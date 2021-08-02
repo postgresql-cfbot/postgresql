@@ -484,6 +484,7 @@ typedef enum NodeTag
 	T_CTECycleClause,
 	T_CommonTableExpr,
 	T_RoleSpec,
+	T_SchemaSpec,
 	T_TriggerTransition,
 	T_PartitionElem,
 	T_PartitionSpec,

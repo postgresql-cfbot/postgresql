@@ -2301,6 +2301,15 @@ my %tests = (
 		like => { %full_runs, section_post_data => 1, },
 	},
 
+	'CREATE PUBLICATION pub3' => {
+		create_order => 50,
+		create_sql   => 'CREATE PUBLICATION pub3;',
+		regexp => qr/^
+			\QCREATE PUBLICATION pub3 WITH (publish = 'insert, update, delete, truncate');\E
+			/xm,
+		like => { %full_runs, section_post_data => 1, },
+	},
+
 	'CREATE SUBSCRIPTION sub1' => {
 		create_order => 50,
 		create_sql   => 'CREATE SUBSCRIPTION sub1
@@ -2335,6 +2344,27 @@ my %tests = (
 			/xm,
 		like => { %full_runs, section_post_data => 1, },
 		unlike => { exclude_dump_test_schema => 1, },
+	},
+
+	'ALTER PUBLICATION pub3 ADD SCHEMA dump_test' => {
+		create_order => 51,
+		create_sql =>
+		  'ALTER PUBLICATION pub3 ADD SCHEMA dump_test;',
+		regexp => qr/^
+			\QALTER PUBLICATION pub3 ADD SCHEMA dump_test;\E
+			/xm,
+		like   => { %full_runs, section_post_data => 1, },
+		unlike => { exclude_dump_test_schema => 1, },
+	},
+
+	'ALTER PUBLICATION pub3 ADD SCHEMA public' => {
+		create_order => 52,
+		create_sql =>
+		  'ALTER PUBLICATION pub3 ADD SCHEMA public;',
+		regexp => qr/^
+			\QALTER PUBLICATION pub3 ADD SCHEMA public;\E
+			/xm,
+		like => { %full_runs, section_post_data => 1, },
 	},
 
 	'CREATE SCHEMA public' => {

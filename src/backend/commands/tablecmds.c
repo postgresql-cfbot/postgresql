@@ -52,6 +52,7 @@
 #include "commands/defrem.h"
 #include "commands/event_trigger.h"
 #include "commands/policy.h"
+#include "commands/publicationcmds.h"
 #include "commands/sequence.h"
 #include "commands/tablecmds.h"
 #include "commands/tablespace.h"
@@ -12265,6 +12266,7 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 			case OCLASS_EVENT_TRIGGER:
 			case OCLASS_PUBLICATION:
 			case OCLASS_PUBLICATION_REL:
+			case OCLASS_PUBLICATION_SCHEMA:
 			case OCLASS_SUBSCRIPTION:
 			case OCLASS_TRANSFORM:
 

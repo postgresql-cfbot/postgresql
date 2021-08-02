@@ -342,6 +342,23 @@ typedef struct RoleSpec
 } RoleSpec;
 
 /*
+ * SchemaSpec - a schema name or CURRENT_SCHEMA
+ */
+typedef enum SchemaSpecType
+{
+	SCHEMASPEC_CSTRING,			/* schema name is stored as a C string */
+	SCHEMASPEC_CURRENT_SCHEMA	/* schema spec is CURRENT_SCHEMA */
+} SchemaSpecType;
+
+typedef struct SchemaSpec
+{
+	NodeTag		type;
+	SchemaSpecType schematype;	/* type of this schemaspec */
+	char	   *schemaname;		/* filled only for SCHEMASPEC_CSTRING */
+	int			location;		/* token location, or -1 if unknown */
+} SchemaSpec;
+
+/*
  * FuncCall - a function or aggregate invocation
  *
  * agg_order (if not NIL) indicates we saw 'foo(... ORDER BY ...)', or if
@@ -1805,6 +1822,7 @@ typedef enum ObjectType
 	OBJECT_PROCEDURE,
 	OBJECT_PUBLICATION,
 	OBJECT_PUBLICATION_REL,
+	OBJECT_PUBLICATION_SCHEMA,
 	OBJECT_ROLE,
 	OBJECT_ROUTINE,
 	OBJECT_RULE,
@@ -3632,6 +3650,7 @@ typedef struct CreatePublicationStmt
 	List	   *options;		/* List of DefElem nodes */
 	List	   *tables;			/* Optional list of tables to add */
 	bool		for_all_tables; /* Special publication for all tables in db */
+	List	   *schemas;		/* Optional list of schemas */
 } CreatePublicationStmt;
 
 typedef struct AlterPublicationStmt
@@ -3646,6 +3665,7 @@ typedef struct AlterPublicationStmt
 	List	   *tables;			/* List of tables to add/drop */
 	bool		for_all_tables; /* Special publication for all tables in db */
 	DefElemAction tableAction;	/* What action to perform with the tables */
+	List	   *schemas;		/* Optional list of schemas */
 } AlterPublicationStmt;
 
 typedef struct CreateSubscriptionStmt

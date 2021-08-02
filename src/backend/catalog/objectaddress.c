@@ -49,6 +49,7 @@
 #include "catalog/pg_proc.h"
 #include "catalog/pg_publication.h"
 #include "catalog/pg_publication_rel.h"
+#include "catalog/pg_publication_schema.h"
 #include "catalog/pg_rewrite.h"
 #include "catalog/pg_statistic_ext.h"
 #include "catalog/pg_subscription.h"
@@ -67,6 +68,7 @@
 #include "commands/extension.h"
 #include "commands/policy.h"
 #include "commands/proclang.h"
+#include "commands/publicationcmds.h"
 #include "commands/tablespace.h"
 #include "commands/trigger.h"
 #include "foreign/foreign.h"
@@ -829,6 +831,10 @@ static const struct object_type_map
 	{
 		"publication relation", OBJECT_PUBLICATION_REL
 	},
+	/* OCLASS_PUBLICATION_SCHEMA */
+	{
+		"publication schema", OBJECT_PUBLICATION_SCHEMA
+	},
 	/* OCLASS_SUBSCRIPTION */
 	{
 		"subscription", OBJECT_SUBSCRIPTION
@@ -875,6 +881,9 @@ static ObjectAddress get_object_address_usermapping(List *object,
 static ObjectAddress get_object_address_publication_rel(List *object,
 														Relation *relp,
 														bool missing_ok);
+static ObjectAddress get_object_address_publication_schema(List *object,
+														   bool missing_ok);
+
 static ObjectAddress get_object_address_defacl(List *object,
 											   bool missing_ok);
 static const ObjectPropertyType *get_object_property_data(Oid class_id);
@@ -1117,6 +1126,10 @@ get_object_address(ObjectType objtype, Node *object,
 				address = get_object_address_publication_rel(castNode(List, object),
 															 &relation,
 															 missing_ok);
+				break;
+			case OBJECT_PUBLICATION_SCHEMA:
+				address = get_object_address_publication_schema(castNode(List, object),
+																missing_ok);
 				break;
 			case OBJECT_DEFACL:
 				address = get_object_address_defacl(castNode(List, object),
@@ -1936,6 +1949,47 @@ get_object_address_publication_rel(List *object,
 }
 
 /*
+ * Find the ObjectAddress for a publication schema.  The first element of
+ * the object parameter is the schema name, the second is the
+ * publication name.
+ */
+static ObjectAddress
+get_object_address_publication_schema(List *object, bool missing_ok)
+{
+	ObjectAddress address;
+	char	   *pubname;
+	Publication *pub;
+	char	   *schemaname;
+	Oid			schemaoid;
+
+	ObjectAddressSet(address, PublicationSchemaRelationId, InvalidOid);
+
+	/* Fetch publication name and schema oid from input list */
+	schemaname = strVal(linitial(object));
+	pubname = strVal(lsecond(object));
+
+	schemaoid = get_namespace_oid(schemaname, false);
+
+	/* Now look up the pg_publication tuple */
+	pub = GetPublicationByName(pubname, missing_ok);
+	if (!pub)
+		return address;
+
+	/* Find the publication schema mapping in syscache */
+	address.objectId =
+		GetSysCacheOid2(PUBLICATIONSCHEMAMAP, Anum_pg_publication_schema_oid,
+						ObjectIdGetDatum(schemaoid),
+						ObjectIdGetDatum(pub->oid));
+	if (!OidIsValid(address.objectId) && !missing_ok)
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("publication schema \"%s\" in publication \"%s\" does not exist",
+						schemaname, pubname)));
+
+	return address;
+}
+
+/*
  * Find the ObjectAddress for a default ACL.
  */
 static ObjectAddress
@@ -2207,6 +2261,7 @@ pg_get_object_address(PG_FUNCTION_ARGS)
 		case OBJECT_CAST:
 		case OBJECT_USER_MAPPING:
 		case OBJECT_PUBLICATION_REL:
+		case OBJECT_PUBLICATION_SCHEMA:
 		case OBJECT_DEFACL:
 		case OBJECT_TRANSFORM:
 			if (list_length(args) != 1)
@@ -2299,6 +2354,7 @@ pg_get_object_address(PG_FUNCTION_ARGS)
 		case OBJECT_PUBLICATION_REL:
 			objnode = (Node *) list_make2(name, linitial(args));
 			break;
+		case OBJECT_PUBLICATION_SCHEMA:
 		case OBJECT_USER_MAPPING:
 			objnode = (Node *) list_make2(linitial(name), linitial(args));
 			break;
@@ -3902,6 +3958,46 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 				break;
 			}
 
+		case OCLASS_PUBLICATION_SCHEMA:
+			{
+				HeapTuple	tup;
+				char	   *pubname;
+				Form_pg_publication_schema psform;
+				char	   *nspname;
+
+				tup = SearchSysCache1(PUBLICATIONSCHEMA,
+									  ObjectIdGetDatum(object->objectId));
+				if (!HeapTupleIsValid(tup))
+				{
+					if (!missing_ok)
+						elog(ERROR, "cache lookup failed for publication schema %u",
+							 object->objectId);
+					break;
+				}
+
+				psform = (Form_pg_publication_schema) GETSTRUCT(tup);
+				pubname = get_publication_name(psform->pspubid, false);
+				nspname = get_namespace_name(psform->psnspcid);
+				if (!nspname)
+				{
+					Oid			psnspcid = psform->psnspcid;
+
+					pfree(pubname);
+					ReleaseSysCache(tup);
+					if (!missing_ok)
+						elog(ERROR, "cache lookup failed for schema %u",
+							 psnspcid);
+					break;
+				}
+
+				appendStringInfo(&buffer, _("publication of schema %s in publication %s"),
+								 nspname, pubname);
+				pfree(pubname);
+				pfree(nspname);
+				ReleaseSysCache(tup);
+				break;
+			}
+
 		case OCLASS_SUBSCRIPTION:
 			{
 				char	   *subname = get_subscription_name(object->objectId,
@@ -4474,6 +4570,10 @@ getObjectTypeDescription(const ObjectAddress *object, bool missing_ok)
 
 		case OCLASS_PUBLICATION_REL:
 			appendStringInfoString(&buffer, "publication relation");
+			break;
+
+		case OCLASS_PUBLICATION_SCHEMA:
+			appendStringInfoString(&buffer, "publication schema");
 			break;
 
 		case OCLASS_SUBSCRIPTION:
@@ -5706,6 +5806,54 @@ getObjectIdentityParts(const ObjectAddress *object,
 
 				if (objargs)
 					*objargs = list_make1(pubname);
+
+				ReleaseSysCache(tup);
+				break;
+			}
+
+		case OCLASS_PUBLICATION_SCHEMA:
+			{
+				HeapTuple	tup;
+				char	   *pubname;
+				char	   *nspname;
+				Form_pg_publication_schema psform;
+
+				tup = SearchSysCache1(PUBLICATIONSCHEMA,
+									  ObjectIdGetDatum(object->objectId));
+				if (!HeapTupleIsValid(tup))
+				{
+					if (!missing_ok)
+						elog(ERROR, "cache lookup failed for publication schema %u",
+							 object->objectId);
+					break;
+				}
+
+				psform = (Form_pg_publication_schema) GETSTRUCT(tup);
+				pubname = get_publication_name(psform->pspubid, false);
+				nspname = get_namespace_name(psform->psnspcid);
+				if (!nspname)
+				{
+					Oid			psnspcid = psform->psnspcid;
+
+					pfree(pubname);
+					ReleaseSysCache(tup);
+					if (!missing_ok)
+						elog(ERROR, "cache lookup failed for schema %u",
+							 psnspcid);
+					break;
+				}
+
+				appendStringInfo(&buffer, "%s in publication %s", nspname, pubname);
+
+				if (objargs)
+					*objargs = list_make1(pubname);
+				else
+					pfree(pubname);
+
+				if (objname)
+					*objname = list_make1(nspname);
+				else
+					pfree(nspname);
 
 				ReleaseSysCache(tup);
 				break;

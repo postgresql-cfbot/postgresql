@@ -25,8 +25,10 @@
 #include "catalog/objectaddress.h"
 #include "catalog/partition.h"
 #include "catalog/pg_inherits.h"
+#include "catalog/pg_namespace.h"
 #include "catalog/pg_publication.h"
 #include "catalog/pg_publication_rel.h"
+#include "catalog/pg_publication_schema.h"
 #include "catalog/pg_type.h"
 #include "commands/dbcommands.h"
 #include "commands/defrem.h"
@@ -53,6 +55,9 @@ static void CloseTableList(List *rels);
 static void PublicationAddTables(Oid pubid, List *rels, bool if_not_exists,
 								 AlterPublicationStmt *stmt);
 static void PublicationDropTables(Oid pubid, List *rels, bool missing_ok);
+static void PublicationAddSchemas(Oid pubid, List *schemas, bool if_not_exists,
+								  AlterPublicationStmt *stmt);
+static void PublicationDropSchemas(Oid pubid, List *schemas, bool missing_ok);
 
 static void
 parse_publication_options(ParseState *pstate,
@@ -139,6 +144,47 @@ parse_publication_options(ParseState *pstate,
 }
 
 /*
+ * Convert the SchemaSpec list into an Oid list.
+ */
+static List *
+ConvertSchemaSpecListToOidList(List *schemas)
+{
+	List	   *schemaoidlist = NIL;
+	ListCell   *cell;
+
+	foreach(cell, schemas)
+	{
+		SchemaSpec *schema = (SchemaSpec *) lfirst(cell);
+		Oid			schemaoid;
+		List	   *search_path;
+		char	   *nspname;
+
+		if (schema->schematype == SCHEMASPEC_CURRENT_SCHEMA)
+		{
+			search_path = fetch_search_path(false);
+			if (search_path == NIL) /* nothing valid in search_path? */
+				ereport(ERROR,
+						errcode(ERRCODE_UNDEFINED_SCHEMA),
+						errmsg("no schema has been selected"));
+
+			schemaoid = linitial_oid(search_path);
+			nspname = get_namespace_name(schemaoid);
+			if (nspname == NULL)	/* recently-deleted namespace? */
+				ereport(ERROR,
+						errcode(ERRCODE_UNDEFINED_SCHEMA),
+						errmsg("no schema has been selected"));
+		}
+		else
+			schemaoid = get_namespace_oid(schema->schemaname, false);
+
+		/* Filter out duplicates if user specifies "sch1, sch1" */
+		schemaoidlist = list_append_unique_oid(schemaoidlist, schemaoid);
+	}
+
+	return schemaoidlist;
+}
+
+/*
  * Create new publication.
  */
 ObjectAddress
@@ -211,6 +257,15 @@ CreatePublication(ParseState *pstate, CreatePublicationStmt *stmt)
 	values[Anum_pg_publication_pubviaroot - 1] =
 		BoolGetDatum(publish_via_partition_root);
 
+	if (stmt->schemas)
+		values[Anum_pg_publication_pubtype - 1] = PUBTYPE_SCHEMA;
+	else if (stmt->tables)
+		values[Anum_pg_publication_pubtype - 1] = PUBTYPE_TABLE;
+	else if (stmt->for_all_tables)
+		values[Anum_pg_publication_pubtype - 1] = PUBTYPE_ALLTABLES;
+	else
+		values[Anum_pg_publication_pubtype - 1] = PUBTYPE_EMPTY;
+
 	tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
 
 	/* Insert tuple into catalog. */
@@ -223,6 +278,20 @@ CreatePublication(ParseState *pstate, CreatePublicationStmt *stmt)
 
 	/* Make the changes visible. */
 	CommandCounterIncrement();
+
+	if (stmt->schemas)
+	{
+		List	   *schemaoidlist = NIL;
+		Relation	nspcrel;
+
+		Assert(list_length(stmt->schemas) > 0);
+
+		schemaoidlist = ConvertSchemaSpecListToOidList(stmt->schemas);
+
+		nspcrel = table_open(NamespaceRelationId, ShareUpdateExclusiveLock);
+		PublicationAddSchemas(puboid, schemaoidlist, true, NULL);
+		table_close(nspcrel, ShareUpdateExclusiveLock);
+	}
 
 	if (stmt->tables)
 	{
@@ -248,6 +317,35 @@ CreatePublication(ParseState *pstate, CreatePublicationStmt *stmt)
 	}
 
 	return myself;
+}
+
+/*
+ * Update publication type in pg_publication relation.
+ */
+static void
+UpdatePublicationTypeTupleValue(Relation rel, HeapTuple tup, int col,
+								char pubtype)
+{
+	bool		nulls[Natts_pg_publication];
+	bool		replaces[Natts_pg_publication];
+	Datum		values[Natts_pg_publication];
+
+
+	/* Everything ok, form a new tuple */
+	memset(values, 0, sizeof(values));
+	memset(nulls, false, sizeof(nulls));
+	memset(replaces, false, sizeof(replaces));
+
+	values[col - 1] = pubtype;
+	replaces[col - 1] = true;
+
+	tup = heap_modify_tuple(tup, RelationGetDescr(rel), values, nulls,
+							replaces);
+
+	/* Update the catalog */
+	CatalogTupleUpdate(rel, &tup->t_self, tup);
+
+	CommandCounterIncrement();
 }
 
 /*
@@ -310,19 +408,25 @@ AlterPublicationOptions(ParseState *pstate, AlterPublicationStmt *stmt,
 	pubform = (Form_pg_publication) GETSTRUCT(tup);
 
 	/* Invalidate the relcache. */
-	if (pubform->puballtables)
+	if (pubform->pubtype == PUBTYPE_ALLTABLES)
 	{
 		CacheInvalidateRelcacheAll();
 	}
 	else
 	{
+		List	   *relids = NIL;
+
 		/*
 		 * For any partitioned tables contained in the publication, we must
 		 * invalidate all partitions contained in the respective partition
 		 * trees, not just those explicitly mentioned in the publication.
 		 */
-		List	   *relids = GetPublicationRelations(pubform->oid,
-													 PUBLICATION_PART_ALL);
+		if (pubform->pubtype == PUBTYPE_TABLE)
+			relids = GetPublicationRelations(pubform->oid,
+											 PUBLICATION_PART_ALL);
+		else if (pubform->pubtype == PUBTYPE_SCHEMA)
+			relids = GetAllSchemasPublicationRelations(pubform->pubviaroot,
+													   pubform->oid);
 
 		/*
 		 * We don't want to send too many individual messages, at some point
@@ -362,19 +466,31 @@ AlterPublicationTables(AlterPublicationStmt *stmt, Relation rel,
 	Oid			pubid = pubform->oid;
 
 	/* Check that user is allowed to manipulate the publication tables. */
-	if (pubform->puballtables)
+	if (pubform->pubtype == PUBTYPE_ALLTABLES)
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 errmsg("publication \"%s\" is defined as FOR ALL TABLES",
 						NameStr(pubform->pubname)),
 				 errdetail("Tables cannot be added to or dropped from FOR ALL TABLES publications.")));
 
+	if (pubform->pubtype == PUBTYPE_SCHEMA)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("publication \"%s\" is defined as FOR SCHEMA",
+						NameStr(pubform->pubname)),
+				 errdetail("Tables cannot be added to or dropped from FOR SCHEMA publications.")));
+
 	Assert(list_length(stmt->tables) > 0);
 
 	rels = OpenTableList(stmt->tables);
 
 	if (stmt->tableAction == DEFELEM_ADD)
+	{
 		PublicationAddTables(pubid, rels, false, stmt);
+		if (pubform->pubtype == PUBTYPE_EMPTY)
+			UpdatePublicationTypeTupleValue(rel, tup, Anum_pg_publication_pubtype,
+											PUBTYPE_TABLE);
+	}
 	else if (stmt->tableAction == DEFELEM_DROP)
 		PublicationDropTables(pubid, rels, false);
 	else						/* DEFELEM_SET */
@@ -421,16 +537,85 @@ AlterPublicationTables(AlterPublicationStmt *stmt, Relation rel,
 		PublicationAddTables(pubid, rels, true, stmt);
 
 		CloseTableList(delrels);
+		if (pubform->pubtype == PUBTYPE_EMPTY)
+			UpdatePublicationTypeTupleValue(rel, tup,
+											Anum_pg_publication_pubtype,
+											PUBTYPE_TABLE);
 	}
 
 	CloseTableList(rels);
 }
 
 /*
+ * Alter the publication schemas.
+ *
+ * Add/Remove/Set the schemas to/from publication.
+ */
+static void
+AlterPublicationSchemas(AlterPublicationStmt *stmt, Relation rel,
+						HeapTuple tup, Form_pg_publication pubform)
+{
+	List	   *schemaoidlist = NIL;
+
+	/* Check that user is allowed to manipulate the publication tables */
+	if (pubform->pubtype == PUBTYPE_ALLTABLES)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("publication \"%s\" is defined as FOR ALL TABLES",
+						NameStr(pubform->pubname)),
+				 errdetail("Schemas cannot be added to or dropped from FOR ALL TABLES publications.")));
+
+	if (pubform->pubtype == PUBTYPE_TABLE)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("publication \"%s\" is defined as FOR TABLE",
+						NameStr(pubform->pubname)),
+				 errdetail("Schemas cannot be added to or dropped from FOR TABLE publications.")));
+
+	/* Convert the text list into oid list */
+	schemaoidlist = ConvertSchemaSpecListToOidList(stmt->schemas);
+
+	if (stmt->tableAction == DEFELEM_ADD)
+	{
+		PublicationAddSchemas(pubform->oid, schemaoidlist, false, stmt);
+		if (pubform->pubtype == PUBTYPE_EMPTY)
+			UpdatePublicationTypeTupleValue(rel, tup,
+											Anum_pg_publication_pubtype,
+											PUBTYPE_SCHEMA);
+	}
+	else if (stmt->tableAction == DEFELEM_DROP)
+		PublicationDropSchemas(pubform->oid, schemaoidlist, false);
+	else
+	{
+		List	   *oldschemaids = GetPublicationSchemas(pubform->oid);
+		List	   *delschemas = NIL;
+		ListCell   *oldlc;
+
+		/* Identify which schemas should be dropped */
+		delschemas = list_difference_oid(oldschemaids, schemaoidlist);
+
+		/* And drop them */
+		PublicationDropSchemas(pubform->oid, delschemas, true);
+
+		/*
+		 * Don't bother calculating the difference for adding, we'll catch and
+		 * skip existing ones when doing catalog update.
+		 */
+		PublicationAddSchemas(pubform->oid, schemaoidlist, true, stmt);
+		if (pubform->pubtype == PUBTYPE_EMPTY)
+			UpdatePublicationTypeTupleValue(rel, tup,
+											Anum_pg_publication_pubtype,
+											PUBTYPE_SCHEMA);
+	}
+
+	return;
+}
+
+/*
  * Alter the existing publication.
  *
- * This is dispatcher function for AlterPublicationOptions and
- * AlterPublicationTables.
+ * This is dispatcher function for AlterPublicationOptions,
+ * AlterPublicationSchemas and AlterPublicationTables.
  */
 void
 AlterPublication(ParseState *pstate, AlterPublicationStmt *stmt)
@@ -459,6 +644,8 @@ AlterPublication(ParseState *pstate, AlterPublicationStmt *stmt)
 
 	if (stmt->options)
 		AlterPublicationOptions(pstate, stmt, rel, tup);
+	else if (stmt->schemas)
+		AlterPublicationSchemas(stmt, rel, tup, pubform);
 	else
 		AlterPublicationTables(stmt, rel, tup);
 
@@ -489,6 +676,30 @@ RemovePublicationRelById(Oid proid)
 
 	/* Invalidate relcache so that publication info is rebuilt. */
 	CacheInvalidateRelcacheByRelid(pubrel->prrelid);
+
+	CatalogTupleDelete(rel, &tup->t_self);
+
+	ReleaseSysCache(tup);
+
+	table_close(rel, RowExclusiveLock);
+}
+
+/*
+ * Remove schema from publication by mapping OID.
+ */
+void
+RemovePublicationSchemaById(Oid psoid)
+{
+	Relation	rel;
+	HeapTuple	tup;
+
+	rel = table_open(PublicationSchemaRelationId, RowExclusiveLock);
+
+	tup = SearchSysCache1(PUBLICATIONSCHEMA, ObjectIdGetDatum(psoid));
+
+	if (!HeapTupleIsValid(tup))
+		elog(ERROR, "cache lookup failed for publication schema %u",
+			 psoid);
 
 	CatalogTupleDelete(rel, &tup->t_self);
 
@@ -607,7 +818,7 @@ PublicationAddTables(Oid pubid, List *rels, bool if_not_exists,
 {
 	ListCell   *lc;
 
-	Assert(!stmt || !stmt->for_all_tables);
+	Assert(!stmt || (!stmt->for_all_tables && !stmt->schemas));
 
 	foreach(lc, rels)
 	{
@@ -626,6 +837,39 @@ PublicationAddTables(Oid pubid, List *rels, bool if_not_exists,
 											 (Node *) stmt);
 
 			InvokeObjectPostCreateHook(PublicationRelRelationId,
+									   obj.objectId, 0);
+		}
+	}
+}
+
+/*
+ * Add listed schemas to the publication.
+ */
+static void
+PublicationAddSchemas(Oid pubid, List *schemas, bool if_not_exists,
+					  AlterPublicationStmt *stmt)
+{
+	ListCell   *lc;
+
+	Assert(!stmt || (!stmt->for_all_tables && !stmt->tables));
+
+	foreach(lc, schemas)
+	{
+		Oid			schemaoid = lfirst_oid(lc);
+		ObjectAddress obj;
+
+		/* Must be owner of the schema or superuser */
+		if (!pg_namespace_ownercheck(schemaoid, GetUserId()))
+			aclcheck_error(ACLCHECK_NOT_OWNER, OBJECT_SCHEMA,
+						   get_namespace_name(schemaoid));
+
+		obj = publication_add_schema(pubid, schemaoid, if_not_exists);
+		if (stmt)
+		{
+			EventTriggerCollectSimpleCommand(obj, InvalidObjectAddress,
+											 (Node *) stmt);
+
+			InvokeObjectPostCreateHook(PublicationSchemaRelationId,
 									   obj.objectId, 0);
 		}
 	}
@@ -666,6 +910,40 @@ PublicationDropTables(Oid pubid, List *rels, bool missing_ok)
 }
 
 /*
+ * Remove listed schemas from the publication.
+ */
+static void
+PublicationDropSchemas(Oid pubid, List *schemas, bool missing_ok)
+{
+	ObjectAddress obj;
+	ListCell   *lc;
+	Oid			psid;
+
+	foreach(lc, schemas)
+	{
+		Oid			schemaoid = lfirst_oid(lc);
+
+		psid = GetSysCacheOid2(PUBLICATIONSCHEMAMAP,
+							   Anum_pg_publication_schema_oid,
+							   ObjectIdGetDatum(schemaoid),
+							   ObjectIdGetDatum(pubid));
+		if (!OidIsValid(psid))
+		{
+			if (missing_ok)
+				continue;
+
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("schema \"%s\" is not part of the publication",
+							get_namespace_name(schemaoid))));
+		}
+
+		ObjectAddressSet(obj, PublicationSchemaRelationId, psid);
+		performDeletion(&obj, DROP_CASCADE, 0);
+	}
+}
+
+/*
  * Internal workhorse for changing a publication owner
  */
 static void
@@ -696,7 +974,7 @@ AlterPublicationOwner_internal(Relation rel, HeapTuple tup, Oid newOwnerId)
 			aclcheck_error(aclresult, OBJECT_DATABASE,
 						   get_database_name(MyDatabaseId));
 
-		if (form->puballtables && !superuser_arg(newOwnerId))
+		if (form->pubtype == PUBTYPE_ALLTABLES && !superuser_arg(newOwnerId))
 			ereport(ERROR,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 					 errmsg("permission denied to change owner of publication \"%s\"",

@@ -257,6 +257,9 @@ getSchemaData(Archive *fout, int *numTablesPtr)
 	pg_log_info("reading publication membership");
 	getPublicationTables(fout, tblinfo, numTables);
 
+	pg_log_info("reading publication schemas");
+	getPublicationSchemas(fout, nspinfo, numNamespaces);
+
 	pg_log_info("reading subscriptions");
 	getSubscriptions(fout);
 

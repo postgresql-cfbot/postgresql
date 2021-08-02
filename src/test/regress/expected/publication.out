@@ -30,20 +30,20 @@ ERROR:  conflicting or redundant options
 LINE 1: ...ub_xxx WITH (publish_via_partition_root = 'true', publish_vi...
                                                              ^
 \dRp
-                                              List of publications
-        Name        |          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root 
---------------------+--------------------------+------------+---------+---------+---------+-----------+----------
- testpib_ins_trunct | regress_publication_user | f          | t       | f       | f       | f         | f
- testpub_default    | regress_publication_user | f          | f       | t       | f       | f         | f
+                                                   List of publications
+        Name        |          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | PubType 
+--------------------+--------------------------+------------+---------+---------+---------+-----------+----------+---------
+ testpib_ins_trunct | regress_publication_user | f          | t       | f       | f       | f         | f        | e
+ testpub_default    | regress_publication_user | f          | f       | t       | f       | f         | f        | e
 (2 rows)
 
 ALTER PUBLICATION testpub_default SET (publish = 'insert, update, delete');
 \dRp
-                                              List of publications
-        Name        |          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root 
---------------------+--------------------------+------------+---------+---------+---------+-----------+----------
- testpib_ins_trunct | regress_publication_user | f          | t       | f       | f       | f         | f
- testpub_default    | regress_publication_user | f          | t       | t       | t       | f         | f
+                                                   List of publications
+        Name        |          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | PubType 
+--------------------+--------------------------+------------+---------+---------+---------+-----------+----------+---------
+ testpib_ins_trunct | regress_publication_user | f          | t       | f       | f       | f         | f        | e
+ testpub_default    | regress_publication_user | f          | t       | t       | t       | f         | f        | e
 (2 rows)
 
 --- adding tables
@@ -69,6 +69,48 @@ DETAIL:  Tables cannot be added to or dropped from FOR ALL TABLES publications.
 ALTER PUBLICATION testpub_foralltables SET TABLE pub_test.testpub_nopk;
 ERROR:  publication "testpub_foralltables" is defined as FOR ALL TABLES
 DETAIL:  Tables cannot be added to or dropped from FOR ALL TABLES publications.
+-- fail - can't add schema to for all tables publication
+ALTER PUBLICATION testpub_foralltables ADD SCHEMA pub_test;
+ERROR:  publication "testpub_foralltables" is defined as FOR ALL TABLES
+DETAIL:  Schemas cannot be added to or dropped from FOR ALL TABLES publications.
+-- fail - can't drop schema from all tables publication
+ALTER PUBLICATION testpub_foralltables DROP SCHEMA pub_test;
+ERROR:  publication "testpub_foralltables" is defined as FOR ALL TABLES
+DETAIL:  Schemas cannot be added to or dropped from FOR ALL TABLES publications.
+-- fail - can't set schema to for all tables publication
+ALTER PUBLICATION testpub_foralltables SET SCHEMA pub_test;
+ERROR:  publication "testpub_foralltables" is defined as FOR ALL TABLES
+DETAIL:  Schemas cannot be added to or dropped from FOR ALL TABLES publications.
+SET client_min_messages = 'ERROR';
+CREATE PUBLICATION testpub_fortable FOR TABLE testpub_tbl1;
+RESET client_min_messages;
+-- fail - can't add schema to for table publication
+ALTER PUBLICATION testpub_fortable ADD SCHEMA pub_test;
+ERROR:  publication "testpub_fortable" is defined as FOR TABLE
+DETAIL:  Schemas cannot be added to or dropped from FOR TABLE publications.
+-- fail - can't drop schema from table publication
+ALTER PUBLICATION testpub_fortable DROP SCHEMA pub_test;
+ERROR:  publication "testpub_fortable" is defined as FOR TABLE
+DETAIL:  Schemas cannot be added to or dropped from FOR TABLE publications.
+-- fail - can't set schema to for table publication
+ALTER PUBLICATION testpub_fortable SET SCHEMA pub_test;
+ERROR:  publication "testpub_fortable" is defined as FOR TABLE
+DETAIL:  Schemas cannot be added to or dropped from FOR TABLE publications.
+SET client_min_messages = 'ERROR';
+CREATE PUBLICATION testpub_forschema FOR SCHEMA pub_test;
+RESET client_min_messages;
+-- fail - can't add table to for schema publication
+ALTER PUBLICATION testpub_forschema ADD TABLE pub_test2.tbl1;
+ERROR:  publication "testpub_forschema" is defined as FOR SCHEMA
+DETAIL:  Tables cannot be added to or dropped from FOR SCHEMA publications.
+-- fail - can't drop table from schema publication
+ALTER PUBLICATION testpub_forschema DROP TABLE pub_test1.tbl1;
+ERROR:  publication "testpub_forschema" is defined as FOR SCHEMA
+DETAIL:  Tables cannot be added to or dropped from FOR SCHEMA publications.
+-- fail - can't set table to schema publication
+ALTER PUBLICATION testpub_forschema SET TABLE pub_test1.tbl1;
+ERROR:  publication "testpub_forschema" is defined as FOR SCHEMA
+DETAIL:  Tables cannot be added to or dropped from FOR SCHEMA publications.
 SELECT pubname, puballtables FROM pg_publication WHERE pubname = 'testpub_foralltables';
        pubname        | puballtables 
 ----------------------+--------------
@@ -87,14 +129,14 @@ Publications:
     "testpub_foralltables"
 
 \dRp+ testpub_foralltables
-                              Publication testpub_foralltables
-          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root 
---------------------------+------------+---------+---------+---------+-----------+----------
- regress_publication_user | t          | t       | t       | f       | f         | f
+                                   Publication testpub_foralltables
+          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | Pubtype 
+--------------------------+------------+---------+---------+---------+-----------+----------+---------
+ regress_publication_user | t          | t       | t       | f       | f         | f        | a
 (1 row)
 
 DROP TABLE testpub_tbl2;
-DROP PUBLICATION testpub_foralltables;
+DROP PUBLICATION testpub_foralltables, testpub_fortable, testpub_forschema;
 CREATE TABLE testpub_tbl3 (a int);
 CREATE TABLE testpub_tbl3a (b text) INHERITS (testpub_tbl3);
 SET client_min_messages = 'ERROR';
@@ -102,19 +144,19 @@ CREATE PUBLICATION testpub3 FOR TABLE testpub_tbl3;
 CREATE PUBLICATION testpub4 FOR TABLE ONLY testpub_tbl3;
 RESET client_min_messages;
 \dRp+ testpub3
-                                    Publication testpub3
-          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root 
---------------------------+------------+---------+---------+---------+-----------+----------
- regress_publication_user | f          | t       | t       | t       | t         | f
+                                         Publication testpub3
+          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | Pubtype 
+--------------------------+------------+---------+---------+---------+-----------+----------+---------
+ regress_publication_user | f          | t       | t       | t       | t         | f        | t
 Tables:
     "public.testpub_tbl3"
     "public.testpub_tbl3a"
 
 \dRp+ testpub4
-                                    Publication testpub4
-          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root 
---------------------------+------------+---------+---------+---------+-----------+----------
- regress_publication_user | f          | t       | t       | t       | t         | f
+                                         Publication testpub4
+          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | Pubtype 
+--------------------------+------------+---------+---------+---------+-----------+----------+---------
+ regress_publication_user | f          | t       | t       | t       | t         | f        | t
 Tables:
     "public.testpub_tbl3"
 
@@ -133,10 +175,10 @@ ALTER TABLE testpub_parted ATTACH PARTITION testpub_parted1 FOR VALUES IN (1);
 -- only parent is listed as being in publication, not the partition
 ALTER PUBLICATION testpub_forparted ADD TABLE testpub_parted;
 \dRp+ testpub_forparted
-                               Publication testpub_forparted
-          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root 
---------------------------+------------+---------+---------+---------+-----------+----------
- regress_publication_user | f          | t       | t       | t       | t         | f
+                                    Publication testpub_forparted
+          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | Pubtype 
+--------------------------+------------+---------+---------+---------+-----------+----------+---------
+ regress_publication_user | f          | t       | t       | t       | t         | f        | t
 Tables:
     "public.testpub_parted"
 
@@ -149,10 +191,10 @@ ALTER TABLE testpub_parted DETACH PARTITION testpub_parted1;
 UPDATE testpub_parted1 SET a = 1;
 ALTER PUBLICATION testpub_forparted SET (publish_via_partition_root = true);
 \dRp+ testpub_forparted
-                               Publication testpub_forparted
-          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root 
---------------------------+------------+---------+---------+---------+-----------+----------
- regress_publication_user | f          | t       | t       | t       | t         | t
+                                    Publication testpub_forparted
+          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | Pubtype 
+--------------------------+------------+---------+---------+---------+-----------+----------+---------
+ regress_publication_user | f          | t       | t       | t       | t         | t        | t
 Tables:
     "public.testpub_parted"
 
@@ -172,10 +214,10 @@ ERROR:  relation "testpub_tbl1" is already member of publication "testpub_fortbl
 CREATE PUBLICATION testpub_fortbl FOR TABLE testpub_tbl1;
 ERROR:  publication "testpub_fortbl" already exists
 \dRp+ testpub_fortbl
-                                 Publication testpub_fortbl
-          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root 
---------------------------+------------+---------+---------+---------+-----------+----------
- regress_publication_user | f          | t       | t       | t       | t         | f
+                                      Publication testpub_fortbl
+          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | Pubtype 
+--------------------------+------------+---------+---------+---------+-----------+----------+---------
+ regress_publication_user | f          | t       | t       | t       | t         | f        | t
 Tables:
     "pub_test.testpub_nopk"
     "public.testpub_tbl1"
@@ -213,10 +255,10 @@ Publications:
     "testpub_fortbl"
 
 \dRp+ testpub_default
-                                Publication testpub_default
-          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root 
---------------------------+------------+---------+---------+---------+-----------+----------
- regress_publication_user | f          | t       | t       | t       | f         | f
+                                     Publication testpub_default
+          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | Pubtype 
+--------------------------+------------+---------+---------+---------+-----------+----------+---------
+ regress_publication_user | f          | t       | t       | t       | f         | f        | t
 Tables:
     "pub_test.testpub_nopk"
     "public.testpub_tbl1"
@@ -257,13 +299,12 @@ DROP PUBLICATION testpub2;
 SET ROLE regress_publication_user;
 REVOKE CREATE ON DATABASE regression FROM regress_publication_user2;
 DROP TABLE testpub_parted;
-DROP VIEW testpub_view;
 DROP TABLE testpub_tbl1;
 \dRp+ testpub_default
-                                Publication testpub_default
-          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root 
---------------------------+------------+---------+---------+---------+-----------+----------
- regress_publication_user | f          | t       | t       | t       | f         | f
+                                     Publication testpub_default
+          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | Pubtype 
+--------------------------+------------+---------+---------+---------+-----------+----------+---------
+ regress_publication_user | f          | t       | t       | t       | f         | f        | t
 (1 row)
 
 -- fail - must be owner of publication
@@ -273,27 +314,340 @@ ERROR:  must be owner of publication testpub_default
 RESET ROLE;
 ALTER PUBLICATION testpub_default RENAME TO testpub_foo;
 \dRp testpub_foo
-                                           List of publications
-    Name     |          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root 
--------------+--------------------------+------------+---------+---------+---------+-----------+----------
- testpub_foo | regress_publication_user | f          | t       | t       | t       | f         | f
+                                                List of publications
+    Name     |          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | PubType 
+-------------+--------------------------+------------+---------+---------+---------+-----------+----------+---------
+ testpub_foo | regress_publication_user | f          | t       | t       | t       | f         | f        | t
 (1 row)
 
 -- rename back to keep the rest simple
 ALTER PUBLICATION testpub_foo RENAME TO testpub_default;
 ALTER PUBLICATION testpub_default OWNER TO regress_publication_user2;
 \dRp testpub_default
-                                             List of publications
-      Name       |           Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root 
------------------+---------------------------+------------+---------+---------+---------+-----------+----------
- testpub_default | regress_publication_user2 | f          | t       | t       | t       | f         | f
+                                                  List of publications
+      Name       |           Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | PubType 
+-----------------+---------------------------+------------+---------+---------+---------+-----------+----------+---------
+ testpub_default | regress_publication_user2 | f          | t       | t       | t       | f         | f        | t
 (1 row)
 
+-- adding schemas and tables
+CREATE SCHEMA pub_test1;
+CREATE SCHEMA pub_test2;
+CREATE SCHEMA pub_test3;
+CREATE TABLE pub_test1.tbl1 (id serial primary key, data text);
+CREATE TABLE pub_test2.tbl1 (id serial primary key, data text);
+-- suppress warning that depends on wal_level
+SET client_min_messages = 'ERROR';
+CREATE PUBLICATION testpub1_forschema FOR SCHEMA pub_test1;
+\dRp+ testpub1_forschema
+                                    Publication testpub1_forschema
+          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | Pubtype 
+--------------------------+------------+---------+---------+---------+-----------+----------+---------
+ regress_publication_user | f          | t       | t       | t       | t         | f        | s
+Schemas:
+    "pub_test1"
+
+SELECT p.pubname FROM pg_catalog.pg_publication p, pg_catalog.pg_namespace n, pg_catalog.pg_publication_schema ps WHERE n.oid = ps.psnspcid AND p.oid = ps.pspubid AND n.nspname = 'pub_test1' ORDER BY 1;
+      pubname       
+--------------------
+ testpub1_forschema
+(1 row)
+
+CREATE PUBLICATION testpub2_forschema FOR SCHEMA pub_test1, pub_test2, pub_test3;
+\dRp+ testpub2_forschema
+                                    Publication testpub2_forschema
+          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | Pubtype 
+--------------------------+------------+---------+---------+---------+-----------+----------+---------
+ regress_publication_user | f          | t       | t       | t       | t         | f        | s
+Schemas:
+    "pub_test1"
+    "pub_test2"
+    "pub_test3"
+
+SELECT p.pubname FROM pg_catalog.pg_publication p, pg_catalog.pg_namespace n, pg_catalog.pg_publication_schema ps WHERE n.oid = ps.psnspcid AND p.oid = ps.pspubid AND n.nspname = 'pub_test1' ORDER BY 1;
+      pubname       
+--------------------
+ testpub1_forschema
+ testpub2_forschema
+(2 rows)
+
+SELECT p.pubname FROM pg_catalog.pg_publication p, pg_catalog.pg_namespace n, pg_catalog.pg_publication_schema ps WHERE n.oid = ps.psnspcid AND p.oid = ps.pspubid AND n.nspname = 'pub_test2' ORDER BY 1;
+      pubname       
+--------------------
+ testpub2_forschema
+(1 row)
+
+SELECT p.pubname FROM pg_catalog.pg_publication p, pg_catalog.pg_namespace n, pg_catalog.pg_publication_schema ps WHERE n.oid = ps.psnspcid AND p.oid = ps.pspubid AND n.nspname = 'pub_test3' ORDER BY 1;
+      pubname       
+--------------------
+ testpub2_forschema
+(1 row)
+
+-- check create publication on CURRENT_SCHEMA
+CREATE PUBLICATION testpub3_forschema FOR SCHEMA CURRENT_SCHEMA;
+RESET client_min_messages;
+\dRp+ testpub3_forschema
+                                    Publication testpub3_forschema
+          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | Pubtype 
+--------------------------+------------+---------+---------+---------+-----------+----------+---------
+ regress_publication_user | f          | t       | t       | t       | t         | f        | s
+Schemas:
+    "public"
+
+SELECT p.pubname FROM pg_catalog.pg_publication p, pg_catalog.pg_namespace n, pg_catalog.pg_publication_schema ps WHERE n.oid = ps.psnspcid AND p.oid = ps.pspubid AND n.nspname = 'public' ORDER BY 1;
+      pubname       
+--------------------
+ testpub3_forschema
+(1 row)
+
+-- check create publication on CURRENT_SCHEMA where search_path is not set
+SET SEARCH_PATH='';
+CREATE PUBLICATION testpub_forschema FOR SCHEMA CURRENT_SCHEMA;
+ERROR:  no schema has been selected
+RESET SEARCH_PATH;
+-- check create publication on a schema that does not exist
+CREATE PUBLICATION testpub_forschema FOR SCHEMA non_existent_schema;
+ERROR:  schema "non_existent_schema" does not exist
+-- check create publication on a system schema
+CREATE PUBLICATION testpub_forschema FOR SCHEMA pg_catalog;
+ERROR:  "pg_catalog" is a system schema
+DETAIL:  System schemas cannot be added to publications.
+-- check create publication on an object which is not schema
+CREATE PUBLICATION testpub1_forschema1 FOR SCHEMA testpub_view;
+ERROR:  schema "testpub_view" does not exist
+-- dropping the schema should reflect the change in publication
+DROP SCHEMA pub_test3;
+\dRp+ testpub2_forschema
+                                    Publication testpub2_forschema
+          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | Pubtype 
+--------------------------+------------+---------+---------+---------+-----------+----------+---------
+ regress_publication_user | f          | t       | t       | t       | t         | f        | s
+Schemas:
+    "pub_test1"
+    "pub_test2"
+
+-- renaming the schema should reflect the change in publication
+ALTER SCHEMA pub_test1 RENAME to pub_test1_renamed;
+\dRp+ testpub2_forschema
+                                    Publication testpub2_forschema
+          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | Pubtype 
+--------------------------+------------+---------+---------+---------+-----------+----------+---------
+ regress_publication_user | f          | t       | t       | t       | t         | f        | s
+Schemas:
+    "pub_test1_renamed"
+    "pub_test2"
+
+ALTER SCHEMA pub_test1_renamed RENAME to pub_test1;
+\dRp+ testpub2_forschema
+                                    Publication testpub2_forschema
+          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | Pubtype 
+--------------------------+------------+---------+---------+---------+-----------+----------+---------
+ regress_publication_user | f          | t       | t       | t       | t         | f        | s
+Schemas:
+    "pub_test1"
+    "pub_test2"
+
+-- alter publication add schema
+ALTER PUBLICATION testpub1_forschema ADD SCHEMA pub_test2;
+\dRp+ testpub1_forschema
+                                    Publication testpub1_forschema
+          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | Pubtype 
+--------------------------+------------+---------+---------+---------+-----------+----------+---------
+ regress_publication_user | f          | t       | t       | t       | t         | f        | s
+Schemas:
+    "pub_test1"
+    "pub_test2"
+
+-- alter publication add CURRENT_SCHEMA
+ALTER PUBLICATION testpub1_forschema ADD SCHEMA CURRENT_SCHEMA;
+\dRp+ testpub1_forschema
+                                    Publication testpub1_forschema
+          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | Pubtype 
+--------------------------+------------+---------+---------+---------+-----------+----------+---------
+ regress_publication_user | f          | t       | t       | t       | t         | f        | s
+Schemas:
+    "pub_test1"
+    "pub_test2"
+    "public"
+
+-- add non existent schema
+ALTER PUBLICATION testpub1_forschema ADD SCHEMA non_existent_schema;
+ERROR:  schema "non_existent_schema" does not exist
+\dRp+ testpub1_forschema
+                                    Publication testpub1_forschema
+          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | Pubtype 
+--------------------------+------------+---------+---------+---------+-----------+----------+---------
+ regress_publication_user | f          | t       | t       | t       | t         | f        | s
+Schemas:
+    "pub_test1"
+    "pub_test2"
+    "public"
+
+-- add a schema which is already added to the publication
+ALTER PUBLICATION testpub1_forschema ADD SCHEMA pub_test1;
+ERROR:  schema "pub_test1" is already member of publication "testpub1_forschema"
+\dRp+ testpub1_forschema
+                                    Publication testpub1_forschema
+          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | Pubtype 
+--------------------------+------------+---------+---------+---------+-----------+----------+---------
+ regress_publication_user | f          | t       | t       | t       | t         | f        | s
+Schemas:
+    "pub_test1"
+    "pub_test2"
+    "public"
+
+-- alter publication drop CURRENT_SCHEMA
+ALTER PUBLICATION testpub1_forschema DROP SCHEMA CURRENT_SCHEMA;
+\dRp+ testpub1_forschema
+                                    Publication testpub1_forschema
+          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | Pubtype 
+--------------------------+------------+---------+---------+---------+-----------+----------+---------
+ regress_publication_user | f          | t       | t       | t       | t         | f        | s
+Schemas:
+    "pub_test1"
+    "pub_test2"
+
+-- alter publication drop schema
+ALTER PUBLICATION testpub1_forschema DROP SCHEMA pub_test2;
+\dRp+ testpub1_forschema
+                                    Publication testpub1_forschema
+          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | Pubtype 
+--------------------------+------------+---------+---------+---------+-----------+----------+---------
+ regress_publication_user | f          | t       | t       | t       | t         | f        | s
+Schemas:
+    "pub_test1"
+
+-- drop schema that is not present in the publication
+ALTER PUBLICATION testpub1_forschema DROP SCHEMA pub_test2;
+ERROR:  schema "pub_test2" is not part of the publication
+\dRp+ testpub1_forschema
+                                    Publication testpub1_forschema
+          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | Pubtype 
+--------------------------+------------+---------+---------+---------+-----------+----------+---------
+ regress_publication_user | f          | t       | t       | t       | t         | f        | s
+Schemas:
+    "pub_test1"
+
+-- drop a schema that does not exist in the system
+ALTER PUBLICATION testpub1_forschema DROP SCHEMA non_existent_schema;
+ERROR:  schema "non_existent_schema" does not exist
+\dRp+ testpub1_forschema
+                                    Publication testpub1_forschema
+          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | Pubtype 
+--------------------------+------------+---------+---------+---------+-----------+----------+---------
+ regress_publication_user | f          | t       | t       | t       | t         | f        | s
+Schemas:
+    "pub_test1"
+
+-- drop all schemas
+ALTER PUBLICATION testpub1_forschema DROP SCHEMA pub_test1;
+\dRp+ testpub1_forschema
+                                    Publication testpub1_forschema
+          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | Pubtype 
+--------------------------+------------+---------+---------+---------+-----------+----------+---------
+ regress_publication_user | f          | t       | t       | t       | t         | f        | s
+(1 row)
+
+-- alter publication set schema
+ALTER PUBLICATION testpub1_forschema SET SCHEMA pub_test1;
+\dRp+ testpub1_forschema
+                                    Publication testpub1_forschema
+          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | Pubtype 
+--------------------------+------------+---------+---------+---------+-----------+----------+---------
+ regress_publication_user | f          | t       | t       | t       | t         | f        | s
+Schemas:
+    "pub_test1"
+
+-- alter publication set multiple schema
+ALTER PUBLICATION testpub1_forschema SET SCHEMA pub_test1, pub_test2;
+\dRp+ testpub1_forschema
+                                    Publication testpub1_forschema
+          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | Pubtype 
+--------------------------+------------+---------+---------+---------+-----------+----------+---------
+ regress_publication_user | f          | t       | t       | t       | t         | f        | s
+Schemas:
+    "pub_test1"
+    "pub_test2"
+
+-- alter publication set non-existent schema
+ALTER PUBLICATION testpub1_forschema SET SCHEMA non_existent_schema;
+ERROR:  schema "non_existent_schema" does not exist
+\dRp+ testpub1_forschema
+                                    Publication testpub1_forschema
+          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | Pubtype 
+--------------------------+------------+---------+---------+---------+-----------+----------+---------
+ regress_publication_user | f          | t       | t       | t       | t         | f        | s
+Schemas:
+    "pub_test1"
+    "pub_test2"
+
+-- alter publication set it with the same schema
+ALTER PUBLICATION testpub1_forschema SET SCHEMA pub_test1, pub_test2;
+\dRp+ testpub1_forschema
+                                    Publication testpub1_forschema
+          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | Pubtype 
+--------------------------+------------+---------+---------+---------+-----------+----------+---------
+ regress_publication_user | f          | t       | t       | t       | t         | f        | s
+Schemas:
+    "pub_test1"
+    "pub_test2"
+
+-- alter publication set it duplicate schemas should set the schemas after
+-- removing the duplicate schemas
+ALTER PUBLICATION testpub1_forschema SET SCHEMA pub_test1, pub_test1;
+\dRp+ testpub1_forschema
+                                    Publication testpub1_forschema
+          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | Pubtype 
+--------------------------+------------+---------+---------+---------+-----------+----------+---------
+ regress_publication_user | f          | t       | t       | t       | t         | f        | s
+Schemas:
+    "pub_test1"
+
+-- alter publication set it with CURRENT_SCHEMA
+ALTER PUBLICATION testpub1_forschema SET SCHEMA CURRENT_SCHEMA;
+\dRp+ testpub1_forschema
+                                    Publication testpub1_forschema
+          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | Pubtype 
+--------------------------+------------+---------+---------+---------+-----------+----------+---------
+ regress_publication_user | f          | t       | t       | t       | t         | f        | s
+Schemas:
+    "public"
+
+-- alter publication set schema should change the publication type from e to s
+-- while altering an empty publication.
+SET client_min_messages = 'ERROR';
+CREATE PUBLICATION testpub4_forschema;
+RESET client_min_messages;
+\dRp+ testpub4_forschema
+                                    Publication testpub4_forschema
+          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | Pubtype 
+--------------------------+------------+---------+---------+---------+-----------+----------+---------
+ regress_publication_user | f          | t       | t       | t       | t         | f        | e
+(1 row)
+
+ALTER PUBLICATION testpub4_forschema SET SCHEMA pub_test1;
+\dRp+ testpub4_forschema
+                                    Publication testpub4_forschema
+          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root | Pubtype 
+--------------------------+------------+---------+---------+---------+-----------+----------+---------
+ regress_publication_user | f          | t       | t       | t       | t         | f        | s
+Schemas:
+    "pub_test1"
+
+DROP VIEW testpub_view;
 DROP PUBLICATION testpub_default;
 DROP PUBLICATION testpib_ins_trunct;
 DROP PUBLICATION testpub_fortbl;
+DROP PUBLICATION testpub1_forschema;
+DROP PUBLICATION testpub2_forschema;
+DROP PUBLICATION testpub3_forschema;
+DROP PUBLICATION testpub4_forschema;
 DROP SCHEMA pub_test CASCADE;
 NOTICE:  drop cascades to table pub_test.testpub_nopk
+DROP SCHEMA pub_test1 CASCADE;
+NOTICE:  drop cascades to table pub_test1.tbl1
+DROP SCHEMA pub_test2 CASCADE;
+NOTICE:  drop cascades to table pub_test2.tbl1
 RESET SESSION AUTHORIZATION;
 DROP ROLE regress_publication_user, regress_publication_user2;
 DROP ROLE regress_publication_user_dummy;

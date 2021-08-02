@@ -66,6 +66,7 @@
 #include "catalog/schemapg.h"
 #include "catalog/storage.h"
 #include "commands/policy.h"
+#include "commands/publicationcmds.h"
 #include "commands/trigger.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
@@ -5447,6 +5448,7 @@ GetRelationPublicationActions(Relation relation)
 	List	   *puboids;
 	ListCell   *lc;
 	MemoryContext oldcxt;
+	Oid			schemaid;
 	PublicationActions *pubactions = palloc0(sizeof(PublicationActions));
 
 	/*
@@ -5477,6 +5479,9 @@ GetRelationPublicationActions(Relation relation)
 		}
 	}
 	puboids = list_concat_unique_oid(puboids, GetAllTablesPublications());
+
+	schemaid = RelationGetNamespace(relation);
+	puboids = list_concat_unique_oid(puboids, GetSchemaPublications(schemaid));
 
 	foreach(lc, puboids)
 	{

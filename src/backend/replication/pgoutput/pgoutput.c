@@ -15,7 +15,9 @@
 #include "access/tupconvert.h"
 #include "catalog/partition.h"
 #include "catalog/pg_publication.h"
+#include "catalog/pg_publication_schema.h"
 #include "commands/defrem.h"
+#include "commands/publicationcmds.h"
 #include "fmgr.h"
 #include "replication/logical.h"
 #include "replication/logicalproto.h"
@@ -1059,6 +1061,9 @@ init_rel_sync_cache(MemoryContext cachectx)
 	CacheRegisterSyscacheCallback(PUBLICATIONRELMAP,
 								  rel_sync_cache_publication_cb,
 								  (Datum) 0);
+	CacheRegisterSyscacheCallback(PUBLICATIONSCHEMAMAP,
+								  rel_sync_cache_publication_cb,
+								  (Datum) 0);
 }
 
 /*
@@ -1163,11 +1168,26 @@ get_rel_sync_entry(PGOutputData *data, Oid relid)
 			Publication *pub = lfirst(lc);
 			bool		publish = false;
 
-			if (pub->alltables)
+			if (pub->pubtype == PUBTYPE_ALLTABLES)
 			{
 				publish = true;
 				if (pub->pubviaroot && am_partition)
 					publish_as_relid = llast_oid(get_partition_ancestors(relid));
+			}
+			else if (pub->pubtype == PUBTYPE_SCHEMA)
+			{
+				Oid			schemaId = get_rel_namespace(relid);
+				Oid			psid = GetSysCacheOid2(PUBLICATIONSCHEMAMAP,
+												   Anum_pg_publication_schema_oid,
+												   ObjectIdGetDatum(schemaId),
+												   ObjectIdGetDatum(pub->oid));
+
+				if (OidIsValid(psid))
+				{
+					publish = true;
+					if (pub->pubviaroot && am_partition)
+						publish_as_relid = llast_oid(get_partition_ancestors(relid));
+				}
 			}
 
 			if (!publish)

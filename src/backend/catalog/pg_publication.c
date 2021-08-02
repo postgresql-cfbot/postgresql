@@ -28,9 +28,12 @@
 #include "catalog/objectaccess.h"
 #include "catalog/objectaddress.h"
 #include "catalog/pg_inherits.h"
+#include "catalog/pg_namespace.h"
 #include "catalog/pg_publication.h"
 #include "catalog/pg_publication_rel.h"
+#include "catalog/pg_publication_schema.h"
 #include "catalog/pg_type.h"
+#include "commands/publicationcmds.h"
 #include "funcapi.h"
 #include "miscadmin.h"
 #include "utils/array.h"
@@ -214,6 +217,92 @@ publication_add_relation(Oid pubid, Relation targetrel,
 	return myself;
 }
 
+/*
+ * Insert new publication / schema mapping.
+ */
+ObjectAddress
+publication_add_schema(Oid pubid, Oid schemaoid, bool if_not_exists)
+{
+	Relation	rel;
+	HeapTuple	tup;
+	Datum		values[Natts_pg_publication_schema];
+	bool		nulls[Natts_pg_publication_schema];
+	Oid			psschid;
+	Publication *pub = GetPublication(pubid);
+	ObjectAddress myself,
+				referenced;
+
+	rel = table_open(PublicationSchemaRelationId, RowExclusiveLock);
+
+	/*
+	 * Check for duplicates. Note that this does not really prevent
+	 * duplicates, it's here just to provide nicer error message in common
+	 * case. The real protection is the unique key on the catalog.
+	 */
+	if (SearchSysCacheExists2(PUBLICATIONSCHEMAMAP, ObjectIdGetDatum(schemaoid),
+							  ObjectIdGetDatum(pubid)))
+	{
+		table_close(rel, RowExclusiveLock);
+
+		if (if_not_exists)
+			return InvalidObjectAddress;
+
+		ereport(ERROR,
+				(errcode(ERRCODE_DUPLICATE_OBJECT),
+				 errmsg("schema \"%s\" is already member of publication \"%s\"",
+						get_namespace_name(schemaoid), pub->name)));
+	}
+
+	/* Can't be system namespace */
+	if (IsCatalogNamespace(schemaoid) || IsToastNamespace(schemaoid))
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("\"%s\" is a system schema",
+						get_namespace_name(schemaoid)),
+				 errdetail("System schemas cannot be added to publications.")));
+
+	/* Can't be temporary namespace */
+	if (isAnyTempNamespace(schemaoid))
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("\"%s\" is a temporary schema",
+						get_namespace_name(schemaoid)),
+				 errdetail("Temporary schemas cannot be added to publications.")));
+
+	/* Form a tuple */
+	memset(values, 0, sizeof(values));
+	memset(nulls, false, sizeof(nulls));
+
+	psschid = GetNewOidWithIndex(rel, PublicationSchemaObjectIndexId,
+								 Anum_pg_publication_schema_oid);
+	values[Anum_pg_publication_schema_oid - 1] = ObjectIdGetDatum(psschid);
+	values[Anum_pg_publication_schema_pspubid - 1] =
+		ObjectIdGetDatum(pubid);
+	values[Anum_pg_publication_schema_psnspcid - 1] =
+		ObjectIdGetDatum(schemaoid);
+
+	tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
+
+	/* Insert tuple into catalog */
+	CatalogTupleInsert(rel, tup);
+	heap_freetuple(tup);
+
+	ObjectAddressSet(myself, PublicationSchemaRelationId, psschid);
+
+	/* Add dependency on the publication */
+	ObjectAddressSet(referenced, PublicationRelationId, pubid);
+	recordDependencyOn(&myself, &referenced, DEPENDENCY_AUTO);
+
+	/* Add dependency on the schema */
+	ObjectAddressSet(referenced, NamespaceRelationId, schemaoid);
+	recordDependencyOn(&myself, &referenced, DEPENDENCY_AUTO);
+
+	/* Close the table */
+	table_close(rel, RowExclusiveLock);
+
+	return myself;
+}
+
 /* Gets list of publication oids for a relation */
 List *
 GetRelationPublications(Oid relid)
@@ -305,6 +394,83 @@ GetPublicationRelations(Oid pubid, PublicationPartOpt pub_partopt)
 }
 
 /*
+ * Gets the list of schema oids for a publication.
+ *
+ * This should only be used for normal publications.
+ */
+List *
+GetPublicationSchemas(Oid pubid)
+{
+	List	   *result = NIL;
+	Relation	pubschsrel;
+	ScanKeyData scankey;
+	SysScanDesc scan;
+	HeapTuple	tup;
+
+	/* Find all publications associated with the schema */
+	pubschsrel = table_open(PublicationSchemaRelationId, AccessShareLock);
+
+	ScanKeyInit(&scankey,
+				Anum_pg_publication_schema_pspubid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(pubid));
+
+	scan = systable_beginscan(pubschsrel, PublicationSchemaPsnspcidPspubidIndexId,
+							  true, NULL, 1, &scankey);
+	while (HeapTupleIsValid(tup = systable_getnext(scan)))
+	{
+		Form_pg_publication_schema pubsch;
+
+		pubsch = (Form_pg_publication_schema) GETSTRUCT(tup);
+
+		result = lappend_oid(result, pubsch->psnspcid);
+	}
+
+	systable_endscan(scan);
+	table_close(pubschsrel, AccessShareLock);
+
+	return result;
+}
+
+
+/*
+ * Gets list of publication oids for publications marked as FOR SCHEMA.
+ */
+List *
+GetSchemaPublications(Oid schemaid)
+{
+	List	   *result = NIL;
+	Relation	pubschsrel;
+	ScanKeyData scankey;
+	SysScanDesc scan;
+	HeapTuple	tup;
+
+	/* Find all publications associated with the schema */
+	pubschsrel = table_open(PublicationSchemaRelationId, AccessShareLock);
+
+	ScanKeyInit(&scankey,
+				Anum_pg_publication_schema_psnspcid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(schemaid));
+
+	scan = systable_beginscan(pubschsrel,
+							  PublicationSchemaPsnspcidPspubidIndexId, true,
+							  NULL, 1, &scankey);
+	while (HeapTupleIsValid(tup = systable_getnext(scan)))
+	{
+		Form_pg_publication_schema pubsch;
+
+		pubsch = (Form_pg_publication_schema) GETSTRUCT(tup);
+		result = lappend_oid(result, pubsch->pspubid);
+	}
+
+	systable_endscan(scan);
+	table_close(pubschsrel, AccessShareLock);
+
+	return result;
+}
+
+/*
  * Gets list of publication oids for publications marked as FOR ALL TABLES.
  */
 List *
@@ -342,29 +508,37 @@ GetAllTablesPublications(void)
 }
 
 /*
- * Gets list of all relation published by FOR ALL TABLES publication(s).
+ * Gets the list of relations published.
  *
  * If the publication publishes partition changes via their respective root
  * partitioned tables, we must exclude partitions in favor of including the
- * root partitioned tables.
+ * root partitioned tables. If schemaOid is specified, get the relations present
+ * in the schema specified.
  */
 List *
-GetAllTablesPublicationRelations(bool pubviaroot)
+GetAllTablesPublicationRelations(bool pubviaroot, Oid schemaOid)
 {
 	Relation	classRel;
-	ScanKeyData key[1];
+	ScanKeyData key[2];
 	TableScanDesc scan;
 	HeapTuple	tuple;
 	List	   *result = NIL;
+	int			keycount = 0;
 
 	classRel = table_open(RelationRelationId, AccessShareLock);
 
-	ScanKeyInit(&key[0],
+	ScanKeyInit(&key[keycount++],
 				Anum_pg_class_relkind,
 				BTEqualStrategyNumber, F_CHAREQ,
 				CharGetDatum(RELKIND_RELATION));
 
-	scan = table_beginscan_catalog(classRel, 1, key);
+	if (schemaOid != InvalidOid)
+		ScanKeyInit(&key[keycount++],
+					Anum_pg_class_relnamespace,
+					BTEqualStrategyNumber, F_OIDEQ,
+					schemaOid);
+
+	scan = table_beginscan_catalog(classRel, keycount, key);
 
 	while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
 	{
@@ -380,12 +554,14 @@ GetAllTablesPublicationRelations(bool pubviaroot)
 
 	if (pubviaroot)
 	{
-		ScanKeyInit(&key[0],
+		ScanKeyData skey[1];
+
+		ScanKeyInit(&skey[0],
 					Anum_pg_class_relkind,
 					BTEqualStrategyNumber, F_CHAREQ,
 					CharGetDatum(RELKIND_PARTITIONED_TABLE));
 
-		scan = table_beginscan_catalog(classRel, 1, key);
+		scan = table_beginscan_catalog(classRel, 1, skey);
 
 		while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
 		{
@@ -401,6 +577,29 @@ GetAllTablesPublicationRelations(bool pubviaroot)
 	}
 
 	table_close(classRel, AccessShareLock);
+	return result;
+}
+
+/*
+ * Gets the list of all relations published by FOR SCHEMA publication(s).
+ */
+List *
+GetAllSchemasPublicationRelations(bool pubviaroot, Oid puboid)
+{
+	List	   *result = NIL;
+	List	   *pubschemalist = GetPublicationSchemas(puboid);
+	ListCell   *cell;
+
+	foreach(cell, pubschemalist)
+	{
+		Oid			schemaOid = lfirst_oid(cell);
+		List	   *schemaRels = NIL;
+
+		schemaRels = GetAllTablesPublicationRelations(pubviaroot,
+													  schemaOid);
+		result = list_concat(result, schemaRels);
+	}
+
 	return result;
 }
 
@@ -431,6 +630,7 @@ GetPublication(Oid pubid)
 	pub->pubactions.pubdelete = pubform->pubdelete;
 	pub->pubactions.pubtruncate = pubform->pubtruncate;
 	pub->pubviaroot = pubform->pubviaroot;
+	pub->pubtype = pubform->pubtype;
 
 	ReleaseSysCache(tup);
 
@@ -530,13 +730,19 @@ pg_get_publication_tables(PG_FUNCTION_ARGS)
 		 * replicated using leaf partition identity and schema, so we only
 		 * need those.
 		 */
-		if (publication->alltables)
-			tables = GetAllTablesPublicationRelations(publication->pubviaroot);
-		else
+		if (publication->pubtype == PUBTYPE_ALLTABLES)
+			tables = GetAllTablesPublicationRelations(publication->pubviaroot,
+													  InvalidOid);
+		else if (publication->pubtype == PUBTYPE_TABLE)
 			tables = GetPublicationRelations(publication->oid,
 											 publication->pubviaroot ?
 											 PUBLICATION_PART_ROOT :
 											 PUBLICATION_PART_LEAF);
+		else if (publication->pubtype == PUBTYPE_SCHEMA)
+			tables = GetAllSchemasPublicationRelations(publication->pubviaroot,
+													   publication->oid);
+		else
+			tables = NIL;
 		funcctx->user_fctx = (void *) tables;
 
 		MemoryContextSwitchTo(oldcontext);

@@ -81,6 +81,7 @@ typedef enum
 	DO_POLICY,
 	DO_PUBLICATION,
 	DO_PUBLICATION_REL,
+	DO_PUBLICATION_SCHEMA,
 	DO_SUBSCRIPTION
 } DumpableObjectType;
 
@@ -94,6 +95,7 @@ typedef uint32 DumpComponents;	/* a bitmask of dump object components */
 #define DUMP_COMPONENT_ACL			(1 << 4)
 #define DUMP_COMPONENT_POLICY		(1 << 5)
 #define DUMP_COMPONENT_USERMAP		(1 << 6)
+#define DUMP_COMPONENT_PUBSCHEMA	(1 << 7)
 #define DUMP_COMPONENT_ALL			(0xFFFF)
 
 /*
@@ -616,6 +618,7 @@ typedef struct _PublicationInfo
 	bool		pubdelete;
 	bool		pubtruncate;
 	bool		pubviaroot;
+	char		pubtype;
 } PublicationInfo;
 
 /*
@@ -628,6 +631,18 @@ typedef struct _PublicationRelInfo
 	PublicationInfo *publication;
 	TableInfo  *pubtable;
 } PublicationRelInfo;
+
+/*
+ * The PublicationSchemaInfo struct is used to represent publication schema
+ * mapping.
+ */
+typedef struct PublicationSchemaInfo
+{
+	DumpableObject dobj;
+	NamespaceInfo *pubschema;
+	char	   *pubname;
+	PublicationInfo *publication;
+} PublicationSchemaInfo;
 
 /*
  * The SubscriptionInfo struct is used to represent subscription.
@@ -735,6 +750,8 @@ extern PublicationInfo *getPublications(Archive *fout,
 										int *numPublications);
 extern void getPublicationTables(Archive *fout, TableInfo tblinfo[],
 								 int numTables);
+extern void getPublicationSchemas(Archive *fout, NamespaceInfo nspinfo[],
+								  int numSchemas);
 extern void getSubscriptions(Archive *fout);
 
 #endif							/* PG_DUMP_H */

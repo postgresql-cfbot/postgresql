@@ -1640,10 +1640,19 @@ psql_completion(const char *text, int start, int end)
 
 	/* ALTER PUBLICATION <name> */
 	else if (Matches("ALTER", "PUBLICATION", MatchAny))
-		COMPLETE_WITH("ADD TABLE", "DROP TABLE", "OWNER TO", "RENAME TO", "SET");
+		COMPLETE_WITH("ADD", "DROP", "OWNER TO", "RENAME TO", "SET");
+	/* ALTER PUBLICATION <name> ADD */
+	else if (Matches("ALTER", "PUBLICATION", MatchAny, "ADD"))
+		COMPLETE_WITH("SCHEMA", "TABLE");
+	/* ALTER PUBLICATION <name> DROP */
+	else if (Matches("ALTER", "PUBLICATION", MatchAny, "DROP"))
+		COMPLETE_WITH("SCHEMA", "TABLE");
 	/* ALTER PUBLICATION <name> SET */
 	else if (Matches("ALTER", "PUBLICATION", MatchAny, "SET"))
-		COMPLETE_WITH("(", "TABLE");
+		COMPLETE_WITH("(", "SCHEMA", "TABLE");
+	else if (Matches("ALTER", "PUBLICATION", MatchAny, "ADD|DROP|SET", "SCHEMA"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_schemas
+							" UNION SELECT 'CURRENT_SCHEMA'");
 	/* ALTER PUBLICATION <name> SET ( */
 	else if (HeadMatches("ALTER", "PUBLICATION", MatchAny) && TailMatches("SET", "("))
 		COMPLETE_WITH("publish", "publish_via_partition_root");
@@ -2641,15 +2650,20 @@ psql_completion(const char *text, int start, int end)
 
 /* CREATE PUBLICATION */
 	else if (Matches("CREATE", "PUBLICATION", MatchAny))
-		COMPLETE_WITH("FOR TABLE", "FOR ALL TABLES", "WITH (");
+		COMPLETE_WITH("FOR TABLE", "FOR ALL TABLES", "FOR SCHEMA", "WITH (");
 	else if (Matches("CREATE", "PUBLICATION", MatchAny, "FOR"))
-		COMPLETE_WITH("TABLE", "ALL TABLES");
+		COMPLETE_WITH("TABLE", "ALL TABLES", "SCHEMA");
 	/* Complete "CREATE PUBLICATION <name> FOR TABLE <table>, ..." */
 	else if (HeadMatches("CREATE", "PUBLICATION", MatchAny, "FOR", "TABLE"))
 		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_tables, NULL);
 	/* Complete "CREATE PUBLICATION <name> [...] WITH" */
 	else if (HeadMatches("CREATE", "PUBLICATION") && TailMatches("WITH", "("))
 		COMPLETE_WITH("publish", "publish_via_partition_root");
+	/* Complete "CREATE PUBLICATION <name> FOR SCHEMA <schema>, ..." */
+	else if (HeadMatches("CREATE", "PUBLICATION", MatchAny, "FOR", "SCHEMA"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_schemas
+							" UNION SELECT 'CURRENT_SCHEMA' "
+							"UNION SELECT 'WITH ('");
 
 /* CREATE RULE */
 	/* Complete "CREATE [ OR REPLACE ] RULE <sth>" with "AS ON" */

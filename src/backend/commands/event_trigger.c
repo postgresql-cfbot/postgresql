@@ -974,6 +974,7 @@ EventTriggerSupportsObjectType(ObjectType obtype)
 		case OBJECT_PROCEDURE:
 		case OBJECT_PUBLICATION:
 		case OBJECT_PUBLICATION_REL:
+		case OBJECT_PUBLICATION_SCHEMA:
 		case OBJECT_ROUTINE:
 		case OBJECT_RULE:
 		case OBJECT_SCHEMA:
@@ -1051,6 +1052,7 @@ EventTriggerSupportsObjectClass(ObjectClass objclass)
 		case OCLASS_POLICY:
 		case OCLASS_PUBLICATION:
 		case OCLASS_PUBLICATION_REL:
+		case OCLASS_PUBLICATION_SCHEMA:
 		case OCLASS_SUBSCRIPTION:
 		case OCLASS_TRANSFORM:
 			return true;
@@ -2127,6 +2129,7 @@ stringify_grant_objtype(ObjectType objtype)
 		case OBJECT_POLICY:
 		case OBJECT_PUBLICATION:
 		case OBJECT_PUBLICATION_REL:
+		case OBJECT_PUBLICATION_SCHEMA:
 		case OBJECT_ROLE:
 		case OBJECT_RULE:
 		case OBJECT_STATISTIC_EXT:
@@ -2209,6 +2212,7 @@ stringify_adefprivs_objtype(ObjectType objtype)
 		case OBJECT_POLICY:
 		case OBJECT_PUBLICATION:
 		case OBJECT_PUBLICATION_REL:
+		case OBJECT_PUBLICATION_SCHEMA:
 		case OBJECT_ROLE:
 		case OBJECT_RULE:
 		case OBJECT_STATISTIC_EXT:

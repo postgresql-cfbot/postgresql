@@ -18,7 +18,6 @@
 #define PG_PUBLICATION_H
 
 #include "catalog/genbki.h"
-#include "catalog/objectaddress.h"
 #include "catalog/pg_publication_d.h"
 
 /* ----------------
@@ -54,6 +53,9 @@ CATALOG(pg_publication,6104,PublicationRelationId)
 
 	/* true if partition changes are published using root schema */
 	bool		pubviaroot;
+
+	/* see PUBTYPE_xxx constants below */
+	char		pubtype;
 } FormData_pg_publication;
 
 /* ----------------
@@ -81,11 +83,8 @@ typedef struct Publication
 	bool		alltables;
 	bool		pubviaroot;
 	PublicationActions pubactions;
+	char		pubtype;
 } Publication;
-
-extern Publication *GetPublication(Oid pubid);
-extern Publication *GetPublicationByName(const char *pubname, bool missing_ok);
-extern List *GetRelationPublications(Oid relid);
 
 /*---------
  * Expected values for pub_partopt parameter of GetRelationPublications(),
@@ -103,16 +102,26 @@ typedef enum PublicationPartOpt
 	PUBLICATION_PART_ALL,
 } PublicationPartOpt;
 
-extern List *GetPublicationRelations(Oid pubid, PublicationPartOpt pub_partopt);
-extern List *GetAllTablesPublications(void);
-extern List *GetAllTablesPublicationRelations(bool pubviaroot);
+/* Publication types */
+#define PUBTYPE_ALLTABLES	'a'		/* all tables publication */
+#define PUBTYPE_TABLE		't'		/* table publication */
+#define PUBTYPE_SCHEMA		's'		/* schema publication */
+#define PUBTYPE_EMPTY		'e'		/* empty publication */
 
-extern bool is_publishable_relation(Relation rel);
-extern ObjectAddress publication_add_relation(Oid pubid, Relation targetrel,
-											  bool if_not_exists);
+/*
+ * Return the publication type.
+*/
+static inline char
+get_publication_type(char *strpubtype)
+{
+	if (strcmp(strpubtype, "a") == 0)
+		return PUBTYPE_ALLTABLES;
+	else if (strcmp(strpubtype, "t") == 0)
+		return PUBTYPE_TABLE;
+	else if (strcmp(strpubtype, "s") == 0)
+		return PUBTYPE_SCHEMA;
 
-extern Oid	get_publication_oid(const char *pubname, bool missing_ok);
-extern char *get_publication_name(Oid pubid, bool missing_ok);
-
+	return PUBTYPE_EMPTY;
+}
 
 #endif							/* PG_PUBLICATION_H */

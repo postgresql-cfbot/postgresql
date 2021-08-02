@@ -51,6 +51,7 @@
 #include "catalog/pg_largeobject_d.h"
 #include "catalog/pg_largeobject_metadata_d.h"
 #include "catalog/pg_proc_d.h"
+#include "catalog/pg_publication.h"
 #include "catalog/pg_subscription.h"
 #include "catalog/pg_trigger_d.h"
 #include "catalog/pg_type_d.h"
@@ -1630,9 +1631,13 @@ selectDumpableNamespace(NamespaceInfo *nsinfo, Archive *fout)
 		if (nsinfo->nspowner == BOOTSTRAP_SUPERUSERID)
 			nsinfo->dobj.dump &= ~DUMP_COMPONENT_DEFINITION;
 		nsinfo->dobj.dump_contains = DUMP_COMPONENT_ALL;
+		nsinfo->dobj.dump |= DUMP_COMPONENT_PUBSCHEMA;
 	}
 	else
+	{
 		nsinfo->dobj.dump_contains = nsinfo->dobj.dump = DUMP_COMPONENT_ALL;
+		nsinfo->dobj.dump |= DUMP_COMPONENT_PUBSCHEMA;
+	}
 
 	/*
 	 * In any case, a namespace can be excluded by an exclusion switch
@@ -3950,6 +3955,7 @@ getPublications(Archive *fout, int *numPublications)
 	int			i_pubdelete;
 	int			i_pubtruncate;
 	int			i_pubviaroot;
+	int			i_pubtype;
 	int			i,
 				ntups;
 
@@ -3964,25 +3970,37 @@ getPublications(Archive *fout, int *numPublications)
 	resetPQExpBuffer(query);
 
 	/* Get the publications. */
-	if (fout->remoteVersion >= 130000)
+	if (fout->remoteVersion >= 150000)
 		appendPQExpBuffer(query,
 						  "SELECT p.tableoid, p.oid, p.pubname, "
 						  "(%s p.pubowner) AS rolname, "
-						  "p.puballtables, p.pubinsert, p.pubupdate, p.pubdelete, p.pubtruncate, p.pubviaroot "
+						  "p.puballtables, p.pubinsert, p.pubupdate, "
+						  "p.pubdelete, p.pubtruncate, p.pubviaroot, p.pubtype "
 						  "FROM pg_publication p",
+						  username_subquery);
+	else if (fout->remoteVersion >= 130000)
+		appendPQExpBuffer(query,
+						  "SELECT p.tableoid, p.oid, p.pubname, "
+						  "(%s p.pubowner) AS rolname, "
+						  "p.puballtables, p.pubinsert, p.pubupdate, "
+						  "p.pubdelete, p.pubtruncate, p.pubviaroot, "
+						  "NULL AS pubtype FROM pg_publication p",
 						  username_subquery);
 	else if (fout->remoteVersion >= 110000)
 		appendPQExpBuffer(query,
 						  "SELECT p.tableoid, p.oid, p.pubname, "
 						  "(%s p.pubowner) AS rolname, "
-						  "p.puballtables, p.pubinsert, p.pubupdate, p.pubdelete, p.pubtruncate, false AS pubviaroot "
-						  "FROM pg_publication p",
+						  "p.puballtables, p.pubinsert, p.pubupdate, "
+						  "p.pubdelete, p.pubtruncate, false AS pubviaroot, "
+						  "NULL AS pubtype FROM pg_publication p",
 						  username_subquery);
 	else
 		appendPQExpBuffer(query,
 						  "SELECT p.tableoid, p.oid, p.pubname, "
 						  "(%s p.pubowner) AS rolname, "
-						  "p.puballtables, p.pubinsert, p.pubupdate, p.pubdelete, false AS pubtruncate, false AS pubviaroot "
+						  "p.puballtables, p.pubinsert, p.pubupdate, "
+						  "p.pubdelete, false AS pubtruncate, "
+						  "false AS pubviaroot, NULL AS pubtype "
 						  "FROM pg_publication p",
 						  username_subquery);
 
@@ -4000,6 +4018,7 @@ getPublications(Archive *fout, int *numPublications)
 	i_pubdelete = PQfnumber(res, "pubdelete");
 	i_pubtruncate = PQfnumber(res, "pubtruncate");
 	i_pubviaroot = PQfnumber(res, "pubviaroot");
+	i_pubtype = PQfnumber(res, "pubtype");
 
 	pubinfo = pg_malloc(ntups * sizeof(PublicationInfo));
 
@@ -4024,6 +4043,7 @@ getPublications(Archive *fout, int *numPublications)
 			(strcmp(PQgetvalue(res, i, i_pubtruncate), "t") == 0);
 		pubinfo[i].pubviaroot =
 			(strcmp(PQgetvalue(res, i, i_pubviaroot), "t") == 0);
+		pubinfo[i].pubtype = get_publication_type(PQgetvalue(res, i, i_pubtype));
 
 		if (strlen(pubinfo[i].rolname) == 0)
 			pg_log_warning("owner of publication \"%s\" appears to be invalid",
@@ -4066,7 +4086,7 @@ dumpPublication(Archive *fout, const PublicationInfo *pubinfo)
 	appendPQExpBuffer(query, "CREATE PUBLICATION %s",
 					  qpubname);
 
-	if (pubinfo->puballtables)
+	if (pubinfo->puballtables || pubinfo->pubtype == PUBTYPE_ALLTABLES)
 		appendPQExpBufferStr(query, " FOR ALL TABLES");
 
 	appendPQExpBufferStr(query, " WITH (publish = '");
@@ -4131,6 +4151,100 @@ dumpPublication(Archive *fout, const PublicationInfo *pubinfo)
 	destroyPQExpBuffer(delq);
 	destroyPQExpBuffer(query);
 	free(qpubname);
+}
+
+/*
+ * getPublicationSchemas
+ *	  get information about publication membership for dumpable schemas
+ */
+void
+getPublicationSchemas(Archive *fout, NamespaceInfo nspinfo[], int numSchemas)
+{
+	PQExpBuffer query;
+	PGresult   *res;
+	PublicationSchemaInfo *pubsinfo;
+	DumpOptions *dopt = fout->dopt;
+	int			i_schemaoid;
+	int			i_oid;
+	int			i_pubname;
+	int			i_pubid;
+	int			i,
+				j,
+				ntups;
+
+	if (dopt->no_publications || fout->remoteVersion < 150000)
+		return;
+
+	query = createPQExpBuffer();
+
+	for (i = 0; i < numSchemas; i++)
+	{
+		NamespaceInfo *nsinfo = &nspinfo[i];
+		PublicationInfo *pubinfo;
+
+		/*
+		 * Ignore publication membership of schemas whose definitions are not
+		 * to be dumped.
+		 */
+		if (!(nsinfo->dobj.dump & DUMP_COMPONENT_PUBSCHEMA))
+			continue;
+
+		pg_log_info("reading publication membership for schema \"%s\"",
+					nsinfo->dobj.name);
+
+		/* Get the publication membership for the schema */
+		printfPQExpBuffer(query,
+						  "SELECT ps.psnspcid, ps.oid, p.pubname, p.oid AS pubid "
+						  "FROM pg_publication_schema ps, pg_publication p "
+						  "WHERE ps.psnspcid = '%u' "
+						  "AND p.oid = ps.pspubid",
+						  nsinfo->dobj.catId.oid);
+		res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
+
+		ntups = PQntuples(res);
+
+		if (ntups == 0)
+		{
+			/*
+			 * Schema is not a member of any publications. Clean up and
+			 * process the next schema.
+			 */
+			PQclear(res);
+			continue;
+		}
+
+		i_schemaoid = PQfnumber(res, "psnspcid");
+		i_oid = PQfnumber(res, "oid");
+		i_pubname = PQfnumber(res, "pubname");
+		i_pubid = PQfnumber(res, "pubid");
+
+		pubsinfo = pg_malloc(ntups * sizeof(PublicationSchemaInfo));
+
+		for (j = 0; j < ntups; j++)
+		{
+			Oid			pspubid = atooid(PQgetvalue(res, j, i_pubid));
+
+			pubinfo = findPublicationByOid(pspubid);
+			if (pubinfo == NULL)
+				continue;
+
+			pubsinfo[j].dobj.objType = DO_PUBLICATION_SCHEMA;
+			pubsinfo[j].dobj.catId.tableoid =
+				atooid(PQgetvalue(res, j, i_schemaoid));
+			pubsinfo[j].dobj.catId.oid = atooid(PQgetvalue(res, j, i_oid));
+			AssignDumpId(&pubsinfo[j].dobj);
+			pubsinfo[j].dobj.namespace = nsinfo->dobj.namespace;
+			pubsinfo[j].dobj.name = nsinfo->dobj.name;
+			pubsinfo[j].pubname = pg_strdup(PQgetvalue(res, j, i_pubname));
+			pubsinfo[j].pubschema = nsinfo;
+			pubsinfo[j].publication = pubinfo;
+
+			/* Decide whether we want to dump it */
+			selectDumpablePublicationTable(&(pubsinfo[j].dobj), fout);
+		}
+		PQclear(res);
+	}
+	destroyPQExpBuffer(query);
 }
 
 /*
@@ -4217,6 +4331,44 @@ getPublicationTables(Archive *fout, TableInfo tblinfo[], int numTables)
 	}
 
 	PQclear(res);
+	destroyPQExpBuffer(query);
+}
+
+/*
+ * dumpPublicationSchema
+ *	  dump the definition of the given publication schema mapping
+ */
+static void
+dumpPublicationSchema(Archive *fout, const PublicationSchemaInfo *pubsinfo)
+{
+	NamespaceInfo *schemainfo = pubsinfo->pubschema;
+	PublicationInfo *pubinfo = pubsinfo->publication;
+	PQExpBuffer query;
+	char	   *tag;
+
+	if (!(pubsinfo->dobj.dump & DUMP_COMPONENT_DEFINITION))
+		return;
+
+	tag = psprintf("%s %s", pubsinfo->pubname, schemainfo->dobj.name);
+
+	query = createPQExpBuffer();
+
+	appendPQExpBuffer(query, "ALTER PUBLICATION %s ", fmtId(pubsinfo->pubname));
+	appendPQExpBuffer(query, "ADD SCHEMA %s;\n", fmtId(schemainfo->dobj.name));
+
+	/*
+	 * There is no point in creating drop query as the drop is done by schema
+	 * drop.
+	 */
+	ArchiveEntry(fout, pubsinfo->dobj.catId, pubsinfo->dobj.dumpId,
+				 ARCHIVE_OPTS(.tag = tag,
+							  .namespace = schemainfo->dobj.name,
+							  .owner = pubinfo->rolname,
+							  .description = "PUBLICATION SCHEMA",
+							  .section = SECTION_POST_DATA,
+							  .createStmt = query->data));
+
+	free(tag);
 	destroyPQExpBuffer(query);
 }
 
@@ -10444,6 +10596,9 @@ dumpDumpableObject(Archive *fout, const DumpableObject *dobj)
 			break;
 		case DO_PUBLICATION_REL:
 			dumpPublicationTable(fout, (const PublicationRelInfo *) dobj);
+			break;
+		case DO_PUBLICATION_SCHEMA:
+			dumpPublicationSchema(fout, (const PublicationSchemaInfo *) dobj);
 			break;
 		case DO_SUBSCRIPTION:
 			dumpSubscription(fout, (const SubscriptionInfo *) dobj);
@@ -18693,6 +18848,7 @@ addBoundaryDependencies(DumpableObject **dobjs, int numObjs,
 			case DO_POLICY:
 			case DO_PUBLICATION:
 			case DO_PUBLICATION_REL:
+			case DO_PUBLICATION_SCHEMA:
 			case DO_SUBSCRIPTION:
 				/* Post-data objects: must come after the post-data boundary */
 				addObjectDependency(dobj, postDataBound->dumpId);

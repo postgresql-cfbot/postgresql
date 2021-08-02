@@ -169,6 +169,7 @@ static Node *makeNullAConst(int location);
 static Node *makeAConst(Value *v, int location);
 static Node *makeBoolAConst(bool state, int location);
 static RoleSpec *makeRoleSpec(RoleSpecType type, int location);
+static SchemaSpec *makeSchemaSpec(SchemaSpecType type, int location);
 static void check_qualified_name(List *names, core_yyscan_t yyscanner);
 static List *check_func_name(List *names, core_yyscan_t yyscanner);
 static List *check_indirection(List *indirection, core_yyscan_t yyscanner);
@@ -257,6 +258,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	PartitionSpec		*partspec;
 	PartitionBoundSpec	*partboundspec;
 	RoleSpec			*rolespec;
+	SchemaSpec			*schemaspec;
 	struct SelectLimit	*selectlimit;
 	SetQuantifier	 setquantifier;
 	struct GroupClause  *groupclause;
@@ -426,14 +428,13 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				transform_element_list transform_type_list
 				TriggerTransitions TriggerReferencing
 				vacuum_relation_list opt_vacuum_relation_list
-				drop_option_list
+				drop_option_list schema_list
 
 %type <node>	opt_routine_body
 %type <groupclause> group_clause
 %type <list>	group_by_list
 %type <node>	group_by_item empty_grouping_set rollup_clause cube_clause
 %type <node>	grouping_sets_clause
-%type <node>	opt_publication_for_tables publication_for_tables
 
 %type <list>	opt_fdw_options fdw_options
 %type <defelt>	fdw_option
@@ -554,6 +555,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <str>		createdb_opt_name plassign_target
 %type <node>	var_value zone_value
 %type <rolespec> auth_ident RoleSpec opt_granted_by
+%type <schemaspec> SchemaSpec
 
 %type <keyword> unreserved_keyword type_func_name_keyword
 %type <keyword> col_name_keyword reserved_keyword
@@ -9591,45 +9593,68 @@ AlterOwnerStmt: ALTER AGGREGATE aggregate_with_argtypes OWNER TO RoleSpec
 
 /*****************************************************************************
  *
- * CREATE PUBLICATION name [ FOR TABLE ] [ WITH options ]
+ * CREATE PUBLICATION name [WITH options]
  *
+ * CREATE PUBLICATION FOR ALL TABLES [WITH options]
+ *
+ * CREATE PUBLICATION FOR TABLE [WITH options]
+ *
+ * CREATE PUBLICATION FOR SCHEMA [WITH options]
  *****************************************************************************/
 
 CreatePublicationStmt:
-			CREATE PUBLICATION name opt_publication_for_tables opt_definition
+			CREATE PUBLICATION name opt_definition
 				{
 					CreatePublicationStmt *n = makeNode(CreatePublicationStmt);
 					n->pubname = $3;
-					n->options = $5;
-					if ($4 != NULL)
-					{
-						/* FOR TABLE */
-						if (IsA($4, List))
-							n->tables = (List *)$4;
-						/* FOR ALL TABLES */
-						else
-							n->for_all_tables = true;
-					}
+					n->options = $4;
+					$$ = (Node *)n;
+				}
+			| CREATE PUBLICATION name FOR ALL TABLES opt_definition
+				{
+					CreatePublicationStmt *n = makeNode(CreatePublicationStmt);
+					n->pubname = $3;
+					n->options = $7;
+					n->for_all_tables = true;
+					$$ = (Node *)n;
+				}
+			| CREATE PUBLICATION name FOR TABLE relation_expr_list opt_definition
+				{
+					CreatePublicationStmt *n = makeNode(CreatePublicationStmt);
+					n->pubname = $3;
+					n->options = $7;
+					n->tables = (List *)$6;
+					$$ = (Node *)n;
+				}
+			| CREATE PUBLICATION name FOR SCHEMA schema_list opt_definition
+				{
+					CreatePublicationStmt *n = makeNode(CreatePublicationStmt);
+					n->pubname = $3;
+					n->options = $7;
+					n->schemas = (List *)$6;
 					$$ = (Node *)n;
 				}
 		;
 
-opt_publication_for_tables:
-			publication_for_tables					{ $$ = $1; }
-			| /* EMPTY */							{ $$ = NULL; }
+/* Schema specifications */
+SchemaSpec:	ColId
+					{
+						SchemaSpec *n;
+						n = makeSchemaSpec(SCHEMASPEC_CSTRING, @1);
+						n->schemaname = pstrdup($1);
+						$$ = n;
+					}
+			| CURRENT_SCHEMA
+					{
+						$$ = makeSchemaSpec(SCHEMASPEC_CURRENT_SCHEMA, @1);
+					}
 		;
 
-publication_for_tables:
-			FOR TABLE relation_expr_list
-				{
-					$$ = (Node *) $3;
-				}
-			| FOR ALL TABLES
-				{
-					$$ = (Node *) makeInteger(true);
-				}
+schema_list:	SchemaSpec
+					{ $$ = list_make1($1); }
+			| schema_list ',' SchemaSpec
+					{ $$ = lappend($1, $3); }
 		;
-
 
 /*****************************************************************************
  *
@@ -9641,6 +9666,11 @@ publication_for_tables:
  *
  * ALTER PUBLICATION name SET TABLE table [, table2]
  *
+ * ALTER PUBLICATION name ADD SCHEMA schema [, schema2]
+ *
+ * ALTER PUBLICATION name DROP SCHEMA schema [, schema2]
+ *
+ * ALTER PUBLICATION name SET SCHEMA schema [, schema2]
  *****************************************************************************/
 
 AlterPublicationStmt:
@@ -9672,6 +9702,30 @@ AlterPublicationStmt:
 					AlterPublicationStmt *n = makeNode(AlterPublicationStmt);
 					n->pubname = $3;
 					n->tables = $6;
+					n->tableAction = DEFELEM_DROP;
+					$$ = (Node *)n;
+				}
+			| ALTER PUBLICATION name ADD_P SCHEMA schema_list
+				{
+					AlterPublicationStmt *n = makeNode(AlterPublicationStmt);
+					n->pubname = $3;
+					n->schemas = $6;
+					n->tableAction = DEFELEM_ADD;
+					$$ = (Node *)n;
+				}
+			| ALTER PUBLICATION name SET SCHEMA schema_list
+				{
+					AlterPublicationStmt *n = makeNode(AlterPublicationStmt);
+					n->pubname = $3;
+					n->schemas = $6;
+					n->tableAction = DEFELEM_SET;
+					$$ = (Node *)n;
+				}
+			| ALTER PUBLICATION name DROP SCHEMA schema_list
+				{
+					AlterPublicationStmt *n = makeNode(AlterPublicationStmt);
+					n->pubname = $3;
+					n->schemas = $6;
 					n->tableAction = DEFELEM_DROP;
 					$$ = (Node *)n;
 				}
@@ -16616,6 +16670,20 @@ makeRoleSpec(RoleSpecType type, int location)
 	RoleSpec *spec = makeNode(RoleSpec);
 
 	spec->roletype = type;
+	spec->location = location;
+
+	return spec;
+}
+
+/*
+ * makeSchemaSpec - Create a SchemaSpec with the given type and location
+ */
+static SchemaSpec *
+makeSchemaSpec(SchemaSpecType type, int location)
+{
+	SchemaSpec *spec = makeNode(SchemaSpec);
+
+	spec->schematype = type;
 	spec->location = location;
 
 	return spec;

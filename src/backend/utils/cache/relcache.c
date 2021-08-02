@@ -5006,6 +5006,7 @@ RelationGetIndexAttrBitmap(Relation relation, IndexAttrBitmapKind attrKind)
 	Bitmapset  *uindexattrs;	/* columns in unique indexes */
 	Bitmapset  *pkindexattrs;	/* columns in the primary index */
 	Bitmapset  *idindexattrs;	/* columns in the replica identity */
+	Bitmapset  *hotblockingattrs;   /* columns with HOT blocking indexes */
 	List	   *indexoidlist;
 	List	   *newindexoidlist;
 	Oid			relpkindex;
@@ -5026,6 +5027,8 @@ RelationGetIndexAttrBitmap(Relation relation, IndexAttrBitmapKind attrKind)
 				return bms_copy(relation->rd_pkattr);
 			case INDEX_ATTR_BITMAP_IDENTITY_KEY:
 				return bms_copy(relation->rd_idattr);
+			case INDEX_ATTR_BITMAP_HOT_BLOCKING:
+				return bms_copy(relation->rd_hotblockingattr);
 			default:
 				elog(ERROR, "unknown attrKind %u", attrKind);
 		}
@@ -5069,6 +5072,7 @@ restart:
 	uindexattrs = NULL;
 	pkindexattrs = NULL;
 	idindexattrs = NULL;
+	hotblockingattrs = NULL;
 	foreach(l, indexoidlist)
 	{
 		Oid			indexOid = lfirst_oid(l);
@@ -5136,6 +5140,10 @@ restart:
 				indexattrs = bms_add_member(indexattrs,
 											attrnum - FirstLowInvalidHeapAttributeNumber);
 
+				if (indexDesc->rd_indam->amhotblocking)
+					hotblockingattrs = bms_add_member(hotblockingattrs,
+												 attrnum - FirstLowInvalidHeapAttributeNumber);
+
 				if (isKey && i < indexDesc->rd_index->indnkeyatts)
 					uindexattrs = bms_add_member(uindexattrs,
 												 attrnum - FirstLowInvalidHeapAttributeNumber);
@@ -5152,9 +5160,14 @@ restart:
 
 		/* Collect all attributes used in expressions, too */
 		pull_varattnos(indexExpressions, 1, &indexattrs);
+		if (indexDesc->rd_indam->amhotblocking)
+			pull_varattnos(indexExpressions, 1, &hotblockingattrs);
 
 		/* Collect all attributes in the index predicate, too */
 		pull_varattnos(indexPredicate, 1, &indexattrs);
+		if (indexDesc->rd_indam->amhotblocking)
+			pull_varattnos(indexPredicate, 1, &hotblockingattrs);
+
 
 		index_close(indexDesc, AccessShareLock);
 	}
@@ -5182,6 +5195,7 @@ restart:
 		bms_free(uindexattrs);
 		bms_free(pkindexattrs);
 		bms_free(idindexattrs);
+		bms_free(hotblockingattrs);
 		bms_free(indexattrs);
 
 		goto restart;
@@ -5196,6 +5210,8 @@ restart:
 	relation->rd_pkattr = NULL;
 	bms_free(relation->rd_idattr);
 	relation->rd_idattr = NULL;
+	bms_free(relation->rd_hotblockingattr);
+	relation->rd_hotblockingattr = NULL;
 
 	/*
 	 * Now save copies of the bitmaps in the relcache entry.  We intentionally
@@ -5208,6 +5224,7 @@ restart:
 	relation->rd_keyattr = bms_copy(uindexattrs);
 	relation->rd_pkattr = bms_copy(pkindexattrs);
 	relation->rd_idattr = bms_copy(idindexattrs);
+	relation->rd_hotblockingattr = bms_copy(hotblockingattrs);
 	relation->rd_indexattr = bms_copy(indexattrs);
 	MemoryContextSwitchTo(oldcxt);
 
@@ -5222,6 +5239,8 @@ restart:
 			return pkindexattrs;
 		case INDEX_ATTR_BITMAP_IDENTITY_KEY:
 			return idindexattrs;
+		case INDEX_ATTR_BITMAP_HOT_BLOCKING:
+			return hotblockingattrs;
 		default:
 			elog(ERROR, "unknown attrKind %u", attrKind);
 			return NULL;

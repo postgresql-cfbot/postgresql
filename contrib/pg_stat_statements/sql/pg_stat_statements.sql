@@ -443,3 +443,54 @@ SELECT (
 SELECT COUNT(*) FROM pg_stat_statements WHERE query LIKE '%SELECT GROUPING%';
 
 DROP EXTENSION pg_stat_statements;
+
+--
+-- Verify compatible with older versions.
+-- Currently the lowest version supported is 1.4.
+-- 
+CREATE EXTENSION pg_stat_statements with version '1.4';
+SELECT installed_version = default_version, installed_version FROM pg_available_extensions WHERE name = 'pg_stat_statements';
+SELECT pg_stat_statements_reset();
+SELECT count(query) FROM pg_stat_statements;
+
+---
+--- Install pg_stat_statements extension version 1.5
+---
+AlTER EXTENSION pg_stat_statements update to '1.5';
+SELECT installed_version = default_version, installed_version FROM pg_available_extensions WHERE name = 'pg_stat_statements';
+SELECT pg_stat_statements_reset();
+SELECT count(query) FROM pg_stat_statements;
+
+---
+--- Install pg_stat_statements extension version 1.6
+---
+AlTER EXTENSION pg_stat_statements update to '1.6';
+SELECT installed_version = default_version, installed_version FROM pg_available_extensions WHERE name = 'pg_stat_statements';
+SELECT pg_stat_statements_reset();
+SELECT count(query) FROM pg_stat_statements;
+
+---
+--- Install pg_stat_statements extension version 1.7
+---
+AlTER EXTENSION pg_stat_statements update to '1.7';
+SELECT installed_version = default_version, installed_version FROM pg_available_extensions WHERE name = 'pg_stat_statements';
+SELECT pg_stat_statements_reset();
+SELECT count(query) FROM pg_stat_statements;
+
+---
+--- Install pg_stat_statements extension version 1.8
+---
+AlTER EXTENSION pg_stat_statements update to '1.8';
+SELECT installed_version = default_version, installed_version FROM pg_available_extensions WHERE name = 'pg_stat_statements';
+SELECT pg_stat_statements_reset();
+SELECT count(plans) FROM pg_stat_statements;
+
+---
+--- Install pg_stat_statements extension to 1.9
+---
+AlTER EXTENSION pg_stat_statements update to '1.9';
+SELECT installed_version = default_version, installed_version FROM pg_available_extensions WHERE name = 'pg_stat_statements';
+SELECT pg_stat_statements_reset();
+SELECT dealloc FROM pg_stat_statements_info;
+
+DROP EXTENSION pg_stat_statements;

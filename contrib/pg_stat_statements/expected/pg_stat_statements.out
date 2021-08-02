@@ -1078,3 +1078,137 @@ SELECT COUNT(*) FROM pg_stat_statements WHERE query LIKE '%SELECT GROUPING%';
 (1 row)
 
 DROP EXTENSION pg_stat_statements;
+--
+-- Verify compatible with older versions.
+-- Currently the lowest version supported is 1.4.
+-- 
+CREATE EXTENSION pg_stat_statements with version '1.4';
+SELECT installed_version = default_version, installed_version FROM pg_available_extensions WHERE name = 'pg_stat_statements';
+ ?column? | installed_version 
+----------+-------------------
+ f        | 1.4
+(1 row)
+
+SELECT pg_stat_statements_reset();
+ pg_stat_statements_reset 
+--------------------------
+ 
+(1 row)
+
+SELECT count(query) FROM pg_stat_statements;
+ count 
+-------
+     2
+(1 row)
+
+---
+--- Install pg_stat_statements extension version 1.5
+---
+AlTER EXTENSION pg_stat_statements update to '1.5';
+SELECT installed_version = default_version, installed_version FROM pg_available_extensions WHERE name = 'pg_stat_statements';
+ ?column? | installed_version 
+----------+-------------------
+ f        | 1.5
+(1 row)
+
+SELECT pg_stat_statements_reset();
+ pg_stat_statements_reset 
+--------------------------
+ 
+(1 row)
+
+SELECT count(query) FROM pg_stat_statements;
+ count 
+-------
+     2
+(1 row)
+
+---
+--- Install pg_stat_statements extension version 1.6
+---
+AlTER EXTENSION pg_stat_statements update to '1.6';
+SELECT installed_version = default_version, installed_version FROM pg_available_extensions WHERE name = 'pg_stat_statements';
+ ?column? | installed_version 
+----------+-------------------
+ f        | 1.6
+(1 row)
+
+SELECT pg_stat_statements_reset();
+ pg_stat_statements_reset 
+--------------------------
+ 
+(1 row)
+
+SELECT count(query) FROM pg_stat_statements;
+ count 
+-------
+     2
+(1 row)
+
+---
+--- Install pg_stat_statements extension version 1.7
+---
+AlTER EXTENSION pg_stat_statements update to '1.7';
+SELECT installed_version = default_version, installed_version FROM pg_available_extensions WHERE name = 'pg_stat_statements';
+ ?column? | installed_version 
+----------+-------------------
+ f        | 1.7
+(1 row)
+
+SELECT pg_stat_statements_reset();
+ pg_stat_statements_reset 
+--------------------------
+ 
+(1 row)
+
+SELECT count(query) FROM pg_stat_statements;
+ count 
+-------
+     2
+(1 row)
+
+---
+--- Install pg_stat_statements extension version 1.8
+---
+AlTER EXTENSION pg_stat_statements update to '1.8';
+SELECT installed_version = default_version, installed_version FROM pg_available_extensions WHERE name = 'pg_stat_statements';
+ ?column? | installed_version 
+----------+-------------------
+ f        | 1.8
+(1 row)
+
+SELECT pg_stat_statements_reset();
+ pg_stat_statements_reset 
+--------------------------
+ 
+(1 row)
+
+SELECT count(plans) FROM pg_stat_statements;
+ count 
+-------
+     2
+(1 row)
+
+---
+--- Install pg_stat_statements extension to 1.9
+---
+AlTER EXTENSION pg_stat_statements update to '1.9';
+SELECT installed_version = default_version, installed_version FROM pg_available_extensions WHERE name = 'pg_stat_statements';
+ ?column? | installed_version 
+----------+-------------------
+ t        | 1.9
+(1 row)
+
+SELECT pg_stat_statements_reset();
+ pg_stat_statements_reset 
+--------------------------
+ 
+(1 row)
+
+SELECT dealloc FROM pg_stat_statements_info;
+ dealloc 
+---------
+       0
+(1 row)
+
+DROP EXTENSION pg_stat_statements;

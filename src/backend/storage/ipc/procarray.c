@@ -266,8 +266,17 @@ static PGPROC *allProcs;
  * Bookkeeping for tracking emulated transactions in recovery
  */
 static TransactionId *KnownAssignedXids;
-static bool *KnownAssignedXidsValid;
+
+typedef struct {
+	int prv;
+	int nxt;
+} KnownAssignedXidValidNode;
+
+// Doubly linked list of valid xids
+static KnownAssignedXidValidNode *KnownAssignedXidsValidDLL;
 static TransactionId latestObservedXid = InvalidTransactionId;
+
+
 
 /*
  * If we're in STANDBY_SNAPSHOT_PENDING state, standbySnapshotPendingXmin is
@@ -359,6 +368,9 @@ static void GlobalVisUpdateApply(ComputeXidHorizonsResult *horizons);
 /*
  * Report shared-memory space needed by CreateSharedProcArray.
  */
+
+static KnownAssignedXidValidNode KAX_E_INVALID;
+
 Size
 ProcArrayShmemSize(void)
 {
@@ -391,12 +403,19 @@ ProcArrayShmemSize(void)
 		size = add_size(size,
 						mul_size(sizeof(TransactionId),
 								 TOTAL_MAX_CACHED_SUBXIDS));
-		size = add_size(size,
-						mul_size(sizeof(bool), TOTAL_MAX_CACHED_SUBXIDS));
+                size = add_size(size,
+						mul_size(sizeof(KnownAssignedXidValidNode), TOTAL_MAX_CACHED_SUBXIDS));
 	}
+
+				KAX_E_INVALID.prv = -1;
+				KAX_E_INVALID.nxt = TOTAL_MAX_CACHED_SUBXIDS;
 
 	return size;
 }
+
+#define KAX_DLL_INDEX_VALID(i) (-1 < i && i < TOTAL_MAX_CACHED_SUBXIDS)
+#define KAX_DLL_ENTRY_INVALID(i) (-1 == KnownAssignedXidsValidDLL[i].prv && KnownAssignedXidsValidDLL[i].nxt == TOTAL_MAX_CACHED_SUBXIDS)
+
 
 /*
  * Initialize the shared PGPROC array during postmaster startup.
@@ -442,10 +461,15 @@ CreateSharedProcArray(void)
 							mul_size(sizeof(TransactionId),
 									 TOTAL_MAX_CACHED_SUBXIDS),
 							&found);
-		KnownAssignedXidsValid = (bool *)
-			ShmemInitStruct("KnownAssignedXidsValid",
-							mul_size(sizeof(bool), TOTAL_MAX_CACHED_SUBXIDS),
+		
+                KnownAssignedXidsValidDLL = (KnownAssignedXidValidNode*)
+			ShmemInitStruct("KnownAssignedXidsValidDLL",
+							mul_size(sizeof(KnownAssignedXidValidNode), TOTAL_MAX_CACHED_SUBXIDS),
 							&found);
+
+							for (int i = 0; i < TOTAL_MAX_CACHED_SUBXIDS; ++ i) {
+										KnownAssignedXidsValidDLL[i] = KAX_E_INVALID;
+							}
 	}
 }
 
@@ -4598,15 +4622,17 @@ KnownAssignedXidsCompress(bool force)
 	 * re-aligning data to 0th element.
 	 */
 	compress_index = 0;
-	for (i = tail; i < head; i++)
+        int prv = -1;
+	for (i = tail; i < head; i = KnownAssignedXidsValidDLL[i].nxt)
 	{
-		if (KnownAssignedXidsValid[i])
-		{
-			KnownAssignedXids[compress_index] = KnownAssignedXids[i];
-			KnownAssignedXidsValid[compress_index] = true;
-			compress_index++;
-		}
+                KnownAssignedXids[compress_index] = KnownAssignedXids[i];
+                KnownAssignedXidsValidDLL[compress_index].prv = prv;
+                KnownAssignedXidsValidDLL[compress_index].nxt = compress_index + 1;
+
+                compress_index++;
 	}
+        // fix last entry
+        KnownAssignedXidsValidDLL[compress_index - 1].nxt = TOTAL_MAX_CACHED_SUBXIDS;
 
 	pArray->tailKnownAssignedXids = 0;
 	pArray->headKnownAssignedXids = compress_index;
@@ -4705,7 +4731,8 @@ KnownAssignedXidsAdd(TransactionId from_xid, TransactionId to_xid,
 	for (i = 0; i < nxids; i++)
 	{
 		KnownAssignedXids[head] = next_xid;
-		KnownAssignedXidsValid[head] = true;
+		KnownAssignedXidsValidDLL[head].nxt = 1 + head;
+                KnownAssignedXidsValidDLL[head + 1].prv = head; 
 		TransactionIdAdvance(next_xid);
 		head++;
 	}
@@ -4794,12 +4821,23 @@ KnownAssignedXidsSearch(TransactionId xid, bool remove)
 	if (result_index < 0)
 		return false;			/* not in array */
 
-	if (!KnownAssignedXidsValid[result_index])
+	if (KAX_DLL_ENTRY_INVALID(result_index))
 		return false;			/* in array, but invalid */
 
 	if (remove)
 	{
-		KnownAssignedXidsValid[result_index] = false;
+                int prv = KnownAssignedXidsValidDLL[result_index].prv;
+                int nxt = KnownAssignedXidsValidDLL[result_index].nxt;
+
+                KnownAssignedXidsValidDLL[result_index] = KAX_E_INVALID;
+                
+                if (KAX_DLL_INDEX_VALID(prv)) {
+                        KnownAssignedXidsValidDLL[prv].nxt = nxt;
+                }
+
+                if (KAX_DLL_INDEX_VALID(nxt)) {
+                        KnownAssignedXidsValidDLL[nxt].prv = prv;
+                }
 
 		pArray->numKnownAssignedXids--;
 		Assert(pArray->numKnownAssignedXids >= 0);
@@ -4810,9 +4848,7 @@ KnownAssignedXidsSearch(TransactionId xid, bool remove)
 		 */
 		if (result_index == tail)
 		{
-			tail++;
-			while (tail < head && !KnownAssignedXidsValid[tail])
-				tail++;
+			tail = KnownAssignedXidsValidDLL[tail].nxt;
 			if (tail >= head)
 			{
 				/* Array is empty, so we can reset both pointers */
@@ -4921,21 +4957,23 @@ KnownAssignedXidsRemovePreceding(TransactionId removeXid)
 	tail = pArray->tailKnownAssignedXids;
 	head = pArray->headKnownAssignedXids;
 
-	for (i = tail; i < head; i++)
+	for (i = tail; i < head; i = KnownAssignedXidsValidDLL[i].nxt)
 	{
-		if (KnownAssignedXidsValid[i])
-		{
-			TransactionId knownXid = KnownAssignedXids[i];
+                TransactionId knownXid = KnownAssignedXids[i];
 
-			if (TransactionIdFollowsOrEquals(knownXid, removeXid))
-				break;
+                if (TransactionIdFollowsOrEquals(knownXid, removeXid))
+                        break;
 
-			if (!StandbyTransactionIdIsPrepared(knownXid))
-			{
-				KnownAssignedXidsValid[i] = false;
-				count++;
-			}
-		}
+                if (!StandbyTransactionIdIsPrepared(knownXid))
+                {
+                        int nxt = KnownAssignedXidsValidDLL[i].nxt;
+                        KnownAssignedXidsValidDLL[i] = KAX_E_INVALID;
+
+                        if (KAX_DLL_INDEX_VALID(nxt)) {
+                                KnownAssignedXidsValidDLL[i].prv = -1;
+                        }
+                        count++;
+                }
 	}
 
 	pArray->numKnownAssignedXids -= count;
@@ -4944,21 +4982,20 @@ KnownAssignedXidsRemovePreceding(TransactionId removeXid)
 	/*
 	 * Advance the tail pointer if we've marked the tail item invalid.
 	 */
-	for (i = tail; i < head; i++)
-	{
-		if (KnownAssignedXidsValid[i])
-			break;
-	}
-	if (i >= head)
-	{
-		/* Array is empty, so we can reset both pointers */
-		pArray->headKnownAssignedXids = 0;
-		pArray->tailKnownAssignedXids = 0;
-	}
-	else
-	{
-		pArray->tailKnownAssignedXids = i;
-	}
+        if (KAX_DLL_ENTRY_INVALID(tail)) {
+                tail = KnownAssignedXidsValidDLL[tail].nxt;
+
+                if (!KAX_DLL_INDEX_VALID(tail))
+                {
+                        /* Array is empty, so we can reset both pointers */
+                        pArray->headKnownAssignedXids = 0;
+                        pArray->tailKnownAssignedXids = 0;
+                }
+                else
+                {
+                        pArray->tailKnownAssignedXids = tail;
+                }
+        }
 
 	/* Opportunistically compress the array */
 	KnownAssignedXidsCompress(false);
@@ -5010,32 +5047,29 @@ KnownAssignedXidsGetAndSetXmin(TransactionId *xarray, TransactionId *xmin,
 	head = procArray->headKnownAssignedXids;
 	SpinLockRelease(&procArray->known_assigned_xids_lck);
 
-	for (i = tail; i < head; i++)
+	for (i = tail; i < head; i = KnownAssignedXidsValidDLL[i].nxt)
 	{
 		/* Skip any gaps in the array */
-		if (KnownAssignedXidsValid[i])
-		{
-			TransactionId knownXid = KnownAssignedXids[i];
+                TransactionId knownXid = KnownAssignedXids[i];
 
-			/*
-			 * Update xmin if required.  Only the first XID need be checked,
-			 * since the array is sorted.
-			 */
-			if (count == 0 &&
-				TransactionIdPrecedes(knownXid, *xmin))
-				*xmin = knownXid;
+                /*
+                 * Update xmin if required.  Only the first XID need be checked,
+                 * since the array is sorted.
+                 */
+                if (count == 0 &&
+                        TransactionIdPrecedes(knownXid, *xmin))
+                        *xmin = knownXid;
 
-			/*
-			 * Filter out anything >= xmax, again relying on sorted property
-			 * of array.
-			 */
-			if (TransactionIdIsValid(xmax) &&
-				TransactionIdFollowsOrEquals(knownXid, xmax))
-				break;
+                /*
+                 * Filter out anything >= xmax, again relying on sorted property
+                 * of array.
+                 */
+                if (TransactionIdIsValid(xmax) &&
+                        TransactionIdFollowsOrEquals(knownXid, xmax))
+                        break;
 
-			/* Add knownXid into output array */
-			xarray[count++] = knownXid;
-		}
+                /* Add knownXid into output array */
+                xarray[count++] = knownXid;
 	}
 
 	return count;
@@ -5060,12 +5094,12 @@ KnownAssignedXidsGetOldestXmin(void)
 	head = procArray->headKnownAssignedXids;
 	SpinLockRelease(&procArray->known_assigned_xids_lck);
 
-	for (i = tail; i < head; i++)
-	{
-		/* Skip any gaps in the array */
-		if (KnownAssignedXidsValid[i])
-			return KnownAssignedXids[i];
-	}
+        i = KnownAssignedXidsValidDLL[i].nxt;
+ 
+        /* Skip any gaps in the array */
+        if (i < head) {
+                return KnownAssignedXids[i];
+        }
 
 	return InvalidTransactionId;
 }
@@ -5095,13 +5129,10 @@ KnownAssignedXidsDisplay(int trace_level)
 
 	initStringInfo(&buf);
 
-	for (i = tail; i < head; i++)
+	for (i = tail; i < head; i = KnownAssignedXidsValidDLL[i].nxt)
 	{
-		if (KnownAssignedXidsValid[i])
-		{
-			nxids++;
-			appendStringInfo(&buf, "[%d]=%u ", i, KnownAssignedXids[i]);
-		}
+                nxids++;
+                appendStringInfo(&buf, "[%d]=%u ", i, KnownAssignedXids[i]);
 	}
 
 	elog(trace_level, "%d KnownAssignedXids (num=%d tail=%d head=%d) %s",

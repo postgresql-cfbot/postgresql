@@ -623,7 +623,8 @@ assign_collations_walker(Node *node, assign_collations_context *context)
 						{
 							/*
 							 * WindowFunc requires special processing only for
-							 * its aggfilter clause, as for aggregates.
+							 * its aggfilter, as for aggregates and its
+							 * runcondition clause.
 							 */
 							WindowFunc *wfunc = (WindowFunc *) node;
 

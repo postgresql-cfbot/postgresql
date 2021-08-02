@@ -2023,6 +2023,7 @@ static TupleTableSlot *
 ExecWindowAgg(PlanState *pstate)
 {
 	WindowAggState *winstate = castNode(WindowAggState, pstate);
+	TupleTableSlot *slot;
 	ExprContext *econtext;
 	int			i;
 	int			numfuncs;
@@ -2235,7 +2236,20 @@ ExecWindowAgg(PlanState *pstate)
 	 */
 	econtext->ecxt_outertuple = winstate->ss.ss_ScanTupleSlot;
 
-	return ExecProject(winstate->ss.ps.ps_ProjInfo);
+	slot = ExecProject(winstate->ss.ps.ps_ProjInfo);
+
+	/*
+	 * Now evaluate the run condition to see if we need to continue further
+	 * with execution.
+	 */
+	econtext->ecxt_scantuple = slot;
+	if (!ExecQual(winstate->runcondition, econtext))
+	{
+		winstate->all_done = true;
+		return NULL;
+	}
+
+	return slot;
 }
 
 /* -----------------
@@ -2306,6 +2320,17 @@ ExecInitWindowAgg(WindowAgg *node, EState *estate, int eflags)
 	 */
 	Assert(node->plan.qual == NIL);
 	winstate->ss.ps.qual = NULL;
+
+	/*
+	 * Setup the run condition, if we received one from the query planner.
+	 * When set, this can allow us to finish execution early because we know
+	 * some higher-level filter exists that would just filter out any further
+	 * results that we produce.
+	 */
+	if (node->runcondition != NIL)
+		winstate->runcondition = ExecInitQual(node->runcondition, (PlanState *) winstate);
+	else
+		winstate->runcondition = NULL;
 
 	/*
 	 * initialize child nodes

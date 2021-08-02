@@ -988,6 +988,138 @@ SELECT * FROM
    FROM empsalary) emp
 WHERE depname = 'sales';
 
+-- Test window function run conditions are properly pushed down into the
+-- WindowAgg
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          row_number() OVER (ORDER BY empno) rn
+   FROM empsalary) emp
+WHERE rn < 3;
+
+-- The following 3 statements should result the same result.
+SELECT * FROM
+  (SELECT empno,
+          row_number() OVER (ORDER BY empno) rn
+   FROM empsalary) emp
+WHERE rn < 3;
+
+SELECT * FROM
+  (SELECT empno,
+          row_number() OVER (ORDER BY empno) rn
+   FROM empsalary) emp
+WHERE 3 > rn;
+
+SELECT * FROM
+  (SELECT empno,
+          row_number() OVER (ORDER BY empno) rn
+   FROM empsalary) emp
+WHERE 2 >= rn;
+
+-- Ensure r <= 3 is pushed down into the run condition of the window agg
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          rank() OVER (ORDER BY salary DESC) r
+   FROM empsalary) emp
+WHERE r <= 3;
+
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          rank() OVER (ORDER BY salary DESC) r
+   FROM empsalary) emp
+WHERE r <= 3;
+
+-- Ensure dr = 1 is converted to dr <= 1 to get all rows leading up to dr = 1
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          dense_rank() OVER (ORDER BY salary DESC) dr
+   FROM empsalary) emp
+WHERE dr = 1;
+
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          dense_rank() OVER (ORDER BY salary DESC) dr
+   FROM empsalary) emp
+WHERE dr = 1;
+
+-- Check COUNT() and COUNT(*)
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(*) OVER (ORDER BY salary DESC) c
+   FROM empsalary) emp
+WHERE c <= 3;
+
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(*) OVER (ORDER BY salary DESC) c
+   FROM empsalary) emp
+WHERE c <= 3;
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(empno) OVER (ORDER BY salary DESC) c
+   FROM empsalary) emp
+WHERE c <= 3;
+
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(empno) OVER (ORDER BY salary DESC) c
+   FROM empsalary) emp
+WHERE c <= 3;
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(*) OVER (ORDER BY salary DESC ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) c
+   FROM empsalary) emp
+WHERE c >= 3;
+
+-- Tests to ensure we don't push down the run condition when it's not valid to
+-- do so.
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          row_number() OVER (PARTITION BY depname ORDER BY empno) rn
+   FROM empsalary) emp
+WHERE rn < 3;
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(empno) OVER (PARTITION BY depname ORDER BY salary DESC) c
+   FROM empsalary) emp
+WHERE c <= 3;
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(*) OVER (ORDER BY salary DESC ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) c
+   FROM empsalary) emp
+WHERE c <= 3;
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(*) OVER (ORDER BY salary) c
+   FROM empsalary) emp
+WHERE 3 <= c;
+
 -- Test Sort node collapsing
 EXPLAIN (COSTS OFF)
 SELECT * FROM

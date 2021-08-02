@@ -13,7 +13,12 @@
  */
 #include "postgres.h"
 
+#include "access/stratnum.h"
+#include "catalog/pg_operator_d.h"
+#include "nodes/makefuncs.h"
+#include "nodes/supportnodes.h"
 #include "utils/builtins.h"
+#include "utils/lsyscache.h"
 #include "windowapi.h"
 
 /*
@@ -73,6 +78,162 @@ rank_up(WindowObject winobj)
 	return up;
 }
 
+/*
+ * process_row_number_rank_run_condition
+ *		Common function for prosupport WindowFunctionRunCondition for
+ *		row_number(), rank() and dense_rank().
+ */
+static void
+process_row_number_rank_run_condition(WindowFunctionRunCondition *req)
+{
+	OpExpr	   *opexpr = req->opexpr;
+	Oid			opno = opexpr->opno;
+	Expr	   *arg;
+	WindowFunc *windowfunc;
+	List	   *opfamilies;
+	ListCell   *lc;
+
+	/* Early abort of execution is not possible if there's a PARTITION BY */
+	if (req->window_clause->partitionClause != NULL)
+	{
+		req->runopexpr = NULL;
+		return;
+	}
+
+	if (!req->wfunc_left)
+	{
+		arg = linitial(opexpr->args);
+		windowfunc = lsecond(opexpr->args);
+	}
+	else
+	{
+		windowfunc = linitial(opexpr->args);
+		arg = lsecond(opexpr->args);
+	}
+
+	/*
+	 * We're only able to handle run conditions that compare the window result
+	 * to a constant.
+	 *
+	 * XXX We could probably do better than just Consts.  Exec Params should
+	 * work too.
+	 */
+	if (!IsA(arg, Const))
+	{
+		req->runopexpr = NULL;
+		return;
+	}
+
+	opfamilies = get_op_btree_interpretation(opno);
+
+	foreach(lc, opfamilies)
+	{
+		OpBtreeInterpretation *oi = (OpBtreeInterpretation *) lfirst(lc);
+
+		if (req->wfunc_left)
+		{
+			/*
+			 * When the opexpr is uses < or <= with the window function on the
+			 * left, then we can use the opexpr directly.  We can also set
+			 * keep_original to false too as the planner does not need to keep
+			 * this qual as a filter in the query above the subquery
+			 * containing the window function.
+			 */
+			if (oi->strategy == BTLessStrategyNumber ||
+				oi->strategy == BTLessEqualStrategyNumber)
+			{
+				req->keep_original = false;
+				req->runopexpr = req->opexpr;
+				break;
+			}
+
+			/*
+			 * For equality conditions we need all rows up until the const
+			 * being compared.  We make an OpExpr with a <= operator so that
+			 * we stop processing just after we find our equality match.
+			 */
+			else if (oi->strategy == BTEqualStrategyNumber)
+			{
+				OpExpr *newopexpr;
+				Oid leop;
+
+				leop = get_opfamily_member(oi->opfamily_id,
+											oi->oplefttype,
+											oi->oprighttype,
+											BTLessEqualStrategyNumber);
+
+				newopexpr = (OpExpr *) make_opclause(leop,
+													 opexpr->opresulttype,
+													 opexpr->opretset,
+													 (Expr *) windowfunc,
+													 arg,
+													 opexpr->opcollid,
+													 opexpr->inputcollid);
+				newopexpr->opfuncid = get_opcode(leop);
+
+				/*
+				 * We must keep the original equality condition as this <=
+				 * OpExpr won't filter out all the earlier records.
+				 */
+				req->keep_original = true;
+				req->runopexpr = newopexpr;
+				break;
+			}
+		}
+		else
+		{
+			/*
+			 * When the window function var is on the right, we look for > and
+			 * >= operators.  e.g: 10 >= row_number() ...
+			 */
+			if (oi->strategy == BTGreaterStrategyNumber ||
+				oi->strategy == BTGreaterEqualStrategyNumber)
+			{
+				req->keep_original = false;
+				req->runopexpr = req->opexpr;
+				break;
+			}
+
+			/*
+			 * For equality conditions we need all rows up until the const
+			 * being compared.  The window function is on the right here, so
+			 * we make an OpExpr with <const> >= <wfunc> so that we stop
+			 * processing just after we find our equality match. We don't
+			 * reverse the condition and use <= because we may have a cross
+			 * type opfamily.
+			 */
+			else if (oi->strategy == BTEqualStrategyNumber)
+			{
+				OpExpr *newopexpr;
+				Oid geop;
+
+				geop = get_opfamily_member(oi->opfamily_id,
+											oi->oplefttype,
+											oi->oprighttype,
+											BTGreaterEqualStrategyNumber);
+
+				newopexpr = (OpExpr *) make_opclause(geop,
+													 opexpr->opresulttype,
+													 opexpr->opretset,
+													 arg,
+													 (Expr *) windowfunc,
+													 opexpr->opcollid,
+													 opexpr->inputcollid);
+				newopexpr->opfuncid = get_opcode(geop);
+
+				/*
+				 * We must keep the original equality condition as this >=
+				 * OpExpr won't filter out all the earlier records.
+				 */
+				req->keep_original = true;
+				req->runopexpr = newopexpr;
+				break;
+			}
+		}
+	}
+
+	list_free(opfamilies);
+}
 
 /*
  * row_number
@@ -88,6 +249,25 @@ window_row_number(PG_FUNCTION_ARGS)
 	PG_RETURN_INT64(curpos + 1);
 }
 
+/*
+ * window_row_number_support
+ *		prosupport function for window_row_number()
+ */
+Datum
+window_row_number_support(PG_FUNCTION_ARGS)
+{
+	Node	   *rawreq = (Node *) PG_GETARG_POINTER(0);
+
+	if (IsA(rawreq, WindowFunctionRunCondition))
+	{
+		WindowFunctionRunCondition *req = (WindowFunctionRunCondition *) rawreq;
+
+		process_row_number_rank_run_condition(req);
+		PG_RETURN_POINTER(req);
+	}
+
+	PG_RETURN_POINTER(NULL);
+}
 
 /*
  * rank
@@ -111,6 +291,26 @@ window_rank(PG_FUNCTION_ARGS)
 }
 
 /*
+ * window_rank_support
+ *		prosupport function for window_rank()
+ */
+Datum
+window_rank_support(PG_FUNCTION_ARGS)
+{
+	Node	   *rawreq = (Node *) PG_GETARG_POINTER(0);
+
+	if (IsA(rawreq, WindowFunctionRunCondition))
+	{
+		WindowFunctionRunCondition *req = (WindowFunctionRunCondition *) rawreq;
+
+		process_row_number_rank_run_condition(req);
+		PG_RETURN_POINTER(req);
+	}
+
+	PG_RETURN_POINTER(NULL);
+}
+
+/*
  * dense_rank
  * Rank increases by 1 when key columns change.
  */
@@ -128,6 +328,26 @@ window_dense_rank(PG_FUNCTION_ARGS)
 		context->rank++;
 
 	PG_RETURN_INT64(context->rank);
+}
+
+/*
+ * window_dense_rank_support
+ *		prosupport function for window_dense_rank()
+ */
+Datum
+window_dense_rank_support(PG_FUNCTION_ARGS)
+{
+	Node	   *rawreq = (Node *) PG_GETARG_POINTER(0);
+
+	if (IsA(rawreq, WindowFunctionRunCondition))
+	{
+		WindowFunctionRunCondition *req = (WindowFunctionRunCondition *) rawreq;
+
+		process_row_number_rank_run_condition(req);
+		PG_RETURN_POINTER(req);
+	}
+
+	PG_RETURN_POINTER(NULL);
 }
 
 /*

@@ -132,13 +132,20 @@ ECPG: stmtViewStmt rule
 	}
 	| ECPGDescribe
 	{
-		fprintf(base_yyout, "{ ECPGdescribe(__LINE__, %d, %s,", compat, $1);
+		check_declared_list($1.stmt_name);
+
+		fprintf(base_yyout, "{ ECPGdescribe(__LINE__, %d, %d, %s, %s,", compat, $1.input, connection ? connection : "NULL", $1.stmt_name);
 		dump_variables(argsresult, 1);
 		fputs("ECPGt_EORT);", base_yyout);
 		fprintf(base_yyout, "}");
 		output_line_number();
 
-		free($1);
+		free($1.stmt_name);
+		if (connection != NULL)
+		{
+			free(connection);
+			connection = NULL;
+		}
 	}
 	| ECPGDisconnect
 	{

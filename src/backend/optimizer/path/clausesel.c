@@ -134,10 +134,19 @@ clauselist_selectivity_ext(PlannerInfo *root,
 	 * If there's exactly one clause, just go directly to
 	 * clause_selectivity_ext(). None of what we might do below is relevant.
 	 */
+
+	/*
+	 * XXX For joins we may have a single join clause, but additional clauses
+	 * on the joined relations, so we can still consider using extended stats
+	 * to calculate conditional probability.
+	 *
+	 * XXX Maybe this should simply add (!use_extended_stats) condition?
+	 *
 	if (list_length(clauses) == 1)
 		return clause_selectivity_ext(root, (Node *) linitial(clauses),
 									  varRelid, jointype, sjinfo,
 									  use_extended_stats);
+	*/
 
 	/*
 	 * Determine if these clauses reference a single relation.  If so, and if
@@ -155,6 +164,24 @@ clauselist_selectivity_ext(PlannerInfo *root,
 		s1 = statext_clauselist_selectivity(root, clauses, varRelid,
 											jointype, sjinfo, rel,
 											&estimatedclauses, false);
+	}
+
+	/*
+	 * Try applying extended statistics to joins. There's not much we can do to
+	 * detect when this is worth it, but we can check that there are at least
+	 * some join clauses, and that at least some of the rels have extended stats.
+	 *
+	 * XXX Isn't this mutualy exclusive with the preceding block calculating
+	 * estimates for a single relation? Probably yes, because that block deals
+	 * just non-join clauses, while here we look at joins.
+	 */
+	if (use_extended_stats &&
+		statext_try_join_estimates(root, clauses, varRelid, jointype, sjinfo,
+						 		   estimatedclauses))
+	{
+		s1 *= statext_clauselist_join_selectivity(root, clauses, varRelid,
+												  jointype, sjinfo,
+												  &estimatedclauses);
 	}
 
 	/*

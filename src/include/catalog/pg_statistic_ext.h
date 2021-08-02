@@ -82,6 +82,7 @@ DECLARE_ARRAY_FOREIGN_KEY((stxrelid, stxkeys), pg_attribute, (attrelid, attnum))
 #define STATS_EXT_DEPENDENCIES		'f'
 #define STATS_EXT_MCV				'm'
 #define STATS_EXT_EXPRESSIONS		'e'
+#define STATS_EXT_SAMPLE			's'
 
 #endif							/* EXPOSE_TO_CLIENT_CODE */
 

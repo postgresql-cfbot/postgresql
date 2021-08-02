@@ -1585,10 +1585,15 @@ explain (costs off)
 select d.* from d left join (select * from b group by b.id, b.c_id) s
   on d.a = s.id;
 
+-- disable index skip scan to prevent it interfering with the plan
+set enable_indexskipscan to off;
+
 -- similarly, but keying off a DISTINCT clause
 explain (costs off)
 select d.* from d left join (select distinct * from b) s
   on d.a = s.id;
+
+set enable_indexskipscan to on;
 
 -- check join removal works when uniqueness of the join condition is enforced
 -- by a UNION

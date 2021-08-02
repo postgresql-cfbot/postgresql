@@ -3094,12 +3094,18 @@ standard_qp_callback(PlannerInfo *root, void *extra)
 
 	if (parse->distinctClause &&
 		grouping_is_sortable(parse->distinctClause))
+	{
 		root->distinct_pathkeys =
 			make_pathkeys_for_sortclauses(root,
 										  parse->distinctClause,
 										  tlist);
+		root->query_uniquekeys = build_uniquekeys(root, parse->distinctClause);
+	}
 	else
+	{
 		root->distinct_pathkeys = NIL;
+		root->query_uniquekeys = NIL;
+	}
 
 	root->sort_pathkeys =
 		make_pathkeys_for_sortclauses(root,
@@ -4314,13 +4320,19 @@ create_distinct_paths(PlannerInfo *root,
 			Path	   *path = (Path *) lfirst(lc);
 
 			if (pathkeys_contained_in(needed_pathkeys, path->pathkeys))
-			{
 				add_path(distinct_rel, (Path *)
 						 create_upper_unique_path(root, distinct_rel,
 												  path,
 												  list_length(root->distinct_pathkeys),
 												  numDistinctRows));
-			}
+		}
+
+		foreach(lc, input_rel->unique_pathlist)
+		{
+			Path	   *path = (Path *) lfirst(lc);
+
+			if (query_has_uniquekeys_for(root, path->uniquekeys, false))
+				add_path(distinct_rel, path);
 		}
 
 		/* For explicit-sort case, always use the more rigorous clause */
@@ -6936,6 +6948,26 @@ apply_scanjoin_target_to_paths(PlannerInfo *root,
 
 	/* Likewise adjust the targets for any partial paths. */
 	foreach(lc, rel->partial_pathlist)
+	{
+		Path	   *subpath = (Path *) lfirst(lc);
+
+		/* Shouldn't have any parameterized paths anymore */
+		Assert(subpath->param_info == NULL);
+
+		if (tlist_same_exprs)
+			subpath->pathtarget->sortgrouprefs =
+				scanjoin_target->sortgrouprefs;
+		else
+		{
+			Path	   *newpath;
+
+			newpath = (Path *) create_projection_path(root, rel, subpath,
+													  scanjoin_target);
+			lfirst(lc) = newpath;
+		}
+	}
+
+	foreach(lc, rel->unique_pathlist)
 	{
 		Path	   *subpath = (Path *) lfirst(lc);
 

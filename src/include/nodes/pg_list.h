@@ -566,6 +566,7 @@ extern pg_nodiscard List *list_delete_first(List *list);
 extern pg_nodiscard List *list_delete_last(List *list);
 extern pg_nodiscard List *list_delete_nth_cell(List *list, int n);
 extern pg_nodiscard List *list_delete_cell(List *list, ListCell *cell);
+extern bool list_is_subset(const List *members, const List *target);
 
 extern List *list_union(const List *list1, const List *list2);
 extern List *list_union_ptr(const List *list1, const List *list2);

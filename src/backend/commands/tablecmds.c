@@ -11135,6 +11135,7 @@ validateForeignKeyConstraint(char *conname,
 	 */
 	MemSet(&trig, 0, sizeof(trig));
 	trig.tgoid = InvalidOid;
+	trig.tgrelid = InvalidOid;
 	trig.tgname = conname;
 	trig.tgenabled = TRIGGER_FIRES_ON_ORIGIN;
 	trig.tgisinternal = true;
@@ -18718,6 +18719,7 @@ ATDetachCheckNoForeignKeyRefs(Relation partition)
 
 		MemSet(&trig, 0, sizeof(trig));
 		trig.tgoid = InvalidOid;
+		trig.tgrelid = InvalidOid;
 		trig.tgname = NameStr(constrForm->conname);
 		trig.tgenabled = TRIGGER_FIRES_ON_ORIGIN;
 		trig.tgisinternal = true;

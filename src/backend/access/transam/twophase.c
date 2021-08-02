@@ -1326,15 +1326,25 @@ static void
 XlogReadTwoPhaseData(XLogRecPtr lsn, char **buf, int *len)
 {
 	XLogRecord *record;
-	XLogReaderState *xlogreader;
+	static XLogReaderState *xlogreader;
 	char	   *errormsg;
 	TimeLineID	save_currtli = ThisTimeLineID;
 
-	xlogreader = XLogReaderAllocate(wal_segment_size, NULL,
-									XL_ROUTINE(.page_read = &read_local_xlog_page,
-											   .segment_open = &wal_segment_open,
-											   .segment_close = &wal_segment_close),
-									NULL);
+	if (!xlogreader)
+	{
+		/*
+		 * Create xlogreader on TopMemoryContext to prevent open the same
+		 * wal segment many times.
+		 */
+		MemoryContext oldctx = MemoryContextSwitchTo(TopMemoryContext);
+		xlogreader = XLogReaderAllocate(wal_segment_size, NULL,
+										XL_ROUTINE(.page_read = &read_local_xlog_page,
+												   .segment_open = &wal_segment_open,
+												   .segment_close = &wal_segment_close),
+										NULL);
+		MemoryContextSwitchTo(oldctx);
+	}
+
 	if (!xlogreader)
 		ereport(ERROR,
 				(errcode(ERRCODE_OUT_OF_MEMORY),
@@ -1369,8 +1379,6 @@ XlogReadTwoPhaseData(XLogRecPtr lsn, char **buf, int *len)
 
 	*buf = palloc(sizeof(char) * XLogRecGetDataLen(xlogreader));
 	memcpy(*buf, XLogRecGetData(xlogreader), sizeof(char) * XLogRecGetDataLen(xlogreader));
-
-	XLogReaderFree(xlogreader);
 }
 
 

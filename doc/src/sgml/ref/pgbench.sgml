@@ -841,6 +841,16 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
     <variablelist>
 
      <varlistentry>
+      <term><option>--conninfo=</option><replaceable>conninfo</replaceable></term>
+      <listitem>
+       <para>
+        Add a <replaceable>conninfo</replaceable> connection information string
+        to the pool of possible connection strings.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>-h</option> <replaceable>hostname</replaceable></term>
       <term><option>--host=</option><replaceable>hostname</replaceable></term>
       <listitem>

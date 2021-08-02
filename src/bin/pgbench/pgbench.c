@@ -277,12 +277,35 @@ bool		is_connect;			/* establish connection for each transaction */
 bool		report_per_command; /* report per-command latencies */
 int			main_pid;			/* main process id used in log filename */
 
+char	   *logfile_prefix = NULL;
+
+/* main connection definition */
 const char *pghost = NULL;
 const char *pgport = NULL;
 const char *username = NULL;
 const char *dbName = NULL;
-char	   *logfile_prefix = NULL;
 const char *progname;
+
+/* connection info list */
+typedef struct conninfo_t
+{
+	const char *conninfo;
+	int			errors;
+} conninfo_t;
+
+#define		MAX_CONNINFO	8
+int			n_conninfo = 0;
+conninfo_t	conninfos[MAX_CONNINFO];
+
+static void
+push_conninfo(const char *ci)
+{
+	// FIXME nicer error
+	Assert(n_conninfo < MAX_CONNINFO);
+	conninfos[n_conninfo].conninfo = ci;
+	conninfos[n_conninfo].errors = 0;
+	n_conninfo++;
+}
 
 #define WSEP '@'				/* weight separator */
 
@@ -758,6 +781,7 @@ usage(void)
 		   "  -U, --username=USERNAME  connect as specified database user\n"
 		   "  -V, --version            output version information, then exit\n"
 		   "  -?, --help               show this help, then exit\n"
+		   "  --conninfo=CONNINFO      add a database server conninfo\n"
 		   "\n"
 		   "Report bugs to <%s>.\n"
 		   "%s home page: <%s>\n",
@@ -1350,9 +1374,44 @@ tryExecuteStatement(PGconn *con, const char *sql)
 	PQclear(res);
 }
 
+/* set up a connection to the backend with a provided conninfo */
+static PGconn *
+doConnectCI(bool change)
+{
+	static int	nci = 0;
+	PGconn	   *conn;
+	conninfo_t *ci = &conninfos[nci];
+
+	conn = PQconnectdb(ci->conninfo);
+
+	if (!conn)
+	{
+		ci->errors++;
+		pg_log_error("connection to database \"%s\" failed", ci->conninfo);
+		/* try another one next time */
+		nci = (nci + 1) % n_conninfo;
+		return NULL;
+	}
+
+	if (PQstatus(conn) == CONNECTION_BAD)
+	{
+		ci->errors++;
+		pg_log_error("%s", PQerrorMessage(conn));
+		PQfinish(conn);
+		/* try another one next time */
+		nci = (nci + 1) % n_conninfo;
+		return NULL;
+	}
+
+	if (change)
+		nci = (nci + 1) % n_conninfo;
+
+	return conn;
+}
+
 /* set up a connection to the backend */
 static PGconn *
-doConnect(void)
+doConnectParams(void)
 {
 	PGconn	   *conn;
 	bool		new_pass;
@@ -1413,6 +1472,13 @@ doConnect(void)
 	}
 
 	return conn;
+}
+
+/* create a connection with one of the above methods */
+static PGconn *
+doConnect(bool change)
+{
+	return n_conninfo > 0 ? doConnectCI(change) : doConnectParams();
 }
 
 /* qsort comparator for Variable array */
@@ -3179,7 +3245,7 @@ advanceConnectionState(TState *thread, CState *st, StatsData *agg)
 				{
 					pg_time_usec_t start = now;
 
-					if ((st->con = doConnect()) == NULL)
+					if ((st->con = doConnect(true)) == NULL)
 					{
 						pg_log_error("client %d aborted while establishing connection", st->id);
 						st->state = CSTATE_ABORTED;
@@ -4417,7 +4483,7 @@ runInitSteps(const char *initialize_steps)
 
 	initPQExpBuffer(&stats);
 
-	if ((con = doConnect()) == NULL)
+	if ((con = doConnect(false)) == NULL)
 		exit(1);
 
 	setup_cancel_handler(NULL);
@@ -5780,6 +5846,7 @@ main(int argc, char **argv)
 		{"show-script", required_argument, NULL, 10},
 		{"partitions", required_argument, NULL, 11},
 		{"partition-method", required_argument, NULL, 12},
+		{"conninfo", required_argument, NULL, 13},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -6133,6 +6200,9 @@ main(int argc, char **argv)
 					exit(1);
 				}
 				break;
+			case 13:
+				push_conninfo(pg_strdup(optarg));
+				break;
 			default:
 				fprintf(stderr, _("Try \"%s --help\" for more information.\n"), progname);
 				exit(1);
@@ -6359,7 +6429,7 @@ main(int argc, char **argv)
 	}
 
 	/* opening connection... */
-	con = doConnect();
+	con = doConnect(false);
 	if (con == NULL)
 		exit(1);
 
@@ -6605,7 +6675,7 @@ threadRun(void *arg)
 		/* make connections to the database before starting */
 		for (int i = 0; i < nstate; i++)
 		{
-			if ((state[i].con = doConnect()) == NULL)
+			if ((state[i].con = doConnect(true)) == NULL)
 			{
 				/*
 				 * On connection failure, we meet the barrier here in place of

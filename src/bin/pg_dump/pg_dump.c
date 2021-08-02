@@ -55,10 +55,12 @@
 #include "catalog/pg_trigger_d.h"
 #include "catalog/pg_type_d.h"
 #include "common/connect.h"
+#include "common/string.h"
 #include "dumputils.h"
 #include "fe_utils/option_utils.h"
 #include "fe_utils/string_utils.h"
 #include "getopt_long.h"
+#include "lib/stringinfo.h"
 #include "libpq/libpq-fs.h"
 #include "parallel.h"
 #include "pg_backup_db.h"
@@ -308,7 +310,7 @@ static void appendReloptionsArrayAH(PQExpBuffer buffer, const char *reloptions,
 static char *get_synchronized_snapshot(Archive *fout);
 static void setupDumpWorker(Archive *AHX);
 static TableInfo *getRootTableInfo(const TableInfo *tbinfo);
-
+static void read_patterns_from_file(char *filename, DumpOptions *dopt);
 
 int
 main(int argc, char **argv)
@@ -380,6 +382,7 @@ main(int argc, char **argv)
 		{"enable-row-security", no_argument, &dopt.enable_row_security, 1},
 		{"exclude-table-data", required_argument, NULL, 4},
 		{"extra-float-digits", required_argument, NULL, 8},
+		{"filter", required_argument, NULL, 12},
 		{"if-exists", no_argument, &dopt.if_exists, 1},
 		{"inserts", no_argument, NULL, 9},
 		{"lock-wait-timeout", required_argument, NULL, 2},
@@ -611,6 +614,10 @@ main(int argc, char **argv)
 			case 11:			/* include foreign data */
 				simple_string_list_append(&foreign_servers_include_patterns,
 										  optarg);
+				break;
+
+			case 12:			/* filter implementation */
+				read_patterns_from_file(optarg, &dopt);
 				break;
 
 			default:
@@ -1038,6 +1045,8 @@ help(const char *progname)
 			 "                               access to)\n"));
 	printf(_("  --exclude-table-data=PATTERN do NOT dump data for the specified table(s)\n"));
 	printf(_("  --extra-float-digits=NUM     override default setting for extra_float_digits\n"));
+	printf(_("  --filter=FILENAME            dump objects and data based on the filter expressions\n"
+			 "                               from the filter file\n"));
 	printf(_("  --if-exists                  use IF EXISTS when dropping objects\n"));
 	printf(_("  --include-foreign-data=PATTERN\n"
 			 "                               include data of foreign tables on foreign\n"
@@ -18939,4 +18948,282 @@ appendReloptionsArrayAH(PQExpBuffer buffer, const char *reloptions,
 								fout->std_strings);
 	if (!res)
 		pg_log_warning("could not parse reloptions array");
+}
+
+/*
+ * Print error message and exit.
+ */
+static void
+exit_invalid_filter_format(FILE *fp, char *filename, char *message, char *line, int lineno)
+{
+	pg_log_error("invalid format of filter file \"%s\": %s",
+				 filename,
+				 message);
+
+	fprintf(stderr, "%d: %s\n", lineno, line);
+
+	if (fp != stdin)
+		fclose(fp);
+
+	exit_nicely(-1);
+}
+
+/*
+ * Search keyword (can contains only ascii alphabetic characters) on line.
+ * Returns NULL, when the line is empty or first char is not alpha
+ */
+static const char *
+get_keyword(const char **line, int *size)
+{
+	const char	   *ptr = *line;
+	const char	   *result = NULL;
+
+	/* skip initial white spaces */
+	while (isblank(*ptr))
+		ptr += 1;
+
+	if (isascii(*ptr) && isalpha(*ptr))
+	{
+		result = ptr++;
+
+		while (isascii(*ptr) && (isalpha(*ptr) || *ptr == '_'))
+			ptr += 1;
+
+		*size = ptr - result;
+	}
+
+	*line = ptr;
+
+	return result;
+}
+
+static bool
+is_keyword(const char *keyword, int size, const char *str)
+{
+	if (strlen(str) != size)
+		return false;
+
+	return pg_strncasecmp(keyword, str, size) == 0;
+}
+
+static bool
+isblank_line(const char *line)
+{
+	while (*line)
+	{
+		if (!isblank(*line++))
+			return false;
+	}
+
+	return true;
+}
+
+/*
+ * Read dumped object specification from file
+ */
+static void
+read_patterns_from_file(char *filename, DumpOptions *dopt)
+{
+	FILE	   *fp;
+	int			lineno = 0;
+	StringInfoData line;
+	PQExpBuffer quoted_name = NULL;
+
+	/* use "-" as symbol for stdin */
+	if (strcmp(filename, "-") != 0)
+	{
+		fp = fopen(filename, "r");
+		if (!fp)
+			fatal("could not open the input file \"%s\": %m",
+				  filename);
+	}
+	else
+		fp = stdin;
+
+	initStringInfo(&line);
+
+	while (pg_get_line_buf(fp, &line))
+	{
+		bool		is_include;
+		char		objecttype;
+		char	   *objectname;
+		char	   *str = line.data;
+		char	   *str_mark;
+		const char	   *keyword;
+		int			size;
+
+		lineno += 1;
+
+		(void) pg_strip_crlf(str);
+
+		/* ignore blank lines */
+		if (isblank_line(str))
+			continue;
+
+		/* when first char is hash, ignore whole line */
+		if (*str == '#')
+			continue;
+
+		keyword = get_keyword((const char **) &str, &size);
+
+		/* Now we expect sequence of two keywords */
+		if (keyword && is_keyword(keyword, size, "include"))
+			is_include = true;
+		else if (keyword && is_keyword(keyword, size, "exclude"))
+			is_include = false;
+		else
+			exit_invalid_filter_format(fp,
+									   filename,
+									   "expected keyword \"include\" or \"exclude\"",
+									   line.data,
+									   lineno);
+
+		/*
+		 * Save current position in parsed line. Can be used later
+		 * in error message.
+		 */
+		str_mark = str;
+
+		keyword = get_keyword((const char **) &str, &size);
+
+		if (keyword && is_keyword(keyword, size, "table"))
+			objecttype = 't';
+		else if (keyword && is_keyword(keyword, size, "schema"))
+			objecttype = 's';
+		else if (keyword && is_keyword(keyword, size, "foreign_data"))
+			objecttype = 'f';
+		else if (keyword && is_keyword(keyword, size, "data"))
+			objecttype = 'd';
+		else
+			exit_invalid_filter_format(fp,
+									   filename,
+									   "expected keyword \"table\", \"schema\", \"foreign_data\" or \"data\"",
+									   str_mark,
+									   lineno);
+
+		objectname = str;
+
+		/* skip initial spaces */
+		while (isspace(*objectname))
+			objectname++;
+
+		if (*objectname == '\0')
+			exit_invalid_filter_format(fp,
+									   filename,
+									   "missing object name",
+									   str,
+									   lineno);
+
+		if (*objectname == '"')
+		{
+			PQExpBuffer		quoted_name;
+			char	   *ptr = objectname + 1;
+
+			quoted_name = createPQExpBuffer();
+
+			appendPQExpBufferChar(quoted_name, '"');
+
+			while (1)
+			{
+				if (*ptr == '\0')
+				{
+					if (!pg_get_line_buf(fp, &line))
+						exit_invalid_filter_format(fp,
+												   filename,
+												   "unexpected end of file",
+												   "",
+												   lineno);
+
+					if (ferror(fp))
+						fatal("could not read from file \"%s\": %m", filename);
+
+					appendPQExpBufferChar(quoted_name, '\n');
+					ptr = line.data;
+					lineno += 1;
+				}
+
+				appendPQExpBufferChar(quoted_name, *ptr);
+				if (*ptr++ == '"')
+				{
+					if (*ptr == '"')
+						appendPQExpBufferChar(quoted_name, *ptr++);
+					else
+						break;
+				}
+			}
+
+			/* check garbage after identifier */
+			if (!isblank_line(ptr))
+				exit_invalid_filter_format(fp,
+										   filename,
+										   "unexpected chars after object name",
+										   ptr,
+										   lineno);
+
+			objectname = quoted_name->data;
+		}
+
+		if (objecttype == 't')
+		{
+			if (is_include)
+			{
+				simple_string_list_append(&table_include_patterns,
+										  objectname);
+				dopt->include_everything = false;
+			}
+			else
+				simple_string_list_append(&table_exclude_patterns,
+										  objectname);
+		}
+		else if (objecttype == 's')
+		{
+			if (is_include)
+			{
+				simple_string_list_append(&schema_include_patterns,
+										  objectname);
+				dopt->include_everything = false;
+			}
+			else
+				simple_string_list_append(&schema_exclude_patterns,
+										  objectname);
+		}
+		else if (objecttype == 'd')
+		{
+			if (is_include)
+				exit_invalid_filter_format(fp,
+										   filename,
+										   "include filter is not supported for this type of object",
+										   str,
+										   lineno);
+			else
+				simple_string_list_append(&tabledata_exclude_patterns,
+										  objectname);
+		}
+		else if (objecttype == 'f')
+		{
+			if (is_include)
+				simple_string_list_append(&foreign_servers_include_patterns,
+										  objectname);
+			else
+				exit_invalid_filter_format(fp,
+										   filename,
+										   "exclude filter is not supported for this type of object",
+										   str,
+										   lineno);
+		}
+
+		if (quoted_name)
+		{
+			destroyPQExpBuffer(quoted_name);
+			quoted_name = NULL;
+		}
+	}
+
+	pfree(line.data);
+
+	if (ferror(fp))
+		fatal("could not read from file \"%s\": %m", filename);
+
+	if (fp != stdin)
+		fclose(fp);
 }

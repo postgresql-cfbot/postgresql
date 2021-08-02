@@ -842,7 +842,7 @@ CREATE COLLATION german (provider = libc, locale = 'de_DE');
     subtag) can be found in
     the <ulink url="https://github.com/unicode-org/cldr/blob/master/common/bcp47/collation.xml">CLDR
     repository</ulink>.
-    The <ulink url="https://ssl.icu-project.org/icu-bin/locexp">ICU Locale
+    The <ulink url="https://icu4c-demos.unicode.org/icu-bin/locexp">ICU Locale
     Explorer</ulink> can be used to check the details of a particular locale
     definition.  The examples using the <literal>k*</literal> subtags require
     at least ICU version 54.

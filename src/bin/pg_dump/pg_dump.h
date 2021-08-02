@@ -270,6 +270,7 @@ typedef struct _tableInfo
 	char		relpersistence; /* relation persistence */
 	bool		relispopulated; /* relation is populated */
 	char		relreplident;	/* replica identifier */
+	char		relparalleldml; /* parallel safety of dml on the relation */
 	char	   *reltablespace;	/* relation tablespace */
 	char	   *reloptions;		/* options specified by WITH (...) */
 	char	   *checkoption;	/* WITH CHECK OPTION, if any */

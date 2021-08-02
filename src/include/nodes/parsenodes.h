@@ -1934,7 +1934,8 @@ typedef enum AlterTableType
 	AT_AddIdentity,				/* ADD IDENTITY */
 	AT_SetIdentity,				/* SET identity column options */
 	AT_DropIdentity,			/* DROP IDENTITY */
-	AT_ReAddStatistics			/* internal to commands/tablecmds.c */
+	AT_ReAddStatistics,			/* internal to commands/tablecmds.c */
+	AT_ParallelDMLSafety		/* PARALLEL DML SAFE/RESTRICTED/UNSAFE */
 } AlterTableType;
 
 typedef struct ReplicaIdentityStmt
@@ -2180,6 +2181,7 @@ typedef struct CreateStmt
 	OnCommitAction oncommit;	/* what do we do at COMMIT? */
 	char	   *tablespacename; /* table space to use, or NULL */
 	char	   *accessMethod;	/* table access method */
+	char	   *paralleldmlsafety; /* parallel dml safety */
 	bool		if_not_exists;	/* just do nothing if it already exists? */
 } CreateStmt;
 

@@ -2206,6 +2206,7 @@ alter table test_storage alter column a set storage external;
  b      | integer |           |          | 0       | plain    |              | 
 Indexes:
     "test_storage_idx" btree (b, a)
+Parallel DML: unsafe
 
 \d+ test_storage_idx
                 Index "public.test_storage_idx"
@@ -4193,6 +4194,7 @@ ALTER TABLE range_parted2 DETACH PARTITION part_rp CONCURRENTLY;
  a      | integer |           |          |         | plain   |              | 
 Partition key: RANGE (a)
 Number of partitions: 0
+Parallel DML: unsafe
 
 -- constraint should be created
 \d part_rp

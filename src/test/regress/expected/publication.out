@@ -85,6 +85,7 @@ Indexes:
     "testpub_tbl2_pkey" PRIMARY KEY, btree (id)
 Publications:
     "testpub_foralltables"
+Parallel DML: unsafe
 
 \dRp+ testpub_foralltables
                               Publication testpub_foralltables
@@ -198,6 +199,7 @@ Publications:
     "testpib_ins_trunct"
     "testpub_default"
     "testpub_fortbl"
+Parallel DML: unsafe
 
 \d+ testpub_tbl1
                                                 Table "public.testpub_tbl1"
@@ -211,6 +213,7 @@ Publications:
     "testpib_ins_trunct"
     "testpub_default"
     "testpub_fortbl"
+Parallel DML: unsafe
 
 \dRp+ testpub_default
                                 Publication testpub_default
@@ -236,6 +239,7 @@ Indexes:
 Publications:
     "testpib_ins_trunct"
     "testpub_fortbl"
+Parallel DML: unsafe
 
 -- permissions
 SET ROLE regress_publication_user2;

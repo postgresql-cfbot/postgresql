@@ -519,6 +519,7 @@ alter table check_con_tbl add check (check_con_function(check_con_tbl.*));
  f1     | integer |           |          |         | plain   |              | 
 Check constraints:
     "check_con_tbl_check" CHECK (check_con_function(check_con_tbl.*))
+Parallel DML: unsafe
 
 copy check_con_tbl from stdin;
 NOTICE:  input = {"f1":1}

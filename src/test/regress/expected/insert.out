@@ -177,6 +177,7 @@ Rules:
     irule3 AS
     ON INSERT TO inserttest2 DO  INSERT INTO inserttest (f4[1].if1, f4[1].if2[2])  SELECT new.f1,
             new.f2
+Parallel DML: unsafe
 
 drop table inserttest2;
 drop table inserttest;
@@ -482,6 +483,7 @@ Partitions: part_aa_bb FOR VALUES IN ('aa', 'bb'),
             part_null FOR VALUES IN (NULL),
             part_xx_yy FOR VALUES IN ('xx', 'yy'), PARTITIONED,
             part_default DEFAULT, PARTITIONED
+Parallel DML: unsafe
 
 -- cleanup
 drop table range_parted, list_parted;
@@ -497,6 +499,7 @@ create table part_default partition of list_parted default;
  a      | integer |           |          |         | plain   |              | 
 Partition of: list_parted DEFAULT
 No partition constraint
+Parallel DML: unsafe
 
 insert into part_default values (null);
 insert into part_default values (1);
@@ -888,6 +891,7 @@ Partitions: mcrparted1_lt_b FOR VALUES FROM (MINVALUE, MINVALUE) TO ('b', MINVAL
             mcrparted6_common_ge_10 FOR VALUES FROM ('common', 10) TO ('common', MAXVALUE),
             mcrparted7_gt_common_lt_d FOR VALUES FROM ('common', MAXVALUE) TO ('d', MINVALUE),
             mcrparted8_ge_d FOR VALUES FROM ('d', MINVALUE) TO (MAXVALUE, MAXVALUE)
+Parallel DML: unsafe
 
 \d+ mcrparted1_lt_b
                               Table "public.mcrparted1_lt_b"
@@ -897,6 +901,7 @@ Partitions: mcrparted1_lt_b FOR VALUES FROM (MINVALUE, MINVALUE) TO ('b', MINVAL
  b      | integer |           |          |         | plain    |              | 
 Partition of: mcrparted FOR VALUES FROM (MINVALUE, MINVALUE) TO ('b', MINVALUE)
 Partition constraint: ((a IS NOT NULL) AND (b IS NOT NULL) AND (a < 'b'::text))
+Parallel DML: unsafe
 
 \d+ mcrparted2_b
                                 Table "public.mcrparted2_b"
@@ -906,6 +911,7 @@ Partition constraint: ((a IS NOT NULL) AND (b IS NOT NULL) AND (a < 'b'::text))
  b      | integer |           |          |         | plain    |              | 
 Partition of: mcrparted FOR VALUES FROM ('b', MINVALUE) TO ('c', MINVALUE)
 Partition constraint: ((a IS NOT NULL) AND (b IS NOT NULL) AND (a >= 'b'::text) AND (a < 'c'::text))
+Parallel DML: unsafe
 
 \d+ mcrparted3_c_to_common
                            Table "public.mcrparted3_c_to_common"
@@ -915,6 +921,7 @@ Partition constraint: ((a IS NOT NULL) AND (b IS NOT NULL) AND (a >= 'b'::text) 
  b      | integer |           |          |         | plain    |              | 
 Partition of: mcrparted FOR VALUES FROM ('c', MINVALUE) TO ('common', MINVALUE)
 Partition constraint: ((a IS NOT NULL) AND (b IS NOT NULL) AND (a >= 'c'::text) AND (a < 'common'::text))
+Parallel DML: unsafe
 
 \d+ mcrparted4_common_lt_0
                            Table "public.mcrparted4_common_lt_0"
@@ -924,6 +931,7 @@ Partition constraint: ((a IS NOT NULL) AND (b IS NOT NULL) AND (a >= 'c'::text) 
  b      | integer |           |          |         | plain    |              | 
 Partition of: mcrparted FOR VALUES FROM ('common', MINVALUE) TO ('common', 0)
 Partition constraint: ((a IS NOT NULL) AND (b IS NOT NULL) AND (a = 'common'::text) AND (b < 0))
+Parallel DML: unsafe
 
 \d+ mcrparted5_common_0_to_10
                          Table "public.mcrparted5_common_0_to_10"
@@ -933,6 +941,7 @@ Partition constraint: ((a IS NOT NULL) AND (b IS NOT NULL) AND (a = 'common'::te
  b      | integer |           |          |         | plain    |              | 
 Partition of: mcrparted FOR VALUES FROM ('common', 0) TO ('common', 10)
 Partition constraint: ((a IS NOT NULL) AND (b IS NOT NULL) AND (a = 'common'::text) AND (b >= 0) AND (b < 10))
+Parallel DML: unsafe
 
 \d+ mcrparted6_common_ge_10
                           Table "public.mcrparted6_common_ge_10"
@@ -942,6 +951,7 @@ Partition constraint: ((a IS NOT NULL) AND (b IS NOT NULL) AND (a = 'common'::te
  b      | integer |           |          |         | plain    |              | 
 Partition of: mcrparted FOR VALUES FROM ('common', 10) TO ('common', MAXVALUE)
 Partition constraint: ((a IS NOT NULL) AND (b IS NOT NULL) AND (a = 'common'::text) AND (b >= 10))
+Parallel DML: unsafe
 
 \d+ mcrparted7_gt_common_lt_d
                          Table "public.mcrparted7_gt_common_lt_d"
@@ -951,6 +961,7 @@ Partition constraint: ((a IS NOT NULL) AND (b IS NOT NULL) AND (a = 'common'::te
  b      | integer |           |          |         | plain    |              | 
 Partition of: mcrparted FOR VALUES FROM ('common', MAXVALUE) TO ('d', MINVALUE)
 Partition constraint: ((a IS NOT NULL) AND (b IS NOT NULL) AND (a > 'common'::text) AND (a < 'd'::text))
+Parallel DML: unsafe
 
 \d+ mcrparted8_ge_d
                               Table "public.mcrparted8_ge_d"
@@ -960,6 +971,7 @@ Partition constraint: ((a IS NOT NULL) AND (b IS NOT NULL) AND (a > 'common'::te
  b      | integer |           |          |         | plain    |              | 
 Partition of: mcrparted FOR VALUES FROM ('d', MINVALUE) TO (MAXVALUE, MAXVALUE)
 Partition constraint: ((a IS NOT NULL) AND (b IS NOT NULL) AND (a >= 'd'::text))
+Parallel DML: unsafe
 
 insert into mcrparted values ('aaa', 0), ('b', 0), ('bz', 10), ('c', -10),
     ('comm', -10), ('common', -10), ('common', 0), ('common', 10),

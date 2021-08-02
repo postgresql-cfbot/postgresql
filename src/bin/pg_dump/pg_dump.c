@@ -6253,6 +6253,7 @@ getTables(Archive *fout, int *numTables)
 	int			i_relpersistence;
 	int			i_relispopulated;
 	int			i_relreplident;
+	int			i_relparalleldml;
 	int			i_owning_tab;
 	int			i_owning_col;
 	int			i_reltablespace;
@@ -6358,7 +6359,7 @@ getTables(Archive *fout, int *numTables)
 						  "tc.relfrozenxid AS tfrozenxid, "
 						  "tc.relminmxid AS tminmxid, "
 						  "c.relpersistence, c.relispopulated, "
-						  "c.relreplident, c.relpages, am.amname, "
+						  "c.relreplident, c.relparalleldml, c.relpages, am.amname, "
 						  "CASE WHEN c.relkind = 'f' THEN "
 						  "(SELECT ftserver FROM pg_catalog.pg_foreign_table WHERE ftrelid = c.oid) "
 						  "ELSE 0 END AS foreignserver, "
@@ -6450,7 +6451,7 @@ getTables(Archive *fout, int *numTables)
 						  "tc.relfrozenxid AS tfrozenxid, "
 						  "tc.relminmxid AS tminmxid, "
 						  "c.relpersistence, c.relispopulated, "
-						  "c.relreplident, c.relpages, "
+						  "c.relreplident, c.relparalleldml, c.relpages, "
 						  "NULL AS amname, "
 						  "CASE WHEN c.relkind = 'f' THEN "
 						  "(SELECT ftserver FROM pg_catalog.pg_foreign_table WHERE ftrelid = c.oid) "
@@ -6503,7 +6504,7 @@ getTables(Archive *fout, int *numTables)
 						  "tc.relfrozenxid AS tfrozenxid, "
 						  "tc.relminmxid AS tminmxid, "
 						  "c.relpersistence, c.relispopulated, "
-						  "c.relreplident, c.relpages, "
+						  "c.relreplident, c.relparalleldml, c.relpages, "
 						  "NULL AS amname, "
 						  "CASE WHEN c.relkind = 'f' THEN "
 						  "(SELECT ftserver FROM pg_catalog.pg_foreign_table WHERE ftrelid = c.oid) "
@@ -6556,7 +6557,7 @@ getTables(Archive *fout, int *numTables)
 						  "tc.relfrozenxid AS tfrozenxid, "
 						  "tc.relminmxid AS tminmxid, "
 						  "c.relpersistence, c.relispopulated, "
-						  "'d' AS relreplident, c.relpages, "
+						  "'d' AS relreplident, 'u' AS relparalleldml, c.relpages, "
 						  "NULL AS amname, "
 						  "CASE WHEN c.relkind = 'f' THEN "
 						  "(SELECT ftserver FROM pg_catalog.pg_foreign_table WHERE ftrelid = c.oid) "
@@ -6609,7 +6610,7 @@ getTables(Archive *fout, int *numTables)
 						  "tc.relfrozenxid AS tfrozenxid, "
 						  "0 AS tminmxid, "
 						  "c.relpersistence, 't' as relispopulated, "
-						  "'d' AS relreplident, c.relpages, "
+						  "'d' AS relreplident, 'u' AS relparalleldml, c.relpages, "
 						  "NULL AS amname, "
 						  "CASE WHEN c.relkind = 'f' THEN "
 						  "(SELECT ftserver FROM pg_catalog.pg_foreign_table WHERE ftrelid = c.oid) "
@@ -6660,7 +6661,7 @@ getTables(Archive *fout, int *numTables)
 						  "tc.relfrozenxid AS tfrozenxid, "
 						  "0 AS tminmxid, "
 						  "'p' AS relpersistence, 't' as relispopulated, "
-						  "'d' AS relreplident, c.relpages, "
+						  "'d' AS relreplident, 'u' AS relparalleldml, c.relpages, "
 						  "NULL AS amname, "
 						  "NULL AS foreignserver, "
 						  "CASE WHEN c.reloftype <> 0 THEN c.reloftype::pg_catalog.regtype ELSE NULL END AS reloftype, "
@@ -6708,7 +6709,7 @@ getTables(Archive *fout, int *numTables)
 						  "tc.relfrozenxid AS tfrozenxid, "
 						  "0 AS tminmxid, "
 						  "'p' AS relpersistence, 't' as relispopulated, "
-						  "'d' AS relreplident, c.relpages, "
+						  "'d' AS relreplident, 'u' AS relparalleldml, c.relpages, "
 						  "NULL AS amname, "
 						  "NULL AS foreignserver, "
 						  "NULL AS reloftype, "
@@ -6756,7 +6757,7 @@ getTables(Archive *fout, int *numTables)
 						  "tc.relfrozenxid AS tfrozenxid, "
 						  "0 AS tminmxid, "
 						  "'p' AS relpersistence, 't' as relispopulated, "
-						  "'d' AS relreplident, c.relpages, "
+						  "'d' AS relreplident, 'u' AS relparalleldml, c.relpages, "
 						  "NULL AS amname, "
 						  "NULL AS foreignserver, "
 						  "NULL AS reloftype, "
@@ -6803,7 +6804,7 @@ getTables(Archive *fout, int *numTables)
 						  "0 AS toid, "
 						  "0 AS tfrozenxid, 0 AS tminmxid,"
 						  "'p' AS relpersistence, 't' as relispopulated, "
-						  "'d' AS relreplident, relpages, "
+						  "'d' AS relreplident, 'u' AS relparalleldml, relpages, "
 						  "NULL AS amname, "
 						  "NULL AS foreignserver, "
 						  "NULL AS reloftype, "
@@ -6872,6 +6873,7 @@ getTables(Archive *fout, int *numTables)
 	i_relpersistence = PQfnumber(res, "relpersistence");
 	i_relispopulated = PQfnumber(res, "relispopulated");
 	i_relreplident = PQfnumber(res, "relreplident");
+	i_relparalleldml = PQfnumber(res, "relparalleldml");
 	i_relpages = PQfnumber(res, "relpages");
 	i_foreignserver = PQfnumber(res, "foreignserver");
 	i_owning_tab = PQfnumber(res, "owning_tab");
@@ -6927,6 +6929,7 @@ getTables(Archive *fout, int *numTables)
 		tblinfo[i].hasoids = (strcmp(PQgetvalue(res, i, i_relhasoids), "t") == 0);
 		tblinfo[i].relispopulated = (strcmp(PQgetvalue(res, i, i_relispopulated), "t") == 0);
 		tblinfo[i].relreplident = *(PQgetvalue(res, i, i_relreplident));
+		tblinfo[i].relparalleldml = *(PQgetvalue(res, i, i_relparalleldml));
 		tblinfo[i].relpages = atoi(PQgetvalue(res, i, i_relpages));
 		tblinfo[i].frozenxid = atooid(PQgetvalue(res, i, i_relfrozenxid));
 		tblinfo[i].minmxid = atooid(PQgetvalue(res, i, i_relminmxid));
@@ -16552,6 +16555,32 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 		{
 			appendPQExpBuffer(q, "\nALTER TABLE ONLY %s REPLICA IDENTITY FULL;\n",
 							  qualrelname);
+		}
+	}
+
+	if (tbinfo->relkind == RELKIND_RELATION ||
+		tbinfo->relkind == RELKIND_PARTITIONED_TABLE ||
+		tbinfo->relkind == RELKIND_FOREIGN_TABLE)
+	{
+		appendPQExpBuffer(q, "\nALTER %sTABLE %s PARALLEL DML ",
+						tbinfo->relkind == RELKIND_FOREIGN_TABLE ? "FOREIGN " : "",
+						qualrelname);
+
+		switch (tbinfo->relparalleldml)
+		{
+			case 's':
+				appendPQExpBuffer(q, "SAFE;\n");
+				break;
+			case 'r':
+				appendPQExpBuffer(q, "RESTRICTED;\n");
+				break;
+			case 'u':
+				appendPQExpBuffer(q, "UNSAFE;\n");
+				break;
+			default:
+				/* should not reach here */
+				appendPQExpBuffer(q, "UNSAFE;\n");
+				break;
 		}
 	}
 

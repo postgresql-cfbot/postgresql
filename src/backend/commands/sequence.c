@@ -211,6 +211,7 @@ DefineSequence(ParseState *pstate, CreateSeqStmt *seq)
 	stmt->options = NIL;
 	stmt->oncommit = ONCOMMIT_NOOP;
 	stmt->tablespacename = NULL;
+	stmt->paralleldmlsafety = NULL;
 	stmt->if_not_exists = seq->if_not_exists;
 
 	address = DefineRelation(stmt, RELKIND_SEQUENCE, seq->ownerId, NULL, NULL);

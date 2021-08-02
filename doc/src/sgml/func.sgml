@@ -23940,6 +23940,67 @@ SELECT collation for ('foo' COLLATE "de_DE");
         Undefined objects are identified with <literal>NULL</literal> values.
        </para></entry>
       </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>pg_get_table_parallel_dml_safety</primary>
+        </indexterm>
+        <function>pg_get_table_parallel_dml_safety</function> ( <parameter>table_name</parameter> <type>regclass</type> )
+        <returnvalue>record</returnvalue>
+        ( <parameter>objid</parameter> <type>oid</type>,
+        <parameter>classid</parameter> <type>oid</type>,
+        <parameter>proparallel</parameter> <type>char</type> )
+       </para>
+       <para>
+        Returns a row containing enough information to uniquely identify the
+        parallel unsafe/restricted table-related objects from which the
+        table's parallel DML safety is determined. The user can use this
+        information during development in order to accurately declare a
+        table's parallel DML safety, or to identify any problematic objects
+        if parallel DML fails or behaves unexpectedly. Note that when the
+        use of an object-related parallel unsafe/restricted function is
+        detected, both the function OID and the object OID are returned.
+        <parameter>classid</parameter> is the OID of the system catalog
+        containing the object;
+        <parameter>objid</parameter> is the OID of the object itself.
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>pg_get_table_max_parallel_dml_hazard</primary>
+        </indexterm>
+        <function>pg_get_table_max_parallel_dml_hazard</function> ( <type>regclass</type> )
+        <returnvalue>char</returnvalue>
+       </para>
+       <para>
+        Returns the worst parallel DML safety hazard that can be found in the
+        given relation:
+         <itemizedlist>
+          <listitem>
+           <para>
+            <literal>s</literal> safe
+           </para>
+          </listitem>
+          <listitem>
+           <para>
+            <literal>r</literal> restricted
+           </para>
+          </listitem>
+          <listitem>
+           <para>
+            <literal>u</literal> unsafe
+           </para>
+          </listitem>
+         </itemizedlist>
+       </para>
+       <para>
+        Users can use this function to do a quick check without caring about
+        specific parallel-related objects.
+       </para></entry>
+      </row>
      </tbody>
     </tgroup>
    </table>

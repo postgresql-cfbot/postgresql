@@ -445,7 +445,8 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       Although most forms of <literal>ADD
       <replaceable class="parameter">table_constraint</replaceable></literal>
       require an <literal>ACCESS EXCLUSIVE</literal> lock, <literal>ADD
-      FOREIGN KEY</literal> requires only a <literal>SHARE ROW
+      CHECK</literal> and <literal>ADD
+      FOREIGN KEY</literal> require only a <literal>SHARE ROW
       EXCLUSIVE</literal> lock.  Note that <literal>ADD FOREIGN KEY</literal>
       also acquires a <literal>SHARE ROW EXCLUSIVE</literal> lock on the
       referenced table, in addition to the lock on the table on which the

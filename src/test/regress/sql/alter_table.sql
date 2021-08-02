@@ -1745,6 +1745,11 @@ select * from my_locks order by 1;
 rollback;
 
 begin;
+alter table alterlock2 add check (f1 > 0) not valid;
+select * from my_locks order by 1;
+rollback;
+
+begin;
 alter table alterlock2
 add constraint alterlock2nv foreign key (f1) references alterlock (f1) NOT VALID;
 select * from my_locks order by 1;

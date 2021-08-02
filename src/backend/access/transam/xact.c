@@ -6127,3 +6127,27 @@ MarkSubTransactionAssigned(void)
 
 	CurrentTransactionState->assigned = true;
 }
+
+/*
+ * CallXactStartCommand
+ *
+ * Wrapper over CallXactCallbacks called in postgres.c after the call to
+ * start_xact_command(). It allows to user-defined code to be executed
+ * for the start of any command through a xact registered callback. This
+ * function do nothing if a transaction is not started.
+ *
+ * The related XactEvent is XACT_EVENT_COMMAND_START.
+ */
+void
+CallXactStartCommand(void)
+{
+	TransactionState s = CurrentTransactionState;
+
+	if (s->blockState == TBLOCK_DEFAULT || s->blockState == TBLOCK_STARTED)
+		return;
+
+	/*
+	 * Call start-of-xact callbacks with start command event
+	 */
+	CallXactCallbacks(XACT_EVENT_COMMAND_START);
+}

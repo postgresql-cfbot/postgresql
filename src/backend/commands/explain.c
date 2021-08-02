@@ -21,6 +21,7 @@
 #include "executor/nodeHash.h"
 #include "foreign/fdwapi.h"
 #include "jit/jit.h"
+#include "miscadmin.h"
 #include "nodes/extensible.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
@@ -28,6 +29,8 @@
 #include "parser/parsetree.h"
 #include "rewrite/rewriteHandler.h"
 #include "storage/bufmgr.h"
+#include "storage/procarray.h"
+#include "tcop/pquery.h"
 #include "tcop/tcopprot.h"
 #include "utils/builtins.h"
 #include "utils/guc_tables.h"
@@ -4919,4 +4922,80 @@ static void
 escape_yaml(StringInfo buf, const char *str)
 {
 	escape_json(buf, str);
+}
+
+/*
+ * HandleLogCurrentPlanInterrupt
+ *		Handle receipt of an interrupt indicating logging the plan of
+ *		the currently running query.
+ *
+ * All the actual work is deferred to ProcessLogCurrentPlanInterrupt(),
+ * because we cannot safely emit a log message inside the signal handler.
+ */
+void
+HandleLogCurrentPlanInterrupt(void)
+{
+	InterruptPending = true;
+	LogCurrentPlanPending = true;
+	/* latch will be set by procsignal_sigusr1_handler */
+}
+
+/*
+ * ProcessLogCurrentPlanInterrupt
+ * 		Perform logging the plan of the currently running query on this
+ * 		backend process.
+ *
+ * Any backend that participates in ProcSignal signaling must arrange to call
+ * this function if we see LogCurrentPlanPending set.
+ * It is called from CHECK_FOR_INTERRUPTS(), which is enough because the target
+ * process for logging plan is a backend.
+ */
+void
+ProcessLogCurrentPlanInterrupt(void)
+{
+	ExplainState *es;
+	LogCurrentPlanPending = false;
+
+	if (!ActivePortal || !ActivePortal->queryDesc)
+	{
+		ereport(LOG_SERVER_ONLY,
+				(errmsg("backend with PID %d is not running a query",
+					MyProcPid)));
+		return;
+	}
+
+	es = NewExplainState();
+
+	es->format = EXPLAIN_FORMAT_TEXT;
+	es->settings = true;
+	es->verbose = true;
+
+	ExplainQueryText(es, ActivePortal->queryDesc);
+	ExplainPrintPlan(es, ActivePortal->queryDesc);
+	ExplainPrintJITSummary(es, ActivePortal->queryDesc);
+
+	/* Remove last line break */
+	if (es->str->len > 0 && es->str->data[es->str->len - 1] == '\n')
+		es->str->data[--es->str->len] = '\0';
+
+	ereport(LOG_SERVER_ONLY,
+			(errmsg("plan of the query running on backend with PID %d is:\n%s",
+					MyProcPid, es->str->data),
+			 errhidestmt(true)));
+}
+
+/*
+ * pg_log_current_query_plan
+ *		Signal a backend process to log the query plan of the running query.
+ */
+Datum
+pg_log_current_query_plan(PG_FUNCTION_ARGS)
+{
+	pid_t		pid;
+	bool		result;
+
+	pid = PG_GETARG_INT32(0);
+	result = SendProcSignalForLogInfo(pid, PROCSIG_LOG_CURRENT_PLAN);
+
+	PG_RETURN_BOOL(result);
 }

@@ -124,4 +124,6 @@ extern void ExplainOpenGroup(const char *objtype, const char *labelname,
 extern void ExplainCloseGroup(const char *objtype, const char *labelname,
 							  bool labeled, ExplainState *es);
 
+extern void HandleLogCurrentPlanInterrupt(void);
+extern void ProcessLogCurrentPlanInterrupt(void);
 #endif							/* EXPLAIN_H */

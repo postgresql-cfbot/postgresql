@@ -20,6 +20,7 @@
 #include "access/parallel.h"
 #include "port/pg_bitutils.h"
 #include "commands/async.h"
+#include "commands/explain.h"
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "replication/walsender.h"
@@ -27,6 +28,7 @@
 #include "storage/ipc.h"
 #include "storage/latch.h"
 #include "storage/proc.h"
+#include "storage/procarray.h"
 #include "storage/shmem.h"
 #include "storage/sinval.h"
 #include "tcop/tcopprot.h"
@@ -310,6 +312,67 @@ SendProcSignal(pid_t pid, ProcSignalReason reason, BackendId backendId)
 
 	errno = ESRCH;
 	return -1;
+}
+
+/*
+ * SendProcSignalForLogInfo
+ *		Signal a backend process to log its information.
+ *
+ * Only superusers are allowed to signal to log information because
+ * allowing any users to issue this request at an unbounded rate
+ * would cause lots of log messages and which can lead to denial of
+ * service.
+ *
+ * On receipt of this signal, a backend sets the flag in the signal
+ * handler, which causes the next CHECK_FOR_INTERRUPTS() to log the
+ * information.
+ */
+bool
+SendProcSignalForLogInfo(pid_t pid, ProcSignalReason reason)
+{
+	PGPROC	   *proc;
+
+	Assert(reason == PROCSIG_LOG_MEMORY_CONTEXT ||
+		   reason == PROCSIG_LOG_CURRENT_PLAN);
+
+	/* Only allow superusers to log information. */
+	if (!superuser())
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				 errmsg("must be a superuser to log information about specified process")));
+
+	proc = BackendPidGetProc(pid);
+
+	/*
+	 * BackendPidGetProc returns NULL if the pid isn't valid; but by the time
+	 * we reach kill(), a process for which we get a valid proc here might
+	 * have terminated on its own.  There's no way to acquire a lock on an
+	 * arbitrary process to prevent that. But since this mechanism is usually
+	 * used to below purposes, it might end its own first and the information
+	 * is not logged is not a problem.
+	 * - debug a backend running and consuming lots of memory
+	 * - look into the plan of the long running query
+	 */
+	if (proc == NULL)
+	{
+		/*
+		 * This is just a warning so a loop-through-resultset will not abort
+		 * if one backend terminated on its own during the run.
+		 */
+		ereport(WARNING,
+				(errmsg("PID %d is not a PostgreSQL server process", pid)));
+		PG_RETURN_BOOL(false);
+	}
+
+	if (SendProcSignal(pid, reason, proc->backendId) < 0)
+	{
+		/* Again, just a warning to allow loops */
+		ereport(WARNING,
+				(errmsg("could not send signal to process %d: %m", pid)));
+		PG_RETURN_BOOL(false);
+	}
+
+	PG_RETURN_BOOL(true);
 }
 
 /*
@@ -660,6 +723,9 @@ procsignal_sigusr1_handler(SIGNAL_ARGS)
 
 	if (CheckProcSignal(PROCSIG_LOG_MEMORY_CONTEXT))
 		HandleLogMemoryContextInterrupt();
+
+	if (CheckProcSignal(PROCSIG_LOG_CURRENT_PLAN))
+		HandleLogCurrentPlanInterrupt();
 
 	if (CheckProcSignal(PROCSIG_RECOVERY_CONFLICT_DATABASE))
 		RecoveryConflictInterrupt(PROCSIG_RECOVERY_CONFLICT_DATABASE);

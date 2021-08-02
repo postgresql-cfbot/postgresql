@@ -72,6 +72,7 @@
 #include "postmaster/bgwriter.h"
 #include "postmaster/postmaster.h"
 #include "postmaster/syslogger.h"
+#include "postmaster/wal_allocator.h"
 #include "postmaster/walwriter.h"
 #include "replication/logicallauncher.h"
 #include "replication/reorderbuffer.h"
@@ -2813,6 +2814,17 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&checkpoint_flush_after,
 		DEFAULT_CHECKPOINT_FLUSH_AFTER, 0, WRITEBACK_MAX_PENDING_FLUSHES,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"wal_allocator_max_size", PGC_SIGHUP, WAL_SETTINGS,
+			gettext_noop("Sets the maximum amount of WAL to pre-allocate."),
+			NULL,
+			GUC_UNIT_MB
+		},
+		&wal_alloc_max_size_mb,
+		64, 0, 102400,
 		NULL, NULL, NULL
 	},
 

@@ -251,6 +251,7 @@ static pid_t StartupPID = 0,
 			CheckpointerPID = 0,
 			WalWriterPID = 0,
 			WalReceiverPID = 0,
+			WalAllocatorPID = 0,
 			AutoVacPID = 0,
 			PgArchPID = 0,
 			PgStatPID = 0,
@@ -557,6 +558,7 @@ static void ShmemBackendArrayRemove(Backend *bn);
 #define StartCheckpointer()		StartChildProcess(CheckpointerProcess)
 #define StartWalWriter()		StartChildProcess(WalWriterProcess)
 #define StartWalReceiver()		StartChildProcess(WalReceiverProcess)
+#define StartWalAllocator()		StartChildProcess(WalAllocatorProcess)
 
 /* Macros to check exit status of a child process */
 #define EXIT_STATUS_0(st)  ((st) == 0)
@@ -1788,6 +1790,13 @@ ServerLoop(void)
 			WalWriterPID = StartWalWriter();
 
 		/*
+		 * If we have lost the WAL allocator process, try to start a new one.
+		 */
+		if (WalAllocatorPID == 0 &&
+			(pmState == PM_RUN || pmState == PM_HOT_STANDBY))
+			WalAllocatorPID = StartWalAllocator();
+
+		/*
 		 * If we have lost the autovacuum launcher, try to start a new one. We
 		 * don't want autovacuum to run in binary upgrade mode because
 		 * autovacuum might update relfrozenxid for empty tables before the
@@ -2702,6 +2711,8 @@ SIGHUP_handler(SIGNAL_ARGS)
 			signal_child(WalWriterPID, SIGHUP);
 		if (WalReceiverPID != 0)
 			signal_child(WalReceiverPID, SIGHUP);
+		if (WalAllocatorPID != 0)
+			signal_child(WalAllocatorPID, SIGHUP);
 		if (AutoVacPID != 0)
 			signal_child(AutoVacPID, SIGHUP);
 		if (PgArchPID != 0)
@@ -3029,6 +3040,8 @@ reaper(SIGNAL_ARGS)
 				BgWriterPID = StartBackgroundWriter();
 			if (WalWriterPID == 0)
 				WalWriterPID = StartWalWriter();
+			if (WalAllocatorPID == 0)
+				WalAllocatorPID = StartWalAllocator();
 
 			/*
 			 * Likewise, start other special children as needed.  In a restart
@@ -3153,6 +3166,20 @@ reaper(SIGNAL_ARGS)
 			if (!EXIT_STATUS_0(exitstatus) && !EXIT_STATUS_1(exitstatus))
 				HandleChildCrash(pid, exitstatus,
 								 _("WAL receiver process"));
+			continue;
+		}
+
+		/*
+		 * Was it the WAL allocator?  Normal exit can be ignored; we'll start a
+		 * new one at the next iteration of the postmaster's main loop, if
+		 * necessary.  Any other exit condition is treated as a crash.
+		 */
+		if (pid == WalAllocatorPID)
+		{
+			WalAllocatorPID = 0;
+			if (!EXIT_STATUS_0(exitstatus))
+				HandleChildCrash(pid, exitstatus,
+								 _("WAL Allocator process"));
 			continue;
 		}
 
@@ -3629,6 +3656,18 @@ HandleChildCrash(int pid, int exitstatus, const char *procname)
 		signal_child(WalReceiverPID, (SendStop ? SIGSTOP : SIGQUIT));
 	}
 
+	/* Take care of the WAL allocator too */
+	if (pid == WalAllocatorPID)
+		WalAllocatorPID = 0;
+	else if (WalAllocatorPID != 0 && take_action)
+	{
+		ereport(DEBUG2,
+				(errmsg_internal("sending %s to process %d",
+								 (SendStop ? "SIGSTOP" : "SIGQUIT"),
+								 (int) WalAllocatorPID)));
+		signal_child(WalAllocatorPID, (SendStop ? SIGSTOP : SIGQUIT));
+	}
+
 	/* Take care of the autovacuum launcher too */
 	if (pid == AutoVacPID)
 		AutoVacPID = 0;
@@ -3816,6 +3855,8 @@ PostmasterStateMachine(void)
 			signal_child(StartupPID, SIGTERM);
 		if (WalReceiverPID != 0)
 			signal_child(WalReceiverPID, SIGTERM);
+		if (WalAllocatorPID != 0)
+			signal_child(WalAllocatorPID, SIGTERM);
 		/* checkpointer, archiver, stats, and syslogger may continue for now */
 
 		/* Now transition to PM_WAIT_BACKENDS state to wait for them to die */
@@ -3846,6 +3887,7 @@ PostmasterStateMachine(void)
 			(CheckpointerPID == 0 ||
 			 (!FatalError && Shutdown < ImmediateShutdown)) &&
 			WalWriterPID == 0 &&
+			WalAllocatorPID == 0 &&
 			AutoVacPID == 0)
 		{
 			if (Shutdown >= ImmediateShutdown || FatalError)
@@ -3939,6 +3981,7 @@ PostmasterStateMachine(void)
 			Assert(BgWriterPID == 0);
 			Assert(CheckpointerPID == 0);
 			Assert(WalWriterPID == 0);
+			Assert(WalAllocatorPID == 0);
 			Assert(AutoVacPID == 0);
 			/* syslogger is not considered here */
 			pmState = PM_NO_CHILDREN;
@@ -4147,6 +4190,8 @@ TerminateChildren(int signal)
 		signal_child(WalWriterPID, signal);
 	if (WalReceiverPID != 0)
 		signal_child(WalReceiverPID, signal);
+	if (WalAllocatorPID != 0)
+		signal_child(WalAllocatorPID, signal);
 	if (AutoVacPID != 0)
 		signal_child(AutoVacPID, signal);
 	if (PgArchPID != 0)

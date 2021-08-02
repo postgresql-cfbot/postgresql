@@ -73,11 +73,13 @@ local_fetch_file_range(rewind_source *source, const char *path, off_t off,
 					   size_t len)
 {
 	const char *datadir = ((local_source *) source)->datadir;
-	PGAlignedBlock buf;
 	char		srcpath[MAXPGPATH];
 	int			srcfd;
 	off_t		begin = off;
 	off_t		end = off + len;
+#ifndef HAVE_COPY_FILE_RANGE
+	PGAlignedBlock buf;
+#endif
 
 	snprintf(srcpath, sizeof(srcpath), "%s/%s", datadir, path);
 
@@ -86,10 +88,11 @@ local_fetch_file_range(rewind_source *source, const char *path, off_t off,
 		pg_fatal("could not open source file \"%s\": %m",
 				 srcpath);
 
+	open_target_file(path, false);
+
+#ifndef HAVE_COPY_FILE_RANGE
 	if (lseek(srcfd, begin, SEEK_SET) == -1)
 		pg_fatal("could not seek in source file: %m");
-
-	open_target_file(path, false);
 
 	while (end - begin > 0)
 	{
@@ -111,6 +114,9 @@ local_fetch_file_range(rewind_source *source, const char *path, off_t off,
 		write_target_range(buf.data, begin, readlen);
 		begin += readlen;
 	}
+#else
+	copy_target_range(srcfd, begin, end - begin);
+#endif
 
 	if (close(srcfd) != 0)
 		pg_fatal("could not close file \"%s\": %m", srcpath);

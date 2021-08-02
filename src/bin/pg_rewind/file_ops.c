@@ -84,6 +84,39 @@ close_target_file(void)
 	dstfd = -1;
 }
 
+#ifdef HAVE_COPY_FILE_RANGE
+void
+copy_target_range(int srcfd, off_t begin, size_t size)
+{
+	ssize_t     copylen;
+
+	/* update progress report */
+	fetch_done += size;
+	progress_report(false);
+
+	if (dry_run)
+		return;
+
+	if (lseek(srcfd, begin, SEEK_SET) == -1)
+		pg_fatal("could not seek in source file: %m");
+
+	if (lseek(dstfd, begin, SEEK_SET) == -1)
+		pg_fatal("could not seek in target file \"%s\": %m", dstpath);
+
+	while (size > 0)
+	{
+		copylen = copy_file_range(srcfd, NULL, dstfd, NULL, size, 0);
+
+		if (copylen < 0)
+			pg_fatal("could not copy file to \"%s\": %m", dstpath);
+		else if (copylen == 0)
+			pg_fatal("unexpected EOF while copying to file \"%s\"", dstpath);
+
+		size -= copylen;
+	}
+}
+#endif
+
 void
 write_target_range(char *buf, off_t begin, size_t size)
 {
@@ -280,25 +313,6 @@ remove_target_symlink(const char *path)
 		pg_fatal("could not remove symbolic link \"%s\": %m",
 				 dstpath);
 }
-
-/*
- * Sync target data directory to ensure that modifications are safely on disk.
- *
- * We do this once, for the whole data directory, for performance reasons.  At
- * the end of pg_rewind's run, the kernel is likely to already have flushed
- * most dirty buffers to disk.  Additionally fsync_pgdata uses a two-pass
- * approach (only initiating writeback in the first pass), which often reduces
- * the overall amount of IO noticeably.
- */
-void
-sync_target_dir(void)
-{
-	if (!do_sync || dry_run)
-		return;
-
-	fsync_pgdata(datadir_target, PG_VERSION_NUM);
-}
-
 
 /*
  * Read a file into memory. The file to be read is <datadir>/<path>.

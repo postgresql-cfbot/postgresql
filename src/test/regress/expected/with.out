@@ -235,6 +235,48 @@ WITH RECURSIVE outermost(x) AS (
  7
 (7 rows)
 
+-- Test multiple self-references in different recursive anchors
+WITH RECURSIVE foo(i) AS
+    (values (1)
+    UNION ALL
+       (SELECT i+1 FROM foo WHERE i < 5
+          UNION ALL
+       SELECT i+1 FROM foo WHERE i < 2)
+) SELECT * FROM foo;
+ i 
+---
+ 1
+ 2
+ 2
+ 3
+ 3
+ 4
+ 4
+ 5
+ 5
+(9 rows)
+
+WITH RECURSIVE foo(i) AS
+    (values (1)
+    UNION ALL
+	   SELECT * FROM
+       (SELECT i+1 FROM foo WHERE i < 5
+          UNION ALL
+       SELECT i+1 FROM foo WHERE i < 2) AS t
+) SELECT * FROM foo;
+ i 
+---
+ 1
+ 2
+ 2
+ 3
+ 3
+ 4
+ 4
+ 5
+ 5
+(9 rows)
+
 --
 -- Some examples with a tree
 --
@@ -1795,24 +1837,24 @@ LINE 2:   x (id) AS (SELECT 1 UNION ALL SELECT id+1 FROM y WHERE id ...
 WITH RECURSIVE foo(i) AS
     (values (1)
     UNION ALL
-       (SELECT i+1 FROM foo WHERE i < 10
+       (SELECT x.i+y.i FROM foo AS x, foo AS y WHERE x.i < 10
           UNION ALL
        SELECT i+1 FROM foo WHERE i < 5)
 ) SELECT * FROM foo;
 ERROR:  recursive reference to query "foo" must not appear more than once
-LINE 6:        SELECT i+1 FROM foo WHERE i < 5)
-                               ^
+LINE 4:        (SELECT x.i+y.i FROM foo AS x, foo AS y WHERE x.i < 1...
+                                              ^
 WITH RECURSIVE foo(i) AS
     (values (1)
     UNION ALL
 	   SELECT * FROM
-       (SELECT i+1 FROM foo WHERE i < 10
+       (SELECT x.i+y.i FROM foo AS x, foo as y WHERE x.i < 10
           UNION ALL
        SELECT i+1 FROM foo WHERE i < 5) AS t
 ) SELECT * FROM foo;
 ERROR:  recursive reference to query "foo" must not appear more than once
-LINE 7:        SELECT i+1 FROM foo WHERE i < 5) AS t
-                               ^
+LINE 5:        (SELECT x.i+y.i FROM foo AS x, foo as y WHERE x.i < 1...
+                                              ^
 WITH RECURSIVE foo(i) AS
     (values (1)
     UNION ALL

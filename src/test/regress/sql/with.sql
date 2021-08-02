@@ -139,6 +139,24 @@ WITH RECURSIVE outermost(x) AS (
  )
  SELECT * FROM outermost ORDER BY 1;
 
+-- Test multiple self-references in different recursive anchors
+WITH RECURSIVE foo(i) AS
+    (values (1)
+    UNION ALL
+       (SELECT i+1 FROM foo WHERE i < 5
+          UNION ALL
+       SELECT i+1 FROM foo WHERE i < 2)
+) SELECT * FROM foo;
+
+WITH RECURSIVE foo(i) AS
+    (values (1)
+    UNION ALL
+	   SELECT * FROM
+       (SELECT i+1 FROM foo WHERE i < 5
+          UNION ALL
+       SELECT i+1 FROM foo WHERE i < 2) AS t
+) SELECT * FROM foo;
+
 --
 -- Some examples with a tree
 --
@@ -847,7 +865,7 @@ SELECT * FROM x;
 WITH RECURSIVE foo(i) AS
     (values (1)
     UNION ALL
-       (SELECT i+1 FROM foo WHERE i < 10
+       (SELECT x.i+y.i FROM foo AS x, foo AS y WHERE x.i < 10
           UNION ALL
        SELECT i+1 FROM foo WHERE i < 5)
 ) SELECT * FROM foo;
@@ -856,7 +874,7 @@ WITH RECURSIVE foo(i) AS
     (values (1)
     UNION ALL
 	   SELECT * FROM
-       (SELECT i+1 FROM foo WHERE i < 10
+       (SELECT x.i+y.i FROM foo AS x, foo as y WHERE x.i < 10
           UNION ALL
        SELECT i+1 FROM foo WHERE i < 5) AS t
 ) SELECT * FROM foo;

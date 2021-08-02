@@ -1117,9 +1117,26 @@ checkWellFormedSelectStmt(SelectStmt *stmt, CteState *cstate)
 		{
 			case SETOP_NONE:
 			case SETOP_UNION:
-				raw_expression_tree_walker((Node *) stmt,
-										   checkWellFormedRecursionWalker,
-										   (void *) cstate);
+				/* Check selfrefcount for each recursive member individually */
+				if((Node *) stmt->larg != NULL && (Node *) stmt->rarg != NULL) {
+					int selfrefcount = cstate->selfrefcount;
+					int selfrefcountL;
+
+					checkWellFormedRecursionWalker((Node *) stmt->larg, cstate);
+
+					/* Restore selfrefcount to allow multiple linear recursive references */
+					selfrefcountL = cstate->selfrefcount;
+					cstate->selfrefcount = selfrefcount;
+
+					checkWellFormedRecursionWalker((Node *) stmt->rarg, cstate);
+					/* Recursive anchors can contain recursive references, but don't have to. */
+					if(cstate->selfrefcount<selfrefcountL)
+						cstate->selfrefcount = selfrefcountL;
+				} else {
+					raw_expression_tree_walker((Node *) stmt,
+											   checkWellFormedRecursionWalker,
+											   (void *) cstate);
+				}
 				break;
 			case SETOP_INTERSECT:
 				if (stmt->all)

@@ -1271,7 +1271,7 @@ gen_random_uuid() returns uuid
 
    <orderedlist>
     <listitem>
-     <para>Connect locally or use SSL connections.</para>
+     <para>Connect locally or use <acronym>SSL/TLS</acronym> connections.</para>
     </listitem>
     <listitem>
      <para>Trust both system and database administrator.</para>

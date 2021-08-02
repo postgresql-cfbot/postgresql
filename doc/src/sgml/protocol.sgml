@@ -1432,49 +1432,49 @@ SELCT 1/0;<!-- this typo is intentional -->
   </sect2>
 
   <sect2>
-   <title><acronym>SSL</acronym> Session Encryption</title>
+   <title><acronym>SSL/TLS</acronym> Session Encryption</title>
 
    <para>
     If <productname>PostgreSQL</productname> was built with
-    <acronym>SSL</acronym> support, frontend/backend communications
-    can be encrypted using <acronym>SSL</acronym>.  This provides
+    <acronym>SSL/TLS</acronym> support, frontend/backend communications
+    can be encrypted using <acronym>SSL/TLS</acronym>.  This provides
     communication security in environments where attackers might be
     able to capture the session traffic. For more information on
     encrypting <productname>PostgreSQL</productname> sessions with
-    <acronym>SSL</acronym>, see <xref linkend="ssl-tcp"/>.
+    <acronym>SSL/TLS</acronym>, see <xref linkend="ssl-tcp"/>.
    </para>
 
    <para>
-    To initiate an <acronym>SSL</acronym>-encrypted connection, the
+    To initiate an <acronym>SSL/TLS</acronym>-encrypted connection, the
     frontend initially sends an SSLRequest message rather than a
     StartupMessage.  The server then responds with a single byte
     containing <literal>S</literal> or <literal>N</literal>, indicating that it is
-    willing or unwilling to perform <acronym>SSL</acronym>,
+    willing or unwilling to perform <acronym>SSL/TLS</acronym>,
     respectively.  The frontend might close the connection at this point
     if it is dissatisfied with the response.  To continue after
-    <literal>S</literal>, perform an <acronym>SSL</acronym> startup handshake
-    (not described here, part of the <acronym>SSL</acronym>
+    <literal>S</literal>, perform an <acronym>SSL/TLS</acronym> startup handshake
+    (not described here, part of the <acronym>SSL/TLS</acronym>
     specification) with the server.  If this is successful, continue
     with sending the usual StartupMessage.  In this case the
     StartupMessage and all subsequent data will be
-    <acronym>SSL</acronym>-encrypted.  To continue after
+    <acronym>SSL/TLS</acronym>-encrypted.  To continue after
     <literal>N</literal>, send the usual StartupMessage and proceed without
     encryption.
     (Alternatively, it is permissible to issue a GSSENCRequest message
     after an <literal>N</literal> response to try to
     use <acronym>GSSAPI</acronym> encryption instead
-    of <acronym>SSL</acronym>.)
+    of <acronym>SSL/TLS</acronym>.)
    </para>
 
    <para>
     The frontend should also be prepared to handle an ErrorMessage
     response to SSLRequest from the server.  This would only occur if
-    the server predates the addition of <acronym>SSL</acronym> support
+    the server predates the addition of <acronym>SSL/TLS</acronym> support
     to <productname>PostgreSQL</productname>.  (Such servers are now very ancient,
     and likely do not exist in the wild anymore.)
     In this case the connection must
     be closed, but the frontend might choose to open a fresh connection
-    and proceed without requesting <acronym>SSL</acronym>.
+    and proceed without requesting <acronym>SSL/TLS</acronym>.
    </para>
 
    <para>
@@ -1484,7 +1484,7 @@ SELCT 1/0;<!-- this typo is intentional -->
 
    <para>
     While the protocol itself does not provide a way for the server to
-    force <acronym>SSL</acronym> encryption, the administrator can
+    force <acronym>SSL/TLS</acronym> encryption, the administrator can
     configure the server to reject unencrypted sessions as a byproduct
     of authentication checking.
    </para>
@@ -1525,7 +1525,7 @@ SELCT 1/0;<!-- this typo is intentional -->
     encryption.
     (Alternatively, it is permissible to issue an SSLRequest message
     after an <literal>N</literal> response to try to
-    use <acronym>SSL</acronym> encryption instead
+    use <acronym>SSL/TLS</acronym> encryption instead
     of <acronym>GSSAPI</acronym>.)
    </para>
 
@@ -1664,7 +1664,7 @@ the password is in.
 
   <para>
 <firstterm>Channel binding</firstterm> is supported in PostgreSQL builds with
-SSL support. The SASL mechanism name for SCRAM with channel binding is
+<acronym>SSL/TLS</acronym> support. The SASL mechanism name for SCRAM with channel binding is
 <literal>SCRAM-SHA-256-PLUS</literal>.  The channel binding type used by
 PostgreSQL is <literal>tls-server-end-point</literal>.
   </para>
@@ -1685,7 +1685,7 @@ PostgreSQL is <literal>tls-server-end-point</literal>.
    certificate into the transmitted password hash. While a fake server can
    retransmit the real server's certificate, it doesn't have access to the
    private key matching that certificate, and therefore cannot prove it is
-   the owner, causing SSL connection failure.
+   the owner, causing <acronym>SSL/TLS</acronym> connection failure.
   </para>
 
 <procedure>
@@ -1695,7 +1695,7 @@ PostgreSQL is <literal>tls-server-end-point</literal>.
   The server sends an AuthenticationSASL message. It includes a list of
   SASL authentication mechanisms that the server can accept.
   This will be <literal>SCRAM-SHA-256-PLUS</literal>
-  and <literal>SCRAM-SHA-256</literal> if the server is built with SSL
+  and <literal>SCRAM-SHA-256</literal> if the server is built with <acronym>SSL/TLS</acronym>
   support, or else just the latter.
 </para>
 </step>
@@ -5908,7 +5908,7 @@ SSLRequest (F)
 </term>
 <listitem>
 <para>
-                The <acronym>SSL</acronym> request code.  The value is chosen to contain
+                The <acronym>SSL/TLS</acronym> request code.  The value is chosen to contain
                 <literal>1234</literal> in the most significant 16 bits, and <literal>5679</literal> in the
                 least significant 16 bits.  (To avoid confusion, this code
                 must not be the same as any protocol version number.)

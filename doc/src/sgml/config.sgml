@@ -1181,10 +1181,16 @@ include_dir 'conf.d'
      </sect2>
 
      <sect2 id="runtime-config-connection-ssl">
-     <title>SSL</title>
+     <title>SSL/TLS</title>
 
      <para>
-      See <xref linkend="ssl-tcp"/> for more information about setting up SSL.
+      See <xref linkend="ssl-tcp"/> for more information about setting up
+      <acronym>SSL/TLS</acronym>. The configuration
+      parameters for controlling <acronym>SSL/TLS</acronym>
+      are named <literal>ssl</literal> for historic reasons, even though
+      support for the <acronym>SSL</acronym> protocol has been deprecated.
+      <acronym>SSL</acronym> is in this context used interchangeably with
+      <acronym>TLS</acronym>.
      </para>
 
      <variablelist>
@@ -1196,7 +1202,7 @@ include_dir 'conf.d'
       </term>
       <listitem>
        <para>
-        Enables <acronym>SSL</acronym> connections.
+        Enables <acronym>SSL/TLS</acronym> connections.
         This parameter can only be set in the <filename>postgresql.conf</filename>
         file or on the server command line.
         The default is <literal>off</literal>.
@@ -1212,7 +1218,7 @@ include_dir 'conf.d'
       </term>
       <listitem>
        <para>
-        Specifies the name of the file containing the SSL server certificate
+        Specifies the name of the file containing the <acronym>SSL/TLS</acronym> server certificate
         authority (CA).
         Relative paths are relative to the data directory.
         This parameter can only be set in the <filename>postgresql.conf</filename>
@@ -1231,7 +1237,7 @@ include_dir 'conf.d'
       </term>
       <listitem>
        <para>
-        Specifies the name of the file containing the SSL server certificate.
+        Specifies the name of the file containing the <acronym>SSL/TLS</acronym> server certificate.
         Relative paths are relative to the data directory.
         This parameter can only be set in the <filename>postgresql.conf</filename>
         file or on the server command line.
@@ -1248,7 +1254,7 @@ include_dir 'conf.d'
       </term>
       <listitem>
        <para>
-        Specifies the name of the file containing the SSL server certificate
+        Specifies the name of the file containing the <acronym>SSL/TLS</acronym> server certificate
         revocation list (CRL).
         Relative paths are relative to the data directory.
         This parameter can only be set in the <filename>postgresql.conf</filename>
@@ -1267,7 +1273,7 @@ include_dir 'conf.d'
       </term>
       <listitem>
        <para>
-        Specifies the name of the directory containing the SSL server
+        Specifies the name of the directory containing the <acronym>SSL/TLS</acronym> server
         certificate revocation list (CRL).  Relative paths are relative to the
         data directory.  This parameter can only be set in
         the <filename>postgresql.conf</filename> file or on the server command
@@ -1301,7 +1307,7 @@ include_dir 'conf.d'
       </term>
       <listitem>
        <para>
-        Specifies the name of the file containing the SSL server private key.
+        Specifies the name of the file containing the <acronym>SSL/TLS</acronym> server private key.
         Relative paths are relative to the data directory.
         This parameter can only be set in the <filename>postgresql.conf</filename>
         file or on the server command line.
@@ -1318,13 +1324,13 @@ include_dir 'conf.d'
       </term>
       <listitem>
        <para>
-        Specifies a list of <acronym>SSL</acronym> cipher suites that are
-        allowed to be used by SSL connections.  See the
+        Specifies a list of <acronym>SSL/TLS</acronym> cipher suites that are
+        allowed to be used by <acronym>SSL/TLS</acronym> connections.  See the
         <citerefentry><refentrytitle>ciphers</refentrytitle></citerefentry>
         manual page in the <productname>OpenSSL</productname> package for the
         syntax of this setting and a list of supported values.  Only
-        connections using TLS version 1.2 and lower are affected.  There is
-        currently no setting that controls the cipher choices used by TLS
+        connections using <acronym>TLS</acronym> version 1.2 and lower are affected.  There is
+        currently no setting that controls the cipher choices used by <acronym>TLS</acronym>
         version 1.3 connections.  The default value is
         <literal>HIGH:MEDIUM:+3DES:!aNULL</literal>.  The default is usually a
         reasonable choice unless you have specific security requirements.
@@ -1405,7 +1411,7 @@ include_dir 'conf.d'
       </term>
       <listitem>
        <para>
-        Specifies whether to use the server's SSL cipher preferences, rather
+        Specifies whether to use the server's <acronym>SSL/TLS</acronym> cipher preferences, rather
         than the client's.
         This parameter can only be set in the <filename>postgresql.conf</filename>
         file or on the server command line.
@@ -1460,12 +1466,12 @@ include_dir 'conf.d'
       </term>
       <listitem>
        <para>
-        Sets the minimum SSL/TLS protocol version to use.  Valid values are
+        Sets the minimum <acronym>TLS</acronym> protocol version to use.  Valid values are
         currently: <literal>TLSv1</literal>, <literal>TLSv1.1</literal>,
         <literal>TLSv1.2</literal>, <literal>TLSv1.3</literal>.  Older
         versions of the <productname>OpenSSL</productname> library do not
         support all values; an error will be raised if an unsupported setting
-        is chosen.  Protocol versions before TLS 1.0, namely SSL version 2 and
+        is chosen.  Protocol versions before <acronym>TLS</acronym> version 1.0, namely <acronym>SSL</acronym> version 2 and
         3, are always disabled.
        </para>
 
@@ -1489,7 +1495,7 @@ include_dir 'conf.d'
       </term>
       <listitem>
        <para>
-        Sets the maximum SSL/TLS protocol version to use.  Valid values are as
+        Sets the maximum <acronym>TLS</acronym> protocol version to use.  Valid values are as
         for <xref linkend="guc-ssl-min-protocol-version"/>, with addition of
         an empty string, which allows any protocol version.  The default is to
         allow any version.  Setting the maximum protocol version is mainly
@@ -1513,7 +1519,7 @@ include_dir 'conf.d'
       <listitem>
        <para>
         Specifies the name of the file containing Diffie-Hellman parameters
-        used for so-called ephemeral DH family of SSL ciphers. The default is
+        used for so-called ephemeral DH family of <acronym>SSL/TLS</acronym> ciphers. The default is
         empty, in which case compiled-in default DH parameters used. Using
         custom DH parameters reduces the exposure if an attacker manages to
         crack the well-known compiled-in DH parameters. You can create your own
@@ -1537,7 +1543,7 @@ include_dir 'conf.d'
       <listitem>
        <para>
         Sets an external command to be invoked when a passphrase for
-        decrypting an SSL file such as a private key needs to be obtained.  By
+        decrypting an <acronym>SSL/TLS</acronym> file such as a private key needs to be obtained.  By
         default, this parameter is empty, which means the built-in prompting
         mechanism is used.
        </para>
@@ -1575,7 +1581,7 @@ include_dir 'conf.d'
         configuration reload if a key file needs a passphrase.  If this
         parameter is off (the default), then
         <varname>ssl_passphrase_command</varname> will be ignored during a
-        reload and the SSL configuration will not be reloaded if a passphrase
+        reload and the <acronym>SSL/TLS</acronym> configuration will not be reloaded if a passphrase
         is needed.  That setting is appropriate for a command that requires a
         TTY for prompting, which might not be available when the server is
         running.  Setting this parameter to on might be appropriate if the
@@ -10279,9 +10285,9 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
       </term>
       <listitem>
        <para>
-        Reports the name of the SSL library that this
+        Reports the name of the <acronym>SSL/TLS</acronym> library that this
         <productname>PostgreSQL</productname> server was built with (even if
-        SSL is not currently configured or in use on this instance), for
+        <acronym>SSL/TLS</acronym> is not currently configured or in use on this instance), for
         example <literal>OpenSSL</literal>, or an empty string if none.
        </para>
       </listitem>

@@ -258,10 +258,10 @@ PostgreSQL documentation
       <term><option>-l</option></term>
       <listitem>
        <para>
-        Enables secure connections using <acronym>SSL</acronym>.
+        Enables secure connections using <acronym>SSL/TLS</acronym>.
         <productname>PostgreSQL</productname> must have been compiled with
-        support for <acronym>SSL</acronym> for this option to be
-        available. For more information on using <acronym>SSL</acronym>,
+        support for <acronym>SSL/TLS</acronym> for this option to be
+        available. For more information on using <acronym>SSL/TLS</acronym>,
         refer to <xref linkend="ssl-tcp"/>.
        </para>
       </listitem>

@@ -308,7 +308,7 @@ $ENV{MSBFLAGS}="/m";
     <varlistentry>
      <term><productname>OpenSSL</productname></term>
      <listitem><para>
-      Required for SSL support. Binaries can be downloaded from
+      Required for <acronym>SSL/TLS</acronym> support. Binaries can be downloaded from
       <ulink url="https://slproweb.com/products/Win32OpenSSL.html"></ulink>
       or source from <ulink url="https://www.openssl.org"></ulink>.
      </para></listitem>

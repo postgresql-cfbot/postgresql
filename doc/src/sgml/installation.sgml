@@ -998,7 +998,7 @@ build-postgresql:
        </term>
        <listitem>
         <para>
-         Build with support for <acronym>SSL</acronym> (encrypted)
+         Build with support for <acronym>SSL/TLS</acronym> (encrypted)
          connections. The only <replaceable>LIBRARY</replaceable>
          supported is <option>openssl</option>. This requires the
          <productname>OpenSSL</productname> package to be installed.

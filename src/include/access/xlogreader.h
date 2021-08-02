@@ -174,6 +174,7 @@ struct XLogReaderState
 	 */
 	XLogRecPtr	ReadRecPtr;		/* start of last record read */
 	XLogRecPtr	EndRecPtr;		/* end+1 of last record read */
+	bool		EndOfWAL;		/* the last attempt was EOW? */
 
 
 	/* ----------------------------------------

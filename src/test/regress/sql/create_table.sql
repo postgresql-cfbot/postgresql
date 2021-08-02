@@ -975,3 +975,238 @@ create table part_column_drop_1_10 partition of
 \d part_column_drop
 \d part_column_drop_1_10
 drop table part_column_drop;
+
+-- Auto generated partitions
+
+-- partitioning type not specified
+CREATE TABLE fail_part (a int) CONFIGURATION (MODULUS 10);
+
+-- must fail because of wrong configuration
+CREATE TABLE fail_part (a int) PARTITION BY HASH (a) CONFIGURATION
+(values in (1, 2), (3, 4) DEFAULT PARTITION part_default);
+
+-- forbidden expressions for partition bound with list partitioned table
+CREATE TABLE fail_parted (a int) PARTITION BY LIST (a) CONFIGURATION
+(VALUES IN (somename));
+CREATE TABLE fail_parted (a int) PARTITION BY LIST (a) CONFIGURATION
+(VALUES IN (somename.somename));
+CREATE TABLE fail_parted (a int) PARTITION BY LIST (a) CONFIGURATION
+(VALUES IN (a));
+CREATE TABLE fail_parted (a int) PARTITION BY LIST (a) CONFIGURATION
+(VALUES IN (sum(a)));
+CREATE TABLE fail_parted (a int) PARTITION BY LIST (a) CONFIGURATION
+(VALUES IN (sum(somename)));
+CREATE TABLE fail_parted (a int) PARTITION BY LIST (a) CONFIGURATION
+(VALUES IN (sum(1)));
+CREATE TABLE fail_parted (a int) PARTITION BY LIST (a) CONFIGURATION
+(VALUES IN ((select 1)));
+CREATE TABLE fail_parted (a int) PARTITION BY LIST (a) CONFIGURATION
+(VALUES IN (generate_series(4, 6)));
+CREATE TABLE fail_parted (a int) PARTITION BY LIST (a) CONFIGURATION
+(VALUES IN ((1+1) collate "POSIX"));
+
+-- syntax does not allow empty list of values for list partitions
+CREATE TABLE fail_parted (a int) PARTITION BY LIST (a) CONFIGURATION
+(VALUES IN ());
+-- trying to specify range for list partitioned table
+CREATE TABLE fail_parted (a int) PARTITION BY LIST (a) CONFIGURATION
+(VALUES FROM (1) TO (2));
+-- trying to specify modulus and remainder for list partitioned table
+CREATE TABLE fail_parted (a int) PARTITION BY LIST (a) CONFIGURATION
+(MODULUS 10);
+-- specified literal can't be cast to the partition column data type
+CREATE TABLE fail_parted (a bool) PARTITION BY LIST (a) CONFIGURATION
+(VALUES IN (1));
+
+-- check for partition bound overlap and other invalid specifications
+CREATE TABLE fail_parted (a varchar) PARTITION BY LIST (a) CONFIGURATION
+(VALUES IN (null, 'z'),('a', 'b'),(null) DEFAULT PARTITION part_default);
+
+CREATE TABLE fail_parted (a varchar) PARTITION BY LIST (a) CONFIGURATION
+(VALUES IN (null, 'z'),('a', 'b'),('b', 'c') DEFAULT PARTITION part_default);
+
+CREATE TABLE fail_parted (a int) PARTITION BY LIST (a) CONFIGURATION
+(values in (1, 2), (1, 3));
+
+-- trying to create default partition for the hash partitioned table
+REATE TABLE fail_parted (a int) PARTITION BY HASH (a) CONFIGURATION
+(MODULUS 10 DEFAULT PARTITION hash_default);
+
+CREATE TABLE list_parted (a int) PARTITION BY LIST (a) CONFIGURATION
+(values in (1, 2), (3, 4) DEFAULT PARTITION part_default);
+\d+ list_parted
+DROP TABLE list_parted;
+
+CREATE TABLE hash_parted (a int) PARTITION BY HASH (a) CONFIGURATION
+(modulus 3);
+\d+ hash_parted
+DROP TABLE hash_parted;
+
+CREATE TABLE list_parted (a int) PARTITION BY LIST (a) CONFIGURATION
+(values in ('1'), (2), (2+1), (null) DEFAULT PARTITION part_default);
+\d+ list_parted
+DROP TABLE list_parted;
+
+-- specified literal can be cast, and the cast might not be immutable
+CREATE TABLE moneyp (a money) PARTITION BY LIST (a) CONFIGURATION
+(VALUES IN (10), ('11'), (to_char(12, '99')::int));
+DROP TABLE moneyp;
+
+-- partition table inherits relation persistence setting from parent
+CREATE TEMP TABLE temp_parted (a char) PARTITION BY LIST (a)
+CONFIGURATION (VALUES IN ('a') DEFAULT PARTITION temp_parted_default);
+\d temp_parted
+DROP TABLE temp_parted;
+
+-- partition table inherits relation persistence setting from parent
+CREATE UNLOGGED TABLE unlogged_parted (a char) PARTITION BY LIST (a)
+CONFIGURATION (VALUES IN ('a') DEFAULT PARTITION unlogged_parted_default);
+\d unlogged_parted
+DROP TABLE unlogged_parted;
+
+-- testing PARTITION OF on automatically generated partitioned table
+
+CREATE TABLE hash_parted (a int) PARTITION BY HASH (a) CONFIGURATION (MODULUS 10);
+-- all remainder values are already belong to partitions
+CREATE TABLE fail_part PARTITION OF hash_parted FOR VALUES WITH (MODULUS 30, REMAINDER 3);
+-- trying to specify range for the hash partitioned table
+CREATE TABLE fail_part PARTITION OF hash_parted FOR VALUES FROM ('a', 1) TO ('z');
+-- trying to specify list value for the hash partitioned table
+CREATE TABLE fail_part PARTITION OF hash_parted FOR VALUES IN (1000);
+-- trying to add default partition to hash partitioned table
+CREATE TABLE fail_part PARTITION OF hash_parted DEFAULT;
+\d hash_parted
+DROP TABLE hash_parted;
+
+-- cast is immutable
+CREATE TABLE bigintp (a bigint) PARTITION BY LIST (a) CONFIGURATION
+(VALUES IN (10));
+-- fails due to overlap:
+CREATE TABLE bigintp_overlap PARTITION OF bigintp FOR VALUES IN ('10');
+DROP TABLE bigintp;
+
+-- check default partition overlap
+CREATE TABLE list_parted (a varchar) PARTITION BY LIST (a) CONFIGURATION
+(VALUES IN (null, 'z'),('a', 'b') DEFAULT partition tbl_default);
+INSERT INTO list_parted VALUES('X');
+CREATE TABLE fail_part PARTITION OF list_parted FOR VALUES IN ('W', 'X', 'Y');
+-- trying to create already existing default partition
+CREATE TABLE fail_part PARTITION OF list_parted DEFAULT;
+DROP TABLE list_parted;
+
+-- check schema propagation from parent
+CREATE TABLE parted (a text, b int NOT NULL DEFAULT 0,
+	CONSTRAINT check_a CHECK (length(a) > 0))
+PARTITION BY LIST (a) CONFIGURATION ( VALUES IN ('a','b'),('d') );
+
+-- only inherited attributes (never local ones)
+SELECT attname, attislocal, attinhcount FROM pg_attribute
+  WHERE attrelid = 'parted_1'::regclass and attnum > 0
+  ORDER BY attnum;
+
+-- able to specify column default, column constraint, and table constraint
+-- first check the "column specified more than once" error
+CREATE TABLE part_e_fail PARTITION OF parted (
+	b NOT NULL,
+	b DEFAULT 1,
+	b CHECK (b >= 0),
+	CONSTRAINT check_a CHECK (length(a) > 0)
+) FOR VALUES IN ('e');
+
+CREATE TABLE part_e PARTITION OF parted (
+	b NOT NULL DEFAULT 1,
+	CONSTRAINT check_a CHECK (length(a) > 0),
+	CONSTRAINT check_b CHECK (b >= 0)
+) FOR VALUES IN ('e');
+-- conislocal should be false for any merged constraints, true otherwise
+SELECT conname, conislocal, coninhcount FROM pg_constraint
+WHERE conrelid = 'part_e'::regclass ORDER BY conislocal, coninhcount;
+
+-- check_a can not be dropped as it is inherited
+ALTER TABLE part_e DROP CONSTRAINT check_a;
+-- check_b can be dropped as it is local
+ALTER TABLE part_e DROP CONSTRAINT check_b;
+
+-- Once check_b is added to the parent, it should be made non-local for part_b
+ALTER TABLE part_e ADD CONSTRAINT check_b CHECK (b >= 0);
+ALTER TABLE parted ADD CONSTRAINT check_b CHECK (b >= 0);
+SELECT conname, conislocal, coninhcount FROM pg_constraint WHERE conrelid = 'part_e'::regclass;
+
+-- Neither check_a nor check_b are droppable from part_b
+ALTER TABLE part_e DROP CONSTRAINT check_a;
+ALTER TABLE part_e DROP CONSTRAINT check_b;
+
+-- And dropping it from parted should leave no trace of them on part_e, unlike
+-- traditional inheritance where they will be left behind, because they would
+-- be local constraints.
+ALTER TABLE parted DROP CONSTRAINT check_a, DROP CONSTRAINT check_b;
+SELECT conislocal, coninhcount FROM pg_constraint WHERE conrelid = 'part_e'::regclass;
+
+-- specify PARTITION BY for a partition
+CREATE TABLE fail_part_col_not_found PARTITION OF parted FOR VALUES IN ('c') PARTITION BY HASH (c);
+CREATE TABLE part_c PARTITION OF parted (b WITH OPTIONS NOT NULL DEFAULT 0)
+FOR VALUES IN ('c') PARTITION BY RANGE ((b));
+
+-- create a level-2 partition
+CREATE TABLE part_c_1_10 PARTITION OF part_c FOR VALUES FROM (1) TO (10);
+
+-- check that NOT NULL and default value are inherited correctly
+CREATE TABLE parted_notnull_inh_test (a int DEFAULT 1, b int NOT NULL DEFAULT 0)
+	PARTITION BY LIST(a) CONFIGURATION (VALUES IN (1));
+INSERT INTO parted_notnull_inh_test (b) VALUES (NULL);
+-- note that a's default is preserved
+\d parted_notnull_inh_test1
+DROP TABLE parted_notnull_inh_test;
+
+-- Partition bound in describe output
+\d+ part_e
+
+-- Both partition bound and partition key in describe output
+\d+ part_c
+
+-- a level-2 partition's constraint will include the parent's expressions
+\d+ part_c_1_10
+
+-- Show partition count in the parent's describe output
+-- Tempted to include \d+ output listing partitions with bound info but
+-- output could vary depending on the order in which partition oids are
+-- returned.
+\d parted
+DROP TABLE parted;
+
+-- list partitioning on array type column
+CREATE TABLE arrlp (a int[]) PARTITION BY LIST (a) CONFIGURATION
+(VALUES IN ('{1}', '{2}'));
+\d+ arrlp_1
+DROP TABLE arrlp;
+
+-- partition on boolean column
+CREATE TABLE boolspart (a bool) PARTITION BY LIST (a) CONFIGURATION
+(VALUES IN (true), (false));
+\d+ boolspart
+DROP TABLE boolspart;
+
+-- test using a volatile expression as partition bound
+CREATE TABLE volatile_partbound_test (partkey timestamp) PARTITION BY LIST (partkey) CONFIGURATION
+(VALUES IN ('1970-01-01 00:00:00+00'::timestamp, current_timestamp),('1982-01-25 00:00:00+00'::timestamp));
+DROP TABLE volatile_partbound_test;
+
+-- tests of column drop with partition tables and indexes using
+-- predicates and expressions.
+CREATE TABLE part_column_drop (useless_1 int, id int, useless_2 int, d int,
+  b int, useless_3 int) PARTITION BY HASH (id) CONFIGURATION (MODULUS 3);
+ALTER TABLE part_column_drop DROP COLUMN useless_1;
+ALTER TABLE part_column_drop DROP COLUMN useless_2;
+ALTER TABLE part_column_drop DROP COLUMN useless_3;
+CREATE INDEX part_column_drop_b_pred ON part_column_drop(b) WHERE b = 1;
+CREATE INDEX part_column_drop_b_expr ON part_column_drop((b = 1));
+CREATE INDEX part_column_drop_d_pred ON part_column_drop(d) WHERE d = 2;
+CREATE INDEX part_column_drop_d_expr ON part_column_drop((d = 2));
+CREATE INDEX part_column_drop_d_1_pred ON part_column_drop_1(d) WHERE d = 2;
+CREATE INDEX part_column_drop_d_1_expr ON part_column_drop_1((d = 2));
+
+\d part_column_drop
+\d part_column_drop_1
+\d part_column_drop_2
+\d part_column_drop_3
+DROP TABLE part_column_drop;

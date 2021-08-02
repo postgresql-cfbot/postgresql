@@ -144,8 +144,8 @@ ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> RENAME TO <
     <term><literal>REFRESH PUBLICATION</literal></term>
     <listitem>
      <para>
-      Fetch missing table information from publisher.  This will start
-      replication of tables that were added to the subscribed-to publications
+      Fetch missing table and sequence information from publisher.  This will start
+      replication of tables and sequences that were added to the subscribed-to publications
       since the last invocation of <command>REFRESH PUBLICATION</command> or
       since <command>CREATE SUBSCRIPTION</command>.
      </para>
@@ -162,7 +162,7 @@ ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> RENAME TO <
           Specifies whether the existing data in the publications that are
           being subscribed to should be copied once the replication starts.
           The default is <literal>true</literal>.  (Previously subscribed
-          tables are not copied.)
+          tables and sequences are not copied.)
          </para>
         </listitem>
        </varlistentry>

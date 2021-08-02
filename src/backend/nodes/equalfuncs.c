@@ -2308,8 +2308,10 @@ _equalAlterPublicationStmt(const AlterPublicationStmt *a,
 	COMPARE_STRING_FIELD(pubname);
 	COMPARE_NODE_FIELD(options);
 	COMPARE_NODE_FIELD(tables);
+	COMPARE_NODE_FIELD(sequences);
 	COMPARE_SCALAR_FIELD(for_all_tables);
-	COMPARE_SCALAR_FIELD(tableAction);
+	COMPARE_SCALAR_FIELD(for_all_sequences);
+	COMPARE_SCALAR_FIELD(action);
 
 	return true;
 }

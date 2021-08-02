@@ -434,6 +434,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <node>	group_by_item empty_grouping_set rollup_clause cube_clause
 %type <node>	grouping_sets_clause
 %type <node>	opt_publication_for_tables publication_for_tables
+/* %type <node>	opt_publication_for_sequences publication_for_sequences */
 
 %type <list>	opt_fdw_options fdw_options
 %type <defelt>	fdw_option
@@ -9596,6 +9597,7 @@ AlterOwnerStmt: ALTER AGGREGATE aggregate_with_argtypes OWNER TO RoleSpec
  *****************************************************************************/
 
 CreatePublicationStmt:
+			/* CREATE PUBLICATION name opt_publication_for_tables opt_publication_for_sequences opt_definition */
 			CREATE PUBLICATION name opt_publication_for_tables opt_definition
 				{
 					CreatePublicationStmt *n = makeNode(CreatePublicationStmt);
@@ -9630,6 +9632,12 @@ publication_for_tables:
 				}
 		;
 
+/*
+ * FIXME
+ *
+ * opt_publication_for_sequences and publication_for_sequences should be
+ * copies for sequences
+ */
 
 /*****************************************************************************
  *
@@ -9640,6 +9648,12 @@ publication_for_tables:
  * ALTER PUBLICATION name DROP TABLE table [, table2]
  *
  * ALTER PUBLICATION name SET TABLE table [, table2]
+ *
+ * ALTER PUBLICATION name ADD SEQUENCE sequence [, sequence2]
+ *
+ * ALTER PUBLICATION name DROP SEQUENCE sequence [, sequence2]
+ *
+ * ALTER PUBLICATION name SET SEQUENCE sequence [, sequence2]
  *
  *****************************************************************************/
 
@@ -9656,7 +9670,7 @@ AlterPublicationStmt:
 					AlterPublicationStmt *n = makeNode(AlterPublicationStmt);
 					n->pubname = $3;
 					n->tables = $6;
-					n->tableAction = DEFELEM_ADD;
+					n->action = DEFELEM_ADD;
 					$$ = (Node *)n;
 				}
 			| ALTER PUBLICATION name SET TABLE relation_expr_list
@@ -9664,7 +9678,7 @@ AlterPublicationStmt:
 					AlterPublicationStmt *n = makeNode(AlterPublicationStmt);
 					n->pubname = $3;
 					n->tables = $6;
-					n->tableAction = DEFELEM_SET;
+					n->action = DEFELEM_SET;
 					$$ = (Node *)n;
 				}
 			| ALTER PUBLICATION name DROP TABLE relation_expr_list
@@ -9672,7 +9686,31 @@ AlterPublicationStmt:
 					AlterPublicationStmt *n = makeNode(AlterPublicationStmt);
 					n->pubname = $3;
 					n->tables = $6;
-					n->tableAction = DEFELEM_DROP;
+					n->action = DEFELEM_DROP;
+					$$ = (Node *)n;
+				}
+			| ALTER PUBLICATION name ADD_P SEQUENCE relation_expr_list
+				{
+					AlterPublicationStmt *n = makeNode(AlterPublicationStmt);
+					n->pubname = $3;
+					n->sequences = $6;
+					n->action = DEFELEM_ADD;
+					$$ = (Node *)n;
+				}
+			| ALTER PUBLICATION name SET SEQUENCE relation_expr_list
+				{
+					AlterPublicationStmt *n = makeNode(AlterPublicationStmt);
+					n->pubname = $3;
+					n->sequences = $6;
+					n->action = DEFELEM_SET;
+					$$ = (Node *)n;
+				}
+			| ALTER PUBLICATION name DROP SEQUENCE relation_expr_list
+				{
+					AlterPublicationStmt *n = makeNode(AlterPublicationStmt);
+					n->pubname = $3;
+					n->sequences = $6;
+					n->action = DEFELEM_DROP;
 					$$ = (Node *)n;
 				}
 		;

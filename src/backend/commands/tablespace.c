@@ -510,8 +510,10 @@ DropTableSpace(DropTableSpaceStmt *stmt)
 	 */
 	if (!destroy_tablespace_directories(tablespaceoid, false))
 	{
+		bool		try_again = false;
+
 		/*
-		 * Not all files deleted?  However, there can be lingering empty files
+		 * Not all files deleted?  However, there can be lingering tombstones
 		 * in the directories, left behind by for example DROP TABLE, that
 		 * have been scheduled for deletion at next checkpoint (see comments
 		 * in mdunlink() for details).  We could just delete them immediately,
@@ -526,8 +528,14 @@ DropTableSpace(DropTableSpaceStmt *stmt)
 		 * TABLESPACE should not give up on the tablespace becoming empty
 		 * until all relevant invalidation processing is complete.
 		 */
-		RequestCheckpoint(CHECKPOINT_IMMEDIATE | CHECKPOINT_FORCE | CHECKPOINT_WAIT);
-		if (!destroy_tablespace_directories(tablespaceoid, false))
+
+		if (XLogNeedRelFileTombstones())
+		{
+			RequestCheckpoint(CHECKPOINT_IMMEDIATE | CHECKPOINT_FORCE | CHECKPOINT_WAIT);
+			try_again = true;
+		}
+
+		if (!try_again || !destroy_tablespace_directories(tablespaceoid, false))
 		{
 			/* Still not empty, the files must be important then */
 			ereport(ERROR,

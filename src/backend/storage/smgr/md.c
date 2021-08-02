@@ -236,8 +236,9 @@ mdcreate(SMgrRelation reln, ForkNumber forkNum, bool isRedo)
  * forkNum can be a fork number to delete a specific fork, or InvalidForkNumber
  * to delete all forks.
  *
- * For regular relations, we don't unlink the first segment file of the rel,
- * but just truncate it to zero length, and record a request to unlink it after
+ * For regular relations, we don't always unlink the first segment file,
+ * depending on the WAL level.  If XLogNeedRelFileTombstones() is true, we
+ * just truncate it to zero length, and record a request to unlink it after
  * the next checkpoint.  Additional segments can be unlinked immediately,
  * however.  Leaving the empty file in place prevents that relfilenode
  * number from being reused.  The scenario this protects us from is:
@@ -321,7 +322,8 @@ mdunlinkfork(RelFileNodeBackend rnode, ForkNumber forkNum, bool isRedo)
 	/*
 	 * Delete or truncate the first segment.
 	 */
-	if (isRedo || forkNum != MAIN_FORKNUM || RelFileNodeBackendIsTemp(rnode))
+	if (isRedo || forkNum != MAIN_FORKNUM || RelFileNodeBackendIsTemp(rnode) ||
+		!XLogNeedRelFileTombstones())
 	{
 		if (!RelFileNodeBackendIsTemp(rnode))
 		{
@@ -349,7 +351,7 @@ mdunlinkfork(RelFileNodeBackend rnode, ForkNumber forkNum, bool isRedo)
 		/* Prevent other backends' fds from holding on to the disk space */
 		ret = do_truncate(path);
 
-		/* Register request to unlink first segment later */
+		/* Leave the file as a tombstone, to be unlinked at checkpoint time. */
 		register_unlink_segment(rnode, forkNum, 0 /* first seg */ );
 	}
 

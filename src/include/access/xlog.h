@@ -182,6 +182,12 @@ extern PGDLLIMPORT int wal_level;
 /* Do we need to WAL-log information required only for logical replication? */
 #define XLogLogicalInfoActive() (wal_level >= WAL_LEVEL_LOGICAL)
 
+/*
+ * Is the WAL-level so low that it is unsafe to recycle relfilenodes between
+ * checkpoints?  See mdunlinkfork().
+ */
+#define XLogNeedRelFileTombstones() (wal_level < WAL_LEVEL_REPLICA)
+
 #ifdef WAL_DEBUG
 extern bool XLOG_DEBUG;
 #endif

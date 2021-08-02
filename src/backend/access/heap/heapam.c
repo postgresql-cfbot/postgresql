@@ -8339,8 +8339,14 @@ ExtractReplicaIdentity(Relation relation, HeapTuple tp, bool key_changed,
 		return tp;
 	}
 
-	/* if the key hasn't changed and we're only logging the key, we're done */
-	if (!key_changed)
+	/*
+	 * If the key hasn't changed and we're only logging the key, we're done.
+	 * But if tuple has external data then it's possible that key might have
+	 * stored externally, if so we need to extract its value because the value
+	 * of the externally stored key data will not be logged with the main tuple
+	 * so we will have to log as old key tuple for replica identity.
+	 */
+	if ((!key_changed) && !HeapTupleHasExternal(tp))
 		return NULL;
 
 	/* find out the replica identity columns */
@@ -8390,6 +8396,16 @@ ExtractReplicaIdentity(Relation relation, HeapTuple tp, bool key_changed,
 
 		key_tuple = toast_flatten_tuple(oldtup, desc);
 		heap_freetuple(oldtup);
+	}
+	/*
+	 * If key tuple doesn't have any external data and key is not changed then
+	 * just free the key tuple and return NULL.
+	 */
+	else if (!key_changed)
+	{
+		heap_freetuple(key_tuple);
+		*copy = false;
+		return NULL;
 	}
 
 	return key_tuple;

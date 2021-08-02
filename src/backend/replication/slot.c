@@ -1088,37 +1088,28 @@ ReplicationSlotReserveWal(void)
 		/*
 		 * For logical slots log a standby snapshot and start logical decoding
 		 * at exactly that position. That allows the slot to start up more
-		 * quickly.
+		 * quickly. But on a standby we cannot do WAL writes, so just use the
+		 * replay pointer; effectively, an attempt to create a logical slot on
+		 * standby will cause it to wait for an xl_running_xact record to be
+		 * logged independently on the primary, so that a snapshot can be built
+		 * using the record.
 		 *
-		 * That's not needed (or indeed helpful) for physical slots as they'll
-		 * start replay at the last logged checkpoint anyway. Instead return
-		 * the location of the last redo LSN. While that slightly increases
-		 * the chance that we have to retry, it's where a base backup has to
-		 * start replay at.
+		 * None of this is needed (or indeed helpful) for physical slots as
+		 * they'll start replay at the last logged checkpoint anyway. Instead
+		 * return the location of the last redo LSN. While that slightly
+		 * increases the chance that we have to retry, it's where a base backup
+		 * has to start replay at.
 		 */
-		if (!RecoveryInProgress() && SlotIsLogical(slot))
-		{
-			XLogRecPtr	flushptr;
-
-			/* start at current insert position */
-			restart_lsn = GetXLogInsertRecPtr();
-			SpinLockAcquire(&slot->mutex);
-			slot->data.restart_lsn = restart_lsn;
-			SpinLockRelease(&slot->mutex);
-
-			/* make sure we have enough information to start */
-			flushptr = LogStandbySnapshot();
-
-			/* and make sure it's fsynced to disk */
-			XLogFlush(flushptr);
-		}
-		else
-		{
+		if (SlotIsPhysical(slot))
 			restart_lsn = GetRedoRecPtr();
-			SpinLockAcquire(&slot->mutex);
-			slot->data.restart_lsn = restart_lsn;
-			SpinLockRelease(&slot->mutex);
-		}
+		else if (RecoveryInProgress())
+			restart_lsn = GetXLogReplayRecPtr(NULL, true);
+		else
+			restart_lsn = GetXLogInsertRecPtr();
+
+		SpinLockAcquire(&slot->mutex);
+		slot->data.restart_lsn = restart_lsn;
+		SpinLockRelease(&slot->mutex);
 
 		/* prevent WAL removal as fast as possible */
 		ReplicationSlotsComputeRequiredLSN();
@@ -1133,6 +1124,17 @@ ReplicationSlotReserveWal(void)
 		XLByteToSeg(slot->data.restart_lsn, segno, wal_segment_size);
 		if (XLogGetLastRemovedSegno() < segno)
 			break;
+	}
+
+	if (!RecoveryInProgress() && SlotIsLogical(slot))
+	{
+		XLogRecPtr	flushptr;
+
+		/* make sure we have enough information to start */
+		flushptr = LogStandbySnapshot();
+
+		/* and make sure it's fsynced to disk */
+		XLogFlush(flushptr);
 	}
 }
 
@@ -1336,6 +1338,215 @@ restart:
 	}
 
 	return invalidated;
+}
+
+/*
+ * Helper for InvalidateConflictingLogicalReplicationSlot -- acquires the given slot
+ * and mark it invalid, if necessary and possible.
+ *
+ * Returns whether ReplicationSlotControlLock was released in the interim (and
+ * in that case we're not holding the lock at return, otherwise we are).
+ *
+ * This is inherently racy, because we release the LWLock
+ * for syscalls, so caller must restart if we return true.
+ */
+static bool
+InvalidatePossiblyConflictingLogicalReplicationSlot(ReplicationSlot *s, TransactionId xid)
+{
+	int		last_signaled_pid = 0;
+	bool	released_lock = false;
+
+	for (;;)
+	{
+		TransactionId slot_xmin;
+		TransactionId slot_catalog_xmin;
+		NameData	slotname;
+		int			active_pid = 0;
+
+		Assert(LWLockHeldByMeInMode(ReplicationSlotControlLock, LW_SHARED));
+
+		if (!s->in_use)
+		{
+			if (released_lock)
+				LWLockRelease(ReplicationSlotControlLock);
+			break;
+		}
+
+		/*
+		 * Check if the slot needs to be invalidated. If it needs to be
+		 * invalidated, and is not currently acquired, acquire it and mark it
+		 * as having been invalidated. We do this with the spinlock held to
+		 * avoid race conditions -- for example the xmin(s) could move forward
+		 * , or the slot could be dropped.
+		 */
+		SpinLockAcquire(&s->mutex);
+
+		slot_xmin = s->data.xmin;
+		slot_catalog_xmin = s->data.catalog_xmin;
+
+		/*
+		 * If the slot is already invalid or is not conflicting, we don't need to
+		 * do anything.
+		 */
+
+		/* slot has been invalidated */
+		if ((!TransactionIdIsValid(slot_xmin) && !TransactionIdIsValid(slot_catalog_xmin))
+			||
+		/*
+		 * we are not forcing for invalidation because the xid is valid
+		 * and this is a non conflicting slot
+		 */
+			(TransactionIdIsValid(xid) && !(
+				(TransactionIdIsValid(slot_xmin) && TransactionIdPrecedesOrEquals(slot_xmin, xid))
+				||
+				(TransactionIdIsValid(slot_catalog_xmin) && TransactionIdPrecedesOrEquals(slot_catalog_xmin, xid))
+				))
+			)
+		{
+			SpinLockRelease(&s->mutex);
+			if (released_lock)
+				LWLockRelease(ReplicationSlotControlLock);
+			break;
+		}
+
+		slotname = s->data.name;
+		active_pid = s->active_pid;
+
+		/*
+		 * If the slot can be acquired, do so and mark it invalidated
+		 * immediately.  Otherwise we'll signal the owning process, below, and
+		 * retry.
+		 */
+		if (active_pid == 0)
+		{
+			MyReplicationSlot = s;
+			s->active_pid = MyProcPid;
+			s->data.xmin = InvalidTransactionId;
+			s->data.catalog_xmin = InvalidTransactionId;
+		}
+
+		SpinLockRelease(&s->mutex);
+
+		if (active_pid != 0)
+		{
+			/*
+			 * Prepare the sleep on the slot's condition variable before
+			 * releasing the lock, to close a possible race condition if the
+			 * slot is released before the sleep below.
+			 */
+
+			ConditionVariablePrepareToSleep(&s->active_cv);
+
+			LWLockRelease(ReplicationSlotControlLock);
+			released_lock = true;
+
+			/*
+			 * Signal to terminate the process that owns the slot, if we
+			 * haven't already signalled it.  (Avoidance of repeated
+			 * signalling is the only reason for there to be a loop in this
+			 * routine; otherwise we could rely on caller's restart loop.)
+			 *
+			 * There is the race condition that other process may own the slot
+			 * after its current owner process is terminated and before this
+			 * process owns it. To handle that, we signal only if the PID of
+			 * the owning process has changed from the previous time. (This
+			 * logic assumes that the same PID is not reused very quickly.)
+			 */
+			if (last_signaled_pid != active_pid)
+			{
+				ereport(LOG,
+						(errmsg("terminating process %d because replication slot \"%s\" conflicts with recovery",
+								active_pid, NameStr(slotname))));
+
+				(void) kill(active_pid, SIGTERM);
+				last_signaled_pid = active_pid;
+			}
+
+			/* Wait until the slot is released. */
+			ConditionVariableSleep(&s->active_cv,
+									WAIT_EVENT_REPLICATION_SLOT_DROP);
+
+			/*
+			 * Re-acquire lock and start over; we expect to invalidate the
+			 * slot next time (unless another process acquires the slot in the
+			 * meantime).
+			 */
+			LWLockAcquire(ReplicationSlotControlLock, LW_SHARED);
+			continue;
+		}
+		else
+		{
+			/*
+			 * We hold the slot now and have already invalidated it; flush it
+			 * to ensure that state persists.
+			 *
+			 * Don't want to hold ReplicationSlotControlLock across file
+			 * system operations, so release it now but be sure to tell caller
+			 * to restart from scratch.
+			 */
+			LWLockRelease(ReplicationSlotControlLock);
+			released_lock = true;
+
+			/* Make sure the invalidated state persists across server restart */
+			ReplicationSlotMarkDirty();
+			ReplicationSlotSave();
+			ReplicationSlotRelease();
+			pgstat_report_replslot_conflict(s->data.database);
+
+			ereport(LOG,
+					(errmsg("invalidating slot \"%s\" because it conflicts with recovery", NameStr(slotname))));
+
+			/* done with this slot for now */
+			break;
+		}
+	}
+
+	Assert(!released_lock == LWLockHeldByMeInMode(ReplicationSlotControlLock, LW_SHARED));
+
+	return released_lock;
+}
+
+/*
+ * Resolve recovery conflicts with logical slots.
+ *
+ * When xid is valid, it means that we are about to remove rows older than xid.
+ * Therefore we need to invalidate slots that depend on seeing those rows.
+ * When xid is invalid, invalidate all logical slots. This is required when the
+ * master wal_level is set back to replica, so existing logical slots need to
+ * be invalidated.
+ */
+void
+InvalidateConflictingLogicalReplicationSlots(Oid dboid, TransactionId xid)
+{
+
+	Assert(max_replication_slots >= 0);
+
+	if (max_replication_slots == 0)
+		return;
+restart:
+	LWLockAcquire(ReplicationSlotControlLock, LW_SHARED);
+	for (int i = 0; i < max_replication_slots; i++)
+	{
+		ReplicationSlot *s = &ReplicationSlotCtl->replication_slots[i];
+
+		if (!s->in_use)
+			continue;
+
+		/* We are only dealing with *logical* slot conflicts. */
+		if (!SlotIsLogical(s))
+			continue;
+
+		/* not our database and we don't want all the database, skip */
+		if (s->data.database != dboid && TransactionIdIsValid(xid))
+			continue;
+
+		if (InvalidatePossiblyConflictingLogicalReplicationSlot(s, xid))
+		{
+			/* if the lock was released, we need to restart from scratch */
+			goto restart;
+		}
+	}
+	LWLockRelease(ReplicationSlotControlLock);
 }
 
 /*

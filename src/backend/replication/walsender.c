@@ -1147,6 +1147,14 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 
 	ReplicationSlotAcquire(cmd->slotname, true);
 
+	if (!TransactionIdIsValid(MyReplicationSlot->data.xmin)
+		 && !TransactionIdIsValid(MyReplicationSlot->data.catalog_xmin))
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("cannot read from logical replication slot \"%s\"",
+						cmd->slotname),
+				 errdetail("This slot has been invalidated because it was conflicting with recovery.")));
+
 	if (XLogRecPtrIsInvalid(MyReplicationSlot->data.restart_lsn))
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
@@ -1165,6 +1173,16 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 				(errmsg("terminating walsender process after promotion")));
 		got_STOPPING = true;
 	}
+
+	/*
+	 * In case of logical decoding on standby it may be that ThisTimeLineID
+	 * is not set yet.
+	 * Indeed we are not going through InitXLOGAccess on a Standby and
+	 * it may also be that IdentifySystem has not been called yet.
+	 * So let's get it through GetXLogReplayRecPtr().
+	 */
+	if (ThisTimeLineID == 0)
+		(void) GetXLogReplayRecPtr(&ThisTimeLineID, false);
 
 	/*
 	 * Create our decoding context, making it start at the previously ack'ed
@@ -1390,7 +1408,7 @@ WalSndWaitForWal(XLogRecPtr loc)
 	if (!RecoveryInProgress())
 		RecentFlushPtr = GetFlushRecPtr();
 	else
-		RecentFlushPtr = GetXLogReplayRecPtr(NULL);
+		RecentFlushPtr = GetXLogReplayRecPtr(NULL, false);
 
 	for (;;)
 	{
@@ -1424,7 +1442,7 @@ WalSndWaitForWal(XLogRecPtr loc)
 		if (!RecoveryInProgress())
 			RecentFlushPtr = GetFlushRecPtr();
 		else
-			RecentFlushPtr = GetXLogReplayRecPtr(NULL);
+			RecentFlushPtr = GetXLogReplayRecPtr(NULL, false);
 
 		/*
 		 * If postmaster asked us to stop, don't wait anymore.
@@ -2890,10 +2908,12 @@ XLogSendLogical(void)
 	 * If first time through in this session, initialize flushPtr.  Otherwise,
 	 * we only need to update flushPtr if EndRecPtr is past it.
 	 */
-	if (flushPtr == InvalidXLogRecPtr)
-		flushPtr = GetFlushRecPtr();
-	else if (logical_decoding_ctx->reader->EndRecPtr >= flushPtr)
-		flushPtr = GetFlushRecPtr();
+	if (flushPtr == InvalidXLogRecPtr ||
+		logical_decoding_ctx->reader->EndRecPtr >= flushPtr)
+	{
+		flushPtr = (am_cascading_walsender ?
+					GetStandbyFlushRecPtr() : GetFlushRecPtr());
+	}
 
 	/* If EndRecPtr is still past our flushPtr, it means we caught up. */
 	if (logical_decoding_ctx->reader->EndRecPtr >= flushPtr)
@@ -2982,7 +3002,7 @@ GetStandbyFlushRecPtr(void)
 	 */
 
 	receivePtr = GetWalRcvFlushRecPtr(NULL, &receiveTLI);
-	replayPtr = GetXLogReplayRecPtr(&replayTLI);
+	replayPtr = GetXLogReplayRecPtr(&replayTLI, false);
 
 	ThisTimeLineID = replayTLI;
 

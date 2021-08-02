@@ -166,6 +166,19 @@ ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> RENAME TO <
          </para>
         </listitem>
        </varlistentry>
+
+       <varlistentry>
+        <term><literal>validate_publication</literal> (<type>boolean</type>)</term>
+        <listitem>
+         <para>
+          When true, the command verifies if all the specified publications
+          that are being subscribed to are present in the publisher and throws
+          an error if any of the publication doesn't exist. The default is
+          <literal>false</literal>.
+         </para>
+        </listitem>
+       </varlistentry>
+
       </variablelist></para>
     </listitem>
    </varlistentry>

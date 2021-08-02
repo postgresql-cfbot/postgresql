@@ -2229,6 +2229,20 @@ RestoreTransactionSnapshot(Snapshot snapshot, void *source_pgproc)
 }
 
 /*
+ * Install a restored snapshot as the transaction snapshot, and set it as
+ * the active snapshot.
+ *
+ * The second argument is of type void * so that snapmgr.h need not include
+ * the declaration for PGPROC.
+ */
+void
+RestoreTxnSnapshotAndSetAsActive(Snapshot snapshot, void *source_pgproc)
+{
+	RestoreTransactionSnapshot(snapshot, source_pgproc);
+	PushActiveSnapshot(CurrentSnapshot);
+}
+
+/*
  * XidInMVCCSnapshot
  *		Is the given XID still-in-progress according to the snapshot?
  *

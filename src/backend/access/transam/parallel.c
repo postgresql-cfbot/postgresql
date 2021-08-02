@@ -67,7 +67,6 @@
 #define PARALLEL_KEY_LIBRARY				UINT64CONST(0xFFFFFFFFFFFF0003)
 #define PARALLEL_KEY_GUC					UINT64CONST(0xFFFFFFFFFFFF0004)
 #define PARALLEL_KEY_COMBO_CID				UINT64CONST(0xFFFFFFFFFFFF0005)
-#define PARALLEL_KEY_TRANSACTION_SNAPSHOT	UINT64CONST(0xFFFFFFFFFFFF0006)
 #define PARALLEL_KEY_ACTIVE_SNAPSHOT		UINT64CONST(0xFFFFFFFFFFFF0007)
 #define PARALLEL_KEY_TRANSACTION_STATE		UINT64CONST(0xFFFFFFFFFFFF0008)
 #define PARALLEL_KEY_ENTRYPOINT				UINT64CONST(0xFFFFFFFFFFFF0009)
@@ -205,7 +204,6 @@ InitializeParallelDSM(ParallelContext *pcxt)
 	Size		library_len = 0;
 	Size		guc_len = 0;
 	Size		combocidlen = 0;
-	Size		tsnaplen = 0;
 	Size		asnaplen = 0;
 	Size		tstatelen = 0;
 	Size		pendingsyncslen = 0;
@@ -216,7 +214,6 @@ InitializeParallelDSM(ParallelContext *pcxt)
 	int			i;
 	FixedParallelState *fps;
 	dsm_handle	session_dsm_handle = DSM_HANDLE_INVALID;
-	Snapshot	transaction_snapshot = GetTransactionSnapshot();
 	Snapshot	active_snapshot = GetActiveSnapshot();
 
 	/* We might be running in a very short-lived memory context. */
@@ -254,8 +251,6 @@ InitializeParallelDSM(ParallelContext *pcxt)
 		shm_toc_estimate_chunk(&pcxt->estimator, guc_len);
 		combocidlen = EstimateComboCIDStateSpace();
 		shm_toc_estimate_chunk(&pcxt->estimator, combocidlen);
-		tsnaplen = EstimateSnapshotSpace(transaction_snapshot);
-		shm_toc_estimate_chunk(&pcxt->estimator, tsnaplen);
 		asnaplen = EstimateSnapshotSpace(active_snapshot);
 		shm_toc_estimate_chunk(&pcxt->estimator, asnaplen);
 		tstatelen = EstimateTransactionStateSpace();
@@ -339,7 +334,6 @@ InitializeParallelDSM(ParallelContext *pcxt)
 		char	   *libraryspace;
 		char	   *gucspace;
 		char	   *combocidspace;
-		char	   *tsnapspace;
 		char	   *asnapspace;
 		char	   *tstatespace;
 		char	   *pendingsyncsspace;
@@ -366,11 +360,7 @@ InitializeParallelDSM(ParallelContext *pcxt)
 		SerializeComboCIDState(combocidlen, combocidspace);
 		shm_toc_insert(pcxt->toc, PARALLEL_KEY_COMBO_CID, combocidspace);
 
-		/* Serialize transaction snapshot and active snapshot. */
-		tsnapspace = shm_toc_allocate(pcxt->toc, tsnaplen);
-		SerializeSnapshot(transaction_snapshot, tsnapspace);
-		shm_toc_insert(pcxt->toc, PARALLEL_KEY_TRANSACTION_SNAPSHOT,
-					   tsnapspace);
+		/* Serialize active snapshot. */
 		asnapspace = shm_toc_allocate(pcxt->toc, asnaplen);
 		SerializeSnapshot(active_snapshot, asnapspace);
 		shm_toc_insert(pcxt->toc, PARALLEL_KEY_ACTIVE_SNAPSHOT, asnapspace);
@@ -1252,7 +1242,6 @@ ParallelWorkerMain(Datum main_arg)
 	parallel_worker_main_type entrypt;
 	char	   *gucspace;
 	char	   *combocidspace;
-	char	   *tsnapspace;
 	char	   *asnapspace;
 	char	   *tstatespace;
 	char	   *pendingsyncsspace;
@@ -1408,14 +1397,13 @@ ParallelWorkerMain(Datum main_arg)
 		shm_toc_lookup(toc, PARALLEL_KEY_SESSION_DSM, false);
 	AttachSession(*(dsm_handle *) session_dsm_handle_space);
 
-	/* Restore transaction snapshot. */
-	tsnapspace = shm_toc_lookup(toc, PARALLEL_KEY_TRANSACTION_SNAPSHOT, false);
-	RestoreTransactionSnapshot(RestoreSnapshot(tsnapspace),
-							   fps->parallel_leader_pgproc);
-
-	/* Restore active snapshot. */
+	/*
+	 * Restore the snapshot, install it as the transaction snapshot and set it
+	 * as the active snapshot.
+	 */
 	asnapspace = shm_toc_lookup(toc, PARALLEL_KEY_ACTIVE_SNAPSHOT, false);
-	PushActiveSnapshot(RestoreSnapshot(asnapspace));
+	RestoreTxnSnapshotAndSetAsActive(RestoreSnapshot(asnapspace),
+							   fps->parallel_leader_pgproc);
 
 	/*
 	 * We've changed which tuples we can see, and must therefore invalidate

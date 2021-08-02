@@ -86,7 +86,9 @@ static void pg_decode_prepare_txn(LogicalDecodingContext *ctx,
 								  XLogRecPtr prepare_lsn);
 static void pg_decode_commit_prepared_txn(LogicalDecodingContext *ctx,
 										  ReorderBufferTXN *txn,
-										  XLogRecPtr commit_lsn);
+										  XLogRecPtr commit_lsn,
+										  XLogRecPtr prepare_end_lsn,
+										  TimestampTz prepare_time);
 static void pg_decode_rollback_prepared_txn(LogicalDecodingContext *ctx,
 											ReorderBufferTXN *txn,
 											XLogRecPtr prepare_end_lsn,
@@ -390,7 +392,8 @@ pg_decode_prepare_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 /* COMMIT PREPARED callback */
 static void
 pg_decode_commit_prepared_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
-							  XLogRecPtr commit_lsn)
+							  XLogRecPtr commit_lsn, XLogRecPtr prepare_end_lsn,
+							  TimestampTz prepare_time)
 {
 	TestDecodingData *data = ctx->output_plugin_private;
 

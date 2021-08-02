@@ -7562,6 +7562,13 @@ are available since protocol version 3.
 <varlistentry>
 <term>Int64</term>
 <listitem><para>
+                The end LSN of the prepare.
+</para></listitem>
+</varlistentry>
+
+<varlistentry>
+<term>Int64</term>
+<listitem><para>
                 The LSN of the commit prepared.
 </para></listitem>
 </varlistentry>
@@ -7570,6 +7577,14 @@ are available since protocol version 3.
 <term>Int64</term>
 <listitem><para>
                 The end LSN of the commit prepared transaction.
+</para></listitem>
+</varlistentry>
+
+<varlistentry>
+<term>Int64</term>
+<listitem><para>
+                Prepare timestamp of the transaction. The value is in number
+                of microseconds since PostgreSQL epoch (2000-01-01).
 </para></listitem>
 </varlistentry>
 

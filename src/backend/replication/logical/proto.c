@@ -228,7 +228,9 @@ logicalrep_read_prepare(StringInfo in, LogicalRepPreparedTxnData *prepare_data)
  */
 void
 logicalrep_write_commit_prepared(StringInfo out, ReorderBufferTXN *txn,
-								 XLogRecPtr commit_lsn)
+								 XLogRecPtr commit_lsn,
+								 XLogRecPtr prepare_end_lsn,
+								 TimestampTz prepare_time)
 {
 	uint8		flags = 0;
 
@@ -244,8 +246,10 @@ logicalrep_write_commit_prepared(StringInfo out, ReorderBufferTXN *txn,
 	pq_sendbyte(out, flags);
 
 	/* send fields */
+	pq_sendint64(out, prepare_end_lsn);
 	pq_sendint64(out, commit_lsn);
 	pq_sendint64(out, txn->end_lsn);
+	pq_sendint64(out, prepare_time);
 	pq_sendint64(out, txn->xact_time.commit_time);
 	pq_sendint32(out, txn->xid);
 
@@ -266,12 +270,16 @@ logicalrep_read_commit_prepared(StringInfo in, LogicalRepCommitPreparedTxnData *
 		elog(ERROR, "unrecognized flags %u in commit prepared message", flags);
 
 	/* read fields */
+	prepare_data->prepare_end_lsn = pq_getmsgint64(in);
+	if (prepare_data->prepare_end_lsn == InvalidXLogRecPtr)
+		elog(ERROR, "prepare_end_lsn is not set in commit prepared message");
 	prepare_data->commit_lsn = pq_getmsgint64(in);
 	if (prepare_data->commit_lsn == InvalidXLogRecPtr)
 		elog(ERROR, "commit_lsn is not set in commit prepared message");
-	prepare_data->end_lsn = pq_getmsgint64(in);
-	if (prepare_data->end_lsn == InvalidXLogRecPtr)
-		elog(ERROR, "end_lsn is not set in commit prepared message");
+	prepare_data->commit_end_lsn = pq_getmsgint64(in);
+	if (prepare_data->commit_end_lsn == InvalidXLogRecPtr)
+		elog(ERROR, "commit_end_lsn is not set in commit prepared message");
+	prepare_data->prepare_time = pq_getmsgint64(in);
 	prepare_data->commit_time = pq_getmsgint64(in);
 	prepare_data->xid = pq_getmsgint(in, 4);
 

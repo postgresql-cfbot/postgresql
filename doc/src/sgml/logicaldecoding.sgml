@@ -884,11 +884,20 @@ typedef void (*LogicalDecodePrepareCB) (struct LogicalDecodingContext *ctx,
       The required <function>commit_prepared_cb</function> callback is called
       whenever a transaction <command>COMMIT PREPARED</command> has been decoded.
       The <parameter>gid</parameter> field, which is part of the
-      <parameter>txn</parameter> parameter, can be used in this callback.
+      <parameter>txn</parameter> parameter, can be used in this callback. The
+      parameters <parameter>prepare_end_lsn</parameter> and
+      <parameter>prepare_time</parameter> can be used to check if the plugin
+      has received this <command>PREPARE TRANSACTION</command> command or not.
+      If yes, it can commit the transaction, otherwise, it can skip the commit.
+      The <parameter>gid</parameter> alone is not sufficient to determine this
+      because the downstream node may already have a prepared transaction with the
+      same identifier.
 <programlisting>
 typedef void (*LogicalDecodeCommitPreparedCB) (struct LogicalDecodingContext *ctx,
                                                ReorderBufferTXN *txn,
-                                               XLogRecPtr commit_lsn);
+                                               XLogRecPtr commit_lsn,
+                                               XLogRecPtr prepare_end_lsn,
+                                               TimestampTz prepare_time);
 </programlisting>
      </para>
     </sect3>

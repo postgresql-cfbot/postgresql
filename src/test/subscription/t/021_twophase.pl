@@ -6,7 +6,7 @@ use strict;
 use warnings;
 use PostgresNode;
 use TestLib;
-use Test::More tests => 24;
+use Test::More tests => 25;
 
 ###############################
 # Setup
@@ -320,10 +320,9 @@ $node_publisher->safe_psql('postgres', "
 $node_publisher->wait_for_catchup($appname_copy);
 $node_publisher->wait_for_catchup($appname);
 
-# Check that the transaction has been prepared on the subscriber, there will be 2
-# prepared transactions for the 2 subscriptions.
+# Check that the transaction has been prepared on the subscriber
 $result = $node_subscriber->safe_psql('postgres', "SELECT count(*) FROM pg_prepared_xacts;");
-is($result, qq(2), 'transaction is prepared on subscriber');
+is($result, qq(1), 'transaction is prepared on subscriber');
 
 # Now commit the insert and verify that it IS replicated
 $node_publisher->safe_psql('postgres', "COMMIT PREPARED 'mygid';");
@@ -338,6 +337,45 @@ is($result, qq(2), 'replicated data in subscriber table');
 
 $node_subscriber->safe_psql('postgres', "DROP SUBSCRIPTION tap_sub_copy;");
 $node_publisher->safe_psql('postgres', "DROP PUBLICATION tap_pub_copy;");
+
+##############################
+# Test empty prepares
+##############################
+
+# create a table that is not part of the publication
+$node_publisher->safe_psql('postgres',
+   "CREATE TABLE tab_nopub (a int PRIMARY KEY)");
+
+# disable the subscription so that we can peek at the slot
+$node_subscriber->safe_psql('postgres', "ALTER SUBSCRIPTION tap_sub DISABLE");
+
+# wait for the replication slot to become inactive in the publisher
+$node_publisher->poll_query_until('postgres',
+   "SELECT COUNT(*) FROM pg_catalog.pg_replication_slots WHERE slot_name = 'tap_sub' AND active='f'", 1);
+
+# create a transaction with no changes relevant to the slot
+$node_publisher->safe_psql('postgres', "
+   BEGIN;
+   INSERT INTO tab_nopub SELECT generate_series(1,10);
+   PREPARE TRANSACTION 'empty_transaction';
+   COMMIT PREPARED 'empty_transaction';");
+
+# peek at the contents of the slot
+$result = $node_publisher->safe_psql(
+   'postgres', qq(
+       SELECT get_byte(data, 0)
+       FROM pg_logical_slot_get_binary_changes('tap_sub', NULL, NULL,
+           'proto_version', '3',
+           'publication_names', 'tap_pub')
+));
+
+# the empty transaction should be skipped
+is($result, qq(),
+   'empty transaction dropped on slot'
+);
+
+# enable the subscription to test cleanup
+$node_subscriber->safe_psql('postgres', "ALTER SUBSCRIPTION tap_sub ENABLE");
 
 ###############################
 # check all the cleanup

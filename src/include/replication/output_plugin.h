@@ -128,7 +128,9 @@ typedef void (*LogicalDecodePrepareCB) (struct LogicalDecodingContext *ctx,
  */
 typedef void (*LogicalDecodeCommitPreparedCB) (struct LogicalDecodingContext *ctx,
 											   ReorderBufferTXN *txn,
-											   XLogRecPtr commit_lsn);
+											   XLogRecPtr commit_lsn,
+											   XLogRecPtr prepare_end_lsn,
+											   TimestampTz prepare_time);
 
 /*
  * Called for ROLLBACK PREPARED.

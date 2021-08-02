@@ -978,27 +978,39 @@ apply_handle_commit_prepared(StringInfo s)
 	/* Compute GID for two_phase transactions. */
 	TwoPhaseTransactionGid(MySubscription->oid, prepare_data.xid,
 						   gid, sizeof(gid));
-
-	/* There is no transaction when COMMIT PREPARED is called */
-	begin_replication_step();
-
 	/*
-	 * Update origin state so we can restart streaming from correct position
-	 * in case of crash.
+	 * It is possible that we haven't received the prepare because
+	 * the transaction did not have any changes relevant to this
+	 * subscription and so was essentially an empty prepare. In this case,
+	 * the walsender is optimized to drop the empty transaction and the
+	 * accompanying prepare. Silently ignore if we don't find the prepared
+	 * transaction.
 	 */
-	replorigin_session_origin_lsn = prepare_data.end_lsn;
-	replorigin_session_origin_timestamp = prepare_data.commit_time;
+	if (LookupGXact(gid, prepare_data.prepare_end_lsn,
+					prepare_data.prepare_time))
+	{
 
-	FinishPreparedTransaction(gid, true);
-	end_replication_step();
-	CommitTransactionCommand();
+		/* There is no transaction when COMMIT PREPARED is called */
+		begin_replication_step();
+
+		/*
+		 * Update origin state so we can restart streaming from correct position
+		 * in case of crash.
+		 */
+		replorigin_session_origin_lsn = prepare_data.commit_end_lsn;
+		replorigin_session_origin_timestamp = prepare_data.commit_time;
+
+		FinishPreparedTransaction(gid, true);
+		end_replication_step();
+		CommitTransactionCommand();
+	}
 	pgstat_report_stat(false);
 
-	store_flush_position(prepare_data.end_lsn);
+	store_flush_position(prepare_data.commit_end_lsn);
 	in_remote_transaction = false;
 
 	/* Process any tables that are being synchronized in parallel. */
-	process_syncing_tables(prepare_data.end_lsn);
+	process_syncing_tables(prepare_data.commit_end_lsn);
 
 	pgstat_report_activity(STATE_IDLE, NULL);
 }

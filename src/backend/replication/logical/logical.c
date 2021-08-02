@@ -63,7 +63,8 @@ static void begin_prepare_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn
 static void prepare_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 							   XLogRecPtr prepare_lsn);
 static void commit_prepared_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
-									   XLogRecPtr commit_lsn);
+									   XLogRecPtr commit_lsn, XLogRecPtr prepare_end_lsn,
+									   TimestampTz prepare_time);
 static void rollback_prepared_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 										 XLogRecPtr prepare_end_lsn, TimestampTz prepare_time);
 static void change_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
@@ -940,7 +941,8 @@ prepare_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 
 static void
 commit_prepared_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
-						   XLogRecPtr commit_lsn)
+						   XLogRecPtr commit_lsn, XLogRecPtr prepare_end_lsn,
+						   TimestampTz prepare_time)
 {
 	LogicalDecodingContext *ctx = cache->private_data;
 	LogicalErrorCallbackState state;
@@ -976,7 +978,8 @@ commit_prepared_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 						"commit_prepared_cb")));
 
 	/* do the actual work: call callback */
-	ctx->callbacks.commit_prepared_cb(ctx, txn, commit_lsn);
+	ctx->callbacks.commit_prepared_cb(ctx, txn, commit_lsn, prepare_end_lsn,
+									  prepare_time);
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;

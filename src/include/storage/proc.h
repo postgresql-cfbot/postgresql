@@ -147,7 +147,6 @@ struct PGPROC
 
 	int			pgxactoff;		/* offset into various ProcGlobal->arrays with
 								 * data mirrored from this PGPROC */
-	int			pgprocno;
 
 	/* These fields are zero while a backend is still starting up: */
 	BackendId	backendId;		/* This backend's backend ID (if assigned) */
@@ -311,6 +310,9 @@ extern PGDLLIMPORT PGPROC *MyProc;
  * When entering a PGPROC for 2PC transactions with ProcArrayAdd(), the data
  * in the dense arrays is initialized from the PGPROC while it already holds
  * ProcArrayLock.
+ *
+ * Shared memory data structures can refer to PGPROCs by index in allProcs.
+ * See GetPGProcNumber() and GetPGProcByNumber().
  */
 typedef struct PROC_HDR
 {
@@ -352,9 +354,6 @@ typedef struct PROC_HDR
 	Latch	   *checkpointerLatch;
 	/* Current shared estimate of appropriate spins_per_delay value */
 	int			spins_per_delay;
-	/* The proc of the Startup process, since not in ProcArray */
-	PGPROC	   *startupProc;
-	int			startupProcPid;
 	/* Buffer id of the buffer that Startup process waits for pin on, or -1 */
 	int			startupBufferPinWaitBufId;
 } PROC_HDR;
@@ -365,6 +364,8 @@ extern PGPROC *PreparedXactProcs;
 
 /* Accessor for PGPROC given a pgprocno. */
 #define GetPGProcByNumber(n) (&ProcGlobal->allProcs[(n)])
+/* Accessor for pgprocno given a pointer to PGPROC. */
+#define GetPGProcNumber(proc) ((proc) - ProcGlobal->allProcs)
 
 /*
  * We set aside some extra PGPROC structures for auxiliary processes,
@@ -395,7 +396,6 @@ extern void InitProcess(void);
 extern void InitProcessPhase2(void);
 extern void InitAuxiliaryProcess(void);
 
-extern void PublishStartupProcessInformation(void);
 extern void SetStartupBufferPinWaitBufId(int bufid);
 extern int	GetStartupBufferPinWaitBufId(void);
 
@@ -411,7 +411,7 @@ extern bool IsWaitingForLock(void);
 extern void LockErrorCleanup(void);
 
 extern void ProcWaitForSignal(uint32 wait_event_info);
-extern void ProcSendSignal(int pid);
+extern void ProcSendSignal(int pgprocno);
 
 extern PGPROC *AuxiliaryPidGetProc(int pid);
 

@@ -317,6 +317,7 @@ _outPlannedStmt(StringInfo str, const PlannedStmt *node)
 	WRITE_NODE_FIELD(invalItems);
 	WRITE_NODE_FIELD(paramExecTypes);
 	WRITE_NODE_FIELD(utilityStmt);
+	WRITE_NODE_FIELD(schemaVariables);
 	WRITE_LOCATION_FIELD(stmt_location);
 	WRITE_INT_FIELD(stmt_len);
 }
@@ -1157,6 +1158,7 @@ _outParam(StringInfo str, const Param *node)
 	WRITE_OID_FIELD(paramtype);
 	WRITE_INT_FIELD(paramtypmod);
 	WRITE_OID_FIELD(paramcollid);
+	WRITE_OID_FIELD(paramvarid);
 	WRITE_LOCATION_FIELD(location);
 }
 
@@ -2269,6 +2271,7 @@ _outPlannerGlobal(StringInfo str, const PlannerGlobal *node)
 	WRITE_NODE_FIELD(relationOids);
 	WRITE_NODE_FIELD(invalItems);
 	WRITE_NODE_FIELD(paramExecTypes);
+	WRITE_NODE_FIELD(schemaVariables);
 	WRITE_UINT_FIELD(lastPHId);
 	WRITE_UINT_FIELD(lastRowMarkId);
 	WRITE_INT_FIELD(lastPlanNodeId);
@@ -2329,6 +2332,7 @@ _outPlannerInfo(StringInfo str, const PlannerInfo *node)
 	WRITE_BOOL_FIELD(hasPseudoConstantQuals);
 	WRITE_BOOL_FIELD(hasAlternativeSubPlans);
 	WRITE_BOOL_FIELD(hasRecursion);
+	WRITE_BOOL_FIELD(hasSchemaVariables);
 	WRITE_INT_FIELD(wt_param_id);
 	WRITE_BITMAPSET_FIELD(curOuterRels);
 	WRITE_NODE_FIELD(curOuterParams);
@@ -2871,6 +2875,17 @@ _outPLAssignStmt(StringInfo str, const PLAssignStmt *node)
 }
 
 static void
+_outLetStmt(StringInfo str, const LetStmt * node)
+{
+	WRITE_NODE_TYPE("LET");
+
+	WRITE_NODE_FIELD(target);
+	WRITE_NODE_FIELD(query);
+	WRITE_BOOL_FIELD(plpgsql_mode);
+	WRITE_LOCATION_FIELD(location);
+}
+
+static void
 _outFuncCall(StringInfo str, const FuncCall *node)
 {
 	WRITE_NODE_TYPE("FUNCCALL");
@@ -3050,6 +3065,7 @@ _outQuery(StringInfo str, const Query *node)
 			case T_IndexStmt:
 			case T_NotifyStmt:
 			case T_DeclareCursorStmt:
+			case T_LetStmt:
 				WRITE_NODE_FIELD(utilityStmt);
 				break;
 			default:
@@ -3061,6 +3077,7 @@ _outQuery(StringInfo str, const Query *node)
 		appendStringInfoString(str, " :utilityStmt <>");
 
 	WRITE_INT_FIELD(resultRelation);
+	WRITE_OID_FIELD(resultVariable);
 	WRITE_BOOL_FIELD(hasAggs);
 	WRITE_BOOL_FIELD(hasWindowFuncs);
 	WRITE_BOOL_FIELD(hasTargetSRFs);
@@ -3071,6 +3088,7 @@ _outQuery(StringInfo str, const Query *node)
 	WRITE_BOOL_FIELD(hasForUpdate);
 	WRITE_BOOL_FIELD(hasRowSecurity);
 	WRITE_BOOL_FIELD(isReturn);
+	WRITE_BOOL_FIELD(hasSchemaVariables);
 	WRITE_NODE_FIELD(cteList);
 	WRITE_NODE_FIELD(rtable);
 	WRITE_NODE_FIELD(jointree);
@@ -4369,6 +4387,9 @@ outNode(StringInfo str, const void *obj)
 				break;
 			case T_PLAssignStmt:
 				_outPLAssignStmt(str, obj);
+				break;
+			case T_LetStmt:
+				_outLetStmt(str, obj);
 				break;
 			case T_ColumnDef:
 				_outColumnDef(str, obj);

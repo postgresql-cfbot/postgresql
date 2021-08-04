@@ -18,6 +18,7 @@
 #include "access/itup.h"
 #include "port/atomics.h"
 #include "storage/buf.h"
+#include "storage/predicate.h"
 #include "storage/spin.h"
 #include "utils/relcache.h"
 
@@ -161,6 +162,15 @@ typedef struct IndexScanDescData
 	Datum	   *xs_orderbyvals;
 	bool	   *xs_orderbynulls;
 	bool		xs_recheckorderby;
+
+	/*
+	 * In certain conditions, we can avoid acquiring predicate locks.  We don't
+	 * know if that's possible until later, so we provide a way for index AMs
+	 * to defer predicate lock acquisition so that the caller can decide
+	 * whether they're needed.
+	 */
+	bool		xs_defer_predlocks;
+	PredicateLockBuffer xs_deferred_predlocks;
 
 	/* parallel index scan information, in shared memory */
 	struct ParallelIndexScanDescData *parallel_scan;

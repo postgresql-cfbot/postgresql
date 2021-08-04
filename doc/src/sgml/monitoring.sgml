@@ -751,40 +751,6 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
 
      <row>
       <entry role="catalog_table_entry"><para role="column_definition">
-       <structfield>client_addr</structfield> <type>inet</type>
-      </para>
-      <para>
-       IP address of the client connected to this backend.
-       If this field is null, it indicates either that the client is
-       connected via a Unix socket on the server machine or that this is an
-       internal process such as autovacuum.
-      </para></entry>
-     </row>
-
-     <row>
-      <entry role="catalog_table_entry"><para role="column_definition">
-       <structfield>client_hostname</structfield> <type>text</type>
-      </para>
-      <para>
-       Host name of the connected client, as reported by a
-       reverse DNS lookup of <structfield>client_addr</structfield>. This field will
-       only be non-null for IP connections, and only when <xref linkend="guc-log-hostname"/> is enabled.
-      </para></entry>
-     </row>
-
-     <row>
-      <entry role="catalog_table_entry"><para role="column_definition">
-       <structfield>client_port</structfield> <type>integer</type>
-      </para>
-      <para>
-       TCP port number that the client is using for communication
-       with this backend, or <literal>-1</literal> if a Unix socket is used.
-       If this field is null, it indicates that this is an internal server process.
-      </para></entry>
-     </row>
-
-     <row>
-      <entry role="catalog_table_entry"><para role="column_definition">
        <structfield>backend_start</structfield> <type>timestamp with time zone</type>
       </para>
       <para>
@@ -2264,6 +2230,91 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
 </programlisting>
    </para>
 
+ </sect2>
+
+ <sect2 id="monitoring-pg-stat-connection-view">
+  <title><structname>pg_stat_connection</structname></title>
+
+  <indexterm>
+   <primary>pg_stat_connection</primary>
+  </indexterm>
+
+  <para>
+   The <structname>pg_stat_connection</structname> view will have one row
+   per server process, showing information related to
+   the current connection of that process.
+  </para>
+
+  <table id="pg-stat-connection-view" xreflabel="pg_stat_connection">
+   <title><structname>pg_stat_connection</structname> View</title>
+   <tgroup cols="1">
+    <thead>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       Column Type
+      </para>
+      <para>
+       Description
+      </para></entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>pid</structfield> <type>integer</type>
+      </para>
+      <para>
+       Process ID of this backend
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>authenticated_id</structfield> <type>text</type>
+      </para>
+      <para>
+       Name of the authenticated ID used for this backend login at
+       authentication
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>client_addr</structfield> <type>inet</type>
+      </para>
+      <para>
+       IP address of the client connected to this backend.
+       If this field is null, it indicates either that the client is
+       connected via a Unix socket on the server machine or that this is an
+       internal process such as autovacuum.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>client_hostname</structfield> <type>text</type>
+      </para>
+      <para>
+       Host name of the connected client, as reported by a
+       reverse DNS lookup of <structfield>client_addr</structfield>. This field will
+       only be non-null for IP connections, and only when <xref linkend="guc-log-hostname"/> is enabled.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>client_port</structfield> <type>integer</type>
+      </para>
+      <para>
+       TCP port number that the client is using for communication
+       with this backend, or <literal>-1</literal> if a Unix socket is used.
+       If this field is null, it indicates that this is an internal server process.
+      </para></entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
  </sect2>
 
  <sect2 id="monitoring-pg-stat-replication-view">

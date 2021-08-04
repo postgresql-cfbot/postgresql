@@ -44,6 +44,7 @@
  */
 bool		pgstat_track_activities = false;
 int			pgstat_track_activity_query_size = 1024;
+int			pgstat_track_connection_authn_size = 128;
 
 
 /* exposed so that progress.c can access it */
@@ -95,7 +96,9 @@ BackendStatusShmemSize(void)
 					mul_size(NAMEDATALEN, NumBackendStatSlots));
 	/* BackendActivityBuffer: */
 	size = add_size(size,
-					mul_size(pgstat_track_activity_query_size, NumBackendStatSlots));
+					mul_size(pgstat_track_activity_query_size +
+							 pgstat_track_connection_authn_size,
+							 NumBackendStatSlots));
 #ifdef USE_SSL
 	/* BackendSslStatusBuffer: */
 	size = add_size(size,
@@ -171,7 +174,8 @@ CreateSharedBackendStatus(void)
 	}
 
 	/* Create or attach to the shared activity buffer */
-	BackendActivityBufferSize = mul_size(pgstat_track_activity_query_size,
+	BackendActivityBufferSize = mul_size(pgstat_track_activity_query_size +
+										 pgstat_track_connection_authn_size,
 										 NumBackendStatSlots);
 	BackendActivityBuffer = (char *)
 		ShmemInitStruct("Backend Activity Buffer",
@@ -182,12 +186,14 @@ CreateSharedBackendStatus(void)
 	{
 		MemSet(BackendActivityBuffer, 0, BackendActivityBufferSize);
 
-		/* Initialize st_activity pointers. */
+		/* Initialize st_activity and st_authn_id pointers. */
 		buffer = BackendActivityBuffer;
 		for (i = 0; i < NumBackendStatSlots; i++)
 		{
 			BackendStatusArray[i].st_activity_raw = buffer;
 			buffer += pgstat_track_activity_query_size;
+			BackendStatusArray[i].st_authn_id = buffer;
+			buffer += pgstat_track_connection_authn_size;
 		}
 	}
 
@@ -432,10 +438,22 @@ pgstat_bestart(void)
 	else
 		lbeentry.st_clienthostname[0] = '\0';
 	lbeentry.st_activity_raw[0] = '\0';
+	if (MyProcPort && MyProcPort->authn_id)
+	{
+		/* Compute the length of the field to store */
+		int		len = Min(strlen(MyProcPort->authn_id),
+						  pgstat_track_connection_authn_size - 1);
+
+		memcpy(lbeentry.st_authn_id, MyProcPort->authn_id, len);
+		lbeentry.st_authn_id[len] = '\0';
+	}
+	else
+		lbeentry.st_authn_id[0] = '\0';
 	/* Also make sure the last byte in each string area is always 0 */
 	lbeentry.st_appname[NAMEDATALEN - 1] = '\0';
 	lbeentry.st_clienthostname[NAMEDATALEN - 1] = '\0';
 	lbeentry.st_activity_raw[pgstat_track_activity_query_size - 1] = '\0';
+	lbeentry.st_authn_id[pgstat_track_connection_authn_size - 1] = '\0';
 
 #ifdef USE_SSL
 	memcpy(lbeentry.st_sslstatus, &lsslstatus, sizeof(PgBackendSSLStatus));
@@ -936,7 +954,8 @@ pgstat_get_backend_current_activity(int pid, bool checkUser)
 			else
 			{
 				/* this'll leak a bit of memory, but that seems acceptable */
-				return pgstat_clip_activity(beentry->st_activity_raw);
+				return pgstat_clip_string(beentry->st_activity_raw,
+										  pgstat_track_activity_query_size);
 			}
 		}
 
@@ -1103,7 +1122,7 @@ pgstat_fetch_stat_numbackends(void)
 }
 
 /*
- * Convert a potentially unsafely truncated activity string (see
+ * Convert a potentially unsafely truncated activity or authn ID string (see
  * PgBackendStatus.st_activity_raw's documentation) into a correctly truncated
  * one.
  *
@@ -1111,37 +1130,36 @@ pgstat_fetch_stat_numbackends(void)
  * freed.
  */
 char *
-pgstat_clip_activity(const char *raw_activity)
+pgstat_clip_string(const char *raw_string, int max_size)
 {
-	char	   *activity;
+	char	   *string;
 	int			rawlen;
 	int			cliplen;
 
 	/*
 	 * Some callers, like pgstat_get_backend_current_activity(), do not
-	 * guarantee that the buffer isn't concurrently modified. We try to take
+	 * guarantee that the buffer isn't concurrently modified.  We try to take
 	 * care that the buffer is always terminated by a NUL byte regardless, but
-	 * let's still be paranoid about the string's length. In those cases the
-	 * underlying buffer is guaranteed to be pgstat_track_activity_query_size
-	 * large.
+	 * let's still be paranoid about the string's length.  In those cases the
+	 * underlying buffer is guaranteed to be max_size large.
 	 */
-	activity = pnstrdup(raw_activity, pgstat_track_activity_query_size - 1);
+	string = pnstrdup(raw_string, max_size - 1);
 
 	/* now double-guaranteed to be NUL terminated */
-	rawlen = strlen(activity);
+	rawlen = strlen(string);
 
 	/*
 	 * All supported server-encodings make it possible to determine the length
 	 * of a multi-byte character from its first byte (this is not the case for
-	 * client encodings, see GB18030). As st_activity is always stored using
-	 * server encoding, this allows us to perform multi-byte aware truncation,
-	 * even if the string earlier was truncated in the middle of a multi-byte
-	 * character.
+	 * client encodings, see GB18030).  As st_activity and st_authn_id are
+	 * always stored using server encoding, this allows us to perform
+	 * multi-byte aware truncation, even if the string earlier was truncated
+	 * in the middle of a multi-byte character.
 	 */
-	cliplen = pg_mbcliplen(activity, rawlen,
-						   pgstat_track_activity_query_size - 1);
+	cliplen = pg_mbcliplen(string, rawlen,
+						   max_size - 1);
 
-	activity[cliplen] = '\0';
+	string[cliplen] = '\0';
 
-	return activity;
+	return string;
 }

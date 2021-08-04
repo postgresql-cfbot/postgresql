@@ -821,9 +821,6 @@ CREATE VIEW pg_stat_activity AS
             S.usesysid,
             U.rolname AS usename,
             S.application_name,
-            S.client_addr,
-            S.client_hostname,
-            S.client_port,
             S.backend_start,
             S.xact_start,
             S.query_start,
@@ -839,6 +836,15 @@ CREATE VIEW pg_stat_activity AS
     FROM pg_stat_get_activity(NULL) AS S
         LEFT JOIN pg_database AS D ON (S.datid = D.oid)
         LEFT JOIN pg_authid AS U ON (S.usesysid = U.oid);
+
+CREATE VIEW pg_stat_connection AS
+    SELECT
+            S.pid,
+            S.authenticated_id,
+            S.client_addr,
+            S.client_hostname,
+            S.client_port
+    FROM pg_stat_get_activity(NULL) AS S;
 
 CREATE VIEW pg_stat_replication AS
     SELECT

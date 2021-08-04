@@ -377,6 +377,7 @@ main(int argc, char **argv)
 		{"column-inserts", no_argument, &dopt.column_inserts, 1},
 		{"disable-dollar-quoting", no_argument, &dopt.disable_dollar_quoting, 1},
 		{"disable-triggers", no_argument, &dopt.disable_triggers, 1},
+		{"drop-cascade", no_argument, &dopt.drop_cascade, 1},
 		{"enable-row-security", no_argument, &dopt.enable_row_security, 1},
 		{"exclude-table-data", required_argument, NULL, 4},
 		{"extra-float-digits", required_argument, NULL, 8},
@@ -666,6 +667,9 @@ main(int argc, char **argv)
 		exit_nicely(1);
 	}
 
+	if (dopt.drop_cascade && !dopt.outputClean)
+		fatal("option --drop-cascade requires option -c/--clean");
+
 	if (dopt.if_exists && !dopt.outputClean)
 		fatal("option --if-exists requires option -c/--clean");
 
@@ -933,6 +937,7 @@ main(int argc, char **argv)
 	ropt->cparams.pghost = dopt.cparams.pghost ? pg_strdup(dopt.cparams.pghost) : NULL;
 	ropt->cparams.username = dopt.cparams.username ? pg_strdup(dopt.cparams.username) : NULL;
 	ropt->cparams.promptPassword = dopt.cparams.promptPassword;
+	ropt->drop_cascade = dopt.drop_cascade;
 	ropt->dropSchema = dopt.outputClean;
 	ropt->dataOnly = dopt.dataOnly;
 	ropt->schemaOnly = dopt.schemaOnly;
@@ -1034,6 +1039,7 @@ help(const char *progname)
 	printf(_("  --column-inserts             dump data as INSERT commands with column names\n"));
 	printf(_("  --disable-dollar-quoting     disable dollar quoting, use SQL standard quoting\n"));
 	printf(_("  --disable-triggers           disable triggers during data-only restore\n"));
+	printf(_("  --drop-cascade               use CASCADE when dropping objects\n"));
 	printf(_("  --enable-row-security        enable row security (dump only content user has\n"
 			 "                               access to)\n"));
 	printf(_("  --exclude-table-data=PATTERN do NOT dump data for the specified table(s)\n"));

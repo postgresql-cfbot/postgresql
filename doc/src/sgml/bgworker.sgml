@@ -1,6 +1,6 @@
 <!-- doc/src/sgml/bgworker.sgml -->
 
-<chapter id="bgworker">
+<chapter id="bgworker" xreflabel="Background Worker Processes">
  <title>Background Worker Processes</title>
 
  <indexterm zone="bgworker">
@@ -28,6 +28,15 @@
    background worker processes.
   </para>
  </warning>
+
+ <para>
+  All code that will be executed in PostgreSQL background workers is expected
+  to follow the basic rules set out for all PostgreSQL extension code in <xref
+  linkend="xfunc-writing-code"/>.
+ </para>
+
+ <sect1>
+  <title>Background Worker initialization and resource allocation</title>
 
  <para>
   Background workers can be initialized at the time that
@@ -94,6 +103,10 @@ typedef struct BackgroundWorker
        data structures, such as heavyweight or lightweight locks, shared
        buffers, or any custom data structures which the worker itself may
        wish to create and use.
+      </para>
+      <para>
+       See <xref linkend="xfunc-shared-addin"/> for information on how to
+       allocate these resources.
       </para>
      </listitem>
     </varlistentry>
@@ -212,9 +225,9 @@ typedef struct BackgroundWorker
    Signals are initially blocked when control reaches the
    background worker's main function, and must be unblocked by it; this is to
    allow the process to customize its signal handlers, if necessary.
-   Signals can be unblocked in the new process by calling
-   <function>BackgroundWorkerUnblockSignals</function> and blocked by calling
-   <function>BackgroundWorkerBlockSignals</function>.
+   It is important that all background workers set up and unblock signal
+   handling before they enter their main loops.  Signal handling in background
+   workers is discussed separately in <xref linkend="bgworker-signals"/>.
   </para>
 
   <para>
@@ -296,13 +309,80 @@ typedef struct BackgroundWorker
   </para>
 
   <para>
-   The <filename>src/test/modules/worker_spi</filename> module
-   contains a working example,
-   which demonstrates some useful techniques.
+   Background workers that require inter-process communication and/or
+   synchronisation should use <productname>PostgreSQL</productname>'s built-in
+   IPC and concurrency features as discussed in
+   <xref linkend="xfunc-concurrency-synchronization"/> and
+   <xref linkend="xfunc-ipc"/>.
+  </para>
+
+  <para>
+   If a background worker needs to sleep or wait for activity, it should
+   always use
+   <link linkend="xfunc-sleeping-interrupts-blocking"><productname>PostgreSQL</productname>'s
+   interupt-aware APIs</link> for the purpose.  Do not use
+   <function>usleep()</function>, <function>system()</function> or other
+   blocking system calls.
+  </para>
+
+  <para>
+   The modules <filename>src/test/modules/worker_spi</filename> and
+   <filename>src/test/modules/test_shm_mq</filename> contain working examples
+   that demonstrates some useful techniques.
   </para>
 
   <para>
    The maximum number of registered background workers is limited by
    <xref linkend="guc-max-worker-processes"/>.
   </para>
+
+ </sect1>
+
+ <sect1 id="bgworker-signals" xreflabel="Signal Handling in Background Workers">
+  <title>Signal Handling in Background Workers</title>
+
+  <para>
+   Signals can be unblocked in the new process by calling
+   <function>BackgroundWorkerUnblockSignals</function> and blocked by calling
+   <function>BackgroundWorkerBlockSignals</function>.
+   The default signal handlers set up for background workers
+   <emphasis>do not interrupt queries or blocking calls into other
+   <productname>PostgreSQL</productname> code</emphasis>
+   so they are only suitable for simple background workers that frequently and
+   predictably return control to their main loop.  If your worker uses the
+   default background worker signal handling, it should call
+   <function>HandleMainLoopInterrupts()</function> on each pass through its
+   main loop.
+  </para>
+
+  <para>
+   Background workers that may make blocking calls into core
+   <productname>PostgreSQL</productname> code and/or run user-supplied queries
+   should generally replace the default background worker signal handlers with the
+   handlers used for normal user backends.  This will ensure that the worker will
+   respond in a timely manner to a termination request, query cancel request,
+   recovery conflict interrupt, deadlock detector request, etc.
+   To set up these handlers, run the following before unblocking interrupts:
+<programlisting>
+    pqsignal(SIGTERM, die);
+    pqsignal(SIGUSR1, procsignal_sigusr1_handler);
+    pqsignal(SIGHUP, SignalHandlerForConfigReload);
+</programlisting>
+   Then ensure that your main loop and any other code that could run for some
+   time contains <function>CHECK_FOR_INTERRUPTS()</function> calls.
+   A background worker using these signal handlers must use <link
+   linkend="xfunc-resource-management"><productname>PostgreSQL</productname>'s
+   resource management APIs and callbacks</link> to handle cleanup rather
+   than relying on control returning to the main loop, because the signal
+   handlers may call <function>proc_exit()</function> directly.
+   This is recommended practice for all types of extension code anyway.
+  </para>
+
+  <para>
+   See the comments in <filename>src/include/miscadmin.h</filename>
+   for more details on signal handling.
+  </para>
+
+ </sect1>
+
 </chapter>

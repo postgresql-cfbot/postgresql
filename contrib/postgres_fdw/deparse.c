@@ -101,6 +101,7 @@ typedef struct deparse_expr_cxt
 								 * a base relation. */
 	StringInfo	buf;			/* output buffer to append to */
 	List	  **params_list;	/* exprs that will become remote Params */
+	int			const_showtype;	/* override showtype in deparseConst */
 } deparse_expr_cxt;
 
 #define REL_ALIAS_PREFIX	"r"
@@ -1146,6 +1147,7 @@ deparseSelectStmtForRel(StringInfo buf, PlannerInfo *root, RelOptInfo *rel,
 	context.foreignrel = rel;
 	context.scanrel = IS_UPPER_REL(rel) ? fpinfo->outerrel : rel;
 	context.params_list = params_list;
+	context.const_showtype = 0;
 
 	/* Construct SELECT clause */
 	deparseSelectSql(tlist, is_subquery, retrieved_attrs, &context);
@@ -1725,6 +1727,7 @@ deparseFromExprForRel(StringInfo buf, PlannerInfo *root, RelOptInfo *foreignrel,
 			context.scanrel = foreignrel;
 			context.root = root;
 			context.params_list = params_list;
+			context.const_showtype = 0;
 
 			appendStringInfoChar(buf, '(');
 			appendConditions(fpinfo->joinclauses, &context);
@@ -2028,6 +2031,7 @@ deparseDirectUpdateSql(StringInfo buf, PlannerInfo *root,
 	context.scanrel = foreignrel;
 	context.buf = buf;
 	context.params_list = params_list;
+	context.const_showtype = 0;
 
 	appendStringInfoString(buf, "UPDATE ");
 	deparseRelation(buf, rel);
@@ -2135,6 +2139,7 @@ deparseDirectDeleteSql(StringInfo buf, PlannerInfo *root,
 	context.scanrel = foreignrel;
 	context.buf = buf;
 	context.params_list = params_list;
+	context.const_showtype = 0;
 
 	appendStringInfoString(buf, "DELETE FROM ");
 	deparseRelation(buf, rel);
@@ -2554,7 +2559,7 @@ deparseExpr(Expr *node, deparse_expr_cxt *context)
 			deparseVar((Var *) node, context);
 			break;
 		case T_Const:
-			deparseConst((Const *) node, context, 0);
+			deparseConst((Const *) node, context, context->const_showtype);
 			break;
 		case T_Param:
 			deparseParam((Param *) node, context);
@@ -2927,6 +2932,9 @@ deparseOpExpr(OpExpr *node, deparse_expr_cxt *context)
 	StringInfo	buf = context->buf;
 	HeapTuple	tuple;
 	Form_pg_operator form;
+	Expr	   *left;
+	Expr	   *right;
+	Oid			rightType;
 	char		oprkind;
 
 	/* Retrieve information about the operator from system catalog. */
@@ -2943,11 +2951,21 @@ deparseOpExpr(OpExpr *node, deparse_expr_cxt *context)
 	/* Always parenthesize the expression. */
 	appendStringInfoChar(buf, '(');
 
+	right = llast(node->args);
+
 	/* Deparse left operand, if any. */
 	if (oprkind == 'b')
 	{
-		deparseExpr(linitial(node->args), context);
+		left = linitial(node->args);
+
+		deparseExpr(left, context);
 		appendStringInfoChar(buf, ' ');
+		rightType = exprType((Node *) right);
+
+		if (rightType == TEXTOID && rightType == exprType((Node *)left)) {
+			/* Suppress const casting for text values against text columns. */
+			context->const_showtype = -1;
+		}
 	}
 
 	/* Deparse operator name. */
@@ -2955,11 +2973,14 @@ deparseOpExpr(OpExpr *node, deparse_expr_cxt *context)
 
 	/* Deparse right operand. */
 	appendStringInfoChar(buf, ' ');
-	deparseExpr(llast(node->args), context);
+	deparseExpr(right, context);
 
 	appendStringInfoChar(buf, ')');
 
 	ReleaseSysCache(tuple);
+
+	/* Release cast suppression in case it was set. */
+	context->const_showtype = 0;
 }
 
 /*

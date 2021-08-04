@@ -6342,6 +6342,27 @@ SELECT pg_stat_get_backend_pid(s.backendid) AS pid,
        is <literal>rebuilding index</literal>.
       </para></entry>
      </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>total_partitions</structfield> <type>bigint</type>
+      </para>
+       When clustering a partitioned table, this column is set to the total
+       number of partitions to be clustered.
+      <para>
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>done_partitions</structfield> <type>bigint</type>
+      </para>
+      <para>
+       When clustering a partitioned table, this column is set to the number
+       of partitions which have been clustered.
+      </para></entry>
+     </row>
+
     </tbody>
    </tgroup>
   </table>

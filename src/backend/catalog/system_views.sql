@@ -1147,7 +1147,9 @@ CREATE VIEW pg_stat_progress_cluster AS
         S.param5 AS heap_tuples_written,
         S.param6 AS heap_blks_total,
         S.param7 AS heap_blks_scanned,
-        S.param8 AS index_rebuild_count
+        S.param8 AS index_rebuild_count,
+        S.param18 AS partitions_total,
+        S.param19 AS partitions_done
     FROM pg_stat_get_progress_info('CLUSTER') AS S
         LEFT JOIN pg_database D ON S.datid = D.oid;
 

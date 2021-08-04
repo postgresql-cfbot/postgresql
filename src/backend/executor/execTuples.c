@@ -167,7 +167,11 @@ tts_virtual_materialize(TupleTableSlot *slot)
 	if (TTS_SHOULDFREE(slot))
 		return;
 
-	/* compute size of memory required */
+	/*
+	 * Compute size of memory required. This size calculation code is also used
+	 * in GetTupleSize(), hence ensure to have the same changes or fixes here
+	 * and also there.
+	 */
 	for (int natt = 0; natt < desc->natts; natt++)
 	{
 		Form_pg_attribute att = TupleDescAttr(desc, natt);
@@ -1269,6 +1273,83 @@ ExecDropSingleTupleTableSlot(TupleTableSlot *slot)
 	pfree(slot);
 }
 
+/*
+ * GetTupleSize - Compute the tuple size given a table slot.
+ *
+ * For heap tuple, buffer tuple and minimal tuple slot types return the actual
+ * tuple size that exists. For virtual tuple, the size is calculated as the
+ * slot does not have the tuple size. If the computed size exceeds the given
+ * maxsize for the virtual tuple, this function exits, not investing time in
+ * further unnecessary calculation.
+ *
+ * Important Notes:
+ * 1) Size calculation code for virtual slots is being used from
+ * 	  tts_virtual_materialize(), hence ensure to have the same changes or fixes
+ * 	  here and also there.
+ * 2) Currently, GetTupleSize() handles the existing heap, buffer, minimal and
+ * 	  virtual slots. Ensure to add related code in case any new slot type is
+ *    introduced.
+ */
+inline Size
+GetTupleSize(TupleTableSlot *slot, Size maxsize)
+{
+	Size sz = 0;
+	HeapTuple tuple = NULL;
+
+	if (TTS_IS_HEAPTUPLE(slot))
+		tuple = ((HeapTupleTableSlot *) slot)->tuple;
+	else if(TTS_IS_BUFFERTUPLE(slot))
+		tuple = ((BufferHeapTupleTableSlot *) slot)->base.tuple;
+	else if(TTS_IS_MINIMALTUPLE(slot))
+		tuple = ((MinimalTupleTableSlot *) slot)->tuple;
+	else if(TTS_IS_VIRTUAL(slot))
+	{
+		/*
+		 * Size calculation code being used here is from
+		 * tts_virtual_materialize(), ensure to have the same changes or fixes
+		 * here and also there.
+		 */
+		TupleDesc	desc = slot->tts_tupleDescriptor;
+
+		for (int natt = 0; natt < desc->natts; natt++)
+		{
+			Form_pg_attribute att = TupleDescAttr(desc, natt);
+			Datum		val;
+
+			if (att->attbyval)
+				sz += att->attlen;
+
+			if (slot->tts_isnull[natt])
+				continue;
+
+			val = slot->tts_values[natt];
+
+			if (att->attlen == -1 &&
+				VARATT_IS_EXTERNAL_EXPANDED(DatumGetPointer(val)))
+			{
+				sz = att_align_nominal(sz, att->attalign);
+				sz += EOH_get_flat_size(DatumGetEOHP(val));
+			}
+			else
+			{
+				sz = att_align_nominal(sz, att->attalign);
+				sz = att_addlength_datum(sz, att->attlen, val);
+			}
+
+			/*
+			 * We are not interested in proceeding further if the computed size
+			 * crosses maxsize limit that we are looking for.
+			 */
+			if (maxsize != 0 && sz >= maxsize)
+				break;
+		}
+	}
+
+	if (tuple != NULL && !TTS_IS_VIRTUAL(slot))
+		sz = tuple->t_len;
+
+	return sz;
+}
 
 /* ----------------------------------------------------------------
  *				  tuple table slot accessor functions

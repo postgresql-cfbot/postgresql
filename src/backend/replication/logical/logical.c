@@ -1602,6 +1602,8 @@ LogicalIncreaseXminForSlot(XLogRecPtr current_lsn, TransactionId xmin)
 	{
 		slot->candidate_catalog_xmin = xmin;
 		slot->candidate_xmin_lsn = current_lsn;
+		elog(DEBUG1, "got new catalog_xmin %u at %X/%X", xmin,
+			 LSN_FORMAT_ARGS(current_lsn));
 	}
 	SpinLockRelease(&slot->mutex);
 

@@ -56,10 +56,10 @@ static List *subbuild_joinrel_joinlist(RelOptInfo *joinrel,
 static void set_foreign_rel_properties(RelOptInfo *joinrel,
 									   RelOptInfo *outer_rel, RelOptInfo *inner_rel);
 static void add_join_rel(PlannerInfo *root, RelOptInfo *joinrel);
-static void build_joinrel_partition_info(RelOptInfo *joinrel,
+static void build_joinrel_partition_info(PlannerInfo *root, RelOptInfo *joinrel,
 										 RelOptInfo *outer_rel, RelOptInfo *inner_rel,
 										 List *restrictlist, JoinType jointype);
-static bool have_partkey_equi_join(RelOptInfo *joinrel,
+static bool have_partkey_equi_join(PlannerInfo *root, RelOptInfo *joinrel,
 								   RelOptInfo *rel1, RelOptInfo *rel2,
 								   JoinType jointype, List *restrictlist);
 static int	match_expr_to_partition_keys(Expr *expr, RelOptInfo *rel,
@@ -720,8 +720,8 @@ build_join_rel(PlannerInfo *root,
 	joinrel->has_eclass_joins = has_relevant_eclass_joinclause(root, joinrel);
 
 	/* Store the partition information. */
-	build_joinrel_partition_info(joinrel, outer_rel, inner_rel, restrictlist,
-								 sjinfo->jointype);
+	build_joinrel_partition_info(root, joinrel, outer_rel, inner_rel,
+								 restrictlist, sjinfo->jointype);
 
 	/*
 	 * Set estimates of the joinrel's size.
@@ -887,8 +887,8 @@ build_child_join_rel(PlannerInfo *root, RelOptInfo *outer_rel,
 	joinrel->has_eclass_joins = parent_joinrel->has_eclass_joins;
 
 	/* Is the join between partitions itself partitioned? */
-	build_joinrel_partition_info(joinrel, outer_rel, inner_rel, restrictlist,
-								 jointype);
+	build_joinrel_partition_info(root, joinrel, outer_rel, inner_rel,
+								 restrictlist, jointype);
 
 	/* Child joinrel is parallel safe if parent is parallel safe. */
 	joinrel->consider_parallel = parent_joinrel->consider_parallel;
@@ -1645,9 +1645,9 @@ find_param_path_info(RelOptInfo *rel, Relids required_outer)
  *		partitioned join relation.
  */
 static void
-build_joinrel_partition_info(RelOptInfo *joinrel, RelOptInfo *outer_rel,
-							 RelOptInfo *inner_rel, List *restrictlist,
-							 JoinType jointype)
+build_joinrel_partition_info(PlannerInfo *root, RelOptInfo *joinrel,
+							 RelOptInfo *outer_rel, RelOptInfo *inner_rel,
+							 List *restrictlist, JoinType jointype)
 {
 	PartitionScheme part_scheme;
 
@@ -1673,7 +1673,7 @@ build_joinrel_partition_info(RelOptInfo *joinrel, RelOptInfo *outer_rel,
 		!outer_rel->consider_partitionwise_join ||
 		!inner_rel->consider_partitionwise_join ||
 		outer_rel->part_scheme != inner_rel->part_scheme ||
-		!have_partkey_equi_join(joinrel, outer_rel, inner_rel,
+		!have_partkey_equi_join(root, joinrel, outer_rel, inner_rel,
 								jointype, restrictlist))
 	{
 		Assert(!IS_PARTITIONED_REL(joinrel));
@@ -1716,15 +1716,14 @@ build_joinrel_partition_info(RelOptInfo *joinrel, RelOptInfo *outer_rel,
  * partition keys.
  */
 static bool
-have_partkey_equi_join(RelOptInfo *joinrel,
+have_partkey_equi_join(PlannerInfo *root, RelOptInfo *joinrel,
 					   RelOptInfo *rel1, RelOptInfo *rel2,
 					   JoinType jointype, List *restrictlist)
 {
 	PartitionScheme part_scheme = rel1->part_scheme;
+	bool		pk_known_equal[PARTITION_MAX_KEYS];
+	int			num_equal_pks;
 	ListCell   *lc;
-	int			cnt_pks;
-	bool		pk_has_clause[PARTITION_MAX_KEYS];
-	bool		strict_op;
 
 	/*
 	 * This function must only be called when the joined relations have same
@@ -1733,13 +1732,19 @@ have_partkey_equi_join(RelOptInfo *joinrel,
 	Assert(rel1->part_scheme == rel2->part_scheme);
 	Assert(part_scheme);
 
-	memset(pk_has_clause, 0, sizeof(pk_has_clause));
+	/* We use a bool array to track which partkey columns are known equal */
+	memset(pk_known_equal, 0, sizeof(pk_known_equal));
+	/* ... as well as a count of how many are known equal */
+	num_equal_pks = 0;
+
+	/* First, look through the join's restriction clauses */
 	foreach(lc, restrictlist)
 	{
 		RestrictInfo *rinfo = lfirst_node(RestrictInfo, lc);
 		OpExpr	   *opexpr;
 		Expr	   *expr1;
 		Expr	   *expr2;
+		bool		strict_op;
 		int			ipk1;
 		int			ipk2;
 
@@ -1799,11 +1804,15 @@ have_partkey_equi_join(RelOptInfo *joinrel,
 		if (ipk1 != ipk2)
 			continue;
 
+		/* Ignore clause if we already proved these keys equal. */
+		if (pk_known_equal[ipk1])
+			continue;
+
 		/*
 		 * The clause allows partitionwise join only if it uses the same
 		 * operator family as that specified by the partition key.
 		 */
-		if (rel1->part_scheme->strategy == PARTITION_STRATEGY_HASH)
+		if (part_scheme->strategy == PARTITION_STRATEGY_HASH)
 		{
 			if (!OidIsValid(rinfo->hashjoinoperator) ||
 				!op_in_opfamily(rinfo->hashjoinoperator,
@@ -1815,17 +1824,89 @@ have_partkey_equi_join(RelOptInfo *joinrel,
 			continue;
 
 		/* Mark the partition key as having an equi-join clause. */
-		pk_has_clause[ipk1] = true;
+		pk_known_equal[ipk1] = true;
+
+		/* We can stop examining clauses once we prove all keys equal. */
+		if (++num_equal_pks == part_scheme->partnatts)
+			return true;
 	}
 
-	/* Check whether every partition key has an equi-join condition. */
-	for (cnt_pks = 0; cnt_pks < part_scheme->partnatts; cnt_pks++)
+	/*
+	 * Also check to see if any keys are known equal by equivclass.c.  In most
+	 * cases there would have been a join restriction clause generated from
+	 * any EC that had such knowledge, but there might be no such clause, or
+	 * it might happen to constrain other members of the ECs than the ones we
+	 * are looking for.
+	 */
+	for (int ipk = 0; ipk < part_scheme->partnatts; ipk++)
 	{
-		if (!pk_has_clause[cnt_pks])
-			return false;
+		Oid			btree_opfamily;
+
+		/* Ignore if we already proved these keys equal. */
+		if (pk_known_equal[ipk])
+			continue;
+
+		/*
+		 * We need a btree opfamily to ask equivclass.c about.  If the
+		 * partopfamily is a hash opfamily, look up its equality operator, and
+		 * select some btree opfamily that that operator is part of.  (Any
+		 * such opfamily should be good enough, since equivclass.c will track
+		 * multiple opfamilies as appropriate.)
+		 */
+		if (part_scheme->strategy == PARTITION_STRATEGY_HASH)
+		{
+			Oid			eq_op;
+			List	   *eq_opfamilies;
+
+			eq_op = get_opfamily_member(part_scheme->partopfamily[ipk],
+										part_scheme->partopcintype[ipk],
+										part_scheme->partopcintype[ipk],
+										HTEqualStrategyNumber);
+			if (!OidIsValid(eq_op))
+				break;			/* we're not going to succeed */
+			eq_opfamilies = get_mergejoin_opfamilies(eq_op);
+			if (eq_opfamilies == NIL)
+				break;			/* we're not going to succeed */
+			btree_opfamily = linitial_oid(eq_opfamilies);
+		}
+		else
+			btree_opfamily = part_scheme->partopfamily[ipk];
+
+		/*
+		 * We consider only non-nullable partition keys here; nullable ones
+		 * would not be treated as part of the same equivalence classes as
+		 * non-nullable ones.
+		 */
+		foreach(lc, rel1->partexprs[ipk])
+		{
+			Node	   *expr1 = (Node *) lfirst(lc);
+			ListCell   *lc2;
+
+			foreach(lc2, rel2->partexprs[ipk])
+			{
+				Node	   *expr2 = (Node *) lfirst(lc2);
+
+				if (exprs_known_equal(root, expr1, expr2, btree_opfamily))
+				{
+					pk_known_equal[ipk] = true;
+					break;
+				}
+			}
+			if (pk_known_equal[ipk])
+				break;
+		}
+
+		if (pk_known_equal[ipk])
+		{
+			/* We can stop examining keys once we prove all keys equal. */
+			if (++num_equal_pks == part_scheme->partnatts)
+				return true;
+		}
+		else
+			break;				/* no chance to succeed, give up */
 	}
 
-	return true;
+	return false;
 }
 
 /*

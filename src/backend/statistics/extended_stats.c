@@ -1347,19 +1347,27 @@ statext_is_compatible_clause_internal(PlannerInfo *root, Node *clause,
 		return true;
 	}
 
-	/* (Var/Expr op Const) or (Const op Var/Expr) */
+	/*
+	 * Three opclause variants are supported: (Expr op Const), (Const op Expr),
+	 * (Expr op Expr). That means we may need to analyze one or two expressions
+	 * to make sure the opclause is compatible with extended stats.
+	 */
 	if (is_opclause(clause))
 	{
 		RangeTblEntry *rte = root->simple_rte_array[relid];
 		OpExpr	   *expr = (OpExpr *) clause;
-		Node	   *clause_expr;
+		ListCell   *lc;
+		List	   *clause_exprs;
 
 		/* Only expressions with two arguments are considered compatible. */
 		if (list_length(expr->args) != 2)
 			return false;
 
-		/* Check if the expression has the right shape */
-		if (!examine_opclause_args(expr->args, &clause_expr, NULL, NULL))
+		/*
+		 * Check if the expression has the right shape. This returns either one
+		 * or two expressions, depending on whether there is a Const.
+		 */
+		if (!examine_opclause_args(expr->args, &clause_exprs, NULL, NULL))
 			return false;
 
 		/*
@@ -1399,13 +1407,31 @@ statext_is_compatible_clause_internal(PlannerInfo *root, Node *clause,
 			!get_func_leakproof(get_opcode(expr->opno)))
 			return false;
 
-		/* Check (Var op Const) or (Const op Var) clauses by recursing. */
-		if (IsA(clause_expr, Var))
-			return statext_is_compatible_clause_internal(root, clause_expr,
-														 relid, attnums, exprs);
+		/*
+		 * There's always at least one expression, otherwise the clause would
+		 * not be considered compatible.
+		 */
+		Assert(list_length(clause_exprs) >= 1);
 
-		/* Otherwise we have (Expr op Const) or (Const op Expr). */
-		*exprs = lappend(*exprs, clause_expr);
+		/*
+		 * Check all expressions by recursing. Var expressions are handled as
+		 * a special case (to match it to attnums etc.)
+		 */
+		foreach (lc, clause_exprs)
+		{
+			Node *clause_expr = (Node *) lfirst(lc);
+
+			if (IsA(clause_expr, Var))
+			{
+				/* if the Var is incompatible, the whole clause is incompatible */
+				if (!statext_is_compatible_clause_internal(root, clause_expr,
+														   relid, attnums, exprs))
+					return false;
+			}
+			else	/* generic expression */
+				*exprs = lappend(*exprs, clause_expr);
+		}
+
 		return true;
 	}
 
@@ -1415,14 +1441,20 @@ statext_is_compatible_clause_internal(PlannerInfo *root, Node *clause,
 		RangeTblEntry *rte = root->simple_rte_array[relid];
 		ScalarArrayOpExpr *expr = (ScalarArrayOpExpr *) clause;
 		Node	   *clause_expr;
+		List	   *clause_exprs;
 
 		/* Only expressions with two arguments are considered compatible. */
 		if (list_length(expr->args) != 2)
 			return false;
 
 		/* Check if the expression has the right shape (one Var, one Const) */
-		if (!examine_opclause_args(expr->args, &clause_expr, NULL, NULL))
+		if (!examine_opclause_args(expr->args, &clause_exprs, NULL, NULL))
 			return false;
+
+		/* There has to be one expression exactly. */
+		Assert(list_length(clause_exprs) == 1);
+
+		clause_expr = (Node *) linitial(clause_exprs);
 
 		/*
 		 * If it's not one of the supported operators ("=", "<", ">", etc.),
@@ -2009,20 +2041,19 @@ statext_clauselist_selectivity(PlannerInfo *root, List *clauses, int varRelid,
  * examine_opclause_args
  *		Split an operator expression's arguments into Expr and Const parts.
  *
- * Attempts to match the arguments to either (Expr op Const) or (Const op
- * Expr), possibly with a RelabelType on top. When the expression matches this
- * form, returns true, otherwise returns false.
+ * Attempts to match the arguments to either (Expr op Const) or (Const op Expr)
+ * or (Expr op Expr), possibly with a RelabelType on top. When the expression
+ * matches this form, returns true, otherwise returns false.
  *
  * Optionally returns pointers to the extracted Expr/Const nodes, when passed
- * non-null pointers (exprp, cstp and expronleftp). The expronleftp flag
+ * non-null pointers (exprsp, cstp and expronleftp). The expronleftp flag
  * specifies on which side of the operator we found the expression node.
  */
 bool
-examine_opclause_args(List *args, Node **exprp, Const **cstp,
-					  bool *expronleftp)
+examine_opclause_args(List *args, List **exprsp, Const **cstp, bool *expronleftp)
 {
-	Node	   *expr;
-	Const	   *cst;
+	List	   *exprs = NIL;
+	Const	   *cst = NULL;
 	bool		expronleft;
 	Node	   *leftop,
 			   *rightop;
@@ -2042,22 +2073,26 @@ examine_opclause_args(List *args, Node **exprp, Const **cstp,
 
 	if (IsA(rightop, Const))
 	{
-		expr = (Node *) leftop;
+		exprs = lappend(exprs, leftop);
 		cst = (Const *) rightop;
 		expronleft = true;
 	}
 	else if (IsA(leftop, Const))
 	{
-		expr = (Node *) rightop;
+		exprs = lappend(exprs, rightop);
 		cst = (Const *) leftop;
 		expronleft = false;
 	}
 	else
-		return false;
+	{
+		exprs = lappend(exprs, leftop);
+		exprs = lappend(exprs, rightop);
+		expronleft = false;
+	}
 
 	/* return pointers to the extracted parts if requested */
-	if (exprp)
-		*exprp = expr;
+	if (exprsp)
+		*exprsp = exprs;
 
 	if (cstp)
 		*cstp = cst;

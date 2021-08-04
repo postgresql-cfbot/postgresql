@@ -316,6 +316,31 @@ sub install_path
 
 =pod
 
+=item $node->config_data($option)
+
+Grab some data from pg_config, with $option being the switched
+used.
+
+=cut
+
+sub config_data
+{
+	my ($self, $option) = @_;
+	local %ENV = $self->_get_env();
+
+	my ($stdout, $stderr);
+	my $result =
+	  IPC::Run::run [ $self->installed_command('pg_config'), $option ],
+	  '>', \$stdout, '2>', \$stderr
+	  or die "could not execute pg_config";
+	chomp($stdout);
+	$stdout =~ s/\r$//;
+
+	return $stdout;
+}
+
+=pod
+
 =item $node->info()
 
 Return a string containing human-readable diagnostic information (paths, etc)

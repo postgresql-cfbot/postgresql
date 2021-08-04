@@ -57,6 +57,7 @@ static List *reparameterize_pathlist_by_child(PlannerInfo *root,
 											  List *pathlist,
 											  RelOptInfo *child_rel);
 
+path_removal_decision_hook_type path_removal_decision_hook = NULL;
 
 /*****************************************************************************
  *		MISC. PATH UTILITIES
@@ -586,12 +587,27 @@ add_path(RelOptInfo *parent_rel, Path *new_path)
 		{
 			parent_rel->pathlist = foreach_delete_current(parent_rel->pathlist,
 														  p1);
-
-			/*
-			 * Delete the data pointed-to by the deleted cell, if possible
-			 */
-			if (!IsA(old_path, IndexPath))
-				pfree(old_path);
+			if (path_removal_decision_hook &&
+				path_removal_decision_hook(parent_rel,
+										   new_path,
+										   old_path,
+										   false))
+			{
+				/*
+				 * Old path is moved to the preserved_pathlist for future
+				 * usage, not remove right now.
+				 */
+				parent_rel->preserved_pathlist =
+					lappend(parent_rel->preserved_pathlist, old_path);
+			}
+			else
+			{
+				/*
+				 * Delete the data pointed-to by the deleted cell, if possible
+				 */
+				if (!IsA(old_path, IndexPath))
+					pfree(old_path);
+			}
 		}
 		else
 		{
@@ -614,6 +630,19 @@ add_path(RelOptInfo *parent_rel, Path *new_path)
 		/* Accept the new path: insert it at proper place in pathlist */
 		parent_rel->pathlist =
 			list_insert_nth(parent_rel->pathlist, insert_at, new_path);
+	}
+	else if (path_removal_decision_hook &&
+			 path_removal_decision_hook(parent_rel,
+										new_path,
+										NULL,
+										false))
+	{
+		/*
+		 * New but rejected path is moved to the preserved_pathlist for
+		 * future usage, not remove right now.
+		 */
+		parent_rel->preserved_pathlist =
+			lappend(parent_rel->preserved_pathlist, new_path);
 	}
 	else
 	{
@@ -822,7 +851,20 @@ add_partial_path(RelOptInfo *parent_rel, Path *new_path)
 		{
 			parent_rel->partial_pathlist =
 				foreach_delete_current(parent_rel->partial_pathlist, p1);
-			pfree(old_path);
+			if (path_removal_decision_hook &&
+				path_removal_decision_hook(parent_rel,
+										   new_path,
+										   old_path,
+										   true))
+			{
+				/* Old path is preserved for future usage */
+				parent_rel->preserved_partial_pathlist =
+					lappend(parent_rel->preserved_partial_pathlist, old_path);
+			}
+			else
+			{
+				pfree(old_path);
+			}
 		}
 		else
 		{
@@ -845,6 +887,15 @@ add_partial_path(RelOptInfo *parent_rel, Path *new_path)
 		/* Accept the new path: insert it at proper place */
 		parent_rel->partial_pathlist =
 			list_insert_nth(parent_rel->partial_pathlist, insert_at, new_path);
+	}
+	else if (path_removal_decision_hook &&
+			 path_removal_decision_hook(parent_rel,
+										new_path,
+										NULL,
+										true))
+	{
+		parent_rel->preserved_partial_pathlist =
+			lappend(parent_rel->preserved_partial_pathlist, new_path);
 	}
 	else
 	{

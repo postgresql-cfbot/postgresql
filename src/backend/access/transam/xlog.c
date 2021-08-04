@@ -5390,6 +5390,11 @@ BootStrapXLOG(void)
 	ControlFile->checkPoint = checkPoint.redo;
 	ControlFile->checkPointCopy = checkPoint;
 
+	/* initialize last recovery as the initial checkpoint */
+	ControlFile->lastRecoveryLSN = checkPoint.redo;
+	ControlFile->lastRecoveryTime = checkPoint.time;
+	ControlFile->recoveryCount = 0;
+
 	/* some additional ControlFile fields are set in WriteControlFile() */
 	WriteControlFile();
 
@@ -9221,6 +9226,14 @@ CreateCheckPoint(int flags)
 	/* crash recovery should always recover to the end of WAL */
 	ControlFile->minRecoveryPoint = InvalidXLogRecPtr;
 	ControlFile->minRecoveryPointTLI = 0;
+
+	/* update recovery information */
+	if (flags & CHECKPOINT_END_OF_RECOVERY)
+	{
+		ControlFile->lastRecoveryLSN = checkPoint.redo;
+		ControlFile->lastRecoveryTime = checkPoint.time;
+		ControlFile->recoveryCount++;
+	}
 
 	/*
 	 * Persist unloggedLSN value. It's reset on crash recovery, so this goes

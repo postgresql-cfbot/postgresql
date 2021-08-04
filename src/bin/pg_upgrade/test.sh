@@ -23,7 +23,13 @@ standard_initdb() {
 	# To increase coverage of non-standard segment size and group access
 	# without increasing test runtime, run these tests with a custom setting.
 	# Also, specify "-A trust" explicitly to suppress initdb's warning.
-	"$1" -N --wal-segsize 1 -g -A trust
+	if [ -z "$oldsrc" ]
+	then
+		"$1" -N -A trust --wal-segsize 1 -g
+	else
+		"$1" -N -A trust
+	fi
+
 	if [ -n "$TEMP_CONFIG" -a -r "$TEMP_CONFIG" ]
 	then
 		cat "$TEMP_CONFIG" >> "$PGDATA/postgresql.conf"
@@ -106,6 +112,10 @@ outputdir="$temp_root/regress"
 EXTRA_REGRESS_OPTS="$EXTRA_REGRESS_OPTS --outputdir=$outputdir"
 export EXTRA_REGRESS_OPTS
 mkdir "$outputdir"
+mkdir "$outputdir"/testtablespace
+
+mkdir "$outputdir"/sql
+mkdir "$outputdir"/expected
 
 logdir=`pwd`/log
 rm -rf "$logdir"
@@ -168,26 +178,11 @@ if "$MAKE" -C "$oldsrc" installcheck-parallel; then
 
 	# before dumping, get rid of objects not feasible in later versions
 	if [ "$newsrc" != "$oldsrc" ]; then
-		fix_sql=""
-		case $oldpgversion in
-			804??)
-				fix_sql="DROP FUNCTION public.myfunc(integer);"
-				;;
-		esac
-		fix_sql="$fix_sql
-				 DROP FUNCTION IF EXISTS
-					public.oldstyle_length(integer, text);	-- last in 9.6
-				 DROP FUNCTION IF EXISTS
-					public.putenv(text);	-- last in v13
-				 DROP OPERATOR IF EXISTS	-- last in v13
-					public.#@# (pg_catalog.int8, NONE),
-					public.#%# (pg_catalog.int8, NONE),
-					public.!=- (pg_catalog.int8, NONE),
-					public.#@%# (pg_catalog.int8, NONE);"
-		psql -X -d regression -c "$fix_sql;" || psql_fix_sql_status=$?
+		psql -X -d regression -f "test-upgrade.sql" || psql_fix_sql_status=$?
 	fi
 
-	pg_dumpall --no-sync -f "$temp_root"/dump1.sql || pg_dumpall1_status=$?
+	echo "fix_sql: $oldpgversion: $fix_sql" >&2
+	pg_dumpall --extra-float-digits=0 --no-sync -f "$temp_root"/dump1.sql || pg_dumpall1_status=$?
 
 	if [ "$newsrc" != "$oldsrc" ]; then
 		# update references to old source tree's regress.so etc
@@ -232,24 +227,29 @@ pg_upgrade $PG_UPGRADE_OPTS -d "${PGDATA}.old" -D "$PGDATA" -b "$oldbindir" -p "
 # make sure all directories and files have group permissions, on Unix hosts
 # Windows hosts don't support Unix-y permissions.
 case $testhost in
-	MINGW*|CYGWIN*) ;;
-	*)	if [ `find "$PGDATA" -type f ! -perm 640 | wc -l` -ne 0 ]; then
-			echo "files in PGDATA with permission != 640";
+	*)
+		x=`find "$PGDATA" -type f ! -perm 600 ! -perm 640 -ls`
+		if [ -n "$x" ]; then
+			echo "files in PGDATA with permission NOT IN (600, 640)";
+			echo "$x" |head
 			exit 1;
 		fi ;;
 esac
 
 case $testhost in
 	MINGW*|CYGWIN*) ;;
-	*)	if [ `find "$PGDATA" -type d ! -perm 750 | wc -l` -ne 0 ]; then
-			echo "directories in PGDATA with permission != 750";
+	*)
+		x=`find "$PGDATA" -type d ! -perm 700 ! -perm 750 -ls`
+		if [ "$x" ]; then
+			echo "directories in PGDATA with permission NOT IN (700, 750)";
+			echo "$x" |head
 			exit 1;
 		fi ;;
 esac
 
 pg_ctl start -l "$logdir/postmaster2.log" -o "$POSTMASTER_OPTS" -w
 
-pg_dumpall --no-sync -f "$temp_root"/dump2.sql || pg_dumpall2_status=$?
+pg_dumpall --extra-float-digits=0 --no-sync -f "$temp_root"/dump2.sql || pg_dumpall2_status=$?
 pg_ctl -m fast stop
 
 if [ -n "$pg_dumpall2_status" ]; then

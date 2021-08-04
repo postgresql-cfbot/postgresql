@@ -222,6 +222,7 @@ typedef struct ModifyTable
 	Index		nominalRelation;	/* Parent RT index for use of EXPLAIN */
 	Index		rootRelation;	/* Root RT index, if target is partitioned */
 	bool		partColsUpdated;	/* some part key in hierarchy updated? */
+	bool		forceCascade;	/* do we need to force cascade on DELETE FKs? */
 	List	   *resultRelations;	/* integer list of RT indexes */
 	List	   *updateColnosLists;	/* per-target-table update_colnos lists */
 	List	   *withCheckOptionLists;	/* per-target-table WCO lists */

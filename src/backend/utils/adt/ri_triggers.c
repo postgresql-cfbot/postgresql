@@ -90,6 +90,7 @@
 #define RI_TRIGTYPE_UPDATE 2
 #define RI_TRIGTYPE_DELETE 3
 
+bool force_cascade_del = false;
 
 /*
  * RI_ConstraintInfo
@@ -180,6 +181,7 @@ static bool ri_Check_Pk_Match(Relation pk_rel, Relation fk_rel,
 							  TupleTableSlot *oldslot,
 							  const RI_ConstraintInfo *riinfo);
 static Datum ri_restrict(TriggerData *trigdata, bool is_no_action);
+static Datum ri_cascade_del(TriggerData *trigdata);
 static Datum ri_set(TriggerData *trigdata, bool is_set_null);
 static void quoteOneName(char *buffer, const char *name);
 static void quoteRelationName(char *buffer, Relation rel);
@@ -550,6 +552,11 @@ RI_FKey_noaction_del(PG_FUNCTION_ARGS)
 	/* Check that this is a valid trigger call on the right time and event. */
 	ri_CheckTrigger(fcinfo, "RI_FKey_noaction_del", RI_TRIGTYPE_DELETE);
 
+	/* If we are overriding the main action to handle as a CASCADE instead,
+	 * handle the main ri_cascade_del guts */
+	if (force_cascade_del)
+		return ri_cascade_del((TriggerData *) fcinfo->context);
+
 	/* Share code with RESTRICT/UPDATE cases. */
 	return ri_restrict((TriggerData *) fcinfo->context, true);
 }
@@ -569,6 +576,11 @@ RI_FKey_restrict_del(PG_FUNCTION_ARGS)
 {
 	/* Check that this is a valid trigger call on the right time and event. */
 	ri_CheckTrigger(fcinfo, "RI_FKey_restrict_del", RI_TRIGTYPE_DELETE);
+
+	/* If we are overriding the main action to handle as a CASCADE instead,
+	 * handle the main ri_cascade_del guts */
+	if (force_cascade_del)
+		return ri_cascade_del((TriggerData *) fcinfo->context);
 
 	/* Share code with NO ACTION/UPDATE cases. */
 	return ri_restrict((TriggerData *) fcinfo->context, false);
@@ -739,7 +751,20 @@ ri_restrict(TriggerData *trigdata, bool is_no_action)
 Datum
 RI_FKey_cascade_del(PG_FUNCTION_ARGS)
 {
-	TriggerData *trigdata = (TriggerData *) fcinfo->context;
+	/* Check that this is a valid trigger call on the right time and event. */
+	ri_CheckTrigger(fcinfo, "RI_FKey_cascade_del", RI_TRIGTYPE_DELETE);
+
+	return ri_cascade_del((TriggerData *) fcinfo->context);
+}
+
+/*
+ * ri_cascade_del -
+ *
+ * Shared guts for cascaded deletes; pulled out to allow override of other constraint types
+ */
+Datum
+ri_cascade_del(TriggerData *trigdata)
+{
 	const RI_ConstraintInfo *riinfo;
 	Relation	fk_rel;
 	Relation	pk_rel;
@@ -747,8 +772,6 @@ RI_FKey_cascade_del(PG_FUNCTION_ARGS)
 	RI_QueryKey qkey;
 	SPIPlanPtr	qplan;
 
-	/* Check that this is a valid trigger call on the right time and event. */
-	ri_CheckTrigger(fcinfo, "RI_FKey_cascade_del", RI_TRIGTYPE_DELETE);
 
 	riinfo = ri_FetchConstraintInfo(trigdata->tg_trigger,
 									trigdata->tg_relation, true);

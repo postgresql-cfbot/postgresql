@@ -142,6 +142,8 @@ typedef struct Query
 
 	bool		isReturn;		/* is a RETURN statement */
 
+	bool		forceCascade;	/* should force a restriction as a cascade */
+
 	List	   *cteList;		/* WITH list (of CommonTableExpr's) */
 
 	List	   *rtable;			/* list of range table entries */
@@ -1598,6 +1600,7 @@ typedef struct DeleteStmt
 	Node	   *whereClause;	/* qualifications */
 	List	   *returningList;	/* list of expressions to return */
 	WithClause *withClause;		/* WITH clause */
+	bool	   forceCascade;	/* whether to force this delete as a cascade */
 } DeleteStmt;
 
 /* ----------------------

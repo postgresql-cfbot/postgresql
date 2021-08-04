@@ -1063,6 +1063,18 @@ CREATE TABLE order_items (
    </para>
 
    <para>
+    Note: If using <command>DELETE</command> with the <literal>CASCADE</literal>
+    option, <literal>RESTRICT</literal> and <literal>NO ACTION</literal>
+    constraints will be treated as if they were defined
+    as <literal>CASCADE</literal> constraints for the duration of the query.
+    This can be useful for ad-hoc cleanup of data with complicated relational
+    hierarchies, where you do not want to manually hunt down dependent records
+    yourself.  Consideration should be given to whether using this form makes
+    sense, or whether you would be better suited in redesigning your
+    constraint definitions to be <literal>ON DELETE CASCADE</literal> instead.
+   </para>
+
+   <para>
     Analogous to <literal>ON DELETE</literal> there is also
     <literal>ON UPDATE</literal> which is invoked when a referenced
     column is changed (updated).  The possible actions are the same.

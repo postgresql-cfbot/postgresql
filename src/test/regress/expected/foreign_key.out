@@ -339,6 +339,30 @@ SELECT * FROM PKTABLE;
       0 | Test4
 (4 rows)
 
+-- Delete without cascade (should fail)
+DELETE FROM PKTABLE WHERE ptest1=1;
+ERROR:  update or delete on table "pktable" violates foreign key constraint "fktable_ftest1_fkey" on table "fktable"
+DETAIL:  Key (ptest1)=(1) is still referenced from table "fktable".
+-- Delete with cascade (should succeed)
+DELETE CASCADE FROM PKTABLE WHERE ptest1=1;
+-- Check PKTABLE for updates
+SELECT * FROM PKTABLE;
+ ptest1 | ptest2 
+--------+--------
+      2 | Test2
+      3 | Test3
+      0 | Test4
+(3 rows)
+
+-- Check FKTABLE for updates
+SELECT * FROM FKTABLE;
+ ftest1 | ftest2 
+--------+--------
+      2 |      3
+      3 |      4
+        |      1
+(3 rows)
+
 DROP TABLE FKTABLE;
 DROP TABLE PKTABLE;
 --

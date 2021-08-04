@@ -1042,6 +1042,7 @@ _equalDeleteStmt(const DeleteStmt *a, const DeleteStmt *b)
 	COMPARE_NODE_FIELD(whereClause);
 	COMPARE_NODE_FIELD(returningList);
 	COMPARE_NODE_FIELD(withClause);
+	COMPARE_SCALAR_FIELD(forceCascade);
 
 	return true;
 }

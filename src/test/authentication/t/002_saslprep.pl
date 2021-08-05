@@ -17,7 +17,7 @@ if (!$use_unix_sockets)
 }
 else
 {
-	plan tests => 12;
+	plan tests => 20;
 }
 
 # Delete pg_hba.conf from the given node, add a new entry to it

@@ -26,15 +26,34 @@
 # explicitly because an invalid sslcert or sslrootcert, respectively,
 # causes those to be ignored.)
 
-package SSLServer;
+package SSL::Server;
 
 use strict;
 use warnings;
 use PostgresNode;
+use RecursiveCopy;
 use TestLib;
 use File::Basename;
 use File::Copy;
 use Test::More;
+use SSL::Backend::OpenSSL qw(get_new_openssl_backend);
+use SSL::Backend::NSS qw(get_new_nss_backend);
+
+our ($openssl, $nss, $backend);
+
+# The TLS backend which the server is using should be mostly transparent for
+# the user, apart from individual configuration settings, so keep the backend
+# specific things abstracted behind SSL::Server.
+if ($ENV{with_ssl} eq 'openssl')
+{
+	$backend = get_new_openssl_backend();
+	$openssl = 1;
+}
+elsif ($ENV{with_ssl} eq 'nss')
+{
+	$backend = get_new_nss_backend();
+	$nss     = 1;
+}
 
 use Exporter 'import';
 our @EXPORT = qw(
@@ -112,14 +131,21 @@ sub configure_test_server_for_ssl
 	close $sslconf;
 
 	# Copy all server certificates and keys, and client root cert, to the data dir
-	copy_files("ssl/server-*.crt", $pgdata);
-	copy_files("ssl/server-*.key", $pgdata);
-	chmod(0600, glob "$pgdata/server-*.key") or die $!;
-	copy_files("ssl/root+client_ca.crt", $pgdata);
-	copy_files("ssl/root_ca.crt",        $pgdata);
-	copy_files("ssl/root+client.crl",    $pgdata);
-	mkdir("$pgdata/root+client-crldir");
-	copy_files("ssl/root+client-crldir/*", "$pgdata/root+client-crldir/");
+	if (defined($openssl))
+	{
+		copy_files("ssl/server-*.crt", $pgdata);
+		copy_files("ssl/server-*.key", $pgdata);
+		chmod(0600, glob "$pgdata/server-*.key") or die $!;
+		copy_files("ssl/root+client_ca.crt", $pgdata);
+		copy_files("ssl/root_ca.crt",        $pgdata);
+		copy_files("ssl/root+client.crl",    $pgdata);
+		mkdir("$pgdata/root+client-crldir");
+		copy_files("ssl/root+client-crldir/*", "$pgdata/root+client-crldir/");
+	}
+	elsif (defined($nss))
+	{
+		RecursiveCopy::copypath("ssl/nss", $pgdata . "/nss") if -e "ssl/nss";
+	}
 
 	# Stop and restart server to load new listen_addresses.
 	$node->restart;
@@ -127,35 +153,40 @@ sub configure_test_server_for_ssl
 	# Change pg_hba after restart because hostssl requires ssl=on
 	configure_hba_for_ssl($node, $servercidr, $authmethod);
 
+	# Finally, perform backend specific configuration
+	$backend->init();
+
 	return;
 }
 
-# Change the configuration to use given server cert file, and reload
-# the server so that the configuration takes effect.
+sub ssl_library
+{
+	return $backend->get_library();
+}
+
+sub cleanup
+{
+	$backend->cleanup();
+}
+
+# Change the configuration to use the given set of certificate, key, ca and
+# CRL, and potentially reload the configuration by restarting the server so
+# that the configuration takes effect.  Restarting is the default, passing
+# restart => 'no' opts out of it leaving the server running.
 sub switch_server_cert
 {
-	my $node     = $_[0];
-	my $certfile = $_[1];
-	my $cafile   = $_[2] || "root+client_ca";
-	my $crlfile  = "root+client.crl";
-	my $crldir;
+	my $node   = shift;
+	my %params = @_;
 	my $pgdata = $node->data_dir;
-
-	# defaults to use crl file
-	if (defined $_[3] || defined $_[4])
-	{
-		$crlfile = $_[3];
-		$crldir  = $_[4];
-	}
 
 	open my $sslconf, '>', "$pgdata/sslconfig.conf";
 	print $sslconf "ssl=on\n";
-	print $sslconf "ssl_ca_file='$cafile.crt'\n";
-	print $sslconf "ssl_cert_file='$certfile.crt'\n";
-	print $sslconf "ssl_key_file='$certfile.key'\n";
-	print $sslconf "ssl_crl_file='$crlfile'\n" if defined $crlfile;
-	print $sslconf "ssl_crl_dir='$crldir'\n"   if defined $crldir;
+	print $sslconf $backend->set_server_cert(\%params);
+	print $sslconf "ssl_passphrase_command='" . $params{passphrase_cmd} . "'\n"
+	  if defined $params{passphrase_cmd};
 	close $sslconf;
+
+	return if (defined($params{restart}) && $params{restart} eq 'no');
 
 	$node->restart;
 	return;

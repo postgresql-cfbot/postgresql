@@ -561,7 +561,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 %type <node>	TableConstraint TableLikeClause
 %type <ival>	TableLikeOptionList TableLikeOption
-%type <str>		column_compression opt_column_compression
+%type <list>	opt_column_compression_options
+%type <node>	column_compression opt_column_compression
 %type <list>	ColQualList
 %type <node>	ColConstraint ColConstraintElem ConstraintAttr
 %type <ival>	key_actions key_delete key_match key_update key_action
@@ -2308,7 +2309,7 @@ alter_table_cmd:
 					AlterTableCmd *n = makeNode(AlterTableCmd);
 					n->subtype = AT_SetCompression;
 					n->name = $3;
-					n->def = (Node *) makeString($5);
+					n->def = $5;
 					$$ = (Node *)n;
 				}
 			/* ALTER TABLE <name> ALTER [COLUMN] <colname> ADD GENERATED ... AS IDENTITY ... */
@@ -3475,7 +3476,7 @@ columnDef:	ColId Typename opt_column_compression create_generic_options ColQualL
 					ColumnDef *n = makeNode(ColumnDef);
 					n->colname = $1;
 					n->typeName = $2;
-					n->compression = $3;
+					n->compression = (ColumnCompression *) $3;
 					n->inhcount = 0;
 					n->is_local = true;
 					n->is_not_null = false;
@@ -3530,9 +3531,26 @@ columnOptions:	ColId ColQualList
 				}
 		;
 
+opt_column_compression_options:
+			WITH '(' generic_option_list ')' { $$ = $3; }
+			| /*EMPTY*/	{ $$ = NULL; }
+		;
+
 column_compression:
-			COMPRESSION ColId						{ $$ = $2; }
-			| COMPRESSION DEFAULT					{ $$ = pstrdup("default"); }
+			COMPRESSION ColId opt_column_compression_options
+			{
+				ColumnCompression *n = makeNode(ColumnCompression);
+				n->cmname = $2;
+				n->options = (List *) $3;
+				$$ = (Node *) n;
+			}
+			| COMPRESSION DEFAULT
+			{
+				ColumnCompression *n = makeNode(ColumnCompression);
+				n->cmname = pstrdup("default");
+				n->options = NULL;
+				$$ = (Node *) n;
+			}
 		;
 
 opt_column_compression:

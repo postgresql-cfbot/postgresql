@@ -138,6 +138,21 @@ CREATE UNIQUE INDEX idx1 ON cmdata2 ((f1 || f2));
 INSERT INTO cmdata2 VALUES((SELECT array_agg(md5(g::TEXT))::TEXT FROM
 generate_series(1, 50) g), VERSION());
 
+-- compression options
+CREATE TABLE cmdata3(f1 TEXT COMPRESSION pglz WITH (min_input_size '100'));
+CREATE INDEX idx2 ON cmdata3(f1);
+INSERT INTO cmdata3 VALUES(repeat('1234567890',1000));
+SELECT attcmoptions FROM pg_attribute WHERE attrelid = 'cmdata3'::regclass AND attname='f1';
+SELECT attcmoptions FROM pg_attribute WHERE attrelid = 'idx2'::regclass AND attname='f1';
+
+ALTER TABLE cmdata3 ALTER COLUMN f1 SET COMPRESSION lz4 WITH (acceleration '50');
+INSERT INTO cmdata3 VALUES(repeat('1234567890',1004));
+SELECT attcmoptions FROM pg_attribute WHERE attrelid = 'cmdata3'::regclass AND attname='f1';
+SELECT attcmoptions FROM pg_attribute WHERE attrelid = 'idx2'::regclass AND attname='f1';
+
+--error
+ALTER TABLE cmdata3 ALTER COLUMN f1 SET COMPRESSION pglz WITH (invalid_option '50');
+
 -- check data is ok
 SELECT length(f1) FROM cmdata;
 SELECT length(f1) FROM cmdata1;

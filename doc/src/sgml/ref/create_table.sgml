@@ -289,7 +289,7 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
    </varlistentry>
 
    <varlistentry>
-    <term><literal>COMPRESSION <replaceable class="parameter">compression_method</replaceable></literal></term>
+    <term><literal>COMPRESSION <replaceable class="parameter">compression_method</replaceable> [ WITH (<replaceable class="parameter">compression_options</replaceable>) ]</literal></term>
     <listitem>
      <para>
       The <literal>COMPRESSION</literal> clause sets the compression method
@@ -308,7 +308,8 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       can be <literal>default</literal> to explicitly specify the default
       behavior, which is to consult the
       <xref linkend="guc-default-toast-compression"/> setting at the time of
-      data insertion to determine the method to use.
+      data insertion to determine the method to use.  The compression options
+      can be specified using <literal>WITH</literal>
      </para>
     </listitem>
    </varlistentry>

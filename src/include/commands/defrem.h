@@ -134,7 +134,12 @@ extern Datum transformGenericOptions(Oid catalogId,
 									 Datum oldOptions,
 									 List *options,
 									 Oid fdwvalidator);
-
+extern Datum optionListToArray(List *options);
+extern char *formatRelOptions(List *options);
+extern ColumnCompression *MakeColumnCompression(Form_pg_attribute att);
+extern List *GetAttributeCompressionOptions(Form_pg_attribute att);
+extern void CheckCompressionMismatch(ColumnCompression *c1, ColumnCompression *c2,
+									 const char *attributeName);
 /* commands/amcmds.c */
 extern ObjectAddress CreateAccessMethod(CreateAmStmt *stmt);
 extern Oid	get_index_am_oid(const char *amname, bool missing_ok);

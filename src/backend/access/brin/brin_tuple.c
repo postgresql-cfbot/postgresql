@@ -38,6 +38,7 @@
 #include "access/toast_internals.h"
 #include "access/tupdesc.h"
 #include "access/tupmacs.h"
+#include "commands/defrem.h"
 #include "utils/datum.h"
 #include "utils/memutils.h"
 
@@ -223,6 +224,7 @@ brin_form_tuple(BrinDesc *brdesc, BlockNumber blkno, BrinMemTuple *tuple,
 			{
 				Datum		cvalue;
 				char		compression;
+				List	   *acoption = NULL;
 				Form_pg_attribute att = TupleDescAttr(brdesc->bd_tupdesc,
 													  keyno);
 
@@ -233,11 +235,14 @@ brin_form_tuple(BrinDesc *brdesc, BlockNumber blkno, BrinMemTuple *tuple,
 				 * default method.
 				 */
 				if (att->atttypid == atttype->type_id)
+				{
 					compression = att->attcompression;
+					acoption = GetAttributeCompressionOptions(att);
+				}
 				else
 					compression = InvalidCompressionMethod;
 
-				cvalue = toast_compress_datum(value, compression);
+				cvalue = toast_compress_datum(value, compression, acoption);
 
 				if (DatumGetPointer(cvalue) != NULL)
 				{

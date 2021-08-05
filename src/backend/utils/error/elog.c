@@ -172,7 +172,6 @@ static char formatted_log_time[FORMATTED_TS_LEN];
 
 
 static const char *err_gettext(const char *str) pg_attribute_format_arg(1);
-static pg_noinline void set_backtrace(ErrorData *edata, int num_skip);
 static void set_errdata_field(MemoryContextData *cxt, char **ptr, const char *str);
 static void write_console(const char *line, int len);
 static void setup_formatted_log_time(void);
@@ -949,9 +948,10 @@ errbacktrace(void)
  * Compute backtrace data and add it to the supplied ErrorData.  num_skip
  * specifies how many inner frames to skip.  Use this to avoid showing the
  * internal backtrace support functions in the backtrace.  This requires that
- * this and related functions are not inlined.
+ * this and related functions are not inlined. If edata pointer is valid
+ * backtrace information will be set in edata.
  */
-static void
+void
 set_backtrace(ErrorData *edata, int num_skip)
 {
 	StringInfoData errtrace;
@@ -978,7 +978,19 @@ set_backtrace(ErrorData *edata, int num_skip)
 						   "backtrace generation is not supported by this installation");
 #endif
 
-	edata->backtrace = errtrace.data;
+	if (edata)
+		edata->backtrace = errtrace.data;
+	else
+	{
+		/*
+		 * LOG_SERVER_ONLY is used intentionally to make sure this information
+		 * is not sent to client based on client_min_messages. We don't want
+		 * to mess up a different session as pg_print_backtrace will be
+		 * sending SIGNAL to a different backend.
+		 */
+		elog(LOG_SERVER_ONLY, "current backtrace:%s", errtrace.data);
+		pfree(errtrace.data);
+	}
 }
 
 /*

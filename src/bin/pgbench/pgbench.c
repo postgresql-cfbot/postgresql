@@ -3181,6 +3181,7 @@ advanceConnectionState(TState *thread, CState *st, StatsData *agg)
 
 					if ((st->con = doConnect()) == NULL)
 					{
+						/* as the bench is already running, we do not abort the process */
 						pg_log_error("client %d aborted while establishing connection", st->id);
 						st->state = CSTATE_ABORTED;
 						break;
@@ -4418,7 +4419,10 @@ runInitSteps(const char *initialize_steps)
 	initPQExpBuffer(&stats);
 
 	if ((con = doConnect()) == NULL)
+	{
+		pg_log_fatal("connection for initialization failed");
 		exit(1);
+	}
 
 	setup_cancel_handler(NULL);
 	SetCancelConn(con);
@@ -6361,7 +6365,10 @@ main(int argc, char **argv)
 	/* opening connection... */
 	con = doConnect();
 	if (con == NULL)
+	{
+		pg_log_fatal("setup connection failed");
 		exit(1);
+	}
 
 	/* report pgbench and server versions */
 	printVersion(con);
@@ -6515,7 +6522,7 @@ main(int argc, char **argv)
 #endif							/* ENABLE_THREAD_SAFETY */
 
 		for (int j = 0; j < thread->nstate; j++)
-			if (thread->state[j].state == CSTATE_ABORTED)
+			if (thread->state[j].state != CSTATE_FINISHED)
 				exit_code = 2;
 
 		/* aggregate thread level stats */
@@ -6583,7 +6590,7 @@ threadRun(void *arg)
 		if (thread->logfile == NULL)
 		{
 			pg_log_fatal("could not open logfile \"%s\": %m", logpath);
-			goto done;
+			exit(1);
 		}
 	}
 
@@ -6607,16 +6614,10 @@ threadRun(void *arg)
 		{
 			if ((state[i].con = doConnect()) == NULL)
 			{
-				/*
-				 * On connection failure, we meet the barrier here in place of
-				 * GO before proceeding to the "done" path which will cleanup,
-				 * so as to avoid locking the process.
-				 *
-				 * It is unclear whether it is worth doing anything rather
-				 * than coldly exiting with an error message.
-				 */
-				THREAD_BARRIER_WAIT(&barrier);
-				goto done;
+				/* coldly abort on initial connection failure */
+				pg_log_fatal("cannot create connection for client %d",
+							 state[i].id);
+				exit(1);
 			}
 		}
 
@@ -6749,7 +6750,7 @@ threadRun(void *arg)
 					continue;
 				}
 				/* must be something wrong */
-				pg_log_fatal("%s() failed: %m", SOCKET_WAIT_METHOD);
+				pg_log_error("%s() failed: %m", SOCKET_WAIT_METHOD);
 				goto done;
 			}
 		}

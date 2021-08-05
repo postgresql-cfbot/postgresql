@@ -1755,6 +1755,325 @@ cost_recursive_union(Path *runion, Path *nrterm, Path *rterm)
 }
 
 /*
+ * is_fake_var
+ *		Workaround for generate_append_tlist() which generates fake Vars with
+ *		varno == 0, that will cause a fail of estimate_num_group() call
+ *
+ * XXX Ummm, why would estimate_num_group fail with this?
+ */
+static bool
+is_fake_var(Expr *expr)
+{
+	if (IsA(expr, RelabelType))
+		expr = (Expr *) ((RelabelType *) expr)->arg;
+
+	return (IsA(expr, Var) && ((Var *) expr)->varno == 0);
+}
+
+/*
+ * get_width_cost_multiplier
+ *		Returns relative complexity of comparing two values based on it's width.
+ * The idea behind - long values have more expensive comparison. Return value is
+ * in cpu_operator_cost unit.
+ */
+static double
+get_width_cost_multiplier(PlannerInfo *root, Expr *expr)
+{
+	double	width = -1.0; /* fake value */
+
+	if (IsA(expr, RelabelType))
+		expr = (Expr *) ((RelabelType *) expr)->arg;
+
+	/* Try to find actual stat in corresponding relation */
+	if (IsA(expr, Var))
+	{
+		Var		*var = (Var *) expr;
+
+		if (var->varno > 0 && var->varno < root->simple_rel_array_size)
+		{
+			RelOptInfo	*rel = root->simple_rel_array[var->varno];
+
+			if (rel != NULL &&
+				var->varattno >= rel->min_attr &&
+				var->varattno <= rel->max_attr)
+			{
+				int	ndx = var->varattno - rel->min_attr;
+
+				if (rel->attr_widths[ndx] > 0)
+					width = rel->attr_widths[ndx];
+			}
+		}
+	}
+
+	/* Didn't find any actual stats, use estimation by type */
+	if (width < 0.0)
+	{
+		Node	*node = (Node*) expr;
+
+		width = get_typavgwidth(exprType(node), exprTypmod(node));
+	}
+
+	/*
+	 * Any value in pgsql is passed by Datum type, so any operation with value
+	 * could not be cheaper than operation with Datum type
+	 */
+	if (width <= sizeof(Datum))
+		return 1.0;
+
+	/*
+	 * Seems, cost of comparision is not directly proportional to args width,
+	 * because comparing args could be differ width (we known only average over
+	 * column) and difference often could be defined only by looking on first
+	 * bytes. So, use log16(width) as estimation.
+	 */
+	return 1.0 + 0.125 * LOG2(width / sizeof(Datum));
+}
+
+/*
+ * compute_cpu_sort_cost
+ *		compute CPU cost of sort (i.e. in-memory)
+ *
+ * The main thing we need to calculate to estimate sort CPU costs is the number
+ * of calls to the comparator functions. The difficulty is that for multi-column
+ * sorts there may be different data types involved (for some of which the calls
+ * may be much more expensive). Furthermore, the columns may have very different
+ * number of distinct values - the higher the number, the fewer comparisons will
+ * be needed for the following columns.
+ *
+ * The algoritm is incremental - we add pathkeys one by one, and at each step we
+ * estimate the number of necessary comparisons (based on the number of distinct
+ * groups in the current pathkey prefix and the new pathkey), and the comparison
+ * costs (which is data type specific).
+ *
+ * Estimation of the number of comparisons is based on ideas from two sources:
+ *
+ * 1) "Algorithms" (course), Robert Sedgewick, Kevin Wayne [https://algs4.cs.princeton.edu/home/]
+ *
+ * 2) "Quicksort Is Optimal For Many Equal Keys" (paper), Sebastian Wild,
+ * arXiv:1608.04906v4 [cs.DS] 1 Nov 2017. [https://arxiv.org/abs/1608.04906]
+ *
+ * In term of that paper, let N - number of tuples, Xi - number of tuples with
+ * key Ki, then the estimate of number of comparisons is:
+ *
+ *	log(N! / (X1! * X2! * ..))  ~  sum(Xi * log(N/Xi))
+ *
+ * In our case all Xi are the same because now we don't have any estimation of
+ * group sizes, we have only know the estimate of number of groups (distinct
+ * values). In that case, formula becomes:
+ *
+ *	N * log(NumberOfGroups)
+ *
+ * For multi-column sorts we need to estimate the number of comparisons for
+ * each individual column - for example with columns (c1, c2, ..., ck) we
+ * can estimate that number of comparions on ck is roughly
+ *
+ *	ncomparisons(c1, c2, ..., ck) / ncomparisons(c1, c2, ..., c(k-1))
+ *
+ * Let k be a column number, Gk - number of groups defined by k columns, and Fk
+ * the cost of the comparison is
+ *
+ *	N * sum( Fk * log(Gk) )
+ *
+ * Note: We also consider column witdth, not just the comparator cost.
+ *
+ * NOTE: some callers currently pass NIL for pathkeys because they
+ * can't conveniently supply the sort keys.  In this case, it will fallback to
+ * simple comparison cost estimate.
+ */
+static Cost
+compute_cpu_sort_cost(PlannerInfo *root, List *pathkeys, int nPresortedKeys,
+					  Cost comparison_cost, double tuples, double output_tuples,
+					  bool heapSort)
+{
+	Cost		per_tuple_cost = 0.0;
+	ListCell	*lc;
+	List		*pathkeyExprs = NIL;
+	double		tuplesPerPrevGroup = tuples;
+	double		totalFuncCost = 1.0;
+	bool		has_fake_var = false;
+	int			i = 0;
+	Oid			prev_datatype = InvalidOid;
+	Cost		funcCost = 0.0;
+	List		*cache_varinfos = NIL;
+
+	/* fallback if pathkeys is unknown */
+	if (list_length(pathkeys) == 0)
+	{
+		/*
+		 * If we'll use a bounded heap-sort keeping just K tuples in memory, for
+		 * a total number of tuple comparisons of N log2 K; but the constant
+		 * factor is a bit higher than for quicksort.  Tweak it so that the
+		 * cost curve is continuous at the crossover point.
+		 *
+		 * XXX I suppose the "quicksort factor" references to 1.5 at the end
+		 * of this function, but I'm not sure. I suggest we introduce some simple
+		 * constants for that, instead of magic values.
+		 */
+		output_tuples = (heapSort) ? 2.0 * output_tuples : tuples;
+		per_tuple_cost += 2.0 * cpu_operator_cost * LOG2(output_tuples);
+
+		/* add cost provided by caller */
+		per_tuple_cost += comparison_cost;
+
+		return per_tuple_cost * tuples;
+	}
+
+	/*
+	 * Computing total cost of sorting takes into account:
+	 * - per column comparison function cost
+	 * - we try to compute needed number of comparison per column
+	 */
+	foreach(lc, pathkeys)
+	{
+		PathKey				*pathkey = (PathKey*)lfirst(lc);
+		EquivalenceMember	*em;
+		double				 nGroups,
+							 correctedNGroups;
+
+		/*
+		 * We believe than equivalence members aren't very  different, so, to
+		 * estimate cost we take just first member
+		 */
+		em = (EquivalenceMember *) linitial(pathkey->pk_eclass->ec_members);
+
+		if (em->em_datatype != InvalidOid)
+		{
+			/* do not lookup funcCost if data type is the same as previous */
+			if (prev_datatype != em->em_datatype)
+			{
+				Oid			sortop;
+				QualCost	cost;
+
+				sortop = get_opfamily_member(pathkey->pk_opfamily,
+											 em->em_datatype, em->em_datatype,
+											 pathkey->pk_strategy);
+
+				cost.startup = 0;
+				cost.per_tuple = 0;
+				add_function_cost(root, get_opcode(sortop), NULL, &cost);
+				/* we need procost, not product of procost and cpu_operator_cost */
+				funcCost = cost.per_tuple / cpu_operator_cost;
+				prev_datatype = em->em_datatype;
+			}
+		}
+		else
+			funcCost = 1.0; /* fallback */
+
+		/* Try to take into account actual width fee */
+		funcCost *= get_width_cost_multiplier(root, em->em_expr);
+
+		totalFuncCost += funcCost;
+
+		/* remeber if we have a fake var in pathkeys */
+		has_fake_var |= is_fake_var(em->em_expr);
+		pathkeyExprs = lappend(pathkeyExprs, em->em_expr);
+
+		/*
+		 * Prevent call estimate_num_groups() with fake Var. Note,
+		 * pathkeyExprs contains only previous columns
+		 */
+		if (has_fake_var == false)
+			/*
+			 * Recursively compute number of group in group from previous step
+			 */
+			nGroups = estimate_num_groups_incremental(root, pathkeyExprs,
+													  tuplesPerPrevGroup, NULL, NULL,
+													  &cache_varinfos,
+													  list_length(pathkeyExprs) - 1);
+		else if (tuples > 4.0)
+			/*
+			 * Use geometric mean as estimation if there is no any stats.
+			 * Don't use DEFAULT_NUM_DISTINCT because it used for only one
+			 * column while here we try to estimate number of groups over
+			 * set of columns.
+			 *
+			 * XXX Perhaps this should use DEFAULT_NUM_DISTINCT at least to
+			 * limit the calculated values, somehow?
+			 *
+			 * XXX What's the logic of the following formula?
+			 */
+			nGroups = ceil(2.0 + sqrt(tuples) *
+				list_length(pathkeyExprs) / list_length(pathkeys));
+		else
+			nGroups = tuples;
+
+		/*
+		 * Presorted keys aren't participated in comparison but still checked
+		 * by qsort comparator.
+		 */
+		if (i >= nPresortedKeys)
+		{
+			if (heapSort)
+			{
+				double heap_tuples;
+
+				/* have to keep at least one group, and a multiple of group size */
+				heap_tuples = Max(ceil(output_tuples / tuplesPerPrevGroup) * tuplesPerPrevGroup,
+								  tuplesPerPrevGroup);
+
+				/* so how many (whole) groups is that? */
+				correctedNGroups = ceil(heap_tuples / tuplesPerPrevGroup);
+			}
+			else
+				/* all groups in the input */
+				correctedNGroups = nGroups;
+
+			correctedNGroups = Max(1.0, ceil(correctedNGroups));
+
+			per_tuple_cost += totalFuncCost * LOG2(correctedNGroups);
+		}
+
+		i++;
+
+		/*
+		 * Real-world distribution isn't uniform but now we don't have a way to
+		 * determine that, so, add multiplier to get closer to worst case.
+		 */
+		tuplesPerPrevGroup = ceil(1.5 * tuplesPerPrevGroup / nGroups);
+
+		/*
+		 * We could skip all following columns for cost estimation, because we
+		 * believe that tuples are unique by set ot previous columns
+		 */
+		if (tuplesPerPrevGroup <= 1.0)
+			break;
+	}
+
+	list_free(pathkeyExprs);
+
+	/* per_tuple_cost is in cpu_operator_cost units */
+	per_tuple_cost *= cpu_operator_cost;
+
+	/*
+	 * Accordingly to "Introduction to algorithms", Thomas H. Cormen, Charles E.
+	 * Leiserson, Ronald L. Rivest, ISBN 0-07-013143-0, quicksort estimation
+	 * formula has additional term proportional to number of tuples (See Chapter
+	 * 8.2 and Theorem 4.1). It has meaning with low number of tuples,
+	 * approximately less that 1e4. Of course, it could be implemented as
+	 * additional multiplier under logarithm, but use more complicated formula
+	 * which takes into account number of unique tuples and it isn't clear how
+	 * to combine multiplier with groups. Estimate it as 10 in cpu_operator_cost
+	 * unit.
+	 */
+	per_tuple_cost += 10 * cpu_operator_cost;
+
+	per_tuple_cost += comparison_cost;
+
+	return tuples * per_tuple_cost;
+}
+
+/*
+ * simple wrapper just to estimate best sort path
+ */
+Cost
+cost_sort_estimate(PlannerInfo *root, List *pathkeys, int nPresortedKeys,
+				   double tuples)
+{
+	return compute_cpu_sort_cost(root, pathkeys, nPresortedKeys,
+								0, tuples, tuples, false);
+}
+
+/*
  * cost_tuplesort
  *	  Determines and returns the cost of sorting a relation using tuplesort,
  *    not including the cost of reading the input data.
@@ -1770,7 +2089,7 @@ cost_recursive_union(Path *runion, Path *nrterm, Path *rterm)
  * number of initial runs formed and M is the merge order used by tuplesort.c.
  * Since the average initial run should be about sort_mem, we have
  *		disk traffic = 2 * relsize * ceil(logM(p / sort_mem))
- *		cpu = comparison_cost * t * log2(t)
+ * 		and cpu cost (computed by compute_cpu_sort_cost()).
  *
  * If the sort is bounded (i.e., only the first k result tuples are needed)
  * and k tuples can fit into sort_mem, we use a heap method that keeps only
@@ -1789,9 +2108,11 @@ cost_recursive_union(Path *runion, Path *nrterm, Path *rterm)
  * 'comparison_cost' is the extra cost per comparison, if any
  * 'sort_mem' is the number of kilobytes of work memory allowed for the sort
  * 'limit_tuples' is the bound on the number of output tuples; -1 if no bound
+ * 'startup_cost' is expected to be 0 at input. If there is "input cost" it should
+ * be added by caller later.
  */
 static void
-cost_tuplesort(Cost *startup_cost, Cost *run_cost,
+cost_tuplesort(PlannerInfo *root, List *pathkeys, Cost *startup_cost, Cost *run_cost,
 			   double tuples, int width,
 			   Cost comparison_cost, int sort_mem,
 			   double limit_tuples)
@@ -1807,9 +2128,6 @@ cost_tuplesort(Cost *startup_cost, Cost *run_cost,
 	 */
 	if (tuples < 2.0)
 		tuples = 2.0;
-
-	/* Include the default cost-per-comparison */
-	comparison_cost += 2.0 * cpu_operator_cost;
 
 	/* Do we have a useful LIMIT? */
 	if (limit_tuples > 0 && limit_tuples < tuples)
@@ -1834,12 +2152,10 @@ cost_tuplesort(Cost *startup_cost, Cost *run_cost,
 		double		log_runs;
 		double		npageaccesses;
 
-		/*
-		 * CPU costs
-		 *
-		 * Assume about N log2 N comparisons
-		 */
-		*startup_cost = comparison_cost * tuples * LOG2(tuples);
+		/* CPU costs */
+		*startup_cost = compute_cpu_sort_cost(root, pathkeys, 0,
+											  comparison_cost, tuples,
+											  tuples, false);
 
 		/* Disk costs */
 
@@ -1855,18 +2171,17 @@ cost_tuplesort(Cost *startup_cost, Cost *run_cost,
 	}
 	else if (tuples > 2 * output_tuples || input_bytes > sort_mem_bytes)
 	{
-		/*
-		 * We'll use a bounded heap-sort keeping just K tuples in memory, for
-		 * a total number of tuple comparisons of N log2 K; but the constant
-		 * factor is a bit higher than for quicksort.  Tweak it so that the
-		 * cost curve is continuous at the crossover point.
-		 */
-		*startup_cost = comparison_cost * tuples * LOG2(2.0 * output_tuples);
+		/* We'll use a bounded heap-sort keeping just K tuples in memory. */
+		*startup_cost = compute_cpu_sort_cost(root, pathkeys, 0,
+											  comparison_cost, tuples,
+											  output_tuples, true);
 	}
 	else
 	{
 		/* We'll use plain quicksort on all the input tuples */
-		*startup_cost = comparison_cost * tuples * LOG2(tuples);
+		*startup_cost = compute_cpu_sort_cost(root, pathkeys, 0,
+											  comparison_cost, tuples,
+											  tuples, false);
 	}
 
 	/*
@@ -1899,8 +2214,8 @@ cost_incremental_sort(Path *path,
 					  double input_tuples, int width, Cost comparison_cost, int sort_mem,
 					  double limit_tuples)
 {
-	Cost		startup_cost = 0,
-				run_cost = 0,
+	Cost		startup_cost,
+				run_cost,
 				input_run_cost = input_total_cost - input_startup_cost;
 	double		group_tuples,
 				input_groups;
@@ -1985,7 +2300,7 @@ cost_incremental_sort(Path *path,
 	 * pessimistic about incremental sort performance and increase its average
 	 * group size by half.
 	 */
-	cost_tuplesort(&group_startup_cost, &group_run_cost,
+	cost_tuplesort(root, pathkeys, &group_startup_cost, &group_run_cost,
 				   1.5 * group_tuples, width, comparison_cost, sort_mem,
 				   limit_tuples);
 
@@ -1993,7 +2308,7 @@ cost_incremental_sort(Path *path,
 	 * Startup cost of incremental sort is the startup cost of its first group
 	 * plus the cost of its input.
 	 */
-	startup_cost += group_startup_cost
+	startup_cost = group_startup_cost
 		+ input_startup_cost + group_input_run_cost;
 
 	/*
@@ -2002,7 +2317,7 @@ cost_incremental_sort(Path *path,
 	 * group, plus the total cost to process the remaining groups, plus the
 	 * remaining cost of input.
 	 */
-	run_cost += group_run_cost
+	run_cost = group_run_cost
 		+ (group_run_cost + group_startup_cost) * (input_groups - 1)
 		+ group_input_run_cost * (input_groups - 1);
 
@@ -2042,7 +2357,7 @@ cost_sort(Path *path, PlannerInfo *root,
 	Cost		startup_cost;
 	Cost		run_cost;
 
-	cost_tuplesort(&startup_cost, &run_cost,
+	cost_tuplesort(root, pathkeys, &startup_cost, &run_cost,
 				   tuples, width,
 				   comparison_cost, sort_mem,
 				   limit_tuples);
@@ -2140,7 +2455,7 @@ append_nonpartial_cost(List *subpaths, int numpaths, int parallel_workers)
  *	  Determines and returns the cost of an Append node.
  */
 void
-cost_append(AppendPath *apath)
+cost_append(AppendPath *apath, PlannerInfo *root)
 {
 	ListCell   *l;
 
@@ -2208,7 +2523,7 @@ cost_append(AppendPath *apath)
 					 * any child.
 					 */
 					cost_sort(&sort_path,
-							  NULL, /* doesn't currently need root */
+							  root,
 							  pathkeys,
 							  subpath->total_cost,
 							  subpath->rows,

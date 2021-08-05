@@ -82,6 +82,8 @@ bool		XactDeferrable;
 
 int			synchronous_commit = SYNCHRONOUS_COMMIT_ON;
 
+bool		wal_sessioninfo = false;
+
 /*
  * CheckXidAlive is a xid value pointing to a possibly ongoing (sub)
  * transaction.  Currently, it is used in logical decoding.  It's possible
@@ -5510,6 +5512,7 @@ XactLogCommitRecord(TimestampTz commit_time,
 	xl_xact_invals xl_invals;
 	xl_xact_twophase xl_twophase;
 	xl_xact_origin xl_origin;
+	xl_xact_sessioninfo xl_sessioninfo;
 	uint8		info;
 
 	Assert(CritSectionCount > 0);
@@ -5589,6 +5592,15 @@ XactLogCommitRecord(TimestampTz commit_time,
 		xl_origin.origin_timestamp = replorigin_session_origin_timestamp;
 	}
 
+	if (wal_sessioninfo)
+	{
+		xl_xinfo.xinfo |= XACT_XINFO_HAS_SESSIONINFO;
+
+		xl_sessioninfo.session_start_time = MyStartTimestamp;
+		xl_sessioninfo.session_pid = MyProcPid;
+		xl_sessioninfo.userid = GetUserId();
+	}
+
 	if (xl_xinfo.xinfo != 0)
 		info |= XLOG_XACT_HAS_INFO;
 
@@ -5637,6 +5649,9 @@ XactLogCommitRecord(TimestampTz commit_time,
 	if (xl_xinfo.xinfo & XACT_XINFO_HAS_ORIGIN)
 		XLogRegisterData((char *) (&xl_origin), sizeof(xl_xact_origin));
 
+	if (xl_xinfo.xinfo & XACT_XINFO_HAS_SESSIONINFO)
+		XLogRegisterData((char *) (&xl_sessioninfo), sizeof(xl_xact_sessioninfo));
+
 	/* we allow filtering by xacts */
 	XLogSetRecordFlags(XLOG_INCLUDE_ORIGIN);
 
@@ -5663,6 +5678,7 @@ XactLogAbortRecord(TimestampTz abort_time,
 	xl_xact_twophase xl_twophase;
 	xl_xact_dbinfo xl_dbinfo;
 	xl_xact_origin xl_origin;
+	xl_xact_sessioninfo xl_sessioninfo;
 
 	uint8		info;
 
@@ -5727,6 +5743,15 @@ XactLogAbortRecord(TimestampTz abort_time,
 		xl_origin.origin_timestamp = replorigin_session_origin_timestamp;
 	}
 
+	if (wal_sessioninfo)
+	{
+		xl_xinfo.xinfo |= XACT_XINFO_HAS_SESSIONINFO;
+
+		xl_sessioninfo.session_start_time = MyStartTimestamp;
+		xl_sessioninfo.session_pid = MyProcPid;
+		xl_sessioninfo.userid = GetUserId();
+	}
+
 	if (xl_xinfo.xinfo != 0)
 		info |= XLOG_XACT_HAS_INFO;
 
@@ -5767,6 +5792,9 @@ XactLogAbortRecord(TimestampTz abort_time,
 
 	if (xl_xinfo.xinfo & XACT_XINFO_HAS_ORIGIN)
 		XLogRegisterData((char *) (&xl_origin), sizeof(xl_xact_origin));
+
+	if (xl_xinfo.xinfo & XACT_XINFO_HAS_SESSIONINFO)
+		XLogRegisterData((char *) (&xl_sessioninfo), sizeof(xl_xact_sessioninfo));
 
 	if (TransactionIdIsValid(twophase_xid))
 		XLogSetRecordFlags(XLOG_INCLUDE_ORIGIN);
@@ -5866,6 +5894,8 @@ xact_redo_commit(xl_xact_parsed_commit *parsed,
 		replorigin_advance(origin_id, parsed->origin_lsn, lsn,
 						   false /* backward */ , false /* WAL */ );
 	}
+
+	/* No action if XACT_INFO_HAS_SESSIONINFO */
 
 	/* Make sure files supposed to be dropped are dropped */
 	if (parsed->nrels > 0)

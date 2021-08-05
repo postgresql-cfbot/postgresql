@@ -586,6 +586,7 @@ PostmasterMain(int argc, char *argv[])
 	bool		listen_addr_saved = false;
 	int			i;
 	char	   *output_config_variable = NULL;
+	bool		output_shmem = false;
 
 	InitProcessGlobals();
 
@@ -702,7 +703,7 @@ PostmasterMain(int argc, char *argv[])
 	 * tcop/postgres.c (the option sets should not conflict) and with the
 	 * common help() function in main/main.c.
 	 */
-	while ((opt = getopt(argc, argv, "B:bc:C:D:d:EeFf:h:ijk:lN:nOPp:r:S:sTt:W:-:")) != -1)
+	while ((opt = getopt(argc, argv, "B:bc:C:D:d:EeFf:h:ijk:lMN:nOPp:r:S:sTt:W:-:")) != -1)
 	{
 		switch (opt)
 		{
@@ -766,6 +767,10 @@ PostmasterMain(int argc, char *argv[])
 
 			case 'l':
 				SetConfigOption("ssl", "true", PGC_POSTMASTER, PGC_S_ARGV);
+				break;
+
+			case 'M':
+				output_shmem = true;
 				break;
 
 			case 'N':
@@ -1018,6 +1023,18 @@ PostmasterMain(int argc, char *argv[])
 	 * workers, calculate MaxBackends.
 	 */
 	InitializeMaxBackends();
+
+	if (output_shmem)
+	{
+		char output[64];
+		Size size;
+
+		size = CreateSharedMemoryAndSemaphores(true);
+		sprintf(output, "%zu", size);
+
+		puts(output);
+		ExitPostmaster(0);
+	}
 
 	/*
 	 * Set up shared memory and semaphores.
@@ -2666,7 +2683,7 @@ reset_shared(void)
 	 * (if using SysV shmem and/or semas).  This helps ensure that we will
 	 * clean up dead IPC objects if the postmaster crashes and is restarted.
 	 */
-	CreateSharedMemoryAndSemaphores();
+	(void) CreateSharedMemoryAndSemaphores(false);
 }
 
 
@@ -5019,7 +5036,7 @@ SubPostmasterMain(int argc, char *argv[])
 		InitProcess();
 
 		/* Attach process to shared data structures */
-		CreateSharedMemoryAndSemaphores();
+		(void) CreateSharedMemoryAndSemaphores(false);
 
 		/* And run the backend */
 		BackendRun(&port);		/* does not return */
@@ -5033,7 +5050,7 @@ SubPostmasterMain(int argc, char *argv[])
 		InitAuxiliaryProcess();
 
 		/* Attach process to shared data structures */
-		CreateSharedMemoryAndSemaphores();
+		(void) CreateSharedMemoryAndSemaphores(false);
 
 		AuxiliaryProcessMain(argc - 2, argv + 2);	/* does not return */
 	}
@@ -5046,7 +5063,7 @@ SubPostmasterMain(int argc, char *argv[])
 		InitProcess();
 
 		/* Attach process to shared data structures */
-		CreateSharedMemoryAndSemaphores();
+		(void) CreateSharedMemoryAndSemaphores(false);
 
 		AutoVacLauncherMain(argc - 2, argv + 2);	/* does not return */
 	}
@@ -5059,7 +5076,7 @@ SubPostmasterMain(int argc, char *argv[])
 		InitProcess();
 
 		/* Attach process to shared data structures */
-		CreateSharedMemoryAndSemaphores();
+		(void) CreateSharedMemoryAndSemaphores(false);
 
 		AutoVacWorkerMain(argc - 2, argv + 2);	/* does not return */
 	}
@@ -5077,7 +5094,7 @@ SubPostmasterMain(int argc, char *argv[])
 		InitProcess();
 
 		/* Attach process to shared data structures */
-		CreateSharedMemoryAndSemaphores();
+		(void) CreateSharedMemoryAndSemaphores(false);
 
 		/* Fetch MyBgworkerEntry from shared memory */
 		shmem_slot = atoi(argv[1] + 15);

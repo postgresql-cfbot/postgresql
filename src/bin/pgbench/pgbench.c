@@ -3233,31 +3233,30 @@ advanceConnectionState(TState *thread, CState *st, StatsData *agg)
 				/*
 				 * If --latency-limit is used, and this slot is already late
 				 * so that the transaction will miss the latency limit even if
-				 * it completed immediately, skip this time slot and schedule
-				 * to continue running on the next slot that isn't late yet.
-				 * But don't iterate beyond the -t limit, if one is given.
+				 * it completed immediately, skip this time slot and loop to
+				 * reschedule.
 				 */
 				if (latency_limit)
 				{
 					pg_time_now_lazy(&now);
 
-					while (thread->throttle_trigger < now - latency_limit &&
-						   (nxacts <= 0 || st->cnt < nxacts))
+					if (thread->throttle_trigger < now - latency_limit)
 					{
 						processXactStats(thread, st, &now, true, agg);
-						/* next rendez-vous */
-						thread->throttle_trigger +=
-							getPoissonRand(&thread->ts_throttle_rs, throttle_delay);
-						st->txn_scheduled = thread->throttle_trigger;
-					}
 
-					/*
-					 * stop client if -t was exceeded in the previous skip
-					 * loop
-					 */
-					if (nxacts > 0 && st->cnt >= nxacts)
-					{
-						st->state = CSTATE_FINISHED;
+						/* stop client if -T/-t was exceeded. */
+						if (timer_exceeded || (nxacts > 0 && st->cnt >= nxacts))
+							/*
+							 * For very unrealistic rates under -T, some skipped
+							 * transactions are not counted because the catchup
+							 * loop is not fast enough just to do the scheduling
+							 * and counting at the expected speed.
+							 *
+							 * We do not bother with such a degenerate case.
+							 */
+							st->state = CSTATE_FINISHED;
+
+						/* otherwise loop over PREPARE_THROTTLE */
 						break;
 					}
 				}

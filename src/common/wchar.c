@@ -583,8 +583,8 @@ pg_utf_mblen(const unsigned char *s)
 
 struct mbinterval
 {
-	unsigned short first;
-	unsigned short last;
+	unsigned int first;
+	unsigned int last;
 };
 
 /* auxiliary function for binary search in interval table */
@@ -645,6 +645,7 @@ static int
 ucs_wcwidth(pg_wchar ucs)
 {
 #include "common/unicode_combining_table.h"
+#include "common/unicode_east_asian_fw_table.h"
 
 	/* test for 8-bit control characters */
 	if (ucs == 0)
@@ -663,17 +664,8 @@ ucs_wcwidth(pg_wchar ucs)
 	 */
 
 	return 1 +
-		(ucs >= 0x1100 &&
-		 (ucs <= 0x115f ||		/* Hangul Jamo init. consonants */
-		  (ucs >= 0x2e80 && ucs <= 0xa4cf && (ucs & ~0x0011) != 0x300a &&
-		   ucs != 0x303f) ||	/* CJK ... Yi */
-		  (ucs >= 0xac00 && ucs <= 0xd7a3) ||	/* Hangul Syllables */
-		  (ucs >= 0xf900 && ucs <= 0xfaff) ||	/* CJK Compatibility
-												 * Ideographs */
-		  (ucs >= 0xfe30 && ucs <= 0xfe6f) ||	/* CJK Compatibility Forms */
-		  (ucs >= 0xff00 && ucs <= 0xff5f) ||	/* Fullwidth Forms */
-		  (ucs >= 0xffe0 && ucs <= 0xffe6) ||
-		  (ucs >= 0x20000 && ucs <= 0x2ffff)));
+		mbbisearch(ucs, east_asian_fw,
+				   sizeof(east_asian_fw) / sizeof(struct mbinterval) - 1);
 }
 
 /*

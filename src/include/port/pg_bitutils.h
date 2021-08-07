@@ -24,6 +24,19 @@ extern const uint8 pg_number_of_ones[256];
 #endif
 
 /*
+ * On x86_64, we can use the hardware popcount instruction, but only if
+ * we can verify that the CPU supports it via the cpuid instruction.
+ *
+ * Otherwise, we fall back to __builtin_popcount if the compiler has that,
+ * or a hand-rolled implementation if not.
+ */
+#ifdef HAVE_X86_64_POPCNTQ
+#if defined(HAVE__GET_CPUID) || defined(HAVE__CPUID)
+#define USE_POPCNT_ASM 1
+#endif
+#endif
+
+/*
  * pg_leftmost_one_pos32
  *		Returns the position of the most significant set bit in "word",
  *		measured from the least significant bit.  word must not be 0.
@@ -254,11 +267,74 @@ pg_ceil_log2_64(uint64 num)
 }
 
 /* Count the number of one-bits in a uint32 or uint64 */
+
+/*
+ * With USE_POPCNT_ASM set (which is true only on x86), we decide at runtime
+ * whether the CPU supports popcnt instruction, and hence we dynamically choose
+ * the corresponding function; thus pg_popcount32/64 is a function pointer. But
+ * for platforms with USE_POPCNT_ASM not set, we don't have to use dynamic
+ * assignment of functions, so we arrange for direct function call so as to get
+ * rid of function pointer dereferencing each time pg_popcount32/64 is called.
+ */
+#ifdef USE_POPCNT_ASM
 extern int	(*pg_popcount32) (uint32 word);
 extern int	(*pg_popcount64) (uint64 word);
+#else
+#define pg_popcount32 pg_popcount32_nonasm
+#define pg_popcount64 pg_popcount64_nonasm
+#endif
+
+/* Slow versions of pg_popcount */
+#ifndef HAVE__BUILTIN_POPCOUNT
+extern int pg_popcount32_slow(uint32 word);
+extern int pg_popcount64_slow(uint64 word);
+#endif
+
+static inline int
+pg_popcount64_nonasm(uint64 word)
+{
+#ifdef HAVE__BUILTIN_POPCOUNT
+#if defined(HAVE_LONG_INT_64)
+	return __builtin_popcountl(word);
+#elif defined(HAVE_LONG_LONG_INT_64)
+	return __builtin_popcountll(word);
+#else
+#error must have a working 64-bit integer datatype
+#endif
+#else							/* !HAVE__BUILTIN_POPCOUNT */
+	return pg_popcount64_slow(word);
+#endif							/* HAVE__BUILTIN_POPCOUNT */
+}
+
+static inline int
+pg_popcount32_nonasm(uint32 word)
+{
+#ifdef HAVE__BUILTIN_POPCOUNT
+	return __builtin_popcount(word);
+#else
+	return pg_popcount32_slow(word);
+#endif							/* HAVE__BUILTIN_POPCOUNT */
+}
 
 /* Count the number of one-bits in a byte array */
 extern uint64 pg_popcount(const char *buf, int bytes);
+
+/* Count the number of 1-bits in the result of xor operation */
+extern uint64 pg_xorcount_long(const char *a, const char *b, int bytes);
+static inline uint64 pg_xorcount(const char *a, const char *b, int bytes)
+{
+	/* For smaller lengths, do simple byte-by-byte traversal */
+	if (bytes <= 32)
+	{
+		uint64		popcnt = 0;
+
+		while (bytes--)
+			popcnt += pg_number_of_ones[(unsigned char) (*a++ ^ *b++)];
+		return popcnt;
+	}
+	else
+		return pg_xorcount_long(a, b, bytes);
+}
 
 /*
  * Rotate the bits of "word" to the right by n bits.

@@ -1576,7 +1576,33 @@ static struct config_bool ConfigureNamesBool[] =
 		true,
 		NULL, NULL, NULL
 	},
-
+	{
+		{"autovacuum_analyze_attach_partition", PGC_SIGHUP, AUTOVACUUM,
+			gettext_noop("Count ATTACH PARTITION commands as row updates."),
+			NULL,
+		},
+		&autovacuum_anl_attach_partition,
+		true,
+		NULL, NULL, NULL
+	},
+	{
+		{"autovacuum_analyze_detach_partition", PGC_SIGHUP, AUTOVACUUM,
+			gettext_noop("Count DETACH PARTITION commands as row updates."),
+			NULL,
+		},
+		&autovacuum_anl_detach_partition,
+		true,
+		NULL, NULL, NULL
+	},
+	{
+		{"autovacuum_analyze_drop_partition", PGC_SIGHUP, AUTOVACUUM,
+			gettext_noop("Count DROP TABLE commands executed on partitions as row updates."),
+			NULL,
+		},
+		&autovacuum_anl_drop_partition,
+		true,
+		NULL, NULL, NULL
+	},
 	{
 		{"trace_notify", PGC_USERSET, DEVELOPER_OPTIONS,
 			gettext_noop("Generates debugging output for LISTEN and NOTIFY."),

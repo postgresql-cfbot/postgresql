@@ -439,7 +439,7 @@ typedef struct PgStat_MsgAnalyze
  * ----------
  */
 #define PGSTAT_NUM_ANCESTORENTRIES    \
-	((PGSTAT_MSG_PAYLOAD - sizeof(Oid) - sizeof(Oid) - sizeof(int))	\
+	((PGSTAT_MSG_PAYLOAD - 2 * sizeof(Oid) - 2 * sizeof(bool) - sizeof(int))  \
 	 / sizeof(Oid))
 
 typedef struct PgStat_MsgAnlAncestors
@@ -447,6 +447,8 @@ typedef struct PgStat_MsgAnlAncestors
 	PgStat_MsgHdr m_hdr;
 	Oid			m_databaseid;
 	Oid			m_tableoid;
+	bool		m_count_livetuples;
+	bool		m_reset_reportedcounter;
 	int			m_nancestors;
 	Oid			m_ancestors[PGSTAT_NUM_ANCESTORENTRIES];
 } PgStat_MsgAnlAncestors;
@@ -1038,7 +1040,8 @@ extern void pgstat_report_vacuum(Oid tableoid, bool shared,
 extern void pgstat_report_analyze(Relation rel,
 								  PgStat_Counter livetuples, PgStat_Counter deadtuples,
 								  bool resetcounter);
-extern void pgstat_report_anl_ancestors(Oid relid);
+extern void pgstat_report_anl_ancestors(Oid relid,
+										bool attached, bool detached, bool dropped);
 
 extern void pgstat_report_recovery_conflict(int reason);
 extern void pgstat_report_deadlock(void);

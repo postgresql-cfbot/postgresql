@@ -1681,11 +1681,15 @@ pgstat_report_analyze(Relation rel,
  *
  *	Send list of partitioned table ancestors of the given partition to the
  *	collector.  The collector is in charge of propagating the analyze tuple
- *	counts from the partition to its ancestors.  This is necessary so that
- *	other processes can decide whether to analyze the partitioned tables.
+ *	counts from the partition to its ancestors.  The attached, detached
+ *	and dropped flags indicate whether this fuction is called by ATTACH/DETACH
+ *	PARTITION and DROP TABLE command, respectively.  If either flag is TRUE,
+ *	the collector will propagate the partition's livetuples to its ancestors'
+ *	analyze tuple counts.  This is necessary so that other processes can
+ *	decide whether to analyze the partitioned tables.
  */
 void
-pgstat_report_anl_ancestors(Oid relid)
+pgstat_report_anl_ancestors(Oid relid, bool attached, bool detached, bool dropped)
 {
 	PgStat_MsgAnlAncestors msg;
 	List	   *ancestors;
@@ -1694,12 +1698,33 @@ pgstat_report_anl_ancestors(Oid relid)
 	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_ANL_ANCESTORS);
 	msg.m_databaseid = MyDatabaseId;
 	msg.m_tableoid = relid;
+	msg.m_count_livetuples = (attached || detached || dropped) ? true : false;
+	msg.m_reset_reportedcounter = detached;
 	msg.m_nancestors = 0;
 
 	ancestors = get_partition_ancestors(relid);
 	foreach(lc, ancestors)
 	{
 		Oid			ancestor = lfirst_oid(lc);
+		Relation	ancestorRel;
+		AutoVacOpts *avopts;
+
+		ancestorRel = table_open(ancestor, AccessShareLock);
+		avopts = ancestorRel->rd_options
+			? &(((StdRdOptions *) ancestorRel->rd_options)->autovacuum)
+			: NULL;
+
+		/* Check reloptions */
+		if ((attached && (avopts ? !avopts->analyze_attach_partition
+								 : !autovacuum_anl_attach_partition)) ||
+			(detached && (avopts ? !avopts->analyze_detach_partition
+								 : !autovacuum_anl_detach_partition)) ||
+			(dropped && (avopts ? !avopts->analyze_drop_partition
+							   : !autovacuum_anl_drop_partition)))
+		{
+			table_close(ancestorRel, AccessShareLock);
+			continue;
+		}
 
 		msg.m_ancestors[msg.m_nancestors] = ancestor;
 		if (++msg.m_nancestors >= PGSTAT_NUM_ANCESTORENTRIES)
@@ -1708,6 +1733,8 @@ pgstat_report_anl_ancestors(Oid relid)
 						msg.m_nancestors * sizeof(Oid));
 			msg.m_nancestors = 0;
 		}
+
+		table_close(ancestorRel, AccessShareLock);
 	}
 
 	if (msg.m_nancestors > 0)
@@ -5419,12 +5446,20 @@ pgstat_recv_anl_ancestors(PgStat_MsgAnlAncestors *msg, int len)
 		PgStat_StatTabEntry *ancestor;
 
 		ancestor = pgstat_get_tab_entry(dbentry, ancestor_relid, true);
-		ancestor->changes_since_analyze +=
-			tabentry->changes_since_analyze - tabentry->changes_since_analyze_reported;
+
+		if (msg->m_count_livetuples)
+			ancestor->changes_since_analyze +=
+				tabentry->n_live_tuples - tabentry->changes_since_analyze_reported;
+		else
+			ancestor->changes_since_analyze +=
+				tabentry->changes_since_analyze - tabentry->changes_since_analyze_reported;
 	}
 
-	tabentry->changes_since_analyze_reported = tabentry->changes_since_analyze;
-
+	/* Reset changes_since_analyze_reported to zero if the partition is detached */
+	if (msg->m_reset_reportedcounter)
+		tabentry->changes_since_analyze_reported = 0;
+	else
+		tabentry->changes_since_analyze_reported = tabentry->changes_since_analyze;
 }
 
 /* ----------

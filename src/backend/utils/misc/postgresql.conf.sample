@@ -645,6 +645,12 @@
 #autovacuum_vacuum_cost_limit = -1	# default vacuum cost limit for
 					# autovacuum, -1 means use
 					# vacuum_cost_limit
+#autovacuum_analyze_attach_partition = on	# count ATTACH PARTITION commands
+						# as row updates
+#autovacuum_analyze_detach_partition = on	# count DETACH PARTITION commands
+						# as row updates
+#autovacuum_analyze_drop_partition = on		# count DROP TABLE commands executed
+						# on partitions as row updates
 
 
 #------------------------------------------------------------------------------

@@ -151,6 +151,33 @@ static relopt_bool boolRelOpts[] =
 	},
 	{
 		{
+			"autovacuum_analyze_attach_partition",
+			"Count ATTACH PARTITION commands as row updates",
+			RELOPT_KIND_PARTITIONED,
+			AccessExclusiveLock
+		},
+		true
+	},
+	{
+		{
+			"autovacuum_analyze_detach_partition",
+			"Count DETACH PARTITION commands as row updates",
+			RELOPT_KIND_PARTITIONED,
+			AccessExclusiveLock
+		},
+		true
+	},
+	{
+		{
+			"autovacuum_analyze_drop_partition",
+			"Counts DROP TABLE commands executed on partitions as row updates",
+			RELOPT_KIND_PARTITIONED,
+			AccessExclusiveLock
+		},
+		true
+	},
+	{
+		{
 			"deduplicate_items",
 			"Enables \"deduplicate items\" feature for this btree index",
 			RELOPT_KIND_BTREE,
@@ -1869,6 +1896,12 @@ default_reloptions(Datum reloptions, bool validate, relopt_kind kind)
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, vacuum_ins_scale_factor)},
 		{"autovacuum_analyze_scale_factor", RELOPT_TYPE_REAL,
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, analyze_scale_factor)},
+		{"autovacuum_analyze_attach_partition", RELOPT_TYPE_BOOL,
+		 offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, analyze_attach_partition)},
+		{"autovacuum_analyze_detach_partition", RELOPT_TYPE_BOOL,
+		 offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, analyze_detach_partition)},
+		{"autovacuum_analyze_drop_partition", RELOPT_TYPE_BOOL,
+		 offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, analyze_drop_partition)},
 		{"user_catalog_table", RELOPT_TYPE_BOOL,
 		offsetof(StdRdOptions, user_catalog_table)},
 		{"parallel_workers", RELOPT_TYPE_INT,
@@ -1979,8 +2012,10 @@ bytea *
 partitioned_table_reloptions(Datum reloptions, bool validate)
 {
 	/*
-	 * autovacuum_enabled, autovacuum_analyze_threshold and
-	 * autovacuum_analyze_scale_factor are supported for partitioned tables.
+	 * autovacuum_enabled, autovacuum_analyze_threshold,
+	 * autovacuum_analyze_scale_factor, autovacuum_analyze_attach_partition,
+	 * autovacuum_analyze_detach_partition and autovacuum_analyze_drop_partition
+	 * are supported for partitioned tables.
 	 */
 
 	return default_reloptions(reloptions, validate, RELOPT_KIND_PARTITIONED);

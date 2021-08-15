@@ -17474,6 +17474,9 @@ ATExecAttachPartition(List **wqueue, Relation rel, PartitionCmd *cmd,
 
 	ObjectAddressSet(address, RelationRelationId, RelationGetRelid(attachrel));
 
+	/* update changes_since_analyze of its ancestors for auto ANALYZE */
+	pgstat_report_anl_ancestors(RelationGetRelid(attachrel), true, false, false);
+
 	/* keep our lock until commit */
 	table_close(attachrel, NoLock);
 
@@ -18020,6 +18023,9 @@ DetachPartitionFinalize(Relation rel, Relation partRel, bool concurrent,
 		 */
 		RemoveInheritance(partRel, rel, true);
 	}
+
+	/* update changes_since_analyze of its ancestors for auto ANALYZE */
+	pgstat_report_anl_ancestors(RelationGetRelid(partRel), false, true, false);
 
 	/* Drop any triggers that were cloned on creation/attach. */
 	DropClonedTriggersFromPartition(RelationGetRelid(partRel));

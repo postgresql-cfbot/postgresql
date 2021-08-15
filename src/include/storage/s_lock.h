@@ -316,12 +316,12 @@ tas(volatile slock_t *lock)
 
 
 /*
- * On ARM and ARM64, we use __sync_lock_test_and_set(int *, int) if available.
+ * On ARM, ARM64 and RISC-V, we use __sync_lock_test_and_set(int *, int) if available.
  *
  * We use the int-width variant of the builtin because it works on more chips
  * than other widths.
  */
-#if defined(__arm__) || defined(__arm) || defined(__aarch64__) || defined(__aarch64)
+#if defined(__arm__) || defined(__arm) || defined(__aarch64__) || defined(__aarch64) || defined(__riscv)
 #ifdef HAVE_GCC__SYNC_INT32_TAS
 #define HAS_TEST_AND_SET
 
@@ -338,7 +338,7 @@ tas(volatile slock_t *lock)
 #define S_UNLOCK(lock) __sync_lock_release(lock)
 
 #endif	 /* HAVE_GCC__SYNC_INT32_TAS */
-#endif	 /* __arm__ || __arm || __aarch64__ || __aarch64 */
+#endif	 /* __arm__ || __arm || __aarch64__ || __aarch64 || __riscv */
 
 
 /*

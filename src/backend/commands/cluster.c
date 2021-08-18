@@ -735,7 +735,7 @@ make_new_heap(Oid OIDOldHeap, Oid NewTableSpace, Oid NewAccessMethod,
 		if (isNull)
 			reloptions = (Datum) 0;
 
-		NewHeapCreateToastTable(OIDNewHeap, reloptions, lockmode);
+		NewHeapCreateToastTable(OIDNewHeap, reloptions, lockmode, toastid);
 
 		ReleaseSysCache(tuple);
 	}
@@ -1526,6 +1526,16 @@ finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap,
 
 			RenameRelationInternal(toastidx,
 								   NewToastName, true, true);
+
+			/*
+			 * Reset the relrewrite for the toast. We need to call
+			 * CommandCounterIncrement() first to avoid the
+			 * "tuple already updated by self" error. Indeed the exact same
+			 * pg_class tuple has already been updated while
+			 * calling RenameRelationInternal().
+			 */
+			CommandCounterIncrement();
+			ResetRelRewrite(newrel->rd_rel->reltoastrelid);
 		}
 		relation_close(newrel, NoLock);
 	}

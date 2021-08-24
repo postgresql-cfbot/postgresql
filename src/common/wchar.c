@@ -583,19 +583,20 @@ pg_utf_mblen(const unsigned char *s)
 
 struct mbinterval
 {
-	unsigned short first;
-	unsigned short last;
+	unsigned int first;
+	unsigned int last:21;
+	signed int	width:4;
 };
 
 /* auxiliary function for binary search in interval table */
-static int
+static const struct mbinterval *
 mbbisearch(pg_wchar ucs, const struct mbinterval *table, int max)
 {
 	int			min = 0;
 	int			mid;
 
 	if (ucs < table[0].first || ucs > table[max].last)
-		return 0;
+		return NULL;
 	while (max >= min)
 	{
 		mid = (min + max) / 2;
@@ -604,10 +605,10 @@ mbbisearch(pg_wchar ucs, const struct mbinterval *table, int max)
 		else if (ucs < table[mid].first)
 			max = mid - 1;
 		else
-			return 1;
+			return &table[mid];
 	}
 
-	return 0;
+	return NULL;
 }
 
 
@@ -644,7 +645,7 @@ mbbisearch(pg_wchar ucs, const struct mbinterval *table, int max)
 static int
 ucs_wcwidth(pg_wchar ucs)
 {
-#include "common/unicode_combining_table.h"
+#include "common/unicode_width_table.h"
 
 	/* test for 8-bit control characters */
 	if (ucs == 0)
@@ -653,27 +654,15 @@ ucs_wcwidth(pg_wchar ucs)
 	if (ucs < 0x20 || (ucs >= 0x7f && ucs < 0xa0) || ucs > 0x0010ffff)
 		return -1;
 
-	/* binary search in table of non-spacing characters */
-	if (mbbisearch(ucs, combining,
-				   sizeof(combining) / sizeof(struct mbinterval) - 1))
-		return 0;
+	/* binary search in table of character widths */
+	const struct mbinterval *range =
+	mbbisearch(ucs, wcwidth,
+			   sizeof(wcwidth) / sizeof(struct mbinterval) - 1);
 
-	/*
-	 * if we arrive here, ucs is not a combining or C0/C1 control character
-	 */
+	if (range != NULL)
+		return range->width;
 
-	return 1 +
-		(ucs >= 0x1100 &&
-		 (ucs <= 0x115f ||		/* Hangul Jamo init. consonants */
-		  (ucs >= 0x2e80 && ucs <= 0xa4cf && (ucs & ~0x0011) != 0x300a &&
-		   ucs != 0x303f) ||	/* CJK ... Yi */
-		  (ucs >= 0xac00 && ucs <= 0xd7a3) ||	/* Hangul Syllables */
-		  (ucs >= 0xf900 && ucs <= 0xfaff) ||	/* CJK Compatibility
-												 * Ideographs */
-		  (ucs >= 0xfe30 && ucs <= 0xfe6f) ||	/* CJK Compatibility Forms */
-		  (ucs >= 0xff00 && ucs <= 0xff5f) ||	/* Fullwidth Forms */
-		  (ucs >= 0xffe0 && ucs <= 0xffe6) ||
-		  (ucs >= 0x20000 && ucs <= 0x2ffff)));
+	return 1;
 }
 
 /*

@@ -1036,6 +1036,10 @@ select * from test_regex('((.))(\2){0}', 'xy', 'RPQ');
 select * from test_regex('((.))(\2)', 'xyy', 'RP');
 -- expectMatch	21.38 oRP	((.))(\2)	xyy	yy	{}	{}	{}
 select * from test_regex('((.))(\2)', 'xyy', 'oRP');
+-- expectMatch	21.39 NPQR	{((.)){0}(\2){0}}	xyz	{}	{}	{}	{}
+select * from test_regex('((.)){0}(\2){0}', 'xyz', 'NPQR');
+-- expectNomatch	21.40 PQR	{((.)){0}(\2)}	xxx
+select * from test_regex('((.)){0}(\2)', 'xxx', 'PQR');
 
 -- doing 22 "multicharacter collating elements"
 -- # again ugh

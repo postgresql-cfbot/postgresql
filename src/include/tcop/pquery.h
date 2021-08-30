@@ -48,4 +48,8 @@ extern bool PlannedStmtRequiresSnapshot(struct PlannedStmt *pstmt);
 
 extern void EnsurePortalSnapshotExists(void);
 
+/* Hook for plugins to get control in start_xact_command() and finish_xact_command() */
+typedef void (*XactCommandStart_hook_type) (void);
+extern PGDLLIMPORT XactCommandStart_hook_type start_xact_command_hook;
+
 #endif							/* PQUERY_H */

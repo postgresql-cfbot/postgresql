@@ -2938,6 +2938,7 @@ XPVIV
 XPVMG
 XactCallback
 XactCallbackItem
+XactCommandStart_hook_type
 XactEvent
 XactLockTableWaitInfo
 XidBoundsViolation

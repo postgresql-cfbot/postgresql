@@ -59,6 +59,7 @@
 #include "commands/typecmds.h"
 #include "commands/user.h"
 #include "executor/executor.h"
+#include "executor/nodeModifyTable.h"
 #include "foreign/fdwapi.h"
 #include "foreign/foreign.h"
 #include "miscadmin.h"
@@ -77,6 +78,7 @@
 #include "parser/parser.h"
 #include "partitioning/partbounds.h"
 #include "partitioning/partdesc.h"
+#include "optimizer/plancat.h"
 #include "pgstat.h"
 #include "rewrite/rewriteDefine.h"
 #include "rewrite/rewriteHandler.h"
@@ -181,6 +183,9 @@ typedef struct AlteredTableInfo
 	bool		chgPersistence; /* T if SET LOGGED/UNLOGGED is used */
 	char		newrelpersistence;	/* if above is true */
 	Expr	   *partition_constraint;	/* for attach partition validation */
+	bool		systemVersioningAdded;	/* is system time column added? */
+	bool		systemVersioningRemoved;	/* is system time column removed? */
+	AttrNumber	attnum;			/* which column is system end time column */
 	/* true, if validating default due to some other attach/detach */
 	bool		validate_default;
 	/* Objects to rebuild after completing ALTER TYPE operations */
@@ -453,11 +458,12 @@ static ObjectAddress ATExecSetStorage(Relation rel, const char *colName,
 static void ATPrepDropColumn(List **wqueue, Relation rel, bool recurse, bool recursing,
 							 AlterTableCmd *cmd, LOCKMODE lockmode,
 							 AlterTableUtilityContext *context);
-static ObjectAddress ATExecDropColumn(List **wqueue, Relation rel, const char *colName,
+static ObjectAddress ATExecDropColumn(List **wqueue, AlteredTableInfo *tab, Relation rel, const char *colName,
 									  DropBehavior behavior,
 									  bool recurse, bool recursing,
 									  bool missing_ok, LOCKMODE lockmode,
-									  ObjectAddresses *addrs);
+									  ObjectAddresses *addrs,
+									  AlterTableUtilityContext *context);
 static ObjectAddress ATExecAddIndex(AlteredTableInfo *tab, Relation rel,
 									IndexStmt *stmt, bool is_rebuild, LOCKMODE lockmode);
 static ObjectAddress ATExecAddStatistics(AlteredTableInfo *tab, Relation rel,
@@ -1625,6 +1631,7 @@ ExecuteTruncate(TruncateStmt *stmt)
 		bool		recurse = rv->inh;
 		Oid			myrelid;
 		LOCKMODE	lockmode = AccessExclusiveLock;
+		TupleDesc	tupdesc;
 
 		myrelid = RangeVarGetRelidExtended(rv, lockmode,
 										   0, RangeVarCallbackForTruncate,
@@ -1642,6 +1649,14 @@ ExecuteTruncate(TruncateStmt *stmt)
 		 * but other checks with the now-opened Relation remain.
 		 */
 		truncate_check_activity(rel);
+
+		tupdesc = RelationGetDescr(rel);
+
+		/* throw error for system versioned table */
+		if (tupdesc->constr && tupdesc->constr->has_system_versioning)
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					 errmsg("cannot truncate table with system versioning")));
 
 		rels = lappend(rels, rel);
 		relids = lappend_oid(relids, myrelid);
@@ -4087,6 +4102,8 @@ AlterTableGetLockLevel(List *cmds)
 			case AT_SetAccessMethod:	/* must rewrite heap */
 			case AT_SetTableSpace:	/* must rewrite heap */
 			case AT_AlterColumnType:	/* must rewrite heap */
+			case AT_PeriodColumn:
+			case AT_AddSystemVersioning:
 				cmd_lockmode = AccessExclusiveLock;
 				break;
 
@@ -4115,6 +4132,7 @@ AlterTableGetLockLevel(List *cmds)
 				 * Subcommands that may be visible to concurrent SELECTs
 				 */
 			case AT_DropColumn: /* change visible to SELECT */
+			case AT_DropSystemVersioning:	/* change visible to SELECT */
 			case AT_AddColumnToView:	/* CREATE VIEW */
 			case AT_DropOids:	/* used to equiv to DropColumn */
 			case AT_EnableAlwaysRule:	/* may change SELECT rules */
@@ -4781,6 +4799,35 @@ ATRewriteCatalogs(List **wqueue, LOCKMODE lockmode,
 						  lockmode, pass, context);
 
 			/*
+			 * Both system time columns have to be specified
+			 */
+			if (context)
+			{
+				if (context->hasSystemVersioning)
+				{
+					if (!context->startTimeColName)
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("period start time column not specified")));
+
+					if (!context->endTimeColName)
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("period end time column not specified")));
+
+					if (context->periodStart && strcmp(context->periodStart, context->startTimeColName) != 0)
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("period start time column name must be the same as the name of row start time column")));
+
+					if (context->periodEnd && strcmp(context->periodEnd, context->endTimeColName) != 0)
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("period end time column name must be the same as  the name of row end time column")));
+				}
+			}
+
+			/*
 			 * After the ALTER TYPE pass, do cleanup work (this is not done in
 			 * ATExecAlterColumnType since it should be done only once if
 			 * multiple columns of a table are altered).
@@ -4888,16 +4935,16 @@ ATExecCmd(List **wqueue, AlteredTableInfo *tab,
 										   lockmode);
 			break;
 		case AT_DropColumn:		/* DROP COLUMN */
-			address = ATExecDropColumn(wqueue, rel, cmd->name,
+			address = ATExecDropColumn(wqueue, tab, rel, cmd->name,
 									   cmd->behavior, false, false,
 									   cmd->missing_ok, lockmode,
-									   NULL);
+									   NULL, context);
 			break;
 		case AT_DropColumnRecurse:	/* DROP COLUMN with recursion */
-			address = ATExecDropColumn(wqueue, rel, cmd->name,
+			address = ATExecDropColumn(wqueue, tab, rel, cmd->name,
 									   cmd->behavior, true, false,
 									   cmd->missing_ok, lockmode,
-									   NULL);
+									   NULL, context);
 			break;
 		case AT_AddIndex:		/* ADD INDEX */
 			address = ATExecAddIndex(tab, rel, (IndexStmt *) cmd->def, false,
@@ -5184,7 +5231,7 @@ ATParseTransformCmd(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	/* Transform the AlterTableStmt */
 	atstmt = transformAlterTableStmt(RelationGetRelid(rel),
 									 atstmt,
-									 context->queryString,
+									 context,
 									 &beforeStmts,
 									 &afterStmts);
 
@@ -5572,6 +5619,7 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 	BulkInsertState bistate;
 	int			ti_options;
 	ExprState  *partqualstate = NULL;
+	ResultRelInfo *resultRelInfo;
 
 	/*
 	 * Open the relation(s).  We have surely already locked the existing
@@ -5609,6 +5657,7 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 	 */
 
 	estate = CreateExecutorState();
+	resultRelInfo = makeNode(ResultRelInfo);
 
 	/* Build the needed expression execution states */
 	foreach(l, tab->constraints)
@@ -5675,6 +5724,12 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 		List	   *dropped_attrs = NIL;
 		ListCell   *lc;
 		Snapshot	snapshot;
+
+		InitResultRelInfo(resultRelInfo,
+						  oldrel,
+						  0,	/* dummy rangetable index */
+						  NULL,
+						  0);
 
 		if (newrel)
 			ereport(DEBUG1,
@@ -5764,6 +5819,13 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 				slot_getallattrs(oldslot);
 				ExecClearTuple(newslot);
 
+				/* Only current data have to be in */
+				if (tab->systemVersioningRemoved)
+				{
+					if (oldslot->tts_values[tab->attnum - 1] != PG_INT64_MAX)
+						continue;
+				}
+
 				/* copy attributes */
 				memcpy(newslot->tts_values, oldslot->tts_values,
 					   sizeof(Datum) * oldslot->tts_nvalid);
@@ -5836,6 +5898,10 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 				 */
 				insertslot = oldslot;
 			}
+
+			/* Set system time columns */
+			if (tab->systemVersioningAdded)
+				ExecSetRowStartTime(estate, insertslot, resultRelInfo);
 
 			/* Now check any constraints on the possibly-changed tuple */
 			econtext->ecxt_scantuple = insertslot;
@@ -6101,6 +6167,12 @@ alter_table_type_to_string(AlterTableType cmdtype)
 			return "ALTER COLUMN ... DROP IDENTITY";
 		case AT_ReAddStatistics:
 			return NULL;		/* not real grammar */
+		case AT_AddSystemVersioning:
+			return "ALTER TABLE ... ADD SYSTEM VERSIONING";
+		case AT_DropSystemVersioning:
+			return "ALTER TABLE ... DROP SYSTEM VERSIONING";
+		case AT_PeriodColumn:
+			return "ALTER TABLE ... ADD PERIOD COLUMN";
 	}
 
 	return NULL;
@@ -6789,6 +6861,14 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 			tab->rewrite |= AT_REWRITE_DEFAULT_VAL;
 	}
 
+	if (colDef->generated == ATTRIBUTE_ROW_START_TIME ||
+		colDef->generated == ATTRIBUTE_ROW_END_TIME)
+	{
+		/* must do a rewrite for system time columns */
+		tab->rewrite |= AT_REWRITE_COLUMN_REWRITE;
+		tab->systemVersioningAdded = true;
+	}
+
 	/*
 	 * Tell Phase 3 to fill in the default expression, if there is one.
 	 *
@@ -7107,6 +7187,13 @@ ATExecDropNotNull(Relation rel, const char *colName, LOCKMODE lockmode)
 		ereport(ERROR,
 				(errcode(ERRCODE_SYNTAX_ERROR),
 				 errmsg("column \"%s\" of relation \"%s\" is an identity column",
+						colName, RelationGetRelationName(rel))));
+
+	if (attTup->attgenerated == ATTRIBUTE_ROW_START_TIME ||
+		attTup->attgenerated == ATTRIBUTE_ROW_END_TIME)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("column \"%s\" of relation \"%s\" is system time column",
 						colName, RelationGetRelationName(rel))));
 
 	/*
@@ -7552,6 +7639,13 @@ ATExecAddIdentity(Relation rel, const char *colName,
 				 errmsg("cannot alter system column \"%s\"",
 						colName)));
 
+	if (attTup->attgenerated == ATTRIBUTE_ROW_START_TIME ||
+		attTup->attgenerated == ATTRIBUTE_ROW_END_TIME)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("column \"%s\" of relation \"%s\" is system time column",
+						colName, RelationGetRelationName(rel))));
+
 	/*
 	 * Creating a column as identity implies NOT NULL, so adding the identity
 	 * to an existing column that is not NOT NULL would create a state that
@@ -7650,6 +7744,13 @@ ATExecSetIdentity(Relation rel, const char *colName, Node *def, LOCKMODE lockmod
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 errmsg("column \"%s\" of relation \"%s\" is not an identity column",
+						colName, RelationGetRelationName(rel))));
+
+	if (attTup->attgenerated == ATTRIBUTE_ROW_START_TIME ||
+		attTup->attgenerated == ATTRIBUTE_ROW_END_TIME)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("column \"%s\" of relation \"%s\" is system time column",
 						colName, RelationGetRelationName(rel))));
 
 	if (generatedEl)
@@ -8059,6 +8160,13 @@ ATExecSetOptions(Relation rel, const char *colName, Node *options,
 				 errmsg("cannot alter system column \"%s\"",
 						colName)));
 
+	if (attrtuple->attgenerated == ATTRIBUTE_ROW_START_TIME ||
+		attrtuple->attgenerated == ATTRIBUTE_ROW_END_TIME)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("column \"%s\" of relation \"%s\" is system time column",
+						colName, RelationGetRelationName(rel))));
+
 	/* Generate new proposed attoptions (text array) */
 	datum = SysCacheGetAttr(ATTNAME, tuple, Anum_pg_attribute_attoptions,
 							&isnull);
@@ -8290,11 +8398,12 @@ ATPrepDropColumn(List **wqueue, Relation rel, bool recurse, bool recursing,
  * checked recursively.
  */
 static ObjectAddress
-ATExecDropColumn(List **wqueue, Relation rel, const char *colName,
+ATExecDropColumn(List **wqueue, AlteredTableInfo *tab, Relation rel, const char *colName,
 				 DropBehavior behavior,
 				 bool recurse, bool recursing,
 				 bool missing_ok, LOCKMODE lockmode,
-				 ObjectAddresses *addrs)
+				 ObjectAddresses *addrs,
+				 AlterTableUtilityContext *context)
 {
 	HeapTuple	tuple;
 	Form_pg_attribute targetatt;
@@ -8336,6 +8445,32 @@ ATExecDropColumn(List **wqueue, Relation rel, const char *colName,
 	targetatt = (Form_pg_attribute) GETSTRUCT(tuple);
 
 	attnum = targetatt->attnum;
+
+#ifdef NOTUSED
+	if (targetatt->attgenerated == ATTRIBUTE_ROW_START_TIME ||
+		targetatt->attgenerated == ATTRIBUTE_ROW_END_TIME)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("column \"%s\" of relation \"%s\" is system time column",
+						colName, RelationGetRelationName(rel))));
+#endif
+
+	/*
+	 * Reviewers note: We should be disallowing DROP COLUMN on a
+	 * system time column, but DROP SYSTEM VERSIONING is currently
+	 * kluged to generate multiple DropColumn subcommands, which
+	 * means we need to allow this for now, even though an explicit
+	 * DROP COLUMN will crash the server. Needs work.
+	 */
+	if (targetatt->attgenerated == ATTRIBUTE_ROW_END_TIME)
+	{
+		tab->attnum = attnum;
+		tab->systemVersioningRemoved = true;
+		tab->rewrite |= AT_REWRITE_COLUMN_REWRITE;
+		context->endTimeColName = NameStr(targetatt->attname);
+	}
+	if (targetatt->attgenerated == ATTRIBUTE_ROW_START_TIME)
+		context->startTimeColName = NameStr(targetatt->attname);
 
 	/* Can't drop a system attribute */
 	if (attnum <= 0)
@@ -8398,10 +8533,14 @@ ATExecDropColumn(List **wqueue, Relation rel, const char *colName,
 			Oid			childrelid = lfirst_oid(child);
 			Relation	childrel;
 			Form_pg_attribute childatt;
+			AlteredTableInfo *childtab;
 
 			/* find_inheritance_children already got lock */
 			childrel = table_open(childrelid, NoLock);
 			CheckTableNotInUse(childrel, "ALTER TABLE");
+
+			/* Find or create work queue entry for this table */
+			childtab = ATGetQueueEntry(wqueue, childrel);
 
 			tuple = SearchSysCacheCopyAttName(childrelid, colName);
 			if (!HeapTupleIsValid(tuple))	/* shouldn't happen */
@@ -8423,9 +8562,9 @@ ATExecDropColumn(List **wqueue, Relation rel, const char *colName,
 				if (childatt->attinhcount == 1 && !childatt->attislocal)
 				{
 					/* Time to delete this child column, too */
-					ATExecDropColumn(wqueue, childrel, colName,
+					ATExecDropColumn(wqueue, childtab, childrel, colName,
 									 behavior, true, true,
-									 false, lockmode, addrs);
+									 false, lockmode, addrs, context);
 				}
 				else
 				{
@@ -10914,6 +11053,7 @@ transformFkeyCheckAttrs(Relation pkrel,
 	ListCell   *indexoidscan;
 	int			i,
 				j;
+	int			nattrs = numattrs;
 
 	/*
 	 * Reject duplicate appearances of columns in the referenced-columns list.
@@ -10931,6 +11071,30 @@ transformFkeyCheckAttrs(Relation pkrel,
 						(errcode(ERRCODE_INVALID_FOREIGN_KEY),
 						 errmsg("foreign key referenced-columns list must not contain duplicates")));
 		}
+	}
+
+	/*
+	 * SQL Standard requires that an FK must refer to a current row of the pkrel,
+	 * if it system versioned. Thus the FK cannot contain the period start or end
+	 * time columns in the referenced-columns list.
+	 */
+	if (pkrel->rd_att->constr &&
+		pkrel->rd_att->constr->has_system_versioning)
+	{
+		for (i = 0; i < numattrs; i++)
+			if (pkrel->rd_att->constr->sv_starttime == attnums[i] ||
+				pkrel->rd_att->constr->sv_endtime == attnums[i])
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_FOREIGN_KEY),
+						 errmsg("foreign key referenced-columns list must not contain system_time period columns"
+								" of a system versioned table")));
+
+		/*
+		 * System versioned tables must have a unique index on the PK plus period
+		 * end time, so we are looking for an index that has one more attribute
+		 * than the number of attrs in the referenced-columns list.
+		 */
+		nattrs++;
 	}
 
 	/*
@@ -10956,7 +11120,7 @@ transformFkeyCheckAttrs(Relation pkrel,
 		 * partial index; forget it if there are any expressions, too. Invalid
 		 * indexes are out as well.
 		 */
-		if (indexStruct->indnkeyatts == numattrs &&
+		if (indexStruct->indnkeyatts == nattrs &&
 			indexStruct->indisunique &&
 			indexStruct->indisvalid &&
 			heap_attisnull(indexTuple, Anum_pg_index_indpred, NULL) &&
@@ -10981,11 +11145,17 @@ transformFkeyCheckAttrs(Relation pkrel,
 			 * start of this function, and we checked above that the number of
 			 * index columns agrees, so if we find a match for each attnums[]
 			 * entry then we must have a one-to-one match in some order.
+			 *
+			 * If pkrel is a system versioned table then its PK will include
+			 * period end time, but that will never match anything in the
+			 * referenced-columns list because of our check above. So we don't
+			 * try to match that. i.e. we have numattrs columns to match, yet
+			 * we're looking for an index with numattrs+1 columns in it.
 			 */
 			for (i = 0; i < numattrs; i++)
 			{
 				found = false;
-				for (j = 0; j < numattrs; j++)
+				for (j = 0; j < nattrs; j++)
 				{
 					if (attnums[i] == indexStruct->indkey.values[j])
 					{
@@ -10996,6 +11166,27 @@ transformFkeyCheckAttrs(Relation pkrel,
 				}
 				if (!found)
 					break;
+			}
+
+			/*
+			 * Check that the last remaining unmatched column of the index
+			 * is the period endtime of the system versioned pkrel.
+			 */
+			if (found && nattrs != numattrs)
+			{
+				found = false;
+				for (j = 0; j < nattrs; j++)
+				{
+					if (pkrel->rd_att->constr->sv_endtime == indexStruct->indkey.values[j])
+					{
+						/*
+						 * FK code will automatically add starttime = 'infinity'
+						 * so we don't need to add any opclasses for that match here.
+						 */
+						found = true;
+						break;
+					}
+				}
 			}
 
 			/*
@@ -12026,6 +12217,12 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("cannot alter type of column \"%s\" twice",
 						colName)));
+	if (attTup->attgenerated == ATTRIBUTE_ROW_START_TIME ||
+		attTup->attgenerated == ATTRIBUTE_ROW_END_TIME)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("column \"%s\" of relation \"%s\" is system time column",
+						colName, RelationGetRelationName(rel))));
 
 	/* Look up the target type (should not fail, since prep found it) */
 	typeTuple = typenameType(NULL, typeName, &targettypmod);
@@ -12807,10 +13004,13 @@ ATPostAlterTypeParse(Oid oldId, Oid oldRelId, Oid refRelId, char *cmd,
 		{
 			List	   *beforeStmts;
 			List	   *afterStmts;
+			AlterTableUtilityContext context;
+
+			context.queryString = cmd;
 
 			stmt = (Node *) transformAlterTableStmt(oldRelId,
 													(AlterTableStmt *) stmt,
-													cmd,
+													&context,
 													&beforeStmts,
 													&afterStmts);
 			querytree_list = list_concat(querytree_list, beforeStmts);
@@ -13162,6 +13362,13 @@ ATExecAlterColumnGenericOptions(Relation rel,
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("cannot alter system column \"%s\"", colName)));
+
+	if (atttableform->attgenerated == ATTRIBUTE_ROW_START_TIME ||
+		atttableform->attgenerated == ATTRIBUTE_ROW_END_TIME)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("column \"%s\" of relation \"%s\" is system time column",
+						colName, RelationGetRelationName(rel))));
 
 
 	/* Initialize buffers for new tuple values */
@@ -16787,7 +16994,8 @@ ComputePartitionAttrs(ParseState *pstate, Relation rel, List *partParams, AttrNu
 			 * Generated columns cannot work: They are computed after BEFORE
 			 * triggers, but partition routing is done before all triggers.
 			 */
-			if (attform->attgenerated)
+			if (attform->attgenerated && attform->attgenerated != ATTRIBUTE_ROW_START_TIME
+				&& attform->attgenerated != ATTRIBUTE_ROW_END_TIME)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 						 errmsg("cannot use generated column in partition key"),

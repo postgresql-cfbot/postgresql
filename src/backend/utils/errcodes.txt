@@ -153,6 +153,7 @@ Section: Class 21 - Cardinality Violation
 Section: Class 22 - Data Exception
 
 22000    E    ERRCODE_DATA_EXCEPTION                                         data_exception
+2201H    E    ERRCODE_DATA_EXCEPTION_INVALID_ROW_VERSION					 data_exception_invalid_row_version
 2202E    E    ERRCODE_ARRAY_ELEMENT_ERROR
 # SQL99's actual definition of "array element error" is subscript error
 2202E    E    ERRCODE_ARRAY_SUBSCRIPT_ERROR                                  array_subscript_error

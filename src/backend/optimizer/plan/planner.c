@@ -56,6 +56,8 @@
 #include "optimizer/tlist.h"
 #include "parser/analyze.h"
 #include "parser/parse_agg.h"
+#include "parser/parse_clause.h"
+#include "parser/parse_relation.h"
 #include "parser/parsetree.h"
 #include "partitioning/partdesc.h"
 #include "rewrite/rewriteManip.h"

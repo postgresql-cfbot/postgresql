@@ -43,6 +43,9 @@ typedef struct TupleConstr
 	uint16		num_check;
 	bool		has_not_null;
 	bool		has_generated_stored;
+	bool		has_system_versioning;
+	AttrNumber	sv_starttime;	/* which column is starttime */
+	AttrNumber	sv_endtime;		/* which column is endtime */
 } TupleConstr;
 
 /*

@@ -1073,17 +1073,19 @@ CREATE VIEW pg_stat_bgwriter AS
         pg_stat_get_bgwriter_stat_reset_time() AS stats_reset;
 
 CREATE VIEW pg_stat_wal AS
-    SELECT
-        w.wal_records,
-        w.wal_fpi,
-        w.wal_bytes,
-        w.wal_buffers_full,
-        w.wal_write,
-        w.wal_sync,
-        w.wal_write_time,
-        w.wal_sync_time,
-        w.stats_reset
+    /* FIXME: easier to maintain without column names during development */
+    SELECT w.*
     FROM pg_stat_get_wal() w;
+
+CREATE VIEW pg_stat_aio_backends AS
+    /* FIXME: easier to maintain without column names during development */
+    SELECT s.*
+    FROM pg_stat_get_aio_backends() s;
+
+CREATE VIEW pg_stat_aios AS
+    /* FIXME: easier to maintain without column names during development */
+    SELECT s.*
+    FROM pg_stat_get_aios() s;
 
 CREATE VIEW pg_stat_progress_analyze AS
     SELECT

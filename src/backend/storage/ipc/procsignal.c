@@ -23,11 +23,13 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "replication/walsender.h"
+#include "storage/aio.h"
 #include "storage/condition_variable.h"
 #include "storage/ipc.h"
 #include "storage/latch.h"
 #include "storage/proc.h"
 #include "storage/shmem.h"
+#include "storage/smgr.h"
 #include "storage/sinval.h"
 #include "tcop/tcopprot.h"
 #include "utils/memutils.h"
@@ -85,7 +87,7 @@ typedef struct
  * possible auxiliary process type.  (This scheme assumes there is not
  * more than one of any auxiliary process type at a time.)
  */
-#define NumProcSignalSlots	(MaxBackends + NUM_AUXPROCTYPES)
+#define NumProcSignalSlots	(MaxBackends + NUM_AUXPROCTYPES + MAX_IO_WORKERS)
 
 /* Check whether the relevant type bit is set in the flags. */
 #define BARRIER_SHOULD_CHECK(flags, type) \
@@ -101,7 +103,7 @@ static ProcSignalSlot *MyProcSignalSlot = NULL;
 static bool CheckProcSignal(ProcSignalReason reason);
 static void CleanupProcSignalState(int status, Datum arg);
 static void ResetProcSignalBarrierBits(uint32 flags);
-static bool ProcessBarrierPlaceholder(void);
+static bool ProcessBarrierSmgrRelease(void);
 
 /*
  * ProcSignalShmemSize
@@ -155,7 +157,7 @@ ProcSignalShmemInit(void)
  *		Register the current process in the procsignal array
  *
  * The passed index should be my BackendId if the process has one,
- * or MaxBackends + aux process type if not.
+ * or a unique value above MaxBackends for auxiliary processes.
  */
 void
 ProcSignalInit(int pss_idx)
@@ -527,8 +529,8 @@ ProcessProcSignalBarrier(void)
 				type = (ProcSignalBarrierType) pg_rightmost_one_pos32(flags);
 				switch (type)
 				{
-					case PROCSIGNAL_BARRIER_PLACEHOLDER:
-						processed = ProcessBarrierPlaceholder();
+					case PROCSIGNAL_BARRIER_SMGRRELEASE:
+						processed = ProcessBarrierSmgrRelease();
 						break;
 				}
 
@@ -595,20 +597,9 @@ ResetProcSignalBarrierBits(uint32 flags)
 }
 
 static bool
-ProcessBarrierPlaceholder(void)
+ProcessBarrierSmgrRelease(void)
 {
-	/*
-	 * XXX. This is just a placeholder until the first real user of this
-	 * machinery gets committed. Rename PROCSIGNAL_BARRIER_PLACEHOLDER to
-	 * PROCSIGNAL_BARRIER_SOMETHING_ELSE where SOMETHING_ELSE is something
-	 * appropriately descriptive. Get rid of this function and instead have
-	 * ProcessBarrierSomethingElse. Most likely, that function should live in
-	 * the file pertaining to that subsystem, rather than here.
-	 *
-	 * The return value should be 'true' if the barrier was successfully
-	 * absorbed and 'false' if not. Note that returning 'false' can lead to
-	 * very frequent retries, so try hard to make that an uncommon case.
-	 */
+	smgrrelease();
 	return true;
 }
 
@@ -660,6 +651,11 @@ procsignal_sigusr1_handler(SIGNAL_ARGS)
 
 	if (CheckProcSignal(PROCSIG_LOG_MEMORY_CONTEXT))
 		HandleLogMemoryContextInterrupt();
+
+#ifdef USE_POSIX_AIO
+	if (CheckProcSignal(PROCSIG_POSIX_AIO))
+		HandlePosixAioInterrupt();
+#endif
 
 	if (CheckProcSignal(PROCSIG_RECOVERY_CONFLICT_DATABASE))
 		RecoveryConflictInterrupt(PROCSIG_RECOVERY_CONFLICT_DATABASE);

@@ -901,6 +901,23 @@ AC_SUBST(with_readline)
 PGAC_ARG_BOOL(with, libedit-preferred, no,
               [prefer BSD Libedit over GNU Readline])
 
+#
+# liburing
+#
+AC_MSG_CHECKING([whether to build with liburing support])
+PGAC_ARG_BOOL(with, liburing, no, [use liburing for async io],
+              [AC_DEFINE([USE_LIBURING], 1, [Define to build with io-uring support. (--with-liburing)])])
+AC_MSG_RESULT([$with_liburing])
+AC_SUBST(with_liburing)
+
+#
+# POSIX AIO
+#
+AC_MSG_CHECKING([whether to build with POSIX AIO support])
+PGAC_ARG_BOOL(with, posix-aio, no, [use POSIX AIO for async io],
+              [AC_DEFINE([USE_POSIX_AIO], 1, [Define to build with POSIX AIO support. (--with-posix-aio)])])
+AC_MSG_RESULT([$with_posix_aio])
+AC_SUBST(with_posix_aio)
 
 #
 # UUID library
@@ -1349,6 +1366,9 @@ elif test "$with_uuid" = ossp ; then
 fi
 AC_SUBST(UUID_LIBS)
 
+if test "$with_liburing" = yes; then
+  PKG_CHECK_MODULES(LIBURING, liburing)
+fi
 
 ##
 ## Header files
@@ -1698,6 +1718,7 @@ LIBS_including_readline="$LIBS"
 LIBS=`echo "$LIBS" | sed -e 's/-ledit//g' -e 's/-lreadline//g'`
 
 AC_CHECK_FUNCS(m4_normalize([
+	aio_waitcomplete
 	backtrace_symbols
 	clock_gettime
 	copyfile
@@ -1737,6 +1758,9 @@ PGAC_CHECK_BUILTIN_FUNC([__builtin_bswap64], [long int x])
 PGAC_CHECK_BUILTIN_FUNC([__builtin_clz], [unsigned int x])
 PGAC_CHECK_BUILTIN_FUNC([__builtin_ctz], [unsigned int x])
 PGAC_CHECK_BUILTIN_FUNC([__builtin_popcount], [unsigned int x])
+
+# Can we use a built-in to prefetch memory?
+PGAC_CHECK_BUILTIN_VOID_FUNC([__builtin_prefetch], [void *x])
 
 # We require 64-bit fseeko() to be available, but run this check anyway
 # in case it finds that _LARGEFILE_SOURCE has to be #define'd for that.

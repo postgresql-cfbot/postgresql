@@ -167,12 +167,21 @@ struct PGPROC
 	bool		recoveryConflictPending;
 
 	/* Info about LWLock the process is currently waiting for, if any. */
-	bool		lwWaiting;		/* true if waiting for an LW lock */
+	uint8		lwWaiting;		/* LockWaitState */
 	uint8		lwWaitMode;		/* lwlock mode being waited for */
+	uint64		lwWaitData;		/* */
 	proclist_node lwWaitLink;	/* position in LW lock wait list */
 
 	/* Support for condition variables. */
 	proclist_node cvWaitLink;	/* position in CV wait list */
+
+	/*
+	 * Support for waiting until a specific WAL location has been written /
+	 * flushed (or WALwriteLock is released).
+	*/
+	XLogRecPtr xlog_write_wait;
+	XLogRecPtr xlog_flush_wait;
+	proclist_node xlogFlushLink;	/* position in xlog flush wait list */
 
 	/* Info about lock the process is currently waiting for, if any. */
 	/* waitLock and waitProcLock are NULL if not currently waiting. */
@@ -374,7 +383,8 @@ extern PGPROC *PreparedXactProcs;
  * operation.  Startup process and WAL receiver also consume 2 slots, but WAL
  * writer is launched only after startup has exited, so we only need 5 slots.
  */
-#define NUM_AUXILIARY_PROCS		5
+#define MAX_IO_WORKERS			32
+#define NUM_AUXILIARY_PROCS		5 + MAX_IO_WORKERS
 
 /* configurable options */
 extern PGDLLIMPORT int DeadlockTimeout;

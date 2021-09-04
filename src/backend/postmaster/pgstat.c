@@ -5423,6 +5423,14 @@ pgstat_recv_wal(PgStat_MsgWal *msg, int len)
 	walStats.wal_sync += msg->m_wal_sync;
 	walStats.wal_write_time += msg->m_wal_write_time;
 	walStats.wal_sync_time += msg->m_wal_sync_time;
+	walStats.wal_already_done_unlocked += msg->m_wal_already_done_unlocked;
+	walStats.wal_already_done_locked += msg->m_wal_already_done_locked;
+	walStats.wal_just_wait += msg->m_wal_just_wait;
+	walStats.wal_lock_immed += msg->m_wal_lock_immed;
+	walStats.wal_lock_wait += msg->m_wal_lock_wait;
+	walStats.wal_partial_wait += msg->m_wal_partial_wait;
+	walStats.wal_partial_pad += msg->m_wal_partial_pad;
+	walStats.wal_partial_pad_bytes += msg->m_wal_partial_pad_bytes;
 }
 
 /* ----------

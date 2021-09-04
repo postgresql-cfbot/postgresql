@@ -610,6 +610,8 @@ PSQLexecWatch(const char *query, const printQueryOpt *opt, FILE *printQueryFout)
 
 	if (pset.timing)
 		INSTR_TIME_SET_CURRENT(before);
+	else
+		INSTR_TIME_SET_ZERO(before);
 
 	res = PQexec(pset.db, query);
 
@@ -1302,6 +1304,8 @@ SendQuery(const char *query)
 
 		if (pset.timing)
 			INSTR_TIME_SET_CURRENT(before);
+		else
+			INSTR_TIME_SET_ZERO(before);
 
 		results = PQexec(pset.db, query);
 
@@ -1480,6 +1484,8 @@ DescribeQuery(const char *query, double *elapsed_msec)
 
 	if (pset.timing)
 		INSTR_TIME_SET_CURRENT(before);
+	else
+		INSTR_TIME_SET_ZERO(before);
 
 	/*
 	 * To parse the query but not execute it, we prepare it, using the unnamed
@@ -1612,6 +1618,8 @@ ExecQueryUsingCursor(const char *query, double *elapsed_msec)
 
 	if (pset.timing)
 		INSTR_TIME_SET_CURRENT(before);
+	else
+		INSTR_TIME_SET_ZERO(before);
 
 	/* if we're not in a transaction, start one */
 	if (PQtransactionStatus(pset.db) == PQTRANS_IDLE)

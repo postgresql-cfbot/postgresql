@@ -180,6 +180,16 @@
 #endif
 
 /*
+ * In cases packed is not strictly necessary, but useful,
+ * pg_attribute_packed_desired() can be used.
+ */
+#ifdef pg_attribute_packed
+#define pg_attribute_packed_desired() pg_attribute_packed()
+#else
+#define pg_attribute_packed_desired()
+#endif
+
+/*
  * Use "pg_attribute_always_inline" in place of "inline" for functions that
  * we wish to force inlining of, even when the compiler's heuristics would
  * choose not to.  But, if possible, don't force inlining in unoptimized
@@ -360,6 +370,14 @@ typedef void (*pg_funcptr_t) (void);
 #endif
 #endif
 
+/* Do we have support for prefetching memory? */
+#if defined(HAVE__BUILTIN_PREFETCH)
+#define pg_prefetch_mem(a) __builtin_prefetch(a)
+#elif defined(_MSC_VER)
+#define pg_prefetch_mem(a) _m_prefetch(a)
+#else
+#define pg_prefetch_mem(a)
+#endif
 
 /* ----------------------------------------------------------------
  *				Section 2:	bool, true, false
@@ -1138,6 +1156,11 @@ extern void ExceptionalCondition(const char *conditionName,
  */
 typedef union PGAlignedBlock
 {
+#ifdef pg_attribute_aligned
+	pg_attribute_aligned(4096)
+#else
+	__declspec(align(4096))
+#endif
 	char		data[BLCKSZ];
 	double		force_align_d;
 	int64		force_align_i64;
@@ -1146,10 +1169,16 @@ typedef union PGAlignedBlock
 /* Same, but for an XLOG_BLCKSZ-sized buffer */
 typedef union PGAlignedXLogBlock
 {
+#ifdef pg_attribute_aligned
+	pg_attribute_aligned(4096)
+#else
+	__declspec(align(4096))
+#endif
 	char		data[XLOG_BLCKSZ];
 	double		force_align_d;
 	int64		force_align_i64;
-} PGAlignedXLogBlock;
+} PGAlignedXLogBlock
+;
 
 /* msb for char */
 #define HIGHBIT					(0x80)

@@ -117,6 +117,8 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 	bool		found;
 	uint32		buf_state;
 
+	Assert(blockNum != P_NEW);
+
 	INIT_BUFFERTAG(newTag, smgr->smgr_rnode.node, forkNum, blockNum);
 
 	/* Initialize local buffers if first request in this session */
@@ -525,8 +527,8 @@ GetLocalBufferStorage(void)
 		/* And don't overflow MaxAllocSize, either */
 		num_bufs = Min(num_bufs, MaxAllocSize / BLCKSZ);
 
-		cur_block = (char *) MemoryContextAlloc(LocalBufferContext,
-												num_bufs * BLCKSZ);
+		cur_block = (char *) MemoryContextAllocIOAligned(LocalBufferContext,
+														 num_bufs * BLCKSZ, 0);
 		next_buf_in_block = 0;
 		num_bufs_in_block = num_bufs;
 	}

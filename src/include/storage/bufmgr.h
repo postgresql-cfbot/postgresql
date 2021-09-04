@@ -76,6 +76,14 @@ extern int	checkpoint_flush_after;
 extern int	backend_flush_after;
 extern int	bgwriter_flush_after;
 
+extern bool io_data_direct;
+extern bool io_data_force_async;
+extern bool io_wal_direct;
+extern bool io_wal_init_direct;
+extern bool io_wal_pad_partial;
+extern int io_wal_concurrency;
+extern int io_wal_target_blocks;
+
 /* in buf_init.c */
 extern PGDLLIMPORT char *BufferBlocks;
 
@@ -171,7 +179,8 @@ extern PGDLLIMPORT int32 *LocalRefCount;
 /*
  * prototypes for functions in bufmgr.c
  */
-extern PrefetchBufferResult PrefetchSharedBuffer(struct SMgrRelationData *smgr_reln,
+extern PrefetchBufferResult PrefetchSharedBuffer(Relation reln,
+												 struct SMgrRelationData *smgr_reln,
 												 ForkNumber forkNum,
 												 BlockNumber blockNum);
 extern PrefetchBufferResult PrefetchBuffer(Relation reln, ForkNumber forkNum,
@@ -185,10 +194,18 @@ extern Buffer ReadBufferExtended(Relation reln, ForkNumber forkNum,
 extern Buffer ReadBufferWithoutRelcache(RelFileNode rnode,
 										ForkNumber forkNum, BlockNumber blockNum,
 										ReadBufferMode mode, BufferAccessStrategy strategy);
+struct PgAioInProgress;
+extern Buffer ReadBufferAsync(Relation reln, ForkNumber forkNum, BlockNumber blockNum,
+							  ReadBufferMode mode, BufferAccessStrategy strategy,
+							  bool *already_valid, struct PgAioInProgress** aio);
+extern Buffer BulkExtendBuffered(Relation relation, ForkNumber forkNum,
+								 int *extendby,
+								 BufferAccessStrategy strategy);
 extern void ReleaseBuffer(Buffer buffer);
 extern void UnlockReleaseBuffer(Buffer buffer);
 extern void MarkBufferDirty(Buffer buffer);
 extern void IncrBufferRefCount(Buffer buffer);
+extern void BufferCheckOneLocalPin(Buffer buffer);
 extern Buffer ReleaseAndReadBuffer(Buffer buffer, Relation relation,
 								   BlockNumber blockNum);
 
@@ -235,7 +252,8 @@ extern bool HoldingBufferPinThatDelaysRecovery(void);
 extern void AbortBufferIO(void);
 
 extern void BufmgrCommit(void);
-extern bool BgBufferSync(struct WritebackContext *wb_context);
+struct PgStreamingWrite;
+extern bool BgBufferSync(struct PgStreamingWrite *pgsw, struct WritebackContext *wb_context);
 
 extern void AtProcExit_LocalBuffers(void);
 

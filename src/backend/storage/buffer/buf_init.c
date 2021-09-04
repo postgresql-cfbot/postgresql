@@ -78,8 +78,9 @@ InitBufferPool(void)
 						&foundDescs);
 
 	BufferBlocks = (char *)
-		ShmemInitStruct("Buffer Blocks",
-						NBuffers * (Size) BLCKSZ, &foundBufs);
+		TYPEALIGN(BLCKSZ,
+				  ShmemInitStruct("Buffer Blocks",
+								  (NBuffers + 1) * (Size) BLCKSZ, &foundBufs));
 
 	/* Align condition variables to cacheline boundary. */
 	BufferIOCVArray = (ConditionVariableMinimallyPadded *)
@@ -122,6 +123,8 @@ InitBufferPool(void)
 
 			buf->buf_id = i;
 
+			pgaio_io_ref_clear(&buf->io_in_progress);
+
 			/*
 			 * Initially link all the buffers together as unused. Subsequent
 			 * management of this list is done by freelist.c.
@@ -163,6 +166,8 @@ BufferShmemSize(void)
 	size = add_size(size, PG_CACHE_LINE_SIZE);
 
 	/* size of data pages */
+    /* to allow aligning buffer blocks */
+    size = add_size(size, BLCKSZ);
 	size = add_size(size, mul_size(NBuffers, BLCKSZ));
 
 	/* size of stuff controlled by freelist.c */

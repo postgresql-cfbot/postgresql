@@ -71,6 +71,9 @@
 # define gettimeofday(a,b) gettimeofday(a)
 #endif
 
+/* Define to 1 if you have the `aio_waitcomplete' function. */
+#undef HAVE_AIO_WAITCOMPLETE
+
 /* Define to 1 if you have the `append_history' function. */
 #undef HAVE_APPEND_HISTORY
 
@@ -755,6 +758,9 @@
 /* Define to 1 if your compiler understands __builtin_popcount. */
 #undef HAVE__BUILTIN_POPCOUNT
 
+/* Define to 1 if your compiler understands __builtin_prefetch. */
+#undef HAVE__BUILTIN_PREFETCH
+
 /* Define to 1 if your compiler understands __builtin_types_compatible_p. */
 #undef HAVE__BUILTIN_TYPES_COMPATIBLE_P
 
@@ -910,6 +916,9 @@
 /* Define to 1 to build with LDAP support. (--with-ldap) */
 #undef USE_LDAP
 
+/* Define to build with io-uring support. (--with-liburing) */
+#undef USE_LIBURING
+
 /* Define to 1 to build with XML support. (--with-libxml) */
 #undef USE_LIBXML
 
@@ -931,6 +940,9 @@
 
 /* Define to 1 to build with PAM support. (--with-pam) */
 #undef USE_PAM
+
+/* Define to build with POSIX AIO support. (--with-posix-aio) */
+#undef USE_POSIX_AIO
 
 /* Define to 1 to use software CRC-32C implementation (slicing-by-8). */
 #undef USE_SLICING_BY_8_CRC32C

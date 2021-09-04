@@ -41,6 +41,7 @@
 #include "postmaster/autovacuum.h"
 #include "postmaster/postmaster.h"
 #include "replication/walsender.h"
+#include "storage/aio.h"
 #include "storage/bufmgr.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
@@ -531,6 +532,8 @@ BaseInit(void)
 	 */
 	pgstat_initialize();
 
+	pgaio_postmaster_child_init();
+
 	/* Do local initialization of storage and buffer managers */
 	InitSync();
 	smgrinit();
@@ -637,11 +640,13 @@ InitPostgres(const char *in_dbname, Oid dboid, const char *username,
 		 * way, start up the XLOG machinery, and register to have it closed
 		 * down at exit.
 		 *
-		 * We don't yet have an aux-process resource owner, but StartupXLOG
-		 * and ShutdownXLOG will need one.  Hence, create said resource owner
-		 * (and register a callback to clean it up after ShutdownXLOG runs).
+		 * In single user mode we don't yet have an aux-process resource
+		 * owner, but StartupXLOG and ShutdownXLOG will need one.  Hence,
+		 * create said resource owner (and register a callback to clean it up
+		 * after ShutdownXLOG runs).
 		 */
-		CreateAuxProcessResourceOwner();
+		if (!bootstrap)
+			CreateAuxProcessResourceOwner();
 
 		StartupXLOG();
 		/* Release (and warn about) any buffer pins leaked in StartupXLOG */

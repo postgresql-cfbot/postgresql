@@ -260,6 +260,7 @@ extern XLogRecPtr XLogInsertRecord(struct XLogRecData *rdata,
 								   uint8 flags,
 								   int num_fpi);
 extern void XLogFlush(XLogRecPtr RecPtr);
+extern bool XLogAsyncFlush(XLogRecPtr RecPtr);
 extern bool XLogBackgroundFlush(void);
 extern bool XLogNeedsFlush(XLogRecPtr RecPtr);
 extern int	XLogFileInit(XLogSegNo segno);

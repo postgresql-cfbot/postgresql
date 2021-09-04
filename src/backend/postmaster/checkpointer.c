@@ -44,6 +44,7 @@
 #include "postmaster/bgwriter.h"
 #include "postmaster/interrupt.h"
 #include "replication/syncrep.h"
+#include "storage/aio.h"
 #include "storage/bufmgr.h"
 #include "storage/condition_variable.h"
 #include "storage/fd.h"
@@ -360,6 +361,17 @@ CheckpointerMain(void)
 			PendingCheckpointerStats.m_requested_checkpoints++;
 		}
 
+		/* Check for archive_timeout and switch xlog files if necessary. */
+		CheckArchiveTimeout();
+
+		/*
+		 * Send off activity statistics to the stats collector.
+		 */
+		pgstat_send_checkpointer();
+
+		/* Send WAL statistics to the stats collector. */
+		pgstat_send_wal(true);
+
 		/*
 		 * Force a checkpoint if too much time has elapsed since the last one.
 		 * Note that we count a timed checkpoint in stats only when this
@@ -377,9 +389,29 @@ CheckpointerMain(void)
 		}
 
 		/*
-		 * Do a checkpoint if requested.
+		 * Do a checkpoint if requested, or wait until it's time to do so.
 		 */
-		if (do_checkpoint)
+		if (!do_checkpoint)
+		{
+			/*
+			 * Sleep until we are signaled or it's time for another checkpoint or
+			 * xlog file switch.
+			 */
+			cur_timeout = CheckPointTimeout - elapsed_secs;
+			if (XLogArchiveTimeout > 0 && !RecoveryInProgress())
+			{
+				elapsed_secs = now - last_xlog_switch_time;
+				if (elapsed_secs >= XLogArchiveTimeout)
+					continue;		/* no sleep for us ... */
+				cur_timeout = Min(cur_timeout, XLogArchiveTimeout - elapsed_secs);
+			}
+
+			(void) WaitLatch(MyLatch,
+							 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+							 cur_timeout * 1000L /* convert to ms */ ,
+							 WAIT_EVENT_CHECKPOINTER_MAIN);
+		}
+		else
 		{
 			bool		ckpt_performed = false;
 			bool		do_restartpoint;
@@ -488,46 +520,6 @@ CheckpointerMain(void)
 
 			ckpt_active = false;
 		}
-
-		/* Check for archive_timeout and switch xlog files if necessary. */
-		CheckArchiveTimeout();
-
-		/*
-		 * Send off activity statistics to the stats collector.
-		 */
-		pgstat_send_checkpointer();
-
-		/* Send WAL statistics to the stats collector. */
-		pgstat_send_wal(true);
-
-		/*
-		 * If any checkpoint flags have been set, redo the loop to handle the
-		 * checkpoint without sleeping.
-		 */
-		if (((volatile CheckpointerShmemStruct *) CheckpointerShmem)->ckpt_flags)
-			continue;
-
-		/*
-		 * Sleep until we are signaled or it's time for another checkpoint or
-		 * xlog file switch.
-		 */
-		now = (pg_time_t) time(NULL);
-		elapsed_secs = now - last_checkpoint_time;
-		if (elapsed_secs >= CheckPointTimeout)
-			continue;			/* no sleep for us ... */
-		cur_timeout = CheckPointTimeout - elapsed_secs;
-		if (XLogArchiveTimeout > 0 && !RecoveryInProgress())
-		{
-			elapsed_secs = now - last_xlog_switch_time;
-			if (elapsed_secs >= XLogArchiveTimeout)
-				continue;		/* no sleep for us ... */
-			cur_timeout = Min(cur_timeout, XLogArchiveTimeout - elapsed_secs);
-		}
-
-		(void) WaitLatch(MyLatch,
-						 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-						 cur_timeout * 1000L /* convert to ms */ ,
-						 WAIT_EVENT_CHECKPOINTER_MAIN);
 	}
 }
 
@@ -684,7 +676,7 @@ ImmediateCheckpointRequested(void)
  * fraction between 0.0 meaning none, and 1.0 meaning all done.
  */
 void
-CheckpointWriteDelay(int flags, double progress)
+CheckpointWriteDelay(int flags, PgStreamingWrite *pgsw, double progress)
 {
 	static int	absorb_counter = WRITES_PER_ABSORB;
 
@@ -720,12 +712,20 @@ CheckpointWriteDelay(int flags, double progress)
 		pgstat_send_checkpointer();
 
 		/*
+		 * Ensure all pending IO is submitted to avoid unnecessary delays
+		 * for other processes.
+		 */
+		pgaio_submit_pending(true);
+		pg_streaming_write_wait_all(pgsw);
+
+		/*
 		 * This sleep used to be connected to bgwriter_delay, typically 200ms.
 		 * That resulted in more frequent wakeups if not much work to do.
 		 * Checkpointer and bgwriter are no longer related so take the Big
 		 * Sleep.
 		 */
-		pg_usleep(100000L);
+		if (IsCheckpointOnSchedule(progress))
+			pg_usleep(100000L);
 	}
 	else if (--absorb_counter <= 0)
 	{

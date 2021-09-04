@@ -79,6 +79,7 @@
 #include "replication/syncrep.h"
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
+#include "storage/aio.h"
 #include "storage/bufmgr.h"
 #include "storage/dsm_impl.h"
 #include "storage/fd.h"
@@ -564,6 +565,7 @@ extern const struct config_enum_entry archive_mode_options[];
 extern const struct config_enum_entry recovery_target_action_options[];
 extern const struct config_enum_entry sync_method_options[];
 extern const struct config_enum_entry dynamic_shared_memory_options[];
+extern const struct config_enum_entry io_method_options[];
 
 /*
  * GUC option variables that are exported from this module
@@ -2116,6 +2118,51 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"io_data_direct", PGC_SUSET, RESOURCES_DISK,
+			gettext_noop("data file IO uses direct IO."),
+		},
+		&io_data_direct,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"io_data_force_async", PGC_SUSET, RESOURCES_DISK,
+			gettext_noop("force synchronous data file to use async IO."),
+		},
+		&io_data_force_async,
+		true, // helpful for development
+		NULL, NULL, NULL
+	},
+
+	{
+		{"io_wal_direct", PGC_SUSET, RESOURCES_DISK,
+			gettext_noop("wal file IO uses direct IO."),
+		},
+		&io_wal_direct,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"io_wal_init_direct", PGC_SUSET, RESOURCES_DISK,
+			gettext_noop("wal file initialization IO uses direct IO."),
+		},
+		&io_wal_init_direct,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"io_wal_pad_partial", PGC_SUSET, RESOURCES_DISK,
+			gettext_noop("pad WAL files upon flash"),
+		},
+		&io_wal_pad_partial,
+		false,
+		NULL, NULL, NULL
+	},
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, false, NULL, NULL, NULL
@@ -3069,6 +3116,28 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"io_wal_concurrency", PGC_POSTMASTER, RESOURCES_ASYNCHRONOUS,
+			gettext_noop("How many concurrent IOs for WAL writes."),
+			NULL,
+			0
+		},
+		&io_wal_concurrency,
+		32, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"io_wal_target_blocks", PGC_POSTMASTER, RESOURCES_ASYNCHRONOUS,
+			gettext_noop("Maximum size for WAL IO."),
+			NULL,
+			GUC_UNIT_XBLOCKS
+		},
+		&io_wal_target_blocks,
+		8, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"backend_flush_after", PGC_USERSET, RESOURCES_ASYNCHRONOUS,
 			gettext_noop("Number of pages after which previously performed writes are flushed to disk."),
 			NULL,
@@ -3112,6 +3181,30 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&max_sync_workers_per_subscription,
 		2, 0, MAX_BACKENDS,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"io_workers",
+			PGC_SIGHUP,
+			RESOURCES_ASYNCHRONOUS,
+			gettext_noop("Number of IO worker processes, for io_method=worker."),
+			NULL,
+		},
+		&io_workers,
+		8, 1, MAX_IO_WORKERS,
+		NULL, assign_io_workers, NULL
+	},
+
+	{
+		{"io_worker_queue_size",
+			PGC_POSTMASTER,
+			RESOURCES_ASYNCHRONOUS,
+			gettext_noop("Size of the submission queue, for io_method=worker."),
+			NULL,
+		},
+		&io_worker_queue_size,
+		64, 1, 4096,
 		NULL, NULL, NULL
 	},
 
@@ -4968,6 +5061,16 @@ static struct config_enum ConfigureNamesEnum[] =
 		&recovery_init_sync_method,
 		RECOVERY_INIT_SYNC_METHOD_FSYNC, recovery_init_sync_method_options,
 		NULL, NULL, NULL
+	},
+
+	{
+		{"io_method", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Selects the method of asynchronous I/O to use."),
+			NULL
+		},
+		&io_method,
+		DEFAULT_IO_METHOD, io_method_options,
+		NULL, assign_io_method, NULL
 	},
 
 	/* End-of-list marker */

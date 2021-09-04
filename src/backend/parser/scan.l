@@ -363,8 +363,7 @@ colon_equals	":="
 equals_greater	"=>"
 less_equals		"<="
 greater_equals	">="
-less_greater	"<>"
-not_equals		"!="
+not_equals		(<>|!=)
 
 /*
  * "self" is the set of chars that should be returned as single-character
@@ -840,12 +839,6 @@ other			.
 {greater_equals} {
 					SET_YYLLOC();
 					return GREATER_EQUALS;
-				}
-
-{less_greater}	{
-					/* We accept both "<>" and "!=" as meaning NOT_EQUALS */
-					SET_YYLLOC();
-					return NOT_EQUALS;
 				}
 
 {not_equals}	{

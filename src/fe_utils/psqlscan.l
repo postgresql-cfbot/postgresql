@@ -301,8 +301,7 @@ colon_equals	":="
 equals_greater	"=>"
 less_equals		"<="
 greater_equals	">="
-less_greater	"<>"
-not_equals		"!="
+not_equals		(<>|!=)
 
 /*
  * "self" is the set of chars that should be returned as single-character
@@ -615,10 +614,6 @@ other			.
 				}
 
 {greater_equals} {
-					ECHO;
-				}
-
-{less_greater}	{
 					ECHO;
 				}
 

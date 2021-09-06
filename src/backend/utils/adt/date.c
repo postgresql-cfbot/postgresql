@@ -3029,7 +3029,7 @@ extract_timetz(PG_FUNCTION_ARGS)
 
 /* timetz_zone()
  * Encode time with time zone type with specified time zone.
- * Applies DST rules as of the current date.
+ * Applies DST rules as of the transaction start time.
  */
 Datum
 timetz_zone(PG_FUNCTION_ARGS)
@@ -3068,12 +3068,11 @@ timetz_zone(PG_FUNCTION_ARGS)
 	}
 	else if (type == DYNTZ)
 	{
-		/* dynamic-offset abbreviation, resolve using current time */
-		pg_time_t	now = (pg_time_t) time(NULL);
-		struct pg_tm *tm;
+		/* dynamic-offset abbreviation, resolve using transaction start time */
+		TimestampTz now = GetCurrentTransactionStartTimestamp();
+		int			isdst;
 
-		tm = pg_localtime(&now, tzp);
-		tz = DetermineTimeZoneAbbrevOffset(tm, tzname, tzp);
+		tz = DetermineTimeZoneAbbrevOffsetTS(now, tzname, tzp, &isdst);
 	}
 	else
 	{
@@ -3081,12 +3080,15 @@ timetz_zone(PG_FUNCTION_ARGS)
 		tzp = pg_tzset(tzname);
 		if (tzp)
 		{
-			/* Get the offset-from-GMT that is valid today for the zone */
-			pg_time_t	now = (pg_time_t) time(NULL);
-			struct pg_tm *tm;
+			/* Get the offset-from-GMT that is valid now for the zone */
+			TimestampTz now = GetCurrentTransactionStartTimestamp();
+			struct pg_tm tm;
+			fsec_t		fsec;
 
-			tm = pg_localtime(&now, tzp);
-			tz = -tm->tm_gmtoff;
+			if (timestamp2tm(now, &tz, &tm, &fsec, NULL, tzp) != 0)
+				ereport(ERROR,
+						(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+						 errmsg("timestamp out of range")));
 		}
 		else
 		{

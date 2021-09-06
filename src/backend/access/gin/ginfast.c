@@ -459,7 +459,17 @@ ginHeapTupleFastInsert(GinState *ginstate, GinTupleCollector *collector)
 	 * pending list not forcibly.
 	 */
 	if (needCleanup)
-		ginInsertCleanup(ginstate, false, true, false, NULL);
+	{
+		bool		recorded;
+
+		recorded = AutoVacuumRequestWork(AVW_GINCleanPendingList, 
+					RelationGetRelid(ginstate->index), InvalidBlockNumber);
+		if (!recorded)
+			ereport(LOG,
+					(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+					 errmsg("request for GIN clean pending list for index \"%s\" was not recorded",
+							RelationGetRelationName(ginstate->index))));
+	}
 }
 
 /*

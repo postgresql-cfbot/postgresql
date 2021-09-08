@@ -153,7 +153,6 @@ typedef enum NodeTag
 	T_Alias,
 	T_RangeVar,
 	T_TableFunc,
-	T_Expr,
 	T_Var,
 	T_Const,
 	T_Param,
@@ -671,6 +670,7 @@ extern bool equal(const void *a, const void *b);
  */
 typedef double Selectivity;		/* fraction of tuples a qualifier will pass */
 typedef double Cost;			/* execution cost (in page-access units) */
+typedef double Cardinality;		/* (estimated) number of rows or other integer count */
 
 
 /*

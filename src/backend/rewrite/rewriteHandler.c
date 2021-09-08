@@ -467,7 +467,7 @@ rewriteRuleAction(Query *parsetree,
 	 * this is a no-op because RLS conditions aren't added till later, but it
 	 * seems like good future-proofing to do this anyway.)
 	 */
-	sub_action->hasRowSecurity |= parsetree->hasRowSecurity;
+	sub_action->hasRowSecurity = parsetree->hasRowSecurity;
 
 	/*
 	 * Each rule action's jointree should be the main parsetree's jointree
@@ -524,7 +524,7 @@ rewriteRuleAction(Query *parsetree,
 	 * If the original query has any CTEs, copy them into the rule action. But
 	 * we don't need them for a utility action.
 	 */
-	if (parsetree->cteList != NIL && sub_action->commandType != CMD_UTILITY)
+	if (parsetree->cteList != NIL && rule_action->commandType != CMD_UTILITY)
 	{
 		ListCell   *lc;
 
@@ -535,13 +535,16 @@ rewriteRuleAction(Query *parsetree,
 		 *
 		 * This could possibly be fixed by using some sort of internally
 		 * generated ID, instead of names, to link CTE RTEs to their CTEs.
+		 * However, decompiling the results would be quite confusing; note the
+		 * merge of hasRecursive flags below, which could change the apparent
+		 * semantics of such redundantly-named CTEs.
 		 */
 		foreach(lc, parsetree->cteList)
 		{
 			CommonTableExpr *cte = (CommonTableExpr *) lfirst(lc);
 			ListCell   *lc2;
 
-			foreach(lc2, sub_action->cteList)
+			foreach(lc2, rule_action->cteList)
 			{
 				CommonTableExpr *cte2 = (CommonTableExpr *) lfirst(lc2);
 
@@ -554,8 +557,11 @@ rewriteRuleAction(Query *parsetree,
 		}
 
 		/* OK, it's safe to combine the CTE lists */
-		sub_action->cteList = list_concat(sub_action->cteList,
+		rule_action->cteList = list_concat(rule_action->cteList,
 										  copyObject(parsetree->cteList));
+		/* ... and don't forget about the associated flags */
+		rule_action->hasRecursive = parsetree->hasRecursive;
+		rule_action->hasModifyingCTE = parsetree->hasModifyingCTE;
 	}
 
 	/*

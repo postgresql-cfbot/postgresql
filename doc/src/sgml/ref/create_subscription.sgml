@@ -92,17 +92,39 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
     <term><literal>WITH ( <replaceable class="parameter">subscription_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] )</literal></term>
     <listitem>
      <para>
-      This clause specifies optional parameters for a subscription.  The
-      following parameters are supported:
+      This clause specifies optional parameters for a subscription.
+     </para>
+
+     <para>
+      The following parameters control what happens during subscription creation:
 
       <variablelist>
+
        <varlistentry>
-        <term><literal>copy_data</literal> (<type>boolean</type>)</term>
+        <term><literal>connect</literal> (<type>boolean</type>)</term>
         <listitem>
          <para>
-          Specifies whether the existing data in the publications that are
-          being subscribed to should be copied once the replication starts.
-          The default is <literal>true</literal>.
+          Specifies whether the <command>CREATE SUBSCRIPTION</command>
+          should connect to the publisher at all.  Setting this to
+          <literal>false</literal> will change default values of
+          <literal>enabled</literal>, <literal>create_slot</literal> and
+          <literal>copy_data</literal> to <literal>false</literal>.
+         </para>
+
+         <para>
+          You are not allowed a combination of <literal>connect</literal> set to
+          <literal>false</literal> and <literal>enabled</literal>,
+          <literal>create_slot</literal>, or <literal>copy_data</literal>
+          set to <literal>true</literal>.
+         </para>
+
+         <para>
+          Since no connection is made when this option is 
+          <literal>false</literal>, the tables are not subscribed, and so
+          after you enable the subscription nothing will be replicated.
+          It is required to run
+          <literal>ALTER SUBSCRIPTION ... REFRESH PUBLICATION</literal>
+          for tables to be subscribed.
          </para>
         </listitem>
        </varlistentry>
@@ -121,8 +143,8 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
         <term><literal>enabled</literal> (<type>boolean</type>)</term>
         <listitem>
          <para>
-          Specifies whether the subscription should be actively replicating,
-          or whether it should be just setup but not started yet.  The default
+          Specifies whether the subscription should be actively replicating
+          or whether it should be just set up but not started yet.  The default
           is <literal>true</literal>.
          </para>
         </listitem>
@@ -137,12 +159,63 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
          </para>
 
          <para>
-          When <literal>slot_name</literal> is set to
-          <literal>NONE</literal>, there will be no replication slot
-          associated with the subscription.  This can be used if the
-          replication slot will be created later manually.  Such
+          Setting <literal>slot_name</literal> to <literal>NONE</literal>
+          means there will be no replication slot
+          associated with the subscription.  Use this when you will be
+          creating the replication slot later manually.  Such
           subscriptions must also have both <literal>enabled</literal> and
           <literal>create_slot</literal> set to <literal>false</literal>.
+         </para>
+        </listitem>
+       </varlistentry>
+      </variablelist>
+     </para>
+
+     <para>
+      The following parameters control the replication behavior:
+
+      <variablelist>
+
+       <varlistentry>
+        <term><literal>binary</literal> (<type>boolean</type>)</term>
+        <listitem>
+         <para>
+          Specifies whether the subscription will request the publisher to
+          send the data in binary format (as opposed to text).
+          The default is <literal>false</literal>.
+          Even when this option is enabled, only data types having
+          binary send and receive functions will be transferred in binary.
+         </para>
+
+         <para>
+          When doing cross-version replication, it could be that the
+          publisher has a binary send function for some data type, but the
+          subscriber lacks a binary receive function for that type.  In
+          such a case, data transfer will fail, and
+          the <literal>binary</literal> option cannot be used.
+         </para>
+        </listitem>
+       </varlistentry>
+
+       <varlistentry>
+        <term><literal>copy_data</literal> (<type>boolean</type>)</term>
+        <listitem>
+         <para>
+          Specifies whether to copy the existing data in the publications 
+          subscribed to once the replication starts.
+          The default is <literal>true</literal>.
+         </para>
+        </listitem>
+       </varlistentry>
+
+       <varlistentry>
+        <term><literal>streaming</literal> (<type>boolean</type>)</term>
+        <listitem>
+         <para>
+          Specifies whether to enable streaming of in-progress transactions
+          for this subscription.  By default, all transactions
+          are fully decoded on the publisher and only then sent to the
+          subscriber as a whole.
          </para>
         </listitem>
        </varlistentry>
@@ -180,67 +253,6 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
        </varlistentry>
 
        <varlistentry>
-        <term><literal>binary</literal> (<type>boolean</type>)</term>
-        <listitem>
-         <para>
-          Specifies whether the subscription will request the publisher to
-          send the data in binary format (as opposed to text).
-          The default is <literal>false</literal>.
-          Even when this option is enabled, only data types that have
-          binary send and receive functions will be transferred in binary.
-         </para>
-
-         <para>
-          When doing cross-version replication, it could happen that the
-          publisher has a binary send function for some data type, but the
-          subscriber lacks a binary receive function for the type.  In
-          such a case, data transfer will fail, and
-          the <literal>binary</literal> option cannot be used.
-         </para>
-        </listitem>
-       </varlistentry>
-
-       <varlistentry>
-        <term><literal>connect</literal> (<type>boolean</type>)</term>
-        <listitem>
-         <para>
-          Specifies whether the <command>CREATE SUBSCRIPTION</command>
-          should connect to the publisher at all.  Setting this to
-          <literal>false</literal> will change default values of
-          <literal>enabled</literal>, <literal>create_slot</literal> and
-          <literal>copy_data</literal> to <literal>false</literal>.
-         </para>
-
-         <para>
-          It is not allowed to combine <literal>connect</literal> set to
-          <literal>false</literal> and <literal>enabled</literal>,
-          <literal>create_slot</literal>, or <literal>copy_data</literal>
-          set to <literal>true</literal>.
-         </para>
-
-         <para>
-          Since no connection is made when this option is set
-          to <literal>false</literal>, the tables are not subscribed, and so
-          after you enable the subscription nothing will be replicated.
-          It is required to run
-          <literal>ALTER SUBSCRIPTION ... REFRESH PUBLICATION</literal> in order
-          for tables to be subscribed.
-         </para>
-        </listitem>
-       </varlistentry>
-       <varlistentry>
-        <term><literal>streaming</literal> (<type>boolean</type>)</term>
-        <listitem>
-         <para>
-          Specifies whether streaming of in-progress transactions should
-          be enabled for this subscription.  By default, all transactions
-          are fully decoded on the publisher, and only then sent to the
-          subscriber as a whole.
-         </para>
-
-        </listitem>
-       </varlistentry>
-       <varlistentry>
         <term><literal>two_phase</literal> (<type>boolean</type>)</term>
         <listitem>
          <para>
@@ -249,24 +261,26 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
          </para>
 
          <para>
-          When two-phase commit is enabled then the decoded transactions are sent
+          When two-phase commit is enabled the decoded transactions are sent
           to the subscriber on the PREPARE TRANSACTION. By default, the transaction
           prepared on the publisher is decoded as a normal transaction at commit.
          </para>
 
          <para>
           The two-phase commit implementation requires that the replication has
-          successfully passed the initial table synchronization phase. This means
+          successfully passed the initial table synchronization phase. So
           even when two_phase is enabled for the subscription, the internal
           two-phase state remains temporarily "pending" until the initialization
-          phase is completed. See column
+          phase completes. See column
           <literal>subtwophasestate</literal> of <xref linkend="catalog-pg-subscription"/>
           to know the actual two-phase state.
          </para>
 
         </listitem>
        </varlistentry>
-      </variablelist></para>
+      </variablelist>
+     </para>
+
     </listitem>
    </varlistentry>
   </variablelist>

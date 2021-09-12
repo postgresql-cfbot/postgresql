@@ -266,6 +266,346 @@ ECPGnoticeReceiver(void *arg, const PGresult *result)
 	ecpg_log("raising sqlcode %d\n", sqlcode);
 }
 
+/*
+ * this function is used for parsing new style:
+ *  <tcp|unix>:postgresql://server[:port][/db-name][?options]
+ */
+static int
+parse_newstyle(int lineno, char *buf, char **host, char **dbname, char **port, char **options)
+{
+	int prefix_len;
+	int connect_params = 0;
+	char *p;
+	char *start;
+	char prevchar = '\0';
+	bool is_unix = false;
+
+	/* check specified protocol */
+	if (strncmp(buf, "unix:", 5) == 0)
+	{
+		is_unix = true;
+		prefix_len = 5;
+	}
+	else
+		prefix_len = 4;
+
+	/* check and skip the prefix */
+	if (!strncmp(buf + prefix_len, "postgtresql://", strlen("postgresql://")))
+		return -1;
+	start = buf + prefix_len + strlen("postgresql://");
+	p = start;
+
+
+	/*
+	 * Look for IPv6 address.
+	 */
+	if (*p == '[')
+	{
+		start = ++p;
+		while (*p && *p != ']')
+			++p;
+		if (!*p)
+		{
+			ecpg_log("end of string reached when looking for matching \"]\" in IPv6 host address: \"%s\"\n", buf);
+			return -1;
+		}
+		if (p == start)
+		{
+			ecpg_log("IPv6 host address may not be empty: \"%s\"\n", buf);
+			return -1;
+		}
+		/* Cut off the bracket and advance */
+		*(p++) = '\0';
+
+		/*
+		 * The address may be followed by a port specifier or a slash or a
+		 * query.
+		 */
+		if (*p && *p != ':' && *p != '/' && *p != '?')
+		{
+			ecpg_log("unexpected character \"%c\" at position %d (expected \":\", \"/\" or \"?\"): \"%s]%s\"\n", *p, (int) (p - buf + 1), buf, p);
+			return -1;
+		}
+	}
+	else
+	{
+		/* Look ahead for possible user credentials designator */
+		while (*p && *p != ':' && *p != '/' && *p != '?')
+			++p;
+	}
+
+	/* Save the hostname terminator before we null it */
+	prevchar = *p;
+	*p = '\0';
+
+	/* Duplicate string if TCP protocol is specified */
+	if (!is_unix)
+	{
+		*host = ecpg_strdup(start, lineno);
+		if (!(*host))
+			return -1;
+		connect_params++;
+	}
+	else
+		/* this value is used only for error-reporting */
+		*host = start;
+
+	if (prevchar == ':')
+	{
+		/* port number is found */
+		start = ++p;
+
+		while (*p && *p != '/' && *p != '?')
+			++p;
+
+		prevchar = *p;
+		*p = '\0';
+		*port = ecpg_strdup(start, lineno);
+		if (!(*port))
+		{
+			if (!is_unix)
+				ecpg_free(*host);
+			return -1;
+		}
+		connect_params++;
+	}
+
+
+	if (prevchar && prevchar != '?')
+	{
+		start = ++p;
+
+		/* Look for query parameters */
+		while (*p && *p != '?')
+			++p;
+
+		prevchar = *p;
+		*p = '\0';
+
+		if (strlen(start))
+		{
+			/* database name is specified */
+			*dbname = ecpg_strdup(start, lineno);
+			if (!(*dbname))
+			{
+				if (!is_unix)
+					ecpg_free(*host);
+				ecpg_free(*port);
+				return -1;
+			}
+			connect_params++;
+		}
+	}
+
+	if (prevchar)
+	{
+		start = ++p;
+		if (strlen(start))
+		{
+			*options = ecpg_strdup(start, lineno);
+			if (!(*options))
+			{
+				if (!is_unix)
+					ecpg_free(*host);
+				ecpg_free(*port);
+				ecpg_free(*dbname);
+				return -1;
+			}
+		}
+	}
+
+	if (is_unix)
+	{
+		if (strcmp(*host, "localhost") &&
+			strcmp(*host, "127.0.0.1") &&
+			strcmp(*host, "::1"))
+		{
+			/*
+			 * The alternative of using "127.0.0.1" here is deprecated
+			 * and undocumented; we'll keep it for backward
+			 * compatibility's sake.
+			 */
+			ecpg_log("ECPGconnect: non-localhost access via sockets on line %d\n", lineno);
+			ecpg_raise(lineno, ECPG_CONNECT, ECPG_SQLSTATE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION, *dbname ? *dbname : ecpg_gettext("<DEFAULT>"));
+			if (*port)
+				ecpg_free(*port);
+			if (*options)
+				ecpg_free(*options);
+			if (*dbname)
+				ecpg_free(*dbname);
+			return -1;
+		}
+		/* If unix-domain is specified, host should be null */
+		*host = NULL;
+	}
+
+	return connect_params;
+}
+
+/*
+ * same as above, but used for oldstyle:
+ *  database[@server][:port]
+ */
+static int
+parse_oldstyle(int lineno, char *buf, char **host, char **dbname, char **port)
+{
+	int connect_params = 0;
+	char *start = buf;
+	char *p = start;
+	char prevchar = '\0';
+
+	/* Look ahead for possible user credentials designator */
+	while (*p && *p != '@' && *p != ':')
+		++p;
+
+	/* Save the hostname terminator before we null it */
+	prevchar = *p;
+	*p = '\0';
+	if (strlen(start))
+	{
+		*dbname = ecpg_strdup(start, lineno);
+		if (!(*dbname))
+			return -1;
+
+		connect_params++;
+	}
+
+	if (prevchar == '@')
+	{
+		/* hostname is found */
+		start = ++p;
+		/*
+		 * Look for IPv6 address.
+		 */
+		if (*p == '[')
+		{
+			start = ++p;
+			while (*p && *p != ']')
+				++p;
+			if (!*p)
+			{
+				ecpg_log("end of string reached when looking for matching \"]\" in IPv6 host address: \"%s\"\n", buf);
+				return -1;
+			}
+			if (p == start)
+			{
+				ecpg_log("IPv6 host address may not be empty: \"%s\"\n", buf);
+				return -1;
+			}
+			/* Cut off the bracket and advance */
+			*(p++) = '\0';
+
+			/*
+			* The address may be followed by a port specifier or a slash or a
+			* query.
+			*/
+			if (*p && *p != ':')
+			{
+				ecpg_log("unexpected character \"%c\": \"%s]%s\"\n", *p, buf, p);
+				return -1;
+			}
+		}
+		else
+		{
+			while(*p && *p != ':')
+				++p;
+
+		}
+		prevchar = *p;
+		*p = '\0';
+		if (strcmp(start, "localhost") && strcmp(start, "127.0.0.1"))
+		{
+			*host = ecpg_strdup(start, lineno);
+			if (!(*host))
+			{
+				ecpg_free(*dbname);
+				return -1;
+			}
+			connect_params++;
+		}
+	}
+
+	if (prevchar == ':')
+	{
+		/* port number is found */
+		start = ++p;
+		*port = ecpg_strdup(start, lineno);
+		if (!(*port))
+		{
+			ecpg_free(*dbname);
+			ecpg_free(*host);
+			return -1;
+		}
+		connect_params++;
+	}
+
+	return connect_params;
+}
+
+/*
+ * parse option string.
+ */
+static int
+parse_options(char *params, int current_params, const char **conn_keywords, const char **conn_values)
+{
+	int connect_params = current_params;
+	while (*params)
+	{
+		/* blank must be skiped. */
+		char       *keyword = *params == ' ' ? ++params : params;
+		char       *value = NULL;
+		char       *p = keyword;
+
+		/*
+		 * Scan the params string for '=' and '&', marking the end of keyword
+		 * and value respectively.
+		 */
+		for (;;)
+		{
+			if (*p == '=')
+			{
+				/* Was there '=' already? */
+				if (value != NULL)
+				{
+					ecpg_log("extra key/value separator \"=\" in query parameter: \"%s\"\n", keyword);
+					return false;
+				}
+				/* Cut off keyword, advance to value */
+				*p++ = '\0';
+				value = p;
+			}
+			else if (*p == '&' || *p == '\0')
+			{
+				/*
+				 * If not at the end, cut off value and advance; leave p
+				 * pointing to start of the next parameter, if any.
+				 */
+				if (*p != '\0')
+					*p++ = '\0';
+				/* Was there '=' at all? */
+				if (value == NULL)
+				{
+					ecpg_log("extra key/value separator \"=\" in query parameter: \"%s\"\n", keyword);
+					return false;
+				}
+				/* Got keyword and value, go process them. */
+				break;
+			}
+			else
+				++p;				/* Advance over all other bytes. */
+		}
+
+		conn_keywords[connect_params] = keyword;
+		conn_values[connect_params] = value;
+		connect_params++;
+
+		/* Proceed to next key=value pair, if any */
+		params = p;
+	}
+
+	return connect_params;
+}
+
 /* this contains some quick hacks, needs to be cleaned up, but it works */
 bool
 ECPGconnect(int lineno, int c, const char *name, const char *user, const char *passwd, const char *connection_name, int autocommit)
@@ -273,13 +613,12 @@ ECPGconnect(int lineno, int c, const char *name, const char *user, const char *p
 	struct sqlca_t *sqlca = ECPGget_sqlca();
 	enum COMPAT_MODE compat = c;
 	struct connection *this;
-	int			i,
-				connect_params = 0;
-	char	   *dbname = name ? ecpg_strdup(name, lineno) : NULL,
+	int			connect_params,
+				conn_size = 0;
+	char	   *buf = name ? ecpg_strdup(name, lineno) : NULL,
 			   *host = NULL,
-			   *tmp,
 			   *port = NULL,
-			   *realname = NULL,
+			   *dbname = NULL,
 			   *options = NULL;
 	const char **conn_keywords;
 	const char **conn_values;
@@ -288,7 +627,7 @@ ECPGconnect(int lineno, int c, const char *name, const char *user, const char *p
 	{
 		ecpg_raise(lineno, ECPG_OUT_OF_MEMORY,
 				   ECPG_SQLSTATE_ECPG_OUT_OF_MEMORY, NULL);
-		ecpg_free(dbname);
+		ecpg_free(buf);
 		return false;
 	}
 
@@ -312,13 +651,13 @@ ECPGconnect(int lineno, int c, const char *name, const char *user, const char *p
 		envname = getenv("PG_DBPATH");
 		if (envname)
 		{
-			ecpg_free(dbname);
-			dbname = ecpg_strdup(envname, lineno);
+			ecpg_free(buf);
+			buf = ecpg_strdup(envname, lineno);
 		}
 
 	}
 
-	if (dbname == NULL && connection_name == NULL)
+	if (buf == NULL && connection_name == NULL)
 		connection_name = "DEFAULT";
 
 #if ENABLE_THREAD_SAFETY
@@ -328,7 +667,7 @@ ECPGconnect(int lineno, int c, const char *name, const char *user, const char *p
 	/* check if the identifier is unique */
 	if (ecpg_get_connection(connection_name))
 	{
-		ecpg_free(dbname);
+		ecpg_free(buf);
 		ecpg_log("ECPGconnect: connection identifier %s is already in use\n",
 				 connection_name);
 		return false;
@@ -336,127 +675,27 @@ ECPGconnect(int lineno, int c, const char *name, const char *user, const char *p
 
 	if ((this = (struct connection *) ecpg_alloc(sizeof(struct connection), lineno)) == NULL)
 	{
-		ecpg_free(dbname);
+		ecpg_free(buf);
 		return false;
 	}
 
-	if (dbname != NULL)
+	if (buf != NULL)
 	{
-		/* get the detail information from dbname */
-		if (strncmp(dbname, "tcp:", 4) == 0 || strncmp(dbname, "unix:", 5) == 0)
-		{
-			int			offset = 0;
-
-			/*
-			 * only allow protocols tcp and unix
-			 */
-			if (strncmp(dbname, "tcp:", 4) == 0)
-				offset = 4;
-			else if (strncmp(dbname, "unix:", 5) == 0)
-				offset = 5;
-
-			if (strncmp(dbname + offset, "postgresql://", strlen("postgresql://")) == 0)
-			{
-
-				/*------
-				 * new style:
-				 *	<tcp|unix>:postgresql://server[:port][/db-name][?options]
-				 *------
-				 */
-				offset += strlen("postgresql://");
-
-				tmp = strrchr(dbname + offset, '?');
-				if (tmp != NULL)	/* options given */
-				{
-					options = ecpg_strdup(tmp + 1, lineno);
-					*tmp = '\0';
-				}
-
-				tmp = last_dir_separator(dbname + offset);
-				if (tmp != NULL)	/* database name given */
-				{
-					if (tmp[1] != '\0') /* non-empty database name */
-					{
-						realname = ecpg_strdup(tmp + 1, lineno);
-						connect_params++;
-					}
-					*tmp = '\0';
-				}
-
-				tmp = strrchr(dbname + offset, ':');
-				if (tmp != NULL)	/* port number given */
-				{
-					*tmp = '\0';
-					port = ecpg_strdup(tmp + 1, lineno);
-					connect_params++;
-				}
-
-				if (strncmp(dbname, "unix:", 5) == 0)
-				{
-					/*
-					 * The alternative of using "127.0.0.1" here is deprecated
-					 * and undocumented; we'll keep it for backward
-					 * compatibility's sake, but not extend it to allow IPv6.
-					 */
-					if (strcmp(dbname + offset, "localhost") != 0 &&
-						strcmp(dbname + offset, "127.0.0.1") != 0)
-					{
-						ecpg_log("ECPGconnect: non-localhost access via sockets on line %d\n", lineno);
-						ecpg_raise(lineno, ECPG_CONNECT, ECPG_SQLSTATE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION, realname ? realname : ecpg_gettext("<DEFAULT>"));
-						if (host)
-							ecpg_free(host);
-						if (port)
-							ecpg_free(port);
-						if (options)
-							ecpg_free(options);
-						if (realname)
-							ecpg_free(realname);
-						if (dbname)
-							ecpg_free(dbname);
-						free(this);
-						return false;
-					}
-				}
-				else
-				{
-					if (*(dbname + offset) != '\0')
-					{
-						host = ecpg_strdup(dbname + offset, lineno);
-						connect_params++;
-					}
-				}
-			}
-		}
+		/* get the detail information from buf */
+		if (!strncmp(buf, "tcp:", 4)|| !strncmp(buf, "unix:", 5))
+			conn_size = parse_newstyle(lineno, buf, &host, &dbname, &port, &options);
 		else
+			conn_size = parse_oldstyle(lineno, buf, &host, &dbname, &port);
+
+		if (conn_size == -1)
 		{
-			/* old style: dbname[@server][:port] */
-			tmp = strrchr(dbname, ':');
-			if (tmp != NULL)	/* port number given */
-			{
-				port = ecpg_strdup(tmp + 1, lineno);
-				connect_params++;
-				*tmp = '\0';
-			}
-
-			tmp = strrchr(dbname, '@');
-			if (tmp != NULL)	/* host name given */
-			{
-				host = ecpg_strdup(tmp + 1, lineno);
-				connect_params++;
-				*tmp = '\0';
-			}
-
-			if (strlen(dbname) > 0)
-			{
-				realname = ecpg_strdup(dbname, lineno);
-				connect_params++;
-			}
-			else
-				realname = NULL;
+			free(this);
+			return false;
 		}
+
 	}
 	else
-		realname = NULL;
+		dbname = NULL;
 
 	/* add connection to our list */
 #ifdef ENABLE_THREAD_SAFETY
@@ -465,7 +704,7 @@ ECPGconnect(int lineno, int c, const char *name, const char *user, const char *p
 	if (connection_name != NULL)
 		this->name = ecpg_strdup(connection_name, lineno);
 	else
-		this->name = ecpg_strdup(realname, lineno);
+		this->name = ecpg_strdup(dbname, lineno);
 
 	this->cache_head = NULL;
 	this->prep_stmts = NULL;
@@ -482,7 +721,7 @@ ECPGconnect(int lineno, int c, const char *name, const char *user, const char *p
 	actual_connection = all_connections;
 
 	ecpg_log("ECPGconnect: opening database %s on %s port %s %s%s %s%s\n",
-			 realname ? realname : "<DEFAULT>",
+			 dbname ? dbname : "<DEFAULT>",
 			 host ? host : "<DEFAULT>",
 			 port ? (ecpg_internal_regression_mode ? "<REGRESSION_PORT>" : port) : "<DEFAULT>",
 			 options ? "with options " : "", options ? options : "",
@@ -490,18 +729,21 @@ ECPGconnect(int lineno, int c, const char *name, const char *user, const char *p
 
 	/* count options (this may produce an overestimate, it's ok) */
 	if (options)
+	{
+		int i;
 		for (i = 0; options[i]; i++)
 			if (options[i] == '=')
-				connect_params++;
+				conn_size++;
+	}
 
 	if (user && strlen(user) > 0)
-		connect_params++;
+		conn_size++;
 	if (passwd && strlen(passwd) > 0)
-		connect_params++;
+		conn_size++;
 
 	/* allocate enough space for all connection parameters */
-	conn_keywords = (const char **) ecpg_alloc((connect_params + 1) * sizeof(char *), lineno);
-	conn_values = (const char **) ecpg_alloc(connect_params * sizeof(char *), lineno);
+	conn_keywords = (const char **) ecpg_alloc((conn_size + 1) * sizeof(char *), lineno);
+	conn_values = (const char **) ecpg_alloc(conn_size * sizeof(char *), lineno);
 	if (conn_keywords == NULL || conn_values == NULL)
 	{
 		if (host)
@@ -510,10 +752,10 @@ ECPGconnect(int lineno, int c, const char *name, const char *user, const char *p
 			ecpg_free(port);
 		if (options)
 			ecpg_free(options);
-		if (realname)
-			ecpg_free(realname);
 		if (dbname)
 			ecpg_free(dbname);
+		if (buf)
+			ecpg_free(buf);
 		if (conn_keywords)
 			ecpg_free(conn_keywords);
 		if (conn_values)
@@ -522,91 +764,43 @@ ECPGconnect(int lineno, int c, const char *name, const char *user, const char *p
 		return false;
 	}
 
-	i = 0;
-	if (realname)
+	connect_params = 0;
+	if (dbname)
 	{
-		conn_keywords[i] = "dbname";
-		conn_values[i] = realname;
-		i++;
+		conn_keywords[connect_params] = "dbname";
+		conn_values[connect_params] = dbname;
+		connect_params++;
 	}
 	if (host)
 	{
-		conn_keywords[i] = "host";
-		conn_values[i] = host;
-		i++;
+		conn_keywords[connect_params] = "host";
+		conn_values[connect_params] = host;
+		connect_params++;
 	}
 	if (port)
 	{
-		conn_keywords[i] = "port";
-		conn_values[i] = port;
-		i++;
+		conn_keywords[connect_params] = "port";
+		conn_values[connect_params] = port;
+		connect_params++;
 	}
 	if (user && strlen(user) > 0)
 	{
-		conn_keywords[i] = "user";
-		conn_values[i] = user;
-		i++;
+		conn_keywords[connect_params] = "user";
+		conn_values[connect_params] = user;
+		connect_params++;
 	}
 	if (passwd && strlen(passwd) > 0)
 	{
-		conn_keywords[i] = "password";
-		conn_values[i] = passwd;
-		i++;
+		conn_keywords[connect_params] = "password";
+		conn_values[connect_params] = passwd;
+		connect_params++;
 	}
 	if (options)
-	{
-		char	   *str;
+		connect_params = parse_options(options, connect_params, conn_keywords, conn_values);
 
-		/*
-		 * The options string contains "keyword=value" pairs separated by
-		 * '&'s.  We must break this up into keywords and values to pass to
-		 * libpq (it's okay to scribble on the options string).  We ignore
-		 * spaces just before each keyword or value.
-		 */
-		for (str = options; *str;)
-		{
-			int			e,
-						a;
-			char	   *token1,
-					   *token2;
 
-			/* Skip spaces before keyword */
-			for (token1 = str; *token1 == ' '; token1++)
-				 /* skip */ ;
-			/* Find end of keyword */
-			for (e = 0; token1[e] && token1[e] != '='; e++)
-				 /* skip */ ;
-			if (token1[e])		/* found "=" */
-			{
-				token1[e] = '\0';
-				/* Skip spaces before value */
-				for (token2 = token1 + e + 1; *token2 == ' '; token2++)
-					 /* skip */ ;
-				/* Find end of value */
-				for (a = 0; token2[a] && token2[a] != '&'; a++)
-					 /* skip */ ;
-				if (token2[a])	/* found "&" => another option follows */
-				{
-					token2[a] = '\0';
-					str = token2 + a + 1;
-				}
-				else
-					str = token2 + a;
-
-				conn_keywords[i] = token1;
-				conn_values[i] = token2;
-				i++;
-			}
-			else
-			{
-				/* Bogus options syntax ... ignore trailing garbage */
-				str = token1 + e;
-			}
-		}
-	}
-
-	Assert(i <= connect_params);
-	conn_keywords[i] = NULL;	/* terminator */
+	Assert(connect_params <= conn_size);
+	conn_keywords[connect_params] = NULL;	/* terminator */
 
 	this->connection = PQconnectdbParams(conn_keywords, conn_values, 0);
 
@@ -616,15 +810,15 @@ ECPGconnect(int lineno, int c, const char *name, const char *user, const char *p
 		ecpg_free(port);
 	if (options)
 		ecpg_free(options);
-	if (dbname)
-		ecpg_free(dbname);
+	if (buf)
+		ecpg_free(buf);
 	ecpg_free(conn_values);
 	ecpg_free(conn_keywords);
 
 	if (PQstatus(this->connection) == CONNECTION_BAD)
 	{
 		const char *errmsg = PQerrorMessage(this->connection);
-		const char *db = realname ? realname : ecpg_gettext("<DEFAULT>");
+		const char *db = dbname ? dbname : ecpg_gettext("<DEFAULT>");
 
 		/* PQerrorMessage's result already has a trailing newline */
 		ecpg_log("ECPGconnect: %s", errmsg);
@@ -635,14 +829,14 @@ ECPGconnect(int lineno, int c, const char *name, const char *user, const char *p
 #endif
 
 		ecpg_raise(lineno, ECPG_CONNECT, ECPG_SQLSTATE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION, db);
-		if (realname)
-			ecpg_free(realname);
+		if (dbname)
+			ecpg_free(dbname);
 
 		return false;
 	}
 
-	if (realname)
-		ecpg_free(realname);
+	if (dbname)
+		ecpg_free(dbname);
 
 #ifdef ENABLE_THREAD_SAFETY
 	pthread_mutex_unlock(&connections_mutex);

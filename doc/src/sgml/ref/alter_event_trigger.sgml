@@ -37,7 +37,9 @@ ALTER EVENT TRIGGER <replaceable class="parameter">name</replaceable> RENAME TO 
   </para>
 
   <para>
-   You must be superuser to alter an event trigger.
+   You must own the event trigger to use <command>ALTER EVENT TRIGGER</command>.
+   To alter the owner, you must also be a direct or indirect member of the
+   new owning role.
   </para>
  </refsect1>
 

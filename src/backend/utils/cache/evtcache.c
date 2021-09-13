@@ -173,6 +173,7 @@ BuildEventTriggerCache(void)
 		/* Allocate new cache item. */
 		item = palloc0(sizeof(EventTriggerCacheItem));
 		item->fnoid = form->evtfoid;
+		item->fnowner = form->evtowner;
 		item->enabled = form->evtenabled;
 
 		/* Decode and sort tags array. */

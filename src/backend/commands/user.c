@@ -77,6 +77,7 @@ CreateRole(ParseState *pstate, CreateRoleStmt *stmt)
 	Datum		new_record[Natts_pg_authid];
 	bool		new_record_nulls[Natts_pg_authid];
 	Oid			roleid;
+	Oid			owner;
 	ListCell   *item;
 	ListCell   *option;
 	char	   *password = NULL;	/* user password */
@@ -107,6 +108,9 @@ CreateRole(ParseState *pstate, CreateRoleStmt *stmt)
 	DefElem    *dadminmembers = NULL;
 	DefElem    *dvalidUntil = NULL;
 	DefElem    *dbypassRLS = NULL;
+
+	/* Make more flexible later */
+	owner = GetUserId();
 
 	/* The defaults can vary depending on the original statement type */
 	switch (stmt->stmt_type)
@@ -345,6 +349,7 @@ CreateRole(ParseState *pstate, CreateRoleStmt *stmt)
 		DirectFunctionCall1(namein, CStringGetDatum(stmt->role));
 
 	new_record[Anum_pg_authid_rolsuper - 1] = BoolGetDatum(issuper);
+	new_record[Anum_pg_authid_rolowner - 1] = ObjectIdGetDatum(owner);
 	new_record[Anum_pg_authid_rolinherit - 1] = BoolGetDatum(inherit);
 	new_record[Anum_pg_authid_rolcreaterole - 1] = BoolGetDatum(createrole);
 	new_record[Anum_pg_authid_rolcreatedb - 1] = BoolGetDatum(createdb);
@@ -421,6 +426,8 @@ CreateRole(ParseState *pstate, CreateRoleStmt *stmt)
 	 * Insert new record in the pg_authid table
 	 */
 	CatalogTupleInsert(pg_authid_rel, tuple);
+
+	recordDependencyOnOwner(AuthIdRelationId, roleid, owner);
 
 	/*
 	 * Advance command counter so we can see new record; else tests in
@@ -686,7 +693,7 @@ AlterRole(ParseState *pstate, AlterRoleStmt *stmt)
 			  !rolemembers &&
 			  !validUntil &&
 			  dpassword &&
-			  roleid == GetUserId()))
+			  !pg_role_ownercheck(roleid, GetUserId())))
 			ereport(ERROR,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 					 errmsg("permission denied")));
@@ -887,7 +894,8 @@ AlterRoleSet(AlterRoleSetStmt *stmt)
 		}
 		else
 		{
-			if (!have_createrole_privilege() && roleid != GetUserId())
+			if (!have_createrole_privilege() &&
+				!pg_role_ownercheck(roleid, GetUserId()))
 				ereport(ERROR,
 						(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 						 errmsg("permission denied")));
@@ -938,11 +946,6 @@ DropRole(DropRoleStmt *stmt)
 	Relation	pg_authid_rel,
 				pg_auth_members_rel;
 	ListCell   *item;
-
-	if (!have_createrole_privilege())
-		ereport(ERROR,
-				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-				 errmsg("permission denied to drop role")));
 
 	/*
 	 * Scan the pg_authid relation to find the Oid of the role(s) to be
@@ -1015,6 +1018,12 @@ DropRole(DropRoleStmt *stmt)
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 					 errmsg("must be superuser to drop superusers")));
 
+		if (!have_createrole_privilege() &&
+			!pg_role_ownercheck(roleid, GetUserId()))
+			ereport(ERROR,
+					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+					 errmsg("permission denied to drop role")));
+
 		/* DROP hook for the role being removed */
 		InvokeObjectDropHook(AuthIdRelationId, roleid, 0);
 
@@ -1078,8 +1087,9 @@ DropRole(DropRoleStmt *stmt)
 		systable_endscan(sscan);
 
 		/*
-		 * Remove any comments or security labels on this role.
+		 * Remove any dependencies, comments or security labels on this role.
 		 */
+		deleteSharedDependencyRecordsFor(AuthIdRelationId, roleid, 0);
 		DeleteSharedComments(roleid, AuthIdRelationId);
 		DeleteSharedSecurityLabel(roleid, AuthIdRelationId);
 
@@ -1674,4 +1684,39 @@ DelRoleMems(const char *rolename, Oid roleid,
 	 * Close pg_authmem, but keep lock till commit.
 	 */
 	table_close(pg_authmem_rel, NoLock);
+}
+
+/*
+ * Change role owner
+ */
+ObjectAddress
+AlterRoleOwner(const char *name, Oid newOwnerId)
+{
+	Oid                     roleid;
+	HeapTuple       tup;
+	Relation        rel;
+	ObjectAddress address;
+	Form_pg_authid authform;
+
+	rel = table_open(AuthIdRelationId, RowExclusiveLock);
+
+	tup = SearchSysCache1(AUTHNAME, CStringGetDatum(name));
+	if (!HeapTupleIsValid(tup))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_SCHEMA),
+				 errmsg("role \"%s\" does not exist", name)));
+
+	authform = (Form_pg_authid) GETSTRUCT(tup);
+	roleid = authform->oid;
+
+	elog(WARNING, "AlterRoleOwner_internal not yet implemented");
+	// AlterRoleOwner_internal(tup, rel, newOwnerId);
+
+	ObjectAddressSet(address, AuthIdRelationId, roleid);
+
+	ReleaseSysCache(tup);
+
+	table_close(rel, RowExclusiveLock);
+
+	return address;
 }

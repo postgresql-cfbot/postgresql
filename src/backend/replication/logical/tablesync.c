@@ -111,6 +111,7 @@
 #include "replication/origin.h"
 #include "storage/ipc.h"
 #include "storage/lmgr.h"
+#include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
@@ -924,6 +925,7 @@ LogicalRepSyncTableStart(XLogRecPtr *origin_startpos)
 	char		relstate;
 	XLogRecPtr	relstate_lsn;
 	Relation	rel;
+	AclResult	aclresult;
 	WalRcvExecResult *res;
 	char		originname[NAMEDATALEN];
 	RepOriginId originid;
@@ -1041,6 +1043,17 @@ LogicalRepSyncTableStart(XLogRecPtr *origin_startpos)
 	 * RowExclusiveLock when remapping remote relation id to local one.
 	 */
 	rel = table_open(MyLogicalRepWorker->relid, RowExclusiveLock);
+
+	/*
+	 * Check that our table sync worker has permission to insert into the
+	 * target table.
+	 */
+	aclresult = pg_class_aclcheck(RelationGetRelid(rel), GetUserId(),
+								  ACL_INSERT);
+	if (aclresult != ACLCHECK_OK)
+		aclcheck_error(aclresult,
+					   get_relkind_objtype(rel->rd_rel->relkind),
+					   RelationGetRelationName(rel));
 
 	/*
 	 * Start a transaction in the remote node in REPEATABLE READ mode.  This

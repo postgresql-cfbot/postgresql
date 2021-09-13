@@ -46,9 +46,7 @@ ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> RENAME TO <
   <para>
    You must own the subscription to use <command>ALTER SUBSCRIPTION</command>.
    To alter the owner, you must also be a direct or indirect member of the
-   new owning role. The new owner has to be a superuser.
-   (Currently, all subscription owners must be superusers, so the owner checks
-   will be bypassed in practice.  But this might change in the future.)
+   new owning role.
   </para>
   
   <para>
@@ -96,6 +94,9 @@ ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> RENAME TO <
       <xref linkend="sql-createsubscription"/>.  See there for more
       information.
      </para>
+     <para>
+      Only superusers may change the connection property.
+     </para>
     </listitem>
    </varlistentry>
 
@@ -133,6 +134,9 @@ ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> RENAME TO <
 
       Additionally, refresh options as described
       under <literal>REFRESH PUBLICATION</literal> may be specified.
+     </para>
+     <para>
+      Only superusers may change the list of subscribed publications.
      </para>
     </listitem>
    </varlistentry>
@@ -198,6 +202,9 @@ ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> RENAME TO <
       <literal>synchronous_commit</literal>,
       <literal>binary</literal>, and
       <literal>streaming</literal>.
+     </para>
+     <para>
+      Only superusers may alter subscription parameters.
      </para>
     </listitem>
    </varlistentry>

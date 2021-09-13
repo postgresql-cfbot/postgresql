@@ -99,11 +99,43 @@ ALTER SUBSCRIPTION regress_testsub_foo SET (synchronous_commit = foobar);
 -- rename back to keep the rest simple
 ALTER SUBSCRIPTION regress_testsub_foo RENAME TO regress_testsub;
 
--- fail - new owner must be superuser
+-- superuser can assign the ownership to a non-superuser
 ALTER SUBSCRIPTION regress_testsub OWNER TO regress_subscription_user2;
-ALTER ROLE regress_subscription_user2 SUPERUSER;
--- now it works
-ALTER SUBSCRIPTION regress_testsub OWNER TO regress_subscription_user2;
+
+SET SESSION AUTHORIZATION regress_subscription_user2;
+
+-- fail - not a member of the target role
+ALTER SUBSCRIPTION regress_testsub OWNER TO regress_subscription_user;
+
+-- fail - non-superuser owner cannot change connection parameter
+ALTER SUBSCRIPTION regress_testsub CONNECTION 'dbname=somethingelse';
+
+-- fail - non-superuser owner cannot alter the publications list
+ALTER SUBSCRIPTION regress_testsub ADD PUBLICATION somepub;
+ALTER SUBSCRIPTION regress_testsub DROP PUBLICATION otherpub;
+ALTER SUBSCRIPTION regress_testsub SET PUBLICATION somepub, otherpub;
+
+-- fail - non-superuser owner cannot change subscription parameters
+ALTER SUBSCRIPTION regress_testsub SET (copy_data = true);
+ALTER SUBSCRIPTION regress_testsub SET (copy_data = false);
+ALTER SUBSCRIPTION regress_testsub SET (create_slot = true);
+ALTER SUBSCRIPTION regress_testsub SET (create_slot = false);
+ALTER SUBSCRIPTION regress_testsub SET (slot_name = 'somethingelse');
+ALTER SUBSCRIPTION regress_testsub SET (synchronous_commit = on);
+ALTER SUBSCRIPTION regress_testsub SET (synchronous_commit = off);
+ALTER SUBSCRIPTION regress_testsub SET (synchronous_commit = local);
+ALTER SUBSCRIPTION regress_testsub SET (synchronous_commit = remote_write);
+ALTER SUBSCRIPTION regress_testsub SET (synchronous_commit = remote_apply);
+ALTER SUBSCRIPTION regress_testsub SET (binary = on);
+ALTER SUBSCRIPTION regress_testsub SET (binary = off);
+ALTER SUBSCRIPTION regress_testsub SET (connect = on);
+ALTER SUBSCRIPTION regress_testsub SET (connect = off);
+ALTER SUBSCRIPTION regress_testsub SET (streaming = on);
+ALTER SUBSCRIPTION regress_testsub SET (streaming = off);
+ALTER SUBSCRIPTION regress_testsub SET (two_phase = on);
+ALTER SUBSCRIPTION regress_testsub SET (two_phase = off);
+
+SET SESSION AUTHORIZATION 'regress_subscription_user';
 
 -- fail - cannot do DROP SUBSCRIPTION inside transaction block with slot name
 BEGIN;

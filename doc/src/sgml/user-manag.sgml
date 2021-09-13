@@ -582,6 +582,50 @@ DROP ROLE doomed_role;
        <entry>Allow executing programs on the database server as the user the database runs as with
        COPY and other functions which allow executing a server-side program.</entry>
       </row>
+      <row>
+       <entry>pg_manage_host_resource_settings</entry>
+       <entry>Allow changing settings which control host resource usage.</entry>
+      </row>
+      <row>
+       <entry>pg_manage_vacuum_settings</entry>
+       <entry>Allow changing settings which control vacuum behavior.</entry>
+      </row>
+      <row>
+       <entry>pg_manage_autovacuum_settings</entry>
+       <entry>Allow changing settings which control autovacuum behavior.</entry>
+      </row>
+      <row>
+       <entry>pg_manage_logging_settings</entry>
+       <entry>Allow changing settings which control logging behavior.</entry>
+      </row>
+      <row>
+       <entry>pg_manage_replication_settings</entry>
+       <entry>Allow changing settings which control replication behavior.</entry>
+      </row>
+      <row>
+       <entry>pg_manage_connection_settings</entry>
+       <entry>Allow changing settings which control connections and authentication.</entry>
+      </row>
+      <row>
+       <entry>pg_manage_wal_settings</entry>
+       <entry>Allow changing settings which control write ahead log behavior.</entry>
+      </row>
+      <row>
+       <entry>pg_manage_query_tuning_settings</entry>
+       <entry>Allow changing settings which control tuning of query planning and execution.</entry>
+      </row>
+      <row>
+       <entry>pg_manage_stats_settings</entry>
+       <entry>Allow changing settings which control collection of statistics.</entry>
+      </row>
+      <row>
+       <entry>pg_manage_recovery_settings</entry>
+       <entry>Allow changing settings which control or are generally used for recovery.</entry>
+      </row>
+      <row>
+       <entry>pg_manage_error_handling_settings</entry>
+       <entry>Allow changing settings which control how errors are handled.</entry>
+      </row>
      </tbody>
     </tgroup>
    </table>
@@ -627,9 +671,25 @@ DROP ROLE doomed_role;
   </para>
 
   <para>
+  The <literal>pg_manage_host_resource_settings</literal>,
+  <literal>pg_manage_vacuum_settings</literal>,
+  <literal>pg_manage_autovacuum_settings</literal>,
+  <literal>pg_manage_logging_settings</literal>,
+  <literal>pg_manage_replication_settings</literal>,
+  <literal>pg_manage_connection_settings</literal>,
+  <literal>pg_manage_wal_settings</literal>,
+  <literal>pg_manage_query_tuning_settings</literal>,
+  <literal>pg_manage_stats_settings</literal>,
+  <literal>pg_manage_recovery_settings</literal> and
+  <literal>pg_manage_error_handling_settings</literal> roles are intended to
+  allow administrators to have trusted, but non-superuser, roles to configure
+  the server.
+  </para>
+
+  <para>
   Care should be taken when granting these roles to ensure they are only used where
   needed and with the understanding that these roles grant access to privileged
-  information.
+  information or the ability to misconfigure the server.
   </para>
 
   <para>

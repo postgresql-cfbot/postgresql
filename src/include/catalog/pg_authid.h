@@ -32,6 +32,7 @@ CATALOG(pg_authid,1260,AuthIdRelationId) BKI_SHARED_RELATION BKI_ROWTYPE_OID(284
 {
 	Oid			oid;			/* oid */
 	NameData	rolname;		/* name of role */
+	Oid			rolowner BKI_DEFAULT(POSTGRES) BKI_LOOKUP(pg_authid); /* owner of this role */
 	bool		rolsuper;		/* read this field via superuser() only! */
 	bool		rolinherit;		/* inherit privileges from other roles? */
 	bool		rolcreaterole;	/* allowed to create more roles? */

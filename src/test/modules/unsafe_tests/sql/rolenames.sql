@@ -499,6 +499,7 @@ REVOKE pg_read_all_settings FROM regress_role_haspriv;
 
 DROP SCHEMA test_roles_schema;
 DROP OWNED BY regress_testrol0, "Public", "current_role", "current_user", regress_testrol1, regress_testrol2, regress_testrolx CASCADE;
-DROP ROLE regress_testrol0, regress_testrol1, regress_testrol2, regress_testrolx;
+DROP ROLE regress_testrol0, regress_testrol1, regress_testrol2, regress_testrolx; -- fails with owner of role regress_role_haspriv
 DROP ROLE "Public", "None", "current_role", "current_user", "session_user", "user";
 DROP ROLE regress_role_haspriv, regress_role_nopriv;
+DROP ROLE regress_testrol0, regress_testrol1, regress_testrol2, regress_testrolx;  -- ok now

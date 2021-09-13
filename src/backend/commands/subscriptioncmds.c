@@ -868,6 +868,11 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 	{
 		case ALTER_SUBSCRIPTION_OPTIONS:
 			{
+				if (!superuser())
+					ereport(ERROR,
+							(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+							 errmsg("must be superuser to alter the options for a subscription")));
+
 				supported_opts = (SUBOPT_SLOT_NAME |
 								  SUBOPT_SYNCHRONOUS_COMMIT | SUBOPT_BINARY |
 								  SUBOPT_STREAMING);
@@ -946,6 +951,11 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 			}
 
 		case ALTER_SUBSCRIPTION_CONNECTION:
+			if (!superuser())
+				ereport(ERROR,
+						(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+						 errmsg("must be superuser to alter the connection for a subscription")));
+
 			/* Load the library providing us libpq calls. */
 			load_file("libpqwalreceiver", false);
 			/* Check the connection info string. */
@@ -959,6 +969,11 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 
 		case ALTER_SUBSCRIPTION_SET_PUBLICATION:
 			{
+				if (!superuser())
+					ereport(ERROR,
+							(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+							 errmsg("must be superuser to alter publications for a subscription")));
+
 				supported_opts = SUBOPT_COPY_DATA | SUBOPT_REFRESH;
 				parse_subscription_options(pstate, stmt->options,
 										   supported_opts, &opts);
@@ -1005,6 +1020,11 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 			{
 				List	   *publist;
 				bool		isadd = stmt->kind == ALTER_SUBSCRIPTION_ADD_PUBLICATION;
+
+				if (!superuser())
+					ereport(ERROR,
+							(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+							 errmsg("must be superuser to alter publications for a subscription")));
 
 				supported_opts = SUBOPT_REFRESH | SUBOPT_COPY_DATA;
 				parse_subscription_options(pstate, stmt->options,
@@ -1456,13 +1476,8 @@ AlterSubscriptionOwner_internal(Relation rel, HeapTuple tup, Oid newOwnerId)
 		aclcheck_error(ACLCHECK_NOT_OWNER, OBJECT_SUBSCRIPTION,
 					   NameStr(form->subname));
 
-	/* New owner must be a superuser */
-	if (!superuser_arg(newOwnerId))
-		ereport(ERROR,
-				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-				 errmsg("permission denied to change owner of subscription \"%s\"",
-						NameStr(form->subname)),
-				 errhint("The owner of a subscription must be a superuser.")));
+	/* Must be able to assign ownership to the target role */
+	check_is_member_of_role(GetUserId(), newOwnerId);
 
 	form->subowner = newOwnerId;
 	CatalogTupleUpdate(rel, &tup->t_self, tup);

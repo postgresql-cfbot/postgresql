@@ -464,14 +464,14 @@ _PG_init(void)
 							   NULL,
 							   &pltcl_start_proc,
 							   NULL,
-							   PGC_SUSET, 0,
+							   PGC_SUSET, GUC_SUPERUSER_ONLY, 0,
 							   NULL, NULL, NULL);
 	DefineCustomStringVariable("pltclu.start_proc",
 							   gettext_noop("PL/TclU function to call once when pltclu is first used."),
 							   NULL,
 							   &pltclu_start_proc,
 							   NULL,
-							   PGC_SUSET, 0,
+							   PGC_SUSET, GUC_SUPERUSER_ONLY, 0,
 							   NULL, NULL, NULL);
 
 	pltcl_pm_init_done = true;

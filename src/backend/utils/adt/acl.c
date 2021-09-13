@@ -4850,6 +4850,10 @@ has_privs_of_role(Oid member, Oid role)
 	if (superuser_arg(member))
 		return true;
 
+	/* Owners of roles have every privilge the owned role has */
+	if (pg_role_ownercheck(role, member))
+		return true;
+
 	/*
 	 * Find all the roles that member has the privileges of, including
 	 * multi-level recursion, then see if target role is any one of them.

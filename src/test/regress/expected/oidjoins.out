@@ -194,6 +194,7 @@ NOTICE:  checking pg_database {dattablespace} => pg_tablespace {oid}
 NOTICE:  checking pg_db_role_setting {setdatabase} => pg_database {oid}
 NOTICE:  checking pg_db_role_setting {setrole} => pg_authid {oid}
 NOTICE:  checking pg_tablespace {spcowner} => pg_authid {oid}
+NOTICE:  checking pg_authid {rolowner} => pg_authid {oid}
 NOTICE:  checking pg_auth_members {roleid} => pg_authid {oid}
 NOTICE:  checking pg_auth_members {member} => pg_authid {oid}
 NOTICE:  checking pg_auth_members {grantor} => pg_authid {oid}

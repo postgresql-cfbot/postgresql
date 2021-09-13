@@ -137,13 +137,60 @@ HINT:  Available values: local, remote_write, remote_apply, on, off.
 
 -- rename back to keep the rest simple
 ALTER SUBSCRIPTION regress_testsub_foo RENAME TO regress_testsub;
--- fail - new owner must be superuser
+-- superuser can assign the ownership to a non-superuser
 ALTER SUBSCRIPTION regress_testsub OWNER TO regress_subscription_user2;
-ERROR:  permission denied to change owner of subscription "regress_testsub"
-HINT:  The owner of a subscription must be a superuser.
-ALTER ROLE regress_subscription_user2 SUPERUSER;
--- now it works
-ALTER SUBSCRIPTION regress_testsub OWNER TO regress_subscription_user2;
+SET SESSION AUTHORIZATION regress_subscription_user2;
+-- fail - not a member of the target role
+ALTER SUBSCRIPTION regress_testsub OWNER TO regress_subscription_user;
+ERROR:  must be member of role "regress_subscription_user"
+-- fail - non-superuser owner cannot change connection parameter
+ALTER SUBSCRIPTION regress_testsub CONNECTION 'dbname=somethingelse';
+ERROR:  must be superuser to alter the connection for a subscription
+-- fail - non-superuser owner cannot alter the publications list
+ALTER SUBSCRIPTION regress_testsub ADD PUBLICATION somepub;
+ERROR:  must be superuser to alter publications for a subscription
+ALTER SUBSCRIPTION regress_testsub DROP PUBLICATION otherpub;
+ERROR:  must be superuser to alter publications for a subscription
+ALTER SUBSCRIPTION regress_testsub SET PUBLICATION somepub, otherpub;
+ERROR:  must be superuser to alter publications for a subscription
+-- fail - non-superuser owner cannot change subscription parameters
+ALTER SUBSCRIPTION regress_testsub SET (copy_data = true);
+ERROR:  must be superuser to alter the options for a subscription
+ALTER SUBSCRIPTION regress_testsub SET (copy_data = false);
+ERROR:  must be superuser to alter the options for a subscription
+ALTER SUBSCRIPTION regress_testsub SET (create_slot = true);
+ERROR:  must be superuser to alter the options for a subscription
+ALTER SUBSCRIPTION regress_testsub SET (create_slot = false);
+ERROR:  must be superuser to alter the options for a subscription
+ALTER SUBSCRIPTION regress_testsub SET (slot_name = 'somethingelse');
+ERROR:  must be superuser to alter the options for a subscription
+ALTER SUBSCRIPTION regress_testsub SET (synchronous_commit = on);
+ERROR:  must be superuser to alter the options for a subscription
+ALTER SUBSCRIPTION regress_testsub SET (synchronous_commit = off);
+ERROR:  must be superuser to alter the options for a subscription
+ALTER SUBSCRIPTION regress_testsub SET (synchronous_commit = local);
+ERROR:  must be superuser to alter the options for a subscription
+ALTER SUBSCRIPTION regress_testsub SET (synchronous_commit = remote_write);
+ERROR:  must be superuser to alter the options for a subscription
+ALTER SUBSCRIPTION regress_testsub SET (synchronous_commit = remote_apply);
+ERROR:  must be superuser to alter the options for a subscription
+ALTER SUBSCRIPTION regress_testsub SET (binary = on);
+ERROR:  must be superuser to alter the options for a subscription
+ALTER SUBSCRIPTION regress_testsub SET (binary = off);
+ERROR:  must be superuser to alter the options for a subscription
+ALTER SUBSCRIPTION regress_testsub SET (connect = on);
+ERROR:  must be superuser to alter the options for a subscription
+ALTER SUBSCRIPTION regress_testsub SET (connect = off);
+ERROR:  must be superuser to alter the options for a subscription
+ALTER SUBSCRIPTION regress_testsub SET (streaming = on);
+ERROR:  must be superuser to alter the options for a subscription
+ALTER SUBSCRIPTION regress_testsub SET (streaming = off);
+ERROR:  must be superuser to alter the options for a subscription
+ALTER SUBSCRIPTION regress_testsub SET (two_phase = on);
+ERROR:  must be superuser to alter the options for a subscription
+ALTER SUBSCRIPTION regress_testsub SET (two_phase = off);
+ERROR:  must be superuser to alter the options for a subscription
+SET SESSION AUTHORIZATION 'regress_subscription_user';
 -- fail - cannot do DROP SUBSCRIPTION inside transaction block with slot name
 BEGIN;
 DROP SUBSCRIPTION regress_testsub;

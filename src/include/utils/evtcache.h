@@ -28,6 +28,7 @@ typedef enum
 typedef struct
 {
 	Oid			fnoid;			/* function to be called */
+	Oid			fnowner;		/* event trigger owner */
 	char		enabled;		/* as SESSION_REPLICATION_ROLE_* */
 	Bitmapset  *tagset;			/* command tags, or NULL if empty */
 } EventTriggerCacheItem;

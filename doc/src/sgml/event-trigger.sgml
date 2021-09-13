@@ -119,6 +119,13 @@
      to intercept. A common use of such triggers is to restrict the range of
      DDL operations which users may perform.
    </para>
+
+   <para>
+    A trigger will only fire if the trigger owner is a direct or indirect
+    member of the role which performed the event.  (Note that
+    <productname>PostgreSQL</productname> prior to version 15.0 did not
+    condition trigger firing on the permissions of the trigger owner.)
+   </para>
   </sect1>
 
   <sect1 id="event-trigger-matrix">

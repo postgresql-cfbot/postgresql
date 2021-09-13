@@ -2540,25 +2540,9 @@ check_object_ownership(Oid roleid, ObjectType objtype, ObjectAddress address,
 							   NameListToString(castNode(List, object)));
 			break;
 		case OBJECT_ROLE:
-
-			/*
-			 * We treat roles as being "owned" by those with CREATEROLE priv,
-			 * except that superusers are only owned by superusers.
-			 */
-			if (superuser_arg(address.objectId))
-			{
-				if (!superuser_arg(roleid))
-					ereport(ERROR,
-							(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-							 errmsg("must be superuser")));
-			}
-			else
-			{
-				if (!has_createrole_privilege(roleid))
-					ereport(ERROR,
-							(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-							 errmsg("must have CREATEROLE privilege")));
-			}
+			if (!pg_role_ownercheck(roleid, GetUserId()))
+				aclcheck_error(ACLCHECK_NOT_OWNER, objtype,
+							   NameListToString(castNode(List, object)));
 			break;
 		case OBJECT_TSPARSER:
 		case OBJECT_TSTEMPLATE:

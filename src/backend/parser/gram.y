@@ -1194,6 +1194,10 @@ CreateOptRoleElem:
 				{
 					$$ = makeDefElem("addroleto", (Node *)$3, @1);
 				}
+			| OWNER RoleSpec
+				{
+					$$ = makeDefElem("owner", (Node *)$2, @1);
+				}
 		;
 
 
@@ -9486,6 +9490,14 @@ AlterOwnerStmt: ALTER AGGREGATE aggregate_with_argtypes OWNER TO RoleSpec
 				{
 					AlterOwnerStmt *n = makeNode(AlterOwnerStmt);
 					n->objectType = OBJECT_PROCEDURE;
+					n->object = (Node *) $3;
+					n->newowner = $6;
+					$$ = (Node *)n;
+				}
+			| ALTER ROLE RoleSpec OWNER TO RoleSpec
+				{
+					AlterOwnerStmt *n = makeNode(AlterOwnerStmt);
+					n->objectType = OBJECT_ROLE;
 					n->object = (Node *) $3;
 					n->newowner = $6;
 					$$ = (Node *)n;

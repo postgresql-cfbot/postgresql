@@ -29,9 +29,14 @@ CREATE USER regress_priv_user2;
 CREATE USER regress_priv_user3;
 CREATE USER regress_priv_user4;
 CREATE USER regress_priv_user5;
+
 CREATE USER regress_priv_user5;	-- duplicate
-CREATE USER regress_priv_user6;
+
+CREATE USER regress_priv_user6 CREATEROLE;
+
+SET SESSION AUTHORIZATION regress_priv_user6;
 CREATE USER regress_priv_user7;
+RESET SESSION AUTHORIZATION;
 
 GRANT pg_read_all_data TO regress_priv_user6;
 GRANT pg_write_all_data TO regress_priv_user7;
@@ -1389,8 +1394,14 @@ DROP USER regress_priv_user2;
 DROP USER regress_priv_user3;
 DROP USER regress_priv_user4;
 DROP USER regress_priv_user5;
+
 DROP USER regress_priv_user6;
+
+SET SESSION AUTHORIZATION regress_priv_user6;
 DROP USER regress_priv_user7;
+RESET SESSION AUTHORIZATION;
+
+DROP USER regress_priv_user6;
 DROP USER regress_priv_user8; -- does not exist
 
 

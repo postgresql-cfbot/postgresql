@@ -27,8 +27,10 @@ CREATE USER regress_priv_user4;
 CREATE USER regress_priv_user5;
 CREATE USER regress_priv_user5;	-- duplicate
 ERROR:  role "regress_priv_user5" already exists
-CREATE USER regress_priv_user6;
+CREATE USER regress_priv_user6 CREATEROLE;
+SET SESSION AUTHORIZATION regress_priv_user6;
 CREATE USER regress_priv_user7;
+RESET SESSION AUTHORIZATION;
 GRANT pg_read_all_data TO regress_priv_user6;
 GRANT pg_write_all_data TO regress_priv_user7;
 CREATE GROUP regress_priv_group1;
@@ -2327,7 +2329,12 @@ DROP USER regress_priv_user3;
 DROP USER regress_priv_user4;
 DROP USER regress_priv_user5;
 DROP USER regress_priv_user6;
+ERROR:  role "regress_priv_user6" cannot be dropped because some objects depend on it
+DETAIL:  owner of role regress_priv_user7
+SET SESSION AUTHORIZATION regress_priv_user6;
 DROP USER regress_priv_user7;
+RESET SESSION AUTHORIZATION;
+DROP USER regress_priv_user6;
 DROP USER regress_priv_user8; -- does not exist
 ERROR:  role "regress_priv_user8" does not exist
 -- permissions with LOCK TABLE

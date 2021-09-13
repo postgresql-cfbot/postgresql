@@ -3418,6 +3418,9 @@ aclcheck_error(AclResult aclerr, ObjectType objtype,
 					case OBJECT_VIEW:
 						msg = gettext_noop("permission denied for view %s");
 						break;
+					case OBJECT_ROLE:
+						msg = gettext_noop("permission denied for role %s");
+						break;
 						/* these currently aren't used */
 					case OBJECT_ACCESS_METHOD:
 					case OBJECT_AMOP:
@@ -3428,7 +3431,6 @@ aclcheck_error(AclResult aclerr, ObjectType objtype,
 					case OBJECT_DEFACL:
 					case OBJECT_DOMCONSTRAINT:
 					case OBJECT_PUBLICATION_REL:
-					case OBJECT_ROLE:
 					case OBJECT_RULE:
 					case OBJECT_TABCONSTRAINT:
 					case OBJECT_TRANSFORM:
@@ -3543,6 +3545,9 @@ aclcheck_error(AclResult aclerr, ObjectType objtype,
 					case OBJECT_TSDICTIONARY:
 						msg = gettext_noop("must be owner of text search dictionary %s");
 						break;
+					case OBJECT_ROLE:
+						msg = gettext_noop("must be owner of role %s");
+						break;
 
 						/*
 						 * Special cases: For these, the error message talks
@@ -3567,7 +3572,6 @@ aclcheck_error(AclResult aclerr, ObjectType objtype,
 					case OBJECT_DEFACL:
 					case OBJECT_DOMCONSTRAINT:
 					case OBJECT_PUBLICATION_REL:
-					case OBJECT_ROLE:
 					case OBJECT_TRANSFORM:
 					case OBJECT_TSPARSER:
 					case OBJECT_TSTEMPLATE:
@@ -5429,15 +5433,61 @@ pg_statistics_object_ownercheck(Oid stat_oid, Oid roleid)
 }
 
 /*
+ * Check whether specified role is the direct or indirect owner of another
+ * role.
+ */
+bool
+pg_role_ownercheck(Oid role_oid, Oid roleid)
+{
+	HeapTuple	tuple;
+
+	/* Superusers bypass all permission checking. */
+	if (superuser_arg(roleid))
+		return true;
+
+	/*
+	 * Start with the owned role and traverse the ownership hierarchy upward.
+	 * We stop when we find the owner we are looking for or when we reach the
+	 * top.
+	 */
+	while (OidIsValid(role_oid))
+	{
+		Oid		owner_oid;
+
+		/* Find the owner of the current iteration's role */
+		tuple = SearchSysCache1(AUTHOID, ObjectIdGetDatum(role_oid));
+		if (!HeapTupleIsValid(tuple))
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("role with OID %u does not exist",
+							role_oid)));
+		owner_oid = ((Form_pg_authid) GETSTRUCT(tuple))->rolowner;
+		ReleaseSysCache(tuple);
+
+		/* Have we found the target role? */
+		if (roleid == owner_oid)
+			return true;
+
+		/*
+		 * If we have reached a role which owns itself, we must iterate no
+		 * further, else we fall into an infinite loop.
+		 */
+		if (role_oid == owner_oid)
+			return false;
+
+		/* Set up for the next iteration. */
+		role_oid = owner_oid;
+	}
+
+	return false;
+}
+
+/*
  * Check whether specified role has CREATEROLE privilege (or is a superuser)
  *
- * Note: roles do not have owners per se; instead we use this test in
- * places where an ownership-like permissions test is needed for a role.
- * Be sure to apply it to the role trying to do the operation, not the
- * role being operated on!	Also note that this generally should not be
- * considered enough privilege if the target role is a superuser.
- * (We don't handle that consideration here because we want to give a
- * separate error message for such cases, so the caller has to deal with it.)
+ * Note: In versions prior to PostgreSQL version 15, roles did not have owners
+ * per se; instead we used this test in places where an ownership-like
+ * permissions test was needed for a role.
  */
 bool
 has_createrole_privilege(Oid roleid)

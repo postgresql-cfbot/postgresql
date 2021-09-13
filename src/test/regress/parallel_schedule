@@ -88,6 +88,11 @@ test: brin_bloom brin_multi
 # ----------
 test: create_table_like alter_generic alter_operator misc async dbsize misc_functions sysviews tsrf tid tidscan tidrangescan collate.icu.utf8 incremental_sort
 
+# ----------
+# Another group of parallel tests (GUC management roles related)
+# ----------
+test: admin host_resource_settings vacuum_settings autovacuum_settings logging_settings replication_settings connection_settings wal_settings query_tuning_settings stats_settings recovery_settings error_handling_settings
+
 # rules cannot run concurrently with any test that creates
 # a view or rule in the public schema
 # collate.*.utf8 tests cannot be run in parallel with each other

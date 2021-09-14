@@ -1565,6 +1565,9 @@ exprLocation(const Node *expr)
 		case T_Constraint:
 			loc = ((const Constraint *) expr)->location;
 			break;
+		case T_Period:
+			loc = ((const Period *) expr)->location;
+			break;
 		case T_FunctionParameter:
 			/* just use typename's location */
 			loc = exprLocation((Node *) ((const FunctionParameter *) expr)->argType);
@@ -2234,6 +2237,14 @@ expression_tree_walker(Node *node,
 					return true;
 			}
 			break;
+		case T_ForPortionOfExpr:
+			{
+				ForPortionOfExpr *forPortionOf = (ForPortionOfExpr *) node;
+
+				if (walker((Node *) forPortionOf->targetRange, context))
+					return true;
+			}
+			break;
 		case T_PartitionPruneStepOp:
 			{
 				PartitionPruneStepOp *opstep = (PartitionPruneStepOp *) node;
@@ -2369,6 +2380,8 @@ query_tree_walker(Query *query,
 	if (walker((Node *) query->targetList, context))
 		return true;
 	if (walker((Node *) query->withCheckOptions, context))
+		return true;
+	if (walker((Node *) query->forPortionOf, context))
 		return true;
 	if (walker((Node *) query->onConflict, context))
 		return true;

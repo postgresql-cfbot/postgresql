@@ -1423,6 +1423,28 @@ _readAppendRelInfo(void)
  */
 
 /*
+ * _readForPortionOfExpr
+ */
+static ForPortionOfExpr *
+_readForPortionOfExpr(void)
+{
+	READ_LOCALS(ForPortionOfExpr);
+
+	READ_INT_FIELD(range_attno);
+	READ_STRING_FIELD(range_name);
+	READ_NODE_FIELD(range);
+	READ_NODE_FIELD(startCol);
+	READ_NODE_FIELD(endCol);
+	READ_NODE_FIELD(targetStart);
+	READ_NODE_FIELD(targetEnd);
+	READ_NODE_FIELD(targetRange);
+	READ_OID_FIELD(rangeType);
+	READ_NODE_FIELD(overlapsExpr);
+	READ_NODE_FIELD(rangeSet);
+	READ_DONE();
+}
+
+/*
  * _readRangeTblEntry
  */
 static RangeTblEntry *
@@ -1696,6 +1718,7 @@ _readModifyTable(void)
 	READ_NODE_FIELD(rowMarks);
 	READ_INT_FIELD(epqParam);
 	READ_ENUM_FIELD(onConflictAction, OnConflictAction);
+	READ_NODE_FIELD(forPortionOf);
 	READ_NODE_FIELD(arbiterIndexes);
 	READ_NODE_FIELD(onConflictSet);
 	READ_NODE_FIELD(onConflictCols);
@@ -2845,6 +2868,8 @@ parseNodeString(void)
 		return_value = _readOnConflictExpr();
 	else if (MATCH("APPENDRELINFO", 13))
 		return_value = _readAppendRelInfo();
+	else if (MATCH("FORPORTIONOFEXPR", 16))
+		return_value = _readForPortionOfExpr();
 	else if (MATCH("RTE", 3))
 		return_value = _readRangeTblEntry();
 	else if (MATCH("RANGETBLFUNCTION", 16))

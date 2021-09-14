@@ -51,6 +51,8 @@
 #include "utils/builtins.h"
 #include "utils/datum.h"
 #include "utils/memutils.h"
+#include "utils/rangetypes.h"
+#include "utils/lsyscache.h"
 #include "utils/rel.h"
 
 
@@ -3046,6 +3048,37 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 									&mtstate->ps);
 			onconfl->oc_WhereClause = qualexpr;
 		}
+	}
+
+	/*
+	 * If needed, initialize the target range for FOR PORTION OF.
+	 */
+	if (node->forPortionOf)
+	{
+		ForPortionOfExpr *forPortionOf = (ForPortionOfExpr *) node->forPortionOf;
+		Datum	targetRange;
+		bool	isNull;
+		ExprContext *econtext;
+		ExprState *exprState;
+
+		/* Eval the FOR PORTION OF target */
+		if (mtstate->ps.ps_ExprContext == NULL)
+			ExecAssignExprContext(estate, &mtstate->ps);
+		econtext = mtstate->ps.ps_ExprContext;
+
+		exprState = ExecPrepareExpr((Expr *) forPortionOf->targetRange, estate);
+		targetRange = ExecEvalExpr(exprState, econtext, &isNull);
+
+		if (isNull) elog(ERROR, "Got a NULL FOR PORTION OF target range");
+
+		resultRelInfo->ri_forPortionOf = makeNode(ForPortionOfState);
+		resultRelInfo->ri_forPortionOf->fp_rangeName = forPortionOf->range_name;
+		resultRelInfo->ri_forPortionOf->fp_periodStartName = forPortionOf->period_start_name;
+		resultRelInfo->ri_forPortionOf->fp_periodEndName = forPortionOf->period_end_name;
+		resultRelInfo->ri_forPortionOf->fp_targetRange = targetRange;
+		resultRelInfo->ri_forPortionOf->fp_rangeType = forPortionOf->rangeType;
+
+		/* Don't free the ExprContext here because the result must last for the whole query */
 	}
 
 	/*

@@ -357,6 +357,9 @@ ExecRefreshMatView(RefreshMatViewStmt *stmt, const char *queryString,
 
 	ObjectAddressSet(address, RelationRelationId, matviewOid);
 
+	/* Report results to the stats collector */
+	pgstat_report_refresh_matview(matviewOid);
+
 	/*
 	 * Save the rowcount so that pg_stat_statements can track the total number
 	 * of rows processed by REFRESH MATERIALIZED VIEW command. Note that we

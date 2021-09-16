@@ -82,6 +82,7 @@ typedef enum StatMsgType
 	PGSTAT_MTYPE_CHECKSUMFAILURE,
 	PGSTAT_MTYPE_REPLSLOT,
 	PGSTAT_MTYPE_CONNECTION,
+	PGSTAT_MTYPE_REFRESHEDMATVIEW
 } StatMsgType;
 
 /* ----------
@@ -667,6 +668,18 @@ typedef struct PgStat_MsgConn
 	SessionEndType m_disconnect;
 } PgStat_MsgConn;
 
+/* ----------
+ * PgStat_MsgRefreshMatview			Sent by the backend to update statistics.
+									after REFRESH MATERIALIZED VIEW.
+ * ----------
+ */
+typedef struct PgStat_MsgRefreshMatview
+{
+	PgStat_MsgHdr m_hdr;
+	Oid			m_databaseid;
+	Oid			m_tableoid;
+	TimestampTz refreshmatview_time;
+} PgStat_MsgRefreshMatview;
 
 /* ----------
  * PgStat_Msg					Union over all possible messages.
@@ -701,6 +714,7 @@ typedef union PgStat_Msg
 	PgStat_MsgChecksumFailure msg_checksumfailure;
 	PgStat_MsgReplSlot msg_replslot;
 	PgStat_MsgConn msg_conn;
+	PgStat_MsgRefreshMatview msg_refreshmatview;
 } PgStat_Msg;
 
 
@@ -797,6 +811,9 @@ typedef struct PgStat_StatTabEntry
 	PgStat_Counter analyze_count;
 	TimestampTz autovac_analyze_timestamp;	/* autovacuum initiated */
 	PgStat_Counter autovac_analyze_count;
+
+	TimestampTz matview_refresh_timestamp;	/* refresh matview executed */
+	PgStat_Counter matview_refresh_count;
 } PgStat_StatTabEntry;
 
 
@@ -1024,7 +1041,7 @@ extern void pgstat_report_checksum_failure(void);
 extern void pgstat_report_replslot(const PgStat_StatReplSlotEntry *repSlotStat);
 extern void pgstat_report_replslot_create(const char *slotname);
 extern void pgstat_report_replslot_drop(const char *slotname);
-
+extern void pgstat_report_refresh_matview(Oid tableoid);
 extern void pgstat_initialize(void);
 
 

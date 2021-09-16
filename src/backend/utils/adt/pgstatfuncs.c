@@ -376,6 +376,39 @@ pg_stat_get_autoanalyze_count(PG_FUNCTION_ARGS)
 }
 
 Datum
+pg_stat_get_last_refresh_matview_time(PG_FUNCTION_ARGS)
+{
+	Oid			relid = PG_GETARG_OID(0);
+	TimestampTz result;
+	PgStat_StatTabEntry *tabentry;
+
+	if ((tabentry = pgstat_fetch_stat_tabentry(relid)) == NULL)
+		result = 0;
+	else
+		result = tabentry->matview_refresh_timestamp;
+
+	if (result == 0)
+		PG_RETURN_NULL();
+	else
+		PG_RETURN_TIMESTAMPTZ(result);
+}
+
+Datum
+pg_stat_get_refresh_matview_count(PG_FUNCTION_ARGS)
+{
+	Oid			relid = PG_GETARG_OID(0);
+	int64		result;
+	PgStat_StatTabEntry *tabentry;
+
+	if ((tabentry = pgstat_fetch_stat_tabentry(relid)) == NULL)
+		result = 0;
+	else
+		result = (int64) (tabentry->matview_refresh_count);
+
+	PG_RETURN_INT64(result);
+}
+
+Datum
 pg_stat_get_function_calls(PG_FUNCTION_ARGS)
 {
 	Oid			funcid = PG_GETARG_OID(0);

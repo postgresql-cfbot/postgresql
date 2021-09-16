@@ -4285,6 +4285,26 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
        daemon
       </para></entry>
      </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>last_refresh_matview_time</structfield> <type>timestamp with time zone</type>
+      </para>
+      <para>
+       Last time at which this materialized view was refreshed
+       (If this record is materialized view)
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>refresh_matview_count</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of times this materialized view has been refreshed
+       (If this record is materialized view)
+      </para></entry>
+     </row>
     </tbody>
    </tgroup>
   </table>

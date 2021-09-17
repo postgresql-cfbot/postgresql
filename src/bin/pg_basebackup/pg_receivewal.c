@@ -47,7 +47,6 @@ static bool synchronous = false;
 static char *replication_slot = NULL;
 static XLogRecPtr endpos = InvalidXLogRecPtr;
 
-
 static void usage(void);
 static DIR *get_destination_dir(char *dest_folder);
 static void close_destination_dir(DIR *dest_dir, char *dest_folder);
@@ -399,7 +398,7 @@ StreamLog(void)
 	 * at the same time, necessary if not valid data can be found in the
 	 * existing output directory.
 	 */
-	if (!RunIdentifySystem(conn, NULL, &servertli, &serverpos, NULL))
+	if (!RunIdentifySystem(conn, &stream.sysidentifier, &servertli, &serverpos, NULL))
 		exit(1);
 
 	/*
@@ -411,6 +410,8 @@ StreamLog(void)
 		stream.startpos = serverpos;
 		stream.timeline = servertli;
 	}
+
+	Assert(stream.timeline != 0 && stream.startpos != InvalidXLogRecPtr);
 
 	/*
 	 * Always start streaming at the beginning of a segment
@@ -449,6 +450,7 @@ StreamLog(void)
 
 	FreeWalDirectoryMethod();
 	pg_free(stream.walmethod);
+	pg_free(stream.sysidentifier);
 }
 
 /*
@@ -688,20 +690,6 @@ main(int argc, char **argv)
 		exit(1);
 
 	/*
-	 * Set umask so that directories/files are created with the same
-	 * permissions as directories/files in the source data directory.
-	 *
-	 * pg_mode_mask is set to owner-only by default and then updated in
-	 * GetConnection() where we get the mode from the server-side with
-	 * RetrieveDataDirCreatePerm() and then call SetDataDirectoryCreatePerm().
-	 */
-	umask(pg_mode_mask);
-
-	/* determine remote server's xlog segment size */
-	if (!RetrieveWalSegSize(conn))
-		exit(1);
-
-	/*
 	 * Check that there is a database associated with connection, none should
 	 * be defined in this context.
 	 */
@@ -711,6 +699,16 @@ main(int argc, char **argv)
 					 replication_slot);
 		exit(1);
 	}
+
+	/*
+	 * Set umask so that directories/files are created with the same
+	 * permissions as directories/files in the source data directory.
+	 *
+	 * pg_mode_mask is set to owner-only by default and then updated in
+	 * GetConnection() where we get the mode from the server-side with
+	 * RetrieveDataDirCreatePerm() and then call SetDataDirectoryCreatePerm().
+	 */
+	umask(pg_mode_mask);
 
 	/*
 	 * Drop a replication slot.
@@ -736,6 +734,10 @@ main(int argc, char **argv)
 			exit(1);
 		exit(0);
 	}
+
+	/* determine remote server's xlog segment size */
+	if (!RetrieveWalSegSize(conn))
+		exit(1);
 
 	/*
 	 * Don't close the connection here so that subsequent StreamLog() can

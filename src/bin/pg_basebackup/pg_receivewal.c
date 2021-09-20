@@ -29,8 +29,15 @@
 #include "receivelog.h"
 #include "streamutil.h"
 
+#ifdef HAVE_LIBLZ4
+#include "lz4frame.h"
+#endif
+
 /* Time to sleep between reconnection attempts */
 #define RECONNECT_SLEEP_TIME 5
+
+/* Default compression level for gzip compression method */
+#define DEFAULT_ZLIB_COMPRESSLEVEL 5
 
 /* Global options */
 static char *basedir = NULL;
@@ -45,6 +52,7 @@ static bool do_drop_slot = false;
 static bool do_sync = true;
 static bool synchronous = false;
 static char *replication_slot = NULL;
+static WalCompressionMethod compression_method = COMPRESSION_NONE;
 static XLogRecPtr endpos = InvalidXLogRecPtr;
 
 
@@ -62,16 +70,6 @@ disconnect_atexit(void)
 	if (conn != NULL)
 		PQfinish(conn);
 }
-
-/* Routines to evaluate segment file format */
-#define IsCompressXLogFileName(fname)	 \
-	(strlen(fname) == XLOG_FNAME_LEN + strlen(".gz") && \
-	 strspn(fname, "0123456789ABCDEF") == XLOG_FNAME_LEN &&		\
-	 strcmp((fname) + XLOG_FNAME_LEN, ".gz") == 0)
-#define IsPartialCompressXLogFileName(fname)	\
-	(strlen(fname) == XLOG_FNAME_LEN + strlen(".gz.partial") && \
-	 strspn(fname, "0123456789ABCDEF") == XLOG_FNAME_LEN &&		\
-	 strcmp((fname) + XLOG_FNAME_LEN, ".gz.partial") == 0)
 
 static void
 usage(void)
@@ -92,7 +90,10 @@ usage(void)
 	printf(_("      --synchronous      flush write-ahead log immediately after writing\n"));
 	printf(_("  -v, --verbose          output verbose messages\n"));
 	printf(_("  -V, --version          output version information, then exit\n"));
-	printf(_("  -Z, --compress=0-9     compress logs with given compression level\n"));
+	printf(_("      --compression-method=METHOD\n"
+			 "                         method to compress logs\n"));
+	printf(_("  -Z, --compress=1-9     compress logs with given compression level (default: %d)"),
+		   DEFAULT_ZLIB_COMPRESSLEVEL);
 	printf(_("  -?, --help             show this help, then exit\n"));
 	printf(_("\nConnection options:\n"));
 	printf(_("  -d, --dbname=CONNSTR   connection string\n"));
@@ -106,6 +107,79 @@ usage(void)
 	printf(_("      --drop-slot        drop the replication slot (for the slot's name see --slot)\n"));
 	printf(_("\nReport bugs to <%s>.\n"), PACKAGE_BUGREPORT);
 	printf(_("%s home page: <%s>\n"), PACKAGE_NAME, PACKAGE_URL);
+}
+
+
+/*
+ * Check if the filename looks like an xlog file. Also note if it is partial
+ * and/or compressed file.
+ */
+static bool
+is_xlogfilename(const char *filename, bool *ispartial,
+				WalCompressionMethod *wal_compression_method)
+{
+	size_t		fname_len = strlen(filename);
+	size_t		xlog_pattern_len = strspn(filename, "0123456789ABCDEF");
+
+	/* File does not look like a XLOG file */
+	if (xlog_pattern_len != XLOG_FNAME_LEN)
+		return false;
+
+	/* File looks like a complete uncompressed XLOG file */
+	if (fname_len == XLOG_FNAME_LEN)
+	{
+		*ispartial = false;
+		*wal_compression_method = COMPRESSION_NONE;
+		return true;
+	}
+
+	/* File looks like a complete zlib compressed XLOG file */
+	if (fname_len == XLOG_FNAME_LEN + strlen(".gz") &&
+		strcmp(filename + XLOG_FNAME_LEN, ".gz") == 0)
+	{
+		*ispartial = false;
+		*wal_compression_method = COMPRESSION_ZLIB;
+		return true;
+	}
+
+	/* File looks like a complete LZ4 compressed XLOG file */
+	if (fname_len == XLOG_FNAME_LEN + strlen(".lz4") &&
+		strcmp(filename + XLOG_FNAME_LEN, ".lz4") == 0)
+	{
+		*ispartial = false;
+		*wal_compression_method = COMPRESSION_LZ4;
+		return true;
+	}
+
+	/* File looks like a partial uncompressed XLOG file */
+	if (fname_len == XLOG_FNAME_LEN + strlen(".partial") &&
+		strcmp(filename + XLOG_FNAME_LEN, ".partial") == 0)
+	{
+		*ispartial = true;
+		*wal_compression_method = COMPRESSION_NONE;
+		return true;
+	}
+
+	/* File looks like a partial zlib compressed XLOG file */
+	if (fname_len == XLOG_FNAME_LEN + strlen(".gz.partial") &&
+		strcmp(filename + XLOG_FNAME_LEN, ".gz.partial") == 0)
+	{
+		*ispartial = true;
+		*wal_compression_method = COMPRESSION_ZLIB;
+		return true;
+	}
+
+	/* File looks like a partial LZ4 compressed XLOG file */
+	if (fname_len == XLOG_FNAME_LEN + strlen(".lz4.partial") &&
+		strcmp(filename + XLOG_FNAME_LEN, ".lz4.partial") == 0)
+	{
+		*ispartial = true;
+		*wal_compression_method = COMPRESSION_LZ4;
+		return true;
+	}
+
+	/* File does not look like something we recognise */
+	return false;
 }
 
 static bool
@@ -213,33 +287,11 @@ FindStreamingStart(uint32 *tli)
 	{
 		uint32		tli;
 		XLogSegNo	segno;
+		WalCompressionMethod wal_compression_method;
 		bool		ispartial;
-		bool		iscompress;
 
-		/*
-		 * Check if the filename looks like an xlog file, or a .partial file.
-		 */
-		if (IsXLogFileName(dirent->d_name))
-		{
-			ispartial = false;
-			iscompress = false;
-		}
-		else if (IsPartialXLogFileName(dirent->d_name))
-		{
-			ispartial = true;
-			iscompress = false;
-		}
-		else if (IsCompressXLogFileName(dirent->d_name))
-		{
-			ispartial = false;
-			iscompress = true;
-		}
-		else if (IsPartialCompressXLogFileName(dirent->d_name))
-		{
-			ispartial = true;
-			iscompress = true;
-		}
-		else
+		if (!is_xlogfilename(dirent->d_name,
+							 &ispartial, &wal_compression_method))
 			continue;
 
 		/*
@@ -250,14 +302,18 @@ FindStreamingStart(uint32 *tli)
 		/*
 		 * Check that the segment has the right size, if it's supposed to be
 		 * completed.  For non-compressed segments just check the on-disk size
-		 * and see if it matches a completed segment. For compressed segments,
-		 * look at the last 4 bytes of the compressed file, which is where the
-		 * uncompressed size is located for gz files with a size lower than
-		 * 4GB, and then compare it to the size of a completed segment. The 4
-		 * last bytes correspond to the ISIZE member according to
-		 * http://www.zlib.org/rfc-gzip.html.
+		 * and see if it matches a completed segment. For zlib compressed
+		 * segments, look at the last 4 bytes of the compressed file, which is
+		 * where the uncompressed size is located for gz files with a size
+		 * lower than 4GB, and then compare it to the size of a completed
+		 * segment. The 4 last bytes correspond to the ISIZE member according
+		 * to http://www.zlib.org/rfc-gzip.html.
+		 *
+		 * For LZ4 compressed segments read the header using the exposed API
+		 * and compare the uncompressed file size, stored in
+		 * LZ4F_frameInfo_t{.contentSize}, to that of a completed segment.
 		 */
-		if (!ispartial && !iscompress)
+		if (!ispartial && wal_compression_method == COMPRESSION_NONE)
 		{
 			struct stat statbuf;
 			char		fullpath[MAXPGPATH * 2];
@@ -276,7 +332,7 @@ FindStreamingStart(uint32 *tli)
 				continue;
 			}
 		}
-		else if (!ispartial && iscompress)
+		else if (!ispartial && wal_compression_method == COMPRESSION_ZLIB)
 		{
 			int			fd;
 			char		buf[4];
@@ -321,6 +377,80 @@ FindStreamingStart(uint32 *tli)
 							   dirent->d_name, bytes_out);
 				continue;
 			}
+		}
+		else if (!ispartial && compression_method == COMPRESSION_LZ4)
+		{
+#ifdef HAVE_LIBLZ4
+			int			fd;
+			int			r;
+			size_t		consumed_len = LZ4F_HEADER_SIZE_MAX;
+			char		buf[LZ4F_HEADER_SIZE_MAX];
+			char		fullpath[MAXPGPATH * 2];
+			LZ4F_frameInfo_t frame_info = {0};
+			LZ4F_decompressionContext_t ctx = NULL;
+			LZ4F_errorCode_t status;
+
+			snprintf(fullpath, sizeof(fullpath), "%s/%s", basedir, dirent->d_name);
+
+			fd = open(fullpath, O_RDONLY | PG_BINARY, 0);
+			if (fd < 0)
+			{
+				pg_log_error("could not open file \"%s\": %m", fullpath);
+				exit(1);
+			}
+
+			r = read(fd, buf, sizeof(buf));
+			if (r != sizeof(buf))
+			{
+				if (r < 0)
+					pg_log_error("could not read file \"%s\": %m", fullpath);
+				else
+					pg_log_error("could not read file \"%s\": read %d of %zu",
+								 fullpath, r, sizeof(buf));
+				exit(1);
+			}
+			close(fd);
+
+			status = LZ4F_createDecompressionContext(&ctx, LZ4F_VERSION);
+			if (LZ4F_isError(status))
+			{
+				pg_log_error("could not create LZ4 decompression context: %s",
+							 LZ4F_getErrorName(status));
+				exit(1);
+			}
+
+			LZ4F_getFrameInfo(ctx, &frame_info, (void *) buf, &consumed_len);
+			if (consumed_len <= LZ4F_HEADER_SIZE_MIN ||
+				consumed_len >= LZ4F_HEADER_SIZE_MAX)
+			{
+				pg_log_warning("compressed segment file \"%s\" has incorrect header size %lu, skipping",
+							   dirent->d_name, consumed_len);
+				(void) LZ4F_freeDecompressionContext(ctx);
+				continue;
+			}
+
+			if (frame_info.contentSize != WalSegSz)
+			{
+				pg_log_warning("compressed segment file \"%s\" has incorrect uncompressed size %lld, skipping",
+							   dirent->d_name, frame_info.contentSize);
+				(void) LZ4F_freeDecompressionContext(ctx);
+				continue;
+			}
+
+			status = LZ4F_freeDecompressionContext(ctx);
+			if (LZ4F_isError(status))
+			{
+				pg_log_error("could not free LZ4 decompression context: %s",
+							 LZ4F_getErrorName(status));
+				exit(1);
+			}
+#else
+			pg_log_error("could not check segment file \"%s\" compressed with LZ4",
+						 dirent->d_name);
+			pg_log_error("this build does not support compression with %s",
+						 "LZ4");
+			exit(1);
+#endif
 		}
 
 		/* Looks like a valid segment. Remember that we saw it. */
@@ -432,7 +562,9 @@ StreamLog(void)
 	stream.synchronous = synchronous;
 	stream.do_sync = do_sync;
 	stream.mark_done = false;
-	stream.walmethod = CreateWalDirectoryMethod(basedir, compresslevel,
+	stream.walmethod = CreateWalDirectoryMethod(basedir,
+												compression_method,
+												compresslevel,
 												stream.do_sync);
 	stream.partial_suffix = ".partial";
 	stream.replication_slot = replication_slot;
@@ -485,6 +617,7 @@ main(int argc, char **argv)
 		{"status-interval", required_argument, NULL, 's'},
 		{"slot", required_argument, NULL, 'S'},
 		{"verbose", no_argument, NULL, 'v'},
+		{"compression-method", required_argument, NULL, 'I'},
 		{"compress", required_argument, NULL, 'Z'},
 /* action */
 		{"create-slot", no_argument, NULL, 1},
@@ -570,8 +703,22 @@ main(int argc, char **argv)
 			case 'v':
 				verbose++;
 				break;
+			case 'I':
+				if (pg_strcasecmp(optarg, "gzip") == 0)
+					compression_method = COMPRESSION_ZLIB;
+				else if (pg_strcasecmp(optarg, "lz4") == 0)
+					compression_method = COMPRESSION_LZ4;
+				else if (pg_strcasecmp(optarg, "none") == 0)
+					compression_method = COMPRESSION_NONE;
+				else
+				{
+					pg_log_error("invalid value \"%s\" for option %s",
+								 optarg, "--compress-method");
+					exit(1);
+				}
+				break;
 			case 'Z':
-				if (!option_parse_int(optarg, "-Z/--compress", 0, 9,
+				if (!option_parse_int(optarg, "-Z/--compress", 1, 9,
 									  &compresslevel))
 					exit(1);
 				break;
@@ -651,13 +798,44 @@ main(int argc, char **argv)
 		exit(1);
 	}
 
-#ifndef HAVE_LIBZ
-	if (compresslevel != 0)
+
+	/*
+	 * Compression related arguments
+	 */
+	if (compression_method != COMPRESSION_NONE)
 	{
-		pg_log_error("this build does not support compression");
+#ifndef HAVE_LIBZ
+		if (compression_method == COMPRESSION_ZLIB)
+		{
+			pg_log_error("this build does not support compression with %s",
+						 "gzip");
+			exit(1);
+		}
+#endif
+#ifndef HAVE_LIBLZ4
+		if (compression_method == COMPRESSION_LZ4)
+		{
+			pg_log_error("this build does not support compression with %s",
+						 "LZ4");
+			exit(1);
+		}
+#endif
+	}
+
+	if (compression_method != COMPRESSION_ZLIB && compresslevel != 0)
+	{
+		pg_log_error("can only use --compress with --compression-method=gzip");
+		fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
+				progname);
 		exit(1);
 	}
-#endif
+
+	if (compression_method == COMPRESSION_ZLIB && compresslevel == 0)
+	{
+		pg_log_info("no --compression specified, will be using %d",
+					DEFAULT_ZLIB_COMPRESSLEVEL);
+		compresslevel = DEFAULT_ZLIB_COMPRESSLEVEL;
+	}
 
 	/*
 	 * Check existence of destination folder.

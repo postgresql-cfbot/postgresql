@@ -2851,6 +2851,7 @@ WaitEventTimeout
 WaitPMResult
 WalCloseMethod
 WalCompression
+WalCompressionMethod
 WalLevel
 WalRcvData
 WalRcvExecResult

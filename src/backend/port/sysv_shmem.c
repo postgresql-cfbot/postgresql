@@ -456,8 +456,6 @@ PGSharedMemoryAttach(IpcMemoryId shmId,
 	return shmStat.shm_nattch == 0 ? SHMSTATE_UNATTACHED : SHMSTATE_ATTACHED;
 }
 
-#ifdef MAP_HUGETLB
-
 /*
  * Identify the huge page size to use, and compute the related mmap flags.
  *
@@ -476,11 +474,22 @@ PGSharedMemoryAttach(IpcMemoryId shmId,
  * such as increasing shared_buffers to absorb the extra space.
  *
  * Returns the (real, assumed or config provided) page size into *hugepagesize,
- * and the hugepage-related mmap flags to use into *mmap_flags.
+ * and the hugepage-related mmap flags to use into *mmap_flags.  If huge pages
+ * are not supported, *hugepagesize and *mmap_flags will be set to 0.  It is
+ * safe to set mmap_flags to NULL if its value is not needed.
  */
-static void
+void
 GetHugePageSize(Size *hugepagesize, int *mmap_flags)
 {
+#ifndef MAP_HUGETLB
+
+	*hugepagesize = 0;
+
+	if (mmap_flags != NULL)
+		*mmap_flags = 0;
+
+#else
+
 	Size		default_hugepagesize = 0;
 
 	/*
@@ -539,23 +548,26 @@ GetHugePageSize(Size *hugepagesize, int *mmap_flags)
 		*hugepagesize = 2 * 1024 * 1024;
 	}
 
-	*mmap_flags = MAP_HUGETLB;
-
-	/*
-	 * On recent enough Linux, also include the explicit page size, if
-	 * necessary.
-	 */
-#if defined(MAP_HUGE_MASK) && defined(MAP_HUGE_SHIFT)
-	if (*hugepagesize != default_hugepagesize)
+	/* If requested, determine appropriate mmap flags. */
+	if (mmap_flags != NULL)
 	{
-		int			shift = pg_ceil_log2_64(*hugepagesize);
+		*mmap_flags = MAP_HUGETLB;
 
-		*mmap_flags |= (shift & MAP_HUGE_MASK) << MAP_HUGE_SHIFT;
-	}
+		/*
+		 * On recent enough Linux, also include the explicit page size, if
+		 * necessary.
+		 */
+#if defined(MAP_HUGE_MASK) && defined(MAP_HUGE_SHIFT)
+		if (*hugepagesize != default_hugepagesize)
+		{
+			int			shift = pg_ceil_log2_64(*hugepagesize);
+
+			*mmap_flags |= (shift & MAP_HUGE_MASK) << MAP_HUGE_SHIFT;
+		}
 #endif
-}
-
+	}
 #endif							/* MAP_HUGETLB */
+}
 
 /*
  * Creates an anonymous mmap()ed shared memory segment.

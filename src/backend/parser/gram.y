@@ -256,6 +256,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	PartitionSpec		*partspec;
 	PartitionBoundSpec	*partboundspec;
 	RoleSpec			*rolespec;
+	PublicationObjSpec	*publicationobjectspec;
 	struct SelectLimit	*selectlimit;
 	SetQuantifier	 setquantifier;
 	struct GroupClause  *groupclause;
@@ -425,14 +426,13 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				transform_element_list transform_type_list
 				TriggerTransitions TriggerReferencing
 				vacuum_relation_list opt_vacuum_relation_list
-				drop_option_list publication_table_list
+				drop_option_list pub_obj_list pubobj_expr_list
 
 %type <node>	opt_routine_body
 %type <groupclause> group_clause
 %type <list>	group_by_list
 %type <node>	group_by_item empty_grouping_set rollup_clause cube_clause
 %type <node>	grouping_sets_clause
-%type <node>	opt_publication_for_tables publication_for_tables publication_table
 
 %type <list>	opt_fdw_options fdw_options
 %type <defelt>	fdw_option
@@ -554,6 +554,9 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <node>	var_value zone_value
 %type <rolespec> auth_ident RoleSpec opt_granted_by
 
+%type <publicationobjectspec> PublicationObjSpec
+%type <publicationobjectspec> pubobj_expr
+%type <node> 	pubobj_name
 %type <keyword> unreserved_keyword type_func_name_keyword
 %type <keyword> col_name_keyword reserved_keyword
 %type <keyword> bare_label_keyword
@@ -9591,69 +9594,107 @@ AlterOwnerStmt: ALTER AGGREGATE aggregate_with_argtypes OWNER TO RoleSpec
 
 /*****************************************************************************
  *
- * CREATE PUBLICATION name [ FOR TABLE ] [ WITH options ]
+ * CREATE PUBLICATION name [WITH options]
+ *
+ * CREATE PUBLICATION FOR ALL TABLES [WITH options]
+ *
+ * CREATE PUBLICATION FOR pub_obj [, pub_obj2] [WITH options]
+ *
+ * pub_obj is one of:
+ *
+ *		TABLE table [, table2]
+ *		ALL TABLES IN SCHEMA schema [, schema2]
  *
  *****************************************************************************/
 
 CreatePublicationStmt:
-			CREATE PUBLICATION name opt_publication_for_tables opt_definition
+			CREATE PUBLICATION name opt_definition
 				{
 					CreatePublicationStmt *n = makeNode(CreatePublicationStmt);
 					n->pubname = $3;
-					n->options = $5;
-					if ($4 != NULL)
-					{
-						/* FOR TABLE */
-						if (IsA($4, List))
-							n->tables = (List *)$4;
-						/* FOR ALL TABLES */
-						else
-							n->for_all_tables = true;
-					}
+					n->options = $4;
+					$$ = (Node *)n;
+				}
+			| CREATE PUBLICATION name FOR ALL TABLES opt_definition
+				{
+					CreatePublicationStmt *n = makeNode(CreatePublicationStmt);
+					n->pubname = $3;
+					n->options = $7;
+					n->for_all_tables = true;
+					$$ = (Node *)n;
+				}
+			| CREATE PUBLICATION name FOR pub_obj_list opt_definition
+				{
+					CreatePublicationStmt *n = makeNode(CreatePublicationStmt);
+					n->pubname = $3;
+					n->options = $6;
+					n->pubobjects = (List *)$5;
 					$$ = (Node *)n;
 				}
 		;
 
-opt_publication_for_tables:
-			publication_for_tables					{ $$ = $1; }
-			| /* EMPTY */							{ $$ = NULL; }
-		;
-
-publication_for_tables:
-			FOR TABLE publication_table_list
+pubobj_expr:
+			pubobj_name
 				{
-					$$ = (Node *) $3;
-				}
-			| FOR ALL TABLES
-				{
-					$$ = (Node *) makeInteger(true);
+					/* inheritance query, implicitly */
+					$$ = makeNode(PublicationObjSpec);
+					$$->object = $1;
 				}
 		;
 
-publication_table_list:
-			publication_table
+/* This can be either a schema or relation name. */
+pubobj_name:
+			ColId
+				{
+					$$ = (Node *) makeString($1);
+				}
+			| ColId indirection
+				{
+					$$ = (Node *) makeRangeVarFromQualifiedName($1, $2, @1, yyscanner);
+				}
+		;
+
+/* FOR TABLE and FOR ALL TABLES IN SCHEMA specifications */
+PublicationObjSpec:	TABLE relation_expr_list
+					{
+						$$ = $2;
+						$$->pubobjtype = PUBLICATIONOBJ_TABLE;
+						$$->location = @1;
+					}
+			| ALL TABLES IN_P SCHEMA pubobj_expr_list
+					{
+						$$ = $5;
+						$$->pubobjtype = PUBLICATIONOBJ_REL_IN_SCHEMA;
+						$$->location = @1;
+					}
+		;
+
+pubobj_expr_list: 	pubobj_expr
 					{ $$ = list_make1($1); }
-		| publication_table_list ',' publication_table
-				{ $$ = lappend($1, $3); }
-		;
+			| pubobj_expr_list ',' pubobj_expr
+					{ $$ = lappend($1, $3); }
+	;
 
-publication_table: relation_expr
-		{
-			PublicationTable *n = makeNode(PublicationTable);
-			n->relation = $1;
-			$$ = (Node *) n;
-		}
+pub_obj_list: 	PublicationObjSpec
+					{ $$ = list_make1($1); }
+			| pub_obj_list ',' PublicationObjSpec
+					{ $$ = lappend($1, $3); }
 	;
 
 /*****************************************************************************
  *
  * ALTER PUBLICATION name SET ( options )
  *
- * ALTER PUBLICATION name ADD TABLE table [, table2]
+ * ALTER PUBLICATION name ADD pub_obj [, pub_obj ...]
  *
- * ALTER PUBLICATION name DROP TABLE table [, table2]
+ * ALTER PUBLICATION name DROP pub_obj [, pub_obj ...]
  *
- * ALTER PUBLICATION name SET TABLE table [, table2]
+ * ALTER PUBLICATION name SET pub_obj [, pub_obj ...]
+ *
+ * pub_obj is one of:
+ *
+ *		TABLE table_name [, table_name ...]
+ *		ALL TABLES IN SCHEMA schema_name [, schema_name ...]
  *
  *****************************************************************************/
 
@@ -9665,28 +9706,28 @@ AlterPublicationStmt:
 					n->options = $5;
 					$$ = (Node *)n;
 				}
-			| ALTER PUBLICATION name ADD_P TABLE publication_table_list
+			| ALTER PUBLICATION name ADD_P pub_obj_list
 				{
 					AlterPublicationStmt *n = makeNode(AlterPublicationStmt);
 					n->pubname = $3;
-					n->tables = $6;
-					n->tableAction = DEFELEM_ADD;
+					n->pubobjects = $5;
+					n->action = DEFELEM_ADD;
 					$$ = (Node *)n;
 				}
-			| ALTER PUBLICATION name SET TABLE publication_table_list
+			| ALTER PUBLICATION name SET pub_obj_list
 				{
 					AlterPublicationStmt *n = makeNode(AlterPublicationStmt);
 					n->pubname = $3;
-					n->tables = $6;
-					n->tableAction = DEFELEM_SET;
+					n->pubobjects = $5;
+					n->action = DEFELEM_SET;
 					$$ = (Node *)n;
 				}
-			| ALTER PUBLICATION name DROP TABLE publication_table_list
+			| ALTER PUBLICATION name DROP pub_obj_list
 				{
 					AlterPublicationStmt *n = makeNode(AlterPublicationStmt);
 					n->pubname = $3;
-					n->tables = $6;
-					n->tableAction = DEFELEM_DROP;
+					n->pubobjects = $5;
+					n->action = DEFELEM_DROP;
 					$$ = (Node *)n;
 				}
 		;

@@ -354,6 +354,26 @@ typedef struct RoleSpec
 } RoleSpec;
 
 /*
+ * Publication object type
+ */
+typedef enum PublicationObjSpecType
+{
+	PUBLICATIONOBJ_TABLE,				/* Table type */
+	PUBLICATIONOBJ_REL_IN_SCHEMA,		/* Relations in schema type */
+	PUBLICATIONOBJ_UNKNOWN				/* Unknown type */
+} PublicationObjSpecType;
+
+typedef struct PublicationObjSpec
+{
+	NodeTag		type;
+	PublicationObjSpecType pubobjtype;	/* type of this publication object */
+	void	   *object;			/* publication object could be:
+								 * RangeVar - table object
+								 * String	- tablename or schemaname */
+	int			location;		/* token location, or -1 if unknown */
+} PublicationObjSpec;
+
+/*
  * FuncCall - a function or aggregate invocation
  *
  * agg_order (if not NIL) indicates we saw 'foo(... ORDER BY ...)', or if
@@ -3636,18 +3656,12 @@ typedef struct AlterTSConfigurationStmt
 	bool		missing_ok;		/* for DROP - skip error if missing? */
 } AlterTSConfigurationStmt;
 
-typedef struct PublicationTable
-{
-	NodeTag		type;
-	RangeVar   *relation;		/* relation to be published */
-} PublicationTable;
-
 typedef struct CreatePublicationStmt
 {
 	NodeTag		type;
 	char	   *pubname;		/* Name of the publication */
 	List	   *options;		/* List of DefElem nodes */
-	List	   *tables;			/* Optional list of tables to add */
+	List	   *pubobjects;		/* Optional list of publication objects */
 	bool		for_all_tables; /* Special publication for all tables in db */
 } CreatePublicationStmt;
 
@@ -3659,10 +3673,11 @@ typedef struct AlterPublicationStmt
 	/* parameters used for ALTER PUBLICATION ... WITH */
 	List	   *options;		/* List of DefElem nodes */
 
-	/* parameters used for ALTER PUBLICATION ... ADD/DROP TABLE */
-	List	   *tables;			/* List of tables to add/drop */
+	/* ALTER PUBLICATION ... ADD/DROP TABLE/ALL TABLES IN SCHEMA parameters */
+	List	   *pubobjects;		/* Optional list of publication objects */
 	bool		for_all_tables; /* Special publication for all tables in db */
-	DefElemAction tableAction;	/* What action to perform with the tables */
+	DefElemAction action;		/* What action to perform with the
+								 * tables/schemas */
 } AlterPublicationStmt;
 
 typedef struct CreateSubscriptionStmt

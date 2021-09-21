@@ -2046,8 +2046,9 @@ PsqlSettings
 Publication
 PublicationActions
 PublicationInfo
+PublicationObjSpec
+PublicationObjSpecType
 PublicationPartOpt
-PublicationRelInfo
 PublicationTable
 PullFilter
 PullFilterOps

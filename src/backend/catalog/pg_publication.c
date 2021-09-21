@@ -141,14 +141,14 @@ pg_relation_is_publishable(PG_FUNCTION_ARGS)
  * Insert new publication / relation mapping.
  */
 ObjectAddress
-publication_add_relation(Oid pubid, PublicationRelInfo *targetrel,
+publication_add_relation(Oid pubid, Relation targetrel,
 						 bool if_not_exists)
 {
 	Relation	rel;
 	HeapTuple	tup;
 	Datum		values[Natts_pg_publication_rel];
 	bool		nulls[Natts_pg_publication_rel];
-	Oid			relid = RelationGetRelid(targetrel->relation);
+	Oid			relid = RelationGetRelid(targetrel);
 	Oid			prrelid;
 	Publication *pub = GetPublication(pubid);
 	ObjectAddress myself,
@@ -172,10 +172,10 @@ publication_add_relation(Oid pubid, PublicationRelInfo *targetrel,
 		ereport(ERROR,
 				(errcode(ERRCODE_DUPLICATE_OBJECT),
 				 errmsg("relation \"%s\" is already member of publication \"%s\"",
-						RelationGetRelationName(targetrel->relation), pub->name)));
+						RelationGetRelationName(targetrel), pub->name)));
 	}
 
-	check_publication_add_relation(targetrel->relation);
+	check_publication_add_relation(targetrel);
 
 	/* Form a tuple. */
 	memset(values, 0, sizeof(values));
@@ -209,7 +209,7 @@ publication_add_relation(Oid pubid, PublicationRelInfo *targetrel,
 	table_close(rel, RowExclusiveLock);
 
 	/* Invalidate relcache so that publication info is rebuilt. */
-	CacheInvalidateRelcache(targetrel->relation);
+	CacheInvalidateRelcache(targetrel);
 
 	return myself;
 }

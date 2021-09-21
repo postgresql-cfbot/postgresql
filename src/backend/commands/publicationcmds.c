@@ -34,6 +34,7 @@
 #include "commands/publicationcmds.h"
 #include "funcapi.h"
 #include "miscadmin.h"
+#include "nodes/makefuncs.h"
 #include "utils/acl.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
@@ -139,6 +140,85 @@ parse_publication_options(ParseState *pstate,
 }
 
 /*
+ * Convert the PublicationObjSpecType list into schema oid list and rangevar
+ * list.
+ */
+static void
+ObjectsInPublicationToOids(List *pubobjspec_list, ParseState *pstate,
+						   List **rels, List **schemas)
+{
+	ListCell   *cell;
+	PublicationObjSpec *pubobj;
+	PublicationObjSpecType prevobjtype = PUBLICATIONOBJ_UNKNOWN;
+
+	if (!pubobjspec_list)
+		return;
+
+	pubobj = (PublicationObjSpec *) linitial(pubobjspec_list);
+	if (pubobj->pubobjtype == PUBLICATIONOBJ_UNKNOWN)
+		ereport(ERROR,
+				errcode(ERRCODE_SYNTAX_ERROR),
+				errmsg("FOR TABLE/FOR ALL TABLES IN SCHEMA should be specified before the table/schema name(s)"),
+				parser_errposition(pstate, pubobj->location));
+
+	foreach(cell, pubobjspec_list)
+	{
+		Node *node;
+
+		pubobj = (PublicationObjSpec *) lfirst(cell);
+		node = (Node *) pubobj->object;
+
+		if (pubobj->pubobjtype == PUBLICATIONOBJ_UNKNOWN)
+			pubobj->pubobjtype = prevobjtype;
+		else
+			prevobjtype = pubobj->pubobjtype;
+
+		if (pubobj->pubobjtype == PUBLICATIONOBJ_TABLE)
+		{
+			if (IsA(node, RangeVar))
+				*rels = lappend(*rels, (RangeVar *) node);
+			else if (IsA(node, String))
+			{
+				RangeVar   *rel = makeRangeVar(NULL, strVal(node),
+											   pubobj->location);
+				*rels = lappend(*rels, rel);
+			}
+		}
+		else if (pubobj->pubobjtype == PUBLICATIONOBJ_REL_IN_SCHEMA)
+		{
+			Oid			schemaid;
+			char	   *schemaname;
+
+			if (!IsA(node, String))
+				ereport(ERROR,
+						errcode(ERRCODE_SYNTAX_ERROR),
+						errmsg("invalid schema name at or near"),
+						parser_errposition(pstate, pubobj->location));
+
+			schemaname = strVal(node);
+			if (strcmp(schemaname, "CURRENT_SCHEMA") == 0)
+			{
+				List	   *search_path;
+
+				search_path = fetch_search_path(false);
+				if (search_path == NIL) /* nothing valid in search_path? */
+					ereport(ERROR,
+							errcode(ERRCODE_UNDEFINED_SCHEMA),
+							errmsg("no schema has been selected for CURRENT_SCHEMA"));
+
+				schemaid = linitial_oid(search_path);
+				list_free(search_path);
+			}
+			else
+				schemaid = get_namespace_oid(schemaname, false);
+
+			/* Filter out duplicates if user specifies "sch1, sch1" */
+			*schemas = list_append_unique_oid(*schemas, schemaid);
+		}
+	}
+}
+ 
+/*
  * Create new publication.
  */
 ObjectAddress
@@ -155,6 +235,8 @@ CreatePublication(ParseState *pstate, CreatePublicationStmt *stmt)
 	bool		publish_via_partition_root_given;
 	bool		publish_via_partition_root;
 	AclResult	aclresult;
+	List	   *relations = NIL;
+	List	   *schemaidlist = NIL;
 
 	/* must have CREATE privilege on database */
 	aclresult = pg_database_aclcheck(MyDatabaseId, GetUserId(), ACL_CREATE);
@@ -224,13 +306,15 @@ CreatePublication(ParseState *pstate, CreatePublicationStmt *stmt)
 	/* Make the changes visible. */
 	CommandCounterIncrement();
 
-	if (stmt->tables)
+	ObjectsInPublicationToOids(stmt->pubobjects, pstate, &relations,
+								   &schemaidlist);
+	if (relations != NIL)
 	{
 		List	   *rels;
 
-		Assert(list_length(stmt->tables) > 0);
+		Assert(list_length(relations) > 0);
 
-		rels = OpenTableList(stmt->tables);
+		rels = OpenTableList(relations);
 		PublicationAddTables(puboid, rels, true, NULL);
 		CloseTableList(rels);
 	}
@@ -360,7 +444,7 @@ AlterPublicationOptions(ParseState *pstate, AlterPublicationStmt *stmt,
  */
 static void
 AlterPublicationTables(AlterPublicationStmt *stmt, Relation rel,
-					   HeapTuple tup)
+					   HeapTuple tup, List *tables, List *schemaidlist)
 {
 	List	   *rels = NIL;
 	Form_pg_publication pubform = (Form_pg_publication) GETSTRUCT(tup);
@@ -374,13 +458,13 @@ AlterPublicationTables(AlterPublicationStmt *stmt, Relation rel,
 						NameStr(pubform->pubname)),
 				 errdetail("Tables cannot be added to or dropped from FOR ALL TABLES publications.")));
 
-	Assert(list_length(stmt->tables) > 0);
+	Assert(list_length(tables) > 0);
 
-	rels = OpenTableList(stmt->tables);
+	rels = OpenTableList(tables);
 
-	if (stmt->tableAction == DEFELEM_ADD)
+	if (stmt->action == DEFELEM_ADD)
 		PublicationAddTables(pubid, rels, false, stmt);
-	else if (stmt->tableAction == DEFELEM_DROP)
+	else if (stmt->action == DEFELEM_DROP)
 		PublicationDropTables(pubid, rels, false);
 	else						/* DEFELEM_SET */
 	{
@@ -398,10 +482,9 @@ AlterPublicationTables(AlterPublicationStmt *stmt, Relation rel,
 
 			foreach(newlc, rels)
 			{
-				PublicationRelInfo *newpubrel;
+				Relation	newrel = (Relation) lfirst(newlc);
 
-				newpubrel = (PublicationRelInfo *) lfirst(newlc);
-				if (RelationGetRelid(newpubrel->relation) == oldrelid)
+				if (RelationGetRelid(newrel) == oldrelid)
 				{
 					found = true;
 					break;
@@ -410,16 +493,10 @@ AlterPublicationTables(AlterPublicationStmt *stmt, Relation rel,
 			/* Not yet in the list, open it and add to the list */
 			if (!found)
 			{
-				Relation	oldrel;
-				PublicationRelInfo *pubrel;
+				Relation	oldrel = table_open(oldrelid,
+												ShareUpdateExclusiveLock);
 
-				/* Wrap relation into PublicationRelInfo */
-				oldrel = table_open(oldrelid, ShareUpdateExclusiveLock);
-
-				pubrel = palloc(sizeof(PublicationRelInfo));
-				pubrel->relation = oldrel;
-
-				delrels = lappend(delrels, pubrel);
+				delrels = lappend(delrels, oldrel);
 			}
 		}
 
@@ -450,6 +527,8 @@ AlterPublication(ParseState *pstate, AlterPublicationStmt *stmt)
 	Relation	rel;
 	HeapTuple	tup;
 	Form_pg_publication pubform;
+	List	   *relations = NIL;
+	List	   *schemaidlist = NIL;
 
 	rel = table_open(PublicationRelationId, RowExclusiveLock);
 
@@ -469,10 +548,16 @@ AlterPublication(ParseState *pstate, AlterPublicationStmt *stmt)
 		aclcheck_error(ACLCHECK_NOT_OWNER, OBJECT_PUBLICATION,
 					   stmt->pubname);
 
+	ObjectsInPublicationToOids(stmt->pubobjects, pstate, &relations,
+								   &schemaidlist);
+
 	if (stmt->options)
 		AlterPublicationOptions(pstate, stmt, rel, tup);
 	else
-		AlterPublicationTables(stmt, rel, tup);
+	{
+		if (relations)
+			AlterPublicationTables(stmt, rel, tup, relations, schemaidlist);
+	}
 
 	/* Cleanup. */
 	heap_freetuple(tup);
@@ -540,7 +625,7 @@ RemovePublicationById(Oid pubid)
 
 /*
  * Open relations specified by a PublicationTable list.
- * In the returned list of PublicationRelInfo, tables are locked
+ * In the returned list of Relation, tables are locked
  * in ShareUpdateExclusiveLock mode in order to add them to a publication.
  */
 static List *
@@ -555,16 +640,15 @@ OpenTableList(List *tables)
 	 */
 	foreach(lc, tables)
 	{
-		PublicationTable *t = lfirst_node(PublicationTable, lc);
-		bool		recurse = t->relation->inh;
+		RangeVar   *rv = lfirst_node(RangeVar, lc);
+		bool		recurse = rv->inh;
 		Relation	rel;
 		Oid			myrelid;
-		PublicationRelInfo *pub_rel;
 
 		/* Allow query cancel in case this takes a long time */
 		CHECK_FOR_INTERRUPTS();
 
-		rel = table_openrv(t->relation, ShareUpdateExclusiveLock);
+		rel = table_openrv(rv, ShareUpdateExclusiveLock);
 		myrelid = RelationGetRelid(rel);
 
 		/*
@@ -580,9 +664,7 @@ OpenTableList(List *tables)
 			continue;
 		}
 
-		pub_rel = palloc(sizeof(PublicationRelInfo));
-		pub_rel->relation = rel;
-		rels = lappend(rels, pub_rel);
+		rels = lappend(rels, rel);
 		relids = lappend_oid(relids, myrelid);
 
 		/*
@@ -615,9 +697,7 @@ OpenTableList(List *tables)
 
 				/* find_all_inheritors already got lock */
 				rel = table_open(childrelid, NoLock);
-				pub_rel = palloc(sizeof(PublicationRelInfo));
-				pub_rel->relation = rel;
-				rels = lappend(rels, pub_rel);
+				rels = lappend(rels, rel);
 				relids = lappend_oid(relids, childrelid);
 			}
 		}
@@ -638,10 +718,9 @@ CloseTableList(List *rels)
 
 	foreach(lc, rels)
 	{
-		PublicationRelInfo *pub_rel;
+		Relation	rel = (Relation) lfirst(lc);
 
-		pub_rel = (PublicationRelInfo *) lfirst(lc);
-		table_close(pub_rel->relation, NoLock);
+		table_close(rel, NoLock);
 	}
 }
 
@@ -658,8 +737,7 @@ PublicationAddTables(Oid pubid, List *rels, bool if_not_exists,
 
 	foreach(lc, rels)
 	{
-		PublicationRelInfo *pub_rel = (PublicationRelInfo *) lfirst(lc);
-		Relation	rel = pub_rel->relation;
+		Relation	rel = (Relation) lfirst(lc);
 		ObjectAddress obj;
 
 		/* Must be owner of the table or superuser. */
@@ -667,7 +745,7 @@ PublicationAddTables(Oid pubid, List *rels, bool if_not_exists,
 			aclcheck_error(ACLCHECK_NOT_OWNER, get_relkind_objtype(rel->rd_rel->relkind),
 						   RelationGetRelationName(rel));
 
-		obj = publication_add_relation(pubid, pub_rel, if_not_exists);
+		obj = publication_add_relation(pubid, rel, if_not_exists);
 		if (stmt)
 		{
 			EventTriggerCollectSimpleCommand(obj, InvalidObjectAddress,
@@ -691,8 +769,7 @@ PublicationDropTables(Oid pubid, List *rels, bool missing_ok)
 
 	foreach(lc, rels)
 	{
-		PublicationRelInfo *pubrel = (PublicationRelInfo *) lfirst(lc);
-		Relation	rel = pubrel->relation;
+		Relation	rel = (Relation) lfirst(lc);
 		Oid			relid = RelationGetRelid(rel);
 
 		prid = GetSysCacheOid2(PUBLICATIONRELMAP, Anum_pg_publication_rel_oid,

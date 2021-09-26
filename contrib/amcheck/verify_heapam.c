@@ -303,9 +303,7 @@ verify_heapam(PG_FUNCTION_ARGS)
 	/*
 	 * Check that a relation's relkind and access method are both supported.
 	 */
-	if (ctx.rel->rd_rel->relkind != RELKIND_RELATION &&
-		ctx.rel->rd_rel->relkind != RELKIND_MATVIEW &&
-		ctx.rel->rd_rel->relkind != RELKIND_TOASTVALUE)
+	if (!RELKIND_HAS_TABLE_AM(ctx.rel->rd_rel->relkind))
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 errmsg("cannot check relation \"%s\"",

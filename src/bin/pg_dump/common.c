@@ -501,13 +501,7 @@ flagInhAttrs(DumpOptions *dopt, TableInfo *tblinfo, int numTables)
 		int			numParents;
 		TableInfo **parents;
 
-		/* Some kinds never have parents */
-		if (tbinfo->relkind == RELKIND_SEQUENCE ||
-			tbinfo->relkind == RELKIND_VIEW ||
-			tbinfo->relkind == RELKIND_MATVIEW)
-			continue;
-
-		/* Don't bother computing anything for non-target tables, either */
+		/* Don't bother computing anything for non-target tables */
 		if (!tbinfo->dobj.dump)
 			continue;
 

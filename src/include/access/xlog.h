@@ -11,14 +11,12 @@
 #ifndef XLOG_H
 #define XLOG_H
 
-#include "access/rmgr.h"
 #include "access/xlogdefs.h"
 #include "access/xloginsert.h"
 #include "access/xlogreader.h"
 #include "datatype/timestamp.h"
 #include "lib/stringinfo.h"
 #include "nodes/pg_list.h"
-#include "storage/fd.h"
 
 
 /* Sync methods */
@@ -31,35 +29,9 @@ extern int	sync_method;
 
 extern PGDLLIMPORT TimeLineID ThisTimeLineID;	/* current TLI */
 
-/*
- * Recovery target type.
- * Only set during a Point in Time recovery, not when in standby mode.
- */
-typedef enum
-{
-	RECOVERY_TARGET_UNSET,
-	RECOVERY_TARGET_XID,
-	RECOVERY_TARGET_TIME,
-	RECOVERY_TARGET_NAME,
-	RECOVERY_TARGET_LSN,
-	RECOVERY_TARGET_IMMEDIATE
-} RecoveryTargetType;
-
-/*
- * Recovery target TimeLine goal
- */
-typedef enum
-{
-	RECOVERY_TARGET_TIMELINE_CONTROLFILE,
-	RECOVERY_TARGET_TIMELINE_LATEST,
-	RECOVERY_TARGET_TIMELINE_NUMERIC
-} RecoveryTargetTimeLineGoal;
-
 extern XLogRecPtr ProcLastRecPtr;
 extern XLogRecPtr XactLastRecEnd;
 extern PGDLLIMPORT XLogRecPtr XactLastCommitEnd;
-
-extern bool reachedConsistency;
 
 /* these variables are GUC parameters related to XLOG */
 extern int	wal_segment_size;
@@ -80,33 +52,9 @@ extern bool wal_recycle;
 extern bool *wal_consistency_checking;
 extern char *wal_consistency_checking_string;
 extern bool log_checkpoints;
-extern char *recoveryRestoreCommand;
-extern char *recoveryEndCommand;
-extern char *archiveCleanupCommand;
-extern bool recoveryTargetInclusive;
-extern int	recoveryTargetAction;
-extern int	recovery_min_apply_delay;
-extern char *PrimaryConnInfo;
-extern char *PrimarySlotName;
-extern bool wal_receiver_create_temp_slot;
 extern bool track_wal_io_timing;
 
-/* indirectly set via GUC system */
-extern TransactionId recoveryTargetXid;
-extern char *recovery_target_time_string;
-extern const char *recoveryTargetName;
-extern XLogRecPtr recoveryTargetLSN;
-extern RecoveryTargetType recoveryTarget;
-extern char *PromoteTriggerFile;
-extern RecoveryTargetTimeLineGoal recoveryTargetTimeLineGoal;
-extern TimeLineID recoveryTargetTLIRequested;
-extern TimeLineID recoveryTargetTLI;
-
 extern int	CheckPointSegments;
-
-/* option set locally in startup process only when signal files exist */
-extern bool StandbyModeRequested;
-extern bool StandbyMode;
 
 /* Archive modes */
 typedef enum ArchiveMode
@@ -140,14 +88,6 @@ typedef enum RecoveryState
 	RECOVERY_STATE_ARCHIVE,		/* archive recovery */
 	RECOVERY_STATE_DONE			/* currently in production */
 } RecoveryState;
-
-/* Recovery pause states */
-typedef enum RecoveryPauseState
-{
-	RECOVERY_NOT_PAUSED,		/* pause not requested */
-	RECOVERY_PAUSE_REQUESTED,	/* pause requested, but not yet paused */
-	RECOVERY_PAUSED				/* recovery is paused */
-} RecoveryPauseState;
 
 extern PGDLLIMPORT int wal_level;
 
@@ -278,19 +218,10 @@ extern void issue_xlog_fsync(int fd, XLogSegNo segno);
 
 extern bool RecoveryInProgress(void);
 extern RecoveryState GetRecoveryState(void);
-extern bool HotStandbyActive(void);
-extern bool HotStandbyActiveInReplay(void);
 extern bool XLogInsertAllowed(void);
-extern void GetXLogReceiptTime(TimestampTz *rtime, bool *fromStream);
-extern XLogRecPtr GetXLogReplayRecPtr(TimeLineID *replayTLI);
 extern XLogRecPtr GetXLogInsertRecPtr(void);
 extern XLogRecPtr GetXLogWriteRecPtr(void);
-extern RecoveryPauseState GetRecoveryPauseState(void);
-extern void SetRecoveryPause(bool recoveryPause);
-extern TimestampTz GetLatestXTime(void);
-extern TimestampTz GetCurrentChunkReplayStartTime(void);
 
-extern void UpdateControlFile(void);
 extern uint64 GetSystemIdentifier(void);
 extern char *GetMockAuthenticationNonce(void);
 extern bool DataChecksumsEnabled(void);
@@ -314,15 +245,19 @@ extern XLogRecPtr GetRedoRecPtr(void);
 extern XLogRecPtr GetInsertRecPtr(void);
 extern XLogRecPtr GetFlushRecPtr(void);
 extern XLogRecPtr GetLastImportantRecPtr(void);
-extern void RemovePromoteSignalFiles(void);
 
-extern bool PromoteIsTriggered(void);
-extern bool CheckPromoteSignal(void);
-extern void WakeupRecovery(void);
+extern void XLogShutdownWalRcv(void);
 extern void SetWalWriterSleeping(bool sleeping);
 
-extern void StartupRequestWalReceiverRestart(void);
-extern void XLogRequestWalReceiverReply(void);
+extern void SetInstallXLogFileSegmentActive(void);
+extern bool IsInstallXLogFileSegmentActive(void);
+
+
+extern void RemoveNonParentXlogFiles(XLogRecPtr switchpoint, TimeLineID newTLI);
+
+extern bool XLogCheckpointNeeded(XLogSegNo new_segno);
+extern void SwitchIntoArchiveRecovery(XLogRecPtr EndRecPtr);
+extern void ReachedEndOfBackup(XLogRecPtr EndRecPtr, TimeLineID tli);
 
 extern void assign_max_wal_size(int newval, void *extra);
 extern void assign_checkpoint_completion_target(double newval, void *extra);

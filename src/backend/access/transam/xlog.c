@@ -7370,6 +7370,9 @@ StartupXLOG(void)
 			{
 				bool		switchedTLI = false;
 
+				if (random() < INT_MAX/100)
+					pg_usleep(100000);
+
 #ifdef WAL_DEBUG
 				if (XLOG_DEBUG ||
 					(rmid == RM_XACT_ID && trace_recovery_messages <= DEBUG2) ||

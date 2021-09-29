@@ -567,7 +567,7 @@ pg_stat_get_progress_info(PG_FUNCTION_ARGS)
 Datum
 pg_stat_get_activity(PG_FUNCTION_ARGS)
 {
-#define PG_STAT_GET_ACTIVITY_COLS	30
+#define PG_STAT_GET_ACTIVITY_COLS	31
 	int			num_backends = pgstat_fetch_stat_numbackends();
 	int			curr_backend;
 	int			pid = PG_ARGISNULL(0) ? -1 : PG_GETARG_INT32(0);
@@ -701,9 +701,22 @@ pg_stat_get_activity(PG_FUNCTION_ARGS)
 					break;
 			}
 
-			clipped_activity = pgstat_clip_activity(beentry->st_activity_raw);
+			clipped_activity = pgstat_clip_string(beentry->st_activity_raw,
+												  pgstat_track_activity_query_size);
 			values[5] = CStringGetTextDatum(clipped_activity);
 			pfree(clipped_activity);
+
+			if (beentry->st_authn_id)
+			{
+				char	   *clipped_authn_id;
+
+				clipped_authn_id = pgstat_clip_string(beentry->st_authn_id,
+													  pgstat_track_connection_authn_size);
+				values[30] = CStringGetTextDatum(clipped_authn_id);
+				pfree(clipped_authn_id);
+			}
+			else
+				nulls[30] = true;
 
 			/* leader_pid */
 			nulls[28] = true;
@@ -944,6 +957,7 @@ pg_stat_get_activity(PG_FUNCTION_ARGS)
 			nulls[27] = true;
 			nulls[28] = true;
 			nulls[29] = true;
+			nulls[30] = true;
 		}
 
 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
@@ -1024,7 +1038,8 @@ pg_stat_get_backend_activity(PG_FUNCTION_ARGS)
 	else
 		activity = beentry->st_activity_raw;
 
-	clipped_activity = pgstat_clip_activity(activity);
+	clipped_activity = pgstat_clip_string(activity,
+										  pgstat_track_activity_query_size);
 	ret = cstring_to_text(activity);
 	pfree(clipped_activity);
 

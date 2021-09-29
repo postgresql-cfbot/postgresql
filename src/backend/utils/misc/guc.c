@@ -3504,6 +3504,17 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"track_connection_authn_size", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Sets the size reserved for pg_stat_connection.authenticated_id, in bytes."),
+			NULL,
+			GUC_UNIT_BYTE
+		},
+		&pgstat_track_connection_authn_size,
+		128, 100, 1048576,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"gin_pending_list_limit", PGC_USERSET, CLIENT_CONN_STATEMENT,
 			gettext_noop("Sets the maximum size of the pending list for GIN index."),
 			NULL,

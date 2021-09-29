@@ -13,6 +13,7 @@
 
 #ifdef WIN32
 
+#define NO_STAT_OVERRIDE
 #ifndef FRONTEND
 #include "postgres.h"
 #else

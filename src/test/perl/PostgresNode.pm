@@ -634,6 +634,32 @@ sub backup_fs_cold
 	return;
 }
 
+sub _srcsymlink
+{
+	my ($srcpath, $destpath) = @_;
+
+	croak "Cannot operate on symlink \"$srcpath\""
+		if ($srcpath !~ qr{/(pg_tblspc/[0-9]+)$});
+
+	# We have mapped tablespaces. Copy them individually
+	my $tmpdir = TestLib::tempdir;
+	my $dstrealdir = TestLib::perl2host($tmpdir);
+	my $srcrealdir = readlink($srcpath);
+
+	opendir(my $dh, $srcrealdir);
+	while (my $entry = (readdir $dh))
+	{
+		next if ($entry eq '.' or $entry eq '..');
+		my $spath = "$srcrealdir/$entry";
+		my $dpath = "$dstrealdir/$entry";
+		RecursiveCopy::copypath($spath, $dpath);
+	}
+	closedir $dh;
+
+	symlink $dstrealdir, $destpath;
+
+	return 1;
+}
 
 # Common sub of backup_fs_hot and backup_fs_cold
 sub _backup_fs
@@ -743,7 +769,8 @@ sub init_from_backup
 	else
 	{
 		rmdir($data_path);
-		RecursiveCopy::copypath($backup_path, $data_path);
+		RecursiveCopy::copypath($backup_path, $data_path,
+								srcsymlinkfn => \&_srcsymlink);
 	}
 	chmod(0700, $data_path);
 
@@ -2156,18 +2183,29 @@ Returns 1 if successful, 0 if timed out.
 
 sub poll_query_until
 {
-	my ($self, $dbname, $query, $expected) = @_;
+	my ($self, $dbname, $query, $params) = @_;
+	my $expected;
+
+	# Be backwards-compatible
+	if (defined $params and ref $params eq '')
+	{
+		$params = {
+			expected => $params,
+			timeout => 180
+		};
+	}
 
 	local %ENV = $self->_get_env();
 
-	$expected = 't' unless defined($expected);    # default value
+	$params->{expected} = 't' unless defined($params->{expected});
+	$params->{timeout} = 180 unless defined($params->{timeout});
 
 	my $cmd = [
 		$self->installed_command('psql'), '-XAt',
 		'-d',                             $self->connstr($dbname)
 	];
 	my ($stdout, $stderr);
-	my $max_attempts = 180 * 10;
+	my $max_attempts = $params->{timeout} * 10;
 	my $attempts     = 0;
 
 	while ($attempts < $max_attempts)
@@ -2180,7 +2218,7 @@ sub poll_query_until
 		$stderr =~ s/\r\n/\n/g if $Config{osname} eq 'msys';
 		chomp($stderr);
 
-		if ($stdout eq $expected && $stderr eq '')
+		if ($stdout eq $params->{expected} && $stderr eq '')
 		{
 			return 1;
 		}
@@ -2196,7 +2234,7 @@ sub poll_query_until
 	diag qq(poll_query_until timed out executing this query:
 $query
 expecting this output:
-$expected
+$params->{expected}
 last actual query output:
 $stdout
 with stderr:

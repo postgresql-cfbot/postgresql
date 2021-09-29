@@ -49,6 +49,11 @@ This subroutine will be called for each entry in the source directory with its
 relative path as only parameter; if the subroutine returns true the entry is
 copied, otherwise the file is skipped.
 
+If the B<srcsymlinkfn> parameter is given, it must be a subroutine reference.
+This subroutine will be called when the source directory is a symlink. It
+determines the mechanism that copies files from the source directory to the
+destination directory.
+
 On failure the target directory may be in some incomplete state; no cleanup is
 attempted.
 
@@ -68,6 +73,7 @@ sub copypath
 {
 	my ($base_src_dir, $base_dest_dir, %params) = @_;
 	my $filterfn;
+	my $srcsymlinkfn;
 
 	if (defined $params{filterfn})
 	{
@@ -82,30 +88,54 @@ sub copypath
 		$filterfn = sub { return 1; };
 	}
 
+	if (defined $params{srcsymlinkfn})
+	{
+		croak "if specified, srcsymlinkfn must be a subroutine reference"
+			unless defined(ref $params{srcsymlinkfn})
+			and (ref $params{srcsymlinkfn} eq 'CODE');
+
+		$srcsymlinkfn = $params{srcsymlinkfn};
+	}
+	else
+	{
+		$srcsymlinkfn = undef;
+	}
+
 	# Complain if original path is bogus, because _copypath_recurse won't.
 	croak "\"$base_src_dir\" does not exist" if !-e $base_src_dir;
 
 	# Start recursive copy from current directory
-	return _copypath_recurse($base_src_dir, $base_dest_dir, "", $filterfn);
+	return _copypath_recurse($base_src_dir, $base_dest_dir, "", $filterfn, $srcsymlinkfn);
 }
 
 # Recursive private guts of copypath
 sub _copypath_recurse
 {
-	my ($base_src_dir, $base_dest_dir, $curr_path, $filterfn) = @_;
+	my ($base_src_dir, $base_dest_dir, $curr_path, $filterfn,
+		$srcsymlinkfn) = @_;
 	my $srcpath  = "$base_src_dir/$curr_path";
 	my $destpath = "$base_dest_dir/$curr_path";
 
 	# invoke the filter and skip all further operation if it returns false
 	return 1 unless &$filterfn($curr_path);
 
-	# Check for symlink -- needed only on source dir
-	# (note: this will fall through quietly if file is already gone)
-	croak "Cannot operate on symlink \"$srcpath\"" if -l $srcpath;
-
 	# Abort if destination path already exists.  Should we allow directories
 	# to exist already?
 	croak "Destination path \"$destpath\" already exists" if -e $destpath;
+
+	# Check for symlink -- needed only on source dir
+	# If caller provided us with a callback, call it; otherwise we're out.
+	if (-l $srcpath)
+	{
+		if (defined $srcsymlinkfn)
+		{
+			return &$srcsymlinkfn($srcpath, $destpath);
+		}
+		else
+		{
+			croak "Cannot operate on symlink \"$srcpath\"";
+		}
+	}
 
 	# If this source path is a file, simply copy it to destination with the
 	# same name and we're done.
@@ -139,7 +169,8 @@ sub _copypath_recurse
 		{
 			next if ($entry eq '.' or $entry eq '..');
 			_copypath_recurse($base_src_dir, $base_dest_dir,
-				$curr_path eq '' ? $entry : "$curr_path/$entry", $filterfn)
+				$curr_path eq '' ? $entry : "$curr_path/$entry", $filterfn,
+				$srcsymlinkfn)
 			  or die "copypath $srcpath/$entry -> $destpath/$entry failed";
 		}
 

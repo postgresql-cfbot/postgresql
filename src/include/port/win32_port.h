@@ -43,9 +43,16 @@
 #define _WINSOCKAPI_
 #endif
 
+/*
+ * Tell windows.h that we're going to include ntstatus.h, to avoid
+ * double-definition of some macros.
+ */
+ #define UMDF_USING_NTSTATUS
+
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+#include <ntstatus.h>
 #undef small
 #include <process.h>
 #include <signal.h>

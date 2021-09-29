@@ -758,14 +758,15 @@ static const SchemaQuery Query_for_list_of_collations = {
 "   FROM pg_catalog.pg_roles "\
 "  WHERE substring(pg_catalog.quote_ident(rolname),1,%d)='%s'"
 
-#define Query_for_list_of_grant_roles \
-" SELECT pg_catalog.quote_ident(rolname) "\
-"   FROM pg_catalog.pg_roles "\
-"  WHERE substring(pg_catalog.quote_ident(rolname),1,%d)='%s'"\
-" UNION ALL SELECT 'PUBLIC'"\
+#define Query_for_list_of_owner_roles \
+Query_for_list_of_roles \
 " UNION ALL SELECT 'CURRENT_ROLE'"\
 " UNION ALL SELECT 'CURRENT_USER'"\
 " UNION ALL SELECT 'SESSION_USER'"
+
+#define Query_for_list_of_grant_roles \
+Query_for_list_of_owner_roles \
+" UNION ALL SELECT 'PUBLIC'"
 
 /* the silly-looking length condition is just to eat up the current word */
 #define Query_for_index_of_table \
@@ -1617,7 +1618,7 @@ psql_completion(const char *text, int start, int end)
 		COMPLETE_WITH("SET TABLESPACE", "OWNED BY");
 	/* ALTER TABLE,INDEX,MATERIALIZED VIEW ALL IN TABLESPACE xxx OWNED BY */
 	else if (TailMatches("ALL", "IN", "TABLESPACE", MatchAny, "OWNED", "BY"))
-		COMPLETE_WITH_QUERY(Query_for_list_of_roles);
+		COMPLETE_WITH_QUERY(Query_for_list_of_owner_roles);
 	/* ALTER TABLE,INDEX,MATERIALIZED VIEW ALL IN TABLESPACE xxx OWNED BY xxx */
 	else if (TailMatches("ALL", "IN", "TABLESPACE", MatchAny, "OWNED", "BY", MatchAny))
 		COMPLETE_WITH("SET TABLESPACE");
@@ -2304,7 +2305,7 @@ psql_completion(const char *text, int start, int end)
 		COMPLETE_WITH("USER");
 	/* complete ALTER GROUP <foo> ADD|DROP USER with a user name */
 	else if (Matches("ALTER", "GROUP", MatchAny, "ADD|DROP", "USER"))
-		COMPLETE_WITH_QUERY(Query_for_list_of_roles);
+		COMPLETE_WITH_QUERY(Query_for_list_of_owner_roles);
 
 	/*
 	 * If we have ALTER TYPE <sth> RENAME VALUE, provide list of enum values
@@ -2726,6 +2727,19 @@ psql_completion(const char *text, int start, int end)
 	/* Complete "AS ON <sth> TO" with a table name */
 	else if (TailMatches("AS", "ON", "SELECT|UPDATE|INSERT|DELETE", "TO"))
 		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_tables, NULL);
+
+/* CREATE SCHEMA [ <name> ] [ AUTHORIZATION ] */
+	else if (Matches("CREATE", "SCHEMA"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_schemas
+							" UNION ALL SELECT 'AUTHORIZATION'");
+	else if (Matches("CREATE", "SCHEMA", "AUTHORIZATION"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_owner_roles);
+	else if (Matches("CREATE", "SCHEMA", MatchAny, "AUTHORIZATION"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_owner_roles);
+	else if (Matches("CREATE", "SCHEMA", MatchAny, "AUTHORIZATION", MatchAny))
+		COMPLETE_WITH("CREATE", "GRANT");
+	else if (Matches("CREATE", "SCHEMA", MatchAny))
+		COMPLETE_WITH("AUTHORIZATION", "CREATE", "GRANT");
 
 /* CREATE SEQUENCE --- is allowed inside CREATE SCHEMA, so use TailMatches */
 	else if (TailMatches("CREATE", "SEQUENCE", MatchAny) ||
@@ -3211,7 +3225,7 @@ psql_completion(const char *text, int start, int end)
 	else if (Matches("DROP", "OWNED"))
 		COMPLETE_WITH("BY");
 	else if (Matches("DROP", "OWNED", "BY"))
-		COMPLETE_WITH_QUERY(Query_for_list_of_roles);
+		COMPLETE_WITH_QUERY(Query_for_list_of_owner_roles);
 
 	/* DROP TEXT SEARCH */
 	else if (Matches("DROP", "TEXT", "SEARCH"))
@@ -3643,7 +3657,7 @@ psql_completion(const char *text, int start, int end)
 
 /* OWNER TO  - complete with available roles */
 	else if (TailMatches("OWNER", "TO"))
-		COMPLETE_WITH_QUERY(Query_for_list_of_roles);
+		COMPLETE_WITH_QUERY(Query_for_list_of_owner_roles);
 
 /* ORDER BY */
 	else if (TailMatches("FROM", MatchAny, "ORDER"))
@@ -3666,11 +3680,11 @@ psql_completion(const char *text, int start, int end)
 	else if (Matches("REASSIGN", "OWNED"))
 		COMPLETE_WITH("BY");
 	else if (Matches("REASSIGN", "OWNED", "BY"))
-		COMPLETE_WITH_QUERY(Query_for_list_of_roles);
+		COMPLETE_WITH_QUERY(Query_for_list_of_owner_roles);
 	else if (Matches("REASSIGN", "OWNED", "BY", MatchAny))
 		COMPLETE_WITH("TO");
 	else if (Matches("REASSIGN", "OWNED", "BY", MatchAny, "TO"))
-		COMPLETE_WITH_QUERY(Query_for_list_of_roles);
+		COMPLETE_WITH_QUERY(Query_for_list_of_owner_roles);
 
 /* REFRESH MATERIALIZED VIEW */
 	else if (Matches("REFRESH"))
@@ -3931,10 +3945,7 @@ psql_completion(const char *text, int start, int end)
 	else if (Matches("ALTER|CREATE|DROP", "USER", "MAPPING"))
 		COMPLETE_WITH("FOR");
 	else if (Matches("CREATE", "USER", "MAPPING", "FOR"))
-		COMPLETE_WITH_QUERY(Query_for_list_of_roles
-							" UNION SELECT 'CURRENT_ROLE'"
-							" UNION SELECT 'CURRENT_USER'"
-							" UNION SELECT 'PUBLIC'"
+		COMPLETE_WITH_QUERY(Query_for_list_of_grant_roles
 							" UNION SELECT 'USER'");
 	else if (Matches("ALTER|DROP", "USER", "MAPPING", "FOR"))
 		COMPLETE_WITH_QUERY(Query_for_list_of_user_mappings);

@@ -8091,8 +8091,9 @@ myEventProc(PGEventId evtId, void *evtInfo, void *passThrough)
    <literal>*</literal>, which matches anything.  The password field from
    the first line that matches the current connection parameters will be
    used.  (Therefore, put more-specific entries first when you are using
-   wildcards.) If an entry needs to contain <literal>:</literal> or
-   <literal>\</literal>, escape this character with <literal>\</literal>.
+   wildcards.) If an entry needs to contain <literal>:</literal>,
+   <literal> </literal>,
+   or <literal>\</literal>, escape this character with <literal>\</literal>.
    The host name field is matched to the <literal>host</literal> connection
    parameter if that is specified, otherwise to
    the <literal>hostaddr</literal> parameter if that is specified; if neither

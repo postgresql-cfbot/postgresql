@@ -6828,3 +6828,64 @@ listOpFamilyFunctions(const char *access_method_pattern,
 	PQclear(res);
 	return true;
 }
+
+/*
+ * \dl or \lo_list
+ * Lists large objects in database
+ */
+bool
+listLargeObjects(bool verbose)
+{
+	PQExpBufferData buf;
+	PGresult   *res;
+	printQueryOpt myopt = pset.popt;
+
+	initPQExpBuffer(&buf);
+
+	if (pset.sversion >= 90000)
+	{
+		printfPQExpBuffer(&buf,
+			"SELECT oid as \"%s\",\n"
+			"  pg_catalog.pg_get_userbyid(lomowner) as \"%s\",\n  ",
+			gettext_noop("ID"),
+			gettext_noop("Owner"));
+
+		if (verbose)
+		{
+			printACLColumn(&buf, "lomacl");
+			appendPQExpBufferStr(&buf, ",\n  ");
+		}
+
+		appendPQExpBuffer(&buf,
+			"pg_catalog.obj_description(oid, 'pg_largeobject') as \"%s\"\n"
+			"FROM pg_catalog.pg_largeobject_metadata\n"
+			"ORDER BY oid",
+			gettext_noop("Description"));
+
+	}
+	else
+	{
+		printfPQExpBuffer(&buf,
+			"SELECT loid as \"%s\",\n"
+			"  pg_catalog.obj_description(loid, 'pg_largeobject') as \"%s\"\n"
+			"FROM (SELECT DISTINCT loid FROM pg_catalog.pg_largeobject) x\n"
+			"ORDER BY 1",
+			gettext_noop("ID"),
+			gettext_noop("Description"));
+	}
+
+	res = PSQLexec(buf.data);
+	termPQExpBuffer(&buf);
+	if (!res)
+		return false;
+
+	myopt.topt.tuples_only = false;
+	myopt.nullPrint = NULL;
+	myopt.title = _("Large objects");
+	myopt.translate_header = true;
+
+	printQuery(res, &myopt, pset.queryFout, false, pset.logfile);
+
+	PQclear(res);
+	return true;
+}

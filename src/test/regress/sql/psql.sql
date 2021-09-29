@@ -1241,3 +1241,19 @@ drop role regress_partitioning_role;
 \dfa bit* small*
 \do - pg_catalog.int4
 \do && anyarray *
+
+-- check printing info about large objects
+-- one large object with OID=42 and owner lo_test is expected in the output
+CREATE ROLE lo_test;
+SELECT lo_create(42);
+ALTER LARGE OBJECT 42 OWNER TO lo_test;
+COMMENT ON LARGE OBJECT 42 IS 'the answer to the ultimate question of life';
+GRANT SELECT ON LARGE OBJECT 42 TO public;
+\dl
+\dl+
+\lo_list
+\lo_list+
+\dl-
+\lo_list-
+\lo_unlink 42
+DROP ROLE lo_test;

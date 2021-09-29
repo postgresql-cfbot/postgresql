@@ -5179,3 +5179,51 @@ List of access methods
  pg_catalog | &&   | anyarray      | anyarray       | boolean     | overlaps
 (1 row)
 
+-- check printing info about large objects
+-- one large object with OID=42 and owner lo_test is expected in the output
+CREATE ROLE lo_test;
+SELECT lo_create(42);
+ lo_create 
+-----------
+        42
+(1 row)
+
+ALTER LARGE OBJECT 42 OWNER TO lo_test;
+COMMENT ON LARGE OBJECT 42 IS 'the answer to the ultimate question of life';
+GRANT SELECT ON LARGE OBJECT 42 TO public;
+\dl
+                       Large objects
+ ID |  Owner  |                 Description                 
+----+---------+---------------------------------------------
+ 42 | lo_test | the answer to the ultimate question of life
+(1 row)
+
+\dl+
+                                  Large objects
+ ID |  Owner  | Access privileges  |                 Description                 
+----+---------+--------------------+---------------------------------------------
+ 42 | lo_test | lo_test=rw/lo_test+| the answer to the ultimate question of life
+    |         | =r/lo_test         | 
+(1 row)
+
+\lo_list
+                       Large objects
+ ID |  Owner  |                 Description                 
+----+---------+---------------------------------------------
+ 42 | lo_test | the answer to the ultimate question of life
+(1 row)
+
+\lo_list+
+                                  Large objects
+ ID |  Owner  | Access privileges  |                 Description                 
+----+---------+--------------------+---------------------------------------------
+ 42 | lo_test | lo_test=rw/lo_test+| the answer to the ultimate question of life
+    |         | =r/lo_test         | 
+(1 row)
+
+\dl-
+invalid command \dl-
+\lo_list-
+invalid command \lo_list-
+\lo_unlink 42
+DROP ROLE lo_test;

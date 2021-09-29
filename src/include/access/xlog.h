@@ -90,6 +90,7 @@ extern char *PrimaryConnInfo;
 extern char *PrimarySlotName;
 extern bool wal_receiver_create_temp_slot;
 extern bool track_wal_io_timing;
+extern bool wal_pmem_map;
 
 /* indirectly set via GUC system */
 extern TransactionId recoveryTargetXid;

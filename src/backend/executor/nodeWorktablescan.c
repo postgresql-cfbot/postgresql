@@ -42,10 +42,6 @@ WorkTableScanNext(WorkTableScanState *node)
 	 * worktable plan node, since it cannot appear high enough in the plan
 	 * tree of a scrollable cursor to be exposed to a backward-scan
 	 * requirement.  So it's not worth expending effort to support it.
-	 *
-	 * Note: we are also assuming that this node is the only reader of the
-	 * worktable.  Therefore, we don't need a private read pointer for the
-	 * tuplestore, nor do we need to tell tuplestore_gettupleslot to copy.
 	 */
 	Assert(ScanDirectionIsForward(node->ss.ps.state->es_direction));
 
@@ -55,6 +51,7 @@ WorkTableScanNext(WorkTableScanState *node)
 	 * Get the next tuple from tuplestore. Return NULL if no more tuples.
 	 */
 	slot = node->ss.ss_ScanTupleSlot;
+	tuplestore_select_read_pointer(tuplestorestate, node->readptr);
 	(void) tuplestore_gettupleslot(tuplestorestate, true, false, slot);
 	return slot;
 }
@@ -99,7 +96,14 @@ ExecWorkTableScan(PlanState *pstate)
 		Assert(!param->isnull);
 		node->rustate = castNode(RecursiveUnionState, DatumGetPointer(param->value));
 		Assert(node->rustate);
+		/*
+		 * Allocate a unique read pointer for each worktable scan.
+		 */
+		node->readptr = tuplestore_alloc_read_pointer(node->rustate->working_table, 0);
+		tuplestore_copy_read_pointer(node->rustate->working_table, 0, node->readptr);
+		tuplestore_rescan(node->rustate->working_table);
 
+		Assert(node->readptr != -1);
 		/*
 		 * The scan tuple type (ie, the rowtype we expect to find in the work
 		 * table) is the same as the result rowtype of the ancestor
@@ -147,6 +151,7 @@ ExecInitWorkTableScan(WorkTableScan *node, EState *estate, int eflags)
 	scanstate->ss.ps.plan = (Plan *) node;
 	scanstate->ss.ps.state = estate;
 	scanstate->ss.ps.ExecProcNode = ExecWorkTableScan;
+	scanstate->readptr = -1;	/* we'll set this later */
 	scanstate->rustate = NULL;	/* we'll set this later */
 
 	/*
@@ -219,5 +224,13 @@ ExecReScanWorkTableScan(WorkTableScanState *node)
 
 	/* No need (or way) to rescan if ExecWorkTableScan not called yet */
 	if (node->rustate)
+	{
+		/* Make sure to select the initial read pointer */
+		tuplestore_select_read_pointer(node->rustate->working_table, 0);
 		tuplestore_rescan(node->rustate->working_table);
+		/* Reallocate a unique read pointer. */
+		node->readptr = tuplestore_alloc_read_pointer(node->rustate->working_table, 0);
+		tuplestore_copy_read_pointer(node->rustate->working_table, 0, node->readptr);
+		tuplestore_rescan(node->rustate->working_table);
+	}
 }

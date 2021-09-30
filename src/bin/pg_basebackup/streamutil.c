@@ -479,6 +479,106 @@ RunIdentifySystem(PGconn *conn, char **sysid, TimeLineID *starttli,
 	return true;
 }
 
+
+/*
+ * Returns wether a replication slot exists through a given connection,
+ * and fills in the slot_info with the results if passed by the caller.
+ */
+ReadReplicationSlotStatus
+GetSlotInformation(PGconn *conn, const char *slot_name, SlotInformation * slot_info)
+{
+	PGresult   *res;
+	PQExpBuffer query;
+
+	Assert(slot_name != NULL);
+
+	if (PQserverVersion(conn) < 150000)
+		return READ_REPLICATION_SLOT_UNSUPPORTED;
+
+
+	query = createPQExpBuffer();
+	appendPQExpBuffer(query, "READ_REPLICATION_SLOT %s", slot_name);
+	res = PQexec(conn, query->data);
+	destroyPQExpBuffer(query);
+	/* The commpand should always return precisely one tuple */
+	if (PQresultStatus(res) != PGRES_TUPLES_OK || PQntuples(res) != 1)
+	{
+		pg_log_error("could not read replication slot : %s",
+					 PQerrorMessage(conn));
+		PQclear(res);
+		return READ_REPLICATION_SLOT_ERROR;
+	}
+
+	/*
+	 * When the slot doesn't exist, the command returns an all-null tuple. The
+	 * first column (slot_type) will only be null if the slot doesn't exists.
+	 */
+	if (PQgetisnull(res, 0, 0))
+	{
+		PQclear(res);
+		return READ_REPLICATION_SLOT_NONEXISTENT;
+	}
+	if (PQntuples(res) != 1 || PQnfields(res) < 5)
+	{
+		pg_log_error("could not fetch replication slot: got %d rows and %d fields, expected %d rows and %d or more fields",
+					 PQntuples(res), PQnfields(res), 1, 5);
+		PQclear(res);
+		return READ_REPLICATION_SLOT_ERROR;
+	}
+	/* If no slotinformation has been passed, we can return immediately */
+	if (slot_info == NULL)
+	{
+		PQclear(res);
+		return READ_REPLICATION_SLOT_OK;
+	}
+
+	slot_info->is_logical = strcmp(PQgetvalue(res, 0, 0), "logical") == 0;
+	/* Restart LSN */
+	if (PQgetisnull(res, 0, 1))
+		slot_info->restart_lsn = InvalidXLogRecPtr;
+	else
+	{
+		uint32		hi,
+					lo;
+
+		if (sscanf(PQgetvalue(res, 0, 1), "%X/%X", &hi, &lo) != 2)
+		{
+			pg_log_error("could not parse slot's restart_lsn \"%s\"",
+						 PQgetvalue(res, 0, 1));
+			PQclear(res);
+			return READ_REPLICATION_SLOT_ERROR;
+		}
+		slot_info->restart_lsn = ((uint64) hi) << 32 | lo;
+	}
+	if (PQgetisnull(res, 0, 2))
+		slot_info->confirmed_flush_lsn = InvalidXLogRecPtr;
+	else
+	{
+		uint32		hi,
+					lo;
+
+		if (sscanf(PQgetvalue(res, 0, 2), "%X/%X", &hi, &lo) != 2)
+		{
+			pg_log_error("could not parse slot's confirmed_flush_lsn \"%s\"",
+						 PQgetvalue(res, 0, 2));
+			PQclear(res);
+			return READ_REPLICATION_SLOT_ERROR;
+		}
+		slot_info->confirmed_flush_lsn = ((uint64) hi) << 32 | lo;
+	}
+
+	if (PQgetisnull(res, 0, 3))
+		slot_info->restart_tli = 0;
+	else
+		slot_info->restart_tli = atoi(PQgetvalue(res, 0, 3));
+	if (PQgetisnull(res, 0, 4))
+		slot_info->confirmed_flush_tli = 0;
+	else
+		slot_info->confirmed_flush_tli = atoi(PQgetvalue(res, 0, 4));
+	PQclear(res);
+	return READ_REPLICATION_SLOT_OK;
+}
+
 /*
  * Create a replication slot for the given connection. This function
  * returns true in case of success.

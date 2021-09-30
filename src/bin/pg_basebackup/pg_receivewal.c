@@ -409,9 +409,58 @@ StreamLog(void)
 	stream.startpos = FindStreamingStart(&stream.timeline);
 	if (stream.startpos == InvalidXLogRecPtr)
 	{
-		stream.startpos = serverpos;
-		stream.timeline = servertli;
+		/* Try to get it from the slot if any, and the server supports it */
+		if (replication_slot)
+		{
+			SlotInformation slot_info;
+
+			switch (GetSlotInformation(conn, replication_slot, &slot_info))
+			{
+				case READ_REPLICATION_SLOT_ERROR:
+
+					/*
+					 * Error has been logged by GetSlotInformation, return and
+					 * maybe retry
+					 */
+					return;
+				case READ_REPLICATION_SLOT_NONEXISTENT:
+					pg_log_error("replication slot \"%s\" does not exist", replication_slot);
+					return;
+				case READ_REPLICATION_SLOT_UNSUPPORTED:
+
+					/*
+					 * Server doesn't support the command, so fallback to the
+					 * default case
+					 */
+					pg_log_warning("server does not support fetching the slot's position, "
+								   "resuming from current server position instead");
+					break;
+				default:
+					if (slot_info.is_logical)
+					{
+						/*
+						 * If the slot is not physical we can't expect to
+						 * recover from that
+						 */
+						pg_log_error("cannot use the slot provided, physical slot expected.");
+						exit(1);
+					}
+					stream.startpos = slot_info.restart_lsn;
+					stream.timeline = slot_info.restart_tli;
+			}
+		}
+
+		/*
+		 * If it is still unknown, use the current flush value from the server
+		 */
+		if (stream.startpos == InvalidXLogRecPtr)
+		{
+			stream.startpos = serverpos;
+			stream.timeline = servertli;
+		}
 	}
+
+	Assert(stream.startpos != InvalidXLogRecPtr);
 
 	/*
 	 * Always start streaming at the beginning of a segment

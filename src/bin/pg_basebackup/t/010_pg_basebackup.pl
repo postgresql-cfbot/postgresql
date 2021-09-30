@@ -10,7 +10,7 @@ use File::Path qw(rmtree);
 use Fcntl qw(:seek);
 use PostgresNode;
 use TestLib;
-use Test::More tests => 110;
+use Test::More tests => 111;
 
 program_help_ok('pg_basebackup');
 program_version_ok('pg_basebackup');
@@ -465,14 +465,15 @@ $node->command_ok(
 	'pg_basebackup -X stream runs with --no-slot');
 rmtree("$tempdir/backupnoslot");
 
-$node->command_fails(
+$node->command_fails_like(
 	[
 		'pg_basebackup',             '-D',
 		"$tempdir/backupxs_sl_fail", '-X',
 		'stream',                    '-S',
 		'slot0'
 	],
-	'pg_basebackup fails with nonexistent replication slot');
+	qr/pg_basebackup: error: replication slot "slot0" does not exist/,
+	'pg_basebackup fails early with nonexistent replication slot');
 
 $node->command_fails(
 	[ 'pg_basebackup', '-D', "$tempdir/backupxs_slot", '-C' ],

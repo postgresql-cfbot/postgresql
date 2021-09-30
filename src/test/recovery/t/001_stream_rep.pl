@@ -6,7 +6,7 @@ use strict;
 use warnings;
 use PostgresNode;
 use TestLib;
-use Test::More tests => 49;
+use Test::More tests => 55;
 
 # Initialize primary node
 my $node_primary = PostgresNode->new('primary');
@@ -251,6 +251,51 @@ ok( $ret == 0,
 ok( $ret == 0,
 	"SHOW with superuser-settable parameter, replication role and logical replication"
 );
+
+note "testing READ_REPLICATION_SLOT command";
+
+my $slotname = 'test_read_replication_slot_physical';
+
+($ret, $stdout, $stderr) = $node_primary->psql(
+	'postgres',
+	'READ_REPLICATION_SLOT non_existent_slot;',
+	extra_params => [ '-d', $connstr_rep ]);
+ok( $ret == 0,
+	"READ_REPLICATION_SLOT does not produce an error with non existent slot");
+ok($stdout eq '||||',
+	"READ_REPLICATION_SLOT returns NULL values if slot does not exist");
+
+($ret, $stdout, $stderr) = $node_primary->psql(
+	'postgres',
+	"CREATE_REPLICATION_SLOT $slotname PHYSICAL RESERVE_WAL;",
+	extra_params => [ '-d', $connstr_rep ],
+	0,
+	'physical slot created on primary');
+
+($ret, $stdout, $stderr) = $node_primary->psql(
+	'postgres',
+	"READ_REPLICATION_SLOT $slotname;",
+	extra_params => [ '-d', $connstr_rep ]);
+ok($ret == 0,
+	"READ_REPLICATION_SLOT does not produce an error with existing slot");
+ok($stdout =~ 'physical\|[^|]*\|\|1\|',
+	"READ_REPLICATION_SLOT returns tuple corresponding to the slot");
+
+$node_primary->psql(
+	'postgres',
+	"DROP_REPLICATION_SLOT $slotname;",
+	extra_params => [ '-d', $connstr_rep ],
+	0,
+	'physical slot dropped on primary');
+
+($ret, $stdout, $stderr) = $node_primary->psql(
+	'postgres',
+	"READ_REPLICATION_SLOT $slotname;",
+	extra_params => [ '-d', $connstr_rep ]);
+ok($ret == 0,
+	"READ_REPLICATION_SLOT does not produce an error with dropped slot");
+ok($stdout eq '||||',
+	"READ_REPLICATION_SLOT returns NULL values if slot has been dropped");
 
 note "switching to physical replication slot";
 

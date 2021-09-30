@@ -1863,6 +1863,37 @@ BaseBackup(void)
 		exit(1);
 
 	/*
+	 * Check the replication slot exists if applicable
+	 */
+	if (replication_slot && !(temp_replication_slot || create_slot))
+	{
+		SlotInformation slot_info;
+
+		switch (GetSlotInformation(conn, replication_slot, &slot_info))
+		{
+			case READ_REPLICATION_SLOT_ERROR:
+
+				/*
+				 * Error has been logged by GetSlotInformation
+				 */
+				exit(1);
+			case READ_REPLICATION_SLOT_UNSUPPORTED:
+				/* We don't care about the result here */
+				break;
+			case READ_REPLICATION_SLOT_NONEXISTENT:
+				pg_log_error("replication slot \"%s\" does not exist", replication_slot);
+				exit(1);
+			case READ_REPLICATION_SLOT_OK:
+				if (slot_info.is_logical)
+				{
+					pg_log_error("cannot use the slot provided, physical slot expected.");
+					exit(1);
+				}
+				break;
+		}
+	}
+
+	/*
 	 * Start the actual backup
 	 */
 	PQescapeStringConn(conn, escaped_label, label, sizeof(escaped_label), &i);

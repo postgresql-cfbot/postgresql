@@ -238,7 +238,9 @@ BackgroundWriterMain(void)
 		/*
 		 * Do one cycle of dirty-buffer writing.
 		 */
+		elog(LOG, "=== begin BgBufferSync ===");
 		can_hibernate = BgBufferSync(&wb_context);
+		elog(LOG, "=== end BgBufferSync ===");
 
 		/*
 		 * Send off activity statistics to the stats collector

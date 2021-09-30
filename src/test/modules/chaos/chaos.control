@@ -1,0 +1,4 @@
+comment = 'Test module for throwaway fault-injection hacks...'
+default_version = '1.0'
+module_pathname = '$libdir/chaos'
+relocatable = true

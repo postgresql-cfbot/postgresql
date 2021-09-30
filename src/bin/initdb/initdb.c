@@ -2886,6 +2886,7 @@ main(int argc, char *argv[])
 	char	   *effective_user;
 	PQExpBuffer start_db_cmd;
 	char		pg_ctl_path[MAXPGPATH];
+	bool		pg_data_opt_used = false;
 
 	/*
 	 * Ensure that buffering behavior of stdout matches what it is in
@@ -2940,6 +2941,7 @@ main(int argc, char *argv[])
 				break;
 			case 'D':
 				pg_data = pg_strdup(optarg);
+				pg_data_opt_used = true;
 				break;
 			case 'E':
 				encoding = pg_strdup(optarg);
@@ -3053,6 +3055,18 @@ main(int argc, char *argv[])
 	/* If we only need to fsync, just do it and exit */
 	if (sync_only)
 	{
+
+		// 2 => 1 for command itself, and one for --sync-data option
+		int valid_argc = 2 + pg_data_opt_used + (pg_data != NULL);
+
+		// Ensure that there were no other options specified
+		if (argc > valid_argc)
+		{
+			// Maybe we should _error_ and exit?!
+			pg_log_warning("too many command-line arguments (--sync-only ignores all other options)");
+			//exit(1);
+		}
+
 		setup_pgdata();
 
 		/* must check that directory is readable */

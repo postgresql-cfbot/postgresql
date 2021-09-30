@@ -12,6 +12,7 @@
  */
 #include "postgres.h"
 
+#include "common/pg_prng.h"
 #include "fmgr.h"
 #include "lib/integerset.h"
 #include "miscadmin.h"
@@ -99,12 +100,16 @@ static void check_with_filler(IntegerSet *intset, uint64 x, uint64 value, uint64
 static void test_single_value_and_filler(uint64 value, uint64 filler_min, uint64 filler_max);
 static void test_huge_distances(void);
 
+static pg_prng_state	pr_state;
+
 /*
  * SQL-callable entry point to perform all tests.
  */
 Datum
 test_integerset(PG_FUNCTION_ARGS)
 {
+	pg_prng_strong_seed(&pr_state);
+
 	/* Tests for various corner cases */
 	test_empty();
 	test_huge_distances();
@@ -248,8 +253,7 @@ test_pattern(const test_spec *spec)
 		 * only a small part of the integer space is used.  We would very
 		 * rarely hit values that are actually in the set.
 		 */
-		x = (pg_lrand48() << 31) | pg_lrand48();
-		x = x % (last_int + 1000);
+		x = pg_prng_u64(&pr_state) % (last_int + 1000);
 
 		/* Do we expect this value to be present in the set? */
 		if (x >= last_int)
@@ -571,7 +575,7 @@ test_huge_distances(void)
 	 */
 	while (num_values < 1000)
 	{
-		val += pg_lrand48();
+		val += pg_prng_u32(&pr_state);
 		values[num_values++] = val;
 	}
 

@@ -15,6 +15,7 @@
 
 #include "access/xlogdefs.h"
 #include "common/logging.h"
+#include "common/pg_prng.h"
 #include "getopt_long.h"
 
 /*
@@ -71,6 +72,7 @@ static char full_buf[DEFAULT_XLOG_SEG_SIZE],
 static struct timeval start_t,
 			stop_t;
 static bool alarm_triggered = false;
+static pg_prng_state	prng_state;
 
 
 static void handle_args(int argc, char *argv[]);
@@ -117,6 +119,7 @@ main(int argc, char *argv[])
 	pqsignal(SIGHUP, signal_cleanup);
 #endif
 
+	pg_prng_strong_seed(&prng_state);
 	prepare_buf();
 
 	test_open();
@@ -233,7 +236,7 @@ prepare_buf(void)
 
 	/* write random data into buffer */
 	for (ops = 0; ops < DEFAULT_XLOG_SEG_SIZE; ops++)
-		full_buf[ops] = random();
+		full_buf[ops] = pg_prng_u32(&prng_state);
 
 	buf = (char *) TYPEALIGN(XLOG_BLCKSZ, full_buf);
 }

@@ -86,10 +86,21 @@ local_fetch_file_range(rewind_source *source, const char *path, off_t off,
 		pg_fatal("could not open source file \"%s\": %m",
 				 srcpath);
 
+	open_target_file(path, false);
+
+#ifdef HAVE_COPY_FILE_RANGE
+	if (copy_file_range_support &&
+		copy_target_range(srcfd, begin, end - begin))
+	{
+		if (close(srcfd) != 0)
+			pg_fatal("could not close file \"%s\": %m", srcpath);
+		return;
+	}
+	/* else fall back to use write_target_range(). */
+#endif
+
 	if (lseek(srcfd, begin, SEEK_SET) == -1)
 		pg_fatal("could not seek in source file: %m");
-
-	open_target_file(path, false);
 
 	while (end - begin > 0)
 	{

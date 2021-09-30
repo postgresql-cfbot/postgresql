@@ -1701,6 +1701,7 @@ AC_CHECK_FUNCS(m4_normalize([
 	backtrace_symbols
 	clock_gettime
 	copyfile
+	copy_file_range
 	fdatasync
 	getifaddrs
 	getpeerucred

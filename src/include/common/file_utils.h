@@ -25,6 +25,9 @@ typedef enum PGFileType
 } PGFileType;
 
 #ifdef FRONTEND
+#ifdef PG_FLUSH_DATA_WORKS
+extern int	pre_sync_fname(const char *fname, bool isdir);
+#endif
 extern int	fsync_fname(const char *fname, bool isdir);
 extern void fsync_pgdata(const char *pg_data, int serverVersion);
 extern void fsync_dir_recurse(const char *dir);

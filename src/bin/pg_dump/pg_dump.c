@@ -380,6 +380,7 @@ main(int argc, char **argv)
 		{"enable-row-security", no_argument, &dopt.enable_row_security, 1},
 		{"exclude-table-data", required_argument, NULL, 4},
 		{"extra-float-digits", required_argument, NULL, 8},
+		{"functions-only", no_argument, &dopt.functions_only, 1},
 		{"if-exists", no_argument, &dopt.if_exists, 1},
 		{"inserts", no_argument, NULL, 9},
 		{"lock-wait-timeout", required_argument, NULL, 2},
@@ -654,8 +655,23 @@ main(int argc, char **argv)
 		exit_nicely(1);
 	}
 
+	if (dopt.dataOnly && dopt.functions_only)
+	{
+		pg_log_error("options --functions-only and -a/--data-only cannot be used together");
+		exit_nicely(1);
+	}
+
+	if (table_include_patterns.head != NULL && dopt.functions_only)
+	{
+		pg_log_error("options --functions-only and -t/--table cannot be used together");
+		exit_nicely(1);
+	}
+
 	if (dopt.schemaOnly && foreign_servers_include_patterns.head != NULL)
 		fatal("options -s/--schema-only and --include-foreign-data cannot be used together");
+
+	if (dopt.functions_only && foreign_servers_include_patterns.head != NULL)
+		fatal("options --functions-only and --include-foreign-data cannot be used together");
 
 	if (numWorkers > 1 && foreign_servers_include_patterns.head != NULL)
 		fatal("option --include-foreign-data is not supported with parallel backup");
@@ -838,8 +854,12 @@ main(int argc, char **argv)
 	 *
 	 * -s means "schema only" and blobs are data, not schema, so we never
 	 * include blobs when -s is used.
+	 *
+	 * --functions-only means no data and blobs are data, so we never include
+	 * blobs when --functions-only is used.
+	 *
 	 */
-	if (dopt.include_everything && !dopt.schemaOnly && !dopt.dontOutputBlobs)
+	if (dopt.include_everything && !dopt.schemaOnly && !dopt.functions_only && !dopt.dontOutputBlobs)
 		dopt.outputBlobs = true;
 
 	/*
@@ -919,7 +939,13 @@ main(int argc, char **argv)
 
 	/* Now the rearrangeable objects. */
 	for (i = 0; i < numObjs; i++)
-		dumpDumpableObject(fout, dobjs[i]);
+	{
+		/* Without the --functions-only option, just dump everything. */
+		if (!dopt.functions_only)
+			dumpDumpableObject(fout, dobjs[i]);
+		else if (dobjs[i]->objType == DO_FUNC)
+			dumpFunc(fout, (const FuncInfo *) dobjs[i]);
+	}
 
 	/*
 	 * Set up options info to ensure we dump what we want.

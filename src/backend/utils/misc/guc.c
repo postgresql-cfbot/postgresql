@@ -137,6 +137,7 @@ extern char *temp_tablespaces;
 extern bool ignore_checksum_failure;
 extern bool ignore_invalid_pages;
 extern bool synchronize_seqscans;
+extern bool wal_sessioninfo;
 
 #ifdef TRACE_SYNCSCAN
 extern bool trace_syncscan;
@@ -1319,6 +1320,16 @@ static struct config_bool ConfigureNamesBool[] =
 		},
 		&wal_log_hints,
 		false,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"wal_sessioninfo", PGC_SUSET, WAL_SETTINGS,
+			gettext_noop("Includes sessionfo onto the WAL records for transaction completion."),
+			NULL
+		},
+		&wal_sessioninfo,
+		true,
 		NULL, NULL, NULL
 	},
 

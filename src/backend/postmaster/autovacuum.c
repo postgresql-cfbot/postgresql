@@ -429,6 +429,14 @@ StartAutoVacLauncher(void)
 	return 0;
 }
 
+static volatile sig_atomic_t bogus_flag = false;
+
+static void
+bogus_handler(void)
+{
+	bogus_flag = true;
+}
+
 /*
  * Main loop for the autovacuum launcher process.
  */
@@ -441,9 +449,6 @@ AutoVacLauncherMain(int argc, char *argv[])
 
 	MyBackendType = B_AUTOVAC_LAUNCHER;
 	init_ps_display(NULL);
-
-	ereport(DEBUG1,
-			(errmsg_internal("autovacuum launcher started")));
 
 	if (PostAuthDelay)
 		pg_usleep(PostAuthDelay * 1000000L);
@@ -461,6 +466,11 @@ AutoVacLauncherMain(int argc, char *argv[])
 	/* SIGQUIT handler was already set up by InitPostmasterChild */
 
 	InitializeTimeouts();		/* establishes SIGALRM handler */
+	RegisterTimeout(BOGUS_TEST_TIMEOUT, bogus_handler);
+	enable_timeout_every(BOGUS_TEST_TIMEOUT, 3000);
+
+	ereport(DEBUG1,
+			(errmsg_internal("autovacuum launcher started")));
 
 	pqsignal(SIGPIPE, SIG_IGN);
 	pqsignal(SIGUSR1, procsignal_sigusr1_handler);
@@ -810,6 +820,12 @@ AutoVacLauncherMain(int argc, char *argv[])
 static void
 HandleAutoVacLauncherInterrupts(void)
 {
+	if (bogus_flag)
+	{
+		bogus_flag = false;
+		elog(LOG, "bogus log message");
+	}
+
 	/* the normal shutdown case */
 	if (ShutdownRequestPending)
 		AutoVacLauncherShutdown();

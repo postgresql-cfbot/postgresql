@@ -883,6 +883,30 @@ large groups of duplicates, maximizing space utilization.  Note also that
 deduplication more efficient.  Deduplication can be performed infrequently,
 without merging together existing posting list tuples too often.
 
+Notes about dynamic prefix truncation
+-------------------------------------
+
+Because NBTrees have a sorted keyspace, when we have determined that some
+prefixing columns of tuples on both sides of the tuple that is being
+compared are equal to the scankey, then the current tuple must also share
+this prefix with the scankey. This allows us to skip comparing those columns,
+potentially saving cycles.
+
+We can only use this constraint if we have proven this information while we
+hold a pin on the page, so this is only useful on the page level: Concurrent
+page deletions and splits may have moved the keyspace of the page referenced
+by an inner page to the right. If we re-used high- and low-column-prefixes,
+we would not be able to detect a change of keyspace from e.g. (2,2) to (1,2),
+and subsequently return invalid results. This race condition can only be
+prevented by re-establishing the prefix-equal-columns for each page.
+
+The positive part of this, is that we already have results of the highest
+value of a page: a pages' highkey is compared to the scankey while we have
+a pin on the page in the _bt_moveright procedure. The _bt_binsrch procedure
+will use this result as a rightmost prefix compare, and for each step in the
+binary search (that does not compare less than the insert key) improve the
+equal-prefix bounds.
+
 Notes about deduplication
 -------------------------
 

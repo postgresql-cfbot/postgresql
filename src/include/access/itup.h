@@ -59,6 +59,15 @@ typedef struct IndexAttributeBitMapData
 
 typedef IndexAttributeBitMapData * IndexAttributeBitMap;
 
+typedef struct IAttrIterStateData
+{
+	int			offset;
+	bool		slow;
+	bool		isNull;
+} IAttrIterStateData;
+
+typedef IAttrIterStateData * IAttrIterState;
+
 /*
  * t_info manipulation macros
  */
@@ -126,6 +135,84 @@ typedef IndexAttributeBitMapData * IndexAttributeBitMap;
 	) \
 )
 
+/* ----------------
+ *		index_attiterinit
+ *
+ *		This gets called many times, so we macro the cacheable and NULL
+ *		lookups, and call nocache_index_attiterinit() for the rest.
+ *
+ *		tup - the tuple being iterated on
+ *		attnum - the attribute number that we start the iteration with 
+ *				 in the first index_attiternext call
+ *		tupdesc - the tuple description
+ *
+ * ----------------
+ */
+#define index_attiterinit(tup, attnum, tupleDesc, iter) \
+do { \
+	if ((attnum) == 1) \
+	{ \
+		*(iter) = ((IAttrIterStateData) { \
+			0 /* offset */, \
+			false /* slow */, \
+			false /* isNull */ \
+		}); \
+	} \
+	else if (!IndexTupleHasNulls(tup) && \
+			 TupleDescAttr((tupleDesc), (attnum)-1)->attcacheoff >= 0) \
+	{ \
+		*(iter) = ((IAttrIterStateData) { \
+			TupleDescAttr((tupleDesc), (attnum)-1)->attcacheoff, /* offset */ \
+			TupleDescAttr((tupleDesc), (attnum)-1)->attlen >= 0, /* slow */ \
+			false /* isNull */ \
+		}); \
+	} \
+	else \
+		nocache_index_attiterinit((tup), (attnum) - 1, (tupleDesc), (iter)); \
+} while (false);
+
+/* ----------------
+ *		index_attiternext
+ *
+ *		This gets called many times, so we macro the cacheable and NULL
+ *		lookups, and call nocache_index_attiternext() for the rest.
+ *
+ * ----------------
+ */
+#define index_attiternext(itup, attnum, tupleDesc, iter) \
+( \
+	AssertMacro(PointerIsValid(iter) && (attnum) > 0), \
+	(!IndexTupleHasNulls(itup)) ? \
+	( \
+		!(iter)->slow && TupleDescAttr((tupleDesc), (attnum) - 1)->attcacheoff >= 0 ? \
+		( \
+			(iter)->offset = att_addlength_pointer(TupleDescAttr((tupleDesc), \
+				(attnum) - 1)->attcacheoff, TupleDescAttr((tupleDesc), \
+				(attnum) - 1)->attlen, (char *) (itup) + \
+				IndexInfoFindDataOffset((itup)->t_info) + \
+				TupleDescAttr((tupleDesc), (attnum) - 1)->attcacheoff), \
+			(iter)->isNull = false,\
+			(iter)->slow = TupleDescAttr((tupleDesc), (attnum) - 1)->attlen < 0, \
+			(Datum) fetchatt(TupleDescAttr((tupleDesc), (attnum) - 1), \
+				(char *) (itup) + IndexInfoFindDataOffset((itup)->t_info) + \
+				TupleDescAttr((tupleDesc), (attnum) - 1)->attcacheoff) \
+		) \
+		: \
+		nocache_index_attiternext((itup), (attnum), (tupleDesc), (iter)) \
+	) \
+	: \
+	( \
+		att_isnull((attnum) - 1, (char *) (itup) + sizeof(IndexTupleData)) ? \
+		( \
+			(iter)->isNull = true, \
+			(iter)->slow = true, \
+			(Datum) 0 \
+		) \
+		: \
+		nocache_index_attiternext((itup), (attnum), (tupleDesc), (iter)) \
+	) \
+)
+
 /*
  * MaxIndexTuplesPerPage is an upper bound on the number of tuples that can
  * fit on one index page.  An index tuple must have either data or a null
@@ -160,5 +247,7 @@ extern void index_deform_tuple_internal(TupleDesc tupleDescriptor,
 extern IndexTuple CopyIndexTuple(IndexTuple source);
 extern IndexTuple index_truncate_tuple(TupleDesc sourceDescriptor,
 									   IndexTuple source, int leavenatts);
+extern void nocache_index_attiterinit(IndexTuple tup, AttrNumber attnum, TupleDesc tupleDesc, IAttrIterState iter);
+extern Datum nocache_index_attiternext(IndexTuple tup, AttrNumber attnum, TupleDesc tupleDesc, IAttrIterState iter);
 
 #endif							/* ITUP_H */

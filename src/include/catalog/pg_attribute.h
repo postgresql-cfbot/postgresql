@@ -182,6 +182,9 @@ CATALOG(pg_attribute,1249,AttributeRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(75,
 	/* Column-level FDW options */
 	text		attfdwoptions[1] BKI_DEFAULT(_null_);
 
+	/* current compression options */
+	text		attcmoptions[1] BKI_DEFAULT(_null_);
+
 	/*
 	 * Missing value for added columns. This is a one element array which lets
 	 * us store a value of the attribute type here.

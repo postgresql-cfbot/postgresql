@@ -2129,3 +2129,67 @@ AlterTableGetRelOptionsLockLevel(List *defList)
 
 	return lockmode;
 }
+
+/*
+ * Convert a DefElem list to the text array format that is used in
+ * pg_foreign_data_wrapper, pg_foreign_server, pg_user_mapping, and
+ * pg_foreign_table.
+ *
+ * Returns the array in the form of a Datum, or PointerGetDatum(NULL)
+ * if the list is empty.
+ *
+ * Note: The array is usually stored to database without further
+ * processing, hence any validation should be done before this
+ * conversion.
+ */
+Datum
+optionListToArray(List *options)
+{
+	ArrayBuildState *astate = NULL;
+	ListCell   *cell;
+
+	foreach(cell, options)
+	{
+		DefElem    *def = lfirst(cell);
+		const char *value;
+		Size		len;
+		text	   *t;
+
+		value = defGetString(def);
+		len = VARHDRSZ + strlen(def->defname) + 1 + strlen(value);
+		t = palloc(len + 1);
+		SET_VARSIZE(t, len);
+		sprintf(VARDATA(t), "%s=%s", def->defname, value);
+
+		astate = accumArrayResult(astate, PointerGetDatum(t),
+								  false, TEXTOID,
+								  CurrentMemoryContext);
+	}
+
+	if (astate)
+		return makeArrayResult(astate, CurrentMemoryContext);
+
+	return PointerGetDatum(NULL);
+}
+
+/*
+ * Return human readable list of reloptions
+ */
+char *
+formatRelOptions(List *options)
+{
+	StringInfoData buf;
+	ListCell   *cell;
+
+	initStringInfo(&buf);
+
+	foreach(cell, options)
+	{
+		DefElem    *def = (DefElem *) lfirst(cell);
+
+		appendStringInfo(&buf, "%s%s=%s", buf.len > 0 ? ", " : "",
+						 def->defname, defGetString(def));
+	}
+
+	return buf.data;
+}

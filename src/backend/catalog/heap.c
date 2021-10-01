@@ -740,6 +740,7 @@ InsertPgAttributeTuples(Relation pg_attribute_rel,
 						TupleDesc tupdesc,
 						Oid new_rel_oid,
 						Datum *attoptions,
+						Datum *attcmoptions,
 						CatalogIndexState indstate)
 {
 	TupleTableSlot **slot;
@@ -795,6 +796,11 @@ InsertPgAttributeTuples(Relation pg_attribute_rel,
 		else
 			slot[slotCount]->tts_isnull[Anum_pg_attribute_attoptions - 1] = true;
 
+		if (attcmoptions && attcmoptions[natts] != (Datum) 0)
+			slot[slotCount]->tts_values[Anum_pg_attribute_attcmoptions - 1] = attcmoptions[natts];
+		else
+			slot[slotCount]->tts_isnull[Anum_pg_attribute_attcmoptions - 1] = true;
+
 		/* start out with empty permissions and empty options */
 		slot[slotCount]->tts_isnull[Anum_pg_attribute_attacl - 1] = true;
 		slot[slotCount]->tts_isnull[Anum_pg_attribute_attfdwoptions - 1] = true;
@@ -842,6 +848,7 @@ InsertPgAttributeTuples(Relation pg_attribute_rel,
 static void
 AddNewAttributeTuples(Oid new_rel_oid,
 					  TupleDesc tupdesc,
+					  Datum *acoption,
 					  char relkind)
 {
 	Relation	rel;
@@ -860,7 +867,8 @@ AddNewAttributeTuples(Oid new_rel_oid,
 	/* set stats detail level to a sane default */
 	for (int i = 0; i < natts; i++)
 		tupdesc->attrs[i].attstattarget = -1;
-	InsertPgAttributeTuples(rel, tupdesc, new_rel_oid, NULL, indstate);
+	InsertPgAttributeTuples(rel, tupdesc, new_rel_oid,
+							NULL, acoption, indstate);
 
 	/* add dependencies on their datatypes and collations */
 	for (int i = 0; i < natts; i++)
@@ -892,7 +900,7 @@ AddNewAttributeTuples(Oid new_rel_oid,
 
 		td = CreateTupleDesc(lengthof(SysAtt), (FormData_pg_attribute **) &SysAtt);
 
-		InsertPgAttributeTuples(rel, td, new_rel_oid, NULL, indstate);
+		InsertPgAttributeTuples(rel, td, new_rel_oid, NULL, NULL, indstate);
 		FreeTupleDesc(td);
 	}
 
@@ -1160,6 +1168,7 @@ heap_create_with_catalog(const char *relname,
 						 bool allow_system_table_mods,
 						 bool is_internal,
 						 Oid relrewrite,
+						 Datum *acoptions,
 						 ObjectAddress *typaddress)
 {
 	Relation	pg_class_desc;
@@ -1418,7 +1427,7 @@ heap_create_with_catalog(const char *relname,
 	/*
 	 * now add tuples to pg_attribute for the attributes in our new relation.
 	 */
-	AddNewAttributeTuples(relid, new_rel_desc->rd_att, relkind);
+	AddNewAttributeTuples(relid, new_rel_desc->rd_att, acoptions, relkind);
 
 	/*
 	 * Make a dependency link to force the relation to be deleted if its

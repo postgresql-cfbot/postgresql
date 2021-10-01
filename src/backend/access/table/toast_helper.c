@@ -15,10 +15,13 @@
 #include "postgres.h"
 
 #include "access/detoast.h"
+#include "access/reloptions.h"
 #include "access/table.h"
 #include "access/toast_helper.h"
 #include "access/toast_internals.h"
 #include "catalog/pg_type_d.h"
+#include "commands/defrem.h"
+#include "utils/syscache.h"
 
 
 /*
@@ -55,6 +58,7 @@ toast_tuple_init(ToastTupleContext *ttc)
 		ttc->ttc_attr[i].tai_colflags = 0;
 		ttc->ttc_attr[i].tai_oldexternal = NULL;
 		ttc->ttc_attr[i].tai_compression = att->attcompression;
+		ttc->ttc_attr[i].tai_cmoptions = GetAttributeCompressionOptions(att);
 
 		if (ttc->ttc_oldvalues != NULL)
 		{
@@ -230,7 +234,8 @@ toast_tuple_try_compression(ToastTupleContext *ttc, int attribute)
 	Datum		new_value;
 	ToastAttrInfo *attr = &ttc->ttc_attr[attribute];
 
-	new_value = toast_compress_datum(*value, attr->tai_compression);
+	new_value = toast_compress_datum(*value, attr->tai_compression,
+									 attr->tai_cmoptions);
 
 	if (DatumGetPointer(new_value) != NULL)
 	{

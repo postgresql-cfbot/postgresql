@@ -322,6 +322,42 @@ generate_series(1, 50) g), VERSION());
 ERROR:  relation "cmdata2" does not exist
 LINE 1: INSERT INTO cmdata2 VALUES((SELECT array_agg(md5(g::TEXT))::...
                     ^
+-- compression options
+CREATE TABLE cmdata3(f1 TEXT COMPRESSION pglz WITH (min_input_size '100'));
+CREATE INDEX idx2 ON cmdata3(f1);
+INSERT INTO cmdata3 VALUES(repeat('1234567890',1000));
+SELECT attcmoptions FROM pg_attribute WHERE attrelid = 'cmdata3'::regclass AND attname='f1';
+     attcmoptions     
+----------------------
+ {min_input_size=100}
+(1 row)
+
+SELECT attcmoptions FROM pg_attribute WHERE attrelid = 'idx2'::regclass AND attname='f1';
+     attcmoptions     
+----------------------
+ {min_input_size=100}
+(1 row)
+
+ALTER TABLE cmdata3 ALTER COLUMN f1 SET COMPRESSION lz4 WITH (acceleration '50');
+ERROR:  unsupported LZ4 compression method
+DETAIL:  This functionality requires the server to be built with lz4 support.
+HINT:  You need to rebuild PostgreSQL using --with-lz4.
+INSERT INTO cmdata3 VALUES(repeat('1234567890',1004));
+SELECT attcmoptions FROM pg_attribute WHERE attrelid = 'cmdata3'::regclass AND attname='f1';
+     attcmoptions     
+----------------------
+ {min_input_size=100}
+(1 row)
+
+SELECT attcmoptions FROM pg_attribute WHERE attrelid = 'idx2'::regclass AND attname='f1';
+     attcmoptions     
+----------------------
+ {min_input_size=100}
+(1 row)
+
+--error
+ALTER TABLE cmdata3 ALTER COLUMN f1 SET COMPRESSION pglz WITH (invalid_option '50');
+ERROR:  unknown compression option for pglz: "invalid_option"
 -- check data is ok
 SELECT length(f1) FROM cmdata;
  length 

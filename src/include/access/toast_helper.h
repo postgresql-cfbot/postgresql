@@ -15,6 +15,7 @@
 #define TOAST_HELPER_H
 
 #include "utils/rel.h"
+#include "nodes/pg_list.h"
 
 /*
  * Information about one column of a tuple being toasted.
@@ -33,6 +34,7 @@ typedef struct
 	int32		tai_size;
 	uint8		tai_colflags;
 	char		tai_compression;
+	List	   *tai_cmoptions;
 } ToastAttrInfo;
 
 /*

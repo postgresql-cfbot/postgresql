@@ -302,6 +302,16 @@ from hash_parted order by part;
 -- partitions
 \d+ list_parted
 
+-- bulk inserts
+truncate hash_parted;
+begin;
+-- exercise bulk insert to partitions
+SET client_min_messages=debug1;
+insert into hash_parted select generate_series(1,9999);
+RESET client_min_messages;
+select count(1) from hash_parted;
+commit;
+
 -- cleanup
 drop table range_parted, list_parted;
 drop table hash_parted;

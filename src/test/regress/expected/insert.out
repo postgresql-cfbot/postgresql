@@ -483,6 +483,21 @@ Partitions: part_aa_bb FOR VALUES IN ('aa', 'bb'),
             part_xx_yy FOR VALUES IN ('xx', 'yy'), PARTITIONED,
             part_default DEFAULT, PARTITIONED
 
+-- bulk inserts
+truncate hash_parted;
+begin;
+-- exercise bulk insert to partitions
+SET client_min_messages=debug1;
+insert into hash_parted select generate_series(1,9999);
+DEBUG:  enabling bulk insert
+RESET client_min_messages;
+select count(1) from hash_parted;
+ count 
+-------
+  9999
+(1 row)
+
+commit;
 -- cleanup
 drop table range_parted, list_parted;
 drop table hash_parted;

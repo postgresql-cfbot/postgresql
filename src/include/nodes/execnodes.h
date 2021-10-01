@@ -14,6 +14,7 @@
 #ifndef EXECNODES_H
 #define EXECNODES_H
 
+#include "access/heapam.h"
 #include "access/tupconvert.h"
 #include "executor/instrument.h"
 #include "fmgr.h"
@@ -1201,6 +1202,10 @@ typedef struct ModifyTableState
 
 	EPQState	mt_epqstate;	/* for evaluating EvalPlanQual rechecks */
 	bool		fireBSTriggers; /* do we need to fire stmt triggers? */
+
+	BulkInsertState	bistate;	/* state for bulk insert like INSERT SELECT, when miinfo cannot be used */
+	ResultRelInfo	*prevResultRelInfo; /* last child inserted with bistate */
+	size_t			ntuples;	/* Number of tuples inserted */
 
 	/*
 	 * These fields are used for inherited UPDATE and DELETE, to track which

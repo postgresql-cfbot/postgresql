@@ -516,7 +516,7 @@ ExecSimpleRelationUpdate(ResultRelInfo *resultRelInfo,
 												   NULL, NIL);
 
 		/* AFTER ROW UPDATE Triggers */
-		ExecARUpdateTriggers(estate, resultRelInfo,
+		ExecARUpdateTriggers(estate, NULL, resultRelInfo,
 							 tid, NULL, slot,
 							 recheckIndexes, NULL);
 
@@ -556,7 +556,7 @@ ExecSimpleRelationDelete(ResultRelInfo *resultRelInfo,
 		simple_table_tuple_delete(rel, tid, estate->es_snapshot);
 
 		/* AFTER ROW DELETE Triggers */
-		ExecARDeleteTriggers(estate, resultRelInfo,
+		ExecARDeleteTriggers(estate, NULL, resultRelInfo,
 							 tid, NULL, NULL);
 	}
 }

@@ -3266,7 +3266,14 @@ describeOneTableDetails(const char *schemaname,
 						   "       AND u.tgparentid = 0) AS parent" :
 						   "NULL AS parent"),
 						  oid);
-		if (pset.sversion >= 110000)
+		/*
+		 * tgisnternal is set to true for inherited triggers of partitions in
+		 * the servers between v11 and v13, though still must be shown to the
+		 * user.  So we use another property that is true for such inherited
+		 * triggers to avoid them being hidden, which is their dependendence
+		 * on another trigger.
+		 */
+		if (pset.sversion >= 110000 && pset.sversion < 140000)
 			appendPQExpBufferStr(&buf, "(NOT t.tgisinternal OR (t.tgisinternal AND t.tgenabled = 'D') \n"
 								 "    OR EXISTS (SELECT 1 FROM pg_catalog.pg_depend WHERE objid = t.oid \n"
 								 "        AND refclassid = 'pg_catalog.pg_trigger'::pg_catalog.regclass))");

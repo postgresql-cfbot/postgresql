@@ -524,6 +524,9 @@ typedef struct ResultRelInfo
 
 	/* for use by copyfrom.c when performing multi-inserts */
 	struct CopyMultiInsertBuffer *ri_CopyMultiInsertBuffer;
+
+	/* Used during cross-partition updates on partitioned tables. */
+	List	   *ri_ancestorResultRels;
 } ResultRelInfo;
 
 /* ----------------

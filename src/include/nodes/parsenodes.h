@@ -3061,6 +3061,7 @@ typedef struct RenameStmt
 	char	   *newname;		/* the new name */
 	DropBehavior behavior;		/* RESTRICT or CASCADE behavior */
 	bool		missing_ok;		/* skip error if missing? */
+	bool		sub_missing_ok; /* skip error if contained object missing? */
 } RenameStmt;
 
 /* ----------------------

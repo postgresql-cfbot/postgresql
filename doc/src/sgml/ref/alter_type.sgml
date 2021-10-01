@@ -26,7 +26,7 @@ PostgreSQL documentation
 ALTER TYPE <replaceable class="parameter">name</replaceable> OWNER TO { <replaceable class="parameter">new_owner</replaceable> | CURRENT_ROLE | CURRENT_USER | SESSION_USER }
 ALTER TYPE <replaceable class="parameter">name</replaceable> RENAME TO <replaceable class="parameter">new_name</replaceable>
 ALTER TYPE <replaceable class="parameter">name</replaceable> SET SCHEMA <replaceable class="parameter">new_schema</replaceable>
-ALTER TYPE <replaceable class="parameter">name</replaceable> RENAME ATTRIBUTE <replaceable class="parameter">attribute_name</replaceable> TO <replaceable class="parameter">new_attribute_name</replaceable> [ CASCADE | RESTRICT ]
+ALTER TYPE <replaceable class="parameter">name</replaceable> RENAME ATTRIBUTE [ IF EXISTS ] <replaceable class="parameter">attribute_name</replaceable> TO <replaceable class="parameter">new_attribute_name</replaceable> [ CASCADE | RESTRICT ]
 ALTER TYPE <replaceable class="parameter">name</replaceable> <replaceable class="parameter">action</replaceable> [, ... ]
 ALTER TYPE <replaceable class="parameter">name</replaceable> ADD VALUE [ IF NOT EXISTS ] <replaceable class="parameter">new_enum_value</replaceable> [ { BEFORE | AFTER } <replaceable class="parameter">neighbor_enum_value</replaceable> ]
 ALTER TYPE <replaceable class="parameter">name</replaceable> RENAME VALUE <replaceable class="parameter">existing_enum_value</replaceable> TO <replaceable class="parameter">new_enum_value</replaceable>
@@ -76,11 +76,14 @@ ALTER TYPE <replaceable class="parameter">name</replaceable> SET ( <replaceable 
    </varlistentry>
 
    <varlistentry>
-    <term><literal>RENAME ATTRIBUTE</literal></term>
+    <term><literal>RENAME ATTRIBUTE [ IF EXISTS ]</literal></term>
     <listitem>
      <para>
       This form is only usable with composite types.
       It changes the name of an individual attribute of the type.
+      If <literal>IF EXISTS</literal> is specified and the attribute
+      does not exist, no error is thrown. In this case a notice
+      is issued instead.
      </para>
     </listitem>
    </varlistentry>

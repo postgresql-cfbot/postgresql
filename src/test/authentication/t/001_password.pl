@@ -20,7 +20,7 @@ if (!$use_unix_sockets)
 }
 else
 {
-	plan tests => 23;
+	plan tests => 32;
 }
 
 

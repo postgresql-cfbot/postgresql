@@ -23,7 +23,7 @@ use Time::HiRes qw(usleep);
 
 if ($ENV{with_gssapi} eq 'yes')
 {
-	plan tests => 44;
+	plan tests => 54;
 }
 else
 {

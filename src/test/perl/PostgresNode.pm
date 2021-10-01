@@ -2055,8 +2055,11 @@ sub connect_ok
 
 	if (defined($params{expected_stdout}))
 	{
-		like($stdout, $params{expected_stdout}, "$test_name: matches");
+		like($stdout, $params{expected_stdout}, "$test_name: stdout matches");
 	}
+
+	is($stderr, "", "$test_name: no stderr");
+
 	if (@log_like or @log_unlike)
 	{
 		my $log_contents = TestLib::slurp_file($self->logfile, $log_location);

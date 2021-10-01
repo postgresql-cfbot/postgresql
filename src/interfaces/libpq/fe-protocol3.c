@@ -2175,6 +2175,50 @@ pqBuildStartupPacket3(PGconn *conn, int *packetlen,
 }
 
 /*
+ * Build comma-separated list of compression algorithms requested by client.
+ * It can be either explicitly specified by user in connection string, or
+ * include all algorithms supported by client library.
+ * This function returns true if the compression string is successfully parsed and
+ * stores a comma-separated list of algorithms in *client_compressors.
+ * If compression is disabled, then NULL is assigned to *client_compressors.
+ * Also it creates an array of compressor descriptors, each element of which corresponds to
+ * the corresponding algorithm name in *client_compressors list. This array is stored in PGconn
+ * and is used during handshake when a compression acknowledgment response is received from the server.
+ */
+static bool
+build_compressors_list(PGconn *conn, char **client_compressors, bool build_descriptors)
+{
+	zpq_compressor *compressors;
+	size_t		n_compressors;
+
+	if (!zpq_parse_compression_setting(conn->compression, &compressors, &n_compressors))
+	{
+		return false;
+	}
+
+	*client_compressors = NULL;
+	if (build_descriptors)
+	{
+		conn->compressors = compressors;
+		conn->n_compressors = n_compressors;
+	}
+
+	if (n_compressors == 0)
+	{
+		/* no compressors available, return */
+		return true;
+	}
+
+	*client_compressors = zpq_serialize_compressors(compressors, n_compressors);
+
+	if (!build_descriptors)
+	{
+		free(compressors);
+	}
+	return true;
+}
+
+/*
  * Build a startup packet given a filled-in PGconn structure.
  *
  * We need to figure out how much space is needed, then fill it in.
@@ -2220,6 +2264,18 @@ build_startup_packet(const PGconn *conn, char *packet,
 		ADD_STARTUP_OPTION("replication", conn->replication);
 	if (conn->pgoptions && conn->pgoptions[0])
 		ADD_STARTUP_OPTION("options", conn->pgoptions);
+	if (conn->compression && conn->compression[0])
+	{
+		char	   *client_compression_algorithms;
+
+		if (build_compressors_list((PGconn *) conn, &client_compression_algorithms, packet == NULL))
+		{
+			if (client_compression_algorithms)
+			{
+				ADD_STARTUP_OPTION("_pq_.compression", client_compression_algorithms);
+			}
+		}
+	}
 	if (conn->send_appname)
 	{
 		/* Use appname if present, otherwise use fallback */

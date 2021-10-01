@@ -1906,6 +1906,16 @@ static struct config_bool ConfigureNamesBool[] =
 	},
 
 	{
+		{"recovery_target_use_origin_time", PGC_POSTMASTER, WAL_RECOVERY_TARGET,
+			gettext_noop("Sets whether to use local or origin transaction time with recovery target."),
+			NULL
+		},
+		&recoveryTargetUseOriginTime,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"hot_standby", PGC_POSTMASTER, REPLICATION_STANDBY,
 			gettext_noop("Allows connections and queries during recovery."),
 			NULL

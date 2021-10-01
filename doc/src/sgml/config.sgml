@@ -3856,7 +3856,8 @@ restore_command = 'copy "C:\\server\\archivedir\\%f" "%p"'  # Windows
         This parameter specifies the time stamp up to which recovery
         will proceed.
         The precise stopping point is also influenced by
-        <xref linkend="guc-recovery-target-inclusive"/>.
+        <xref linkend="guc-recovery-target-inclusive"/> and
+        <xref linkend="guc-recovery-target-use-origin-time"/>.
        </para>
 
        <para>
@@ -3933,6 +3934,28 @@ restore_command = 'copy "C:\\server\\archivedir\\%f" "%p"'  # Windows
         This setting controls whether transactions
         having exactly the target WAL location (LSN), commit time, or transaction ID, respectively, will
         be included in the recovery.  Default is <literal>on</literal>.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <variablelist>
+     <varlistentry id="guc-recovery-target-use-origin-time"
+                   xreflabel="recovery_target_use_origin_time">
+      <term><varname>recovery_target_use_origin_time</varname> (<type>boolean</type>)
+      <indexterm>
+        <primary><varname>recovery_target_use_origin_time</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies whether to use the timestamp from the local commit
+        record (<literal>off</literal>), or, if one exists, to use
+        the timestamp as recorded by the origin, for commits that
+        arrive by logical replication from another server.
+        This allows a PITR recovery to have a single consistent
+        timestamp across multiple servers, if that is desirable.
+        Applies when <xref linkend="guc-recovery-target-time"/>
+        is specified.  Default is <literal>on</literal>.
        </para>
       </listitem>
      </varlistentry>

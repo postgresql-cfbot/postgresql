@@ -55,10 +55,12 @@
 #include "catalog/pg_trigger_d.h"
 #include "catalog/pg_type_d.h"
 #include "common/connect.h"
+#include "common/string.h"
 #include "dumputils.h"
 #include "fe_utils/option_utils.h"
 #include "fe_utils/string_utils.h"
 #include "getopt_long.h"
+#include "lib/stringinfo.h"
 #include "libpq/libpq-fs.h"
 #include "parallel.h"
 #include "pg_backup_db.h"
@@ -89,6 +91,28 @@ typedef enum OidOptions
 	zeroAsStar = 2,
 	zeroAsNone = 4
 } OidOptions;
+
+/*
+ * State data for reading filter items from stream.
+ */
+typedef struct
+{
+	FILE	   *fp;
+	char	   *filename;
+	int			lineno;
+} FilterStateData;
+
+/*
+ * List of objects that can be specified in filter file
+ */
+typedef enum
+{
+	FILTER_OBJECT_TYPE_NONE,
+	FILTER_OBJECT_TYPE_TABLE,
+	FILTER_OBJECT_TYPE_SCHEMA,
+	FILTER_OBJECT_TYPE_FOREIGN_DATA,
+	FILTER_OBJECT_TYPE_DATA
+} FilterObjectType;
 
 /* global decls */
 static bool dosync = true;		/* Issue fsync() to make dump durable on disk. */
@@ -308,6 +332,7 @@ static void appendReloptionsArrayAH(PQExpBuffer buffer, const char *reloptions,
 static char *get_synchronized_snapshot(Archive *fout);
 static void setupDumpWorker(Archive *AHX);
 static TableInfo *getRootTableInfo(const TableInfo *tbinfo);
+static void read_filters_from_file(char *filename, DumpOptions *dopt);
 
 
 int
@@ -380,6 +405,7 @@ main(int argc, char **argv)
 		{"enable-row-security", no_argument, &dopt.enable_row_security, 1},
 		{"exclude-table-data", required_argument, NULL, 4},
 		{"extra-float-digits", required_argument, NULL, 8},
+		{"filter", required_argument, NULL, 12},
 		{"if-exists", no_argument, &dopt.if_exists, 1},
 		{"inserts", no_argument, NULL, 9},
 		{"lock-wait-timeout", required_argument, NULL, 2},
@@ -611,6 +637,10 @@ main(int argc, char **argv)
 			case 11:			/* include foreign data */
 				simple_string_list_append(&foreign_servers_include_patterns,
 										  optarg);
+				break;
+
+			case 12:			/* filter implementation */
+				read_filters_from_file(optarg, &dopt);
 				break;
 
 			default:
@@ -1038,6 +1068,8 @@ help(const char *progname)
 			 "                               access to)\n"));
 	printf(_("  --exclude-table-data=PATTERN do NOT dump data for the specified table(s)\n"));
 	printf(_("  --extra-float-digits=NUM     override default setting for extra_float_digits\n"));
+	printf(_("  --filter=FILENAME            dump objects and data based on the filter expressions\n"
+			 "                               in specified file\n"));
 	printf(_("  --if-exists                  use IF EXISTS when dropping objects\n"));
 	printf(_("  --include-foreign-data=PATTERN\n"
 			 "                               include data of foreign tables on foreign\n"
@@ -18978,4 +19010,328 @@ appendReloptionsArrayAH(PQExpBuffer buffer, const char *reloptions,
 								fout->std_strings);
 	if (!res)
 		pg_log_warning("could not parse reloptions array");
+}
+
+/*
+ * Print error message and exit.
+ */
+static void
+exit_invalid_filter_format(FilterStateData *fstate, char *message)
+{
+	if (fstate->fp != stdin)
+	{
+		pg_log_error("invalid format of filter file \"%s\" on line %d: %s",
+					 fstate->filename,
+					 fstate->lineno,
+					 message);
+
+		fclose(fstate->fp);
+	}
+	else
+		pg_log_error("invalid format of filter on line %d: %s",
+					 fstate->lineno,
+					 message);
+
+	exit_nicely(1);
+}
+
+/*
+ * Search keyword (can contains only ascii alphabetic characters) on line.
+ * Returns NULL, when the line is empty or first char is not alpha
+ */
+static const char *
+filter_get_keyword(const char **line, int *size)
+{
+	const char	   *ptr = *line;
+	const char	   *result = NULL;
+
+	/* skip initial white spaces */
+	while (isspace(*ptr))
+		ptr += 1;
+
+	if (isascii(*ptr) && isalpha(*ptr))
+	{
+		result = ptr++;
+
+		while (isascii(*ptr) && (isalpha(*ptr) || *ptr == '_'))
+			ptr += 1;
+
+		*size = ptr - result;
+	}
+
+	*line = ptr;
+
+	return result;
+}
+
+/*
+ * Sets objname to string with object identifier. The line variable holds
+ * string of last line with object identifier (object name). Returns pointer to
+ * first char after object name.
+ */
+static char *
+filter_get_object_name(FilterStateData *fstate,
+					   StringInfo line,
+					   char *str,
+					   char **objname)
+{
+	/* skip white spaces */
+	while (isspace(*str))
+		str++;
+
+	if (*str == '\0')
+		exit_invalid_filter_format(fstate, "missing object name");
+
+	if (*str == '"')
+	{
+		PQExpBuffer		quoted_name = createPQExpBuffer();
+
+		appendPQExpBufferChar(quoted_name, '"');
+		str++;
+
+		while (1)
+		{
+			if (*str == '\0')
+			{
+				if (!pg_get_line_buf(fstate->fp, line))
+				{
+					if (ferror(fstate->fp))
+					{
+						pg_log_error("could not read from file \"%s\": %m", fstate->filename);
+						if (fstate->fp != stdin)
+							fclose(fstate->fp);
+
+						exit_nicely(1);
+					}
+
+					exit_invalid_filter_format(fstate,"unexpected end of file");
+				}
+
+				str = line->data;
+				(void) pg_strip_crlf(str);
+
+				appendPQExpBufferChar(quoted_name, '\n');
+				fstate->lineno += 1;
+			}
+
+			if (*str == '"')
+			{
+				appendPQExpBufferChar(quoted_name, '"');
+				str++;
+
+				if (*str == '"')
+				{
+					appendPQExpBufferChar(quoted_name, '"');
+					str++;
+				}
+				else
+					break;
+			}
+			else if (*str == '\\')
+			{
+				str++;
+				if (*str == 'n')
+					appendPQExpBufferChar(quoted_name, '\n');
+				else if (*str == '\\')
+					appendPQExpBufferChar(quoted_name, '\\');
+
+				str++;
+			}
+			else
+				appendPQExpBufferChar(quoted_name, *str++);
+		}
+
+		*objname = quoted_name->data;
+	}
+	else
+	{
+		char	   *startptr = str++;
+
+		/* simple variant, read to end or to first space */
+		while (*str && !isspace(*str))
+			str++;
+
+		*objname = pnstrdup(startptr, str - startptr);
+	}
+
+	return str;
+}
+
+/*
+ * Returns true, when one filter item was successfully read and parsed.
+ * When object name contains \n chars, then more than one line from input
+ * file can be processed. Returns false when EOF. Run exit on error.
+ */
+static bool
+read_filter_item(FilterStateData *fstate,
+				 bool *is_include,
+				 char **objname,
+				 FilterObjectType *objtype)
+{
+	StringInfoData		line;
+
+	initStringInfo(&line);
+
+	if (pg_get_line_buf(fstate->fp, &line))
+	{
+		char	   *str = line.data;
+		const char	   *keyword;
+		int			size;
+
+		fstate->lineno += 1;
+
+		(void) pg_strip_crlf(str);
+
+		/* skip initial white spaces */
+		while (isspace(*str))
+			str++;
+
+		/*
+		 * skip empty lines or lines when first noblank char is hash (comment)
+		 */
+		if (*str != '\0' && *str != '#')
+		{
+			keyword = filter_get_keyword((const char **) &str, &size);
+			if (!keyword)
+				exit_invalid_filter_format(fstate,
+				   "no keyword found (expected \"include\" or \"exclude\")");
+
+			/* Now we expect sequence of two keywords */
+			if (size == 7 && pg_strncasecmp(keyword, "include", 7) == 0)
+				*is_include = true;
+			else if (size == 7 && pg_strncasecmp(keyword, "exclude", 7) == 0)
+				*is_include = false;
+			else
+				exit_invalid_filter_format(fstate,
+				   "invalid keyword (expected \"include\" or \"exclude\")");
+
+			keyword = filter_get_keyword((const char **) &str, &size);
+			if (!keyword)
+				exit_invalid_filter_format(fstate,
+				   "no keyword found (expected \"table\", \"schema\", \"foreign_data\" or \"data\")");
+
+			if (size == 5 && pg_strncasecmp(keyword, "table", 5) == 0)
+				*objtype = FILTER_OBJECT_TYPE_TABLE;
+			else if (size == 6 && pg_strncasecmp(keyword, "schema", 6) == 0)
+				*objtype = FILTER_OBJECT_TYPE_SCHEMA;
+			else if (size == 12 && pg_strncasecmp(keyword, "foreign_data", 12) == 0)
+				*objtype = FILTER_OBJECT_TYPE_FOREIGN_DATA;
+			else if (size == 4 && pg_strncasecmp(keyword, "data", 4) == 0)
+				*objtype = FILTER_OBJECT_TYPE_DATA;
+			else
+				exit_invalid_filter_format(fstate,
+				   "invalid keyword (expected \"table\", \"schema\", \"foreign_data\" or \"data\")");
+
+			str = filter_get_object_name(fstate, &line, str, objname);
+
+			/*
+			 * check possible content after object identifier.
+			 * Allow comment started by hash.
+			 */
+			while (isspace(*str))
+				str++;
+
+			if (*str != '\0' && *str != '#')
+				exit_invalid_filter_format(fstate,
+				   "unexpected chars after object name");
+		}
+		else
+		{
+			*objname = NULL;
+			*objtype = FILTER_OBJECT_TYPE_NONE;
+		}
+
+		free(line.data);
+
+		return true;
+	}
+
+	if (ferror(fstate->fp))
+	{
+		pg_log_error("could not read from file \"%s\": %m", fstate->filename);
+
+		if (fstate->fp != stdin)
+			fclose(fstate->fp);
+
+		exit_nicely(1);
+	}
+
+	free(line.data);
+
+	return false;
+}
+
+/*
+ * Read dumped object specification from file
+ */
+static void
+read_filters_from_file(char *filename, DumpOptions *dopt)
+{
+	FilterStateData fstate;
+	bool		is_include;
+	char	   *objname;
+	FilterObjectType objtype;
+
+	fstate.filename = filename;
+	fstate.lineno = 0;
+
+	/* use "-" as symbol for stdin */
+	if (strcmp(filename, "-") != 0)
+	{
+		fstate.fp = fopen(filename, "r");
+		if (!fstate.fp)
+			fatal("could not open the input file \"%s\": %m",
+				  filename);
+	}
+	else
+		fstate.fp = stdin;
+
+	while (read_filter_item(&fstate, &is_include, &objname, &objtype))
+	{
+		if (objtype == FILTER_OBJECT_TYPE_TABLE)
+		{
+			if (is_include)
+			{
+				simple_string_list_append(&table_include_patterns, objname);
+				dopt->include_everything = false;
+			}
+			else
+				simple_string_list_append(&table_exclude_patterns, objname);
+		}
+		else if (objtype == FILTER_OBJECT_TYPE_SCHEMA)
+		{
+			if (is_include)
+			{
+				simple_string_list_append(&schema_include_patterns,
+										  objname);
+				dopt->include_everything = false;
+			}
+			else
+				simple_string_list_append(&schema_exclude_patterns,
+										  objname);
+		}
+		else if (objtype == FILTER_OBJECT_TYPE_DATA)
+		{
+			if (is_include)
+				exit_invalid_filter_format(&fstate,
+					   "include filter is not allowed for this type of object");
+			else
+				simple_string_list_append(&tabledata_exclude_patterns,
+										  objname);
+		}
+		else if (objtype == FILTER_OBJECT_TYPE_FOREIGN_DATA)
+		{
+			if (is_include)
+				simple_string_list_append(&foreign_servers_include_patterns,
+										  objname);
+			else
+				exit_invalid_filter_format(&fstate,
+					   "exclude filter is not allowed for this type of object");
+		}
+
+		free(objname);
+	}
+
+	if (fstate.fp != stdin)
+		fclose(fstate.fp);
 }

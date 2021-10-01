@@ -790,6 +790,67 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><option>--filter=<replaceable class="parameter">filename</replaceable></option></term>
+      <listitem>
+       <para>
+      Filtering rules for which objects to dump are read from the specified
+      file.  Specify <filename>-</filename> to read from
+    <literal>STDIN</literal>.  The file has the following format:
+<synopsis>
+{ include | exclude } { table | schema | foreign_data | data } <replaceable class="parameter">PATTERN</replaceable>
+</synopsis>
+       </para>
+
+       <para>
+        The first keyword specifies whether the object is to be included or
+        excluded, and the second keyword specifies the type of object to be
+        filtered:
+        <itemizedlist>
+         <listitem>
+           <para><literal>table</literal>: table</para>
+         </listitem>
+     <listitem>
+       <para><literal>schema</literal>: schema</para>
+     </listitem>
+     <listitem>
+           <para><literal>foreign_data</literal>: foreign server</para>
+     </listitem>
+     <listitem>
+           <para><literal>data</literal>: table data</para>
+     </listitem>
+    </itemizedlist>
+       </para>
+
+       <para>
+        Example:
+<programlisting>
+include table mytable*
+exclude table mytable2
+</programlisting>
+        With the this filter file, the dump would include all tables with 
+        name starting by <literal>mytable</literal>, but exclude table
+        <literal>mytable2</literal>.
+       </para>
+
+       <para>
+        Lines starting with <literal>#</literal> are considered comments and
+        are ignored. Comments can be placed after filter as well. Blank lines
+        are also ignored.
+       </para>
+
+       <para>
+        The <option>--filter</option> option works just like the other
+        options to include or exclude tables (<option>-t</option> or
+        <option>--table</option>), schemas (<option>-n</option> or
+        <option>--schema</option>), table data (<option>--exclude-table-data</option>),
+        or foreign tables (<option>--include-foreign-data</option>).
+        It isn't possible to exclude a specific foreign table or
+        to include a specific table's data.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>--if-exists</option></term>
       <listitem>
        <para>

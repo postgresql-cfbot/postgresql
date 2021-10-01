@@ -453,4 +453,18 @@ extern void set_syslog_parameters(const char *ident, int facility);
  */
 extern void write_stderr(const char *fmt,...) pg_attribute_printf(1, 2);
 
+/*
+ * Time-related variables and functions.
+ * They are used in elog.c and process_format_string().
+ */
+extern struct timeval saved_timeval;
+extern bool saved_timeval_set;
+
+#define FORMATTED_TS_LEN 128
+extern char formatted_start_time[FORMATTED_TS_LEN];
+extern char formatted_log_time[FORMATTED_TS_LEN];
+
+void setup_formatted_log_time(void);
+void setup_formatted_start_time(void);
+
 #endif							/* ELOG_H */

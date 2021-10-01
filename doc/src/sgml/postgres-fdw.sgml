@@ -180,6 +180,10 @@ OPTIONS (ADD password_required 'false');
     relationship granted by authentication modes like <literal>peer</literal>
     or <literal>ident</literal> authentication.
    </para>
+   <para>
+    You can use escape sequences for <literal>application_name</literal> even if
+    it is set as a connection option. Please refer the later section.
+   </para>
   </sect3>
 
   <sect3>
@@ -920,7 +924,7 @@ postgres=# SELECT postgres_fdw_disconnect_all();
   <title>Configuration Parameters</title>
 
   <variablelist>
-   <varlistentry>
+   <varlistentry id="guc-pgfdw-application-name" xreflabel="pgfdw_application_name">
     <term>
      <varname>postgres_fdw.application_name</varname> (<type>string</type>)
      <indexterm>
@@ -936,6 +940,53 @@ postgres=# SELECT postgres_fdw_disconnect_all();
       Note that change of this parameter doesn't affect any existing
       connections until they are re-established.
      </para>
+
+     <para>
+      Same as <xref linkend="guc-log-line-prefix"/>, this is a
+      <function>printf</function>-style string. Accepted escapes are
+      bit different from <xref linkend="guc-log-line-prefix"/>,
+      but padding can be used like as it.
+     </para>
+
+     <informaltable>
+      <tgroup cols="2">
+       <thead>
+        <row>
+         <entry>Escape</entry>
+         <entry>Effect</entry>
+        </row>
+       </thead>
+       <tbody>
+        <row>
+         <entry><literal>%a</literal></entry>
+         <entry>Application name</entry>
+        </row>
+        <row>
+         <entry><literal>%u</literal></entry>
+         <entry>Local user name</entry>
+        </row>
+        <row>
+         <entry><literal>%d</literal></entry>
+         <entry>Local database name</entry>
+        </row>
+        <row>
+         <entry><literal>%p</literal></entry>
+         <entry>Local backend process ID</entry>
+        </row>
+        <row>
+         <entry><literal>%%</literal></entry>
+         <entry>Liteal %</entry>
+        </row>
+       </tbody>
+      </tgroup>
+     </informaltable>
+
+     <para>
+     Note that if embedded strings have Non-ASCII,
+     these characters will be replaced with the question marks (<literal>?</literal>).
+     This limitation is caused by <literal>application_name</literal>.
+     </para>
+
     </listitem>
    </varlistentry>
   </variablelist>

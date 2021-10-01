@@ -22,7 +22,6 @@
 #include "utils/builtins.h"
 #include "utils/guc.h"
 #include "utils/varlena.h"
-
 /*
  * Describes the valid options for objects that this wrapper uses.
  */
@@ -441,6 +440,15 @@ ExtractExtensionList(const char *extensionsString, bool warnOnMissing)
 
 	list_free(extlist);
 	return extensionOids;
+}
+
+/*
+ * Wrapper function for process_format_string()
+ */
+void
+parse_pgfdw_appname(StringInfo buf, const char *name)
+{
+	process_format_string(buf, name, NULL, 0, "audp%");
 }
 
 /*

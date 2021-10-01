@@ -152,12 +152,12 @@ static int	recursion_depth = 0;	/* to detect actual recursion */
  * Saved timeval and buffers for formatted timestamps that might be used by
  * both log_line_prefix and csv logs.
  */
-static struct timeval saved_timeval;
-static bool saved_timeval_set = false;
+struct timeval saved_timeval;
+bool saved_timeval_set = false;
 
 #define FORMATTED_TS_LEN 128
-static char formatted_start_time[FORMATTED_TS_LEN];
-static char formatted_log_time[FORMATTED_TS_LEN];
+char formatted_start_time[FORMATTED_TS_LEN];
+char formatted_log_time[FORMATTED_TS_LEN];
 
 
 /* Macro for checking errordata_stack_depth is reasonable */
@@ -175,9 +175,6 @@ static const char *err_gettext(const char *str) pg_attribute_format_arg(1);
 static pg_noinline void set_backtrace(ErrorData *edata, int num_skip);
 static void set_errdata_field(MemoryContextData *cxt, char **ptr, const char *str);
 static void write_console(const char *line, int len);
-static void setup_formatted_log_time(void);
-static void setup_formatted_start_time(void);
-static const char *process_log_prefix_padding(const char *p, int *padding);
 static void log_line_prefix(StringInfo buf, ErrorData *edata);
 static void write_csvlog(ErrorData *edata);
 static void send_message_to_server_log(ErrorData *edata);
@@ -2291,7 +2288,7 @@ write_console(const char *line, int len)
 /*
  * setup formatted_log_time, for consistent times between CSV and regular logs
  */
-static void
+void
 setup_formatted_log_time(void)
 {
 	pg_time_t	stamp_time;
@@ -2323,7 +2320,7 @@ setup_formatted_log_time(void)
 /*
  * setup formatted_start_time
  */
-static void
+void
 setup_formatted_start_time(void)
 {
 	pg_time_t	stamp_time = (pg_time_t) MyStartTime;
@@ -2339,42 +2336,10 @@ setup_formatted_start_time(void)
 }
 
 /*
- * process_log_prefix_padding --- helper function for processing the format
- * string in log_line_prefix
- *
- * Note: This function returns NULL if it finds something which
- * it deems invalid in the format string.
- */
-static const char *
-process_log_prefix_padding(const char *p, int *ppadding)
-{
-	int			paddingsign = 1;
-	int			padding = 0;
-
-	if (*p == '-')
-	{
-		p++;
-
-		if (*p == '\0')			/* Did the buf end in %- ? */
-			return NULL;
-		paddingsign = -1;
-	}
-
-	/* generate an int version of the numerical string */
-	while (*p >= '0' && *p <= '9')
-		padding = padding * 10 + (*p++ - '0');
-
-	/* format is invalid if it ends with the padding number */
-	if (*p == '\0')
-		return NULL;
-
-	padding *= paddingsign;
-	*ppadding = padding;
-	return p;
-}
-
-/*
  * Format tag info for log lines; append to the provided buffer.
+ *
+ * This is also the wrapper function for process_format_string(),
+ * but this counts log_line_number.
  */
 static void
 log_line_prefix(StringInfo buf, ErrorData *edata)
@@ -2384,8 +2349,6 @@ log_line_prefix(StringInfo buf, ErrorData *edata)
 
 	/* has counter been reset in current process? */
 	static int	log_my_pid = 0;
-	int			padding;
-	const char *p;
 
 	/*
 	 * This is one of the few places where we'd rather not inherit a static
@@ -2404,329 +2367,7 @@ log_line_prefix(StringInfo buf, ErrorData *edata)
 	if (Log_line_prefix == NULL)
 		return;					/* in case guc hasn't run yet */
 
-	for (p = Log_line_prefix; *p != '\0'; p++)
-	{
-		if (*p != '%')
-		{
-			/* literal char, just copy */
-			appendStringInfoChar(buf, *p);
-			continue;
-		}
-
-		/* must be a '%', so skip to the next char */
-		p++;
-		if (*p == '\0')
-			break;				/* format error - ignore it */
-		else if (*p == '%')
-		{
-			/* string contains %% */
-			appendStringInfoChar(buf, '%');
-			continue;
-		}
-
-
-		/*
-		 * Process any formatting which may exist after the '%'.  Note that
-		 * process_log_prefix_padding moves p past the padding number if it
-		 * exists.
-		 *
-		 * Note: Since only '-', '0' to '9' are valid formatting characters we
-		 * can do a quick check here to pre-check for formatting. If the char
-		 * is not formatting then we can skip a useless function call.
-		 *
-		 * Further note: At least on some platforms, passing %*s rather than
-		 * %s to appendStringInfo() is substantially slower, so many of the
-		 * cases below avoid doing that unless non-zero padding is in fact
-		 * specified.
-		 */
-		if (*p > '9')
-			padding = 0;
-		else if ((p = process_log_prefix_padding(p, &padding)) == NULL)
-			break;
-
-		/* process the option */
-		switch (*p)
-		{
-			case 'a':
-				if (MyProcPort)
-				{
-					const char *appname = application_name;
-
-					if (appname == NULL || *appname == '\0')
-						appname = _("[unknown]");
-					if (padding != 0)
-						appendStringInfo(buf, "%*s", padding, appname);
-					else
-						appendStringInfoString(buf, appname);
-				}
-				else if (padding != 0)
-					appendStringInfoSpaces(buf,
-										   padding > 0 ? padding : -padding);
-
-				break;
-			case 'b':
-				{
-					const char *backend_type_str;
-
-					if (MyProcPid == PostmasterPid)
-						backend_type_str = "postmaster";
-					else if (MyBackendType == B_BG_WORKER)
-						backend_type_str = MyBgworkerEntry->bgw_type;
-					else
-						backend_type_str = GetBackendTypeDesc(MyBackendType);
-
-					if (padding != 0)
-						appendStringInfo(buf, "%*s", padding, backend_type_str);
-					else
-						appendStringInfoString(buf, backend_type_str);
-					break;
-				}
-			case 'u':
-				if (MyProcPort)
-				{
-					const char *username = MyProcPort->user_name;
-
-					if (username == NULL || *username == '\0')
-						username = _("[unknown]");
-					if (padding != 0)
-						appendStringInfo(buf, "%*s", padding, username);
-					else
-						appendStringInfoString(buf, username);
-				}
-				else if (padding != 0)
-					appendStringInfoSpaces(buf,
-										   padding > 0 ? padding : -padding);
-				break;
-			case 'd':
-				if (MyProcPort)
-				{
-					const char *dbname = MyProcPort->database_name;
-
-					if (dbname == NULL || *dbname == '\0')
-						dbname = _("[unknown]");
-					if (padding != 0)
-						appendStringInfo(buf, "%*s", padding, dbname);
-					else
-						appendStringInfoString(buf, dbname);
-				}
-				else if (padding != 0)
-					appendStringInfoSpaces(buf,
-										   padding > 0 ? padding : -padding);
-				break;
-			case 'c':
-				if (padding != 0)
-				{
-					char		strfbuf[128];
-
-					snprintf(strfbuf, sizeof(strfbuf) - 1, "%lx.%x",
-							 (long) (MyStartTime), MyProcPid);
-					appendStringInfo(buf, "%*s", padding, strfbuf);
-				}
-				else
-					appendStringInfo(buf, "%lx.%x", (long) (MyStartTime), MyProcPid);
-				break;
-			case 'p':
-				if (padding != 0)
-					appendStringInfo(buf, "%*d", padding, MyProcPid);
-				else
-					appendStringInfo(buf, "%d", MyProcPid);
-				break;
-
-			case 'P':
-				if (MyProc)
-				{
-					PGPROC	   *leader = MyProc->lockGroupLeader;
-
-					/*
-					 * Show the leader only for active parallel workers. This
-					 * leaves out the leader of a parallel group.
-					 */
-					if (leader == NULL || leader->pid == MyProcPid)
-						appendStringInfoSpaces(buf,
-											   padding > 0 ? padding : -padding);
-					else if (padding != 0)
-						appendStringInfo(buf, "%*d", padding, leader->pid);
-					else
-						appendStringInfo(buf, "%d", leader->pid);
-				}
-				else if (padding != 0)
-					appendStringInfoSpaces(buf,
-										   padding > 0 ? padding : -padding);
-				break;
-
-			case 'l':
-				if (padding != 0)
-					appendStringInfo(buf, "%*ld", padding, log_line_number);
-				else
-					appendStringInfo(buf, "%ld", log_line_number);
-				break;
-			case 'm':
-				setup_formatted_log_time();
-				if (padding != 0)
-					appendStringInfo(buf, "%*s", padding, formatted_log_time);
-				else
-					appendStringInfoString(buf, formatted_log_time);
-				break;
-			case 't':
-				{
-					pg_time_t	stamp_time = (pg_time_t) time(NULL);
-					char		strfbuf[128];
-
-					pg_strftime(strfbuf, sizeof(strfbuf),
-								"%Y-%m-%d %H:%M:%S %Z",
-								pg_localtime(&stamp_time, log_timezone));
-					if (padding != 0)
-						appendStringInfo(buf, "%*s", padding, strfbuf);
-					else
-						appendStringInfoString(buf, strfbuf);
-				}
-				break;
-			case 'n':
-				{
-					char		strfbuf[128];
-
-					if (!saved_timeval_set)
-					{
-						gettimeofday(&saved_timeval, NULL);
-						saved_timeval_set = true;
-					}
-
-					snprintf(strfbuf, sizeof(strfbuf), "%ld.%03d",
-							 (long) saved_timeval.tv_sec,
-							 (int) (saved_timeval.tv_usec / 1000));
-
-					if (padding != 0)
-						appendStringInfo(buf, "%*s", padding, strfbuf);
-					else
-						appendStringInfoString(buf, strfbuf);
-				}
-				break;
-			case 's':
-				if (formatted_start_time[0] == '\0')
-					setup_formatted_start_time();
-				if (padding != 0)
-					appendStringInfo(buf, "%*s", padding, formatted_start_time);
-				else
-					appendStringInfoString(buf, formatted_start_time);
-				break;
-			case 'i':
-				if (MyProcPort)
-				{
-					const char *psdisp;
-					int			displen;
-
-					psdisp = get_ps_display(&displen);
-					if (padding != 0)
-						appendStringInfo(buf, "%*s", padding, psdisp);
-					else
-						appendBinaryStringInfo(buf, psdisp, displen);
-
-				}
-				else if (padding != 0)
-					appendStringInfoSpaces(buf,
-										   padding > 0 ? padding : -padding);
-				break;
-			case 'r':
-				if (MyProcPort && MyProcPort->remote_host)
-				{
-					if (padding != 0)
-					{
-						if (MyProcPort->remote_port && MyProcPort->remote_port[0] != '\0')
-						{
-							/*
-							 * This option is slightly special as the port
-							 * number may be appended onto the end. Here we
-							 * need to build 1 string which contains the
-							 * remote_host and optionally the remote_port (if
-							 * set) so we can properly align the string.
-							 */
-
-							char	   *hostport;
-
-							hostport = psprintf("%s(%s)", MyProcPort->remote_host, MyProcPort->remote_port);
-							appendStringInfo(buf, "%*s", padding, hostport);
-							pfree(hostport);
-						}
-						else
-							appendStringInfo(buf, "%*s", padding, MyProcPort->remote_host);
-					}
-					else
-					{
-						/* padding is 0, so we don't need a temp buffer */
-						appendStringInfoString(buf, MyProcPort->remote_host);
-						if (MyProcPort->remote_port &&
-							MyProcPort->remote_port[0] != '\0')
-							appendStringInfo(buf, "(%s)",
-											 MyProcPort->remote_port);
-					}
-
-				}
-				else if (padding != 0)
-					appendStringInfoSpaces(buf,
-										   padding > 0 ? padding : -padding);
-				break;
-			case 'h':
-				if (MyProcPort && MyProcPort->remote_host)
-				{
-					if (padding != 0)
-						appendStringInfo(buf, "%*s", padding, MyProcPort->remote_host);
-					else
-						appendStringInfoString(buf, MyProcPort->remote_host);
-				}
-				else if (padding != 0)
-					appendStringInfoSpaces(buf,
-										   padding > 0 ? padding : -padding);
-				break;
-			case 'q':
-				/* in postmaster and friends, stop if %q is seen */
-				/* in a backend, just ignore */
-				if (MyProcPort == NULL)
-					return;
-				break;
-			case 'v':
-				/* keep VXID format in sync with lockfuncs.c */
-				if (MyProc != NULL && MyProc->backendId != InvalidBackendId)
-				{
-					if (padding != 0)
-					{
-						char		strfbuf[128];
-
-						snprintf(strfbuf, sizeof(strfbuf) - 1, "%d/%u",
-								 MyProc->backendId, MyProc->lxid);
-						appendStringInfo(buf, "%*s", padding, strfbuf);
-					}
-					else
-						appendStringInfo(buf, "%d/%u", MyProc->backendId, MyProc->lxid);
-				}
-				else if (padding != 0)
-					appendStringInfoSpaces(buf,
-										   padding > 0 ? padding : -padding);
-				break;
-			case 'x':
-				if (padding != 0)
-					appendStringInfo(buf, "%*u", padding, GetTopTransactionIdIfAny());
-				else
-					appendStringInfo(buf, "%u", GetTopTransactionIdIfAny());
-				break;
-			case 'e':
-				if (padding != 0)
-					appendStringInfo(buf, "%*s", padding, unpack_sql_state(edata->sqlerrcode));
-				else
-					appendStringInfoString(buf, unpack_sql_state(edata->sqlerrcode));
-				break;
-			case 'Q':
-				if (padding != 0)
-					appendStringInfo(buf, "%*lld", padding,
-									 (long long) pgstat_get_my_query_id());
-				else
-					appendStringInfo(buf, "%lld",
-									 (long long) pgstat_get_my_query_id());
-				break;
-			default:
-				/* format error - ignore it */
-				break;
-		}
-	}
+	process_format_string(buf, Log_line_prefix, edata, log_line_number, NULL);
 }
 
 /*

@@ -3422,3 +3422,20 @@ CREATE FOREIGN TABLE inv_fsz (c1 int )
 -- Invalid batch_size option
 CREATE FOREIGN TABLE inv_bsz (c1 int )
 	SERVER loopback OPTIONS (batch_size '100$%$#$#');
+
+-- ===================================================================
+-- test postgres_fdw.application_name GUC
+-- ===================================================================
+SET debug_discard_caches TO 0;
+-- Some escapes can be used for this GUC.
+SET postgres_fdw.application_name TO '%a%u%d%p%%';
+-- All escape candidates depend on the runtime environment
+-- and it causes some fails for this tests.
+-- Hence we just count number of rows here. It returns a row if works well.
+SELECT 1 FROM postgres_fdw_disconnect_all();
+SELECT 1 FROM ft6 LIMIT 1;
+SELECT COUNT(*) FROM pg_stat_activity WHERE application_name = current_setting('application_name') || current_user || current_database() || pg_backend_pid() || '%';
+
+--Clean up
+RESET postgres_fdw.application_name;
+RESET debug_discard_caches;

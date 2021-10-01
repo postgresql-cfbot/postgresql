@@ -13,6 +13,7 @@
 #ifndef GUC_H
 #define GUC_H
 
+#include "lib/stringinfo.h"
 #include "nodes/parsenodes.h"
 #include "tcop/dest.h"
 #include "utils/array.h"
@@ -396,6 +397,8 @@ extern void ProcessGUCArray(ArrayType *array,
 extern ArrayType *GUCArrayAdd(ArrayType *array, const char *name, const char *value);
 extern ArrayType *GUCArrayDelete(ArrayType *array, const char *name);
 extern ArrayType *GUCArrayReset(ArrayType *array);
+
+extern void process_format_string(StringInfo buf, const char *input, ErrorData *edata, long log_line_number, const char *escape_chars);
 
 #ifdef EXEC_BACKEND
 extern void write_nondefault_variables(GucContext context);

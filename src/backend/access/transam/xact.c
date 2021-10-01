@@ -35,6 +35,7 @@
 #include "catalog/pg_enum.h"
 #include "catalog/storage.h"
 #include "commands/async.h"
+#include "commands/schema_variable.h"
 #include "commands/tablecmds.h"
 #include "commands/trigger.h"
 #include "executor/spi.h"
@@ -2145,6 +2146,9 @@ CommitTransaction(void)
 	 */
 	smgrDoPendingSyncs(true, is_parallel_worker);
 
+	/* Let ON COMMIT DROP or ON TRANSACTION END */
+	AtPreEOXact_SchemaVariable_on_commit_actions(true);
+
 	/* close large objects before lower-level cleanup */
 	AtEOXact_LargeObject(true);
 
@@ -2284,6 +2288,7 @@ CommitTransaction(void)
 	AtEOXact_SPI(true);
 	AtEOXact_Enum();
 	AtEOXact_on_commit_actions(true);
+	AtEOXact_SchemaVariable_on_commit_actions(true);
 	AtEOXact_Namespace(true, is_parallel_worker);
 	AtEOXact_SMgr();
 	AtEOXact_Files(true);
@@ -2712,6 +2717,9 @@ AbortTransaction(void)
 	AtAbort_Portals();
 	smgrDoPendingSyncs(false, is_parallel_worker);
 	AtEOXact_LargeObject(false);
+
+	/* 'false' means it's abort */
+	AtPreEOXact_SchemaVariable_on_commit_actions(false);
 	AtAbort_Notify();
 	AtEOXact_RelationMap(false, is_parallel_worker);
 	AtAbort_Twophase();
@@ -2776,6 +2784,7 @@ AbortTransaction(void)
 		AtEOXact_SPI(false);
 		AtEOXact_Enum();
 		AtEOXact_on_commit_actions(false);
+		AtEOXact_SchemaVariable_on_commit_actions(false);
 		AtEOXact_Namespace(false, is_parallel_worker);
 		AtEOXact_SMgr();
 		AtEOXact_Files(false);

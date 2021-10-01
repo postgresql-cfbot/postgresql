@@ -45,10 +45,13 @@
 #include "access/xact.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_publication.h"
+#include "catalog/pg_variable.h"
 #include "commands/matview.h"
 #include "commands/trigger.h"
+#include "commands/schema_variable.h"
 #include "executor/execdebug.h"
 #include "executor/nodeSubplan.h"
+#include "executor/svariableReceiver.h"
 #include "foreign/fdwapi.h"
 #include "jit/jit.h"
 #include "mb/pg_wchar.h"
@@ -198,6 +201,52 @@ standard_ExecutorStart(QueryDesc *queryDesc, int eflags)
 	/* We now require all callers to provide sourceText */
 	Assert(queryDesc->sourceText != NULL);
 	estate->es_sourceText = queryDesc->sourceText;
+
+	/*
+	 * Prepare schema variables, if are not prepared in queryDesc
+	 */
+	if (queryDesc->num_schema_variables > 0)
+	{
+		/*
+		 * link shared memory with working copy of schema variable's values
+		 * used in this query. This access is used by parallel query executor's
+		 * workers.
+		 */
+		estate->es_schema_variables = queryDesc->schema_variables;
+		estate->es_num_schema_variables = queryDesc->num_schema_variables;
+	}
+	else if (queryDesc->plannedstmt->schemaVariables)
+	{
+		ListCell   *lc;
+		int			nSchemaVariables;
+		int			i = 0;
+
+		nSchemaVariables = list_length(queryDesc->plannedstmt->schemaVariables);
+
+		/* Create buffer for used schema variables */
+		estate->es_schema_variables = (SchemaVariableValue *)
+			palloc(nSchemaVariables * sizeof(SchemaVariableValue));
+
+		foreach(lc, queryDesc->plannedstmt->schemaVariables)
+		{
+			AclResult	aclresult;
+			Oid			varid = lfirst_oid(lc);
+
+			aclresult = pg_variable_aclcheck(varid, GetUserId(), ACL_READ);
+			if (aclresult != ACLCHECK_OK)
+				aclcheck_error(aclresult, OBJECT_VARIABLE,
+							   schema_variable_get_name(varid));
+
+			estate->es_schema_variables[i].varid = varid;
+			estate->es_schema_variables[i].value = CopySchemaVariable(varid,
+																	  &estate->es_schema_variables[i].isnull,
+																	  &estate->es_schema_variables[i].typid);
+
+			i++;
+		}
+
+		estate->es_num_schema_variables = nSchemaVariables;
+	}
 
 	/*
 	 * Fill in the query environment, if any, from queryDesc.

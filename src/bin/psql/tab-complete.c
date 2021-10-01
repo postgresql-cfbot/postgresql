@@ -628,6 +628,13 @@ static const SchemaQuery Query_for_list_of_collations = {
 	.result = "pg_catalog.quote_ident(c.collname)",
 };
 
+static const SchemaQuery Query_for_list_of_variables = {
+	.min_server_version = 120000,
+	.catname = "pg_catalog.pg_variable v",
+	.viscondition = "pg_catalog.pg_variable_is_visible(v.oid)",
+	.namespace = "v.varnamespace",
+	.result = "pg_catalog.quote_ident(v.varname)",
+};
 
 /*
  * Queries to get lists of names of various kinds of things, possibly
@@ -1097,6 +1104,7 @@ static const pgsql_thing_t words_after_create[] = {
 																	 * TABLE ... */
 	{"USER", Query_for_list_of_roles " UNION SELECT 'MAPPING FOR'"},
 	{"USER MAPPING FOR", NULL, NULL, NULL},
+	{"VARIABLE", NULL, NULL, &Query_for_list_of_variables},
 	{"VIEW", NULL, NULL, &Query_for_list_of_views},
 	{NULL}						/* end of list */
 };
@@ -1495,8 +1503,8 @@ psql_completion(const char *text, int start, int end)
 		"ABORT", "ALTER", "ANALYZE", "BEGIN", "CALL", "CHECKPOINT", "CLOSE", "CLUSTER",
 		"COMMENT", "COMMIT", "COPY", "CREATE", "DEALLOCATE", "DECLARE",
 		"DELETE FROM", "DISCARD", "DO", "DROP", "END", "EXECUTE", "EXPLAIN",
-		"FETCH", "GRANT", "IMPORT FOREIGN SCHEMA", "INSERT INTO", "LISTEN", "LOAD", "LOCK",
-		"MOVE", "NOTIFY", "PREPARE",
+		"FETCH", "GRANT", "IMPORT FOREIGN SCHEMA", "INSERT INTO", "LET", "LISTEN", "LOAD",
+		"LOCK", "MOVE", "NOTIFY", "PREPARE",
 		"REASSIGN", "REFRESH MATERIALIZED VIEW", "REINDEX", "RELEASE",
 		"RESET", "REVOKE", "ROLLBACK",
 		"SAVEPOINT", "SECURITY LABEL", "SELECT", "SET", "SHOW", "START",
@@ -1515,7 +1523,7 @@ psql_completion(const char *text, int start, int end)
 		"\\dF", "\\dFd", "\\dFp", "\\dFt", "\\dg", "\\di", "\\dl", "\\dL",
 		"\\dm", "\\dn", "\\do", "\\dO", "\\dp", "\\dP", "\\dPi", "\\dPt",
 		"\\drds", "\\dRs", "\\dRp", "\\ds",
-		"\\dt", "\\dT", "\\dv", "\\du", "\\dx", "\\dX", "\\dy",
+		"\\dt", "\\dT", "\\dv", "\\du", "\\dx", "\\dX", "\\dy", "\\dV",
 		"\\echo", "\\edit", "\\ef", "\\elif", "\\else", "\\encoding",
 		"\\endif", "\\errverbose", "\\ev",
 		"\\f",
@@ -1914,6 +1922,9 @@ psql_completion(const char *text, int start, int end)
 		COMPLETE_WITH_QUERY(Query_for_list_of_alter_system_set_vars);
 	else if (Matches("ALTER", "SYSTEM", "SET", MatchAny))
 		COMPLETE_WITH("TO");
+	/* ALTER VARIABLE <name> */
+	else if (Matches("ALTER", "VARIABLE", MatchAny))
+		COMPLETE_WITH("OWNER TO", "RENAME TO", "SET SCHEMA");
 	/* ALTER VIEW <name> */
 	else if (Matches("ALTER", "VIEW", MatchAny))
 		COMPLETE_WITH("ALTER COLUMN", "OWNER TO", "RENAME",
@@ -2754,7 +2765,7 @@ psql_completion(const char *text, int start, int end)
 /* CREATE TABLE --- is allowed inside CREATE SCHEMA, so use TailMatches */
 	/* Complete "CREATE TEMP/TEMPORARY" with the possible temp objects */
 	else if (TailMatches("CREATE", "TEMP|TEMPORARY"))
-		COMPLETE_WITH("SEQUENCE", "TABLE", "VIEW");
+		COMPLETE_WITH("SEQUENCE", "TABLE", "VIEW", "VARIABLE");
 	/* Complete "CREATE UNLOGGED" with TABLE or MATVIEW */
 	else if (TailMatches("CREATE", "UNLOGGED"))
 		COMPLETE_WITH("TABLE", "MATERIALIZED VIEW");
@@ -3044,6 +3055,14 @@ psql_completion(const char *text, int start, int end)
 		else if (TailMatches("=", MatchAnyExcept("*)")))
 			COMPLETE_WITH(",", ")");
 	}
+/* CREATE VARIABLE --- is allowed inside CREATE SCHEMA, so use TailMatches */
+	/* Complete CREATE VARIABLE <name> with AS */
+	else if (TailMatches("CREATE", "VARIABLE", MatchAny) ||
+			 TailMatches("TEMP|TEMPORARY", "VARIABLE", MatchAny))
+			COMPLETE_WITH("AS");
+	else if (TailMatches("VARIABLE", MatchAny, "AS"))
+			/* Complete CREATE VARIABLE <name> with AS types */
+			COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_datatypes, NULL);
 
 /* CREATE VIEW --- is allowed inside CREATE SCHEMA, so use TailMatches */
 	/* Complete CREATE [ OR REPLACE ] VIEW <name> with AS */
@@ -3158,7 +3177,7 @@ psql_completion(const char *text, int start, int end)
 
 /* DISCARD */
 	else if (Matches("DISCARD"))
-		COMPLETE_WITH("ALL", "PLANS", "SEQUENCES", "TEMP");
+		COMPLETE_WITH("ALL", "PLANS", "SEQUENCES", "TEMP", "VARIABLES");
 
 /* DO */
 	else if (Matches("DO"))
@@ -3262,6 +3281,12 @@ psql_completion(const char *text, int start, int end)
 		COMPLETE_WITH_QUERY(Query_for_list_of_tables_for_rule);
 	}
 	else if (Matches("DROP", "RULE", MatchAny, "ON", MatchAny))
+		COMPLETE_WITH("CASCADE", "RESTRICT");
+
+	/* DROP VARIABLE */
+	else if (Matches("DROP", "VARIABLE"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_variables, NULL);
+	else if (Matches("DROP", "VARIABLE", MatchAny))
 		COMPLETE_WITH("CASCADE", "RESTRICT");
 
 /* EXECUTE */
@@ -3436,6 +3461,7 @@ psql_completion(const char *text, int start, int end)
 									   " UNION SELECT 'ALL ROUTINES IN SCHEMA'"
 									   " UNION SELECT 'ALL SEQUENCES IN SCHEMA'"
 									   " UNION SELECT 'ALL TABLES IN SCHEMA'"
+									   " UNION SELECT 'ALL VARIABLES IN SCHEMA'"
 									   " UNION SELECT 'DATABASE'"
 									   " UNION SELECT 'DOMAIN'"
 									   " UNION SELECT 'FOREIGN DATA WRAPPER'"
@@ -3449,14 +3475,16 @@ psql_completion(const char *text, int start, int end)
 									   " UNION SELECT 'SEQUENCE'"
 									   " UNION SELECT 'TABLE'"
 									   " UNION SELECT 'TABLESPACE'"
-									   " UNION SELECT 'TYPE'");
+									   " UNION SELECT 'TYPE'"
+									   " UNION SELECT 'VARIABLE'");
 	}
 	else if (TailMatches("GRANT|REVOKE", MatchAny, "ON", "ALL"))
 		COMPLETE_WITH("FUNCTIONS IN SCHEMA",
 					  "PROCEDURES IN SCHEMA",
 					  "ROUTINES IN SCHEMA",
 					  "SEQUENCES IN SCHEMA",
-					  "TABLES IN SCHEMA");
+					  "TABLES IN SCHEMA",
+					  "VARIABLES IN SCHEMA");
 	else if (TailMatches("GRANT|REVOKE", MatchAny, "ON", "FOREIGN"))
 		COMPLETE_WITH("DATA WRAPPER", "SERVER");
 
@@ -3490,6 +3518,8 @@ psql_completion(const char *text, int start, int end)
 			COMPLETE_WITH_QUERY(Query_for_list_of_tablespaces);
 		else if (TailMatches("TYPE"))
 			COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_datatypes, NULL);
+		else if (TailMatches("VARIABLE"))
+			COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_variables, NULL);
 		else if (TailMatches("GRANT", MatchAny, MatchAny, MatchAny))
 			COMPLETE_WITH("TO");
 		else
@@ -3653,7 +3683,7 @@ psql_completion(const char *text, int start, int end)
 
 /* PREPARE xx AS */
 	else if (Matches("PREPARE", MatchAny, "AS"))
-		COMPLETE_WITH("SELECT", "UPDATE", "INSERT INTO", "DELETE FROM");
+		COMPLETE_WITH("SELECT", "UPDATE", "INSERT INTO", "DELETE FROM", "LET");
 
 /*
  * PREPARE TRANSACTION is missing on purpose. It's intended for transaction
@@ -3927,6 +3957,14 @@ psql_completion(const char *text, int start, int end)
 	else if (TailMatches("UPDATE", MatchAny, "SET", MatchAnyExcept("*=")))
 		COMPLETE_WITH("=");
 
+/* LET --- can be inside EXPLAIN, PREPARE etc */
+	/* If prev. word is LET suggest a list of variables */
+	else if (TailMatches("LET"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_variables, NULL);
+	/* Complete LET <variable> with "=" */
+	else if (TailMatches("LET", MatchAny))
+		COMPLETE_WITH("=");
+
 /* USER MAPPING */
 	else if (Matches("ALTER|CREATE|DROP", "USER", "MAPPING"))
 		COMPLETE_WITH("FOR");
@@ -4091,6 +4129,8 @@ psql_completion(const char *text, int start, int end)
 		COMPLETE_WITH_QUERY(Query_for_list_of_roles);
 	else if (TailMatchesCS("\\dv*"))
 		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_views, NULL);
+	else if (TailMatchesCS("\\dV*"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_variables, NULL);
 	else if (TailMatchesCS("\\dx*"))
 		COMPLETE_WITH_QUERY(Query_for_list_of_extensions);
 	else if (TailMatchesCS("\\dX*"))

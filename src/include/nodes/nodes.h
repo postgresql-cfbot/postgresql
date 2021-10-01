@@ -454,6 +454,7 @@ typedef enum NodeTag
 	T_RangeTableFuncCol,
 	T_TypeName,
 	T_ColumnDef,
+	T_ColumnCompression,
 	T_IndexElem,
 	T_StatsElem,
 	T_Constraint,

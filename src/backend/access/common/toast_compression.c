@@ -19,6 +19,7 @@
 
 #include "access/detoast.h"
 #include "access/toast_compression.h"
+#include "commands/defrem.h"
 #include "common/pg_lzcompress.h"
 #include "fmgr.h"
 #include "utils/builtins.h"
@@ -33,26 +34,113 @@ int			default_toast_compression = TOAST_PGLZ_COMPRESSION;
 			 errdetail("This functionality requires the server to be built with lz4 support."), \
 			 errhint("You need to rebuild PostgreSQL using %s.", "--with-lz4")))
 
+#define PGLZ_OPTIONS_COUNT 6
+
+static char *PGLZ_options[PGLZ_OPTIONS_COUNT] = {
+	"min_input_size",
+	"max_input_size",
+	"min_comp_rate",
+	"first_success_by",
+	"match_size_good",
+	"match_size_drop"
+};
+
+/*
+ * Convert value from reloptions to int32, and report if it is not correct.
+ * Also checks parameter names
+ */
+static int32
+parse_option(char *name, char *value)
+{
+	int			i;
+
+	for (i = 0; i < PGLZ_OPTIONS_COUNT; i++)
+	{
+		if (strcmp(PGLZ_options[i], name) == 0)
+			return pg_atoi(value, 4, 0);
+	}
+
+	ereport(ERROR,
+			(errcode(ERRCODE_UNDEFINED_PARAMETER),
+			 errmsg("unknown compression option for pglz: \"%s\"", name)));
+}
+
+/*
+ * Check PGLZ options if specified.
+ */
+void
+pglz_check_options(List *options)
+{
+	ListCell   *lc;
+
+	foreach(lc, options)
+	{
+		DefElem    *def = (DefElem *) lfirst(lc);
+
+		parse_option(def->defname, defGetString(def));
+	}
+}
+
+/*
+ * Configure PGLZ_Strategy struct for compression function
+ */
+static inline PGLZ_Strategy *
+pglz_init_options(List *options)
+{
+	ListCell   *lc;
+	PGLZ_Strategy *strategy = palloc(sizeof(PGLZ_Strategy));
+
+	/* initialize with default strategy values */
+	memcpy(strategy, PGLZ_strategy_default, sizeof(PGLZ_Strategy));
+	foreach(lc, options)
+	{
+		DefElem    *def = (DefElem *) lfirst(lc);
+		int32		val = parse_option(def->defname, defGetString(def));
+
+		/* fill the strategy */
+		if (strcmp(def->defname, "min_input_size") == 0)
+			strategy->min_input_size = val;
+		else if (strcmp(def->defname, "max_input_size") == 0)
+			strategy->max_input_size = val;
+		else if (strcmp(def->defname, "min_comp_rate") == 0)
+			strategy->min_comp_rate = val;
+		else if (strcmp(def->defname, "first_success_by") == 0)
+			strategy->first_success_by = val;
+		else if (strcmp(def->defname, "match_size_good") == 0)
+			strategy->match_size_good = val;
+		else if (strcmp(def->defname, "match_size_drop") == 0)
+			strategy->match_size_drop = val;
+	}
+	return strategy;
+}
+
 /*
  * Compress a varlena using PGLZ.
  *
  * Returns the compressed varlena, or NULL if compression fails.
  */
 struct varlena *
-pglz_compress_datum(const struct varlena *value)
+pglz_compress_datum(const struct varlena *value, List *options)
 {
 	int32		valsize,
 				len;
-	struct varlena *tmp = NULL;
+	struct varlena	*tmp = NULL;
+	PGLZ_Strategy	*strategy;
 
 	valsize = VARSIZE_ANY_EXHDR(DatumGetPointer(value));
+
+	/*
+	 * XXX we should create attribute level cache for the parsed options
+	 * instead of parsing it for every compression.
+	 */
+	strategy = pglz_init_options(options);
 
 	/*
 	 * No point in wasting a palloc cycle if value size is outside the allowed
 	 * range for compression.
 	 */
-	if (valsize < PGLZ_strategy_default->min_input_size ||
-		valsize > PGLZ_strategy_default->max_input_size)
+	if (valsize < strategy->min_input_size ||
+		valsize > strategy->max_input_size)
 		return NULL;
 
 	/*
@@ -65,7 +153,9 @@ pglz_compress_datum(const struct varlena *value)
 	len = pglz_compress(VARDATA_ANY(value),
 						valsize,
 						(char *) tmp + VARHDRSZ_COMPRESSED,
-						NULL);
+						strategy);
+	pfree(strategy);
+
 	if (len < 0)
 	{
 		pfree(tmp);
@@ -133,12 +223,77 @@ pglz_decompress_datum_slice(const struct varlena *value,
 }
 
 /*
+ * Check options if specified. All validation is located here so
+ * we don't need to do it again in cminitstate function.
+ */
+void
+lz4_check_options(List *options)
+{
+#ifndef USE_LZ4
+	NO_LZ4_SUPPORT();
+	return NULL;				/* keep compiler quiet */
+#else
+	ListCell	*lc;
+
+	foreach(lc, options)
+	{
+		DefElem    *def = (DefElem *) lfirst(lc);
+
+		if (strcmp(def->defname, "acceleration") == 0)
+		{
+			int32 acceleration =
+				pg_atoi(defGetString(def), sizeof(acceleration), 0);
+
+			if (acceleration < INT32_MIN || acceleration > INT32_MAX)
+				ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("unexpected value for lz4 compression acceleration: \"%s\"",
+								defGetString(def)),
+					 errhint("expected value between INT32_MIN and INT32_MAX")
+					));
+		}
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_PARAMETER),
+					 errmsg("unknown compression option for lz4: \"%s\"", def->defname)));
+	}
+#endif
+}
+
+static int32
+lz4_init_options(List *options)
+{
+#ifndef USE_LZ4
+	NO_LZ4_SUPPORT();
+	return NULL;				/* keep compiler quiet */
+#else
+	int32	acceleration;
+
+	acceleration = 1;
+	if (list_length(options) > 0)
+	{
+		ListCell	*lc;
+
+		foreach(lc, options)
+		{
+			DefElem    *def = (DefElem *) lfirst(lc);
+
+			if (strcmp(def->defname, "acceleration") == 0)
+				acceleration = pg_atoi(defGetString(def), sizeof(int32), 0);
+		}
+	}
+
+	return acceleration;
+#endif
+}
+
+/*
  * Compress a varlena using LZ4.
  *
  * Returns the compressed varlena, or NULL if compression fails.
  */
 struct varlena *
-lz4_compress_datum(const struct varlena *value)
+lz4_compress_datum(const struct varlena *value, List *options)
 {
 #ifndef USE_LZ4
 	NO_LZ4_SUPPORT();
@@ -147,7 +302,10 @@ lz4_compress_datum(const struct varlena *value)
 	int32		valsize;
 	int32		len;
 	int32		max_size;
+	int32		acceleration;
 	struct varlena *tmp = NULL;
+
+	acceleration = lz4_init_options(options);
 
 	valsize = VARSIZE_ANY_EXHDR(value);
 
@@ -158,9 +316,9 @@ lz4_compress_datum(const struct varlena *value)
 	max_size = LZ4_compressBound(valsize);
 	tmp = (struct varlena *) palloc(max_size + VARHDRSZ_COMPRESSED);
 
-	len = LZ4_compress_default(VARDATA_ANY(value),
-							   (char *) tmp + VARHDRSZ_COMPRESSED,
-							   valsize, max_size);
+	len = LZ4_compress_fast(VARDATA_ANY(value),
+							(char *) tmp + VARHDRSZ_COMPRESSED,
+							valsize, max_size, acceleration);
 	if (len <= 0)
 		elog(ERROR, "lz4 compression failed");
 

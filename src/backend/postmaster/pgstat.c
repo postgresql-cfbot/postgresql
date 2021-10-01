@@ -124,9 +124,12 @@ char	   *pgstat_stat_filename = NULL;
 char	   *pgstat_stat_tmpname = NULL;
 
 /*
- * BgWriter and WAL global statistics counters.
- * Stored directly in a stats message structure so they can be sent
- * without needing to copy things around.  We assume these init to zeroes.
+ * BgWriter, Checkpointer, WAL, and I/O global statistics counters. I/O global
+ * statistics on various IO ops are tracked in PgBackendStatus while a backend
+ * is alive and then sent to stats collector before a backend exits in a
+ * PgStat_MsgIOPathOps.
+ * All others are stored directly in a stats message structure so they can be
+ * sent without needing to copy things around.  We assume these init to zeroes.
  */
 PgStat_MsgBgWriter PendingBgWriterStats;
 PgStat_MsgCheckpointer PendingCheckpointerStats;
@@ -362,6 +365,7 @@ static void pgstat_recv_analyze(PgStat_MsgAnalyze *msg, int len);
 static void pgstat_recv_archiver(PgStat_MsgArchiver *msg, int len);
 static void pgstat_recv_bgwriter(PgStat_MsgBgWriter *msg, int len);
 static void pgstat_recv_checkpointer(PgStat_MsgCheckpointer *msg, int len);
+static void pgstat_recv_io_path_ops(PgStat_MsgIOPathOps *msg, int len);
 static void pgstat_recv_wal(PgStat_MsgWal *msg, int len);
 static void pgstat_recv_slru(PgStat_MsgSLRU *msg, int len);
 static void pgstat_recv_funcstat(PgStat_MsgFuncstat *msg, int len);
@@ -1452,6 +1456,8 @@ pgstat_reset_shared_counters(const char *target)
 		msg.m_resettarget = RESET_ARCHIVER;
 	else if (strcmp(target, "bgwriter") == 0)
 		msg.m_resettarget = RESET_BGWRITER;
+	else if (strcmp(target, "buffers") == 0)
+		msg.m_resettarget = RESET_BUFFERS;
 	else if (strcmp(target, "wal") == 0)
 		msg.m_resettarget = RESET_WAL;
 	else
@@ -1461,7 +1467,25 @@ pgstat_reset_shared_counters(const char *target)
 				 errhint("Target must be \"archiver\", \"bgwriter\", or \"wal\".")));
 
 	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_RESETSHAREDCOUNTER);
-	pgstat_send(&msg, sizeof(msg));
+
+	if (msg.m_resettarget == RESET_BUFFERS)
+	{
+		int			backend_type;
+		PgStatIOPathOps ops[BACKEND_NUM_TYPES];
+
+		memset(ops, 0, sizeof(ops));
+		pgstat_report_live_backend_io_path_ops(ops);
+
+		for (backend_type = 1; backend_type < BACKEND_NUM_TYPES; backend_type++)
+		{
+			msg.m_backend_resets.backend_type = backend_type;
+			memcpy(&msg.m_backend_resets.iop, &ops[backend_type], sizeof(msg.m_backend_resets.iop));
+			pgstat_send(&msg, sizeof(msg));
+		}
+	}
+	else
+		pgstat_send(&msg, sizeof(msg));
+
 }
 
 /* ----------
@@ -2760,6 +2784,19 @@ pgstat_twophase_postabort(TransactionId xid, uint16 info,
 		rec->tuples_inserted + rec->tuples_updated;
 }
 
+/*
+ *	Support function for SQL-callable pgstat* functions. Returns a pointer to
+ *	the PgStat_BackendIOPathOps structure tracking IO op statistics for both
+ *	exited backends and reset arithmetic.
+ */
+PgStat_BackendIOPathOps *
+pgstat_fetch_exited_backend_buffers(void)
+{
+	backend_read_statsfile();
+
+	return &globalStats.buffers;
+}
+
 
 /* ----------
  * pgstat_fetch_stat_dbentry() -
@@ -3000,6 +3037,14 @@ pgstat_shutdown_hook(int code, Datum arg)
 	Assert(!pgstat_is_shutdown);
 
 	/*
+	 * Only need to send stats on IO Ops for IO Paths when a process exits, as
+	 * pg_stat_get_buffers() will read from live backends' PgBackendStatus and
+	 * then sum this with totals from exited backends persisted by the stats
+	 * collector.
+	 */
+	pgstat_send_buffers();
+
+	/*
 	 * If we got as far as discovering our own database ID, we can report what
 	 * we did to the collector.  Otherwise, we'd be sending an invalid
 	 * database ID, so forget it.  (This means that accesses to pg_database
@@ -3092,6 +3137,30 @@ pgstat_send(void *msg, int len)
 #endif
 }
 
+/*
+ * Add live IO Op stats for all IO Paths (e.g. shared, local) to those in the
+ * equivalent stats structure for exited backends. Note that this adds and
+ * doesn't set, so the destination stats structure should be zeroed out by the
+ * caller initially. This would commonly be used to transfer all IO Op stats
+ * for all IO Paths for a particular backend type to the pgstats structure.
+ */
+void
+pgstat_add_io_path_ops(PgStatIOOps *dest, IOOps *src, int io_path_num_types)
+{
+	int			io_path;
+
+	for (io_path = 0; io_path < io_path_num_types; io_path++)
+	{
+		dest->allocs += pg_atomic_read_u64(&src->allocs);
+		dest->extends += pg_atomic_read_u64(&src->extends);
+		dest->fsyncs += pg_atomic_read_u64(&src->fsyncs);
+		dest->writes += pg_atomic_read_u64(&src->writes);
+		dest++;
+		src++;
+	}
+
+}
+
 /* ----------
  * pgstat_send_archiver() -
  *
@@ -3147,6 +3216,32 @@ pgstat_send_bgwriter(void)
 	 */
 	MemSet(&PendingBgWriterStats, 0, sizeof(PendingBgWriterStats));
 }
+
+/*
+ * Before exiting, a backend sends its IO op statistics to the collector so
+ * that they may be persisted.
+ */
+void
+pgstat_send_buffers(void)
+{
+	PgStat_MsgIOPathOps msg;
+
+	PgBackendStatus *beentry = MyBEEntry;
+
+	if (!beentry)
+		return;
+
+	memset(&msg, 0, sizeof(msg));
+	msg.backend_type = beentry->st_backendType;
+
+	pgstat_add_io_path_ops(msg.iop.io_path_ops,
+						   (IOOps *) &beentry->io_path_stats,
+						   IOPATH_NUM_TYPES);
+
+	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_IO_PATH_OPS);
+	pgstat_send(&msg, sizeof(msg));
+}
+
 
 /* ----------
  * pgstat_send_checkpointer() -
@@ -3520,6 +3615,10 @@ PgstatCollectorMain(int argc, char *argv[])
 
 				case PGSTAT_MTYPE_CHECKPOINTER:
 					pgstat_recv_checkpointer(&msg.msg_checkpointer, len);
+					break;
+
+				case PGSTAT_MTYPE_IO_PATH_OPS:
+					pgstat_recv_io_path_ops(&msg.msg_io_path_ops, len);
 					break;
 
 				case PGSTAT_MTYPE_WAL:
@@ -5221,9 +5320,29 @@ pgstat_recv_resetsharedcounter(PgStat_MsgResetsharedcounter *msg, int len)
 {
 	if (msg->m_resettarget == RESET_BGWRITER)
 	{
-		/* Reset the global, bgwriter and checkpointer statistics for the cluster. */
-		memset(&globalStats, 0, sizeof(globalStats));
+		/*
+		 * Reset the global, bgwriter and checkpointer statistics for the
+		 * cluster.
+		 */
+		memset(&globalStats.checkpointer, 0, sizeof(globalStats.checkpointer));
+		memset(&globalStats.bgwriter, 0, sizeof(globalStats.bgwriter));
 		globalStats.bgwriter.stat_reset_timestamp = GetCurrentTimestamp();
+	}
+	else if (msg->m_resettarget == RESET_BUFFERS)
+	{
+		BackendType backend_type = msg->m_backend_resets.backend_type;
+
+		/*
+		 * Though globalStats.buffers only needs to be reset once, doing so
+		 * for every message is less brittle and the extra cost is irrelevant
+		 * given how often stats are reset.
+		 */
+		memset(&globalStats.buffers.ops, 0, sizeof(globalStats.buffers.ops));
+		globalStats.buffers.stat_reset_timestamp = GetCurrentTimestamp();
+
+		memcpy(&globalStats.buffers.resets[backend_type],
+			   &msg->m_backend_resets.iop.io_path_ops, sizeof(msg->m_backend_resets.iop.io_path_ops));
+
 	}
 	else if (msg->m_resettarget == RESET_ARCHIVER)
 	{
@@ -5489,9 +5608,7 @@ pgstat_recv_archiver(PgStat_MsgArchiver *msg, int len)
 static void
 pgstat_recv_bgwriter(PgStat_MsgBgWriter *msg, int len)
 {
-	globalStats.bgwriter.buf_written_clean += msg->m_buf_written_clean;
 	globalStats.bgwriter.maxwritten_clean += msg->m_maxwritten_clean;
-	globalStats.bgwriter.buf_alloc += msg->m_buf_alloc;
 }
 
 /* ----------
@@ -5507,9 +5624,26 @@ pgstat_recv_checkpointer(PgStat_MsgCheckpointer *msg, int len)
 	globalStats.checkpointer.requested_checkpoints += msg->m_requested_checkpoints;
 	globalStats.checkpointer.checkpoint_write_time += msg->m_checkpoint_write_time;
 	globalStats.checkpointer.checkpoint_sync_time += msg->m_checkpoint_sync_time;
-	globalStats.checkpointer.buf_written_checkpoints += msg->m_buf_written_checkpoints;
-	globalStats.checkpointer.buf_written_backend += msg->m_buf_written_backend;
-	globalStats.checkpointer.buf_fsync_backend += msg->m_buf_fsync_backend;
+}
+
+static void
+pgstat_recv_io_path_ops(PgStat_MsgIOPathOps *msg, int len)
+{
+	int			io_path;
+	PgStatIOOps *src_io_path_ops = msg->iop.io_path_ops;
+	PgStatIOOps *dest_io_path_ops =
+	globalStats.buffers.ops[msg->backend_type].io_path_ops;
+
+	for (io_path = 0; io_path < IOPATH_NUM_TYPES; io_path++)
+	{
+		PgStatIOOps *src = &src_io_path_ops[io_path];
+		PgStatIOOps *dest = &dest_io_path_ops[io_path];
+
+		dest->allocs += src->allocs;
+		dest->extends += src->extends;
+		dest->fsyncs += src->fsyncs;
+		dest->writes += src->writes;
+	}
 }
 
 /* ----------

@@ -338,6 +338,8 @@ typedef enum BackendType
 	B_LOGGER,
 } BackendType;
 
+#define BACKEND_NUM_TYPES (B_LOGGER + 1)
+
 extern BackendType MyBackendType;
 
 extern const char *GetBackendTypeDesc(BackendType backendType);

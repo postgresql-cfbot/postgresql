@@ -36,6 +36,42 @@
 
 #define HAS_PGSTAT_PERMISSIONS(role)	 (is_member_of_role(GetUserId(), ROLE_PG_READ_ALL_STATS) || has_privs_of_role(GetUserId(), role))
 
+/*
+ * Helper function for views with multiple rows constructed from a tuplestore
+ */
+static Tuplestorestate *
+pg_stat_make_tuplestore(FunctionCallInfo fcinfo, TupleDesc *tupdesc)
+{
+	Tuplestorestate *tupstore;
+	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	MemoryContext per_query_ctx;
+	MemoryContext oldcontext;
+
+	/* check to see if caller supports us returning a tuplestore */
+	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("set-valued function called in context that cannot accept a set")));
+	if (!(rsinfo->allowedModes & SFRM_Materialize))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("materialize mode required, but it is not allowed in this context")));
+
+	/* Build a tuple descriptor for our result type */
+	if (get_call_result_type(fcinfo, NULL, tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+
+	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+	oldcontext = MemoryContextSwitchTo(per_query_ctx);
+
+	tupstore = tuplestore_begin_heap(true, false, work_mem);
+	rsinfo->returnMode = SFRM_Materialize;
+	rsinfo->setResult = tupstore;
+	rsinfo->setDesc = *tupdesc;
+	MemoryContextSwitchTo(oldcontext);
+	return tupstore;
+}
+
 Datum
 pg_stat_get_numscans(PG_FUNCTION_ARGS)
 {
@@ -457,29 +493,13 @@ Datum
 pg_stat_get_progress_info(PG_FUNCTION_ARGS)
 {
 #define PG_STAT_GET_PROGRESS_COLS	PGSTAT_NUM_PROGRESS_PARAM + 3
-	int			num_backends = pgstat_fetch_stat_numbackends();
 	int			curr_backend;
-	char	   *cmd = text_to_cstring(PG_GETARG_TEXT_PP(0));
 	ProgressCommandType cmdtype;
 	TupleDesc	tupdesc;
-	Tuplestorestate *tupstore;
-	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
-	MemoryContext per_query_ctx;
-	MemoryContext oldcontext;
 
-	/* check to see if caller supports us returning a tuplestore */
-	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("set-valued function called in context that cannot accept a set")));
-	if (!(rsinfo->allowedModes & SFRM_Materialize))
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("materialize mode required, but it is not allowed in this context")));
-
-	/* Build a tuple descriptor for our result type */
-	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
-		elog(ERROR, "return type must be a row type");
+	Tuplestorestate *tupstore = pg_stat_make_tuplestore(fcinfo, &tupdesc);
+	int			num_backends = pgstat_fetch_stat_numbackends();
+	char	   *cmd = text_to_cstring(PG_GETARG_TEXT_PP(0));
 
 	/* Translate command name into command type code. */
 	if (pg_strcasecmp(cmd, "VACUUM") == 0)
@@ -498,15 +518,6 @@ pg_stat_get_progress_info(PG_FUNCTION_ARGS)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("invalid command name: \"%s\"", cmd)));
-
-	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
-	oldcontext = MemoryContextSwitchTo(per_query_ctx);
-
-	tupstore = tuplestore_begin_heap(true, false, work_mem);
-	rsinfo->returnMode = SFRM_Materialize;
-	rsinfo->setResult = tupstore;
-	rsinfo->setDesc = tupdesc;
-	MemoryContextSwitchTo(oldcontext);
 
 	/* 1-based index */
 	for (curr_backend = 1; curr_backend <= num_backends; curr_backend++)
@@ -568,38 +579,12 @@ Datum
 pg_stat_get_activity(PG_FUNCTION_ARGS)
 {
 #define PG_STAT_GET_ACTIVITY_COLS	30
-	int			num_backends = pgstat_fetch_stat_numbackends();
-	int			curr_backend;
-	int			pid = PG_ARGISNULL(0) ? -1 : PG_GETARG_INT32(0);
-	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
 	TupleDesc	tupdesc;
-	Tuplestorestate *tupstore;
-	MemoryContext per_query_ctx;
-	MemoryContext oldcontext;
+	int			curr_backend;
 
-	/* check to see if caller supports us returning a tuplestore */
-	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("set-valued function called in context that cannot accept a set")));
-	if (!(rsinfo->allowedModes & SFRM_Materialize))
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("materialize mode required, but it is not allowed in this context")));
-
-	/* Build a tuple descriptor for our result type */
-	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
-		elog(ERROR, "return type must be a row type");
-
-	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
-	oldcontext = MemoryContextSwitchTo(per_query_ctx);
-
-	tupstore = tuplestore_begin_heap(true, false, work_mem);
-	rsinfo->returnMode = SFRM_Materialize;
-	rsinfo->setResult = tupstore;
-	rsinfo->setDesc = tupdesc;
-
-	MemoryContextSwitchTo(oldcontext);
+	int			num_backends = pgstat_fetch_stat_numbackends();
+	int			pid = PG_ARGISNULL(0) ? -1 : PG_GETARG_INT32(0);
+	Tuplestorestate *tupstore = pg_stat_make_tuplestore(fcinfo, &tupdesc);
 
 	/* 1-based index */
 	for (curr_backend = 1; curr_backend <= num_backends; curr_backend++)
@@ -1739,18 +1724,6 @@ pg_stat_get_bgwriter_requested_checkpoints(PG_FUNCTION_ARGS)
 }
 
 Datum
-pg_stat_get_bgwriter_buf_written_checkpoints(PG_FUNCTION_ARGS)
-{
-	PG_RETURN_INT64(pgstat_fetch_stat_checkpointer()->buf_written_checkpoints);
-}
-
-Datum
-pg_stat_get_bgwriter_buf_written_clean(PG_FUNCTION_ARGS)
-{
-	PG_RETURN_INT64(pgstat_fetch_stat_bgwriter()->buf_written_clean);
-}
-
-Datum
 pg_stat_get_bgwriter_maxwritten_clean(PG_FUNCTION_ARGS)
 {
 	PG_RETURN_INT64(pgstat_fetch_stat_bgwriter()->maxwritten_clean);
@@ -1779,21 +1752,123 @@ pg_stat_get_bgwriter_stat_reset_time(PG_FUNCTION_ARGS)
 }
 
 Datum
-pg_stat_get_buf_written_backend(PG_FUNCTION_ARGS)
+pg_stat_get_buffers(PG_FUNCTION_ARGS)
 {
-	PG_RETURN_INT64(pgstat_fetch_stat_checkpointer()->buf_written_backend);
-}
+#define NROWS ((BACKEND_NUM_TYPES - 1) * IOPATH_NUM_TYPES)
+	PgStat_BackendIOPathOps *backend_io_path_ops;
+	int			i;
+	int			io_path,
+				backend_type;
+	Datum		reset_time;
+	PgBackendStatus *beentry;
+	TupleDesc	tupdesc;
 
-Datum
-pg_stat_get_buf_fsync_backend(PG_FUNCTION_ARGS)
-{
-	PG_RETURN_INT64(pgstat_fetch_stat_checkpointer()->buf_fsync_backend);
-}
+	Tuplestorestate *tupstore = pg_stat_make_tuplestore(fcinfo, &tupdesc);
 
-Datum
-pg_stat_get_buf_alloc(PG_FUNCTION_ARGS)
-{
-	PG_RETURN_INT64(pgstat_fetch_stat_bgwriter()->buf_alloc);
+	/*
+	 * When adding a new column to the pg_stat_buffers view, add a new enum
+	 * value here above COLUMN_LENGTH.
+	 */
+	enum
+	{
+		COLUMN_BACKEND_TYPE,
+		COLUMN_IO_PATH,
+		COLUMN_ALLOCS,
+		COLUMN_EXTENDS,
+		COLUMN_FSYNCS,
+		COLUMN_WRITES,
+		COLUMN_RESET_TIME,
+		COLUMN_LENGTH,
+	};
+
+	Datum		all_values[NROWS][COLUMN_LENGTH];
+	bool		all_nulls[NROWS][COLUMN_LENGTH];
+
+	memset(all_values, 0, sizeof(all_values));
+	memset(all_nulls, 0, sizeof(all_nulls));
+
+	/*
+	 * Loop through all live backends and count their IO Ops for each IO Path
+	 */
+	beentry = pgstat_fetch_backend_statuses();
+
+	for (i = 0; i < MaxBackends + NUM_AUXPROCTYPES; i++)
+	{
+		IOOps	   *io_ops;
+
+		beentry++;
+		/* Don't count dead backends. They should already be counted */
+		if (beentry->st_procpid == 0)
+			continue;
+
+		io_ops = beentry->io_path_stats;
+
+		for (io_path = 0; io_path < IOPATH_NUM_TYPES; io_path++)
+		{
+			/*
+			 * Subtract 1 from backend_type to avoid having rows for B_INVALID
+			 * BackendType
+			 */
+			int			rownum = (beentry->st_backendType - 1) * IOPATH_NUM_TYPES + io_path;
+			Datum	   *values = all_values[rownum];
+
+			/*
+			 * COLUMN_RESET_TIME, COLUMN_BACKEND_TYPE, and COLUMN_IO_PATH will
+			 * all be set when looping through exited backends array
+			 */
+			values[COLUMN_ALLOCS] += pg_atomic_read_u64(&io_ops->allocs);
+			values[COLUMN_EXTENDS] += pg_atomic_read_u64(&io_ops->extends);
+			values[COLUMN_FSYNCS] += pg_atomic_read_u64(&io_ops->fsyncs);
+			values[COLUMN_WRITES] += pg_atomic_read_u64(&io_ops->writes);
+			io_ops++;
+		}
+	}
+
+	/* Add stats from all exited backends */
+	backend_io_path_ops = pgstat_fetch_exited_backend_buffers();
+
+	reset_time = TimestampTzGetDatum(backend_io_path_ops->stat_reset_timestamp);
+
+	/* 0 is not a valid BackendType */
+	for (backend_type = 1; backend_type < BACKEND_NUM_TYPES; backend_type++)
+	{
+		PgStatIOOps *io_ops = backend_io_path_ops->ops[backend_type].io_path_ops;
+		PgStatIOOps *resets = backend_io_path_ops->resets[backend_type].io_path_ops;
+
+		Datum		backend_type_desc = CStringGetTextDatum(GetBackendTypeDesc(backend_type));
+
+		for (io_path = 0; io_path < IOPATH_NUM_TYPES; io_path++)
+		{
+			/*
+			 * Subtract 1 from backend_type to avoid having rows for B_INVALID
+			 * BackendType
+			 */
+			Datum	   *values = all_values[(backend_type - 1) * IOPATH_NUM_TYPES + io_path];
+
+			values[COLUMN_BACKEND_TYPE] = backend_type_desc;
+			values[COLUMN_IO_PATH] = CStringGetTextDatum(GetIOPathDesc(io_path));
+			values[COLUMN_ALLOCS] = values[COLUMN_ALLOCS] + io_ops->allocs - resets->allocs;
+			values[COLUMN_EXTENDS] = values[COLUMN_EXTENDS] + io_ops->extends - resets->extends;
+			values[COLUMN_FSYNCS] = values[COLUMN_FSYNCS] + io_ops->fsyncs - resets->fsyncs;
+			values[COLUMN_WRITES] = values[COLUMN_WRITES] + io_ops->writes - resets->writes;
+			values[COLUMN_RESET_TIME] = reset_time;
+			io_ops++;
+			resets++;
+		}
+	}
+
+	for (i = 0; i < NROWS; i++)
+	{
+		Datum	   *values = all_values[i];
+		bool	   *nulls = all_nulls[i];
+
+		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+	}
+
+	/* clean up and return the tuplestore */
+	tuplestore_donestoring(tupstore);
+
+	return (Datum) 0;
 }
 
 /*
@@ -1871,37 +1946,11 @@ Datum
 pg_stat_get_slru(PG_FUNCTION_ARGS)
 {
 #define PG_STAT_GET_SLRU_COLS	9
-	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
 	TupleDesc	tupdesc;
-	Tuplestorestate *tupstore;
-	MemoryContext per_query_ctx;
-	MemoryContext oldcontext;
 	int			i;
 	PgStat_SLRUStats *stats;
 
-	/* check to see if caller supports us returning a tuplestore */
-	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("set-valued function called in context that cannot accept a set")));
-	if (!(rsinfo->allowedModes & SFRM_Materialize))
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("materialize mode required, but it is not allowed in this context")));
-
-	/* Build a tuple descriptor for our result type */
-	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
-		elog(ERROR, "return type must be a row type");
-
-	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
-	oldcontext = MemoryContextSwitchTo(per_query_ctx);
-
-	tupstore = tuplestore_begin_heap(true, false, work_mem);
-	rsinfo->returnMode = SFRM_Materialize;
-	rsinfo->setResult = tupstore;
-	rsinfo->setDesc = tupdesc;
-
-	MemoryContextSwitchTo(oldcontext);
+	Tuplestorestate *tupstore = pg_stat_make_tuplestore(fcinfo, &tupdesc);
 
 	/* request SLRU stats from the stat collector */
 	stats = pgstat_fetch_slru();

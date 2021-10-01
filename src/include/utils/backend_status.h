@@ -13,6 +13,7 @@
 #include "datatype/timestamp.h"
 #include "libpq/pqcomm.h"
 #include "miscadmin.h"			/* for BackendType */
+#include "port/atomics.h"
 #include "utils/backend_progress.h"
 
 
@@ -31,11 +32,47 @@ typedef enum BackendState
 	STATE_DISABLED
 } BackendState;
 
+/* ----------
+ * IO Stats reporting utility types
+ * ----------
+ */
+
+typedef enum IOOp
+{
+	IOOP_ALLOC,
+	IOOP_EXTEND,
+	IOOP_FSYNC,
+	IOOP_WRITE,
+} IOOp;
+
+#define IOOP_NUM_TYPES (IOOP_WRITE + 1)
+
+typedef enum IOPath
+{
+	IOPATH_DIRECT,
+	IOPATH_LOCAL,
+	IOPATH_SHARED,
+	IOPATH_STRATEGY,
+} IOPath;
+
+#define IOPATH_NUM_TYPES (IOPATH_STRATEGY + 1)
+
 
 /* ----------
  * Shared-memory data structures
  * ----------
  */
+
+/*
+ * Structure for counting all types of IOOps for a live backend.
+ */
+typedef struct IOOps
+{
+	pg_atomic_uint64 allocs;
+	pg_atomic_uint64 extends;
+	pg_atomic_uint64 fsyncs;
+	pg_atomic_uint64 writes;
+} IOOps;
 
 /*
  * PgBackendSSLStatus
@@ -168,6 +205,16 @@ typedef struct PgBackendStatus
 
 	/* query identifier, optionally computed using post_parse_analyze_hook */
 	uint64		st_query_id;
+
+	/*
+	 * Stats on all IO Ops for all IO Paths for this backend. When the
+	 * pg_stat_buffers view is queried and when stats are reset, one backend
+	 * will read io_path_stats from all live backends and combine them with
+	 * io_path_stats from exited backends for each backend type. When this
+	 * backend exits, it will send io_path_stats to the stats collector to be
+	 * persisted.
+	 */
+	IOOps		io_path_stats[IOPATH_NUM_TYPES];
 } PgBackendStatus;
 
 
@@ -289,6 +336,10 @@ extern void CreateSharedBackendStatus(void);
  * ----------
  */
 
+/* Utility functions */
+extern const char *GetIOPathDesc(IOPath io_path);
+
+
 /* Initialization functions */
 extern void pgstat_beinit(void);
 extern void pgstat_bestart(void);
@@ -296,7 +347,39 @@ extern void pgstat_bestart(void);
 extern void pgstat_clear_backend_activity_snapshot(void);
 
 /* Activity reporting functions */
+typedef struct PgStatIOPathOps PgStatIOPathOps;
+
+static inline void
+pgstat_inc_ioop(IOOp io_op, IOPath io_path)
+{
+	IOOps	   *io_ops;
+	PgBackendStatus *beentry = MyBEEntry;
+
+	Assert(beentry);
+
+	io_ops = &beentry->io_path_stats[io_path];
+	switch (io_op)
+	{
+		case IOOP_ALLOC:
+			pg_atomic_write_u64(&io_ops->allocs,
+								pg_atomic_read_u64(&io_ops->allocs) + 1);
+			break;
+		case IOOP_EXTEND:
+			pg_atomic_write_u64(&io_ops->extends,
+								pg_atomic_read_u64(&io_ops->extends) + 1);
+			break;
+		case IOOP_FSYNC:
+			pg_atomic_write_u64(&io_ops->fsyncs,
+								pg_atomic_read_u64(&io_ops->fsyncs) + 1);
+			break;
+		case IOOP_WRITE:
+			pg_atomic_write_u64(&io_ops->writes,
+								pg_atomic_read_u64(&io_ops->writes) + 1);
+			break;
+	}
+}
 extern void pgstat_report_activity(BackendState state, const char *cmd_str);
+extern void pgstat_report_live_backend_io_path_ops(PgStatIOPathOps *backend_io_path_ops);
 extern void pgstat_report_query_id(uint64 query_id, bool force);
 extern void pgstat_report_tempfile(size_t filesize);
 extern void pgstat_report_appname(const char *appname);
@@ -312,6 +395,7 @@ extern uint64 pgstat_get_my_query_id(void);
  * generate the pgstat* views.
  * ----------
  */
+extern PgBackendStatus *pgstat_fetch_backend_statuses(void);
 extern int	pgstat_fetch_stat_numbackends(void);
 extern PgBackendStatus *pgstat_fetch_stat_beentry(int beid);
 extern LocalPgBackendStatus *pgstat_fetch_stat_local_beentry(int beid);

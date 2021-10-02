@@ -695,6 +695,7 @@ const char *const GucContext_Names[] =
 	 /* PGC_SU_BACKEND */ "superuser-backend",
 	 /* PGC_BACKEND */ "backend",
 	 /* PGC_SUSET */ "superuser",
+	 /* PGC_ADMINSET */ "administrator",
 	 /* PGC_USERSET */ "user"
 };
 
@@ -1370,7 +1371,7 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
-		{"log_replication_commands", PGC_SUSET, LOGGING_WHAT,
+		{"log_replication_commands", PGC_ADMINSET, LOGGING_WHAT,
 			gettext_noop("Logs each replication command."),
 			NULL
 		},
@@ -1423,7 +1424,7 @@ static struct config_bool ConfigureNamesBool[] =
 	},
 
 	{
-		{"log_duration", PGC_SUSET, LOGGING_WHAT,
+		{"log_duration", PGC_ADMINSET, LOGGING_WHAT,
 			gettext_noop("Logs the duration of each completed SQL statement."),
 			NULL
 		},
@@ -1468,7 +1469,7 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
-		{"log_parser_stats", PGC_SUSET, STATS_MONITORING,
+		{"log_parser_stats", PGC_ADMINSET, STATS_MONITORING,
 			gettext_noop("Writes parser performance statistics to the server log."),
 			NULL
 		},
@@ -1477,7 +1478,7 @@ static struct config_bool ConfigureNamesBool[] =
 		check_stage_log_stats, NULL, NULL
 	},
 	{
-		{"log_planner_stats", PGC_SUSET, STATS_MONITORING,
+		{"log_planner_stats", PGC_ADMINSET, STATS_MONITORING,
 			gettext_noop("Writes planner performance statistics to the server log."),
 			NULL
 		},
@@ -1486,7 +1487,7 @@ static struct config_bool ConfigureNamesBool[] =
 		check_stage_log_stats, NULL, NULL
 	},
 	{
-		{"log_executor_stats", PGC_SUSET, STATS_MONITORING,
+		{"log_executor_stats", PGC_ADMINSET, STATS_MONITORING,
 			gettext_noop("Writes executor performance statistics to the server log."),
 			NULL
 		},
@@ -1495,7 +1496,7 @@ static struct config_bool ConfigureNamesBool[] =
 		check_stage_log_stats, NULL, NULL
 	},
 	{
-		{"log_statement_stats", PGC_SUSET, STATS_MONITORING,
+		{"log_statement_stats", PGC_ADMINSET, STATS_MONITORING,
 			gettext_noop("Writes cumulative performance statistics to the server log."),
 			NULL
 		},
@@ -1517,7 +1518,7 @@ static struct config_bool ConfigureNamesBool[] =
 #endif
 
 	{
-		{"track_activities", PGC_SUSET, STATS_COLLECTOR,
+		{"track_activities", PGC_ADMINSET, STATS_COLLECTOR,
 			gettext_noop("Collects information about executing commands."),
 			gettext_noop("Enables the collection of information on the currently "
 						 "executing command of each session, along with "
@@ -1528,7 +1529,7 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
-		{"track_counts", PGC_SUSET, STATS_COLLECTOR,
+		{"track_counts", PGC_ADMINSET, STATS_COLLECTOR,
 			gettext_noop("Collects statistics on database activity."),
 			NULL
 		},
@@ -1537,7 +1538,7 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
-		{"track_io_timing", PGC_SUSET, STATS_COLLECTOR,
+		{"track_io_timing", PGC_ADMINSET, STATS_COLLECTOR,
 			gettext_noop("Collects timing statistics for database I/O activity."),
 			NULL
 		},
@@ -1634,7 +1635,7 @@ static struct config_bool ConfigureNamesBool[] =
 #endif
 
 	{
-		{"log_lock_waits", PGC_SUSET, LOGGING_WHAT,
+		{"log_lock_waits", PGC_ADMINSET, LOGGING_WHAT,
 			gettext_noop("Logs long lock waits."),
 			NULL
 		},
@@ -2966,7 +2967,7 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
-		{"log_min_duration_sample", PGC_SUSET, LOGGING_WHEN,
+		{"log_min_duration_sample", PGC_ADMINSET, LOGGING_WHEN,
 			gettext_noop("Sets the minimum execution time above which "
 						 "a sample of statements will be logged."
 						 " Sampling is determined by log_statement_sample_rate."),
@@ -2979,7 +2980,7 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
-		{"log_min_duration_statement", PGC_SUSET, LOGGING_WHEN,
+		{"log_min_duration_statement", PGC_ADMINSET, LOGGING_WHEN,
 			gettext_noop("Sets the minimum execution time above which "
 						 "all statements will be logged."),
 			gettext_noop("Zero prints all queries. -1 turns this feature off."),
@@ -3003,7 +3004,7 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
-		{"log_parameter_max_length", PGC_SUSET, LOGGING_WHAT,
+		{"log_parameter_max_length", PGC_ADMINSET, LOGGING_WHAT,
 			gettext_noop("When logging statements, limit logged parameter values to first N bytes."),
 			gettext_noop("-1 to print values in full."),
 			GUC_UNIT_BYTE
@@ -3482,7 +3483,7 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
-		{"log_temp_files", PGC_SUSET, LOGGING_WHAT,
+		{"log_temp_files", PGC_ADMINSET, LOGGING_WHAT,
 			gettext_noop("Log the use of temporary files larger than this number of kilobytes."),
 			gettext_noop("Zero logs all files. The default is -1 (turning this feature off)."),
 			GUC_UNIT_KB
@@ -3819,7 +3820,7 @@ static struct config_real ConfigureNamesReal[] =
 	},
 
 	{
-		{"log_statement_sample_rate", PGC_SUSET, LOGGING_WHEN,
+		{"log_statement_sample_rate", PGC_ADMINSET, LOGGING_WHEN,
 			gettext_noop("Fraction of statements exceeding log_min_duration_sample to be logged."),
 			gettext_noop("Use a value between 0.0 (never log) and 1.0 (always log).")
 		},
@@ -3829,9 +3830,10 @@ static struct config_real ConfigureNamesReal[] =
 	},
 
 	{
-		{"log_transaction_sample_rate", PGC_SUSET, LOGGING_WHEN,
-			gettext_noop("Sets the fraction of transactions from which to log all statements."),
-			gettext_noop("Use a value between 0.0 (never log) and 1.0 (log all "
+		{"log_transaction_sample_rate", PGC_ADMINSET, LOGGING_WHEN,
+			gettext_noop("Sets the fraction of transactions to log for new transactions."),
+			gettext_noop("Logs all statements from a fraction of transactions. "
+						 "Use a value between 0.0 (never log) and 1.0 (log all "
 						 "statements for all transactions).")
 		},
 		&log_xact_sample_rate,
@@ -4724,7 +4726,7 @@ static struct config_enum ConfigureNamesEnum[] =
 	},
 
 	{
-		{"log_error_verbosity", PGC_SUSET, LOGGING_WHAT,
+		{"log_error_verbosity", PGC_ADMINSET, LOGGING_WHAT,
 			gettext_noop("Sets the verbosity of logged messages."),
 			NULL
 		},
@@ -4734,7 +4736,7 @@ static struct config_enum ConfigureNamesEnum[] =
 	},
 
 	{
-		{"log_min_messages", PGC_SUSET, LOGGING_WHEN,
+		{"log_min_messages", PGC_ADMINSET, LOGGING_WHEN,
 			gettext_noop("Sets the message levels that are logged."),
 			gettext_noop("Each level includes all the levels that follow it. The later"
 						 " the level, the fewer messages are sent.")
@@ -4745,7 +4747,7 @@ static struct config_enum ConfigureNamesEnum[] =
 	},
 
 	{
-		{"log_min_error_statement", PGC_SUSET, LOGGING_WHEN,
+		{"log_min_error_statement", PGC_ADMINSET, LOGGING_WHEN,
 			gettext_noop("Causes all statements generating error at or above this level to be logged."),
 			gettext_noop("Each level includes all the levels that follow it. The later"
 						 " the level, the fewer messages are sent.")
@@ -4756,7 +4758,7 @@ static struct config_enum ConfigureNamesEnum[] =
 	},
 
 	{
-		{"log_statement", PGC_SUSET, LOGGING_WHAT,
+		{"log_statement", PGC_ADMINSET, LOGGING_WHAT,
 			gettext_noop("Sets the type of statements logged."),
 			NULL
 		},
@@ -4837,7 +4839,7 @@ static struct config_enum ConfigureNamesEnum[] =
 	},
 
 	{
-		{"track_functions", PGC_SUSET, STATS_COLLECTOR,
+		{"track_functions", PGC_ADMINSET, STATS_COLLECTOR,
 			gettext_noop("Collects function-level statistics on database activity."),
 			NULL
 		},
@@ -7470,6 +7472,19 @@ set_config_option(const char *name, const char *value,
 			break;
 		case PGC_SUSET:
 			if (context == PGC_USERSET || context == PGC_BACKEND)
+			{
+				ereport(elevel,
+						(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+						 errmsg("permission denied to set parameter \"%s\"",
+								name)));
+				return 0;
+			}
+			break;
+		case PGC_ADMINSET:
+			if ((context == PGC_USERSET &&
+				!((source == PGC_S_DATABASE_USER || source == PGC_S_TEST) &&
+				  is_member_of_role(GetUserId(), ROLE_PG_CHANGE_ROLE_SETTINGS))) ||
+				context == PGC_BACKEND)
 			{
 				ereport(elevel,
 						(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),

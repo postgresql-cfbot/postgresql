@@ -531,7 +531,7 @@ typedef enum
  * used for a given lock group is determined by the group leader's pgprocno.
  */
 #define LockHashPartitionLockByProc(leader_pgproc) \
-	LockHashPartitionLock((leader_pgproc)->pgprocno)
+	LockHashPartitionLock(GetPGProcNumber(leader_pgproc))
 
 /*
  * function prototypes

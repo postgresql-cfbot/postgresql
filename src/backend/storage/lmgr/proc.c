@@ -177,8 +177,6 @@ InitProcGlobal(void)
 	ProcGlobal->autovacFreeProcs = NULL;
 	ProcGlobal->bgworkerFreeProcs = NULL;
 	ProcGlobal->walsenderFreeProcs = NULL;
-	ProcGlobal->startupProc = NULL;
-	ProcGlobal->startupProcPid = 0;
 	ProcGlobal->startupBufferPinWaitBufId = -1;
 	ProcGlobal->walwriterLatch = NULL;
 	ProcGlobal->checkpointerLatch = NULL;
@@ -229,7 +227,6 @@ InitProcGlobal(void)
 			InitSharedLatch(&(procs[i].procLatch));
 			LWLockInitialize(&(procs[i].fpInfoLock), LWTRANCHE_LOCK_FASTPATH);
 		}
-		procs[i].pgprocno = i;
 
 		/*
 		 * Newly created PGPROCs for normal backends, autovacuum and bgworkers
@@ -622,21 +619,6 @@ InitAuxiliaryProcess(void)
 	 * Arrange to clean up at process exit.
 	 */
 	on_shmem_exit(AuxiliaryProcKill, Int32GetDatum(proctype));
-}
-
-/*
- * Record the PID and PGPROC structures for the Startup process, for use in
- * ProcSendSignal().  See comments there for further explanation.
- */
-void
-PublishStartupProcessInformation(void)
-{
-	SpinLockAcquire(ProcStructLock);
-
-	ProcGlobal->startupProc = MyProc;
-	ProcGlobal->startupProcPid = MyProcPid;
-
-	SpinLockRelease(ProcStructLock);
 }
 
 /*
@@ -1903,38 +1885,12 @@ ProcWaitForSignal(uint32 wait_event_info)
 }
 
 /*
- * ProcSendSignal - send a signal to a backend identified by PID
+ * ProcSendSignal - send a signal to a backend identified by pgprocno
  */
 void
-ProcSendSignal(int pid)
+ProcSendSignal(int pgprocno)
 {
-	PGPROC	   *proc = NULL;
-
-	if (RecoveryInProgress())
-	{
-		SpinLockAcquire(ProcStructLock);
-
-		/*
-		 * Check to see whether it is the Startup process we wish to signal.
-		 * This call is made by the buffer manager when it wishes to wake up a
-		 * process that has been waiting for a pin in so it can obtain a
-		 * cleanup lock using LockBufferForCleanup(). Startup is not a normal
-		 * backend, so BackendPidGetProc() will not return any pid at all. So
-		 * we remember the information for this special case.
-		 */
-		if (pid == ProcGlobal->startupProcPid)
-			proc = ProcGlobal->startupProc;
-
-		SpinLockRelease(ProcStructLock);
-	}
-
-	if (proc == NULL)
-		proc = BackendPidGetProc(pid);
-
-	if (proc != NULL)
-	{
-		SetLatch(&proc->procLatch);
-	}
+	SetLatch(&ProcGlobal->allProcs[pgprocno].procLatch);
 }
 
 /*
@@ -1990,10 +1946,9 @@ BecomeLockGroupMember(PGPROC *leader, int pid)
 
 	/*
 	 * Get lock protecting the group fields.  Note LockHashPartitionLockByProc
-	 * accesses leader->pgprocno in a PGPROC that might be free.  This is safe
-	 * because all PGPROCs' pgprocno fields are set during shared memory
-	 * initialization and never change thereafter; so we will acquire the
-	 * correct lock even if the leader PGPROC is in process of being recycled.
+	 * takes a PGPROC that might be free, but it uses only its address.  We
+	 * will acquire the correct lock even if the leader PGPROC is in the
+	 * process of being recycled.
 	 */
 	leader_lwlock = LockHashPartitionLockByProc(leader);
 	LWLockAcquire(leader_lwlock, LW_EXCLUSIVE);

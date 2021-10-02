@@ -464,7 +464,7 @@ TransactionGroupUpdateXidStatus(TransactionId xid, XidStatus status,
 
 		if (pg_atomic_compare_exchange_u32(&procglobal->clogGroupFirst,
 										   &nextidx,
-										   (uint32) proc->pgprocno))
+										   (uint32) GetPGProcNumber(proc)))
 			break;
 	}
 

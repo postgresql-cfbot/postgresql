@@ -279,7 +279,7 @@ TwoPhaseShmemInit(void)
 			TwoPhaseState->freeGXacts = &gxacts[i];
 
 			/* associate it with a PGPROC assigned by InitProcGlobal */
-			gxacts[i].pgprocno = PreparedXactProcs[i].pgprocno;
+			gxacts[i].pgprocno = GetPGProcNumber(&PreparedXactProcs[i]);
 
 			/*
 			 * Assign a unique ID for each dummy proc, so that the range of
@@ -456,7 +456,6 @@ MarkAsPreparingGuts(GlobalTransaction gxact, TransactionId xid, const char *gid,
 
 	/* Initialize the PGPROC entry */
 	MemSet(proc, 0, sizeof(PGPROC));
-	proc->pgprocno = gxact->pgprocno;
 	SHMQueueElemInit(&(proc->links));
 	proc->waitStatus = PROC_WAIT_STATUS_OK;
 	/* We set up the gxact's VXID as InvalidBackendId/XID */

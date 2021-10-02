@@ -897,6 +897,14 @@ set_plan_refs(PlannerInfo *root, Plan *plan, int rtoffset)
 					fix_scan_expr(root, wplan->startOffset, rtoffset, 1);
 				wplan->endOffset =
 					fix_scan_expr(root, wplan->endOffset, rtoffset, 1);
+				wplan->runcondition = fix_scan_list(root,
+													wplan->runcondition,
+													rtoffset,
+													NUM_EXEC_TLIST(plan));
+				wplan->runconditionorig = fix_scan_list(root,
+														wplan->runconditionorig,
+														rtoffset,
+														NUM_EXEC_TLIST(plan));
 			}
 			break;
 		case T_Result:

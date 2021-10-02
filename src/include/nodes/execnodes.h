@@ -2408,6 +2408,10 @@ typedef struct WindowAggState
 	MemoryContext curaggcontext;	/* current aggregate's working data */
 	ExprContext *tmpcontext;	/* short-term evaluation context */
 
+	ExprState  *runcondition;	/* Condition which must remain true otherwise
+								 * execution of the WindowAgg will finish, or
+								 * NULL if there is no such condition. */
+
 	bool		all_first;		/* true if the scan is starting */
 	bool		all_done;		/* true if the scan is finished */
 	bool		partition_spooled;	/* true if all tuples in current partition

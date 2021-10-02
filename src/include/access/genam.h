@@ -127,6 +127,13 @@ typedef struct IndexOrderByDistance
 	bool		isnull;
 } IndexOrderByDistance;
 
+typedef enum IndexLpDeadAllowedResult
+{
+	INDEX_LP_DEAD_OK,			/* Index tuple could be marked as LP_DEAD */
+	INDEX_LP_DEAD_NOT_OK,		/* Not allowed to mark index tuple as dead */
+	INDEX_LP_DEAD_OK_MIN_LSN	/* Allowed if index page LSN is greater */
+} IndexLpDeadAllowedResult;
+
 /*
  * generalized index_ interface routines (in indexam.c)
  */

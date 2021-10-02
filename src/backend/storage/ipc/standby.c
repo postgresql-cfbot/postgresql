@@ -1135,6 +1135,12 @@ standby_redo(XLogReaderState *record)
 		running.xids = xlrec->xids;
 
 		ProcArrayApplyRecoveryInfo(&running);
+		if (InHotStandby)
+		{
+			/* Move minRecoveryPoint forward to allow standby set
+			 * hint bits and index-LP_DEAD more aggressively. */
+			XLogFlush(record->currRecPtr);
+		}
 	}
 	else if (info == XLOG_INVALIDATIONS)
 	{

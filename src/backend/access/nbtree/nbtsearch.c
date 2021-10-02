@@ -1516,6 +1516,7 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum)
 	int			itemIndex;
 	bool		continuescan;
 	int			indnatts;
+	bool		ignore_killed_tuples;
 
 	/*
 	 * We must have the buffer pinned and locked, but the usual macro can't be
@@ -1569,6 +1570,15 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum)
 	 */
 	Assert(BTScanPosIsPinned(so->currPos));
 
+	/*
+	 * Check whether is it allowed to see LP_DEAD bits - always true for primary,
+	 * on secondary we should avoid flags that were set by primary.
+	 * In case of promotion xactStartedInRecovery may still be equal
+	 * to true on primary so, old standby-safe bits are used (case of old
+	 * transaction in promoted server).
+	 */
+	ignore_killed_tuples = !scan->xactStartedInRecovery ||
+										P_LP_SAFE_ON_STANDBY(opaque);
 	if (ScanDirectionIsForward(dir))
 	{
 		/* load items[] in ascending order */
@@ -1585,7 +1595,7 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum)
 			 * If the scan specifies not to return killed tuples, then we
 			 * treat a killed tuple as not passing the qual
 			 */
-			if (scan->ignore_killed_tuples && ItemIdIsDead(iid))
+			if (ignore_killed_tuples && ItemIdIsDead(iid))
 			{
 				offnum = OffsetNumberNext(offnum);
 				continue;
@@ -1685,7 +1695,7 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum)
 			 * uselessly advancing to the page to the left.  This is similar
 			 * to the high key optimization used by forward scans.
 			 */
-			if (scan->ignore_killed_tuples && ItemIdIsDead(iid))
+			if (ignore_killed_tuples && ItemIdIsDead(iid))
 			{
 				Assert(offnum >= P_FIRSTDATAKEY(opaque));
 				if (offnum > P_FIRSTDATAKEY(opaque))

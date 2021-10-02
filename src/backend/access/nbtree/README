@@ -714,17 +714,30 @@ lax about how same-level locks are acquired during recovery (most kinds
 of readers could still move right to recover if we didn't couple
 same-level locks), but we prefer to be conservative here.
 
-During recovery all index scans start with ignore_killed_tuples = false
-and we never set kill_prior_tuple. We do this because the oldest xmin
-on the standby server can be older than the oldest xmin on the primary
-server, which means tuples can be marked LP_DEAD even when they are
-still visible on the standby. We don't WAL log tuple LP_DEAD bits, but
-they can still appear in the standby because of full page writes. So
-we must always ignore them in standby, and that means it's not worth
-setting them either.  (When LP_DEAD-marked tuples are eventually deleted
-on the primary, the deletion is WAL-logged.  Queries that run on a
-standby therefore get much of the benefit of any LP_DEAD setting that
-takes place on the primary.)
+There is some complexity in using LP_DEAD bits during recovery. Generally,
+bits could be set and read by scan, but there is a possibility to meet
+the bit applied on the primary. We don't WAL log tuple LP_DEAD bits, but
+they can still appear on the standby because of the full-page writes. Such
+a cause could cause MVCC failures because the oldest xmin on the standby
+server can be older than the oldest xmin on the primary server, which means
+tuples can be marked LP_DEAD even when they are still visible on the standby.
+
+To prevent such failure, we mark pages with LP_DEAD bits set by standby with a
+special hint. In the case of FPW from primary the hint is always cleared while
+applying the full page write, so, LP_DEAD received from primary is ignored on
+standby. Also, standby clears all LP_DEAD set by primary on the page before
+setting of own bits.
+
+There are restrictions on settings LP_DEAD bits by the standby related to
+minRecoveryPoint value. In case of crash recovery standby will start to process
+queries after replaying WAL to minRecoveryPoint position (some kind of rewind to
+the previous state). A the same time setting of LP_DEAD bits are not protected
+by WAL in any way. So, to mark tuple as dead we must be sure it was "killed"
+before minRecoveryPoint (comparing the LSN of commit record). Another valid
+option is to compare "killer" LSN with index page LSN because minRecoveryPoint
+is moved forward if the index page flushed. Also, in some cases xid of "killer"
+is unknown - tuples were cleared by XLOG_HEAP2_PRUNE. In that case, we compare
+the LSN of the heap page to index page LSN.
 
 Note that we talk about scans that are started during recovery. We go to
 a little trouble to allow a scan to start during recovery and end during

@@ -309,6 +309,7 @@ index_rescan(IndexScanDesc scan,
 		table_index_fetch_reset(scan->xs_heapfetch);
 
 	scan->kill_prior_tuple = false; /* for safety */
+	scan->kill_prior_tuple_min_lsn = InvalidXLogRecPtr;
 	scan->xs_heap_continue = false;
 
 	scan->indexRelation->rd_indam->amrescan(scan, keys, nkeys,
@@ -386,6 +387,7 @@ index_restrpos(IndexScanDesc scan)
 		table_index_fetch_reset(scan->xs_heapfetch);
 
 	scan->kill_prior_tuple = false; /* for safety */
+	scan->kill_prior_tuple_min_lsn = InvalidXLogRecPtr;
 	scan->xs_heap_continue = false;
 
 	scan->indexRelation->rd_indam->amrestrpos(scan);
@@ -534,6 +536,7 @@ index_getnext_tid(IndexScanDesc scan, ScanDirection direction)
 
 	/* Reset kill flag immediately for safety */
 	scan->kill_prior_tuple = false;
+	scan->kill_prior_tuple_min_lsn = InvalidXLogRecPtr;
 	scan->xs_heap_continue = false;
 
 	/* If we're out of index entries, we're done */
@@ -551,6 +554,62 @@ index_getnext_tid(IndexScanDesc scan, ScanDirection direction)
 
 	/* Return the TID of the tuple we found. */
 	return &scan->xs_heaptid;
+}
+
+/*
+ * is_index_lp_dead_allowed
+ *
+ * Checks is it allowed to set LP_DEAD hint bit for the tuple in index.
+ *
+ * minLsn is used as output for LSN value that need to be compared with
+ * page LSN for decision in case of INDEX_LP_DEAD_OK_MIN_LSN as result value.
+ */
+static IndexLpDeadAllowedResult
+is_index_lp_dead_allowed(TupleDeadnessData *deadness,
+						 XLogRecPtr *minLsn)
+{
+	*minLsn = InvalidXLogRecPtr;
+	if (!deadness->all_dead)
+		return INDEX_LP_DEAD_NOT_OK;
+	/* It is always allowed on primary if ->all_dead. */
+	if (!RecoveryInProgress())
+		return INDEX_LP_DEAD_OK;
+
+	if (TransactionIdIsValid(deadness->latest_removed_xid)) {
+		/*
+		 * If latest_removed_xid is known - make sure its commit record
+		 * less than minRecoveryPoint to avoid MVCC failure after crash recovery.
+		 */
+		XLogRecPtr commitLSN
+				= TransactionIdGetCommitLSN(deadness->latest_removed_xid);
+
+		if (XLogNeedsFlush(commitLSN))
+		{
+			/* LSN not flushed - allow iff index LSN is greater. */
+			*minLsn = commitLSN;
+			return INDEX_LP_DEAD_OK_MIN_LSN;
+		}
+		else return INDEX_LP_DEAD_OK;
+	} else {
+		/*
+		 * Looks like it is tuple cleared by heap_page_prune_execute,
+		 * we must be sure if LSN of XLOG_HEAP2_PRUNE (or any subsequent
+		 * updates) less than minRecoveryPoint to avoid MVCC failure
+		 * after crash recovery.
+		 *
+		 * Another possible case is transaction rollback or tuple updated
+		 * by inserting transaction. Such tuple never will be seen, so it
+		 * is safe to set LP_DEAD. It is related to the logic of
+		 * HeapTupleHeaderAdvanceLatestRemovedXid.
+		 */
+		if (XLogNeedsFlush(deadness->page_lsn))
+		{
+			/* LSN not flushed - allow iff index LSN is greater. */
+			*minLsn = deadness->page_lsn;
+			return INDEX_LP_DEAD_OK_MIN_LSN;
+		}
+		else return INDEX_LP_DEAD_OK;
+	}
 }
 
 /* ----------------
@@ -574,12 +633,18 @@ index_getnext_tid(IndexScanDesc scan, ScanDirection direction)
 bool
 index_fetch_heap(IndexScanDesc scan, TupleTableSlot *slot)
 {
-	bool		all_dead = false;
-	bool		found;
+	TupleDeadnessData			deadness;
+	IndexLpDeadAllowedResult	kill_allowed;
+	bool						found;
+
+	deadness.all_dead = false;
+	deadness.latest_removed_xid = InvalidTransactionId;
+	deadness.page_lsn = InvalidXLogRecPtr;
 
 	found = table_index_fetch_tuple(scan->xs_heapfetch, &scan->xs_heaptid,
 									scan->xs_snapshot, slot,
-									&scan->xs_heap_continue, &all_dead);
+									&scan->xs_heap_continue,
+									&deadness);
 
 	if (found)
 		pgstat_count_heap_fetch(scan->indexRelation);
@@ -587,13 +652,12 @@ index_fetch_heap(IndexScanDesc scan, TupleTableSlot *slot)
 	/*
 	 * If we scanned a whole HOT chain and found only dead tuples, tell index
 	 * AM to kill its entry for that TID (this will take effect in the next
-	 * amgettuple call, in index_getnext_tid).  We do not do this when in
-	 * recovery because it may violate MVCC to do so.  See comments in
-	 * RelationGetIndexScan().
+	 * amgettuple call, in index_getnext_tid). We do this when in
+	 * recovery only in certain conditions because it may violate MVCC.
 	 */
-	if (!scan->xactStartedInRecovery)
-		scan->kill_prior_tuple = all_dead;
-
+	kill_allowed = is_index_lp_dead_allowed(&deadness,
+											&scan->kill_prior_tuple_min_lsn);
+	scan->kill_prior_tuple = (kill_allowed != INDEX_LP_DEAD_NOT_OK);
 	return found;
 }
 
@@ -667,6 +731,7 @@ index_getbitmap(IndexScanDesc scan, TIDBitmap *bitmap)
 
 	/* just make sure this is false... */
 	scan->kill_prior_tuple = false;
+	scan->kill_prior_tuple_min_lsn = InvalidXLogRecPtr;
 
 	/*
 	 * have the am's getbitmap proc do all the work.

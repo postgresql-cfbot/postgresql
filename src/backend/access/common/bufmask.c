@@ -128,3 +128,28 @@ mask_page_content(Page page)
 	memset(&((PageHeader) page)->pd_upper, MASK_MARKER,
 		   sizeof(uint16));
 }
+
+/*
+ * mask_lp_dead
+ *
+ * In some index AMs, line pointer flags can be modified without emitting any
+ * WAL record. Sometimes it is required to mask LP_DEAD flags set on primary to
+ * set own values on standby.
+ */
+void
+mask_lp_dead(Page page)
+{
+	OffsetNumber offnum,
+				 maxoff;
+
+	maxoff = PageGetMaxOffsetNumber(page);
+	for (offnum = FirstOffsetNumber;
+		 offnum <= maxoff;
+		 offnum = OffsetNumberNext(offnum));
+	{
+		ItemId		itemId = PageGetItemId(page, offnum);
+
+		if (ItemIdHasStorage(itemId) && ItemIdIsDead(itemId))
+			itemId->lp_flags = LP_NORMAL;
+	}
+}

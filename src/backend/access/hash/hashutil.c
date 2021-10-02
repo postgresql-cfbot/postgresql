@@ -14,6 +14,7 @@
  */
 #include "postgres.h"
 
+#include "access/bufmask.h"
 #include "access/hash.h"
 #include "access/reloptions.h"
 #include "access/relscan.h"
@@ -547,6 +548,7 @@ _hash_kill_items(IndexScanDesc scan)
 	int			numKilled = so->numKilled;
 	int			i;
 	bool		killedsomething = false;
+	bool		dirty = false;
 	bool		havePin = false;
 
 	Assert(so->numKilled > 0);
@@ -558,6 +560,15 @@ _hash_kill_items(IndexScanDesc scan)
 	 * pages.
 	 */
 	so->numKilled = 0;
+
+	/*
+	 * Standby was promoted after start of current transaction. It is not
+	 * required for correctness, but it is better to just skip everything.
+	 */
+	if (scan->xactStartedInRecovery && !RecoveryInProgress())
+	{
+		return;
+	}
 
 	blkno = so->currPos.currPage;
 	if (HashScanPosIsPinned(so->currPos))
@@ -576,6 +587,23 @@ _hash_kill_items(IndexScanDesc scan)
 	page = BufferGetPage(buf);
 	opaque = (HashPageOpaque) PageGetSpecialPointer(page);
 	maxoff = PageGetMaxOffsetNumber(page);
+
+	if (H_LP_SAFE_ON_STANDBY(opaque) && !scan->xactStartedInRecovery)
+	{
+		/* Seems like server was promoted some time ago,
+		 * clear the flag just for accuracy. */
+		opaque->hasho_flag &= ~LH_LP_SAFE_ON_STANDBY;
+		dirty = true;
+	}
+	else if (!H_LP_SAFE_ON_STANDBY(opaque) && scan->xactStartedInRecovery)
+	{
+		/* LP_DEAD flags were set by the primary. We need to clear them,
+		 * and allow standby to set own. */
+		mask_lp_flags(page);
+		pg_memory_barrier();
+		opaque->hasho_flag |= LH_LP_SAFE_ON_STANDBY;
+		dirty = true;
+	}
 
 	for (i = 0; i < numKilled; i++)
 	{
@@ -596,7 +624,7 @@ _hash_kill_items(IndexScanDesc scan)
 			{
 				/* found the item */
 				ItemIdMarkDead(iid);
-				killedsomething = true;
+				killedsomething = dirty = true;
 				break;			/* out of inner search loop */
 			}
 			offnum = OffsetNumberNext(offnum);
@@ -611,6 +639,9 @@ _hash_kill_items(IndexScanDesc scan)
 	if (killedsomething)
 	{
 		opaque->hasho_flag |= LH_PAGE_HAS_DEAD_TUPLES;
+	}
+	if (dirty)
+	{
 		MarkBufferDirtyHint(buf, true);
 	}
 

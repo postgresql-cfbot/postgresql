@@ -50,6 +50,7 @@
 #include "pqexpbuffer.h"
 #include "settings.h"
 #include "stringutils.h"
+#include "psqlscanslash.h"
 
 /*
  * Ancient versions of libedit provide filename_completion_function()
@@ -4983,15 +4984,24 @@ exec_query(const char *query)
  * Words are returned right to left, that is, previous_words[0] gets the last
  * word before point, previous_words[1] the next-to-last, etc.
  */
+static const PsqlScanCallbacks psqlscan_callbacks = {
+	NULL,
+};
 static char **
 get_previous_words(int point, char **buffer, int *nwords)
 {
 	char	  **previous_words;
 	char	   *buf;
 	char	   *outptr;
+	char	   *endptr;
 	int			words_found = 0;
 	int			i;
+	PsqlScanState scan_state;
+	PsqlScanToken tok;
+	PQExpBufferData query_buf;
 
+	initPQExpBuffer(&query_buf);
+	
 	/*
 	 * If we have anything in tab_completion_query_buf, paste it together with
 	 * rl_line_buffer to construct the full query.  Otherwise we can just use
@@ -5021,80 +5031,60 @@ get_previous_words(int point, char **buffer, int *nwords)
 	 */
 	previous_words = (char **) pg_malloc(point * sizeof(char *));
 	*buffer = outptr = (char *) pg_malloc(point * 2);
+	endptr = outptr + point * 2;	/* limit + 1 */
 
-	/*
-	 * First we look for a non-word char before the current point.  (This is
-	 * probably useless, if readline is on the same page as we are about what
-	 * is a word, but if so it's cheap.)
-	 */
-	for (i = point - 1; i >= 0; i--)
+	scan_state = psql_scan_create(&psqlscan_callbacks);
+	psql_scan_setup(scan_state, buf, strlen(buf),
+					pset.encoding, standard_strings());
+	if (psql_scan(scan_state, NULL,  NULL) != PSCAN_BACKSLASH)
 	{
-		if (strchr(WORD_BREAKS, buf[i]))
-			break;
-	}
-	point = i;
+		words_found = psql_scan_get_ntokens(scan_state);
 
-	/*
-	 * Now parse words, working backwards, until we hit start of line.  The
-	 * backwards scan has some interesting but intentional properties
-	 * concerning parenthesis handling.
-	 */
-	while (point >= 0)
+		if (words_found > 0 && !psql_scan_last_token_is_whitespace(scan_state))
+			words_found--;
+
+		tok = NULL;
+		for (i = words_found - 1 ; i >= 0 ; i--)
+		{
+			tok = psql_scan_get_next_token(scan_state, tok);
+			previous_words[i] = outptr;
+			outptr += psql_scan_get_token_string(scan_state, tok, outptr);
+		}
+		psql_scan_destroy(scan_state);
+	}
+	else
 	{
-		int			start,
-					end;
-		bool		inquotes = false;
-		int			parentheses = 0;
+		char *word = psql_scan_slash_command(scan_state);
+		words_found = 0;
 
-		/* now find the first non-space which then constitutes the end */
-		end = -1;
-		for (i = point; i >= 0; i--)
+		if (word && psql_scan_last_token_is_whitespace(scan_state))
 		{
-			if (!isspace((unsigned char) buf[i]))
+			int  n = point - 1;
+
+			previous_words[n--] = outptr;
+			*outptr++ = '\\';
+			strcpy(outptr, word);
+			free(word);
+			outptr += strlen(outptr) + 1;
+			words_found++;
+
+			while ((word = psql_scan_slash_option(scan_state, OT_NORMAL,
+												  NULL, false)) != NULL &&
+				   psql_scan_last_token_is_whitespace(scan_state))
 			{
-				end = i;
-				break;
+				previous_words[n--] = outptr;
+				strcpy(outptr, word);
+				free(word);
+				outptr += strlen(outptr) + 1;
+				words_found++;
 			}
+
+			memcpy(previous_words, previous_words + n + 1,
+				   words_found * sizeof(char *));
 		}
-		/* if no end found, we're done */
-		if (end < 0)
-			break;
-
-		/*
-		 * Otherwise we now look for the start.  The start is either the last
-		 * character before any word-break character going backwards from the
-		 * end, or it's simply character 0.  We also handle open quotes and
-		 * parentheses.
-		 */
-		for (start = end; start > 0; start--)
-		{
-			if (buf[start] == '"')
-				inquotes = !inquotes;
-			if (!inquotes)
-			{
-				if (buf[start] == ')')
-					parentheses++;
-				else if (buf[start] == '(')
-				{
-					if (--parentheses <= 0)
-						break;
-				}
-				else if (parentheses == 0 &&
-						 strchr(WORD_BREAKS, buf[start - 1]))
-					break;
-			}
-		}
-
-		/* Return the word located at start to end inclusive */
-		previous_words[words_found++] = outptr;
-		i = end - start + 1;
-		memcpy(outptr, &buf[start], i);
-		outptr += i;
-		*outptr++ = '\0';
-
-		/* Continue searching */
-		point = start - 1;
 	}
+
+	Assert (point == 0 || outptr < endptr);
 
 	/* Release parsing input workspace, if we made one above */
 	if (buf != rl_line_buffer)
@@ -5103,6 +5093,7 @@ get_previous_words(int point, char **buffer, int *nwords)
 	*nwords = words_found;
 	return previous_words;
 }
+
 
 /*
  * Look up the type for the GUC variable with the passed name.

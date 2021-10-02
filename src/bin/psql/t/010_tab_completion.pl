@@ -194,19 +194,27 @@ check_completion(
 
 clear_query();
 
+# check tab-completion for CONNECTION string with equal sign.
+check_completion(
+	"CREATE SUBSCRIPTION my_sub CONNECTION 'host=localhost port=5432 dbname=postgres' \t",
+	qr|PUBLICATION|,
+	"tab-completion for CONNECTION string with equal sign");
+
+clear_query();
+
 # COPY requires quoting
 # note: broken versions of libedit want to backslash the closing quote;
 # not much we can do about that
 check_completion(
-	"COPY foo FROM tmp_check/some\t",
+	"COPY foo FROM \'tmp_check/some\t",
 	qr|'tmp_check/somefile\\?' |,
 	"quoted filename completion with one possibility");
 
 clear_line();
 
 check_completion(
-	"COPY foo FROM tmp_check/af\t",
-	qr|'tmp_check/afile|,
+	"COPY foo FROM \'tmp_check/af\t",
+	qr|'tmp_check/af\a?ile|,	# \a is BEL
 	"quoted filename completion with multiple possibilities");
 
 # some versions of readline/libedit require two tabs here, some only need one

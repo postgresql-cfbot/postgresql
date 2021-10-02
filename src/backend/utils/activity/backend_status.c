@@ -35,7 +35,7 @@
  * includes autovacuum workers and background workers as well.
  * ----------
  */
-#define NumBackendStatSlots (MaxBackends + NUM_AUXPROCTYPES)
+#define NumBackendStatSlots (GetMaxBackends() + NUM_AUXPROCTYPES)
 
 
 /* ----------
@@ -251,7 +251,7 @@ pgstat_beinit(void)
 	/* Initialize MyBEEntry */
 	if (MyBackendId != InvalidBackendId)
 	{
-		Assert(MyBackendId >= 1 && MyBackendId <= MaxBackends);
+		Assert(MyBackendId >= 1 && MyBackendId <= GetMaxBackends());
 		MyBEEntry = &BackendStatusArray[MyBackendId - 1];
 	}
 	else
@@ -267,7 +267,7 @@ pgstat_beinit(void)
 		 * MaxBackends + AuxBackendType + 1 as the index of the slot for an
 		 * auxiliary process.
 		 */
-		MyBEEntry = &BackendStatusArray[MaxBackends + MyAuxProcType];
+		MyBEEntry = &BackendStatusArray[GetMaxBackends() + MyAuxProcType];
 	}
 
 	/* Set up a process-exit hook to clean up */
@@ -893,9 +893,10 @@ pgstat_get_backend_current_activity(int pid, bool checkUser)
 {
 	PgBackendStatus *beentry;
 	int			i;
+	int			max_backends = GetMaxBackends();
 
 	beentry = BackendStatusArray;
-	for (i = 1; i <= MaxBackends; i++)
+	for (i = 1; i <= max_backends; i++)
 	{
 		/*
 		 * Although we expect the target backend's entry to be stable, that
@@ -971,6 +972,7 @@ pgstat_get_crashed_backend_activity(int pid, char *buffer, int buflen)
 {
 	volatile PgBackendStatus *beentry;
 	int			i;
+	int			max_backends = GetMaxBackends();
 
 	beentry = BackendStatusArray;
 
@@ -981,7 +983,7 @@ pgstat_get_crashed_backend_activity(int pid, char *buffer, int buflen)
 	if (beentry == NULL || BackendActivityBuffer == NULL)
 		return NULL;
 
-	for (i = 1; i <= MaxBackends; i++)
+	for (i = 1; i <= max_backends; i++)
 	{
 		if (beentry->st_procpid == pid)
 		{

@@ -1013,10 +1013,8 @@ PostmasterMain(int argc, char *argv[])
 	LocalProcessControlFile(false);
 
 	/*
-	 * Register the apply launcher.  Since it registers a background worker,
-	 * it needs to be called before InitializeMaxBackends(), and it's probably
-	 * a good idea to call it before any modules had chance to take the
-	 * background worker slots.
+	 * Register the apply launcher.  It's probably a good idea to call it before
+	 * any modules had a chance to take the background worker slots.
 	 */
 	ApplyLauncherRegister();
 
@@ -1037,8 +1035,8 @@ PostmasterMain(int argc, char *argv[])
 #endif
 
 	/*
-	 * Now that loadable modules have had their chance to register background
-	 * workers, calculate MaxBackends.
+	 * Now that loadable modules have had their chance to alter any GUCs,
+	 * calculate MaxBackends.
 	 */
 	InitializeMaxBackends();
 
@@ -6228,7 +6226,7 @@ save_backend_variables(BackendParameters *param, Port *port,
 	param->query_id_enabled = query_id_enabled;
 	param->max_safe_fds = max_safe_fds;
 
-	param->MaxBackends = MaxBackends;
+	param->MaxBackends = GetMaxBackends();
 
 #ifdef WIN32
 	param->PostmasterHandle = PostmasterHandle;
@@ -6462,7 +6460,7 @@ restore_backend_variables(BackendParameters *param, Port *port)
 	query_id_enabled = param->query_id_enabled;
 	max_safe_fds = param->max_safe_fds;
 
-	MaxBackends = param->MaxBackends;
+	SetMaxBackends(param->MaxBackends);
 
 #ifdef WIN32
 	PostmasterHandle = param->PostmasterHandle;

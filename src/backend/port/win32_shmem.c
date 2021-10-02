@@ -390,6 +390,8 @@ retry:
 	/* Register on-exit routine to delete the new segment */
 	on_shmem_exit(pgwin32_SharedMemoryDelete, PointerGetDatum(hmap2));
 
+	ereport(LOG, (errmsg("Anonymous shared memory was allocated %s huge pages.", (flProtect & SEC_LARGE_PAGES)  ? "with" : "without")));
+
 	*shim = hdr;
 	return hdr;
 }

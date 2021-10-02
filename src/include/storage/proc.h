@@ -79,6 +79,10 @@ struct XidCache
  */
 #define INVALID_PGPROCNO		PG_INT32_MAX
 
+/* symbols for PGPROC.delayChkpt */
+#define DELAY_CHKPT_START		(1<<0) 
+#define DELAY_CHKPT_COMPLETE	(1<<1)
+
 typedef enum
 {
 	PROC_WAIT_STATUS_OK,
@@ -184,7 +188,8 @@ struct PGPROC
 	pg_atomic_uint64 waitStart; /* time at which wait for lock acquisition
 								 * started */
 
-	bool		delayChkpt;		/* true if this proc delays checkpoint start */
+	int			delayChkpt;		/* if this proc delays checkpoint start and/or
+								 * completion.  */
 
 	uint8		statusFlags;	/* this backend's status flags, see PROC_*
 								 * above. mirrored in

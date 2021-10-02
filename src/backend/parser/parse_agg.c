@@ -551,6 +551,14 @@ check_agglevels_and_constraints(ParseState *pstate, Node *expr)
 				err = _("grouping operations are not allowed in COPY FROM WHERE conditions");
 
 			break;
+		case EXPR_KIND_PUBLICATION_WHERE:
+#if 0
+			if (isAgg)
+				err = _("aggregate functions are not allowed in publication WHERE expressions");
+			else
+				err = _("grouping operations are not allowed in publication WHERE expressions");
+#endif
+			break;
 
 		case EXPR_KIND_CYCLE_MARK:
 			errkind = true;
@@ -942,6 +950,11 @@ transformWindowFuncCall(ParseState *pstate, WindowFunc *wfunc,
 			break;
 		case EXPR_KIND_CYCLE_MARK:
 			errkind = true;
+			break;
+		case EXPR_KIND_PUBLICATION_WHERE:
+#if 0
+			err = _("window functions are not allowed in publication WHERE expressions");
+#endif
 			break;
 
 			/*

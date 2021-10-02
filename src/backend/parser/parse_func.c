@@ -2655,6 +2655,12 @@ check_srf_call_placement(ParseState *pstate, Node *last_srf, int location)
 		case EXPR_KIND_CYCLE_MARK:
 			errkind = true;
 			break;
+		case EXPR_KIND_PUBLICATION_WHERE:
+			pstate->p_hasTargetSRFs = true;
+#if 0
+			err = _("set-returning functions are not allowed in publication WHERE expressions");
+#endif
+			break;
 
 			/*
 			 * There is intentionally no default: case here, so that the

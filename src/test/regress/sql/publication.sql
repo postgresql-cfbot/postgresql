@@ -100,6 +100,118 @@ UPDATE testpub_parted2 SET a = 2;
 DROP TABLE testpub_parted1, testpub_parted2;
 DROP PUBLICATION testpub_forparted, testpub_forparted1;
 
+-- Test row filter for publications
+CREATE TABLE testpub_rf_tbl1 (a integer, b text);
+CREATE TABLE testpub_rf_tbl2 (c text, d integer);
+CREATE TABLE testpub_rf_tbl3 (e integer);
+CREATE TABLE testpub_rf_tbl4 (g text);
+SET client_min_messages = 'ERROR';
+-- Firstly, test using the option publish="insert" because the row filter
+-- validation of referenced columns is less strict than for delete/update.
+CREATE PUBLICATION testpub5 FOR TABLE testpub_rf_tbl1, testpub_rf_tbl2 WHERE (c <> 'test' AND d < 5) WITH (publish = "insert");
+RESET client_min_messages;
+\dRp+ testpub5
+ALTER PUBLICATION testpub5 ADD TABLE testpub_rf_tbl3 WHERE (e > 1000 AND e < 2000);
+\dRp+ testpub5
+ALTER PUBLICATION testpub5 DROP TABLE testpub_rf_tbl2;
+\dRp+ testpub5
+-- remove testpub_rf_tbl1 and add testpub_rf_tbl3 again (another WHERE expression)
+ALTER PUBLICATION testpub5 SET TABLE testpub_rf_tbl3 WHERE (e > 300 AND e < 500);
+\dRp+ testpub5
+-- fail - functions disallowed
+ALTER PUBLICATION testpub5 ADD TABLE testpub_rf_tbl4 WHERE (length(g) < 6);
+-- fail - user-defined operators disallowed
+CREATE FUNCTION testpub_rf_func(integer, integer) RETURNS boolean AS $$ SELECT hashint4($1) > $2 $$ LANGUAGE SQL;
+CREATE OPERATOR =#> (PROCEDURE = testpub_rf_func, LEFTARG = integer, RIGHTARG = integer);
+CREATE PUBLICATION testpub6 FOR TABLE testpub_rf_tbl3 WHERE (e =#> 27);
+-- fail - row-filter expression is not simple
+CREATE PUBLICATION testpub7 FOR TABLE testpub_rf_tbl1 WHERE (a IN (SELECT generate_series(1,5)));
+-- fail - WHERE not allowed in DROP
+ALTER PUBLICATION testpub5 DROP TABLE testpub_rf_tbl3 WHERE (e < 27);
+
+DROP TABLE testpub_rf_tbl1;
+DROP TABLE testpub_rf_tbl2;
+DROP TABLE testpub_rf_tbl3;
+DROP TABLE testpub_rf_tbl4;
+DROP PUBLICATION testpub5;
+DROP OPERATOR =#>(integer, integer);
+DROP FUNCTION testpub_rf_func(integer, integer);
+
+-- ======================================================
+-- More row filter tests for validating column references
+CREATE TABLE rf_tbl_abcd_nopk(a int, b int, c int, d int);
+CREATE TABLE rf_tbl_abcd_pk(a int, b int, c int, d int, PRIMARY KEY(a,b));
+
+-- Case 1. REPLICA IDENTITY DEFAULT (means use primary key or nothing)
+-- 1a. REPLICA IDENTITY is DEFAULT and table has a PK.
+-- ok - "a" is a PK col
+SET client_min_messages = 'ERROR';
+CREATE PUBLICATION testpub6 FOR TABLE rf_tbl_abcd_pk WHERE (a > 99);
+RESET client_min_messages;
+DROP PUBLICATION testpub6;
+-- ok - "b" is a PK col
+SET client_min_messages = 'ERROR';
+CREATE PUBLICATION testpub6 FOR TABLE rf_tbl_abcd_pk WHERE (b > 99);
+RESET client_min_messages;
+DROP PUBLICATION testpub6;
+-- fail - "c" is not part of the PK
+CREATE PUBLICATION testpub6 FOR TABLE rf_tbl_abcd_pk WHERE (c > 99);
+-- fail - "d" is not part of the PK
+CREATE PUBLICATION testpub6 FOR TABLE rf_tbl_abcd_pk WHERE (d > 99);
+-- 1b. REPLICA IDENTITY is DEFAULT and table has no PK
+-- fail - "a" is not part of REPLICA IDENTITY
+CREATE PUBLICATION testpub6 FOR TABLE rf_tbl_abcd_nopk WHERE (a > 99);
+
+-- Case 2. REPLICA IDENTITY FULL
+ALTER TABLE rf_tbl_abcd_pk REPLICA IDENTITY FULL;
+ALTER TABLE rf_tbl_abcd_nopk REPLICA IDENTITY FULL;
+-- ok - "c" is in REPLICA IDENTITY now even though not in PK
+SET client_min_messages = 'ERROR';
+CREATE PUBLICATION testpub6 FOR TABLE rf_tbl_abcd_pk WHERE (c > 99);
+DROP PUBLICATION testpub6;
+RESET client_min_messages;
+-- ok - "a" is in REPLICA IDENTITY now
+SET client_min_messages = 'ERROR';
+CREATE PUBLICATION testpub6 FOR TABLE rf_tbl_abcd_nopk WHERE (a > 99);
+DROP PUBLICATION testpub6;
+RESET client_min_messages;
+
+-- Case 3. REPLICA IDENTITY NOTHING
+ALTER TABLE rf_tbl_abcd_pk REPLICA IDENTITY NOTHING;
+ALTER TABLE rf_tbl_abcd_nopk REPLICA IDENTITY NOTHING;
+-- fail - "a" is in PK but it is not part of REPLICA IDENTITY NOTHING
+CREATE PUBLICATION testpub6 FOR TABLE rf_tbl_abcd_pk WHERE (a > 99);
+-- fail - "c" is not in PK and not in REPLICA IDENTITY NOTHING
+CREATE PUBLICATION testpub6 FOR TABLE rf_tbl_abcd_pk WHERE (c > 99);
+-- fail - "a" is not in REPLICA IDENTITY NOTHING
+CREATE PUBLICATION testpub6 FOR TABLE rf_tbl_abcd_nopk WHERE (a > 99);
+
+-- Case 4. REPLICA IDENTITY INDEX
+ALTER TABLE rf_tbl_abcd_pk ALTER COLUMN c SET NOT NULL;
+CREATE UNIQUE INDEX idx_abcd_pk_c ON rf_tbl_abcd_pk(c);
+ALTER TABLE rf_tbl_abcd_pk REPLICA IDENTITY USING INDEX idx_abcd_pk_c;
+ALTER TABLE rf_tbl_abcd_nopk ALTER COLUMN c SET NOT NULL;
+CREATE UNIQUE INDEX idx_abcd_nopk_c ON rf_tbl_abcd_nopk(c);
+ALTER TABLE rf_tbl_abcd_nopk REPLICA IDENTITY USING INDEX idx_abcd_nopk_c;
+-- fail - "a" is in PK but it is not part of REPLICA IDENTITY INDEX
+CREATE PUBLICATION testpub6 FOR TABLE rf_tbl_abcd_pk WHERE (a > 99);
+-- ok - "c" is not in PK but it is part of REPLICA IDENTITY INDEX
+SET client_min_messages = 'ERROR';
+CREATE PUBLICATION testpub6 FOR TABLE rf_tbl_abcd_pk WHERE (c > 99);
+DROP PUBLICATION testpub6;
+RESET client_min_messages;
+-- fail - "a" is not in REPLICA IDENTITY INDEX
+CREATE PUBLICATION testpub6 FOR TABLE rf_tbl_abcd_nopk WHERE (a > 99);
+-- ok - "c" is part of REPLICA IDENTITY INDEX
+SET client_min_messages = 'ERROR';
+CREATE PUBLICATION testpub6 FOR TABLE rf_tbl_abcd_nopk WHERE (c > 99);
+DROP PUBLICATION testpub6;
+RESET client_min_messages;
+
+DROP TABLE rf_tbl_abcd_pk;
+DROP TABLE rf_tbl_abcd_nopk;
+-- ======================================================
+
 -- Test cache invalidation FOR ALL TABLES publication
 SET client_min_messages = 'ERROR';
 CREATE TABLE testpub_tbl4(a int);

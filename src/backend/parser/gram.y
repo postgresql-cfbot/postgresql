@@ -9637,10 +9637,11 @@ publication_table_list:
 				{ $$ = lappend($1, $3); }
 		;
 
-publication_table: relation_expr
+publication_table: relation_expr OptWhereClause
 		{
 			PublicationTable *n = makeNode(PublicationTable);
 			n->relation = $1;
+			n->whereClause = $2;
 			$$ = (Node *) n;
 		}
 	;
@@ -9681,7 +9682,7 @@ AlterPublicationStmt:
 					n->tableAction = DEFELEM_SET;
 					$$ = (Node *)n;
 				}
-			| ALTER PUBLICATION name DROP TABLE publication_table_list
+			| ALTER PUBLICATION name DROP TABLE relation_expr_list
 				{
 					AlterPublicationStmt *n = makeNode(AlterPublicationStmt);
 					n->pubname = $3;

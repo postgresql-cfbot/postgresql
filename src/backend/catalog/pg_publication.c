@@ -34,6 +34,9 @@
 #include "commands/publicationcmds.h"
 #include "funcapi.h"
 #include "miscadmin.h"
+#include "parser/parse_clause.h"
+#include "parser/parse_collate.h"
+#include "parser/parse_relation.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/catcache.h"
@@ -138,6 +141,86 @@ pg_relation_is_publishable(PG_FUNCTION_ARGS)
 }
 
 /*
+ * Walk the parse-tree to decide if the row-filter is valid or not.
+ */
+static void
+rowfilter_expr_checker(Publication *pub, ParseState *pstate, Node *rfnode, Relation rel)
+{
+	Oid	relid = RelationGetRelid(rel);
+	char *relname = RelationGetRelationName(rel);
+
+	/*
+	 * Rule:
+	 *
+	 * Walk the parse-tree and reject anything more complicated than a very
+	 * simple expression.
+	 */
+	rowfilter_validator(relname, rfnode);
+
+	/*
+	 * Rule:
+	 *
+	 * If the publish operation contains "delete" then only columns that
+	 * are allowed by the REPLICA IDENTITY rules are permitted to be used in
+	 * the row-filter WHERE clause.
+	 *
+	 * TODO - check later for publish "update" case.
+	 */
+	if (pub->pubactions.pubdelete)
+	{
+		char replica_identity = rel->rd_rel->relreplident;
+
+		if (replica_identity == REPLICA_IDENTITY_FULL)
+		{
+			/*
+			 * FULL means all cols are in the REPLICA IDENTITY, so all cols are
+			 * allowed in the row-filter too.
+			 */
+		}
+		else
+		{
+			List *rfcols;
+			ListCell *lc;
+			Bitmapset *bms_okcols;
+
+			/*
+			 * Find what are the cols that are part of the REPLICA IDENTITY.
+			 * Note that REPLICA IDENTIY DEFAULT means primary key or nothing.
+			 */
+			if (replica_identity == REPLICA_IDENTITY_DEFAULT)
+				bms_okcols = RelationGetIndexAttrBitmap(rel, INDEX_ATTR_BITMAP_PRIMARY_KEY);
+			else
+				bms_okcols = RelationGetIndexAttrBitmap(rel, INDEX_ATTR_BITMAP_IDENTITY_KEY);
+
+			/*
+			 * Find what cols are referenced in the row filter WHERE clause,
+			 * and validate that each of those referenced cols is allowed.
+			 */
+			rfcols = rowfilter_find_cols(rfnode, relid);
+			foreach(lc, rfcols)
+			{
+				RfCol *rfcol = lfirst(lc);
+				char *colname = rfcol->name;
+				int attnum = rfcol->attnum;
+
+				if (!bms_is_member(attnum - FirstLowInvalidHeapAttributeNumber, bms_okcols))
+				{
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_COLUMN_REFERENCE),
+							errmsg("cannot add relation \"%s\" to publication",
+								   relname),
+							errdetail("Row filter column \"%s\" is not part of the REPLICA IDENTITY",
+									  colname)));
+				}
+			}
+
+			bms_free(bms_okcols);
+			list_free_deep(rfcols);
+		}
+	}
+}
+
+/*
  * Gets the relations based on the publication partition option for a specified
  * relation.
  */
@@ -178,21 +261,26 @@ GetPubPartitionOptionRelations(List *result, PublicationPartOpt pub_partopt,
  * Insert new publication / relation mapping.
  */
 ObjectAddress
-publication_add_relation(Oid pubid, PublicationRelInfo *targetrel,
+publication_add_relation(Oid pubid, PublicationRelInfo *pri,
 						 bool if_not_exists)
 {
 	Relation	rel;
 	HeapTuple	tup;
 	Datum		values[Natts_pg_publication_rel];
 	bool		nulls[Natts_pg_publication_rel];
-	Oid			relid = RelationGetRelid(targetrel->relation);
+	Relation    targetrel = pri->relation;
+	Oid         relid;
 	Oid			prrelid;
 	Publication *pub = GetPublication(pubid);
 	ObjectAddress myself,
 				referenced;
+	ParseState *pstate;
+	ParseNamespaceItem *nsitem;
+	Node       *whereclause = NULL;
 	List	   *relids = NIL;
 
 	rel = table_open(PublicationRelRelationId, RowExclusiveLock);
+	relid = RelationGetRelid(targetrel);
 
 	/*
 	 * Check for duplicates. Note that this does not really prevent
@@ -210,10 +298,33 @@ publication_add_relation(Oid pubid, PublicationRelInfo *targetrel,
 		ereport(ERROR,
 				(errcode(ERRCODE_DUPLICATE_OBJECT),
 				 errmsg("relation \"%s\" is already member of publication \"%s\"",
-						RelationGetRelationName(targetrel->relation), pub->name)));
+						RelationGetRelationName(targetrel), pub->name)));
 	}
 
-	check_publication_add_relation(targetrel->relation);
+	check_publication_add_relation(targetrel);
+
+	if (pri->whereClause != NULL)
+	{
+		/* Set up a pstate to parse with */
+		pstate = make_parsestate(NULL);
+		pstate->p_sourcetext = nodeToString(pri->whereClause);
+
+		nsitem = addRangeTableEntryForRelation(pstate, targetrel,
+											   AccessShareLock,
+											   NULL, false, false);
+		addNSItemToQuery(pstate, nsitem, false, true, true);
+
+		whereclause = transformWhereClause(pstate,
+										   copyObject(pri->whereClause),
+										   EXPR_KIND_PUBLICATION_WHERE,
+										   "PUBLICATION WHERE");
+
+		/* Fix up collation information */
+		assign_expr_collations(pstate, whereclause);
+
+		/* Validate the row-filter. */
+		rowfilter_expr_checker(pub, pstate, whereclause, targetrel);
+	}
 
 	/* Form a tuple. */
 	memset(values, 0, sizeof(values));
@@ -226,6 +337,12 @@ publication_add_relation(Oid pubid, PublicationRelInfo *targetrel,
 		ObjectIdGetDatum(pubid);
 	values[Anum_pg_publication_rel_prrelid - 1] =
 		ObjectIdGetDatum(relid);
+
+	/* Add qualifications, if available */
+	if (whereclause)
+		values[Anum_pg_publication_rel_prqual - 1] = CStringGetTextDatum(nodeToString(whereclause));
+	else
+		nulls[Anum_pg_publication_rel_prqual - 1] = true;
 
 	tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
 
@@ -242,6 +359,14 @@ publication_add_relation(Oid pubid, PublicationRelInfo *targetrel,
 	/* Add dependency on the relation */
 	ObjectAddressSet(referenced, RelationRelationId, relid);
 	recordDependencyOn(&myself, &referenced, DEPENDENCY_AUTO);
+
+	/* Add dependency on the objects mentioned in the qualifications */
+	if (whereclause)
+	{
+		recordDependencyOnExpr(&myself, whereclause, pstate->p_rtable, DEPENDENCY_NORMAL);
+
+		free_parsestate(pstate);
+	}
 
 	/* Close the table. */
 	table_close(rel, RowExclusiveLock);

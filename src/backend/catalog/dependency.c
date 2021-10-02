@@ -132,6 +132,12 @@ typedef struct
 	int			subflags;		/* flags to pass down when recursing to obj */
 } ObjectAddressAndFlags;
 
+/* for rowfilter_walker */
+typedef struct
+{
+	char *relname;
+} rf_context;
+
 /* for find_expr_references_walker */
 typedef struct
 {
@@ -1551,6 +1557,126 @@ ReleaseDeletionLock(const ObjectAddress *object)
 		/* assume we should lock the whole object not a sub-object */
 		UnlockDatabaseObject(object->classId, object->objectId, 0,
 							 AccessExclusiveLock);
+}
+
+/*
+ * Walker checks that the row filter extression is legal. Allow only simple or
+ * or compound expressions like:
+ *
+ * "(Var Op Const)" or
+ * "(Var Op Const) Bool (Var Op Const)"
+ *
+ * Nothing more complicated is permitted. Specifically, no functions of any kind
+ * and no user-defined operators.
+ */
+static bool
+rowfilter_walker(Node *node, rf_context *context)
+{
+	char *forbidden = NULL;
+
+	if (node == NULL)
+		return false;
+
+	if (IsA(node, Var) || IsA(node, Const) || IsA(node, BoolExpr))
+	{
+		/* OK */
+	}
+	else if (IsA(node, OpExpr))
+	{
+		/* OK, except user-defined operators are not allowed. */
+		if (((OpExpr *)node)->opno >= FirstNormalObjectId)
+			forbidden = _("user-defined operators are not allowed");
+	}
+	else if (IsA(node, FuncExpr))
+	{
+		forbidden = _("function calls are not allowed");
+	}
+	else
+	{
+		elog(DEBUG1, "row filter contained something unexpected: %s", nodeToString(node));
+		forbidden = _("too complex");
+	}
+
+	if (forbidden)
+		ereport(ERROR,
+				(errmsg("invalid publication WHERE expression for relation \"%s\"",
+						context->relname),
+				 errdetail("%s", forbidden),
+				 errhint("only simple expressions using columns and constants are allowed")
+				));
+
+	return expression_tree_walker(node, rowfilter_walker, (void *)context);
+}
+
+/*
+ * Walk the parse-tree of this publication row filter expression and throw an
+ * error if it encounters anything not permitted or unexpected.
+ */
+void
+rowfilter_validator(char *relname, Node *expr)
+{
+	rf_context context = {0};
+
+	context.relname = relname;
+	rowfilter_walker(expr, &context);
+}
+
+/*
+ * Find all the columns referenced by the row-filter expression and return what
+ * is found as a list of RfCol. This list is used for row-filter validation.
+ */
+List *
+rowfilter_find_cols(Node *expr, Oid relId)
+{
+	find_expr_references_context context;
+	RangeTblEntry rte;
+	int ref;
+	List *rfcol_list = NIL;
+
+	context.addrs = new_object_addresses();
+
+	/* We gin up a rather bogus rangetable list to handle Vars */
+	MemSet(&rte, 0, sizeof(rte));
+	rte.type = T_RangeTblEntry;
+	rte.rtekind = RTE_RELATION;
+	rte.relid = relId;
+	rte.relkind = RELKIND_RELATION; /* no need for exactness here */
+	rte.rellockmode = AccessShareLock;
+
+	context.rtables = list_make1(list_make1(&rte));
+
+	/* Scan the expression tree for referenceable objects */
+	find_expr_references_walker(expr, &context);
+
+	/* Remove any duplicates */
+	eliminate_duplicate_dependencies(context.addrs);
+
+	/* Build/Return the list of columns referenced by this Row Filter */
+	for (ref = 0; ref < context.addrs->numrefs; ref++)
+	{
+		ObjectAddress *thisobj = context.addrs->refs + ref;
+
+		if (thisobj->classId == RelationRelationId)
+		{
+			RfCol *rfcol;
+
+			/*
+			 * The parser already took care of ensuring columns must be from
+			 * the correct table.
+			 */
+			Assert(thisobj->objectId == relId);
+
+			rfcol = palloc(sizeof(RfCol));
+			rfcol->name = get_attname(thisobj->objectId, thisobj->objectSubId, false);
+			rfcol->attnum = thisobj->objectSubId;
+
+			rfcol_list = lappend(rfcol_list, rfcol);
+		}
+	}
+
+	free_object_addresses(context.addrs);
+
+	return rfcol_list;
 }
 
 /*

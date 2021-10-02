@@ -19,6 +19,7 @@
 #include "replication/logicalproto.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
+#include "executor/executor.h"
 
 /*
  * Protocol message flags.
@@ -32,6 +33,8 @@
 static void logicalrep_write_attrs(StringInfo out, Relation rel);
 static void logicalrep_write_tuple(StringInfo out, Relation rel,
 								   HeapTuple tuple, bool binary);
+static void logicalrep_write_tuple_cached(StringInfo out, Relation rel,
+										  TupleTableSlot *slot, bool binary);
 
 static void logicalrep_read_attrs(StringInfo in, LogicalRepRelation *rel);
 static void logicalrep_read_tuple(StringInfo in, LogicalRepTupleData *tuple);
@@ -438,6 +441,38 @@ logicalrep_read_insert(StringInfo in, LogicalRepTupleData *newtup)
 }
 
 /*
+ * Write UPDATE to the output stream using cached virtual slots.
+ * Cached updates will have both old tuple and new tuple.
+ */
+void
+logicalrep_write_update_cached(StringInfo out, TransactionId xid, Relation rel,
+				TupleTableSlot *oldtuple, TupleTableSlot *newtuple, bool binary)
+{
+	pq_sendbyte(out, LOGICAL_REP_MSG_UPDATE);
+
+	Assert(rel->rd_rel->relreplident == REPLICA_IDENTITY_DEFAULT ||
+		   rel->rd_rel->relreplident == REPLICA_IDENTITY_FULL ||
+		   rel->rd_rel->relreplident == REPLICA_IDENTITY_INDEX);
+
+	/* transaction ID (if not valid, we're not streaming) */
+	if (TransactionIdIsValid(xid))
+		pq_sendint32(out, xid);
+
+	/* use Oid as relation identifier */
+	pq_sendint32(out, RelationGetRelid(rel));
+
+	if (rel->rd_rel->relreplident == REPLICA_IDENTITY_FULL)
+		pq_sendbyte(out, 'O');	/* old tuple follows */
+	else
+		pq_sendbyte(out, 'K');	/* old key follows */
+	logicalrep_write_tuple_cached(out, rel, oldtuple, binary);
+
+	pq_sendbyte(out, 'N');		/* new tuple follows */
+	logicalrep_write_tuple_cached(out, rel, newtuple, binary);
+}
+
+
+/*
  * Write UPDATE to the output stream.
  */
 void
@@ -744,6 +779,93 @@ logicalrep_read_typ(StringInfo in, LogicalRepTyp *ltyp)
 	ltyp->nspname = pstrdup(logicalrep_read_namespace(in));
 	ltyp->typname = pstrdup(pq_getmsgstring(in));
 }
+
+/*
+ * Write a tuple to the outputstream using cached slot, in the most efficient format possible.
+ */
+static void
+logicalrep_write_tuple_cached(StringInfo out, Relation rel, TupleTableSlot *slot, bool binary)
+{
+	TupleDesc	desc;
+	int			i;
+	uint16		nliveatts = 0;
+	HeapTuple	tuple = ExecFetchSlotHeapTuple(slot, false, NULL);
+
+	desc = RelationGetDescr(rel);
+
+	for (i = 0; i < desc->natts; i++)
+	{
+		if (TupleDescAttr(desc, i)->attisdropped || TupleDescAttr(desc, i)->attgenerated)
+			continue;
+		nliveatts++;
+	}
+	pq_sendint16(out, nliveatts);
+
+	/* try to allocate enough memory from the get-go */
+	enlargeStringInfo(out, tuple->t_len +
+					  nliveatts * (1 + 4));
+
+	/* Write the values */
+	for (i = 0; i < desc->natts; i++)
+	{
+		HeapTuple	typtup;
+		Form_pg_type typclass;
+		Form_pg_attribute att = TupleDescAttr(desc, i);
+
+		if (att->attisdropped || att->attgenerated)
+			continue;
+
+		if (slot->tts_isnull[i])
+		{
+			pq_sendbyte(out, LOGICALREP_COLUMN_NULL);
+			continue;
+		}
+
+		if (att->attlen == -1 && VARATT_IS_EXTERNAL_ONDISK(slot->tts_values[i]))
+		{
+			/*
+			 * Unchanged toasted datum.  (Note that we don't promise to detect
+			 * unchanged data in general; this is just a cheap check to avoid
+			 * sending large values unnecessarily.)
+			 */
+			pq_sendbyte(out, LOGICALREP_COLUMN_UNCHANGED);
+			continue;
+		}
+
+		typtup = SearchSysCache1(TYPEOID, ObjectIdGetDatum(att->atttypid));
+		if (!HeapTupleIsValid(typtup))
+			elog(ERROR, "cache lookup failed for type %u", att->atttypid);
+		typclass = (Form_pg_type) GETSTRUCT(typtup);
+
+		/*
+		 * Send in binary if requested and type has suitable send function.
+		 */
+		if (binary && OidIsValid(typclass->typsend))
+		{
+			bytea	   *outputbytes;
+			int			len;
+
+			pq_sendbyte(out, LOGICALREP_COLUMN_BINARY);
+			outputbytes = OidSendFunctionCall(typclass->typsend, slot->tts_values[i]);
+			len = VARSIZE(outputbytes) - VARHDRSZ;
+			pq_sendint(out, len, 4);	/* length */
+			pq_sendbytes(out, VARDATA(outputbytes), len);	/* data */
+			pfree(outputbytes);
+		}
+		else
+		{
+			char	   *outputstr;
+
+			pq_sendbyte(out, LOGICALREP_COLUMN_TEXT);
+			outputstr = OidOutputFunctionCall(typclass->typoutput, slot->tts_values[i]);
+			pq_sendcountedtext(out, outputstr, strlen(outputstr), false);
+			pfree(outputstr);
+		}
+
+		ReleaseSysCache(typtup);
+	}
+}
+
 
 /*
  * Write a tuple to the outputstream, in the most efficient format possible.

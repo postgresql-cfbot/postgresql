@@ -16,7 +16,6 @@
 
 #include "catalog/objectaddress.h"
 
-
 /*
  * Precise semantics of a dependency relationship are specified by the
  * DependencyType code (which is stored in a "char" field in pg_depend,
@@ -150,6 +149,14 @@ extern void performDeletion(const ObjectAddress *object,
 
 extern void performMultipleDeletions(const ObjectAddresses *objects,
 									 DropBehavior behavior, int flags);
+
+typedef struct RfCol {
+	char *name;
+	int attnum;
+} RfCol;
+extern List *rowfilter_find_cols(Node *expr, Oid relId);
+
+extern void rowfilter_validator(char *relname, Node *expr);
 
 extern void recordDependencyOnExpr(const ObjectAddress *depender,
 								   Node *expr, List *rtable,

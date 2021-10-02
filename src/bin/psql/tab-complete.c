@@ -1648,6 +1648,11 @@ psql_completion(const char *text, int start, int end)
 	/* ALTER PUBLICATION <name> SET */
 	else if (Matches("ALTER", "PUBLICATION", MatchAny, "SET"))
 		COMPLETE_WITH("(", "TABLE");
+	/* ALTER PUBLICATION <name> SET TABLE <name> */
+	/* ALTER PUBLICATION <name> ADD TABLE <name> */
+	else if (Matches("ALTER", "PUBLICATION", MatchAny, "SET", "TABLE", MatchAny)
+		|| Matches("ALTER", "PUBLICATION", MatchAny, "ADD", "TABLE", MatchAny))
+		COMPLETE_WITH("WHERE (");
 	/* ALTER PUBLICATION <name> SET ( */
 	else if (HeadMatches("ALTER", "PUBLICATION", MatchAny) && TailMatches("SET", "("))
 		COMPLETE_WITH("publish", "publish_via_partition_root");
@@ -2693,9 +2698,10 @@ psql_completion(const char *text, int start, int end)
 		COMPLETE_WITH("TABLE", "ALL TABLES");
 	else if (Matches("CREATE", "PUBLICATION", MatchAny, "FOR", "ALL"))
 		COMPLETE_WITH("TABLES");
-	else if (Matches("CREATE", "PUBLICATION", MatchAny, "FOR", "ALL", "TABLES")
-			 || Matches("CREATE", "PUBLICATION", MatchAny, "FOR", "TABLE", MatchAny))
+	else if (Matches("CREATE", "PUBLICATION", MatchAny, "FOR", "ALL", "TABLES"))
 		COMPLETE_WITH("WITH (");
+	else if (Matches("CREATE", "PUBLICATION", MatchAny, "FOR", "TABLE", MatchAny))
+		COMPLETE_WITH("WHERE (", "WITH (");
 	/* Complete "CREATE PUBLICATION <name> FOR TABLE" with "<table>, ..." */
 	else if (Matches("CREATE", "PUBLICATION", MatchAny, "FOR", "TABLE"))
 		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_tables, NULL);

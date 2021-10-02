@@ -136,6 +136,10 @@ CopyPlanFields(const Plan *from, Plan *newnode)
 	COPY_NODE_FIELD(initPlan);
 	COPY_BITMAPSET_FIELD(extParam);
 	COPY_BITMAPSET_FIELD(allParam);
+
+	COPY_NODE_FIELD(applied_stats);
+	COPY_NODE_FIELD(applied_clauses);
+	COPY_NODE_FIELD(applied_clauses_or);
 }
 
 /*

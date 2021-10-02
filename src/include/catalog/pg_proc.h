@@ -76,6 +76,9 @@ CATALOG(pg_proc,1255,ProcedureRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(81,Proce
 	/* see PROPARALLEL_ categories below */
 	char		proparallel BKI_DEFAULT(s);
 
+	/* maximum number of dynamic result sets */
+	int32		prodynres BKI_DEFAULT(0);
+
 	/* number of arguments */
 	/* Note: need not be given in pg_proc.dat; genbki.pl will compute it */
 	int16		pronargs;
@@ -211,7 +214,8 @@ extern ObjectAddress ProcedureCreate(const char *procedureName,
 									 Datum proconfig,
 									 Oid prosupport,
 									 float4 procost,
-									 float4 prorows);
+									 float4 prorows,
+									 int dynres);
 
 extern bool function_parse_error_transpose(const char *prosrc);
 

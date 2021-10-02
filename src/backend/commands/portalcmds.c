@@ -24,6 +24,7 @@
 #include <limits.h>
 
 #include "access/xact.h"
+#include "commands/defrem.h"
 #include "commands/portalcmds.h"
 #include "executor/executor.h"
 #include "executor/tstoreReceiver.h"
@@ -138,6 +139,28 @@ PerformCursorOpen(ParseState *pstate, DeclareCursorStmt *cstmt, ParamListInfo pa
 			portal->cursorOptions |= CURSOR_OPT_SCROLL;
 		else
 			portal->cursorOptions |= CURSOR_OPT_NO_SCROLL;
+	}
+
+	/*
+	 * For returnable cursors, remember the currently active procedure, as
+	 * well as the command ID, so we can sort by creation order later.  If
+	 * there is no procedure active, the cursor is marked as WITHOUT RETURN.
+	 * (This is not an error, per SQL standard, subclause "Effect of opening a
+	 * cursor".)
+	 */
+	if (portal->cursorOptions & CURSOR_OPT_RETURN)
+	{
+		Oid			procId = CurrentProcedure();
+
+		if (procId)
+		{
+			portal->procId = procId;
+			portal->createCid = GetCurrentCommandId(true);
+		}
+		else
+		{
+			portal->cursorOptions &= ~CURSOR_OPT_RETURN;
+		}
 	}
 
 	/*

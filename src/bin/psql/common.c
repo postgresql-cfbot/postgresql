@@ -1303,22 +1303,25 @@ SendQuery(const char *query)
 		if (pset.timing)
 			INSTR_TIME_SET_CURRENT(before);
 
-		results = PQexec(pset.db, query);
+		PQsendQuery(pset.db, query);
 
 		/* these operations are included in the timing result: */
 		ResetCancelConn();
-		OK = ProcessResult(&results);
-
-		if (pset.timing)
+		while ((results = PQgetResult(pset.db)))
 		{
-			INSTR_TIME_SET_CURRENT(after);
-			INSTR_TIME_SUBTRACT(after, before);
-			elapsed_msec = INSTR_TIME_GET_MILLISEC(after);
-		}
+			OK = ProcessResult(&results);
 
-		/* but printing results isn't: */
-		if (OK && results)
-			OK = PrintQueryResults(results);
+			if (pset.timing)
+			{
+				INSTR_TIME_SET_CURRENT(after);
+				INSTR_TIME_SUBTRACT(after, before);
+				elapsed_msec = INSTR_TIME_GET_MILLISEC(after);
+			}
+
+			/* but printing results isn't: */
+			if (OK && results)
+				OK = PrintQueryResults(results);
+		}
 	}
 	else
 	{

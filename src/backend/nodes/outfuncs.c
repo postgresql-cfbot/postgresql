@@ -341,6 +341,7 @@ _outPlanInfo(StringInfo str, const Plan *node)
 	WRITE_BOOL_FIELD(parallel_aware);
 	WRITE_BOOL_FIELD(parallel_safe);
 	WRITE_BOOL_FIELD(async_capable);
+	WRITE_BOOL_FIELD(parallel_safe_ignoring_params);
 	WRITE_INT_FIELD(plan_node_id);
 	WRITE_NODE_FIELD(targetlist);
 	WRITE_NODE_FIELD(qual);
@@ -1381,6 +1382,7 @@ _outSubPlan(StringInfo str, const SubPlan *node)
 	WRITE_BOOL_FIELD(useHashTable);
 	WRITE_BOOL_FIELD(unknownEqFalse);
 	WRITE_BOOL_FIELD(parallel_safe);
+	WRITE_BOOL_FIELD(parallel_safe_ignoring_params);
 	WRITE_NODE_FIELD(setParam);
 	WRITE_NODE_FIELD(parParam);
 	WRITE_NODE_FIELD(args);
@@ -1779,6 +1781,7 @@ _outPathInfo(StringInfo str, const Path *node)
 		outBitmapset(str, NULL);
 	WRITE_BOOL_FIELD(parallel_aware);
 	WRITE_BOOL_FIELD(parallel_safe);
+	WRITE_BOOL_FIELD(parallel_safe_ignoring_params);
 	WRITE_INT_FIELD(parallel_workers);
 	WRITE_FLOAT_FIELD(rows, "%.0f");
 	WRITE_FLOAT_FIELD(startup_cost, "%.2f");

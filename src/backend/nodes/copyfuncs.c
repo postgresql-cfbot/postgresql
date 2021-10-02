@@ -128,6 +128,7 @@ CopyPlanFields(const Plan *from, Plan *newnode)
 	COPY_SCALAR_FIELD(parallel_aware);
 	COPY_SCALAR_FIELD(parallel_safe);
 	COPY_SCALAR_FIELD(async_capable);
+	COPY_SCALAR_FIELD(parallel_safe_ignoring_params);
 	COPY_SCALAR_FIELD(plan_node_id);
 	COPY_NODE_FIELD(targetlist);
 	COPY_NODE_FIELD(qual);
@@ -1771,6 +1772,7 @@ _copySubPlan(const SubPlan *from)
 	COPY_SCALAR_FIELD(useHashTable);
 	COPY_SCALAR_FIELD(unknownEqFalse);
 	COPY_SCALAR_FIELD(parallel_safe);
+	COPY_SCALAR_FIELD(parallel_safe_ignoring_params);
 	COPY_NODE_FIELD(setParam);
 	COPY_NODE_FIELD(parParam);
 	COPY_NODE_FIELD(args);

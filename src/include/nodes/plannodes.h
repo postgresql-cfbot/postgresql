@@ -128,6 +128,7 @@ typedef struct Plan
 	 */
 	bool		parallel_aware; /* engage parallel-aware logic? */
 	bool		parallel_safe;	/* OK to use as part of parallel plan? */
+	bool		parallel_safe_ignoring_params;	/* OK to use as part of parallel plan if worker context provides params? */
 
 	/*
 	 * information needed for asynchronous execution

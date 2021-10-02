@@ -119,7 +119,7 @@ query_planner(PlannerInfo *root,
 				if (root->glob->parallelModeOK &&
 					force_parallel_mode != FORCE_PARALLEL_OFF)
 					final_rel->consider_parallel =
-						is_parallel_safe(root, parse->jointree->quals);
+						is_parallel_safe(root, parse->jointree->quals, &final_rel->consider_parallel_rechecking_params);
 
 				/*
 				 * The only path for it is a trivial Result path.  We cheat a

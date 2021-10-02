@@ -1621,6 +1621,7 @@ ReadCommonPlan(Plan *local_node)
 	READ_BOOL_FIELD(parallel_aware);
 	READ_BOOL_FIELD(parallel_safe);
 	READ_BOOL_FIELD(async_capable);
+	READ_BOOL_FIELD(parallel_safe_ignoring_params);
 	READ_INT_FIELD(plan_node_id);
 	READ_NODE_FIELD(targetlist);
 	READ_NODE_FIELD(qual);
@@ -2615,6 +2616,7 @@ _readSubPlan(void)
 	READ_BOOL_FIELD(useHashTable);
 	READ_BOOL_FIELD(unknownEqFalse);
 	READ_BOOL_FIELD(parallel_safe);
+	READ_BOOL_FIELD(parallel_safe_ignoring_params);
 	READ_NODE_FIELD(setParam);
 	READ_NODE_FIELD(parParam);
 	READ_NODE_FIELD(args);

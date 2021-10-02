@@ -57,6 +57,7 @@
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
 #include "miscadmin.h"
+#include "optimizer/clauses.h"
 #include "optimizer/cost.h"
 #include "optimizer/geqo.h"
 #include "optimizer/optimizer.h"
@@ -970,6 +971,16 @@ static const unit_conversion time_unit_conversion_table[] =
 
 static struct config_bool ConfigureNamesBool[] =
 {
+	{
+		{"enable_parallel_params_recheck", PGC_USERSET, QUERY_TUNING_METHOD,
+			gettext_noop("Enables the planner's rechecking of parallel safety in the presence of PARAM_EXEC params (for correlated subqueries)."),
+			NULL,
+			GUC_EXPLAIN
+		},
+		&enable_parallel_params_recheck,
+		true,
+		NULL, NULL, NULL
+	},
 	{
 		{"enable_seqscan", PGC_USERSET, QUERY_TUNING_METHOD,
 			gettext_noop("Enables the planner's use of sequential-scan plans."),

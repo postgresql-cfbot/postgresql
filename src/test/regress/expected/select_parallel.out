@@ -1194,4 +1194,26 @@ SELECT 1 FROM tenk1_vw_sec
                  Filter: (f1 < tenk1_vw_sec.unique1)
 (9 rows)
 
+-- test gather for subproblem's topmost scan/join rel
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM tenk1 a JOIN tenk1 b ON a.two = b.two
+  FULL JOIN tenk1 c ON b.two = c.two;
+                         QUERY PLAN                         
+------------------------------------------------------------
+ Aggregate
+   ->  Hash Full Join
+         Hash Cond: (b.two = c.two)
+         ->  Gather
+               Workers Planned: 4
+               ->  Parallel Hash Join
+                     Hash Cond: (a.two = b.two)
+                     ->  Parallel Seq Scan on tenk1 a
+                     ->  Parallel Hash
+                           ->  Parallel Seq Scan on tenk1 b
+         ->  Hash
+               ->  Gather
+                     Workers Planned: 4
+                     ->  Parallel Seq Scan on tenk1 c
+(14 rows)
+
 rollback;

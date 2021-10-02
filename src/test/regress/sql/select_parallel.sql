@@ -455,4 +455,9 @@ EXPLAIN (COSTS OFF)
 SELECT 1 FROM tenk1_vw_sec
   WHERE (SELECT sum(f1) FROM int4_tbl WHERE f1 < unique1) < 100;
 
+-- test gather for subproblem's topmost scan/join rel
+EXPLAIN (COSTS OFF)
+SELECT count(*) FROM tenk1 a JOIN tenk1 b ON a.two = b.two
+  FULL JOIN tenk1 c ON b.two = c.two;
+
 rollback;

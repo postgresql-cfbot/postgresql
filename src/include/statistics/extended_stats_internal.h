@@ -99,8 +99,8 @@ extern SortItem *build_sorted_items(StatsBuildData *data, int *nitems,
 									MultiSortSupport mss,
 									int numattrs, AttrNumber *attnums);
 
-extern bool examine_opclause_args(List *args, Node **exprp,
-								  Const **cstp, bool *expronleftp);
+extern bool examine_opclause_args(List *args, List **exprs, Const **cstp,
+								  bool *expronleftp, bool *issimplep);
 
 extern Selectivity mcv_combine_selectivities(Selectivity simple_sel,
 											 Selectivity mcv_sel,

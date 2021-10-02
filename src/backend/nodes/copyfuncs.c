@@ -1423,6 +1423,7 @@ _copyIntoClause(const IntoClause *from)
 	COPY_STRING_FIELD(tableSpaceName);
 	COPY_NODE_FIELD(viewQuery);
 	COPY_SCALAR_FIELD(skipData);
+	COPY_SCALAR_FIELD(ivm);
 
 	return newnode;
 }
@@ -2459,6 +2460,7 @@ _copyRangeTblEntry(const RangeTblEntry *from)
 	COPY_SCALAR_FIELD(relkind);
 	COPY_SCALAR_FIELD(rellockmode);
 	COPY_NODE_FIELD(tablesample);
+	COPY_SCALAR_FIELD(relisivm);
 	COPY_NODE_FIELD(subquery);
 	COPY_SCALAR_FIELD(security_barrier);
 	COPY_SCALAR_FIELD(jointype);

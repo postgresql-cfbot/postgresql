@@ -739,6 +739,22 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><option>--drop-cascade</option></term>
+      <listitem>
+       <para>
+        Use <literal>CASCADE</literal> to drop database objects.
+        This option is not valid unless <option>--clean</option> is also specified.
+       </para>
+
+       <para>
+        This option is ignored when emitting an archive (non-text) output
+        file.  For the archive formats, you can specify the option when you
+        call <command>pg_restore</command>.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>--enable-row-security</option></term>
       <listitem>
        <para>
@@ -796,6 +812,12 @@ PostgreSQL documentation
         Use conditional commands (i.e., add an <literal>IF EXISTS</literal>
         clause) when cleaning database objects.  This option is not valid
         unless <option>--clean</option> is also specified.
+       </para>
+
+       <para>
+        This option is ignored when emitting an archive (non-text) output
+        file.  For the archive formats, you can specify the option when you
+        call <command>pg_restore</command>.
        </para>
       </listitem>
      </varlistentry>

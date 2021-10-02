@@ -63,6 +63,7 @@ main(int argc, char **argv)
 	Archive    *AH;
 	char	   *inputFileSpec;
 	static int	disable_triggers = 0;
+	static int	drop_cascade = 0;
 	static int	enable_row_security = 0;
 	static int	if_exists = 0;
 	static int	no_data_for_failed_tables = 0;
@@ -109,6 +110,7 @@ main(int argc, char **argv)
 		 * the following options don't have an equivalent short option letter
 		 */
 		{"disable-triggers", no_argument, &disable_triggers, 1},
+		{"drop-cascade", no_argument, &drop_cascade, 1},
 		{"enable-row-security", no_argument, &enable_row_security, 1},
 		{"if-exists", no_argument, &if_exists, 1},
 		{"no-data-for-failed-tables", no_argument, &no_data_for_failed_tables, 1},
@@ -356,6 +358,13 @@ main(int argc, char **argv)
 	}
 
 	opts->disable_triggers = disable_triggers;
+
+	if (drop_cascade && !opts->dropSchema)
+	{
+		pg_log_error("option --drop-cascade requires option -c/--clean");
+		exit_nicely(1);
+	}
+	opts->drop_cascade = drop_cascade;
 	opts->enable_row_security = enable_row_security;
 	opts->noDataForFailedTables = no_data_for_failed_tables;
 	opts->noTablespace = outputNoTablespaces;
@@ -479,6 +488,7 @@ usage(const char *progname)
 	printf(_("  -x, --no-privileges          skip restoration of access privileges (grant/revoke)\n"));
 	printf(_("  -1, --single-transaction     restore as a single transaction\n"));
 	printf(_("  --disable-triggers           disable triggers during data-only restore\n"));
+	printf(_("  --drop-cascade               use CASCADE when dropping objects\n"));
 	printf(_("  --enable-row-security        enable row security\n"));
 	printf(_("  --if-exists                  use IF EXISTS when dropping objects\n"));
 	printf(_("  --no-comments                do not restore comments\n"));

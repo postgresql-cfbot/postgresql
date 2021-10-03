@@ -497,6 +497,7 @@ secure_open_gssapi(Port *port)
 	bool		complete_next = false;
 	OM_uint32	major,
 				minor;
+	gss_cred_id_t	proxy;
 
 	/*
 	 * Allocate subsidiary Port data for GSSAPI operations.
@@ -588,7 +589,8 @@ secure_open_gssapi(Port *port)
 									   GSS_C_NO_CREDENTIAL, &input,
 									   GSS_C_NO_CHANNEL_BINDINGS,
 									   &port->gss->name, NULL, &output, NULL,
-									   NULL, NULL);
+									   NULL, &proxy);
+
 		if (GSS_ERROR(major))
 		{
 			pg_GSS_error(_("could not accept GSSAPI security context"),
@@ -604,6 +606,9 @@ secure_open_gssapi(Port *port)
 			 */
 			complete_next = true;
 		}
+
+		if (proxy != NULL)
+			pg_store_proxy_credential(proxy);
 
 		/* Done handling the incoming packet, reset our buffer */
 		PqGSSRecvLength = 0;

@@ -92,3 +92,40 @@ pg_GSS_error(const char *errmsg,
 			(errmsg_internal("%s", errmsg),
 			 errdetail_internal("%s: %s", msg_major, msg_minor)));
 }
+
+void
+pg_store_proxy_credential(gss_cred_id_t cred)
+{
+	OM_uint32 major, minor;
+	gss_OID_set mech;
+	gss_cred_usage_t usage;
+	gss_key_value_element_desc cc;
+	gss_key_value_set_desc ccset;
+
+	cc.key = "ccache";
+	cc.value = "MEMORY:";
+	ccset.count = 1;
+	ccset.elements = &cc;
+
+	/* Make the proxy credential only available to current process */
+	major = gss_store_cred_into(&minor,
+		cred,
+		GSS_C_INITIATE, /* credential only used for starting libpq connection */
+		GSS_C_NULL_OID, /* store all */
+		true, /* overwrite */
+		true, /* make default */
+		&ccset,
+		&mech,
+		&usage);
+
+
+	if (major != GSS_S_COMPLETE)
+	{
+		pg_GSS_error("gss_store_cred", major, minor);
+	}
+
+	/* quite strange that gss_store_cred doesn't work with "KRB5CCNAME=MEMORY:",
+	 * we have to use gss_store_cred_into instead and set the env for later
+	 * gss_acquire_cred calls. */
+	putenv("KRB5CCNAME=MEMORY:");
+}

@@ -344,6 +344,10 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 		"Target-Session-Attrs", "", 15, /* sizeof("prefer-standby") = 15 */
 	offsetof(struct pg_conn, target_session_attrs)},
 
+	{"ldapuser", "PGLDAPUSER", NULL, NULL,
+		"LDAP-User", "", 20,
+	offsetof(struct pg_conn, pgldapuser)},
+
 	/* Terminating entry --- MUST BE LAST */
 	{NULL, NULL, NULL, NULL,
 	NULL, NULL, 0}
@@ -1435,6 +1439,8 @@ connectOptions2(PGconn *conn)
 		if (!conn->client_encoding_initial)
 			goto oom_error;
 	}
+
+	/* TODO: unset pgldapuser if it's the same as pguser, for compatibility? */
 
 	/*
 	 * Only if we get this far is it appropriate to try to connect. (We need a

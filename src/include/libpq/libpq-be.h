@@ -204,6 +204,11 @@ typedef struct Port
 #endif
 
 	/*
+	 * LDAP structures.
+	 */
+	const char *ldapuser;
+
+	/*
 	 * SSL structures.
 	 */
 	bool		ssl_in_use;

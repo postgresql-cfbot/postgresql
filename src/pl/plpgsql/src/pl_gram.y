@@ -3656,7 +3656,7 @@ check_sql_expr(const char *stmt, RawParseMode parseMode, int location)
 	error_context_stack = &syntax_errcontext;
 
 	oldCxt = MemoryContextSwitchTo(plpgsql_compile_tmp_cxt);
-	(void) raw_parser(stmt, parseMode);
+	(void) raw_parser(stmt, parseMode, 0);
 	MemoryContextSwitchTo(oldCxt);
 
 	/* Restore former ereport callback */

@@ -41,7 +41,8 @@ typedef enum
 	RAW_PARSE_PLPGSQL_EXPR,
 	RAW_PARSE_PLPGSQL_ASSIGN1,
 	RAW_PARSE_PLPGSQL_ASSIGN2,
-	RAW_PARSE_PLPGSQL_ASSIGN3
+	RAW_PARSE_PLPGSQL_ASSIGN3,
+	RAW_PARSE_SINGLE_QUERY
 } RawParseMode;
 
 /* Values for the backslash_quote GUC */
@@ -59,7 +60,7 @@ extern PGDLLIMPORT bool standard_conforming_strings;
 
 
 /* Primary entry point for the raw parsing functions */
-extern List *raw_parser(const char *str, RawParseMode mode);
+extern List *raw_parser(const char *str, RawParseMode mode, int offset);
 
 /* Utility functions exported by gram.y (perhaps these should be elsewhere) */
 extern List *SystemFuncName(char *name);

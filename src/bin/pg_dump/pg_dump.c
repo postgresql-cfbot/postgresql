@@ -3422,7 +3422,7 @@ getBlobs(Archive *fout)
 
 		buildACLQueries(acl_subquery, racl_subquery, init_acl_subquery,
 						init_racl_subquery, "l.lomacl", "l.lomowner",
-						"pip.initprivs", "'L'", dopt->binary_upgrade);
+						"pip.initprivs", "'L'", dopt->binary_upgrade, false);
 
 		appendPQExpBuffer(blobQry,
 						  "SELECT l.oid, (%s l.lomowner) AS rolname, "
@@ -4872,7 +4872,7 @@ getNamespaces(Archive *fout, int *numNamespaces)
 						"         n.nspowner::regrole, n.nspowner::regrole),"
 						"  format('=U/%s', n.nspowner::regrole)]::aclitem[] "
 						"ELSE pip.initprivs END",
-						"'n'", dopt->binary_upgrade);
+						"'n'", dopt->binary_upgrade, false);
 
 		appendPQExpBuffer(query, "SELECT n.tableoid, n.oid, n.nspname, "
 						  "n.nspowner, "
@@ -5123,7 +5123,7 @@ getTypes(Archive *fout, int *numTypes)
 
 		buildACLQueries(acl_subquery, racl_subquery, initacl_subquery,
 						initracl_subquery, "t.typacl", "t.typowner",
-						"pip.initprivs", "'T'", dopt->binary_upgrade);
+						"pip.initprivs", "'T'", dopt->binary_upgrade, false);
 
 		appendPQExpBuffer(query, "SELECT t.tableoid, t.oid, t.typname, "
 						  "t.typnamespace, "
@@ -5826,7 +5826,7 @@ getAggregates(Archive *fout, int *numAggs)
 
 		buildACLQueries(acl_subquery, racl_subquery, initacl_subquery,
 						initracl_subquery, "p.proacl", "p.proowner",
-						"pip.initprivs", "'f'", dopt->binary_upgrade);
+						"pip.initprivs", "'f'", dopt->binary_upgrade, false);
 
 		agg_check = (fout->remoteVersion >= 110000 ? "p.prokind = 'a'"
 					 : "p.proisagg");
@@ -6039,7 +6039,7 @@ getFuncs(Archive *fout, int *numFuncs)
 
 		buildACLQueries(acl_subquery, racl_subquery, initacl_subquery,
 						initracl_subquery, "p.proacl", "p.proowner",
-						"pip.initprivs", "'f'", dopt->binary_upgrade);
+						"pip.initprivs", "'f'", dopt->binary_upgrade, false);
 
 		not_agg_check = (fout->remoteVersion >= 110000 ? "p.prokind <> 'a'"
 						 : "NOT p.proisagg");
@@ -6338,11 +6338,11 @@ getTables(Archive *fout, int *numTables)
 						"pip.initprivs",
 						"CASE WHEN c.relkind = " CppAsString2(RELKIND_SEQUENCE)
 						" THEN 's' ELSE 'r' END::\"char\"",
-						dopt->binary_upgrade);
+						dopt->binary_upgrade, false);
 
 		buildACLQueries(attacl_subquery, attracl_subquery, attinitacl_subquery,
 						attinitracl_subquery, "at.attacl", "c.relowner",
-						"pip.initprivs", "'c'", dopt->binary_upgrade);
+						"pip.initprivs", "'c'", dopt->binary_upgrade, false);
 
 		appendPQExpBuffer(query,
 						  "SELECT c.tableoid, c.oid, c.relname, "
@@ -8317,7 +8317,7 @@ getProcLangs(Archive *fout, int *numProcLangs)
 
 		buildACLQueries(acl_subquery, racl_subquery, initacl_subquery,
 						initracl_subquery, "l.lanacl", "l.lanowner",
-						"pip.initprivs", "'l'", dopt->binary_upgrade);
+						"pip.initprivs", "'l'", dopt->binary_upgrade, false);
 
 		/* pg_language has a laninline column */
 		appendPQExpBuffer(query, "SELECT l.tableoid, l.oid, "
@@ -9549,7 +9549,7 @@ getForeignDataWrappers(Archive *fout, int *numForeignDataWrappers)
 
 		buildACLQueries(acl_subquery, racl_subquery, initacl_subquery,
 						initracl_subquery, "f.fdwacl", "f.fdwowner",
-						"pip.initprivs", "'F'", dopt->binary_upgrade);
+						"pip.initprivs", "'F'", dopt->binary_upgrade, false);
 
 		appendPQExpBuffer(query, "SELECT f.tableoid, f.oid, f.fdwname, "
 						  "(%s f.fdwowner) AS rolname, "
@@ -9716,7 +9716,7 @@ getForeignServers(Archive *fout, int *numForeignServers)
 
 		buildACLQueries(acl_subquery, racl_subquery, initacl_subquery,
 						initracl_subquery, "f.srvacl", "f.srvowner",
-						"pip.initprivs", "'S'", dopt->binary_upgrade);
+						"pip.initprivs", "'S'", dopt->binary_upgrade, false);
 
 		appendPQExpBuffer(query, "SELECT f.tableoid, f.oid, f.srvname, "
 						  "(%s f.srvowner) AS rolname, "
@@ -9864,7 +9864,7 @@ getDefaultACLs(Archive *fout, int *numDefaultACLs)
 						initracl_subquery, "defaclacl", "defaclrole",
 						"pip.initprivs",
 						"CASE WHEN defaclobjtype = 'S' THEN 's' ELSE defaclobjtype END::\"char\"",
-						dopt->binary_upgrade);
+						dopt->binary_upgrade, true);
 
 		appendPQExpBuffer(query, "SELECT d.oid, d.tableoid, "
 						  "(%s d.defaclrole) AS defaclrole, "
@@ -15713,7 +15713,8 @@ dumpTable(Archive *fout, const TableInfo *tbinfo)
 
 			buildACLQueries(acl_subquery, racl_subquery, initacl_subquery,
 							initracl_subquery, "at.attacl", "c.relowner",
-							"pip.initprivs", "'c'", dopt->binary_upgrade);
+							"pip.initprivs", "'c'", dopt->binary_upgrade,
+							false);
 
 			appendPQExpBuffer(query,
 							  "SELECT at.attname, "

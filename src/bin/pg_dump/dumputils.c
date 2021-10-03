@@ -726,8 +726,30 @@ buildACLQueries(PQExpBuffer acl_subquery, PQExpBuffer racl_subquery,
 				PQExpBuffer init_acl_subquery, PQExpBuffer init_racl_subquery,
 				const char *acl_column, const char *acl_owner,
 				const char *initprivs_expr,
-				const char *obj_kind, bool binary_upgrade)
+				const char *obj_kind, bool binary_upgrade, bool is_default_acl)
 {
+	PQExpBuffer	acldefault_expr = createPQExpBuffer();
+
+	/*
+	 * Build the expression for obtaining the default privileges.
+	 *
+	 * This is ordinarily just acldefault(), but for schema-local default ACLs
+	 * (i.e., entries in pg_default_acl with defaclnamespace != 0), the default
+	 * is actually an empty ACL.
+	 */
+	if (is_default_acl)
+		printfPQExpBuffer(acldefault_expr,
+						  "CASE WHEN defaclnamespace = 0 THEN "
+						  "pg_catalog.acldefault(%s,%s) "
+						  "ELSE NULL END",
+						  obj_kind,
+						  acl_owner);
+	else
+		printfPQExpBuffer(acldefault_expr,
+						  "pg_catalog.acldefault(%s,%s)",
+						  obj_kind,
+						  acl_owner);
+
 	/*
 	 * To get the delta from what the permissions were at creation time
 	 * (either initdb or CREATE EXTENSION) vs. what they are now, we have to
@@ -762,34 +784,30 @@ buildACLQueries(PQExpBuffer acl_subquery, PQExpBuffer racl_subquery,
 	printfPQExpBuffer(acl_subquery,
 					  "(SELECT pg_catalog.array_agg(acl ORDER BY row_n) FROM "
 					  "(SELECT acl, row_n FROM "
-					  "pg_catalog.unnest(coalesce(%s,pg_catalog.acldefault(%s,%s))) "
+					  "pg_catalog.unnest(coalesce(%s,%s)) "
 					  "WITH ORDINALITY AS perm(acl,row_n) "
 					  "WHERE NOT EXISTS ( "
 					  "SELECT 1 FROM "
-					  "pg_catalog.unnest(coalesce(%s,pg_catalog.acldefault(%s,%s))) "
+					  "pg_catalog.unnest(coalesce(%s,%s)) "
 					  "AS init(init_acl) WHERE acl = init_acl)) as foo)",
 					  acl_column,
-					  obj_kind,
-					  acl_owner,
+					  acldefault_expr->data,
 					  initprivs_expr,
-					  obj_kind,
-					  acl_owner);
+					  acldefault_expr->data);
 
 	printfPQExpBuffer(racl_subquery,
 					  "(SELECT pg_catalog.array_agg(acl ORDER BY row_n) FROM "
 					  "(SELECT acl, row_n FROM "
-					  "pg_catalog.unnest(coalesce(%s,pg_catalog.acldefault(%s,%s))) "
+					  "pg_catalog.unnest(coalesce(%s,%s)) "
 					  "WITH ORDINALITY AS initp(acl,row_n) "
 					  "WHERE NOT EXISTS ( "
 					  "SELECT 1 FROM "
-					  "pg_catalog.unnest(coalesce(%s,pg_catalog.acldefault(%s,%s))) "
+					  "pg_catalog.unnest(coalesce(%s,%s)) "
 					  "AS permp(orig_acl) WHERE acl = orig_acl)) as foo)",
 					  initprivs_expr,
-					  obj_kind,
-					  acl_owner,
+					  acldefault_expr->data,
 					  acl_column,
-					  obj_kind,
-					  acl_owner);
+					  acldefault_expr->data);
 
 	/*
 	 * In binary upgrade mode we don't run the extension script but instead
@@ -814,23 +832,21 @@ buildACLQueries(PQExpBuffer acl_subquery, PQExpBuffer racl_subquery,
 						  "WITH ORDINALITY AS initp(acl,row_n) "
 						  "WHERE NOT EXISTS ( "
 						  "SELECT 1 FROM "
-						  "pg_catalog.unnest(pg_catalog.acldefault(%s,%s)) "
+						  "pg_catalog.unnest(%s) "
 						  "AS privm(orig_acl) WHERE acl = orig_acl)) as foo) END",
 						  initprivs_expr,
-						  obj_kind,
-						  acl_owner);
+						  acldefault_expr->data);
 
 		printfPQExpBuffer(init_racl_subquery,
 						  "CASE WHEN privtype = 'e' THEN "
 						  "(SELECT pg_catalog.array_agg(acl) FROM "
 						  "(SELECT acl, row_n FROM "
-						  "pg_catalog.unnest(pg_catalog.acldefault(%s,%s)) "
+						  "pg_catalog.unnest(%s) "
 						  "WITH ORDINALITY AS privp(acl,row_n) "
 						  "WHERE NOT EXISTS ( "
 						  "SELECT 1 FROM pg_catalog.unnest(%s) "
 						  "AS initp(init_acl) WHERE acl = init_acl)) as foo) END",
-						  obj_kind,
-						  acl_owner,
+						  acldefault_expr->data,
 						  initprivs_expr);
 	}
 	else
@@ -838,6 +854,8 @@ buildACLQueries(PQExpBuffer acl_subquery, PQExpBuffer racl_subquery,
 		printfPQExpBuffer(init_acl_subquery, "NULL");
 		printfPQExpBuffer(init_racl_subquery, "NULL");
 	}
+
+	destroyPQExpBuffer(acldefault_expr);
 }
 
 /*

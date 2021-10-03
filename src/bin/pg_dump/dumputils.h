@@ -55,7 +55,8 @@ extern void buildACLQueries(PQExpBuffer acl_subquery, PQExpBuffer racl_subquery,
 							PQExpBuffer init_acl_subquery, PQExpBuffer init_racl_subquery,
 							const char *acl_column, const char *acl_owner,
 							const char *initprivs_expr,
-							const char *obj_kind, bool binary_upgrade);
+							const char *obj_kind, bool binary_upgrade,
+							bool is_default_acl);
 
 extern bool variable_is_guc_list_quote(const char *name);
 

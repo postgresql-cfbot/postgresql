@@ -1,0 +1,48 @@
+unused step name: s1_seq_restart
+Parsed test spec with 2 sessions
+
+starting permutation: s1_seq_next s2_seq_next s1_seq_next
+step s1_seq_next: select nextval('gtt_with_seq_c2_seq');
+nextval
+-------
+      1
+(1 row)
+
+step s2_seq_next: select nextval('gtt_with_seq_c2_seq');
+nextval
+-------
+      1
+(1 row)
+
+step s1_seq_next: select nextval('gtt_with_seq_c2_seq');
+nextval
+-------
+      2
+(1 row)
+
+
+starting permutation: s1_select s2_select s1_insert s2_insert s1_select s2_select
+step s1_select: select * from gtt_with_seq order by c1,c2;
+c1|c2
+--+--
+(0 rows)
+
+step s2_select: select * from gtt_with_seq order by c1,c2;
+c1|c2
+--+--
+(0 rows)
+
+step s1_insert: insert into gtt_with_seq values(1);
+step s2_insert: insert into gtt_with_seq values(10);
+step s1_select: select * from gtt_with_seq order by c1,c2;
+c1|c2
+--+--
+ 1| 3
+(1 row)
+
+step s2_select: select * from gtt_with_seq order by c1,c2;
+c1|c2
+--+--
+10| 1
+(1 row)
+

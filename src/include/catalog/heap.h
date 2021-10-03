@@ -85,7 +85,7 @@ extern Oid	heap_create_with_catalog(const char *relname,
 
 extern void heap_drop_with_catalog(Oid relid);
 
-extern void heap_truncate(List *relids);
+extern void heap_truncate(List *relids, bool is_global_temp);
 
 extern void heap_truncate_one_rel(Relation rel);
 

@@ -1,0 +1,506 @@
+--
+-- GLobal emparary table test case 
+--
+CREATE SCHEMA IF NOT EXISTS global_temporary_table;
+set search_path=global_temporary_table,sys;
+--
+--  test create global temp table basic syntax
+--
+create global temp table gtt_on_commit_default(a int primary key, b text);
+create global temp table gtt_on_commit_delete(a int primary key, b text) on commit delete rows;
+create global temp table gtt_on_commit_delete2(n int) with (on_commit_delete_rows='true');
+create global temp table gtt_on_commit_preserve(a int primary key, b text) on commit PRESERVE rows;
+create global temp table gtt_test_rename(a int primary key, b text);
+create global temp table gtt_test_createindex(c0 tsvector,c1 varchar(100), c2 int);
+--
+-- test DML of temp table
+--
+-- update empty temp table
+update gtt_on_commit_delete set b ='test';
+begin;
+insert into gtt_on_commit_delete values (1);
+update gtt_on_commit_delete set b ='test';
+-- should 1 row
+select * from gtt_on_commit_delete;
+ a |  b   
+---+------
+ 1 | test
+(1 row)
+
+commit;
+-- data delete after transaction commit
+-- should 0 row
+select * from gtt_on_commit_delete;
+ a | b 
+---+---
+(0 rows)
+
+-- update empty temp table
+update gtt_on_commit_preserve set b ='test';
+insert into gtt_on_commit_preserve values (2);
+begin;
+insert into gtt_on_commit_preserve values (3);
+update gtt_on_commit_preserve set b ='test';
+-- should 2 row
+select * from gtt_on_commit_preserve order by a;
+ a |  b   
+---+------
+ 2 | test
+ 3 | test
+(2 rows)
+
+delete from gtt_on_commit_preserve where a=2;
+commit;
+-- should 1 row
+select * from gtt_on_commit_preserve order by a;
+ a |  b   
+---+------
+ 3 | test
+(1 row)
+
+begin;
+insert into gtt_on_commit_preserve values (4);
+-- temp table support truncate;
+truncate gtt_on_commit_preserve;
+select * from gtt_on_commit_preserve order by a;
+ a | b 
+---+---
+(0 rows)
+
+rollback;
+-- should 1 row
+select * from gtt_on_commit_preserve order by a;
+ a |  b   
+---+------
+ 3 | test
+(1 row)
+
+--
+-- test unsupported global temp partition table
+--
+-- should fail
+CREATE global temp TABLE global_temp_partition_01 (
+id        bigserial NOT NULL,
+cre_time  timestamp without time zone,
+note      varchar(30)
+) PARTITION BY RANGE (cre_time)
+on commit delete rows;
+ERROR:  Only support global temporary regular table.
+CREATE TABLE regular_partition_01_2019 (
+id        bigserial NOT NULL,
+cre_time  timestamp without time zone,
+note      varchar(30)
+);
+CREATE TABLE regular_partition01 (
+id        bigserial NOT NULL,
+cre_time  timestamp without time zone,
+note      varchar(30)
+) PARTITION BY RANGE (cre_time);
+-- should fail
+CREATE global temp TABLE temp_partition01_2018
+PARTITION OF regular_partition01
+FOR VALUES FROM ('2018-01-01 00:00:00') TO ('2019-01-01 00:00:00');
+ERROR:  Not support global temporary partition table or inherit table.
+CREATE global temp TABLE global_temp_partition_01_2021 (
+id        bigserial NOT NULL,
+cre_time  timestamp without time zone,
+note      varchar(30)
+)on commit delete rows;
+-- should fail
+ALTER TABLE regular_partition01 ATTACH PARTITION global_temp_partition_01_2021 FOR VALUES FROM ('2021-01-01 00:00:00') TO ('2022-01-01 00:00:00');
+ERROR:  cannot attach a global temporary relation as partition of permanent relation "regular_partition01"
+--
+-- test unsupported inherit table
+--
+create table inherits_parent(
+a int not null,
+b varchar(32) not null default 'Got u',
+c int check (c > 0),
+d date not null
+);
+create global temp table inherits_parent_global_temp(
+a int not null,
+b varchar(32) not null default 'Got u',
+c int check (c > 0),
+d date not null
+)on commit delete rows;
+-- should fail
+create global temp table temp_inherit() inherits (inherits_parent);
+ERROR:  Not support global temporary partition table or inherit table.
+-- should fail
+create global temp table temp_inherit() inherits (inherits_parent_global_temp) on commit delete rows;
+ERROR:  Not support global temporary partition table or inherit table.
+--
+-- test DDL on global temp table
+--
+create index gtt_idx_1 on gtt_test_createindex using gin (c0);
+create index gtt_idx_2 on gtt_test_createindex using gist (c0);
+create index gtt_idx_3 on gtt_test_createindex using hash (c2);
+alter table gtt_test_rename rename to gtt_test_new;
+ALTER TABLE gtt_test_new ADD COLUMN address varchar(30);
+create index CONCURRENTLY idx_b on gtt_on_commit_default (b);
+cluster gtt_on_commit_default using gtt_on_commit_default_pkey;
+insert into gtt_on_commit_default values(1,'test');
+create global temp table gtt_test_alter1 (a int primary key,b text);
+alter table gtt_test_alter1 alter a type varchar;
+-- should fail
+alter table gtt_on_commit_default alter a type varchar;
+ERROR:  Only support alter global temporary table in an empty context.
+HINT:  Please create a new connection and execute ALTER TABLE on the new connection.
+-- should fail
+cluster gtt_on_commit_default using gtt_on_commit_default_pkey;
+ERROR:  not support cluster global temporary table yet
+-- should fail
+create table gtt_on_commit_default(a int primary key, b text) on commit delete rows;
+ERROR:  ON COMMIT can only be used on temporary tables
+-- should fail
+alter table gtt_on_commit_default SET TABLESPACE pg_default;
+ERROR:  not support alter table set tablespace on global temporary table
+-- should fail
+alter table gtt_on_commit_default set ( on_commit_delete_rows='true');
+ERROR:  table cannot add or modify on commit parameter by ALTER TABLE command.
+-- should fail
+create table gtt_on_commit_default(a int primary key, b text) with(on_commit_delete_rows=true);
+ERROR:  The parameter on_commit_delete_rows is exclusive to the global temporary table, which cannot be specified by a regular table
+-- should fail
+create or replace global temp view gtt_v as select 5;
+ERROR:  views cannot be global temp because they do not have storage
+create table foo();
+-- should fail
+alter table foo set (on_commit_delete_rows='true');
+ERROR:  table cannot add or modify on commit parameter by ALTER TABLE command.
+-- should fail
+create global temp table gtt_on_commit_preserve(a int primary key, b text) on commit drop;
+ERROR:  global temporary table not support on commit drop clause
+-- should fail
+create global temp table gtt4(a int primary key, b text) with(on_commit_delete_rows=true) on commit delete rows;
+ERROR:  could not create global temporary table with on commit and with clause at same time
+-- should fail
+CREATE MATERIALIZED VIEW mv_gtt_on_commit_default as select * from gtt_on_commit_default;
+ERROR:  materialized views must not use global temporary tables or views
+--
+-- test foreign key dependencies for global temp table
+--
+CREATE global temp TABLE temp_products (
+    product_no integer PRIMARY KEY,
+    name text,
+    price numeric
+);
+CREATE global temp TABLE products (
+    product_no integer PRIMARY KEY,
+    name text,
+    price numeric
+);
+CREATE global temp TABLE temp_orders (
+    order_id integer PRIMARY KEY,
+    product_no integer REFERENCES temp_products(product_no),
+    quantity integer
+)on commit delete rows;
+-- should fail
+CREATE TABLE orders (
+    order_id integer PRIMARY KEY,
+    product_no integer REFERENCES temp_products(product_no),
+    quantity integer
+);
+ERROR:  constraints on permanent tables may reference only permanent tables
+CREATE global temp TABLE temp_orders_2 (
+    order_id integer PRIMARY KEY,
+    product_no integer REFERENCES products(product_no),
+    quantity integer
+);
+--should fail
+insert into temp_orders values(1,1,1);
+ERROR:  insert or update on table "temp_orders" violates foreign key constraint "temp_orders_product_no_fkey"
+DETAIL:  Key (product_no)=(1) is not present in table "temp_products".
+insert into temp_products values(1,'test',1.0);
+begin;
+insert into temp_orders values(1,1,1);
+commit;
+-- should 1 row
+select count(*) from temp_products;
+ count 
+-------
+     1
+(1 row)
+
+-- should 0 row
+select count(*) from temp_orders;
+ count 
+-------
+     0
+(1 row)
+
+--
+-- test sequence on global temp table
+--
+create global temp table global_temp_with_serial (a SERIAL,b int);
+begin;
+set transaction_read_only = true;
+-- support insert data to temp table in read only transaction
+insert into global_temp_with_serial (b) values(1);
+select * from global_temp_with_serial;
+ a | b 
+---+---
+ 1 | 1
+(1 row)
+
+commit;
+create sequence seq_1;
+CREATE GLOBAL TEMPORARY TABLE temp_table_with_sequence_oncommit_delete(c1 int PRIMARY KEY) ON COMMIT DELETE ROWS;
+CREATE GLOBAL TEMPORARY TABLE temp_table_with_sequence_oncommit_preserve(c1 int PRIMARY KEY) ON COMMIT PRESERVE ROWS;
+alter table temp_table_with_sequence_oncommit_delete add c2 int default nextval('seq_1');
+alter table temp_table_with_sequence_oncommit_preserve add c2 int default nextval('seq_1');
+begin;
+insert into temp_table_with_sequence_oncommit_delete (c1)values(1);
+insert into temp_table_with_sequence_oncommit_preserve (c1)values(2);
+insert into temp_table_with_sequence_oncommit_delete (c1)values(3);
+insert into temp_table_with_sequence_oncommit_preserve (c1)values(4);
+-- should 2 row
+select * from temp_table_with_sequence_oncommit_delete order by c1;
+ c1 | c2 
+----+----
+  1 |  1
+  3 |  3
+(2 rows)
+
+commit;
+-- should 0 row
+select * from temp_table_with_sequence_oncommit_delete order by c1;
+ c1 | c2 
+----+----
+(0 rows)
+
+-- should 2 row
+select * from temp_table_with_sequence_oncommit_preserve order by c1;
+ c1 | c2 
+----+----
+  2 |  2
+  4 |  4
+(2 rows)
+
+--
+-- test statistics on temp table
+--
+create global temp table temp_table_test_statistics(a int);
+insert into temp_table_test_statistics values(generate_series(1,100000));
+create index idx_test_1 on temp_table_test_statistics (a);
+create index idx_test_2 on temp_table_test_statistics((a*10));
+explain (costs off) select * from temp_table_test_statistics where a=200000;
+                   QUERY PLAN                   
+------------------------------------------------
+ Bitmap Heap Scan on temp_table_test_statistics
+   Recheck Cond: (a = 200000)
+   ->  Bitmap Index Scan on idx_test_1
+         Index Cond: (a = 200000)
+(4 rows)
+
+explain (costs off) select * from temp_table_test_statistics where a*10=3;
+                   QUERY PLAN                   
+------------------------------------------------
+ Bitmap Heap Scan on temp_table_test_statistics
+   Recheck Cond: ((a * 10) = 3)
+   ->  Bitmap Index Scan on idx_test_2
+         Index Cond: ((a * 10) = 3)
+(4 rows)
+
+analyze temp_table_test_statistics;
+-- indexscan by idx_test_1
+explain (costs off) select * from temp_table_test_statistics where a=200000;
+                           QUERY PLAN                           
+----------------------------------------------------------------
+ Index Only Scan using idx_test_1 on temp_table_test_statistics
+   Index Cond: (a = 200000)
+(2 rows)
+
+-- indexscan by idx_test_2
+explain (costs off) select * from temp_table_test_statistics where a*10=3;
+                        QUERY PLAN                         
+-----------------------------------------------------------
+ Index Scan using idx_test_2 on temp_table_test_statistics
+   Index Cond: ((a * 10) = 3)
+(2 rows)
+
+--
+-- test temp table with toast table
+--
+create global temp table gtt_t_kenyon(id int,vname varchar(48),remark text) on commit PRESERVE rows;
+create index idx_gtt_t_kenyon_1 on gtt_t_kenyon(id);
+create index idx_gtt_t_kenyon_2 on gtt_t_kenyon(remark);
+insert into gtt_t_kenyon select generate_series(1,2000),repeat('kenyon here'||'^_^',2),repeat('^_^ Kenyon is not God',500);
+select relname, pg_relation_size(oid),pg_relation_size(reltoastrelid),pg_table_size(oid),pg_indexes_size(oid),pg_total_relation_size(oid) from pg_class where relname like '%t_kenyon%' order by relname;
+      relname       | pg_relation_size | pg_relation_size | pg_table_size | pg_indexes_size | pg_total_relation_size 
+--------------------+------------------+------------------+---------------+-----------------+------------------------
+ gtt_t_kenyon       |           450560 |                0 |        483328 |           98304 |                 581632
+ idx_gtt_t_kenyon_1 |            65536 |                  |         65536 |               0 |                  65536
+ idx_gtt_t_kenyon_2 |            32768 |                  |         32768 |               0 |                  32768
+(3 rows)
+
+insert into gtt_t_kenyon select generate_series(5,6),repeat('kenyon here'||'^_^',2),repeat('^_^ Kenyon is not God,Remark here!!',5500);
+select relname, pg_relation_size(oid),pg_relation_size(reltoastrelid),pg_table_size(oid),pg_indexes_size(oid),pg_total_relation_size(oid) from pg_class where relname like '%t_kenyon%' order by relname;
+      relname       | pg_relation_size | pg_relation_size | pg_table_size | pg_indexes_size | pg_total_relation_size 
+--------------------+------------------+------------------+---------------+-----------------+------------------------
+ gtt_t_kenyon       |           450560 |             8192 |        499712 |          106496 |                 606208
+ idx_gtt_t_kenyon_1 |            65536 |                  |         65536 |               0 |                  65536
+ idx_gtt_t_kenyon_2 |            40960 |                  |         40960 |               0 |                  40960
+(3 rows)
+
+begin;
+truncate gtt_t_kenyon;
+insert into gtt_t_kenyon select generate_series(1,10),repeat('kenyon here'||'^_^',2),repeat('^_^ Kenyon is not God',10);
+select relname, pg_relation_size(oid),pg_relation_size(reltoastrelid),pg_table_size(oid),pg_indexes_size(oid),pg_total_relation_size(oid) from pg_class where relname like '%t_kenyon%' order by relname;
+      relname       | pg_relation_size | pg_relation_size | pg_table_size | pg_indexes_size | pg_total_relation_size 
+--------------------+------------------+------------------+---------------+-----------------+------------------------
+ gtt_t_kenyon       |             8192 |                0 |         16384 |           32768 |                  49152
+ idx_gtt_t_kenyon_1 |            16384 |                  |         16384 |               0 |                  16384
+ idx_gtt_t_kenyon_2 |            16384 |                  |         16384 |               0 |                  16384
+(3 rows)
+
+rollback;
+select relname, pg_relation_size(oid),pg_relation_size(reltoastrelid),pg_table_size(oid),pg_indexes_size(oid),pg_total_relation_size(oid) from pg_class where relname like '%t_kenyon%' order by relname;
+      relname       | pg_relation_size | pg_relation_size | pg_table_size | pg_indexes_size | pg_total_relation_size 
+--------------------+------------------+------------------+---------------+-----------------+------------------------
+ gtt_t_kenyon       |           450560 |             8192 |        499712 |          106496 |                 606208
+ idx_gtt_t_kenyon_1 |            65536 |                  |         65536 |               0 |                  65536
+ idx_gtt_t_kenyon_2 |            40960 |                  |         40960 |               0 |                  40960
+(3 rows)
+
+--
+-- test global temp table system view
+--
+create global temp table temp_table_test_systemview(a int primary key, b text) on commit PRESERVE rows;
+-- should empty, storage not initialized
+select tablename from pg_gtt_attached_pids where tablename = 'temp_table_test_systemview';
+ tablename 
+-----------
+(0 rows)
+
+-- should empty, storage not initialized
+select count(*) from pg_list_gtt_relfrozenxids();
+ count 
+-------
+     2
+(1 row)
+
+insert into temp_table_test_systemview values(generate_series(1,10000),'test');
+select tablename from pg_gtt_attached_pids where tablename = 'temp_table_test_systemview';
+         tablename          
+----------------------------
+ temp_table_test_systemview
+(1 row)
+
+select count(*) from pg_list_gtt_relfrozenxids();
+ count 
+-------
+     2
+(1 row)
+
+select schemaname, tablename, relpages, reltuples, relallvisible from pg_gtt_relstats where tablename in('temp_table_test_systemview','temp_table_test_systemview_pkey') order by tablename;
+       schemaname       |            tablename            | relpages | reltuples | relallvisible 
+------------------------+---------------------------------+----------+-----------+---------------
+ global_temporary_table | temp_table_test_systemview      |        0 |         0 |             0
+ global_temporary_table | temp_table_test_systemview_pkey |        1 |         0 |             0
+(2 rows)
+
+-- should empty
+select * from pg_gtt_stats where tablename = 'temp_table_test_systemview' order by tablename;
+ schemaname | tablename | attname | inherited | null_frac | avg_width | n_distinct | most_common_vals | most_common_freqs | histogram_bounds | correlation | most_common_elems | most_common_elem_freqs | elem_count_histogram 
+------------+-----------+---------+-----------+-----------+-----------+------------+------------------+-------------------+------------------+-------------+-------------------+------------------------+----------------------
+(0 rows)
+
+analyze temp_table_test_systemview;
+select schemaname, tablename, relpages, reltuples, relallvisible from pg_gtt_relstats where tablename in('temp_table_test_systemview','temp_table_test_systemview_pkey') order by tablename;
+       schemaname       |            tablename            | relpages | reltuples | relallvisible 
+------------------------+---------------------------------+----------+-----------+---------------
+ global_temporary_table | temp_table_test_systemview      |       55 |     10000 |             0
+ global_temporary_table | temp_table_test_systemview_pkey |       30 |     10000 |             0
+(2 rows)
+
+-- get data after analyze;
+select * from pg_gtt_stats where tablename = 'temp_table_test_systemview' order by tablename;
+       schemaname       |         tablename          | attname | inherited | null_frac | avg_width | n_distinct | most_common_vals | most_common_freqs |                                                                                                                                                                                                                                                histogram_bounds                                                                                                                                                                                                                                                 | correlation | most_common_elems | most_common_elem_freqs | elem_count_histogram 
+------------------------+----------------------------+---------+-----------+-----------+-----------+------------+------------------+-------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+-------------+-------------------+------------------------+----------------------
+ global_temporary_table | temp_table_test_systemview | a       | f         |         0 |         4 |         -1 |                  |                   | {1,100,200,300,400,500,600,700,800,900,1000,1100,1200,1300,1400,1500,1600,1700,1800,1900,2000,2100,2200,2300,2400,2500,2600,2700,2800,2900,3000,3100,3200,3300,3400,3500,3600,3700,3800,3900,4000,4100,4200,4300,4400,4500,4600,4700,4800,4900,5000,5100,5200,5300,5400,5500,5600,5700,5800,5900,6000,6100,6200,6300,6400,6500,6600,6700,6800,6900,7000,7100,7200,7300,7400,7500,7600,7700,7800,7900,8000,8100,8200,8300,8400,8500,8600,8700,8800,8900,9000,9100,9200,9300,9400,9500,9600,9700,9800,9900,10000} |           1 |                   |                        | 
+ global_temporary_table | temp_table_test_systemview | b       | f         |         0 |         5 |          1 | {test}           | {1}               |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |           1 |                   |                        | 
+(2 rows)
+
+-- get all object info in current schema
+select relname ,relkind, relpersistence, reloptions from pg_class c, pg_namespace n where c.relnamespace = n.oid and n.nspname = 'global_temporary_table' order by relkind,relpersistence,relname;
+                     relname                     | relkind | relpersistence |          reloptions           
+-------------------------------------------------+---------+----------------+-------------------------------
+ global_temp_partition_01_2021_id_seq            | S       | g              | {on_commit_delete_rows=false}
+ global_temp_with_serial_a_seq                   | S       | g              | {on_commit_delete_rows=false}
+ regular_partition01_id_seq                      | S       | p              | 
+ regular_partition_01_2019_id_seq                | S       | p              | 
+ seq_1                                           | S       | p              | 
+ gtt_idx_1                                       | i       | g              | 
+ gtt_idx_2                                       | i       | g              | 
+ gtt_idx_3                                       | i       | g              | 
+ gtt_on_commit_default_pkey                      | i       | g              | 
+ gtt_on_commit_delete_pkey                       | i       | g              | 
+ gtt_on_commit_preserve_pkey                     | i       | g              | 
+ gtt_test_alter1_pkey                            | i       | g              | 
+ gtt_test_rename_pkey                            | i       | g              | 
+ idx_b                                           | i       | g              | 
+ idx_gtt_t_kenyon_1                              | i       | g              | 
+ idx_gtt_t_kenyon_2                              | i       | g              | 
+ idx_test_1                                      | i       | g              | 
+ idx_test_2                                      | i       | g              | 
+ products_pkey                                   | i       | g              | 
+ temp_orders_2_pkey                              | i       | g              | 
+ temp_orders_pkey                                | i       | g              | 
+ temp_products_pkey                              | i       | g              | 
+ temp_table_test_systemview_pkey                 | i       | g              | 
+ temp_table_with_sequence_oncommit_delete_pkey   | i       | g              | 
+ temp_table_with_sequence_oncommit_preserve_pkey | i       | g              | 
+ regular_partition01                             | p       | p              | 
+ global_temp_partition_01_2021                   | r       | g              | {on_commit_delete_rows=true}
+ global_temp_with_serial                         | r       | g              | {on_commit_delete_rows=false}
+ gtt_on_commit_default                           | r       | g              | {on_commit_delete_rows=false}
+ gtt_on_commit_delete                            | r       | g              | {on_commit_delete_rows=true}
+ gtt_on_commit_delete2                           | r       | g              | {on_commit_delete_rows=true}
+ gtt_on_commit_preserve                          | r       | g              | {on_commit_delete_rows=false}
+ gtt_t_kenyon                                    | r       | g              | {on_commit_delete_rows=false}
+ gtt_test_alter1                                 | r       | g              | {on_commit_delete_rows=false}
+ gtt_test_createindex                            | r       | g              | {on_commit_delete_rows=false}
+ gtt_test_new                                    | r       | g              | {on_commit_delete_rows=false}
+ inherits_parent_global_temp                     | r       | g              | {on_commit_delete_rows=true}
+ products                                        | r       | g              | {on_commit_delete_rows=false}
+ temp_orders                                     | r       | g              | {on_commit_delete_rows=true}
+ temp_orders_2                                   | r       | g              | {on_commit_delete_rows=false}
+ temp_products                                   | r       | g              | {on_commit_delete_rows=false}
+ temp_table_test_statistics                      | r       | g              | {on_commit_delete_rows=false}
+ temp_table_test_systemview                      | r       | g              | {on_commit_delete_rows=false}
+ temp_table_with_sequence_oncommit_delete        | r       | g              | {on_commit_delete_rows=true}
+ temp_table_with_sequence_oncommit_preserve      | r       | g              | {on_commit_delete_rows=false}
+ foo                                             | r       | p              | 
+ inherits_parent                                 | r       | p              | 
+ regular_partition_01_2019                       | r       | p              | 
+(48 rows)
+
+reset search_path;
+drop schema global_temporary_table cascade;
+NOTICE:  drop cascades to 24 other objects
+DETAIL:  drop cascades to table global_temporary_table.gtt_on_commit_default
+drop cascades to table global_temporary_table.gtt_on_commit_delete
+drop cascades to table global_temporary_table.gtt_on_commit_delete2
+drop cascades to table global_temporary_table.gtt_on_commit_preserve
+drop cascades to table global_temporary_table.gtt_test_new
+drop cascades to table global_temporary_table.gtt_test_createindex
+drop cascades to table global_temporary_table.regular_partition_01_2019
+drop cascades to table global_temporary_table.regular_partition01
+drop cascades to table global_temporary_table.global_temp_partition_01_2021
+drop cascades to table global_temporary_table.inherits_parent
+drop cascades to table global_temporary_table.inherits_parent_global_temp
+drop cascades to table global_temporary_table.gtt_test_alter1
+drop cascades to table global_temporary_table.foo
+drop cascades to table global_temporary_table.temp_products
+drop cascades to table global_temporary_table.products
+drop cascades to table global_temporary_table.temp_orders
+drop cascades to table global_temporary_table.temp_orders_2
+drop cascades to table global_temporary_table.global_temp_with_serial
+drop cascades to sequence global_temporary_table.seq_1
+drop cascades to table global_temporary_table.temp_table_with_sequence_oncommit_delete
+drop cascades to table global_temporary_table.temp_table_with_sequence_oncommit_preserve
+drop cascades to table global_temporary_table.temp_table_test_statistics
+drop cascades to table global_temporary_table.gtt_t_kenyon
+drop cascades to table global_temporary_table.temp_table_test_systemview

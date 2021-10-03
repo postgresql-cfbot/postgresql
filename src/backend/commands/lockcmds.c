@@ -51,11 +51,31 @@ LockTableCommand(LockStmt *lockstmt)
 		RangeVar   *rv = (RangeVar *) lfirst(p);
 		bool		recurse = rv->inh;
 		Oid			reloid;
+		LOCKMODE	lockmode = lockstmt->mode;
+		char		relpersistence;
 
-		reloid = RangeVarGetRelidExtended(rv, lockstmt->mode,
-										  lockstmt->nowait ? RVR_NOWAIT : 0,
+		reloid = RangeVarGetRelidExtended(rv, NoLock, 0,
 										  RangeVarCallbackForLockTable,
 										  (void *) &lockstmt->mode);
+
+		relpersistence = get_rel_persistence(reloid);
+		if (relpersistence != RELPERSISTENCE_GLOBAL_TEMP)
+		{
+			if (!lockstmt->nowait)
+				LockRelationOid(reloid, lockmode);
+			else if (!ConditionalLockRelationOid(reloid, lockmode))
+			{
+				/* try to throw error by name; relation could be deleted... */
+				char	   *relname = get_rel_name(reloid);
+
+				if (!relname)
+					return;		/* child concurrently dropped, just skip it */
+				ereport(ERROR,
+						(errcode(ERRCODE_LOCK_NOT_AVAILABLE),
+						 errmsg("could not obtain lock on relation \"%s\"",
+								relname)));
+			}
+		}
 
 		if (get_rel_relkind(reloid) == RELKIND_VIEW)
 			LockViewRecurse(reloid, lockstmt->mode, lockstmt->nowait, NIL);

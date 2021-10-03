@@ -28,6 +28,7 @@
 #include "access/transam.h"
 #include "access/xlog.h"
 #include "access/xloginsert.h"
+#include "catalog/storage_gtt.h"
 #include "miscadmin.h"
 #include "storage/indexfsm.h"
 #include "storage/lmgr.h"
@@ -676,6 +677,14 @@ _bt_getrootheight(Relation rel)
 	if (rel->rd_amcache == NULL)
 	{
 		Buffer		metabuf;
+
+		/*
+		 * If a global temporary table storage file is not initialized in the
+		 * current backend, its index does not have a root page, just returns 0.
+		 */
+		if (RELATION_IS_GLOBAL_TEMP(rel) &&
+			!gtt_storage_attached(RelationGetRelid(rel)))
+			return 0;
 
 		metabuf = _bt_getbuf(rel, BTREE_METAPAGE, BT_READ);
 		metad = _bt_getmeta(rel, metabuf);

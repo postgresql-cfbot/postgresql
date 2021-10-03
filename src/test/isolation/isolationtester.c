@@ -80,9 +80,30 @@ disconnect_atexit(void)
 {
 	int			i;
 
-	for (i = 0; i < nconns; i++)
+	for (i = 1; i < nconns; i++)
 		if (conns[i].conn)
 			PQfinish(conns[i].conn);
+
+	if (parseresult.destroy)
+	{
+		PGresult   *res;
+
+		res = PQexec(conns[0].conn, parseresult.destroy);
+		if (PQresultStatus(res) == PGRES_TUPLES_OK)
+		{
+			printResultSet(res);
+		}
+		else if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		{
+			fprintf(stderr, "destroy failed: %s",
+					PQerrorMessage(conns[0].conn));
+			/* don't exit on teardown failure */
+		}
+		PQclear(res);
+	}
+
+	if (conns[0].conn)
+		PQfinish(conns[0].conn);
 }
 
 int
@@ -213,6 +234,24 @@ main(int argc, char **argv)
 	}
 	PQclear(res);
 	termPQExpBuffer(&wait_query);
+
+	if (parseresult.initialize)
+	{
+		PGresult   *res;
+
+		res = PQexec(conns[0].conn, parseresult.initialize);
+		if (PQresultStatus(res) == PGRES_TUPLES_OK)
+		{
+			printResultSet(res);
+		}
+		else if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		{
+			fprintf(stderr, "initialize failed: %s",
+					PQerrorMessage(conns[0].conn));
+			/* don't exit on teardown failure */
+		}
+		PQclear(res);
+	}
 
 	/*
 	 * Run the permutations specified in the spec, or all if none were

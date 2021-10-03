@@ -2061,6 +2061,26 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-catalog-cache-prune-min-age" xreflabel="catalog_cache_prune_min_age">
+      <term><varname>catalog_cache_prune_min_age</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>catalog_cache_prune_min_age</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Setting <varname>catalog_cache_prune_min_age</varname> allows catalog
+        cache entries older than this seconds removed. A value
+        of <literal>-1</literal> disables this feature, effectively setting
+        the value to infinity.  The default is 600 seconds.  You can reduce
+        this value to reduce the amount of memory used by the catalog cache in
+        exchange of possible performance degradation or increase it to gain in
+        performance of intermittently executed queries in exchange of the
+        possible increase of memory usage.
+       </para>
+      </listitem>
+     </varlistentry>
+
      </variablelist>
      </sect2>
 

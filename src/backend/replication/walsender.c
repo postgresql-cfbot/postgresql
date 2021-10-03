@@ -170,6 +170,9 @@ static TimestampTz last_reply_timestamp = 0;
 /* Have we sent a heartbeat message asking for reply, since last reply? */
 static bool waiting_for_ping_response = false;
 
+/* Force keep alive when skipping transactions in synchronous replication mode */
+static bool force_keepalive_syncrep = false;
+
 /*
  * While streaming WAL in Copy mode, streamingDoneSending is set to true
  * after we have sent CopyDone. We should not send any more CopyData messages
@@ -247,7 +250,8 @@ static long WalSndComputeSleeptime(TimestampTz now);
 static void WalSndWait(uint32 socket_events, long timeout, uint32 wait_event);
 static void WalSndPrepareWrite(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid, bool last_write);
 static void WalSndWriteData(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid, bool last_write);
-static void WalSndUpdateProgress(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid);
+static void WalSndUpdateProgress(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid,
+								 bool send_keepalive);
 static XLogRecPtr WalSndWaitForWal(XLogRecPtr loc);
 static void LagTrackerWrite(XLogRecPtr lsn, TimestampTz local_flush_time);
 static TimeOffset LagTrackerRead(int head, XLogRecPtr lsn, TimestampTz now);
@@ -1346,10 +1350,17 @@ WalSndWriteData(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid,
  * Write the current position to the lag tracker (see XLogSendPhysical).
  */
 static void
-WalSndUpdateProgress(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid)
+WalSndUpdateProgress(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid,
+					 bool send_keepalive)
 {
 	static TimestampTz sendTime = 0;
 	TimestampTz now = GetCurrentTimestamp();
+
+	/*
+	 * When skipping empty transactions in synchronous replication, we need
+	 * to send a keep alive to keep the MyWalSnd locations updated.
+	 */
+	force_keepalive_syncrep = send_keepalive && SyncRepEnabled();
 
 	/*
 	 * Track lag no more than once per WALSND_LOGICAL_LAG_TRACK_INTERVAL_MS to
@@ -1444,10 +1455,13 @@ WalSndWaitForWal(XLogRecPtr loc)
 		 * otherwise idle, this keepalive will trigger a reply. Processing the
 		 * reply will update these MyWalSnd locations.
 		 */
-		if (MyWalSnd->flush < sentPtr &&
+		if (force_keepalive_syncrep ||
+			(MyWalSnd->flush < sentPtr &&
 			MyWalSnd->write < sentPtr &&
-			!waiting_for_ping_response)
+			!waiting_for_ping_response))
+		{
 			WalSndKeepalive(false);
+		}
 
 		/* check whether we're done */
 		if (loc <= RecentFlushPtr)

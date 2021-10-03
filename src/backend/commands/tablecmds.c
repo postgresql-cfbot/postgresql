@@ -17460,6 +17460,24 @@ ATExecAttachPartition(List **wqueue, Relation rel, PartitionCmd *cmd,
 
 	ObjectAddressSet(address, RelationRelationId, RelationGetRelid(attachrel));
 
+	/*
+	 * If the partition we just attached is partitioned itself, invalidate
+	 * relcache for all descendent partitions too to ensure that their
+	 * rd_partcheck expression trees are rebuilt; partitions already locked
+	 * at the beginning of this function.
+	 */
+	if (attachrel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+	{
+		ListCell *l;
+
+		foreach(l, attachrel_children)
+		{
+			Oid		partOid = lfirst_oid(l);
+
+			CacheInvalidateRelcacheByRelid(partOid);
+		}
+	}
+
 	/* keep our lock until commit */
 	table_close(attachrel, NoLock);
 
@@ -18150,6 +18168,26 @@ DetachPartitionFinalize(Relation rel, Relation partRel, bool concurrent,
 	 * included in its partition descriptor.
 	 */
 	CacheInvalidateRelcache(rel);
+
+	/*
+	 * If the partition we just detached is partitioned itself, invalidate
+	 * relcache for all descendent partitions too to ensure that their
+	 * rd_partcheck expression trees are rebuilt; must lock partitions
+	 * before doing so.
+	 */
+	if (partRel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+	{
+		List   *partRel_children =
+			find_all_inheritors(RelationGetRelid(partRel),
+								AccessExclusiveLock, NULL);
+
+		foreach(cell, partRel_children)
+		{
+			Oid		partOid = lfirst_oid(cell);
+
+			CacheInvalidateRelcacheByRelid(partOid);
+		}
+	}
 }
 
 /*

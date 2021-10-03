@@ -813,3 +813,48 @@ set default_with_oids to f;
 -- Should not allow to set it to true.
 set default_with_oids to t;
 ERROR:  tables declared WITH OIDS are not supported
+-- tests for output_special_values and special values
+set output_special_values to t;
+set log_min_duration_statement = 100;
+show log_min_duration_statement;
+ log_min_duration_statement 
+----------------------------
+ 100ms
+(1 row)
+
+set log_min_duration_statement = -1;
+show log_min_duration_statement;
+ log_min_duration_statement 
+----------------------------
+ disabled
+(1 row)
+
+set log_min_duration_statement = disabled;
+show log_min_duration_statement;
+ log_min_duration_statement 
+----------------------------
+ disabled
+(1 row)
+
+set output_special_values to f;
+set log_min_duration_statement = 100;
+show log_min_duration_statement;
+ log_min_duration_statement 
+----------------------------
+ 100ms
+(1 row)
+
+set log_min_duration_statement = -1;
+show log_min_duration_statement;
+ log_min_duration_statement 
+----------------------------
+ -1
+(1 row)
+
+set log_min_duration_statement = disabled;
+show log_min_duration_statement;
+ log_min_duration_statement 
+----------------------------
+ -1
+(1 row)
+

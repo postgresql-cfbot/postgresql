@@ -305,7 +305,6 @@ xcstart			\/\*{op_chars}*
 xcstop			\*+\/
 xcinside		[^*/]+
 
-digit			[0-9]
 ident_start		[A-Za-z\200-\377_]
 ident_cont		[A-Za-z\200-\377_0-9\$]
 
@@ -346,24 +345,41 @@ self			[,()\[\].;\:\+\-\*\/\%\^\<\>\=]
 op_chars		[\~\!\@\#\^\&\|\`\?\+\-\*\/\%\<\>\=]
 operator		{op_chars}+
 
-/* we no longer allow unary minus in numbers.
- * instead we pass it separately to parser. there it gets
- * coerced via doNegate() -- Leon aug 20 1999
+/*
+ * Numbers
  *
- * {decimalfail} is used because we would like "1..10" to lex as 1, dot_dot, 10.
+ * Unary minus is not part of a number here.  Instead we pass it separately to
+ * parser, and there it gets coerced via doNegate().
+ *
+ * {numericfail} is used because we would like "1..10" to lex as 1, dot_dot, 10.
  *
  * {realfail1} and {realfail2} are added to prevent the need for scanner
  * backup when the {real} rule fails to match completely.
  */
+decdigit		[0-9]
+hexdigit		[0-9A-Fa-f]
+octdigit		[0-7]
+bindigit		[0-1]
 
-integer			{digit}+
-decimal			(({digit}*\.{digit}+)|({digit}+\.{digit}*))
-decimalfail		{digit}+\.\.
-real			({integer}|{decimal})[Ee][-+]?{digit}+
-realfail1		({integer}|{decimal})[Ee]
-realfail2		({integer}|{decimal})[Ee][-+]
+decinteger		{decdigit}+
+hexinteger		0[xX]{hexdigit}+
+octinteger		0[oO]{octdigit}+
+bininteger		0[bB]{bindigit}+
 
-param			\${integer}
+hexfail			0[xX]
+octfail			0[oO]
+binfail			0[bB]
+
+integer			({decinteger}|{hexinteger}|{octinteger}|{bininteger})
+
+numeric			(({decinteger}\.{decinteger}?)|(\.{decinteger}))
+numericfail		{decdigit}+\.\.
+
+real			({decinteger}|{numeric})[Ee][-+]?{decdigit}+
+realfail1		({decinteger}|{numeric})[Ee]
+realfail2		({decinteger}|{numeric})[Ee][-+]
+
+param			\${decinteger}
 
 /* special characters for other dbms */
 /* we have to react differently in compat mode */
@@ -393,9 +409,6 @@ include_next	[iI][nN][cC][lL][uU][dD][eE]_[nN][eE][xX][tT]
 import			[iI][mM][pP][oO][rR][tT]
 undef			[uU][nN][dD][eE][fF]
 
-/* C version of hex number */
-xch				0[xX][0-9A-Fa-f]*
-
 ccomment		"//".*\n
 
 if				[iI][fF]
@@ -408,7 +421,7 @@ endif			[eE][nN][dD][iI][fF]
 struct			[sS][tT][rR][uU][cC][tT]
 
 exec_sql		{exec}{space}*{sql}{space}*
-ipdigit			({digit}|{digit}{digit}|{digit}{digit}{digit})
+ipdigit			({decdigit}|{decdigit}{decdigit}|{decdigit}{decdigit}{decdigit})
 ip				{ipdigit}\.{ipdigit}\.{ipdigit}\.{ipdigit}
 
 /* we might want to parse all cpp include files */
@@ -926,11 +939,11 @@ cppline			{space}*#([^i][A-Za-z]*|{if}|{ifdef}|{ifndef}|{import})((\/\*[^*/]*\*+
 {integer}		{
 					return process_integer_literal(yytext, &base_yylval);
 				}
-{decimal}		{
+{numeric}		{
 					base_yylval.str = mm_strdup(yytext);
 					return FCONST;
 				}
-{decimalfail}	{
+{numericfail}	{
 					/* throw back the .., and treat as integer */
 					yyless(yyleng - 2);
 					return process_integer_literal(yytext, &base_yylval);
@@ -942,7 +955,7 @@ cppline			{space}*#([^i][A-Za-z]*|{if}|{ifdef}|{ifndef}|{import})((\/\*[^*/]*\*+
 {realfail1}		{
 					/*
 					 * throw back the [Ee], and figure out whether what
-					 * remains is an {integer} or {decimal}.
+					 * remains is an {integer} or {numeric}.
 					 */
 					yyless(yyleng - 1);
 					return process_integer_literal(yytext, &base_yylval);
@@ -1009,7 +1022,7 @@ cppline			{space}*#([^i][A-Za-z]*|{if}|{ifdef}|{ifndef}|{import})((\/\*[^*/]*\*+
 							return S_ANYTHING;
 					 }
 <C>{ccomment}		{ ECHO; }
-<C>{xch}			{
+<C>{hexinteger}		{
 						char* endptr;
 
 						errno = 0;
@@ -1546,7 +1559,7 @@ addlitchar(unsigned char ychar)
 }
 
 /*
- * Process {integer}.  Note this will also do the right thing with {decimal},
+ * Process {integer}.  Note this will also do the right thing with {numeric},
  * ie digits and a decimal point.
  */
 static int
@@ -1556,7 +1569,14 @@ process_integer_literal(const char *token, YYSTYPE *lval)
 	char	   *endptr;
 
 	errno = 0;
-	val = strtoint(token, &endptr, 10);
+	if (token[0] == '0' && (token[1] == 'X' || token[1] == 'x'))
+		val = strtoint(token + 2, &endptr, 16);
+	else if (token[0] == '0' && (token[1] == 'O' || token[1] == 'o'))
+		val = strtoint(token + 2, &endptr, 8);
+	else if (token[0] == '0' && (token[1] == 'B' || token[1] == 'b'))
+		val = strtoint(token + 2, &endptr, 2);
+	else
+		val = strtoint(token, &endptr, 10);
 	if (*endptr != '\0' || errno == ERANGE)
 	{
 		/* integer too large (or contains decimal pt), treat it as a float */

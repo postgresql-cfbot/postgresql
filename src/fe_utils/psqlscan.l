@@ -200,7 +200,7 @@ quotecontinuefail	{whitespace}*"-"?
 xbstart			[bB]{quote}
 xbinside		[^']*
 
-/* Hexadecimal number */
+/* Hexadecimal byte string */
 xhstart			[xX]{quote}
 xhinside		[^']*
 
@@ -279,7 +279,6 @@ xcstart			\/\*{op_chars}*
 xcstop			\*+\/
 xcinside		[^*/]+
 
-digit			[0-9]
 ident_start		[A-Za-z\200-\377_]
 ident_cont		[A-Za-z\200-\377_0-9\$]
 
@@ -318,24 +317,41 @@ self			[,()\[\].;\:\+\-\*\/\%\^\<\>\=]
 op_chars		[\~\!\@\#\^\&\|\`\?\+\-\*\/\%\<\>\=]
 operator		{op_chars}+
 
-/* we no longer allow unary minus in numbers.
- * instead we pass it separately to parser. there it gets
- * coerced via doNegate() -- Leon aug 20 1999
+/*
+ * Numbers
  *
- * {decimalfail} is used because we would like "1..10" to lex as 1, dot_dot, 10.
+ * Unary minus is not part of a number here.  Instead we pass it separately to
+ * parser, and there it gets coerced via doNegate().
+ *
+ * {numericfail} is used because we would like "1..10" to lex as 1, dot_dot, 10.
  *
  * {realfail1} and {realfail2} are added to prevent the need for scanner
  * backup when the {real} rule fails to match completely.
  */
+decdigit		[0-9]
+hexdigit		[0-9A-Fa-f]
+octdigit		[0-7]
+bindigit		[0-1]
 
-integer			{digit}+
-decimal			(({digit}*\.{digit}+)|({digit}+\.{digit}*))
-decimalfail		{digit}+\.\.
-real			({integer}|{decimal})[Ee][-+]?{digit}+
-realfail1		({integer}|{decimal})[Ee]
-realfail2		({integer}|{decimal})[Ee][-+]
+decinteger		{decdigit}+
+hexinteger		0[xX]{hexdigit}+
+octinteger		0[oO]{octdigit}+
+bininteger		0[bB]{bindigit}+
 
-param			\${integer}
+hexfail			0[xX]
+octfail			0[oO]
+binfail			0[bB]
+
+integer			({decinteger}|{hexinteger}|{octinteger}|{bininteger})
+
+numeric			(({decinteger}\.{decinteger}?)|(\.{decinteger}))
+numericfail		{decdigit}+\.\.
+
+real			({decinteger}|{numeric})[Ee][-+]?{decdigit}+
+realfail1		({decinteger}|{numeric})[Ee]
+realfail2		({decinteger}|{numeric})[Ee][-+]
+
+param			\${decinteger}
 
 /* psql-specific: characters allowed in variable names */
 variable_char	[A-Za-z\200-\377_0-9]
@@ -842,10 +858,19 @@ other			.
 {integer}		{
 					ECHO;
 				}
-{decimal}		{
+{hexfail}		{
 					ECHO;
 				}
-{decimalfail}	{
+{octfail}		{
+					ECHO;
+				}
+{binfail}		{
+					ECHO;
+				}
+{numeric}		{
+					ECHO;
+				}
+{numericfail}	{
 					/* throw back the .., and treat as integer */
 					yyless(yyleng - 2);
 					ECHO;

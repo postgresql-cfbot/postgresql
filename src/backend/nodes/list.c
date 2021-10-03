@@ -1537,3 +1537,34 @@ list_oid_cmp(const ListCell *p1, const ListCell *p2)
 		return 1;
 	return 0;
 }
+
+/*
+ * Return true iff every entry in "members" list is also present
+ * in the "target" list.
+ */
+bool
+list_is_subset(const List *members, const List *target)
+{
+	const ListCell	*lc1, *lc2;
+
+	Assert(IsPointerList(members));
+	Assert(IsPointerList(target));
+	check_list_invariants(members);
+	check_list_invariants(target);
+
+	foreach(lc1, members)
+	{
+		bool found = false;
+		foreach(lc2, target)
+		{
+			if (equal(lfirst(lc1), lfirst(lc2)))
+			{
+				found = true;
+				break;
+			}
+		}
+		if (!found)
+			return false;
+	}
+	return true;
+}

@@ -293,6 +293,7 @@ struct PlannerInfo
 
 	List	   *query_pathkeys; /* desired pathkeys for query_planner() */
 
+	List	   *query_uniquekeys; /* unique keys required for the query */
 	List	   *group_pathkeys; /* groupClause pathkeys, if any */
 	List	   *window_pathkeys;	/* pathkeys of bottom window, if any */
 	List	   *distinct_pathkeys;	/* distinctClause pathkeys, if any */
@@ -695,6 +696,7 @@ typedef struct RelOptInfo
 	List	   *pathlist;		/* Path structures */
 	List	   *ppilist;		/* ParamPathInfos used in pathlist */
 	List	   *partial_pathlist;	/* partial Paths */
+	List       *unique_pathlist;    /* unique Paths */
 	struct Path *cheapest_startup_path;
 	struct Path *cheapest_total_path;
 	struct Path *cheapest_unique_path;
@@ -883,6 +885,7 @@ struct IndexOptInfo
 	bool		amsearchnulls;	/* can AM search for NULL/NOT NULL entries? */
 	bool		amhasgettuple;	/* does AM have amgettuple interface? */
 	bool		amhasgetbitmap; /* does AM have amgetbitmap interface? */
+	bool		amcanskip;		/* can AM skip duplicate values? */
 	bool		amcanparallel;	/* does AM support parallel scan? */
 	bool		amcanmarkpos;	/* does AM support mark/restore? */
 	/* Rather than include amapi.h here, we declare amcostestimate like this */
@@ -1195,6 +1198,8 @@ typedef struct Path
 
 	List	   *pathkeys;		/* sort ordering of path's output */
 	/* pathkeys is a List of PathKey nodes; see above */
+
+	List	   *uniquekeys;	/* the unique keys, or NIL if none */
 } Path;
 
 /* Macro for extracting a path's parameterization relids; beware double eval */
@@ -1237,6 +1242,9 @@ typedef struct Path
  * we need not recompute them when considering using the same index in a
  * bitmap index/heap scan (see BitmapHeapPath).  The costs of the IndexPath
  * itself represent the costs of an IndexScan or IndexOnlyScan plan type.
+ *
+ * 'indexskipprefix' represents the number of columns to consider for skip
+ * scans.
  *----------
  */
 typedef struct IndexPath
@@ -1249,6 +1257,7 @@ typedef struct IndexPath
 	ScanDirection indexscandir;
 	Cost		indextotalcost;
 	Selectivity indexselectivity;
+	int			indexskipprefix;
 } IndexPath;
 
 /*

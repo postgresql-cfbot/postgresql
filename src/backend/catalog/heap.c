@@ -91,7 +91,9 @@
 
 /* Potentially set by pg_upgrade_support functions */
 Oid			binary_upgrade_next_heap_pg_class_oid = InvalidOid;
+Oid			binary_upgrade_next_heap_pg_class_relfilenode = InvalidOid;
 Oid			binary_upgrade_next_toast_pg_class_oid = InvalidOid;
+Oid			binary_upgrade_next_toast_pg_class_relfilenode = InvalidOid;
 
 static void AddNewRelationTuple(Relation pg_class_desc,
 								Relation new_rel_desc,
@@ -286,7 +288,10 @@ SystemAttributeByName(const char *attname)
  *
  *		Note API change: the caller must now always provide the OID
  *		to use for the relation.  The relfilenode may (and, normally,
- *		should) be left unspecified.
+ *		should) be left unspecified unless explicitly set in binary-upgrade mode.
+ *
+ *		suppress_storage indicates whether or not to create the storage if the
+ *		caller passed a valid relfilenode.
  *
  *		rel->rd_rel is initialized by RelationBuildLocalRelation,
  *		and is mostly zeroes at return.
@@ -306,7 +311,8 @@ heap_create(const char *relname,
 			bool mapped_relation,
 			bool allow_system_table_mods,
 			TransactionId *relfrozenxid,
-			MultiXactId *relminmxid)
+			MultiXactId *relminmxid,
+			bool suppress_storage)
 {
 	bool		create_storage;
 	Relation	rel;
@@ -367,16 +373,22 @@ heap_create(const char *relname,
 	}
 
 	/*
-	 * Decide whether to create storage. If caller passed a valid relfilenode,
-	 * storage is already created, so don't do it here.  Also don't create it
-	 * for relkinds without physical storage.
+	 * Decide whether to create storage. If suppress_storage is true and a
+	 * valid relfilenode is passed, storage is already created, so don't do it
+	 * here. If suppress_storage is false and relfilenode is valid, create the
+	 * storage with the specified relfilenode. If relfilenode is unspecified
+	 * by the caller then create the storage with oid same as relid. Also,
+	 * don't create it for relkinds without physical storage.
 	 */
-	if (!RELKIND_HAS_STORAGE(relkind) || OidIsValid(relfilenode))
+	if (!RELKIND_HAS_STORAGE(relkind) || (OidIsValid(relfilenode) && suppress_storage))
 		create_storage = false;
 	else
 	{
 		create_storage = true;
-		relfilenode = relid;
+
+		/* Initialize relfilenode to relid */
+		if (!OidIsValid(relfilenode))
+			relfilenode = relid;
 	}
 
 	/*
@@ -1168,8 +1180,12 @@ heap_create_with_catalog(const char *relname,
 	Oid			existing_relid;
 	Oid			old_type_oid;
 	Oid			new_type_oid;
+
+	/* By default set to InvalidOid unless overridden by binary-upgrade */
+	Oid			relfilenode = InvalidOid;
 	TransactionId relfrozenxid;
 	MultiXactId relminmxid;
+	bool		suppress_storage = true;
 
 	pg_class_desc = table_open(RelationRelationId, RowExclusiveLock);
 
@@ -1230,7 +1246,7 @@ heap_create_with_catalog(const char *relname,
 	 */
 	if (!OidIsValid(relid))
 	{
-		/* Use binary-upgrade override for pg_class.oid/relfilenode? */
+		/* Use binary-upgrade override for pg_class.oid and relfilenode */
 		if (IsBinaryUpgrade &&
 			(relkind == RELKIND_RELATION || relkind == RELKIND_SEQUENCE ||
 			 relkind == RELKIND_VIEW || relkind == RELKIND_MATVIEW ||
@@ -1244,7 +1260,27 @@ heap_create_with_catalog(const char *relname,
 
 			relid = binary_upgrade_next_heap_pg_class_oid;
 			binary_upgrade_next_heap_pg_class_oid = InvalidOid;
+
+			/*
+			 * Override the relfilenode and set the suppress_storage flag to
+			 * false so that the storage gets created with the specified
+			 * relfilenode during heap_create().
+			 */
+			if (relkind == RELKIND_RELATION || relkind == RELKIND_SEQUENCE ||
+				relkind == RELKIND_MATVIEW)
+			{
+				if (!OidIsValid(binary_upgrade_next_heap_pg_class_relfilenode))
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							 errmsg("relfilenode value not set when in binary upgrade mode")));
+
+				relfilenode = binary_upgrade_next_heap_pg_class_relfilenode;
+				binary_upgrade_next_heap_pg_class_relfilenode = InvalidOid;
+
+				suppress_storage = false;
+			}
 		}
+
 		/* There might be no TOAST table, so we have to test for it. */
 		else if (IsBinaryUpgrade &&
 				 OidIsValid(binary_upgrade_next_toast_pg_class_oid) &&
@@ -1252,6 +1288,21 @@ heap_create_with_catalog(const char *relname,
 		{
 			relid = binary_upgrade_next_toast_pg_class_oid;
 			binary_upgrade_next_toast_pg_class_oid = InvalidOid;
+
+			/*
+			 * Override the toast relfilenode and set the suppress_storage
+			 * flag to false so that the storage gets created with the
+			 * specified relfilenode during heap_create().
+			 */
+			if (!OidIsValid(binary_upgrade_next_toast_pg_class_relfilenode))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("toast relfilenode value not set when in binary upgrade mode")));
+
+			relfilenode = binary_upgrade_next_toast_pg_class_relfilenode;
+			binary_upgrade_next_toast_pg_class_relfilenode = InvalidOid;
+
+			suppress_storage = false;
 		}
 		else
 			relid = GetNewRelFileNode(reltablespace, pg_class_desc,
@@ -1294,7 +1345,7 @@ heap_create_with_catalog(const char *relname,
 							   relnamespace,
 							   reltablespace,
 							   relid,
-							   InvalidOid,
+							   relfilenode,
 							   accessmtd,
 							   tupdesc,
 							   relkind,
@@ -1303,7 +1354,8 @@ heap_create_with_catalog(const char *relname,
 							   mapped_relation,
 							   allow_system_table_mods,
 							   &relfrozenxid,
-							   &relminmxid);
+							   &relminmxid,
+							   suppress_storage);
 
 	Assert(relid == RelationGetRelid(new_rel_desc));
 

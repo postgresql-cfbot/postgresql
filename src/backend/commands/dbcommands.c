@@ -117,7 +117,7 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	HeapTuple	tuple;
 	Datum		new_record[Natts_pg_database];
 	bool		new_record_nulls[Natts_pg_database];
-	Oid			dboid;
+	Oid			dboid = InvalidOid;
 	Oid			datdba;
 	ListCell   *option;
 	DefElem    *dtablespacename = NULL;
@@ -216,6 +216,27 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 					 errmsg("LOCATION is not supported anymore"),
 					 errhint("Consider using tablespaces instead."),
 					 parser_errposition(pstate, defel->location)));
+		}
+		else if (strcmp(defel->defname, "oid") == 0)
+		{
+			dboid = defGetInt32(defel);
+
+			/*
+			 * Throw an error if the user specified oid < FirstNormalObjectId for
+			 * creating the database. However, we need to allow creating database
+			 * with oid < FirstNormalObjectId for below cases:
+			 * 1. creating template0 with fixed oid during initdb
+			 * 2. creating databases with oids from the old cluster during binary
+			 *    upgrade.
+			 */
+			if ((dboid < FirstNormalObjectId) &&
+				(strcmp(dbname, "template0") != 0) &&
+				(!IsBinaryUpgrade))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE)),
+						errmsg("Invalid value for option \"%s\"", defel->defname),
+						errhint("Consider using a value greater than %u.",
+						(FirstNormalObjectId - 1)));
 		}
 		else
 			ereport(ERROR,
@@ -504,11 +525,15 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	 */
 	pg_database_rel = table_open(DatabaseRelationId, RowExclusiveLock);
 
-	do
+	/* Select an OID for the new database if is not explicitly configured. */
+	if (!OidIsValid(dboid))
 	{
-		dboid = GetNewOidWithIndex(pg_database_rel, DatabaseOidIndexId,
-								   Anum_pg_database_oid);
-	} while (check_db_file_conflict(dboid));
+		do
+		{
+			dboid = GetNewOidWithIndex(pg_database_rel, DatabaseOidIndexId,
+									   Anum_pg_database_oid);
+		} while (check_db_file_conflict(dboid));
+	}
 
 	/*
 	 * Insert a new tuple into pg_database.  This establishes our ownership of

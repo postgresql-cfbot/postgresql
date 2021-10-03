@@ -687,7 +687,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	NOT NOTHING NOTIFY NOTNULL NOWAIT NULL_P NULLIF
 	NULLS_P NUMERIC
 
-	OBJECT_P OF OFF OFFSET OIDS OLD ON ONLY OPERATOR OPTION OPTIONS OR
+	OBJECT_P OF OFF OFFSET OID OIDS OLD ON ONLY OPERATOR OPTION OPTIONS OR
 	ORDER ORDINALITY OTHERS OUT_P OUTER_P
 	OVER OVERLAPS OVERLAY OVERRIDING OWNED OWNER
 
@@ -10254,6 +10254,7 @@ createdb_opt_name:
 			| OWNER							{ $$ = pstrdup($1); }
 			| TABLESPACE					{ $$ = pstrdup($1); }
 			| TEMPLATE						{ $$ = pstrdup($1); }
+			| OID							{ $$ = pstrdup($1); }
 		;
 
 /*

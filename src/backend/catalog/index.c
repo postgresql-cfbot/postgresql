@@ -86,6 +86,7 @@
 
 /* Potentially set by pg_upgrade_support functions */
 Oid			binary_upgrade_next_index_pg_class_oid = InvalidOid;
+Oid			binary_upgrade_next_index_pg_class_relfilenode = InvalidOid;
 
 /*
  * Pointer-free representation of variables used when reindexing system
@@ -732,6 +733,7 @@ index_create(Relation heapRelation,
 	char		relkind;
 	TransactionId relfrozenxid;
 	MultiXactId relminmxid;
+	bool		suppress_storage = true;
 
 	/* constraint flags can only be set when a constraint is requested */
 	Assert((constr_flags == 0) ||
@@ -903,7 +905,7 @@ index_create(Relation heapRelation,
 	 */
 	if (!OidIsValid(indexRelationId))
 	{
-		/* Use binary-upgrade override for pg_class.oid/relfilenode? */
+		/* Use binary-upgrade override for pg_class.oid and relfilenode */
 		if (IsBinaryUpgrade)
 		{
 			if (!OidIsValid(binary_upgrade_next_index_pg_class_oid))
@@ -913,6 +915,21 @@ index_create(Relation heapRelation,
 
 			indexRelationId = binary_upgrade_next_index_pg_class_oid;
 			binary_upgrade_next_index_pg_class_oid = InvalidOid;
+
+			/*
+			 * Overide the relfilenode and set the suppress_storage to false
+			 * so that the storage gets created with the specified relfilenode
+			 * during heap_create().
+			 */
+			if ((relkind == RELKIND_INDEX) &&
+				(!OidIsValid(binary_upgrade_next_index_pg_class_relfilenode)))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("index relfilenode value not set when in binary upgrade mode")));
+			relFileNode = binary_upgrade_next_index_pg_class_relfilenode;
+			binary_upgrade_next_index_pg_class_relfilenode = InvalidOid;
+
+			suppress_storage = false;
 		}
 		else
 		{
@@ -939,7 +956,8 @@ index_create(Relation heapRelation,
 								mapped_relation,
 								allow_system_table_mods,
 								&relfrozenxid,
-								&relminmxid);
+								&relminmxid,
+								suppress_storage);
 
 	Assert(relfrozenxid == InvalidTransactionId);
 	Assert(relminmxid == InvalidMultiXactId);

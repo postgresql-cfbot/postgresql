@@ -1836,15 +1836,12 @@ static void
 make_template0(FILE *cmdfd)
 {
 	const char *const *line;
-	static const char *const template0_setup[] = {
-		"CREATE DATABASE template0 IS_TEMPLATE = true ALLOW_CONNECTIONS = false;\n\n",
 
-		/*
-		 * We use the OID of template0 to determine datlastsysoid
-		 */
-		"UPDATE pg_database SET datlastsysoid = "
-		"    (SELECT oid FROM pg_database "
-		"    WHERE datname = 'template0');\n\n",
+	/*
+	 * Create template0 database with fixed OID 2
+	 */
+	static const char *const template0_setup[] = {
+		"CREATE DATABASE template0 IS_TEMPLATE = true ALLOW_CONNECTIONS = false OID 2;\n\n",
 
 		/*
 		 * Explicitly revoke public create-schema and create-temp-table
@@ -1877,6 +1874,14 @@ make_postgres(FILE *cmdfd)
 	static const char *const postgres_setup[] = {
 		"CREATE DATABASE postgres;\n\n",
 		"COMMENT ON DATABASE postgres IS 'default administrative connection database';\n\n",
+
+		/*
+		 * We use the OID of postgres to determine datlastsysoid
+		 */
+		"UPDATE pg_database SET datlastsysoid = "
+		"    (SELECT oid FROM pg_database "
+		"    WHERE datname = 'postgres');\n\n",
+
 		NULL
 	};
 

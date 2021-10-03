@@ -8,6 +8,7 @@ use PostgresNode;
 use TestLib;
 use Test::More;
 use Config;
+use Time::HiRes qw(time);
 
 # start a pgbench specific server
 my $node = PostgresNode->new('main');
@@ -54,12 +55,14 @@ sub pgbench
 
 	push @cmd, @args;
 
+	my $start = time();
 	$node->command_checks_all(\@cmd, $stat, $out, $err, $name);
+	my $stop = time();
 
 	# cleanup?
 	#unlink @filenames or die "cannot unlink files (@filenames): $!";
 
-	return;
+	return $stop - $start;
 }
 
 # tablespace for testing, because partitioned tables cannot use pg_default
@@ -1187,7 +1190,7 @@ sub check_pgbench_logs
 
 	# $prefix is simple enough, thus does not need escaping
 	my @logs = list_files($dir, qr{^$prefix\..*$});
-	ok(@logs == $nb, "number of log files");
+	ok(@logs == $nb, "number of log files (@logs)");
 	ok(grep(/\/$prefix\.\d+(\.\d+)?$/, @logs) == $nb, "file name format");
 
 	my $log_number = 0;
@@ -1219,7 +1222,58 @@ sub check_pgbench_logs
 
 my $bdir = $node->basedir;
 
-# Run with sampling rate, 2 clients with 50 transactions each.
+TODO: {
+	#
+	# Test time-sensitive features on a light read-only transaction
+	#
+	local $TODO = "possibly unreliable on slow hosts or unlucky runs";
+
+	# Run with sampling rate, 2 clients with 50 transactions each.
+	#
+	#   -T: bench duration, 2 seconds to exercise progress & logs
+	#   -P: progress report
+	#   --aggregate-interval: periodic aggregated logs
+	#   --rate: schedule load
+	#   --latency-limit: max delay, not deeply exercice
+	#
+	# note: the --rate behavior is probabilistic in nature.
+	# note: --progress-timestamp is not tested.
+	my $delay = pgbench(
+		'-T 2 -P 1 -l --aggregate-interval=1 -S -b se@2'
+		. ' --rate=20 --latency-limit=1000 -j ' . $nthreads
+		. ' -c 3 -r',
+		0,
+		[   qr{type: multiple},
+			qr{clients: 3},
+			qr{threads: $nthreads},
+			qr{duration: 2 s},
+			qr{script 1: .* select only},
+			qr{script 2: .* select only},
+			qr{statement latencies in milliseconds},
+			qr{FROM pgbench_accounts} ],
+		[ qr{vacuum}, qr{progress: 1\b} ],
+		'pgbench progress', undef,
+		"--log-prefix=$bdir/001_pgbench_log_1");
+
+	# The rate may results in an unlucky schedule which triggers
+	# an early exit, hence the loose bound.
+
+	# also, the delay may totally fail on very slow or overloaded hosts,
+	# valgrind runs...
+
+	ok(1.5 < $delay && $delay < 2.5, "-T 2 run around 2 seconds");
+
+	# $nthreads threads, 2 seconds, but due to timing imprecision we might get
+	# only 1 or as many as 3 progress reports per thread.
+	# aggregate log format is:
+	#   unix_epoch_time #tx sum sum2 min max [sum sum2 min max [skipped]]
+	# first series about latency; second about lag (--rate) ;
+	# skipped only if --latency-limit is set.
+	check_pgbench_logs($bdir, '001_pgbench_log_1', $nthreads, 1, 3,
+		qr{^\d{10,} \d{1,2} \d+ \d+ \d+ \d+ \d+ \d+ \d+ \d+ \d+$});
+}
+
+# with sampling rate, 2 clients with 50 tx each
 pgbench(
 	"-n -S -t 50 -c 2 --log --sampling-rate=0.5", 0,
 	[ qr{select only}, qr{processed: 100/100} ], [qr{^$}],

@@ -462,3 +462,23 @@ SELECT
 DROP EVENT TRIGGER start_rls_command;
 DROP EVENT TRIGGER end_rls_command;
 DROP EVENT TRIGGER sql_drop_command;
+
+-- On login triggers
+create table user_logins(id serial, who text);
+create function on_login_proc() returns event_trigger as $$
+begin
+  insert into user_logins (who) values ('I am');
+  raise notice 'You are welcome!';
+end;
+$$ language plpgsql;
+create event trigger on_login_trigger on login execute procedure on_login_proc();
+alter event trigger on_login_trigger enable always;
+\c
+select * from user_logins;
+\c
+select * from user_logins;
+
+-- Cleanup
+drop table user_logins;
+drop event trigger on_login_trigger;
+drop function on_login_proc();

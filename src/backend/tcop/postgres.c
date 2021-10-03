@@ -42,6 +42,7 @@
 #include "catalog/pg_type.h"
 #include "commands/async.h"
 #include "commands/prepare.h"
+#include "commands/event_trigger.h"
 #include "executor/spi.h"
 #include "jit/jit.h"
 #include "libpq/libpq.h"
@@ -4164,6 +4165,8 @@ PostgresMain(const char *dbname, const char *username)
 	MessageContext = AllocSetContextCreate(TopMemoryContext,
 										   "MessageContext",
 										   ALLOCSET_DEFAULT_SIZES);
+
+	EventTriggerOnLogin();
 
 	/*
 	 * Create memory context and buffer used for RowDescription messages. As

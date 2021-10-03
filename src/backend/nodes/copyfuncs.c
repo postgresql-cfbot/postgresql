@@ -4831,8 +4831,10 @@ _copyAlterPublicationStmt(const AlterPublicationStmt *from)
 	COPY_STRING_FIELD(pubname);
 	COPY_NODE_FIELD(options);
 	COPY_NODE_FIELD(tables);
+	COPY_NODE_FIELD(sequences);
 	COPY_SCALAR_FIELD(for_all_tables);
-	COPY_SCALAR_FIELD(tableAction);
+	COPY_SCALAR_FIELD(for_all_sequences);
+	COPY_SCALAR_FIELD(action);
 
 	return newnode;
 }

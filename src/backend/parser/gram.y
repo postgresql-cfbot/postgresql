@@ -9596,6 +9596,7 @@ AlterOwnerStmt: ALTER AGGREGATE aggregate_with_argtypes OWNER TO RoleSpec
  *****************************************************************************/
 
 CreatePublicationStmt:
+			/* CREATE PUBLICATION name opt_publication_for_tables opt_publication_for_sequences opt_definition */
 			CREATE PUBLICATION name opt_publication_for_tables opt_definition
 				{
 					CreatePublicationStmt *n = makeNode(CreatePublicationStmt);
@@ -9670,7 +9671,7 @@ AlterPublicationStmt:
 					AlterPublicationStmt *n = makeNode(AlterPublicationStmt);
 					n->pubname = $3;
 					n->tables = $6;
-					n->tableAction = DEFELEM_ADD;
+					n->action = DEFELEM_ADD;
 					$$ = (Node *)n;
 				}
 			| ALTER PUBLICATION name SET TABLE publication_table_list
@@ -9678,7 +9679,7 @@ AlterPublicationStmt:
 					AlterPublicationStmt *n = makeNode(AlterPublicationStmt);
 					n->pubname = $3;
 					n->tables = $6;
-					n->tableAction = DEFELEM_SET;
+					n->action = DEFELEM_SET;
 					$$ = (Node *)n;
 				}
 			| ALTER PUBLICATION name DROP TABLE publication_table_list
@@ -9686,7 +9687,31 @@ AlterPublicationStmt:
 					AlterPublicationStmt *n = makeNode(AlterPublicationStmt);
 					n->pubname = $3;
 					n->tables = $6;
-					n->tableAction = DEFELEM_DROP;
+					n->action = DEFELEM_DROP;
+					$$ = (Node *)n;
+				}
+			| ALTER PUBLICATION name ADD_P SEQUENCE publication_table_list
+				{
+					AlterPublicationStmt *n = makeNode(AlterPublicationStmt);
+					n->pubname = $3;
+					n->sequences = $6;
+					n->action = DEFELEM_ADD;
+					$$ = (Node *)n;
+				}
+			| ALTER PUBLICATION name SET SEQUENCE publication_table_list
+				{
+					AlterPublicationStmt *n = makeNode(AlterPublicationStmt);
+					n->pubname = $3;
+					n->sequences = $6;
+					n->action = DEFELEM_SET;
+					$$ = (Node *)n;
+				}
+			| ALTER PUBLICATION name DROP SEQUENCE publication_table_list
+				{
+					AlterPublicationStmt *n = makeNode(AlterPublicationStmt);
+					n->pubname = $3;
+					n->sequences = $6;
+					n->action = DEFELEM_DROP;
 					$$ = (Node *)n;
 				}
 		;
@@ -9935,6 +9960,12 @@ UnlistenStmt:
 				}
 		;
 
+/*
+ * FIXME
+ *
+ * opt_publication_for_sequences and publication_for_sequences should be
+ * copies for sequences
+ */
 
 /*****************************************************************************
  *
@@ -9942,6 +9973,12 @@ UnlistenStmt:
  *
  *		BEGIN / COMMIT / ROLLBACK
  *		(also older versions END / ABORT)
+ *
+ * ALTER PUBLICATION name ADD SEQUENCE sequence [, sequence2]
+ *
+ * ALTER PUBLICATION name DROP SEQUENCE sequence [, sequence2]
+ *
+ * ALTER PUBLICATION name SET SEQUENCE sequence [, sequence2]
  *
  *****************************************************************************/
 

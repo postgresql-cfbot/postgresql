@@ -3661,8 +3661,10 @@ typedef struct AlterPublicationStmt
 
 	/* parameters used for ALTER PUBLICATION ... ADD/DROP TABLE */
 	List	   *tables;			/* List of tables to add/drop */
+	List	   *sequences;		/* List of sequences to add/drop */
 	bool		for_all_tables; /* Special publication for all tables in db */
-	DefElemAction tableAction;	/* What action to perform with the tables */
+	bool		for_all_sequences; /* Special publication for all tables in db */
+	DefElemAction action;		/* What action to perform with the tables/sequences */
 } AlterPublicationStmt;
 
 typedef struct CreateSubscriptionStmt

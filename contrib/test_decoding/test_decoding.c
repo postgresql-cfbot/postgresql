@@ -35,6 +35,7 @@ typedef struct
 	bool		include_timestamp;
 	bool		skip_empty_xacts;
 	bool		only_local;
+	bool		skip_sequences;
 } TestDecodingData;
 
 /*
@@ -76,6 +77,10 @@ static void pg_decode_message(LogicalDecodingContext *ctx,
 							  ReorderBufferTXN *txn, XLogRecPtr message_lsn,
 							  bool transactional, const char *prefix,
 							  Size sz, const char *message);
+static void pg_decode_sequence(LogicalDecodingContext *ctx,
+							  ReorderBufferTXN *txn, XLogRecPtr sequence_lsn,
+							  Relation rel, bool transactional, bool created,
+							  int64 last_value, int64 log_cnt, bool is_called);
 static bool pg_decode_filter_prepare(LogicalDecodingContext *ctx,
 									 TransactionId xid,
 									 const char *gid);
@@ -116,6 +121,10 @@ static void pg_decode_stream_message(LogicalDecodingContext *ctx,
 									 ReorderBufferTXN *txn, XLogRecPtr message_lsn,
 									 bool transactional, const char *prefix,
 									 Size sz, const char *message);
+static void pg_decode_stream_sequence(LogicalDecodingContext *ctx,
+									  ReorderBufferTXN *txn, XLogRecPtr sequence_lsn,
+									  Relation rel, bool transactional, bool created,
+									  int64 last_value, int64 log_cnt, bool is_called);
 static void pg_decode_stream_truncate(LogicalDecodingContext *ctx,
 									  ReorderBufferTXN *txn,
 									  int nrelations, Relation relations[],
@@ -141,6 +150,7 @@ _PG_output_plugin_init(OutputPluginCallbacks *cb)
 	cb->filter_by_origin_cb = pg_decode_filter;
 	cb->shutdown_cb = pg_decode_shutdown;
 	cb->message_cb = pg_decode_message;
+	cb->sequence_cb = pg_decode_sequence;
 	cb->filter_prepare_cb = pg_decode_filter_prepare;
 	cb->begin_prepare_cb = pg_decode_begin_prepare_txn;
 	cb->prepare_cb = pg_decode_prepare_txn;
@@ -153,6 +163,7 @@ _PG_output_plugin_init(OutputPluginCallbacks *cb)
 	cb->stream_commit_cb = pg_decode_stream_commit;
 	cb->stream_change_cb = pg_decode_stream_change;
 	cb->stream_message_cb = pg_decode_stream_message;
+	cb->stream_sequence_cb = pg_decode_stream_sequence;
 	cb->stream_truncate_cb = pg_decode_stream_truncate;
 }
 
@@ -174,6 +185,9 @@ pg_decode_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
 	data->include_timestamp = false;
 	data->skip_empty_xacts = false;
 	data->only_local = false;
+
+	/* skip sequences by default for backwards compatibility */
+	data->skip_sequences = true;
 
 	ctx->output_plugin_private = data;
 
@@ -260,6 +274,17 @@ pg_decode_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
 			if (elem->arg == NULL)
 				continue;
 			else if (!parse_bool(strVal(elem->arg), &enable_streaming))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("could not parse value \"%s\" for parameter \"%s\"",
+								strVal(elem->arg), elem->defname)));
+		}
+		else if (strcmp(elem->defname, "skip-sequences") == 0)
+		{
+
+			if (elem->arg == NULL)
+				continue;	/* true by default */
+			else if (!parse_bool(strVal(elem->arg), &data->skip_sequences))
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 						 errmsg("could not parse value \"%s\" for parameter \"%s\"",
@@ -745,6 +770,28 @@ pg_decode_message(LogicalDecodingContext *ctx,
 }
 
 static void
+pg_decode_sequence(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
+				   XLogRecPtr sequence_lsn, Relation rel,
+				   bool transactional, bool created,
+				   int64 last_value, int64 log_cnt, bool is_called)
+{
+	TestDecodingData *data = ctx->output_plugin_private;
+
+	/* return if requested to skip_sequences */
+	if (data->skip_sequences)
+		return;
+
+	OutputPluginPrepareWrite(ctx, true);
+	appendStringInfoString(ctx->out, "sequence ");
+	appendStringInfoString(ctx->out,
+						   quote_qualified_identifier(get_namespace_name(get_rel_namespace(RelationGetRelid(rel))),
+													  RelationGetRelationName(rel)));
+	appendStringInfo(ctx->out, 	": transactional:%d created:%d last_value:%zu log_cnt:%zu is_called:%d",
+					 transactional, created, last_value, log_cnt, is_called);
+	OutputPluginWrite(ctx, true);
+}
+
+static void
 pg_decode_stream_start(LogicalDecodingContext *ctx,
 					   ReorderBufferTXN *txn)
 {
@@ -940,6 +987,28 @@ pg_decode_stream_message(LogicalDecodingContext *ctx,
 		appendBinaryStringInfo(ctx->out, message, sz);
 	}
 
+	OutputPluginWrite(ctx, true);
+}
+
+static void
+pg_decode_stream_sequence(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
+						  XLogRecPtr sequence_lsn, Relation rel,
+						  bool transactional, bool created,
+						  int64 last_value, int64 log_cnt, bool is_called)
+{
+	TestDecodingData *data = ctx->output_plugin_private;
+
+	/* return if requested to skip_sequences */
+	if (data->skip_sequences)
+		return;
+
+	OutputPluginPrepareWrite(ctx, true);
+	appendStringInfoString(ctx->out, "streaming sequence ");
+	appendStringInfoString(ctx->out,
+						   quote_qualified_identifier(get_namespace_name(get_rel_namespace(RelationGetRelid(rel))),
+													  RelationGetRelationName(rel)));
+	appendStringInfo(ctx->out, 	": transactional:%d created:%d last_value:%zu log_cnt:%zu is_called:%d",
+					 transactional, created, last_value, log_cnt, is_called);
 	OutputPluginWrite(ctx, true);
 }
 

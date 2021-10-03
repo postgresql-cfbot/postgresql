@@ -16,6 +16,7 @@
 
 #include "access/genam.h"
 #include "access/htup_details.h"
+#include "access/relation.h"
 #include "access/table.h"
 #include "access/xact.h"
 #include "catalog/catalog.h"
@@ -51,6 +52,12 @@ static void PublicationAddTables(Oid pubid, List *rels, bool if_not_exists,
 								 AlterPublicationStmt *stmt);
 static void PublicationDropTables(Oid pubid, List *rels, bool missing_ok);
 
+static List *OpenSequenceList(List *sequences);
+static void CloseSequenceList(List *rels);
+static void PublicationAddSequences(Oid pubid, List *rels, bool if_not_exists,
+								 AlterPublicationStmt *stmt);
+static void PublicationDropSequences(Oid pubid, List *rels, bool missing_ok);
+
 static void
 parse_publication_options(ParseState *pstate,
 						  List *options,
@@ -69,6 +76,7 @@ parse_publication_options(ParseState *pstate,
 	pubactions->pubupdate = true;
 	pubactions->pubdelete = true;
 	pubactions->pubtruncate = true;
+	pubactions->pubsequence = true;
 	*publish_via_partition_root = false;
 
 	/* Parse options */
@@ -93,6 +101,7 @@ parse_publication_options(ParseState *pstate,
 			pubactions->pubupdate = false;
 			pubactions->pubdelete = false;
 			pubactions->pubtruncate = false;
+			pubactions->pubsequence = false;
 
 			*publish_given = true;
 			publish = defGetString(defel);
@@ -115,6 +124,8 @@ parse_publication_options(ParseState *pstate,
 					pubactions->pubdelete = true;
 				else if (strcmp(publish_opt, "truncate") == 0)
 					pubactions->pubtruncate = true;
+				else if (strcmp(publish_opt, "sequence") == 0)
+					pubactions->pubsequence = true;
 				else
 					ereport(ERROR,
 							(errcode(ERRCODE_SYNTAX_ERROR),
@@ -205,6 +216,8 @@ CreatePublication(ParseState *pstate, CreatePublicationStmt *stmt)
 		BoolGetDatum(pubactions.pubdelete);
 	values[Anum_pg_publication_pubtruncate - 1] =
 		BoolGetDatum(pubactions.pubtruncate);
+	values[Anum_pg_publication_pubsequence - 1] =
+		BoolGetDatum(pubactions.pubsequence);
 	values[Anum_pg_publication_pubviaroot - 1] =
 		BoolGetDatum(publish_via_partition_root);
 
@@ -380,9 +393,9 @@ AlterPublicationTables(AlterPublicationStmt *stmt, Relation rel,
 
 	rels = OpenTableList(stmt->tables);
 
-	if (stmt->tableAction == DEFELEM_ADD)
+	if (stmt->action == DEFELEM_ADD)
 		PublicationAddTables(pubid, rels, false, stmt);
-	else if (stmt->tableAction == DEFELEM_DROP)
+	else if (stmt->action == DEFELEM_DROP)
 		PublicationDropTables(pubid, rels, false);
 	else						/* DEFELEM_SET */
 	{
@@ -441,6 +454,82 @@ AlterPublicationTables(AlterPublicationStmt *stmt, Relation rel,
 }
 
 /*
+ * Add or remove sequence to/from publication.
+ */
+static void
+AlterPublicationSequences(AlterPublicationStmt *stmt, Relation rel,
+						  HeapTuple tup)
+{
+	List	   *rels = NIL;
+	Form_pg_publication pubform = (Form_pg_publication) GETSTRUCT(tup);
+	Oid			pubid = pubform->oid;
+
+	/* Check that user is allowed to manipulate the publication tables. */
+	if (pubform->puballsequences)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("publication \"%s\" is defined as FOR ALL SEQUENCES",
+						NameStr(pubform->pubname)),
+				 errdetail("Sequences cannot be added to or dropped from FOR ALL TABLES publications.")));
+
+	Assert(list_length(stmt->sequences) > 0);
+
+	rels = OpenSequenceList(stmt->sequences);
+
+	if (stmt->action == DEFELEM_ADD)
+		PublicationAddSequences(pubid, rels, false, stmt);
+	else if (stmt->action == DEFELEM_DROP)
+		PublicationDropSequences(pubid, rels, false);
+	else						/* DEFELEM_SET */
+	{
+		List	   *oldrelids = GetPublicationRelations(pubid,
+														PUBLICATION_PART_ROOT);
+		List	   *delrels = NIL;
+		ListCell   *oldlc;
+
+		/* Calculate which relations to drop. */
+		foreach(oldlc, oldrelids)
+		{
+			Oid			oldrelid = lfirst_oid(oldlc);
+			ListCell   *newlc;
+			bool		found = false;
+
+			foreach(newlc, rels)
+			{
+				Relation	newrel = (Relation) lfirst(newlc);
+
+				if (RelationGetRelid(newrel) == oldrelid)
+				{
+					found = true;
+					break;
+				}
+			}
+
+			if (!found)
+			{
+				Relation	oldrel = relation_open(oldrelid,
+												ShareUpdateExclusiveLock);
+
+				delrels = lappend(delrels, oldrel);
+			}
+		}
+
+		/* And drop them. */
+		PublicationDropSequences(pubid, delrels, true);
+
+		/*
+		 * Don't bother calculating the difference for adding, we'll catch and
+		 * skip existing ones when doing catalog update.
+		 */
+		PublicationAddSequences(pubid, rels, true, stmt);
+
+		CloseSequenceList(delrels);
+	}
+
+	CloseSequenceList(rels);
+}
+
+/*
  * Alter the existing publication.
  *
  * This is dispatcher function for AlterPublicationOptions and
@@ -473,8 +562,12 @@ AlterPublication(ParseState *pstate, AlterPublicationStmt *stmt)
 
 	if (stmt->options)
 		AlterPublicationOptions(pstate, stmt, rel, tup);
-	else
+	else if (stmt->tables)
 		AlterPublicationTables(stmt, rel, tup);
+	else if (stmt->sequences)
+		AlterPublicationSequences(stmt, rel, tup);
+	else
+		Assert(false);
 
 	/* Cleanup. */
 	heap_freetuple(tup);
@@ -726,6 +819,144 @@ PublicationDropTables(Oid pubid, List *rels, bool missing_ok)
 		performDeletion(&obj, DROP_CASCADE, 0);
 	}
 }
+
+/*
+ * Open relations specified by a PublicationTable list.
+ * In the returned list of PublicationRelInfo, tables are locked
+ * in ShareUpdateExclusiveLock mode in order to add them to a publication.
+ */
+static List *
+OpenSequenceList(List *sequences)
+{
+	List	   *relids = NIL;
+	List	   *rels = NIL;
+	ListCell   *lc;
+
+	/*
+	 * Open, share-lock, and check all the explicitly-specified relations
+	 */
+	foreach(lc, sequences)
+	{
+		PublicationTable *s = lfirst_node(PublicationTable, lc);
+		Relation	rel;
+		Oid			myrelid;
+		PublicationRelInfo *pub_rel;
+
+		/* Allow query cancel in case this takes a long time */
+		CHECK_FOR_INTERRUPTS();
+
+		rel = table_openrv(s->relation, ShareUpdateExclusiveLock);
+		myrelid = RelationGetRelid(rel);
+
+		/*
+		 * Filter out duplicates if user specifies "foo, foo".
+		 *
+		 * Note that this algorithm is known to not be very efficient (O(N^2))
+		 * but given that it only works on list of tables given to us by user
+		 * it's deemed acceptable.
+		 */
+		if (list_member_oid(relids, myrelid))
+		{
+			table_close(rel, ShareUpdateExclusiveLock);
+			continue;
+		}
+
+		pub_rel = palloc(sizeof(PublicationRelInfo));
+		pub_rel->relation = rel;
+		rels = lappend(rels, pub_rel);
+		relids = lappend_oid(relids, myrelid);
+	}
+
+	list_free(relids);
+
+	return rels;
+}
+
+/*
+ * Close all relations in the list.
+ */
+static void
+CloseSequenceList(List *rels)
+{
+	ListCell   *lc;
+
+	foreach(lc, rels)
+	{
+		PublicationRelInfo *pub_rel;
+
+		pub_rel = (PublicationRelInfo *) lfirst(lc);
+		table_close(pub_rel->relation, NoLock);
+	}
+}
+
+/*
+ * Add listed tables to the publication.
+ */
+static void
+PublicationAddSequences(Oid pubid, List *rels, bool if_not_exists,
+						AlterPublicationStmt *stmt)
+{
+	ListCell   *lc;
+
+	Assert(!stmt || !stmt->for_all_sequences);
+
+	foreach(lc, rels)
+	{
+		PublicationRelInfo *pub_rel = (PublicationRelInfo *) lfirst(lc);
+		Relation	rel = pub_rel->relation;
+		ObjectAddress obj;
+
+		/* Must be owner of the sequence or superuser. */
+		if (!pg_class_ownercheck(RelationGetRelid(rel), GetUserId()))
+			aclcheck_error(ACLCHECK_NOT_OWNER, get_relkind_objtype(rel->rd_rel->relkind),
+						   RelationGetRelationName(rel));
+
+		obj = publication_add_relation(pubid, pub_rel, if_not_exists);
+		if (stmt)
+		{
+			EventTriggerCollectSimpleCommand(obj, InvalidObjectAddress,
+											 (Node *) stmt);
+
+			InvokeObjectPostCreateHook(PublicationRelRelationId,
+									   obj.objectId, 0);
+		}
+	}
+}
+
+/*
+ * Remove listed sequences from the publication.
+ */
+static void
+PublicationDropSequences(Oid pubid, List *rels, bool missing_ok)
+{
+	ObjectAddress obj;
+	ListCell   *lc;
+	Oid			prid;
+
+	foreach(lc, rels)
+	{
+		Relation	rel = (Relation) lfirst(lc);
+		Oid			relid = RelationGetRelid(rel);
+
+		prid = GetSysCacheOid2(PUBLICATIONRELMAP, Anum_pg_publication_rel_oid,
+							   ObjectIdGetDatum(relid),
+							   ObjectIdGetDatum(pubid));
+		if (!OidIsValid(prid))
+		{
+			if (missing_ok)
+				continue;
+
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("relation \"%s\" is not part of the publication",
+							RelationGetRelationName(rel))));
+		}
+
+		ObjectAddressSet(obj, PublicationRelRelationId, prid);
+		performDeletion(&obj, DROP_CASCADE, 0);
+	}
+}
+
 
 /*
  * Internal workhorse for changing a publication owner

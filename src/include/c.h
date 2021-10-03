@@ -113,6 +113,13 @@
 #define __has_attribute(attribute) 0
 #endif
 
+/* only GCC supports the visibility attribute */
+#ifdef __GNUC__
+#define pg_attribute_hidden() __attribute__ ((visibility ("hidden")))
+#else
+#define pg_attribute_hidden()
+#endif
+
 /* only GCC supports the unused attribute */
 #ifdef __GNUC__
 #define pg_attribute_unused() __attribute__((unused))

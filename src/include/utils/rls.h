@@ -14,7 +14,7 @@
 #define RLS_H
 
 /* GUC variable */
-extern bool row_security;
+extern bool row_security pg_attribute_hidden();
 
 /*
  * Used by callers of check_enable_rls.

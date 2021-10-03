@@ -716,7 +716,7 @@ extern bool CheckFunctionValidatorAccess(Oid validatorOid, Oid functionOid);
 /*
  * Routines in dfmgr.c
  */
-extern char *Dynamic_library_path;
+extern char *Dynamic_library_path pg_attribute_hidden();
 
 extern void *load_external_function(const char *filename, const char *funcname,
 									bool signalNotFound, void **filehandle);

@@ -953,9 +953,9 @@ typedef struct PgStat_FunctionCallUsage
  */
 extern PGDLLIMPORT bool pgstat_track_counts;
 extern PGDLLIMPORT int pgstat_track_functions;
-extern char *pgstat_stat_directory;
-extern char *pgstat_stat_tmpname;
-extern char *pgstat_stat_filename;
+extern char *pgstat_stat_directory pg_attribute_hidden();
+extern char *pgstat_stat_tmpname pg_attribute_hidden();
+extern char *pgstat_stat_filename pg_attribute_hidden();
 
 /*
  * BgWriter statistics counters are updated directly by bgwriter and bufmgr

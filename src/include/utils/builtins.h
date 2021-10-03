@@ -65,7 +65,7 @@ extern char *regexp_fixed_prefix(text *text_re, bool case_insensitive,
 								 Oid collation, bool *exact);
 
 /* ruleutils.c */
-extern bool quote_all_identifiers;
+extern bool quote_all_identifiers pg_attribute_hidden();
 extern const char *quote_identifier(const char *ident);
 extern char *quote_qualified_identifier(const char *qualifier,
 										const char *ident);

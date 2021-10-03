@@ -17,7 +17,7 @@
 #include "parser/parse_node.h"
 
 /* GUC. Is actually of type PasswordType. */
-extern int	Password_encryption;
+extern int	Password_encryption pg_attribute_hidden();
 
 /* Hook to check passwords in CreateRole() and AlterRole() */
 typedef void (*check_password_hook_type) (const char *username, const char *shadow_pass, PasswordType password_type, Datum validuntil_time, bool validuntil_null);

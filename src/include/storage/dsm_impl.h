@@ -39,8 +39,8 @@
 #endif
 
 /* GUC. */
-extern int	dynamic_shared_memory_type;
-extern int	min_dynamic_shared_memory;
+extern int	dynamic_shared_memory_type pg_attribute_hidden();
+extern int	min_dynamic_shared_memory pg_attribute_hidden();
 
 /*
  * Directory for on-disk state.

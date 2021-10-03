@@ -66,13 +66,13 @@ typedef union
 #define PIPE_PROTO_DEST_CSVLOG	0x20
 
 /* GUC options */
-extern bool Logging_collector;
-extern int	Log_RotationAge;
-extern int	Log_RotationSize;
+extern bool Logging_collector pg_attribute_hidden();
+extern int	Log_RotationAge pg_attribute_hidden();
+extern int	Log_RotationSize pg_attribute_hidden();
 extern PGDLLIMPORT char *Log_directory;
 extern PGDLLIMPORT char *Log_filename;
-extern bool Log_truncate_on_rotation;
-extern int	Log_file_mode;
+extern bool Log_truncate_on_rotation pg_attribute_hidden();
+extern int	Log_file_mode pg_attribute_hidden();
 
 #ifndef WIN32
 extern int	syslogPipe[2];

@@ -14,22 +14,22 @@
 #define _POSTMASTER_H
 
 /* GUC options */
-extern bool EnableSSL;
-extern int	ReservedBackends;
+extern bool EnableSSL pg_attribute_hidden();
+extern int	ReservedBackends pg_attribute_hidden();
 extern PGDLLIMPORT int PostPortNumber;
-extern int	Unix_socket_permissions;
-extern char *Unix_socket_group;
-extern char *Unix_socket_directories;
-extern char *ListenAddresses;
+extern int	Unix_socket_permissions pg_attribute_hidden();
+extern char *Unix_socket_group pg_attribute_hidden();
+extern char *Unix_socket_directories pg_attribute_hidden();
+extern char *ListenAddresses pg_attribute_hidden();
 extern bool ClientAuthInProgress;
-extern int	PreAuthDelay;
-extern int	AuthenticationTimeout;
-extern bool Log_connections;
-extern bool log_hostname;
-extern bool enable_bonjour;
-extern char *bonjour_name;
-extern bool restart_after_crash;
-extern bool remove_temp_files_after_crash;
+extern int	PreAuthDelay pg_attribute_hidden();
+extern int	AuthenticationTimeout pg_attribute_hidden();
+extern bool Log_connections pg_attribute_hidden();
+extern bool log_hostname pg_attribute_hidden();
+extern bool enable_bonjour pg_attribute_hidden();
+extern char *bonjour_name pg_attribute_hidden();
+extern bool restart_after_crash pg_attribute_hidden();
+extern bool remove_temp_files_after_crash pg_attribute_hidden();
 
 #ifdef WIN32
 extern HANDLE PostmasterHandle;

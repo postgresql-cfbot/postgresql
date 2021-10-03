@@ -34,14 +34,14 @@ typedef struct PROC_QUEUE
 } PROC_QUEUE;
 
 /* GUC variables */
-extern int	max_locks_per_xact;
+extern int	max_locks_per_xact pg_attribute_hidden();
 
 #ifdef LOCK_DEBUG
-extern int	Trace_lock_oidmin;
-extern bool Trace_locks;
-extern bool Trace_userlocks;
-extern int	Trace_lock_table;
-extern bool Debug_deadlocks;
+extern int	Trace_lock_oidmin pg_attribute_hidden();
+extern bool Trace_locks pg_attribute_hidden();
+extern bool Trace_userlocks pg_attribute_hidden();
+extern int	Trace_lock_table pg_attribute_hidden();
+extern bool Debug_deadlocks pg_attribute_hidden();
 #endif							/* LOCK_DEBUG */
 
 

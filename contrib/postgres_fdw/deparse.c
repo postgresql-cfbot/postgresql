@@ -52,6 +52,7 @@
 #include "parser/parsetree.h"
 #include "postgres_fdw.h"
 #include "utils/builtins.h"
+#include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
@@ -109,6 +110,15 @@ typedef struct deparse_expr_cxt
 		appendStringInfo((buf), "%s%d.", REL_ALIAS_PREFIX, (varno))
 #define SUBQUERY_REL_ALIAS_PREFIX	"s"
 #define SUBQUERY_COL_ALIAS_PREFIX	"c"
+#define TIME_RELATED_SQLVALUE_FUNCTION(s)	\
+		(s->op == SVFOP_CURRENT_TIMESTAMP || \
+		 s->op == SVFOP_CURRENT_TIMESTAMP_N || \
+		 s->op == SVFOP_CURRENT_TIME || \
+		 s->op == SVFOP_CURRENT_TIME_N || \
+		 s->op == SVFOP_LOCALTIMESTAMP || \
+		 s->op == SVFOP_LOCALTIMESTAMP_N || \
+		 s->op == SVFOP_LOCALTIME || \
+		 s->op == SVFOP_LOCALTIME_N)
 
 /*
  * Functions to determine whether an expression can be evaluated safely on
@@ -157,6 +167,7 @@ static void deparseDistinctExpr(DistinctExpr *node, deparse_expr_cxt *context);
 static void deparseScalarArrayOpExpr(ScalarArrayOpExpr *node,
 									 deparse_expr_cxt *context);
 static void deparseRelabelType(RelabelType *node, deparse_expr_cxt *context);
+static void deparseSQLValueFunction(SQLValueFunction *node, deparse_expr_cxt *context);
 static void deparseBoolExpr(BoolExpr *node, deparse_expr_cxt *context);
 static void deparseNullTest(NullTest *node, deparse_expr_cxt *context);
 static void deparseCaseExpr(CaseExpr *node, deparse_expr_cxt *context);
@@ -268,12 +279,11 @@ is_foreign_expr(PlannerInfo *root,
 
 	/*
 	 * An expression which includes any mutable functions can't be sent over
-	 * because its result is not stable.  For example, sending now() remote
-	 * side could cause confusion from clock offsets.  Future versions might
-	 * be able to make this choice with more granularity.  (We check this last
-	 * because it requires a lot of expensive catalog lookups.)
+	 * because its result is not stable.  Future versions might be able to
+	 * make this choice with more granularity.  (We check this last because it
+	 * requires a lot of expensive catalog lookups.)
 	 */
-	if (contain_mutable_functions((Node *) expr))
+	if (contain_unsafe_functions((Node *) expr))
 		return false;
 
 	/* OK to evaluate on the remote server */
@@ -616,6 +626,23 @@ foreign_expr_walker(Node *node,
 					state = FDW_COLLATE_NONE;
 				else
 					state = FDW_COLLATE_UNSAFE;
+			}
+			break;
+		case T_SQLValueFunction:
+			{
+				SQLValueFunction *s = (SQLValueFunction *) node;
+
+				/*
+				 * For now only time-related SQLValue functions are supported.
+				 * We can push down localtimestamp and localtime as we compute
+				 * them locally.
+				 */
+				if (!TIME_RELATED_SQLVALUE_FUNCTION(s))
+					return false;
+
+				/* Timestamp or time are not collatable */
+				collation = InvalidOid;
+				state = FDW_COLLATE_NONE;
 			}
 			break;
 		case T_BoolExpr:
@@ -1031,6 +1058,22 @@ is_foreign_param(PlannerInfo *root,
 		case T_Param:
 			/* Params always have to be sent to the foreign server */
 			return true;
+		case T_FuncExpr:
+			{
+				FuncExpr   *fe = (FuncExpr *) expr;
+
+				if (fe->funcid == F_NOW)
+					return true;
+				break;
+			}
+		case T_SQLValueFunction:
+			{
+				SQLValueFunction *s = (SQLValueFunction *) expr;
+
+				if (TIME_RELATED_SQLVALUE_FUNCTION(s))
+					return true;
+				break;
+			}
 		default:
 			break;
 	}
@@ -2603,6 +2646,9 @@ deparseExpr(Expr *node, deparse_expr_cxt *context)
 		case T_RelabelType:
 			deparseRelabelType((RelabelType *) node, context);
 			break;
+		case T_SQLValueFunction:
+			deparseSQLValueFunction((SQLValueFunction *) node, context);
+			break;
 		case T_BoolExpr:
 			deparseBoolExpr((BoolExpr *) node, context);
 			break;
@@ -2920,6 +2966,20 @@ deparseFuncExpr(FuncExpr *node, deparse_expr_cxt *context)
 		return;
 	}
 
+	if (node->funcid == F_NOW)
+	{
+		SQLValueFunction *svf = makeNode(SQLValueFunction);
+
+		svf->op = SVFOP_CURRENT_TIMESTAMP;
+		svf->type = TIMESTAMPTZOID;
+		svf->typmod = -1;
+		svf->location = -1;
+
+		deparseSQLValueFunction(svf, context);
+
+		return;
+	}
+
 	/* Check if need to print VARIADIC (cf. ruleutils.c) */
 	use_variadic = node->funcvariadic;
 
@@ -3090,6 +3150,61 @@ deparseRelabelType(RelabelType *node, deparse_expr_cxt *context)
 		appendStringInfo(context->buf, "::%s",
 						 deparse_type_name(node->resulttype,
 										   node->resulttypmod));
+}
+
+/*
+ * Deparse a SQLValueFunction node
+ */
+static void
+deparseSQLValueFunction(SQLValueFunction *node, deparse_expr_cxt *context)
+{
+	int32		typmod = -1;
+
+	switch (node->op)
+	{
+		case SVFOP_LOCALTIME:
+		case SVFOP_CURRENT_TIME:
+		case SVFOP_LOCALTIMESTAMP:
+		case SVFOP_CURRENT_TIMESTAMP:
+			break;
+		case SVFOP_LOCALTIME_N:
+		case SVFOP_CURRENT_TIME_N:
+		case SVFOP_CURRENT_TIMESTAMP_N:
+		case SVFOP_LOCALTIMESTAMP_N:
+			typmod = node->typmod;
+			break;
+		default:
+			elog(ERROR, "unsupported SQLValueFunction op for deparse: %d",
+				 node->op);
+	}
+	Assert(node->type != InvalidOid);
+
+	/* Treat like a Param */
+	if (context->params_list)
+	{
+		int			pindex = 0;
+		ListCell   *lc;
+
+		/* find its index in params_list */
+		foreach(lc, *context->params_list)
+		{
+			pindex++;
+			if (equal(node, (Node *) lfirst(lc)))
+				break;
+		}
+		if (lc == NULL)
+		{
+			/* not in list, so add it */
+			pindex++;
+			*context->params_list = lappend(*context->params_list, node);
+		}
+
+		printRemoteParam(pindex, node->type, typmod, context);
+	}
+	else
+	{
+		printRemotePlaceholder(node->type, typmod, context);
+	}
 }
 
 /*

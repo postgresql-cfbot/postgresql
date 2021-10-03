@@ -230,5 +230,6 @@ extern const char *get_jointype_name(JoinType jointype);
 /* in shippable.c */
 extern bool is_builtin(Oid objectId);
 extern bool is_shippable(Oid objectId, Oid classId, PgFdwRelationInfo *fpinfo);
+extern bool contain_unsafe_functions(Node *clause);
 
 #endif							/* POSTGRES_FDW_H */

@@ -138,6 +138,11 @@ extern bool ignore_checksum_failure;
 extern bool ignore_invalid_pages;
 extern bool synchronize_seqscans;
 
+extern bool enable_sample_estimates_scan;
+extern bool enable_sample_estimates_join;
+extern bool enable_sample_join_correlate;
+extern double estimate_sample_rate;
+
 #ifdef TRACE_SYNCSCAN
 extern bool trace_syncscan;
 #endif
@@ -2118,6 +2123,33 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"enable_sample_scan_estimates", PGC_USERSET, DEVELOPER_OPTIONS,
+			gettext_noop("Decides whether sampling will be used for cardinality estimates for scans."),
+		},
+		&enable_sample_estimates_scan,
+		true,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"enable_sample_join_estimates", PGC_USERSET, DEVELOPER_OPTIONS,
+			gettext_noop("Decides whether sampling will be used for cardinality estimates for joins."),
+		},
+		&enable_sample_estimates_join,
+		true,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"enable_sample_join_correlate", PGC_USERSET, DEVELOPER_OPTIONS,
+			gettext_noop("Try using correlated samples for joins."),
+		},
+		&enable_sample_join_correlate,
+		true,
+		NULL, NULL, NULL
+	},
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, false, NULL, NULL, NULL
@@ -3836,6 +3868,16 @@ static struct config_real ConfigureNamesReal[] =
 		},
 		&log_xact_sample_rate,
 		0.0, 0.0, 1.0,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"estimate_sample_rate", PGC_SUSET, DEVELOPER_OPTIONS,
+			gettext_noop("Fraction of table to sample for run-time cardinality estimates"),
+			NULL
+		},
+		&estimate_sample_rate,
+		0.01, 0.0, 1.0,
 		NULL, NULL, NULL
 	},
 

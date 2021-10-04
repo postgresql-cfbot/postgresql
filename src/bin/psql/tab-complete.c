@@ -2744,7 +2744,7 @@ psql_completion(const char *text, int start, int end)
 	else if (Matches("CREATE", "STATISTICS", MatchAny))
 		COMPLETE_WITH("(", "ON");
 	else if (Matches("CREATE", "STATISTICS", MatchAny, "("))
-		COMPLETE_WITH("ndistinct", "dependencies", "mcv");
+		COMPLETE_WITH("ndistinct", "dependencies", "mcv", "sample");
 	else if (Matches("CREATE", "STATISTICS", MatchAny, "(*)"))
 		COMPLETE_WITH("ON");
 	else if (HeadMatches("CREATE", "STATISTICS", MatchAny) &&

@@ -788,6 +788,15 @@ Query_for_index_of_table \
 "       and pg_catalog.quote_ident(c1.relname)='%s'"\
 "       and pg_catalog.pg_table_is_visible(c1.oid)"
 
+/* the silly-looking length condition is just to eat up the current word */
+#define Query_for_constraint_of_table_not_validated \
+"SELECT pg_catalog.quote_ident(conname) "\
+"  FROM pg_catalog.pg_class c1, pg_catalog.pg_constraint con "\
+" WHERE c1.oid=conrelid and (%d = pg_catalog.length('%s'))"\
+"       and pg_catalog.quote_ident(c1.relname)='%s'"\
+"       and pg_catalog.pg_table_is_visible(c1.oid)" \
+"       and NOT con.convalidated"
+
 #define Query_for_all_table_constraints \
 "SELECT pg_catalog.quote_ident(conname) "\
 "  FROM pg_catalog.pg_constraint c "\
@@ -2145,13 +2154,21 @@ psql_completion(const char *text, int start, int end)
 		COMPLETE_WITH_ATTR(prev3_wd, "");
 
 	/*
-	 * If we have ALTER TABLE <sth> ALTER|DROP|RENAME|VALIDATE CONSTRAINT,
+	 * If we have ALTER TABLE <sth> ALTER|DROP|RENAME CONSTRAINT,
 	 * provide list of constraints
 	 */
-	else if (Matches("ALTER", "TABLE", MatchAny, "ALTER|DROP|RENAME|VALIDATE", "CONSTRAINT"))
+	else if (Matches("ALTER", "TABLE", MatchAny, "ALTER|DROP|RENAME", "CONSTRAINT"))
 	{
 		completion_info_charp = prev3_wd;
 		COMPLETE_WITH_QUERY(Query_for_constraint_of_table);
+	}
+	/*
+	 * ALTER TABLE <sth> VALIDATE CONSTRAINT <non-validated constraint>
+	 */
+	else if (Matches("ALTER", "TABLE", MatchAny, "VALIDATE", "CONSTRAINT"))
+	{
+		completion_info_charp = prev3_wd;
+		COMPLETE_WITH_QUERY(Query_for_constraint_of_table_not_validated);
 	}
 	/* ALTER TABLE ALTER [COLUMN] <foo> */
 	else if (Matches("ALTER", "TABLE", MatchAny, "ALTER", "COLUMN", MatchAny) ||

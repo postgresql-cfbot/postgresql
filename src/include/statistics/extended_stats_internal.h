@@ -127,4 +127,8 @@ extern Selectivity mcv_clause_selectivity_or(PlannerInfo *root,
 											 Selectivity *overlap_basesel,
 											 Selectivity *totalsel);
 
+extern bool *mcv_get_match_bitmap(PlannerInfo *root, List *clauses,
+								  Bitmapset *keys, List *exprs,
+								  MCVList *mcvlist, bool is_or);
+
 #endif							/* EXTENDED_STATS_INTERNAL_H */

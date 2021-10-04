@@ -16,7 +16,6 @@
 #include "replication/origin.h"
 #include "storage/sync.h"
 
-
 extern PGDLLIMPORT bool track_commit_timestamp;
 
 extern void TransactionTreeSetCommitTsData(TransactionId xid, int nsubxids,

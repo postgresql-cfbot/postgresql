@@ -2377,10 +2377,10 @@ RelationDestroyRelation(Relation relation, bool remember_tupdesc)
 	list_free_deep(relation->rd_fkeylist);
 	list_free(relation->rd_indexlist);
 	list_free(relation->rd_statlist);
-	bms_free(relation->rd_indexattr);
 	bms_free(relation->rd_keyattr);
 	bms_free(relation->rd_pkattr);
 	bms_free(relation->rd_idattr);
+	bms_free(relation->rd_hotblockingattr);
 	if (relation->rd_pubactions)
 		pfree(relation->rd_pubactions);
 	if (relation->rd_options)
@@ -5002,10 +5002,10 @@ RelationGetIndexPredicate(Relation relation)
 Bitmapset *
 RelationGetIndexAttrBitmap(Relation relation, IndexAttrBitmapKind attrKind)
 {
-	Bitmapset  *indexattrs;		/* indexed columns */
 	Bitmapset  *uindexattrs;	/* columns in unique indexes */
 	Bitmapset  *pkindexattrs;	/* columns in the primary index */
 	Bitmapset  *idindexattrs;	/* columns in the replica identity */
+	Bitmapset  *hotblockingattrs;   /* columns with HOT blocking indexes */
 	List	   *indexoidlist;
 	List	   *newindexoidlist;
 	Oid			relpkindex;
@@ -5014,18 +5014,18 @@ RelationGetIndexAttrBitmap(Relation relation, IndexAttrBitmapKind attrKind)
 	MemoryContext oldcxt;
 
 	/* Quick exit if we already computed the result. */
-	if (relation->rd_indexattr != NULL)
+	if (relation->rd_attrsvalid)
 	{
 		switch (attrKind)
 		{
-			case INDEX_ATTR_BITMAP_ALL:
-				return bms_copy(relation->rd_indexattr);
 			case INDEX_ATTR_BITMAP_KEY:
 				return bms_copy(relation->rd_keyattr);
 			case INDEX_ATTR_BITMAP_PRIMARY_KEY:
 				return bms_copy(relation->rd_pkattr);
 			case INDEX_ATTR_BITMAP_IDENTITY_KEY:
 				return bms_copy(relation->rd_idattr);
+			case INDEX_ATTR_BITMAP_HOT_BLOCKING:
+				return bms_copy(relation->rd_hotblockingattr);
 			default:
 				elog(ERROR, "unknown attrKind %u", attrKind);
 		}
@@ -5056,7 +5056,7 @@ restart:
 	relreplindex = relation->rd_replidindex;
 
 	/*
-	 * For each index, add referenced attributes to indexattrs.
+	 * For each index, add referenced attributes to appropriate bitmaps.
 	 *
 	 * Note: we consider all indexes returned by RelationGetIndexList, even if
 	 * they are not indisready or indisvalid.  This is important because an
@@ -5065,10 +5065,10 @@ restart:
 	 * CONCURRENTLY is far enough along that we should ignore the index, it
 	 * won't be returned at all by RelationGetIndexList.
 	 */
-	indexattrs = NULL;
 	uindexattrs = NULL;
 	pkindexattrs = NULL;
 	idindexattrs = NULL;
+	hotblockingattrs = NULL;
 	foreach(l, indexoidlist)
 	{
 		Oid			indexOid = lfirst_oid(l);
@@ -5133,8 +5133,9 @@ restart:
 			 */
 			if (attrnum != 0)
 			{
-				indexattrs = bms_add_member(indexattrs,
-											attrnum - FirstLowInvalidHeapAttributeNumber);
+				if (indexDesc->rd_indam->amhotblocking)
+					hotblockingattrs = bms_add_member(hotblockingattrs,
+												 attrnum - FirstLowInvalidHeapAttributeNumber);
 
 				if (isKey && i < indexDesc->rd_index->indnkeyatts)
 					uindexattrs = bms_add_member(uindexattrs,
@@ -5151,10 +5152,13 @@ restart:
 		}
 
 		/* Collect all attributes used in expressions, too */
-		pull_varattnos(indexExpressions, 1, &indexattrs);
+		if (indexDesc->rd_indam->amhotblocking)
+			pull_varattnos(indexExpressions, 1, &hotblockingattrs);
 
 		/* Collect all attributes in the index predicate, too */
-		pull_varattnos(indexPredicate, 1, &indexattrs);
+		if (indexDesc->rd_indam->amhotblocking)
+			pull_varattnos(indexPredicate, 1, &hotblockingattrs);
+
 
 		index_close(indexDesc, AccessShareLock);
 	}
@@ -5182,25 +5186,25 @@ restart:
 		bms_free(uindexattrs);
 		bms_free(pkindexattrs);
 		bms_free(idindexattrs);
-		bms_free(indexattrs);
+		bms_free(hotblockingattrs);
 
 		goto restart;
 	}
 
 	/* Don't leak the old values of these bitmaps, if any */
-	bms_free(relation->rd_indexattr);
-	relation->rd_indexattr = NULL;
 	bms_free(relation->rd_keyattr);
 	relation->rd_keyattr = NULL;
 	bms_free(relation->rd_pkattr);
 	relation->rd_pkattr = NULL;
 	bms_free(relation->rd_idattr);
 	relation->rd_idattr = NULL;
+	bms_free(relation->rd_hotblockingattr);
+	relation->rd_hotblockingattr = NULL;
 
 	/*
 	 * Now save copies of the bitmaps in the relcache entry.  We intentionally
-	 * set rd_indexattr last, because that's the one that signals validity of
-	 * the values; if we run out of memory before making that copy, we won't
+	 * set rd_attrsvalid last, because that's what signals validity of the
+	 * values; if we run out of memory before making that copy, we won't
 	 * leave the relcache entry looking like the other ones are valid but
 	 * empty.
 	 */
@@ -5208,20 +5212,21 @@ restart:
 	relation->rd_keyattr = bms_copy(uindexattrs);
 	relation->rd_pkattr = bms_copy(pkindexattrs);
 	relation->rd_idattr = bms_copy(idindexattrs);
-	relation->rd_indexattr = bms_copy(indexattrs);
+	relation->rd_hotblockingattr = bms_copy(hotblockingattrs);
+	relation->rd_attrsvalid = true;
 	MemoryContextSwitchTo(oldcxt);
 
 	/* We return our original working copy for caller to play with */
 	switch (attrKind)
 	{
-		case INDEX_ATTR_BITMAP_ALL:
-			return indexattrs;
 		case INDEX_ATTR_BITMAP_KEY:
 			return uindexattrs;
 		case INDEX_ATTR_BITMAP_PRIMARY_KEY:
 			return pkindexattrs;
 		case INDEX_ATTR_BITMAP_IDENTITY_KEY:
 			return idindexattrs;
+		case INDEX_ATTR_BITMAP_HOT_BLOCKING:
+			return hotblockingattrs;
 		default:
 			elog(ERROR, "unknown attrKind %u", attrKind);
 			return NULL;
@@ -6070,10 +6075,10 @@ load_relcache_init_file(bool shared)
 		rel->rd_indexlist = NIL;
 		rel->rd_pkindex = InvalidOid;
 		rel->rd_replidindex = InvalidOid;
-		rel->rd_indexattr = NULL;
 		rel->rd_keyattr = NULL;
 		rel->rd_pkattr = NULL;
 		rel->rd_idattr = NULL;
+		rel->rd_hotblockingattr = NULL;
 		rel->rd_pubactions = NULL;
 		rel->rd_statvalid = false;
 		rel->rd_statlist = NIL;

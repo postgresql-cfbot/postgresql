@@ -215,6 +215,30 @@ ALTER SUBSCRIPTION regress_testsub SET (two_phase = false);
 -- but can alter streaming when two_phase enabled
 ALTER SUBSCRIPTION regress_testsub SET (streaming = true);
 
+ALTER SUBSCRIPTION regress_testsub SET (slot_name = NONE);
+
+-- ok
+ALTER SUBSCRIPTION regress_testsub RESET (synchronous_commit);
+ALTER SUBSCRIPTION regress_testsub RESET (synchronous_commit, binary, streaming);
+
+-- fail - unsupported parameters
+ALTER SUBSCRIPTION regress_testsub RESET (connect);
+ALTER SUBSCRIPTION regress_testsub RESET (enabled);
+
+-- fail - RESET must not include values
+ALTER SUBSCRIPTION regress_testsub RESET (synchronous_commit = off);
+
+-- it works
+ALTER SUBSCRIPTION regress_testsub SET (skip_xid = 3);
+ALTER SUBSCRIPTION regress_testsub SET (skip_xid = '4294967295');
+ALTER SUBSCRIPTION regress_testsub RESET (skip_xid);
+
+-- fail - invalid XID
+ALTER SUBSCRIPTION regress_testsub SET (skip_xid = 1.1);
+ALTER SUBSCRIPTION regress_testsub SET (skip_xid = 0);
+ALTER SUBSCRIPTION regress_testsub SET (skip_xid = 1);
+ALTER SUBSCRIPTION regress_testsub SET (skip_xid = 2);
+
 \dRs+
 
 ALTER SUBSCRIPTION regress_testsub SET (slot_name = NONE);

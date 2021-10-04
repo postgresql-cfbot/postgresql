@@ -29,6 +29,7 @@ ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> REFRESH PUB
 ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> ENABLE
 ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> DISABLE
 ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> SET ( <replaceable class="parameter">subscription_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] )
+ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> RESET ( <replaceable class="parameter">subscription_parameter</replaceable> [, ... ] )
 ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> OWNER TO { <replaceable>new_owner</replaceable> | CURRENT_ROLE | CURRENT_USER | SESSION_USER }
 ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> RENAME TO <replaceable>new_name</replaceable>
 </synopsis>
@@ -194,15 +195,53 @@ ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> RENAME TO <
 
    <varlistentry>
     <term><literal>SET ( <replaceable class="parameter">subscription_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] )</literal></term>
+    <term><literal>RESET ( <replaceable class="parameter">subscription_parameter</replaceable> [, ... ] )</literal></term>
     <listitem>
      <para>
       This clause alters parameters originally set by
       <xref linkend="sql-createsubscription"/>.  See there for more
-      information.  The parameters that can be altered
+      information.  The parameters that can be set
       are <literal>slot_name</literal>,
       <literal>synchronous_commit</literal>,
       <literal>binary</literal>, and
       <literal>streaming</literal>.
+     </para>
+     <para>
+      The parameters that can be reset are: <literal>slot_name</literal>,
+      <literal>synchronous_commit</literal>, <literal>binary</literal>,
+      <literal>streaming</literal>, and following parameter:
+     </para>
+     <para>
+      <variablelist>
+       <varlistentry>
+        <term><literal>skip_xid</literal> (<type>xid</type>)</term>
+        <listitem>
+         <para>
+          If incoming data violates any constraints the logical replication
+          will stop until it is resolved.  The resolution can be done either
+          by changing data on the subscriber so that it doesn't conflict with
+          incoming change or by skipping the whole transaction.  This option
+          specifies transaction ID that logical replication worker skips to
+          apply.  The logical replication worker skips all data modification
+          changes within the specified transaction.  Therefore, since it skips
+          the whole transaction including the changes that may not violate the
+          constraint, it should only be used as a last resort.  This option has
+          no effect for the transaction that is already prepared with enabling
+          <literal>two_phase</literal> on susbscriber.  After the logical
+          replication successfully skips the transaction, the transaction ID
+          (stored in
+          <structname>pg_subscription</structname>.<structfield>subskipxid</structfield>)
+          is cleared.  See <xref linkend="logical-replication-conflicts"/> for
+          the details of logical replication conflicts.
+         </para>
+
+         <para>
+          Setting and resetting of <literal>skip_xid</literal> option is
+          restrited to superusers.
+         </para>
+        </listitem>
+       </varlistentry>
+      </variablelist>
      </para>
     </listitem>
    </varlistentry>

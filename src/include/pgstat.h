@@ -14,6 +14,7 @@
 #include "datatype/timestamp.h"
 #include "portability/instr_time.h"
 #include "postmaster/pgarch.h"	/* for MAX_XFN_CHARS */
+#include "replication/logicalproto.h"
 #include "utils/backend_progress.h" /* for backward compatibility */
 #include "utils/backend_status.h"	/* for backward compatibility */
 #include "utils/hsearch.h"
@@ -66,6 +67,7 @@ typedef enum StatMsgType
 	PGSTAT_MTYPE_RESETSINGLECOUNTER,
 	PGSTAT_MTYPE_RESETSLRUCOUNTER,
 	PGSTAT_MTYPE_RESETREPLSLOTCOUNTER,
+	PGSTAT_MTYPE_RESETSUBWORKERERROR,
 	PGSTAT_MTYPE_AUTOVAC_START,
 	PGSTAT_MTYPE_VACUUM,
 	PGSTAT_MTYPE_ANALYZE,
@@ -83,6 +85,9 @@ typedef enum StatMsgType
 	PGSTAT_MTYPE_REPLSLOT,
 	PGSTAT_MTYPE_CONNECT,
 	PGSTAT_MTYPE_DISCONNECT,
+	PGSTAT_MTYPE_SUBWORKERERROR,
+	PGSTAT_MTYPE_SUBWORKERERRORPURGE,
+	PGSTAT_MTYPE_SUBWORKERPURGE,
 } StatMsgType;
 
 /* ----------
@@ -390,6 +395,24 @@ typedef struct PgStat_MsgResetreplslotcounter
 } PgStat_MsgResetreplslotcounter;
 
 /* ----------
+ * PgStat_MsgRestsubworkererror	Sent by the backend to reset the subscription
+ *								worker error information.
+ * ----------
+ */
+typedef struct PgStat_MsgResetsubworkererror
+{
+	PgStat_MsgHdr m_hdr;
+
+	/*
+	 * Same as PgStat_MsgSubWorkerError, m_subid and m_subrelid are used to
+	 * determine the subscription and the reporter of the error: the apply
+	 * worker or the table sync worker.
+	 */
+	Oid			m_subid;
+	Oid			m_subrelid;
+} PgStat_MsgResetsubworkererror;
+
+/* ----------
  * PgStat_MsgAutovacStart		Sent by the autovacuum daemon to signal
  *								that a database is going to be processed
  * ----------
@@ -536,6 +559,67 @@ typedef struct PgStat_MsgReplSlot
 	PgStat_Counter m_total_bytes;
 } PgStat_MsgReplSlot;
 
+/* ----------
+ * PgStat_MsgSubWorkerError		Sent by the apply worker or the table sync worker to
+ *								report the error occurred during logical replication.
+ * ----------
+ */
+#define PGSTAT_SUBWORKERERROR_MSGLEN 256
+typedef struct PgStat_MsgSubWorkerError
+{
+	PgStat_MsgHdr m_hdr;
+
+	/*
+	 * m_subid and m_subrelid are used to determine the subscription and the
+	 * reporter of the error. m_subrelid is InvalidOid if reported by an apply
+	 * worker otherwise reported by a table sync worker.
+	 */
+	Oid			m_subid;
+	Oid			m_subrelid;
+
+	/*
+	 * Oid of the table that the reporter was actually processing. This can be
+	 * InvalidOid if the worker was applying a non-data-modification change
+	 * such as STREAM_STOP.
+	 */
+	Oid			m_relid;
+
+	LogicalRepMsgType m_command;
+	TransactionId m_xid;
+	TimestampTz m_timestamp;
+	char		m_message[PGSTAT_SUBWORKERERROR_MSGLEN];
+} PgStat_MsgSubWorkerError;
+
+/* ----------
+ * PgStat_MsgSubWorkerPurge		Sent by the backend and autovacuum to tell the
+ *								collector about the dead subscriptions.
+ * ----------
+ */
+#define PGSTAT_NUM_SUBWORKERPURGE  \
+	((PGSTAT_MSG_PAYLOAD - sizeof(int)) / sizeof(Oid))
+
+typedef struct PgStat_MsgSubWorkerPurge
+{
+	PgStat_MsgHdr m_hdr;
+	int			m_nentries;
+	Oid			m_subids[PGSTAT_NUM_SUBWORKERPURGE];
+} PgStat_MsgSubWorkerPurge;
+
+/* ----------
+ * PgStat_MsgSubWorkerErrorPurge	Sent by the backend and autovacuum to purge
+ *									the subscription errors.
+ * ----------
+ */
+#define PGSTAT_NUM_SUBWORKERERRORPURGE  \
+	((PGSTAT_MSG_PAYLOAD - sizeof(Oid) - sizeof(int)) / sizeof(Oid))
+
+typedef struct PgStat_MsgSubWorkerErrorPurge
+{
+	PgStat_MsgHdr m_hdr;
+	Oid			m_subid;
+	int			m_nentries;
+	Oid			m_relids[PGSTAT_NUM_SUBWORKERERRORPURGE];
+} PgStat_MsgSubWorkerErrorPurge;
 
 /* ----------
  * PgStat_MsgRecoveryConflict	Sent by the backend upon recovery conflict
@@ -697,6 +781,7 @@ typedef union PgStat_Msg
 	PgStat_MsgResetsinglecounter msg_resetsinglecounter;
 	PgStat_MsgResetslrucounter msg_resetslrucounter;
 	PgStat_MsgResetreplslotcounter msg_resetreplslotcounter;
+	PgStat_MsgResetsubworkererror msg_resetsubworkererror;
 	PgStat_MsgAutovacStart msg_autovacuum_start;
 	PgStat_MsgVacuum msg_vacuum;
 	PgStat_MsgAnalyze msg_analyze;
@@ -714,6 +799,9 @@ typedef union PgStat_Msg
 	PgStat_MsgReplSlot msg_replslot;
 	PgStat_MsgConnect msg_connect;
 	PgStat_MsgDisconnect msg_disconnect;
+	PgStat_MsgSubWorkerError msg_subworkererror;
+	PgStat_MsgSubWorkerErrorPurge msg_subworkererrorpurge;
+	PgStat_MsgSubWorkerPurge msg_subworkerpurge;
 } PgStat_Msg;
 
 
@@ -929,6 +1017,34 @@ typedef struct PgStat_StatReplSlotEntry
 	TimestampTz stat_reset_timestamp;
 } PgStat_StatReplSlotEntry;
 
+/* The lookup key for subscription worker hash table */
+typedef struct PgStat_StatSubWorkerKey
+{
+	Oid			subid;
+	Oid			subrelid;		/* InvalidOid for apply worker, otherwise for
+								 * table sync worker */
+} PgStat_StatSubWorkerKey;
+
+/*
+ * Logical replication apply worker and table sync worker statistics kept in the
+ * stats collector.
+ */
+typedef struct PgStat_StatSubWorkerEntry
+{
+	PgStat_StatSubWorkerKey key;	/* hash key (must be first) */
+
+	/*
+	 * Subscription worker error statistics representing an error that occurred
+	 * during application of logical replication or the initial table synchronization.
+	 */
+	Oid			relid;
+	LogicalRepMsgType command;
+	TransactionId xid;
+	PgStat_Counter count;
+	TimestampTz timestamp;
+	char		message[PGSTAT_SUBWORKERERROR_MSGLEN];
+	TimestampTz stat_reset_timestamp;
+} PgStat_StatSubWorkerEntry;
 
 /*
  * Working state needed to accumulate per-function-call timing statistics.
@@ -1022,6 +1138,7 @@ extern void pgstat_reset_shared_counters(const char *);
 extern void pgstat_reset_single_counter(Oid objectid, PgStat_Single_Reset_Type type);
 extern void pgstat_reset_slru_counter(const char *);
 extern void pgstat_reset_replslot_counter(const char *name);
+extern void pgstat_reset_subworker_error_stats(Oid subid, Oid subrelid);
 
 extern void pgstat_report_connect(Oid dboid);
 extern void pgstat_report_autovac(Oid dboid);
@@ -1038,6 +1155,9 @@ extern void pgstat_report_checksum_failure(void);
 extern void pgstat_report_replslot(const PgStat_StatReplSlotEntry *repSlotStat);
 extern void pgstat_report_replslot_create(const char *slotname);
 extern void pgstat_report_replslot_drop(const char *slotname);
+extern void pgstat_report_subworker_error(Oid subid, Oid subrelid, Oid relid,
+										  LogicalRepMsgType command,
+										  TransactionId xid, const char *errmsg);
 
 extern void pgstat_initialize(void);
 
@@ -1136,6 +1256,7 @@ extern PgStat_GlobalStats *pgstat_fetch_global(void);
 extern PgStat_WalStats *pgstat_fetch_stat_wal(void);
 extern PgStat_SLRUStats *pgstat_fetch_slru(void);
 extern PgStat_StatReplSlotEntry *pgstat_fetch_replslot(NameData slotname);
+extern PgStat_StatSubWorkerEntry *pgstat_fetch_subworker(Oid subid, Oid subrelid);
 
 extern void pgstat_count_slru_page_zeroed(int slru_idx);
 extern void pgstat_count_slru_page_hit(int slru_idx);

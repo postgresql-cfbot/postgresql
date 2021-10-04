@@ -104,6 +104,16 @@ GetSubscription(Oid subid, bool missing_ok)
 	Assert(!isnull);
 	sub->publications = textarray_to_stringlist(DatumGetArrayTypeP(datum));
 
+	/* Get skip XID */
+	datum = SysCacheGetAttr(SUBSCRIPTIONOID,
+							tup,
+							Anum_pg_subscription_subskipxid,
+							&isnull);
+	if (!isnull)
+		sub->skipxid = DatumGetTransactionId(datum);
+	else
+		sub->skipxid = InvalidTransactionId;
+
 	ReleaseSysCache(tup);
 
 	return sub;

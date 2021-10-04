@@ -41,6 +41,8 @@
 #include "catalog/catalog.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_proc.h"
+#include "catalog/pg_subscription.h"
+#include "catalog/pg_subscription_rel.h"
 #include "common/ip.h"
 #include "executor/instrument.h"
 #include "libpq/libpq.h"
@@ -106,6 +108,7 @@
 #define PGSTAT_TAB_HASH_SIZE	512
 #define PGSTAT_FUNCTION_HASH_SIZE	512
 #define PGSTAT_REPLSLOT_HASH_SIZE	32
+#define PGSTAT_SUBWORKER_HASH_SIZE	32
 
 
 /* ----------
@@ -282,6 +285,7 @@ static PgStat_GlobalStats globalStats;
 static PgStat_WalStats walStats;
 static PgStat_SLRUStats slruStats[SLRU_NUM_ELEMENTS];
 static HTAB *replSlotStatHash = NULL;
+static HTAB *subWorkerStatHash = NULL;
 
 /*
  * List of OIDs of databases we need to write out.  If an entry is InvalidOid,
@@ -332,6 +336,13 @@ static bool pgstat_db_requested(Oid databaseid);
 static PgStat_StatReplSlotEntry *pgstat_get_replslot_entry(NameData name, bool create_it);
 static void pgstat_reset_replslot(PgStat_StatReplSlotEntry *slotstats, TimestampTz ts);
 
+static PgStat_StatSubWorkerEntry *pgstat_get_subworker_entry(Oid subid, Oid subrelid,
+															 bool create);
+static void pgstat_reset_subworker_error(PgStat_StatSubWorkerEntry *wentry, TimestampTz ts);
+static void pgstat_report_subworker_purge(PgStat_MsgSubWorkerPurge *msg);
+static void pgstat_report_subworker_error_purge(PgStat_MsgSubWorkerErrorPurge *msg);
+static void pgstat_vacuum_subworker_stats(void);
+
 static void pgstat_send_tabstat(PgStat_MsgTabstat *tsmsg, TimestampTz now);
 static void pgstat_send_funcstats(void);
 static void pgstat_send_slru(void);
@@ -356,6 +367,7 @@ static void pgstat_recv_resetsharedcounter(PgStat_MsgResetsharedcounter *msg, in
 static void pgstat_recv_resetsinglecounter(PgStat_MsgResetsinglecounter *msg, int len);
 static void pgstat_recv_resetslrucounter(PgStat_MsgResetslrucounter *msg, int len);
 static void pgstat_recv_resetreplslotcounter(PgStat_MsgResetreplslotcounter *msg, int len);
+static void pgstat_recv_resetsubworkererror(PgStat_MsgResetsubworkererror *msg, int len);
 static void pgstat_recv_autovac(PgStat_MsgAutovacStart *msg, int len);
 static void pgstat_recv_vacuum(PgStat_MsgVacuum *msg, int len);
 static void pgstat_recv_analyze(PgStat_MsgAnalyze *msg, int len);
@@ -373,6 +385,10 @@ static void pgstat_recv_connect(PgStat_MsgConnect *msg, int len);
 static void pgstat_recv_disconnect(PgStat_MsgDisconnect *msg, int len);
 static void pgstat_recv_replslot(PgStat_MsgReplSlot *msg, int len);
 static void pgstat_recv_tempfile(PgStat_MsgTempFile *msg, int len);
+static void pgstat_recv_subworker_error(PgStat_MsgSubWorkerError *msg, int len);
+static void pgstat_recv_subworker_error_purge(PgStat_MsgSubWorkerErrorPurge *msg,
+											  int len);
+static void pgstat_recv_subworker_purge(PgStat_MsgSubWorkerPurge *msg, int len);
 
 /* ------------------------------------------------------------
  * Public functions called from postmaster follow
@@ -1178,6 +1194,10 @@ pgstat_vacuum_stat(void)
 		}
 	}
 
+	/* Cleanup the dead subscription workers statistics */
+	if (subWorkerStatHash)
+		pgstat_vacuum_subworker_stats();
+
 	/*
 	 * Lookup our own database entry; if not found, nothing more to do.
 	 */
@@ -1354,6 +1374,218 @@ pgstat_collect_oids(Oid catalogid, AttrNumber anum_oid)
 	return htab;
 }
 
+
+/* PgStat_StatSubWorkerEntry comparator, sorting subid and subrelid */
+static int
+subworker_stats_comparator(const ListCell *a, const ListCell *b)
+{
+	PgStat_StatSubWorkerEntry *entry1 = (PgStat_StatSubWorkerEntry *) lfirst(a);
+	PgStat_StatSubWorkerEntry *entry2 = (PgStat_StatSubWorkerEntry *) lfirst(b);
+	int			ret;
+
+	ret = oid_cmp(&entry1->key.subid, &entry2->key.subid);
+	if (ret != 0)
+		return ret;
+
+	return oid_cmp(&entry1->key.subrelid, &entry2->key.subrelid);
+}
+
+/* ----------
+ * pgstat_vacuum_subworker_stat() -
+ *
+ * This is a subroutine for pgstat_vacuum_stat to tell the collector about
+ * the all the dead subscription worker statistics.
+ */
+static void
+pgstat_vacuum_subworker_stats(void)
+{
+	struct subid_dbid_mapping
+	{
+		Oid			subid;
+		Oid			dbid;
+	};
+	HTAB	   *subdbmap;
+	HASHCTL		hash_ctl;
+	HASH_SEQ_STATUS hstat;
+	Relation	rel;
+	HeapTuple	tup;
+	Snapshot	snapshot;
+	TupleDesc	desc;
+	TableScanDesc scan;
+	PgStat_MsgSubWorkerPurge wpmsg;
+	PgStat_MsgSubWorkerErrorPurge epmsg;
+	PgStat_StatSubWorkerEntry *wentry;
+	List	   *subworker_stats = NIL;
+	List	   *not_ready_rels = NIL;
+	ListCell   *lc1;
+
+	/* Create a map for mapping subscriptoin OID and database OID */
+	hash_ctl.keysize = sizeof(Oid);
+	hash_ctl.entrysize = sizeof(struct subid_dbid_mapping);
+	subdbmap = hash_create("Temporary map of subscription and database OIDs",
+						   PGSTAT_SUBWORKER_HASH_SIZE,
+						   &hash_ctl,
+						   HASH_ELEM | HASH_BLOBS);
+
+	rel = table_open(SubscriptionRelationId, AccessShareLock);
+	snapshot = RegisterSnapshot(GetLatestSnapshot());
+	scan = table_beginscan(rel, snapshot, 0, NULL);
+	desc = RelationGetDescr(rel);
+
+	/* Register entries into the hash table */
+	while (HeapTupleIsValid(tup = heap_getnext(scan, ForwardScanDirection)))
+	{
+		struct subid_dbid_mapping buf;
+		struct subid_dbid_mapping *entry;
+		bool		isnull;
+
+		CHECK_FOR_INTERRUPTS();
+
+		buf.subid = heap_getattr(tup, Anum_pg_subscription_oid, desc, &isnull);
+		Assert(!isnull);
+
+		buf.dbid = heap_getattr(tup, Anum_pg_subscription_subdbid, desc, &isnull);
+		Assert(!isnull);
+
+		entry = hash_search(subdbmap, (void *) &(buf.subid), HASH_ENTER, NULL);
+		entry->dbid = buf.dbid;
+	}
+	table_endscan(scan);
+	UnregisterSnapshot(snapshot);
+	table_close(rel, AccessShareLock);
+
+	/* Build the list of worker stats and sort it by subid and relid */
+	hash_seq_init(&hstat, subWorkerStatHash);
+	while ((wentry = (PgStat_StatSubWorkerEntry *) hash_seq_search(&hstat)) != NULL)
+		subworker_stats = lappend(subworker_stats, wentry);
+	list_sort(subworker_stats, subworker_stats_comparator);
+
+	wpmsg.m_nentries = 0;
+	epmsg.m_nentries = 0;
+	epmsg.m_subid = InvalidOid;
+
+	/*
+	 * Search for all the dead subscriptions and unnecessary table sync worker
+	 * entries in stats hashtable and tell the stats collector to drop them.
+	 */
+	foreach(lc1, subworker_stats)
+	{
+		struct subid_dbid_mapping *hentry;
+		ListCell   *lc2;
+		bool		keep_it = false;
+
+		wentry = (PgStat_StatSubWorkerEntry *) lfirst(lc1);
+
+		CHECK_FOR_INTERRUPTS();
+
+		/* Skip if we already registered this subscription to purge */
+		if (wpmsg.m_nentries > 0 &&
+			wpmsg.m_subids[wpmsg.m_nentries - 1] == wentry->key.subid)
+			continue;
+
+		/* Check if the subscription is dead */
+		if ((hentry = hash_search(subdbmap, (void *) &(wentry->key.subid),
+								  HASH_FIND, NULL)) == NULL)
+		{
+			/* This subscription is dead, add the subid to the message */
+			wpmsg.m_subids[wpmsg.m_nentries++] = wentry->key.subid;
+
+			/*
+			 * If the message is full, send it out and reinitialize to empty
+			 */
+			if (wpmsg.m_nentries >= PGSTAT_NUM_SUBWORKERPURGE)
+			{
+				pgstat_report_subworker_purge(&wpmsg);
+				wpmsg.m_nentries = 0;
+			}
+
+			continue;
+		}
+
+		/*
+		 * This subscription is live.  The next step is that we search errors
+		 * of the table sync workers who are already in sync state. These
+		 * errors should be removed.
+		 */
+
+		/* We remove only table sync errors in the current database */
+		if (hentry->dbid != MyDatabaseId)
+			continue;
+
+		/* Skip if it's an apply worker error */
+		if (!OidIsValid(wentry->key.subrelid))
+			continue;
+
+		if (epmsg.m_subid != wentry->key.subid)
+		{
+			/*
+			 * Send the purge message for previously collected table sync
+			 * errors, if there is.
+			 */
+			if (epmsg.m_nentries > 0)
+			{
+				pgstat_report_subworker_error_purge(&epmsg);
+				epmsg.m_nentries = 0;
+			}
+
+			/* Clean up if necessary */
+			if (not_ready_rels != NIL)
+				list_free_deep(not_ready_rels);
+
+			/* Refresh the not-ready-relations of this subscription */
+			not_ready_rels = GetSubscriptionNotReadyRelations(wentry->key.subid);
+
+			/* Prepare the error purge message for the subscription */
+			epmsg.m_subid = wentry->key.subid;
+		}
+
+		/*
+		 * Check if the table is still being synchronized or no longer belongs
+		 * to the subscription.
+		 */
+		foreach(lc2, not_ready_rels)
+		{
+			SubscriptionRelState *relstate = (SubscriptionRelState *) lfirst(lc2);
+
+			if (relstate->relid == wentry->key.subrelid)
+			{
+				/* This table is still being synchronized, so keep it */
+				keep_it = true;
+				break;
+			}
+		}
+
+		if (keep_it)
+			continue;
+
+		/* Add the table to the error purge message */
+		epmsg.m_relids[epmsg.m_nentries++] = wentry->key.subrelid;
+
+		/*
+		 * If the error purge message is full, send it out and reinitialize to
+		 * empty
+		 */
+		if (epmsg.m_nentries >= PGSTAT_NUM_SUBWORKERERRORPURGE)
+		{
+			pgstat_report_subworker_error_purge(&epmsg);
+			epmsg.m_nentries = 0;
+		}
+	}
+
+	/* Send the rest of dead subscriptions */
+	if (wpmsg.m_nentries > 0)
+		pgstat_report_subworker_purge(&wpmsg);
+
+	/* Send the rest of dead error entries */
+	if (epmsg.m_nentries > 0)
+		pgstat_report_subworker_error_purge(&epmsg);
+
+	/* Clean up */
+	if (not_ready_rels != NIL)
+		list_free_deep(not_ready_rels);
+
+	hash_destroy(subdbmap);
+}
 
 /* ----------
  * pgstat_drop_database() -
@@ -1542,6 +1774,24 @@ pgstat_reset_replslot_counter(const char *name)
 	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_RESETREPLSLOTCOUNTER);
 
 	pgstat_send(&msg, sizeof(msg));
+}
+
+/* ----------
+ * pgstat_reset_subscription_error_stats() -
+ *
+ *	Tell the collector to reset the subscription worker error.
+ * ----------
+ */
+void
+pgstat_reset_subworker_error_stats(Oid subid, Oid subrelid)
+{
+	PgStat_MsgResetsubworkererror msg;
+
+	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_RESETSUBWORKERERROR);
+	msg.m_subid = subid;
+	msg.m_subrelid = subrelid;
+
+	pgstat_send(&msg, sizeof(PgStat_MsgResetsubworkererror));
 }
 
 /* ----------
@@ -1804,6 +2054,47 @@ pgstat_should_report_connstat(void)
 	return MyBackendType == B_BACKEND;
 }
 
+/* --------
+ * pgstat_report_subworker_purge() -
+ *
+ *	Tell the collector about dead subscriptions.
+ * --------
+ */
+static void
+pgstat_report_subworker_purge(PgStat_MsgSubWorkerPurge *msg)
+{
+	int			len;
+
+	Assert(msg->m_nentries > 0);
+
+	len = offsetof(PgStat_MsgSubWorkerPurge, m_subids[0])
+		+ msg->m_nentries * sizeof(Oid);
+
+	pgstat_setheader(&msg->m_hdr, PGSTAT_MTYPE_SUBWORKERPURGE);
+	pgstat_send(msg, len);
+}
+
+/* --------
+ * pgstat_report_subworker_error_purge() -
+ *
+ *	Tell the collector to remove table sync errors.
+ * --------
+ */
+static void
+pgstat_report_subworker_error_purge(PgStat_MsgSubWorkerErrorPurge *msg)
+{
+	int			len;
+
+	Assert(OidIsValid(msg->m_subid));
+	Assert(msg->m_nentries > 0);
+
+	len = offsetof(PgStat_MsgSubWorkerErrorPurge, m_relids[0])
+		+ msg->m_nentries * sizeof(Oid);
+
+	pgstat_setheader(&msg->m_hdr, PGSTAT_MTYPE_SUBWORKERERRORPURGE);
+	pgstat_send(msg, len);
+}
+
 /* ----------
  * pgstat_report_replslot() -
  *
@@ -1867,6 +2158,35 @@ pgstat_report_replslot_drop(const char *slotname)
 	msg.m_create = false;
 	msg.m_drop = true;
 	pgstat_send(&msg, sizeof(PgStat_MsgReplSlot));
+}
+
+/* ----------
+ * pgstat_report_subworker_error() -
+ *
+ *	Tell the collector about the subscription worker error.
+ * ----------
+ */
+void
+pgstat_report_subworker_error(Oid subid, Oid subrelid, Oid relid,
+							  LogicalRepMsgType command, TransactionId xid,
+							  const char *errmsg)
+{
+	PgStat_MsgSubWorkerError msg;
+	int			len;
+
+	Assert(strlen(errmsg) < PGSTAT_SUBWORKERERROR_MSGLEN);
+	len = offsetof(PgStat_MsgSubWorkerError, m_message[0]) + strlen(errmsg) + 1;
+
+	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_SUBWORKERERROR);
+	msg.m_subid = subid;
+	msg.m_subrelid = subrelid;
+	msg.m_relid = relid;
+	msg.m_command = command;
+	msg.m_xid = xid;
+	msg.m_timestamp = GetCurrentTimestamp();
+	strlcpy(msg.m_message, errmsg, PGSTAT_SUBWORKERERROR_MSGLEN);
+
+	pgstat_send(&msg, len);
 }
 
 /* ----------
@@ -2988,6 +3308,22 @@ pgstat_fetch_replslot(NameData slotname)
 }
 
 /*
+ * ---------
+ * pgstat_fetch_subworker() -
+ *
+ *	Support function for the SQL-callable pgstat* functions. Returns
+ *	a pointer to the subscription worker struct.
+ * ---------
+ */
+PgStat_StatSubWorkerEntry *
+pgstat_fetch_subworker(Oid subid, Oid subrelid)
+{
+	backend_read_statsfile();
+
+	return pgstat_get_subworker_entry(subid, subrelid, false);
+}
+
+/*
  * Shut down a single backend's statistics reporting at process exit.
  *
  * Flush any remaining statistics counts out to the collector.
@@ -3498,6 +3834,11 @@ PgstatCollectorMain(int argc, char *argv[])
 													 len);
 					break;
 
+				case PGSTAT_MTYPE_RESETSUBWORKERERROR:
+					pgstat_recv_resetsubworkererror(&msg.msg_resetsubworkererror,
+													len);
+					break;
+
 				case PGSTAT_MTYPE_AUTOVAC_START:
 					pgstat_recv_autovac(&msg.msg_autovacuum_start, len);
 					break;
@@ -3566,6 +3907,19 @@ PgstatCollectorMain(int argc, char *argv[])
 
 				case PGSTAT_MTYPE_DISCONNECT:
 					pgstat_recv_disconnect(&msg.msg_disconnect, len);
+					break;
+
+				case PGSTAT_MTYPE_SUBWORKERERROR:
+					pgstat_recv_subworker_error(&msg.msg_subworkererror, len);
+					break;
+
+				case PGSTAT_MTYPE_SUBWORKERERRORPURGE:
+					pgstat_recv_subworker_error_purge(&msg.msg_subworkererrorpurge,
+													  len);
+					break;
+
+				case PGSTAT_MTYPE_SUBWORKERPURGE:
+					pgstat_recv_subworker_purge(&msg.msg_subworkerpurge, len);
 					break;
 
 				default:
@@ -3864,6 +4218,22 @@ pgstat_write_statsfiles(bool permanent, bool allDbs)
 		{
 			fputc('R', fpout);
 			rc = fwrite(slotent, sizeof(PgStat_StatReplSlotEntry), 1, fpout);
+			(void) rc;			/* we'll check for error with ferror */
+		}
+	}
+
+	/*
+	 * Write subscription worker stats struct
+	 */
+	if (subWorkerStatHash)
+	{
+		PgStat_StatSubWorkerEntry *wentry;
+
+		hash_seq_init(&hstat, subWorkerStatHash);
+		while ((wentry = (PgStat_StatSubWorkerEntry *) hash_seq_search(&hstat)) != NULL)
+		{
+			fputc('S', fpout);
+			rc = fwrite(wentry, sizeof(PgStat_StatSubWorkerEntry), 1, fpout);
 			(void) rc;			/* we'll check for error with ferror */
 		}
 	}
@@ -4329,6 +4699,48 @@ pgstat_read_statsfiles(Oid onlydb, bool permanent, bool deep)
 					break;
 				}
 
+				/*
+				 * 'S'	A PgStat_StatSubWorkerEntry struct describing a
+				 * subscription worker statistics.
+				 */
+			case 'S':
+				{
+					PgStat_StatSubWorkerEntry wbuf;
+					PgStat_StatSubWorkerEntry *wentry;
+
+					/* Read the subscription entry */
+					if (fread(&wbuf, 1, sizeof(PgStat_StatSubWorkerEntry), fpin)
+						!= sizeof(PgStat_StatSubWorkerEntry))
+					{
+						ereport(pgStatRunningInCollector ? LOG : WARNING,
+								(errmsg("corrupted statistics file \"%s\"",
+										statfile)));
+						goto done;
+					}
+
+					/* Create hash table if we don't have it already. */
+					if (subWorkerStatHash == NULL)
+					{
+						HASHCTL		hash_ctl;
+
+						hash_ctl.keysize = sizeof(PgStat_StatSubWorkerKey);
+						hash_ctl.entrysize = sizeof(PgStat_StatSubWorkerEntry);
+						hash_ctl.hcxt = pgStatLocalContext;
+						subWorkerStatHash = hash_create("Subscription worker stat entries",
+														PGSTAT_SUBWORKER_HASH_SIZE,
+														&hash_ctl,
+														HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+					}
+
+					/* Enter the subscription entry and initialize fields */
+					wentry =
+						(PgStat_StatSubWorkerEntry *) hash_search(subWorkerStatHash,
+																  (void *) &wbuf.key,
+																  HASH_ENTER, NULL);
+					memcpy(wentry, &wbuf, sizeof(PgStat_StatSubWorkerEntry));
+					break;
+				}
+
 			case 'E':
 				goto done;
 
@@ -4541,6 +4953,7 @@ pgstat_read_db_statsfile_timestamp(Oid databaseid, bool permanent,
 	PgStat_WalStats myWalStats;
 	PgStat_SLRUStats mySLRUStats[SLRU_NUM_ELEMENTS];
 	PgStat_StatReplSlotEntry myReplSlotStats;
+	PgStat_StatSubWorkerEntry mySubWorkerStats;
 	FILE	   *fpin;
 	int32		format_id;
 	const char *statfile = permanent ? PGSTAT_STAT_PERMANENT_FILENAME : pgstat_stat_filename;
@@ -4662,6 +5075,22 @@ pgstat_read_db_statsfile_timestamp(Oid databaseid, bool permanent,
 			case 'R':
 				if (fread(&myReplSlotStats, 1, sizeof(PgStat_StatReplSlotEntry), fpin)
 					!= sizeof(PgStat_StatReplSlotEntry))
+				{
+					ereport(pgStatRunningInCollector ? LOG : WARNING,
+							(errmsg("corrupted statistics file \"%s\"",
+									statfile)));
+					FreeFile(fpin);
+					return false;
+				}
+				break;
+
+				/*
+				 * 'S'	A PgStat_StatSubWorkerEntry struct describing a
+				 * subscription worker statistics.
+				 */
+			case 'S':
+				if (fread(&mySubWorkerStats, 1, sizeof(mySubWorkerStats), fpin)
+					!= sizeof(mySubWorkerStats))
 				{
 					ereport(pgStatRunningInCollector ? LOG : WARNING,
 							(errmsg("corrupted statistics file \"%s\"",
@@ -4876,6 +5305,7 @@ pgstat_clear_snapshot(void)
 	pgStatLocalContext = NULL;
 	pgStatDBHash = NULL;
 	replSlotStatHash = NULL;
+	subWorkerStatHash = NULL;
 
 	/*
 	 * Historically the backend_status.c facilities lived in this file, and
@@ -5344,6 +5774,33 @@ pgstat_recv_resetreplslotcounter(PgStat_MsgResetreplslotcounter *msg,
 	}
 }
 
+/* ----------
+ * pgstat_recv_resetsubworkererror() -
+ *
+ *	Process a RESETSUBWORKERERROR message.
+ * ----------
+ */
+static void
+pgstat_recv_resetsubworkererror(PgStat_MsgResetsubworkererror *msg, int len)
+{
+	PgStat_StatSubWorkerEntry *wentry;
+
+	Assert(OidIsValid(msg->m_subid));
+
+	/* Get subscription worker stats */
+	wentry = pgstat_get_subworker_entry(msg->m_subid, msg->m_subrelid, false);
+
+	/*
+	 * Nothing to do if the subscription error entry is not found.  This could
+	 * happen when the subscription is dropped and the message for dropping
+	 * subscription entry arrived before the message for resetting the error.
+	 */
+	if (wentry == NULL)
+		return;
+
+	/* reset the entry and set reset timestamp */
+	pgstat_reset_subworker_error(wentry, GetCurrentTimestamp());
+}
 
 /* ----------
  * pgstat_recv_autovac() -
@@ -5817,6 +6274,93 @@ pgstat_recv_funcpurge(PgStat_MsgFuncpurge *msg, int len)
 }
 
 /* ----------
+ * pgstat_recv_subworker_error() -
+ *
+ *	Process a SUBWORKERERROR message.
+ * ----------
+ */
+static void
+pgstat_recv_subworker_error(PgStat_MsgSubWorkerError *msg, int len)
+{
+	PgStat_StatSubWorkerEntry *wentry;
+
+	/* Get the subscription worker stats */
+	wentry = pgstat_get_subworker_entry(msg->m_subid, msg->m_subrelid, true);
+	Assert(wentry);
+
+	/*
+	 * Update only the counter and timestamp if we received the same error
+	 * again
+	 */
+	if (wentry->relid == msg->m_relid &&
+		wentry->command == msg->m_command &&
+		wentry->xid == msg->m_xid &&
+		strncmp(wentry->message, msg->m_message, strlen(wentry->message)) == 0)
+	{
+		wentry->count++;
+		wentry->timestamp = msg->m_timestamp;
+		return;
+	}
+
+	/* Otherwise, update the error information */
+	wentry->relid = msg->m_relid;
+	wentry->command = msg->m_command;
+	wentry->xid = msg->m_xid;
+	wentry->count = 1;
+	wentry->timestamp = msg->m_timestamp;
+	strlcpy(wentry->message, msg->m_message, PGSTAT_SUBWORKERERROR_MSGLEN);
+}
+
+/* ----------
+ * pgstat_recv_subworker_purge() -
+ *
+ *	Process a SUBWORKERPURGE message.
+ * ----------
+ */
+static void
+pgstat_recv_subworker_purge(PgStat_MsgSubWorkerPurge *msg, int len)
+{
+	if (subWorkerStatHash == NULL)
+		return;
+
+	for (int i = 0; i < msg->m_nentries; i++)
+	{
+		HASH_SEQ_STATUS sstat;
+		PgStat_StatSubWorkerEntry *wentry;
+
+		/* Remove all worker statistics of the subscription */
+		hash_seq_init(&sstat, subWorkerStatHash);
+		while ((wentry = (PgStat_StatSubWorkerEntry *) hash_seq_search(&sstat)) != NULL)
+		{
+			if (wentry->key.subid == msg->m_subids[i])
+				(void) hash_search(subWorkerStatHash, (void *) &(wentry->key),
+								   HASH_REMOVE, NULL);
+		}
+	}
+}
+
+/* ----------
+ * pgstat_recv_subworker_error_purge() -
+ *
+ *	Process a SUBWORKERERRORPURGE message.
+ * ----------
+ */
+static void
+pgstat_recv_subworker_error_purge(PgStat_MsgSubWorkerErrorPurge *msg, int len)
+{
+	PgStat_StatSubWorkerKey key;
+
+	key.subid = msg->m_subid;
+	for (int i = 0; i < msg->m_nentries; i++)
+	{
+		Assert(OidIsValid(msg->m_relids[i]));
+
+		key.subrelid = msg->m_relids[i];
+		(void) hash_search(subWorkerStatHash, (void *) &key, HASH_REMOVE, NULL);
+	}
+}
+
+/* ----------
  * pgstat_write_statsfile_needed() -
  *
  *	Do we need to write out any stats files?
@@ -5932,6 +6476,71 @@ pgstat_reset_replslot(PgStat_StatReplSlotEntry *slotent, TimestampTz ts)
 	slotent->total_txns = 0;
 	slotent->total_bytes = 0;
 	slotent->stat_reset_timestamp = ts;
+}
+
+/* ----------
+ * pgstat_get_subworker_entry
+ *
+ * Return the entry of subscription worker entry with the subscription
+ * OID and relation OID.  If subrelid is InvalidOid, it returns an entry
+ * of the apply worker otherwise of the table sync worker associated with
+ * subrelid. If no subscription entry exists, initialize it, if the
+ * create parameter is true.  Else, return NULL.
+ * ----------
+ */
+static PgStat_StatSubWorkerEntry *
+pgstat_get_subworker_entry(Oid subid, Oid subrelid, bool create)
+{
+	PgStat_StatSubWorkerEntry *wentry;
+	PgStat_StatSubWorkerKey key;
+	HASHACTION	action;
+	bool		found;
+
+	if (subWorkerStatHash == NULL)
+	{
+		HASHCTL		hash_ctl;
+
+		if (!create)
+			return NULL;
+
+		hash_ctl.keysize = sizeof(PgStat_StatSubWorkerKey);
+		hash_ctl.entrysize = sizeof(PgStat_StatSubWorkerEntry);
+		subWorkerStatHash = hash_create("Subscription worker stat entries",
+										PGSTAT_SUBWORKER_HASH_SIZE,
+										&hash_ctl,
+										HASH_ELEM | HASH_BLOBS);
+	}
+
+	key.subid = subid;
+	key.subrelid = subrelid;
+	action = (create ? HASH_ENTER : HASH_FIND);
+	wentry = (PgStat_StatSubWorkerEntry *) hash_search(subWorkerStatHash,
+													   (void *) &key,
+													   action, &found);
+
+	/* initialize fields */
+	if (create && !found)
+		pgstat_reset_subworker_error(wentry, 0);
+
+	return wentry;
+}
+
+/* ----------
+ * pgstat_reset_subworker_error
+ *
+ * Reset the given subscription worker error stats.
+ * ----------
+ */
+static void
+pgstat_reset_subworker_error(PgStat_StatSubWorkerEntry *wentry, TimestampTz ts)
+{
+	wentry->relid = InvalidOid;
+	wentry->command = 0;
+	wentry->xid = InvalidTransactionId;
+	wentry->count = 0;
+	wentry->timestamp = 0;
+	wentry->message[0] = '\0';
+	wentry->stat_reset_timestamp = ts;
 }
 
 /*

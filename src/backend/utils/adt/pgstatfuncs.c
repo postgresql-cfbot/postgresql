@@ -24,6 +24,7 @@
 #include "pgstat.h"
 #include "postmaster/bgworker_internals.h"
 #include "postmaster/postmaster.h"
+#include "replication/logicalproto.h"
 #include "replication/slot.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
@@ -2239,6 +2240,23 @@ pg_stat_reset_replication_slot(PG_FUNCTION_ARGS)
 	PG_RETURN_VOID();
 }
 
+/* Reset a subscription error stats */
+Datum
+pg_stat_reset_subscription_error(PG_FUNCTION_ARGS)
+{
+	Oid			subid = PG_GETARG_OID(0);
+	Oid			relid;
+
+	if (PG_ARGISNULL(1))
+		relid = InvalidOid;		/* reset apply worker error stats */
+	else
+		relid = PG_GETARG_OID(1);	/* reset table sync worker error stats */
+
+	pgstat_reset_subworker_error_stats(subid, relid);
+
+	PG_RETURN_VOID();
+}
+
 Datum
 pg_stat_get_archiver(PG_FUNCTION_ARGS)
 {
@@ -2375,6 +2393,109 @@ pg_stat_get_replication_slot(PG_FUNCTION_ARGS)
 		nulls[9] = true;
 	else
 		values[9] = TimestampTzGetDatum(slotent->stat_reset_timestamp);
+
+	/* Returns the record as Datum */
+	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
+}
+
+/*
+ * Get the subscription error for the given subscription (and relation).
+ */
+Datum
+pg_stat_get_subscription_error(PG_FUNCTION_ARGS)
+{
+#define PG_STAT_GET_SUBSCRIPTION_ERROR_COLS 9
+	Oid			subid = PG_GETARG_OID(0);
+	Oid			subrelid;
+	TupleDesc	tupdesc;
+	Datum		values[PG_STAT_GET_SUBSCRIPTION_ERROR_COLS];
+	bool		nulls[PG_STAT_GET_SUBSCRIPTION_ERROR_COLS];
+	PgStat_StatSubWorkerEntry *wentry;
+	int			i;
+
+	if (PG_ARGISNULL(1))
+		subrelid = InvalidOid;
+	else
+		subrelid = PG_GETARG_OID(1);
+
+	/* Initialise attributes information in the tuple descriptor */
+	tupdesc = CreateTemplateTupleDesc(PG_STAT_GET_SUBSCRIPTION_ERROR_COLS);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "subid",
+					   OIDOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 2, "subrelid",
+					   OIDOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 3, "relid",
+					   OIDOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 4, "command",
+					   TEXTOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 5, "xid",
+					   XIDOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 6, "count",
+					   INT8OID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 7, "error_message",
+					   TEXTOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 8, "last_failed_time",
+					   TIMESTAMPTZOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 9, "stats_reset",
+					   TIMESTAMPTZOID, -1, 0);
+	BlessTupleDesc(tupdesc);
+
+	/* Get subscription worker stats */
+	wentry = pgstat_fetch_subworker(subid, subrelid);
+
+	/* Return NULL if the subscription doesn't have any errors */
+	if (wentry == NULL)
+		PG_RETURN_NULL();
+
+	/* Initialise values and NULL flags arrays */
+	MemSet(values, 0, sizeof(values));
+	MemSet(nulls, 0, sizeof(nulls));
+
+	i = 0;
+	/* subid */
+	values[i++] = ObjectIdGetDatum(subid);
+
+	/* subrelid */
+	if (OidIsValid(subrelid))
+		values[i++] = ObjectIdGetDatum(subrelid);
+	else
+		nulls[i++] = true;
+
+	/* relid */
+	if (OidIsValid(wentry->relid))
+		values[i++] = ObjectIdGetDatum(wentry->relid);
+	else
+		nulls[i++] = true;
+
+	/* command */
+	if (wentry->command != 0)
+		values[i++] = CStringGetTextDatum(logicalrep_message_type(wentry->command));
+	else
+		nulls[i++] = true;
+
+	/* xid */
+	if (TransactionIdIsValid(wentry->xid))
+		values[i++] = TransactionIdGetDatum(wentry->xid);
+	else
+		nulls[i++] = true;
+
+	/* count */
+	values[i++] = Int64GetDatum(wentry->count);
+
+	/* error_message */
+	values[i++] = CStringGetTextDatum(wentry->message);
+
+	/* last_failed_time */
+	if (wentry->timestamp != 0)
+		values[i++] = TimestampTzGetDatum(wentry->timestamp);
+	else
+		nulls[i++] = true;
+
+	/* stats_reset */
+	if (wentry->stat_reset_timestamp != 0)
+		values[i++] = TimestampTzGetDatum(wentry->stat_reset_timestamp);
+	else
+		nulls[i++] = true;
 
 	/* Returns the record as Datum */
 	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));

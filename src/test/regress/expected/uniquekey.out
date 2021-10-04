@@ -1,0 +1,445 @@
+CREATE TABLE uqk1(a int, pk int primary key, c int,  d int);
+CREATE TABLE uqk2(a int, pk int primary key, c int,  d int);
+INSERT INTO uqk1 VALUES(1, 1, 1, 1), (2, 2, 2, 2), (3, 3, 3, 3), (4, 4, null, 4), (5, 5, null, 4);
+INSERT INTO uqk2 VALUES(1, 1, 1, 1), (4, 4, 4, 4), (5, 5, 5, 5);
+ANALYZE uqk1;
+ANALYZE uqk2;
+-- Test single table primary key.
+EXPLAIN (COSTS OFF) SELECT DISTINCT * FROM uqk1;
+    QUERY PLAN    
+------------------
+ Seq Scan on uqk1
+(1 row)
+
+-- Test EC case.
+EXPLAIN (COSTS OFF) SELECT DISTINCT d FROM uqk1 WHERE d = pk;
+     QUERY PLAN     
+--------------------
+ Seq Scan on uqk1
+   Filter: (d = pk)
+(2 rows)
+
+-- Test UniqueKey indexes.
+CREATE UNIQUE INDEX uqk1_ukcd ON uqk1(c, d);
+-- Test not null quals and not null per catalog.
+EXPLAIN (COSTS OFF) SELECT DISTINCT c, d FROM uqk1;
+       QUERY PLAN       
+------------------------
+ HashAggregate
+   Group Key: c, d
+   ->  Seq Scan on uqk1
+(3 rows)
+
+EXPLAIN (COSTS OFF) SELECT DISTINCT c, d FROM uqk1 WHERE c is NOT NULL;
+              QUERY PLAN               
+---------------------------------------
+ Unique
+   ->  Sort
+         Sort Key: c, d
+         ->  Seq Scan on uqk1
+               Filter: (c IS NOT NULL)
+(5 rows)
+
+EXPLAIN (COSTS OFF) SELECT DISTINCT d FROM uqk1 WHERE c = 1;
+          QUERY PLAN           
+-------------------------------
+ Unique
+   ->  Sort
+         Sort Key: d
+         ->  Seq Scan on uqk1
+               Filter: (c = 1)
+(5 rows)
+
+ALTER TABLE uqk1 ALTER COLUMN d SET NOT NULL;
+EXPLAIN (COSTS OFF) SELECT DISTINCT c, d FROM uqk1 WHERE c is NOT NULL;
+        QUERY PLAN         
+---------------------------
+ Seq Scan on uqk1
+   Filter: (c IS NOT NULL)
+(2 rows)
+
+-- Test UniqueKey column reduction.
+EXPLAIN (COSTS OFF) SELECT DISTINCT d FROM uqk1 WHERE c = 1;
+    QUERY PLAN     
+-------------------
+ Seq Scan on uqk1
+   Filter: (c = 1)
+(2 rows)
+
+EXPLAIN (COSTS OFF) SELECT DISTINCT a FROM uqk1 WHERE c = 1 and d = 1;
+           QUERY PLAN            
+---------------------------------
+ Seq Scan on uqk1
+   Filter: ((c = 1) AND (d = 1))
+(2 rows)
+
+-- Test Distinct ON
+EXPLAIN (COSTS OFF) SELECT DISTINCT ON(pk) d FROM uqk1;
+    QUERY PLAN    
+------------------
+ Seq Scan on uqk1
+(1 row)
+
+------------------------------------------------------
+-- Test UniqueKey on one side still valid after join.
+-----------------------------------------------------
+-- uqk1(c, d) is the uniquekey with mutli nulls at single relation access.
+-- so distinct is not no-op.
+EXPLAIN (COSTS OFF) SELECT DISTINCT uqk1.c, uqk1.d FROM uqk1, uqk2
+WHERE uqk1.a = uqk2.pk;
+                 QUERY PLAN                  
+---------------------------------------------
+ Unique
+   ->  Sort
+         Sort Key: uqk1.c, uqk1.d
+         ->  Hash Join
+               Hash Cond: (uqk1.a = uqk2.pk)
+               ->  Seq Scan on uqk1
+               ->  Hash
+                     ->  Seq Scan on uqk2
+(8 rows)
+
+-- Both uqk1 (c,d) are a valid uniquekey. 
+EXPLAIN (COSTS OFF) SELECT DISTINCT uqk1.c, uqk1.d FROM uqk1, uqk2
+WHERE uqk1.c is NOT NULL AND uqk1.a = uqk2.pk;
+           QUERY PLAN            
+---------------------------------
+ Hash Join
+   Hash Cond: (uqk1.a = uqk2.pk)
+   ->  Seq Scan on uqk1
+         Filter: (c IS NOT NULL)
+   ->  Hash
+         ->  Seq Scan on uqk2
+(6 rows)
+
+-- uqk1.c is null at baserel, but the null values are removed after join.
+EXPLAIN (COSTS OFF) SELECT DISTINCT uqk1.c, uqk1.d FROM uqk1, uqk2
+WHERE  uqk1.a = uqk2.pk and uqk1.c = uqk2.c;
+                       QUERY PLAN                        
+---------------------------------------------------------
+ Hash Join
+   Hash Cond: ((uqk1.a = uqk2.pk) AND (uqk1.c = uqk2.c))
+   ->  Seq Scan on uqk1
+   ->  Hash
+         ->  Seq Scan on uqk2
+(5 rows)
+
+-- uqk1.c is null at baserel, but the null values are removed after join
+-- but new null values are generated due to outer join again. so distinct
+-- is still needed.
+EXPLAIN (COSTS OFF) SELECT DISTINCT uqk1.c, uqk1.d FROM uqk1 right join uqk2
+on uqk1.a = uqk2.pk and uqk1.c = uqk2.c;
+                             QUERY PLAN                              
+---------------------------------------------------------------------
+ Unique
+   ->  Sort
+         Sort Key: uqk1.c, uqk1.d
+         ->  Hash Right Join
+               Hash Cond: ((uqk1.a = uqk2.pk) AND (uqk1.c = uqk2.c))
+               ->  Seq Scan on uqk1
+               ->  Hash
+                     ->  Seq Scan on uqk2
+(8 rows)
+
+------------------------------------------------------
+-- Test join: Composited UniqueKey
+-----------------------------------------------------
+-- both t1.pk and t1.pk is valid uniquekey.
+EXPLAIN SELECT DISTINCT t1.pk, t2.pk FROM uqk1 t1 cross join uqk2 t2;
+                            QUERY PLAN                             
+-------------------------------------------------------------------
+ Nested Loop  (cost=0.00..2.27 rows=15 width=8)
+   ->  Seq Scan on uqk1 t1  (cost=0.00..1.05 rows=5 width=4)
+   ->  Materialize  (cost=0.00..1.04 rows=3 width=4)
+         ->  Seq Scan on uqk2 t2  (cost=0.00..1.03 rows=3 width=4)
+(4 rows)
+
+SELECT DISTINCT t1.pk, t2.pk FROM uqk1 t1 cross join uqk2 t2 order by 1, 2;
+ pk | pk 
+----+----
+  1 |  1
+  1 |  4
+  1 |  5
+  2 |  1
+  2 |  4
+  2 |  5
+  3 |  1
+  3 |  4
+  3 |  5
+  4 |  1
+  4 |  4
+  4 |  5
+  5 |  1
+  5 |  4
+  5 |  5
+(15 rows)
+
+-- NOT OK, since t1.c includes multi nulls. 
+EXPLAIN SELECT DISTINCT t1.c, t1.d, t2.pk FROM uqk1 t1 cross join uqk2 t2 where t1.c is null;
+                               QUERY PLAN                                
+-------------------------------------------------------------------------
+ HashAggregate  (cost=2.20..2.26 rows=6 width=12)
+   Group Key: t1.c, t1.d, t2.pk
+   ->  Nested Loop  (cost=0.00..2.16 rows=6 width=12)
+         ->  Seq Scan on uqk2 t2  (cost=0.00..1.03 rows=3 width=4)
+         ->  Materialize  (cost=0.00..1.06 rows=2 width=8)
+               ->  Seq Scan on uqk1 t1  (cost=0.00..1.05 rows=2 width=8)
+                     Filter: (c IS NULL)
+(7 rows)
+
+SELECT DISTINCT t1.c, t1.d, t2.pk FROM uqk1 t1 cross join uqk2 t2 where t1.c is null order by 1, 2,3;
+ c | d | pk 
+---+---+----
+   | 4 |  1
+   | 4 |  4
+   | 4 |  5
+(3 rows)
+
+SELECT t1.c, t1.d, t2.pk FROM uqk1 t1 cross join uqk2 t2 where t1.c is null order by 1, 2,3;
+ c | d | pk 
+---+---+----
+   | 4 |  1
+   | 4 |  1
+   | 4 |  4
+   | 4 |  4
+   | 4 |  5
+   | 4 |  5
+(6 rows)
+
+-- let's remove the t1.c's multi null values
+EXPLAIN SELECT DISTINCT t1.c, t1.d, t2.pk FROM uqk1 t1 cross join uqk2 t2 where t1.c is not null;
+                            QUERY PLAN                             
+-------------------------------------------------------------------
+ Nested Loop  (cost=0.00..2.20 rows=9 width=12)
+   ->  Seq Scan on uqk1 t1  (cost=0.00..1.05 rows=3 width=8)
+         Filter: (c IS NOT NULL)
+   ->  Materialize  (cost=0.00..1.04 rows=3 width=4)
+         ->  Seq Scan on uqk2 t2  (cost=0.00..1.03 rows=3 width=4)
+(5 rows)
+
+SELECT DISTINCT t1.c, t1.d, t2.pk FROM uqk1 t1 cross join uqk2 t2 where t1.c is not null order by 1, 2, 3 ;
+ c | d | pk 
+---+---+----
+ 1 | 1 |  1
+ 1 | 1 |  4
+ 1 | 1 |  5
+ 2 | 2 |  1
+ 2 | 2 |  4
+ 2 | 2 |  5
+ 3 | 3 |  1
+ 3 | 3 |  4
+ 3 | 3 |  5
+(9 rows)
+
+SELECT t1.c, t1.d, t2.pk FROM uqk1 t1 cross join uqk2 t2 where t1.c is not null order by 1, 2, 3;
+ c | d | pk 
+---+---+----
+ 1 | 1 |  1
+ 1 | 1 |  4
+ 1 | 1 |  5
+ 2 | 2 |  1
+ 2 | 2 |  4
+ 2 | 2 |  5
+ 3 | 3 |  1
+ 3 | 3 |  4
+ 3 | 3 |  5
+(9 rows)
+
+-- test onerow case with composited cases.
+-- t2.c is onerow. OK
+EXPLAIN SELECT DISTINCT t1.c, t1.d, t2.c FROM uqk1 t1 cross join uqk2 t2 where t1.c is not null and t2.pk = 1;
+                         QUERY PLAN                          
+-------------------------------------------------------------
+ Nested Loop  (cost=0.00..2.12 rows=3 width=12)
+   ->  Seq Scan on uqk2 t2  (cost=0.00..1.04 rows=1 width=4)
+         Filter: (pk = 1)
+   ->  Seq Scan on uqk1 t1  (cost=0.00..1.05 rows=3 width=8)
+         Filter: (c IS NOT NULL)
+(5 rows)
+
+SELECT DISTINCT t1.c, t1.d, t2.c FROM uqk1 t1 cross join uqk2 t2 where t1.c is not null and t2.pk = 1;
+ c | d | c 
+---+---+---
+ 1 | 1 | 1
+ 2 | 2 | 1
+ 3 | 3 | 1
+(3 rows)
+
+SELECT t1.c, t1.d, t2.c FROM uqk1 t1 cross join uqk2 t2 where t1.c is not null and t2.pk = 1;
+ c | d | c 
+---+---+---
+ 1 | 1 | 1
+ 2 | 2 | 1
+ 3 | 3 | 1
+(3 rows)
+
+-- t2.c is onerow, but t1.c has multi-nulls, NOt OK.
+EXPLAIN SELECT DISTINCT t1.c, t1.d, t2.c FROM uqk1 t1 cross join uqk2 t2 where t1.c is null and t2.pk = 1;
+                               QUERY PLAN                                
+-------------------------------------------------------------------------
+ Unique  (cost=2.12..2.14 rows=2 width=12)
+   ->  Sort  (cost=2.12..2.12 rows=2 width=12)
+         Sort Key: t1.c, t1.d, t2.c
+         ->  Nested Loop  (cost=0.00..2.11 rows=2 width=12)
+               ->  Seq Scan on uqk2 t2  (cost=0.00..1.04 rows=1 width=4)
+                     Filter: (pk = 1)
+               ->  Seq Scan on uqk1 t1  (cost=0.00..1.05 rows=2 width=8)
+                     Filter: (c IS NULL)
+(8 rows)
+
+SELECT DISTINCT t1.c, t1.d, t2.c FROM uqk1 t1 cross join uqk2 t2 where t1.c is null and t2.pk = 1;
+ c | d | c 
+---+---+---
+   | 4 | 1
+(1 row)
+
+SELECT t1.c, t1.d, t2.c FROM uqk1 t1 cross join uqk2 t2 where t1.c is null and t2.pk = 1;
+ c | d | c 
+---+---+---
+   | 4 | 1
+   | 4 | 1
+(2 rows)
+
+-- Test Semi/Anti JOIN
+EXPLAIN (COSTS OFF) SELECT DISTINCT pk FROM uqk1 WHERE d in (SELECT d FROM uqk2);
+           QUERY PLAN           
+--------------------------------
+ Hash Semi Join
+   Hash Cond: (uqk1.d = uqk2.d)
+   ->  Seq Scan on uqk1
+   ->  Hash
+         ->  Seq Scan on uqk2
+(5 rows)
+
+EXPLAIN (COSTS OFF) SELECT DISTINCT pk FROM uqk1 WHERE d NOT in (SELECT d FROM uqk2);
+             QUERY PLAN             
+------------------------------------
+ Seq Scan on uqk1
+   Filter: (NOT (hashed SubPlan 1))
+   SubPlan 1
+     ->  Seq Scan on uqk2
+(4 rows)
+
+-----------------------------------
+-- Test Join: Special OneRow case.
+-----------------------------------
+-- Test Unique Key FOR one-row case, DISTINCT is NOT needed as well.
+-- uqk1.d is the a uniquekey due to onerow rule. uqk2.pk is pk.
+EXPLAIN (COSTS OFF) SELECT DISTINCT uqk1.d FROM uqk1, uqk2 WHERE uqk1.pk = 1 AND uqk1.c = uqk2.pk;
+            QUERY PLAN             
+-----------------------------------
+ Nested Loop
+   Join Filter: (uqk1.c = uqk2.pk)
+   ->  Seq Scan on uqk1
+         Filter: (pk = 1)
+   ->  Seq Scan on uqk2
+(5 rows)
+
+SELECT uqk1.d FROM uqk1, uqk2 WHERE uqk1.pk = 1 AND uqk1.c = uqk2.pk order BY 1;
+ d 
+---
+ 1
+(1 row)
+
+-- Both uqk1.d AND uqk2.c are the a uniquekey due to onerow rule
+EXPLAIN (COSTS OFF) SELECT DISTINCT uqk1.d FROM uqk1, uqk2 WHERE uqk1.pk = 1
+AND uqk2.pk = 1 AND uqk1.d = uqk2.d;
+            QUERY PLAN            
+----------------------------------
+ Nested Loop
+   Join Filter: (uqk1.d = uqk2.d)
+   ->  Seq Scan on uqk1
+         Filter: (pk = 1)
+   ->  Seq Scan on uqk2
+         Filter: (pk = 1)
+(6 rows)
+
+SELECT uqk1.d FROM uqk1, uqk2 WHERE uqk1.pk = 1 AND uqk2.pk = 1
+AND uqk1.d = uqk2.d order BY 1;
+ d 
+---
+ 1
+(1 row)
+
+-- Both UniqueKey in targetList, so distinct is not needed.
+EXPLAIN (COSTS OFF) SELECT DISTINCT uqk1.c, uqk2.c FROM uqk1, uqk2 WHERE uqk1.pk = 2 AND uqk2.pk = 1;
+        QUERY PLAN        
+--------------------------
+ Nested Loop
+   ->  Seq Scan on uqk1
+         Filter: (pk = 2)
+   ->  Seq Scan on uqk2
+         Filter: (pk = 1)
+(5 rows)
+
+SELECT uqk1.c, uqk2.c FROM uqk1, uqk2 WHERE uqk1.pk = 2 AND uqk2.pk = 1 order BY 1, 2;
+ c | c 
+---+---
+ 2 | 1
+(1 row)
+
+-----------------------------------------
+-- Test more non-unique cases after join.
+-----------------------------------------
+EXPLAIN (COSTS OFF) SELECT DISTINCT uqk1.pk FROM uqk1, uqk2 WHERE uqk1.c = uqk2.c;
+                 QUERY PLAN                 
+--------------------------------------------
+ Unique
+   ->  Sort
+         Sort Key: uqk1.pk
+         ->  Hash Join
+               Hash Cond: (uqk1.c = uqk2.c)
+               ->  Seq Scan on uqk1
+               ->  Hash
+                     ->  Seq Scan on uqk2
+(8 rows)
+
+EXPLAIN (COSTS OFF) SELECT DISTINCT uqk1.d FROM uqk1, uqk2 WHERE uqk1.pk = 1 AND uqk1.c = uqk2.c;
+                  QUERY PLAN                  
+----------------------------------------------
+ Unique
+   ->  Sort
+         Sort Key: uqk1.d
+         ->  Nested Loop
+               Join Filter: (uqk1.c = uqk2.c)
+               ->  Seq Scan on uqk1
+                     Filter: (pk = 1)
+               ->  Seq Scan on uqk2
+(8 rows)
+
+-----------------------------------------
+-- Test DISTINCT/GROUP BY CASE.
+-----------------------------------------
+--------------------------------------------------------------------------------------------
+-- Test subquery cases.
+-- Note that current the UniqueKey still not push down the interesting UniqueKey to subquery.
+-- like uniquekey, so the below test case need a "DISTINCT" in subquery to make sure the
+-- UniqueKey is maintain.
+--------------------------------------------------------------------------------------------
+-- Test a normal case - one side
+EXPLAIN SELECT DISTINCT v.* FROM
+(SELECT DISTINCT uqk1.c, uqk1.d FROM uqk1, uqk2
+WHERE uqk1.a = uqk2.pk AND uqk1.c is not null offset 0) v;
+                           QUERY PLAN                           
+----------------------------------------------------------------
+ Hash Join  (cost=1.07..2.14 rows=2 width=8)
+   Hash Cond: (uqk1.a = uqk2.pk)
+   ->  Seq Scan on uqk1  (cost=0.00..1.05 rows=3 width=12)
+         Filter: (c IS NOT NULL)
+   ->  Hash  (cost=1.03..1.03 rows=3 width=4)
+         ->  Seq Scan on uqk2  (cost=0.00..1.03 rows=3 width=4)
+(6 rows)
+
+-- Test a normal case - composited side.
+EXPLAIN SELECT DISTINCT v.* FROM
+(SELECT DISTINCT t1.c, t1.d, t2.pk FROM uqk1 t1 cross join uqk2 t2 where t1.c is not null OFFSET 0)
+v;
+                            QUERY PLAN                             
+-------------------------------------------------------------------
+ Nested Loop  (cost=0.00..2.20 rows=9 width=12)
+   ->  Seq Scan on uqk1 t1  (cost=0.00..1.05 rows=3 width=8)
+         Filter: (c IS NOT NULL)
+   ->  Materialize  (cost=0.00..1.04 rows=3 width=4)
+         ->  Seq Scan on uqk2 t2  (cost=0.00..1.03 rows=3 width=4)
+(5 rows)
+

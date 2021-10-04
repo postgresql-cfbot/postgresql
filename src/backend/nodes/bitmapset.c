@@ -664,6 +664,20 @@ bms_num_members(const Bitmapset *a)
 }
 
 /*
+ * bms_max_member - the max member in this bitmap.
+ */
+int
+bms_max_member(const Bitmapset *a)
+{
+	int result;
+	if (a == NULL || bms_is_empty(a))
+		elog(ERROR, "Must be an non-empty bitmapset.");
+	result = (a->nwords - 1) * BITS_PER_BITMAPWORD;
+	result += bmw_leftmost_one_pos(a->words[a->nwords - 1]);
+	return result;
+}
+
+/*
  * bms_membership - does a set have zero, one, or multiple members?
  *
  * This is faster than making an exact count with bms_num_members().

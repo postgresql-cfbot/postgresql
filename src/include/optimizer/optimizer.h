@@ -171,6 +171,7 @@ extern TargetEntry *get_sortgroupref_tle(Index sortref,
 										 List *targetList);
 extern TargetEntry *get_sortgroupclause_tle(SortGroupClause *sgClause,
 											List *targetList);
+extern TargetEntry *get_tle_from_expr(Expr *expr, List *targetlist);
 extern Node *get_sortgroupclause_expr(SortGroupClause *sgClause,
 									  List *targetList);
 extern List *get_sortgrouplist_exprs(List *sgClauses,

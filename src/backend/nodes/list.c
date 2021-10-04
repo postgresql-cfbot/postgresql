@@ -702,6 +702,27 @@ list_member_oid(const List *list, Oid datum)
 	return false;
 }
 
+
+/*
+ * list_is_subset_ptr - is A a subset of B?
+ */
+bool
+list_is_subset_ptr(const List *a, const List *b)
+{
+	ListCell *lc;
+	Assert(IsPointerList(a));
+	check_list_invariants(a);
+	Assert(IsPointerList(b));
+	check_list_invariants(b);
+	foreach(lc, a)
+	{
+		if (!list_member_ptr(b, lfirst(lc)))
+			return false;
+	}
+	return true;
+}
+
+
 /*
  * Delete the n'th cell (counting from 0) in list.
  *

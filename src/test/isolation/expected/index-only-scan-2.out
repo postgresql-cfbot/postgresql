@@ -1,0 +1,15 @@
+Parsed test spec with 2 sessions
+
+starting permutation: r1 r2 w1 w2 c1 c2
+step r1: SELECT id1 FROM account WHERE id1 = 1;
+id1            
+
+1              
+step r2: SELECT id2 FROM account WHERE id2 = 2;
+id2            
+
+2              
+step w1: UPDATE account SET balance = 200 WHERE id1 = 1;
+step w2: UPDATE account SET balance = 200 WHERE id2 = 2;
+step c1: COMMIT;
+step c2: COMMIT;

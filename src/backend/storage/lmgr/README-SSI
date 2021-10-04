@@ -344,16 +344,16 @@ need not generate a conflict, although an update which "moves" a row
 into the scan must generate a conflict.  While correctness allows
 false positives, they should be minimized for performance reasons.
 
+An index scan which is comparing for equality on the entire key
+for a unique index need not acquire a predicate lock as long as a key
+is found corresponding to a visible tuple which has not been modified by
+another transaction -- there are no "between or around" gaps to
+cover.
+
 Several optimizations are possible, though not all are implemented yet:
 
     * An index scan which is just finding the right position for an
 index insertion or deletion need not acquire a predicate lock.
-
-    * An index scan which is comparing for equality on the entire key
-for a unique index need not acquire a predicate lock as long as a key
-is found corresponding to a visible tuple which has not been modified
-by another transaction -- there are no "between or around" gaps to
-cover.
 
     * As long as built-in foreign key enforcement continues to use
 its current "special tricks" to deal with MVCC issues, predicate
@@ -609,13 +609,6 @@ address it?
     * External replication. Look at how this impacts external
 replication solutions, like Postgres-R, Slony, pgpool, HS/SR, etc.
 This is related to the "WAL file replay" issue.
-
-    * UNIQUE btree search for equality on all columns. Since a search
-of a UNIQUE index using equality tests on all columns will lock the
-heap tuple if an entry is found, it appears that there is no need to
-get a predicate lock on the index in that case. A predicate lock is
-still needed for such a search if a matching index entry which points
-to a visible tuple is not found.
 
     * Minimize touching of shared memory. Should lists in shared
 memory push entries which have just been returned to the front of the

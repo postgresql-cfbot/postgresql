@@ -36,6 +36,20 @@ extern int	max_predicate_locks_per_page;
  */
 typedef void *SerializableXactHandle;
 
+typedef struct PredicateLockRequest
+{
+	Relation 		relation;
+	BlockNumber		blocknum;
+	Snapshot		snapshot;
+	uint64			page_split_count;
+} PredicateLockRequest;
+
+/* A small buffer for predicate lock requests that might later be elided. */
+typedef struct PredicateLockBuffer {
+	int				size;
+	PredicateLockRequest requests[4];
+} PredicateLockBuffer;
+
 /*
  * function prototypes
  */
@@ -63,6 +77,15 @@ extern void PredicateLockPageSplit(Relation relation, BlockNumber oldblkno, Bloc
 extern void PredicateLockPageCombine(Relation relation, BlockNumber oldblkno, BlockNumber newblkno);
 extern void TransferPredicateLocksToHeapRelation(Relation relation);
 extern void ReleasePredicateLocks(bool isCommit, bool isReadOnlySafe);
+
+/* deferred predicate locks */
+extern void InitPredicateLockBuffer(PredicateLockBuffer *buffer);
+extern void FlushPredicateLockBuffer(PredicateLockBuffer *buffer);
+extern void ClearPredicateLockBuffer(PredicateLockBuffer *buffer);
+extern void SchedulePredicateLockPage(PredicateLockBuffer *buffer,
+									  Relation relation,
+									  BlockNumber blkno,
+									  Snapshot snapshot);
 
 /* conflict detection (may also trigger rollback) */
 extern bool CheckForSerializableConflictOutNeeded(Relation relation, Snapshot snapshot);

@@ -919,15 +919,19 @@ SnapBuildPurgeCommittedTxn(SnapBuild *builder)
  */
 void
 SnapBuildCommitTxn(SnapBuild *builder, XLogRecPtr lsn, TransactionId xid,
-				   int nsubxacts, TransactionId *subxacts)
+				   int nsubxacts, TransactionId *subxacts, bool force_travel_and_snapshot)
 {
 	int			nxact;
-
-	bool		needs_snapshot = false;
-	bool		needs_timetravel = false;
-	bool		sub_needs_timetravel = false;
+	bool		needs_snapshot;
+	bool		needs_timetravel;
+	bool		sub_needs_timetravel;
 
 	TransactionId xmax = xid;
+	/*
+	 * if force_travel_and_snapshot is set to true
+	 * then proceed as if there are any catalog modifying subxacts.
+	 */
+	needs_snapshot = needs_timetravel = sub_needs_timetravel = force_travel_and_snapshot;
 
 	/*
 	 * Transactions preceding BUILDING_SNAPSHOT will neither be decoded, nor

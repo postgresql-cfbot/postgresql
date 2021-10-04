@@ -4980,7 +4980,7 @@ ApplyLogicalMappingFile(HTAB *tuplecid_data, Oid relid, const char *fname)
 /*
  * Check whether the TransactionId 'xid' is in the pre-sorted array 'xip'.
  */
-static bool
+bool
 TransactionIdInArray(TransactionId xid, TransactionId *xip, Size num)
 {
 	return bsearch(&xid, xip, num,

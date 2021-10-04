@@ -42,6 +42,7 @@
 #include "replication/reorderbuffer.h"
 #include "replication/snapbuild.h"
 #include "storage/standby.h"
+#include "utils/builtins.h"
 
 typedef struct XLogRecordBuffer
 {
@@ -85,6 +86,9 @@ static inline bool FilterPrepare(LogicalDecodingContext *ctx,
 static bool DecodeTXNNeedSkip(LogicalDecodingContext *ctx,
 							  XLogRecordBuffer *buf, Oid dbId,
 							  RepOriginId origin_id);
+
+/* record previous restart_lsn running xacts */
+xl_running_xacts *last_running = NULL;
 
 /*
  * Take every XLogReadRecord()ed record and perform the actions required to
@@ -405,6 +409,28 @@ DecodeStandbyOp(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 			{
 				xl_running_xacts *running = (xl_running_xacts *) XLogRecGetData(r);
 
+				/* record restart_lsn running xacts */
+				if (MyReplicationSlot && (buf->origptr == MyReplicationSlot->data.restart_lsn))
+				{
+					if (last_running)
+						free(last_running);
+
+					last_running = NULL;
+
+					/*
+					 * xl_running_xacts contains a xids Flexible Array
+					 * and its size is subxcnt + xcnt.
+					 * Take that into account while allocating
+					 * the memory for last_running.
+					 */
+					last_running = (xl_running_xacts *) malloc(sizeof(xl_running_xacts)
+																+ sizeof(TransactionId )
+																* (running->subxcnt + running->xcnt));
+					memcpy(last_running, running, sizeof(xl_running_xacts)
+														 + (sizeof(TransactionId)
+														 * (running->subxcnt + running->xcnt)));
+				}
+
 				SnapBuildProcessRunningXacts(builder, buf->origptr, running);
 
 				/*
@@ -682,6 +708,7 @@ DecodeCommit(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
 	TimestampTz commit_time = parsed->xact_time;
 	RepOriginId origin_id = XLogRecGetOrigin(buf->record);
 	int			i;
+	bool force_travel_and_snapshot = false;
 
 	if (parsed->xinfo & XACT_XINFO_HAS_ORIGIN)
 	{
@@ -689,8 +716,29 @@ DecodeCommit(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
 		commit_time = parsed->origin_timestamp;
 	}
 
+	/*
+	 * Check if the commit contain catalog invalidations
+	 * and if the xid was part of the restart_lsn
+	 * running ones
+	 */
+	if ((parsed->xinfo & XACT_XINFO_HAS_INVALS) && last_running)
+	{
+		/* make last_running->xids bsearch()able */
+		qsort(last_running->xids,
+			  last_running->subxcnt + last_running->xcnt,
+			  sizeof(TransactionId), xidComparator);
+
+		/*
+		 * Is this xid part of the known running ones
+		 * in the restart_lsn RUNNING_XACT entry?
+		 */
+		force_travel_and_snapshot = TransactionIdInArray(xid, last_running->xids,
+														 last_running->subxcnt
+														 + last_running->xcnt);
+	}
+
 	SnapBuildCommitTxn(ctx->snapshot_builder, buf->origptr, xid,
-					   parsed->nsubxacts, parsed->subxacts);
+					   parsed->nsubxacts, parsed->subxacts, force_travel_and_snapshot);
 
 	/* ----
 	 * Check whether we are interested in this specific transaction, and tell

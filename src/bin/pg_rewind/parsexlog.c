@@ -23,6 +23,7 @@
 #include "fe_utils/archive.h"
 #include "filemap.h"
 #include "pg_rewind.h"
+#include "utils/relmapper.h"
 
 /*
  * RmgrNames is an array of resource manager names, to make error messages

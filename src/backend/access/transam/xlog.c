@@ -669,6 +669,13 @@ typedef struct XLogCtlData
 	bool		SharedPromoteIsTriggered;
 
 	/*
+	 * SharedArchiveRecoveryRequested exports the value of the
+	 * ArchiveRecoveryRequested flag to be share which is otherwise valid only
+	 * in the startup process.
+	 */
+	bool		SharedArchiveRecoveryRequested;
+
+	/*
 	 * WalWriterSleeping indicates whether the WAL writer is currently in
 	 * low-power mode (and hence should be nudged if an async commit occurs).
 	 * Protected by info_lck.
@@ -716,6 +723,13 @@ typedef struct XLogCtlData
 	TimeLineID	replayEndTLI;
 	/* timestamp of last COMMIT/ABORT record replayed (or being replayed) */
 	TimestampTz recoveryLastXTime;
+
+	/*
+	 * SharedAbortedRecPtr exports abortedRecPtr to be shared with another
+	 * process to write OVERWRITE_CONTRECORD message, if WAL writes are not
+	 * permitted in the current process which reads that.
+	 */
+	XLogRecPtr	SharedAbortedRecPtr;
 
 	/*
 	 * timestamp of when we started replaying the current chunk of WAL data,
@@ -889,6 +903,7 @@ static MemoryContext walDebugCxt = NULL;
 static void readRecoverySignalFile(void);
 static void validateRecoveryParameters(void);
 static void exitArchiveRecovery(TimeLineID endTLI, XLogRecPtr endOfLog);
+static void CleanupAfterArchiveRecovery(void);
 static bool recoveryStopsBefore(XLogReaderState *record);
 static bool recoveryStopsAfter(XLogReaderState *record);
 static char *getRecoveryStopReason(void);
@@ -937,6 +952,8 @@ static void UpdateMinRecoveryPoint(XLogRecPtr lsn, bool force);
 static XLogRecord *ReadRecord(XLogReaderState *xlogreader,
 							  int emode, bool fetching_ckpt);
 static void CheckRecoveryConsistency(void);
+static bool XLogAcceptWrites(void);
+static bool PerformRecoveryXLogAction(void);
 static XLogRecord *ReadCheckpointRecord(XLogReaderState *xlogreader,
 										XLogRecPtr RecPtr, int whichChkpt, bool report);
 static bool rescanLatestTimeLine(void);
@@ -5263,6 +5280,7 @@ XLOGShmemInit(void)
 	XLogCtl->SharedHotStandbyActive = false;
 	XLogCtl->InstallXLogFileSegmentActive = false;
 	XLogCtl->SharedPromoteIsTriggered = false;
+	XLogCtl->SharedArchiveRecoveryRequested = false;
 	XLogCtl->WalWriterSleeping = false;
 
 	SpinLockInit(&XLogCtl->Insert.insertpos_lck);
@@ -5544,6 +5562,11 @@ readRecoverySignalFile(void)
 		ereport(FATAL,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("standby mode is not supported by single-user servers")));
+
+	/*
+	 * Remember archive recovery request in shared memory state.
+	 */
+	XLogCtl->SharedArchiveRecoveryRequested = ArchiveRecoveryRequested;
 }
 
 static void
@@ -5729,6 +5752,92 @@ exitArchiveRecovery(TimeLineID endTLI, XLogRecPtr endOfLog)
 
 	ereport(LOG,
 			(errmsg("archive recovery complete")));
+}
+
+/*
+ * Perform cleanup actions at the conclusion of archive recovery.
+ */
+static void
+CleanupAfterArchiveRecovery(void)
+{
+	XLogRecPtr	EndOfLog;
+
+	/*
+	 * Execute the recovery_end_command, if any.
+	 */
+	if (recoveryEndCommand && strcmp(recoveryEndCommand, "") != 0)
+		ExecuteRecoveryCommand(recoveryEndCommand,
+							   "recovery_end_command",
+							   true);
+
+	/*
+	 * We switched to a new timeline. Clean up segments on the old timeline.
+	 *
+	 * If there are any higher-numbered segments on the old timeline, remove
+	 * them. They might contain valid WAL, but they might also be pre-allocated
+	 * files containing garbage. In any case, they are not part of the new
+	 * timeline's history so we don't need them.
+	 */
+	(void) GetLastSegSwitchData(&EndOfLog);
+	RemoveNonParentXlogFiles(EndOfLog, ThisTimeLineID);
+
+	/*
+	 * If the switch happened in the middle of a segment, what to do with the
+	 * last, partial segment on the old timeline? If we don't archive it, and
+	 * the server that created the WAL never archives it either (e.g. because it
+	 * was hit by a meteor), it will never make it to the archive. That's OK
+	 * from our point of view, because the new segment that we created with the
+	 * new TLI contains all the WAL from the old timeline up to the switch
+	 * point. But if you later try to do PITR to the "missing" WAL on the old
+	 * timeline, recovery won't find it in the archive. It's physically present
+	 * in the new file with new TLI, but recovery won't look there when it's
+	 * recovering to the older timeline. On the other hand, if we archive the
+	 * partial segment, and the original server on that timeline is still
+	 * running and archives the completed version of the same segment later, it
+	 * will fail. (We used to do that in 9.4 and below, and it caused such
+	 * problems).
+	 *
+	 * As a compromise, we rename the last segment with the .partial suffix, and
+	 * archive it. Archive recovery will never try to read .partial segments, so
+	 * they will normally go unused. But in the odd PITR case, the administrator
+	 * can copy them manually to the pg_wal directory (removing the suffix).
+	 * They can be useful in debugging, too.
+	 *
+	 * If a .done or .ready file already exists for the old timeline, however,
+	 * we had already determined that the segment is complete, so we can let it
+	 * be archived normally. (In particular, if it was restored from the archive
+	 * to begin with, it's expected to have a .done file).
+	 */
+	if (XLogSegmentOffset(EndOfLog, wal_segment_size) != 0 &&
+		XLogArchivingActive())
+	{
+		char		origfname[MAXFNAMELEN];
+		XLogSegNo	endLogSegNo;
+		TimeLineID	EndOfLogTLI = XLogCtl->replayEndTLI;
+
+		XLByteToPrevSeg(EndOfLog, endLogSegNo, wal_segment_size);
+		XLogFileName(origfname, EndOfLogTLI, endLogSegNo, wal_segment_size);
+
+		if (!XLogArchiveIsReadyOrDone(origfname))
+		{
+			char		origpath[MAXPGPATH];
+			char		partialfname[MAXFNAMELEN];
+			char		partialpath[MAXPGPATH];
+
+			XLogFilePath(origpath, EndOfLogTLI, endLogSegNo, wal_segment_size);
+			snprintf(partialfname, MAXFNAMELEN, "%s.partial", origfname);
+			snprintf(partialpath, MAXPGPATH, "%s.partial", origpath);
+
+			/*
+			 * Make sure there's no .done or .ready file for the .partial
+			 * file.
+			 */
+			XLogArchiveCleanup(partialfname);
+
+			durable_rename(origpath, partialpath, ERROR);
+			XLogArchiveNotify(partialfname);
+		}
+	}
 }
 
 /*
@@ -7879,6 +7988,18 @@ StartupXLOG(void)
 	{
 		Assert(!XLogRecPtrIsInvalid(abortedRecPtr));
 		EndOfLog = missingContrecPtr;
+
+		/*
+		 * Remember broken record pointer in shared memory state. This process
+		 * might unable to write an OVERWRITE_CONTRECORD message because of WAL
+		 * write restriction.  Storing in shared memory helps that get written
+		 * later by another process when WAL writes enabled.
+		 */
+		XLogCtl->SharedAbortedRecPtr = abortedRecPtr;
+
+		/* Shared memory value will be used further */
+		abortedRecPtr = InvalidXLogRecPtr;
+		missingContrecPtr = InvalidXLogRecPtr;
 	}
 
 	/*
@@ -7933,148 +8054,6 @@ StartupXLOG(void)
 	XLogCtl->LogwrtRqst.Write = EndOfLog;
 	XLogCtl->LogwrtRqst.Flush = EndOfLog;
 
-	LocalSetXLogInsertAllowed();
-
-	/* If necessary, write overwrite-contrecord before doing anything else */
-	if (!XLogRecPtrIsInvalid(abortedRecPtr))
-	{
-		Assert(!XLogRecPtrIsInvalid(missingContrecPtr));
-		CreateOverwriteContrecordRecord(abortedRecPtr);
-		abortedRecPtr = InvalidXLogRecPtr;
-		missingContrecPtr = InvalidXLogRecPtr;
-	}
-
-	/*
-	 * Update full_page_writes in shared memory and write an XLOG_FPW_CHANGE
-	 * record before resource manager writes cleanup WAL records or checkpoint
-	 * record is written.
-	 */
-	Insert->fullPageWrites = lastFullPageWrites;
-	UpdateFullPageWrites();
-	LocalXLogInsertAllowed = -1;
-
-	if (InRecovery)
-	{
-		/*
-		 * Perform a checkpoint to update all our recovery activity to disk.
-		 *
-		 * Note that we write a shutdown checkpoint rather than an on-line
-		 * one. This is not particularly critical, but since we may be
-		 * assigning a new TLI, using a shutdown checkpoint allows us to have
-		 * the rule that TLI only changes in shutdown checkpoints, which
-		 * allows some extra error checking in xlog_redo.
-		 *
-		 * In promotion, only create a lightweight end-of-recovery record
-		 * instead of a full checkpoint. A checkpoint is requested later,
-		 * after we're fully out of recovery mode and already accepting
-		 * queries.
-		 */
-		if (ArchiveRecoveryRequested && IsUnderPostmaster &&
-			LocalPromoteIsTriggered)
-		{
-			promoted = true;
-
-			/*
-			 * Insert a special WAL record to mark the end of recovery, since
-			 * we aren't doing a checkpoint. That means that the checkpointer
-			 * process may likely be in the middle of a time-smoothed
-			 * restartpoint and could continue to be for minutes after this.
-			 * That sounds strange, but the effect is roughly the same and it
-			 * would be stranger to try to come out of the restartpoint and
-			 * then checkpoint. We request a checkpoint later anyway, just for
-			 * safety.
-			 */
-			CreateEndOfRecoveryRecord();
-		}
-		else
-		{
-			RequestCheckpoint(CHECKPOINT_END_OF_RECOVERY |
-							  CHECKPOINT_IMMEDIATE |
-							  CHECKPOINT_WAIT);
-		}
-	}
-
-	if (ArchiveRecoveryRequested)
-	{
-		/*
-		 * And finally, execute the recovery_end_command, if any.
-		 */
-		if (recoveryEndCommand && strcmp(recoveryEndCommand, "") != 0)
-			ExecuteRecoveryCommand(recoveryEndCommand,
-								   "recovery_end_command",
-								   true);
-
-		/*
-		 * We switched to a new timeline. Clean up segments on the old
-		 * timeline.
-		 *
-		 * If there are any higher-numbered segments on the old timeline,
-		 * remove them. They might contain valid WAL, but they might also be
-		 * pre-allocated files containing garbage. In any case, they are not
-		 * part of the new timeline's history so we don't need them.
-		 */
-		RemoveNonParentXlogFiles(EndOfLog, ThisTimeLineID);
-
-		/*
-		 * If the switch happened in the middle of a segment, what to do with
-		 * the last, partial segment on the old timeline? If we don't archive
-		 * it, and the server that created the WAL never archives it either
-		 * (e.g. because it was hit by a meteor), it will never make it to the
-		 * archive. That's OK from our point of view, because the new segment
-		 * that we created with the new TLI contains all the WAL from the old
-		 * timeline up to the switch point. But if you later try to do PITR to
-		 * the "missing" WAL on the old timeline, recovery won't find it in
-		 * the archive. It's physically present in the new file with new TLI,
-		 * but recovery won't look there when it's recovering to the older
-		 * timeline. On the other hand, if we archive the partial segment, and
-		 * the original server on that timeline is still running and archives
-		 * the completed version of the same segment later, it will fail. (We
-		 * used to do that in 9.4 and below, and it caused such problems).
-		 *
-		 * As a compromise, we rename the last segment with the .partial
-		 * suffix, and archive it. Archive recovery will never try to read
-		 * .partial segments, so they will normally go unused. But in the odd
-		 * PITR case, the administrator can copy them manually to the pg_wal
-		 * directory (removing the suffix). They can be useful in debugging,
-		 * too.
-		 *
-		 * If a .done or .ready file already exists for the old timeline,
-		 * however, we had already determined that the segment is complete, so
-		 * we can let it be archived normally. (In particular, if it was
-		 * restored from the archive to begin with, it's expected to have a
-		 * .done file).
-		 */
-		if (XLogSegmentOffset(EndOfLog, wal_segment_size) != 0 &&
-			XLogArchivingActive())
-		{
-			char		origfname[MAXFNAMELEN];
-			XLogSegNo	endLogSegNo;
-
-			XLByteToPrevSeg(EndOfLog, endLogSegNo, wal_segment_size);
-			XLogFileName(origfname, EndOfLogTLI, endLogSegNo, wal_segment_size);
-
-			if (!XLogArchiveIsReadyOrDone(origfname))
-			{
-				char		origpath[MAXPGPATH];
-				char		partialfname[MAXFNAMELEN];
-				char		partialpath[MAXPGPATH];
-
-				XLogFilePath(origpath, EndOfLogTLI, endLogSegNo, wal_segment_size);
-				snprintf(partialfname, MAXFNAMELEN, "%s.partial", origfname);
-				snprintf(partialpath, MAXPGPATH, "%s.partial", origpath);
-
-				/*
-				 * Make sure there's no .done or .ready file for the .partial
-				 * file.
-				 */
-				XLogArchiveCleanup(partialfname);
-
-				durable_rename(origpath, partialpath, ERROR);
-				XLogArchiveNotify(partialfname);
-			}
-		}
-	}
-
 	/*
 	 * Preallocate additional log files, if wanted.
 	 */
@@ -8120,17 +8099,14 @@ StartupXLOG(void)
 	XLogReaderFree(xlogreader);
 
 	/*
-	 * If any of the critical GUCs have changed, log them before we allow
-	 * backends to write WAL.
+	 * Update full_page_writes in shared memory, and later whenever wal write
+	 * permitted, write an XLOG_FPW_CHANGE record before resource manager
+	 * writes cleanup WAL records or checkpoint record is written.
 	 */
-	LocalSetXLogInsertAllowed();
-	XLogReportParameters();
+	Insert->fullPageWrites = lastFullPageWrites;
 
-	/*
-	 * Local WAL inserts enabled, so it's time to finish initialization of
-	 * commit timestamp.
-	 */
-	CompleteCommitTsInitialization();
+	/* Prepare to accept WAL writes. */
+	promoted = XLogAcceptWrites();
 
 	/*
 	 * All done with end-of-recovery actions.
@@ -8184,6 +8160,57 @@ StartupXLOG(void)
 	 */
 	if (promoted)
 		RequestCheckpoint(CHECKPOINT_FORCE);
+}
+
+/*
+ * Prepare to accept WAL writes.
+ */
+static bool
+XLogAcceptWrites(void)
+{
+	bool		promoted = false;
+
+	LocalSetXLogInsertAllowed();
+
+	/* If necessary, write overwrite-contrecord before doing anything else */
+	if (!XLogRecPtrIsInvalid(XLogCtl->SharedAbortedRecPtr))
+	{
+		CreateOverwriteContrecordRecord(XLogCtl->SharedAbortedRecPtr);
+		XLogCtl->SharedAbortedRecPtr = InvalidXLogRecPtr;
+	}
+
+	/* Write an XLOG_FPW_CHANGE record */
+	UpdateFullPageWrites();
+	LocalXLogInsertAllowed = -1;
+
+	/*
+	 * Emit checkpoint or end-of-recovery record in XLOG, if the server has been
+	 * through the archive or the crash recovery.
+	 *
+	 * If the recovery is performed lastReplayedEndRecPtr will always be a valid
+	 * record pointer that never changes after REDO loop.
+	 */
+	if (!XLogRecPtrIsInvalid(XLogCtl->lastReplayedEndRecPtr))
+		promoted = PerformRecoveryXLogAction();
+
+	/* If this is archive recovery, perform post-recovery cleanup actions. */
+	if (XLogCtl->SharedArchiveRecoveryRequested)
+		CleanupAfterArchiveRecovery();
+
+	/*
+	 * If any of the critical GUCs have changed, log them before we allow
+	 * backends to write WAL.
+	 */
+	LocalSetXLogInsertAllowed();
+	XLogReportParameters();
+
+	/*
+	 * Local WAL inserts enabled, so it's time to finish initialization of
+	 * commit timestamp.
+	 */
+	CompleteCommitTsInitialization();
+
+	return promoted;
 }
 
 /*
@@ -8280,6 +8307,60 @@ CheckRecoveryConsistency(void)
 
 		SendPostmasterSignal(PMSIGNAL_BEGIN_HOT_STANDBY);
 	}
+}
+
+/*
+ * Perform whatever XLOG actions are necessary at end of REDO.
+ *
+ * The goal here is to make sure that we'll be able to recover properly if
+ * we crash again. If we choose to write a checkpoint, we'll write a shutdown
+ * checkpoint rather than an on-line one. This is not particularly critical,
+ * but since we may be assigning a new TLI, using a shutdown checkpoint allows
+ * us to have the rule that TLI only changes in shutdown checkpoints, which
+ * allows some extra error checking in xlog_redo.
+ */
+static bool
+PerformRecoveryXLogAction(void)
+{
+	bool		promoted = false;
+
+	/*
+	 * Perform a checkpoint to update all our recovery activity to disk.
+	 *
+	 * Note that we write a shutdown checkpoint rather than an on-line one. This
+	 * is not particularly critical, but since we may be assigning a new TLI,
+	 * using a shutdown checkpoint allows us to have the rule that TLI only
+	 * changes in shutdown checkpoints, which allows some extra error checking
+	 * in xlog_redo.
+	 *
+	 * In promotion, only create a lightweight end-of-recovery record instead of
+	 * a full checkpoint. A checkpoint is requested later, after we're fully out
+	 * of recovery mode and already accepting queries.
+	 */
+	if (XLogCtl->SharedArchiveRecoveryRequested && IsUnderPostmaster &&
+		PromoteIsTriggered())
+	{
+		promoted = true;
+
+		/*
+		 * Insert a special WAL record to mark the end of recovery, since we
+		 * aren't doing a checkpoint. That means that the checkpointer process
+		 * may likely be in the middle of a time-smoothed restartpoint and could
+		 * continue to be for minutes after this.  That sounds strange, but the
+		 * effect is roughly the same and it would be stranger to try to come
+		 * out of the restartpoint and then checkpoint. We request a checkpoint
+		 * later anyway, just for safety.
+		 */
+		CreateEndOfRecoveryRecord();
+	}
+	else
+	{
+		RequestCheckpoint(CHECKPOINT_END_OF_RECOVERY |
+						  CHECKPOINT_IMMEDIATE |
+						  CHECKPOINT_WAIT);
+	}
+
+	return promoted;
 }
 
 /*

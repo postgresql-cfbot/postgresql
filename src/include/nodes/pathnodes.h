@@ -1647,6 +1647,7 @@ typedef struct MergePath
 {
 	JoinPath	jpath;
 	List	   *path_mergeclauses;	/* join clauses to be used for merge */
+	List	   *path_rangeclause;	/* join clause to be used for range merge */
 	List	   *outersortkeys;	/* keys for explicit sort, if any */
 	List	   *innersortkeys;	/* keys for explicit sort, if any */
 	bool		skip_mark_restore;	/* can executor skip mark/restore? */
@@ -2102,6 +2103,8 @@ typedef struct RestrictInfo
 
 	/* valid if clause is mergejoinable, else NIL */
 	List	   *mergeopfamilies;	/* opfamilies containing clause operator */
+	List	   *rangeleftopfamilies;
+	List	   *rangerightopfamilies;
 
 	/* cache space for mergeclause processing; NULL if not yet set */
 	EquivalenceClass *left_ec;	/* EquivalenceClass containing lefthand */
@@ -2528,6 +2531,7 @@ typedef struct JoinPathExtraData
 {
 	List	   *restrictlist;
 	List	   *mergeclause_list;
+	List	   *rangeclause_list;
 	bool		inner_unique;
 	SpecialJoinInfo *sjinfo;
 	SemiAntiJoinFactors semifactors;

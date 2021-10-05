@@ -1,0 +1,7 @@
+# test_dbgapi extension
+comment = 'test_dbgapi'
+default_version = '1.0'
+module_pathname = '$libdir/test_dbgapi'
+relocatable = false
+schema = pg_catalog
+trusted = true

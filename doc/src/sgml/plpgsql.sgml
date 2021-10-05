@@ -292,7 +292,9 @@ $$ LANGUAGE plpgsql;
       special variables such as <literal>FOUND</literal> (see
       <xref linkend="plpgsql-statements-diagnostics"/>).  The outer block is
       labeled with the function's name, meaning that parameters and special
-      variables can be qualified with the function's name.
+      variables can be qualified with the function's name. The name of this outer
+      block can be changed by inserting special command 
+      <literal>#routine_label new_name</literal> at the start of the function.
      </para>
     </note>
 
@@ -434,6 +436,31 @@ $$ LANGUAGE plpgsql;
       be qualified with that label, instead.)
      </para>
     </note>
+
+    <para>
+     The function's argument can be qualified with the function name:
+<programlisting>
+CREATE FUNCTION sales_tax(subtotal real) RETURNS real AS $$
+BEGIN
+    RETURN sales_tax.subtotal * 0.06;
+END;
+$$ LANGUAGE plpgsql;
+</programlisting>
+    </para>
+
+    <para>
+     Sometimes the function name is too long and it can be more practical to use
+     some shorter label. The top namespace label can be changed (along with
+     the function's arguments) using the option <literal>routine_label</literal>:
+<programlisting>
+CREATE FUNCTION sales_tax(subtotal real) RETURNS real AS $$
+#routine_label s
+BEGIN
+    RETURN s.subtotal * 0.06;
+END;
+$$ LANGUAGE plpgsql;
+</programlisting>
+    </para>
 
      <para>
       Some more examples:

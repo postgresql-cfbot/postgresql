@@ -79,7 +79,13 @@ typedef struct Instrumentation
 	/* Accumulated statistics across all completed cycles: */
 	double		startup;		/* total startup time (in seconds) */
 	double		total;			/* total time (in seconds) */
+	double		min_t;			/* time of fastest loop (in seconds) */
+	double		max_t;			/* time of slowest loop (in seconds) */
 	double		ntuples;		/* total tuples produced */
+	double		min_tuples;		/* min counter of produced tuples for all
+								 * loops */
+	double		max_tuples;		/* max counter of produced tuples for all
+								 * loops */
 	double		ntuples2;		/* secondary node-specific tuple counter */
 	double		nloops;			/* # of run cycles for this node */
 	double		nfiltered1;		/* # of tuples removed by scanqual or joinqual */

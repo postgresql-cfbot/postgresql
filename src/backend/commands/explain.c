@@ -1611,6 +1611,11 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		double		startup_ms = 1000.0 * planstate->instrument->startup / nloops;
 		double		total_ms = 1000.0 * planstate->instrument->total / nloops;
 		double		rows = planstate->instrument->ntuples / nloops;
+		double		loop_total_rows = planstate->instrument->ntuples;
+		double		loop_min_r = planstate->instrument->min_tuples;
+		double		loop_max_r = planstate->instrument->max_tuples;
+		double		loop_min_t_ms = 1000.0 * planstate->instrument->min_t;
+		double		loop_max_t_ms = 1000.0 * planstate->instrument->max_t;
 
 		if (es->format == EXPLAIN_FORMAT_TEXT)
 		{
@@ -1622,6 +1627,19 @@ ExplainNode(PlanState *planstate, List *ancestors,
 				appendStringInfo(es->str,
 								 " (actual rows=%.0f loops=%.0f)",
 								 rows, nloops);
+			if (nloops > 1 && es->verbose)
+			{
+				appendStringInfo(es->str, "\n");
+				ExplainIndentText(es);
+				if (es->timing)
+					appendStringInfo(es->str,
+									 "Loop min_time: %.3f  max_time: %.3f  min_rows: %.0f  max_rows: %.0f  total_rows: %.0f",
+									 loop_min_t_ms, loop_max_t_ms, loop_min_r, loop_max_r, loop_total_rows);
+				else
+					appendStringInfo(es->str,
+									 "Loop min_rows: %.0f  max_rows: %.0f  total_rows: %.0f",
+									 loop_min_r, loop_max_r, loop_total_rows);
+			}
 		}
 		else
 		{
@@ -1631,8 +1649,21 @@ ExplainNode(PlanState *planstate, List *ancestors,
 									 3, es);
 				ExplainPropertyFloat("Actual Total Time", "ms", total_ms,
 									 3, es);
+				if (nloops > 1 && es->verbose)
+				{
+					ExplainPropertyFloat("Loop Min Time", "s", loop_min_t_ms,
+										 3, es);
+					ExplainPropertyFloat("Loop Max Time", "s", loop_max_t_ms,
+										 3, es);
+				}
 			}
 			ExplainPropertyFloat("Actual Rows", NULL, rows, 0, es);
+			if (nloops > 1 && es->verbose)
+			{
+				ExplainPropertyFloat("Loop Min Rows", NULL, loop_min_r, 0, es);
+				ExplainPropertyFloat("Loop Max Rows", NULL, loop_max_r, 0, es);
+				ExplainPropertyFloat("Loop Total Rows", NULL, loop_total_rows, 0, es);
+			}
 			ExplainPropertyFloat("Actual Loops", NULL, nloops, 0, es);
 		}
 	}
@@ -1642,6 +1673,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			appendStringInfoString(es->str, " (never executed)");
 		else
 		{
+			/* without min and max values because actual result is 0 */
 			if (es->timing)
 			{
 				ExplainPropertyFloat("Actual Startup Time", "ms", 0.0, 3, es);
@@ -1668,12 +1700,22 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			double		startup_ms;
 			double		total_ms;
 			double		rows;
+			double		loop_min_t_ms;
+			double		loop_max_t_ms;
+			double		loop_min_r;
+			double		loop_max_r;
+			double		loop_total_rows;
 
 			if (nloops <= 0)
 				continue;
 			startup_ms = 1000.0 * instrument->startup / nloops;
 			total_ms = 1000.0 * instrument->total / nloops;
 			rows = instrument->ntuples / nloops;
+			loop_min_t_ms = 1000.0 * instrument->min_t;
+			loop_max_t_ms = 1000.0 * instrument->max_t;
+			loop_min_r = instrument->min_tuples;
+			loop_max_r = instrument->max_tuples;
+			loop_total_rows = instrument->ntuples;
 
 			ExplainOpenWorker(n, es);
 
@@ -1688,6 +1730,19 @@ ExplainNode(PlanState *planstate, List *ancestors,
 					appendStringInfo(es->str,
 									 "actual rows=%.0f loops=%.0f\n",
 									 rows, nloops);
+				if (nloops > 1)
+				{
+					appendStringInfo(es->str, "\n");
+					ExplainIndentText(es);
+					if (es->timing)
+						appendStringInfo(es->str,
+										 "Loop min_time: %.3f  max_time: %.3f  min_rows: %.0f  max_rows: %.0f  total_rows: %.0f",
+										 loop_min_t_ms, loop_max_t_ms, loop_min_r, loop_max_r, loop_total_rows);
+					else
+						appendStringInfo(es->str,
+										 "Loop min_rows: %.0f  max_rows: %.0f  total_rows: %.0f",
+										 loop_min_r, loop_max_r, loop_total_rows);
+				}
 			}
 			else
 			{
@@ -1697,8 +1752,21 @@ ExplainNode(PlanState *planstate, List *ancestors,
 										 startup_ms, 3, es);
 					ExplainPropertyFloat("Actual Total Time", "ms",
 										 total_ms, 3, es);
+					if (nloops > 1)
+					{
+						ExplainPropertyFloat("Loop Min Time", "ms",
+											 loop_min_t_ms, 3, es);
+						ExplainPropertyFloat("Loop Max Time", "ms",
+											 loop_max_t_ms, 3, es);
+					}
 				}
 				ExplainPropertyFloat("Actual Rows", NULL, rows, 0, es);
+				if (nloops > 1)
+				{
+					ExplainPropertyFloat("Loop Min Rows", NULL, loop_min_r, 0, es);
+					ExplainPropertyFloat("Loop Max Rows", NULL, loop_max_r, 0, es);
+					ExplainPropertyFloat("Loop Total Rows", NULL, loop_total_rows, 0, es);
+				}
 				ExplainPropertyFloat("Actual Loops", NULL, nloops, 0, es);
 			}
 

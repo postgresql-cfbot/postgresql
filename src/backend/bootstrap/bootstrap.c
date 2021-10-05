@@ -16,6 +16,7 @@
 
 #include <unistd.h>
 #include <signal.h>
+#include <sys/stat.h>
 
 #include "access/genam.h"
 #include "access/heapam.h"
@@ -318,6 +319,20 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 	ChangeToDataDir();
 
 	CreateDataDirLockFile(false);
+
+	/* if we see a control file in check_only mode, check it, too */
+	if (check_only)
+	{
+		struct stat buf;
+
+		if (stat(XLOG_CONTROL_FILE, &buf) == 0)
+			LocalProcessControlFile(false);
+		else if (errno != ENOENT)
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not stat file \"%s\": %m",
+							XLOG_CONTROL_FILE)));
+	}
 
 	SetProcessingMode(BootstrapProcessing);
 	IgnoreSystemIndexes = true;

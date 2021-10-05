@@ -10761,3 +10761,9 @@ ERROR:  invalid value for integer option "fetch_size": 100$%$#$#
 CREATE FOREIGN TABLE inv_bsz (c1 int )
 	SERVER loopback OPTIONS (batch_size '100$%$#$#');
 ERROR:  invalid value for integer option "batch_size": 100$%$#$#
+-- ===================================================================
+-- test error case for create publication on foreign table
+-- ===================================================================
+CREATE PUBLICATION testpub_foreign_tbl FOR TABLE ft1;  --ERROR
+ERROR:  cannot add relation "ft1" to publication
+DETAIL:  This operation is not supported for foreign tables.

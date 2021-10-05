@@ -1202,6 +1202,8 @@ typedef struct ModifyTableState
 	EPQState	mt_epqstate;	/* for evaluating EvalPlanQual rechecks */
 	bool		fireBSTriggers; /* do we need to fire stmt triggers? */
 
+	bool		forceCascade;	/* do we need to force cascade triggers? */
+
 	/*
 	 * These fields are used for inherited UPDATE and DELETE, to track which
 	 * target relation a given tuple is from.  If there are a lot of target

@@ -216,6 +216,18 @@ UPDATE PKTABLE SET ptest1=0 WHERE ptest1=4;
 -- Check PKTABLE for updates
 SELECT * FROM PKTABLE;
 
+-- Delete without cascade (should fail)
+DELETE FROM PKTABLE WHERE ptest1=1;
+
+-- Delete with cascade (should succeed)
+DELETE CASCADE FROM PKTABLE WHERE ptest1=1;
+
+-- Check PKTABLE for updates
+SELECT * FROM PKTABLE;
+
+-- Check FKTABLE for updates
+SELECT * FROM FKTABLE;
+
 DROP TABLE FKTABLE;
 DROP TABLE PKTABLE;
 

@@ -442,6 +442,17 @@ transformDeleteStmt(ParseState *pstate, DeleteStmt *stmt)
 		qry->hasModifyingCTE = pstate->p_hasModifyingCTE;
 	}
 
+	/* if we have provided CASCADE, set this to true */
+	if (stmt->forceCascade)
+    {
+		/* validate that this is not a RETURNING query */
+		/* XXX do we actually need this, since normal CASCADE FKs would
+		 * behave the same way. */
+		if (stmt->returningList)
+			elog(ERROR, "cannot use DELETE CASCADE with a RETURNING clause");
+
+		qry->forceCascade = true;
+	}
 	/* set up range table with just the result rel */
 	qry->resultRelation = setTargetTable(pstate, stmt->relation,
 										 stmt->relation->inh,

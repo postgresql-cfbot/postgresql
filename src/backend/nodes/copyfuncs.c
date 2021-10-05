@@ -3169,6 +3169,7 @@ _copyQuery(const Query *from)
 	COPY_SCALAR_FIELD(hasDistinctOn);
 	COPY_SCALAR_FIELD(hasRecursive);
 	COPY_SCALAR_FIELD(hasModifyingCTE);
+	COPY_SCALAR_FIELD(forceCascade);
 	COPY_SCALAR_FIELD(hasForUpdate);
 	COPY_SCALAR_FIELD(hasRowSecurity);
 	COPY_SCALAR_FIELD(isReturn);
@@ -3237,6 +3238,7 @@ _copyDeleteStmt(const DeleteStmt *from)
 	COPY_NODE_FIELD(whereClause);
 	COPY_NODE_FIELD(returningList);
 	COPY_NODE_FIELD(withClause);
+	COPY_SCALAR_FIELD(forceCascade);
 
 	return newnode;
 }

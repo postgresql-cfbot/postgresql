@@ -800,6 +800,7 @@ set_plan_refs(PlannerInfo *root, Plan *plan, int rtoffset)
 		case T_IncrementalSort:
 		case T_Unique:
 		case T_SetOp:
+		case T_Redistribute:
 
 			/*
 			 * These plan types don't actually bother to evaluate their

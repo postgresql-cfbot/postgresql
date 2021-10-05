@@ -14,6 +14,7 @@ CREATE FUNCTION test_shm_mq_pipelined(queue_size pg_catalog.int8,
 					   message pg_catalog.text,
 					   repeat_count pg_catalog.int4 default 1,
 					   num_workers pg_catalog.int4 default 1,
-					   verify pg_catalog.bool default true)
+					   verify pg_catalog.bool default true,
+					   use_once pg_catalog.bool default false)
     RETURNS pg_catalog.void STRICT
 	AS 'MODULE_PATHNAME' LANGUAGE C;

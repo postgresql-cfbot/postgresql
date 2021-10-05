@@ -1432,3 +1432,98 @@ where (x = 0) or (q1 >= q2 and q1 <= q2);
  4567890123456789 |  4567890123456789 | 1
 (6 rows)
 
+-- parallel union
+BEGIN;
+SET redistribute_query_size = '128kB';
+SET min_parallel_table_scan_size =0;
+SET parallel_tuple_cost = 0;
+SET parallel_setup_cost = 0;
+SET enable_indexonlyscan = OFF;
+-- using redistribute+sort sort
+SET enable_hashagg = OFF;
+EXPLAIN (costs off)
+SELECT count(*) FROM (SELECT unique2 FROM tenk1 UNION SELECT unique2 FROM tenk1) foo;
+                                  QUERY PLAN                                  
+------------------------------------------------------------------------------
+ Finalize Aggregate
+   ->  Gather
+         Workers Planned: 2
+         ->  Partial Aggregate
+               ->  Unique
+                     ->  Sort
+                           Sort Key: tenk1.unique2
+                           ->  Parallel Redistribute
+                                 Hash Key: tenk1.unique2
+                                 ->  Parallel Append
+                                       ->  Parallel Seq Scan on tenk1
+                                       ->  Parallel Seq Scan on tenk1 tenk1_1
+(12 rows)
+
+SELECT count(*) FROM (SELECT unique2 FROM tenk1 UNION SELECT unique2 FROM tenk1) foo;
+ count 
+-------
+ 10000
+(1 row)
+
+EXPLAIN (costs off)
+SELECT count(*) FROM (SELECT unique2 FROM tenk1 UNION SELECT unique2 FROM tenk1) t1 INNER JOIN tenk1 USING(unique2);
+                                        QUERY PLAN                                        
+------------------------------------------------------------------------------------------
+ Finalize Aggregate
+   ->  Gather
+         Workers Planned: 2
+         ->  Partial Aggregate
+               ->  Parallel Hash Join
+                     Hash Cond: (tenk1.unique2 = tenk1_1.unique2)
+                     ->  Parallel Seq Scan on tenk1
+                     ->  Parallel Hash
+                           ->  Unique
+                                 ->  Sort
+                                       Sort Key: tenk1_1.unique2
+                                       ->  Parallel Redistribute
+                                             Hash Key: tenk1_1.unique2
+                                             ->  Parallel Append
+                                                   ->  Parallel Seq Scan on tenk1 tenk1_1
+                                                   ->  Parallel Seq Scan on tenk1 tenk1_2
+(16 rows)
+
+SELECT count(*) FROM (SELECT unique2 FROM tenk1 UNION SELECT unique2 FROM tenk1) t1 INNER JOIN tenk1 USING(unique2);
+ count 
+-------
+ 10000
+(1 row)
+
+reset enable_hashagg;
+-- using batch hash
+SET enable_sort = OFF;
+EXPLAIN (costs off)
+SELECT count(*) from (
+  SELECT hundred from tenk1
+    union
+  SELECT hundred from tenk1) foo;
+                               QUERY PLAN                               
+------------------------------------------------------------------------
+ Finalize Aggregate
+   ->  Gather
+         Workers Planned: 2
+         ->  Partial Aggregate
+               ->  HashAggregate
+                     Group Key: tenk1.hundred
+                     ->  Parallel Redistribute
+                           Hash Key: tenk1.hundred
+                           ->  Parallel Append
+                                 ->  Parallel Seq Scan on tenk1
+                                 ->  Parallel Seq Scan on tenk1 tenk1_1
+(11 rows)
+
+SELECT count(*) from (
+  SELECT hundred from tenk1
+    union
+  SELECT hundred from tenk1) foo;
+ count 
+-------
+   100
+(1 row)
+
+reset enable_sort;
+ABORT;

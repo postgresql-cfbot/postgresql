@@ -3822,6 +3822,32 @@ adjust_limit_rows_costs(double *rows,	/* in/out parameter */
 	}
 }
 
+RedistributePath *
+create_redistribute_path(PlannerInfo *root,
+						 RelOptInfo *rel,
+						 Path *subpath,
+						 List *groupClause)
+{
+	RedistributePath   *path;
+	Assert(rel->consider_parallel && subpath->parallel_safe);
+
+	path = makeNode(RedistributePath);
+	path->path.pathtype = T_Redistribute;
+	path->path.parent = rel;
+	/* Redistribute doesn't project, so use source path's pathtarget */
+	path->path.pathtarget = subpath->pathtarget;
+	path->path.parallel_aware = true;
+	path->path.parallel_safe = true;
+	path->path.parallel_workers = subpath->parallel_workers;
+	path->path.rows = subpath->rows;
+	path->path.pathkeys = subpath->pathkeys;
+	path->subpath = subpath;
+	path->hashClause = groupClause;
+
+	cost_redistribute(path);
+
+	return path;
+}
 
 /*
  * reparameterize_path

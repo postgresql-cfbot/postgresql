@@ -117,6 +117,7 @@ static void show_tidbitmap_info(BitmapHeapScanState *planstate,
 static void show_instrumentation_count(const char *qlabel, int which,
 									   PlanState *planstate, ExplainState *es);
 static void show_foreignscan_info(ForeignScanState *fsstate, ExplainState *es);
+static void show_redistribute_info(RedistributeState *node, ExplainState *es);
 static void show_eval_params(Bitmapset *bms_params, ExplainState *es);
 static const char *explain_get_index_name(Oid indexId);
 static void show_buffer_usage(ExplainState *es, const BufferUsage *usage,
@@ -1388,6 +1389,9 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		case T_Hash:
 			pname = sname = "Hash";
 			break;
+		case T_Redistribute:
+			pname = sname = "Redistribute";
+			break;
 		default:
 			pname = sname = "???";
 			break;
@@ -2018,6 +2022,14 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		case T_Memoize:
 			show_memoize_info(castNode(MemoizeState, planstate), ancestors,
 							  es);
+			break;
+		case T_Redistribute:
+			show_sort_group_keys(planstate, "Hash Key",
+								 ((Redistribute*)plan)->numCols, 0,
+								 ((Redistribute*)plan)->hashColIdx,
+								 NULL, NULL, NULL,
+								 ancestors, es);
+			show_redistribute_info(castNode(RedistributeState, planstate), es);
 			break;
 		default:
 			break;
@@ -3426,6 +3438,53 @@ show_foreignscan_info(ForeignScanState *fsstate, ExplainState *es)
 	{
 		if (fdwroutine->ExplainForeignScan != NULL)
 			fdwroutine->ExplainForeignScan(fsstate, es);
+	}
+}
+
+/*
+ * Show extra information for a Redistribute node's one worker.
+ */
+static void
+show_redistribute_one_info(RedistributeInstrumentation *instrument, ExplainState *es)
+{
+	if (es->format == EXPLAIN_FORMAT_TEXT)
+	{
+		ExplainIndentText(es);
+		appendStringInfo(es->str, "Parts: %d", instrument->parts_got);
+		appendStringInfo(es->str, "  Disk Usage: " UINT64_FORMAT "kB", instrument->disk_used / 1024);
+		appendStringInfo(es->str, "  Disk Rows: " UINT64_FORMAT, instrument->disk_rows);
+		appendStringInfoChar(es->str, '\n');
+	}else
+	{
+		ExplainPropertyInteger("Parts", NULL, instrument->parts_got, es);
+		ExplainPropertyInteger("Disk Usage", "kB", instrument->disk_used / 1024, es);
+		ExplainPropertyInteger("Disk Rows", NULL, instrument->disk_rows, es);
+	}
+}
+
+/*
+ * Show extra information for a Redistribute node.
+ */
+static void
+show_redistribute_info(RedistributeState *node, ExplainState *es)
+{
+	SharedRedistributeInfo *info = node->shared_instrument;
+	int						i;
+	if (info == NULL)
+		return;
+
+	if (info->sinstrument[0].parts_got != 0)
+		show_redistribute_one_info(&info->sinstrument[0], es);
+
+	for (i=1;i<info->num_workers;++i)
+	{
+		if (info->sinstrument[i].parts_got == 0)
+			continue;
+		if (es->workers_state)
+			ExplainOpenWorker(i-1, es);
+		show_redistribute_one_info(&info->sinstrument[i], es);
+		if (es->workers_state)
+			ExplainCloseWorker(i-1, es);
 	}
 }
 

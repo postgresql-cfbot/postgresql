@@ -540,3 +540,35 @@ select * from
    union all
    select *, 1 as x from int8_tbl b) ss
 where (x = 0) or (q1 >= q2 and q1 <= q2);
+
+-- parallel union
+BEGIN;
+SET redistribute_query_size = '128kB';
+SET min_parallel_table_scan_size =0;
+SET parallel_tuple_cost = 0;
+SET parallel_setup_cost = 0;
+SET enable_indexonlyscan = OFF;
+
+-- using redistribute+sort sort
+SET enable_hashagg = OFF;
+EXPLAIN (costs off)
+SELECT count(*) FROM (SELECT unique2 FROM tenk1 UNION SELECT unique2 FROM tenk1) foo;
+SELECT count(*) FROM (SELECT unique2 FROM tenk1 UNION SELECT unique2 FROM tenk1) foo;
+EXPLAIN (costs off)
+SELECT count(*) FROM (SELECT unique2 FROM tenk1 UNION SELECT unique2 FROM tenk1) t1 INNER JOIN tenk1 USING(unique2);
+SELECT count(*) FROM (SELECT unique2 FROM tenk1 UNION SELECT unique2 FROM tenk1) t1 INNER JOIN tenk1 USING(unique2);
+reset enable_hashagg;
+
+-- using batch hash
+SET enable_sort = OFF;
+EXPLAIN (costs off)
+SELECT count(*) from (
+  SELECT hundred from tenk1
+    union
+  SELECT hundred from tenk1) foo;
+SELECT count(*) from (
+  SELECT hundred from tenk1
+    union
+  SELECT hundred from tenk1) foo;
+reset enable_sort;
+ABORT;

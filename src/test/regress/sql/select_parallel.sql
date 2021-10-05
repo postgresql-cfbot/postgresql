@@ -314,6 +314,25 @@ reset enable_material;
 
 reset enable_hashagg;
 
+--test rescan for redistribute
+SET redistribute_query_size = '128kB';
+SET enable_sort = off;
+
+explain (costs off)
+select * from
+  (select string4, count(unique2)
+   from tenk1 group by string4) ss
+  right join (values (1),(2),(3)) v(x) on true order by 3,1;
+
+select * from
+  (select string4, count(unique2)
+   from tenk1 group by string4) ss
+  right join (values (1),(2),(3)) v(x) on true order by 3,1;
+
+reset enable_sort;
+
+reset redistribute_query_size;
+
 -- check parallelized int8 aggregate (bug #14897)
 explain (costs off)
 select avg(unique1::int8) from tenk1;

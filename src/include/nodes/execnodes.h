@@ -2640,4 +2640,43 @@ typedef struct LimitState
 	TupleTableSlot *last_slot;	/* slot for evaluation of ties */
 } LimitState;
 
+/* ---------------------
+ *	per-worker redistribute information
+ * ---------------------
+ */
+typedef struct RedistributeInstrumentation
+{
+	Size	disk_used;		/* bytes of disk space used */
+	Size	disk_rows;		/* rows of disk writed */
+	uint32	parts_got;		/* parts fetched */
+}RedistributeInstrumentation;
+
+/* ----------------
+ *	 Shared memory container for per-worker aggregate information
+ * ----------------
+ */
+typedef struct SharedRedistributeInfo
+{
+	int			num_workers;
+	RedistributeInstrumentation sinstrument[FLEXIBLE_ARRAY_MEMBER];
+} SharedRedistributeInfo;
+
+typedef struct RedistributeState
+{
+	PlanState		ps;
+	List		   *hash_funcs;				/* for compute hash with redistribute */
+	int				hash_max_attr;			/* max attribute from subplan's output */
+	struct RedistributeShmem *shmem;		/* private in nodeRedistribute.c */
+	struct RedistributeWriteInfo *writer;	/* private in nodeRedistribute.c */
+	struct SharedTuplestoreAccessor *sta;	/* in disk tuples from other workers */
+	struct shm_mq_handle  **mqreader;		/* array with nreaders active entries */
+	uint32			nreaders;				/* number of working workers for writing */
+	uint32			nextreader;				/* next one to try to read from */
+	uint32			nwriter;				/* number of array writer */
+	uint32			status_flags;			/* execute status flags */
+	uint32			current_part;			/* current partition number */
+	RedistributeInstrumentation *instrument;
+	SharedRedistributeInfo *shared_instrument;
+}RedistributeState;
+
 #endif							/* EXECNODES_H */

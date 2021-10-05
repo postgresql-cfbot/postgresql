@@ -2494,6 +2494,22 @@ _readLimit(void)
 }
 
 /*
+ * _readRedistribute
+ */
+static Redistribute *
+_readRedistribute(void)
+{
+	READ_LOCALS(Redistribute);
+
+	ReadCommonPlan(&local_node->plan);
+
+	READ_INT_FIELD(numCols);
+	READ_ATTRNUMBER_ARRAY(hashColIdx, local_node->numCols);
+
+	READ_DONE();
+}
+
+/*
  * _readNestLoopParam
  */
 static NestLoopParam *
@@ -2949,6 +2965,8 @@ parseNodeString(void)
 		return_value = _readLockRows();
 	else if (MATCH("LIMIT", 5))
 		return_value = _readLimit();
+	else if (MATCH("REDISTRIBUTE", 12))
+		return_value = _readRedistribute();
 	else if (MATCH("NESTLOOPPARAM", 13))
 		return_value = _readNestLoopParam();
 	else if (MATCH("PLANROWMARK", 11))

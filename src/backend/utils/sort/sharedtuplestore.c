@@ -131,11 +131,22 @@ sts_initialize(SharedTuplestore *sts, int participants,
 			   SharedFileSet *fileset,
 			   const char *name)
 {
-	SharedTuplestoreAccessor *accessor;
-	int			i;
+	sts_create(sts, participants, meta_data_size, flags, name);
+	return sts_attach(sts, my_participant_number, fileset);
+}
 
-	Assert(my_participant_number < participants);
-
+/*
+ * The caller must supply a SharedFileSet, which is essentially a directory
+ * that will be cleaned up automatically, and a name which must be unique
+ * across all SharedTuplestores created in the same SharedFileSet.
+ */
+void
+sts_create(SharedTuplestore *sts, int participants,
+		   size_t meta_data_size,
+		   int flags,
+		   const char *name)
+{
+	int		i;
 	sts->nparticipants = participants;
 	sts->meta_data_size = meta_data_size;
 	sts->flags = flags;
@@ -160,14 +171,6 @@ sts_initialize(SharedTuplestore *sts, int participants,
 		sts->participants[i].read_page = 0;
 		sts->participants[i].writing = false;
 	}
-
-	accessor = palloc0(sizeof(SharedTuplestoreAccessor));
-	accessor->participant = my_participant_number;
-	accessor->sts = sts;
-	accessor->fileset = fileset;
-	accessor->context = CurrentMemoryContext;
-
-	return accessor;
 }
 
 /*
@@ -203,6 +206,32 @@ sts_flush_chunk(SharedTuplestoreAccessor *accessor)
 	accessor->write_pointer = &accessor->write_chunk->data[0];
 	accessor->sts->participants[accessor->participant].npages +=
 		STS_CHUNK_PAGES;
+}
+
+/*
+ * close opend files and free memory resource
+ * return written size
+ */
+int64
+sts_close(SharedTuplestoreAccessor *accessor)
+{
+	int64	size = 0;
+	if (accessor->write_file != NULL)
+	{
+		sts_flush_chunk(accessor);
+		size = BufFileSize(accessor->write_file);
+		BufFileClose(accessor->write_file);
+		pfree(accessor->write_chunk);
+		accessor->write_chunk = NULL;
+		accessor->write_file = NULL;
+		accessor->sts->participants[accessor->participant].writing = false;
+	}
+
+	if (accessor->read_file)
+		BufFileClose(accessor->read_file);
+	pfree(accessor);
+
+	return size;
 }
 
 /*

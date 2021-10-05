@@ -45,6 +45,7 @@ extern void ExecParallelFinish(ParallelExecutorInfo *pei);
 extern void ExecParallelCleanup(ParallelExecutorInfo *pei);
 extern void ExecParallelReinitialize(PlanState *planstate,
 									 ParallelExecutorInfo *pei, Bitmapset *sendParam);
+extern void ExecParallelLaunched(PlanState *planstate, ParallelContext *pcxt);
 
 extern void ParallelQueryMain(dsm_segment *seg, shm_toc *toc);
 

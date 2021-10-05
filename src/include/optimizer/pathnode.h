@@ -290,6 +290,10 @@ extern Path *reparameterize_path(PlannerInfo *root, Path *path,
 								 double loop_count);
 extern Path *reparameterize_path_by_child(PlannerInfo *root, Path *path,
 										  RelOptInfo *child_rel);
+extern RedistributePath *create_redistribute_path(PlannerInfo *root,
+												  RelOptInfo *rel,
+												  Path *subpath,
+												  List *groupClause);
 
 /*
  * prototypes for relnode.c

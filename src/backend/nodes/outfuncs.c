@@ -972,6 +972,17 @@ _outLimit(StringInfo str, const Limit *node)
 }
 
 static void
+_outRedistribute(StringInfo str, const Redistribute *node)
+{
+	WRITE_NODE_TYPE("REDISTRIBUTE");
+
+	_outPlanInfo(str, (const Plan *) node);
+
+	WRITE_INT_FIELD(numCols);
+	WRITE_ATTRNUMBER_ARRAY(hashColIdx, node->numCols);
+}
+
+static void
 _outNestLoopParam(StringInfo str, const NestLoopParam *node)
 {
 	WRITE_NODE_TYPE("NESTLOOPPARAM");
@@ -2214,6 +2225,17 @@ _outLimitPath(StringInfo str, const LimitPath *node)
 	WRITE_NODE_FIELD(limitOffset);
 	WRITE_NODE_FIELD(limitCount);
 	WRITE_ENUM_FIELD(limitOption, LimitOption);
+}
+
+static void
+_outRedistributePath(StringInfo str, const RedistributePath *node)
+{
+	WRITE_NODE_TYPE("REDISTRIBUTEPATH");
+
+	_outPathInfo(str, (const Path *) node);
+
+	WRITE_NODE_FIELD(subpath);
+	WRITE_NODE_FIELD(hashClause);
 }
 
 static void
@@ -3987,6 +4009,9 @@ outNode(StringInfo str, const void *obj)
 			case T_Limit:
 				_outLimit(str, obj);
 				break;
+			case T_Redistribute:
+				_outRedistribute(str, obj);
+				break;
 			case T_NestLoopParam:
 				_outNestLoopParam(str, obj);
 				break;
@@ -4256,6 +4281,9 @@ outNode(StringInfo str, const void *obj)
 				break;
 			case T_LimitPath:
 				_outLimitPath(str, obj);
+				break;
+			case T_RedistributePath:
+				_outRedistributePath(str, obj);
 				break;
 			case T_GatherMergePath:
 				_outGatherMergePath(str, obj);

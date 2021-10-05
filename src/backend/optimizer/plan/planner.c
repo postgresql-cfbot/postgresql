@@ -192,6 +192,9 @@ static RelOptInfo *create_distinct_paths(PlannerInfo *root,
 static void create_partial_distinct_paths(PlannerInfo *root,
 										  RelOptInfo *input_rel,
 										  RelOptInfo *final_distinct_rel);
+static void create_parallel_distinct_paths(PlannerInfo *root,
+										   RelOptInfo *input_rel,
+										   RelOptInfo *distinct_rel);
 static RelOptInfo *create_final_distinct_paths(PlannerInfo *root,
 											   RelOptInfo *input_rel,
 											   RelOptInfo *distinct_rel);
@@ -3361,6 +3364,7 @@ create_grouping_paths(PlannerInfo *root,
 		extra.havingQual = parse->havingQual;
 		extra.targetList = parse->targetList;
 		extra.partial_costs_set = false;
+		extra.hashableList = grouping_get_hashable(parse->groupClause);
 
 		/*
 		 * Determine whether partitionwise aggregation is in theory possible.
@@ -4257,12 +4261,18 @@ create_distinct_paths(PlannerInfo *root, RelOptInfo *input_rel)
 	distinct_rel->userid = input_rel->userid;
 	distinct_rel->useridiscurrent = input_rel->useridiscurrent;
 	distinct_rel->fdwroutine = input_rel->fdwroutine;
+	distinct_rel->reltarget = root->upper_targets[UPPERREL_DISTINCT];
 
 	/* build distinct paths based on input_rel's pathlist */
 	create_final_distinct_paths(root, input_rel, distinct_rel);
 
 	/* now build distinct paths based on input_rel's partial_pathlist */
 	create_partial_distinct_paths(root, input_rel, distinct_rel);
+
+	/* now build parallel distinct paths based on input_rel's partial_pathlist */
+	create_parallel_distinct_paths(root, input_rel, distinct_rel);
+
+	generate_useful_gather_paths(root, distinct_rel, false);
 
 	/* Give a helpful error if we failed to create any paths */
 	if (distinct_rel->pathlist == NIL)
@@ -4563,6 +4573,95 @@ create_final_distinct_paths(PlannerInfo *root, RelOptInfo *input_rel,
 	}
 
 	return distinct_rel;
+}
+
+static void
+create_parallel_distinct_paths(PlannerInfo *root,
+							   RelOptInfo *input_rel,
+							   RelOptInfo *distinct_rel)
+{
+	List	   *hashable_clause;
+	Query	   *parse;
+	List	   *distinctExprs;
+	double		numDistinctRows;
+	Path	   *cheapest_partial_path;
+	Path	   *path;
+
+	if (distinct_rel->consider_parallel == false ||
+		redistribute_query_size <= 0 ||
+		input_rel->partial_pathlist == NIL)
+		return;
+
+	parse = root->parse;
+
+	hashable_clause = grouping_get_hashable(parse->distinctClause);
+	if (hashable_clause == NIL)
+		return;
+
+	cheapest_partial_path = linitial(input_rel->partial_pathlist);
+
+	distinctExprs = get_sortgrouplist_exprs(parse->distinctClause,
+											parse->targetList);
+
+	/* estimate how many distinct rows we'll get from each worker */
+	numDistinctRows = estimate_num_groups(root, distinctExprs,
+										  input_rel->cheapest_total_path->rows,
+										  NULL, NULL);
+	numDistinctRows /= (cheapest_partial_path->parallel_workers + 1);
+	if (numDistinctRows < 1.0)
+		numDistinctRows = 1.0;
+
+	if (grouping_is_sortable(parse->distinctClause))
+	{
+		List	   *needed_pathkeys;
+
+		/* For explicit-sort case, always use the more rigorous clause */
+		if (list_length(root->distinct_pathkeys) <
+			list_length(root->sort_pathkeys))
+		{
+			needed_pathkeys = root->sort_pathkeys;
+			/* Assert checks that parser didn't mess up... */
+			Assert(pathkeys_contained_in(root->distinct_pathkeys,
+										 needed_pathkeys));
+		}
+		else
+			needed_pathkeys = root->distinct_pathkeys;
+
+		path = (Path *) create_redistribute_path(root,
+												 distinct_rel,
+												 cheapest_partial_path,
+												 hashable_clause);
+		path = (Path *) create_sort_path(root,
+										 distinct_rel,
+										 path,
+										 needed_pathkeys,
+										 -1.0);
+		path = (Path *)create_upper_unique_path(root,
+												distinct_rel,
+												path,
+												list_length(root->distinct_pathkeys),
+												numDistinctRows);
+		add_partial_path(distinct_rel, path);
+	}
+
+	if (grouping_is_hashable(parse->distinctClause))
+	{
+		path = (Path *) create_redistribute_path(root,
+												 distinct_rel,
+												 cheapest_partial_path,
+												 hashable_clause);
+		path = (Path *)create_agg_path(root,
+									   distinct_rel,
+									   path,
+									   path->pathtarget,
+									   AGG_HASHED,
+									   AGGSPLIT_SIMPLE,
+									   parse->distinctClause,
+									   NIL,
+									   NULL,
+									   numDistinctRows);
+		add_partial_path(distinct_rel, path);
+	}
 }
 
 /*
@@ -6294,6 +6393,57 @@ add_paths_to_grouping_rel(PlannerInfo *root, RelOptInfo *input_rel,
 			}
 		}
 
+		if (parse->groupingSets == NIL && /* not support grouping sets */
+			extra->hashableList != NIL &&
+			grouped_rel->consider_parallel &&
+			input_rel->partial_pathlist != NIL &&
+			redistribute_query_size > 0)
+		{
+			Path   *path = linitial(input_rel->partial_pathlist);
+			double	rows = dNumGroups / (path->parallel_workers + 1);
+			if (rows < 1.0)
+				rows = 1.0;
+
+			/* Redistribute tuples using hashable group columns */
+			path = (Path*) create_redistribute_path(root,
+													grouped_rel,
+													path,
+													extra->hashableList);
+
+			/* Sort the path */
+			path = (Path*) create_sort_path(root,
+											grouped_rel,
+											path,
+											root->group_pathkeys,
+											-1.0);
+
+			Assert(parse->groupClause != NIL);
+			if (parse->hasAggs)
+			{
+				add_partial_path(grouped_rel, (Path *)
+						 create_agg_path(root,
+										 grouped_rel,
+										 path,
+										 grouped_rel->reltarget,
+										 AGG_SORTED,
+										 AGGSPLIT_SIMPLE,
+										 parse->groupClause,
+										 havingQual,
+										 agg_costs,
+										 rows));
+			}
+			else
+			{
+				add_partial_path(grouped_rel, (Path *)
+								 create_group_path(root,
+												   grouped_rel,
+												   path,
+												   parse->groupClause,
+												   havingQual,
+												   dNumGroups));
+			}
+		}
+
 		/*
 		 * Instead of operating directly on the input relation, we can
 		 * consider finalizing a partially aggregated path.
@@ -6397,6 +6547,58 @@ add_paths_to_grouping_rel(PlannerInfo *root, RelOptInfo *input_rel,
 											   havingQual,
 											   dNumGroups));
 			}
+
+			if (parse->groupingSets == NIL && /* not support grouping sets */
+				extra->hashableList != NIL &&
+				grouped_rel->consider_parallel &&
+				partially_grouped_rel->partial_pathlist != NIL &&
+				redistribute_query_size > 0)
+			{
+				Path   *path = linitial(partially_grouped_rel->partial_pathlist);
+				double	rows = dNumGroups / (path->parallel_workers + 1);
+				if (rows < 1.0)
+					rows = 1.0;
+
+				/* Redistribute tuples using hashable group columns */
+				path = (Path*) create_redistribute_path(root,
+														grouped_rel,
+														path,
+														extra->hashableList);
+
+				/* Sort the path */
+				path = (Path*) create_sort_path(root,
+												grouped_rel,
+												path,
+												root->group_pathkeys,
+												-1.0);
+
+				Assert(parse->groupClause != NIL);
+				if (parse->hasAggs)
+				{
+					add_partial_path(grouped_rel, (Path *)
+							 create_agg_path(root,
+											 grouped_rel,
+											 path,
+											 grouped_rel->reltarget,
+											 AGG_SORTED,
+											 AGGSPLIT_FINAL_DESERIAL,
+											 parse->groupClause,
+											 havingQual,
+											 agg_costs,
+											 rows));
+				}
+				else
+				{
+					add_partial_path(grouped_rel, (Path *)
+									 create_group_path(root,
+													   grouped_rel,
+													   path,
+													   parse->groupClause,
+													   havingQual,
+													   dNumGroups));
+				}
+			}
+
 		}
 	}
 
@@ -6427,6 +6629,34 @@ add_paths_to_grouping_rel(PlannerInfo *root, RelOptInfo *input_rel,
 									 havingQual,
 									 agg_costs,
 									 dNumGroups));
+
+			if (redistribute_query_size > 0 &&
+				extra->hashableList != NIL &&
+				grouped_rel->consider_parallel &&
+				input_rel->partial_pathlist != NIL)
+			{
+				Path   *path = linitial(input_rel->partial_pathlist);
+				double	rows = dNumGroups / (path->parallel_workers + 1);
+				if (rows < 1.0)
+					rows = 1.0;
+
+				/* Redistribute tuples using hashable group columns */
+				path = (Path*) create_redistribute_path(root,
+														grouped_rel,
+														path,
+														extra->hashableList);
+
+				path = (Path *) create_agg_path(root, grouped_rel,
+												path,
+												grouped_rel->reltarget,
+												AGG_HASHED,
+												AGGSPLIT_SIMPLE,
+												parse->groupClause,
+												havingQual,
+												agg_costs,
+												rows);
+				add_partial_path(grouped_rel, path);
+			}
 		}
 
 		/*
@@ -6448,6 +6678,36 @@ add_paths_to_grouping_rel(PlannerInfo *root, RelOptInfo *input_rel,
 									 havingQual,
 									 agg_final_costs,
 									 dNumGroups));
+
+			if (redistribute_query_size > 0 &&
+				extra->hashableList != NIL &&
+				grouped_rel->consider_parallel &&
+				partially_grouped_rel->partial_pathlist != NIL)
+			{
+				double	rows;
+				path = linitial(partially_grouped_rel->partial_pathlist);
+				rows = dNumGroups / (path->parallel_workers + 1);
+				if (rows < 1.0)
+					rows = 1.0;
+
+				/* Redistribute tuples using hashable group columns */
+				path = (Path*) create_redistribute_path(root,
+														grouped_rel,
+														path,
+														extra->hashableList);
+
+				path = (Path *) create_agg_path(root,
+												grouped_rel,
+												path,
+												grouped_rel->reltarget,
+												AGG_HASHED,
+												AGGSPLIT_FINAL_DESERIAL,
+												parse->groupClause,
+												havingQual,
+												agg_final_costs,
+												rows);
+				add_partial_path(grouped_rel, path);
+			}
 		}
 	}
 

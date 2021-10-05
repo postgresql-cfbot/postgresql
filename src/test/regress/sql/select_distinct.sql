@@ -174,3 +174,18 @@ SELECT 1 IS NOT DISTINCT FROM 2 as "no";
 SELECT 2 IS NOT DISTINCT FROM 2 as "yes";
 SELECT 2 IS NOT DISTINCT FROM null as "no";
 SELECT null IS NOT DISTINCT FROM null as "yes";
+
+-- parallel distinct
+BEGIN;
+SET redistribute_query_size = '128kB';
+SET min_parallel_table_scan_size =0;
+SET parallel_tuple_cost = 0;
+SET parallel_setup_cost = 0;
+SET enable_indexonlyscan = OFF;
+
+EXPLAIN (costs off)
+SELECT COUNT(*) FROM (SELECT DISTINCT unique2 FROM tenk1) foo;
+SELECT COUNT(*) FROM (SELECT DISTINCT unique2 FROM tenk1) foo;
+explain (costs off)
+SELECT DISTINCT * FROM (SELECT DISTINCT unique2 FROM tenk1) foo;
+ABORT;

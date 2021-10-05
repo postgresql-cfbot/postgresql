@@ -61,6 +61,7 @@ OBJS = \
 	nodeNestloop.o \
 	nodeProjectSet.o \
 	nodeRecursiveunion.o \
+	nodeRedistribute.o \
 	nodeResult.o \
 	nodeSamplescan.o \
 	nodeSeqscan.o \

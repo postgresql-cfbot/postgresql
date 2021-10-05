@@ -560,6 +560,27 @@ grouping_is_hashable(List *groupClause)
 	return true;
 }
 
+/*
+ * grouping_get_hashable - extract all hashable clause
+ *
+ * Some time we don't all clauses can be hash
+ */
+List *
+grouping_get_hashable(List *groupClause)
+{
+	ListCell   *lc;
+	List	   *result = NIL;
+
+	foreach (lc, groupClause)
+	{
+		SortGroupClause *groupcl = lfirst_node(SortGroupClause, lc);
+
+		if (groupcl->hashable)
+			result = lappend(result, groupcl);
+	}
+
+	return result;
+}
 
 /*****************************************************************************
  *		PathTarget manipulation functions

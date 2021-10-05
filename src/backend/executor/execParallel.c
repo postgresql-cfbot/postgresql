@@ -36,6 +36,7 @@
 #include "executor/nodeIndexonlyscan.h"
 #include "executor/nodeIndexscan.h"
 #include "executor/nodeMemoize.h"
+#include "executor/nodeRedistribute.h"
 #include "executor/nodeSeqscan.h"
 #include "executor/nodeSort.h"
 #include "executor/nodeSubplan.h"
@@ -297,6 +298,9 @@ ExecParallelEstimate(PlanState *planstate, ExecParallelEstimateContext *e)
 			/* even when not parallel-aware, for EXPLAIN ANALYZE */
 			ExecMemoizeEstimate((MemoizeState *) planstate, e->pcxt);
 			break;
+		case T_RedistributeState:
+			ExecRedistributeEstimate((RedistributeState *) planstate, e->pcxt);
+			break;
 		default:
 			break;
 	}
@@ -521,6 +525,9 @@ ExecParallelInitializeDSM(PlanState *planstate,
 			/* even when not parallel-aware, for EXPLAIN ANALYZE */
 			ExecMemoizeInitializeDSM((MemoizeState *) planstate, d->pcxt);
 			break;
+		case T_RedistributeState:
+			ExecRedistributeInitializeDSM((RedistributeState *) planstate, d->pcxt);
+			break;;
 		default:
 			break;
 	}
@@ -994,6 +1001,10 @@ ExecParallelReInitializeDSM(PlanState *planstate,
 				ExecHashJoinReInitializeDSM((HashJoinState *) planstate,
 											pcxt);
 			break;
+		case T_RedistributeState:
+			ExecRedistributeReInitializeDSM((RedistributeState *) planstate,
+											pcxt);
+			break;
 		case T_HashState:
 		case T_SortState:
 		case T_IncrementalSortState:
@@ -1006,6 +1017,32 @@ ExecParallelReInitializeDSM(PlanState *planstate,
 	}
 
 	return planstate_tree_walker(planstate, ExecParallelReInitializeDSM, pcxt);
+}
+
+static bool
+ExecParallelLaunchedWalker(PlanState *planstate, ParallelContext *pcxt)
+{
+	if (planstate == NULL)
+		return false;
+
+	switch (nodeTag(planstate))
+	{
+		case T_RedistributeState:
+			ExecRedistributeParallelLaunched((RedistributeState *)planstate,
+											 pcxt);
+			break;
+
+		default:
+			break;
+	}
+
+	return planstate_tree_walker(planstate, ExecParallelLaunchedWalker, pcxt);
+}
+
+void
+ExecParallelLaunched(PlanState *planstate, ParallelContext *pcxt)
+{
+	(void)planstate_tree_walker(planstate, ExecParallelLaunchedWalker, pcxt);
 }
 
 /*
@@ -1069,6 +1106,9 @@ ExecParallelRetrieveInstrumentation(PlanState *planstate,
 			break;
 		case T_MemoizeState:
 			ExecMemoizeRetrieveInstrumentation((MemoizeState *) planstate);
+			break;
+		case T_RedistributeState:
+			ExecRedistributeRetrieveInstrumentation((RedistributeState *) planstate);
 			break;
 		default:
 			break;
@@ -1365,6 +1405,9 @@ ExecParallelInitializeWorker(PlanState *planstate, ParallelWorkerContext *pwcxt)
 		case T_MemoizeState:
 			/* even when not parallel-aware, for EXPLAIN ANALYZE */
 			ExecMemoizeInitializeWorker((MemoizeState *) planstate, pwcxt);
+			break;
+		case T_RedistributeState:
+			ExecRedistributeInitializeWorker((RedistributeState *) planstate, pwcxt);
 			break;
 		default:
 			break;

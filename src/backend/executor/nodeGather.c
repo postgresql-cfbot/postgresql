@@ -184,6 +184,7 @@ ExecGather(PlanState *pstate)
 			 */
 			pcxt = node->pei->pcxt;
 			LaunchParallelWorkers(pcxt);
+			ExecParallelLaunched(outerPlanState(node), pcxt);
 			/* We save # workers launched for the benefit of EXPLAIN */
 			node->nworkers_launched = pcxt->nworkers_launched;
 

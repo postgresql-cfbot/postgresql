@@ -136,6 +136,7 @@ test_shm_mq_pipelined(PG_FUNCTION_ARGS)
 	int32		loop_count = PG_GETARG_INT32(2);
 	int32		nworkers = PG_GETARG_INT32(3);
 	bool		verify = PG_GETARG_BOOL(4);
+	bool		use_once = PG_GETARG_BOOL(5);
 	int32		send_count = 0;
 	int32		receive_count = 0;
 	dsm_segment *seg;
@@ -177,7 +178,10 @@ test_shm_mq_pipelined(PG_FUNCTION_ARGS)
 		 */
 		if (send_count < loop_count)
 		{
-			res = shm_mq_send(outqh, message_size, message_contents, true);
+			if (use_once)
+				res = shm_mq_send_once(outqh, message_size, message_contents);
+			else
+				res = shm_mq_send(outqh, message_size, message_contents, true);
 			if (res == SHM_MQ_SUCCESS)
 			{
 				++send_count;

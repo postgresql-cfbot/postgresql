@@ -1236,6 +1236,28 @@ _copyLimit(const Limit *from)
 }
 
 /*
+ * _copyRedistribute
+ */
+static Redistribute *
+_copyRedistribute(const Redistribute *from)
+{
+	Redistribute	   *newnode = makeNode(Redistribute);
+
+	/*
+	 * copy node superclass fields
+	 */
+	CopyPlanFields((const Plan *) from, (Plan *) newnode);
+
+	/*
+	 * copy remainder of node
+	 */
+	COPY_SCALAR_FIELD(numCols);
+	COPY_POINTER_FIELD(hashColIdx, from->numCols * sizeof(from->hashColIdx[0]));
+
+	return newnode;
+}
+
+/*
  * _copyNestLoopParam
  */
 static NestLoopParam *
@@ -5127,6 +5149,9 @@ copyObjectImpl(const void *from)
 			break;
 		case T_Limit:
 			retval = _copyLimit(from);
+			break;
+		case T_Redistribute:
+			retval = _copyRedistribute(from);
 			break;
 		case T_NestLoopParam:
 			retval = _copyNestLoopParam(from);

@@ -27,6 +27,7 @@ CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXI
     [ WITH ( <replaceable class="parameter">storage_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] ) | WITHOUT OIDS ]
     [ ON COMMIT { PRESERVE ROWS | DELETE ROWS | DROP } ]
     [ TABLESPACE <replaceable class="parameter">tablespace_name</replaceable> ]
+    [ PARALLEL DML { DEFAULT | UNSAFE | RESTRICTED | SAFE } ]
     AS <replaceable>query</replaceable>
     [ WITH [ NO ] DATA ]
 </synopsis>
@@ -220,6 +221,43 @@ CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXI
       <xref linkend="guc-default-tablespace"/> is consulted, or
       <xref linkend="guc-temp-tablespaces"/> if the table is temporary.
      </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>PARALLEL DML { DEFAULT | UNSAFE | RESTRICTED | SAFE } </literal></term>
+    <listitem>
+     <para>
+      <literal>PARALLEL DML DEFAULT</literal> indicates that the safety of
+      parallel modification will be checked automatically. This is default.
+      <literal>PARALLEL DML UNSAFE</literal> indicates that the data in the
+      table can't be modified in parallel mode, and this forces a serial
+      execution plan for DML statements operating on the table.
+      <literal>PARALLEL DML RESTRICTED</literal> indicates that the data in the
+      table can be modified in parallel mode, but the modification is
+      restricted to the parallel group leader. <literal>PARALLEL DML
+      SAFE</literal> indicates that the data in the table can be modified in
+      parallel mode without restriction. Note that
+      <productname>PostgreSQL</productname> currently does not support data
+      modification by parallel workers.
+     </para>
+
+     <para>
+      Tables should be labeled parallel dml unsafe/restricted if any parallel
+      unsafe/restricted function could be executed when modifying the data in
+      table (e.g., functions in trigger/index expression/constraints ...).
+     </para>
+
+     <para>
+      To assist in correctly labeling the parallel DML safety level of a table,
+      PostgreSQL provides some utility functions that may be used during
+      application development. Refer to
+      <link linkend="functions-info-object-table">
+      <function>pg_get_table_parallel_dml_safety()</function></link> and
+      <link linkend="functions-info-object-table">
+      <function>pg_get_table_max_parallel_dml_hazard()</function></link> for more information.
+     </para>
+
     </listitem>
    </varlistentry>
 

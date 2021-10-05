@@ -110,6 +110,13 @@ typedef struct
 	Oid			relId;			/* relation ID */
 } SharedInvalSnapshotMsg;
 
+#define SHAREDINVALPARALLELDML_ID	(-6)
+
+typedef struct
+{
+	int8		id;				/* type field --- must be first */
+} SharedInvalParallelDMLMsg;
+
 typedef union
 {
 	int8		id;				/* type field --- must be first */
@@ -119,6 +126,7 @@ typedef union
 	SharedInvalSmgrMsg sm;
 	SharedInvalRelmapMsg rm;
 	SharedInvalSnapshotMsg sn;
+	SharedInvalParallelDMLMsg pd;
 } SharedInvalidationMessage;
 
 

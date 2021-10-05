@@ -63,6 +63,7 @@ typedef struct RelationData
 	bool		rd_indexvalid;	/* is rd_indexlist valid? (also rd_pkindex and
 								 * rd_replidindex) */
 	bool		rd_statvalid;	/* is rd_statlist valid? */
+	char		rd_paralleldml; /* parallel dml safety */
 
 	/*----------
 	 * rd_createSubid is the ID of the highest subtransaction the rel has

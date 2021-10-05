@@ -40,6 +40,7 @@
 #include "tcop/tcopprot.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
+#include "utils/inval.h"
 #include "utils/lsyscache.h"
 #include "utils/regproc.h"
 #include "utils/rel.h"
@@ -368,6 +369,9 @@ ProcedureCreate(const char *procedureName,
 		Datum		proargnames;
 		bool		isnull;
 		const char *dropcmd;
+		char		old_proparallel;
+
+		old_proparallel = oldproc->proparallel;
 
 		if (!replace)
 			ereport(ERROR,
@@ -559,6 +563,15 @@ ProcedureCreate(const char *procedureName,
 		/* Okay, do it... */
 		tup = heap_modify_tuple(oldtup, tupDesc, values, nulls, replaces);
 		CatalogTupleUpdate(rel, &tup->t_self, tup);
+
+		/*
+		 * If the function's parallel safety changed, the tables that depend
+		 * on this function won't be safe to be modified in parallel mode
+		 * anymore. So, we need to invalidate the parallel dml flag in
+		 * relcache.
+		 */
+		if (old_proparallel != parallel)
+			CacheInvalidateParallelDML();
 
 		ReleaseSysCache(oldtup);
 		is_update = true;

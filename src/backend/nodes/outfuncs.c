@@ -1114,6 +1114,7 @@ _outIntoClause(StringInfo str, const IntoClause *node)
 	WRITE_NODE_FIELD(options);
 	WRITE_ENUM_FIELD(onCommit, OnCommitAction);
 	WRITE_STRING_FIELD(tableSpaceName);
+	WRITE_STRING_FIELD(paralleldmlsafety);
 	WRITE_NODE_FIELD(viewQuery);
 	WRITE_BOOL_FIELD(skipData);
 }
@@ -2715,6 +2716,7 @@ _outCreateStmtInfo(StringInfo str, const CreateStmt *node)
 	WRITE_ENUM_FIELD(oncommit, OnCommitAction);
 	WRITE_STRING_FIELD(tablespacename);
 	WRITE_STRING_FIELD(accessMethod);
+	WRITE_STRING_FIELD(paralleldmlsafety);
 	WRITE_BOOL_FIELD(if_not_exists);
 }
 

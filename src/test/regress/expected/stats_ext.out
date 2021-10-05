@@ -158,6 +158,7 @@ ALTER STATISTICS ab1_a_b_stats SET STATISTICS -1;
  b      | integer |           |          |         | plain   |              | 
 Statistics objects:
     "public.ab1_a_b_stats" ON a, b FROM ab1
+Parallel DML: default
 
 -- partial analyze doesn't build stats either
 ANALYZE ab1 (a);

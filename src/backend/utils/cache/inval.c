@@ -479,6 +479,27 @@ AddSnapshotInvalidationMessage(InvalidationMsgsGroup *group,
 }
 
 /*
+ * Add a parallel dml inval entry
+ */
+static void
+AddParallelDMLInvalidationMessage(InvalidationMsgsGroup *group)
+{
+	SharedInvalidationMessage msg;
+
+	/* Don't add a duplicate item. */
+	ProcessMessageSubGroup(group, RelCacheMsgs,
+						   if (msg->rc.id == SHAREDINVALPARALLELDML_ID)
+						   return);
+
+	/* OK, add the item */
+	msg.pd.id = SHAREDINVALPARALLELDML_ID;
+	/* check AddCatcacheInvalidationMessage() for an explanation */
+	VALGRIND_MAKE_MEM_DEFINED(&msg, sizeof(msg));
+
+	AddInvalidationMessage(group, RelCacheMsgs, &msg);
+}
+
+/*
  * Append one group of invalidation messages to another, resetting
  * the source group to empty.
  */
@@ -577,6 +598,21 @@ RegisterRelcacheInvalidation(Oid dbId, Oid relId)
 }
 
 /*
+ * RegisterParallelDMLInvalidation
+ *
+ * Register a invalidation event for paralleldml in all relcache.
+ */
+static void
+RegisterParallelDMLInvalidation()
+{
+	AddParallelDMLInvalidationMessage(&transInvalInfo->CurrentCmdInvalidMsgs);
+
+	(void) GetCurrentCommandId(true);
+
+	transInvalInfo->RelcacheInitFileInval = true;
+}
+
+/*
  * RegisterSnapshotInvalidation
  *
  * Register an invalidation event for MVCC scans against a given catalog.
@@ -667,6 +703,11 @@ LocalExecuteInvalidationMessage(SharedInvalidationMessage *msg)
 			InvalidateCatalogSnapshot();
 		else if (msg->sn.dbId == MyDatabaseId)
 			InvalidateCatalogSnapshot();
+	}
+	else if (msg->id == SHAREDINVALPARALLELDML_ID)
+	{
+		/* Invalid all the relcache's parallel dml flag */
+		ParallelDMLInvalidate();
 	}
 	else
 		elog(FATAL, "unrecognized SI message ID: %d", msg->id);
@@ -1368,6 +1409,18 @@ CacheInvalidateRelcacheAll(void)
 	PrepareInvalidationState();
 
 	RegisterRelcacheInvalidation(InvalidOid, InvalidOid);
+}
+
+/*
+ * CacheInvalidateParallelDML
+ *		Register invalidation of the whole relcache at the end of command.
+ */
+void
+CacheInvalidateParallelDML(void)
+{
+	PrepareInvalidationState();
+
+	RegisterParallelDMLInvalidation();
 }
 
 /*

@@ -1873,6 +1873,7 @@ formrdesc(const char *relationName, Oid relationReltype,
 	relation->rd_rel->relkind = RELKIND_RELATION;
 	relation->rd_rel->relnatts = (int16) natts;
 	relation->rd_rel->relam = HEAP_TABLE_AM_OID;
+	relation->rd_rel->relparalleldml = PROPARALLEL_DEFAULT;
 
 	/*
 	 * initialize attribute tuple form
@@ -2934,6 +2935,25 @@ RelationCacheInvalidate(void)
 }
 
 /*
+ * ParallelDMLInvalidate
+ *	 Invalidate all the relcache's parallel dml flag.
+ */
+void
+ParallelDMLInvalidate(void)
+{
+	HASH_SEQ_STATUS status;
+	RelIdCacheEnt *idhentry;
+	Relation	relation;
+
+	hash_seq_init(&status, RelationIdCache);
+
+	while ((idhentry = (RelIdCacheEnt *) hash_seq_search(&status)) != NULL)
+	{
+		relation = idhentry->reldesc;
+		relation->rd_paralleldml = 0;
+	}
+}
+/*
  * RelationCloseSmgrByOid - close a relcache entry's smgr link
  *
  * Needed in some cases where we are changing a relation's physical mapping.
@@ -3359,7 +3379,8 @@ RelationBuildLocalRelation(const char *relname,
 						   bool shared_relation,
 						   bool mapped_relation,
 						   char relpersistence,
-						   char relkind)
+						   char relkind,
+						   char relparalleldml)
 {
 	Relation	rel;
 	MemoryContext oldcxt;
@@ -3508,6 +3529,8 @@ RelationBuildLocalRelation(const char *relname,
 		rel->rd_rel->relreplident = REPLICA_IDENTITY_DEFAULT;
 	else
 		rel->rd_rel->relreplident = REPLICA_IDENTITY_NOTHING;
+
+	rel->rd_rel->relparalleldml = relparalleldml;
 
 	/*
 	 * Insert relation physical and logical identifiers (OIDs) into the right

@@ -3180,6 +3180,7 @@ Rules:
     r3 AS
     ON DELETE TO rules_src DO
  NOTIFY rules_src_deletion
+Parallel DML: default
 
 --
 -- Ensure an aliased target relation for insert is correctly deparsed.
@@ -3208,6 +3209,7 @@ Rules:
     r5 AS
     ON UPDATE TO rules_src DO INSTEAD  UPDATE rules_log trgt SET tag = 'updated'::text
   WHERE trgt.f1 = new.f1
+Parallel DML: default
 
 --
 -- Also check multiassignment deparsing.
@@ -3231,6 +3233,7 @@ Rules:
   WHERE trgt.f1 = new.f1
   RETURNING new.f1,
     new.f2
+Parallel DML: default
 
 drop table rule_t1, rule_dest;
 --

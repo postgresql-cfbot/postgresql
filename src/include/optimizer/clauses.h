@@ -23,6 +23,17 @@ typedef struct
 	List	  **windowFuncs;	/* lists of WindowFuncs for each winref */
 } WindowFuncLists;
 
+/*
+ * Information about a table-related object which could affect the safety of
+ * parallel data modification on table.
+ */
+typedef struct safety_object
+{
+	Oid objid;			/* OID of object itself */
+	Oid classid;		/* OID of its catalog */
+	char proparallel;	/* parallel safety of the object */
+} safety_object;
+
 extern bool contain_agg_clause(Node *clause);
 
 extern bool contain_window_function(Node *clause);
@@ -52,5 +63,10 @@ extern void CommuteOpExpr(OpExpr *clause);
 
 extern Query *inline_set_returning_function(PlannerInfo *root,
 											RangeTblEntry *rte);
+
+extern bool is_parallel_allowed_for_modify(Query *parse);
+extern List *target_rel_parallel_hazard(Oid relOid, bool findall,
+										char max_interesting,
+										char *max_hazard);
 
 #endif							/* CLAUSES_H */

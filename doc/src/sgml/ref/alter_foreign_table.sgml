@@ -29,6 +29,8 @@ ALTER FOREIGN TABLE [ IF EXISTS ] <replaceable class="parameter">name</replaceab
     RENAME TO <replaceable class="parameter">new_name</replaceable>
 ALTER FOREIGN TABLE [ IF EXISTS ] <replaceable class="parameter">name</replaceable>
     SET SCHEMA <replaceable class="parameter">new_schema</replaceable>
+ALTER FOREIGN TABLE [ IF EXISTS ] <replaceable class="parameter">name</replaceable>
+    PARALLEL { DEFAULT | UNSAFE | RESTRICTED | SAFE }
 
 <phrase>where <replaceable class="parameter">action</replaceable> is one of:</phrase>
 
@@ -295,6 +297,17 @@ ALTER FOREIGN TABLE [ IF EXISTS ] <replaceable class="parameter">name</replaceab
     <listitem>
      <para>
       This form moves the foreign table into another schema.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>PARALLEL DML</literal></term>
+    <listitem>
+     <para>
+      Change whether the data in the table can be modified in parallel mode.
+      See the similar form of <link linkend="sql-altertable"><command>ALTER TABLE</command></link>
+      for more details.
      </para>
     </listitem>
    </varlistentry>

@@ -12,6 +12,7 @@ INSERT INTO cmdata VALUES(repeat('1234567890', 1000));
  f1     | text |           |          |         | extended | pglz        |              | 
 Indexes:
     "idx" btree (f1)
+Parallel DML: default
 
 CREATE TABLE cmdata1(f1 TEXT COMPRESSION lz4);
 ERROR:  compression method lz4 not supported
@@ -51,6 +52,7 @@ SELECT * INTO cmmove1 FROM cmdata;
  Column | Type | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
 --------+------+-----------+----------+---------+----------+-------------+--------------+-------------
  f1     | text |           |          |         | extended |             |              | 
+Parallel DML: default
 
 SELECT pg_column_compression(f1) FROM cmmove1;
  pg_column_compression 
@@ -138,6 +140,7 @@ CREATE TABLE cmdata2 (f1 int);
  Column |  Type   | Collation | Nullable | Default | Storage | Compression | Stats target | Description 
 --------+---------+-----------+----------+---------+---------+-------------+--------------+-------------
  f1     | integer |           |          |         | plain   |             |              | 
+Parallel DML: default
 
 ALTER TABLE cmdata2 ALTER COLUMN f1 TYPE varchar;
 \d+ cmdata2
@@ -145,6 +148,7 @@ ALTER TABLE cmdata2 ALTER COLUMN f1 TYPE varchar;
  Column |       Type        | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
 --------+-------------------+-----------+----------+---------+----------+-------------+--------------+-------------
  f1     | character varying |           |          |         | extended |             |              | 
+Parallel DML: default
 
 ALTER TABLE cmdata2 ALTER COLUMN f1 TYPE int USING f1::integer;
 \d+ cmdata2
@@ -152,6 +156,7 @@ ALTER TABLE cmdata2 ALTER COLUMN f1 TYPE int USING f1::integer;
  Column |  Type   | Collation | Nullable | Default | Storage | Compression | Stats target | Description 
 --------+---------+-----------+----------+---------+---------+-------------+--------------+-------------
  f1     | integer |           |          |         | plain   |             |              | 
+Parallel DML: default
 
 --changing column storage should not impact the compression method
 --but the data should not be compressed
@@ -162,6 +167,7 @@ ALTER TABLE cmdata2 ALTER COLUMN f1 SET COMPRESSION pglz;
  Column |       Type        | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
 --------+-------------------+-----------+----------+---------+----------+-------------+--------------+-------------
  f1     | character varying |           |          |         | extended | pglz        |              | 
+Parallel DML: default
 
 ALTER TABLE cmdata2 ALTER COLUMN f1 SET STORAGE plain;
 \d+ cmdata2
@@ -169,6 +175,7 @@ ALTER TABLE cmdata2 ALTER COLUMN f1 SET STORAGE plain;
  Column |       Type        | Collation | Nullable | Default | Storage | Compression | Stats target | Description 
 --------+-------------------+-----------+----------+---------+---------+-------------+--------------+-------------
  f1     | character varying |           |          |         | plain   | pglz        |              | 
+Parallel DML: default
 
 INSERT INTO cmdata2 VALUES (repeat('123456789', 800));
 SELECT pg_column_compression(f1) FROM cmdata2;
@@ -249,6 +256,7 @@ INSERT INTO cmdata VALUES (repeat('123456789', 4004));
  f1     | text |           |          |         | extended | pglz        |              | 
 Indexes:
     "idx" btree (f1)
+Parallel DML: default
 
 SELECT pg_column_compression(f1) FROM cmdata;
  pg_column_compression 
@@ -263,6 +271,7 @@ ALTER TABLE cmdata2 ALTER COLUMN f1 SET COMPRESSION default;
  Column |       Type        | Collation | Nullable | Default | Storage | Compression | Stats target | Description 
 --------+-------------------+-----------+----------+---------+---------+-------------+--------------+-------------
  f1     | character varying |           |          |         | plain   |             |              | 
+Parallel DML: default
 
 -- test alter compression method for materialized views
 ALTER MATERIALIZED VIEW compressmv ALTER COLUMN x SET COMPRESSION lz4;

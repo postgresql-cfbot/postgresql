@@ -2098,14 +2098,14 @@ if test x"$pgac_cv__cpuid" = x"yes"; then
   AC_DEFINE(HAVE__CPUID, 1, [Define to 1 if you have __cpuid.])
 fi
 
-# Check for Intel SSE 4.2 intrinsics to do CRC calculations.
+# Check for Intel SSE 4.2 intrinsics.
 #
-# First check if the _mm_crc32_u8 and _mm_crc32_u64 intrinsics can be used
-# with the default compiler flags. If not, check if adding the -msse4.2
+# First check if these intrinsics can be used with the default
+# compiler flags. If not, check if adding the -msse4.2
 # flag helps. CFLAGS_SSE42 is set to -msse4.2 if that's required.
-PGAC_SSE42_CRC32_INTRINSICS([])
-if test x"$pgac_sse42_crc32_intrinsics" != x"yes"; then
-  PGAC_SSE42_CRC32_INTRINSICS([-msse4.2])
+PGAC_SSE42_INTRINSICS([])
+if test x"$pgac_sse42_intrinsics" != x"yes"; then
+  PGAC_SSE42_INTRINSICS([-msse4.2])
 fi
 AC_SUBST(CFLAGS_SSE42)
 
@@ -2146,12 +2146,12 @@ AC_SUBST(CFLAGS_ARMV8_CRC32C)
 # in the template or configure command line.
 if test x"$USE_SLICING_BY_8_CRC32C" = x"" && test x"$USE_SSE42_CRC32C" = x"" && test x"$USE_SSE42_CRC32C_WITH_RUNTIME_CHECK" = x"" && test x"$USE_ARMV8_CRC32C" = x"" && test x"$USE_ARMV8_CRC32C_WITH_RUNTIME_CHECK" = x""; then
   # Use Intel SSE 4.2 if available.
-  if test x"$pgac_sse42_crc32_intrinsics" = x"yes" && test x"$SSE4_2_TARGETED" = x"1" ; then
+  if test x"$pgac_sse42_intrinsics" = x"yes" && test x"$SSE4_2_TARGETED" = x"1" ; then
     USE_SSE42_CRC32C=1
   else
     # Intel SSE 4.2, with runtime check? The CPUID instruction is needed for
     # the runtime check.
-    if test x"$pgac_sse42_crc32_intrinsics" = x"yes" && (test x"$pgac_cv__get_cpuid" = x"yes" || test x"$pgac_cv__cpuid" = x"yes"); then
+    if test x"$pgac_sse42_intrinsics" = x"yes" && (test x"$pgac_cv__get_cpuid" = x"yes" || test x"$pgac_cv__cpuid" = x"yes"); then
       USE_SSE42_CRC32C_WITH_RUNTIME_CHECK=1
     else
       # Use ARM CRC Extension if available.
@@ -2165,7 +2165,7 @@ if test x"$USE_SLICING_BY_8_CRC32C" = x"" && test x"$USE_SSE42_CRC32C" = x"" && 
           # fall back to slicing-by-8 algorithm, which doesn't require any
           # special CPU support.
           USE_SLICING_BY_8_CRC32C=1
-	fi
+        fi
       fi
     fi
   fi
@@ -2202,6 +2202,49 @@ else
 fi
 AC_SUBST(PG_CRC32C_OBJS)
 
+# Select UTF-8 validator implementation.
+#
+# If we are targeting a processor that has SSE 4.2 instructions, we can use
+# those to validate UTF-8 characters. If we're not targeting such
+# a processor, but we can nevertheless produce code that uses the SSE
+# intrinsics, perhaps with some extra CFLAGS, compile both implementations and
+# select which one to use at runtime, depending on whether SSE 4.2 is supported
+# by the processor we're running on.
+#
+# You can override this logic by setting the appropriate USE_*_UTF8 flag to 1
+# in the template or configure command line.
+if test x"$USE_SSE42_UTF8" = x"" && test x"$USE_SSE42_UTF8_WITH_RUNTIME_CHECK" = x"" && test x"$USE_FALLBACK_UTF8" = x""; then
+  if test x"$pgac_sse42_intrinsics" = x"yes" && test x"$SSE4_2_TARGETED" = x"1" ; then
+    USE_SSE42_UTF8=1
+  else
+    if test x"$pgac_sse42_intrinsics" = x"yes"; then
+      USE_SSE42_UTF8_WITH_RUNTIME_CHECK=1
+    else
+      # fall back to algorithm which doesn't require any special
+      # CPU support.
+      USE_FALLBACK_UTF8=1
+    fi
+  fi
+fi
+
+# Set PG_UTF8_OBJS appropriately depending on the selected implementation.
+AC_MSG_CHECKING([which UTF-8 validator to use])
+if test x"$USE_SSE42_UTF8" = x"1"; then
+  AC_DEFINE(USE_SSE42_UTF8, 1, [Define to 1 use Intel SSE 4.2 instructions.])
+  PG_UTF8_OBJS="pg_utf8_sse42.o"
+  AC_MSG_RESULT(SSE 4.2)
+else
+  if test x"$USE_SSE42_UTF8_WITH_RUNTIME_CHECK" = x"1"; then
+    AC_DEFINE(USE_SSE42_UTF8_WITH_RUNTIME_CHECK, 1, [Define to 1 to use Intel SSE 4.2 instructions with a runtime check.])
+    PG_UTF8_OBJS="pg_utf8_sse42.o pg_utf8_fallback.o pg_utf8_sse42_choose.o"
+    AC_MSG_RESULT(SSE 4.2 with runtime check)
+  else
+    AC_DEFINE(USE_FALLBACK_UTF8, 1, [Define to 1 to use the fallback.])
+    PG_UTF8_OBJS="pg_utf8_fallback.o"
+    AC_MSG_RESULT(fallback)
+  fi
+fi
+AC_SUBST(PG_UTF8_OBJS)
 
 # Select semaphore implementation type.
 if test "$PORTNAME" != "win32"; then

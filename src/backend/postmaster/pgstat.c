@@ -1870,6 +1870,22 @@ pgstat_report_replslot_drop(const char *slotname)
 }
 
 /* ----------
+ * pgstat_report_replslot_conflict()
+ * Tell the collector about a logical slot being conflicting
+ * with recovery.
+ * ----------
+ */
+void
+pgstat_report_replslot_conflict(Oid dboid)
+{
+	PgStat_MsgRecoveryConflict msg;
+	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_RECOVERYCONFLICT);
+	msg.m_databaseid = dboid;
+	msg.m_reason = PROCSIG_RECOVERY_CONFLICT_LOGICALSLOT;
+	pgstat_send(&msg, sizeof(msg));
+}
+
+/* ----------
  * pgstat_ping() -
  *
  *	Send some junk data to the collector to increase traffic.
@@ -3633,6 +3649,7 @@ reset_dbentry_counters(PgStat_StatDBEntry *dbentry)
 	dbentry->n_conflict_tablespace = 0;
 	dbentry->n_conflict_lock = 0;
 	dbentry->n_conflict_snapshot = 0;
+	dbentry->n_conflict_logicalslot = 0;
 	dbentry->n_conflict_bufferpin = 0;
 	dbentry->n_conflict_startup_deadlock = 0;
 	dbentry->n_temp_files = 0;
@@ -5579,6 +5596,9 @@ pgstat_recv_recoveryconflict(PgStat_MsgRecoveryConflict *msg, int len)
 			break;
 		case PROCSIG_RECOVERY_CONFLICT_SNAPSHOT:
 			dbentry->n_conflict_snapshot++;
+			break;
+		case PROCSIG_RECOVERY_CONFLICT_LOGICALSLOT:
+			dbentry->n_conflict_logicalslot++;
 			break;
 		case PROCSIG_RECOVERY_CONFLICT_BUFFERPIN:
 			dbentry->n_conflict_bufferpin++;

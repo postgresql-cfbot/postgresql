@@ -747,6 +747,7 @@ typedef struct PgStat_StatDBEntry
 	PgStat_Counter n_conflict_tablespace;
 	PgStat_Counter n_conflict_lock;
 	PgStat_Counter n_conflict_snapshot;
+	PgStat_Counter n_conflict_logicalslot;
 	PgStat_Counter n_conflict_bufferpin;
 	PgStat_Counter n_conflict_startup_deadlock;
 	PgStat_Counter n_temp_files;
@@ -1038,6 +1039,7 @@ extern void pgstat_report_checksum_failure(void);
 extern void pgstat_report_replslot(const PgStat_StatReplSlotEntry *repSlotStat);
 extern void pgstat_report_replslot_create(const char *slotname);
 extern void pgstat_report_replslot_drop(const char *slotname);
+extern void pgstat_report_replslot_conflict(Oid dbOid);
 
 extern void pgstat_initialize(void);
 

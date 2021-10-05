@@ -214,7 +214,7 @@ pg_logical_slot_get_changes_guts(FunctionCallInfo fcinfo, bool confirm, bool bin
 	if (!RecoveryInProgress())
 		end_of_wal = GetFlushRecPtr();
 	else
-		end_of_wal = GetXLogReplayRecPtr(&ThisTimeLineID);
+		end_of_wal = GetXLogReplayRecPtr(&ThisTimeLineID, false);
 
 	ReplicationSlotAcquire(NameStr(*name), true);
 
@@ -232,11 +232,14 @@ pg_logical_slot_get_changes_guts(FunctionCallInfo fcinfo, bool confirm, bool bin
 
 		/*
 		 * After the sanity checks in CreateDecodingContext, make sure the
-		 * restart_lsn is valid.  Avoid "cannot get changes" wording in this
+		 * restart_lsn is valid or both xmin and catalog_xmin are valid.
+		 * Avoid "cannot get changes" wording in this
 		 * errmsg because that'd be confusingly ambiguous about no changes
 		 * being available.
 		 */
-		if (XLogRecPtrIsInvalid(MyReplicationSlot->data.restart_lsn))
+		if (XLogRecPtrIsInvalid(MyReplicationSlot->data.restart_lsn)
+			|| (!TransactionIdIsValid(MyReplicationSlot->data.xmin)
+				&& !TransactionIdIsValid(MyReplicationSlot->data.catalog_xmin)))
 			ereport(ERROR,
 					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 					 errmsg("can no longer get changes from replication slot \"%s\"",

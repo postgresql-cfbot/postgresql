@@ -372,7 +372,7 @@ GetReplicationApplyDelay(void)
 	receivePtr = walrcv->flushedUpto;
 	SpinLockRelease(&walrcv->mutex);
 
-	replayPtr = GetXLogReplayRecPtr(NULL);
+	replayPtr = GetXLogReplayRecPtr(NULL, false);
 
 	if (receivePtr == replayPtr)
 		return 0;

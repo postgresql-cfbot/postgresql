@@ -434,7 +434,7 @@ CheckpointerMain(void)
 			 */
 			ckpt_active = true;
 			if (do_restartpoint)
-				ckpt_start_recptr = GetXLogReplayRecPtr(NULL);
+				ckpt_start_recptr = GetXLogReplayRecPtr(NULL, false);
 			else
 				ckpt_start_recptr = GetInsertRecPtr();
 			ckpt_start_time = now;
@@ -794,7 +794,7 @@ IsCheckpointOnSchedule(double progress)
 	 * value that was in effect when the WAL was generated).
 	 */
 	if (RecoveryInProgress())
-		recptr = GetXLogReplayRecPtr(NULL);
+		recptr = GetXLogReplayRecPtr(NULL, false);
 	else
 		recptr = GetInsertRecPtr();
 	elapsed_xlogs = (((double) (recptr - ckpt_start_recptr)) /

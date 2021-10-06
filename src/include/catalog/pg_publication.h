@@ -83,11 +83,6 @@ typedef struct Publication
 	PublicationActions pubactions;
 } Publication;
 
-typedef struct PublicationRelInfo
-{
-	Relation	relation;
-} PublicationRelInfo;
-
 extern Publication *GetPublication(Oid pubid);
 extern Publication *GetPublicationByName(const char *pubname, bool missing_ok);
 extern List *GetRelationPublications(Oid relid);
@@ -111,13 +106,21 @@ typedef enum PublicationPartOpt
 extern List *GetPublicationRelations(Oid pubid, PublicationPartOpt pub_partopt);
 extern List *GetAllTablesPublications(void);
 extern List *GetAllTablesPublicationRelations(bool pubviaroot);
-extern List *GetPubPartitionOptionRelations(List *result,
-											PublicationPartOpt pub_partopt,
-											Oid relid);
+extern List *GetPublicationSchemas(Oid pubid);
+extern List *GetSchemaPublications(Oid schemaid);
+extern List *GetSchemaPublicationRelations(Oid schemaid,
+										   PublicationPartOpt pub_partopt);
+extern List *GetAllSchemaPublicationRelations(Oid puboid,
+											  PublicationPartOpt pub_partopt);
 
 extern bool is_publishable_relation(Relation rel);
-extern ObjectAddress publication_add_relation(Oid pubid, PublicationRelInfo *targetrel,
+extern List *GetPubPartitionOptionRelations(List* result,
+											PublicationPartOpt pub_partopt,
+											Oid relid);
+extern ObjectAddress publication_add_relation(Oid pubid, Relation targetrel,
 											  bool if_not_exists);
+extern ObjectAddress publication_add_schema(Oid pubid, Oid schemaid,
+											bool if_not_exists);
 
 extern Oid	get_publication_oid(const char *pubname, bool missing_ok);
 extern char *get_publication_name(Oid pubid, bool missing_ok);

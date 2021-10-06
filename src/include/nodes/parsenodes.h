@@ -354,6 +354,26 @@ typedef struct RoleSpec
 } RoleSpec;
 
 /*
+ * Publication object type
+ */
+typedef enum PublicationObjSpecType
+{
+	PUBLICATIONOBJ_TABLE,		/* Table type */
+	PUBLICATIONOBJ_REL_IN_SCHEMA,	/* Relations in schema type */
+	PUBLICATIONOBJ_CURRSCHEMA,	/* Get the first element from search_path */
+	PUBLICATIONOBJ_CONTINUATION	/* Continuation of previous type */
+} PublicationObjSpecType;
+
+typedef struct PublicationObjSpec
+{
+	NodeTag		type;
+	PublicationObjSpecType pubobjtype;	/* type of this publication object */
+	char	   *name;
+	RangeVar   *rangevar;
+	int			location;		/* token location, or -1 if unknown */
+} PublicationObjSpec;
+
+/*
  * FuncCall - a function or aggregate invocation
  *
  * agg_order (if not NIL) indicates we saw 'foo(... ORDER BY ...)', or if
@@ -1816,6 +1836,7 @@ typedef enum ObjectType
 	OBJECT_POLICY,
 	OBJECT_PROCEDURE,
 	OBJECT_PUBLICATION,
+	OBJECT_PUBLICATION_NAMESPACE,
 	OBJECT_PUBLICATION_REL,
 	OBJECT_ROLE,
 	OBJECT_ROUTINE,
@@ -3636,18 +3657,12 @@ typedef struct AlterTSConfigurationStmt
 	bool		missing_ok;		/* for DROP - skip error if missing? */
 } AlterTSConfigurationStmt;
 
-typedef struct PublicationTable
-{
-	NodeTag		type;
-	RangeVar   *relation;		/* relation to be published */
-} PublicationTable;
-
 typedef struct CreatePublicationStmt
 {
 	NodeTag		type;
 	char	   *pubname;		/* Name of the publication */
 	List	   *options;		/* List of DefElem nodes */
-	List	   *tables;			/* Optional list of tables to add */
+	List	   *pubobjects;		/* Optional list of publication objects */
 	bool		for_all_tables; /* Special publication for all tables in db */
 } CreatePublicationStmt;
 
@@ -3659,10 +3674,14 @@ typedef struct AlterPublicationStmt
 	/* parameters used for ALTER PUBLICATION ... WITH */
 	List	   *options;		/* List of DefElem nodes */
 
-	/* parameters used for ALTER PUBLICATION ... ADD/DROP TABLE */
-	List	   *tables;			/* List of tables to add/drop */
+	/*
+	 * Parameters used for ALTER PUBLICATION ... ADD/DROP/SET publication
+	 * objects.
+	 */
+	List	   *pubobjects;		/* Optional list of publication objects */
 	bool		for_all_tables; /* Special publication for all tables in db */
-	DefElemAction tableAction;	/* What action to perform with the tables */
+	DefElemAction action;		/* What action to perform with the
+								 * tables/schemas */
 } AlterPublicationStmt;
 
 typedef struct CreateSubscriptionStmt

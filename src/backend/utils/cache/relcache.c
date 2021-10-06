@@ -5447,6 +5447,7 @@ GetRelationPublicationActions(Relation relation)
 	List	   *puboids;
 	ListCell   *lc;
 	MemoryContext oldcxt;
+	Oid			schemaid;
 	PublicationActions *pubactions = palloc0(sizeof(PublicationActions));
 
 	/*
@@ -5462,6 +5463,9 @@ GetRelationPublicationActions(Relation relation)
 
 	/* Fetch the publication membership info. */
 	puboids = GetRelationPublications(RelationGetRelid(relation));
+	schemaid = RelationGetNamespace(relation);
+	puboids = list_concat_unique_oid(puboids, GetSchemaPublications(schemaid));
+
 	if (relation->rd_rel->relispartition)
 	{
 		/* Add publications that the ancestors are in too. */
@@ -5474,6 +5478,9 @@ GetRelationPublicationActions(Relation relation)
 
 			puboids = list_concat_unique_oid(puboids,
 											 GetRelationPublications(ancestor));
+			schemaid = get_rel_namespace(ancestor);
+			puboids = list_concat_unique_oid(puboids,
+											 GetSchemaPublications(schemaid));
 		}
 	}
 	puboids = list_concat_unique_oid(puboids, GetAllTablesPublications());

@@ -362,6 +362,26 @@ CREATE VIEW pg_stats_ext_exprs WITH (security_barrier) AS
 -- unprivileged users may read pg_statistic_ext but not pg_statistic_ext_data
 REVOKE ALL ON pg_statistic_ext_data FROM public;
 
+CREATE VIEW pg_publication_objects AS
+SELECT
+    P.pubname,
+    N.nspname AS objname,
+    'schema'::text AS objtype
+FROM pg_catalog.pg_publication P
+    JOIN pg_catalog.pg_publication_namespace S ON P.oid = S.pnpubid
+    JOIN pg_catalog.pg_class C ON C.relnamespace = S.pnnspid
+    JOIN pg_catalog.pg_namespace N on N.oid = S.pnnspid
+UNION
+SELECT
+    P.pubname,
+    quote_ident(N.nspname) || '.' || quote_ident(C.relname) AS objname,
+    'table'::text AS objtype
+FROM pg_catalog.pg_publication P
+    JOIN pg_catalog.pg_publication_rel R ON P.oid = R.prpubid
+    JOIN pg_catalog.pg_class C ON C.oid = R.prrelid
+    JOIN pg_catalog.pg_namespace N ON N.oid = C.relnamespace
+ORDER BY pubname;
+
 CREATE VIEW pg_publication_tables AS
     SELECT
         P.pubname AS pubname,

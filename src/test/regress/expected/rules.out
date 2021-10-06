@@ -1451,6 +1451,22 @@ pg_prepared_xacts| SELECT p.transaction,
    FROM ((pg_prepared_xact() p(transaction, gid, prepared, ownerid, dbid)
      LEFT JOIN pg_authid u ON ((p.ownerid = u.oid)))
      LEFT JOIN pg_database d ON ((p.dbid = d.oid)));
+pg_publication_objects| SELECT p.pubname,
+    n.nspname AS objname,
+    'schema'::text AS objtype
+   FROM (((pg_publication p
+     JOIN pg_publication_namespace s ON ((p.oid = s.pnpubid)))
+     JOIN pg_class c ON ((c.relnamespace = s.pnnspid)))
+     JOIN pg_namespace n ON ((n.oid = s.pnnspid)))
+UNION
+ SELECT p.pubname,
+    ((quote_ident((n.nspname)::text) || '.'::text) || quote_ident((c.relname)::text)) AS objname,
+    'table'::text AS objtype
+   FROM (((pg_publication p
+     JOIN pg_publication_rel r ON ((p.oid = r.prpubid)))
+     JOIN pg_class c ON ((c.oid = r.prrelid)))
+     JOIN pg_namespace n ON ((n.oid = c.relnamespace)))
+  ORDER BY 1;
 pg_publication_tables| SELECT p.pubname,
     n.nspname AS schemaname,
     c.relname AS tablename

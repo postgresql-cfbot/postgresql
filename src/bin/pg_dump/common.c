@@ -254,8 +254,11 @@ getSchemaData(Archive *fout, int *numTablesPtr)
 	pubinfoindex = buildIndexArray(pubinfo, numPublications,
 								   sizeof(PublicationInfo));
 
-	pg_log_info("reading publication membership");
+	pg_log_info("reading publication membership of tables");
 	getPublicationTables(fout, tblinfo, numTables);
+
+	pg_log_info("reading publication membership of schemas");
+	getPublicationNamespaces(fout, nspinfo, numNamespaces);
 
 	pg_log_info("reading subscriptions");
 	getSubscriptions(fout);

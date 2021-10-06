@@ -2302,7 +2302,7 @@ _equalCreatePublicationStmt(const CreatePublicationStmt *a,
 {
 	COMPARE_STRING_FIELD(pubname);
 	COMPARE_NODE_FIELD(options);
-	COMPARE_NODE_FIELD(tables);
+	COMPARE_NODE_FIELD(pubobjects);
 	COMPARE_SCALAR_FIELD(for_all_tables);
 
 	return true;
@@ -2314,9 +2314,9 @@ _equalAlterPublicationStmt(const AlterPublicationStmt *a,
 {
 	COMPARE_STRING_FIELD(pubname);
 	COMPARE_NODE_FIELD(options);
-	COMPARE_NODE_FIELD(tables);
+	COMPARE_NODE_FIELD(pubobjects);
 	COMPARE_SCALAR_FIELD(for_all_tables);
-	COMPARE_SCALAR_FIELD(tableAction);
+	COMPARE_SCALAR_FIELD(action);
 
 	return true;
 }
@@ -3038,6 +3038,18 @@ _equalPartitionCmd(const PartitionCmd *a, const PartitionCmd *b)
 	return true;
 }
 
+static bool
+_equalPublicationObject(const PublicationObjSpec* a,
+						const PublicationObjSpec* b)
+{
+	COMPARE_SCALAR_FIELD(pubobjtype);
+	COMPARE_STRING_FIELD(name);
+	COMPARE_NODE_FIELD(rangevar);
+	COMPARE_LOCATION_FIELD(location);
+
+	return true;
+}
+
 /*
  * Stuff from pg_list.h
  */
@@ -3129,14 +3141,6 @@ static bool
 _equalBitString(const BitString *a, const BitString *b)
 {
 	COMPARE_STRING_FIELD(val);
-
-	return true;
-}
-
-static bool
-_equalPublicationTable(const PublicationTable *a, const PublicationTable *b)
-{
-	COMPARE_NODE_FIELD(relation);
 
 	return true;
 }
@@ -3894,8 +3898,8 @@ equal(const void *a, const void *b)
 		case T_PartitionCmd:
 			retval = _equalPartitionCmd(a, b);
 			break;
-		case T_PublicationTable:
-			retval = _equalPublicationTable(a, b);
+		case T_PublicationObjSpec:
+			retval = _equalPublicationObject(a, b);
 			break;
 
 		default:

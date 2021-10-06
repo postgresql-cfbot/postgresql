@@ -2940,3 +2940,15 @@ select indexrelid::regclass, indisclustered from pg_index
   where indrelid = 'alttype_cluster'::regclass
   order by indexrelid::regclass::text;
 drop table alttype_cluster;
+
+-- Test altering table having publication
+create schema alter1;
+create schema alter2;
+create table alter1.t1 (a int);
+set client_min_messages = 'ERROR';
+create publication pub1 for table alter1.t1, all tables in schema alter2;
+reset client_min_messages;
+alter table alter1.t1 set schema alter2; -- should fail
+drop publication pub1;
+drop schema alter1 cascade;
+drop schema alter2 cascade;

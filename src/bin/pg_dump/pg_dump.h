@@ -81,6 +81,7 @@ typedef enum
 	DO_POLICY,
 	DO_PUBLICATION,
 	DO_PUBLICATION_REL,
+	DO_PUBLICATION_REL_IN_SCHEMA,
 	DO_SUBSCRIPTION
 } DumpableObjectType;
 
@@ -632,6 +633,17 @@ typedef struct _PublicationRelInfo
 } PublicationRelInfo;
 
 /*
+ * The PublicationSchemaInfo struct is used to represent publication tables
+ * in schema mapping.
+ */
+typedef struct _PublicationSchemaInfo
+{
+	DumpableObject dobj;
+	NamespaceInfo *pubschema;
+	PublicationInfo *publication;
+} PublicationSchemaInfo;
+
+/*
  * The SubscriptionInfo struct is used to represent subscription.
  */
 typedef struct _SubscriptionInfo
@@ -737,6 +749,8 @@ extern PublicationInfo *getPublications(Archive *fout,
 										int *numPublications);
 extern void getPublicationTables(Archive *fout, TableInfo tblinfo[],
 								 int numTables);
+extern void getPublicationNamespaces(Archive *fout, NamespaceInfo nspinfo[],
+									 int numSchemas);
 extern void getSubscriptions(Archive *fout);
 
 #endif							/* PG_DUMP_H */

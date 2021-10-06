@@ -1077,4 +1077,33 @@ SELECT COUNT(*) FROM pg_stat_statements WHERE query LIKE '%SELECT GROUPING%';
      2
 (1 row)
 
+--
+-- statement timestamps
+--
+SELECT pg_stat_statements_reset();
+ pg_stat_statements_reset 
+--------------------------
+ 
+(1 row)
+
+SELECT 1 AS "STMTTS1";
+ STMTTS1 
+---------
+       1
+(1 row)
+
+SELECT now() AS ref_ts \gset
+SELECT 1,2 AS "STMTTS2";
+ ?column? | STMTTS2 
+----------+---------
+        1 |       2
+(1 row)
+
+SELECT first_seen >= :'ref_ts', count(*) FROM pg_stat_statements WHERE query LIKE '%STMTTS%' GROUP BY first_seen >= :'ref_ts' ORDER BY first_seen >= :'ref_ts';
+ ?column? | count 
+----------+-------
+ f        |     1
+ t        |     1
+(2 rows)
+
 DROP EXTENSION pg_stat_statements;

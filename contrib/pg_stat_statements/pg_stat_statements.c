@@ -88,7 +88,7 @@ PG_MODULE_MAGIC;
 #define PGSS_TEXT_FILE	PG_STAT_TMP_DIR "/pgss_query_texts.stat"
 
 /* Magic number identifying the stats file format */
-static const uint32 PGSS_FILE_HEADER = 0x20201227;
+static const uint32 PGSS_FILE_HEADER = 0x20210322;
 
 /* PostgreSQL major version number, changes in which invalidate all entries */
 static const uint32 PGSS_PG_MAJOR_VERSION = PG_VERSION_NUM / 100;
@@ -121,7 +121,8 @@ typedef enum pgssVersion
 	PGSS_V1_2,
 	PGSS_V1_3,
 	PGSS_V1_8,
-	PGSS_V1_9
+	PGSS_V1_9,
+	PGSS_V1_10
 } pgssVersion;
 
 typedef enum pgssStoreKind
@@ -214,6 +215,7 @@ typedef struct pgssEntry
 	Size		query_offset;	/* query text offset in external file */
 	int			query_len;		/* # of valid bytes in query string, or -1 */
 	int			encoding;		/* query text encoding */
+	TimestampTz	first_seen;		/* timestamp of entry allocation moment */
 	slock_t		mutex;			/* protects the counters only */
 } pgssEntry;
 
@@ -302,6 +304,7 @@ PG_FUNCTION_INFO_V1(pg_stat_statements_1_2);
 PG_FUNCTION_INFO_V1(pg_stat_statements_1_3);
 PG_FUNCTION_INFO_V1(pg_stat_statements_1_8);
 PG_FUNCTION_INFO_V1(pg_stat_statements_1_9);
+PG_FUNCTION_INFO_V1(pg_stat_statements_1_10);
 PG_FUNCTION_INFO_V1(pg_stat_statements);
 PG_FUNCTION_INFO_V1(pg_stat_statements_info);
 
@@ -649,6 +652,7 @@ pgss_shmem_startup(void)
 
 		/* copy in the actual stats */
 		entry->counters = temp.counters;
+		entry->first_seen = temp.first_seen;
 	}
 
 	/* Read global statistics for pg_stat_statements */
@@ -1426,7 +1430,8 @@ pg_stat_statements_reset(PG_FUNCTION_ARGS)
 #define PG_STAT_STATEMENTS_COLS_V1_3	23
 #define PG_STAT_STATEMENTS_COLS_V1_8	32
 #define PG_STAT_STATEMENTS_COLS_V1_9	33
-#define PG_STAT_STATEMENTS_COLS			33	/* maximum of above */
+#define PG_STAT_STATEMENTS_COLS_V1_10	34
+#define PG_STAT_STATEMENTS_COLS			34	/* maximum of above */
 
 /*
  * Retrieve statement statistics.
@@ -1438,6 +1443,16 @@ pg_stat_statements_reset(PG_FUNCTION_ARGS)
  * expected API version is identified by embedding it in the C name of the
  * function.  Unfortunately we weren't bright enough to do that for 1.1.
  */
+Datum
+pg_stat_statements_1_10(PG_FUNCTION_ARGS)
+{
+	bool		showtext = PG_GETARG_BOOL(0);
+
+	pg_stat_statements_internal(fcinfo, PGSS_V1_10, showtext);
+
+	return (Datum) 0;
+}
+
 Datum
 pg_stat_statements_1_9(PG_FUNCTION_ARGS)
 {
@@ -1571,6 +1586,10 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 			if (api_version != PGSS_V1_9)
 				elog(ERROR, "incorrect number of output arguments");
 			break;
+		case PG_STAT_STATEMENTS_COLS_V1_10:
+			if (api_version != PGSS_V1_10)
+				elog(ERROR, "incorrect number of output arguments");
+			break;
 		default:
 			elog(ERROR, "incorrect number of output arguments");
 	}
@@ -1656,6 +1675,7 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 		Counters	tmp;
 		double		stddev;
 		int64		queryid = entry->key.queryid;
+		TimestampTz	first_seen;
 
 		memset(values, 0, sizeof(values));
 		memset(nulls, 0, sizeof(nulls));
@@ -1724,6 +1744,7 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 
 			SpinLockAcquire(&e->mutex);
 			tmp = e->counters;
+			first_seen = e->first_seen;
 			SpinLockRelease(&e->mutex);
 		}
 
@@ -1795,6 +1816,8 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 											Int32GetDatum(-1));
 			values[i++] = wal_bytes;
 		}
+		if (api_version >= PGSS_V1_10)
+			values[i++] = TimestampTzGetDatum(first_seen);
 
 		Assert(i == (api_version == PGSS_V1_0 ? PG_STAT_STATEMENTS_COLS_V1_0 :
 					 api_version == PGSS_V1_1 ? PG_STAT_STATEMENTS_COLS_V1_1 :
@@ -1802,6 +1825,7 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 					 api_version == PGSS_V1_3 ? PG_STAT_STATEMENTS_COLS_V1_3 :
 					 api_version == PGSS_V1_8 ? PG_STAT_STATEMENTS_COLS_V1_8 :
 					 api_version == PGSS_V1_9 ? PG_STAT_STATEMENTS_COLS_V1_9 :
+					 api_version == PGSS_V1_10 ? PG_STAT_STATEMENTS_COLS_V1_10 :
 					 -1 /* fail if you forget to update this assert */ ));
 
 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
@@ -1917,6 +1941,7 @@ entry_alloc(pgssHashKey *key, Size query_offset, int query_len, int encoding,
 		entry->query_offset = query_offset;
 		entry->query_len = query_len;
 		entry->encoding = encoding;
+		entry->first_seen = GetCurrentTimestamp();
 	}
 
 	return entry;

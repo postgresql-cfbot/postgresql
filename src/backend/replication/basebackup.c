@@ -1412,11 +1412,13 @@ sendDir(const char *path, int basepathlen, bool sizeonly, List *tablespaces,
 			size += _tarWriteDir(pathbuf, basepathlen, &statbuf, sizeonly);
 
 			/*
-			 * Also send archive_status directory (by hackishly reusing
-			 * statbuf from above ...).
+			 * Also send archive_status and preallocated_segments (by hackishly
+			 * reusing statbuf from above ...).
 			 */
 			size += _tarWriteHeader("./pg_wal/archive_status", NULL, &statbuf,
 									sizeonly);
+			size += _tarWriteHeader("./pg_wal/preallocated_segments", NULL,
+									&statbuf, sizeonly);
 
 			continue;			/* don't recurse into pg_wal */
 		}

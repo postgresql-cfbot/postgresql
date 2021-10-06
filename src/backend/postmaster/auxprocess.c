@@ -21,6 +21,7 @@
 #include "postmaster/auxprocess.h"
 #include "postmaster/bgwriter.h"
 #include "postmaster/startup.h"
+#include "postmaster/wal_allocator.h"
 #include "postmaster/walwriter.h"
 #include "replication/walreceiver.h"
 #include "storage/bufmgr.h"
@@ -79,6 +80,9 @@ AuxiliaryProcessMain(AuxProcType auxtype)
 			break;
 		case WalReceiverProcess:
 			MyBackendType = B_WAL_RECEIVER;
+			break;
+		case WalAllocatorProcess:
+			MyBackendType = B_WAL_ALLOCATOR;
 			break;
 		default:
 			elog(ERROR, "something has gone wrong");
@@ -160,6 +164,10 @@ AuxiliaryProcessMain(AuxProcType auxtype)
 
 		case WalReceiverProcess:
 			WalReceiverMain();
+			proc_exit(1);
+
+		case WalAllocatorProcess:
+			WalAllocatorMain();
 			proc_exit(1);
 
 		default:

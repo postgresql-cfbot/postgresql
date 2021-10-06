@@ -208,6 +208,7 @@ static char *extra_options = "";
 static const char *const subdirs[] = {
 	"global",
 	"pg_wal/archive_status",
+	"pg_wal/preallocated_segments",
 	"pg_commit_ts",
 	"pg_dynshmem",
 	"pg_notify",

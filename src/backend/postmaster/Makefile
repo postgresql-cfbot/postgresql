@@ -25,6 +25,7 @@ OBJS = \
 	postmaster.o \
 	startup.o \
 	syslogger.o \
+	wal_allocator.o \
 	walwriter.o
 
 include $(top_srcdir)/src/backend/common.mk

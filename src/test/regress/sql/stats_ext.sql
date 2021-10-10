@@ -112,6 +112,32 @@ CREATE STATISTICS ab1_a_b_stats ON a, b FROM ab1;
 ANALYZE ab1;
 DROP TABLE ab1 CASCADE;
 
+CREATE TABLE stxdinh(i int, j int);
+CREATE TABLE stxdinh1() INHERITS(stxdinh);
+INSERT INTO stxdinh SELECT a, a/10 FROM generate_series(1,9)a;
+INSERT INTO stxdinh1 SELECT a, a FROM generate_series(1,999)a;
+VACUUM ANALYZE stxdinh, stxdinh1;
+-- Without stats object, it looks like this
+SELECT * FROM check_estimated_rows('SELECT * FROM stxdinh* GROUP BY 1,2');
+CREATE STATISTICS stxdinh ON i,j FROM stxdinh;
+VACUUM ANALYZE stxdinh, stxdinh1;
+-- Ensure non-inherited stats are not applied to inherited query
+-- Since the stats object does not include inherited stats, it should not affect the estimates
+SELECT * FROM check_estimated_rows('SELECT * FROM stxdinh* GROUP BY 1,2');
+-- Ensure correct (non-inherited) stats are applied to inherited query
+SELECT * FROM check_estimated_rows('SELECT * FROM ONLY stxdinh GROUP BY 1,2');
+DROP TABLE stxdinh, stxdinh1;
+
+-- Ensure inherited stats ARE applied to inherited query in partitioned table
+CREATE TABLE stxdinp(i int, a int, b int) PARTITION BY RANGE (i);
+CREATE TABLE stxdinp1 PARTITION OF stxdinp FOR VALUES FROM (1)TO(100);
+INSERT INTO stxdinp SELECT 1, a/100, a/100 FROM generate_series(1,999)a;
+CREATE STATISTICS stxdinp ON (a),(b) FROM stxdinp;
+VACUUM ANALYZE stxdinp; -- partitions are processed recursively
+SELECT 1 FROM pg_statistic_ext WHERE stxrelid='stxdinp'::regclass;
+SELECT * FROM check_estimated_rows('SELECT a, b FROM stxdinp GROUP BY 1,2');
+DROP TABLE stxdinp;
+
 -- basic test for statistics on expressions
 CREATE TABLE ab1 (a INTEGER, b INTEGER, c TIMESTAMP, d TIMESTAMPTZ);
 

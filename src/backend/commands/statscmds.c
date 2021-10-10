@@ -524,6 +524,9 @@ CreateStatistics(CreateStatsStmt *stmt)
 
 	datavalues[Anum_pg_statistic_ext_data_stxoid - 1] = ObjectIdGetDatum(statoid);
 
+	/* create only the "stxdinherit=false", because that always exists */
+	datavalues[Anum_pg_statistic_ext_data_stxdinherit - 1] = ObjectIdGetDatum(false);
+
 	/* no statistics built yet */
 	datanulls[Anum_pg_statistic_ext_data_stxdndistinct - 1] = true;
 	datanulls[Anum_pg_statistic_ext_data_stxddependencies - 1] = true;
@@ -726,6 +729,7 @@ RemoveStatisticsById(Oid statsOid)
 	HeapTuple	tup;
 	Form_pg_statistic_ext statext;
 	Oid			relid;
+	int			inh;
 
 	/*
 	 * First delete the pg_statistic_ext_data tuple holding the actual
@@ -733,14 +737,20 @@ RemoveStatisticsById(Oid statsOid)
 	 */
 	relation = table_open(StatisticExtDataRelationId, RowExclusiveLock);
 
-	tup = SearchSysCache1(STATEXTDATASTXOID, ObjectIdGetDatum(statsOid));
+	/* hack to delete both stxdinherit = true/false */
+	for (inh = 0; inh <= 1; inh++)
+	{
+		tup = SearchSysCache2(STATEXTDATASTXOID, ObjectIdGetDatum(statsOid),
+							  BoolGetDatum(inh));
 
-	if (!HeapTupleIsValid(tup)) /* should not happen */
-		elog(ERROR, "cache lookup failed for statistics data %u", statsOid);
+		if (!HeapTupleIsValid(tup)) /* should not happen */
+			// elog(ERROR, "cache lookup failed for statistics data %u", statsOid);
+			continue;
 
-	CatalogTupleDelete(relation, &tup->t_self);
+		CatalogTupleDelete(relation, &tup->t_self);
 
-	ReleaseSysCache(tup);
+		ReleaseSysCache(tup);
+	}
 
 	table_close(relation, RowExclusiveLock);
 

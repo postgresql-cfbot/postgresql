@@ -30,6 +30,7 @@
 #include "catalog/pg_am.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_statistic_ext.h"
+#include "catalog/pg_statistic_ext_data.h"
 #include "foreign/fdwapi.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
@@ -1311,127 +1312,144 @@ get_relation_statistics(RelOptInfo *rel, Relation relation)
 	{
 		Oid			statOid = lfirst_oid(l);
 		Form_pg_statistic_ext staForm;
+		Form_pg_statistic_ext_data dataForm;
 		HeapTuple	htup;
 		HeapTuple	dtup;
 		Bitmapset  *keys = NULL;
 		List	   *exprs = NIL;
 		int			i;
+		int			inh;
 
 		htup = SearchSysCache1(STATEXTOID, ObjectIdGetDatum(statOid));
 		if (!HeapTupleIsValid(htup))
 			elog(ERROR, "cache lookup failed for statistics object %u", statOid);
 		staForm = (Form_pg_statistic_ext) GETSTRUCT(htup);
 
-		dtup = SearchSysCache1(STATEXTDATASTXOID, ObjectIdGetDatum(statOid));
-		if (!HeapTupleIsValid(dtup))
-			elog(ERROR, "cache lookup failed for statistics object %u", statOid);
-
 		/*
-		 * First, build the array of columns covered.  This is ultimately
-		 * wasted if no stats within the object have actually been built, but
-		 * it doesn't seem worth troubling over that case.
+		 * Hack to load stats with stxdinherit true/false - there should be
+		 * a better way to do this, I guess.
 		 */
-		for (i = 0; i < staForm->stxkeys.dim1; i++)
-			keys = bms_add_member(keys, staForm->stxkeys.values[i]);
-
-		/*
-		 * Preprocess expressions (if any). We read the expressions, run them
-		 * through eval_const_expressions, and fix the varnos.
-		 */
+		for (inh = 0; inh <= 1; inh++)
 		{
-			bool		isnull;
-			Datum		datum;
+			dtup = SearchSysCache2(STATEXTDATASTXOID,
+								   ObjectIdGetDatum(statOid), BoolGetDatum((bool) inh));
+			if (!HeapTupleIsValid(dtup))
+				continue;
 
-			/* decode expression (if any) */
-			datum = SysCacheGetAttr(STATEXTOID, htup,
-									Anum_pg_statistic_ext_stxexprs, &isnull);
+			dataForm = (Form_pg_statistic_ext_data) GETSTRUCT(dtup);
 
-			if (!isnull)
+			/*
+			 * First, build the array of columns covered.  This is ultimately
+			 * wasted if no stats within the object have actually been built, but
+			 * it doesn't seem worth troubling over that case.
+			 */
+			for (i = 0; i < staForm->stxkeys.dim1; i++)
+				keys = bms_add_member(keys, staForm->stxkeys.values[i]);
+
+			/*
+			 * Preprocess expressions (if any). We read the expressions, run them
+			 * through eval_const_expressions, and fix the varnos.
+			 */
 			{
-				char	   *exprsString;
+				bool		isnull;
+				Datum		datum;
 
-				exprsString = TextDatumGetCString(datum);
-				exprs = (List *) stringToNode(exprsString);
-				pfree(exprsString);
+				/* decode expression (if any) */
+				datum = SysCacheGetAttr(STATEXTOID, htup,
+										Anum_pg_statistic_ext_stxexprs, &isnull);
 
-				/*
-				 * Run the expressions through eval_const_expressions. This is
-				 * not just an optimization, but is necessary, because the
-				 * planner will be comparing them to similarly-processed qual
-				 * clauses, and may fail to detect valid matches without this.
-				 * We must not use canonicalize_qual, however, since these
-				 * aren't qual expressions.
-				 */
-				exprs = (List *) eval_const_expressions(NULL, (Node *) exprs);
+				if (!isnull)
+				{
+					char	   *exprsString;
 
-				/* May as well fix opfuncids too */
-				fix_opfuncids((Node *) exprs);
+					exprsString = TextDatumGetCString(datum);
+					exprs = (List *) stringToNode(exprsString);
+					pfree(exprsString);
 
-				/*
-				 * Modify the copies we obtain from the relcache to have the
-				 * correct varno for the parent relation, so that they match
-				 * up correctly against qual clauses.
-				 */
-				if (varno != 1)
-					ChangeVarNodes((Node *) exprs, 1, varno, 0);
+					/*
+					 * Run the expressions through eval_const_expressions. This is
+					 * not just an optimization, but is necessary, because the
+					 * planner will be comparing them to similarly-processed qual
+					 * clauses, and may fail to detect valid matches without this.
+					 * We must not use canonicalize_qual, however, since these
+					 * aren't qual expressions.
+					 */
+					exprs = (List *) eval_const_expressions(NULL, (Node *) exprs);
+
+					/* May as well fix opfuncids too */
+					fix_opfuncids((Node *) exprs);
+
+					/*
+					 * Modify the copies we obtain from the relcache to have the
+					 * correct varno for the parent relation, so that they match
+					 * up correctly against qual clauses.
+					 */
+					if (varno != 1)
+						ChangeVarNodes((Node *) exprs, 1, varno, 0);
+				}
 			}
-		}
 
-		/* add one StatisticExtInfo for each kind built */
-		if (statext_is_kind_built(dtup, STATS_EXT_NDISTINCT))
-		{
-			StatisticExtInfo *info = makeNode(StatisticExtInfo);
+			/* add one StatisticExtInfo for each kind built */
+			if (statext_is_kind_built(dtup, STATS_EXT_NDISTINCT))
+			{
+				StatisticExtInfo *info = makeNode(StatisticExtInfo);
 
-			info->statOid = statOid;
-			info->rel = rel;
-			info->kind = STATS_EXT_NDISTINCT;
-			info->keys = bms_copy(keys);
-			info->exprs = exprs;
+				info->statOid = statOid;
+				info->inherit = dataForm->stxdinherit;
+				info->rel = rel;
+				info->kind = STATS_EXT_NDISTINCT;
+				info->keys = bms_copy(keys);
+				info->exprs = exprs;
 
-			stainfos = lappend(stainfos, info);
-		}
+				stainfos = lappend(stainfos, info);
+			}
 
-		if (statext_is_kind_built(dtup, STATS_EXT_DEPENDENCIES))
-		{
-			StatisticExtInfo *info = makeNode(StatisticExtInfo);
+			if (statext_is_kind_built(dtup, STATS_EXT_DEPENDENCIES))
+			{
+				StatisticExtInfo *info = makeNode(StatisticExtInfo);
 
-			info->statOid = statOid;
-			info->rel = rel;
-			info->kind = STATS_EXT_DEPENDENCIES;
-			info->keys = bms_copy(keys);
-			info->exprs = exprs;
+				info->statOid = statOid;
+				info->inherit = dataForm->stxdinherit;
+				info->rel = rel;
+				info->kind = STATS_EXT_DEPENDENCIES;
+				info->keys = bms_copy(keys);
+				info->exprs = exprs;
 
-			stainfos = lappend(stainfos, info);
-		}
+				stainfos = lappend(stainfos, info);
+			}
 
-		if (statext_is_kind_built(dtup, STATS_EXT_MCV))
-		{
-			StatisticExtInfo *info = makeNode(StatisticExtInfo);
+			if (statext_is_kind_built(dtup, STATS_EXT_MCV))
+			{
+				StatisticExtInfo *info = makeNode(StatisticExtInfo);
 
-			info->statOid = statOid;
-			info->rel = rel;
-			info->kind = STATS_EXT_MCV;
-			info->keys = bms_copy(keys);
-			info->exprs = exprs;
+				info->statOid = statOid;
+				info->inherit = dataForm->stxdinherit;
+				info->rel = rel;
+				info->kind = STATS_EXT_MCV;
+				info->keys = bms_copy(keys);
+				info->exprs = exprs;
 
-			stainfos = lappend(stainfos, info);
-		}
+				stainfos = lappend(stainfos, info);
+			}
 
-		if (statext_is_kind_built(dtup, STATS_EXT_EXPRESSIONS))
-		{
-			StatisticExtInfo *info = makeNode(StatisticExtInfo);
+			if (statext_is_kind_built(dtup, STATS_EXT_EXPRESSIONS))
+			{
+				StatisticExtInfo *info = makeNode(StatisticExtInfo);
 
-			info->statOid = statOid;
-			info->rel = rel;
-			info->kind = STATS_EXT_EXPRESSIONS;
-			info->keys = bms_copy(keys);
-			info->exprs = exprs;
+				info->statOid = statOid;
+				info->inherit = dataForm->stxdinherit;
+				info->rel = rel;
+				info->kind = STATS_EXT_EXPRESSIONS;
+				info->keys = bms_copy(keys);
+				info->exprs = exprs;
 
-			stainfos = lappend(stainfos, info);
+				stainfos = lappend(stainfos, info);
+			}
+
+			ReleaseSysCache(dtup);
 		}
 
 		ReleaseSysCache(htup);
-		ReleaseSysCache(dtup);
 		bms_free(keys);
 	}
 

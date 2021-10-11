@@ -5885,7 +5885,8 @@ ORDER BY c.ordinal_position;
        <structfield>max_dynamic_result_sets</structfield> <type>cardinal_number</type>
       </para>
       <para>
-       Applies to a feature not available in <productname>PostgreSQL</productname>
+       For a procedure, the maximum number of dynamic result sets.  Otherwise
+       zero.
       </para></entry>
      </row>
 

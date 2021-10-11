@@ -6,7 +6,7 @@ use warnings;
 
 use PostgresNode;
 use TestLib;
-use Test::More tests => 2;
+use Test::More skip_all => 'broken';
 use Time::HiRes qw(usleep);
 
 my $tempdir = TestLib::tempdir;

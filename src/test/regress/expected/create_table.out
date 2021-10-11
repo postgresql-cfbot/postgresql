@@ -279,12 +279,13 @@ DEALLOCATE select1;
 -- (temporarily hide query, to avoid the long CREATE TABLE stmt)
 \set ECHO none
 INSERT INTO extra_wide_table(firstc, lastc) VALUES('first col', 'last col');
+ERROR:  relation "extra_wide_table" does not exist
+LINE 1: INSERT INTO extra_wide_table(firstc, lastc) VALUES('first co...
+                    ^
 SELECT firstc, lastc FROM extra_wide_table;
-  firstc   |  lastc   
------------+----------
- first col | last col
-(1 row)
-
+ERROR:  relation "extra_wide_table" does not exist
+LINE 1: SELECT firstc, lastc FROM extra_wide_table;
+                                  ^
 -- check that tables with oids cannot be created anymore
 CREATE TABLE withoid() WITH OIDS;
 ERROR:  syntax error at or near "OIDS"

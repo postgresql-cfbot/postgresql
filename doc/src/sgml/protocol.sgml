@@ -960,6 +960,25 @@ SELCT 1/0;<!-- this typo is intentional -->
    </para>
 
    <para>
+    Executing a portal may give rise to a <firstterm>dynamic result set
+    sequence</firstterm>.  That means the command contained in the portal
+    created additional result sets beyond what it normally returns.  (The
+    typical example is calling a stored procedure that creates dynamic result
+    sets.)  Dynamic result sets are issued after whatever response the main
+    command issued.  Each dynamic result set begins with a RowDescription
+    message followed by zero or more DataRow messages.  (Since, as explained
+    above, an Execute message normally does not respond with a RowDescription,
+    the appearance of the first RowDescription marks the end of the primary
+    result set of the portal and the beginning of the first dynamic result
+    set.)  The CommandComplete message that concludes the Execute message
+    response follows <emphasis>after</emphasis> all dynamic result sets.  Note
+    that dynamic result sets cannot, by their nature, be decribed prior to the
+    execution of the portal.  Multiple executions of the same prepared
+    statement could result in dynamic result sets with different row
+    descriptions being returned.
+   </para>
+
+   <para>
     At completion of each series of extended-query messages, the frontend
     should issue a Sync message.  This parameterless message causes the
     backend to close the current transaction if it's not inside a

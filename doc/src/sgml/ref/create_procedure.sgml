@@ -24,6 +24,7 @@ PostgreSQL documentation
 CREATE [ OR REPLACE ] PROCEDURE
     <replaceable class="parameter">name</replaceable> ( [ [ <replaceable class="parameter">argmode</replaceable> ] [ <replaceable class="parameter">argname</replaceable> ] <replaceable class="parameter">argtype</replaceable> [ { DEFAULT | = } <replaceable class="parameter">default_expr</replaceable> ] [, ...] ] )
   { LANGUAGE <replaceable class="parameter">lang_name</replaceable>
+    | DYNAMIC RESULT SETS <replaceable class="parameter">dynamic_result_sets</replaceable>
     | TRANSFORM { FOR TYPE <replaceable class="parameter">type_name</replaceable> } [, ... ]
     | [ EXTERNAL ] SECURITY INVOKER | [ EXTERNAL ] SECURITY DEFINER
     | SET <replaceable class="parameter">configuration_parameter</replaceable> { TO <replaceable class="parameter">value</replaceable> | = <replaceable class="parameter">value</replaceable> | FROM CURRENT }
@@ -172,6 +173,19 @@ CREATE [ OR REPLACE ] PROCEDURE
        <literal>sql</literal> if <replaceable
        class="parameter">sql_body</replaceable> is specified.  Enclosing the
        name in single quotes is deprecated and requires matching case.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><literal>DYNAMIC RESULT SETS <replaceable class="parameter">dynamic_result_sets</replaceable></literal></term>
+
+     <listitem>
+      <para>
+       Specifies how many dynamic result sets the procedure returns (see
+       <literal><link linkend="sql-declare">DECLARE</link> WITH
+       RETURN</literal>).  The default is 0.  If a procedure returns more
+       result sets than declared, a warning is raised.
       </para>
      </listitem>
     </varlistentry>

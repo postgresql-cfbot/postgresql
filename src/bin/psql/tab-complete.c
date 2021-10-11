@@ -969,7 +969,7 @@ Query_for_index_of_table \
 
 #define Query_for_enum \
 " SELECT name FROM ( "\
-"   SELECT pg_catalog.quote_ident(pg_catalog.unnest(enumvals)) AS name "\
+"   SELECT pg_catalog.unnest(enumvals) AS name "\
 "     FROM pg_catalog.pg_settings "\
 "    WHERE pg_catalog.lower(name)=pg_catalog.lower('%s') "\
 "    UNION ALL " \

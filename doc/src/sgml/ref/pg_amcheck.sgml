@@ -435,6 +435,13 @@ PostgreSQL documentation
    </variablelist>
   </para>
 
+  <warning>
+   <para>
+    The <option>--parent-check</option> and <option>--rootdescend</option>
+    options will fail when executed against a server in Hot Standby mode.
+   </para>
+  </warning>
+
   <para>
    The following command-line options control the connection to the server:
 

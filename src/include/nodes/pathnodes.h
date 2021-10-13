@@ -1908,6 +1908,15 @@ typedef struct LimitPath
 	LimitOption limitOption;	/* FETCH FIRST with ties or exact number */
 } LimitPath;
 
+/*
+ * Redistribute represents redistribute tuples
+ */
+typedef struct RedistributePath
+{
+	Path		path;
+	Path	   *subpath;		/* path representing input source */
+	List	   *hashClause;		/* a list of SortGroupClause's */
+}RedistributePath;
 
 /*
  * Restriction clause info.
@@ -2596,6 +2605,7 @@ typedef struct
 	bool		target_parallel_safe;
 	Node	   *havingQual;
 	List	   *targetList;
+	List	   *hashableList;	/* hashable group list */
 	PartitionwiseAggregateType patype;
 } GroupPathExtraData;
 

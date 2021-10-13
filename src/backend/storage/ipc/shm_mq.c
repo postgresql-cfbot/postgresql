@@ -260,6 +260,68 @@ shm_mq_get_sender(shm_mq *mq)
 }
 
 /*
+ * Receiver get peer
+ */
+PGPROC *
+shm_mq_receiver_get_sender(shm_mq_handle *mqh)
+{
+	PGPROC	   *sender;
+	shm_mq	   *mq = mqh->mqh_queue;
+	Assert(mq->mq_receiver == MyProc);
+
+	/*
+	 * If the counterparty is known to have attached, we can read mq_receiver
+	 * without acquiring the spinlock and assume it isn't NULL.  Otherwise,
+	 * more caution is needed.
+	 */
+	if (mqh->mqh_counterparty_attached)
+	{
+		sender = mq->mq_sender;
+	}
+	else
+	{
+		SpinLockAcquire(&mq->mq_mutex);
+		sender = mq->mq_sender;
+		SpinLockRelease(&mq->mq_mutex);
+		if (sender != NULL)
+			mqh->mqh_counterparty_attached = true;
+	}
+
+	return sender;
+}
+
+/*
+ * Sender get peer
+ */
+PGPROC *
+shm_mq_sender_get_reciver(shm_mq_handle *mqh)
+{
+	PGPROC	   *receiver;
+	shm_mq	   *mq = mqh->mqh_queue;
+	Assert(mq->mq_sender == MyProc);
+
+	/*
+	 * If the counterparty is known to have attached, we can read mq_receiver
+	 * without acquiring the spinlock and assume it isn't NULL.  Otherwise,
+	 * more caution is needed.
+	 */
+	if (mqh->mqh_counterparty_attached)
+	{
+		receiver = mq->mq_receiver;
+	}
+	else
+	{
+		SpinLockAcquire(&mq->mq_mutex);
+		receiver = mq->mq_receiver;
+		SpinLockRelease(&mq->mq_mutex);
+		if (receiver != NULL)
+			mqh->mqh_counterparty_attached = true;
+	}
+
+	return receiver;
+}
+
+/*
  * Attach to a shared message queue so we can send or receive messages.
  *
  * The memory context in effect at the time this function is called should
@@ -520,6 +582,44 @@ shm_mq_sendv(shm_mq_handle *mqh, shm_mq_iovec *iov, int iovcnt, bool nowait)
 
 	/* Notify receiver of the newly-written data, and return. */
 	SetLatch(&receiver->procLatch);
+	return SHM_MQ_SUCCESS;
+}
+
+/*
+ * like shm_mq_send(nowait), but return SHM_MQ_WOULD_BLOCK immediately when
+ * no space for write data, not write any data to queue
+ */
+shm_mq_result
+shm_mq_send_once(shm_mq_handle *mqh, Size nbytes, const void *data)
+{
+	PGPROC	   *receiver;
+	shm_mq	   *mq = mqh->mqh_queue;
+	uint64		rb = pg_atomic_read_u64(&mq->mq_bytes_read);
+	uint64		wb = pg_atomic_read_u64(&mq->mq_bytes_written);
+	Size		written;
+	shm_mq_result result;
+
+	Assert(mq->mq_sender == MyProc);
+	Assert(mqh->mqh_length_word_complete == false);
+	Assert(mqh->mqh_partial_bytes == 0);
+
+	/* test space */
+	if (mq->mq_ring_size - (wb - rb) < nbytes + sizeof(Size))
+		return SHM_MQ_WOULD_BLOCK;
+
+	/* write date */
+	if ((result = shm_mq_send_bytes(mqh, sizeof(Size), &nbytes, true, &written)) != SHM_MQ_SUCCESS ||
+		(result = shm_mq_send_bytes(mqh, nbytes, data, true, &written)) != SHM_MQ_SUCCESS)
+	{
+		/* should not get SHM_MQ_WOULD_BLOCK */
+		Assert(result == SHM_MQ_DETACHED);
+		return result;
+	}
+
+	/* Notify receiver of the newly-written data(if attached), and return. */
+	receiver = shm_mq_sender_get_reciver(mqh);
+	if (receiver != NULL)
+		SetLatch(&receiver->procLatch);
 	return SHM_MQ_SUCCESS;
 }
 

@@ -451,6 +451,12 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 		case WAIT_EVENT_XACT_GROUP_UPDATE:
 			event_name = "XactGroupUpdate";
 			break;
+		case WAIT_EVENT_REDISTRIBUTE_PARALLEL_START:
+			event_name = "RedistributeParallelStartup";
+			break;
+		case WAIT_EVENT_REDISTRIBUTE_SHARED_TUPLESTORE:
+			event_name = "RedistributeSharedTuplestore";
+			break;
 			/* no default case, so that compiler will warn */
 	}
 

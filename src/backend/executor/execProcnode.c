@@ -102,6 +102,7 @@
 #include "executor/nodeNestloop.h"
 #include "executor/nodeProjectSet.h"
 #include "executor/nodeRecursiveunion.h"
+#include "executor/nodeRedistribute.h"
 #include "executor/nodeResult.h"
 #include "executor/nodeSamplescan.h"
 #include "executor/nodeSeqscan.h"
@@ -379,6 +380,11 @@ ExecInitNode(Plan *node, EState *estate, int eflags)
 		case T_Limit:
 			result = (PlanState *) ExecInitLimit((Limit *) node,
 												 estate, eflags);
+			break;
+
+		case T_Redistribute:
+			result = (PlanState *) ExecInitRedistribute((Redistribute *)node,
+														estate, eflags);
 			break;
 
 		default:
@@ -754,6 +760,10 @@ ExecEndNode(PlanState *node)
 
 		case T_LimitState:
 			ExecEndLimit((LimitState *) node);
+			break;
+
+		case T_RedistributeState:
+			ExecEndRedistribute((RedistributeState *) node);
 			break;
 
 		default:

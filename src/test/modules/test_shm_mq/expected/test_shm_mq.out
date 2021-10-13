@@ -34,3 +34,9 @@ SELECT test_shm_mq_pipelined(16384, (select string_agg(chr(32+(random()*95)::int
  
 (1 row)
 
+SELECT test_shm_mq_pipelined(16384, (select string_agg(chr(32+(random()*95)::int), '') from generate_series(1,4000)), 600, 3, true, true);
+ test_shm_mq_pipelined 
+-----------------------
+ 
+(1 row)
+

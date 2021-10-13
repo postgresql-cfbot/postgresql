@@ -1034,6 +1034,20 @@ typedef struct Limit
 } Limit;
 
 
+/* ----------------
+ *		limit node
+ *
+ * Note: as of Postgres 8.2, the offset and count expressions are expected
+ * to yield int8, rather than int4 as before.
+ * ----------------
+ */
+typedef struct Redistribute
+{
+	Plan		plan;
+	int			numCols;		/* number of hash columns */
+	AttrNumber *hashColIdx;		/* their indexes in the target list */
+}Redistribute;
+
 /*
  * RowMarkType -
  *	  enums for types of row-marking operations

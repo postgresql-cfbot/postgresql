@@ -137,6 +137,7 @@ extern char *temp_tablespaces;
 extern bool ignore_checksum_failure;
 extern bool ignore_invalid_pages;
 extern bool synchronize_seqscans;
+extern int	redistribute_query_size;	/* in nodeRedistribute.c */
 
 #ifdef TRACE_SYNCSCAN
 extern bool trace_syncscan;
@@ -3568,6 +3569,17 @@ static struct config_int ConfigureNamesInt[] =
 		&client_connection_check_interval,
 		0, 0, INT_MAX,
 		check_client_connection_check_interval, NULL, NULL
+	},
+
+	{
+		{"redistribute_query_size", PGC_USERSET, 0,
+			gettext_noop("Sets the maximum shared memory to be used by redistribute plan"),
+			NULL,
+			GUC_UNIT_KB,
+		},
+		&redistribute_query_size,
+		0, 0, MAX_KILOBYTES,
+		NULL, NULL, NULL
 	},
 
 	/* End-of-list marker */

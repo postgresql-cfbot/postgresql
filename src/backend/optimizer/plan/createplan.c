@@ -311,7 +311,9 @@ static ModifyTable *make_modifytable(PlannerInfo *root, Plan *subplan,
 									 List *rowMarks, OnConflictExpr *onconflict, int epqParam);
 static GatherMerge *create_gather_merge_plan(PlannerInfo *root,
 											 GatherMergePath *best_path);
-
+static Redistribute *create_redistribute_plan(PlannerInfo *root,
+											  RedistributePath *best_path,
+											  int flags);
 
 /*
  * create_plan
@@ -535,6 +537,11 @@ create_plan_recurse(PlannerInfo *root, Path *best_path, int flags)
 		case T_GatherMerge:
 			plan = (Plan *) create_gather_merge_plan(root,
 													 (GatherMergePath *) best_path);
+			break;
+		case T_Redistribute:
+			plan = (Plan *) create_redistribute_plan(root,
+													 (RedistributePath *) best_path,
+													 flags);
 			break;
 		default:
 			elog(ERROR, "unrecognized node type: %d",
@@ -1920,6 +1927,28 @@ create_gather_merge_plan(PlannerInfo *root, GatherMergePath *best_path)
 	root->glob->parallelModeNeeded = true;
 
 	return gm_plan;
+}
+
+static Redistribute *
+create_redistribute_plan(PlannerInfo *root, RedistributePath *best_path, int flags)
+{
+	Redistribute   *plan;
+	Plan		   *subplan;
+
+	subplan = create_plan_recurse(root, best_path->subpath,
+								  flags | CP_SMALL_TLIST);
+
+	plan = makeNode(Redistribute);
+	plan->plan.targetlist = subplan->targetlist;
+	plan->plan.qual = NIL;
+	outerPlan(plan) = subplan;
+	innerPlan(plan) = NULL;
+	plan->numCols = list_length(best_path->hashClause);
+	plan->hashColIdx = extract_grouping_cols(best_path->hashClause,
+											 subplan->targetlist);
+
+	copy_generic_path_info(&plan->plan, &best_path->path);
+	return plan;
 }
 
 /*

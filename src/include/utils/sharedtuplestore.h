@@ -39,9 +39,16 @@ extern SharedTuplestoreAccessor *sts_initialize(SharedTuplestore *sts,
 												SharedFileSet *fileset,
 												const char *name);
 
+extern void sts_create(SharedTuplestore *sts, int participants,
+					   size_t meta_data_size,
+					   int flags,
+					   const char *name);
+
 extern SharedTuplestoreAccessor *sts_attach(SharedTuplestore *sts,
 											int my_participant_number,
 											SharedFileSet *fileset);
+
+extern int64 sts_close(SharedTuplestoreAccessor *accessor);
 
 extern void sts_end_write(SharedTuplestoreAccessor *accessor);
 

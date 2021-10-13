@@ -54,6 +54,8 @@ extern void shm_mq_set_sender(shm_mq *mq, PGPROC *);
 /* Accessor methods for sender and receiver. */
 extern PGPROC *shm_mq_get_receiver(shm_mq *);
 extern PGPROC *shm_mq_get_sender(shm_mq *);
+extern PGPROC *shm_mq_receiver_get_sender(shm_mq_handle *mqh);
+extern PGPROC *shm_mq_sender_get_reciver(shm_mq_handle *mqh);
 
 /* Set up backend-local queue state. */
 extern shm_mq_handle *shm_mq_attach(shm_mq *mq, dsm_segment *seg,
@@ -73,6 +75,8 @@ extern shm_mq_result shm_mq_send(shm_mq_handle *mqh,
 								 Size nbytes, const void *data, bool nowait);
 extern shm_mq_result shm_mq_sendv(shm_mq_handle *mqh,
 								  shm_mq_iovec *iov, int iovcnt, bool nowait);
+extern shm_mq_result shm_mq_send_once(shm_mq_handle *mqh,
+									  Size nbytes, const void *data);
 extern shm_mq_result shm_mq_receive(shm_mq_handle *mqh,
 									Size *nbytesp, void **datap, bool nowait);
 

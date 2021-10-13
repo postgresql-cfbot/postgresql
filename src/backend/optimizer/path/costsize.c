@@ -1426,6 +1426,28 @@ cost_subqueryscan(SubqueryScanPath *path, PlannerInfo *root,
 	startup_cost += path->path.pathtarget->cost.startup;
 	run_cost += path->path.pathtarget->cost.per_tuple * path->path.rows;
 
+	/* Adjust costing for parallelism, if used. */
+	if (path->path.parallel_workers > 0)
+	{
+		double		parallel_divisor = get_parallel_divisor(&path->path);
+
+		/* The CPU cost is divided among all the workers. */
+		run_cost /= parallel_divisor;
+
+		/*
+		 * It may be possible to amortize some of the I/O cost, but probably
+		 * not very much, because most operating systems already do aggressive
+		 * prefetching.  For now, we assume that the disk run cost can't be
+		 * amortized at all.
+		 */
+
+		/*
+		 * In the case of a parallel plan, the row count needs to represent
+		 * the number of tuples processed per worker.
+		 */
+		path->path.rows = clamp_row_est(path->path.rows / parallel_divisor);
+	}
+
 	path->path.startup_cost += startup_cost;
 	path->path.total_cost += startup_cost + run_cost;
 }
@@ -4091,6 +4113,21 @@ final_cost_hashjoin(PlannerInfo *root, HashPath *path,
 	path->jpath.path.total_cost = startup_cost + run_cost;
 }
 
+void
+cost_redistribute(RedistributePath *path)
+{
+	Cost	run_cost;
+	double	rows = path->path.rows;
+
+	/* hash cost */
+	run_cost = cpu_operator_cost * list_length(path->hashClause) * rows;
+
+	/* communication cost */
+	run_cost += parallel_tuple_cost * (rows - rows / (path->path.parallel_workers+1));
+
+	path->path.startup_cost = path->subpath->startup_cost;
+	path->path.total_cost = path->subpath->total_cost + run_cost;
+}
 
 /*
  * cost_subplan

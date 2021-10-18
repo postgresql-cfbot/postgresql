@@ -25,6 +25,7 @@
 #include "catalog/pg_authid.h"
 #include "catalog/pg_class.h"
 #include "catalog/pg_namespace.h"
+#include "catalog/pg_proc.h"
 #include "catalog/pg_tablespace.h"
 #include "catalog/toasting.h"
 #include "commands/defrem.h"
@@ -208,6 +209,7 @@ Boot_CreateStmt:
 												   tupdesc,
 												   RELKIND_RELATION,
 												   RELPERSISTENCE_PERMANENT,
+												   PROPARALLEL_DEFAULT,
 												   shared_relation,
 												   mapped_relation,
 												   true,
@@ -231,6 +233,7 @@ Boot_CreateStmt:
 													  NIL,
 													  RELKIND_RELATION,
 													  RELPERSISTENCE_PERMANENT,
+													  PROPARALLEL_DEFAULT,
 													  shared_relation,
 													  mapped_relation,
 													  ONCOMMIT_NOOP,

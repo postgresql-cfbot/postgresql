@@ -1655,6 +1655,7 @@ describeOneTableDetails(const char *schemaname,
 		char	   *reloftype;
 		char		relpersistence;
 		char		relreplident;
+		char		relparalleldml;
 		char	   *relam;
 	}			tableinfo;
 	bool		show_column_details = false;
@@ -1668,7 +1669,25 @@ describeOneTableDetails(const char *schemaname,
 	initPQExpBuffer(&tmpbuf);
 
 	/* Get general table info */
-	if (pset.sversion >= 120000)
+	if (pset.sversion >= 150000)
+	{
+		printfPQExpBuffer(&buf,
+						  "SELECT c.relchecks, c.relkind, c.relhasindex, c.relhasrules, "
+						  "c.relhastriggers, c.relrowsecurity, c.relforcerowsecurity, "
+						  "false AS relhasoids, c.relispartition, %s, c.reltablespace, "
+						  "CASE WHEN c.reloftype = 0 THEN '' ELSE c.reloftype::pg_catalog.regtype::pg_catalog.text END, "
+						  "c.relpersistence, c.relreplident, am.amname, c.relparalleldml\n"
+						  "FROM pg_catalog.pg_class c\n "
+						  "LEFT JOIN pg_catalog.pg_class tc ON (c.reltoastrelid = tc.oid)\n"
+						  "LEFT JOIN pg_catalog.pg_am am ON (c.relam = am.oid)\n"
+						  "WHERE c.oid = '%s';",
+						  (verbose ?
+						   "pg_catalog.array_to_string(c.reloptions || "
+						   "array(select 'toast.' || x from pg_catalog.unnest(tc.reloptions) x), ', ')\n"
+						   : "''"),
+						  oid);
+	}
+	else if (pset.sversion >= 120000)
 	{
 		printfPQExpBuffer(&buf,
 						  "SELECT c.relchecks, c.relkind, c.relhasindex, c.relhasrules, "
@@ -1852,6 +1871,8 @@ describeOneTableDetails(const char *schemaname,
 			(char *) NULL : pg_strdup(PQgetvalue(res, 0, 14));
 	else
 		tableinfo.relam = NULL;
+	tableinfo.relparalleldml = (pset.sversion >= 150000) ?
+		*(PQgetvalue(res, 0, 15)) : 0;
 	PQclear(res);
 	res = NULL;
 
@@ -3629,6 +3650,21 @@ describeOneTableDetails(const char *schemaname,
 			printfPQExpBuffer(&buf, _("Access method: %s"), tableinfo.relam);
 			printTableAddFooter(&cont, buf.data);
 		}
+
+		if (verbose &&
+			(tableinfo.relkind == RELKIND_RELATION ||
+			 tableinfo.relkind == RELKIND_PARTITIONED_TABLE ||
+			 tableinfo.relkind == RELKIND_FOREIGN_TABLE) &&
+			 tableinfo.relparalleldml != 0)
+		{
+			printfPQExpBuffer(&buf, _("Parallel DML: %s"),
+							  tableinfo.relparalleldml == 'd' ? "default" :
+							  tableinfo.relparalleldml == 'u' ? "unsafe" :
+							  tableinfo.relparalleldml == 'r' ? "restricted" :
+							  tableinfo.relparalleldml == 's' ? "safe" :
+							  "???");
+			printTableAddFooter(&cont, buf.data);
+		}
 	}
 
 	/* reloptions, if verbose */
@@ -4004,7 +4040,7 @@ listTables(const char *tabtypes, const char *pattern, bool verbose, bool showSys
 	PGresult   *res;
 	printQueryOpt myopt = pset.popt;
 	int			cols_so_far;
-	bool		translate_columns[] = {false, false, true, false, false, false, false, false, false};
+	bool		translate_columns[] = {false, false, true, false, false, false, false, false, false, false};
 
 	/* If tabtypes is empty, we default to \dtvmsE (but see also command.c) */
 	if (!(showTables || showIndexes || showViews || showMatViews || showSeq || showForeign))
@@ -4072,12 +4108,8 @@ listTables(const char *tabtypes, const char *pattern, bool verbose, bool showSys
 							  gettext_noop("unlogged"),
 							  gettext_noop("Persistence"));
 			translate_columns[cols_so_far] = true;
+			cols_so_far++;
 		}
-
-		/*
-		 * We don't bother to count cols_so_far below here, as there's no need
-		 * to; this might change with future additions to the output columns.
-		 */
 
 		/*
 		 * Access methods exist for tables, materialized views and indexes.
@@ -4085,9 +4117,34 @@ listTables(const char *tabtypes, const char *pattern, bool verbose, bool showSys
 		 */
 		if (pset.sversion >= 120000 && !pset.hide_tableam &&
 			(showTables || showMatViews || showIndexes))
+		{
 			appendPQExpBuffer(&buf,
 							  ",\n  am.amname as \"%s\"",
 							  gettext_noop("Access method"));
+			cols_so_far++;
+		}
+
+		/*
+		 * Show whether the data in the relation is default('d') unsafe('u'),
+		 * restricted('r'), or safe('s') can be modified in parallel mode.
+		 * This has been introduced in PostgreSQL 15 for tables.
+		 */
+		if (pset.sversion >= 150000)
+		{
+			appendPQExpBuffer(&buf,
+							  ",\n  CASE c.relparalleldml WHEN 'd' THEN '%s' WHEN 'u' THEN '%s' WHEN 'r' THEN '%s' WHEN 's' THEN '%s' END as \"%s\"",
+							  gettext_noop("default"),
+							  gettext_noop("unsafe"),
+							  gettext_noop("restricted"),
+							  gettext_noop("safe"),
+							  gettext_noop("Parallel DML"));
+			translate_columns[cols_so_far] = true;
+		}
+
+		/*
+		 * We don't bother to count cols_so_far below here, as there's no need
+		 * to; this might change with future additions to the output columns.
+		 */
 
 		/*
 		 * As of PostgreSQL 9.0, use pg_table_size() to show a more accurate

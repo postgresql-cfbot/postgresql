@@ -64,4 +64,6 @@ extern void CallSyscacheCallbacks(int cacheid, uint32 hashvalue);
 extern void InvalidateSystemCaches(void);
 
 extern void LogLogicalInvalidations(void);
+
+extern void CacheInvalidateParallelDML(void);
 #endif							/* INVAL_H */

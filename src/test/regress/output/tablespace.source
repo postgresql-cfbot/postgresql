@@ -339,6 +339,7 @@ Indexes:
     "part_a_idx" btree (a), tablespace "regress_tblspace"
 Partitions: testschema.part1 FOR VALUES IN (1),
             testschema.part2 FOR VALUES IN (2)
+Parallel DML: default
 
 \d testschema.part1
              Table "testschema.part1"
@@ -358,6 +359,7 @@ Partition of: testschema.part FOR VALUES IN (1)
 Partition constraint: ((a IS NOT NULL) AND (a = 1))
 Indexes:
     "part1_a_idx" btree (a), tablespace "regress_tblspace"
+Parallel DML: default
 
 \d testschema.part_a_idx
 Partitioned index "testschema.part_a_idx"

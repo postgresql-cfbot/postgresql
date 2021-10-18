@@ -70,6 +70,7 @@
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
 #include "utils/guc.h"
+#include "utils/inval.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
@@ -1505,7 +1506,22 @@ AlterFunction(ParseState *pstate, AlterFunctionStmt *stmt)
 								repl_val, repl_null, repl_repl);
 	}
 	if (parallel_item)
-		procForm->proparallel = interpret_func_parallel(parallel_item);
+	{
+		char proparallel;
+
+		proparallel = interpret_func_parallel(parallel_item);
+
+		/*
+		 * If the function's parallel safety changed, the tables that depends
+		 * on this function won't be safe to be modified in parallel mode
+		 * anymore. So, we need to invalidate the parallel dml flag in
+		 * relcache.
+		 */
+		if (proparallel != procForm->proparallel)
+			CacheInvalidateParallelDML();
+
+		procForm->proparallel = proparallel;
+	}
 
 	/* Do the update */
 	CatalogTupleUpdate(rel, &tup->t_self, tup);

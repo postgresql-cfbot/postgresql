@@ -116,6 +116,9 @@ CATALOG(pg_class,1259,RelationRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(83,Relat
 	/* see REPLICA_IDENTITY_xxx constants */
 	char		relreplident BKI_DEFAULT(n);
 
+	/* parallel safety of the dml on the relation */
+	char		relparalleldml BKI_DEFAULT(d);
+
 	/* is relation a partition? */
 	bool		relispartition BKI_DEFAULT(f);
 

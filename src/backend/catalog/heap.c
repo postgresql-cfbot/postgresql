@@ -302,6 +302,7 @@ heap_create(const char *relname,
 			TupleDesc tupDesc,
 			char relkind,
 			char relpersistence,
+			char relparalleldml,
 			bool shared_relation,
 			bool mapped_relation,
 			bool allow_system_table_mods,
@@ -404,7 +405,8 @@ heap_create(const char *relname,
 									 shared_relation,
 									 mapped_relation,
 									 relpersistence,
-									 relkind);
+									 relkind,
+									 relparalleldml);
 
 	/*
 	 * Have the storage manager create the relation's disk file, if needed.
@@ -959,6 +961,7 @@ InsertPgClassTuple(Relation pg_class_desc,
 	values[Anum_pg_class_relhassubclass - 1] = BoolGetDatum(rd_rel->relhassubclass);
 	values[Anum_pg_class_relispopulated - 1] = BoolGetDatum(rd_rel->relispopulated);
 	values[Anum_pg_class_relreplident - 1] = CharGetDatum(rd_rel->relreplident);
+	values[Anum_pg_class_relparalleldml - 1] = CharGetDatum(rd_rel->relparalleldml);
 	values[Anum_pg_class_relispartition - 1] = BoolGetDatum(rd_rel->relispartition);
 	values[Anum_pg_class_relrewrite - 1] = ObjectIdGetDatum(rd_rel->relrewrite);
 	values[Anum_pg_class_relfrozenxid - 1] = TransactionIdGetDatum(rd_rel->relfrozenxid);
@@ -1152,6 +1155,7 @@ heap_create_with_catalog(const char *relname,
 						 List *cooked_constraints,
 						 char relkind,
 						 char relpersistence,
+						 char relparalleldml,
 						 bool shared_relation,
 						 bool mapped_relation,
 						 OnCommitAction oncommit,
@@ -1299,6 +1303,7 @@ heap_create_with_catalog(const char *relname,
 							   tupdesc,
 							   relkind,
 							   relpersistence,
+							   relparalleldml,
 							   shared_relation,
 							   mapped_relation,
 							   allow_system_table_mods,

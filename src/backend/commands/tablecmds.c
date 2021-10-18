@@ -40,6 +40,7 @@
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_opclass.h"
+#include "catalog/pg_proc.h"
 #include "catalog/pg_tablespace.h"
 #include "catalog/pg_statistic_ext.h"
 #include "catalog/pg_trigger.h"
@@ -602,6 +603,7 @@ static void refuseDupeIndexAttach(Relation parentIdx, Relation partIdx,
 static List *GetParentedForeignKeyRefs(Relation partition);
 static void ATDetachCheckNoForeignKeyRefs(Relation partition);
 static char GetAttributeCompression(Oid atttypid, char *compression);
+static void ATExecParallelDMLSafety(Relation rel, Node *def);
 
 
 /* ----------------------------------------------------------------
@@ -647,6 +649,7 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	LOCKMODE	parentLockmode;
 	const char *accessMethod = NULL;
 	Oid			accessMethodId = InvalidOid;
+	char		relparalleldml = PROPARALLEL_DEFAULT;
 
 	/*
 	 * Truncate relname to appropriate length (probably a waste of time, as
@@ -925,6 +928,32 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	if (accessMethod != NULL)
 		accessMethodId = get_table_am_oid(accessMethod, false);
 
+	if (stmt->paralleldmlsafety != NULL)
+	{
+		if (strcmp(stmt->paralleldmlsafety, "safe") == 0)
+		{
+			if (relkind == RELKIND_FOREIGN_TABLE ||
+				stmt->relation->relpersistence == RELPERSISTENCE_TEMP)
+				ereport(ERROR,
+						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+						 errmsg("cannot perform parallel data modification on relation \"%s\"",
+								relname),
+						 errdetail_relkind_not_supported(relkind)));
+
+			relparalleldml = PROPARALLEL_SAFE;
+		}
+		else if (strcmp(stmt->paralleldmlsafety, "restricted") == 0)
+			relparalleldml = PROPARALLEL_RESTRICTED;
+		else if (strcmp(stmt->paralleldmlsafety, "unsafe") == 0)
+			relparalleldml = PROPARALLEL_UNSAFE;
+		else if (strcmp(stmt->paralleldmlsafety, "default") == 0)
+			relparalleldml = PROPARALLEL_DEFAULT;
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_SYNTAX_ERROR),
+					errmsg("parameter \"parallel dml\" must be SAFE, RESTRICTED, UNSAFE or DEFAULT")));
+	}
+
 	/*
 	 * Create the relation.  Inherited defaults and constraints are passed in
 	 * for immediate handling --- since they don't need parsing, they can be
@@ -943,6 +972,7 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 													  old_constraints),
 										  relkind,
 										  stmt->relation->relpersistence,
+										  relparalleldml,
 										  false,
 										  false,
 										  stmt->oncommit,
@@ -4173,6 +4203,7 @@ AlterTableGetLockLevel(List *cmds)
 			case AT_SetIdentity:
 			case AT_DropExpression:
 			case AT_SetCompression:
+			case AT_ParallelDMLSafety:
 				cmd_lockmode = AccessExclusiveLock;
 				break;
 
@@ -4723,6 +4754,11 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 			/* No command-specific prep needed */
 			pass = AT_PASS_MISC;
 			break;
+		case AT_ParallelDMLSafety:
+			ATSimplePermissions(cmd->subtype, rel, ATT_TABLE | ATT_FOREIGN_TABLE);
+			/* No command-specific prep needed */
+			pass = AT_PASS_MISC;
+			break;
 		default:				/* oops */
 			elog(ERROR, "unrecognized alter table type: %d",
 				 (int) cmd->subtype);
@@ -5127,6 +5163,9 @@ ATExecCmd(List **wqueue, AlteredTableInfo *tab,
 			break;
 		case AT_DetachPartitionFinalize:
 			ATExecDetachPartitionFinalize(rel, ((PartitionCmd *) cmd->def)->name);
+			break;
+		case AT_ParallelDMLSafety:
+			ATExecParallelDMLSafety(rel, cmd->def);
 			break;
 		default:				/* oops */
 			elog(ERROR, "unrecognized alter table type: %d",
@@ -6101,6 +6140,8 @@ alter_table_type_to_string(AlterTableType cmdtype)
 			return "ALTER COLUMN ... DROP IDENTITY";
 		case AT_ReAddStatistics:
 			return NULL;		/* not real grammar */
+		case AT_ParallelDMLSafety:
+			return "PARALLEL DML SAFETY";
 	}
 
 	return NULL;
@@ -18760,4 +18801,60 @@ GetAttributeCompression(Oid atttypid, char *compression)
 				 errmsg("invalid compression method \"%s\"", compression)));
 
 	return cmethod;
+}
+
+static void
+ATExecParallelDMLSafety(Relation rel, Node *def)
+{
+	Relation	pg_class;
+	Oid			relid;
+	HeapTuple	tuple;
+	char		relparallel = PROPARALLEL_DEFAULT;
+	char	   *parallel = strVal(def);
+
+	if (parallel)
+	{
+		if (strcmp(parallel, "safe") == 0)
+		{
+			/*
+			 * We can't support table modification in a parallel worker if it's
+			 * a foreign table/partition (no FDW API for supporting parallel
+			 * access) or a temporary table.
+			 */
+			if (rel->rd_rel->relkind == RELKIND_FOREIGN_TABLE ||
+				RelationUsesLocalBuffers(rel))
+					ereport(ERROR,
+							(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+							 errmsg("cannot perform parallel data modification on relation \"%s\"",
+									RelationGetRelationName(rel)),
+							 errdetail_relkind_not_supported(rel->rd_rel->relkind)));
+
+			relparallel = PROPARALLEL_SAFE;
+		}
+		else if (strcmp(parallel, "restricted") == 0)
+			relparallel = PROPARALLEL_RESTRICTED;
+		else if (strcmp(parallel, "unsafe") == 0)
+			relparallel = PROPARALLEL_UNSAFE;
+		else if (strcmp(parallel, "default") == 0)
+			relparallel = PROPARALLEL_DEFAULT;
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_SYNTAX_ERROR),
+					 errmsg("parameter \"parallel dml\" must be SAFE, RESTRICTED, UNSAFE or DEFAULT")));
+	}
+
+	relid = RelationGetRelid(rel);
+
+	pg_class = table_open(RelationRelationId, RowExclusiveLock);
+
+	tuple = SearchSysCacheCopy1(RELOID, ObjectIdGetDatum(relid));
+
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "cache lookup failed for relation %u", relid);
+
+	((Form_pg_class) GETSTRUCT(tuple))->relparalleldml = relparallel;
+	CatalogTupleUpdate(pg_class, &tuple->t_self, tuple);
+
+	table_close(pg_class, RowExclusiveLock);
+	heap_freetuple(tuple);
 }

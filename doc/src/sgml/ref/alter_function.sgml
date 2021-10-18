@@ -38,7 +38,7 @@ ALTER FUNCTION <replaceable>name</replaceable> [ ( [ [ <replaceable class="param
     IMMUTABLE | STABLE | VOLATILE
     [ NOT ] LEAKPROOF
     [ EXTERNAL ] SECURITY INVOKER | [ EXTERNAL ] SECURITY DEFINER
-    PARALLEL { UNSAFE | RESTRICTED | SAFE }
+    PARALLEL { DEFAULT | UNSAFE | RESTRICTED | SAFE }
     COST <replaceable class="parameter">execution_cost</replaceable>
     ROWS <replaceable class="parameter">result_rows</replaceable>
     SUPPORT <replaceable class="parameter">support_function</replaceable>

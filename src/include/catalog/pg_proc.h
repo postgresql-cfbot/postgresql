@@ -171,6 +171,8 @@ DECLARE_UNIQUE_INDEX(pg_proc_proname_args_nsp_index, 2691, ProcedureNameArgsNspI
 #define PROPARALLEL_RESTRICTED	'r' /* can run in parallel leader only */
 #define PROPARALLEL_UNSAFE		'u' /* banned while in parallel mode */
 
+#define PROPARALLEL_DEFAULT		'd' /* only used for parallel dml safety */
+
 /*
  * Symbolic values for proargmodes column.  Note that these must agree with
  * the FunctionParameterMode enum in parsenodes.h; we declare them here to

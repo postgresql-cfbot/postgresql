@@ -38,6 +38,7 @@
 #include "lib/pairingheap.h"
 #include "miscadmin.h"
 #include "nodes/nodeFuncs.h"
+#include "storage/predicate.h"
 #include "utils/array.h"
 #include "utils/datum.h"
 #include "utils/lsyscache.h"
@@ -118,6 +119,18 @@ IndexNext(IndexScanState *node)
 		node->iss_ScanDesc = scandesc;
 
 		/*
+		 * Single row SSI optimization: if this scan produce only one row, tell
+		 * the index to defer acquisition of predicate locks on the index
+		 * itself (but not the heap); we'll decide whether to acquire or forget
+		 * them later.
+		 */
+		if (node->iss_SingleRow)
+		{
+			InitPredicateLockBuffer(&scandesc->xs_deferred_predlocks);
+			scandesc->xs_defer_predlocks = true;
+		}
+
+		/*
 		 * If no run-time keys to calculate or they are ready, go ahead and
 		 * pass the scankeys to the index AM.
 		 */
@@ -149,8 +162,23 @@ IndexNext(IndexScanState *node)
 			}
 		}
 
+		/*
+		 * Single row SSI optimization: If we found a visible match, then there
+		 * is no need for the index to acquire predicate locks.  The heap tuple
+		 * lock is enough, because there can be only one match.
+		 */
+		if (node->iss_SingleRow)
+			ClearPredicateLockBuffer(&scandesc->xs_deferred_predlocks);
+
 		return slot;
 	}
+
+	/*
+	 * Single row SSI optimization: If we didn't find a row, then the index
+	 * needs to lock the gap.
+	 */
+	if (node->iss_SingleRow)
+		FlushPredicateLockBuffer(&scandesc->xs_deferred_predlocks);
 
 	/*
 	 * if we get here it means the index scan failed so we are at the end of
@@ -987,7 +1015,8 @@ ExecInitIndexScan(IndexScan *node, EState *estate, int eflags)
 						   &indexstate->iss_RuntimeKeys,
 						   &indexstate->iss_NumRuntimeKeys,
 						   NULL,	/* no ArrayKeys */
-						   NULL);
+						   NULL,
+						   &indexstate->iss_SingleRow);
 
 	/*
 	 * any ORDER BY exprs have to be turned into scankeys in the same way
@@ -1001,6 +1030,7 @@ ExecInitIndexScan(IndexScan *node, EState *estate, int eflags)
 						   &indexstate->iss_RuntimeKeys,
 						   &indexstate->iss_NumRuntimeKeys,
 						   NULL,	/* no ArrayKeys */
+						   NULL,
 						   NULL);
 
 	/* Initialize sort support, if we need to re-check ORDER BY exprs */
@@ -1141,16 +1171,18 @@ ExecInitIndexScan(IndexScan *node, EState *estate, int eflags)
  * *numRuntimeKeys: receives number of runtime keys
  * *arrayKeys: receives ptr to array of IndexArrayKeyInfos, or NULL if none
  * *numArrayKeys: receives number of array keys
+ * *singleRow: receives flag meaning at most one visible row can be produced
  *
  * Caller may pass NULL for arrayKeys and numArrayKeys to indicate that
- * IndexArrayKeyInfos are not supported.
+ * IndexArrayKeyInfos are not supported.  Likewise for singleRow.
  */
 void
 ExecIndexBuildScanKeys(PlanState *planstate, Relation index,
 					   List *quals, bool isorderby,
 					   ScanKey *scanKeys, int *numScanKeys,
 					   IndexRuntimeKeyInfo **runtimeKeys, int *numRuntimeKeys,
-					   IndexArrayKeyInfo **arrayKeys, int *numArrayKeys)
+					   IndexArrayKeyInfo **arrayKeys, int *numArrayKeys,
+					   bool *singleRow)
 {
 	ListCell   *qual_cell;
 	ScanKey		scan_keys;
@@ -1161,6 +1193,7 @@ ExecIndexBuildScanKeys(PlanState *planstate, Relation index,
 	int			max_runtime_keys;
 	int			n_array_keys;
 	int			j;
+	bool		single_row;
 
 	/* Allocate array for ScanKey structs: one per qual */
 	n_scan_keys = list_length(quals);
@@ -1624,6 +1657,34 @@ ExecIndexBuildScanKeys(PlanState *planstate, Relation index,
 	}
 
 	/*
+	 * Can at most one visible row can be produced by the scan?
+	 *
+	 * XXX btree only for now due to need to recognise equality
+	 * XXX this is probably not the right place for this work!
+	 * XXX do it in the planner? ð¤¯
+	 */
+	single_row = false;
+	if (singleRow &&
+		IsolationIsSerializable() &&
+		index->rd_rel->relam == BTREE_AM_OID &&
+		index->rd_index->indisunique &&
+		index->rd_index->indimmediate)
+	{
+		Bitmapset *attrs = NULL;
+
+		/* Find all equality quals. */
+		for (int i = 0; i < n_scan_keys; ++i)
+			if (scan_keys[i].sk_strategy == BTEqualStrategyNumber)
+				attrs = bms_add_member(attrs, scan_keys[i].sk_attno);
+
+		/* Are all attributes covered? */
+		if (bms_num_members(attrs) == index->rd_index->indnkeyatts)
+			single_row = true;
+
+		bms_free(attrs);
+	}
+
+	/*
 	 * Return info to our caller.
 	 */
 	*scanKeys = scan_keys;
@@ -1637,6 +1698,8 @@ ExecIndexBuildScanKeys(PlanState *planstate, Relation index,
 	}
 	else if (n_array_keys != 0)
 		elog(ERROR, "ScalarArrayOpExpr index qual found where not allowed");
+	if (singleRow)
+		*singleRow = single_row;
 }
 
 /* ----------------------------------------------------------------
@@ -1689,6 +1752,12 @@ ExecIndexScanInitializeDSM(IndexScanState *node,
 								 node->iss_NumOrderByKeys,
 								 piscan);
 
+	if (node->iss_SingleRow)
+	{
+		InitPredicateLockBuffer(&node->iss_ScanDesc->xs_deferred_predlocks);
+		node->iss_ScanDesc->xs_defer_predlocks = true;
+	}
+
 	/*
 	 * If no run-time keys to calculate or they are ready, go ahead and pass
 	 * the scankeys to the index AM.
@@ -1731,6 +1800,12 @@ ExecIndexScanInitializeWorker(IndexScanState *node,
 								 node->iss_NumScanKeys,
 								 node->iss_NumOrderByKeys,
 								 piscan);
+
+	if (node->iss_SingleRow)
+	{
+		InitPredicateLockBuffer(&node->iss_ScanDesc->xs_deferred_predlocks);
+		node->iss_ScanDesc->xs_defer_predlocks = true;
+	}
 
 	/*
 	 * If no run-time keys to calculate or they are ready, go ahead and pass

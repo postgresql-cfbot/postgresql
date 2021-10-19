@@ -1473,6 +1473,7 @@ typedef struct IndexScanState
 	int			iss_NumRuntimeKeys;
 	bool		iss_RuntimeKeysReady;
 	ExprContext *iss_RuntimeContext;
+	bool		iss_SingleRow;
 	Relation	iss_RelationDesc;
 	struct IndexScanDescData *iss_ScanDesc;
 
@@ -1518,6 +1519,7 @@ typedef struct IndexOnlyScanState
 	int			ioss_NumRuntimeKeys;
 	bool		ioss_RuntimeKeysReady;
 	ExprContext *ioss_RuntimeContext;
+	bool		ioss_SingleRow;
 	Relation	ioss_RelationDesc;
 	struct IndexScanDescData *ioss_ScanDesc;
 	TupleTableSlot *ioss_TableSlot;

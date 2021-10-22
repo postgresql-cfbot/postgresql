@@ -6,7 +6,7 @@ use strict;
 use warnings;
 use PostgresNode;
 use TestLib;
-use Test::More tests => 5;
+use Test::More tests => 7;
 
 # Bug #15114
 
@@ -224,3 +224,69 @@ $node_sub->safe_psql('postgres', "DROP TABLE tab1");
 $node_pub->stop('fast');
 $node_pub_sub->stop('fast');
 $node_sub->stop('fast');
+
+# Verify different datestyle between publisher and subscriber.
+$node_publisher = PostgresNode->new('datestyle_publisher');
+$node_publisher->init(allows_streaming => 'logical');
+$node_publisher->append_conf('postgresql.conf',
+	"datestyle = 'SQL, MDY'");
+$node_publisher->append_conf('postgresql.conf',
+	"extra_float_digits = '-4'");
+$node_publisher->start;
+
+$node_subscriber = PostgresNode->new('datestyle_subscriber');
+$node_subscriber->init(allows_streaming => 'logical');
+$node_subscriber->append_conf('postgresql.conf',
+	"datestyle = 'SQL, DMY'");
+$node_subscriber->start;
+
+# Table for datestyle
+$node_publisher->safe_psql('postgres',
+	"CREATE TABLE tab_rep(a date)");
+$node_subscriber->safe_psql('postgres',
+	"CREATE TABLE tab_rep(a date)");
+
+# Table for extra_float_digits
+$node_publisher->safe_psql('postgres',
+	"CREATE TABLE flt_rep(a real, d double precision)");
+$node_subscriber->safe_psql('postgres',
+	"CREATE TABLE flt_rep(a real, d double precision)");
+
+# Setup logical replication
+my $node_publisher_connstr = $node_publisher->connstr . ' dbname=postgres';
+$node_publisher->safe_psql('postgres',
+	"CREATE PUBLICATION tab_pub FOR ALL TABLES");
+$node_subscriber->safe_psql('postgres',
+	"CREATE SUBSCRIPTION tab_sub CONNECTION '$node_publisher_connstr' PUBLICATION tab_pub");
+
+$node_publisher->safe_psql('postgres',
+	"INSERT INTO tab_rep VALUES ('07-18-2021'), ('05-15-2018')");
+
+$node_publisher->wait_for_catchup('tab_sub');
+
+my $result = $node_subscriber->safe_psql('postgres',
+	"SELECT count(*) FROM tab_rep");
+is($result, qq(2), 'failed to replication date from different datestyle');
+
+$node_publisher->safe_psql('postgres',
+	"INSERT INTO flt_rep VALUES (1.2121323, 32.32321232132434)");
+
+$node_publisher->wait_for_catchup('tab_sub');
+
+$result = $node_subscriber->safe_psql('postgres',
+	"SELECT a, d FROM flt_rep");
+is($result, qq(1.2121323|32.32321232132434),
+	'failed to replication floating-point values');
+
+# Clean up the tables on both publisher and subscriber as we don't need them
+$node_publisher->safe_psql('postgres', 'DROP TABLE tab_rep');
+$node_subscriber->safe_psql('postgres', 'DROP TABLE tab_rep');
+$node_publisher->safe_psql('postgres', 'DROP TABLE flt_rep');
+$node_subscriber->safe_psql('postgres', 'DROP TABLE flt_rep');
+
+# Drop subscription/publication as we don't need anymore
+$node_subscriber->safe_psql('postgres', 'DROP SUBSCRIPTION tab_sub');
+$node_publisher->safe_psql('postgres', 'DROP PUBLICATION tab_pub');
+
+$node_publisher->stop('fast');
+$node_subscriber->stop('fast');

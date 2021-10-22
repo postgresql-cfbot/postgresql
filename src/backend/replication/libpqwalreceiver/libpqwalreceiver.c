@@ -128,8 +128,8 @@ libpqrcv_connect(const char *conninfo, bool logical, const char *appname,
 {
 	WalReceiverConn *conn;
 	PostgresPollingStatusType status;
-	const char *keys[5];
-	const char *vals[5];
+	const char *keys[6];
+	const char *vals[6];
 	int			i = 0;
 
 	/*
@@ -155,6 +155,13 @@ libpqrcv_connect(const char *conninfo, bool logical, const char *appname,
 	{
 		keys[++i] = "client_encoding";
 		vals[i] = GetDatabaseEncodingName();
+
+		/*
+		 * Force assorted GUC parameters to settings that ensure that we'll output
+		 * data values in a form that is unambiguous to the publisher.
+		 */
+		keys[++i] = "options";
+		vals[i] = "-c datestyle=ISO,YMD -c intervalstyle=postgres -c extra_float_digits=3";
 	}
 	keys[++i] = NULL;
 	vals[i] = NULL;

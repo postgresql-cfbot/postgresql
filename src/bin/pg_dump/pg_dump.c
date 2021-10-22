@@ -9562,10 +9562,22 @@ getDefaultACLs(Archive *fout, int *numDefaultACLs)
 		PQExpBuffer initacl_subquery = createPQExpBuffer();
 		PQExpBuffer initracl_subquery = createPQExpBuffer();
 
+		/*
+		 * Since the default for a global entry is the hard-wired default
+		 * ACL for the particular object type, we pass defaclobjtype except
+		 * for the case of 'S' (DEFACLOBJ_SEQUENCE) where we need to
+		 * transform it to 's' since acldefault() SQL-callable function
+		 * handles 's' as a sequence.  On the other hand, since the default
+		 * for non-global entries is an empty ACL we pass NULL.  This works
+		 * because acldefault() is STRICT.
+		 */
 		buildACLQueries(acl_subquery, racl_subquery, initacl_subquery,
 						initracl_subquery, "defaclacl", "defaclrole",
 						"pip.initprivs",
-						"CASE WHEN defaclobjtype = 'S' THEN 's' ELSE defaclobjtype END::\"char\"",
+						"CASE WHEN defaclnamespace = 0 THEN "
+						"	  CASE WHEN defaclobjtype = 'S' THEN 's' "
+						"	  ELSE defaclobjtype END::\"char\" "
+						"ELSE NULL END",
 						dopt->binary_upgrade);
 
 		appendPQExpBuffer(query, "SELECT d.oid, d.tableoid, "

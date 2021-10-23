@@ -75,6 +75,29 @@ my %pgdump_runs = (
 			'postgres',
 		],
 	},
+	clean_drop_cascade => {
+		dump_cmd => [
+			'pg_dump',
+			'--no-sync',
+			"--file=$tempdir/clean_drop_cascade.sql",
+			'-c',
+			'--drop-cascade',
+			'--encoding=UTF8',    # no-op, just tests that option is accepted
+			'postgres',
+		],
+	},
+	clean_if_exists_drop_cascade => {
+		dump_cmd => [
+			'pg_dump',
+			'--no-sync',
+			"--file=$tempdir/clean_if_exists_drop_cascade.sql",
+			'-c',
+			'--if-exists',
+			'--drop-cascade',
+			'--encoding=UTF8',    # no-op, just tests that option is accepted
+			'postgres',
+		],
+	},
 	column_inserts => {
 		dump_cmd => [
 			'pg_dump',                            '--no-sync',
@@ -407,21 +430,23 @@ my %dump_test_schema_runs = (
 # Tests which are considered 'full' dumps by pg_dump, but there
 # are flags used to exclude specific items (ACLs, blobs, etc).
 my %full_runs = (
-	binary_upgrade           => 1,
-	clean                    => 1,
-	clean_if_exists          => 1,
-	createdb                 => 1,
-	defaults                 => 1,
-	exclude_dump_test_schema => 1,
-	exclude_test_table       => 1,
-	exclude_test_table_data  => 1,
-	no_toast_compression     => 1,
-	no_blobs                 => 1,
-	no_owner                 => 1,
-	no_privs                 => 1,
-	pg_dumpall_dbprivs       => 1,
-	pg_dumpall_exclude       => 1,
-	schema_only              => 1,);
+	binary_upgrade               => 1,
+	clean                        => 1,
+	clean_if_exists              => 1,
+	clean_drop_cascade           => 1,
+	clean_if_exists_drop_cascade => 1,
+	createdb                     => 1,
+	defaults                     => 1,
+	exclude_dump_test_schema     => 1,
+	exclude_test_table           => 1,
+	exclude_test_table_data      => 1,
+	no_toast_compression         => 1,
+	no_blobs                     => 1,
+	no_owner                     => 1,
+	no_privs                     => 1,
+	pg_dumpall_dbprivs           => 1,
+	pg_dumpall_exclude           => 1,
+	schema_only                  => 1,);
 
 # This is where the actual tests are defined.
 my %tests = (
@@ -2865,23 +2890,25 @@ my %tests = (
 		\QCREATE INDEX measurement_city_id_logdate_idx ON ONLY dump_test.measurement USING\E
 		/xm,
 		like => {
-			binary_upgrade          => 1,
-			clean                   => 1,
-			clean_if_exists         => 1,
-			createdb                => 1,
-			defaults                => 1,
-			exclude_test_table      => 1,
-			exclude_test_table_data => 1,
-			no_toast_compression    => 1,
-			no_blobs                => 1,
-			no_privs                => 1,
-			no_owner                => 1,
-			only_dump_test_schema   => 1,
-			pg_dumpall_dbprivs      => 1,
-			pg_dumpall_exclude      => 1,
-			schema_only             => 1,
-			section_post_data       => 1,
-			test_schema_plus_blobs  => 1,
+			binary_upgrade               => 1,
+			clean                        => 1,
+			clean_if_exists              => 1,
+			clean_drop_cascade           => 1,
+			clean_if_exists_drop_cascade => 1,
+			createdb                     => 1,
+			defaults                     => 1,
+			exclude_test_table           => 1,
+			exclude_test_table_data      => 1,
+			no_toast_compression         => 1,
+			no_blobs                     => 1,
+			no_privs                     => 1,
+			no_owner                     => 1,
+			only_dump_test_schema        => 1,
+			pg_dumpall_dbprivs           => 1,
+			pg_dumpall_exclude           => 1,
+			schema_only                  => 1,
+			section_post_data            => 1,
+			test_schema_plus_blobs       => 1,
 		},
 		unlike => {
 			exclude_dump_test_schema => 1,
@@ -2937,23 +2964,25 @@ my %tests = (
 		\QALTER INDEX dump_test.measurement_pkey ATTACH PARTITION dump_test_second_schema.measurement_y2006m2_pkey\E
 		/xm,
 		like => {
-			binary_upgrade           => 1,
-			clean                    => 1,
-			clean_if_exists          => 1,
-			createdb                 => 1,
-			defaults                 => 1,
-			exclude_dump_test_schema => 1,
-			exclude_test_table       => 1,
-			exclude_test_table_data  => 1,
-			no_toast_compression     => 1,
-			no_blobs                 => 1,
-			no_privs                 => 1,
-			no_owner                 => 1,
-			pg_dumpall_dbprivs       => 1,
-			pg_dumpall_exclude       => 1,
-			role                     => 1,
-			schema_only              => 1,
-			section_post_data        => 1,
+			binary_upgrade               => 1,
+			clean                        => 1,
+			clean_if_exists              => 1,
+			clean_drop_cascade           => 1,
+			clean_if_exists_drop_cascade => 1,
+			createdb                     => 1,
+			defaults                     => 1,
+			exclude_dump_test_schema     => 1,
+			exclude_test_table           => 1,
+			exclude_test_table_data      => 1,
+			no_toast_compression         => 1,
+			no_blobs                     => 1,
+			no_privs                     => 1,
+			no_owner                     => 1,
+			pg_dumpall_dbprivs           => 1,
+			pg_dumpall_exclude           => 1,
+			role                         => 1,
+			schema_only                  => 1,
+			section_post_data            => 1,
 		},
 		unlike => {
 			only_dump_test_schema    => 1,
@@ -3093,6 +3122,32 @@ my %tests = (
 	'DROP TABLE IF EXISTS test_second_table' => {
 		regexp => qr/^DROP TABLE IF EXISTS dump_test\.test_second_table;/m,
 		like   => { clean_if_exists => 1, },
+	},
+
+	'DROP TYPE int42 CASCADE' => {
+		regexp => qr/^DROP TYPE dump_test.int42 CASCADE;/m,
+		like   => { clean => 1, clean_drop_cascade => 1 },
+	},
+	'DROP FUNCTION trigger_func CASCADE' => {
+		regexp => qr/^
+			\QDROP FUNCTION dump_test.trigger_func() CASCADE;\E
+			/xm,
+		like => { clean_drop_cascade => 1, },
+	},
+
+	'DROP LANGUAGE pltestlang' => {
+		regexp => qr/^DROP PROCEDURAL LANGUAGE pltestlang CASCADE;/m,
+		like   => { clean_drop_cascade => 1, },
+	},
+
+	'DROP SCHEMA dump_test' => {
+		regexp => qr/^DROP SCHEMA dump_test CASCADE;/m,
+		like   => { clean_drop_cascade => 1, },
+	},
+
+	'DROP TABLE test_table' => {
+		regexp => qr/^DROP TABLE dump_test\.test_table CASCADE;/m,
+		like   => { clean_drop_cascade => 1, },
 	},
 
 	'DROP ROLE regress_dump_test_role' => {

@@ -7,7 +7,7 @@ use warnings;
 use Config;
 use PostgresNode;
 use TestLib;
-use Test::More tests => 82;
+use Test::More tests => 84;
 
 my $tempdir       = TestLib::tempdir;
 
@@ -94,6 +94,11 @@ command_fails_like(
 	[ 'pg_dump', '--if-exists' ],
 	qr/\Qpg_dump: error: option --if-exists requires option -c\/--clean\E/,
 	'pg_dump: option --if-exists requires option -c/--clean');
+
+command_fails_like(
+	[ 'pg_dump', '--drop-cascade' ],
+	qr/\Qpg_dump: error: option --drop-cascade requires option -c\/--clean\E/,
+	'pg_dump: option --drop-cascade requires option -c/--clean');
 
 command_fails_like(
 	[ 'pg_dump', '-j3' ],

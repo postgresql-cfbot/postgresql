@@ -186,6 +186,7 @@ dumpOptionsFromRestoreOptions(RestoreOptions *ropt)
 	dopt->cparams.promptPassword = ropt->cparams.promptPassword;
 	dopt->outputClean = ropt->dropSchema;
 	dopt->dataOnly = ropt->dataOnly;
+	dopt->drop_cascade = ropt->drop_cascade;
 	dopt->schemaOnly = ropt->schemaOnly;
 	dopt->if_exists = ropt->if_exists;
 	dopt->column_inserts = ropt->column_inserts;
@@ -527,95 +528,103 @@ RestoreArchive(Archive *AHX)
 				 */
 				if (*te->dropStmt != '\0')
 				{
-					if (!ropt->if_exists)
+					if (!ropt->if_exists && !ropt->drop_cascade)
 					{
-						/* No --if-exists?	Then just use the original */
+						/* Just use the original */
 						ahprintf(AH, "%s", te->dropStmt);
+					}
+					/*
+					* Inject an appropriate spelling of "if exists" or "cascade".
+					* For large objects, we have a separate routine that
+					* knows how to do it, without depending on
+					* te->dropStmt; use that.  For other objects we need
+					* to parse the command.
+					*/
+					else if (strncmp(te->desc, "BLOB", 4) == 0)
+					{
+						if (ropt->if_exists)
+							DropBlobIfExists(AH, te->catalogId.oid);
+						else
+							ahprintf(AH, "%s", te->dropStmt);
 					}
 					else
 					{
+						char	   *dropStmt = pg_strdup(te->dropStmt);
+						char	   *dropStmtOrig = dropStmt;
+						PQExpBuffer ftStmt = createPQExpBuffer();
 						/*
-						 * Inject an appropriate spelling of "if exists".  For
-						 * large objects, we have a separate routine that
-						 * knows how to do it, without depending on
-						 * te->dropStmt; use that.  For other objects we need
-						 * to parse the command.
-						 */
-						if (strncmp(te->desc, "BLOB", 4) == 0)
+						* Need to inject IF EXISTS clause after ALTER
+						* TABLE part in ALTER TABLE .. DROP statement
+						*/
+						if (ropt->if_exists && strncmp(dropStmt, "ALTER TABLE", 11) == 0)
 						{
-							DropBlobIfExists(AH, te->catalogId.oid);
+							appendPQExpBufferStr(ftStmt,
+													"ALTER TABLE IF EXISTS");
+							dropStmt = dropStmt + 11;
 						}
+
+						/*
+						* ALTER TABLE..ALTER COLUMN..DROP DEFAULT does
+						* not support the IF EXISTS or CASCADE clause, and therefore
+						* we simply emit the original command for DEFAULT
+						* objects (modulo the adjustment made above).
+						*
+						* Likewise, don't mess with DATABASE PROPERTIES.
+						*
+						* If we used CREATE OR REPLACE VIEW as a means of
+						* quasi-dropping an ON SELECT rule, that should
+						* be emitted unchanged as well.
+						*
+						* For other object types, we need to extract the
+						* first part of the DROP which includes the
+						* object type.  Most of the time this matches
+						* te->desc, so search for that; however for the
+						* different kinds of CONSTRAINTs, we know to
+						* search for hardcoded "DROP CONSTRAINT" instead.
+						*/
+						if (strcmp(te->desc, "DEFAULT") == 0 ||
+							strcmp(te->desc, "DATABASE PROPERTIES") == 0 ||
+							strncmp(dropStmt, "CREATE OR REPLACE VIEW", 22) == 0)
+							appendPQExpBufferStr(ftStmt, dropStmt);
 						else
 						{
-							char	   *dropStmt = pg_strdup(te->dropStmt);
-							char	   *dropStmtOrig = dropStmt;
-							PQExpBuffer ftStmt = createPQExpBuffer();
+							char		buffer[40];
+							char	   *mark;
 
-							/*
-							 * Need to inject IF EXISTS clause after ALTER
-							 * TABLE part in ALTER TABLE .. DROP statement
-							 */
-							if (strncmp(dropStmt, "ALTER TABLE", 11) == 0)
+							if (strcmp(te->desc, "CONSTRAINT") == 0 ||
+								strcmp(te->desc, "CHECK CONSTRAINT") == 0 ||
+								strcmp(te->desc, "FK CONSTRAINT") == 0)
+								strcpy(buffer, "DROP CONSTRAINT");
+							else
+								snprintf(buffer, sizeof(buffer), "DROP %s",
+											te->desc);
+
+							mark = strstr(dropStmt, buffer);
+
+							if (mark)
 							{
-								appendPQExpBufferStr(ftStmt,
-													 "ALTER TABLE IF EXISTS");
-								dropStmt = dropStmt + 11;
+								char *name = mark + strlen(buffer);
+								*mark = '\0';
+								/*
+								 * pg_dump always add CASCADE for TYPE with circular dependencies.
+								 * avoid adding duplicated CASCADE.
+								 */
+								bool shouldCascade = ropt->drop_cascade && strstr(name, "CASCADE;") == NULL;
+								char *stmtEnd = strstr(name, ";");
+								*stmtEnd = '\0';
+								appendPQExpBuffer(ftStmt, "%s%s%s%s%s\n",
+													dropStmt, buffer,
+													ropt->if_exists ? " IF EXISTS" : "",
+													name,
+													shouldCascade ? " CASCADE;" : ";");
 							}
-
-							/*
-							 * ALTER TABLE..ALTER COLUMN..DROP DEFAULT does
-							 * not support the IF EXISTS clause, and therefore
-							 * we simply emit the original command for DEFAULT
-							 * objects (modulo the adjustment made above).
-							 *
-							 * Likewise, don't mess with DATABASE PROPERTIES.
-							 *
-							 * If we used CREATE OR REPLACE VIEW as a means of
-							 * quasi-dropping an ON SELECT rule, that should
-							 * be emitted unchanged as well.
-							 *
-							 * For other object types, we need to extract the
-							 * first part of the DROP which includes the
-							 * object type.  Most of the time this matches
-							 * te->desc, so search for that; however for the
-							 * different kinds of CONSTRAINTs, we know to
-							 * search for hardcoded "DROP CONSTRAINT" instead.
-							 */
-							if (strcmp(te->desc, "DEFAULT") == 0 ||
-								strcmp(te->desc, "DATABASE PROPERTIES") == 0 ||
-								strncmp(dropStmt, "CREATE OR REPLACE VIEW", 22) == 0)
-								appendPQExpBufferStr(ftStmt, dropStmt);
 							else
 							{
-								char		buffer[40];
-								char	   *mark;
-
-								if (strcmp(te->desc, "CONSTRAINT") == 0 ||
-									strcmp(te->desc, "CHECK CONSTRAINT") == 0 ||
-									strcmp(te->desc, "FK CONSTRAINT") == 0)
-									strcpy(buffer, "DROP CONSTRAINT");
-								else
-									snprintf(buffer, sizeof(buffer), "DROP %s",
-											 te->desc);
-
-								mark = strstr(dropStmt, buffer);
-
-								if (mark)
-								{
-									*mark = '\0';
-									appendPQExpBuffer(ftStmt, "%s%s IF EXISTS%s",
-													  dropStmt, buffer,
-													  mark + strlen(buffer));
-								}
-								else
-								{
-									/* complain and emit unmodified command */
-									pg_log_warning("could not find where to insert IF EXISTS in statement \"%s\"",
-												   dropStmtOrig);
-									appendPQExpBufferStr(ftStmt, dropStmt);
-								}
+								/* complain and emit unmodified command */
+								pg_log_warning("could not find where to insert IF EXISTS or CASCADE in statement \"%s\"",
+												dropStmtOrig);
+								appendPQExpBufferStr(ftStmt, dropStmt);
 							}
-
 							ahprintf(AH, "%s", ftStmt->data);
 
 							destroyPQExpBuffer(ftStmt);

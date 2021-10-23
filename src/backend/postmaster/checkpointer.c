@@ -405,13 +405,6 @@ CheckpointerMain(void)
 			ConditionVariableBroadcast(&CheckpointerShmem->start_cv);
 
 			/*
-			 * The end-of-recovery checkpoint is a real checkpoint that's
-			 * performed while we're still in recovery.
-			 */
-			if (flags & CHECKPOINT_END_OF_RECOVERY)
-				do_restartpoint = false;
-
-			/*
 			 * We will warn if (a) too soon since last checkpoint (whatever
 			 * caused it) and (b) somebody set the CHECKPOINT_CAUSE_XLOG flag
 			 * since the last checkpoint start.  Note in particular that this
@@ -905,12 +898,10 @@ CheckpointerShmemInit(void)
  *
  * flags is a bitwise OR of the following:
  *	CHECKPOINT_IS_SHUTDOWN: checkpoint is for database shutdown.
- *	CHECKPOINT_END_OF_RECOVERY: checkpoint is for end of WAL recovery.
  *	CHECKPOINT_IMMEDIATE: finish the checkpoint ASAP,
  *		ignoring checkpoint_completion_target parameter.
  *	CHECKPOINT_FORCE: force a checkpoint even if no XLOG activity has occurred
- *		since the last one (implied by CHECKPOINT_IS_SHUTDOWN or
- *		CHECKPOINT_END_OF_RECOVERY).
+ *		since the last one (implied by CHECKPOINT_IS_SHUTDOWN)
  *	CHECKPOINT_WAIT: wait for completion before returning (otherwise,
  *		just signal checkpointer to do it, and return).
  *	CHECKPOINT_CAUSE_XLOG: checkpoint is requested due to xlog filling.

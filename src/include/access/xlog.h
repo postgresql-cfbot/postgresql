@@ -194,18 +194,16 @@ extern bool XLOG_DEBUG;
 
 /* These directly affect the behavior of CreateCheckPoint and subsidiaries */
 #define CHECKPOINT_IS_SHUTDOWN	0x0001	/* Checkpoint is for shutdown */
-#define CHECKPOINT_END_OF_RECOVERY	0x0002	/* Like shutdown checkpoint, but
-											 * issued at end of WAL recovery */
-#define CHECKPOINT_IMMEDIATE	0x0004	/* Do it without delays */
-#define CHECKPOINT_FORCE		0x0008	/* Force even if no activity */
-#define CHECKPOINT_FLUSH_ALL	0x0010	/* Flush all pages, including those
+#define CHECKPOINT_IMMEDIATE	0x0002	/* Do it without delays */
+#define CHECKPOINT_FORCE		0x0004	/* Force even if no activity */
+#define CHECKPOINT_FLUSH_ALL	0x0008	/* Flush all pages, including those
 										 * belonging to unlogged tables */
 /* These are important to RequestCheckpoint */
-#define CHECKPOINT_WAIT			0x0020	/* Wait for completion */
-#define CHECKPOINT_REQUESTED	0x0040	/* Checkpoint request has been made */
+#define CHECKPOINT_WAIT			0x0010	/* Wait for completion */
+#define CHECKPOINT_REQUESTED	0x0020	/* Checkpoint request has been made */
 /* These indicate the cause of a checkpoint request */
-#define CHECKPOINT_CAUSE_XLOG	0x0080	/* XLOG consumption */
-#define CHECKPOINT_CAUSE_TIME	0x0100	/* Elapsed time */
+#define CHECKPOINT_CAUSE_XLOG	0x0040	/* XLOG consumption */
+#define CHECKPOINT_CAUSE_TIME	0x0080	/* Elapsed time */
 
 /*
  * Flag bits for the record being inserted, set using XLogSetRecordFlags().

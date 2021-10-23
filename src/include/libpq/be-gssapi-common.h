@@ -18,9 +18,11 @@
 #include <gssapi.h>
 #else
 #include <gssapi/gssapi.h>
+#include <gssapi/gssapi_ext.h>
 #endif
 
 extern void pg_GSS_error(const char *errmsg,
 						 OM_uint32 maj_stat, OM_uint32 min_stat);
 
+extern void pg_store_proxy_credential(gss_cred_id_t cred);
 #endif							/* BE_GSSAPI_COMMON_H */

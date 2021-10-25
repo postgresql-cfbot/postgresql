@@ -1476,3 +1476,30 @@ REVOKE TRUNCATE ON lock_table FROM regress_locktable_user;
 -- clean up
 DROP TABLE lock_table;
 DROP USER regress_locktable_user;
+
+-- test to check privileges of system views pg_shmem_allocations and
+-- pg_backend_memory_contexts.
+
+-- switch to superuser
+\c -
+
+CREATE ROLE regress_nosprusr_noreadallstats WITH NOSUPERUSER;
+SET ROLE regress_nosprusr_noreadallstats;
+SELECT COUNT(*) >= 0 AS ok FROM pg_backend_memory_contexts; -- permission denied error
+SELECT COUNT(*) >= 0 AS ok FROM pg_shmem_allocations; -- permission denied error
+
+-- switch to superuser
+\c -
+
+CREATE ROLE regress_nosprusr_readallstats WITH NOSUPERUSER;
+GRANT pg_read_all_stats TO regress_nosprusr_readallstats;
+SET ROLE regress_nosprusr_readallstats;
+SELECT COUNT(*) >= 0 AS ok FROM pg_backend_memory_contexts;
+SELECT COUNT(*) >= 0 AS ok FROM pg_shmem_allocations;
+
+-- switch to superuser
+\c -
+
+-- clean up
+DROP ROLE regress_nosprusr_noreadallstats;
+DROP ROLE regress_nosprusr_readallstats;

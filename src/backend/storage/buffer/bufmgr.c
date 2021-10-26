@@ -2452,6 +2452,8 @@ BgBufferSync(WritebackContext *wb_context)
 		}
 		else if (sync_state & BUF_REUSABLE)
 			reusable_buffers++;
+
+		pg_usleep(1000000);
 	}
 
 	PendingBgWriterStats.m_buf_written_clean += num_written;

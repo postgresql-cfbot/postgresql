@@ -46,6 +46,7 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="parameter">name</replaceable>
     ALTER [ COLUMN ] <replaceable class="parameter">column_name</replaceable> SET DEFAULT <replaceable class="parameter">expression</replaceable>
     ALTER [ COLUMN ] <replaceable class="parameter">column_name</replaceable> DROP DEFAULT
     ALTER [ COLUMN ] <replaceable class="parameter">column_name</replaceable> { SET | DROP } NOT NULL
+    ALTER [ COLUMN ] <replaceable class="parameter">column_name</replaceable> { SET | DROP } UNEXPANDED
     ALTER [ COLUMN ] <replaceable class="parameter">column_name</replaceable> DROP EXPRESSION [ IF EXISTS ]
     ALTER [ COLUMN ] <replaceable class="parameter">column_name</replaceable> ADD GENERATED { ALWAYS | BY DEFAULT } AS IDENTITY [ ( <replaceable>sequence_options</replaceable> ) ]
     ALTER [ COLUMN ] <replaceable class="parameter">column_name</replaceable> { SET GENERATED { ALWAYS | BY DEFAULT } | SET <replaceable>sequence_option</replaceable> | RESTART [ [ WITH ] <replaceable class="parameter">restart</replaceable> ] } [...]
@@ -241,6 +242,26 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       parent, such a constraint can still be added to individual partitions,
       if desired; that is, the children can disallow nulls even if the parent
       allows them, but not the other way around.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>SET</literal>/<literal>DROP UNEXPANDED</literal></term>
+    <listitem>
+     <para>
+      When a column is defined with the <literal>UNEXPANDED</literal> attribute,
+      it is not available unless it is explicitly referenced. For example,
+      if a SELECT * FROM table is executed, unexpanded columns are not returned
+      in the resulting rows. Same, if an INSERT statement without a target
+      columns list is executed it does not expect values for any unexpanded columns.
+      An unexpanded column can always be referenced explicitly wherever a column
+      name can be specified, for example in an ORDER BY or a JOIN clause.
+      (See <xref linkend="ddl-unexpanded-columns"/> for more information on unexpanded column).
+     </para>
+     <para>
+      The unexpansion behavior will only apply in subsequent SELECT or INSERT commands;
+      it does not cause running queries behavior to change. 
      </para>
     </listitem>
    </varlistentry>

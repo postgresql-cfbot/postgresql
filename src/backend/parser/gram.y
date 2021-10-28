@@ -720,7 +720,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	TREAT TRIGGER TRIM TRUE_P
 	TRUNCATE TRUSTED TYPE_P TYPES_P
 
-	UESCAPE UNBOUNDED UNCOMMITTED UNENCRYPTED UNION UNIQUE UNKNOWN
+	UESCAPE UNBOUNDED UNCOMMITTED UNENCRYPTED UNEXPANDED UNION UNIQUE UNKNOWN
 	UNLISTEN UNLOGGED UNTIL UPDATE USER USING
 
 	VACUUM VALID VALIDATE VALIDATOR VALUE_P VALUES VARCHAR VARIADIC VARYING
@@ -2239,6 +2239,22 @@ alter_table_cmd:
 					n->name = $3;
 					$$ = (Node *)n;
 				}
+			/* ALTER TABLE <name> ALTER [COLUMN] <colname> DROP UNEXPANDED */
+			| ALTER opt_column ColId DROP UNEXPANDED
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_DropUnexpanded;
+					n->name = $3;
+					$$ = (Node *)n;
+				}
+			/* ALTER TABLE <name> ALTER [COLUMN] <colname> SET UNEXPANDED */
+			| ALTER opt_column ColId SET UNEXPANDED
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_SetUnexpanded;
+					n->name = $3;
+					$$ = (Node *)n;
+				}
 			/* ALTER TABLE <name> ALTER [COLUMN] <colname> DROP EXPRESSION */
 			| ALTER opt_column ColId DROP EXPRESSION
 				{
@@ -3493,6 +3509,7 @@ columnDef:	ColId Typename opt_column_compression create_generic_options ColQualL
 					n->fdwoptions = $4;
 					SplitColQualList($5, &n->constraints, &n->collClause,
 									 yyscanner);
+					n->is_unexpanded = false;
 					n->location = @1;
 					$$ = (Node *)n;
 				}
@@ -3513,6 +3530,7 @@ columnOptions:	ColId ColQualList
 					n->collOid = InvalidOid;
 					SplitColQualList($2, &n->constraints, &n->collClause,
 									 yyscanner);
+					n->is_unexpanded = false;
 					n->location = @1;
 					$$ = (Node *)n;
 				}
@@ -3777,6 +3795,7 @@ TableLikeOption:
 				| INDEXES			{ $$ = CREATE_TABLE_LIKE_INDEXES; }
 				| STATISTICS		{ $$ = CREATE_TABLE_LIKE_STATISTICS; }
 				| STORAGE			{ $$ = CREATE_TABLE_LIKE_STORAGE; }
+				| UNEXPANDED		{ $$ = CREATE_TABLE_LIKE_UNEXPANDED; }
 				| ALL				{ $$ = CREATE_TABLE_LIKE_ALL; }
 		;
 
@@ -15828,6 +15847,7 @@ unreserved_keyword:
 			| UNBOUNDED
 			| UNCOMMITTED
 			| UNENCRYPTED
+			| UNEXPANDED
 			| UNKNOWN
 			| UNLISTEN
 			| UNLOGGED
@@ -16429,6 +16449,7 @@ bare_label_keyword:
 			| UNBOUNDED
 			| UNCOMMITTED
 			| UNENCRYPTED
+			| UNEXPANDED
 			| UNIQUE
 			| UNKNOWN
 			| UNLISTEN

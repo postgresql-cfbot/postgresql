@@ -133,6 +133,7 @@ CreateTupleDescCopy(TupleDesc tupdesc)
 		att->atthasmissing = false;
 		att->attidentity = '\0';
 		att->attgenerated = '\0';
+		att->attisunexpanded = false;
 	}
 
 	/* We can copy the tuple type identification, too */
@@ -463,6 +464,8 @@ equalTupleDescs(TupleDesc tupdesc1, TupleDesc tupdesc2)
 			return false;
 		if (attr1->attcollation != attr2->attcollation)
 			return false;
+		if (attr1->attisunexpanded != attr2->attisunexpanded)
+			return false;
 		/* variable-length fields are not even present... */
 	}
 
@@ -644,6 +647,7 @@ TupleDescInitEntry(TupleDesc desc,
 	att->attstorage = typeForm->typstorage;
 	att->attcompression = InvalidCompressionMethod;
 	att->attcollation = typeForm->typcollation;
+	att->attisunexpanded = false;
 
 	ReleaseSysCache(tuple);
 }
@@ -691,6 +695,7 @@ TupleDescInitBuiltinEntry(TupleDesc desc,
 	att->attisdropped = false;
 	att->attislocal = true;
 	att->attinhcount = 0;
+	att->attisunexpanded = false;
 	/* attacl, attoptions and attfdwoptions are not present in tupledescs */
 
 	att->atttypid = oidtypeid;
@@ -839,6 +844,7 @@ BuildDescForRelation(List *schema)
 		has_not_null |= entry->is_not_null;
 		att->attislocal = entry->is_local;
 		att->attinhcount = entry->inhcount;
+		att->attisunexpanded = entry->is_unexpanded;
 	}
 
 	if (has_not_null)

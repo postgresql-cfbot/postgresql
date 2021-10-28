@@ -377,6 +377,209 @@ CREATE TABLE people (
   </para>
  </sect1>
 
+ <sect1 id="ddl-unexpanded-columns">
+  <title>Unexpanded Columns</title>
+
+  <indexterm zone="ddl-unexpanded-columns">
+   <primary>Unexpanded column</primary>
+  </indexterm>
+
+  <para>
+  An unexpanded column is just like a normal column except that it is not available
+  unless it is explicitly referenced.  Columns with the <literal>UNEXEPANDED</literal>
+  attribute will not be part of the star expansion such that <literal>SELECT * FROM</literal> table doesn't
+  return a value for the columns.  The same behavior applies to the <literal>COPY ... TO</literal>
+  statements when no columns are specified.
+  In order to be used, unexpanded columns must be explicitly included in the query.
+  Unexpanded column can always be referenced explicitly wherever a column name can
+  be specified, for example in a <literal>JOIN</literal>, a <literal>GROUP BY</literal>
+  or an <literal>ORDER BY</literal> clause.
+  </para>
+  <para>
+  When inserting data into a table, an <literal>INSERT</literal> statement without a target column
+  list does not expect values for any unexpanded columns.  In such cases, if the
+  input includes a value for a unexpanded column, that value does not have a target
+  column and an error is returned.  Because an <literal>INSERT</literal> statement without a
+  column list does not include values for unexpanded columns, any columns that are
+  defined as hidden and <literal>NOT NULL</literal> must have a default value.
+  The same behavior with unexpanded column applies to the <literal>COPY ... FROM</literal>
+  statements when no destination columns are specified.
+  </para>
+  <para>
+  The <command>ALTER TABLE</command> statement can be used to set the unexpanded attribute
+  to a column or to remove it.
+<programlisting>
+ALTER TABLE people ALTER COLUMN rowid <emphasis>SET UNEXPANDED</emphasis>;
+ALTER TABLE people ALTER COLUMN rowid <emphasis>DROP UNEXPANDED</emphasis>;
+</programlisting>
+  </para>
+
+  <para>
+  If a table is created using a <command>CREATE TABLE</command> statement with
+  the LIKE clause, any unexpanded columns in the source table is copied to the
+  new table but by default the unexpanded attribute is not set.
+<programlisting>
+CREATE TABLE foo (LIKE t1);
+</programlisting>
+  To copied the <literal>UNEXPANDED</literal> attribute it must be explicitely
+  included.
+<programlisting>
+CREATE TABLE foo (LIKE t1 <emphasis>INCLUDING UNEXPANDED</emphasis>);
+</programlisting>
+  </para>
+
+  <para>
+  Since <literal>SELECT *</literal> does not return the unexpanded columns,
+  new tables or views created in this manner will have no trace of the
+  unexpanded columns.  If explicitely referenced in the <literal>SELECT</literal>
+  statement, the columns will be brought into the view/new table, but the
+  <literal>UNEXPANDED</literal> attribute will not.
+<programlisting>
+db=# \d+ t1
+                     Table "public.t1"
+ Column |  Type   | Collation | Nullable |  Expanded  | Default 
+--------+---------+-----------+----------+------------+---------
+ col1   | integer |           |          | unexpanded | 13
+ col2   | text    |           | not null |            | 
+
+test=# CREATE TABLE t2 AS SELECT * FROM t1;
+SELECT 2
+db=# \d t2
+                    Table "public.t2"
+ Column | Type | Collation | Nullable | Expanded | Default 
+--------+------+-----------+----------+--------+---------
+ col2   | text |           |          |        | 
+
+test=# CREATE TABLE t3 AS SELECT col1, col2 FROM t1;
+SELECT 2
+db=# \d t2
+                    Table "public.t2"
+ Column |  Type   | Collation | Nullable | Expanded | Default 
+--------+---------+-----------+----------+----------+---------
+ col1   | integer |           |          |          | 13
+ col2   | text    |           |          |          | 
+</programlisting>
+  </para>
+
+  <para>
+   Several other points apply to the definition of unexpanded columns and tables
+   involving such columns:
+   <itemizedlist>
+    <listitem>
+     <para>
+      Unexpanded columns are also supported in created temporary or unlogged tables
+      but not in foreign table.
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+     Unexpanded columns support the usual column attributes as well as all
+     constraints.
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+     An unexpanded column can be explicitly referenced in a
+     <command>CREATE INDEX</command> statement or <command>ALTER TABLE</command>
+     statement.
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+     Foreign key constraints can be defined on unexpanded columns and unexpanded columns
+     can be referenced in foreign key constraints.
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+     Virtual columns can be flagged unexpanded as well as identity columns.
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+     A table can be partitioned by an unexpanded column.
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+    User-defined types can not contain unexpanded attributes.
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+     A table can have all columns unexpanded, PostgreSQL support table without column.
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+     Unexpanded column are inherited.
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+     Changing a column's unexpanded attribute after defining a view that
+     references the column does not change the view behavior. 
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+     The unexpanded column attribute has no effect when the whole-row or star is used in a function. For example:
+<programlisting>
+SELECT row_to_json(t) FROM htest0 t;
+       row_to_json
+--------------------------
+ {"a":1,"b":"one"}
+ {"a":2,"b":"two"}
+
+SELECT row_to_json(t.*) FROM htest0 t;
+       row_to_json
+--------------------------
+ {"a":1,"b":"one"}
+ {"a":2,"b":"two"}
+</programlisting>
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+     Insert without column list with values retrieved from a query using the
+     wild-card star (<literal>INSERT INTO t2 SELECT * FROM t1;</literal>) will
+     not include unexpanded columns from the selected table.
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+     The unexpanded column will not be part of the values returned by a
+     <literal>RETURNING *</literal>. For example:
+<programlisting>
+CREATE TABLE htest1 (a bigserial PRIMARY KEY, b text);
+ALTER TABLE htest1 ALTER COLUMN a SET UNEXPANDED;
+INSERT INTO htest1 VALUES ('htest1 one');
+SELECT a, b FROM htest1;
+ a |     b 
+---+------------
+ 1 | htest1 one
+
+WITH cte AS (
+   DELETE FROM htest1 RETURNING *
+) SELECT * FROM cte;
+     b      
+------------
+ htest1 one
+</programlisting>
+     Note that the presence of an unexpanded column prevent the use of ROWTYPE in plpgsql code with <literal>RETURNING * INTO</literal>
+     </para>
+    </listitem>
+   </itemizedlist>
+  </para>
+
+  <para>
+  Information about whether a column is expanded or not is available from
+  the <structfield>attisunexpanded</structfield> column of the
+  <link linkend="catalog-pg-attribute"><structname>pg_attribute</structname></link>
+  catalog table.
+  </para>
+ </sect1>
+
  <sect1 id="ddl-constraints">
   <title>Constraints</title>
 

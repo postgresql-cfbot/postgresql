@@ -4908,7 +4908,7 @@ testdb=&gt; <userinput>\d my_table</userinput>
  Column |  Type   | Collation | Nullable | Default
 --------+---------+-----------+----------+---------
  first  | integer |           | not null | 0
- second | text    |           |          | 
+ second | text    |           |          |
 </programlisting>
   Now we change the prompt to something more interesting:
 <programlisting>

@@ -1084,6 +1084,12 @@ transformTableLikeClause(CreateStmtContext *cxt, TableLikeClause *table_like_cla
 		else
 			def->storage = 0;
 
+		/* Likewise, copy hidden if requested */
+		if (table_like_clause->options & CREATE_TABLE_LIKE_UNEXPANDED)
+			def->is_unexpanded = attribute->attisunexpanded;
+		else
+			def->is_unexpanded = false;
+
 		/* Likewise, copy compression if requested */
 		if ((table_like_clause->options & CREATE_TABLE_LIKE_COMPRESSION) != 0
 			&& CompressionMethodIsValid(attribute->attcompression))
@@ -1482,6 +1488,7 @@ transformOfType(CreateStmtContext *cxt, TypeName *ofTypename)
 		n->collOid = attr->attcollation;
 		n->constraints = NIL;
 		n->location = -1;
+		n->is_unexpanded = false;
 		cxt->columns = lappend(cxt->columns, n);
 	}
 	DecrTupleDescRefCount(tupdesc);

@@ -167,8 +167,15 @@ CATALOG(pg_attribute,1249,AttributeRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(75,
 	/* Number of times inherited from direct parent relation(s) */
 	int32		attinhcount BKI_DEFAULT(0);
 
+	/*
+	 * This flag specifies whether this column is expendable in
+	 * a SELECT *, an INSERT without column list, or not. It is true when
+	 * a column is defined with the HIDDEN attribute, false otherwise.
+	 */
+	bool		attisunexpanded BKI_DEFAULT(f);
+
 	/* attribute's collation, if any */
-	Oid			attcollation BKI_LOOKUP_OPT(pg_collation);
+	Oid		attcollation BKI_LOOKUP_OPT(pg_collation);
 
 #ifdef CATALOG_VARLEN			/* variable-length fields start here */
 	/* NOTE: The following fields are not present in tuple descriptors. */

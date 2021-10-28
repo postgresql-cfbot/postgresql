@@ -1417,6 +1417,18 @@
        the column is null.
       </para></entry>
      </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>attisunexpanded</structfield> <type>bool</type>
+      </para>
+      <para>
+       This column is not expanded in the resulting target list of a
+       <literal>SELECT *</literal> or in an <literal>INSERT</literal> without
+       destination column list.  An unexpanded column can still be used, but it
+       must be explicitly referenced.
+      </para></entry>
+     </row>
     </tbody>
    </tgroup>
   </table>

@@ -87,7 +87,7 @@ class="parameter">referential_action</replaceable> ] [ ON UPDATE <replaceable cl
 
 <phrase>and <replaceable class="parameter">like_option</replaceable> is:</phrase>
 
-{ INCLUDING | EXCLUDING } { COMMENTS | COMPRESSION | CONSTRAINTS | DEFAULTS | GENERATED | IDENTITY | INDEXES | STATISTICS | STORAGE | ALL }
+{ INCLUDING | EXCLUDING } { COMMENTS | COMPRESSION | CONSTRAINTS | DEFAULTS | GENERATED | UNEXPANDED | IDENTITY | INDEXES | STATISTICS | STORAGE | ALL }
 
 <phrase>and <replaceable class="parameter">partition_bound_spec</replaceable> is:</phrase>
 
@@ -677,6 +677,16 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
        </varlistentry>
 
        <varlistentry>
+        <term><literal>INCLUDING UNEXPANDED</literal></term>
+        <listitem>
+         <para>
+          Any unexpanded attribute of copied column definitions will be
+          copied.  By default, new columns will be part of the star expansion.
+         </para>
+        </listitem>
+       </varlistentry>
+
+       <varlistentry>
         <term><literal>INCLUDING IDENTITY</literal></term>
         <listitem>
          <para>
@@ -737,6 +747,7 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
          </para>
         </listitem>
        </varlistentry>
+
       </variablelist>
      </para>
 
@@ -1349,7 +1360,6 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
      </para>
     </listitem>
    </varlistentry>
-
   </variablelist>
 
   <refsect2 id="sql-createtable-storage-parameters" xreflabel="Storage Parameters">

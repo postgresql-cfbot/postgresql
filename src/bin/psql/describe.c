@@ -1628,6 +1628,7 @@ describeOneTableDetails(const char *schemaname,
 				atttype_col = -1,
 				attrdef_col = -1,
 				attnotnull_col = -1,
+				attisunexpanded_col = -1,
 				attcoll_col = -1,
 				attidentity_col = -1,
 				attgenerated_col = -1,
@@ -2091,6 +2092,14 @@ describeOneTableDetails(const char *schemaname,
 			appendPQExpBufferStr(&buf, ",\n  pg_catalog.col_description(a.attrelid, a.attnum)");
 			attdescr_col = cols++;
 		}
+
+		/* column visibility in a SELECT *, if relevant to relkind */
+		if (tableinfo.relkind == RELKIND_RELATION ||
+			tableinfo.relkind == RELKIND_PARTITIONED_TABLE)
+		{
+			appendPQExpBufferStr(&buf, ",\n  a.attisunexpanded AS attisunexpanded");
+			attisunexpanded_col = cols++;
+		}
 	}
 
 	appendPQExpBufferStr(&buf, "\nFROM pg_catalog.pg_attribute a");
@@ -2183,6 +2192,8 @@ describeOneTableDetails(const char *schemaname,
 		headers[cols++] = gettext_noop("Nullable");
 		headers[cols++] = gettext_noop("Default");
 	}
+	if (attisunexpanded_col >= 0)
+		headers[cols++] = gettext_noop("Expanded");
 	if (isindexkey_col >= 0)
 		headers[cols++] = gettext_noop("Key?");
 	if (indexdef_col >= 0)
@@ -2215,7 +2226,7 @@ describeOneTableDetails(const char *schemaname,
 		/* Type */
 		printTableAddCell(&cont, PQgetvalue(res, i, atttype_col), false, false);
 
-		/* Collation, Nullable, Default */
+		/* Collation, Nullable, Unexpanded, Default */
 		if (show_column_details)
 		{
 			char	   *identity;
@@ -2228,7 +2239,6 @@ describeOneTableDetails(const char *schemaname,
 			printTableAddCell(&cont,
 							  strcmp(PQgetvalue(res, i, attnotnull_col), "t") == 0 ? "not null" : "",
 							  false, false);
-
 			identity = PQgetvalue(res, i, attidentity_col);
 			generated = PQgetvalue(res, i, attgenerated_col);
 
@@ -2257,6 +2267,12 @@ describeOneTableDetails(const char *schemaname,
 		/* FDW options for foreign table columns */
 		if (fdwopts_col >= 0)
 			printTableAddCell(&cont, PQgetvalue(res, i, fdwopts_col), false, false);
+
+		/* Column unexpanded in SELECT *, if relevant */
+		if (attisunexpanded_col >= 0)
+			printTableAddCell(&cont,
+						  strcmp(PQgetvalue(res, i, attisunexpanded_col), "t") == 0 ? "unexpanded" : "",
+						  false, false);
 
 		/* Storage mode, if relevant */
 		if (attstorage_col >= 0)

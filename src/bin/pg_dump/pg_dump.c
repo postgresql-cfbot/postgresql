@@ -8541,6 +8541,7 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 	int			i_attoptions;
 	int			i_attcollation;
 	int			i_attcompression;
+	int			i_attisunexpanded;
 	int			i_attfdwoptions;
 	int			i_attmissingval;
 	int			i_atthasdef;
@@ -8617,6 +8618,13 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 			appendPQExpBuffer(q,
 							  "'' AS attcompression,\n");
 
+		if (fout->remoteVersion >= 150000)
+			appendPQExpBuffer(q,
+							  "a.attisunexpanded,\n");
+		else
+			appendPQExpBuffer(q,
+							  "'f' AS attisunexpanded,\n");
+
 		if (fout->remoteVersion >= 90200)
 			appendPQExpBufferStr(q,
 								 "pg_catalog.array_to_string(ARRAY("
@@ -8680,6 +8688,7 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 		tbinfo->attoptions = (char **) pg_malloc(ntups * sizeof(char *));
 		tbinfo->attcollation = (Oid *) pg_malloc(ntups * sizeof(Oid));
 		tbinfo->attcompression = (char *) pg_malloc(ntups * sizeof(char));
+		tbinfo->attisunexpanded = (bool *) pg_malloc(ntups * sizeof(bool));
 		tbinfo->attfdwoptions = (char **) pg_malloc(ntups * sizeof(char *));
 		tbinfo->attmissingval = (char **) pg_malloc(ntups * sizeof(char *));
 		tbinfo->notnull = (bool *) pg_malloc(ntups * sizeof(bool));
@@ -8704,6 +8713,7 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 		i_attoptions = PQfnumber(res, "attoptions");
 		i_attcollation = PQfnumber(res, "attcollation");
 		i_attcompression = PQfnumber(res, "attcompression");
+		i_attisunexpanded = PQfnumber(res, "attisunexpanded");
 		i_attfdwoptions = PQfnumber(res, "attfdwoptions");
 		i_attmissingval = PQfnumber(res, "attmissingval");
 		i_atthasdef = PQfnumber(res, "atthasdef");
@@ -8730,6 +8740,7 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 			tbinfo->attoptions[j] = pg_strdup(PQgetvalue(res, j, i_attoptions));
 			tbinfo->attcollation[j] = atooid(PQgetvalue(res, j, i_attcollation));
 			tbinfo->attcompression[j] = *(PQgetvalue(res, j, i_attcompression));
+			tbinfo->attisunexpanded[j] = (PQgetvalue(res, j, i_attisunexpanded)[0] == 't');
 			tbinfo->attfdwoptions[j] = pg_strdup(PQgetvalue(res, j, i_attfdwoptions));
 			tbinfo->attmissingval[j] = pg_strdup(PQgetvalue(res, j, i_attmissingval));
 			tbinfo->attrdefs[j] = NULL; /* fix below */
@@ -16309,6 +16320,16 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 								  fmtId(tbinfo->attnames[j]));
 
 			/*
+			 * Dump per-column unexpanded information. We only issue an ALTER
+			 * TABLE statement if the attisunexpanded entry for this column is
+			 * true (i.e. it's not the default value)
+			 */
+			if (tbinfo->attisunexpanded[j])
+				appendPQExpBuffer(q, "ALTER %sTABLE ONLY %s ALTER COLUMN %s SET UNEXPANDED;\n",
+								  foreign, qualrelname,
+								  fmtId(tbinfo->attnames[j]));
+
+			/*
 			 * Dump per-column statistics information. We only issue an ALTER
 			 * TABLE statement if the attstattarget entry for this column is
 			 * non-negative (i.e. it's not the default value)
@@ -16401,6 +16422,7 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 								  qualrelname,
 								  fmtId(tbinfo->attnames[j]),
 								  tbinfo->attfdwoptions[j]);
+
 		}						/* end loop over columns */
 
 		if (ftoptions)

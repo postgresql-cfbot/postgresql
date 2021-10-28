@@ -602,6 +602,10 @@ static void refuseDupeIndexAttach(Relation parentIdx, Relation partIdx,
 static List *GetParentedForeignKeyRefs(Relation partition);
 static void ATDetachCheckNoForeignKeyRefs(Relation partition);
 static char GetAttributeCompression(Oid atttypid, char *compression);
+static ObjectAddress ATExecDropUnexpanded(Relation rel, const char *colName,
+									  LOCKMODE lockmode);
+static ObjectAddress ATExecSetUnexpanded(Relation rel, const char *colName,
+									  LOCKMODE lockmode);
 
 
 /* ----------------------------------------------------------------
@@ -647,6 +651,7 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	LOCKMODE	parentLockmode;
 	const char *accessMethod = NULL;
 	Oid			accessMethodId = InvalidOid;
+	bool	   has_visible_col = false;
 
 	/*
 	 * Truncate relname to appropriate length (probably a waste of time, as
@@ -897,10 +902,24 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 		if (colDef->generated)
 			attr->attgenerated = colDef->generated;
 
+		if (colDef->is_unexpanded)
+			attr->attisunexpanded = true;
+		else
+			has_visible_col = true;
+
 		if (colDef->compression)
 			attr->attcompression = GetAttributeCompression(attr->atttypid,
 														   colDef->compression);
 	}
+
+	/*
+	 * Verify that we have at least one visible column
+	 * when there is hidden ones
+	 */
+	if (attnum > 0 && !has_visible_col)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("a table must have at least one visible column")));
 
 	/*
 	 * If the statement hasn't specified an access method, but we're defining
@@ -2340,6 +2359,7 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 					coldef->cooked_default = restdef->cooked_default;
 					coldef->constraints = restdef->constraints;
 					coldef->is_from_type = false;
+					coldef->is_unexpanded = restdef->is_unexpanded;
 					schema = list_delete_nth_cell(schema, restpos);
 				}
 				else
@@ -2565,6 +2585,8 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 							(errcode(ERRCODE_DATATYPE_MISMATCH),
 							 errmsg("inherited column \"%s\" has a generation conflict",
 									attributeName)));
+				/* Merge of UNEXPANDED attribute = OR 'em together */
+				def->is_unexpanded |= attribute->attisunexpanded;
 			}
 			else
 			{
@@ -2592,6 +2614,7 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 						pstrdup(GetCompressionMethodName(attribute->attcompression));
 				else
 					def->compression = NULL;
+				def->is_unexpanded = attribute->attisunexpanded;
 				inhSchema = lappend(inhSchema, def);
 				newattmap->attnums[parent_attno - 1] = ++child_attno;
 			}
@@ -2857,6 +2880,8 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 				def->is_local = true;
 				/* Merge of NOT NULL constraints = OR 'em together */
 				def->is_not_null |= newdef->is_not_null;
+				/* Merge of UNEXPANDED attribute = OR 'em together */
+				def->is_unexpanded |= newdef->is_unexpanded;
 
 				/*
 				 * Check for conflicts related to generated columns.
@@ -2951,6 +2976,7 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 				{
 					found = true;
 					coldef->is_not_null |= restdef->is_not_null;
+					coldef->is_unexpanded |= restdef->is_unexpanded;
 
 					/*
 					 * Override the parent's default value for this column
@@ -4207,6 +4233,8 @@ AlterTableGetLockLevel(List *cmds)
 			case AT_SetIdentity:
 			case AT_DropExpression:
 			case AT_SetCompression:
+			case AT_DropUnexpanded:
+			case AT_SetUnexpanded:
 				cmd_lockmode = AccessExclusiveLock;
 				break;
 
@@ -4492,6 +4520,16 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 			break;
 		case AT_DropIdentity:
 			ATSimplePermissions(cmd->subtype, rel, ATT_TABLE | ATT_VIEW | ATT_FOREIGN_TABLE);
+			/* This command never recurses */
+			pass = AT_PASS_DROP;
+			break;
+		case AT_SetUnexpanded:
+			ATSimplePermissions(cmd->subtype, rel, ATT_TABLE);
+			/* No command-specific prep needed */
+			pass = AT_PASS_MISC;
+			break;
+		case AT_DropUnexpanded:
+			ATSimplePermissions(cmd->subtype, rel, ATT_TABLE);
 			/* This command never recurses */
 			pass = AT_PASS_DROP;
 			break;
@@ -4892,6 +4930,12 @@ ATExecCmd(List **wqueue, AlteredTableInfo *tab,
 			break;
 		case AT_DropIdentity:
 			address = ATExecDropIdentity(rel, cmd->name, cmd->missing_ok, lockmode);
+			break;
+		case AT_SetUnexpanded:		/* ALTER COLUMN SET UNEXPANDED  */
+			address = ATExecSetUnexpanded(rel, cmd->name, lockmode);
+			break;
+		case AT_DropUnexpanded:		/* ALTER COLUMN DROP UNEXPANDED  */
+			address = ATExecDropUnexpanded(rel, cmd->name, lockmode);
 			break;
 		case AT_DropNotNull:	/* ALTER COLUMN DROP NOT NULL */
 			address = ATExecDropNotNull(rel, cmd->name, lockmode);
@@ -6135,6 +6179,10 @@ alter_table_type_to_string(AlterTableType cmdtype)
 			return "ALTER COLUMN ... DROP IDENTITY";
 		case AT_ReAddStatistics:
 			return NULL;		/* not real grammar */
+		case AT_DropUnexpanded:
+			return "ALTER COLUMN ... DROP UNEXPANDED";
+		case AT_SetUnexpanded:
+			return "ALTER COLUMN ... SET UNEXPANDED";
 	}
 
 	return NULL;
@@ -6756,6 +6804,7 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	attribute.attisdropped = false;
 	attribute.attislocal = colDef->is_local;
 	attribute.attinhcount = colDef->inhcount;
+	attribute.attisunexpanded = colDef->is_unexpanded;
 	attribute.attcollation = collOid;
 
 	/* attribute.attacl is handled by InsertPgAttributeTuples() */
@@ -7099,6 +7148,143 @@ ATPrepDropNotNull(Relation rel, bool recurse, bool recursing)
 					 errmsg("cannot remove constraint from only the partitioned table when partitions exist"),
 					 errhint("Do not specify the ONLY keyword.")));
 	}
+}
+
+/*
+ * Return the address of the modified column.  If the column was already
+ * part of star expansion, InvalidObjectAddress is returned.
+ */
+static ObjectAddress
+ATExecDropUnexpanded(Relation rel, const char *colName, LOCKMODE lockmode)
+{
+	HeapTuple	tuple;
+	Form_pg_attribute attTup;
+	AttrNumber	attnum;
+	Relation	attr_rel;
+	ObjectAddress address;
+
+	/*
+	 * lookup the attribute
+	 */
+	attr_rel = table_open(AttributeRelationId, RowExclusiveLock);
+
+	tuple = SearchSysCacheCopyAttName(RelationGetRelid(rel), colName);
+	if (!HeapTupleIsValid(tuple))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_COLUMN),
+				 errmsg("column \"%s\" of relation \"%s\" does not exist",
+						colName, RelationGetRelationName(rel))));
+	attTup = (Form_pg_attribute) GETSTRUCT(tuple);
+	attnum = attTup->attnum;
+
+	/* Prevent them from altering a system attribute */
+	if (attnum <= 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot alter system column \"%s\"",
+						colName)));
+
+	/* If rel is partition, shouldn't drop UNEXPANDED if parent has the same */
+	if (rel->rd_rel->relispartition)
+	{
+		Oid		parentId = get_partition_parent(RelationGetRelid(rel), false);
+		Relation	parent = table_open(parentId, AccessShareLock);
+		TupleDesc	tupDesc = RelationGetDescr(parent);
+		AttrNumber	parent_attnum;
+
+		parent_attnum = get_attnum(parentId, colName);
+		if (TupleDescAttr(tupDesc, parent_attnum - 1)->attisunexpanded)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+					 errmsg("column \"%s\" is marked UNEXPANDED in parent table",
+							colName)));
+		table_close(parent, AccessShareLock);
+	}
+
+	/*
+	 * Okay, actually perform the catalog change ... if needed
+	 */
+	if (attTup->attisunexpanded)
+	{
+		attTup->attisunexpanded = false;
+
+		CatalogTupleUpdate(attr_rel, &tuple->t_self, tuple);
+
+		ObjectAddressSubSet(address, RelationRelationId,
+							RelationGetRelid(rel), attnum);
+	}
+	else
+		address = InvalidObjectAddress;
+
+	InvokeObjectPostAlterHook(RelationRelationId,
+							  RelationGetRelid(rel), attnum);
+
+	table_close(attr_rel, RowExclusiveLock);
+
+	return address;
+}
+
+/*
+ * Return the address of the modified column.  If the column was already
+ * UNEXPANDED, InvalidObjectAddress is returned.
+ */
+static ObjectAddress
+ATExecSetUnexpanded(Relation rel, const char *colName, LOCKMODE lockmode)
+{
+	HeapTuple	tuple;
+	AttrNumber	attnum;
+	Relation	attr_rel;
+	ObjectAddress   address;
+
+	if (rel->rd_rel->reloftype)
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("cannot set UNEXPANDED attribute on a column of a typed table")));
+
+	attr_rel = table_open(AttributeRelationId, RowExclusiveLock);
+
+	/*
+	 * lookup the attribute
+	 */
+	tuple = SearchSysCacheCopyAttName(RelationGetRelid(rel), colName);
+
+	if (!HeapTupleIsValid(tuple))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_COLUMN),
+				 errmsg("column \"%s\" of relation \"%s\" does not exist",
+						colName, RelationGetRelationName(rel))));
+
+	attnum = ((Form_pg_attribute) GETSTRUCT(tuple))->attnum;
+
+	/* Prevent them from altering a system attribute */
+	if (attnum <= 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot alter system column \"%s\"",
+						colName)));
+
+	/*
+	 * Okay, actually perform the catalog change ... if needed
+	 */
+	if (!((Form_pg_attribute) GETSTRUCT(tuple))->attisunexpanded)
+	{
+		((Form_pg_attribute) GETSTRUCT(tuple))->attisunexpanded = true;
+
+		/* Now we can update the catalog */
+		CatalogTupleUpdate(attr_rel, &tuple->t_self, tuple);
+
+		ObjectAddressSubSet(address, RelationRelationId,
+							RelationGetRelid(rel), attnum);
+	}
+	else
+		address = InvalidObjectAddress;
+
+	InvokeObjectPostAlterHook(RelationRelationId,
+							RelationGetRelid(rel), attnum);
+
+	table_close(attr_rel, RowExclusiveLock);
+
+	return address;
 }
 
 /*

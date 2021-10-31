@@ -27,6 +27,8 @@ ALTER INDEX <replaceable class="parameter">name</replaceable> ATTACH PARTITION <
 ALTER INDEX <replaceable class="parameter">name</replaceable> [ NO ] DEPENDS ON EXTENSION <replaceable class="parameter">extension_name</replaceable>
 ALTER INDEX [ IF EXISTS ] <replaceable class="parameter">name</replaceable> SET ( <replaceable class="parameter">storage_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] )
 ALTER INDEX [ IF EXISTS ] <replaceable class="parameter">name</replaceable> RESET ( <replaceable class="parameter">storage_parameter</replaceable> [, ... ] )
+ALTER INDEX [ IF EXISTS ] <replaceable class="parameter">name</replaceable> ALTER [ COLUMN ] <replaceable class="parameter">column_number</replaceable> SET ( <replaceable class="parameter">opclass_parameter</replaceable> = <replaceable class="parameter">value</replaceable> [, ... ] )
+ALTER INDEX [ IF EXISTS ] <replaceable class="parameter">name</replaceable> ALTER [ COLUMN ] <replaceable class="parameter">column_number</replaceable> RESET ( <replaceable class="parameter">opclass_parameter</replaceable> [, ... ] )
 ALTER INDEX [ IF EXISTS ] <replaceable class="parameter">name</replaceable> ALTER [ COLUMN ] <replaceable class="parameter">column_number</replaceable>
     SET STATISTICS <replaceable class="parameter">integer</replaceable>
 ALTER INDEX ALL IN TABLESPACE <replaceable class="parameter">name</replaceable> [ OWNED BY <replaceable class="parameter">role_name</replaceable> [, ... ] ]
@@ -140,6 +142,18 @@ ALTER INDEX ALL IN TABLESPACE <replaceable class="parameter">name</replaceable> 
    </varlistentry>
 
    <varlistentry>
+    <term><literal>ALTER [ COLUMN ] <replaceable class="parameter">column_number</replaceable> SET ( <replaceable class="parameter">opclass_parameter</replaceable> = <replaceable class="parameter">value</replaceable> [, ... ] )</literal></term>
+    <term><literal>ALTER [ COLUMN ] <replaceable class="parameter">column_number</replaceable> RESET ( <replaceable class="parameter">opclass_parameter</replaceable> [, ... ] )</literal></term>
+    <listitem>
+     <para>
+      This form sets or resets per-attribute operator class parameters.
+      Since expressions lack a unique name, we refer to them using the
+      ordinal number of the index column.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><literal>ALTER [ COLUMN ] <replaceable class="parameter">column_number</replaceable> SET STATISTICS <replaceable class="parameter">integer</replaceable></literal></term>
     <listitem>
      <para>
@@ -203,6 +217,17 @@ ALTER INDEX ALL IN TABLESPACE <replaceable class="parameter">name</replaceable> 
       <listitem>
        <para>
         The new name for the index.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><replaceable class="parameter">opclass_parameter</replaceable></term>
+      <listitem>
+       <para>
+        The name of an operator class parameter. See
+        <xref linkend="indexes-opclass"/> and <xref linkend="xindex"/>
+        for details.      
        </para>
       </listitem>
      </varlistentry>

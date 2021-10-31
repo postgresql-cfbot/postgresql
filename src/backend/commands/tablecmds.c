@@ -447,7 +447,8 @@ static ObjectAddress ATExecDropExpression(Relation rel, const char *colName, boo
 static ObjectAddress ATExecSetStatistics(Relation rel, const char *colName, int16 colNum,
 										 Node *newValue, LOCKMODE lockmode);
 static ObjectAddress ATExecSetOptions(Relation rel, const char *colName,
-									  Node *options, bool isReset, LOCKMODE lockmode);
+									  int16 colNum, Node *options,
+									  bool isReset, LOCKMODE lockmode);
 static ObjectAddress ATExecSetStorage(Relation rel, const char *colName,
 									  Node *newValue, LOCKMODE lockmode);
 static void ATPrepDropColumn(List **wqueue, Relation rel, bool recurse, bool recursing,
@@ -4528,7 +4529,7 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 			break;
 		case AT_SetOptions:		/* ALTER COLUMN SET ( options ) */
 		case AT_ResetOptions:	/* ALTER COLUMN RESET ( options ) */
-			ATSimplePermissions(cmd->subtype, rel, ATT_TABLE | ATT_MATVIEW | ATT_FOREIGN_TABLE);
+			ATSimplePermissions(cmd->subtype, rel, ATT_TABLE | ATT_MATVIEW | ATT_INDEX | ATT_PARTITIONED_INDEX | ATT_FOREIGN_TABLE);
 			/* This command never recurses */
 			pass = AT_PASS_MISC;
 			break;
@@ -4909,10 +4910,10 @@ ATExecCmd(List **wqueue, AlteredTableInfo *tab,
 			address = ATExecSetStatistics(rel, cmd->name, cmd->num, cmd->def, lockmode);
 			break;
 		case AT_SetOptions:		/* ALTER COLUMN SET ( options ) */
-			address = ATExecSetOptions(rel, cmd->name, cmd->def, false, lockmode);
+			address = ATExecSetOptions(rel, cmd->name, cmd->num, cmd->def, false, lockmode);
 			break;
 		case AT_ResetOptions:	/* ALTER COLUMN RESET ( options ) */
-			address = ATExecSetOptions(rel, cmd->name, cmd->def, true, lockmode);
+			address = ATExecSetOptions(rel, cmd->name, cmd->num, cmd->def, true, lockmode);
 			break;
 		case AT_SetStorage:		/* ALTER COLUMN SET STORAGE */
 			address = ATExecSetStorage(rel, cmd->name, cmd->def, lockmode);
@@ -8059,8 +8060,8 @@ ATExecSetStatistics(Relation rel, const char *colName, int16 colNum, Node *newVa
  * Return value is the address of the modified column
  */
 static ObjectAddress
-ATExecSetOptions(Relation rel, const char *colName, Node *options,
-				 bool isReset, LOCKMODE lockmode)
+ATExecSetOptions(Relation rel, const char *colName, int16 colNum,
+				 Node *options, bool isReset, LOCKMODE lockmode)
 {
 	Relation	attrelation;
 	HeapTuple	tuple,
@@ -8075,15 +8076,40 @@ ATExecSetOptions(Relation rel, const char *colName, Node *options,
 	bool		repl_null[Natts_pg_attribute];
 	bool		repl_repl[Natts_pg_attribute];
 
+	/*
+	 * We allow referencing columns by numbers only for indexes, since table
+	 * column numbers could contain gaps if columns are later dropped.
+	 */
+	if (rel->rd_rel->relkind != RELKIND_INDEX &&
+		rel->rd_rel->relkind != RELKIND_PARTITIONED_INDEX &&
+		!colName)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot refer to non-index column by number")));
+
 	attrelation = table_open(AttributeRelationId, RowExclusiveLock);
 
-	tuple = SearchSysCacheAttName(RelationGetRelid(rel), colName);
+	if (colName)
+	{
+		tuple = SearchSysCacheAttName(RelationGetRelid(rel), colName);
 
-	if (!HeapTupleIsValid(tuple))
-		ereport(ERROR,
-				(errcode(ERRCODE_UNDEFINED_COLUMN),
-				 errmsg("column \"%s\" of relation \"%s\" does not exist",
-						colName, RelationGetRelationName(rel))));
+		if (!HeapTupleIsValid(tuple))
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_COLUMN),
+					 errmsg("column \"%s\" of relation \"%s\" does not exist",
+							colName, RelationGetRelationName(rel))));
+	}
+	else
+	{
+		tuple = SearchSysCacheAttNum(RelationGetRelid(rel), colNum);
+
+		if (!HeapTupleIsValid(tuple))
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_COLUMN),
+					 errmsg("column number %d of relation \"%s\" does not exist",
+							colNum, RelationGetRelationName(rel))));
+	}
+
 	attrtuple = (Form_pg_attribute) GETSTRUCT(tuple);
 
 	attnum = attrtuple->attnum;
@@ -8100,7 +8126,11 @@ ATExecSetOptions(Relation rel, const char *colName, Node *options,
 									 castNode(List, options), NULL, NULL,
 									 false, isReset);
 	/* Validate new options */
-	(void) attribute_reloptions(newOptions, true);
+	if (rel->rd_rel->relkind == RELKIND_INDEX ||
+		rel->rd_rel->relkind == RELKIND_PARTITIONED_INDEX)
+		(void) index_opclass_options(rel, attnum, newOptions, true);
+	else
+		(void) attribute_reloptions(newOptions, true);
 
 	/* Build new tuple. */
 	memset(repl_null, false, sizeof(repl_null));

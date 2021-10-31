@@ -174,7 +174,8 @@ INSERT INTO delete_test_table SELECT i, 1, 2, 3 FROM generate_series(1,1000) i;
 create index on btree_tall_tbl (id int4_ops(foo=1));
 
 -- Test case of ALTER INDEX with abuse of column names for indexes.
--- This grammar is not officially supported, but the parser allows it.
+-- This grammar is allowed by the parser, but table parameters are not
+-- supported by indexes.
 CREATE INDEX btree_tall_idx2 ON btree_tall_tbl (id);
 ALTER INDEX btree_tall_idx2 ALTER COLUMN id SET (n_distinct=100);
 DROP INDEX btree_tall_idx2;

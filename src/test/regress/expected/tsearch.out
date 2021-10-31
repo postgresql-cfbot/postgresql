@@ -536,6 +536,28 @@ Indexes:
     "wowidx" gist (a)
     "wowidx2" gist (a tsvector_ops (siglen='1'))
 
+ALTER INDEX wowidx2 ALTER COLUMN 1 RESET (siglen);
+\d test_tsvector
+            Table "public.test_tsvector"
+ Column |   Type   | Collation | Nullable | Default 
+--------+----------+-----------+----------+---------
+ t      | text     |           |          | 
+ a      | tsvector |           |          | 
+Indexes:
+    "wowidx" gist (a)
+    "wowidx2" gist (a)
+
+ALTER INDEX wowidx2 ALTER COLUMN 1 SET (siglen=2);
+\d test_tsvector
+            Table "public.test_tsvector"
+ Column |   Type   | Collation | Nullable | Default 
+--------+----------+-----------+----------+---------
+ t      | text     |           |          | 
+ a      | tsvector |           |          | 
+Indexes:
+    "wowidx" gist (a)
+    "wowidx2" gist (a tsvector_ops (siglen='2'))
+
 DROP INDEX wowidx;
 EXPLAIN (costs off) SELECT count(*) FROM test_tsvector WHERE a @@ 'wr|qh';
                          QUERY PLAN                          

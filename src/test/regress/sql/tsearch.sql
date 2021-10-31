@@ -140,6 +140,14 @@ CREATE INDEX wowidx2 ON test_tsvector USING gist (a tsvector_ops(siglen=1));
 
 \d test_tsvector
 
+ALTER INDEX wowidx2 ALTER COLUMN 1 RESET (siglen);
+
+\d test_tsvector
+
+ALTER INDEX wowidx2 ALTER COLUMN 1 SET (siglen=2);
+
+\d test_tsvector
+
 DROP INDEX wowidx;
 
 EXPLAIN (costs off) SELECT count(*) FROM test_tsvector WHERE a @@ 'wr|qh';

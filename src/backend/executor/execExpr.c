@@ -3138,6 +3138,8 @@ ExecInitCoerceToDomain(ExprEvalStep *scratch, CoerceToDomain *ctest,
 {
 	DomainConstraintRef *constraint_ref;
 	ListCell   *l;
+	Datum	   *domainval = NULL;
+	bool	   *domainnull = NULL;
 
 	scratch->d.domaincheck.resulttype = ctest->resulttype;
 	/* we'll allocate workspace only if needed */
@@ -3183,8 +3185,6 @@ ExecInitCoerceToDomain(ExprEvalStep *scratch, CoerceToDomain *ctest,
 	foreach(l, constraint_ref->constraints)
 	{
 		DomainConstraintState *con = (DomainConstraintState *) lfirst(l);
-		Datum	   *domainval = NULL;
-		bool	   *domainnull = NULL;
 		Datum	   *save_innermost_domainval;
 		bool	   *save_innermost_domainnull;
 

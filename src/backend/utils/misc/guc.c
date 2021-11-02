@@ -966,11 +966,21 @@ static const unit_conversion time_unit_conversion_table[] =
  *	  variable_is_guc_list_quote() in src/bin/pg_dump/dumputils.c.
  */
 
+bool listen_transaction_id = false;
 
 /******** option records follow ********/
 
 static struct config_bool ConfigureNamesBool[] =
 {
+	{
+		{"listen_transaction_id", PGC_USERSET, UNGROUPED,
+			gettext_noop("Emit top-level transaction ID on transaction start."),
+			NULL
+		},
+		&listen_transaction_id,
+		false,
+		NULL, NULL, NULL
+	},
 	{
 		{"enable_seqscan", PGC_USERSET, QUERY_TUNING_METHOD,
 			gettext_noop("Enables the planner's use of sequential-scan plans."),

@@ -730,9 +730,7 @@ sub fetchTests
 			# configuration of the build
 
 			my $cftests =
-			  $config->{openssl}
-			  ? GetTests("OSSL_TESTS", $m)
-			  : GetTests("INT_TESTS",  $m);
+			  GetTests("OSSL_TESTS", $m);
 			my $pgptests =
 			  $config->{zlib}
 			  ? GetTests("ZLIB_TST",     $m)

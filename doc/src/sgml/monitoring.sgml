@@ -4018,6 +4018,16 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
        deadlocks
       </para></entry>
      </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>confl_logicalslot</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of queries in this database that have been canceled due to
+       logical slots
+      </para></entry>
+     </row>
     </tbody>
    </tgroup>
   </table>

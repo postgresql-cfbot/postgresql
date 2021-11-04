@@ -737,6 +737,7 @@ typedef struct XLogCtlData
 } XLogCtlData;
 
 static XLogCtlData *XLogCtl = NULL;
+XLogCtlCvData *XLogCtlCv = NULL;
 
 /* a private copy of XLogCtl->Insert.WALInsertLocks, for convenience */
 static WALInsertLockPadded *WALInsertLocks = NULL;
@@ -5135,6 +5136,17 @@ LocalProcessControlFile(bool reset)
 }
 
 /*
+ * Get the wal_level from the control file. For a standby, this value should be
+ * considered as its active wal_level, because it may be different from what
+ * was originally configured on standby.
+ */
+WalLevel
+GetActiveWalLevelOnStandby(void)
+{
+	return ControlFile->wal_level;
+}
+
+/*
  * Initialization of shared memory for XLOG
  */
 Size
@@ -5182,7 +5194,8 @@ void
 XLOGShmemInit(void)
 {
 	bool		foundCFile,
-				foundXLog;
+				foundXLog,
+				foundXLogCv;
 	char	   *allocptr;
 	int			i;
 	ControlFileData *localControlFile;
@@ -5207,14 +5220,17 @@ XLOGShmemInit(void)
 	XLogCtl = (XLogCtlData *)
 		ShmemInitStruct("XLOG Ctl", XLOGShmemSize(), &foundXLog);
 
+	XLogCtlCv = (XLogCtlCvData *)
+		ShmemInitStruct("XLOG Cv Ctl", sizeof(XLogCtlCvData), &foundXLogCv);
+
 	localControlFile = ControlFile;
 	ControlFile = (ControlFileData *)
 		ShmemInitStruct("Control File", sizeof(ControlFileData), &foundCFile);
 
-	if (foundCFile || foundXLog)
+	if (foundCFile || foundXLog || foundXLogCv)
 	{
-		/* both should be present or neither */
-		Assert(foundCFile && foundXLog);
+		/* All should be present or neither */
+		Assert(foundCFile && foundXLog && foundXLogCv);
 
 		/* Initialize local copy of WALInsertLocks */
 		WALInsertLocks = XLogCtl->Insert.WALInsertLocks;
@@ -5224,6 +5240,7 @@ XLOGShmemInit(void)
 		return;
 	}
 	memset(XLogCtl, 0, sizeof(XLogCtlData));
+	memset(XLogCtlCv, 0, sizeof(XLogCtlCvData));
 
 	/*
 	 * Already have read control file locally, unless in bootstrap mode. Move
@@ -5285,6 +5302,7 @@ XLOGShmemInit(void)
 	SpinLockInit(&XLogCtl->ulsn_lck);
 	InitSharedLatch(&XLogCtl->recoveryWakeupLatch);
 	ConditionVariableInit(&XLogCtl->recoveryNotPausedCV);
+	ConditionVariableInit(&XLogCtlCv->replayedCV);
 }
 
 /*
@@ -7685,6 +7703,11 @@ StartupXLOG(void)
 				SpinLockRelease(&XLogCtl->info_lck);
 
 				/*
+				 * wake up walsender(s) used by logical decoding on standby.
+				 */
+				ConditionVariableBroadcast(&XLogCtlCv->replayedCV);
+
+				/*
 				 * If rm_redo called XLogRequestWalReceiverReply, then we wake
 				 * up the receiver so that it notices the updated
 				 * lastReplayedEndRecPtr and sends a reply to the primary.
@@ -9798,7 +9821,7 @@ CreateRestartPoint(int flags)
 	 * whichever is later.
 	 */
 	receivePtr = GetWalRcvFlushRecPtr(NULL, NULL);
-	replayPtr = GetXLogReplayRecPtr(&replayTLI);
+	replayPtr = GetXLogReplayRecPtr(&replayTLI, false);
 	endptr = (receivePtr < replayPtr) ? replayPtr : receivePtr;
 	KeepLogSeg(endptr, &_logSegNo);
 	if (InvalidateObsoleteReplicationSlots(_logSegNo))
@@ -10587,6 +10610,19 @@ xlog_redo(XLogReaderState *record)
 
 		/* Update our copy of the parameters in pg_control */
 		memcpy(&xlrec, XLogRecGetData(record), sizeof(xl_parameter_change));
+
+		/*
+		 * Invalidate logical slots if we are in hot standby and the primary does not
+		 * have a WAL level sufficient for logical decoding. No need to search
+		 * for potentially conflicting logically slots if standby is running
+		 * with wal_level lower than logical, because in that case, we would
+		 * have either disallowed creation of logical slots or invalidated existing
+		 * ones.
+		 */
+		if (InRecovery && InHotStandby &&
+			xlrec.wal_level < WAL_LEVEL_LOGICAL &&
+			wal_level >= WAL_LEVEL_LOGICAL)
+			InvalidateConflictingLogicalReplicationSlots(InvalidOid,InvalidTransactionId);
 
 		LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
 		ControlFile->MaxConnections = xlrec.MaxConnections;
@@ -11950,7 +11986,7 @@ register_persistent_abort_backup_handler(void)
  * Exported to allow WALReceiver to read the pointer directly.
  */
 XLogRecPtr
-GetXLogReplayRecPtr(TimeLineID *replayTLI)
+GetXLogReplayRecPtr(TimeLineID *replayTLI, bool avoid_header)
 {
 	XLogRecPtr	recptr;
 	TimeLineID	tli;
@@ -11962,6 +11998,24 @@ GetXLogReplayRecPtr(TimeLineID *replayTLI)
 
 	if (replayTLI)
 		*replayTLI = tli;
+
+	/*
+	 * Replay pointer may point one past the end of the record. If that
+	 * is a XLOG page boundary, it will not be a valid LSN for the
+	 * start of a record, so bump it up past the page header.
+	 */
+	if (avoid_header && !XRecOffIsValid(recptr))
+	{
+		if (recptr % XLOG_BLCKSZ != 0)
+			elog(ERROR, "invalid replay pointer");
+
+		/* For the first page of a segment file, it's a long header */
+		if (XLogSegmentOffset(recptr, wal_segment_size) == 0)
+			recptr += SizeOfXLogLongPHD;
+		else
+			recptr += SizeOfXLogShortPHD;
+	}
+
 	return recptr;
 }
 

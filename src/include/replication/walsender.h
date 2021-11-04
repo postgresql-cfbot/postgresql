@@ -13,6 +13,7 @@
 #define _WALSENDER_H
 
 #include <signal.h>
+#include "storage/condition_variable.h"
 
 /*
  * What to do with a snapshot in create replication slot command.
@@ -47,6 +48,17 @@ extern void WalSndInitStopping(void);
 extern void WalSndWaitStopping(void);
 extern void HandleWalSndInitStopping(void);
 extern void WalSndRqstFileReload(void);
+
+/*
+ * shared-memory state for Condition Variable(s)
+ * between the startup process and the walsender.
+ */
+typedef struct XLogCtlCvData
+{
+	ConditionVariable replayedCV;
+} XLogCtlCvData;
+
+extern XLogCtlCvData *XLogCtlCv;
 
 /*
  * Remember that we want to wakeup walsenders later

@@ -22,6 +22,7 @@ typedef enum
 /* Types of compression supported */
 typedef enum
 {
+	COMPRESSION_LZ4,
 	COMPRESSION_GZIP,
 	COMPRESSION_NONE
 } WalCompressionMethod;

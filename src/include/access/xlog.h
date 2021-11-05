@@ -91,6 +91,12 @@ extern char *PrimarySlotName;
 extern bool wal_receiver_create_temp_slot;
 extern bool track_wal_io_timing;
 
+#ifdef USE_LIBPMEM
+extern bool wal_pmem_map;
+#else
+#define wal_pmem_map false
+#endif
+
 /* indirectly set via GUC system */
 extern TransactionId recoveryTargetXid;
 extern char *recovery_target_time_string;

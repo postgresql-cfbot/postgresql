@@ -324,6 +324,9 @@ extern XLogRecPtr RequestXLogSwitch(bool mark_unimportant);
 
 extern void GetOldestRestartPoint(XLogRecPtr *oldrecptr, TimeLineID *oldtli);
 
+extern bool InstallXLogFileSegment(XLogSegNo *segno, char *tmppath,
+								   bool find_free, XLogSegNo max_segno);
+
 /*
  * Exported for the functions in timeline.c and xlogarchive.c.  Only valid
  * in the startup process.

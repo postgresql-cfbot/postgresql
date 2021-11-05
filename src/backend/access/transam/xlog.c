@@ -35,6 +35,7 @@
 #include "access/xlog_internal.h"
 #include "access/xlogarchive.h"
 #include "access/xloginsert.h"
+#include "access/xlogpmem.h"
 #include "access/xlogreader.h"
 #include "access/xlogutils.h"
 #include "catalog/catversion.h"
@@ -112,6 +113,10 @@ int			CommitSiblings = 5; /* # concurrent xacts needed to sleep */
 int			wal_retrieve_retry_interval = 5000;
 int			max_slot_wal_keep_size_mb = -1;
 bool		track_wal_io_timing = false;
+
+#ifdef USE_LIBPMEM
+bool		wal_pmem_map = false;
+#endif
 
 #ifdef WAL_DEBUG
 bool		XLOG_DEBUG = false;
@@ -916,8 +921,6 @@ static XLogRecPtr XLogGetReplicationSlotMinimumLSN(void);
 static void AdvanceXLInsertBuffer(XLogRecPtr upto, bool opportunistic);
 static bool XLogCheckpointNeeded(XLogSegNo new_segno);
 static void XLogWrite(XLogwrtRqst WriteRqst, bool flexible);
-static bool InstallXLogFileSegment(XLogSegNo *segno, char *tmppath,
-								   bool find_free, XLogSegNo max_segno);
 static int	XLogFileRead(XLogSegNo segno, int emode, TimeLineID tli,
 						 XLogSource source, bool notfoundOk);
 static int	XLogFileReadAnyTLI(XLogSegNo segno, int emode, XLogSource source);
@@ -1921,6 +1924,23 @@ GetXLogBuffer(XLogRecPtr ptr)
 	 */
 	if (ptr / XLOG_BLCKSZ == cachedPage)
 	{
+		/*
+		 * Ensure WAL mappings before assersion.
+		 *
+		 * cachedPos should be recaluculated because it has been probably
+		 * invalidated due to WAL remapping. This should be done even if
+		 * openLogSegNo seems not to change because the address of the
+		 * mapping could have changed (ABA problem).
+		 */
+		if (wal_pmem_map)
+		{
+			endptr = ptr - ptr % XLOG_BLCKSZ + XLOG_BLCKSZ;
+			openLogSegNo = PmemXLogEnsurePrevMapped(endptr);
+			cachedPos = PmemXLogGetBufferPages() +
+						(Size) XLogSegmentOffset(endptr - XLOG_BLCKSZ,
+												 wal_segment_size);
+		}
+
 		Assert(((XLogPageHeader) cachedPos)->xlp_magic == XLOG_PAGE_MAGIC);
 		Assert(((XLogPageHeader) cachedPos)->xlp_pageaddr == ptr - (ptr % XLOG_BLCKSZ));
 		return cachedPos + ptr % XLOG_BLCKSZ;
@@ -2004,7 +2024,15 @@ GetXLogBuffer(XLogRecPtr ptr)
 	 * offset within the page.
 	 */
 	cachedPage = ptr / XLOG_BLCKSZ;
-	cachedPos = XLogCtl->pages + idx * (Size) XLOG_BLCKSZ;
+	if (wal_pmem_map)
+	{
+		openLogSegNo = PmemXLogEnsurePrevMapped(endptr);
+		cachedPos = PmemXLogGetBufferPages() +
+					(Size) XLogSegmentOffset(endptr - XLOG_BLCKSZ,
+											 wal_segment_size);
+	}
+	else
+		cachedPos = XLogCtl->pages + idx * (Size) XLOG_BLCKSZ;
 
 	Assert(((XLogPageHeader) cachedPos)->xlp_magic == XLOG_PAGE_MAGIC);
 	Assert(((XLogPageHeader) cachedPos)->xlp_pageaddr == ptr - (ptr % XLOG_BLCKSZ));
@@ -2238,7 +2266,15 @@ AdvanceXLInsertBuffer(XLogRecPtr upto, bool opportunistic)
 
 		Assert(XLogRecPtrToBufIdx(NewPageBeginPtr) == nextidx);
 
-		NewPage = (XLogPageHeader) (XLogCtl->pages + nextidx * (Size) XLOG_BLCKSZ);
+		if (wal_pmem_map)
+		{
+			openLogSegNo = PmemXLogEnsurePrevMapped(NewPageEndPtr);
+			NewPage = (XLogPageHeader)
+				(PmemXLogGetBufferPages() +
+				 (Size) XLogSegmentOffset(NewPageBeginPtr, wal_segment_size));
+		}
+		else
+			NewPage = (XLogPageHeader) (XLogCtl->pages + nextidx * (Size) XLOG_BLCKSZ);
 
 		/*
 		 * Be sure to re-zero the buffer so that bytes beyond what we've
@@ -2457,6 +2493,8 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 	int			npages;
 	int			startidx;
 	uint32		startoffset;
+	bool		isfirstpage;
+	XLogRecPtr	startpageptr;
 
 	/* We should always be inside a critical section here */
 	Assert(CritSectionCount > 0);
@@ -2478,6 +2516,10 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 	npages = 0;
 	startidx = 0;
 	startoffset = 0;
+
+	/* Those are used actually only if wal_pmem_map=true */
+	isfirstpage = true;
+	startpageptr = 0;
 
 	/*
 	 * Within the loop, curridx is the cache block index of the page to
@@ -2504,31 +2546,34 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 		LogwrtResult.Write = EndPtr;
 		ispartialpage = WriteRqst.Write < LogwrtResult.Write;
 
-		if (!XLByteInPrevSeg(LogwrtResult.Write, openLogSegNo,
-							 wal_segment_size))
+		if (!wal_pmem_map)
 		{
-			/*
-			 * Switch to new logfile segment.  We cannot have any pending
-			 * pages here (since we dump what we have at segment end).
-			 */
-			Assert(npages == 0);
-			if (openLogFile >= 0)
-				XLogFileClose();
-			XLByteToPrevSeg(LogwrtResult.Write, openLogSegNo,
-							wal_segment_size);
+			if (!XLByteInPrevSeg(LogwrtResult.Write, openLogSegNo,
+								 wal_segment_size))
+			{
+				/*
+				 * Switch to new logfile segment.  We cannot have any pending
+				 * pages here (since we dump what we have at segment end).
+				 */
+				Assert(npages == 0);
+				if (openLogFile >= 0)
+					XLogFileClose();
+				XLByteToPrevSeg(LogwrtResult.Write, openLogSegNo,
+								wal_segment_size);
 
-			/* create/use new log file */
-			openLogFile = XLogFileInit(openLogSegNo);
-			ReserveExternalFD();
-		}
+				/* create/use new log file */
+				openLogFile = XLogFileInit(openLogSegNo);
+				ReserveExternalFD();
+			}
 
-		/* Make sure we have the current logfile open */
-		if (openLogFile < 0)
-		{
-			XLByteToPrevSeg(LogwrtResult.Write, openLogSegNo,
-							wal_segment_size);
-			openLogFile = XLogFileOpen(openLogSegNo);
-			ReserveExternalFD();
+			/* Make sure we have the current logfile open */
+			if (openLogFile < 0)
+			{
+				XLByteToPrevSeg(LogwrtResult.Write, openLogSegNo,
+								wal_segment_size);
+				openLogFile = XLogFileOpen(openLogSegNo);
+				ReserveExternalFD();
+			}
 		}
 
 		/* Add current page to the set of pending pages-to-dump */
@@ -2536,8 +2581,8 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 		{
 			/* first of group */
 			startidx = curridx;
-			startoffset = XLogSegmentOffset(LogwrtResult.Write - XLOG_BLCKSZ,
-											wal_segment_size);
+			startpageptr = LogwrtResult.Write - XLOG_BLCKSZ;
+			startoffset = XLogSegmentOffset(startpageptr, wal_segment_size);
 		}
 		npages++;
 
@@ -2575,7 +2620,37 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 					INSTR_TIME_SET_CURRENT(start);
 
 				pgstat_report_wait_start(WAIT_EVENT_WAL_WRITE);
-				written = pg_pwrite(openLogFile, from, nleft, startoffset);
+
+				/*
+				 * If we use a WAL segment file as WAL buffers, we cache-flush
+				 * records on the buffers byte by byte, not page by page. To do
+				 * so, here we fix the range being cache-flushed.
+				 */
+				if (wal_pmem_map)
+				{
+					XLogRecPtr	startbyteptr;
+					XLogRecPtr	endbyteptr;
+
+					startbyteptr = (isfirstpage)
+								 ? XLogCtl->LogwrtResult.Write
+								 : startpageptr;
+
+					endbyteptr = (ispartialpage)
+							   ? WriteRqst.Write
+							   : LogwrtResult.Write;
+
+					/* Now we cache-flush records */
+					openLogSegNo = PmemXLogEnsurePrevMapped(endbyteptr);
+					PmemXLogFlush(startbyteptr, endbyteptr);
+
+					/* Mark the first page is consumed */
+					isfirstpage = false;
+
+					/* Tell all the "pages" have been written successfully */
+					written = nleft;
+				}
+				else
+					written = pg_pwrite(openLogFile, from, nleft, startoffset);
 				pgstat_report_wait_end();
 
 				/*
@@ -2633,7 +2708,10 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 			 */
 			if (finishing_seg)
 			{
-				issue_xlog_fsync(openLogFile, openLogSegNo);
+				if (wal_pmem_map)
+					PmemXLogSync();
+				else
+					issue_xlog_fsync(openLogFile, openLogSegNo);
 
 				/* signal that we need to wakeup walsenders later */
 				WalSndWakeupRequest();
@@ -2684,12 +2762,14 @@ XLogWrite(XLogwrtRqst WriteRqst, bool flexible)
 		LogwrtResult.Flush < LogwrtResult.Write)
 
 	{
+		if (wal_pmem_map)
+			PmemXLogSync();
 		/*
 		 * Could get here without iterating above loop, in which case we might
 		 * have no open file or the wrong one.  However, we do not need to
 		 * fsync more than one file.
 		 */
-		if (sync_method != SYNC_METHOD_OPEN &&
+		else if (sync_method != SYNC_METHOD_OPEN &&
 			sync_method != SYNC_METHOD_OPEN_DSYNC)
 		{
 			if (openLogFile >= 0 &&
@@ -3657,7 +3737,7 @@ XLogFileCopy(XLogSegNo destsegno, TimeLineID srcTLI, XLogSegNo srcsegno,
  * max_segno limit was exceeded, the startup process has disabled this
  * function for now, or an error occurred while renaming the file into place.
  */
-static bool
+bool
 InstallXLogFileSegment(XLogSegNo *segno, char *tmppath,
 					   bool find_free, XLogSegNo max_segno)
 {
@@ -5143,12 +5223,37 @@ XLOGShmemSize(void)
 	Size		size;
 
 	/*
+	 * If we use WAL segment files as WAL buffers, we don't use the given
+	 * value of wal_buffers. Instead, we set it to the value based on the
+	 * min_wal_size and the page size. This should be done before calculating
+	 * the size of xlblocks array.
+	 *
+	 * TODO Do not allow changing min_wal_size by SIGHUP if wal_pmem_map=true.
+	 *
+	 * TODO Move validations to check_hook functions.
+	 */
+	if (wal_pmem_map)
+	{
+		int			npages;
+		char		buf[32];
+
+		if (min_wal_size_mb % (wal_segment_size / (1024 * 1024)) != 0)
+			elog(PANIC, "min_wal_size should be multiple of wal_segment_size when wal_pmem_map=true");
+
+		if (min_wal_size_mb / (XLOG_BLCKSZ / 1024) > INT_MAX / 1024)
+			elog(PANIC, "too many wal buffer pages");
+
+		npages = min_wal_size_mb / (XLOG_BLCKSZ / 1024) * 1024;
+		snprintf(buf, sizeof(buf), "%d", (int) npages);
+		SetConfigOption("wal_buffers", buf, PGC_POSTMASTER, PGC_S_OVERRIDE);
+	}
+	/*
 	 * If the value of wal_buffers is -1, use the preferred auto-tune value.
 	 * This isn't an amazingly clean place to do this, but we must wait till
 	 * NBuffers has received its final value, and must do it before using the
 	 * value of XLOGbuffers to do anything important.
 	 */
-	if (XLOGbuffers == -1)
+	else if (XLOGbuffers == -1)
 	{
 		char		buf[32];
 
@@ -5164,10 +5269,17 @@ XLOGShmemSize(void)
 	size = add_size(size, mul_size(sizeof(WALInsertLockPadded), NUM_XLOGINSERT_LOCKS + 1));
 	/* xlblocks array */
 	size = add_size(size, mul_size(sizeof(XLogRecPtr), XLOGbuffers));
-	/* extra alignment padding for XLOG I/O buffers */
-	size = add_size(size, XLOG_BLCKSZ);
-	/* and the buffers themselves */
-	size = add_size(size, mul_size(XLOG_BLCKSZ, XLOGbuffers));
+
+	/*
+	 * If we use WAL segment files as WAL buffers, we don't need volatile ones.
+	 */
+	if (!wal_pmem_map)
+	{
+		/* extra alignment padding for XLOG I/O buffers */
+		size = add_size(size, XLOG_BLCKSZ);
+		/* and the buffers themselves */
+		size = add_size(size, mul_size(XLOG_BLCKSZ, XLOGbuffers));
+	}
 
 	/*
 	 * Note: we don't count ControlFileData, it comes out of the "slop factor"
@@ -5261,13 +5373,19 @@ XLOGShmemInit(void)
 	}
 
 	/*
-	 * Align the start of the page buffers to a full xlog block size boundary.
-	 * This simplifies some calculations in XLOG insertion. It is also
-	 * required for O_DIRECT.
+	 * If we use WAL segment files as WAL buffers, we don't need volatile ones.
 	 */
-	allocptr = (char *) TYPEALIGN(XLOG_BLCKSZ, allocptr);
-	XLogCtl->pages = allocptr;
-	memset(XLogCtl->pages, 0, (Size) XLOG_BLCKSZ * XLOGbuffers);
+	if (!wal_pmem_map)
+	{
+		/*
+		 * Align the start of the page buffers to a full xlog block size boundary.
+		 * This simplifies some calculations in XLOG insertion. It is also
+		 * required for O_DIRECT.
+		 */
+		allocptr = (char *) TYPEALIGN(XLOG_BLCKSZ, allocptr);
+		XLogCtl->pages = allocptr;
+		memset(XLogCtl->pages, 0, (Size) XLOG_BLCKSZ * XLOGbuffers);
+	}
 
 	/*
 	 * Do basic initialization of XLogCtl shared data. (StartupXLOG will fill
@@ -8017,11 +8135,30 @@ StartupXLOG(void)
 
 		firstIdx = XLogRecPtrToBufIdx(EndOfLog);
 
-		/* Copy the valid part of the last block, and zero the rest */
-		page = &XLogCtl->pages[firstIdx * XLOG_BLCKSZ];
-		len = EndOfLog % XLOG_BLCKSZ;
-		memcpy(page, xlogreader->readBuf, len);
-		memset(page + len, 0, XLOG_BLCKSZ - len);
+		if (wal_pmem_map)
+		{
+			/*
+			 * Keep the valid part of the last block, and zero the rest.
+			 * Note that "len" indicates the size of the valid part.
+			 */
+			openLogSegNo = PmemXLogEnsurePrevMapped(EndOfLog);
+			page = PmemXLogGetBufferPages() +
+				   (Size) XLogSegmentOffset(pageBeginPtr, wal_segment_size);
+			len = EndOfLog % XLOG_BLCKSZ;
+			memset(page + len, 0, XLOG_BLCKSZ - len);
+
+			/* Cache-flush and sync now */
+			PmemXLogFlush(EndOfLog, pageBeginPtr + XLOG_BLCKSZ);
+			PmemXLogSync();
+		}
+		else
+		{
+			/* Copy the valid part of the last block, and zero the rest */
+			page = &XLogCtl->pages[firstIdx * XLOG_BLCKSZ];
+			len = EndOfLog % XLOG_BLCKSZ;
+			memcpy(page, xlogreader->readBuf, len);
+			memset(page + len, 0, XLOG_BLCKSZ - len);
+		}
 
 		XLogCtl->xlblocks[firstIdx] = pageBeginPtr + XLOG_BLCKSZ;
 		XLogCtl->InitializedUpTo = pageBeginPtr + XLOG_BLCKSZ;
@@ -8046,7 +8183,10 @@ StartupXLOG(void)
 	/*
 	 * Preallocate additional log files, if wanted.
 	 */
-	PreallocXlogFiles(EndOfLog);
+	if (wal_pmem_map)
+		AdvanceXLInsertBuffer(InvalidXLogRecPtr, true);
+	else
+		PreallocXlogFiles(EndOfLog);
 
 	/*
 	 * Okay, we're officially UP.

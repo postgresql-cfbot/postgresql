@@ -17,6 +17,9 @@ SELECT count(*) FROM chartmp WHERE a >=  '31b0'::char(32);
 SELECT count(*) FROM chartmp WHERE a >   '31b0'::char(32);
 
 CREATE INDEX charidx ON chartmp USING GIST ( a );
+CREATE INDEX charidx_b ON chartmp USING GIST ( a ) WITH (buffering=on);
+DROP INDEX charidx_b;
+RESET client_min_messages;
 
 SET enable_seqscan=off;
 

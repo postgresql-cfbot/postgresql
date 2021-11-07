@@ -272,9 +272,9 @@ typedef struct ForeignKeyCacheInfo
 	Oid			confrelid;		/* relation referenced by the foreign key */
 	int			nkeys;			/* number of columns in the foreign key */
 	/* these arrays each have nkeys valid entries: */
-	AttrNumber	conkey[INDEX_MAX_KEYS]; /* cols in referencing table */
-	AttrNumber	confkey[INDEX_MAX_KEYS];	/* cols in referenced table */
-	Oid			conpfeqop[INDEX_MAX_KEYS];	/* PK = FK operator OIDs */
+	AttrNumber	conkey[INDEX_MAX_KEYS] pg_node_attr(array_size(nkeys)); /* cols in referencing table */
+	AttrNumber	confkey[INDEX_MAX_KEYS] pg_node_attr(array_size(nkeys));	/* cols in referenced table */
+	Oid			conpfeqop[INDEX_MAX_KEYS] pg_node_attr(array_size(nkeys));	/* PK = FK operator OIDs */
 } ForeignKeyCacheInfo;
 
 

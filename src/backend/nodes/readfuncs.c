@@ -240,6 +240,8 @@ readBitmapset(void)
 	return _readBitmapset();
 }
 
+#include "readfuncs.inc1.c"
+
 /*
  * _readQuery
  */
@@ -291,6 +293,7 @@ _readQuery(void)
 	READ_DONE();
 }
 
+#ifdef OBSOLETE
 /*
  * _readNotifyStmt
  */
@@ -589,6 +592,7 @@ _readVar(void)
 
 	READ_DONE();
 }
+#endif /*OBSOLETE*/
 
 /*
  * _readConst
@@ -615,6 +619,7 @@ _readConst(void)
 	READ_DONE();
 }
 
+#ifdef OBSOLETE
 /*
  * _readParam
  */
@@ -840,6 +845,7 @@ _readScalarArrayOpExpr(void)
 
 	READ_DONE();
 }
+#endif /*OBSOLETE*/
 
 /*
  * _readBoolExpr
@@ -867,6 +873,7 @@ _readBoolExpr(void)
 	READ_DONE();
 }
 
+#ifdef OBSOLETE
 /*
  * _readSubLink
  */
@@ -1421,6 +1428,7 @@ _readAppendRelInfo(void)
 /*
  *	Stuff from parsenodes.h.
  */
+#endif /*OBSOLETE*/
 
 /*
  * _readRangeTblEntry
@@ -1516,6 +1524,7 @@ _readRangeTblEntry(void)
 	READ_DONE();
 }
 
+#ifdef OBSOLETE
 /*
  * _readRangeTblFunction
  */
@@ -2636,6 +2645,7 @@ _readAlternativeSubPlan(void)
 
 	READ_DONE();
 }
+#endif /*OBSOLETE*/
 
 /*
  * _readExtensibleNode
@@ -2667,6 +2677,7 @@ _readExtensibleNode(void)
 	READ_DONE();
 }
 
+#ifdef OBSOLETE
 /*
  * _readPartitionBoundSpec
  */
@@ -2701,6 +2712,7 @@ _readPartitionRangeDatum(void)
 
 	READ_DONE();
 }
+#endif /*OBSOLETE*/
 
 /*
  * parseNodeString
@@ -2725,7 +2737,11 @@ parseNodeString(void)
 #define MATCH(tokname, namelen) \
 	(length == namelen && memcmp(token, tokname, namelen) == 0)
 
-	if (MATCH("QUERY", 5))
+	if (false)
+		;
+#include "readfuncs.inc2.c"
+#ifdef OBSOLETE
+	else if (MATCH("QUERY", 5))
 		return_value = _readQuery();
 	else if (MATCH("WITHCHECKOPTION", 15))
 		return_value = _readWithCheckOption();
@@ -2973,6 +2989,7 @@ parseNodeString(void)
 		return_value = _readPartitionBoundSpec();
 	else if (MATCH("PARTITIONRANGEDATUM", 19))
 		return_value = _readPartitionRangeDatum();
+#endif /*OBSOLETE*/
 	else
 	{
 		elog(ERROR, "badly formatted node string \"%.32s\"...", token);

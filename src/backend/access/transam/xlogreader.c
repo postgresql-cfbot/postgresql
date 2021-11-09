@@ -121,6 +121,7 @@ XLogReaderAllocate(int wal_segment_size, const char *waldir,
 		pfree(state);
 		return NULL;
 	}
+	state->EndOfWAL = false;
 	state->errormsg_buf[0] = '\0';
 
 	/*
@@ -292,6 +293,7 @@ XLogReadRecord(XLogReaderState *state, char **errormsg)
 	/* reset error state */
 	*errormsg = NULL;
 	state->errormsg_buf[0] = '\0';
+	state->EndOfWAL = false;
 
 	ResetDecoder(state);
 	state->abortedRecPtr = InvalidXLogRecPtr;
@@ -588,6 +590,16 @@ err:
 		 */
 		state->abortedRecPtr = RecPtr;
 		state->missingContrecPtr = targetPagePtr;
+
+		/*
+		 * If the messages is not set yet, that means we failed to load the
+		 * page for the record.  Otherwise do not hide the existing message at
+		 * it should be more detailed.
+		 */
+		if (state->errormsg_buf[0] == '\0')
+			report_invalid_record(state,
+								  "missing contrecord at %X/%X",
+								  LSN_FORMAT_ARGS(RecPtr));
 	}
 
 	/*
@@ -730,6 +742,36 @@ ValidXLogRecordHeader(XLogReaderState *state, XLogRecPtr RecPtr,
 					  XLogRecPtr PrevRecPtr, XLogRecord *record,
 					  bool randAccess)
 {
+	if (record->xl_tot_len == 0)
+	{
+		/*
+		 * We are almost sure reaching the end of WAL, make sure that the whole
+		 * header is zeroed.
+		 */
+		char   *p = (char *)record;
+		char   *pe = (char *)record + SizeOfXLogRecord;
+
+		while (*p == 0 && p < pe)
+			p++;
+
+		if (p == pe)
+		{
+			/* it is completely zeroed, call it a day  */
+			report_invalid_record(state, "empty record header found at %X/%X",
+								  LSN_FORMAT_ARGS(RecPtr));
+
+			/* notify end-of-wal to callers */
+			state->EndOfWAL = true;
+		}
+		else
+		{
+			/* Otherwise we found a garbage header.. */
+			report_invalid_record(state, "garbage record header at %X/%X",
+								  LSN_FORMAT_ARGS(RecPtr));
+		}
+
+		return false;
+	}
 	if (record->xl_tot_len < SizeOfXLogRecord)
 	{
 		report_invalid_record(state,

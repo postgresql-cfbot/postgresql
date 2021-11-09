@@ -408,6 +408,10 @@ typedef unsigned char bool;
  * ----------------------------------------------------------------
  */
 
+#ifndef HAVE_SOCKLEN_T
+typedef socklen_t int;
+#endif
+
 /*
  * Pointer
  *		Variable holding address of any memory resident object.

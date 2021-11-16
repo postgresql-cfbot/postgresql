@@ -1312,11 +1312,18 @@ extern long long strtoll(const char *str, char **endptr, int base);
 extern unsigned long long strtoull(const char *str, char **endptr, int base);
 #endif
 
-/* no special DLL markers on most ports */
-#ifndef PGDLLIMPORT
-#define PGDLLIMPORT
+/*
+ * If the platform knows __attribute__((visibility("*"))), i.e. gcc like
+ * compilers, we use that.
+ */
+#if !defined(PGDLLIMPORT) && defined(HAVE_VISIBILITY_ATTRIBUTE)
+#define PGDLLIMPORT __attribute__((visibility("default")))
+#define PGDLLEXPORT __attribute__((visibility("default")))
 #endif
-#ifndef PGDLLEXPORT
+
+/* No special DLL markers on the remaining ports. */
+#if !defined(PGDLLIMPORT)
+#define PGDLLIMPORT
 #define PGDLLEXPORT
 #endif
 

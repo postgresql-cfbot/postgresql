@@ -2572,6 +2572,26 @@ psql_completion(const char *text, int start, int end)
 			COMPLETE_WITH("true", "false");
 	}
 
+	/* CREATE CONVERSION */
+	else if (Matches("CREATE", "CONVERSION", MatchAny) ||
+			 Matches("CREATE", "DEFAULT", "CONVERSION", MatchAny))
+		COMPLETE_WITH("FOR");
+	else if (Matches("CREATE", "CONVERSION", MatchAny, "FOR") ||
+			 Matches("CREATE", "DEFAULT", "CONVERSION", MatchAny, "FOR"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_encodings);
+	else if (Matches("CREATE", "CONVERSION", MatchAny, "FOR", MatchAny) ||
+			 Matches("CREATE", "DEFAULT", "CONVERSION", MatchAny, "FOR", MatchAny))
+		COMPLETE_WITH("TO");
+	else if (Matches("CREATE", "CONVERSION", MatchAny, "FOR", MatchAny, "TO") ||
+			 Matches("CREATE", "DEFAULT", "CONVERSION", MatchAny, "FOR", MatchAny, "TO"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_encodings);
+	else if (Matches("CREATE", "CONVERSION", MatchAny, "FOR", MatchAny, "TO", MatchAny) ||
+			 Matches("CREATE", "DEFAULT", "CONVERSION", MatchAny, "FOR", MatchAny, "TO", MatchAny))
+		COMPLETE_WITH("FROM");
+	else if (Matches("CREATE", "CONVERSION", MatchAny, "FOR", MatchAny, "TO", MatchAny, "FROM") ||
+			 Matches("CREATE", "DEFAULT", "CONVERSION", MatchAny, "FOR", MatchAny, "TO", MatchAny, "FROM"))
+		COMPLETE_WITH_VERSIONED_SCHEMA_QUERY(Query_for_list_of_functions, NULL);
+
 	/* CREATE DATABASE */
 	else if (Matches("CREATE", "DATABASE", MatchAny))
 		COMPLETE_WITH("OWNER", "TEMPLATE", "ENCODING", "TABLESPACE",
@@ -2581,6 +2601,17 @@ psql_completion(const char *text, int start, int end)
 
 	else if (Matches("CREATE", "DATABASE", MatchAny, "TEMPLATE"))
 		COMPLETE_WITH_QUERY(Query_for_list_of_template_databases);
+
+	/* CREATE DOMAIN */
+	else if (Matches("CREATE", "DOMAIN", MatchAny))
+		COMPLETE_WITH("AS");
+	else if (Matches("CREATE", "DOMAIN", MatchAny, "AS"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_datatypes, NULL);
+	else if (Matches("CREATE", "DOMAIN", MatchAny, "AS", MatchAny))
+		COMPLETE_WITH("COLLATE", "DEFAULT", "CONSTRAINT",
+					  "NOT NULL", "NULL", "CHECK (");
+	else if (Matches("CREATE", "DOMAIN", MatchAny, "COLLATE"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_collations, NULL);
 
 	/* CREATE EXTENSION */
 	/* Complete with available extensions rather than installed ones. */
@@ -2660,6 +2691,14 @@ psql_completion(const char *text, int start, int end)
 			 !TailMatches("POLICY", MatchAny, MatchAny, MatchAny, MatchAny, MatchAny) &&
 			 !TailMatches("FOR", MatchAny, MatchAny, MatchAny))
 		COMPLETE_WITH("(");
+
+	/* CREATE LANGUAGE */
+	else if (Matches("CREATE", "LANGUAGE", MatchAny) ||
+			 Matches("CREATE", "OR", "REPLACE", "LANGUAGE", MatchAny))
+		COMPLETE_WITH("HANDLER");
+	else if (Matches("CREATE", "LANGUAGE", MatchAny, "HANDLER", MatchAny) ||
+			 Matches("CREATE", "OR", "REPLACE", "LANGUAGE", MatchAny, "HANDLER", MatchAny))
+		COMPLETE_WITH("INLINE", "VALIDATOR");
 
 	/* CREATE OR REPLACE */
 	else if (Matches("CREATE", "OR"))
@@ -2802,11 +2841,20 @@ psql_completion(const char *text, int start, int end)
 	else if (TailMatches("AS", "ON", "SELECT|UPDATE|INSERT|DELETE", "TO"))
 		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_tables, NULL);
 
+/* CREATE SCHEMA */
+	else if (Matches("CREATE", "SCHEMA"))
+		COMPLETE_WITH("AUTHORIZATION");
+	else if (Matches("CREATE", "SCHEMA") && TailMatches("AUTHORIZATION"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_roles);
+
 /* CREATE SEQUENCE --- is allowed inside CREATE SCHEMA, so use TailMatches */
 	else if (TailMatches("CREATE", "SEQUENCE", MatchAny) ||
 			 TailMatches("CREATE", "TEMP|TEMPORARY", "SEQUENCE", MatchAny))
-		COMPLETE_WITH("INCREMENT BY", "MINVALUE", "MAXVALUE", "NO", "CACHE",
-					  "CYCLE", "OWNED BY", "START WITH");
+		COMPLETE_WITH("AS", "INCREMENT BY", "MINVALUE", "MAXVALUE", "NO",
+					  "CACHE", "CYCLE", "OWNED BY", "START WITH");
+	else if (TailMatches("CREATE", "SEQUENCE", MatchAny, "AS") ||
+			 TailMatches("CREATE", "TEMP|TEMPORARY", "SEQUENCE", MatchAny, "AS"))
+		COMPLETE_WITH("smallint", "integer", "bigint");
 	else if (TailMatches("CREATE", "SEQUENCE", MatchAny, "NO") ||
 			 TailMatches("CREATE", "TEMP|TEMPORARY", "SEQUENCE", MatchAny, "NO"))
 		COMPLETE_WITH("MINVALUE", "MAXVALUE", "CYCLE");
@@ -2881,6 +2929,19 @@ psql_completion(const char *text, int start, int end)
 		COMPLETE_WITH("CONFIGURATION", "DICTIONARY", "PARSER", "TEMPLATE");
 	else if (Matches("CREATE", "TEXT", "SEARCH", "CONFIGURATION|DICTIONARY|PARSER|TEMPLATE", MatchAny))
 		COMPLETE_WITH("(");
+
+/* CREATE TRANSFORM */
+	else if (Matches("CREATE", "TRANSFORM"))
+		COMPLETE_WITH("FOR");
+	else if (Matches("CREATE", "TRANSFORM", "FOR"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_datatypes, NULL);
+	else if (Matches("CREATE", "TRANSFORM", "FOR", MatchAny))
+		COMPLETE_WITH("LANGUAGE");
+	else if (Matches("CREATE", "TRANSFORM", "FOR", MatchAny, "LANGUAGE"))
+	{
+		completion_info_charp = prev2_wd;
+		COMPLETE_WITH_QUERY(Query_for_list_of_languages);
+	}
 
 /* CREATE SUBSCRIPTION */
 	else if (Matches("CREATE", "SUBSCRIPTION", MatchAny))

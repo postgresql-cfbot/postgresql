@@ -420,8 +420,12 @@ CREATE [ UNIQUE ] INDEX [ CONCURRENTLY ] [ [ IF NOT EXISTS ] <replaceable class=
       updates or inserts will cause a sudden flood of page splits.
      </para>
      <para>
-      The other index methods use fillfactor in different but roughly
-      analogous ways; the default fillfactor varies between methods.
+      Other built-in index methods which use fillfactor use it in different but
+      roughly analogous ways; the default fillfactor varies between methods.
+     </para>
+     <para>
+      The built-in <acronym>BRIN</acronym> and <acronym>GIN</acronym> index
+      methods do not use fillfactor.
      </para>
     </listitem>
    </varlistentry>

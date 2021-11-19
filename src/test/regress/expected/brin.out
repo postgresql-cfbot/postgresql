@@ -565,5 +565,35 @@ SELECT * FROM brintest_3 WHERE b < '0';
 ---+---+---+---
 (0 rows)
 
+-- Test supported storage parameters
+CREATE INDEX ON brintest_3 USING brin (b, c) WITH (autosummarize=true,pages_per_range=40);
+-- Test unsupported storage parameters
+CREATE INDEX ON brintest_3 USING brin (b, c) WITH (deduplicate_items=on);  -- from btree
+ERROR:  unrecognized parameter "deduplicate_items"
+CREATE INDEX ON brintest_3 USING brin (b, c) WITH (fastupdate=on);  -- from gin
+ERROR:  unrecognized parameter "fastupdate"
+CREATE INDEX ON brintest_3 USING brin (b, c) WITH (gin_pending_list_limit=1000);  -- from gin
+ERROR:  unrecognized parameter "gin_pending_list_limit"
+CREATE INDEX ON brintest_3 USING brin (b, c) WITH (fillfactor=30);  -- from gist
+ERROR:  unrecognized parameter "fillfactor"
+CREATE INDEX ON brintest_3 USING brin (b, c) WITH (buffering=on);  -- from gist
+ERROR:  unrecognized parameter "buffering"
+CREATE INDEX ON brintest_3 USING brin (b, c) WITH (parallel_workers=5);  -- from heap
+ERROR:  unrecognized parameter "parallel_workers"
+CREATE INDEX ON brintest_3 USING brin (b, c) WITH (seq_page_cost=1.0);  -- from tablespace
+ERROR:  unrecognized parameter "seq_page_cost"
+CREATE INDEX ON brintest_3 USING brin (b, c) WITH (random_page_cost=4.0);  -- from tablespace
+ERROR:  unrecognized parameter "random_page_cost"
+CREATE INDEX ON brintest_3 USING brin (b, c) WITH (effective_io_concurrency=5); -- from tablespace
+ERROR:  unrecognized parameter "effective_io_concurrency"
+CREATE INDEX ON brintest_3 USING brin (b, c) WITH (maintenance_io_concurrency=5); -- from tablespace
+ERROR:  unrecognized parameter "maintenance_io_concurrency"
+CREATE INDEX ON brintest_3 USING brin (b, c) WITH (toast.vacuum_index_cleanup=auto);  -- from toast
+ERROR:  unrecognized parameter namespace "toast"
+-- Test nonsense storage parameters
+CREATE INDEX ON brintest_3 USING brin (b, c) WITH (nonsense);
+ERROR:  unrecognized parameter "nonsense"
+CREATE INDEX ON brintest_3 USING brin (b, c) WITH (toast.nonsense);
+ERROR:  unrecognized parameter namespace "toast"
 DROP TABLE brintest_3;
 RESET enable_seqscan;

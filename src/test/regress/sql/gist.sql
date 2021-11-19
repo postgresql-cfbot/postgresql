@@ -147,4 +147,24 @@ reset enable_seqscan;
 reset enable_bitmapscan;
 reset enable_indexonlyscan;
 
+-- Test supported storage parameters
+create index on gist_tbl using gist (p, c) with (fillfactor=30, buffering=on);
+
+-- Test unsupported storage parameters
+create index on gist_tbl using gist (p, c) with (pages_per_range=40);  -- from brin
+create index on gist_tbl using gist (p, c) with (autosummarize=true);  -- from brin
+create index on gist_tbl using gist (p, c) with (deduplicate_items=on);  -- from btree
+create index on gist_tbl using gist (p, c) with (fastupdate=on);  -- from gin
+create index on gist_tbl using gist (p, c) with (gin_pending_list_limit=1000);  -- from gin
+create index on gist_tbl using gist (p, c) with (parallel_workers=5);  -- from heap
+create index on gist_tbl using gist (p, c) with (seq_page_cost=1.0);  -- from tablespace
+create index on gist_tbl using gist (p, c) with (random_page_cost=4.0);  -- from tablespace
+create index on gist_tbl using gist (p, c) with (effective_io_concurrency=5); -- from tablespace
+create index on gist_tbl using gist (p, c) with (maintenance_io_concurrency=5); -- from tablespace
+create index on gist_tbl using gist (p, c) with (toast.vacuum_index_cleanup=auto);  -- from toast
+
+-- Test nonsense storage parameters
+create index on gist_tbl using gist (p, c) with (nonsense);
+create index on gist_tbl using gist (p, c) with (toast.nonsense);
+
 drop table gist_tbl;

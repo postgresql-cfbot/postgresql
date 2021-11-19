@@ -287,4 +287,34 @@ select count(*) from t_gin_test_tbl where j @> '{}'::int[];
 
 reset enable_seqscan;
 reset enable_bitmapscan;
+-- Test supported storage parameters
+create index on t_gin_test_tbl using gin(i, j) with (fastupdate=on, gin_pending_list_limit=1000);
+-- Test unsupported storage parameters
+create index on t_gin_test_tbl using gin(i, j) with (pages_per_range=40);  -- from brin
+ERROR:  unrecognized parameter "pages_per_range"
+create index on t_gin_test_tbl using gin(i, j) with (autosummarize=true);  -- from brin
+ERROR:  unrecognized parameter "autosummarize"
+create index on t_gin_test_tbl using gin(i, j) with (deduplicate_items=on);  -- from btree
+ERROR:  unrecognized parameter "deduplicate_items"
+create index on t_gin_test_tbl using gin(i, j) with (fillfactor=30);  -- from gist
+ERROR:  unrecognized parameter "fillfactor"
+create index on t_gin_test_tbl using gin(i, j) with (buffering=on);  -- from gist
+ERROR:  unrecognized parameter "buffering"
+create index on t_gin_test_tbl using gin(i, j) with (parallel_workers=5);  -- from heap
+ERROR:  unrecognized parameter "parallel_workers"
+create index on t_gin_test_tbl using gin(i, j) with (seq_page_cost=1.0);  -- from tablespace
+ERROR:  unrecognized parameter "seq_page_cost"
+create index on t_gin_test_tbl using gin(i, j) with (random_page_cost=4.0);  -- from tablespace
+ERROR:  unrecognized parameter "random_page_cost"
+create index on t_gin_test_tbl using gin(i, j) with (effective_io_concurrency=5); -- from tablespace
+ERROR:  unrecognized parameter "effective_io_concurrency"
+create index on t_gin_test_tbl using gin(i, j) with (maintenance_io_concurrency=5); -- from tablespace
+ERROR:  unrecognized parameter "maintenance_io_concurrency"
+create index on t_gin_test_tbl using gin(i, j) with (toast.vacuum_index_cleanup=auto);  -- from toast
+ERROR:  unrecognized parameter namespace "toast"
+-- Test nonsense storage parameters
+create index on t_gin_test_tbl using gin(i, j) with (nonsense);
+ERROR:  unrecognized parameter "nonsense"
+create index on t_gin_test_tbl using gin(i, j) with (toast.nonsense);
+ERROR:  unrecognized parameter namespace "toast"
 drop table t_gin_test_tbl;

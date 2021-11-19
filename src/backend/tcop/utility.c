@@ -1155,7 +1155,6 @@ ProcessUtilitySlow(ParseState *pstate,
 						{
 							CreateStmt *cstmt = (CreateStmt *) stmt;
 							Datum		toast_options;
-							static char *validnsps[] = HEAP_RELOPT_NAMESPACES;
 
 							/* Remember transformed RangeVar for LIKE */
 							table_rv = cstmt->relation;
@@ -1182,7 +1181,7 @@ ProcessUtilitySlow(ParseState *pstate,
 							toast_options = transformRelOptions((Datum) 0,
 																cstmt->options,
 																"toast",
-																validnsps,
+																reloptNsps(RELKIND_TOASTVALUE),
 																true,
 																false);
 							(void) heap_reloptions(RELKIND_TOASTVALUE,

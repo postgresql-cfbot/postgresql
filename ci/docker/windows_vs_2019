@@ -1,0 +1,111 @@
+# escape=`
+
+# We used to use the visual studio container, but it's too outdated now
+FROM cirrusci/windowsservercore:2019
+
+SHELL ["powershell", "-NoLogo", "-NoProfile", "-Command"]
+
+
+# Install commandline debugger and log all crashes to c:\cirrus\crashlog.txt
+#
+# Done manually as doing this via chocolatey / the installer directly, ends up
+# with a lot of unnecessary chaff, making the layer unnecessarily large.
+RUN `
+    mkdir c:\t ; `
+    cd c:\t ; `
+    `
+    setx PATH \"C:\Windows Kits\10\Debuggers\x64;$Env:PATH\" /m ; `
+    `
+    curl.exe -sSL -o 'windsdksetup.exe' https://download.microsoft.com/download/9/7/9/97982c1d-d687-41be-9dd3-6d01e52ceb68/windowssdk/winsdksetup.exe ; `
+    echo 'starting sdk installation (for debugger)' ; `
+    Start-Process -Wait -FilePath ".\windsdksetup.exe" `
+      -ArgumentList '/Features OptionId.WindowsDesktopDebuggers /layout c:\t\sdk /quiet /norestart /log c:\t\sdk.log' `
+      ; `
+    `
+    Start-Process -Wait -FilePath msiexec.exe `
+      -ArgumentList '/a \"C:\t\sdk\Installers\X64 Debuggers And Tools-x64_en-us.msi\" /qb /log install2.log' `
+    ; `
+    C:\Windows` Kits\10\Debuggers\x64\cdb.exe -version ; `
+    `
+    Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AeDebug' -Name 'Debugger' -Value '\"C:\Windows Kits\10\Debuggers\x64\cdb.exe\" -p %ld -e %ld -g -kqm -c \".lines -e; .symfix+ ;.logappend c:\cirrus\crashlog.txt ; !peb; ~*kP ; .logclose ; q \"' ; `
+    New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AeDebug' -Name 'Auto' -Value 1 -PropertyType DWord ; `
+    Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AeDebug' -Name Debugger ; `
+    `
+    cd c:\ ; `
+    Remove-Item C:\t -Force -Recurse
+
+
+# Install perl, python, flex and bison.
+#
+# Done manually as choco takes a lot longer. I think it's download issues with
+# powershell's download stuff? That's wy curl.exe is directly used here at least...
+#
+# Using perl 5.26.3.1 for now, as newer versions don't currently work correctly
+RUN `
+    mkdir c:\t ; `
+    cd c:\t ; `
+    `
+    echo 'adding to path, before setup below, so changes are not overwritten' ; `
+    setx PATH \"C:\strawberry\perl\bin;C:\winflexbison;C:\Program Files\Git\usr\bin;$Env:PATH\" /m ; `
+    `
+    curl.exe -sSL -o perl.zip `
+        https://strawberryperl.com/download/5.26.3.1/strawberry-perl-5.26.3.1-64bit-portable.zip ; `
+    echo 'installing perl' ; `
+    7z.exe x .\perl.zip -xr!c -oc:\strawberry ; `
+    `
+    curl.exe -sSL -o python.exe https://www.python.org/ftp/python/3.10.0/python-3.10.0-amd64.exe ; `
+    echo 'installing python' ; `
+    Start-Process -Wait -FilePath ".\python.exe" `
+      -ArgumentList `
+        '/quiet', 'SimpleInstall=1', 'PrependPath=1', 'CompileAll=1', `
+        'TargetDir=c:\python\', 'InstallAllUsers=1', 'Shortcuts=0', `
+        'Include_docs=0', 'Include_tcltk=0', 'Include_tests=0' `
+      ; `
+    `
+    curl.exe -sSL -o winflexbison.zip `
+        https://github.com/lexxmark/winflexbison/releases/download/v2.5.24/win_flex_bison-2.5.24.zip ; `
+    echo 'installing winflexbison' ; `
+    7z.exe x .\winflexbison.zip -oc:\winflexbison ; `
+    Rename-Item -Path c:\winflexbison\win_flex.exe c:\winflexbison\flex.exe ; `
+    Rename-Item -Path c:\winflexbison\win_bison.exe c:\winflexbison\bison.exe ; `
+    `
+    cd c:\ ; `
+    Remove-Item C:\t -Force -Recurse
+
+
+# Install openssl
+RUN `
+    mkdir c:\t ; `
+    cd c:\t ; `
+    `
+    curl.exe -o openssl-setup.exe -sSL https://slproweb.com/download/Win64OpenSSL-1_1_1L.exe ; `
+    echo 'staring openssl installation' ; `
+    Start-Process -Wait -FilePath ".\openssl-setup.exe" `
+      -ArgumentList '/DIR=c:\openssl\1.1.1l\ /VERYSILENT /SP- /SUPPRESSMSGBOXES' ; `
+    `
+    cd c:\ ; `
+    Remove-Item C:\t -Force -Recurse
+
+
+# Install visual studio
+#
+# Adding VS path to vcvarsall.bat so user of container doesn't need to know the full path
+RUN `
+    mkdir c:\t ; `
+    cd c:\t ; `
+    setx PATH \"c:\BuildTools\VC\Auxiliary\Build;$Env:PATH\" /m ; `
+    `
+    curl.exe -sSL -o c:\t\vs_buildtools.exe https://aka.ms/vs/16/release/vs_buildtools.exe ; `
+    echo 'starting visual studio installation' ; `
+    Start-Process -Wait `
+        -FilePath c:\t\vs_buildtools.exe `
+        -ArgumentList `
+          '--quiet', '--wait', '--norestart', '--nocache', `
+          '--installPath', 'c:\BuildTools', `
+          '--add', 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64', `
+          '--add', 'Microsoft.VisualStudio.Component.Windows10SDK.20348'  ; `
+    `
+    cd c:\ ; `
+    Remove-Item C:\t -Force -Recurse ; `
+    Remove-Item -Force -Recurse ${Env:TEMP}\*; `
+    Remove-Item -Force -Recurse \"${Env:ProgramData}\Package Cache\"

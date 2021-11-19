@@ -26,6 +26,10 @@
 #include <sys/param.h>
 #endif
 
+#if defined(WIN32)
+#include <crtdbg.h>
+#endif
+
 #if defined(_M_AMD64) && _MSC_VER == 1800
 #include <math.h>
 #include <versionhelpers.h>
@@ -237,8 +241,45 @@ startup_hacks(const char *progname)
 			exit(1);
 		}
 
-		/* In case of general protection fault, don't show GUI popup box */
-		SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
+		/*
+		 * SEM_FAILCRITICALERRORS causes more errors to be reported to
+		 * callers.
+		 *
+		 * We used to also specify SEM_NOGPFAULTERRORBOX, but that prevents
+		 * windows crash reporting from working. Which includes registered
+		 * just-in-time debuggers. Now we try to disable sources of popups
+		 * separately below (note that SEM_NOGPFAULTERRORBOX didn't actually
+		 * prevent several sources of popups).
+		 */
+		SetErrorMode(SEM_FAILCRITICALERRORS);
+
+		/*
+		 * Show errors on stderr instead of popup box (note this doesn't
+		 * affect errors originating in the C runtime, see below).
+		 */
+		_set_error_mode(_OUT_TO_STDERR);
+
+
+		/*
+		 * By default abort() only generates a crash-dump in *non* debug
+		 * builds. As our Assert() / ExceptionalCondition() uses abort(),
+		 * leaving the default in place would make debugging harder.
+		 */
+#ifndef __MINGW64__
+		_set_abort_behavior(_CALL_REPORTFAULT | _WRITE_ABORT_MSG,
+							_CALL_REPORTFAULT | _WRITE_ABORT_MSG);
+#endif
+
+		/*
+		 * In case of errors (including assertions) on the C runtime level,
+		 * report them to stderr (and the debugger) instead of displaying a
+		 * popup. This is C runtime specific and thus the above incantations
+		 * aren't sufficient to suppress these popups.
+		 */
+		_CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE | _CRTDBG_MODE_DEBUG);
+		_CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_FILE | _CRTDBG_MODE_DEBUG);
+		_CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+		_CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
 
 #if defined(_M_AMD64) && _MSC_VER == 1800
 

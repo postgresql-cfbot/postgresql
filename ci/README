@@ -1,0 +1,36 @@
+Postgres Continuous Integration (CI)
+====================================
+
+Postgres has two forms of CI:
+
+1) All supported branches in the main postgres repository are continuously
+   tested via the the the buildfarm. As this covers only the main repository,
+   it cannot be used during development of features.
+
+   For details see https://buildfarm.postgresql.org/
+
+2) For not yet merged development work, CI can be enabled for some git hosting
+   providers. This allows to test patches on a number of platforms before they
+   are merged (or even submitted).
+
+
+Configuring CI on personal repositories
+=======================================
+
+Currently postgres contains CI support utilizing cirrus-ci. cirrus-ci
+currently is only available for github.
+
+
+Enabling cirrus-ci in a github repository
+=========================================
+
+To enable cirrus-ci on a repository, go to
+https://github.com/marketplace/cirrus-ci and select "Public
+Repositories". Then "Install it for free" and "Complete order". The next page
+allows to configure which repositories cirrus-ci has access too. Choose the
+relevant repository and "Install".
+
+Once enabled on a repository, future commits and pull-requests in that
+repository will automatically trigger CI builds. These are visible from the
+commit history / PRs, and can also be viewed in the cirrus-ci UI at
+https://cirrus-ci.com/github/<username>/<reponame>/

@@ -754,7 +754,7 @@ AutoVacLauncherMain(int argc, char *argv[])
 					dlist_push_head(&AutoVacuumShmem->av_freeWorkers,
 									&worker->wi_links);
 					AutoVacuumShmem->av_startingWorker = NULL;
-					elog(WARNING, "worker took too long to start; canceled");
+					elog(WARNING, "autovacuum worker took too long to start; canceled");
 				}
 			}
 			else
@@ -966,10 +966,10 @@ rebuild_database_list(Oid newdb)
 	autovac_refresh_stats();
 
 	newcxt = AllocSetContextCreate(AutovacMemCxt,
-								   "AV dblist",
+								   "Autovacuum dblist",
 								   ALLOCSET_DEFAULT_SIZES);
 	tmpcxt = AllocSetContextCreate(newcxt,
-								   "tmp AV dblist",
+								   "Autovacuum tmp dblist",
 								   ALLOCSET_DEFAULT_SIZES);
 	oldcxt = MemoryContextSwitchTo(tmpcxt);
 
@@ -1179,7 +1179,7 @@ do_start_worker(void)
 	 * allocated for the database list.
 	 */
 	tmpcxt = AllocSetContextCreate(CurrentMemoryContext,
-								   "Start worker tmp cxt",
+								   "Autovacuum start worker tmp cxt",
 								   ALLOCSET_DEFAULT_SIZES);
 	oldcxt = MemoryContextSwitchTo(tmpcxt);
 
@@ -1981,7 +1981,7 @@ do_autovacuum(void)
 	 * relations to vacuum/analyze across transactions.
 	 */
 	AutovacMemCxt = AllocSetContextCreate(TopMemoryContext,
-										  "AV worker",
+										  "Autovacuum worker",
 										  ALLOCSET_DEFAULT_SIZES);
 	MemoryContextSwitchTo(AutovacMemCxt);
 

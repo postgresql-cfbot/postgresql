@@ -4184,29 +4184,28 @@ AlterTableGetLockLevel(List *cmds)
 			case AT_DisableTrig:
 			case AT_DisableTrigAll:
 			case AT_DisableTrigUser:
-				cmd_lockmode = ShareRowExclusiveLock;
-				break;
-
-				/*
-				 * These subcommands affect write operations only. XXX
-				 * Theoretically, these could be ShareRowExclusiveLock.
-				 */
 			case AT_ColumnDefault:
 			case AT_CookedColumnDefault:
-			case AT_AlterConstraint:
-			case AT_AddIndex:	/* from ADD CONSTRAINT */
-			case AT_AddIndexConstraint:
 			case AT_ReplicaIdentity:
-			case AT_SetNotNull:
-			case AT_EnableRowSecurity:
-			case AT_DisableRowSecurity:
-			case AT_ForceRowSecurity:
-			case AT_NoForceRowSecurity:
+			case AT_AlterConstraint:
 			case AT_AddIdentity:
 			case AT_DropIdentity:
 			case AT_SetIdentity:
 			case AT_DropExpression:
 			case AT_SetCompression:
+				cmd_lockmode = ShareRowExclusiveLock;
+				break;
+
+				/*
+				 * These subcommands appear to have various special cases.
+				 */
+			case AT_AddIndex:	/* from ADD CONSTRAINT */
+			case AT_AddIndexConstraint:
+			case AT_SetNotNull:
+			case AT_EnableRowSecurity:
+			case AT_DisableRowSecurity:
+			case AT_ForceRowSecurity:
+			case AT_NoForceRowSecurity:
 				cmd_lockmode = AccessExclusiveLock;
 				break;
 

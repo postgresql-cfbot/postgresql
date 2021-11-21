@@ -244,6 +244,71 @@ select count(*) > 0 from
 (1 row)
 
 --
+-- Test replication slot directory functions
+--
+-- The outputs of these are variable, so we can't just print their results
+-- directly, but we can at least verify that the code doesn't fail, and that
+-- the permissions are set properly.
+--
+CREATE ROLE regress_slot_dir_funcs;
+SELECT has_function_privilege('regress_slot_dir_funcs',
+  'pg_ls_logicalsnapdir()', 'EXECUTE'); -- no
+ has_function_privilege 
+------------------------
+ f
+(1 row)
+
+SELECT has_function_privilege('regress_slot_dir_funcs',
+  'pg_ls_logicalmapdir()', 'EXECUTE'); -- no
+ has_function_privilege 
+------------------------
+ f
+(1 row)
+
+SELECT has_function_privilege('regress_slot_dir_funcs',
+  'pg_ls_replslotdir(text)', 'EXECUTE'); -- no
+ has_function_privilege 
+------------------------
+ f
+(1 row)
+
+GRANT pg_monitor TO regress_slot_dir_funcs;
+SELECT 'init' FROM pg_create_physical_replication_slot('slot_dir_funcs');
+ ?column? 
+----------
+ init
+(1 row)
+
+SET ROLE regress_slot_dir_funcs;
+SELECT COUNT(*) >= 0 AS OK FROM pg_ls_logicalsnapdir();
+ ok 
+----
+ t
+(1 row)
+
+SELECT COUNT(*) >= 0 AS OK FROM pg_ls_logicalmapdir();
+ ok 
+----
+ t
+(1 row)
+
+SELECT COUNT(*) >= 0 AS OK FROM pg_ls_replslotdir('slot_dir_funcs');
+ ok 
+----
+ t
+(1 row)
+
+SELECT pg_ls_replslotdir('non_existent_slot'); -- ERROR
+ERROR:  replication slot "non_existent_slot" does not exist
+RESET ROLE;
+SELECT pg_drop_replication_slot('slot_dir_funcs');
+ pg_drop_replication_slot 
+--------------------------
+ 
+(1 row)
+
+DROP ROLE regress_slot_dir_funcs;
+--
 -- Test adding a support function to a subject function
 --
 CREATE FUNCTION my_int_eq(int, int) RETURNS bool

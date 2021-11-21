@@ -92,6 +92,37 @@ select count(*) > 0 from
   join pg_database db on pts.pts = db.oid;
 
 --
+-- Test replication slot directory functions
+--
+-- The outputs of these are variable, so we can't just print their results
+-- directly, but we can at least verify that the code doesn't fail, and that
+-- the permissions are set properly.
+--
+
+CREATE ROLE regress_slot_dir_funcs;
+
+SELECT has_function_privilege('regress_slot_dir_funcs',
+  'pg_ls_logicalsnapdir()', 'EXECUTE'); -- no
+SELECT has_function_privilege('regress_slot_dir_funcs',
+  'pg_ls_logicalmapdir()', 'EXECUTE'); -- no
+SELECT has_function_privilege('regress_slot_dir_funcs',
+  'pg_ls_replslotdir(text)', 'EXECUTE'); -- no
+
+GRANT pg_monitor TO regress_slot_dir_funcs;
+
+SELECT 'init' FROM pg_create_physical_replication_slot('slot_dir_funcs');
+
+SET ROLE regress_slot_dir_funcs;
+SELECT COUNT(*) >= 0 AS OK FROM pg_ls_logicalsnapdir();
+SELECT COUNT(*) >= 0 AS OK FROM pg_ls_logicalmapdir();
+SELECT COUNT(*) >= 0 AS OK FROM pg_ls_replslotdir('slot_dir_funcs');
+SELECT pg_ls_replslotdir('non_existent_slot'); -- ERROR
+RESET ROLE;
+
+SELECT pg_drop_replication_slot('slot_dir_funcs');
+DROP ROLE regress_slot_dir_funcs;
+
+--
 -- Test adding a support function to a subject function
 --
 

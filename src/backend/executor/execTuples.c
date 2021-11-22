@@ -1100,7 +1100,7 @@ const TupleTableSlotOps TTSOpsBufferHeapTuple = {
  */
 
 /* --------------------------------
- *		MakeTupleTableSlot
+ *		MakeSingleTupleTableSlot
  *
  *		Basic routine to make an empty TupleTableSlot of given
  *		TupleTableSlotType. If tupleDesc is specified the slot's descriptor is
@@ -1109,7 +1109,7 @@ const TupleTableSlotOps TTSOpsBufferHeapTuple = {
  * --------------------------------
  */
 TupleTableSlot *
-MakeTupleTableSlot(TupleDesc tupleDesc,
+MakeSingleTupleTableSlot(TupleDesc tupleDesc,
 				   const TupleTableSlotOps *tts_ops)
 {
 	Size		basesz,
@@ -1171,7 +1171,7 @@ TupleTableSlot *
 ExecAllocTableSlot(List **tupleTable, TupleDesc desc,
 				   const TupleTableSlotOps *tts_ops)
 {
-	TupleTableSlot *slot = MakeTupleTableSlot(desc, tts_ops);
+	TupleTableSlot *slot = MakeSingleTupleTableSlot(desc, tts_ops);
 
 	*tupleTable = lappend(*tupleTable, slot);
 
@@ -1223,24 +1223,6 @@ ExecResetTupleTable(List *tupleTable,	/* tuple table */
 	/* If shouldFree, release the list structure */
 	if (shouldFree)
 		list_free(tupleTable);
-}
-
-/* --------------------------------
- *		MakeSingleTupleTableSlot
- *
- *		This is a convenience routine for operations that need a standalone
- *		TupleTableSlot not gotten from the main executor tuple table.  It makes
- *		a single slot of given TupleTableSlotType and initializes it to use the
- *		given tuple descriptor.
- * --------------------------------
- */
-TupleTableSlot *
-MakeSingleTupleTableSlot(TupleDesc tupdesc,
-						 const TupleTableSlotOps *tts_ops)
-{
-	TupleTableSlot *slot = MakeTupleTableSlot(tupdesc, tts_ops);
-
-	return slot;
 }
 
 /* --------------------------------

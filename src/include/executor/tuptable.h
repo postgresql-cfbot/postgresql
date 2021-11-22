@@ -293,8 +293,6 @@ typedef struct MinimalTupleTableSlot
 	((slot) == NULL || TTS_EMPTY(slot))
 
 /* in executor/execTuples.c */
-extern TupleTableSlot *MakeTupleTableSlot(TupleDesc tupleDesc,
-										  const TupleTableSlotOps *tts_ops);
 extern TupleTableSlot *ExecAllocTableSlot(List **tupleTable, TupleDesc desc,
 										  const TupleTableSlotOps *tts_ops);
 extern void ExecResetTupleTable(List *tupleTable, bool shouldFree);

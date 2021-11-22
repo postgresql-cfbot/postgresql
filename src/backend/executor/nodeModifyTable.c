@@ -81,6 +81,8 @@ static TupleTableSlot *ExecPrepareTupleRouting(ModifyTableState *mtstate,
 											   ResultRelInfo *targetRelInfo,
 											   TupleTableSlot *slot,
 											   ResultRelInfo **partRelInfo);
+/* guc */
+int bulk_insert_ntuples = 1000;
 
 /*
  * Verify that the tuples to be produced by INSERT match the
@@ -625,6 +627,19 @@ ExecInsert(ModifyTableState *mtstate,
 
 	resultRelationDesc = resultRelInfo->ri_RelationDesc;
 
+	/* Use bulk insert after a threshold number of tuples */
+	// XXX: maybe this should only be done if it's not a partitioned table or
+	// if the partitions don't support miinfo, which uses its own bistates
+	mtstate->ntuples++;
+	if (mtstate->bistate == NULL &&
+			mtstate->ntuples > bulk_insert_ntuples &&
+			bulk_insert_ntuples >= 0)
+	{
+		elog(DEBUG1, "enabling bulk insert");
+		mtstate->bistate = GetBulkInsertState();
+	}
+
+
 	/*
 	 * Open the table's indexes, if we have not done so already, so that we
 	 * can add new index entries for the inserted tuple.
@@ -893,7 +908,7 @@ ExecInsert(ModifyTableState *mtstate,
 			table_tuple_insert_speculative(resultRelationDesc, slot,
 										   estate->es_output_cid,
 										   0,
-										   NULL,
+										   mtstate->bistate,
 										   specToken);
 
 			/* insert index entries for tuple */
@@ -930,10 +945,17 @@ ExecInsert(ModifyTableState *mtstate,
 		}
 		else
 		{
+			if (proute && mtstate->prevResultRelInfo != resultRelInfo)
+			{
+				if (mtstate->bistate)
+					ReleaseBulkInsertStatePin(mtstate->bistate);
+				mtstate->prevResultRelInfo = resultRelInfo;
+			}
+
 			/* insert the tuple normally */
 			table_tuple_insert(resultRelationDesc, slot,
 							   estate->es_output_cid,
-							   0, NULL);
+							   0, mtstate->bistate);
 
 			/* insert index entries for tuple */
 			if (resultRelInfo->ri_NumIndices > 0)
@@ -2736,6 +2758,8 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 	mtstate->resultRelInfo = (ResultRelInfo *)
 		palloc(nrels * sizeof(ResultRelInfo));
 
+	mtstate->bistate = NULL;
+
 	/*----------
 	 * Resolve the target relation. This is the same as:
 	 *
@@ -3194,6 +3218,12 @@ ExecEndModifyTable(ModifyTableState *node)
 			ExecDropSingleTupleTableSlot(resultRelInfo->ri_Slots[j]);
 			ExecDropSingleTupleTableSlot(resultRelInfo->ri_PlanSlots[j]);
 		}
+	}
+
+	if (node->bistate)
+	{
+		FreeBulkInsertState(node->bistate);
+		table_finish_bulk_insert(node->rootResultRelInfo->ri_RelationDesc, 0);
 	}
 
 	/*

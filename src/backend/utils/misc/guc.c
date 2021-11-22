@@ -51,6 +51,7 @@
 #include "commands/vacuum.h"
 #include "commands/variable.h"
 #include "common/string.h"
+#include "executor/nodeModifyTable.h"
 #include "funcapi.h"
 #include "jit/jit.h"
 #include "libpq/auth.h"
@@ -3569,6 +3570,14 @@ static struct config_int ConfigureNamesInt[] =
 		&client_connection_check_interval,
 		0, 0, INT_MAX,
 		check_client_connection_check_interval, NULL, NULL
+	},
+	{
+		{"bulk_insert_ntuples", PGC_USERSET, CLIENT_CONN_STATEMENT,
+			gettext_noop("Enable bulk insertions after this number of tuples."),
+			gettext_noop("A ring buffer of limited size will be used and updates done in batch"),
+		},
+		&bulk_insert_ntuples,
+		1000, -1, INT_MAX,
 	},
 
 	{

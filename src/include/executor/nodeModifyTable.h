@@ -15,6 +15,8 @@
 
 #include "nodes/execnodes.h"
 
+extern PGDLLIMPORT int bulk_insert_ntuples;
+
 extern void ExecComputeStoredGenerated(ResultRelInfo *resultRelInfo,
 									   EState *estate, TupleTableSlot *slot,
 									   CmdType cmdtype);

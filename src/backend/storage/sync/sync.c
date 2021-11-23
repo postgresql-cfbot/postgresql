@@ -579,7 +579,7 @@ RegisterSyncRequest(const FileTag *ftag, SyncRequestType type,
 
 	if (pendingOps != NULL)
 	{
-		/* standalone backend or startup process: fsync state is local */
+		/* standalone backend or checkpointer process: fsync state is local */
 		RememberSyncRequest(ftag, type);
 		return true;
 	}

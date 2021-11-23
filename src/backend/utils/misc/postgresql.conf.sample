@@ -241,6 +241,11 @@
 #max_wal_size = 1GB
 #min_wal_size = 80MB
 
+# - Prefetching during recovery -
+
+#wal_decode_buffer_size = 512kB		# lookahead window used for prefetching
+#recovery_prefetch = off		# prefetch pages referenced in the WAL?
+
 # - Archiving -
 
 #archive_mode = off		# enables archiving; off, on, or always

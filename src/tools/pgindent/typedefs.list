@@ -533,6 +533,7 @@ DeadLockState
 DeallocateStmt
 DeclareCursorStmt
 DecodedBkpBlock
+DecodedXLogRecord
 DecodingOutputState
 DefElem
 DefElemAction
@@ -1410,6 +1411,9 @@ LogicalRepWorker
 LogicalRewriteMappingData
 LogicalTape
 LogicalTapeSet
+LsnReadQueue
+LsnReadQueueNextFun
+LsnReadQueueNextStatus
 LtreeGistOptions
 LtreeSignature
 MAGIC
@@ -2931,6 +2935,11 @@ XLogPageHeader
 XLogPageHeaderData
 XLogPageReadCB
 XLogPageReadPrivate
+XLogPageReadResult
+XLogPrefetcher
+XLogPrefetcherFilter
+XLogPrefetchState
+XLogPrefetchStats
 XLogReaderRoutine
 XLogReaderState
 XLogRecData

@@ -393,10 +393,10 @@ XLogDumpRecordLen(XLogReaderState *record, uint32 *rec_len, uint32 *fpi_len)
 	 * add an accessor macro for this.
 	 */
 	*fpi_len = 0;
-	for (block_id = 0; block_id <= record->max_block_id; block_id++)
+	for (block_id = 0; block_id <= XLogRecMaxBlockId(record); block_id++)
 	{
 		if (XLogRecHasBlockImage(record, block_id))
-			*fpi_len += record->blocks[block_id].bimg_len;
+			*fpi_len += record->record->blocks[block_id].bimg_len;
 	}
 
 	/*
@@ -494,7 +494,7 @@ XLogDumpDisplayRecord(XLogDumpConfig *config, XLogReaderState *record)
 	if (!config->bkp_details)
 	{
 		/* print block references (short format) */
-		for (block_id = 0; block_id <= record->max_block_id; block_id++)
+		for (block_id = 0; block_id <= XLogRecMaxBlockId(record); block_id++)
 		{
 			if (!XLogRecHasBlockRef(record, block_id))
 				continue;
@@ -525,7 +525,7 @@ XLogDumpDisplayRecord(XLogDumpConfig *config, XLogReaderState *record)
 	{
 		/* print block references (detailed format) */
 		putchar('\n');
-		for (block_id = 0; block_id <= record->max_block_id; block_id++)
+		for (block_id = 0; block_id <= XLogRecMaxBlockId(record); block_id++)
 		{
 			if (!XLogRecHasBlockRef(record, block_id))
 				continue;
@@ -538,7 +538,7 @@ XLogDumpDisplayRecord(XLogDumpConfig *config, XLogReaderState *record)
 				   blk);
 			if (XLogRecHasBlockImage(record, block_id))
 			{
-				uint8		bimg_info = record->blocks[block_id].bimg_info;
+				uint8		bimg_info = record->record->blocks[block_id].bimg_info;
 
 				if (BKPIMAGE_COMPRESSED(bimg_info))
 				{
@@ -555,11 +555,11 @@ XLogDumpDisplayRecord(XLogDumpConfig *config, XLogReaderState *record)
 						   "compression saved: %u, method: %s",
 						   XLogRecBlockImageApply(record, block_id) ?
 						   "" : " for WAL verification",
-						   record->blocks[block_id].hole_offset,
-						   record->blocks[block_id].hole_length,
+						   record->record->blocks[block_id].hole_offset,
+						   record->record->blocks[block_id].hole_length,
 						   BLCKSZ -
-						   record->blocks[block_id].hole_length -
-						   record->blocks[block_id].bimg_len,
+						   record->record->blocks[block_id].hole_length -
+						   record->record->blocks[block_id].bimg_len,
 						   method);
 				}
 				else
@@ -567,8 +567,8 @@ XLogDumpDisplayRecord(XLogDumpConfig *config, XLogReaderState *record)
 					printf(" (FPW%s); hole: offset: %u, length: %u",
 						   XLogRecBlockImageApply(record, block_id) ?
 						   "" : " for WAL verification",
-						   record->blocks[block_id].hole_offset,
-						   record->blocks[block_id].hole_length);
+						   record->record->blocks[block_id].hole_offset,
+						   record->record->blocks[block_id].hole_length);
 				}
 			}
 			putchar('\n');

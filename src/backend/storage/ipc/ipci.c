@@ -22,6 +22,7 @@
 #include "access/subtrans.h"
 #include "access/syncscan.h"
 #include "access/twophase.h"
+#include "access/xlogprefetcher.h"
 #include "commands/async.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -118,6 +119,7 @@ CalculateShmemSize(int *num_semaphores)
 	size = add_size(size, LockShmemSize());
 	size = add_size(size, PredicateLockShmemSize());
 	size = add_size(size, ProcGlobalShmemSize());
+	size = add_size(size, XLogPrefetchShmemSize());
 	size = add_size(size, XLOGShmemSize());
 	size = add_size(size, CLOGShmemSize());
 	size = add_size(size, CommitTsShmemSize());
@@ -241,6 +243,7 @@ CreateSharedMemoryAndSemaphores(void)
 	 * Set up xlog, clog, and buffers
 	 */
 	XLOGShmemInit();
+	XLogPrefetchShmemInit();
 	CLOGShmemInit();
 	CommitTsShmemInit();
 	SUBTRANSShmemInit();

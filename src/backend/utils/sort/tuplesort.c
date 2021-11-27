@@ -4148,9 +4148,8 @@ comparetup_index_btree(const SortTuple *a, const SortTuple *b,
 	int32		compare;
 	Datum		datum1,
 				datum2;
-	bool		isnull1,
-				isnull2;
-
+	IAttrIterStateData iter1;
+	IAttrIterStateData iter2;
 
 	/* Compare the leading sort key */
 	compare = ApplySortComparator(a->datum1, a->isnull1,
@@ -4164,14 +4163,17 @@ comparetup_index_btree(const SortTuple *a, const SortTuple *b,
 	tuple2 = (IndexTuple) b->tuple;
 	keysz = state->nKeys;
 	tupDes = RelationGetDescr(state->indexRel);
+	
+	index_attiterinit(tuple1, 1, tupDes, &iter1);
+	index_attiterinit(tuple2, 1, tupDes, &iter2);
+
+	datum1 = index_attiternext(tuple1, 1, tupDes, &iter1);
+	datum2 = index_attiternext(tuple2, 1, tupDes, &iter2);
 
 	if (sortKey->abbrev_converter)
 	{
-		datum1 = index_getattr(tuple1, 1, tupDes, &isnull1);
-		datum2 = index_getattr(tuple2, 1, tupDes, &isnull2);
-
-		compare = ApplySortAbbrevFullComparator(datum1, isnull1,
-												datum2, isnull2,
+		compare = ApplySortAbbrevFullComparator(datum1, iter1.isNull,
+												datum2, iter2.isNull,
 												sortKey);
 		if (compare != 0)
 			return compare;
@@ -4184,17 +4186,17 @@ comparetup_index_btree(const SortTuple *a, const SortTuple *b,
 	sortKey++;
 	for (nkey = 2; nkey <= keysz; nkey++, sortKey++)
 	{
-		datum1 = index_getattr(tuple1, nkey, tupDes, &isnull1);
-		datum2 = index_getattr(tuple2, nkey, tupDes, &isnull2);
+		datum1 = index_attiternext(tuple1, nkey, tupDes, &iter1);
+		datum2 = index_attiternext(tuple2, nkey, tupDes, &iter2);
 
-		compare = ApplySortComparator(datum1, isnull1,
-									  datum2, isnull2,
+		compare = ApplySortComparator(datum1, iter1.isNull,
+									  datum2, iter2.isNull,
 									  sortKey);
 		if (compare != 0)
 			return compare;		/* done when we find unequal attributes */
 
 		/* they are equal, so we only need to examine one null flag */
-		if (isnull1)
+		if (iter1.isNull)
 			equal_hasnull = true;
 	}
 

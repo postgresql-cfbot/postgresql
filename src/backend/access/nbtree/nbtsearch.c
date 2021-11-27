@@ -25,7 +25,7 @@
 
 
 static void _bt_drop_lock_and_maybe_pin(IndexScanDesc scan, BTScanPos sp);
-static OffsetNumber _bt_binsrch(Relation rel, BTScanInsert key, Buffer buf);
+static OffsetNumber _bt_binsrch(Relation rel, BTScanInsert key, Buffer buf, AttrNumber highkeycmpcol);
 static int	_bt_binsrch_posting(BTScanInsert key, Page page,
 								OffsetNumber offnum);
 static bool _bt_readpage(IndexScanDesc scan, ScanDirection dir,
@@ -121,6 +121,7 @@ _bt_search(Relation rel, BTScanInsert key, Buffer *bufP, int access,
 		IndexTuple	itup;
 		BlockNumber child;
 		BTStack		new_stack;
+		AttrNumber	comparecol = 1;
 
 		/*
 		 * Race -- the page we just grabbed may have split since we read its
@@ -135,7 +136,7 @@ _bt_search(Relation rel, BTScanInsert key, Buffer *bufP, int access,
 		 * opportunity to finish splits of internal pages too.
 		 */
 		*bufP = _bt_moveright(rel, key, *bufP, (access == BT_WRITE), stack_in,
-							  page_access, snapshot);
+							  page_access, snapshot, &comparecol);
 
 		/* if this is a leaf page, we're done */
 		page = BufferGetPage(*bufP);
@@ -147,7 +148,7 @@ _bt_search(Relation rel, BTScanInsert key, Buffer *bufP, int access,
 		 * Find the appropriate pivot tuple on this page.  Its downlink points
 		 * to the child page that we're about to descend to.
 		 */
-		offnum = _bt_binsrch(rel, key, *bufP);
+		offnum = _bt_binsrch(rel, key, *bufP, comparecol);
 		itemid = PageGetItemId(page, offnum);
 		itup = (IndexTuple) PageGetItem(page, itemid);
 		Assert(BTreeTupleIsPivot(itup) || !key->heapkeyspace);
@@ -186,6 +187,7 @@ _bt_search(Relation rel, BTScanInsert key, Buffer *bufP, int access,
 	 */
 	if (access == BT_WRITE && page_access == BT_READ)
 	{
+		AttrNumber	comparecol = 1;
 		/* trade in our read lock for a write lock */
 		_bt_unlockbuf(rel, *bufP);
 		_bt_lockbuf(rel, *bufP, BT_WRITE);
@@ -196,7 +198,7 @@ _bt_search(Relation rel, BTScanInsert key, Buffer *bufP, int access,
 		 * move right to its new sibling.  Do that.
 		 */
 		*bufP = _bt_moveright(rel, key, *bufP, true, stack_in, BT_WRITE,
-							  snapshot);
+							  snapshot, &comparecol);
 	}
 
 	return stack_in;
@@ -238,17 +240,21 @@ _bt_search(Relation rel, BTScanInsert key, Buffer *bufP, int access,
  * positioning for an insert or delete, so NULL is used for those cases.
  */
 Buffer
-_bt_moveright(Relation rel,
+_bt_moveright(
+			  Relation rel,
 			  BTScanInsert key,
 			  Buffer buf,
 			  bool forupdate,
 			  BTStack stack,
 			  int access,
-			  Snapshot snapshot)
+			  Snapshot snapshot,
+			  AttrNumber *comparecol)
 {
 	Page		page;
 	BTPageOpaque opaque;
 	int32		cmpval;
+
+	Assert(PointerIsValid(comparecol));
 
 	/*
 	 * When nextkey = false (normal case): if the scan key that brought us to
@@ -271,12 +277,16 @@ _bt_moveright(Relation rel,
 
 	for (;;)
 	{
+		AttrNumber cmpcol = 1;
 		page = BufferGetPage(buf);
 		TestForOldSnapshot(snapshot, rel, page);
 		opaque = (BTPageOpaque) PageGetSpecialPointer(page);
 
 		if (P_RIGHTMOST(opaque))
+		{
+			*comparecol = cmpcol;
 			break;
+		}
 
 		/*
 		 * Finish any incomplete splits we encounter along the way.
@@ -302,14 +312,18 @@ _bt_moveright(Relation rel,
 			continue;
 		}
 
-		if (P_IGNORE(opaque) || _bt_compare(rel, key, page, P_HIKEY) >= cmpval)
+		if (P_IGNORE(opaque) || _bt_compare(rel, key, page, P_HIKEY, &cmpcol) >= cmpval)
 		{
 			/* step right one page */
 			buf = _bt_relandgetbuf(rel, buf, opaque->btpo_next, access);
+			*comparecol = 1;
 			continue;
 		}
 		else
+		{
+			*comparecol = cmpcol;
 			break;
+		}
 	}
 
 	if (P_IGNORE(opaque))
@@ -342,7 +356,8 @@ _bt_moveright(Relation rel,
 static OffsetNumber
 _bt_binsrch(Relation rel,
 			BTScanInsert key,
-			Buffer buf)
+			Buffer buf,
+			AttrNumber highkeycmpcol)
 {
 	Page		page;
 	BTPageOpaque opaque;
@@ -350,6 +365,9 @@ _bt_binsrch(Relation rel,
 				high;
 	int32		result,
 				cmpval;
+	AttrNumber	curcmpcol = 1,
+				highcmpcol = highkeycmpcol,
+				lowcmpcol = 1;
 
 	page = BufferGetPage(buf);
 	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
@@ -394,12 +412,20 @@ _bt_binsrch(Relation rel,
 
 		/* We have low <= mid < high, so mid points at a real slot */
 
-		result = _bt_compare(rel, key, page, mid);
+		result = _bt_compare(rel, key, page, mid, &curcmpcol);
+		Assert(((curcmpcol = 1), result == _bt_compare(rel, key, page, mid, &curcmpcol)));
 
 		if (result >= cmpval)
+		{
 			low = mid + 1;
+			lowcmpcol = curcmpcol;
+		}
 		else
+		{
 			high = mid;
+			highcmpcol = curcmpcol;
+		}
+		curcmpcol = Min(highcmpcol, lowcmpcol);
 	}
 
 	/*
@@ -444,7 +470,7 @@ _bt_binsrch(Relation rel,
  * list split).
  */
 OffsetNumber
-_bt_binsrch_insert(Relation rel, BTInsertState insertstate)
+_bt_binsrch_insert(Relation rel, BTInsertState insertstate, AttrNumber highcmpcol)
 {
 	BTScanInsert key = insertstate->itup_key;
 	Page		page;
@@ -454,6 +480,9 @@ _bt_binsrch_insert(Relation rel, BTInsertState insertstate)
 				stricthigh;
 	int32		result,
 				cmpval;
+	AttrNumber	cmpcol = 1,
+				highcol = highcmpcol,
+				lowcol = 1;
 
 	page = BufferGetPage(insertstate->buf);
 	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
@@ -507,16 +536,22 @@ _bt_binsrch_insert(Relation rel, BTInsertState insertstate)
 
 		/* We have low <= mid < high, so mid points at a real slot */
 
-		result = _bt_compare(rel, key, page, mid);
+		result = _bt_compare(rel, key, page, mid, &cmpcol);
 
 		if (result >= cmpval)
+		{
 			low = mid + 1;
+			lowcol = cmpcol;
+		}
 		else
 		{
 			high = mid;
+			highcol = cmpcol;
 			if (result != 0)
 				stricthigh = high;
 		}
+
+		cmpcol = Min(highcol, lowcol);
 
 		/*
 		 * If tuple at offset located by binary search is a posting list whose
@@ -661,7 +696,8 @@ int32
 _bt_compare(Relation rel,
 			BTScanInsert key,
 			Page page,
-			OffsetNumber offnum)
+			OffsetNumber offnum,
+			AttrNumber *comparecol)
 {
 	TupleDesc	itupdesc = RelationGetDescr(rel);
 	BTPageOpaque opaque = (BTPageOpaque) PageGetSpecialPointer(page);
@@ -671,10 +707,12 @@ _bt_compare(Relation rel,
 	int			ncmpkey;
 	int			ntupatts;
 	int32		result;
+	IAttrIterStateData iter;
 
 	Assert(_bt_check_natts(rel, key->heapkeyspace, page, offnum));
 	Assert(key->keysz <= IndexRelationGetNumberOfKeyAttributes(rel));
 	Assert(key->heapkeyspace || key->scantid == NULL);
+	Assert(*comparecol >= 1 && *comparecol <= key->keysz + 1);
 
 	/*
 	 * Force result ">" if target item is first data item on an internal page
@@ -701,24 +739,26 @@ _bt_compare(Relation rel,
 	ncmpkey = Min(ntupatts, key->keysz);
 	Assert(key->heapkeyspace || ncmpkey == key->keysz);
 	Assert(!BTreeTupleIsPosting(itup) || key->allequalimage);
-	scankey = key->scankeys;
-	for (int i = 1; i <= ncmpkey; i++)
+	scankey = key->scankeys + (*comparecol - 1);
+
+	index_attiterinit(itup, *comparecol, itupdesc, &iter);
+
+	for (int i = *comparecol; i <= ncmpkey; i++)
 	{
 		Datum		datum;
-		bool		isNull;
 
-		datum = index_getattr(itup, scankey->sk_attno, itupdesc, &isNull);
+		datum = index_attiternext(itup, scankey->sk_attno, itupdesc, &iter);
 
 		if (scankey->sk_flags & SK_ISNULL)	/* key is NULL */
 		{
-			if (isNull)
+			if (iter.isNull)
 				result = 0;		/* NULL "=" NULL */
 			else if (scankey->sk_flags & SK_BT_NULLS_FIRST)
 				result = -1;	/* NULL "<" NOT_NULL */
 			else
 				result = 1;		/* NULL ">" NOT_NULL */
 		}
-		else if (isNull)		/* key is NOT_NULL and item is NULL */
+		else if (iter.isNull)		/* key is NOT_NULL and item is NULL */
 		{
 			if (scankey->sk_flags & SK_BT_NULLS_FIRST)
 				result = 1;		/* NOT_NULL ">" NULL */
@@ -746,7 +786,10 @@ _bt_compare(Relation rel,
 
 		/* if the keys are unequal, return the difference */
 		if (result != 0)
+		{
+			*comparecol = i;
 			return result;
+		}
 
 		scankey++;
 	}
@@ -760,6 +803,8 @@ _bt_compare(Relation rel,
 	 * scankey won't, so explicitly excluding non-key attributes isn't
 	 * necessary.
 	 */
+	*comparecol = ncmpkey + 1;
+
 	if (key->keysz > ntupatts)
 		return 1;
 
@@ -1397,7 +1442,7 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 	_bt_initialize_more_data(so, dir);
 
 	/* position to the precise item on the page */
-	offnum = _bt_binsrch(rel, &inskey, buf);
+	offnum = _bt_binsrch(rel, &inskey, buf, 1);
 
 	/*
 	 * If nextkey = false, we are positioned at the first item >= scan key, or

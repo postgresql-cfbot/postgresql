@@ -2651,6 +2651,7 @@ bt_rootdescend(BtreeCheckState *state, IndexTuple itup)
 	BTStack		stack;
 	Buffer		lbuf;
 	bool		exists;
+	AttrNumber	cmpcol = 1;
 
 	key = _bt_mkscankey(state->rel, itup);
 	Assert(key->heapkeyspace && key->scantid != NULL);
@@ -2681,13 +2682,13 @@ bt_rootdescend(BtreeCheckState *state, IndexTuple itup)
 		insertstate.buf = lbuf;
 
 		/* Get matching tuple on leaf page */
-		offnum = _bt_binsrch_insert(state->rel, &insertstate);
+		offnum = _bt_binsrch_insert(state->rel, &insertstate, 1);
 		/* Compare first >= matching item on leaf page, if any */
 		page = BufferGetPage(lbuf);
 		/* Should match on first heap TID when tuple has a posting list */
 		if (offnum <= PageGetMaxOffsetNumber(page) &&
 			insertstate.postingoff <= 0 &&
-			_bt_compare(state->rel, key, page, offnum) == 0)
+			_bt_compare(state->rel, key, page, offnum, &cmpcol) == 0)
 			exists = true;
 		_bt_relbuf(state->rel, lbuf);
 	}
@@ -2748,7 +2749,8 @@ invariant_l_offset(BtreeCheckState *state, BTScanInsert key,
 				   OffsetNumber upperbound)
 {
 	ItemId		itemid;
-	int32		cmp;
+	int32		cmp,
+				cmpcol = 1;
 
 	Assert(key->pivotsearch);
 
@@ -2759,7 +2761,7 @@ invariant_l_offset(BtreeCheckState *state, BTScanInsert key,
 	if (!key->heapkeyspace)
 		return invariant_leq_offset(state, key, upperbound);
 
-	cmp = _bt_compare(state->rel, key, state->target, upperbound);
+	cmp = _bt_compare(state->rel, key, state->target, upperbound, &cmpcol);
 
 	/*
 	 * _bt_compare() is capable of determining that a scankey with a
@@ -2810,11 +2812,12 @@ static inline bool
 invariant_leq_offset(BtreeCheckState *state, BTScanInsert key,
 					 OffsetNumber upperbound)
 {
-	int32		cmp;
+	int32		cmp,
+				cmpcol = 1;
 
 	Assert(key->pivotsearch);
 
-	cmp = _bt_compare(state->rel, key, state->target, upperbound);
+	cmp = _bt_compare(state->rel, key, state->target, upperbound, &cmpcol);
 
 	return cmp <= 0;
 }
@@ -2833,11 +2836,12 @@ static inline bool
 invariant_g_offset(BtreeCheckState *state, BTScanInsert key,
 				   OffsetNumber lowerbound)
 {
-	int32		cmp;
+	int32		cmp,
+				cmpcol = 1;
 
 	Assert(key->pivotsearch);
 
-	cmp = _bt_compare(state->rel, key, state->target, lowerbound);
+	cmp = _bt_compare(state->rel, key, state->target, lowerbound, &cmpcol);
 
 	/* pg_upgrade'd indexes may legally have equal sibling tuples */
 	if (!key->heapkeyspace)
@@ -2871,14 +2875,15 @@ invariant_l_nontarget_offset(BtreeCheckState *state, BTScanInsert key,
 							 OffsetNumber upperbound)
 {
 	ItemId		itemid;
-	int32		cmp;
+	int32		cmp,
+				cmpcol = 1;
 
 	Assert(key->pivotsearch);
 
 	/* Verify line pointer before checking tuple */
 	itemid = PageGetItemIdCareful(state, nontargetblock, nontarget,
 								  upperbound);
-	cmp = _bt_compare(state->rel, key, nontarget, upperbound);
+	cmp = _bt_compare(state->rel, key, nontarget, upperbound, &cmpcol);
 
 	/* pg_upgrade'd indexes may legally have equal sibling tuples */
 	if (!key->heapkeyspace)

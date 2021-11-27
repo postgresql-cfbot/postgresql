@@ -24,6 +24,7 @@
 #include "common/ip.h"
 #include "common/link-canary.h"
 #include "common/scram-common.h"
+#include "common/zpq_stream.h"
 #include "common/string.h"
 #include "fe-auth.h"
 #include "libpq-fe.h"
@@ -339,6 +340,10 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 		"Replication", "D", 5,
 	offsetof(struct pg_conn, replication)},
 
+	{"compression", "PGCOMPRESSION", NULL, NULL,
+		"Libpq-compression", "", 16,
+	offsetof(struct pg_conn, compression)},
+
 	{"target_session_attrs", "PGTARGETSESSIONATTRS",
 		DefaultTargetSessionAttrs, NULL,
 		"Target-Session-Attrs", "", 15, /* sizeof("prefer-standby") = 15 */
@@ -447,6 +452,10 @@ pgthreadlock_t pg_g_threadlock = default_threadlock;
 void
 pqDropConnection(PGconn *conn, bool flushInput)
 {
+	/* Release compression streams */
+	zpq_free(conn->zpqStream);
+	conn->zpqStream = NULL;
+
 	/* Drop any SSL state */
 	pqsecure_close(conn);
 
@@ -3271,11 +3280,14 @@ keep_going:						/* We will come back to here until there is
 				}
 
 				/*
-				 * Validate message type: we expect only an authentication
-				 * request or an error here.  Anything else probably means
-				 * it's not Postgres on the other end at all.
+				 * Validate message type. We expect only:
+				 * - authentication request ('R')
+				 * - error ('E')
+				 * - protocol compression acknowledgment ('z')
+				 * - NegotiateProtocolVersion in cases when server does not support protocol compression
+				 * Anything else probably means it's not Postgres on the other end at all.
 				 */
-				if (!(beresp == 'R' || beresp == 'E'))
+				if (!(beresp == 'R' || beresp == 'E' || beresp == 'z' || beresp == 'v'))
 				{
 					appendPQExpBuffer(&conn->errorMessage,
 									  libpq_gettext("expected authentication request from server, but received %c\n"),
@@ -3351,6 +3363,60 @@ keep_going:						/* We will come back to here until there is
 						goto error_return;
 					/* We'll come back when there is more data */
 					return PGRES_POLLING_READING;
+				}
+
+				if (beresp == 'z')	/* Switch on compression */
+				{
+					zpq_compressor *compressors;
+					size_t		n_compressors;
+					char	   *resp = malloc(msgLength);
+
+					pqGetnchar(resp, msgLength, conn);
+
+					if (!zpq_deserialize_compressors(resp, &compressors, &n_compressors))
+					{
+						appendPQExpBuffer(&conn->errorMessage,
+										  libpq_gettext("server returned unrecognized compression setting: %s\n"),
+										  resp);
+						free(resp);
+						goto error_return;
+					}
+					free(resp);
+
+					if (n_compressors == 0)
+					{
+						/*
+						 * If there are no compressors returned, it means that
+						 * the server rejected all sent compression
+						 * algorithms. Mark the data as consumed and do not
+						 * enable the compression.
+						 */
+						conn->inStart = conn->inCursor;
+						goto keep_going;
+					}
+
+					Assert(!conn->zpqStream);
+					conn->zpqStream = zpq_create(compressors, n_compressors,
+												 (zpq_tx_func) pqsecure_write, (zpq_rx_func) pqsecure_read,
+												 conn,
+												 &conn->inBuffer[conn->inCursor],
+												 conn->inEnd - conn->inCursor);
+					if (!conn->zpqStream)
+					{
+						appendPQExpBuffer(&conn->errorMessage,
+										  libpq_gettext("failed to initialize compression\n"));
+						free(compressors);
+						goto error_return;
+					}
+					/* reset buffer */
+					conn->inStart = conn->inCursor = conn->inEnd = 0;
+				}
+
+				if (conn->n_compressors != 0 && beresp == 'v')	/* NegotiateProtocolVersion */
+				{
+					appendPQExpBuffer(&conn->errorMessage,
+									  libpq_gettext("server does not support protocol compression\n"));
+					goto error_return;
 				}
 
 				/* Handle errors. */
@@ -4097,6 +4163,8 @@ freePGconn(PGconn *conn)
 		free(conn->dbName);
 	if (conn->replication)
 		free(conn->replication);
+	if (conn->compression)
+		free(conn->compression);
 	if (conn->pguser)
 		free(conn->pguser);
 	if (conn->pgpass)
@@ -6626,6 +6694,22 @@ PQuser(const PGconn *conn)
 	if (!conn)
 		return NULL;
 	return conn->pguser;
+}
+
+char *
+PQcompressor(const PGconn *conn)
+{
+	if (!conn || !conn->zpqStream)
+		return NULL;
+	return (char *) zpq_compress_algorithm_name(conn->zpqStream);
+}
+
+char *
+PQdecompressor(const PGconn *conn)
+{
+	if (!conn || !conn->zpqStream)
+		return NULL;
+	return (char *) zpq_decompress_algorithm_name(conn->zpqStream);
 }
 
 char *

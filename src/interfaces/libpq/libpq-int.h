@@ -40,6 +40,7 @@
 /* include stuff common to fe and be */
 #include "getaddrinfo.h"
 #include "libpq/pqcomm.h"
+#include "common/zpq_stream.h"
 /* include stuff found in fe only */
 #include "fe-auth-sasl.h"
 #include "pqexpbuffer.h"
@@ -340,6 +341,7 @@ typedef struct pg_conn_host
 								 * found in password file. */
 } pg_conn_host;
 
+
 /*
  * PGconn stores all the state data associated with a single connection
  * to a backend.
@@ -392,6 +394,14 @@ struct pg_conn
 								 * "sspi") */
 	char	   *ssl_min_protocol_version;	/* minimum TLS protocol version */
 	char	   *ssl_max_protocol_version;	/* maximum TLS protocol version */
+
+	char	   *compression;	/* stream compression (boolean value, "any" or
+								 * list of compression algorithms separated by
+								 * comma) */
+	zpq_compressor *compressors;	/* descriptors of compression algorithms
+									 * chosen by client */
+	unsigned	n_compressors;	/* size of compressors array  */
+
 	char	   *target_session_attrs;	/* desired session properties */
 
 	/* Optional file to write trace info to */
@@ -572,6 +582,9 @@ struct pg_conn
 
 	/* Buffer for receiving various parts of messages */
 	PQExpBufferData workBuffer; /* expansible string */
+
+	/* Compression stream */
+	ZpqStream  *zpqStream;
 };
 
 /* PGcancel stores all data necessary to cancel a connection. A copy of this
@@ -697,6 +710,7 @@ extern int	pqWaitTimed(int forRead, int forWrite, PGconn *conn,
 						time_t finish_time);
 extern int	pqReadReady(PGconn *conn);
 extern int	pqWriteReady(PGconn *conn);
+extern int	pqReadPending(PGconn *conn);
 
 /* === in fe-secure.c === */
 

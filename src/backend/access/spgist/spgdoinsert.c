@@ -19,6 +19,7 @@
 #include "access/spgist_private.h"
 #include "access/spgxlog.h"
 #include "access/xloginsert.h"
+#include "common/pg_prng.h"
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
 #include "utils/rel.h"
@@ -2210,7 +2211,7 @@ spgdoinsert(Relation index, SpGistState *state,
 				if (out.resultType == spgAddNode)
 					elog(ERROR, "cannot add a node to an allTheSame inner tuple");
 				else if (out.resultType == spgMatchNode)
-					out.result.matchNode.nodeN = random() % innerTuple->nNodes;
+					out.result.matchNode.nodeN = pg_prng_uint32(&pg_global_prng_state) % innerTuple->nNodes;
 			}
 
 			switch (out.resultType)

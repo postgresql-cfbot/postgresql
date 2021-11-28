@@ -98,6 +98,7 @@
 #include "catalog/pg_control.h"
 #include "common/file_perm.h"
 #include "common/ip.h"
+#include "common/pg_prng.h"
 #include "common/string.h"
 #include "lib/ilist.h"
 #include "libpq/auth.h"
@@ -2699,19 +2700,22 @@ ClosePostmasterPorts(bool am_syslogger)
 void
 InitProcessGlobals(void)
 {
-	unsigned int rseed;
-
 	MyProcPid = getpid();
 	MyStartTimestamp = GetCurrentTimestamp();
 	MyStartTime = timestamptz_to_time_t(MyStartTimestamp);
 
 	/*
-	 * Set a different seed for random() in every process.  We want something
+	 * Set a different global seed in every process.  We want something
 	 * unpredictable, so if possible, use high-quality random bits for the
 	 * seed.  Otherwise, fall back to a seed based on timestamp and PID.
 	 */
-	if (!pg_strong_random(&rseed, sizeof(rseed)))
+	if (unlikely(!pg_prng_strong_seed(&pg_global_prng_state)))
 	{
+		uint64	rseed;
+
+		ereport(WARNING,
+				(errmsg_internal("pg_prng_strong_seed() failed, falling back to weaker seeding")));
+
 		/*
 		 * Since PIDs and timestamps tend to change more frequently in their
 		 * least significant bits, shift the timestamp left to allow a larger
@@ -2722,8 +2726,14 @@ InitProcessGlobals(void)
 		rseed = ((uint64) MyProcPid) ^
 			((uint64) MyStartTimestamp << 12) ^
 			((uint64) MyStartTimestamp >> 20);
+
+		pg_prng_seed(&pg_global_prng_state, rseed);
 	}
-	srandom(rseed);
+
+#ifndef WIN32
+	/* random() should not be used anywhere, but just in case */
+	srandom(pg_prng_int32(&pg_global_prng_state));
+#endif
 }
 
 

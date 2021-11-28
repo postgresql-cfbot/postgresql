@@ -21,14 +21,7 @@ geqo_set_seed(PlannerInfo *root, double seed)
 {
 	GeqoPrivateData *private = (GeqoPrivateData *) root->join_search_private;
 
-	/*
-	 * XXX. This seeding algorithm could certainly be improved - but it is not
-	 * critical to do so.
-	 */
-	memset(private->random_state, 0, sizeof(private->random_state));
-	memcpy(private->random_state,
-		   &seed,
-		   Min(sizeof(private->random_state), sizeof(seed)));
+	pg_prng_fseed(&private->random_state, seed);
 }
 
 double
@@ -36,5 +29,5 @@ geqo_rand(PlannerInfo *root)
 {
 	GeqoPrivateData *private = (GeqoPrivateData *) root->join_search_private;
 
-	return pg_erand48(private->random_state);
+	return pg_prng_double(&private->random_state);
 }

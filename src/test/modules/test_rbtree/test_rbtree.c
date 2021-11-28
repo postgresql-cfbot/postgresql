@@ -14,6 +14,7 @@
 #include "postgres.h"
 
 #include "fmgr.h"
+#include "common/pg_prng.h"
 #include "lib/rbtree.h"
 #include "utils/memutils.h"
 
@@ -108,7 +109,7 @@ GetPermutation(int size)
 	 */
 	for (i = 1; i < size; i++)
 	{
-		int			j = random() % (i + 1);
+		int			j = pg_prng_uint32(&pg_global_prng_state) % (i + 1);
 
 		if (j < i)				/* avoid fetching undefined data if j=i */
 			permutation[i] = permutation[j];
@@ -320,7 +321,7 @@ testdelete(int size, int delsize)
 
 	for (i = 0; i < delsize; i++)
 	{
-		int			k = random() % size;
+		int			k = pg_prng_uint32(&pg_global_prng_state) % size;
 
 		while (chosen[k])
 			k = (k + 1) % size;

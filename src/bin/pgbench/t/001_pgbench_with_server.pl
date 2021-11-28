@@ -379,9 +379,9 @@ $node->pgbench(
 
 		# After explicit seeding, the four random checks (1-3,20) are
 		# deterministic
-		qr{command=1.: int 13\b},      # uniform random
-		qr{command=2.: int 116\b},     # exponential random
-		qr{command=3.: int 1498\b},    # gaussian random
+		qr{command=1.: int 17\b},      # uniform random
+		qr{command=2.: int 108\b},     # exponential random
+		qr{command=3.: int 1452\b},    # gaussian random
 		qr{command=4.: int 4\b},
 		qr{command=5.: int 5\b},
 		qr{command=6.: int 6\b},
@@ -448,6 +448,7 @@ $node->pgbench(
 		qr{command=109.: boolean true\b},
 		qr{command=110.: boolean true\b},
 		qr{command=111.: boolean true\b},
+		qr{command=113.: boolean true\b},
 	],
 	'pgbench expressions',
 	{
@@ -591,8 +592,17 @@ SELECT :v0, :v1, :v2, :v3;
 \set t debug(0 <= :p and :p < :size and :p = permute(:v + :size, :size) and :p <> permute(:v + 1, :size))
 -- actual values
 \set t debug(permute(:v, 1) = 0)
-\set t debug(permute(0, 2, 5432) = 0 and permute(1, 2, 5432) = 1 and \
-             permute(0, 2, 5435) = 1 and permute(1, 2, 5435) = 0)
+\set t debug(permute(0, 2, 5431) = 1 and permute(1, 2, 5431) = 0 and \
+             permute(0, 2, 5432) = 0 and permute(1, 2, 5432) = 1)
+-- 63 bits tests for checking permute portability across architectures
+\set size debug(:max - 10)
+\set t debug(permute(:size-1, :size, 5432) = 4352241160009873020 and \
+             permute(:size-2, :size, 5432) = 4990004119691638710 and \
+             permute(:size-3, :size, 5432) = 5868029867256127549 and \
+             permute(:size-4, :size, 5432) = 1238830324886341378 and \
+             permute(:size-5, :size, 5432) = 7415914367102906897 and \
+             permute(:size-6, :size, 5432) = 3214501037984818995 and \
+             permute(:size-7, :size, 5432) =  600660351261124695)
 }
 	});
 

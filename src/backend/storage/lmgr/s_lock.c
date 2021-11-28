@@ -50,6 +50,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "common/pg_prng.h"
 #include "port/atomics.h"
 #include "storage/s_lock.h"
 
@@ -63,6 +64,7 @@
 slock_t		dummy_spinlock;
 
 static int	spins_per_delay = DEFAULT_SPINS_PER_DELAY;
+static pg_prng_state	prng_state;
 
 
 /*
@@ -143,8 +145,7 @@ perform_spin_delay(SpinDelayStatus *status)
 #endif
 
 		/* increase delay by a random fraction between 1X and 2X */
-		status->cur_delay += (int) (status->cur_delay *
-									((double) random() / (double) MAX_RANDOM_VALUE) + 0.5);
+		status->cur_delay += (int) (status->cur_delay * (pg_prng_double(&prng_state) + 0.5));
 		/* wrap back to minimum delay when max is exceeded */
 		if (status->cur_delay > MAX_DELAY_USEC)
 			status->cur_delay = MIN_DELAY_USEC;
@@ -303,7 +304,7 @@ volatile struct test_lock_struct test_lock;
 int
 main()
 {
-	srandom((unsigned int) time(NULL));
+	pg_prng_seed(&prng_state, (unsigned int) time(NULL));
 
 	test_lock.pad1 = test_lock.pad2 = 0x44;
 

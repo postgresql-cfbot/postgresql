@@ -13,6 +13,7 @@
 #include "postgres.h"
 
 #include "fmgr.h"
+#include "common/pg_prng.h"
 #include "lib/bloomfilter.h"
 #include "miscadmin.h"
 
@@ -85,7 +86,7 @@ create_and_test_bloom(int power, int64 nelements, int callerseed)
 	 * random seed can be recreated through callerseed if the need arises.
 	 * (Don't assume that RAND_MAX cannot exceed PG_INT32_MAX.)
 	 */
-	seed = callerseed < 0 ? random() % PG_INT32_MAX : callerseed;
+	seed = callerseed < 0 ? pg_prng_int32p(&pg_global_prng_state) : callerseed;
 
 	/* Create Bloom filter, populate it, and report on false positive rate */
 	filter = bloom_create(nelements, bloom_work_mem, seed);

@@ -556,7 +556,7 @@ StreamServerPort(int family, const char *hostName, unsigned short portNumber,
 		 * intended to provide a clamp on the request on platforms where an
 		 * overly large request provokes a kernel error (are there any?).
 		 */
-		maxconn = MaxBackends * 2;
+		maxconn = GetMaxBackends() * 2;
 		if (maxconn > PG_SOMAXCONN)
 			maxconn = PG_SOMAXCONN;
 

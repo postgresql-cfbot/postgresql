@@ -365,7 +365,7 @@ ProcArrayShmemSize(void)
 	Size		size;
 
 	/* Size of the ProcArray structure itself */
-#define PROCARRAY_MAXPROCS	(MaxBackends + max_prepared_xacts)
+#define PROCARRAY_MAXPROCS	(GetMaxBackends() + max_prepared_xacts)
 
 	size = offsetof(ProcArrayStruct, pgprocnos);
 	size = add_size(size, mul_size(sizeof(int), PROCARRAY_MAXPROCS));

@@ -293,7 +293,7 @@ TwoPhaseShmemInit(void)
 			 * prepared transaction. Currently multixact.c uses that
 			 * technique.
 			 */
-			gxacts[i].dummyBackendId = MaxBackends + 1 + i;
+			gxacts[i].dummyBackendId = GetMaxBackends() + 1 + i;
 		}
 	}
 	else

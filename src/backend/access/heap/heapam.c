@@ -80,7 +80,9 @@ static XLogRecPtr log_heap_update(Relation reln, Buffer oldbuf,
 								  bool all_visible_cleared, bool new_all_visible_cleared);
 static Bitmapset *HeapDetermineModifiedColumns(Relation relation,
 											   Bitmapset *interesting_cols,
-											   HeapTuple oldtup, HeapTuple newtup);
+											   Bitmapset *check_external_attr,
+											   HeapTuple oldtup, HeapTuple newtup,
+											   bool *id_has_external);
 static bool heap_acquire_tuplock(Relation relation, ItemPointer tid,
 								 LockTupleMode mode, LockWaitPolicy wait_policy,
 								 bool *have_tuple_lock);
@@ -106,7 +108,7 @@ static bool ConditionalMultiXactIdWait(MultiXactId multi, MultiXactStatus status
 static void index_delete_sort(TM_IndexDeleteOp *delstate);
 static int	bottomup_sort_and_shrink(TM_IndexDeleteOp *delstate);
 static XLogRecPtr log_heap_new_cid(Relation relation, HeapTuple tup);
-static HeapTuple ExtractReplicaIdentity(Relation rel, HeapTuple tup, bool key_changed,
+static HeapTuple ExtractReplicaIdentity(Relation rel, HeapTuple tup, bool key_required,
 										bool *copy);
 
 
@@ -3184,6 +3186,7 @@ heap_update(Relation relation, ItemPointer otid, HeapTuple newtup,
 	bool		all_visible_cleared_new = false;
 	bool		checked_lockers;
 	bool		locker_remains;
+	bool		id_has_external = false;
 	TransactionId xmax_new_tuple,
 				xmax_old_tuple;
 	uint16		infomask_old_tuple,
@@ -3264,7 +3267,8 @@ heap_update(Relation relation, ItemPointer otid, HeapTuple newtup,
 
 	/* Determine columns modified by the update. */
 	modified_attrs = HeapDetermineModifiedColumns(relation, interesting_attrs,
-												  &oldtup, newtup);
+												  id_attrs, &oldtup,
+												  newtup, &id_has_external);
 
 	/*
 	 * If we're not updating any "key" column, we can grab a weaker lock type.
@@ -3864,10 +3868,12 @@ l2:
 	 * Compute replica identity tuple before entering the critical section so
 	 * we don't PANIC upon a memory allocation failure.
 	 * ExtractReplicaIdentity() will return NULL if nothing needs to be
-	 * logged.
+	 * logged.  Pass old key required as true only if the replica identity key
+	 * columns are modified or it has external data.
 	 */
 	old_key_tuple = ExtractReplicaIdentity(relation, &oldtup,
-										   bms_overlap(modified_attrs, id_attrs),
+										   bms_overlap(modified_attrs, id_attrs) ||
+										   id_has_external,
 										   &old_key_copied);
 
 	/* NO EREPORT(ERROR) from here till changes are logged */
@@ -4028,7 +4034,8 @@ l2:
  */
 static bool
 heap_tuple_attr_equals(TupleDesc tupdesc, int attrnum,
-					   HeapTuple tup1, HeapTuple tup2)
+					   HeapTuple tup1, HeapTuple tup2,
+					   bool *old_has_external)
 {
 	Datum		value1,
 				value2;
@@ -4063,6 +4070,13 @@ heap_tuple_attr_equals(TupleDesc tupdesc, int attrnum,
 	 */
 	value1 = heap_getattr(tup1, attrnum, tupdesc, &isnull1);
 	value2 = heap_getattr(tup2, attrnum, tupdesc, &isnull2);
+
+	/* check whether the value is stored externally or not and set the flag */
+	if (!isnull1 && TupleDescAttr(tupdesc, attrnum - 1)->attlen == -1 &&
+		VARATT_IS_EXTERNAL((struct varlena *) DatumGetPointer(value1)))
+		*old_has_external = true;
+	else
+		*old_has_external = false;
 
 	/*
 	 * If one value is NULL and other is not, then they are certainly not
@@ -4110,19 +4124,25 @@ heap_tuple_attr_equals(TupleDesc tupdesc, int attrnum,
  */
 static Bitmapset *
 HeapDetermineModifiedColumns(Relation relation, Bitmapset *interesting_cols,
-							 HeapTuple oldtup, HeapTuple newtup)
+							 Bitmapset *check_external_attr,
+							 HeapTuple oldtup, HeapTuple newtup,
+							 bool *id_has_external)
 {
 	int			attnum;
 	Bitmapset  *modified = NULL;
+	bool		has_external = false;
 
 	while ((attnum = bms_first_member(interesting_cols)) >= 0)
 	{
 		attnum += FirstLowInvalidHeapAttributeNumber;
 
 		if (!heap_tuple_attr_equals(RelationGetDescr(relation),
-									attnum, oldtup, newtup))
+									attnum, oldtup, newtup, &has_external))
 			modified = bms_add_member(modified,
 									  attnum - FirstLowInvalidHeapAttributeNumber);
+		if (has_external && bms_is_member(attnum - FirstLowInvalidHeapAttributeNumber,
+										  check_external_attr))
+			*id_has_external = true;
 	}
 
 	return modified;
@@ -8350,14 +8370,15 @@ log_heap_new_cid(Relation relation, HeapTuple tup)
  * Returns NULL if there's no need to log an identity or if there's no suitable
  * key defined.
  *
- * key_changed should be false if caller knows that no replica identity
- * columns changed value.  It's always true in the DELETE case.
+ * key_required should be false if caller knows that no replica identity
+ * columns changed value and it doesn't has any external data.
+ * It's always true in the DELETE case.
  *
  * *copy is set to true if the returned tuple is a modified copy rather than
  * the same tuple that was passed in.
  */
 static HeapTuple
-ExtractReplicaIdentity(Relation relation, HeapTuple tp, bool key_changed,
+ExtractReplicaIdentity(Relation relation, HeapTuple tp, bool key_required,
 					   bool *copy)
 {
 	TupleDesc	desc = RelationGetDescr(relation);
@@ -8390,7 +8411,7 @@ ExtractReplicaIdentity(Relation relation, HeapTuple tp, bool key_changed,
 	}
 
 	/* if the key hasn't changed and we're only logging the key, we're done */
-	if (!key_changed)
+	if (!key_required)
 		return NULL;
 
 	/* find out the replica identity columns */
@@ -8398,10 +8419,10 @@ ExtractReplicaIdentity(Relation relation, HeapTuple tp, bool key_changed,
 										 INDEX_ATTR_BITMAP_IDENTITY_KEY);
 
 	/*
-	 * If there's no defined replica identity columns, treat as !key_changed.
+	 * If there's no defined replica identity columns, treat as !key_required.
 	 * (This case should not be reachable from heap_update, since that should
-	 * calculate key_changed accurately.  But heap_delete just passes constant
-	 * true for key_changed, so we can hit this case in deletes.)
+	 * calculate key_required accurately.  But heap_delete just passes constant
+	 * true for key_required, so we can hit this case in deletes.)
 	 */
 	if (bms_is_empty(idattrs))
 		return NULL;

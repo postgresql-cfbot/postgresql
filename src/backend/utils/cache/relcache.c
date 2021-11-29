@@ -4619,7 +4619,7 @@ RelationGetFKeyList(Relation relation)
 								   info->conkey,
 								   info->confkey,
 								   info->conpfeqop,
-								   NULL, NULL);
+								   NULL, NULL, NULL, NULL);
 
 		/* Add FK's node to the result list */
 		result = lappend(result, info);

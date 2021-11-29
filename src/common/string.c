@@ -25,6 +25,15 @@
 
 
 /*
+ * Returns whether the string `str' has the prefix `start'.
+ */
+bool
+pg_str_startswith(const char *str, const char *start)
+{
+	return strncmp(str, start, strlen(start)) == 0;
+}
+
+/*
  * Returns whether the string `str' has the postfix `end'.
  */
 bool

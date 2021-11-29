@@ -578,6 +578,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <boolean> constraints_set_mode
 %type <str>		OptTableSpace OptConsTableSpace
 %type <rolespec> OptTableSpaceOwner
+%type <boolean> OptTableSpaceNew
 %type <ival>	opt_check_option
 
 %type <str>		opt_provider security_label
@@ -4559,19 +4560,25 @@ opt_procedural:
  *
  *****************************************************************************/
 
-CreateTableSpaceStmt: CREATE TABLESPACE name OptTableSpaceOwner LOCATION Sconst opt_reloptions
+CreateTableSpaceStmt: CREATE TABLESPACE name OptTableSpaceOwner OptTableSpaceNew LOCATION Sconst opt_reloptions
 				{
 					CreateTableSpaceStmt *n = makeNode(CreateTableSpaceStmt);
 					n->tablespacename = $3;
 					n->owner = $4;
-					n->location = $6;
-					n->options = $7;
+					n->missing_ok = $5;
+					n->location = $7;
+					n->options = $8;
 					$$ = (Node *) n;
 				}
 		;
 
 OptTableSpaceOwner: OWNER RoleSpec		{ $$ = $2; }
 			| /*EMPTY */				{ $$ = NULL; }
+		;
+
+OptTableSpaceNew:
+			NEW							{ $$ = true; }
+			| /*EMPTY*/					{ $$ = false; }
 		;
 
 /*****************************************************************************

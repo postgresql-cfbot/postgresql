@@ -70,6 +70,7 @@
 #include "commands/tablecmds.h"
 #include "commands/tablespace.h"
 #include "common/file_perm.h"
+#include "common/string.h"
 #include "miscadmin.h"
 #include "postmaster/bgwriter.h"
 #include "storage/fd.h"
@@ -90,7 +91,8 @@ char	   *temp_tablespaces = NULL;
 
 
 static void create_tablespace_directories(const char *location,
-										  const Oid tablespaceoid);
+										  const Oid tablespaceoid,
+										  bool missing_ok);
 static bool destroy_tablespace_directories(Oid tablespaceoid, bool redo);
 
 
@@ -267,14 +269,16 @@ CreateTableSpace(CreateTableSpaceStmt *stmt)
 				 errmsg("tablespace location cannot contain single quotes")));
 
 	/*
-	 * Allowing relative paths seems risky
+	 * Allowing relative paths seems risky in general, but we'll allow it under
+	 * pg_user_files.
 	 *
 	 * this also helps us ensure that location is not empty or whitespace
 	 */
-	if (!is_absolute_path(location))
+	if (!is_absolute_path(location) &&
+		!pg_str_startswith(location, "pg_user_files/"))
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
-				 errmsg("tablespace location must be an absolute path")));
+				 errmsg("tablespace location must be an absolute path or a relative path under pg_user_files/")));
 
 	/*
 	 * Check that location isn't too long. Remember that we're going to append
@@ -366,13 +370,14 @@ CreateTableSpace(CreateTableSpaceStmt *stmt)
 	/* Post creation hook for new tablespace */
 	InvokeObjectPostCreateHook(TableSpaceRelationId, tablespaceoid, 0);
 
-	create_tablespace_directories(location, tablespaceoid);
+	create_tablespace_directories(location, tablespaceoid, stmt->missing_ok);
 
 	/* Record the filesystem change in XLOG */
 	{
 		xl_tblspc_create_rec xlrec;
 
 		xlrec.ts_id = tablespaceoid;
+		xlrec.ts_missing_ok = stmt->missing_ok;
 
 		XLogBeginInsert();
 		XLogRegisterData((char *) &xlrec,
@@ -585,8 +590,10 @@ DropTableSpace(DropTableSpaceStmt *stmt)
  *	to the specified directory
  */
 static void
-create_tablespace_directories(const char *location, const Oid tablespaceoid)
+create_tablespace_directories(const char *location, const Oid tablespaceoid,
+							  bool missing_ok)
 {
+	char		buffer[MAXPGPATH];
 	char	   *linkloc;
 	char	   *location_with_version_dir;
 	struct stat st;
@@ -597,16 +604,28 @@ create_tablespace_directories(const char *location, const Oid tablespaceoid)
 
 	/*
 	 * Attempt to coerce target directory to safe permissions.  If this fails,
-	 * it doesn't exist or has the wrong owner.
+	 * it doesn't exist or has the wrong owner.  If NEW LOCATION, we'll create
+	 * the directory.
 	 */
 	if (chmod(location, pg_dir_create_mode) != 0)
 	{
 		if (errno == ENOENT)
-			ereport(ERROR,
-					(errcode(ERRCODE_UNDEFINED_FILE),
-					 errmsg("directory \"%s\" does not exist", location),
-					 InRecovery ? errhint("Create this directory for the tablespace before "
-										  "restarting the server.") : 0));
+		{
+			if (missing_ok)
+			{
+				if (mkdir(location, pg_dir_create_mode) != 0)
+					ereport(ERROR,
+							(errcode(ERRCODE_UNDEFINED_FILE),
+							 errmsg("could not create directory \"%s\"",
+									location)));
+			}
+			else
+				ereport(ERROR,
+						(errcode(ERRCODE_UNDEFINED_FILE),
+						 errmsg("directory \"%s\" does not exist", location),
+						 InRecovery ? errhint("Create this directory for the tablespace before "
+											  "restarting the server.") : 0));
+		}
 		else
 			ereport(ERROR,
 					(errcode_for_file_access(),
@@ -650,6 +669,19 @@ create_tablespace_directories(const char *location, const Oid tablespaceoid)
 	 */
 	if (InRecovery)
 		remove_tablespace_symlink(linkloc);
+
+#ifndef WIN32
+	/*
+	 * If location is relative to pgdata, prefix it with ".." so that we have a
+	 * path relative to the symlink.  (Not needed for Windows, because our
+	 * symlink() wrapper will interpret it as relative to pgdata instead).
+	 */
+	if (!is_absolute_path(location))
+	{
+		snprintf(buffer, sizeof(buffer), "../%s", location);
+		location = buffer;
+	}
+#endif
 
 	/*
 	 * Create the symlink under PGDATA
@@ -1520,8 +1552,9 @@ tblspc_redo(XLogReaderState *record)
 	{
 		xl_tblspc_create_rec *xlrec = (xl_tblspc_create_rec *) XLogRecGetData(record);
 		char	   *location = xlrec->ts_path;
+		bool		missing_ok = xlrec->ts_missing_ok;
 
-		create_tablespace_directories(location, xlrec->ts_id);
+		create_tablespace_directories(location, xlrec->ts_id, missing_ok);
 	}
 	else if (info == XLOG_TBLSPC_DROP)
 	{

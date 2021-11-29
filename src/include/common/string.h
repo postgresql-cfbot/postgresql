@@ -21,6 +21,7 @@ typedef struct PromptInterruptContext
 } PromptInterruptContext;
 
 /* functions in src/common/string.c */
+extern bool pg_str_startswith(const char *str, const char *start);
 extern bool pg_str_endswith(const char *str, const char *end);
 extern int	strtoint(const char *pg_restrict str, char **pg_restrict endptr,
 					 int base);

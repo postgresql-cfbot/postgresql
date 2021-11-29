@@ -119,7 +119,7 @@ submake-contrib-spi: | submake-libpgport submake-generated-headers
 ## Run tests
 ##
 
-REGRESS_OPTS = --dlpath=. --max-concurrent-tests=20 --make-testtablespace-dir \
+REGRESS_OPTS = --dlpath=. --max-concurrent-tests=20 \
 	$(EXTRA_REGRESS_OPTS)
 
 check: all
@@ -163,5 +163,4 @@ clean distclean maintainer-clean: clean-lib
 	rm -f pg_regress_main.o pg_regress.o pg_regress$(X)
 # things created by various check targets
 	rm -f $(output_files) $(input_files)
-	rm -rf testtablespace
 	rm -rf $(pg_regress_clean_files)

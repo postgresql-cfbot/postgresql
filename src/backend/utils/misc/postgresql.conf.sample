@@ -90,6 +90,10 @@
 					# disconnection while running queries;
 					# 0 for never
 
+#remote_servers_connection_check_interval = 0	# time between time between checks for
+					# foreign server disconnection;
+					# 0 for never
+
 # - Authentication -
 
 #authentication_timeout = 1min		# 1s-600s

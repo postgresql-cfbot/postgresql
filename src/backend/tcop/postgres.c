@@ -44,6 +44,7 @@
 #include "commands/prepare.h"
 #include "common/pg_prng.h"
 #include "executor/spi.h"
+#include "foreign/foreign.h"
 #include "jit/jit.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
@@ -350,6 +351,7 @@ SocketBackend(StringInfo inBuf)
 	 * Get message type code from the frontend.
 	 */
 	HOLD_CANCEL_INTERRUPTS();
+	HOLD_CHECKING_REMOTE_SERVERS_INTERRUPTS();
 	pq_startmsgread();
 	qtype = pq_getbyte();
 
@@ -456,6 +458,7 @@ SocketBackend(StringInfo inBuf)
 	 */
 	if (pq_getmessage(inBuf, maxmsglen))
 		return EOF;				/* suitable message already logged */
+	RESUME_CHECKING_REMOTE_SERVERS_INTERRUPTS();
 	RESUME_CANCEL_INTERRUPTS();
 
 	return qtype;
@@ -2709,6 +2712,13 @@ start_xact_command(void)
 		!get_timeout_active(CLIENT_CONNECTION_CHECK_TIMEOUT))
 		enable_timeout_after(CLIENT_CONNECTION_CHECK_TIMEOUT,
 							 client_connection_check_interval);
+	if (remote_servers_connection_check_interval > 0 &&
+		IsUnderPostmaster &&
+		MyProcPort &&
+		HaveCheckingRemoteServersCallbacks() &&
+		!get_timeout_active(CHECKING_REMOTE_SERVERS_TIMEOUT))
+		enable_timeout_after(CHECKING_REMOTE_SERVERS_TIMEOUT,
+							 remote_servers_connection_check_interval);
 }
 
 static void
@@ -3211,6 +3221,27 @@ ProcessInterrupts(void)
 			else
 				enable_timeout_after(CLIENT_CONNECTION_CHECK_TIMEOUT,
 									 client_connection_check_interval);
+		}
+	}
+
+	if (CheckingRemoteServersTimeoutPending)
+	{
+		if (CheckingRemoteServersHoldoffCount != 0)
+		{
+			/*
+			* Skip checking foreign servers while reading messages.
+			*/
+			InterruptPending = true;
+		}
+		else
+		{
+			CheckingRemoteServersTimeoutPending = false;
+
+			CallCheckingRemoteServersCallbacks();
+
+			if (remote_servers_connection_check_interval > 0)
+				enable_timeout_after(CHECKING_REMOTE_SERVERS_TIMEOUT,
+										remote_servers_connection_check_interval);
 		}
 	}
 

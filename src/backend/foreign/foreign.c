@@ -26,7 +26,11 @@
 #include "utils/memutils.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
+#include "utils/timeout.h"
 
+/* for checking remote servers */
+int remote_servers_connection_check_interval = 0;
+static CheckingRemoteServersCallbackItem *fdw_callbacks = NULL;
 
 /*
  * GetForeignDataWrapper -	look up the foreign-data wrapper by OID.
@@ -835,4 +839,52 @@ GetExistingLocalJoinPath(RelOptInfo *joinrel)
 		return (Path *) joinpath;
 	}
 	return NULL;
+}
+
+/*
+ * Register callbacks for checking remote servers.
+ *
+ * This function is intended for use by FDW extensions.
+ * The checking timeout will be fired after registering the first callback.
+ */
+void
+RegisterCheckingRemoteServersCallback(CheckingRemoteServersCallback callback, void *arg)
+{
+	CheckingRemoteServersCallbackItem *item;
+	/* should we start checking timeout? */
+	bool first_exec = HaveCheckingRemoteServersCallbacks();
+
+	item = (CheckingRemoteServersCallbackItem *)
+			MemoryContextAlloc(TopMemoryContext, sizeof(CheckingRemoteServersCallbackItem));
+	item->callback = callback;
+	item->arg = arg;
+	item->next = fdw_callbacks;
+	fdw_callbacks = item;
+
+	if (first_exec && remote_servers_connection_check_interval > 0)
+		enable_timeout_after(CHECKING_REMOTE_SERVERS_TIMEOUT, remote_servers_connection_check_interval);
+}
+
+
+/*
+ * Call callbacks for checking remote servers.
+ *
+ * Note that this function will not return anything.
+ * Callback functions must throw ereport(ERROR) if disconnection has been detected.
+ */
+void
+CallCheckingRemoteServersCallbacks(void)
+{
+	CheckingRemoteServersCallbackItem *item;
+	for (item = fdw_callbacks; item; item = item->next)
+		item->callback(item->arg);
+}
+
+/*
+ * Check whether any callbacks has been registered.
+ */
+bool
+HaveCheckingRemoteServersCallbacks(void)
+{
+	return fdw_callbacks != NULL;
 }

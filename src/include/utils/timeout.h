@@ -34,6 +34,7 @@ typedef enum TimeoutId
 	IDLE_SESSION_TIMEOUT,
 	CLIENT_CONNECTION_CHECK_TIMEOUT,
 	STARTUP_PROGRESS_TIMEOUT,
+	CHECKING_REMOTE_SERVERS_TIMEOUT,
 	/* First user-definable timeout reason */
 	USER_TIMEOUT,
 	/* Maximum number of timeout reasons */

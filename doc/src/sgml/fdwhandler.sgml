@@ -2136,4 +2136,26 @@ GetForeignServerByName(const char *name, bool missing_ok);
 
   </sect1>
 
+   <sect1 id="fdw-checking-remote-servers">
+    <title>Checking the Health of Remote Servers via Foreign Data Wrapper</title>
+
+    <para>
+     For verifying the health of remote servers, callback functions can be
+     registered that runs periodically. The time interval is controlled by
+     <xref linkend="guc-remote-servers-connection-check-interval"/>.
+     The API for registering functions is:
+    <programlisting>
+void
+RegisterCheckingRemoteServersCallback(CheckingRemoteServersCallback callback, void *arg);
+    </programlisting>
+    Only functions that return void can be registered as callback functions.
+    Please set to void* arg a pointer if you want to pass an argument.
+    If you have problems with the health check results and want to
+    abort the transaction, please execute <function>ereport(ERROR)</function>
+    in the callback function.
+    </para>
+
+   </sect1>
+
+
  </chapter>

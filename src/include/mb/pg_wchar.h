@@ -30,6 +30,13 @@ typedef unsigned int pg_wchar;
 #define MAX_MULTIBYTE_CHAR_LEN	4
 
 /*
+ * UTF-8 macros
+ */
+#define IS_UTF8_2B_LEAD(c) (((c) & 0xe0) == 0xc0)
+#define IS_UTF8_3B_LEAD(c) (((c) & 0xf0) == 0xe0)
+#define IS_UTF8_4B_LEAD(c) (((c) & 0xf8) == 0xf0)
+
+/*
  * various definitions for EUC
  */
 #define SS2 0x8e				/* single shift 2 (JIS0201) */

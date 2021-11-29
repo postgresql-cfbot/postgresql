@@ -42,6 +42,62 @@
  */
 
 /*
+ * Verify a chunk of bytes for valid ASCII, including a zero-byte check.
+ */
+static inline bool
+is_valid_ascii(const unsigned char *s, int len)
+{
+	uint64		chunk,
+				highbit_cum = UINT64CONST(0),
+				zero_cum = UINT64CONST(0x8080808080808080);
+
+	Assert(len % sizeof(chunk) == 0);
+
+	while (len >= sizeof(chunk))
+	{
+		memcpy(&chunk, s, sizeof(chunk));
+
+		/*
+		 * Capture any zero bytes in this chunk.
+		 *
+		 * First, add 0x7f to each byte. This sets the high bit in each byte,
+		 * unless it was a zero. We will check later that none of the bytes in
+		 * the chunk had the high bit set, in which case the max value each
+		 * byte can have after the addition is 0x7f + 0x7f = 0xfe, and we
+		 * don't need to worry about carrying over to the next byte.
+		 *
+		 * If any resulting high bits are zero, the corresponding high bits in
+		 * the zero accumulator will be cleared.
+		 */
+		zero_cum &= (chunk + UINT64CONST(0x7f7f7f7f7f7f7f7f));
+
+		/* Capture any set bits in this chunk. */
+		highbit_cum |= chunk;
+
+		s += sizeof(chunk);
+		len -= sizeof(chunk);
+	}
+
+	/* Check if any high bits in the high bit accumulator got set. */
+	if (highbit_cum & UINT64CONST(0x8080808080808080))
+		return false;
+
+	/*
+	 * Check if any high bits in the zero accumulator got cleared.
+	 *
+	 * XXX: As noted above, the zero check is only valid if the chunk had no
+	 * high bits set. However, the compiler may perform these two checks in
+	 * any order. That's okay because if any high bits were set, we would
+	 * return false regardless, so invalid results from the zero check don't
+	 * matter.
+	 */
+	if (zero_cum != UINT64CONST(0x8080808080808080))
+		return false;
+
+	return true;
+}
+
+/*
  * SQL/ASCII
  */
 static int
@@ -1721,7 +1777,7 @@ pg_gb18030_verifystr(const unsigned char *s, int len)
 	return s - start;
 }
 
-static int
+static pg_noinline int
 pg_utf8_verifychar(const unsigned char *s, int len)
 {
 	int			l;
@@ -1750,11 +1806,229 @@ pg_utf8_verifychar(const unsigned char *s, int len)
 	return l;
 }
 
+/*
+ * The fast path of the UTF-8 verifier uses a deterministic finite automaton
+ * (DFA) for multibyte characters. In a traditional table-driven DFA, the
+ * input byte and current state are used to compute an index into an array of
+ * state transitions. Since the address of the next transition is dependent
+ * on this computation, there is latency in executing the load instruction,
+ * and the CPU is not kept busy.
+ *
+ * Instead, we use a "shift-based" DFA as described by Per Vognsen:
+ *
+ * https://gist.github.com/pervognsen/218ea17743e1442e59bb60d29b1aa725
+ *
+ * In a shift-based DFA, the input byte is an index into array of integers
+ * whose bit pattern encodes the state transitions. To compute the current
+ * state, we simply right-shift the integer by the current state and apply a
+ * mask. In this scheme, the address of the transition only depends on the
+ * input byte, so there is better pipelining.
+ *
+ * The naming convention for states and transitions was adopted from a UTF-8
+ * to UTF-16/32 transcoder, whose table is reproduced below:
+ *
+ * https://github.com/BobSteagall/utf_utils/blob/6b7a465265de2f5fa6133d653df0c9bdd73bbcf8/src/utf_utils.cpp
+ *
+ * ILL  ASC  CR1  CR2  CR3  L2A  L3A  L3B  L3C  L4A  L4B  L4C CLASS / STATE
+ * ==========================================================================
+ * err, END, err, err, err, CS1, P3A, CS2, P3B, P4A, CS3, P4B,      | BGN/END
+ * err, err, err, err, err, err, err, err, err, err, err, err,      | ERR
+ *                                                                  |
+ * err, err, END, END, END, err, err, err, err, err, err, err,      | CS1
+ * err, err, CS1, CS1, CS1, err, err, err, err, err, err, err,      | CS2
+ * err, err, CS2, CS2, CS2, err, err, err, err, err, err, err,      | CS3
+ *                                                                  |
+ * err, err, err, err, CS1, err, err, err, err, err, err, err,      | P3A
+ * err, err, CS1, CS1, err, err, err, err, err, err, err, err,      | P3B
+ *                                                                  |
+ * err, err, err, CS2, CS2, err, err, err, err, err, err, err,      | P4A
+ * err, err, CS2, err, err, err, err, err, err, err, err, err,      | P4B
+ *
+ * In the most straightforward implementation, a shift-based DFA for UTF-8
+ * requires 64-bit integers to encode the transitions, but with an SMT solver
+ * it's possible to find state numbers such that the transitions fit within
+ * 32-bit integers, as Dougall Johnson demonstrated:
+ *
+ * https://gist.github.com/dougallj/166e326de6ad4cf2c94be97a204c025f
+ *
+ * This packed representation is the reason for the seemingly odd choice of
+ * state values below.
+ */
+
+/* Error */
+#define	ERR  0
+/* Begin */
+#define	BGN 11
+/* Continuation states, expect 1/2/3 continuation bytes */
+#define	CS1 16
+#define	CS2  1
+#define	CS3  5
+/* Leading byte was E0/ED, expect 1 more continuation byte */
+#define	P3A  6
+#define	P3B 20
+/* Leading byte was F0/F4, expect 2 more continuation bytes */
+#define	P4A 25
+#define	P4B 30
+/* Begin and End are the same state */
+#define	END BGN
+
+/* the encoded state transitions for the lookup table */
+
+/* ASCII */
+#define ASC (END << BGN)
+/* 2-byte lead */
+#define L2A (CS1 << BGN)
+/* 3-byte lead */
+#define L3A (P3A << BGN)
+#define L3B (CS2 << BGN)
+#define L3C (P3B << BGN)
+/* 4-byte lead */
+#define L4A (P4A << BGN)
+#define L4B (CS3 << BGN)
+#define L4C (P4B << BGN)
+/* continuation byte */
+#define CR1 (END << CS1) | (CS1 << CS2) | (CS2 << CS3) | (CS1 << P3B) | (CS2 << P4B)
+#define CR2 (END << CS1) | (CS1 << CS2) | (CS2 << CS3) | (CS1 << P3B) | (CS2 << P4A)
+#define CR3 (END << CS1) | (CS1 << CS2) | (CS2 << CS3) | (CS1 << P3A) | (CS2 << P4A)
+/* invalid byte */
+#define ILL ERR
+
+static const uint32 Utf8Transition[256] =
+{
+	/* ASCII */
+
+	ILL, ASC, ASC, ASC, ASC, ASC, ASC, ASC,
+	ASC, ASC, ASC, ASC, ASC, ASC, ASC, ASC,
+	ASC, ASC, ASC, ASC, ASC, ASC, ASC, ASC,
+	ASC, ASC, ASC, ASC, ASC, ASC, ASC, ASC,
+
+	ASC, ASC, ASC, ASC, ASC, ASC, ASC, ASC,
+	ASC, ASC, ASC, ASC, ASC, ASC, ASC, ASC,
+	ASC, ASC, ASC, ASC, ASC, ASC, ASC, ASC,
+	ASC, ASC, ASC, ASC, ASC, ASC, ASC, ASC,
+
+	ASC, ASC, ASC, ASC, ASC, ASC, ASC, ASC,
+	ASC, ASC, ASC, ASC, ASC, ASC, ASC, ASC,
+	ASC, ASC, ASC, ASC, ASC, ASC, ASC, ASC,
+	ASC, ASC, ASC, ASC, ASC, ASC, ASC, ASC,
+
+	ASC, ASC, ASC, ASC, ASC, ASC, ASC, ASC,
+	ASC, ASC, ASC, ASC, ASC, ASC, ASC, ASC,
+	ASC, ASC, ASC, ASC, ASC, ASC, ASC, ASC,
+	ASC, ASC, ASC, ASC, ASC, ASC, ASC, ASC,
+
+	/* continuation bytes */
+
+	/* 80..8F */
+	CR1, CR1, CR1, CR1, CR1, CR1, CR1, CR1,
+	CR1, CR1, CR1, CR1, CR1, CR1, CR1, CR1,
+
+	/* 90..9F */
+	CR2, CR2, CR2, CR2, CR2, CR2, CR2, CR2,
+	CR2, CR2, CR2, CR2, CR2, CR2, CR2, CR2,
+
+	/* A0..BF */
+	CR3, CR3, CR3, CR3, CR3, CR3, CR3, CR3,
+	CR3, CR3, CR3, CR3, CR3, CR3, CR3, CR3,
+	CR3, CR3, CR3, CR3, CR3, CR3, CR3, CR3,
+	CR3, CR3, CR3, CR3, CR3, CR3, CR3, CR3,
+
+	/* leading bytes */
+
+	/* C0..DF */
+	ILL, ILL, L2A, L2A, L2A, L2A, L2A, L2A,
+	L2A, L2A, L2A, L2A, L2A, L2A, L2A, L2A,
+	L2A, L2A, L2A, L2A, L2A, L2A, L2A, L2A,
+	L2A, L2A, L2A, L2A, L2A, L2A, L2A, L2A,
+
+	/* E0..EF */
+	L3A, L3B, L3B, L3B, L3B, L3B, L3B, L3B,
+	L3B, L3B, L3B, L3B, L3B, L3C, L3B, L3B,
+
+	/* F0..FF */
+	L4A, L4B, L4B, L4B, L4C, ILL, ILL, ILL,
+	ILL, ILL, ILL, ILL, ILL, ILL, ILL, ILL
+};
+
+static inline void
+utf8_advance(const unsigned char *s, uint32 *state, int len)
+{
+	/* Note: We deliberately don't check the state's value here. */
+	while (len > 0)
+	{
+		/*
+		 * It's important that the mask value is 31: In most instruction sets,
+		 * a shift by a 32-bit operand is understood to be a shift by its mod
+		 * 32, so the compiler should elide the mask operation.
+		 */
+		*state = Utf8Transition[*s++] >> (*state & 31);
+		len--;
+	}
+
+	*state &= 31;
+}
+
 static int
 pg_utf8_verifystr(const unsigned char *s, int len)
 {
 	const unsigned char *start = s;
+	const int	orig_len = len;
+	uint32		state = BGN;
 
+/*
+ * Sixteen seems to give the best balance of performance across different
+ * byte distributions.
+ */
+#define STRIDE_LENGTH 16
+
+	if (len >= STRIDE_LENGTH)
+	{
+		while (len >= STRIDE_LENGTH)
+		{
+			/*
+			 * If the chunk is all ASCII, we can skip the full UTF-8 check,
+			 * but we must first check for a non-END state, which means the
+			 * previous chunk ended in the middle of a multibyte sequence.
+			 */
+			if (state != END || !is_valid_ascii(s, STRIDE_LENGTH))
+				utf8_advance(s, &state, STRIDE_LENGTH);
+
+			s += STRIDE_LENGTH;
+			len -= STRIDE_LENGTH;
+		}
+
+		/*
+		 * The error state persists, so we only need to check for it here. In
+		 * case of error we start over from the beginning with the slow path
+		 * so we can count the valid bytes.
+		 */
+		if (state == ERR)
+		{
+			len = orig_len;
+			s = start;
+		}
+
+		/*
+		 * We treat all other states as success, but it's possible the fast
+		 * path exited in the middle of a multibyte sequence, since that
+		 * wouldn't have caused an error. Before checking the remaining bytes,
+		 * walk backwards to find the last byte that could have been the start
+		 * of a valid sequence.
+		 */
+		while (s > start)
+		{
+			s--;
+			len++;
+
+			if (!IS_HIGHBIT_SET(*s) ||
+				IS_UTF8_2B_LEAD(*s) ||
+				IS_UTF8_3B_LEAD(*s) ||
+				IS_UTF8_4B_LEAD(*s))
+				break;
+		}
+	}
+
+	/* check remaining bytes */
 	while (len > 0)
 	{
 		int			l;

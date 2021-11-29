@@ -581,6 +581,10 @@ HandleCheckpointerInterrupts(void)
 		/* Normal exit from the checkpointer is here */
 		proc_exit(0);			/* done */
 	}
+
+	/* Process a request to log backtrace */
+	if (LogBacktracePending)
+		ProcessLogBacktraceInterrupt();
 }
 
 /*

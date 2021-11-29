@@ -859,4 +859,8 @@ HandlePgArchInterrupts(void)
 		ConfigReloadPending = false;
 		ProcessConfigFile(PGC_SIGHUP);
 	}
+
+	/* Process a request to log backtrace */
+	if (LogBacktracePending)
+		ProcessLogBacktraceInterrupt();
 }

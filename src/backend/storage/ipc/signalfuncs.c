@@ -23,6 +23,7 @@
 #include "storage/pmsignal.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
+#include "tcop/tcopprot.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
 
@@ -296,5 +297,70 @@ pg_rotate_logfile_v2(PG_FUNCTION_ARGS)
 	}
 
 	SendPostmasterSignal(PMSIGNAL_ROTATE_LOGFILE);
+	PG_RETURN_BOOL(true);
+}
+
+/*
+ * pg_log_backtrace - log backtrace of backend process.
+ *
+ * By default, only superusers can log a backtrace. Additional roles can be
+ * permitted with GRANT.
+ */
+Datum
+pg_log_backtrace(PG_FUNCTION_ARGS)
+{
+	int			pid = PG_GETARG_INT32(0);
+	PGPROC	   *proc;
+	PGPROC	   *aux_proc = NULL;
+	BackendId   backendId = InvalidBackendId;
+
+#ifndef HAVE_BACKTRACE_SYMBOLS
+	ereport(WARNING,
+			errmsg("backtrace generation is not supported by this installation"),
+			errhint("You need to rebuild PostgreSQL using a library containing backtrace_symbols."));
+	PG_RETURN_BOOL(false);
+#endif
+
+	/*
+	 * BackendPidGetProc or AuxiliaryPidGetProc returns NULL if the pid isn't
+	 * valid; but by the time we reach kill(), a process for which we get a
+	 * valid proc here might have terminated on its own.  There's no way to
+	 * acquire a lock on an arbitrary process to prevent that. But since this
+	 * mechanism is usually used to debug a backend consuming lots of CPU
+	 * cycles, that it might end on its own first and its backtrace not logged
+	 * is not a problem.
+	 */
+	proc = BackendPidGetProc(pid);
+	if (proc == NULL)
+	{
+		/* See if the process with given pid is an auxiliary process. */
+		aux_proc = AuxiliaryPidGetProc(pid);
+		if (aux_proc == NULL)
+		{
+			ereport(WARNING,
+					(errmsg("PID %d is not a PostgreSQL server process", pid)));
+			PG_RETURN_BOOL(false);
+		}
+	}
+
+	/*
+	 * Only regular backends will have a valid backend id; auxiliary processes
+	 * don't.
+	 */
+	if (!aux_proc)
+		backendId = proc->backendId;
+
+	/*
+	 * Send SIGUSR1 to postgres backend whose pid matches pid by
+	 * setting PROCSIG_LOG_BACKTRACE, the backend process will log
+	 * the backtrace once the signal is received.
+	 */
+	if (SendProcSignal(pid, PROCSIG_LOG_BACKTRACE, backendId))
+	{
+		ereport(WARNING,
+				(errmsg("could not send signal to process %d: %m", pid)));
+		PG_RETURN_BOOL(false);
+	}
+
 	PG_RETURN_BOOL(true);
 }

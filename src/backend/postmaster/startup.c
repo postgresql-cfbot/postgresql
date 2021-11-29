@@ -200,6 +200,10 @@ HandleStartupProcInterrupts(void)
 	/* Process barrier events */
 	if (ProcSignalBarrierPending)
 		ProcessProcSignalBarrier();
+
+	/* Process a request to log backtrace */
+	if (LogBacktracePending)
+		ProcessLogBacktraceInterrupt();
 }
 
 

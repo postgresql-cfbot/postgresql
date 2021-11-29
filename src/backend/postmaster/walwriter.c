@@ -306,4 +306,8 @@ HandleWalWriterInterrupts(void)
 
 		proc_exit(0);
 	}
+
+	/* Process a request to log backtrace */
+	if (LogBacktracePending)
+		ProcessLogBacktraceInterrupt();
 }

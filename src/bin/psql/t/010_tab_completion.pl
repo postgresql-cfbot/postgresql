@@ -41,8 +41,11 @@ $node->start;
 # set up a few database objects
 $node->safe_psql('postgres',
 	    "CREATE TABLE tab1 (f1 int, f2 text);\n"
+	  . "CREATE TABLE onetab1 (f1 int);\n"
 	  . "CREATE TABLE mytab123 (f1 int, f2 text);\n"
-	  . "CREATE TABLE mytab246 (f1 int, f2 text);\n");
+	  . "CREATE TABLE mytab246 (f1 int, f2 text);\n"
+	  . "CREATE TABLE \"myTAB123\" (\"aF1\" int, f2 text);\n"
+	  . "CREATE TYPE mytype1 as enum ('green', 'BLUE', 'bLACK');\n");
 
 # Developers would not appreciate this test adding a bunch of junk to
 # their ~/.psql_history, so be sure to redirect history into a temp file.
@@ -148,6 +151,66 @@ sub clear_line
 check_completion("SEL\t", qr/SELECT /, "complete SEL<tab> to SELECT");
 
 clear_query();
+
+# check set query command(upper case) completion for upper character inputs
+check_completion("set BYT\t", qq/set BYT\b\b\bbytea_output /, "complete set BYT<tab> to set bytea_output");
+
+clear_query();
+
+# check set query command(lower case) completion for upper character inputs
+check_completion("set bYT\t", qq/set bYT\b\bytea_output /, "complete set bYT<tab> to set bytea_output");
+
+clear_query();
+
+# check query command(upper case) completion for empty input
+check_completion("update onetab1 \t", qr/update onetab1 SET /, "complete SQL key words for onetab1 with empty input");
+
+clear_query();
+
+# check query command(lower case) completion for empty input
+check_completion("update onetab1 SET \t", qr/update onetab1 SET f1 /, "complete column name for onetab1 with empty input");
+
+clear_query();
+
+# check query command completion for upper character relation name
+check_completion("update TAB1 SET \t", qr/update TAB1 SET \af/, "complete column name for TAB1");
+
+clear_query();
+
+# check quoted identifiers in table
+check_completion("update \"my\t", qr/update \"myTAB123\" /, "complete quoted string1");
+
+clear_query();
+
+# check quoted identifiers in column
+check_completion("update \"myTAB123\" SET \"aF\t", qr/update \"myTAB123\" SET \"aF1\" /, "complete quoted string2");
+
+clear_query();
+
+# check schema query(lower case) which is case-insensitive
+check_completion("select oid from pg_Cla\t", qq/select oid from pg_Cla\b\b\bclass /, "complete schema query with lower case string");
+
+clear_query();
+
+# check schema query(upper case) which is case-insensitive
+check_completion("select oid from Pg_cla\t", qq/select oid from Pg_cla\b\b\b\b\b\bpg_class /, "complete schema query with uppper case string");
+
+clear_query();
+
+# check schema.table query which is case-insensitive
+check_completion("alter table PUBLIC.tab\t", qq/alter table PUBLIC.tab\b\b\b\b\b\b\b\b\b\bpublic.tab1 /, "complete schema.table without quoted identifiers");
+
+clear_query();
+
+# check schema.table query which is case-sensitive
+check_completion("alter table PUBLIC.\"my\t", qq/alter table PUBLIC.\"my\b\b\b\b\b\b\b\b\b\bpublic.\"myTAB123\" /, "complete schema.table with quoted identifiers");
+
+clear_query();
+
+# check enum values which are case-insensitive
+check_completion("ALTER TYPE mytype1 RENAME VALUE '\t\t", qr|'bLACK' + 'BLUE' + 'green'|, "complete enum values");
+
+clear_line();
 
 # check case variation is honored
 check_completion("sel\t", qr/select /, "complete sel<tab> to select");

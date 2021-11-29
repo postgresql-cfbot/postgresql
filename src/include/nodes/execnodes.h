@@ -545,6 +545,18 @@ typedef struct AsyncRequest
 } AsyncRequest;
 
 /* ----------------
+ * SchemaVariableValue
+ * ----------------
+ */
+typedef struct SchemaVariableValue
+{
+	Oid			varid;
+	Oid			typid;
+	bool		isnull;
+	Datum		value;
+}			SchemaVariableValue;
+
+/* ----------------
  *	  EState information
  *
  * Working state for an Executor invocation
@@ -594,6 +606,13 @@ typedef struct EState
 	/* Parameter info: */
 	ParamListInfo es_param_list_info;	/* values of external params */
 	ParamExecData *es_param_exec_vals;	/* values of internal params */
+
+	/* Variables info: */
+	/* number of used schema variables */
+	int			es_num_schema_variables;
+
+	/* array of copied values of schema variables */
+	SchemaVariableValue *es_schema_variables;
 
 	QueryEnvironment *es_queryEnv;	/* query environment */
 

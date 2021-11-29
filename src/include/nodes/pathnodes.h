@@ -130,6 +130,8 @@ typedef struct PlannerGlobal
 	char		maxParallelHazard;	/* worst PROPARALLEL hazard level */
 
 	PartitionDirectory partition_directory; /* partition descriptors */
+
+	List	   *schemaVariables;	/* list of used schema variables */
 } PlannerGlobal;
 
 /* macro for fetching the Plan associated with a SubPlan node */
@@ -350,6 +352,7 @@ struct PlannerInfo
 										 * pseudoconstant = true */
 	bool		hasAlternativeSubPlans; /* true if we've made any of those */
 	bool		hasRecursion;	/* true if planning a recursive WITH item */
+	bool		hasSchemaVariables;	/* true if schema variables were used */
 
 	/*
 	 * Information about aggregates. Filled by preprocess_aggrefs().

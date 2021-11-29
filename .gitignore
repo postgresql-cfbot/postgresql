@@ -42,3 +42,15 @@ lib*.pc
 /Debug/
 /Release/
 /tmp_install/
+
+# Thomas
+# XXX Shouldn't be in the patch.
+/data/
+/server/
+.idea/
+.settings/
+.cproject
+.project
+logfile
+src/backend/catalog/postgres.*
+*.patch

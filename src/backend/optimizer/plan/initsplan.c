@@ -16,6 +16,7 @@
 
 #include "catalog/pg_class.h"
 #include "catalog/pg_type.h"
+#include "catalog/pg_operator.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
 #include "optimizer/clauses.h"
@@ -77,6 +78,7 @@ static bool check_equivalence_delay(PlannerInfo *root,
 									RestrictInfo *restrictinfo);
 static bool check_redundant_nullability_qual(PlannerInfo *root, Node *clause);
 static void check_mergejoinable(RestrictInfo *restrictinfo);
+static void check_rangejoinable(RestrictInfo *restrictinfo);
 static void check_hashjoinable(RestrictInfo *restrictinfo);
 static void check_memoizable(RestrictInfo *restrictinfo);
 
@@ -1877,6 +1879,8 @@ distribute_qual_to_rels(PlannerInfo *root, Node *clause,
 	 */
 	check_mergejoinable(restrictinfo);
 
+	check_rangejoinable(restrictinfo);
+
 	/*
 	 * If it is a true equivalence clause, send it to the EquivalenceClass
 	 * machinery.  We do *not* attach it directly to any restriction or join
@@ -1960,6 +1964,13 @@ distribute_qual_to_rels(PlannerInfo *root, Node *clause,
 			/* we still need to set up left_ec/right_ec */
 			initialize_mergeclause_eclasses(root, restrictinfo);
 		}
+	}
+
+	if(restrictinfo->rangeleftopfamilies)
+	{
+		Assert(restrictinfo->rangerightopfamilies);
+
+		initialize_rangeclause_eclasses(root, restrictinfo);
 	}
 
 	/* No EC special case applies, so push it into the clause lists */
@@ -2675,6 +2686,50 @@ check_mergejoinable(RestrictInfo *restrictinfo)
 	 * in any btree opfamilies, mergeopfamilies remains NIL and so the clause
 	 * is not treated as mergejoinable.
 	 */
+}
+
+/*
+ * check_rangejoinable
+ */
+static void
+check_rangejoinable(RestrictInfo *restrictinfo)
+{
+	OpExpr	   *clause = (OpExpr *) restrictinfo->clause;
+	Oid			opno = clause->opno;
+
+	if (!restrictinfo->can_join)
+		return;
+	if (contain_volatile_functions((Node *) clause))
+		return;
+
+	if (opno == OID_RANGE_CONTAINS_ELEM_OP ||
+			opno == OID_RANGE_ELEM_CONTAINED_OP)
+	{
+		Node		   *leftarg = get_leftop(clause),
+					   *rightarg = get_rightop(clause);
+
+		Oid				lefttype = exprType(leftarg),
+						righttype = exprType(rightarg);
+
+		TypeCacheEntry *left_typecache = lookup_type_cache(lefttype, TYPECACHE_CMP_PROC),
+					   *right_typecache = lookup_type_cache(righttype, TYPECACHE_CMP_PROC);
+
+		restrictinfo->rangeleftopfamilies =
+				lappend_oid(restrictinfo->rangeleftopfamilies,
+							left_typecache->btree_opf);
+
+		restrictinfo->rangerightopfamilies =
+				lappend_oid(restrictinfo->rangerightopfamilies,
+							right_typecache->btree_opf);
+	}
+	else
+	{
+		List *opfamilies = get_rangejoin_opfamilies(opno);
+
+		restrictinfo->rangeleftopfamilies = opfamilies;
+		restrictinfo->rangerightopfamilies = opfamilies;
+
+	}
 }
 
 /*

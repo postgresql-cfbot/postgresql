@@ -93,11 +93,15 @@
 #include "postgres.h"
 
 #include "access/nbtree.h"
+#include "catalog/pg_operator.h"
 #include "executor/execdebug.h"
 #include "executor/nodeMergejoin.h"
 #include "miscadmin.h"
+#include "nodes/nodeFuncs.h"
+#include "utils/rangetypes.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
+#include "utils/typcache.h"
 
 
 /*
@@ -139,6 +143,19 @@ typedef struct MergeJoinClauseData
 	 */
 	SortSupportData ssup;
 }			MergeJoinClauseData;
+
+/*
+ * Runtime data for the range clause.
+ *
+ * XXX This really needs some comments, explaining what the fields are for.
+ */
+typedef struct RangeJoinData
+{
+	ExprState *startClause;
+	ExprState *endClause;
+	ExprState *rangeExpr;
+	ExprState *elemExpr;
+}			RangeJoinData;
 
 /* Result type for MJEvalOuterValues and MJEvalInnerValues */
 typedef enum
@@ -267,6 +284,61 @@ MJExamineQuals(List *mergeclauses,
 	}
 
 	return clauses;
+}
+
+/*
+ * MJCreateRangeData
+ */
+static RangeData
+MJCreateRangeData(List *rangeclause,
+				   PlanState *parent)
+{
+	RangeData data;
+
+	/* XXX how come this does not crash anything? */
+	Assert(false);
+	// FIXME, there's no 'node' variable
+	// Assert(list_length(node->rangeclause) < 3);
+
+	data = (RangeData) palloc0(sizeof(RangeJoinData));
+
+	/* XXX useless, thanks to the palloc0 */
+	data->startClause = NULL;
+	data->endClause = NULL;
+	data->rangeExpr = NULL;
+	data->elemExpr = NULL;
+
+	if(list_length(rangeclause) == 2)
+	{
+		data->startClause = ExecInitExpr(linitial(rangeclause), parent);
+		data->endClause = ExecInitExpr(lsecond(rangeclause), parent);
+	}
+	else
+	{
+		OpExpr		*qual = (OpExpr *) linitial(rangeclause);
+		ExprState	*lexpr;
+		ExprState	*rexpr;
+
+		/*
+		 * Prepare the input expressions for execution.
+		 */
+		lexpr = ExecInitExpr((Expr *) get_leftop(qual), parent);
+		rexpr = ExecInitExpr((Expr *) get_rightop(qual), parent);
+
+		if(qual->opno == OID_RANGE_CONTAINS_ELEM_OP)
+		{
+			data->rangeExpr = lexpr;
+			data->elemExpr = rexpr;
+		}
+		else
+		{
+			Assert(qual->opno == OID_RANGE_ELEM_CONTAINED_OP);
+			data->rangeExpr = rexpr;
+			data->elemExpr = lexpr;
+		}
+	}
+
+	return data;
 }
 
 /*
@@ -446,6 +518,77 @@ MJCompare(MergeJoinState *mergestate)
 
 
 /*
+ * MJCompareRange
+ *
+ * Compare the rangejoinable values of the current two input tuples
+ * and return 0 if they are equal (ie, the outer interval contains the inner),
+ * >0 if outer > inner, <0 if outer < inner.
+ *
+ * XXX So this is essentially a simple comparator function, except that it
+ * also deals with ranges. That'd deserve explanation how clauses with ranges
+ * works, I guess.
+ */
+static int
+MJCompareRange(MergeJoinState *mergestate)
+{
+	int 		  result = 0;
+	bool 		  isNull;
+	MemoryContext oldContext;
+	RangeData	  rangeData = mergestate->mj_RangeData;
+	ExprContext	 *econtext = mergestate->js.ps.ps_ExprContext;
+	ExprState	 *endClause = rangeData->endClause,
+				 *startClause = rangeData->startClause,
+				 *rangeExpr = rangeData->rangeExpr,
+				 *elemExpr = rangeData->elemExpr;
+
+	/*
+	 * Call the comparison functions in short-lived context, in case they leak
+	 * memory.
+	 */
+	ResetExprContext(econtext);
+
+	oldContext = MemoryContextSwitchTo(econtext->ecxt_per_tuple_memory);
+
+	econtext->ecxt_outertuple = mergestate->mj_OuterTupleSlot;
+	econtext->ecxt_innertuple = mergestate->mj_InnerTupleSlot;
+
+	if (endClause != NULL)
+	{
+		Assert(startClause != NULL);
+
+		if (!ExecEvalExprSwitchContext(endClause, econtext, &isNull))
+			result = -1;
+		else if (!ExecEvalExprSwitchContext(startClause, econtext, &isNull))
+			result = 1;
+	}
+	else
+	{
+		Datum			rangeDatum,
+    					elemDatum;
+		Oid				rangeType;
+		TypeCacheEntry *typecache;
+
+		Assert(rangeExpr != NULL && elemExpr != NULL);
+
+		rangeDatum = ExecEvalExprSwitchContext(rangeExpr, econtext, &isNull);
+		elemDatum = ExecEvalExprSwitchContext(elemExpr, econtext, &isNull);
+
+		rangeType = exprType((Node *) rangeExpr->expr);
+		typecache = lookup_type_cache(rangeType, TYPECACHE_RANGE_INFO);
+
+		if (elem_after_range_internal(typecache, elemDatum, DatumGetRangeTypeP(rangeDatum)))
+			result = -1;
+		else if (elem_before_range_internal(typecache, elemDatum, DatumGetRangeTypeP(rangeDatum)))
+			result = 1;
+	}
+
+	MemoryContextSwitchTo(oldContext);
+
+	return result;
+}
+
+
+/*
  * Generate a fake join tuple with nulls for the inner tuple,
  * and return it if it passes the non-join quals.
  */
@@ -604,6 +747,7 @@ ExecMergeJoin(PlanState *pstate)
 	ExprState  *otherqual;
 	bool		qualResult;
 	int			compareResult;
+	int			compareRangeResult;
 	PlanState  *innerPlan;
 	TupleTableSlot *innerTupleSlot;
 	PlanState  *outerPlan;
@@ -611,6 +755,7 @@ ExecMergeJoin(PlanState *pstate)
 	ExprContext *econtext;
 	bool		doFillOuter;
 	bool		doFillInner;
+	bool		isRangeJoin;
 
 	CHECK_FOR_INTERRUPTS();
 
@@ -624,6 +769,7 @@ ExecMergeJoin(PlanState *pstate)
 	otherqual = node->js.ps.qual;
 	doFillOuter = node->mj_FillOuter;
 	doFillInner = node->mj_FillInner;
+	isRangeJoin = node->mj_RangeJoin;
 
 	/*
 	 * Reset per-tuple memory context to free any expression evaluation
@@ -891,8 +1037,26 @@ ExecMergeJoin(PlanState *pstate)
 						compareResult = MJCompare(node);
 						MJ_DEBUG_COMPARE(compareResult);
 
-						if (compareResult == 0)
-							node->mj_JoinState = EXEC_MJ_JOINTUPLES;
+						/*
+						 * XXX Incomprehensible. Maybe add some comments?
+						 */
+						if(compareResult == 0)
+						{
+							if(isRangeJoin)
+							{
+								compareRangeResult = MJCompareRange(node);
+
+								if (compareRangeResult == 0)
+									node->mj_JoinState = EXEC_MJ_JOINTUPLES;
+								else
+								{
+									Assert(compareRangeResult < 0);
+									node->mj_JoinState = EXEC_MJ_NEXTOUTER;
+								}
+							}
+							else
+								node->mj_JoinState = EXEC_MJ_JOINTUPLES;
+						}
 						else
 						{
 							Assert(compareResult < 0);
@@ -1085,7 +1249,22 @@ ExecMergeJoin(PlanState *pstate)
 						/* we need not do MJEvalInnerValues again */
 					}
 
-					node->mj_JoinState = EXEC_MJ_JOINTUPLES;
+					/*
+					 * Comments?
+					 */
+					if(isRangeJoin)
+					{
+						compareRangeResult = MJCompareRange(node);
+
+						if(compareRangeResult == 0)
+							node->mj_JoinState = EXEC_MJ_JOINTUPLES;
+						else if(compareRangeResult < 0)
+							node->mj_JoinState = EXEC_MJ_SKIPOUTER_ADVANCE;
+						else /* compareRangeResult > 0 */
+							node->mj_JoinState = EXEC_MJ_SKIPINNER_ADVANCE;
+					}
+					else
+						node->mj_JoinState = EXEC_MJ_JOINTUPLES;
 				}
 				else
 				{
@@ -1184,12 +1363,31 @@ ExecMergeJoin(PlanState *pstate)
 
 				if (compareResult == 0)
 				{
-					if (!node->mj_SkipMarkRestore)
-						ExecMarkPos(innerPlan);
-
-					MarkInnerTuple(node->mj_InnerTupleSlot, node);
-
-					node->mj_JoinState = EXEC_MJ_JOINTUPLES;
+					/*
+					 * XXX Comments?
+					 */
+					if(isRangeJoin)
+					{
+						compareRangeResult = MJCompareRange(node);
+						if(compareRangeResult == 0)
+						{
+							if (!node->mj_SkipMarkRestore)
+								ExecMarkPos(innerPlan);
+							MarkInnerTuple(node->mj_InnerTupleSlot, node);
+							node->mj_JoinState = EXEC_MJ_JOINTUPLES;
+						}
+						else if(compareRangeResult < 0)
+							node->mj_JoinState = EXEC_MJ_SKIPOUTER_ADVANCE;
+						else /* compareRangeResult > 0 */
+							node->mj_JoinState = EXEC_MJ_SKIPINNER_ADVANCE;
+					}
+					else
+					{
+						if (!node->mj_SkipMarkRestore)
+							ExecMarkPos(innerPlan);
+						MarkInnerTuple(node->mj_InnerTupleSlot, node);
+						node->mj_JoinState = EXEC_MJ_JOINTUPLES;
+					}
 				}
 				else if (compareResult < 0)
 					node->mj_JoinState = EXEC_MJ_SKIPOUTER_ADVANCE;
@@ -1531,6 +1729,17 @@ ExecInitMergeJoin(MergeJoin *node, EState *estate, int eflags)
 	mergestate->js.joinqual =
 		ExecInitQual(node->join.joinqual, (PlanState *) mergestate);
 	/* mergeclauses are handled below */
+
+	/*
+	 * initialize range join
+	 */
+	if(node->rangeclause)
+	{
+		mergestate->mj_RangeData = MJCreateRangeData(node->rangeclause, (PlanState *) mergestate);
+		mergestate->mj_RangeJoin = true;
+	}
+	else
+		mergestate->mj_RangeJoin = false;
 
 	/*
 	 * detect whether we need only consider the first matching inner tuple

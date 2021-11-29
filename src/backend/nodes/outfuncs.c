@@ -765,6 +765,7 @@ _outMergeJoin(StringInfo str, const MergeJoin *node)
 
 	WRITE_BOOL_FIELD(skip_mark_restore);
 	WRITE_NODE_FIELD(mergeclauses);
+    WRITE_NODE_FIELD(rangeclause);
 
 	numCols = list_length(node->mergeclauses);
 
@@ -2246,6 +2247,7 @@ _outMergePath(StringInfo str, const MergePath *node)
 	_outJoinPathInfo(str, (const JoinPath *) node);
 
 	WRITE_NODE_FIELD(path_mergeclauses);
+	WRITE_NODE_FIELD(path_rangeclause);
 	WRITE_NODE_FIELD(outersortkeys);
 	WRITE_NODE_FIELD(innersortkeys);
 	WRITE_BOOL_FIELD(skip_mark_restore);
@@ -2562,6 +2564,8 @@ _outRestrictInfo(StringInfo str, const RestrictInfo *node)
 	WRITE_FLOAT_FIELD(norm_selec, "%.4f");
 	WRITE_FLOAT_FIELD(outer_selec, "%.4f");
 	WRITE_NODE_FIELD(mergeopfamilies);
+	WRITE_NODE_FIELD(rangeleftopfamilies);
+	WRITE_NODE_FIELD(rangerightopfamilies);
 	/* don't write left_ec, leads to infinite recursion in plan tree dump */
 	/* don't write right_ec, leads to infinite recursion in plan tree dump */
 	WRITE_NODE_FIELD(left_em);

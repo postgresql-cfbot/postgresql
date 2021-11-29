@@ -57,6 +57,20 @@ typedef enum
 	PQUOTE_SHELL_ARG			/* quote if needed to be safe in a shell cmd */
 } PsqlScanQuoteType;
 
+typedef enum PsqlScanTokenType
+{
+	PSCAN_TOKEN_WORD,
+	PSCAN_TOKEN_IDENTIFIER,
+	PSCAN_TOKEN_LPAREN,
+	PSCAN_TOKEN_RPAREN,
+	PSCAN_TOKEN_STRING,
+	PSCAN_TOKEN_OP,
+	PSCAN_TOKEN_CONT
+} PsqlScanTokenType;
+
+struct PsqlScanTokenData;
+typedef struct PsqlScanTokenData *PsqlScanToken;
+
 /* Callback functions to be used by the lexer */
 typedef struct PsqlScanCallbacks
 {
@@ -76,7 +90,12 @@ extern void psql_scan_setup(PsqlScanState state,
 							const char *line, int line_len,
 							int encoding, bool std_strings);
 extern void psql_scan_finish(PsqlScanState state);
-
+extern const PsqlScanToken psql_scan_get_next_token(PsqlScanState state,
+													const PsqlScanToken prev);
+extern int psql_scan_get_token_string(PsqlScanState state,
+									  const PsqlScanToken tok, char *buf);
+extern int	psql_scan_get_ntokens(PsqlScanState state);
+extern bool psql_scan_last_token_is_whitespace(PsqlScanState state);
 extern PsqlScanResult psql_scan(PsqlScanState state,
 								PQExpBuffer query_buf,
 								promptStatus_t *prompt);

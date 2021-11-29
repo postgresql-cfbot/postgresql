@@ -76,6 +76,19 @@ typedef struct StackElem
 } StackElem;
 
 /*
+ * psql_scan has another mode that stores tokenized data instead of a
+ * cleaned-up string.  This represents every token in the token array.
+ */
+typedef struct PsqlScanTokenData
+{
+	PsqlScanTokenType	type;		/* toke type */
+	int					startpos;	/* start position in state.scanline */
+	int					len;		/* token length */
+	int					paren_depth; /* depth of parenthesized region */
+	struct PsqlScanTokenData *next;
+} PsqlScanTokenData;
+
+/*
  * All working state of the lexer must be stored in PsqlScanStateData
  * between calls.  This allows us to have multiple open lexer operations,
  * which is needed for nested include files.  The lexer itself is not
@@ -112,6 +125,7 @@ typedef struct PsqlScanStateData
 	int			start_state;	/* yylex's starting/finishing state */
 	int			state_before_str_stop;	/* start cond. before end quote */
 	int			paren_depth;	/* depth of nesting in parentheses */
+	int			quote_depth;
 	int			xcdepth;		/* depth of nesting in slash-star comments */
 	char	   *dolqstart;		/* current $foo$ quote start string */
 
@@ -122,6 +136,11 @@ typedef struct PsqlScanStateData
 	int			identifier_count;	/* identifiers since start of statement */
 	char		identifiers[4]; /* records the first few identifiers */
 	int			begin_depth;	/* depth of begin/end pairs */
+
+	PsqlScanToken	tokenlist;		/* list of tokens*/
+	PsqlScanToken	lasttoken;		/* last token for fast access */
+	bool			token_continue;	/* the last token is continuing */
+	bool		last_is_whitespace;	/* last token was whitespace */
 
 	/*
 	 * Callback functions provided by the program making use of the lexer,
@@ -146,6 +165,9 @@ extern YY_BUFFER_STATE psqlscan_prepare_buffer(PsqlScanState state,
 											   const char *txt, int len,
 											   char **txtcopy);
 extern void psqlscan_emit(PsqlScanState state, const char *txt, int len);
+extern void psqlscan_add_token(PsqlScanState state, const char *txt, int len,
+	PsqlScanTokenType type);
+extern void psqlscan_mark_whitespace(PsqlScanState state, bool is_ws);
 extern char *psqlscan_extract_substring(PsqlScanState state,
 										const char *txt, int len);
 extern void psqlscan_escape_variable(PsqlScanState state,

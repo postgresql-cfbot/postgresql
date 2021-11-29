@@ -381,8 +381,10 @@ other			.
 					 * which is pretty dubious but is the historical
 					 * behavior.
 					 */
-					if (!(output_buf->len == 0 || yytext[0] == '-'))
+					if (output_buf &&
+						!(output_buf->len == 0 || yytext[0] == '-'))
 						ECHO;
+					psqlscan_mark_whitespace(cur_state, true);
 				}
 
 {xcstart}		{
@@ -414,6 +416,7 @@ other			.
 				}
 
 {op_chars}		{
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_OP);
 					ECHO;
 				}
 
@@ -424,10 +427,13 @@ other			.
 
 {xbstart}		{
 					BEGIN(xb);
+					cur_state->quote_depth++;
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_STRING);
 					ECHO;
 				}
 <xh>{xhinside}	|
 <xb>{xbinside}	{
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_STRING);
 					ECHO;
 				}
 
@@ -439,11 +445,14 @@ other			.
 					 * to mark it for the input routine as a hex string.
 					 */
 					BEGIN(xh);
+					cur_state->quote_depth++;
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_STRING);
 					ECHO;
 				}
 
 {xnstart}		{
 					yyless(1);	/* eat only 'n' this time */
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_STRING);
 					ECHO;
 				}
 
@@ -452,14 +461,20 @@ other			.
 						BEGIN(xq);
 					else
 						BEGIN(xe);
+					cur_state->quote_depth++;
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_STRING);
 					ECHO;
 				}
 {xestart}		{
 					BEGIN(xe);
+					cur_state->quote_depth++;
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_STRING);
 					ECHO;
 				}
 {xusstart}		{
 					BEGIN(xus);
+					cur_state->quote_depth++;
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_STRING);
 					ECHO;
 				}
 
@@ -474,6 +489,7 @@ other			.
 					 */
 					cur_state->state_before_str_stop = YYSTATE;
 					BEGIN(xqs);
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_CONT);
 					ECHO;
 				}
 <xqs>{quotecontinue} {
@@ -483,6 +499,7 @@ other			.
 					 * added to the literal's contents.
 					 */
 					BEGIN(cur_state->state_before_str_stop);
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_CONT);
 					ECHO;
 				}
 <xqs>{quotecontinuefail} |
@@ -494,46 +511,62 @@ other			.
 					 */
 					yyless(0);
 					BEGIN(INITIAL);
+
+					if (cur_state->quote_depth > 0)
+						cur_state->quote_depth--;
+					/* terminate this string */
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_CONT);
 					/* There's nothing to echo ... */
 				}
 
 <xq,xe,xus>{xqdouble} {
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_STRING);
 					ECHO;
 				}
 <xq,xus>{xqinside}  {
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_CONT);
 					ECHO;
 				}
 <xe>{xeinside}  {
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_CONT);
 					ECHO;
 				}
 <xe>{xeunicode} {
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_CONT);
 					ECHO;
 				}
 <xe>{xeunicodefail}	{
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_CONT);
 					ECHO;
 				}
 <xe>{xeescape}  {
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_CONT);
 					ECHO;
 				}
 <xe>{xeoctesc}  {
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_CONT);
 					ECHO;
 				}
 <xe>{xehexesc}  {
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_CONT);
 					ECHO;
 				}
 <xe>.			{
 					/* This is only needed for \ just before EOF */
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_CONT);
 					ECHO;
 				}
 
 {dolqdelim}		{
 					cur_state->dolqstart = pg_strdup(yytext);
 					BEGIN(xdolq);
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_WORD);
 					ECHO;
 				}
 {dolqfailed}	{
 					/* throw back all but the initial "$" */
 					yyless(1);
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_WORD);
 					ECHO;
 				}
 <xdolq>{dolqdelim} {
@@ -552,77 +585,102 @@ other			.
 						 */
 						yyless(yyleng - 1);
 					}
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_WORD);
 					ECHO;
 				}
 <xdolq>{dolqinside} {
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_WORD);
 					ECHO;
 				}
 <xdolq>{dolqfailed} {
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_WORD);
 					ECHO;
 				}
 <xdolq>.		{
 					/* This is only needed for $ inside the quoted text */
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_WORD);
 					ECHO;
 				}
 
 {xdstart}		{
 					BEGIN(xd);
+					cur_state->quote_depth++;
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_IDENTIFIER);
 					ECHO;
 				}
 {xuistart}		{
 					BEGIN(xui);
+					cur_state->quote_depth++;
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_IDENTIFIER);
 					ECHO;
 				}
 <xd>{xdstop}	{
 					BEGIN(INITIAL);
+					if (cur_state->quote_depth > 0)
+						cur_state->quote_depth--;
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_CONT);
 					ECHO;
 				}
 <xui>{dquote}	{
 					BEGIN(INITIAL);
+					if (cur_state->quote_depth > 0)
+						cur_state->quote_depth--;
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_CONT);
 					ECHO;
 				}
 <xd,xui>{xddouble}	{
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_CONT);
 					ECHO;
 				}
 <xd,xui>{xdinside}	{
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_CONT);
 					ECHO;
 				}
 
 {xufailed}	{
 					/* throw back all but the initial u/U */
 					yyless(1);
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_WORD);
 					ECHO;
 				}
 
 {typecast}		{
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_WORD);
 					ECHO;
 				}
 
 {dot_dot}		{
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_WORD);
 					ECHO;
 				}
 
 {colon_equals}	{
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_WORD);
 					ECHO;
 				}
 
 {equals_greater} {
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_WORD);
 					ECHO;
 				}
 
 {less_equals}	{
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_WORD);
 					ECHO;
 				}
 
 {greater_equals} {
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_WORD);
 					ECHO;
 				}
 
 {less_greater}	{
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_WORD);
 					ECHO;
 				}
 
 {not_equals}	{
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_WORD);
 					ECHO;
 				}
 
@@ -634,16 +692,19 @@ other			.
 
 "("				{
 					cur_state->paren_depth++;
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_LPAREN);
 					ECHO;
 				}
 
 ")"				{
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_RPAREN);
 					if (cur_state->paren_depth > 0)
 						cur_state->paren_depth--;
 					ECHO;
 				}
 
 ";"				{
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_WORD);
 					ECHO;
 					if (cur_state->paren_depth == 0 && cur_state->begin_depth == 0)
 					{
@@ -765,6 +826,7 @@ other			.
 	 */
 
 {self}			{
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_WORD);
 					ECHO;
 				}
 
@@ -832,25 +894,31 @@ other			.
 						/* Strip the unwanted chars from the token */
 						yyless(nchars);
 					}
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_OP);
 					ECHO;
 				}
 
 {param}			{
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_WORD);
 					ECHO;
 				}
 
 {integer}		{
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_WORD);
 					ECHO;
 				}
 {decimal}		{
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_WORD);
 					ECHO;
 				}
 {decimalfail}	{
 					/* throw back the .., and treat as integer */
 					yyless(yyleng - 2);
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_WORD);
 					ECHO;
 				}
 {real}			{
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_WORD);
 					ECHO;
 				}
 {realfail1}		{
@@ -860,11 +928,13 @@ other			.
 					 * (in psql, we don't actually care...)
 					 */
 					yyless(yyleng - 1);
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_WORD);
 					ECHO;
 				}
 {realfail2}		{
 					/* throw back the [Ee][+-], and proceed as above */
 					yyless(yyleng - 2);
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_WORD);
 					ECHO;
 				}
 
@@ -919,10 +989,12 @@ other			.
 						}
 					}
 
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_WORD);
 					ECHO;
 				}
 
 {other}			{
+					psqlscan_add_token(cur_state, yytext, yyleng, PSCAN_TOKEN_WORD);
 					ECHO;
 				}
 
@@ -1037,6 +1109,134 @@ psql_scan_setup(PsqlScanState state,
 }
 
 /*
+ * Add a token to token array.
+ *
+ * This is similar to psqlscan_emit but instead adds tokens into an array that
+ * is to be used for syntax completion. Quoted identifiers and strings are
+ * merged together as a token.
+ */
+void
+psqlscan_add_token(PsqlScanState state, const char *txt, int len,
+					PsqlScanTokenType type)
+{
+	PsqlScanToken tok;
+	PsqlScanToken prev;
+
+	if (state->output_buf)
+		return;
+
+	/* we have met non-whitespace characters */
+	state->last_is_whitespace = false;
+
+	/* merge this token into the previous one if it is continued */
+	if (state->token_continue)
+	{
+		Assert (state->lasttoken);
+		state->lasttoken->len += len;
+
+		/* still continue to the next token? */
+		state->token_continue = (state->quote_depth > 0);
+
+		/* 
+		 * If this token has finished, assume it is followed by whitespace.
+		 * (Maybe this is not needed since readline requires a whitespace.)
+		 */
+		if (!state->token_continue)
+			state->last_is_whitespace = true;
+		
+		return;
+	}
+
+	/* Append new token */
+	prev = state->lasttoken;
+	tok = pg_malloc(sizeof(PsqlScanToken));
+
+	/*
+	 * This logic could be simplified if we stored the tokens in the reverse
+	 * order and it is convenient for tab-completion code, but we choose to
+	 * store in the saner order here.
+	 */
+	if (prev)
+		prev->next = tok;
+	else
+		state->tokenlist = tok;
+
+	state->lasttoken = tok;
+
+	/* if this token starts quote, it continues to the following tokens */
+	state->token_continue = (state->quote_depth > 0);
+	tok->type = type;
+	tok->startpos = txt - state->scanbuf;
+	tok->len = len;
+	tok->paren_depth = state->paren_depth;
+	tok->next = NULL;
+}
+
+/*
+ * Set if the last token was whitespace.
+ */
+void
+
+psqlscan_mark_whitespace(PsqlScanState state, bool is_ws)
+{
+	state->last_is_whitespace = is_ws;
+}
+
+
+/*
+ * Returns the next token.  prev=NULL means requesting for the first token.
+ */
+const PsqlScanToken
+psql_scan_get_next_token(PsqlScanState state, const PsqlScanToken prev)
+{
+	if (!prev)
+		return state->tokenlist;
+
+	return prev->next;
+}
+
+/*
+ * Copy token string into given buffer then return the consumed buffer size
+ * including the terminating zero byte.
+ */
+int
+psql_scan_get_token_string(PsqlScanState state,
+						   const PsqlScanToken tok, char *buf)
+{
+	memcpy(buf, &state->scanline[tok->startpos], tok->len);
+	buf[tok->len] = 0;
+
+	return tok->len + 1;
+}
+
+/*
+ * Returns the number of tokens.
+ */
+int
+psql_scan_get_ntokens(PsqlScanState state)
+{
+	int i = 0;
+	PsqlScanToken tok = state->tokenlist;
+	
+	while (tok)
+	{
+		i++;
+		tok = tok->next;
+	}
+
+	return i;
+}
+
+/*
+ *
+ */
+bool
+psql_scan_last_token_is_whitespace(PsqlScanState state)
+{
+	return state->last_is_whitespace;
+}
+
+/*
  * Do lexical analysis of SQL command text.
  *
  * The text previously passed to psql_scan_setup is scanned, and appended
@@ -1075,7 +1275,8 @@ psql_scan(PsqlScanState state,
 {
 	PsqlScanResult result;
 	int			lexresult;
-
+	promptStatus_t	tprompt;
+	
 	/* Must be scanning already */
 	Assert(state->scanbufhandle != NULL);
 
@@ -1104,60 +1305,60 @@ psql_scan(PsqlScanState state,
 					if (state->paren_depth > 0)
 					{
 						result = PSCAN_INCOMPLETE;
-						*prompt = PROMPT_PAREN;
+						tprompt = PROMPT_PAREN;
 					}
 					else if (state->begin_depth > 0)
 					{
 						result = PSCAN_INCOMPLETE;
-						*prompt = PROMPT_CONTINUE;
+						tprompt = PROMPT_CONTINUE;
 					}
-					else if (query_buf->len > 0)
+					else if (query_buf ? query_buf->len > 0 : state->tokenlist != NULL)
 					{
 						result = PSCAN_EOL;
-						*prompt = PROMPT_CONTINUE;
+						tprompt = PROMPT_CONTINUE;
 					}
 					else
 					{
 						/* never bother to send an empty buffer */
 						result = PSCAN_INCOMPLETE;
-						*prompt = PROMPT_READY;
+						tprompt = PROMPT_READY;
 					}
 					break;
 				case xb:
 					result = PSCAN_INCOMPLETE;
-					*prompt = PROMPT_SINGLEQUOTE;
+					tprompt = PROMPT_SINGLEQUOTE;
 					break;
 				case xc:
 					result = PSCAN_INCOMPLETE;
-					*prompt = PROMPT_COMMENT;
+					tprompt = PROMPT_COMMENT;
 					break;
 				case xd:
 					result = PSCAN_INCOMPLETE;
-					*prompt = PROMPT_DOUBLEQUOTE;
+					tprompt = PROMPT_DOUBLEQUOTE;
 					break;
 				case xh:
 					result = PSCAN_INCOMPLETE;
-					*prompt = PROMPT_SINGLEQUOTE;
+					tprompt = PROMPT_SINGLEQUOTE;
 					break;
 				case xe:
 					result = PSCAN_INCOMPLETE;
-					*prompt = PROMPT_SINGLEQUOTE;
+					tprompt = PROMPT_SINGLEQUOTE;
 					break;
 				case xq:
 					result = PSCAN_INCOMPLETE;
-					*prompt = PROMPT_SINGLEQUOTE;
+					tprompt = PROMPT_SINGLEQUOTE;
 					break;
 				case xdolq:
 					result = PSCAN_INCOMPLETE;
-					*prompt = PROMPT_DOLLARQUOTE;
+					tprompt = PROMPT_DOLLARQUOTE;
 					break;
 				case xui:
 					result = PSCAN_INCOMPLETE;
-					*prompt = PROMPT_DOUBLEQUOTE;
+					tprompt = PROMPT_DOUBLEQUOTE;
 					break;
 				case xus:
 					result = PSCAN_INCOMPLETE;
-					*prompt = PROMPT_SINGLEQUOTE;
+					tprompt = PROMPT_SINGLEQUOTE;
 					break;
 				default:
 					/* can't get here */
@@ -1167,11 +1368,11 @@ psql_scan(PsqlScanState state,
 			break;
 		case LEXRES_SEMI:		/* semicolon */
 			result = PSCAN_SEMICOLON;
-			*prompt = PROMPT_READY;
+			tprompt = PROMPT_READY;
 			break;
 		case LEXRES_BACKSLASH:	/* backslash */
 			result = PSCAN_BACKSLASH;
-			*prompt = PROMPT_READY;
+			tprompt = PROMPT_READY;
 			break;
 		default:
 			/* can't get here */
@@ -1179,6 +1380,8 @@ psql_scan(PsqlScanState state,
 			exit(1);
 	}
 
+	if (prompt)
+		*prompt = tprompt;
 	return result;
 }
 
@@ -1221,14 +1424,28 @@ psql_scan_finish(PsqlScanState state)
 void
 psql_scan_reset(PsqlScanState state)
 {
+	PsqlScanToken tok;
+
 	state->start_state = INITIAL;
 	state->paren_depth = 0;
+	state->quote_depth = 0;
 	state->xcdepth = 0;			/* not really necessary */
 	if (state->dolqstart)
 		free(state->dolqstart);
 	state->dolqstart = NULL;
 	state->identifier_count = 0;
 	state->begin_depth = 0;
+	state->token_continue = false;
+
+	/* free up toekn list */
+	tok = state->tokenlist;
+	while (tok)
+	{
+		PsqlScanToken prev = tok;
+		tok = tok->next;
+		free(prev);
+	}
+	state->tokenlist = NULL;
 }
 
 /*
@@ -1418,6 +1635,9 @@ void
 psqlscan_emit(PsqlScanState state, const char *txt, int len)
 {
 	PQExpBuffer output_buf = state->output_buf;
+
+	if (!output_buf)
+		return;
 
 	if (state->safe_encoding)
 		appendBinaryPQExpBuffer(output_buf, txt, len);

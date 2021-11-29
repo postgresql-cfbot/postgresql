@@ -149,11 +149,15 @@ other			.
 
 {space}|"\\"	{
 					yyless(0);
+					psqlscan_mark_whitespace(cur_state, true);
 					cur_state->start_state = YY_START;
 					return LEXRES_OK;
 				}
 
-{other}			{ ECHO; }
+{other}			{
+					psqlscan_mark_whitespace(cur_state, false);
+					ECHO;
+				}
 
 }
 
@@ -164,9 +168,10 @@ other			.
 	 * check for it here.
 	 */
 
-{space}+		{ }
+{space}+		{  psqlscan_mark_whitespace(cur_state, true); }
 
 "|"				{
+					psqlscan_mark_whitespace(cur_state, false);
 					if (option_type == OT_FILEPIPE)
 					{
 						/* treat like whole-string case */
@@ -182,6 +187,7 @@ other			.
 				}
 
 {other}			{
+					psqlscan_mark_whitespace(cur_state, false);
 					yyless(0);
 					BEGIN(xslasharg);
 				}
@@ -207,18 +213,21 @@ other			.
 					 * processing that encourages use of backslashes is rather
 					 * broken.
 					 */
+					psqlscan_mark_whitespace(cur_state, true);
 					yyless(0);
 					cur_state->start_state = YY_START;
 					return LEXRES_OK;
 				}
 
 {quote}			{
+					psqlscan_mark_whitespace(cur_state, false);
 					*option_quote = '\'';
 					unquoted_option_chars = 0;
 					BEGIN(xslashquote);
 				}
 
 "`"				{
+					psqlscan_mark_whitespace(cur_state, false);
 					backtick_start_offset = output_buf->len;
 					*option_quote = '`';
 					unquoted_option_chars = 0;
@@ -226,6 +235,7 @@ other			.
 				}
 
 {dquote}		{
+					psqlscan_mark_whitespace(cur_state, false);
 					ECHO;
 					*option_quote = '"';
 					unquoted_option_chars = 0;
@@ -233,6 +243,7 @@ other			.
 				}
 
 :{variable_char}+	{
+					psqlscan_mark_whitespace(cur_state, false);
 					/* Possible psql variable substitution */
 					if (cur_state->callbacks->get_variable == NULL)
 						ECHO;
@@ -278,6 +289,7 @@ other			.
 
 
 :\"{variable_char}+\"	{
+					psqlscan_mark_whitespace(cur_state, false);
 					psqlscan_escape_variable(cur_state, yytext, yyleng,
 											 PQUOTE_SQL_IDENT);
 					*option_quote = ':';
@@ -285,6 +297,7 @@ other			.
 				}
 
 :\{\?{variable_char}+\}	{
+					psqlscan_mark_whitespace(cur_state, false);
 					psqlscan_test_variable(cur_state, yytext, yyleng);
 				}
 
@@ -317,6 +330,7 @@ other			.
 				}
 
 {other}			{
+					psqlscan_mark_whitespace(cur_state, false);
 					unquoted_option_chars++;
 					ECHO;
 				}

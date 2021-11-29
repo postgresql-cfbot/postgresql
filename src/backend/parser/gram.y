@@ -632,7 +632,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %token <str>	IDENT UIDENT FCONST SCONST USCONST BCONST XCONST Op
 %token <ival>	ICONST PARAM
 %token			TYPECAST DOT_DOT COLON_EQUALS EQUALS_GREATER
-%token			LESS_EQUALS GREATER_EQUALS NOT_EQUALS
+%token			LESS_EQUALS GREATER_EQUALS NOT_EQUALS END_OF_FILE
 
 /*
  * If you want to make any keyword changes, update the keyword table in
@@ -759,6 +759,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %token		MODE_PLPGSQL_ASSIGN1
 %token		MODE_PLPGSQL_ASSIGN2
 %token		MODE_PLPGSQL_ASSIGN3
+%token		MODE_SINGLE_QUERY
 
 
 /* Precedence: lowest to highest */
@@ -863,6 +864,32 @@ parse_toplevel:
 				n->nnames = 3;
 				pg_yyget_extra(yyscanner)->parsetree =
 					list_make1(makeRawStmt((Node *) n, 0));
+			}
+			| MODE_SINGLE_QUERY toplevel_stmt ';'
+			{
+				RawStmt *raw = makeRawStmt($2, 0);
+				updateRawStmtEnd(raw, @3 + 1);
+				/* NOTE: we can return a raw statement containing a NULL stmt.
+				 * This is done to allow pg_parse_query to ignore that part of
+				 * the input string and move to the next command.
+				 */
+				pg_yyget_extra(yyscanner)->parsetree = list_make1(raw);
+				YYACCEPT;
+			}
+			/*
+			 * We need to explicitly look for EOF to parse non-semicolon
+			 * terminated statements in single query mode, as we could
+			 * otherwise successfully parse the beginning of an otherwise
+			 * invalid query.
+			 */
+			| MODE_SINGLE_QUERY toplevel_stmt END_OF_FILE
+			{
+				/* NOTE: we can return a raw statement containing a NULL stmt.
+				 * This is done to allow pg_parse_query to ignore that part of
+				 * the input string.
+				 */
+				pg_yyget_extra(yyscanner)->parsetree = list_make1(makeRawStmt($2, 0));
+				YYACCEPT;
 			}
 		;
 

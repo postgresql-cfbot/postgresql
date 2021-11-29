@@ -896,6 +896,9 @@ typedef struct WindowAgg
 	int			frameOptions;	/* frame_clause options, see WindowDef */
 	Node	   *startOffset;	/* expression for starting bound, if any */
 	Node	   *endOffset;		/* expression for ending bound, if any */
+	List	   *runcondition;	/* Conditions that must remain true in order
+								 * for execution to continue */
+	List	   *runconditionorig;	/* runcondition for display in EXPLAIN */
 	/* these fields are used with RANGE offset PRECEDING/FOLLOWING: */
 	Oid			startInRangeFunc;	/* in_range function for startOffset */
 	Oid			endInRangeFunc; /* in_range function for endOffset */
@@ -1293,5 +1296,22 @@ typedef struct PlanInvalItem
 	int			cacheId;		/* a syscache ID, see utils/syscache.h */
 	uint32		hashValue;		/* hash value of object's cache lookup key */
 } PlanInvalItem;
+
+/*
+ * MonotonicFunction
+ *
+ * Allows the planner to track monotonic properties of functions.  A function
+ * is monotonically increasing if a subsequent call cannot yield a lower value
+ * than the previous call.  A monotonically decreasing function cannot yield a
+ * higher value, and a function which is both must return the same value on
+ * each call.
+ */
+typedef enum MonotonicFunction
+{
+	MONOTONICFUNC_NONE = 0,
+	MONOTONICFUNC_INCREASING = (1 << 0),
+	MONOTONICFUNC_DECREASING = (1 << 1),
+	MONOTONICFUNC_BOTH = MONOTONICFUNC_INCREASING | MONOTONICFUNC_DECREASING
+} MonotonicFunction;
 
 #endif							/* PLANNODES_H */

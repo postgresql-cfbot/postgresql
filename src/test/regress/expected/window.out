@@ -3336,6 +3336,275 @@ WHERE depname = 'sales';
                            ->  Seq Scan on empsalary
 (9 rows)
 
+-- Test window function run conditions are properly pushed down into the
+-- WindowAgg
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          row_number() OVER (ORDER BY empno) rn
+   FROM empsalary) emp
+WHERE rn < 3;
+                  QUERY PLAN                  
+----------------------------------------------
+ WindowAgg
+   Run Condition: (row_number() OVER (?) < 3)
+   ->  Sort
+         Sort Key: empsalary.empno
+         ->  Seq Scan on empsalary
+(5 rows)
+
+-- The following 3 statements should result the same result.
+SELECT * FROM
+  (SELECT empno,
+          row_number() OVER (ORDER BY empno) rn
+   FROM empsalary) emp
+WHERE rn < 3;
+ empno | rn 
+-------+----
+     1 |  1
+     2 |  2
+(2 rows)
+
+SELECT * FROM
+  (SELECT empno,
+          row_number() OVER (ORDER BY empno) rn
+   FROM empsalary) emp
+WHERE 3 > rn;
+ empno | rn 
+-------+----
+     1 |  1
+     2 |  2
+(2 rows)
+
+SELECT * FROM
+  (SELECT empno,
+          row_number() OVER (ORDER BY empno) rn
+   FROM empsalary) emp
+WHERE 2 >= rn;
+ empno | rn 
+-------+----
+     1 |  1
+     2 |  2
+(2 rows)
+
+-- Ensure r <= 3 is pushed down into the run condition of the window agg
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          rank() OVER (ORDER BY salary DESC) r
+   FROM empsalary) emp
+WHERE r <= 3;
+               QUERY PLAN                
+-----------------------------------------
+ WindowAgg
+   Run Condition: (rank() OVER (?) <= 3)
+   ->  Sort
+         Sort Key: empsalary.salary DESC
+         ->  Seq Scan on empsalary
+(5 rows)
+
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          rank() OVER (ORDER BY salary DESC) r
+   FROM empsalary) emp
+WHERE r <= 3;
+ empno | salary | r 
+-------+--------+---
+     8 |   6000 | 1
+    10 |   5200 | 2
+    11 |   5200 | 2
+(3 rows)
+
+-- Ensure dr = 1 is converted to dr <= 1 to get all rows leading up to dr = 1
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          dense_rank() OVER (ORDER BY salary DESC) dr
+   FROM empsalary) emp
+WHERE dr = 1;
+                     QUERY PLAN                      
+-----------------------------------------------------
+ Subquery Scan on emp
+   Filter: (emp.dr = 1)
+   ->  WindowAgg
+         Run Condition: (dense_rank() OVER (?) <= 1)
+         ->  Sort
+               Sort Key: empsalary.salary DESC
+               ->  Seq Scan on empsalary
+(7 rows)
+
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          dense_rank() OVER (ORDER BY salary DESC) dr
+   FROM empsalary) emp
+WHERE dr = 1;
+ empno | salary | dr 
+-------+--------+----
+     8 |   6000 |  1
+(1 row)
+
+-- Check COUNT() and COUNT(*)
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(*) OVER (ORDER BY salary DESC) c
+   FROM empsalary) emp
+WHERE c <= 3;
+                QUERY PLAN                 
+-------------------------------------------
+ WindowAgg
+   Run Condition: (count(*) OVER (?) <= 3)
+   ->  Sort
+         Sort Key: empsalary.salary DESC
+         ->  Seq Scan on empsalary
+(5 rows)
+
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(*) OVER (ORDER BY salary DESC) c
+   FROM empsalary) emp
+WHERE c <= 3;
+ empno | salary | c 
+-------+--------+---
+     8 |   6000 | 1
+    10 |   5200 | 3
+    11 |   5200 | 3
+(3 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(empno) OVER (ORDER BY salary DESC) c
+   FROM empsalary) emp
+WHERE c <= 3;
+                       QUERY PLAN                        
+---------------------------------------------------------
+ WindowAgg
+   Run Condition: (count(empsalary.empno) OVER (?) <= 3)
+   ->  Sort
+         Sort Key: empsalary.salary DESC
+         ->  Seq Scan on empsalary
+(5 rows)
+
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(empno) OVER (ORDER BY salary DESC) c
+   FROM empsalary) emp
+WHERE c <= 3;
+ empno | salary | c 
+-------+--------+---
+     8 |   6000 | 1
+    10 |   5200 | 3
+    11 |   5200 | 3
+(3 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(*) OVER (ORDER BY salary DESC ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) c
+   FROM empsalary) emp
+WHERE c >= 3;
+                QUERY PLAN                 
+-------------------------------------------
+ WindowAgg
+   Run Condition: (count(*) OVER (?) >= 3)
+   ->  Sort
+         Sort Key: empsalary.salary DESC
+         ->  Seq Scan on empsalary
+(5 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(*) OVER () c
+   FROM empsalary) emp
+WHERE 11 <= c;
+                 QUERY PLAN                 
+--------------------------------------------
+ WindowAgg
+   Run Condition: (11 <= count(*) OVER (?))
+   ->  Seq Scan on empsalary
+(3 rows)
+
+-- Tests to ensure we don't push down the run condition when it's not valid to
+-- do so.
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          row_number() OVER (PARTITION BY depname ORDER BY empno) rn
+   FROM empsalary) emp
+WHERE rn < 3;
+                         QUERY PLAN                         
+------------------------------------------------------------
+ Subquery Scan on emp
+   Filter: (emp.rn < 3)
+   ->  WindowAgg
+         ->  Sort
+               Sort Key: empsalary.depname, empsalary.empno
+               ->  Seq Scan on empsalary
+(6 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(empno) OVER (PARTITION BY depname ORDER BY salary DESC) c
+   FROM empsalary) emp
+WHERE c <= 3;
+                            QUERY PLAN                            
+------------------------------------------------------------------
+ Subquery Scan on emp
+   Filter: (emp.c <= 3)
+   ->  WindowAgg
+         ->  Sort
+               Sort Key: empsalary.depname, empsalary.salary DESC
+               ->  Seq Scan on empsalary
+(6 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(*) OVER (ORDER BY salary DESC ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) c
+   FROM empsalary) emp
+WHERE c <= 3;
+                  QUERY PLAN                   
+-----------------------------------------------
+ Subquery Scan on emp
+   Filter: (emp.c <= 3)
+   ->  WindowAgg
+         ->  Sort
+               Sort Key: empsalary.salary DESC
+               ->  Seq Scan on empsalary
+(6 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(*) OVER (ORDER BY salary) c
+   FROM empsalary) emp
+WHERE 3 <= c;
+                QUERY PLAN                
+------------------------------------------
+ Subquery Scan on emp
+   Filter: (3 <= emp.c)
+   ->  WindowAgg
+         ->  Sort
+               Sort Key: empsalary.salary
+               ->  Seq Scan on empsalary
+(6 rows)
+
 -- Test Sort node collapsing
 EXPLAIN (COSTS OFF)
 SELECT * FROM

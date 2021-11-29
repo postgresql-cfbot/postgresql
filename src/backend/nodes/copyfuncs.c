@@ -1101,6 +1101,8 @@ _copyWindowAgg(const WindowAgg *from)
 	COPY_SCALAR_FIELD(frameOptions);
 	COPY_NODE_FIELD(startOffset);
 	COPY_NODE_FIELD(endOffset);
+	COPY_NODE_FIELD(runcondition);
+	COPY_NODE_FIELD(runconditionorig);
 	COPY_SCALAR_FIELD(startInRangeFunc);
 	COPY_SCALAR_FIELD(endInRangeFunc);
 	COPY_SCALAR_FIELD(inRangeColl);
@@ -2578,6 +2580,8 @@ _copyWindowClause(const WindowClause *from)
 	COPY_SCALAR_FIELD(frameOptions);
 	COPY_NODE_FIELD(startOffset);
 	COPY_NODE_FIELD(endOffset);
+	COPY_NODE_FIELD(runcondition);
+	COPY_NODE_FIELD(runconditionorig);
 	COPY_SCALAR_FIELD(startInRangeFunc);
 	COPY_SCALAR_FIELD(endInRangeFunc);
 	COPY_SCALAR_FIELD(inRangeColl);

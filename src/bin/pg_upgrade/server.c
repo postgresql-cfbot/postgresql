@@ -236,6 +236,9 @@ start_postmaster(ClusterInfo *cluster, bool report_and_exit_on_error)
 	 * values are less than a gap of 2000000000 from the current xid counter,
 	 * so autovacuum will not touch them.
 	 *
+	 * Disable background workers by setting max_worker_processes=0 to prevent
+	 * undesired writes which may cause corruptions on the new cluster.
+	 *
 	 * Turn off durability requirements to improve object creation speed, and
 	 * we only modify the new cluster, so only use it there.  If there is a
 	 * crash, the new cluster has to be recreated anyway.  fsync=off is a big
@@ -245,7 +248,7 @@ start_postmaster(ClusterInfo *cluster, bool report_and_exit_on_error)
 	 * vacuumdb --freeze actually freezes the tuples.
 	 */
 	snprintf(cmd, sizeof(cmd),
-			 "\"%s/pg_ctl\" -w -l \"%s\" -D \"%s\" -o \"-p %d%s%s %s%s\" start",
+			 "\"%s/pg_ctl\" -w -l \"%s\" -D \"%s\" -o \"-p %d%s%s %s%s -c max_worker_processes=0\" start",
 			 cluster->bindir, SERVER_LOG_FILE, cluster->pgconfig, cluster->port,
 			 (cluster->controldata.cat_ver >=
 			  BINARY_UPGRADE_SERVER_FLAG_CAT_VER) ? " -b" :

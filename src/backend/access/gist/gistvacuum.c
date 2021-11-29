@@ -161,7 +161,7 @@ gistvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	 */
 	vstate.page_set_context = GenerationContextCreate(CurrentMemoryContext,
 													  "GiST VACUUM page set context",
-													  16 * 1024);
+													  ALLOCSET_DEFAULT_SIZES);
 	oldctx = MemoryContextSwitchTo(vstate.page_set_context);
 	vstate.internal_page_set = intset_create();
 	vstate.empty_leaf_set = intset_create();

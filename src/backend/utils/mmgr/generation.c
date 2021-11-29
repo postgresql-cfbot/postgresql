@@ -46,6 +46,8 @@
 #define Generation_BLOCKHDRSZ	MAXALIGN(sizeof(GenerationBlock))
 #define Generation_CHUNKHDRSZ	sizeof(GenerationChunk)
 
+#define Generation_CHUNK_FRACTION	8
+
 typedef struct GenerationBlock GenerationBlock; /* forward reference */
 typedef struct GenerationChunk GenerationChunk;
 
@@ -60,9 +62,13 @@ typedef struct GenerationContext
 	MemoryContextData header;	/* Standard memory-context fields */
 
 	/* Generational context parameters */
-	Size		blockSize;		/* standard block size */
+	Size		initBlockSize;	/* initial block size */
+	Size		maxBlockSize;	/* maximum block size */
+	Size		nextBlockSize;	/* next block size to allocate */
+	Size		allocChunkLimit;	/* effective chunk size limit */
 
 	GenerationBlock *block;		/* current (most recently allocated) block */
+	GenerationBlock *keeper;	/* keeper block */
 	dlist_head	blocks;			/* list of blocks */
 } GenerationContext;
 
@@ -196,7 +202,9 @@ static const MemoryContextMethods GenerationMethods = {
 MemoryContext
 GenerationContextCreate(MemoryContext parent,
 						const char *name,
-						Size blockSize)
+						Size minContextSize,
+						Size initBlockSize,
+						Size maxBlockSize)
 {
 	GenerationContext *set;
 
@@ -208,16 +216,20 @@ GenerationContextCreate(MemoryContext parent,
 					 "padding calculation in GenerationChunk is wrong");
 
 	/*
-	 * First, validate allocation parameters.  (If we're going to throw an
-	 * error, we should do so before the context is created, not after.)  We
-	 * somewhat arbitrarily enforce a minimum 1K block size, mostly because
-	 * that's what AllocSet does.
+	 * First, validate allocation parameters.  Once these were regular runtime
+	 * test and elog's, but in practice Asserts seem sufficient because nobody
+	 * varies their parameters at runtime.  We somewhat arbitrarily enforce a
+	 * minimum 1K block size.
 	 */
-	if (blockSize != MAXALIGN(blockSize) ||
-		blockSize < 1024 ||
-		!AllocHugeSizeIsValid(blockSize))
-		elog(ERROR, "invalid blockSize for memory context: %zu",
-			 blockSize);
+	Assert(initBlockSize == MAXALIGN(initBlockSize) &&
+		   initBlockSize >= 1024);
+	Assert(maxBlockSize == MAXALIGN(maxBlockSize) &&
+		   maxBlockSize >= initBlockSize &&
+		   AllocHugeSizeIsValid(maxBlockSize)); /* must be safe to double */
+	Assert(minContextSize == 0 ||
+		   (minContextSize == MAXALIGN(minContextSize) &&
+			minContextSize >= 1024 &&
+			minContextSize <= maxBlockSize));
 
 	/*
 	 * Allocate the context header.  Unlike aset.c, we never try to combine
@@ -242,8 +254,22 @@ GenerationContextCreate(MemoryContext parent,
 	 */
 
 	/* Fill in GenerationContext-specific header fields */
-	set->blockSize = blockSize;
+	set->initBlockSize = initBlockSize;
+	set->maxBlockSize = maxBlockSize;
+	set->nextBlockSize = initBlockSize;
+
+	/*
+	 * Compute the allocation chunk size limit for this context.
+	 *
+	 * Follows similar ideas as AllocSet, see aset.c for details ...
+	 */
+	set->allocChunkLimit = maxBlockSize;
+	while ((Size) (set->allocChunkLimit + Generation_CHUNKHDRSZ) >
+		   (Size) ((Size) (maxBlockSize - Generation_BLOCKHDRSZ) / Generation_CHUNK_FRACTION))
+		set->allocChunkLimit >>= 1;
+
 	set->block = NULL;
+	set->keeper = NULL;
 	dlist_init(&set->blocks);
 
 	/* Finally, do the type-independent part of context creation */
@@ -292,6 +318,10 @@ GenerationReset(MemoryContext context)
 	}
 
 	set->block = NULL;
+	set->keeper = NULL;
+
+	/* Reset block size allocation sequence, too */
+	set->nextBlockSize = set->initBlockSize;
 
 	Assert(dlist_is_empty(&set->blocks));
 }
@@ -331,7 +361,7 @@ GenerationAlloc(MemoryContext context, Size size)
 	Size		chunk_size = MAXALIGN(size);
 
 	/* is it an over-sized chunk? if yes, allocate special block */
-	if (chunk_size > set->blockSize / 8)
+	if (chunk_size > set->allocChunkLimit)
 	{
 		Size		blksize = chunk_size + Generation_BLOCKHDRSZ + Generation_CHUNKHDRSZ;
 
@@ -384,10 +414,48 @@ GenerationAlloc(MemoryContext context, Size size)
 	 */
 	block = set->block;
 
+	/*
+	 * If we can't use the current block, and we have a keeper block with
+	 * enough free space in it, use it as the block.
+	 *
+	 * XXX We don't want to do this when there's not enough free space
+	 * (although the keeper block should be empty, so not sure if checking
+	 * the space in the keeper block is necessary).
+	 */
+	if (((block == NULL) ||
+		(block->endptr - block->freeptr) < Generation_CHUNKHDRSZ + chunk_size) &&
+		(set->keeper != NULL) &&
+		(set->keeper->endptr - set->keeper->freeptr) < Generation_CHUNKHDRSZ + chunk_size)
+	{
+		block = set->keeper;
+		set->keeper = NULL;
+
+		/* keeper block was not counted as allocated, so add it back */
+		context->mem_allocated += block->blksize;
+	}
+
 	if ((block == NULL) ||
 		(block->endptr - block->freeptr) < Generation_CHUNKHDRSZ + chunk_size)
 	{
-		Size		blksize = set->blockSize;
+		Size		blksize;
+		Size		required_size;
+
+		/*
+		 * The first such block has size initBlockSize, and we double the
+		 * space in each succeeding block, but not more than maxBlockSize.
+		 */
+		blksize = set->nextBlockSize;
+		set->nextBlockSize <<= 1;
+		if (set->nextBlockSize > set->maxBlockSize)
+			set->nextBlockSize = set->maxBlockSize;
+
+		/*
+		 * If initBlockSize is less than ALLOC_CHUNK_LIMIT, we could need more
+		 * space... but try to keep it a power of 2.
+		 */
+		required_size = chunk_size + Generation_BLOCKHDRSZ + Generation_CHUNKHDRSZ;
+		while (blksize < required_size)
+			blksize <<= 1;
 
 		block = (GenerationBlock *) malloc(blksize);
 
@@ -499,15 +567,33 @@ GenerationFree(MemoryContext context, void *pointer)
 	if (block->nfree < block->nchunks)
 		return;
 
+	/* Also make sure the block is not marked as the current block. */
+	if (set->block == block)
+		set->block = NULL;
+
+	/* Keep the block for reuse, if we don't have one already. */
+	if (!set->keeper && block->blksize <= set->maxBlockSize)
+	{
+		/* reset the pointers before we use it as keeper block */
+		block->freeptr = ((char *) block) + Generation_BLOCKHDRSZ;
+		block->endptr = ((char *) block) + block->blksize;
+
+		block->nfree = 0;
+		block->nchunks = 0;
+
+		set->keeper = block;
+
+		/* keeper block is not counted as allocated */
+		context->mem_allocated -= block->blksize;
+
+		return;
+	}
+
 	/*
 	 * The block is empty, so let's get rid of it. First remove it from the
 	 * list of blocks, then return it to malloc().
 	 */
 	dlist_delete(&block->node);
-
-	/* Also make sure the block is not marked as the current block. */
-	if (set->block == block)
-		set->block = NULL;
 
 	context->mem_allocated -= block->blksize;
 	free(block);
@@ -745,13 +831,19 @@ GenerationCheck(MemoryContext context)
 					nchunks;
 		char	   *ptr;
 
-		total_allocated += block->blksize;
+		/*
+		 * The keeper block in the list of blocks, but we don't consider it
+		 * as allocated in memory accounting. So don't include it in the sum.
+		 */
+		if (block != gen->keeper)
+			total_allocated += block->blksize;
 
 		/*
 		 * nfree > nchunks is surely wrong, and we don't expect to see
 		 * equality either, because such a block should have gotten freed.
 		 */
-		if (block->nfree >= block->nchunks)
+		if ((block->nfree > block->nchunks) &&
+			((block != gen->keeper) && (block->nfree == block->nchunks)))
 			elog(WARNING, "problem in Generation %s: number of free chunks %d in block %p exceeds %d allocated",
 				 name, block->nfree, block, block->nchunks);
 

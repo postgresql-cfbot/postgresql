@@ -33,6 +33,14 @@ typedef struct IdentifySystemCmd
 	NodeTag		type;
 } IdentifySystemCmd;
 
+/* ----------------------
+ *		LIST_SLOTS command
+ * ----------------------
+ */
+typedef struct ListSlotsCmd
+{
+	NodeTag		type;
+} ListSlotsCmd;
 
 /* ----------------------
  *		BASE_BACKUP command

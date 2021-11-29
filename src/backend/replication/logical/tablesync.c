@@ -100,6 +100,7 @@
 #include "catalog/pg_subscription_rel.h"
 #include "catalog/pg_type.h"
 #include "commands/copy.h"
+#include "commands/subscriptioncmds.h"
 #include "miscadmin.h"
 #include "parser/parse_relation.h"
 #include "pgstat.h"
@@ -151,7 +152,8 @@ finish_sync_worker(void)
 	CommitTransactionCommand();
 
 	/* Find the main apply worker and signal it. */
-	logicalrep_worker_wakeup(MyLogicalRepWorker->subid, InvalidOid);
+	logicalrep_worker_wakeup(MyLogicalRepWorker->dbid,
+							 MyLogicalRepWorker->subid, InvalidOid);
 
 	/* Stop gracefully */
 	proc_exit(0);
@@ -191,7 +193,8 @@ wait_for_relation_state_change(Oid relid, char expected_state)
 
 		/* Check if the sync worker is still running and bail if not. */
 		LWLockAcquire(LogicalRepWorkerLock, LW_SHARED);
-		worker = logicalrep_worker_find(MyLogicalRepWorker->subid, relid,
+		worker = logicalrep_worker_find(MyLogicalRepWorker->dbid,
+										MyLogicalRepWorker->subid, relid,
 										false);
 		LWLockRelease(LogicalRepWorkerLock);
 		if (!worker)
@@ -238,7 +241,8 @@ wait_for_worker_state_change(char expected_state)
 		 * waiting.
 		 */
 		LWLockAcquire(LogicalRepWorkerLock, LW_SHARED);
-		worker = logicalrep_worker_find(MyLogicalRepWorker->subid,
+		worker = logicalrep_worker_find(MyLogicalRepWorker->dbid,
+										MyLogicalRepWorker->subid,
 										InvalidOid, false);
 		if (worker && worker->proc)
 			logicalrep_worker_wakeup_ptr(worker);
@@ -484,7 +488,8 @@ process_syncing_tables_for_apply(XLogRecPtr current_lsn)
 			 */
 			LWLockAcquire(LogicalRepWorkerLock, LW_SHARED);
 
-			syncworker = logicalrep_worker_find(MyLogicalRepWorker->subid,
+			syncworker = logicalrep_worker_find(MyLogicalRepWorker->dbid,
+												MyLogicalRepWorker->subid,
 												rstate->relid, false);
 
 			if (syncworker)

@@ -58,6 +58,7 @@ static void libpqrcv_get_senderinfo(WalReceiverConn *conn,
 									char **sender_host, int *sender_port);
 static char *libpqrcv_identify_system(WalReceiverConn *conn,
 									  TimeLineID *primary_tli);
+static List *libpqrcv_list_slots(WalReceiverConn *conn);
 static int	libpqrcv_server_version(WalReceiverConn *conn);
 static void libpqrcv_readtimelinehistoryfile(WalReceiverConn *conn,
 											 TimeLineID tli, char **filename,
@@ -89,6 +90,7 @@ static WalReceiverFunctionsType PQWalReceiverFunctions = {
 	libpqrcv_get_conninfo,
 	libpqrcv_get_senderinfo,
 	libpqrcv_identify_system,
+	libpqrcv_list_slots,
 	libpqrcv_server_version,
 	libpqrcv_readtimelinehistoryfile,
 	libpqrcv_startstreaming,
@@ -395,6 +397,77 @@ static int
 libpqrcv_server_version(WalReceiverConn *conn)
 {
 	return PQserverVersion(conn->streamConn);
+}
+
+/*
+ * Get list of slots from primary.
+ */
+static List *
+libpqrcv_list_slots(WalReceiverConn *conn)
+{
+	PGresult   *res;
+	int			i;
+	List	   *slots = NIL;
+	int			ntuples;
+	WalRecvReplicationSlotData *slot_data;
+
+	res = libpqrcv_PQexec(conn->streamConn, "LIST_SLOTS");
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+	{
+		PQclear(res);
+		ereport(ERROR,
+				(errmsg("could not receive list of slots the primary server: %s",
+						pchomp(PQerrorMessage(conn->streamConn)))));
+	}
+	if (PQnfields(res) < 10)
+	{
+		int			nfields = PQnfields(res);
+
+		PQclear(res);
+		ereport(ERROR,
+				(errmsg("invalid response from primary server"),
+				 errdetail("Could not get list of slots: got %d fields, expected %d or more fields.",
+						   nfields, 10)));
+	}
+
+	ntuples = PQntuples(res);
+	for (i = 0; i < ntuples; i++)
+	{
+		char   *slot_type;
+
+		slot_data = palloc0(sizeof(WalRecvReplicationSlotData));
+		namestrcpy(&slot_data->name, PQgetvalue(res, i, 0));
+		if (!PQgetisnull(res, i, 1))
+			namestrcpy(&slot_data->plugin, PQgetvalue(res, i, 1));
+		slot_type = PQgetvalue(res, i, 2);
+		if (!PQgetisnull(res, i, 3))
+			slot_data->database = atooid(PQgetvalue(res, i, 3));
+		if (strcmp(slot_type, "physical") == 0)
+		{
+			if (OidIsValid(slot_data->database))
+				elog(ERROR, "unexpected physical replication slot with database set");
+		}
+		if (pg_strtoint32(PQgetvalue(res, i, 5)) == 1)
+			slot_data->persistency = RS_TEMPORARY;
+		else
+			slot_data->persistency = RS_PERSISTENT;
+		if (!PQgetisnull(res, i, 6))
+			slot_data->xmin = atooid(PQgetvalue(res, i, 6));
+		if (!PQgetisnull(res, i, 7))
+			slot_data->catalog_xmin = atooid(PQgetvalue(res, i, 7));
+		if (!PQgetisnull(res, i, 8))
+			slot_data->restart_lsn = pg_strtouint64(PQgetvalue(res, i, 8),
+													NULL, 10);
+		if (!PQgetisnull(res, i, 9))
+			slot_data->confirmed_flush = pg_strtouint64(PQgetvalue(res, i, 9),
+														NULL, 10);
+
+		slots = lappend(slots, slot_data);
+	}
+
+	PQclear(res);
+
+	return slots;
 }
 
 /*

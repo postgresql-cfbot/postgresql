@@ -91,11 +91,12 @@ static SQLCmd *make_sqlcmd(void);
 %token K_USE_SNAPSHOT
 %token K_MANIFEST
 %token K_MANIFEST_CHECKSUMS
+%token K_LIST_SLOTS
 
 %type <node>	command
 %type <node>	base_backup start_replication start_logical_replication
 				create_replication_slot drop_replication_slot identify_system
-				read_replication_slot timeline_history show sql_cmd
+				read_replication_slot timeline_history show sql_cmd list_slots
 %type <list>	base_backup_legacy_opt_list generic_option_list
 %type <defelt>	base_backup_legacy_opt generic_option
 %type <uintval>	opt_timeline
@@ -129,6 +130,7 @@ command:
 			| read_replication_slot
 			| timeline_history
 			| show
+			| list_slots
 			| sql_cmd
 			;
 
@@ -139,6 +141,15 @@ identify_system:
 			K_IDENTIFY_SYSTEM
 				{
 					$$ = (Node *) makeNode(IdentifySystemCmd);
+				}
+			;
+/*
+ * LIST_SLOTS
+ */
+list_slots:
+			K_LIST_SLOTS
+				{
+					$$ = (Node *) makeNode(ListSlotsCmd);
 				}
 			;
 

@@ -30,6 +30,7 @@
 #include "nodes/nodeFuncs.h"
 #include "optimizer/clauses.h"
 #include "optimizer/optimizer.h"
+#include "parser/parse_relation.h"
 #include "pgstat.h"
 #include "postmaster/autovacuum.h"
 #include "statistics/extended_stats_internal.h"
@@ -1559,6 +1560,7 @@ statext_is_compatible_clause(PlannerInfo *root, Node *clause, Index relid,
 							 Bitmapset **attnums, List **exprs)
 {
 	RangeTblEntry *rte = root->simple_rte_array[relid];
+	RelOptInfo *rel = root->simple_rel_array[relid];
 	RestrictInfo *rinfo = (RestrictInfo *) clause;
 	int			clause_relid;
 	Oid			userid;
@@ -1606,10 +1608,9 @@ statext_is_compatible_clause(PlannerInfo *root, Node *clause, Index relid,
 		return false;
 
 	/*
-	 * Check that the user has permission to read all required attributes. Use
-	 * checkAsUser if it's set, in case we're accessing the table via a view.
+	 * Check that the user has permission to read all required attributes.
 	 */
-	userid = rte->checkAsUser ? rte->checkAsUser : GetUserId();
+	userid = rel->userid ? rel->userid : GetUserId();
 
 	if (pg_class_aclcheck(rte->relid, userid, ACL_SELECT) != ACLCHECK_OK)
 	{

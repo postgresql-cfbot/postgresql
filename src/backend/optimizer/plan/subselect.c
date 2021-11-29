@@ -1506,6 +1506,11 @@ convert_EXISTS_sublink_to_join(PlannerInfo *root, SubLink *sublink,
 	parse->rtable = list_concat(parse->rtable, subselect->rtable);
 
 	/*
+	 * Add subquery's RelPermissionInfos into the upper query.
+	 */
+	MergeRelPermissionInfos(parse, subselect->relpermlist);
+
+	/*
 	 * And finally, build the JoinExpr node.
 	 */
 	result = makeNode(JoinExpr);

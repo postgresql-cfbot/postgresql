@@ -101,6 +101,8 @@ typedef struct PlannerGlobal
 
 	List	   *finalrtable;	/* "flat" rangetable for executor */
 
+	List	   *finalrelpermlist;	/* "flat list of RelPermissionInfo "*/
+
 	List	   *finalrowmarks;	/* "flat" list of PlanRowMarks */
 
 	List	   *resultRelations;	/* "flat" list of integer RT indexes */
@@ -730,7 +732,8 @@ typedef struct RelOptInfo
 
 	/* Information about foreign tables and foreign joins */
 	Oid			serverid;		/* identifies server for the table or join */
-	Oid			userid;			/* identifies user to check access as */
+	Oid			userid;			/* identifies user to check access as; set
+								 * in non-foreign table relations too! */
 	bool		useridiscurrent;	/* join is only valid for current user */
 	/* use "struct FdwRoutine" to avoid including fdwapi.h here */
 	struct FdwRoutine *fdwroutine;

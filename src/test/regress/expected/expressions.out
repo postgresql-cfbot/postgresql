@@ -179,12 +179,12 @@ create view numeric_view as
  f2164  | numeric(16,4) |           |          |         | main    | 
  f2n    | numeric       |           |          |         | main    | 
 View definition:
- SELECT numeric_tbl.f1,
-    numeric_tbl.f1::numeric(16,4) AS f1164,
-    numeric_tbl.f1::numeric AS f1n,
-    numeric_tbl.f2,
-    numeric_tbl.f2::numeric(16,4) AS f2164,
-    numeric_tbl.f2 AS f2n
+ SELECT f1,
+    f1::numeric(16,4) AS f1164,
+    f1::numeric AS f1n,
+    f2,
+    f2::numeric(16,4) AS f2164,
+    f2 AS f2n
    FROM numeric_tbl;
 
 explain (verbose, costs off) select * from numeric_view;

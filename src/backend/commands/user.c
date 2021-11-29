@@ -304,11 +304,27 @@ CreateRole(ParseState *pstate, CreateRoleStmt *stmt)
 	pg_authid_rel = table_open(AuthIdRelationId, RowExclusiveLock);
 	pg_authid_dsc = RelationGetDescr(pg_authid_rel);
 
-	if (OidIsValid(get_role_oid(stmt->role, true)))
-		ereport(ERROR,
-				(errcode(ERRCODE_DUPLICATE_OBJECT),
-				 errmsg("role \"%s\" already exists",
-						stmt->role)));
+	if (OidIsValid(get_role_oid(stmt->role, true))) {
+		if (stmt->replace) {
+			AlterRoleStmt *alter = makeNode(AlterRoleStmt);
+
+			alter->role = makeNode(RoleSpec);
+			alter->role->roletype = ROLESPEC_CSTRING;
+			alter->role->rolename = stmt->role;
+			alter->role->location = -1;
+			alter->options = stmt->options;
+			alter->action = 1;
+
+			table_close(pg_authid_rel, NoLock);
+
+			return AlterRole(pstate, alter);
+		}
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_DUPLICATE_OBJECT),
+					 errmsg("role \"%s\" already exists",
+							stmt->role)));
+	}
 
 	/* Convert validuntil to internal form */
 	if (validUntil)

@@ -4518,6 +4518,7 @@ _copyCreateRoleStmt(const CreateRoleStmt *from)
 	COPY_SCALAR_FIELD(stmt_type);
 	COPY_STRING_FIELD(role);
 	COPY_NODE_FIELD(options);
+	COPY_SCALAR_FIELD(replace);
 
 	return newnode;
 }

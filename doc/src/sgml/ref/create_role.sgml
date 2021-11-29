@@ -21,7 +21,7 @@ PostgreSQL documentation
 
  <refsynopsisdiv>
 <synopsis>
-CREATE ROLE <replaceable class="parameter">name</replaceable> [ [ WITH ] <replaceable class="parameter">option</replaceable> [ ... ] ]
+CREATE [ OR REPLACE ] ROLE <replaceable class="parameter">name</replaceable> [ [ WITH ] <replaceable class="parameter">option</replaceable> [ ... ] ]
 
 <phrase>where <replaceable class="parameter">option</replaceable> can be:</phrase>
 
@@ -74,6 +74,18 @@ in sync when changing the above synopsis!
   <title>Parameters</title>
 
     <variablelist>
+     <varlistentry>
+      <term><literal>OR REPLACE</literal></term>
+      <listitem>
+       <para>
+        Ensure that the given role exists with the parameters provided on in
+        the command.  If the role already exists, this will force any
+        parameters on this role into the existing role.  This may end up with
+        some surprising behavior.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry>
       <term><replaceable class="parameter">name</replaceable></term>
       <listitem>

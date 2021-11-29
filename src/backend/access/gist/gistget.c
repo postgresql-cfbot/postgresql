@@ -14,6 +14,7 @@
  */
 #include "postgres.h"
 
+#include "access/bufmask.h"
 #include "access/genam.h"
 #include "access/gist_private.h"
 #include "access/relscan.h"
@@ -49,6 +50,7 @@ gistkillitems(IndexScanDesc scan)
 	Assert(so->curBlkno != InvalidBlockNumber);
 	Assert(!XLogRecPtrIsInvalid(so->curPageLSN));
 	Assert(so->killedItems != NULL);
+	Assert(so->numKilled > 0);
 
 	buffer = ReadBuffer(scan->indexRelation, so->curBlkno);
 	if (!BufferIsValid(buffer))
@@ -62,8 +64,13 @@ gistkillitems(IndexScanDesc scan)
 	 * If page LSN differs it means that the page was modified since the last
 	 * read. killedItems could be not valid so LP_DEAD hints applying is not
 	 * safe.
+	 *
+	 * Another case - standby was promoted after start of current transaction.
+	 * It is not required for correctness, but it is better to just skip
+	 * everything.
 	 */
-	if (BufferGetLSNAtomic(buffer) != so->curPageLSN)
+	if ((BufferGetLSNAtomic(buffer) != so->curPageLSN) ||
+			(scan->xactStartedInRecovery && !RecoveryInProgress()))
 	{
 		UnlockReleaseBuffer(buffer);
 		so->numKilled = 0;		/* reset counter */
@@ -71,6 +78,20 @@ gistkillitems(IndexScanDesc scan)
 	}
 
 	Assert(GistPageIsLeaf(page));
+	if (GistPageHasLpSafeOnStandby(page) && !scan->xactStartedInRecovery)
+	{
+		/* Seems like server was promoted some time ago,
+		 * clear the flag just for accuracy. */
+		GistClearPageHasLpSafeOnStandby(page);
+	}
+	else if (!GistPageHasLpSafeOnStandby(page) && scan->xactStartedInRecovery)
+	{
+		/* LP_DEAD flags were set by primary. We need to clear them,
+		 * and allow standby to set own. */
+		mask_lp_dead(page);
+		pg_memory_barrier();
+		GistMarkPageHasLpSafeOnStandby(page);
+	}
 
 	/*
 	 * Mark all killedItems as dead. We need no additional recheck, because,
@@ -338,6 +359,7 @@ gistScanPage(IndexScanDesc scan, GISTSearchItem *pageItem,
 	OffsetNumber maxoff;
 	OffsetNumber i;
 	MemoryContext oldcxt;
+	bool ignore_killed_tuples;
 
 	Assert(!GISTSearchItemIsHeap(*pageItem));
 
@@ -412,6 +434,15 @@ gistScanPage(IndexScanDesc scan, GISTSearchItem *pageItem,
 	 * check all tuples on page
 	 */
 	maxoff = PageGetMaxOffsetNumber(page);
+	/*
+	 * Check whether is it allowed to see LP_DEAD bits - always true for primary,
+	 * on secondary we should avoid flags that were set by primary.
+	 * In case of promotion xactStartedInRecovery may still be equal
+	 * to true on primary so, old standby-safe bits are used (case of old
+	 * transaction in promoted server).
+	 */
+	ignore_killed_tuples = !scan->xactStartedInRecovery ||
+									GistPageHasLpSafeOnStandby(page);
 	for (i = FirstOffsetNumber; i <= maxoff; i = OffsetNumberNext(i))
 	{
 		ItemId		iid = PageGetItemId(page, i);
@@ -424,7 +455,7 @@ gistScanPage(IndexScanDesc scan, GISTSearchItem *pageItem,
 		 * If the scan specifies not to return killed tuples, then we treat a
 		 * killed tuple as not passing the qual.
 		 */
-		if (scan->ignore_killed_tuples && ItemIdIsDead(iid))
+		if (ignore_killed_tuples && ItemIdIsDead(iid))
 			continue;
 
 		it = (IndexTuple) PageGetItem(page, iid);
@@ -651,7 +682,9 @@ gistgettuple(IndexScanDesc scan, ScanDirection dir)
 		{
 			if (so->curPageData < so->nPageData)
 			{
-				if (scan->kill_prior_tuple && so->curPageData > 0)
+				if (scan->kill_prior_tuple && so->curPageData > 0 &&
+					(XLogRecPtrIsInvalid(scan->kill_prior_tuple_min_lsn) ||
+						scan->kill_prior_tuple_min_lsn < so->curPageLSN))
 				{
 
 					if (so->killedItems == NULL)
@@ -688,7 +721,9 @@ gistgettuple(IndexScanDesc scan, ScanDirection dir)
 			 */
 			if (scan->kill_prior_tuple
 				&& so->curPageData > 0
-				&& so->curPageData == so->nPageData)
+				&& so->curPageData == so->nPageData
+				&& (XLogRecPtrIsInvalid(scan->kill_prior_tuple_min_lsn) ||
+						scan->kill_prior_tuple_min_lsn < so->curPageLSN))
 			{
 
 				if (so->killedItems == NULL)

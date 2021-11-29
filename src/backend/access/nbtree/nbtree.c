@@ -244,7 +244,9 @@ btgettuple(IndexScanDesc scan, ScanDirection dir)
 			/*
 			 * Check to see if we should kill the previously-fetched tuple.
 			 */
-			if (scan->kill_prior_tuple)
+			if (scan->kill_prior_tuple &&
+				(XLogRecPtrIsInvalid(scan->kill_prior_tuple_min_lsn) ||
+					scan->kill_prior_tuple_min_lsn < so->currPos.lsn))
 			{
 				/*
 				 * Yes, remember it for later. (We'll deal with all such

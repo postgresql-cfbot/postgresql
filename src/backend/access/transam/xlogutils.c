@@ -352,6 +352,7 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 							  Buffer *buf)
 {
 	XLogRecPtr	lsn = record->EndRecPtr;
+	RmgrId		rmid = XLogRecGetRmid(record);
 	RelFileNode rnode;
 	ForkNumber	forknum;
 	BlockNumber blkno;
@@ -393,6 +394,11 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 		if (!PageIsNew(page))
 		{
 			PageSetLSN(page, lsn);
+			/* If FPI apply mask function is defined - apply it to the buffer. */
+			if (RmgrTable[rmid].rm_fpi_mask)
+			{
+				RmgrTable[rmid].rm_fpi_mask(page, blkno);
+			}
 		}
 
 		MarkBufferDirty(*buf);

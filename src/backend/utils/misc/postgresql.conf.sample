@@ -245,6 +245,7 @@
 
 #archive_mode = off		# enables archiving; off, on, or always
 				# (change requires restart)
+#archive_library = 'shell'	# library to use to archive a logfile segment
 #archive_command = ''		# command to use to archive a logfile segment
 				# placeholders: %p = path of file to archive
 				#               %f = file name only

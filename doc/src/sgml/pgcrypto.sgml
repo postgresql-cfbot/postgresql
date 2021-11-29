@@ -163,7 +163,7 @@ hmac(data bytea, key bytea, type text) returns bytea
       <entry>yes</entry>
       <entry>128</entry>
       <entry>60</entry>
-      <entry>Blowfish-based, variant 2a</entry>
+      <entry>Blowfish-based, variants 2a, 2b, 2x, 2y</entry>
      </row>
      <row>
       <entry><literal>md5</literal></entry>

@@ -78,7 +78,9 @@ struct px_crypt_algo
 static const struct px_crypt_algo
 			px_crypt_list[] = {
 	{"$2a$", 4, run_crypt_bf},
+	{"$2b$", 4, run_crypt_bf},
 	{"$2x$", 4, run_crypt_bf},
+	{"$2y$", 4, run_crypt_bf},
 	{"$2$", 3, NULL},			/* N/A */
 	{"$1$", 3, run_crypt_md5},
 	{"_", 1, run_crypt_des},
@@ -112,8 +114,9 @@ px_crypt(const char *psw, const char *salt, char *buf, unsigned len)
 struct generator
 {
 	char	   *name;
-	char	   *(*gen) (unsigned long count, const char *input, int size,
-						char *output, int output_size);
+	char	   *(*gen) (const char *prefix, unsigned long count, const char *input,
+						int size, char *output, int output_size);
+	char		*prefix;
 	int			input_len;
 	int			def_rounds;
 	int			min_rounds;
@@ -121,10 +124,10 @@ struct generator
 };
 
 static struct generator gen_list[] = {
-	{"des", _crypt_gensalt_traditional_rn, 2, 0, 0, 0},
-	{"md5", _crypt_gensalt_md5_rn, 6, 0, 0, 0},
-	{"xdes", _crypt_gensalt_extended_rn, 3, PX_XDES_ROUNDS, 1, 0xFFFFFF},
-	{"bf", _crypt_gensalt_blowfish_rn, 16, PX_BF_ROUNDS, 4, 31},
+	{"des", _crypt_gensalt_traditional_rn, "", 2, 0, 0, 0},
+	{"md5", _crypt_gensalt_md5_rn, "$1$", 6, 0, 0, 0},
+	{"xdes", _crypt_gensalt_extended_rn, "_", 3, PX_XDES_ROUNDS, 1, 0xFFFFFF},
+	{"bf", _crypt_gensalt_blowfish_rn, "$2a$", 16, PX_BF_ROUNDS, 4, 31},
 	{NULL, NULL, 0, 0, 0, 0}
 };
 
@@ -154,7 +157,7 @@ px_gen_salt(const char *salt_type, char *buf, int rounds)
 	if (!pg_strong_random(rbuf, g->input_len))
 		return PXE_NO_RANDOM;
 
-	p = g->gen(rounds, rbuf, g->input_len, buf, PX_MAX_SALT_LEN);
+	p = g->gen(g->prefix, rounds, rbuf, g->input_len, buf, PX_MAX_SALT_LEN);
 	px_memset(rbuf, 0, sizeof(rbuf));
 
 	if (p == NULL)

@@ -25348,12 +25348,18 @@ SELECT collation for ('foo' COLLATE "de_DE");
         <returnvalue>boolean</returnvalue>
        </para>
        <para>
-        Requests to log the memory contexts of the backend with the
-        specified process ID.  These memory contexts will be logged at
-        <literal>LOG</literal> message level. They will appear in
-        the server log based on the log configuration set
-        (See <xref linkend="runtime-config-logging"/> for more information),
-        but will not be sent to the client regardless of
+        Requests to log memory contexts of the <glossterm linkend="glossary-backend">backend</glossterm>
+        or the <glossterm linkend="glossary-wal-sender">WAL sender</glossterm> or
+        the <glossterm linkend="glossary-auxiliary-proc">auxiliary process</glossterm>
+        with the specified process ID. This function cannot request
+        <glossterm linkend="glossary-postmaster">postmaster process</glossterm> or
+        <glossterm linkend="glossary-logger">logger</glossterm> or 
+        <glossterm linkend="glossary-stats-collector">statistics collector</glossterm>
+        (all other <glossterm linkend="glossary-auxiliary-proc">auxiliary processes</glossterm>
+        it can) for memory contexts. These memory contexts will be logged at
+        <literal>LOG</literal> message level. They will appear in the server log
+        based on the log configuration set (See <xref linkend="runtime-config-logging"/>
+        for more information), but will not be sent to the client regardless of
         <xref linkend="guc-client-min-messages"/>.
        </para></entry>
       </row>

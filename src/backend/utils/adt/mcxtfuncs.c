@@ -167,26 +167,35 @@ pg_get_backend_memory_contexts(PG_FUNCTION_ARGS)
  * rate would cause lots of log messages and which can lead to denial of
  * service. Additional roles can be permitted with GRANT.
  *
- * On receipt of this signal, a backend sets the flag in the signal
- * handler, which causes the next CHECK_FOR_INTERRUPTS() to log the
- * memory contexts.
+ * On receipt of this signal, a backend sets the flag in the signal handler,
+ * which causes the next CHECK_FOR_INTERRUPTS() or process specific interrupt
+ * handlers to log the memory contexts.
  */
 Datum
 pg_log_backend_memory_contexts(PG_FUNCTION_ARGS)
 {
 	int			pid = PG_GETARG_INT32(0);
 	PGPROC	   *proc;
+	bool		is_aux_proc = false;
+	BackendId   backendId = InvalidBackendId;
 
 	proc = BackendPidGetProc(pid);
 
+	/* See if the process with given pid is an auxiliary process. */
+	if (proc == NULL)
+	{
+		proc = AuxiliaryPidGetProc(pid);
+		is_aux_proc = true;
+	}
+
 	/*
-	 * BackendPidGetProc returns NULL if the pid isn't valid; but by the time
-	 * we reach kill(), a process for which we get a valid proc here might
-	 * have terminated on its own.  There's no way to acquire a lock on an
-	 * arbitrary process to prevent that. But since this mechanism is usually
-	 * used to debug a backend running and consuming lots of memory, that it
-	 * might end on its own first and its memory contexts are not logged is
-	 * not a problem.
+	 * BackendPidGetProc or AuxiliaryPidGetProc returns NULL if the pid isn't
+	 * valid; but by the time we reach kill(), a process for which we get a
+	 * valid proc here might have terminated on its own.  There's no way to
+	 * acquire a lock on an arbitrary process to prevent that. But since this
+	 * mechanism is usually used to debug a backend running and consuming lots
+	 * of memory, that it might end on its own first and its memory contexts
+	 * are not logged is not a problem.
 	 */
 	if (proc == NULL)
 	{
@@ -199,7 +208,11 @@ pg_log_backend_memory_contexts(PG_FUNCTION_ARGS)
 		PG_RETURN_BOOL(false);
 	}
 
-	if (SendProcSignal(pid, PROCSIG_LOG_MEMORY_CONTEXT, proc->backendId) < 0)
+	/* Only regular backends will have valid backend id, auxiliary processes don't. */
+	if (!is_aux_proc)
+		backendId = proc->backendId;
+
+	if (SendProcSignal(pid, PROCSIG_LOG_MEMORY_CONTEXT, backendId) < 0)
 	{
 		/* Again, just a warning to allow loops */
 		ereport(WARNING,

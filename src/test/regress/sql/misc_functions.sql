@@ -41,6 +41,15 @@ SELECT num_nulls();
 
 SELECT pg_log_backend_memory_contexts(pg_backend_pid());
 
+CREATE FUNCTION memcxt_get_proc_pid(text)
+  RETURNS int
+  LANGUAGE SQL
+  AS 'SELECT pid FROM pg_stat_activity WHERE backend_type = $1';
+
+SELECT pg_log_backend_memory_contexts(memcxt_get_proc_pid('checkpointer'));
+
+DROP FUNCTION memcxt_get_proc_pid(text);
+
 CREATE ROLE regress_log_memory;
 
 SELECT has_function_privilege('regress_log_memory',

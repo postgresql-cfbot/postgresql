@@ -12,6 +12,10 @@ TCP connections on localhost. Any user on the same host is able to
 log in to the test server while the tests are running. Do not run this
 suite on a multi-user system where you don't trust all local users!
 
+NOTE: You must have given the --enable-tap-tests argument to configure.
+Also, to use "make installcheck", you must have built and installed
+contrib/sslinfo in addition to the core code.
+
 Running the tests
 =================
 

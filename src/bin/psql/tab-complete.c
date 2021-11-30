@@ -1675,7 +1675,7 @@ psql_completion(const char *text, int start, int end)
 	/* ALTER SUBSCRIPTION <name> REFRESH PUBLICATION WITH ( */
 	else if (HeadMatches("ALTER", "SUBSCRIPTION", MatchAny) &&
 			 TailMatches("REFRESH", "PUBLICATION", "WITH", "("))
-		COMPLETE_WITH("copy_data");
+		COMPLETE_WITH("copy_data", "validate_publication");
 	/* ALTER SUBSCRIPTION <name> SET */
 	else if (Matches("ALTER", "SUBSCRIPTION", MatchAny, "SET"))
 		COMPLETE_WITH("(", "PUBLICATION");
@@ -1691,11 +1691,14 @@ psql_completion(const char *text, int start, int end)
 	else if (HeadMatches("ALTER", "SUBSCRIPTION", MatchAny) &&
 			 TailMatches("ADD|DROP|SET", "PUBLICATION", MatchAny))
 		COMPLETE_WITH("WITH (");
-	/* ALTER SUBSCRIPTION <name> ADD|DROP|SET PUBLICATION <name> WITH ( */
+	/* ALTER SUBSCRIPTION <name> ADD|SET PUBLICATION <name> WITH ( */
 	else if (HeadMatches("ALTER", "SUBSCRIPTION", MatchAny) &&
-			 TailMatches("ADD|DROP|SET", "PUBLICATION", MatchAny, "WITH", "("))
+			 TailMatches("ADD|SET", "PUBLICATION", MatchAny, "WITH", "("))
+		COMPLETE_WITH("copy_data", "refresh", "validate_publication");
+	/* ALTER SUBSCRIPTION <name> DROP PUBLICATION <name> WITH ( */
+	else if (HeadMatches("ALTER", "SUBSCRIPTION", MatchAny) &&
+			 TailMatches("DROP", "PUBLICATION", MatchAny, "WITH", "("))
 		COMPLETE_WITH("copy_data", "refresh");
-
 	/* ALTER SCHEMA <name> */
 	else if (Matches("ALTER", "SCHEMA", MatchAny))
 		COMPLETE_WITH("OWNER TO", "RENAME TO");
@@ -2939,7 +2942,8 @@ psql_completion(const char *text, int start, int end)
 	else if (HeadMatches("CREATE", "SUBSCRIPTION") && TailMatches("WITH", "("))
 		COMPLETE_WITH("binary", "connect", "copy_data", "create_slot",
 					  "enabled", "slot_name", "streaming",
-					  "synchronous_commit", "two_phase");
+					  "synchronous_commit", "two_phase",
+					  "validate_publication");
 
 /* CREATE TRIGGER --- is allowed inside CREATE SCHEMA, so use TailMatches */
 

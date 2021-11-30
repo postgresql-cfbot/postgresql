@@ -1014,7 +1014,8 @@ primary_conninfo='$root_connstr'
 	return;
 }
 
-# Internal routine to enable archive recovery command on a standby node
+# Internal routine to enable archive recovery command on a standby node.
+# Returns generated restore_command.
 sub enable_restoring
 {
 	my ($self, $root_node, $standby) = @_;
@@ -1047,7 +1048,7 @@ restore_command = '$copy_command'
 	{
 		$self->set_recovery_mode();
 	}
-	return;
+	return $copy_command;
 }
 
 =pod

@@ -4,7 +4,7 @@
 use strict;
 use warnings;
 use PostgreSQL::Test::Utils;
-use Test::More tests => 23;
+use Test::More tests => 29;
 
 use FindBin;
 use lib $FindBin::RealBin;
@@ -190,5 +190,6 @@ in primary, before promotion
 run_test('local');
 run_test('remote');
 run_test('archive');
+run_test('archive_cli');
 
 exit(0);

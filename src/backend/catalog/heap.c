@@ -30,6 +30,7 @@
 #include "postgres.h"
 
 #include "access/genam.h"
+#include "access/heapam.h"
 #include "access/htup_details.h"
 #include "access/multixact.h"
 #include "access/relation.h"
@@ -3320,6 +3321,48 @@ RelationTruncateIndexes(Relation heapRelation)
 }
 
 /*
+ * Reset the relfrozenxid and other stats to the same values used when
+ * creating tables. This is used after non-transactional truncation.
+ *
+ * This reduces the need for long-running programs to vacuum their own
+ * temporary tables (since they're not covered by autovacuum) at least in the
+ * case where they're ON COMMIT DELETE ROWS.
+ *
+ * see also src/backend/commands/vacuum.c vac_update_relstats()
+ * also see AddNewRelationTuple() above
+ */
+
+static void
+ResetVacStats(Relation rel)
+{
+	HeapTuple	ctup;
+	Form_pg_class pgcform;
+	Relation classRel;
+
+	/* Fetch a copy of the tuple to scribble on */
+	classRel = table_open(RelationRelationId, RowExclusiveLock);
+	ctup = SearchSysCacheCopy1(RELOID, ObjectIdGetDatum(RelationGetRelid(rel)));
+	if (!HeapTupleIsValid(ctup))
+		elog(ERROR, "pg_class entry for relid %u vanished during truncation",
+			 RelationGetRelid(rel));
+	pgcform = (Form_pg_class) GETSTRUCT(ctup);
+
+	/*
+	 * Update relfrozenxid
+	 */
+
+	pgcform->relpages = 0;
+	pgcform->reltuples = -1;
+	pgcform->relallvisible = 0;
+	pgcform->relfrozenxid = RecentXmin;
+	pgcform->relminmxid = GetOldestMultiXactId();
+
+	heap_inplace_update(classRel, ctup);
+
+	table_close(classRel, RowExclusiveLock);
+}
+
+/*
  *	 heap_truncate
  *
  *	 This routine deletes all data within all the specified relations.
@@ -3327,6 +3370,14 @@ RelationTruncateIndexes(Relation heapRelation)
  * This is not transaction-safe!  There is another, transaction-safe
  * implementation in commands/tablecmds.c.  We now use this only for
  * ON COMMIT truncation of temporary tables, where it doesn't matter.
+ *
+ * Or whenever a table's relfilenode was created within the same transaction
+ * such as when the table was created or truncated (normally) within this
+ * transaction.
+ *
+ * The correctness of this code depends on the fact that the table creation or
+ * truncation would be rolled back *including* the insert/update to the
+ * pg_class row that we update in place here.
  */
 void
 heap_truncate(List *relids)
@@ -3383,6 +3434,7 @@ heap_truncate_one_rel(Relation rel)
 
 	/* Truncate the underlying relation */
 	table_relation_nontransactional_truncate(rel);
+	ResetVacStats(rel);
 
 	/* If the relation has indexes, truncate the indexes too */
 	RelationTruncateIndexes(rel);
@@ -3394,6 +3446,7 @@ heap_truncate_one_rel(Relation rel)
 		Relation	toastrel = table_open(toastrelid, AccessExclusiveLock);
 
 		table_relation_nontransactional_truncate(toastrel);
+		ResetVacStats(rel);
 		RelationTruncateIndexes(toastrel);
 		/* keep the lock... */
 		table_close(toastrel, NoLock);

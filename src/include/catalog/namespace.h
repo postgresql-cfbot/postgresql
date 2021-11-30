@@ -155,7 +155,7 @@ extern bool isTempToastNamespace(Oid namespaceId);
 extern bool isTempOrTempToastNamespace(Oid namespaceId);
 extern bool isAnyTempNamespace(Oid namespaceId);
 extern bool isOtherTempNamespace(Oid namespaceId);
-extern TempNamespaceStatus checkTempNamespaceStatus(Oid namespaceId);
+extern TempNamespaceStatus checkTempNamespaceStatus(Oid namespaceId, pid_t *pid);
 extern int	GetTempNamespaceBackendId(Oid namespaceId);
 extern Oid	GetTempToastNamespace(void);
 extern void GetTempNamespaceState(Oid *tempNamespaceId,

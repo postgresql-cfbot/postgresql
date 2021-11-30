@@ -79,6 +79,25 @@ SELECT * FROM temptest;
 
 DROP TABLE temptest;
 
+-- Test that ON COMMIT DELETE ROWS resets the relfrozenxid when the
+-- table is truncated. This requires this test not be run in parallel
+-- with other tests as concurrent transactions will hold back the
+-- globalxmin
+CREATE TEMP TABLE temptest(col int) ON COMMIT DELETE ROWS;
+
+SELECT relpages, reltuples, relallvisible, relfrozenxid FROM pg_class where oid = 'temptest'::regclass \gset old_
+BEGIN;
+INSERT INTO temptest (select generate_series(1,1000));
+ANALYZE temptest; -- update relpages, reltuples
+COMMIT;
+SELECT relpages, reltuples, relallvisible, relfrozenxid FROM pg_class where oid = 'temptest'::regclass \gset new_
+SELECT :old_relpages      = :new_relpages      AS pages_reset,
+       :old_reltuples     = :new_reltuples     AS tuples_reset,
+       :old_relallvisible = :new_relallvisible AS allvisible_reset,
+       :old_relfrozenxid <> :new_relfrozenxid  AS frozenxid_advanced;
+
+DROP TABLE temptest;
+
 -- Test ON COMMIT DROP
 
 BEGIN;

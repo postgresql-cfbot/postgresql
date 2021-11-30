@@ -113,10 +113,13 @@ test: json jsonb json_encoding jsonpath jsonpath_encoding jsonb_jsonpath
 
 # ----------
 # Another group of parallel tests
-# NB: temp.sql does a reconnect which transiently uses 2 connections,
-# so keep this parallel group to at most 19 tests
 # ----------
-test: plancache limit plpgsql copy2 temp domain rangefuncs prepare conversion truncate alter_table sequence polymorphism rowtypes returning largeobject with xml
+test: plancache limit plpgsql copy2 domain rangefuncs prepare conversion truncate alter_table sequence polymorphism rowtypes returning largeobject with xml
+
+# Run temp by itself so it can verify relfrozenxid advances when
+# truncating temp tables (and because it does a reconnect which may
+# transiently use two connections)
+test: temp
 
 # ----------
 # Another group of parallel tests

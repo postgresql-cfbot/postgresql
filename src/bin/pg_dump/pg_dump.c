@@ -14111,11 +14111,13 @@ dumpAgg(Archive *fout, const AggInfo *agginfo)
 	const char *aggcombinefn;
 	const char *aggserialfn;
 	const char *aggdeserialfn;
+	const char *aggpartialconverterfn;
 	const char *aggmtransfn;
 	const char *aggminvtransfn;
 	const char *aggmfinalfn;
 	bool		aggfinalextra;
 	bool		aggmfinalextra;
+	bool		aggpartialpushdownsafe;
 	char		aggfinalmodify;
 	char		aggmfinalmodify;
 	const char *aggsortop;
@@ -14200,11 +14202,19 @@ dumpAgg(Archive *fout, const AggInfo *agginfo)
 	if (fout->remoteVersion >= 110000)
 		appendPQExpBufferStr(query,
 							 "aggfinalmodify,\n"
-							 "aggmfinalmodify\n");
+							 "aggmfinalmodify,\n");
 	else
 		appendPQExpBufferStr(query,
 							 "'0' AS aggfinalmodify,\n"
-							 "'0' AS aggmfinalmodify\n");
+							 "'0' AS aggmfinalmodify,\n");
+	if (fout->remoteVersion >= 150000)
+		appendPQExpBufferStr(query,
+							 "aggpartialconverterfn,\n"
+							 "aggpartialpushdownsafe\n");
+	else
+		appendPQExpBufferStr(query,
+							 "'-' AS aggpartialconverterfn,\n"
+							 "false as aggpartialpushdownsafe\n");
 
 	appendPQExpBuffer(query,
 					  "FROM pg_catalog.pg_aggregate a, pg_catalog.pg_proc p "
@@ -14222,6 +14232,8 @@ dumpAgg(Archive *fout, const AggInfo *agginfo)
 	aggcombinefn = PQgetvalue(res, 0, PQfnumber(res, "aggcombinefn"));
 	aggserialfn = PQgetvalue(res, 0, PQfnumber(res, "aggserialfn"));
 	aggdeserialfn = PQgetvalue(res, 0, PQfnumber(res, "aggdeserialfn"));
+	aggpartialconverterfn = PQgetvalue(res, 0, PQfnumber(res, "aggpartialconverterfn"));
+	aggpartialpushdownsafe = (PQgetvalue(res, 0, PQfnumber(res, "aggpartialpushdownsafe"))[0] == 't');
 	aggmtransfn = PQgetvalue(res, 0, PQfnumber(res, "aggmtransfn"));
 	aggminvtransfn = PQgetvalue(res, 0, PQfnumber(res, "aggminvtransfn"));
 	aggmfinalfn = PQgetvalue(res, 0, PQfnumber(res, "aggmfinalfn"));
@@ -14315,6 +14327,11 @@ dumpAgg(Archive *fout, const AggInfo *agginfo)
 
 	if (strcmp(aggdeserialfn, "-") != 0)
 		appendPQExpBuffer(details, ",\n    DESERIALFUNC = %s", aggdeserialfn);
+
+	if (strcmp(aggpartialconverterfn, "-") != 0)
+		appendPQExpBuffer(details, ",\n    PARTIALCONVERTERFUNC = %s", aggpartialconverterfn);
+	if (aggpartialpushdownsafe)
+		appendPQExpBufferStr(details, ",\n    PARTIAL_PUSHDOWN_SAFE");
 
 	if (strcmp(aggmtransfn, "-") != 0)
 	{

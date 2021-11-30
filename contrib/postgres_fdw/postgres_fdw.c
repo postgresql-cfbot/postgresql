@@ -18,6 +18,8 @@
 #include "access/sysattr.h"
 #include "access/table.h"
 #include "catalog/pg_class.h"
+#include "catalog/pg_aggregate.h"
+#include "catalog/pg_proc.h"
 #include "commands/defrem.h"
 #include "commands/explain.h"
 #include "commands/vacuum.h"
@@ -48,6 +50,7 @@
 #include "utils/rel.h"
 #include "utils/sampling.h"
 #include "utils/selfuncs.h"
+#include "utils/syscache.h"
 
 PG_MODULE_MAGIC;
 
@@ -80,7 +83,12 @@ enum FdwScanPrivateIndex
 	 * String describing join i.e. names of relations being joined and types
 	 * of join, added when the scan is join
 	 */
-	FdwScanPrivateRelations
+	FdwScanPrivateRelations,
+
+	/*
+	 * List of functions to convert partial aggregate result
+	 */
+	FdwScanPrivateConvertors
 };
 
 /*
@@ -143,6 +151,7 @@ typedef struct PgFdwScanState
 	/* extracted fdw_private data */
 	char	   *query;			/* text of SELECT command */
 	List	   *retrieved_attrs;	/* list of retrieved attribute numbers */
+	List	   *conv_list;		/* list of converters */
 
 	/* for remote query execution */
 	PGconn	   *conn;			/* connection for the scan */
@@ -474,6 +483,7 @@ static void store_returning_result(PgFdwModifyState *fmstate,
 								   TupleTableSlot *slot, PGresult *res);
 static void finish_foreign_modify(PgFdwModifyState *fmstate);
 static void deallocate_query(PgFdwModifyState *fmstate);
+static List *build_conv_list(RelOptInfo *foreignrel);
 static List *build_remote_returning(Index rtindex, Relation rel,
 									List *returningList);
 static void rebuild_fdw_scan_tlist(ForeignScan *fscan, List *tlist);
@@ -510,6 +520,7 @@ static HeapTuple make_tuple_from_result_row(PGresult *res,
 											Relation rel,
 											AttInMetadata *attinmeta,
 											List *retrieved_attrs,
+											List *conv_list,
 											ForeignScanState *fsstate,
 											MemoryContext temp_context);
 static void conversion_error_callback(void *arg);
@@ -517,7 +528,7 @@ static bool foreign_join_ok(PlannerInfo *root, RelOptInfo *joinrel,
 							JoinType jointype, RelOptInfo *outerrel, RelOptInfo *innerrel,
 							JoinPathExtraData *extra);
 static bool foreign_grouping_ok(PlannerInfo *root, RelOptInfo *grouped_rel,
-								Node *havingQual);
+								Node *havingQual, bool partial);
 static List *get_useful_pathkeys_for_relation(PlannerInfo *root,
 											  RelOptInfo *rel);
 static List *get_useful_ecs_for_relation(PlannerInfo *root, RelOptInfo *rel);
@@ -526,7 +537,8 @@ static void add_paths_with_pathkeys_for_rel(PlannerInfo *root, RelOptInfo *rel,
 static void add_foreign_grouping_paths(PlannerInfo *root,
 									   RelOptInfo *input_rel,
 									   RelOptInfo *grouped_rel,
-									   GroupPathExtraData *extra);
+									   GroupPathExtraData *extra,
+									   bool partial);
 static void add_foreign_ordered_paths(PlannerInfo *root,
 									  RelOptInfo *input_rel,
 									  RelOptInfo *ordered_rel);
@@ -540,7 +552,6 @@ static void merge_fdw_options(PgFdwRelationInfo *fpinfo,
 							  const PgFdwRelationInfo *fpinfo_o,
 							  const PgFdwRelationInfo *fpinfo_i);
 static int	get_batch_size_option(Relation rel);
-
 
 /*
  * Foreign-data wrapper handler function: return a struct with pointers
@@ -1233,6 +1244,7 @@ postgresGetForeignPlan(PlannerInfo *root,
 	List	   *local_exprs = NIL;
 	List	   *params_list = NIL;
 	List	   *fdw_scan_tlist = NIL;
+	List	   *fdw_conv_list = NIL;
 	List	   *fdw_recheck_quals = NIL;
 	List	   *retrieved_attrs;
 	StringInfoData sql;
@@ -1336,6 +1348,9 @@ postgresGetForeignPlan(PlannerInfo *root,
 		/* Build the list of columns to be fetched from the foreign server. */
 		fdw_scan_tlist = build_tlist_to_deparse(foreignrel);
 
+		/* Build the list of converters for partial aggregates. */
+		fdw_conv_list = build_conv_list(foreignrel);
+
 		/*
 		 * Ensure that the outer plan produces a tuple whose descriptor
 		 * matches our scan tuple slot.  Also, remove the local conditions
@@ -1415,6 +1430,8 @@ postgresGetForeignPlan(PlannerInfo *root,
 	if (IS_JOIN_REL(foreignrel) || IS_UPPER_REL(foreignrel))
 		fdw_private = lappend(fdw_private,
 							  makeString(fpinfo->relation_name));
+	if (IS_UPPER_REL(foreignrel))
+		fdw_private = lappend(fdw_private, fdw_conv_list);
 
 	/*
 	 * Create the ForeignScan node for the given relation.
@@ -1431,6 +1448,48 @@ postgresGetForeignPlan(PlannerInfo *root,
 							fdw_scan_tlist,
 							fdw_recheck_quals,
 							outer_plan);
+}
+
+/*
+ * Generate attinmeta if there are some converters:
+ * they are expected to return BYTEA, but real input type is likely different.
+ */
+static AttInMetadata *
+get_rcvd_attinmeta(TupleDesc tupdesc, List *conv_list)
+{
+	TupleDesc	rcvd_tupdesc;
+
+	Assert(conv_list != NIL);
+
+	rcvd_tupdesc = CreateTupleDescCopy(tupdesc);
+	for (int i = 0; i < rcvd_tupdesc->natts; i++)
+	{
+		Oid			converter = InvalidOid;
+		Form_pg_attribute att = TupleDescAttr(rcvd_tupdesc, i);
+
+		converter = list_nth_oid(conv_list, i);
+		if (converter != InvalidOid)
+		{
+			HeapTuple	proctup;
+			Form_pg_proc procform;
+
+			proctup = SearchSysCache1(PROCOID, ObjectIdGetDatum(converter));
+
+			if (!HeapTupleIsValid(proctup))
+				elog(ERROR, "cache lookup failed for function %u", converter);
+
+			procform = (Form_pg_proc) GETSTRUCT(proctup);
+
+			if (procform->pronargs != 1)
+				elog(ERROR, "converter %s is expected to have one argument", NameStr(procform->proname));
+
+			att->atttypid = procform->proargtypes.values[0];
+
+			ReleaseSysCache(proctup);
+		}
+	}
+
+	return TupleDescGetAttInMetadata(rcvd_tupdesc);
 }
 
 /*
@@ -1545,6 +1604,12 @@ postgresBeginForeignScan(ForeignScanState *node, int eflags)
 									 FdwScanPrivateSelectSql));
 	fsstate->retrieved_attrs = (List *) list_nth(fsplan->fdw_private,
 												 FdwScanPrivateRetrievedAttrs);
+
+	if (list_length(fsplan->fdw_private) > FdwScanPrivateConvertors)
+		fsstate->conv_list = (List *) list_nth(fsplan->fdw_private,
+											   FdwScanPrivateConvertors);
+
+
 	fsstate->fetch_size = intVal(list_nth(fsplan->fdw_private,
 										  FdwScanPrivateFetchSize));
 
@@ -1571,7 +1636,10 @@ postgresBeginForeignScan(ForeignScanState *node, int eflags)
 		fsstate->tupdesc = get_tupdesc_for_join_scan_tuples(node);
 	}
 
-	fsstate->attinmeta = TupleDescGetAttInMetadata(fsstate->tupdesc);
+	if (fsstate->conv_list != NIL)
+		fsstate->attinmeta = get_rcvd_attinmeta(fsstate->tupdesc, fsstate->conv_list);
+	else
+		fsstate->attinmeta = TupleDescGetAttInMetadata(fsstate->tupdesc);
 
 	/*
 	 * Prepare for processing of parameters used in remote query, if any.
@@ -3822,6 +3890,7 @@ fetch_more_data(ForeignScanState *node)
 										   fsstate->rel,
 										   fsstate->attinmeta,
 										   fsstate->retrieved_attrs,
+										   fsstate->conv_list,
 										   node,
 										   fsstate->temp_cxt);
 		}
@@ -4309,6 +4378,7 @@ store_returning_result(PgFdwModifyState *fmstate,
 											fmstate->rel,
 											fmstate->attinmeta,
 											fmstate->retrieved_attrs,
+											NIL,
 											NULL,
 											fmstate->temp_cxt);
 
@@ -4603,6 +4673,7 @@ get_returning_data(ForeignScanState *node)
 												dmstate->rel,
 												dmstate->attinmeta,
 												dmstate->retrieved_attrs,
+												NIL,
 												node,
 												dmstate->temp_cxt);
 			ExecStoreHeapTuple(newtup, slot, false);
@@ -5183,6 +5254,7 @@ analyze_row_processor(PGresult *res, int row, PgFdwAnalyzeState *astate)
 													   astate->rel,
 													   astate->attinmeta,
 													   astate->retrieved_attrs,
+													   NIL,
 													   NULL,
 													   astate->temp_cxt);
 
@@ -6083,7 +6155,7 @@ postgresGetForeignJoinPaths(PlannerInfo *root,
  */
 static bool
 foreign_grouping_ok(PlannerInfo *root, RelOptInfo *grouped_rel,
-					Node *havingQual)
+					Node *havingQual, bool partial)
 {
 	Query	   *query = root->parse;
 	PgFdwRelationInfo *fpinfo = (PgFdwRelationInfo *) grouped_rel->fdw_private;
@@ -6095,6 +6167,11 @@ foreign_grouping_ok(PlannerInfo *root, RelOptInfo *grouped_rel,
 
 	/* We currently don't support pushing Grouping Sets. */
 	if (query->groupingSets)
+		return false;
+
+
+	/* It's unsafe to push having statements with partial aggregates */
+	if (partial && havingQual)
 		return false;
 
 	/* Get the fpinfo of the underlying scan relation. */
@@ -6336,6 +6413,7 @@ postgresGetForeignUpperPaths(PlannerInfo *root, UpperRelationKind stage,
 
 	/* Ignore stages we don't support; and skip any duplicate calls. */
 	if ((stage != UPPERREL_GROUP_AGG &&
+		 stage != UPPERREL_PARTIAL_GROUP_AGG &&
 		 stage != UPPERREL_ORDERED &&
 		 stage != UPPERREL_FINAL) ||
 		output_rel->fdw_private)
@@ -6350,7 +6428,11 @@ postgresGetForeignUpperPaths(PlannerInfo *root, UpperRelationKind stage,
 	{
 		case UPPERREL_GROUP_AGG:
 			add_foreign_grouping_paths(root, input_rel, output_rel,
-									   (GroupPathExtraData *) extra);
+									   (GroupPathExtraData *) extra, false);
+			break;
+		case UPPERREL_PARTIAL_GROUP_AGG:
+			add_foreign_grouping_paths(root, input_rel, output_rel,
+									   (GroupPathExtraData *) extra, true);
 			break;
 		case UPPERREL_ORDERED:
 			add_foreign_ordered_paths(root, input_rel, output_rel);
@@ -6375,7 +6457,8 @@ postgresGetForeignUpperPaths(PlannerInfo *root, UpperRelationKind stage,
 static void
 add_foreign_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
 						   RelOptInfo *grouped_rel,
-						   GroupPathExtraData *extra)
+						   GroupPathExtraData *extra,
+						   bool partial)
 {
 	Query	   *parse = root->parse;
 	PgFdwRelationInfo *ifpinfo = input_rel->fdw_private;
@@ -6391,8 +6474,9 @@ add_foreign_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
 		!root->hasHavingQual)
 		return;
 
-	Assert(extra->patype == PARTITIONWISE_AGGREGATE_NONE ||
-		   extra->patype == PARTITIONWISE_AGGREGATE_FULL);
+	Assert(((extra->patype == PARTITIONWISE_AGGREGATE_NONE ||
+			 extra->patype == PARTITIONWISE_AGGREGATE_FULL) && !partial) ||
+		   (extra->patype == PARTITIONWISE_AGGREGATE_PARTIAL && partial));
 
 	/* save the input_rel as outerrel in fpinfo */
 	fpinfo->outerrel = input_rel;
@@ -6412,7 +6496,7 @@ add_foreign_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
 	 * Use HAVING qual from extra. In case of child partition, it will have
 	 * translated Vars.
 	 */
-	if (!foreign_grouping_ok(root, grouped_rel, extra->havingQual))
+	if (!foreign_grouping_ok(root, grouped_rel, extra->havingQual, partial))
 		return;
 
 	/*
@@ -7109,6 +7193,30 @@ complete_pending_request(AsyncRequest *areq)
 }
 
 /*
+ * Interface to fmgr to call converters
+ */
+static Datum
+call_converter(Oid converter, Oid collation, Datum value, bool isnull, bool *res_isnull)
+{
+	LOCAL_FCINFO(fcinfo, 1);
+	FmgrInfo	flinfo;
+	Datum		result;
+
+	fmgr_info(converter, &flinfo);
+
+	InitFunctionCallInfoData(*fcinfo, &flinfo, 1, collation, NULL, NULL);
+
+	fcinfo->args[0].value = value;
+	fcinfo->args[0].isnull = isnull;
+
+	result = FunctionCallInvoke(fcinfo);
+
+	if (res_isnull)
+		*res_isnull = fcinfo->isnull;
+	return result;
+}
+
+/*
  * Create a tuple from the specified row of the PGresult.
  *
  * rel is the local representation of the foreign table, attinmeta is
@@ -7127,6 +7235,7 @@ make_tuple_from_result_row(PGresult *res,
 						   Relation rel,
 						   AttInMetadata *attinmeta,
 						   List *retrieved_attrs,
+						   List *conv_list,
 						   ForeignScanState *fsstate,
 						   MemoryContext temp_context)
 {
@@ -7209,6 +7318,20 @@ make_tuple_from_result_row(PGresult *res,
 											  valstr,
 											  attinmeta->attioparams[i - 1],
 											  attinmeta->atttypmods[i - 1]);
+			if (conv_list != NIL)
+			{
+				Oid			converter = list_nth_oid(conv_list, i - 1);
+
+				if (converter != InvalidOid)
+				{
+					Form_pg_attribute att = TupleDescAttr(tupdesc, i);
+					bool		res_isnull;
+
+					values[i - 1] = call_converter(converter, att->attcollation, values[i - 1], nulls[i - 1], &res_isnull);
+
+					nulls[i - 1] = res_isnull;
+				}
+			}
 		}
 		else if (i == SelfItemPointerAttributeNumber)
 		{
@@ -7471,4 +7594,55 @@ get_batch_size_option(Relation rel)
 	}
 
 	return batch_size;
+}
+
+/*
+ * For UPPER_REL build a list of converters, corresponding to tlist entries.
+ */
+static List *
+build_conv_list(RelOptInfo *foreignrel)
+{
+	List	   *conv_list = NIL;
+	PgFdwRelationInfo *fpinfo = (PgFdwRelationInfo *) foreignrel->fdw_private;
+	ListCell   *lc;
+
+	if (IS_UPPER_REL(foreignrel))
+	{
+		/* For UPPER_REL tlist matches grouped_tlist */
+		foreach(lc, fpinfo->grouped_tlist)
+		{
+			TargetEntry *tlentry = (TargetEntry *) lfirst(lc);
+			Oid			converter_oid = InvalidOid;
+
+			if (IsA(tlentry->expr, Aggref))
+			{
+				Aggref	   *agg = (Aggref *) tlentry->expr;
+
+				if (agg->aggsplit == AGGSPLIT_INITIAL_SERIAL && agg->aggtranstype == INTERNALOID)
+				{
+					HeapTuple	aggtup;
+					Form_pg_aggregate aggform;
+
+					aggtup = SearchSysCache1(AGGFNOID, ObjectIdGetDatum(agg->aggfnoid));
+					if (!HeapTupleIsValid(aggtup))
+						elog(ERROR, "cache lookup failed for function %u", agg->aggfnoid);
+
+					aggform = (Form_pg_aggregate) GETSTRUCT(aggtup);
+
+					converter_oid = aggform->aggpartialconverterfn;
+					Assert(converter_oid != InvalidOid);
+
+					ReleaseSysCache(aggtup);
+				}
+			}
+
+			/*
+			 * We append InvalidOid to conv_list to preserve one-to-one
+			 * mapping between tlist and conv_list members.
+			 */
+			conv_list = lappend_oid(conv_list, converter_oid);
+		}
+	}
+
+	return conv_list;
 }

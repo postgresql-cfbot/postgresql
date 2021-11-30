@@ -60,6 +60,7 @@ AggregateCreate(const char *aggName,
 				List *aggcombinefnName,
 				List *aggserialfnName,
 				List *aggdeserialfnName,
+				List *aggpartialconverterfnName,
 				List *aggmtransfnName,
 				List *aggminvtransfnName,
 				List *aggmfinalfnName,
@@ -74,7 +75,8 @@ AggregateCreate(const char *aggName,
 				int32 aggmTransSpace,
 				const char *agginitval,
 				const char *aggminitval,
-				char proparallel)
+				char proparallel,
+				bool partialPushdownSafe)
 {
 	Relation	aggdesc;
 	HeapTuple	tup;
@@ -88,6 +90,7 @@ AggregateCreate(const char *aggName,
 	Oid			combinefn = InvalidOid; /* can be omitted */
 	Oid			serialfn = InvalidOid;	/* can be omitted */
 	Oid			deserialfn = InvalidOid;	/* can be omitted */
+	Oid			partialconverterfn = InvalidOid;	/* can be omitted */
 	Oid			mtransfn = InvalidOid;	/* can be omitted */
 	Oid			minvtransfn = InvalidOid;	/* can be omitted */
 	Oid			mfinalfn = InvalidOid;	/* can be omitted */
@@ -569,6 +572,27 @@ AggregateCreate(const char *aggName,
 							format_type_be(finaltype))));
 	}
 
+	/*
+	 * Validate the partial converter, if present.
+	 */
+	if (aggpartialconverterfnName)
+	{
+		fnArgs[0] = finaltype;
+
+		partialconverterfn = lookup_agg_function(aggpartialconverterfnName, 1,
+											  fnArgs, InvalidOid,
+											  &rettype);
+
+		if (rettype != BYTEAOID)
+			ereport(ERROR,
+					(errcode(ERRCODE_DATATYPE_MISMATCH),
+					 errmsg("return type of partial serialization function %s is not %s",
+							NameListToString(aggserialfnName),
+							format_type_be(BYTEAOID))));
+
+	}
+
+
 	/* handle sortop, if supplied */
 	if (aggsortopName)
 	{
@@ -664,6 +688,7 @@ AggregateCreate(const char *aggName,
 	values[Anum_pg_aggregate_aggcombinefn - 1] = ObjectIdGetDatum(combinefn);
 	values[Anum_pg_aggregate_aggserialfn - 1] = ObjectIdGetDatum(serialfn);
 	values[Anum_pg_aggregate_aggdeserialfn - 1] = ObjectIdGetDatum(deserialfn);
+	values[Anum_pg_aggregate_aggpartialconverterfn - 1] = ObjectIdGetDatum(partialconverterfn);
 	values[Anum_pg_aggregate_aggmtransfn - 1] = ObjectIdGetDatum(mtransfn);
 	values[Anum_pg_aggregate_aggminvtransfn - 1] = ObjectIdGetDatum(minvtransfn);
 	values[Anum_pg_aggregate_aggmfinalfn - 1] = ObjectIdGetDatum(mfinalfn);
@@ -676,6 +701,7 @@ AggregateCreate(const char *aggName,
 	values[Anum_pg_aggregate_aggtransspace - 1] = Int32GetDatum(aggTransSpace);
 	values[Anum_pg_aggregate_aggmtranstype - 1] = ObjectIdGetDatum(aggmTransType);
 	values[Anum_pg_aggregate_aggmtransspace - 1] = Int32GetDatum(aggmTransSpace);
+	values[Anum_pg_aggregate_aggpartialpushdownsafe - 1] = BoolGetDatum(partialPushdownSafe);
 	if (agginitval)
 		values[Anum_pg_aggregate_agginitval - 1] = CStringGetTextDatum(agginitval);
 	else

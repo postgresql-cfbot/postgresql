@@ -484,7 +484,8 @@ extract_directory(const char *filename, mode_t mode)
 		 */
 		if (!((pg_str_endswith(filename, "/pg_wal") ||
 			   pg_str_endswith(filename, "/pg_xlog") ||
-			   pg_str_endswith(filename, "/archive_status")) &&
+			   pg_str_endswith(filename, "/archive_status") ||
+			   pg_str_endswith(filename, "/preallocated_segments")) &&
 			  errno == EEXIST))
 		{
 			pg_log_error("could not create directory \"%s\": %m",

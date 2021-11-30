@@ -26,6 +26,7 @@ extern int	BgWriterDelay;
 extern int	CheckPointTimeout;
 extern int	CheckPointWarning;
 extern double CheckPointCompletionTarget;
+extern int	wal_prealloc_max_size_mb;
 
 extern void BackgroundWriterMain(void) pg_attribute_noreturn();
 extern void CheckpointerMain(void) pg_attribute_noreturn();
@@ -41,5 +42,9 @@ extern Size CheckpointerShmemSize(void);
 extern void CheckpointerShmemInit(void);
 
 extern bool FirstCallSinceLastCheckpoint(void);
+
+extern int GetNumPreallocatedWalSegs(void);
+extern void SetNumPreallocatedWalSegs(int i);
+extern void RequestWalPreallocation(void);
 
 #endif							/* _BGWRITER_H */

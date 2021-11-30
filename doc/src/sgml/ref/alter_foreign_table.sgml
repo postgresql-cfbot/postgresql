@@ -24,7 +24,7 @@ PostgreSQL documentation
 ALTER FOREIGN TABLE [ IF EXISTS ] [ ONLY ] <replaceable class="parameter">name</replaceable> [ * ]
     <replaceable class="parameter">action</replaceable> [, ... ]
 ALTER FOREIGN TABLE [ IF EXISTS ] [ ONLY ] <replaceable class="parameter">name</replaceable> [ * ]
-    RENAME [ COLUMN ] <replaceable class="parameter">column_name</replaceable> TO <replaceable class="parameter">new_column_name</replaceable>
+    RENAME [ COLUMN ] [ IF EXISTS ] <replaceable class="parameter">column_name</replaceable> TO <replaceable class="parameter">new_column_name</replaceable>
 ALTER FOREIGN TABLE [ IF EXISTS ] <replaceable class="parameter">name</replaceable>
     RENAME TO <replaceable class="parameter">new_name</replaceable>
 ALTER FOREIGN TABLE [ IF EXISTS ] <replaceable class="parameter">name</replaceable>

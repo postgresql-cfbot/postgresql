@@ -1787,6 +1787,15 @@ alter table dropColumnExists drop column non_existing; --fail
 ERROR:  column "non_existing" of relation "dropcolumnexists" does not exist
 alter table dropColumnExists drop column if exists non_existing; --succeed
 NOTICE:  column "non_existing" of relation "dropcolumnexists" does not exist, skipping
+-- rename column if exists
+create table renameColumnExists ();
+alter table renameColumnExists rename column c1 to c2; -- fails
+ERROR:  column "c1" does not exist
+alter table renameColumnExists rename column if exists c1 to c2; -- succeeds
+NOTICE:  column "c1" does not exist, skipping
+alter table renameColumnExists add column c1 int;
+alter table renameColumnExists rename column if exists c1 to c2; -- succeeds
+drop table renameColumnExists;
 select relname, attname, attinhcount, attislocal
 from pg_class join pg_attribute on (pg_class.oid = pg_attribute.attrelid)
 where relname in ('p1','p2','c1','gc1') and attnum > 0 and not attisdropped
@@ -3032,6 +3041,9 @@ ALTER TYPE test_type RENAME ATTRIBUTE d TO dd;
 --------+---------+-----------+----------+---------
  dd     | boolean |           |          | 
 
+ALTER TYPE test_type RENAME ATTRIBUTE IF EXISTS d TO dd;
+NOTICE:  column "d" does not exist, skipping
+ALTER TYPE test_type RENAME ATTRIBUTE IF EXISTS dd TO d;
 DROP TYPE test_type;
 CREATE TYPE test_type1 AS (a int, b text);
 CREATE TABLE test_tbl1 (x int, y test_type1);

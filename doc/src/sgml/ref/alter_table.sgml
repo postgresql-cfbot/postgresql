@@ -24,7 +24,7 @@ PostgreSQL documentation
 ALTER TABLE [ IF EXISTS ] [ ONLY ] <replaceable class="parameter">name</replaceable> [ * ]
     <replaceable class="parameter">action</replaceable> [, ... ]
 ALTER TABLE [ IF EXISTS ] [ ONLY ] <replaceable class="parameter">name</replaceable> [ * ]
-    RENAME [ COLUMN ] <replaceable class="parameter">column_name</replaceable> TO <replaceable class="parameter">new_column_name</replaceable>
+    RENAME [ COLUMN ] [ IF EXISTS ] <replaceable class="parameter">column_name</replaceable> TO <replaceable class="parameter">new_column_name</replaceable>
 ALTER TABLE [ IF EXISTS ] [ ONLY ] <replaceable class="parameter">name</replaceable> [ * ]
     RENAME CONSTRAINT <replaceable class="parameter">constraint_name</replaceable> TO <replaceable class="parameter">new_constraint_name</replaceable>
 ALTER TABLE [ IF EXISTS ] <replaceable class="parameter">name</replaceable>
@@ -1081,7 +1081,7 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       <term><literal>IF EXISTS</literal></term>
       <listitem>
        <para>
-        Do not throw an error if the table does not exist. A notice is issued
+        Do not throw an error if the table or the column does not exist. A notice is issued
         in this case.
        </para>
       </listitem>

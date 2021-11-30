@@ -423,6 +423,7 @@ _outModifyTable(StringInfo str, const ModifyTable *node)
 	WRITE_NODE_FIELD(rowMarks);
 	WRITE_INT_FIELD(epqParam);
 	WRITE_ENUM_FIELD(onConflictAction, OnConflictAction);
+	WRITE_NODE_FIELD(forPortionOf);
 	WRITE_NODE_FIELD(arbiterIndexes);
 	WRITE_NODE_FIELD(onConflictSet);
 	WRITE_NODE_FIELD(onConflictCols);
@@ -1750,6 +1751,24 @@ _outOnConflictExpr(StringInfo str, const OnConflictExpr *node)
 	WRITE_NODE_FIELD(exclRelTlist);
 }
 
+static void
+_outForPortionOfExpr(StringInfo str, const ForPortionOfExpr *node)
+{
+	WRITE_NODE_TYPE("FORPORTIONOFEXPR");
+
+	WRITE_INT_FIELD(range_attno);
+	WRITE_STRING_FIELD(range_name);
+	WRITE_NODE_FIELD(range);
+	WRITE_NODE_FIELD(startCol);
+	WRITE_NODE_FIELD(endCol);
+	WRITE_NODE_FIELD(targetStart);
+	WRITE_NODE_FIELD(targetEnd);
+	WRITE_NODE_FIELD(targetRange);
+	WRITE_OID_FIELD(rangeType);
+	WRITE_NODE_FIELD(overlapsExpr);
+	WRITE_NODE_FIELD(rangeSet);
+}
+
 /*****************************************************************************
  *
  *	Stuff from pathnodes.h.
@@ -2710,6 +2729,7 @@ _outCreateStmtInfo(StringInfo str, const CreateStmt *node)
 {
 	WRITE_NODE_FIELD(relation);
 	WRITE_NODE_FIELD(tableElts);
+	WRITE_NODE_FIELD(periods);
 	WRITE_NODE_FIELD(inhRelations);
 	WRITE_NODE_FIELD(partspec);
 	WRITE_NODE_FIELD(partbound);
@@ -2742,6 +2762,27 @@ _outCreateForeignTableStmt(StringInfo str, const CreateForeignTableStmt *node)
 }
 
 static void
+_outAlterTableStmt(StringInfo str, const AlterTableStmt *node)
+{
+	WRITE_NODE_TYPE("ALTERTABLESTMT");
+
+	WRITE_NODE_FIELD(relation);
+	WRITE_NODE_FIELD(cmds);
+}
+
+static void
+_outAlterTableCmd(StringInfo str, const AlterTableCmd *node)
+{
+	WRITE_NODE_TYPE("ALTERTABLECMD");
+
+	WRITE_ENUM_FIELD(subtype, AlterTableType);
+	WRITE_STRING_FIELD(name);
+	WRITE_INT_FIELD(num);
+	WRITE_NODE_FIELD(def);
+	WRITE_BOOL_FIELD(missing_ok);
+}
+
+static void
 _outImportForeignSchemaStmt(StringInfo str, const ImportForeignSchemaStmt *node)
 {
 	WRITE_NODE_TYPE("IMPORTFOREIGNSCHEMASTMT");
@@ -2765,6 +2806,7 @@ _outIndexStmt(StringInfo str, const IndexStmt *node)
 	WRITE_STRING_FIELD(tableSpace);
 	WRITE_NODE_FIELD(indexParams);
 	WRITE_NODE_FIELD(indexIncludingParams);
+	WRITE_NODE_FIELD(period);
 	WRITE_NODE_FIELD(options);
 	WRITE_NODE_FIELD(whereClause);
 	WRITE_NODE_FIELD(excludeOpNames);
@@ -3765,6 +3807,19 @@ _outConstraint(StringInfo str, const Constraint *node)
 }
 
 static void
+_outPeriod(StringInfo str, const Period *node)
+{
+	WRITE_NODE_TYPE("PERIOD");
+
+	WRITE_STRING_FIELD(periodname);
+	WRITE_STRING_FIELD(startcolname);
+	WRITE_STRING_FIELD(endcolname);
+	WRITE_NODE_FIELD(options);
+	WRITE_OID_FIELD(rngtypid);
+	WRITE_LOCATION_FIELD(location);
+}
+
+static void
 _outForeignKeyCacheInfo(StringInfo str, const ForeignKeyCacheInfo *node)
 {
 	WRITE_NODE_TYPE("FOREIGNKEYCACHEINFO");
@@ -4165,6 +4220,9 @@ outNode(StringInfo str, const void *obj)
 			case T_OnConflictExpr:
 				_outOnConflictExpr(str, obj);
 				break;
+			case T_ForPortionOfExpr:
+				_outForPortionOfExpr(str, obj);
+				break;
 			case T_Path:
 				_outPath(str, obj);
 				break;
@@ -4348,6 +4406,12 @@ outNode(StringInfo str, const void *obj)
 			case T_CreateForeignTableStmt:
 				_outCreateForeignTableStmt(str, obj);
 				break;
+			case T_AlterTableStmt:
+				_outAlterTableStmt(str, obj);
+				break;
+			case T_AlterTableCmd:
+				_outAlterTableCmd(str, obj);
+				break;
 			case T_ImportForeignSchemaStmt:
 				_outImportForeignSchemaStmt(str, obj);
 				break;
@@ -4491,6 +4555,9 @@ outNode(StringInfo str, const void *obj)
 				break;
 			case T_Constraint:
 				_outConstraint(str, obj);
+				break;
+			case T_Period:
+				_outPeriod(str, obj);
 				break;
 			case T_FuncCall:
 				_outFuncCall(str, obj);

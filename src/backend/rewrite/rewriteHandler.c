@@ -1591,6 +1591,7 @@ rewriteValuesRTE(Query *parsetree, RangeTblEntry *rte, int rti,
 /*
  * Record in target_rte->extraUpdatedCols the indexes of any generated columns
  * that depend on any columns mentioned in target_rte->updatedCols.
+ * If the update uses FOR PORTION OF, include the PK range.
  */
 void
 fill_extraUpdatedCols(RangeTblEntry *target_rte, Relation target_relation)
@@ -3122,6 +3123,20 @@ rewriteTargetView(Query *parsetree, Relation view)
 			}
 		}
 
+		// TODO: The test suite isn't running this yet.
+		// Need a test for FPO and updateable views.
+		if (parsetree->forPortionOf)
+		{
+			foreach(lc, parsetree->forPortionOf->rangeSet)
+			{
+				TargetEntry *tle = (TargetEntry *) lfirst(lc);
+
+				if (!tle->resjunk)
+					modified_cols = bms_add_member(modified_cols,
+												   tle->resno - FirstLowInvalidHeapAttributeNumber);
+			}
+		}
+
 		auto_update_detail = view_cols_are_auto_updatable(viewquery,
 														  modified_cols,
 														  NULL,
@@ -3764,6 +3779,16 @@ RewriteQuery(Query *parsetree, List *rewrite_events)
 		}
 		else if (event == CMD_UPDATE)
 		{
+			/* Update FOR PORTION OF column(s) automatically */
+			if (parsetree->forPortionOf)
+			{
+				ListCell *tl;
+				foreach(tl, parsetree->forPortionOf->rangeSet)
+				{
+					TargetEntry *tle = (TargetEntry *) lfirst(tl);
+					parsetree->targetList = lappend(parsetree->targetList, tle);
+				}
+			}
 			parsetree->targetList =
 				rewriteTargetListIU(parsetree->targetList,
 									parsetree->commandType,

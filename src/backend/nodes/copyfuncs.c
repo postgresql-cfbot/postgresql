@@ -222,6 +222,7 @@ _copyModifyTable(const ModifyTable *from)
 	COPY_NODE_FIELD(rowMarks);
 	COPY_SCALAR_FIELD(epqParam);
 	COPY_SCALAR_FIELD(onConflictAction);
+	COPY_NODE_FIELD(forPortionOf);
 	COPY_NODE_FIELD(arbiterIndexes);
 	COPY_NODE_FIELD(onConflictSet);
 	COPY_NODE_FIELD(onConflictCols);
@@ -2297,6 +2298,33 @@ _copyOnConflictExpr(const OnConflictExpr *from)
 	return newnode;
 }
 
+/*
+ * _copyForPortionOfExpr
+ */
+static ForPortionOfExpr *
+_copyForPortionOfExpr(const ForPortionOfExpr *from)
+{
+	ForPortionOfExpr *newnode = makeNode(ForPortionOfExpr);
+
+	COPY_SCALAR_FIELD(range_attno);
+	COPY_SCALAR_FIELD(start_attno);
+	COPY_SCALAR_FIELD(end_attno);
+	COPY_STRING_FIELD(range_name);
+	COPY_STRING_FIELD(period_start_name);
+	COPY_STRING_FIELD(period_end_name);
+	COPY_NODE_FIELD(range);
+	COPY_NODE_FIELD(startCol);
+	COPY_NODE_FIELD(endCol);
+	COPY_NODE_FIELD(targetStart);
+	COPY_NODE_FIELD(targetEnd);
+	COPY_NODE_FIELD(targetRange);
+	COPY_SCALAR_FIELD(rangeType);
+	COPY_NODE_FIELD(overlapsExpr);
+	COPY_NODE_FIELD(rangeSet);
+
+	return newnode;
+}
+
 /* ****************************************************************
  *						pathnodes.h copy functions
  *
@@ -2669,6 +2697,19 @@ _copyCTECycleClause(const CTECycleClause *from)
 	COPY_SCALAR_FIELD(cycle_mark_typmod);
 	COPY_SCALAR_FIELD(cycle_mark_collation);
 	COPY_SCALAR_FIELD(cycle_mark_neop);
+
+	return newnode;
+}
+
+static ForPortionOfClause *
+_copyForPortionOfClause(const ForPortionOfClause *from)
+{
+	ForPortionOfClause *newnode = makeNode(ForPortionOfClause);
+
+	COPY_STRING_FIELD(range_name);
+	COPY_SCALAR_FIELD(range_name_location);
+	COPY_NODE_FIELD(target_start);
+	COPY_NODE_FIELD(target_end);
 
 	return newnode;
 }
@@ -3079,14 +3120,32 @@ _copyConstraint(const Constraint *from)
 	COPY_NODE_FIELD(where_clause);
 	COPY_NODE_FIELD(pktable);
 	COPY_NODE_FIELD(fk_attrs);
+	COPY_NODE_FIELD(fk_period);
 	COPY_NODE_FIELD(pk_attrs);
+	COPY_NODE_FIELD(pk_period);
 	COPY_SCALAR_FIELD(fk_matchtype);
 	COPY_SCALAR_FIELD(fk_upd_action);
 	COPY_SCALAR_FIELD(fk_del_action);
 	COPY_NODE_FIELD(old_conpfeqop);
 	COPY_SCALAR_FIELD(old_pktable_oid);
+	COPY_NODE_FIELD(without_overlaps);
 	COPY_SCALAR_FIELD(skip_validation);
 	COPY_SCALAR_FIELD(initially_valid);
+
+	return newnode;
+}
+
+static Period *
+_copyPeriod(const Period *from)
+{
+	Period *newnode = makeNode(Period);
+
+	COPY_STRING_FIELD(periodname);
+	COPY_STRING_FIELD(startcolname);
+	COPY_STRING_FIELD(endcolname);
+	COPY_NODE_FIELD(options);
+	COPY_SCALAR_FIELD(rngtypid);
+	COPY_LOCATION_FIELD(location);
 
 	return newnode;
 }
@@ -3165,6 +3224,7 @@ _copyQuery(const Query *from)
 	COPY_SCALAR_FIELD(canSetTag);
 	COPY_NODE_FIELD(utilityStmt);
 	COPY_SCALAR_FIELD(resultRelation);
+	COPY_NODE_FIELD(forPortionOf);
 	COPY_SCALAR_FIELD(hasAggs);
 	COPY_SCALAR_FIELD(hasWindowFuncs);
 	COPY_SCALAR_FIELD(hasTargetSRFs);
@@ -3650,6 +3710,7 @@ _copyIndexStmt(const IndexStmt *from)
 	COPY_STRING_FIELD(tableSpace);
 	COPY_NODE_FIELD(indexParams);
 	COPY_NODE_FIELD(indexIncludingParams);
+	COPY_NODE_FIELD(period);
 	COPY_NODE_FIELD(options);
 	COPY_NODE_FIELD(whereClause);
 	COPY_NODE_FIELD(excludeOpNames);
@@ -3661,6 +3722,7 @@ _copyIndexStmt(const IndexStmt *from)
 	COPY_SCALAR_FIELD(unique);
 	COPY_SCALAR_FIELD(primary);
 	COPY_SCALAR_FIELD(isconstraint);
+	COPY_SCALAR_FIELD(istemporal);
 	COPY_SCALAR_FIELD(deferrable);
 	COPY_SCALAR_FIELD(initdeferred);
 	COPY_SCALAR_FIELD(transformed);
@@ -5322,6 +5384,9 @@ copyObjectImpl(const void *from)
 		case T_OnConflictExpr:
 			retval = _copyOnConflictExpr(from);
 			break;
+		case T_ForPortionOfExpr:
+			retval = _copyForPortionOfExpr(from);
+			break;
 
 			/*
 			 * RELATION NODES
@@ -5825,6 +5890,9 @@ copyObjectImpl(const void *from)
 		case T_Constraint:
 			retval = _copyConstraint(from);
 			break;
+		case T_Period:
+			retval = _copyPeriod(from);
+			break;
 		case T_DefElem:
 			retval = _copyDefElem(from);
 			break;
@@ -5869,6 +5937,9 @@ copyObjectImpl(const void *from)
 			break;
 		case T_CTECycleClause:
 			retval = _copyCTECycleClause(from);
+			break;
+		case T_ForPortionOfClause:
+			retval = _copyForPortionOfClause(from);
 			break;
 		case T_CommonTableExpr:
 			retval = _copyCommonTableExpr(from);

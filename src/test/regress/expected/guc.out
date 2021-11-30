@@ -813,3 +813,24 @@ set default_with_oids to f;
 -- Should not allow to set it to true.
 set default_with_oids to t;
 ERROR:  tables declared WITH OIDS are not supported
+-- test SET unrecongnized parameter
+SET foo = FALSE; -- no such setting
+ERROR:  unrecognized configuration parameter "foo"
+-- test setting a parameter with a registered prefix (plpgsql)
+SET plpgsql.extra_foo_warnings = FALSE; -- no such setting
+WARNING:  unrecognized configuration parameter "plpgsql.extra_foo_warnings"
+DETAIL:  "plpgsql" is a reserved prefix.
+HINT:  If you need to create a custom placeholder use a different prefix.
+SHOW plpgsql.extra_foo_warnings; -- the parameter is however set
+ plpgsql.extra_foo_warnings 
+----------------------------
+ false
+(1 row)
+
+-- cleanup
+RESET foo;
+ERROR:  unrecognized configuration parameter "foo"
+RESET plpgsql.extra_foo_warnings;
+WARNING:  unrecognized configuration parameter "plpgsql.extra_foo_warnings"
+DETAIL:  "plpgsql" is a reserved prefix.
+HINT:  If you need to create a custom placeholder use a different prefix.

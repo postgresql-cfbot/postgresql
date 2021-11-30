@@ -58,9 +58,7 @@ typedef struct
 	/* These fields are filled by intorel_startup: */
 	Relation	rel;			/* relation to write to */
 	ObjectAddress reladdr;		/* address of rel, for ExecCreateTableAs */
-	CommandId	output_cid;		/* cmin to insert in output tuples */
-	int			ti_options;		/* table_tuple_insert performance options */
-	BulkInsertState bistate;	/* bulk insert state */
+	TableInsertState *istate;	/* insert state */
 } DR_intorel;
 
 /* utility functions for CTAS definition creation */
@@ -541,21 +539,25 @@ intorel_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 		SetMatViewPopulatedState(intoRelationDesc, true);
 
 	/*
+	 * If WITH NO DATA is specified, there is no need to set up the state for
+	 * bulk inserts and multi inserts as there are no tuples to insert.
+	 */
+	if (!into->skipData)
+	{
+		myState->istate = table_insert_begin(intoRelationDesc,
+											 GetCurrentCommandId(true),
+											 TABLE_INSERT_SKIP_FSM,
+											 true,
+											 true);
+	}
+	else
+		myState->istate = NULL;
+
+	/*
 	 * Fill private fields of myState for use by later routines
 	 */
 	myState->rel = intoRelationDesc;
 	myState->reladdr = intoRelationAddr;
-	myState->output_cid = GetCurrentCommandId(true);
-	myState->ti_options = TABLE_INSERT_SKIP_FSM;
-
-	/*
-	 * If WITH NO DATA is specified, there is no need to set up the state for
-	 * bulk inserts as there are no tuples to insert.
-	 */
-	if (!into->skipData)
-		myState->bistate = GetBulkInsertState();
-	else
-		myState->bistate = NULL;
 
 	/*
 	 * Valid smgr_targblock implies something already wrote to the relation.
@@ -583,11 +585,7 @@ intorel_receive(TupleTableSlot *slot, DestReceiver *self)
 		 * would not be cheap either. This also doesn't allow accessing per-AM
 		 * data (say a tuple's xmin), but since we don't do that here...
 		 */
-		table_tuple_insert(myState->rel,
-						   slot,
-						   myState->output_cid,
-						   myState->ti_options,
-						   myState->bistate);
+		table_multi_insert_v2(myState->istate, slot);
 	}
 
 	/* We know this is a newly created relation, so there are no indexes */
@@ -602,12 +600,17 @@ static void
 intorel_shutdown(DestReceiver *self)
 {
 	DR_intorel *myState = (DR_intorel *) self;
-	IntoClause *into = myState->into;
+	int ti_options;
 
-	if (!into->skipData)
+	if (!myState->into->skipData)
 	{
-		FreeBulkInsertState(myState->bistate);
-		table_finish_bulk_insert(myState->rel, myState->ti_options);
+		ti_options = myState->istate->options;
+
+		table_multi_insert_flush(myState->istate);
+
+		table_insert_end(myState->istate);
+
+		table_finish_bulk_insert(myState->rel, ti_options);
 	}
 
 	/* close rel, but keep lock until commit */

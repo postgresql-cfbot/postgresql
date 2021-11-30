@@ -502,3 +502,109 @@ select explain_filter('explain (verbose) select * from int8_tbl i8');
  Query Identifier: N
 (3 rows)
 
+-- Test I/O timing for temp buffers
+set track_io_timing = on;
+set work_mem to '4MB';
+select explain_filter('explain (analyze, buffers) select count(*) from generate_series(1, 100000)');
+                                                explain_filter                                                
+--------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=N.N..N.N rows=N width=N) (actual time=N.N..N.N rows=N loops=N)
+   I/O Timings: temp read=N.N write=N.N
+   ->  Function Scan on generate_series  (cost=N.N..N.N rows=N width=N) (actual time=N.N..N.N rows=N loops=N)
+         I/O Timings: temp read=N.N write=N.N
+ Planning Time: N.N ms
+ Execution Time: N.N ms
+(6 rows)
+
+select explain_filter('explain (analyze, buffers, format json) select count(*) from generate_series(1, 100000)');
+                explain_filter                 
+-----------------------------------------------
+ [                                            +
+   {                                          +
+     "Plan": {                                +
+       "Node Type": "Aggregate",              +
+       "Strategy": "Plain",                   +
+       "Partial Mode": "Simple",              +
+       "Parallel Aware": false,               +
+       "Async Capable": false,                +
+       "Startup Cost": N.N,                   +
+       "Total Cost": N.N,                     +
+       "Plan Rows": N,                        +
+       "Plan Width": N,                       +
+       "Actual Startup Time": N.N,            +
+       "Actual Total Time": N.N,              +
+       "Actual Rows": N,                      +
+       "Actual Loops": N,                     +
+       "Shared Hit Blocks": N,                +
+       "Shared Read Blocks": N,               +
+       "Shared Dirtied Blocks": N,            +
+       "Shared Written Blocks": N,            +
+       "Local Hit Blocks": N,                 +
+       "Local Read Blocks": N,                +
+       "Local Dirtied Blocks": N,             +
+       "Local Written Blocks": N,             +
+       "Temp Read Blocks": N,                 +
+       "Temp Written Blocks": N,              +
+       "I/O Read Time": N.N,                  +
+       "I/O Write Time": N.N,                 +
+       "Temp I/O Read Time": N.N,             +
+       "Temp I/O Write Time": N.N,            +
+       "Plans": [                             +
+         {                                    +
+           "Node Type": "Function Scan",      +
+           "Parent Relationship": "Outer",    +
+           "Parallel Aware": false,           +
+           "Async Capable": false,            +
+           "Function Name": "generate_series",+
+           "Alias": "generate_series",        +
+           "Startup Cost": N.N,               +
+           "Total Cost": N.N,                 +
+           "Plan Rows": N,                    +
+           "Plan Width": N,                   +
+           "Actual Startup Time": N.N,        +
+           "Actual Total Time": N.N,          +
+           "Actual Rows": N,                  +
+           "Actual Loops": N,                 +
+           "Shared Hit Blocks": N,            +
+           "Shared Read Blocks": N,           +
+           "Shared Dirtied Blocks": N,        +
+           "Shared Written Blocks": N,        +
+           "Local Hit Blocks": N,             +
+           "Local Read Blocks": N,            +
+           "Local Dirtied Blocks": N,         +
+           "Local Written Blocks": N,         +
+           "Temp Read Blocks": N,             +
+           "Temp Written Blocks": N,          +
+           "I/O Read Time": N.N,              +
+           "I/O Write Time": N.N,             +
+           "Temp I/O Read Time": N.N,         +
+           "Temp I/O Write Time": N.N         +
+         }                                    +
+       ]                                      +
+     },                                       +
+     "Planning": {                            +
+       "Shared Hit Blocks": N,                +
+       "Shared Read Blocks": N,               +
+       "Shared Dirtied Blocks": N,            +
+       "Shared Written Blocks": N,            +
+       "Local Hit Blocks": N,                 +
+       "Local Read Blocks": N,                +
+       "Local Dirtied Blocks": N,             +
+       "Local Written Blocks": N,             +
+       "Temp Read Blocks": N,                 +
+       "Temp Written Blocks": N,              +
+       "I/O Read Time": N.N,                  +
+       "I/O Write Time": N.N,                 +
+       "Temp I/O Read Time": N.N,             +
+       "Temp I/O Write Time": N.N             +
+     },                                       +
+     "Planning Time": N.N,                    +
+     "Triggers": [                            +
+     ],                                       +
+     "Execution Time": N.N                    +
+   }                                          +
+ ]
+(1 row)
+
+reset track_io_timing;
+reset work_mem;

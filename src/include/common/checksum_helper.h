@@ -26,6 +26,13 @@
  * MD5 here because any new that does need a cryptographically strong checksum
  * should use something better.
  */
+
+ /*
+ * CHECKSUM_TYPE_NONE defined in the winioctl.h when _WIN32_WINNT >= _WIN32_WINNT_WIN10
+ */
+#ifdef CHECKSUM_TYPE_NONE
+#undef CHECKSUM_TYPE_NONE
+#endif
 typedef enum pg_checksum_type
 {
 	CHECKSUM_TYPE_NONE,

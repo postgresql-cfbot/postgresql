@@ -62,6 +62,9 @@
 					# defaults to 'localhost'; use '*' for all
 					# (change requires restart)
 #port = 5432				# (change requires restart)
+#proxy_port = 0				# port to listen to for proxy connections
+					# (change requires restart)
+#proxy_servers = ''			# what proxy servers to trust
 #max_connections = 100			# (change requires restart)
 #superuser_reserved_connections = 3	# (change requires restart)
 #unix_socket_directories = '/tmp'	# comma-separated list of directories

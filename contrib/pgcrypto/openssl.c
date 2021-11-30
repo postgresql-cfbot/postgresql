@@ -31,6 +31,8 @@
 
 #include "postgres.h"
 
+#ifdef USE_OPENSSL
+
 #include <openssl/evp.h>
 #include <openssl/err.h>
 #include <openssl/rand.h>
@@ -819,3 +821,5 @@ px_find_cipher(const char *name, PX_Cipher **res)
 	*res = c;
 	return 0;
 }
+
+#endif		/* USE_OPENSSL */

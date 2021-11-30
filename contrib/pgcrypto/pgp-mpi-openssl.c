@@ -30,6 +30,8 @@
  */
 #include "postgres.h"
 
+#ifdef USE_OPENSSL
+
 #include <openssl/bn.h>
 
 #include "pgp.h"
@@ -282,3 +284,4 @@ err:
 		BN_clear_free(c);
 	return res;
 }
+#endif							/* USE_OPENSSL */

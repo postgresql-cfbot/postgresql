@@ -447,6 +447,27 @@ PQdefaultSSLKeyPassHook_OpenSSL(char *buf, int size, PGconn *conn)
 }
 #endif							/* USE_OPENSSL */
 
+#ifndef USE_NSS
+
+PQsslKeyPassHook_nss_type
+PQgetSSLKeyPassHook_nss(void)
+{
+	return NULL;
+}
+
+void
+PQsetSSLKeyPassHook_nss(PQsslKeyPassHook_nss_type hook)
+{
+	return;
+}
+
+char *
+PQdefaultSSLKeyPassHook_nss(PK11SlotInfo * slot, PRBool retry, void *arg)
+{
+	return NULL;
+}
+#endif							/* USE_NSS */
+
 /* Dummy version of GSSAPI information functions, when built without GSS support */
 #ifndef ENABLE_GSS
 

@@ -12,6 +12,7 @@ OBJS = \
 	crypt-gensalt.o \
 	crypt-md5.o \
 	mbuf.o \
+	nss.o \
 	openssl.o \
 	pgcrypto.o \
 	pgp-armor.o \
@@ -21,6 +22,7 @@ OBJS = \
 	pgp-encrypt.o \
 	pgp-info.o \
 	pgp-mpi.o \
+	pgp-mpi-nss.o \
 	pgp-mpi-openssl.o \
 	pgp-pgsql.o \
 	pgp-pubdec.o \

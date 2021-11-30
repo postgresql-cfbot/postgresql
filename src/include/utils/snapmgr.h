@@ -54,6 +54,12 @@ extern TimestampTz GetOldSnapshotThresholdTimestamp(void);
 extern void SnapshotTooOldMagicForTest(void);
 
 extern bool FirstSnapshotSet;
+/*
+ * Used to cover cases where a dirty
+ * catalog snapshot is needed. Currently
+ * used to avoid orphaned dependencies.
+ */
+extern bool UseDirtyCatalogSnapshot;
 
 extern PGDLLIMPORT TransactionId TransactionXmin;
 extern PGDLLIMPORT TransactionId RecentXmin;
@@ -62,6 +68,7 @@ extern PGDLLIMPORT TransactionId RecentXmin;
 extern PGDLLIMPORT SnapshotData SnapshotSelfData;
 extern PGDLLIMPORT SnapshotData SnapshotAnyData;
 extern PGDLLIMPORT SnapshotData CatalogSnapshotData;
+extern PGDLLIMPORT SnapshotData DirtyCatalogSnapshotData;
 
 #define SnapshotSelf		(&SnapshotSelfData)
 #define SnapshotAny			(&SnapshotAnyData)
@@ -97,6 +104,10 @@ extern PGDLLIMPORT SnapshotData CatalogSnapshotData;
 	((snapshot)->snapshot_type == SNAPSHOT_MVCC || \
 	 (snapshot)->snapshot_type == SNAPSHOT_HISTORIC_MVCC)
 
+/* This macro encodes the knowledge of which snapshots are Dirty */
+#define IsDirtySnapshot(snapshot)  \
+	((snapshot)->snapshot_type == SNAPSHOT_DIRTY)
+
 static inline bool
 OldSnapshotThresholdActive(void)
 {
@@ -111,6 +122,7 @@ extern Snapshot GetOldestSnapshot(void);
 extern Snapshot GetCatalogSnapshot(Oid relid);
 extern Snapshot GetNonHistoricCatalogSnapshot(Oid relid);
 extern void InvalidateCatalogSnapshot(void);
+extern void InvalidateDirtyCatalogSnapshot(void);
 extern void InvalidateCatalogSnapshotConditionally(void);
 
 extern void PushActiveSnapshot(Snapshot snapshot);

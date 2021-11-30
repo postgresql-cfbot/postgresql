@@ -210,7 +210,8 @@ static bool get_actual_variable_endpoint(Relation heapRel,
 										 MemoryContext outercontext,
 										 Datum *endpointDatum);
 static RelOptInfo *find_join_input_rel(PlannerInfo *root, Relids relids);
-
+static bool matching_restriction_variables(PlannerInfo *root, List *args,
+										   int varRelid);
 
 /*
  *		eqsel			- Selectivity of "=" for any data types.
@@ -255,6 +256,14 @@ eqsel_internal(PG_FUNCTION_ARGS, bool negate)
 			return 1.0 - DEFAULT_EQ_SEL;
 		}
 	}
+
+	/*
+	 * It it's (variable = variable) with the same variable on both sides, it's
+	 * a special case and we know it's not expected to filter anything, so we
+	 * estimate the selectivity as 1.0 (or 0.0 if it's negated).
+	 */
+	if (matching_restriction_variables(root, args, varRelid))
+		return (negate) ? 0.0 : 1.0;
 
 	/*
 	 * If expression is not variable = something or something = variable, then
@@ -1407,6 +1416,22 @@ scalarineqsel_wrapper(PG_FUNCTION_ARGS, bool isgt, bool iseq)
 	Datum		constval;
 	Oid			consttype;
 	double		selec;
+
+	/*
+	 * Handle (variable < variable) and (variable <= variable) with the same
+	 * variable on both sides as a special case. The strict inequality should
+	 * not match any rows, hence selectivity is 0.0. The other case is about
+	 * the same as equality, so selectivity is 1.0.
+	 */
+	if (matching_restriction_variables(root, args, varRelid))
+	{
+		/* The case with equality matches all rows, so estimate it as 1.0. */
+		if (iseq)
+			PG_RETURN_FLOAT8(1.0);
+
+		/* Strict inequality matches nothing, so selectivity is 0.0. */
+		PG_RETURN_FLOAT8(0.0);
+	}
 
 	/*
 	 * If expression is not variable op something or something op variable,
@@ -4869,6 +4894,56 @@ get_restriction_variable(PlannerInfo *root, List *args, int varRelid,
 	ReleaseVariableStats(rdata);
 
 	return false;
+}
+
+
+/*
+ * matching_restriction_variable
+ *		Examine the args of a restriction clause to see if it's of the
+ *		form (variable op variable) with the same variable on both sides.
+ *
+ * Inputs:
+ *	root: the planner info
+ *	args: clause argument list
+ *	varRelid: see specs for restriction selectivity functions
+ *
+ * Returns true if the same variable is on both sides, otherwise false.
+ */
+static bool
+matching_restriction_variables(PlannerInfo *root, List *args, int varRelid)
+{
+	Node	   *left,
+			   *right;
+	VariableStatData ldata;
+	VariableStatData rdata;
+	bool		res = false;
+
+	/* Fail if not a binary opclause (probably shouldn't happen) */
+	if (list_length(args) != 2)
+		return false;
+
+	left = (Node *) linitial(args);
+	right = (Node *) lsecond(args);
+
+	/*
+	 * Examine both sides.  Note that when varRelid is nonzero, Vars of other
+	 * relations will be treated as pseudoconstants.
+	 */
+	examine_variable(root, left, varRelid, &ldata);
+	examine_variable(root, right, varRelid, &rdata);
+
+	/*
+	 * If both sides are variable, and are equal, we win.
+	 */
+	if ((ldata.rel != NULL && rdata.rel != NULL) &&
+		equal(ldata.var, rdata.var))
+		res = true;
+
+	/* We don't need the stats. */
+	ReleaseVariableStats(ldata);
+	ReleaseVariableStats(rdata);
+
+	return res;
 }
 
 /*

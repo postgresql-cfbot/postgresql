@@ -77,6 +77,35 @@
  *	  a bit more memory to the oldest subtransactions, because it's likely
  *	  they are the source for the next sequence of changes.
  *
+ *	  When decoding sequences, we differentiate between a sequences created
+ *	  in a (running) transaction, and sequences created in other (already
+ *	  committed) transactions. Changes for sequences created in the same
+ *	  top-level transaction are treated as "transactional" i.e. just like
+ *	  any other change from that transaction (and discarded in case of a
+ *	  rollback). Changes for sequences created earlier are treated as not
+ *	  transactional - are processed immediately, as if performed outside
+ *	  any transaction (and thus not rolled back).
+ *
+ *	  This mixed behavior is necessary - sequences are non-transactional
+ *	  (e.g. ROLLBACK does not undo the sequence increments). But for new
+ *	  sequences, we need to handle them in a transactional way, because if
+ *	  we ever get some DDL support, the sequence won't exist until the
+ *	  transaction gets applied. So we need to ensure the increments don't
+ *	  happen until the sequence gets created.
+ *
+ *	  To differentiate which sequences are "old" and which were created
+ *	  in a still-running transaction, we track sequences created in running
+ *	  transactions in a hash table. Each sequence is identified by it's
+ *	  relfilenode, and at transaction commit we discard all sequences
+ *	  created in that particular transaction. For each sequence we track
+ *	  the XID of the (sub)transaction that created it, and we cleanup the
+ *	  sequences for each subtransaction when it completes (commit/rollback).
+ *
+ *	  We don't use the XID to check if it's the same top-level transaction.
+ *	  It's enough to know it was created in an in-progress transaction,
+ *	  and we know it must be the current one because otherwise it wouldn't
+ *	  see the sequence object.
+ *
  * -------------------------------------------------------------------------
  */
 #include "postgres.h"
@@ -115,6 +144,13 @@ typedef struct ReorderBufferTXNByIdEnt
 	TransactionId xid;
 	ReorderBufferTXN *txn;
 } ReorderBufferTXNByIdEnt;
+
+/* entry for hash table we use to track sequences created in running xacts */
+typedef struct ReorderBufferSequenceEnt
+{
+	RelFileNode		rnode;
+	TransactionId	xid;
+} ReorderBufferSequenceEnt;
 
 /* data structures for (relfilenode, ctid) => (cmin, cmax) mapping */
 typedef struct ReorderBufferTupleCidKey
@@ -339,6 +375,14 @@ ReorderBufferAllocate(void)
 	buffer->by_txn = hash_create("ReorderBufferByXid", 1000, &hash_ctl,
 								 HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
 
+	/* hash table of sequences, mapping relfilenode to XID of transaction */
+	hash_ctl.keysize = sizeof(RelFileNode);
+	hash_ctl.entrysize = sizeof(ReorderBufferSequenceEnt);
+	hash_ctl.hcxt = buffer->context;
+
+	buffer->sequences = hash_create("ReorderBufferSequenceHash", 1000, &hash_ctl,
+								 HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+
 	buffer->by_txn_last_xid = InvalidTransactionId;
 	buffer->by_txn_last_txn = NULL;
 
@@ -529,6 +573,7 @@ ReorderBufferReturnChange(ReorderBuffer *rb, ReorderBufferChange *change,
 		case REORDER_BUFFER_CHANGE_INTERNAL_SPEC_ABORT:
 		case REORDER_BUFFER_CHANGE_INTERNAL_COMMAND_ID:
 		case REORDER_BUFFER_CHANGE_INTERNAL_TUPLECID:
+		case REORDER_BUFFER_CHANGE_SEQUENCE:
 			break;
 	}
 
@@ -853,6 +898,190 @@ ReorderBufferQueueMessage(ReorderBuffer *rb, TransactionId xid,
 		PG_CATCH();
 		{
 			TeardownHistoricSnapshot(true);
+			PG_RE_THROW();
+		}
+		PG_END_TRY();
+	}
+}
+
+/*
+ * Treat the sequence increment as transactional?
+ *
+ * The hash table tracks all sequences created in in-progress transactions,
+ * so we simply do a lookup (the sequence is identified by relfilende). If
+ * we find a match, the increment should be handled as transactional.
+ */
+bool
+ReorderBufferSequenceIsTransactional(ReorderBuffer *rb,
+									 RelFileNode rnode, bool created)
+{
+	bool	found = false;
+
+	if (created)
+		return true;
+
+	hash_search(rb->sequences,
+				(void *) &rnode,
+				HASH_FIND,
+				&found);
+
+	return found;
+}
+
+/*
+ * Cleanup sequences created in in-progress transactions.
+ *
+ * There's no way to search by XID, so we simply do a seqscan of all
+ * the entries in the hash table. Hopefully there are only a couple
+ * entries in most cases - people generally don't create many new
+ * sequences over and over.
+ */
+static void
+ReorderBufferSequenceCleanup(ReorderBuffer *rb, TransactionId xid)
+{
+	HASH_SEQ_STATUS scan_status;
+	ReorderBufferSequenceEnt *ent;
+
+	hash_seq_init(&scan_status, rb->sequences);
+	while ((ent = (ReorderBufferSequenceEnt *) hash_seq_search(&scan_status)) != NULL)
+	{
+		/* skip sequences not from this transaction */
+		if (ent->xid != xid)
+			continue;
+
+		(void) hash_search(rb->sequences,
+					   (void *) &(ent->rnode),
+					   HASH_REMOVE, NULL);
+	}
+}
+
+/*
+ * A transactional sequence increment is queued to be processed upon commit
+ * and a non-transactional increment gets processed immediately.
+ *
+ * A sequence update may be both transactional and non-transactional. When
+ * created in a running transaction, treat it as transactional and queue
+ * the change in it. Otherwise treat it as non-transactional, so that we
+ * don't forget the increment in case of a rollback.
+ */
+void
+ReorderBufferQueueSequence(ReorderBuffer *rb, TransactionId xid,
+						   Snapshot snapshot, XLogRecPtr lsn, RepOriginId origin_id,
+						   Oid reloid, RelFileNode rnode, int64 last, int64 log_cnt, bool is_called)
+{
+	bool transactional = TransactionIdIsValid(xid);
+
+	/*
+	 * Change needs to be handled as transactional, because the sequence was
+	 * created in a transaction that is still running. In that case all the
+	 * changes need to be queued in that transaction, we must not send them
+	 * to the downstream until the transaction commits.
+	 *
+	 * There's a bit of a trouble with subtransactions - we can't queue it
+	 * into the subxact, because it might be rolled back and we'd lose the
+	 * increment. We need to queue it into the same (sub)xact that created
+	 * the sequence, which is why we track the XID in the hash table.
+	 */
+	if (transactional)
+	{
+		MemoryContext oldcontext;
+		ReorderBufferChange *change;
+
+		/* OK, allocate and queue the change */
+		oldcontext = MemoryContextSwitchTo(rb->context);
+
+		change = ReorderBufferGetChange(rb);
+
+		change->action = REORDER_BUFFER_CHANGE_SEQUENCE;
+		change->origin_id = origin_id;
+
+		memcpy(&change->data.sequence.relnode, &rnode, sizeof(RelFileNode));
+
+		change->data.sequence.reloid = reloid;
+		change->data.sequence.last = last;
+		change->data.sequence.log_cnt = log_cnt;
+		change->data.sequence.is_called = is_called;
+
+		/* add it to the same subxact that created the sequence */
+		ReorderBufferQueueChange(rb, xid, lsn, change, false);
+
+		MemoryContextSwitchTo(oldcontext);
+	}
+	else
+	{
+		/*
+		* This increment is for a sequence that was not created in any
+		* running transaction, so we treat it as non-transactional and
+		* just send it to the output plugin directly.
+		*/
+		ReorderBufferTXN *txn = NULL;
+		volatile Snapshot snapshot_now = snapshot;
+		bool    using_subtxn;
+
+		if (xid != InvalidTransactionId)
+			txn = ReorderBufferTXNByXid(rb, xid, true, NULL, lsn, true);
+
+		/* setup snapshot to allow catalog access */
+		SetupHistoricSnapshot(snapshot_now, NULL);
+
+		/*
+		* Decoding needs access to syscaches et al., which in turn use
+		* heavyweight locks and such. Thus we need to have enough state around to
+		* keep track of those.  The easiest way is to simply use a transaction
+		* internally.  That also allows us to easily enforce that nothing writes
+		* to the database by checking for xid assignments.
+		*
+		* When we're called via the SQL SRF there's already a transaction
+		* started, so start an explicit subtransaction there.
+		*/
+		using_subtxn = IsTransactionOrTransactionBlock();
+
+		PG_TRY();
+		{
+			Relation	relation;
+//			Oid			reloid;
+
+			if (using_subtxn)
+				BeginInternalSubTransaction("sequence");
+			else
+				StartTransactionCommand();
+/*
+			reloid = RelidByRelfilenode(rnode.spcNode, rnode.relNode);
+
+			if (reloid == InvalidOid)
+				elog(ERROR, "could not map filenode \"%s\" to relation OID",
+					relpathperm(rnode,
+								MAIN_FORKNUM));
+*/
+			relation = RelationIdGetRelation(reloid);
+
+			/*
+			 * Extract the internal sequence values, describing the state.
+			 *
+			 * XXX Seems a bit strange to access it directly. Maybe there's
+			 * a better / more correct way?
+			 */
+			rb->sequence(rb, txn, lsn, relation, transactional, false,
+						last, log_cnt, is_called);
+
+			RelationClose(relation);
+
+			TeardownHistoricSnapshot(false);
+
+			AbortCurrentTransaction();
+
+			if (using_subtxn)
+				RollbackAndReleaseCurrentSubTransaction();
+		}
+		PG_CATCH();
+		{
+			TeardownHistoricSnapshot(true);
+
+			AbortCurrentTransaction();
+
+			if (using_subtxn)
+				RollbackAndReleaseCurrentSubTransaction();
+
 			PG_RE_THROW();
 		}
 		PG_END_TRY();
@@ -1535,6 +1764,9 @@ ReorderBufferCleanupTXN(ReorderBuffer *rb, ReorderBufferTXN *txn)
 				&found);
 	Assert(found);
 
+	/* Remove sequences created in this transaction (if any). */
+	ReorderBufferSequenceCleanup(rb, txn->xid);
+
 	/* remove entries spilled to disk */
 	if (rbtxn_is_serialized(txn))
 		ReorderBufferRestoreCleanup(rb, txn);
@@ -1948,6 +2180,38 @@ ReorderBufferApplyMessage(ReorderBuffer *rb, ReorderBufferTXN *txn,
 					change->data.msg.prefix,
 					change->data.msg.message_size,
 					change->data.msg.message);
+}
+
+/*
+ * Helper function for ReorderBufferProcessTXN for applying sequences.
+ */
+static inline void
+ReorderBufferApplySequence(ReorderBuffer *rb, ReorderBufferTXN *txn,
+						   Relation relation, ReorderBufferChange *change,
+						   bool streaming)
+{
+	int64		last_value, log_cnt;
+	bool		is_called;
+
+	/*
+	 * Extract the internal sequence values, describing the state.
+	 *
+	 * XXX Seems a bit strange to access it directly. Maybe there's
+	 * a better / more correct way?
+	 */
+	last_value = change->data.sequence.last;
+	log_cnt = change->data.sequence.log_cnt;
+	is_called = change->data.sequence.is_called;
+
+	/* Only ever called from ReorderBufferApplySequence, so transational. */
+	if (streaming)
+		rb->stream_sequence(rb, txn, change->lsn, relation, true,
+							false,	/* FIXME */
+							last_value, log_cnt, is_called);
+	else
+		rb->sequence(rb, txn, change->lsn, relation, true,
+					 false,	/* FIXME */
+					 last_value, log_cnt, is_called);
 }
 
 /*
@@ -2391,6 +2655,33 @@ ReorderBufferProcessTXN(ReorderBuffer *rb, ReorderBufferTXN *txn,
 
 				case REORDER_BUFFER_CHANGE_INTERNAL_TUPLECID:
 					elog(ERROR, "tuplecid value in changequeue");
+					break;
+
+				case REORDER_BUFFER_CHANGE_SEQUENCE:
+					Assert(snapshot_now);
+
+					/*
+					reloid = RelidByRelfilenode(change->data.sequence.relnode.spcNode,
+												change->data.sequence.relnode.relNode);
+
+					if (reloid == InvalidOid)
+						elog(ERROR, "zz could not map filenode \"%s\" to relation OID",
+							 relpathperm(change->data.sequence.relnode,
+										 MAIN_FORKNUM));
+
+					*/
+					relation = RelationIdGetRelation(change->data.sequence.reloid);
+
+					if (!RelationIsValid(relation))
+						elog(ERROR, "could not open relation with OID %u (for filenode \"%s\")",
+							 reloid,
+							 relpathperm(change->data.sequence.relnode,
+										 MAIN_FORKNUM));
+
+					if (RelationIsLogicallyLogged(relation))
+						ReorderBufferApplySequence(rb, txn, relation, change, streaming);
+
+					RelationClose(relation);
 					break;
 			}
 		}
@@ -3782,6 +4073,7 @@ ReorderBufferSerializeChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
 		case REORDER_BUFFER_CHANGE_INTERNAL_SPEC_ABORT:
 		case REORDER_BUFFER_CHANGE_INTERNAL_COMMAND_ID:
 		case REORDER_BUFFER_CHANGE_INTERNAL_TUPLECID:
+		case REORDER_BUFFER_CHANGE_SEQUENCE:
 			/* ReorderBufferChange contains everything important */
 			break;
 	}
@@ -4046,6 +4338,7 @@ ReorderBufferChangeSize(ReorderBufferChange *change)
 		case REORDER_BUFFER_CHANGE_INTERNAL_SPEC_ABORT:
 		case REORDER_BUFFER_CHANGE_INTERNAL_COMMAND_ID:
 		case REORDER_BUFFER_CHANGE_INTERNAL_TUPLECID:
+		case REORDER_BUFFER_CHANGE_SEQUENCE:
 			/* ReorderBufferChange contains everything important */
 			break;
 	}
@@ -4341,10 +4634,12 @@ ReorderBufferRestoreChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
 
 				break;
 			}
+
 		case REORDER_BUFFER_CHANGE_INTERNAL_SPEC_CONFIRM:
 		case REORDER_BUFFER_CHANGE_INTERNAL_SPEC_ABORT:
 		case REORDER_BUFFER_CHANGE_INTERNAL_COMMAND_ID:
 		case REORDER_BUFFER_CHANGE_INTERNAL_TUPLECID:
+		case REORDER_BUFFER_CHANGE_SEQUENCE:
 			break;
 	}
 

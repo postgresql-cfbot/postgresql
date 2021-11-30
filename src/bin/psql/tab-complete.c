@@ -1647,13 +1647,13 @@ psql_completion(const char *text, int start, int end)
 		COMPLETE_WITH("ADD", "DROP", "OWNER TO", "RENAME TO", "SET");
 	/* ALTER PUBLICATION <name> ADD */
 	else if (Matches("ALTER", "PUBLICATION", MatchAny, "ADD"))
-		COMPLETE_WITH("ALL TABLES IN SCHEMA", "TABLE");
+		COMPLETE_WITH("ALL TABLES IN SCHEMA", "TABLE|SEQUENCE");
 	/* ALTER PUBLICATION <name> DROP */
 	else if (Matches("ALTER", "PUBLICATION", MatchAny, "DROP"))
-		COMPLETE_WITH("ALL TABLES IN SCHEMA", "TABLE");
+		COMPLETE_WITH("ALL TABLES IN SCHEMA", "TABLE|SEQUENCE");
 	/* ALTER PUBLICATION <name> SET */
 	else if (Matches("ALTER", "PUBLICATION", MatchAny, "SET"))
-		COMPLETE_WITH("(", "ALL TABLES IN SCHEMA", "TABLE");
+		COMPLETE_WITH("(", "ALL TABLES IN SCHEMA", "TABLE|SEQUENCE");
 	else if (Matches("ALTER", "PUBLICATION", MatchAny, "ADD|DROP|SET", "ALL", "TABLES", "IN", "SCHEMA"))
 		COMPLETE_WITH_QUERY(Query_for_list_of_schemas
 							" AND nspname != 'pg_catalog' "

@@ -37,6 +37,7 @@
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "parser/parse_type.h"
+#include "replication/message.h"
 #include "storage/lmgr.h"
 #include "storage/proc.h"
 #include "storage/smgr.h"
@@ -75,6 +76,7 @@ typedef struct SeqTableData
 {
 	Oid			relid;			/* pg_class OID of this sequence (hash key) */
 	Oid			filenode;		/* last seen relfilenode of this sequence */
+	Oid			tablespace;		/* last seen tablespace of this sequence */
 	LocalTransactionId lxid;	/* xact in which we last did a seq op */
 	bool		last_valid;		/* do we have a valid "last" value? */
 	int64		last;			/* value last returned by nextval */
@@ -82,6 +84,11 @@ typedef struct SeqTableData
 	/* if last != cached, we have not used up all the cached values */
 	int64		increment;		/* copy of sequence's increment field */
 	/* note that increment is zero until we first do nextval_internal() */
+	bool		need_log;		/* should be written to WAL at commit? */
+	bool		touched;
+	int64		last_value;
+	int64		log_cnt;
+	bool		is_called;
 } SeqTableData;
 
 typedef SeqTableData *SeqTable;
@@ -230,6 +237,31 @@ DefineSequence(ParseState *pstate, CreateSeqStmt *seq)
 
 	table_close(rel, NoLock);
 
+	/*
+	 * Add the new sequence to local cache, so that we log it at commit.
+	 */
+	{
+		Relation	seqrel;
+		SeqTable	elm;
+		Buffer		buf;
+		Form_pg_sequence_data seq;
+		HeapTupleData	seqdatatuple;
+
+		init_sequence(seqoid, &elm, &seqrel);
+
+		seq = read_seq_tuple(seqrel, &buf, &seqdatatuple);
+
+		elm->last_value = seq->last_value;
+		elm->is_called = seq->is_called;
+		elm->log_cnt = 0;
+		elm->touched = true;
+		elm->need_log = true;
+
+		relation_close(seqrel, NoLock);
+
+		UnlockReleaseBuffer(buf);
+	}
+
 	/* fill in pg_sequence */
 	rel = table_open(SequenceRelationId, RowExclusiveLock);
 	tupDesc = RelationGetDescr(rel);
@@ -333,6 +365,91 @@ ResetSequence(Oid seq_relid)
 	/* Note that we do not change the currval() state */
 	elm->cached = elm->last;
 
+	/* Remember we need to write the sequence to WAL at commit. */
+	elm->need_log = true;
+	elm->is_called = false;
+	elm->log_cnt = 0;
+	elm->touched = true;
+
+	relation_close(seq_rel, NoLock);
+}
+
+/*
+ * Reset a sequence to its initial value.
+ *
+ * The change is made transactionally, so that on failure of the current
+ * transaction, the sequence will be restored to its previous state.
+ * We do that by creating a whole new relfilenode for the sequence; so this
+ * works much like the rewriting forms of ALTER TABLE.
+ *
+ * Caller is assumed to have acquired AccessExclusiveLock on the sequence,
+ * which must not be released until end of transaction.  Caller is also
+ * responsible for permissions checking.
+ */
+void
+ResetSequence2(Oid seq_relid, int64 last_value, int64 log_cnt, bool is_called)
+{
+	Relation	seq_rel;
+	SeqTable	elm;
+	Form_pg_sequence_data seq;
+	Buffer		buf;
+	HeapTupleData seqdatatuple;
+	HeapTuple	tuple;
+
+	/*
+	 * Read the old sequence.  This does a bit more work than really
+	 * necessary, but it's simple, and we do want to double-check that it's
+	 * indeed a sequence.
+	 */
+	init_sequence(seq_relid, &elm, &seq_rel);
+	(void) read_seq_tuple(seq_rel, &buf, &seqdatatuple);
+
+	/*
+	 * Copy the existing sequence tuple.
+	 */
+	tuple = heap_copytuple(&seqdatatuple);
+
+	/* Now we're done with the old page */
+	UnlockReleaseBuffer(buf);
+
+	/*
+	 * Modify the copied tuple to execute the restart (compare the RESTART
+	 * action in AlterSequence)
+	 */
+	seq = (Form_pg_sequence_data) GETSTRUCT(tuple);
+	seq->last_value = last_value;
+	seq->is_called = is_called;
+	seq->log_cnt = log_cnt;
+
+	/*
+	 * Create a new storage file for the sequence.
+	 */
+	RelationSetNewRelfilenode(seq_rel, seq_rel->rd_rel->relpersistence);
+
+	/*
+	 * Ensure sequence's relfrozenxid is at 0, since it won't contain any
+	 * unfrozen XIDs.  Same with relminmxid, since a sequence will never
+	 * contain multixacts.
+	 */
+	Assert(seq_rel->rd_rel->relfrozenxid == InvalidTransactionId);
+	Assert(seq_rel->rd_rel->relminmxid == InvalidMultiXactId);
+
+	/*
+	 * Insert the modified tuple into the new storage file.
+	 *
+	 * XXX Maybe this should also use created=true, just like the other places
+	 * calling fill_seq_with_data. That's probably needed for correct cascading
+	 * replication.
+	 *
+	 * XXX That'd mean all fill_seq_with_data callers use created=true, making
+	 * the parameter unnecessary.
+	 */
+	fill_seq_with_data(seq_rel, tuple);
+
+	/* Clear local cache so that we don't think we have cached numbers */
+	/* Note that we do not change the currval() state */
+	elm->cached = elm->last;
+
 	relation_close(seq_rel, NoLock);
 }
 
@@ -378,7 +495,10 @@ fill_seq_with_data(Relation rel, HeapTuple tuple)
 
 	/* check the comment above nextval_internal()'s equivalent call. */
 	if (RelationNeedsWAL(rel))
+	{
 		GetTopTransactionId();
+		// GetCurrentTransactionId();
+	}
 
 	START_CRIT_SECTION();
 
@@ -503,6 +623,10 @@ AlterSequence(ParseState *pstate, AlterSeqStmt *stmt)
 		 * Insert the modified tuple into the new storage file.
 		 */
 		fill_seq_with_data(seqrel, newdatatuple);
+
+		elm->need_log = true;
+		elm->is_called = false;
+		elm->log_cnt = 0;
 	}
 
 	/* process OWNED BY if given */
@@ -601,6 +725,8 @@ nextval_internal(Oid relid, bool check_permissions)
 
 	/* open and lock sequence */
 	init_sequence(relid, &elm, &seqrel);
+
+	elm->touched = true;
 
 	if (check_permissions &&
 		pg_class_aclcheck(elm->relid, GetUserId(),
@@ -766,7 +892,10 @@ nextval_internal(Oid relid, bool check_permissions)
 	 * (Have to do that here, so we're outside the critical section)
 	 */
 	if (logit && RelationNeedsWAL(seqrel))
+	{
 		GetTopTransactionId();
+		// GetCurrentTransactionId();
+	}
 
 	/* ready to change the on-disk (or really, in-buffer) tuple */
 	START_CRIT_SECTION();
@@ -810,6 +939,11 @@ nextval_internal(Oid relid, bool check_permissions)
 		recptr = XLogInsert(RM_SEQ_ID, XLOG_SEQ_LOG);
 
 		PageSetLSN(page, recptr);
+
+		elm->need_log = true;
+		elm->is_called = true;
+		elm->last_value = next;
+		elm->log_cnt = 0;
 	}
 
 	/* Now update sequence tuple to the intended final state */
@@ -921,6 +1055,8 @@ do_setval(Oid relid, int64 next, bool iscalled)
 	/* open and lock sequence */
 	init_sequence(relid, &elm, &seqrel);
 
+	elm->touched = true;
+
 	if (pg_class_aclcheck(elm->relid, GetUserId(), ACL_UPDATE) != ACLCHECK_OK)
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
@@ -977,7 +1113,10 @@ do_setval(Oid relid, int64 next, bool iscalled)
 
 	/* check the comment above nextval_internal()'s equivalent call. */
 	if (RelationNeedsWAL(seqrel))
+	{
 		GetTopTransactionId();
+		// GetCurrentTransactionId();
+	}
 
 	/* ready to change the on-disk (or really, in-buffer) tuple */
 	START_CRIT_SECTION();
@@ -1005,6 +1144,11 @@ do_setval(Oid relid, int64 next, bool iscalled)
 		recptr = XLogInsert(RM_SEQ_ID, XLOG_SEQ_LOG);
 
 		PageSetLSN(page, recptr);
+
+		elm->need_log = true;
+		elm->is_called = false;
+		elm->last_value = next;
+		elm->log_cnt = 0;
 	}
 
 	END_CRIT_SECTION();
@@ -1123,6 +1267,7 @@ init_sequence(Oid relid, SeqTable *p_elm, Relation *p_rel)
 	{
 		/* relid already filled in */
 		elm->filenode = InvalidOid;
+		elm->tablespace = InvalidOid;
 		elm->lxid = InvalidLocalTransactionId;
 		elm->last_valid = false;
 		elm->last = elm->cached = 0;
@@ -1146,6 +1291,7 @@ init_sequence(Oid relid, SeqTable *p_elm, Relation *p_rel)
 	 */
 	if (seqrel->rd_rel->relfilenode != elm->filenode)
 	{
+		elm->tablespace = seqrel->rd_rel->reltablespace;
 		elm->filenode = seqrel->rd_rel->relfilenode;
 		elm->cached = elm->last;
 	}
@@ -1904,6 +2050,8 @@ seq_redo(XLogReaderState *record)
 
 /*
  * Flush cached sequence information.
+ *
+ * XXX Do we need to WAL-log the entries based on need_log?
  */
 void
 ResetSequenceCaches(void)
@@ -1926,4 +2074,100 @@ seq_mask(char *page, BlockNumber blkno)
 	mask_page_lsn_and_checksum(page);
 
 	mask_unused_space(page);
+}
+
+
+static void
+read_sequence_info(Relation seqrel, int64 *last_value, int64 *log_cnt, bool *is_called)
+{
+	Buffer		buf;
+	Form_pg_sequence_data seq;
+	HeapTupleData	seqdatatuple;
+
+	seq = read_seq_tuple(seqrel, &buf, &seqdatatuple);
+
+	*last_value = seq->last_value;
+	*is_called = seq->is_called;
+	*log_cnt = seq->log_cnt;
+
+	UnlockReleaseBuffer(buf);
+}
+
+/* XXX Do this only for wal_level = logical, probably? */
+void
+AtEOXact_Sequences(bool isCommit)
+{
+	SeqTable		entry;
+	HASH_SEQ_STATUS	scan;
+
+	if (!seqhashtab)
+		return;
+
+	/*
+	 * XXX If we run just nextval() that returns cached value, the xact may
+	 * not have XID, but we expect it in reorderbuffer. Maybe treat that as
+	 * transactional?
+	 */
+	// GetTopTransactionId();
+	// GetCurrentTransactionId();
+
+	hash_seq_init(&scan, seqhashtab);
+
+	while ((entry = (SeqTable) hash_seq_search(&scan)))
+	{
+		Relation			rel;
+		RelFileNode			rnode;
+		xl_logical_sequence	xlrec;
+
+		if (!isCommit)
+			entry->touched = false;
+
+		/*
+		 * If not touched in the current transaction, don't log anything.
+		 * We leave needs_log set, so that if future transactions touch
+		 * the sequence we'll log it properly.
+		 */
+		if (!entry->touched)
+			continue;
+
+		/*
+		 * Likewise, if the sequence does not need logging, we're done.
+		 */
+		if (!entry->need_log)
+			continue;
+
+		/* does the relation still exist? */
+		rel = try_relation_open(entry->relid, NoLock);
+
+		/* relation might have been dropped */
+		if (!rel)
+			continue;
+
+		/* if this is commit, we'll log the */
+		entry->need_log = false;
+		entry->touched = false;
+
+		rnode.spcNode = entry->tablespace;		/* tablespace */
+		rnode.dbNode = MyDatabaseId;			/* database */
+		rnode.relNode = entry->filenode;		/* relation */
+
+		xlrec.node = rnode;
+		xlrec.reloid = entry->relid;
+
+		/* XXX is it good enough to log values we have in cache? seems
+		 * wrong and we may need to re-read that. */
+		// xlrec.dbId = MyDatabaseId;
+		// xlrec.relId = entry->relid;
+		read_sequence_info(rel, &xlrec.last, &xlrec.log_cnt, &xlrec.is_called);
+
+		XLogBeginInsert();
+		XLogRegisterData((char *) &xlrec, SizeOfLogicalSequence);
+
+		/* allow origin filtering */
+		XLogSetRecordFlags(XLOG_INCLUDE_ORIGIN);
+
+		(void) XLogInsert(RM_LOGICALMSG_ID, XLOG_LOGICAL_SEQUENCE);
+
+		relation_close(rel, NoLock);
+	}
 }

@@ -2336,6 +2336,7 @@ _equalAlterPublicationStmt(const AlterPublicationStmt *a,
 	COMPARE_NODE_FIELD(options);
 	COMPARE_NODE_FIELD(pubobjects);
 	COMPARE_SCALAR_FIELD(for_all_tables);
+	COMPARE_SCALAR_FIELD(for_all_sequences);
 	COMPARE_SCALAR_FIELD(action);
 
 	return true;

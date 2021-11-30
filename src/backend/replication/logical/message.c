@@ -81,7 +81,8 @@ logicalmsg_redo(XLogReaderState *record)
 {
 	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
 
-	if (info != XLOG_LOGICAL_MESSAGE)
+	if (info != XLOG_LOGICAL_MESSAGE &&
+		info != XLOG_LOGICAL_SEQUENCE)
 		elog(PANIC, "logicalmsg_redo: unknown op code %u", info);
 
 	/* This is only interesting for logical decoding, see decode.c. */

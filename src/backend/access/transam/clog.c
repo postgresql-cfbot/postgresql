@@ -58,8 +58,8 @@
 
 /* We need two bits per xact, so four xacts fit in a byte */
 #define CLOG_BITS_PER_XACT	2
-#define CLOG_XACTS_PER_BYTE 4
-#define CLOG_XACTS_PER_PAGE (BLCKSZ * CLOG_XACTS_PER_BYTE)
+StaticAssertDecl((CLOG_BITS_PER_XACT * CLOG_XACTS_PER_BYTE) == BITS_PER_BYTE,
+				 "CLOG_BITS_PER_XACT and CLOG_XACTS_PER_BYTE are inconsistent");
 #define CLOG_XACT_BITMASK	((1 << CLOG_BITS_PER_XACT) - 1)
 
 #define TransactionIdToPage(xid)	((xid) / (TransactionId) CLOG_XACTS_PER_PAGE)
@@ -664,23 +664,16 @@ TransactionIdGetStatus(TransactionId xid, XLogRecPtr *lsn)
 /*
  * Number of shared CLOG buffers.
  *
- * On larger multi-processor systems, it is possible to have many CLOG page
- * requests in flight at one time which could lead to disk access for CLOG
- * page if the required page is not found in memory.  Testing revealed that we
- * can get the best performance by having 128 CLOG buffers, more than that it
- * doesn't improve performance.
- *
- * Unconditionally keeping the number of CLOG buffers to 128 did not seem like
- * a good idea, because it would increase the minimum amount of shared memory
- * required to start, which could be a problem for people running very small
- * configurations.  The following formula seems to represent a reasonable
- * compromise: people with very low values for shared_buffers will get fewer
- * CLOG buffers as well, and everyone else will get 128.
+ * By default, we'll use 2MB of for every 1GB of shared buffers, up to the
+ * theoretical maximum useful value, but always at least 4 buffers.
  */
 Size
 CLOGShmemBuffers(void)
 {
-	return Min(128, Max(4, NBuffers / 512));
+	/* Use configured value if provided. */
+	if (xact_buffers > 0)
+		return Max(4, xact_buffers);
+	return Min(CLOG_MAX_ALLOWED_BUFFERS, Max(4, NBuffers / 512));
 }
 
 /*

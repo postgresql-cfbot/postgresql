@@ -83,6 +83,7 @@ GetTableAmRoutine(Oid amhandler)
 	Assert(routine->tuple_lock != NULL);
 
 	Assert(routine->relation_set_new_filenode != NULL);
+	Assert(routine->relation_reset_filenode != NULL);
 	Assert(routine->relation_nontransactional_truncate != NULL);
 	Assert(routine->relation_copy_data != NULL);
 	Assert(routine->relation_copy_for_cluster != NULL);

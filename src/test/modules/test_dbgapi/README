@@ -1,0 +1,7 @@
+test_dbgapi
+===========
+
+test_dbgapi is an example of usage of PLpgSQL debug API. This extension
+implements some very basic (and simple) code execution tracing. The
+implemented functionality is very limited, because main purpose is
+allow to run regress test of debug API.

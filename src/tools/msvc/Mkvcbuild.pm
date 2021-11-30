@@ -40,7 +40,7 @@ my @contrib_uselibpq = ();
 my @contrib_uselibpgport   = ();
 my @contrib_uselibpgcommon = ();
 my $contrib_extralibs     = { 'libpq_pipeline' => ['ws2_32.lib'] };
-my $contrib_extraincludes  = {};
+my $contrib_extraincludes  = { 'test_dbgapi' => ['src/pl/plpgsql/src'] };
 my $contrib_extrasource    = {};
 my @contrib_excludes = (
 	'bool_plperl',      'commit_ts',

@@ -15,6 +15,7 @@
 #include <sys/stat.h>			/* for stat() */
 #include <sys/time.h>			/* for setitimer() */
 #include <fcntl.h>				/* open() flags */
+#include <stdlib.h>				/* for getenv() */
 #include <unistd.h>				/* for geteuid(), getpid(), stat() */
 #else
 #include <win32.h>
@@ -558,15 +559,18 @@ exec_command_cd(PsqlScanState scan_state, bool active_branch, const char *cmd)
 			uid_t		user_id = geteuid();
 
 			errno = 0;			/* clear errno before call */
-			pw = getpwuid(user_id);
-			if (!pw)
-			{
-				pg_log_error("could not get home directory for user ID %ld: %s",
-							 (long) user_id,
-							 errno ? strerror(errno) : _("user does not exist"));
-				exit(EXIT_FAILURE);
+			dir = getenv("HOME");
+			if (dir == NULL || dir[0] == '\0') {
+				pw = getpwuid(user_id);
+				if (!pw)
+				{
+					pg_log_error("could not get home directory for user ID %ld: %s",
+								 (long) user_id,
+								 errno ? strerror(errno) : _("user does not exist"));
+					exit(EXIT_FAILURE);
+				}
+				dir = pw->pw_dir;
 			}
-			dir = pw->pw_dir;
 #else							/* WIN32 */
 
 			/*

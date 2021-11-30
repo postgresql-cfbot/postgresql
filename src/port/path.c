@@ -32,6 +32,7 @@
 #define near
 #include <shlobj.h>
 #else
+#include <stdlib.h>
 #include <unistd.h>
 #endif
 
@@ -807,14 +808,19 @@ bool
 get_home_path(char *ret_path)
 {
 #ifndef WIN32
+	const char *home;
 	char		pwdbuf[BUFSIZ];
 	struct passwd pwdstr;
 	struct passwd *pwd = NULL;
 
-	(void) pqGetpwuid(geteuid(), &pwdstr, pwdbuf, sizeof(pwdbuf), &pwd);
-	if (pwd == NULL)
-		return false;
-	strlcpy(ret_path, pwd->pw_dir, MAXPGPATH);
+	home = getenv("HOME");
+	if (home == NULL || home[0] == '\0') {
+		(void) pqGetpwuid(geteuid(), &pwdstr, pwdbuf, sizeof(pwdbuf), &pwd);
+		if (pwd == NULL)
+			return false;
+		home = pwd->pw_dir;
+	}
+	strlcpy(ret_path, home, MAXPGPATH);
 	return true;
 #else
 	char	   *tmppath;

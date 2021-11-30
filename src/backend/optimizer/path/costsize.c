@@ -1426,6 +1426,17 @@ cost_subqueryscan(SubqueryScanPath *path, PlannerInfo *root,
 	startup_cost += path->path.pathtarget->cost.startup;
 	run_cost += path->path.pathtarget->cost.per_tuple * path->path.rows;
 
+	/* Adjust costing for parallelism, if used. */
+	if (path->path.parallel_workers > 0)
+	{
+		double          parallel_divisor = get_parallel_divisor(&path->path);
+
+		path->path.rows = clamp_row_est(path->path.rows / parallel_divisor);
+
+		/* The CPU cost is divided among all the workers. */
+		run_cost /= parallel_divisor;
+	}
+
 	path->path.startup_cost += startup_cost;
 	path->path.total_cost += startup_cost + run_cost;
 }

@@ -1432,3 +1432,55 @@ where (x = 0) or (q1 >= q2 and q1 <= q2);
  4567890123456789 |  4567890123456789 | 1
 (6 rows)
 
+-- Test handling of appendrel with different types which disables the path flattening and
+-- forces a subquery node. for the subquery node ensure the rowcounts are correct.
+create function check_estimated_rows(text) returns table (estimated int)
+language plpgsql as
+$$
+declare
+    ln text;
+    tmp text[];
+    first_row bool := true;
+begin
+    for ln in
+        execute format('explain %s', $1)
+    loop
+        tmp := regexp_match(ln, 'rows=(\d*)');
+        return query select tmp[1]::int;
+    end loop;
+end;
+$$;
+set min_parallel_table_scan_size = 0;
+set parallel_setup_cost = 0;
+set parallel_tuple_cost = 0;
+set default_statistics_target = 1000;
+explain (costs off)
+select *, 0::int from tenk1 a
+union all
+select *, 1::bigint from tenk1 b;
+                   QUERY PLAN                   
+------------------------------------------------
+ Gather
+   Workers Planned: 2
+   ->  Parallel Append
+         ->  Subquery Scan on "*SELECT* 1"
+               ->  Parallel Seq Scan on tenk1 a
+         ->  Parallel Seq Scan on tenk1 b
+(6 rows)
+
+select check_estimated_rows('select *, 0::int from tenk1 a union all select *, 1::bigint from tenk1 b;');
+ check_estimated_rows 
+----------------------
+                19990
+                     
+                 8330
+                 4165
+                 4165
+                 4165
+(6 rows)
+
+reset parallel_setup_cost;
+reset parallel_tuple_cost;
+reset min_parallel_table_scan_size;
+reset default_statistics_target;
+drop function check_estimated_rows(text);

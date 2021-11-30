@@ -343,7 +343,8 @@
 #wal_retrieve_retry_interval = 5s	# time to wait before retrying to
 					# retrieve WAL after a failed attempt
 #recovery_min_apply_delay = 0		# minimum delay for applying changes during recovery
-
+#wal_receiver_start_condition = 'exhaust'#	'exhaust', 'consistency', or 'startup'
+					# (change requires restart)
 # - Subscribers -
 
 # These settings are ignored on a publisher.

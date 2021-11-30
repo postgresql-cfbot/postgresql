@@ -4607,6 +4607,39 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-wal-receiver-start-condition" xreflabel="wal_receiver_start_condition">
+      <term><varname>wal_receiver_start_condition</varname> (<type>enum</type>)
+      <indexterm>
+       <primary><varname>wal_receiver_start_condition</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies when the WAL receiver process will be started for a standby
+        server.
+        The allowed values of <varname>wal_receiver_start_condition</varname>
+        are <literal>startup</literal> (start immediately when the standby starts),
+        <literal>consistency</literal> (start only after reaching consistency), and
+        <literal>exhaust</literal> (start only after all WAL from the archive and
+        pg_wal has been replayed)
+         The default setting is<literal>exhaust</literal>.
+       </para>
+
+       <para>
+        Traditionally, the WAL receiver process is started only after the
+        standby server has exhausted all WAL from the WAL archive and the local
+        pg_wal directory. In some environments there can be a significant volume
+        of local WAL left to replay, along with a large volume of yet to be
+        streamed WAL. Such environments can benefit from setting
+        <varname>wal_receiver_start_condition</varname> to
+        <literal>startup</literal> or <literal>consistency</literal>. These
+        values will lead to the WAL receiver starting much earlier, and from
+        the end of locally available WAL. The network will be utilized to stream
+        WAL concurrently with replay, improving performance significantly.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-wal-receiver-status-interval" xreflabel="wal_receiver_status_interval">
       <term><varname>wal_receiver_status_interval</varname> (<type>integer</type>)
       <indexterm>

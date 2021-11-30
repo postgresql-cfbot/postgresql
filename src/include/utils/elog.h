@@ -216,6 +216,7 @@ extern int	errposition(int cursorpos);
 
 extern int	internalerrposition(int cursorpos);
 extern int	internalerrquery(const char *query);
+extern int	set_errquery(const char* query);
 
 extern int	err_generic_string(int field, const char *str);
 
@@ -395,7 +396,7 @@ typedef struct ErrorData
 	int			internalpos;	/* cursor index into internalquery */
 	char	   *internalquery;	/* text of internally-generated query */
 	int			saved_errno;	/* errno at entry */
-
+	char	   *query;			/* text query */
 	/* context containing associated non-constant strings */
 	struct MemoryContextData *assoc_context;
 } ErrorData;

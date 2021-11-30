@@ -2856,6 +2856,7 @@ _SPI_error_callback(void *arg)
 	}
 	else
 	{
+		set_errquery(query);
 		/* Use the parse mode to decide how to describe the query */
 		switch (carg->mode)
 		{

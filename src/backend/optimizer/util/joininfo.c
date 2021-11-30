@@ -130,6 +130,9 @@ remove_join_clause_from_rels(PlannerInfo *root,
 	{
 		RelOptInfo *rel = find_base_rel(root, cur_relid);
 
+		if (!list_member_ptr(rel->joininfo, restrictinfo))
+			continue;
+
 		/*
 		 * Remove the restrictinfo from the list.  Pointer comparison is
 		 * sufficient.

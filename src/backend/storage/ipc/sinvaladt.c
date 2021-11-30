@@ -231,7 +231,7 @@ CreateSharedInvalidationState(void)
 	shmInvalBuffer->maxMsgNum = 0;
 	shmInvalBuffer->nextThreshold = CLEANUP_MIN;
 	shmInvalBuffer->lastBackend = 0;
-	shmInvalBuffer->maxBackends = MaxBackends;
+	shmInvalBuffer->maxBackends = MaxBackends + 1;
 	SpinLockInit(&shmInvalBuffer->msgnumLock);
 
 	/* The buffer[] array is initially all unused, so we need not fill it */
@@ -260,6 +260,9 @@ SharedInvalBackendInit(bool sendOnly)
 	ProcState  *stateP = NULL;
 	SISeg	   *segP = shmInvalBuffer;
 
+	Assert(MyBackendId == InvalidBackendId ||
+		   MyBackendId <= segP->maxBackends);
+
 	/*
 	 * This can run in parallel with read operations, but not with write
 	 * operations, since SIInsertDataEntries relies on lastBackend to set
@@ -267,14 +270,22 @@ SharedInvalBackendInit(bool sendOnly)
 	 */
 	LWLockAcquire(SInvalWriteLock, LW_EXCLUSIVE);
 
-	/* Look for a free entry in the procState array */
-	for (index = 0; index < segP->lastBackend; index++)
+	if (MyBackendId == InvalidBackendId)
 	{
-		if (segP->procState[index].procPid == 0)	/* inactive slot? */
+		/* Look for a free entry in the procState array */
+		for (index = 0; index < segP->lastBackend; index++)
 		{
-			stateP = &segP->procState[index];
-			break;
+			if (segP->procState[index].procPid == 0)	/* inactive slot? */
+			{
+				stateP = &segP->procState[index];
+				break;
+			}
 		}
+	}
+	else
+	{
+		stateP = &segP->procState[MyBackendId - 1];
+		Assert(stateP->procPid == 0);
 	}
 
 	if (stateP == NULL)
@@ -298,6 +309,8 @@ SharedInvalBackendInit(bool sendOnly)
 		}
 	}
 
+	Assert(MyBackendId == InvalidBackendId ||
+		   MyBackendId == (stateP - &segP->procState[0]) + 1);
 	MyBackendId = (stateP - &segP->procState[0]) + 1;
 
 	/* Advertise assigned backend ID in MyProc */

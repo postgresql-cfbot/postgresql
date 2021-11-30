@@ -47,7 +47,8 @@
 
 static void reform_and_rewrite_tuple(HeapTuple tuple,
 									 Relation OldHeap, Relation NewHeap,
-									 Datum *values, bool *isnull, RewriteState rwstate);
+									 Datum *values, bool *isnull, bool islive,
+									 RewriteState rwstate);
 
 static bool SampleHeapTupleVisible(TableScanDesc scan, Buffer buffer,
 								   HeapTuple tuple,
@@ -782,6 +783,7 @@ heapam_relation_copy_for_cluster(Relation OldHeap, Relation NewHeap,
 		HeapTuple	tuple;
 		Buffer		buf;
 		bool		isdead;
+		bool		islive = false;
 
 		CHECK_FOR_INTERRUPTS();
 
@@ -848,6 +850,7 @@ heapam_relation_copy_for_cluster(Relation OldHeap, Relation NewHeap,
 			case HEAPTUPLE_LIVE:
 				/* Live or recently dead, must copy it */
 				isdead = false;
+				islive = true;
 				break;
 			case HEAPTUPLE_INSERT_IN_PROGRESS:
 
@@ -903,7 +906,7 @@ heapam_relation_copy_for_cluster(Relation OldHeap, Relation NewHeap,
 		*num_tuples += 1;
 		if (tuplesort != NULL)
 		{
-			tuplesort_putheaptuple(tuplesort, tuple);
+			tuplesort_putheaptuple(tuplesort, tuple, islive);
 
 			/*
 			 * In scan-and-sort mode, report increase in number of tuples
@@ -921,7 +924,7 @@ heapam_relation_copy_for_cluster(Relation OldHeap, Relation NewHeap,
 			int64		ct_val[2];
 
 			reform_and_rewrite_tuple(tuple, OldHeap, NewHeap,
-									 values, isnull, rwstate);
+									 values, isnull, islive, rwstate);
 
 			/*
 			 * In indexscan mode and also VACUUM FULL, report increase in
@@ -961,17 +964,18 @@ heapam_relation_copy_for_cluster(Relation OldHeap, Relation NewHeap,
 		for (;;)
 		{
 			HeapTuple	tuple;
+			bool		islive;
 
 			CHECK_FOR_INTERRUPTS();
 
-			tuple = tuplesort_getheaptuple(tuplesort, true);
+			tuple = tuplesort_getheaptuple(tuplesort, true, &islive);
 			if (tuple == NULL)
 				break;
 
 			n_tuples += 1;
 			reform_and_rewrite_tuple(tuple,
 									 OldHeap, NewHeap,
-									 values, isnull,
+									 values, isnull, islive,
 									 rwstate);
 			/* Report n_tuples */
 			pgstat_progress_update_param(PROGRESS_CLUSTER_HEAP_TUPLES_WRITTEN,
@@ -2458,7 +2462,8 @@ heapam_scan_sample_next_tuple(TableScanDesc scan, SampleScanState *scanstate,
 static void
 reform_and_rewrite_tuple(HeapTuple tuple,
 						 Relation OldHeap, Relation NewHeap,
-						 Datum *values, bool *isnull, RewriteState rwstate)
+						 Datum *values, bool *isnull, bool islive,
+						 RewriteState rwstate)
 {
 	TupleDesc	oldTupDesc = RelationGetDescr(OldHeap);
 	TupleDesc	newTupDesc = RelationGetDescr(NewHeap);
@@ -2477,7 +2482,7 @@ reform_and_rewrite_tuple(HeapTuple tuple,
 	copiedTuple = heap_form_tuple(newTupDesc, values, isnull);
 
 	/* The heap rewrite module does the rest */
-	rewrite_heap_tuple(rwstate, tuple, copiedTuple);
+	rewrite_heap_tuple(rwstate, islive, tuple, copiedTuple);
 
 	heap_freetuple(copiedTuple);
 }

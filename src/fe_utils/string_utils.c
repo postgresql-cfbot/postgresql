@@ -819,6 +819,8 @@ appendReloptionsArray(PQExpBuffer buffer, const char *reloptions,
  * altnamevar: NULL, or name of an alternative variable to match against name.
  * visibilityrule: clause to use if we want to restrict to visible objects
  * (for example, "pg_catalog.pg_table_is_visible(p.oid)").  Can be NULL.
+ * dotcnt: how many separators were parsed from the pattern, by reference.
+ * Can be NULL.
  *
  * Formatting note: the text already present in buf should end with a newline.
  * The appended text, if any, will end with one too.
@@ -827,16 +829,21 @@ bool
 processSQLNamePattern(PGconn *conn, PQExpBuffer buf, const char *pattern,
 					  bool have_where, bool force_escape,
 					  const char *schemavar, const char *namevar,
-					  const char *altnamevar, const char *visibilityrule)
+					  const char *altnamevar, const char *visibilityrule,
+					  PQExpBuffer db, int *dotcnt, bool *dbname_is_literal)
 {
 	PQExpBufferData schemabuf;
 	PQExpBufferData namebuf;
+	PQExpBuffer		schema = NULL;
+	PQExpBuffer		name = NULL;
 	bool		added_clause = false;
 
 #define WHEREAND() \
 	(appendPQExpBufferStr(buf, have_where ? "  AND " : "WHERE "), \
 	 have_where = true, added_clause = true)
 
+	Assert(dotcnt != NULL);
+	*dotcnt = 0;
 	if (pattern == NULL)
 	{
 		/* Default: select all visible objects */
@@ -848,16 +855,24 @@ processSQLNamePattern(PGconn *conn, PQExpBuffer buf, const char *pattern,
 		return added_clause;
 	}
 
-	initPQExpBuffer(&schemabuf);
-	initPQExpBuffer(&namebuf);
+	if (schemavar)
+	{
+		schema = &schemabuf;
+		initPQExpBuffer(schema);
+	}
+	if (namevar || altnamevar)
+	{
+		name = &namebuf;
+		initPQExpBuffer(name);
+	}
 
 	/*
 	 * Convert shell-style 'pattern' into the regular expression(s) we want to
 	 * execute.  Quoting/escaping into SQL literal format will be done below
 	 * using appendStringLiteralConn().
 	 */
-	patternToSQLRegex(PQclientEncoding(conn), NULL, &schemabuf, &namebuf,
-					  pattern, force_escape);
+	patternToSQLRegex(PQclientEncoding(conn), db, schema, name, pattern,
+					  force_escape, true, dotcnt, dbname_is_literal);
 
 	/*
 	 * Now decide what we need to emit.  We may run under a hostile
@@ -870,25 +885,25 @@ processSQLNamePattern(PGconn *conn, PQExpBuffer buf, const char *pattern,
 	 * is >= v12 then we need to force it through explicit COLLATE clauses,
 	 * otherwise the "C" collation attached to "name" catalog columns wins.
 	 */
-	if (namebuf.len > 2)
+	if (name && name->len > 2)
 	{
 		/* We have a name pattern, so constrain the namevar(s) */
 
 		/* Optimize away a "*" pattern */
-		if (strcmp(namebuf.data, "^(.*)$") != 0)
+		if (strcmp(name->data, "^(.*)$") != 0)
 		{
 			WHEREAND();
 			if (altnamevar)
 			{
 				appendPQExpBuffer(buf,
 								  "(%s OPERATOR(pg_catalog.~) ", namevar);
-				appendStringLiteralConn(buf, namebuf.data, conn);
+				appendStringLiteralConn(buf, name->data, conn);
 				if (PQserverVersion(conn) >= 120000)
 					appendPQExpBufferStr(buf, " COLLATE pg_catalog.default");
 				appendPQExpBuffer(buf,
 								  "\n        OR %s OPERATOR(pg_catalog.~) ",
 								  altnamevar);
-				appendStringLiteralConn(buf, namebuf.data, conn);
+				appendStringLiteralConn(buf, name->data, conn);
 				if (PQserverVersion(conn) >= 120000)
 					appendPQExpBufferStr(buf, " COLLATE pg_catalog.default");
 				appendPQExpBufferStr(buf, ")\n");
@@ -896,7 +911,7 @@ processSQLNamePattern(PGconn *conn, PQExpBuffer buf, const char *pattern,
 			else
 			{
 				appendPQExpBuffer(buf, "%s OPERATOR(pg_catalog.~) ", namevar);
-				appendStringLiteralConn(buf, namebuf.data, conn);
+				appendStringLiteralConn(buf, name->data, conn);
 				if (PQserverVersion(conn) >= 120000)
 					appendPQExpBufferStr(buf, " COLLATE pg_catalog.default");
 				appendPQExpBufferChar(buf, '\n');
@@ -904,16 +919,16 @@ processSQLNamePattern(PGconn *conn, PQExpBuffer buf, const char *pattern,
 		}
 	}
 
-	if (schemabuf.len > 2)
+	if (schema && schema->len > 2)
 	{
 		/* We have a schema pattern, so constrain the schemavar */
 
 		/* Optimize away a "*" pattern */
-		if (strcmp(schemabuf.data, "^(.*)$") != 0 && schemavar)
+		if (strcmp(schema->data, "^(.*)$") != 0 && schemavar)
 		{
 			WHEREAND();
 			appendPQExpBuffer(buf, "%s OPERATOR(pg_catalog.~) ", schemavar);
-			appendStringLiteralConn(buf, schemabuf.data, conn);
+			appendStringLiteralConn(buf, schema->data, conn);
 			if (PQserverVersion(conn) >= 120000)
 				appendPQExpBufferStr(buf, " COLLATE pg_catalog.default");
 			appendPQExpBufferChar(buf, '\n');
@@ -929,8 +944,10 @@ processSQLNamePattern(PGconn *conn, PQExpBuffer buf, const char *pattern,
 		}
 	}
 
-	termPQExpBuffer(&schemabuf);
-	termPQExpBuffer(&namebuf);
+	if (schema)
+		termPQExpBuffer(schema);
+	if (name)
+		termPQExpBuffer(name);
 
 	return added_clause;
 #undef WHEREAND
@@ -965,32 +982,40 @@ processSQLNamePattern(PGconn *conn, PQExpBuffer buf, const char *pattern,
  */
 void
 patternToSQLRegex(int encoding, PQExpBuffer dbnamebuf, PQExpBuffer schemabuf,
-				  PQExpBuffer namebuf, const char *pattern, bool force_escape)
+				  PQExpBuffer namebuf, const char *pattern, bool force_escape,
+				  bool want_literal_dbname, int *dotcnt,
+				  bool *dbname_is_literal)
 {
 	PQExpBufferData buf[3];
+	PQExpBufferData left_literal;
 	PQExpBuffer curbuf;
 	PQExpBuffer maxbuf;
 	int			i;
 	bool		inquotes;
+	bool		left,
+				left_is_literal;
 	const char *cp;
 
 	Assert(pattern != NULL);
-	Assert(namebuf != NULL);
+	Assert(dotcnt != NULL);
 
-	/* callers should never expect "dbname.relname" format */
-	Assert(dbnamebuf == NULL || schemabuf != NULL);
-
+	*dotcnt = 0;
 	inquotes = false;
 	cp = pattern;
 
+	maxbuf = &buf[0];
 	if (dbnamebuf != NULL)
-		maxbuf = &buf[2];
-	else if (schemabuf != NULL)
-		maxbuf = &buf[1];
-	else
-		maxbuf = &buf[0];
+		maxbuf++;
+	if (schemabuf != NULL)
+		maxbuf++;
+	if (namebuf != NULL)
+		maxbuf++;
 
 	curbuf = &buf[0];
+	left = true;
+	if (want_literal_dbname)
+		initPQExpBuffer(&left_literal);
+	left_is_literal = true;
 	initPQExpBuffer(curbuf);
 	appendPQExpBufferStr(curbuf, "^(");
 	while (*cp)
@@ -1003,6 +1028,8 @@ patternToSQLRegex(int encoding, PQExpBuffer dbnamebuf, PQExpBuffer schemabuf,
 			{
 				/* emit one quote, stay in inquotes mode */
 				appendPQExpBufferChar(curbuf, '"');
+				if (left && want_literal_dbname)
+					appendPQExpBufferChar(&left_literal, '"');
 				cp++;
 			}
 			else
@@ -1013,32 +1040,48 @@ patternToSQLRegex(int encoding, PQExpBuffer dbnamebuf, PQExpBuffer schemabuf,
 		{
 			appendPQExpBufferChar(curbuf,
 								  pg_tolower((unsigned char) ch));
+			if (left && want_literal_dbname)
+				appendPQExpBufferChar(&left_literal,
+									  pg_tolower((unsigned char) ch));
 			cp++;
 		}
 		else if (!inquotes && ch == '*')
 		{
 			appendPQExpBufferStr(curbuf, ".*");
+			if (left)
+			{
+				if (want_literal_dbname)
+					appendPQExpBufferChar(&left_literal, '*');
+				left_is_literal = false;
+			}
 			cp++;
 		}
 		else if (!inquotes && ch == '?')
 		{
 			appendPQExpBufferChar(curbuf, '.');
+			if (left)
+			{
+				if (want_literal_dbname)
+					appendPQExpBufferChar(&left_literal, '?');
+				left_is_literal = false;
+			}
 			cp++;
 		}
-
-		/*
-		 * When we find a dbname/schema/name separator, we treat it specially
-		 * only if the caller requested more patterns to be parsed than we
-		 * have already parsed from the pattern.  Otherwise, dot characters
-		 * are not special.
-		 */
-		else if (!inquotes && ch == '.' && curbuf < maxbuf)
+		else if (!inquotes && ch == '.')
 		{
-			appendPQExpBufferStr(curbuf, ")$");
-			curbuf++;
-			initPQExpBuffer(curbuf);
-			appendPQExpBufferStr(curbuf, "^(");
-			cp++;
+			left = false;
+			if (dotcnt)
+				(*dotcnt)++;
+			if (curbuf < maxbuf-1)
+			{
+				appendPQExpBufferStr(curbuf, ")$");
+				curbuf++;
+				initPQExpBuffer(curbuf);
+				appendPQExpBufferStr(curbuf, "^(");
+				cp++;
+			}
+			else
+				appendPQExpBufferChar(curbuf, *cp++);
 		}
 		else if (ch == '$')
 		{
@@ -1050,6 +1093,8 @@ patternToSQLRegex(int encoding, PQExpBuffer dbnamebuf, PQExpBuffer schemabuf,
 			 * having it possess its regexp meaning.
 			 */
 			appendPQExpBufferStr(curbuf, "\\$");
+			if (left && want_literal_dbname)
+				appendPQExpBufferChar(&left_literal, '$');
 			cp++;
 		}
 		else
@@ -1074,25 +1119,44 @@ patternToSQLRegex(int encoding, PQExpBuffer dbnamebuf, PQExpBuffer schemabuf,
 				appendPQExpBufferChar(curbuf, '\\');
 			i = PQmblenBounded(cp, encoding);
 			while (i--)
+			{
+				if (left)
+				{
+					if (want_literal_dbname)
+						appendPQExpBufferChar(&left_literal, *cp);
+					if (!inquotes && strchr("|+()[]{}.^\\", *cp))
+						left_is_literal = false;
+				}
 				appendPQExpBufferChar(curbuf, *cp++);
+			}
 		}
 	}
 	appendPQExpBufferStr(curbuf, ")$");
 
-	appendPQExpBufferStr(namebuf, curbuf->data);
-	termPQExpBuffer(curbuf);
-
-	if (curbuf > buf)
+	if (namebuf)
 	{
+		appendPQExpBufferStr(namebuf, curbuf->data);
+		termPQExpBuffer(curbuf);
 		curbuf--;
+	}
+
+	if (schemabuf && curbuf >= buf)
+	{
 		appendPQExpBufferStr(schemabuf, curbuf->data);
 		termPQExpBuffer(curbuf);
-
-		if (curbuf > buf)
-		{
-			curbuf--;
-			appendPQExpBufferStr(dbnamebuf, curbuf->data);
-			termPQExpBuffer(curbuf);
-		}
+		curbuf--;
 	}
+
+	if (dbnamebuf && curbuf >= buf)
+	{
+		if (want_literal_dbname)
+			appendPQExpBufferStr(dbnamebuf, left_literal.data);
+		else
+			appendPQExpBufferStr(dbnamebuf, curbuf->data);
+		termPQExpBuffer(curbuf);
+		if (dbname_is_literal)
+			*dbname_is_literal = left_is_literal;
+	}
+	else if (dbname_is_literal)
+		*dbname_is_literal = true;		/* treat empty dbname as literal */
 }

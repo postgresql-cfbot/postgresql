@@ -6,7 +6,7 @@ use warnings;
 
 use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
-use Test::More tests => 76;
+use Test::More tests => 82;
 
 # Test set-up
 my ($node, $port);
@@ -147,6 +147,39 @@ $node->command_checks_all(
 	[qr/pg_amcheck: error: no heap tables to check matching "\."/],
 	'checking table pattern "."');
 
+# Check that a multipart database name is rejected
+$node->command_checks_all(
+	[ 'pg_amcheck', '-d', 'localhost.postgres' ],
+	2,
+	[qr/^$/],
+	[
+		qr/pg_amcheck: error: improper qualified name \(too many dotted names\): localhost\.postgres/
+	],
+	'multipart database patterns are rejected'
+);
+
+# Check that a three-part schema name is rejected
+$node->command_checks_all(
+	[ 'pg_amcheck', '-s', 'localhost.postgres.pg_catalog' ],
+	2,
+	[qr/^$/],
+	[
+		qr/pg_amcheck: error: improper qualified name \(too many dotted names\): localhost\.postgres\.pg_catalog/
+	],
+	'three part schema patterns are rejected'
+);
+
+# Check that a four-part table name is rejected
+$node->command_checks_all(
+	[ 'pg_amcheck', '-t', 'localhost.postgres.pg_catalog.pg_class' ],
+	2,
+	[qr/^$/],
+	[
+		qr/pg_amcheck: error: improper relation name \(too many dotted names\): localhost\.postgres\.pg_catalog\.pg_class/
+	],
+	'four part table patterns are rejected'
+);
+
 #########################################
 # Test checking non-existent databases, schemas, tables, and indexes
 
@@ -165,9 +198,7 @@ $node->command_checks_all(
 		'-d',         'no*such*database',
 		'-r',         'none.none',
 		'-r',         'none.none.none',
-		'-r',         'this.is.a.really.long.dotted.string',
 		'-r',         'postgres.none.none',
-		'-r',         'postgres.long.dotted.string',
 		'-r',         'postgres.pg_catalog.none',
 		'-r',         'postgres.none.pg_class',
 		'-t',         'postgres.pg_catalog.pg_class',          # This exists
@@ -186,15 +217,12 @@ $node->command_checks_all(
 		qr/pg_amcheck: warning: no connectable databases to check matching "no\*such\*database"/,
 		qr/pg_amcheck: warning: no relations to check matching "none\.none"/,
 		qr/pg_amcheck: warning: no connectable databases to check matching "none\.none\.none"/,
-		qr/pg_amcheck: warning: no connectable databases to check matching "this\.is\.a\.really\.long\.dotted\.string"/,
 		qr/pg_amcheck: warning: no relations to check matching "postgres\.none\.none"/,
-		qr/pg_amcheck: warning: no relations to check matching "postgres\.long\.dotted\.string"/,
 		qr/pg_amcheck: warning: no relations to check matching "postgres\.pg_catalog\.none"/,
 		qr/pg_amcheck: warning: no relations to check matching "postgres\.none\.pg_class"/,
 		qr/pg_amcheck: warning: no connectable databases to check matching "no_such_database"/,
 		qr/pg_amcheck: warning: no connectable databases to check matching "no\*such\*database"/,
 		qr/pg_amcheck: warning: no connectable databases to check matching "none\.none\.none"/,
-		qr/pg_amcheck: warning: no connectable databases to check matching "this\.is\.a\.really\.long\.dotted\.string"/,
 	],
 	'many unmatched patterns and one matched pattern under --no-strict-names'
 );

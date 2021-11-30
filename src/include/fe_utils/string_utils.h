@@ -54,10 +54,14 @@ extern bool processSQLNamePattern(PGconn *conn, PQExpBuffer buf,
 								  const char *pattern,
 								  bool have_where, bool force_escape,
 								  const char *schemavar, const char *namevar,
-								  const char *altnamevar, const char *visibilityrule);
+								  const char *altnamevar, const char *visibilityrule,
+								  PQExpBuffer db, int *dotcnt,
+								  bool *dbname_is_literal);
 
 extern void patternToSQLRegex(int encoding, PQExpBuffer dbnamebuf,
 							  PQExpBuffer schemabuf, PQExpBuffer namebuf,
-							  const char *pattern, bool force_escape);
+							  const char *pattern, bool force_escape,
+							  bool want_literal_dbname, int *dotcnt,
+							  bool *dbname_is_literal);
 
 #endif							/* STRING_UTILS_H */

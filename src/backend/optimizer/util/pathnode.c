@@ -756,10 +756,10 @@ add_partial_path(RelOptInfo *parent_rel, Path *new_path)
 	CHECK_FOR_INTERRUPTS();
 
 	/* Path to be added must be parallel safe. */
-	Assert(new_path->parallel_safe);
+	Assert(new_path->parallel_safe || new_path->parallel_safe_ignoring_params);
 
 	/* Relation should be OK for parallelism, too. */
-	Assert(parent_rel->consider_parallel);
+	Assert(parent_rel->consider_parallel || parent_rel->consider_parallel_rechecking_params);
 
 	/*
 	 * As in add_path, throw out any paths which are dominated by the new
@@ -938,6 +938,7 @@ create_seqscan_path(PlannerInfo *root, RelOptInfo *rel,
 													 required_outer);
 	pathnode->parallel_aware = (parallel_workers > 0);
 	pathnode->parallel_safe = rel->consider_parallel;
+	pathnode->parallel_safe_ignoring_params = rel->consider_parallel_rechecking_params;
 	pathnode->parallel_workers = parallel_workers;
 	pathnode->pathkeys = NIL;	/* seqscan has unordered result */
 
@@ -1016,6 +1017,7 @@ create_index_path(PlannerInfo *root,
 														  required_outer);
 	pathnode->path.parallel_aware = false;
 	pathnode->path.parallel_safe = rel->consider_parallel;
+	pathnode->path.parallel_safe_ignoring_params = rel->consider_parallel_rechecking_params;
 	pathnode->path.parallel_workers = 0;
 	pathnode->path.pathkeys = pathkeys;
 
@@ -1866,7 +1868,7 @@ create_gather_merge_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
 	Cost		input_startup_cost = 0;
 	Cost		input_total_cost = 0;
 
-	Assert(subpath->parallel_safe);
+	Assert(subpath->parallel_safe || subpath->parallel_safe_ignoring_params);
 	Assert(pathkeys);
 
 	pathnode->path.pathtype = T_GatherMerge;
@@ -1954,7 +1956,7 @@ create_gather_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
 {
 	GatherPath *pathnode = makeNode(GatherPath);
 
-	Assert(subpath->parallel_safe);
+	Assert(subpath->parallel_safe || subpath->parallel_safe_ignoring_params);
 
 	pathnode->path.pathtype = T_Gather;
 	pathnode->path.parent = rel;
@@ -2001,6 +2003,8 @@ create_subqueryscan_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
 	pathnode->path.parallel_aware = false;
 	pathnode->path.parallel_safe = rel->consider_parallel &&
 		subpath->parallel_safe;
+	pathnode->path.parallel_safe_ignoring_params = rel->consider_parallel_rechecking_params &&
+		subpath->parallel_safe_ignoring_params;
 	pathnode->path.parallel_workers = subpath->parallel_workers;
 	pathnode->path.pathkeys = pathkeys;
 	pathnode->subpath = subpath;
@@ -2418,6 +2422,8 @@ create_nestloop_path(PlannerInfo *root,
 	NestPath   *pathnode = makeNode(NestPath);
 	Relids		inner_req_outer = PATH_REQ_OUTER(inner_path);
 
+	/* TODO: Assert lateral relids subset safety? */
+
 	/*
 	 * If the inner path is parameterized by the outer, we must drop any
 	 * restrict_clauses that are due to be moved into the inner path.  We have
@@ -2458,6 +2464,8 @@ create_nestloop_path(PlannerInfo *root,
 	pathnode->jpath.path.parallel_aware = false;
 	pathnode->jpath.path.parallel_safe = joinrel->consider_parallel &&
 		outer_path->parallel_safe && inner_path->parallel_safe;
+	pathnode->jpath.path.parallel_safe_ignoring_params = joinrel->consider_parallel_rechecking_params &&
+		outer_path->parallel_safe_ignoring_params && inner_path->parallel_safe_ignoring_params;
 	/* This is a foolish way to estimate parallel_workers, but for now... */
 	pathnode->jpath.path.parallel_workers = outer_path->parallel_workers;
 	pathnode->jpath.path.pathkeys = pathkeys;
@@ -2631,6 +2639,8 @@ create_projection_path(PlannerInfo *root,
 {
 	ProjectionPath *pathnode = makeNode(ProjectionPath);
 	PathTarget *oldtarget;
+	bool target_parallel_safe;
+	bool target_parallel_safe_ignoring_params = false;
 
 	/*
 	 * We mustn't put a ProjectionPath directly above another; it's useless
@@ -2654,9 +2664,12 @@ create_projection_path(PlannerInfo *root,
 	/* For now, assume we are above any joins, so no parameterization */
 	pathnode->path.param_info = NULL;
 	pathnode->path.parallel_aware = false;
+	target_parallel_safe = is_parallel_safe(root, (Node *) target->exprs,
+			&target_parallel_safe_ignoring_params);
 	pathnode->path.parallel_safe = rel->consider_parallel &&
-		subpath->parallel_safe &&
-		is_parallel_safe(root, (Node *) target->exprs);
+		subpath->parallel_safe && target_parallel_safe;
+	pathnode->path.parallel_safe_ignoring_params = rel->consider_parallel_rechecking_params &&
+		subpath->parallel_safe_ignoring_params && target_parallel_safe_ignoring_params;
 	pathnode->path.parallel_workers = subpath->parallel_workers;
 	/* Projection does not change the sort order */
 	pathnode->path.pathkeys = subpath->pathkeys;
@@ -2764,7 +2777,7 @@ apply_projection_to_path(PlannerInfo *root,
 	 * parallel-safe in the target expressions, then we can't.
 	 */
 	if ((IsA(path, GatherPath) || IsA(path, GatherMergePath)) &&
-		is_parallel_safe(root, (Node *) target->exprs))
+		is_parallel_safe(root, (Node *) target->exprs, NULL))
 	{
 		/*
 		 * We always use create_projection_path here, even if the subpath is
@@ -2798,7 +2811,7 @@ apply_projection_to_path(PlannerInfo *root,
 		}
 	}
 	else if (path->parallel_safe &&
-			 !is_parallel_safe(root, (Node *) target->exprs))
+			 !is_parallel_safe(root, (Node *) target->exprs, NULL))
 	{
 		/*
 		 * We're inserting a parallel-restricted target list into a path
@@ -2806,6 +2819,7 @@ apply_projection_to_path(PlannerInfo *root,
 		 * safe.
 		 */
 		path->parallel_safe = false;
+		path->parallel_safe_ignoring_params = false; /* TODO */
 	}
 
 	return path;
@@ -2838,7 +2852,7 @@ create_set_projection_path(PlannerInfo *root,
 	pathnode->path.parallel_aware = false;
 	pathnode->path.parallel_safe = rel->consider_parallel &&
 		subpath->parallel_safe &&
-		is_parallel_safe(root, (Node *) target->exprs);
+		is_parallel_safe(root, (Node *) target->exprs, NULL);
 	pathnode->path.parallel_workers = subpath->parallel_workers;
 	/* Projection does not change the sort order XXX? */
 	pathnode->path.pathkeys = subpath->pathkeys;
@@ -3115,6 +3129,8 @@ create_agg_path(PlannerInfo *root,
 	pathnode->path.parallel_aware = false;
 	pathnode->path.parallel_safe = rel->consider_parallel &&
 		subpath->parallel_safe;
+	pathnode->path.parallel_safe_ignoring_params = rel->consider_parallel_rechecking_params &&
+		subpath->parallel_safe_ignoring_params;
 	pathnode->path.parallel_workers = subpath->parallel_workers;
 	if (aggstrategy == AGG_SORTED)
 		pathnode->path.pathkeys = subpath->pathkeys;	/* preserves order */
@@ -3736,6 +3752,8 @@ create_limit_path(PlannerInfo *root, RelOptInfo *rel,
 	pathnode->path.parallel_aware = false;
 	pathnode->path.parallel_safe = rel->consider_parallel &&
 		subpath->parallel_safe;
+	pathnode->path.parallel_safe_ignoring_params = rel->consider_parallel_rechecking_params &&
+		subpath->parallel_safe_ignoring_params;
 	pathnode->path.parallel_workers = subpath->parallel_workers;
 	pathnode->path.rows = subpath->rows;
 	pathnode->path.startup_cost = subpath->startup_cost;

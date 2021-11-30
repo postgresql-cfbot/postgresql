@@ -16,6 +16,8 @@
 
 #include "nodes/pathnodes.h"
 
+extern PGDLLIMPORT bool enable_parallel_params_recheck;
+
 typedef struct
 {
 	int			numWindowFuncs; /* total number of WindowFuncs found */
@@ -33,7 +35,7 @@ extern double expression_returns_set_rows(PlannerInfo *root, Node *clause);
 extern bool contain_subplans(Node *clause);
 
 extern char max_parallel_hazard(Query *parse);
-extern bool is_parallel_safe(PlannerInfo *root, Node *node);
+extern bool is_parallel_safe(PlannerInfo *root, Node *node, bool *safe_ignoring_params);
 extern bool contain_nonstrict_functions(Node *clause);
 extern bool contain_exec_param(Node *clause, List *param_ids);
 extern bool contain_leaked_vars(Node *clause);

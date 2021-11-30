@@ -273,6 +273,7 @@ recurse_set_operations(Node *setOp, PlannerInfo *root,
 		 */
 		final_rel = fetch_upper_rel(subroot, UPPERREL_FINAL, NULL);
 		rel->consider_parallel = final_rel->consider_parallel;
+		rel->consider_parallel_rechecking_params = final_rel->consider_parallel_rechecking_params;
 
 		/*
 		 * For the moment, we consider only a single Path for the subquery.
@@ -409,6 +410,7 @@ recurse_set_operations(Node *setOp, PlannerInfo *root,
 				Assert(subpath->param_info == NULL);
 
 				/* avoid apply_projection_to_path, in case of multiple refs */
+				/* TODO: how to we know the target is parallel safe? */
 				path = (Path *) create_projection_path(root, subpath->parent,
 													   subpath, target);
 				lfirst(lc) = path;
@@ -616,6 +618,7 @@ generate_union_paths(SetOperationStmt *op, PlannerInfo *root,
 	result_rel = fetch_upper_rel(root, UPPERREL_SETOP, relids);
 	result_rel->reltarget = create_pathtarget(root, tlist);
 	result_rel->consider_parallel = consider_parallel;
+	/* consider_parallel_rechecking_params */
 
 	/*
 	 * Append the child results together.

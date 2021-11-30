@@ -897,7 +897,7 @@ find_computable_ec_member(PlannerInfo *root,
 		 * check this last because it's a rather expensive test.
 		 */
 		if (require_parallel_safe &&
-			!is_parallel_safe(root, (Node *) em->em_expr))
+			!is_parallel_safe(root, (Node *) em->em_expr, NULL))
 			continue;
 
 		return em;				/* found usable expression */
@@ -1012,7 +1012,7 @@ relation_can_be_sorted_early(PlannerInfo *root, RelOptInfo *rel,
 		 * check this last because it's a rather expensive test.
 		 */
 		if (require_parallel_safe &&
-			!is_parallel_safe(root, (Node *) em->em_expr))
+			!is_parallel_safe(root, (Node *) em->em_expr, NULL))
 			continue;
 
 		return true;

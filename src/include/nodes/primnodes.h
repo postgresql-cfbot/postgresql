@@ -764,6 +764,7 @@ typedef struct SubPlan
 								 * spec result is UNKNOWN; this allows much
 								 * simpler handling of null values */
 	bool		parallel_safe;	/* is the subplan parallel-safe? */
+	bool		parallel_safe_ignoring_params;	/* is the subplan parallel-safe when params are provided by the worker context? */
 	/* Note: parallel_safe does not consider contents of testexpr or args */
 	/* Information for passing params into and out of the subselect: */
 	/* setParam and parParam are lists of integers (param IDs) */

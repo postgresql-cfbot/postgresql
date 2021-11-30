@@ -1047,6 +1047,17 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 		/*
 		 * If appropriate, consider parallel index scan.  We don't allow
 		 * parallel index scan for bitmap index scans.
+		 *
+		 * XXX: Checking rel->consider_parallel_rechecking_params here resulted
+		 * in some odd behavior on:
+		 * select (select t.unique1 from tenk1 where tenk1.unique1 = t.unique1) from tenk1 t;
+		 * where the total cost on the chosen plan went *up* considering
+		 * the extra path.
+		 *
+		 * Current working theory is that this method is about base relation
+		 * scans, and we only want parameterized paths to be parallelized as
+		 * companions to existing parallel plans and so don't really care to
+		 * consider a separate parallel index scan here.
 		 */
 		if (index->amcanparallel &&
 			rel->consider_parallel && outer_relids == NULL &&
@@ -1100,6 +1111,7 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 			result = lappend(result, ipath);
 
 			/* If appropriate, consider parallel index scan */
+			/* XXX: As above here for rel->consider_parallel_rechecking_params? */
 			if (index->amcanparallel &&
 				rel->consider_parallel && outer_relids == NULL &&
 				scantype != ST_BITMAPSCAN)

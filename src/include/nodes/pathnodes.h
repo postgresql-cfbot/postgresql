@@ -687,6 +687,7 @@ typedef struct RelOptInfo
 	bool		consider_startup;	/* keep cheap-startup-cost paths? */
 	bool		consider_param_startup; /* ditto, for parameterized paths? */
 	bool		consider_parallel;	/* consider parallel paths? */
+	bool		consider_parallel_rechecking_params;	/* consider parallel paths? */
 
 	/* default result targetlist for Paths scanning this relation */
 	struct PathTarget *reltarget;	/* list of Vars/Exprs, cost, width */
@@ -1186,6 +1187,7 @@ typedef struct Path
 
 	bool		parallel_aware; /* engage parallel-aware logic? */
 	bool		parallel_safe;	/* OK to use as part of parallel plan? */
+	bool		parallel_safe_ignoring_params;	/* OK to use as part of parallel plan if worker context provides params? */
 	int			parallel_workers;	/* desired # of workers; 0 = not parallel */
 
 	/* estimated size/costs for path (see costsize.c for more info) */
@@ -2478,7 +2480,7 @@ typedef struct MinMaxAggInfo
  * for conflicting purposes.
  *
  * In addition, PARAM_EXEC slots are assigned for Params representing outputs
- * from subplans (values that are setParam items for those subplans).  These
+ * from subplans (values that are setParam items for those subplans). [TODO: is this true, or only for init plans?]  These
  * IDs need not be tracked via PlannerParamItems, since we do not need any
  * duplicate-elimination nor later processing of the represented expressions.
  * Instead, we just record the assignment of the slot number by appending to
@@ -2597,6 +2599,7 @@ typedef struct
 
 	/* Data which may differ across partitions. */
 	bool		target_parallel_safe;
+	bool		target_parallel_safe_ignoring_params;
 	Node	   *havingQual;
 	List	   *targetList;
 	PartitionwiseAggregateType patype;

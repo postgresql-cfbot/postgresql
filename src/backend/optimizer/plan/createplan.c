@@ -5279,6 +5279,7 @@ copy_generic_path_info(Plan *dest, Path *src)
 	dest->plan_width = src->pathtarget->width;
 	dest->parallel_aware = src->parallel_aware;
 	dest->parallel_safe = src->parallel_safe;
+	dest->parallel_safe_ignoring_params = src->parallel_safe_ignoring_params;
 }
 
 /*
@@ -5296,6 +5297,7 @@ copy_plan_costsize(Plan *dest, Plan *src)
 	dest->parallel_aware = false;
 	/* Assume the inserted node is parallel-safe, if child plan is. */
 	dest->parallel_safe = src->parallel_safe;
+	dest->parallel_safe_ignoring_params = src->parallel_safe_ignoring_params;
 }
 
 /*

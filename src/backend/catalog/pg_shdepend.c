@@ -65,6 +65,7 @@
 #include "storage/lmgr.h"
 #include "utils/acl.h"
 #include "utils/fmgroids.h"
+#include "utils/memutils.h"
 #include "utils/syscache.h"
 
 typedef enum
@@ -1497,6 +1498,7 @@ shdepReassignOwned(List *roleids, Oid newrole)
 		while ((tuple = systable_getnext(scan)) != NULL)
 		{
 			Form_pg_shdepend sdepForm = (Form_pg_shdepend) GETSTRUCT(tuple);
+			MemoryContext cxt, oldcxt;
 
 			/*
 			 * We only operate on shared objects and objects in the current
@@ -1509,6 +1511,11 @@ shdepReassignOwned(List *roleids, Oid newrole)
 			/* We leave non-owner dependencies alone */
 			if (sdepForm->deptype != SHARED_DEPENDENCY_OWNER)
 				continue;
+
+			cxt = AllocSetContextCreate(CurrentMemoryContext,
+										"shdepReassignOwned",
+										ALLOCSET_DEFAULT_SIZES);
+			oldcxt = MemoryContextSwitchTo(cxt);
 
 			/* Issue the appropriate ALTER OWNER call */
 			switch (sdepForm->classid)
@@ -1598,6 +1605,10 @@ shdepReassignOwned(List *roleids, Oid newrole)
 					elog(ERROR, "unexpected classid %u", sdepForm->classid);
 					break;
 			}
+
+			MemoryContextSwitchTo(oldcxt);
+			MemoryContextDelete(cxt);
+
 			/* Make sure the next iteration will see my changes */
 			CommandCounterIncrement();
 		}

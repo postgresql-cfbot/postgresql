@@ -61,11 +61,13 @@
 #undef near
 
 /* needed before sys/stat hacking below: */
+#if !defined(NO_STAT_OVERRIDE)
 #define fstat microsoft_native_fstat
 #define stat microsoft_native_stat
 #include <sys/stat.h>
 #undef fstat
 #undef stat
+#endif
 
 /* Must be here to avoid conflicting with prototype in windows.h */
 #define mkdir(a,b)	mkdir(a)
@@ -261,7 +263,7 @@ typedef int pid_t;
  * The struct stat is 32 bit in MSVC, so we redefine it as a copy of
  * struct __stat64.  This also fixes the struct size for MINGW builds.
  */
-struct stat						/* This should match struct __stat64 */
+struct _pgstat64					/* This should match struct __stat64 */
 {
 	_dev_t		st_dev;
 	_ino_t		st_ino;
@@ -276,12 +278,14 @@ struct stat						/* This should match struct __stat64 */
 	__time64_t	st_ctime;
 };
 
-extern int	_pgfstat64(int fileno, struct stat *buf);
-extern int	_pgstat64(const char *name, struct stat *buf);
+extern int	_pgfstat64(int fileno, struct _pgstat64 *buf);
+extern int	_pgstat64(const char *name, struct _pgstat64 *buf);
 
+#if !defined(NO_STAT_OVERRIDE)
 #define fstat(fileno, sb)	_pgfstat64(fileno, sb)
-#define stat(path, sb)		_pgstat64(path, sb)
+#define stat				_pgstat64
 #define lstat(path, sb)		_pgstat64(path, sb)
+#endif
 
 /* These macros are not provided by older MinGW, nor by MSVC */
 #ifndef S_IRUSR

@@ -18,6 +18,9 @@
 #include "catalog/pg_user_mapping.h"
 #include "commands/defrem.h"
 #include "commands/extension.h"
+#include "common/string.h"
+#include "lib/stringinfo.h"
+#include "libpq/libpq-be.h"
 #include "postgres_fdw.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
@@ -443,6 +446,80 @@ ExtractExtensionList(const char *extensionsString, bool warnOnMissing)
 
 	list_free(extlist);
 	return extensionOids;
+}
+
+/*
+ * parse postgres_fdw.application_name and set escaped string.
+ * This function is almost same as log_line_prefix(), but
+ * accepted escape sequence is different and this cannot understand
+ * padding integer.
+ *
+ * Note that argument buf must be initialized.
+ */
+void
+parse_pgfdw_appname(StringInfo buf, const char *name)
+{
+	const char *p;
+	Assert(MyProcPort != NULL);
+
+	for(p = name; *p != '\0'; p++)
+	{
+		if (*p != '%')
+		{
+			/* literal char, just copy */
+			appendStringInfoChar(buf, *p);
+			continue;
+		}
+
+		/* must be a '%', so skip to the next char */
+		p++;
+		if (*p == '\0')
+			break;				/* format error - ignore it */
+		else if (*p == '%')
+		{
+			/* string contains %% */
+			appendStringInfoChar(buf, '%');
+			continue;
+		}
+
+		/* process the option */
+		switch (*p)
+		{
+			case 'a':
+				{
+					const char *appname = application_name;
+
+					if (appname == NULL)
+						appname = "[unknown]";
+					appendStringInfoString(buf, appname);
+				}
+				break;
+			case 'u':
+				{
+					const char *username = MyProcPort->user_name;
+
+					if (username == NULL || *username == '\0')
+						username = "[unknown]";
+					appendStringInfoString(buf, username);
+				}
+				break;
+			case 'd':
+				{
+					const char *dbname = MyProcPort->database_name;
+
+					if (dbname == NULL || *dbname == '\0')
+						dbname =  "[unknown]";
+					appendStringInfoString(buf, dbname);
+				}
+				break;
+			case 'p':
+				appendStringInfo(buf, "%d", MyProcPid);
+				break;
+			default:
+				/* format error - ignore it */
+				break;
+		}
+	}
 }
 
 /*

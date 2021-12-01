@@ -158,6 +158,7 @@ extern int	ExtractConnectionOptions(List *defelems,
 									 const char **values);
 extern List *ExtractExtensionList(const char *extensionsString,
 								  bool warnOnMissing);
+extern void parse_pgfdw_appname(StringInfo buf, const char *name);
 extern char *pgfdw_application_name;
 
 /* in deparse.c */

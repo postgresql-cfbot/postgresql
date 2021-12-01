@@ -17,6 +17,7 @@
 #include "catalog/pg_user_mapping.h"
 #include "commands/defrem.h"
 #include "funcapi.h"
+#include "lib/stringinfo.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -348,7 +349,9 @@ connect_pg_server(ForeignServer *server, UserMapping *user)
 	{
 		const char **keywords;
 		const char **values;
+		StringInfo buf;
 		int			n;
+		int			i;
 
 		/*
 		 * Construct connection params from generic options of ForeignServer
@@ -360,6 +363,7 @@ connect_pg_server(ForeignServer *server, UserMapping *user)
 		n = list_length(server->options) + list_length(user->options) + 4;
 		keywords = (const char **) palloc(n * sizeof(char *));
 		values = (const char **) palloc(n * sizeof(char *));
+		buf = makeStringInfo();
 
 		n = 0;
 		n += ExtractConnectionOptions(server->options,
@@ -381,6 +385,37 @@ connect_pg_server(ForeignServer *server, UserMapping *user)
 			keywords[n] = "application_name";
 			values[n] = pgfdw_application_name;
 			n++;
+		}
+
+		/*
+		 * Search application_name and replace it if found.
+		 *
+		 * We search paramters from the end because the later
+		 * one have higher priority.  See also the above comment.
+		 */
+		for (i = n - 1; i >= 0; i--)
+		{
+			if (strcmp(keywords[i], "application_name") == 0)
+			{
+				parse_pgfdw_appname(buf, values[i]);
+
+				/* Use the string and break if it is valid */
+				if (strcmp(buf->data, "") != 0)
+				{
+					values[i] = buf->data;
+					break;
+				}
+
+				/*
+				 * The parsing result became an empty string,
+				 * and that means other "application_name" will be used
+				 * for connecting to the remote server.
+				 * So we must set values[i] to an empty string
+				 * and search the array again. buf is reset for reuse.
+				 */
+				values[i] = "";
+				resetStringInfo(buf);
+			}
 		}
 
 		/* Use "postgres_fdw" as fallback_application_name */
@@ -454,6 +489,8 @@ connect_pg_server(ForeignServer *server, UserMapping *user)
 
 		pfree(keywords);
 		pfree(values);
+		pfree(buf->data);
+		pfree(buf);
 	}
 	PG_CATCH();
 	{

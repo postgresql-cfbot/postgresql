@@ -1212,6 +1212,7 @@ sort_inner_and_outer(PlannerInfo *root,
 		save_jointype != JOIN_UNIQUE_OUTER &&
 		save_jointype != JOIN_FULL &&
 		save_jointype != JOIN_RIGHT &&
+		save_jointype != JOIN_RIGHT_ANTI &&
 		outerrel->partial_pathlist != NIL &&
 		bms_is_empty(joinrel->lateral_relids))
 	{
@@ -1621,6 +1622,7 @@ match_unsorted_outer(PlannerInfo *root,
 			useallclauses = false;
 			break;
 		case JOIN_RIGHT:
+		case JOIN_RIGHT_ANTI:
 		case JOIN_FULL:
 			nestjoinOK = false;
 			useallclauses = true;
@@ -1799,6 +1801,7 @@ match_unsorted_outer(PlannerInfo *root,
 		save_jointype != JOIN_UNIQUE_OUTER &&
 		save_jointype != JOIN_FULL &&
 		save_jointype != JOIN_RIGHT &&
+		save_jointype != JOIN_RIGHT_ANTI &&
 		outerrel->partial_pathlist != NIL &&
 		bms_is_empty(joinrel->lateral_relids))
 	{
@@ -2145,6 +2148,7 @@ hash_inner_and_outer(PlannerInfo *root,
 			save_jointype != JOIN_UNIQUE_OUTER &&
 			save_jointype != JOIN_FULL &&
 			save_jointype != JOIN_RIGHT &&
+			save_jointype != JOIN_RIGHT_ANTI &&
 			outerrel->partial_pathlist != NIL &&
 			bms_is_empty(joinrel->lateral_relids))
 		{
@@ -2307,6 +2311,7 @@ select_mergejoin_clauses(PlannerInfo *root,
 	switch (jointype)
 	{
 		case JOIN_RIGHT:
+		case JOIN_RIGHT_ANTI:
 		case JOIN_FULL:
 			*mergejoin_allowed = !have_nonmergeable_joinclause;
 			break;

@@ -202,6 +202,15 @@ PostgreSQL documentation
         full-page images) instead of individual records. Optionally
         generate statistics per-record instead of per-rmgr.
        </para>
+
+      <para>
+        If the <application>pg_waldump</application> is terminated or
+        interrupted with signal <systemitem>SIGINT</systemitem> while
+        calculating the statistics, the summary statistics computed as
+        of the termination will be displayed in non-quiet mode or without
+        <option>--quiet</option>.
+      </para>
+
       </listitem>
      </varlistentry>
 

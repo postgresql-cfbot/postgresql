@@ -13,6 +13,7 @@
 #include "postgres.h"
 
 #include <dirent.h>
+#include <signal.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -28,6 +29,7 @@
 static const char *progname;
 
 static int	WalSegSz;
+static volatile sig_atomic_t time_to_stop = false;
 
 typedef struct XLogDumpPrivate
 {
@@ -67,11 +69,21 @@ typedef struct Stats
 typedef struct XLogDumpStats
 {
 	uint64		count;
+	XLogRecPtr 	startptr;
+	XLogRecPtr 	endptr;
 	Stats		rmgr_stats[RM_NEXT_ID];
 	Stats		record_stats[RM_NEXT_ID][MAX_XLINFO_TYPES];
 } XLogDumpStats;
 
 #define fatal_error(...) do { pg_log_fatal(__VA_ARGS__); exit(EXIT_FAILURE); } while(0)
+
+#ifndef WIN32
+static void
+sigint_handler(int signum)
+{
+	time_to_stop = true;
+}
+#endif
 
 static void
 print_rmgr_list(void)
@@ -645,6 +657,9 @@ XLogDumpDisplayStats(XLogDumpConfig *config, XLogDumpStats *stats)
 	}
 	total_len = total_rec_len + total_fpi_len;
 
+	printf("Summary of the WAL statistics computed between LSN %X/%X and LSN %X/%X is:\n",
+		   LSN_FORMAT_ARGS(stats->startptr), LSN_FORMAT_ARGS(stats->endptr));
+
 	/*
 	 * 27 is strlen("Transaction/COMMIT_PREPARED"), 20 is strlen(2^64), 8 is
 	 * strlen("(100.00%)")
@@ -794,6 +809,10 @@ main(int argc, char **argv)
 	int			option;
 	int			optindex = 0;
 
+#ifndef WIN32
+	pqsignal(SIGINT, sigint_handler);
+#endif
+
 	pg_logging_init(argv[0]);
 	set_pglocale_pgservice(argv[0], PG_TEXTDOMAIN("pg_waldump"));
 	progname = get_progname(argv[0]);
@@ -832,6 +851,9 @@ main(int argc, char **argv)
 	config.filter_by_xid_enabled = false;
 	config.stats = false;
 	config.stats_per_record = false;
+
+	stats.startptr = InvalidXLogRecPtr;
+	stats.endptr = InvalidXLogRecPtr;
 
 	if (argc <= 1)
 	{
@@ -1084,8 +1106,14 @@ main(int argc, char **argv)
 			   LSN_FORMAT_ARGS(first_record),
 			   (uint32) (first_record - private.startptr));
 
+	if (config.stats == true && !config.quiet)
+		stats.startptr = first_record;
+
 	for (;;)
 	{
+		if (time_to_stop)
+			break;
+
 		/* try to read the next record */
 		record = XLogReadRecord(xlogreader_state, &errormsg);
 		if (!record)
@@ -1112,7 +1140,10 @@ main(int argc, char **argv)
 		if (!config.quiet)
 		{
 			if (config.stats == true)
+			{
 				XLogDumpCountRecord(&config, &stats, xlogreader_state);
+				stats.endptr = xlogreader_state->EndRecPtr;
+			}
 			else
 				XLogDumpDisplayRecord(&config, xlogreader_state);
 		}
@@ -1126,6 +1157,9 @@ main(int argc, char **argv)
 
 	if (config.stats == true && !config.quiet)
 		XLogDumpDisplayStats(&config, &stats);
+
+	if (time_to_stop)
+		return EXIT_FAILURE;
 
 	if (errormsg)
 		fatal_error("error in WAL record at %X/%X: %s",

@@ -19,10 +19,13 @@
 #include "catalog/objectaddress.h"
 #include "nodes/parsenodes.h"
 #include "storage/lock.h"
+#include "storage/smgr.h"
 #include "utils/relcache.h"
 
 struct AlterTableUtilityContext;	/* avoid including tcop/utility.h here */
 
+typedef void (*copy_relation_storage) (SMgrRelation src, SMgrRelation dst,
+									  ForkNumber forkNum, char relpersistence);
 
 extern ObjectAddress DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 									ObjectAddress *typaddress, const char *queryString);
@@ -42,6 +45,8 @@ extern void AlterTableInternal(Oid relid, List *cmds, bool recurse);
 
 extern Oid	AlterTableMoveAll(AlterTableMoveAllStmt *stmt);
 
+extern void RelationCopyAllFork(SMgrRelation src_smgr, SMgrRelation	dst_smgr,
+								char relpersistence, copy_relation_storage copy_storage);
 extern ObjectAddress AlterTableNamespace(AlterObjectSchemaStmt *stmt,
 										 Oid *oldschema);
 

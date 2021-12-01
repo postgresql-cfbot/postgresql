@@ -437,6 +437,18 @@ make standbycheck
    to allow the behavior of the standby to be tested.
   </para>
   </sect2>
+
+  <sect2>
+   <title>Running the Tests on <productname>Windows</productname></title>
+   
+  <para>
+   The regression tests can be run against an already installed and running
+   server or using a temporary installation within the build tree on
+   <productname>Windows</productname>. See <xref linkend="install-windows-regression-tests"/>
+   for more information.
+  </para>
+  </sect2>
+
   </sect1>
 
   <sect1 id="regress-evaluation">

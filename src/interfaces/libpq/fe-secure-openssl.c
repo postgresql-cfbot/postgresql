@@ -1245,11 +1245,37 @@ initialize_SSL(PGconn *conn)
 								  fnbuf);
 			return -1;
 		}
+
+		/*
+		* Refuse to load key files owned by users other than us or root and
+		* require no public access to the key file. If the file is owned by us,
+		* require mode 0600 or less. If owned by root, require 0640 or less to
+		* allow read access through our gid, or a supplementary gid that allows
+		* us to read system-wide certificates.
+		*
+		* Note that similar checks are performed in
+		* check_ssl_key_file_permissions() so any changes here may need to be
+		* made there as well.
+		*
+		* Ideally we would do similar checks on Windows but it is not clear how
+		* that would work since unix-style permissions may not be available. See
+		* also the data directory permissions checks in checkDataDir().
+		*/
 #ifndef WIN32
-		if (!S_ISREG(buf.st_mode) || buf.st_mode & (S_IRWXG | S_IRWXO))
+		if (buf.st_uid != geteuid() && buf.st_uid != 0)
 		{
 			appendPQExpBuffer(&conn->errorMessage,
-							  libpq_gettext("private key file \"%s\" has group or world access; permissions should be u=rw (0600) or less\n"),
+							  libpq_gettext("private key file \"%s\" must be owned by the current user or root\n"),
+							  fnbuf);
+			return -1;
+		}
+
+		if (!S_ISREG(buf.st_mode) ||
+			(buf.st_uid == geteuid() && buf.st_mode & (S_IRWXG | S_IRWXO)) ||
+			(buf.st_uid == 0 && buf.st_mode & (S_IWGRP | S_IXGRP | S_IRWXO)))
+		{
+			appendPQExpBuffer(&conn->errorMessage,
+							  libpq_gettext("private key file \"%s\" has group or world access; file must have permissions u=rw (0600) or less if owned by the current user, or permissions u=rw,g=r (0640) or less if owned by root.\n"),
 							  fnbuf);
 			return -1;
 		}

@@ -155,6 +155,9 @@ check_ssl_key_file_permissions(const char *ssl_key_file, bool isServerStart)
 	/*
 	 * Refuse to load key files owned by users other than us or root.
 	 *
+	 * Note that a similar check is performed in initialize_SSL() so any changes
+	 * here may need to be made there as well.
+	 *
 	 * XXX surely we can check this on Windows somehow, too.
 	 */
 #if !defined(WIN32) && !defined(__CYGWIN__)
@@ -173,6 +176,9 @@ check_ssl_key_file_permissions(const char *ssl_key_file, bool isServerStart)
 	 * require mode 0600 or less. If owned by root, require 0640 or less to
 	 * allow read access through our gid, or a supplementary gid that allows
 	 * to read system-wide certificates.
+	 *
+	 * Note that a similar check is performed in initialize_SSL() so any changes
+	 * here may need to be made there as well.
 	 *
 	 * XXX temporarily suppress check when on Windows, because there may not
 	 * be proper support for Unix-y file permissions.  Need to think of a

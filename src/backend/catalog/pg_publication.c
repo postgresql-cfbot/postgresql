@@ -50,8 +50,12 @@
  * error if not.
  */
 static void
-check_publication_add_relation(Relation targetrel)
+check_publication_add_relation(Relation targetrel, List *targetcols)
 {
+	bool		replidentfull = (targetrel->rd_rel->relreplident == REPLICA_IDENTITY_FULL);
+	Oid			relid = RelationGetRelid(targetrel);
+	Bitmapset  *idattrs;
+
 	/* Must be a regular or partitioned table */
 	if (RelationGetForm(targetrel)->relkind != RELKIND_RELATION &&
 		RelationGetForm(targetrel)->relkind != RELKIND_PARTITIONED_TABLE)
@@ -82,6 +86,36 @@ check_publication_add_relation(Relation targetrel)
 				 errmsg("cannot add relation \"%s\" to publication",
 						RelationGetRelationName(targetrel)),
 				 errdetail("This operation is not supported for unlogged tables.")));
+
+	/*
+	 * Cannot specify column filter when REPLICA IDENTITY IS FULL or if column
+	 * filter does not contain REPLICA IDENITY columns
+	 */
+	if (targetcols != NIL)
+	{
+		if (replidentfull)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("cannot add relation \"%s\" to publication",
+							RelationGetRelationName(targetrel)),
+					 errdetail("Cannot have column filter with REPLICA IDENTITY FULL")));
+		else
+		{
+			Bitmapset  *filtermap = NULL;
+
+			idattrs = RelationGetIndexAttrBitmap(targetrel, INDEX_ATTR_BITMAP_IDENTITY_KEY);
+
+			filtermap = get_table_columnset(relid, targetcols, filtermap);
+			if (!bms_is_subset(idattrs, filtermap))
+			{
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("cannot add relation \"%s\" to publication",
+								RelationGetRelationName(targetrel)),
+						 errdetail("Column filter must include REPLICA IDENTITY columns")));
+			}
+		}
+	}
 }
 
 /*
@@ -270,6 +304,8 @@ publication_add_relation(Oid pubid, PublicationRelInfo *targetrel,
 	ObjectAddress myself,
 				referenced;
 	List	   *relids = NIL;
+	ListCell   *lc;
+	List	   *target_cols = NIL;
 
 	rel = table_open(PublicationRelRelationId, RowExclusiveLock);
 
@@ -292,7 +328,14 @@ publication_add_relation(Oid pubid, PublicationRelInfo *targetrel,
 						RelationGetRelationName(targetrel->relation), pub->name)));
 	}
 
-	check_publication_add_relation(targetrel->relation);
+	foreach(lc, targetrel->columns)
+	{
+		char	   *colname;
+
+		colname = strVal(lfirst(lc));
+		target_cols = lappend(target_cols, colname);
+	}
+	check_publication_add_relation(targetrel->relation, target_cols);
 
 	/* Form a tuple. */
 	memset(values, 0, sizeof(values));
@@ -305,6 +348,8 @@ publication_add_relation(Oid pubid, PublicationRelInfo *targetrel,
 		ObjectIdGetDatum(pubid);
 	values[Anum_pg_publication_rel_prrelid - 1] =
 		ObjectIdGetDatum(relid);
+	values[Anum_pg_publication_rel_prattrs - 1] =
+		PointerGetDatum(strlist_to_textarray(target_cols));
 
 	tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
 
@@ -313,7 +358,16 @@ publication_add_relation(Oid pubid, PublicationRelInfo *targetrel,
 	heap_freetuple(tup);
 
 	ObjectAddressSet(myself, PublicationRelRelationId, prrelid);
+	foreach(lc, target_cols)
+	{
+		int			attnum;
 
+		attnum = get_attnum(relid, lfirst(lc));
+
+		/* Add dependency on the column */
+		ObjectAddressSubSet(referenced, RelationRelationId, relid, attnum);
+		recordDependencyOn(&myself, &referenced, DEPENDENCY_AUTO);
+	}
 	/* Add dependency on the publication */
 	ObjectAddressSet(referenced, PublicationRelationId, pubid);
 	recordDependencyOn(&myself, &referenced, DEPENDENCY_AUTO);

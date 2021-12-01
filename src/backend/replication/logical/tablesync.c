@@ -111,6 +111,7 @@
 #include "replication/origin.h"
 #include "storage/ipc.h"
 #include "storage/lmgr.h"
+#include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
@@ -695,19 +696,28 @@ fetch_remote_table_info(char *nspname, char *relname,
 						LogicalRepRelation *lrel)
 {
 	WalRcvExecResult *res;
+	WalRcvExecResult *res_pub;
 	StringInfoData cmd;
 	TupleTableSlot *slot;
-	Oid			tableRow[] = {OIDOID, CHAROID, CHAROID};
+	TupleTableSlot *slot_pub;
+	Oid			tableRow[] = {OIDOID, CHAROID, CHAROID, BOOLOID};
 	Oid			attrRow[] = {TEXTOID, OIDOID, BOOLOID};
+	Oid			pubRow[] = {TEXTARRAYOID};
 	bool		isnull;
-	int			natt;
+	int			natt,
+				i;
+	Datum	   *elems;
+	int			nelems;
+	List	   *pub_columns = NIL;
+	ListCell   *lc;
+	bool		am_partition = false;
 
 	lrel->nspname = nspname;
 	lrel->relname = relname;
 
 	/* First fetch Oid and replica identity. */
 	initStringInfo(&cmd);
-	appendStringInfo(&cmd, "SELECT c.oid, c.relreplident, c.relkind"
+	appendStringInfo(&cmd, "SELECT c.oid, c.relreplident, c.relkind, c.relispartition"
 					 "  FROM pg_catalog.pg_class c"
 					 "  INNER JOIN pg_catalog.pg_namespace n"
 					 "        ON (c.relnamespace = n.oid)"
@@ -737,6 +747,7 @@ fetch_remote_table_info(char *nspname, char *relname,
 	Assert(!isnull);
 	lrel->relkind = DatumGetChar(slot_getattr(slot, 3, &isnull));
 	Assert(!isnull);
+	am_partition = DatumGetChar(slot_getattr(slot, 4, &isnull));
 
 	ExecDropSingleTupleTableSlot(slot);
 	walrcv_clear_result(res);
@@ -774,11 +785,80 @@ fetch_remote_table_info(char *nspname, char *relname,
 
 	natt = 0;
 	slot = MakeSingleTupleTableSlot(res->tupledesc, &TTSOpsMinimalTuple);
+
+	/*
+	 * Now, fetch the values of publications' column filters For a partition,
+	 * use pg_inherit to find the parent, as the pg_publication_rel contains
+	 * only the topmost parent table entry in case the table is partitioned.
+	 * Run a recursive query to iterate through all the parents of the
+	 * partition and retreive the record for the parent that exists in
+	 * pg_publication_rel.
+	 */
+	resetStringInfo(&cmd);
+	if (!am_partition)
+		appendStringInfo(&cmd, "SELECT prattrs from pg_publication_rel"
+						 " WHERE prrelid = %u", lrel->remoteid);
+	else
+		appendStringInfo(&cmd, "WITH RECURSIVE t(inhparent) AS ( SELECT inhparent from pg_inherits where inhrelid = %u"
+						 " UNION SELECT pg.inhparent from pg_inherits pg, t where inhrelid = t.inhparent)"
+						 " SELECT prattrs from pg_publication_rel WHERE prrelid IN (SELECT inhparent from t)", lrel->remoteid);
+
+	res_pub = walrcv_exec(LogRepWorkerWalRcvConn, cmd.data,
+						  lengthof(pubRow), pubRow);
+
+	if (res_pub->status != WALRCV_OK_TUPLES)
+		ereport(ERROR,
+				(errcode(ERRCODE_CONNECTION_FAILURE),
+				 errmsg("could not fetch published columns info for table \"%s.%s\" from publisher: %s",
+						nspname, relname, res_pub->err)));
+	slot_pub = MakeSingleTupleTableSlot(res_pub->tupledesc, &TTSOpsMinimalTuple);
+
+	while (tuplestore_gettupleslot(res_pub->tuplestore, true, false, slot_pub))
+	{
+		deconstruct_array(DatumGetArrayTypePCopy(slot_getattr(slot_pub, 1, &isnull)),
+						  TEXTOID, -1, false, 'i',
+						  &elems, NULL, &nelems);
+		for (i = 0; i < nelems; i++)
+			pub_columns = lappend(pub_columns, TextDatumGetCString(elems[i]));
+		ExecClearTuple(slot_pub);
+	}
+	ExecDropSingleTupleTableSlot(slot_pub);
+	walrcv_clear_result(res_pub);
+
+	/*
+	 * Store the column names only if they are contained in column filter
+	 * LogicalRepRelation will only contain attributes corresponding to those
+	 * specficied in column filters.
+	 */
 	while (tuplestore_gettupleslot(res->tuplestore, true, false, slot))
 	{
-		lrel->attnames[natt] =
-			TextDatumGetCString(slot_getattr(slot, 1, &isnull));
+		char	   *rel_colname;
+		bool		found = false;
+
+		rel_colname = TextDatumGetCString(slot_getattr(slot, 1, &isnull));
 		Assert(!isnull);
+		if (pub_columns != NIL)
+		{
+			foreach(lc, pub_columns)
+			{
+				char	   *pub_colname = lfirst(lc);
+
+				if (!strcmp(pub_colname, rel_colname))
+				{
+					found = true;
+					lrel->attnames[natt] = rel_colname;
+					break;
+				}
+			}
+		}
+		else
+		{
+			found = true;
+			lrel->attnames[natt] = rel_colname;
+		}
+		if (!found)
+			continue;
+
 		lrel->atttyps[natt] = DatumGetObjectId(slot_getattr(slot, 2, &isnull));
 		Assert(!isnull);
 		if (DatumGetBool(slot_getattr(slot, 3, &isnull)))
@@ -829,8 +909,17 @@ copy_table(Relation rel)
 	/* Start copy on the publisher. */
 	initStringInfo(&cmd);
 	if (lrel.relkind == RELKIND_RELATION)
-		appendStringInfo(&cmd, "COPY %s TO STDOUT",
+	{
+		appendStringInfo(&cmd, "COPY %s (",
 						 quote_qualified_identifier(lrel.nspname, lrel.relname));
+		for (int i = 0; i < lrel.natts; i++)
+		{
+			appendStringInfoString(&cmd, quote_identifier(lrel.attnames[i]));
+			if (i < lrel.natts - 1)
+				appendStringInfoString(&cmd, ", ");
+		}
+		appendStringInfo(&cmd, ") TO STDOUT");
+	}
 	else
 	{
 		/*

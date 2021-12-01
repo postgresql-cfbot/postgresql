@@ -21,12 +21,14 @@
 #include "postgres.h"
 
 #include "access/relation.h"
+#include "access/sysattr.h"
 #include "access/xact.h"
 #include "catalog/namespace.h"
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "storage/lmgr.h"
 #include "utils/inval.h"
+#include "utils/lsyscache.h"
 #include "utils/syscache.h"
 
 
@@ -214,4 +216,24 @@ relation_close(Relation relation, LOCKMODE lockmode)
 
 	if (lockmode != NoLock)
 		UnlockRelationId(&relid, lockmode);
+}
+
+/*
+ * Return a bitmapset of attributes given the list of column names
+ */
+Bitmapset *
+get_table_columnset(Oid relid, List *columns, Bitmapset *att_map)
+{
+	ListCell   *cell;
+
+	foreach(cell, columns)
+	{
+		const char *attname = lfirst(cell);
+		int			attnum = get_attnum(relid, attname);
+
+		if (!bms_is_member(attnum - FirstLowInvalidHeapAttributeNumber, att_map))
+			att_map = bms_add_member(att_map,
+									 attnum - FirstLowInvalidHeapAttributeNumber);
+	}
+	return att_map;
 }

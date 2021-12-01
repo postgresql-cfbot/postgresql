@@ -681,5 +681,6 @@ RelationGetSmgr(Relation rel)
 /* routines in utils/cache/relcache.c */
 extern void RelationIncrementReferenceCount(Relation rel);
 extern void RelationDecrementReferenceCount(Relation rel);
+extern Bitmapset *get_table_columnset(Oid relid, List *columns, Bitmapset *att_map);
 
 #endif							/* REL_H */

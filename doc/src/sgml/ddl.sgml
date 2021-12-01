@@ -1360,6 +1360,8 @@ ALTER TABLE products ADD COLUMN description text;
      is executed. Instead, the default value will be returned the next time
      the row is accessed, and applied when the table is rewritten, making
      the <command>ALTER TABLE</command> very fast even on large tables.
+     Additionally adding a column with a constant default value avoids a
+     a table scan to verify no <literal>NULL</literal> values are present.
     </para>
 
     <para>

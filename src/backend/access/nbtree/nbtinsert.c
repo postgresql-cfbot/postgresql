@@ -18,6 +18,7 @@
 #include "access/nbtree.h"
 #include "access/nbtxlog.h"
 #include "access/transam.h"
+#include "access/walprohibit.h"
 #include "access/xloginsert.h"
 #include "common/pg_prng.h"
 #include "lib/qunique.h"
@@ -1241,6 +1242,7 @@ _bt_insertonpg(Relation rel,
 		Page		metapg = NULL;
 		BTMetaPageData *metad = NULL;
 		BlockNumber blockcache;
+		bool		needwal = RelationNeedsWAL(rel);
 
 		/*
 		 * If we are doing this insert because we split a page that was the
@@ -1265,6 +1267,9 @@ _bt_insertonpg(Relation rel,
 				metabuf = InvalidBuffer;
 			}
 		}
+
+		if (needwal)
+			CheckWALPermitted();
 
 		/* Do the update.  No ereport(ERROR) until changes are logged */
 		START_CRIT_SECTION();
@@ -1304,7 +1309,7 @@ _bt_insertonpg(Relation rel,
 		}
 
 		/* XLOG stuff */
-		if (RelationNeedsWAL(rel))
+		if (needwal)
 		{
 			xl_btree_insert xlrec;
 			xl_btree_metadata xlmeta;
@@ -1489,6 +1494,7 @@ _bt_split(Relation rel, BTScanInsert itup_key, Buffer buf, Buffer cbuf,
 	bool		newitemonleft,
 				isleaf,
 				isrightmost;
+	bool		needwal;
 
 	/*
 	 * origpage is the original page to be split.  leftpage is a temporary
@@ -1916,13 +1922,18 @@ _bt_split(Relation rel, BTScanInsert itup_key, Buffer buf, Buffer cbuf,
 			ropaque->btpo_flags |= BTP_SPLIT_END;
 	}
 
+	needwal = RelationNeedsWAL(rel);
+	if (needwal)
+		CheckWALPermitted();
+
 	/*
 	 * Right sibling is locked, new siblings are prepared, but original page
 	 * is not updated yet.
 	 *
 	 * NO EREPORT(ERROR) till right sibling is updated.  We can get away with
 	 * not starting the critical section till here because we haven't been
-	 * scribbling on the original page yet; see comments above.
+	 * scribbling on the original page yet; see the comments above for grabbing
+	 * the right sibling.
 	 */
 	START_CRIT_SECTION();
 
@@ -1959,7 +1970,7 @@ _bt_split(Relation rel, BTScanInsert itup_key, Buffer buf, Buffer cbuf,
 	}
 
 	/* XLOG stuff */
-	if (RelationNeedsWAL(rel))
+	if (needwal)
 	{
 		xl_btree_split xlrec;
 		uint8		xlinfo;
@@ -2447,6 +2458,7 @@ _bt_newroot(Relation rel, Buffer lbuf, Buffer rbuf)
 	Buffer		metabuf;
 	Page		metapg;
 	BTMetaPageData *metad;
+	bool		needwal;
 
 	lbkno = BufferGetBlockNumber(lbuf);
 	rbkno = BufferGetBlockNumber(rbuf);
@@ -2483,6 +2495,10 @@ _bt_newroot(Relation rel, Buffer lbuf, Buffer rbuf)
 	item = (IndexTuple) PageGetItem(lpage, itemid);
 	right_item = CopyIndexTuple(item);
 	BTreeTupleSetDownLink(right_item, rbkno);
+
+	needwal = RelationNeedsWAL(rel);
+	if (needwal)
+		CheckWALPermitted();
 
 	/* NO EREPORT(ERROR) from here till newroot op is logged */
 	START_CRIT_SECTION();
@@ -2541,7 +2557,7 @@ _bt_newroot(Relation rel, Buffer lbuf, Buffer rbuf)
 	MarkBufferDirty(metabuf);
 
 	/* XLOG stuff */
-	if (RelationNeedsWAL(rel))
+	if (needwal)
 	{
 		xl_btree_newroot xlrec;
 		XLogRecPtr	recptr;

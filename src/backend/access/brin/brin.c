@@ -24,6 +24,7 @@
 #include "access/relscan.h"
 #include "access/table.h"
 #include "access/tableam.h"
+#include "access/walprohibit.h"
 #include "access/xloginsert.h"
 #include "catalog/index.h"
 #include "catalog/pg_am.h"
@@ -900,6 +901,9 @@ brinbuildempty(Relation index)
 	metabuf =
 		ReadBufferExtended(index, INIT_FORKNUM, P_NEW, RBM_NORMAL, NULL);
 	LockBuffer(metabuf, BUFFER_LOCK_EXCLUSIVE);
+
+	/* Index building transactions will always have a valid XID */
+	AssertWALPermittedHaveXID();
 
 	/* Initialize and xlog metabuffer. */
 	START_CRIT_SECTION();

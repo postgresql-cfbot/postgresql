@@ -17,6 +17,7 @@
 #include "access/commit_ts.h"
 #include "access/subtrans.h"
 #include "access/transam.h"
+#include "access/walprohibit.h"
 #include "access/xact.h"
 #include "access/xlogutils.h"
 #include "commands/dbcommands.h"
@@ -74,6 +75,9 @@ GetNewTransactionId(bool isSubXact)
 	/* safety check, we should never get this far in a HS standby */
 	if (RecoveryInProgress())
 		elog(ERROR, "cannot assign TransactionIds during recovery");
+
+	/* do not assign transaction id when WAL is prohibited */
+	CheckWALPermitted();
 
 	LWLockAcquire(XidGenLock, LW_EXCLUSIVE);
 

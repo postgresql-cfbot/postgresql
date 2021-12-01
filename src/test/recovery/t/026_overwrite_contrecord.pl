@@ -65,10 +65,11 @@ my $endfile = $node->safe_psql('postgres',
 	'SELECT pg_walfile_name(pg_current_wal_insert_lsn())');
 ok($initfile ne $endfile, "$initfile differs from $endfile");
 
-# Now stop abruptly, to avoid a stop checkpoint.  We can remove the tail file
-# afterwards, and on startup the large message should be overwritten with new
-# contents
-$node->stop('immediate');
+# Change system to wal prohibited that will skip shutdown checkpoint.  We can
+# remove the tail file afterwards, and on startup the large message should be
+# overwritten with new contents
+$node->safe_psql('postgres', qq{SELECT pg_prohibit_wal(true)});
+$node->stop;
 
 unlink $node->basedir . "/pgdata/pg_wal/$endfile"
   or die "could not unlink " . $node->basedir . "/pgdata/pg_wal/$endfile: $!";
@@ -81,6 +82,8 @@ $node_standby->init_from_backup($node, 'backup', has_streaming => 1);
 $node_standby->start;
 $node->start;
 
+# Change system to wal permitted now.
+$node->safe_psql('postgres', qq{SELECT pg_prohibit_wal(false)});
 $node->safe_psql('postgres',
 	qq{create table foo (a text); insert into foo values ('hello')});
 $node->safe_psql('postgres',

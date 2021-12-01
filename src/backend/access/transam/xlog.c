@@ -31,6 +31,7 @@
 #include "access/timeline.h"
 #include "access/transam.h"
 #include "access/twophase.h"
+#include "access/walprohibit.h"
 #include "access/xact.h"
 #include "access/xlog_internal.h"
 #include "access/xlogarchive.h"
@@ -237,9 +238,10 @@ static bool LocalPromoteIsTriggered = false;
  *		0: unconditionally not allowed to insert XLOG
  *		-1: must check RecoveryInProgress(); disallow until it is false
  * Most processes start with -1 and transition to 1 after seeing that recovery
- * is not in progress.  But we can also force the value for special cases.
- * The coding in XLogInsertAllowed() depends on the first two of these states
- * being numerically the same as bool true and false.
+ * is not in progress or the server state is not a WAL prohibited state.  But
+ * we can also force the value for special cases.  The coding in
+ * XLogInsertAllowed() depends on the first two of these states being
+ * numerically the same as bool true and false.
  */
 static int	LocalXLogInsertAllowed = -1;
 
@@ -661,6 +663,13 @@ typedef struct XLogCtlData
 	bool		SharedPromoteIsTriggered;
 
 	/*
+	 * SharedArchiveRecoveryRequested exports the value of the
+	 * ArchiveRecoveryRequested flag to be share which is otherwise valid only
+	 * in the startup process.
+	 */
+	bool		SharedArchiveRecoveryRequested;
+
+	/*
 	 * WalWriterSleeping indicates whether the WAL writer is currently in
 	 * low-power mode (and hence should be nudged if an async commit occurs).
 	 * Protected by info_lck.
@@ -710,6 +719,21 @@ typedef struct XLogCtlData
 	TimestampTz recoveryLastXTime;
 
 	/*
+	 * SharedAbortedRecPtr exports abortedRecPtr to be shared with another
+	 * process to write OVERWRITE_CONTRECORD message, if WAL writes are not
+	 * permitted in the current process which reads that.
+	 */
+	XLogRecPtr	SharedAbortedRecPtr;
+
+	/*
+	 * Determines an endpoint that we consider a valid portion of WAL when
+	 * server startup.  It is invalid during recovery and does not change once
+	 * set.
+	 */
+	XLogRecPtr	endOfLog;
+	TimeLineID	endOfLogTLI;
+
+	/*
 	 * timestamp of when we started replaying the current chunk of WAL data,
 	 * only relevant for replication or archive recovery
 	 */
@@ -723,6 +747,12 @@ typedef struct XLogCtlData
 	 * XLOG_FPW_CHANGE record that instructs full_page_writes is disabled.
 	 */
 	XLogRecPtr	lastFpwDisableRecPtr;
+
+	/*
+	 * SharedXLogAllowWritesState indicates the state of the last recovery
+	 * checkpoint and required wal write to start the normal server.
+	 */
+	XLogAcceptWritesState SharedXLogAllowWritesState;
 
 	slock_t		info_lck;		/* locks shared variables shown above */
 } XLogCtlData;
@@ -882,9 +912,7 @@ static void readRecoverySignalFile(void);
 static void validateRecoveryParameters(void);
 static void exitArchiveRecovery(TimeLineID endTLI, XLogRecPtr endOfLog,
 								TimeLineID newTLI);
-static void CleanupAfterArchiveRecovery(TimeLineID EndOfLogTLI,
-										XLogRecPtr EndOfLog,
-										TimeLineID newTLI);
+static void CleanupAfterArchiveRecovery(void);
 static bool recoveryStopsBefore(XLogReaderState *record);
 static bool recoveryStopsAfter(XLogReaderState *record);
 static char *getRecoveryStopReason(void);
@@ -939,6 +967,7 @@ static XLogRecord *ReadRecord(XLogReaderState *xlogreader,
 							  int emode, bool fetching_ckpt,
 							  TimeLineID replayTLI);
 static void CheckRecoveryConsistency(void);
+static bool XLogAcceptWrites(void);
 static bool PerformRecoveryXLogAction(void);
 static XLogRecord *ReadCheckpointRecord(XLogReaderState *xlogreader,
 										XLogRecPtr RecPtr, int whichChkpt, bool report,
@@ -1040,7 +1069,7 @@ XLogInsertRecord(XLogRecData *rdata,
 
 	/* cross-check on whether we should be here or not */
 	if (!XLogInsertAllowed())
-		elog(ERROR, "cannot make new WAL entries during recovery");
+		elog(ERROR, "cannot make new WAL entries now");
 
 	/*
 	 * Given that we're not in recovery, InsertTimeLineID is set and can't
@@ -2920,9 +2949,11 @@ XLogFlush(XLogRecPtr record)
 	 * trying to flush the WAL, we should update minRecoveryPoint instead. We
 	 * test XLogInsertAllowed(), not InRecovery, because we need checkpointer
 	 * to act this way too, and because when it tries to write the
-	 * end-of-recovery checkpoint, it should indeed flush.
+	 * end-of-recovery checkpoint, it should indeed flush. Also, WAL prohibit
+	 * state should not restrict WAL flushing. Otherwise, the dirty buffer
+	 * cannot be evicted until WAL has been flushed up to the buffer's LSN.
 	 */
-	if (!XLogInsertAllowed())
+	if (!XLogInsertAllowed() && !IsWALProhibited())
 	{
 		UpdateMinRecoveryPoint(record, false);
 		return;
@@ -5043,6 +5074,16 @@ UpdateControlFile(void)
 	update_controlfile(DataDir, ControlFile, true);
 }
 
+/* Set ControlFile's WAL prohibit flag */
+	void
+SetControlFileWALProhibitFlag(bool walProhibited)
+{
+	LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
+	ControlFile->wal_prohibited = walProhibited;
+	UpdateControlFile();
+	LWLockRelease(ControlFileLock);
+}
+
 /*
  * Returns the unique system identifier from control file.
  */
@@ -5319,6 +5360,7 @@ XLOGShmemInit(void)
 	XLogCtl->InstallXLogFileSegmentActive = false;
 	XLogCtl->SharedPromoteIsTriggered = false;
 	XLogCtl->WalWriterSleeping = false;
+	XLogCtl->SharedXLogAllowWritesState = XLOG_ACCEPT_WRITES_PENDING;
 
 	SpinLockInit(&XLogCtl->Insert.insertpos_lck);
 	SpinLockInit(&XLogCtl->info_lck);
@@ -5597,6 +5639,11 @@ readRecoverySignalFile(void)
 		ereport(FATAL,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("standby mode is not supported by single-user servers")));
+
+	/*
+	 * Remember archive recovery request in shared memory state.
+	 */
+	XLogCtl->SharedArchiveRecoveryRequested = ArchiveRecoveryRequested;
 }
 
 static void
@@ -5787,9 +5834,17 @@ exitArchiveRecovery(TimeLineID endTLI, XLogRecPtr endOfLog, TimeLineID newTLI)
  * Perform cleanup actions at the conclusion of archive recovery.
  */
 static void
-CleanupAfterArchiveRecovery(TimeLineID EndOfLogTLI, XLogRecPtr EndOfLog,
-							TimeLineID newTLI)
+CleanupAfterArchiveRecovery(void)
 {
+	/*
+	 * Use volatile pointer to make sure we make a fresh read of the
+	 * shared variable.
+	 */
+	volatile XLogCtlData *xlogctl = XLogCtl;
+
+	XLogRecPtr	EndOfLog = xlogctl->endOfLog;
+	TimeLineID	EndOfLogTLI = xlogctl->endOfLogTLI;
+
 	/*
 	 * Execute the recovery_end_command, if any.
 	 */
@@ -5807,7 +5862,7 @@ CleanupAfterArchiveRecovery(TimeLineID EndOfLogTLI, XLogRecPtr EndOfLog,
 	 * files containing garbage. In any case, they are not part of the new
 	 * timeline's history so we don't need them.
 	 */
-	RemoveNonParentXlogFiles(EndOfLog, newTLI);
+	RemoveNonParentXlogFiles(EndOfLog, xlogctl->InsertTimeLineID);
 
 	/*
 	 * If the switch happened in the middle of a segment, what to do with the
@@ -6471,6 +6526,15 @@ SetLatestXTime(TimestampTz xtime)
 }
 
 /*
+ * Fetch latest state of allow WAL writes.
+ */
+XLogAcceptWritesState
+GetXLogWriteAllowedState(void)
+{
+	return ((volatile XLogCtlData *) XLogCtl)->SharedXLogAllowWritesState;
+}
+
+/*
  * Fetch timestamp of latest processed commit/abort record.
  */
 TimestampTz
@@ -6842,12 +6906,28 @@ StartupXLOG(void)
 					(errmsg("starting archive recovery")));
 	}
 
-	/*
-	 * Take ownership of the wakeup latch if we're going to sleep during
-	 * recovery.
-	 */
 	if (ArchiveRecoveryRequested)
+	{
+		/*
+		 * Take ownership of the wakeup latch if we're going to sleep during
+		 * recovery.
+		 */
 		OwnLatch(&XLogCtl->recoveryWakeupLatch);
+
+		/*
+		 * Since archive recovery is requested, we cannot be in a wal prohibited
+		 * state.
+		 */
+		if (ControlFile->wal_prohibited)
+		{
+			/* No need to hold ControlFileLock yet, we aren't up far enough */
+			ControlFile->wal_prohibited = false;
+			UpdateControlFile();
+
+			ereport(LOG,
+					(errmsg("clearing WAL prohibition because the system is in archive recovery")));
+		}
+	}
 
 	/* Set up XLOG reader facility */
 	MemSet(&private, 0, sizeof(XLogPageReadPrivate));
@@ -8036,6 +8116,16 @@ StartupXLOG(void)
 	{
 		Assert(!XLogRecPtrIsInvalid(abortedRecPtr));
 		EndOfLog = missingContrecPtr;
+
+		/*
+		 * Remember broken record pointer in shared memory state. This process
+		 * might unable to write an OVERWRITE_CONTRECORD message because of WAL
+		 * write restriction.  Storing in shared memory helps that get written
+		 * later by another process as soon as WAL writing is enabled.
+		 */
+		XLogCtl->SharedAbortedRecPtr = abortedRecPtr;
+		abortedRecPtr = InvalidXLogRecPtr;
+		missingContrecPtr = InvalidXLogRecPtr;
 	}
 
 	/*
@@ -8104,6 +8194,13 @@ StartupXLOG(void)
 	XLogCtl->lastSegSwitchTime = (pg_time_t) time(NULL);
 	XLogCtl->lastSegSwitchLSN = EndOfLog;
 
+	/*
+	 * Store EndOfLog and EndOfLogTLI into shared memory to share with other
+	 * processes.
+	 */
+	XLogCtl->endOfLog = EndOfLog;
+	XLogCtl->endOfLogTLI = EndOfLogTLI;
+
 	/* also initialize latestCompletedXid, to nextXid - 1 */
 	LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
 	ShmemVariableCache->latestCompletedXid = ShmemVariableCache->nextXid;
@@ -8134,53 +8231,36 @@ StartupXLOG(void)
 	}
 	XLogReaderFree(xlogreader);
 
-	/* Enable WAL writes for this backend only. */
-	LocalSetXLogInsertAllowed();
-
-	/* If necessary, write overwrite-contrecord before doing anything else */
-	if (!XLogRecPtrIsInvalid(abortedRecPtr))
-	{
-		Assert(!XLogRecPtrIsInvalid(missingContrecPtr));
-		CreateOverwriteContrecordRecord(abortedRecPtr);
-		abortedRecPtr = InvalidXLogRecPtr;
-		missingContrecPtr = InvalidXLogRecPtr;
-	}
-
 	/*
-	 * Update full_page_writes in shared memory and write an XLOG_FPW_CHANGE
-	 * record before resource manager writes cleanup WAL records or checkpoint
-	 * record is written.
+	 * Update full_page_writes in shared memory, and later whenever wal write
+	 * permitted, write an XLOG_FPW_CHANGE record before resource manager writes
+	 * cleanup WAL records or checkpoint record is written.
 	 */
 	Insert->fullPageWrites = lastFullPageWrites;
-	UpdateFullPageWrites();
 
 	/*
-	 * Emit checkpoint or end-of-recovery record in XLOG, if required.
-	 *
-	 * XLogCtl->lastReplayedEndRecPtr will be a valid LSN if and only if we
-	 * entered recovery. Even if we ultimately replayed no WAL records, it will
-	 * have been initialized based on where replay was due to start.  We don't
-	 * need a lock to access this, since this can't change any more by the time
-	 * we reach this code.
+	 * Before enabling WAL insertion, initialize WAL prohibit state in shared
+	 * memory that will decide the further WAL insert should be allowed or
+	 * not.
 	 */
-	if (!XLogRecPtrIsInvalid(XLogCtl->lastReplayedEndRecPtr))
-		promoted = PerformRecoveryXLogAction();
+	WALProhibitStateCounterInit(ControlFile->wal_prohibited);
 
 	/*
-	 * If any of the critical GUCs have changed, log them before we allow
-	 * backends to write WAL.
+	 * Skip wal writes and end of recovery checkpoint if the system is in WAL
+	 * prohibited state.
 	 */
-	XLogReportParameters();
+	if (IsWALProhibited())
+	{
+		XLogCtl->SharedXLogAllowWritesState = XLOG_ACCEPT_WRITES_SKIPPED;
 
-	/* If this is archive recovery, perform post-recovery cleanup actions. */
-	if (ArchiveRecoveryRequested)
-		CleanupAfterArchiveRecovery(EndOfLogTLI, EndOfLog, newTLI);
-
-	/*
-	 * Local WAL inserts enabled, so it's time to finish initialization of
-	 * commit timestamp.
-	 */
-	CompleteCommitTsInitialization();
+		ereport(LOG,
+				(errmsg("skipping startup checkpoint because the WAL is now prohibited")));
+	}
+	else
+	{
+		/* Prepare to accept WAL writes. */
+		promoted = XLogAcceptWrites();
+	}
 
 	/*
 	 * All done with end-of-recovery actions.
@@ -8234,6 +8314,115 @@ StartupXLOG(void)
 	if (promoted)
 		RequestCheckpoint(CHECKPOINT_FORCE);
 }
+
+/*
+ * Prepare to accept WAL writes.
+ */
+static bool
+XLogAcceptWrites(void)
+{
+	bool		promoted = false;
+
+	/*
+	 * Use volatile pointer to make sure we make a fresh read of the
+	 * shared variable.
+	 */
+	volatile XLogCtlData *xlogctl = XLogCtl;
+
+	/*
+	 * If required wal writes to start server normally are performed already
+	 * then we are done.
+	 */
+	if (GetXLogWriteAllowedState() == XLOG_ACCEPT_WRITES_DONE)
+		return promoted;
+
+	/*
+	 * If the system in wal prohibited state, then only the checkpointer process
+	 * should be here to complete this operation which might have skipped
+	 * previously while booting the system in WAL prohibited state.
+	 */
+	Assert(!IsWALProhibited() || AmCheckpointerProcess());
+
+	/* Enable WAL writes for this backend only. */
+	LocalSetXLogInsertAllowed();
+
+	/* If necessary, write overwrite-contrecord before doing anything else */
+	if (!XLogRecPtrIsInvalid(xlogctl->SharedAbortedRecPtr))
+	{
+		/* Restore values */
+		abortedRecPtr = xlogctl->SharedAbortedRecPtr;
+		missingContrecPtr = xlogctl->endOfLog;
+
+		Assert(!XLogRecPtrIsInvalid(missingContrecPtr));
+		CreateOverwriteContrecordRecord(abortedRecPtr);
+
+		xlogctl->SharedAbortedRecPtr = InvalidXLogRecPtr;
+		abortedRecPtr = InvalidXLogRecPtr;
+		missingContrecPtr = InvalidXLogRecPtr;
+	}
+
+	/* Write an XLOG_FPW_CHANGE record */
+	UpdateFullPageWrites();
+
+	/*
+	 * Emit checkpoint or end-of-recovery record in XLOG, if required.
+	 *
+	 * XLogCtl->lastReplayedEndRecPtr will be a valid LSN if and only if we
+	 * entered recovery. Even if we ultimately replayed no WAL records, it will
+	 * have been initialized based on where replay was due to start.  We don't
+	 * need a lock to access this, since this can't change any more by the time
+	 * we reach this code.
+	 */
+	if (!XLogRecPtrIsInvalid(xlogctl->lastReplayedEndRecPtr))
+		promoted = PerformRecoveryXLogAction();
+
+	/*
+	 * If any of the critical GUCs have changed, log them before we allow
+	 * backends to write WAL.
+	 */
+	XLogReportParameters();
+
+	/* If this is archive recovery, perform post-recovery cleanup actions. */
+	if (ArchiveRecoveryRequested)
+		CleanupAfterArchiveRecovery();
+
+	/*
+	 * Local WAL inserts enabled, so it's time to finish initialization of
+	 * commit timestamp.
+	 */
+	CompleteCommitTsInitialization();
+
+	/*
+	 * Spinlock protection isn't needed since only one process will be updating
+	 * this value at a time.
+	 */
+	XLogCtl->SharedXLogAllowWritesState = XLOG_ACCEPT_WRITES_DONE;
+
+	return promoted;
+}
+
+/*
+ * Wrapper function to call XLogAcceptWrites() for checkpointer process.
+ */
+void
+PerformPendingXLogAcceptWrites(void)
+{
+	Assert(AmCheckpointerProcess());
+	Assert(GetXLogWriteAllowedState() != XLOG_ACCEPT_WRITES_DONE);
+
+	/* Prepare to accept WAL writes. */
+	(void) XLogAcceptWrites();
+
+	/*
+	 * We need to update DBState explicitly like the startup process
+	 * because end-of-recovery checkpoint would set db state to
+	 * shutdown.
+	 */
+	LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
+	ControlFile->state = DB_IN_PRODUCTION;
+	UpdateControlFile();
+	LWLockRelease(ControlFileLock);
+ }
 
 /*
  * Checks if recovery has reached a consistent state. When consistency is
@@ -8359,8 +8548,8 @@ PerformRecoveryXLogAction(void)
 	 * a full checkpoint. A checkpoint is requested later, after we're fully out
 	 * of recovery mode and already accepting queries.
 	 */
-	if (ArchiveRecoveryRequested && IsUnderPostmaster &&
-		LocalPromoteIsTriggered)
+	if (XLogCtl->SharedArchiveRecoveryRequested && IsUnderPostmaster &&
+		PromoteIsTriggered())
 	{
 		promoted = true;
 
@@ -8374,6 +8563,11 @@ PerformRecoveryXLogAction(void)
 		 * later anyway, just for safety.
 		 */
 		CreateEndOfRecoveryRecord();
+	}
+	else if (AmCheckpointerProcess())
+	{
+		/* In checkpointer process, just do it ourselves */
+		CreateCheckPoint(CHECKPOINT_END_OF_RECOVERY | CHECKPOINT_IMMEDIATE);
 	}
 	else
 	{
@@ -8503,9 +8697,9 @@ HotStandbyActiveInReplay(void)
 /*
  * Is this process allowed to insert new WAL records?
  *
- * Ordinarily this is essentially equivalent to !RecoveryInProgress().
- * But we also have provisions for forcing the result "true" or "false"
- * within specific processes regardless of the global state.
+ * Ordinarily this is essentially equivalent to !RecoveryInProgress() and
+ * !IsWALProhibited().  But we also have provisions for forcing the result
+ * "true" or "false" within specific processes regardless of the global state.
  */
 bool
 XLogInsertAllowed(void)
@@ -8524,9 +8718,20 @@ XLogInsertAllowed(void)
 	if (RecoveryInProgress())
 		return false;
 
+	/* Or, in WAL prohibited state */
+	if (IsWALProhibited())
+	{
+		/*
+		 * Set it to "unconditionally false" to avoid checking until it gets
+		 * reset.
+		 */
+		LocalXLogInsertAllowed = 0;
+		return false;
+	}
+
 	/*
-	 * On exit from recovery, reset to "unconditionally true", since there is
-	 * no need to keep checking.
+	 * On exit from recovery or WAL prohibited state, reset to
+	 * "unconditionally true", since there is no need to keep checking.
 	 */
 	LocalXLogInsertAllowed = 1;
 	return true;
@@ -8551,6 +8756,12 @@ LocalSetXLogInsertAllowed(void)
 	InitXLOGAccess();
 
 	return oldXLogAllowed;
+}
+
+void
+ResetLocalXLogInsertAllowed(void)
+{
+	LocalXLogInsertAllowed = -1;
 }
 
 /*
@@ -8854,9 +9065,13 @@ ShutdownXLOG(int code, Datum arg)
 	 */
 	WalSndWaitStopping();
 
+	/*
+	 * The restartpoint, checkpoint, or xlog rotation will be performed if the
+	 * WAL writing is permitted.
+	 */
 	if (RecoveryInProgress())
 		CreateRestartPoint(CHECKPOINT_IS_SHUTDOWN | CHECKPOINT_IMMEDIATE);
-	else
+	else if (XLogInsertAllowed())
 	{
 		/*
 		 * If archiving is enabled, rotate the last XLOG file so that all the
@@ -8869,6 +9084,9 @@ ShutdownXLOG(int code, Datum arg)
 
 		CreateCheckPoint(CHECKPOINT_IS_SHUTDOWN | CHECKPOINT_IMMEDIATE);
 	}
+	else
+		ereport(LOG,
+				(errmsg("skipping shutdown checkpoint because the WAL is now prohibited")));
 }
 
 /*
@@ -9119,8 +9337,13 @@ CreateCheckPoint(int flags)
 		shutdown = false;
 
 	/* sanity check */
-	if (RecoveryInProgress() && (flags & CHECKPOINT_END_OF_RECOVERY) == 0)
-		elog(ERROR, "can't create a checkpoint during recovery");
+	if ((flags & CHECKPOINT_END_OF_RECOVERY) == 0)
+	{
+		if (RecoveryInProgress())
+			elog(ERROR, "can't create a checkpoint during recovery");
+		else if (!XLogInsertAllowed())
+			elog(ERROR, "can't create a checkpoint while WAL is prohibited");
+	}
 
 	/*
 	 * Prepare to accumulate statistics.
@@ -9360,6 +9583,9 @@ CreateCheckPoint(int flags)
 	if (!shutdown && XLogStandbyInfoActive())
 		LogStandbySnapshot();
 
+	/* Error out if wal writes are disabled. */
+	CheckWALPermitted();
+
 	START_CRIT_SECTION();
 
 	/*
@@ -9523,6 +9749,9 @@ CreateEndOfRecoveryRecord(void)
 	xlrec.PrevTimeLineID = XLogCtl->PrevTimeLineID;
 	WALInsertLockRelease();
 
+	/* Assured that WAL permission has been checked */
+	AssertWALPermitted();
+
 	START_CRIT_SECTION();
 
 	XLogBeginInsert();
@@ -9569,13 +9798,18 @@ CreateOverwriteContrecordRecord(XLogRecPtr aborted_lsn)
 {
 	xl_overwrite_contrecord xlrec;
 	XLogRecPtr	recptr;
+	XLogAcceptWritesState state = GetXLogWriteAllowedState();
 
 	/* sanity check */
-	if (!RecoveryInProgress())
-		elog(ERROR, "can only be used at end of recovery");
+	if (state != XLOG_ACCEPT_WRITES_PENDING &&
+		state != XLOG_ACCEPT_WRITES_SKIPPED)
+		elog(ERROR, "can only be used at enabling WAL writes");
 
 	xlrec.overwritten_lsn = aborted_lsn;
 	xlrec.overwrite_time = GetCurrentTimestamp();
+
+	/* Assured that WAL permission has been checked */
+	AssertWALPermitted();
 
 	START_CRIT_SECTION();
 
@@ -10222,7 +10456,7 @@ void
 UpdateFullPageWrites(void)
 {
 	XLogCtlInsert *Insert = &XLogCtl->Insert;
-	bool		recoveryInProgress;
+	bool		WALInsertAllowed;
 
 	/*
 	 * Do nothing if full_page_writes has not been changed.
@@ -10236,10 +10470,10 @@ UpdateFullPageWrites(void)
 
 	/*
 	 * Perform this outside critical section so that the WAL insert
-	 * initialization done by RecoveryInProgress() doesn't trigger an
-	 * assertion failure.
+	 * initialization done by XLogInsertAllowed() doesn't trigger an assertion
+	 * failure.
 	 */
-	recoveryInProgress = RecoveryInProgress();
+	WALInsertAllowed = XLogInsertAllowed();
 
 	START_CRIT_SECTION();
 
@@ -10261,8 +10495,11 @@ UpdateFullPageWrites(void)
 	 * Write an XLOG_FPW_CHANGE record. This allows us to keep track of
 	 * full_page_writes during archive recovery, if required.
 	 */
-	if (XLogStandbyInfoActive() && !recoveryInProgress)
+	if (XLogStandbyInfoActive() && WALInsertAllowed)
 	{
+		/* Assured that WAL permission has been checked */
+		AssertWALPermitted();
+
 		XLogBeginInsert();
 		XLogRegisterData((char *) (&fullPageWrites), sizeof(bool));
 

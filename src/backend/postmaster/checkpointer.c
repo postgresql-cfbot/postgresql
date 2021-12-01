@@ -36,6 +36,7 @@
 #include <sys/time.h>
 #include <time.h>
 
+#include "access/walprohibit.h"
 #include "access/xlog.h"
 #include "access/xlog_internal.h"
 #include "libpq/pqsignal.h"
@@ -339,6 +340,7 @@ CheckpointerMain(void)
 		pg_time_t	now;
 		int			elapsed_secs;
 		int			cur_timeout;
+		WALProhibitState cur_state;
 
 		/* Clear any already-pending wakeups */
 		ResetLatch(MyLatch);
@@ -348,6 +350,22 @@ CheckpointerMain(void)
 		 */
 		AbsorbSyncRequests();
 		HandleCheckpointerInterrupts();
+		ProcessWALProhibitStateChangeRequest();
+
+		/* Should be in WAL permitted state to perform the checkpoint */
+		cur_state = GetWALProhibitState();
+		if (cur_state != WALPROHIBIT_STATE_READ_WRITE)
+		{
+			/*
+			 * Don't let Checkpointer process do anything until someone wakes it
+			 * up.  For example a backend might later on request us to put the
+			 * system back to read-write state.
+			 */
+			if (cur_state == WALPROHIBIT_STATE_READ_ONLY)
+				(void) WaitLatch(MyLatch, WL_LATCH_SET | WL_EXIT_ON_PM_DEATH,
+								 -1, WAIT_EVENT_WALPROHIBIT_STATE_CHANGE);
+			continue;
+		}
 
 		/*
 		 * Detect a pending checkpoint request by checking whether the flags
@@ -692,6 +710,9 @@ CheckpointWriteDelay(int flags, double progress)
 	if (!AmCheckpointerProcess())
 		return;
 
+	/* Check for wal prohibit state change request */
+	ProcessWALProhibitStateChangeRequest();
+
 	/*
 	 * Perform the usual duties and take a nap, unless we're behind schedule,
 	 * in which case we just try to catch up as quickly as possible.
@@ -922,6 +943,10 @@ RequestCheckpoint(int flags)
 	int			ntries;
 	int			old_failed,
 				old_started;
+
+	/* The checkpoint is allowed in recovery but not in WAL prohibit state */
+	if (!RecoveryInProgress())
+		CheckWALPermitted();
 
 	/*
 	 * If in a standalone backend, just do it ourselves.
@@ -1340,4 +1365,20 @@ FirstCallSinceLastCheckpoint(void)
 	ckpt_done = new_done;
 
 	return FirstCall;
+}
+
+/*
+ * SendSignalToCheckpointer allows any process to send a signal to the checkpoint
+ * process.
+ */
+bool
+SendSignalToCheckpointer(int signum)
+{
+	if (CheckpointerShmem->checkpointer_pid == 0)
+		return false;
+
+	if (kill(CheckpointerShmem->checkpointer_pid, signum) != 0)
+		return false;
+
+	return true; /* Signaled checkpointer successfully */
 }

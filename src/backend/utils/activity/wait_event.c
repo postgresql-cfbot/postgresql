@@ -729,6 +729,9 @@ pgstat_get_wait_io(WaitEventIO w)
 		case WAIT_EVENT_WAL_WRITE:
 			event_name = "WALWrite";
 			break;
+		case WAIT_EVENT_WALPROHIBIT_STATE_CHANGE:
+			event_name = "SystemWALProhibitStateChange";
+			break;
 
 			/* no default case, so that compiler will warn */
 	}

@@ -88,6 +88,7 @@
 
 #include "access/heapam_xlog.h"
 #include "access/visibilitymap.h"
+#include "access/walprohibit.h"
 #include "access/xlogutils.h"
 #include "miscadmin.h"
 #include "port/pg_bitutils.h"
@@ -249,6 +250,7 @@ visibilitymap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
 	uint8		mapOffset = HEAPBLK_TO_OFFSET(heapBlk);
 	Page		page;
 	uint8	   *map;
+	bool		needwal = RelationNeedsWAL(rel);
 
 #ifdef TRACE_VISIBILITYMAP
 	elog(DEBUG1, "vm_set %s %d", RelationGetRelationName(rel), heapBlk);
@@ -272,12 +274,19 @@ visibilitymap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
 
 	if (flags != (map[mapByte] >> mapOffset & VISIBILITYMAP_VALID_BITS))
 	{
+		/*
+		 * Can reach here from VACUUM or from startup process, so need not have an
+		 * XID.
+		 */
+		if (needwal && XLogRecPtrIsInvalid(recptr))
+			CheckWALPermitted();
+
 		START_CRIT_SECTION();
 
 		map[mapByte] |= (flags << mapOffset);
 		MarkBufferDirty(vmBuf);
 
-		if (RelationNeedsWAL(rel))
+		if (needwal)
 		{
 			if (XLogRecPtrIsInvalid(recptr))
 			{
@@ -474,6 +483,7 @@ visibilitymap_prepare_truncate(Relation rel, BlockNumber nheapblocks)
 		Buffer		mapBuffer;
 		Page		page;
 		char	   *map;
+		bool		needwal;
 
 		newnblocks = truncBlock + 1;
 
@@ -487,7 +497,12 @@ visibilitymap_prepare_truncate(Relation rel, BlockNumber nheapblocks)
 		page = BufferGetPage(mapBuffer);
 		map = PageGetContents(page);
 
+		needwal = (!InRecovery && RelationNeedsWAL(rel) && XLogHintBitIsNeeded());
+
 		LockBuffer(mapBuffer, BUFFER_LOCK_EXCLUSIVE);
+
+		if (needwal)
+			CheckWALPermitted();
 
 		/* NO EREPORT(ERROR) from here till changes are logged */
 		START_CRIT_SECTION();
@@ -516,7 +531,7 @@ visibilitymap_prepare_truncate(Relation rel, BlockNumber nheapblocks)
 		 * during recovery.
 		 */
 		MarkBufferDirty(mapBuffer);
-		if (!InRecovery && RelationNeedsWAL(rel) && XLogHintBitIsNeeded())
+		if (needwal)
 			log_newpage_buffer(mapBuffer, false);
 
 		END_CRIT_SECTION();

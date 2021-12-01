@@ -21,6 +21,7 @@
 #include "access/commit_ts.h"
 #include "access/clog.h"
 #include "access/multixact.h"
+#include "access/walprohibit.h"
 #include "access/xlog.h"
 #include "access/xlogutils.h"
 #include "commands/tablespace.h"
@@ -241,9 +242,17 @@ SyncPostCheckpoint(void)
 		entry->canceled = true;
 
 		/*
-		 * As in ProcessSyncRequests, we don't want to stop absorbing fsync
-		 * requests for a long time when there are many deletions to be done.
-		 * We can safely call AbsorbSyncRequests() at this point in the loop.
+		 * As in ProcessSyncRequests, we don't want to stop processing wal
+		 * prohibit change requests for a long time when there are many
+		 * deletions to be done.  It needs to be check and processed by
+		 * checkpointer as soon as possible.
+		 */
+		ProcessWALProhibitStateChangeRequest();
+
+		/*
+		 * Similarly, we don't want to stop absorbing fsync requests for the
+		 * long time.  We can safely call AbsorbSyncRequests() at this point in
+		 * the loop (note it might try to delete list entries).
 		 */
 		if (--absorb_counter <= 0)
 		{
@@ -302,6 +311,9 @@ ProcessSyncRequests(void)
 	if (!pendingOps)
 		elog(ERROR, "cannot sync without a pendingOps table");
 
+	/* Check for wal prohibit state change request for checkpointer */
+	ProcessWALProhibitStateChangeRequest();
+
 	/*
 	 * If we are in the checkpointer, the sync had better include all fsync
 	 * requests that were queued by backends up to this point.  The tightest
@@ -359,6 +371,13 @@ ProcessSyncRequests(void)
 	while ((entry = (PendingFsyncEntry *) hash_seq_search(&hstat)) != NULL)
 	{
 		int			failures;
+
+		/*
+		 * Don't want to stop processing wal prohibit change requests for a long
+		 * time when there are many fsync requests to be processed.  It needs to
+		 * be check and processed by checkpointer as soon as possible.
+		 */
+		ProcessWALProhibitStateChangeRequest();
 
 		/*
 		 * If the entry is new then don't process it this time; it is new.
@@ -445,6 +464,12 @@ ProcessSyncRequests(void)
 							(errcode_for_file_access(),
 							 errmsg_internal("could not fsync file \"%s\" but retrying: %m",
 											 path)));
+
+				/*
+				 * For the same reason mentioned previously for the same
+				 * function call.
+				 */
+				ProcessWALProhibitStateChangeRequest();
 
 				/*
 				 * Absorb incoming requests and check to see if a cancel

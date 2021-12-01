@@ -508,6 +508,13 @@ check_transaction_read_only(bool *newval, void **extra, GucSource source)
 			GUC_check_errmsg("cannot set transaction read-write mode during recovery");
 			return false;
 		}
+		/* Can't go to r/w mode while WAL is prohibited */
+		if (!XLogInsertAllowed())
+		{
+			GUC_check_errcode(ERRCODE_FEATURE_NOT_SUPPORTED);
+			GUC_check_errmsg("cannot set transaction read-write mode while WAL is prohibited");
+			return false;
+		}
 	}
 
 	return true;

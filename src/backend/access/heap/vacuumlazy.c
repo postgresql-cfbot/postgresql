@@ -43,6 +43,7 @@
 #include "access/parallel.h"
 #include "access/transam.h"
 #include "access/visibilitymap.h"
+#include "access/walprohibit.h"
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "catalog/index.h"
@@ -1324,6 +1325,11 @@ lazy_scan_heap(LVRelState *vacrel, VacuumParams *params, bool aggressive)
 			 */
 			if (!PageIsAllVisible(page))
 			{
+				bool 		needwal = RelationNeedsWAL(vacrel->rel);
+
+				if (needwal)
+					CheckWALPermitted();
+
 				START_CRIT_SECTION();
 
 				/* mark buffer dirty before writing a WAL record */
@@ -1339,8 +1345,7 @@ lazy_scan_heap(LVRelState *vacrel, VacuumParams *params, bool aggressive)
 				 * page has been previously WAL-logged, and if not, do that
 				 * now.
 				 */
-				if (RelationNeedsWAL(vacrel->rel) &&
-					PageGetLSN(page) == InvalidXLogRecPtr)
+				if (needwal && PageGetLSN(page) == InvalidXLogRecPtr)
 					log_newpage_buffer(buf, true);
 
 				PageSetAllVisible(page);
@@ -1945,7 +1950,12 @@ retry:
 	 */
 	if (nfrozen > 0)
 	{
+		bool		needwal = RelationNeedsWAL(vacrel->rel);
+
 		Assert(prunestate->hastup);
+
+		if (needwal)
+			CheckWALPermitted();
 
 		/*
 		 * At least one tuple with storage needs to be frozen -- execute that
@@ -1971,7 +1981,7 @@ retry:
 		}
 
 		/* Now WAL-log freezing if necessary */
-		if (RelationNeedsWAL(vacrel->rel))
+		if (needwal)
 		{
 			XLogRecPtr	recptr;
 
@@ -2396,6 +2406,7 @@ lazy_vacuum_heap_page(LVRelState *vacrel, BlockNumber blkno, Buffer buffer,
 	TransactionId visibility_cutoff_xid;
 	bool		all_frozen;
 	LVSavedErrInfo saved_err_info;
+	bool		needwal = RelationNeedsWAL(vacrel->rel);
 
 	Assert(vacrel->nindexes == 0 || vacrel->do_index_vacuuming);
 
@@ -2405,6 +2416,9 @@ lazy_vacuum_heap_page(LVRelState *vacrel, BlockNumber blkno, Buffer buffer,
 	update_vacuum_error_info(vacrel, &saved_err_info,
 							 VACUUM_ERRCB_PHASE_VACUUM_HEAP, blkno,
 							 InvalidOffsetNumber);
+
+	if (needwal)
+		CheckWALPermitted();
 
 	START_CRIT_SECTION();
 
@@ -2436,7 +2450,7 @@ lazy_vacuum_heap_page(LVRelState *vacrel, BlockNumber blkno, Buffer buffer,
 	MarkBufferDirty(buffer);
 
 	/* XLOG stuff */
-	if (RelationNeedsWAL(vacrel->rel))
+	if (needwal)
 	{
 		xl_heap_vacuum xlrec;
 		XLogRecPtr	recptr;

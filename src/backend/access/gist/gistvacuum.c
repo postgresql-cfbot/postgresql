@@ -17,6 +17,7 @@
 #include "access/genam.h"
 #include "access/gist_private.h"
 #include "access/transam.h"
+#include "access/walprohibit.h"
 #include "commands/vacuum.h"
 #include "lib/integerset.h"
 #include "miscadmin.h"
@@ -272,6 +273,7 @@ gistvacuumpage(GistVacState *vstate, BlockNumber blkno, BlockNumber orig_blkno)
 	Buffer		buffer;
 	Page		page;
 	BlockNumber recurse_to;
+	bool		needwal = RelationNeedsWAL(rel);
 
 restart:
 	recurse_to = InvalidBlockNumber;
@@ -353,6 +355,9 @@ restart:
 		 */
 		if (ntodelete > 0)
 		{
+			if (needwal)
+				CheckWALPermitted();
+
 			START_CRIT_SECTION();
 
 			MarkBufferDirty(buffer);
@@ -360,7 +365,7 @@ restart:
 			PageIndexMultiDelete(page, todelete, ntodelete);
 			GistMarkTuplesDeleted(page);
 
-			if (RelationNeedsWAL(rel))
+			if (needwal)
 			{
 				XLogRecPtr	recptr;
 
@@ -589,6 +594,7 @@ gistdeletepage(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	IndexTuple	idxtuple;
 	XLogRecPtr	recptr;
 	FullTransactionId txid;
+	bool		needwal = RelationNeedsWAL(info->index);
 
 	/*
 	 * Check that the leaf is still empty and deletable.
@@ -643,6 +649,9 @@ gistdeletepage(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	 */
 	txid = ReadNextFullTransactionId();
 
+	if (needwal)
+		CheckWALPermitted();
+
 	START_CRIT_SECTION();
 
 	/* mark the page as deleted */
@@ -655,7 +664,7 @@ gistdeletepage(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	MarkBufferDirty(parentBuffer);
 	PageIndexTupleDelete(parentPage, downlink);
 
-	if (RelationNeedsWAL(info->index))
+	if (needwal)
 		recptr = gistXLogPageDelete(leafBuffer, txid, parentBuffer, downlink);
 	else
 		recptr = gistGetFakeLSN(info->index);

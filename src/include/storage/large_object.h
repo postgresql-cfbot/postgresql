@@ -79,7 +79,7 @@ typedef struct LargeObjectDesc
 /*
  * GUC: backwards-compatibility flag to suppress LO permission checks
  */
-extern bool lo_compat_privileges;
+extern bool lo_compat_privileges pg_attribute_hidden();
 
 /*
  * Function definitions...

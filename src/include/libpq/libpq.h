@@ -86,13 +86,13 @@ extern bool pq_check_connection(void);
 /*
  * prototypes for functions in be-secure.c
  */
-extern char *ssl_library;
-extern char *ssl_cert_file;
-extern char *ssl_key_file;
-extern char *ssl_ca_file;
-extern char *ssl_crl_file;
-extern char *ssl_crl_dir;
-extern char *ssl_dh_params_file;
+extern char *ssl_library pg_attribute_hidden();
+extern char *ssl_cert_file pg_attribute_hidden();
+extern char *ssl_key_file pg_attribute_hidden();
+extern char *ssl_ca_file pg_attribute_hidden();
+extern char *ssl_crl_file pg_attribute_hidden();
+extern char *ssl_crl_dir pg_attribute_hidden();
+extern char *ssl_dh_params_file pg_attribute_hidden();
 extern PGDLLIMPORT char *ssl_passphrase_command;
 extern PGDLLIMPORT bool ssl_passphrase_command_supports_reload;
 #ifdef USE_SSL
@@ -117,11 +117,11 @@ extern ssize_t secure_open_gssapi(Port *port);
 #endif
 
 /* GUCs */
-extern char *SSLCipherSuites;
-extern char *SSLECDHCurve;
-extern bool SSLPreferServerCiphers;
-extern int	ssl_min_protocol_version;
-extern int	ssl_max_protocol_version;
+extern char *SSLCipherSuites pg_attribute_hidden();
+extern char *SSLECDHCurve pg_attribute_hidden();
+extern bool SSLPreferServerCiphers pg_attribute_hidden();
+extern int	ssl_min_protocol_version pg_attribute_hidden();
+extern int	ssl_max_protocol_version pg_attribute_hidden();
 
 enum ssl_protocol_versions
 {

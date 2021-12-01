@@ -31,9 +31,9 @@ extern bool am_db_walsender;
 extern bool wake_wal_senders;
 
 /* user-settable parameters */
-extern int	max_wal_senders;
-extern int	wal_sender_timeout;
-extern bool log_replication_commands;
+extern int	max_wal_senders pg_attribute_hidden();
+extern int	wal_sender_timeout pg_attribute_hidden();
+extern bool log_replication_commands pg_attribute_hidden();
 
 extern void InitWalSender(void);
 extern bool exec_replication_command(const char *query_string);

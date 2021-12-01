@@ -61,7 +61,7 @@ enum ComputeQueryIdType
 };
 
 /* GUC parameters */
-extern int	compute_query_id;
+extern int	compute_query_id pg_attribute_hidden();
 
 
 extern const char *CleanQuerytext(const char *query, int *location, int *len);

@@ -27,9 +27,9 @@
 
 extern CommandDest whereToSendOutput;
 extern PGDLLIMPORT const char *debug_query_string;
-extern int	max_stack_depth;
-extern int	PostAuthDelay;
-extern int	client_connection_check_interval;
+extern int	max_stack_depth pg_attribute_hidden();
+extern int	PostAuthDelay pg_attribute_hidden();
+extern int	client_connection_check_interval pg_attribute_hidden();
 
 /* GUC-configurable parameters */
 

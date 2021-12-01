@@ -16,7 +16,7 @@
 #include "parser/parse_node.h"
 
 /* GUC parameters */
-extern bool Transform_null_equals;
+extern bool Transform_null_equals pg_attribute_hidden();
 
 extern Node *transformExpr(ParseState *pstate, Node *expr, ParseExprKind exprKind);
 

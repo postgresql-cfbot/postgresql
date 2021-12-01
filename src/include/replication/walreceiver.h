@@ -25,9 +25,9 @@
 #include "utils/tuplestore.h"
 
 /* user-settable parameters */
-extern int	wal_receiver_status_interval;
-extern int	wal_receiver_timeout;
-extern bool hot_standby_feedback;
+extern int	wal_receiver_status_interval pg_attribute_hidden();
+extern int	wal_receiver_timeout pg_attribute_hidden();
+extern bool hot_standby_feedback pg_attribute_hidden();
 
 /*
  * MAXCONNINFO: maximum size of a connection string.

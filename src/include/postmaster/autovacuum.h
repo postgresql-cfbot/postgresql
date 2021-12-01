@@ -27,25 +27,25 @@ typedef enum
 
 
 /* GUC variables */
-extern bool autovacuum_start_daemon;
-extern int	autovacuum_max_workers;
-extern int	autovacuum_work_mem;
-extern int	autovacuum_naptime;
-extern int	autovacuum_vac_thresh;
-extern double autovacuum_vac_scale;
-extern int	autovacuum_vac_ins_thresh;
-extern double autovacuum_vac_ins_scale;
-extern int	autovacuum_anl_thresh;
-extern double autovacuum_anl_scale;
-extern int	autovacuum_freeze_max_age;
-extern int	autovacuum_multixact_freeze_max_age;
-extern double autovacuum_vac_cost_delay;
-extern int	autovacuum_vac_cost_limit;
+extern bool autovacuum_start_daemon pg_attribute_hidden();
+extern int	autovacuum_max_workers pg_attribute_hidden();
+extern int	autovacuum_work_mem pg_attribute_hidden();
+extern int	autovacuum_naptime pg_attribute_hidden();
+extern int	autovacuum_vac_thresh pg_attribute_hidden();
+extern double autovacuum_vac_scale pg_attribute_hidden();
+extern int	autovacuum_vac_ins_thresh pg_attribute_hidden();
+extern double autovacuum_vac_ins_scale pg_attribute_hidden();
+extern int	autovacuum_anl_thresh pg_attribute_hidden();
+extern double autovacuum_anl_scale pg_attribute_hidden();
+extern int	autovacuum_freeze_max_age pg_attribute_hidden();
+extern int	autovacuum_multixact_freeze_max_age pg_attribute_hidden();
+extern double autovacuum_vac_cost_delay pg_attribute_hidden();
+extern int	autovacuum_vac_cost_limit pg_attribute_hidden();
 
 /* autovacuum launcher PID, only valid when worker is shutting down */
 extern int	AutovacuumLauncherPid;
 
-extern int	Log_autovacuum_min_duration;
+extern int	Log_autovacuum_min_duration pg_attribute_hidden();
 
 /* Status inquiry functions */
 extern bool AutoVacuumingActive(void);

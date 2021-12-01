@@ -133,6 +133,13 @@ struct PartitionTupleRouting
  *		routing it through this table). A NULL value is stored if no tuple
  *		conversion is required.
  *
+ * cached_bound_offset
+ * last_seen_offset
+ * n_tups_inserted
+ * n_offset_changed
+ *		Fields to manage the state for bound offset caching; see
+ *		maybe_cache_partition_bound_offset()
+ *
  * indexes
  *		Array of partdesc->nparts elements.  For leaf partitions the index
  *		corresponds to the partition's ResultRelInfo in the encapsulating
@@ -150,6 +157,12 @@ typedef struct PartitionDispatchData
 	PartitionDesc partdesc;
 	TupleTableSlot *tupslot;
 	AttrMap    *tupmap;
+
+	int			cached_bound_offset;
+	int			last_seen_offset;
+	int			n_tups_inserted;
+	int			n_offset_changed;
+
 	int			indexes[FLEXIBLE_ARRAY_MEMBER];
 }			PartitionDispatchData;
 
@@ -1026,6 +1039,10 @@ ExecInitPartitionDispatchInfo(EState *estate,
 	pd->key = RelationGetPartitionKey(rel);
 	pd->keystate = NIL;
 	pd->partdesc = partdesc;
+
+	pd->cached_bound_offset = pd->last_seen_offset = -1;
+	pd->n_tups_inserted = pd->n_offset_changed = 0;
+
 	if (parent_pd != NULL)
 	{
 		TupleDesc	tupdesc = RelationGetDescr(rel);
@@ -1232,6 +1249,135 @@ FormPartitionKeyDatum(PartitionDispatch pd,
 }
 
 /*
+ * Threshold of the number of tuples to need to have been processed before
+ * maybe_cache_partition_bound_offset() (re-)assesses whether caching must be
+ * enabled or disabled for subsequent tuples.
+ */
+#define	CACHE_BOUND_OFFSET_THRESHOLD_TUPS	1000
+
+/*
+ * maybe_cache_partition_bound_offset
+ *		Conditionally sets pd->cached_bound_offset so that
+ *		get_cached_{list|range}_partition can be used for subsequent
+ *		tuples
+ *
+ * It is set if it appears that some offsets observed over the last
+ * pd->n_tups_inserted tuples would have been reused, which can be inferred
+ * from seeing that the ratio of tuples inserted and the number of times the
+ * offset needed to be changed during the insertion of those tuples is greater
+ * than 1.  Conversely, we disable the caching if the ratio is 1, because that
+ * suggests that every consecutively inserted tuple mapped to a different
+ * partition.
+ */
+static inline void
+maybe_cache_partition_bound_offset(PartitionDispatch pd, int offset)
+{
+	if (offset != pd->last_seen_offset)
+	{
+		pd->last_seen_offset = offset;
+		pd->n_offset_changed += 1;
+		/* Only set to the new value after calculating the ratio formula. */
+		pd->cached_bound_offset = -1;
+	}
+
+	/*
+	 * Only consider (re-)enabling/disabling caching if we've seen at least
+	 * a threshold number of tuples since the last time we enabled/disabled
+	 * it.
+	 */
+	if (pd->n_tups_inserted < CACHE_BOUND_OFFSET_THRESHOLD_TUPS)
+		return;
+
+	/* Wouldn't get called if the cached bound offset worked. */
+	Assert(offset != pd->cached_bound_offset);
+
+	/* If the offset didn't change at all, caching it might be a good idea. */
+	if (pd->n_offset_changed == 0 ||
+		(double) pd->n_tups_inserted / pd->n_offset_changed > 1)
+		pd->cached_bound_offset = offset;
+	else
+		pd->cached_bound_offset = -1;
+	pd->n_tups_inserted = pd->n_offset_changed = 0;
+}
+
+/*
+ * get_cached_{list|range}_partition
+ *		Computes if the cached bound offset value, if any, is satisfied by
+ *		the tuple specified in 'values' and it is, returns the index of
+ *		the partition corresponding to that bound
+ *
+ * Callers must ensure that none of the elements of 'values' is NULL.
+ */
+static inline int
+get_cached_list_partition(PartitionDispatch pd,
+						  PartitionBoundInfo boundinfo,
+						  PartitionKey key,
+						  Datum *values)
+{
+	int		part_index = -1;
+	int		cached_off = pd->cached_bound_offset;
+
+	if (cached_off >= 0)
+	{
+		Datum	bound_datum = boundinfo->datums[cached_off][0];
+		int32	cmpval;
+
+		cmpval = DatumGetInt32(FunctionCall2Coll(&key->partsupfunc[0],
+												 key->partcollation[0],
+												 bound_datum,
+												 values[0]));
+		if (cmpval == 0)
+			part_index = boundinfo->indexes[cached_off];
+	}
+
+	return part_index;
+}
+
+static inline int
+get_cached_range_partition(PartitionDispatch pd,
+						   PartitionBoundInfo boundinfo,
+						   PartitionKey key,
+						   Datum *values)
+{
+	int		part_index = -1;
+	int		cached_off = pd->cached_bound_offset;
+
+	if (cached_off >= 0)
+	{
+		Datum   *bound_datums = boundinfo->datums[cached_off];
+		PartitionRangeDatumKind *bound_kind = boundinfo->kind[cached_off];
+		int32	cmpval;
+
+		/* Check if the value is above the low bound */
+		cmpval = partition_rbound_datum_cmp(key->partsupfunc,
+											key->partcollation,
+											bound_datums,
+											bound_kind,
+											values,
+											key->partnatts);
+		if (cmpval == 0)
+			part_index = boundinfo->indexes[cached_off + 1];
+		else if (cmpval < 0 && cached_off + 1 < boundinfo->ndatums)
+		{
+			/* Check if the value is below the high bound */
+			bound_datums = boundinfo->datums[cached_off + 1];
+			bound_kind = boundinfo->kind[cached_off + 1];
+			cmpval = partition_rbound_datum_cmp(key->partsupfunc,
+												key->partcollation,
+												bound_datums,
+												bound_kind,
+												values,
+												key->partnatts);
+
+			if (cmpval > 0)
+				part_index = boundinfo->indexes[cached_off + 1];
+		}
+	}
+
+	return part_index;
+}
+
+/*
  * get_partition_for_tuple
  *		Finds partition of relation which accepts the partition key specified
  *		in values and isnull
@@ -1247,6 +1393,8 @@ get_partition_for_tuple(PartitionDispatch pd, Datum *values, bool *isnull)
 	PartitionKey key = pd->key;
 	PartitionDesc partdesc = pd->partdesc;
 	PartitionBoundInfo boundinfo = partdesc->boundinfo;
+
+	pd->n_tups_inserted += 1;
 
 	/* Route as appropriate based on partitioning strategy. */
 	switch (key->strategy)
@@ -1272,14 +1420,26 @@ get_partition_for_tuple(PartitionDispatch pd, Datum *values, bool *isnull)
 			}
 			else
 			{
-				bool		equal = false;
+				part_index = get_cached_list_partition(pd,
+													   boundinfo,
+													   key,
+													   values);
+				if (part_index < 0)
+				{
+					bool		equal = false;
 
-				bound_offset = partition_list_bsearch(key->partsupfunc,
-													  key->partcollation,
-													  boundinfo,
-													  values[0], &equal);
-				if (bound_offset >= 0 && equal)
-					part_index = boundinfo->indexes[bound_offset];
+					bound_offset = partition_list_bsearch(key->partsupfunc,
+														  key->partcollation,
+														  boundinfo,
+														  values[0], &equal);
+					if (bound_offset >= 0 && equal)
+					{
+						part_index = boundinfo->indexes[bound_offset];
+						if (part_index >= 0)
+							maybe_cache_partition_bound_offset(pd,
+															   bound_offset);
+					}
+				}
 			}
 			break;
 
@@ -1304,20 +1464,30 @@ get_partition_for_tuple(PartitionDispatch pd, Datum *values, bool *isnull)
 
 				if (!range_partkey_has_null)
 				{
-					bound_offset = partition_range_datum_bsearch(key->partsupfunc,
-																 key->partcollation,
-																 boundinfo,
-																 key->partnatts,
-																 values,
-																 &equal);
+					part_index = get_cached_range_partition(pd,
+															boundinfo,
+															key,
+															values);
+					if (part_index < 0)
+					{
+						bound_offset = partition_range_datum_bsearch(key->partsupfunc,
+																	 key->partcollation,
+																	 boundinfo,
+																	 key->partnatts,
+																	 values,
+																	 &equal);
 
-					/*
-					 * The bound at bound_offset is less than or equal to the
-					 * tuple value, so the bound at offset+1 is the upper
-					 * bound of the partition we're looking for, if there
-					 * actually exists one.
-					 */
-					part_index = boundinfo->indexes[bound_offset + 1];
+						/*
+						 * The bound at bound_offset is less than or equal to the
+						 * tuple value, so the bound at offset+1 is the upper
+						 * bound of the partition we're looking for, if there
+						 * actually exists one.
+						 */
+						part_index = boundinfo->indexes[bound_offset + 1];
+						if (part_index >= 0)
+							maybe_cache_partition_bound_offset(pd,
+															   bound_offset);
+					}
 				}
 			}
 			break;

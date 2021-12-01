@@ -25,9 +25,13 @@
 
 #include "access/transam.h"
 #include "catalog/dependency.h"
+#include "catalog/pg_proc.h"
+#include "nodes/nodeFuncs.h"
 #include "postgres_fdw.h"
+#include "utils/fmgroids.h"
 #include "utils/hsearch.h"
 #include "utils/inval.h"
+#include "utils/lsyscache.h"
 #include "utils/syscache.h"
 
 /* Hash table for caching the results of shippability lookups */
@@ -208,4 +212,70 @@ is_shippable(Oid objectId, Oid classId, PgFdwRelationInfo *fpinfo)
 	}
 
 	return entry->shippable;
+}
+
+static bool
+contain_unsafe_functions_checker(Oid func_id, void *context)
+{
+	/* now() is stable, but we can ship it as it's replaced by parameter */
+	return !(func_volatile(func_id) == PROVOLATILE_IMMUTABLE || func_id == F_NOW);
+}
+
+static bool
+contain_unsafe_functions_walker(Node *node, void *context)
+{
+	if (node == NULL)
+		return false;
+	/* Check for unsafe functions in node itself */
+	if (check_functions_in_node(node, contain_unsafe_functions_checker,
+								context))
+		return true;
+
+	/*
+	 * Unlike contain_mutable_functions_walker, don't treat SQLValueFunction
+	 * as unsafe - foreign_expr_walker() classifies them
+	 */
+
+	if (IsA(node, NextValueExpr))
+	{
+		/* NextValueExpr is volatile */
+		return true;
+	}
+
+	/*
+	 * It should be safe to treat MinMaxExpr as immutable, because it will
+	 * depend on a non-cross-type btree comparison function, and those should
+	 * always be immutable.  Treating XmlExpr as immutable is more dubious,
+	 * and treating CoerceToDomain as immutable is outright dangerous.  But we
+	 * have done so historically, and changing this would probably cause more
+	 * problems than it would fix.  In practice, if you have a non-immutable
+	 * domain constraint you are in for pain anyhow.
+	 */
+
+	/* Recurse to check arguments */
+	if (IsA(node, Query))
+	{
+		/* Recurse into subselects */
+		return query_tree_walker((Query *) node,
+								 contain_unsafe_functions_walker,
+								 context, 0);
+	}
+	return expression_tree_walker(node, contain_unsafe_functions_walker,
+								  context);
+}
+
+/*
+ * contain_unsafe_functions
+ *	  Recursively search for unsafe mutable functions within a clause.
+ *
+ * Returns true if any unsafe mutable function (or operator implemented by a
+ * mutable function), which is not known to be safe, is found.
+ *
+ * We will recursively look into Query nodes (i.e., SubLink sub-selects)
+ * but not into SubPlans.  See comments for contain_volatile_functions().
+ */
+bool
+contain_unsafe_functions(Node *clause)
+{
+	return contain_unsafe_functions_walker(clause, NULL);
 }

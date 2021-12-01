@@ -7040,6 +7040,7 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 				i_indkey,
 				i_indisclustered,
 				i_indisreplident,
+				i_indnullsnotdistinct,
 				i_contype,
 				i_conname,
 				i_condeferrable,
@@ -7097,6 +7098,7 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 							  "i.indnatts AS indnatts, "
 							  "i.indkey, i.indisclustered, "
 							  "i.indisreplident, "
+							  "i.indnullsnotdistinct, " // TODO: make version-specific
 							  "c.contype, c.conname, "
 							  "c.condeferrable, c.condeferred, "
 							  "c.tableoid AS contableoid, "
@@ -7279,6 +7281,7 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 		i_indkey = PQfnumber(res, "indkey");
 		i_indisclustered = PQfnumber(res, "indisclustered");
 		i_indisreplident = PQfnumber(res, "indisreplident");
+		i_indnullsnotdistinct = PQfnumber(res, "indnullsnotdistinct");
 		i_contype = PQfnumber(res, "contype");
 		i_conname = PQfnumber(res, "conname");
 		i_condeferrable = PQfnumber(res, "condeferrable");
@@ -7319,6 +7322,7 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 						  indxinfo[j].indkeys, indxinfo[j].indnattrs);
 			indxinfo[j].indisclustered = (PQgetvalue(res, j, i_indisclustered)[0] == 't');
 			indxinfo[j].indisreplident = (PQgetvalue(res, j, i_indisreplident)[0] == 't');
+			indxinfo[j].indnullsnotdistinct = (PQgetvalue(res, j, i_indnullsnotdistinct)[0] == 't');
 			indxinfo[j].parentidx = atooid(PQgetvalue(res, j, i_parentidx));
 			indxinfo[j].partattaches = (SimplePtrList)
 			{
@@ -16982,8 +16986,11 @@ dumpConstraint(Archive *fout, const ConstraintInfo *coninfo)
 		}
 		else
 		{
-			appendPQExpBuffer(q, "%s (",
+			appendPQExpBuffer(q, "%s",
 							  coninfo->contype == 'p' ? "PRIMARY KEY" : "UNIQUE");
+			if (indxinfo->indnullsnotdistinct)
+				appendPQExpBuffer(q, " NULLS NOT DISTINCT");
+			appendPQExpBuffer(q, " (");
 			for (k = 0; k < indxinfo->indnkeyattrs; k++)
 			{
 				int			indkey = (int) indxinfo->indkeys[k];

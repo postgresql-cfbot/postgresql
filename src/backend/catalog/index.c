@@ -613,6 +613,7 @@ UpdateIndexRelation(Oid indexoid,
 	values[Anum_pg_index_indnatts - 1] = Int16GetDatum(indexInfo->ii_NumIndexAttrs);
 	values[Anum_pg_index_indnkeyatts - 1] = Int16GetDatum(indexInfo->ii_NumIndexKeyAttrs);
 	values[Anum_pg_index_indisunique - 1] = BoolGetDatum(indexInfo->ii_Unique);
+	values[Anum_pg_index_indnullsnotdistinct - 1] = BoolGetDatum(indexInfo->ii_NullsNotDistinct);
 	values[Anum_pg_index_indisprimary - 1] = BoolGetDatum(primary);
 	values[Anum_pg_index_indisexclusion - 1] = BoolGetDatum(isexclusion);
 	values[Anum_pg_index_indimmediate - 1] = BoolGetDatum(immediate);
@@ -1349,6 +1350,7 @@ index_concurrently_create_copy(Relation heapRelation, Oid oldIndexId,
 							indexExprs,
 							indexPreds,
 							oldInfo->ii_Unique,
+							oldInfo->ii_NullsNotDistinct,
 							false,	/* not ready for inserts */
 							true);
 
@@ -2408,6 +2410,7 @@ BuildIndexInfo(Relation index)
 					   RelationGetIndexExpressions(index),
 					   RelationGetIndexPredicate(index),
 					   indexStruct->indisunique,
+					   indexStruct->indnullsnotdistinct,
 					   indexStruct->indisready,
 					   false);
 
@@ -2467,6 +2470,7 @@ BuildDummyIndexInfo(Relation index)
 					   RelationGetDummyIndexExpressions(index),
 					   NIL,
 					   indexStruct->indisunique,
+					   indexStruct->indnullsnotdistinct,
 					   indexStruct->indisready,
 					   false);
 
@@ -2498,6 +2502,9 @@ CompareIndexInfo(IndexInfo *info1, IndexInfo *info2,
 	int			i;
 
 	if (info1->ii_Unique != info2->ii_Unique)
+		return false;
+
+	if (info1->ii_NullsNotDistinct != info2->ii_NullsNotDistinct)
 		return false;
 
 	/* indexes are only equivalent if they have the same access method */

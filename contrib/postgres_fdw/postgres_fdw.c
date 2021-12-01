@@ -918,8 +918,6 @@ get_useful_pathkeys_for_relation(PlannerInfo *root, RelOptInfo *rel)
 		foreach(lc, root->query_pathkeys)
 		{
 			PathKey    *pathkey = (PathKey *) lfirst(lc);
-			EquivalenceClass *pathkey_ec = pathkey->pk_eclass;
-			Expr	   *em_expr;
 
 			/*
 			 * The planner and executor don't have any clever strategy for
@@ -927,13 +925,8 @@ get_useful_pathkeys_for_relation(PlannerInfo *root, RelOptInfo *rel)
 			 * getting it to be sorted by all of those pathkeys. We'll just
 			 * end up resorting the entire data set.  So, unless we can push
 			 * down all of the query pathkeys, forget it.
-			 *
-			 * is_foreign_expr would detect volatile expressions as well, but
-			 * checking ec_has_volatile here saves some cycles.
 			 */
-			if (pathkey_ec->ec_has_volatile ||
-				!(em_expr = find_em_expr_for_rel(pathkey_ec, rel)) ||
-				!is_foreign_expr(root, rel, em_expr))
+			if (!is_foreign_pathkey(root, rel, pathkey))
 			{
 				query_pathkeys_ok = false;
 				break;
@@ -6541,9 +6534,9 @@ add_foreign_ordered_paths(PlannerInfo *root, RelOptInfo *input_rel,
 			return;
 
 		/* Get the sort expression for the pathkey_ec */
-		sort_expr = find_em_expr_for_input_target(root,
-												  pathkey_ec,
-												  input_rel->reltarget);
+		sort_expr = find_em_for_input_target(root,
+											 pathkey_ec,
+											 input_rel->reltarget)->em_expr;
 
 		/* If it's unsafe to remote, we cannot push down the final sort */
 		if (!is_foreign_expr(root, input_rel, sort_expr))
@@ -7370,13 +7363,12 @@ conversion_error_callback(void *arg)
 }
 
 /*
- * Find an equivalence class member expression to be computed as a sort column
- * in the given target.
+ * Find an equivalence class member to be computed as a sort column in the
+ * given target.
  */
-Expr *
-find_em_expr_for_input_target(PlannerInfo *root,
-							  EquivalenceClass *ec,
-							  PathTarget *target)
+EquivalenceMember *
+find_em_for_input_target(PlannerInfo *root, EquivalenceClass *ec,
+						 PathTarget *target)
 {
 	ListCell   *lc1;
 	int			i;
@@ -7421,7 +7413,7 @@ find_em_expr_for_input_target(PlannerInfo *root,
 				em_expr = ((RelabelType *) em_expr)->arg;
 
 			if (equal(em_expr, expr))
-				return em->em_expr;
+				return em;
 		}
 
 		i++;

@@ -1,0 +1,485 @@
+CREATE EXTENSION test_path;
+SELECT * FROM test_platform();
+ test_platform 
+---------------
+ Win32
+(1 row)
+
+-- prefix is '/'
+SELECT * FROM test_canonicalize_path('/');
+ test_canonicalize_path 
+------------------------
+ /
+(1 row)
+
+SELECT * FROM test_canonicalize_path('//');
+ test_canonicalize_path 
+------------------------
+ //
+(1 row)
+
+SELECT * FROM test_canonicalize_path('/./abc/def/');
+ test_canonicalize_path 
+------------------------
+ /abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('/./../abc/def');
+ test_canonicalize_path 
+------------------------
+ /abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('/./../../abc/def/');
+ test_canonicalize_path 
+------------------------
+ /abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('/../abc/def');
+ test_canonicalize_path 
+------------------------
+ /abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('/../../abc/def');
+ test_canonicalize_path 
+------------------------
+ /abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('/abc/../abc/def');
+ test_canonicalize_path 
+------------------------
+ /abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('/abc/./../abc/def//');
+ test_canonicalize_path 
+------------------------
+ /abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('/abc/../../abc/def');
+ test_canonicalize_path 
+------------------------
+ /abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('/abc/def/../../abc/def');
+ test_canonicalize_path 
+------------------------
+ /abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('/abc/def/../../../../abc/def');
+ test_canonicalize_path 
+------------------------
+ /abc/def
+(1 row)
+
+-- prefix is '/abc'
+SELECT * FROM test_canonicalize_path('/abc/./abc/def');
+ test_canonicalize_path 
+------------------------
+ /abc/abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('/abc/abc/../abc/def');
+ test_canonicalize_path 
+------------------------
+ /abc/abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('/abc/abc/./../abc/def');
+ test_canonicalize_path 
+------------------------
+ /abc/abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('/abc/abc/def/../../abc/def');
+ test_canonicalize_path 
+------------------------
+ /abc/abc/def
+(1 row)
+
+-- prefix is '.'
+SELECT * FROM test_canonicalize_path('.');
+ test_canonicalize_path 
+------------------------
+ .
+(1 row)
+
+SELECT * FROM test_canonicalize_path('./');
+ test_canonicalize_path 
+------------------------
+ .
+(1 row)
+
+SELECT * FROM test_canonicalize_path('./abc/..');
+ test_canonicalize_path 
+------------------------
+ .
+(1 row)
+
+-- prefix is '..'
+SELECT * FROM test_canonicalize_path('..');
+ test_canonicalize_path 
+------------------------
+ ..
+(1 row)
+
+SELECT * FROM test_canonicalize_path('../');
+ test_canonicalize_path 
+------------------------
+ ..
+(1 row)
+
+SELECT * FROM test_canonicalize_path('../abc/def');
+ test_canonicalize_path 
+------------------------
+ ../abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('./../abc/def');
+ test_canonicalize_path 
+------------------------
+ ../abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('./abc/../../abc/def');
+ test_canonicalize_path 
+------------------------
+ ../abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('./abc/./def/.././ghi/../../../abc/def');
+ test_canonicalize_path 
+------------------------
+ ../abc/def
+(1 row)
+
+-- prefix is 'abc'
+SELECT * FROM test_canonicalize_path('abc');
+ test_canonicalize_path 
+------------------------
+ abc
+(1 row)
+
+SELECT * FROM test_canonicalize_path('abc/');
+ test_canonicalize_path 
+------------------------
+ abc
+(1 row)
+
+SELECT * FROM test_canonicalize_path('./abc/def');
+ test_canonicalize_path 
+------------------------
+ abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('./abc/../abc/def');
+ test_canonicalize_path 
+------------------------
+ abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('./abc/./../abc/def');
+ test_canonicalize_path 
+------------------------
+ abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('./abc/./def/.././../abc/def');
+ test_canonicalize_path 
+------------------------
+ abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('abc/def');
+ test_canonicalize_path 
+------------------------
+ abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('abc/../abc/def');
+ test_canonicalize_path 
+------------------------
+ abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('abc/./../abc/def');
+ test_canonicalize_path 
+------------------------
+ abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('abc/./def/.././../abc/def');
+ test_canonicalize_path 
+------------------------
+ abc/def
+(1 row)
+
+-- special
+SELECT * FROM test_canonicalize_path('/abc/c:abc');
+ test_canonicalize_path 
+------------------------
+ /abc/c:abc
+(1 row)
+
+SELECT * FROM test_canonicalize_path('/abc/c:/abc');
+ test_canonicalize_path 
+------------------------
+ /abc/c:/abc
+(1 row)
+
+SELECT * FROM test_canonicalize_path('/abc/c:\abc');
+ test_canonicalize_path 
+------------------------
+ /abc/c:/abc
+(1 row)
+
+SELECT * FROM test_canonicalize_path('/abc/c:abc/def');
+ test_canonicalize_path 
+------------------------
+ /abc/c:abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('/abc/c:abc/./def');
+ test_canonicalize_path 
+------------------------
+ /abc/c:abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('/abc/c:abc/./../def');
+ test_canonicalize_path 
+------------------------
+ /abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('c:abc');
+ test_canonicalize_path 
+------------------------
+ c:abc
+(1 row)
+
+SELECT * FROM test_canonicalize_path('c:abc/def');
+ test_canonicalize_path 
+------------------------
+ c:abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('./c:abc/./def');
+ test_canonicalize_path 
+------------------------
+ c:abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('../c:abc/./../def');
+ test_canonicalize_path 
+------------------------
+ ../def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('/..a/b..');
+ test_canonicalize_path 
+------------------------
+ /..a/b..
+(1 row)
+
+-- Windows
+-- prefix is 'C:\' or '\\network'
+SELECT * FROM test_canonicalize_path('C:');
+ test_canonicalize_path 
+------------------------
+ C:
+(1 row)
+
+SELECT * FROM test_canonicalize_path('C:\');
+ test_canonicalize_path 
+------------------------
+ C:/
+(1 row)
+
+SELECT * FROM test_canonicalize_path('C:\\');
+ test_canonicalize_path 
+------------------------
+ C:/
+(1 row)
+
+SELECT * FROM test_canonicalize_path('C:\\\');
+ test_canonicalize_path 
+------------------------
+ C:/
+(1 row)
+
+SELECT * FROM test_canonicalize_path('C:\\.\abc\def');
+ test_canonicalize_path 
+------------------------
+ C:/abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('C:\\.\..\abc\def');
+ test_canonicalize_path 
+------------------------
+ C:/abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('C:\.\..\..\abc\def');
+ test_canonicalize_path 
+------------------------
+ C:/abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('C:\..\abc\def');
+ test_canonicalize_path 
+------------------------
+ C:/abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('C:\..\..\abc\def');
+ test_canonicalize_path 
+------------------------
+ C:/abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('C:\abc\..\abc\def');
+ test_canonicalize_path 
+------------------------
+ C:/abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('C:\abc\.\..\abc\def');
+ test_canonicalize_path 
+------------------------
+ C:/abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('C:\abc\..\..\abc\def');
+ test_canonicalize_path 
+------------------------
+ C:/abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('C:\abc\def\..\..\abc\def');
+ test_canonicalize_path 
+------------------------
+ C:/abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('C:\abc\def\..\..\..\..\abc\def');
+ test_canonicalize_path 
+------------------------
+ C:/abc/def
+(1 row)
+
+-- prefix is '\\network'
+SELECT * FROM test_canonicalize_path('\\127.0.0.1');
+ test_canonicalize_path 
+------------------------
+ //127.0.0.1
+(1 row)
+
+SELECT * FROM test_canonicalize_path('\\127.0.0.1\');
+ test_canonicalize_path 
+------------------------
+ //127.0.0.1/
+(1 row)
+
+SELECT * FROM test_canonicalize_path('\\127.0.0.1\\');
+ test_canonicalize_path 
+------------------------
+ //127.0.0.1/
+(1 row)
+
+SELECT * FROM test_canonicalize_path('\\127.0.0.1\\\');
+ test_canonicalize_path 
+------------------------
+ //127.0.0.1/
+(1 row)
+
+SELECT * FROM test_canonicalize_path('\\127.0.0.1\\.\abc\def');
+ test_canonicalize_path 
+------------------------
+ //127.0.0.1/abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('\\127.0.0.1\\.\..\abc\def');
+ test_canonicalize_path 
+------------------------
+ //127.0.0.1/abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('\\127.0.0.1\.\..\..\abc\def');
+ test_canonicalize_path 
+------------------------
+ //127.0.0.1/abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('\\127.0.0.1\..\abc\def');
+ test_canonicalize_path 
+------------------------
+ //127.0.0.1/abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('\\127.0.0.1\..\..\abc\def');
+ test_canonicalize_path 
+------------------------
+ //127.0.0.1/abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('\\127.0.0.1\abc\..\abc\def');
+ test_canonicalize_path 
+------------------------
+ //127.0.0.1/abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('\\127.0.0.1\abc\.\..\abc\def');
+ test_canonicalize_path 
+------------------------
+ //127.0.0.1/abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('\\127.0.0.1\abc\..\..\abc\def');
+ test_canonicalize_path 
+------------------------
+ //127.0.0.1/abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('\\127.0.0.1\abc\def\..\..\abc\def');
+ test_canonicalize_path 
+------------------------
+ //127.0.0.1/abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('\\127.0.0.1\abc\def\..\..\..\..\abc\def');
+ test_canonicalize_path 
+------------------------
+ //127.0.0.1/abc/def
+(1 row)
+
+-- prefix is 'C:\abc' or '\\network\abc'
+SELECT * FROM test_canonicalize_path('\\127.0.0.1\abc\.\abc\def');
+ test_canonicalize_path  
+-------------------------
+ //127.0.0.1/abc/abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('\\127.0.0.1\abc\abc\..\abc\def');
+ test_canonicalize_path  
+-------------------------
+ //127.0.0.1/abc/abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('\\127.0.0.1\abc\abc\.\..\abc\def');
+ test_canonicalize_path  
+-------------------------
+ //127.0.0.1/abc/abc/def
+(1 row)
+
+SELECT * FROM test_canonicalize_path('\\127.0.0.1\abc\abc\def\..\..\abc\def');
+ test_canonicalize_path  
+-------------------------
+ //127.0.0.1/abc/abc/def
+(1 row)
+

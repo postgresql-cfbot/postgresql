@@ -21,6 +21,7 @@ SUBDIRS = \
 		  test_integerset \
 		  test_misc \
 		  test_parser \
+		  test_path \
 		  test_pg_dump \
 		  test_predtest \
 		  test_rbtree \

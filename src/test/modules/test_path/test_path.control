@@ -1,0 +1,5 @@
+# test_path extension
+comment = 'test canonicalize_path'
+default_version = '1.0'
+module_pathname = '$libdir/test_path'
+relocatable = true

@@ -46,7 +46,7 @@
 
 static void make_relative_path(char *ret_path, const char *target_path,
 							   const char *bin_path, const char *my_exec_path);
-static void trim_directory(char *path);
+static int trim_directory(char *path);
 static void trim_trailing_separator(char *path);
 
 
@@ -240,6 +240,69 @@ join_path_components(char *ret_path,
 	}
 }
 
+static inline void
+canonicalize_path_sub(bool isabs, char *path, int *pathlen,
+					  char *sub, int sublen, int *nstrips)
+{
+	bool need_copy = true;
+
+	if (sublen == '\0')
+		return;
+
+	if (strcmp(sub, ".") == 0)
+	{
+		/* Don't remove the leading '.' if this is a relative path */
+
+		if (isabs || path[0] != '\0')
+			need_copy = false;
+	}
+	else if (strcmp(sub, "..") == 0 )
+	{
+		if (*nstrips == 0)
+		{
+			if (isabs)
+				need_copy = false;
+
+			/* handle leading './..', this should be '..' */
+			else if (strcmp(path, ".") == 0)
+				*pathlen = *pathlen - 1;
+		}
+		else
+		{
+			*nstrips = *nstrips - 1;
+			*pathlen = trim_directory(path);
+
+			/* foo/.. should become ".", not empty */
+			if (*pathlen == 0)
+			{
+				sub = ".";
+				sublen = 1;
+			}
+			else
+				need_copy = false;
+		}
+	}
+	else
+	{
+		/* handle leading './dir', this should be 'dir' */
+		if (!isabs && strcmp(path, ".") == 0)
+			*pathlen = *pathlen - 1;
+
+		*nstrips = *nstrips + 1;
+	}
+
+	if (need_copy)
+	{
+		if (*pathlen > 0 && path[*pathlen-1] != '/')
+		{
+			strcpy(&path[*pathlen], "/");
+			*pathlen = *pathlen + 1;
+		}
+
+		strcpy(&path[*pathlen], sub);
+		*pathlen = *pathlen + sublen;
+	}
+}
 
 /*
  *	Clean up path by:
@@ -247,17 +310,18 @@ join_path_components(char *ret_path,
  *		o  remove trailing quote on Win32
  *		o  remove trailing slash
  *		o  remove duplicate adjacent separators
- *		o  remove trailing '.'
- *		o  process trailing '..' ourselves
+ *		o  remove '.' (excpet leading '.' in relative path)
+ *		o  remove '..' (excpet leading '..' in relative path)
  */
 void
 canonicalize_path(char *path)
 {
-	char	   *p,
-			   *to_p;
+	char	   *p;
 	char	   *spath;
-	bool		was_sep = false;
-	int			pending_strips;
+	char	   *tmppath;
+	bool		isabs;
+	int			nstrips = 0;
+	int			len = 0;
 
 #ifdef WIN32
 
@@ -279,127 +343,53 @@ canonicalize_path(char *path)
 		*(p - 1) = '/';
 #endif
 
-	/*
-	 * Removing the trailing slash on a path means we never get ugly double
-	 * trailing slashes. Also, Win32 can't stat() a directory with a trailing
-	 * slash. Don't remove a leading slash, though.
-	 */
-	trim_trailing_separator(path);
-
-	/*
-	 * Remove duplicate adjacent separators
-	 */
-	p = path;
-#ifdef WIN32
-	/* Don't remove leading double-slash on Win32 */
-	if (*p)
-		p++;
+	isabs = is_absolute_path(path);
+	tmppath = strdup(path);
+	if (!tmppath)
+	{
+#ifndef FRONTEND
+			ereport(ERROR,
+					(errcode(ERRCODE_OUT_OF_MEMORY),
+					 errmsg("out of memory")));
+#else
+			fprintf(stderr, _("out of memory\n"));
+			return;
 #endif
-	to_p = p;
-	for (; *p; p++, to_p++)
-	{
-		/* Handle many adjacent slashes, like "/a///b" */
-		while (*p == '/' && was_sep)
-			p++;
-		if (to_p != p)
-			*to_p = *p;
-		was_sep = (*p == '/');
-	}
-	*to_p = '\0';
-
-	/*
-	 * Remove any trailing uses of "." and process ".." ourselves
-	 *
-	 * Note that "/../.." should reduce to just "/", while "../.." has to be
-	 * kept as-is.  In the latter case we put back mistakenly trimmed ".."
-	 * components below.  Also note that we want a Windows drive spec to be
-	 * visible to trim_directory(), but it's not part of the logic that's
-	 * looking at the name components; hence distinction between path and
-	 * spath.
-	 */
-	spath = skip_drive(path);
-	pending_strips = 0;
-	for (;;)
-	{
-		int			len = strlen(spath);
-
-		if (len >= 2 && strcmp(spath + len - 2, "/.") == 0)
-			trim_directory(path);
-		else if (strcmp(spath, ".") == 0)
-		{
-			/* Want to leave "." alone, but "./.." has to become ".." */
-			if (pending_strips > 0)
-				*spath = '\0';
-			break;
-		}
-		else if ((len >= 3 && strcmp(spath + len - 3, "/..") == 0) ||
-				 strcmp(spath, "..") == 0)
-		{
-			trim_directory(path);
-			pending_strips++;
-		}
-		else if (pending_strips > 0 && *spath != '\0')
-		{
-			/* trim a regular directory name canceled by ".." */
-			trim_directory(path);
-			pending_strips--;
-			/* foo/.. should become ".", not empty */
-			if (*spath == '\0')
-				strcpy(spath, ".");
-		}
-		else
-			break;
 	}
 
-	if (pending_strips > 0)
+	if (isabs)
+		len = skip_drive(path) - path + 1;
+
+	path[len] = '\0';
+
+	if (isabs)
+		spath = skip_drive(tmppath) + 1;
+	else
+		spath = tmppath;
+
+	for (p = spath; *p; p++)
 	{
-		/*
-		 * We could only get here if path is now totally empty (other than a
-		 * possible drive specifier on Windows). We have to put back one or
-		 * more ".."'s that we took off.
-		 */
-		while (--pending_strips > 0)
-			strcat(path, "../");
-		strcat(path, "..");
+		if (IS_DIR_SEP(*p))
+		{
+			*p = '\0';
+
+			canonicalize_path_sub(isabs, path, &len,
+				spath, strlen(spath), &nstrips);
+
+			spath = p + 1;
+		}
 	}
-}
 
-/*
- * Detect whether a path contains any parent-directory references ("..")
- *
- * The input *must* have been put through canonicalize_path previously.
- *
- * This is a bit tricky because we mustn't be fooled by "..a.." (legal)
- * nor "C:.." (legal on Unix but not Windows).
- */
-bool
-path_contains_parent_reference(const char *path)
-{
-	int			path_len;
+	canonicalize_path_sub(isabs, path, &len,
+		spath, strlen(spath), &nstrips);
 
-	path = skip_drive(path);	/* C: shouldn't affect our conclusion */
-
-	path_len = strlen(path);
-
-	/*
-	 * ".." could be the whole path; otherwise, if it's present it must be at
-	 * the beginning, in the middle, or at the end.
-	 */
-	if (strcmp(path, "..") == 0 ||
-		strncmp(path, "../", 3) == 0 ||
-		strstr(path, "/../") != NULL ||
-		(path_len >= 3 && strcmp(path + path_len - 3, "/..") == 0))
-		return true;
-
-	return false;
+	free(tmppath);
 }
 
 /*
  * Detect whether a path is only in or below the current working directory.
  * An absolute path that matches the current working directory should
- * return false (we only want relative to the cwd).  We don't allow
- * "/../" even if that would keep us under the cwd (it is too hard to
- * track that).
+ * return false (we only want relative to the cwd).
  */
 bool
 path_is_relative_and_below_cwd(const char *path)
@@ -407,7 +397,7 @@ path_is_relative_and_below_cwd(const char *path)
 	if (is_absolute_path(path))
 		return false;
 	/* don't allow anything above the cwd */
-	else if (path_contains_parent_reference(path))
+	else if (path_is_prefix_of_path("..", path))
 		return false;
 #ifdef WIN32
 
@@ -864,15 +854,16 @@ get_parent_directory(char *path)
  *	the last pathname component, and the slash just ahead of it --- but never
  *	remove a leading slash.
  */
-static void
+static int
 trim_directory(char *path)
 {
 	char	   *p;
+	char	   *opath = path;
 
 	path = skip_drive(path);
 
 	if (path[0] == '\0')
-		return;
+		return 0;
 
 	/* back up over trailing slash(es) */
 	for (p = path + strlen(path) - 1; IS_DIR_SEP(*p) && p > path; p--)
@@ -887,6 +878,8 @@ trim_directory(char *path)
 	if (p == path && IS_DIR_SEP(*p))
 		p++;
 	*p = '\0';
+
+	return (int)(p - opath);
 }
 
 

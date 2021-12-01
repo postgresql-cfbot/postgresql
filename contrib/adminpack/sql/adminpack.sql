@@ -23,7 +23,7 @@ SET ROLE regress_user1;
 SELECT pg_file_write('../test_file0', 'test0', false);
 SELECT pg_file_write('/tmp/test_file0', 'test0', false);
 SELECT pg_file_write(current_setting('data_directory') || '/test_file4', 'test4', false);
-SELECT pg_file_write(current_setting('data_directory') || '/../test_file4', 'test4', false);
+SELECT pg_file_write('abc/../../test_file4', 'test4', false);
 RESET ROLE;
 REVOKE EXECUTE ON FUNCTION pg_file_write(text,text,bool) FROM regress_user1;
 REVOKE pg_read_all_settings FROM regress_user1;

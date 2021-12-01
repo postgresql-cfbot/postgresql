@@ -50,8 +50,8 @@ SELECT pg_file_write(current_setting('data_directory') || '/test_file4', 'test4'
              5
 (1 row)
 
-SELECT pg_file_write(current_setting('data_directory') || '/../test_file4', 'test4', false);
-ERROR:  reference to parent directory ("..") not allowed
+SELECT pg_file_write('abc/../../test_file4', 'test4', false);
+ERROR:  path must be in or below the current directory
 RESET ROLE;
 REVOKE EXECUTE ON FUNCTION pg_file_write(text,text,bool) FROM regress_user1;
 REVOKE pg_read_all_settings FROM regress_user1;

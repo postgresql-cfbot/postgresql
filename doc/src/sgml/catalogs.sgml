@@ -1642,11 +1642,10 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
   </para>
 
   <para>
-   Because user identities are cluster-wide,
-   <structname>pg_auth_members</structname>
-   is shared across all databases of a cluster: there is only one
-   copy of <structname>pg_auth_members</structname> per cluster, not
-   one per database.
+   User identities are cluster-wide, but role memberships can be either
+   cluster-wide or database-specific (as specified by the value of the
+   <structfield>dbid</structfield> column).  The <structname>pg_auth_members</structname>
+   catalog is shared across all databases of a cluster.
   </para>
 
   <table>
@@ -1703,6 +1702,17 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
        <structfield>roleid</structfield> to others
       </para></entry>
      </row>
+
+      <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>dbid</structfield> <type>oid</type>
+       (references <link linkend="catalog-pg-database"><structname>pg_database</structname></link>.<structfield>oid</structfield>)
+      </para>
+      <para>
+       ID of the database that this membership is constrained to; zero if membership is cluster-wide
+      </para></entry>
+     </row>
+
     </tbody>
    </tgroup>
   </table>

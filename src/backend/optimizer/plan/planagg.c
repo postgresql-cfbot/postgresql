@@ -245,7 +245,7 @@ can_minmax_aggs(PlannerInfo *root, List **context)
 	foreach(lc, root->agginfos)
 	{
 		AggInfo    *agginfo = (AggInfo *) lfirst(lc);
-		Aggref	   *aggref = agginfo->representative_aggref;
+		Aggref	   *aggref = linitial_node(Aggref, agginfo->aggrefs);
 		Oid			aggsortop;
 		TargetEntry *curTarget;
 		MinMaxAggInfo *mminfo;

@@ -197,6 +197,7 @@ struct config_int
 	GucIntCheckHook check_hook;
 	GucIntAssignHook assign_hook;
 	GucShowHook show_hook;
+	const struct config_enum_entry *special;
 	/* variable fields, initialized at runtime: */
 	int			reset_val;
 	void	   *reset_extra;

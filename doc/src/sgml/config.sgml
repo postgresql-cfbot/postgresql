@@ -7373,7 +7373,8 @@ log_line_prefix = '%m [%p] %q%u@%d/%a '
         location of the error in the PostgreSQL source code
         (if <varname>log_error_verbosity</varname> is set to <literal>verbose</literal>),
         application name, backend type, process ID of parallel group leader,
-        and query id.
+        query id,
+        and optional tags added by the logger as JSON.
         Here is a sample table definition for storing CSV-format log output:
 
 <programlisting>
@@ -7405,6 +7406,7 @@ CREATE TABLE postgres_log
   backend_type text,
   leader_pid integer,
   query_id bigint,
+  tags jsonb
   PRIMARY KEY (session_id, session_line_num)
 );
 </programlisting>

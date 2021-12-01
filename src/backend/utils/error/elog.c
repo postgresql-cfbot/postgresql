@@ -80,6 +80,7 @@
 #include "storage/proc.h"
 #include "tcop/tcopprot.h"
 #include "utils/guc.h"
+#include "utils/json.h"
 #include "utils/memutils.h"
 #include "utils/ps_status.h"
 
@@ -465,6 +466,7 @@ errstart(int elevel, const char *domain)
 		edata->sqlerrcode = ERRCODE_SUCCESSFUL_COMPLETION;
 	/* errno is saved here so that error parameter eval can't change it */
 	edata->saved_errno = errno;
+	edata->tags = NIL;
 
 	/*
 	 * Any allocations for this error state level should go into ErrorContext
@@ -516,6 +518,7 @@ errfinish(const char *filename, int lineno, const char *funcname)
 	int			elevel;
 	MemoryContext oldcontext;
 	ErrorContextCallback *econtext;
+	ListCell   *lc;
 
 	recursion_depth++;
 	CHECK_STACK_DEPTH();
@@ -621,7 +624,18 @@ errfinish(const char *filename, int lineno, const char *funcname)
 		pfree(edata->constraint_name);
 	if (edata->internalquery)
 		pfree(edata->internalquery);
+	/* Every tag should have been palloc'ed */
+	if (edata->tags != NIL)
+	{
+		foreach(lc, edata->tags)
+		{
+			ErrorTag   *tag = (ErrorTag *) lfirst(lc);
 
+			pfree(tag->tagvalue);
+			pfree(tag);
+		}
+		pfree(edata->tags);
+	}
 	errordata_stack_depth--;
 
 	/* Exit error-handling context */
@@ -1190,6 +1204,41 @@ errhint_plural(const char *fmt_singular, const char *fmt_plural,
 	MemoryContextSwitchTo(oldcontext);
 	recursion_depth--;
 	return 0;					/* return value does not matter */
+}
+
+int
+errtag(const char *tag, const char *fmt_value,...)
+{
+	ErrorData  *edata = &errordata[errordata_stack_depth];
+	ErrorTag   *etag;
+	MemoryContext oldcontext;
+	StringInfoData buf;
+
+	recursion_depth++;
+	CHECK_STACK_DEPTH();
+	oldcontext = MemoryContextSwitchTo(edata->assoc_context);
+	etag = palloc(sizeof(ErrorTag));
+	etag->tagname = tag;
+	initStringInfo(&buf);
+	for (;;)
+	{
+		va_list		args;
+		int			needed;
+
+		errno = edata->saved_errno;
+		va_start(args, fmt_value);
+		needed = appendStringInfoVA(&buf, fmt_value, args);
+		va_end(args);
+		if (needed == 0)
+			break;
+		enlargeStringInfo(&buf, needed);
+	}
+	etag->tagvalue = pstrdup(buf.data);
+	edata->tags = lappend(edata->tags, etag);
+	pfree(buf.data);
+	MemoryContextSwitchTo(oldcontext);
+	recursion_depth--;
+	return 0;
 }
 
 
@@ -2965,10 +3014,32 @@ write_csvlog(ErrorData *edata)
 			appendStringInfo(&buf, "%d", leader->pid);
 	}
 	appendStringInfoChar(&buf, ',');
-
 	/* query id */
 	appendStringInfo(&buf, "%lld", (long long) pgstat_get_my_query_id());
+	appendStringInfoChar(&buf, ',');
+	if (edata->tags != NIL)
+	{
+		StringInfoData tagbuf;
+		ListCell   *lc;
+		bool		first = true;
 
+		initStringInfo(&tagbuf);
+		appendStringInfoChar(&tagbuf, '{');
+		foreach(lc, edata->tags)
+		{
+			ErrorTag   *etag = lfirst(lc);
+
+			if (!first)
+				appendStringInfoChar(&tagbuf, ',');
+			escape_json(&tagbuf, etag->tagname);
+			appendStringInfoChar(&tagbuf, ':');
+			escape_json(&tagbuf, etag->tagvalue);
+			first = false;
+		}
+		appendStringInfoChar(&tagbuf, '}');
+		appendCSVLiteral(&buf, tagbuf.data);
+		pfree(tagbuf.data);
+	}
 	appendStringInfoChar(&buf, '\n');
 
 	/* If in the syslogger process, try to write messages direct to file */

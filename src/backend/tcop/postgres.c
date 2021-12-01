@@ -41,6 +41,7 @@
 #include "access/xact.h"
 #include "catalog/pg_type.h"
 #include "commands/async.h"
+#include "commands/explain.h"
 #include "commands/prepare.h"
 #include "common/pg_prng.h"
 #include "executor/spi.h"
@@ -3367,6 +3368,9 @@ ProcessInterrupts(void)
 
 	if (LogMemoryContextPending)
 		ProcessLogMemoryContextInterrupt();
+
+	if (LogCurrentPlanPending)
+		ProcessLogCurrentPlanInterrupt();
 }
 
 
@@ -4289,6 +4293,9 @@ PostgresMain(const char *dbname, const char *username)
 
 		/* We don't have a transaction command open anymore */
 		xact_started = false;
+
+		/* We have no running query */
+		ActiveQueryDesc = NULL;
 
 		/*
 		 * If an error occurred while we were reading a message from the

@@ -688,10 +688,13 @@ compactify_tuples(itemIdCompact itemidbase, int nitems, Page page, bool presorte
  *
  * This routine is usable for heap pages only, but see PageIndexMultiDelete.
  *
- * Never removes unused line pointers.  PageTruncateLinePointerArray can
- * safely remove some unused line pointers.  It ought to be safe for this
- * routine to free unused line pointers in roughly the same way, but it's not
- * clear that that would be beneficial.
+ * Also removes line pointers, similar to PageTruncateLinePointerArray.
+ * The main benefit for also truncating the line pointer array here is that
+ * now HOT workloads can also benefit from this optimization. The remaining
+ * line pointers from a temporary increase in HOT chain length on this page
+ * will now be cleaned up as well, even if no logical tuple is ever deleted
+ * from the page.  This allows for more extended use of local updates,
+ * without needing to wait for a second run of VACUUM:
  *
  * PageTruncateLinePointerArray is only called during VACUUM's second pass
  * over the heap.  Any unused line pointers that it sees are likely to have
@@ -718,6 +721,7 @@ PageRepairFragmentation(Page page)
 	int			nline,
 				nstorage,
 				nunused;
+	OffsetNumber lastUsed = InvalidOffsetNumber;
 	int			i;
 	Size		totallen;
 	bool		presorted = true;	/* For now */
@@ -751,6 +755,7 @@ PageRepairFragmentation(Page page)
 		lp = PageGetItemId(page, i);
 		if (ItemIdIsUsed(lp))
 		{
+			lastUsed = i;
 			if (ItemIdHasStorage(lp))
 			{
 				itemidptr->offsetindex = i - 1;
@@ -798,6 +803,19 @@ PageRepairFragmentation(Page page)
 		compactify_tuples(itemidbase, nstorage, page, presorted);
 	}
 
+	/* The last line pointer is not the last used line pointer */
+	if (lastUsed != nline)
+	{
+		int nunusedend = nline - lastUsed;
+
+		Assert(nunused >= nunusedend && nunusedend > 0);
+
+		/* remove trailing unused line pointers from the count */
+		nunused -= nunusedend;
+		/* truncate the line pointer array */
+		((PageHeader) page)->pd_lower -= (sizeof(ItemIdData) * nunusedend);
+	}
+
 	/* Set hint bit for PageAddItemExtended */
 	if (nunused > 0)
 		PageSetHasFreeLinePointers(page);
@@ -814,11 +832,6 @@ PageRepairFragmentation(Page page)
  * its second pass over the heap.  We expect at least one LP_UNUSED line
  * pointer on the page (if VACUUM didn't have an LP_DEAD item on the page that
  * it just set to LP_UNUSED then it should not call here).
- *
- * We avoid truncating the line pointer array to 0 items, if necessary by
- * leaving behind a single remaining LP_UNUSED item.  This is a little
- * arbitrary, but it seems like a good idea to avoid leaving a PageIsEmpty()
- * page behind.
  *
  * Caller can have either an exclusive lock or a super-exclusive lock on
  * page's buffer.  The page's PD_HAS_FREE_LINES hint bit will be set or unset
@@ -837,7 +850,7 @@ PageTruncateLinePointerArray(Page page)
 	{
 		ItemId		lp = PageGetItemId(page, i);
 
-		if (!countdone && i > FirstOffsetNumber)
+		if (!countdone)
 		{
 			/*
 			 * Still determining which line pointers from the end of the array

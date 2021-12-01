@@ -16,6 +16,7 @@
 
 #include "miscadmin.h"
 #include "optimizer/appendinfo.h"
+#include "optimizer/cost.h"
 #include "optimizer/joininfo.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
@@ -1549,6 +1550,192 @@ try_partitionwise_join(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 		populate_joinrel_with_paths(root, child_rel1, child_rel2,
 									child_joinrel, child_sjinfo,
 									child_restrictlist);
+	}
+}
+
+/*
+ * Build RelOptInfo on JOIN of each partition of the outer relation and the inner
+ * relation. Return List of such RelOptInfo's. Return NIL, if at least one of
+ * these JOINs is impossible to build.
+ */
+static List *
+extract_asymmetric_partitionwise_subjoin(PlannerInfo *root,
+										 RelOptInfo *joinrel,
+										 AppendPath *append_path,
+										 RelOptInfo *inner_rel,
+										 JoinType jointype,
+										 JoinPathExtraData *extra)
+{
+	List		*result = NIL;
+	ListCell	*lc;
+
+	foreach (lc, append_path->subpaths)
+	{
+		Path			*child_path = lfirst(lc);
+		RelOptInfo		*child_rel = child_path->parent;
+		Relids			child_joinrelids;
+		Relids			parent_relids;
+		RelOptInfo		*child_joinrel;
+		SpecialJoinInfo	*child_sjinfo;
+		List			*child_restrictlist;
+
+		child_joinrelids = bms_union(child_rel->relids, inner_rel->relids);
+		parent_relids = bms_union(append_path->path.parent->relids,
+								  inner_rel->relids);
+
+		child_sjinfo = build_child_join_sjinfo(root, extra->sjinfo,
+											   child_rel->relids,
+											   inner_rel->relids);
+		child_restrictlist = (List *)
+			adjust_appendrel_attrs_multilevel(root, (Node *)extra->restrictlist,
+											  child_joinrelids, parent_relids);
+
+		child_joinrel = find_join_rel(root, child_joinrelids);
+		if (!child_joinrel)
+			child_joinrel = build_child_join_rel(root,
+												 child_rel,
+												 inner_rel,
+												 joinrel,
+												 child_restrictlist,
+												 child_sjinfo,
+												 jointype);
+		else
+		{
+			/*
+			 * The join relation already exists. For example, it could happen if
+			 * we join two plane tables with partitioned table(s).
+			 * Populating this join with additional paths could push out some
+			 * previously added paths which could be pointed in a subplans list
+			 * of an higher level append.
+			 * Of course, we could save such paths before generating new. But it
+			 * can increase too much the number of paths in complex queries. It
+			 * can be a task for future work.
+			 */
+			return NIL;
+		}
+
+		populate_joinrel_with_paths(root,
+									child_rel,
+									inner_rel,
+									child_joinrel,
+									child_sjinfo,
+									child_restrictlist);
+
+		/* Give up if asymmetric partition-wise join is not available */
+		if (child_joinrel->pathlist == NIL)
+			return NIL;
+
+		set_cheapest(child_joinrel);
+		result = lappend(result, child_joinrel);
+	}
+	return result;
+}
+
+static bool
+is_asymmetric_join_feasible(PlannerInfo *root,
+						   RelOptInfo *outer_rel,
+						   RelOptInfo *inner_rel,
+						   JoinType jointype)
+{
+	ListCell *lc;
+
+	if (jointype != JOIN_INNER && jointype != JOIN_LEFT)
+		return false;
+
+	if (IS_OTHER_REL(outer_rel) || IS_OTHER_REL(inner_rel))
+		return false;
+
+	/* Disallow recursive usage of asymmertic join machinery */
+	if (root->join_rel_level == NULL)
+		return false;
+
+	/*
+	 * Don't allow asymmetric JOIN of two append subplans.
+	 * In the case of a parameterized NL join, a reparameterization procedure
+	 * will lead to large memory allocations and a CPU consumption:
+	 * each reparameterization will induce subpath duplication, creating new
+	 * ParamPathInfo instance and increasing of ppilist up to number of
+	 * partitions in the inner. Also, if we have many partitions, each bitmapset
+	 * variable will be large and many leaks of such variable (caused by relid
+	 * replacement) will highly increase memory consumption.
+	 * So, we deny such paths for now.
+	 */
+	foreach(lc, inner_rel->pathlist)
+	{
+		if (IsA(lfirst(lc), AppendPath))
+			return false;
+	}
+
+	return true;
+}
+
+void
+try_asymmetric_partitionwise_join(PlannerInfo *root,
+								  RelOptInfo *joinrel,
+								  RelOptInfo *outer_rel,
+								  RelOptInfo *inner_rel,
+								  JoinType jointype,
+								  JoinPathExtraData *extra)
+{
+	ListCell *lc;
+
+	/*
+	 * Try this kind of paths if we allow complex partitionwise joins and we know
+	 * we can build this join safely.
+	 */
+	if (!enable_partitionwise_join ||
+		!is_asymmetric_join_feasible(root, outer_rel, inner_rel, jointype))
+		return;
+
+	foreach (lc, outer_rel->pathlist)
+	{
+		AppendPath *append_path = lfirst(lc);
+
+		/*
+		 * We assume this pathlist keeps at least one AppendPath that
+		 * represents partitioned table-scan, symmetric or asymmetric
+		 * partition-wise join. Asymmetric join isn't needed if the append node
+		 * has only one child.
+		 */
+		if (IsA(append_path, AppendPath) &&
+			list_length(append_path->subpaths) > 1)
+		{
+			List **join_rel_level_saved;
+			List *live_childrels = NIL;
+
+			join_rel_level_saved = root->join_rel_level;
+			PG_TRY();
+			{
+				/* temporary disables "dynamic programming" algorithm */
+				root->join_rel_level = NULL;
+
+				live_childrels =
+					extract_asymmetric_partitionwise_subjoin(root,
+															 joinrel,
+															 append_path,
+															 inner_rel,
+															 jointype,
+															 extra);
+			}
+			PG_FINALLY();
+			{
+				root->join_rel_level = join_rel_level_saved;
+			}
+			PG_END_TRY();
+
+			if (live_childrels != NIL)
+			{
+				/*
+				 * Add new append relation. We must choose cheapest paths after
+				 * this operation because the pathlist possibly contains
+				 * joinrels and appendrels that can be suboptimal.
+				 */
+				add_paths_to_append_rel(root, joinrel, live_childrels);
+				set_cheapest(joinrel);
+			}
+
+			break;
+		}
 	}
 }
 

@@ -18,6 +18,7 @@
 #include "access/toast_internals.h"
 #include "access/visibilitymap.h"
 #include "catalog/pg_am.h"
+#include "catalog/storage_gtt.h"
 #include "funcapi.h"
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
@@ -226,6 +227,8 @@ verify_heapam(PG_FUNCTION_ARGS)
 	BlockNumber last_block;
 	BlockNumber nblocks;
 	const char *skip;
+	TransactionId	relfrozenxid = InvalidTransactionId;
+	MultiXactId		relminmxid = InvalidMultiXactId;
 
 	/* Check to see if caller supports us returning a tuplestore */
 	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
@@ -342,6 +345,13 @@ verify_heapam(PG_FUNCTION_ARGS)
 		PG_RETURN_NULL();
 	}
 
+	if (RELATION_IS_GLOBAL_TEMP(ctx.rel) &&
+		!gtt_storage_attached(RelationGetRelid(ctx.rel)))
+	{
+		relation_close(ctx.rel, AccessShareLock);
+		PG_RETURN_NULL();
+	}
+
 	/* Early exit if the relation is empty */
 	nblocks = RelationGetNumberOfBlocks(ctx.rel);
 	if (!nblocks)
@@ -409,9 +419,25 @@ verify_heapam(PG_FUNCTION_ARGS)
 
 	update_cached_xid_range(&ctx);
 	update_cached_mxid_range(&ctx);
-	ctx.relfrozenxid = ctx.rel->rd_rel->relfrozenxid;
+
+	if (RELATION_IS_GLOBAL_TEMP(ctx.rel))
+	{
+		get_gtt_relstats(RelationGetRelid(ctx.rel),
+						NULL,
+						NULL,
+						NULL,
+						&relfrozenxid,
+						&relminmxid);
+	}
+	else
+	{
+		relfrozenxid = ctx.rel->rd_rel->relfrozenxid;
+		relminmxid = ctx.rel->rd_rel->relminmxid;
+	}
+
+	ctx.relfrozenxid = relfrozenxid;
 	ctx.relfrozenfxid = FullTransactionIdFromXidAndCtx(ctx.relfrozenxid, &ctx);
-	ctx.relminmxid = ctx.rel->rd_rel->relminmxid;
+	ctx.relminmxid = relminmxid;
 
 	if (TransactionIdIsNormal(ctx.relfrozenxid))
 		ctx.oldest_xid = ctx.relfrozenxid;

@@ -18,6 +18,7 @@
 #include "catalog/partition.h"
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_type.h"
+#include "catalog/storage_gtt.h"
 #include "executor/execPartition.h"
 #include "executor/executor.h"
 #include "foreign/fdwapi.h"

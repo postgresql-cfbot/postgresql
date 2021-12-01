@@ -47,6 +47,7 @@
 #include "access/xlog.h"
 #include "catalog/index.h"
 #include "catalog/storage.h"
+#include "catalog/storage_gtt.h"
 #include "commands/dbcommands.h"
 #include "commands/progress.h"
 #include "commands/vacuum.h"
@@ -481,6 +482,25 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 	TransactionId OldestXmin;
 	TransactionId FreezeLimit;
 	MultiXactId MultiXactCutoff;
+	TransactionId	relfrozenxid = InvalidTransactionId;
+	MultiXactId		relminmxid = InvalidMultiXactId;
+	double			reltuples = 0;
+
+	if (RELATION_IS_GLOBAL_TEMP(rel))
+	{
+		get_gtt_relstats(RelationGetRelid(rel),
+						NULL,
+						&reltuples,
+						NULL,
+						&relfrozenxid,
+						&relminmxid);
+	}
+	else
+	{
+		relfrozenxid = rel->rd_rel->relfrozenxid;
+		relminmxid = rel->rd_rel->relminmxid;
+		reltuples = rel->rd_rel->reltuples;
+	}
 
 	/* measure elapsed time iff autovacuum logging requires it */
 	if (IsAutoVacuumWorkerProcess() && params->log_min_duration >= 0)
@@ -516,9 +536,9 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 	 * table's minimum MultiXactId is older than or equal to the requested
 	 * mxid full-table scan limit; or if DISABLE_PAGE_SKIPPING was specified.
 	 */
-	aggressive = TransactionIdPrecedesOrEquals(rel->rd_rel->relfrozenxid,
+	aggressive = TransactionIdPrecedesOrEquals(relfrozenxid,
 											   xidFullScanLimit);
-	aggressive |= MultiXactIdPrecedesOrEquals(rel->rd_rel->relminmxid,
+	aggressive |= MultiXactIdPrecedesOrEquals(relminmxid,
 											  mxactFullScanLimit);
 	if (params->options & VACOPT_DISABLE_PAGE_SKIPPING)
 		aggressive = true;
@@ -565,9 +585,9 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 	}
 
 	vacrel->bstrategy = bstrategy;
-	vacrel->relfrozenxid = rel->rd_rel->relfrozenxid;
-	vacrel->relminmxid = rel->rd_rel->relminmxid;
-	vacrel->old_live_tuples = rel->rd_rel->reltuples;
+	vacrel->relfrozenxid = relfrozenxid;
+	vacrel->relminmxid = relminmxid;
+	vacrel->old_live_tuples = reltuples;
 
 	/* Set cutoffs for entire VACUUM */
 	vacrel->OldestXmin = OldestXmin;

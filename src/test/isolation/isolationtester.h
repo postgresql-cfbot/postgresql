@@ -81,6 +81,8 @@ typedef struct
 	int			nsessions;
 	Permutation **permutations;
 	int			npermutations;
+	char	   *initialize;
+	char	   *destroy;
 } TestSpec;
 
 extern TestSpec parseresult;

@@ -96,3 +96,5 @@ test: plpgsql-toast
 test: truncate-conflict
 test: serializable-parallel
 test: serializable-parallel-2
+test: gtt-sequence
+test: gtt-table

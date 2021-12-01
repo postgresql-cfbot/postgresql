@@ -38,6 +38,7 @@
 #include "commands/prepare.h"
 #include "commands/tablecmds.h"
 #include "commands/view.h"
+#include "catalog/storage_gtt.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
@@ -519,6 +520,8 @@ intorel_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 	 * Finally we can open the target table
 	 */
 	intoRelationDesc = table_open(intoRelationAddr.objectId, AccessExclusiveLock);
+
+	init_gtt_storage(CMD_INSERT, intoRelationDesc);
 
 	/*
 	 * Make sure the constructed table does not have RLS enabled.

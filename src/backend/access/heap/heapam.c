@@ -52,6 +52,7 @@
 #include "access/xloginsert.h"
 #include "access/xlogutils.h"
 #include "catalog/catalog.h"
+#include "catalog/storage_gtt.h"
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "port/atomics.h"
@@ -5825,6 +5826,19 @@ heap_abort_speculative(Relation relation, ItemPointer tid)
 	BlockNumber block;
 	Buffer		buffer;
 	TransactionId prune_xid;
+	TransactionId relfrozenxid = InvalidTransactionId;
+
+	if (RELATION_IS_GLOBAL_TEMP(relation))
+	{
+		get_gtt_relstats(RelationGetRelid(relation),
+						NULL,
+						NULL,
+						NULL,
+						&relfrozenxid,
+						NULL);
+	}
+	else
+		relfrozenxid = relation->rd_rel->relfrozenxid;
 
 	Assert(ItemPointerIsValid(tid));
 
@@ -5877,8 +5891,8 @@ heap_abort_speculative(Relation relation, ItemPointer tid)
 	 * TransactionXmin, so there's no race here).
 	 */
 	Assert(TransactionIdIsValid(TransactionXmin));
-	if (TransactionIdPrecedes(TransactionXmin, relation->rd_rel->relfrozenxid))
-		prune_xid = relation->rd_rel->relfrozenxid;
+	if (TransactionIdPrecedes(TransactionXmin, relfrozenxid))
+		prune_xid = relfrozenxid;
 	else
 		prune_xid = TransactionXmin;
 	PageSetPrunable(page, prune_xid);

@@ -30,6 +30,7 @@
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "catalog/namespace.h"
+#include "catalog/storage_gtt.h"
 #include "commands/copy.h"
 #include "commands/copyfrom_internal.h"
 #include "commands/progress.h"
@@ -652,7 +653,7 @@ CopyFrom(CopyFromState cstate)
 	 */
 	ExecInitRangeTable(estate, cstate->range_table);
 	resultRelInfo = target_resultRelInfo = makeNode(ResultRelInfo);
-	ExecInitResultRelation(estate, resultRelInfo, 1);
+	ExecInitResultRelation(estate, resultRelInfo, 1, CMD_INSERT);
 
 	/* Verify the named relation is a valid target for INSERT */
 	CheckValidResultRel(resultRelInfo, CMD_INSERT);

@@ -151,6 +151,12 @@ my %pgdump_runs = (
 			"--file=$tempdir/extension_schema.sql", 'postgres',
 		],
 	},
+	functions_only => {
+		dump_cmd => [
+			'pg_dump', '--no-sync', "--file=$tempdir/functions_only.sql",
+			'--functions-only', 'postgres',
+		],
+	},
 	pg_dumpall_globals => {
 		dump_cmd => [
 			'pg_dumpall',                             '--no-sync',
@@ -420,6 +426,7 @@ my %tests = (
 			/xm,
 		like => {
 			%full_runs,
+			functions_only   => 1,
 			schema_only      => 1,
 			section_pre_data => 1,
 		},
@@ -672,6 +679,7 @@ my %tests = (
 			section_pre_data   => 1,
 			# Excludes this schema as extension is not listed.
 			without_extension_explicit_schema => 1,
+			functions_only     => 1,
 		},
 	},
 
@@ -688,6 +696,7 @@ my %tests = (
 			section_pre_data   => 1,
 			# Excludes this schema as extension is not listed.
 			without_extension_explicit_schema => 1,
+			functions_only     => 1,
 		},
 	},
 

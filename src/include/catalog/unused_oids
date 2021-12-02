@@ -32,6 +32,11 @@ my @input_files = glob("pg_*.h");
 
 my $oids = Catalog::FindAllOidsFromHeaders(@input_files);
 
+# Push the OID that is reserved for template0 database.
+my $Template0ObjectId =
+  Catalog::FindDefinedSymbol('access/transam.h', '..', 'Template0ObjectId');
+push @{$oids}, $Template0ObjectId;
+
 # Also push FirstGenbkiObjectId to serve as a terminator for the last gap.
 my $FirstGenbkiObjectId =
   Catalog::FindDefinedSymbol('access/transam.h', '..', 'FirstGenbkiObjectId');

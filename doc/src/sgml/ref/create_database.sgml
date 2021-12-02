@@ -31,7 +31,8 @@ CREATE DATABASE <replaceable class="parameter">name</replaceable>
            [ TABLESPACE [=] <replaceable class="parameter">tablespace_name</replaceable> ]
            [ ALLOW_CONNECTIONS [=] <replaceable class="parameter">allowconn</replaceable> ]
            [ CONNECTION LIMIT [=] <replaceable class="parameter">connlimit</replaceable> ]
-           [ IS_TEMPLATE [=] <replaceable class="parameter">istemplate</replaceable> ] ]
+           [ IS_TEMPLATE [=] <replaceable class="parameter">istemplate</replaceable> ]
+           [ OID [=] <replaceable class="parameter">db_oid</replaceable> ] ]
 </synopsis>
  </refsynopsisdiv>
 
@@ -203,6 +204,18 @@ CREATE DATABASE <replaceable class="parameter">name</replaceable>
         </para>
        </listitem>
       </varlistentry>
+
+      <varlistentry>
+       <term><replaceable class="parameter">oid</replaceable></term>
+       <listitem>
+        <para>
+         The object identifier with which the database gets created.
+         The OID range for user objects starts from 16384. CREATE DATABASE fails if a 
+         database with specified oid already exists.
+        </para>
+       </listitem>
+      </varlistentry>
+
     </variablelist>
 
   <para>

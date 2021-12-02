@@ -157,15 +157,8 @@ typedef struct
 	const char *new_tablespace;
 	const char *old_tablespace_suffix;
 	const char *new_tablespace_suffix;
-	Oid			old_db_oid;
-	Oid			new_db_oid;
-
-	/*
-	 * old/new relfilenodes might differ for pg_largeobject(_metadata) indexes
-	 * due to VACUUM FULL or REINDEX.  Other relfilenodes are preserved.
-	 */
-	Oid			old_relfilenode;
-	Oid			new_relfilenode;
+	Oid			db_oid;
+	Oid			relfilenode;
 	/* the rest are used only for logging and error reporting */
 	char	   *nspname;		/* namespaces */
 	char	   *relname;
@@ -390,8 +383,6 @@ FileNameMap *gen_db_file_maps(DbInfo *old_db,
 							  DbInfo *new_db, int *nmaps, const char *old_pgdata,
 							  const char *new_pgdata);
 void		get_db_and_rel_infos(ClusterInfo *cluster);
-void		print_maps(FileNameMap *maps, int n,
-					   const char *db_name);
 
 /* option.c */
 

@@ -420,6 +420,7 @@ ProcessSyncRequests(void)
 					total_elapsed += elapsed;
 					processed++;
 
+					pgstat_inc_ioop(IOOP_FSYNC, IOPATH_SHARED);
 					if (log_checkpoints)
 						elog(DEBUG1, "checkpoint sync: number=%d file=%s time=%.3f ms",
 							 processed,

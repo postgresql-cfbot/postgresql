@@ -360,6 +360,25 @@ get_sortgroupclause_tle(SortGroupClause *sgClause,
 }
 
 /*
+ * get_tle_from_expr
+ *
+ *	Find the targetlist entry matching the given expr and return it.
+ */
+TargetEntry *
+get_tle_from_expr(Expr *expr, List *targetlist)
+{
+	ListCell	*lc;
+
+	foreach(lc, targetlist)
+	{
+		TargetEntry *tle = (TargetEntry *) lfirst(lc);
+
+		if (equal(tle->expr, expr))
+			return tle;
+	}
+	return NULL;
+}
+/*
  * get_sortgroupclause_expr
  *		Find the targetlist entry matching the given SortGroupClause
  *		by ressortgroupref, and return its expression.

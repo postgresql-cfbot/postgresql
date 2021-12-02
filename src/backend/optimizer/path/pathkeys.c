@@ -33,7 +33,6 @@ static bool pathkey_is_redundant(PathKey *new_pathkey, List *pathkeys);
 static bool matches_boolean_partition_clause(RestrictInfo *rinfo,
 											 RelOptInfo *partrel,
 											 int partkeycol);
-static Var *find_var_for_subquery_tle(RelOptInfo *rel, TargetEntry *tle);
 static bool right_merge_direction(PlannerInfo *root, PathKey *pathkey);
 
 
@@ -1035,7 +1034,7 @@ convert_subquery_pathkeys(PlannerInfo *root, RelOptInfo *rel,
  * We need this to ensure that we don't return pathkeys describing values
  * that are unavailable above the level of the subquery scan.
  */
-static Var *
+Var *
 find_var_for_subquery_tle(RelOptInfo *rel, TargetEntry *tle)
 {
 	ListCell   *lc;
@@ -1751,43 +1750,12 @@ pathkeys_useful_for_merging(PlannerInfo *root, RelOptInfo *rel, List *pathkeys)
 	{
 		PathKey    *pathkey = (PathKey *) lfirst(i);
 		bool		matched = false;
-		ListCell   *j;
 
 		/* If "wrong" direction, not useful for merging */
 		if (!right_merge_direction(root, pathkey))
 			break;
 
-		/*
-		 * First look into the EquivalenceClass of the pathkey, to see if
-		 * there are any members not yet joined to the rel.  If so, it's
-		 * surely possible to generate a mergejoin clause using them.
-		 */
-		if (rel->has_eclass_joins &&
-			eclass_useful_for_merging(root, pathkey->pk_eclass, rel))
-			matched = true;
-		else
-		{
-			/*
-			 * Otherwise search the rel's joininfo list, which contains
-			 * non-EquivalenceClass-derivable join clauses that might
-			 * nonetheless be mergejoinable.
-			 */
-			foreach(j, rel->joininfo)
-			{
-				RestrictInfo *restrictinfo = (RestrictInfo *) lfirst(j);
-
-				if (restrictinfo->mergeopfamilies == NIL)
-					continue;
-				update_mergeclause_eclasses(root, restrictinfo);
-
-				if (pathkey->pk_eclass == restrictinfo->left_ec ||
-					pathkey->pk_eclass == restrictinfo->right_ec)
-				{
-					matched = true;
-					break;
-				}
-			}
-		}
+		matched = ec_useful_for_merging(root, rel, pathkey->pk_eclass);
 
 		/*
 		 * If we didn't find a mergeclause, we're done --- any additional

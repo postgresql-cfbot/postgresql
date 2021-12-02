@@ -94,6 +94,7 @@ extern bool bms_nonempty_difference(const Bitmapset *a, const Bitmapset *b);
 extern int	bms_singleton_member(const Bitmapset *a);
 extern bool bms_get_singleton_member(const Bitmapset *a, int *member);
 extern int	bms_num_members(const Bitmapset *a);
+extern int	bms_max_member(const Bitmapset *a);
 
 /* optimized tests when we don't need to know exact membership count: */
 extern BMS_Membership bms_membership(const Bitmapset *a);

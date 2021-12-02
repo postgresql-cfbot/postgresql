@@ -1279,7 +1279,8 @@ InitResultRelInfo(ResultRelInfo *resultRelInfo,
  * in es_trig_target_relations.
  */
 ResultRelInfo *
-ExecGetTriggerResultRel(EState *estate, Oid relid)
+ExecGetTriggerResultRel(EState *estate, Oid relid,
+						ResultRelInfo *rootRelInfo)
 {
 	ResultRelInfo *rInfo;
 	ListCell   *l;
@@ -1330,7 +1331,7 @@ ExecGetTriggerResultRel(EState *estate, Oid relid)
 	InitResultRelInfo(rInfo,
 					  rel,
 					  0,		/* dummy rangetable index */
-					  NULL,
+					  rootRelInfo,
 					  estate->es_instrument);
 	estate->es_trig_target_relations =
 		lappend(estate->es_trig_target_relations, rInfo);
@@ -1447,8 +1448,22 @@ ExecCloseResultRelations(EState *estate)
 	foreach(l, estate->es_opened_result_relations)
 	{
 		ResultRelInfo *resultRelInfo = lfirst(l);
+		ListCell *lc;
 
 		ExecCloseIndices(resultRelInfo);
+		foreach(lc, resultRelInfo->ri_ancestorResultRels)
+		{
+			ResultRelInfo *rInfo = lfirst(lc);
+
+			/*
+			 * Don't close the root ancestor relation, because that one's
+			 * closed in ExecCloseRangeTableRelations().
+			 */
+			if (rInfo->ri_RangeTableIndex > 0)
+				continue;
+
+			table_close(rInfo->ri_RelationDesc, NoLock);
+		}
 	}
 
 	/* Close any relations that have been opened by ExecGetTriggerResultRel(). */

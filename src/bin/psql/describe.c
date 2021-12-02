@@ -2884,6 +2884,7 @@ describeOneTableDetails(const char *schemaname,
 							  "  'd' = any(stxkind) AS ndist_enabled,\n"
 							  "  'f' = any(stxkind) AS deps_enabled,\n"
 							  "  'm' = any(stxkind) AS mcv_enabled,\n"
+							  "  's' = any(stxkind) AS sample_enabled,\n"
 							  "stxstattarget\n"
 							  "FROM pg_catalog.pg_statistic_ext stat\n"
 							  "WHERE stxrelid = '%s'\n"
@@ -2906,12 +2907,14 @@ describeOneTableDetails(const char *schemaname,
 					bool		has_ndistinct;
 					bool		has_dependencies;
 					bool		has_mcv;
+					bool		has_sample;
 					bool		has_all;
 					bool		has_some;
 
 					has_ndistinct = (strcmp(PQgetvalue(result, i, 5), "t") == 0);
 					has_dependencies = (strcmp(PQgetvalue(result, i, 6), "t") == 0);
 					has_mcv = (strcmp(PQgetvalue(result, i, 7), "t") == 0);
+					has_sample = (strcmp(PQgetvalue(result, i, 8), "t") == 0);
 
 					printfPQExpBuffer(&buf, "    ");
 
@@ -2928,8 +2931,8 @@ describeOneTableDetails(const char *schemaname,
 					 * single expr) or when all are specified (in which case
 					 * we assume it's expanded by CREATE STATISTICS).
 					 */
-					has_all = (has_ndistinct && has_dependencies && has_mcv);
-					has_some = (has_ndistinct || has_dependencies || has_mcv);
+					has_all = (has_ndistinct && has_dependencies && has_mcv && has_sample);
+					has_some = (has_ndistinct || has_dependencies || has_mcv || has_sample);
 
 					if (has_some && !has_all)
 					{
@@ -2951,7 +2954,11 @@ describeOneTableDetails(const char *schemaname,
 						if (has_mcv)
 						{
 							appendPQExpBuffer(&buf, "%smcv", gotone ? ", " : "");
+							gotone = true;
 						}
+
+						if (has_sample)
+							appendPQExpBuffer(&buf, "%ssample", gotone ? ", " : "");
 
 						appendPQExpBufferChar(&buf, ')');
 					}
@@ -2961,9 +2968,9 @@ describeOneTableDetails(const char *schemaname,
 									  PQgetvalue(result, i, 1));
 
 					/* Show the stats target if it's not default */
-					if (strcmp(PQgetvalue(result, i, 8), "-1") != 0)
+					if (strcmp(PQgetvalue(result, i, 9), "-1") != 0)
 						appendPQExpBuffer(&buf, "; STATISTICS %s",
-										  PQgetvalue(result, i, 8));
+										  PQgetvalue(result, i, 9));
 
 					printTableAddFooter(&cont, buf.data);
 				}

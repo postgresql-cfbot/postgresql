@@ -103,6 +103,7 @@ extern void BuildRelationExtStatistics(Relation onerel, double totalrows,
 									   int natts, VacAttrStats **vacattrstats);
 extern int	ComputeExtStatisticsRows(Relation onerel,
 									 int natts, VacAttrStats **stats);
+extern bool statext_is_kind_enabled(HeapTuple htup, char kind);
 extern bool statext_is_kind_built(HeapTuple htup, char kind);
 extern Selectivity dependencies_clauselist_selectivity(PlannerInfo *root,
 													   List *clauses,
@@ -120,10 +121,21 @@ extern Selectivity statext_clauselist_selectivity(PlannerInfo *root,
 												  Bitmapset **estimatedclauses,
 												  bool is_or);
 extern bool has_stats_of_kind(List *stats, char requiredkind);
+extern StatisticExtInfo *find_matching_sample(PlannerInfo *root, RelOptInfo *rel,
+											  Bitmapset *attnums, List *exprs);
 extern StatisticExtInfo *choose_best_statistics(List *stats, char requiredkind,
 												Bitmapset **clause_attnums,
 												List **clause_exprs,
 												int nclauses);
 extern HeapTuple statext_expressions_load(Oid stxoid, int idx);
+
+extern bool statext_try_join_estimates(PlannerInfo *root, List *clauses, int varRelid,
+									   JoinType jointype, SpecialJoinInfo *sjinfo,
+									   Bitmapset *estimatedclauses);
+
+extern Selectivity statext_clauselist_join_selectivity(PlannerInfo *root, List *clauses,
+													   int varRelid,
+													   JoinType jointype, SpecialJoinInfo *sjinfo,
+													   Bitmapset **estimatedclauses);
 
 #endif							/* STATISTICS_H */

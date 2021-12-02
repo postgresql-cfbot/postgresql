@@ -86,13 +86,14 @@ CreateStatistics(CreateStatsStmt *stmt)
 	Oid			relid;
 	ObjectAddress parentobject,
 				myself;
-	Datum		types[4];		/* one for each possible type of statistic */
+	Datum		types[5];		/* one for each possible type of statistic */
 	int			ntypes;
 	ArrayType  *stxkind;
 	bool		build_ndistinct;
 	bool		build_dependencies;
 	bool		build_mcv;
 	bool		build_expressions;
+	bool		build_sample;	/* XXX misleading, we don't build samples */
 	bool		requested_type = false;
 	int			i;
 	ListCell   *cell;
@@ -348,6 +349,7 @@ CreateStatistics(CreateStatsStmt *stmt)
 	build_ndistinct = false;
 	build_dependencies = false;
 	build_mcv = false;
+	build_sample = false;
 	foreach(cell, stmt->stat_types)
 	{
 		char	   *type = strVal(lfirst(cell));
@@ -367,6 +369,11 @@ CreateStatistics(CreateStatsStmt *stmt)
 			build_mcv = true;
 			requested_type = true;
 		}
+		else if (strcmp(type, "sample") == 0)
+		{
+			build_sample = true;
+			requested_type = true;
+		}
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -377,6 +384,11 @@ CreateStatistics(CreateStatsStmt *stmt)
 	/*
 	 * If no statistic type was specified, build them all (but only when the
 	 * statistics is defined on more than one column/expression).
+	 *
+	 * XXX We keep sampling disabled by default, otherwise building the rest
+	 * of statistics kinds would be somewhat pointless (the sample is applied
+	 * first). But maybe we should enable this just like the other kinds and
+	 * then use GUCs to enable or disable this at runtime.
 	 */
 	if ((!requested_type) && (numcols >= 2))
 	{
@@ -468,6 +480,8 @@ CreateStatistics(CreateStatsStmt *stmt)
 		types[ntypes++] = CharGetDatum(STATS_EXT_MCV);
 	if (build_expressions)
 		types[ntypes++] = CharGetDatum(STATS_EXT_EXPRESSIONS);
+	if (build_sample)
+		types[ntypes++] = CharGetDatum(STATS_EXT_SAMPLE);
 	Assert(ntypes > 0 && ntypes <= lengthof(types));
 	stxkind = construct_array(types, ntypes, CHAROID, 1, true, TYPALIGN_CHAR);
 

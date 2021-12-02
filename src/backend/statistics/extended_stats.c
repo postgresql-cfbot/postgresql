@@ -19,19 +19,26 @@
 #include "access/detoast.h"
 #include "access/genam.h"
 #include "access/htup_details.h"
+#include "access/relation.h"
 #include "access/table.h"
 #include "catalog/indexing.h"
 #include "catalog/pg_collation.h"
+#include "catalog/pg_constraint.h"
 #include "catalog/pg_statistic_ext.h"
 #include "catalog/pg_statistic_ext_data.h"
 #include "executor/executor.h"
+#include "executor/spi.h"
 #include "commands/progress.h"
 #include "miscadmin.h"
 #include "nodes/nodeFuncs.h"
+#include "nodes/pathnodes.h"
 #include "optimizer/clauses.h"
 #include "optimizer/optimizer.h"
+#include "optimizer/pathnode.h"
+#include "parser/parsetree.h"
 #include "pgstat.h"
 #include "postmaster/autovacuum.h"
+#include "rewrite/rewriteManip.h"
 #include "statistics/extended_stats_internal.h"
 #include "statistics/statistics.h"
 #include "utils/acl.h"
@@ -43,6 +50,7 @@
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
+#include "utils/ruleutils.h"
 #include "utils/selfuncs.h"
 #include "utils/syscache.h"
 #include "utils/typcache.h"
@@ -101,6 +109,61 @@ static StatsBuildData *make_build_data(Relation onerel, StatExtEntry *stat,
 									   int numrows, HeapTuple *rows,
 									   VacAttrStats **stats, int stattarget);
 
+/*
+ * Runtime samples used to estimate scans and joins.
+ */
+typedef struct Sample
+{
+	int			nrows;
+	int			maxrows;
+
+	Bitmapset  *attnums;
+	List	   *exprs;
+
+	/*
+	 * We don't keep the original heap tuples, we extract and keep just the
+	 * interesting attibutes to save space (hopefully).
+	 *
+	 * XXX We might deduplicate the values, which would save a lot of memory
+	 * for data with a lot of repetitions. Which is quite common.
+	 */
+	Datum	   *values;
+	bool	   *isnull;
+} Sample;
+
+static Sample *statext_collect_sample(PlannerInfo *root,
+									  StatisticExtInfo *stat);
+
+static Sample *statext_collect_correlated_sample(PlannerInfo *root,
+												 StatisticExtInfo *stat,
+												 StatisticExtInfo *stat2,
+												 Sample *sample,
+												 List *clauses);
+
+static Selectivity sample_clauselist_selectivity(PlannerInfo *root,
+												 StatisticExtInfo *stat, Sample *sample,
+												 List *clauses, int varRelid,
+												 JoinType jointype, SpecialJoinInfo *sjinfo,
+												 RelOptInfo *rel, bool is_or);
+
+static bool stat_covers_expressions(StatisticExtInfo *stat, List *exprs,
+									Bitmapset **expr_idxs);
+
+static List *statext_sample_get_conditions(PlannerInfo *root,
+										   RelOptInfo *rel,
+										   StatisticExtInfo *info);
+
+static bool *statext_sample_eval_conditions(PlannerInfo *root, RelOptInfo *rel,
+											StatisticExtInfo *stat, Sample *sample,
+											Selectivity *sel);
+
+/* various (mostly developer-oriented) GUCs */
+bool enable_sample_estimates_scan = true;
+bool enable_sample_estimates_join = true;
+bool enable_sample_join_correlate = true;
+
+/* 1% might be a bit too much, perhaps we should cap it to statistics target? */
+double estimate_sample_rate = 0.01;
 
 /*
  * Compute requested extended stats, using the rows sampled for the plain
@@ -416,6 +479,46 @@ statext_is_kind_built(HeapTuple htup, char type)
 }
 
 /*
+ * statext_is_kind_enabled
+ *		Is this stat kind enabled in the given pg_statistic_ext tuple?
+ */
+bool
+statext_is_kind_enabled(HeapTuple htup, char type)
+{
+	int			i;
+	ArrayType  *arr;
+	char	   *enabled;
+
+	Datum		datum;
+	bool		isnull;
+
+	/* decode the stxkind char array into a list of chars */
+	datum = SysCacheGetAttr(STATEXTOID, htup,
+							Anum_pg_statistic_ext_stxkind, &isnull);
+	Assert(!isnull);
+	arr = DatumGetArrayTypeP(datum);
+	if (ARR_NDIM(arr) != 1 ||
+		ARR_HASNULL(arr) ||
+		ARR_ELEMTYPE(arr) != CHAROID)
+		elog(ERROR, "stxkind is not a 1-D char array");
+	enabled = (char *) ARR_DATA_PTR(arr);
+
+	for (i = 0; i < ARR_DIMS(arr)[0]; i++)
+	{
+		Assert((enabled[i] == STATS_EXT_NDISTINCT) ||
+			   (enabled[i] == STATS_EXT_DEPENDENCIES) ||
+			   (enabled[i] == STATS_EXT_MCV) ||
+			   (enabled[i] == STATS_EXT_EXPRESSIONS) ||
+			   (enabled[i] == STATS_EXT_SAMPLE));
+
+		if (enabled[i] == type)
+			return true;
+	}
+
+	return false;
+}
+
+/*
  * Return a list (of StatExtEntry) of statistics objects for the given relation.
  */
 static List *
@@ -476,7 +579,8 @@ fetch_statentries_for_relation(Relation pg_statext, Oid relid)
 			Assert((enabled[i] == STATS_EXT_NDISTINCT) ||
 				   (enabled[i] == STATS_EXT_DEPENDENCIES) ||
 				   (enabled[i] == STATS_EXT_MCV) ||
-				   (enabled[i] == STATS_EXT_EXPRESSIONS));
+				   (enabled[i] == STATS_EXT_EXPRESSIONS) ||
+				   (enabled[i] == STATS_EXT_SAMPLE));
 			entry->types = lappend_int(entry->types, (int) enabled[i]);
 		}
 
@@ -1159,6 +1263,103 @@ has_stats_of_kind(List *stats, char requiredkind)
 }
 
 /*
+ * find_matching_sample
+ *		Search for a sample statistics covering all the attributes.
+ *
+ * Both attnums and expressions in the join clause are required to be covered
+ * by the statistics. Additional restrictions on base relations are considered
+ * as extra conditions - but those are not required to be covered, we only use
+ * them to pick "better" sample.
+ *
+ * So for example with a query
+ *
+ * t1 JOIN t2 ON (t1.a = t2.a AND t1.b = t2.b) AND t1.c = 10 AND t2.d < 100
+ *
+ * any statistics (on either side of the join) covering (a,b) will be eligible,
+ * but those covering the columns in WHERE clauses will be seen as better.
+ *
+ * XXX The requirement that all the attributes need to be covered might be
+ * too strong. Maybe we could relax it a bit, and search for stats (on both
+ * sides of the join) with the largest overlap. But we don't really expect
+ * many candidate samples, so this simple approach seems sufficient for now.
+ */
+StatisticExtInfo *
+find_matching_sample(PlannerInfo *root, RelOptInfo *rel,
+					 Bitmapset *attnums, List *exprs)
+{
+	ListCell   *l;
+	StatisticExtInfo *sample = NULL;
+	List *stats = rel->statlist;
+
+	foreach(l, stats)
+	{
+		StatisticExtInfo *stat = (StatisticExtInfo *) lfirst(l);
+		List *conditions1 = NIL,
+			 *conditions2 = NIL;
+
+		/* We only care about samples statistics here. */
+		if (stat->kind != STATS_EXT_SAMPLE)
+			continue;
+
+		/*
+		 * Ignore stats not covering all the attributes/expressions.
+		 *
+		 * XXX Maybe we shouldn't be so strict and consider only partial
+		 * matches for join clauses too?
+		 */
+		if (!bms_is_subset(attnums, stat->keys) ||
+			!stat_covers_expressions(stat, exprs, NULL))
+			continue;
+
+		/* If there's no matching sample yet, keep it. */
+		if (!sample)
+		{
+			sample = stat;
+			continue;
+		}
+
+		/*
+		 * OK, we have two candidate statistics and we need to pick. We'll
+		 * use two simple heuristics: We prefer smaller statistics (fewer
+		 * columns), on the assumption that a smaller statistics probably
+		 * represents a larger fraction of the data (fewer combinations
+		 * with higher counts). But we also like if the statistics covers
+		 * some additional conditions at the baserel level, because this
+		 * may affect the data distribition. Of course, those two metrics
+		 * are contradictory - smaller stats are less likely to cover as
+		 * many conditions as a larger one.
+		 *
+		 * XXX For now we simply prefer smaller statistics, but maybe it
+		 * should be the other way around.
+		 */
+		if (bms_num_members(sample->keys) + list_length(sample->exprs) >
+			bms_num_members(stat->keys) + list_length(stat->exprs))
+		{
+			sample = stat;
+			continue;
+		}
+
+		/*
+		 * Now inspect the base restrictinfo conditions too. We need to be
+		 * more careful because we didn't check which of those clauses are
+		 * compatible, so we need to run statext_is_compatible_clause.
+		 *
+		 * XXX This should be moved before the previous check, probably. This
+		 * way a "smaller" statistics will be preferred, no matter if that
+		 * means some conditions will be unusable.
+		 */
+		conditions1 = statext_sample_get_conditions(root, rel, stat);
+		conditions2 = statext_sample_get_conditions(root, rel, sample);
+
+		/* if the new statistics covers more conditions, use it */
+		if (list_length(conditions2) > list_length(conditions1))
+			sample = stat;
+	}
+
+	return sample;
+}
+
+/*
  * stat_find_expression
  *		Search for an expression in statistics object's list of expressions.
  *
@@ -1650,6 +1851,215 @@ statext_is_compatible_clause(PlannerInfo *root, Node *clause, Index relid,
 }
 
 /*
+ * statext_sample_clauselist_selectivity
+ *		Estimate clauses using the best multi-column statistics sample.
+ *
+ * Applies available extended (multi-column) statistics on a table. There may
+ * be multiple applicable statistics (with respect to the clauses), in which
+ * case we use greedy approach. In each round we select the best statistic on
+ * a table (measured by the number of attributes extracted from the clauses
+ * and covered by it), and compute the selectivity for the supplied clauses.
+ * We repeat this process with the remaining clauses (if any), until none of
+ * the available statistics can be used.
+ *
+ * This is similar to statext_mcv_clauselist_selectivity, but it only considers
+ * statistics with run-time samples, not MCV lists. We try to apply it before
+ * MCV lists, and the remaining clauses are estimated by MCVs.
+ *
+ * 'estimatedclauses' is an input/output parameter.  We set bits for the
+ * 0-based 'clauses' indexes we estimate for and also skip clause items that
+ * already have a bit set.
+ *
+ * XXX In principle, samples might cover much wider range of clauses - almost
+ * any condition can be evaluated on the sample (as long as all the input vars
+ * are in the sample), and then we can use that. For the MCV this would not
+ * work well as the function might move values from the non-MCV part to the
+ * MCV, but that's impossible to calculate.  But for now we ignore this and
+ * just use statext_is_compatible_clause, we can relax this later.
+ */
+static Selectivity
+statext_sample_clauselist_selectivity(PlannerInfo *root, List *clauses, int varRelid,
+									  JoinType jointype, SpecialJoinInfo *sjinfo,
+									  RelOptInfo *rel, Bitmapset **estimatedclauses,
+									  bool is_or)
+{
+	ListCell   *l;
+	Bitmapset **list_attnums;	/* attnums extracted from the clause */
+	List	  **list_exprs;		/* expressions matched to any statistic */
+	int			listidx;
+	Selectivity sel = (is_or) ? 0.0 : 1.0;
+	Sample	   *sample;
+
+	/* check if there's any stats that might be useful for us. */
+	if (!has_stats_of_kind(rel->statlist, STATS_EXT_SAMPLE) ||
+		!enable_sample_estimates_scan)
+		return sel;
+
+	list_attnums = (Bitmapset **) palloc(sizeof(Bitmapset *) *
+										 list_length(clauses));
+
+	/* expressions extracted from complex expressions */
+	list_exprs = (List **) palloc(sizeof(Node *) * list_length(clauses));
+
+	/*
+	 * Pre-process the clauses list to extract the attnums and expressions
+	 * seen in each item.  We need to determine if there are any clauses which
+	 * will be useful for selectivity estimations with extended stats.  Along
+	 * the way we'll record all of the attnums and expressions for each clause
+	 * in lists which we'll reference later so we don't need to repeat the
+	 * same work again.
+	 *
+	 * We also skip clauses that we already estimated using different types of
+	 * statistics (we treat them as incompatible).
+	 */
+	listidx = 0;
+	foreach(l, clauses)
+	{
+		Node	   *clause = (Node *) lfirst(l);
+		Bitmapset  *attnums = NULL;
+		List	   *exprs = NIL;
+
+		if (!bms_is_member(listidx, *estimatedclauses) &&
+			statext_is_compatible_clause(root, clause, rel->relid, &attnums, &exprs))
+		{
+			list_attnums[listidx] = attnums;
+			list_exprs[listidx] = exprs;
+		}
+		else
+		{
+			list_attnums[listidx] = NULL;
+			list_exprs[listidx] = NIL;
+		}
+
+		listidx++;
+	}
+
+	/* apply as many extended statistics as possible */
+	while (true)
+	{
+		StatisticExtInfo *stat;
+		List	   *stat_clauses;
+		Bitmapset  *simple_clauses;
+
+		/* find the best suited statistics object for these attnums */
+		stat = choose_best_statistics(rel->statlist, STATS_EXT_SAMPLE,
+									  list_attnums, list_exprs,
+									  list_length(clauses));
+
+		/*
+		 * if no (additional) matching stats could be found then we've nothing
+		 * to do
+		 */
+		if (!stat)
+			break;
+
+		/*
+		 * XXX should be done later, after determining which attnums and exprs
+		 * need to be sampled.
+		 */
+		sample = statext_collect_sample(root, stat);
+
+		/* Ensure choose_best_statistics produced an expected stats type. */
+		Assert(stat->kind == STATS_EXT_SAMPLE);
+
+		/* now filter the clauses to be estimated using the selected stat */
+		stat_clauses = NIL;
+
+		/* record which clauses are simple (single column or expression) */
+		simple_clauses = NULL;
+
+		listidx = -1;
+		foreach(l, clauses)
+		{
+			/* Increment the index before we decide if to skip the clause. */
+			listidx++;
+
+			/*
+			 * Ignore clauses from which we did not extract any attnums or
+			 * expressions (this needs to be consistent with what we do in
+			 * choose_best_statistics).
+			 *
+			 * This also eliminates already estimated clauses - both those
+			 * estimated before and during applying extended statistics.
+			 *
+			 * XXX This check is needed because both bms_is_subset and
+			 * stat_covers_expressions return true for empty attnums and
+			 * expressions.
+			 */
+			if (!list_attnums[listidx] && !list_exprs[listidx])
+				continue;
+
+			/*
+			 * The clause was not estimated yet, and we've extracted either
+			 * attnums of expressions from it. Ignore it if it's not fully
+			 * covered by the chosen statistics.
+			 *
+			 * We need to check both attributes and expressions, and reject if
+			 * either is not covered.
+			 */
+			if (!bms_is_subset(list_attnums[listidx], stat->keys) ||
+				!stat_covers_expressions(stat, list_exprs[listidx], NULL))
+				continue;
+
+			/*
+			 * Now we know the clause is compatible (we have either attnums or
+			 * expressions extracted from it), and was not estimated yet.
+			 */
+
+			/* record simple clauses (single column or expression) */
+			if ((list_attnums[listidx] == NULL &&
+				 list_length(list_exprs[listidx]) == 1) ||
+				(list_exprs[listidx] == NIL &&
+				 bms_membership(list_attnums[listidx]) == BMS_SINGLETON))
+				simple_clauses = bms_add_member(simple_clauses,
+												list_length(stat_clauses));
+
+			/* add clause to list and mark it as estimated */
+			stat_clauses = lappend(stat_clauses, (Node *) lfirst(l));
+			*estimatedclauses = bms_add_member(*estimatedclauses, listidx);
+
+			/*
+			 * Reset the pointers, so that choose_best_statistics knows this
+			 * clause was estimated and does not consider it again.
+			 */
+			bms_free(list_attnums[listidx]);
+			list_attnums[listidx] = NULL;
+
+			list_free(list_exprs[listidx]);
+			list_exprs[listidx] = NULL;
+		}
+
+		if (is_or)
+		{
+			Selectivity	stat_sel;
+
+			stat_sel = sample_clauselist_selectivity(root, stat, sample, stat_clauses,
+													 varRelid, jointype, sjinfo,
+													 rel, true);
+
+			/*
+			 * Factor the result for this statistics object into the overall
+			 * result.  We treat the results from each separate statistics
+			 * object as independent of one another.
+			 */
+			sel = sel + stat_sel - sel * stat_sel;
+		}
+		else					/* Implicitly-ANDed list of clauses */
+		{
+			/*
+			 * Multi-column estimate using the sample. Just facto it right
+			 * into the result.
+			 */
+			sel *= sample_clauselist_selectivity(root, stat, sample, stat_clauses,
+												 varRelid, jointype, sjinfo,
+												 rel, false);
+		}
+	}
+
+	return sel;
+}
+
+/*
  * statext_mcv_clauselist_selectivity
  *		Estimate clauses using the best multi-column statistics.
  *
@@ -1977,17 +2387,30 @@ statext_clauselist_selectivity(PlannerInfo *root, List *clauses, int varRelid,
 							   bool is_or)
 {
 	Selectivity sel;
+	Selectivity sel2;
 
-	/* First, try estimating clauses using a multivariate MCV list. */
-	sel = statext_mcv_clauselist_selectivity(root, clauses, varRelid, jointype,
+	/* First, try estimating clauses using a multivariate sample. */
+	sel = statext_sample_clauselist_selectivity(root, clauses, varRelid, jointype,
+												sjinfo, rel, estimatedclauses, is_or);
+
+	/* Then try estimating the remaining clauses using a multivariate MCV list. */
+	sel2 = statext_mcv_clauselist_selectivity(root, clauses, varRelid, jointype,
 											 sjinfo, rel, estimatedclauses, is_or);
 
 	/*
 	 * Functional dependencies only work for clauses connected by AND, so for
 	 * OR clauses we're done.
+	 *
+	 * If it's OR, combine them using the usual (s1 + s2 - s1 * s2).
 	 */
 	if (is_or)
-		return sel;
+		return (sel + sel2 - sel * sel2);
+
+	/*
+	 * Otherwise continue with functional dependencies, but first combine the results
+	 * using the usual product formula (assuming independence).
+	 */
+	sel *= sel2;
 
 	/*
 	 * Then, apply functional dependencies on the remaining clauses by calling
@@ -2607,4 +3030,1822 @@ make_build_data(Relation rel, StatExtEntry *stat, int numrows, HeapTuple *rows,
 	FreeExecutorState(estate);
 
 	return result;
+}
+
+/*
+ * sample_alloc
+ *		allocate a sample with space for maxrows (we'll resize if needed)
+ */
+static Sample *
+sample_alloc(Bitmapset *attrs, List *exprs, int maxrows)
+{
+	Sample *sample;
+	int		nattributes = bms_num_members(attrs) + list_length(exprs);
+
+	/* basic struct */
+	sample = palloc0(sizeof(Sample));
+
+	/* XXX should we copy this? */
+	sample->attnums = attrs;
+	sample->exprs = exprs;
+	sample->maxrows = maxrows;
+
+	sample->values = palloc(sizeof(Datum) * nattributes * maxrows);
+	sample->isnull = palloc(sizeof(bool) * nattributes * maxrows);
+
+	return sample;
+}
+
+/*
+ * sample_free
+ *		free the row sample
+ */
+static void
+sample_free(Sample *sample)
+{
+	/* XXX maybe free the attnums / exprs */
+	pfree(sample->values);
+	pfree(sample->isnull);
+	pfree(sample);
+}
+
+/*
+ * sample_add_tuple
+ *		add tuple to the random sample, resize if needed
+ *
+ * We extract the attnums from the heap tuples, and keep simple array of Datum
+ * values and bool isnull flags.
+ */
+static void
+sample_add_tuple(Sample *sample, TupleDesc tdesc, HeapTuple htup)
+{
+	int	attno;
+	int	nattrs = bms_num_members(sample->attnums) + list_length(sample->exprs);
+
+	int	idx = sample->nrows * nattrs;
+
+	if (sample->maxrows == sample->nrows)
+	{
+		sample->maxrows *= 2;
+		sample->values = repalloc(sample->values, sample->maxrows * nattrs * sizeof(Datum));
+		sample->isnull = repalloc(sample->isnull, sample->maxrows * nattrs * sizeof(bool));
+	}
+
+	for (attno = 1; attno <= nattrs; attno++)
+	{
+		if (!htup)
+		{
+			/* if no tuple, treat it as all NULL values (won't match any conditions) */
+			sample->values[idx] = (Datum) 0;
+			sample->isnull[idx] = true;
+		}
+		else
+			sample->values[idx] = heap_getattr(htup, attno, tdesc,
+											   &sample->isnull[idx]);
+		idx++;
+	}
+
+	sample->nrows++;
+}
+
+/*
+ * sample_calculate_size
+ *		calculate the sampling rate for tablesample
+ *
+ * We look at statistics target for the statistics object, or the default one if
+ * not set, and we use that as a fraction for tablesample. We also combine that
+ * with estimate_sample_rate GUC.
+ *
+ * XXX Maybe we should look at per-attribute targets too.
+ */
+static double
+sample_calculate_size(StatisticExtInfo *stat, double ntuples, double *nrows)
+{
+	int			stattarget;
+	HeapTuple	htup;
+	Datum		datum;
+	bool		isnull;
+	double		sample_rate;
+
+	/* determine stattarget, if any */
+	htup = SearchSysCache1(STATEXTOID, ObjectIdGetDatum(stat->statOid));
+	if (!HeapTupleIsValid(htup))
+		elog(ERROR, "cache lookup failed for statistics object %u", stat->statOid);
+
+	/* Determine which statistics types exist */
+	datum = SysCacheGetAttr(STATEXTOID, htup,
+							Anum_pg_statistic_ext_stxstattarget, &isnull);
+
+	Assert(!isnull);
+
+	stattarget = DatumGetInt32(datum);
+	if (stattarget == -1)
+		stattarget = default_statistics_target;
+
+	ReleaseSysCache(htup);
+
+	*nrows = Min(300.0 * stattarget, ntuples);
+
+	/* use the GUC of stattarget, whatever gives higher sample rate */
+	sample_rate = Max(estimate_sample_rate, *nrows / ntuples);
+
+	*nrows = ntuples * sample_rate;
+
+	return sample_rate;
+}
+
+/*
+ * statext_collect_sample
+ *		build a random sample for the relation
+ *
+ * XXX We sample all attributes and expresions the statistics is defined on, but
+ * we should sample only what's referenced in the query (both as a join clause
+ * and base restrictions).
+ *
+ * XXX This uses the regular TABLESAMPLE through SPI, as that's the simplest way.
+ * Good enough for PoC, but maybe there's a better way to do this.
+ */
+static Sample *
+statext_collect_sample(PlannerInfo *root, StatisticExtInfo *stat)
+{
+	int		ret;
+	int		i, k;
+	uint64	proc;
+	StringInfoData str;
+	bool	first;
+	RangeTblEntry *rte = planner_rt_fetch(stat->rel->relid, root);
+	Oid		relid = rte->relid;
+	ListCell *lc;
+	bool	reset;
+
+	double	sample_rows;
+	double	sample_rate = sample_calculate_size(stat, stat->rel->tuples,
+												&sample_rows);
+
+	Sample *sample = sample_alloc(stat->keys, stat->exprs, sample_rows);
+
+	SPITupleTable  *spi_tuptable;
+	TupleDesc		spi_tupdesc;
+
+	List	   *context;
+	initStringInfo(&str);
+
+	/* internal error */
+	if ((ret = SPI_connect()) < 0)
+		elog(ERROR, "statext_collect_sample: SPI_connect returned %d", ret);
+
+	appendStringInfoString(&str, "SELECT ");
+
+	first = true;
+	k = -1;
+
+	while ((k = bms_next_member(stat->keys, k)) >= 0)
+	{
+		AttrNumber attnum = k;
+
+		if (!first)
+			appendStringInfo(&str, ", ");
+
+		appendStringInfo(&str, "%s", get_attname(relid, attnum, false));
+
+		first = false;
+	}
+
+	context = deparse_context_for(get_rel_name(relid), relid);
+
+	foreach(lc, stat->exprs)
+	{
+		Node   *expr = (Node *) lfirst(lc);
+		char   *expr_str;
+
+		/* tweak the varno */
+		if (stat->rel->relid != 1)
+		{
+			expr = copyObject(expr);
+			ChangeVarNodes(expr, stat->rel->relid, 1, 0);
+		}
+
+		expr_str = deparse_expression(expr, context, false, false);
+
+		if (!first)
+			appendStringInfo(&str, ", ");
+
+		appendStringInfo(&str, "%s", expr_str);
+
+		first = false;
+	}
+
+	/*
+	 * XXX Maybe for joins this could also include the additional non-join
+	 * conditions, derived from the baserestrictinfos. That would make the
+	 * sample smaller, and we would not need to bother with evaluating the
+	 * conditions later. Both would make it more efficient. It may make the
+	 * sample less useful for other queries (not an issue for samples built
+	 * at run-time for each query, but if retained it'd be a problem).
+	 */
+	appendStringInfo(&str, " FROM %s.%s TABLESAMPLE BERNOULLI (%f)",
+					 quote_identifier(get_namespace_name(get_rel_namespace(relid))),
+					 quote_identifier(get_rel_name(relid)), 100 * sample_rate);
+
+	/*
+	 * disable sampling for this sampling query
+	 *
+	 * The query is simple enough and should always use the unique index, so
+	 * there's very little risk of poor query plans. Moreover, there might be
+	 * a risk of infinite cycles (having to sample when collecting a sample).
+	 */
+	reset = enable_sample_estimates_scan;
+	enable_sample_estimates_scan = false;
+
+	ret = SPI_execute(str.data, true, 0);
+	proc = SPI_processed;
+
+	/* If no qualifying tuples, fall out early */
+	if (ret != SPI_OK_SELECT || proc == 0)
+	{
+		SPI_finish();
+		return NULL;
+	}
+
+	spi_tuptable = SPI_tuptable;
+	spi_tupdesc = spi_tuptable->tupdesc;
+
+	for (i = 0; i < proc; i++)
+		sample_add_tuple(sample, spi_tupdesc, spi_tuptable->vals[i]);
+
+	elog(WARNING, "statext_collect_sample: sampled %ld rows", proc);
+
+	SPI_finish();
+
+	enable_sample_estimates_scan = reset;
+
+	return sample;
+}
+
+/*
+ * statext_collect_correlated_sample
+ *		build a correlated random sample for the relation
+ *
+ * Given an existing sample on A, find matching rows in relation B. This requires
+ * a primary key on B, but could be relaxed to a unique index or even any index.
+ * With non-unique indexes we may need to sample the rows somehow.
+ *
+ * This works best for cases with star/snowflake schema. It's inspired by papers
+ *
+ * Cardinality Estimation Done Right: Index-Based Join Sampling - Viktor Leis and
+ *   B. Radke and Andrey Gubichev and A. Kemper and Thomas Neumann, CIDR 2017
+ *
+ * CS2: A New Database Synopsis for Query Estimation - Feng Yu, Southern Illinois
+ *   University; Wen-Chi Hou, Southern Illinois University; Cheng    Luo, Coppin
+ *   State University; Dunren Che, Southern Illinois University; Mengxia Zhu,
+ *   Southern Illinois University
+ *
+ * XXX The optimizer already uses the foreign key info to improve estimates, but
+ * that does not consider cross-table correlations or additional conditions on
+ * the tables. So this should probably take precedence, before considering the
+ * foreign keys.
+ */
+static Sample *
+statext_collect_correlated_sample(PlannerInfo *root, StatisticExtInfo *stat,
+								  StatisticExtInfo *stat2, Sample *sample2, List *clauses)
+{
+	int		ret;
+	int		i, k;
+	uint64	proc;
+	StringInfoData str;
+	bool	first;
+	RangeTblEntry *rte = planner_rt_fetch(stat->rel->relid, root);
+	Oid		relid = rte->relid;
+	ListCell *lc;
+
+	/*
+	 * Use the same number of rows as the source sample (we'll lookup by
+	 * primary key).
+	 */
+	Sample *sample = sample_alloc(stat->keys, stat->exprs, sample2->nrows);
+
+	SPIPlanPtr		pplan;
+	SPITupleTable  *spi_tuptable;
+	TupleDesc		spi_tupdesc;
+
+	List	   *context;
+
+	initStringInfo(&str);
+
+	appendStringInfoString(&str, "SELECT ");
+
+	first = true;
+	k = -1;
+
+	while ((k = bms_next_member(stat->keys, k)) >= 0)
+	{
+		AttrNumber attnum = k;
+
+		if (!first)
+			appendStringInfo(&str, ", ");
+
+		appendStringInfo(&str, "%s", get_attname(relid, attnum, false));
+
+		first = false;
+	}
+
+	context = deparse_context_for(get_rel_name(relid), relid);
+
+	foreach(lc, stat->exprs)
+	{
+		Node   *expr = (Node *) lfirst(lc);
+		char   *expr_str;
+
+		/* tweak the varno */
+		if (stat->rel->relid != 1)
+		{
+			expr = copyObject(expr);
+			ChangeVarNodes(expr, stat->rel->relid, 1, 0);
+		}
+
+		expr_str = deparse_expression(expr, context, false, false);
+
+		if (!first)
+			appendStringInfo(&str, ", ");
+
+		appendStringInfo(&str, "%s", expr_str);
+
+		first = false;
+	}
+
+	appendStringInfo(&str, " FROM %s.%s",
+					 quote_identifier(get_namespace_name(get_rel_namespace(relid))),
+					 quote_identifier(get_rel_name(relid)));
+
+	/*
+	 * Extract information from the join conditions - which attributes to add to
+	 * the SQL query, which values to use from the existing sample, etc.
+	*/
+	{
+		ListCell *lc;
+		int j;
+
+		int			idx = 0;
+		int			natts = list_length(clauses);
+		AttrNumber *attnums1 = (AttrNumber *) palloc(sizeof(AttrNumber) * natts);
+		AttrNumber *attnums2 = (AttrNumber *) palloc(sizeof(AttrNumber) * natts);
+		Oid		   *atttypes = (Oid *) palloc(sizeof(Oid) * natts);
+		int		   *attmap = (int *) palloc(sizeof(int) * natts);
+		bool		reset;
+
+		Datum  *values = palloc(sizeof(Datum) * natts);
+		char   *nulls = palloc(sizeof(char) * natts);
+
+		/* expects trivial */
+		foreach (lc, clauses)
+		{
+			Node *clause = (Node *) lfirst(lc);
+			Bitmapset *attnums = NULL;
+
+			pull_varattnos(clause, stat->rel->relid, &attnums);
+
+			attnums1[idx] = bms_singleton_member(attnums) + FirstLowInvalidHeapAttributeNumber;
+
+			bms_free(attnums);
+			attnums = NULL;
+
+			pull_varattnos(clause, stat2->rel->relid, &attnums);
+
+			attnums2[idx] = bms_singleton_member(attnums) + FirstLowInvalidHeapAttributeNumber;
+
+			bms_free(attnums);
+			attnums = NULL;
+
+			atttypes[idx] = get_atttype(relid, attnums1[idx]);
+
+			/* which index in the other sample */
+			attmap[idx] = bms_member_index(stat2->keys, attnums2[idx]);
+
+			idx++;
+		}
+
+		Assert(idx == natts);
+
+		appendStringInfoString(&str, " WHERE ");
+
+		for (i = 0; i < natts; i++)
+		{
+			if (i > 0)
+				appendStringInfoString(&str, " AND ");
+
+			appendStringInfo(&str, " %s = $%d ", get_attname(relid, attnums1[i], false), (i+1));
+		}
+
+		/*
+		 * XXX Maybe for joins this could also include the additional non-join
+		 * conditions, derived from the baserestrictinfos. That would make the
+		 * sample smaller, and we would not need to bother with evaluating the
+		 * conditions later. Both would make it more efficient. It may make the
+		 * sample less useful for other queries (not an issue for samples built
+		 * at run-time for each query, but if retained it'd be a problem).
+		 */
+
+		elog(WARNING, "SQL: %s", str.data);
+
+		/* internal error */
+		if ((ret = SPI_connect()) < 0)
+			elog(ERROR, "statext_collect_sample: SPI_connect returned %d", ret);
+
+		/*
+		 * disable sampling for this sampling query
+		 *
+		 * The query is simple enough and should always use the unique index, so
+		 * there's very little risk of poor query plans. Moreover, there might be
+		 * a risk of infinite cycles (having to sample when collecting a sample).
+		 */
+		reset = enable_sample_estimates_scan;
+		enable_sample_estimates_scan = false;
+
+		/* prepare the lookup statement */
+		pplan = SPI_prepare(str.data, natts, atttypes);
+
+		/*
+		 * Lookup the values for all rows in the existing sample.
+		 *
+		 * XXX We might sort te sample2 so that it's easy to identify values
+		 * that are equal, and skip the index lookup in that case.
+		 */
+		for (j = 0; j < sample2->nrows; j++)
+		{
+			int	ret;
+			int	natts2 = bms_num_members(stat2->keys) + list_length(stat2->exprs);
+
+			/* build parameters for the prepared statement */
+			for (i = 0; i < natts; i++)
+			{
+				int	idx = j * natts2 + attmap[i];
+
+				values[i] = sample2->values[idx];
+
+				if (sample2->isnull[idx])
+					nulls[i] = 'n';
+				else
+					nulls[i] = ' ';
+			}
+
+			/* run the prepared statement */
+			ret = SPI_execp(pplan, values, nulls, natts);
+			proc = SPI_processed;
+
+			/* results of the lookup */
+			spi_tuptable = SPI_tuptable;
+			spi_tupdesc = spi_tuptable->tupdesc;
+
+			/*
+			 * We could relax this to work with any indexes, in which case this
+			 * will fail (and we'll need to sample the returned rows somehow).
+			 */
+			Assert(proc <= 1);
+
+			/* If no qualifying tuples, add "empty" tuple */
+			if (ret != SPI_OK_SELECT || proc == 0)
+				sample_add_tuple(sample, spi_tupdesc, NULL);
+			else
+				sample_add_tuple(sample, spi_tupdesc, spi_tuptable->vals[0]);
+
+			SPI_freetuptable(spi_tuptable);
+		}
+
+		/* restore the value */
+		enable_sample_estimates_scan = reset;
+	}
+
+	SPI_finish();
+
+	SPI_freeplan(pplan);
+
+	elog(WARNING, "statext_collect_correlated_sample: sampled %d rows", sample->nrows);
+
+	return sample;
+}
+
+/*
+ * match the attribute/expression to a dimension of the statistic
+ *
+ * Match the attribute/expression to statistics dimension. Optionally
+ * determine the collation.
+ */
+static int
+sample_match_expression(Node *expr, Bitmapset *keys, List *exprs, Oid *collid)
+{
+	int			idx = -1;
+
+	if (IsA(expr, Var))
+	{
+		/* simple Var, so just lookup using varattno */
+		Var		   *var = (Var *) expr;
+
+		if (collid)
+			*collid = var->varcollid;
+
+		idx = bms_member_index(keys, var->varattno);
+
+		/* make sure the index is valid */
+		Assert((idx >= 0) && (idx <= bms_num_members(keys)));
+	}
+	else
+	{
+		ListCell   *lc;
+
+		/* expressions are stored after the simple columns */
+		idx = bms_num_members(keys);
+
+		if (collid)
+			*collid = exprCollation(expr);
+
+		/* expression - lookup in stats expressions */
+		foreach(lc, exprs)
+		{
+			Node	   *stat_expr = (Node *) lfirst(lc);
+
+			if (equal(expr, stat_expr))
+				break;
+
+			idx++;
+		}
+
+		/* make sure the index is valid */
+		Assert((idx >= bms_num_members(keys)) &&
+			   (idx <= bms_num_members(keys) + list_length(exprs)));
+	}
+
+	Assert((idx >= 0) && (idx < bms_num_members(keys) + list_length(exprs)));
+
+	return idx;
+}
+
+#define RESULT_MERGE(value, is_or, match) \
+	((is_or) ? ((value) || (match)) : ((value) && (match)))
+
+#define RESULT_IS_FINAL(value, is_or)	((is_or) ? (value) : (!(value)))
+
+static bool *
+sample_get_match_bitmap(PlannerInfo *root, List *clauses,
+						Bitmapset *keys, List *exprs,
+						Sample *sample, bool is_or)
+{
+	ListCell *l;
+	bool   *matches = palloc(sample->nrows * sizeof(bool));
+	int		nattrs = bms_num_members(keys) + list_length(exprs);
+
+	memset(matches, (is_or) ? false : true,
+		   sizeof(bool) * sample->nrows);
+
+	/*
+	 * Loop through the list of clauses, and for each of them evaluate all
+	 * the sampled rows not yet eliminated by the preceding clauses.
+	 */
+	foreach(l, clauses)
+	{
+		Node	   *clause = (Node *) lfirst(l);
+
+		/* if it's a RestrictInfo, then extract the clause */
+		if (IsA(clause, RestrictInfo))
+			clause = (Node *) ((RestrictInfo *) clause)->clause;
+
+		/*
+		 * Handle the various types of clauses - OpClause, NullTest and
+		 * AND/OR/NOT
+		 */
+		if (is_opclause(clause))
+		{
+			OpExpr	   *expr = (OpExpr *) clause;
+			FmgrInfo	opproc;
+
+			/* valid only after examine_opclause_args returns true */
+			Node	   *clause_expr;
+			Const	   *cst;
+			bool		expronleft;
+			int			idx;
+			Oid			collid;
+			int			i;
+
+			fmgr_info(get_opcode(expr->opno), &opproc);
+
+			/* extract the var/expr and const from the expression */
+			if (!examine_opclause_args(expr->args, &clause_expr, &cst, &expronleft))
+				elog(ERROR, "incompatible clause");
+
+			/* match the attribute/expression to a dimension of the statistic */
+			idx = sample_match_expression(clause_expr, keys, exprs, &collid);
+
+			Assert((idx >= 0) && (idx < bms_num_members(keys) + list_length(exprs)));
+
+			/*
+			 * Walk through the sampled rows and evaluate the current clause. We
+			 * can skip items that were already ruled out, and terminate if
+			 * there are no remaining MCV items that might possibly match.
+			 */
+			for (i = 0; i < sample->nrows; i++)
+			{
+				bool		match = true;
+				Datum	   *values = &sample->values[i * nattrs];
+				bool	   *isnull = &sample->isnull[i * nattrs];
+
+				Assert(idx >= 0);
+
+				/*
+				 * When the sampled row or the Const value is NULL we can treat
+				 * this as a mismatch. We must not call the operator because
+				 * of strictness.
+				 */
+				if (isnull[idx] || cst->constisnull)
+				{
+					matches[i] = RESULT_MERGE(matches[i], is_or, false);
+					continue;
+				}
+
+				/*
+				 * Skip sampled rows that can't change result in the bitmap. Once
+				 * the value gets false for AND-lists, or true for OR-lists, we
+				 * don't need to look at more clauses.
+				 */
+				if (RESULT_IS_FINAL(matches[i], is_or))
+					continue;
+
+				/*
+				 * First check whether the constant is below the lower
+				 * boundary (in that case we can skip the bucket, because
+				 * there's no overlap).
+				 *
+				 * We don't store collations used to build the statistics, but
+				 * we can use the collation for the attribute itself, as
+				 * stored in varcollid. We do reset the statistics after a
+				 * type change (including collation change), so this is OK.
+				 * For expressions, we use the collation extracted from the
+				 * expression itself.
+				 */
+				if (expronleft)
+					match = DatumGetBool(FunctionCall2Coll(&opproc,
+														   collid,
+														   values[idx],
+														   cst->constvalue));
+				else
+					match = DatumGetBool(FunctionCall2Coll(&opproc,
+														   collid,
+														   cst->constvalue,
+														   values[idx]));
+
+				/* update the match bitmap with the result */
+				matches[i] = RESULT_MERGE(matches[i], is_or, match);
+			}
+		}
+		else if (IsA(clause, ScalarArrayOpExpr))
+		{
+			ScalarArrayOpExpr *expr = (ScalarArrayOpExpr *) clause;
+			FmgrInfo	opproc;
+
+			/* valid only after examine_opclause_args returns true */
+			Node	   *clause_expr;
+			Const	   *cst;
+			bool		expronleft;
+			Oid			collid;
+			int			idx,
+						i;
+
+			/* array evaluation */
+			ArrayType  *arrayval;
+			int16		elmlen;
+			bool		elmbyval;
+			char		elmalign;
+			int			num_elems;
+			Datum	   *elem_values;
+			bool	   *elem_nulls;
+
+			fmgr_info(get_opcode(expr->opno), &opproc);
+
+			/* extract the var/expr and const from the expression */
+			if (!examine_opclause_args(expr->args, &clause_expr, &cst, &expronleft))
+				elog(ERROR, "incompatible clause");
+
+			/* ScalarArrayOpExpr has the Var always on the left */
+			Assert(expronleft);
+
+			/* XXX what if (cst->constisnull == NULL)? */
+			if (!cst->constisnull)
+			{
+				arrayval = DatumGetArrayTypeP(cst->constvalue);
+				get_typlenbyvalalign(ARR_ELEMTYPE(arrayval),
+									 &elmlen, &elmbyval, &elmalign);
+				deconstruct_array(arrayval,
+								  ARR_ELEMTYPE(arrayval),
+								  elmlen, elmbyval, elmalign,
+								  &elem_values, &elem_nulls, &num_elems);
+			}
+
+			/* match the attribute/expression to a dimension of the statistic */
+			idx = sample_match_expression(clause_expr, keys, exprs, &collid);
+
+			/*
+			 * Walk through the sample and evaluate the current clause. We
+			 * can skip items that were already ruled out, and terminate if
+			 * there are no remaining MCV items that might possibly match.
+			 */
+			for (i = 0; i < sample->nrows; i++)
+			{
+				int			j;
+				bool		match = (expr->useOr ? false : true);
+				Datum	   *values = &sample->values[i * nattrs];
+				bool	   *isnull = &sample->isnull[i * nattrs];
+
+				/*
+				 * When the MCV item or the Const value is NULL we can treat
+				 * this as a mismatch. We must not call the operator because
+				 * of strictness.
+				 */
+				if (isnull[idx] || cst->constisnull)
+				{
+					matches[i] = RESULT_MERGE(matches[i], is_or, false);
+					continue;
+				}
+
+				/*
+				 * Skip MCV items that can't change result in the bitmap. Once
+				 * the value gets false for AND-lists, or true for OR-lists,
+				 * we don't need to look at more clauses.
+				 */
+				if (RESULT_IS_FINAL(matches[i], is_or))
+					continue;
+
+				for (j = 0; j < num_elems; j++)
+				{
+					Datum		elem_value = elem_values[j];
+					bool		elem_isnull = elem_nulls[j];
+					bool		elem_match;
+
+					/* NULL values always evaluate as not matching. */
+					if (elem_isnull)
+					{
+						match = RESULT_MERGE(match, expr->useOr, false);
+						continue;
+					}
+
+					/*
+					 * Stop evaluating the array elements once we reach a
+					 * matching value that can't change - ALL() is the same as
+					 * AND-list, ANY() is the same as OR-list.
+					 */
+					if (RESULT_IS_FINAL(match, expr->useOr))
+						break;
+
+					elem_match = DatumGetBool(FunctionCall2Coll(&opproc,
+																collid,
+																values[idx],
+																elem_value));
+
+					match = RESULT_MERGE(match, expr->useOr, elem_match);
+				}
+
+				/* update the match bitmap with the result */
+				matches[i] = RESULT_MERGE(matches[i], is_or, match);
+			}
+		}
+		else if (IsA(clause, NullTest))
+		{
+			int			i;
+			NullTest   *expr = (NullTest *) clause;
+			Node	   *clause_expr = (Node *) (expr->arg);
+
+			/* match the attribute/expression to a dimension of the statistic */
+			int			idx = sample_match_expression(clause_expr, keys, exprs, NULL);
+
+			/*
+			 * Walk through the sample and evaluate the current clause. We
+			 * can skip items that were already ruled out, and terminate if
+			 * there are no remaining MCV items that might possibly match.
+			 */
+			for (i = 0; i < sample->nrows; i++)
+			{
+				bool	match = false;	/* assume mismatch */
+				bool   *isnull = &sample->isnull[i * nattrs];
+
+
+				/* if the clause mismatches the MCV item, update the bitmap */
+				switch (expr->nulltesttype)
+				{
+					case IS_NULL:
+						match = (isnull[idx]) ? true : match;
+						break;
+
+					case IS_NOT_NULL:
+						match = (!isnull[idx]) ? true : match;
+						break;
+				}
+
+				/* now, update the match bitmap, depending on OR/AND type */
+				matches[i] = RESULT_MERGE(matches[i], is_or, match);
+			}
+		}
+		else if (is_orclause(clause) || is_andclause(clause))
+		{
+			/* AND/OR clause, with all subclauses being compatible */
+
+			int			i;
+			BoolExpr   *bool_clause = ((BoolExpr *) clause);
+			List	   *bool_clauses = bool_clause->args;
+
+			/* match/mismatch bitmap for each MCV item */
+			bool	   *bool_matches = NULL;
+
+			Assert(bool_clauses != NIL);
+			Assert(list_length(bool_clauses) >= 2);
+
+			/* build the match bitmap for the OR-clauses */
+			bool_matches = sample_get_match_bitmap(root, bool_clauses, keys, exprs,
+												   sample, is_orclause(clause));
+
+			/*
+			 * Merge the bitmap produced by mcv_get_match_bitmap into the
+			 * current one. We need to consider if we're evaluating AND or OR
+			 * condition when merging the results.
+			 */
+			for (i = 0; i < sample->nrows; i++)
+				matches[i] = RESULT_MERGE(matches[i], is_or, bool_matches[i]);
+
+			pfree(bool_matches);
+		}
+		else if (is_notclause(clause))
+		{
+			/* NOT clause, with all subclauses compatible */
+
+			int			i;
+			BoolExpr   *not_clause = ((BoolExpr *) clause);
+			List	   *not_args = not_clause->args;
+
+			/* match/mismatch bitmap for each MCV item */
+			bool	   *not_matches = NULL;
+
+			Assert(not_args != NIL);
+			Assert(list_length(not_args) == 1);
+
+			/* build the match bitmap for the NOT-clause */
+			not_matches = sample_get_match_bitmap(root, not_args, keys, exprs,
+												  sample, false);
+
+			/*
+			 * Merge the bitmap produced by mcv_get_match_bitmap into the
+			 * current one. We're handling a NOT clause, so invert the result
+			 * before merging it into the global bitmap.
+			 */
+			for (i = 0; i < sample->nrows; i++)
+				matches[i] = RESULT_MERGE(matches[i], is_or, !not_matches[i]);
+
+			pfree(not_matches);
+		}
+		else if (IsA(clause, Var))
+		{
+			/* Var (has to be a boolean Var, possibly from below NOT) */
+			Var		   *var = (Var *) (clause);
+			int			i;
+
+			/* match the attribute to a dimension of the statistic */
+			int			idx = bms_member_index(keys, var->varattno);
+
+			Assert(var->vartype == BOOLOID);
+
+			/*
+			 * Walk through the MCV items and evaluate the current clause. We
+			 * can skip items that were already ruled out, and terminate if
+			 * there are no remaining MCV items that might possibly match.
+			 */
+			for (i = 0; i < sample->nrows; i++)
+			{
+				Datum	   *values = &sample->values[i * nattrs];
+				bool	   *isnull = &sample->isnull[i * nattrs];
+				bool		match = false;
+
+				/* if the item is NULL, it's a mismatch */
+				if (!isnull[idx] && DatumGetBool(values[idx]))
+					match = true;
+
+				/* update the result bitmap */
+				matches[i] = RESULT_MERGE(matches[i], is_or, match);
+			}
+		}
+		else
+			elog(ERROR, "unknown clause type: %d", clause->type);
+	}
+
+	return matches;
+}
+
+static Selectivity
+sample_clauselist_selectivity(PlannerInfo *root, StatisticExtInfo *stat,
+							  Sample *sample, List *clauses, int varRelid,
+							  JoinType jointype, SpecialJoinInfo *sjinfo,
+							  RelOptInfo *rel, bool is_or)
+{
+	int			i;
+	int			matched;
+
+	/* match/mismatch bitmap for each sampled row */
+	bool	   *matches = NULL;
+
+	/* build a match bitmap for the clauses */
+	matches = sample_get_match_bitmap(root, clauses,
+									  sample->attnums, sample->exprs,
+									  sample, is_or);
+
+	/* sum frequencies for all the matching sampled rows */
+	matched = 0;
+	for (i = 0; i < sample->nrows; i++)
+	{
+		if (matches[i] != false)
+			matched++;
+	}
+
+	return matched / (double) sample->nrows;
+}
+
+/*
+ * statext_sample_get_conditions
+ *		Get conditions on base relations, to be used as conditions for joins.
+ *
+ * When estimating joins using extended statistics, we can apply conditions
+ * from base relations as conditions. This peeks at the baserestrictinfo
+ * list for a relation and extracts those that are compatible with extended
+ * statistics.
+ *
+ * XXX Requiring statext_is_compatible_clause for samples is a bit bogus, as
+ * samples can be used to estimate almost any expression. So we should relax
+ * this in the future, probably.
+ */
+static List *
+statext_sample_get_conditions(PlannerInfo *root, RelOptInfo *rel,
+						   StatisticExtInfo *info)
+{
+	ListCell   *lc;
+	List	   *conditions = NIL;
+
+	/* extract conditions that may be applied to the MCV list */
+	foreach (lc, rel->baserestrictinfo)
+	{
+		RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
+		Bitmapset *indexes = NULL;
+		Bitmapset *attnums = NULL;
+		List *exprs = NIL;
+
+		/* clause has to be supported by sample in general */
+		if (!statext_is_compatible_clause(root, (Node *) rinfo, rel->relid,
+										  &attnums, &exprs))
+			continue;
+
+		/*
+		 * clause is compatible in general, but is it actually covered
+		 * by this partiular statistics object?
+		 */
+		if (!bms_is_subset(attnums, info->keys) ||
+			!stat_covers_expressions(info, exprs, &indexes))
+			continue;
+
+		conditions = lappend(conditions, rinfo->clause);
+	}
+
+	return conditions;
+}
+
+/*
+ * statext_mcv_eval_conditions
+ *		Evaluate a list of conditions on the sample.
+ *
+ * This returns a match bitmap for the conditions, which can be used later
+ * to restrict just the "interesting" part of the sample. Also returns
+ * the selectivity of the conditions, or 1.0 if there are no conditions.
+ */
+static bool *
+statext_sample_eval_conditions(PlannerInfo *root, RelOptInfo *rel,
+							   StatisticExtInfo *stat, Sample *sample,
+							   Selectivity *sel)
+{
+	List   *conditions;
+
+	/* everything matches by default */
+	*sel = 1.0;
+
+	/*
+	 * XXX We've already evaluated this before, when picking the statistics
+	 * object. Maybe we should stash it somewhere, so that we don't have to
+	 * evaluate it again.
+	 */
+	conditions = statext_sample_get_conditions(root, rel, stat);
+
+	/* If no conditions, we're done. */
+	if (!conditions)
+		return NULL;
+
+	/* what's the selectivity of the conditions alone? */
+	*sel = clauselist_selectivity(root, conditions, rel->relid, 0, NULL);
+
+	return sample_get_match_bitmap(root, conditions, stat->keys, stat->exprs,
+								   sample, false);
+}
+
+static bool
+statext_can_use_correlated_sample(PlannerInfo *root, RelOptInfo *rel, List *clauses)
+{
+	RangeTblEntry *rte = planner_rt_fetch(rel->relid, root);
+	Oid		relid = rte->relid;
+	Oid		constraintOid;
+	Bitmapset *pkattnos = NULL;
+	Bitmapset *attnos = NULL;
+
+	pkattnos = get_primary_key_attnos(relid, true, &constraintOid);
+
+	if (!OidIsValid(constraintOid))
+		return false;
+
+	pull_varattnos((Node *) clauses, rel->relid, &attnos);
+
+	if (!bms_equal(attnos, pkattnos))
+		return false;
+
+	return true;
+}
+
+/*
+ * statext_compare_samples
+ *		Calculte join selectivity using extended statistics, similarly to
+ *		eqjoinsel_inner.
+ *
+ * Considers restrictions on base relations too, essentially computing
+ * a conditional probability
+ *
+ *	P(join clauses | baserestrictinfos on either side)
+ *
+ * Compared to eqjoinsel_inner there's a couple problems. With per-column
+ * MCV lists it's obvious that the number of distinct values not covered
+ * by the MCV is (ndistinct - size(MCV)). With multi-column MCVs it's not
+ * that simple, particularly when the conditions are on a subset of the
+ * MCV and NULLs are involved. E.g. with MCV (a,b,c) and conditions on
+ * (a,b), it's not clear if the number of (a,b) combinations not covered
+ * by the MCV is
+ *
+ * (ndistinct(a,b) - ndistinct_mcv(a,b))
+ *
+ * where ndistinct_mcv(a,b) is the number of distinct (a,b) combinations
+ * included in the MCV list. These combinations may be present in the rest
+ * of the data (outside MCV), just with some extra values in "c". So in
+ * principle there may be between
+ *
+ * (ndistinct(a,b) - ndistinct_mcv(a,b)) and ndistinct(a,b)
+ *
+ * distinct values in the rest of the data. So we need to pick something
+ * in between, there's no way to calculate this accurately.
+ */
+static Selectivity
+statext_compare_samples(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
+						StatisticExtInfo *stat1, StatisticExtInfo *stat2,
+						List *clauses)
+{
+	Sample *sample1;
+	Sample *sample2;
+	int		i, j;
+	Selectivity s = 0;
+
+	/* items eliminated by conditions (if any) */
+	bool   *conditions1 = NULL,
+		   *conditions2 = NULL;
+
+	double	conditions1_sel = 1.0,
+			conditions2_sel = 1.0;
+
+	bool   *matches1 = NULL,
+		   *matches2 = NULL;
+
+	double	matchfreq1,
+			unmatchfreq1,
+			matchfreq2,
+			unmatchfreq2,
+			freq1,
+			freq2;
+
+	int64	nmatches = 0,
+			nmatches1 = 0,
+			nunmatches1 = 0,
+			nmatches2 = 0,
+			nunmatches2 = 0;
+	int64	total = 0;
+
+	bool	correlated = false;
+
+	/*
+	 * XXX Extract attnums / expressions and sample just those.
+	 *
+	 * XXX The other thing we could do is sampling just the rows
+	 * matching the conditions, which would make the sample a bit
+	 * smaller.
+	 *
+	 * XXX And finally we can do GROUP BY to combine duplicate values,
+	 * which should make the sample yet a bit smaller and cheaper to
+	 * process. It'll be a bit like a large MCV, with each row having a
+	 * frequency. This can be done easily in SPI, however that means the
+	 * query will be dependent on the planner (it'll pick the grouping
+	 * algorithm).
+	 *
+	 * XXX We could also build a count-min sketch instead of the sample.
+	 * We can't restrict the count-min sketch with the conditions, but
+	 * we can apply the conditions *before* the sketch gets built. Not
+	 * sure if that can affect the query plan (e.g. by using index for
+	 * the conditions).
+	 */
+	if (enable_sample_join_correlate &&
+		statext_can_use_correlated_sample(root, rel1, clauses))
+	{
+		sample2 = statext_collect_sample(root, stat2);
+		sample1 = statext_collect_correlated_sample(root, stat1, stat2, sample2, clauses);
+		correlated = true;
+	}
+	else if (enable_sample_join_correlate &&
+			 statext_can_use_correlated_sample(root, rel2, clauses))
+	{
+		sample1 = statext_collect_sample(root, stat1);
+		sample2 = statext_collect_correlated_sample(root, stat2, stat1, sample1, clauses);
+		correlated = true;
+	}
+	else
+	{
+		sample1 = statext_collect_sample(root, stat1);
+		sample2 = statext_collect_sample(root, stat2);
+	}
+
+	/* should only get here with samples on both sides */
+	Assert(sample1 && sample2);
+
+	matches1 = (bool *) palloc0(sizeof(bool) * sample1->nrows);
+	matches2 = (bool *) palloc0(sizeof(bool) * sample2->nrows);
+
+	/* apply baserestrictinfo conditions on the MCV lists */
+
+	conditions1 = statext_sample_eval_conditions(root, rel1, stat1, sample1,
+												 &conditions1_sel);
+
+	conditions2 = statext_sample_eval_conditions(root, rel2, stat2, sample2,
+												 &conditions2_sel);
+
+	/*
+	 * Match items from the two samples.
+	 *
+	 * We don't know if the matches are 1:1 - we may have overlap on only
+	 * a subset of attributes, e.g. (a,b,c) vs. (b,c,d), so there may be
+	 * multiple matches.
+	 */
+	for (i = 0; i < sample1->nrows; i++)
+	{
+		int	start = 0;
+		int	end = sample2->nrows;
+
+		/* skip items eliminated by restrictions on rel1 */
+		if (conditions1 && !conditions1[i])
+			continue;
+
+		CHECK_FOR_INTERRUPTS();
+
+		if (correlated)
+		{
+			start = i;
+			end = i+1;
+		}
+
+		/* find matches in the second MCV list */
+		for (j = start; j < end; j++)
+		{
+			ListCell   *lc;
+			bool		items_match = true;
+
+			/* skip items eliminated by restrictions on rel2 */
+			if (conditions2 && !conditions2[j])
+				continue;
+
+			foreach (lc, clauses)
+			{
+				Node *clause = (Node *) lfirst(lc);
+				Bitmapset  *atts1 = NULL;
+				Bitmapset  *atts2 = NULL;
+				Datum		value1, value2;
+				int			index1, index2;
+				AttrNumber	attnum1;
+				AttrNumber	attnum2;
+				bool		match;
+				int			natts1 = bms_num_members(sample1->attnums) + list_length(sample1->exprs);
+				int			natts2 = bms_num_members(sample2->attnums) + list_length(sample2->exprs);
+
+				FmgrInfo	opproc;
+				OpExpr	   *expr = (OpExpr *) clause;
+
+				Assert(is_opclause(clause));
+
+				fmgr_info(get_opcode(expr->opno), &opproc);
+
+				/* determine the columns in each statistics object */
+
+				/* FIXME make this work with expressions too */
+				pull_varattnos(clause, rel1->relid, &atts1);
+				attnum1 = bms_singleton_member(atts1) + FirstLowInvalidHeapAttributeNumber;
+				index1 = bms_member_index(stat1->keys, attnum1);
+
+				pull_varattnos(clause, rel2->relid, &atts2);
+				attnum2 = bms_singleton_member(atts2) + FirstLowInvalidHeapAttributeNumber;
+				index2 = bms_member_index(stat2->keys, attnum2);
+
+				/* translate attr indexes to index in the sample arrays */
+				index1 = i * natts1 + index1;
+				index2 = j * natts2 + index2;
+
+				bms_free(atts1);
+				bms_free(atts2);
+
+				/* if either value is null, we're done */
+				if (sample1->isnull[index1] || sample2->isnull[index2])
+					match = false;
+				else
+				{
+					value1 = sample1->values[index1];
+					value2 = sample2->values[index2];
+
+					/*
+					 * FIXME Might have issues with order of parameters, but for
+					 * same-type equality that should not matter.
+					 * */
+					match = DatumGetBool(FunctionCall2Coll(&opproc,
+														   InvalidOid,
+														   value1, value2));
+				}
+
+				items_match &= match;
+
+				if (!items_match)
+					break;
+			}
+
+			if (items_match)
+			{
+				matches1[i] = matches2[j] = true;
+				nmatches += 1;
+			}
+		}
+	}
+
+	if (correlated)
+		total = (int64) Min(sample1->nrows, stat1->rel->tuples) * (int64) Min(sample2->nrows, stat2->rel->tuples);
+	else
+		total = (int64) sample1->nrows * (int64) sample2->nrows;
+
+	s = nmatches / (double) total;
+
+	elog(WARNING, "statext_compare_samples nmatches %ld cartesian %ld s %f", nmatches, total, s);
+
+	/*
+	 * XXX The "unmatched" frequencies are probably not needed, as the
+	 * sample should cover the whole data set (unlike a MCV list).
+	 *
+	 * XXX We should however look at the number of distinct groups in
+	 * the matched columns/expressions, which should help us to calculate
+	 * selectivity for the whole cross join. One possible extreme is we
+	 * saw all the distinct values, and that all the groups grow about
+	 * proportionally (and the join as ~square of that). Or maybe there
+	 * are many other distinct groups, in which case the join grows
+	 * slowly (closer to linear).
+	 */
+
+	for (i = 0; i < sample1->nrows; i++)
+	{
+		if (conditions1 && !conditions1[i])
+			continue;
+
+		if (matches1[i])
+			nmatches1++;
+		else
+			nunmatches1++;
+	}
+
+	matchfreq1 = nmatches1 / (double) sample1->nrows;
+	unmatchfreq1 = nunmatches1 / (double) sample1->nrows;
+	freq1 = 1.0;
+
+	for (i = 0; i < sample2->nrows; i++)
+	{
+		if (conditions2 && !conditions2[i])
+			continue;
+
+		if (matches2[i])
+			nmatches2++;
+		else
+			nunmatches2++;
+	}
+
+	matchfreq2 = nmatches2 / (double) sample2->nrows;
+	unmatchfreq2 = nunmatches2 / (double) sample2->nrows;
+	freq2 = 1.0;
+
+	/*
+	 * correction for sample parts eliminated by the conditions
+	 *
+	 * FIXME for "impossible" conditions this does /0, which results in
+	 * NaN and other weird stuff.
+	 */
+	if ((matchfreq1 + unmatchfreq1) > 0 && (matchfreq2 + unmatchfreq2) > 0)
+		s = s * freq1 * freq2 / (matchfreq1 + unmatchfreq1) / (matchfreq2 + unmatchfreq2);
+	else
+		s = 0.0;
+
+	elog(WARNING, "statext_compare_samples corrected %f", s);
+
+	sample_free(sample1);
+	sample_free(sample2);
+
+	return s;
+}
+
+/*
+ * statext_is_supported_join_clause
+ *		Check if a join clause may be estimated using extended stats.
+ *
+ * Determines if this is a join clause of the form (Expr op Expr) which
+ * may be estimated using extended statistics. Each side must reference
+ * just one relation for now.
+ */
+static bool
+statext_is_supported_join_clause(PlannerInfo *root, Node *clause,
+								 int varRelid, SpecialJoinInfo *sjinfo)
+{
+	Oid	oprsel;
+	RestrictInfo   *rinfo;
+	OpExpr		   *opclause;
+	ListCell	   *lc;
+
+	/*
+	 * evaluation as a restriction clause, either at scan node or forced
+	 *
+	 * XXX See treat_as_join_clause.
+	 */
+	if ((varRelid != 0) || (sjinfo == NULL))
+		return false;
+
+	/* XXX Can we rely on always getting RestrictInfo here? */
+	if (!IsA(clause, RestrictInfo))
+		return false;
+
+	/* strip the RestrictInfo */
+	rinfo = (RestrictInfo *) clause;
+	clause = (Node *) rinfo->clause;
+
+	/* is it referencing multiple relations? */
+	if (bms_membership(rinfo->clause_relids) != BMS_MULTIPLE)
+		return false;
+
+	/* we only support simple operator clauses for now */
+	if (!is_opclause(clause))
+		return false;
+
+	opclause = (OpExpr *) clause;
+
+	/* for now we only support estimating equijoins */
+	oprsel = get_oprjoin(opclause->opno);
+
+	if (oprsel != F_EQJOINSEL)
+		return false;
+
+	/*
+	 * Make sure we're not mixing vars from multiple relations on the same
+	 * side, like
+	 *
+	 *   (t1.a + t2.a) = (t1.b + t2.b)
+	 *
+	 * which is still technically an opclause, but we can't match it to
+	 * extended statistics in a simple way.
+	 *
+	 * XXX This also means we require rinfo->clause_relids to have 2 rels.
+	 *
+	 * XXX Also check it's not expression on system attributes, which we
+	 * don't allow in extended statistics.
+	 *
+	 * XXX Although maybe we could allow cases that combine expressions
+	 * from both relations on either side? Like (t1.a + t2.b = t1.c - t2.d)
+	 * or something like that. We could do "cartesian product" of the MCV
+	 * stats and restrict it using this condition.
+	 */
+	foreach (lc, opclause->args)
+	{
+		Bitmapset *varnos = NULL;
+		Node *expr = (Node *) lfirst(lc);
+
+		varnos = pull_varnos(root, expr);
+
+		/*
+		 * No argument should reference more than just one relation.
+		 *
+		 * This effectively means each side references just two relations.
+		 * If there's no relation on one side, it's a Const, and the other
+		 * side has to be either Const or Expr with a single rel. In which
+		 * case it can't be a join clause.
+		 */
+		if (bms_num_members(varnos) > 1)
+			return false;
+
+		/*
+		 * XXX Maybe check that both relations have extended statistics
+		 * (no point in considering the clause as useful without it). But
+		 * we'll do that check later anyway, so keep this cheap.
+		 */
+	}
+
+	return true;
+}
+
+/*
+ * statext_try_join_estimates
+ *		Checks if it's worth considering extended stats on join estimates.
+ *
+ * This is supposed to be a quick/cheap check to decide whether to expend
+ * more effort on applying extended statistics to join clauses.
+ */
+bool
+statext_try_join_estimates(PlannerInfo *root, List *clauses, int varRelid,
+						   JoinType jointype, SpecialJoinInfo *sjinfo,
+						   Bitmapset *estimatedclauses)
+{
+	int			listidx;
+	int			k;
+	ListCell   *lc;
+	Bitmapset  *relids = NULL;
+
+	/*
+	 * XXX Not having these values means treat_as_join_clause returns false,
+	 * so we're not supposed to handle join clauses here. So just bail out.
+	 */
+	if ((varRelid != 0) || (sjinfo == NULL))
+		return false;
+
+	listidx = -1;
+	foreach (lc, clauses)
+	{
+		Node *clause = (Node *) lfirst(lc);
+		RestrictInfo *rinfo;
+		listidx++;
+
+		/* skip estimated clauses */
+		if (bms_is_member(listidx, estimatedclauses))
+			continue;
+
+		/*
+		 * Skip clauses that are not join clauses or that we don't know
+		 * how to handle estimate using extended statistics.
+		 */
+		if (!statext_is_supported_join_clause(root, clause, varRelid, sjinfo))
+			continue;
+
+		/*
+		 * Collect relids from all usable clauses.
+		 *
+		 * XXX We're guaranteed to have RestrictInfo thanks to the checks
+		 * in statext_is_supported_join_clause.
+		 */
+		rinfo = (RestrictInfo *) clause;
+		relids = bms_union(relids, rinfo->clause_relids);
+	}
+
+	/* no join clauses found, don't try applying extended stats */
+	if (bms_num_members(relids) == 0)
+		return false;
+
+	/*
+	 * We expect either 0 or >= 2 relids, a case with 1 relid in join clauses
+	 * should be impossible. And we just ruled out 0, so there are at least 2.
+	 */
+	Assert(bms_num_members(relids) >= 2);
+
+	/*
+	 * Check that at least some of the rels referenced by the clauses have
+	 * extended stats.
+	 *
+	 * XXX Maybe we should check how many rels have stats, and cross-check
+	 * how compatible they are (e.g. that both have MCVs, etc.). Also,
+	 * maybe this should cross-check the exact pairs of rels with a join
+	 * clause between them? OTOH this is supposed to be a cheap check, so
+	 * maybe better leave that for later.
+	 *
+	 * XXX We could also check if there are enough parameters in each rel
+	 * to consider extended stats. If there's just a single attribute, it's
+	 * probably better to use just regular statistics. OTOH we can also
+	 * consider restriction clauses from baserestrictinfo and use them
+	 * to calculate conditional probabilities.
+	 */
+	k = -1;
+	while ((k = bms_next_member(relids, k)) >= 0)
+	{
+		RelOptInfo *rel = find_base_rel(root, k);
+		if (rel->statlist)
+			return true;
+	}
+
+	return false;
+}
+
+/*
+ * Information about a join between two relations. It tracks relations being
+ * joined and the join clauses.
+ */
+typedef struct JoinPairInfo
+{
+	Bitmapset  *rels;
+	List	   *clauses;
+} JoinPairInfo;
+
+/*
+ * statext_build_join_pairs
+ *		Extract pairs of joined rels with join clauses for each pair.
+ *
+ * Walks the remaining (not yet estimated) clauses, and splits them into
+ * lists for each pair of joined relations. Returns NULL if there are no
+ * suitable join pairs that might be estimated using extended stats.
+ *
+ * XXX It's possible there are join clauses, but the clauses are not
+ * supported by the extended stats machinery (we only support opclauses
+ * with F_EQJOINSEL selectivity function at the moment). But for samples
+ * it should be possible to support almost anything, although maybe not
+ * with the efficient correlated sampling.
+ *
+ * XXX This should also order the join pairs in a way that supports the
+ * correlated sampling, so for example in a snowflake join
+ *
+ * F -> D1 -> D2
+ *
+ * we should join F->D1 first, then D1->D2. This way we can enrich the
+ * first sample. For star schema this probably does not matter too much.
+ */
+static JoinPairInfo *
+statext_build_join_pairs(PlannerInfo *root, List *clauses, int varRelid,
+						 JoinType jointype, SpecialJoinInfo *sjinfo,
+						 Bitmapset *estimatedclauses, int *npairs)
+{
+	int				cnt;
+	int				listidx;
+	JoinPairInfo   *info;
+	ListCell	   *lc;
+
+	/*
+	 * Assume each clause is for a different pair of relations (some of them
+	 * might be already estimated, but meh - there shouldn't be too many of
+	 * them and it's cheaper than repalloc.
+	 */
+	info = (JoinPairInfo *) palloc0(sizeof(JoinPairInfo) * list_length(clauses));
+	cnt = 0;
+
+	listidx = -1;
+	foreach(lc, clauses)
+	{
+		int				i;
+		bool			found;
+		Node		   *clause = (Node *) lfirst(lc);
+		RestrictInfo   *rinfo;
+
+		listidx++;
+
+		/* skip already estimated clauses */
+		if (bms_is_member(listidx, estimatedclauses))
+			continue;
+
+		/*
+		 * Make sure the clause is a join clause of a supported shape (at
+		 * the moment we support just (Expr op Expr) clauses with each
+		 * side referencing just a single relation.
+		 */
+		if (!statext_is_supported_join_clause(root, clause, varRelid, sjinfo))
+			continue;
+
+		/* statext_is_supported_join_clause guarantees RestrictInfo */
+		rinfo = (RestrictInfo *) clause;
+		clause = (Node *) rinfo->clause;
+
+		/* search for a matching join pair */
+		found = false;
+		for (i = 0; i < cnt; i++)
+		{
+			if (bms_is_subset(rinfo->clause_relids, info[i].rels))
+			{
+				info[i].clauses = lappend(info[i].clauses, clause);
+				found = true;
+				break;
+			}
+		}
+
+		if (!found)
+		{
+			info[cnt].rels = rinfo->clause_relids;
+			info[cnt].clauses = lappend(info[cnt].clauses, clause);
+			cnt++;
+		}
+	}
+
+	if (cnt == 0)
+		return NULL;
+
+	*npairs = cnt;
+	return info;
+}
+
+/*
+ * extract_relation_info
+ *		Extract information about a relation in a join pair.
+ *
+ * The relation is identified by index (generally 0 or 1), and picks extended
+ * statistics covering matching the join clauses and baserel restrictions.
+ *
+ * XXX Can we have cases with indexes above 1? Probably for clauses mixing
+ * vars from 3 relations, but we're rejecting those.
+ */
+static RelOptInfo *
+extract_relation_info(PlannerInfo *root, JoinPairInfo *info, int index,
+					  StatisticExtInfo **stat)
+{
+	int	k;
+	int	relid;
+	RelOptInfo *rel;
+	ListCell *lc;
+
+	Bitmapset  *attnums = NULL;
+	List	   *exprs = NIL;
+
+	k = -1;
+	while (index >= 0)
+	{
+		k = bms_next_member(info->rels, k);
+		if (k < 0)
+			elog(ERROR, "failed to extract relid");
+
+		relid = k;
+		index--;
+	}
+
+	rel = find_base_rel(root, relid);
+
+	/*
+	 * Walk the clauses for this join pair, and extract expressions about
+	 * the relation identified by index / relid. For simple Vars we extract
+	 * the attnum. Otherwise we keep the whole expression.
+	 */
+	foreach (lc, info->clauses)
+	{
+		ListCell *lc2;
+		Node *clause = (Node *) lfirst(lc);
+		OpExpr *opclause = (OpExpr *) clause;
+
+		/* only opclauses supported for now */
+		Assert(is_opclause(clause));
+
+		foreach (lc2, opclause->args)
+		{
+			Node *arg = (Node *) lfirst(lc2);
+			Bitmapset *varnos = NULL;
+
+			/* plain Var references (boolean Vars or recursive checks) */
+			if (IsA(arg, Var))
+			{
+				Var		   *var = (Var *) arg;
+
+				/* Ignore vars from other relations. */
+				if (var->varno != relid)
+					continue;
+
+				/* we also better ensure the Var is from the current level */
+				if (var->varlevelsup > 0)
+					continue;
+
+				/* Also skip system attributes (we don't allow stats on those). */
+				if (!AttrNumberIsForUserDefinedAttr(var->varattno))
+					elog(ERROR, "unexpected system attribute");
+
+				attnums = bms_add_member(attnums, var->varattno);
+
+				/* Done, process the next argument. */
+				continue;
+			}
+
+			/*
+			 * OK, it's a more complex expression, so check if it matches
+			 * the relid and maybe keep it as a whole. It should be
+			 * compatible because we already checked it when building the
+			 * join pairs.
+			 */
+			varnos = pull_varnos(root, arg);
+
+			if (relid == bms_singleton_member(varnos))
+				exprs = lappend(exprs, arg);
+		}
+	}
+
+	*stat = find_matching_sample(root, rel, attnums, exprs);
+
+	return rel;
+}
+
+/*
+ * statext_clauselist_join_selectivity
+ *		Use extended stats to estimate join clauses.
+ *
+ * XXX In principle, we should not restrict this to cases with multiple
+ * join clauses - we should consider dependencies with conditions at the
+ * base relations, i.e. calculate P(join clause | base restrictions).
+ * But currently that does not happen, because clauselist_selectivity_ext
+ * treats a single clause as a special case (and we don't apply extended
+ * statistics in that case yet).
+ */
+Selectivity
+statext_clauselist_join_selectivity(PlannerInfo *root, List *clauses, int varRelid,
+									JoinType jointype, SpecialJoinInfo *sjinfo,
+									Bitmapset **estimatedclauses)
+{
+	int			i;
+	int			listidx;
+	Selectivity	s = 1.0;
+
+	JoinPairInfo *info;
+	int				ninfo;
+
+	if (!clauses || !enable_sample_estimates_join)
+		return 1.0;
+
+	/* extract pairs of joined relations from the list of clauses */
+	info = statext_build_join_pairs(root, clauses, varRelid, jointype, sjinfo,
+									*estimatedclauses, &ninfo);
+
+	/* no useful join pairs */
+	if (!info)
+		return 1.0;
+
+	/*
+	 * Process the join pairs, try to find a matching MCV on each side.
+	 *
+	 * XXX The basic principle is quite similar to eqjoinsel_inner, i.e.
+	 * we try to find a MCV on both sides of the join, and use it to get
+	 * better join estimate. It's a bit more complicated, because there
+	 * might be multiple MCV lists, we also need ndistinct estimate, and
+	 * there may be interesting baserestrictions too.
+	 *
+	 * XXX At the moment we only handle the case with matching MCVs on
+	 * both sides, but it'd be good to also handle case with just ndistinct
+	 * statistics improving ndistinct estimates.
+	 *
+	 * XXX Perhaps it'd be good to also handle case with one side only
+	 * having "regular" statistics (e.g. MCV), especially in cases with
+	 * no conditions on that side of the join (where we can't use the
+	 * extended MCV to calculate conditional probability).
+	 */
+	for (i = 0; i < ninfo; i++)
+	{
+		RelOptInfo *rel1;
+		RelOptInfo *rel2;
+		StatisticExtInfo *stat1;
+		StatisticExtInfo *stat2;
+
+		ListCell *lc;
+
+		/* extract info about the first relation */
+		rel1 = extract_relation_info(root, &info[i], 0, &stat1);
+
+		/* extract info about the second relation */
+		rel2 = extract_relation_info(root, &info[i], 1, &stat2);
+
+		/* XXX only handling case with MCV on both sides for now */
+		if (!stat1 || !stat2)
+			continue;
+
+		s *= statext_compare_samples(root, rel1, rel2, stat1, stat2, info[i].clauses);
+
+		/*
+		 * Now mark all the clauses for this join pair as estimated.
+		 *
+		 * XXX Maybe track the indexes in JoinPairInfo, so that we can
+		 * simply union the two bitmaps, without the extra matching.
+		 */
+		foreach (lc, info->clauses)
+		{
+			Node *clause = (Node *) lfirst(lc);
+			ListCell *lc2;
+
+			listidx = -1;
+			foreach (lc2, clauses)
+			{
+				Node *clause2 = (Node *) lfirst(lc2);
+				listidx++;
+
+				Assert(IsA(clause2, RestrictInfo));
+
+				clause2 = (Node *) ((RestrictInfo *) clause2)->clause;
+
+				if (equal(clause, clause2))
+				{
+					*estimatedclauses = bms_add_member(*estimatedclauses, listidx);
+					break;
+				}
+			}
+		}
+	}
+
+	return s;
 }

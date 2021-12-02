@@ -1118,6 +1118,7 @@ _outIntoClause(StringInfo str, const IntoClause *node)
 	WRITE_STRING_FIELD(tableSpaceName);
 	WRITE_NODE_FIELD(viewQuery);
 	WRITE_BOOL_FIELD(skipData);
+	WRITE_BOOL_FIELD(ivm);
 }
 
 static void
@@ -3256,6 +3257,7 @@ _outRangeTblEntry(StringInfo str, const RangeTblEntry *node)
 			WRITE_CHAR_FIELD(relkind);
 			WRITE_INT_FIELD(rellockmode);
 			WRITE_NODE_FIELD(tablesample);
+			WRITE_BOOL_FIELD(relisivm);
 			break;
 		case RTE_SUBQUERY:
 			WRITE_NODE_FIELD(subquery);

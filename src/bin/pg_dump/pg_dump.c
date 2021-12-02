@@ -6428,6 +6428,7 @@ getTables(Archive *fout, int *numTables)
 	int			i_partkeydef;
 	int			i_ispartition;
 	int			i_partbound;
+	int			i_isivm;
 
 	/*
 	 * Find all the tables and table-like objects.
@@ -6631,12 +6632,19 @@ getTables(Archive *fout, int *numTables)
 		appendPQExpBufferStr(query,
 							 "pg_get_partkeydef(c.oid) AS partkeydef, "
 							 "c.relispartition AS ispartition, "
-							 "pg_get_expr(c.relpartbound, c.oid) AS partbound ");
+							 "pg_get_expr(c.relpartbound, c.oid) AS partbound, ");
 	else
 		appendPQExpBufferStr(query,
 							 "NULL AS partkeydef, "
 							 "false AS ispartition, "
-							 "NULL AS partbound ");
+							 "NULL AS partbound, ");
+
+	if (fout->remoteVersion >= 150000)
+		appendPQExpBufferStr(query,
+							 "c.relisivm AS isivm ");
+	else
+		appendPQExpBufferStr(query,
+							 "false AS isivm ");
 
 	/*
 	 * Left join to pg_depend to pick up dependency info linking sequences to
@@ -6754,6 +6762,8 @@ getTables(Archive *fout, int *numTables)
 	i_partkeydef = PQfnumber(res, "partkeydef");
 	i_ispartition = PQfnumber(res, "ispartition");
 	i_partbound = PQfnumber(res, "partbound");
+	i_isivm = PQfnumber(res, "isivm");
+
 
 	if (dopt->lockWaitTimeout)
 	{
@@ -6831,6 +6841,8 @@ getTables(Archive *fout, int *numTables)
 		tblinfo[i].partkeydef = pg_strdup(PQgetvalue(res, i, i_partkeydef));
 		tblinfo[i].ispartition = (strcmp(PQgetvalue(res, i, i_ispartition), "t") == 0);
 		tblinfo[i].partbound = pg_strdup(PQgetvalue(res, i, i_partbound));
+		tblinfo[i].isivm = (strcmp(PQgetvalue(res, i, i_isivm), "t") == 0);
+
 
 		/* other fields were zeroed above */
 
@@ -15903,9 +15915,11 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 			binary_upgrade_set_pg_class_oids(fout, q,
 											 tbinfo->dobj.catId.oid, false);
 
-		appendPQExpBuffer(q, "CREATE %s%s %s",
+		appendPQExpBuffer(q, "CREATE %s%s%s %s",
 						  tbinfo->relpersistence == RELPERSISTENCE_UNLOGGED ?
 						  "UNLOGGED " : "",
+						  tbinfo->relkind == RELKIND_MATVIEW && tbinfo->isivm ?
+						  "INCREMENTAL " : "",
 						  reltypename,
 						  qualrelname);
 

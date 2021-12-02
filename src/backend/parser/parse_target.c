@@ -1957,6 +1957,43 @@ FigureColnameInternal(Node *node, char **name)
 		case T_XmlSerialize:
 			*name = "xmlserialize";
 			return 2;
+		case T_JsonParseExpr:
+			*name = "json";
+			return 2;
+		case T_JsonScalarExpr:
+			*name = "json_scalar";
+			return 2;
+		case T_JsonSerializeExpr:
+			*name = "json_serialize";
+			return 2;
+		case T_JsonObjectConstructor:
+			*name = "json_object";
+			return 2;
+		case T_JsonArrayConstructor:
+		case T_JsonArrayQueryConstructor:
+			*name = "json_array";
+			return 2;
+		case T_JsonObjectAgg:
+			*name = "json_objectagg";
+			return 2;
+		case T_JsonArrayAgg:
+			*name = "json_arrayagg";
+			return 2;
+		case T_JsonFuncExpr:
+			/* make SQL/JSON functions act like a regular function */
+			switch (((JsonFuncExpr *) node)->op)
+			{
+				case IS_JSON_QUERY:
+					*name = "json_query";
+					return 2;
+				case IS_JSON_VALUE:
+					*name = "json_value";
+					return 2;
+				case IS_JSON_EXISTS:
+					*name = "json_exists";
+					return 2;
+			}
+			break;
 		default:
 			break;
 	}

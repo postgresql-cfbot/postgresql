@@ -134,6 +134,193 @@ UPDATE testpub_parted2 SET a = 2;
 DROP TABLE testpub_parted1, testpub_parted2;
 DROP PUBLICATION testpub_forparted, testpub_forparted1;
 
+CREATE TABLE testpub_rf_tbl1 (a integer, b text);
+CREATE TABLE testpub_rf_tbl2 (c text, d integer);
+CREATE TABLE testpub_rf_tbl3 (e integer);
+CREATE TABLE testpub_rf_tbl4 (g text);
+CREATE SCHEMA testpub_rf_myschema;
+CREATE TABLE testpub_rf_myschema.testpub_rf_tbl5(h integer);
+CREATE SCHEMA testpub_rf_myschema1;
+CREATE TABLE testpub_rf_myschema1.testpub_rf_tb16(i integer);
+SET client_min_messages = 'ERROR';
+-- Firstly, test using the option publish="insert" because the row filter
+-- validation of referenced columns is less strict than for delete/update.
+CREATE PUBLICATION testpub5 FOR TABLE testpub_rf_tbl1, testpub_rf_tbl2 WHERE (c <> 'test' AND d < 5) WITH (publish = "insert");
+RESET client_min_messages;
+\dRp+ testpub5
+ALTER PUBLICATION testpub5 ADD TABLE testpub_rf_tbl3 WHERE (e > 1000 AND e < 2000);
+\dRp+ testpub5
+ALTER PUBLICATION testpub5 DROP TABLE testpub_rf_tbl2;
+\dRp+ testpub5
+-- remove testpub_rf_tbl1 and add testpub_rf_tbl3 again (another WHERE expression)
+ALTER PUBLICATION testpub5 SET TABLE testpub_rf_tbl3 WHERE (e > 300 AND e < 500);
+\dRp+ testpub5
+-- test \d+ (now it displays filter information)
+SET client_min_messages = 'ERROR';
+CREATE PUBLICATION testpub5a FOR TABLE testpub_rf_tbl1 WHERE (a > 1) WITH (publish="insert");
+CREATE PUBLICATION testpub5b FOR TABLE testpub_rf_tbl1;
+CREATE PUBLICATION testpub5c FOR TABLE testpub_rf_tbl1 WHERE (a > 3) WITH (publish="insert");
+RESET client_min_messages;
+\d+ testpub_rf_tbl1
+DROP PUBLICATION testpub5a, testpub5b, testpub5c;
+-- some more syntax tests to exercise other parser pathways
+SET client_min_messages = 'ERROR';
+CREATE PUBLICATION testpub_syntax1 FOR TABLE testpub_rf_tbl1, ONLY testpub_rf_tbl3 WHERE (e < 999) WITH (publish = "insert");
+RESET client_min_messages;
+\dRp+ testpub_syntax1
+DROP PUBLICATION testpub_syntax1;
+SET client_min_messages = 'ERROR';
+CREATE PUBLICATION testpub_syntax2 FOR TABLE testpub_rf_tbl1, testpub_rf_myschema.testpub_rf_tbl5 WHERE (h < 999) WITH (publish = "insert");
+RESET client_min_messages;
+\dRp+ testpub_syntax2
+DROP PUBLICATION testpub_syntax2;
+-- fail - schemas are not allowed WHERE row-filter
+SET client_min_messages = 'ERROR';
+CREATE PUBLICATION testpub_syntax3 FOR ALL TABLES IN SCHEMA testpub_rf_myschema WHERE (a = 123);
+CREATE PUBLICATION testpub_syntax3 FOR ALL TABLES IN SCHEMA testpub_rf_myschema, testpub_rf_myschema WHERE (a = 123);
+RESET client_min_messages;
+-- fail - duplicate tables are not allowed if that table has any WHERE row-filters
+SET client_min_messages = 'ERROR';
+CREATE PUBLICATION testpub_dups FOR TABLE testpub_rf_tbl1 WHERE (a = 1), testpub_rf_tbl1 WITH (publish="insert");
+CREATE PUBLICATION testpub_dups FOR TABLE testpub_rf_tbl1, testpub_rf_tbl1 WHERE (a = 2) WITH (publish="insert");
+RESET client_min_messages;
+-- fail - user-defined functions are not allowed
+CREATE FUNCTION testpub_rf_func99() RETURNS integer AS $$ BEGIN RETURN 99; END; $$ LANGUAGE plpgsql;
+ALTER PUBLICATION testpub5 SET TABLE testpub_rf_tbl1 WHERE (a < testpub_rf_func99());
+-- fail - system functions that are not IMMUTABLE are not allowed; random() is a "volatile" function.
+ALTER PUBLICATION testpub5 SET TABLE testpub_rf_tbl1 WHERE (a < random());
+-- ok - system functions that are IMMUTABLE are allowed; int8inc() is an "immutable" function.
+ALTER PUBLICATION testpub5 SET TABLE testpub_rf_tbl1 WHERE (a < int8inc(999));
+-- ok - NULLIF is allowed
+ALTER PUBLICATION testpub5 SET TABLE testpub_rf_tbl1 WHERE (NULLIF(1,2) = a);
+-- ok - IS NULL is allowed
+ALTER PUBLICATION testpub5 SET TABLE testpub_rf_tbl1 WHERE (a IS NULL);
+-- fail - user-defined operators disallowed
+CREATE FUNCTION testpub_rf_func(integer, integer) RETURNS boolean AS $$ SELECT hashint4($1) > $2 $$ LANGUAGE SQL;
+CREATE OPERATOR =#> (PROCEDURE = testpub_rf_func, LEFTARG = integer, RIGHTARG = integer);
+CREATE PUBLICATION testpub6 FOR TABLE testpub_rf_tbl3 WHERE (e =#> 27);
+-- fail - user-defined types disallowed
+CREATE TYPE rf_bug_status AS ENUM ('new', 'open', 'closed');
+CREATE TABLE rf_bug (id serial, description text, status rf_bug_status);
+CREATE PUBLICATION testpub6 FOR TABLE rf_bug WHERE (status = 'open') WITH (publish="insert");
+DROP TABLE rf_bug;
+DROP TYPE rf_bug_status;
+-- fail - row-filter expression is not simple
+CREATE PUBLICATION testpub7 FOR TABLE testpub_rf_tbl1 WHERE (a IN (SELECT generate_series(1,5)));
+-- fail - WHERE not allowed in DROP
+ALTER PUBLICATION testpub5 SET TABLE testpub_rf_tbl3;
+ALTER PUBLICATION testpub5 DROP TABLE testpub_rf_tbl3 WHERE (e < 27);
+-- fail - cannot ALTER SET table which is a member of a pre-existing schema
+SET client_min_messages = 'ERROR';
+CREATE PUBLICATION testpub7 FOR ALL TABLES IN SCHEMA testpub_rf_myschema1;
+ALTER PUBLICATION testpub7 SET ALL TABLES IN SCHEMA testpub_rf_myschema1, TABLE testpub_rf_myschema1.testpub_rf_tb16;
+RESET client_min_messages;
+
+DROP TABLE testpub_rf_tbl1;
+DROP TABLE testpub_rf_tbl2;
+DROP TABLE testpub_rf_tbl3;
+DROP TABLE testpub_rf_tbl4;
+DROP TABLE testpub_rf_myschema.testpub_rf_tbl5;
+DROP TABLE testpub_rf_myschema1.testpub_rf_tb16;
+DROP SCHEMA testpub_rf_myschema;
+DROP SCHEMA testpub_rf_myschema1;
+DROP PUBLICATION testpub5;
+DROP PUBLICATION testpub7;
+DROP OPERATOR =#>(integer, integer);
+DROP FUNCTION testpub_rf_func(integer, integer);
+DROP FUNCTION testpub_rf_func99();
+
+-- ======================================================
+-- More row filter tests for validating column references
+CREATE TABLE rf_tbl_abcd_nopk(a int, b int, c int, d int);
+CREATE TABLE rf_tbl_abcd_pk(a int, b int, c int, d int, PRIMARY KEY(a,b));
+
+-- Case 1. REPLICA IDENTITY DEFAULT (means use primary key or nothing)
+-- 1a. REPLICA IDENTITY is DEFAULT and table has a PK.
+-- ok - "a" is a PK col
+SET client_min_messages = 'ERROR';
+CREATE PUBLICATION testpub6 FOR TABLE rf_tbl_abcd_pk WHERE (a > 99);
+RESET client_min_messages;
+DROP PUBLICATION testpub6;
+-- ok - "b" is a PK col
+SET client_min_messages = 'ERROR';
+CREATE PUBLICATION testpub6 FOR TABLE rf_tbl_abcd_pk WHERE (b > 99);
+DROP PUBLICATION testpub6;
+CREATE PUBLICATION testpub6 FOR TABLE rf_tbl_abcd_pk WHERE (c > 99);
+-- fail - "c" is not part of the PK
+UPDATE rf_tbl_abcd_pk set a = 1;
+DROP PUBLICATION testpub6;
+CREATE PUBLICATION testpub6 FOR TABLE rf_tbl_abcd_pk WHERE (d > 99);
+-- fail - "d" is not part of the PK
+UPDATE rf_tbl_abcd_pk set a = 1;
+DROP PUBLICATION testpub6;
+-- 1b. REPLICA IDENTITY is DEFAULT and table has no PK
+CREATE PUBLICATION testpub6 FOR TABLE rf_tbl_abcd_nopk WHERE (a > 99);
+-- fail - "a" is not part of REPLICA IDENTITY
+UPDATE rf_tbl_abcd_nopk set a = 1;
+DROP PUBLICATION testpub6;
+RESET client_min_messages;
+
+-- Case 2. REPLICA IDENTITY FULL
+ALTER TABLE rf_tbl_abcd_pk REPLICA IDENTITY FULL;
+ALTER TABLE rf_tbl_abcd_nopk REPLICA IDENTITY FULL;
+-- ok - "c" is in REPLICA IDENTITY now even though not in PK
+SET client_min_messages = 'ERROR';
+CREATE PUBLICATION testpub6 FOR TABLE rf_tbl_abcd_pk WHERE (c > 99);
+DROP PUBLICATION testpub6;
+RESET client_min_messages;
+-- ok - "a" is in REPLICA IDENTITY now
+SET client_min_messages = 'ERROR';
+CREATE PUBLICATION testpub6 FOR TABLE rf_tbl_abcd_nopk WHERE (a > 99);
+DROP PUBLICATION testpub6;
+RESET client_min_messages;
+
+SET client_min_messages = 'ERROR';
+-- Case 3. REPLICA IDENTITY NOTHING
+ALTER TABLE rf_tbl_abcd_pk REPLICA IDENTITY NOTHING;
+ALTER TABLE rf_tbl_abcd_nopk REPLICA IDENTITY NOTHING;
+CREATE PUBLICATION testpub6 FOR TABLE rf_tbl_abcd_pk WHERE (a > 99);
+-- fail - "a" is in PK but it is not part of REPLICA IDENTITY NOTHING
+UPDATE rf_tbl_abcd_pk set a = 1;
+DROP PUBLICATION testpub6;
+CREATE PUBLICATION testpub6 FOR TABLE rf_tbl_abcd_pk WHERE (c > 99);
+-- fail - "c" is not in PK and not in REPLICA IDENTITY NOTHING
+UPDATE rf_tbl_abcd_pk set a = 1;
+DROP PUBLICATION testpub6;
+CREATE PUBLICATION testpub6 FOR TABLE rf_tbl_abcd_nopk WHERE (a > 99);
+-- fail - "a" is not in REPLICA IDENTITY NOTHING
+UPDATE rf_tbl_abcd_nopk set a = 1;
+DROP PUBLICATION testpub6;
+RESET client_min_messages;
+
+-- Case 4. REPLICA IDENTITY INDEX
+ALTER TABLE rf_tbl_abcd_pk ALTER COLUMN c SET NOT NULL;
+CREATE UNIQUE INDEX idx_abcd_pk_c ON rf_tbl_abcd_pk(c);
+ALTER TABLE rf_tbl_abcd_pk REPLICA IDENTITY USING INDEX idx_abcd_pk_c;
+ALTER TABLE rf_tbl_abcd_nopk ALTER COLUMN c SET NOT NULL;
+CREATE UNIQUE INDEX idx_abcd_nopk_c ON rf_tbl_abcd_nopk(c);
+ALTER TABLE rf_tbl_abcd_nopk REPLICA IDENTITY USING INDEX idx_abcd_nopk_c;
+SET client_min_messages = 'ERROR';
+CREATE PUBLICATION testpub6 FOR TABLE rf_tbl_abcd_pk WHERE (a > 99);
+-- fail - "a" is in PK but it is not part of REPLICA IDENTITY INDEX
+update rf_tbl_abcd_pk set a = 1;
+DROP PUBLICATION testpub6;
+-- ok - "c" is not in PK but it is part of REPLICA IDENTITY INDEX
+CREATE PUBLICATION testpub6 FOR TABLE rf_tbl_abcd_pk WHERE (c > 99);
+DROP PUBLICATION testpub6;
+CREATE PUBLICATION testpub6 FOR TABLE rf_tbl_abcd_nopk WHERE (a > 99);
+-- fail - "a" is not in REPLICA IDENTITY INDEX
+update rf_tbl_abcd_nopk set a = 1;
+DROP PUBLICATION testpub6;
+-- ok - "c" is part of REPLICA IDENTITY INDEX
+CREATE PUBLICATION testpub6 FOR TABLE rf_tbl_abcd_nopk WHERE (c > 99);
+DROP PUBLICATION testpub6;
+RESET client_min_messages;
+
+DROP TABLE rf_tbl_abcd_pk;
+DROP TABLE rf_tbl_abcd_nopk;
+-- ======================================================
+
 -- Test cache invalidation FOR ALL TABLES publication
 SET client_min_messages = 'ERROR';
 CREATE TABLE testpub_tbl4(a int);

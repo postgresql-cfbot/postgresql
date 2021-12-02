@@ -19,6 +19,7 @@
 #include "replication/logicalproto.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
+#include "executor/executor.h"
 
 /*
  * Protocol message flags.
@@ -31,8 +32,8 @@
 
 static void logicalrep_write_attrs(StringInfo out, Relation rel);
 static void logicalrep_write_tuple(StringInfo out, Relation rel,
-								   HeapTuple tuple, bool binary);
-
+								   HeapTuple tuple, TupleTableSlot *slot,
+								   bool binary);
 static void logicalrep_read_attrs(StringInfo in, LogicalRepRelation *rel);
 static void logicalrep_read_tuple(StringInfo in, LogicalRepTupleData *tuple);
 
@@ -410,7 +411,7 @@ logicalrep_write_insert(StringInfo out, TransactionId xid, Relation rel,
 	pq_sendint32(out, RelationGetRelid(rel));
 
 	pq_sendbyte(out, 'N');		/* new tuple follows */
-	logicalrep_write_tuple(out, rel, newtuple, binary);
+	logicalrep_write_tuple(out, rel, newtuple, NULL, binary);
 }
 
 /*
@@ -442,7 +443,8 @@ logicalrep_read_insert(StringInfo in, LogicalRepTupleData *newtup)
  */
 void
 logicalrep_write_update(StringInfo out, TransactionId xid, Relation rel,
-						HeapTuple oldtuple, HeapTuple newtuple, bool binary)
+						HeapTuple oldtuple, HeapTuple newtuple, TupleTableSlot *oldslot,
+						TupleTableSlot *newslot, bool binary)
 {
 	pq_sendbyte(out, LOGICAL_REP_MSG_UPDATE);
 
@@ -463,11 +465,11 @@ logicalrep_write_update(StringInfo out, TransactionId xid, Relation rel,
 			pq_sendbyte(out, 'O');	/* old tuple follows */
 		else
 			pq_sendbyte(out, 'K');	/* old key follows */
-		logicalrep_write_tuple(out, rel, oldtuple, binary);
+		logicalrep_write_tuple(out, rel, oldtuple, oldslot, binary);
 	}
 
 	pq_sendbyte(out, 'N');		/* new tuple follows */
-	logicalrep_write_tuple(out, rel, newtuple, binary);
+	logicalrep_write_tuple(out, rel, newtuple, newslot, binary);
 }
 
 /*
@@ -536,7 +538,7 @@ logicalrep_write_delete(StringInfo out, TransactionId xid, Relation rel,
 	else
 		pq_sendbyte(out, 'K');	/* old key follows */
 
-	logicalrep_write_tuple(out, rel, oldtuple, binary);
+	logicalrep_write_tuple(out, rel, oldtuple, NULL, binary);
 }
 
 /*
@@ -749,11 +751,12 @@ logicalrep_read_typ(StringInfo in, LogicalRepTyp *ltyp)
  * Write a tuple to the outputstream, in the most efficient format possible.
  */
 static void
-logicalrep_write_tuple(StringInfo out, Relation rel, HeapTuple tuple, bool binary)
+logicalrep_write_tuple(StringInfo out, Relation rel, HeapTuple tuple, TupleTableSlot *slot,
+bool binary)
 {
 	TupleDesc	desc;
-	Datum		values[MaxTupleAttributeNumber];
-	bool		isnull[MaxTupleAttributeNumber];
+	Datum		*values;
+	bool		*isnull;
 	int			i;
 	uint16		nliveatts = 0;
 
@@ -771,7 +774,17 @@ logicalrep_write_tuple(StringInfo out, Relation rel, HeapTuple tuple, bool binar
 	enlargeStringInfo(out, tuple->t_len +
 					  nliveatts * (1 + 4));
 
-	heap_deform_tuple(tuple, desc, values, isnull);
+	if (slot == NULL || TTS_EMPTY(slot))
+	{
+		values = (Datum *) palloc(desc->natts * sizeof(Datum));
+		isnull = (bool *) palloc(desc->natts * sizeof(bool));
+		heap_deform_tuple(tuple, desc, values, isnull);
+	}
+	else
+	{
+		values = slot->tts_values;
+		isnull = slot->tts_isnull;
+	}
 
 	/* Write the values */
 	for (i = 0; i < desc->natts; i++)

@@ -16,6 +16,7 @@
 #include "access/xact.h"
 #include "replication/reorderbuffer.h"
 #include "utils/rel.h"
+#include "executor/executor.h"
 
 /*
  * Protocol capabilities
@@ -211,7 +212,11 @@ extern void logicalrep_write_insert(StringInfo out, TransactionId xid,
 extern LogicalRepRelId logicalrep_read_insert(StringInfo in, LogicalRepTupleData *newtup);
 extern void logicalrep_write_update(StringInfo out, TransactionId xid,
 									Relation rel, HeapTuple oldtuple,
-									HeapTuple newtuple, bool binary);
+									HeapTuple newtuple, TupleTableSlot *oldslot,
+									TupleTableSlot *newslot, bool binary);
+extern void logicalrep_write_update_cached(StringInfo out, TransactionId xid, Relation rel,
+											TupleTableSlot *oldtuple, TupleTableSlot *newtuple,
+										   bool binary);
 extern LogicalRepRelId logicalrep_read_update(StringInfo in,
 											  bool *has_oldtuple, LogicalRepTupleData *oldtup,
 											  LogicalRepTupleData *newtup);

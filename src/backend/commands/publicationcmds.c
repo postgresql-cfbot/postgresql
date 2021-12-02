@@ -497,6 +497,7 @@ AlterPublicationTables(AlterPublicationStmt *stmt, HeapTuple tup,
 	List	   *rels = NIL;
 	Form_pg_publication pubform = (Form_pg_publication) GETSTRUCT(tup);
 	Oid			pubid = pubform->oid;
+	Node       *oldrelwhereclause = NULL;
 
 	/*
 	 * It is quite possible that for the SET case user has not specified any
@@ -529,40 +530,92 @@ AlterPublicationTables(AlterPublicationStmt *stmt, HeapTuple tup,
 		List	   *delrels = NIL;
 		ListCell   *oldlc;
 
+		/*
+		 * Check if the relation is member of the existing schema in the
+		 * publication or member of the schema list specified.
+		 */
 		CheckObjSchemaNotAlreadyInPublication(rels, schemaidlist,
 											  PUBLICATIONOBJ_TABLE);
 
-		/* Calculate which relations to drop. */
+		/*
+		 * In order to recreate the relation list for the publication,
+		 * look for existing relations that need not be dropped.
+		 */
 		foreach(oldlc, oldrelids)
 		{
 			Oid			oldrelid = lfirst_oid(oldlc);
-			ListCell   *newlc;
+			ListCell	*newlc;
+			PublicationRelInfo *oldrel;
 			bool		found = false;
+			HeapTuple	rftuple;
+			bool		rfisnull = true;
+
+			/* look up the cache for the old relmap */
+			rftuple = SearchSysCache2(PUBLICATIONRELMAP, ObjectIdGetDatum(oldrelid),
+									  ObjectIdGetDatum(pubid));
+			if (HeapTupleIsValid(rftuple))
+			{
+				Datum		whereClauseDatum;
+
+				whereClauseDatum = SysCacheGetAttr(PUBLICATIONRELMAP, rftuple, Anum_pg_publication_rel_prqual,
+												   &rfisnull);
+				if (!rfisnull)
+					oldrelwhereclause = stringToNode(TextDatumGetCString(whereClauseDatum));
+
+				ReleaseSysCache(rftuple);
+			}
 
 			foreach(newlc, rels)
 			{
 				PublicationRelInfo *newpubrel;
 
 				newpubrel = (PublicationRelInfo *) lfirst(newlc);
+
+				/*
+				 * Look if any of the new set of relations match with
+				 * the existing relations in the publication. Additionally,
+				 * if the relation has an associated where-clause, check the
+				 * where-clauses also match. Drop the rest.
+				 */
 				if (RelationGetRelid(newpubrel->relation) == oldrelid)
 				{
-					found = true;
-					break;
+					if (rfisnull && !newpubrel->whereClause)
+					{
+						found = true;
+						break;
+					}
+
+					if (!rfisnull && newpubrel->whereClause)
+					{
+						ParseState *pstate = make_parsestate(NULL);
+						Node *whereclause;
+
+						whereclause = GetTransformedWhereClause(pstate,
+																newpubrel,
+																false);
+						if (equal(oldrelwhereclause, whereclause))
+						{
+							free_parsestate(pstate);
+							found = true;
+							break;
+						}
+
+						free_parsestate(pstate);
+					}
 				}
 			}
-			/* Not yet in the list, open it and add to the list */
+
+			/*
+			 * Add the non-matched relations to a list so that they can
+			 * be dropped.
+			 */
 			if (!found)
 			{
-				Relation	oldrel;
-				PublicationRelInfo *pubrel;
-
-				/* Wrap relation into PublicationRelInfo */
-				oldrel = table_open(oldrelid, ShareUpdateExclusiveLock);
-
-				pubrel = palloc(sizeof(PublicationRelInfo));
-				pubrel->relation = oldrel;
-
-				delrels = lappend(delrels, pubrel);
+				oldrel = palloc(sizeof(PublicationRelInfo));
+				oldrel->whereClause = NULL;
+				oldrel->relation = table_open(oldrelid,
+										  ShareUpdateExclusiveLock);
+				delrels = lappend(delrels, oldrel);
 			}
 		}
 
@@ -899,6 +952,7 @@ OpenTableList(List *tables)
 	List	   *relids = NIL;
 	List	   *rels = NIL;
 	ListCell   *lc;
+	List	   *relids_with_rf = NIL;
 
 	/*
 	 * Open, share-lock, and check all the explicitly-specified relations
@@ -926,14 +980,25 @@ OpenTableList(List *tables)
 		 */
 		if (list_member_oid(relids, myrelid))
 		{
+			/* Disallow duplicate tables if there are any with row-filters. */
+			if (t->whereClause || list_member_oid(relids_with_rf, myrelid))
+				ereport(ERROR,
+						(errcode(ERRCODE_DUPLICATE_OBJECT),
+						 errmsg("conflicting or redundant row-filters for \"%s\"",
+								RelationGetRelationName(rel))));
+
 			table_close(rel, ShareUpdateExclusiveLock);
 			continue;
 		}
 
 		pub_rel = palloc(sizeof(PublicationRelInfo));
 		pub_rel->relation = rel;
+		pub_rel->whereClause = t->whereClause;
 		rels = lappend(rels, pub_rel);
 		relids = lappend_oid(relids, myrelid);
+
+		if (t->whereClause)
+			relids_with_rf = lappend_oid(relids_with_rf, myrelid);
 
 		/*
 		 * Add children of this rel, if requested, so that they too are added
@@ -967,6 +1032,8 @@ OpenTableList(List *tables)
 				rel = table_open(childrelid, NoLock);
 				pub_rel = palloc(sizeof(PublicationRelInfo));
 				pub_rel->relation = rel;
+				/* child inherits WHERE clause from parent */
+				pub_rel->whereClause = t->whereClause;
 				rels = lappend(rels, pub_rel);
 				relids = lappend_oid(relids, childrelid);
 			}
@@ -974,6 +1041,7 @@ OpenTableList(List *tables)
 	}
 
 	list_free(relids);
+	list_free(relids_with_rf);
 
 	return rels;
 }
@@ -993,6 +1061,8 @@ CloseTableList(List *rels)
 		pub_rel = (PublicationRelInfo *) lfirst(lc);
 		table_close(pub_rel->relation, NoLock);
 	}
+
+	list_free_deep(rels);
 }
 
 /*
@@ -1087,6 +1157,11 @@ PublicationDropTables(Oid pubid, List *rels, bool missing_ok)
 					 errmsg("relation \"%s\" is not part of the publication",
 							RelationGetRelationName(rel))));
 		}
+
+		if (pubrel->whereClause)
+			ereport(ERROR,
+					(errcode(ERRCODE_SYNTAX_ERROR),
+					 errmsg("invalid use of WHERE row-filter in ALTER PUBLICATION ... DROP TABLE")));
 
 		ObjectAddressSet(obj, PublicationRelRelationId, prid);
 		performDeletion(&obj, DROP_CASCADE, 0);

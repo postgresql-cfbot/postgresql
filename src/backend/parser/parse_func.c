@@ -2655,6 +2655,13 @@ check_srf_call_placement(ParseState *pstate, Node *last_srf, int location)
 		case EXPR_KIND_CYCLE_MARK:
 			errkind = true;
 			break;
+		case EXPR_KIND_PUBLICATION_WHERE:
+			/*
+			 * OK for now. The row-filter validation is done later by a walker
+			 * function (see pg_publication).
+			 */
+			pstate->p_hasTargetSRFs = true;
+			break;
 
 			/*
 			 * There is intentionally no default: case here, so that the

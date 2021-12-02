@@ -551,6 +551,12 @@ check_agglevels_and_constraints(ParseState *pstate, Node *expr)
 				err = _("grouping operations are not allowed in COPY FROM WHERE conditions");
 
 			break;
+		case EXPR_KIND_PUBLICATION_WHERE:
+			/*
+			 * OK for now. The row-filter validation is done later by a walker
+			 * function (see pg_publication).
+			 */
+			break;
 
 		case EXPR_KIND_CYCLE_MARK:
 			errkind = true;
@@ -942,6 +948,12 @@ transformWindowFuncCall(ParseState *pstate, WindowFunc *wfunc,
 			break;
 		case EXPR_KIND_CYCLE_MARK:
 			errkind = true;
+			break;
+		case EXPR_KIND_PUBLICATION_WHERE:
+			/*
+			 * OK for now. The row-filter validation is done later by a walker
+			 * function (see pg_publication).
+			 */
 			break;
 
 			/*

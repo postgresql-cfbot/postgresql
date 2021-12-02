@@ -33,9 +33,14 @@
 #include "catalog/pg_publication_namespace.h"
 #include "catalog/pg_publication_rel.h"
 #include "catalog/pg_type.h"
+#include "catalog/pg_proc.h"
 #include "commands/publicationcmds.h"
 #include "funcapi.h"
 #include "miscadmin.h"
+#include "nodes/nodeFuncs.h"
+#include "parser/parse_clause.h"
+#include "parser/parse_collate.h"
+#include "parser/parse_relation.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/catcache.h"
@@ -217,9 +222,110 @@ pg_relation_is_publishable(PG_FUNCTION_ARGS)
 }
 
 /*
- * Gets the relations based on the publication partition option for a specified
- * relation.
+ * The row filter walker checks that the row filter expression is legal.
+ *
+ * Rules: Node-type validation
+ * ---------------------------
+ * Allow only simple or compound expressions such as:
+ * - "(Var Op Const)" or
+ * - "(Var Op Var)" or
+ * - "(Var Op Const) Bool (Var Op Const)"
+ * - etc
+ * (where Var is a column of the table this filter belongs to)
+ *
+ * Specifically,
+ * - User-defined operators are not allowed.
+ * - User-defined functions are not allowed.
+ * - User-defined types are not allowed.
+ * - System functions that are not IMMUTABLE are not allowed.
+ * - NULLIF is allowed.
+ * - IS NULL is allowed.
+ *
+ * Notes:
+ *
+ * We don't allow user-defined functions/operators/types because (a) if the user
+ * drops such a user-defnition or if there is any other error via its function,
+ * the walsender won't be able to recover from such an error even if we fix the
+ * function's problem because a historic snapshot is used to access the
+ * row-filter; (b) any other table could be accessed via a function, which won't
+ * work because of historic snapshots in logical decoding environment.
+ *
+ * We don't allow anything other than immutable built-in functions because those
+ * (not immutable ones) can access database and would lead to the problem (b)
+ * mentioned in the previous paragraph.
  */
+static bool
+rowfilter_walker(Node *node, Relation relation)
+{
+	char *forbidden = NULL;
+	bool too_complex = false;
+
+	if (node == NULL)
+		return false;
+
+	if (IsA(node, Var))
+	{
+		Var		   *var = (Var *) node;
+
+		/* User-defined types not allowed. */
+		if (var->vartype >= FirstNormalObjectId)
+			forbidden = _("user-defined types are not allowed");
+	}
+	else if (IsA(node, Const) || IsA(node, BoolExpr) || IsA(node, NullIfExpr)
+			 || IsA(node, NullTest))
+	{
+		/* OK */
+	}
+	else if (IsA(node, OpExpr))
+	{
+		/* OK, except user-defined operators are not allowed. */
+		if (((OpExpr *)node)->opno >= FirstNormalObjectId)
+			forbidden = _("user-defined operators are not allowed");
+	}
+	else if (IsA(node, FuncExpr))
+	{
+		Oid funcid = ((FuncExpr *)node)->funcid;
+		char *funcname = get_func_name(funcid);
+
+		/*
+		 * User-defined functions are not allowed.
+		 * System-functions that are not IMMUTABLE are not allowed.
+		 */
+		if (funcid >= FirstNormalObjectId)
+		{
+			forbidden = psprintf("user-defined functions are not allowed: %s",
+								 funcname);
+		}
+		else
+		{
+			if (func_volatile(funcid) != PROVOLATILE_IMMUTABLE)
+				forbidden = psprintf("system functions that are not IMMUTABLE are not allowed: %s",
+									 funcname);
+		}
+	}
+	else
+	{
+		elog(DEBUG1, "the row filter contained something unexpected: %s", nodeToString(node));
+		too_complex = true;
+	}
+
+	if (too_complex)
+		ereport(ERROR,
+				(errmsg("invalid publication WHERE expression for relation \"%s\"",
+						RelationGetRelationName(relation)),
+				errhint("only simple expressions using columns, constants and immutable system functions are allowed")
+				));
+
+	if (forbidden)
+		ereport(ERROR,
+				(errmsg("invalid publication WHERE expression for relation \"%s\"",
+						RelationGetRelationName(relation)),
+						errdetail("%s", forbidden)
+				));
+
+	return expression_tree_walker(node, rowfilter_walker, (void *) relation);
+}
+
 List *
 GetPubPartitionOptionRelations(List *result, PublicationPartOpt pub_partopt,
 							   Oid relid)
@@ -253,22 +359,51 @@ GetPubPartitionOptionRelations(List *result, PublicationPartOpt pub_partopt,
 	return result;
 }
 
+Node *
+GetTransformedWhereClause(ParseState *pstate, PublicationRelInfo *pri,
+						  bool bfixupcollation)
+{
+	ParseNamespaceItem *nsitem;
+	Node       *transformedwhereclause = NULL;
+
+	pstate->p_sourcetext = nodeToString(pri->whereClause);
+
+	nsitem = addRangeTableEntryForRelation(pstate, pri->relation,
+											AccessShareLock,
+											NULL, false, false);
+	addNSItemToQuery(pstate, nsitem, false, true, true);
+
+	transformedwhereclause = transformWhereClause(pstate,
+												  copyObject(pri->whereClause),
+												  EXPR_KIND_PUBLICATION_WHERE,
+												  "PUBLICATION WHERE");
+
+	/* Fix up collation information */
+	if (bfixupcollation)
+		assign_expr_collations(pstate, transformedwhereclause);
+
+	return transformedwhereclause;
+}
+
 /*
  * Insert new publication / relation mapping.
  */
 ObjectAddress
-publication_add_relation(Oid pubid, PublicationRelInfo *targetrel,
+publication_add_relation(Oid pubid, PublicationRelInfo *pri,
 						 bool if_not_exists)
 {
 	Relation	rel;
 	HeapTuple	tup;
 	Datum		values[Natts_pg_publication_rel];
 	bool		nulls[Natts_pg_publication_rel];
-	Oid			relid = RelationGetRelid(targetrel->relation);
+	Relation    targetrel = pri->relation;
+	Oid			relid = RelationGetRelid(targetrel);
 	Oid			prrelid;
 	Publication *pub = GetPublication(pubid);
 	ObjectAddress myself,
 				referenced;
+	ParseState *pstate;
+	Node       *whereclause = NULL;
 	List	   *relids = NIL;
 
 	rel = table_open(PublicationRelRelationId, RowExclusiveLock);
@@ -289,10 +424,26 @@ publication_add_relation(Oid pubid, PublicationRelInfo *targetrel,
 		ereport(ERROR,
 				(errcode(ERRCODE_DUPLICATE_OBJECT),
 				 errmsg("relation \"%s\" is already member of publication \"%s\"",
-						RelationGetRelationName(targetrel->relation), pub->name)));
+						RelationGetRelationName(targetrel), pub->name)));
 	}
 
-	check_publication_add_relation(targetrel->relation);
+	check_publication_add_relation(targetrel);
+
+	if (pri->whereClause != NULL)
+	{
+		/* Set up a ParseState to parse with */
+		pstate = make_parsestate(NULL);
+
+		/* Fix up collation information */
+		whereclause = GetTransformedWhereClause(pstate, pri, true);
+
+		/*
+		 * Walk the parse-tree of this publication row filter expression and
+		 * throw an error if anything not permitted or unexpected is
+		 * encountered.
+		 */
+		rowfilter_walker(whereclause, targetrel);
+	}
 
 	/* Form a tuple. */
 	memset(values, 0, sizeof(values));
@@ -305,6 +456,12 @@ publication_add_relation(Oid pubid, PublicationRelInfo *targetrel,
 		ObjectIdGetDatum(pubid);
 	values[Anum_pg_publication_rel_prrelid - 1] =
 		ObjectIdGetDatum(relid);
+
+	/* Add qualifications, if available */
+	if (whereclause)
+		values[Anum_pg_publication_rel_prqual - 1] = CStringGetTextDatum(nodeToString(whereclause));
+	else
+		nulls[Anum_pg_publication_rel_prqual - 1] = true;
 
 	tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
 
@@ -321,6 +478,13 @@ publication_add_relation(Oid pubid, PublicationRelInfo *targetrel,
 	/* Add dependency on the relation */
 	ObjectAddressSet(referenced, RelationRelationId, relid);
 	recordDependencyOn(&myself, &referenced, DEPENDENCY_AUTO);
+
+	/* Add dependency on the objects mentioned in the qualifications */
+	if (whereclause)
+	{
+		recordDependencyOnExpr(&myself, whereclause, pstate->p_rtable, DEPENDENCY_NORMAL);
+		free_parsestate(pstate);
+	}
 
 	/* Close the table. */
 	table_close(rel, RowExclusiveLock);

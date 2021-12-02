@@ -13,18 +13,28 @@
 #include "postgres.h"
 
 #include "access/tupconvert.h"
+#include "access/xact.h"
 #include "catalog/partition.h"
 #include "catalog/pg_publication.h"
+#include "catalog/pg_publication_rel.h"
 #include "commands/defrem.h"
+#include "executor/executor.h"
 #include "fmgr.h"
+#include "nodes/nodeFuncs.h"
+#include "nodes/makefuncs.h"
+#include "optimizer/optimizer.h"
+#include "parser/parse_coerce.h"
 #include "replication/logical.h"
 #include "replication/logicalproto.h"
+#include "replication/logicalrelation.h"
 #include "replication/origin.h"
 #include "replication/pgoutput.h"
+#include "utils/builtins.h"
 #include "utils/int8.h"
 #include "utils/inval.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
+#include "utils/snapmgr.h"
 #include "utils/syscache.h"
 #include "utils/varlena.h"
 
@@ -116,6 +126,25 @@ typedef struct RelationSyncEntry
 	PublicationActions pubactions;
 
 	/*
+	 * Row-filter related members:
+	 * The flag 'rowfilter_valid' indicates if the exprstate has been assigned
+	 * yet or not. We cannot just use the exprstate value for this purpose
+	 * because there might be no filter at all for the current relid (e.g.
+	 * every exprstate is NULL).
+	 * The row-filter exprstate is stored per pubaction type.
+	 */
+	bool		rowfilter_valid;
+#define IDX_PUBACTION_INSERT 	0
+#define IDX_PUBACTION_UPDATE 	1
+#define IDX_PUBACTION_DELETE 	2
+#define IDX_PUBACTION_TRUNCATE	3
+	ExprState	   *exprstate[4];	/* ExprState for row filter(s). One per pubaction. */
+	TupleTableSlot *scantuple;		/* tuple table slot for row filter */
+	TupleTableSlot *new_tuple;		/* slot for storing deformed new tuple during updates */
+	TupleTableSlot *old_tuple;		/* slot for storing deformed old tuple during updates */
+	TupleTableSlot *tmp_new_tuple;	/* slot for temporary new tuple used for expression evaluation */
+
+	/*
 	 * OID of the relation to publish changes as.  For a partition, this may
 	 * be set to one of its ancestors whose schema will be used when
 	 * replicating changes, if publish_via_partition_root is set for the
@@ -137,7 +166,7 @@ static HTAB *RelationSyncCache = NULL;
 
 static void init_rel_sync_cache(MemoryContext decoding_context);
 static void cleanup_rel_sync_cache(TransactionId xid, bool is_commit);
-static RelationSyncEntry *get_rel_sync_entry(PGOutputData *data, Oid relid);
+static RelationSyncEntry *get_rel_sync_entry(PGOutputData *data, Relation relation);
 static void rel_sync_cache_relation_cb(Datum arg, Oid relid);
 static void rel_sync_cache_publication_cb(Datum arg, int cacheid,
 										  uint32 hashvalue);
@@ -145,6 +174,18 @@ static void set_schema_sent_in_streamed_txn(RelationSyncEntry *entry,
 											TransactionId xid);
 static bool get_schema_sent_in_streamed_txn(RelationSyncEntry *entry,
 											TransactionId xid);
+
+/* row filter routines */
+static EState *create_estate_for_relation(Relation rel);
+static void pgoutput_row_filter_init(PGOutputData *data, Relation relation, RelationSyncEntry *entry);
+static ExprState *pgoutput_row_filter_init_expr(Node *rfnode);
+static bool pgoutput_row_filter_exec_expr(ExprState *state, ExprContext *econtext);
+static bool pgoutput_row_filter(int idx_pubaction, Relation relation, HeapTuple oldtuple,
+								HeapTuple newtuple, TupleTableSlot *slot,
+								RelationSyncEntry *entry);
+static bool pgoutput_row_filter_update_check(int idx_pubaction, Relation relation, HeapTuple oldtuple,
+									   HeapTuple newtuple, RelationSyncEntry *entry,
+									   ReorderBufferChangeType *action);
 
 /*
  * Specify output plugin callbacks
@@ -621,6 +662,433 @@ send_relation_and_attrs(Relation relation, TransactionId xid,
 }
 
 /*
+ * Executor state preparation for evaluation of row filter expressions for the
+ * specified relation.
+ */
+static EState *
+create_estate_for_relation(Relation rel)
+{
+	EState			*estate;
+	RangeTblEntry	*rte;
+
+	estate = CreateExecutorState();
+
+	rte = makeNode(RangeTblEntry);
+	rte->rtekind = RTE_RELATION;
+	rte->relid = RelationGetRelid(rel);
+	rte->relkind = rel->rd_rel->relkind;
+	rte->rellockmode = AccessShareLock;
+	ExecInitRangeTable(estate, list_make1(rte));
+
+	estate->es_output_cid = GetCurrentCommandId(false);
+
+	return estate;
+}
+
+/*
+ * Initialize for row filter expression execution.
+ */
+static ExprState *
+pgoutput_row_filter_init_expr(Node *rfnode)
+{
+	ExprState	   *exprstate;
+	Oid				exprtype;
+	Expr		   *expr;
+
+	/* Cache ExprState using CacheMemoryContext. */
+	Assert(CurrentMemoryContext = CacheMemoryContext);
+
+	/* Prepare expression for execution */
+	exprtype = exprType(rfnode);
+	expr = (Expr *) coerce_to_target_type(NULL, rfnode, exprtype, BOOLOID, -1, COERCION_ASSIGNMENT, COERCE_IMPLICIT_CAST, -1);
+
+	if (expr == NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_CANNOT_COERCE),
+				 errmsg("row filter returns type %s that cannot be cast to the expected type %s",
+						format_type_be(exprtype),
+						format_type_be(BOOLOID)),
+				 errhint("You will need to rewrite the row filter.")));
+
+	/*
+	 * This is the same code as ExecPrepareExpr() but that is not used because
+	 * we have no EState to pass it. There should probably be another function
+	 * in the executor to handle the execution outside a normal Plan tree
+	 * context.
+	 */
+	expr = expression_planner(expr);
+	exprstate = ExecInitExpr(expr, NULL);
+
+	return exprstate;
+}
+
+/*
+ * Evaluates row filter.
+ *
+ * If the row filter evaluates to NULL, it is taken as false i.e. the change
+ * isn't replicated.
+ */
+static bool
+pgoutput_row_filter_exec_expr(ExprState *state, ExprContext *econtext)
+{
+	Datum		ret;
+	bool		isnull;
+
+	Assert(state != NULL);
+
+	ret = ExecEvalExprSwitchContext(state, econtext, &isnull);
+
+	elog(DEBUG3, "row filter evaluates to %s (isnull: %s)",
+		 DatumGetBool(ret) ? "true" : "false",
+		 isnull ? "true" : "false");
+
+	if (isnull)
+		return false;
+
+	return DatumGetBool(ret);
+}
+
+/*
+ * Update is checked against the row filter, if any.
+ * Updates are transformed to inserts and deletes based on the
+ * old_tuple and new_tuple. The new action is updated in the
+ * action parameter. If not updated, action remains as update.
+ * old-row (no match)    new-row (no match)  -> (drop change)
+ * old-row (no match)    new row (match)     -> INSERT
+ * old-row (match)       new-row (no match)  -> DELETE
+ * old-row (match)       new row (match)     -> UPDATE
+ * If the change is to be replicated returns true, else false.
+ */
+static bool
+pgoutput_row_filter_update_check(int idx_pubaction, Relation relation, HeapTuple oldtuple, HeapTuple newtuple, RelationSyncEntry *entry, ReorderBufferChangeType *action)
+{
+	TupleDesc	desc = RelationGetDescr(relation);
+	int		i;
+	bool	old_matched, new_matched;
+	TupleTableSlot	*tmp_new_slot, *old_slot, *new_slot;
+
+	/* Bail out if there is no row filter */
+	if (!entry->exprstate[idx_pubaction])
+		return true;
+
+	/* update requires a new tuple */
+	Assert(newtuple);
+
+	elog(DEBUG3, "table \"%s.%s\" has row filter",
+			get_namespace_name(get_rel_namespace(RelationGetRelid(relation))),
+			get_rel_name(relation->rd_id));
+
+	/*
+	 * If no old_tuple, then none of the replica identity columns changed
+	 * and this would reduce to a simple update.
+	 */
+	if (!oldtuple)
+	{
+		*action = REORDER_BUFFER_CHANGE_UPDATE;
+		return pgoutput_row_filter(idx_pubaction, relation, NULL, newtuple, NULL, entry);
+	}
+
+	old_slot = entry->old_tuple;
+	new_slot = entry->new_tuple;
+	tmp_new_slot = entry->tmp_new_tuple;
+	ExecClearTuple(old_slot);
+	ExecClearTuple(new_slot);
+	ExecClearTuple(tmp_new_slot);
+
+	heap_deform_tuple(newtuple, desc, new_slot->tts_values, new_slot->tts_isnull);
+	heap_deform_tuple(oldtuple, desc, old_slot->tts_values, old_slot->tts_isnull);
+
+	ExecStoreVirtualTuple(old_slot);
+	ExecStoreVirtualTuple(new_slot);
+
+	tmp_new_slot = ExecCopySlot(tmp_new_slot, new_slot);
+
+	/*
+	 * For updates, both the newtuple and oldtuple needs to be checked
+	 * against the row-filter. The newtuple might not have all the
+	 * replica identity columns, in which case it needs to be
+	 * copied over from the oldtuple.
+	 */
+	for (i = 0; i < desc->natts; i++)
+	{
+		Form_pg_attribute att = TupleDescAttr(desc, i);
+
+		/* if the column in the new_tuple is null, nothing to do */
+		if (tmp_new_slot->tts_isnull[i])
+			continue;
+
+		/*
+		 * Unchanged toasted replica identity columns are
+		 * only detoasted in the old tuple, copy this over to the newtuple.
+		 */
+		if ((att->attlen == -1 && VARATT_IS_EXTERNAL_ONDISK(tmp_new_slot->tts_values[i])) &&
+				(!old_slot->tts_isnull[i] &&
+					!(VARATT_IS_EXTERNAL_ONDISK(old_slot->tts_values[i]))))
+		{
+			Assert(!old_slot->tts_isnull[i] &&
+				   !VARATT_IS_EXTERNAL_ONDISK(old_slot->tts_values[i]));
+			tmp_new_slot->tts_values[i] = old_slot->tts_values[i];
+		}
+
+	}
+
+	old_matched = pgoutput_row_filter(idx_pubaction, relation, NULL, NULL, old_slot, entry);
+	new_matched = pgoutput_row_filter(idx_pubaction, relation, NULL, NULL, tmp_new_slot, entry);
+
+	if (!old_matched && !new_matched)
+		return false;
+
+	if (!old_matched && new_matched)
+		*action = REORDER_BUFFER_CHANGE_INSERT;
+	else if (old_matched && !new_matched)
+		*action = REORDER_BUFFER_CHANGE_DELETE;
+	else if (new_matched && old_matched)
+		*action = REORDER_BUFFER_CHANGE_UPDATE;
+
+	return true;
+}
+
+/*
+ * Initialize the row filter, the first time.
+ */
+static void
+pgoutput_row_filter_init(PGOutputData *data, Relation relation, RelationSyncEntry *entry)
+{
+	ListCell   *lc;
+	List	   *rfnodes[4] = {NIL, NIL, NIL, NIL}; /* One per pubaction */
+	bool		no_filter[4] = {false, false, false, false}; /* One per pubaction */
+
+	/*
+	 * If the row filter caching is currently flagged "invalid" then it means we
+	 * don't know yet if there is/isn't any row filters for this relation.
+	 *
+	 * This code is usually one-time execution.
+	 *
+	 * NOTE: The ExprState cache could have been created up-front in the
+	 * function get_rel_sync_entry() instead of the deferred on-the-fly
+	 * assignment below. The reason for choosing to do it here is because there
+	 * are some scenarios where the get_rel_sync_entry() is called but where a
+	 * row will not be published. For example, for truncate, we may not need
+	 * any row evaluation, so there is no need to compute it. It would also be
+	 * a waste if any error happens before actually evaluating the filter. And
+	 * tomorrow there could be other operations (which use get_rel_sync_entry)
+	 * but which don't need to build ExprState. Furthermore, because the
+	 * decision to publish or not is made AFTER the call to get_rel_sync_entry
+	 * it may be that the filter evaluation is not necessary at all. So the
+	 * decision was to defer this logic to last moment when we know it will be
+	 * needed.
+	 */
+	if (!entry->rowfilter_valid)
+	{
+		MemoryContext	oldctx;
+
+		/* Release the tuple table slot if it already exists. */
+		if (entry->scantuple != NULL)
+		{
+			ExecDropSingleTupleTableSlot(entry->scantuple);
+			entry->scantuple = NULL;
+		}
+
+		/*
+		 * Find if there are any row filters for this relation. If there are,
+		 * then prepare the necessary ExprState and cache it in entry->exprstate.
+		 *
+		 * NOTE: All publication-table mappings must be checked.
+		 *
+		 * NOTE: If the relation is a partition and pubviaroot is true, use
+		 * the row filter of the topmost partitioned table instead of the row
+		 * filter of its own partition.
+		 *
+		 * NOTE: Multiple row-filters for the same table are combined by OR-ing
+		 * them together, but this means that if (in any of the publications)
+		 * there is *no* filter then effectively none of the other filters have
+		 * any meaning either.
+		 */
+		foreach(lc, data->publications)
+		{
+			Publication *pub = lfirst(lc);
+			HeapTuple	rftuple;
+			Datum		rfdatum;
+			bool		rfisnull;
+
+			/*
+			 * Lookup if there is a row-filter, and if yes remember it in a list (per pubaction).
+			 * In code following this 'publications' loop we will combine all filters.
+			 */
+			rftuple = SearchSysCache2(PUBLICATIONRELMAP, ObjectIdGetDatum(entry->publish_as_relid), ObjectIdGetDatum(pub->oid));
+			if (HeapTupleIsValid(rftuple))
+			{
+				rfdatum = SysCacheGetAttr(PUBLICATIONRELMAP, rftuple, Anum_pg_publication_rel_prqual, &rfisnull);
+
+				if (!rfisnull)
+				{
+					Node	   *rfnode;
+
+					oldctx = MemoryContextSwitchTo(CacheMemoryContext);
+					/* Gather the rfnodes per pubaction of this publiaction. */
+					if (pub->pubactions.pubinsert)
+					{
+						rfnode = stringToNode(TextDatumGetCString(rfdatum));
+						rfnodes[IDX_PUBACTION_INSERT] = lappend(rfnodes[IDX_PUBACTION_INSERT], rfnode);
+					}
+					if (pub->pubactions.pubupdate)
+					{
+						rfnode = stringToNode(TextDatumGetCString(rfdatum));
+						rfnodes[IDX_PUBACTION_UPDATE] = lappend(rfnodes[IDX_PUBACTION_UPDATE], rfnode);
+					}
+					if (pub->pubactions.pubdelete)
+					{
+						rfnode = stringToNode(TextDatumGetCString(rfdatum));
+						rfnodes[IDX_PUBACTION_DELETE] = lappend(rfnodes[IDX_PUBACTION_DELETE], rfnode);
+					}
+					if (pub->pubactions.pubtruncate)
+					{
+						rfnode = stringToNode(TextDatumGetCString(rfdatum));
+						rfnodes[IDX_PUBACTION_TRUNCATE] = lappend(rfnodes[IDX_PUBACTION_TRUNCATE], rfnode);
+					}
+					MemoryContextSwitchTo(oldctx);
+				}
+				else
+				{
+					/* Remember which pubactions have no row-filter. */
+					if (pub->pubactions.pubinsert)
+						no_filter[IDX_PUBACTION_INSERT] = true;
+					if (pub->pubactions.pubupdate)
+						no_filter[IDX_PUBACTION_UPDATE] = true;
+					if (pub->pubactions.pubdelete)
+						no_filter[IDX_PUBACTION_DELETE] = true;
+					if (pub->pubactions.pubinsert)
+						no_filter[IDX_PUBACTION_TRUNCATE] = true;
+				}
+
+				ReleaseSysCache(rftuple);
+			}
+
+		} /* loop all subscribed publications */
+
+		/*
+		 * Now all the filters for all pubactions are known, let's try to combine them
+		 * when their pubactions are same.
+		 */
+		{
+			int		idx;
+			bool	found_filters = false;
+
+			/* For each pubaction... */
+			for (idx = 0; idx < 4; idx++)
+			{
+				int n_filters;
+
+				/*
+				 * If one or more publications with this pubaction had no filter at all,
+				 * then that nullifies the effect of all other filters for the same
+				 * pubaction (because filters get OR'ed together).
+				 */
+				if (no_filter[idx])
+				{
+					if (rfnodes[idx])
+					{
+						list_free_deep(rfnodes[idx]);
+						rfnodes[idx] = NIL;
+					}
+				}
+
+				/*
+				 * If there was one or more filter for this pubaction then combine them
+				 * (if necessary) and cache the ExprState.
+				 */
+				n_filters = list_length(rfnodes[idx]);
+				if (n_filters > 0)
+				{
+					Node	   *rfnode;
+
+					oldctx = MemoryContextSwitchTo(CacheMemoryContext);
+					rfnode = n_filters > 1 ? makeBoolExpr(OR_EXPR, rfnodes[idx], -1) : linitial(rfnodes[idx]);
+					entry->exprstate[idx] = pgoutput_row_filter_init_expr(rfnode);
+					MemoryContextSwitchTo(oldctx);
+
+					found_filters = true; /* flag that we will need slots made */
+				}
+			} /* for each pubaction */
+
+			if (found_filters)
+			{
+				TupleDesc	tupdesc = RelationGetDescr(relation);
+
+				/*
+				 * Create tuple table slots for row filter. Create a copy of the
+				 * TupleDesc as it needs to live as long as the cache remains.
+				 */
+				oldctx = MemoryContextSwitchTo(CacheMemoryContext);
+				tupdesc = CreateTupleDescCopy(tupdesc);
+				entry->scantuple = MakeSingleTupleTableSlot(tupdesc, &TTSOpsHeapTuple);
+				entry->old_tuple = MakeSingleTupleTableSlot(tupdesc, &TTSOpsVirtual);
+				entry->new_tuple = MakeSingleTupleTableSlot(tupdesc, &TTSOpsVirtual);
+				entry->tmp_new_tuple = MakeSingleTupleTableSlot(tupdesc, &TTSOpsVirtual);
+				MemoryContextSwitchTo(oldctx);
+			}
+		}
+
+		entry->rowfilter_valid = true;
+	}
+}
+
+/*
+ * Change is checked against the row filter, if any.
+ *
+ * If it returns true, the change is replicated, otherwise, it is not.
+ */
+static bool
+pgoutput_row_filter(int idx_pubaction, Relation relation, HeapTuple oldtuple, HeapTuple newtuple, TupleTableSlot *slot,
+RelationSyncEntry *entry)
+{
+	EState	   *estate;
+	ExprContext *ecxt;
+	bool		result = true;
+	Oid         relid = RelationGetRelid(relation);
+
+	/* Bail out if there is no row filter */
+	if (!entry->exprstate[idx_pubaction])
+		return true;
+
+	if (message_level_is_interesting(DEBUG3))
+		elog(DEBUG3, "table \"%s.%s\" has row filter",
+			 get_namespace_name(get_rel_namespace(relid)),
+			 get_rel_name(relid));
+
+	PushActiveSnapshot(GetTransactionSnapshot());
+
+	estate = create_estate_for_relation(relation);
+
+	/* Prepare context per tuple */
+	ecxt = GetPerTupleExprContext(estate);
+	ecxt->ecxt_scantuple = entry->scantuple;
+
+	if (newtuple || oldtuple)
+		ExecStoreHeapTuple(newtuple ? newtuple : oldtuple, ecxt->ecxt_scantuple, false);
+	else
+	{
+		ecxt->ecxt_scantuple = slot;
+	}
+
+	/*
+	 * NOTE: Multiple publication row-filters have already been combined to a
+	 * single exprstate (for this pubaction).
+	 */
+	if (entry->exprstate[idx_pubaction])
+	{
+		/* Evaluates row filter */
+		result = pgoutput_row_filter_exec_expr(entry->exprstate[idx_pubaction], ecxt);
+	}
+
+	/* Cleanup allocated resources */
+	FreeExecutorState(estate);
+	PopActiveSnapshot();
+
+	return result;
+}
+
+/*
  * Sends the decoded DML over wire.
  *
  * This is called both in streaming and non-streaming modes.
@@ -647,7 +1115,7 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	if (in_streaming)
 		xid = change->txn->xid;
 
-	relentry = get_rel_sync_entry(data, RelationGetRelid(relation));
+	relentry = get_rel_sync_entry(data, relation);
 
 	/* First check the table filter */
 	switch (change->action)
@@ -671,7 +1139,8 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	/* Avoid leaking memory by using and resetting our own context */
 	old = MemoryContextSwitchTo(data->context);
 
-	maybe_send_schema(ctx, change, relation, relentry);
+	/* Initialize the row_filter */
+	pgoutput_row_filter_init(data, relation, relentry);
 
 	/* Send the data */
 	switch (change->action)
@@ -679,6 +1148,16 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 		case REORDER_BUFFER_CHANGE_INSERT:
 			{
 				HeapTuple	tuple = &change->data.tp.newtuple->tuple;
+
+				/* Check row filter. */
+				if (!pgoutput_row_filter(IDX_PUBACTION_INSERT, relation, NULL, tuple, NULL, relentry))
+					break;
+
+				/*
+				 * Schema should be sent before the logic that replaces the
+				 * relation because it also sends the ancestor's relation.
+				 */
+				maybe_send_schema(ctx, change, relation, relentry);
 
 				/* Switch relation if publishing via root. */
 				if (relentry->publish_as_relid != RelationGetRelid(relation))
@@ -702,6 +1181,13 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 				HeapTuple	oldtuple = change->data.tp.oldtuple ?
 				&change->data.tp.oldtuple->tuple : NULL;
 				HeapTuple	newtuple = &change->data.tp.newtuple->tuple;
+				ReorderBufferChangeType modified_action = REORDER_BUFFER_CHANGE_UPDATE;
+
+				if (!pgoutput_row_filter_update_check(IDX_PUBACTION_UPDATE, relation, oldtuple, newtuple, relentry,
+												&modified_action))
+					break;
+
+				maybe_send_schema(ctx, change, relation, relentry);
 
 				/* Switch relation if publishing via root. */
 				if (relentry->publish_as_relid != RelationGetRelid(relation))
@@ -721,8 +1207,27 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 				}
 
 				OutputPluginPrepareWrite(ctx, true);
-				logicalrep_write_update(ctx->out, xid, relation, oldtuple,
-										newtuple, data->binary);
+
+				switch (modified_action)
+				{
+					case REORDER_BUFFER_CHANGE_INSERT:
+						logicalrep_write_insert(ctx->out, xid, relation, newtuple,
+												data->binary);
+						break;
+					case REORDER_BUFFER_CHANGE_UPDATE:
+						logicalrep_write_update(ctx->out, xid, relation,
+												oldtuple, newtuple, relentry->old_tuple,
+												relentry->new_tuple,
+												data->binary);
+						break;
+					case REORDER_BUFFER_CHANGE_DELETE:
+						logicalrep_write_delete(ctx->out, xid, relation, oldtuple,
+												data->binary);
+						break;
+					default:
+						Assert(false);
+				}
+
 				OutputPluginWrite(ctx, true);
 				break;
 			}
@@ -730,6 +1235,12 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 			if (change->data.tp.oldtuple)
 			{
 				HeapTuple	oldtuple = &change->data.tp.oldtuple->tuple;
+
+				/* Check row filter. */
+				if (!pgoutput_row_filter(IDX_PUBACTION_DELETE, relation, oldtuple, NULL, NULL, relentry))
+					break;
+
+				maybe_send_schema(ctx, change, relation, relentry);
 
 				/* Switch relation if publishing via root. */
 				if (relentry->publish_as_relid != RelationGetRelid(relation))
@@ -794,7 +1305,7 @@ pgoutput_truncate(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 		if (!is_publishable_relation(relation))
 			continue;
 
-		relentry = get_rel_sync_entry(data, relid);
+		relentry = get_rel_sync_entry(data, relation);
 
 		if (!relentry->pubactions.pubtruncate)
 			continue;
@@ -1116,9 +1627,10 @@ set_schema_sent_in_streamed_txn(RelationSyncEntry *entry, TransactionId xid)
  * when publishing.
  */
 static RelationSyncEntry *
-get_rel_sync_entry(PGOutputData *data, Oid relid)
+get_rel_sync_entry(PGOutputData *data, Relation relation)
 {
 	RelationSyncEntry *entry;
+	Oid			relid = RelationGetRelid(relation);
 	bool		am_partition = get_rel_relispartition(relid);
 	char		relkind = get_rel_relkind(relid);
 	bool		found;
@@ -1139,8 +1651,17 @@ get_rel_sync_entry(PGOutputData *data, Oid relid)
 		entry->schema_sent = false;
 		entry->streamed_txns = NIL;
 		entry->replicate_valid = false;
+		entry->rowfilter_valid = false;
 		entry->pubactions.pubinsert = entry->pubactions.pubupdate =
 			entry->pubactions.pubdelete = entry->pubactions.pubtruncate = false;
+		entry->scantuple = NULL;
+		entry->new_tuple = NULL;
+		entry->old_tuple = NULL;
+		entry->tmp_new_tuple = NULL;
+		entry->exprstate[IDX_PUBACTION_INSERT] = NULL;
+		entry->exprstate[IDX_PUBACTION_UPDATE] = NULL;
+		entry->exprstate[IDX_PUBACTION_DELETE] = NULL;
+		entry->exprstate[IDX_PUBACTION_TRUNCATE] = NULL;
 		entry->publish_as_relid = InvalidOid;
 		entry->map = NULL;		/* will be set by maybe_send_schema() if
 								 * needed */
@@ -1245,9 +1766,6 @@ get_rel_sync_entry(PGOutputData *data, Oid relid)
 				entry->pubactions.pubtruncate |= pub->pubactions.pubtruncate;
 			}
 
-			if (entry->pubactions.pubinsert && entry->pubactions.pubupdate &&
-				entry->pubactions.pubdelete && entry->pubactions.pubtruncate)
-				break;
 		}
 
 		list_free(pubids);
@@ -1310,6 +1828,7 @@ static void
 rel_sync_cache_relation_cb(Datum arg, Oid relid)
 {
 	RelationSyncEntry *entry;
+	int	idx;
 
 	/*
 	 * We can get here if the plugin was used in SQL interface as the
@@ -1354,6 +1873,25 @@ rel_sync_cache_relation_cb(Datum arg, Oid relid)
 			free_conversion_map(entry->map);
 		}
 		entry->map = NULL;
+
+		/*
+		 * Row filter cache cleanups. (Will be rebuilt later if needed).
+		 */
+		entry->rowfilter_valid = false;
+		if (entry->scantuple != NULL)
+		{
+			ExecDropSingleTupleTableSlot(entry->scantuple);
+			entry->scantuple = NULL;
+		}
+		/* Cleanup the ExprState for each of the pubactions. */
+		for (idx = 0; idx < 4; idx++)
+		{
+			if (entry->exprstate[idx] != NULL)
+			{
+				pfree(entry->exprstate[idx]);
+				entry->exprstate[idx] = NULL;
+			}
+		}
 	}
 }
 
@@ -1365,6 +1903,7 @@ rel_sync_cache_publication_cb(Datum arg, int cacheid, uint32 hashvalue)
 {
 	HASH_SEQ_STATUS status;
 	RelationSyncEntry *entry;
+	MemoryContext oldctx;
 
 	/*
 	 * We can get here if the plugin was used in SQL interface as the
@@ -1373,6 +1912,8 @@ rel_sync_cache_publication_cb(Datum arg, int cacheid, uint32 hashvalue)
 	 */
 	if (RelationSyncCache == NULL)
 		return;
+
+	oldctx = MemoryContextSwitchTo(CacheMemoryContext);
 
 	/*
 	 * There is no way to find which entry in our cache the hash belongs to so
@@ -1392,6 +1933,8 @@ rel_sync_cache_publication_cb(Datum arg, int cacheid, uint32 hashvalue)
 		entry->pubactions.pubdelete = false;
 		entry->pubactions.pubtruncate = false;
 	}
+
+	MemoryContextSwitchTo(oldctx);
 }
 
 /* Send Replication origin */

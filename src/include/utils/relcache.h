@@ -76,6 +76,7 @@ extern void RelationInitIndexAccessInfo(Relation relation);
 /* caller must include pg_publication.h */
 struct PublicationActions;
 extern struct PublicationActions *GetRelationPublicationActions(Relation relation);
+extern AttrNumber RelationGetInvalRowFilterCol(Relation relation);
 
 extern void RelationInitTableAccessMethod(Relation relation);
 

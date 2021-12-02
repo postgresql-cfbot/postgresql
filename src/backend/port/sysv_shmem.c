@@ -587,6 +587,7 @@ CreateAnonymousSegment(Size *size)
 	Size		allocsize = *size;
 	void	   *ptr = MAP_FAILED;
 	int			mmap_errno = 0;
+	bool		with_hugepages = false;
 
 #ifndef MAP_HUGETLB
 	/* PGSharedMemoryCreate should have dealt with this case */
@@ -608,9 +609,14 @@ CreateAnonymousSegment(Size *size)
 		ptr = mmap(NULL, allocsize, PROT_READ | PROT_WRITE,
 				   PG_MMAP_FLAGS | mmap_flags, -1, 0);
 		mmap_errno = errno;
-		if (huge_pages == HUGE_PAGES_TRY && ptr == MAP_FAILED)
-			elog(DEBUG1, "mmap(%zu) with MAP_HUGETLB failed, huge pages disabled: %m",
-				 allocsize);
+		if (ptr == MAP_FAILED)
+		{
+			if (huge_pages == HUGE_PAGES_TRY)
+				elog(DEBUG1, "mmap(%zu) with MAP_HUGETLB failed, huge pages disabled: %m",
+				 	allocsize);
+		} 
+		else
+			with_hugepages = true;
 	}
 #endif
 
@@ -639,6 +645,15 @@ CreateAnonymousSegment(Size *size)
 						 "memory usage, perhaps by reducing shared_buffers or "
 						 "max_connections.",
 						 allocsize) : 0));
+	} 
+
+	if (huge_pages == HUGE_PAGES_TRY && IsPostmasterEnvironment)
+	{
+		if (with_hugepages)
+			ereport(LOG, errmsg("anonymous shared memory was allocated with huge pages"));
+		else
+			ereport(LOG, errmsg("anonymous shared memory was allocated without huge pages"),
+				errhint("The amount of memory requested for huge pages is %zu bytes.", allocsize));
 	}
 
 	*size = allocsize;

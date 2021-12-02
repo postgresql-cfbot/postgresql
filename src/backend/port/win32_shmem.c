@@ -390,6 +390,15 @@ retry:
 	/* Register on-exit routine to delete the new segment */
 	on_shmem_exit(pgwin32_SharedMemoryDelete, PointerGetDatum(hmap2));
 
+	if (huge_pages == HUGE_PAGES_TRY && IsPostmasterEnvironment)
+	{
+		if (flProtect & SEC_LARGE_PAGES)
+			ereport(LOG, errmsg("anonymous shared memory was allocated with huge pages"));
+		else
+			ereport(LOG, errmsg("anonymous shared memory was allocated without huge pages"),
+				errhint("The amount of memory requested for huge pages is %zu bytes.", size));
+	}
+
 	*shim = hdr;
 	return hdr;
 }

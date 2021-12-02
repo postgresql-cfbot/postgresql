@@ -25153,6 +25153,21 @@ SELECT collation for ('foo' COLLATE "de_DE");
      <tbody>
 
       <row>
+       <entry><structfield>last_recovery_lsn</structfield></entry>
+       <entry><type>pg_lsn</type></entry>
+      </row>
+
+      <row>
+       <entry><structfield>last_recovery_time</structfield></entry>
+       <entry><type>timestamp with time zone</type></entry>
+      </row>
+
+      <row>
+       <entry><structfield>recovery_count</structfield></entry>
+       <entry><type>bigint</type></entry>
+      </row>
+
+      <row>
        <entry><structfield>min_recovery_end_lsn</structfield></entry>
        <entry><type>pg_lsn</type></entry>
       </row>

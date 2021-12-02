@@ -205,6 +205,15 @@ typedef struct ParallelHashJoinBatchAccessor
 	bool		at_least_one_chunk; /* has this backend allocated a chunk? */
 
 	bool		done;			/* flag to remember that a batch is done */
+
+	/*
+	 * While doing the unmatched inner scan, the assigned worker may emit
+	 * tuples. Thus, we must keep track of where it was in the hashtable so it
+	 * can return to the correct offset within the correct chunk.
+	 */
+	dsa_pointer shared_chunk;
+	HashMemoryChunk current_chunk;
+	size_t		current_chunk_idx;
 	SharedTuplestoreAccessor *inner_tuples;
 	SharedTuplestoreAccessor *outer_tuples;
 } ParallelHashJoinBatchAccessor;
@@ -254,31 +263,33 @@ typedef struct ParallelHashJoinState
 } ParallelHashJoinState;
 
 /* The phases for building batches, used by build_barrier. */
-#define PHJ_BUILD_ELECTING				0
-#define PHJ_BUILD_ALLOCATING			1
-#define PHJ_BUILD_HASHING_INNER			2
-#define PHJ_BUILD_HASHING_OUTER			3
-#define PHJ_BUILD_DONE					4
+#define PHJ_BUILD_ELECT					0
+#define PHJ_BUILD_ALLOCATE				1
+#define PHJ_BUILD_HASH_INNER			2
+#define PHJ_BUILD_HASH_OUTER			3
+#define PHJ_BUILD_RUN					4
+#define PHJ_BUILD_FREE					5
 
 /* The phases for probing each batch, used by for batch_barrier. */
-#define PHJ_BATCH_ELECTING				0
-#define PHJ_BATCH_ALLOCATING			1
-#define PHJ_BATCH_LOADING				2
-#define PHJ_BATCH_PROBING				3
-#define PHJ_BATCH_DONE					4
+#define PHJ_BATCH_ELECT					0
+#define PHJ_BATCH_ALLOCATE				1
+#define PHJ_BATCH_LOAD					2
+#define PHJ_BATCH_PROBE					3
+#define PHJ_BATCH_SCAN					4
+#define PHJ_BATCH_FREE					5
 
 /* The phases of batch growth while hashing, for grow_batches_barrier. */
-#define PHJ_GROW_BATCHES_ELECTING		0
-#define PHJ_GROW_BATCHES_ALLOCATING		1
-#define PHJ_GROW_BATCHES_REPARTITIONING 2
-#define PHJ_GROW_BATCHES_DECIDING		3
-#define PHJ_GROW_BATCHES_FINISHING		4
+#define PHJ_GROW_BATCHES_ELECT			0
+#define PHJ_GROW_BATCHES_REALLOCATE		1
+#define PHJ_GROW_BATCHES_REPARTITION	2
+#define PHJ_GROW_BATCHES_DECIDE			3
+#define PHJ_GROW_BATCHES_FINISH			4
 #define PHJ_GROW_BATCHES_PHASE(n)		((n) % 5)	/* circular phases */
 
 /* The phases of bucket growth while hashing, for grow_buckets_barrier. */
-#define PHJ_GROW_BUCKETS_ELECTING		0
-#define PHJ_GROW_BUCKETS_ALLOCATING		1
-#define PHJ_GROW_BUCKETS_REINSERTING	2
+#define PHJ_GROW_BUCKETS_ELECT			0
+#define PHJ_GROW_BUCKETS_REALLOCATE		1
+#define PHJ_GROW_BUCKETS_REINSERT		2
 #define PHJ_GROW_BUCKETS_PHASE(n)		((n) % 3)	/* circular phases */
 
 typedef struct HashJoinTableData
@@ -350,6 +361,9 @@ typedef struct HashJoinTableData
 
 	/* used for dense allocation of tuples (into linked chunks) */
 	HashMemoryChunk chunks;		/* one list for the whole batch */
+
+	/* index of tuple within current chunk for serial unmatched inner scan */
+	size_t		current_chunk_idx;
 
 	/* Shared and private state for Parallel Hash. */
 	HashMemoryChunk current_chunk;	/* this backend's current chunk */

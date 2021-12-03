@@ -8913,7 +8913,9 @@ LogCheckpointEnd(bool restartpoint)
 				sync_msecs,
 				total_msecs,
 				longest_msecs,
-				average_msecs;
+				average_msecs,
+				repl_snap_msecs,
+				repl_map_msecs;
 	uint64		average_sync_time;
 
 	CheckpointStats.ckpt_end_t = GetCurrentTimestamp();
@@ -8950,13 +8952,21 @@ LogCheckpointEnd(bool restartpoint)
 			CheckpointStats.ckpt_sync_rels;
 	average_msecs = (long) ((average_sync_time + 999) / 1000);
 
+	repl_snap_msecs = TimestampDifferenceMilliseconds(CheckpointStats.repl_snap_start_t,
+													  CheckpointStats.repl_snap_end_t);
+
+	repl_map_msecs = TimestampDifferenceMilliseconds(CheckpointStats.repl_map_start_t,
+													 CheckpointStats.repl_map_end_t);
+
 	if (restartpoint)
 		ereport(LOG,
 				(errmsg("restartpoint complete: wrote %d buffers (%.1f%%); "
 						"%d WAL file(s) added, %d removed, %d recycled; "
 						"write=%ld.%03d s, sync=%ld.%03d s, total=%ld.%03d s; "
 						"sync files=%d, longest=%ld.%03d s, average=%ld.%03d s; "
-						"distance=%d kB, estimate=%d kB",
+						"distance=%d kB, estimate=%d kB; "
+						"snapbuild snapshot file(s) removed=" UINT64_FORMAT ", size=%zu bytes, time=%ld.%03d s, cutoff LSN=%X/%X; "
+						"logical rewrite mapping file(s) removed/synced=" UINT64_FORMAT ", size=%zu bytes, time=%ld.%03d s, cutoff LSN=%X/%X",
 						CheckpointStats.ckpt_bufs_written,
 						(double) CheckpointStats.ckpt_bufs_written * 100 / NBuffers,
 						CheckpointStats.ckpt_segs_added,
@@ -8969,14 +8979,24 @@ LogCheckpointEnd(bool restartpoint)
 						longest_msecs / 1000, (int) (longest_msecs % 1000),
 						average_msecs / 1000, (int) (average_msecs % 1000),
 						(int) (PrevCheckPointDistance / 1024.0),
-						(int) (CheckPointDistanceEstimate / 1024.0))));
+						(int) (CheckPointDistanceEstimate / 1024.0),
+						CheckpointStats.repl_snap_files_cnt,
+						CheckpointStats.repl_snap_files_sz,
+						repl_snap_msecs / 1000, (int) (repl_snap_msecs % 1000),
+						LSN_FORMAT_ARGS(CheckpointStats.repl_snap_cutoff_lsn),
+						CheckpointStats.repl_map_files_cnt,
+						CheckpointStats.repl_map_files_sz,
+						repl_map_msecs / 1000, (int) (repl_map_msecs % 1000),
+						LSN_FORMAT_ARGS(CheckpointStats.repl_map_cutoff_lsn))));
 	else
 		ereport(LOG,
 				(errmsg("checkpoint complete: wrote %d buffers (%.1f%%); "
 						"%d WAL file(s) added, %d removed, %d recycled; "
 						"write=%ld.%03d s, sync=%ld.%03d s, total=%ld.%03d s; "
 						"sync files=%d, longest=%ld.%03d s, average=%ld.%03d s; "
-						"distance=%d kB, estimate=%d kB",
+						"distance=%d kB, estimate=%d kB; "
+						"snapbuild snapshot file(s) removed=" UINT64_FORMAT ", size=%zu bytes, time=%ld.%03d s, cutoff LSN=%X/%X; "
+						"logical rewrite mapping file(s) removed/synced=" UINT64_FORMAT ", size=%zu bytes, time=%ld.%03d s, cutoff LSN=%X/%X",
 						CheckpointStats.ckpt_bufs_written,
 						(double) CheckpointStats.ckpt_bufs_written * 100 / NBuffers,
 						CheckpointStats.ckpt_segs_added,
@@ -8989,7 +9009,15 @@ LogCheckpointEnd(bool restartpoint)
 						longest_msecs / 1000, (int) (longest_msecs % 1000),
 						average_msecs / 1000, (int) (average_msecs % 1000),
 						(int) (PrevCheckPointDistance / 1024.0),
-						(int) (CheckPointDistanceEstimate / 1024.0))));
+						(int) (CheckPointDistanceEstimate / 1024.0),
+						CheckpointStats.repl_snap_files_cnt,
+						CheckpointStats.repl_snap_files_sz,
+						repl_snap_msecs / 1000, (int) (repl_snap_msecs % 1000),
+						LSN_FORMAT_ARGS(CheckpointStats.repl_snap_cutoff_lsn),
+						CheckpointStats.repl_map_files_cnt,
+						CheckpointStats.repl_map_files_sz,
+						repl_map_msecs / 1000, (int) (repl_map_msecs % 1000),
+						LSN_FORMAT_ARGS(CheckpointStats.repl_map_cutoff_lsn))));
 }
 
 /*
@@ -9602,8 +9630,15 @@ CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 {
 	CheckPointRelationMap();
 	CheckPointReplicationSlots();
+
+	CheckpointStats.repl_snap_start_t = GetCurrentTimestamp();
 	CheckPointSnapBuild();
+	CheckpointStats.repl_snap_end_t = GetCurrentTimestamp();
+
+	CheckpointStats.repl_map_start_t = GetCurrentTimestamp();
 	CheckPointLogicalRewriteHeap();
+	CheckpointStats.repl_map_end_t = GetCurrentTimestamp();
+
 	CheckPointReplicationOrigin();
 
 	/* Write out all dirty data in SLRUs and the main buffer pool */

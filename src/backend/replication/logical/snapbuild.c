@@ -1997,7 +1997,12 @@ CheckPointSnapBuild(void)
 								path)));
 				continue;
 			}
+
+			CheckpointStats.repl_snap_files_cnt++;
+			CheckpointStats.repl_snap_files_sz += statbuf.st_size;
 		}
 	}
+
+	CheckpointStats.repl_snap_cutoff_lsn = cutoff;
 	FreeDir(snap_dir);
 }

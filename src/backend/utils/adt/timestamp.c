@@ -3040,10 +3040,21 @@ timestamptz_mi_interval(PG_FUNCTION_ARGS)
 }
 
 
+Interval *
+interval_um_internal(Interval *interval);
+
 Datum
 interval_um(PG_FUNCTION_ARGS)
 {
 	Interval   *interval = PG_GETARG_INTERVAL_P(0);
+	Interval   *result = interval_um_internal(interval);
+
+	PG_RETURN_INTERVAL_P(result);
+}
+
+Interval *
+interval_um_internal(Interval *interval)
+{
 	Interval   *result;
 
 	result = (Interval *) palloc(sizeof(Interval));
@@ -3065,7 +3076,7 @@ interval_um(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
 				 errmsg("interval out of range")));
 
-	PG_RETURN_INTERVAL_P(result);
+	return result;
 }
 
 
@@ -3167,10 +3178,26 @@ interval_mi(PG_FUNCTION_ARGS)
 }
 
 /*
- *	There is no interval_abs():  it is unclear what value to return:
+ *	Although some strangeness is possible with intervals:
  *	  http://archives.postgresql.org/pgsql-general/2009-10/msg01031.php
  *	  http://archives.postgresql.org/pgsql-general/2009-11/msg00041.php
+ *	... there is nevertheless nothing clearly better than the usual
+ *	definition of abs as the greater of the input and its negative.
  */
+Datum
+interval_abs(PG_FUNCTION_ARGS)
+{
+	Interval   *interval = PG_GETARG_INTERVAL_P(0);
+	Interval   *minterval = interval_um_internal(interval);
+	Interval   *result;
+
+	if (interval_cmp_internal(interval, minterval) >= 0)
+		result = interval;
+	else
+		result = minterval;
+
+	PG_RETURN_INTERVAL_P(result);
+}
 
 Datum
 interval_mul(PG_FUNCTION_ARGS)

@@ -8823,6 +8823,20 @@ SELECT regexp_match('abc01234xyz', '(?:(.*?)(\d+)(.*)){1,1}');
 
        <row>
         <entry role="func_table_entry"><para role="func_signature">
+         <literal>@</literal> <type>interval</type>
+         <returnvalue>interval</returnvalue>
+        </para>
+        <para>
+         Find the absolute value of an interval
+        </para>
+        <para>
+         <literal>@ interval '-23 hours'</literal>
+         <returnvalue>23:00:00</returnvalue>
+        </para></entry>
+       </row>
+
+       <row>
+        <entry role="func_table_entry"><para role="func_signature">
          <type>date</type> <literal>-</literal> <type>date</type>
          <returnvalue>integer</returnvalue>
         </para>
@@ -8991,6 +9005,24 @@ SELECT regexp_match('abc01234xyz', '(?:(.*?)(\d+)(.*)){1,1}');
       </thead>
 
       <tbody>
+       <row>
+        <entry role="func_table_entry"><para role="func_signature">
+         <indexterm>
+          <primary>abs</primary>
+         </indexterm>
+         <function>abs</function> ( <type>interval</type> )
+         <returnvalue>interval</returnvalue>
+        </para>
+        <para>
+         Compute the absolute value of an interval; that is, the greater of the input
+         and its negative.
+        </para>
+        <para>
+         <literal>abs(interval '-23 hours')</literal>
+         <returnvalue>23:00:00</returnvalue>
+        </para></entry>
+       </row>
+
        <row>
         <entry role="func_table_entry"><para role="func_signature">
          <indexterm>

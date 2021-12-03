@@ -171,8 +171,7 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit)
 	 * described in SyncRepUpdateSyncStandbysDefined(). On the other hand, if
 	 * it's false, the lock is not necessary because we don't touch the queue.
 	 */
-	if (!SyncRepRequested() ||
-		!((volatile WalSndCtlData *) WalSndCtl)->sync_standbys_defined)
+	if (!SyncRepEnabled())
 		return;
 
 	/* Cap the level for anything other than commit to remote flush only. */
@@ -327,6 +326,15 @@ SyncRepWaitForLSN(XLogRecPtr lsn, bool commit)
 		set_ps_display(new_status);
 		pfree(new_status);
 	}
+}
+
+/*
+ * Check if Synchronous Replication is enabled
+ */
+bool
+SyncRepEnabled(void)
+{
+	return SyncRepRequested() && ((volatile WalSndCtlData *) WalSndCtl)->sync_standbys_defined;
 }
 
 /*

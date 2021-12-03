@@ -9451,10 +9451,9 @@ get_rule_expr(Node *node, deparse_context *context,
 						sep = "";
 						foreach(cell, spec->listdatums)
 						{
-							Const	   *val = lfirst_node(Const, cell);
-
 							appendStringInfoString(buf, sep);
-							get_const_expr(val, context, -1);
+							appendStringInfoString
+								(buf, get_list_partbound_value_string(lfirst(cell)));
 							sep = ", ";
 						}
 
@@ -12012,6 +12011,46 @@ flatten_reloptions(Oid relid)
 	ReleaseSysCache(tuple);
 
 	return result;
+}
+
+/*
+ * get_list_partbound_value_string
+ *
+ * A C string representation of one list partition bound value
+ */
+char *
+get_list_partbound_value_string(List *bound_value)
+{
+	StringInfo  	buf = makeStringInfo();
+	StringInfo  	boundconstraint = makeStringInfo();
+	deparse_context context;
+	ListCell	   *cell;
+	char		   *sep = "";
+	int				ncols = 0;
+
+	memset(&context, 0, sizeof(deparse_context));
+	context.buf = buf;
+
+	foreach(cell, bound_value)
+	{
+		Const      *val = castNode(Const, lfirst(cell));
+
+		appendStringInfoString(buf, sep);
+		get_const_expr(val, &context, -1);
+		sep = ", ";
+		ncols++;
+	}
+
+	if (ncols > 1)
+	{
+		appendStringInfoChar(boundconstraint, '(');
+		appendStringInfoString(boundconstraint, buf->data);
+		appendStringInfoChar(boundconstraint, ')');
+
+		return boundconstraint->data;
+	}
+	else
+		return buf->data;
 }
 
 /*

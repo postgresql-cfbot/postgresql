@@ -342,12 +342,6 @@ CREATE TABLE partitioned (
 	a int
 ) INHERITS (some_table) PARTITION BY LIST (a);
 
--- cannot use more than 1 column as partition key for list partitioned table
-CREATE TABLE partitioned (
-	a1 int,
-	a2 int
-) PARTITION BY LIST (a1, a2);	-- fail
-
 -- unsupported constraint type for partitioned tables
 CREATE TABLE partitioned (
 	a int,
@@ -562,6 +556,9 @@ CREATE TABLE fail_part PARTITION OF list_parted FOR VALUES WITH (MODULUS 10, REM
 CREATE TABLE part_default PARTITION OF list_parted DEFAULT;
 CREATE TABLE fail_default_part PARTITION OF list_parted DEFAULT;
 
+-- trying to specify more number of values than the number of partition keys
+CREATE TABLE fail_part PARTITION OF list_parted FOR VALUES IN ((1, 2));
+
 -- specified literal can't be cast to the partition column data type
 CREATE TABLE bools (
 	a bool
@@ -727,6 +724,32 @@ CREATE TABLE range3_default PARTITION OF range_parted3 DEFAULT;
 -- from -infinity to +infinity, while there exist partitions that have
 -- more specific ranges
 CREATE TABLE fail_part PARTITION OF range_parted3 FOR VALUES FROM (1, minvalue) TO (1, maxvalue);
+
+-- now check for multi-column list partition key
+CREATE TABLE list_parted3 (
+	a int,
+	b varchar
+) PARTITION BY LIST (a, b);
+
+CREATE TABLE list_parted3_p1 PARTITION OF list_parted3 FOR VALUES IN ((1, 'A'));
+CREATE TABLE list_parted3_p2 PARTITION OF list_parted3 FOR VALUES IN ((1, 'B'),(1, 'E'), (1, 'E'), (2, 'C'),(2, 'D'));
+CREATE TABLE list_parted3_p3 PARTITION OF list_parted3 FOR VALUES IN ((1, NULL),(NULL, 'F'));
+CREATE TABLE list_parted3_p4 PARTITION OF list_parted3 FOR VALUES IN ((NULL, NULL));
+CREATE TABLE fail_part PARTITION OF list_parted3 FOR VALUES IN ((1, 'E'));
+CREATE TABLE fail_part PARTITION OF list_parted3 FOR VALUES IN ((1, NULL));
+CREATE TABLE fail_part PARTITION OF list_parted3 FOR VALUES IN ((NULL, 'F'));
+CREATE TABLE fail_part PARTITION OF list_parted3 FOR VALUES IN ((NULL, NULL));
+CREATE TABLE list_parted3_default PARTITION OF list_parted3 DEFAULT;
+
+-- trying to specify less number of values than the number of partition keys
+CREATE TABLE fail_part PARTITION OF list_parted3 FOR VALUES IN (10, 'N');
+CREATE TABLE fail_part PARTITION OF list_parted3 FOR VALUES IN ((10), ('N'));
+
+-- trying to specify more number of values than the number of partition keys
+CREATE TABLE fail_part PARTITION OF list_parted3 FOR VALUES IN ((10, 'N', 10));
+
+-- cleanup
+DROP TABLE list_parted3;
 
 -- check for partition bound overlap and other invalid specifications for the hash partition
 CREATE TABLE hash_parted2 (

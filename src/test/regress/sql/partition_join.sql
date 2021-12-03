@@ -1100,6 +1100,263 @@ DROP TABLE plt2_adv;
 DROP TABLE plt3_adv;
 
 
+-- Tests for multi-column list-partitioned tables
+CREATE TABLE plt1_adv_m (a int, b int, c text, d int) PARTITION BY LIST (c, d);
+CREATE TABLE plt1_adv_m_p1 PARTITION OF plt1_adv_m FOR VALUES IN (('0001', 1), ('0003', 3));
+CREATE TABLE plt1_adv_m_p2 PARTITION OF plt1_adv_m FOR VALUES IN (('0004', 4), ('0006', 6));
+CREATE TABLE plt1_adv_m_p3 PARTITION OF plt1_adv_m FOR VALUES IN (('0008', 8), ('0009', 9));
+INSERT INTO plt1_adv_m SELECT i, i, to_char(i % 10, 'FM0000'), (i % 10) FROM generate_series(1, 299) i WHERE i % 10 IN (1, 3, 4, 6, 8, 9);
+ANALYZE plt1_adv_m;
+
+CREATE TABLE plt2_adv_m (a int, b int, c text, d int) PARTITION BY LIST (c, d);
+CREATE TABLE plt2_adv_m_p1 PARTITION OF plt2_adv_m FOR VALUES IN (('0002', 2), ('0003', 3));
+CREATE TABLE plt2_adv_m_p2 PARTITION OF plt2_adv_m FOR VALUES IN (('0004', 4), ('0006', 6));
+CREATE TABLE plt2_adv_m_p3 PARTITION OF plt2_adv_m FOR VALUES IN (('0007', 7), ('0009', 9));
+INSERT INTO plt2_adv_m SELECT i, i, to_char(i % 10, 'FM0000'), (i % 10) FROM generate_series(1, 299) i WHERE i % 10 IN (2, 3, 4, 6, 7, 9);
+ANALYZE plt2_adv_m;
+
+-- inner join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt1_adv_m t1 INNER JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE t1.a < 10 ORDER BY t1.a;
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt1_adv_m t1 INNER JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE t1.a < 10 ORDER BY t1.a;
+
+-- semi join
+EXPLAIN (COSTS OFF)
+SELECT t1.* FROM plt1_adv_m t1 WHERE EXISTS (SELECT 1 FROM plt2_adv_m t2 WHERE t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) AND t1.a < 10 ORDER BY t1.a;
+SELECT t1.* FROM plt1_adv_m t1 WHERE EXISTS (SELECT 1 FROM plt2_adv_m t2 WHERE t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) AND t1.a < 10 ORDER BY t1.a;
+
+-- left join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt1_adv_m t1 LEFT JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE t1.a < 10 ORDER BY t1.a;
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt1_adv_m t1 LEFT JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE t1.a < 10 ORDER BY t1.a;
+
+-- anti join
+EXPLAIN (COSTS OFF)
+SELECT t1.* FROM plt1_adv_m t1 WHERE NOT EXISTS (SELECT 1 FROM plt2_adv_m t2 WHERE t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) AND t1.a < 10 ORDER BY t1.a;
+SELECT t1.* FROM plt1_adv_m t1 WHERE NOT EXISTS (SELECT 1 FROM plt2_adv_m t2 WHERE t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) AND t1.a < 10 ORDER BY t1.a;
+
+-- full join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt1_adv_m t1 FULL JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE coalesce(t1.a, 0) < 10 AND coalesce(t2.b, 0) < 10 ORDER BY t1.a, t2.a;
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt1_adv_m t1 FULL JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE coalesce(t1.a, 0) < 10 AND coalesce(t2.b, 0) < 10 ORDER BY t1.a, t2.a;
+
+-- Test cases where one side has an extra partition
+CREATE TABLE plt2_adv_m_extra PARTITION OF plt2_adv_m FOR VALUES IN (('0000', 0));
+INSERT INTO plt2_adv_m_extra VALUES (0, 0, '0000', 0);
+ANALYZE plt2_adv_m;
+
+-- inner join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt1_adv_m t1 INNER JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE t1.b < 10 ORDER BY t1.a;
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt1_adv_m t1 INNER JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE t1.b < 10 ORDER BY t1.a;
+
+-- semi join
+EXPLAIN (COSTS OFF)
+SELECT t1.* FROM plt1_adv_m t1 WHERE EXISTS (SELECT 1 FROM plt2_adv_m t2 WHERE t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) AND t1.b < 10 ORDER BY t1.a;
+SELECT t1.* FROM plt1_adv_m t1 WHERE EXISTS (SELECT 1 FROM plt2_adv_m t2 WHERE t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) AND t1.b < 10 ORDER BY t1.a;
+
+-- left join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt1_adv_m t1 LEFT JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE t1.b < 10 ORDER BY t1.a;
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt1_adv_m t1 LEFT JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE t1.b < 10 ORDER BY t1.a;
+
+-- left join; currently we can't do partitioned join if there are no matched
+-- partitions on the nullable side
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt2_adv_m t1 LEFT JOIN plt1_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE t1.b < 10 ORDER BY t1.a;
+
+-- anti join
+EXPLAIN (COSTS OFF)
+SELECT t1.* FROM plt1_adv_m t1 WHERE NOT EXISTS (SELECT 1 FROM plt2_adv_m t2 WHERE t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) AND t1.b < 10 ORDER BY t1.a;
+SELECT t1.* FROM plt1_adv_m t1 WHERE NOT EXISTS (SELECT 1 FROM plt2_adv_m t2 WHERE t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) AND t1.b < 10 ORDER BY t1.a;
+
+-- anti join; currently we can't do partitioned join if there are no matched
+-- partitions on the nullable side
+EXPLAIN (COSTS OFF)
+SELECT t1.* FROM plt2_adv_m t1 WHERE NOT EXISTS (SELECT 1 FROM plt1_adv_m t2 WHERE t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) AND t1.b < 10 ORDER BY t1.a;
+
+-- full join; currently we can't do partitioned join if there are no matched
+-- partitions on the nullable side
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt1_adv_m t1 FULL JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE coalesce(t1.b, 0) < 10 AND coalesce(t2.b, 0) < 10 ORDER BY t1.a, t2.a;
+
+DROP TABLE plt2_adv_m_extra;
+
+-- Test cases where a partition on one side matches multiple partitions on
+-- the other side; we currently can't do partitioned join in such cases
+ALTER TABLE plt2_adv_m DETACH PARTITION plt2_adv_m_p2;
+-- Split plt2_adv_p2 into two partitions so that plt1_adv_p2 matches both
+CREATE TABLE plt2_adv_m_p2_1 PARTITION OF plt2_adv_m FOR VALUES IN (('0004', 4));
+CREATE TABLE plt2_adv_m_p2_2 PARTITION OF plt2_adv_m FOR VALUES IN (('0006', 6));
+INSERT INTO plt2_adv_m SELECT i, i, to_char(i % 10, 'FM0000'), (i % 10) FROM generate_series(1, 299) i WHERE i % 10 IN (4, 6);
+ANALYZE plt2_adv_m;
+
+-- inner join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt1_adv_m t1 INNER JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE t1.b < 10 ORDER BY t1.a;
+
+-- semi join
+EXPLAIN (COSTS OFF)
+SELECT t1.* FROM plt1_adv_m t1 WHERE EXISTS (SELECT 1 FROM plt2_adv_m t2 WHERE t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) AND t1.b < 10 ORDER BY t1.a;
+
+-- left join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt1_adv_m t1 LEFT JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE t1.b < 10 ORDER BY t1.a;
+
+-- anti join
+EXPLAIN (COSTS OFF)
+SELECT t1.* FROM plt1_adv_m t1 WHERE NOT EXISTS (SELECT 1 FROM plt2_adv_m t2 WHERE t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) AND t1.b < 10 ORDER BY t1.a;
+
+-- full join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt1_adv_m t1 FULL JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE coalesce(t1.b, 0) < 10 AND coalesce(t2.b, 0) < 10 ORDER BY t1.a, t2.a;
+
+DROP TABLE plt2_adv_m_p2_1;
+DROP TABLE plt2_adv_m_p2_2;
+-- Restore plt2_adv_p2
+ALTER TABLE plt2_adv_m ATTACH PARTITION plt2_adv_m_p2 FOR VALUES IN (('0004', 4), ('0006', 6));
+
+
+-- Test NULL partitions
+ALTER TABLE plt1_adv_m DETACH PARTITION plt1_adv_m_p1;
+-- Change plt1_adv_p1 to the NULL partition
+CREATE TABLE plt1_adv_m_p1_null PARTITION OF plt1_adv_m FOR VALUES IN ((NULL, NULL), ('0001', 1), ('0003', 3));
+INSERT INTO plt1_adv_m SELECT i, i, to_char(i % 10, 'FM0000'), (i % 10) FROM generate_series(1, 299) i WHERE i % 10 IN (1, 3);
+INSERT INTO plt1_adv_m VALUES (-1, -1, NULL, NULL);
+ANALYZE plt1_adv_m;
+
+ALTER TABLE plt2_adv_m DETACH PARTITION plt2_adv_m_p3;
+-- Change plt2_adv_p3 to the NULL partition
+CREATE TABLE plt2_adv_m_p3_null PARTITION OF plt2_adv_m FOR VALUES IN ((NULL, NULL), ('0007', 7), ('0009', 9));
+INSERT INTO plt2_adv_m SELECT i, i, to_char(i % 10, 'FM0000'), (i % 10) FROM generate_series(1, 299) i WHERE i % 10 IN (7, 9);
+INSERT INTO plt2_adv_m VALUES (-1, -1, NULL, NULL);
+ANALYZE plt2_adv_m;
+
+-- inner join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt1_adv_m t1 INNER JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE t1.b < 10 ORDER BY t1.a;
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt1_adv_m t1 INNER JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE t1.b < 10 ORDER BY t1.a;
+
+-- semi join
+EXPLAIN (COSTS OFF)
+SELECT t1.* FROM plt1_adv_m t1 WHERE EXISTS (SELECT 1 FROM plt2_adv_m t2 WHERE t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) AND t1.b < 10 ORDER BY t1.a;
+SELECT t1.* FROM plt1_adv_m t1 WHERE EXISTS (SELECT 1 FROM plt2_adv_m t2 WHERE t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) AND t1.b < 10 ORDER BY t1.a;
+
+-- left join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt1_adv_m t1 LEFT JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE t1.b < 10 ORDER BY t1.a;
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt1_adv_m t1 LEFT JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE t1.b < 10 ORDER BY t1.a;
+
+-- anti join
+EXPLAIN (COSTS OFF)
+SELECT t1.* FROM plt1_adv_m t1 WHERE NOT EXISTS (SELECT 1 FROM plt2_adv_m t2 WHERE t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) AND t1.b < 10 ORDER BY t1.a;
+SELECT t1.* FROM plt1_adv_m t1 WHERE NOT EXISTS (SELECT 1 FROM plt2_adv_m t2 WHERE t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) AND t1.b < 10 ORDER BY t1.a;
+
+-- full join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt1_adv_m t1 FULL JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE coalesce(t1.b, 0) < 10 AND coalesce(t2.b, 0) < 10 ORDER BY t1.a, t2.a;
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt1_adv_m t1 FULL JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE coalesce(t1.b, 0) < 10 AND coalesce(t2.b, 0) < 10 ORDER BY t1.a, t2.a;
+
+DROP TABLE plt1_adv_m_p1_null;
+-- Restore plt1_adv_p1
+ALTER TABLE plt1_adv_m ATTACH PARTITION plt1_adv_m_p1 FOR VALUES IN (('0001', 1), ('0003', 3));
+
+-- Add to plt1_adv the extra NULL partition containing only NULL values as the
+-- key values
+CREATE TABLE plt1_adv_m_extra PARTITION OF plt1_adv_m FOR VALUES IN ((NULL, NULL));
+INSERT INTO plt1_adv_m VALUES (-1, -1, NULL, NULL);
+ANALYZE plt1_adv_m;
+
+DROP TABLE plt2_adv_m_p3_null;
+-- Restore plt2_adv_p3
+ALTER TABLE plt2_adv_m ATTACH PARTITION plt2_adv_m_p3 FOR VALUES IN (('0007', 7), ('0009', 9));
+ANALYZE plt2_adv_m;
+
+-- inner join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt1_adv_m t1 INNER JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE t1.b < 10 ORDER BY t1.a;
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt1_adv_m t1 INNER JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE t1.b < 10 ORDER BY t1.a;
+
+-- left join; currently we can't do partitioned join if there are no matched
+-- partitions on the nullable side
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt1_adv_m t1 LEFT JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE t1.b < 10 ORDER BY t1.a;
+
+-- full join; currently we can't do partitioned join if there are no matched
+-- partitions on the nullable side
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt1_adv_m t1 FULL JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE coalesce(t1.b, 0) < 10 AND coalesce(t2.b, 0) < 10 ORDER BY t1.a, t2.a;
+
+
+-- Add to plt2_adv the extra NULL partition containing only NULL values as the
+-- key values
+CREATE TABLE plt2_adv_m_extra PARTITION OF plt2_adv_m FOR VALUES IN ((NULL, NULL));
+INSERT INTO plt2_adv_m VALUES (-1, -1, NULL, NULL);
+ANALYZE plt2_adv_m;
+
+-- inner join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt1_adv_m t1 INNER JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE t1.b < 10 ORDER BY t1.a;
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt1_adv_m t1 INNER JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE t1.b < 10 ORDER BY t1.a;
+
+-- left join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt1_adv_m t1 LEFT JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE t1.b < 10 ORDER BY t1.a;
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt1_adv_m t1 LEFT JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE t1.b < 10 ORDER BY t1.a;
+
+-- full join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt1_adv_m t1 FULL JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE coalesce(t1.b, 0) < 10 AND coalesce(t2.b, 0) < 10 ORDER BY t1.a, t2.a;
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt1_adv_m t1 FULL JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE coalesce(t1.b, 0) < 10 AND coalesce(t2.b, 0) < 10 ORDER BY t1.a, t2.a;
+
+-- 3-way join to test the NULL partition of a join relation
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d, t3.a, t3.c, t3.d FROM plt1_adv_m t1 LEFT JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) LEFT JOIN plt1_adv_m t3 ON (t1.a = t3.a AND t1.c = t3.c AND t1.d = t3.d) WHERE t1.b < 10 ORDER BY t1.a;
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d, t3.a, t3.c, t3.d FROM plt1_adv_m t1 LEFT JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) LEFT JOIN plt1_adv_m t3 ON (t1.a = t3.a AND t1.c = t3.c AND t1.d = t3.d) WHERE t1.b < 10 ORDER BY t1.a;
+
+DROP TABLE plt1_adv_m_extra;
+DROP TABLE plt2_adv_m_extra;
+
+-- Multiple NULL test
+CREATE TABLE plt1_adv_m_p4 PARTITION OF plt1_adv_m FOR VALUES IN (('0005', NULL));
+CREATE TABLE plt1_adv_m_p5 PARTITION OF plt1_adv_m FOR VALUES IN (('0010', NULL), (NULL, 10));
+INSERT INTO plt1_adv_m VALUES (-1, -1, '0005', NULL);
+INSERT INTO plt1_adv_m VALUES (-1, -1, '0010', NULL);
+INSERT INTO plt1_adv_m VALUES (-1, -1, NULL, 10);
+ANALYZE plt1_adv_m;
+
+CREATE TABLE plt2_adv_m_p4 PARTITION OF plt2_adv_m FOR VALUES IN ((NULL, 5));
+CREATE TABLE plt2_adv_m_p5 PARTITION OF plt2_adv_m FOR VALUES IN (('0010', NULL), (NULL, 10));
+INSERT INTO plt2_adv_m VALUES (-1, -1, '0005', NULL);
+INSERT INTO plt2_adv_m VALUES (-1, -1, '0010', NULL);
+INSERT INTO plt2_adv_m VALUES (-1, -1, NULL, 10);
+ANALYZE plt2_adv_m;
+
+-- inner join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt1_adv_m t1 INNER JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE t1.a < 10 ORDER BY t1.a;
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt1_adv_m t1 INNER JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE t1.a < 10 ORDER BY t1.a;
+
+-- semi join
+EXPLAIN (COSTS OFF)
+SELECT t1.* FROM plt1_adv_m t1 WHERE EXISTS (SELECT 1 FROM plt2_adv_m t2 WHERE t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) AND t1.a < 10 ORDER BY t1.a;
+SELECT t1.* FROM plt1_adv_m t1 WHERE EXISTS (SELECT 1 FROM plt2_adv_m t2 WHERE t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) AND t1.a < 10 ORDER BY t1.a;
+
+-- left join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt1_adv_m t1 LEFT JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE t1.a < 10 ORDER BY t1.a;
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt1_adv_m t1 LEFT JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE t1.a < 10 ORDER BY t1.a;
+
+-- anti join
+EXPLAIN (COSTS OFF)
+SELECT t1.* FROM plt1_adv_m t1 WHERE NOT EXISTS (SELECT 1 FROM plt2_adv_m t2 WHERE t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) AND t1.a < 10 ORDER BY t1.a;
+SELECT t1.* FROM plt1_adv_m t1 WHERE NOT EXISTS (SELECT 1 FROM plt2_adv_m t2 WHERE t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) AND t1.a < 10 ORDER BY t1.a;
+
+-- full join
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt1_adv_m t1 FULL JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE coalesce(t1.a, 0) < 10 AND coalesce(t2.b, 0) < 10 ORDER BY t1.a, t2.a;
+SELECT t1.a, t1.c, t1.d, t2.a, t2.c, t2.d FROM plt1_adv_m t1 FULL JOIN plt2_adv_m t2 ON (t1.a = t2.a AND t1.c = t2.c AND t1.d = t2.d) WHERE coalesce(t1.a, 0) < 10 AND coalesce(t2.b, 0) < 10 ORDER BY t1.a, t2.a;
+
 -- Tests for multi-level partitioned tables
 CREATE TABLE alpha (a double precision, b int, c text) PARTITION BY RANGE (a);
 CREATE TABLE alpha_neg PARTITION OF alpha FOR VALUES FROM ('-Infinity') TO (0) PARTITION BY RANGE (b);

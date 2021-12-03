@@ -1612,6 +1612,13 @@ lazy_scan_heap(LVRelState *vacrel, VacuumParams *params, bool aggressive)
 		update_index_statistics(vacrel);
 
 	/*
+	 * Skip log report processing if the log output is going to be
+	 * suppressed anyway due to the log level.
+	 */
+	if (!message_level_is_interesting(elevel))
+		return;
+
+	/*
 	 * When the table has no indexes (i.e. in the one-pass strategy case),
 	 * make log report that lazy_vacuum_heap_rel would've made had there been
 	 * indexes.  (As in the two-pass strategy case, only make this report when

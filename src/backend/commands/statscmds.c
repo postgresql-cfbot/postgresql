@@ -45,6 +45,7 @@
 static char *ChooseExtendedStatisticName(const char *name1, const char *name2,
 										 const char *label, Oid namespaceid);
 static char *ChooseExtendedStatisticNameAddition(List *exprs);
+static void RemoveStatisticsByIdWorker(Relation pg_statistic_ext, Oid statsOid, bool inh);
 
 
 /* qsort comparator for the attnums in CreateStatistics */
@@ -524,6 +525,10 @@ CreateStatistics(CreateStatsStmt *stmt)
 
 	datavalues[Anum_pg_statistic_ext_data_stxoid - 1] = ObjectIdGetDatum(statoid);
 
+	/* create "stxdinherit=false", because that always exists, except for
+	 * partitioned tables, for which that's meaningless */
+	datavalues[Anum_pg_statistic_ext_data_stxdinherit - 1] = BoolGetDatum(rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE);
+
 	/* no statistics built yet */
 	datanulls[Anum_pg_statistic_ext_data_stxdndistinct - 1] = true;
 	datanulls[Anum_pg_statistic_ext_data_stxddependencies - 1] = true;
@@ -726,23 +731,7 @@ RemoveStatisticsById(Oid statsOid)
 	HeapTuple	tup;
 	Form_pg_statistic_ext statext;
 	Oid			relid;
-
-	/*
-	 * First delete the pg_statistic_ext_data tuple holding the actual
-	 * statistical data.
-	 */
-	relation = table_open(StatisticExtDataRelationId, RowExclusiveLock);
-
-	tup = SearchSysCache1(STATEXTDATASTXOID, ObjectIdGetDatum(statsOid));
-
-	if (!HeapTupleIsValid(tup)) /* should not happen */
-		elog(ERROR, "cache lookup failed for statistics data %u", statsOid);
-
-	CatalogTupleDelete(relation, &tup->t_self);
-
-	ReleaseSysCache(tup);
-
-	table_close(relation, RowExclusiveLock);
+	char relkind;
 
 	/*
 	 * Delete the pg_statistic_ext tuple.  Also send out a cache inval on the
@@ -757,6 +746,7 @@ RemoveStatisticsById(Oid statsOid)
 
 	statext = (Form_pg_statistic_ext) GETSTRUCT(tup);
 	relid = statext->stxrelid;
+	relkind = get_rel_relkind(relid);
 
 	CacheInvalidateRelcacheByRelid(relid);
 
@@ -765,6 +755,37 @@ RemoveStatisticsById(Oid statsOid)
 	ReleaseSysCache(tup);
 
 	table_close(relation, RowExclusiveLock);
+
+	/*
+	 * Delete the pg_statistic_ext_data tuples holding the actual
+	 * statistical data.
+	 */
+	relation = table_open(StatisticExtDataRelationId, RowExclusiveLock);
+
+	if (relkind != RELKIND_PARTITIONED_TABLE)
+		RemoveStatisticsByIdWorker(relation, statsOid, false);
+	RemoveStatisticsByIdWorker(relation, statsOid, true);
+
+	table_close(relation, RowExclusiveLock);
+}
+
+void
+RemoveStatisticsByIdWorker(Relation pg_statistic_ext, Oid statsOid, bool inh)
+{
+	HeapTuple	tup;
+	tup = SearchSysCache2(STATEXTDATASTXOID, ObjectIdGetDatum(statsOid),
+						  BoolGetDatum(inh));
+
+	/* should not happen,  .. */
+	if (!HeapTupleIsValid(tup))
+	{
+		if (!inh)
+			elog(ERROR, "cache lookup failed for statistics data %u inh %d", statsOid, inh);
+		return;
+	}
+
+	CatalogTupleDelete(pg_statistic_ext, &tup->t_self);
+	ReleaseSysCache(tup);
 }
 
 /*

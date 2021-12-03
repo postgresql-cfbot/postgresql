@@ -19,7 +19,7 @@ OBJS = \
 	launcher.o \
 	logical.o \
 	logicalfuncs.o \
-	message.o \
+	logical_xlog.o \
 	origin.o \
 	proto.o \
 	relation.o \

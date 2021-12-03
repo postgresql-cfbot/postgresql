@@ -28,7 +28,7 @@
 #include "nodes/makefuncs.h"
 #include "replication/decode.h"
 #include "replication/logical.h"
-#include "replication/message.h"
+#include "replication/logical_xlog.h"
 #include "storage/fd.h"
 #include "utils/array.h"
 #include "utils/builtins.h"

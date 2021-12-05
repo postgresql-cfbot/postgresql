@@ -1859,6 +1859,7 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 										returningLists,
 										rowMarks,
 										parse->onConflict,
+										parse->forPortionOf,
 										assign_special_exec_param(root));
 		}
 

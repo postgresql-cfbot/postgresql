@@ -841,6 +841,24 @@ _equalOnConflictExpr(const OnConflictExpr *a, const OnConflictExpr *b)
 	return true;
 }
 
+static bool
+_equalForPortionOfExpr(const ForPortionOfExpr *a, const ForPortionOfExpr *b)
+{
+	COMPARE_SCALAR_FIELD(range_attno);
+	COMPARE_STRING_FIELD(range_name);
+	COMPARE_NODE_FIELD(range);
+	COMPARE_NODE_FIELD(startCol);
+	COMPARE_NODE_FIELD(endCol);
+	COMPARE_NODE_FIELD(targetStart);
+	COMPARE_NODE_FIELD(targetEnd);
+	COMPARE_NODE_FIELD(targetRange);
+	COMPARE_SCALAR_FIELD(rangeType);
+	COMPARE_NODE_FIELD(overlapsExpr);
+	COMPARE_NODE_FIELD(rangeSet);
+
+	return true;
+}
+
 /*
  * Stuff from pathnodes.h
  */
@@ -1391,6 +1409,7 @@ _equalIndexStmt(const IndexStmt *a, const IndexStmt *b)
 	COMPARE_STRING_FIELD(tableSpace);
 	COMPARE_NODE_FIELD(indexParams);
 	COMPARE_NODE_FIELD(indexIncludingParams);
+	COMPARE_NODE_FIELD(period);
 	COMPARE_NODE_FIELD(options);
 	COMPARE_NODE_FIELD(whereClause);
 	COMPARE_NODE_FIELD(excludeOpNames);
@@ -2734,6 +2753,19 @@ _equalConstraint(const Constraint *a, const Constraint *b)
 }
 
 static bool
+_equalPeriod(const Period *a, const Period *b)
+{
+	COMPARE_STRING_FIELD(periodname);
+	COMPARE_STRING_FIELD(startcolname);
+	COMPARE_STRING_FIELD(endcolname);
+	COMPARE_NODE_FIELD(options);
+	COMPARE_SCALAR_FIELD(rngtypid);
+	COMPARE_LOCATION_FIELD(location);
+
+	return true;
+}
+
+static bool
 _equalDefElem(const DefElem *a, const DefElem *b)
 {
 	COMPARE_STRING_FIELD(defnamespace);
@@ -2946,6 +2978,17 @@ _equalCTECycleClause(const CTECycleClause *a, const CTECycleClause *b)
 	COMPARE_SCALAR_FIELD(cycle_mark_typmod);
 	COMPARE_SCALAR_FIELD(cycle_mark_collation);
 	COMPARE_SCALAR_FIELD(cycle_mark_neop);
+
+	return true;
+}
+
+static bool
+_equalForPortionOfClause(const ForPortionOfClause *a, const ForPortionOfClause *b)
+{
+	COMPARE_STRING_FIELD(range_name);
+	COMPARE_SCALAR_FIELD(range_name_location);
+	COMPARE_NODE_FIELD(target_start);
+	COMPARE_NODE_FIELD(target_end);
 
 	return true;
 }
@@ -3334,6 +3377,9 @@ equal(const void *a, const void *b)
 			break;
 		case T_OnConflictExpr:
 			retval = _equalOnConflictExpr(a, b);
+			break;
+		case T_ForPortionOfExpr:
+			retval = _equalForPortionOfExpr(a, b);
 			break;
 		case T_JoinExpr:
 			retval = _equalJoinExpr(a, b);
@@ -3828,6 +3874,9 @@ equal(const void *a, const void *b)
 		case T_Constraint:
 			retval = _equalConstraint(a, b);
 			break;
+		case T_Period:
+			retval = _equalPeriod(a, b);
+			break;
 		case T_DefElem:
 			retval = _equalDefElem(a, b);
 			break;
@@ -3872,6 +3921,9 @@ equal(const void *a, const void *b)
 			break;
 		case T_CTECycleClause:
 			retval = _equalCTECycleClause(a, b);
+			break;
+		case T_ForPortionOfClause:
+			retval = _equalForPortionOfClause(a, b);
 			break;
 		case T_CommonTableExpr:
 			retval = _equalCommonTableExpr(a, b);

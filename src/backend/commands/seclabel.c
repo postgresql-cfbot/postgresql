@@ -78,6 +78,7 @@ SecLabelSupportsObjectType(ObjectType objtype)
 		case OBJECT_OPCLASS:
 		case OBJECT_OPERATOR:
 		case OBJECT_OPFAMILY:
+		case OBJECT_PERIOD:
 		case OBJECT_POLICY:
 		case OBJECT_PUBLICATION_NAMESPACE:
 		case OBJECT_PUBLICATION_REL:

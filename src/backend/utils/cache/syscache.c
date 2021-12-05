@@ -48,6 +48,7 @@
 #include "catalog/pg_operator.h"
 #include "catalog/pg_opfamily.h"
 #include "catalog/pg_partitioned_table.h"
+#include "catalog/pg_period.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_publication.h"
 #include "catalog/pg_publication_namespace.h"
@@ -585,6 +586,27 @@ static const struct cachedesc cacheinfo[] = {
 		},
 		32
 	},
+	{PeriodRelationId,		/* PERIODNAME */
+		PeriodRelidNameIndexId,
+		2,
+		{
+			Anum_pg_period_perrelid,
+			Anum_pg_period_pername,
+			0,
+			0
+		},
+		32
+	},
+	{PeriodRelationId,		/* PERIODOID */
+		PeriodObjectIndexId,
+		1,
+		{
+			Anum_pg_period_oid,
+			0,
+			0
+		},
+		32
+	},
 	{ProcedureRelationId,		/* PROCNAMEARGSNSP */
 		ProcedureNameArgsNspIndexId,
 		3,
@@ -684,7 +706,17 @@ static const struct cachedesc cacheinfo[] = {
 		},
 		4
 	},
-
+	{RangeRelationId,           /* RANGESUBTYPE */
+		RangeSubTypidTypidIndexId,
+		2,
+		{
+			Anum_pg_range_rngsubtype,
+			Anum_pg_range_rngtypid,
+			0,
+			0
+		},
+		4
+	},
 	{RangeRelationId,			/* RANGETYPE */
 		RangeTypidIndexId,
 		1,

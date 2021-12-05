@@ -155,6 +155,7 @@ _equalIntoClause(const IntoClause *a, const IntoClause *b)
 	COMPARE_STRING_FIELD(tableSpaceName);
 	COMPARE_NODE_FIELD(viewQuery);
 	COMPARE_SCALAR_FIELD(skipData);
+	COMPARE_SCALAR_FIELD(ivm);
 
 	return true;
 }
@@ -2763,6 +2764,7 @@ _equalRangeTblEntry(const RangeTblEntry *a, const RangeTblEntry *b)
 	COMPARE_SCALAR_FIELD(relkind);
 	COMPARE_SCALAR_FIELD(rellockmode);
 	COMPARE_NODE_FIELD(tablesample);
+	COMPARE_SCALAR_FIELD(relisivm);
 	COMPARE_NODE_FIELD(subquery);
 	COMPARE_SCALAR_FIELD(security_barrier);
 	COMPARE_SCALAR_FIELD(jointype);

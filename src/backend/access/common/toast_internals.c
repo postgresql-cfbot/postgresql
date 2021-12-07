@@ -361,8 +361,8 @@ toast_save_datum(Relation rel, Datum value,
 	/*
 	 * Done - close toast relation and its indexes
 	 */
-	toast_close_indexes(toastidxs, num_indexes, RowExclusiveLock);
-	table_close(toastrel, RowExclusiveLock);
+	toast_close_indexes(toastidxs, num_indexes, NoLock);
+	table_close(toastrel, NoLock);
 
 	/*
 	 * Create the TOAST pointer value that we'll return
@@ -442,8 +442,8 @@ toast_delete_datum(Relation rel, Datum value, bool is_speculative)
 	 * End scan and close relations
 	 */
 	systable_endscan_ordered(toastscan);
-	toast_close_indexes(toastidxs, num_indexes, RowExclusiveLock);
-	table_close(toastrel, RowExclusiveLock);
+	toast_close_indexes(toastidxs, num_indexes, NoLock);
+	table_close(toastrel, NoLock);
 }
 
 /* ----------

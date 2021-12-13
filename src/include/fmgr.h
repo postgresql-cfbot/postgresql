@@ -748,6 +748,7 @@ extern void **find_rendezvous_variable(const char *varName);
 extern Size EstimateLibraryStateSpace(void);
 extern void SerializeLibraryState(Size maxsize, char *start_address);
 extern void RestoreLibraryState(char *start_address);
+char *expand_dynamic_library_name(const char *name);
 
 /*
  * Support for aggregate functions

@@ -4660,6 +4660,12 @@ AlterSystemSetConfigFile(AlterSystemStmt *altersysstmt)
 				union config_var_val newval;
 				void	   *newextra = NULL;
 
+				/*
+				 * PGC_S_FILE is used even though we should use PGC_S_TEST,
+				 * since various GUC validation functions use TEST to give a
+				 * NOTICE rather than an ERROR, and we don't want to allow
+				 * setting values that would always return an error later.
+				 */
 				if (!parse_and_validate_value(record, name, value,
 											  PGC_S_FILE, ERROR,
 											  &newval, &newextra))

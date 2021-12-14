@@ -1715,7 +1715,7 @@ WALInsertLockAcquire(void)
 	static int	lockToTry = -1;
 
 	if (lockToTry == -1)
-		lockToTry = MyProc->pgprocno % NUM_XLOGINSERT_LOCKS;
+		lockToTry = GetPGProcNumber(MyProc) % NUM_XLOGINSERT_LOCKS;
 	MyLockNo = lockToTry;
 
 	/*
@@ -7518,9 +7518,6 @@ StartupXLOG(void)
 
 		/* Also ensure XLogReceiptTime has a sane value */
 		XLogReceiptTime = GetCurrentTimestamp();
-
-		/* Allow ProcSendSignal() to find us, for buffer pin wakeups. */
-		PublishStartupProcessInformation();
 
 		/*
 		 * Let postmaster know we've started redo now, so that it can launch

@@ -1080,9 +1080,9 @@ LWLockQueueSelf(LWLock *lock, LWLockMode mode)
 
 	/* LW_WAIT_UNTIL_FREE waiters are always at the front of the queue */
 	if (mode == LW_WAIT_UNTIL_FREE)
-		proclist_push_head(&lock->waiters, MyProc->pgprocno, lwWaitLink);
+		proclist_push_head(&lock->waiters, GetPGProcNumber(MyProc), lwWaitLink);
 	else
-		proclist_push_tail(&lock->waiters, MyProc->pgprocno, lwWaitLink);
+		proclist_push_tail(&lock->waiters, GetPGProcNumber(MyProc), lwWaitLink);
 
 	/* Can release the mutex now */
 	LWLockWaitListUnlock(lock);
@@ -1122,7 +1122,7 @@ LWLockDequeueSelf(LWLock *lock)
 	 */
 	proclist_foreach_modify(iter, &lock->waiters, lwWaitLink)
 	{
-		if (iter.cur == MyProc->pgprocno)
+		if (iter.cur == GetPGProcNumber(MyProc))
 		{
 			found = true;
 			proclist_delete(&lock->waiters, iter.cur, lwWaitLink);

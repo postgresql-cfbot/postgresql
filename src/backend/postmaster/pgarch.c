@@ -229,7 +229,7 @@ PgArchiverMain(void)
 	 * Advertise our pgprocno so that backends can use our latch to wake us up
 	 * while we're sleeping.
 	 */
-	PgArch->pgprocno = MyProc->pgprocno;
+	PgArch->pgprocno = GetPGProcNumber(MyProc);
 
 	/* Initialize our max-heap for prioritizing files to archive. */
 	arch_heap = binaryheap_allocate(NUM_FILES_PER_DIRECTORY_SCAN,

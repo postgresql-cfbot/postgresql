@@ -207,6 +207,7 @@
 #include "storage/predicate_internals.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
+#include "storage/sinvaladt.h"
 #include "utils/rel.h"
 #include "utils/snapmgr.h"
 
@@ -3669,7 +3670,12 @@ ReleasePredicateLocks(bool isCommit, bool isReadOnlySafe)
 			 */
 			if (SxactIsDeferrableWaiting(roXact) &&
 				(SxactIsROUnsafe(roXact) || SxactIsROSafe(roXact)))
-				ProcSendSignal(roXact->pid);
+			{
+				PGPROC	   *proc;
+
+				proc = BackendIdGetProc(roXact->vxid.backendId);
+				ProcSendSignal(GetPGProcNumber(proc));
+			}
 
 			possibleUnsafeConflict = nextConflict;
 		}

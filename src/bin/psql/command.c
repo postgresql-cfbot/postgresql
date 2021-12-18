@@ -380,6 +380,7 @@ exec_command(const char *cmd,
 	else if (strcmp(cmd, "if") == 0)
 		status = exec_command_if(scan_state, cstack, query_buf);
 	else if (strcmp(cmd, "l") == 0 || strcmp(cmd, "list") == 0 ||
+			 strcmp(cmd, "l++") == 0 || strcmp(cmd, "list++") == 0 ||
 			 strcmp(cmd, "l+") == 0 || strcmp(cmd, "list+") == 0)
 		status = exec_command_list(scan_state, active_branch, cmd);
 	else if (strncmp(cmd, "lo_", 3) == 0)
@@ -851,6 +852,7 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 	if (active_branch)
 	{
 		char	   *pattern;
+		int			verbose = 0;
 		bool		show_verbose,
 					show_system;
 
@@ -858,7 +860,10 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 		pattern = psql_scan_slash_option(scan_state,
 										 OT_NORMAL, NULL, true);
 
-		show_verbose = strchr(cmd, '+') ? true : false;
+		for (const char *t = cmd; *t != '\0'; ++t)
+			verbose += *t == '+' ? 1 : 0;
+
+		show_verbose = (bool) (verbose != 0);
 		show_system = strchr(cmd, 'S') ? true : false;
 
 		switch (cmd[1])
@@ -883,7 +888,7 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 					{
 						case '\0':
 						case '+':
-							success = describeAccessMethods(pattern, show_verbose);
+							success = describeAccessMethods(pattern, verbose);
 							break;
 						case 'c':
 							success = listOperatorClasses(pattern, pattern2, show_verbose);
@@ -909,7 +914,7 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 				success = describeAggregates(pattern, show_verbose, show_system);
 				break;
 			case 'b':
-				success = describeTablespaces(pattern, show_verbose);
+				success = describeTablespaces(pattern, verbose);
 				break;
 			case 'c':
 				if (strncmp(cmd, "dconfig", 7) == 0)
@@ -963,7 +968,7 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 				success = listLanguages(pattern, show_verbose, show_system);
 				break;
 			case 'n':
-				success = listSchemas(pattern, show_verbose, show_system);
+				success = listSchemas(pattern, verbose, show_system);
 				break;
 			case 'o':
 				success = exec_command_dfo(scan_state, cmd, pattern,
@@ -2046,14 +2051,15 @@ exec_command_list(PsqlScanState scan_state, bool active_branch, const char *cmd)
 	if (active_branch)
 	{
 		char	   *pattern;
-		bool		show_verbose;
+		int			verbose = 0;
 
 		pattern = psql_scan_slash_option(scan_state,
 										 OT_NORMAL, NULL, true);
 
-		show_verbose = strchr(cmd, '+') ? true : false;
+		for (const char *t = cmd; *t != '\0'; ++t)
+			verbose += *t == '+' ? 1 : 0;
 
-		success = listAllDbs(pattern, show_verbose);
+		success = listAllDbs(pattern, verbose);
 
 		free(pattern);
 	}

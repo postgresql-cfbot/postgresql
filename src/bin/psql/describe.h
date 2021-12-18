@@ -13,10 +13,10 @@
 extern bool describeAggregates(const char *pattern, bool verbose, bool showSystem);
 
 /* \dA */
-extern bool describeAccessMethods(const char *pattern, bool verbose);
+extern bool describeAccessMethods(const char *pattern, int verbose);
 
 /* \db */
-extern bool describeTablespaces(const char *pattern, bool verbose);
+extern bool describeTablespaces(const char *pattern, int verbose);
 
 /* \df, \dfa, \dfn, \dft, \dfw, etc. */
 extern bool describeFunctions(const char *functypes, const char *func_pattern,
@@ -65,7 +65,7 @@ extern bool listTSDictionaries(const char *pattern, bool verbose);
 extern bool listTSTemplates(const char *pattern, bool verbose);
 
 /* \l */
-extern bool listAllDbs(const char *pattern, bool verbose);
+extern bool listAllDbs(const char *pattern, int verbose);
 
 /* \dt, \di, \ds, \dS, etc. */
 extern bool listTables(const char *tabtypes, const char *pattern, bool verbose, bool showSystem);
@@ -90,7 +90,7 @@ extern bool listCasts(const char *pattern, bool verbose);
 extern bool listCollations(const char *pattern, bool verbose, bool showSystem);
 
 /* \dn */
-extern bool listSchemas(const char *pattern, bool verbose, bool showSystem);
+extern bool listSchemas(const char *pattern, int verbose, bool showSystem);
 
 /* \dew */
 extern bool listForeignDataWrappers(const char *pattern, bool verbose);

@@ -317,7 +317,6 @@ SET foo = false;  -- no such setting
 
 -- test setting a parameter with a registered prefix (plpgsql)
 SET plpgsql.extra_foo_warnings = false;  -- no such setting
-SHOW plpgsql.extra_foo_warnings;  -- but the parameter is set
 
 -- cleanup
 RESET foo;

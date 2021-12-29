@@ -9901,6 +9901,24 @@ show_config_by_name_missing_ok(PG_FUNCTION_ARGS)
 }
 
 /*
+ * Return the flags for the specified GUC, or NULL if it doesn't exist.
+ */
+Datum
+pg_get_guc_flags(PG_FUNCTION_ARGS)
+{
+	char *varname = TextDatumGetCString(PG_GETARG_DATUM(0));
+	struct config_generic *record;
+
+	record = find_option(varname, false, true, ERROR);
+
+	/* return NULL if no such variable */
+	if (record == NULL)
+		PG_RETURN_NULL();
+
+	PG_RETURN_INT32(record->flags);
+}
+
+/*
  * show_all_settings - equiv to SHOW ALL command but implemented as
  * a Table Function.
  */

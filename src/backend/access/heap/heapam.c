@@ -4751,7 +4751,7 @@ failed:
 	{
 		Assert(result == TM_SelfModified || result == TM_Updated ||
 			   result == TM_Deleted || result == TM_WouldBlock);
-		Assert(!(tuple->t_data->t_infomask & HEAP_XMAX_INVALID));
+		Assert(TM_WouldBlock || !(tuple->t_data->t_infomask & HEAP_XMAX_INVALID));
 		Assert(result != TM_Updated ||
 			   !ItemPointerEquals(&tuple->t_self, &tuple->t_data->t_ctid));
 		tmfd->ctid = tuple->t_data->t_ctid;

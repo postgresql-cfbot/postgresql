@@ -1,561 +1,1541 @@
 Parsed test spec with 2 sessions
 
-starting permutation: s1a s1b s1c s2a s2b s2c
-step s1a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+starting permutation: s1dc s1f s1u s1c s2dc s2f s2u s2c
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
 id|data|status
 --+----+------
  1|foo |NEW   
 (1 row)
 
-step s1b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2c: COMMIT;
+
+starting permutation: s1dc s1f s1u s2dc s1c s2f s2u s2c
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1c: COMMIT;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2c: COMMIT;
+
+starting permutation: s1dc s1f s1u s2dc s2f s1c s2u s2c
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
 id|data|status
 --+----+------
  1|foo |NEW   
 (1 row)
 
 step s1c: COMMIT;
-step s2a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 1|foo |NEW   
-(1 row)
-
-step s2b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 1|foo |NEW   
-(1 row)
-
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
 step s2c: COMMIT;
 
-starting permutation: s1a s1b s2a s1c s2b s2c
-step s1a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+starting permutation: s1dc s1f s1u s2dc s2f s2u s1c s2c
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
 id|data|status
 --+----+------
  1|foo |NEW   
 (1 row)
 
-step s1b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
 id|data|status
 --+----+------
  1|foo |NEW   
 (1 row)
 
-step s2a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 2|bar |NEW   
-(1 row)
-
-step s1c: COMMIT;
-step s2b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 1|foo |NEW   
-(1 row)
-
-step s2c: COMMIT;
-
-starting permutation: s1a s1b s2a s2b s1c s2c
-step s1a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 1|foo |NEW   
-(1 row)
-
-step s1b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 1|foo |NEW   
-(1 row)
-
-step s2a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 2|bar |NEW   
-(1 row)
-
-step s2b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 2|bar |NEW   
-(1 row)
-
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
 step s1c: COMMIT;
 step s2c: COMMIT;
 
-starting permutation: s1a s1b s2a s2b s2c s1c
-step s1a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+starting permutation: s1dc s1f s1u s2dc s2f s2u s2c s1c
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
 id|data|status
 --+----+------
  1|foo |NEW   
 (1 row)
 
-step s1b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
 id|data|status
 --+----+------
  1|foo |NEW   
 (1 row)
 
-step s2a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 2|bar |NEW   
-(1 row)
-
-step s2b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 2|bar |NEW   
-(1 row)
-
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
 step s2c: COMMIT;
 step s1c: COMMIT;
 
-starting permutation: s1a s2a s1b s1c s2b s2c
-step s1a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+starting permutation: s1dc s1f s2dc s1u s1c s2f s2u s2c
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
 id|data|status
 --+----+------
  1|foo |NEW   
 (1 row)
 
-step s2a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+step s2f: FETCH curs;
 id|data|status
 --+----+------
- 2|bar |NEW   
+ 1|foo |NEW   
 (1 row)
 
-step s1b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2c: COMMIT;
+
+starting permutation: s1dc s1f s2dc s1u s2f s1c s2u s2c
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2f: FETCH curs;
 id|data|status
 --+----+------
  1|foo |NEW   
 (1 row)
 
 step s1c: COMMIT;
-step s2b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 1|foo |NEW   
-(1 row)
-
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
 step s2c: COMMIT;
 
-starting permutation: s1a s2a s1b s2b s1c s2c
-step s1a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+starting permutation: s1dc s1f s2dc s1u s2f s2u s1c s2c
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
 id|data|status
 --+----+------
  1|foo |NEW   
 (1 row)
 
-step s2a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 2|bar |NEW   
-(1 row)
-
-step s1b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2f: FETCH curs;
 id|data|status
 --+----+------
  1|foo |NEW   
 (1 row)
 
-step s2b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 2|bar |NEW   
-(1 row)
-
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
 step s1c: COMMIT;
 step s2c: COMMIT;
 
-starting permutation: s1a s2a s1b s2b s2c s1c
-step s1a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+starting permutation: s1dc s1f s2dc s1u s2f s2u s2c s1c
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
 id|data|status
 --+----+------
  1|foo |NEW   
 (1 row)
 
-step s2a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 2|bar |NEW   
-(1 row)
-
-step s1b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2f: FETCH curs;
 id|data|status
 --+----+------
  1|foo |NEW   
 (1 row)
 
-step s2b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 2|bar |NEW   
-(1 row)
-
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
 step s2c: COMMIT;
 step s1c: COMMIT;
 
-starting permutation: s1a s2a s2b s1b s1c s2c
-step s1a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+starting permutation: s1dc s1f s2dc s2f s1u s1c s2u s2c
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
 id|data|status
 --+----+------
  1|foo |NEW   
 (1 row)
 
-step s2a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
 id|data|status
 --+----+------
  2|bar |NEW   
 (1 row)
 
-step s2b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 2|bar |NEW   
-(1 row)
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2c: COMMIT;
 
-step s1b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+starting permutation: s1dc s1f s2dc s2f s1u s2u s1c s2c
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
 id|data|status
 --+----+------
  1|foo |NEW   
 (1 row)
 
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 2|bar |NEW   
+(1 row)
+
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
 step s1c: COMMIT;
 step s2c: COMMIT;
 
-starting permutation: s1a s2a s2b s1b s2c s1c
-step s1a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+starting permutation: s1dc s1f s2dc s2f s1u s2u s2c s1c
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
 id|data|status
 --+----+------
  1|foo |NEW   
 (1 row)
 
-step s2a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
 id|data|status
 --+----+------
  2|bar |NEW   
 (1 row)
 
-step s2b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 2|bar |NEW   
-(1 row)
-
-step s1b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 1|foo |NEW   
-(1 row)
-
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
 step s2c: COMMIT;
 step s1c: COMMIT;
 
-starting permutation: s1a s2a s2b s2c s1b s1c
-step s1a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+starting permutation: s1dc s1f s2dc s2f s2u s1u s1c s2c
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
 id|data|status
 --+----+------
  1|foo |NEW   
 (1 row)
 
-step s2a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
 id|data|status
 --+----+------
  2|bar |NEW   
 (1 row)
 
-step s2b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 2|bar |NEW   
-(1 row)
-
-step s2c: COMMIT;
-step s1b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 1|foo |NEW   
-(1 row)
-
-step s1c: COMMIT;
-
-starting permutation: s2a s1a s1b s1c s2b s2c
-step s2a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 1|foo |NEW   
-(1 row)
-
-step s1a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 2|bar |NEW   
-(1 row)
-
-step s1b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 2|bar |NEW   
-(1 row)
-
-step s1c: COMMIT;
-step s2b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 1|foo |NEW   
-(1 row)
-
-step s2c: COMMIT;
-
-starting permutation: s2a s1a s1b s2b s1c s2c
-step s2a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 1|foo |NEW   
-(1 row)
-
-step s1a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 2|bar |NEW   
-(1 row)
-
-step s1b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 2|bar |NEW   
-(1 row)
-
-step s2b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 1|foo |NEW   
-(1 row)
-
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
 step s1c: COMMIT;
 step s2c: COMMIT;
 
-starting permutation: s2a s1a s1b s2b s2c s1c
-step s2a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+starting permutation: s1dc s1f s2dc s2f s2u s1u s2c s1c
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
 id|data|status
 --+----+------
  1|foo |NEW   
 (1 row)
 
-step s1a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
 id|data|status
 --+----+------
  2|bar |NEW   
 (1 row)
 
-step s1b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 2|bar |NEW   
-(1 row)
-
-step s2b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 1|foo |NEW   
-(1 row)
-
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
 step s2c: COMMIT;
 step s1c: COMMIT;
 
-starting permutation: s2a s1a s2b s1b s1c s2c
-step s2a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+starting permutation: s1dc s1f s2dc s2f s2u s2c s1u s1c
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
 id|data|status
 --+----+------
  1|foo |NEW   
 (1 row)
 
-step s1a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
 id|data|status
 --+----+------
  2|bar |NEW   
 (1 row)
 
-step s2b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 1|foo |NEW   
-(1 row)
-
-step s1b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 2|bar |NEW   
-(1 row)
-
-step s1c: COMMIT;
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
 step s2c: COMMIT;
-
-starting permutation: s2a s1a s2b s1b s2c s1c
-step s2a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 1|foo |NEW   
-(1 row)
-
-step s1a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 2|bar |NEW   
-(1 row)
-
-step s2b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 1|foo |NEW   
-(1 row)
-
-step s1b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 2|bar |NEW   
-(1 row)
-
-step s2c: COMMIT;
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
 step s1c: COMMIT;
 
-starting permutation: s2a s1a s2b s2c s1b s1c
-step s2a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+starting permutation: s1dc s2dc s1f s1u s1c s2f s2u s2c
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
 id|data|status
 --+----+------
  1|foo |NEW   
 (1 row)
 
-step s1a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 2|bar |NEW   
-(1 row)
-
-step s2b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+step s2f: FETCH curs;
 id|data|status
 --+----+------
  1|foo |NEW   
 (1 row)
 
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
 step s2c: COMMIT;
-step s1b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+
+starting permutation: s1dc s2dc s1f s1u s2f s1c s2u s2c
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2f: FETCH curs;
 id|data|status
 --+----+------
  1|foo |NEW   
 (1 row)
 
 step s1c: COMMIT;
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2c: COMMIT;
 
-starting permutation: s2a s2b s1a s1b s1c s2c
-step s2a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+starting permutation: s1dc s2dc s1f s1u s2f s2u s1c s2c
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
 id|data|status
 --+----+------
  1|foo |NEW   
 (1 row)
 
-step s2b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2f: FETCH curs;
 id|data|status
 --+----+------
  1|foo |NEW   
 (1 row)
 
-step s1a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 2|bar |NEW   
-(1 row)
-
-step s1b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 2|bar |NEW   
-(1 row)
-
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
 step s1c: COMMIT;
 step s2c: COMMIT;
 
-starting permutation: s2a s2b s1a s1b s2c s1c
-step s2a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+starting permutation: s1dc s2dc s1f s1u s2f s2u s2c s1c
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
 id|data|status
 --+----+------
  1|foo |NEW   
 (1 row)
 
-step s2b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2f: FETCH curs;
 id|data|status
 --+----+------
  1|foo |NEW   
 (1 row)
 
-step s1a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 2|bar |NEW   
-(1 row)
-
-step s1b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 2|bar |NEW   
-(1 row)
-
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
 step s2c: COMMIT;
 step s1c: COMMIT;
 
-starting permutation: s2a s2b s1a s2c s1b s1c
-step s2a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+starting permutation: s1dc s2dc s1f s2f s1u s1c s2u s2c
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
 id|data|status
 --+----+------
  1|foo |NEW   
 (1 row)
 
-step s2b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
-id|data|status
---+----+------
- 1|foo |NEW   
-(1 row)
-
-step s1a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+step s2f: FETCH curs;
 id|data|status
 --+----+------
  2|bar |NEW   
 (1 row)
 
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
 step s2c: COMMIT;
-step s1b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+
+starting permutation: s1dc s2dc s1f s2f s1u s2u s1c s2c
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 2|bar |NEW   
+(1 row)
+
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1dc s2dc s1f s2f s1u s2u s2c s1c
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 2|bar |NEW   
+(1 row)
+
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2c: COMMIT;
+step s1c: COMMIT;
+
+starting permutation: s1dc s2dc s1f s2f s2u s1u s1c s2c
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 2|bar |NEW   
+(1 row)
+
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1dc s2dc s1f s2f s2u s1u s2c s1c
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 2|bar |NEW   
+(1 row)
+
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2c: COMMIT;
+step s1c: COMMIT;
+
+starting permutation: s1dc s2dc s1f s2f s2u s2c s1u s1c
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 2|bar |NEW   
+(1 row)
+
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2c: COMMIT;
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+
+starting permutation: s1dc s2dc s2f s1f s1u s1c s2u s2c
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 2|bar |NEW   
+(1 row)
+
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2c: COMMIT;
+
+starting permutation: s1dc s2dc s2f s1f s1u s2u s1c s2c
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 2|bar |NEW   
+(1 row)
+
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1dc s2dc s2f s1f s1u s2u s2c s1c
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 2|bar |NEW   
+(1 row)
+
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2c: COMMIT;
+step s1c: COMMIT;
+
+starting permutation: s1dc s2dc s2f s1f s2u s1u s1c s2c
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 2|bar |NEW   
+(1 row)
+
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1dc s2dc s2f s1f s2u s1u s2c s1c
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 2|bar |NEW   
+(1 row)
+
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2c: COMMIT;
+step s1c: COMMIT;
+
+starting permutation: s1dc s2dc s2f s1f s2u s2c s1u s1c
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 2|bar |NEW   
+(1 row)
+
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2c: COMMIT;
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+
+starting permutation: s1dc s2dc s2f s2u s1f s1u s1c s2c
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s1dc s2dc s2f s2u s1f s1u s2c s1c
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2c: COMMIT;
+step s1c: COMMIT;
+
+starting permutation: s1dc s2dc s2f s2u s1f s2c s1u s1c
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s2c: COMMIT;
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+
+starting permutation: s1dc s2dc s2f s2u s2c s1f s1u s1c
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2c: COMMIT;
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+
+starting permutation: s2dc s1dc s1f s1u s1c s2f s2u s2c
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2c: COMMIT;
+
+starting permutation: s2dc s1dc s1f s1u s2f s1c s2u s2c
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2f: FETCH curs;
 id|data|status
 --+----+------
  1|foo |NEW   
 (1 row)
 
 step s1c: COMMIT;
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2c: COMMIT;
 
-starting permutation: s2a s2b s2c s1a s1b s1c
-step s2a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+starting permutation: s2dc s1dc s1f s1u s2f s2u s1c s2c
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
 id|data|status
 --+----+------
  1|foo |NEW   
 (1 row)
 
-step s2b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s2dc s1dc s1f s1u s2f s2u s2c s1c
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2c: COMMIT;
+step s1c: COMMIT;
+
+starting permutation: s2dc s1dc s1f s2f s1u s1c s2u s2c
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 2|bar |NEW   
+(1 row)
+
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2c: COMMIT;
+
+starting permutation: s2dc s1dc s1f s2f s1u s2u s1c s2c
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 2|bar |NEW   
+(1 row)
+
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s2dc s1dc s1f s2f s1u s2u s2c s1c
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 2|bar |NEW   
+(1 row)
+
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2c: COMMIT;
+step s1c: COMMIT;
+
+starting permutation: s2dc s1dc s1f s2f s2u s1u s1c s2c
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 2|bar |NEW   
+(1 row)
+
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s2dc s1dc s1f s2f s2u s1u s2c s1c
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 2|bar |NEW   
+(1 row)
+
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2c: COMMIT;
+step s1c: COMMIT;
+
+starting permutation: s2dc s1dc s1f s2f s2u s2c s1u s1c
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 2|bar |NEW   
+(1 row)
+
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2c: COMMIT;
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+
+starting permutation: s2dc s1dc s2f s1f s1u s1c s2u s2c
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 2|bar |NEW   
+(1 row)
+
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2c: COMMIT;
+
+starting permutation: s2dc s1dc s2f s1f s1u s2u s1c s2c
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 2|bar |NEW   
+(1 row)
+
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s2dc s1dc s2f s1f s1u s2u s2c s1c
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 2|bar |NEW   
+(1 row)
+
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2c: COMMIT;
+step s1c: COMMIT;
+
+starting permutation: s2dc s1dc s2f s1f s2u s1u s1c s2c
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 2|bar |NEW   
+(1 row)
+
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s2dc s1dc s2f s1f s2u s1u s2c s1c
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 2|bar |NEW   
+(1 row)
+
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2c: COMMIT;
+step s1c: COMMIT;
+
+starting permutation: s2dc s1dc s2f s1f s2u s2c s1u s1c
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 2|bar |NEW   
+(1 row)
+
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2c: COMMIT;
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+
+starting permutation: s2dc s1dc s2f s2u s1f s1u s1c s2c
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s2dc s1dc s2f s2u s1f s1u s2c s1c
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2c: COMMIT;
+step s1c: COMMIT;
+
+starting permutation: s2dc s1dc s2f s2u s1f s2c s1u s1c
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1f: FETCH curs;
 id|data|status
 --+----+------
  1|foo |NEW   
 (1 row)
 
 step s2c: COMMIT;
-step s1a: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+
+starting permutation: s2dc s1dc s2f s2u s2c s1f s1u s1c
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
 id|data|status
 --+----+------
  1|foo |NEW   
 (1 row)
 
-step s1b: SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1;
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2c: COMMIT;
+step s1f: FETCH curs;
 id|data|status
 --+----+------
  1|foo |NEW   
 (1 row)
 
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+
+starting permutation: s2dc s2f s1dc s1f s1u s1c s2u s2c
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 2|bar |NEW   
+(1 row)
+
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2c: COMMIT;
+
+starting permutation: s2dc s2f s1dc s1f s1u s2u s1c s2c
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 2|bar |NEW   
+(1 row)
+
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s2dc s2f s1dc s1f s1u s2u s2c s1c
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 2|bar |NEW   
+(1 row)
+
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2c: COMMIT;
+step s1c: COMMIT;
+
+starting permutation: s2dc s2f s1dc s1f s2u s1u s1c s2c
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 2|bar |NEW   
+(1 row)
+
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s2dc s2f s1dc s1f s2u s1u s2c s1c
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 2|bar |NEW   
+(1 row)
+
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2c: COMMIT;
+step s1c: COMMIT;
+
+starting permutation: s2dc s2f s1dc s1f s2u s2c s1u s1c
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 2|bar |NEW   
+(1 row)
+
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2c: COMMIT;
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+
+starting permutation: s2dc s2f s1dc s2u s1f s1u s1c s2c
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s2dc s2f s1dc s2u s1f s1u s2c s1c
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2c: COMMIT;
+step s1c: COMMIT;
+
+starting permutation: s2dc s2f s1dc s2u s1f s2c s1u s1c
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s2c: COMMIT;
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+
+starting permutation: s2dc s2f s1dc s2u s2c s1f s1u s1c
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2c: COMMIT;
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+
+starting permutation: s2dc s2f s2u s1dc s1f s1u s1c s2c
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+step s2c: COMMIT;
+
+starting permutation: s2dc s2f s2u s1dc s1f s1u s2c s1c
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2c: COMMIT;
+step s1c: COMMIT;
+
+starting permutation: s2dc s2f s2u s1dc s1f s2c s1u s1c
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s2c: COMMIT;
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+
+starting permutation: s2dc s2f s2u s1dc s2c s1f s1u s1c
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2c: COMMIT;
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s1c: COMMIT;
+
+starting permutation: s2dc s2f s2u s2c s1dc s1f s1u s1c
+step s2dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s2f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s2u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
+step s2c: COMMIT;
+step s1dc: DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED;
+step s1f: FETCH curs;
+id|data|status
+--+----+------
+ 1|foo |NEW   
+(1 row)
+
+step s1u: UPDATE queue SET status = status + 1 WHERE CURRENT OF curs;
+ERROR:  operator does not exist: text + integer
 step s1c: COMMIT;

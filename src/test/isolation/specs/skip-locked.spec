@@ -17,12 +17,14 @@ teardown
 
 session s1
 setup		{ BEGIN; }
-step s1a	{ SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1; }
-step s1b	{ SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1; }
+step s1dc	{ DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED; }
+step s1f	{ FETCH curs; }
+step s1u	{ UPDATE queue SET status = status + 1 WHERE CURRENT OF curs; }
 step s1c	{ COMMIT; }
 
 session s2
 setup		{ BEGIN; }
-step s2a	{ SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1; }
-step s2b	{ SELECT * FROM queue ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1; }
+step s2dc	{ DECLARE curs CURSOR FOR SELECT * FROM queue LIMIT 1 FOR UPDATE SKIP LOCKED; }
+step s2f	{ FETCH curs; }
+step s2u	{ UPDATE queue SET status = status + 1 WHERE CURRENT OF curs; }
 step s2c	{ COMMIT; }

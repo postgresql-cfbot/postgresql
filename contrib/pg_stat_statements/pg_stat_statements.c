@@ -1191,9 +1191,8 @@ pgss_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 /*
  * Store some statistics for a statement.
  *
- * If queryId is 0 then this is a utility statement for which we couldn't
- * compute a queryId during parse analysis, and we should compute a suitable
- * queryId internally.
+ * If queryId is 0 then no query fingerprinting source has been enabled, so we
+ * act as if the extension was disabled: silently exit without doing any work.
  *
  * If jstate is not NULL then we're trying to create an entry for which
  * we have no statistics as yet; we just want to record the normalized

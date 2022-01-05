@@ -30,7 +30,6 @@
 #ifndef FRONTEND
 #include "utils/memutils.h"
 #include "utils/resowner.h"
-#include "utils/resowner_private.h"
 #endif
 
 /*
@@ -63,6 +62,27 @@ struct pg_cryptohash_ctx
 #endif
 };
 
+/* ResourceOwner callbacks to hold cryptohash contexts */
+#ifndef FRONTEND
+static void ResOwnerReleaseCryptoHash(Datum res);
+static void ResOwnerPrintCryptoHashLeakWarning(Datum res);
+
+static ResourceOwnerFuncs cryptohash_resowner_funcs =
+{
+	/* relcache references */
+	.name = "OpenSSL cryptohash context",
+	.phase = RESOURCE_RELEASE_BEFORE_LOCKS,
+	.ReleaseResource = ResOwnerReleaseCryptoHash,
+	.PrintLeakWarning = ResOwnerPrintCryptoHashLeakWarning,
+};
+
+/* Convenience wrappers over ResourceOwnerRemember/Forget */
+#define ResourceOwnerRememberCryptoHash(owner, ctx) \
+	ResourceOwnerRemember(owner, PointerGetDatum(ctx), &cryptohash_resowner_funcs)
+#define ResourceOwnerForgetCryptoHash(owner, ctx) \
+	ResourceOwnerForget(owner, PointerGetDatum(ctx), &cryptohash_resowner_funcs)
+#endif
+
 /*
  * pg_cryptohash_create
  *
@@ -80,7 +100,7 @@ pg_cryptohash_create(pg_cryptohash_type type)
 	 * allocation to avoid leaking.
 	 */
 #ifndef FRONTEND
-	ResourceOwnerEnlargeCryptoHash(CurrentResourceOwner);
+	ResourceOwnerEnlarge(CurrentResourceOwner);
 #endif
 
 	ctx = ALLOC(sizeof(pg_cryptohash_ctx));
@@ -109,8 +129,7 @@ pg_cryptohash_create(pg_cryptohash_type type)
 
 #ifndef FRONTEND
 	ctx->resowner = CurrentResourceOwner;
-	ResourceOwnerRememberCryptoHash(CurrentResourceOwner,
-									PointerGetDatum(ctx));
+	ResourceOwnerRememberCryptoHash(CurrentResourceOwner, ctx);
 #endif
 
 	return ctx;
@@ -241,10 +260,28 @@ pg_cryptohash_free(pg_cryptohash_ctx *ctx)
 	EVP_MD_CTX_destroy(ctx->evpctx);
 
 #ifndef FRONTEND
-	ResourceOwnerForgetCryptoHash(ctx->resowner,
-								  PointerGetDatum(ctx));
+	ResourceOwnerForgetCryptoHash(ctx->resowner, ctx);
 #endif
 
 	explicit_bzero(ctx, sizeof(pg_cryptohash_ctx));
 	FREE(ctx);
 }
+
+
+/*
+ * ResourceOwner callbacks
+ */
+#ifndef FRONTEND
+static void
+ResOwnerReleaseCryptoHash(Datum res)
+{
+	pg_cryptohash_free((pg_cryptohash_ctx *) DatumGetPointer(res));
+}
+
+static void
+ResOwnerPrintCryptoHashLeakWarning(Datum res)
+{
+	elog(WARNING, "cryptohash context reference leak: context %p still referenced",
+		 DatumGetPointer(res));
+}
+#endif

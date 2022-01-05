@@ -9159,7 +9159,7 @@ CreateCheckPoint(int flags)
 		{
 			WALInsertLockRelease();
 			END_CRIT_SECTION();
-			ereport(DEBUG1,
+			ereport((log_checkpoints ? LOG : DEBUG1),
 					(errmsg_internal("checkpoint skipped because system is idle")));
 			return;
 		}

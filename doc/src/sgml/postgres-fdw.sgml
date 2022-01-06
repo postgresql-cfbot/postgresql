@@ -456,6 +456,56 @@ OPTIONS (ADD password_required 'false');
   </sect3>
 
   <sect3>
+   <title>Transaction Management Options</title>
+
+   <para>
+    In cases that multiple remote (sub)transactions are opened in a local
+    (sub)transaction, by default <filename>postgres_fdw</filename> commits or
+    aborts those remote (sub)transactions one by one when the local
+    (sub)transaction commits or aborts.
+    This can be optimized with the following options:
+   </para>
+
+   <variablelist>
+
+    <varlistentry>
+     <term><literal>parallel_commit</literal> (<type>boolean</type>)</term>
+     <listitem>
+      <para>
+       This option controls whether <filename>postgres_fdw</filename> commits
+       multiple remote (sub)transactions opened in a local (sub)transaction
+       in parallel when the local (sub)transaction commits.
+       This option can only be specified for foreign servers, not per-table.
+       The default is <literal>false</literal>.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><literal>parallel_abort</literal> (<type>boolean</type>)</term>
+     <listitem>
+      <para>
+       This option controls whether <filename>postgres_fdw</filename> aborts
+       multiple remote (sub)transactions opened in a local (sub)transaction
+       in parallel when the local (sub)transaction aborts.
+       This option can only be specified for foreign servers, not per-table.
+       The default is <literal>false</literal>.
+      </para>
+     </listitem>
+    </varlistentry>
+
+   </variablelist>
+
+   <para>
+    Note that if many remote (sub)transactions are opened on a remote server
+    in a local (sub)transaction, these options might increase the remote
+    server’s load significantly when those remote (sub)transactions are
+    committed or aborted.  So be careful when using these options.
+   </para>
+
+  </sect3>
+
+  <sect3>
    <title>Updatability Options</title>
 
    <para>

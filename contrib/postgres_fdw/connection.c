@@ -58,6 +58,8 @@ typedef struct ConnCacheEntry
 	bool		have_prep_stmt; /* have we prepared any stmts in this xact? */
 	bool		have_error;		/* have any subxacts aborted in this xact? */
 	bool		changing_xact_state;	/* xact state change in process */
+	bool		parallel_commit;	/* do we commit (sub)xacts in parallel? */
+	bool		parallel_abort;	/* do we abort (sub)xacts in parallel? */
 	bool		invalidated;	/* true if reconnect is pending */
 	bool		keep_connections;	/* setting value of keep_connections
 									 * server option */
@@ -79,6 +81,18 @@ static unsigned int prep_stmt_number = 0;
 /* tracks whether any work is needed in callback functions */
 static bool xact_got_connection = false;
 
+/* macro for constructing abort command to be sent */
+#define CONSTRUCT_ABORT_COMMAND(sql, entry, toplevel) \
+	do { \
+		if (toplevel) \
+			snprintf((sql), sizeof(sql), \
+					 "ABORT TRANSACTION"); \
+		else \
+			snprintf((sql), sizeof(sql), \
+					 "ROLLBACK TO SAVEPOINT s%d; RELEASE SAVEPOINT s%d", \
+					 (entry)->xact_depth, (entry)->xact_depth); \
+	} while(0)
+
 /*
  * SQL functions
  */
@@ -92,6 +106,8 @@ static PGconn *connect_pg_server(ForeignServer *server, UserMapping *user);
 static void disconnect_pg_server(ConnCacheEntry *entry);
 static void check_conn_params(const char **keywords, const char **values, UserMapping *user);
 static void configure_remote_session(PGconn *conn);
+static void do_sql_command_begin(PGconn *conn, const char *sql);
+static void do_sql_command_end(PGconn *conn, const char *sql, bool ignore_errors);
 static void begin_remote_xact(ConnCacheEntry *entry);
 static void pgfdw_xact_callback(XactEvent event, void *arg);
 static void pgfdw_subxact_callback(SubXactEvent event,
@@ -100,13 +116,28 @@ static void pgfdw_subxact_callback(SubXactEvent event,
 								   void *arg);
 static void pgfdw_inval_callback(Datum arg, int cacheid, uint32 hashvalue);
 static void pgfdw_reject_incomplete_xact_state_change(ConnCacheEntry *entry);
+static void pgfdw_reset_xact_state(ConnCacheEntry *entry, bool toplevel);
 static bool pgfdw_cancel_query(PGconn *conn);
+static bool pgfdw_cancel_query_begin(PGconn *conn);
+static bool pgfdw_cancel_query_end(PGconn *conn, TimestampTz endtime);
 static bool pgfdw_exec_cleanup_query(PGconn *conn, const char *query,
 									 bool ignore_errors);
+static bool pgfdw_exec_cleanup_query_begin(PGconn *conn, const char *query);
+static bool pgfdw_exec_cleanup_query_end(PGconn *conn, const char *query,
+										 bool ignore_errors,
+										 TimestampTz endtime);
 static bool pgfdw_get_cleanup_result(PGconn *conn, TimestampTz endtime,
 									 PGresult **result, bool *timed_out);
 static void pgfdw_abort_cleanup(ConnCacheEntry *entry, const char *sql,
 								bool toplevel);
+static bool pgfdw_abort_cleanup_begin(ConnCacheEntry *entry, const char *sql,
+									  List **pending_entries,
+									  List **cancel_requested);
+static void pgfdw_finish_pre_commit_cleanup(List *pending_entries);
+static void pgfdw_finish_pre_subcommit_cleanup(List *pending_entries);
+static void pgfdw_finish_abort_cleanup(List *pending_entries,
+									   List *cancel_requested,
+									   bool toplevel);
 static bool UserMappingPasswordRequired(UserMapping *user);
 static bool disconnect_cached_connections(Oid serverid);
 
@@ -318,12 +349,18 @@ make_new_connection(ConnCacheEntry *entry, UserMapping *user)
 	 * By default, all the connections to any foreign servers are kept open.
 	 */
 	entry->keep_connections = true;
+	entry->parallel_commit = false;
+	entry->parallel_abort = false;
 	foreach(lc, server->options)
 	{
 		DefElem    *def = (DefElem *) lfirst(lc);
 
 		if (strcmp(def->defname, "keep_connections") == 0)
 			entry->keep_connections = defGetBoolean(def);
+		if (strcmp(def->defname, "parallel_commit") == 0)
+			entry->parallel_commit = defGetBoolean(def);
+		if (strcmp(def->defname, "parallel_abort") == 0)
+			entry->parallel_abort = defGetBoolean(def);
 	}
 
 	/* Now try to make the connection */
@@ -625,11 +662,41 @@ do_sql_command(PGconn *conn, const char *sql)
 {
 	PGresult   *res;
 
-	if (!PQsendQuery(conn, sql))
-		pgfdw_report_error(ERROR, NULL, conn, false, sql);
+	do_sql_command_begin(conn, sql);
 	res = pgfdw_get_result(conn, sql);
 	if (PQresultStatus(res) != PGRES_COMMAND_OK)
 		pgfdw_report_error(ERROR, res, conn, true, sql);
+	PQclear(res);
+}
+
+static void
+do_sql_command_begin(PGconn *conn, const char *sql)
+{
+	if (!PQsendQuery(conn, sql))
+		pgfdw_report_error(ERROR, NULL, conn, false, sql);
+}
+
+static void
+do_sql_command_end(PGconn *conn, const char *sql, bool ignore_errors)
+{
+	PGresult   *res;
+
+	/*
+	 * Consume whatever data is available from the socket  (Note that if all
+	 * data is available, this allows us to call PQgetResult without forcing
+	 * the overhead of WaitLatchOrSocket in pgfdw_get_result, which would be
+	 * very large compared to the overhead of PQconsumeInput.)
+	 */
+	if (!PQconsumeInput(conn))
+		pgfdw_report_error(WARNING, NULL, conn, false, sql);
+	res = pgfdw_get_result(conn, sql);
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+	{
+		if (ignore_errors)
+			pgfdw_report_error(WARNING, res, conn, true, sql);
+		else
+			pgfdw_report_error(ERROR, res, conn, true, sql);
+	}
 	PQclear(res);
 }
 
@@ -888,6 +955,8 @@ pgfdw_xact_callback(XactEvent event, void *arg)
 {
 	HASH_SEQ_STATUS scan;
 	ConnCacheEntry *entry;
+	List	   *pending_entries = NIL;
+	List	   *cancel_requested = NIL;
 
 	/* Quick exit if no connections were touched in this transaction. */
 	if (!xact_got_connection)
@@ -925,6 +994,13 @@ pgfdw_xact_callback(XactEvent event, void *arg)
 
 					/* Commit all remote transactions during pre-commit */
 					entry->changing_xact_state = true;
+					if (entry->parallel_commit)
+					{
+						do_sql_command_begin(entry->conn,
+											 "COMMIT TRANSACTION");
+						pending_entries = lappend(pending_entries, entry);
+						continue;
+					}
 					do_sql_command(entry->conn, "COMMIT TRANSACTION");
 					entry->changing_xact_state = false;
 
@@ -975,28 +1051,39 @@ pgfdw_xact_callback(XactEvent event, void *arg)
 				case XACT_EVENT_PARALLEL_ABORT:
 				case XACT_EVENT_ABORT:
 
-					pgfdw_abort_cleanup(entry, "ABORT TRANSACTION", true);
+					if (entry->parallel_abort)
+					{
+						if (pgfdw_abort_cleanup_begin(entry,
+													  "ABORT TRANSACTION",
+													  &pending_entries,
+													  &cancel_requested))
+							continue;
+					}
+					else
+						pgfdw_abort_cleanup(entry, "ABORT TRANSACTION", true);
 					break;
 			}
 		}
 
 		/* Reset state to show we're out of a transaction */
-		entry->xact_depth = 0;
+		pgfdw_reset_xact_state(entry, true);
+	}
 
-		/*
-		 * If the connection isn't in a good idle state, it is marked as
-		 * invalid or keep_connections option of its server is disabled, then
-		 * discard it to recover. Next GetConnection will open a new
-		 * connection.
-		 */
-		if (PQstatus(entry->conn) != CONNECTION_OK ||
-			PQtransactionStatus(entry->conn) != PQTRANS_IDLE ||
-			entry->changing_xact_state ||
-			entry->invalidated ||
-			!entry->keep_connections)
+	/* If there are any pending remote transactions, finish closing them */
+	if (pending_entries || cancel_requested)
+	{
+		if (event == XACT_EVENT_PARALLEL_PRE_COMMIT ||
+			event == XACT_EVENT_PRE_COMMIT)
 		{
-			elog(DEBUG3, "discarding connection %p", entry->conn);
-			disconnect_pg_server(entry);
+			Assert(cancel_requested == NIL);
+			pgfdw_finish_pre_commit_cleanup(pending_entries);
+		}
+		else
+		{
+			Assert(event == XACT_EVENT_PARALLEL_ABORT ||
+				   event == XACT_EVENT_ABORT);
+			pgfdw_finish_abort_cleanup(pending_entries, cancel_requested,
+									   true);
 		}
 	}
 
@@ -1021,6 +1108,8 @@ pgfdw_subxact_callback(SubXactEvent event, SubTransactionId mySubid,
 	HASH_SEQ_STATUS scan;
 	ConnCacheEntry *entry;
 	int			curlevel;
+	List	   *pending_entries = NIL;
+	List	   *cancel_requested = NIL;
 
 	/* Nothing to do at subxact start, nor after commit. */
 	if (!(event == SUBXACT_EVENT_PRE_COMMIT_SUB ||
@@ -1063,6 +1152,12 @@ pgfdw_subxact_callback(SubXactEvent event, SubTransactionId mySubid,
 			/* Commit all remote subtransactions during pre-commit */
 			snprintf(sql, sizeof(sql), "RELEASE SAVEPOINT s%d", curlevel);
 			entry->changing_xact_state = true;
+			if (entry->parallel_commit)
+			{
+				do_sql_command_begin(entry->conn, sql);
+				pending_entries = lappend(pending_entries, entry);
+				continue;
+			}
 			do_sql_command(entry->conn, sql);
 			entry->changing_xact_state = false;
 		}
@@ -1072,11 +1167,35 @@ pgfdw_subxact_callback(SubXactEvent event, SubTransactionId mySubid,
 			snprintf(sql, sizeof(sql),
 					 "ROLLBACK TO SAVEPOINT s%d; RELEASE SAVEPOINT s%d",
 					 curlevel, curlevel);
-			pgfdw_abort_cleanup(entry, sql, false);
+			if (entry->parallel_abort)
+			{
+				if (pgfdw_abort_cleanup_begin(entry, sql,
+											  &pending_entries,
+											  &cancel_requested))
+					continue;
+			}
+			else
+				pgfdw_abort_cleanup(entry, sql, false);
 		}
 
 		/* OK, we're outta that level of subtransaction */
-		entry->xact_depth--;
+		pgfdw_reset_xact_state(entry, false);
+	}
+
+	/* If there are any pending remote subtransactions, finish closing them */
+	if (pending_entries || cancel_requested)
+	{
+		if (event == SUBXACT_EVENT_PRE_COMMIT_SUB)
+		{
+			Assert(cancel_requested == NIL);
+			pgfdw_finish_pre_subcommit_cleanup(pending_entries);
+		}
+		else
+		{
+			Assert(event == SUBXACT_EVENT_ABORT_SUB);
+			pgfdw_finish_abort_cleanup(pending_entries, cancel_requested,
+									   false);
+		}
 	}
 }
 
@@ -1170,6 +1289,40 @@ pgfdw_reject_incomplete_xact_state_change(ConnCacheEntry *entry)
 }
 
 /*
+ * Reset state to show we're out of a (sub)transaction.
+ */
+static void
+pgfdw_reset_xact_state(ConnCacheEntry *entry, bool toplevel)
+{
+	if (toplevel)
+	{
+		/* Reset state to show we're out of a transaction */
+		entry->xact_depth = 0;
+
+		/*
+		 * If the connection isn't in a good idle state, it is marked as
+		 * invalid or keep_connections option of its server is disabled, then
+		 * discard it to recover. Next GetConnection will open a new
+		 * connection.
+		 */
+		if (PQstatus(entry->conn) != CONNECTION_OK ||
+			PQtransactionStatus(entry->conn) != PQTRANS_IDLE ||
+			entry->changing_xact_state ||
+			entry->invalidated ||
+			!entry->keep_connections)
+		{
+			elog(DEBUG3, "discarding connection %p", entry->conn);
+			disconnect_pg_server(entry);
+		}
+	}
+	else
+	{
+		/* Reset state to show we're out of a subtransaction */
+		entry->xact_depth--;
+	}
+}
+
+/*
  * Cancel the currently-in-progress query (whose query text we do not have)
  * and ignore the result.  Returns true if we successfully cancel the query
  * and discard any pending result, and false if not.
@@ -1186,17 +1339,24 @@ pgfdw_reject_incomplete_xact_state_change(ConnCacheEntry *entry)
 static bool
 pgfdw_cancel_query(PGconn *conn)
 {
-	PGcancel   *cancel;
-	char		errbuf[256];
-	PGresult   *result = NULL;
 	TimestampTz endtime;
-	bool		timed_out;
 
 	/*
 	 * If it takes too long to cancel the query and discard the result, assume
 	 * the connection is dead.
 	 */
 	endtime = TimestampTzPlusMilliseconds(GetCurrentTimestamp(), 30000);
+
+	if (!pgfdw_cancel_query_begin(conn))
+		return false;
+	return pgfdw_cancel_query_end(conn, endtime);
+}
+
+static bool
+pgfdw_cancel_query_begin(PGconn *conn)
+{
+	PGcancel   *cancel;
+	char		errbuf[256];
 
 	/*
 	 * Issue cancel request.  Unfortunately, there's no good way to limit the
@@ -1215,6 +1375,15 @@ pgfdw_cancel_query(PGconn *conn)
 		}
 		PQfreeCancel(cancel);
 	}
+
+	return true;
+}
+
+static bool
+pgfdw_cancel_query_end(PGconn *conn, TimestampTz endtime)
+{
+	PGresult   *result = NULL;
+	bool		timed_out;
 
 	/* Get and discard the result of the query. */
 	if (pgfdw_get_cleanup_result(conn, endtime, &result, &timed_out))
@@ -1250,9 +1419,7 @@ pgfdw_cancel_query(PGconn *conn)
 static bool
 pgfdw_exec_cleanup_query(PGconn *conn, const char *query, bool ignore_errors)
 {
-	PGresult   *result = NULL;
 	TimestampTz endtime;
-	bool		timed_out;
 
 	/*
 	 * If it takes too long to execute a cleanup query, assume the connection
@@ -1262,6 +1429,14 @@ pgfdw_exec_cleanup_query(PGconn *conn, const char *query, bool ignore_errors)
 	 */
 	endtime = TimestampTzPlusMilliseconds(GetCurrentTimestamp(), 30000);
 
+	if (!pgfdw_exec_cleanup_query_begin(conn, query))
+		return false;
+	return pgfdw_exec_cleanup_query_end(conn, query, ignore_errors, endtime);
+}
+
+static bool
+pgfdw_exec_cleanup_query_begin(PGconn *conn, const char *query)
+{
 	/*
 	 * Submit a query.  Since we don't use non-blocking mode, this also can
 	 * block.  But its risk is relatively small, so we ignore that for now.
@@ -1271,6 +1446,16 @@ pgfdw_exec_cleanup_query(PGconn *conn, const char *query, bool ignore_errors)
 		pgfdw_report_error(WARNING, NULL, conn, false, query);
 		return false;
 	}
+
+	return true;
+}
+
+static bool
+pgfdw_exec_cleanup_query_end(PGconn *conn, const char *query,
+							 bool ignore_errors, TimestampTz endtime)
+{
+	PGresult   *result = NULL;
+	bool		timed_out;
 
 	/* Get the result of the query. */
 	if (pgfdw_get_cleanup_result(conn, endtime, &result, &timed_out))
@@ -1447,6 +1632,274 @@ pgfdw_abort_cleanup(ConnCacheEntry *entry, const char *sql, bool toplevel)
 
 	/* Disarm changing_xact_state if it all worked */
 	entry->changing_xact_state = false;
+}
+
+static bool
+pgfdw_abort_cleanup_begin(ConnCacheEntry *entry, const char *sql,
+						  List **pending_entries, List **cancel_requested)
+{
+	/*
+	 * Don't try to clean up the connection if we're already in error
+	 * recursion trouble.
+	 */
+	if (in_error_recursion_trouble())
+		entry->changing_xact_state = true;
+
+	/*
+	 * If connection is already unsalvageable, don't touch it further.
+	 */
+	if (entry->changing_xact_state)
+		return false;
+
+	/*
+	 * Mark this connection as in the process of changing transaction state.
+	 */
+	entry->changing_xact_state = true;
+
+	/* Assume we might have lost track of prepared statements */
+	entry->have_error = true;
+
+	/*
+	 * If a command has been submitted to the remote server by using an
+	 * asynchronous execution function, the command might not have yet
+	 * completed.  Check to see if a command is still being processed by the
+	 * remote server, and if so, request cancellation of the command.
+	 */
+	if (PQtransactionStatus(entry->conn) == PQTRANS_ACTIVE)
+	{
+		if (!pgfdw_cancel_query_begin(entry->conn))
+			return false;		/* Unable to cancel running query */
+		*cancel_requested = lappend(*cancel_requested, entry);
+	}
+	else
+	{
+		if (!pgfdw_exec_cleanup_query_begin(entry->conn, sql))
+			return false;		/* Unable to abort remote transaction */
+		*pending_entries = lappend(*pending_entries, entry);
+	}
+
+	return true;
+}
+
+static void
+pgfdw_finish_pre_commit_cleanup(List *pending_entries)
+{
+	ConnCacheEntry *entry;
+	List	   *pending_deallocs = NIL;
+	ListCell   *lc;
+
+	Assert(pending_entries);
+
+	foreach(lc, pending_entries)
+	{
+		entry = (ConnCacheEntry *) lfirst(lc);
+
+		Assert(entry->changing_xact_state);
+		do_sql_command_end(entry->conn, "COMMIT TRANSACTION", false);
+		entry->changing_xact_state = false;
+
+		/* Do a DEALLOCATE ALL if needed */
+		if (entry->have_prep_stmt && entry->have_error)
+		{
+			entry->changing_xact_state = true;
+			do_sql_command_begin(entry->conn, "DEALLOCATE ALL");
+			pending_deallocs = lappend(pending_deallocs, entry);
+			continue;
+		}
+
+		entry->have_prep_stmt = false;
+		entry->have_error = false;
+
+		pgfdw_reset_xact_state(entry, true);
+	}
+
+	if (pending_deallocs)
+	{
+		foreach(lc, pending_deallocs)
+		{
+			entry = (ConnCacheEntry *) lfirst(lc);
+
+			Assert(entry->changing_xact_state);
+			/* Ignore errors in the DEALLOCATE (see note above) */
+			do_sql_command_end(entry->conn, "DEALLOCATE ALL", true);
+			entry->changing_xact_state = false;
+
+			entry->have_prep_stmt = false;
+			entry->have_error = false;
+
+			pgfdw_reset_xact_state(entry, true);
+		}
+	}
+}
+
+static void
+pgfdw_finish_pre_subcommit_cleanup(List *pending_entries)
+{
+	ConnCacheEntry *entry;
+	int			curlevel;
+	char		sql[100];
+	ListCell   *lc;
+
+	Assert(pending_entries);
+
+	curlevel = GetCurrentTransactionNestLevel();
+	snprintf(sql, sizeof(sql), "RELEASE SAVEPOINT s%d", curlevel);
+
+	foreach(lc, pending_entries)
+	{
+		entry = (ConnCacheEntry *) lfirst(lc);
+
+		Assert(entry->changing_xact_state);
+		do_sql_command_end(entry->conn, sql, false);
+		entry->changing_xact_state = false;
+
+		pgfdw_reset_xact_state(entry, false);
+	}
+}
+
+static void
+pgfdw_finish_abort_cleanup(List *pending_entries, List *cancel_requested,
+						   bool toplevel)
+{
+	List	   *pending_deallocs = NIL;
+	ListCell   *lc;
+
+	if (cancel_requested)
+	{
+		foreach(lc, cancel_requested)
+		{
+			ConnCacheEntry *entry = (ConnCacheEntry *) lfirst(lc);
+			TimestampTz endtime;
+			char		sql[100];
+
+			Assert(entry->changing_xact_state);
+
+			/*
+			 * Set end time.  You might think we should do so before issuing
+			 * cancel request like in normal mode, but that is problematic,
+			 * because if, for example, it took longer than 30 seconds to
+			 * process the first few entries in the cancel_requested list, it
+			 * would cause a timeout for each of the remaining entries in the
+			 * list when processing it, leading to slamming the connection of
+			 * it shut.
+			 */
+			endtime = TimestampTzPlusMilliseconds(GetCurrentTimestamp(),
+												  30000);
+
+			/* Get and discard the result of the query. */
+			if (!pgfdw_cancel_query_end(entry->conn, endtime))
+			{
+				/* Unable to cancel running query */
+				pgfdw_reset_xact_state(entry, toplevel);
+				continue;
+			}
+
+			CONSTRUCT_ABORT_COMMAND(sql, entry, toplevel);
+			if (!pgfdw_exec_cleanup_query_begin(entry->conn, sql))
+			{
+				/* Unable to abort remote (sub)transaction */
+				pgfdw_reset_xact_state(entry, toplevel);
+			}
+			else
+				pending_entries = lappend(pending_entries, entry);
+		}
+	}
+
+	if (!pending_entries)
+		return;
+
+	foreach(lc, pending_entries)
+	{
+		ConnCacheEntry *entry = (ConnCacheEntry *) lfirst(lc);
+		TimestampTz endtime;
+		char		sql[100];
+
+		Assert(entry->changing_xact_state);
+
+		/*
+		 * Set end time.  We do this now, not before issuing the command like
+		 * in normal mode, for the same reason as for the cancel_requested
+		 * entries.
+		 */
+		endtime = TimestampTzPlusMilliseconds(GetCurrentTimestamp(), 30000);
+
+		/* Get the result of the command. */
+		CONSTRUCT_ABORT_COMMAND(sql, entry, toplevel);
+		if (!pgfdw_exec_cleanup_query_end(entry->conn, sql, false, endtime))
+		{
+			/* Unable to abort remote (sub)transaction */
+			pgfdw_reset_xact_state(entry, toplevel);
+			continue;
+		}
+
+		/*
+		 * If called for cleanup at main-transaction end, do a DEALLOCATE ALL
+		 * if needed.
+		 */
+		if (toplevel)
+		{
+			if (entry->have_prep_stmt && entry->have_error)
+			{
+				if (!pgfdw_exec_cleanup_query_begin(entry->conn,
+													"DEALLOCATE ALL"))
+				{
+					/* Trouble clearing prepared statements */
+					pgfdw_reset_xact_state(entry, toplevel);
+				}
+				else
+					pending_deallocs = lappend(pending_deallocs, entry);
+				continue;
+			}
+
+			entry->have_prep_stmt = false;
+			entry->have_error = false;
+			/* Also reset per-connection state */
+			memset(&entry->state, 0, sizeof(entry->state));
+		}
+
+		/* We're done with this entry; unset the changing_xact_state flag */
+		entry->changing_xact_state = false;
+		pgfdw_reset_xact_state(entry, toplevel);
+	}
+
+	if (!pending_deallocs)
+		return;
+	Assert(toplevel);
+
+	foreach(lc, pending_deallocs)
+	{
+		ConnCacheEntry *entry = (ConnCacheEntry *) lfirst(lc);
+		TimestampTz endtime;
+
+		Assert(entry->changing_xact_state);
+		Assert(entry->have_prep_stmt);
+		Assert(entry->have_error);
+
+		/*
+		 * Set end time.  We do this now, not before issuing the command like
+		 * in normal mode, for the same reason as for the cancel_requested
+		 * entries.
+		 */
+		endtime = TimestampTzPlusMilliseconds(GetCurrentTimestamp(), 30000);
+
+		/* Get the result of the command. */
+		if (!pgfdw_exec_cleanup_query_end(entry->conn, "DEALLOCATE ALL",
+										  true, endtime))
+		{
+			/* Trouble clearing prepared statements */
+			pgfdw_reset_xact_state(entry, toplevel);
+			continue;
+		}
+
+		entry->have_prep_stmt = false;
+		entry->have_error = false;
+		/* Also reset per-connection state */
+		memset(&entry->state, 0, sizeof(entry->state));
+
+		/* We're done with this entry; unset the changing_xact_state flag */
+		entry->changing_xact_state = false;
+		pgfdw_reset_xact_state(entry, toplevel);
+	}
 }
 
 /*

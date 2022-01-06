@@ -6,6 +6,34 @@
 \getenv abs_srcdir PG_ABS_SRCDIR
 \getenv abs_builddir PG_ABS_BUILDDIR
 
+-- Test printing large object acls.
+-- The expected output should contain only one large object
+-- with a known id (42) and a known owner (regress_lo_user).
+SELECT lo_create(42);
+
+-- Test ALTER LARGE OBJECT
+CREATE ROLE regress_lo_user;
+ALTER LARGE OBJECT 42 OWNER TO regress_lo_user;
+SELECT
+	rol.rolname
+FROM
+	pg_largeobject_metadata lo
+	JOIN pg_authid rol ON lo.lomowner = rol.oid
+WHERE
+    lo.oid = 42;
+
+COMMENT ON LARGE OBJECT 42 IS 'the answer to the ultimate question of life';
+GRANT SELECT ON LARGE OBJECT 42 TO public;
+\dl
+\dl+
+\lo_list
+\lo_list+
+-- Invalid commands
+\dl-
+\lo_list-
+-- Cleanup
+\lo_unlink 42
+
 -- ensure consistent test output regardless of the default bytea format
 SET bytea_output TO escape;
 
@@ -15,21 +43,6 @@ CREATE TABLE lotest_stash_values (loid oid, fd integer);
 -- The mode arg to lo_creat is unused, some vestigal holdover from ancient times
 -- returns the large object id
 INSERT INTO lotest_stash_values (loid) SELECT lo_creat(42);
-
--- Test ALTER LARGE OBJECT
-CREATE ROLE regress_lo_user;
-DO $$
-  BEGIN
-    EXECUTE 'ALTER LARGE OBJECT ' || (select loid from lotest_stash_values)
-		|| ' OWNER TO regress_lo_user';
-  END
-$$;
-SELECT
-	rol.rolname
-FROM
-	lotest_stash_values s
-	JOIN pg_largeobject_metadata lo ON s.loid = lo.oid
-	JOIN pg_authid rol ON lo.lomowner = rol.oid;
 
 -- NOTE: large objects require transactions
 BEGIN;

@@ -811,7 +811,16 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 				success = describeRoles(pattern, show_verbose, show_system);
 				break;
 			case 'l':
-				success = do_lo_list();
+				switch (cmd[2])
+				{
+					case '\0':
+					case '+':
+						success = listLargeObjects(show_verbose);
+						break;
+					default:
+						status = PSQL_CMD_UNKNOWN;
+						break;
+				}
 				break;
 			case 'L':
 				success = listLanguages(pattern, show_verbose, show_system);
@@ -1928,11 +1937,13 @@ exec_command_lo(PsqlScanState scan_state, bool active_branch, const char *cmd)
 	{
 		char	   *opt1,
 				   *opt2;
+		bool		show_verbose;
 
 		opt1 = psql_scan_slash_option(scan_state,
 									  OT_NORMAL, NULL, true);
 		opt2 = psql_scan_slash_option(scan_state,
 									  OT_NORMAL, NULL, true);
+		show_verbose = strchr(cmd, '+') ? true : false;
 
 		if (strcmp(cmd + 3, "export") == 0)
 		{
@@ -1962,8 +1973,8 @@ exec_command_lo(PsqlScanState scan_state, bool active_branch, const char *cmd)
 			}
 		}
 
-		else if (strcmp(cmd + 3, "list") == 0)
-			success = do_lo_list();
+		else if (strcmp(cmd + 3, "list") == 0 || strcmp(cmd + 3, "list+") == 0)
+			success = listLargeObjects(show_verbose);
 
 		else if (strcmp(cmd + 3, "unlink") == 0)
 		{

@@ -372,9 +372,9 @@ PostgreSQL documentation
       <listitem>
        <para>
         Enables gzip compression of tar file output, and specifies the
-        compression level (0 through 9, 0 being no compression and 9 being best
-        compression). Compression is only available when using the tar
-        format, and the suffix <filename>.gz</filename> will
+        compression level (1 through 9, 1 being worst compression and 9
+        being best compression). Compression is only available when using
+        the tar format, and the suffix <filename>.gz</filename> will
         automatically be added to all tar filenames.
        </para>
       </listitem>
@@ -567,6 +567,22 @@ PostgreSQL documentation
       </listitem>
      </varlistentry>
 
+     <varlistentry>
+      <term><option>--compression-method=<replaceable class="parameter">method</replaceable></option></term>
+      <listitem>
+       <para>
+        Enables compression of backup data using the specified method.
+        Supported values <literal>gzip</literal> and <literal>none</literal>,
+        the default.
+       </para>
+
+       <para>
+        The suffix <filename>.gz</filename> will automatically be added to
+        all filenames when using <literal>gzip</literal>.
+       </para>
+      </listitem>
+     </varlistentry>
+     
      <varlistentry>
       <term><option>--manifest-force-encode</option></term>
       <listitem>

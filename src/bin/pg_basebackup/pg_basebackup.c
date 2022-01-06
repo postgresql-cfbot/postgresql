@@ -113,6 +113,7 @@ static bool showprogress = false;
 static bool estimatesize = true;
 static int	verbose = 0;
 static int	compresslevel = 0;
+static WalCompressionMethod compression_method = COMPRESSION_NONE;
 static IncludeWal includewal = STREAM_WAL;
 static bool fastcheckpoint = false;
 static bool writerecoveryconf = false;
@@ -359,7 +360,9 @@ usage(void)
 	printf(_("  -X, --wal-method=none|fetch|stream\n"
 			 "                         include required WAL files with specified method\n"));
 	printf(_("  -z, --gzip             compress tar output\n"));
-	printf(_("  -Z, --compress=0-9     compress tar output with given compression level\n"));
+	printf(_("  -Z, --compress=1-9     compress tar output with given compression level\n"));
+	printf(_("      --compression-method=METHOD\n"
+			 "                         method to compress data\n"));
 	printf(_("\nGeneral options:\n"));
 	printf(_("  -c, --checkpoint=fast|spread\n"
 			 "                         set fast or spread checkpointing\n"));
@@ -524,7 +527,7 @@ LogStreamerMain(logstreamer_param *param)
 													stream.do_sync);
 	else
 		stream.walmethod = CreateWalTarMethod(param->xlog,
-											  COMPRESSION_NONE, /* ignored */
+											  compression_method,
 											  compresslevel,
 											  stream.do_sync);
 
@@ -975,7 +978,7 @@ CreateBackupStreamer(char *archive_name, char *spclocation,
 					 bool is_recovery_guc_supported,
 					 bool expect_unterminated_tarfile)
 {
-	bbstreamer *streamer;
+	bbstreamer *streamer = NULL;
 	bbstreamer *manifest_inject_streamer = NULL;
 	bool		inject_manifest;
 	bool		must_parse_archive;
@@ -1034,19 +1037,22 @@ CreateBackupStreamer(char *archive_name, char *spclocation,
 			archive_file = NULL;
 		}
 
+		if (compression_method == COMPRESSION_NONE)
+			streamer = bbstreamer_plain_writer_new(archive_filename,
+												   archive_file);
 #ifdef HAVE_LIBZ
-		if (compresslevel != 0)
+		else if (compression_method == COMPRESSION_GZIP)
 		{
 			strlcat(archive_filename, ".gz", sizeof(archive_filename));
 			streamer = bbstreamer_gzip_writer_new(archive_filename,
 												  archive_file,
 												  compresslevel);
 		}
-		else
 #endif
-			streamer = bbstreamer_plain_writer_new(archive_filename,
-												   archive_file);
-
+		else
+		{
+			Assert(false);		/* not reachable */
+		}
 
 		/*
 		 * If we need to parse the archive for whatever reason, then we'll
@@ -1765,6 +1771,7 @@ main(int argc, char **argv)
 		{"no-manifest", no_argument, NULL, 5},
 		{"manifest-force-encode", no_argument, NULL, 6},
 		{"manifest-checksums", required_argument, NULL, 7},
+		{"compression-method", required_argument, NULL, 8},
 		{NULL, 0, NULL, 0}
 	};
 	int			c;
@@ -1872,14 +1879,10 @@ main(int argc, char **argv)
 				do_sync = false;
 				break;
 			case 'z':
-#ifdef HAVE_LIBZ
-				compresslevel = Z_DEFAULT_COMPRESSION;
-#else
-				compresslevel = 1;	/* will be rejected below */
-#endif
+				compression_method = COMPRESSION_GZIP;
 				break;
 			case 'Z':
-				if (!option_parse_int(optarg, "-Z/--compress", 0, 9,
+				if (!option_parse_int(optarg, "-Z/--compress", 1, 9,
 									  &compresslevel))
 					exit(1);
 				break;
@@ -1941,6 +1944,18 @@ main(int argc, char **argv)
 			case 7:
 				manifest_checksums = pg_strdup(optarg);
 				break;
+			case 8:
+				if (pg_strcasecmp(optarg, "gzip") == 0)
+					compression_method = COMPRESSION_GZIP;
+				else if (pg_strcasecmp(optarg, "none") == 0)
+					compression_method = COMPRESSION_NONE;
+				else
+				{
+					pg_log_error("invalid value \"%s\" for option %s",
+								 optarg, "--compression-method");
+					exit(1);
+				}
+				break;
 			default:
 
 				/*
@@ -1978,7 +1993,7 @@ main(int argc, char **argv)
 	/*
 	 * Mutually exclusive arguments
 	 */
-	if (format == 'p' && compresslevel != 0)
+	if (format == 'p' && compression_method != COMPRESSION_NONE)
 	{
 		pg_log_error("only tar mode backups can be compressed");
 		fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
@@ -2056,13 +2071,39 @@ main(int argc, char **argv)
 		}
 	}
 
-#ifndef HAVE_LIBZ
-	if (compresslevel != 0)
+	/*
+	 * Compression-related options.
+	 */
+	switch (compression_method)
 	{
-		pg_log_error("this build does not support compression");
-		exit(1);
-	}
+		case COMPRESSION_NONE:
+			if (compresslevel != 0)
+			{
+				pg_log_error("cannot use --compress with --compression-method=%s",
+							 "none");
+				fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
+						progname);
+				exit(1);
+			}
+			break;
+		case COMPRESSION_GZIP:
+#ifdef HAVE_LIBZ
+			if (compresslevel == 0)
+			{
+				pg_log_info("no value specified for --compress, switching to default");
+				compresslevel = Z_DEFAULT_COMPRESSION;
+			}
+#else
+			pg_log_error("this build does not support compression with %s",
+						 "gzip");
+			exit(1);
 #endif
+			break;
+		case COMPRESSION_LZ4:
+			/* option not supported */
+			Assert(false);
+			break;
+	}
 
 	if (showprogress && !estimatesize)
 	{

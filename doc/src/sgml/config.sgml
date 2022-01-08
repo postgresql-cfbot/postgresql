@@ -9399,6 +9399,18 @@ SET XML OPTION { DOCUMENT | CONTENT };
         is interpreted as for the <link linkend="sql-load"><command>LOAD</command></link> command.
         Whitespace between entries is ignored; surround a library name with
         double quotes if you need to include whitespace or commas in the name.
+        For example:
+<programlisting>
+ALTER SYSTEM SET shared_preload_libraries TO auth_delay,pg_stat_statements,sepgsql;
+</programlisting>
+or
+<programlisting>
+ALTER SYSTEM SET shared_preload_libraries = 'auth_delay','pg_stat_statements','sepgsql';
+</programlisting>
+or
+<programlisting>
+ALTER SYSTEM SET shared_preload_libraries TO 'auth_delay','pg_stat_statements','sepgsql';
+</programlisting>
         This parameter can only be set at server start.  If a specified
         library is not found, the server will fail to start.
        </para>

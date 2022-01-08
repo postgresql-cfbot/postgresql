@@ -9570,8 +9570,21 @@ CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 {
 	CheckPointRelationMap();
 	CheckPointReplicationSlots();
-	CheckPointSnapBuild();
-	CheckPointLogicalRewriteHeap();
+
+	/*
+	 * Let's not process snapshot and mapping files during end-of-recovery
+	 * checkpoint to make the server available faster. However, the regular
+	 * checkpoints can process these files.
+	 */
+	if (flags & CHECKPOINT_END_OF_RECOVERY)
+		ereport((log_checkpoints ? LOG : DEBUG2),
+				(errmsg("skipped processing of replication slot snapshot and mapping files during end-of-recovery checkpoint")));
+	else
+	{
+		CheckPointSnapBuild();
+		CheckPointLogicalRewriteHeap();
+	}
+
 	CheckPointReplicationOrigin();
 
 	/* Write out all dirty data in SLRUs and the main buffer pool */

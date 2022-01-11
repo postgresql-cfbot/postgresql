@@ -57,6 +57,12 @@ pg_signal_backend(int pid, int sig)
 	 * arbitrary process to prevent that. But since so far all the callers of
 	 * this mechanism involve some request for ending the process anyway, that
 	 * it might end on its own first is not a problem.
+	 *
+	 * Note that proc will also be NULL if the pid refers to an auxiliary
+	 * process or the postmaster (neither of which can be signaled via
+	 * pg_signal_backend()).  The warning message is intentionally phrased to
+	 * work for both non-PostgreSQL processes and the PostgreSQL processes that
+	 * cannot be signaled with this function.
 	 */
 	if (proc == NULL)
 	{
@@ -65,7 +71,8 @@ pg_signal_backend(int pid, int sig)
 		 * if one backend terminated on its own during the run.
 		 */
 		ereport(WARNING,
-				(errmsg("PID %d is not a PostgreSQL server process", pid)));
+				(errmsg("PID %d is not a PostgreSQL backend process", pid)));
+
 		return SIGNAL_BACKEND_ERROR;
 	}
 

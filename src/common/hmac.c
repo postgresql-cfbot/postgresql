@@ -38,6 +38,14 @@
 #define FREE(ptr) free(ptr)
 #endif
 
+/* Set of error states */
+typedef enum pg_hmac_errno
+{
+	PG_HMAC_ERROR_NONE = 0,
+	PG_HMAC_ERROR_OOM,
+	PG_HMAC_ERROR_INTERNAL
+} pg_hmac_errno;
+
 /*
  * Internal structure for pg_hmac_ctx->data with this implementation.
  */
@@ -45,6 +53,8 @@ struct pg_hmac_ctx
 {
 	pg_cryptohash_ctx *hash;
 	pg_cryptohash_type type;
+	pg_hmac_errno error;
+	const char *errreason;
 	int			block_size;
 	int			digest_size;
 
@@ -75,6 +85,8 @@ pg_hmac_create(pg_cryptohash_type type)
 		return NULL;
 	memset(ctx, 0, sizeof(pg_hmac_ctx));
 	ctx->type = type;
+	ctx->error = PG_HMAC_ERROR_NONE;
+	ctx->errreason = NULL;
 
 	/*
 	 * Initialize the context data.  This requires to know the digest and
@@ -152,12 +164,16 @@ pg_hmac_init(pg_hmac_ctx *ctx, const uint8 *key, size_t len)
 		/* temporary buffer for one-time shrink */
 		shrinkbuf = ALLOC(digest_size);
 		if (shrinkbuf == NULL)
+		{
+			ctx->error = PG_HMAC_ERROR_OOM;
 			return -1;
+		}
 		memset(shrinkbuf, 0, digest_size);
 
 		hash_ctx = pg_cryptohash_create(ctx->type);
 		if (hash_ctx == NULL)
 		{
+			ctx->error = PG_HMAC_ERROR_OOM;
 			FREE(shrinkbuf);
 			return -1;
 		}
@@ -166,6 +182,8 @@ pg_hmac_init(pg_hmac_ctx *ctx, const uint8 *key, size_t len)
 			pg_cryptohash_update(hash_ctx, key, len) < 0 ||
 			pg_cryptohash_final(hash_ctx, shrinkbuf, digest_size) < 0)
 		{
+			ctx->error = PG_HMAC_ERROR_INTERNAL;
+			ctx->errreason = pg_cryptohash_error(hash_ctx);
 			pg_cryptohash_free(hash_ctx);
 			FREE(shrinkbuf);
 			return -1;
@@ -186,6 +204,8 @@ pg_hmac_init(pg_hmac_ctx *ctx, const uint8 *key, size_t len)
 	if (pg_cryptohash_init(ctx->hash) < 0 ||
 		pg_cryptohash_update(ctx->hash, ctx->k_ipad, ctx->block_size) < 0)
 	{
+		ctx->error = PG_HMAC_ERROR_INTERNAL;
+		ctx->errreason = pg_cryptohash_error(ctx->hash);
 		if (shrinkbuf)
 			FREE(shrinkbuf);
 		return -1;
@@ -208,7 +228,11 @@ pg_hmac_update(pg_hmac_ctx *ctx, const uint8 *data, size_t len)
 		return -1;
 
 	if (pg_cryptohash_update(ctx->hash, data, len) < 0)
+	{
+		ctx->error = PG_HMAC_ERROR_INTERNAL;
+		ctx->errreason = pg_cryptohash_error(ctx->hash);
 		return -1;
+	}
 
 	return 0;
 }
@@ -228,11 +252,16 @@ pg_hmac_final(pg_hmac_ctx *ctx, uint8 *dest, size_t len)
 
 	h = ALLOC(ctx->digest_size);
 	if (h == NULL)
+	{
+		ctx->error = PG_HMAC_ERROR_OOM;
 		return -1;
+	}
 	memset(h, 0, ctx->digest_size);
 
 	if (pg_cryptohash_final(ctx->hash, h, ctx->digest_size) < 0)
 	{
+		ctx->error = PG_HMAC_ERROR_INTERNAL;
+		ctx->errreason = pg_cryptohash_error(ctx->hash);
 		FREE(h);
 		return -1;
 	}
@@ -243,6 +272,8 @@ pg_hmac_final(pg_hmac_ctx *ctx, uint8 *dest, size_t len)
 		pg_cryptohash_update(ctx->hash, h, ctx->digest_size) < 0 ||
 		pg_cryptohash_final(ctx->hash, dest, len) < 0)
 	{
+		ctx->error = PG_HMAC_ERROR_INTERNAL;
+		ctx->errreason = pg_cryptohash_error(ctx->hash);
 		FREE(h);
 		return -1;
 	}
@@ -265,4 +296,37 @@ pg_hmac_free(pg_hmac_ctx *ctx)
 	pg_cryptohash_free(ctx->hash);
 	explicit_bzero(ctx, sizeof(pg_hmac_ctx));
 	FREE(ctx);
+}
+
+/*
+ * pg_hmac_error
+ *
+ * Returns a static string providing details about an error that happened
+ * during a HMAC computation.
+ */
+const char *
+pg_hmac_error(pg_hmac_ctx *ctx)
+{
+	if (ctx == NULL)
+		return _("out of memory");
+
+	/*
+	 * If a reason is provided, rely on it, else fallback to any error code
+	 * set.
+	 */
+	if (ctx->errreason)
+		return ctx->errreason;
+
+	switch (ctx->error)
+	{
+		case PG_HMAC_ERROR_NONE:
+			return _("success");
+		case PG_HMAC_ERROR_INTERNAL:
+			return _("internal error");
+		case PG_HMAC_ERROR_OOM:
+			return _("out of memory");
+	}
+
+	Assert(false);				/* cannot be reached */
+	return _("success");
 }

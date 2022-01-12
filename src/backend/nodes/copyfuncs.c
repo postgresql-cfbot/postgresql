@@ -2745,16 +2745,19 @@ _copyA_Const(const A_Const *from)
 		switch (nodeTag(&from->val))
 		{
 			case T_Integer:
-				COPY_SCALAR_FIELD(val.ival.val);
+				COPY_SCALAR_FIELD(val.ival.ival);
 				break;
 			case T_Float:
-				COPY_STRING_FIELD(val.fval.val);
+				COPY_STRING_FIELD(val.fval.fval);
+				break;
+			case T_Boolean:
+				COPY_SCALAR_FIELD(val.boolval.boolval);
 				break;
 			case T_String:
-				COPY_STRING_FIELD(val.sval.val);
+				COPY_STRING_FIELD(val.sval.sval);
 				break;
 			case T_BitString:
-				COPY_STRING_FIELD(val.bsval.val);
+				COPY_STRING_FIELD(val.bsval.bsval);
 				break;
 			default:
 				elog(ERROR, "unrecognized node type: %d",
@@ -4934,7 +4937,7 @@ _copyInteger(const Integer *from)
 {
 	Integer	   *newnode = makeNode(Integer);
 
-	COPY_SCALAR_FIELD(val);
+	COPY_SCALAR_FIELD(ival);
 
 	return newnode;
 }
@@ -4944,7 +4947,17 @@ _copyFloat(const Float *from)
 {
 	Float	   *newnode = makeNode(Float);
 
-	COPY_STRING_FIELD(val);
+	COPY_STRING_FIELD(fval);
+
+	return newnode;
+}
+
+static Boolean *
+_copyBoolean(const Boolean *from)
+{
+	Boolean	   *newnode = makeNode(Boolean);
+
+	COPY_SCALAR_FIELD(boolval);
 
 	return newnode;
 }
@@ -4954,7 +4967,7 @@ _copyString(const String *from)
 {
 	String	   *newnode = makeNode(String);
 
-	COPY_STRING_FIELD(val);
+	COPY_STRING_FIELD(sval);
 
 	return newnode;
 }
@@ -4964,7 +4977,7 @@ _copyBitString(const BitString *from)
 {
 	BitString   *newnode = makeNode(BitString);
 
-	COPY_STRING_FIELD(val);
+	COPY_STRING_FIELD(bsval);
 
 	return newnode;
 }
@@ -5355,6 +5368,9 @@ copyObjectImpl(const void *from)
 			break;
 		case T_Float:
 			retval = _copyFloat(from);
+			break;
+		case T_Boolean:
+			retval = _copyBoolean(from);
 			break;
 		case T_String:
 			retval = _copyString(from);

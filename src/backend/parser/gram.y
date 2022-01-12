@@ -177,10 +177,10 @@ static Node *makeStringConst(char *str, int location);
 static Node *makeStringConstCast(char *str, int location, TypeName *typename);
 static Node *makeIntConst(int val, int location);
 static Node *makeFloatConst(char *str, int location);
+static Node *makeBoolAConst(bool state, int location);
 static Node *makeBitStringConst(char *str, int location);
 static Node *makeNullAConst(int location);
 static Node *makeAConst(Node *v, int location);
-static Node *makeBoolAConst(bool state, int location);
 static RoleSpec *makeRoleSpec(RoleSpecType type, int location);
 static void check_qualified_name(List *names, core_yyscan_t yyscanner);
 static List *check_func_name(List *names, core_yyscan_t yyscanner);
@@ -1133,7 +1133,7 @@ AlterOptRoleElem:
 				}
 			| INHERIT
 				{
-					$$ = makeDefElem("inherit", (Node *)makeInteger(true), @1);
+					$$ = makeDefElem("inherit", (Node *)makeBoolean(true), @1);
 				}
 			| CONNECTION LIMIT SignedIconst
 				{
@@ -1156,36 +1156,36 @@ AlterOptRoleElem:
 					 * size of the main parser.
 					 */
 					if (strcmp($1, "superuser") == 0)
-						$$ = makeDefElem("superuser", (Node *)makeInteger(true), @1);
+						$$ = makeDefElem("superuser", (Node *)makeBoolean(true), @1);
 					else if (strcmp($1, "nosuperuser") == 0)
-						$$ = makeDefElem("superuser", (Node *)makeInteger(false), @1);
+						$$ = makeDefElem("superuser", (Node *)makeBoolean(false), @1);
 					else if (strcmp($1, "createrole") == 0)
-						$$ = makeDefElem("createrole", (Node *)makeInteger(true), @1);
+						$$ = makeDefElem("createrole", (Node *)makeBoolean(true), @1);
 					else if (strcmp($1, "nocreaterole") == 0)
-						$$ = makeDefElem("createrole", (Node *)makeInteger(false), @1);
+						$$ = makeDefElem("createrole", (Node *)makeBoolean(false), @1);
 					else if (strcmp($1, "replication") == 0)
-						$$ = makeDefElem("isreplication", (Node *)makeInteger(true), @1);
+						$$ = makeDefElem("isreplication", (Node *)makeBoolean(true), @1);
 					else if (strcmp($1, "noreplication") == 0)
-						$$ = makeDefElem("isreplication", (Node *)makeInteger(false), @1);
+						$$ = makeDefElem("isreplication", (Node *)makeBoolean(false), @1);
 					else if (strcmp($1, "createdb") == 0)
-						$$ = makeDefElem("createdb", (Node *)makeInteger(true), @1);
+						$$ = makeDefElem("createdb", (Node *)makeBoolean(true), @1);
 					else if (strcmp($1, "nocreatedb") == 0)
-						$$ = makeDefElem("createdb", (Node *)makeInteger(false), @1);
+						$$ = makeDefElem("createdb", (Node *)makeBoolean(false), @1);
 					else if (strcmp($1, "login") == 0)
-						$$ = makeDefElem("canlogin", (Node *)makeInteger(true), @1);
+						$$ = makeDefElem("canlogin", (Node *)makeBoolean(true), @1);
 					else if (strcmp($1, "nologin") == 0)
-						$$ = makeDefElem("canlogin", (Node *)makeInteger(false), @1);
+						$$ = makeDefElem("canlogin", (Node *)makeBoolean(false), @1);
 					else if (strcmp($1, "bypassrls") == 0)
-						$$ = makeDefElem("bypassrls", (Node *)makeInteger(true), @1);
+						$$ = makeDefElem("bypassrls", (Node *)makeBoolean(true), @1);
 					else if (strcmp($1, "nobypassrls") == 0)
-						$$ = makeDefElem("bypassrls", (Node *)makeInteger(false), @1);
+						$$ = makeDefElem("bypassrls", (Node *)makeBoolean(false), @1);
 					else if (strcmp($1, "noinherit") == 0)
 					{
 						/*
 						 * Note that INHERIT is a keyword, so it's handled by main parser, but
 						 * NOINHERIT is handled here.
 						 */
-						$$ = makeDefElem("inherit", (Node *)makeInteger(false), @1);
+						$$ = makeDefElem("inherit", (Node *)makeBoolean(false), @1);
 					}
 					else
 						ereport(ERROR,
@@ -1719,7 +1719,7 @@ zone_value:
 					if ($3 != NIL)
 					{
 						A_Const *n = (A_Const *) linitial($3);
-						if ((n->val.ival.val & ~(INTERVAL_MASK(HOUR) | INTERVAL_MASK(MINUTE))) != 0)
+						if ((n->val.ival.ival & ~(INTERVAL_MASK(HOUR) | INTERVAL_MASK(MINUTE))) != 0)
 							ereport(ERROR,
 									(errcode(ERRCODE_SYNTAX_ERROR),
 									 errmsg("time zone interval must be HOUR or HOUR TO MINUTE"),
@@ -3175,7 +3175,7 @@ copy_opt_item:
 				}
 			| FREEZE
 				{
-					$$ = makeDefElem("freeze", (Node *)makeInteger(true), @1);
+					$$ = makeDefElem("freeze", (Node *)makeBoolean(true), @1);
 				}
 			| DELIMITER opt_as Sconst
 				{
@@ -3191,7 +3191,7 @@ copy_opt_item:
 				}
 			| HEADER_P
 				{
-					$$ = makeDefElem("header", (Node *)makeInteger(true), @1);
+					$$ = makeDefElem("header", (Node *)makeBoolean(true), @1);
 				}
 			| QUOTE opt_as Sconst
 				{
@@ -4499,11 +4499,11 @@ SeqOptElem: AS SimpleTypename
 				}
 			| CYCLE
 				{
-					$$ = makeDefElem("cycle", (Node *)makeInteger(true), @1);
+					$$ = makeDefElem("cycle", (Node *)makeBoolean(true), @1);
 				}
 			| NO CYCLE
 				{
-					$$ = makeDefElem("cycle", (Node *)makeInteger(false), @1);
+					$$ = makeDefElem("cycle", (Node *)makeBoolean(false), @1);
 				}
 			| INCREMENT opt_by NumericOnly
 				{
@@ -4739,7 +4739,7 @@ create_extension_opt_item:
 				}
 			| CASCADE
 				{
-					$$ = makeDefElem("cascade", (Node *)makeInteger(true), @1);
+					$$ = makeDefElem("cascade", (Node *)makeBoolean(true), @1);
 				}
 		;
 
@@ -7934,15 +7934,15 @@ createfunc_opt_list:
 common_func_opt_item:
 			CALLED ON NULL_P INPUT_P
 				{
-					$$ = makeDefElem("strict", (Node *)makeInteger(false), @1);
+					$$ = makeDefElem("strict", (Node *)makeBoolean(false), @1);
 				}
 			| RETURNS NULL_P ON NULL_P INPUT_P
 				{
-					$$ = makeDefElem("strict", (Node *)makeInteger(true), @1);
+					$$ = makeDefElem("strict", (Node *)makeBoolean(true), @1);
 				}
 			| STRICT_P
 				{
-					$$ = makeDefElem("strict", (Node *)makeInteger(true), @1);
+					$$ = makeDefElem("strict", (Node *)makeBoolean(true), @1);
 				}
 			| IMMUTABLE
 				{
@@ -7958,27 +7958,27 @@ common_func_opt_item:
 				}
 			| EXTERNAL SECURITY DEFINER
 				{
-					$$ = makeDefElem("security", (Node *)makeInteger(true), @1);
+					$$ = makeDefElem("security", (Node *)makeBoolean(true), @1);
 				}
 			| EXTERNAL SECURITY INVOKER
 				{
-					$$ = makeDefElem("security", (Node *)makeInteger(false), @1);
+					$$ = makeDefElem("security", (Node *)makeBoolean(false), @1);
 				}
 			| SECURITY DEFINER
 				{
-					$$ = makeDefElem("security", (Node *)makeInteger(true), @1);
+					$$ = makeDefElem("security", (Node *)makeBoolean(true), @1);
 				}
 			| SECURITY INVOKER
 				{
-					$$ = makeDefElem("security", (Node *)makeInteger(false), @1);
+					$$ = makeDefElem("security", (Node *)makeBoolean(false), @1);
 				}
 			| LEAKPROOF
 				{
-					$$ = makeDefElem("leakproof", (Node *)makeInteger(true), @1);
+					$$ = makeDefElem("leakproof", (Node *)makeBoolean(true), @1);
 				}
 			| NOT LEAKPROOF
 				{
-					$$ = makeDefElem("leakproof", (Node *)makeInteger(false), @1);
+					$$ = makeDefElem("leakproof", (Node *)makeBoolean(false), @1);
 				}
 			| COST NumericOnly
 				{
@@ -8018,7 +8018,7 @@ createfunc_opt_item:
 				}
 			| WINDOW
 				{
-					$$ = makeDefElem("window", (Node *)makeInteger(true), @1);
+					$$ = makeDefElem("window", (Node *)makeBoolean(true), @1);
 				}
 			| common_func_opt_item
 				{
@@ -9941,7 +9941,7 @@ AlterSubscriptionStmt:
 					n->kind = ALTER_SUBSCRIPTION_ENABLED;
 					n->subname = $3;
 					n->options = list_make1(makeDefElem("enabled",
-											(Node *)makeInteger(true), @1));
+											(Node *)makeBoolean(true), @1));
 					$$ = (Node *)n;
 				}
 			| ALTER SUBSCRIPTION name DISABLE_P
@@ -9951,7 +9951,7 @@ AlterSubscriptionStmt:
 					n->kind = ALTER_SUBSCRIPTION_ENABLED;
 					n->subname = $3;
 					n->options = list_make1(makeDefElem("enabled",
-											(Node *)makeInteger(false), @1));
+											(Node *)makeBoolean(false), @1));
 					$$ = (Node *)n;
 				}
 		;
@@ -12874,7 +12874,7 @@ xmltable_column_el:
 										(errcode(ERRCODE_SYNTAX_ERROR),
 										 errmsg("conflicting or redundant NULL / NOT NULL declarations for column \"%s\"", fc->colname),
 										 parser_errposition(defel->location)));
-							fc->is_not_null = intVal(defel->arg);
+							fc->is_not_null = boolVal(defel->arg);
 							nullability_seen = true;
 						}
 						else
@@ -12914,9 +12914,9 @@ xmltable_column_option_el:
 			| DEFAULT b_expr
 				{ $$ = makeDefElem("default", $2, @1); }
 			| NOT NULL_P
-				{ $$ = makeDefElem("is_not_null", (Node *) makeInteger(true), @1); }
+				{ $$ = makeDefElem("is_not_null", (Node *) makeBoolean(true), @1); }
 			| NULL_P
-				{ $$ = makeDefElem("is_not_null", (Node *) makeInteger(false), @1); }
+				{ $$ = makeDefElem("is_not_null", (Node *) makeBoolean(false), @1); }
 		;
 
 xml_namespace_list:
@@ -16667,7 +16667,7 @@ makeStringConst(char *str, int location)
 	A_Const *n = makeNode(A_Const);
 
 	n->val.sval.type = T_String;
-	n->val.sval.val = str;
+	n->val.sval.sval = str;
 	n->location = location;
 
    return (Node *)n;
@@ -16687,7 +16687,7 @@ makeIntConst(int val, int location)
 	A_Const *n = makeNode(A_Const);
 
 	n->val.ival.type = T_Integer;
-	n->val.ival.val = val;
+	n->val.ival.ival = val;
 	n->location = location;
 
    return (Node *)n;
@@ -16699,7 +16699,19 @@ makeFloatConst(char *str, int location)
 	A_Const *n = makeNode(A_Const);
 
 	n->val.fval.type = T_Float;
-	n->val.fval.val = str;
+	n->val.fval.fval = str;
+	n->location = location;
+
+   return (Node *)n;
+}
+
+static Node *
+makeBoolAConst(bool state, int location)
+{
+	A_Const *n = makeNode(A_Const);
+
+	n->val.boolval.type = T_Boolean;
+	n->val.boolval.boolval = state;
 	n->location = location;
 
    return (Node *)n;
@@ -16711,7 +16723,7 @@ makeBitStringConst(char *str, int location)
 	A_Const *n = makeNode(A_Const);
 
 	n->val.bsval.type = T_BitString;
-	n->val.bsval.val = str;
+	n->val.bsval.bsval = str;
 	n->location = location;
 
    return (Node *)n;
@@ -16736,31 +16748,20 @@ makeAConst(Node *v, int location)
 	switch (v->type)
 	{
 		case T_Float:
-			n = makeFloatConst(castNode(Float, v)->val, location);
+			n = makeFloatConst(castNode(Float, v)->fval, location);
 			break;
 
 		case T_Integer:
-			n = makeIntConst(castNode(Integer, v)->val, location);
+			n = makeIntConst(castNode(Integer, v)->ival, location);
 			break;
 
-		case T_String:
 		default:
-			n = makeStringConst(castNode(String, v)->val, location);
-			break;
+			/* currently not used */
+			Assert(false);
+			n = NULL;
 	}
 
 	return n;
-}
-
-/* makeBoolAConst()
- * Create an A_Const string node and put it inside a boolean cast.
- */
-static Node *
-makeBoolAConst(bool state, int location)
-{
-	return makeStringConstCast((state ? "t" : "f"),
-							   location,
-							   SystemTypeName("bool"));
 }
 
 /* makeRoleSpec
@@ -17049,7 +17050,7 @@ doNegate(Node *n, int location)
 
 		if (IsA(&con->val, Integer))
 		{
-			con->val.ival.val = -con->val.ival.val;
+			con->val.ival.ival = -con->val.ival.ival;
 			return n;
 		}
 		if (IsA(&con->val, Float))
@@ -17065,14 +17066,14 @@ doNegate(Node *n, int location)
 static void
 doNegateFloat(Float *v)
 {
-	char   *oldval = v->val;
+	char   *oldval = v->fval;
 
 	if (*oldval == '+')
 		oldval++;
 	if (*oldval == '-')
-		v->val = oldval+1;	/* just strip the '-' */
+		v->fval = oldval+1;	/* just strip the '-' */
 	else
-		v->val = psprintf("-%s", oldval);
+		v->fval = psprintf("-%s", oldval);
 }
 
 static Node *

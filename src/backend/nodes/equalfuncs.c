@@ -3125,7 +3125,7 @@ _equalList(const List *a, const List *b)
 static bool
 _equalInteger(const Integer *a, const Integer *b)
 {
-	COMPARE_SCALAR_FIELD(val);
+	COMPARE_SCALAR_FIELD(ival);
 
 	return true;
 }
@@ -3133,7 +3133,15 @@ _equalInteger(const Integer *a, const Integer *b)
 static bool
 _equalFloat(const Float *a, const Float *b)
 {
-	COMPARE_STRING_FIELD(val);
+	COMPARE_STRING_FIELD(fval);
+
+	return true;
+}
+
+static bool
+_equalBoolean(const Boolean *a, const Boolean *b)
+{
+	COMPARE_SCALAR_FIELD(boolval);
 
 	return true;
 }
@@ -3141,7 +3149,7 @@ _equalFloat(const Float *a, const Float *b)
 static bool
 _equalString(const String *a, const String *b)
 {
-	COMPARE_STRING_FIELD(val);
+	COMPARE_STRING_FIELD(sval);
 
 	return true;
 }
@@ -3149,7 +3157,7 @@ _equalString(const String *a, const String *b)
 static bool
 _equalBitString(const BitString *a, const BitString *b)
 {
-	COMPARE_STRING_FIELD(val);
+	COMPARE_STRING_FIELD(bsval);
 
 	return true;
 }
@@ -3373,6 +3381,9 @@ equal(const void *a, const void *b)
 			break;
 		case T_Float:
 			retval = _equalFloat(a, b);
+			break;
+		case T_Boolean:
+			retval = _equalBoolean(a, b);
 			break;
 		case T_String:
 			retval = _equalString(a, b);

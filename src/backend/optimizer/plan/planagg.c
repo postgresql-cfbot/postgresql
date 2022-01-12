@@ -439,10 +439,12 @@ build_minmax_path(PlannerInfo *root, MinMaxAggInfo *mminfo,
 		path_fraction = 1.0;
 
 	sorted_path =
-		get_cheapest_fractional_path_for_pathkeys(final_rel->pathlist,
+		get_cheapest_fractional_path_for_pathkeys(root, final_rel,
+												  final_rel->pathlist,
 												  subroot->query_pathkeys,
 												  NULL,
-												  path_fraction);
+												  path_fraction,
+												  false);
 	if (!sorted_path)
 		return false;
 

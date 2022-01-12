@@ -22,6 +22,7 @@
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
 #include "nodes/plannodes.h"
+#include "optimizer/cost.h"
 #include "optimizer/optimizer.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
@@ -446,17 +447,24 @@ get_cheapest_path_for_pathkeys(List *paths, List *pathkeys,
  * 'fraction' is the fraction of the total tuples expected to be retrieved
  */
 Path *
-get_cheapest_fractional_path_for_pathkeys(List *paths,
+get_cheapest_fractional_path_for_pathkeys(PlannerInfo *root, RelOptInfo *rel,
+										  List *paths,
 										  List *pathkeys,
 										  Relids required_outer,
-										  double fraction)
+										  double fraction,
+										  bool incremental_sort)
 {
 	Path	   *matched_path = NULL;
 	ListCell   *l;
+	bool		try_incremental_sort;
+
+	try_incremental_sort = (enable_incremental_sort && incremental_sort);
 
 	foreach(l, paths)
 	{
 		Path	   *path = (Path *) lfirst(l);
+		bool		is_sorted;
+		int			presorted_keys;
 
 		/*
 		 * Since cost comparison is a lot cheaper than pathkey comparison, do
@@ -468,7 +476,42 @@ get_cheapest_fractional_path_for_pathkeys(List *paths,
 
 		if (pathkeys_contained_in(pathkeys, path->pathkeys) &&
 			bms_is_subset(PATH_REQ_OUTER(path), required_outer))
+		{
 			matched_path = path;
+			continue;
+		}
+
+		/* Incremental sort disabled or not requested. */
+		if (!try_incremental_sort)
+			continue;
+
+		is_sorted = pathkeys_count_contained_in(pathkeys,
+												path->pathkeys,
+												&presorted_keys);
+
+		/*
+		 * If fully sorted, it should have been handled before. If there
+		 * are no presorted keys, no point in trying incremental sort.
+		 */
+		if (is_sorted || (presorted_keys == 0))
+			continue;
+
+		path = (Path *) create_incremental_sort_path(root,
+													 rel,
+													 path,
+													 pathkeys,
+													 presorted_keys,
+													 -1); /* FIXME can we get something better? */
+
+		/*
+		 * Since cost comparison is a lot cheaper than pathkey comparison, do
+		 * that first.  (XXX is that still true?)
+		 */
+		if (matched_path != NULL &&
+			compare_fractional_path_costs(matched_path, path, fraction) <= 0)
+			continue;
+
+		matched_path = path;
 	}
 	return matched_path;
 }

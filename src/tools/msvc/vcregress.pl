@@ -133,7 +133,6 @@ sub installcheck_internal
 		"--bindir=../../../$Config/psql",
 		"--schedule=${schedule}_schedule",
 		"--max-concurrent-tests=20",
-		"--make-testtablespace-dir",
 		"--encoding=SQL_ASCII",
 		"--no-locale");
 	push(@args, $maxconn) if $maxconn;
@@ -168,7 +167,6 @@ sub check
 		"--bindir=",
 		"--schedule=${schedule}_schedule",
 		"--max-concurrent-tests=20",
-		"--make-testtablespace-dir",
 		"--encoding=SQL_ASCII",
 		"--no-locale",
 		"--temp-instance=./tmp_check");
@@ -537,6 +535,8 @@ sub modulescheck
 sub recoverycheck
 {
 	InstallTemp();
+
+	$ENV{REGRESS_OUTPUTDIR} = "$topdir/src/test/recovery";
 
 	my $mstat  = 0;
 	my $dir    = "$topdir/src/test/recovery";

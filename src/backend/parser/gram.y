@@ -8882,6 +8882,18 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
+			| ALTER TABLE relation_expr RENAME opt_column IF_P EXISTS name TO name
+				{
+					RenameStmt *n = makeNode(RenameStmt);
+					n->renameType = OBJECT_COLUMN;
+					n->relationType = OBJECT_TABLE;
+					n->relation = $3;
+					n->subname = $8;
+					n->newname = $10;
+					n->missing_ok = false;
+					n->sub_missing_ok = true;
+					$$ = (Node *)n;
+				}
 			| ALTER TABLE IF_P EXISTS relation_expr RENAME opt_column name TO name
 				{
 					RenameStmt *n = makeNode(RenameStmt);
@@ -8891,6 +8903,18 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->subname = $8;
 					n->newname = $10;
 					n->missing_ok = true;
+					$$ = (Node *)n;
+				}
+			| ALTER TABLE IF_P EXISTS relation_expr RENAME opt_column IF_P EXISTS name TO name
+				{
+					RenameStmt *n = makeNode(RenameStmt);
+					n->renameType = OBJECT_COLUMN;
+					n->relationType = OBJECT_TABLE;
+					n->relation = $5;
+					n->subname = $10;
+					n->newname = $12;
+					n->missing_ok = true;
+					n->sub_missing_ok = true;
 					$$ = (Node *)n;
 				}
 			| ALTER VIEW qualified_name RENAME opt_column name TO name
@@ -8904,6 +8928,18 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
+			| ALTER VIEW qualified_name RENAME opt_column IF_P EXISTS name TO name
+				{
+					RenameStmt *n = makeNode(RenameStmt);
+					n->renameType = OBJECT_COLUMN;
+					n->relationType = OBJECT_VIEW;
+					n->relation = $3;
+					n->subname = $8;
+					n->newname = $10;
+					n->missing_ok = false;
+					n->sub_missing_ok = true;
+					$$ = (Node *)n;
+				}
 			| ALTER VIEW IF_P EXISTS qualified_name RENAME opt_column name TO name
 				{
 					RenameStmt *n = makeNode(RenameStmt);
@@ -8913,6 +8949,18 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->subname = $8;
 					n->newname = $10;
 					n->missing_ok = true;
+					$$ = (Node *)n;
+				}
+			| ALTER VIEW IF_P EXISTS qualified_name RENAME opt_column IF_P EXISTS name TO name
+				{
+					RenameStmt *n = makeNode(RenameStmt);
+					n->renameType = OBJECT_COLUMN;
+					n->relationType = OBJECT_VIEW;
+					n->relation = $5;
+					n->subname = $10;
+					n->newname = $12;
+					n->missing_ok = true;
+					n->sub_missing_ok = true;
 					$$ = (Node *)n;
 				}
 			| ALTER MATERIALIZED VIEW qualified_name RENAME opt_column name TO name
@@ -8926,6 +8974,18 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
+			| ALTER MATERIALIZED VIEW qualified_name RENAME opt_column IF_P EXISTS name TO name
+				{
+					RenameStmt *n = makeNode(RenameStmt);
+					n->renameType = OBJECT_COLUMN;
+					n->relationType = OBJECT_MATVIEW;
+					n->relation = $4;
+					n->subname = $9;
+					n->newname = $11;
+					n->missing_ok = false;
+					n->sub_missing_ok = true;
+					$$ = (Node *)n;
+				}
 			| ALTER MATERIALIZED VIEW IF_P EXISTS qualified_name RENAME opt_column name TO name
 				{
 					RenameStmt *n = makeNode(RenameStmt);
@@ -8935,6 +8995,18 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->subname = $9;
 					n->newname = $11;
 					n->missing_ok = true;
+					$$ = (Node *)n;
+				}
+			| ALTER MATERIALIZED VIEW IF_P EXISTS qualified_name RENAME opt_column IF_P EXISTS name TO name
+				{
+					RenameStmt *n = makeNode(RenameStmt);
+					n->renameType = OBJECT_COLUMN;
+					n->relationType = OBJECT_MATVIEW;
+					n->relation = $6;
+					n->subname = $11;
+					n->newname = $13;
+					n->missing_ok = true;
+					n->sub_missing_ok = true;
 					$$ = (Node *)n;
 				}
 			| ALTER TABLE relation_expr RENAME CONSTRAINT name TO name
@@ -8968,6 +9040,18 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->missing_ok = false;
 					$$ = (Node *)n;
 				}
+			| ALTER FOREIGN TABLE relation_expr RENAME opt_column IF_P EXISTS name TO name
+				{
+					RenameStmt *n = makeNode(RenameStmt);
+					n->renameType = OBJECT_COLUMN;
+					n->relationType = OBJECT_FOREIGN_TABLE;
+					n->relation = $4;
+					n->subname = $9;
+					n->newname = $11;
+					n->missing_ok = false;
+					n->sub_missing_ok = true;
+					$$ = (Node *)n;
+				}
 			| ALTER FOREIGN TABLE IF_P EXISTS relation_expr RENAME opt_column name TO name
 				{
 					RenameStmt *n = makeNode(RenameStmt);
@@ -8977,6 +9061,18 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->subname = $9;
 					n->newname = $11;
 					n->missing_ok = true;
+					$$ = (Node *)n;
+				}
+			| ALTER FOREIGN TABLE IF_P EXISTS relation_expr RENAME opt_column IF_P EXISTS name TO name
+				{
+					RenameStmt *n = makeNode(RenameStmt);
+					n->renameType = OBJECT_COLUMN;
+					n->relationType = OBJECT_FOREIGN_TABLE;
+					n->relation = $6;
+					n->subname = $11;
+					n->newname = $13;
+					n->missing_ok = true;
+					n->sub_missing_ok = true;
 					$$ = (Node *)n;
 				}
 			| ALTER RULE name ON qualified_name RENAME TO name
@@ -9098,6 +9194,19 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->newname = $8;
 					n->behavior = $9;
 					n->missing_ok = false;
+					$$ = (Node *)n;
+				}
+			| ALTER TYPE_P any_name RENAME ATTRIBUTE IF_P EXISTS name TO name opt_drop_behavior
+				{
+					RenameStmt *n = makeNode(RenameStmt);
+					n->renameType = OBJECT_ATTRIBUTE;
+					n->relationType = OBJECT_TYPE;
+					n->relation = makeRangeVarFromAnyName($3, @3, yyscanner);
+					n->subname = $8;
+					n->newname = $10;
+					n->behavior = $11;
+					n->missing_ok = false;
+					n->sub_missing_ok = true;
 					$$ = (Node *)n;
 				}
 		;

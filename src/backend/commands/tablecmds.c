@@ -3487,45 +3487,45 @@ renameatt_internal(Oid myrelid,
 
 	atttup = SearchSysCacheCopyAttName(myrelid, oldattname);
 	if (!HeapTupleIsValid(atttup))
-		ereport(ERROR,
-				(errcode(ERRCODE_UNDEFINED_COLUMN),
-				 errmsg("column \"%s\" does not exist",
-						oldattname)));
-	attform = (Form_pg_attribute) GETSTRUCT(atttup);
+		attnum = InvalidAttrNumber;
+	else
+	{
+		attform = (Form_pg_attribute) GETSTRUCT(atttup);
 
-	attnum = attform->attnum;
-	if (attnum <= 0)
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("cannot rename system column \"%s\"",
-						oldattname)));
+		attnum = attform->attnum;
+		if (attnum <= 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					errmsg("cannot rename system column \"%s\"",
+							oldattname)));
 
-	/*
-	 * if the attribute is inherited, forbid the renaming.  if this is a
-	 * top-level call to renameatt(), then expected_parents will be 0, so the
-	 * effect of this code will be to prohibit the renaming if the attribute
-	 * is inherited at all.  if this is a recursive call to renameatt(),
-	 * expected_parents will be the number of parents the current relation has
-	 * within the inheritance hierarchy being processed, so we'll prohibit the
-	 * renaming only if there are additional parents from elsewhere.
-	 */
-	if (attform->attinhcount > expected_parents)
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
-				 errmsg("cannot rename inherited column \"%s\"",
-						oldattname)));
+		/*
+		* if the attribute is inherited, forbid the renaming.  if this is a
+		* top-level call to renameatt(), then expected_parents will be 0, so the
+		* effect of this code will be to prohibit the renaming if the attribute
+		* is inherited at all.  if this is a recursive call to renameatt(),
+		* expected_parents will be the number of parents the current relation has
+		* within the inheritance hierarchy being processed, so we'll prohibit the
+		* renaming only if there are additional parents from elsewhere.
+		*/
+		if (attform->attinhcount > expected_parents)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+					errmsg("cannot rename inherited column \"%s\"",
+							oldattname)));
 
-	/* new name should not already exist */
-	(void) check_for_column_name_collision(targetrelation, newattname, false);
+		/* new name should not already exist */
+		(void) check_for_column_name_collision(targetrelation, newattname, false);
 
-	/* apply the update */
-	namestrcpy(&(attform->attname), newattname);
+		/* apply the update */
+		namestrcpy(&(attform->attname), newattname);
 
-	CatalogTupleUpdate(attrelation, &atttup->t_self, atttup);
+		CatalogTupleUpdate(attrelation, &atttup->t_self, atttup);
 
-	InvokeObjectPostAlterHook(RelationRelationId, myrelid, attnum);
+		InvokeObjectPostAlterHook(RelationRelationId, myrelid, attnum);
 
-	heap_freetuple(atttup);
+		heap_freetuple(atttup);
+	}
 
 	table_close(attrelation, RowExclusiveLock);
 
@@ -3586,6 +3586,22 @@ renameatt(RenameStmt *stmt)
 						   false,	/* recursing? */
 						   0,	/* expected inhcount */
 						   stmt->behavior);
+
+	if (attnum == InvalidAttrNumber)
+	{
+		if (!stmt->sub_missing_ok)
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_COLUMN),
+					 errmsg("column \"%s\" does not exist",
+							stmt->subname)));
+		else
+		{
+			ereport(NOTICE,
+					(errmsg("column \"%s\" does not exist, skipping",
+							stmt->subname)));
+			return InvalidObjectAddress;
+		}
+	}
 
 	ObjectAddressSubSet(address, RelationRelationId, relid, attnum);
 

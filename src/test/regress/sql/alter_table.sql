@@ -1271,6 +1271,14 @@ create table dropColumnExists ();
 alter table dropColumnExists drop column non_existing; --fail
 alter table dropColumnExists drop column if exists non_existing; --succeed
 
+-- rename column if exists
+create table renameColumnExists ();
+alter table renameColumnExists rename column c1 to c2; -- fails
+alter table renameColumnExists rename column if exists c1 to c2; -- succeeds
+alter table renameColumnExists add column c1 int;
+alter table renameColumnExists rename column if exists c1 to c2; -- succeeds
+drop table renameColumnExists;
+
 select relname, attname, attinhcount, attislocal
 from pg_class join pg_attribute on (pg_class.oid = pg_attribute.attrelid)
 where relname in ('p1','p2','c1','gc1') and attnum > 0 and not attisdropped
@@ -1952,6 +1960,9 @@ ALTER TYPE test_type DROP ATTRIBUTE a, ADD ATTRIBUTE d boolean;
 ALTER TYPE test_type RENAME ATTRIBUTE a TO aa;
 ALTER TYPE test_type RENAME ATTRIBUTE d TO dd;
 \d test_type
+
+ALTER TYPE test_type RENAME ATTRIBUTE IF EXISTS d TO dd;
+ALTER TYPE test_type RENAME ATTRIBUTE IF EXISTS dd TO d;
 
 DROP TYPE test_type;
 

@@ -15,88 +15,8 @@
 #include "storage/lwlock.h"
 #include "storage/shmem.h"
 #include "storage/spin.h"
+#include "replication/slot_common.h"
 #include "replication/walreceiver.h"
-
-/*
- * Behaviour of replication slots, upon release or crash.
- *
- * Slots marked as PERSISTENT are crash-safe and will not be dropped when
- * released. Slots marked as EPHEMERAL will be dropped when released or after
- * restarts.  Slots marked TEMPORARY will be dropped at the end of a session
- * or on error.
- *
- * EPHEMERAL is used as a not-quite-ready state when creating persistent
- * slots.  EPHEMERAL slots can be made PERSISTENT by calling
- * ReplicationSlotPersist().  For a slot that goes away at the end of a
- * session, TEMPORARY is the appropriate choice.
- */
-typedef enum ReplicationSlotPersistency
-{
-	RS_PERSISTENT,
-	RS_EPHEMERAL,
-	RS_TEMPORARY
-} ReplicationSlotPersistency;
-
-/*
- * On-Disk data of a replication slot, preserved across restarts.
- */
-typedef struct ReplicationSlotPersistentData
-{
-	/* The slot's identifier */
-	NameData	name;
-
-	/* database the slot is active on */
-	Oid			database;
-
-	/*
-	 * The slot's behaviour when being dropped (or restored after a crash).
-	 */
-	ReplicationSlotPersistency persistency;
-
-	/*
-	 * xmin horizon for data
-	 *
-	 * NB: This may represent a value that hasn't been written to disk yet;
-	 * see notes for effective_xmin, below.
-	 */
-	TransactionId xmin;
-
-	/*
-	 * xmin horizon for catalog tuples
-	 *
-	 * NB: This may represent a value that hasn't been written to disk yet;
-	 * see notes for effective_xmin, below.
-	 */
-	TransactionId catalog_xmin;
-
-	/* oldest LSN that might be required by this replication slot */
-	XLogRecPtr	restart_lsn;
-
-	/* restart_lsn is copied here when the slot is invalidated */
-	XLogRecPtr	invalidated_at;
-
-	/*
-	 * Oldest LSN that the client has acked receipt for.  This is used as the
-	 * start_lsn point in case the client doesn't specify one, and also as a
-	 * safety measure to jump forwards in case the client specifies a
-	 * start_lsn that's further in the past than this value.
-	 */
-	XLogRecPtr	confirmed_flush;
-
-	/*
-	 * LSN at which we enabled two_phase commit for this slot or LSN at which
-	 * we found a consistent point at the time of slot creation.
-	 */
-	XLogRecPtr	two_phase_at;
-
-	/*
-	 * Allow decoding of prepared transactions?
-	 */
-	bool		two_phase;
-
-	/* plugin name */
-	NameData	plugin;
-} ReplicationSlotPersistentData;
 
 /*
  * Shared memory state of a single replication slot.

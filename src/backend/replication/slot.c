@@ -50,45 +50,6 @@
 #include "storage/procarray.h"
 #include "utils/builtins.h"
 
-/*
- * Replication slot on-disk data structure.
- */
-typedef struct ReplicationSlotOnDisk
-{
-	/* first part of this struct needs to be version independent */
-
-	/* data not covered by checksum */
-	uint32		magic;
-	pg_crc32c	checksum;
-
-	/* data covered by checksum */
-	uint32		version;
-	uint32		length;
-
-	/*
-	 * The actual data in the slot that follows can differ based on the above
-	 * 'version'.
-	 */
-
-	ReplicationSlotPersistentData slotdata;
-} ReplicationSlotOnDisk;
-
-/* size of version independent data */
-#define ReplicationSlotOnDiskConstantSize \
-	offsetof(ReplicationSlotOnDisk, slotdata)
-/* size of the part of the slot not covered by the checksum */
-#define ReplicationSlotOnDiskNotChecksummedSize  \
-	offsetof(ReplicationSlotOnDisk, version)
-/* size of the part covered by the checksum */
-#define ReplicationSlotOnDiskChecksummedSize \
-	sizeof(ReplicationSlotOnDisk) - ReplicationSlotOnDiskNotChecksummedSize
-/* size of the slot data that is version dependent */
-#define ReplicationSlotOnDiskV2Size \
-	sizeof(ReplicationSlotOnDisk) - ReplicationSlotOnDiskConstantSize
-
-#define SLOT_MAGIC		0x1051CA1	/* format identifier */
-#define SLOT_VERSION	2		/* version for new files */
-
 /* Control array for replication slot management */
 ReplicationSlotCtlData *ReplicationSlotCtl = NULL;
 

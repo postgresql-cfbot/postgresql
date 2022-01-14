@@ -247,13 +247,6 @@ my %pgdump_runs = (
 			'--exclude-database', '*dump_test*', '--no-sync',
 		],
 	},
-	no_toast_compression => {
-		dump_cmd => [
-			'pg_dump', '--no-sync',
-			"--file=$tempdir/no_toast_compression.sql",
-			'--no-toast-compression', 'postgres',
-		],
-	},
 	no_blobs => {
 		dump_cmd => [
 			'pg_dump',                      '--no-sync',
@@ -273,6 +266,20 @@ my %pgdump_runs = (
 			'pg_dump',                      '--no-sync',
 			"--file=$tempdir/no_owner.sql", '-O',
 			'postgres',
+		],
+	},
+	no_table_am => {
+		dump_cmd => [
+			'pg_dump', '--no-sync',
+			"--file=$tempdir/no_table_am.sql",
+			'--no-table-access-method', 'postgres',
+		],
+	},
+	no_toast_compression => {
+		dump_cmd => [
+			'pg_dump', '--no-sync',
+			"--file=$tempdir/no_toast_compression.sql",
+			'--no-toast-compression', 'postgres',
 		],
 	},
 	only_dump_test_schema => {
@@ -422,10 +429,11 @@ my %full_runs = (
 	exclude_dump_test_schema => 1,
 	exclude_test_table       => 1,
 	exclude_test_table_data  => 1,
-	no_toast_compression     => 1,
 	no_blobs                 => 1,
 	no_owner                 => 1,
 	no_privs                 => 1,
+	no_table_am              => 1,
+	no_toast_compression     => 1,
 	pg_dumpall_dbprivs       => 1,
 	pg_dumpall_exclude       => 1,
 	schema_only              => 1,);
@@ -2968,10 +2976,11 @@ my %tests = (
 			defaults                => 1,
 			exclude_test_table      => 1,
 			exclude_test_table_data => 1,
-			no_toast_compression    => 1,
 			no_blobs                => 1,
 			no_privs                => 1,
 			no_owner                => 1,
+			no_table_am             => 1,
+			no_toast_compression    => 1,
 			only_dump_test_schema   => 1,
 			pg_dumpall_dbprivs      => 1,
 			pg_dumpall_exclude      => 1,
@@ -3041,10 +3050,11 @@ my %tests = (
 			exclude_dump_test_schema => 1,
 			exclude_test_table       => 1,
 			exclude_test_table_data  => 1,
-			no_toast_compression     => 1,
 			no_blobs                 => 1,
 			no_privs                 => 1,
 			no_owner                 => 1,
+			no_table_am              => 1,
+			no_toast_compression     => 1,
 			pg_dumpall_dbprivs       => 1,
 			pg_dumpall_exclude       => 1,
 			role                     => 1,
@@ -3648,7 +3658,7 @@ my %tests = (
 		like => {
 			%full_runs, %dump_test_schema_runs, section_pre_data => 1,
 		},
-		unlike => { exclude_dump_test_schema => 1 },
+		unlike => { exclude_dump_test_schema => 1, no_table_am => 1 },
 	},
 
 	'CREATE MATERIALIZED VIEW regress_pg_dump_matview_am' => {
@@ -3668,7 +3678,7 @@ my %tests = (
 		like => {
 			%full_runs, %dump_test_schema_runs, section_pre_data => 1,
 		},
-		unlike => { exclude_dump_test_schema => 1 },
+		unlike => { exclude_dump_test_schema => 1, no_table_am => 1 },
 	});
 
 #########################################

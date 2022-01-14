@@ -268,7 +268,7 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 	/* user-invoked vacuum is never "for wraparound" */
 	params.is_wraparound = false;
 
-	/* user-invoked vacuum never uses this parameter */
+	/* user-invoked vacuum uses VACOPT_VERBOSE instead of log_min_duration */
 	params.log_min_duration = -1;
 
 	/* Now go through the common routine */

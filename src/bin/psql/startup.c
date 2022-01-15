@@ -200,6 +200,7 @@ main(int argc, char *argv[])
 
 	/* Default values for variables (that don't match the result of \unset) */
 	SetVariableBool(pset.vars, "AUTOCOMMIT");
+	SetVariableBool(pset.vars, "ON_ERROR_STOP");
 	SetVariable(pset.vars, "PROMPT1", DEFAULT_PROMPT1);
 	SetVariable(pset.vars, "PROMPT2", DEFAULT_PROMPT2);
 	SetVariable(pset.vars, "PROMPT3", DEFAULT_PROMPT3);

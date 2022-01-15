@@ -100,6 +100,9 @@ int			log_statement = LOGSTMT_NONE;
 /* GUC variable for maximum stack depth (measured in kilobytes) */
 int			max_stack_depth = 100;
 
+/* Hook for plugins to get control in pg_parse_query() */
+parser_hook_type parser_hook = NULL;
+
 /* wait N seconds to allow attach from a debugger */
 int			PostAuthDelay = 0;
 
@@ -590,18 +593,147 @@ ProcessClientWriteInterrupt(bool blocked)
  * database tables.  So, we rely on the raw parser to determine whether
  * we've seen a COMMIT or ABORT command; when we are in abort state, other
  * commands are not processed any further than the raw parse stage.
+ *
+ * To support loadable plugins that monitor the parsing or implements SQL
+ * syntactic sugar we provide a hook variable that lets a plugin get control
+ * before and after the standard parsing process.  If the plugin only implement
+ * a subset of postgres supported syntax, it's its duty to call raw_parser (or
+ * the previous hook if any) for the statements it doesn't understand.
  */
 List *
 pg_parse_query(const char *query_string)
 {
-	List	   *raw_parsetree_list;
+	List		   *result = NIL;
+	int				stmt_len, offset;
 
 	TRACE_POSTGRESQL_QUERY_PARSE_START(query_string);
 
 	if (log_parser_stats)
 		ResetUsage();
 
-	raw_parsetree_list = raw_parser(query_string, RAW_PARSE_DEFAULT);
+	stmt_len = 0; /* lazily computed when needed */
+	offset = 0;
+
+	while(true)
+	{
+		List *raw_parsetree_list;
+		RawStmt *raw;
+		bool	error = false;
+
+		/*----------------
+		 * Start parsing the input string.  If a third-party module provided a
+		 * parser_hook, we switch to single-query parsing so multi-query
+		 * commands using different grammar can work properly.
+		 * If the third-party modules support the full set of SQL we support,
+		 * or want to prevent fallback on the core parser, it can ignore the
+		 * RAW_PARSE_SINGLE_QUERY flag and parse the full query string.
+		 * In that case they must return a List with more than one RawStmt or a
+		 * single RawStmt with a 0 length to stop the parsing phase, or raise
+		 * an ERROR.
+		 *
+		 * Otherwise, plugins should parse a single query only and always
+		 * return a List containing a single RawStmt with a properly set length
+		 * (possibly 0 if it was a single query without end of query
+		 * delimiter).  If the command is valid but doesn't contain any
+		 * statements (e.g. a single semi-colon), a single RawStmt with a NULL
+		 * stmt field should be returned, containing the consumed query string
+		 * length so we can move to the next command in a single pass rather
+		 * than 1 byte at a time.
+		 *
+		 * Also, third-party modules can choose to ignore some or all of
+		 * parsing error if they want to implement only subset of postgres
+		 * suppoted syntax, or even a totally different syntax, and fall-back
+		 * on core grammar for unhandled case.  In thase case, they should set
+		 * the error flag to true.  The returned List will be ignored and the
+		 * same offset of the input string will be parsed using the core
+		 * parser.
+		 *
+		 * Finally, note that third-party modules that wants to fallback on
+		 * other grammar should first try to call a previous parser hook if any
+		 * before setting the error switch and returning .
+		 */
+		if (parser_hook)
+			raw_parsetree_list = (*parser_hook) (query_string,
+												 RAW_PARSE_SINGLE_QUERY,
+												 offset,
+												 &error);
+
+		/*
+		 * If a third-party module couldn't parse a single query or if no
+		 * third-party module is configured, fallback on core parser.
+		 */
+		if (error || !parser_hook)
+		{
+			/* Send a -1 offset to raw_parser to specify that it should
+			 * explicitly detect EOF during parsing.  scanner_init() will treat
+			 * it the same as a 0 offset.
+			 */
+			raw_parsetree_list = raw_parser(query_string,
+					error ? RAW_PARSE_SINGLE_QUERY : RAW_PARSE_DEFAULT,
+					(error && offset == 0) ? -1 : offset);
+		}
+
+		/*
+		 * If there are no third-party plugin, or none of the parsers found a
+		 * valid query, or if a third party module consumed the whole
+		 * query string we're done.
+		 */
+		if (!parser_hook || raw_parsetree_list == NIL ||
+			list_length(raw_parsetree_list) > 1)
+		{
+			/*
+			 * Warn third-party plugins if they mix "single query" and "whole
+			 * input string" strategy rather than silently accepting it and
+			 * maybe allow fallback on core grammar even if they want to avoid
+			 * that.  This way plugin authors can be warned early of the issue.
+			 */
+			if (result != NIL)
+			{
+				Assert(parser_hook != NULL);
+				elog(ERROR, "parser_hook should parse a single statement at "
+						"a time or consume the whole input string at once");
+			}
+			result = raw_parsetree_list;
+			break;
+		}
+
+		if (stmt_len == 0)
+			stmt_len = strlen(query_string);
+
+		raw = linitial_node(RawStmt, raw_parsetree_list);
+
+		/*
+		 * In single-query mode, the parser will return statement location info
+		 * relative to the beginning of complete original string, not the part
+		 * we just parsed, so adjust the location info.
+		 */
+		if (offset > 0 && raw->stmt_len > 0)
+		{
+			Assert(raw->stmt_len > offset);
+			raw->stmt_location = offset;
+			raw->stmt_len -= offset;
+		}
+
+		/* Ignore the statement if it didn't contain any command. */
+		if (raw->stmt)
+			result = lappend(result, raw);
+
+		if (raw->stmt_len == 0)
+		{
+			/* The statement was the whole string, we're done. */
+			break;
+		}
+		else if (raw->stmt_len + offset >= stmt_len)
+		{
+			/* We consumed all of the input string, we're done. */
+			break;
+		}
+		else
+		{
+			/* Advance the offset to the next command. */
+			offset += raw->stmt_len;
+		}
+	}
 
 	if (log_parser_stats)
 		ShowUsage("PARSER STATISTICS");
@@ -609,13 +741,13 @@ pg_parse_query(const char *query_string)
 #ifdef COPY_PARSE_PLAN_TREES
 	/* Optional debugging check: pass raw parsetrees through copyObject() */
 	{
-		List	   *new_list = copyObject(raw_parsetree_list);
+		List	   *new_list = copyObject(result);
 
 		/* This checks both copyObject() and the equal() routines... */
-		if (!equal(new_list, raw_parsetree_list))
+		if (!equal(new_list, result))
 			elog(WARNING, "copyObject() failed to produce an equal raw parse tree");
 		else
-			raw_parsetree_list = new_list;
+			result = new_list;
 	}
 #endif
 
@@ -627,7 +759,7 @@ pg_parse_query(const char *query_string)
 
 	TRACE_POSTGRESQL_QUERY_PARSE_DONE(query_string);
 
-	return raw_parsetree_list;
+	return result;
 }
 
 /*

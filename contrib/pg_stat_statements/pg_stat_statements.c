@@ -2729,7 +2729,8 @@ fill_in_constant_lengths(JumbleState *jstate, const char *query,
 	yyscanner = scanner_init(query,
 							 &yyextra,
 							 &ScanKeywords,
-							 ScanKeywordTokens);
+							 ScanKeywordTokens,
+							 0);
 
 	/* we don't want to re-emit any escape string warnings */
 	yyextra.escape_string_warning = false;

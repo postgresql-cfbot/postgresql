@@ -1044,7 +1044,10 @@ other			.
 
 <<EOF>>			{
 					SET_YYLLOC();
-					yyterminate();
+					if (yyextra->return_eof)
+						return END_OF_FILE;
+					else
+						yyterminate();
 				}
 
 %%
@@ -1192,8 +1195,10 @@ core_yyscan_t
 scanner_init(const char *str,
 			 core_yy_extra_type *yyext,
 			 const ScanKeywordList *keywordlist,
-			 const uint16 *keyword_tokens)
+			 const uint16 *keyword_tokens,
+			 int offset)
 {
+	YY_BUFFER_STATE state;
 	Size		slen = strlen(str);
 	yyscan_t	scanner;
 
@@ -1216,12 +1221,27 @@ scanner_init(const char *str,
 	yyext->scanbuflen = slen;
 	memcpy(yyext->scanbuf, str, slen);
 	yyext->scanbuf[slen] = yyext->scanbuf[slen + 1] = YY_END_OF_BUFFER_CHAR;
-	yy_scan_buffer(yyext->scanbuf, slen + 2, scanner);
+	state = yy_scan_buffer(yyext->scanbuf, slen + 2, scanner);
 
 	/* initialize literal buffer to a reasonable but expansible size */
 	yyext->literalalloc = 1024;
 	yyext->literalbuf = (char *) palloc(yyext->literalalloc);
 	yyext->literallen = 0;
+
+	/*
+	 * Note that pg_parse_query will set a -1 offset rather than 0 for the
+	 * first query of a possibly multi-query string if it wants us to return an
+	 * EOF token.
+	 */
+	yyext->return_eof = (offset != 0);
+
+	/*
+	 * Adjust the offset in the input string.  This is required in single-query
+	 * mode, as we need to register the same token locations as we would have
+	 * in normal mode with multi-statement query string.
+	 */
+	if (offset > 0)
+		state->yy_buf_pos += offset;
 
 	return scanner;
 }

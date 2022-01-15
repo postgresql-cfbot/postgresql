@@ -187,6 +187,8 @@ static char *convert_string_datum(Datum value, Oid typid, Oid collid,
 								  bool *failure);
 static double convert_timevalue_to_scalar(Datum value, Oid typid,
 										  bool *failure);
+static void recheck_parent_acl(PlannerInfo *root, VariableStatData *vardata,
+								Oid relid);
 static void examine_simple_variable(PlannerInfo *root, Var *var,
 									VariableStatData *vardata);
 static bool get_variable_range(PlannerInfo *root, VariableStatData *vardata,
@@ -3919,17 +3921,6 @@ estimate_multivariate_ndistinct(PlannerInfo *root, RelOptInfo *rel,
 	if (!rel->statlist)
 		return false;
 
-	/*
-	 * When dealing with regular inheritance trees, ignore extended stats
-	 * (which were built without data from child rels, and thus do not
-	 * represent them). For partitioned tables data there's no data in the
-	 * non-leaf relations, so we build stats only for the inheritance tree.
-	 * So for partitioned tables we do consider extended stats.
-	 */
-	rte = planner_rt_fetch(rel->relid, root);
-	if (rte->inh && rte->relkind != RELKIND_PARTITIONED_TABLE)
-		return false;
-
 	/* look for the ndistinct statistics object matching the most vars */
 	nmatches_vars = 0;			/* we require at least two matches */
 	nmatches_exprs = 0;
@@ -4015,7 +4006,8 @@ estimate_multivariate_ndistinct(PlannerInfo *root, RelOptInfo *rel,
 
 	Assert(nmatches_vars + nmatches_exprs > 1);
 
-	stats = statext_ndistinct_load(statOid);
+	rte = planner_rt_fetch(rel->relid, root);
+	stats = statext_ndistinct_load(statOid, rte->inh);
 
 	/*
 	 * If we have a match, search it for the specific item that matches (there
@@ -5163,51 +5155,7 @@ examine_variable(PlannerInfo *root, Node *node, int varRelid,
 									(pg_class_aclcheck(rte->relid, userid,
 													   ACL_SELECT) == ACLCHECK_OK);
 
-								/*
-								 * If the user doesn't have permissions to
-								 * access an inheritance child relation, check
-								 * the permissions of the table actually
-								 * mentioned in the query, since most likely
-								 * the user does have that permission.  Note
-								 * that whole-table select privilege on the
-								 * parent doesn't quite guarantee that the
-								 * user could read all columns of the child.
-								 * But in practice it's unlikely that any
-								 * interesting security violation could result
-								 * from allowing access to the expression
-								 * index's stats, so we allow it anyway.  See
-								 * similar code in examine_simple_variable()
-								 * for additional comments.
-								 */
-								if (!vardata->acl_ok &&
-									root->append_rel_array != NULL)
-								{
-									AppendRelInfo *appinfo;
-									Index		varno = index->rel->relid;
-
-									appinfo = root->append_rel_array[varno];
-									while (appinfo &&
-										   planner_rt_fetch(appinfo->parent_relid,
-															root)->rtekind == RTE_RELATION)
-									{
-										varno = appinfo->parent_relid;
-										appinfo = root->append_rel_array[varno];
-									}
-									if (varno != index->rel->relid)
-									{
-										/* Repeat access check on this rel */
-										rte = planner_rt_fetch(varno, root);
-										Assert(rte->rtekind == RTE_RELATION);
-
-										userid = rte->checkAsUser ? rte->checkAsUser : GetUserId();
-
-										vardata->acl_ok =
-											rte->securityQuals == NIL &&
-											(pg_class_aclcheck(rte->relid,
-															   userid,
-															   ACL_SELECT) == ACLCHECK_OK);
-									}
-								}
+								recheck_parent_acl(root, vardata, index->rel->relid);
 							}
 							else
 							{
@@ -5245,17 +5193,6 @@ examine_variable(PlannerInfo *root, Node *node, int varRelid,
 			if (vardata->statsTuple)
 				break;
 
-			/*
-			 * When dealing with regular inheritance trees, ignore extended
-			 * stats (which were built without data from child rels, and thus
-			 * do not represent them). For partitioned tables data there's no
-			 * data in the non-leaf relations, so we build stats only for the
-			 * inheritance tree. So for partitioned tables we do consider
-			 * extended stats.
-			 */
-			if (rte->inh && rte->relkind != RELKIND_PARTITIONED_TABLE)
-				break;
-
 			/* skip stats without per-expression stats */
 			if (info->kind != STATS_EXT_EXPRESSIONS)
 				continue;
@@ -5274,22 +5211,18 @@ examine_variable(PlannerInfo *root, Node *node, int varRelid,
 				/* found a match, see if we can extract pg_statistic row */
 				if (equal(node, expr))
 				{
-					HeapTuple	t = statext_expressions_load(info->statOid, pos);
-
-					/* Get statistics object's table for permission check */
-					RangeTblEntry *rte;
 					Oid			userid;
 
-					vardata->statsTuple = t;
+					Assert(rte->rtekind == RTE_RELATION);
 
 					/*
 					 * XXX Not sure if we should cache the tuple somewhere.
 					 * Now we just create a new copy every time.
 					 */
-					vardata->freefunc = ReleaseDummy;
+					vardata->statsTuple =
+						statext_expressions_load(info->statOid, rte->inh, pos);
 
-					rte = planner_rt_fetch(onerel->relid, root);
-					Assert(rte->rtekind == RTE_RELATION);
+					vardata->freefunc = ReleaseDummy;
 
 					/*
 					 * Use checkAsUser if it's set, in case we're accessing
@@ -5310,54 +5243,60 @@ examine_variable(PlannerInfo *root, Node *node, int varRelid,
 						(pg_class_aclcheck(rte->relid, userid,
 										   ACL_SELECT) == ACLCHECK_OK);
 
-					/*
-					 * If the user doesn't have permissions to access an
-					 * inheritance child relation, check the permissions of
-					 * the table actually mentioned in the query, since most
-					 * likely the user does have that permission.  Note that
-					 * whole-table select privilege on the parent doesn't
-					 * quite guarantee that the user could read all columns of
-					 * the child. But in practice it's unlikely that any
-					 * interesting security violation could result from
-					 * allowing access to the expression stats, so we allow it
-					 * anyway.  See similar code in examine_simple_variable()
-					 * for additional comments.
-					 */
-					if (!vardata->acl_ok &&
-						root->append_rel_array != NULL)
-					{
-						AppendRelInfo *appinfo;
-						Index		varno = onerel->relid;
-
-						appinfo = root->append_rel_array[varno];
-						while (appinfo &&
-							   planner_rt_fetch(appinfo->parent_relid,
-												root)->rtekind == RTE_RELATION)
-						{
-							varno = appinfo->parent_relid;
-							appinfo = root->append_rel_array[varno];
-						}
-						if (varno != onerel->relid)
-						{
-							/* Repeat access check on this rel */
-							rte = planner_rt_fetch(varno, root);
-							Assert(rte->rtekind == RTE_RELATION);
-
-							userid = rte->checkAsUser ? rte->checkAsUser : GetUserId();
-
-							vardata->acl_ok =
-								rte->securityQuals == NIL &&
-								(pg_class_aclcheck(rte->relid,
-												   userid,
-												   ACL_SELECT) == ACLCHECK_OK);
-						}
-					}
-
+					recheck_parent_acl(root, vardata, onerel->relid);
 					break;
 				}
 
 				pos++;
 			}
+		}
+	}
+}
+
+/*
+ * If the user doesn't have permissions to access an inheritance child
+ * relation, check the permissions of the table actually mentioned in the
+ * query, since most likely the user does have that permission.  Note that
+ * whole-table select privilege on the parent doesn't quite guarantee that the
+ * user could read all columns of the child.  But in practice it's unlikely
+ * that any interesting security violation could result from allowing access to
+ * the expression stats, so we allow it anyway.  See similar code in
+ * examine_simple_variable() for additional comments.
+ */
+static void
+recheck_parent_acl(PlannerInfo *root, VariableStatData *vardata, Oid relid)
+{
+	RangeTblEntry	*rte;
+	Oid		userid;
+
+	if (!vardata->acl_ok &&
+		root->append_rel_array != NULL)
+	{
+		AppendRelInfo *appinfo;
+		Index		varno = relid;
+
+		appinfo = root->append_rel_array[varno];
+		while (appinfo &&
+			   planner_rt_fetch(appinfo->parent_relid,
+								root)->rtekind == RTE_RELATION)
+		{
+			varno = appinfo->parent_relid;
+			appinfo = root->append_rel_array[varno];
+		}
+
+		if (varno != relid)
+		{
+			/* Repeat access check on this rel */
+			rte = planner_rt_fetch(varno, root);
+			Assert(rte->rtekind == RTE_RELATION);
+
+			userid = rte->checkAsUser ? rte->checkAsUser : GetUserId();
+
+			vardata->acl_ok =
+				rte->securityQuals == NIL &&
+				(pg_class_aclcheck(rte->relid,
+								   userid,
+								   ACL_SELECT) == ACLCHECK_OK);
 		}
 	}
 }

@@ -1,22 +1,22 @@
 /*-------------------------------------------------------------------------
  *
- * logicalmsgdesc.c
- *	  rmgr descriptor routines for replication/logical/message.c
+ * logicaldesc.c
+ *	  rmgr descriptor routines for replication/logical/logical_xlog.c
  *
  * Portions Copyright (c) 2015-2022, PostgreSQL Global Development Group
  *
  *
  * IDENTIFICATION
- *	  src/backend/access/rmgrdesc/logicalmsgdesc.c
+ *	  src/backend/access/rmgrdesc/logicaldesc.c
  *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"
 
-#include "replication/message.h"
+#include "replication/logical_xlog.h"
 
 void
-logicalmsg_desc(StringInfo buf, XLogReaderState *record)
+logical_desc(StringInfo buf, XLogReaderState *record)
 {
 	char	   *rec = XLogRecGetData(record);
 	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
@@ -40,13 +40,42 @@ logicalmsg_desc(StringInfo buf, XLogReaderState *record)
 			sep = " ";
 		}
 	}
+	else if (info == XLOG_LOGICAL_INSERT)
+	{
+
+	}
+	else if (info == XLOG_LOGICAL_UPDATE)
+	{
+
+	}
+	else if (info == XLOG_LOGICAL_DELETE)
+	{
+
+	}
+	else if (info == XLOG_LOGICAL_TRUNCATE)
+	{
+
+	}
 }
 
 const char *
-logicalmsg_identify(uint8 info)
+logical_identify(uint8 info)
 {
-	if ((info & ~XLR_INFO_MASK) == XLOG_LOGICAL_MESSAGE)
-		return "MESSAGE";
+	switch (info)
+	{
+		case XLOG_LOGICAL_MESSAGE:
+			return "MESSAGE";
+		case XLOG_LOGICAL_INSERT:
+			return "INSERT";
+		case XLOG_LOGICAL_UPDATE:
+			return "UPDATE";
+		case XLOG_LOGICAL_DELETE:
+			return "DELETE";
+		case XLOG_LOGICAL_TRUNCATE:
+			return "TRUNCATE";
+		default:
+			return NULL;
+	}
 
 	return NULL;
 }

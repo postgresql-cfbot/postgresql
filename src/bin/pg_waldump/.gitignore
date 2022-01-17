@@ -10,7 +10,7 @@
 /gistdesc.c
 /hashdesc.c
 /heapdesc.c
-/logicalmsgdesc.c
+/logicaldesc.c
 /mxactdesc.c
 /nbtdesc.c
 /relmapdesc.c

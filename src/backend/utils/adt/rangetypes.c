@@ -2506,6 +2506,70 @@ range_contains_elem_internal(TypeCacheEntry *typcache, const RangeType *r, Datum
 	return true;
 }
 
+/*
+ * Test whether range r is right of a specific element value.
+ *
+ * XXX naming seems a bit strange, all other functions here start with range_
+ */
+bool
+elem_before_range_internal(TypeCacheEntry *typcache, Datum val, const RangeType *r)
+{
+	RangeBound	lower;
+	RangeBound	upper;
+	bool		empty;
+	int32		cmp;
+
+	range_deserialize(typcache, r, &lower, &upper, &empty);
+
+	if (empty)
+		return true;
+
+	if (!lower.infinite)
+	{
+		cmp = DatumGetInt32(FunctionCall2Coll(&typcache->rng_cmp_proc_finfo,
+											  typcache->rng_collation,
+											  lower.val, val));
+		if (cmp > 0)
+			return true;
+		if (cmp == 0 && !lower.inclusive)
+			return true;
+	}
+
+	return false;
+}
+
+/*
+ * Test whether range r is left of a specific element value.
+ *
+ * XXX naming seems a bit strange, all other functions here start with range_
+ */
+bool
+elem_after_range_internal(TypeCacheEntry *typcache, Datum val, const RangeType *r)
+{
+	RangeBound	lower;
+	RangeBound	upper;
+	bool		empty;
+	int32		cmp;
+
+	range_deserialize(typcache, r, &lower, &upper, &empty);
+
+	if (empty)
+		return true;
+
+	if (!upper.infinite)
+	{
+		cmp = DatumGetInt32(FunctionCall2Coll(&typcache->rng_cmp_proc_finfo,
+											  typcache->rng_collation,
+											  upper.val, val));
+		if (cmp < 0)
+			return true;
+		if (cmp == 0 && !upper.inclusive)
+			return true;
+	}
+
+	return false;
+}
+
 
 /*
  * datum_compute_size() and datum_write() are used to insert the bound

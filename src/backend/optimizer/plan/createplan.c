@@ -247,6 +247,7 @@ static Hash *make_hash(Plan *lefttree,
 static MergeJoin *make_mergejoin(List *tlist,
 								 List *joinclauses, List *otherclauses,
 								 List *mergeclauses,
+								 List *rangeclause,
 								 Oid *mergefamilies,
 								 Oid *mergecollations,
 								 int *mergestrategies,
@@ -4327,6 +4328,7 @@ create_mergejoin_plan(PlannerInfo *root,
 	List	   *joinclauses;
 	List	   *otherclauses;
 	List	   *mergeclauses;
+	List	   *rangeclause;
 	List	   *outerpathkeys;
 	List	   *innerpathkeys;
 	int			nClauses;
@@ -4381,6 +4383,9 @@ create_mergejoin_plan(PlannerInfo *root,
 	mergeclauses = get_actual_clauses(best_path->path_mergeclauses);
 	joinclauses = list_difference(joinclauses, mergeclauses);
 
+	rangeclause = get_actual_clauses(best_path->path_rangeclause);
+	joinclauses = list_difference(joinclauses, rangeclause);
+
 	/*
 	 * Replace any outer-relation variables with nestloop params.  There
 	 * should not be any in the mergeclauses.
@@ -4391,6 +4396,8 @@ create_mergejoin_plan(PlannerInfo *root,
 			replace_nestloop_params(root, (Node *) joinclauses);
 		otherclauses = (List *)
 			replace_nestloop_params(root, (Node *) otherclauses);
+		rangeclause = (List *)
+			replace_nestloop_params(root, (Node *) rangeclause);
 	}
 
 	/*
@@ -4607,6 +4614,7 @@ create_mergejoin_plan(PlannerInfo *root,
 							   joinclauses,
 							   otherclauses,
 							   mergeclauses,
+							   rangeclause,
 							   mergefamilies,
 							   mergecollations,
 							   mergestrategies,
@@ -5911,6 +5919,7 @@ make_mergejoin(List *tlist,
 			   List *joinclauses,
 			   List *otherclauses,
 			   List *mergeclauses,
+			   List *rangeclause,
 			   Oid *mergefamilies,
 			   Oid *mergecollations,
 			   int *mergestrategies,
@@ -5937,6 +5946,7 @@ make_mergejoin(List *tlist,
 	node->join.jointype = jointype;
 	node->join.inner_unique = inner_unique;
 	node->join.joinqual = joinclauses;
+	node->rangeclause = rangeclause;
 
 	return node;
 }

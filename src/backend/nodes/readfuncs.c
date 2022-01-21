@@ -2172,6 +2172,7 @@ _readMergeJoin(void)
 
 	READ_BOOL_FIELD(skip_mark_restore);
 	READ_NODE_FIELD(mergeclauses);
+    READ_NODE_FIELD(rangeclause);
 
 	numCols = list_length(local_node->mergeclauses);
 

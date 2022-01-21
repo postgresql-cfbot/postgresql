@@ -2063,6 +2063,14 @@ set_join_references(PlannerInfo *root, Join *join, int rtoffset)
 										 (Index) 0,
 										 rtoffset,
 										 NUM_EXEC_QUAL((Plan *) join));
+
+		mj->rangeclause = fix_join_expr(root,
+										 mj->rangeclause,
+										 outer_itlist,
+										 inner_itlist,
+										 (Index) 0,
+										 rtoffset,
+										 NUM_EXEC_QUAL((Plan *) join));
 	}
 	else if (IsA(join, HashJoin))
 	{

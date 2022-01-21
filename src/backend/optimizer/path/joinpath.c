@@ -16,6 +16,7 @@
 
 #include <math.h>
 
+#include "catalog/pg_operator.h"
 #include "executor/executor.h"
 #include "foreign/fdwapi.h"
 #include "nodes/nodeFuncs.h"
@@ -24,6 +25,7 @@
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
 #include "optimizer/planmain.h"
+#include "utils/lsyscache.h"
 #include "utils/typcache.h"
 
 /* Hook for plugins to get control in add_paths_to_joinrel() */
@@ -84,6 +86,9 @@ static List *select_mergejoin_clauses(PlannerInfo *root,
 									  List *restrictlist,
 									  JoinType jointype,
 									  bool *mergejoin_allowed);
+static List *select_rangejoin_clauses(RelOptInfo *outerrel,
+									  RelOptInfo *innerrel,
+									  List *restrictlist);
 static void generate_mergejoin_paths(PlannerInfo *root,
 									 RelOptInfo *joinrel,
 									 RelOptInfo *innerrel,
@@ -147,6 +152,7 @@ add_paths_to_joinrel(PlannerInfo *root,
 
 	extra.restrictlist = restrictlist;
 	extra.mergeclause_list = NIL;
+	extra.rangeclause_list = NIL;
 	extra.sjinfo = sjinfo;
 	extra.param_source_rels = NULL;
 
@@ -207,6 +213,7 @@ add_paths_to_joinrel(PlannerInfo *root,
 	 * it's a full join.
 	 */
 	if (enable_mergejoin || jointype == JOIN_FULL)
+	{
 		extra.mergeclause_list = select_mergejoin_clauses(root,
 														  joinrel,
 														  outerrel,
@@ -214,6 +221,13 @@ add_paths_to_joinrel(PlannerInfo *root,
 														  restrictlist,
 														  jointype,
 														  &mergejoin_allowed);
+
+		/* XXX Why only for inner/left joins? */
+		if (jointype == JOIN_INNER || jointype == JOIN_LEFT)
+			extra.rangeclause_list = select_rangejoin_clauses(outerrel,
+															  innerrel,
+															  restrictlist);
+	}
 
 	/*
 	 * If it's SEMI, ANTI, or inner_unique join, compute correction factors
@@ -822,6 +836,7 @@ try_mergejoin_path(PlannerInfo *root,
 				   Path *inner_path,
 				   List *pathkeys,
 				   List *mergeclauses,
+				   List *rangeclause,
 				   List *outersortkeys,
 				   List *innersortkeys,
 				   JoinType jointype,
@@ -895,6 +910,7 @@ try_mergejoin_path(PlannerInfo *root,
 									   pathkeys,
 									   required_outer,
 									   mergeclauses,
+									   rangeclause,
 									   outersortkeys,
 									   innersortkeys));
 	}
@@ -971,6 +987,7 @@ try_partial_mergejoin_path(PlannerInfo *root,
 										   pathkeys,
 										   NULL,
 										   mergeclauses,
+										   NIL,
 										   outersortkeys,
 										   innersortkeys));
 }
@@ -1152,7 +1169,8 @@ sort_inner_and_outer(PlannerInfo *root,
 	Path	   *inner_path;
 	Path	   *cheapest_partial_outer = NULL;
 	Path	   *cheapest_safe_inner = NULL;
-	List	   *all_pathkeys;
+	List	   *merge_pathkeys;
+	List	   *range_pathkeys;
 	ListCell   *l;
 
 	/*
@@ -1251,26 +1269,84 @@ sort_inner_and_outer(PlannerInfo *root,
 	 * The pathkey order returned by select_outer_pathkeys_for_merge() has
 	 * some heuristics behind it (see that function), so be sure to try it
 	 * exactly as-is as well as making variants.
+	 *
+	 * XXX This comment probably needs updating? The patch significantly
+	 * reworks the following code ...
 	 */
-	all_pathkeys = select_outer_pathkeys_for_merge(root,
-												   extra->mergeclause_list,
-												   joinrel);
 
-	foreach(l, all_pathkeys)
+	range_pathkeys = select_outer_pathkeys_for_range(root,
+													 extra->rangeclause_list);
+
+	merge_pathkeys = select_outer_pathkeys_for_merge(root,
+													 extra->mergeclause_list,
+													 joinrel);
+
+	if(merge_pathkeys == NIL && enable_mergejoin)
+	{
+		foreach(l, range_pathkeys)
+		{
+			PathKey		*range_pathkey = (PathKey *) lfirst(l);
+			List		*outerkeys = list_make1(range_pathkey);
+			List		*innerkeys = NIL;
+			List		*rangeclauses;
+			ListCell	*lc;
+
+			rangeclauses = find_rangeclauses_for_outer_pathkeys(root,
+												outerkeys,
+												NIL,
+												extra->rangeclause_list);
+
+			foreach(lc, rangeclauses)
+			{
+				List	*rangeclause = (List *) lfirst(lc);
+				PathKey *range_inner_pathkey =
+						make_inner_pathkey_for_range(root,
+													 rangeclause);
+
+				innerkeys = lappend(innerkeys, range_inner_pathkey);
+
+				merge_pathkeys = build_join_pathkeys(root, joinrel, jointype,
+															 outerkeys);
+
+				/*
+				 * And now we can make the path.
+				 *
+				 * Note: it's possible that the cheapest paths will already be sorted
+				 * properly.  try_mergejoin_path will detect that case and suppress an
+				 * explicit sort step, so we needn't do so here.
+				 */
+				try_mergejoin_path(root,
+								   joinrel,
+								   outer_path,
+								   inner_path,
+								   merge_pathkeys,
+								   NIL,
+								   rangeclause,
+								   outerkeys,
+								   innerkeys,
+								   jointype,
+								   extra,
+								   false);
+			}
+		}
+	}
+
+
+	foreach(l, merge_pathkeys)
 	{
 		List	   *front_pathkey = (List *) lfirst(l);
 		List	   *cur_mergeclauses;
 		List	   *outerkeys;
 		List	   *innerkeys;
-		List	   *merge_pathkeys;
+		List	   *mergejoin_pathkeys;
 
 		/* Make a pathkey list with this guy first */
-		if (l != list_head(all_pathkeys))
+		if (l != list_head(merge_pathkeys))
 			outerkeys = lcons(front_pathkey,
-							  list_delete_nth_cell(list_copy(all_pathkeys),
-												   foreach_current_index(l)));
+							  list_delete_ptr(list_copy(merge_pathkeys),
+											  front_pathkey));
 		else
-			outerkeys = all_pathkeys;	/* no work at first one... */
+			outerkeys = merge_pathkeys;	/* no work at first one... */
 
 		/* Sort the mergeclauses into the corresponding ordering */
 		cur_mergeclauses =
@@ -1287,7 +1363,7 @@ sort_inner_and_outer(PlannerInfo *root,
 												  outerkeys);
 
 		/* Build pathkeys representing output sort order */
-		merge_pathkeys = build_join_pathkeys(root, joinrel, jointype,
+		mergejoin_pathkeys = build_join_pathkeys(root, joinrel, jointype,
 											 outerkeys);
 
 		/*
@@ -1301,8 +1377,9 @@ sort_inner_and_outer(PlannerInfo *root,
 						   joinrel,
 						   outer_path,
 						   inner_path,
-						   merge_pathkeys,
+						   mergejoin_pathkeys,
 						   cur_mergeclauses,
+						   NIL,
 						   outerkeys,
 						   innerkeys,
 						   jointype,
@@ -1318,12 +1395,89 @@ sort_inner_and_outer(PlannerInfo *root,
 									   joinrel,
 									   cheapest_partial_outer,
 									   cheapest_safe_inner,
-									   merge_pathkeys,
+									   mergejoin_pathkeys,
 									   cur_mergeclauses,
 									   outerkeys,
 									   innerkeys,
 									   jointype,
 									   extra);
+
+		/* XXX comments? */
+		foreach(l, range_pathkeys)
+		{
+			PathKey		*range_outer_pathkey = (PathKey *) lfirst(l);
+			List		*range_outerkeys = list_copy(outerkeys);
+			List		*range_innerkeys;
+			List		*rangeclauses;
+			ListCell	*lc;
+
+			if(list_member_ptr(range_outerkeys, range_outer_pathkey))
+			{
+				if(!equal(llast(range_outerkeys), range_outer_pathkey))
+					continue;
+			}
+			else
+				range_outerkeys = lappend(range_outerkeys, range_outer_pathkey);
+
+			/* Sort the mergeclauses into the corresponding ordering */
+			cur_mergeclauses =
+				find_mergeclauses_for_outer_pathkeys(root,
+													 range_outerkeys,
+													 extra->mergeclause_list);
+
+			/* Should have used them all... */
+			Assert(list_length(cur_mergeclauses) == list_length(extra->mergeclause_list));
+
+			/* Build sort pathkeys for the inner side */
+			range_innerkeys = make_inner_pathkeys_for_merge(root,
+													  	  	cur_mergeclauses,
+															range_outerkeys);
+
+			rangeclauses = find_rangeclauses_for_outer_pathkeys(root,
+												range_outerkeys,
+												cur_mergeclauses,
+												extra->rangeclause_list);
+
+			foreach(lc, rangeclauses)
+			{
+				List	*cur_rangeclause = (List *) lfirst(lc);
+				PathKey *range_inner_pathkey;
+
+				range_inner_pathkey = make_inner_pathkey_for_range(root, cur_rangeclause);
+
+				if(list_member_ptr(range_innerkeys, range_inner_pathkey))
+				{
+					if(!equal(llast(range_innerkeys), range_inner_pathkey))
+						continue;
+				}
+				else
+					range_innerkeys = lappend(range_innerkeys, range_inner_pathkey);
+
+
+				mergejoin_pathkeys = build_join_pathkeys(root, joinrel, jointype,
+															 range_outerkeys);
+
+				/*
+				 * And now we can make the path.
+				 *
+				 * Note: it's possible that the cheapest paths will already be sorted
+				 * properly.  try_mergejoin_path will detect that case and suppress an
+				 * explicit sort step, so we needn't do so here.
+				 */
+				try_mergejoin_path(root,
+								   joinrel,
+								   outer_path,
+								   inner_path,
+								   mergejoin_pathkeys,
+								   cur_mergeclauses,
+								   cur_rangeclause,
+								   range_outerkeys,
+								   range_innerkeys,
+								   jointype,
+								   extra,
+								   false);
+			}
+		}
 	}
 }
 
@@ -1408,6 +1562,7 @@ generate_mergejoin_paths(PlannerInfo *root,
 					   inner_cheapest_total,
 					   merge_pathkeys,
 					   mergeclauses,
+					   NIL,
 					   NIL,
 					   innersortkeys,
 					   jointype,
@@ -1507,6 +1662,7 @@ generate_mergejoin_paths(PlannerInfo *root,
 							   newclauses,
 							   NIL,
 							   NIL,
+							   NIL,
 							   jointype,
 							   extra,
 							   is_partial);
@@ -1549,6 +1705,7 @@ generate_mergejoin_paths(PlannerInfo *root,
 								   innerpath,
 								   merge_pathkeys,
 								   newclauses,
+								   NIL,
 								   NIL,
 								   NIL,
 								   jointype,
@@ -2315,5 +2472,144 @@ select_mergejoin_clauses(PlannerInfo *root,
 			break;
 	}
 
+	return result_list;
+}
+
+/*
+ * range_clause_order
+ *
+ * XXX And what does this do?
+ */
+static int
+range_clause_order(RestrictInfo *first,
+				   RestrictInfo *second)
+{
+	/*
+	 * Extract details from first restrictinfo
+	 */
+	Node   *first_left = get_leftop(first->clause),
+		   *first_right = get_rightop(first->clause);
+	bool	first_outer_is_left = first->outer_is_left;
+	int		first_strategy = get_op_opfamily_strategy(((OpExpr *) first->clause)->opno,
+														(linitial_oid(first->rangeleftopfamilies)));
+	bool    first_less = (first_strategy == BTLessStrategyNumber ||
+							first_strategy == BTLessEqualStrategyNumber);
+
+	/*
+	 * Extract details from second restrictinfo
+	 */
+	Node   *second_left = get_leftop(second->clause),
+		   *second_right = get_rightop(second->clause);
+	bool	second_outer_is_left = second->outer_is_left;
+	int		second_strategy = get_op_opfamily_strategy(((OpExpr *) second->clause)->opno,
+														(linitial_oid(second->rangeleftopfamilies)));
+	bool    second_less = (second_strategy == BTLessStrategyNumber ||
+							second_strategy == BTLessEqualStrategyNumber);
+
+	/*
+	 * Check for rangeclause
+	 */
+	if (first_less && second_less)
+	{
+		if (!first_outer_is_left && second_outer_is_left &&
+				equal(first_left, second_right))
+			return 2;
+		else if (first_outer_is_left && !second_outer_is_left &&
+				equal(first_right, second_left))
+			return 1;
+	}
+	else if (!first_less && !second_less)
+	{
+		if (!first_outer_is_left && second_outer_is_left &&
+				equal(first_left, second_right))
+			return 1;
+		else if (first_outer_is_left && !second_outer_is_left &&
+				equal(first_right, second_left))
+			return 2;
+	}
+	else if (first_less && !second_less)
+	{
+		if (!first_outer_is_left && !second_outer_is_left &&
+				equal(first_left, second_left))
+			return 2;
+		else if (first_outer_is_left && second_outer_is_left &&
+				equal(first_right, second_right))
+			return 1;
+	}
+	else if (!first_less && second_less)
+	{
+		if (!first_outer_is_left && !second_outer_is_left &&
+				equal(first_left, second_left))
+			return 1;
+		else if (first_outer_is_left && second_outer_is_left &&
+				equal(first_right, second_right))
+			return 2;
+	}
+
+	return 0;
+}
+
+/*
+ * select_rangejoin_clauses
+ *
+ * XXX And what does this do?
+ */
+static List *
+select_rangejoin_clauses(RelOptInfo *outerrel,
+						 RelOptInfo *innerrel,
+						 List *restrictlist)
+{
+	List	   *result_list = NIL;
+	ListCell   *l;
+	List	   *range_candidates = NIL;
+
+	foreach(l, restrictlist)
+	{
+		RestrictInfo *restrictinfo = (RestrictInfo *) lfirst(l);
+		OpExpr		 *clause = (OpExpr *) restrictinfo->clause;
+
+		/* Check that clause is a rangejoinable operator clause */
+		if (restrictinfo->rangeleftopfamilies == NIL)
+			continue;			/* not rangejoinable */
+
+		/*
+		 * Check if clause has the form "outer op inner" or "inner op outer".
+		 */
+		if (!clause_sides_match_join(restrictinfo, outerrel, innerrel))
+			continue;			/* no good for these input relations */
+
+		if (restrictinfo->rangeleftopfamilies == restrictinfo->rangerightopfamilies)
+		{
+			ListCell *lc;
+			List	 *range_clause;
+
+			foreach(lc, range_candidates)
+			{
+				RestrictInfo *candidate = (RestrictInfo *) lfirst(lc);
+
+				switch (range_clause_order(restrictinfo, candidate))
+				{
+				case 1:
+					range_clause = list_make2(restrictinfo, candidate);
+					result_list = lappend(result_list, range_clause);
+					break;
+
+				case 2:
+					range_clause = list_make2(candidate, restrictinfo);
+					result_list = lappend(result_list, range_clause);
+					break;
+				default:
+					break;
+				}
+			}
+			range_candidates = lappend(range_candidates, restrictinfo);
+		}
+		else if ((clause->opno == OID_RANGE_CONTAINS_ELEM_OP && restrictinfo->outer_is_left) ||
+				(clause->opno == OID_RANGE_ELEM_CONTAINED_OP && !restrictinfo->outer_is_left))
+		{
+			result_list = lappend(result_list, list_make1(restrictinfo));
+		}
+	}
+	list_free(range_candidates);
 	return result_list;
 }

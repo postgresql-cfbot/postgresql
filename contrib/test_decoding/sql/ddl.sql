@@ -376,6 +376,20 @@ DELETE FROM table_dropped_index_no_pk WHERE b = 1;
 DELETE FROM table_dropped_index_no_pk WHERE a = 3;
 DROP TABLE table_dropped_index_no_pk;
 
+-- check tables with newly added primary key
+CREATE TABLE table_with_not_null(id int NOT NULL, data int);
+CREATE UNIQUE INDEX table_with_not_null_idx ON table_with_not_null(id);
+INSERT INTO table_with_not_null VALUES(1, 2);
+-- won't log old keys
+UPDATE table_with_not_null SET data = 3 WHERE data = 2;
+UPDATE table_with_not_null SET id = -id;
+UPDATE table_with_not_null SET id = -id;
+-- should log the old pkey
+ALTER TABLE table_with_not_null ADD PRIMARY KEY USING INDEX table_with_not_null_idx;
+UPDATE table_with_not_null SET data = 3 WHERE data = 2;
+UPDATE table_with_not_null SET id = -id;
+UPDATE table_with_not_null SET id = -id;
+
 -- check toast support
 BEGIN;
 CREATE SEQUENCE toasttable_rand_seq START 79 INCREMENT 1499; -- portable "random"

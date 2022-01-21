@@ -6,7 +6,7 @@ use strict;
 use warnings;
 use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
-use Test::More tests => 7;
+use Test::More tests => 9;
 
 # Bug #15114
 
@@ -301,6 +301,78 @@ $node_publisher->safe_psql(
 $node_publisher->wait_for_catchup('tap_sub');
 is( $node_subscriber->safe_psql(
 		'postgres', "SELECT * FROM tab_replidentity_index"),
+	qq(-1|1),
+	"update works with REPLICA IDENTITY");
+
+$node_publisher->stop('fast');
+$node_subscriber->stop('fast');
+
+# Website
+
+# When adding PRIMARY KEY using an existing unique index on not null columns,
+# the target table's relcache was not being invalidated. If REPLICA IDENTITY
+# is default, this leads to disallowing UPDATE/DELETE operations on the
+# publisher side because the primary key is not found.
+
+$node_publisher = PostgreSQL::Test::Cluster->new('publisher4');
+$node_publisher->init(allows_streaming => 'logical');
+$node_publisher->start;
+
+$node_subscriber = PostgreSQL::Test::Cluster->new('subscriber4');
+$node_subscriber->init(allows_streaming => 'logical');
+$node_subscriber->start;
+
+$node_publisher->safe_psql('postgres',
+	"CREATE TABLE tab_replidentity_default(a int NOT NULL, b int)");
+$node_publisher->safe_psql('postgres',
+	"CREATE UNIQUE INDEX idx_replidentity_index_a ON tab_replidentity_default(a)"
+);
+
+$node_publisher->safe_psql('postgres',
+	"INSERT INTO tab_replidentity_default VALUES(1, 1),(2, 2)");
+
+$node_subscriber->safe_psql('postgres',
+	"CREATE TABLE tab_replidentity_default(a int NOT NULL, b int)");
+$node_subscriber->safe_psql('postgres',
+	"CREATE UNIQUE INDEX idx_replidentity_index_a ON tab_replidentity_default(a)"
+);
+
+$publisher_connstr = $node_publisher->connstr . ' dbname=postgres';
+$node_publisher->safe_psql('postgres',
+	"CREATE PUBLICATION tap_pub FOR TABLE tab_replidentity_default");
+$node_subscriber->safe_psql('postgres',
+	"CREATE SUBSCRIPTION tap_sub CONNECTION '$publisher_connstr' PUBLICATION tap_pub"
+);
+
+$node_publisher->wait_for_catchup('tap_sub');
+
+# Also wait for initial table sync to finish
+$node_subscriber->poll_query_until('postgres', $synced_query)
+  or die "Timed out while waiting for subscriber to synchronize data";
+
+is( $node_subscriber->safe_psql(
+		'postgres', "SELECT * FROM tab_replidentity_default"),
+	qq(1|1
+2|2),
+	"check initial data on subscriber");
+
+# Create primary key using idx_replidentity_index_a on subscriber because it
+# reflects the future scenario we are testing: ADD PRIMARY KEY USING INDEX.
+$node_subscriber->safe_psql('postgres',
+	"ALTER TABLE tab_replidentity_default ADD PRIMARY KEY USING INDEX idx_replidentity_index_a"
+);
+
+# Create primary key using idx_replidentity_index_a on publisher, then run UPDATE and DELETE.
+$node_publisher->safe_psql(
+	'postgres', qq[
+	ALTER TABLE tab_replidentity_default ADD PRIMARY KEY USING INDEX idx_replidentity_index_a;
+	UPDATE tab_replidentity_default SET a = -a WHERE a = 1;
+	DELETE FROM tab_replidentity_default WHERE a = 2;
+]);
+
+$node_publisher->wait_for_catchup('tap_sub');
+is( $node_subscriber->safe_psql(
+		'postgres', "SELECT * FROM tab_replidentity_default"),
 	qq(-1|1),
 	"update works with REPLICA IDENTITY");
 

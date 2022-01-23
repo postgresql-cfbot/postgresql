@@ -737,7 +737,7 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data)
 
 				RemoveSubscriptionRel(sub->oid, relid);
 
-				logicalrep_worker_stop(sub->oid, relid);
+				logicalrep_worker_stop(MyDatabaseId, sub->oid, relid);
 
 				/*
 				 * For READY state, we would have already dropped the
@@ -1239,7 +1239,7 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 	{
 		LogicalRepWorker *w = (LogicalRepWorker *) lfirst(lc);
 
-		logicalrep_worker_stop(w->subid, w->relid);
+		logicalrep_worker_stop(w->dbid, w->subid, w->relid);
 	}
 	list_free(subworkers);
 

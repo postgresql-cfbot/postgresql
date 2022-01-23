@@ -95,11 +95,13 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "replication/logical.h"
+#include "replication/logicalworker.h"
 #include "replication/reorderbuffer.h"
 #include "replication/slot.h"
 #include "replication/snapbuild.h"	/* just for SnapBuildSnapDecRefcount */
 #include "storage/bufmgr.h"
 #include "storage/fd.h"
+#include "storage/ipc.h"
 #include "storage/sinval.h"
 #include "utils/builtins.h"
 #include "utils/combocid.h"
@@ -107,6 +109,7 @@
 #include "utils/memutils.h"
 #include "utils/rel.h"
 #include "utils/relfilenodemap.h"
+#include "utils/varlena.h"
 
 
 /* entry for a hash table we use to map from xid to our transaction state */
@@ -2006,6 +2009,85 @@ ReorderBufferResetTXN(ReorderBuffer *rb, ReorderBufferTXN *txn,
 	}
 }
 
+static void
+wait_for_standby_confirmation(XLogRecPtr commit_lsn)
+{
+	char	   *rawname;
+	List	   *namelist;
+	ListCell   *lc;
+	XLogRecPtr	flush_pos = InvalidXLogRecPtr;
+
+	if (strcmp(standby_slot_names, "") == 0)
+		return;
+
+	rawname = pstrdup(standby_slot_names);
+	SplitIdentifierString(rawname, ',', &namelist);
+
+	while (true)
+	{
+		int			wait_slots_remaining;
+		XLogRecPtr	oldest_flush_pos = InvalidXLogRecPtr;
+		int			rc;
+
+		wait_slots_remaining = list_length(namelist);
+
+		LWLockAcquire(ReplicationSlotControlLock, LW_SHARED);
+		for (int i = 0; i < max_replication_slots; i++)
+		{
+			ReplicationSlot *s = &ReplicationSlotCtl->replication_slots[i];
+			bool		inlist;
+
+			if (!s->in_use)
+				continue;
+
+			inlist = false;
+			foreach (lc, namelist)
+			{
+				char *name = lfirst(lc);
+				if (strcmp(name, NameStr(s->data.name)) == 0)
+				{
+					inlist = true;
+					break;
+				}
+			}
+			if (!inlist)
+				continue;
+
+			SpinLockAcquire(&s->mutex);
+
+			if (s->data.database == InvalidOid)
+				/* Physical slots advance restart_lsn on flush and ignore confirmed_flush_lsn */
+				flush_pos = s->data.restart_lsn;
+			else
+				/* For logical slots we must wait for commit and flush */
+				flush_pos = s->data.confirmed_flush;
+
+			SpinLockRelease(&s->mutex);
+
+			/* We want to find out the min(flush pos) over all named slots */
+			if (oldest_flush_pos == InvalidXLogRecPtr
+				|| oldest_flush_pos > flush_pos)
+				oldest_flush_pos = flush_pos;
+
+			if (flush_pos >= commit_lsn && wait_slots_remaining > 0)
+				wait_slots_remaining --;
+		}
+		LWLockRelease(ReplicationSlotControlLock);
+
+		if (wait_slots_remaining == 0)
+			return;
+
+		rc = WaitLatch(MyLatch,
+					   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
+					   1000L, PG_WAIT_EXTENSION);
+
+		if (rc & WL_POSTMASTER_DEATH)
+			proc_exit(1);
+
+		CHECK_FOR_INTERRUPTS();
+	}
+}
+
 /*
  * Helper function for ReorderBufferReplay and ReorderBufferStreamTXN.
  *
@@ -2434,6 +2516,9 @@ ReorderBufferProcessTXN(ReorderBuffer *rb, ReorderBufferTXN *txn,
 			 * Call either PREPARE (for two-phase transactions) or COMMIT (for
 			 * regular ones).
 			 */
+
+			wait_for_standby_confirmation(commit_lsn);
+
 			if (rbtxn_prepared(txn))
 				rb->prepare(rb, txn, commit_lsn);
 			else

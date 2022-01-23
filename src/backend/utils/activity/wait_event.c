@@ -230,6 +230,9 @@ pgstat_get_wait_activity(WaitEventActivity w)
 		case WAIT_EVENT_LOGICAL_LAUNCHER_MAIN:
 			event_name = "LogicalLauncherMain";
 			break;
+		case WAIT_EVENT_REPL_SLOT_SYNC_MAIN:
+			event_name = "ReplSlotSyncMain";
+			break;
 		case WAIT_EVENT_PGSTAT_MAIN:
 			event_name = "PgStatMain";
 			break;

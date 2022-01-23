@@ -4406,6 +4406,23 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-standby-slot-names" xreflabel="standby_slot_names">
+      <term><varname>standby_slot_names</varname> (<type>string</type>)
+      <indexterm>
+       <primary><varname>standby_slot_names</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        List of physical replication slots that logical replication waits for.
+        If a logical replication connection is meant to switch to a physical
+        standby after the standby is promoted, the physical replication slot
+        for the standby should be listed here.  This ensures that logical
+        replication is not ahead of the physical standby.
+       </para>
+      </listitem>
+     </varlistentry>
+
      </variablelist>
     </sect2>
 
@@ -4790,6 +4807,23 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
        <para>
         This parameter can only be set in the <filename>postgresql.conf</filename>
         file or on the server command line.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-synchronize_slot_names" xreflabel="synchronize_slot_names">
+      <term><varname>synchronize_slot_names</varname> (<type>string</type>)
+      <indexterm>
+       <primary><varname>synchronize_slot_names</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies a list of logical replication slots that a physical standby
+        should synchronize from the primary server.  This is necessary to be
+        able to retarget those logical replication connections to this standby
+        if it gets promoted.  Specify <literal>*</literal> to synchronize all
+        logical replication slots.  The default is empty.
        </para>
       </listitem>
      </varlistentry>

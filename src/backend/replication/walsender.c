@@ -456,6 +456,194 @@ IdentifySystem(void)
 	end_tup_output(tstate);
 }
 
+static int
+pg_qsort_namecmp(const void *a, const void *b)
+{
+	return strncmp(NameStr(*(Name) a), NameStr(*(Name) b), NAMEDATALEN);
+}
+
+/*
+ * Handle the LIST_SLOTS command.
+ */
+static void
+ListSlots(ListSlotsCmd *cmd)
+{
+	DestReceiver *dest;
+	TupOutputState *tstate;
+	TupleDesc	tupdesc;
+	NameData   *slot_names;
+	int			numslot_names;
+
+	numslot_names = list_length(cmd->slot_names);
+	if (numslot_names)
+	{
+		ListCell   *lc;
+		int			i = 0;
+
+		slot_names = palloc(numslot_names * sizeof(NameData));
+		foreach(lc, cmd->slot_names)
+		{
+			char	   *slot_name = lfirst(lc);
+
+			ReplicationSlotValidateName(slot_name, ERROR);
+			namestrcpy(&slot_names[i++], slot_name);
+		}
+
+		qsort(slot_names, numslot_names, sizeof(NameData), pg_qsort_namecmp);
+	}
+
+	dest = CreateDestReceiver(DestRemoteSimple);
+
+	/* need a tuple descriptor representing four columns */
+	tupdesc = CreateTemplateTupleDesc(10);
+	TupleDescInitBuiltinEntry(tupdesc, (AttrNumber) 1, "slot_name",
+							  TEXTOID, -1, 0);
+	TupleDescInitBuiltinEntry(tupdesc, (AttrNumber) 2, "plugin",
+							  TEXTOID, -1, 0);
+	TupleDescInitBuiltinEntry(tupdesc, (AttrNumber) 3, "slot_type",
+							  TEXTOID, -1, 0);
+	TupleDescInitBuiltinEntry(tupdesc, (AttrNumber) 4, "datoid",
+							  INT8OID, -1, 0);
+	TupleDescInitBuiltinEntry(tupdesc, (AttrNumber) 5, "database",
+							  TEXTOID, -1, 0);
+	TupleDescInitBuiltinEntry(tupdesc, (AttrNumber) 6, "temporary",
+							  INT4OID, -1, 0);
+	TupleDescInitBuiltinEntry(tupdesc, (AttrNumber) 7, "xmin",
+							  INT8OID, -1, 0);
+	TupleDescInitBuiltinEntry(tupdesc, (AttrNumber) 8, "catalog_xmin",
+							  INT8OID, -1, 0);
+	TupleDescInitBuiltinEntry(tupdesc, (AttrNumber) 9, "restart_lsn",
+							  TEXTOID, -1, 0);
+	TupleDescInitBuiltinEntry(tupdesc, (AttrNumber) 10, "confirmed_flush",
+							  TEXTOID, -1, 0);
+
+	/* prepare for projection of tuples */
+	tstate = begin_tup_output_tupdesc(dest, tupdesc, &TTSOpsVirtual);
+
+	LWLockAcquire(ReplicationSlotControlLock, LW_SHARED);
+	for (int slotno = 0; slotno < max_replication_slots; slotno++)
+	{
+		ReplicationSlot *slot = &ReplicationSlotCtl->replication_slots[slotno];
+		char		restart_lsn_str[MAXFNAMELEN];
+		char		confirmed_flush_lsn_str[MAXFNAMELEN];
+		Datum		values[10];
+		bool		nulls[10];
+
+		ReplicationSlotPersistency persistency;
+		TransactionId xmin;
+		TransactionId catalog_xmin;
+		XLogRecPtr	restart_lsn;
+		XLogRecPtr	confirmed_flush_lsn;
+		Oid			datoid;
+		NameData	slot_name;
+		NameData	plugin;
+		int			i;
+		int64		tmpbigint;
+
+		if (!slot->in_use)
+			continue;
+
+		SpinLockAcquire(&slot->mutex);
+
+		xmin = slot->data.xmin;
+		catalog_xmin = slot->data.catalog_xmin;
+		datoid = slot->data.database;
+		restart_lsn = slot->data.restart_lsn;
+		confirmed_flush_lsn = slot->data.confirmed_flush;
+		namestrcpy(&slot_name, NameStr(slot->data.name));
+		namestrcpy(&plugin, NameStr(slot->data.plugin));
+		persistency = slot->data.persistency;
+
+		SpinLockRelease(&slot->mutex);
+
+		if (numslot_names &&
+			!bsearch((void *) &slot_name, (void *) slot_names,
+					 numslot_names, sizeof(NameData), pg_qsort_namecmp))
+			continue;
+
+		memset(nulls, 0, sizeof(nulls));
+
+		i = 0;
+		values[i++] = CStringGetTextDatum(NameStr(slot_name));
+
+		if (datoid == InvalidOid)
+			nulls[i++] = true;
+		else
+			values[i++] = CStringGetTextDatum(NameStr(plugin));
+
+		if (datoid == InvalidOid)
+			values[i++] = CStringGetTextDatum("physical");
+		else
+			values[i++] = CStringGetTextDatum("logical");
+
+		if (datoid == InvalidOid)
+			nulls[i++] = true;
+		else
+		{
+			tmpbigint = datoid;
+			values[i++] = Int64GetDatum(tmpbigint);
+		}
+
+		if (datoid == InvalidOid)
+			nulls[i++] = true;
+		else
+		{
+			MemoryContext cur = CurrentMemoryContext;
+
+			/* syscache access needs a transaction env. */
+			StartTransactionCommand();
+			/* make dbname live outside TX context */
+			MemoryContextSwitchTo(cur);
+			values[i++] = CStringGetTextDatum(get_database_name(datoid));
+			CommitTransactionCommand();
+			/* CommitTransactionCommand switches to TopMemoryContext */
+			MemoryContextSwitchTo(cur);
+		}
+
+		values[i++] = Int32GetDatum(persistency == RS_TEMPORARY ? 1 : 0);
+
+		if (xmin != InvalidTransactionId)
+		{
+			tmpbigint = xmin;
+			values[i++] = Int64GetDatum(tmpbigint);
+		}
+		else
+			nulls[i++] = true;
+
+		if (catalog_xmin != InvalidTransactionId)
+		{
+			tmpbigint = catalog_xmin;
+			values[i++] = Int64GetDatum(tmpbigint);
+		}
+		else
+			nulls[i++] = true;
+
+		if (restart_lsn != InvalidXLogRecPtr)
+		{
+			snprintf(restart_lsn_str, sizeof(restart_lsn_str), "%X/%X",
+					 LSN_FORMAT_ARGS(restart_lsn));
+			values[i++] = CStringGetTextDatum(restart_lsn_str);
+		}
+		else
+			nulls[i++] = true;
+
+		if (confirmed_flush_lsn != InvalidXLogRecPtr)
+		{
+			snprintf(confirmed_flush_lsn_str, sizeof(confirmed_flush_lsn_str),
+					 "%X/%X", LSN_FORMAT_ARGS(confirmed_flush_lsn));
+			values[i++] = CStringGetTextDatum(confirmed_flush_lsn_str);
+		}
+		else
+			nulls[i++] = true;
+
+		/* send it to dest */
+		do_tup_output(tstate, values, nulls);
+	}
+	LWLockRelease(ReplicationSlotControlLock);
+
+	end_tup_output(tstate);
+}
+
 /* Handle READ_REPLICATION_SLOT command */
 static void
 ReadReplicationSlot(ReadReplicationSlotCmd *cmd)
@@ -553,7 +741,6 @@ ReadReplicationSlot(ReadReplicationSlotCmd *cmd)
 	do_tup_output(tstate, values, nulls);
 	end_tup_output(tstate);
 }
-
 
 /*
  * Handle TIMELINE_HISTORY command.
@@ -1746,6 +1933,13 @@ exec_replication_command(const char *cmd_string)
 			cmdtag = "DROP_REPLICATION_SLOT";
 			set_ps_display(cmdtag);
 			DropReplicationSlot((DropReplicationSlotCmd *) cmd_node);
+			EndReplicationCommand(cmdtag);
+			break;
+
+		case T_ListSlotsCmd:
+			cmdtag = "LIST_SLOTS";
+			set_ps_display(cmdtag);
+			ListSlots((ListSlotsCmd *) cmd_node);
 			EndReplicationCommand(cmdtag);
 			break;
 

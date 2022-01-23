@@ -315,6 +315,7 @@
 				# and comma-separated list of application_name
 				# from standby(s); '*' = all
 #vacuum_defer_cleanup_age = 0	# number of xacts by which cleanup is delayed
+#standby_slot_names = ''	# physical standby slot names that logical replication waits for
 
 # - Standby Servers -
 
@@ -343,6 +344,7 @@
 #wal_retrieve_retry_interval = 5s	# time to wait before retrying to
 					# retrieve WAL after a failed attempt
 #recovery_min_apply_delay = 0		# minimum delay for applying changes during recovery
+#synchronize_slot_names = ''		# logical replication slots to sync to standby
 
 # - Subscribers -
 

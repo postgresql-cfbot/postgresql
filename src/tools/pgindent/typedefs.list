@@ -2948,6 +2948,7 @@ XLogRecordBuffer
 XLogRedoAction
 XLogSegNo
 XLogSource
+XLogwrtAtomic
 XLogwrtResult
 XLogwrtRqst
 XPVIV

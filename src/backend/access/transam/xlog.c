@@ -10507,7 +10507,7 @@ xlog_redo(XLogReaderState *record)
 		 */
 		if (xlrec.ThisTimeLineID != replayTLI)
 			ereport(PANIC,
-					(errmsg("unexpected timeline ID %u (should be %u) in checkpoint record",
+					(errmsg("unexpected timeline ID %u (should be %u) in end-of-recovery record",
 							xlrec.ThisTimeLineID, replayTLI)));
 	}
 	else if (info == XLOG_NOOP)

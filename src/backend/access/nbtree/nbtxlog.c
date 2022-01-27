@@ -15,6 +15,8 @@
 #include "postgres.h"
 
 #include "access/bufmask.h"
+#include "access/heapam_xlog.h"
+#include "access/htup_details.h"
 #include "access/nbtree.h"
 #include "access/nbtxlog.h"
 #include "access/transam.h"

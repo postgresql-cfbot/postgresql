@@ -2538,6 +2538,7 @@ ExecModifyTable(PlanState *pstate)
 					HeapTupleHeaderGetDatumLength(oldtupdata.t_data);
 				ItemPointerSetInvalid(&(oldtupdata.t_self));
 				/* Historically, view triggers see invalid t_tableOid. */
+				HeapTupleSetZeroBase(&oldtupdata);
 				oldtupdata.t_tableOid =
 					(relkind == RELKIND_VIEW) ? InvalidOid :
 					RelationGetRelid(resultRelInfo->ri_RelationDesc);

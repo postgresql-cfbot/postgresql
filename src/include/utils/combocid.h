@@ -15,7 +15,7 @@
 #define COMBOCID_H
 
 /*
- * HeapTupleHeaderGetCmin and HeapTupleHeaderGetCmax function prototypes
+ * HeapTupleGetCmin and HeapTupleGetCmax function prototypes
  * are in access/htup.h, because that's where the macro definitions that
  * those functions replaced used to be.
  */

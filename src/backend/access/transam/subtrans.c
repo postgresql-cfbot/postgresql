@@ -63,8 +63,8 @@ static SlruCtlData SubTransCtlData;
 #define SubTransCtl  (&SubTransCtlData)
 
 
-static int	ZeroSUBTRANSPage(int pageno);
-static bool SubTransPagePrecedes(int page1, int page2);
+static bool SubTransPagePrecedes(int64 page1, int64 page2);
+static int	ZeroSUBTRANSPage(int64 pageno);
 
 
 /*
@@ -73,7 +73,7 @@ static bool SubTransPagePrecedes(int page1, int page2);
 void
 SubTransSetParent(TransactionId xid, TransactionId parent)
 {
-	int			pageno = TransactionIdToPage(xid);
+	int64		pageno = TransactionIdToPage(xid);
 	int			entryno = TransactionIdToEntry(xid);
 	int			slotno;
 	TransactionId *ptr;
@@ -108,7 +108,7 @@ SubTransSetParent(TransactionId xid, TransactionId parent)
 TransactionId
 SubTransGetParent(TransactionId xid)
 {
-	int			pageno = TransactionIdToPage(xid);
+	int64		pageno = TransactionIdToPage(xid);
 	int			entryno = TransactionIdToEntry(xid);
 	int			slotno;
 	TransactionId *ptr;
@@ -168,7 +168,7 @@ SubTransGetTopmostTransaction(TransactionId xid)
 		 * structure that could lead to an infinite loop, so exit.
 		 */
 		if (!TransactionIdPrecedes(parentXid, previousXid))
-			elog(ERROR, "pg_subtrans contains invalid entry: xid %u points to parent xid %u",
+			elog(ERROR, "pg_subtrans contains invalid entry: xid " XID_FMT " points to parent xid " XID_FMT,
 				 previousXid, parentXid);
 	}
 
@@ -211,11 +211,14 @@ void
 BootStrapSUBTRANS(void)
 {
 	int			slotno;
+	int64		pageno;
+
+	pageno = TransactionIdToPage(XidFromFullTransactionId(ShmemVariableCache->nextXid));
 
 	LWLockAcquire(SubtransSLRULock, LW_EXCLUSIVE);
 
 	/* Create and zero the first page of the subtrans log */
-	slotno = ZeroSUBTRANSPage(0);
+	slotno = ZeroSUBTRANSPage(pageno);
 
 	/* Make sure it's written out */
 	SimpleLruWritePage(SubTransCtl, slotno);
@@ -233,7 +236,7 @@ BootStrapSUBTRANS(void)
  * Control lock must be held at entry, and will be held at exit.
  */
 static int
-ZeroSUBTRANSPage(int pageno)
+ZeroSUBTRANSPage(int64 pageno)
 {
 	return SimpleLruZeroPage(SubTransCtl, pageno);
 }
@@ -249,8 +252,8 @@ void
 StartupSUBTRANS(TransactionId oldestActiveXID)
 {
 	FullTransactionId nextXid;
-	int			startPage;
-	int			endPage;
+	int64		startPage;
+	int64		endPage;
 
 	/*
 	 * Since we don't expect pg_subtrans to be valid across crashes, we
@@ -268,9 +271,6 @@ StartupSUBTRANS(TransactionId oldestActiveXID)
 	{
 		(void) ZeroSUBTRANSPage(startPage);
 		startPage++;
-		/* must account for wraparound */
-		if (startPage > TransactionIdToPage(MaxTransactionId))
-			startPage = 0;
 	}
 	(void) ZeroSUBTRANSPage(startPage);
 
@@ -307,7 +307,7 @@ CheckPointSUBTRANS(void)
 void
 ExtendSUBTRANS(TransactionId newestXact)
 {
-	int			pageno;
+	int64		pageno;
 
 	/*
 	 * No work except at first XID of a page.  But beware: just after
@@ -337,7 +337,7 @@ ExtendSUBTRANS(TransactionId newestXact)
 void
 TruncateSUBTRANS(TransactionId oldestXact)
 {
-	int			cutoffPage;
+	int64		cutoffPage;
 
 	/*
 	 * The cutoff point is the start of the segment containing oldestXact. We
@@ -347,6 +347,13 @@ TruncateSUBTRANS(TransactionId oldestXact)
 	 * a page and oldestXact == next XID.  In that case, if we didn't subtract
 	 * one, we'd trigger SimpleLruTruncate's wraparound detection.
 	 */
+
+	if (oldestXact <= FirstNormalTransactionId)
+	{
+		SimpleLruTruncate(SubTransCtl, 0);
+		return;
+	}
+
 	TransactionIdRetreat(oldestXact);
 	cutoffPage = TransactionIdToPage(oldestXact);
 
@@ -357,18 +364,12 @@ TruncateSUBTRANS(TransactionId oldestXact)
 /*
  * Decide whether a SUBTRANS page number is "older" for truncation purposes.
  * Analogous to CLOGPagePrecedes().
+ *
+ * With 64xid this function is just "<", but we left it as a function in order
+ * for its calls remain "vanilla" like.
  */
 static bool
-SubTransPagePrecedes(int page1, int page2)
+SubTransPagePrecedes(int64 page1, int64 page2)
 {
-	TransactionId xid1;
-	TransactionId xid2;
-
-	xid1 = ((TransactionId) page1) * SUBTRANS_XACTS_PER_PAGE;
-	xid1 += FirstNormalTransactionId + 1;
-	xid2 = ((TransactionId) page2) * SUBTRANS_XACTS_PER_PAGE;
-	xid2 += FirstNormalTransactionId + 1;
-
-	return (TransactionIdPrecedes(xid1, xid2) &&
-			TransactionIdPrecedes(xid1, xid2 + SUBTRANS_XACTS_PER_PAGE - 1));
+	return page1 < page2;
 }

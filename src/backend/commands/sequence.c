@@ -56,16 +56,6 @@
 #define SEQ_LOG_VALS	32
 
 /*
- * The "special area" of a sequence's buffer page looks like this.
- */
-#define SEQ_MAGIC	  0x1717
-
-typedef struct sequence_magic
-{
-	uint32		magic;
-} sequence_magic;
-
-/*
  * We store a SeqTable item for every sequence we have touched in the current
  * session.  This is needed to hold onto nextval/currval state.  (We can't
  * rely on the relcache, since it's only, well, a cache, and may decide to
@@ -342,10 +332,9 @@ ResetSequence(Oid seq_relid)
 static void
 fill_seq_with_data(Relation rel, HeapTuple tuple)
 {
-	Buffer		buf;
-	Page		page;
-	sequence_magic *sm;
-	OffsetNumber offnum;
+	Buffer			buf;
+	Page			page;
+	OffsetNumber	offnum;
 
 	/* Initialize first page of relation with special magic number */
 
@@ -354,9 +343,8 @@ fill_seq_with_data(Relation rel, HeapTuple tuple)
 
 	page = BufferGetPage(buf);
 
-	PageInit(page, BufferGetPageSize(buf), sizeof(sequence_magic));
-	sm = (sequence_magic *) PageGetSpecialPointer(page);
-	sm->magic = SEQ_MAGIC;
+	PageInit(page, BufferGetPageSize(buf), sizeof(HeapPageSpecialData));
+	HeapPageGetSpecial(page)->pd_xid_base = RecentXmin - FirstNormalTransactionId;
 
 	/* Now insert sequence tuple */
 
@@ -369,10 +357,10 @@ fill_seq_with_data(Relation rel, HeapTuple tuple)
 	 * because if the current transaction aborts, no other xact will ever
 	 * examine the sequence tuple anyway.
 	 */
-	HeapTupleHeaderSetXmin(tuple->t_data, FrozenTransactionId);
+	HeapTupleSetXmin(tuple, FrozenTransactionId);
 	HeapTupleHeaderSetXminFrozen(tuple->t_data);
 	HeapTupleHeaderSetCmin(tuple->t_data, FirstCommandId);
-	HeapTupleHeaderSetXmax(tuple->t_data, InvalidTransactionId);
+	HeapTupleSetXmax(tuple, InvalidTransactionId);
 	tuple->t_data->t_infomask |= HEAP_XMAX_INVALID;
 	ItemPointerSet(&tuple->t_data->t_ctid, 0, FirstOffsetNumber);
 
@@ -1170,25 +1158,19 @@ read_seq_tuple(Relation rel, Buffer *buf, HeapTuple seqdatatuple)
 {
 	Page		page;
 	ItemId		lp;
-	sequence_magic *sm;
 	Form_pg_sequence_data seq;
 
 	*buf = ReadBuffer(rel, 0);
 	LockBuffer(*buf, BUFFER_LOCK_EXCLUSIVE);
 
 	page = BufferGetPage(*buf);
-	sm = (sequence_magic *) PageGetSpecialPointer(page);
-
-	if (sm->magic != SEQ_MAGIC)
-		elog(ERROR, "bad magic number in sequence \"%s\": %08X",
-			 RelationGetRelationName(rel), sm->magic);
-
 	lp = PageGetItemId(page, FirstOffsetNumber);
 	Assert(ItemIdIsNormal(lp));
 
 	/* Note we currently only bother to set these two fields of *seqdatatuple */
 	seqdatatuple->t_data = (HeapTupleHeader) PageGetItem(page, lp);
 	seqdatatuple->t_len = ItemIdGetLength(lp);
+	HeapTupleCopyBaseFromPage(seqdatatuple, page);
 
 	/*
 	 * Previous releases of Postgres neglected to prevent SELECT FOR UPDATE on
@@ -1199,9 +1181,9 @@ read_seq_tuple(Relation rel, Buffer *buf, HeapTuple seqdatatuple)
 	 * this again if the update gets lost.
 	 */
 	Assert(!(seqdatatuple->t_data->t_infomask & HEAP_XMAX_IS_MULTI));
-	if (HeapTupleHeaderGetRawXmax(seqdatatuple->t_data) != InvalidTransactionId)
+	if (HeapTupleGetRawXmax(seqdatatuple) != InvalidTransactionId)
 	{
-		HeapTupleHeaderSetXmax(seqdatatuple->t_data, InvalidTransactionId);
+		HeapTupleSetXmax(seqdatatuple, InvalidTransactionId);
 		seqdatatuple->t_data->t_infomask &= ~HEAP_XMAX_COMMITTED;
 		seqdatatuple->t_data->t_infomask |= HEAP_XMAX_INVALID;
 		MarkBufferDirtyHint(*buf, true);
@@ -1863,7 +1845,6 @@ seq_redo(XLogReaderState *record)
 	char	   *item;
 	Size		itemsz;
 	xl_seq_rec *xlrec = (xl_seq_rec *) XLogRecGetData(record);
-	sequence_magic *sm;
 
 	if (info != XLOG_SEQ_LOG)
 		elog(PANIC, "seq_redo: unknown op code %u", info);
@@ -1882,9 +1863,8 @@ seq_redo(XLogReaderState *record)
 	 */
 	localpage = (Page) palloc(BufferGetPageSize(buffer));
 
-	PageInit(localpage, BufferGetPageSize(buffer), sizeof(sequence_magic));
-	sm = (sequence_magic *) PageGetSpecialPointer(localpage);
-	sm->magic = SEQ_MAGIC;
+	PageInit(localpage, BufferGetPageSize(buffer), sizeof(HeapPageSpecialData));
+	HeapPageGetSpecial(localpage)->pd_xid_base = RecentXmin - FirstNormalTransactionId;
 
 	item = (char *) xlrec + sizeof(xl_seq_rec);
 	itemsz = XLogRecGetDataLen(record) - sizeof(xl_seq_rec);

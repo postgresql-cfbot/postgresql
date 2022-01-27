@@ -44,7 +44,7 @@ fsm_page_contents(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("must be superuser to use raw page functions")));
 
-	fsmpage = (FSMPage) PageGetContents(VARDATA(raw_page));
+	fsmpage = (FSMPage) PageGetContents(get_page_from_raw(raw_page));
 
 	initStringInfo(&sinfo);
 

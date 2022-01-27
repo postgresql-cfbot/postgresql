@@ -118,7 +118,7 @@ typedef enum TM_Result
  * cmax is the outdating command's CID, but only when the failure code is
  * TM_SelfModified (i.e., something in the current transaction outdated the
  * tuple); otherwise cmax is zero.  (We make this restriction because
- * HeapTupleHeaderGetCmax doesn't work for tuples outdated in other
+ * HeapTupleGetCmax doesn't work for tuples outdated in other
  * transactions.)
  */
 typedef struct TM_FailureData

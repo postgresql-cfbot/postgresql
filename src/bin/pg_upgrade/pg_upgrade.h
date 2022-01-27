@@ -21,6 +21,7 @@
 #define MESSAGE_WIDTH		60
 
 #define GET_MAJOR_VERSION(v)	((v) / 100)
+#define ALREADY_64bit_XID(cluster) (GET_MAJOR_VERSION((cluster).major_version) >= 1500)
 
 /* contains both global db information and CREATE DATABASE commands */
 #define GLOBALS_DUMP_FILE	"pg_upgrade_dump_globals.sql"
@@ -183,13 +184,13 @@ typedef struct
 	uint32		ctrl_ver;
 	uint32		cat_ver;
 	char		nextxlogfile[25];
-	uint32		chkpnt_nxtxid;
-	uint32		chkpnt_nxtepoch;
+	uint64		chkpnt_nxtxid;
+	uint32		chkpnt_nxtepoch;	/* for 32bit xids only */
 	uint32		chkpnt_nxtoid;
-	uint32		chkpnt_nxtmulti;
-	uint32		chkpnt_nxtmxoff;
-	uint32		chkpnt_oldstMulti;
-	uint32		chkpnt_oldstxid;
+	uint64		chkpnt_nxtmulti;
+	uint64		chkpnt_nxtmxoff;
+	uint64		chkpnt_oldstMulti;
+	uint64		chkpnt_oldstxid;
 	uint32		align;
 	uint32		blocksz;
 	uint32		largesz;
@@ -417,6 +418,7 @@ void		end_progress_output(void);
 void		prep_status(const char *fmt,...) pg_attribute_printf(1, 2);
 void		check_ok(void);
 unsigned int str2uint(const char *str);
+uint64		str2uint64(const char *str);
 
 
 /* version.c */
@@ -435,6 +437,10 @@ void		old_9_6_invalidate_hash_indexes(ClusterInfo *cluster,
 void		old_11_check_for_sql_identifier_data_type_usage(ClusterInfo *cluster);
 void		report_extension_updates(ClusterInfo *cluster);
 
+void		invalidate_spgist_indexes(ClusterInfo *cluster, bool check_mode);
+void		invalidate_gin_indexes(ClusterInfo *cluster, bool check_mode);
+void		invalidate_external_indexes(ClusterInfo *cluster, bool check_mode);
+
 /* parallel.c */
 void		parallel_exec_prog(const char *log_file, const char *opt_log_file,
 							   const char *fmt,...) pg_attribute_printf(3, 4);
@@ -442,3 +448,9 @@ void		parallel_transfer_all_new_dbs(DbInfoArr *old_db_arr, DbInfoArr *new_db_arr
 										  char *old_pgdata, char *new_pgdata,
 										  char *old_tablespace);
 bool		reap_child(bool wait_for_child);
+
+/* segresize.c */
+void convert_clog(const char *olddir, const char *newdir);
+MultiXactOffset convert_multixact_offsets(const char *olddir, const char *newdir);
+void convert_multixact_members(const char *olddir, const char *newdir,
+							   MultiXactOffset oldest_mxoff);

@@ -245,6 +245,8 @@ extern void TestForOldSnapshot_impl(Snapshot snapshot, Relation relation);
 extern BufferAccessStrategy GetAccessStrategy(BufferAccessStrategyType btype);
 extern void FreeAccessStrategy(BufferAccessStrategy strategy);
 
+/* old tuple format support */
+extern void convert_page(Relation rel, Page orig_page, Buffer buf, BlockNumber blkno);
 
 /* inline functions */
 

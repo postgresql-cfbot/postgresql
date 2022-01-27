@@ -40,16 +40,16 @@ SELECT * FROM bt_page_items('test1_a_idx', 1);
 -- pagesize in pageinspect >= 1.10.
 ALTER EXTENSION pageinspect UPDATE TO '1.9';
 \df page_header
-                                                                                                                  List of functions
- Schema |    Name     | Result data type |                                                                                         Argument data types                                                                                         | Type 
---------+-------------+------------------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+------
- public | page_header | record           | page bytea, OUT lsn pg_lsn, OUT checksum smallint, OUT flags smallint, OUT lower smallint, OUT upper smallint, OUT special smallint, OUT pagesize smallint, OUT version smallint, OUT prune_xid xid | func
+                                                                                                                                     List of functions
+ Schema |    Name     | Result data type |                                                                                                            Argument data types                                                                                                            | Type 
+--------+-------------+------------------+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+------
+ public | page_header | record           | page bytea, OUT lsn pg_lsn, OUT checksum smallint, OUT flags smallint, OUT lower smallint, OUT upper smallint, OUT special smallint, OUT pagesize smallint, OUT version smallint, OUT xid_base xid, OUT multi_base xid, OUT prune_xid xid | func
 (1 row)
 
 SELECT pagesize, version FROM page_header(get_raw_page('test1', 0));
  pagesize | version 
 ----------+---------
-     8192 |       4
+     8192 |       5
 (1 row)
 
 DROP TABLE test1;

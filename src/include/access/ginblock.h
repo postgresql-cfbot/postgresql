@@ -133,8 +133,15 @@ typedef struct GinMetaPageData
  * We should reclaim deleted page only once every transaction started before
  * its deletion is over.
  */
-#define GinPageGetDeleteXid(page) ( ((PageHeader) (page))->pd_prune_xid )
-#define GinPageSetDeleteXid(page, xid) ( ((PageHeader) (page))->pd_prune_xid = xid)
+#define GinPageGetDeleteXid(page) ( \
+	(((PageHeader) (page))->pd_upper == BLCKSZ - sizeof(GinPageOpaqueData) - sizeof(TransactionId)) ? \
+	*((TransactionId *) ((char *) (page) + BLCKSZ - sizeof(GinPageOpaqueData) - sizeof(TransactionId))) : \
+	InvalidTransactionId )
+#define GinPageSetDeleteXid(page, xid) \
+	do { \
+		((PageHeader) (page))->pd_upper = BLCKSZ - sizeof(GinPageOpaqueData) - sizeof(TransactionId); \
+		*((TransactionId *) ((char *) (page) + BLCKSZ - sizeof(GinPageOpaqueData) - sizeof(TransactionId))) = xid; \
+	} while (false)
 extern bool GinPageIsRecyclable(Page page);
 
 /*

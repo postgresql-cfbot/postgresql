@@ -36,7 +36,7 @@
 #include "utils/timestamp.h"
 
 /* User-settable GUC parameters */
-int			vacuum_defer_cleanup_age;
+int64		vacuum_defer_cleanup_age;
 int			max_standby_archive_delay = 30 * 1000;
 int			max_standby_streaming_delay = 30 * 1000;
 bool		log_recovery_conflict_waits = false;
@@ -994,13 +994,13 @@ StandbyReleaseLockList(List *locks)
 		LOCKTAG		locktag;
 
 		elog(trace_recovery(DEBUG4),
-			 "releasing recovery lock: xid %u db %u rel %u",
+			 "releasing recovery lock: xid " XID_FMT " db %u rel %u",
 			 lock->xid, lock->dbOid, lock->relOid);
 		SET_LOCKTAG_RELATION(locktag, lock->dbOid, lock->relOid);
 		if (!LockRelease(&locktag, AccessExclusiveLock, true))
 		{
 			elog(LOG,
-				 "RecoveryLockLists contains entry for lock no longer recorded by lock manager: xid %u database %u relation %u",
+				 "RecoveryLockLists contains entry for lock no longer recorded by lock manager: xid " XID_FMT " database %u relation %u",
 				 lock->xid, lock->dbOid, lock->relOid);
 			Assert(false);
 		}
@@ -1305,7 +1305,7 @@ LogCurrentRunningXacts(RunningTransactions CurrRunningXacts)
 
 	if (CurrRunningXacts->subxid_overflow)
 		elog(trace_recovery(DEBUG2),
-			 "snapshot of %u running transactions overflowed (lsn %X/%X oldest xid %u latest complete %u next xid %u)",
+			 "snapshot of %u running transactions overflowed (lsn %X/%X oldest xid " XID_FMT " latest complete " XID_FMT " next xid " XID_FMT ")",
 			 CurrRunningXacts->xcnt,
 			 LSN_FORMAT_ARGS(recptr),
 			 CurrRunningXacts->oldestRunningXid,
@@ -1313,7 +1313,7 @@ LogCurrentRunningXacts(RunningTransactions CurrRunningXacts)
 			 CurrRunningXacts->nextXid);
 	else
 		elog(trace_recovery(DEBUG2),
-			 "snapshot of %u+%u running transaction ids (lsn %X/%X oldest xid %u latest complete %u next xid %u)",
+			 "snapshot of %u+%u running transaction ids (lsn %X/%X oldest xid " XID_FMT " latest complete " XID_FMT " next xid " XID_FMT ")",
 			 CurrRunningXacts->xcnt, CurrRunningXacts->subxcnt,
 			 LSN_FORMAT_ARGS(recptr),
 			 CurrRunningXacts->oldestRunningXid,

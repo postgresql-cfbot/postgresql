@@ -310,7 +310,7 @@ pg_output_begin(LogicalDecodingContext *ctx, TestDecodingData *data, ReorderBuff
 {
 	OutputPluginPrepareWrite(ctx, last_write);
 	if (data->include_xids)
-		appendStringInfo(ctx->out, "BEGIN %u", txn->xid);
+		appendStringInfo(ctx->out, "BEGIN " XID_FMT, txn->xid);
 	else
 		appendStringInfoString(ctx->out, "BEGIN");
 	OutputPluginWrite(ctx, last_write);
@@ -333,7 +333,7 @@ pg_decode_commit_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 
 	OutputPluginPrepareWrite(ctx, true);
 	if (data->include_xids)
-		appendStringInfo(ctx->out, "COMMIT %u", txn->xid);
+		appendStringInfo(ctx->out, "COMMIT " XID_FMT, txn->xid);
 	else
 		appendStringInfoString(ctx->out, "COMMIT");
 
@@ -378,7 +378,7 @@ pg_decode_prepare_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 					 quote_literal_cstr(txn->gid));
 
 	if (data->include_xids)
-		appendStringInfo(ctx->out, ", txid %u", txn->xid);
+		appendStringInfo(ctx->out, ", txid " XID_FMT, txn->xid);
 
 	if (data->include_timestamp)
 		appendStringInfo(ctx->out, " (at %s)",
@@ -400,7 +400,7 @@ pg_decode_commit_prepared_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn
 					 quote_literal_cstr(txn->gid));
 
 	if (data->include_xids)
-		appendStringInfo(ctx->out, ", txid %u", txn->xid);
+		appendStringInfo(ctx->out, ", txid " XID_FMT, txn->xid);
 
 	if (data->include_timestamp)
 		appendStringInfo(ctx->out, " (at %s)",
@@ -424,7 +424,7 @@ pg_decode_rollback_prepared_txn(LogicalDecodingContext *ctx,
 					 quote_literal_cstr(txn->gid));
 
 	if (data->include_xids)
-		appendStringInfo(ctx->out, ", txid %u", txn->xid);
+		appendStringInfo(ctx->out, ", txid " XID_FMT, txn->xid);
 
 	if (data->include_timestamp)
 		appendStringInfo(ctx->out, " (at %s)",
@@ -773,7 +773,7 @@ pg_output_stream_start(LogicalDecodingContext *ctx, TestDecodingData *data, Reor
 {
 	OutputPluginPrepareWrite(ctx, last_write);
 	if (data->include_xids)
-		appendStringInfo(ctx->out, "opening a streamed block for transaction TXN %u", txn->xid);
+		appendStringInfo(ctx->out, "opening a streamed block for transaction TXN " XID_FMT, txn->xid);
 	else
 		appendStringInfoString(ctx->out, "opening a streamed block for transaction");
 	OutputPluginWrite(ctx, last_write);
@@ -791,7 +791,7 @@ pg_decode_stream_stop(LogicalDecodingContext *ctx,
 
 	OutputPluginPrepareWrite(ctx, true);
 	if (data->include_xids)
-		appendStringInfo(ctx->out, "closing a streamed block for transaction TXN %u", txn->xid);
+		appendStringInfo(ctx->out, "closing a streamed block for transaction TXN " XID_FMT, txn->xid);
 	else
 		appendStringInfoString(ctx->out, "closing a streamed block for transaction");
 	OutputPluginWrite(ctx, true);
@@ -825,7 +825,7 @@ pg_decode_stream_abort(LogicalDecodingContext *ctx,
 
 	OutputPluginPrepareWrite(ctx, true);
 	if (data->include_xids)
-		appendStringInfo(ctx->out, "aborting streamed (sub)transaction TXN %u", txn->xid);
+		appendStringInfo(ctx->out, "aborting streamed (sub)transaction TXN " XID_FMT, txn->xid);
 	else
 		appendStringInfoString(ctx->out, "aborting streamed (sub)transaction");
 	OutputPluginWrite(ctx, true);
@@ -845,7 +845,7 @@ pg_decode_stream_prepare(LogicalDecodingContext *ctx,
 	OutputPluginPrepareWrite(ctx, true);
 
 	if (data->include_xids)
-		appendStringInfo(ctx->out, "preparing streamed transaction TXN %s, txid %u",
+		appendStringInfo(ctx->out, "preparing streamed transaction TXN %s, txid " XID_FMT,
 						 quote_literal_cstr(txn->gid), txn->xid);
 	else
 		appendStringInfo(ctx->out, "preparing streamed transaction %s",
@@ -876,7 +876,7 @@ pg_decode_stream_commit(LogicalDecodingContext *ctx,
 	OutputPluginPrepareWrite(ctx, true);
 
 	if (data->include_xids)
-		appendStringInfo(ctx->out, "committing streamed transaction TXN %u", txn->xid);
+		appendStringInfo(ctx->out, "committing streamed transaction TXN " XID_FMT, txn->xid);
 	else
 		appendStringInfoString(ctx->out, "committing streamed transaction");
 
@@ -910,7 +910,7 @@ pg_decode_stream_change(LogicalDecodingContext *ctx,
 
 	OutputPluginPrepareWrite(ctx, true);
 	if (data->include_xids)
-		appendStringInfo(ctx->out, "streaming change for TXN %u", txn->xid);
+		appendStringInfo(ctx->out, "streaming change for TXN " XID_FMT, txn->xid);
 	else
 		appendStringInfoString(ctx->out, "streaming change for transaction");
 	OutputPluginWrite(ctx, true);
@@ -963,7 +963,7 @@ pg_decode_stream_truncate(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 
 	OutputPluginPrepareWrite(ctx, true);
 	if (data->include_xids)
-		appendStringInfo(ctx->out, "streaming truncate for TXN %u", txn->xid);
+		appendStringInfo(ctx->out, "streaming truncate for TXN " XID_FMT, txn->xid);
 	else
 		appendStringInfoString(ctx->out, "streaming truncate for transaction");
 	OutputPluginWrite(ctx, true);

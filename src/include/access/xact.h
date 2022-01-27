@@ -226,7 +226,7 @@ typedef struct xl_xact_xinfo
 	 * four so following records don't have to care about alignment. Commit
 	 * records can be large, so copying large portions isn't attractive.
 	 */
-	uint32		xinfo;
+	uint64		xinfo;
 } xl_xact_xinfo;
 
 typedef struct xl_xact_dbinfo
@@ -258,7 +258,12 @@ typedef struct xl_xact_invals
 
 typedef struct xl_xact_twophase
 {
-	TransactionId xid;
+	/*
+	 * TransactionId is split into 32-bit parts because
+	 * xl_xact_twophase is only int-aligned.
+	 */
+	uint32		xid_lo;
+	uint32		xid_hi;
 } xl_xact_twophase;
 
 typedef struct xl_xact_origin
@@ -276,7 +281,7 @@ typedef struct xl_xact_commit
 	/* xl_xact_subxacts follows if XINFO_HAS_SUBXACT */
 	/* xl_xact_relfilenodes follows if XINFO_HAS_RELFILENODES */
 	/* xl_xact_invals follows if XINFO_HAS_INVALS */
-	/* xl_xact_twophase follows if XINFO_HAS_TWOPHASE */
+	/* xl_xact_twophase follows if XINFO_HAS_TWOPHASE (xid is int-aligned!) */
 	/* twophase_gid follows if XINFO_HAS_GID. As a null-terminated string. */
 	/* xl_xact_origin follows if XINFO_HAS_ORIGIN, stored unaligned! */
 } xl_xact_commit;
@@ -291,7 +296,7 @@ typedef struct xl_xact_abort
 	/* xl_xact_subxacts follows if XINFO_HAS_SUBXACT */
 	/* xl_xact_relfilenodes follows if XINFO_HAS_RELFILENODES */
 	/* No invalidation messages needed. */
-	/* xl_xact_twophase follows if XINFO_HAS_TWOPHASE */
+	/* xl_xact_twophase follows if XINFO_HAS_TWOPHASE (xid is int-aligned!) */
 	/* twophase_gid follows if XINFO_HAS_GID. As a null-terminated string. */
 	/* xl_xact_origin follows if XINFO_HAS_ORIGIN, stored unaligned! */
 } xl_xact_abort;

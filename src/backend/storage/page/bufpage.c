@@ -21,10 +21,25 @@
 #include "storage/checksum.h"
 #include "utils/memdebug.h"
 #include "utils/memutils.h"
+#include "utils/snapmgr.h"
 
 
 /* GUC variable */
 bool		ignore_checksum_failure = false;
+
+/*
+ * HeapPageSpecialData used when pd_special == BLCKSZ.  This is special format
+ * used when page with 32-bit xids doesn't fit HeapPageSpecialData.  Then
+ * all xmin's are frozen (can do this for all live tuples after pg_upgrade),
+ * while 64-bit xmax is stored in both t_heap.t_xmin and t_heap.t_xmax.
+ * This is so-called "double xmax" format.
+ */
+static HeapPageSpecialData doubleXmaxSpecialData =
+{
+	.pd_xid_base = MaxTransactionId,
+	.pd_multi_base = MaxTransactionId
+};
+HeapPageSpecial doubleXmaxSpecial = &doubleXmaxSpecialData;
 
 
 /* ----------------------------------------------------------------
@@ -432,15 +447,131 @@ PageRestoreTempPage(Page tempPage, Page oldPage)
 }
 
 /*
- * Tuple defrag support for PageRepairFragmentation and PageIndexMultiDelete
+ * Get minimum and maximum values of xid and multixact on "double xmax" page.
  */
-typedef struct itemIdCompactData
+static void
+heap_page_double_xmax_get_min_max(Page page,
+								  TransactionId *xid_min,
+								  TransactionId *xid_max,
+								  MultiXactId *multi_min,
+								  MultiXactId *multi_max)
 {
-	uint16		offsetindex;	/* linp array index */
-	int16		itemoff;		/* page offset of item data */
-	uint16		alignedlen;		/* MAXALIGN(item data len) */
-} itemIdCompactData;
-typedef itemIdCompactData *itemIdCompact;
+	bool				xid_found = false,
+						multi_found = false;
+	OffsetNumber		offnum,
+						maxoff;
+
+	maxoff = PageGetMaxOffsetNumber(page);
+
+	for (offnum = FirstOffsetNumber;
+		 offnum <= maxoff;
+		 offnum = OffsetNumberNext(offnum))
+	{
+		ItemId				itemid;
+		HeapTupleHeader		htup;
+		TransactionId		xmax;
+
+		itemid = PageGetItemId(page, offnum);
+
+		if (!ItemIdIsNormal(itemid))
+			continue;
+
+		htup = (HeapTupleHeader) PageGetItem(page, itemid);
+
+		xmax = HeapTupleHeaderGetDoubleXmax(htup);
+
+		if (!TransactionIdIsNormal(xmax))
+			continue;
+
+		if (!(htup->t_infomask & HEAP_XMAX_IS_MULTI))
+		{
+			if (!xid_found)
+			{
+				*xid_min = *xid_max = xmax;
+				xid_found = true;
+			}
+			else
+			{
+				*xid_min = Min(*xid_min, xmax);
+				*xid_max = Max(*xid_max, xmax);
+			}
+		}
+		else
+		{
+			if (!multi_found)
+			{
+				*multi_min = *multi_max = xmax;
+				multi_found = true;
+			}
+			else
+			{
+				*multi_min = Min(*multi_min, xmax);
+				*multi_max = Max(*multi_max, xmax);
+			}
+		}
+	}
+}
+
+/*
+ * Add special area to heap page, so convert from "double xmax" to normal
+ * format.
+ */
+static void
+heap_page_add_special_area(itemIdCompact itemidbase, int nitems, Page page,
+						   TransactionId xid_base, MultiXactId multi_base)
+{
+	char		newPage[BLCKSZ];
+	PageHeader	phdr = (PageHeader) page;
+	PageHeader	new_phdr = (PageHeader) newPage;
+	HeapPageSpecial	special;
+	Offset		upper;
+	int			i;
+
+	memcpy(newPage, page, phdr->pd_lower);
+
+	/* Add special area */
+	new_phdr->pd_special = PageGetPageSize(newPage) - sizeof(HeapPageSpecialData);
+	special = (HeapPageSpecial) ((Pointer) (newPage) + new_phdr->pd_special);
+	special->pd_xid_base = xid_base;
+	special->pd_multi_base = multi_base;
+
+	/* sort itemIdSortData array into decreasing itemoff order */
+	qsort((char *) itemidbase, nitems, sizeof(itemIdCompactData),
+		  itemoffcompare);
+
+	upper = new_phdr->pd_special;
+	for (i = 0; i < nitems; i++)
+	{
+		itemIdCompact		itemidptr = &itemidbase[i];
+		ItemId				lp;
+		HeapTupleHeader		old_htup;
+		HeapTupleHeader		new_htup;
+		TransactionId		xmax;
+
+		lp = PageGetItemId(page, itemidptr->offsetindex + 1);
+		old_htup = (HeapTupleHeader) PageGetItem(page, lp);
+		upper -= itemidptr->alignedlen;
+		memcpy((Pointer) newPage + upper,
+			   (Pointer) page + itemidptr->itemoff,
+			   itemidptr->alignedlen);
+		lp = PageGetItemId(newPage, itemidptr->offsetindex + 1);
+		lp->lp_off = upper;
+		new_htup = (HeapTupleHeader) PageGetItem(newPage, lp);
+
+		/* Convert xmax value */
+		new_htup->t_choice.t_heap.t_xmin = FrozenTransactionId;
+		xmax = HeapTupleHeaderGetDoubleXmax(old_htup);
+		if (!(new_htup->t_infomask & HEAP_XMAX_IS_MULTI))
+			new_htup->t_choice.t_heap.t_xmax = NormalTransactionIdToShort(xid_base, xmax);
+		else
+			new_htup->t_choice.t_heap.t_xmax = NormalTransactionIdToShort(multi_base, xmax);
+	}
+
+	new_phdr->pd_upper = upper;
+
+	memcpy(page, newPage, PageGetPageSize(newPage));
+	elog(DEBUG2, "convert heap page from double xmax to normal format");
+}
 
 /*
  * After removing or marking some line pointers unused, move the tuples to
@@ -471,7 +602,8 @@ typedef itemIdCompactData *itemIdCompact;
  * Callers must ensure that nitems is > 0
  */
 static void
-compactify_tuples(itemIdCompact itemidbase, int nitems, Page page, bool presorted)
+compactify_tuples(itemIdCompact itemidbase, int nitems, Page page,
+				  bool presorted, bool addspecial)
 {
 	PageHeader	phdr = (PageHeader) page;
 	Offset		upper;
@@ -483,9 +615,33 @@ compactify_tuples(itemIdCompact itemidbase, int nitems, Page page, bool presorte
 	/* Code within will not work correctly if nitems == 0 */
 	Assert(nitems > 0);
 
+	/* Add special area to the heap page if possible */
+	if (addspecial)
+	{
+		TransactionId	xid_min = FirstNormalTransactionId,
+						xid_max = FirstNormalTransactionId;
+		MultiXactId		multi_min = FirstNormalTransactionId,
+						multi_max = FirstNormalTransactionId;
+
+		Assert(phdr->pd_special == PageGetPageSize(page));
+
+		heap_page_double_xmax_get_min_max(page, &xid_min, &xid_max,
+										  &multi_min, &multi_max);
+
+		if (xid_max - xid_min < (TransactionId) (MaxShortTransactionId - FirstNormalTransactionId) &&
+			multi_max - multi_min < (TransactionId) (MaxShortTransactionId - FirstNormalTransactionId))
+		{
+			Assert(xid_min >= FirstNormalTransactionId);
+			Assert(multi_min >= FirstNormalTransactionId);
+			heap_page_add_special_area(itemidbase, nitems, page,
+									   xid_min - FirstNormalTransactionId,
+									   multi_min - FirstNormalTransactionId);
+			return;
+		}
+	}
+
 	if (presorted)
 	{
-
 #ifdef USE_ASSERT_CHECKING
 		{
 			/*
@@ -783,11 +939,21 @@ PageRepairFragmentation(Page page)
 	nstorage = itemidptr - itemidbase;
 	if (nstorage == 0)
 	{
+		if (pd_special == PageGetPageSize(page))
+		{
+			pd_special = PageGetPageSize(page) - sizeof(HeapPageSpecialData);
+			((PageHeader) page)->pd_special = pd_special;
+			HeapPageGetSpecial(page)->pd_xid_base = 0;
+			HeapPageGetSpecial(page)->pd_multi_base = 0;
+		}
+
 		/* Page is completely empty, so just reset it quickly */
 		((PageHeader) page)->pd_upper = pd_special;
 	}
 	else
 	{
+		bool	addspecial = false;
+
 		/* Need to compact the page the hard way */
 		if (totallen > (Size) (pd_special - pd_lower))
 			ereport(ERROR,
@@ -795,7 +961,15 @@ PageRepairFragmentation(Page page)
 					 errmsg("corrupted item lengths: total %u, available space %u",
 							(unsigned int) totallen, pd_special - pd_lower)));
 
-		compactify_tuples(itemidbase, nstorage, page, presorted);
+		/*
+		 * Try to add special area to the heap page if it has enough of free
+		 * space.
+		 */
+		if (pd_special == PageGetPageSize(page) &&
+			(Size) (pd_special - pd_lower) - totallen >= sizeof(HeapPageSpecialData))
+			addspecial = true;
+
+		compactify_tuples(itemidbase, nstorage, page, presorted, addspecial);
 	}
 
 	/* Set hint bit for PageAddItemExtended */
@@ -984,6 +1158,9 @@ Size
 PageGetHeapFreeSpace(Page page)
 {
 	Size		space;
+
+	if (HeapPageIsDoubleXmax(page))
+		return 0;
 
 	space = PageGetFreeSpace(page);
 	if (space > 0)
@@ -1268,7 +1445,7 @@ PageIndexMultiDelete(Page page, OffsetNumber *itemnos, int nitems)
 
 	/* and compactify the tuple data */
 	if (nused > 0)
-		compactify_tuples(itemidbase, nused, page, presorted);
+		compactify_tuples(itemidbase, nused, page, presorted, false);
 	else
 		phdr->pd_upper = pd_special;
 }

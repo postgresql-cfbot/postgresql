@@ -54,6 +54,10 @@ typedef MinimalTupleData *MinimalTuple;
  *	 this can't be told apart from case #1 by inspection; code setting up
  *	 or destroying this representation has to know what it's doing.
  *
+ * t_xid_base and t_multi_base are base values for calculation of transaction
+ * identifiers from t_xmin and t_xmax in heap tuple header.  Normally they
+ * are copied from page header or another tuple.
+ *
  * t_len should always be valid, except in the pointer-to-nothing case.
  * t_self and t_tableOid should be valid if the HeapTupleData points to
  * a disk buffer, or if it represents a copy of a tuple on disk.  They
@@ -62,9 +66,11 @@ typedef MinimalTupleData *MinimalTuple;
 typedef struct HeapTupleData
 {
 	uint32		t_len;			/* length of *t_data */
+	TransactionId	t_xid_base;	/* base value for normal transaction ids */
+	TransactionId	t_multi_base;	/* base value for mutlixact */
 	ItemPointerData t_self;		/* SelfItemPointer */
 	Oid			t_tableOid;		/* table the tuple came from */
-#define FIELDNO_HEAPTUPLEDATA_DATA 3
+#define FIELDNO_HEAPTUPLEDATA_DATA 5
 	HeapTupleHeader t_data;		/* -> tuple header and data */
 } HeapTupleData;
 
@@ -78,12 +84,12 @@ typedef HeapTupleData *HeapTuple;
 #define HeapTupleIsValid(tuple) PointerIsValid(tuple)
 
 /* HeapTupleHeader functions implemented in utils/time/combocid.c */
-extern CommandId HeapTupleHeaderGetCmin(HeapTupleHeader tup);
-extern CommandId HeapTupleHeaderGetCmax(HeapTupleHeader tup);
-extern void HeapTupleHeaderAdjustCmax(HeapTupleHeader tup,
+extern CommandId HeapTupleGetCmin(HeapTuple tup);
+extern CommandId HeapTupleGetCmax(HeapTuple tup);
+extern void HeapTupleHeaderAdjustCmax(HeapTuple tup,
 									  CommandId *cmax, bool *iscombo);
 
 /* Prototype for HeapTupleHeader accessors in heapam.c */
-extern TransactionId HeapTupleGetUpdateXid(HeapTupleHeader tuple);
+extern TransactionId HeapTupleGetUpdateXid(HeapTuple tuple);
 
 #endif							/* HTUP_H */

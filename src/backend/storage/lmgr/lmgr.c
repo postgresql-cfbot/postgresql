@@ -1135,10 +1135,17 @@ DescribeLockTag(StringInfo buf, const LOCKTAG *tag)
 							 tag->locktag_field1);
 			break;
 		case LOCKTAG_TRANSACTION:
-			appendStringInfo(buf,
-							 _("transaction %u"),
-							 tag->locktag_field1);
+		{
+			char		xid_str[32];
+
+			/* make translatable string */
+			snprintf(xid_str, sizeof(xid_str), XID_FMT,
+				(TransactionId) tag->locktag_field1 |
+				((TransactionId) tag->locktag_field2 << 32));
+
+			appendStringInfo(buf, _("transaction %s"), xid_str);
 			break;
+		}
 		case LOCKTAG_VIRTUALTRANSACTION:
 			appendStringInfo(buf,
 							 _("virtual transaction %d/%u"),

@@ -252,7 +252,6 @@ static void WalSndUpdateProgress(LogicalDecodingContext *ctx, XLogRecPtr lsn, Tr
 static XLogRecPtr WalSndWaitForWal(XLogRecPtr loc);
 static void LagTrackerWrite(XLogRecPtr lsn, TimestampTz local_flush_time);
 static TimeOffset LagTrackerRead(int head, XLogRecPtr lsn, TimestampTz now);
-static bool TransactionIdInRecentPast(TransactionId xid, uint32 epoch);
 
 static void WalSndSegmentOpen(XLogReaderState *state, XLogSegNo nextSegNo,
 							  TimeLineID *tli_p);
@@ -2146,53 +2145,13 @@ PhysicalReplicationSlotNewXmin(TransactionId feedbackXmin, TransactionId feedbac
 }
 
 /*
- * Check that the provided xmin/epoch are sane, that is, not in the future
- * and not so far back as to be already wrapped around.
- *
- * Epoch of nextXid should be same as standby, or if the counter has
- * wrapped, then one greater than standby.
- *
- * This check doesn't care about whether clog exists for these xids
- * at all.
- */
-static bool
-TransactionIdInRecentPast(TransactionId xid, uint32 epoch)
-{
-	FullTransactionId nextFullXid;
-	TransactionId nextXid;
-	uint32		nextEpoch;
-
-	nextFullXid = ReadNextFullTransactionId();
-	nextXid = XidFromFullTransactionId(nextFullXid);
-	nextEpoch = EpochFromFullTransactionId(nextFullXid);
-
-	if (xid <= nextXid)
-	{
-		if (epoch != nextEpoch)
-			return false;
-	}
-	else
-	{
-		if (epoch + 1 != nextEpoch)
-			return false;
-	}
-
-	if (!TransactionIdPrecedesOrEquals(xid, nextXid))
-		return false;			/* epoch OK, but it's wrapped around */
-
-	return true;
-}
-
-/*
  * Hot Standby feedback
  */
 static void
 ProcessStandbyHSFeedbackMessage(void)
 {
 	TransactionId feedbackXmin;
-	uint32		feedbackEpoch;
 	TransactionId feedbackCatalogXmin;
-	uint32		feedbackCatalogEpoch;
 	TimestampTz replyTime;
 
 	/*
@@ -2201,10 +2160,8 @@ ProcessStandbyHSFeedbackMessage(void)
 	 * of this message.
 	 */
 	replyTime = pq_getmsgint64(&reply_message);
-	feedbackXmin = pq_getmsgint(&reply_message, 4);
-	feedbackEpoch = pq_getmsgint(&reply_message, 4);
-	feedbackCatalogXmin = pq_getmsgint(&reply_message, 4);
-	feedbackCatalogEpoch = pq_getmsgint(&reply_message, 4);
+	feedbackXmin = pq_getmsgint64(&reply_message);
+	feedbackCatalogXmin = pq_getmsgint64(&reply_message);
 
 	if (message_level_is_interesting(DEBUG2))
 	{
@@ -2213,11 +2170,9 @@ ProcessStandbyHSFeedbackMessage(void)
 		/* Copy because timestamptz_to_str returns a static buffer */
 		replyTimeStr = pstrdup(timestamptz_to_str(replyTime));
 
-		elog(DEBUG2, "hot standby feedback xmin %u epoch %u, catalog_xmin %u epoch %u reply_time %s",
+		elog(DEBUG2, "hot standby feedback xmin " XID_FMT ", catalog_xmin " XID_FMT " reply_time %s",
 			 feedbackXmin,
-			 feedbackEpoch,
 			 feedbackCatalogXmin,
-			 feedbackCatalogEpoch,
 			 replyTimeStr);
 
 		pfree(replyTimeStr);
@@ -2247,18 +2202,6 @@ ProcessStandbyHSFeedbackMessage(void)
 			PhysicalReplicationSlotNewXmin(feedbackXmin, feedbackCatalogXmin);
 		return;
 	}
-
-	/*
-	 * Check that the provided xmin/epoch are sane, that is, not in the future
-	 * and not so far back as to be already wrapped around.  Ignore if not.
-	 */
-	if (TransactionIdIsNormal(feedbackXmin) &&
-		!TransactionIdInRecentPast(feedbackXmin, feedbackEpoch))
-		return;
-
-	if (TransactionIdIsNormal(feedbackCatalogXmin) &&
-		!TransactionIdInRecentPast(feedbackCatalogXmin, feedbackCatalogEpoch))
-		return;
 
 	/*
 	 * Set the WalSender's xmin equal to the standby's requested xmin, so that

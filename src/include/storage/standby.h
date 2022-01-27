@@ -21,7 +21,7 @@
 #include "storage/standbydefs.h"
 
 /* User-settable GUC parameters */
-extern int	vacuum_defer_cleanup_age;
+extern int64 vacuum_defer_cleanup_age;
 extern int	max_standby_archive_delay;
 extern int	max_standby_streaming_delay;
 extern bool log_recovery_conflict_waits;

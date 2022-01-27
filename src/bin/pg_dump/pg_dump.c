@@ -314,6 +314,7 @@ static void appendReloptionsArrayAH(PQExpBuffer buffer, const char *reloptions,
 static char *get_synchronized_snapshot(Archive *fout);
 static void setupDumpWorker(Archive *AHX);
 static TableInfo *getRootTableInfo(const TableInfo *tbinfo);
+static uint64 pg_strtouint64(const char *str, char **endptr, int base);
 
 
 int
@@ -2773,7 +2774,7 @@ dumpDatabase(Archive *fout)
 			   *datistemplate,
 			   *datconnlimit,
 			   *tablespace;
-	uint32		frozenxid,
+	uint64		frozenxid,
 				minmxid;
 	char	   *qdatname;
 
@@ -2822,8 +2823,8 @@ dumpDatabase(Archive *fout)
 	encoding = PQgetvalue(res, 0, i_encoding);
 	collate = PQgetvalue(res, 0, i_collate);
 	ctype = PQgetvalue(res, 0, i_ctype);
-	frozenxid = atooid(PQgetvalue(res, 0, i_frozenxid));
-	minmxid = atooid(PQgetvalue(res, 0, i_minmxid));
+	frozenxid = pg_strtouint64(PQgetvalue(res, 0, i_frozenxid), NULL, 0);
+	minmxid = pg_strtouint64(PQgetvalue(res, 0, i_minmxid), NULL, 0);
 	dbdacl.acl = PQgetvalue(res, 0, i_datacl);
 	dbdacl.acldefault = PQgetvalue(res, 0, i_acldefault);
 	datistemplate = PQgetvalue(res, 0, i_datistemplate);
@@ -3016,7 +3017,7 @@ dumpDatabase(Archive *fout)
 	{
 		appendPQExpBufferStr(creaQry, "\n-- For binary upgrade, set datfrozenxid and datminmxid.\n");
 		appendPQExpBuffer(creaQry, "UPDATE pg_catalog.pg_database\n"
-						  "SET datfrozenxid = '%u', datminmxid = '%u'\n"
+						  "SET datfrozenxid = '" XID_FMT "', datminmxid = '" XID_FMT "'\n"
 						  "WHERE datname = ",
 						  frozenxid, minmxid);
 		appendStringLiteralAH(creaQry, datname, fout);
@@ -3066,10 +3067,10 @@ dumpDatabase(Archive *fout)
 
 		appendPQExpBufferStr(loOutQry, "\n-- For binary upgrade, set pg_largeobject relfrozenxid and relminmxid\n");
 		appendPQExpBuffer(loOutQry, "UPDATE pg_catalog.pg_class\n"
-						  "SET relfrozenxid = '%u', relminmxid = '%u'\n"
+						  "SET relfrozenxid = '%s', relminmxid = '%s'\n"
 						  "WHERE oid = %u;\n",
-						  atooid(PQgetvalue(lo_res, 0, i_relfrozenxid)),
-						  atooid(PQgetvalue(lo_res, 0, i_relminmxid)),
+						  (PQgetvalue(lo_res, 0, i_relfrozenxid)),
+						  (PQgetvalue(lo_res, 0, i_relminmxid)),
 						  LargeObjectRelationId);
 		ArchiveEntry(fout, nilCatalogId, createDumpId(),
 					 ARCHIVE_OPTS(.tag = "pg_largeobject",
@@ -6251,11 +6252,11 @@ getTables(Archive *fout, int *numTables)
 		tblinfo[i].relreplident = *(PQgetvalue(res, i, i_relreplident));
 		tblinfo[i].rowsec = (strcmp(PQgetvalue(res, i, i_relrowsec), "t") == 0);
 		tblinfo[i].forcerowsec = (strcmp(PQgetvalue(res, i, i_relforcerowsec), "t") == 0);
-		tblinfo[i].frozenxid = atooid(PQgetvalue(res, i, i_relfrozenxid));
-		tblinfo[i].toast_frozenxid = atooid(PQgetvalue(res, i, i_toastfrozenxid));
+		tblinfo[i].frozenxid = pg_strtouint64(PQgetvalue(res, i, i_relfrozenxid), NULL, 0);
+		tblinfo[i].toast_frozenxid = pg_strtouint64(PQgetvalue(res, i, i_toastfrozenxid), NULL, 0);
 		tblinfo[i].toast_oid = atooid(PQgetvalue(res, i, i_toastoid));
-		tblinfo[i].minmxid = atooid(PQgetvalue(res, i, i_relminmxid));
-		tblinfo[i].toast_minmxid = atooid(PQgetvalue(res, i, i_toastminmxid));
+		tblinfo[i].minmxid = pg_strtouint64(PQgetvalue(res, i, i_relminmxid), NULL, 0);
+		tblinfo[i].toast_minmxid = pg_strtouint64(PQgetvalue(res, i, i_toastminmxid), NULL, 0);
 		tblinfo[i].reloptions = pg_strdup(PQgetvalue(res, i, i_reloptions));
 		if (PQgetisnull(res, i, i_checkoption))
 			tblinfo[i].checkoption = NULL;
@@ -15380,7 +15381,7 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 		{
 			appendPQExpBufferStr(q, "\n-- For binary upgrade, set heap's relfrozenxid and relminmxid\n");
 			appendPQExpBuffer(q, "UPDATE pg_catalog.pg_class\n"
-							  "SET relfrozenxid = '%u', relminmxid = '%u'\n"
+							  "SET relfrozenxid = '" XID_FMT "', relminmxid = '" XID_FMT "'\n"
 							  "WHERE oid = ",
 							  tbinfo->frozenxid, tbinfo->minmxid);
 			appendStringLiteralAH(q, qualrelname, fout);
@@ -15394,7 +15395,7 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 				 */
 				appendPQExpBufferStr(q, "\n-- For binary upgrade, set toast's relfrozenxid and relminmxid\n");
 				appendPQExpBuffer(q, "UPDATE pg_catalog.pg_class\n"
-								  "SET relfrozenxid = '%u', relminmxid = '%u'\n"
+								  "SET relfrozenxid = '" XID_FMT "', relminmxid = '" XID_FMT "'\n"
 								  "WHERE oid = '%u';\n",
 								  tbinfo->toast_frozenxid,
 								  tbinfo->toast_minmxid, tbinfo->toast_oid);
@@ -17954,4 +17955,28 @@ appendReloptionsArrayAH(PQExpBuffer buffer, const char *reloptions,
 								fout->std_strings);
 	if (!res)
 		pg_log_warning("could not parse %s array", "reloptions");
+}
+
+/*
+ * Copied from src/backend/utils/adt/numutils.c
+ *
+ * pg_strtouint64
+ *		Converts 'str' into an unsigned 64-bit integer.
+ *
+ * This has the identical API to strtoul(3), except that it will handle
+ * 64-bit ints even where "long" is narrower than that.
+ *
+ * For the moment it seems sufficient to assume that the platform has
+ * such a function somewhere; let's not roll our own.
+ */
+static uint64
+pg_strtouint64(const char *str, char **endptr, int base)
+{
+#ifdef _MSC_VER					/* MSVC only */
+	return _strtoui64(str, endptr, base);
+#elif defined(HAVE_STRTOULL) && SIZEOF_LONG < 8
+	return strtoull(str, endptr, base);
+#else
+	return strtoul(str, endptr, base);
+#endif
 }

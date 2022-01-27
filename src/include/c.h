@@ -75,6 +75,10 @@
 #include <libintl.h>
 #endif
 
+#if HAVE_INTTYPES_H
+#include "inttypes.h"
+#endif
+
 
 /* ----------------------------------------------------------------
  *				Section 1: compiler characteristics
@@ -484,6 +488,16 @@ typedef unsigned long long int uint64;
 #define UINT64_FORMAT "%" INT64_MODIFIER "u"
 
 /*
+ * Used to make translatable strings.
+ * Also on macOS externally defined PRIu64 doesn't match postgres int64
+ * definition causing strom of printf warnings. So redefine it anyway. -- sk.
+ */
+#ifdef PRIu64
+#undef PRIu64
+#endif
+#define PRIu64 INT64_MODIFIER "u"
+
+/*
  * 128-bit signed and unsigned integers
  *		There currently is only limited support for such types.
  *		E.g. 128bit literals and snprintf are not supported; but math is.
@@ -584,19 +598,41 @@ typedef double float8;
 typedef Oid regproc;
 typedef regproc RegProcedure;
 
-typedef uint32 TransactionId;
+#define MAX_START_XID	UINT64CONST(0x3fffffffffffffff)
 
-typedef uint32 LocalTransactionId;
+typedef uint64 TransactionId;
 
-typedef uint32 SubTransactionId;
+#define TransactionIdPrecedes(id1, id2) ((id1) < (id2))
+#define TransactionIdPrecedesOrEquals(id1, id2) ((id1) <= (id2))
+#define TransactionIdFollows(id1, id2) ((id1) > (id2))
+#define TransactionIdFollowsOrEquals(id1, id2) ((id1) >= (id2))
+
+#define StartTransactionIdIsValid(start_xid)	((start_xid) <= MAX_START_XID)
+
+typedef uint32 ShortTransactionId;
+
+typedef uint64 LocalTransactionId;
+
+typedef uint64 SubTransactionId;
 
 #define InvalidSubTransactionId		((SubTransactionId) 0)
 #define TopSubTransactionId			((SubTransactionId) 1)
 
+#define XID_FMT UINT64_FORMAT
+
 /* MultiXactId must be equivalent to TransactionId, to fit in t_xmax */
 typedef TransactionId MultiXactId;
 
-typedef uint32 MultiXactOffset;
+#define MultiXactIdPrecedes(id1, id2) ((id1) < (id2))
+#define MultiXactIdPrecedesOrEquals(id1, id2) ((id1) <= (id2))
+#define MultiXactIdFollows(id1, id2) ((id1) > (id2))
+#define MultiXactIdFollowsOrEquals(id1, id2) ((id1) >= (id2))
+
+#define StartMultiXactIdIsValid(start_mx_id)	((start_mx_id) <= MAX_START_XID)
+
+typedef uint64 MultiXactOffset;
+
+#define StartMultiXactOffsetIsValid(start_mx_offset)	((start_mx_offset) <= MAX_START_XID)
 
 typedef uint32 CommandId;
 

@@ -105,9 +105,14 @@ GetBTPageStatistics(BlockNumber blkno, Buffer buffer, BTPageStat *stat)
 
 	stat->page_size = PageGetPageSize(page);
 
+	stat->btpo_prev = opaque->btpo_prev;
+	stat->btpo_level = opaque->btpo_level;
+
 	/* page type (flags) */
 	if (P_ISDELETED(opaque))
 	{
+		TransactionId safexid;
+
 		/* We divide deleted pages into leaf ('d') or internal ('D') */
 		if (P_ISLEAF(opaque) || !P_HAS_FULLXID(opaque))
 			stat->type = 'd';
@@ -122,16 +127,16 @@ GetBTPageStatistics(BlockNumber blkno, Buffer buffer, BTPageStat *stat)
 		 * called "bpto").
 		 */
 		if (P_HAS_FULLXID(opaque))
-		{
-			FullTransactionId safexid = BTPageGetDeleteXid(page);
-
-			elog(DEBUG2, "deleted page from block %u has safexid %u:%u",
-				 blkno, EpochFromFullTransactionId(safexid),
-				 XidFromFullTransactionId(safexid));
-		}
+			safexid = XidFromFullTransactionId(BTPageGetDeleteXid(page));
 		else
-			elog(DEBUG2, "deleted page from block %u has safexid %u",
-				 blkno, opaque->btpo_level);
+		{
+			safexid = BTP_GET_XACT(opaque);
+			stat->btpo_prev = 0;
+			stat->btpo_level = 0;
+		}
+
+		elog(DEBUG2, "deleted page from block %u has safexid " XID_FMT,
+			 blkno, safexid);
 
 		/* Don't interpret BTDeletedPageData as index tuples */
 		maxoff = InvalidOffsetNumber;
@@ -146,9 +151,7 @@ GetBTPageStatistics(BlockNumber blkno, Buffer buffer, BTPageStat *stat)
 		stat->type = 'i';
 
 	/* btpage opaque data */
-	stat->btpo_prev = opaque->btpo_prev;
 	stat->btpo_next = opaque->btpo_next;
-	stat->btpo_level = opaque->btpo_level;
 	stat->btpo_flags = opaque->btpo_flags;
 	stat->btpo_cycleid = opaque->btpo_cycleid;
 
@@ -613,7 +616,7 @@ bt_page_items_bytea(PG_FUNCTION_ARGS)
 
 		uargs = palloc(sizeof(struct user_args));
 
-		uargs->page = VARDATA(raw_page);
+		uargs->page = get_page_from_raw(raw_page);
 
 		uargs->offset = FirstOffsetNumber;
 

@@ -17,6 +17,7 @@
 
 #include "access/htup_details.h"
 #include "access/relation.h"
+#include "commands/sequence.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_type.h"
 #include "funcapi.h"
@@ -252,8 +253,8 @@ page_header(PG_FUNCTION_ARGS)
 
 	Datum		result;
 	HeapTuple	tuple;
-	Datum		values[9];
-	bool		nulls[9];
+	Datum		values[11];
+	bool		nulls[11];
 
 	PageHeader	page;
 	XLogRecPtr	lsn;
@@ -274,7 +275,7 @@ page_header(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("input page too small (%d bytes)", raw_page_size)));
 
-	page = (PageHeader) VARDATA(raw_page);
+	page = (PageHeader) get_page_from_raw(raw_page);
 
 	/* Build a tuple descriptor for our result type */
 	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
@@ -324,11 +325,28 @@ page_header(PG_FUNCTION_ARGS)
 	}
 
 	values[7] = UInt16GetDatum(PageGetPageLayoutVersion(page));
-	values[8] = TransactionIdGetDatum(page->pd_prune_xid);
 
 	/* Build and return the tuple. */
 
 	memset(nulls, 0, sizeof(nulls));
+
+	if (PageGetSpecialSize(page) == MAXALIGN(sizeof(HeapPageSpecialData)))
+	{
+		HeapPageSpecial pageSpecial = HeapPageGetSpecial(page);
+
+		values[8] = TransactionIdGetDatum(pageSpecial->pd_xid_base);
+		values[9] = TransactionIdGetDatum(pageSpecial->pd_multi_base);
+		values[10] = TransactionIdGetDatum(HeapPageGetPruneXid(page));
+		nulls[8] = false;
+		nulls[9] = false;
+		nulls[10] = false;
+	}
+	else
+	{
+		nulls[8] = true;
+		nulls[9] = true;
+		nulls[10] = true;
+	}
 
 	tuple = heap_form_tuple(tupdesc, values, nulls);
 	result = HeapTupleGetDatum(tuple);

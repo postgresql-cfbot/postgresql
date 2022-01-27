@@ -1046,7 +1046,7 @@ apply_handle_stream_prepare(StringInfo s)
 	logicalrep_read_stream_prepare(s, &prepare_data);
 	set_apply_error_context_xact(prepare_data.xid, prepare_data.prepare_time);
 
-	elog(DEBUG1, "received prepare for streamed transaction %u", prepare_data.xid);
+	elog(DEBUG1, "received prepare for streamed transaction " XID_FMT, prepare_data.xid);
 
 	/* Replay all the spooled operations. */
 	apply_spooled_messages(prepare_data.xid, prepare_data.prepare_lsn);
@@ -1428,7 +1428,7 @@ apply_handle_stream_commit(StringInfo s)
 	xid = logicalrep_read_stream_commit(s, &commit_data);
 	set_apply_error_context_xact(xid, commit_data.committime);
 
-	elog(DEBUG1, "received commit for streamed transaction %u", xid);
+	elog(DEBUG1, "received commit for streamed transaction " XID_FMT, xid);
 
 	apply_spooled_messages(xid, commit_data.commit_lsn);
 
@@ -3203,14 +3203,14 @@ subxact_info_add(TransactionId xid)
 static inline void
 subxact_filename(char *path, Oid subid, TransactionId xid)
 {
-	snprintf(path, MAXPGPATH, "%u-%u.subxacts", subid, xid);
+	snprintf(path, MAXPGPATH, "%u-" XID_FMT ".subxacts", subid, xid);
 }
 
 /* format filename for file containing serialized changes */
 static inline void
 changes_filename(char *path, Oid subid, TransactionId xid)
 {
-	snprintf(path, MAXPGPATH, "%u-%u.changes", subid, xid);
+	snprintf(path, MAXPGPATH, "%u-" XID_FMT ".changes", subid, xid);
 }
 
 /*
@@ -3372,7 +3372,7 @@ TwoPhaseTransactionGid(Oid subid, TransactionId xid, char *gid, int szgid)
 				(errcode(ERRCODE_PROTOCOL_VIOLATION),
 				 errmsg_internal("invalid two-phase transaction ID")));
 
-	snprintf(gid, szgid, "pg_gid_%u_%u", subid, xid);
+	snprintf(gid, szgid, "pg_gid_%u_" XID_FMT, subid, xid);
 }
 
 /* Logical Replication Apply worker entry point */
@@ -3689,7 +3689,7 @@ apply_error_callback(void *arg)
 	/* append transaction information */
 	if (TransactionIdIsNormal(errarg->remote_xid))
 	{
-		appendStringInfo(&buf, _(" in transaction %u"), errarg->remote_xid);
+		appendStringInfo(&buf, _(" in transaction " XID_FMT), errarg->remote_xid);
 		if (errarg->ts != 0)
 			appendStringInfo(&buf, _(" at %s"),
 							 timestamptz_to_str(errarg->ts));

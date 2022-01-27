@@ -653,6 +653,7 @@ collect_corrupt_items(Oid relid, bool all_visible, bool all_frozen)
 
 			/* Initialize a HeapTupleData structure for checks below. */
 			ItemPointerSet(&(tuple.t_self), blkno, offnum);
+			HeapTupleCopyBaseFromPage(&tuple, page);
 			tuple.t_data = (HeapTupleHeader) PageGetItem(page, itemid);
 			tuple.t_len = ItemIdGetLength(itemid);
 			tuple.t_tableOid = relid;
@@ -762,7 +763,7 @@ tuple_all_visible(HeapTuple tup, TransactionId OldestXmin, Buffer buffer)
 	 * be set here.  So just check the xmin.
 	 */
 
-	xmin = HeapTupleHeaderGetXmin(tup->t_data);
+	xmin = HeapTupleGetXmin(tup);
 	if (!TransactionIdPrecedes(xmin, OldestXmin))
 		return false;			/* xmin not old enough for all to see */
 

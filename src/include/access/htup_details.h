@@ -120,13 +120,13 @@
 
 typedef struct HeapTupleFields
 {
-	TransactionId t_xmin;		/* inserting xact ID */
-	TransactionId t_xmax;		/* deleting or locking xact ID */
+	ShortTransactionId t_xmin;		/* inserting xact ID */
+	ShortTransactionId t_xmax;		/* deleting or locking xact ID */
 
 	union
 	{
 		CommandId	t_cid;		/* inserting or deleting command ID, or both */
-		TransactionId t_xvac;	/* old-style VACUUM FULL xact ID */
+		ShortTransactionId t_xvac;	/* old-style VACUUM FULL xact ID */
 	}			t_field3;
 } HeapTupleFields;
 
@@ -222,7 +222,7 @@ struct HeapTupleHeaderData
  * HEAP_XMAX_LOCK_ONLY bit is set; or, for pg_upgrade's sake, if the Xmax is
  * not a multi and the EXCL_LOCK bit is set.
  *
- * See also HeapTupleHeaderIsOnlyLocked, which also checks for a possible
+ * See also HeapTupleIsOnlyLocked, which also checks for a possible
  * aborted updater transaction.
  *
  * Beware of multiple evaluations of the argument.
@@ -298,6 +298,63 @@ struct HeapTupleHeaderData
  */
 
 /*
+ * Copy base values for xid and multixacts from page to heap tuple.  Should be
+ * called each time tuple is read from page.  Otherwise, it would be impossible
+ * to correctly read tuple xmin and xmax.
+ */
+#define HeapTupleCopyBaseFromPage(tup, page) \
+{ \
+	(tup)->t_xid_base = HeapPageGetSpecial(page)->pd_xid_base; \
+	(tup)->t_multi_base = HeapPageGetSpecial(page)->pd_multi_base; \
+}
+
+/*
+ * Copy base values for xid and multixacts from one heap tuple to heap tuple.
+ * Should be called on tuple copy or making desc tuple on the base on src tuple
+ * saving visibility information.
+ */
+#define HeapTupleCopyBase(dest, src) \
+{ \
+	(dest)->t_xid_base = (src)->t_xid_base; \
+	(dest)->t_multi_base = (src)->t_multi_base; \
+}
+
+/*
+ * Set base values for tuple xids/multixacts to zero.  Used when visibility
+ * infromation is negligible or will be set later.
+ */
+#define HeapTupleSetZeroBase(tup) \
+{ \
+	(tup)->t_xid_base = InvalidTransactionId; \
+	(tup)->t_multi_base = InvalidTransactionId; \
+}
+
+/*
+ * Macros for accessing "double xmax".  On pg_upgraded instances, it might
+ * happend that we can't fit new special area to the page.  But we still
+ * might neep to write xmax of tuples for updates and deletes.  The trick is
+ * that we actually don't need xmin field.  After pg_upgrade (wich implies
+ * restart) no insertions went to this page yet (otherwise special area could
+ * fit).  So, if tuple is visible (othewise it would be deleted), then it's
+ * visible for everybody.  Thus, t_xmin isn't needed.  Therefore, we can use
+ * both t_xmin and t_xmax to store 64-bit xmax.
+ *
+ * See heap_convert.c for details.
+ */
+#define HeapTupleIsDoubleXmax(tup) \
+	((tup)->t_xid_base == MaxTransactionId)
+
+#define HeapTupleHeaderGetDoubleXmax(tup) \
+	((TransactionId)(tup)->t_choice.t_heap.t_xmax + \
+		((TransactionId)(tup)->t_choice.t_heap.t_xmin << 32))
+
+#define HeapTupleHeaderSetDoubleXmax(tup, xid) \
+do { \
+	(tup)->t_choice.t_heap.t_xmax = (TransactionId) (xid) & 0xFFFFFFFF; \
+	(tup)->t_choice.t_heap.t_xmin = ((TransactionId) (xid) >> 32) & 0xFFFFFFFF; \
+} while (0)
+
+/*
  * HeapTupleHeaderGetRawXmin returns the "raw" xmin field, which is the xid
  * originally used to insert the tuple.  However, the tuple might actually
  * be frozen (via HeapTupleHeaderSetXminFrozen) in which case the tuple's xmin
@@ -305,20 +362,29 @@ struct HeapTupleHeaderData
  * the xmin to FrozenTransactionId, and that value may still be encountered
  * on disk.
  */
-#define HeapTupleHeaderGetRawXmin(tup) \
+#define HeapTupleGetRawXmin(tup) \
 ( \
-	(tup)->t_choice.t_heap.t_xmin \
+	HeapTupleIsDoubleXmax(tup) ? \
+	FrozenTransactionId : \
+	ShortTransactionIdToNormal((tup)->t_xid_base, (tup)->t_data->t_choice.t_heap.t_xmin) \
 )
 
-#define HeapTupleHeaderGetXmin(tup) \
+#define HeapTupleGetXmin(tup) \
 ( \
-	HeapTupleHeaderXminFrozen(tup) ? \
-		FrozenTransactionId : HeapTupleHeaderGetRawXmin(tup) \
+	HeapTupleHeaderXminFrozen((tup)->t_data) ? \
+		FrozenTransactionId : HeapTupleGetRawXmin(tup) \
 )
 
-#define HeapTupleHeaderSetXmin(tup, xid) \
+#define HeapTupleSetXmin(tup, xid) \
 ( \
-	(tup)->t_choice.t_heap.t_xmin = (xid) \
+	AssertMacro(!HeapTupleIsDoubleXmax(tup)), \
+	(tup)->t_data->t_choice.t_heap.t_xmin = NormalTransactionIdToShort((tup)->t_xid_base, (xid)) \
+)
+
+#define HeapTupleHeaderSetXmin(page, tup, xid) \
+( \
+	AssertMacro(!HeapPageIsDoubleXmax(page)), \
+	(tup)->t_choice.t_heap.t_xmin = NormalTransactionIdToShort(HeapPageGetSpecial(page)->pd_xid_base, (xid)) \
 )
 
 #define HeapTupleHeaderXminCommitted(tup) \
@@ -362,30 +428,60 @@ struct HeapTupleHeaderData
  * to resolve the MultiXactId if necessary.  This might involve multixact I/O,
  * so it should only be used if absolutely necessary.
  */
-#define HeapTupleHeaderGetUpdateXid(tup) \
+#define HeapTupleGetUpdateXidAny(tup) \
 ( \
-	(!((tup)->t_infomask & HEAP_XMAX_INVALID) && \
-	 ((tup)->t_infomask & HEAP_XMAX_IS_MULTI) && \
-	 !((tup)->t_infomask & HEAP_XMAX_LOCK_ONLY)) ? \
+	(!((tup)->t_data->t_infomask & HEAP_XMAX_INVALID) && \
+	 ((tup)->t_data->t_infomask & HEAP_XMAX_IS_MULTI) && \
+	 !((tup)->t_data->t_infomask & HEAP_XMAX_LOCK_ONLY)) ? \
 		HeapTupleGetUpdateXid(tup) \
 	: \
-		HeapTupleHeaderGetRawXmax(tup) \
+		HeapTupleGetRawXmax(tup) \
 )
 
-#define HeapTupleHeaderGetRawXmax(tup) \
+#define HeapTupleGetRawXmax(tup) \
 ( \
-	(tup)->t_choice.t_heap.t_xmax \
+	HeapTupleIsDoubleXmax(tup) ? \
+	HeapTupleHeaderGetDoubleXmax((tup)->t_data) : \
+	ShortTransactionIdToNormal( \
+		((tup)->t_data->t_infomask & HEAP_XMAX_IS_MULTI) ? (tup)->t_multi_base : (tup)->t_xid_base, \
+		(tup)->t_data->t_choice.t_heap.t_xmax) \
 )
 
-#define HeapTupleHeaderSetXmax(tup, xid) \
+#define HeapTupleHeaderGetRawXmax(page, tup) \
 ( \
-	(tup)->t_choice.t_heap.t_xmax = (xid) \
+	HeapPageIsDoubleXmax(page) ? \
+	HeapTupleHeaderGetDoubleXmax(tup) : \
+	ShortTransactionIdToNormal( \
+		((tup)->t_infomask & HEAP_XMAX_IS_MULTI) ? HeapPageGetSpecial(page)->pd_multi_base : HeapPageGetSpecial(page)->pd_xid_base, \
+		(tup)->t_choice.t_heap.t_xmax) \
 )
+
+#define HeapTupleSetXmax(tup, xid) \
+do { \
+	if (HeapTupleIsDoubleXmax(tup)) \
+		HeapTupleHeaderSetDoubleXmax((tup)->t_data, (xid)); \
+	else \
+		(tup)->t_data->t_choice.t_heap.t_xmax = \
+			NormalTransactionIdToShort( \
+				((tup)->t_data->t_infomask & HEAP_XMAX_IS_MULTI) ? (tup)->t_multi_base : (tup)->t_xid_base, \
+				(xid)); \
+} while (0)
+
+#define HeapTupleHeaderSetXmax(page, tup, xid) \
+do { \
+	if (HeapPageIsDoubleXmax(tup)) \
+		HeapTupleHeaderSetDoubleXmax((tup), (xid)); \
+	else \
+		(tup)->t_choice.t_heap.t_xmax = \
+			NormalTransactionIdToShort( \
+				((tup)->t_infomask & HEAP_XMAX_IS_MULTI) ? HeapPageGetSpecial(page)->pd_multi_base : HeapPageGetSpecial(page)->pd_xid_base, \
+				(xid)); \
+} while (0)
 
 /*
  * HeapTupleHeaderGetRawCommandId will give you what's in the header whether
- * it is useful or not.  Most code should use HeapTupleHeaderGetCmin or
- * HeapTupleHeaderGetCmax instead, but note that those Assert that you can
+ * it is useful or not.  Most code should use HeapTupleGetCmin or
+ * HeapTupleGetCmax instead, but note that those Assert that you can
  * get a legitimate result, ie you are in the originating transaction!
  */
 #define HeapTupleHeaderGetRawCommandId(tup) \
@@ -556,7 +652,7 @@ do { \
  * ItemIds and tuples have different alignment requirements, don't assume that
  * you can, say, fit 2 tuples of size MaxHeapTupleSize/2 on the same page.
  */
-#define MaxHeapTupleSize  (BLCKSZ - MAXALIGN(SizeOfPageHeaderData + sizeof(ItemIdData)))
+#define MaxHeapTupleSize  (BLCKSZ - MAXALIGN(SizeOfPageHeaderData + sizeof(ItemIdData)) - MAXALIGN(sizeof(HeapPageSpecialData)))
 #define MinHeapTupleSize  MAXALIGN(SizeofHeapTupleHeader)
 
 /*

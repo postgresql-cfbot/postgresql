@@ -50,7 +50,7 @@ logicalrep_write_begin(StringInfo out, ReorderBufferTXN *txn)
 	/* fixed fields */
 	pq_sendint64(out, txn->final_lsn);
 	pq_sendint64(out, txn->xact_time.commit_time);
-	pq_sendint32(out, txn->xid);
+	pq_sendint64(out, txn->xid);
 }
 
 /*
@@ -64,7 +64,7 @@ logicalrep_read_begin(StringInfo in, LogicalRepBeginData *begin_data)
 	if (begin_data->final_lsn == InvalidXLogRecPtr)
 		elog(ERROR, "final_lsn not set in begin message");
 	begin_data->committime = pq_getmsgint64(in);
-	begin_data->xid = pq_getmsgint(in, 4);
+	begin_data->xid = pq_getmsgint64(in);
 }
 
 

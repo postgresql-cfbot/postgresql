@@ -22,7 +22,7 @@
  */
 #define MaximumBytesPerTuple(tuplesPerPage) \
 	MAXALIGN_DOWN((BLCKSZ - \
-				   MAXALIGN(SizeOfPageHeaderData + (tuplesPerPage) * sizeof(ItemIdData))) \
+				   MAXALIGN(SizeOfPageHeaderData + (tuplesPerPage) * sizeof(ItemIdData)) - MAXALIGN(sizeof(HeapPageSpecialData))) \
 				  / (tuplesPerPage))
 
 /*

@@ -24,7 +24,7 @@ standard_initdb() {
 	# without increasing test runtime, run these tests with a custom setting.
 	# Also, specify "-A trust" explicitly to suppress initdb's warning.
 	# --allow-group-access and --wal-segsize have been added in v11.
-	"$1" -N --wal-segsize 1 --allow-group-access -A trust
+	"$1" -N --wal-segsize 1 --allow-group-access -A trust -x 21000000000
 	if [ -n "$TEMP_CONFIG" -a -r "$TEMP_CONFIG" ]
 	then
 		cat "$TEMP_CONFIG" >> "$PGDATA/postgresql.conf"
@@ -195,6 +195,12 @@ if "$MAKE" -C "$oldsrc" installcheck-parallel; then
 		fi
 	fi
 
+	psql -X -d regression << EOF
+					CREATE TABLE t1 (id SERIAL NOT NULL PRIMARY KEY, plt text, pln NUMERIC(8, 4));
+					INSERT INTO t1 (plt, pln) SELECT md5(random()::text), random() * 9999 FROM generate_series(1, 1000);
+EOF
+	psql -X -d regression -c"SELECT relfrozenxid, relminmxid FROM pg_class WHERE relname = 't1';" > "$temp_root"/old_xids.txt
+
 	pg_dumpall $extra_dump_options --no-sync \
 		-f "$temp_root"/dump1.sql || pg_dumpall1_status=$?
 
@@ -254,6 +260,17 @@ case $testhost in
 esac
 
 pg_ctl start -l "$logdir/postmaster2.log" -o "$POSTMASTER_OPTS" -w
+
+psql -X -d regression -c"SELECT relfrozenxid, relminmxid FROM pg_class WHERE relname = 't1';" > "$temp_root"/new_xids.txt
+
+if diff -u "$temp_root"/new_xids.txt "$temp_root"/old_xids.txt > "$temp_root"/xids.diff; then
+	rm "$temp_root"/xids.diff
+	echo "xids are identical, PASSED"
+else
+	echo "Files $temp_root/new_xids.txt and $temp_root/old_xids.txt differ"
+	echo "See $temp_root/xids.diff"
+	exit 1
+fi
 
 pg_dumpall $extra_dump_options --no-sync \
 	-f "$temp_root"/dump2.sql || pg_dumpall2_status=$?

@@ -457,7 +457,7 @@ ForgetPrivateRefCountEntry(PrivateRefCountEntry *ref)
 )
 
 
-static Buffer ReadBuffer_common(SMgrRelation reln, char relpersistence,
+static Buffer ReadBuffer_common(Relation rel, SMgrRelation reln, char relpersistence,
 								ForkNumber forkNum, BlockNumber blockNum,
 								ReadBufferMode mode, BufferAccessStrategy strategy,
 								bool *hit);
@@ -759,7 +759,8 @@ ReadBufferExtended(Relation reln, ForkNumber forkNum, BlockNumber blockNum,
 	 * miss.
 	 */
 	pgstat_count_buffer_read(reln);
-	buf = ReadBuffer_common(RelationGetSmgr(reln), reln->rd_rel->relpersistence,
+	buf = ReadBuffer_common(reln, RelationGetSmgr(reln),
+							reln->rd_rel->relpersistence,
 							forkNum, blockNum, mode, strategy, &hit);
 	if (hit)
 		pgstat_count_buffer_hit(reln);
@@ -787,7 +788,7 @@ ReadBufferWithoutRelcache(RelFileNode rnode, ForkNumber forkNum,
 
 	Assert(InRecovery);
 
-	return ReadBuffer_common(smgr, RELPERSISTENCE_PERMANENT, forkNum, blockNum,
+	return ReadBuffer_common(NULL, smgr, RELPERSISTENCE_PERMANENT, forkNum, blockNum,
 							 mode, strategy, &hit);
 }
 
@@ -798,7 +799,7 @@ ReadBufferWithoutRelcache(RelFileNode rnode, ForkNumber forkNum,
  * *hit is set to true if the request was satisfied from shared buffer cache.
  */
 static Buffer
-ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
+ReadBuffer_common(Relation rel, SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 				  BlockNumber blockNum, ReadBufferMode mode,
 				  BufferAccessStrategy strategy, bool *hit)
 {
@@ -1029,6 +1030,16 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 							 errmsg("invalid page in block %u of relation %s",
 									blockNum,
 									relpath(smgr->smgr_rnode, forkNum))));
+			}
+
+			if (PageGetPageLayoutVersion(bufBlock) != PG_PAGE_LAYOUT_VERSION &&
+				!PageIsNew((Page) bufBlock))
+			{
+				Buffer	buf = BufferDescriptorGetBuffer(bufHdr);
+
+				LWLockAcquire(BufferDescriptorGetContentLock(bufHdr), LW_EXCLUSIVE);
+				convert_page(rel, bufBlock, buf, blockNum);
+				LWLockRelease(BufferDescriptorGetContentLock(bufHdr));
 			}
 		}
 	}

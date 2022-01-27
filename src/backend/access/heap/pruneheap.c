@@ -135,7 +135,7 @@ heap_page_prune_opt(Relation relation, Buffer buffer)
 	 * determining the appropriate horizon is a waste if there's no prune_xid
 	 * (i.e. no updates/deletes left potentially dead tuples around).
 	 */
-	prune_xid = ((PageHeader) page)->pd_prune_xid;
+	prune_xid = HeapPageGetPruneXidNoAssert(page);
 	if (!TransactionIdIsValid(prune_xid))
 		return;
 
@@ -206,7 +206,7 @@ heap_page_prune_opt(Relation relation, Buffer buffer)
 					nnewlpdead;
 
 			ndeleted = heap_page_prune(relation, buffer, vistest, limited_xmin,
-									   limited_ts, &nnewlpdead, NULL);
+									   limited_ts, &nnewlpdead, NULL, true);
 
 			/*
 			 * Report the number of tuples reclaimed to pgstats.  This is
@@ -265,7 +265,8 @@ heap_page_prune(Relation relation, Buffer buffer,
 				TransactionId old_snap_xmin,
 				TimestampTz old_snap_ts,
 				int	*nnewlpdead,
-				OffsetNumber *off_loc)
+				OffsetNumber *off_loc,
+				bool repairFragmentation)
 {
 	int			ndeleted = 0;
 	Page		page = BufferGetPage(buffer);
@@ -336,6 +337,7 @@ heap_page_prune(Relation relation, Buffer buffer,
 		htup = (HeapTupleHeader) PageGetItem(page, itemid);
 		tup.t_data = htup;
 		tup.t_len = ItemIdGetLength(itemid);
+		HeapTupleCopyBaseFromPage(&tup, page);
 		ItemPointerSet(&(tup.t_self), blockno, offnum);
 
 		/*
@@ -390,13 +392,15 @@ heap_page_prune(Relation relation, Buffer buffer,
 		heap_page_prune_execute(buffer,
 								prstate.redirected, prstate.nredirected,
 								prstate.nowdead, prstate.ndead,
-								prstate.nowunused, prstate.nunused);
+								prstate.nowunused, prstate.nunused,
+								repairFragmentation);
 
 		/*
 		 * Update the page's pd_prune_xid field to either zero, or the lowest
 		 * XID of any soon-prunable tuple.
 		 */
-		((PageHeader) page)->pd_prune_xid = prstate.new_prune_xid;
+		if (XidFitsPage(page, prstate.new_prune_xid))
+			HeapPageSetPruneXid(page, prstate.new_prune_xid);
 
 		/*
 		 * Also clear the "page is full" flag, since there's no point in
@@ -458,10 +462,10 @@ heap_page_prune(Relation relation, Buffer buffer,
 		 * point in repeating the prune/defrag process until something else
 		 * happens to the page.
 		 */
-		if (((PageHeader) page)->pd_prune_xid != prstate.new_prune_xid ||
+		if (HeapPageGetPruneXid(page) != prstate.new_prune_xid ||
 			PageIsFull(page))
 		{
-			((PageHeader) page)->pd_prune_xid = prstate.new_prune_xid;
+			HeapPageSetPruneXid(page, prstate.new_prune_xid);
 			PageClearFull(page);
 			MarkBufferDirtyHint(buffer, true);
 		}
@@ -598,6 +602,10 @@ heap_prune_chain(Buffer buffer, OffsetNumber rootoffnum, PruneState *prstate)
 	OffsetNumber chainitems[MaxHeapTuplesPerPage];
 	int			nchain = 0,
 				i;
+	HeapTupleData tup;
+
+	tup.t_tableOid = RelationGetRelid(prstate->rel);
+	HeapTupleCopyBaseFromPage(&tup, dp);
 
 	rootlp = PageGetItemId(dp, rootoffnum);
 
@@ -608,6 +616,10 @@ heap_prune_chain(Buffer buffer, OffsetNumber rootoffnum, PruneState *prstate)
 	{
 		Assert(prstate->htsv[rootoffnum] != -1);
 		htup = (HeapTupleHeader) PageGetItem(dp, rootlp);
+
+		tup.t_data = htup;
+		tup.t_len = ItemIdGetLength(rootlp);
+		ItemPointerSet(&(tup.t_self), BufferGetBlockNumber(buffer), rootoffnum);
 
 		if (HeapTupleHeaderIsHeapOnly(htup))
 		{
@@ -633,7 +645,7 @@ heap_prune_chain(Buffer buffer, OffsetNumber rootoffnum, PruneState *prstate)
 				!HeapTupleHeaderIsHotUpdated(htup))
 			{
 				heap_prune_record_unused(prstate, rootoffnum);
-				HeapTupleHeaderAdvanceLatestRemovedXid(htup,
+				HeapTupleHeaderAdvanceLatestRemovedXid(&tup,
 													   &prstate->latestRemovedXid);
 				ndeleted++;
 			}
@@ -700,11 +712,16 @@ heap_prune_chain(Buffer buffer, OffsetNumber rootoffnum, PruneState *prstate)
 		Assert(prstate->htsv[offnum] != -1);
 		htup = (HeapTupleHeader) PageGetItem(dp, lp);
 
+		tup.t_data = htup;
+		tup.t_len = ItemIdGetLength(lp);
+		HeapTupleCopyBaseFromPage(&tup, dp);
+		ItemPointerSet(&(tup.t_self), BufferGetBlockNumber(buffer), offnum);
+
 		/*
 		 * Check the tuple XMIN against prior XMAX, if any
 		 */
 		if (TransactionIdIsValid(priorXmax) &&
-			!TransactionIdEquals(HeapTupleHeaderGetXmin(htup), priorXmax))
+			!TransactionIdEquals(HeapTupleGetXmin(&tup), priorXmax))
 			break;
 
 		/*
@@ -731,7 +748,7 @@ heap_prune_chain(Buffer buffer, OffsetNumber rootoffnum, PruneState *prstate)
 				 * that the page is reconsidered for pruning in future.
 				 */
 				heap_prune_record_prunable(prstate,
-										   HeapTupleHeaderGetUpdateXid(htup));
+										   HeapTupleGetUpdateXidAny(&tup));
 				break;
 
 			case HEAPTUPLE_DELETE_IN_PROGRESS:
@@ -741,7 +758,7 @@ heap_prune_chain(Buffer buffer, OffsetNumber rootoffnum, PruneState *prstate)
 				 * that the page is reconsidered for pruning in future.
 				 */
 				heap_prune_record_prunable(prstate,
-										   HeapTupleHeaderGetUpdateXid(htup));
+										   HeapTupleGetUpdateXidAny(&tup));
 				break;
 
 			case HEAPTUPLE_LIVE:
@@ -770,7 +787,7 @@ heap_prune_chain(Buffer buffer, OffsetNumber rootoffnum, PruneState *prstate)
 		if (tupdead)
 		{
 			latestdead = offnum;
-			HeapTupleHeaderAdvanceLatestRemovedXid(htup,
+			HeapTupleHeaderAdvanceLatestRemovedXid(&tup,
 												   &prstate->latestRemovedXid);
 		}
 		else if (!recent_dead)
@@ -792,7 +809,7 @@ heap_prune_chain(Buffer buffer, OffsetNumber rootoffnum, PruneState *prstate)
 		Assert(ItemPointerGetBlockNumber(&htup->t_ctid) ==
 			   BufferGetBlockNumber(buffer));
 		offnum = ItemPointerGetOffsetNumber(&htup->t_ctid);
-		priorXmax = HeapTupleHeaderGetUpdateXid(htup);
+		priorXmax = HeapTupleGetUpdateXidAny(&tup);
 	}
 
 	/*
@@ -909,7 +926,8 @@ void
 heap_page_prune_execute(Buffer buffer,
 						OffsetNumber *redirected, int nredirected,
 						OffsetNumber *nowdead, int ndead,
-						OffsetNumber *nowunused, int nunused)
+						OffsetNumber *nowunused, int nunused,
+						bool repairFragmentation)
 {
 	Page		page = (Page) BufferGetPage(buffer);
 	OffsetNumber *offnum;
@@ -1033,7 +1051,8 @@ heap_page_prune_execute(Buffer buffer,
 	 * Finally, repair any fragmentation, and update the page's hint bit about
 	 * whether it has free pointers.
 	 */
-	PageRepairFragmentation(page);
+	if (repairFragmentation)
+		PageRepairFragmentation(page);
 
 	/*
 	 * Now that the page has been modified, assert that redirect items still
@@ -1120,6 +1139,7 @@ heap_get_root_tuples(Page page, OffsetNumber *root_offsets)
 		HeapTupleHeader htup;
 		OffsetNumber nextoffnum;
 		TransactionId priorXmax;
+		HeapTupleData tup;
 
 		/* skip unused and dead items */
 		if (!ItemIdIsUsed(lp) || ItemIdIsDead(lp))
@@ -1128,6 +1148,8 @@ heap_get_root_tuples(Page page, OffsetNumber *root_offsets)
 		if (ItemIdIsNormal(lp))
 		{
 			htup = (HeapTupleHeader) PageGetItem(page, lp);
+			tup.t_data = htup;
+			HeapTupleCopyBaseFromPage(&tup, page);
 
 			/*
 			 * Check if this tuple is part of a HOT-chain rooted at some other
@@ -1149,7 +1171,7 @@ heap_get_root_tuples(Page page, OffsetNumber *root_offsets)
 
 			/* Set up to scan the HOT-chain */
 			nextoffnum = ItemPointerGetOffsetNumber(&htup->t_ctid);
-			priorXmax = HeapTupleHeaderGetUpdateXid(htup);
+			priorXmax = HeapTupleGetUpdateXidAny(&tup);
 		}
 		else
 		{
@@ -1188,9 +1210,11 @@ heap_get_root_tuples(Page page, OffsetNumber *root_offsets)
 				break;
 
 			htup = (HeapTupleHeader) PageGetItem(page, lp);
+			tup.t_data = htup;
+			HeapTupleCopyBaseFromPage(&tup, page);
 
 			if (TransactionIdIsValid(priorXmax) &&
-				!TransactionIdEquals(priorXmax, HeapTupleHeaderGetXmin(htup)))
+				!TransactionIdEquals(priorXmax, HeapTupleGetXmin(&tup)))
 				break;
 
 			/* Remember the root line pointer for this item */
@@ -1204,7 +1228,7 @@ heap_get_root_tuples(Page page, OffsetNumber *root_offsets)
 			Assert(!HeapTupleHeaderIndicatesMovedPartitions(htup));
 
 			nextoffnum = ItemPointerGetOffsetNumber(&htup->t_ctid);
-			priorXmax = HeapTupleHeaderGetUpdateXid(htup);
+			priorXmax = HeapTupleGetUpdateXidAny(&tup);
 		}
 	}
 }

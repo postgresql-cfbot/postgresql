@@ -59,6 +59,8 @@
 #define XLOG_HEAP2_LOCK_UPDATED 0x60
 #define XLOG_HEAP2_NEW_CID		0x70
 
+#define XLOG_HEAP3_BASE_SHIFT	0x00
+
 /*
  * xl_heap_insert/xl_heap_multi_insert flag values, 8 bits are available.
  */
@@ -389,7 +391,16 @@ typedef struct xl_heap_rewrite_mapping
 	XLogRecPtr	start_lsn;		/* Insert LSN at begin of rewrite */
 } xl_heap_rewrite_mapping;
 
-extern void HeapTupleHeaderAdvanceLatestRemovedXid(HeapTupleHeader tuple,
+/* shift the base of xids on heap page */
+typedef struct xl_heap_base_shift
+{
+	int64		delta;			/* delta value to shift the base */
+	bool		multi;			/* true to shift multixact base */
+} xl_heap_base_shift;
+
+#define SizeOfHeapBaseShift (offsetof(xl_heap_base_shift, multi) + sizeof(bool))
+
+extern void HeapTupleHeaderAdvanceLatestRemovedXid(HeapTuple tuple,
 												   TransactionId *latestRemovedXid);
 
 extern void heap_redo(XLogReaderState *record);
@@ -399,19 +410,24 @@ extern void heap_mask(char *pagedata, BlockNumber blkno);
 extern void heap2_redo(XLogReaderState *record);
 extern void heap2_desc(StringInfo buf, XLogReaderState *record);
 extern const char *heap2_identify(uint8 info);
+extern void heap3_redo(XLogReaderState *record);
+extern void heap3_desc(StringInfo buf, XLogReaderState *record);
+extern const char *heap3_identify(uint8 info);
 extern void heap_xlog_logical_rewrite(XLogReaderState *r);
 
 extern XLogRecPtr log_heap_freeze(Relation reln, Buffer buffer,
 								  TransactionId cutoff_xid, xl_heap_freeze_tuple *tuples,
 								  int ntuples);
-extern bool heap_prepare_freeze_tuple(HeapTupleHeader tuple,
+extern bool heap_prepare_freeze_tuple(HeapTuple htup,
 									  TransactionId relfrozenxid,
 									  TransactionId relminmxid,
 									  TransactionId cutoff_xid,
 									  TransactionId cutoff_multi,
 									  xl_heap_freeze_tuple *frz,
 									  bool *totally_frozen);
-extern void heap_execute_freeze_tuple(HeapTupleHeader tuple,
+extern void heap_execute_freeze_tuple(HeapTuple tuple,
+									  xl_heap_freeze_tuple *xlrec_tp);
+extern void heap_execute_freeze_tuple_page(Page page, HeapTupleHeader tuple,
 									  xl_heap_freeze_tuple *xlrec_tp);
 extern XLogRecPtr log_heap_visible(RelFileNode rnode, Buffer heap_buffer,
 								   Buffer vm_buffer, TransactionId cutoff_xid, uint8 flags);

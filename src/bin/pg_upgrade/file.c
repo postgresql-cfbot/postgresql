@@ -25,6 +25,7 @@
 #include "storage/bufpage.h"
 #include "storage/checksum.h"
 #include "storage/checksum_impl.h"
+#include "storage/fsm_internals.h"
 
 
 /*
@@ -152,6 +153,112 @@ linkFile(const char *src, const char *dst,
 				 schemaName, relName, src, dst, strerror(errno));
 }
 
+/* Context for file rewriting */
+typedef struct FileRewriteContext
+{
+	const char *fromfile;
+	const char *tofile;
+	const char *schemaName;
+	const char *relName;
+	int			src_fd;
+	int			dst_fd;
+	ssize_t		src_filesize;
+	ssize_t		totalBytesRead;
+	BlockNumber	last_blkno;
+	bool		old_lastblk;
+} FileRewriteContext;
+
+/* Initialize context for file rewriting */
+static void
+rewriteFileInit(FileRewriteContext *cxt,
+			   const char *fromfile, const char *tofile,
+			   const char *schemaName, const char *relName)
+{
+	struct stat statbuf;
+
+	cxt->fromfile = fromfile;
+	cxt->tofile = tofile;
+	cxt->schemaName = schemaName;
+	cxt->relName = relName;
+	cxt->totalBytesRead = 0;
+	cxt->last_blkno = InvalidBlockNumber;
+	cxt->old_lastblk = false;
+
+	/* Open old and new files */
+	if ((cxt->src_fd = open(fromfile, O_RDONLY | PG_BINARY, 0)) < 0)
+		pg_fatal("error while copying relation \"%s.%s\": could not open file \"%s\": %s\n",
+				 schemaName, relName, fromfile, strerror(errno));
+
+	if (fstat(cxt->src_fd, &statbuf) != 0)
+		pg_fatal("error while copying relation \"%s.%s\": could not stat file \"%s\": %s\n",
+				 schemaName, relName, fromfile, strerror(errno));
+
+	if ((cxt->dst_fd = open(tofile, O_RDWR | O_CREAT | O_EXCL | PG_BINARY,
+					   pg_file_create_mode)) < 0)
+		pg_fatal("error while copying relation \"%s.%s\": could not create file \"%s\": %s\n",
+				 schemaName, relName, tofile, strerror(errno));
+
+	/* Save old file size */
+	cxt->src_filesize = statbuf.st_size;
+}
+
+/* Clean up file rewriting context */
+static void
+rewriteFileCleanup(FileRewriteContext *cxt)
+{
+	close(cxt->dst_fd);
+	close(cxt->src_fd);
+}
+
+/* Read old page of the rewritten file */
+static ssize_t
+rewriteFileReadPage(FileRewriteContext *cxt, Page page)
+{
+	ssize_t		bytesRead;
+
+	if (cxt->totalBytesRead >= cxt->src_filesize)
+		return 0;
+
+	if ((bytesRead = read(cxt->src_fd, page, BLCKSZ)) != BLCKSZ)
+	{
+		if (bytesRead < 0)
+			pg_fatal("error while copying relation \"%s.%s\": could not read file \"%s\": %s\n",
+					 cxt->schemaName, cxt->relName, cxt->fromfile, strerror(errno));
+		else
+			pg_fatal("error while copying relation \"%s.%s\": partial page found in file \"%s\"\n",
+					 cxt->schemaName, cxt->relName, cxt->fromfile);
+	}
+
+	cxt->totalBytesRead += BLCKSZ;
+	cxt->old_lastblk = (cxt->totalBytesRead == cxt->src_filesize);
+
+	return bytesRead;
+}
+
+/* Write new page of the rewritten file */
+static void
+rewriteFileWritePage(FileRewriteContext *cxt, Page page, BlockNumber blkno)
+{
+	/* Set new checksum for page, if enabled */
+	if (new_cluster.controldata.data_checksum_version != 0)
+		((PageHeader) page)->pd_checksum = pg_checksum_page(page, blkno);
+
+	/* Write page */
+	errno = 0;
+
+	if ((blkno != (cxt->last_blkno == InvalidBlockNumber ? 0 : cxt->last_blkno + 1) &&
+		 lseek(cxt->dst_fd, (off_t) BLCKSZ * blkno, SEEK_SET) != (off_t) BLCKSZ * blkno) ||
+		write(cxt->dst_fd, page, BLCKSZ) != BLCKSZ)
+	{
+		/* if write didn't set errno, assume problem is no disk space */
+		if (errno == 0)
+			errno = ENOSPC;
+		pg_fatal("error while copying relation \"%s.%s\": could not write file \"%s\": %s\n",
+				 cxt->schemaName, cxt->relName, cxt->tofile, strerror(errno));
+	}
+
+	cxt->last_blkno = blkno;
+}
 
 /*
  * rewriteVisibilityMap()
@@ -171,36 +278,19 @@ linkFile(const char *src, const char *dst,
  */
 void
 rewriteVisibilityMap(const char *fromfile, const char *tofile,
-					 const char *schemaName, const char *relName)
+						   const char *schemaName, const char *relName)
 {
-	int			src_fd;
-	int			dst_fd;
+	FileRewriteContext cxt;
 	PGAlignedBlock buffer;
 	PGAlignedBlock new_vmbuf;
-	ssize_t		totalBytesRead = 0;
-	ssize_t		src_filesize;
 	int			rewriteVmBytesPerPage;
 	BlockNumber new_blkno = 0;
-	struct stat statbuf;
+	ssize_t		bytesRead;
 
 	/* Compute number of old-format bytes per new page */
 	rewriteVmBytesPerPage = (BLCKSZ - SizeOfPageHeaderData) / 2;
 
-	if ((src_fd = open(fromfile, O_RDONLY | PG_BINARY, 0)) < 0)
-		pg_fatal("error while copying relation \"%s.%s\": could not open file \"%s\": %s\n",
-				 schemaName, relName, fromfile, strerror(errno));
-
-	if (fstat(src_fd, &statbuf) != 0)
-		pg_fatal("error while copying relation \"%s.%s\": could not stat file \"%s\": %s\n",
-				 schemaName, relName, fromfile, strerror(errno));
-
-	if ((dst_fd = open(tofile, O_RDWR | O_CREAT | O_EXCL | PG_BINARY,
-					   pg_file_create_mode)) < 0)
-		pg_fatal("error while copying relation \"%s.%s\": could not create file \"%s\": %s\n",
-				 schemaName, relName, tofile, strerror(errno));
-
-	/* Save old file size */
-	src_filesize = statbuf.st_size;
+	rewriteFileInit(&cxt, fromfile, tofile, schemaName, relName);
 
 	/*
 	 * Turn each visibility map page into 2 pages one by one. Each new page
@@ -208,27 +298,12 @@ rewriteVisibilityMap(const char *fromfile, const char *tofile,
 	 * last page is empty, we skip it, mostly to avoid turning one-page
 	 * visibility maps for small relations into two pages needlessly.
 	 */
-	while (totalBytesRead < src_filesize)
+	while ((bytesRead = rewriteFileReadPage(&cxt, buffer.data)) > 0)
 	{
-		ssize_t		bytesRead;
 		char	   *old_cur;
 		char	   *old_break;
 		char	   *old_blkend;
 		PageHeaderData pageheader;
-		bool		old_lastblk;
-
-		if ((bytesRead = read(src_fd, buffer.data, BLCKSZ)) != BLCKSZ)
-		{
-			if (bytesRead < 0)
-				pg_fatal("error while copying relation \"%s.%s\": could not read file \"%s\": %s\n",
-						 schemaName, relName, fromfile, strerror(errno));
-			else
-				pg_fatal("error while copying relation \"%s.%s\": partial page found in file \"%s\"\n",
-						 schemaName, relName, fromfile);
-		}
-
-		totalBytesRead += BLCKSZ;
-		old_lastblk = (totalBytesRead == src_filesize);
 
 		/* Save the page header data */
 		memcpy(&pageheader, buffer.data, SizeOfPageHeaderData);
@@ -253,7 +328,7 @@ rewriteVisibilityMap(const char *fromfile, const char *tofile,
 			memcpy(new_vmbuf.data, &pageheader, SizeOfPageHeaderData);
 
 			/* Rewriting the last part of the last old page? */
-			old_lastpart = old_lastblk && (old_break == old_blkend);
+			old_lastpart = cxt.old_lastblk && (old_break == old_blkend);
 
 			new_cur = new_vmbuf.data + SizeOfPageHeaderData;
 
@@ -287,20 +362,7 @@ rewriteVisibilityMap(const char *fromfile, const char *tofile,
 			if (old_lastpart && empty)
 				break;
 
-			/* Set new checksum for visibility map page, if enabled */
-			if (new_cluster.controldata.data_checksum_version != 0)
-				((PageHeader) new_vmbuf.data)->pd_checksum =
-					pg_checksum_page(new_vmbuf.data, new_blkno);
-
-			errno = 0;
-			if (write(dst_fd, new_vmbuf.data, BLCKSZ) != BLCKSZ)
-			{
-				/* if write didn't set errno, assume problem is no disk space */
-				if (errno == 0)
-					errno = ENOSPC;
-				pg_fatal("error while copying relation \"%s.%s\": could not write file \"%s\": %s\n",
-						 schemaName, relName, tofile, strerror(errno));
-			}
+			rewriteFileWritePage(&cxt, new_vmbuf.data, new_blkno);
 
 			/* Advance for next new page */
 			old_break += rewriteVmBytesPerPage;
@@ -308,9 +370,7 @@ rewriteVisibilityMap(const char *fromfile, const char *tofile,
 		}
 	}
 
-	/* Clean up */
-	close(dst_fd);
-	close(src_fd);
+	rewriteFileCleanup(&cxt);
 }
 
 void

@@ -1845,6 +1845,7 @@ CatalogCacheCreateEntry(CatCache *cache, HeapTuple ntp, Datum *arguments,
 		memcpy((char *) ct->tuple.t_data,
 			   (const char *) dtp->t_data,
 			   dtp->t_len);
+		HeapTupleCopyBase(&ct->tuple, dtp);
 		MemoryContextSwitchTo(oldcxt);
 
 		if (dtp != ntp)

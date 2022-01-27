@@ -159,11 +159,83 @@ typedef struct PageHeaderData
 	LocationIndex pd_upper;		/* offset to end of free space */
 	LocationIndex pd_special;	/* offset to start of special space */
 	uint16		pd_pagesize_version;
-	TransactionId pd_prune_xid; /* oldest prunable XID, or zero if none */
+	ShortTransactionId	pd_prune_xid;  /* oldest prunable XID, or zero if none */
 	ItemIdData	pd_linp[FLEXIBLE_ARRAY_MEMBER]; /* line pointer array */
 } PageHeaderData;
 
 typedef PageHeaderData *PageHeader;
+
+
+/*
+ * HeapPageSpecialData -- data that stored at the end of each heap page.
+ *
+ *		pd_xid_base - base value for transaction IDs on page
+ *		pd_multi_base - base value for multixact IDs on page
+ *
+ * pd_xid_base and pd_multi_base are base values for calculation of transaction
+ * identifiers from t_xmin and t_xmax in each heap tuple header on the page.
+ */
+typedef struct HeapPageSpecialData
+{
+	TransactionId		pd_xid_base;   /* base value for transaction IDs on page */
+	TransactionId		pd_multi_base; /* base value for multixact IDs on page */
+} HeapPageSpecialData;
+
+#define SizeOfPageSpecial MAXALIGN(sizeof(HeapPageSpecialData))
+
+typedef HeapPageSpecialData *HeapPageSpecial;
+
+extern PGDLLIMPORT HeapPageSpecial doubleXmaxSpecial;
+
+/*
+ * Get pointer to HeapPageSpecialData without using pd_special of the page
+ * (for the sake of speed) assuming all heap pages have same size of special
+ * data.
+ *
+ * Return doubleXmaxSpecial when pd_special == BLCKSZ.  See comment in bufpage.c
+ * for details.
+ */
+#define HeapPageGetSpecial(page) ( \
+	(((PageHeader) (page))->pd_special == BLCKSZ) ? \
+	((HeapPageSpecial) doubleXmaxSpecial) : \
+	(AssertMacro(((PageHeader) (page))->pd_special == BLCKSZ - MAXALIGN(sizeof(HeapPageSpecialData))), \
+	 (HeapPageSpecial) ((Pointer) (page) + BLCKSZ - MAXALIGN(sizeof(HeapPageSpecialData)))) \
+)
+
+/*
+ * Version of HeapPageGetSpecial() without assertions about pd_special.  Used
+ * for non-consistent reads from non-locked pages.
+ */
+#define HeapPageGetSpecialNoAssert(page) ( \
+	(((PageHeader) (page))->pd_special == BLCKSZ) ? \
+	((HeapPageSpecial) doubleXmaxSpecial) : \
+	(HeapPageSpecial) ((Pointer) (page) + BLCKSZ - MAXALIGN(sizeof(HeapPageSpecialData))) \
+)
+
+ShortTransactionId HeapPageSetPruneXidInternal(Page page, TransactionId xid);
+
+#define HeapPageSetPruneXid(page, xid)  \
+	HeapPageSetPruneXidInternal((Page)(page), xid)
+
+#define HeapPageGetPruneXid(page) \
+( \
+	ShortTransactionIdToNormal(HeapPageGetSpecial(page)->pd_xid_base, ((PageHeader) (page))->pd_prune_xid) \
+)
+
+/*
+ * Read pd_prune_xid from non-locked page.  May return invalid value, but doen't
+ * causes assert failures.
+ */
+#define HeapPageGetPruneXidNoAssert(page) \
+( \
+	ShortTransactionIdToNormal(HeapPageGetSpecialNoAssert(page)->pd_xid_base, ((PageHeader) (page))->pd_prune_xid) \
+)
+
+#define XidFitsPage(page, xid) \
+( \
+	(xid) >= HeapPageGetSpecial(page)->pd_xid_base + FirstNormalTransactionId && \
+	(xid) <= HeapPageGetSpecial(page)->pd_xid_base + MaxShortTransactionId \
+)
 
 /*
  * pd_flags contains the following flag bits.  Undefined bits are initialized
@@ -192,11 +264,13 @@ typedef PageHeaderData *PageHeader;
  * Release 8.3 uses 4; it changed the HeapTupleHeader layout again, and
  *		added the pd_flags field (by stealing some bits from pd_tli),
  *		as well as adding the pd_prune_xid field (which enlarges the header).
+ * PgPro Enterprise 10 uses version number (0x00FF - 1), and should not
+ * collide with vanilla versions due to page conversion after pg_upgrade.
  *
  * As of Release 9.3, the checksum version must also be considered when
  * handling pages.
  */
-#define PG_PAGE_LAYOUT_VERSION		4
+#define PG_PAGE_LAYOUT_VERSION		5
 #define PG_DATA_CHECKSUM_VERSION	1
 
 /* ----------------------------------------------------------------
@@ -389,16 +463,18 @@ PageValidateSpecialPointer(Page page)
 #define PageClearAllVisible(page) \
 	(((PageHeader) (page))->pd_flags &= ~PD_ALL_VISIBLE)
 
+/* Check if page is in "double xmax" format */
+#define HeapPageIsDoubleXmax(page) \
+	(((PageHeader) (page))->pd_special == BLCKSZ)
+
 #define PageSetPrunable(page, xid) \
 do { \
 	Assert(TransactionIdIsNormal(xid)); \
-	if (!TransactionIdIsValid(((PageHeader) (page))->pd_prune_xid) || \
-		TransactionIdPrecedes(xid, ((PageHeader) (page))->pd_prune_xid)) \
-		((PageHeader) (page))->pd_prune_xid = (xid); \
+	if (!HeapPageIsDoubleXmax(page) && \
+			(!TransactionIdIsValid(HeapPageGetPruneXid(page)) || \
+			 TransactionIdPrecedes(xid, HeapPageGetPruneXid(page)))) \
+		HeapPageSetPruneXid(page, xid); \
 } while (0)
-#define PageClearPrunable(page) \
-	(((PageHeader) (page))->pd_prune_xid = InvalidTransactionId)
-
 
 /* ----------------------------------------------------------------
  *		extern declarations
@@ -431,6 +507,19 @@ do { \
  */
 StaticAssertDecl(BLCKSZ == ((BLCKSZ / sizeof(size_t)) * sizeof(size_t)),
 				 "BLCKSZ has to be a multiple of sizeof(size_t)");
+
+/*
+ * Tuple defrag support for PageRepairFragmentation and PageIndexMultiDelete
+ */
+typedef struct itemIdCompactData
+{
+	uint16		offsetindex;	/* linp array index */
+	int16		itemoff;		/* page offset of item data */
+	uint16		alignedlen;		/* MAXALIGN(item data len) */
+} itemIdCompactData;
+typedef itemIdCompactData *itemIdCompact;
+
+extern int itemoffcompare(const void *item1, const void *item2);
 
 extern void PageInit(Page page, Size pageSize, Size specialSize);
 extern bool PageIsVerifiedExtended(Page page, BlockNumber blkno, int flags);

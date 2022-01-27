@@ -120,7 +120,7 @@ static const struct typinfo TypInfo[] = {
 	F_OIDIN, F_OIDOUT},
 	{"tid", TIDOID, 0, 6, false, TYPALIGN_SHORT, TYPSTORAGE_PLAIN, InvalidOid,
 	F_TIDIN, F_TIDOUT},
-	{"xid", XIDOID, 0, 4, true, TYPALIGN_INT, TYPSTORAGE_PLAIN, InvalidOid,
+	{"xid", XIDOID, 0, 8, FLOAT8PASSBYVAL, TYPALIGN_DOUBLE, TYPSTORAGE_PLAIN, InvalidOid,
 	F_XIDIN, F_XIDOUT},
 	{"cid", CIDOID, 0, 4, true, TYPALIGN_INT, TYPSTORAGE_PLAIN, InvalidOid,
 	F_CIDIN, F_CIDOUT},
@@ -221,7 +221,11 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 	argv++;
 	argc--;
 
-	while ((flag = getopt(argc, argv, "B:c:d:D:Fkr:X:-:")) != -1)
+	start_xid = 0;
+	start_mx_id = 0;
+	start_mx_offset = 0;
+
+	while ((flag = getopt(argc, argv, "B:c:d:D:Fkm:o:r:X:Z:-:")) != -1)
 	{
 		switch (flag)
 		{
@@ -250,8 +254,29 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 			case 'k':
 				bootstrap_data_checksum_version = PG_DATA_CHECKSUM_VERSION;
 				break;
+			case 'm':
+				if (sscanf(optarg, XID_FMT, &start_mx_id) != 1
+					|| !StartMultiXactIdIsValid(start_mx_id))
+					ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						errmsg("invalid start multixact id value")));
+				break;
+			case 'o':
+				if (sscanf(optarg, XID_FMT, &start_mx_offset) != 1
+					|| !StartMultiXactOffsetIsValid(start_mx_offset))
+					ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						errmsg("invalid start multixact offset value")));
+				break;
 			case 'r':
 				strlcpy(OutputFileName, optarg, MAXPGPATH);
+				break;
+			case 'Z':
+				if (sscanf(optarg, XID_FMT, &start_xid) != 1
+					|| !StartTransactionIdIsValid(start_xid))
+					ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						errmsg("invalid start xid value")));
 				break;
 			case 'X':
 				{

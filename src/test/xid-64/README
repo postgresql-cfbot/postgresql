@@ -1,0 +1,16 @@
+src/test/xid-64/README
+
+Regression tests for 64-bit XIDs
+=============================================
+
+This directory contains a test suite for 64-bit xids.
+
+Running the tests
+=================
+
+    make check
+
+NOTE: This creates a temporary installation, and some tests may
+create one or multiple nodes.
+
+NOTE: This requires the --enable-tap-tests argument to configure.

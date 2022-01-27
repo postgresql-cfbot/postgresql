@@ -63,7 +63,7 @@ btree_desc(StringInfo buf, XLogReaderState *record)
 			{
 				xl_btree_delete *xlrec = (xl_btree_delete *) rec;
 
-				appendStringInfo(buf, "latestRemovedXid %u; ndeleted %u; nupdated %u",
+				appendStringInfo(buf, "latestRemovedXid " XID_FMT "; ndeleted %u; nupdated %u",
 								 xlrec->latestRemovedXid, xlrec->ndeleted, xlrec->nupdated);
 				break;
 			}
@@ -80,9 +80,8 @@ btree_desc(StringInfo buf, XLogReaderState *record)
 			{
 				xl_btree_unlink_page *xlrec = (xl_btree_unlink_page *) rec;
 
-				appendStringInfo(buf, "left %u; right %u; level %u; safexid %u:%u; ",
+				appendStringInfo(buf, "left %u; right %u; level %u; safexid " XID_FMT "; ",
 								 xlrec->leftsib, xlrec->rightsib, xlrec->level,
-								 EpochFromFullTransactionId(xlrec->safexid),
 								 XidFromFullTransactionId(xlrec->safexid));
 				appendStringInfo(buf, "leafleft %u; leafright %u; leaftopparent %u",
 								 xlrec->leafleftsib, xlrec->leafrightsib,
@@ -100,10 +99,9 @@ btree_desc(StringInfo buf, XLogReaderState *record)
 			{
 				xl_btree_reuse_page *xlrec = (xl_btree_reuse_page *) rec;
 
-				appendStringInfo(buf, "rel %u/%u/%u; latestRemovedXid %u:%u",
+				appendStringInfo(buf, "rel %u/%u/%u; latestRemovedXid " XID_FMT,
 								 xlrec->node.spcNode, xlrec->node.dbNode,
 								 xlrec->node.relNode,
-								 EpochFromFullTransactionId(xlrec->latestRemovedFullXid),
 								 XidFromFullTransactionId(xlrec->latestRemovedFullXid));
 				break;
 			}

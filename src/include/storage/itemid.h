@@ -78,6 +78,8 @@ typedef uint16 ItemLength;
 #define ItemIdGetRedirect(itemId) \
    ((itemId)->lp_off)
 
+#define ItemIdGetTupleEnd(itemId) \
+	(MAXALIGN(ItemIdGetLength((itemId))) + ItemIdGetOffset((itemId)))
 /*
  * ItemIdIsValid
  *		True iff item identifier is valid.

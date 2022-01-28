@@ -6,7 +6,7 @@ use strict;
 use warnings;
 use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
-use Test::More tests => 9;
+use Test::More tests => 10;
 use Time::HiRes qw(usleep);
 
 # Create and test a standby from given backup, with a certain recovery target.
@@ -182,3 +182,48 @@ $logfile = slurp_file($node_standby->logfile());
 ok( $logfile =~
 	  qr/FATAL: .* recovery ended before configured recovery target was reached/,
 	'recovery end before target reached is a fatal error');
+
+# Test to cover a case where that we are looking for WAL record that ought to be
+# in for e.g 000000010000000000000005 we don't find it; instead we find
+# 000000020000000000000005 because of various reasons such as there was a
+# timeline switch in that segment, and we were reading the old WAL from a
+# segment belonging to a higher timeline or our recovery target timeline is 2,
+# or something that has 2 in its history.
+
+# Insert few more data to primary
+$node_primary->safe_psql('postgres', "SELECT pg_switch_wal()");
+$node_primary->safe_psql('postgres',
+	"INSERT INTO tab_int VALUES (generate_series(6001,7000))");
+my $lsn6 = $node_primary->safe_psql('postgres',
+	"SELECT pg_current_wal_lsn()");
+
+# Setup new standby and enable WAL archiving to archive WAL files at the same
+# location as the primary.
+my $archive_dir = $node_primary->archive_dir;
+$node_standby = PostgreSQL::Test::Cluster->new('standby_9');
+$node_standby->init_from_backup(
+	$node_primary, 'my_backup',
+	has_streaming => 1);
+$node_standby->enable_archiving($archive_dir);
+$node_standby->start;
+# Wait until necessary replay has been done on standby
+$node_primary->wait_for_catchup($node_standby);
+$node_standby->promote;
+$node_standby->safe_psql('postgres',
+	"INSERT INTO tab_int VALUES (generate_series(7001,8000))");
+# Force archiving of WAL file
+my $last_wal = $node_standby->safe_psql('postgres',
+	"SELECT pg_walfile_name(pg_switch_wal())");
+# Wait until this WAL file archive
+my $check_archive = "SELECT last_archived_wal >= '$last_wal' FROM pg_stat_archiver";
+$node_standby->poll_query_until('postgres', $check_archive)
+	or die "Timed out while waiting for $last_wal file archive";
+$node_standby->stop;
+
+# Another standby whose recovery target lsn will be in the WAL file has
+# a different TLI than the target LSN belongs to.
+@recovery_params = (
+	"recovery_target_lsn = '$lsn6'",
+	"recovery_target_inclusive = off");
+test_recovery_standby("target LSN belong to different TLI",
+	'standby_10', $node_primary, \@recovery_params, "7000", $lsn6);

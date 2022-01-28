@@ -1050,9 +1050,12 @@ primary_conninfo='$root_connstr'
 # Internal routine to enable archive recovery command on a standby node
 sub enable_restoring
 {
-	my ($self, $root_node, $standby) = @_;
-	my $path = PostgreSQL::Test::Utils::perl2host($root_node->archive_dir);
+	my ($self, $root_node, $standby, $path) = @_;
 	my $name = $self->name;
+
+	# Default archive directory will be used if not specified.
+	$path = $root_node->archive_dir if (!defined($path));
+	$path = PostgreSQL::Test::Utils::perl2host($path);
 
 	print "### Enabling WAL restore for node \"$name\"\n";
 
@@ -1118,9 +1121,12 @@ sub set_standby_mode
 # Internal routine to enable archiving
 sub enable_archiving
 {
-	my ($self) = @_;
-	my $path   = PostgreSQL::Test::Utils::perl2host($self->archive_dir);
+	my ($self, $path) = @_;
 	my $name   = $self->name;
+
+	# Default archive directory will be used if not specified.
+	$path = $self->archive_dir if (!defined($path));
+	$path = PostgreSQL::Test::Utils::perl2host($path);
 
 	print "### Enabling WAL archiving for node \"$name\"\n";
 

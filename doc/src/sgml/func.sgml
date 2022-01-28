@@ -23599,6 +23599,21 @@ SELECT pg_type_is_visible('myschema.widget'::regtype);
       <row>
        <entry role="func_table_entry"><para role="func_signature">
         <indexterm>
+         <primary>pg_get_get_flags</primary>
+        </indexterm>
+        <function>pg_get_get_flags</function> ( <parameter>guc</parameter> <type>text</type> )
+        <returnvalue>text[]</returnvalue>
+       </para>
+       <para>
+        Return an array of flags associated with the given GUC, or NULL if the
+        GUC does not exist.  Not all flags are exposed; the set of flags which
+        are exposed is subject to change.
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
          <primary>pg_get_indexdef</primary>
         </indexterm>
         <function>pg_get_indexdef</function> ( <parameter>index</parameter> <type>oid</type> <optional>, <parameter>column</parameter> <type>integer</type>, <parameter>pretty</parameter> <type>boolean</type> </optional> )

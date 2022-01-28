@@ -311,3 +311,75 @@ reset check_function_bodies;
 set default_with_oids to f;
 -- Should not allow to set it to true.
 set default_with_oids to t;
+
+--
+-- Test GUC categories and flags.
+--
+CREATE TABLE pg_settings_flags AS SELECT name, category,
+	'NO_SHOW_ALL'	=ANY(flags) AS no_show_all,
+	'NO_RESET_ALL'	=ANY(flags) AS no_reset_all,
+	'NOT_IN_SAMPLE'	=ANY(flags) AS not_in_sample,
+	'EXPLAIN'	=ANY(flags) AS guc_explain,
+	'COMPUTED'	=ANY(flags) AS guc_computed
+	FROM pg_show_all_settings() AS psas, pg_get_guc_flags(psas.name) AS flags;
+
+-- test that GUCS are in postgresql.conf
+SELECT lower(name) FROM pg_settings_flags WHERE NOT not_in_sample EXCEPT
+SELECT regexp_replace(ln, '^#?([_[:alpha:]]+) (= .*|[^ ]*$)', '\1') AS guc
+FROM (SELECT regexp_split_to_table(pg_read_file('postgresql.conf'), '\n') AS ln) conf
+WHERE ln ~ '^#?[[:alpha:]]'
+ORDER BY 1;
+
+-- test that lines in postgresql.conf that look like GUCs are GUCs
+SELECT regexp_replace(ln, '^#?([_[:alpha:]]+) (= .*|[^ ]*$)', '\1') AS guc
+FROM (SELECT regexp_split_to_table(pg_read_file('postgresql.conf'), '\n') AS ln) conf
+WHERE ln ~ '^#?[[:alpha:]]'
+EXCEPT SELECT lower(name) FROM pg_settings_flags WHERE NOT not_in_sample
+ORDER BY 1;
+
+-- test that section:DEVELOPER GUCs are flagged GUC_NOT_IN_SAMPLE:
+SELECT * FROM pg_settings_flags
+WHERE category='Developer Options' AND NOT not_in_sample
+ORDER BY 1;
+
+-- Maybe the converse:
+SELECT * FROM pg_settings_flags
+WHERE category NOT IN ('Developer Options', 'Preset Options') AND not_in_sample
+ORDER BY 1;
+
+-- Most Query Tuning GUCs are flagged as EXPLAIN:
+SELECT * FROM pg_settings_flags
+WHERE category ~ '^Query Tuning' AND NOT guc_explain
+ORDER BY 1;
+
+-- Maybe the converse:
+SELECT * FROM pg_settings_flags
+WHERE guc_explain AND NOT category ~ '^Query Tuning|^Resource Usage'
+ORDER BY 1;
+
+-- GUCs flagged RUNTIME are Preset
+SELECT * FROM pg_settings_flags
+WHERE guc_computed AND NOT category='Preset Options'
+ORDER BY 1;
+
+-- PRESET GUCs are flagged NOT_IN_SAMPLE
+SELECT * FROM pg_settings_flags
+WHERE category='Preset Options' AND NOT not_in_sample
+ORDER BY 1;
+
+-- NO_SHOW_ALL implies NO_RESET_ALL:
+SELECT * FROM pg_settings_flags
+WHERE no_show_all AND NOT no_reset_all
+ORDER BY 1;
+
+-- Usually the converse:
+SELECT * FROM pg_settings_flags
+WHERE NOT no_show_all AND no_reset_all
+ORDER BY 1;
+
+-- NO_SHOW_ALL implies NOT_IN_SAMPLE:
+SELECT * FROM pg_settings_flags
+WHERE no_show_all AND NOT not_in_sample
+ORDER BY 1;
+
+DROP TABLE pg_settings_flags;

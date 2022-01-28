@@ -198,8 +198,9 @@ typedef enum
 
 #define GUC_QUALIFIER_SEPARATOR '.'
 
-/*
+/* --
  * bit values in "flags" of a GUC variable
+ * Consider if any new flags should be exposed in pg_get_guc_flags().
  */
 #define GUC_LIST_INPUT			0x0001	/* input can be list format */
 #define GUC_LIST_QUOTE			0x0002	/* double-quote list elements */

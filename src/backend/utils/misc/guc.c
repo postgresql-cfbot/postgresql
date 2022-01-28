@@ -9635,6 +9635,43 @@ GetConfigOptionByName(const char *name, const char **varname, bool missing_ok)
 }
 
 /*
+ * Return some flags for the specified GUC, or NULL if it doesn't exist.
+ */
+Datum
+pg_get_guc_flags(PG_FUNCTION_ARGS)
+{
+	char *varname = TextDatumGetCString(PG_GETARG_DATUM(0));
+	struct config_generic *record;
+	int			cnt = 0;
+#define MAX_NUM_FLAGS	5
+	Datum      flags[MAX_NUM_FLAGS];
+	ArrayType	*a;
+
+	record = find_option(varname, false, true, ERROR);
+
+	/* return NULL if no such variable */
+	if (record == NULL)
+		PG_RETURN_NULL();
+
+	if (record->flags & GUC_NO_SHOW_ALL)
+		flags[cnt++] = CStringGetTextDatum("NO_SHOW_ALL");
+	if (record->flags & GUC_NO_RESET_ALL)
+		flags[cnt++] = CStringGetTextDatum("NO_RESET_ALL");
+	if (record->flags & GUC_NOT_IN_SAMPLE)
+		flags[cnt++] = CStringGetTextDatum("NOT_IN_SAMPLE");
+	if (record->flags & GUC_EXPLAIN)
+		flags[cnt++] = CStringGetTextDatum("EXPLAIN");
+	if (record->flags & GUC_RUNTIME_COMPUTED)
+		flags[cnt++] = CStringGetTextDatum("RUNTIME_COMPUTED");
+
+	Assert(cnt <= MAX_NUM_FLAGS);
+
+	/* Returns the record as Datum */
+	a = construct_array(flags, cnt, TEXTOID, -1, false, TYPALIGN_INT);
+	PG_RETURN_ARRAYTYPE_P(a);
+}
+
+/*
  * Return GUC variable value by variable number; optionally return canonical
  * form of name.  Return value is palloc'd.
  */

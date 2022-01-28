@@ -25,12 +25,13 @@ ALTER PUBLICATION <replaceable class="parameter">name</replaceable> ADD <replace
 ALTER PUBLICATION <replaceable class="parameter">name</replaceable> SET <replaceable class="parameter">publication_object</replaceable> [, ...]
 ALTER PUBLICATION <replaceable class="parameter">name</replaceable> DROP <replaceable class="parameter">publication_object</replaceable> [, ...]
 ALTER PUBLICATION <replaceable class="parameter">name</replaceable> SET ( <replaceable class="parameter">publication_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] )
+ALTER PUBLICATION <replaceable class="parameter">name</replaceable> ALTER TABLE <replaceable class="parameter">publication_object</replaceable> SET COLUMNS { ( <replaceable class="parameter">name</replaceable> [, ...] ) | ALL }
 ALTER PUBLICATION <replaceable class="parameter">name</replaceable> OWNER TO { <replaceable>new_owner</replaceable> | CURRENT_ROLE | CURRENT_USER | SESSION_USER }
 ALTER PUBLICATION <replaceable class="parameter">name</replaceable> RENAME TO <replaceable>new_name</replaceable>
 
 <phrase>where <replaceable class="parameter">publication_object</replaceable> is one of:</phrase>
 
-    TABLE [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ * ] [, ... ]
+    TABLE [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ * ] [ ( <replaceable class="parameter">column_name</replaceable>, [, ... ] ) ] [, ... ]
     ALL TABLES IN SCHEMA { <replaceable class="parameter">schema_name</replaceable> | CURRENT_SCHEMA } [, ... ]
 </synopsis>
  </refsynopsisdiv>
@@ -60,6 +61,11 @@ ALTER PUBLICATION <replaceable class="parameter">name</replaceable> RENAME TO <r
    all of the publication properties specified in
    <xref linkend="sql-createpublication"/>.  Properties not mentioned in the
    command retain their previous settings.
+  </para>
+
+  <para>
+   The <literal>ALTER TABLE ... SET COLUMNS</literal> variant allows changing
+   the set of columns that are included in the publication.
   </para>
 
   <para>
@@ -110,6 +116,8 @@ ALTER PUBLICATION <replaceable class="parameter">name</replaceable> RENAME TO <r
       specified, the table and all its descendant tables (if any) are
       affected.  Optionally, <literal>*</literal> can be specified after the table
       name to explicitly indicate that descendant tables are included.
+      Optionally, a column list can be specified.  See <xref
+      linkend="sql-createpublication"/> for details.
      </para>
     </listitem>
    </varlistentry>
@@ -164,9 +172,15 @@ ALTER PUBLICATION noinsert SET (publish = 'update, delete');
   </para>
 
   <para>
-   Add some tables to the publication:
+   Add tables to the publication:
 <programlisting>
-ALTER PUBLICATION mypublication ADD TABLE users, departments;
+ALTER PUBLICATION mypublication ADD TABLE users (user_id, firstname), departments;
+</programlisting></para>
+
+  <para>
+   Change the set of columns published for a table:
+<programlisting>
+ALTER PUBLICATION mypublication ALTER TABLE users SET COLUMNS (user_id, firstname, lastname);
 </programlisting></para>
 
   <para>

@@ -8364,6 +8364,7 @@ ATExecDropColumn(List **wqueue, Relation rel, const char *colName,
 				 bool missing_ok, LOCKMODE lockmode,
 				 ObjectAddresses *addrs)
 {
+	Oid			relid = RelationGetRelid(rel);
 	HeapTuple	tuple;
 	Form_pg_attribute targetatt;
 	AttrNumber	attnum;
@@ -8383,7 +8384,7 @@ ATExecDropColumn(List **wqueue, Relation rel, const char *colName,
 	/*
 	 * get the number of the attribute
 	 */
-	tuple = SearchSysCacheAttName(RelationGetRelid(rel), colName);
+	tuple = SearchSysCacheAttName(relid, colName);
 	if (!HeapTupleIsValid(tuple))
 	{
 		if (!missing_ok)
@@ -8438,12 +8439,41 @@ ATExecDropColumn(List **wqueue, Relation rel, const char *colName,
 	ReleaseSysCache(tuple);
 
 	/*
+	 * Also, if the column is used in the column list of a publication,
+	 * disallow the drop if the DROP is RESTRICT.  We don't do anything if the
+	 * DROP is CASCADE, which means that the dependency mechanism will remove
+	 * the relation from the publication.
+	 */
+	if (behavior == DROP_RESTRICT)
+	{
+		List	   *pubs;
+		ListCell   *lc;
+
+		pubs = GetRelationColumnPartialPublications(relid);
+		foreach(lc, pubs)
+		{
+			Oid			pubid = lfirst_oid(lc);
+			List	   *published_cols;
+
+			published_cols =
+				GetRelationColumnListInPublication(relid, pubid);
+
+			if (list_member_oid(published_cols, attnum))
+				ereport(ERROR,
+						errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+						errmsg("cannot drop column \"%s\" because it is part of publication \"%s\"",
+							   colName, get_publication_name(pubid, false)),
+						errhint("Specify CASCADE or use ALTER PUBLICATION to remove the column from the publication."));
+		}
+	}
+
+	/*
 	 * Propagate to children as appropriate.  Unlike most other ALTER
 	 * routines, we have to do this one level of recursion at a time; we can't
 	 * use find_all_inheritors to do it in one pass.
 	 */
 	children =
-		find_inheritance_children(RelationGetRelid(rel), lockmode);
+		find_inheritance_children(relid, lockmode);
 
 	if (children)
 	{
@@ -8531,7 +8561,7 @@ ATExecDropColumn(List **wqueue, Relation rel, const char *colName,
 
 	/* Add object to delete */
 	object.classId = RelationRelationId;
-	object.objectId = RelationGetRelid(rel);
+	object.objectId = relid;
 	object.objectSubId = attnum;
 	add_exact_object_address(&object, addrs);
 
@@ -15841,6 +15871,7 @@ relation_mark_replica_identity(Relation rel, char ri_type, Oid indexOid,
 			CatalogTupleUpdate(pg_index, &pg_index_tuple->t_self, pg_index_tuple);
 			InvokeObjectPostAlterHookArg(IndexRelationId, thisIndexOid, 0,
 										 InvalidOid, is_internal);
+
 			/*
 			 * Invalidate the relcache for the table, so that after we commit
 			 * all sessions will refresh the table's replica identity index
@@ -15863,6 +15894,11 @@ ATExecReplicaIdentity(Relation rel, ReplicaIdentityStmt *stmt, LOCKMODE lockmode
 	Oid			indexOid;
 	Relation	indexRel;
 	int			key;
+	List	   *pubs;
+	Bitmapset  *indexed_cols = NULL;
+	ListCell   *lc;
+
+	pubs = GetRelationColumnPartialPublications(RelationGetRelid(rel));
 
 	if (stmt->identity_type == REPLICA_IDENTITY_DEFAULT)
 	{
@@ -15871,11 +15907,16 @@ ATExecReplicaIdentity(Relation rel, ReplicaIdentityStmt *stmt, LOCKMODE lockmode
 	}
 	else if (stmt->identity_type == REPLICA_IDENTITY_FULL)
 	{
+		if (pubs != NIL)
+			ereport(ERROR,
+					errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+					errmsg("cannot set REPLICA IDENTITY FULL when publications contain relations that specify column lists"));
 		relation_mark_replica_identity(rel, stmt->identity_type, InvalidOid, true);
 		return;
 	}
 	else if (stmt->identity_type == REPLICA_IDENTITY_NOTHING)
 	{
+		/* XXX not sure what's the right check for publications here */
 		relation_mark_replica_identity(rel, stmt->identity_type, InvalidOid, true);
 		return;
 	}
@@ -15960,6 +16001,46 @@ ATExecReplicaIdentity(Relation rel, ReplicaIdentityStmt *stmt, LOCKMODE lockmode
 					 errmsg("index \"%s\" cannot be used as replica identity because column \"%s\" is nullable",
 							RelationGetRelationName(indexRel),
 							NameStr(attr->attname))));
+
+		/*
+		 * Collect columns used, in case we have any publications that we need
+		 * to vet.  System attributes are disallowed so no need to subtract
+		 * FirstLowInvalidHeapAttributeNumber.
+		 */
+		indexed_cols = bms_add_member(indexed_cols, attno);
+	}
+
+	/*
+	 * Check partial-column publications.  For those that include UPDATE and
+	 * DELETE, we must enforce that the columns in the replica identity are
+	 * included in the column list.  For publications that only include INSERT
+	 * and TRUNCATE, we don't need to restrict the replica identity.
+	 */
+	foreach(lc, pubs)
+	{
+		Oid			pubid = lfirst_oid(lc);
+		List	   *published_cols;
+		PublicationActions actions;
+
+		GetActionsInPublication(pubid, &actions);
+		/* No need to worry about this one */
+		if (!actions.pubupdate && !actions.pubdelete)
+			continue;
+
+		published_cols =
+			GetRelationColumnListInPublication(RelationGetRelid(rel), pubid);
+
+		for (key = 0; key < IndexRelationGetNumberOfKeyAttributes(indexRel); key++)
+		{
+			int16	attno = indexRel->rd_index->indkey.values[key];
+
+			if (!list_member_oid(published_cols, attno))
+				ereport(ERROR,
+						errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						errmsg("index \"%s\" cannot be used because publication \"%s\" does not include all indexed columns",
+							   RelationGetRelationName(indexRel),
+							   get_publication_name(pubid, false)));
+		}
 	}
 
 	/* This index is suitable for use as a replica identity. Mark it. */

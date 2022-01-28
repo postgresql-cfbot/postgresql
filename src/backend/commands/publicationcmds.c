@@ -377,6 +377,46 @@ CreatePublication(ParseState *pstate, CreatePublicationStmt *stmt)
 }
 
 /*
+ * Change the column list of a relation in a publication
+ */
+static void
+PublicationSetColumns(AlterPublicationStmt *stmt,
+					  Form_pg_publication pubform, PublicationTable *table)
+{
+	Relation	rel,
+				urel;
+	HeapTuple	tup;
+	ObjectAddress obj,
+				secondary;
+
+	rel = table_open(PublicationRelRelationId, RowExclusiveLock);
+	urel = table_openrv(table->relation, ShareUpdateExclusiveLock);
+
+	tup = SearchSysCache2(PUBLICATIONRELMAP,
+						  ObjectIdGetDatum(RelationGetRelid(urel)),
+						  ObjectIdGetDatum(pubform->oid));
+	if (!HeapTupleIsValid(tup))
+		ereport(ERROR,
+				errmsg("relation \"%s\" is not already in publication \"%s\"",
+					   table->relation->relname,
+					   NameStr(pubform->pubname)));
+
+	publication_set_table_columns(rel, tup, urel, table->columns);
+
+	ObjectAddressSet(obj, PublicationRelationId,
+					 ((Form_pg_publication_rel) GETSTRUCT(tup))->oid);
+	ObjectAddressSet(secondary, RelationRelationId, RelationGetRelid(urel));
+	EventTriggerCollectSimpleCommand(obj, secondary, (Node *) stmt);
+
+	ReleaseSysCache(tup);
+
+	table_close(rel, RowExclusiveLock);
+	table_close(urel, NoLock);
+
+	InvokeObjectPostAlterHook(PublicationRelationId, pubform->oid, 0);
+}
+
+/*
  * Change options of a publication.
  */
 static void
@@ -523,6 +563,14 @@ AlterPublicationTables(AlterPublicationStmt *stmt, HeapTuple tup,
 	}
 	else if (stmt->action == AP_DropObjects)
 		PublicationDropTables(pubid, rels, false);
+	else if (stmt->action == AP_SetColumns)
+	{
+		Assert(schemaidlist == NIL);
+		Assert(list_length(tables) == 1);
+
+		PublicationSetColumns(stmt, pubform,
+							  linitial_node(PublicationTable, tables));
+	}
 	else						/* AP_SetObjects */
 	{
 		List	   *oldrelids = GetPublicationRelations(pubid,
@@ -562,7 +610,8 @@ AlterPublicationTables(AlterPublicationStmt *stmt, HeapTuple tup,
 
 				pubrel = palloc(sizeof(PublicationRelInfo));
 				pubrel->relation = oldrel;
-
+				/* This is not needed to delete a table */
+				pubrel->columns = NIL;
 				delrels = lappend(delrels, pubrel);
 			}
 		}
@@ -622,7 +671,7 @@ AlterPublicationSchemas(AlterPublicationStmt *stmt,
 	}
 	else if (stmt->action == AP_DropObjects)
 		PublicationDropSchemas(pubform->oid, schemaidlist, false);
-	else						/* AP_SetObjects */
+	else if (stmt->action == AP_SetObjects)
 	{
 		List	   *oldschemaids = GetPublicationSchemas(pubform->oid);
 		List	   *delschemas = NIL;
@@ -644,6 +693,10 @@ AlterPublicationSchemas(AlterPublicationStmt *stmt,
 		 * skip existing ones when doing catalog update.
 		 */
 		PublicationAddSchemas(pubform->oid, schemaidlist, true, stmt);
+	}
+	else
+	{
+		/* Nothing to do for AP_SetColumns */
 	}
 }
 
@@ -934,6 +987,8 @@ OpenTableList(List *tables)
 
 		pub_rel = palloc(sizeof(PublicationRelInfo));
 		pub_rel->relation = rel;
+		pub_rel->columns = t->columns;
+
 		rels = lappend(rels, pub_rel);
 		relids = lappend_oid(relids, myrelid);
 
@@ -967,8 +1022,11 @@ OpenTableList(List *tables)
 
 				/* find_all_inheritors already got lock */
 				rel = table_open(childrelid, NoLock);
+
 				pub_rel = palloc(sizeof(PublicationRelInfo));
 				pub_rel->relation = rel;
+				pub_rel->columns = t->columns;
+
 				rels = lappend(rels, pub_rel);
 				relids = lappend_oid(relids, childrelid);
 			}
@@ -1075,6 +1133,11 @@ PublicationDropTables(Oid pubid, List *rels, bool missing_ok)
 		PublicationRelInfo *pubrel = (PublicationRelInfo *) lfirst(lc);
 		Relation	rel = pubrel->relation;
 		Oid			relid = RelationGetRelid(rel);
+
+		if (pubrel->columns)
+			ereport(ERROR,
+					errcode(ERRCODE_SYNTAX_ERROR),
+					errmsg("column list must not be specified in ALTER PUBLICATION ... DROP"));
 
 		prid = GetSysCacheOid2(PUBLICATIONRELMAP, Anum_pg_publication_rel_oid,
 							   ObjectIdGetDatum(relid),

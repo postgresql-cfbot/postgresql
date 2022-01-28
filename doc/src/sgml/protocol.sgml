@@ -7033,7 +7033,9 @@ Relation
 </listitem>
 </varlistentry>
 </variablelist>
-        Next, the following message part appears for each column (except generated columns):
+        Next, the following message part appears for each column (except
+        generated columns and other columns that don't appear in the column
+        filter list, for tables that have one):
 <variablelist>
 <varlistentry>
 <term>

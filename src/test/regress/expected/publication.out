@@ -165,8 +165,54 @@ Publications:
  regress_publication_user | t          | t       | t       | f       | f         | f
 (1 row)
 
-DROP TABLE testpub_tbl2;
-DROP PUBLICATION testpub_foralltables, testpub_fortable, testpub_forschema;
+CREATE TABLE testpub_tbl5 (a int PRIMARY KEY, b text, c text,
+	d int generated always as (a + length(b)) stored);
+ALTER PUBLICATION testpub_fortable ADD TABLE testpub_tbl5 (a, x);  -- error
+ERROR:  column "x" of relation "testpub_tbl5" does not exist
+ALTER PUBLICATION testpub_fortable ADD TABLE testpub_tbl5 (b, c);  -- error
+ERROR:  invalid column list for publishing relation "testpub_tbl5"
+DETAIL:  All columns in REPLICA IDENTITY must be present in the column list.
+ALTER PUBLICATION testpub_fortable ADD TABLE testpub_tbl5 (a, d);  -- error
+ERROR:  cannot reference generated column "d" in publication column list
+ALTER PUBLICATION testpub_fortable ADD TABLE testpub_tbl5 (a, c);  -- ok
+ALTER TABLE testpub_tbl5 DROP COLUMN c;		-- no dice
+ERROR:  cannot drop column "c" because it is part of publication "testpub_fortable"
+HINT:  Specify CASCADE or use ALTER PUBLICATION to remove the column from the publication.
+/* not all replica identities are good enough */
+CREATE UNIQUE INDEX testpub_tbl5_b_key ON testpub_tbl5 (b, c);
+ALTER TABLE testpub_tbl5 ALTER b SET NOT NULL, ALTER c SET NOT NULL;
+ALTER TABLE testpub_tbl5 REPLICA IDENTITY USING INDEX testpub_tbl5_b_key; -- nope
+ERROR:  index "testpub_tbl5_b_key" cannot be used because publication "testpub_fortable" does not include all indexed columns
+ALTER PUBLICATION testpub_fortable DROP TABLE testpub_tbl5;
+ALTER TABLE testpub_tbl5 REPLICA IDENTITY USING INDEX testpub_tbl5_b_key; -- ok, but ...
+ALTER PUBLICATION testpub_fortable ADD TABLE testpub_tbl5 (a, c);	-- no dice
+ERROR:  invalid column list for publishing relation "testpub_tbl5"
+DETAIL:  All columns in REPLICA IDENTITY must be present in the column list.
+/* But if upd/del are not published, it works OK */
+SET client_min_messages = 'ERROR';
+CREATE PUBLICATION testpub_table_ins WITH (publish = 'insert, truncate');
+RESET client_min_messages;
+ALTER PUBLICATION testpub_table_ins ADD TABLE testpub_tbl5 (a);		-- ok
+\dRp+ testpub_table_ins
+                               Publication testpub_table_ins
+          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root 
+--------------------------+------------+---------+---------+---------+-----------+----------
+ regress_publication_user | f          | t       | f       | f       | t         | f
+Tables:
+    "public.testpub_tbl5" (a)
+
+CREATE TABLE testpub_tbl6 (a int, b text, c text);
+ALTER TABLE testpub_tbl6 REPLICA IDENTITY FULL;
+ALTER PUBLICATION testpub_fortable ADD TABLE testpub_tbl6 (a, b, c);  -- error
+ERROR:  invalid column list for publishing relation "testpub_tbl6"
+DETAIL:  Cannot specify a column list on relations with REPLICA IDENTITY FULL.
+ALTER PUBLICATION testpub_fortable ADD TABLE testpub_tbl6; -- ok
+ALTER PUBLICATION testpub_fortable
+  ALTER TABLE testpub_tbl6 SET COLUMNS (a, b, c);	-- error
+ERROR:  cannot change column set for relation "testpub_tbl6"
+DETAIL:  Cannot specify column list on relations with REPLICA IDENTITY FULL.
+DROP TABLE testpub_tbl2, testpub_tbl5, testpub_tbl6;
+DROP PUBLICATION testpub_foralltables, testpub_fortable, testpub_forschema, testpub_table_ins;
 CREATE TABLE testpub_tbl3 (a int);
 CREATE TABLE testpub_tbl3a (b text) INHERITS (testpub_tbl3);
 SET client_min_messages = 'ERROR';
@@ -684,6 +730,15 @@ ALTER PUBLICATION testpub1_forschema SET ALL TABLES IN SCHEMA pub_test1, pub_tes
 Tables from schemas:
     "pub_test1"
 
+-- Verify that it fails to add a schema with a column specification
+ALTER PUBLICATION testpub1_forschema ADD ALL TABLES IN SCHEMA foo (a, b);
+ERROR:  syntax error at or near "("
+LINE 1: ...TION testpub1_forschema ADD ALL TABLES IN SCHEMA foo (a, b);
+                                                                ^
+ALTER PUBLICATION testpub1_forschema ADD ALL TABLES IN SCHEMA foo, bar (a, b);
+ERROR:  column specification not allowed for schemas
+LINE 1: ... testpub1_forschema ADD ALL TABLES IN SCHEMA foo, bar (a, b)...
+                                                             ^
 -- cleanup pub_test1 schema for invalidation tests
 ALTER PUBLICATION testpub2_forschema DROP ALL TABLES IN SCHEMA pub_test1;
 DROP PUBLICATION testpub3_forschema, testpub4_forschema, testpub5_forschema, testpub6_forschema, testpub_fortable;

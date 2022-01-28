@@ -9760,6 +9760,26 @@ PublicationObjSpec:
 					$$->pubobjtype = PUBLICATIONOBJ_TABLES_IN_CUR_SCHEMA;
 					$$->location = @5;
 				}
+			| SEQUENCE relation_expr
+				{
+					$$ = makeNode(PublicationObjSpec);
+					$$->pubobjtype = PUBLICATIONOBJ_SEQUENCE;
+					$$->pubtable = makeNode(PublicationTable);
+					$$->pubtable->relation = $2;
+				}
+			| ALL SEQUENCES IN_P SCHEMA ColId
+				{
+					$$ = makeNode(PublicationObjSpec);
+					$$->pubobjtype = PUBLICATIONOBJ_SEQUENCES_IN_SCHEMA;
+					$$->name = $5;
+					$$->location = @5;
+				}
+			| ALL SEQUENCES IN_P SCHEMA CURRENT_SCHEMA
+				{
+					$$ = makeNode(PublicationObjSpec);
+					$$->pubobjtype = PUBLICATIONOBJ_SEQUENCES_IN_CUR_SCHEMA;
+					$$->location = @5;
+				}
 			| ColId
 				{
 					$$ = makeNode(PublicationObjSpec);
@@ -10095,6 +10115,12 @@ UnlistenStmt:
 				}
 		;
 
+/*
+ * FIXME
+ *
+ * opt_publication_for_sequences and publication_for_sequences should be
+ * copies for sequences
+ */
 
 /*****************************************************************************
  *
@@ -10102,6 +10128,12 @@ UnlistenStmt:
  *
  *		BEGIN / COMMIT / ROLLBACK
  *		(also older versions END / ABORT)
+ *
+ * ALTER PUBLICATION name ADD SEQUENCE sequence [, sequence2]
+ *
+ * ALTER PUBLICATION name DROP SEQUENCE sequence [, sequence2]
+ *
+ * ALTER PUBLICATION name SET SEQUENCE sequence [, sequence2]
  *
  *****************************************************************************/
 

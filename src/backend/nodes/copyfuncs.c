@@ -4850,6 +4850,7 @@ _copyCreatePublicationStmt(const CreatePublicationStmt *from)
 	COPY_NODE_FIELD(options);
 	COPY_NODE_FIELD(pubobjects);
 	COPY_SCALAR_FIELD(for_all_tables);
+	COPY_SCALAR_FIELD(for_all_sequences);
 
 	return newnode;
 }

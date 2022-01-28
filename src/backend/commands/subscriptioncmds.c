@@ -85,6 +85,7 @@ typedef struct SubOpts
 } SubOpts;
 
 static List *fetch_table_list(WalReceiverConn *wrconn, List *publications);
+static List *fetch_sequence_list(WalReceiverConn *wrconn, List *publications);
 static void check_duplicates_in_publist(List *publist, Datum *datums);
 static List *merge_publications(List *oldpublist, List *newpublist, bool addpub, const char *subname);
 static void ReportSlotConnectionError(List *rstates, Oid subid, char *slotname, char *err);
@@ -496,6 +497,7 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 		char	   *err;
 		WalReceiverConn *wrconn;
 		List	   *tables;
+		List	   *sequences;
 		ListCell   *lc;
 		char		table_state;
 
@@ -520,6 +522,26 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 			 */
 			tables = fetch_table_list(wrconn, publications);
 			foreach(lc, tables)
+			{
+				RangeVar   *rv = (RangeVar *) lfirst(lc);
+				Oid			relid;
+
+				relid = RangeVarGetRelid(rv, AccessShareLock, false);
+
+				/* Check for supported relkind. */
+				CheckSubscriptionRelkind(get_rel_relkind(relid),
+										 rv->schemaname, rv->relname);
+
+				AddSubscriptionRelState(subid, relid, table_state,
+										InvalidXLogRecPtr);
+			}
+
+			/*
+			 * Get the sequence list from publisher and build local sequence
+			 * status info.
+			 */
+			sequences = fetch_sequence_list(wrconn, publications);
+			foreach(lc, sequences)
 			{
 				RangeVar   *rv = (RangeVar *) lfirst(lc);
 				Oid			relid;
@@ -706,6 +728,10 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data)
 		{
 			Oid			relid = subrel_local_oids[off];
 
+			/* XXX ignore sequences - maybe do this in GetSubscriptionRelations? */
+			if (get_rel_relkind(relid) == RELKIND_SEQUENCE)
+				continue;
+
 			if (!bsearch(&relid, pubrel_local_oids,
 						 list_length(pubrel_names), sizeof(Oid), oid_cmp))
 			{
@@ -797,6 +823,183 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data)
 				ReplicationSlotDropAtPubNode(wrconn, syncslotname, true);
 			}
 		}
+
+		/*
+		 * XXX now do the same thing for sequences, maybe before the preceding
+		 * block, or earlier?
+		 */
+
+		/* Get the table list from publisher. */
+		pubrel_names = fetch_sequence_list(wrconn, sub->publications);
+
+		/* Get local table list. */
+		subrel_states = GetSubscriptionRelations(sub->oid);
+
+		/*
+		 * Build qsorted array of local table oids for faster lookup. This can
+		 * potentially contain all tables in the database so speed of lookup
+		 * is important.
+		 */
+		subrel_local_oids = palloc(list_length(subrel_states) * sizeof(Oid));
+		off = 0;
+		foreach(lc, subrel_states)
+		{
+			SubscriptionRelState *relstate = (SubscriptionRelState *) lfirst(lc);
+
+			subrel_local_oids[off++] = relstate->relid;
+		}
+		qsort(subrel_local_oids, list_length(subrel_states),
+			  sizeof(Oid), oid_cmp);
+
+		/*
+		 * Rels that we want to remove from subscription and drop any slots
+		 * and origins corresponding to them.
+		 */
+		sub_remove_rels = palloc(list_length(subrel_states) * sizeof(SubRemoveRels));
+
+		/*
+		 * Walk over the remote tables and try to match them to locally known
+		 * tables. If the table is not known locally create a new state for
+		 * it.
+		 *
+		 * Also builds array of local oids of remote tables for the next step.
+		 */
+		off = 0;
+		pubrel_local_oids = palloc(list_length(pubrel_names) * sizeof(Oid));
+
+		foreach(lc, pubrel_names)
+		{
+			RangeVar   *rv = (RangeVar *) lfirst(lc);
+			Oid			relid;
+
+			relid = RangeVarGetRelid(rv, AccessShareLock, false);
+
+			/* Check for supported relkind. */
+			CheckSubscriptionRelkind(get_rel_relkind(relid),
+									 rv->schemaname, rv->relname);
+
+			pubrel_local_oids[off++] = relid;
+
+			if (!bsearch(&relid, subrel_local_oids,
+						 list_length(subrel_states), sizeof(Oid), oid_cmp))
+			{
+				AddSubscriptionRelState(sub->oid, relid,
+										copy_data ? SUBREL_STATE_INIT : SUBREL_STATE_READY,
+										InvalidXLogRecPtr);
+				ereport(DEBUG1,
+						(errmsg_internal("table \"%s.%s\" added to subscription \"%s\"",
+										 rv->schemaname, rv->relname, sub->name)));
+			}
+		}
+
+		/*
+		 * Next remove state for tables we should not care about anymore using
+		 * the data we collected above
+		 */
+		qsort(pubrel_local_oids, list_length(pubrel_names),
+			  sizeof(Oid), oid_cmp);
+
+		remove_rel_len = 0;
+		for (off = 0; off < list_length(subrel_states); off++)
+		{
+			Oid			relid = subrel_local_oids[off];
+
+			/* XXX ignore non-sequences - maybe do this in GetSubscriptionRelations? */
+			if (get_rel_relkind(relid) != RELKIND_SEQUENCE)
+				continue;
+
+			if (!bsearch(&relid, pubrel_local_oids,
+						 list_length(pubrel_names), sizeof(Oid), oid_cmp))
+			{
+				char		state;
+				XLogRecPtr	statelsn;
+
+				/*
+				 * Lock pg_subscription_rel with AccessExclusiveLock to
+				 * prevent any race conditions with the apply worker
+				 * re-launching workers at the same time this code is trying
+				 * to remove those tables.
+				 *
+				 * Even if new worker for this particular rel is restarted it
+				 * won't be able to make any progress as we hold exclusive
+				 * lock on subscription_rel till the transaction end. It will
+				 * simply exit as there is no corresponding rel entry.
+				 *
+				 * This locking also ensures that the state of rels won't
+				 * change till we are done with this refresh operation.
+				 */
+				if (!rel)
+					rel = table_open(SubscriptionRelRelationId, AccessExclusiveLock);
+
+				/* Last known rel state. */
+				state = GetSubscriptionRelState(sub->oid, relid, &statelsn);
+
+				sub_remove_rels[remove_rel_len].relid = relid;
+				sub_remove_rels[remove_rel_len++].state = state;
+
+				RemoveSubscriptionRel(sub->oid, relid);
+
+				logicalrep_worker_stop(sub->oid, relid);
+
+				/*
+				 * For READY state, we would have already dropped the
+				 * tablesync origin.
+				 */
+				if (state != SUBREL_STATE_READY)
+				{
+					char		originname[NAMEDATALEN];
+
+					/*
+					 * Drop the tablesync's origin tracking if exists.
+					 *
+					 * It is possible that the origin is not yet created for
+					 * tablesync worker, this can happen for the states before
+					 * SUBREL_STATE_FINISHEDCOPY. The apply worker can also
+					 * concurrently try to drop the origin and by this time
+					 * the origin might be already removed. For these reasons,
+					 * passing missing_ok = true.
+					 */
+					ReplicationOriginNameForTablesync(sub->oid, relid, originname,
+													  sizeof(originname));
+					replorigin_drop_by_name(originname, true, false);
+				}
+
+				ereport(DEBUG1,
+						(errmsg_internal("table \"%s.%s\" removed from subscription \"%s\"",
+										 get_namespace_name(get_rel_namespace(relid)),
+										 get_rel_name(relid),
+										 sub->name)));
+			}
+		}
+
+		/*
+		 * Drop the tablesync slots associated with removed tables. This has
+		 * to be at the end because otherwise if there is an error while doing
+		 * the database operations we won't be able to rollback dropped slots.
+		 */
+		for (off = 0; off < remove_rel_len; off++)
+		{
+			if (sub_remove_rels[off].state != SUBREL_STATE_READY &&
+				sub_remove_rels[off].state != SUBREL_STATE_SYNCDONE)
+			{
+				char		syncslotname[NAMEDATALEN] = {0};
+
+				/*
+				 * For READY/SYNCDONE states we know the tablesync slot has
+				 * already been dropped by the tablesync worker.
+				 *
+				 * For other states, there is no certainty, maybe the slot
+				 * does not exist yet. Also, if we fail after removing some of
+				 * the slots, next time, it will again try to drop already
+				 * dropped slots and fail. For these reasons, we allow
+				 * missing_ok = true for the drop.
+				 */
+				ReplicationSlotNameForTablesync(sub->oid, sub_remove_rels[off].relid,
+												syncslotname, sizeof(syncslotname));
+				ReplicationSlotDropAtPubNode(wrconn, syncslotname, true);
+			}
+		}
+
 	}
 	PG_FINALLY();
 	{
@@ -1588,6 +1791,75 @@ fetch_table_list(WalReceiverConn *wrconn, List *publications)
 		ereport(ERROR,
 				(errcode(ERRCODE_CONNECTION_FAILURE),
 				 errmsg("could not receive list of replicated tables from the publisher: %s",
+						res->err)));
+
+	/* Process tables. */
+	slot = MakeSingleTupleTableSlot(res->tupledesc, &TTSOpsMinimalTuple);
+	while (tuplestore_gettupleslot(res->tuplestore, true, false, slot))
+	{
+		char	   *nspname;
+		char	   *relname;
+		bool		isnull;
+		RangeVar   *rv;
+
+		nspname = TextDatumGetCString(slot_getattr(slot, 1, &isnull));
+		Assert(!isnull);
+		relname = TextDatumGetCString(slot_getattr(slot, 2, &isnull));
+		Assert(!isnull);
+
+		rv = makeRangeVar(nspname, relname, -1);
+		tablelist = lappend(tablelist, rv);
+
+		ExecClearTuple(slot);
+	}
+	ExecDropSingleTupleTableSlot(slot);
+
+	walrcv_clear_result(res);
+
+	return tablelist;
+}
+
+/*
+ * Get the list of sequences which belong to specified publications on the
+ * publisher connection.
+ */
+static List *
+fetch_sequence_list(WalReceiverConn *wrconn, List *publications)
+{
+	WalRcvExecResult *res;
+	StringInfoData cmd;
+	TupleTableSlot *slot;
+	Oid			tableRow[2] = {TEXTOID, TEXTOID};
+	ListCell   *lc;
+	bool		first;
+	List	   *tablelist = NIL;
+
+	Assert(list_length(publications) > 0);
+
+	initStringInfo(&cmd);
+	appendStringInfoString(&cmd, "SELECT DISTINCT s.schemaname, s.sequencename\n"
+						   "  FROM pg_catalog.pg_publication_sequences s\n"
+						   " WHERE s.pubname IN (");
+	first = true;
+	foreach(lc, publications)
+	{
+		char	   *pubname = strVal(lfirst(lc));
+
+		if (first)
+			first = false;
+		else
+			appendStringInfoString(&cmd, ", ");
+
+		appendStringInfoString(&cmd, quote_literal_cstr(pubname));
+	}
+	appendStringInfoChar(&cmd, ')');
+
+	res = walrcv_exec(wrconn, cmd.data, 2, tableRow);
+	pfree(cmd.data);
+
+	if (res->status != WALRCV_OK_TUPLES)
+		ereport(ERROR,
+				(errmsg("could not receive list of replicated tables from the publisher: %s",
 						res->err)));
 
 	/* Process tables. */

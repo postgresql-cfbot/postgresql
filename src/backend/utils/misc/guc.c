@@ -237,6 +237,9 @@ static void assign_recovery_target_lsn(const char *newval, void *extra);
 static bool check_primary_slot_name(char **newval, void **extra, GucSource source);
 static bool check_default_with_oids(bool *newval, void **extra, GucSource source);
 
+static bool parse_special_int(const struct config_enum_entry *options, const char *value, int *result);
+static bool special_int_to_value(const struct config_enum_entry *options, int value, const char **retval);
+
 /* Private functions in guc-file.l that need to be called from guc.c */
 static ConfigVariable *ProcessConfigFileInternal(GucContext context,
 												 bool applySettings, int elevel);
@@ -567,6 +570,57 @@ extern const struct config_enum_entry recovery_target_action_options[];
 extern const struct config_enum_entry sync_method_options[];
 extern const struct config_enum_entry dynamic_shared_memory_options[];
 
+/* Some static structs for use in options which have -1 as special values;
+ * example: "disabled" or "inherited". While these are not enums per se, we
+ * are reusing the struct, with the bool field indicating whether to print the
+ * translated values on output */
+
+static const struct config_enum_entry special_auto[] = {
+	{"auto", -1, false},
+	{NULL, 0, false}
+};
+
+static const struct config_enum_entry special_disabled[] = {
+	{"disabled", -1, false},
+	{NULL, 0, false}
+};
+
+static const struct config_enum_entry special_disabled0[] = {
+	{"disabled", 0, false},
+	{NULL, 0, false}
+};
+
+static const struct config_enum_entry special_disabled_all[] = {
+	{"disabled", -1, false},
+	{"all", 0, false},
+	{NULL, 0, false}
+};
+
+static const struct config_enum_entry special_default0[] = {
+	{"default", 0, false},
+	{NULL, 0, false}
+};
+
+static const struct config_enum_entry special_immediate0[] = {
+	{"immediate", 0, false},
+	{NULL, 0, false}
+};
+
+static const struct config_enum_entry special_none0[] = {
+	{"none", 0, false},
+	{NULL, 0, false}
+};
+
+static const struct config_enum_entry special_unlimited[] = {
+	{"unlimited", -1, false},
+	{NULL, 0, false}
+};
+
+static const struct config_enum_entry special_unlimited0[] = {
+	{"unlimited", 0, false},
+	{NULL, 0, false}
+};
+
 /*
  * GUC option variables that are exported from this module
  */
@@ -593,6 +647,8 @@ bool		check_function_bodies = true;
  */
 bool		default_with_oids = false;
 bool		session_auth_is_superuser;
+
+bool		output_special_values = false;
 
 int			log_min_error_statement = ERROR;
 int			log_min_messages = WARNING;
@@ -2132,6 +2188,15 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"output_special_values", PGC_USERSET, CLIENT_CONN_OTHER,
+			gettext_noop("Whether to display \"special\" values in settings display."),
+		},
+		&output_special_values,
+		false,
+		NULL, NULL, NULL
+	},
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, false, NULL, NULL, NULL
@@ -2150,7 +2215,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&XLogArchiveTimeout,
 		0, 0, INT_MAX / 2,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_disabled0
 	},
 	{
 		{"post_auth_delay", PGC_BACKEND, DEVELOPER_OPTIONS,
@@ -2161,7 +2226,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&PostAuthDelay,
 		0, 0, INT_MAX / 1000000,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_disabled0
 	},
 	{
 		{"default_statistics_target", PGC_USERSET, QUERY_TUNING_OTHER,
@@ -2171,7 +2236,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&default_statistics_target,
 		100, 1, 10000,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 	{
 		{"from_collapse_limit", PGC_USERSET, QUERY_TUNING_OTHER,
@@ -2184,7 +2249,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&from_collapse_limit,
 		8, 1, INT_MAX,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 	{
 		{"join_collapse_limit", PGC_USERSET, QUERY_TUNING_OTHER,
@@ -2197,7 +2262,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&join_collapse_limit,
 		8, 1, INT_MAX,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 	{
 		{"geqo_threshold", PGC_USERSET, QUERY_TUNING_GEQO,
@@ -2207,7 +2272,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&geqo_threshold,
 		12, 2, INT_MAX,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 	{
 		{"geqo_effort", PGC_USERSET, QUERY_TUNING_GEQO,
@@ -2217,7 +2282,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&Geqo_effort,
 		DEFAULT_GEQO_EFFORT, MIN_GEQO_EFFORT, MAX_GEQO_EFFORT,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 	{
 		{"geqo_pool_size", PGC_USERSET, QUERY_TUNING_GEQO,
@@ -2227,7 +2292,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&Geqo_pool_size,
 		0, 0, INT_MAX,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 	{
 		{"geqo_generations", PGC_USERSET, QUERY_TUNING_GEQO,
@@ -2237,7 +2302,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&Geqo_generations,
 		0, 0, INT_MAX,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -2249,7 +2314,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&DeadlockTimeout,
 		1000, 1, INT_MAX,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -2260,7 +2325,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&max_standby_archive_delay,
 		30 * 1000, -1, INT_MAX,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_unlimited
 	},
 
 	{
@@ -2271,7 +2336,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&max_standby_streaming_delay,
 		30 * 1000, -1, INT_MAX,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_unlimited
 	},
 
 	{
@@ -2282,7 +2347,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&recovery_min_apply_delay,
 		0, 0, INT_MAX,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -2293,7 +2358,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&wal_receiver_status_interval,
 		10, 0, INT_MAX / 1000,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_disabled0
 	},
 
 	{
@@ -2304,7 +2369,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&wal_receiver_timeout,
 		60 * 1000, 0, INT_MAX,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_disabled0
 	},
 
 	{
@@ -2314,7 +2379,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&MaxConnections,
 		100, 1, MAX_BACKENDS,
-		check_maxconnections, NULL, NULL
+		check_maxconnections, NULL, NULL, NULL
 	},
 
 	{
@@ -2325,7 +2390,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&ReservedBackends,
 		3, 0, MAX_BACKENDS,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -2336,7 +2401,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&min_dynamic_shared_memory,
 		0, 0, (int) Min((size_t) INT_MAX, SIZE_MAX / (1024 * 1024)),
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	/*
@@ -2351,7 +2416,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&NBuffers,
 		16384, 16, INT_MAX / 2,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -2362,7 +2427,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&shared_memory_size_mb,
 		0, 0, INT_MAX,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -2384,7 +2449,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&num_temp_buffers,
 		1024, 100, INT_MAX / 2,
-		check_temp_buffers, NULL, NULL
+		check_temp_buffers, NULL, NULL, NULL
 	},
 
 	{
@@ -2394,7 +2459,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&PostPortNumber,
 		DEF_PGPORT, 1, 65535,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -2409,7 +2474,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&Unix_socket_permissions,
 		0777, 0000, 0777,
-		NULL, NULL, show_unix_socket_permissions
+		NULL, NULL, show_unix_socket_permissions, NULL
 	},
 
 	{
@@ -2423,7 +2488,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&Log_file_mode,
 		0600, 0000, 0777,
-		NULL, NULL, show_log_file_mode
+		NULL, NULL, show_log_file_mode, NULL
 	},
 
 
@@ -2438,7 +2503,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&data_directory_mode,
 		0700, 0000, 0777,
-		NULL, NULL, show_data_directory_mode
+		NULL, NULL, show_data_directory_mode, NULL
 	},
 
 	{
@@ -2451,7 +2516,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&work_mem,
 		4096, 64, MAX_KILOBYTES,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -2462,7 +2527,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&maintenance_work_mem,
 		65536, 1024, MAX_KILOBYTES,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -2474,7 +2539,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&logical_decoding_work_mem,
 		65536, 64, MAX_KILOBYTES,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	/*
@@ -2490,7 +2555,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&max_stack_depth,
 		100, 100, MAX_KILOBYTES,
-		check_max_stack_depth, assign_max_stack_depth, NULL
+		check_max_stack_depth, assign_max_stack_depth, NULL, NULL
 	},
 
 	{
@@ -2501,7 +2566,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&temp_file_limit,
 		-1, -1, INT_MAX,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_unlimited
 	},
 
 	{
@@ -2511,7 +2576,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&VacuumCostPageHit,
 		1, 0, 10000,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -2521,7 +2586,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&VacuumCostPageMiss,
 		2, 0, 10000,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -2531,7 +2596,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&VacuumCostPageDirty,
 		20, 0, 10000,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -2541,7 +2606,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&VacuumCostLimit,
 		200, 1, 10000,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -2551,7 +2616,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&autovacuum_vac_cost_limit,
 		-1, -1, 10000,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -2561,7 +2626,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&max_files_per_process,
 		1000, 64, INT_MAX,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	/*
@@ -2574,7 +2639,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&max_prepared_xacts,
 		0, 0, MAX_BACKENDS,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_disabled0
 	},
 
 #ifdef LOCK_DEBUG
@@ -2586,7 +2651,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&Trace_lock_oidmin,
 		FirstNormalObjectId, 0, INT_MAX,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 	{
 		{"trace_lock_table", PGC_SUSET, DEVELOPER_OPTIONS,
@@ -2596,7 +2661,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&Trace_lock_table,
 		0, 0, INT_MAX,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 #endif
 
@@ -2608,7 +2673,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&StatementTimeout,
 		0, 0, INT_MAX,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_unlimited0
 	},
 
 	{
@@ -2619,7 +2684,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&LockTimeout,
 		0, 0, INT_MAX,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_unlimited0
 	},
 
 	{
@@ -2630,7 +2695,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&IdleInTransactionSessionTimeout,
 		0, 0, INT_MAX,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_unlimited0
 	},
 
 	{
@@ -2641,7 +2706,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&IdleSessionTimeout,
 		0, 0, INT_MAX,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_unlimited0
 	},
 
 	{
@@ -2651,7 +2716,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&vacuum_freeze_min_age,
 		50000000, 0, 1000000000,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -2661,7 +2726,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&vacuum_freeze_table_age,
 		150000000, 0, 2000000000,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -2671,7 +2736,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&vacuum_multixact_freeze_min_age,
 		5000000, 0, 1000000000,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -2681,7 +2746,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&vacuum_multixact_freeze_table_age,
 		150000000, 0, 2000000000,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -2691,7 +2756,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&vacuum_defer_cleanup_age,
 		0, 0, 1000000,			/* see ComputeXidHorizons */
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 	{
 		{"vacuum_failsafe_age", PGC_USERSET, CLIENT_CONN_STATEMENT,
@@ -2700,7 +2765,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&vacuum_failsafe_age,
 		1600000000, 0, 2100000000,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 	{
 		{"vacuum_multixact_failsafe_age", PGC_USERSET, CLIENT_CONN_STATEMENT,
@@ -2709,7 +2774,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&vacuum_multixact_failsafe_age,
 		1600000000, 0, 2100000000,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	/*
@@ -2724,7 +2789,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&max_locks_per_xact,
 		64, 10, INT_MAX,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -2736,7 +2801,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&max_predicate_locks_per_xact,
 		64, 10, INT_MAX,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -2747,7 +2812,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&max_predicate_locks_per_relation,
 		-2, INT_MIN, INT_MAX,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -2758,7 +2823,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&max_predicate_locks_per_page,
 		2, 0, INT_MAX,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -2769,7 +2834,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&AuthenticationTimeout,
 		60, 1, 600,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -2782,7 +2847,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&PreAuthDelay,
 		0, 0, 60,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_disabled0
 	},
 
 	{
@@ -2793,7 +2858,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&wal_keep_size_mb,
 		0, 0, MAX_KILOBYTES,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_none0
 	},
 
 	{
@@ -2805,7 +2870,7 @@ static struct config_int ConfigureNamesInt[] =
 		&min_wal_size_mb,
 		DEFAULT_MIN_WAL_SEGS * (DEFAULT_XLOG_SEG_SIZE / (1024 * 1024)),
 		2, MAX_KILOBYTES,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -2817,7 +2882,7 @@ static struct config_int ConfigureNamesInt[] =
 		&max_wal_size_mb,
 		DEFAULT_MAX_WAL_SEGS * (DEFAULT_XLOG_SEG_SIZE / (1024 * 1024)),
 		2, MAX_KILOBYTES,
-		NULL, assign_max_wal_size, NULL
+		NULL, assign_max_wal_size, NULL, NULL
 	},
 
 	{
@@ -2828,7 +2893,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&CheckPointTimeout,
 		300, 30, 86400,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -2843,7 +2908,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&CheckPointWarning,
 		30, 0, INT_MAX,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_disabled0
 	},
 
 	{
@@ -2854,7 +2919,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&checkpoint_flush_after,
 		DEFAULT_CHECKPOINT_FLUSH_AFTER, 0, WRITEBACK_MAX_PENDING_FLUSHES,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_disabled0
 	},
 
 	{
@@ -2865,7 +2930,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&XLOGbuffers,
 		-1, -1, (INT_MAX / XLOG_BLCKSZ),
-		check_wal_buffers, NULL, NULL
+		check_wal_buffers, NULL, NULL, special_auto
 	},
 
 	{
@@ -2876,7 +2941,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&WalWriterDelay,
 		200, 1, 10000,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -2887,7 +2952,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&WalWriterFlushAfter,
 		(1024 * 1024) / XLOG_BLCKSZ, 0, INT_MAX,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_immediate0
 	},
 
 	{
@@ -2898,7 +2963,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&wal_skip_threshold,
 		2048, 0, MAX_KILOBYTES,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -2908,7 +2973,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&max_wal_senders,
 		10, 0, MAX_BACKENDS,
-		check_max_wal_senders, NULL, NULL
+		check_max_wal_senders, NULL, NULL, NULL
 	},
 
 	{
@@ -2919,7 +2984,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&max_replication_slots,
 		10, 0, MAX_BACKENDS /* XXX? */ ,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -2932,7 +2997,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&max_slot_wal_keep_size_mb,
 		-1, -1, MAX_KILOBYTES,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_unlimited
 	},
 
 	{
@@ -2943,7 +3008,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&wal_sender_timeout,
 		60 * 1000, 0, INT_MAX,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_disabled0
 	},
 
 	{
@@ -2955,7 +3020,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&CommitDelay,
 		0, 0, 100000,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_none0
 	},
 
 	{
@@ -2966,7 +3031,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&CommitSiblings,
 		5, 0, 1000,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -2979,7 +3044,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&extra_float_digits,
 		1, -15, 3,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -2992,7 +3057,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&log_min_duration_sample,
 		-1, -1, INT_MAX,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_disabled_all
 	},
 
 	{
@@ -3004,7 +3069,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&log_min_duration_statement,
 		-1, -1, INT_MAX,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_disabled_all
 	},
 
 	{
@@ -3016,7 +3081,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&Log_autovacuum_min_duration,
 		600000, -1, INT_MAX,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_disabled_all
 	},
 
 	{
@@ -3028,7 +3093,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&log_parameter_max_length,
 		-1, -1, INT_MAX / 2,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_unlimited
 	},
 
 	{
@@ -3040,7 +3105,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&log_parameter_max_length_on_error,
 		0, -1, INT_MAX / 2,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_unlimited
 	},
 
 	{
@@ -3051,7 +3116,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&BgWriterDelay,
 		200, 10, 10000,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -3061,7 +3126,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&bgwriter_lru_maxpages,
 		100, 0, INT_MAX / 2,	/* Same upper limit as shared_buffers */
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -3072,7 +3137,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&bgwriter_flush_after,
 		DEFAULT_BGWRITER_FLUSH_AFTER, 0, WRITEBACK_MAX_PENDING_FLUSHES,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_disabled0
 	},
 
 	{
@@ -3090,7 +3155,7 @@ static struct config_int ConfigureNamesInt[] =
 		0,
 #endif
 		0, MAX_IO_CONCURRENCY,
-		check_effective_io_concurrency, NULL, NULL
+		check_effective_io_concurrency, NULL, NULL, special_disabled0
 	},
 
 	{
@@ -3108,7 +3173,7 @@ static struct config_int ConfigureNamesInt[] =
 		0,
 #endif
 		0, MAX_IO_CONCURRENCY,
-		check_maintenance_io_concurrency, NULL, NULL
+		check_maintenance_io_concurrency, NULL, NULL, NULL
 	},
 
 	{
@@ -3119,7 +3184,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&backend_flush_after,
 		DEFAULT_BACKEND_FLUSH_AFTER, 0, WRITEBACK_MAX_PENDING_FLUSHES,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_disabled0
 	},
 
 	{
@@ -3131,7 +3196,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&max_worker_processes,
 		8, 0, MAX_BACKENDS,
-		check_max_worker_processes, NULL, NULL
+		check_max_worker_processes, NULL, NULL, special_disabled0
 	},
 
 	{
@@ -3143,7 +3208,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&max_logical_replication_workers,
 		4, 0, MAX_BACKENDS,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_disabled0
 	},
 
 	{
@@ -3155,7 +3220,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&max_sync_workers_per_subscription,
 		2, 0, MAX_BACKENDS,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_disabled0
 	},
 
 	{
@@ -3167,7 +3232,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&Log_RotationAge,
 		HOURS_PER_DAY * MINS_PER_HOUR, 0, INT_MAX / SECS_PER_MINUTE,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_disabled0
 	},
 
 	{
@@ -3179,7 +3244,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&Log_RotationSize,
 		10 * 1024, 0, INT_MAX / 1024,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_disabled0
 	},
 
 	{
@@ -3190,7 +3255,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&max_function_args,
 		FUNC_MAX_ARGS, FUNC_MAX_ARGS, FUNC_MAX_ARGS,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -3201,7 +3266,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&max_index_keys,
 		INDEX_MAX_KEYS, INDEX_MAX_KEYS, INDEX_MAX_KEYS,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -3212,7 +3277,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&max_identifier_length,
 		NAMEDATALEN - 1, NAMEDATALEN - 1, NAMEDATALEN - 1,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -3223,7 +3288,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&block_size,
 		BLCKSZ, BLCKSZ, BLCKSZ,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -3234,7 +3299,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&segment_size,
 		RELSEG_SIZE, RELSEG_SIZE, RELSEG_SIZE,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -3245,7 +3310,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&wal_block_size,
 		XLOG_BLCKSZ, XLOG_BLCKSZ, XLOG_BLCKSZ,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -3257,7 +3322,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&wal_retrieve_retry_interval,
 		5000, 1, INT_MAX,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -3270,7 +3335,7 @@ static struct config_int ConfigureNamesInt[] =
 		DEFAULT_XLOG_SEG_SIZE,
 		WalSegMinSize,
 		WalSegMaxSize,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -3281,7 +3346,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&autovacuum_naptime,
 		60, 1, INT_MAX / 1000,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 	{
 		{"autovacuum_vacuum_threshold", PGC_SIGHUP, AUTOVACUUM,
@@ -3290,7 +3355,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&autovacuum_vac_thresh,
 		50, 0, INT_MAX,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 	{
 		{"autovacuum_vacuum_insert_threshold", PGC_SIGHUP, AUTOVACUUM,
@@ -3299,7 +3364,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&autovacuum_vac_ins_thresh,
 		1000, -1, INT_MAX,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_disabled
 	},
 	{
 		{"autovacuum_analyze_threshold", PGC_SIGHUP, AUTOVACUUM,
@@ -3308,7 +3373,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&autovacuum_anl_thresh,
 		50, 0, INT_MAX,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 	{
 		/* see varsup.c for why this is PGC_POSTMASTER not PGC_SIGHUP */
@@ -3320,7 +3385,7 @@ static struct config_int ConfigureNamesInt[] =
 
 		/* see vacuum_failsafe_age if you change the upper-limit value. */
 		200000000, 100000, 2000000000,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 	{
 		/* see multixact.c for why this is PGC_POSTMASTER not PGC_SIGHUP */
@@ -3330,7 +3395,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&autovacuum_multixact_freeze_max_age,
 		400000000, 10000, 2000000000,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 	{
 		/* see max_connections */
@@ -3340,7 +3405,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&autovacuum_max_workers,
 		3, 1, MAX_BACKENDS,
-		check_autovacuum_max_workers, NULL, NULL
+		check_autovacuum_max_workers, NULL, NULL, NULL
 	},
 
 	{
@@ -3350,7 +3415,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&max_parallel_maintenance_workers,
 		2, 0, 1024,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_disabled0
 	},
 
 	{
@@ -3361,7 +3426,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&max_parallel_workers_per_gather,
 		2, 0, MAX_PARALLEL_WORKER_LIMIT,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_disabled0
 	},
 
 	{
@@ -3372,7 +3437,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&max_parallel_workers,
 		8, 0, MAX_PARALLEL_WORKER_LIMIT,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_disabled0
 	},
 
 	{
@@ -3383,7 +3448,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&autovacuum_work_mem,
 		-1, -1, MAX_KILOBYTES,
-		check_autovacuum_work_mem, NULL, NULL
+		check_autovacuum_work_mem, NULL, NULL, NULL
 	},
 
 	{
@@ -3394,7 +3459,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&old_snapshot_threshold,
 		-1, -1, MINS_PER_HOUR * HOURS_PER_DAY * 60,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_disabled
 	},
 
 	{
@@ -3405,7 +3470,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&tcp_keepalives_idle,
 		0, 0, INT_MAX,
-		NULL, assign_tcp_keepalives_idle, show_tcp_keepalives_idle
+		NULL, assign_tcp_keepalives_idle, show_tcp_keepalives_idle, special_default0
 	},
 
 	{
@@ -3416,7 +3481,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&tcp_keepalives_interval,
 		0, 0, INT_MAX,
-		NULL, assign_tcp_keepalives_interval, show_tcp_keepalives_interval
+		NULL, assign_tcp_keepalives_interval, show_tcp_keepalives_interval, special_default0
 	},
 
 	{
@@ -3427,7 +3492,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&ssl_renegotiation_limit,
 		0, 0, 0,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -3439,7 +3504,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&tcp_keepalives_count,
 		0, 0, INT_MAX,
-		NULL, assign_tcp_keepalives_count, show_tcp_keepalives_count
+		NULL, assign_tcp_keepalives_count, show_tcp_keepalives_count, special_default0
 	},
 
 	{
@@ -3450,7 +3515,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&GinFuzzySearchLimit,
 		0, 0, INT_MAX,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -3462,7 +3527,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&effective_cache_size,
 		DEFAULT_EFFECTIVE_CACHE_SIZE, 1, INT_MAX,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -3473,7 +3538,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&min_parallel_table_scan_size,
 		(8 * 1024 * 1024) / BLCKSZ, 0, INT_MAX / 3,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -3484,7 +3549,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&min_parallel_index_scan_size,
 		(512 * 1024) / BLCKSZ, 0, INT_MAX / 3,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -3496,7 +3561,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&server_version_num,
 		PG_VERSION_NUM, PG_VERSION_NUM, PG_VERSION_NUM,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -3507,7 +3572,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&log_temp_files,
 		-1, -1, INT_MAX,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, special_disabled_all
 	},
 
 	{
@@ -3518,7 +3583,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&pgstat_track_activity_query_size,
 		1024, 100, 1048576,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -3529,7 +3594,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&gin_pending_list_limit,
 		4096, 64, MAX_KILOBYTES,
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -3540,7 +3605,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&tcp_user_timeout,
 		0, 0, INT_MAX,
-		NULL, assign_tcp_user_timeout, show_tcp_user_timeout
+		NULL, assign_tcp_user_timeout, show_tcp_user_timeout, special_default0
 	},
 
 	{
@@ -3574,7 +3639,7 @@ static struct config_int ConfigureNamesInt[] =
 #else							/* not DISCARD_CACHES_ENABLED */
 		0, 0, 0,
 #endif							/* not DISCARD_CACHES_ENABLED */
-		NULL, NULL, NULL
+		NULL, NULL, NULL, NULL
 	},
 
 	{
@@ -3585,7 +3650,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&client_connection_check_interval,
 		0, 0, INT_MAX,
-		check_client_connection_check_interval, NULL, NULL
+		check_client_connection_check_interval, NULL, NULL, special_disabled0
 	},
 
 	{
@@ -3602,7 +3667,7 @@ static struct config_int ConfigureNamesInt[] =
 
 	/* End-of-list marker */
 	{
-		{NULL, 0, 0, NULL, NULL}, NULL, 0, 0, 0, NULL, NULL, NULL
+		{NULL, 0, 0, NULL, NULL}, NULL, 0, 0, 0, NULL, NULL, NULL, NULL
 	}
 };
 
@@ -6966,6 +7031,56 @@ parse_int(const char *value, int *result, int flags, const char **hintmsg)
 	return true;
 }
 
+
+/*
+ * Lookup special values from an array of chars -> int (case-sensitive).
+ * If the value is found, sets the retval value and returns
+ * true. If it's not found, return false and leave retval alone.
+ */
+bool
+parse_special_int(const struct config_enum_entry *options, const char *value,
+						   int *retval)
+{
+	const struct config_enum_entry *entry;
+
+	for (entry = options; entry && entry->name; entry++)
+	{
+		if (pg_strcasecmp(value, entry->name) == 0)
+		{
+			*retval = entry->val;
+			return true;
+		}
+	}
+
+	/* don't touch the return value in other case */
+	return false;
+}
+
+/*
+ * Lookup special values by int value and set to static string.
+ * If the value is found, sets the retval value and returns
+ * true. If it's not found, return false.
+ */
+bool
+special_int_to_value(const struct config_enum_entry *options, int value,
+						   const char **retval)
+{
+	const struct config_enum_entry *entry;
+
+	for (entry = options; entry && entry->name; entry++)
+	{
+		if (value == entry->val)
+		{
+			*retval = entry->name;
+			return true;
+		}
+	}
+
+	/* don't touch the return value in other case */
+	return false;
+}
+
+
 /*
  * Try to parse value as a floating point number in the usual format.
  * Optionally, the value can be followed by a unit name if "flags" indicates
@@ -7028,7 +7143,6 @@ parse_real(const char *value, double *result, int flags, const char **hintmsg)
 		*result = val;
 	return true;
 }
-
 
 /*
  * Lookup the name for an enum option with the selected value.
@@ -7176,8 +7290,8 @@ parse_and_validate_value(struct config_generic *record,
 				struct config_int *conf = (struct config_int *) record;
 				const char *hintmsg;
 
-				if (!parse_int(value, &newval->intval,
-							   conf->gen.flags, &hintmsg))
+				if (!(conf->special && parse_special_int(conf->special, value, &newval->intval)) &&
+					!parse_int(value, &newval->intval, conf->gen.flags, &hintmsg))
 				{
 					ereport(elevel,
 							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
@@ -10184,7 +10298,11 @@ _ShowOption(struct config_generic *record, bool use_units)
 			{
 				struct config_int *conf = (struct config_int *) record;
 
-				if (conf->show_hook)
+				/* Special values are prioritized over show hooks */
+				if (output_special_values && conf->special && special_int_to_value(conf->special, *conf->variable, &val))
+					/* if return is true we have no special action to take here but val was set already */
+					;
+				else if (conf->show_hook)
 					val = conf->show_hook();
 				else
 				{

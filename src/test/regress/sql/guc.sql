@@ -311,3 +311,19 @@ reset check_function_bodies;
 set default_with_oids to f;
 -- Should not allow to set it to true.
 set default_with_oids to t;
+
+-- tests for output_special_values and special values
+set output_special_values to t;
+set log_min_duration_statement = 100;
+show log_min_duration_statement;
+set log_min_duration_statement = -1;
+show log_min_duration_statement;
+set log_min_duration_statement = disabled;
+show log_min_duration_statement;
+set output_special_values to f;
+set log_min_duration_statement = 100;
+show log_min_duration_statement;
+set log_min_duration_statement = -1;
+show log_min_duration_statement;
+set log_min_duration_statement = disabled;
+show log_min_duration_statement;

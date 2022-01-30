@@ -31,6 +31,31 @@ SELECT num_nonnulls();
 SELECT num_nulls();
 
 --
+-- canonicalize_path()
+--
+
+SELECT * FROM test_canonicalize_path('/');
+SELECT * FROM test_canonicalize_path('/./abc/def/');
+SELECT * FROM test_canonicalize_path('/./../abc/def');
+SELECT * FROM test_canonicalize_path('/./../../abc/def/');
+SELECT * FROM test_canonicalize_path('/abc/.././def/ghi');
+SELECT * FROM test_canonicalize_path('/abc/./../def/ghi//');
+SELECT * FROM test_canonicalize_path('/abc/def/../../../../ghi/jkl');
+SELECT * FROM test_canonicalize_path('.');
+SELECT * FROM test_canonicalize_path('./');
+SELECT * FROM test_canonicalize_path('./abc/..');
+SELECT * FROM test_canonicalize_path('abc/../');
+SELECT * FROM test_canonicalize_path('abc/../def');
+SELECT * FROM test_canonicalize_path('..');
+SELECT * FROM test_canonicalize_path('../abc/def');
+SELECT * FROM test_canonicalize_path('../abc/..');
+SELECT * FROM test_canonicalize_path('../abc/../def');
+SELECT * FROM test_canonicalize_path('../abc/../../def/ghi');
+SELECT * FROM test_canonicalize_path('./abc/./def/.');
+SELECT * FROM test_canonicalize_path('./abc/././def/.');
+SELECT * FROM test_canonicalize_path('./abc/./def/.././ghi/../../../jkl/mno');
+
+--
 -- pg_log_backend_memory_contexts()
 --
 -- Memory contexts are logged and they are not returned to the function.

@@ -1565,6 +1565,11 @@ tblspc_redo(XLogReaderState *record)
 	{
 		xl_tblspc_drop_rec *xlrec = (xl_tblspc_drop_rec *) XLogRecGetData(record);
 
+		if (!reachedConsistency)
+			XLogForgetMissingDir(xlrec->ts_id, InvalidOid);
+
+		XLogFlush(record->EndRecPtr);
+
 		/*
 		 * If we issued a WAL record for a drop tablespace it implies that
 		 * there were no files in it at all when the DROP was done. That means

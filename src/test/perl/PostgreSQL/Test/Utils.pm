@@ -748,6 +748,48 @@ sub dir_symlink
 
 =pod
 
+=item dir_readlink(name)
+
+Portably read a symlink for a directory. On Windows this reads a junction
+point. Elsewhere it just calls perl's builtin readlink.
+
+=cut
+
+sub dir_readlink
+{
+	my $name = shift;
+	if ($windows_os)
+	{
+		$name = perl2host($name);
+		$name =~ s,/,\\,g;
+		# Split the path into parent directory and link name
+		die "invalid path spec: $name" if ($name !~ m!^(.*)\\([^\\]+)\\?$!);
+		my ($dir, $fname) = ($1, $2);
+		my $cmd = qq{cmd /c "dir /A:L $dir"};
+		if ($Config{osname} eq 'msys')
+		{
+			# need some indirection on msys
+			$cmd = qq{echo '$cmd' | \$COMSPEC /Q};
+		}
+
+		my $result;
+		foreach my $l (split /[\r\n]+/, `$cmd`)
+		{
+			$result = $1 if ($l =~ m/<JUNCTION>\W+$fname \[(.*)\]/)
+		}
+		die "junction $name not found" if (!defined $result);
+
+		$name =~ s,\\,/,g;
+		return $result;
+	}
+	else
+	{
+		return readlink $name;
+	}
+}
+
+=pod
+
 =back
 
 =head1 Test::More-LIKE METHODS

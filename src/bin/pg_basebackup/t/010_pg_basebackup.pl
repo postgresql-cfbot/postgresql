@@ -271,7 +271,7 @@ $node->safe_psql('postgres',
 	"CREATE TABLESPACE tblspc1 LOCATION '$realTsDir';");
 $node->safe_psql('postgres',
 	    "CREATE TABLE test1 (a int) TABLESPACE tblspc1;"
-	  . "INSERT INTO test1 VALUES (1234);");
+				 . "INSERT INTO test1 VALUES (1234);");
 $node->backup('tarbackup2', backup_options => ['-Ft']);
 # empty test1, just so that it's different from the to-be-restored data
 $node->safe_psql('postgres', "TRUNCATE TABLE test1;");

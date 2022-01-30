@@ -298,6 +298,64 @@ sub archive_dir
 
 =pod
 
+=item $node->tablespace_storage([, nocreate])
+
+Diretory to store tablespace directories.
+If nocreate is true, returns undef if not yet created.
+
+=cut
+
+sub tablespace_storage
+{
+	my ($self, $nocreate) = @_;
+
+	if (!defined $self->{_tsproot})
+	{
+		# tablespace is not used, return undef if nocreate is specified.
+		return undef if ($nocreate);
+
+		# create and remember the tablespae root directotry.
+		$self->{_tsproot} = PostgreSQL::Test::Utils::tempdir_short();
+	}
+
+	return $self->{_tsproot};
+}
+
+=pod
+
+=item $node->tablespaces()
+
+Returns a hash from tablespace OID to tablespace directory name.  For
+example, an oid 16384 pointing to /tmp/jWAhkT_fs0/ts1 is stored as
+$hash{16384} = "ts1".
+
+=cut
+
+sub tablespaces
+{
+	my ($self) = @_;
+	my $pg_tblspc = $self->data_dir . '/pg_tblspc';
+	my %ret;
+
+	# return undef if no tablespace is used
+	return undef if (!defined $self->tablespace_storage(1));
+
+	# collect tablespace entries in pg_tblspc directory
+	opendir(my $dir, $pg_tblspc);
+	while (my $oid = readdir($dir))
+	{
+		next if ($oid !~ /^([0-9]+)$/);
+		my $linkpath = "$pg_tblspc/$oid";
+		my $tsppath = PostgreSQL::Test::Utils::dir_readlink($linkpath);
+		$ret{$oid} = File::Basename::basename($tsppath);
+	}
+	closedir($dir);
+
+	return %ret;
+}
+
+=pod
+
 =item $node->backup_dir()
 
 The output path for backups taken with $node->backup()
@@ -309,6 +367,77 @@ sub backup_dir
 	my ($self) = @_;
 	my $basedir = $self->basedir;
 	return "$basedir/backup";
+}
+
+=pod
+
+=item $node->backup_tablespace_storage_path(backup_name)
+
+Returns tablespace location path for backup_name.
+Retuns the parent directory if backup_name is not given.
+
+=cut
+
+sub backup_tablespace_storage_path
+{
+	my ($self, $backup_name) = @_;
+	my $dir = $self->backup_dir . '/__tsps';
+
+	$dir .= "/$backup_name" if (defined $backup_name);
+
+	return $dir;
+}
+
+=pod
+
+=item $node->backup_create_tablespace_storage(backup_name)
+
+Create tablespace location directory for backup_name if not yet.
+Create the parent tablespace storage that holds all location
+directories if backup_name is not supplied.
+
+=cut
+
+sub backup_create_tablespace_storage
+{
+	my ($self, $backup_name) = @_;
+	my $dir = $self->backup_tablespace_storage_path($backup_name);
+
+	File::Path::make_path $dir if (! -d $dir);
+}
+
+=pod
+
+=item $node->backup_tablespaces(backup_name)
+
+Returns a reference to hash from tablespace OID to tablespace
+directory name of tablespace directory that the specified backup has.
+For example, an oid 16384 pointing to ../tsps/backup1/ts1 is stored as
+$hash{16384} = "ts1".
+
+=cut
+
+sub backup_tablespaces
+{
+	my ($self, $backup_name) = @_;
+	my $pg_tblspc = $self->backup_dir . '/' . $backup_name . '/pg_tblspc';
+	my %ret;
+
+	#return undef if this backup holds no tablespaces
+	return undef if (! -d $self->backup_tablespace_storage_path($backup_name));
+
+	# scan pg_tblspc directory of the backup
+	opendir(my $dir, $pg_tblspc);
+	while (my $oid = readdir($dir))
+	{
+		next if ($oid !~ /^([0-9]+)$/);
+		my $linkpath = "$pg_tblspc/$oid";
+		my $tsppath = PostgreSQL::Test::Utils::dir_readlink($linkpath);
+		$ret{$oid} = File::Basename::basename($tsppath);
+	}
+	closedir($dir);
+
+	return \%ret;
 }
 
 =pod
@@ -345,6 +474,7 @@ sub info
 	print $fh "Data directory: " . $self->data_dir . "\n";
 	print $fh "Backup directory: " . $self->backup_dir . "\n";
 	print $fh "Archive directory: " . $self->archive_dir . "\n";
+	print $fh "Tablespace directory: " . $self->tablespace_storage . "\n";
 	print $fh "Connection string: " . $self->connstr . "\n";
 	print $fh "Log file: " . $self->logfile . "\n";
 	print $fh "Install Path: ", $self->{_install_path} . "\n"
@@ -575,6 +705,43 @@ sub adjust_conf
 
 =pod
 
+=item $node->new_tablespace(name)
+
+Create a tablespace directory with the name then returns the path.
+
+=cut
+
+sub new_tablespace
+{
+	my ($self, $name) = @_;
+
+	my $path = $self->tablespace_storage . '/' . $name;
+
+	die "tablespace \"$name\" already exists" if (!mkdir($path));
+
+	return $path;
+}
+
+=pod
+
+=item $node->tablespace_dir(name)
+
+Return the path of the existing tablespace with the name.
+
+=cut
+
+sub tablespace_dir
+{
+	my ($self, $name) = @_;
+
+	my $path = $self->tablespace_storage . '/' . $name;
+	return undef if (!-d $path);
+
+	return $path;
+}
+
+=pod
+
 =item $node->backup(backup_name)
 
 Create a hot backup with B<pg_basebackup> in subdirectory B<backup_name> of
@@ -594,8 +761,23 @@ sub backup
 	my ($self, $backup_name, %params) = @_;
 	my $backup_path = $self->backup_dir . '/' . $backup_name;
 	my $name        = $self->name;
+	my @tsp_maps;
 
 	local %ENV = $self->_get_env();
+
+	# Build tablespace mappings.  We once let pg_basebackup copy
+	# tablespaces into temporary tablespace storage with a short name
+	# so that we can work on pathnames that fit our tar format which
+	# pg_basebackup depends on.
+	my $map_src_root = $self->tablespace_storage(1);
+	my $backup_tmptsp_root = PostgreSQL::Test::Utils::tempdir_short();
+	my %tsps = $self->tablespaces();
+	foreach my $tspname (values %tsps)
+	{
+		my $src = "$map_src_root/$tspname";
+		my $dst = "$backup_tmptsp_root/$tspname";
+		push(@tsp_maps, "--tablespace-mapping=$src=$dst");
+	}
 
 	print "# Taking pg_basebackup $backup_name from node \"$name\"\n";
 	PostgreSQL::Test::Utils::system_or_bail(
@@ -604,7 +786,33 @@ sub backup
 		$self->host,     '-p',
 		$self->port,     '--checkpoint',
 		'fast',          '--no-sync',
+		@tsp_maps,
 		@{ $params{backup_options} });
+
+	# Move the tablespaces from temporary storage into backup
+	# directory, unless the backup is in tar mode.
+	if (%tsps && ! -f "$backup_path/base.tar")
+	{
+		$self->backup_create_tablespace_storage();
+		PostgreSQL::Test::RecursiveCopy::copypath(
+			$backup_tmptsp_root,
+			$self->backup_tablespace_storage_path($backup_name));
+		# delete the temporary directory right away
+		rmtree $backup_tmptsp_root;
+
+		# Fix tablespace symlinks.  This is not necessarily required
+		# in backups but keep them consistent.
+		my $linkdst_root = "$backup_path/pg_tblspc";
+		my $linksrc_root = $self->backup_tablespace_storage_path($backup_name);
+		foreach my $oid (keys %tsps)
+		{
+			my $tspdst = "$linkdst_root/$oid";
+			my $tspsrc = "$linksrc_root/" . $tsps{$oid};
+			unlink $tspdst;
+			PostgreSQL::Test::Utils::dir_symlink($tspsrc, $tspdst);
+		}
+	}
+
 	print "# Backup finished\n";
 	return;
 }
@@ -666,10 +874,31 @@ sub _backup_fs
 	PostgreSQL::Test::RecursiveCopy::copypath(
 		$self->data_dir,
 		$backup_path,
+		# Skipping some files and tablespace symlinks
 		filterfn => sub {
 			my $src = shift;
-			return ($src ne 'log' and $src ne 'postmaster.pid');
+			return ($src ne 'log' and $src ne 'postmaster.pid' and
+					$src !~ m!^pg_tblspc/[0-9]+$!);
 		});
+
+	# Copy tablespaces if any
+	my %tsps = $self->tablespaces();
+	if (%tsps)
+	{
+		$self->backup_create_tablespace_storage();
+		PostgreSQL::Test::RecursiveCopy::copypath(
+			$self->tablespace_storage,
+			$self->backup_tablespace_storage_path($backup_name));
+
+		my $linkdst_root = $backup_path . '/pg_tblspc';
+		my $linksrc_root = $self->backup_tablespace_storage_path($backup_name);
+		foreach my $oid (keys %tsps)
+		{
+			my $tspdst = "$linkdst_root/$oid";
+			my $tspsrc = "$linksrc_root/" . $tsps{$oid};
+			PostgreSQL::Test::Utils::dir_symlink($tspsrc, $tspdst);
+		}
+	}
 
 	if ($hot)
 	{
@@ -754,7 +983,38 @@ sub init_from_backup
 	else
 	{
 		rmdir($data_path);
-		PostgreSQL::Test::RecursiveCopy::copypath($backup_path, $data_path);
+		PostgreSQL::Test::RecursiveCopy::copypath(
+			$backup_path,
+			$data_path,
+			# Skipping tablespace symlinks
+			filterfn => sub {
+				my $src = shift;
+				return ($src !~ m!^pg_tblspc/[0-9]+$!);
+			});
+	}
+
+	# Copy tablespaces if any
+	my $tsps = $root_node->backup_tablespaces($backup_name);
+
+	if ($tsps)
+	{
+		my $tsp_src = $root_node->backup_tablespace_storage_path($backup_name);
+		my $tsp_dst = $self->tablespace_storage();
+		my $linksrc_root = $data_path . '/pg_tblspc';
+
+		# copypath() rejects to copy into existing directory.
+		# Copy individual directories in the storage.
+		foreach my $oid (keys %{$tsps})
+		{
+			my $tsp = ${$tsps}{$oid};
+			my $tspsrc = "$tsp_src/$tsp";
+			my $tspdst = "$tsp_dst/$tsp";
+			PostgreSQL::Test::RecursiveCopy::copypath($tspsrc, $tspdst);
+
+			# Create tablespace symlink for this tablespace
+			my $linkdst = "$linksrc_root/$oid";
+			PostgreSQL::Test::Utils::dir_symlink($tspdst, $linkdst);
+		}
 	}
 	chmod(0700, $data_path);
 

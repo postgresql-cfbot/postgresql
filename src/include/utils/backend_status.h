@@ -13,6 +13,7 @@
 #include "datatype/timestamp.h"
 #include "libpq/pqcomm.h"
 #include "miscadmin.h"			/* for BackendType */
+#include "port/atomics.h"
 #include "utils/backend_progress.h"
 
 
@@ -31,11 +32,46 @@ typedef enum BackendState
 	STATE_DISABLED
 } BackendState;
 
+/* ----------
+ * IO Stats reporting utility types
+ * ----------
+ */
+
+typedef enum IOOp
+{
+	IOOP_ALLOC,
+	IOOP_EXTEND,
+	IOOP_FSYNC,
+	IOOP_WRITE,
+} IOOp;
+
+#define IOOP_NUM_TYPES (IOOP_WRITE + 1)
+
+typedef enum IOPath
+{
+	IOPATH_DIRECT,
+	IOPATH_LOCAL,
+	IOPATH_SHARED,
+	IOPATH_STRATEGY,
+} IOPath;
+
+#define IOPATH_NUM_TYPES (IOPATH_STRATEGY + 1)
 
 /* ----------
  * Shared-memory data structures
  * ----------
  */
+
+/*
+ * Structure for counting all types of IOOp for a live backend.
+ */
+typedef struct IOOpCounters
+{
+	pg_atomic_uint64 allocs;
+	pg_atomic_uint64 extends;
+	pg_atomic_uint64 fsyncs;
+	pg_atomic_uint64 writes;
+} IOOpCounters;
 
 /*
  * PgBackendSSLStatus
@@ -168,6 +204,12 @@ typedef struct PgBackendStatus
 
 	/* query identifier, optionally computed using post_parse_analyze_hook */
 	uint64		st_query_id;
+
+	/*
+	 * Stats on all IOOps for all IOPaths for this backend. These should be
+	 * incremented whenever an IO Operation is performed.
+	 */
+	IOOpCounters	io_path_stats[IOPATH_NUM_TYPES];
 } PgBackendStatus;
 
 
@@ -274,6 +316,7 @@ extern PGDLLIMPORT int pgstat_track_activity_query_size;
  * ----------
  */
 extern PGDLLIMPORT PgBackendStatus *MyBEEntry;
+extern PGDLLIMPORT PgBackendStatus *BackendStatusArray;
 
 
 /* ----------
@@ -289,6 +332,43 @@ extern void CreateSharedBackendStatus(void);
  * ----------
  */
 
+/* Utility functions */
+
+/*
+ * When maintaining an array of information about all valid BackendTypes, in
+ * order to avoid wasting the 0th spot, use this helper to convert a valid
+ * BackendType to a valid location in the array (given that no spot is
+ * maintained for B_INVALID BackendType).
+ */
+static inline int backend_type_get_idx(BackendType backend_type)
+{
+	/*
+	 * backend_type must be one of the valid backend types. If caller is
+	 * maintaining backend information in an array that includes B_INVALID,
+	 * this function is unnecessary.
+	 */
+	Assert(backend_type > B_INVALID && backend_type <= BACKEND_NUM_TYPES);
+	return backend_type - 1;
+}
+
+/*
+ * When using a value from an array of information about all valid
+ * BackendTypes, add 1 to the index before using it as a BackendType to adjust
+ * for not maintaining a spot for B_INVALID BackendType.
+ */
+static inline BackendType idx_get_backend_type(int idx)
+{
+	int backend_type = idx + 1;
+	/*
+	 * If the array includes a spot for B_INVALID BackendType this function is
+	 * not required.
+	 */
+	Assert(backend_type > B_INVALID && backend_type <= BACKEND_NUM_TYPES);
+	return backend_type;
+}
+
+extern const char *GetIOPathDesc(IOPath io_path);
+
 /* Initialization functions */
 extern void pgstat_beinit(void);
 extern void pgstat_bestart(void);
@@ -296,7 +376,35 @@ extern void pgstat_bestart(void);
 extern void pgstat_clear_backend_activity_snapshot(void);
 
 /* Activity reporting functions */
+typedef struct PgStatIOPathOps PgStatIOPathOps;
+
+static inline void
+pgstat_inc_ioop(IOOp io_op, IOPath io_path)
+{
+	IOOpCounters *io_ops;
+	PgBackendStatus *beentry = MyBEEntry;
+
+	Assert(beentry);
+
+	io_ops = &beentry->io_path_stats[io_path];
+	switch (io_op)
+	{
+		case IOOP_ALLOC:
+			pg_atomic_unlocked_inc_counter(&io_ops->allocs);
+			break;
+		case IOOP_EXTEND:
+			pg_atomic_unlocked_inc_counter(&io_ops->extends);
+			break;
+		case IOOP_FSYNC:
+			pg_atomic_unlocked_inc_counter(&io_ops->fsyncs);
+			break;
+		case IOOP_WRITE:
+			pg_atomic_unlocked_inc_counter(&io_ops->writes);
+			break;
+	}
+}
 extern void pgstat_report_activity(BackendState state, const char *cmd_str);
+extern void pgstat_report_live_backend_io_path_ops(PgStatIOPathOps *backend_io_path_ops);
 extern void pgstat_report_query_id(uint64 query_id, bool force);
 extern void pgstat_report_tempfile(size_t filesize);
 extern void pgstat_report_appname(const char *appname);

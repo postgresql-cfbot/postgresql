@@ -185,13 +185,15 @@ static IndexScan *make_indexscan(List *qptlist, List *qpqual, Index scanrelid,
 								 Oid indexid, List *indexqual, List *indexqualorig,
 								 List *indexorderby, List *indexorderbyorig,
 								 List *indexorderbyops,
-								 ScanDirection indexscandir);
+								 ScanDirection indexscandir,
+								 int skipprefix);
 static IndexOnlyScan *make_indexonlyscan(List *qptlist, List *qpqual,
 										 Index scanrelid, Oid indexid,
 										 List *indexqual, List *recheckqual,
 										 List *indexorderby,
 										 List *indextlist,
-										 ScanDirection indexscandir);
+										 ScanDirection indexscandir,
+										 int skipprefix);
 static BitmapIndexScan *make_bitmap_indexscan(Index scanrelid, Oid indexid,
 											  List *indexqual,
 											  List *indexqualorig);
@@ -3092,7 +3094,8 @@ create_indexscan_plan(PlannerInfo *root,
 												stripped_indexquals,
 												fixed_indexorderbys,
 												indexinfo->indextlist,
-												best_path->indexscandir);
+												best_path->indexscandir,
+												best_path->indexskipprefix);
 	else
 		scan_plan = (Scan *) make_indexscan(tlist,
 											qpqual,
@@ -3103,7 +3106,8 @@ create_indexscan_plan(PlannerInfo *root,
 											fixed_indexorderbys,
 											indexorderbys,
 											indexorderbyops,
-											best_path->indexscandir);
+											best_path->indexscandir,
+											best_path->indexskipprefix);
 
 	copy_generic_path_info(&scan_plan->plan, &best_path->path);
 
@@ -5436,7 +5440,8 @@ make_indexscan(List *qptlist,
 			   List *indexorderby,
 			   List *indexorderbyorig,
 			   List *indexorderbyops,
-			   ScanDirection indexscandir)
+			   ScanDirection indexscandir,
+			   int skipPrefixSize)
 {
 	IndexScan  *node = makeNode(IndexScan);
 	Plan	   *plan = &node->scan.plan;
@@ -5453,6 +5458,7 @@ make_indexscan(List *qptlist,
 	node->indexorderbyorig = indexorderbyorig;
 	node->indexorderbyops = indexorderbyops;
 	node->indexorderdir = indexscandir;
+	node->indexskipprefixsize = skipPrefixSize;
 
 	return node;
 }
@@ -5466,7 +5472,8 @@ make_indexonlyscan(List *qptlist,
 				   List *recheckqual,
 				   List *indexorderby,
 				   List *indextlist,
-				   ScanDirection indexscandir)
+				   ScanDirection indexscandir,
+				   int skipPrefixSize)
 {
 	IndexOnlyScan *node = makeNode(IndexOnlyScan);
 	Plan	   *plan = &node->scan.plan;
@@ -5482,6 +5489,7 @@ make_indexonlyscan(List *qptlist,
 	node->indexorderby = indexorderby;
 	node->indextlist = indextlist;
 	node->indexorderdir = indexscandir;
+	node->indexskipprefixsize = skipPrefixSize;
 
 	return node;
 }

@@ -326,6 +326,15 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 	RelationPreTruncate(rel);
 
 	/*
+	 * Delay the concurrent checkpoint's completion until this truncation
+	 * successfully completes. Otherwise the checkpoint may leave inconsistent
+	 * relation files if the following file truncation doesn't happen due to
+	 * file system failure or server crash.
+	 */
+	Assert((MyProc->delayChkpt & DELAY_CHKPT_COMPLETE) == 0);
+	MyProc->delayChkpt |= DELAY_CHKPT_COMPLETE;
+
+	/*
 	 * We WAL-log the truncation before actually truncating, which means
 	 * trouble if the truncation fails. If we then crash, the WAL replay
 	 * likely isn't going to succeed in the truncation either, and cause a
@@ -365,6 +374,10 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 
 	/* Do the real work to truncate relation forks */
 	smgrtruncate(RelationGetSmgr(rel), forks, nforks, blocks);
+
+
+	/* FSM is not WAL-logged, close the critical section here. */
+	MyProc->delayChkpt &= ~DELAY_CHKPT_COMPLETE;
 
 	/*
 	 * Update upper-level FSM pages to account for the truncation. This is

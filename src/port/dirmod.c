@@ -39,6 +39,192 @@
 #endif
 #endif
 
+
+#if defined(WIN32) && !defined(__CYGWIN__) && defined(_WIN32_WINNT_WIN10) && _WIN32_WINNT >= _WIN32_WINNT_WIN10
+
+#include <winternl.h>
+
+/*
+ * Checks Windows version using RtlGetVersion
+ * Version 1607 (Build 14393) is required for SetFileInformationByHandle
+ * function with FILE_RENAME_FLAG_POSIX_SEMANTICS flag
+*/
+typedef NTSYSAPI(NTAPI * PFN_RTLGETVERSION)
+(OUT PRTL_OSVERSIONINFOEXW lpVersionInformation);
+
+static int isWin1607 = -1;
+static int isWindows1607OrGreater()
+{
+	HMODULE ntdll;
+	PFN_RTLGETVERSION _RtlGetVersion = NULL;
+	OSVERSIONINFOEXW info;
+	if (isWin1607 >= 0) return isWin1607;
+	ntdll = LoadLibraryEx("ntdll.dll", NULL, 0);
+	if (ntdll == NULL)
+	{
+		DWORD		err = GetLastError();
+
+		_dosmaperr(err);
+		return -1;
+	}
+
+	_RtlGetVersion = (PFN_RTLGETVERSION)(pg_funcptr_t)
+		GetProcAddress(ntdll, "RtlGetVersion");
+	if (_RtlGetVersion == NULL)
+	{
+		DWORD		err = GetLastError();
+
+		FreeLibrary(ntdll);
+		_dosmaperr(err);
+		return -1;
+	}
+	info.dwOSVersionInfoSize = sizeof(OSVERSIONINFOEXW);
+	if (!NT_SUCCESS(_RtlGetVersion(&info)))
+	{
+		DWORD		err = GetLastError();
+
+		FreeLibrary(ntdll);
+		_dosmaperr(err);
+		return -1;
+	}
+
+	if (info.dwMajorVersion >= 10 && info.dwBuildNumber >= 14393) isWin1607 = 1;
+	else isWin1607 = 0;
+	FreeLibrary(ntdll);
+	return isWin1607;
+
+}
+
+typedef struct _FILE_RENAME_INFO_EXT {
+	FILE_RENAME_INFO fri;
+	WCHAR extra_space[MAX_PATH];
+} FILE_RENAME_INFO_EXT;
+
+/*
+ * pgrename_windows_posix_semantics  - uses SetFileInformationByHandle function
+ * with FILE_RENAME_FLAG_POSIX_SEMANTICS flag for atomic rename file
+ * working only on Windows 10 (1607) or later and  _WIN32_WINNT must be >= _WIN32_WINNT_WIN10
+ */
+static int
+pgrename_windows_posix_semantics(const char *from, const char *to)
+{
+	int err;
+	FILE_RENAME_INFO_EXT rename_info;
+	PFILE_RENAME_INFO prename_info;
+	HANDLE f_handle;
+	wchar_t from_w[MAX_PATH];
+
+	prename_info = (PFILE_RENAME_INFO)&rename_info;
+
+	if (MultiByteToWideChar(CP_ACP, 0, (LPCCH)from, -1, (LPWSTR)from_w, MAX_PATH) == 0) {
+		err = GetLastError();
+		_dosmaperr(err);
+		return -1;
+	}
+	if (MultiByteToWideChar(CP_ACP, 0, (LPCCH)to, -1, (LPWSTR)prename_info->FileName, MAX_PATH) == 0) {
+		err = GetLastError();
+		_dosmaperr(err);
+		return -1;
+	}
+	/*
+	 * To open a directory using CreateFile, specify the FILE_FLAG_BACKUP_SEMANTICS.
+	 * We use the FILE_FLAG_OPEN_REPARSE_POINT flag
+	 * If FILE_FLAG_OPEN_REPARSE_POINT is not specified: If an existing file is opened and it is
+	 * a symbolic link, the handle returned is a handle to the target.
+	 */
+	f_handle = CreateFileW(from_w,
+		GENERIC_READ | GENERIC_WRITE | DELETE,
+		FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+		NULL,
+		OPEN_EXISTING,
+		FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+		NULL);
+
+
+	if (f_handle == INVALID_HANDLE_VALUE)
+	{
+		err = GetLastError();
+
+		_dosmaperr(err);
+
+		return -1;
+	}
+
+	
+	prename_info->ReplaceIfExists = TRUE;
+	prename_info->Flags = FILE_RENAME_FLAG_POSIX_SEMANTICS | FILE_RENAME_FLAG_REPLACE_IF_EXISTS;
+
+	prename_info->RootDirectory = NULL;
+	prename_info->FileNameLength = wcslen(prename_info->FileName);
+	
+	if (!SetFileInformationByHandle(f_handle, FileRenameInfoEx, prename_info, sizeof(FILE_RENAME_INFO_EXT)))
+	{
+		err = GetLastError();
+
+		_dosmaperr(err);
+		CloseHandle(f_handle);
+		return -1;
+	}
+
+	CloseHandle(f_handle);
+	return 0;
+
+}
+
+/*
+ *	pgunlink_windows_posix_semantics function
+ */
+#define FILE_DISPOSITION_DELETE 0x00000001
+#define FILE_DISPOSITION_POSIX_SEMANTICS 0x00000002
+
+typedef struct _FILE_DISPOSITION_INFORMATION_EX {
+	ULONG Flags;
+} FILE_DISPOSITION_INFORMATION_EX, *PFILE_DISPOSITION_INFORMATION_EX;
+
+/*
+ * pgunlink_windows_posix_semantics  - uses SetFileInformationByHandle function
+ * with FILE_DISPOSITION_POSIX_SEMANTICS flag for delete file
+ * working only on Windows 10 (1607) or later and  _WIN32_WINNT must be >= _WIN32_WINNT_WIN10
+ */
+int
+pgunlink_windows_posix_semantics(const char *path)
+{
+	int err;
+	HANDLE hFile;
+	FILE_DISPOSITION_INFO_EX fdi;
+
+	hFile = CreateFile(path, DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 0, OPEN_EXISTING,
+		FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+
+
+	if (hFile == INVALID_HANDLE_VALUE)
+	{
+		err = GetLastError();
+		_dosmaperr(err);
+		return -1;
+	}
+
+	fdi.Flags = FILE_DISPOSITION_DELETE | FILE_DISPOSITION_POSIX_SEMANTICS;
+
+	if (!SetFileInformationByHandle(hFile, FileDispositionInfoEx, &fdi, sizeof(fdi)))
+	{
+		err = GetLastError();
+
+		_dosmaperr(err);
+		CloseHandle(hFile);
+		return -1;
+	}
+
+	CloseHandle(hFile);
+
+	return 0;
+
+}
+
+
+#endif 							/* #if defined(WIN32) && !defined(__CYGWIN__) && defined(_WIN32_WINNT_WIN10) && _WIN32_WINNT >= _WIN32_WINNT_WIN10 */
+
+
 #if defined(WIN32) || defined(__CYGWIN__)
 
 /*
@@ -48,6 +234,16 @@ int
 pgrename(const char *from, const char *to)
 {
 	int			loops = 0;
+
+	/*
+	* Calls pgrename_windows_posix_semantics on Windows 10 and later when _WIN32_WINNT >= _WIN32_WINNT_WIN10.
+	*/
+#if defined(_WIN32_WINNT_WIN10) && _WIN32_WINNT >= _WIN32_WINNT_WIN10 && !defined(__CYGWIN__)
+	if (isWindows1607OrGreater()>0) {
+		return pgrename_windows_posix_semantics(from, to);
+	}
+#endif
+
 
 	/*
 	 * We need to loop because even though PostgreSQL uses flags that allow
@@ -99,6 +295,14 @@ int
 pgunlink(const char *path)
 {
 	int			loops = 0;
+	/*
+	* Calls pgunlink_windows_posix_semantics on Windows 10 and later when _WIN32_WINNT >= _WIN32_WINNT_WIN10.
+	*/
+#if defined(_WIN32_WINNT_WIN10) && _WIN32_WINNT >= _WIN32_WINNT_WIN10 && !defined(__CYGWIN__)
+	if (isWindows1607OrGreater() > 0) {
+		return pgunlink_windows_posix_semantics(path);
+	}
+#endif
 
 	/*
 	 * We need to loop because even though PostgreSQL uses flags that allow

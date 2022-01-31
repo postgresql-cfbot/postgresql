@@ -18,14 +18,21 @@ include $(top_builddir)/src/Makefile.global
 export with_ssl
 
 # The sslfiles targets are separated into their own file due to interactions
-# with settings in Makefile.global.
+# with settings in Makefile.global. There is no library guard on with_ssl for
+# the targets, as nssfiles rely on the openssl generated files and also the
+# openssl toolchain to some degree.
 .PHONY: sslfiles sslfiles-clean
 sslfiles sslfiles-clean:
-	$(MAKE) -f $(srcdir)/sslfiles.mk $@
+	MKDIR_P="$(MKDIR_P)" $(MAKE) -f $(srcdir)/sslfiles.mk $@
+
+.PHONY: nssfiles nssfiles-clean
+nssfiles nssfiles-clean:
+	MKDIR_P="$(MKDIR_P)" $(MAKE) -f $(srcdir)/sslfiles_nss.mk $@
 
 clean distclean maintainer-clean:
 	rm -rf tmp_check
 	$(MAKE) -f $(srcdir)/sslfiles.mk $@
+	$(MAKE) -f $(srcdir)/sslfiles_nss.mk $@
 
 # Doesn't depend on sslfiles because we don't rebuild them by default
 check:

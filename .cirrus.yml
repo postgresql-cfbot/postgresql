@@ -140,7 +140,6 @@ LINUX_CONFIGURE_FEATURES: &LINUX_CONFIGURE_FEATURES >-
   --with-perl
   --with-python
   --with-selinux
-  --with-ssl=openssl
   --with-systemd
   --with-tcl --with-tclconfig=/usr/lib/tcl8.6/
   --with-uuid=ossp
@@ -194,6 +193,7 @@ task:
       ./configure \
         --enable-cassert --enable-debug --enable-tap-tests \
         --enable-nls \
+        --with-ssl=openssl \
         \
         ${LINUX_CONFIGURE_FEATURES} \
         \
@@ -209,6 +209,81 @@ task:
   test_world_script: |
     su postgres <<-EOF
       ulimit -c unlimited # default is 0
+      make -s ${CHECK} ${CHECKFLAGS} -j${TEST_JOBS}
+    EOF
+
+  on_failure:
+    <<: *on_failure
+    cores_script: src/tools/ci/cores_backtrace.sh linux /tmp/cores
+
+
+task:
+  name: Linux - Debian Bullseye (nss)
+
+  env:
+    CPUS: 4
+    BUILD_JOBS: 4
+    TEST_JOBS: 8 # experimentally derived to be a decent choice
+
+    CCACHE_DIR: /tmp/ccache_dir
+    DEBUGINFOD_URLS: "https://debuginfod.debian.net"
+
+    LINUX_CONFIGURE_FEATURES: *LINUX_CONFIGURE_FEATURES
+
+  only_if: $CIRRUS_CHANGE_MESSAGE !=~ '.*\nci-os-only:.*' || $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-os-only:[^\n]*linux.*'
+
+  compute_engine_instance:
+    image_project: $IMAGE_PROJECT
+    image: family/pg-ci-bullseye
+    platform: linux
+    cpu: $CPUS
+    memory: 2G
+
+  ccache_cache:
+    folder: ${CCACHE_DIR}
+
+  sysinfo_script: |
+    id
+    uname -a
+    cat /proc/cmdline
+    ulimit -a -H && ulimit -a -S
+    export
+  create_user_script: |
+    useradd -m postgres
+    chown -R postgres:postgres .
+    mkdir -p ${CCACHE_DIR}
+    chown -R postgres:postgres ${CCACHE_DIR}
+    echo '* - memlock 134217728' > /etc/security/limits.d/postgres.conf
+    su postgres -c "ulimit -l -H && ulimit -l -S"
+  setup_cores_script: |
+    mkdir -m 770 /tmp/cores
+    chown root:postgres /tmp/cores
+    sysctl kernel.core_pattern='/tmp/cores/%e-%s-%p.core'
+  install_script: |
+    DEBIAN_FRONTEND=noninteractive apt-get update && apt-get --yes install libnss3 libnss3-dev libnss3-tools libnspr4 libnspr4-dev
+
+  configure_script: |
+    su postgres <<-EOF
+      ./configure \
+        --enable-cassert --enable-debug --enable-tap-tests \
+        --enable-nls \
+        --with-ssl=nss \
+        \
+        ${LINUX_CONFIGURE_FEATURES} \
+        \
+        CC="ccache gcc" \
+        CXX="ccache g++" \
+        CLANG="ccache clang" \
+        CFLAGS="-O0 -ggdb" \
+        CXXFLAGS="-O0 -ggdb"
+    EOF
+  build_script: su postgres -c "make -s -j${BUILD_JOBS} world-bin"
+  upload_caches: ccache
+
+  test_world_script: |
+    su postgres <<-EOF
+      ulimit -c unlimited # default is 0
+      make -C src/test/ssl/ nssfiles
       make -s ${CHECK} ${CHECKFLAGS} -j${TEST_JOBS}
     EOF
 

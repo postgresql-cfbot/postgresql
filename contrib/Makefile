@@ -50,7 +50,7 @@ SUBDIRS = \
 		unaccent	\
 		vacuumlo
 
-ifeq ($(with_ssl),openssl)
+ifneq (,$(filter $(with_ssl),openssl nss))
 SUBDIRS += pgcrypto sslinfo
 else
 ALWAYS_SUBDIRS += pgcrypto sslinfo

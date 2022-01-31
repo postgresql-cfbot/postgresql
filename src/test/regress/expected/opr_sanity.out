@@ -193,6 +193,7 @@ WHERE p1.oid != p2.oid AND
     p2.prosrc NOT LIKE E'range\\_constructor_' AND
     p1.prosrc NOT LIKE E'multirange\\_constructor_' AND
     p2.prosrc NOT LIKE E'multirange\\_constructor_' AND
+    p2.prosrc NOT LIKE E'range\\_agg\\_finalfn' AND
     (p1.proargtypes[1] < p2.proargtypes[1])
 ORDER BY 1, 2;
          proargtypes         |       proargtypes        

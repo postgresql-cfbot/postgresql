@@ -1148,22 +1148,38 @@ CREATE TABLE fract_t (id BIGINT, PRIMARY KEY (id)) PARTITION BY RANGE (id);
 CREATE TABLE fract_t0 PARTITION OF fract_t FOR VALUES FROM ('0') TO ('1000');
 CREATE TABLE fract_t1 PARTITION OF fract_t FOR VALUES FROM ('1000') TO ('2000');
 
+CREATE TABLE fract_x (id BIGINT, PRIMARY KEY (id)) PARTITION BY RANGE (id);
+CREATE TABLE fract_x0 PARTITION OF fract_x FOR VALUES FROM ('0') TO ('1000');
+CREATE TABLE fract_x1 PARTITION OF fract_x FOR VALUES FROM ('1000') TO ('2000');
 -- insert data
 INSERT INTO fract_t (id) (SELECT generate_series(0, 1999));
 ANALYZE fract_t;
+INSERT INTO fract_x (id) (SELECT generate_series(0, 1999));
+ANALYZE fract_x;
 
--- verify plan; nested index only scans
+SET max_parallel_workers_per_gather = 0;
+SET enable_partitionwise_join = on;
+
+-- verify partition pruning
 SET max_parallel_workers_per_gather = 0;
 SET enable_partitionwise_join = on;
 
 EXPLAIN (COSTS OFF)
-SELECT * FROM fract_t x LEFT JOIN fract_t y USING (id) ORDER BY id ASC LIMIT 10;
+SELECT x.id FROM fract_x x LEFT JOIN fract_t y USING (id) ORDER BY id ASC LIMIT 10;
 
 EXPLAIN (COSTS OFF)
-SELECT * FROM fract_t x LEFT JOIN fract_t y USING (id) ORDER BY id DESC LIMIT 10;
+SELECT x.id FROM fract_x x LEFT JOIN fract_t y USING (id) ORDER BY id ASC LIMIT 10;
+
+-- verify plan; nested index only scans
+EXPLAIN (COSTS OFF)
+SELECT x.id, y.id FROM fract_x x LEFT JOIN fract_t y USING (id) ORDER BY x.id ASC LIMIT 10;
+
+EXPLAIN (COSTS OFF)
+SELECT x.id, y.id FROM fract_x x LEFT JOIN fract_t y USING (id) ORDER BY x.id DESC LIMIT 10;
 
 -- cleanup
 DROP TABLE fract_t;
+DROP TABLE fract_x;
 
 RESET max_parallel_workers_per_gather;
 RESET enable_partitionwise_join;

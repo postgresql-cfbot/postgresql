@@ -116,8 +116,8 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 {
 	Index		varno = rel->relid;
 	Relation	relation;
-	bool		hasindex;
 	List	   *indexinfos = NIL;
+	List	   *partedIndexinfos = NIL;
 
 	/*
 	 * We need not lock the relation since it was already locked, either by
@@ -154,17 +154,8 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 	/* Retrieve the parallel_workers reloption, or -1 if not set. */
 	rel->rel_parallel_workers = RelationGetParallelWorkers(relation, -1);
 
-	/*
-	 * Make list of indexes.  Ignore indexes on system catalogs if told to.
-	 * Don't bother with indexes for an inheritance parent, either.
-	 */
-	if (inhparent ||
-		(IgnoreSystemIndexes && IsSystemRelation(relation)))
-		hasindex = false;
-	else
-		hasindex = relation->rd_rel->relhasindex;
-
-	if (hasindex)
+	/* Make list of indexes. Ignore indexes on system catalogs if told to. */
+	if (!(IgnoreSystemIndexes && IsSystemRelation(relation)) && relation->rd_rel->relhasindex)
 	{
 		List	   *indexoidlist;
 		LOCKMODE	lmode;
@@ -213,10 +204,13 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 			}
 
 			/*
-			 * Ignore partitioned indexes, since they are not usable for
-			 * queries.
+			 * Don't add partitioned indexes to the indexlist, since they are
+			 * not usable by the executor. If they are unique add them to the
+			 * partedIndexlist instead, to use for further pruning. That is
+			 * relevant for the join pruning, if the outer relation is partitioned.
+			 * If they aren't that either, simply skip them.
 			 */
-			if (indexRelation->rd_rel->relkind == RELKIND_PARTITIONED_INDEX)
+			if (inhparent && (!index->indisunique || indexRelation->rd_rel->relkind != RELKIND_PARTITIONED_INDEX))
 			{
 				index_close(indexRelation, NoLock);
 				continue;
@@ -264,7 +258,40 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 				info->indexcollations[i] = indexRelation->rd_indcollation[i];
 			}
 
-			info->relam = indexRelation->rd_rel->relam;
+			/*
+			 * Fetch the index expressions and predicate, if any.  We must
+			 * modify the copies we obtain from the relcache to have the
+			 * correct varno for the parent relation, so that they match up
+			 * correctly against qual clauses.
+			 */
+			info->indexprs = RelationGetIndexExpressions(indexRelation);
+			info->indpred = RelationGetIndexPredicate(indexRelation);
+			if (info->indexprs && varno != 1)
+				ChangeVarNodes((Node *) info->indexprs, 1, varno, 0);
+			if (info->indpred && varno != 1)
+				ChangeVarNodes((Node *) info->indpred, 1, varno, 0);
+
+			info->unique = index->indisunique;
+			info->immediate = index->indimmediate;
+
+			/*
+			 * Don't add partitioned indexes to the indexlist, add them to the
+			 * partedIndexlist instead, since they are not usable by the
+			 * executor.
+			 */
+			if (indexRelation->rd_rel->relkind == RELKIND_PARTITIONED_INDEX)
+			{
+				index_close(indexRelation, NoLock);
+				partedIndexinfos = lappend(partedIndexinfos, info);
+				continue;
+			}
+
+			info->hypothetical = false;
+			info->indrestrictinfo = NIL;	/* set later, in indxpath.c */
+			info->predOK = false;	/* set later, in indxpath.c */
+
+			/* Build targetlist using the completed indexprs data */
+			info->indextlist = build_index_tlist(root, info, relation);
 
 			/* We copy just the fields we need, not all of rd_indam */
 			amroutine = indexRelation->rd_indam;
@@ -283,6 +310,8 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 
 			/* Fetch index opclass options */
 			info->opclassoptions = RelationGetIndexAttOptions(indexRelation, true);
+
+			info->relam = indexRelation->rd_rel->relam;
 
 			/*
 			 * Fetch the ordering information for the index, if any.
@@ -371,28 +400,6 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 			}
 
 			/*
-			 * Fetch the index expressions and predicate, if any.  We must
-			 * modify the copies we obtain from the relcache to have the
-			 * correct varno for the parent relation, so that they match up
-			 * correctly against qual clauses.
-			 */
-			info->indexprs = RelationGetIndexExpressions(indexRelation);
-			info->indpred = RelationGetIndexPredicate(indexRelation);
-			if (info->indexprs && varno != 1)
-				ChangeVarNodes((Node *) info->indexprs, 1, varno, 0);
-			if (info->indpred && varno != 1)
-				ChangeVarNodes((Node *) info->indpred, 1, varno, 0);
-
-			/* Build targetlist using the completed indexprs data */
-			info->indextlist = build_index_tlist(root, info, relation);
-
-			info->indrestrictinfo = NIL;	/* set later, in indxpath.c */
-			info->predOK = false;	/* set later, in indxpath.c */
-			info->unique = index->indisunique;
-			info->immediate = index->indimmediate;
-			info->hypothetical = false;
-
-			/*
 			 * Estimate the index size.  If it's not a partial index, we lock
 			 * the number-of-tuples estimate to equal the parent table; if it
 			 * is partial then we have to use the same methods as we would for
@@ -441,6 +448,7 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 	}
 
 	rel->indexlist = indexinfos;
+	rel->partedIndexlist = partedIndexinfos;
 
 	rel->statlist = get_relation_statistics(rel, relation);
 

@@ -247,6 +247,7 @@ struct PlannerInfo
 									 * subquery outputs */
 
 	List	   *eq_classes;		/* list of active EquivalenceClasses */
+	List	   *unique_exprs;		/* List of unique expr */
 
 	bool		ec_merging_done;	/* set true once ECs are canonical */
 
@@ -691,6 +692,13 @@ typedef struct RelOptInfo
 	/* default result targetlist for Paths scanning this relation */
 	struct PathTarget *reltarget;	/* list of Vars/Exprs, cost, width */
 
+	Bitmapset	**notnull_attrs; /* The attno which is not null after evalating
+								  * all the quals on this relation, for baserel,
+								  * the len would always 1. and for others the array
+								  * index is relid from relids.
+								  */
+	List		*uniquekeys; /* A list of UniqueKey. */
+
 	/* materialization information */
 	List	   *pathlist;		/* Path structures */
 	List	   *ppilist;		/* ParamPathInfos used in pathlist */
@@ -1069,6 +1077,24 @@ typedef struct PathKey
 	int			pk_strategy;	/* sort direction (ASC or DESC) */
 	bool		pk_nulls_first; /* do NULLs come before normal values? */
 } PathKey;
+
+
+typedef struct UnqiueKey
+{
+	NodeTag	type;
+	Bitmapset	*unique_expr_indexes;
+	bool	multi_nulls;
+	bool	use_for_distinct;  /* true if it is used in distinct-pathkey, in this case
+								* we would never check if we should discard it during
+								* join search.
+								*/
+} UniqueKey;
+
+typedef struct SingleRow
+{
+	NodeTag	type;
+	Index		relid;
+} SingleRow;
 
 /*
  * VolatileFunctionStatus -- allows nodes to cache their

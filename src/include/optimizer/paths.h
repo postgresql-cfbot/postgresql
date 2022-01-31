@@ -135,6 +135,9 @@ extern EquivalenceClass *get_eclass_for_sort_expr(PlannerInfo *root,
 												  Index sortref,
 												  Relids rel,
 												  bool create_it);
+extern EquivalenceClass *find_ec_matching_expr(PlannerInfo *root,
+											   Expr *expr,
+											   RelOptInfo *rel);
 extern EquivalenceMember *find_ec_member_matching_expr(EquivalenceClass *ec,
 													   Expr *expr,
 													   Relids relids);
@@ -143,7 +146,12 @@ extern EquivalenceMember *find_computable_ec_member(PlannerInfo *root,
 													List *exprs,
 													Relids relids,
 													bool require_parallel_safe);
+extern bool ec_useful_for_merging(PlannerInfo *root, RelOptInfo *rel,
+								  EquivalenceClass *ec);
 extern Expr *find_em_expr_for_rel(EquivalenceClass *ec, RelOptInfo *rel);
+extern List *build_equivalanceclass_list_for_exprs(PlannerInfo *root,
+												   List *exprs,
+												   RelOptInfo *rel);
 extern bool relation_can_be_sorted_early(PlannerInfo *root, RelOptInfo *rel,
 										 EquivalenceClass *ec,
 										 bool require_parallel_safe);
@@ -255,4 +263,19 @@ extern PathKey *make_canonical_pathkey(PlannerInfo *root,
 extern void add_paths_to_append_rel(PlannerInfo *root, RelOptInfo *rel,
 									List *live_childrels);
 
+extern void populate_baserel_uniquekeys(PlannerInfo *root,
+										RelOptInfo *baserel);
+extern Var *find_var_for_subquery_tle(RelOptInfo *rel, TargetEntry *tle);
+extern void populate_baserel_uniquekeys(PlannerInfo *root,
+										RelOptInfo *baserel);
+extern void populate_joinrel_uniquekeys(PlannerInfo *root, RelOptInfo *joinrel,
+										RelOptInfo *outerrel, RelOptInfo *innerrel,
+										List *restrictlist, JoinType jointype);
+extern void populate_uniquekeys_from_pathkeys(PlannerInfo *root, RelOptInfo *rel,
+											  List *pathkeys);
+extern void populate_subquery_uniquekeys(PlannerInfo *root, RelOptInfo *rel,
+										 RelOptInfo *sub_final_rel);
+extern void simple_copy_uniquekeys(RelOptInfo *srcrel, RelOptInfo *tarrel);
+extern bool relation_is_distinct_for(PlannerInfo *root, RelOptInfo *rel,
+									 List *distinct_pathkey);
 #endif							/* PATHS_H */

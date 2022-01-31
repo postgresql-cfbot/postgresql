@@ -3367,6 +3367,10 @@ ProcessInterrupts(void)
 
 	if (LogMemoryContextPending)
 		ProcessLogMemoryContextInterrupt();
+
+	/* Perform logging of backtrace of this process */
+	if (LogBacktracePending)
+		ProcessLogBacktraceInterrupt();
 }
 
 

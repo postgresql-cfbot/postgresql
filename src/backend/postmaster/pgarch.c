@@ -749,9 +749,9 @@ pgarch_die(int code, Datum arg)
  * Interrupt handler for WAL archiver process.
  *
  * This is called in the loops pgarch_MainLoop and pgarch_ArchiverCopyLoop.
- * It checks for barrier events, config update and request for logging of
- * memory contexts, but not shutdown request because how to handle
- * shutdown request is different between those loops.
+ * It checks for barrier events, config update, request for logging of
+ * memory contexts and backtrace, but not shutdown request because how to
+ * handle shutdown request is different between those loops.
  */
 static void
 HandlePgArchInterrupts(void)
@@ -768,4 +768,8 @@ HandlePgArchInterrupts(void)
 	/* Perform logging of memory contexts of this process */
 	if (LogMemoryContextPending)
 		ProcessLogMemoryContextInterrupt();
+
+	/* Perform logging of backtrace of this process */
+	if (LogBacktracePending)
+		ProcessLogBacktraceInterrupt();
 }

@@ -66,6 +66,8 @@ extern PGPROC *BackendPidGetProc(int pid);
 extern PGPROC *BackendPidGetProcWithLock(int pid);
 extern int	BackendXidGetPid(TransactionId xid);
 extern bool IsBackendPid(int pid);
+extern PGPROC *CheckPostgresProcessId(int pid, bool chk_auxiliary_proc,
+									  BackendId *backendId);
 
 extern VirtualTransactionId *GetCurrentVirtualXIDs(TransactionId limitXmin,
 												   bool excludeXmin0, bool allDbs, int excludeVacuum,

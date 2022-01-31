@@ -613,6 +613,45 @@ ProcessBarrierPlaceholder(void)
 }
 
 /*
+ * HandleLogBacktraceInterrupt - Handle receipt of an interrupt requesting to
+ * log a backtrace.
+ *
+ * All the actual work is deferred to ProcessLogBacktraceInterrupt(),
+ * because we cannot safely emit a log message inside the signal handler.
+ */
+static void
+HandleLogBacktraceInterrupt(void)
+{
+	InterruptPending = true;
+	LogBacktracePending = true;
+	/* latch will be set by procsignal_sigusr1_handler */
+}
+
+/*
+ * ProcessLogBacktraceInterrupt - Perform logging of backtrace of this
+ * backend process.
+ *
+ * Any backend that participates in ProcSignal signaling must arrange
+ * to call this function if we see LogBacktracePending set.
+ * CHECK_FOR_INTERRUPTS() or from process specific interrupt handlers.
+ */
+void
+ProcessLogBacktraceInterrupt(void)
+{
+	LogBacktracePending = false;
+
+	/*
+	 * Use LOG_SERVER_ONLY to prevent this message from being sent to the
+	 * connected client.
+	 */
+	ereport(LOG_SERVER_ONLY,
+			errhidestmt(true),
+			errhidecontext(true),
+			errmsg_internal("logging backtrace of PID %d", MyProcPid));
+	set_backtrace(NULL, 0);
+}
+
+/*
  * CheckProcSignal - check to see if a particular reason has been
  * signaled, and clear the signal flag.  Should be called after receiving
  * SIGUSR1.
@@ -660,6 +699,9 @@ procsignal_sigusr1_handler(SIGNAL_ARGS)
 
 	if (CheckProcSignal(PROCSIG_LOG_MEMORY_CONTEXT))
 		HandleLogMemoryContextInterrupt();
+
+	if (CheckProcSignal(PROCSIG_LOG_BACKTRACE))
+		HandleLogBacktraceInterrupt();
 
 	if (CheckProcSignal(PROCSIG_RECOVERY_CONFLICT_DATABASE))
 		RecoveryConflictInterrupt(PROCSIG_RECOVERY_CONFLICT_DATABASE);

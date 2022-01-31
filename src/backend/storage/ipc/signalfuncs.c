@@ -48,31 +48,12 @@
 static int
 pg_signal_backend(int pid, int sig)
 {
-	PGPROC	   *proc = BackendPidGetProc(pid);
+	PGPROC  *proc;
 
-	/*
-	 * BackendPidGetProc returns NULL if the pid isn't valid; but by the time
-	 * we reach kill(), a process for which we get a valid proc here might
-	 * have terminated on its own.  There's no way to acquire a lock on an
-	 * arbitrary process to prevent that. But since so far all the callers of
-	 * this mechanism involve some request for ending the process anyway, that
-	 * it might end on its own first is not a problem.
-	 *
-	 * Note that proc will also be NULL if the pid refers to an auxiliary
-	 * process or the postmaster (neither of which can be signaled via
-	 * pg_signal_backend()).
-	 */
-	if (proc == NULL)
-	{
-		/*
-		 * This is just a warning so a loop-through-resultset will not abort
-		 * if one backend terminated on its own during the run.
-		 */
-		ereport(WARNING,
-				(errmsg("PID %d is not a PostgreSQL backend process", pid)));
-
+	/* Users can only signal valid backend or an auxiliary process. */
+	proc = CheckPostgresProcessId(pid, false, NULL);
+	if (!proc)
 		return SIGNAL_BACKEND_ERROR;
-	}
 
 	/* Only allow superusers to signal superuser-owned backends. */
 	if (superuser_arg(proc->roleId) && !superuser())
@@ -301,5 +282,51 @@ pg_rotate_logfile_v2(PG_FUNCTION_ARGS)
 	}
 
 	SendPostmasterSignal(PMSIGNAL_ROTATE_LOGFILE);
+	PG_RETURN_BOOL(true);
+}
+
+/*
+ * pg_log_backtrace
+ *		Signal a backend or an auxiliary process to log its backtrace.
+ *
+ * By default, only superusers are allowed to signal to log the backtrace
+ * because allowing any users to issue this request at an unbounded
+ * rate would cause lots of log messages and which can lead to denial of
+ * service. Additional roles can be permitted with GRANT.
+ *
+ * On receipt of this signal, a backend or an auxiliary process sets the flag
+ * in the signal handler, which causes the next CHECK_FOR_INTERRUPTS()
+ * or process-specific interrupt handler to log the backtrace.
+ */
+Datum
+pg_log_backtrace(PG_FUNCTION_ARGS)
+{
+	int			pid = PG_GETARG_INT32(0);
+	BackendId   backendId;
+
+#ifndef HAVE_BACKTRACE_SYMBOLS
+	ereport(WARNING,
+			errmsg("backtrace generation is not supported by this installation"),
+			errhint("You need to rebuild PostgreSQL using a library containing backtrace_symbols."));
+	PG_RETURN_BOOL(false);
+#endif
+
+	/* Get the process id of the backend or an auxiliary process */
+	if (!CheckPostgresProcessId(pid, true, &backendId))
+		PG_RETURN_BOOL(false);
+
+	/*
+	 * If the given process is a backend, its backend id from PGPROC is used in
+	 * SendProcSignal() later to speed up the operation. Otherwise,
+	 * InvalidBackendId is used because auxiliary processes (except the startup
+	 * process) don't have a valid backend id.
+	 */
+	if (SendProcSignal(pid, PROCSIG_LOG_BACKTRACE, backendId))
+	{
+		ereport(WARNING,
+				(errmsg("could not send signal to process %d: %m", pid)));
+		PG_RETURN_BOOL(false);
+	}
+
 	PG_RETURN_BOOL(true);
 }

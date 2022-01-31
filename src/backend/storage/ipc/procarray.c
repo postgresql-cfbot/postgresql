@@ -3141,6 +3141,62 @@ HaveVirtualXIDsDelayingChkpt(VirtualTransactionId *vxids, int nvxids)
 }
 
 /*
+ * CheckPostgresProcessId -- check if the process with given pid is a backend
+ * or an auxiliary process and return its PGPROC.
+ *
+ * Returns NULL if not found.
+ */
+PGPROC *
+CheckPostgresProcessId(int pid, bool chk_auxiliary_proc, BackendId *backendId)
+{
+	PGPROC	   *result;
+
+	/*
+	 * Get backend id from PGPROC for a backend. Since auxiliary processes
+	 * (except the startup process) don't have a valid backend id, return
+	 * InvalidBackendId.
+	 */
+	if (backendId)
+		*backendId = InvalidBackendId;
+
+	/* See if the process with given pid is a backend */
+	result = BackendPidGetProc(pid);
+
+	if (result && backendId)
+		*backendId = result->backendId;
+	else if (chk_auxiliary_proc)
+	{
+		/* See if the process with given pid is an auxiliary process */
+		result = AuxiliaryPidGetProc(pid);
+	}
+
+	/*
+	 * BackendPidGetProc() and AuxiliaryPidGetProc() return NULL if the pid
+	 * isn't valid; but by the time we reach kill(), a process for which we
+	 * get a valid proc here might have terminated on its own.  There's no way
+	 * to acquire a lock on an arbitrary process to prevent that. But since
+	 * this mechanism is usually used to debug a backend or an auxiliary
+	 * process running and consuming lots of memory, that it might end on its
+	 * own first and its memory contexts are not logged is not a problem.
+	 */
+	if (result == NULL)
+	{
+		/*
+		 * This is just a warning so a loop-through-resultset will not abort
+		 * if one backend terminated on its own during the run.
+		 */
+		if (chk_auxiliary_proc)
+			ereport(WARNING,
+					(errmsg("PID %d is not a PostgreSQL server process", pid)));
+		else
+			ereport(WARNING,
+					(errmsg("PID %d is not a PostgreSQL backend process", pid)));
+	}
+
+	return result;
+}
+
+/*
  * BackendPidGetProc -- get a backend's PGPROC given its PID
  *
  * Returns NULL if not found.  Note that it is up to the caller to be

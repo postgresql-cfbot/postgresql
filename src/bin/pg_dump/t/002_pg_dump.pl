@@ -3716,7 +3716,7 @@ $node->psql('postgres', 'create database regress_public_owner;');
 
 # Start with number of command_fails_like()*2 tests below (each
 # command_fails_like is actually 2 tests)
-my $num_tests = 12;
+my $num_tests = 27;
 
 foreach my $run (sort keys %pgdump_runs)
 {
@@ -3888,6 +3888,65 @@ command_fails_like(
 	[ 'pg_dump', '-p', "$port", '--strict-names', '-t', 'nonexistent*' ],
 	qr/\Qpg_dump: error: no matching tables were found for pattern\E/,
 	'no matching tables');
+
+#########################################
+# Test invalid multipart database names
+
+$node->command_fails_like(
+	[ 'pg_dumpall', '--exclude-database', 'myhost.mydb' ],
+	qr/pg_dumpall: error: improper qualified name \(too many dotted names\): myhost\.mydb/,
+	'pg_dumpall: option --exclude-database rejects multipart database names'
+);
+
+#########################################
+# Test valid database exclusion patterns
+$node->command_ok(
+	[ 'pg_dumpall', '--exclude-database', '??*' ],
+	'pg_dumpall: option --exclude-database handles database name patterns'
+);
+
+
+#########################################
+# Test invalid multipart schema names
+
+$node->command_fails_like(
+	[ 'pg_dump', '--schema', 'myhost.mydb.myschema' ],
+	qr/pg_dump: error: improper qualified name \(too many dotted names\): myhost\.mydb\.myschema/,
+	'pg_dump: option --schema rejects three-part schema names'
+);
+
+$node->command_fails_like(
+	[ 'pg_dump', '--schema', 'otherdb.myschema' ],
+	qr/pg_dump: error: cross-database references are not implemented: otherdb\.myschema/,
+	'pg_dump: option --schema rejects cross-database multipart schema names'
+);
+
+$node->command_fails_like(
+	[ 'pg_dump', '--schema', 'otherdb.myschema' ],
+	qr/pg_dump: error: cross-database references are not implemented: otherdb\.myschema/,
+	'pg_dump: option --schema rejects cross-database multipart schema names'
+);
+
+#########################################
+# Test invalid multipart relation names
+
+$node->command_fails_like(
+	[ 'pg_dump', '--table', 'myhost.mydb.myschema.mytable' ],
+	qr/pg_dump: error: improper relation name \(too many dotted names\): myhost\.mydb\.myschema\.mytable/,
+	'pg_dump: option --table rejects four-part table names'
+);
+
+$node->command_fails_like(
+	[ 'pg_dump', '--table', 'otherdb.pg_catalog.pg_class' ],
+	qr/pg_dump: error: cross-database references are not implemented: otherdb\.pg_catalog\.pg_class/,
+	'pg_dump: option --table rejects cross-database three part table names'
+);
+
+$node->command_fails_like(
+	[ 'pg_dump', '--table', 'ma??.pg_catalog.pg_class' ],
+	qr/pg_dump: error: database name must be literal: ma\?\?\.pg_catalog\.pg_class/,
+	'pg_dump: option --table rejects non-literal database name'
+);
 
 #########################################
 # Run all runs

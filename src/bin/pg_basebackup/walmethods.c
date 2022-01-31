@@ -107,7 +107,10 @@ dir_get_file_name(const char *pathname, const char *temp_suffix)
 static Walfile
 dir_open_for_write(const char *pathname, const char *temp_suffix, size_t pad_to_size)
 {
-	char		tmppath[MAXPGPATH];
+	static char targetpath[MAXPGPATH];
+	static char tmpsuffixpath[MAXPGPATH];
+	bool		shouldcreatetempfile;
+	int			fileflags;
 	char	   *filename;
 	int			fd;
 	DirectoryMethodFile *f;
@@ -123,7 +126,7 @@ dir_open_for_write(const char *pathname, const char *temp_suffix, size_t pad_to_
 	dir_clear_error();
 
 	filename = dir_get_file_name(pathname, temp_suffix);
-	snprintf(tmppath, sizeof(tmppath), "%s/%s",
+	snprintf(targetpath, sizeof(targetpath), "%s/%s",
 			 dir_data->basedir, filename);
 	pg_free(filename);
 
@@ -131,13 +134,41 @@ dir_open_for_write(const char *pathname, const char *temp_suffix, size_t pad_to_
 	 * Open a file for non-compressed as well as compressed files. Tracking
 	 * the file descriptor is important for dir_sync() method as gzflush()
 	 * does not do any system calls to fsync() to make changes permanent on
-	 * disk.
+	 * disk. Create a temporary file if pad_to_size is great than zero to
+	 * ensure return a fully initialized file.
 	 */
-	fd = open(tmppath, O_WRONLY | O_CREAT | PG_BINARY, pg_file_create_mode);
+	if (pad_to_size == 0)
+	{
+		fileflags = O_WRONLY | O_CREAT | PG_BINARY;
+		shouldcreatetempfile = false;
+	}
+	else
+	{
+		fileflags = O_WRONLY | PG_BINARY;
+		shouldcreatetempfile = true;
+	}
+
+	fd = open(targetpath, fileflags, pg_file_create_mode);
 	if (fd < 0)
 	{
-		dir_data->lasterrno = errno;
-		return NULL;
+		if (errno != ENOENT || !shouldcreatetempfile)
+		{
+			dir_data->lasterrno = errno;
+			return NULL;
+		}
+
+		/*
+		 * If file not already exists and requires padding then open file with create mode.
+		 */
+		snprintf(tmpsuffixpath, sizeof(tmpsuffixpath), "%s%s",
+			targetpath,	".temp");
+		
+		fd = open(tmpsuffixpath, fileflags | O_CREAT, pg_file_create_mode);
+		if (fd < 0)
+		{
+			dir_data->lasterrno = errno;
+			return NULL;
+		}
 	}
 
 #ifdef HAVE_LIBZ
@@ -232,12 +263,23 @@ dir_open_for_write(const char *pathname, const char *temp_suffix, size_t pad_to_
 	 * fsync WAL file and containing directory, to ensure the file is
 	 * persistently created and zeroed (if padded). That's particularly
 	 * important when using synchronous mode, where the file is modified and
-	 * fsynced in-place, without a directory fsync.
+	 * fsynced in-place, without a directory fsync. While padding > 0 cases,
+	 * durable_rename already fsync both the files and the containing directory
+	 * so we can skip it.
 	 */
-	if (dir_data->sync)
+	if (shouldcreatetempfile)
 	{
-		if (fsync_fname(tmppath, false) != 0 ||
-			fsync_parent_path(tmppath) != 0)
+		if (durable_rename(tmpsuffixpath, targetpath) != 0)
+		{
+			close(fd);
+			unlink(tmpsuffixpath);
+			return NULL;
+		}
+	}
+	else if (dir_data->sync)
+	{
+		if (fsync_fname(targetpath, false) != 0 ||
+			fsync_parent_path(targetpath) != 0)
 		{
 			dir_data->lasterrno = errno;
 #ifdef HAVE_LIBZ
@@ -277,7 +319,7 @@ dir_open_for_write(const char *pathname, const char *temp_suffix, size_t pad_to_
 	f->fd = fd;
 	f->currpos = 0;
 	f->pathname = pg_strdup(pathname);
-	f->fullpath = pg_strdup(tmppath);
+	f->fullpath = pg_strdup(targetpath);
 	if (temp_suffix)
 		f->temp_suffix = pg_strdup(temp_suffix);
 

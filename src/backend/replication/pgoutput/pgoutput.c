@@ -132,6 +132,17 @@ typedef struct RelationSyncEntry
 	TupleConversionMap *map;
 } RelationSyncEntry;
 
+/*
+ * Maintain a per-transaction level variable to track whether the
+ * transaction has sent BEGIN. BEGIN is only sent when the first
+ * change in a transaction is processed. This makes it possible
+ * to skip transactions that are empty.
+ */
+typedef struct PGOutputTxnData
+{
+	bool sent_begin_txn;    /* flag indicating whether BEGIN has been sent */
+} PGOutputTxnData;
+
 /* Map used to remember which relation schemas we sent. */
 static HTAB *RelationSyncCache = NULL;
 
@@ -396,15 +407,41 @@ pgoutput_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
 }
 
 /*
- * BEGIN callback
+ * BEGIN callback.
+ *
+ * Don't send BEGIN message here. Instead, postpone it until the first
+ * change. In logical replication, a common scenario is to replicate a set
+ * of tables (instead of all tables) and transactions whose changes were on
+ * table(s) that are not published will produce empty transactions. These
+ * empty transactions will send BEGIN and COMMIT messages to subscribers,
+ * using bandwidth on something with little/no use for logical replication.
  */
 static void
 pgoutput_begin_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn)
 {
+	PGOutputTxnData    *txndata = MemoryContextAllocZero(ctx->context,
+														 sizeof(PGOutputTxnData));
+
+	txndata->sent_begin_txn = false;
+	txn->output_plugin_private = txndata;
+}
+
+/*
+ * Send BEGIN.
+ * This is where the BEGIN is actually sent. This is called
+ * while processing the first change of the transaction.
+ */
+static void
+pgoutput_begin(LogicalDecodingContext *ctx, ReorderBufferTXN *txn)
+{
 	bool		send_replication_origin = txn->origin_id != InvalidRepOriginId;
+	PGOutputTxnData	*txndata = (PGOutputTxnData *) txn->output_plugin_private;
+
+	Assert(txndata);
 
 	OutputPluginPrepareWrite(ctx, !send_replication_origin);
 	logicalrep_write_begin(ctx->out, txn);
+	txndata->sent_begin_txn = true;
 
 	send_repl_origin(ctx, txn->origin_id, txn->origin_lsn,
 					 send_replication_origin);
@@ -419,7 +456,25 @@ static void
 pgoutput_commit_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 					XLogRecPtr commit_lsn)
 {
-	OutputPluginUpdateProgress(ctx);
+	PGOutputTxnData	*txndata = (PGOutputTxnData *) txn->output_plugin_private;
+	bool            skip;
+
+	Assert(txndata);
+
+	/*
+	 * If a BEGIN message was not yet sent, then it means there were no relevant
+	 * changes encountered, so we can skip the COMMIT message too.
+	 */
+	skip = !txndata->sent_begin_txn;
+	txn->output_plugin_private = NULL;
+	OutputPluginUpdateProgress(ctx, skip);
+
+	pfree(txndata);
+	if (skip)
+	{
+		elog(DEBUG1, "skipping replication of an empty transaction");
+		return;
+	}
 
 	OutputPluginPrepareWrite(ctx, true);
 	logicalrep_write_commit(ctx->out, txn, commit_lsn);
@@ -433,6 +488,8 @@ static void
 pgoutput_begin_prepare_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn)
 {
 	bool		send_replication_origin = txn->origin_id != InvalidRepOriginId;
+	PGOutputTxnData    *txndata = MemoryContextAllocZero(ctx->context,
+														 sizeof(PGOutputTxnData));
 
 	OutputPluginPrepareWrite(ctx, !send_replication_origin);
 	logicalrep_write_begin_prepare(ctx->out, txn);
@@ -441,6 +498,8 @@ pgoutput_begin_prepare_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn)
 					 send_replication_origin);
 
 	OutputPluginWrite(ctx, true);
+	txndata->sent_begin_txn = true;
+	txn->output_plugin_private = txndata;
 }
 
 /*
@@ -450,7 +509,7 @@ static void
 pgoutput_prepare_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 					 XLogRecPtr prepare_lsn)
 {
-	OutputPluginUpdateProgress(ctx);
+	OutputPluginUpdateProgress(ctx, false);
 
 	OutputPluginPrepareWrite(ctx, true);
 	logicalrep_write_prepare(ctx->out, txn, prepare_lsn);
@@ -464,7 +523,17 @@ static void
 pgoutput_commit_prepared_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 							 XLogRecPtr commit_lsn)
 {
-	OutputPluginUpdateProgress(ctx);
+	PGOutputTxnData	*txndata = (PGOutputTxnData *) txn->output_plugin_private;
+
+	/*
+	 * A BEGIN PREPARE will always be sent for a prepared transaction.
+	 * A COMMIT PREPARED after a shutdown will not have the txndata,
+	 * so check before freeing.
+	 */
+	if (txndata)
+		pfree(txndata);
+	txn->output_plugin_private = NULL;
+	OutputPluginUpdateProgress(ctx, false);
 
 	OutputPluginPrepareWrite(ctx, true);
 	logicalrep_write_commit_prepared(ctx->out, txn, commit_lsn);
@@ -480,7 +549,17 @@ pgoutput_rollback_prepared_txn(LogicalDecodingContext *ctx,
 							   XLogRecPtr prepare_end_lsn,
 							   TimestampTz prepare_time)
 {
-	OutputPluginUpdateProgress(ctx);
+	PGOutputTxnData	*txndata = (PGOutputTxnData *) txn->output_plugin_private;
+
+	/*
+	 * A BEGIN PREPARE will always be sent for a prepared transaction.
+	 * A ROLLBACK PREPARED after a shutdown will not have the txndata,
+	 * so check before freeing.
+	 */
+	if (txndata)
+		pfree(txndata);
+	txn->output_plugin_private = NULL;
+	OutputPluginUpdateProgress(ctx, false);
 
 	OutputPluginPrepareWrite(ctx, true);
 	logicalrep_write_rollback_prepared(ctx->out, txn, prepare_end_lsn,
@@ -630,10 +709,14 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 				Relation relation, ReorderBufferChange *change)
 {
 	PGOutputData *data = (PGOutputData *) ctx->output_plugin_private;
+	PGOutputTxnData *txndata = (PGOutputTxnData *) txn->output_plugin_private;
 	MemoryContext old;
 	RelationSyncEntry *relentry;
 	TransactionId xid = InvalidTransactionId;
 	Relation	ancestor = NULL;
+
+	/* If not streaming, should have setup txndata as part of BEGIN/BEGIN PREPARE */
+	Assert(in_streaming || txndata);
 
 	if (!is_publishable_relation(relation))
 		return;
@@ -667,6 +750,12 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 		default:
 			Assert(false);
 	}
+
+	/*
+	 * Output BEGIN if we haven't yet, unless streaming.
+	 */
+	if (!in_streaming && !txndata->sent_begin_txn)
+		pgoutput_begin(ctx, txn);
 
 	/* Avoid leaking memory by using and resetting our own context */
 	old = MemoryContextSwitchTo(data->context);
@@ -770,6 +859,7 @@ pgoutput_truncate(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 				  int nrelations, Relation relations[], ReorderBufferChange *change)
 {
 	PGOutputData *data = (PGOutputData *) ctx->output_plugin_private;
+	PGOutputTxnData *txndata;
 	MemoryContext old;
 	RelationSyncEntry *relentry;
 	int			i;
@@ -813,6 +903,17 @@ pgoutput_truncate(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 
 	if (nrelids > 0)
 	{
+		txndata = (PGOutputTxnData *) txn->output_plugin_private;
+
+		/* If not streaming, should have setup txndata as part of BEGIN/BEGIN PREPARE */
+		Assert(in_streaming || txndata);
+
+		/*
+		 * output BEGIN if we haven't yet, unless streaming.
+		 */
+		if (!in_streaming && !txndata->sent_begin_txn)
+			pgoutput_begin(ctx, txn);
+
 		OutputPluginPrepareWrite(ctx, true);
 		logicalrep_write_truncate(ctx->out,
 								  xid,
@@ -844,6 +945,19 @@ pgoutput_message(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	 */
 	if (in_streaming)
 		xid = txn->xid;
+
+	/*
+	 * Output BEGIN if we haven't yet.
+	 * Avoid for streaming and non-transactional messages.
+	 */
+	if (!in_streaming && transactional)
+	{
+		PGOutputTxnData *txndata = (PGOutputTxnData *) txn->output_plugin_private;
+
+		Assert(txndata);
+		if (!txndata->sent_begin_txn)
+			pgoutput_begin(ctx, txn);
+	}
 
 	OutputPluginPrepareWrite(ctx, true);
 	logicalrep_write_message(ctx->out,
@@ -1011,7 +1125,7 @@ pgoutput_stream_commit(struct LogicalDecodingContext *ctx,
 	Assert(!in_streaming);
 	Assert(rbtxn_is_streamed(txn));
 
-	OutputPluginUpdateProgress(ctx);
+	OutputPluginUpdateProgress(ctx, false);
 
 	OutputPluginPrepareWrite(ctx, true);
 	logicalrep_write_stream_commit(ctx->out, txn, commit_lsn);
@@ -1032,7 +1146,7 @@ pgoutput_stream_prepare_txn(LogicalDecodingContext *ctx,
 {
 	Assert(rbtxn_is_streamed(txn));
 
-	OutputPluginUpdateProgress(ctx);
+	OutputPluginUpdateProgress(ctx, false);
 	OutputPluginPrepareWrite(ctx, true);
 	logicalrep_write_stream_prepare(ctx->out, txn, prepare_lsn);
 	OutputPluginWrite(ctx, true);

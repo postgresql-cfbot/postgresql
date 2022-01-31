@@ -90,6 +90,7 @@ extern void SyncRepCleanupAtProcExit(void);
 /* called by wal sender */
 extern void SyncRepInitConfig(void);
 extern void SyncRepReleaseWaiters(void);
+extern bool SyncRepEnabled(void);
 
 /* called by wal sender and user backend */
 extern int	SyncRepGetCandidateStandbys(SyncRepStandbyData **standbys);

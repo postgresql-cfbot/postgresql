@@ -19,6 +19,7 @@
 #define GEO_DECLS_H
 
 #include <math.h>
+#include <limits.h>
 
 #include "fmgr.h"
 
@@ -39,6 +40,18 @@
  */
 
 #define EPSILON					1.0E-06
+
+/* helper function for tri-state checking */
+static inline tsbool
+FP_TSCHECK(double A, double B, bool cond)
+{
+	if (cond)
+		return TS_TRUE;
+	if (!isnan(A) && !isnan(B))
+		return TS_FALSE;
+
+	return TS_NULL;
+}
 
 #ifdef EPSILON
 #define FPzero(A)				(fabs(A) <= EPSILON)
@@ -87,6 +100,100 @@ FPge(double A, double B)
 #define FPgt(A,B)				((A) > (B))
 #define FPge(A,B)				((A) >= (B))
 #endif
+
+
+/* define as inline functions to avoid duplicate evaluation */
+static inline tsbool
+FPTzero(double A)
+{
+	if (fabs(A) <= EPSILON)
+		return TS_TRUE;
+	if (isnan(A))
+		return TS_NULL;
+	return TS_FALSE;
+}
+
+static inline tsbool
+FPTeq(double A, double B)
+{
+	return FP_TSCHECK(A, B, FPeq(A, B));
+}
+
+static inline tsbool
+FPTne(double A, double B)
+{
+	return FP_TSCHECK(A, B, FPne(A, B));
+}
+
+static inline tsbool
+FPTlt(double A, double B)
+{
+	return FP_TSCHECK(A, B, FPlt(A, B));
+}
+
+static inline tsbool
+FPTle(double A, double B)
+{
+	return FP_TSCHECK(A, B, FPle(A, B));
+}
+
+static inline tsbool
+FPTgt(double A, double B)
+{
+	return FP_TSCHECK(A, B, FPgt(A, B));
+}
+
+static inline tsbool
+FPTge(double A, double B)
+{
+	return FP_TSCHECK(A, B, FPge(A, B));
+}
+
+/* https://graphics.stanford.edu/~seander/bithacks.html#ZeroInWord */
+#define TS_SIGN(v) (-(int)((unsigned int)((int)v) >> (sizeof(int) * CHAR_BIT - 1)))
+
+static inline tsbool
+TS_NOT(tsbool a)
+{
+	return (!a) | TS_SIGN(a);
+}
+
+/*
+ * Returns the result of tristate-OR of two tsbools.
+ * The operations on true and false are the same to boolean.  returns TS_NULL
+ * if any of the operands is TS_NULL.
+ */
+static inline tsbool
+TS_OR2(tsbool p1, tsbool p2)
+{
+
+	return p1 | p2;		/* not a boolean operator, but a bitwise operator */
+}
+
+/*
+ * Returns the result of tristate-AND of two tsbools.
+ * The operations on true and false are the same to boolean.  returns TS_NULL
+ * if any of the operands is TS_NULL.
+ */
+static inline tsbool
+TS_AND2(tsbool p1, tsbool p2)
+{
+	return (p1 & p2) | TS_SIGN(p1 | p2);
+}
+
+static inline tsbool
+TS_AND4(tsbool p1, tsbool p2, tsbool p3, tsbool p4)
+{
+	return (p1 & p2 & p3 & p4) | TS_SIGN(p1 | p2 | p3 | p4);
+}
+
+#define PG_RETURN_TSBOOL(e)			\
+	do								\
+	{								\
+		if ((e) != TS_NULL)			\
+			PG_RETURN_BOOL(e);		\
+		PG_RETURN_NULL();			\
+	} while (0)
 
 #define HYPOT(A, B)				pg_hypot(A, B)
 

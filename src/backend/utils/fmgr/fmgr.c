@@ -807,8 +807,15 @@ DirectFunctionCall1Coll(PGFunction func, Oid collation, Datum arg1)
 	return result;
 }
 
+/*
+ * We make a special use of binary operator functions that expects null to be
+ * returned.  Thus only the two-operand version among these functions have
+ * additional parameter to deal with that case. This function has a translation
+ * macro DirectFunctionCall2Coll for the ordinary use.
+ */
 Datum
-DirectFunctionCall2Coll(PGFunction func, Oid collation, Datum arg1, Datum arg2)
+DirectFunctionCall2CollExt(PGFunction func, Oid collation,
+						   Datum arg1, Datum arg2, bool *isnull)
 {
 	LOCAL_FCINFO(fcinfo, 2);
 	Datum		result;
@@ -822,9 +829,14 @@ DirectFunctionCall2Coll(PGFunction func, Oid collation, Datum arg1, Datum arg2)
 
 	result = (*func) (fcinfo);
 
-	/* Check for null result, since caller is clearly not expecting one */
+	/* Interpret null as false, since caller is clearly not expecting one */
 	if (fcinfo->isnull)
-		elog(ERROR, "function %p returned NULL", (void *) func);
+	{
+		if (isnull)
+			*isnull = true;
+		else
+			elog(ERROR, "function %p returned NULL", (void *) func);
+	}
 
 	return result;
 }

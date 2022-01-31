@@ -353,4 +353,135 @@ float8_max(const float8 val1, const float8 val2)
 	return float8_gt(val1, val2) ? val1 : val2;
 }
 
+/* tri-state equivalents */
+static inline tsbool
+float4_teq(const float4 val1, const float4 val2)
+{
+	if (!isnan(val1) && !isnan(val2))
+		return val1 == val2;
+
+	return TS_NULL;
+}
+
+static inline tsbool
+float8_teq(const float8 val1, const float8 val2)
+{
+	if (!isnan(val1) && !isnan(val2))
+		return val1 == val2;
+
+	return TS_NULL;
+}
+
+static inline tsbool
+float4_tne(const float4 val1, const float4 val2)
+{
+	if (!isnan(val1) && !isnan(val2))
+		return val1 != val2;
+
+	return TS_NULL;
+}
+
+static inline tsbool
+float8_tne(const float8 val1, const float8 val2)
+{
+	if (!isnan(val1) && !isnan(val2))
+		return val1 != val2;
+
+	return TS_NULL;
+}
+
+static inline tsbool
+float4_tlt(const float4 val1, const float4 val2)
+{
+	if (!isnan(val1) && !isnan(val2))
+		return val1 < val2;
+
+	return TS_NULL;
+}
+
+static inline tsbool
+float8_tlt(const float8 val1, const float8 val2)
+{
+	if (!isnan(val1) && !isnan(val2))
+		return val1 < val2;
+
+	return TS_NULL;
+}
+
+static inline tsbool
+float4_tle(const float4 val1, const float4 val2)
+{
+	if (!isnan(val1) && !isnan(val2))
+		return val1 <= val2;
+
+	return TS_NULL;
+}
+
+static inline tsbool
+float8_tle(const float8 val1, const float8 val2)
+{
+	if (!isnan(val1) && !isnan(val2))
+		return val1 <= val2;
+
+	return TS_NULL;
+}
+
+static inline tsbool
+float4_tgt(const float4 val1, const float4 val2)
+{
+	if (!isnan(val1) && !isnan(val2))
+		return val1 > val2;
+
+	return TS_NULL;
+}
+
+static inline tsbool
+float8_tgt(const float8 val1, const float8 val2)
+{
+	if (!isnan(val1) && !isnan(val2))
+		return val1 > val2;
+
+	return TS_NULL;
+}
+
+static inline tsbool
+float4_tge(const float4 val1, const float4 val2)
+{
+	if (!isnan(val1) && !isnan(val2))
+		return val1 >= val2;
+
+	return TS_NULL;
+}
+
+static inline tsbool
+float8_tge(const float8 val1, const float8 val2)
+{
+	if (!isnan(val1) && !isnan(val2))
+		return val1 >= val2;
+
+	return TS_NULL;
+}
+
+/*
+ * These two functions return NaN if either input is NaN, else the smaller
+ * of the two inputs.  This does NOT follow our usual sort rule, but it is
+ * convenient in some places.  (Note that float4_max and float8_max act this
+ * way anyway, so no similar variant is needed for them.)
+ */
+static inline float4
+float4_min_nan(const float4 val1, const float4 val2)
+{
+	return (isnan(val1) ? val1 :
+			(isnan(val2) ? val2 :
+			 (val1 < val2 ? val1 : val2)));
+}
+
+static inline float8
+float8_min_nan(const float8 val1, const float8 val2)
+{
+	return (isnan(val1) ? val1 :
+			(isnan(val2) ? val2 :
+			 (val1 < val2 ? val1 : val2)));
+}
+
 #endif							/* FLOAT_H */

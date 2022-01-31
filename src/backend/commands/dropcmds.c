@@ -276,6 +276,13 @@ does_not_exist_skipping(ObjectType objtype, Node *object)
 				name = NameListToString(castNode(List, object));
 			}
 			break;
+		case OBJECT_SETTING:
+			if (!schema_does_not_exist_skipping(castNode(List, object), &msg, &name))
+			{
+				msg = gettext_noop("setting \"%s\" does not exist, skipping");
+				name = NameListToString(castNode(List, object));
+			}
+			break;
 		case OBJECT_CONVERSION:
 			if (!schema_does_not_exist_skipping(castNode(List, object), &msg, &name))
 			{

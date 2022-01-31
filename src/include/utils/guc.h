@@ -379,6 +379,8 @@ extern int	set_config_option(const char *name, const char *value,
 							  GucAction action, bool changeVal, int elevel,
 							  bool is_reload);
 extern void AlterSystemSetConfigFile(AlterSystemStmt *altersysstmt);
+extern bool valid_variable_name(const char *name, int *partcnt);
+extern const char *GetConfigOptionCanonicalName(const char *alias);
 extern char *GetConfigOptionByName(const char *name, const char **varname,
 								   bool missing_ok);
 extern void GetConfigOptionByNum(int varnum, const char **values, bool *noshow);

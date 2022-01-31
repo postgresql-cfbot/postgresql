@@ -92,6 +92,7 @@ typedef enum ObjectClass
 	OCLASS_TYPE,				/* pg_type */
 	OCLASS_CAST,				/* pg_cast */
 	OCLASS_COLLATION,			/* pg_collation */
+	OCLASS_SETTING,				/* pg_setting_acl */
 	OCLASS_CONSTRAINT,			/* pg_constraint */
 	OCLASS_CONVERSION,			/* pg_conversion */
 	OCLASS_DEFAULT,				/* pg_attrdef */

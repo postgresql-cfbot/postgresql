@@ -52,6 +52,7 @@
 #include "catalog/pg_publication_namespace.h"
 #include "catalog/pg_publication_rel.h"
 #include "catalog/pg_rewrite.h"
+#include "catalog/pg_setting_acl.h"
 #include "catalog/pg_statistic_ext.h"
 #include "catalog/pg_subscription.h"
 #include "catalog/pg_tablespace.h"
@@ -150,6 +151,7 @@ static const Oid object_classes[] = {
 	TypeRelationId,				/* OCLASS_TYPE */
 	CastRelationId,				/* OCLASS_CAST */
 	CollationRelationId,		/* OCLASS_COLLATION */
+	SettingAclRelationId,		/* OCLASS_SETTING */
 	ConstraintRelationId,		/* OCLASS_CONSTRAINT */
 	ConversionRelationId,		/* OCLASS_CONVERSION */
 	AttrDefaultRelationId,		/* OCLASS_DEFAULT */
@@ -1504,6 +1506,7 @@ doDeletion(const ObjectAddress *object, int flags)
 			/*
 			 * These global object types are not supported here.
 			 */
+		case OCLASS_SETTING:
 		case OCLASS_ROLE:
 		case OCLASS_DATABASE:
 		case OCLASS_TBLSPACE:
@@ -2777,6 +2780,9 @@ getObjectClass(const ObjectAddress *object)
 
 		case CollationRelationId:
 			return OCLASS_COLLATION;
+
+		case SettingAclRelationId:
+			return OCLASS_SETTING;
 
 		case ConstraintRelationId:
 			return OCLASS_CONSTRAINT;

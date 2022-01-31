@@ -595,6 +595,19 @@ CREATE RULE pg_settings_n AS
 
 GRANT SELECT, UPDATE ON pg_settings TO PUBLIC;
 
+CREATE VIEW pg_setting_privileges AS
+	SELECT grantor.rolname AS grantor,
+		   grantee.rolname AS grantee,
+		   set_acl.setting AS setting,
+		   acl.privilege_type AS privilege_type,
+		   acl.is_grantable
+		FROM pg_catalog.pg_setting_acl set_acl,
+		LATERAL (SELECT * FROM aclexplode(set_acl.setacl)) acl
+		LEFT JOIN pg_catalog.pg_authid grantee ON acl.grantee = grantee.oid
+		LEFT JOIN pg_catalog.pg_authid grantor ON acl.grantor = grantor.oid;
+
+GRANT SELECT ON pg_setting_privileges TO PUBLIC;
+
 CREATE VIEW pg_file_settings AS
    SELECT * FROM pg_show_all_file_settings() AS A;
 

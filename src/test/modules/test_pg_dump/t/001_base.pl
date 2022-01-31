@@ -317,6 +317,53 @@ my %tests = (
 		like         => { pg_dumpall_globals => 1, },
 	},
 
+	'GRANT ALTER SYSTEM ON ignore_checksum_failure' => {
+		create_order => 2,
+		create_sql   =>
+			'GRANT ALTER SYSTEM ON ignore_checksum_failure TO regress_dump_test_role;',
+		regexp       =>
+			qr/^GRANT ALTER SYSTEM ON ignore_checksum_failure TO regress_dump_test_role GRANTED BY /m,
+		like         => { pg_dumpall_globals => 1, },
+	},
+
+	'GRANT SET VALUE ON my.missing.guc' => {
+		create_order => 2,
+		create_sql   =>
+			'GRANT SET VALUE ON my.missing.guc TO regress_dump_test_role;',
+		regexp       =>
+			qr/^GRANT SET VALUE ON my\.missing\.guc TO regress_dump_test_role GRANTED BY /m,
+		like         => { pg_dumpall_globals => 1, },
+	},
+
+	'GRANT SET VALUE, ALTER SYSTEM ON something WITH GRANT OPTION' => {
+		create_order => 2,
+		create_sql =>
+			'GRANT SET VALUE, ALTER SYSTEM ON something TO regress_dump_test_role WITH GRANT OPTION;',
+		regexp =>
+			qr/^GRANT ALTER SYSTEM, SET VALUE ON something TO regress_dump_test_role WITH GRANT OPTION GRANTED BY /m,
+		like => { pg_dumpall_globals => 1, },
+	},
+
+	'GRANT ALTER SYSTEM ON MyReallyLong.ButValidCustom.GucNameThatCannotFit.InNamedata64Byte.Format' => {
+		create_order => 2,
+		create_sql =>
+			# configuration parameters get cased folded
+			'GRANT ALTER SYSTEM ON MyReallyLong.ButValidCustom.GucNameThatCannotFit.InNamedata64Byte.Format TO regress_dump_test_role;',
+		regexp =>
+			qr/^GRANT ALTER SYSTEM ON myreallylong\.butvalidcustom\.gucnamethatcannotfit\.innamedata64byte\.format TO regress_dump_test_role GRANTED BY /m,
+		like => { pg_dumpall_globals => 1, },
+	},
+
+	'GRANT ALTER SYSTEM, SET VALUE ON my.guc TO regress_dump_test_role GRANTED BY CURRENT_ROLE' => {
+		create_order => 2,
+		create_sql =>
+			# GRANTED BY CURRENT_ROLE is allowed for SQL compatibility, but is ignored
+			'GRANT ALTER SYSTEM, SET VALUE ON my.guc TO regress_dump_test_role GRANTED BY CURRENT_ROLE;',
+		regexp =>
+			qr/^GRANT ALTER SYSTEM, SET VALUE ON my\.guc TO regress_dump_test_role GRANTED BY /m,
+		like => { pg_dumpall_globals => 1, },
+	},
+
 	'CREATE SCHEMA public' => {
 		regexp => qr/^CREATE SCHEMA public;/m,
 		like   => {

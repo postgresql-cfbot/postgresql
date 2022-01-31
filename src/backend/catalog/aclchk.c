@@ -49,6 +49,7 @@
 #include "catalog/pg_operator.h"
 #include "catalog/pg_opfamily.h"
 #include "catalog/pg_proc.h"
+#include "catalog/pg_setting_acl.h"
 #include "catalog/pg_statistic_ext.h"
 #include "catalog/pg_subscription.h"
 #include "catalog/pg_tablespace.h"
@@ -112,6 +113,7 @@ static void ExecGrant_Largeobject(InternalGrant *grantStmt);
 static void ExecGrant_Namespace(InternalGrant *grantStmt);
 static void ExecGrant_Tablespace(InternalGrant *grantStmt);
 static void ExecGrant_Type(InternalGrant *grantStmt);
+static void ExecGrant_Setting(InternalGrant *grantStmt);
 
 static void SetDefaultACLsInSchemas(InternalDefaultACL *iacls, List *nspnames);
 static void SetDefaultACL(InternalDefaultACL *iacls);
@@ -258,6 +260,9 @@ restrict_and_check_grant(bool is_grant, AclMode avail_goptions, bool all_privs,
 			return ACL_NO_RIGHTS;
 		case OBJECT_TYPE:
 			whole_mask = ACL_ALL_RIGHTS_TYPE;
+			break;
+		case OBJECT_SETTING:
+			whole_mask = ACL_ALL_RIGHTS_SETTING;
 			break;
 		default:
 			elog(ERROR, "unrecognized object type: %d", objtype);
@@ -498,6 +503,10 @@ ExecuteGrantStmt(GrantStmt *stmt)
 			all_privileges = ACL_ALL_RIGHTS_FOREIGN_SERVER;
 			errormsg = gettext_noop("invalid privilege type %s for foreign server");
 			break;
+		case OBJECT_SETTING:
+			all_privileges = ACL_ALL_RIGHTS_SETTING;
+			errormsg = gettext_noop("invalid privilege type %s for setting");
+			break;
 		default:
 			elog(ERROR, "unrecognized GrantStmt.objtype: %d",
 				 (int) stmt->objtype);
@@ -599,6 +608,9 @@ ExecGrantStmt_oids(InternalGrant *istmt)
 			break;
 		case OBJECT_TABLESPACE:
 			ExecGrant_Tablespace(istmt);
+			break;
+		case OBJECT_SETTING:
+			ExecGrant_Setting(istmt);
 			break;
 		default:
 			elog(ERROR, "unrecognized GrantStmt.objtype: %d",
@@ -757,6 +769,38 @@ objectNamesToOids(ObjectType objtype, List *objnames)
 				Oid			srvid = get_foreign_server_oid(srvname, false);
 
 				objects = lappend_oid(objects, srvid);
+			}
+			break;
+		case OBJECT_SETTING:
+			foreach(cell, objnames)
+			{
+				char	   *setting = strVal(lfirst(cell));
+				Oid			settingid = get_setting_oid(setting, true);
+
+				if (!OidIsValid(settingid))
+				{
+					/*
+					 * Lookup the existing entry, or if necessary, add a new
+					 * entry for this parameter.  Entries only exist for
+					 * parameters which currently have, or previously have had,
+					 * privileges assigned.
+					 *
+					 * It is tempting to sanity-check the given configuration
+					 * parameter name against known guc names in the guc
+					 * tables, but for handling upgrades we need to accept
+					 * setting names that do not yet exist.
+					 */
+					settingid = SettingAclCreate(setting, true);
+
+					/*
+					 * Prevent error when processing duplicate objects, and
+					 * make this new entry visible to our later selves which
+					 * will need to update the Acl.
+					 */
+					CommandCounterIncrement();
+				}
+
+				objects = lappend_oid(objects, settingid);
 			}
 			break;
 		default:
@@ -1493,6 +1537,9 @@ RemoveRoleFromObjectACL(Oid roleid, Oid classid, Oid objid)
 				break;
 			case ForeignDataWrapperRelationId:
 				istmt.objtype = OBJECT_FDW;
+				break;
+			case SettingAclRelationId:
+				istmt.objtype = OBJECT_SETTING;
 				break;
 			default:
 				elog(ERROR, "unexpected object class %u", classid);
@@ -3225,6 +3272,131 @@ ExecGrant_Type(InternalGrant *istmt)
 	table_close(relation, RowExclusiveLock);
 }
 
+static void
+ExecGrant_Setting(InternalGrant *istmt)
+{
+	Relation	relation;
+	ListCell   *cell;
+
+	if (istmt->all_privs && istmt->privileges == ACL_NO_RIGHTS)
+		istmt->privileges = ACL_ALL_RIGHTS_SETTING;
+
+	relation = table_open(SettingAclRelationId, RowExclusiveLock);
+
+	foreach(cell, istmt->objects)
+	{
+		Oid			settingId = lfirst_oid(cell);
+		Form_pg_setting_acl pg_setting_acl_tuple;
+		Datum		aclDatum;
+		bool		isNull;
+		AclMode		avail_goptions;
+		AclMode		this_privileges;
+		Acl		   *old_acl;
+		Acl		   *new_acl;
+		Oid			grantorId;
+		HeapTuple	tuple;
+		HeapTuple	newtuple;
+		Datum		values[Natts_pg_setting_acl];
+		bool		nulls[Natts_pg_setting_acl];
+		bool		replaces[Natts_pg_setting_acl];
+		int			noldmembers;
+		int			nnewmembers;
+		Oid		   *oldmembers;
+		Oid		   *newmembers;
+
+		tuple = SearchSysCache1(SETTINGOID, ObjectIdGetDatum(settingId));
+		if (!HeapTupleIsValid(tuple))
+			elog(ERROR, "cache lookup failed for setting %u", settingId);
+
+		pg_setting_acl_tuple = (Form_pg_setting_acl) GETSTRUCT(tuple);
+
+		/*
+		 * Get owner ID and working copy of existing ACL. If there's no ACL,
+		 * substitute the proper default.
+		 */
+		aclDatum = SysCacheGetAttr(SETTINGNAME, tuple, Anum_pg_setting_acl_setacl,
+								   &isNull);
+		if (isNull)
+		{
+			old_acl = acldefault(OBJECT_SETTING, InvalidOid);
+			/* There are no old member roles according to the catalogs */
+			noldmembers = 0;
+			oldmembers = NULL;
+		}
+		else
+		{
+			old_acl = DatumGetAclPCopy(aclDatum);
+			/* Get the roles mentioned in the existing ACL */
+			noldmembers = aclmembers(old_acl, &oldmembers);
+		}
+
+		/* Determine ID to do the grant as, and available grant options */
+		select_best_grantor(GetUserId(), istmt->privileges,
+							old_acl, GetUserId(),
+							&grantorId, &avail_goptions);
+
+		/*
+		 * Restrict the privileges to what we can actually grant, and emit the
+		 * standards-mandated warning and error messages.
+		 */
+		this_privileges =
+			restrict_and_check_grant(istmt->is_grant, avail_goptions,
+									 istmt->all_privs, istmt->privileges,
+									 settingId, grantorId, OBJECT_SETTING,
+									 text_to_cstring(&pg_setting_acl_tuple->setting),
+									 0, NULL);
+
+		/*
+		 * Generate new ACL.
+		 */
+		new_acl = merge_acl_with_grant(old_acl, istmt->is_grant,
+									   istmt->grant_option, istmt->behavior,
+									   istmt->grantees, this_privileges,
+									   grantorId, InvalidOid);
+
+		/*
+		 * We need the members of both old and new ACLs so we can correct the
+		 * shared dependency information.
+		 */
+		nnewmembers = aclmembers(new_acl, &newmembers);
+
+		/* finished building new ACL value, now insert it */
+		MemSet(values, 0, sizeof(values));
+		MemSet(nulls, false, sizeof(nulls));
+		MemSet(replaces, false, sizeof(replaces));
+
+		replaces[Anum_pg_setting_acl_setacl - 1] = true;
+		values[Anum_pg_setting_acl_setacl - 1] = PointerGetDatum(new_acl);
+
+		newtuple = heap_modify_tuple(tuple, RelationGetDescr(relation), values,
+									 nulls, replaces);
+
+		CatalogTupleUpdate(relation, &newtuple->t_self, newtuple);
+
+		/* Update initial privileges for extensions */
+		recordExtensionInitPriv(settingId, SettingAclRelationId, 0, new_acl);
+
+		/* Update the shared dependency ACL info */
+		updateAclDependencies(SettingAclRelationId,
+							  pg_setting_acl_tuple->oid, 0,
+							  InvalidOid,
+							  noldmembers, oldmembers,
+							  nnewmembers, newmembers);
+
+		ReleaseSysCache(tuple);
+
+		pfree(new_acl);
+
+		/* Post alter hook called for grant and revoke */
+		InvokeObjectPostAlterHook(SettingAclRelationId, settingId, 0);
+
+		/* prevent error when processing duplicate objects */
+		CommandCounterIncrement();
+	}
+
+	table_close(relation, RowExclusiveLock);
+}
+
 
 static AclMode
 string_to_privilege(const char *privname)
@@ -3255,6 +3427,10 @@ string_to_privilege(const char *privname)
 		return ACL_CREATE_TEMP;
 	if (strcmp(privname, "connect") == 0)
 		return ACL_CONNECT;
+	if (strcmp(privname, "set value") == 0)
+		return ACL_SET_VALUE;
+	if (strcmp(privname, "alter system") == 0)
+		return ACL_ALTER_SYSTEM;
 	if (strcmp(privname, "rule") == 0)
 		return 0;				/* ignore old RULE privileges */
 	ereport(ERROR,
@@ -3292,6 +3468,10 @@ privilege_to_string(AclMode privilege)
 			return "TEMP";
 		case ACL_CONNECT:
 			return "CONNECT";
+		case ACL_SET_VALUE:
+			return "SET VALUE";
+		case ACL_ALTER_SYSTEM:
+			return "ALTER SYSTEM";
 		default:
 			elog(ERROR, "unrecognized privilege: %d", (int) privilege);
 	}
@@ -3327,6 +3507,13 @@ aclcheck_error(AclResult aclerr, ObjectType objtype,
 						break;
 					case OBJECT_COLUMN:
 						msg = gettext_noop("permission denied for column %s");
+						break;
+					case OBJECT_SETTING:
+						/*
+						 * Quote the object name for backward compatibility
+						 * with behavior before SET was handled here.
+						 */
+						msg = gettext_noop("permission denied to set parameter \"%s\"");
 						break;
 					case OBJECT_CONVERSION:
 						msg = gettext_noop("permission denied for conversion %s");
@@ -3564,6 +3751,7 @@ aclcheck_error(AclResult aclerr, ObjectType objtype,
 					case OBJECT_AMPROC:
 					case OBJECT_ATTRIBUTE:
 					case OBJECT_CAST:
+					case OBJECT_SETTING:
 					case OBJECT_DEFAULT:
 					case OBJECT_DEFACL:
 					case OBJECT_DOMCONSTRAINT:
@@ -3990,6 +4178,59 @@ pg_database_aclmask(Oid db_oid, Oid roleid,
 	}
 
 	result = aclmask(acl, roleid, ownerId, mask, how);
+
+	/* if we have a detoasted copy, free it */
+	if (acl && (Pointer) acl != DatumGetPointer(aclDatum))
+		pfree(acl);
+
+	ReleaseSysCache(tuple);
+
+	return result;
+}
+
+/*
+ * Exported routine for examining a user's privileges for a configuration
+ * parameter (GUC)
+ */
+AclMode
+pg_setting_acl_aclmask(Oid config_oid, Oid roleid,
+						AclMode mask, AclMaskHow how)
+{
+	AclMode		result;
+	HeapTuple	tuple;
+	Datum		aclDatum;
+	bool		isNull;
+	Acl		   *acl;
+
+	/* Superusers bypass all permission checking. */
+	if (superuser_arg(roleid))
+		return mask;
+
+	/*
+	 * Get the setting's ACL from pg_setting_acl
+	 */
+	tuple = SearchSysCache1(SETTINGOID, ObjectIdGetDatum(config_oid));
+	if (!HeapTupleIsValid(tuple))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_DATABASE),
+				 errmsg("setting with OID %u does not exist",
+						config_oid)));
+
+	aclDatum = SysCacheGetAttr(SETTINGOID, tuple, Anum_pg_setting_acl_setacl,
+							   &isNull);
+	if (isNull)
+	{
+		/* No ACL, so build default ACL */
+		acl = acldefault(OBJECT_SETTING, InvalidOid);
+		aclDatum = (Datum) 0;
+	}
+	else
+	{
+		/* detoast ACL if necessary */
+		acl = DatumGetAclP(aclDatum);
+	}
+
+	result = aclmask(acl, roleid, InvalidOid, mask, how);
 
 	/* if we have a detoasted copy, free it */
 	if (acl && (Pointer) acl != DatumGetPointer(aclDatum))
@@ -4708,6 +4949,19 @@ AclResult
 pg_database_aclcheck(Oid db_oid, Oid roleid, AclMode mode)
 {
 	if (pg_database_aclmask(db_oid, roleid, mode, ACLMASK_ANY) != 0)
+		return ACLCHECK_OK;
+	else
+		return ACLCHECK_NO_PRIV;
+}
+
+/*
+ * Exported routine for checking a user's access privileges to a configuration
+ * parameter
+ */
+AclResult
+pg_setting_acl_aclcheck(Oid config_oid, Oid roleid, AclMode mode)
+{
+	if (pg_setting_acl_aclmask(config_oid, roleid, mode, ACLMASK_ANY) != 0)
 		return ACLCHECK_OK;
 	else
 		return ACLCHECK_NO_PRIV;

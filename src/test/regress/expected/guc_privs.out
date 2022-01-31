@@ -1,0 +1,780 @@
+-- Test superuser
+-- Superuser DBA
+CREATE ROLE regress_admin SUPERUSER;
+-- Perform all operations as user 'regress_admin' --
+SET SESSION AUTHORIZATION regress_admin;
+-- PGC_BACKEND
+SET ignore_system_indexes = OFF;  -- fail, cannot be set after connection start
+ERROR:  parameter "ignore_system_indexes" cannot be set after connection start
+RESET ignore_system_indexes;  -- fail, cannot be set after connection start
+ERROR:  parameter "ignore_system_indexes" cannot be set after connection start
+ALTER SYSTEM SET ignore_system_indexes = OFF;  -- ok
+ALTER SYSTEM RESET ignore_system_indexes;  -- ok
+-- PGC_INTERNAL
+SET block_size = 50;  -- fail, cannot be changed
+ERROR:  parameter "block_size" cannot be changed
+RESET block_size;  -- fail, cannot be changed
+ERROR:  parameter "block_size" cannot be changed
+ALTER SYSTEM SET block_size = 50;  -- fail, cannot be changed
+ERROR:  parameter "block_size" cannot be changed
+ALTER SYSTEM RESET block_size;  -- fail, cannot be changed
+ERROR:  parameter "block_size" cannot be changed
+-- PGC_POSTMASTER
+SET autovacuum_freeze_max_age = 1000050000;  -- fail, requires restart
+ERROR:  parameter "autovacuum_freeze_max_age" cannot be changed without restarting the server
+RESET autovacuum_freeze_max_age;  -- fail, requires restart
+ERROR:  parameter "autovacuum_freeze_max_age" cannot be changed without restarting the server
+ALTER SYSTEM SET autovacuum_freeze_max_age = 1000050000;  -- ok
+ALTER SYSTEM RESET autovacuum_freeze_max_age;  -- ok
+ALTER SYSTEM SET config_file = '/usr/local/data/postgresql.conf';  -- fail, cannot be changed
+ERROR:  parameter "config_file" cannot be changed
+ALTER SYSTEM RESET config_file;  -- fail, cannot be changed
+ERROR:  parameter "config_file" cannot be changed
+-- PGC_SIGHUP
+SET autovacuum = OFF;  -- fail, requires reload
+ERROR:  parameter "autovacuum" cannot be changed now
+RESET autovacuum;  -- fail, requires reload
+ERROR:  parameter "autovacuum" cannot be changed now
+ALTER SYSTEM SET autovacuum = OFF;  -- ok
+ALTER SYSTEM RESET autovacuum;  -- ok
+-- PGC_SUSET
+SET lc_messages = 'C';  -- ok
+RESET lc_messages;  -- ok
+ALTER SYSTEM SET lc_messages = 'C';  -- ok
+ALTER SYSTEM RESET lc_messages;  -- ok
+-- PGC_SU_BACKEND
+SET jit_debugging_support = OFF;  -- fail, cannot be set after connection start
+ERROR:  parameter "jit_debugging_support" cannot be set after connection start
+RESET jit_debugging_support;  -- fail, cannot be set after connection start
+ERROR:  parameter "jit_debugging_support" cannot be set after connection start
+ALTER SYSTEM SET jit_debugging_support = OFF;  -- ok
+ALTER SYSTEM RESET jit_debugging_support;  -- ok
+-- PGC_USERSET
+SET DateStyle = 'ISO, MDY';  -- ok
+RESET DateStyle;  -- ok
+ALTER SYSTEM SET DateStyle = 'ISO, MDY';  -- ok
+ALTER SYSTEM RESET DateStyle;  -- ok
+ALTER SYSTEM SET ssl_renegotiation_limit = 0;  -- fail, cannot be changed
+ERROR:  parameter "ssl_renegotiation_limit" cannot be changed
+ALTER SYSTEM RESET ssl_renegotiation_limit;  -- fail, cannot be changed
+ERROR:  parameter "ssl_renegotiation_limit" cannot be changed
+-- Finished testing superuser
+RESET statement_timeout;
+-- Check setting privileges prior to creating any
+SELECT grantee, setting, privilege_type, is_grantable
+	FROM pg_catalog.pg_setting_privileges
+	ORDER BY grantee, setting, privilege_type;
+ grantee |               setting               | privilege_type | is_grantable 
+---------+-------------------------------------+----------------+--------------
+         | DateStyle                           | SET VALUE      | f
+         | IntervalStyle                       | SET VALUE      | f
+         | TimeZone                            | SET VALUE      | f
+         | application_name                    | SET VALUE      | f
+         | array_nulls                         | SET VALUE      | f
+         | backend_flush_after                 | SET VALUE      | f
+         | backslash_quote                     | SET VALUE      | f
+         | bytea_output                        | SET VALUE      | f
+         | check_function_bodies               | SET VALUE      | f
+         | client_connection_check_interval    | SET VALUE      | f
+         | client_min_messages                 | SET VALUE      | f
+         | commit_siblings                     | SET VALUE      | f
+         | constraint_exclusion                | SET VALUE      | f
+         | cpu_index_tuple_cost                | SET VALUE      | f
+         | cpu_operator_cost                   | SET VALUE      | f
+         | cpu_tuple_cost                      | SET VALUE      | f
+         | cursor_tuple_fraction               | SET VALUE      | f
+         | debug_pretty_print                  | SET VALUE      | f
+         | debug_print_parse                   | SET VALUE      | f
+         | debug_print_plan                    | SET VALUE      | f
+         | debug_print_rewritten               | SET VALUE      | f
+         | default_statistics_target           | SET VALUE      | f
+         | default_table_access_method         | SET VALUE      | f
+         | default_tablespace                  | SET VALUE      | f
+         | default_text_search_config          | SET VALUE      | f
+         | default_toast_compression           | SET VALUE      | f
+         | default_transaction_deferrable      | SET VALUE      | f
+         | default_transaction_isolation       | SET VALUE      | f
+         | default_transaction_read_only       | SET VALUE      | f
+         | default_with_oids                   | SET VALUE      | f
+         | effective_cache_size                | SET VALUE      | f
+         | effective_io_concurrency            | SET VALUE      | f
+         | enable_async_append                 | SET VALUE      | f
+         | enable_bitmapscan                   | SET VALUE      | f
+         | enable_gathermerge                  | SET VALUE      | f
+         | enable_hashagg                      | SET VALUE      | f
+         | enable_hashjoin                     | SET VALUE      | f
+         | enable_incremental_sort             | SET VALUE      | f
+         | enable_indexonlyscan                | SET VALUE      | f
+         | enable_indexscan                    | SET VALUE      | f
+         | enable_material                     | SET VALUE      | f
+         | enable_memoize                      | SET VALUE      | f
+         | enable_mergejoin                    | SET VALUE      | f
+         | enable_nestloop                     | SET VALUE      | f
+         | enable_parallel_append              | SET VALUE      | f
+         | enable_parallel_hash                | SET VALUE      | f
+         | enable_partition_pruning            | SET VALUE      | f
+         | enable_partitionwise_aggregate      | SET VALUE      | f
+         | enable_partitionwise_join           | SET VALUE      | f
+         | enable_seqscan                      | SET VALUE      | f
+         | enable_sort                         | SET VALUE      | f
+         | enable_tidscan                      | SET VALUE      | f
+         | escape_string_warning               | SET VALUE      | f
+         | exit_on_error                       | SET VALUE      | f
+         | extra_float_digits                  | SET VALUE      | f
+         | force_parallel_mode                 | SET VALUE      | f
+         | from_collapse_limit                 | SET VALUE      | f
+         | geqo                                | SET VALUE      | f
+         | geqo_effort                         | SET VALUE      | f
+         | geqo_generations                    | SET VALUE      | f
+         | geqo_pool_size                      | SET VALUE      | f
+         | geqo_seed                           | SET VALUE      | f
+         | geqo_selection_bias                 | SET VALUE      | f
+         | geqo_threshold                      | SET VALUE      | f
+         | gin_fuzzy_search_limit              | SET VALUE      | f
+         | gin_pending_list_limit              | SET VALUE      | f
+         | hash_mem_multiplier                 | SET VALUE      | f
+         | idle_in_transaction_session_timeout | SET VALUE      | f
+         | idle_session_timeout                | SET VALUE      | f
+         | jit                                 | SET VALUE      | f
+         | jit_above_cost                      | SET VALUE      | f
+         | jit_expressions                     | SET VALUE      | f
+         | jit_inline_above_cost               | SET VALUE      | f
+         | jit_optimize_above_cost             | SET VALUE      | f
+         | jit_tuple_deforming                 | SET VALUE      | f
+         | join_collapse_limit                 | SET VALUE      | f
+         | lc_monetary                         | SET VALUE      | f
+         | lc_numeric                          | SET VALUE      | f
+         | lc_time                             | SET VALUE      | f
+         | local_preload_libraries             | SET VALUE      | f
+         | lock_timeout                        | SET VALUE      | f
+         | log_parameter_max_length_on_error   | SET VALUE      | f
+         | logical_decoding_work_mem           | SET VALUE      | f
+         | maintenance_io_concurrency          | SET VALUE      | f
+         | maintenance_work_mem                | SET VALUE      | f
+         | max_parallel_maintenance_workers    | SET VALUE      | f
+         | max_parallel_workers                | SET VALUE      | f
+         | max_parallel_workers_per_gather     | SET VALUE      | f
+         | min_parallel_index_scan_size        | SET VALUE      | f
+         | min_parallel_table_scan_size        | SET VALUE      | f
+         | optimize_bounded_sort               | SET VALUE      | f
+         | parallel_leader_participation       | SET VALUE      | f
+         | parallel_setup_cost                 | SET VALUE      | f
+         | parallel_tuple_cost                 | SET VALUE      | f
+         | password_encryption                 | SET VALUE      | f
+         | plan_cache_mode                     | SET VALUE      | f
+         | quote_all_identifiers               | SET VALUE      | f
+         | random_page_cost                    | SET VALUE      | f
+         | role                                | SET VALUE      | f
+         | row_security                        | SET VALUE      | f
+         | search_path                         | SET VALUE      | f
+         | seed                                | SET VALUE      | f
+         | seq_page_cost                       | SET VALUE      | f
+         | ssl_renegotiation_limit             | SET VALUE      | f
+         | standard_conforming_strings         | SET VALUE      | f
+         | statement_timeout                   | SET VALUE      | f
+         | synchronize_seqscans                | SET VALUE      | f
+         | synchronous_commit                  | SET VALUE      | f
+         | tcp_keepalives_count                | SET VALUE      | f
+         | tcp_keepalives_idle                 | SET VALUE      | f
+         | tcp_keepalives_interval             | SET VALUE      | f
+         | tcp_user_timeout                    | SET VALUE      | f
+         | temp_buffers                        | SET VALUE      | f
+         | temp_tablespaces                    | SET VALUE      | f
+         | timezone_abbreviations              | SET VALUE      | f
+         | trace_notify                        | SET VALUE      | f
+         | trace_sort                          | SET VALUE      | f
+         | trace_syncscan                      | SET VALUE      | f
+         | transaction_deferrable              | SET VALUE      | f
+         | transaction_isolation               | SET VALUE      | f
+         | transaction_read_only               | SET VALUE      | f
+         | transform_null_equals               | SET VALUE      | f
+         | vacuum_cost_delay                   | SET VALUE      | f
+         | vacuum_cost_limit                   | SET VALUE      | f
+         | vacuum_cost_page_dirty              | SET VALUE      | f
+         | vacuum_cost_page_hit                | SET VALUE      | f
+         | vacuum_cost_page_miss               | SET VALUE      | f
+         | vacuum_failsafe_age                 | SET VALUE      | f
+         | vacuum_freeze_min_age               | SET VALUE      | f
+         | vacuum_freeze_table_age             | SET VALUE      | f
+         | vacuum_multixact_failsafe_age       | SET VALUE      | f
+         | vacuum_multixact_freeze_min_age     | SET VALUE      | f
+         | vacuum_multixact_freeze_table_age   | SET VALUE      | f
+         | wal_sender_timeout                  | SET VALUE      | f
+         | wal_skip_threshold                  | SET VALUE      | f
+         | work_mem                            | SET VALUE      | f
+         | xmlbinary                           | SET VALUE      | f
+         | xmloption                           | SET VALUE      | f
+(138 rows)
+
+-- Create non-superuser with privileges to configure host resource usage
+CREATE ROLE regress_host_resource_admin NOSUPERUSER;
+-- Check the new role does not yet have privileges on settings
+SELECT has_setting_privilege('regress_host_resource_admin', 'work_mem', 'SET VALUE, ALTER SYSTEM');
+ has_setting_privilege 
+-----------------------
+ t
+(1 row)
+
+SELECT has_setting_privilege('regress_host_resource_admin', 'work_mem', 'SET VALUE');
+ has_setting_privilege 
+-----------------------
+ t
+(1 row)
+
+SELECT has_setting_privilege('regress_host_resource_admin', 'work_mem', 'ALTER SYSTEM');
+ has_setting_privilege 
+-----------------------
+ f
+(1 row)
+
+-- Check inappropriate and nonsense privilege types
+SELECT has_setting_privilege('regress_host_resource_admin', 'work_mem', 'SELECT, UPDATE, CREATE');
+ERROR:  unrecognized privilege type: "SELECT"
+SELECT has_setting_privilege('regress_host_resource_admin', 'work_mem', 'USAGE');
+ERROR:  unrecognized privilege type: "USAGE"
+SELECT has_setting_privilege('regress_host_resource_admin', 'work_mem', 'WHATEVER');
+ERROR:  unrecognized privilege type: "WHATEVER"
+-- Grant privileges on settings to the new non-superuser role
+GRANT SET VALUE, ALTER SYSTEM ON
+	autovacuum_work_mem, hash_mem_multiplier, logical_decoding_work_mem,
+	maintenance_work_mem, max_stack_depth, min_dynamic_shared_memory,
+	shared_buffers, temp_buffers, temp_file_limit, work_mem
+TO regress_host_resource_admin;
+-- Check setting privileges after creating some
+SELECT grantee, setting, privilege_type, is_grantable
+	FROM pg_catalog.pg_setting_privileges
+	ORDER BY grantee, setting, privilege_type;
+           grantee           |               setting               | privilege_type | is_grantable 
+-----------------------------+-------------------------------------+----------------+--------------
+ regress_host_resource_admin | autovacuum_work_mem                 | ALTER SYSTEM   | f
+ regress_host_resource_admin | autovacuum_work_mem                 | SET VALUE      | f
+ regress_host_resource_admin | hash_mem_multiplier                 | ALTER SYSTEM   | f
+ regress_host_resource_admin | hash_mem_multiplier                 | SET VALUE      | f
+ regress_host_resource_admin | logical_decoding_work_mem           | ALTER SYSTEM   | f
+ regress_host_resource_admin | logical_decoding_work_mem           | SET VALUE      | f
+ regress_host_resource_admin | maintenance_work_mem                | ALTER SYSTEM   | f
+ regress_host_resource_admin | maintenance_work_mem                | SET VALUE      | f
+ regress_host_resource_admin | max_stack_depth                     | ALTER SYSTEM   | f
+ regress_host_resource_admin | max_stack_depth                     | SET VALUE      | f
+ regress_host_resource_admin | min_dynamic_shared_memory           | ALTER SYSTEM   | f
+ regress_host_resource_admin | min_dynamic_shared_memory           | SET VALUE      | f
+ regress_host_resource_admin | shared_buffers                      | ALTER SYSTEM   | f
+ regress_host_resource_admin | shared_buffers                      | SET VALUE      | f
+ regress_host_resource_admin | temp_buffers                        | ALTER SYSTEM   | f
+ regress_host_resource_admin | temp_buffers                        | SET VALUE      | f
+ regress_host_resource_admin | temp_file_limit                     | ALTER SYSTEM   | f
+ regress_host_resource_admin | temp_file_limit                     | SET VALUE      | f
+ regress_host_resource_admin | work_mem                            | ALTER SYSTEM   | f
+ regress_host_resource_admin | work_mem                            | SET VALUE      | f
+                             | DateStyle                           | SET VALUE      | f
+                             | IntervalStyle                       | SET VALUE      | f
+                             | TimeZone                            | SET VALUE      | f
+                             | application_name                    | SET VALUE      | f
+                             | array_nulls                         | SET VALUE      | f
+                             | backend_flush_after                 | SET VALUE      | f
+                             | backslash_quote                     | SET VALUE      | f
+                             | bytea_output                        | SET VALUE      | f
+                             | check_function_bodies               | SET VALUE      | f
+                             | client_connection_check_interval    | SET VALUE      | f
+                             | client_min_messages                 | SET VALUE      | f
+                             | commit_siblings                     | SET VALUE      | f
+                             | constraint_exclusion                | SET VALUE      | f
+                             | cpu_index_tuple_cost                | SET VALUE      | f
+                             | cpu_operator_cost                   | SET VALUE      | f
+                             | cpu_tuple_cost                      | SET VALUE      | f
+                             | cursor_tuple_fraction               | SET VALUE      | f
+                             | debug_pretty_print                  | SET VALUE      | f
+                             | debug_print_parse                   | SET VALUE      | f
+                             | debug_print_plan                    | SET VALUE      | f
+                             | debug_print_rewritten               | SET VALUE      | f
+                             | default_statistics_target           | SET VALUE      | f
+                             | default_table_access_method         | SET VALUE      | f
+                             | default_tablespace                  | SET VALUE      | f
+                             | default_text_search_config          | SET VALUE      | f
+                             | default_toast_compression           | SET VALUE      | f
+                             | default_transaction_deferrable      | SET VALUE      | f
+                             | default_transaction_isolation       | SET VALUE      | f
+                             | default_transaction_read_only       | SET VALUE      | f
+                             | default_with_oids                   | SET VALUE      | f
+                             | effective_cache_size                | SET VALUE      | f
+                             | effective_io_concurrency            | SET VALUE      | f
+                             | enable_async_append                 | SET VALUE      | f
+                             | enable_bitmapscan                   | SET VALUE      | f
+                             | enable_gathermerge                  | SET VALUE      | f
+                             | enable_hashagg                      | SET VALUE      | f
+                             | enable_hashjoin                     | SET VALUE      | f
+                             | enable_incremental_sort             | SET VALUE      | f
+                             | enable_indexonlyscan                | SET VALUE      | f
+                             | enable_indexscan                    | SET VALUE      | f
+                             | enable_material                     | SET VALUE      | f
+                             | enable_memoize                      | SET VALUE      | f
+                             | enable_mergejoin                    | SET VALUE      | f
+                             | enable_nestloop                     | SET VALUE      | f
+                             | enable_parallel_append              | SET VALUE      | f
+                             | enable_parallel_hash                | SET VALUE      | f
+                             | enable_partition_pruning            | SET VALUE      | f
+                             | enable_partitionwise_aggregate      | SET VALUE      | f
+                             | enable_partitionwise_join           | SET VALUE      | f
+                             | enable_seqscan                      | SET VALUE      | f
+                             | enable_sort                         | SET VALUE      | f
+                             | enable_tidscan                      | SET VALUE      | f
+                             | escape_string_warning               | SET VALUE      | f
+                             | exit_on_error                       | SET VALUE      | f
+                             | extra_float_digits                  | SET VALUE      | f
+                             | force_parallel_mode                 | SET VALUE      | f
+                             | from_collapse_limit                 | SET VALUE      | f
+                             | geqo                                | SET VALUE      | f
+                             | geqo_effort                         | SET VALUE      | f
+                             | geqo_generations                    | SET VALUE      | f
+                             | geqo_pool_size                      | SET VALUE      | f
+                             | geqo_seed                           | SET VALUE      | f
+                             | geqo_selection_bias                 | SET VALUE      | f
+                             | geqo_threshold                      | SET VALUE      | f
+                             | gin_fuzzy_search_limit              | SET VALUE      | f
+                             | gin_pending_list_limit              | SET VALUE      | f
+                             | hash_mem_multiplier                 | SET VALUE      | f
+                             | idle_in_transaction_session_timeout | SET VALUE      | f
+                             | idle_session_timeout                | SET VALUE      | f
+                             | jit                                 | SET VALUE      | f
+                             | jit_above_cost                      | SET VALUE      | f
+                             | jit_expressions                     | SET VALUE      | f
+                             | jit_inline_above_cost               | SET VALUE      | f
+                             | jit_optimize_above_cost             | SET VALUE      | f
+                             | jit_tuple_deforming                 | SET VALUE      | f
+                             | join_collapse_limit                 | SET VALUE      | f
+                             | lc_monetary                         | SET VALUE      | f
+                             | lc_numeric                          | SET VALUE      | f
+                             | lc_time                             | SET VALUE      | f
+                             | local_preload_libraries             | SET VALUE      | f
+                             | lock_timeout                        | SET VALUE      | f
+                             | log_parameter_max_length_on_error   | SET VALUE      | f
+                             | logical_decoding_work_mem           | SET VALUE      | f
+                             | maintenance_io_concurrency          | SET VALUE      | f
+                             | maintenance_work_mem                | SET VALUE      | f
+                             | max_parallel_maintenance_workers    | SET VALUE      | f
+                             | max_parallel_workers                | SET VALUE      | f
+                             | max_parallel_workers_per_gather     | SET VALUE      | f
+                             | min_parallel_index_scan_size        | SET VALUE      | f
+                             | min_parallel_table_scan_size        | SET VALUE      | f
+                             | optimize_bounded_sort               | SET VALUE      | f
+                             | parallel_leader_participation       | SET VALUE      | f
+                             | parallel_setup_cost                 | SET VALUE      | f
+                             | parallel_tuple_cost                 | SET VALUE      | f
+                             | password_encryption                 | SET VALUE      | f
+                             | plan_cache_mode                     | SET VALUE      | f
+                             | quote_all_identifiers               | SET VALUE      | f
+                             | random_page_cost                    | SET VALUE      | f
+                             | role                                | SET VALUE      | f
+                             | row_security                        | SET VALUE      | f
+                             | search_path                         | SET VALUE      | f
+                             | seed                                | SET VALUE      | f
+                             | seq_page_cost                       | SET VALUE      | f
+                             | ssl_renegotiation_limit             | SET VALUE      | f
+                             | standard_conforming_strings         | SET VALUE      | f
+                             | statement_timeout                   | SET VALUE      | f
+                             | synchronize_seqscans                | SET VALUE      | f
+                             | synchronous_commit                  | SET VALUE      | f
+                             | tcp_keepalives_count                | SET VALUE      | f
+                             | tcp_keepalives_idle                 | SET VALUE      | f
+                             | tcp_keepalives_interval             | SET VALUE      | f
+                             | tcp_user_timeout                    | SET VALUE      | f
+                             | temp_buffers                        | SET VALUE      | f
+                             | temp_tablespaces                    | SET VALUE      | f
+                             | timezone_abbreviations              | SET VALUE      | f
+                             | trace_notify                        | SET VALUE      | f
+                             | trace_sort                          | SET VALUE      | f
+                             | trace_syncscan                      | SET VALUE      | f
+                             | transaction_deferrable              | SET VALUE      | f
+                             | transaction_isolation               | SET VALUE      | f
+                             | transaction_read_only               | SET VALUE      | f
+                             | transform_null_equals               | SET VALUE      | f
+                             | vacuum_cost_delay                   | SET VALUE      | f
+                             | vacuum_cost_limit                   | SET VALUE      | f
+                             | vacuum_cost_page_dirty              | SET VALUE      | f
+                             | vacuum_cost_page_hit                | SET VALUE      | f
+                             | vacuum_cost_page_miss               | SET VALUE      | f
+                             | vacuum_failsafe_age                 | SET VALUE      | f
+                             | vacuum_freeze_min_age               | SET VALUE      | f
+                             | vacuum_freeze_table_age             | SET VALUE      | f
+                             | vacuum_multixact_failsafe_age       | SET VALUE      | f
+                             | vacuum_multixact_freeze_min_age     | SET VALUE      | f
+                             | vacuum_multixact_freeze_table_age   | SET VALUE      | f
+                             | wal_sender_timeout                  | SET VALUE      | f
+                             | wal_skip_threshold                  | SET VALUE      | f
+                             | work_mem                            | SET VALUE      | f
+                             | xmlbinary                           | SET VALUE      | f
+                             | xmloption                           | SET VALUE      | f
+(158 rows)
+
+-- Check the new role now has privilges on settings
+SELECT has_setting_privilege('regress_host_resource_admin', 'work_mem', 'SET VALUE, ALTER SYSTEM');
+ has_setting_privilege 
+-----------------------
+ t
+(1 row)
+
+SELECT has_setting_privilege('regress_host_resource_admin', 'work_mem', 'SET VALUE');
+ has_setting_privilege 
+-----------------------
+ t
+(1 row)
+
+SELECT has_setting_privilege('regress_host_resource_admin', 'work_mem', 'ALTER SYSTEM');
+ has_setting_privilege 
+-----------------------
+ t
+(1 row)
+
+SELECT has_setting_privilege('regress_host_resource_admin', 'work_mem', 'SET VALUE WITH GRANT OPTION, ALTER SYSTEM WITH GRANT OPTION');
+ has_setting_privilege 
+-----------------------
+ f
+(1 row)
+
+-- Check again the inappropriate and nonsense privilege types.  The prior similar check
+-- was performed before any entry for work_mem existed.
+SELECT has_setting_privilege('regress_host_resource_admin', 'work_mem', 'SELECT, UPDATE, CREATE');
+ERROR:  unrecognized privilege type: "SELECT"
+SELECT has_setting_privilege('regress_host_resource_admin', 'work_mem', 'USAGE');
+ERROR:  unrecognized privilege type: "USAGE"
+SELECT has_setting_privilege('regress_host_resource_admin', 'work_mem', 'WHATEVER');
+ERROR:  unrecognized privilege type: "WHATEVER"
+SELECT has_setting_privilege('regress_host_resource_admin', 'work_mem', 'WHATEVER WITH GRANT OPTION');
+ERROR:  unrecognized privilege type: "WHATEVER WITH GRANT OPTION"
+-- Check other function signatures
+SELECT has_setting_privilege('regress_host_resource_admin',
+							 (SELECT oid FROM pg_catalog.pg_setting_acl WHERE setting = 'max_stack_depth'),
+							 'SET VALUE');
+ has_setting_privilege 
+-----------------------
+ t
+(1 row)
+
+SELECT has_setting_privilege((SELECT oid FROM pg_catalog.pg_authid WHERE rolname = 'regress_host_resource_admin'),
+							 'max_stack_depth',
+							 'SET VALUE');
+ has_setting_privilege 
+-----------------------
+ t
+(1 row)
+
+SELECT has_setting_privilege((SELECT oid FROM pg_catalog.pg_authid WHERE rolname = 'regress_host_resource_admin'),
+							 (SELECT oid FROM pg_catalog.pg_setting_acl WHERE setting = 'max_stack_depth'),
+							 'SET VALUE');
+ has_setting_privilege 
+-----------------------
+ t
+(1 row)
+
+SELECT has_setting_privilege('hash_mem_multiplier', 'set value');
+ has_setting_privilege 
+-----------------------
+ t
+(1 row)
+
+SELECT has_setting_privilege((SELECT oid FROM pg_catalog.pg_setting_acl WHERE setting = 'work_mem'),
+							 'alter system with grant option');
+ has_setting_privilege 
+-----------------------
+ t
+(1 row)
+
+-- Check setting privileges show up in view
+SELECT grantee, setting, privilege_type, is_grantable
+	FROM pg_catalog.pg_setting_privileges
+	ORDER BY grantee, setting, privilege_type;
+           grantee           |               setting               | privilege_type | is_grantable 
+-----------------------------+-------------------------------------+----------------+--------------
+ regress_host_resource_admin | autovacuum_work_mem                 | ALTER SYSTEM   | f
+ regress_host_resource_admin | autovacuum_work_mem                 | SET VALUE      | f
+ regress_host_resource_admin | hash_mem_multiplier                 | ALTER SYSTEM   | f
+ regress_host_resource_admin | hash_mem_multiplier                 | SET VALUE      | f
+ regress_host_resource_admin | logical_decoding_work_mem           | ALTER SYSTEM   | f
+ regress_host_resource_admin | logical_decoding_work_mem           | SET VALUE      | f
+ regress_host_resource_admin | maintenance_work_mem                | ALTER SYSTEM   | f
+ regress_host_resource_admin | maintenance_work_mem                | SET VALUE      | f
+ regress_host_resource_admin | max_stack_depth                     | ALTER SYSTEM   | f
+ regress_host_resource_admin | max_stack_depth                     | SET VALUE      | f
+ regress_host_resource_admin | min_dynamic_shared_memory           | ALTER SYSTEM   | f
+ regress_host_resource_admin | min_dynamic_shared_memory           | SET VALUE      | f
+ regress_host_resource_admin | shared_buffers                      | ALTER SYSTEM   | f
+ regress_host_resource_admin | shared_buffers                      | SET VALUE      | f
+ regress_host_resource_admin | temp_buffers                        | ALTER SYSTEM   | f
+ regress_host_resource_admin | temp_buffers                        | SET VALUE      | f
+ regress_host_resource_admin | temp_file_limit                     | ALTER SYSTEM   | f
+ regress_host_resource_admin | temp_file_limit                     | SET VALUE      | f
+ regress_host_resource_admin | work_mem                            | ALTER SYSTEM   | f
+ regress_host_resource_admin | work_mem                            | SET VALUE      | f
+                             | DateStyle                           | SET VALUE      | f
+                             | IntervalStyle                       | SET VALUE      | f
+                             | TimeZone                            | SET VALUE      | f
+                             | application_name                    | SET VALUE      | f
+                             | array_nulls                         | SET VALUE      | f
+                             | backend_flush_after                 | SET VALUE      | f
+                             | backslash_quote                     | SET VALUE      | f
+                             | bytea_output                        | SET VALUE      | f
+                             | check_function_bodies               | SET VALUE      | f
+                             | client_connection_check_interval    | SET VALUE      | f
+                             | client_min_messages                 | SET VALUE      | f
+                             | commit_siblings                     | SET VALUE      | f
+                             | constraint_exclusion                | SET VALUE      | f
+                             | cpu_index_tuple_cost                | SET VALUE      | f
+                             | cpu_operator_cost                   | SET VALUE      | f
+                             | cpu_tuple_cost                      | SET VALUE      | f
+                             | cursor_tuple_fraction               | SET VALUE      | f
+                             | debug_pretty_print                  | SET VALUE      | f
+                             | debug_print_parse                   | SET VALUE      | f
+                             | debug_print_plan                    | SET VALUE      | f
+                             | debug_print_rewritten               | SET VALUE      | f
+                             | default_statistics_target           | SET VALUE      | f
+                             | default_table_access_method         | SET VALUE      | f
+                             | default_tablespace                  | SET VALUE      | f
+                             | default_text_search_config          | SET VALUE      | f
+                             | default_toast_compression           | SET VALUE      | f
+                             | default_transaction_deferrable      | SET VALUE      | f
+                             | default_transaction_isolation       | SET VALUE      | f
+                             | default_transaction_read_only       | SET VALUE      | f
+                             | default_with_oids                   | SET VALUE      | f
+                             | effective_cache_size                | SET VALUE      | f
+                             | effective_io_concurrency            | SET VALUE      | f
+                             | enable_async_append                 | SET VALUE      | f
+                             | enable_bitmapscan                   | SET VALUE      | f
+                             | enable_gathermerge                  | SET VALUE      | f
+                             | enable_hashagg                      | SET VALUE      | f
+                             | enable_hashjoin                     | SET VALUE      | f
+                             | enable_incremental_sort             | SET VALUE      | f
+                             | enable_indexonlyscan                | SET VALUE      | f
+                             | enable_indexscan                    | SET VALUE      | f
+                             | enable_material                     | SET VALUE      | f
+                             | enable_memoize                      | SET VALUE      | f
+                             | enable_mergejoin                    | SET VALUE      | f
+                             | enable_nestloop                     | SET VALUE      | f
+                             | enable_parallel_append              | SET VALUE      | f
+                             | enable_parallel_hash                | SET VALUE      | f
+                             | enable_partition_pruning            | SET VALUE      | f
+                             | enable_partitionwise_aggregate      | SET VALUE      | f
+                             | enable_partitionwise_join           | SET VALUE      | f
+                             | enable_seqscan                      | SET VALUE      | f
+                             | enable_sort                         | SET VALUE      | f
+                             | enable_tidscan                      | SET VALUE      | f
+                             | escape_string_warning               | SET VALUE      | f
+                             | exit_on_error                       | SET VALUE      | f
+                             | extra_float_digits                  | SET VALUE      | f
+                             | force_parallel_mode                 | SET VALUE      | f
+                             | from_collapse_limit                 | SET VALUE      | f
+                             | geqo                                | SET VALUE      | f
+                             | geqo_effort                         | SET VALUE      | f
+                             | geqo_generations                    | SET VALUE      | f
+                             | geqo_pool_size                      | SET VALUE      | f
+                             | geqo_seed                           | SET VALUE      | f
+                             | geqo_selection_bias                 | SET VALUE      | f
+                             | geqo_threshold                      | SET VALUE      | f
+                             | gin_fuzzy_search_limit              | SET VALUE      | f
+                             | gin_pending_list_limit              | SET VALUE      | f
+                             | hash_mem_multiplier                 | SET VALUE      | f
+                             | idle_in_transaction_session_timeout | SET VALUE      | f
+                             | idle_session_timeout                | SET VALUE      | f
+                             | jit                                 | SET VALUE      | f
+                             | jit_above_cost                      | SET VALUE      | f
+                             | jit_expressions                     | SET VALUE      | f
+                             | jit_inline_above_cost               | SET VALUE      | f
+                             | jit_optimize_above_cost             | SET VALUE      | f
+                             | jit_tuple_deforming                 | SET VALUE      | f
+                             | join_collapse_limit                 | SET VALUE      | f
+                             | lc_monetary                         | SET VALUE      | f
+                             | lc_numeric                          | SET VALUE      | f
+                             | lc_time                             | SET VALUE      | f
+                             | local_preload_libraries             | SET VALUE      | f
+                             | lock_timeout                        | SET VALUE      | f
+                             | log_parameter_max_length_on_error   | SET VALUE      | f
+                             | logical_decoding_work_mem           | SET VALUE      | f
+                             | maintenance_io_concurrency          | SET VALUE      | f
+                             | maintenance_work_mem                | SET VALUE      | f
+                             | max_parallel_maintenance_workers    | SET VALUE      | f
+                             | max_parallel_workers                | SET VALUE      | f
+                             | max_parallel_workers_per_gather     | SET VALUE      | f
+                             | min_parallel_index_scan_size        | SET VALUE      | f
+                             | min_parallel_table_scan_size        | SET VALUE      | f
+                             | optimize_bounded_sort               | SET VALUE      | f
+                             | parallel_leader_participation       | SET VALUE      | f
+                             | parallel_setup_cost                 | SET VALUE      | f
+                             | parallel_tuple_cost                 | SET VALUE      | f
+                             | password_encryption                 | SET VALUE      | f
+                             | plan_cache_mode                     | SET VALUE      | f
+                             | quote_all_identifiers               | SET VALUE      | f
+                             | random_page_cost                    | SET VALUE      | f
+                             | role                                | SET VALUE      | f
+                             | row_security                        | SET VALUE      | f
+                             | search_path                         | SET VALUE      | f
+                             | seed                                | SET VALUE      | f
+                             | seq_page_cost                       | SET VALUE      | f
+                             | ssl_renegotiation_limit             | SET VALUE      | f
+                             | standard_conforming_strings         | SET VALUE      | f
+                             | statement_timeout                   | SET VALUE      | f
+                             | synchronize_seqscans                | SET VALUE      | f
+                             | synchronous_commit                  | SET VALUE      | f
+                             | tcp_keepalives_count                | SET VALUE      | f
+                             | tcp_keepalives_idle                 | SET VALUE      | f
+                             | tcp_keepalives_interval             | SET VALUE      | f
+                             | tcp_user_timeout                    | SET VALUE      | f
+                             | temp_buffers                        | SET VALUE      | f
+                             | temp_tablespaces                    | SET VALUE      | f
+                             | timezone_abbreviations              | SET VALUE      | f
+                             | trace_notify                        | SET VALUE      | f
+                             | trace_sort                          | SET VALUE      | f
+                             | trace_syncscan                      | SET VALUE      | f
+                             | transaction_deferrable              | SET VALUE      | f
+                             | transaction_isolation               | SET VALUE      | f
+                             | transaction_read_only               | SET VALUE      | f
+                             | transform_null_equals               | SET VALUE      | f
+                             | vacuum_cost_delay                   | SET VALUE      | f
+                             | vacuum_cost_limit                   | SET VALUE      | f
+                             | vacuum_cost_page_dirty              | SET VALUE      | f
+                             | vacuum_cost_page_hit                | SET VALUE      | f
+                             | vacuum_cost_page_miss               | SET VALUE      | f
+                             | vacuum_failsafe_age                 | SET VALUE      | f
+                             | vacuum_freeze_min_age               | SET VALUE      | f
+                             | vacuum_freeze_table_age             | SET VALUE      | f
+                             | vacuum_multixact_failsafe_age       | SET VALUE      | f
+                             | vacuum_multixact_freeze_min_age     | SET VALUE      | f
+                             | vacuum_multixact_freeze_table_age   | SET VALUE      | f
+                             | wal_sender_timeout                  | SET VALUE      | f
+                             | wal_skip_threshold                  | SET VALUE      | f
+                             | work_mem                            | SET VALUE      | f
+                             | xmlbinary                           | SET VALUE      | f
+                             | xmloption                           | SET VALUE      | f
+(158 rows)
+
+-- Perform all operations as user 'regress_host_resource_admin' --
+SET SESSION AUTHORIZATION regress_host_resource_admin;
+ALTER SYSTEM SET autovacuum_work_mem = 32;  -- ok, privileges have been granted
+ALTER SYSTEM SET ignore_system_indexes = OFF;  -- fail, insufficient privileges
+ERROR:  permission denied to set parameter "ignore_system_indexes"
+ALTER SYSTEM RESET autovacuum_multixact_freeze_max_age;  -- fail, insufficient privileges
+ERROR:  permission denied to set parameter "autovacuum_multixact_freeze_max_age"
+SET jit_provider = 'llvmjit';  -- fail, insufficient privileges
+ERROR:  parameter "jit_provider" cannot be changed without restarting the server
+ALTER SYSTEM SET shared_buffers = 50;  -- ok
+ALTER SYSTEM RESET shared_buffers;  -- ok
+SET autovacuum_work_mem = 50;  -- cannot be changed now
+ERROR:  parameter "autovacuum_work_mem" cannot be changed now
+ALTER SYSTEM RESET temp_file_limit;  -- ok
+SET TimeZone = 'Europe/Helsinki';  -- ok
+ALTER SYSTEM RESET autovacuum_work_mem;  -- ok, privileges have been granted
+RESET TimeZone;  -- ok
+SET SESSION AUTHORIZATION regress_admin;
+DROP ROLE regress_host_resource_admin;  -- fail, privileges remain
+ERROR:  role "regress_host_resource_admin" cannot be dropped because some objects depend on it
+DETAIL:  privileges for setting temp_buffers
+privileges for setting work_mem
+privileges for setting maintenance_work_mem
+privileges for setting logical_decoding_work_mem
+privileges for setting hash_mem_multiplier
+privileges for setting autovacuum_work_mem
+privileges for setting max_stack_depth
+privileges for setting min_dynamic_shared_memory
+privileges for setting shared_buffers
+privileges for setting temp_file_limit
+-- Use "revoke" to remove the privileges and allow the role to be dropped
+REVOKE SET VALUE, ALTER SYSTEM ON
+	autovacuum_work_mem, hash_mem_multiplier, logical_decoding_work_mem,
+	maintenance_work_mem, max_stack_depth, min_dynamic_shared_memory,
+	shared_buffers, temp_buffers, temp_file_limit, work_mem
+FROM regress_host_resource_admin;
+DROP ROLE regress_host_resource_admin;  -- ok
+-- Try that again, but use "drop owned by" instead of "revoke"
+CREATE ROLE regress_host_resource_admin NOSUPERUSER;
+SET SESSION AUTHORIZATION regress_host_resource_admin;
+ALTER SYSTEM SET autovacuum_work_mem = 32;  -- fail, privileges not yet granted
+ERROR:  permission denied to set parameter "autovacuum_work_mem"
+SET SESSION AUTHORIZATION regress_admin;
+GRANT SET VALUE, ALTER SYSTEM ON
+	autovacuum_work_mem, hash_mem_multiplier, logical_decoding_work_mem,
+	maintenance_work_mem, max_stack_depth, min_dynamic_shared_memory,
+	shared_buffers, temp_buffers, temp_file_limit, work_mem
+TO regress_host_resource_admin;
+DROP ROLE regress_host_resource_admin;  -- fail, privileges remain
+ERROR:  role "regress_host_resource_admin" cannot be dropped because some objects depend on it
+DETAIL:  privileges for setting temp_buffers
+privileges for setting work_mem
+privileges for setting maintenance_work_mem
+privileges for setting logical_decoding_work_mem
+privileges for setting hash_mem_multiplier
+privileges for setting autovacuum_work_mem
+privileges for setting max_stack_depth
+privileges for setting min_dynamic_shared_memory
+privileges for setting shared_buffers
+privileges for setting temp_file_limit
+DROP OWNED BY regress_host_resource_admin RESTRICT; -- cascade should not be needed
+SET SESSION AUTHORIZATION regress_host_resource_admin;
+ALTER SYSTEM SET autovacuum_work_mem = 32;  -- fail, "drop owned" has dropped privileges
+ERROR:  permission denied to set parameter "autovacuum_work_mem"
+SET SESSION AUTHORIZATION regress_admin;
+DROP ROLE regress_host_resource_admin;  -- ok
+-- Try that again, but use "reassign owned by" this time
+CREATE ROLE regress_host_resource_admin NOSUPERUSER;
+CREATE ROLE regress_host_resource_newadmin NOSUPERUSER;
+GRANT SET VALUE, ALTER SYSTEM ON
+	autovacuum_work_mem, hash_mem_multiplier, logical_decoding_work_mem,
+	maintenance_work_mem, max_stack_depth, min_dynamic_shared_memory,
+	shared_buffers, temp_buffers, temp_file_limit, work_mem
+TO regress_host_resource_admin;
+REASSIGN OWNED BY regress_host_resource_admin TO regress_host_resource_newadmin;
+SET SESSION AUTHORIZATION regress_host_resource_admin;
+ALTER SYSTEM SET autovacuum_work_mem = 32;  -- ok, "reassign owned" did not change privileges
+SET SESSION AUTHORIZATION regress_admin;
+DROP ROLE regress_host_resource_admin;  -- fail, privileges remain
+ERROR:  role "regress_host_resource_admin" cannot be dropped because some objects depend on it
+DETAIL:  privileges for setting temp_buffers
+privileges for setting work_mem
+privileges for setting maintenance_work_mem
+privileges for setting logical_decoding_work_mem
+privileges for setting hash_mem_multiplier
+privileges for setting autovacuum_work_mem
+privileges for setting max_stack_depth
+privileges for setting min_dynamic_shared_memory
+privileges for setting shared_buffers
+privileges for setting temp_file_limit
+DROP ROLE regress_host_resource_newadmin;  -- ok, nothing was transferred
+-- Use "drop owned by" so we can drop the role
+DROP OWNED BY regress_host_resource_admin;  -- ok
+DROP ROLE regress_host_resource_admin;  -- ok
+-- Create non-superuser with privileges to configure plgsql custom variables
+CREATE ROLE regress_plpgsql_admin NOSUPERUSER;
+-- Perform all operations as user 'regress_plpgsql_admin' --
+SET SESSION AUTHORIZATION regress_plpgsql_admin;
+SET plpgsql.extra_errors TO 'all';
+SET plpgsql.extra_warnings TO 'all';
+RESET plpgsql.extra_errors;
+RESET plpgsql.extra_warnings;
+ALTER SYSTEM SET plpgsql.extra_errors TO 'all';
+ERROR:  permission denied to set parameter "plpgsql.extra_errors"
+ALTER SYSTEM SET plpgsql.extra_warnings TO 'all';
+ERROR:  permission denied to set parameter "plpgsql.extra_warnings"
+ALTER SYSTEM RESET plpgsql.extra_errors;
+ERROR:  permission denied to set parameter "plpgsql.extra_errors"
+ALTER SYSTEM RESET plpgsql.extra_warnings;
+ERROR:  permission denied to set parameter "plpgsql.extra_warnings"
+SET SESSION AUTHORIZATION regress_admin;
+GRANT SET VALUE, ALTER SYSTEM ON
+	plpgsql.extra_warnings, plpgsql.extra_errors
+TO regress_plpgsql_admin;
+-- Perform all operations as user 'regress_plpgsql_admin' --
+SET SESSION AUTHORIZATION regress_plpgsql_admin;  -- ok
+SET plpgsql.extra_errors TO 'all';  -- ok
+SET plpgsql.extra_warnings TO 'all';  -- ok
+RESET plpgsql.extra_errors;  -- ok
+RESET plpgsql.extra_warnings;  -- ok
+ALTER SYSTEM SET plpgsql.extra_errors TO 'all';  -- ok
+ALTER SYSTEM SET plpgsql.extra_warnings TO 'all';  -- ok
+ALTER SYSTEM RESET plpgsql.extra_errors;  -- ok
+ALTER SYSTEM RESET plpgsql.extra_warnings;  -- ok
+SET SESSION AUTHORIZATION regress_admin;
+DROP ROLE regress_plpgsql_admin;  -- fail, privileges remain
+ERROR:  role "regress_plpgsql_admin" cannot be dropped because some objects depend on it
+DETAIL:  privileges for setting plpgsql.extra_warnings
+privileges for setting plpgsql.extra_errors
+REVOKE SET VALUE, ALTER SYSTEM ON
+	plpgsql.extra_warnings, plpgsql.extra_errors
+FROM regress_plpgsql_admin;
+DROP ROLE regress_plpgsql_admin;  -- ok

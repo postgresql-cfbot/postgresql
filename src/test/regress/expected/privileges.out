@@ -54,6 +54,33 @@ REVOKE pg_read_all_settings FROM regress_priv_user8;
 DROP USER regress_priv_user10;
 DROP USER regress_priv_user9;
 DROP USER regress_priv_user8;
+GRANT SET VALUE ON enable_memoize TO regress_priv_user6;
+GRANT SET VALUE ON enable_nestloop TO regress_priv_user6;
+SET ROLE regress_priv_user6;
+SET enable_memoize TO false;
+SET enable_nestloop TO false;
+RESET enable_memoize;
+RESET enable_nestloop;
+RESET ROLE;
+GRANT ALTER SYSTEM ON enable_seqscan TO regress_priv_user7; -- ok
+GRANT ALTER SYSTEM ON sort_mem TO regress_priv_user7; -- old name for "work_mem"
+GRANT ALTER SYSTEM ON maintenance_work_mem TO regress_priv_user7; -- ok
+GRANT ALTER SYSTEM ON no_such_param TO regress_priv_user7; -- ok
+GRANT ALTER SYSTEM ON no_such_extension.no_such_param TO regress_priv_user7; -- ok
+GRANT ALTER SYSTEM ON no_such_extension.no_such_param.longer.than.maximum.namedata.length TO regress_priv_user7; -- ok
+GRANT ALTER SYSTEM ON "" TO regress_priv_user7; -- bad name
+ERROR:  zero-length delimited identifier at or near """"
+LINE 1: GRANT ALTER SYSTEM ON "" TO regress_priv_user7;
+                              ^
+GRANT ALTER SYSTEM ON " " TO regress_priv_user7; -- bad name
+ERROR:  invalid setting name " "
+GRANT ALTER SYSTEM ON " foo " TO regress_priv_user7; -- bad name
+ERROR:  invalid setting name " foo "
+GRANT SELECT ON public.persons2 TO regress_priv_user7;
+SET ROLE regress_priv_user7;
+ALTER SYSTEM SET enable_seqscan = OFF;
+ALTER SYSTEM RESET enable_seqscan;
+RESET ROLE;
 CREATE GROUP regress_priv_group1;
 CREATE GROUP regress_priv_group2 WITH USER regress_priv_user1, regress_priv_user2;
 ALTER GROUP regress_priv_group1 ADD USER regress_priv_user4;
@@ -2355,10 +2382,32 @@ DROP USER regress_priv_user2;
 DROP USER regress_priv_user3;
 DROP USER regress_priv_user4;
 DROP USER regress_priv_user5;
-DROP USER regress_priv_user6;
-DROP USER regress_priv_user7;
+DROP USER regress_priv_user6; -- privileges remain
+ERROR:  role "regress_priv_user6" cannot be dropped because some objects depend on it
+DETAIL:  privileges for setting enable_memoize
+privileges for setting enable_nestloop
+DROP USER regress_priv_user7; -- privileges remain
+ERROR:  role "regress_priv_user7" cannot be dropped because some objects depend on it
+DETAIL:  privileges for setting enable_seqscan
+privileges for setting work_mem
+privileges for setting maintenance_work_mem
+privileges for table persons2
+privileges for setting no_such_param
+privileges for setting no_such_extension.no_such_param
+privileges for setting no_such_extension.no_such_param.longer.than.maximum.namedata.length
 DROP USER regress_priv_user8; -- does not exist
 ERROR:  role "regress_priv_user8" does not exist
+REVOKE SELECT ON public.persons2 FROM regress_priv_user7;
+REVOKE ALTER SYSTEM ON enable_seqscan FROM regress_priv_user7; -- ok
+REVOKE ALTER SYSTEM ON work_mem FROM regress_priv_user7; -- ok, use new name
+REVOKE ALTER SYSTEM ON vacuum_mem FROM regress_priv_user7; -- ok, use old name
+REVOKE ALTER SYSTEM ON no_such_param FROM regress_priv_user7; -- ok
+REVOKE ALTER SYSTEM ON no_such_extension.no_such_param FROM regress_priv_user7; -- ok
+REVOKE ALTER SYSTEM ON no_such_extension.no_such_param.longer.than.maximum.namedata.length FROM regress_priv_user7; -- ok
+DROP USER regress_priv_user7; -- ok
+REVOKE SET VALUE ON enable_memoize FROM regress_priv_user6;
+REVOKE SET VALUE ON enable_nestloop FROM regress_priv_user6;
+DROP USER regress_priv_user6; -- ok
 -- permissions with LOCK TABLE
 CREATE USER regress_locktable_user;
 CREATE TABLE lock_table (a int);

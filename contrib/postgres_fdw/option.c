@@ -526,7 +526,7 @@ _PG_init(void)
 							   NULL,
 							   &pgfdw_application_name,
 							   NULL,
-							   PGC_USERSET,
+							   PGC_SUSET,
 							   0,
 							   NULL,
 							   NULL,

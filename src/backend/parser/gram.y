@@ -363,8 +363,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <str>		foreign_server_version opt_foreign_server_version
 %type <str>		opt_in_database
 
-%type <str>		OptSchemaName
-%type <list>	OptSchemaEltList
+%type <str>		OptSchemaName setting_name
+%type <list>	OptSchemaEltList setting_target
 
 %type <chr>		am_type
 
@@ -402,8 +402,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <str>		iso_level opt_encoding
 %type <rolespec> grantee
 %type <list>	grantee_list
-%type <accesspriv> privilege
-%type <list>	privileges privilege_list
+%type <accesspriv> privilege setting_priv
+%type <list>	privileges privilege_list setting_priv_list
 %type <privtarget> privilege_target
 %type <objwithargs> function_with_argtypes aggregate_with_argtypes operator_with_argtypes
 %type <list>	function_with_argtypes_list aggregate_with_argtypes_list operator_with_argtypes_list
@@ -715,7 +715,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	ORDER ORDINALITY OTHERS OUT_P OUTER_P
 	OVER OVERLAPS OVERLAY OVERRIDING OWNED OWNER
 
-	PARALLEL PARSER PARTIAL PARTITION PASSING PASSWORD PLACING PLANS POLICY
+	PARALLEL PARAMETER PARSER PARTIAL PARTITION PASSING PASSWORD PLACING PLANS POLICY
 	POSITION PRECEDING PRECISION PRESERVE PREPARE PREPARED PRIMARY
 	PRIOR PRIVILEGES PROCEDURAL PROCEDURE PROCEDURES PROGRAM PUBLICATION
 
@@ -6972,6 +6972,20 @@ GrantStmt:	GRANT privileges ON privilege_target TO grantee_list
 					n->grantor = $8;
 					$$ = (Node*)n;
 				}
+			| GRANT setting_priv_list ON setting_target TO grantee_list
+			opt_grant_grant_option opt_granted_by
+				{
+					GrantStmt *n = makeNode(GrantStmt);
+					n->is_grant = true;
+					n->privileges = $2;
+					n->targtype = ACL_TARGET_OBJECT;
+					n->objtype = OBJECT_SETTING;
+					n->objects = $4;
+					n->grantees = $6;
+					n->grant_option = $7;
+					n->grantor = $8;
+					$$ = (Node*)n;
+				}
 		;
 
 RevokeStmt:
@@ -7000,6 +7014,36 @@ RevokeStmt:
 					n->targtype = ($7)->targtype;
 					n->objtype = ($7)->objtype;
 					n->objects = ($7)->objs;
+					n->grantees = $9;
+					n->grantor = $10;
+					n->behavior = $11;
+					$$ = (Node *)n;
+				}
+			| REVOKE setting_priv_list ON setting_target FROM grantee_list
+			opt_granted_by opt_drop_behavior
+				{
+					GrantStmt *n = makeNode(GrantStmt);
+					n->is_grant = false;
+					n->grant_option = false;
+					n->privileges = $2;
+					n->targtype = ACL_TARGET_OBJECT;
+					n->objtype = OBJECT_SETTING;
+					n->objects = $4;
+					n->grantees = $6;
+					n->grantor = $7;
+					n->behavior = $8;
+					$$ = (Node *)n;
+				}
+			| REVOKE GRANT OPTION FOR setting_priv_list ON setting_target
+			FROM grantee_list opt_granted_by opt_drop_behavior
+				{
+					GrantStmt *n = makeNode(GrantStmt);
+					n->is_grant = false;
+					n->grant_option = true;
+					n->privileges = $5;
+					n->targtype = ACL_TARGET_OBJECT;
+					n->objtype = OBJECT_SETTING;
+					n->objects = $7;
 					n->grantees = $9;
 					n->grantor = $10;
 					n->behavior = $11;
@@ -7073,6 +7117,49 @@ privilege:	SELECT opt_column_list
 			}
 		;
 
+setting_priv_list: setting_priv						{ $$ = list_make1($1); }
+			| setting_priv_list ',' setting_priv	{ $$ = lappend($1, $3); }
+		;
+
+setting_priv:
+		ALTER SYSTEM_P
+			{
+				AccessPriv *n = makeNode(AccessPriv);
+				n->priv_name = pstrdup("alter system");
+				n->cols = NIL;
+				$$ = n;
+			}
+		| SET VALUE_P
+			{
+				AccessPriv *n = makeNode(AccessPriv);
+				n->priv_name = pstrdup("set value");
+				n->cols = NIL;
+				$$ = n;
+			}
+		;
+
+
+setting_target:
+			setting_name
+				{
+					$$ = list_make1(makeString($1));
+				}
+			| setting_target ',' setting_name
+				{
+					$$ = lappend($1, makeString($3));
+				}
+		;
+
+setting_name:
+			ColId
+				{
+					$$ = $1;
+				}
+			| setting_name '.' ColId
+				{
+					$$ = psprintf("%s.%s", $1, $3);
+				}
+		;
 
 /* Don't bother trying to fold the first two rules into one using
  * opt_table.  You're going to get conflicts.
@@ -15816,6 +15903,7 @@ unreserved_keyword:
 			| OWNED
 			| OWNER
 			| PARALLEL
+			| PARAMETER
 			| PARSER
 			| PARTIAL
 			| PARTITION
@@ -16394,6 +16482,7 @@ bare_label_keyword:
 			| OWNED
 			| OWNER
 			| PARALLEL
+			| PARAMETER
 			| PARSER
 			| PARTIAL
 			| PARTITION

@@ -57,6 +57,7 @@
 #include "catalog/pg_rewrite.h"
 #include "catalog/pg_seclabel.h"
 #include "catalog/pg_sequence.h"
+#include "catalog/pg_setting_acl.h"
 #include "catalog/pg_shdepend.h"
 #include "catalog/pg_shdescription.h"
 #include "catalog/pg_shseclabel.h"
@@ -761,6 +762,28 @@ static const struct cachedesc cacheinfo[] = {
 			0
 		},
 		32
+	},
+	{SettingAclRelationId,		/* SETTINGNAME */
+		SettingAclSettingIndexId,
+		1,
+		{
+			Anum_pg_setting_acl_setting,
+			0,
+			0,
+			0
+		},
+		4
+	},
+	{SettingAclRelationId,		/* SETTINGOID */
+		SettingAclOidIndexId,
+		1,
+		{
+			Anum_pg_setting_acl_oid,
+			0,
+			0,
+			0
+		},
+		4
 	},
 	{StatisticExtDataRelationId,	/* STATEXTDATASTXOID */
 		StatisticExtDataStxoidInhIndexId,

@@ -34,6 +34,7 @@
 #include "catalog/pg_largeobject.h"
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_replication_origin.h"
+#include "catalog/pg_setting_acl.h"
 #include "catalog/pg_shdepend.h"
 #include "catalog/pg_shdescription.h"
 #include "catalog/pg_shseclabel.h"
@@ -246,6 +247,7 @@ IsSharedRelation(Oid relationId)
 	/* These are the shared catalogs (look for BKI_SHARED_RELATION) */
 	if (relationId == AuthIdRelationId ||
 		relationId == AuthMemRelationId ||
+		relationId == SettingAclRelationId ||
 		relationId == DatabaseRelationId ||
 		relationId == SharedDescriptionRelationId ||
 		relationId == SharedDependRelationId ||
@@ -260,6 +262,8 @@ IsSharedRelation(Oid relationId)
 		relationId == AuthIdOidIndexId ||
 		relationId == AuthMemRoleMemIndexId ||
 		relationId == AuthMemMemRoleIndexId ||
+		relationId == SettingAclSettingIndexId ||
+		relationId == SettingAclOidIndexId ||
 		relationId == DatabaseNameIndexId ||
 		relationId == DatabaseOidIndexId ||
 		relationId == SharedDescriptionObjIndexId ||
@@ -277,6 +281,8 @@ IsSharedRelation(Oid relationId)
 	/* These are their toast tables and toast indexes */
 	if (relationId == PgAuthidToastTable ||
 		relationId == PgAuthidToastIndex ||
+		relationId == PgSettingAclToastTable ||
+		relationId == PgSettingAclToastIndex ||
 		relationId == PgDatabaseToastTable ||
 		relationId == PgDatabaseToastIndex ||
 		relationId == PgDbRoleSettingToastTable ||

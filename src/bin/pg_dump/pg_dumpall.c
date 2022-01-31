@@ -36,6 +36,7 @@ static void help(void);
 static void dropRoles(PGconn *conn);
 static void dumpRoles(PGconn *conn);
 static void dumpRoleMembership(PGconn *conn);
+static void dumpRoleGUCPrivs(PGconn *conn);
 static void dropTablespaces(PGconn *conn);
 static void dumpTablespaces(PGconn *conn);
 static void dropDBs(PGconn *conn);
@@ -585,6 +586,10 @@ main(int argc, char *argv[])
 
 			/* Dump role memberships */
 			dumpRoleMembership(conn);
+
+			/* Dump role guc privileges */
+			if (server_version >= 150000)
+				dumpRoleGUCPrivs(conn);
 		}
 
 		/* Dump tablespaces */
@@ -1020,6 +1025,72 @@ dropTablespaces(PGconn *conn)
 	}
 
 	PQclear(res);
+
+	fprintf(OPF, "\n\n");
+}
+
+/*
+ * Dump role configuration parameter privileges.  This code is used for 15.0
+ * and later servers.
+ *
+ * Note: we expect dumpRoles already created all the roles, but there are
+ * no per-role configuration parameter privileges yet..
+ */
+static void
+dumpRoleGUCPrivs(PGconn *conn)
+{
+	PQExpBuffer buf = createPQExpBuffer();
+	PGresult   *res;
+	int			i;
+
+	printfPQExpBuffer(buf, "SELECT string_agg(acl.privilege_type, ', ' ORDER BY acl.privilege_type), "
+					  "set_acl.setting, "
+					  "grantee.rolname AS grantee, "
+					  "acl.is_grantable, "
+					  "grantor.rolname AS grantor "
+					  "FROM pg_catalog.pg_setting_acl set_acl, "
+					  "LATERAL (SELECT * FROM aclexplode(set_acl.setacl)) acl "
+					  "JOIN pg_catalog.pg_authid grantee "
+					  "ON acl.grantee = grantee.oid "
+					  "LEFT JOIN pg_catalog.pg_authid grantor ON "
+					  "acl.grantor = grantor.oid "
+					  "WHERE acl.grantee > 0 "
+					  "GROUP BY setting, grantee.rolname, is_grantable, grantor.rolname"
+					  );
+
+	res = executeQuery(conn, buf->data);
+
+	if (PQntuples(res) > 0)
+		fprintf(OPF, "--\n-- Role privileges on configuration parameters\n--\n\n");
+
+	for (i = 0; i < PQntuples(res); i++)
+	{
+		char	   *privilege = PQgetvalue(res, i, 0);
+		char	   *setting = PQgetvalue(res, i, 1);
+		char	   *grantee = PQgetvalue(res, i, 2);
+		char	   *grantable = PQgetvalue(res, i, 3);
+
+		fprintf(OPF, "GRANT %s", privilege);
+		fprintf(OPF, " ON %s", setting);
+		fprintf(OPF, " TO %s", fmtId(grantee));
+		if (*grantable == 't')
+			fprintf(OPF, " WITH GRANT OPTION");
+
+		/*
+		 * We don't track the grantor very carefully in the backend, so cope
+		 * with the possibility that it has been dropped.
+		 */
+		if (!PQgetisnull(res, i, 4))
+		{
+			char	   *grantor = PQgetvalue(res, i, 4);
+
+			fprintf(OPF, " GRANTED BY %s", fmtId(grantor));
+		}
+		fprintf(OPF, ";\n");
+	}
+
+	PQclear(res);
+	destroyPQExpBuffer(buf);
 
 	fprintf(OPF, "\n\n");
 }

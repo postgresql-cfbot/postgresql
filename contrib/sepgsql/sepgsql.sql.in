@@ -34,4 +34,5 @@ CREATE OR REPLACE FUNCTION pg_catalog.sepgsql_setcon(text) RETURNS bool AS 'MODU
 CREATE OR REPLACE FUNCTION pg_catalog.sepgsql_mcstrans_in(text) RETURNS text AS 'MODULE_PATHNAME', 'sepgsql_mcstrans_in' LANGUAGE C STRICT;
 CREATE OR REPLACE FUNCTION pg_catalog.sepgsql_mcstrans_out(text) RETURNS text AS 'MODULE_PATHNAME', 'sepgsql_mcstrans_out' LANGUAGE C STRICT;
 CREATE OR REPLACE FUNCTION pg_catalog.sepgsql_restorecon(text) RETURNS bool AS 'MODULE_PATHNAME', 'sepgsql_restorecon' LANGUAGE C;
+GRANT SET VALUE ON "sepgsql.debug_audit" TO public;
 SELECT sepgsql_restorecon(NULL);

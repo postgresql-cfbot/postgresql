@@ -23,6 +23,7 @@
 #include "catalog/pg_authid.h"
 #include "catalog/pg_class.h"
 #include "catalog/pg_database.h"
+#include "catalog/pg_setting_acl.h"
 #include "catalog/pg_type.h"
 #include "commands/dbcommands.h"
 #include "commands/proclang.h"
@@ -36,6 +37,7 @@
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/catcache.h"
+#include "utils/guc.h"
 #include "utils/inval.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
@@ -109,6 +111,8 @@ static Oid	convert_tablespace_name(text *tablespacename);
 static AclMode convert_tablespace_priv_string(text *priv_type_text);
 static Oid	convert_type_name(text *typename);
 static AclMode convert_type_priv_string(text *priv_type_text);
+static Oid	convert_setting_name(text *setting);
+static AclMode convert_setting_priv_string(text *priv_setting_text);
 static AclMode convert_role_priv_string(text *priv_type_text);
 static AclResult pg_role_aclcheck(Oid role_oid, Oid roleid, AclMode mode);
 
@@ -305,6 +309,12 @@ aclparse(const char *s, AclItem *aip)
 				break;
 			case ACL_CONNECT_CHR:
 				read = ACL_CONNECT;
+				break;
+			case ACL_SET_VALUE_CHR:
+				read = ACL_SET_VALUE;
+				break;
+			case ACL_ALTER_SYSTEM_CHR:
+				read = ACL_ALTER_SYSTEM;
 				break;
 			case 'R':			/* ignore old RULE privileges */
 				read = 0;
@@ -793,6 +803,10 @@ acldefault(ObjectType objtype, Oid ownerId)
 		case OBJECT_TYPE:
 			world_default = ACL_USAGE;
 			owner_default = ACL_ALL_RIGHTS_TYPE;
+			break;
+		case OBJECT_SETTING:
+			world_default = ACL_NO_RIGHTS;
+			owner_default = ACL_NO_RIGHTS;
 			break;
 		default:
 			elog(ERROR, "unrecognized objtype: %d", (int) objtype);
@@ -1602,6 +1616,10 @@ convert_priv_string(text *priv_type_text)
 		return ACL_CREATE_TEMP;
 	if (pg_strcasecmp(priv_type, "CONNECT") == 0)
 		return ACL_CONNECT;
+	if (pg_strcasecmp(priv_type, "SET VALUE") == 0)
+		return ACL_SET_VALUE;
+	if (pg_strcasecmp(priv_type, "ALTER SYSTEM") == 0)
+		return ACL_ALTER_SYSTEM;
 	if (pg_strcasecmp(priv_type, "RULE") == 0)
 		return 0;				/* ignore old RULE privileges */
 
@@ -1698,6 +1716,10 @@ convert_aclright_to_string(int aclright)
 			return "TEMPORARY";
 		case ACL_CONNECT:
 			return "CONNECT";
+		case ACL_SET_VALUE:
+			return "SET VALUE";
+		case ACL_ALTER_SYSTEM:
+			return "ALTER SYSTEM";
 		default:
 			elog(ERROR, "unrecognized aclright: %d", aclright);
 			return NULL;
@@ -4429,6 +4451,205 @@ convert_type_priv_string(text *priv_type_text)
 	return convert_any_priv_string(priv_type_text, type_priv_map);
 }
 
+/*
+ * has_setting_privilege variants
+ *		These are all named "has_setting_privilege" at the SQL level.
+ *		They take various combinations of setting name, setting OID,
+ *		user name, user OID, or implicit user = current_user.
+ *
+ *		The result is a boolean value: true if user has the indicated
+ *		privilege, false if not, or NULL if object doesn't exist.
+ */
+
+/*
+ * has_setting_privilege_name_name
+ *		Check user privileges on a setting given
+ *		name username, text setting, and text priv name.
+ */
+Datum
+has_setting_privilege_name_name(PG_FUNCTION_ARGS)
+{
+	Name		username = PG_GETARG_NAME(0);
+	text	   *setting = PG_GETARG_TEXT_PP(1);
+	text	   *priv_setting_text = PG_GETARG_TEXT_PP(2);
+	Oid			roleid;
+	Oid			settingoid;
+	AclMode		mode;
+	AclResult	aclresult;
+
+	roleid = get_role_oid_or_public(NameStr(*username));
+	settingoid = convert_setting_name(setting);
+	mode = convert_setting_priv_string(priv_setting_text);
+
+	aclresult = pg_setting_acl_aclcheck(settingoid, roleid, mode);
+
+	PG_RETURN_BOOL(aclresult == ACLCHECK_OK);
+}
+
+/*
+ * has_setting_privilege_name
+ *		Check user privileges on a setting given
+ *		text setting and text priv name.
+ *		current_user is assumed
+ */
+Datum
+has_setting_privilege_name(PG_FUNCTION_ARGS)
+{
+	text	   *setting = PG_GETARG_TEXT_PP(0);
+	text	   *priv_setting_text = PG_GETARG_TEXT_PP(1);
+	Oid			roleid;
+	Oid			settingoid;
+	AclMode		mode;
+	AclResult	aclresult;
+
+	roleid = GetUserId();
+	settingoid = convert_setting_name(setting);
+	mode = convert_setting_priv_string(priv_setting_text);
+
+	aclresult = pg_setting_acl_aclcheck(settingoid, roleid, mode);
+
+	PG_RETURN_BOOL(aclresult == ACLCHECK_OK);
+}
+
+/*
+ * has_setting_privilege_name_id
+ *		Check user privileges on a setting given
+ *		name usename, setting oid, and text priv name.
+ */
+Datum
+has_setting_privilege_name_id(PG_FUNCTION_ARGS)
+{
+	Name		username = PG_GETARG_NAME(0);
+	Oid			settingoid = PG_GETARG_OID(1);
+	text	   *priv_setting_text = PG_GETARG_TEXT_PP(2);
+	Oid			roleid;
+	AclMode		mode;
+	AclResult	aclresult;
+
+	roleid = get_role_oid_or_public(NameStr(*username));
+	mode = convert_setting_priv_string(priv_setting_text);
+
+	if (!SearchSysCacheExists1(SETTINGOID, ObjectIdGetDatum(settingoid)))
+		PG_RETURN_NULL();
+
+	aclresult = pg_setting_acl_aclcheck(settingoid, roleid, mode);
+
+	PG_RETURN_BOOL(aclresult == ACLCHECK_OK);
+}
+
+/*
+ * has_setting_privilege_id
+ *		Check user privileges on a setting given
+ *		setting oid, and text priv name.
+ *		current_user is assumed
+ */
+Datum
+has_setting_privilege_id(PG_FUNCTION_ARGS)
+{
+	Oid			settingoid = PG_GETARG_OID(0);
+	text	   *priv_setting_text = PG_GETARG_TEXT_PP(1);
+	Oid			roleid;
+	AclMode		mode;
+	AclResult	aclresult;
+
+	roleid = GetUserId();
+	mode = convert_setting_priv_string(priv_setting_text);
+
+	if (!SearchSysCacheExists1(SETTINGOID, ObjectIdGetDatum(settingoid)))
+		PG_RETURN_NULL();
+
+	aclresult = pg_setting_acl_aclcheck(settingoid, roleid, mode);
+
+	PG_RETURN_BOOL(aclresult == ACLCHECK_OK);
+}
+
+/*
+ * has_setting_privilege_id_name
+ *		Check user privileges on a setting given
+ *		roleid, text setting, and text priv name.
+ */
+Datum
+has_setting_privilege_id_name(PG_FUNCTION_ARGS)
+{
+	Oid			roleid = PG_GETARG_OID(0);
+	text	   *setting = PG_GETARG_TEXT_PP(1);
+	text	   *priv_setting_text = PG_GETARG_TEXT_PP(2);
+	Oid			settingoid;
+	AclMode		mode;
+	AclResult	aclresult;
+
+	settingoid = convert_setting_name(setting);
+	mode = convert_setting_priv_string(priv_setting_text);
+
+	aclresult = pg_setting_acl_aclcheck(settingoid, roleid, mode);
+
+	PG_RETURN_BOOL(aclresult == ACLCHECK_OK);
+}
+
+/*
+ * has_setting_privilege_id_id
+ *		Check user privileges on a setting given
+ *		roleid, setting oid, and text priv name.
+ */
+Datum
+has_setting_privilege_id_id(PG_FUNCTION_ARGS)
+{
+	Oid			roleid = PG_GETARG_OID(0);
+	Oid			settingoid = PG_GETARG_OID(1);
+	text	   *priv_setting_text = PG_GETARG_TEXT_PP(2);
+	AclMode		mode;
+	AclResult	aclresult;
+
+	mode = convert_setting_priv_string(priv_setting_text);
+
+	if (!SearchSysCacheExists1(SETTINGOID, ObjectIdGetDatum(settingoid)))
+		PG_RETURN_NULL();
+
+	aclresult = pg_setting_acl_aclcheck(settingoid, roleid, mode);
+
+	PG_RETURN_BOOL(aclresult == ACLCHECK_OK);
+}
+
+/*
+ *		Support routines for has_setting_privilege family.
+ */
+
+/*
+ * Given a setting name expressed as a string, look it up and return Oid
+ */
+static Oid
+convert_setting_name(text *settingname)
+{
+	Oid			oid;
+	char	   *setting = text_to_cstring(settingname);
+
+	oid = get_setting_oid(setting, true);
+
+	if (!OidIsValid(oid))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("setting \"%s\" does not exist", setting)));
+
+	return oid;
+}
+
+/*
+ * convert_setting_priv_string
+ *		Convert text string to AclMode value.
+ */
+static AclMode
+convert_setting_priv_string(text *priv_setting_text)
+{
+	static const priv_map setting_priv_map[] = {
+		{"SET VALUE", ACL_SET_VALUE},
+		{"SET VALUE WITH GRANT OPTION", ACL_GRANT_OPTION_FOR(ACL_SET_VALUE)},
+		{"ALTER SYSTEM", ACL_ALTER_SYSTEM},
+		{"ALTER SYSTEM WITH GRANT OPTION", ACL_GRANT_OPTION_FOR(ACL_ALTER_SYSTEM)},
+		{NULL, 0}
+	};
+
+	return convert_any_priv_string(priv_setting_text, setting_priv_map);
+}
 
 /*
  * pg_has_role variants
@@ -4668,6 +4889,43 @@ initialize_acl(void)
 									  RoleMembershipCacheCallback,
 									  (Datum) 0);
 	}
+}
+
+/*
+ * get_setting_oid - Given a configuration parameter name, look up the
+ * configuration parameter's OID.  Note that names which are aliases for
+ * a canonical name will be translated automatically and the OID found.
+ *
+ * If missing_ok is false, throw an error if the configuration parameter name
+ * is not found.
+ *
+ * Returns the Oid of the configuration parameter.
+ */
+Oid
+get_setting_oid(const char *setting, bool missing_ok)
+{
+	Oid			oid;
+
+	/* Check for the variable by the name we were given */
+	oid = GetSysCacheOid1(SETTINGNAME, Anum_pg_setting_acl_oid,
+						  PointerGetDatum(cstring_to_text(setting)));
+	if (!OidIsValid(oid))
+	{
+		const char *canonical;
+
+		/* Check if the variable has a different canonical spelling */
+		canonical = GetConfigOptionCanonicalName(setting);
+		if (canonical != NULL)
+			oid = GetSysCacheOid1(SETTINGNAME, Anum_pg_setting_acl_oid,
+								  PointerGetDatum(cstring_to_text(canonical)));
+
+		if (!OidIsValid(oid) && !missing_ok)
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("setting \"%s\" does not exist", setting)));
+	}
+
+	return oid;
 }
 
 /*

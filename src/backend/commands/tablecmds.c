@@ -12620,6 +12620,7 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 			case OCLASS_TYPE:
 			case OCLASS_CAST:
 			case OCLASS_COLLATION:
+			case OCLASS_SETTING:
 			case OCLASS_CONVERSION:
 			case OCLASS_LANGUAGE:
 			case OCLASS_LARGEOBJECT:

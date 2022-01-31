@@ -66,6 +66,33 @@ DROP USER regress_priv_user10;
 DROP USER regress_priv_user9;
 DROP USER regress_priv_user8;
 
+GRANT SET VALUE ON enable_memoize TO regress_priv_user6;
+GRANT SET VALUE ON enable_nestloop TO regress_priv_user6;
+
+SET ROLE regress_priv_user6;
+SET enable_memoize TO false;
+SET enable_nestloop TO false;
+RESET enable_memoize;
+RESET enable_nestloop;
+RESET ROLE;
+
+GRANT ALTER SYSTEM ON enable_seqscan TO regress_priv_user7; -- ok
+GRANT ALTER SYSTEM ON sort_mem TO regress_priv_user7; -- old name for "work_mem"
+GRANT ALTER SYSTEM ON maintenance_work_mem TO regress_priv_user7; -- ok
+GRANT ALTER SYSTEM ON no_such_param TO regress_priv_user7; -- ok
+GRANT ALTER SYSTEM ON no_such_extension.no_such_param TO regress_priv_user7; -- ok
+GRANT ALTER SYSTEM ON no_such_extension.no_such_param.longer.than.maximum.namedata.length TO regress_priv_user7; -- ok
+GRANT ALTER SYSTEM ON "" TO regress_priv_user7; -- bad name
+GRANT ALTER SYSTEM ON " " TO regress_priv_user7; -- bad name
+GRANT ALTER SYSTEM ON " foo " TO regress_priv_user7; -- bad name
+
+GRANT SELECT ON public.persons2 TO regress_priv_user7;
+
+SET ROLE regress_priv_user7;
+ALTER SYSTEM SET enable_seqscan = OFF;
+ALTER SYSTEM RESET enable_seqscan;
+RESET ROLE;
+
 CREATE GROUP regress_priv_group1;
 CREATE GROUP regress_priv_group2 WITH USER regress_priv_user1, regress_priv_user2;
 
@@ -1426,10 +1453,23 @@ DROP USER regress_priv_user2;
 DROP USER regress_priv_user3;
 DROP USER regress_priv_user4;
 DROP USER regress_priv_user5;
-DROP USER regress_priv_user6;
-DROP USER regress_priv_user7;
+DROP USER regress_priv_user6; -- privileges remain
+DROP USER regress_priv_user7; -- privileges remain
 DROP USER regress_priv_user8; -- does not exist
 
+REVOKE SELECT ON public.persons2 FROM regress_priv_user7;
+REVOKE ALTER SYSTEM ON enable_seqscan FROM regress_priv_user7; -- ok
+REVOKE ALTER SYSTEM ON work_mem FROM regress_priv_user7; -- ok, use new name
+REVOKE ALTER SYSTEM ON vacuum_mem FROM regress_priv_user7; -- ok, use old name
+REVOKE ALTER SYSTEM ON no_such_param FROM regress_priv_user7; -- ok
+REVOKE ALTER SYSTEM ON no_such_extension.no_such_param FROM regress_priv_user7; -- ok
+REVOKE ALTER SYSTEM ON no_such_extension.no_such_param.longer.than.maximum.namedata.length FROM regress_priv_user7; -- ok
+DROP USER regress_priv_user7; -- ok
+
+REVOKE SET VALUE ON enable_memoize FROM regress_priv_user6;
+REVOKE SET VALUE ON enable_nestloop FROM regress_priv_user6;
+
+DROP USER regress_priv_user6; -- ok
 
 -- permissions with LOCK TABLE
 CREATE USER regress_locktable_user;

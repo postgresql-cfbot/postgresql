@@ -449,7 +449,7 @@ _PG_init(void)
 							 NULL,
 							 &sepgsql_debug_audit,
 							 false,
-							 PGC_USERSET,
+							 PGC_SUSET,
 							 GUC_NOT_IN_SAMPLE,
 							 NULL,
 							 NULL,

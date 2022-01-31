@@ -32,6 +32,7 @@
 #include "catalog/pg_operator.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_range.h"
+#include "catalog/pg_setting_acl.h"
 #include "catalog/pg_statistic.h"
 #include "catalog/pg_transform.h"
 #include "catalog/pg_type.h"
@@ -3302,6 +3303,25 @@ free_attstatsslot(AttStatsSlot *sslot)
 		pfree(sslot->values_arr);
 	if (sslot->numbers_arr)
 		pfree(sslot->numbers_arr);
+}
+
+char *
+get_setting_name(Oid configid)
+{
+	HeapTuple	tp;
+
+	tp = SearchSysCache1(SETTINGOID, ObjectIdGetDatum(configid));
+	if (HeapTupleIsValid(tp))
+	{
+		Form_pg_setting_acl configtup = (Form_pg_setting_acl) GETSTRUCT(tp);
+		char	   *result;
+
+		result = pstrdup(text_to_cstring(&configtup->setting));
+		ReleaseSysCache(tp);
+		return result;
+	}
+	else
+		return NULL;
 }
 
 /*				---------- PG_NAMESPACE CACHE ----------				 */

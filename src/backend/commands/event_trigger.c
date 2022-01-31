@@ -937,6 +937,7 @@ EventTriggerSupportsObjectType(ObjectType obtype)
 {
 	switch (obtype)
 	{
+		case OBJECT_SETTING:
 		case OBJECT_DATABASE:
 		case OBJECT_TABLESPACE:
 		case OBJECT_ROLE:
@@ -1012,6 +1013,7 @@ EventTriggerSupportsObjectClass(ObjectClass objclass)
 {
 	switch (objclass)
 	{
+		case OCLASS_SETTING:
 		case OCLASS_DATABASE:
 		case OCLASS_TBLSPACE:
 		case OCLASS_ROLE:
@@ -2078,6 +2080,8 @@ stringify_grant_objtype(ObjectType objtype)
 	{
 		case OBJECT_COLUMN:
 			return "COLUMN";
+		case OBJECT_SETTING:
+			return "SETTING";
 		case OBJECT_TABLE:
 			return "TABLE";
 		case OBJECT_SEQUENCE:
@@ -2161,6 +2165,8 @@ stringify_adefprivs_objtype(ObjectType objtype)
 	{
 		case OBJECT_COLUMN:
 			return "COLUMNS";
+		case OBJECT_SETTING:
+			return "SETTINGS";
 		case OBJECT_TABLE:
 			return "TABLES";
 		case OBJECT_SEQUENCE:

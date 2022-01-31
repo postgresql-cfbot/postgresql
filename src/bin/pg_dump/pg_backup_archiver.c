@@ -3421,6 +3421,7 @@ _getObjectDescription(PQExpBuffer buf, TocEntry *te)
 		strcmp(type, "SCHEMA") == 0 ||
 		strcmp(type, "EVENT TRIGGER") == 0 ||
 		strcmp(type, "FOREIGN DATA WRAPPER") == 0 ||
+		strcmp(type, "SETTING") == 0 ||
 		strcmp(type, "SERVER") == 0 ||
 		strcmp(type, "PUBLICATION") == 0 ||
 		strcmp(type, "SUBSCRIPTION") == 0 ||
@@ -3604,6 +3605,7 @@ _printTocEntry(ArchiveHandle *AH, TocEntry *te, bool isData)
 			strcmp(te->desc, "TEXT SEARCH DICTIONARY") == 0 ||
 			strcmp(te->desc, "TEXT SEARCH CONFIGURATION") == 0 ||
 			strcmp(te->desc, "FOREIGN DATA WRAPPER") == 0 ||
+			strcmp(te->desc, "SETTING") == 0 ||
 			strcmp(te->desc, "SERVER") == 0 ||
 			strcmp(te->desc, "STATISTICS") == 0 ||
 			strcmp(te->desc, "PUBLICATION") == 0 ||

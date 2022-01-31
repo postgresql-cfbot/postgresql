@@ -14115,6 +14115,9 @@ dumpDefaultACL(Archive *fout, const DefaultACLInfo *daclinfo)
 		case DEFACLOBJ_NAMESPACE:
 			type = "SCHEMAS";
 			break;
+		case DEFACLOBJ_SETTING:
+			type = "SETTINGS";
+			break;
 		default:
 			/* shouldn't get here */
 			fatal("unrecognized object type in default privileges: %d",
@@ -14158,7 +14161,7 @@ dumpDefaultACL(Archive *fout, const DefaultACLInfo *daclinfo)
  *		or InvalidDumpId if there is no need for a second dependency.
  * 'type' must be one of
  *		TABLE, SEQUENCE, FUNCTION, LANGUAGE, SCHEMA, DATABASE, TABLESPACE,
- *		FOREIGN DATA WRAPPER, SERVER, or LARGE OBJECT.
+ *		FOREIGN DATA WRAPPER, SERVER, SETTING or LARGE OBJECT.
  * 'name' is the formatted name of the object.  Must be quoted etc. already.
  * 'subname' is the formatted name of the sub-object, if any.  Must be quoted.
  *		(Currently we assume that subname is only provided for table columns.)

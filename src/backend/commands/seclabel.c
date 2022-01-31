@@ -67,6 +67,7 @@ SecLabelSupportsObjectType(ObjectType objtype)
 		case OBJECT_ATTRIBUTE:
 		case OBJECT_CAST:
 		case OBJECT_COLLATION:
+		case OBJECT_SETTING:
 		case OBJECT_CONVERSION:
 		case OBJECT_DEFAULT:
 		case OBJECT_DEFACL:

@@ -1708,6 +1708,19 @@ pg_sequences| SELECT n.nspname AS schemaname,
      JOIN pg_class c ON ((c.oid = s.seqrelid)))
      LEFT JOIN pg_namespace n ON ((n.oid = c.relnamespace)))
   WHERE ((NOT pg_is_other_temp_schema(n.oid)) AND (c.relkind = 'S'::"char"));
+pg_setting_privileges| SELECT grantor.rolname AS grantor,
+    grantee.rolname AS grantee,
+    set_acl.setting,
+    acl.privilege_type,
+    acl.is_grantable
+   FROM pg_setting_acl set_acl,
+    ((LATERAL ( SELECT aclexplode.grantor,
+            aclexplode.grantee,
+            aclexplode.privilege_type,
+            aclexplode.is_grantable
+           FROM aclexplode(set_acl.setacl) aclexplode(grantor, grantee, privilege_type, is_grantable)) acl
+     LEFT JOIN pg_authid grantee ON ((acl.grantee = grantee.oid)))
+     LEFT JOIN pg_authid grantor ON ((acl.grantor = grantor.oid)));
 pg_settings| SELECT a.name,
     a.setting,
     a.unit,

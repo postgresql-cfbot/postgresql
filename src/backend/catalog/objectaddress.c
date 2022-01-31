@@ -51,6 +51,7 @@
 #include "catalog/pg_publication_namespace.h"
 #include "catalog/pg_publication_rel.h"
 #include "catalog/pg_rewrite.h"
+#include "catalog/pg_setting_acl.h"
 #include "catalog/pg_statistic_ext.h"
 #include "catalog/pg_subscription.h"
 #include "catalog/pg_tablespace.h"
@@ -2309,6 +2310,7 @@ pg_get_object_address(PG_FUNCTION_ARGS)
 		case OBJECT_COLUMN:
 		case OBJECT_ATTRIBUTE:
 		case OBJECT_COLLATION:
+		case OBJECT_SETTING:
 		case OBJECT_CONVERSION:
 		case OBJECT_STATISTIC_EXT:
 		case OBJECT_TSPARSER:
@@ -3510,6 +3512,22 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 				break;
 			}
 
+		case OCLASS_SETTING:
+			{
+				char	   *setting;
+
+				setting = get_setting_name(object->objectId);
+				if (!setting)
+				{
+					if (!missing_ok)
+						elog(ERROR, "cache lookup failed for setting %u",
+							 object->objectId);
+					break;
+				}
+				appendStringInfo(&buffer, _("setting %s"), setting);
+				break;
+			}
+
 		case OCLASS_SCHEMA:
 			{
 				char	   *nspname;
@@ -4473,6 +4491,10 @@ getObjectTypeDescription(const ObjectAddress *object, bool missing_ok)
 			appendStringInfoString(&buffer, "collation");
 			break;
 
+		case OCLASS_SETTING:
+			appendStringInfoString(&buffer, "setting");
+			break;
+
 		case OCLASS_CONSTRAINT:
 			getConstraintTypeDescription(&buffer, object->objectId,
 										 missing_ok);
@@ -4974,6 +4996,30 @@ getObjectIdentityParts(const ObjectAddress *object,
 				}
 
 				ReleaseSysCache(conTup);
+				break;
+			}
+
+		case OCLASS_SETTING:
+			{
+				HeapTuple	configTup;
+				Form_pg_setting_acl configForm;
+				char	   *namestr;
+
+				configTup = SearchSysCache1(SETTINGOID,
+											ObjectIdGetDatum(object->objectId));
+				if (!HeapTupleIsValid(configTup))
+				{
+					if (!missing_ok)
+						elog(ERROR, "cache lookup failed for setting %u",
+							 object->objectId);
+					break;
+				}
+				configForm = (Form_pg_setting_acl) GETSTRUCT(configTup);
+				namestr = text_to_cstring(&configForm->setting);
+				appendStringInfoString(&buffer, namestr);
+				if (objname)
+					*objname = list_make1(namestr);
+				ReleaseSysCache(configTup);
 				break;
 			}
 

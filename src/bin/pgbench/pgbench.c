@@ -2832,6 +2832,30 @@ chooseScript(TState *thread)
 	return i - 1;
 }
 
+/* Prepare SQL commands in the chosen script */
+static void
+prepareCommands(CState *st)
+{
+	int			j;
+	Command   **commands = sql_script[st->use_file].commands;
+
+	for (j = 0; commands[j] != NULL; j++)
+	{
+		PGresult   *res;
+		char		name[MAX_PREPARE_NAME];
+
+		if (commands[j]->type != SQL_COMMAND)
+			continue;
+		preparedStatementName(name, st->use_file, j);
+		res = PQprepare(st->con, name,
+						commands[j]->argv[0], commands[j]->argc - 1, NULL);
+		if (PQresultStatus(res) != PGRES_COMMAND_OK)
+			pg_log_error("%s", PQerrorMessage(st->con));
+		PQclear(res);
+	}
+	st->prepared[st->use_file] = true;
+}
+
 /* Send a SQL command, using the chosen querymode */
 static bool
 sendCommand(CState *st, Command *command)
@@ -2864,42 +2888,6 @@ sendCommand(CState *st, Command *command)
 	{
 		char		name[MAX_PREPARE_NAME];
 		const char *params[MAX_ARGS];
-
-		if (!st->prepared[st->use_file])
-		{
-			int			j;
-			Command   **commands = sql_script[st->use_file].commands;
-
-			for (j = 0; commands[j] != NULL; j++)
-			{
-				PGresult   *res;
-				char		name[MAX_PREPARE_NAME];
-
-				if (commands[j]->type != SQL_COMMAND)
-					continue;
-				preparedStatementName(name, st->use_file, j);
-				if (PQpipelineStatus(st->con) == PQ_PIPELINE_OFF)
-				{
-					res = PQprepare(st->con, name,
-									commands[j]->argv[0], commands[j]->argc - 1, NULL);
-					if (PQresultStatus(res) != PGRES_COMMAND_OK)
-						pg_log_error("%s", PQerrorMessage(st->con));
-					PQclear(res);
-				}
-				else
-				{
-					/*
-					 * In pipeline mode, we use asynchronous functions. If a
-					 * server-side error occurs, it will be processed later
-					 * among the other results.
-					 */
-					if (!PQsendPrepare(st->con, name,
-									   commands[j]->argv[0], commands[j]->argc - 1, NULL))
-						pg_log_error("%s", PQerrorMessage(st->con));
-				}
-			}
-			st->prepared[st->use_file] = true;
-		}
 
 		getQueryParams(st, command, params);
 		preparedStatementName(name, st->use_file, st->command);
@@ -3171,6 +3159,11 @@ advanceConnectionState(TState *thread, CState *st, StatsData *agg)
 					/* Reset session-local state */
 					memset(st->prepared, 0, sizeof(st->prepared));
 				}
+
+
+				/* Prepare SQL commands if needed */
+				if (querymode == QUERY_PREPARED && !st->prepared[st->use_file])
+					prepareCommands(st);
 
 				/* record transaction start time */
 				st->txn_begin = now;

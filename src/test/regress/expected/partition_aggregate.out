@@ -367,17 +367,17 @@ SELECT c, sum(b order by a) FROM pagg_tab GROUP BY c ORDER BY 1, 2;
          ->  GroupAggregate
                Group Key: pagg_tab.c
                ->  Sort
-                     Sort Key: pagg_tab.c
+                     Sort Key: pagg_tab.c, pagg_tab.a
                      ->  Seq Scan on pagg_tab_p1 pagg_tab
          ->  GroupAggregate
                Group Key: pagg_tab_1.c
                ->  Sort
-                     Sort Key: pagg_tab_1.c
+                     Sort Key: pagg_tab_1.c, pagg_tab_1.a
                      ->  Seq Scan on pagg_tab_p2 pagg_tab_1
          ->  GroupAggregate
                Group Key: pagg_tab_2.c
                ->  Sort
-                     Sort Key: pagg_tab_2.c
+                     Sort Key: pagg_tab_2.c, pagg_tab_2.a
                      ->  Seq Scan on pagg_tab_p3 pagg_tab_2
 (18 rows)
 

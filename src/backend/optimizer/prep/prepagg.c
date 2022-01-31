@@ -225,6 +225,7 @@ preprocess_aggref(Aggref *aggref, PlannerInfo *root)
 	{
 		AggInfo    *agginfo = list_nth(root->agginfos, aggno);
 
+		agginfo->aggrefs = lappend(agginfo->aggrefs, aggref);
 		transno = agginfo->transno;
 	}
 	else
@@ -232,7 +233,7 @@ preprocess_aggref(Aggref *aggref, PlannerInfo *root)
 		AggInfo    *agginfo = palloc(sizeof(AggInfo));
 
 		agginfo->finalfn_oid = aggfinalfn;
-		agginfo->representative_aggref = aggref;
+		agginfo->aggrefs = list_make1(aggref);
 		agginfo->shareable = shareable;
 
 		aggno = list_length(root->agginfos);
@@ -386,7 +387,7 @@ find_compatible_agg(PlannerInfo *root, Aggref *newagg,
 
 		aggno++;
 
-		existingRef = agginfo->representative_aggref;
+		existingRef = linitial_node(Aggref, agginfo->aggrefs);
 
 		/* all of the following must be the same or it's no match */
 		if (newagg->inputcollid != existingRef->inputcollid ||
@@ -646,7 +647,7 @@ get_agg_clause_costs(PlannerInfo *root, AggSplit aggsplit, AggClauseCosts *costs
 	foreach(lc, root->agginfos)
 	{
 		AggInfo    *agginfo = (AggInfo *) lfirst(lc);
-		Aggref	   *aggref = agginfo->representative_aggref;
+		Aggref	   *aggref = linitial_node(Aggref, agginfo->aggrefs);
 
 		/*
 		 * Add the appropriate component function execution costs to

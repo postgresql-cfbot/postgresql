@@ -89,7 +89,8 @@ static CycleCtr checkpoint_cycle_ctr = 0;
 typedef struct SyncOps
 {
 	int			(*sync_syncfiletag) (const FileTag *ftag, char *path);
-	int			(*sync_unlinkfiletag) (const FileTag *ftag, char *path);
+	int			(*sync_unlinkfiletag) (const FileTag *ftag, char *path,
+									   StorageMarks mark);
 	bool		(*sync_filetagmatches) (const FileTag *ftag,
 										const FileTag *candidate);
 } SyncOps;
@@ -222,7 +223,8 @@ SyncPostCheckpoint(void)
 
 		/* Unlink the file */
 		if (syncsw[entry->tag.handler].sync_unlinkfiletag(&entry->tag,
-														  path) < 0)
+														  path,
+														  SMGR_MARK_NONE) < 0)
 		{
 			/*
 			 * There's a race condition, when the database is dropped at the
@@ -230,6 +232,20 @@ SyncPostCheckpoint(void)
 			 * DROP DATABASE deletes the file before we do, we will get ENOENT
 			 * here. rmtree() also has to ignore ENOENT errors, to deal with
 			 * the possibility that we delete the file first.
+			 */
+			if (errno != ENOENT)
+				ereport(WARNING,
+						(errcode_for_file_access(),
+						 errmsg("could not remove file \"%s\": %m", path)));
+		}
+		else if (syncsw[entry->tag.handler].sync_unlinkfiletag(
+					 &entry->tag, path,
+					 SMGR_MARK_UNCOMMITTED) < 0)
+		{
+			/*
+			 * And we may have SMGR_MARK_UNCOMMITTED file.  Remove it if the
+			 * fork files has been successfully removed. It's ok if the file
+			 * does not exist.
 			 */
 			if (errno != ENOENT)
 				ereport(WARNING,

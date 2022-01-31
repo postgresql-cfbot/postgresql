@@ -16,29 +16,49 @@
 
 #include <unistd.h>
 
+#include "access/xlog.h"
+#include "catalog/pg_tablespace_d.h"
 #include "common/relpath.h"
 #include "postmaster/startup.h"
+#include "storage/bufmgr.h"
 #include "storage/copydir.h"
 #include "storage/fd.h"
+#include "storage/md.h"
 #include "storage/reinit.h"
+#include "storage/smgr.h"
 #include "utils/hsearch.h"
 #include "utils/memutils.h"
 
 static void ResetUnloggedRelationsInTablespaceDir(const char *tsdirname,
-												  int op);
+												  Oid tspid, int op);
 static void ResetUnloggedRelationsInDbspaceDir(const char *dbspacedirname,
-											   int op);
+											   Oid tspid, Oid dbid, int op);
 
 typedef struct
 {
 	Oid			reloid;			/* hash key */
-} unlogged_relation_entry;
+	bool		has_init;		/* has INIT fork */
+	bool		dirty_init;		/* needs to remove INIT fork */
+	bool		dirty_all;		/* needs to remove all forks */
+} relfile_entry;
 
 /*
- * Reset unlogged relations from before the last restart.
+ * Clean up and reset relation files from before the last restart.
  *
- * If op includes UNLOGGED_RELATION_CLEANUP, we remove all forks of any
- * relation with an "init" fork, except for the "init" fork itself.
+ * If op includes UNLOGGED_RELATION_CLEANUP, we perform different operations
+ * depending on the existence of the "cleanup" forks.
+ *
+ * If SMGR_MARK_UNCOMMITTED mark file for init fork is present, we remove the
+ * init fork along with the mark file.
+ *
+ * If SMGR_MARK_UNCOMMITTED mark file for main fork is present we remove the
+ * whole relation along with the mark file.
+ *
+ * Otherwise, if the "init" fork is found.  we remove all forks of any relation
+ * with the "init" fork, except for the "init" fork itself.
+ *
+ * If op includes UNLOGGED_RELATION_DROP_BUFFER, we drop all buffers for all
+ * relations that have the "cleanup" and/or the "init" forks.
  *
  * If op includes UNLOGGED_RELATION_INIT, we copy the "init" fork to the main
  * fork.
@@ -72,7 +92,7 @@ ResetUnloggedRelations(int op)
 	/*
 	 * First process unlogged files in pg_default ($PGDATA/base)
 	 */
-	ResetUnloggedRelationsInTablespaceDir("base", op);
+	ResetUnloggedRelationsInTablespaceDir("base", DEFAULTTABLESPACE_OID, op);
 
 	/*
 	 * Cycle through directories for all non-default tablespaces.
@@ -81,13 +101,19 @@ ResetUnloggedRelations(int op)
 
 	while ((spc_de = ReadDir(spc_dir, "pg_tblspc")) != NULL)
 	{
+		Oid tspid;
+
 		if (strcmp(spc_de->d_name, ".") == 0 ||
 			strcmp(spc_de->d_name, "..") == 0)
 			continue;
 
 		snprintf(temp_path, sizeof(temp_path), "pg_tblspc/%s/%s",
 				 spc_de->d_name, TABLESPACE_VERSION_DIRECTORY);
-		ResetUnloggedRelationsInTablespaceDir(temp_path, op);
+
+		tspid = atooid(spc_de->d_name);
+
+		Assert(tspid != 0);
+		ResetUnloggedRelationsInTablespaceDir(temp_path, tspid, op);
 	}
 
 	FreeDir(spc_dir);
@@ -103,7 +129,8 @@ ResetUnloggedRelations(int op)
  * Process one tablespace directory for ResetUnloggedRelations
  */
 static void
-ResetUnloggedRelationsInTablespaceDir(const char *tsdirname, int op)
+ResetUnloggedRelationsInTablespaceDir(const char *tsdirname,
+									  Oid tspid, int op)
 {
 	DIR		   *ts_dir;
 	struct dirent *de;
@@ -130,6 +157,8 @@ ResetUnloggedRelationsInTablespaceDir(const char *tsdirname, int op)
 
 	while ((de = ReadDir(ts_dir, tsdirname)) != NULL)
 	{
+		Oid dbid;
+
 		/*
 		 * We're only interested in the per-database directories, which have
 		 * numeric names.  Note that this code will also (properly) ignore "."
@@ -148,7 +177,10 @@ ResetUnloggedRelationsInTablespaceDir(const char *tsdirname, int op)
 			ereport_startup_progress("resetting unlogged relations (cleanup), elapsed time: %ld.%02d s, current path: %s",
 									 dbspace_path);
 
-		ResetUnloggedRelationsInDbspaceDir(dbspace_path, op);
+		dbid = atooid(de->d_name);
+		Assert(dbid != 0);
+
+		ResetUnloggedRelationsInDbspaceDir(dbspace_path, tspid, dbid, op);
 	}
 
 	FreeDir(ts_dir);
@@ -158,125 +190,227 @@ ResetUnloggedRelationsInTablespaceDir(const char *tsdirname, int op)
  * Process one per-dbspace directory for ResetUnloggedRelations
  */
 static void
-ResetUnloggedRelationsInDbspaceDir(const char *dbspacedirname, int op)
+ResetUnloggedRelationsInDbspaceDir(const char *dbspacedirname,
+								   Oid tspid, Oid dbid, int op)
 {
 	DIR		   *dbspace_dir;
 	struct dirent *de;
 	char		rm_path[MAXPGPATH * 2];
+	HTAB	   *hash;
+	HASHCTL		ctl;
 
 	/* Caller must specify at least one operation. */
-	Assert((op & (UNLOGGED_RELATION_CLEANUP | UNLOGGED_RELATION_INIT)) != 0);
+	Assert((op & (UNLOGGED_RELATION_CLEANUP |
+				  UNLOGGED_RELATION_DROP_BUFFER |
+				  UNLOGGED_RELATION_INIT)) != 0);
 
 	/*
 	 * Cleanup is a two-pass operation.  First, we go through and identify all
 	 * the files with init forks.  Then, we go through again and nuke
 	 * everything with the same OID except the init fork.
 	 */
-	if ((op & UNLOGGED_RELATION_CLEANUP) != 0)
+
+	/*
+	 * It's possible that someone could create tons of unlogged relations in
+	 * the same database & tablespace, so we'd better use a hash table rather
+	 * than an array or linked list to keep track of which files need to be
+	 * reset.  Otherwise, this cleanup operation would be O(n^2).
+	 */
+	memset(&ctl, 0, sizeof(ctl));
+	ctl.keysize = sizeof(Oid);
+	ctl.entrysize = sizeof(relfile_entry);
+	hash = hash_create("relfilenode cleanup hash",
+					   32, &ctl, HASH_ELEM | HASH_BLOBS);
+
+	/* Collect INIT fork and mark files in the directory. */
+	dbspace_dir = AllocateDir(dbspacedirname);
+	while ((de = ReadDir(dbspace_dir, dbspacedirname)) != NULL)
 	{
-		HTAB	   *hash;
-		HASHCTL		ctl;
+		int			oidchars;
+		ForkNumber	forkNum;
+		StorageMarks mark;
 
-		/*
-		 * It's possible that someone could create a ton of unlogged relations
-		 * in the same database & tablespace, so we'd better use a hash table
-		 * rather than an array or linked list to keep track of which files
-		 * need to be reset.  Otherwise, this cleanup operation would be
-		 * O(n^2).
-		 */
-		ctl.keysize = sizeof(Oid);
-		ctl.entrysize = sizeof(unlogged_relation_entry);
-		ctl.hcxt = CurrentMemoryContext;
-		hash = hash_create("unlogged relation OIDs", 32, &ctl,
-						   HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+		/* Skip anything that doesn't look like a relation data file. */
+		if (!parse_filename_for_nontemp_relation(de->d_name, &oidchars,
+												 &forkNum, &mark))
+			continue;
 
-		/* Scan the directory. */
-		dbspace_dir = AllocateDir(dbspacedirname);
-		while ((de = ReadDir(dbspace_dir, dbspacedirname)) != NULL)
+		if (forkNum == INIT_FORKNUM || mark == SMGR_MARK_UNCOMMITTED)
 		{
-			ForkNumber	forkNum;
-			int			oidchars;
-			unlogged_relation_entry ent;
-
-			/* Skip anything that doesn't look like a relation data file. */
-			if (!parse_filename_for_nontemp_relation(de->d_name, &oidchars,
-													 &forkNum))
-				continue;
-
-			/* Also skip it unless this is the init fork. */
-			if (forkNum != INIT_FORKNUM)
-				continue;
+			Oid				key;
+			relfile_entry  *ent;
+			bool			found;
 
 			/*
-			 * Put the OID portion of the name into the hash table, if it
-			 * isn't already.
+			 * Record the relfilenode information. If it has
+			 * SMGR_MARK_UNCOMMITTED mark files, the relfilenode is in dirty
+			 * state, where clean up is needed.
 			 */
-			ent.reloid = atooid(de->d_name);
-			(void) hash_search(hash, &ent, HASH_ENTER, NULL);
+			key = atooid(de->d_name);
+			ent = hash_search(hash, &key, HASH_ENTER, &found);
+
+			if (!found)
+			{
+				ent->has_init = false;
+				ent->dirty_init = false;
+				ent->dirty_all = false;
+			}
+
+			if (forkNum == INIT_FORKNUM && mark == SMGR_MARK_UNCOMMITTED)
+				ent->dirty_init = true;
+			else if (forkNum == MAIN_FORKNUM && mark == SMGR_MARK_UNCOMMITTED)
+				ent->dirty_all = true;
+			else
+			{
+				Assert(forkNum == INIT_FORKNUM);
+				ent->has_init = true;
+			}
 		}
+	}
 
-		/* Done with the first pass. */
-		FreeDir(dbspace_dir);
+	/* Done with the first pass. */
+	FreeDir(dbspace_dir);
 
+	/* nothing to do if we don't have init nor cleanup forks */
+	if (hash_get_num_entries(hash) < 1)
+	{
+		hash_destroy(hash);
+		return;
+	}
+
+	if ((op & UNLOGGED_RELATION_DROP_BUFFER) != 0)
+	{
 		/*
-		 * If we didn't find any init forks, there's no point in continuing;
-		 * we can bail out now.
+		 * When we come here after recovery, smgr object for this file might
+		 * have been created. In that case we need to drop all buffers then the
+		 * smgr object before initializing the unlogged relation.  This is safe
+		 * as far as no other backends have accessed the relation before
+		 * starting archive recovery.
 		 */
-		if (hash_get_num_entries(hash) == 0)
+		HASH_SEQ_STATUS status;
+		relfile_entry *ent;
+		SMgrRelation   *srels = palloc(sizeof(SMgrRelation) * 8);
+		int			   maxrels = 8;
+		int			   nrels = 0;
+		int i;
+
+		Assert(!HotStandbyActive());
+
+		hash_seq_init(&status, hash);
+		while((ent = (relfile_entry *) hash_seq_search(&status)) != NULL)
 		{
-			hash_destroy(hash);
-			return;
+			RelFileNodeBackend rel;
+
+			/*
+			 * The relation is persistent and stays remain persistent. Don't
+			 * drop the buffers for this relation.
+			 */
+			if (ent->has_init && ent->dirty_init)
+				continue;
+
+			if (maxrels <= nrels)
+			{
+				maxrels *= 2;
+				srels = repalloc(srels, sizeof(SMgrRelation) * maxrels);
+			}
+
+			rel.backend = InvalidBackendId;
+			rel.node.spcNode = tspid;
+			rel.node.dbNode = dbid;
+			rel.node.relNode = ent->reloid;
+
+			srels[nrels++] = smgropen(rel.node, InvalidBackendId);
 		}
 
-		/*
-		 * Now, make a second pass and remove anything that matches.
-		 */
+		DropRelFileNodesAllBuffers(srels, nrels);
+
+		for (i = 0 ; i < nrels ; i++)
+			smgrclose(srels[i]);
+	}
+
+	/*
+	 * Now, make a second pass and remove anything that matches.
+	 */
+	if ((op & UNLOGGED_RELATION_CLEANUP) != 0)
+	{
 		dbspace_dir = AllocateDir(dbspacedirname);
 		while ((de = ReadDir(dbspace_dir, dbspacedirname)) != NULL)
 		{
-			ForkNumber	forkNum;
-			int			oidchars;
-			unlogged_relation_entry ent;
+			ForkNumber		forkNum;
+			StorageMarks	mark;
+			int				oidchars;
+			Oid				key;
+			relfile_entry  *ent;
+			RelFileNodeBackend rel;
 
 			/* Skip anything that doesn't look like a relation data file. */
 			if (!parse_filename_for_nontemp_relation(de->d_name, &oidchars,
-													 &forkNum))
-				continue;
-
-			/* We never remove the init fork. */
-			if (forkNum == INIT_FORKNUM)
+													 &forkNum, &mark))
 				continue;
 
 			/*
 			 * See whether the OID portion of the name shows up in the hash
 			 * table.  If so, nuke it!
 			 */
-			ent.reloid = atooid(de->d_name);
-			if (hash_search(hash, &ent, HASH_FIND, NULL))
+			key = atooid(de->d_name);
+			ent = hash_search(hash, &key, HASH_FIND, NULL);
+
+			if (!ent)
+				continue;
+
+			if (!ent->dirty_all)
 			{
-				snprintf(rm_path, sizeof(rm_path), "%s/%s",
-						 dbspacedirname, de->d_name);
-				if (unlink(rm_path) < 0)
-					ereport(ERROR,
-							(errcode_for_file_access(),
-							 errmsg("could not remove file \"%s\": %m",
-									rm_path)));
+				/* clean permanent relations don't need cleanup */
+				if (!ent->has_init)
+					continue;
+
+				if (ent->dirty_init)
+				{
+					/*
+					 * The crashed trasaction did SET UNLOGGED. This relation
+					 * is restored to a LOGGED relation.
+					 */
+					if (forkNum != INIT_FORKNUM)
+						continue;
+				}
 				else
-					elog(DEBUG2, "unlinked file \"%s\"", rm_path);
+				{
+					/*
+					 * we don't remove the INIT fork of a non-dirty
+					 * relfilenode
+					 */
+					if (forkNum == INIT_FORKNUM && mark == SMGR_MARK_NONE)
+						continue;
+				}
 			}
+
+			/* so, nuke it! */
+			snprintf(rm_path, sizeof(rm_path), "%s/%s",
+					 dbspacedirname, de->d_name);
+			if (unlink(rm_path) < 0)
+				ereport(ERROR,
+						(errcode_for_file_access(),
+						 errmsg("could not remove file \"%s\": %m",
+								rm_path)));
+
+			rel.backend = InvalidBackendId;
+			rel.node.spcNode = tspid;
+			rel.node.dbNode = dbid;
+			rel.node.relNode = atooid(de->d_name);
+
+			ForgetRelationForkSyncRequests(rel, forkNum);
 		}
 
 		/* Cleanup is complete. */
 		FreeDir(dbspace_dir);
-		hash_destroy(hash);
 	}
+
+	hash_destroy(hash);
+	hash = NULL;
 
 	/*
 	 * Initialization happens after cleanup is complete: we copy each init
-	 * fork file to the corresponding main fork file.  Note that if we are
-	 * asked to do both cleanup and init, we may never get here: if the
-	 * cleanup code determines that there are no init forks in this dbspace,
-	 * it will return before we get to this point.
+	 * fork file to the corresponding main fork file.
 	 */
 	if ((op & UNLOGGED_RELATION_INIT) != 0)
 	{
@@ -285,6 +419,7 @@ ResetUnloggedRelationsInDbspaceDir(const char *dbspacedirname, int op)
 		while ((de = ReadDir(dbspace_dir, dbspacedirname)) != NULL)
 		{
 			ForkNumber	forkNum;
+			StorageMarks mark;
 			int			oidchars;
 			char		oidbuf[OIDCHARS + 1];
 			char		srcpath[MAXPGPATH * 2];
@@ -292,8 +427,10 @@ ResetUnloggedRelationsInDbspaceDir(const char *dbspacedirname, int op)
 
 			/* Skip anything that doesn't look like a relation data file. */
 			if (!parse_filename_for_nontemp_relation(de->d_name, &oidchars,
-													 &forkNum))
+													 &forkNum, &mark))
 				continue;
+
+			Assert(mark == SMGR_MARK_NONE);
 
 			/* Also skip it unless this is the init fork. */
 			if (forkNum != INIT_FORKNUM)
@@ -328,14 +465,17 @@ ResetUnloggedRelationsInDbspaceDir(const char *dbspacedirname, int op)
 		while ((de = ReadDir(dbspace_dir, dbspacedirname)) != NULL)
 		{
 			ForkNumber	forkNum;
+			StorageMarks mark;
 			int			oidchars;
 			char		oidbuf[OIDCHARS + 1];
 			char		mainpath[MAXPGPATH];
 
 			/* Skip anything that doesn't look like a relation data file. */
 			if (!parse_filename_for_nontemp_relation(de->d_name, &oidchars,
-													 &forkNum))
+													 &forkNum, &mark))
 				continue;
+
+			Assert(mark == SMGR_MARK_NONE);
 
 			/* Also skip it unless this is the init fork. */
 			if (forkNum != INIT_FORKNUM)
@@ -379,7 +519,7 @@ ResetUnloggedRelationsInDbspaceDir(const char *dbspacedirname, int op)
  */
 bool
 parse_filename_for_nontemp_relation(const char *name, int *oidchars,
-									ForkNumber *fork)
+									ForkNumber *fork, StorageMarks *mark)
 {
 	int			pos;
 
@@ -410,10 +550,18 @@ parse_filename_for_nontemp_relation(const char *name, int *oidchars,
 
 		for (segchar = 1; isdigit((unsigned char) name[pos + segchar]); ++segchar)
 			;
-		if (segchar <= 1)
-			return false;
-		pos += segchar;
+		if (segchar > 1)
+			pos += segchar;
 	}
+
+	/* mark file? */
+	if (name[pos] == '.' && name[pos + 1] != 0)
+	{
+		*mark = name[pos + 1];
+		pos += 2;
+	}
+	else
+		*mark = SMGR_MARK_NONE;
 
 	/* Now we should be at the end. */
 	if (name[pos] != '\0')

@@ -4273,6 +4273,19 @@ _copyAlterTableMoveAllStmt(const AlterTableMoveAllStmt *from)
 	return newnode;
 }
 
+static AlterTableSetLoggedAllStmt *
+_copyAlterTableSetLoggedAllStmt(const AlterTableSetLoggedAllStmt *from)
+{
+	AlterTableSetLoggedAllStmt *newnode = makeNode(AlterTableSetLoggedAllStmt);
+
+	COPY_STRING_FIELD(tablespacename);
+	COPY_SCALAR_FIELD(objtype);
+	COPY_SCALAR_FIELD(logged);
+	COPY_SCALAR_FIELD(nowait);
+
+	return newnode;
+}
+
 static CreateExtensionStmt *
 _copyCreateExtensionStmt(const CreateExtensionStmt *from)
 {
@@ -5638,6 +5651,9 @@ copyObjectImpl(const void *from)
 			break;
 		case T_AlterTableMoveAllStmt:
 			retval = _copyAlterTableMoveAllStmt(from);
+			break;
+		case T_AlterTableSetLoggedAllStmt:
+			retval = _copyAlterTableSetLoggedAllStmt(from);
 			break;
 		case T_CreateExtensionStmt:
 			retval = _copyCreateExtensionStmt(from);

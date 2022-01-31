@@ -407,6 +407,30 @@ extractPageInfo(XLogReaderState *record)
 		 * source system.
 		 */
 	}
+	else if (rmid == RM_SMGR_ID && rminfo == XLOG_SMGR_UNLINK)
+	{
+		/*
+		 * We can safely ignore these. When we compare the sizes later on,
+		 * we'll notice that they differ, and copy the missing tail from
+		 * source system.
+		 */
+	}
+	else if (rmid == RM_SMGR_ID && rminfo == XLOG_SMGR_MARK)
+	{
+		/*
+		 * We can safely ignore these. When we compare the sizes later on,
+		 * we'll notice that they differ, and copy the missing tail from
+		 * source system.
+		 */
+	}
+	else if (rmid == RM_SMGR_ID && rminfo == XLOG_SMGR_BUFPERSISTENCE)
+	{
+		/*
+		 * We can safely ignore these. When we compare the sizes later on,
+		 * we'll notice that they differ, and copy the missing tail from
+		 * source system.
+		 */
+	}
 	else if (rmid == RM_XACT_ID &&
 			 ((rminfo & XLOG_XACT_OPMASK) == XLOG_XACT_COMMIT ||
 			  (rminfo & XLOG_XACT_OPMASK) == XLOG_XACT_COMMIT_PREPARED ||

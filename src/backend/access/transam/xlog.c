@@ -40,6 +40,7 @@
 #include "catalog/catversion.h"
 #include "catalog/pg_control.h"
 #include "catalog/pg_database.h"
+#include "catalog/storage.h"
 #include "commands/progress.h"
 #include "commands/tablespace.h"
 #include "common/controldata_utils.h"
@@ -4563,6 +4564,14 @@ ReadRecord(XLogReaderState *xlogreader, int emode,
 			{
 				ereport(DEBUG1,
 						(errmsg_internal("reached end of WAL in pg_wal, entering archive recovery")));
+
+				/* cleanup garbage files left during crash recovery */
+				ResetUnloggedRelations(UNLOGGED_RELATION_DROP_BUFFER |
+									   UNLOGGED_RELATION_CLEANUP);
+
+				/* run rollback cleanup if any */
+				smgrDoPendingDeletes(false);
+
 				InArchiveRecovery = true;
 				if (StandbyModeRequested)
 					StandbyMode = true;
@@ -7822,6 +7831,14 @@ StartupXLOG(void)
 						break;
 				}
 			}
+
+			/* cleanup garbage files left during crash recovery */
+			if (!InArchiveRecovery)
+				ResetUnloggedRelations(UNLOGGED_RELATION_DROP_BUFFER |
+									   UNLOGGED_RELATION_CLEANUP);
+
+			/* run rollback cleanup if any */
+			smgrDoPendingDeletes(false);
 
 			/* Allow resource managers to do any required cleanup. */
 			for (rmid = 0; rmid <= RM_MAX_ID; rmid++)

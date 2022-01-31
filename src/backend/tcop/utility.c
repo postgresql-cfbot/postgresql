@@ -162,6 +162,7 @@ ClassifyUtilityCommandAsReadOnly(Node *parsetree)
 		case T_AlterTSConfigurationStmt:
 		case T_AlterTSDictionaryStmt:
 		case T_AlterTableMoveAllStmt:
+		case T_AlterTableSetLoggedAllStmt:
 		case T_AlterTableSpaceOptionsStmt:
 		case T_AlterTableStmt:
 		case T_AlterTypeStmt:
@@ -1747,6 +1748,12 @@ ProcessUtilitySlow(ParseState *pstate,
 				commandCollected = true;
 				break;
 
+			case T_AlterTableSetLoggedAllStmt:
+				AlterTableSetLoggedAll((AlterTableSetLoggedAllStmt *) parsetree);
+				/* commands are stashed in AlterTableSetLoggedAll */
+				commandCollected = true;
+				break;
+
 			case T_DropStmt:
 				ExecDropStmt((DropStmt *) parsetree, isTopLevel);
 				/* no commands stashed for DROP */
@@ -2667,6 +2674,10 @@ CreateCommandTag(Node *parsetree)
 
 		case T_AlterTableMoveAllStmt:
 			tag = AlterObjectTypeCommandTag(((AlterTableMoveAllStmt *) parsetree)->objtype);
+			break;
+
+		case T_AlterTableSetLoggedAllStmt:
+			tag = AlterObjectTypeCommandTag(((AlterTableSetLoggedAllStmt *) parsetree)->objtype);
 			break;
 
 		case T_AlterTableStmt:

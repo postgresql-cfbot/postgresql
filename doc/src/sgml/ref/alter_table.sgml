@@ -33,6 +33,8 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="parameter">name</replaceable>
     SET SCHEMA <replaceable class="parameter">new_schema</replaceable>
 ALTER TABLE ALL IN TABLESPACE <replaceable class="parameter">name</replaceable> [ OWNED BY <replaceable class="parameter">role_name</replaceable> [, ... ] ]
     SET TABLESPACE <replaceable class="parameter">new_tablespace</replaceable> [ NOWAIT ]
+ALTER TABLE ALL IN TABLESPACE <replaceable class="parameter">name</replaceable> [ OWNED BY <replaceable class="parameter">role_name</replaceable> [, ... ] ]
+    SET { LOGGED | UNLOGGED } [ NOWAIT ]
 ALTER TABLE [ IF EXISTS ] <replaceable class="parameter">name</replaceable>
     ATTACH PARTITION <replaceable class="parameter">partition_name</replaceable> { FOR VALUES <replaceable class="parameter">partition_bound_spec</replaceable> | DEFAULT }
 ALTER TABLE [ IF EXISTS ] <replaceable class="parameter">name</replaceable>
@@ -752,6 +754,19 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       This form changes the table from unlogged to logged or vice-versa
       (see <xref linkend="sql-createtable-unlogged"/>).  It cannot be applied
       to a temporary table.
+     </para>
+
+     <para>
+      All tables in the current database in a tablespace can be changed by using
+      the <literal>ALL IN TABLESPACE</literal> form, which will lock all tables
+      to be changed first and then change each one.  This form also supports
+      <literal>OWNED BY</literal>, which will only change tables owned by the
+      roles specified.  If the <literal>NOWAIT</literal> option is specified
+      then the command will fail if it is unable to acquire all of the locks
+      required immediately.  The <literal>information_schema</literal>
+      relations are not considered part of the system catalogs and will be
+      changed.  See also
+      <link linkend="sql-createtablespace"><command>CREATE TABLESPACE</command></link>.
      </para>
     </listitem>
    </varlistentry>

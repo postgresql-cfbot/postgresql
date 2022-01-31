@@ -2351,6 +2351,16 @@ typedef struct AlterTableMoveAllStmt
 	bool		nowait;
 } AlterTableMoveAllStmt;
 
+typedef struct AlterTableSetLoggedAllStmt
+{
+	NodeTag		type;
+	char	   *tablespacename;
+	ObjectType	objtype;		/* Object type to move */
+	List	   *roles;			/* List of roles to change objects of */
+	bool		logged;
+	bool		nowait;
+} AlterTableSetLoggedAllStmt;
+
 /* ----------------------
  *		Create/Alter Extension Statements
  * ----------------------

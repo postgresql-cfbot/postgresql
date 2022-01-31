@@ -724,6 +724,14 @@ we must panic and abort recovery.  The DBA will have to manually clean up
 then restart recovery.  This is part of the reason for not writing a WAL
 entry until we've successfully done the original action.
 
+The Smgr MARK files
+--------------------------------
+
+An smgr mark file is created when a new relation file is created to
+mark the relfilenode needs to be cleaned up at recovery time.  In
+contrast to the four actions above, failure to remove smgr mark files
+will lead to data loss, in which case the server will shut down.
+
 
 Skipping WAL for New RelFileNode
 --------------------------------

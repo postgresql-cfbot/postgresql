@@ -1984,6 +1984,48 @@ AlterTableStmt:
 					n->nowait = $13;
 					$$ = (Node *)n;
 				}
+		|	ALTER TABLE ALL IN_P TABLESPACE name SET LOGGED opt_nowait
+				{
+					AlterTableSetLoggedAllStmt *n =
+						makeNode(AlterTableSetLoggedAllStmt);
+					n->tablespacename = $6;
+					n->objtype = OBJECT_TABLE;
+					n->logged = true;
+					n->nowait = $9;
+					$$ = (Node *)n;
+				}
+		|	ALTER TABLE ALL IN_P TABLESPACE name OWNED BY role_list SET LOGGED opt_nowait
+				{
+					AlterTableSetLoggedAllStmt *n =
+						makeNode(AlterTableSetLoggedAllStmt);
+					n->tablespacename = $6;
+					n->objtype = OBJECT_TABLE;
+					n->roles = $9;
+					n->logged = true;
+					n->nowait = $12;
+					$$ = (Node *)n;
+				}
+		|	ALTER TABLE ALL IN_P TABLESPACE name SET UNLOGGED opt_nowait
+				{
+					AlterTableSetLoggedAllStmt *n =
+						makeNode(AlterTableSetLoggedAllStmt);
+					n->tablespacename = $6;
+					n->objtype = OBJECT_TABLE;
+					n->logged = false;
+					n->nowait = $9;
+					$$ = (Node *)n;
+				}
+		|	ALTER TABLE ALL IN_P TABLESPACE name OWNED BY role_list SET UNLOGGED opt_nowait
+				{
+					AlterTableSetLoggedAllStmt *n =
+						makeNode(AlterTableSetLoggedAllStmt);
+					n->tablespacename = $6;
+					n->objtype = OBJECT_TABLE;
+					n->roles = $9;
+					n->logged = false;
+					n->nowait = $12;
+					$$ = (Node *)n;
+				}
 		|	ALTER INDEX qualified_name alter_table_cmds
 				{
 					AlterTableStmt *n = makeNode(AlterTableStmt);

@@ -19,6 +19,7 @@
 
 #include "postgres.h"
 
+#include "access/amapi.h"
 #include "access/parallel.h"
 #include "access/visibilitymap.h"
 #include "access/xact.h"
@@ -66,6 +67,23 @@ typedef struct PendingRelDelete
 	struct PendingRelDelete *next;	/* linked-list link */
 } PendingRelDelete;
 
+#define	PCOP_UNLINK_FORK		(1 << 0)
+#define	PCOP_UNLINK_MARK		(1 << 1)
+#define	PCOP_SET_PERSISTENCE	(1 << 2)
+
+typedef struct PendingCleanup
+{
+	RelFileNode relnode;		/* relation that may need to be deleted */
+	int			op;				/* operation mask */
+	bool		bufpersistence;	/* buffer persistence to set */
+	int			unlink_forknum;	/* forknum to unlink */
+	StorageMarks unlink_mark;	/* mark to unlink */
+	BackendId	backend;		/* InvalidBackendId if not a temp rel */
+	bool		atCommit;		/* T=delete at commit; F=delete at abort */
+	int			nestLevel;		/* xact nesting level of request */
+	struct PendingCleanup *next;	/* linked-list link */
+} PendingCleanup;
+
 typedef struct PendingRelSync
 {
 	RelFileNode rnode;
@@ -73,6 +91,7 @@ typedef struct PendingRelSync
 } PendingRelSync;
 
 static PendingRelDelete *pendingDeletes = NULL; /* head of linked list */
+static PendingCleanup   *pendingCleanups = NULL; /* head of linked list */
 HTAB	   *pendingSyncHash = NULL;
 
 
@@ -117,7 +136,8 @@ AddPendingSync(const RelFileNode *rnode)
 SMgrRelation
 RelationCreateStorage(RelFileNode rnode, char relpersistence)
 {
-	PendingRelDelete *pending;
+	PendingRelDelete *pendingdel;
+	PendingCleanup	 *pendingclean;
 	SMgrRelation srel;
 	BackendId	backend;
 	bool		needs_wal;
@@ -143,21 +163,41 @@ RelationCreateStorage(RelFileNode rnode, char relpersistence)
 			return NULL;		/* placate compiler */
 	}
 
+	/*
+	 * We are going to create a new storage file. If server crashes before the
+	 * current transaction ends the file needs to be cleaned up. The
+	 * SMGR_MARK_UNCOMMITED mark file prompts that work at the next startup.
+	 */
 	srel = smgropen(rnode, backend);
+	log_smgrcreatemark(&rnode, MAIN_FORKNUM, SMGR_MARK_UNCOMMITTED);
+	smgrcreatemark(srel, MAIN_FORKNUM, SMGR_MARK_UNCOMMITTED, false);
 	smgrcreate(srel, MAIN_FORKNUM, false);
 
 	if (needs_wal)
 		log_smgrcreate(&srel->smgr_rnode.node, MAIN_FORKNUM);
 
 	/* Add the relation to the list of stuff to delete at abort */
-	pending = (PendingRelDelete *)
+	pendingdel = (PendingRelDelete *)
 		MemoryContextAlloc(TopMemoryContext, sizeof(PendingRelDelete));
-	pending->relnode = rnode;
-	pending->backend = backend;
-	pending->atCommit = false;	/* delete if abort */
-	pending->nestLevel = GetCurrentTransactionNestLevel();
-	pending->next = pendingDeletes;
-	pendingDeletes = pending;
+	pendingdel->relnode = rnode;
+	pendingdel->backend = backend;
+	pendingdel->atCommit = false;	/* delete if abort */
+	pendingdel->nestLevel = GetCurrentTransactionNestLevel();
+	pendingdel->next = pendingDeletes;
+	pendingDeletes = pendingdel;
+
+	/* drop mark files at commit */
+	pendingclean = (PendingCleanup *)
+		MemoryContextAlloc(TopMemoryContext, sizeof(PendingCleanup));
+	pendingclean->relnode = rnode;
+	pendingclean->op = PCOP_UNLINK_MARK;
+	pendingclean->unlink_forknum = MAIN_FORKNUM;
+	pendingclean->unlink_mark = SMGR_MARK_UNCOMMITTED;
+	pendingclean->backend = backend;
+	pendingclean->atCommit = true;
+	pendingclean->nestLevel = GetCurrentTransactionNestLevel();
+	pendingclean->next = pendingCleanups;
+	pendingCleanups = pendingclean;
 
 	if (relpersistence == RELPERSISTENCE_PERMANENT && !XLogIsNeeded())
 	{
@@ -166,6 +206,203 @@ RelationCreateStorage(RelFileNode rnode, char relpersistence)
 	}
 
 	return srel;
+}
+
+/*
+ * RelationCreateInitFork
+ *		Create physical storage for the init fork of a relation.
+ *
+ * Create the init fork for the relation.
+ *
+ * This function is transactional. The creation is WAL-logged, and if the
+ * transaction aborts later on, the init fork will be removed.
+ */
+void
+RelationCreateInitFork(Relation rel)
+{
+	RelFileNode rnode = rel->rd_node;
+	PendingCleanup *pending;
+	PendingCleanup *prev;
+	PendingCleanup *next;
+	SMgrRelation srel;
+	bool			  create = true;
+
+	/* switch buffer persistence */
+	SetRelationBuffersPersistence(RelationGetSmgr(rel), false, false);
+
+	/*
+	 * If we have entries for init-fork operations on this relation, that means
+	 * that we have already registered pending delete entries to drop an
+	 * init-fork preexisting since before the current transaction started. This
+	 * function reverts that change just by removing the entries.
+	 */
+	prev = NULL;
+	for (pending = pendingCleanups; pending != NULL; pending = next)
+	{
+		next = pending->next;
+
+		if (RelFileNodeEquals(rnode, pending->relnode) &&
+			pending->unlink_forknum == INIT_FORKNUM)
+		{
+			if (prev)
+				prev->next = next;
+			else
+				pendingCleanups = next;
+
+			pfree(pending);
+			/* prev does not change */
+
+			create = false;
+		}
+		else
+			prev = pending;
+	}
+
+	if (!create)
+		return;
+
+	/*
+	 * We are going to create an init fork. If server crashes before the
+	 * current transaction ends the init fork left alone corrupts data while
+	 * recovery.  The mark file works as the sentinel to identify that
+	 * situation.
+	 */
+	srel = smgropen(rnode, InvalidBackendId);
+	log_smgrcreatemark(&rnode, INIT_FORKNUM, SMGR_MARK_UNCOMMITTED);
+	smgrcreatemark(srel, INIT_FORKNUM, SMGR_MARK_UNCOMMITTED, false);
+
+	/* We don't have existing init fork, create it. */
+	smgrcreate(srel, INIT_FORKNUM, false);
+
+	/*
+	 * index-init fork needs further initialization. ambuildempty shoud do
+	 * WAL-log and file sync by itself but otherwise we do that by ourselves.
+	 */
+	if (rel->rd_rel->relkind == RELKIND_INDEX)
+		rel->rd_indam->ambuildempty(rel);
+	else
+	{
+		log_smgrcreate(&rnode, INIT_FORKNUM);
+		smgrimmedsync(srel, INIT_FORKNUM);
+	}
+
+	/* drop the init fork, mark file and revert persistence at abort */
+	pending = (PendingCleanup *)
+		MemoryContextAlloc(TopMemoryContext, sizeof(PendingCleanup));
+	pending->relnode = rnode;
+	pending->op = PCOP_UNLINK_FORK | PCOP_UNLINK_MARK | PCOP_SET_PERSISTENCE;
+	pending->unlink_forknum = INIT_FORKNUM;
+	pending->unlink_mark = SMGR_MARK_UNCOMMITTED;
+	pending->bufpersistence = true;
+	pending->backend = InvalidBackendId;
+	pending->atCommit = false;
+	pending->nestLevel = GetCurrentTransactionNestLevel();
+	pending->next = pendingCleanups;
+	pendingCleanups = pending;
+
+	/* drop mark file at commit */
+	pending = (PendingCleanup *)
+		MemoryContextAlloc(TopMemoryContext, sizeof(PendingCleanup));
+	pending->relnode = rnode;
+	pending->op = PCOP_UNLINK_MARK;
+	pending->unlink_forknum = INIT_FORKNUM;
+	pending->unlink_mark = SMGR_MARK_UNCOMMITTED;
+	pending->backend = InvalidBackendId;
+	pending->atCommit = true;
+	pending->nestLevel = GetCurrentTransactionNestLevel();
+	pending->next = pendingCleanups;
+	pendingCleanups = pending;
+}
+
+/*
+ * RelationDropInitFork
+ *		Delete physical storage for the init fork of a relation.
+ *
+ * Register pending-delete of the init fork. The real deletion is performed by
+ * smgrDoPendingDeletes at commit.
+ *
+ * This function is transactional. If the transaction aborts later on, the
+ * deletion doesn't happen.
+ */
+void
+RelationDropInitFork(Relation rel)
+{
+	RelFileNode rnode = rel->rd_node;
+	PendingCleanup *pending;
+	PendingCleanup *prev;
+	PendingCleanup *next;
+	bool		    inxact_created = false;
+
+	/* switch buffer persistence */
+	SetRelationBuffersPersistence(RelationGetSmgr(rel), true, false);
+
+	/*
+	 * If we have entries for init-fork operations of this relation, that means
+	 * that we have created the init fork in the current transaction.  We
+	 * remove the init fork and mark file immediately in that case.  Otherwise
+	 * just register pending-delete for the existing init fork.
+	 */
+	prev = NULL;
+	for (pending = pendingCleanups; pending != NULL; pending = next)
+	{
+		next = pending->next;
+
+		if (RelFileNodeEquals(rnode, pending->relnode) &&
+			pending->unlink_forknum != INIT_FORKNUM)
+		{
+			/* unlink list entry */
+			if (prev)
+				prev->next = next;
+			else
+				pendingCleanups = next;
+
+			pfree(pending);
+			/* prev does not change */
+
+			inxact_created = true;
+		}
+		else
+			prev = pending;
+	}
+
+	if (inxact_created)
+	{
+		SMgrRelation srel = smgropen(rnode, InvalidBackendId);
+
+		/*
+		 * INIT forks never be loaded to shared buffer so no point in dropping
+		 * buffers for such files.
+		 */
+		log_smgrunlinkmark(&rnode, INIT_FORKNUM, SMGR_MARK_UNCOMMITTED);
+		smgrunlinkmark(srel, INIT_FORKNUM, SMGR_MARK_UNCOMMITTED, false);
+		log_smgrunlink(&rnode, INIT_FORKNUM);
+		smgrunlink(srel, INIT_FORKNUM, false);
+		return;
+	}
+
+	/* register drop of this init fork file at commit */
+	pending = (PendingCleanup *)
+		MemoryContextAlloc(TopMemoryContext, sizeof(PendingCleanup));
+	pending->relnode = rnode;
+	pending->op = PCOP_UNLINK_FORK;
+	pending->unlink_forknum = INIT_FORKNUM;
+	pending->backend = InvalidBackendId;
+	pending->atCommit = true;
+	pending->nestLevel = GetCurrentTransactionNestLevel();
+	pending->next = pendingCleanups;
+	pendingCleanups = pending;
+
+	/* revert buffer-persistence changes at abort */
+	pending = (PendingCleanup *)
+		MemoryContextAlloc(TopMemoryContext, sizeof(PendingCleanup));
+	pending->relnode = rnode;
+	pending->op = PCOP_SET_PERSISTENCE;
+	pending->bufpersistence = false;
+	pending->backend = InvalidBackendId;
+	pending->atCommit = false;
+	pending->nestLevel = GetCurrentTransactionNestLevel();
+	pending->next = pendingCleanups;
+	pendingCleanups = pending;
 }
 
 /*
@@ -185,6 +422,88 @@ log_smgrcreate(const RelFileNode *rnode, ForkNumber forkNum)
 	XLogBeginInsert();
 	XLogRegisterData((char *) &xlrec, sizeof(xlrec));
 	XLogInsert(RM_SMGR_ID, XLOG_SMGR_CREATE | XLR_SPECIAL_REL_UPDATE);
+}
+
+/*
+ * Perform XLogInsert of an XLOG_SMGR_UNLINK record to WAL.
+ */
+void
+log_smgrunlink(const RelFileNode *rnode, ForkNumber forkNum)
+{
+	xl_smgr_unlink xlrec;
+
+	/*
+	 * Make an XLOG entry reporting the file unlink.
+	 */
+	xlrec.rnode = *rnode;
+	xlrec.forkNum = forkNum;
+
+	XLogBeginInsert();
+	XLogRegisterData((char *) &xlrec, sizeof(xlrec));
+	XLogInsert(RM_SMGR_ID, XLOG_SMGR_UNLINK | XLR_SPECIAL_REL_UPDATE);
+}
+
+/*
+ * Perform XLogInsert of an XLOG_SMGR_CREATEMARK record to WAL.
+ */
+void
+log_smgrcreatemark(const RelFileNode *rnode, ForkNumber forkNum,
+				   StorageMarks mark)
+{
+	xl_smgr_mark xlrec;
+
+	/*
+	 * Make an XLOG entry reporting the file creation.
+	 */
+	xlrec.rnode = *rnode;
+	xlrec.forkNum = forkNum;
+	xlrec.mark = mark;
+	xlrec.action = XLOG_SMGR_MARK_CREATE;
+
+	XLogBeginInsert();
+	XLogRegisterData((char *) &xlrec, sizeof(xlrec));
+	XLogInsert(RM_SMGR_ID, XLOG_SMGR_MARK | XLR_SPECIAL_REL_UPDATE);
+}
+
+/*
+ * Perform XLogInsert of an XLOG_SMGR_UNLINKMARK record to WAL.
+ */
+void
+log_smgrunlinkmark(const RelFileNode *rnode, ForkNumber forkNum,
+				   StorageMarks mark)
+{
+	xl_smgr_mark xlrec;
+
+	/*
+	 * Make an XLOG entry reporting the file creation.
+	 */
+	xlrec.rnode = *rnode;
+	xlrec.forkNum = forkNum;
+	xlrec.mark = mark;
+	xlrec.action = XLOG_SMGR_MARK_UNLINK;
+
+	XLogBeginInsert();
+	XLogRegisterData((char *) &xlrec, sizeof(xlrec));
+	XLogInsert(RM_SMGR_ID, XLOG_SMGR_MARK | XLR_SPECIAL_REL_UPDATE);
+}
+
+/*
+ * Perform XLogInsert of an XLOG_SMGR_BUFPERSISTENCE record to WAL.
+ */
+void
+log_smgrbufpersistence(const RelFileNode *rnode, bool persistence)
+{
+	xl_smgr_bufpersistence xlrec;
+
+	/*
+	 * Make an XLOG entry reporting the change of buffer persistence.
+	 */
+	xlrec.rnode = *rnode;
+	xlrec.persistence = persistence;
+
+	XLogBeginInsert();
+	XLogRegisterData((char *) &xlrec, sizeof(xlrec));
+	XLogInsert(RM_SMGR_ID, XLOG_SMGR_BUFPERSISTENCE | XLR_SPECIAL_REL_UPDATE);
 }
 
 /*
@@ -255,6 +574,7 @@ RelationPreserveStorage(RelFileNode rnode, bool atCommit)
 				prev->next = next;
 			else
 				pendingDeletes = next;
+
 			pfree(pending);
 			/* prev does not change */
 		}
@@ -674,6 +994,88 @@ smgrDoPendingDeletes(bool isCommit)
 }
 
 /*
+ *	smgrDoPendingUnmark() -- Clean up work that emits WAL records
+ *
+ *  The operations handled in the function emits WAL records, which must be
+ *  emitted before the commit record for the current transaction.
+ */
+void
+smgrDoPendingCleanups(bool isCommit)
+{
+	int			nestLevel = GetCurrentTransactionNestLevel();
+	PendingCleanup *pending;
+	PendingCleanup *prev;
+	PendingCleanup *next;
+
+	prev = NULL;
+	for (pending = pendingCleanups; pending != NULL; pending = next)
+	{
+		next = pending->next;
+		if (pending->nestLevel < nestLevel)
+		{
+			/* outer-level entries should not be processed yet */
+			prev = pending;
+		}
+		else
+		{
+			/* unlink list entry first, so we don't retry on failure */
+			if (prev)
+				prev->next = next;
+			else
+				pendingCleanups = next;
+
+			/* do cleanup if called for */
+			if (pending->atCommit == isCommit)
+			{
+				SMgrRelation srel;
+
+				srel = smgropen(pending->relnode, pending->backend);
+
+				Assert ((pending->op &
+						 ~(PCOP_UNLINK_FORK | PCOP_UNLINK_MARK |
+						   PCOP_SET_PERSISTENCE)) == 0);
+
+				if (pending->op & PCOP_UNLINK_FORK)
+				{
+					/* other forks needs to drop buffers */
+					Assert(pending->unlink_forknum == INIT_FORKNUM);
+
+					/* Don't emit wal while recovery. */
+					if (!InRecovery)
+						log_smgrunlink(&pending->relnode,
+									   pending->unlink_forknum);
+					smgrunlink(srel, pending->unlink_forknum, false);
+				}
+
+				if (pending->op & PCOP_UNLINK_MARK)
+				{
+					SMgrRelation srel;
+
+					if (!InRecovery)
+						log_smgrunlinkmark(&pending->relnode,
+										   pending->unlink_forknum,
+										   pending->unlink_mark);
+					srel = smgropen(pending->relnode, pending->backend);
+					smgrunlinkmark(srel, pending->unlink_forknum,
+								   pending->unlink_mark, InRecovery);
+					smgrclose(srel);
+				}
+
+				if (pending->op & PCOP_SET_PERSISTENCE)
+				{
+					SetRelationBuffersPersistence(srel, pending->bufpersistence,
+												  InRecovery);
+				}
+			}
+
+			/* must explicitly free the list entry */
+			pfree(pending);
+			/* prev does not change */
+		}
+	}
+}
+
+/*
  *	smgrDoPendingSyncs() -- Take care of relation syncs at end of xact.
  */
 void
@@ -933,6 +1335,15 @@ smgr_redo(XLogReaderState *record)
 		reln = smgropen(xlrec->rnode, InvalidBackendId);
 		smgrcreate(reln, xlrec->forkNum, true);
 	}
+	else if (info == XLOG_SMGR_UNLINK)
+	{
+		xl_smgr_unlink *xlrec = (xl_smgr_unlink *) XLogRecGetData(record);
+		SMgrRelation reln;
+
+		reln = smgropen(xlrec->rnode, InvalidBackendId);
+		smgrunlink(reln, xlrec->forkNum, true);
+		smgrclose(reln);
+	}
 	else if (info == XLOG_SMGR_TRUNCATE)
 	{
 		xl_smgr_truncate *xlrec = (xl_smgr_truncate *) XLogRecGetData(record);
@@ -1020,6 +1431,124 @@ smgr_redo(XLogReaderState *record)
 									InvalidBlockNumber);
 
 		FreeFakeRelcacheEntry(rel);
+	}
+	else if (info == XLOG_SMGR_MARK)
+	{
+		xl_smgr_mark *xlrec = (xl_smgr_mark *) XLogRecGetData(record);
+		SMgrRelation reln;
+		PendingCleanup *pending;
+		bool		created = false;
+
+		reln = smgropen(xlrec->rnode, InvalidBackendId);
+
+		switch (xlrec->action)
+		{
+			case XLOG_SMGR_MARK_CREATE:
+				smgrcreatemark(reln, xlrec->forkNum, xlrec->mark, true);
+				created = true;
+				break;
+			case XLOG_SMGR_MARK_UNLINK:
+				smgrunlinkmark(reln, xlrec->forkNum, xlrec->mark, true);
+				break;
+			default:
+				elog(ERROR, "unknown smgr_mark action \"%c\"", xlrec->mark);
+		}
+
+		if (created)
+		{
+			/* revert mark file operation at abort */
+			pending = (PendingCleanup *)
+				MemoryContextAlloc(TopMemoryContext, sizeof(PendingCleanup));
+			pending->relnode = xlrec->rnode;
+			pending->op = PCOP_UNLINK_MARK;
+			pending->unlink_forknum = xlrec->forkNum;
+			pending->unlink_mark = xlrec->mark;
+			pending->backend = InvalidBackendId;
+			pending->atCommit = false;
+			pending->nestLevel = GetCurrentTransactionNestLevel();
+			pending->next = pendingCleanups;
+			pendingCleanups = pending;
+		}
+		else
+		{
+			/*
+			 * Delete pending action for this mark file if any. We should have
+			 * at most one entry for this action.
+			 */
+			PendingCleanup *prev = NULL;
+
+			for (pending = pendingCleanups; pending != NULL;
+				 pending = pending->next)
+			{
+				if (RelFileNodeEquals(xlrec->rnode, pending->relnode) &&
+					pending->unlink_forknum == xlrec->forkNum &&
+					(pending->op & PCOP_UNLINK_MARK) != 0)
+				{
+					if (prev)
+						prev->next = pending->next;
+					else
+						pendingCleanups = pending->next;
+
+					pfree(pending);
+					break;
+				}
+
+				prev = pending;
+			}
+		}
+	}
+	else if (info == XLOG_SMGR_BUFPERSISTENCE)
+	{
+		xl_smgr_bufpersistence *xlrec =
+			(xl_smgr_bufpersistence *) XLogRecGetData(record);
+		SMgrRelation reln;
+		PendingCleanup *pending;
+		PendingCleanup *prev = NULL;
+
+		reln = smgropen(xlrec->rnode, InvalidBackendId);
+		SetRelationBuffersPersistence(reln, xlrec->persistence, true);
+
+		/*
+		 * Delete pending action for persistence change if any. We should have
+		 * at most one entry for this action.
+		 */
+		for (pending = pendingCleanups; pending != NULL;
+			 pending = pending->next)
+		{
+			if (RelFileNodeEquals(xlrec->rnode, pending->relnode) &&
+				(pending->op & PCOP_SET_PERSISTENCE) != 0)
+			{
+				Assert (pending->bufpersistence == xlrec->persistence);
+
+				if (prev)
+					prev->next = pending->next;
+				else
+					pendingCleanups = pending->next;
+
+				pfree(pending);
+				break;
+			}
+
+			prev = pending;
+		}
+
+		/*
+		 * Revert buffer-persistence changes at abort if the relation is going
+		 * to different persistence from before this transaction.
+		 */
+		if (!pending)
+		{
+			pending = (PendingCleanup *)
+				MemoryContextAlloc(TopMemoryContext, sizeof(PendingCleanup));
+			pending->relnode = xlrec->rnode;
+			pending->op = PCOP_SET_PERSISTENCE;
+			pending->bufpersistence = !xlrec->persistence;
+			pending->backend = InvalidBackendId;
+			pending->atCommit = false;
+			pending->nestLevel = GetCurrentTransactionNestLevel();
+			pending->next = pendingCleanups;
+			pendingCleanups = pending;
+		}
 	}
 	else
 		elog(PANIC, "smgr_redo: unknown op code %u", info);

@@ -170,4 +170,24 @@ select count(*) from t_gin_test_tbl where j @> '{}'::int[];
 reset enable_seqscan;
 reset enable_bitmapscan;
 
+-- Test supported storage parameters
+create index on t_gin_test_tbl using gin(i, j) with (fastupdate=on, gin_pending_list_limit=1000);
+
+-- Test unsupported storage parameters
+create index on t_gin_test_tbl using gin(i, j) with (pages_per_range=40);  -- from brin
+create index on t_gin_test_tbl using gin(i, j) with (autosummarize=true);  -- from brin
+create index on t_gin_test_tbl using gin(i, j) with (deduplicate_items=on);  -- from btree
+create index on t_gin_test_tbl using gin(i, j) with (fillfactor=30);  -- from gist
+create index on t_gin_test_tbl using gin(i, j) with (buffering=on);  -- from gist
+create index on t_gin_test_tbl using gin(i, j) with (parallel_workers=5);  -- from heap
+create index on t_gin_test_tbl using gin(i, j) with (seq_page_cost=1.0);  -- from tablespace
+create index on t_gin_test_tbl using gin(i, j) with (random_page_cost=4.0);  -- from tablespace
+create index on t_gin_test_tbl using gin(i, j) with (effective_io_concurrency=5); -- from tablespace
+create index on t_gin_test_tbl using gin(i, j) with (maintenance_io_concurrency=5); -- from tablespace
+create index on t_gin_test_tbl using gin(i, j) with (toast.vacuum_index_cleanup=auto);  -- from toast
+
+-- Test nonsense storage parameters
+create index on t_gin_test_tbl using gin(i, j) with (nonsense);
+create index on t_gin_test_tbl using gin(i, j) with (toast.nonsense);
+
 drop table t_gin_test_tbl;

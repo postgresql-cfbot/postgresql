@@ -267,6 +267,12 @@ ERROR:  invalid value for boolean option "security_barrier": 100
 CREATE VIEW mysecview6 WITH (invalid_option)		-- Error
        AS SELECT * FROM tbl1 WHERE a < 100;
 ERROR:  unrecognized parameter "invalid_option"
+CREATE VIEW mysecview7 WITH (toast.vacuum_index_cleanup=OFF)	-- Error
+       AS SELECT * FROM tbl1 WHERE a < 100;
+ERROR:  unrecognized parameter namespace "toast"
+CREATE VIEW mysecview8 WITH (nonsense.instanity)	-- Error
+       AS SELECT * FROM tbl1 WHERE a < 100;
+ERROR:  unrecognized parameter namespace "nonsense"
 SELECT relname, relkind, reloptions FROM pg_class
        WHERE oid in ('mysecview1'::regclass, 'mysecview2'::regclass,
                      'mysecview3'::regclass, 'mysecview4'::regclass)

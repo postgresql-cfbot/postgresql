@@ -507,6 +507,26 @@ SELECT * FROM brintest_3 WHERE b < '0';
 
 SELECT * FROM brintest_3 WHERE b < '0';
 
+-- Test supported storage parameters
+CREATE INDEX ON brintest_3 USING brin (b, c) WITH (autosummarize=true,pages_per_range=40);
+
+-- Test unsupported storage parameters
+CREATE INDEX ON brintest_3 USING brin (b, c) WITH (deduplicate_items=on);  -- from btree
+CREATE INDEX ON brintest_3 USING brin (b, c) WITH (fastupdate=on);  -- from gin
+CREATE INDEX ON brintest_3 USING brin (b, c) WITH (gin_pending_list_limit=1000);  -- from gin
+CREATE INDEX ON brintest_3 USING brin (b, c) WITH (fillfactor=30);  -- from gist
+CREATE INDEX ON brintest_3 USING brin (b, c) WITH (buffering=on);  -- from gist
+CREATE INDEX ON brintest_3 USING brin (b, c) WITH (parallel_workers=5);  -- from heap
+CREATE INDEX ON brintest_3 USING brin (b, c) WITH (seq_page_cost=1.0);  -- from tablespace
+CREATE INDEX ON brintest_3 USING brin (b, c) WITH (random_page_cost=4.0);  -- from tablespace
+CREATE INDEX ON brintest_3 USING brin (b, c) WITH (effective_io_concurrency=5); -- from tablespace
+CREATE INDEX ON brintest_3 USING brin (b, c) WITH (maintenance_io_concurrency=5); -- from tablespace
+CREATE INDEX ON brintest_3 USING brin (b, c) WITH (toast.vacuum_index_cleanup=auto);  -- from toast
+
+-- Test nonsense storage parameters
+CREATE INDEX ON brintest_3 USING brin (b, c) WITH (nonsense);
+CREATE INDEX ON brintest_3 USING brin (b, c) WITH (toast.nonsense);
+
 DROP TABLE brintest_3;
 RESET enable_seqscan;
 

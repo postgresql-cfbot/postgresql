@@ -849,7 +849,8 @@ AlterRoleSet(AlterRoleSetStmt *stmt)
 
 		/*
 		 * To mess with a superuser you gotta be superuser; else you need
-		 * createrole, or just want to change your own settings
+		 * createrole, the pg_change_role_settings default role, or just want
+		 * to change your own settings.
 		 */
 		if (roleform->rolsuper)
 		{
@@ -860,7 +861,9 @@ AlterRoleSet(AlterRoleSetStmt *stmt)
 		}
 		else
 		{
-			if (!have_createrole_privilege() && roleid != GetUserId())
+			if (!have_createrole_privilege() &&
+				roleid != GetUserId() &&
+				!is_member_of_role(GetUserId(), ROLE_PG_CHANGE_ROLE_SETTINGS))
 				ereport(ERROR,
 						(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 						 errmsg("permission denied")));

@@ -135,7 +135,7 @@ typedef ProtocolVersion MsgType;
 
 typedef uint32 PacketLen;
 
-extern bool Db_user_namespace;
+extern bool Db_user_namespace pg_attribute_hidden();
 
 /*
  * In protocol 3.0 and later, the startup packet length is not fixed, but

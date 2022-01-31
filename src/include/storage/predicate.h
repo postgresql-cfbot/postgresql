@@ -22,9 +22,9 @@
 /*
  * GUC variables
  */
-extern int	max_predicate_locks_per_xact;
-extern int	max_predicate_locks_per_relation;
-extern int	max_predicate_locks_per_page;
+extern int	max_predicate_locks_per_xact pg_attribute_hidden();
+extern int	max_predicate_locks_per_relation pg_attribute_hidden();
+extern int	max_predicate_locks_per_page pg_attribute_hidden();
 
 
 /* Number of SLRU buffers to use for Serial SLRU */

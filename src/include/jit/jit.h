@@ -79,16 +79,16 @@ struct JitProviderCallbacks
 
 
 /* GUCs */
-extern bool jit_enabled;
-extern char *jit_provider;
-extern bool jit_debugging_support;
-extern bool jit_dump_bitcode;
-extern bool jit_expressions;
-extern bool jit_profiling_support;
-extern bool jit_tuple_deforming;
-extern double jit_above_cost;
-extern double jit_inline_above_cost;
-extern double jit_optimize_above_cost;
+extern bool jit_enabled pg_attribute_hidden();
+extern char *jit_provider pg_attribute_hidden();
+extern bool jit_debugging_support pg_attribute_hidden();
+extern bool jit_dump_bitcode pg_attribute_hidden();
+extern bool jit_expressions pg_attribute_hidden();
+extern bool jit_profiling_support pg_attribute_hidden();
+extern bool jit_tuple_deforming pg_attribute_hidden();
+extern double jit_above_cost pg_attribute_hidden();
+extern double jit_inline_above_cost pg_attribute_hidden();
+extern double jit_optimize_above_cost pg_attribute_hidden();
 
 
 extern void jit_reset_after_error(void);

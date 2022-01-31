@@ -79,7 +79,7 @@ extern SyncRepConfigData *syncrep_parse_result;
 extern char *syncrep_parse_error_msg;
 
 /* user-settable parameters for synchronous replication */
-extern char *SyncRepStandbyNames;
+extern char *SyncRepStandbyNames pg_attribute_hidden();
 
 /* called by user backend */
 extern void SyncRepWaitForLSN(XLogRecPtr lsn, bool commit);

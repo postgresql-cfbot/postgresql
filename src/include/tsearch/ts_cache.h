@@ -84,7 +84,7 @@ typedef struct
 /*
  * GUC variable for current configuration
  */
-extern char *TSCurrentConfig;
+extern char *TSCurrentConfig pg_attribute_hidden();
 
 
 extern TSParserCacheEntry *lookup_ts_parser_cache(Oid prsId);

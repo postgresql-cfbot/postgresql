@@ -239,53 +239,53 @@ typedef enum
 
 
 /* GUC vars that are actually declared in guc.c, rather than elsewhere */
-extern bool Debug_print_plan;
-extern bool Debug_print_parse;
-extern bool Debug_print_rewritten;
-extern bool Debug_pretty_print;
+extern bool Debug_print_plan pg_attribute_hidden();
+extern bool Debug_print_parse pg_attribute_hidden();
+extern bool Debug_print_rewritten pg_attribute_hidden();
+extern bool Debug_pretty_print pg_attribute_hidden();
 
-extern bool log_parser_stats;
-extern bool log_planner_stats;
-extern bool log_executor_stats;
-extern bool log_statement_stats;
-extern bool log_btree_build_stats;
+extern bool log_parser_stats pg_attribute_hidden();
+extern bool log_planner_stats pg_attribute_hidden();
+extern bool log_executor_stats pg_attribute_hidden();
+extern bool log_statement_stats pg_attribute_hidden();
+extern bool log_btree_build_stats pg_attribute_hidden();
 
 extern PGDLLIMPORT bool check_function_bodies;
-extern bool session_auth_is_superuser;
+extern bool session_auth_is_superuser pg_attribute_hidden();
 
-extern bool log_duration;
-extern int	log_parameter_max_length;
-extern int	log_parameter_max_length_on_error;
-extern int	log_min_error_statement;
+extern bool log_duration pg_attribute_hidden();
+extern int	log_parameter_max_length pg_attribute_hidden();
+extern int	log_parameter_max_length_on_error pg_attribute_hidden();
+extern int	log_min_error_statement pg_attribute_hidden();
 extern PGDLLIMPORT int log_min_messages;
 extern PGDLLIMPORT int client_min_messages;
-extern int	log_min_duration_sample;
-extern int	log_min_duration_statement;
-extern int	log_temp_files;
-extern double log_statement_sample_rate;
-extern double log_xact_sample_rate;
-extern char *backtrace_functions;
+extern int	log_min_duration_sample pg_attribute_hidden();
+extern int	log_min_duration_statement pg_attribute_hidden();
+extern int	log_temp_files pg_attribute_hidden();
+extern double log_statement_sample_rate pg_attribute_hidden();
+extern double log_xact_sample_rate pg_attribute_hidden();
+extern char *backtrace_functions pg_attribute_hidden();
 extern char *backtrace_symbol_list;
 
-extern int	temp_file_limit;
+extern int	temp_file_limit pg_attribute_hidden();
 
-extern int	num_temp_buffers;
+extern int	num_temp_buffers pg_attribute_hidden();
 
-extern char *cluster_name;
+extern char *cluster_name pg_attribute_hidden();
 extern PGDLLIMPORT char *ConfigFileName;
-extern char *HbaFileName;
-extern char *IdentFileName;
-extern char *external_pid_file;
+extern char *HbaFileName pg_attribute_hidden();
+extern char *IdentFileName pg_attribute_hidden();
+extern char *external_pid_file pg_attribute_hidden();
 
 extern PGDLLIMPORT char *application_name;
 
-extern int	tcp_keepalives_idle;
-extern int	tcp_keepalives_interval;
-extern int	tcp_keepalives_count;
-extern int	tcp_user_timeout;
+extern int	tcp_keepalives_idle pg_attribute_hidden();
+extern int	tcp_keepalives_interval pg_attribute_hidden();
+extern int	tcp_keepalives_count pg_attribute_hidden();
+extern int	tcp_user_timeout pg_attribute_hidden();
 
 #ifdef TRACE_SORT
-extern bool trace_sort;
+extern bool trace_sort pg_attribute_hidden();
 #endif
 
 /*

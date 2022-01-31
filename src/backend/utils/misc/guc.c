@@ -131,20 +131,20 @@
 #define REALTYPE_PRECISION 17
 
 /* XXX these should appear in other modules' header files */
-extern bool Log_disconnections;
-extern int	CommitDelay;
-extern int	CommitSiblings;
-extern char *default_tablespace;
-extern char *temp_tablespaces;
-extern bool ignore_checksum_failure;
-extern bool ignore_invalid_pages;
+extern bool Log_disconnections pg_attribute_hidden();
+extern int	CommitDelay pg_attribute_hidden();
+extern int	CommitSiblings pg_attribute_hidden();
+extern char *default_tablespace pg_attribute_hidden();
+extern char *temp_tablespaces pg_attribute_hidden();
+extern bool ignore_checksum_failure pg_attribute_hidden();
+extern bool ignore_invalid_pages pg_attribute_hidden();
 extern bool synchronize_seqscans;
 
 #ifdef TRACE_SYNCSCAN
-extern bool trace_syncscan;
+extern bool trace_syncscan pg_attribute_hidden();
 #endif
 #ifdef DEBUG_BOUNDED_SORT
-extern bool optimize_bounded_sort;
+extern bool optimize_bounded_sort pg_attribute_hidden();
 #endif
 
 static int	GUC_check_errcode_value;

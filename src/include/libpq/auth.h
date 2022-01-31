@@ -16,8 +16,8 @@
 
 #include "libpq/libpq-be.h"
 
-extern char *pg_krb_server_keyfile;
-extern bool pg_krb_caseins_users;
+extern char *pg_krb_server_keyfile pg_attribute_hidden();
+extern bool pg_krb_caseins_users pg_attribute_hidden();
 extern char *pg_krb_realm;
 
 extern void ClientAuthentication(Port *port);

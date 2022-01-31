@@ -339,7 +339,7 @@ typedef struct ArrayIteratorData *ArrayIterator;
 /*
  * GUC parameter
  */
-extern bool Array_nulls;
+extern bool Array_nulls pg_attribute_hidden();
 
 /*
  * prototypes for functions defined in arrayfuncs.c

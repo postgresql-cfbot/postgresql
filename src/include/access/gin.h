@@ -68,7 +68,7 @@ typedef char GinTernaryValue;
 
 /* GUC parameters */
 extern PGDLLIMPORT int GinFuzzySearchLimit;
-extern int	gin_pending_list_limit;
+extern int	gin_pending_list_limit pg_attribute_hidden();
 
 /* ginutil.c */
 extern void ginGetStats(Relation index, GinStatsData *stats);

@@ -252,12 +252,12 @@ typedef struct VacDeadItems
 
 /* GUC parameters */
 extern PGDLLIMPORT int default_statistics_target;	/* PGDLLIMPORT for PostGIS */
-extern int	vacuum_freeze_min_age;
-extern int	vacuum_freeze_table_age;
-extern int	vacuum_multixact_freeze_min_age;
-extern int	vacuum_multixact_freeze_table_age;
-extern int	vacuum_failsafe_age;
-extern int	vacuum_multixact_failsafe_age;
+extern int	vacuum_freeze_min_age pg_attribute_hidden();
+extern int	vacuum_freeze_table_age pg_attribute_hidden();
+extern int	vacuum_multixact_freeze_min_age pg_attribute_hidden();
+extern int	vacuum_multixact_freeze_table_age pg_attribute_hidden();
+extern int	vacuum_failsafe_age pg_attribute_hidden();
+extern int	vacuum_multixact_failsafe_age pg_attribute_hidden();
 
 /* Variables for cost-based parallel vacuum */
 extern pg_atomic_uint32 *VacuumSharedCostBalance;

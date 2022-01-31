@@ -38,10 +38,10 @@
 #define LOCALE_NAME_BUFLEN 128
 
 /* GUC settings */
-extern char *locale_messages;
-extern char *locale_monetary;
-extern char *locale_numeric;
-extern char *locale_time;
+extern char *locale_messages pg_attribute_hidden();
+extern char *locale_monetary pg_attribute_hidden();
+extern char *locale_numeric pg_attribute_hidden();
+extern char *locale_time pg_attribute_hidden();
 
 /* lc_time localization cache */
 extern char *localized_abbrev_days[];

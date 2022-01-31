@@ -49,23 +49,23 @@
  *
  * If you change these, update backend/utils/misc/postgresql.conf.sample
  */
-extern int	Geqo_effort;		/* 1 .. 10, knob for adjustment of defaults */
+extern int	Geqo_effort pg_attribute_hidden();		/* 1 .. 10, knob for adjustment of defaults */
 
 #define DEFAULT_GEQO_EFFORT 5
 #define MIN_GEQO_EFFORT 1
 #define MAX_GEQO_EFFORT 10
 
-extern int	Geqo_pool_size;		/* 2 .. inf, or 0 to use default */
+extern int	Geqo_pool_size pg_attribute_hidden();		/* 2 .. inf, or 0 to use default */
 
-extern int	Geqo_generations;	/* 1 .. inf, or 0 to use default */
+extern int	Geqo_generations pg_attribute_hidden();	/* 1 .. inf, or 0 to use default */
 
-extern double Geqo_selection_bias;
+extern double Geqo_selection_bias pg_attribute_hidden();
 
 #define DEFAULT_GEQO_SELECTION_BIAS 2.0
 #define MIN_GEQO_SELECTION_BIAS 1.5
 #define MAX_GEQO_SELECTION_BIAS 2.0
 
-extern double Geqo_seed;		/* 0 .. 1 */
+extern double Geqo_seed pg_attribute_hidden();		/* 0 .. 1 */
 
 
 /*

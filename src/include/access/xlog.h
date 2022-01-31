@@ -26,7 +26,7 @@
 #define SYNC_METHOD_OPEN		2	/* for O_SYNC */
 #define SYNC_METHOD_FSYNC_WRITETHROUGH	3
 #define SYNC_METHOD_OPEN_DSYNC	4	/* for O_DSYNC */
-extern int	sync_method;
+extern int	sync_method pg_attribute_hidden();
 
 /*
  * Recovery target type.
@@ -59,45 +59,45 @@ extern PGDLLIMPORT XLogRecPtr XactLastCommitEnd;
 extern bool reachedConsistency;
 
 /* these variables are GUC parameters related to XLOG */
-extern int	wal_segment_size;
-extern int	min_wal_size_mb;
-extern int	max_wal_size_mb;
-extern int	wal_keep_size_mb;
-extern int	max_slot_wal_keep_size_mb;
-extern int	XLOGbuffers;
-extern int	XLogArchiveTimeout;
-extern int	wal_retrieve_retry_interval;
-extern char *XLogArchiveCommand;
-extern bool EnableHotStandby;
-extern bool fullPageWrites;
-extern bool wal_log_hints;
-extern int	wal_compression;
-extern bool wal_init_zero;
-extern bool wal_recycle;
+extern int	wal_segment_size pg_attribute_hidden();
+extern int	min_wal_size_mb pg_attribute_hidden();
+extern int	max_wal_size_mb pg_attribute_hidden();
+extern int	wal_keep_size_mb pg_attribute_hidden();
+extern int	max_slot_wal_keep_size_mb pg_attribute_hidden();
+extern int	XLOGbuffers pg_attribute_hidden();
+extern int	XLogArchiveTimeout pg_attribute_hidden();
+extern int	wal_retrieve_retry_interval pg_attribute_hidden();
+extern char *XLogArchiveCommand pg_attribute_hidden();
+extern bool EnableHotStandby pg_attribute_hidden();
+extern bool fullPageWrites pg_attribute_hidden();
+extern bool wal_log_hints pg_attribute_hidden();
+extern int	wal_compression pg_attribute_hidden();
+extern bool wal_init_zero pg_attribute_hidden();
+extern bool wal_recycle pg_attribute_hidden();
 extern bool *wal_consistency_checking;
-extern char *wal_consistency_checking_string;
-extern bool log_checkpoints;
-extern char *recoveryRestoreCommand;
-extern char *recoveryEndCommand;
-extern char *archiveCleanupCommand;
-extern bool recoveryTargetInclusive;
-extern int	recoveryTargetAction;
-extern int	recovery_min_apply_delay;
-extern char *PrimaryConnInfo;
-extern char *PrimarySlotName;
-extern bool wal_receiver_create_temp_slot;
-extern bool track_wal_io_timing;
+extern char *wal_consistency_checking_string pg_attribute_hidden();
+extern bool log_checkpoints pg_attribute_hidden();
+extern char *recoveryRestoreCommand pg_attribute_hidden();
+extern char *recoveryEndCommand pg_attribute_hidden();
+extern char *archiveCleanupCommand pg_attribute_hidden();
+extern bool recoveryTargetInclusive pg_attribute_hidden();
+extern int	recoveryTargetAction pg_attribute_hidden();
+extern int	recovery_min_apply_delay pg_attribute_hidden();
+extern char *PrimaryConnInfo pg_attribute_hidden();
+extern char *PrimarySlotName pg_attribute_hidden();
+extern bool wal_receiver_create_temp_slot pg_attribute_hidden();
+extern bool track_wal_io_timing pg_attribute_hidden();
 
 /* indirectly set via GUC system */
-extern TransactionId recoveryTargetXid;
-extern char *recovery_target_time_string;
-extern const char *recoveryTargetName;
-extern XLogRecPtr recoveryTargetLSN;
-extern RecoveryTargetType recoveryTarget;
-extern char *PromoteTriggerFile;
-extern RecoveryTargetTimeLineGoal recoveryTargetTimeLineGoal;
-extern TimeLineID recoveryTargetTLIRequested;
-extern TimeLineID recoveryTargetTLI;
+extern TransactionId recoveryTargetXid pg_attribute_hidden();
+extern char *recovery_target_time_string pg_attribute_hidden();
+extern const char *recoveryTargetName pg_attribute_hidden();
+extern XLogRecPtr recoveryTargetLSN pg_attribute_hidden();
+extern RecoveryTargetType recoveryTarget pg_attribute_hidden();
+extern char *PromoteTriggerFile pg_attribute_hidden();
+extern RecoveryTargetTimeLineGoal recoveryTargetTimeLineGoal pg_attribute_hidden();
+extern TimeLineID recoveryTargetTLIRequested pg_attribute_hidden();
+extern TimeLineID recoveryTargetTLI pg_attribute_hidden();
 
 extern int	CheckPointSegments;
 
@@ -112,7 +112,7 @@ typedef enum ArchiveMode
 	ARCHIVE_MODE_ON,			/* enabled while server is running normally */
 	ARCHIVE_MODE_ALWAYS			/* enabled always (even during recovery) */
 } ArchiveMode;
-extern int	XLogArchiveMode;
+extern int	XLogArchiveMode pg_attribute_hidden();
 
 /* WAL levels */
 typedef enum WalLevel
@@ -180,7 +180,7 @@ extern PGDLLIMPORT int wal_level;
 #define XLogLogicalInfoActive() (wal_level >= WAL_LEVEL_LOGICAL)
 
 #ifdef WAL_DEBUG
-extern bool XLOG_DEBUG;
+extern bool XLOG_DEBUG pg_attribute_hidden();
 #endif
 
 /*

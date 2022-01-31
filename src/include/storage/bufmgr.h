@@ -65,16 +65,16 @@ struct SMgrRelationData;
 extern PGDLLIMPORT int NBuffers;
 
 /* in bufmgr.c */
-extern bool zero_damaged_pages;
-extern int	bgwriter_lru_maxpages;
-extern double bgwriter_lru_multiplier;
-extern bool track_io_timing;
-extern int	effective_io_concurrency;
-extern int	maintenance_io_concurrency;
+extern bool zero_damaged_pages pg_attribute_hidden();
+extern int	bgwriter_lru_maxpages pg_attribute_hidden();
+extern double bgwriter_lru_multiplier pg_attribute_hidden();
+extern bool track_io_timing pg_attribute_hidden();
+extern int	effective_io_concurrency pg_attribute_hidden();
+extern int	maintenance_io_concurrency pg_attribute_hidden();
 
-extern int	checkpoint_flush_after;
-extern int	backend_flush_after;
-extern int	bgwriter_flush_after;
+extern int	checkpoint_flush_after pg_attribute_hidden();
+extern int	backend_flush_after pg_attribute_hidden();
+extern int	bgwriter_flush_after pg_attribute_hidden();
 
 /* in buf_init.c */
 extern PGDLLIMPORT char *BufferBlocks;

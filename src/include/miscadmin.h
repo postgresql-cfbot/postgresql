@@ -255,18 +255,18 @@ extern PGDLLIMPORT int IntervalStyle;
 
 #define MAXTZLEN		10		/* max TZ name len, not counting tr. null */
 
-extern bool enableFsync;
+extern bool enableFsync pg_attribute_hidden();
 extern PGDLLIMPORT bool allowSystemTableMods;
 extern PGDLLIMPORT int work_mem;
 extern PGDLLIMPORT double hash_mem_multiplier;
 extern PGDLLIMPORT int maintenance_work_mem;
 extern PGDLLIMPORT int max_parallel_maintenance_workers;
 
-extern int	VacuumCostPageHit;
-extern int	VacuumCostPageMiss;
-extern int	VacuumCostPageDirty;
-extern int	VacuumCostLimit;
-extern double VacuumCostDelay;
+extern int	VacuumCostPageHit pg_attribute_hidden();
+extern int	VacuumCostPageMiss pg_attribute_hidden();
+extern int	VacuumCostPageDirty pg_attribute_hidden();
+extern int	VacuumCostLimit pg_attribute_hidden();
+extern double VacuumCostDelay pg_attribute_hidden();
 
 extern int64 VacuumPageHit;
 extern int64 VacuumPageMiss;
@@ -299,7 +299,7 @@ extern void PreventCommandIfParallelMode(const char *cmdname);
 extern void PreventCommandDuringRecovery(const char *cmdname);
 
 /* in utils/misc/guc.c */
-extern int	trace_recovery_messages;
+extern int	trace_recovery_messages pg_attribute_hidden();
 extern int	trace_recovery(int trace_level);
 
 /*****************************************************************************
@@ -462,11 +462,11 @@ extern void InitPostgres(const char *in_dbname, Oid dboid, const char *username,
 extern void BaseInit(void);
 
 /* in utils/init/miscinit.c */
-extern bool IgnoreSystemIndexes;
+extern bool IgnoreSystemIndexes pg_attribute_hidden();
 extern PGDLLIMPORT bool process_shared_preload_libraries_in_progress;
-extern char *session_preload_libraries_string;
-extern char *shared_preload_libraries_string;
-extern char *local_preload_libraries_string;
+extern char *session_preload_libraries_string pg_attribute_hidden();
+extern char *shared_preload_libraries_string pg_attribute_hidden();
+extern char *local_preload_libraries_string pg_attribute_hidden();
 
 extern void CreateDataDirLockFile(bool amPostmaster);
 extern void CreateSocketLockFile(const char *socketfile, bool amPostmaster,

@@ -13,8 +13,8 @@
 #define _WALWRITER_H
 
 /* GUC options */
-extern int	WalWriterDelay;
-extern int	WalWriterFlushAfter;
+extern int	WalWriterDelay pg_attribute_hidden();
+extern int	WalWriterFlushAfter pg_attribute_hidden();
 
 extern void WalWriterMain(void) pg_attribute_noreturn();
 

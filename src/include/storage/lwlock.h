@@ -110,7 +110,7 @@ typedef enum LWLockMode
 
 
 #ifdef LOCK_DEBUG
-extern bool Trace_lwlocks;
+extern bool Trace_lwlocks pg_attribute_hidden();
 #endif
 
 extern bool LWLockAcquire(LWLock *lock, LWLockMode mode);

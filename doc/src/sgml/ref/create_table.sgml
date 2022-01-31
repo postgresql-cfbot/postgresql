@@ -215,6 +215,14 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       Any indexes created on an unlogged table are automatically unlogged as
       well.
      </para>
+
+     <para>
+      The function <link linkend="functions-pg-control-recovery">
+      <function>pg_control_recovery()</function></link> can be used to
+      determine when a crash or standby promotion last happened, which is
+      useful for determining whether an <literal>UNLOGGED</literal> table
+      should be repopulated.
+     </para>
     </listitem>
    </varlistentry>
 

@@ -210,8 +210,8 @@ pg_control_checkpoint(PG_FUNCTION_ARGS)
 Datum
 pg_control_recovery(PG_FUNCTION_ARGS)
 {
-	Datum		values[5];
-	bool		nulls[5];
+	Datum		values[8];
+	bool		nulls[8];
 	TupleDesc	tupdesc;
 	HeapTuple	htup;
 	ControlFileData *ControlFile;
@@ -221,16 +221,22 @@ pg_control_recovery(PG_FUNCTION_ARGS)
 	 * Construct a tuple descriptor for the result row.  This must match this
 	 * function's pg_proc entry!
 	 */
-	tupdesc = CreateTemplateTupleDesc(5);
-	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "min_recovery_end_lsn",
+	tupdesc = CreateTemplateTupleDesc(8);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "last_recovery_lsn",
 					   PG_LSNOID, -1, 0);
-	TupleDescInitEntry(tupdesc, (AttrNumber) 2, "min_recovery_end_timeline",
+	TupleDescInitEntry(tupdesc, (AttrNumber) 2, "last_recovery_time",
+					   TIMESTAMPTZOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 3, "recovery_count",
+					   INT8OID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 4, "min_recovery_end_lsn",
+					   PG_LSNOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 5, "min_recovery_end_timeline",
 					   INT4OID, -1, 0);
-	TupleDescInitEntry(tupdesc, (AttrNumber) 3, "backup_start_lsn",
+	TupleDescInitEntry(tupdesc, (AttrNumber) 6, "backup_start_lsn",
 					   PG_LSNOID, -1, 0);
-	TupleDescInitEntry(tupdesc, (AttrNumber) 4, "backup_end_lsn",
+	TupleDescInitEntry(tupdesc, (AttrNumber) 7, "backup_end_lsn",
 					   PG_LSNOID, -1, 0);
-	TupleDescInitEntry(tupdesc, (AttrNumber) 5, "end_of_backup_record_required",
+	TupleDescInitEntry(tupdesc, (AttrNumber) 8, "end_of_backup_record_required",
 					   BOOLOID, -1, 0);
 	tupdesc = BlessTupleDesc(tupdesc);
 
@@ -240,20 +246,29 @@ pg_control_recovery(PG_FUNCTION_ARGS)
 		ereport(ERROR,
 				(errmsg("calculated CRC checksum does not match value stored in file")));
 
-	values[0] = LSNGetDatum(ControlFile->minRecoveryPoint);
+	values[0] = LSNGetDatum(ControlFile->lastRecoveryLSN);
 	nulls[0] = false;
 
-	values[1] = Int32GetDatum(ControlFile->minRecoveryPointTLI);
+	values[1] = TimestampTzGetDatum(time_t_to_timestamptz(ControlFile->lastRecoveryTime));
 	nulls[1] = false;
 
-	values[2] = LSNGetDatum(ControlFile->backupStartPoint);
+	values[2] = Int64GetDatum(ControlFile->recoveryCount);
 	nulls[2] = false;
 
-	values[3] = LSNGetDatum(ControlFile->backupEndPoint);
+	values[3] = LSNGetDatum(ControlFile->minRecoveryPoint);
 	nulls[3] = false;
 
-	values[4] = BoolGetDatum(ControlFile->backupEndRequired);
+	values[4] = Int32GetDatum(ControlFile->minRecoveryPointTLI);
 	nulls[4] = false;
+
+	values[5] = LSNGetDatum(ControlFile->backupStartPoint);
+	nulls[5] = false;
+
+	values[6] = LSNGetDatum(ControlFile->backupEndPoint);
+	nulls[6] = false;
+
+	values[7] = BoolGetDatum(ControlFile->backupEndRequired);
+	nulls[7] = false;
 
 	htup = heap_form_tuple(tupdesc, values, nulls);
 

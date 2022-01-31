@@ -456,6 +456,112 @@ PLy_spi_execute_fetch_result(SPITupleTable *tuptable, uint64 rows, int status)
 	return (PyObject *) result;
 }
 
+PyObject *
+PLy_commit(PyObject *self, PyObject *args)
+{
+	volatile MemoryContext oldcontext;
+	volatile ResourceOwner oldowner;
+
+	oldcontext = CurrentMemoryContext;
+	oldowner = CurrentResourceOwner;
+
+	PG_TRY();
+	{
+		PLyExecutionContext *exec_ctx = PLy_current_execution_context();
+
+		SPI_commit();
+		SPI_start_transaction();
+
+		/* was cleared at transaction end, reset pointer */
+		exec_ctx->scratch_ctx = NULL;
+	}
+	PG_CATCH();
+	{
+		ErrorData  *edata;
+		PLyExceptionEntry *entry;
+		PyObject   *exc;
+
+		/* Save error info */
+		MemoryContextSwitchTo(oldcontext);
+		edata = CopyErrorData();
+		FlushErrorState();
+
+		MemoryContextSwitchTo(oldcontext);
+		CurrentResourceOwner = oldowner;
+
+		/* Look up the correct exception */
+		entry = hash_search(PLy_spi_exceptions, &(edata->sqlerrcode),
+							HASH_FIND, NULL);
+
+		/*
+		 * This could be a custom error code, if that's the case fallback to
+		 * SPIError
+		 */
+		exc = entry ? entry->exc : PLy_exc_spi_error;
+		/* Make Python raise the exception */
+		PLy_spi_exception_set(exc, edata);
+		FreeErrorData(edata);
+
+		return NULL;
+	}
+	PG_END_TRY();
+
+	Py_RETURN_NONE;
+}
+
+PyObject *
+PLy_rollback(PyObject *self, PyObject *args)
+{
+	volatile MemoryContext oldcontext;
+	volatile ResourceOwner oldowner;
+
+	oldcontext = CurrentMemoryContext;
+	oldowner = CurrentResourceOwner;
+
+	PG_TRY();
+	{
+		PLyExecutionContext *exec_ctx = PLy_current_execution_context();
+
+		SPI_rollback();
+		SPI_start_transaction();
+
+		/* was cleared at transaction end, reset pointer */
+		exec_ctx->scratch_ctx = NULL;
+	}
+	PG_CATCH();
+	{
+		ErrorData  *edata;
+		PLyExceptionEntry *entry;
+		PyObject   *exc;
+
+		/* Save error info */
+		MemoryContextSwitchTo(oldcontext);
+		edata = CopyErrorData();
+		FlushErrorState();
+
+		MemoryContextSwitchTo(oldcontext);
+		CurrentResourceOwner = oldowner;
+
+		/* Look up the correct exception */
+		entry = hash_search(PLy_spi_exceptions, &(edata->sqlerrcode),
+							HASH_FIND, NULL);
+
+		/*
+		 * This could be a custom error code, if that's the case fallback to
+		 * SPIError
+		 */
+		exc = entry ? entry->exc : PLy_exc_spi_error;
+		/* Make Python raise the exception */
+		PLy_spi_exception_set(exc, edata);
+		FreeErrorData(edata);
+
+		return NULL;
+	}
+	PG_END_TRY();
+
+	Py_RETURN_NONE;
+}
+
 /*
  * Utilities for running SPI functions in subtransactions.
  *

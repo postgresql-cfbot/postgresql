@@ -55,8 +55,11 @@ for i in range(0, 10):
 return 1
 $$;
 SELECT transaction_test2();
-ERROR:  invalid transaction termination
-CONTEXT:  PL/Python function "transaction_test2"
+ERROR:  spiexceptions.InvalidTransactionTermination: invalid transaction termination
+CONTEXT:  Traceback (most recent call last):
+  PL/Python function "transaction_test2", line 5, in <module>
+    plpy.commit()
+PL/Python function "transaction_test2"
 SELECT * FROM test1;
  a | b 
 ---+---
@@ -70,7 +73,7 @@ plpy.execute("CALL transaction_test1()")
 return 1
 $$;
 SELECT transaction_test3();
-ERROR:  spiexceptions.InvalidTransactionTermination: invalid transaction termination
+ERROR:  spiexceptions.InvalidTransactionTermination: spiexceptions.InvalidTransactionTermination: invalid transaction termination
 CONTEXT:  Traceback (most recent call last):
   PL/Python function "transaction_test3", line 2, in <module>
     plpy.execute("CALL transaction_test1()")
@@ -88,7 +91,7 @@ plpy.execute("DO LANGUAGE plpythonu $x$ plpy.commit() $x$")
 return 1
 $$;
 SELECT transaction_test4();
-ERROR:  spiexceptions.InvalidTransactionTermination: invalid transaction termination
+ERROR:  spiexceptions.InvalidTransactionTermination: spiexceptions.InvalidTransactionTermination: invalid transaction termination
 CONTEXT:  Traceback (most recent call last):
   PL/Python function "transaction_test4", line 2, in <module>
     plpy.execute("DO LANGUAGE plpythonu $x$ plpy.commit() $x$")
@@ -100,8 +103,11 @@ s.enter()
 plpy.commit()
 $$;
 WARNING:  forcibly aborting a subtransaction that has not been exited
-ERROR:  cannot commit while a subtransaction is active
-CONTEXT:  PL/Python anonymous code block
+ERROR:  spiexceptions.InvalidTransactionTermination: cannot commit while a subtransaction is active
+CONTEXT:  Traceback (most recent call last):
+  PL/Python anonymous code block, line 4, in <module>
+    plpy.commit()
+PL/Python anonymous code block
 -- commit inside cursor loop
 CREATE TABLE test2 (x int);
 INSERT INTO test2 VALUES (0), (1), (2), (3), (4);

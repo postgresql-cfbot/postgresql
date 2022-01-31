@@ -531,8 +531,9 @@ SnapBuildInitialSnapshot(SnapBuild *builder)
 {
 	Snapshot	snap;
 	TransactionId xid;
-	TransactionId *newxip;
-	int			newxcnt = 0;
+	TransactionId *newsubxip;
+	int			newsubxcnt;
+	bool		overflowed = false;
 
 	Assert(!FirstSnapshotSet);
 	Assert(XactIsoLevel == XACT_REPEATABLE_READ);
@@ -568,9 +569,12 @@ SnapBuildInitialSnapshot(SnapBuild *builder)
 
 	MyProc->xmin = snap->xmin;
 
-	/* allocate in transaction context */
-	newxip = (TransactionId *)
-		palloc(sizeof(TransactionId) * GetMaxSnapshotXidCount());
+	/*
+	 * Allocate in transaction context. We use only subxip to store xids. See
+	 * below and GetSnapshotData for details.
+	 */
+	newsubxip = (TransactionId *)
+		palloc(sizeof(TransactionId) * GetMaxSnapshotSubxidCount());
 
 	/*
 	 * snapbuild.c builds transactions in an "inverted" manner, which means it
@@ -578,6 +582,9 @@ SnapBuildInitialSnapshot(SnapBuild *builder)
 	 * classical snapshot by marking all non-committed transactions as
 	 * in-progress. This can be expensive.
 	 */
+retry:
+	newsubxcnt = 0;
+
 	for (xid = snap->xmin; NormalTransactionIdPrecedes(xid, snap->xmax);)
 	{
 		void	   *test;
@@ -591,12 +598,28 @@ SnapBuildInitialSnapshot(SnapBuild *builder)
 
 		if (test == NULL)
 		{
-			if (newxcnt >= GetMaxSnapshotXidCount())
-				ereport(ERROR,
-						(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
-						 errmsg("initial slot snapshot too large")));
+			/*
+			 * If subtransactions fit the subxid array, we fill the array and
+			 * call it a day. Otherwise we store only top-level transactions
+			 * into the same subxip array.
+			 */
+			if (!overflowed ||
+				!ReorderBufferXidIsKnownSubXact(builder->reorder, xid))
+			{
+				if (newsubxcnt >= GetMaxSnapshotSubxidCount())
+				{
+					if (overflowed)
+						ereport(ERROR,
+								(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
+								 errmsg("initial slot snapshot too large")));
 
-			newxip[newxcnt++] = xid;
+					/* retry excluding subxids */
+					overflowed = true;
+					goto retry;
+				}
+
+				newsubxip[newsubxcnt++] = xid;
+			}
 		}
 
 		TransactionIdAdvance(xid);
@@ -604,8 +627,15 @@ SnapBuildInitialSnapshot(SnapBuild *builder)
 
 	/* adjust remaining snapshot fields as needed */
 	snap->snapshot_type = SNAPSHOT_MVCC;
-	snap->xcnt = newxcnt;
-	snap->xip = newxip;
+	snap->xcnt = 0;
+	snap->subxcnt = newsubxcnt;
+	snap->subxip = newsubxip;
+	snap->suboverflowed = overflowed;
+	/*
+	 * Although this snapshot is taken actually not during recovery, all XIDs
+	 * are stored in subxip even if it is not overflowed.
+	 */
+	snap->takenDuringRecovery = true;
 
 	return snap;
 }

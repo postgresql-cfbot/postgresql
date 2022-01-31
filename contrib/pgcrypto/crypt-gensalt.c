@@ -1,15 +1,31 @@
 /*
- * Written by Solar Designer and placed in the public domain.
- * See crypt_blowfish.c for more information.
- *
  * contrib/pgcrypto/crypt-gensalt.c
+ *
+ * Written by Solar Designer <solar at openwall.com> in 2000-2011.
+ * No copyright is claimed, and the software is hereby placed in the public
+ * domain.  In case this attempt to disclaim copyright and place the software
+ * in the public domain is deemed null and void, then the software is
+ * Copyright (c) 2000-2011 Solar Designer and it is hereby released to the
+ * general public under the following terms:
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted.
+ *
+ * There's ABSOLUTELY NO WARRANTY, express or implied.
+ *
+ * See crypt_blowfish.c for more information.
  *
  * This file contains salt generation functions for the traditional and
  * other common crypt(3) algorithms, except for bcrypt which is defined
  * entirely in crypt_blowfish.c.
  *
- * Put bcrypt generator also here as crypt-blowfish.c
- * may not be compiled always.        -- marko
+ * Changes from upstream crypt_blowfish 1.3
+ *
+ *  - Format with pgindent
+ *  - Don't set errno
+ *  - Make _crypt_itoa64 static
+ *  - Include bcrypt generator also here as crypt-blowfish.c may not always be
+ *    compiled
  */
 
 #include "postgres.h"
@@ -22,9 +38,11 @@ static unsigned char _crypt_itoa64[64 + 1] =
 "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
 char *
-_crypt_gensalt_traditional_rn(unsigned long count,
+_crypt_gensalt_traditional_rn(const char *prefix, unsigned long count,
 							  const char *input, int size, char *output, int output_size)
 {
+	(void) prefix;
+
 	if (size < 2 || output_size < 2 + 1 || (count && count != 25))
 	{
 		if (output_size > 0)
@@ -40,10 +58,12 @@ _crypt_gensalt_traditional_rn(unsigned long count,
 }
 
 char *
-_crypt_gensalt_extended_rn(unsigned long count,
+_crypt_gensalt_extended_rn(const char *prefix, unsigned long count,
 						   const char *input, int size, char *output, int output_size)
 {
 	unsigned long value;
+
+	(void) prefix;
 
 /* Even iteration counts make it easier to detect weak DES keys from a look
  * at the hash, so they should be avoided */
@@ -76,10 +96,12 @@ _crypt_gensalt_extended_rn(unsigned long count,
 }
 
 char *
-_crypt_gensalt_md5_rn(unsigned long count,
+_crypt_gensalt_md5_rn(const char *prefix, unsigned long count,
 					  const char *input, int size, char *output, int output_size)
 {
 	unsigned long value;
+
+	(void) prefix;
 
 	if (size < 3 || output_size < 3 + 4 + 1 || (count && count != 1000))
 	{
@@ -158,11 +180,13 @@ BF_encode(char *dst, const BF_word *src, int size)
 }
 
 char *
-_crypt_gensalt_blowfish_rn(unsigned long count,
+_crypt_gensalt_blowfish_rn(const char *prefix, unsigned long count,
 						   const char *input, int size, char *output, int output_size)
 {
 	if (size < 16 || output_size < 7 + 22 + 1 ||
-		(count && (count < 4 || count > 31)))
+		(count && (count < 4 || count > 31)) ||
+		prefix[0] != '$' || prefix[1] != '2' ||
+		(prefix[2] != 'a' && prefix[2] != 'b' && prefix[2] != 'y'))
 	{
 		if (output_size > 0)
 			output[0] = '\0';
@@ -174,7 +198,7 @@ _crypt_gensalt_blowfish_rn(unsigned long count,
 
 	output[0] = '$';
 	output[1] = '2';
-	output[2] = 'a';
+	output[2] = prefix[2];
 	output[3] = '$';
 	output[4] = '0' + count / 10;
 	output[5] = '0' + count % 10;

@@ -25683,8 +25683,7 @@ LOG:  Grand total: 1651920 bytes in 201 blocks; 622360 free (88 chunks); 1029560
         <function>pg_start_backup</function> (
           <parameter>label</parameter> <type>text</type>
           <optional>, <parameter>fast</parameter> <type>boolean</type>
-          <optional>, <parameter>exclusive</parameter> <type>boolean</type>
-          </optional></optional> )
+          </optional> )
         <returnvalue>pg_lsn</returnvalue>
        </para>
        <para>
@@ -25696,20 +25695,6 @@ LOG:  Grand total: 1651920 bytes in 201 blocks; 622360 free (88 chunks); 1029560
         it specifies executing <function>pg_start_backup</function> as quickly
         as possible.  This forces an immediate checkpoint which will cause a
         spike in I/O operations, slowing any concurrently executing queries.
-        The optional third parameter specifies whether to perform an exclusive
-        or non-exclusive backup (default is exclusive).
-       </para>
-       <para>
-        When used in exclusive mode, this function writes a backup label file
-        (<filename>backup_label</filename>) and, if there are any links in
-        the <filename>pg_tblspc/</filename> directory, a tablespace map file
-        (<filename>tablespace_map</filename>) into the database cluster's data
-        directory, then performs a checkpoint, and then returns the backup's
-        starting write-ahead log location.  (The user can ignore this
-        result value, but it is provided in case it is useful.)  When used in
-        non-exclusive mode, the contents of these files are instead returned
-        by the <function>pg_stop_backup</function> function, and should be
-        copied to the backup area by the user.
        </para>
        <para>
         This function is restricted to superusers by default, but other users
@@ -25723,7 +25708,6 @@ LOG:  Grand total: 1651920 bytes in 201 blocks; 622360 free (88 chunks); 1029560
          <primary>pg_stop_backup</primary>
         </indexterm>
         <function>pg_stop_backup</function> (
-          <parameter>exclusive</parameter> <type>boolean</type>
           <optional>, <parameter>wait_for_archive</parameter> <type>boolean</type>
           </optional> )
         <returnvalue>setof record</returnvalue>
@@ -25732,13 +25716,8 @@ LOG:  Grand total: 1651920 bytes in 201 blocks; 622360 free (88 chunks); 1029560
         <parameter>spcmapfile</parameter> <type>text</type> )
        </para>
        <para>
-        Finishes performing an exclusive or non-exclusive on-line backup.
-        The <parameter>exclusive</parameter> parameter must match the
-        previous <function>pg_start_backup</function> call.
-        In an exclusive backup, <function>pg_stop_backup</function> removes
-        the backup label file and, if it exists, the tablespace map file
-        created by <function>pg_start_backup</function>.  In a non-exclusive
-        backup, the desired contents of these files are returned as part of
+        Finishes performing an on-line backup.  The desired contents of the
+        backup label file and the tablespace map file are returned as part of
         the result of the function, and should be written to files in the
         backup area (not in the data directory).
        </para>
@@ -25771,8 +25750,7 @@ LOG:  Grand total: 1651920 bytes in 201 blocks; 622360 free (88 chunks); 1029560
         The result of the function is a single record.
         The <parameter>lsn</parameter> column holds the backup's ending
         write-ahead log location (which again can be ignored).  The second and
-        third columns are <literal>NULL</literal> when ending an exclusive
-        backup; after a non-exclusive backup they hold the desired contents of
+        third columns hold the desired contents of
         the label and tablespace map files.
        </para>
        <para>

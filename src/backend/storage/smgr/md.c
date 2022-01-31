@@ -1029,13 +1029,13 @@ register_forget_request(RelFileNodeBackend rnode, ForkNumber forknum,
  * ForgetDatabaseSyncRequests -- forget any fsyncs and unlinks for a DB
  */
 void
-ForgetDatabaseSyncRequests(Oid dbid)
+ForgetDatabaseSyncRequests(Oid dbid, Oid tbsid)
 {
 	FileTag		tag;
 	RelFileNode rnode;
 
 	rnode.dbNode = dbid;
-	rnode.spcNode = 0;
+	rnode.spcNode = tbsid;
 	rnode.relNode = 0;
 
 	INIT_MD_FILETAG(tag, rnode, InvalidForkNumber, InvalidBlockNumber);

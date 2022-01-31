@@ -771,24 +771,17 @@ ReadBufferExtended(Relation reln, ForkNumber forkNum, BlockNumber blockNum,
 /*
  * ReadBufferWithoutRelcache -- like ReadBufferExtended, but doesn't require
  *		a relcache entry for the relation.
- *
- * NB: At present, this function may only be used on permanent relations, which
- * is OK, because we only use it during XLOG replay.  If in the future we
- * want to use it on temporary or unlogged relations, we could pass additional
- * parameters.
  */
 Buffer
 ReadBufferWithoutRelcache(RelFileNode rnode, ForkNumber forkNum,
 						  BlockNumber blockNum, ReadBufferMode mode,
-						  BufferAccessStrategy strategy)
+						  BufferAccessStrategy strategy, char relpersistence)
 {
 	bool		hit;
 
 	SMgrRelation smgr = smgropen(rnode, InvalidBackendId);
 
-	Assert(InRecovery);
-
-	return ReadBuffer_common(smgr, RELPERSISTENCE_PERMANENT, forkNum, blockNum,
+	return ReadBuffer_common(smgr, relpersistence, forkNum, blockNum,
 							 mode, strategy, &hit);
 }
 
@@ -798,7 +791,7 @@ ReadBufferWithoutRelcache(RelFileNode rnode, ForkNumber forkNum,
  *
  * *hit is set to true if the request was satisfied from shared buffer cache.
  */
-static Buffer
+Buffer
 ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 				  BlockNumber blockNum, ReadBufferMode mode,
 				  BufferAccessStrategy strategy, bool *hit)
@@ -3392,10 +3385,13 @@ FindAndDropRelFileNodeBuffers(RelFileNode rnode, ForkNumber forkNum,
  *		database, to avoid trying to flush data to disk when the directory
  *		tree no longer exists.  Implementation is pretty similar to
  *		DropRelFileNodeBuffers() which is for destroying just one relation.
+ *
+ *		If a valid tablespace oid is passed then it will compare the tablespace
+ *		oid as well otherwise just the db oid.
  * --------------------------------------------------------------------
  */
 void
-DropDatabaseBuffers(Oid dbid)
+DropDatabaseBuffers(Oid dbid, Oid tbsid)
 {
 	int			i;
 
@@ -3413,11 +3409,13 @@ DropDatabaseBuffers(Oid dbid)
 		 * As in DropRelFileNodeBuffers, an unlocked precheck should be safe
 		 * and saves some cycles.
 		 */
-		if (bufHdr->tag.rnode.dbNode != dbid)
+		if (bufHdr->tag.rnode.dbNode != dbid ||
+			(OidIsValid(tbsid) && bufHdr->tag.rnode.spcNode != tbsid))
 			continue;
 
 		buf_state = LockBufHdr(bufHdr);
-		if (bufHdr->tag.rnode.dbNode == dbid)
+		if (bufHdr->tag.rnode.dbNode == dbid &&
+			(!OidIsValid(tbsid) || bufHdr->tag.rnode.spcNode == tbsid))
 			InvalidateBuffer(bufHdr);	/* releases spinlock */
 		else
 			UnlockBufHdr(bufHdr, buf_state);

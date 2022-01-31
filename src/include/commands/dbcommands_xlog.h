@@ -23,11 +23,8 @@
 
 typedef struct xl_dbase_create_rec
 {
-	/* Records copying of a single subdirectory incl. contents */
 	Oid			db_id;
 	Oid			tablespace_id;
-	Oid			src_db_id;
-	Oid			src_tablespace_id;
 } xl_dbase_create_rec;
 
 typedef struct xl_dbase_drop_rec

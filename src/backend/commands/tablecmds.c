@@ -14580,6 +14580,49 @@ AlterTableMoveAll(AlterTableMoveAllStmt *stmt)
 	return new_tablespaceoid;
 }
 
+/*
+ * Copy source smgr relation's all fork's data to the destination.
+ *
+ * copy_storage - storage copy function, which is passed by the caller.
+ */
+void
+RelationCopyAllFork(SMgrRelation src_smgr, SMgrRelation	dst_smgr,
+					char relpersistence, copy_relation_storage copy_storage)
+{
+	/*
+	 * Create and copy all forks of the relation.
+	 *
+	 * NOTE: any conflict in relfilenode value will be caught in
+	 * RelationCreateStorage().
+	 */
+	RelationCreateStorage(dst_smgr->smgr_rnode.node, relpersistence);
+
+	/* copy main fork */
+	copy_storage(src_smgr, dst_smgr, MAIN_FORKNUM, relpersistence);
+
+	/* copy those extra forks that exist */
+	for (ForkNumber forkNum = MAIN_FORKNUM + 1;
+		 forkNum <= MAX_FORKNUM; forkNum++)
+	{
+		if (smgrexists(src_smgr, forkNum))
+		{
+			smgrcreate(dst_smgr, forkNum, false);
+
+			/*
+			 * WAL log creation if the relation is persistent, or this is the
+			 * init fork of an unlogged relation.
+			 */
+			if (relpersistence == RELPERSISTENCE_PERMANENT ||
+				(relpersistence == RELPERSISTENCE_UNLOGGED &&
+				 forkNum == INIT_FORKNUM))
+				log_smgrcreate(&dst_smgr->smgr_rnode.node, forkNum);
+
+			/* Copy a fork's data, block by block. */
+			copy_storage(src_smgr, dst_smgr, forkNum, relpersistence);
+		}
+	}
+}
+
 static void
 index_copy_data(Relation rel, RelFileNode newrnode)
 {
@@ -14598,36 +14641,9 @@ index_copy_data(Relation rel, RelFileNode newrnode)
 	/*
 	 * Create and copy all forks of the relation, and schedule unlinking of
 	 * old physical files.
-	 *
-	 * NOTE: any conflict in relfilenode value will be caught in
-	 * RelationCreateStorage().
 	 */
-	RelationCreateStorage(newrnode, rel->rd_rel->relpersistence);
-
-	/* copy main fork */
-	RelationCopyStorage(RelationGetSmgr(rel), dstrel, MAIN_FORKNUM,
-						rel->rd_rel->relpersistence);
-
-	/* copy those extra forks that exist */
-	for (ForkNumber forkNum = MAIN_FORKNUM + 1;
-		 forkNum <= MAX_FORKNUM; forkNum++)
-	{
-		if (smgrexists(RelationGetSmgr(rel), forkNum))
-		{
-			smgrcreate(dstrel, forkNum, false);
-
-			/*
-			 * WAL log creation if the relation is persistent, or this is the
-			 * init fork of an unlogged relation.
-			 */
-			if (RelationIsPermanent(rel) ||
-				(rel->rd_rel->relpersistence == RELPERSISTENCE_UNLOGGED &&
-				 forkNum == INIT_FORKNUM))
-				log_smgrcreate(&newrnode, forkNum);
-			RelationCopyStorage(RelationGetSmgr(rel), dstrel, forkNum,
-								rel->rd_rel->relpersistence);
-		}
-	}
+	RelationCopyAllFork(RelationGetSmgr(rel), dstrel,
+						rel->rd_rel->relpersistence, RelationCopyStorage);
 
 	/* drop old relation, and close new one */
 	RelationDropStorage(rel);

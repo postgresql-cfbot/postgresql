@@ -41,7 +41,7 @@ extern void mdtruncate(SMgrRelation reln, ForkNumber forknum,
 					   BlockNumber nblocks);
 extern void mdimmedsync(SMgrRelation reln, ForkNumber forknum);
 
-extern void ForgetDatabaseSyncRequests(Oid dbid);
+extern void ForgetDatabaseSyncRequests(Oid dbid, Oid tbsid);
 extern void DropRelationFiles(RelFileNode *delrels, int ndelrels, bool isRedo);
 
 /* md sync callbacks */

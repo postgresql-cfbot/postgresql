@@ -136,6 +136,7 @@
 #include "access/xact.h"
 #include "access/xlog_internal.h"
 #include "catalog/catalog.h"
+#include "catalog/indexing.h"
 #include "catalog/namespace.h"
 #include "catalog/partition.h"
 #include "catalog/pg_inherits.h"
@@ -257,6 +258,21 @@ static bool in_streamed_transaction = false;
 
 static TransactionId stream_xid = InvalidTransactionId;
 
+/*
+ * We enable skipping all data modification changes (INSERT, UPDATE, etc.) for
+ * the subscription if the user has specified subskipxid. Once we start skipping
+ * changes, we don't stop it until we skip all changes of the transaction even
+ * if pg_subscription is updated and MySubscription->skipxid gets changed or
+ * reset during that.  Also, in streaming transaction cases, we don't skip
+ * receiving and spooling the changes, since we decide whether or not to skip
+ * applying the changes when starting to apply changes.  At end of the transaction,
+ * we disable it and reset subskipxid.  The timing of resetting subskipxid varies
+ * depending on commit or commit/rollback prepared case.  Please refer to the
+ * comments in corresponding functions for details.
+ */
+static TransactionId skip_xid = InvalidTransactionId;
+#define is_skipping_changes() (TransactionIdIsValid(skip_xid))
+
 /* BufFile handle of the current streaming file */
 static BufFile *stream_fd = NULL;
 
@@ -331,6 +347,13 @@ static void TwoPhaseTransactionGid(Oid subid, TransactionId xid, char *gid, int 
 
 /* Common streaming function to apply all the spooled messages */
 static void apply_spooled_messages(TransactionId xid, XLogRecPtr lsn);
+
+/* Functions for skipping changes */
+static void maybe_start_skipping_changes(TransactionId xid);
+static void stop_skipping_changes(bool commit, XLogRecPtr origin_lsn,
+								  TimestampTz origin_timestamp);
+static void clear_subscription_skip_xid(TransactionId xid, XLogRecPtr origin_lsn,
+										TimestampTz origin_timestamp);
 
 /* Functions for apply error callback */
 static void apply_error_callback(void *arg);
@@ -791,6 +814,8 @@ apply_handle_begin(StringInfo s)
 
 	remote_final_lsn = begin_data.final_lsn;
 
+	maybe_start_skipping_changes(begin_data.xid);
+
 	in_remote_transaction = true;
 
 	pgstat_report_activity(STATE_RUNNING, NULL);
@@ -843,6 +868,8 @@ apply_handle_begin_prepare(StringInfo s)
 
 	remote_final_lsn = begin_data.prepare_lsn;
 
+	maybe_start_skipping_changes(begin_data.xid);
+
 	in_remote_transaction = true;
 
 	pgstat_report_activity(STATE_RUNNING, NULL);
@@ -855,6 +882,36 @@ static void
 apply_handle_prepare_internal(LogicalRepPreparedTxnData *prepare_data)
 {
 	char		gid[GIDSIZE];
+
+	/*
+	 * If we are skipping all changes of this transaction, we stop it but
+	 * unlike commit, we do not clear subskipxid of pg_subscription catalog
+	 * here and will do that at commit prepared or rollback prepared time. If
+	 * we update the catalog and then prepare the transaction, the changes
+	 * will be part of the prepared transaction.  Even if we do that in
+	 * reverse order, subskipxid will not be cleared but this transaction
+	 * won't be resent in a case where the server crashes between them.
+	 *
+	 * subskipxid might be changed or cleared by the user before we receive
+	 * COMMIT PREPARED or ROLLBACK PREPARED. But that's okay because this
+	 * prepared transaction is empty.
+	 *
+	 * One might think that we can skip preparing the skipped transaction and
+	 * also skip COMMIT PREPARED or ROLLBACK PREPARED by comparing the XID
+	 * received as part of the message to subskipxid.  But subskipxid could be
+	 * changed by users between PREPARE and COMMIT PREPARED or ROLLBACK
+	 * PREPARED.  There was an idea to disallow users to change subskipxid
+	 * while skipping changes.  But we don't know when COMMIT PREPARED or
+	 * ROLLBACK PREPARED comes and another conflict could occur in the
+	 * meanwhile.  If such another conflict occurs, we cannot skip the
+	 * transaction by using subskipxid.  Also, there was another idea to check
+	 * whether the transaction has been prepared or not by checking GID,
+	 * origin LSN, and origin timestamp of the prepared transaction but that
+	 * doesn't seem worthwhile because it requires protocol changes, and
+	 * skipping transactions shouldn't be common.
+	 */
+	if (is_skipping_changes())
+		stop_skipping_changes(false, InvalidXLogRecPtr, 0);
 
 	/*
 	 * Compute unique GID for two_phase transactions. We don't use GID of
@@ -901,9 +958,9 @@ apply_handle_prepare(StringInfo s)
 
 	/*
 	 * Unlike commit, here, we always prepare the transaction even though no
-	 * change has happened in this transaction. It is done this way because at
-	 * commit prepared time, we won't know whether we have skipped preparing a
-	 * transaction because of no change.
+	 * change has happened in this transaction or all changes are skipped. It
+	 * is done this way because at commit prepared time, we won't know whether
+	 * we have skipped preparing a transaction because of no change.
 	 *
 	 * XXX, We can optimize such that at commit prepared time, we first check
 	 * whether we have prepared the transaction or not but that doesn't seem
@@ -939,6 +996,23 @@ apply_handle_commit_prepared(StringInfo s)
 
 	logicalrep_read_commit_prepared(s, &prepare_data);
 	set_apply_error_context_xact(prepare_data.xid, prepare_data.commit_time);
+
+	if (MySubscription->skipxid == prepare_data.xid)
+	{
+		/*
+		 * Clear the subskipxid of pg_subscription catalog.  This catalog
+		 * update must be committed before finishing prepared transaction.
+		 * Because otherwise, in a case where the server crashes between
+		 * finishing prepared transaction and the catalog update, COMMIT
+		 * PREPARED won't be resent but subskipxid is left.
+		 *
+		 * Also, we must not update the replication origin LSN and timestamp
+		 * while committing the catalog update so that COMMIT PREPARED will be
+		 * resent in case of a crash immediately after the catalog update
+		 * commit.
+		 */
+		clear_subscription_skip_xid(prepare_data.xid, InvalidXLogRecPtr, 0);
+	}
 
 	/* Compute GID for two_phase transactions. */
 	TwoPhaseTransactionGid(MySubscription->oid, prepare_data.xid,
@@ -980,6 +1054,17 @@ apply_handle_rollback_prepared(StringInfo s)
 
 	logicalrep_read_rollback_prepared(s, &rollback_data);
 	set_apply_error_context_xact(rollback_data.xid, rollback_data.rollback_time);
+
+	if (MySubscription->skipxid == rollback_data.xid)
+	{
+		/*
+		 * Same as COMMIT PREPARED, we must clear subskipxid of
+		 * pg_subscription before rolling back the prepared transaction.
+		 * Please see the comments in apply_handle_commit_prepared() for
+		 * details.
+		 */
+		clear_subscription_skip_xid(rollback_data.xid, InvalidXLogRecPtr, 0);
+	}
 
 	/* Compute GID for two_phase transactions. */
 	TwoPhaseTransactionGid(MySubscription->oid, rollback_data.xid,
@@ -1210,6 +1295,15 @@ apply_handle_stream_abort(StringInfo s)
 	logicalrep_read_stream_abort(s, &xid, &subxid);
 
 	/*
+	 * We don't expect the user to set the XID of the transaction that is
+	 * rolled back but if the skip XID is set, clear it.  Since we don't
+	 * support skipping individual subtransactions we don't clear
+	 * subtransaction's XID.
+	 */
+	if (MySubscription->skipxid == xid)
+		clear_subscription_skip_xid(MySubscription->skipxid, InvalidXLogRecPtr, 0);
+
+	/*
 	 * If the two XIDs are the same, it's in fact abort of toplevel xact, so
 	 * just delete the files with serialized info.
 	 */
@@ -1331,6 +1425,8 @@ apply_spooled_messages(TransactionId xid, XLogRecPtr lsn)
 
 	remote_final_lsn = lsn;
 
+	maybe_start_skipping_changes(xid);
+
 	/*
 	 * Make sure the handle apply_dispatch methods are aware we're in a remote
 	 * transaction.
@@ -1451,7 +1547,23 @@ apply_handle_stream_commit(StringInfo s)
 static void
 apply_handle_commit_internal(LogicalRepCommitData *commit_data)
 {
-	if (IsTransactionState())
+	if (is_skipping_changes())
+	{
+		/*
+		 * If we are skipping all changes of this transaction, we stop it and
+		 * clear subskipxid of pg_subscription.
+		 */
+		stop_skipping_changes(true, commit_data->end_lsn,
+							  commit_data->committime);
+
+		/* Clearing subskipxid must be committed */
+		Assert(!IsTransactionState());
+
+		pgstat_report_stat(false);
+
+		store_flush_position(commit_data->end_lsn);
+	}
+	else if (IsTransactionState())
 	{
 		/*
 		 * Update origin state so we can restart streaming from correct
@@ -2365,6 +2477,17 @@ apply_dispatch(StringInfo s)
 {
 	LogicalRepMsgType action = pq_getmsgbyte(s);
 	LogicalRepMsgType saved_command;
+
+	/*
+	 * Skip all data-modification changes if we're skipping changes of this
+	 * transaction.
+	 */
+	if (is_skipping_changes() &&
+		(action == LOGICAL_REP_MSG_INSERT ||
+		 action == LOGICAL_REP_MSG_UPDATE ||
+		 action == LOGICAL_REP_MSG_DELETE ||
+		 action == LOGICAL_REP_MSG_TRUNCATE))
+		return;
 
 	/*
 	 * Set the current command being applied. Since this function can be
@@ -3659,6 +3782,139 @@ bool
 IsLogicalWorker(void)
 {
 	return MyLogicalRepWorker != NULL;
+}
+
+/*
+ * Start skipping changes of the transaction if the given XID matches the
+ * transaction ID specified by subscription's skipxid.
+ */
+static void
+maybe_start_skipping_changes(TransactionId xid)
+{
+	Assert(!is_skipping_changes());
+	Assert(!in_remote_transaction);
+	Assert(!in_streamed_transaction);
+
+	if (MySubscription->skipxid != xid)
+		return;
+
+	/* Start skipping all changes of this transaction */
+	skip_xid = xid;
+
+	ereport(LOG,
+			errmsg("start skipping logical replication transaction %u",
+				   xid));
+}
+
+/*
+ * Stop skipping changes by resetting skip_xid.  If clear_subskipxid is true,
+ * we also clear subskipxid of pg_subscription by setting InvalidTransactionId.
+ * Both origin_lsn and origin_timestamp are used to update origin state when
+ * clearing subskipxid so that we can restart streaming from correct position
+ * in case of crash.
+ */
+static void
+stop_skipping_changes(bool clear_subskipxid, XLogRecPtr origin_lsn,
+					  TimestampTz origin_timestamp)
+{
+	Assert(is_skipping_changes());
+
+	if (clear_subskipxid)
+	{
+		clear_subscription_skip_xid(skip_xid, origin_lsn, origin_timestamp);
+
+		/* Make sure that clearing subskipxid is committed */
+		if (IsTransactionState())
+			CommitTransactionCommand();
+	}
+
+	/* Stop skipping changes */
+	skip_xid = InvalidTransactionId;
+
+	ereport(LOG,
+			(errmsg("done skipping logical replication transaction %u",
+					skip_xid)));
+}
+
+/* Clear subskipxid of pg_subscription catalog */
+static void
+clear_subscription_skip_xid(TransactionId xid, XLogRecPtr origin_lsn,
+							TimestampTz origin_timestamp)
+{
+	Relation	rel;
+	Form_pg_subscription subform;
+	HeapTuple	tup;
+	bool		started_tx = false;
+
+	if (!IsTransactionState())
+	{
+		StartTransactionCommand();
+		started_tx = true;
+	}
+
+	/*
+	 * Protect subskipxid of pg_subscription from being concurrently updated
+	 * while clearing it.
+	 */
+	LockSharedObject(SubscriptionRelationId, MySubscription->oid, 0,
+					 AccessShareLock);
+
+	rel = table_open(SubscriptionRelationId, RowExclusiveLock);
+
+	/* Fetch the existing tuple. */
+	tup = SearchSysCacheCopy1(SUBSCRIPTIONOID,
+							  ObjectIdGetDatum(MySubscription->oid));
+
+	if (!HeapTupleIsValid(tup))
+		elog(ERROR, "subscription \"%s\" does not exist", MySubscription->name);
+
+	/* Get subskipxid value */
+	subform = (Form_pg_subscription) GETSTRUCT(tup);
+
+	/*
+	 * Update the subskipxid of the tuple to InvalidTransactionId.  If user
+	 * has already changed subskipxid before clearing it we don't update the
+	 * catalog and don't advance the replication origin state.  So in the
+	 * worst case, if the server crashes before sending an acknowledgment of
+	 * the flush position the transaction will be sent again and the user
+	 * needs to set subskipxid again.  We can reduce the possibility by
+	 * logging a replication origin WAL record to advance the origin LSN
+	 * instead but there is no way to advance the origin timestamp and it
+	 * doesn't seem to be worth doing anything about it since it's a very rare
+	 * case.
+	 */
+	if (subform->subskipxid == xid)
+	{
+		bool		nulls[Natts_pg_subscription];
+		bool		replaces[Natts_pg_subscription];
+		Datum		values[Natts_pg_subscription];
+
+		memset(values, 0, sizeof(values));
+		memset(nulls, false, sizeof(nulls));
+		memset(replaces, false, sizeof(replaces));
+
+		/* reset subskipxid */
+		values[Anum_pg_subscription_subskipxid - 1] =
+			TransactionIdGetDatum(InvalidTransactionId);
+		replaces[Anum_pg_subscription_subskipxid - 1] = true;
+
+		/*
+		 * Update origin state so we can restart streaming from correct
+		 * position in case of crash.
+		 */
+		replorigin_session_origin_lsn = origin_lsn;
+		replorigin_session_origin_timestamp = origin_timestamp;
+
+		tup = heap_modify_tuple(tup, RelationGetDescr(rel), values, nulls,
+								replaces);
+		CatalogTupleUpdate(rel, &tup->t_self, tup);
+	}
+
+	heap_freetuple(tup);
+	table_close(rel, NoLock);
+
+	if (started_tx)
+		CommitTransactionCommand();
 }
 
 /* Error callback to give more context info about the change being applied */

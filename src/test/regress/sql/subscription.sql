@@ -72,6 +72,28 @@ ALTER SUBSCRIPTION regress_testsub SET (slot_name = '');
 ALTER SUBSCRIPTION regress_doesnotexist CONNECTION 'dbname=regress_doesnotexist2';
 ALTER SUBSCRIPTION regress_testsub SET (create_slot = false);
 
+-- ok - valid xid
+ALTER SUBSCRIPTION regress_testsub SKIP (xid = 3);
+ALTER SUBSCRIPTION regress_testsub SKIP (xid = 4294967295);
+SELECT subname, subskipxid FROM pg_subscription WHERE subname = 'regress_testsub';
+ALTER SUBSCRIPTION regress_testsub SKIP (xid = NONE);
+SELECT subname, subskipxid FROM pg_subscription WHERE subname = 'regress_testsub';
+
+-- fail
+ALTER SUBSCRIPTION regress_testsub SKIP (xid = 0);
+ALTER SUBSCRIPTION regress_testsub SKIP (xid = 1);
+ALTER SUBSCRIPTION regress_testsub SKIP (xid = 2);
+
+-- fail - must be superuser. We need to try this operation as subscription
+-- owner.
+ALTER ROLE regress_subscription_user2 SUPERUSER;
+ALTER ROLE regress_subscription_user NOSUPERUSER;
+ALTER SUBSCRIPTION regress_testsub SKIP (xid = 100);
+SET SESSION AUTHORIZATION 'regress_subscription_user2';
+ALTER ROLE regress_subscription_user SUPERUSER;
+ALTER ROLE regress_subscription_user2 NOSUPERUSER;
+SET SESSION AUTHORIZATION 'regress_subscription_user';
+
 \dRs+
 
 BEGIN;

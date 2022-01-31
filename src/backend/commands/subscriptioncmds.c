@@ -61,6 +61,7 @@
 #define SUBOPT_BINARY				0x00000080
 #define SUBOPT_STREAMING			0x00000100
 #define SUBOPT_TWOPHASE_COMMIT		0x00000200
+#define SUBOPT_XID					0x00000400
 
 /* check if the 'val' has 'bits' set */
 #define IsSet(val, bits)  (((val) & (bits)) == (bits))
@@ -82,6 +83,8 @@ typedef struct SubOpts
 	bool		binary;
 	bool		streaming;
 	bool		twophase;
+	TransactionId xid;			/* InvalidTransactionId for resetting purpose,
+								 * otherwise normal transaction id */
 } SubOpts;
 
 static List *fetch_table_list(WalReceiverConn *wrconn, List *publications);
@@ -248,6 +251,33 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 
 			opts->specified_opts |= SUBOPT_TWOPHASE_COMMIT;
 			opts->twophase = defGetBoolean(defel);
+		}
+		else if (IsSet(supported_opts, SUBOPT_XID) &&
+				 strcmp(defel->defname, "xid") == 0)
+		{
+			char	   *xid_str = defGetString(defel);
+			TransactionId xid;
+
+			if (IsSet(opts->specified_opts, SUBOPT_XID))
+				errorConflictingDefElem(defel, pstate);
+
+			/* Setting xid = NONE is treated as resetting xid */
+			if (strcmp(xid_str, "none") == 0)
+				xid = InvalidTransactionId;
+			else
+			{
+				/* Parse the argument as TransactionId */
+				xid = DatumGetTransactionId(DirectFunctionCall1(xidin,
+																CStringGetDatum(xid_str)));
+
+				if (!TransactionIdIsNormal(xid))
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							 errmsg("invalid transaction ID: %s", xid_str)));
+			}
+
+			opts->specified_opts |= SUBOPT_XID;
+			opts->xid = xid;
 		}
 		else
 			ereport(ERROR,
@@ -464,6 +494,8 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 		CharGetDatum(opts.twophase ?
 					 LOGICALREP_TWOPHASE_STATE_PENDING :
 					 LOGICALREP_TWOPHASE_STATE_DISABLED);
+	values[Anum_pg_subscription_subskipxid - 1] =
+		TransactionIdGetDatum(InvalidTransactionId);
 	values[Anum_pg_subscription_subconninfo - 1] =
 		CStringGetTextDatum(conninfo);
 	if (opts.slot_name)
@@ -1079,6 +1111,27 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 				PreventInTransactionBlock(isTopLevel, "ALTER SUBSCRIPTION ... REFRESH");
 
 				AlterSubscription_refresh(sub, opts.copy_data);
+
+				break;
+			}
+
+		case ALTER_SUBSCRIPTION_SKIP:
+			{
+				if (!superuser())
+					ereport(ERROR,
+							(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+							 errmsg("must be superuser to skip transaction")));
+
+				parse_subscription_options(pstate, stmt->options, SUBOPT_XID, &opts);
+
+				/* ALTER SUBSCRIPTION ... SKIP supports only xid option */
+				Assert(IsSet(opts.specified_opts, SUBOPT_XID));
+
+				values[Anum_pg_subscription_subskipxid - 1] =
+					TransactionIdGetDatum(opts.xid);
+				replaces[Anum_pg_subscription_subskipxid - 1] = true;
+
+				update_tuple = true;
 
 				break;
 			}

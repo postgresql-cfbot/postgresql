@@ -29,6 +29,7 @@ ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> REFRESH PUB
 ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> ENABLE
 ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> DISABLE
 ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> SET ( <replaceable class="parameter">subscription_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] )
+ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> SKIP ( <replaceable class="parameter">skip_option</replaceable> = <replaceable class="parameter">value</replaceable> )
 ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> OWNER TO { <replaceable>new_owner</replaceable> | CURRENT_ROLE | CURRENT_USER | SESSION_USER }
 ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> RENAME TO <replaceable>new_name</replaceable>
 </synopsis>
@@ -203,6 +204,47 @@ ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> RENAME TO <
       <literal>synchronous_commit</literal>,
       <literal>binary</literal>, and
       <literal>streaming</literal>.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>SKIP ( <replaceable class="parameter">skip_option</replaceable> = <replaceable class="parameter">value</replaceable> )</literal></term>
+    <listitem>
+     <para>
+      Skips applying all changes of the specified remote transaction.  If incoming data
+      violates any constraints, logical replication will stop until it is
+      resolved.  The resolution can be done either by changing data on the
+      subscriber so that it doesn't conflict with incoming changes or by skipping
+      the whole transaction.  Using the <command>ALTER SUBSCRIPTION ... SKIP</command>
+      command, the logical replication worker skips all data modification changes
+      within the specified transaction, including changes that might not violate
+      the constraint, so, it should only be used as a last resort. This option has
+      no effect on the transactions that are already prepared by enabling
+      <literal>two_phase</literal> on subscriber.  After logical replication
+      successfully skips the transaction, the transaction ID (stored in
+      <structname>pg_subscription</structname>.<structfield>subskipxid</structfield>)
+      is cleared.  See <xref linkend="logical-replication-conflicts"/> for
+      the details of logical replication conflicts.
+     </para>
+
+     <para>
+      <replaceable>skip_option</replaceable> specifies options for this operation.
+      The supported option is:
+
+      <variablelist>
+       <varlistentry>
+        <term><literal>xid</literal> (<type>xid</type>)</term>
+        <listitem>
+         <para>
+          Specifies the ID of the remote transaction whose changes are to be skipped
+          by the logical replication worker.  Skipping
+          individual subtransactions is not supported.  Setting <literal>NONE</literal>
+          resets the transaction ID.
+         </para>
+        </listitem>
+       </varlistentry>
+      </variablelist>
      </para>
     </listitem>
    </varlistentry>

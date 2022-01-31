@@ -352,15 +352,51 @@
   </para>
 
   <para>
-   The resolution can be done either by changing data or permissions on the subscriber so
-   that it does not conflict with the incoming change or by skipping the
-   transaction that conflicts with the existing data.  The transaction can be
-   skipped by calling the <link linkend="pg-replication-origin-advance">
+   When a conflict produces an error, it is shown in the
+   <structname>pg_stat_subscription_workers</structname> view as follows:
+
+<programlisting>
+postgres=# SELECT * FROM pg_stat_subscription_workers;
+-[ RECORD 1 ]------+-----------------------------------------------------------
+subid              | 16391
+subname            | test_sub
+subrelid           |
+last_error_relid   | 16385
+last_error_command | INSERT
+last_error_xid     | 716
+last_error_count   | 50
+last_error_message | duplicate key value violates unique constraint "test_pkey"
+last_error_time    | 2021-09-29 15:52:45.165754+00
+</programlisting>
+
+   and it is also shown in subscriber's server log as follows:
+
+<screen>
+ERROR:  duplicate key value violates unique constraint "test_pkey"
+DETAIL:  Key (id)=(1) already exists.
+CONTEXT:  processing remote data during "INSERT" for replication target relation "public.test" in transaction 716 at 2021-09-29 15:52:45.165754+00
+</screen>
+
+   The ID of the transaction that contains the change violating the constraint can be
+   found from those outputs (transaction ID 716 in the above case).  The transaction
+   can be skipped by using <command>ALTER SUBSCRIPTION ... SKIP</command> on the
+   subscription.  Alternatively, the transaction can also be skipped by calling the
+   <link linkend="pg-replication-origin-advance">
    <function>pg_replication_origin_advance()</function></link> function with
    a <parameter>node_name</parameter> corresponding to the subscription name,
    and a position.  The current position of origins can be seen in the
    <link linkend="view-pg-replication-origin-status">
    <structname>pg_replication_origin_status</structname></link> system view.
+  </para>
+
+  <para>
+   The resolution can be done by changing data or permissions on the subscriber so
+   that it does not conflict with incoming changes, by dropping the conflicting constraint
+   or unique index, or by writing a trigger on the subscriber to suppress or redirect
+   conflicting incoming changes, or as a last resort, by skipping the whole transaction.
+   Skipping the whole transaction includes skipping changes that might not violate
+   any constraint.  This can easily make the subscriber inconsistent, especially if
+   a user specifies the wrong transaction ID or the wrong position of origin.
   </para>
  </sect1>
 

@@ -4312,6 +4312,10 @@ getSubscriptions(Archive *fout)
 
 	ntups = PQntuples(res);
 
+	/*
+	 * Get subscription fields. We don't include subskipxid in the dump as
+	 * after restoring the dump this value may no longer be relevant.
+	 */
 	i_tableoid = PQfnumber(res, "tableoid");
 	i_oid = PQfnumber(res, "oid");
 	i_subname = PQfnumber(res, "subname");

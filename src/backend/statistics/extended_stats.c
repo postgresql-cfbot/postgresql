@@ -1829,6 +1829,11 @@ statext_mcv_clauselist_selectivity(PlannerInfo *root, List *clauses, int varReli
 			list_exprs[listidx] = NULL;
 		}
 
+		/* add it to the list of applied stats/clauses */
+		rel->applied_stats = lappend(rel->applied_stats, stat);
+		rel->applied_clauses = lappend(rel->applied_clauses, stat_clauses);
+		rel->applied_clauses_or = lappend_int(rel->applied_clauses_or, (is_or) ? 1 : 0);
+
 		if (is_or)
 		{
 			bool	   *or_matches = NULL;

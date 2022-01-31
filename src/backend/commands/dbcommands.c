@@ -573,6 +573,7 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	new_record[Anum_pg_database_datcollate - 1] = CStringGetTextDatum(dbcollate);
 	new_record[Anum_pg_database_datctype - 1] = CStringGetTextDatum(dbctype);
 	new_record[Anum_pg_database_datistemplate - 1] = BoolGetDatum(dbistemplate);
+	new_record[Anum_pg_database_dathasloginevt - 1] = BoolGetDatum(false);
 	new_record[Anum_pg_database_datallowconn - 1] = BoolGetDatum(dballowconnections);
 	new_record[Anum_pg_database_datconnlimit - 1] = Int32GetDatum(dbconnlimit);
 	new_record[Anum_pg_database_datfrozenxid - 1] = TransactionIdGetDatum(src_frozenxid);
@@ -1627,7 +1628,7 @@ AlterDatabase(ParseState *pstate, AlterDatabaseStmt *stmt, bool isTopLevel)
 		new_record[Anum_pg_database_datconnlimit - 1] = Int32GetDatum(dbconnlimit);
 		new_record_repl[Anum_pg_database_datconnlimit - 1] = true;
 	}
-
+	new_record[Anum_pg_database_dathasloginevt - 1] = BoolGetDatum(datform->dathasloginevt);
 	newtuple = heap_modify_tuple(tuple, RelationGetDescr(rel), new_record,
 								 new_record_nulls, new_record_repl);
 	CatalogTupleUpdate(rel, &tuple->t_self, newtuple);

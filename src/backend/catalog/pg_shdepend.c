@@ -67,6 +67,7 @@
 #include "utils/fmgroids.h"
 #include "utils/memutils.h"
 #include "utils/syscache.h"
+#include "utils/snapmgr.h"
 
 typedef enum
 {
@@ -123,6 +124,12 @@ recordSharedDependencyOn(ObjectAddress *depender,
 						 SharedDependencyType deptype)
 {
 	Relation	sdepRel;
+	Relation    catalog;
+	HeapTuple   tuple;
+	Oid         oidIndexId;
+	SysScanDesc scan;
+	ScanKeyData skey;
+	Snapshot dirtySnapshot;
 
 	/*
 	 * Objects in pg_shdepend can't have SubIds.
@@ -136,6 +143,67 @@ recordSharedDependencyOn(ObjectAddress *depender,
 	 */
 	if (IsBootstrapProcessingMode())
 		return;
+
+	catalog = table_open(referenced->classId, AccessShareLock);
+	oidIndexId = get_object_oid_index(referenced->classId);
+
+	Assert(OidIsValid(oidIndexId));
+
+	/*
+	 * We use a dirty snapshot so that we see all potential dependencies,
+	 * committed or not. Without doing this we would miss objects created
+	 * during in-flight transactions.
+	 */
+	UseDirtyCatalogSnapshot = true;
+
+	dirtySnapshot = GetCatalogSnapshot(RelationGetRelid(catalog));
+
+	ScanKeyInit(&skey,
+				get_object_attnum_oid(referenced->classId),
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(referenced->objectId));
+
+	scan = systable_beginscan(catalog, oidIndexId, true,
+							  dirtySnapshot, 1, &skey);
+
+	tuple = systable_getnext(scan);
+
+	/*
+	 * dirtySnapshot->xmax is set to the tuple's xmax
+	 * if that is another transaction that's still in
+	 * progress; or to InvalidTransactionId if the
+	 * tuple's xmax is committed good, committed dead,
+	 * or my own xact. See snapshot.h comments.
+	 */
+	if (HeapTupleIsValid(tuple) && TransactionIdIsValid(dirtySnapshot->xmax))
+	{
+		char *dependerDesc;
+		char *referencedDesc;
+		StringInfoData detail;
+
+		initStringInfo(&detail);
+
+		/* We need a dirty snapshot to get its description. */
+		UseDirtyCatalogSnapshot = true;
+		referencedDesc = getObjectDescription(referenced, false);
+
+		dependerDesc = getObjectDescription(depender, false);
+
+		appendStringInfo(&detail, _("%s depends on %s (modifications not yet committed)"),
+									dependerDesc,
+									referencedDesc);
+
+		ereport(ERROR,
+				(errcode(ERRCODE_DEPENDENT_OBJECTS_UNCOMMITTED_DEPENDENCY),
+				errmsg("cannot create %s because it depends of other objects uncommitted dependencies",
+				dependerDesc)),
+				errdetail("%s", detail.data),
+				errdetail_log("%s", detail.data),
+				errhint("%s", "CREATE won't work as long as there is uncommitted modification dependencies."));
+	}
+
+	systable_endscan(scan);
+	table_close(catalog, AccessShareLock);
 
 	sdepRel = table_open(SharedDependRelationId, RowExclusiveLock);
 
@@ -1316,6 +1384,7 @@ shdepDropOwned(List *roleids, DropBehavior behavior)
 		ScanKeyData key[2];
 		SysScanDesc scan;
 		HeapTuple	tuple;
+		Snapshot dirtySnapshot;
 
 		/* Doesn't work for pinned objects */
 		if (IsPinnedObject(AuthIdRelationId, roleid))
@@ -1333,6 +1402,15 @@ shdepDropOwned(List *roleids, DropBehavior behavior)
 							getObjectDescription(&obj, false))));
 		}
 
+		/*
+		 * We use a dirty snapshot so that we see all potential dependencies,
+		 * committed or not. Without doing this we would miss objects created
+		 * during in-flight transactions.
+		 */
+		UseDirtyCatalogSnapshot = true;
+
+		dirtySnapshot = GetCatalogSnapshot(RelationGetRelid(sdepRel));
+
 		ScanKeyInit(&key[0],
 					Anum_pg_shdepend_refclassid,
 					BTEqualStrategyNumber, F_OIDEQ,
@@ -1343,7 +1421,7 @@ shdepDropOwned(List *roleids, DropBehavior behavior)
 					ObjectIdGetDatum(roleid));
 
 		scan = systable_beginscan(sdepRel, SharedDependReferenceIndexId, true,
-								  NULL, 2, key);
+								  dirtySnapshot, 2, key);
 
 		while ((tuple = systable_getnext(scan)) != NULL)
 		{
@@ -1390,10 +1468,42 @@ shdepDropOwned(List *roleids, DropBehavior behavior)
 						 * object in that case.
 						 */
 						AcquireDeletionLock(&obj, 0);
-						if (!systable_recheck_tuple(scan, tuple))
+						if (!systable_recheck_tuple(scan, tuple, true))
 						{
 							ReleaseDeletionLock(&obj);
 							break;
+						}
+
+						/*
+						 * dirtySnapshot->xmin is set to the tuple's xmin
+						 * if that is another transaction that's still in
+						 * progress; or to InvalidTransactionId if the
+						 * tuple's xmin is committed good, committed dead,
+						 * or my own xact. See snapshot.h comments.
+						 */
+						if(TransactionIdIsValid(dirtySnapshot->xmin))
+						{
+							ObjectAddress roleobj;
+							char *roledesc;
+							char *objdesc;
+
+							roleobj.classId = AuthIdRelationId;
+							roleobj.objectId = roleid;
+							roleobj.objectSubId = 0;
+
+							roledesc = getObjectDescription(&roleobj, false);
+
+							/* We need a dirty snapshot to get its description. */
+							UseDirtyCatalogSnapshot = true;
+							objdesc = getObjectDescription(&obj, false);
+
+							ereport(ERROR,
+									(errcode(ERRCODE_DEPENDENT_OBJECTS_STILL_EXIST),
+									errmsg("cannot drop objects owned by %s because other uncommitted objects depend on it",
+									roledesc),
+									errdetail("%s (not yet committed) depends on %s", objdesc, roledesc),
+									errdetail_log("%s (not yet committed) depends on %s", objdesc, roledesc),
+									errhint("Commit or rollback %s creation.", objdesc)));
 						}
 						add_exact_object_address(&obj, deleteobjs);
 					}
@@ -1407,10 +1517,43 @@ shdepDropOwned(List *roleids, DropBehavior behavior)
 						obj.objectSubId = sdepForm->objsubid;
 						/* as above */
 						AcquireDeletionLock(&obj, 0);
-						if (!systable_recheck_tuple(scan, tuple))
+						if (!systable_recheck_tuple(scan, tuple, true))
 						{
 							ReleaseDeletionLock(&obj);
 							break;
+						}
+
+						/*
+						 * dirtySnapshot->xmin is set to the tuple's xmin
+						 * if that is another transaction that's still in
+						 * progress; or to InvalidTransactionId if the
+						 * tuple's xmin is committed good, committed dead,
+						 * or my own xact. See snapshot.h comments.
+						 */
+						if(TransactionIdIsValid(dirtySnapshot->xmin))
+						{
+
+							ObjectAddress roleobj;
+							char *roledesc;
+							char *objdesc;
+
+							roleobj.classId = AuthIdRelationId;
+							roleobj.objectId = roleid;
+							roleobj.objectSubId = 0;
+
+							roledesc = getObjectDescription(&roleobj, false);
+
+							/* We need a dirty snapshot to get its description. */
+							UseDirtyCatalogSnapshot = true;
+							objdesc = getObjectDescription(&obj, false);
+
+							ereport(ERROR,
+									(errcode(ERRCODE_DEPENDENT_OBJECTS_STILL_EXIST),
+									errmsg("cannot drop objects owned by %s because other uncommitted objects depend on it",
+									roledesc),
+									errdetail("%s (not yet committed) depends on %s", objdesc, roledesc),
+									errdetail_log("%s (not yet committed) depends on %s", objdesc, roledesc),
+									errhint("Commit or rollback %s creation.", objdesc)));
 						}
 						add_exact_object_address(&obj, deleteobjs);
 					}

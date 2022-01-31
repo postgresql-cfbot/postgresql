@@ -1,0 +1,44 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1_begin s1_create_function_in_schema s2_drop_schema s1_commit
+step s1_begin: BEGIN;
+step s1_create_function_in_schema: CREATE OR REPLACE FUNCTION testschema.functime() RETURNS TIMESTAMP AS $$
+DECLARE
+   outTS TIMESTAMP;
+BEGIN
+   RETURN CURRENT_TIMESTAMP;
+END;
+$$ LANGUAGE plpgsql volatile;
+
+step s2_drop_schema: drop schema testschema;
+ERROR:  cannot drop schema testschema because other objects depend on it
+step s1_commit: COMMIT;
+
+starting permutation: s2_begin s2_drop_schema s1_create_function_in_schema s2_commit
+step s2_begin: BEGIN;
+step s2_drop_schema: drop schema testschema;
+step s1_create_function_in_schema: CREATE OR REPLACE FUNCTION testschema.functime() RETURNS TIMESTAMP AS $$
+DECLARE
+   outTS TIMESTAMP;
+BEGIN
+   RETURN CURRENT_TIMESTAMP;
+END;
+$$ LANGUAGE plpgsql volatile;
+
+ERROR:  cannot create function testschema.functime() because it depends of other objects uncommitted dependencies
+step s2_commit: COMMIT;
+
+starting permutation: s1_set_session_authorization s1_begin s1_create_function s2_drop_owned_by_toorph s1_commit
+step s1_set_session_authorization: set SESSION AUTHORIZATION toorph;
+step s1_begin: BEGIN;
+step s1_create_function: CREATE OR REPLACE FUNCTION functime() RETURNS TIMESTAMP AS $$
+DECLARE
+   outTS TIMESTAMP;
+BEGIN
+   RETURN CURRENT_TIMESTAMP;
+END;
+$$ LANGUAGE plpgsql volatile;
+
+step s2_drop_owned_by_toorph: drop owned by toorph;
+ERROR:  cannot drop objects owned by role toorph because other uncommitted objects depend on it
+step s1_commit: COMMIT;

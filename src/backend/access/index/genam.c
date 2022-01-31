@@ -561,7 +561,7 @@ systable_getnext(SysScanDesc sysscan)
  * good crosscheck that the caller is interested in the right tuple.
  */
 bool
-systable_recheck_tuple(SysScanDesc sysscan, HeapTuple tup)
+systable_recheck_tuple(SysScanDesc sysscan, HeapTuple tup, bool dirtysnap)
 {
 	Snapshot	freshsnap;
 	bool		result;
@@ -574,6 +574,9 @@ systable_recheck_tuple(SysScanDesc sysscan, HeapTuple tup)
 	 * acquire snapshots, so we need not register the snapshot.  Those
 	 * facilities are too low-level to have any business scanning tables.
 	 */
+
+	UseDirtyCatalogSnapshot = dirtysnap;
+
 	freshsnap = GetCatalogSnapshot(RelationGetRelid(sysscan->heap_rel));
 
 	result = table_tuple_satisfies_snapshot(sysscan->heap_rel,

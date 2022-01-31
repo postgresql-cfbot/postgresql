@@ -316,10 +316,12 @@ InitPgFdwOptions(void)
 		popt->keyword = lopt->keyword;
 
 		/*
-		 * "user" and any secret options are allowed only on user mappings.
-		 * Everything else is a server option.
+		 * "user", "authuser", and any secret options are allowed only on user
+		 * mappings.  Everything else is a server option.
 		 */
-		if (strcmp(lopt->keyword, "user") == 0 || strchr(lopt->dispchar, '*'))
+		if (strcmp(lopt->keyword, "user") == 0 ||
+			strcmp(lopt->keyword, "authuser") == 0 ||
+			strchr(lopt->dispchar, '*'))
 			popt->optcontext = UserMappingRelationId;
 		else
 			popt->optcontext = ForeignServerRelationId;

@@ -9375,6 +9375,7 @@ CreateCheckPoint(int flags)
 	LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
 	if (shutdown)
 		ControlFile->state = DB_SHUTDOWNED;
+	ControlFile->checkPointKind = flags;
 	ControlFile->checkPoint = ProcLastRecPtr;
 	ControlFile->checkPointCopy = checkPoint;
 	/* crash recovery should always recover to the end of WAL */
@@ -9761,6 +9762,7 @@ CreateRestartPoint(int flags)
 	if (ControlFile->state == DB_IN_ARCHIVE_RECOVERY &&
 		ControlFile->checkPointCopy.redo < lastCheckPoint.redo)
 	{
+		ControlFile->checkPointKind = flags;
 		ControlFile->checkPoint = lastCheckPointRecPtr;
 		ControlFile->checkPointCopy = lastCheckPoint;
 

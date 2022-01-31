@@ -25130,6 +25130,11 @@ SELECT collation for ('foo' COLLATE "de_DE");
        <entry><type>timestamp with time zone</type></entry>
       </row>
 
+      <row>
+       <entry><structfield>checkpoint_kind</structfield></entry>
+       <entry><type>text</type></entry>
+      </row>
+
      </tbody>
     </tgroup>
    </table>

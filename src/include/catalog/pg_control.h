@@ -22,10 +22,13 @@
 
 
 /* Version identifier for this pg_control format */
-#define PG_CONTROL_VERSION	1300
+#define PG_CONTROL_VERSION	1500
 
 /* Nonce key length, see below */
 #define MOCK_AUTH_NONCE_LEN		32
+
+/* Maximum length of checkpoint kind text */
+#define	CHECKPOINT_KIND_TEXT_LENGTH 128
 
 /*
  * Body of CheckPoint XLOG records.  This is declared here because we keep
@@ -128,9 +131,10 @@ typedef struct ControlFileData
 	 */
 	DBState		state;			/* see enum above */
 	pg_time_t	time;			/* time stamp of last pg_control update */
-	XLogRecPtr	checkPoint;		/* last check point record ptr */
+	uint16		checkPointKind;	/* last checkpoint kind */
+	XLogRecPtr	checkPoint;		/* last checkpoint record ptr */
 
-	CheckPoint	checkPointCopy; /* copy of last check point record */
+	CheckPoint	checkPointCopy; /* copy of last checkpoint record */
 
 	XLogRecPtr	unloggedLSN;	/* current fake LSN value, for unlogged rels */
 

@@ -79,20 +79,22 @@ pg_control_system(PG_FUNCTION_ARGS)
 Datum
 pg_control_checkpoint(PG_FUNCTION_ARGS)
 {
-	Datum		values[18];
-	bool		nulls[18];
+	Datum		values[19];
+	bool		nulls[19];
 	TupleDesc	tupdesc;
 	HeapTuple	htup;
 	ControlFileData *ControlFile;
 	XLogSegNo	segno;
 	char		xlogfilename[MAXFNAMELEN];
 	bool		crc_ok;
+	uint16		flags;
+	char 		ckpt_kind[CHECKPOINT_KIND_TEXT_LENGTH];
 
 	/*
 	 * Construct a tuple descriptor for the result row.  This must match this
 	 * function's pg_proc entry!
 	 */
-	tupdesc = CreateTemplateTupleDesc(18);
+	tupdesc = CreateTemplateTupleDesc(19);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "checkpoint_lsn",
 					   PG_LSNOID, -1, 0);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 2, "redo_lsn",
@@ -129,6 +131,8 @@ pg_control_checkpoint(PG_FUNCTION_ARGS)
 					   XIDOID, -1, 0);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 18, "checkpoint_time",
 					   TIMESTAMPTZOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 19, "checkpoint_kind",
+					   TEXTOID, -1, 0);
 	tupdesc = BlessTupleDesc(tupdesc);
 
 	/* Read the control file. */
@@ -201,6 +205,22 @@ pg_control_checkpoint(PG_FUNCTION_ARGS)
 
 	values[17] = TimestampTzGetDatum(time_t_to_timestamptz(ControlFile->checkPointCopy.time));
 	nulls[17] = false;
+
+	MemSet(ckpt_kind, 0, CHECKPOINT_KIND_TEXT_LENGTH);
+	flags = ControlFile->checkPointKind;
+
+	snprintf(ckpt_kind, CHECKPOINT_KIND_TEXT_LENGTH, "%s%s%s%s%s%s%s%s",
+				(flags & CHECKPOINT_IS_SHUTDOWN) ? "shutdown" : "",
+				(flags & CHECKPOINT_END_OF_RECOVERY) ? " end-of-recovery" : "",
+				(flags & CHECKPOINT_IMMEDIATE) ? " immediate" : "",
+				(flags & CHECKPOINT_FORCE) ? " force" : "",
+				(flags & CHECKPOINT_WAIT) ? " wait" : "",
+				(flags & CHECKPOINT_CAUSE_XLOG) ? " wal" : "",
+				(flags & CHECKPOINT_CAUSE_TIME) ? " time" : "",
+				(flags & CHECKPOINT_FLUSH_ALL) ? " flush-all" : "");
+
+	values[18] = CStringGetTextDatum(ckpt_kind);
+	nulls[18] = false;
 
 	htup = heap_form_tuple(tupdesc, values, nulls);
 

@@ -106,6 +106,8 @@ main(int argc, char *argv[])
 	int			c;
 	int			i;
 	int			WalSegSz;
+	uint16		flags;
+	char 		ckpt_kind[CHECKPOINT_KIND_TEXT_LENGTH];
 
 	pg_logging_init(argv[0]);
 	set_pglocale_pgservice(argv[0], PG_TEXTDOMAIN("pg_controldata"));
@@ -225,6 +227,19 @@ main(int argc, char *argv[])
 		snprintf(&mock_auth_nonce_str[i * 2], 3, "%02x",
 				 (unsigned char) ControlFile->mock_authentication_nonce[i]);
 
+	MemSet(ckpt_kind, 0, CHECKPOINT_KIND_TEXT_LENGTH);
+	flags = ControlFile->checkPointKind;
+
+	snprintf(ckpt_kind, CHECKPOINT_KIND_TEXT_LENGTH, "%s%s%s%s%s%s%s%s",
+				(flags & CHECKPOINT_IS_SHUTDOWN) ? "shutdown" : "",
+				(flags & CHECKPOINT_END_OF_RECOVERY) ? " end-of-recovery" : "",
+				(flags & CHECKPOINT_IMMEDIATE) ? " immediate" : "",
+				(flags & CHECKPOINT_FORCE) ? " force" : "",
+				(flags & CHECKPOINT_WAIT) ? " wait" : "",
+				(flags & CHECKPOINT_CAUSE_XLOG) ? " wal" : "",
+				(flags & CHECKPOINT_CAUSE_TIME) ? " time" : "",
+				(flags & CHECKPOINT_FLUSH_ALL) ? " flush-all" : "");
+
 	printf(_("pg_control version number:            %u\n"),
 		   ControlFile->pg_control_version);
 	printf(_("Catalog version number:               %u\n"),
@@ -235,6 +250,8 @@ main(int argc, char *argv[])
 		   dbState(ControlFile->state));
 	printf(_("pg_control last modified:             %s\n"),
 		   pgctime_str);
+	printf(_("Latest checkpoint kind:               %s\n"),
+		   ckpt_kind);
 	printf(_("Latest checkpoint location:           %X/%X\n"),
 		   LSN_FORMAT_ARGS(ControlFile->checkPoint));
 	printf(_("Latest checkpoint's REDO location:    %X/%X\n"),

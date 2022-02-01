@@ -2147,6 +2147,23 @@ pg_stat_sys_tables| SELECT pg_stat_all_tables.relid,
     pg_stat_all_tables.autoanalyze_count
    FROM pg_stat_all_tables
   WHERE ((pg_stat_all_tables.schemaname = ANY (ARRAY['pg_catalog'::name, 'information_schema'::name])) OR (pg_stat_all_tables.schemaname ~ '^pg_toast'::text));
+pg_stat_toast| SELECT n.nspname AS schemaname,
+    a.attrelid AS reloid,
+    a.attnum,
+    c.relname,
+    a.attname,
+    a.attstorage AS storagemethod,
+    pg_stat_get_toast_externalizations(a.attrelid, (a.attnum)::integer) AS externalized,
+    a.attcompression AS compressmethod,
+    pg_stat_get_toast_compressions(a.attrelid, (a.attnum)::integer) AS compressattempts,
+    pg_stat_get_toast_compressionsuccesses(a.attrelid, (a.attnum)::integer) AS compresssuccesses,
+    pg_stat_get_toast_compressedsizesum(a.attrelid, (a.attnum)::integer) AS compressedsize,
+    pg_stat_get_toast_originalsizesum(a.attrelid, (a.attnum)::integer) AS originalsize,
+    pg_stat_get_toast_total_time(a.attrelid, (a.attnum)::integer) AS total_time
+   FROM ((pg_attribute a
+     JOIN pg_class c ON ((c.oid = a.attrelid)))
+     LEFT JOIN pg_namespace n ON ((n.oid = c.relnamespace)))
+  WHERE (pg_stat_get_toast_externalizations(a.attrelid, (a.attnum)::integer) IS NOT NULL);
 pg_stat_user_functions| SELECT p.oid AS funcid,
     n.nspname AS schemaname,
     p.proname AS funcname,

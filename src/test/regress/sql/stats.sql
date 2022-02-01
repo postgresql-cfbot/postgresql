@@ -8,6 +8,20 @@
 -- conditio sine qua non
 SHOW track_counts;  -- must be on
 
+-- prepare and fill the pg_stat_toast table now:
+SHOW track_toast;
+SET track_toast TO on;
+SHOW track_toast;
+TABLE pg_stat_toast; -- view exists
+
+CREATE TABLE toast_test (cola TEXT, colb TEXT, colc TEXT , cold TEXT);
+ALTER TABLE toast_test ALTER colb SET STORAGE EXTERNAL;
+ALTER TABLE toast_test ALTER colc SET STORAGE MAIN;
+ALTER TABLE toast_test ALTER cold SET STORAGE PLAIN;
+INSERT INTO toast_test VALUES (repeat(md5('a'),100), repeat(md5('a'),100), repeat(md5('a'),100), repeat(md5('a'),100) );
+-- make sure we don't interfere with the other tests:
+SET track_toast TO off;
+
 -- ensure that both seqscan and indexscan plans are allowed
 SET enable_seqscan TO on;
 SET enable_indexscan TO on;
@@ -225,5 +239,19 @@ SELECT pg_stat_get_tuples_hot_updated('brin_hot'::regclass::oid);
 DROP TABLE brin_hot;
 DROP FUNCTION wait_for_hot_stats();
 
+-- now check that the track_toast stuff worked:
+SELECT attname
+	,storagemethod
+	,externalized
+	,compressmethod
+	,compressattempts
+	,compresssuccesses
+	,compressedsize < originalsize AS compression_works
+	, total_time > 0 AS takes_time 
+FROM pg_stat_toast WHERE relname = 'toast_test' ORDER BY attname;
+SELECT compressattempts=0 AS external_doesnt_compress FROM pg_stat_toast WHERE relname = 'toast_test' AND storagemethod = 'e';
+SELECT externalized=0 AS main_doesnt_externalize FROM pg_stat_toast WHERE relname = 'toast_test' AND storagemethod = 'm';
+DROP TABLE toast_test;
+SELECT count(*) FROM pg_stat_toast WHERE relname = 'toast_test';
 
 -- End of Stats Test

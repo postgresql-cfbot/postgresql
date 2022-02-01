@@ -517,6 +517,15 @@ pages). There was no run time difference compared to an un-<acronym>TOAST</acron
 comparison table, in which all the HTML pages were cut down to 7 kB to fit.
 </para>
 
+<para>
+When you enable <xref linkend="guc-track-toast"/>, the system view
+<link linkend="monitoring-pg-stat-toast-view"><structname>pg_stat_toast</structname>
+</link> provides details on the number and effect of compression attempts,
+number of externalizations and some more useful information that enables you
+to decide if a different storage method and/or compression method would suite a
+column better.
+</para>
+
 </sect2>
 
 <sect2 id="storage-toast-inmemory">
@@ -1068,7 +1077,8 @@ data. Empty in ordinary tables.</entry>
   <type>struct varlena</type>, which includes the total length of the stored
   value and some flag bits.  Depending on the flags, the data can be either
   inline or in a <acronym>TOAST</acronym> table;
-  it might be compressed, too (see <xref linkend="storage-toast"/>).
+  it might be compressed, too (see <xref linkend="storage-toast"/> and 
+  <xref linkend="monitoring-pg-stat-toast-view"/>).
 
  </para>
  </sect2>

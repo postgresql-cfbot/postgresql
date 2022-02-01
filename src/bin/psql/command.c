@@ -780,7 +780,23 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 				success = describeTablespaces(pattern, show_verbose);
 				break;
 			case 'c':
-				success = listConversions(pattern, show_verbose, show_system);
+				if (strncmp(cmd, "dco", 3) == 0) /* Constraint */
+					switch (cmd[3])
+					{
+						case '\0':
+						case 'S':
+						case 'c':
+						case 'f':
+						case 'p':
+						case 'u':
+						case 't':
+						case 'x':
+							success = listConstraints(&cmd[2], pattern, show_system);
+							break;
+						default:
+							status = PSQL_CMD_UNKNOWN;
+							break;
+					}
 				break;
 			case 'C':
 				success = listCasts(pattern, show_verbose);

@@ -84,7 +84,8 @@ static bool GetTupleForTrigger(EState *estate,
 							   ItemPointer tid,
 							   LockTupleMode lockmode,
 							   TupleTableSlot *oldslot,
-							   TupleTableSlot **newSlot);
+							   TupleTableSlot **newSlot,
+							   TM_FailureData *tmfpd);
 static bool TriggerEnabled(EState *estate, ResultRelInfo *relinfo,
 						   Trigger *trigger, TriggerEvent event,
 						   Bitmapset *modifiedCols,
@@ -94,6 +95,16 @@ static HeapTuple ExecCallTriggerFunc(TriggerData *trigdata,
 									 FmgrInfo *finfo,
 									 Instrumentation *instr,
 									 MemoryContext per_tuple_context);
+static Tuplestorestate *AfterTriggerGetTransitionTable(int event,
+													   TupleTableSlot *oldslot,
+													   TupleTableSlot *newslot,
+													   TransitionCaptureState *transition_capture);
+static void TransitionTableAddTuple(EState *estate,
+									TransitionCaptureState *transition_capture,
+									ResultRelInfo *relinfo,
+									TupleTableSlot *slot,
+									TupleTableSlot *original_insert_tuple,
+									Tuplestorestate *tuplestore);
 static void AfterTriggerSaveEvent(EState *estate, ResultRelInfo *relinfo,
 								  int event, bool row_trigger,
 								  TupleTableSlot *oldtup, TupleTableSlot *newtup,
@@ -2688,7 +2699,8 @@ ExecBRDeleteTriggers(EState *estate, EPQState *epqstate,
 					 ResultRelInfo *relinfo,
 					 ItemPointer tupleid,
 					 HeapTuple fdw_trigtuple,
-					 TupleTableSlot **epqslot)
+					 TupleTableSlot **epqslot,
+					 TM_FailureData *tmfd)
 {
 	TupleTableSlot *slot = ExecGetTriggerOldSlot(estate, relinfo);
 	TriggerDesc *trigdesc = relinfo->ri_TrigDesc;
@@ -2704,7 +2716,8 @@ ExecBRDeleteTriggers(EState *estate, EPQState *epqstate,
 		TupleTableSlot *epqslot_candidate = NULL;
 
 		if (!GetTupleForTrigger(estate, epqstate, relinfo, tupleid,
-								LockTupleExclusive, slot, &epqslot_candidate))
+								LockTupleExclusive, slot, &epqslot_candidate,
+								tmfd))
 			return false;
 
 		/*
@@ -2719,7 +2732,6 @@ ExecBRDeleteTriggers(EState *estate, EPQState *epqstate,
 		}
 
 		trigtuple = ExecFetchSlotHeapTuple(slot, true, &should_free);
-
 	}
 	else
 	{
@@ -2789,6 +2801,7 @@ ExecARDeleteTriggers(EState *estate, ResultRelInfo *relinfo,
 							   tupleid,
 							   LockTupleExclusive,
 							   slot,
+							   NULL,
 							   NULL);
 		else
 			ExecForceStoreHeapTuple(fdw_trigtuple, slot, false);
@@ -2925,7 +2938,8 @@ ExecBRUpdateTriggers(EState *estate, EPQState *epqstate,
 					 ResultRelInfo *relinfo,
 					 ItemPointer tupleid,
 					 HeapTuple fdw_trigtuple,
-					 TupleTableSlot *newslot)
+					 TupleTableSlot *newslot,
+					 TM_FailureData *tmfd)
 {
 	TriggerDesc *trigdesc = relinfo->ri_TrigDesc;
 	TupleTableSlot *oldslot = ExecGetTriggerOldSlot(estate, relinfo);
@@ -2948,7 +2962,8 @@ ExecBRUpdateTriggers(EState *estate, EPQState *epqstate,
 
 		/* get a copy of the on-disk tuple we are planning to update */
 		if (!GetTupleForTrigger(estate, epqstate, relinfo, tupleid,
-								lockmode, oldslot, &epqslot_candidate))
+								lockmode, oldslot, &epqslot_candidate,
+								tmfd))
 			return false;		/* cancel the update action */
 
 		/*
@@ -3082,6 +3097,7 @@ ExecARUpdateTriggers(EState *estate, ResultRelInfo *relinfo,
 							   tupleid,
 							   LockTupleExclusive,
 							   oldslot,
+							   NULL,
 							   NULL);
 		else if (fdw_trigtuple != NULL)
 			ExecForceStoreHeapTuple(fdw_trigtuple, oldslot, false);
@@ -3229,7 +3245,8 @@ GetTupleForTrigger(EState *estate,
 				   ItemPointer tid,
 				   LockTupleMode lockmode,
 				   TupleTableSlot *oldslot,
-				   TupleTableSlot **epqslot)
+				   TupleTableSlot **epqslot,
+				   TM_FailureData *tmfdp)
 {
 	Relation	relation = relinfo->ri_RelationDesc;
 
@@ -3254,6 +3271,10 @@ GetTupleForTrigger(EState *estate,
 								lockmode, LockWaitBlock,
 								lockflags,
 								&tmfd);
+
+		/* Let the caller know about the status of this operation */
+		if (tmfdp)
+			*tmfdp = tmfd;
 
 		switch (test)
 		{
@@ -3752,8 +3773,23 @@ struct AfterTriggersTableData
 	bool		before_trig_done;	/* did we already queue BS triggers? */
 	bool		after_trig_done;	/* did we already queue AS triggers? */
 	AfterTriggerEventList after_trig_events;	/* if so, saved list pointer */
-	Tuplestorestate *old_tuplestore;	/* "old" transition table, if any */
-	Tuplestorestate *new_tuplestore;	/* "new" transition table, if any */
+
+	/*
+	 * We maintain separate transition tables for UPDATE/INSERT/DELETE since
+	 * MERGE can run all three actions in a single statement. Note that UPDATE
+	 * needs both old and new transition tables whereas INSERT needs only new,
+	 * and DELETE needs only old.
+	 */
+
+	/* "old" transition table for UPDATE, if any */
+	Tuplestorestate *old_upd_tuplestore;
+	/* "new" transition table for UPDATE, if any */
+	Tuplestorestate *new_upd_tuplestore;
+	/* "old" transition table for DELETE, if any */
+	Tuplestorestate *old_del_tuplestore;
+	/* "new" transition table INSERT, if any */
+	Tuplestorestate *new_ins_tuplestore;
+
 	TupleTableSlot *storeslot;	/* for converting to tuplestore's format */
 };
 
@@ -4234,13 +4270,19 @@ AfterTriggerExecute(EState *estate,
 	{
 		if (LocTriggerData.tg_trigger->tgoldtable)
 		{
-			LocTriggerData.tg_oldtable = evtshared->ats_table->old_tuplestore;
+			if (TRIGGER_FIRED_BY_UPDATE(evtshared->ats_event))
+				LocTriggerData.tg_oldtable = evtshared->ats_table->old_upd_tuplestore;
+			else
+				LocTriggerData.tg_oldtable = evtshared->ats_table->old_del_tuplestore;
 			evtshared->ats_table->closed = true;
 		}
 
 		if (LocTriggerData.tg_trigger->tgnewtable)
 		{
-			LocTriggerData.tg_newtable = evtshared->ats_table->new_tuplestore;
+			if (TRIGGER_FIRED_BY_INSERT(evtshared->ats_event))
+				LocTriggerData.tg_newtable = evtshared->ats_table->new_ins_tuplestore;
+			else
+				LocTriggerData.tg_newtable = evtshared->ats_table->new_upd_tuplestore;
 			evtshared->ats_table->closed = true;
 		}
 	}
@@ -4629,8 +4671,10 @@ TransitionCaptureState *
 MakeTransitionCaptureState(TriggerDesc *trigdesc, Oid relid, CmdType cmdType)
 {
 	TransitionCaptureState *state;
-	bool		need_old,
-				need_new;
+	bool		need_old_upd,
+				need_new_upd,
+				need_old_del,
+				need_new_ins;
 	AfterTriggersTableData *table;
 	MemoryContext oldcxt;
 	ResourceOwner saveResourceOwner;
@@ -4642,23 +4686,31 @@ MakeTransitionCaptureState(TriggerDesc *trigdesc, Oid relid, CmdType cmdType)
 	switch (cmdType)
 	{
 		case CMD_INSERT:
-			need_old = false;
-			need_new = trigdesc->trig_insert_new_table;
+			need_old_upd = need_old_del = need_new_upd = false;
+			need_new_ins = trigdesc->trig_insert_new_table;
 			break;
 		case CMD_UPDATE:
-			need_old = trigdesc->trig_update_old_table;
-			need_new = trigdesc->trig_update_new_table;
+			need_old_upd = trigdesc->trig_update_old_table;
+			need_new_upd = trigdesc->trig_update_new_table;
+			need_old_del = need_new_ins = false;
 			break;
 		case CMD_DELETE:
-			need_old = trigdesc->trig_delete_old_table;
-			need_new = false;
+			need_old_del = trigdesc->trig_delete_old_table;
+			need_old_upd = need_new_upd = need_new_ins = false;
+			break;
+		case CMD_MERGE:
+			need_old_upd = trigdesc->trig_update_old_table;
+			need_new_upd = trigdesc->trig_update_new_table;
+			need_old_del = trigdesc->trig_delete_old_table;
+			need_new_ins = trigdesc->trig_insert_new_table;
 			break;
 		default:
 			elog(ERROR, "unexpected CmdType: %d", (int) cmdType);
-			need_old = need_new = false;	/* keep compiler quiet */
+			/* keep compiler quiet */
+			need_old_upd = need_new_upd = need_old_del = need_new_ins = false;
 			break;
 	}
-	if (!need_old && !need_new)
+	if (!need_old_upd && !need_new_upd && !need_new_ins && !need_old_del)
 		return NULL;
 
 	/* Check state, like AfterTriggerSaveEvent. */
@@ -4688,10 +4740,14 @@ MakeTransitionCaptureState(TriggerDesc *trigdesc, Oid relid, CmdType cmdType)
 	saveResourceOwner = CurrentResourceOwner;
 	CurrentResourceOwner = CurTransactionResourceOwner;
 
-	if (need_old && table->old_tuplestore == NULL)
-		table->old_tuplestore = tuplestore_begin_heap(false, false, work_mem);
-	if (need_new && table->new_tuplestore == NULL)
-		table->new_tuplestore = tuplestore_begin_heap(false, false, work_mem);
+	if (need_old_upd && table->old_upd_tuplestore == NULL)
+		table->old_upd_tuplestore = tuplestore_begin_heap(false, false, work_mem);
+	if (need_new_upd && table->new_upd_tuplestore == NULL)
+		table->new_upd_tuplestore = tuplestore_begin_heap(false, false, work_mem);
+	if (need_old_del && table->old_del_tuplestore == NULL)
+		table->old_del_tuplestore = tuplestore_begin_heap(false, false, work_mem);
+	if (need_new_ins && table->new_ins_tuplestore == NULL)
+		table->new_ins_tuplestore = tuplestore_begin_heap(false, false, work_mem);
 
 	CurrentResourceOwner = saveResourceOwner;
 	MemoryContextSwitchTo(oldcxt);
@@ -4880,12 +4936,20 @@ AfterTriggerFreeQuery(AfterTriggersQueryData *qs)
 	{
 		AfterTriggersTableData *table = (AfterTriggersTableData *) lfirst(lc);
 
-		ts = table->old_tuplestore;
-		table->old_tuplestore = NULL;
+		ts = table->old_upd_tuplestore;
+		table->old_upd_tuplestore = NULL;
 		if (ts)
 			tuplestore_end(ts);
-		ts = table->new_tuplestore;
-		table->new_tuplestore = NULL;
+		ts = table->new_upd_tuplestore;
+		table->new_upd_tuplestore = NULL;
+		if (ts)
+			tuplestore_end(ts);
+		ts = table->old_del_tuplestore;
+		table->old_del_tuplestore = NULL;
+		if (ts)
+			tuplestore_end(ts);
+		ts = table->new_ins_tuplestore;
+		table->new_ins_tuplestore = NULL;
 		if (ts)
 			tuplestore_end(ts);
 		if (table->storeslot)
@@ -5650,6 +5714,94 @@ AfterTriggerPendingOnRel(Oid relid)
 	return false;
 }
 
+/*
+ * Get the transition table for the given event and depending on whether we are
+ * processing the old or the new tuple.
+ */
+static Tuplestorestate *
+AfterTriggerGetTransitionTable(int event,
+							   TupleTableSlot *oldslot,
+							   TupleTableSlot *newslot,
+							   TransitionCaptureState *transition_capture)
+{
+	Tuplestorestate *tuplestore = NULL;
+	bool		delete_old_table = transition_capture->tcs_delete_old_table;
+	bool		update_old_table = transition_capture->tcs_update_old_table;
+	bool		update_new_table = transition_capture->tcs_update_new_table;
+	bool		insert_new_table = transition_capture->tcs_insert_new_table;
+
+	/*
+	 * For INSERT events, NEW should be non-NULL; for DELETE events, OLD
+	 * should be non-NULL; for UPDATE events, normally both OLD and NEW are
+	 * non-NULL -- but for UPDATE events fired for capturing transition tuples
+	 * during UPDATE partition-key row movement, OLD is NULL when the event is
+	 * for a row being inserted, whereas NEW is NULL when the event is for a
+	 * row being deleted.
+	 */
+	Assert(!(event == TRIGGER_EVENT_DELETE && delete_old_table &&
+			 TupIsNull(oldslot)));
+	Assert(!(event == TRIGGER_EVENT_INSERT && insert_new_table &&
+			 TupIsNull(newslot)));
+
+	/*
+	 * We're called either for the NEW or the OLD tuples, but not both at the
+	 * same time.
+	 */
+	Assert((oldslot != NULL) ^ (newslot != NULL));
+
+	if (oldslot != NULL)
+	{
+		if (event == TRIGGER_EVENT_DELETE && delete_old_table)
+			tuplestore = transition_capture->tcs_private->old_del_tuplestore;
+		else if (event == TRIGGER_EVENT_UPDATE && update_old_table)
+			tuplestore = transition_capture->tcs_private->old_upd_tuplestore;
+	}
+
+	if (newslot != NULL)
+	{
+		if (event == TRIGGER_EVENT_INSERT && insert_new_table)
+			tuplestore = transition_capture->tcs_private->new_ins_tuplestore;
+		else if (event == TRIGGER_EVENT_UPDATE && update_new_table)
+			tuplestore = transition_capture->tcs_private->new_upd_tuplestore;
+	}
+
+	return tuplestore;
+}
+
+/*
+ * Add the given heap tuple to the given tuplestore, applying the conversion
+ * map if necessary.
+ */
+static void
+TransitionTableAddTuple(EState *estate,
+						TransitionCaptureState *transition_capture,
+						ResultRelInfo *relinfo,
+						TupleTableSlot *slot,
+						TupleTableSlot *original_insert_tuple,
+						Tuplestorestate *tuplestore)
+{
+	TupleConversionMap *map;
+
+	/*
+	 * Nothing needs to be done if we don't have a tuplestore.
+	 */
+	if (tuplestore == NULL)
+		return;
+
+	if (original_insert_tuple)
+		tuplestore_puttupleslot(tuplestore, original_insert_tuple);
+	else if ((map = ExecGetChildToRootMap(relinfo)) != NULL)
+	{
+		AfterTriggersTableData *table = transition_capture->tcs_private;
+		TupleTableSlot *storeslot;
+
+		storeslot = GetAfterTriggersStoreSlot(table, map->outdesc);
+		execute_attr_map_slot(map->attrMap, slot, storeslot);
+		tuplestore_puttupleslot(tuplestore, storeslot);
+	}
+	else
+		tuplestore_puttupleslot(tuplestore, slot);
+}
 
 /* ----------
  * AfterTriggerSaveEvent()
@@ -5710,75 +5862,45 @@ AfterTriggerSaveEvent(EState *estate, ResultRelInfo *relinfo,
 	if (row_trigger && transition_capture != NULL)
 	{
 		TupleTableSlot *original_insert_tuple = transition_capture->tcs_original_insert_tuple;
-		TupleConversionMap *map = ExecGetChildToRootMap(relinfo);
-		bool		delete_old_table = transition_capture->tcs_delete_old_table;
-		bool		update_old_table = transition_capture->tcs_update_old_table;
-		bool		update_new_table = transition_capture->tcs_update_new_table;
-		bool		insert_new_table = transition_capture->tcs_insert_new_table;
 
 		/*
-		 * For INSERT events NEW should be non-NULL, for DELETE events OLD
-		 * should be non-NULL, whereas for UPDATE events normally both OLD and
-		 * NEW are non-NULL.  But for UPDATE events fired for capturing
-		 * transition tuples during UPDATE partition-key row movement, OLD is
-		 * NULL when the event is for a row being inserted, whereas NEW is
-		 * NULL when the event is for a row being deleted.
+		 * Capture the old tuple in the appropriate transition table based on
+		 * the event.
 		 */
-		Assert(!(event == TRIGGER_EVENT_DELETE && delete_old_table &&
-				 TupIsNull(oldslot)));
-		Assert(!(event == TRIGGER_EVENT_INSERT && insert_new_table &&
-				 TupIsNull(newslot)));
-
-		if (!TupIsNull(oldslot) &&
-			((event == TRIGGER_EVENT_DELETE && delete_old_table) ||
-			 (event == TRIGGER_EVENT_UPDATE && update_old_table)))
+		if (!TupIsNull(oldslot))
 		{
-			Tuplestorestate *old_tuplestore;
+			Tuplestorestate *tuplestore;
 
-			old_tuplestore = transition_capture->tcs_private->old_tuplestore;
-
-			if (map != NULL)
-			{
-				AfterTriggersTableData *table = transition_capture->tcs_private;
-				TupleTableSlot *storeslot;
-
-				storeslot = GetAfterTriggersStoreSlot(table, map->outdesc);
-				execute_attr_map_slot(map->attrMap, oldslot, storeslot);
-				tuplestore_puttupleslot(old_tuplestore, storeslot);
-			}
-			else
-				tuplestore_puttupleslot(old_tuplestore, oldslot);
+			tuplestore = AfterTriggerGetTransitionTable(event,
+														oldslot,
+														NULL,
+														transition_capture);
+			TransitionTableAddTuple(estate, transition_capture, relinfo,
+									oldslot, NULL, tuplestore);
 		}
-		if (!TupIsNull(newslot) &&
-			((event == TRIGGER_EVENT_INSERT && insert_new_table) ||
-			 (event == TRIGGER_EVENT_UPDATE && update_new_table)))
+
+		/*
+		 * Capture the new tuple in the appropriate transition table based on
+		 * the event.
+		 */
+		if (!TupIsNull(newslot))
 		{
-			Tuplestorestate *new_tuplestore;
+			Tuplestorestate *tuplestore;
 
-			new_tuplestore = transition_capture->tcs_private->new_tuplestore;
-
-			if (original_insert_tuple != NULL)
-				tuplestore_puttupleslot(new_tuplestore,
-										original_insert_tuple);
-			else if (map != NULL)
-			{
-				AfterTriggersTableData *table = transition_capture->tcs_private;
-				TupleTableSlot *storeslot;
-
-				storeslot = GetAfterTriggersStoreSlot(table, map->outdesc);
-				execute_attr_map_slot(map->attrMap, newslot, storeslot);
-				tuplestore_puttupleslot(new_tuplestore, storeslot);
-			}
-			else
-				tuplestore_puttupleslot(new_tuplestore, newslot);
+			tuplestore = AfterTriggerGetTransitionTable(event,
+														NULL,
+														newslot,
+														transition_capture);
+			TransitionTableAddTuple(estate, transition_capture, relinfo,
+									newslot, original_insert_tuple, tuplestore);
 		}
 
 		/*
 		 * If transition tables are the only reason we're here, return. As
 		 * mentioned above, we can also be here during update tuple routing in
 		 * presence of transition tables, in which case this function is
-		 * called separately for oldtup and newtup, so we expect exactly one
-		 * of them to be NULL.
+		 * called separately for OLD and NEW, so we expect exactly one of them
+		 * to be NULL.
 		 */
 		if (trigdesc == NULL ||
 			(event == TRIGGER_EVENT_DELETE && !trigdesc->trig_delete_after_row) ||

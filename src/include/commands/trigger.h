@@ -13,6 +13,7 @@
 #ifndef TRIGGER_H
 #define TRIGGER_H
 
+#include "access/tableam.h"
 #include "catalog/objectaddress.h"
 #include "nodes/execnodes.h"
 #include "nodes/parsenodes.h"
@@ -209,7 +210,8 @@ extern bool ExecBRDeleteTriggers(EState *estate,
 								 ResultRelInfo *relinfo,
 								 ItemPointer tupleid,
 								 HeapTuple fdw_trigtuple,
-								 TupleTableSlot **epqslot);
+								 TupleTableSlot **epqslot,
+								 TM_FailureData *tmfdp);
 extern void ExecARDeleteTriggers(EState *estate,
 								 ResultRelInfo *relinfo,
 								 ItemPointer tupleid,
@@ -228,7 +230,8 @@ extern bool ExecBRUpdateTriggers(EState *estate,
 								 ResultRelInfo *relinfo,
 								 ItemPointer tupleid,
 								 HeapTuple fdw_trigtuple,
-								 TupleTableSlot *slot);
+								 TupleTableSlot *slot,
+								 TM_FailureData *tmfdp);
 extern void ExecARUpdateTriggers(EState *estate,
 								 ResultRelInfo *relinfo,
 								 ItemPointer tupleid,

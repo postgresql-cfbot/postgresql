@@ -388,6 +388,23 @@ typedef struct OnConflictSetState
 	ExprState  *oc_WhereClause; /* state for the WHERE clause */
 } OnConflictSetState;
 
+
+/* ----------------
+ *	 MergeActionState information
+ *
+ *	Global info for a MERGE action.
+ * ----------------
+ */
+typedef struct MergeActionState
+{
+	NodeTag		type;
+
+	MergeAction *mas_action;	/* associated MergeAction node */
+	ProjectionInfo *mas_proj;	/* projection of the action's targetlist for
+								 * this rel */
+	ExprState  *mas_whenqual;	/* WHEN [NOT] MATCHED AND conditions */
+} MergeActionState;
+
 /*
  * ResultRelInfo
  *
@@ -498,6 +515,10 @@ typedef struct ResultRelInfo
 
 	/* ON CONFLICT evaluation state */
 	OnConflictSetState *ri_onConflict;
+
+	/* for MERGE, lists of MergeActionState */
+	List	   *ri_matchedMergeAction;
+	List	   *ri_notMatchedMergeAction;
 
 	/* partition check expression state (NULL if not set up yet) */
 	ExprState  *ri_PartitionCheckExpr;
@@ -1082,6 +1103,11 @@ typedef struct PlanState
 		if (((PlanState *)(node))->instrument) \
 			((PlanState *)(node))->instrument->nfiltered2 += (delta); \
 	} while(0)
+#define InstrCountFiltered3(node, delta) \
+	do { \
+		if (((PlanState *)(node))->instrument) \
+			((PlanState *)(node))->instrument->nfiltered3 += (delta); \
+	} while(0)
 
 /*
  * EPQState is state for executing an EvalPlanQual recheck on a candidate
@@ -1190,7 +1216,7 @@ typedef struct ProjectSetState
 typedef struct ModifyTableState
 {
 	PlanState	ps;				/* its first field is NodeTag */
-	CmdType		operation;		/* INSERT, UPDATE, or DELETE */
+	CmdType		operation;		/* INSERT, UPDATE, DELETE or MERGE */
 	bool		canSetTag;		/* do we set the command tag/es_processed? */
 	bool		mt_done;		/* are we done? */
 	int			mt_nrels;		/* number of entries in resultRelInfo[] */
@@ -1232,6 +1258,9 @@ typedef struct ModifyTableState
 
 	/* controls transition table population for INSERT...ON CONFLICT UPDATE */
 	struct TransitionCaptureState *mt_oc_transition_capture;
+
+	/* Flags showing which subcommands are present INS/UPD/DEL/DO NOTHING */
+	int			mt_merge_subcommands;
 } ModifyTableState;
 
 /* ----------------

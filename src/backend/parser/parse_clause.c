@@ -72,9 +72,6 @@ static TableSampleClause *transformRangeTableSample(ParseState *pstate,
 													RangeTableSample *rts);
 static ParseNamespaceItem *getNSItemForSpecialRelationTypes(ParseState *pstate,
 															RangeVar *rv);
-static Node *transformFromClauseItem(ParseState *pstate, Node *n,
-									 ParseNamespaceItem **top_nsitem,
-									 List **namespace);
 static Var *buildVarFromNSColumn(ParseNamespaceColumn *nscol);
 static Node *buildMergedJoinVar(ParseState *pstate, JoinType jointype,
 								Var *l_colvar, Var *r_colvar);
@@ -1045,14 +1042,14 @@ getNSItemForSpecialRelationTypes(ParseState *pstate, RangeVar *rv)
  * jointree item.  (This is only used during internal recursion, not by
  * outside callers.)
  *
- * *namespace: receives a List of ParseNamespaceItems for the RTEs exposed
+ * *fnamespace: receives a List of ParseNamespaceItems for the RTEs exposed
  * as table/column names by this item.  (The lateral_only flags in these items
  * are indeterminate and should be explicitly set by the caller before use.)
  */
-static Node *
+Node *
 transformFromClauseItem(ParseState *pstate, Node *n,
 						ParseNamespaceItem **top_nsitem,
-						List **namespace)
+						List **fnamespace)
 {
 	if (IsA(n, RangeVar))
 	{
@@ -1069,7 +1066,7 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 			nsitem = transformTableEntry(pstate, rv);
 
 		*top_nsitem = nsitem;
-		*namespace = list_make1(nsitem);
+		*fnamespace = list_make1(nsitem);
 		rtr = makeNode(RangeTblRef);
 		rtr->rtindex = nsitem->p_rtindex;
 		return (Node *) rtr;
@@ -1082,7 +1079,7 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 
 		nsitem = transformRangeSubselect(pstate, (RangeSubselect *) n);
 		*top_nsitem = nsitem;
-		*namespace = list_make1(nsitem);
+		*fnamespace = list_make1(nsitem);
 		rtr = makeNode(RangeTblRef);
 		rtr->rtindex = nsitem->p_rtindex;
 		return (Node *) rtr;
@@ -1095,7 +1092,7 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 
 		nsitem = transformRangeFunction(pstate, (RangeFunction *) n);
 		*top_nsitem = nsitem;
-		*namespace = list_make1(nsitem);
+		*fnamespace = list_make1(nsitem);
 		rtr = makeNode(RangeTblRef);
 		rtr->rtindex = nsitem->p_rtindex;
 		return (Node *) rtr;
@@ -1108,7 +1105,7 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 
 		nsitem = transformRangeTableFunc(pstate, (RangeTableFunc *) n);
 		*top_nsitem = nsitem;
-		*namespace = list_make1(nsitem);
+		*fnamespace = list_make1(nsitem);
 		rtr = makeNode(RangeTblRef);
 		rtr->rtindex = nsitem->p_rtindex;
 		return (Node *) rtr;
@@ -1122,7 +1119,7 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 
 		/* Recursively transform the contained relation */
 		rel = transformFromClauseItem(pstate, rts->relation,
-									  top_nsitem, namespace);
+									  top_nsitem, fnamespace);
 		rte = (*top_nsitem)->p_rte;
 		/* We only support this on plain relations and matviews */
 		if (rte->rtekind != RTE_RELATION ||
@@ -1550,7 +1547,7 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 		nsitem->p_lateral_ok = true;
 
 		*top_nsitem = nsitem;
-		*namespace = lappend(my_namespace, nsitem);
+		*fnamespace = lappend(my_namespace, nsitem);
 
 		return (Node *) j;
 	}

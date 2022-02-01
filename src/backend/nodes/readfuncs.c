@@ -283,6 +283,8 @@ _readQuery(void)
 	READ_NODE_FIELD(setOperations);
 	READ_NODE_FIELD(constraintDeps);
 	READ_NODE_FIELD(withCheckOptions);
+	READ_NODE_FIELD(mergeActionList);
+	READ_BOOL_FIELD(mergeUseOuterJoin);
 	READ_LOCATION_FIELD(stmt_location);
 	READ_INT_FIELD(stmt_len);
 
@@ -1390,6 +1392,24 @@ _readOnConflictExpr(void)
 }
 
 /*
+ * _readMergeAction
+ */
+static MergeAction *
+_readMergeAction(void)
+{
+	READ_LOCALS(MergeAction);
+
+	READ_BOOL_FIELD(matched);
+	READ_ENUM_FIELD(commandType, CmdType);
+	READ_ENUM_FIELD(override, OverridingKind);
+	READ_NODE_FIELD(qual);
+	READ_NODE_FIELD(targetList);
+	READ_NODE_FIELD(updateColnos);
+
+	READ_DONE();
+}
+
+/*
  *	Stuff from pathnodes.h.
  *
  * Mostly we don't need to read planner nodes back in again, but some
@@ -1700,6 +1720,26 @@ _readModifyTable(void)
 	READ_NODE_FIELD(onConflictWhere);
 	READ_UINT_FIELD(exclRelRTI);
 	READ_NODE_FIELD(exclRelTlist);
+	READ_NODE_FIELD(mergeActionLists);
+
+	READ_DONE();
+}
+
+/*
+ * _readMergeWhenClause
+ */
+static MergeWhenClause *
+_readMergeWhenClause(void)
+{
+	READ_LOCALS(MergeWhenClause);
+
+	READ_BOOL_FIELD(matched);
+	READ_ENUM_FIELD(commandType, CmdType);
+	READ_NODE_FIELD(condition);
+	READ_NODE_FIELD(targetList);
+	READ_NODE_FIELD(cols);
+	READ_NODE_FIELD(values);
+	READ_ENUM_FIELD(override, OverridingKind);
 
 	READ_DONE();
 }
@@ -2844,6 +2884,8 @@ parseNodeString(void)
 		return_value = _readFromExpr();
 	else if (MATCH("ONCONFLICTEXPR", 14))
 		return_value = _readOnConflictExpr();
+	else if (MATCH("MERGEACTION", 11))
+		return_value = _readMergeAction();
 	else if (MATCH("APPENDRELINFO", 13))
 		return_value = _readAppendRelInfo();
 	else if (MATCH("RANGETBLENTRY", 13))
@@ -2868,6 +2910,8 @@ parseNodeString(void)
 		return_value = _readProjectSet();
 	else if (MATCH("MODIFYTABLE", 11))
 		return_value = _readModifyTable();
+	else if (MATCH("MERGEWHENCLAUSE", 15))
+		return_value = _readMergeWhenClause();
 	else if (MATCH("APPEND", 6))
 		return_value = _readAppend();
 	else if (MATCH("MERGEAPPEND", 11))

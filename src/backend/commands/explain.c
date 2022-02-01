@@ -1182,6 +1182,9 @@ ExplainNode(PlanState *planstate, List *ancestors,
 				case CMD_DELETE:
 					pname = operation = "Delete";
 					break;
+				case CMD_MERGE:
+					pname = operation = "Merge";
+					break;
 				default:
 					pname = "???";
 					break;
@@ -3871,6 +3874,11 @@ show_modifytable_info(ModifyTableState *mtstate, List *ancestors,
 			operation = "Delete";
 			foperation = "Foreign Delete";
 			break;
+		case CMD_MERGE:
+			operation = "Merge";
+			/* XXX unsupported for now, but avoid compiler noise */
+			foperation = "Foreign Merge";
+			break;
 		default:
 			operation = "???";
 			foperation = "Foreign ???";
@@ -3991,6 +3999,33 @@ show_modifytable_info(ModifyTableState *mtstate, List *ancestors,
 								 insert_path, 0, es);
 			ExplainPropertyFloat("Conflicting Tuples", NULL,
 								 other_path, 0, es);
+		}
+	}
+	else if (node->operation == CMD_MERGE)
+	{
+		/* EXPLAIN ANALYZE display of actual outcome for each tuple proposed */
+		if (es->analyze && mtstate->ps.instrument)
+		{
+			double		total;
+			double		insert_path;
+			double		update_path;
+			double		delete_path;
+			double		skipped_path;
+
+			InstrEndLoop(outerPlanState(mtstate)->instrument);
+
+			/* count the number of source rows */
+			total = outerPlanState(mtstate)->instrument->ntuples;
+			insert_path = mtstate->ps.instrument->nfiltered1;
+			update_path = mtstate->ps.instrument->nfiltered2;
+			delete_path = mtstate->ps.instrument->nfiltered3;
+			skipped_path = total - insert_path - update_path - delete_path;
+			Assert(skipped_path >= 0);
+
+			ExplainPropertyFloat("Tuples Inserted", NULL, insert_path, 0, es);
+			ExplainPropertyFloat("Tuples Updated", NULL, update_path, 0, es);
+			ExplainPropertyFloat("Tuples Deleted", NULL, delete_path, 0, es);
+			ExplainPropertyFloat("Tuples Skipped", NULL, skipped_path, 0, es);
 		}
 	}
 

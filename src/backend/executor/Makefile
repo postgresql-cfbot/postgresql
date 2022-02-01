@@ -22,6 +22,7 @@ OBJS = \
 	execIndexing.o \
 	execJunk.o \
 	execMain.o \
+	execMerge.o \
 	execParallel.o \
 	execPartition.o \
 	execProcnode.o \

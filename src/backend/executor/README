@@ -41,6 +41,19 @@ be used for other table types.)  For DELETE, the plan tree need only deliver
 junk row-identity column(s), and the ModifyTable node visits each of those
 rows and marks the row deleted.
 
+MERGE runs one generic plan that returns candidate change rows. Each row
+consists of the output of the data-source table or query, plus CTID and
+(if the target table is partitioned) TABLEOID junk columns.  If the target
+table contains a matching row, the CTID junk column identifies the matching
+tuple and we evaluate WHEN MATCHED actions. If a matching tuple is not
+found, then CTID column is NULL and we evaluate WHEN NOT MATCHED actions.
+Once we know which action to execute, we form the final result row and
+apply only those changes.  If WHEN MATCHED returns a row that is concurrently
+updated or deleted, EvalPlanQual (see below) is used to find the latest
+version of the row, and that is re-fetched; if it exists, the search for a
+WHEN MATCHED clause to use starts at the top.  If it doesn't, then WHEN NOT
+MATCHED actions are evaluated.
+
 XXX a great deal more documentation needs to be written here...
 
 

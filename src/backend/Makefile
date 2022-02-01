@@ -144,10 +144,14 @@ submake-catalog-headers:
 	$(MAKE) -C catalog distprep generated-header-symlinks
 
 # run this unconditionally to avoid needing to know its dependencies here:
+submake-nodes-headers:
+	$(MAKE) -C nodes distprep generated-header-symlinks
+
+# run this unconditionally to avoid needing to know its dependencies here:
 submake-utils-headers:
 	$(MAKE) -C utils distprep generated-header-symlinks
 
-.PHONY: submake-catalog-headers submake-utils-headers
+.PHONY: submake-catalog-headers submake-nodes-headers submake-utils-headers
 
 # Make symlinks for these headers in the include directory. That way
 # we can cut down on the -I options. Also, a symlink is automatically
@@ -162,7 +166,7 @@ submake-utils-headers:
 
 .PHONY: generated-headers
 
-generated-headers: $(top_builddir)/src/include/parser/gram.h $(top_builddir)/src/include/storage/lwlocknames.h submake-catalog-headers submake-utils-headers
+generated-headers: $(top_builddir)/src/include/parser/gram.h $(top_builddir)/src/include/storage/lwlocknames.h submake-catalog-headers submake-nodes-headers submake-utils-headers
 
 $(top_builddir)/src/include/parser/gram.h: parser/gram.h
 	prereqdir=`cd '$(dir $<)' >/dev/null && pwd` && \

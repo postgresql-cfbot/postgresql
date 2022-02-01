@@ -31,11 +31,10 @@
 
 #include "lib/stringinfo.h"
 #include "miscadmin.h"
-#include "nodes/extensible.h"
-#include "nodes/pathnodes.h"
-#include "nodes/plannodes.h"
+#include "nodes/bitmapset.h"
+#include "nodes/nodes.h"
+#include "nodes/pg_list.h"
 #include "utils/datum.h"
-#include "utils/rel.h"
 
 static void outChar(StringInfo str, char c);
 
@@ -295,6 +294,9 @@ outDatum(StringInfo str, Datum value, int typlen, bool typbyval)
 }
 
 
+#include "outfuncs.inc1.c"
+
+#ifdef OBSOLETE
 /*
  *	Stuff from plannodes.h
  */
@@ -1136,6 +1138,7 @@ _outVar(StringInfo str, const Var *node)
 	WRITE_INT_FIELD(varattnosyn);
 	WRITE_LOCATION_FIELD(location);
 }
+#endif /*OBSOLETE*/
 
 static void
 _outConst(StringInfo str, const Const *node)
@@ -1157,6 +1160,7 @@ _outConst(StringInfo str, const Const *node)
 		outDatum(str, node->constvalue, node->constlen, node->constbyval);
 }
 
+#ifdef OBSOLETE
 static void
 _outParam(StringInfo str, const Param *node)
 {
@@ -1327,6 +1331,7 @@ _outScalarArrayOpExpr(StringInfo str, const ScalarArrayOpExpr *node)
 	WRITE_NODE_FIELD(args);
 	WRITE_LOCATION_FIELD(location);
 }
+#endif /*OBSOLETE*/
 
 static void
 _outBoolExpr(StringInfo str, const BoolExpr *node)
@@ -1355,6 +1360,7 @@ _outBoolExpr(StringInfo str, const BoolExpr *node)
 	WRITE_LOCATION_FIELD(location);
 }
 
+#ifdef OBSOLETE
 static void
 _outSubLink(StringInfo str, const SubLink *node)
 {
@@ -2675,6 +2681,7 @@ _outPlannerParamItem(StringInfo str, const PlannerParamItem *node)
 	WRITE_NODE_FIELD(item);
 	WRITE_INT_FIELD(paramId);
 }
+#endif /*OBSOLETE*/
 
 /*****************************************************************************
  *
@@ -2697,6 +2704,7 @@ _outExtensibleNode(StringInfo str, const ExtensibleNode *node)
 	methods->nodeOut(str, node);
 }
 
+#ifdef OBSOLETE
 /*****************************************************************************
  *
  *	Stuff from parsenodes.h.
@@ -3029,6 +3037,7 @@ _outStatsElem(StringInfo str, const StatsElem *node)
 	WRITE_STRING_FIELD(name);
 	WRITE_NODE_FIELD(expr);
 }
+#endif /*OBSOLETE*/
 
 static void
 _outQuery(StringInfo str, const Query *node)
@@ -3101,6 +3110,7 @@ _outQuery(StringInfo str, const Query *node)
 	WRITE_INT_FIELD(stmt_len);
 }
 
+#ifdef OBSOLETE
 static void
 _outWithCheckOption(StringInfo str, const WithCheckOption *node)
 {
@@ -3239,6 +3249,7 @@ _outSetOperationStmt(StringInfo str, const SetOperationStmt *node)
 	WRITE_NODE_FIELD(colCollations);
 	WRITE_NODE_FIELD(groupClauses);
 }
+#endif /*OBSOLETE*/
 
 static void
 _outRangeTblEntry(StringInfo str, const RangeTblEntry *node)
@@ -3319,6 +3330,7 @@ _outRangeTblEntry(StringInfo str, const RangeTblEntry *node)
 	WRITE_NODE_FIELD(securityQuals);
 }
 
+#ifdef OBSOLETE
 static void
 _outRangeTblFunction(StringInfo str, const RangeTblFunction *node)
 {
@@ -3342,6 +3354,7 @@ _outTableSampleClause(StringInfo str, const TableSampleClause *node)
 	WRITE_NODE_FIELD(args);
 	WRITE_NODE_FIELD(repeatable);
 }
+#endif /*OBSOLETE*/
 
 static void
 _outA_Expr(StringInfo str, const A_Expr *node)
@@ -3460,6 +3473,7 @@ _outBitString(StringInfo str, const BitString *node)
 	appendStringInfoString(str, node->bsval);
 }
 
+#ifdef OBSOLETE
 static void
 _outColumnRef(StringInfo str, const ColumnRef *node)
 {
@@ -3491,6 +3505,7 @@ _outRawStmt(StringInfo str, const RawStmt *node)
 	WRITE_LOCATION_FIELD(stmt_location);
 	WRITE_INT_FIELD(stmt_len);
 }
+#endif /*OBSOLETE*/
 
 static void
 _outA_Const(StringInfo str, const A_Const *node)
@@ -3507,6 +3522,7 @@ _outA_Const(StringInfo str, const A_Const *node)
 	WRITE_LOCATION_FIELD(location);
 }
 
+#ifdef OBSOLETE
 static void
 _outA_Star(StringInfo str, const A_Star *node)
 {
@@ -3651,6 +3667,7 @@ _outRangeTableFuncCol(StringInfo str, const RangeTableFuncCol *node)
 	WRITE_NODE_FIELD(coldefexpr);
 	WRITE_LOCATION_FIELD(location);
 }
+#endif /*OBSOLETE*/
 
 static void
 _outConstraint(StringInfo str, const Constraint *node)
@@ -3772,6 +3789,7 @@ _outConstraint(StringInfo str, const Constraint *node)
 	}
 }
 
+#ifdef OBSOLETE
 static void
 _outForeignKeyCacheInfo(StringInfo str, const ForeignKeyCacheInfo *node)
 {
@@ -3832,6 +3850,7 @@ _outPartitionRangeDatum(StringInfo str, const PartitionRangeDatum *node)
 	WRITE_NODE_FIELD(value);
 	WRITE_LOCATION_FIELD(location);
 }
+#endif /*OBSOLETE*/
 
 /*
  * outNode -
@@ -3863,6 +3882,8 @@ outNode(StringInfo str, const void *obj)
 		appendStringInfoChar(str, '{');
 		switch (nodeTag(obj))
 		{
+#include "outfuncs.inc2.c"
+#ifdef OBSOLETE
 			case T_PlannedStmt:
 				_outPlannedStmt(str, obj);
 				break;
@@ -4535,6 +4556,7 @@ outNode(StringInfo str, const void *obj)
 			case T_PartitionRangeDatum:
 				_outPartitionRangeDatum(str, obj);
 				break;
+#endif /*OBSOLETE*/
 
 			default:
 

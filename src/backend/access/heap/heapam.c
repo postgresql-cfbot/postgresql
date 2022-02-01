@@ -6087,12 +6087,24 @@ heap_inplace_update(Relation relation, HeapTuple tuple)
  * FRM_RETURN_IS_MULTI
  *		The return value is a new MultiXactId to set as new Xmax.
  *		(caller must obtain proper infomask bits using GetMultiXactIdHintBits)
+ *
+ * "NewRelfrozenxid" is an output value; it's used to maintain target new
+ * relfrozenxid for the relation.  It can be ignored unless "flags" contains
+ * either FRM_NOOP or FRM_RETURN_IS_MULTI, because we only handle multiXacts
+ * here.  This follows the general convention: only track XIDs that will still
+ * be in the table after the ongoing VACUUM finishes.  Note that it's up to
+ * caller to maintain this when the Xid return value is itself an Xid.
+ *
+ * Note that we cannot depend on xmin to maintain NewRelfrozenxid.  We need to
+ * push maintenance of NewRelfrozenxid down this far, since in general xmin
+ * might have been frozen by an earlier VACUUM operation, in which case our
+ * caller will not have factored-in xmin when maintaining NewRelfrozenxid.
  */
 static TransactionId
 FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
 				  TransactionId relfrozenxid, TransactionId relminmxid,
 				  TransactionId cutoff_xid, MultiXactId cutoff_multi,
-				  uint16 *flags)
+				  uint16 *flags, TransactionId *NewRelfrozenxid)
 {
 	TransactionId xid = InvalidTransactionId;
 	int			i;
@@ -6104,6 +6116,7 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
 	bool		has_lockers;
 	TransactionId update_xid;
 	bool		update_committed;
+	TransactionId tempNewRelfrozenxid;
 
 	*flags = 0;
 
@@ -6198,13 +6211,13 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
 
 	/* is there anything older than the cutoff? */
 	need_replace = false;
+	tempNewRelfrozenxid = *NewRelfrozenxid;
 	for (i = 0; i < nmembers; i++)
 	{
 		if (TransactionIdPrecedes(members[i].xid, cutoff_xid))
-		{
 			need_replace = true;
-			break;
-		}
+		if (TransactionIdPrecedes(members[i].xid, tempNewRelfrozenxid))
+			tempNewRelfrozenxid = members[i].xid;
 	}
 
 	/*
@@ -6213,6 +6226,7 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
 	 */
 	if (!need_replace)
 	{
+		*NewRelfrozenxid = tempNewRelfrozenxid;
 		*flags |= FRM_NOOP;
 		pfree(members);
 		return InvalidTransactionId;
@@ -6222,6 +6236,7 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
 	 * If the multi needs to be updated, figure out which members do we need
 	 * to keep.
 	 */
+	tempNewRelfrozenxid = *NewRelfrozenxid;
 	nnewmembers = 0;
 	newmembers = palloc(sizeof(MultiXactMember) * nmembers);
 	has_lockers = false;
@@ -6303,7 +6318,11 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
 			 * list.)
 			 */
 			if (TransactionIdIsValid(update_xid))
+			{
 				newmembers[nnewmembers++] = members[i];
+				if (TransactionIdPrecedes(members[i].xid, tempNewRelfrozenxid))
+					tempNewRelfrozenxid = members[i].xid;
+			}
 		}
 		else
 		{
@@ -6313,6 +6332,7 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
 			{
 				/* running locker cannot possibly be older than the cutoff */
 				Assert(!TransactionIdPrecedes(members[i].xid, cutoff_xid));
+				Assert(!TransactionIdPrecedes(members[i].xid, *NewRelfrozenxid));
 				newmembers[nnewmembers++] = members[i];
 				has_lockers = true;
 			}
@@ -6341,6 +6361,7 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
 		if (update_committed)
 			*flags |= FRM_MARK_COMMITTED;
 		xid = update_xid;
+		/* Caller manages NewRelfrozenxid directly when we return an XID */
 	}
 	else
 	{
@@ -6350,6 +6371,7 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
 		 */
 		xid = MultiXactIdCreateFromMembers(nnewmembers, newmembers);
 		*flags |= FRM_RETURN_IS_MULTI;
+		*NewRelfrozenxid = tempNewRelfrozenxid;
 	}
 
 	pfree(newmembers);
@@ -6367,6 +6389,13 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
  * is to be changed.  In addition, set *totally_frozen_p to true if the tuple
  * will be totally frozen after these operations are performed and false if
  * more freezing will eventually be required.
+ *
+ * Also maintains *NewRelfrozenxid and *NewRelminmxid, which are the current
+ * target relfrozenxid and relminmxid for the relation.  Assumption is that
+ * caller will actually go on to freeze as indicated by our *frz output, so
+ * any (xmin, xmax, xvac) XIDs that we indicate need to be frozen won't need
+ * to be counted here.  Values are valid lower bounds at the point that the
+ * ongoing VACUUM finishes.
  *
  * Caller is responsible for setting the offset field, if appropriate.
  *
@@ -6392,7 +6421,9 @@ bool
 heap_prepare_freeze_tuple(HeapTupleHeader tuple,
 						  TransactionId relfrozenxid, TransactionId relminmxid,
 						  TransactionId cutoff_xid, TransactionId cutoff_multi,
-						  xl_heap_freeze_tuple *frz, bool *totally_frozen_p)
+						  xl_heap_freeze_tuple *frz, bool *totally_frozen_p,
+						  TransactionId *NewRelfrozenxid,
+						  MultiXactId *NewRelminmxid)
 {
 	bool		changed = false;
 	bool		xmax_already_frozen = false;
@@ -6436,6 +6467,11 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
 			frz->t_infomask |= HEAP_XMIN_FROZEN;
 			changed = true;
 		}
+		else if (TransactionIdPrecedes(xid, *NewRelfrozenxid))
+		{
+			/* won't be frozen, but older than current NewRelfrozenxid */
+			*NewRelfrozenxid = xid;
+		}
 	}
 
 	/*
@@ -6453,10 +6489,11 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
 	{
 		TransactionId newxmax;
 		uint16		flags;
+		TransactionId temp = *NewRelfrozenxid;
 
 		newxmax = FreezeMultiXactId(xid, tuple->t_infomask,
 									relfrozenxid, relminmxid,
-									cutoff_xid, cutoff_multi, &flags);
+									cutoff_xid, cutoff_multi, &flags, &temp);
 
 		freeze_xmax = (flags & FRM_INVALIDATE_XMAX);
 
@@ -6474,6 +6511,24 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
 			if (flags & FRM_MARK_COMMITTED)
 				frz->t_infomask |= HEAP_XMAX_COMMITTED;
 			changed = true;
+
+			if (TransactionIdPrecedes(newxmax, *NewRelfrozenxid))
+			{
+				/* New xmax is an XID older than new NewRelfrozenxid */
+				*NewRelfrozenxid = newxmax;
+			}
+		}
+		else if (flags & FRM_NOOP)
+		{
+			/*
+			 * Changing nothing, so might have to ratchet back NewRelminmxid,
+			 * NewRelfrozenxid, or both together
+			 */
+			if (MultiXactIdIsValid(xid) &&
+				MultiXactIdPrecedes(xid, *NewRelminmxid))
+				*NewRelminmxid = xid;
+			if (TransactionIdPrecedes(temp, *NewRelfrozenxid))
+				*NewRelfrozenxid = temp;
 		}
 		else if (flags & FRM_RETURN_IS_MULTI)
 		{
@@ -6495,6 +6550,13 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
 			frz->xmax = newxmax;
 
 			changed = true;
+
+			/*
+			 * New multixact might have remaining XID older than
+			 * NewRelfrozenxid
+			 */
+			if (TransactionIdPrecedes(temp, *NewRelfrozenxid))
+				*NewRelfrozenxid = temp;
 		}
 	}
 	else if (TransactionIdIsNormal(xid))
@@ -6522,7 +6584,14 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
 			freeze_xmax = true;
 		}
 		else
+		{
 			freeze_xmax = false;
+			if (TransactionIdPrecedes(xid, *NewRelfrozenxid))
+			{
+				/* won't be frozen, but older than current NewRelfrozenxid */
+				*NewRelfrozenxid = xid;
+			}
+		}
 	}
 	else if ((tuple->t_infomask & HEAP_XMAX_INVALID) ||
 			 !TransactionIdIsValid(HeapTupleHeaderGetRawXmax(tuple)))
@@ -6569,6 +6638,9 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
 		 * was removed in PostgreSQL 9.0.  Note that if we were to respect
 		 * cutoff_xid here, we'd need to make surely to clear totally_frozen
 		 * when we skipped freezing on that basis.
+		 *
+		 * Since we always freeze here, NewRelfrozenxid doesn't need to be
+		 * maintained.
 		 */
 		if (TransactionIdIsNormal(xid))
 		{
@@ -6646,11 +6718,14 @@ heap_freeze_tuple(HeapTupleHeader tuple,
 	xl_heap_freeze_tuple frz;
 	bool		do_freeze;
 	bool		tuple_totally_frozen;
+	TransactionId NewRelfrozenxid = FirstNormalTransactionId;
+	MultiXactId NewRelminmxid = FirstMultiXactId;
 
 	do_freeze = heap_prepare_freeze_tuple(tuple,
 										  relfrozenxid, relminmxid,
 										  cutoff_xid, cutoff_multi,
-										  &frz, &tuple_totally_frozen);
+										  &frz, &tuple_totally_frozen,
+										  &NewRelfrozenxid, &NewRelminmxid);
 
 	/*
 	 * Note that because this is not a WAL-logged operation, we don't need to
@@ -7080,6 +7155,15 @@ heap_tuple_needs_eventual_freeze(HeapTupleHeader tuple)
  * Check to see whether any of the XID fields of a tuple (xmin, xmax, xvac)
  * are older than the specified cutoff XID or MultiXactId.  If so, return true.
  *
+ * Also maintains *NewRelfrozenxid and *NewRelminmxid, which are the current
+ * target relfrozenxid and relminmxid for the relation.  Assumption is that
+ * caller will never freeze any of the XIDs from the tuple, even when we say
+ * that they should.  If caller opts to go with our recommendation to freeze,
+ * then it must account for the fact that it shouldn't trust how we've set
+ * NewRelfrozenxid/NewRelminmxid.  (In practice aggressive VACUUMs always take
+ * our recommendation because they must, and non-aggressive VACUUMs always opt
+ * to not freeze, preferring to ratchet back NewRelfrozenxid instead).
+ *
  * It doesn't matter whether the tuple is alive or dead, we are checking
  * to see if a tuple needs to be removed or frozen to avoid wraparound.
  *
@@ -7088,74 +7172,86 @@ heap_tuple_needs_eventual_freeze(HeapTupleHeader tuple)
  */
 bool
 heap_tuple_needs_freeze(HeapTupleHeader tuple, TransactionId cutoff_xid,
-						MultiXactId cutoff_multi, Buffer buf)
+						MultiXactId cutoff_multi,
+						TransactionId *NewRelfrozenxid,
+						MultiXactId *NewRelminmxid, Buffer buf)
 {
 	TransactionId xid;
+	bool		needs_freeze = false;
 
 	xid = HeapTupleHeaderGetXmin(tuple);
-	if (TransactionIdIsNormal(xid) &&
-		TransactionIdPrecedes(xid, cutoff_xid))
-		return true;
+	if (TransactionIdIsNormal(xid))
+	{
+		if (TransactionIdPrecedes(xid, *NewRelfrozenxid))
+			*NewRelfrozenxid = xid;
+		if (TransactionIdPrecedes(xid, cutoff_xid))
+			needs_freeze = true;
+	}
 
 	/*
 	 * The considerations for multixacts are complicated; look at
 	 * heap_prepare_freeze_tuple for justifications.  This routine had better
 	 * be in sync with that one!
+	 *
+	 * (Actually, we maintain NewRelminmxid differently here, because we
+	 * assume that XIDs that should be frozen according to cutoff_xid won't
+	 * be, whereas heap_prepare_freeze_tuple makes the opposite assumption.)
 	 */
 	if (tuple->t_infomask & HEAP_XMAX_IS_MULTI)
 	{
 		MultiXactId multi;
+		MultiXactMember *members;
+		int			nmembers;
 
 		multi = HeapTupleHeaderGetRawXmax(tuple);
-		if (!MultiXactIdIsValid(multi))
-		{
-			/* no xmax set, ignore */
-			;
-		}
-		else if (HEAP_LOCKED_UPGRADED(tuple->t_infomask))
+		if (MultiXactIdIsValid(multi) &&
+			MultiXactIdPrecedes(multi, *NewRelminmxid))
+			*NewRelminmxid = multi;
+
+		if (HEAP_LOCKED_UPGRADED(tuple->t_infomask))
 			return true;
 		else if (MultiXactIdPrecedes(multi, cutoff_multi))
-			return true;
-		else
+			needs_freeze = true;
+
+		/* need to check whether any member of the mxact is too old */
+		nmembers = GetMultiXactIdMembers(multi, &members, false,
+										 HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_infomask));
+
+		for (int i = 0; i < nmembers; i++)
 		{
-			MultiXactMember *members;
-			int			nmembers;
-			int			i;
-
-			/* need to check whether any member of the mxact is too old */
-
-			nmembers = GetMultiXactIdMembers(multi, &members, false,
-											 HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_infomask));
-
-			for (i = 0; i < nmembers; i++)
-			{
-				if (TransactionIdPrecedes(members[i].xid, cutoff_xid))
-				{
-					pfree(members);
-					return true;
-				}
-			}
-			if (nmembers > 0)
-				pfree(members);
+			if (TransactionIdPrecedes(members[i].xid, cutoff_xid))
+				needs_freeze = true;
+			if (TransactionIdPrecedes(members[i].xid, *NewRelfrozenxid))
+				*NewRelfrozenxid = xid;
 		}
+		if (nmembers > 0)
+			pfree(members);
 	}
 	else
 	{
 		xid = HeapTupleHeaderGetRawXmax(tuple);
-		if (TransactionIdIsNormal(xid) &&
-			TransactionIdPrecedes(xid, cutoff_xid))
-			return true;
+		if (TransactionIdIsNormal(xid))
+		{
+			if (TransactionIdPrecedes(xid, *NewRelfrozenxid))
+				*NewRelfrozenxid = xid;
+			if (TransactionIdPrecedes(xid, cutoff_xid))
+				needs_freeze = true;
+		}
 	}
 
 	if (tuple->t_infomask & HEAP_MOVED)
 	{
 		xid = HeapTupleHeaderGetXvac(tuple);
-		if (TransactionIdIsNormal(xid) &&
-			TransactionIdPrecedes(xid, cutoff_xid))
-			return true;
+		if (TransactionIdIsNormal(xid))
+		{
+			if (TransactionIdPrecedes(xid, *NewRelfrozenxid))
+				*NewRelfrozenxid = xid;
+			if (TransactionIdPrecedes(xid, cutoff_xid))
+				needs_freeze = true;
+		}
 	}
 
-	return false;
+	return needs_freeze;
 }
 
 /*

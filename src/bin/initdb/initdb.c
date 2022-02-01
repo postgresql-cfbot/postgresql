@@ -1173,6 +1173,12 @@ setup_config(void)
 							  repltok);
 #endif
 
+#ifdef USE_LIBPMEM
+	conflines = replace_token(conflines,
+							  "#wal_pmem_map = off",
+							  "wal_pmem_map = on");
+#endif
+
 #ifndef USE_PREFETCH
 	conflines = replace_token(conflines,
 							  "#effective_io_concurrency = 1",

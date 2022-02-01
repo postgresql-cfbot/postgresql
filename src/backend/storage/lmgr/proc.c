@@ -832,7 +832,7 @@ ProcKill(int code, Datum arg)
 
 	/* Make sure active replication slots are released */
 	if (MyReplicationSlot != NULL)
-		ReplicationSlotRelease();
+		ReplicationSlotRelease(true);
 
 	/* Also cleanup all the temporary slots. */
 	ReplicationSlotCleanup();

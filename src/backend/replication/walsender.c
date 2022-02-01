@@ -304,7 +304,7 @@ WalSndErrorCleanup(void)
 		wal_segment_close(xlogreader);
 
 	if (MyReplicationSlot != NULL)
-		ReplicationSlotRelease();
+		ReplicationSlotRelease(true);
 
 	ReplicationSlotCleanup();
 
@@ -695,7 +695,7 @@ StartReplication(StartReplicationCmd *cmd)
 
 	if (cmd->slotname)
 	{
-		ReplicationSlotAcquire(cmd->slotname, true);
+		ReplicationSlotAcquire(cmd->slotname, true, true);
 		if (SlotIsLogical(MyReplicationSlot))
 			ereport(ERROR,
 					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
@@ -841,7 +841,7 @@ StartReplication(StartReplicationCmd *cmd)
 	}
 
 	if (cmd->slotname)
-		ReplicationSlotRelease();
+		ReplicationSlotRelease(true);
 
 	/*
 	 * Copy is finished now. Send a single-row result set indicating the next
@@ -1220,7 +1220,7 @@ CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 	do_tup_output(tstate, values, nulls);
 	end_tup_output(tstate);
 
-	ReplicationSlotRelease();
+	ReplicationSlotRelease(false);
 }
 
 /*
@@ -1247,7 +1247,7 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 
 	Assert(!MyReplicationSlot);
 
-	ReplicationSlotAcquire(cmd->slotname, true);
+	ReplicationSlotAcquire(cmd->slotname, true, true);
 
 	if (XLogRecPtrIsInvalid(MyReplicationSlot->data.restart_lsn))
 		ereport(ERROR,
@@ -1316,7 +1316,7 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 	WalSndLoop(XLogSendLogical);
 
 	FreeDecodingContext(logical_decoding_ctx);
-	ReplicationSlotRelease();
+	ReplicationSlotRelease(true);
 
 	replication_active = false;
 	if (got_STOPPING)

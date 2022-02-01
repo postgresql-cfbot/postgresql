@@ -15,6 +15,8 @@
 #define QUERYJUBLE_H
 
 #include "nodes/parsenodes.h"
+#include "nodes/nodeFuncs.h"
+#include "optimizer/optimizer.h"
 
 #define JUMBLE_SIZE				1024	/* query serialization buffer size */
 
@@ -25,6 +27,8 @@ typedef struct LocationLen
 {
 	int			location;		/* start offset in query text */
 	int			length;			/* length in bytes, or -1 to ignore */
+	bool		merged;			/* whether or not the location was marked as
+								   duplicate */
 } LocationLen;
 
 /*
@@ -39,7 +43,10 @@ typedef struct JumbleState
 	/* Number of bytes used in jumble[] */
 	Size		jumble_len;
 
-	/* Array of locations of constants that should be removed */
+	/*
+	 * Array of locations of constants that should be removed, or parameters
+	 * that are already replaced, but could be also processed to be merged
+	 */
 	LocationLen *clocations;
 
 	/* Allocated length of clocations array */
@@ -62,7 +69,7 @@ enum ComputeQueryIdType
 
 /* GUC parameters */
 extern int	compute_query_id;
-
+extern int  const_merge_threshold;
 
 extern const char *CleanQuerytext(const char *query, int *location, int *len);
 extern JumbleState *JumbleQuery(Query *query, const char *querytext);

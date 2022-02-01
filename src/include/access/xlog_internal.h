@@ -319,7 +319,7 @@ typedef struct RmgrData
 							  struct XLogRecordBuffer *buf);
 } RmgrData;
 
-extern const RmgrData RmgrTable[];
+extern PGDLLIMPORT const RmgrData RmgrTable[];
 
 /*
  * Exported to support xlog switching from checkpointer

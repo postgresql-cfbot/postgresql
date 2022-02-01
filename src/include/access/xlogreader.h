@@ -276,9 +276,7 @@ extern void XLogReaderFree(XLogReaderState *state);
 
 /* Position the XLogReader to given record */
 extern void XLogBeginRead(XLogReaderState *state, XLogRecPtr RecPtr);
-#ifdef FRONTEND
 extern XLogRecPtr XLogFindNextRecord(XLogReaderState *state, XLogRecPtr RecPtr);
-#endif							/* FRONTEND */
 
 /* Read the next XLog record. Returns NULL on end-of-WAL or failure */
 extern struct XLogRecord *XLogReadRecord(XLogReaderState *state,
@@ -287,6 +285,8 @@ extern struct XLogRecord *XLogReadRecord(XLogReaderState *state,
 /* Validate a page */
 extern bool XLogReaderValidatePageHeader(XLogReaderState *state,
 										 XLogRecPtr recptr, char *phdr);
+
+extern bool IsXLogRecordValid(XLogRecord *record);
 
 /*
  * Error information from WALRead that both backend and frontend caller can

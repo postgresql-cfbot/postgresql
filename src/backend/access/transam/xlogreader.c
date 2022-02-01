@@ -815,6 +815,27 @@ ValidXLogRecord(XLogReaderState *state, XLogRecord *record, XLogRecPtr recptr)
 }
 
 /*
+ * Same as ValidXLogRecord but without XLogReaderState and XLogRecPtr.
+ */
+bool
+IsXLogRecordValid(XLogRecord *record)
+{
+	pg_crc32c	crc;
+
+	/* Calculate the CRC. */
+	INIT_CRC32C(crc);
+	COMP_CRC32C(crc, ((char *) record) + SizeOfXLogRecord, record->xl_tot_len - SizeOfXLogRecord);
+	/* Include the record header last. */
+	COMP_CRC32C(crc, (char *) record, offsetof(XLogRecord, xl_crc));
+	FIN_CRC32C(crc);
+
+	if (!EQ_CRC32C(record->xl_crc, crc))
+		return false;
+
+	return true;
+}
+
+/*
  * Validate a page header.
  *
  * Check if 'phdr' is valid as the header of the XLog page at position
@@ -956,13 +977,6 @@ XLogReaderValidatePageHeader(XLogReaderState *state, XLogRecPtr recptr,
 	return true;
 }
 
-#ifdef FRONTEND
-/*
- * Functions that are currently not needed in the backend, but are better
- * implemented inside xlogreader.c because of the internal facilities available
- * here.
- */
-
 /*
  * Find the first record with an lsn >= RecPtr.
  *
@@ -1079,6 +1093,13 @@ err:
 
 	return InvalidXLogRecPtr;
 }
+
+#ifdef FRONTEND
+/*
+ * Functions that are currently not needed in the backend, but are better
+ * implemented inside xlogreader.c because of the internal facilities available
+ * here.
+ */
 
 #endif							/* FRONTEND */
 

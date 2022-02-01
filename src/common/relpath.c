@@ -40,6 +40,12 @@ const char *const forkNames[] = {
 StaticAssertDecl(lengthof(forkNames) == (MAX_FORKNUM + 1),
 				 "array length mismatch");
 
+const char *const
+get_forkname(ForkNumber num)
+{
+	return forkNames[num];
+}
+
 /*
  * forkname_to_number - look up fork number by name
  *

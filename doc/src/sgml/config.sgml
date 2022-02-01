@@ -9735,6 +9735,25 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-sql-json" xreflabel="sql_json">
+      <term><varname>sql_json</varname> (<type>enum</type>)
+      <indexterm><primary>json</primary></indexterm>
+      <indexterm><primary>jsonb</primary></indexterm>
+      <indexterm>
+       <primary><varname>sql_json</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+         Valid values are <literal>json</literal> and <literal>jsonb</literal>.
+         Specifies what <productname>PostgreSQL</productname> type is used
+         as an implementation of SQL type <type>JSON</type>.
+         When <varname>sql_json</varname> is set to <literal>jsonb</literal>,
+         <productname>PostgreSQL</productname> type <type>json</type> can be
+         accessed using explicit qualification <type>pg_catalog.json</type>.
+       </para>
+      </listitem>
+     </varlistentry>
      </variablelist>
     </sect2>
    </sect1>

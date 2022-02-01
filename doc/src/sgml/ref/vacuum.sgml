@@ -296,6 +296,28 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
    </varlistentry>
 
    <varlistentry>
+    <term><literal>EMERGENCY</literal></term>
+    <listitem>
+     <para>
+      Special vacuum mode intended for when a forced shutdown has happened to avoid transaction ID wraparound.
+      It performs a database-wide vacuum on tables, toast tables, and materialized views whose
+      xid age or mxid age is older than 1 billion. To complete as quickly as possible, an emergency
+      vacuum will skip truncation and index cleanup, and will skip toast tables whose age has not
+      exceeded the cutoff.
+     </para>
+
+     <para>
+      While this option could be used while the postmaster is running, it is expected that the wraparound
+      failsafe mechanism will automatically work in the same way to prevent imminent shutdown.
+      When <literal>EMERGENCY</literal> is specified no tables may be listed, since it is designed to
+      select candidate relations from the entire database.
+      The only other option that may be combined with <literal>VERBOSE</literal>, although in single-user mode no client messages are
+      output.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><replaceable class="parameter">boolean</replaceable></term>
     <listitem>
      <para>

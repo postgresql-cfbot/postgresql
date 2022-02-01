@@ -188,6 +188,7 @@ typedef struct VacAttrStats
 #define VACOPT_SKIP_LOCKED 0x20 /* skip if cannot get lock */
 #define VACOPT_PROCESS_TOAST 0x40	/* process the TOAST table, if any */
 #define VACOPT_DISABLE_PAGE_SKIPPING 0x80	/* don't skip any pages */
+#define VACOPT_EMERGENCY 0x100	/* do minimal freezing work to prevent or get out of shutdown */
 
 /*
  * Values used by index_cleanup and truncate params.
@@ -233,6 +234,10 @@ typedef struct VacuumParams
 	 * disabled.
 	 */
 	int			nworkers;
+
+	/* cutoff ages for selecting tables to vacuum, 0 is the default */
+	int 		min_xid_age;
+	int 		min_mxid_age;
 } VacuumParams;
 
 /*

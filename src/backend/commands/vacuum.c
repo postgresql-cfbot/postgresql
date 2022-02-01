@@ -52,6 +52,7 @@
 #include "storage/proc.h"
 #include "storage/procarray.h"
 #include "utils/acl.h"
+#include "utils/builtins.h"
 #include "utils/fmgroids.h"
 #include "utils/guc.h"
 #include "utils/memutils.h"
@@ -86,7 +87,7 @@ int			VacuumCostBalanceLocal = 0;
 
 /* non-export function prototypes */
 static List *expand_vacuum_rel(VacuumRelation *vrel, int options);
-static List *get_all_vacuum_rels(int options);
+static List *get_all_vacuum_rels(VacuumParams *params);
 static void vac_truncate_clog(TransactionId frozenXID,
 							  MultiXactId minMulti,
 							  TransactionId lastSaneFrozenXid,
@@ -114,6 +115,7 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 	bool		full = false;
 	bool		disable_page_skipping = false;
 	bool		process_toast = true;
+	bool		emergency = false;
 	ListCell   *lc;
 
 	/* index_cleanup and truncate values unspecified for now */
@@ -122,6 +124,10 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 
 	/* By default parallel vacuum is enabled */
 	params.nworkers = 0;
+
+	/* By default don't skip any tables */
+	params.min_xid_age = 0;
+	params.min_mxid_age = 0;
 
 	/* Parse options list */
 	foreach(lc, vacstmt->options)
@@ -200,6 +206,8 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 					params.nworkers = nworkers;
 			}
 		}
+		else if (strcmp(opt->defname, "emergency") == 0)
+			emergency = defGetBoolean(opt);
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -216,7 +224,8 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 		(freeze ? VACOPT_FREEZE : 0) |
 		(full ? VACOPT_FULL : 0) |
 		(disable_page_skipping ? VACOPT_DISABLE_PAGE_SKIPPING : 0) |
-		(process_toast ? VACOPT_PROCESS_TOAST : 0);
+		(process_toast ? VACOPT_PROCESS_TOAST : 0) |
+		(emergency ? VACOPT_EMERGENCY : 0);
 
 	/* sanity checks on options */
 	Assert(params.options & (VACOPT_VACUUM | VACOPT_ANALYZE));
@@ -246,16 +255,69 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 		}
 	}
 
+	if (emergency)
+	{
+		/* exclude incompatible options */
+		foreach(lc, vacstmt->options)
+		{
+			DefElem    *opt = (DefElem *) lfirst(lc);
+
+			if (strcmp(opt->defname, "emergency") != 0 &&
+				strcmp(opt->defname, "verbose") != 0 &&
+				defGetBoolean(opt))
+
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+								errmsg("option \"%s\" is incompatible with EMERGENCY", opt->defname),
+								parser_errposition(pstate, opt->location)));
+		}
+
+		/* prevent specifying a list of tables, to keep it simple */
+		if (vacstmt->rels != NULL)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						errmsg("a relation list is not supported with the EMERGENCY option")));
+
+		/* skip unnecessary work, similar to failsafe mode */
+
+		params.index_cleanup = VACOPTVALUE_DISABLED;
+		params.truncate = VACOPTVALUE_DISABLED;
+
+		/* Hard-code 1 billion for the thresholds to avoid making assumptions
+		* about the configuration. This leaves some headroom for when the user
+		* returns to normal mode while also minimizing work.
+		* WIP: consider passing these constants via the params struct
+		*/
+		// params.min_xid_age = 1000 * 1000 * 1000;
+		// params.min_mxid_age = 1000 * 1000 * 1000;
+		// FIXME to speed up testing
+		params.min_xid_age = 1000 * 1000;
+		params.min_mxid_age = 1000 * 1000;
+	}
+
 	/*
-	 * All freeze ages are zero if the FREEZE option is given; otherwise pass
-	 * them as -1 which means to use the default values.
+	 * Set freeze ages to zero where appropriate; otherwise pass
+	 * them as -1 which means to use the configured values.
 	 */
 	if (params.options & VACOPT_FREEZE)
 	{
+		/* All freeze ages are zero if the FREEZE option is given */
 		params.freeze_min_age = 0;
 		params.freeze_table_age = 0;
 		params.multixact_freeze_min_age = 0;
 		params.multixact_freeze_table_age = 0;
+	}
+	else if (params.options & VACOPT_EMERGENCY)
+	{
+		/* It's highly likely any table selected will be eligible for aggressive vacuum, but make sure */
+		params.freeze_table_age = 0;
+		params.multixact_freeze_table_age = 0;
+
+		// WIP: It might be worth trying to do less work here, such as max age / 2 :
+		// params.freeze_min_age = 100 * 1000 * 1000;
+		// params.multixact_freeze_min_age = 200 * 1000 * 1000;
+		params.freeze_min_age = -1;
+		params.multixact_freeze_min_age = -1;
 	}
 	else
 	{
@@ -404,7 +466,7 @@ vacuum(List *relations, VacuumParams *params,
 		relations = newrels;
 	}
 	else
-		relations = get_all_vacuum_rels(params->options);
+		relations = get_all_vacuum_rels(params);
 
 	/*
 	 * Decide whether we need to start/commit our own transactions.
@@ -461,7 +523,10 @@ vacuum(List *relations, VacuumParams *params,
 		ListCell   *cur;
 
 		in_vacuum = true;
-		VacuumCostActive = (VacuumCostDelay > 0);
+		if (params->VACOPT_EMERGENCY)
+			VacuumCostActive = false;
+		else
+			VacuumCostActive = (VacuumCostDelay > 0);
 		VacuumCostBalance = 0;
 		VacuumPageHit = 0;
 		VacuumPageMiss = 0;
@@ -888,12 +953,14 @@ expand_vacuum_rel(VacuumRelation *vrel, int options)
  * the current database.  The list is built in vac_context.
  */
 static List *
-get_all_vacuum_rels(int options)
+get_all_vacuum_rels(VacuumParams *params)
 {
 	List	   *vacrels = NIL;
 	Relation	pgclass;
 	TableScanDesc scan;
 	HeapTuple	tuple;
+	int32 		table_xid_age,
+				table_mxid_age;
 
 	pgclass = table_open(RelationRelationId, AccessShareLock);
 
@@ -906,15 +973,37 @@ get_all_vacuum_rels(int options)
 		Oid			relid = classForm->oid;
 
 		/* check permissions of relation */
-		if (!vacuum_is_relation_owner(relid, classForm, options))
+		if (!vacuum_is_relation_owner(relid, classForm, params->options))
 			continue;
 
+		if (params->options & VACOPT_EMERGENCY)
+		{
+			/*
+			* Only consider relations able to hold unfrozen XIDs (anything else
+			* should have InvalidTransactionId in relfrozenxid anyway).
+			*/
+			if (classForm->relkind != RELKIND_RELATION &&
+				classForm->relkind != RELKIND_MATVIEW &&
+				classForm->relkind != RELKIND_TOASTVALUE)
+			{
+				Assert(!TransactionIdIsValid(classForm->relfrozenxid));
+				Assert(!MultiXactIdIsValid(classForm->relminmxid));
+				continue;
+			}
+
+			table_xid_age = DirectFunctionCall1(xid_age, classForm->relfrozenxid);
+			table_mxid_age = DirectFunctionCall1(mxid_age, classForm->relminmxid);
+
+			if ((table_xid_age < params->min_xid_age) &&
+				(table_mxid_age < params->min_mxid_age))
+				continue;
+		}
 		/*
 		 * We include partitioned tables here; depending on which operation is
 		 * to be performed, caller will decide whether to process or ignore
 		 * them.
 		 */
-		if (classForm->relkind != RELKIND_RELATION &&
+		else if (classForm->relkind != RELKIND_RELATION &&
 			classForm->relkind != RELKIND_MATVIEW &&
 			classForm->relkind != RELKIND_PARTITIONED_TABLE)
 			continue;

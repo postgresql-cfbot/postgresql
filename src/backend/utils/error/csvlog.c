@@ -27,6 +27,7 @@
 #include "utils/backend_status.h"
 #include "utils/elog.h"
 #include "utils/guc.h"
+#include "utils/json.h"
 #include "utils/ps_status.h"
 
 
@@ -251,6 +252,33 @@ write_csvlog(ErrorData *edata)
 
 	/* query id */
 	appendStringInfo(&buf, "%lld", (long long) pgstat_get_my_query_id());
+
+	appendStringInfoChar(&buf, ',');
+
+	/* tags */
+	if (edata->tags != NIL)
+	{
+		StringInfoData tagbuf;
+		ListCell   *lc;
+		bool            first = true;
+
+		initStringInfo(&tagbuf);
+		appendStringInfoChar(&tagbuf, '{');
+		foreach(lc, edata->tags)
+		{
+			ErrorTag   *etag = lfirst(lc);
+
+			if (!first)
+				appendStringInfoChar(&tagbuf, ',');
+			escape_json(&tagbuf, etag->tagname);
+			appendStringInfoChar(&tagbuf, ':');
+			escape_json(&tagbuf, etag->tagvalue);
+			first = false;
+		}
+		appendStringInfoChar(&tagbuf, '}');
+		appendCSVLiteral(&buf, tagbuf.data);
+		pfree(tagbuf.data);
+	}
 
 	appendStringInfoChar(&buf, '\n');
 

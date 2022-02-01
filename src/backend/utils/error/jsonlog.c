@@ -289,6 +289,32 @@ write_jsonlog(ErrorData *edata)
 	appendJSONKeyValueFmt(&buf, "query_id", false, "%lld",
 						  (long long) pgstat_get_my_query_id());
 
+	/* tags */
+	if (edata->tags != NIL)
+	{
+		StringInfoData tagbuf;
+		ListCell   *lc;
+		bool            first = true;
+
+
+		initStringInfo(&tagbuf);
+		appendStringInfoChar(&tagbuf, '{');
+		foreach(lc, edata->tags)
+		{
+			ErrorTag   *etag = lfirst(lc);
+			if (!first)
+				appendStringInfoChar(&tagbuf, ',');
+			escape_json(&tagbuf, etag->tagname);
+			appendStringInfoChar(&tagbuf, ':');
+			escape_json(&tagbuf, etag->tagvalue);
+			first = false;
+		}
+		appendStringInfoChar(&tagbuf, '}');
+		appendJSONKeyValue(&buf, "tags", tagbuf.data, false);
+		pfree(tagbuf.data);
+	}
+
+
 	/* Finish string */
 	appendStringInfoChar(&buf, '}');
 	appendStringInfoChar(&buf, '\n');

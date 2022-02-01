@@ -309,6 +309,11 @@ CREATE ROLE <replaceable>name</replaceable>;
 GRANT <replaceable>group_role</replaceable> TO <replaceable>role1</replaceable>, ... ;
 REVOKE <replaceable>group_role</replaceable> FROM <replaceable>role1</replaceable>, ... ;
 </synopsis>
+   Role membership can also be granted and revoked within the context of a specific database:
+<synopsis>
+GRANT <replaceable>group_role</replaceable> TO <replaceable>role1</replaceable>, ... IN CURRENT DATABASE;
+REVOKE <replaceable>group_role</replaceable> FROM <replaceable>role1</replaceable>, ... IN DATABASE <replaceable>database_name</replaceable>;
+</synopsis>
    You can grant membership to other group roles, too (since there isn't
    really any distinction between group roles and non-group roles).  The
    database will not let you set up circular membership loops.  Also,
@@ -396,9 +401,6 @@ RESET ROLE;
    <literal>admin</literal> role.  Then a session connecting as role <literal>joe</literal>
    would not have these privileges immediately, only after doing
    <command>SET ROLE admin</command>.
-  </para>
-
-  <para>
   </para>
 
   <para>
@@ -639,7 +641,7 @@ DROP ROLE doomed_role;
   </para>
 
   <para>
-   Administrators can grant access to these roles to users using the
+   Administrators can grant cluster-wide access to these roles to users using the
    <link linkend="sql-grant"><command>GRANT</command></link> command, for example:
 
 <programlisting>
@@ -647,6 +649,14 @@ GRANT pg_signal_backend TO admin_user;
 </programlisting>
   </para>
 
+  <para>
+   Access can also be granted within the context of a specific database,
+   for example:
+
+<programlisting>
+GRANT pg_read_all_data TO reporting_user IN DATABASE sales;
+</programlisting>
+  </para>
  </sect1>
 
  <sect1 id="perm-functions">

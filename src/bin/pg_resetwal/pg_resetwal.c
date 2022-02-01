@@ -85,6 +85,7 @@ static void RewriteControlFile(void);
 static void FindEndOfXLOG(void);
 static void KillExistingXLOG(void);
 static void KillExistingArchiveStatus(void);
+static void KillExistingPreallocatedSegments(void);
 static void WriteEmptyXLOG(void);
 static void usage(void);
 
@@ -530,6 +531,7 @@ main(int argc, char *argv[])
 	RewriteControlFile();
 	KillExistingXLOG();
 	KillExistingArchiveStatus();
+	KillExistingPreallocatedSegments();
 	WriteEmptyXLOG();
 
 	printf(_("Write-ahead log reset\n"));
@@ -1114,6 +1116,52 @@ KillExistingArchiveStatus(void)
 	if (closedir(xldir))
 	{
 		pg_log_error("could not close directory \"%s\": %m", ARCHSTATDIR);
+		exit(1);
+	}
+}
+
+
+/*
+ * Remove existing preallocated segments
+ */
+static void
+KillExistingPreallocatedSegments(void)
+{
+#define PREALLOCSEGDIR XLOGDIR "/preallocated_segments"
+
+	DIR		   *xldir;
+	struct dirent *xlde;
+	char		path[MAXPGPATH + sizeof(PREALLOCSEGDIR)];
+
+	xldir = opendir(PREALLOCSEGDIR);
+	if (xldir == NULL)
+	{
+		pg_log_error("could not open directory \"%s\": %m", PREALLOCSEGDIR);
+		exit(1);
+	}
+
+	while (errno = 0, (xlde = readdir(xldir)) != NULL)
+	{
+		if (strncmp(xlde->d_name, "xlogtemp", strlen("xlogtemp")) ==  0)
+		{
+			snprintf(path, sizeof(path), "%s/%s", PREALLOCSEGDIR, xlde->d_name);
+			if (unlink(path) < 0)
+			{
+				pg_log_error("could not delete file \"%s\": %m", path);
+				exit(1);
+			}
+		}
+	}
+
+	if (errno)
+	{
+		pg_log_error("could not read directory \"%s\": %m", PREALLOCSEGDIR);
+		exit(1);
+	}
+
+	if (closedir(xldir))
+	{
+		pg_log_error("could not close directory \"%s\": %m", PREALLOCSEGDIR);
 		exit(1);
 	}
 }

@@ -17,8 +17,10 @@
 #include "access/gin_private.h"
 #include "access/ginxlog.h"
 #include "access/xloginsert.h"
+#include "commands/progress.h"
 #include "commands/vacuum.h"
 #include "miscadmin.h"
+#include "pgstat.h"
 #include "postmaster/autovacuum.h"
 #include "storage/indexfsm.h"
 #include "storage/lmgr.h"
@@ -60,6 +62,7 @@ ginVacuumItemPointers(GinVacuumState *gvs, ItemPointerData *items,
 		if (gvs->callback(items + i, gvs->callback_state))
 		{
 			gvs->result->tuples_removed += 1;
+			pgstat_progress_update_param(PROGRESS_VACUUM_TUPLES_REMOVED, gvs->result->tuples_removed);
 			if (!tmpitems)
 			{
 				/*

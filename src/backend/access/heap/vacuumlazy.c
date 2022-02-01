@@ -58,6 +58,7 @@
 #include "postmaster/autovacuum.h"
 #include "storage/bufmgr.h"
 #include "storage/freespace.h"
+#include "storage/ipc.h"
 #include "storage/lmgr.h"
 #include "tcop/tcopprot.h"
 #include "utils/lsyscache.h"
@@ -239,6 +240,25 @@ typedef struct LVSavedErrInfo
 	VacErrPhase phase;
 } LVSavedErrInfo;
 
+/* Structs for tracking shared Progress information
+ * amongst worker ( and leader ) processes of a vacuum.
+ */
+typedef struct VacOneWorkerProgressInfo
+{
+	int                             leader_pid;
+	int                             indexes_processed;
+} VacOneWorkerProgressInfo;
+
+typedef struct VacWorkerProgressInfo
+{
+	int                     num_vacuums;    /* number of active VACUUMS with parallel workers */
+	int                     max_vacuums;    /* max number of VACUUMS with parallel workers */
+	slock_t			mutex;
+	VacOneWorkerProgressInfo vacuums[FLEXIBLE_ARRAY_MEMBER];
+} VacWorkerProgressInfo;
+
+static VacWorkerProgressInfo *vacworkerprogress;
+
 
 /* non-export function prototypes */
 static void lazy_scan_heap(LVRelState *vacrel, VacuumParams *params,
@@ -341,6 +361,7 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 
 	pgstat_progress_start_command(PROGRESS_COMMAND_VACUUM,
 								  RelationGetRelid(rel));
+	pgstat_progress_update_param(PROGRESS_VACUUM_LEADER_PID, MyProcPid);
 
 	vacuum_set_xid_limits(rel,
 						  params->freeze_min_age,
@@ -404,6 +425,10 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 	vacrel->rel = rel;
 	vac_open_indexes(vacrel->rel, RowExclusiveLock, &vacrel->nindexes,
 					 &vacrel->indrels);
+
+	/* Advertise the number of indexes we are vacuuming */
+	pgstat_progress_update_param(PROGRESS_VACUUM_TOTAL_INDEXES, vacrel->nindexes);
+
 	if (instrument && vacrel->nindexes > 0)
 	{
 		/* Copy index names used by instrumentation (not error reporting) */
@@ -2000,20 +2025,33 @@ lazy_vacuum_all_indexes(LVRelState *vacrel)
 		return false;
 	}
 
-	/* Report that we are now vacuuming indexes */
-	pgstat_progress_update_param(PROGRESS_VACUUM_PHASE,
-								 PROGRESS_VACUUM_PHASE_VACUUM_INDEX);
-
 	if (!ParallelVacuumIsActive(vacrel))
 	{
+		/* Report that we are now vacuuming indexes */
+		pgstat_progress_update_param(PROGRESS_VACUUM_PHASE,
+									PROGRESS_VACUUM_PHASE_VACUUM_INDEX);
+
 		for (int idx = 0; idx < vacrel->nindexes; idx++)
 		{
 			Relation	indrel = vacrel->indrels[idx];
 			IndexBulkDeleteResult *istat = vacrel->indstats[idx];
 
+			/* Advertise the index being vacuumed */
+			pgstat_progress_update_param(PROGRESS_VACUUM_INDEXRELID, RelationGetRelid(indrel));
+
 			vacrel->indstats[idx] =
 				lazy_vacuum_one_index(indrel, istat, vacrel->old_live_tuples,
 									  vacrel);
+
+			/* For the non-parallel variant of a vacuum, the array position
+			 * of the index determines how many indexes are processed so far.
+			 * Add 1 to the posititon as this is 0-based array.
+			 */
+			pgstat_progress_update_param(PROGRESS_VACUUM_INDEXES_COMPLETED, idx + 1);
+
+			/* Advertise we are done vacuuming indexes */
+			pgstat_progress_update_param(PROGRESS_VACUUM_INDEXRELID, 0);
+			pgstat_progress_update_param(PROGRESS_VACUUM_TUPLES_REMOVED, 0);
 
 			if (lazy_check_wraparound_failsafe(vacrel))
 			{
@@ -2025,9 +2063,28 @@ lazy_vacuum_all_indexes(LVRelState *vacrel)
 	}
 	else
 	{
-		/* Outsource everything to parallel variant */
-		parallel_vacuum_bulkdel_all_indexes(vacrel->pvs, vacrel->old_live_tuples,
+		/* Report that we are now vacuuming indexes in parallel
+		 * and Outsource everything to parallel variant.
+		 */
+		pgstat_progress_update_param(PROGRESS_VACUUM_PHASE,
+									PROGRESS_VACUUM_PHASE_VACUUM_INDEX_PARALLEL);
+
+		/*
+		 * For the parallel variant of a vacuum, we will be populating shared memory
+		 * for the index completion progress. This is done with a call to
+		 * vacuum_worker_update inside vacuumparallel.c.
+		 *
+		 * Make sure we are properly cleaning up this shared memory on failure
+		 * or we will end up with a leak in the slots.
+		 */
+		PG_ENSURE_ERROR_CLEANUP(vacuum_worker_end_callback, Int32GetDatum(MyProcPid));
+		{
+
+			parallel_vacuum_bulkdel_all_indexes(vacrel->pvs, vacrel->old_live_tuples,
 											vacrel->num_index_scans);
+		}
+		PG_END_ENSURE_ERROR_CLEANUP(vacuum_worker_end_callback, Int32GetDatum(MyProcPid));
+		vacuum_worker_end(MyProcPid);
 
 		/*
 		 * Do a postcheck to consider applying wraparound failsafe now.  Note
@@ -2405,33 +2462,55 @@ lazy_cleanup_all_indexes(LVRelState *vacrel)
 {
 	Assert(vacrel->nindexes > 0);
 
-	/* Report that we are now cleaning up indexes */
-	pgstat_progress_update_param(PROGRESS_VACUUM_PHASE,
-								 PROGRESS_VACUUM_PHASE_INDEX_CLEANUP);
-
 	if (!ParallelVacuumIsActive(vacrel))
 	{
 		double		reltuples = vacrel->new_rel_tuples;
 		bool		estimated_count =
 		vacrel->tupcount_pages < vacrel->rel_pages;
 
+		/* Report that we are now cleaning up indexes */
+		pgstat_progress_update_param(PROGRESS_VACUUM_PHASE,
+									PROGRESS_VACUUM_PHASE_INDEX_CLEANUP);
+
 		for (int idx = 0; idx < vacrel->nindexes; idx++)
 		{
 			Relation	indrel = vacrel->indrels[idx];
 			IndexBulkDeleteResult *istat = vacrel->indstats[idx];
 
+			/* Advertise the index being cleaned */
+			pgstat_progress_update_param(PROGRESS_VACUUM_INDEXRELID, RelationGetRelid(indrel));
+
 			vacrel->indstats[idx] =
 				lazy_cleanup_one_index(indrel, istat, reltuples,
 									   estimated_count, vacrel);
+
+			/* See the lazy_vacuum_all_indexes comments */
+			pgstat_progress_update_param(PROGRESS_VACUUM_INDEXES_COMPLETED, idx + 1);
+
+			/* Advertise we are done cleaning indexes */
+			pgstat_progress_update_param(PROGRESS_VACUUM_INDEXRELID, 0);
+			pgstat_progress_update_param(PROGRESS_VACUUM_TUPLES_REMOVED, 0);
 		}
 	}
 	else
 	{
-		/* Outsource everything to parallel variant */
-		parallel_vacuum_cleanup_all_indexes(vacrel->pvs, vacrel->new_rel_tuples,
+		/* Report that we are now cleaning up indexes in parallel
+		 * and Outsource everything to parallel variant.
+		 */
+		pgstat_progress_update_param(PROGRESS_VACUUM_PHASE,
+									PROGRESS_VACUUM_PHASE_INDEX_CLEANUP_PARALLEL);
+
+		/* See the lazy_vacuum_all_indexes comments */
+		PG_ENSURE_ERROR_CLEANUP(vacuum_worker_end_callback, Int32GetDatum(MyProcPid));
+		{
+			parallel_vacuum_cleanup_all_indexes(vacrel->pvs, vacrel->new_rel_tuples,
 											vacrel->num_index_scans,
 											(vacrel->tupcount_pages < vacrel->rel_pages));
+		}
+		PG_END_ENSURE_ERROR_CLEANUP(vacuum_worker_end_callback, Int32GetDatum(MyProcPid));
+		vacuum_worker_end(MyProcPid);
 	}
+
 }
 
 /*
@@ -3204,4 +3283,137 @@ restore_vacuum_error_info(LVRelState *vacrel,
 	vacrel->blkno = saved_vacrel->blkno;
 	vacrel->offnum = saved_vacrel->offnum;
 	vacrel->phase = saved_vacrel->phase;
+}
+
+void
+vacuum_worker_end(int leader_pid)
+{
+	SpinLockAcquire(&vacworkerprogress->mutex);
+	for (int i = 0; i < vacworkerprogress->num_vacuums; i++)
+	{
+		VacOneWorkerProgressInfo *vac = &vacworkerprogress->vacuums[i];
+
+		if (vac->leader_pid == leader_pid)
+		{
+			*vac = vacworkerprogress->vacuums[vacworkerprogress->num_vacuums - 1];
+			vacworkerprogress->num_vacuums--;
+			SpinLockRelease(&vacworkerprogress->mutex);
+			break;
+		}
+	}
+	SpinLockRelease(&vacworkerprogress->mutex);
+}
+
+/*
+ * vacuum_worker_end wrapped as an on_shmem_exit callback function
+ */
+void
+vacuum_worker_end_callback(int code, Datum arg)
+{
+	vacuum_worker_end(DatumGetInt32(arg));
+}
+
+/*
+ * vacuum_worker_update sets the number of indexes processed so far
+ * in a parallel vacuum. This routine can be
+ * expanded to other progress tracking amongst parallel
+ * workers ( and leader ).
+ */
+void
+vacuum_worker_update(int leader_pid)
+{
+	VacOneWorkerProgressInfo *vac;
+
+	SpinLockAcquire(&vacworkerprogress->mutex);
+
+	for (int i = 0; i < vacworkerprogress->num_vacuums; i++)
+	{
+		int next_leader_pid;
+
+		vac = &vacworkerprogress->vacuums[i];
+
+		next_leader_pid = vac->leader_pid;
+
+		if (next_leader_pid == leader_pid)
+		{
+			vac->indexes_processed++;
+			SpinLockRelease(&vacworkerprogress->mutex);
+			return;
+		}
+	}
+
+	if (vacworkerprogress->num_vacuums >= vacworkerprogress->max_vacuums)
+	{
+		SpinLockRelease(&vacworkerprogress->mutex);
+		elog(ERROR, "out of vacuum worker progress slots");
+	}
+
+	vac = &vacworkerprogress->vacuums[vacworkerprogress->num_vacuums];
+	vac->leader_pid = leader_pid;
+	vac->indexes_processed = 1;
+	vacworkerprogress->num_vacuums++;
+	SpinLockRelease(&vacworkerprogress->mutex);
+}
+
+/*
+ * vacuum_progress_cb updates the number of indexes that have been
+ * vacuumed or cleaned up in a parallel vacuum.
+ */
+void
+vacuum_progress_cb(Datum *values, int offset)
+{
+	VacOneWorkerProgressInfo *vac;
+	int leader_pid = values[0];
+
+	/* If we are vacuuming in parallel, set the number of indexes vacuumed
+	 * from the shared memory counter.
+	 * */
+	for (int i = 0; i < vacworkerprogress->num_vacuums; i++)
+	{
+		int next_leader_pid;
+
+		vac = &vacworkerprogress->vacuums[i];
+
+		next_leader_pid = vac->leader_pid;
+
+		if (next_leader_pid == leader_pid)
+			values[PROGRESS_VACUUM_INDEXES_COMPLETED + offset] = vac->indexes_processed;
+	}
+}
+
+/*
+ * VacuumWorkerProgressShmemSize --- report amount of shared memory space needed
+ */
+Size
+VacuumWorkerProgressShmemSize(void)
+{
+	Size            size;
+
+	size = offsetof(VacWorkerProgressInfo, vacuums);
+	size = add_size(size, mul_size(MaxBackends, sizeof(VacOneWorkerProgressInfo)));
+	return size;
+}
+
+/*
+ * VacuumWorkerProgressShmemInit --- initialize this module's shared memory
+ */
+void
+VacuumWorkerProgressShmemInit(void)
+{
+	bool            found;
+
+	vacworkerprogress = (VacWorkerProgressInfo *) ShmemInitStruct("Vacuum Worker Progress Stats",
+										VacuumWorkerProgressShmemSize(),
+										&found);
+
+	if (!IsUnderPostmaster)
+	{
+		/* Initialize shared memory area */
+		Assert(!found);
+
+		vacworkerprogress->max_vacuums = MaxBackends;
+		SpinLockInit(&vacworkerprogress->mutex);
+	}
+	else
+		Assert(found);
 }

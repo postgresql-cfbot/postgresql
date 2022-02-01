@@ -336,4 +336,12 @@ extern double anl_random_fract(void);
 extern double anl_init_selection_state(int n);
 extern double anl_get_next_S(double t, int n, double *stateptr);
 
+/* in commands/vacuumparallel.c */
+extern Size VacuumWorkerProgressShmemSize(void);
+extern void VacuumWorkerProgressShmemInit(void);
+extern void vacuum_worker_end(int leader_pid);
+extern void vacuum_worker_update(int leader_pid);
+extern void vacuum_progress_cb(Datum *values, int offset);
+extern void vacuum_worker_end_callback(int code, Datum arg);
+
 #endif							/* VACUUM_H */

@@ -2017,6 +2017,8 @@ pg_stat_progress_vacuum| SELECT s.pid,
             WHEN 4 THEN 'cleaning up indexes'::text
             WHEN 5 THEN 'truncating heap'::text
             WHEN 6 THEN 'performing final cleanup'::text
+            WHEN 7 THEN 'vacuuming indexes'::text
+            WHEN 8 THEN 'cleaning up indexes'::text
             ELSE NULL::text
         END AS phase,
     s.param2 AS heap_blks_total,
@@ -2024,9 +2026,43 @@ pg_stat_progress_vacuum| SELECT s.pid,
     s.param4 AS heap_blks_vacuumed,
     s.param5 AS index_vacuum_count,
     s.param6 AS max_dead_tuples,
-    s.param7 AS num_dead_tuples
+    s.param7 AS num_dead_tuples,
+    s.param8 AS indexes_total,
+    s.param9 AS indexes_processed
    FROM (pg_stat_get_progress_info('VACUUM'::text) s(pid, datid, relid, param1, param2, param3, param4, param5, param6, param7, param8, param9, param10, param11, param12, param13, param14, param15, param16, param17, param18, param19, param20)
      LEFT JOIN pg_database d ON ((s.datid = d.oid)));
+pg_stat_progress_vacuum_index| SELECT s.pid,
+    s.datid,
+    s.datname,
+    s.indexrelid,
+    s.leader_pid,
+        CASE s.phase
+            WHEN 7 THEN 'vacuuming indexes'::text
+            WHEN 8 THEN 'cleaning up indexes'::text
+            ELSE NULL::text
+        END AS phase,
+    s.tuples_removed
+   FROM ( SELECT s_1.pid,
+            s_1.datid,
+            d.datname,
+            s_1.param10 AS indexrelid,
+            s_1.param12 AS leader_pid,
+            s_1.param1 AS phase,
+            s_1.param11 AS tuples_removed
+           FROM (pg_stat_get_progress_info('VACUUM'::text) s_1(pid, datid, relid, param1, param2, param3, param4, param5, param6, param7, param8, param9, param10, param11, param12, param13, param14, param15, param16, param17, param18, param19, param20)
+             LEFT JOIN pg_database d ON ((s_1.datid = d.oid)))
+          WHERE ((s_1.param1 = ANY (ARRAY[(2)::bigint, (4)::bigint, (7)::bigint, (8)::bigint])) AND (s_1.param10 > 0))
+        UNION ALL
+         SELECT s_1.pid,
+            s_1.datid,
+            d.datname,
+            s_1.param10 AS indexrelid,
+            s_1.param12 AS leader_pid,
+            s_1.param1 AS phase,
+            s_1.param11 AS tuples_removed
+           FROM (pg_stat_get_progress_info('VACUUM_PARALLEL'::text) s_1(pid, datid, relid, param1, param2, param3, param4, param5, param6, param7, param8, param9, param10, param11, param12, param13, param14, param15, param16, param17, param18, param19, param20)
+             LEFT JOIN pg_database d ON ((s_1.datid = d.oid)))) s
+  WHERE ((s.phase = ANY (ARRAY[(2)::bigint, (4)::bigint, (7)::bigint, (8)::bigint])) AND (s.indexrelid > 0));
 pg_stat_replication| SELECT s.pid,
     s.usesysid,
     u.rolname AS usename,

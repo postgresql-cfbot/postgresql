@@ -1273,6 +1273,7 @@ backtrack:
 								nupdatable);
 
 			stats->tuples_removed += nhtidsdead;
+			pgstat_progress_update_param(PROGRESS_VACUUM_TUPLES_REMOVED, stats->tuples_removed);
 			/* must recompute maxoff */
 			maxoff = PageGetMaxOffsetNumber(page);
 

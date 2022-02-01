@@ -1123,12 +1123,52 @@ CREATE VIEW pg_stat_progress_vacuum AS
                       WHEN 4 THEN 'cleaning up indexes'
                       WHEN 5 THEN 'truncating heap'
                       WHEN 6 THEN 'performing final cleanup'
+                      WHEN 7 THEN 'vacuuming indexes'
+                      WHEN 8 THEN 'cleaning up indexes'
                       END AS phase,
         S.param2 AS heap_blks_total, S.param3 AS heap_blks_scanned,
         S.param4 AS heap_blks_vacuumed, S.param5 AS index_vacuum_count,
-        S.param6 AS max_dead_tuples, S.param7 AS num_dead_tuples
+        S.param6 AS max_dead_tuples, S.param7 AS num_dead_tuples,
+        S.param8 AS indexes_total, S.param9 AS indexes_processed
     FROM pg_stat_get_progress_info('VACUUM') AS S
         LEFT JOIN pg_database D ON S.datid = D.oid;
+
+CREATE VIEW pg_stat_progress_vacuum_index AS
+    SELECT
+        S.pid,
+        S.datid,
+        S.datname,
+        S.indexrelid,
+        S.leader_pid,
+        CASE S.phase WHEN 7 THEN 'vacuuming indexes'
+                     WHEN 8 THEN 'cleaning up indexes'
+                     END AS phase,
+        S.tuples_removed
+    FROM (
+        SELECT
+            S.pid AS pid,
+            S.datid AS datid,
+            D.datname AS datname,
+            S.param10 AS indexrelid,
+            S.param12 AS leader_pid,
+            S.param1 AS phase,
+            S.param11 AS tuples_removed
+        FROM pg_stat_get_progress_info('VACUUM') AS S
+            LEFT JOIN pg_database D ON S.datid = D.oid
+        WHERE S.param1 IN (2, 4, 7, 8) AND S.param10 > 0
+        UNION ALL
+        SELECT
+            S.pid AS pid,
+            S.datid AS datid,
+            D.datname AS datname,
+            S.param10 AS indexrelid,
+            S.param12 AS leader_pid,
+            S.param1 AS phase,
+            S.param11 AS tuples_removed
+        FROM pg_stat_get_progress_info('VACUUM_PARALLEL') AS S
+            LEFT JOIN pg_database D ON S.datid = D.oid
+        ) AS S
+    WHERE S.phase IN (2, 4, 7, 8) AND S.indexrelid > 0;
 
 CREATE VIEW pg_stat_progress_cluster AS
     SELECT

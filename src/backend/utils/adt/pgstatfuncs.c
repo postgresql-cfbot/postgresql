@@ -18,6 +18,7 @@
 #include "access/xlog.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_type.h"
+#include "commands/vacuum.h"
 #include "common/ip.h"
 #include "funcapi.h"
 #include "miscadmin.h"
@@ -452,6 +453,14 @@ pg_stat_get_backend_idset(PG_FUNCTION_ARGS)
 
 /*
  * Returns command progress information for the named command.
+ *
+ * A command type can optionally define a callback function
+ * which will derive Datum values rather than use values
+ * directly from the backends progress array.
+ *
+ * Derived values are useful to calculate values form multiple backends
+ * as is the case with parallel operations, in which progress values
+ * are calculated form multiple workers.
  */
 Datum
 pg_stat_get_progress_info(PG_FUNCTION_ARGS)
@@ -466,6 +475,7 @@ pg_stat_get_progress_info(PG_FUNCTION_ARGS)
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
 	MemoryContext per_query_ctx;
 	MemoryContext oldcontext;
+	void (*callback)(Datum *, int) = NULL;
 
 	/* check to see if caller supports us returning a tuplestore */
 	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
@@ -483,7 +493,14 @@ pg_stat_get_progress_info(PG_FUNCTION_ARGS)
 
 	/* Translate command name into command type code. */
 	if (pg_strcasecmp(cmd, "VACUUM") == 0)
+	{
 		cmdtype = PROGRESS_COMMAND_VACUUM;
+		callback = vacuum_progress_cb;
+	}
+	else if (pg_strcasecmp(cmd, "VACUUM_PARALLEL") == 0)
+	{
+		cmdtype = PROGRESS_COMMAND_VACUUM_PARALLEL;
+	}
 	else if (pg_strcasecmp(cmd, "ANALYZE") == 0)
 		cmdtype = PROGRESS_COMMAND_ANALYZE;
 	else if (pg_strcasecmp(cmd, "CLUSTER") == 0)
@@ -551,6 +568,9 @@ pg_stat_get_progress_info(PG_FUNCTION_ARGS)
 			for (i = 0; i < PGSTAT_NUM_PROGRESS_PARAM; i++)
 				nulls[i + 3] = true;
 		}
+
+		if (callback)
+			callback(values, 3);
 
 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
 	}

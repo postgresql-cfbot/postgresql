@@ -17,6 +17,8 @@ SELECT count(*) FROM inettmp WHERE a >= '89.225.196.191';
 SELECT count(*) FROM inettmp WHERE a >  '89.225.196.191';
 
 CREATE INDEX inetidx ON inettmp USING gist ( a );
+CREATE INDEX inetidx_b ON inettmp USING gist ( a ) WITH (buffering=on);
+DROP INDEX inetidx_b;
 
 SET enable_seqscan=off;
 

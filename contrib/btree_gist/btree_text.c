@@ -18,6 +18,7 @@ PG_FUNCTION_INFO_V1(gbt_text_consistent);
 PG_FUNCTION_INFO_V1(gbt_bpchar_consistent);
 PG_FUNCTION_INFO_V1(gbt_text_penalty);
 PG_FUNCTION_INFO_V1(gbt_text_same);
+PG_FUNCTION_INFO_V1(gbt_text_sortsupport);
 
 
 /* define for comparison */
@@ -286,4 +287,34 @@ gbt_text_penalty(PG_FUNCTION_ARGS)
 
 	PG_RETURN_POINTER(gbt_var_penalty(result, o, n, PG_GET_COLLATION(),
 									  &tinfo, fcinfo->flinfo));
+}
+
+static int
+gbt_text_sort_build_cmp(Datum a, Datum b, SortSupport ssup)
+{
+	GBT_VARKEY_R ra = gbt_var_key_readable((GBT_VARKEY *) PG_DETOAST_DATUM(a));
+	GBT_VARKEY_R rb = gbt_var_key_readable((GBT_VARKEY *) PG_DETOAST_DATUM(b));
+	return DatumGetInt32(DirectFunctionCall2Coll(bttextcmp,
+												 ssup->ssup_collation,
+												 PointerGetDatum(ra.lower),
+												 PointerGetDatum(rb.lower)));
+}
+
+/*
+ * Sort support routine for fast GiST index build by sorting.
+ */
+Datum
+gbt_text_sortsupport(PG_FUNCTION_ARGS)
+{
+	SortSupport ssup = (SortSupport) PG_GETARG_POINTER(0);
+
+	/*
+	 * Text has abbreviation routines in varlena.c, but we don't try to use
+	 * them here. Maybe later.
+	 */
+	ssup->comparator = gbt_text_sort_build_cmp;
+	ssup->abbrev_converter = NULL;
+	ssup->abbrev_abort = NULL;
+	ssup->abbrev_full_comparator = NULL;
+	PG_RETURN_VOID();
 }

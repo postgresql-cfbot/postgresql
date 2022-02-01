@@ -16,6 +16,8 @@ SELECT count(*) FROM cidrtmp WHERE a >= '121.111.63.82';
 SELECT count(*) FROM cidrtmp WHERE a >  '121.111.63.82';
 
 CREATE INDEX cidridx ON cidrtmp USING gist ( a );
+CREATE INDEX cidridx_b ON cidrtmp USING gist ( a ) WITH (buffering=on);
+DROP INDEX cidridx_b;
 
 SET enable_seqscan=off;
 

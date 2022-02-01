@@ -17,6 +17,8 @@ SELECT count(*) FROM bittmp WHERE a >=  '011011000100010111011000110000100';
 SELECT count(*) FROM bittmp WHERE a >   '011011000100010111011000110000100';
 
 CREATE INDEX bitidx ON bittmp USING GIST ( a );
+CREATE INDEX bitidx_b ON bittmp USING GIST ( a ) WITH (buffering=on);
+DROP INDEX bitidx_b;
 
 SET enable_seqscan=off;
 

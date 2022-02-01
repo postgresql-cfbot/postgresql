@@ -41,6 +41,8 @@ SELECT count(*) FROM numerictmp WHERE a >  0 ;
 
 
 CREATE INDEX numericidx ON numerictmp USING gist ( a );
+CREATE INDEX numericidx_b ON numerictmp USING gist ( a ) WITH (buffering=on);
+DROP INDEX numericidx_b;
 
 SET enable_seqscan=off;
 

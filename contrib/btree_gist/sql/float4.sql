@@ -19,6 +19,8 @@ SELECT count(*) FROM float4tmp WHERE a >  -179.0;
 SELECT a, a <-> '-179.0' FROM float4tmp ORDER BY a <-> '-179.0' LIMIT 3;
 
 CREATE INDEX float4idx ON float4tmp USING gist ( a );
+CREATE INDEX float4idx_b ON float4tmp USING gist ( a ) WITH (buffering=on);
+DROP INDEX float4idx_b;
 
 SET enable_seqscan=off;
 

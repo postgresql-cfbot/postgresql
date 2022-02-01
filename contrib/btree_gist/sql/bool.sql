@@ -17,6 +17,8 @@ SELECT count(*) FROM booltmp WHERE a >= true;
 SELECT count(*) FROM booltmp WHERE a >  true;
 
 CREATE INDEX boolidx ON booltmp USING gist ( a );
+CREATE INDEX boolidx_b ON booltmp USING gist ( a ) WITH (buffering=on);
+DROP INDEX boolidx_b;
 
 SET enable_seqscan=off;
 

@@ -41,8 +41,9 @@ INSERT INTO timetzcmp (r_id,a) SELECT 24,count(*) FROM timetztmp WHERE a >= '07:
 INSERT INTO timetzcmp (r_id,a) SELECT 25,count(*) FROM timetztmp WHERE a >  '07:46:45 GMT+4';
 
 
-
 CREATE INDEX timetzidx ON timetztmp USING gist ( a );
+CREATE INDEX timetzidx_b ON timetztmp USING gist ( a ) WITH (buffering=on);
+DROP INDEX timetzidx_b;
 
 SET enable_seqscan=off;
 

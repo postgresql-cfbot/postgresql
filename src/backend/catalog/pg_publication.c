@@ -276,17 +276,51 @@ GetPubPartitionOptionRelations(List *result, PublicationPartOpt pub_partopt,
 }
 
 /*
+ * Returns the relid of the topmost ancestor that is published via this
+ * publication if any, otherwise returns InvalidOid.
+ *
+ * Note that the ancestors list should be ordered such that the topmost
+ * ancestor is at the end of the list.
+ */
+Oid
+GetTopMostAncestorInPublication(Oid puboid, List *ancestors)
+{
+	ListCell   *lc;
+	Oid			topmost_relid = InvalidOid;
+
+	/*
+	 * Find the "topmost" ancestor that is in this publication.
+	 */
+	foreach(lc, ancestors)
+	{
+		Oid			ancestor = lfirst_oid(lc);
+		List	   *apubids = GetRelationPublications(ancestor);
+		List	   *aschemaPubids = GetSchemaPublications(get_rel_namespace(ancestor));
+
+		if (list_member_oid(apubids, puboid) ||
+			list_member_oid(aschemaPubids, puboid))
+			topmost_relid = ancestor;
+
+		list_free(apubids);
+		list_free(aschemaPubids);
+	}
+
+	return topmost_relid;
+}
+
+/*
  * Insert new publication / relation mapping.
  */
 ObjectAddress
-publication_add_relation(Oid pubid, PublicationRelInfo *targetrel,
+publication_add_relation(Oid pubid, PublicationRelInfo *pri,
 						 bool if_not_exists)
 {
 	Relation	rel;
 	HeapTuple	tup;
 	Datum		values[Natts_pg_publication_rel];
 	bool		nulls[Natts_pg_publication_rel];
-	Oid			relid = RelationGetRelid(targetrel->relation);
+	Relation	targetrel = pri->relation;
+	Oid			relid = RelationGetRelid(targetrel);
 	Oid			pubreloid;
 	Publication *pub = GetPublication(pubid);
 	ObjectAddress myself,
@@ -311,10 +345,10 @@ publication_add_relation(Oid pubid, PublicationRelInfo *targetrel,
 		ereport(ERROR,
 				(errcode(ERRCODE_DUPLICATE_OBJECT),
 				 errmsg("relation \"%s\" is already member of publication \"%s\"",
-						RelationGetRelationName(targetrel->relation), pub->name)));
+						RelationGetRelationName(targetrel), pub->name)));
 	}
 
-	check_publication_add_relation(targetrel->relation);
+	check_publication_add_relation(targetrel);
 
 	/* Form a tuple. */
 	memset(values, 0, sizeof(values));
@@ -327,6 +361,12 @@ publication_add_relation(Oid pubid, PublicationRelInfo *targetrel,
 		ObjectIdGetDatum(pubid);
 	values[Anum_pg_publication_rel_prrelid - 1] =
 		ObjectIdGetDatum(relid);
+
+	/* Add qualifications, if available */
+	if (pri->whereClause != NULL)
+		values[Anum_pg_publication_rel_prqual - 1] = CStringGetTextDatum(nodeToString(pri->whereClause));
+	else
+		nulls[Anum_pg_publication_rel_prqual - 1] = true;
 
 	tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
 
@@ -344,6 +384,12 @@ publication_add_relation(Oid pubid, PublicationRelInfo *targetrel,
 	/* Add dependency on the relation */
 	ObjectAddressSet(referenced, RelationRelationId, relid);
 	recordDependencyOn(&myself, &referenced, DEPENDENCY_AUTO);
+
+	/* Add dependency on the objects mentioned in the qualifications */
+	if (pri->whereClause)
+		recordDependencyOnSingleRelExpr(&myself, pri->whereClause, relid,
+										DEPENDENCY_NORMAL, DEPENDENCY_NORMAL,
+										false);
 
 	/* Close the table. */
 	table_close(rel, RowExclusiveLock);

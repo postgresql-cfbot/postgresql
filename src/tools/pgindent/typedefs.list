@@ -2052,6 +2052,7 @@ PsqlScanStateData
 PsqlSettings
 Publication
 PublicationActions
+PublicationDesc
 PublicationInfo
 PublicationObjSpec
 PublicationObjSpecType
@@ -2198,6 +2199,7 @@ ReorderBufferApplyChangeCB
 ReorderBufferApplyTruncateCB
 ReorderBufferBeginCB
 ReorderBufferChange
+ReorderBufferChangeType
 ReorderBufferCommitCB
 ReorderBufferCommitPreparedCB
 ReorderBufferDiskChange
@@ -3504,6 +3506,7 @@ replace_rte_variables_context
 ret_type
 rewind_source
 rewrite_event
+rf_context
 rijndael_ctx
 rm_detail_t
 role_auth_extra

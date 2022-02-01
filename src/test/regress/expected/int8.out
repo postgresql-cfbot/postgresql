@@ -932,3 +932,22 @@ SELECT lcm((-9223372036854775808)::int8, 1::int8); -- overflow
 ERROR:  bigint out of range
 SELECT lcm(9223372036854775807::int8, 9223372036854775806::int8); -- overflow
 ERROR:  bigint out of range
+-- non-decimal literals
+SELECT int8 '0b100101';
+ int8 
+------
+   37
+(1 row)
+
+SELECT int8 '0o273';
+ int8 
+------
+  187
+(1 row)
+
+SELECT int8 '0x42F';
+ int8 
+------
+ 1071
+(1 row)
+

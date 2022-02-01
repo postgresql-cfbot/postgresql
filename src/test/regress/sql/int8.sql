@@ -250,3 +250,10 @@ FROM (VALUES (0::int8, 0::int8),
 
 SELECT lcm((-9223372036854775808)::int8, 1::int8); -- overflow
 SELECT lcm(9223372036854775807::int8, 9223372036854775806::int8); -- overflow
+
+
+-- non-decimal literals
+
+SELECT int8 '0b100101';
+SELECT int8 '0o273';
+SELECT int8 '0x42F';

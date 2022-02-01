@@ -1115,6 +1115,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	BufferDesc *buf;
 	bool		valid;
 	uint32		buf_state;
+	void	   *oldElem = NULL;
 
 	/* create a tag so we can lookup the buffer */
 	INIT_BUFFERTAG(newTag, smgr->smgr_rnode.node, forkNum, blockNum);
@@ -1289,91 +1290,14 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 			oldHash = BufTableHashCode(&oldTag);
 			oldPartitionLock = BufMappingPartitionLock(oldHash);
 
-			/*
-			 * Must lock the lower-numbered partition first to avoid
-			 * deadlocks.
-			 */
-			if (oldPartitionLock < newPartitionLock)
-			{
-				LWLockAcquire(oldPartitionLock, LW_EXCLUSIVE);
-				LWLockAcquire(newPartitionLock, LW_EXCLUSIVE);
-			}
-			else if (oldPartitionLock > newPartitionLock)
-			{
-				LWLockAcquire(newPartitionLock, LW_EXCLUSIVE);
-				LWLockAcquire(oldPartitionLock, LW_EXCLUSIVE);
-			}
-			else
-			{
-				/* only one partition, only one lock */
-				LWLockAcquire(newPartitionLock, LW_EXCLUSIVE);
-			}
+			LWLockAcquire(oldPartitionLock, LW_EXCLUSIVE);
 		}
 		else
 		{
-			/* if it wasn't valid, we need only the new partition */
-			LWLockAcquire(newPartitionLock, LW_EXCLUSIVE);
 			/* remember we have no old-partition lock or tag */
 			oldPartitionLock = NULL;
 			/* keep the compiler quiet about uninitialized variables */
 			oldHash = 0;
-		}
-
-		/*
-		 * Try to make a hashtable entry for the buffer under its new tag.
-		 * This could fail because while we were writing someone else
-		 * allocated another buffer for the same block we want to read in.
-		 * Note that we have not yet removed the hashtable entry for the old
-		 * tag.
-		 */
-		buf_id = BufTableInsert(&newTag, newHash, buf->buf_id);
-
-		if (buf_id >= 0)
-		{
-			/*
-			 * Got a collision. Someone has already done what we were about to
-			 * do. We'll just handle this as if it were found in the buffer
-			 * pool in the first place.  First, give up the buffer we were
-			 * planning to use.
-			 */
-			UnpinBuffer(buf, true);
-
-			/* Can give up that buffer's mapping partition lock now */
-			if (oldPartitionLock != NULL &&
-				oldPartitionLock != newPartitionLock)
-				LWLockRelease(oldPartitionLock);
-
-			/* remaining code should match code at top of routine */
-
-			buf = GetBufferDescriptor(buf_id);
-
-			valid = PinBuffer(buf, strategy);
-
-			/* Can release the mapping lock as soon as we've pinned it */
-			LWLockRelease(newPartitionLock);
-
-			*foundPtr = true;
-
-			if (!valid)
-			{
-				/*
-				 * We can only get here if (a) someone else is still reading
-				 * in the page, or (b) a previous read attempt failed.  We
-				 * have to wait for any active read attempt to finish, and
-				 * then set up our own read attempt if the page is still not
-				 * BM_VALID.  StartBufferIO does it all.
-				 */
-				if (StartBufferIO(buf, true))
-				{
-					/*
-					 * If we get here, previous attempts to read the buffer
-					 * must have failed ... but we shall bravely try again.
-					 */
-					*foundPtr = false;
-				}
-			}
-
-			return buf;
 		}
 
 		/*
@@ -1392,31 +1316,102 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 			break;
 
 		UnlockBufHdr(buf, buf_state);
-		BufTableDelete(&newTag, newHash);
-		if (oldPartitionLock != NULL &&
-			oldPartitionLock != newPartitionLock)
+		if (oldPartitionLock != NULL)
 			LWLockRelease(oldPartitionLock);
-		LWLockRelease(newPartitionLock);
 		UnpinBuffer(buf, true);
+	}
+
+	/*
+	 * Clear out the buffer's tag and flags.  We must do this to ensure that
+	 * linear scans of the buffer array don't think the buffer is valid. We
+	 * also reset the usage_count since any recency of use of the old content
+	 * is no longer relevant.
+	 *
+	 * Since we are single pinner, there should no be PIN_COUNT_WAITER or
+	 * IO_IN_PROGRESS (flags that were not cleared in previous code).
+	 */
+	Assert((oldFlags & (BM_PIN_COUNT_WAITER | BM_IO_IN_PROGRESS)) == 0);
+	CLEAR_BUFFERTAG(buf->tag);
+	buf_state &= ~(BUF_FLAG_MASK | BUF_USAGECOUNT_MASK);
+	UnlockBufHdr(buf, buf_state);
+
+	if (oldFlags & BM_TAG_VALID)
+		oldElem = BufTableDelete(&oldTag, oldHash);
+
+	if (oldPartitionLock != newPartitionLock)
+	{
+		if (oldPartitionLock != NULL)
+			LWLockRelease(oldPartitionLock);
+		LWLockAcquire(newPartitionLock, LW_EXCLUSIVE);
+	}
+
+	/*
+	 * Try to make a hashtable entry for the buffer under its new tag. This
+	 * could fail because while we were writing someone else allocated another
+	 * buffer for the same block we want to read in. Note that we have not yet
+	 * removed the hashtable entry for the old tag.
+	 */
+	buf_id = BufTableLookup(&newTag, newHash);
+
+	if (buf_id >= 0)
+	{
+		/*
+		 * Got a collision. Someone has already done what we were about to do.
+		 * We'll just handle this as if it were found in the buffer pool in
+		 * the first place.  First, give up the buffer we were planning to use
+		 * and put it to free lists.
+		 */
+		UnpinBuffer(buf, true);
+		StrategyFreeBuffer(buf);
+		if (oldElem != NULL)
+			BufTableFreeDeleted(oldElem, oldHash);
+
+		/* remaining code should match code at top of routine */
+
+		buf = GetBufferDescriptor(buf_id);
+
+		valid = PinBuffer(buf, strategy);
+
+		/* Can release the mapping lock as soon as we've pinned it */
+		LWLockRelease(newPartitionLock);
+
+		*foundPtr = true;
+
+		if (!valid)
+		{
+			/*
+			 * We can only get here if (a) someone else is still reading in
+			 * the page, or (b) a previous read attempt failed.  We have to
+			 * wait for any active read attempt to finish, and then set up our
+			 * own read attempt if the page is still not BM_VALID.
+			 * StartBufferIO does it all.
+			 */
+			if (StartBufferIO(buf, true))
+			{
+				/*
+				 * If we get here, previous attempts to read the buffer must
+				 * have failed ... but we shall bravely try again.
+				 */
+				*foundPtr = false;
+			}
+		}
+
+		return buf;
 	}
 
 	/*
 	 * Okay, it's finally safe to rename the buffer.
 	 *
-	 * Clearing BM_VALID here is necessary, clearing the dirtybits is just
-	 * paranoia.  We also reset the usage_count since any recency of use of
-	 * the old content is no longer relevant.  (The usage_count starts out at
-	 * 1 so that the buffer can survive one clock-sweep pass.)
-	 *
 	 * Make sure BM_PERMANENT is set for buffers that must be written at every
 	 * checkpoint.  Unlogged buffers only need to be written at shutdown
 	 * checkpoints, except for their "init" forks, which need to be treated
 	 * just like permanent relations.
+	 *
+	 * The usage_count starts out at 1 so that the buffer can survive one
+	 * clock-sweep pass.
 	 */
+	buf_state = LockBufHdr(buf);
 	buf->tag = newTag;
-	buf_state &= ~(BM_VALID | BM_DIRTY | BM_JUST_DIRTIED |
-				   BM_CHECKPOINT_NEEDED | BM_IO_ERROR | BM_PERMANENT |
-				   BUF_USAGECOUNT_MASK);
 	if (relpersistence == RELPERSISTENCE_PERMANENT || forkNum == INIT_FORKNUM)
 		buf_state |= BM_TAG_VALID | BM_PERMANENT | BUF_USAGECOUNT_ONE;
 	else
@@ -1424,13 +1419,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 
 	UnlockBufHdr(buf, buf_state);
 
-	if (oldPartitionLock != NULL)
-	{
-		BufTableDelete(&oldTag, oldHash);
-		if (oldPartitionLock != newPartitionLock)
-			LWLockRelease(oldPartitionLock);
-	}
-
+	BufTableInsert(&newTag, newHash, buf->buf_id, oldElem);
 	LWLockRelease(newPartitionLock);
 
 	/*
@@ -1540,7 +1529,12 @@ retry:
 	 * Remove the buffer from the lookup hashtable, if it was in there.
 	 */
 	if (oldFlags & BM_TAG_VALID)
-		BufTableDelete(&oldTag, oldHash);
+	{
+		void   *oldElem;
+
+		oldElem = BufTableDelete(&oldTag, oldHash);
+		BufTableFreeDeleted(oldElem, oldHash);
+	}
 
 	/*
 	 * Done with mapping lock.

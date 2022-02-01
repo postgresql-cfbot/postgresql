@@ -99,6 +99,7 @@
 #include "access/xact.h"
 #include "common/hashfn.h"
 #include "port/pg_bitutils.h"
+#include "port/atomics.h"
 #include "storage/shmem.h"
 #include "storage/spin.h"
 #include "utils/dynahash.h"
@@ -133,6 +134,18 @@ typedef HASHELEMENT *HASHBUCKET;
 /* A hash segment is an array of bucket headers */
 typedef HASHBUCKET *HASHSEGMENT;
 
+#if SIZEOF_LONG == 8
+typedef pg_atomic_uint64 Count;
+#define count_atomic_inc(x)	pg_atomic_fetch_add_u64((x), 1)
+#define count_atomic_dec(x)	pg_atomic_fetch_sub_u64((x), 1)
+#define MAX_NENTRIES	((uint64)PG_INT64_MAX)
+#else
+typedef pg_atomic_uint32 Count;
+#define count_atomic_inc(x)	pg_atomic_fetch_add_u32((x), 1)
+#define count_atomic_dec(x)	pg_atomic_fetch_sub_u32((x), 1)
+#define MAX_NENTRIES	((uint32)PG_INT32_MAX)
+#endif
+
 /*
  * Per-freelist data.
  *
@@ -153,7 +166,7 @@ typedef HASHBUCKET *HASHSEGMENT;
 typedef struct
 {
 	slock_t		mutex;			/* spinlock for this freelist */
-	long		nentries;		/* number of entries in associated buckets */
+	Count		nentries;		/* number of entries in associated buckets */
 	HASHELEMENT *freeList;		/* chain of free elements */
 } FreeListData;
 
@@ -306,6 +319,54 @@ string_compare(const char *key1, const char *key2, Size keysize)
 	return strncmp(key1, key2, keysize - 1);
 }
 
+/*
+ * Free list routines
+ */
+static inline void
+free_list_link_entry(HASHHDR *hctl, HASHBUCKET currBucket, int freelist_idx)
+{
+	FreeListData *list = &hctl->freeList[freelist_idx];
+
+	if (IS_PARTITIONED(hctl))
+	{
+		SpinLockAcquire(&list->mutex);
+		currBucket->link = list->freeList;
+		list->freeList = currBucket;
+		SpinLockRelease(&list->mutex);
+	}
+	else
+	{
+		currBucket->link = list->freeList;
+		list->freeList = currBucket;
+	}
+}
+
+static inline void
+free_list_increment_nentries(HASHHDR *hctl, int freelist_idx)
+{
+	FreeListData *list = &hctl->freeList[freelist_idx];
+
+	/* Check for overflow */
+	Assert(hctl->freeList[freelist_idx].nentries.value < MAX_NENTRIES);
+
+	if (IS_PARTITIONED(hctl))
+		count_atomic_inc(&list->nentries);
+	else
+		list->nentries.value++;
+}
+
+static inline void
+free_list_decrement_nentries(HASHHDR *hctl, int freelist_idx)
+{
+	FreeListData *list = &hctl->freeList[freelist_idx];
+
+	if (IS_PARTITIONED(hctl))
+		count_atomic_dec(&list->nentries);
+	else
+		list->nentries.value--;
+	/* Check for overflow */
+	Assert(hctl->freeList[freelist_idx].nentries.value < MAX_NENTRIES);
+}
 
 /************************** CREATE ROUTINES **********************/
 
@@ -1000,7 +1061,7 @@ hash_search_with_hash_value(HTAB *hashp,
 		 * Can't split if running in partitioned mode, nor if frozen, nor if
 		 * table is the subject of any active hash_seq_search scans.
 		 */
-		if (hctl->freeList[0].nentries > (long) hctl->max_bucket &&
+		if (hctl->freeList[0].nentries.value > (long) hctl->max_bucket &&
 			!IS_PARTITIONED(hctl) && !hashp->frozen &&
 			!has_seq_scans(hashp))
 			(void) expand_table(hashp);
@@ -1057,23 +1118,14 @@ hash_search_with_hash_value(HTAB *hashp,
 		case HASH_REMOVE:
 			if (currBucket != NULL)
 			{
-				/* if partitioned, must lock to touch nentries and freeList */
-				if (IS_PARTITIONED(hctl))
-					SpinLockAcquire(&(hctl->freeList[freelist_idx].mutex));
-
 				/* delete the record from the appropriate nentries counter. */
-				Assert(hctl->freeList[freelist_idx].nentries > 0);
-				hctl->freeList[freelist_idx].nentries--;
+				free_list_decrement_nentries(hctl, freelist_idx);
 
 				/* remove record from hash bucket's chain. */
 				*prevBucketPtr = currBucket->link;
 
 				/* add the record to the appropriate freelist. */
-				currBucket->link = hctl->freeList[freelist_idx].freeList;
-				hctl->freeList[freelist_idx].freeList = currBucket;
-
-				if (IS_PARTITIONED(hctl))
-					SpinLockRelease(&hctl->freeList[freelist_idx].mutex);
+				free_list_link_entry(hctl, currBucket, freelist_idx);
 
 				/*
 				 * better hope the caller is synchronizing access to this
@@ -1115,6 +1167,7 @@ hash_search_with_hash_value(HTAB *hashp,
 							(errcode(ERRCODE_OUT_OF_MEMORY),
 							 errmsg("out of memory")));
 			}
+			free_list_increment_nentries(hctl, freelist_idx);
 
 			/* link into hashbucket chain */
 			*prevBucketPtr = currBucket;
@@ -1165,6 +1218,7 @@ hash_update_hash_key(HTAB *hashp,
 {
 	HASHELEMENT *existingElement = ELEMENT_FROM_KEY(existingEntry);
 	HASHHDR    *hctl = hashp->hctl;
+	uint32		oldhashvalue;
 	uint32		newhashvalue;
 	Size		keysize;
 	uint32		bucket;
@@ -1218,6 +1272,7 @@ hash_update_hash_key(HTAB *hashp,
 			 hashp->tabname);
 
 	oldPrevPtr = prevBucketPtr;
+	oldhashvalue = existingElement->hashvalue;
 
 	/*
 	 * Now perform the equivalent of a HASH_ENTER operation to locate the hash
@@ -1271,12 +1326,21 @@ hash_update_hash_key(HTAB *hashp,
 	 */
 	if (bucket != newbucket)
 	{
+		int			old_freelist_idx = FREELIST_IDX(hctl, oldhashvalue);
+		int			new_freelist_idx = FREELIST_IDX(hctl, newhashvalue);
+
 		/* OK to remove record from old hash bucket's chain. */
 		*oldPrevPtr = currBucket->link;
 
 		/* link into new hashbucket chain */
 		*prevBucketPtr = currBucket;
 		currBucket->link = NULL;
+
+		if (old_freelist_idx != new_freelist_idx)
+		{
+			free_list_decrement_nentries(hctl, old_freelist_idx);
+			free_list_increment_nentries(hctl, new_freelist_idx);
+		}
 	}
 
 	/* copy new key into record */
@@ -1286,6 +1350,193 @@ hash_update_hash_key(HTAB *hashp,
 	/* rest of record is untouched */
 
 	return true;
+}
+
+/*
+ * hash_insert_with_hash_nocheck - inserts new entry into bucket without
+ * checking for duplicates.
+ *
+ * Caller should be sure there is no conflicting entry.
+ *
+ * Caller may pass pointer to old entry acquired with hash_delete_skip_freelist.
+ * In this case entry will be reused and returned as a new.
+ */
+void *
+hash_insert_with_hash_nocheck(HTAB *hashp,
+							  const void *keyPtr,
+							  uint32 hashvalue,
+							  void *oldentry)
+{
+	HASHHDR    *hctl = hashp->hctl;
+	int			freelist_idx = FREELIST_IDX(hctl, hashvalue);
+	uint32		bucket;
+	long		segment_num;
+	long		segment_ndx;
+	HASHSEGMENT segp;
+	HASHBUCKET	currBucket;
+	HASHBUCKET *prevBucketPtr;
+
+#if HASH_STATISTICS
+	hash_accesses++;
+	hctl->accesses++;
+#endif
+
+	/* disallow updates if frozen */
+	if (hashp->frozen)
+		elog(ERROR, "cannot update in frozen hashtable \"%s\"",
+			 hashp->tabname);
+
+	if (!IS_PARTITIONED(hctl) &&
+		hctl->freeList[0].nentries.value > (long) hctl->max_bucket &&
+		!has_seq_scans(hashp))
+		(void) expand_table(hashp);
+
+	/*
+	 * Lookup the existing element using its saved hash value.  We need to do
+	 * this to be able to unlink it from its hash chain, but as a side benefit
+	 * we can verify the validity of the passed existingEntry pointer.
+	 */
+	bucket = calc_bucket(hctl, hashvalue);
+
+	segment_num = bucket >> hashp->sshift;
+	segment_ndx = MOD(bucket, hashp->ssize);
+
+	segp = hashp->dir[segment_num];
+
+	if (segp == NULL)
+		hash_corrupted(hashp);
+
+	prevBucketPtr = &segp[segment_ndx];
+
+	if (oldentry != NULL)
+		currBucket = ELEMENT_FROM_KEY(oldentry);
+	else
+		currBucket = get_hash_entry(hashp, freelist_idx);
+	free_list_increment_nentries(hctl, freelist_idx);
+
+	if (currBucket == NULL)
+	{
+		/* report a generic message */
+		if (hashp->isshared)
+			ereport(ERROR,
+					(errcode(ERRCODE_OUT_OF_MEMORY),
+					 errmsg("out of shared memory")));
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_OUT_OF_MEMORY),
+					 errmsg("out of memory")));
+	}
+
+	/* copy key into record */
+	currBucket->hashvalue = hashvalue;
+	currBucket->link = *prevBucketPtr;
+	hashp->keycopy(ELEMENTKEY(currBucket), keyPtr, hashp->keysize);
+
+	*prevBucketPtr = currBucket;
+
+	return (void *) ELEMENTKEY(currBucket);
+}
+
+/*
+ * hash_delete_skip_freelist - find and delete entry, but don't put it
+ * to free list.
+ *
+ * Used in Buffer Manager to reuse entry for evicted buffer.
+ *
+ * Returned entry should be either reused with hash_insert_with_hash_nocheck
+ * or returned to free list with hash_return_to_freelist.
+ */
+void *
+hash_delete_skip_freelist(HTAB *hashp,
+						  const void *keyPtr,
+						  uint32 hashvalue)
+{
+	HASHHDR    *hctl = hashp->hctl;
+	int			freelist_idx = FREELIST_IDX(hctl, hashvalue);
+	Size		keysize;
+	uint32		bucket;
+	long		segment_num;
+	long		segment_ndx;
+	HASHSEGMENT segp;
+	HASHBUCKET	currBucket;
+	HASHBUCKET *prevBucketPtr;
+	HashCompareFunc match;
+
+#if HASH_STATISTICS
+	hash_accesses++;
+	hctl->accesses++;
+#endif
+
+	/*
+	 * Do the initial lookup
+	 */
+	bucket = calc_bucket(hctl, hashvalue);
+
+	segment_num = bucket >> hashp->sshift;
+	segment_ndx = MOD(bucket, hashp->ssize);
+
+	segp = hashp->dir[segment_num];
+
+	if (segp == NULL)
+		hash_corrupted(hashp);
+
+	prevBucketPtr = &segp[segment_ndx];
+	currBucket = *prevBucketPtr;
+
+	/*
+	 * Follow collision chain looking for matching key
+	 */
+	match = hashp->match;		/* save one fetch in inner loop */
+	keysize = hashp->keysize;	/* ditto */
+
+	while (currBucket != NULL)
+	{
+		if (currBucket->hashvalue == hashvalue &&
+			match(ELEMENTKEY(currBucket), keyPtr, keysize) == 0)
+			break;
+		prevBucketPtr = &(currBucket->link);
+		currBucket = *prevBucketPtr;
+#if HASH_STATISTICS
+		hash_collisions++;
+		hctl->collisions++;
+#endif
+	}
+
+	if (currBucket == NULL)
+		return NULL;
+
+	/* delete the record from the appropriate nentries counter. */
+	free_list_decrement_nentries(hctl, freelist_idx);
+
+	/* remove record from hash bucket's chain. */
+	*prevBucketPtr = currBucket->link;
+
+	return (void *) ELEMENTKEY(currBucket);
+}
+
+/*
+ * hash_return_to_freelist - return entry deleted with
+ * hash_delete_skip_freelist to free list.
+ *
+ * Used in Buffer Manager in case new conflicting entry were inserted by
+ * concurrent process.
+ */
+void
+hash_return_to_freelist(HTAB *hashp,
+						const void *entry,
+						uint32 hashvalue)
+{
+	HASHHDR    *hctl = hashp->hctl;
+	int			freelist_idx = FREELIST_IDX(hctl, hashvalue);
+	HASHBUCKET	currBucket;
+
+	if (entry == NULL)
+		return;
+
+	currBucket = ELEMENT_FROM_KEY(entry);
+
+	/* add the record to the appropriate freelist. */
+	free_list_link_entry(hctl, currBucket, freelist_idx);
 }
 
 /*
@@ -1349,11 +1600,6 @@ get_hash_entry(HTAB *hashp, int freelist_idx)
 					hctl->freeList[borrow_from_idx].freeList = newElement->link;
 					SpinLockRelease(&(hctl->freeList[borrow_from_idx].mutex));
 
-					/* careful: count the new element in its proper freelist */
-					SpinLockAcquire(&hctl->freeList[freelist_idx].mutex);
-					hctl->freeList[freelist_idx].nentries++;
-					SpinLockRelease(&hctl->freeList[freelist_idx].mutex);
-
 					return newElement;
 				}
 
@@ -1365,9 +1611,8 @@ get_hash_entry(HTAB *hashp, int freelist_idx)
 		}
 	}
 
-	/* remove entry from freelist, bump nentries */
+	/* remove entry from freelist */
 	hctl->freeList[freelist_idx].freeList = newElement->link;
-	hctl->freeList[freelist_idx].nentries++;
 
 	if (IS_PARTITIONED(hctl))
 		SpinLockRelease(&hctl->freeList[freelist_idx].mutex);
@@ -1382,7 +1627,7 @@ long
 hash_get_num_entries(HTAB *hashp)
 {
 	int			i;
-	long		sum = hashp->hctl->freeList[0].nentries;
+	long		sum = hashp->hctl->freeList[0].nentries.value;
 
 	/*
 	 * We currently don't bother with acquiring the mutexes; it's only
@@ -1392,7 +1637,7 @@ hash_get_num_entries(HTAB *hashp)
 	if (IS_PARTITIONED(hashp->hctl))
 	{
 		for (i = 1; i < NUM_FREELISTS; i++)
-			sum += hashp->hctl->freeList[i].nentries;
+			sum += hashp->hctl->freeList[i].nentries.value;
 	}
 
 	return sum;

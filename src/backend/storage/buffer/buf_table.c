@@ -107,36 +107,29 @@ BufTableLookup(BufferTag *tagPtr, uint32 hashcode)
 
 /*
  * BufTableInsert
- *		Insert a hashtable entry for given tag and buffer ID,
- *		unless an entry already exists for that tag
- *
- * Returns -1 on successful insertion.  If a conflicting entry exists
- * already, returns the buffer ID in that entry.
+ *		Insert a hashtable entry for given tag and buffer ID.
+ *		Caller should be sure there is no conflicting entry.
  *
  * Caller must hold exclusive lock on BufMappingLock for tag's partition
+ * and call BufTableLookup to check for conflicting entry.
+ *
+ * If oldelem is passed it is reused.
  */
-int
-BufTableInsert(BufferTag *tagPtr, uint32 hashcode, int buf_id)
+void
+BufTableInsert(BufferTag *tagPtr, uint32 hashcode, int buf_id, void *oldelem)
 {
 	BufferLookupEnt *result;
-	bool		found;
 
 	Assert(buf_id >= 0);		/* -1 is reserved for not-in-table */
 	Assert(tagPtr->blockNum != P_NEW);	/* invalid tag */
 
 	result = (BufferLookupEnt *)
-		hash_search_with_hash_value(SharedBufHash,
-									(void *) tagPtr,
-									hashcode,
-									HASH_ENTER,
-									&found);
-
-	if (found)					/* found something already in the table */
-		return result->id;
+		hash_insert_with_hash_nocheck(SharedBufHash,
+									  (void *) tagPtr,
+									  hashcode,
+									  oldelem);
 
 	result->id = buf_id;
-
-	return -1;
 }
 
 /*
@@ -144,19 +137,32 @@ BufTableInsert(BufferTag *tagPtr, uint32 hashcode, int buf_id)
  *		Delete the hashtable entry for given tag (which must exist)
  *
  * Caller must hold exclusive lock on BufMappingLock for tag's partition
+ *
+ * Returns pointer to internal hashtable entry that should be passed either
+ * to BufTableInsert or BufTableFreeDeleted.
  */
-void
+void *
 BufTableDelete(BufferTag *tagPtr, uint32 hashcode)
 {
 	BufferLookupEnt *result;
 
 	result = (BufferLookupEnt *)
-		hash_search_with_hash_value(SharedBufHash,
-									(void *) tagPtr,
-									hashcode,
-									HASH_REMOVE,
-									NULL);
+		hash_delete_skip_freelist(SharedBufHash,
+								  (void *) tagPtr,
+								  hashcode);
 
 	if (!result)				/* shouldn't happen */
 		elog(ERROR, "shared buffer hash table corrupted");
+
+	return result;
+}
+
+/*
+ * BufTableFreeDeleted
+ *		Returns deleted hashtable entry to freelist.
+ */
+void
+BufTableFreeDeleted(void *oldelem, uint32 hashcode)
+{
+	hash_return_to_freelist(SharedBufHash, oldelem, hashcode);
 }

@@ -327,8 +327,10 @@ extern Size BufTableShmemSize(int size);
 extern void InitBufTable(int size);
 extern uint32 BufTableHashCode(BufferTag *tagPtr);
 extern int	BufTableLookup(BufferTag *tagPtr, uint32 hashcode);
-extern int	BufTableInsert(BufferTag *tagPtr, uint32 hashcode, int buf_id);
-extern void BufTableDelete(BufferTag *tagPtr, uint32 hashcode);
+extern void BufTableInsert(BufferTag *tagPtr, uint32 hashcode, int buf_id,
+						   void *oldelem);
+extern void *BufTableDelete(BufferTag *tagPtr, uint32 hashcode);
+extern void BufTableFreeDeleted(void *oldelem, uint32 hashcode);
 
 /* localbuf.c */
 extern PrefetchBufferResult PrefetchLocalBuffer(SMgrRelation smgr,

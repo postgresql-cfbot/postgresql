@@ -150,4 +150,21 @@ extern Size hash_get_shared_size(HASHCTL *info, int flags);
 extern void AtEOXact_HashTables(bool isCommit);
 extern void AtEOSubXact_HashTables(bool isCommit, int nestDepth);
 
+/*
+ * Buffer Manager optimization utilities.
+ * They made to avoid taking two partition locks simultaneously and
+ * skip interraction with dynahash's freelist.
+ * Use them carefully and only if they gives meaningful improvement.
+ */
+extern void *hash_insert_with_hash_nocheck(HTAB *hashp,
+										   const void *keyPtr,
+										   uint32 hashvalue,
+										   void *oldentry);
+extern void *hash_delete_skip_freelist(HTAB *hashp,
+									   const void *keyPtr,
+									   uint32 hashvalue);
+extern void hash_return_to_freelist(HTAB *hashp,
+									const void *entry,
+									uint32 hashvalue);
+
 #endif							/* HSEARCH_H */

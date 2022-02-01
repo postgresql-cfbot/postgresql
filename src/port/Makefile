@@ -43,6 +43,7 @@ OBJS = \
 	bsearch_arg.o \
 	chklocale.o \
 	inet_net_ntop.o \
+	inet_net_pton.o \
 	noblock.o \
 	path.o \
 	pg_bitutils.o \

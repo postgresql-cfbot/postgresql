@@ -43,7 +43,6 @@ OBJS = \
 	geo_selfuncs.o \
 	geo_spgist.o \
 	inet_cidr_ntop.o \
-	inet_net_pton.o \
 	int.o \
 	int8.o \
 	json.o \

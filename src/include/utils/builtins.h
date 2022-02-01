@@ -93,10 +93,6 @@ extern int	xidLogicalComparator(const void *arg1, const void *arg2);
 extern char *pg_inet_cidr_ntop(int af, const void *src, int bits,
 							   char *dst, size_t size);
 
-/* inet_net_pton.c */
-extern int	pg_inet_net_pton(int af, const char *src,
-							 void *dst, size_t size);
-
 /* network.c */
 extern double convert_network_to_scalar(Datum value, Oid typid, bool *failure);
 extern Datum network_scan_first(Datum in);

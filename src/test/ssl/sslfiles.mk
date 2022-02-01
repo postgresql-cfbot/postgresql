@@ -22,9 +22,14 @@
 # key/certificate pair will be generated for you, signed by the appropriate CA.
 #
 SERVERS := server-cn-and-alt-names \
+	server-cn-and-ip-alt-names \
 	server-cn-only \
+	server-ip-cn-only \
+	server-ip-cn-and-alt-names \
+	server-ip-cn-and-dns-alt-names \
 	server-single-alt-name \
 	server-multiple-alt-names \
+	server-ip-alt-names \
 	server-no-names \
 	server-revoked
 CLIENTS := client client-dn client-revoked client_ext

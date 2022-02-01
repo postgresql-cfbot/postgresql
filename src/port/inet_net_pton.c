@@ -14,14 +14,18 @@
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT
  * OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  *
- *	  src/backend/utils/adt/inet_net_pton.c
+ *	  src/port/inet_net_pton.c
  */
 
 #if defined(LIBC_SCCS) && !defined(lint)
 static const char rcsid[] = "Id: inet_net_pton.c,v 1.4.2.3 2004/03/17 00:40:11 marka Exp $";
 #endif
 
+#ifndef FRONTEND
 #include "postgres.h"
+#else
+#include "postgres_fe.h"
+#endif
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -29,15 +33,25 @@ static const char rcsid[] = "Id: inet_net_pton.c,v 1.4.2.3 2004/03/17 00:40:11 m
 #include <assert.h>
 #include <ctype.h>
 
+#ifndef FRONTEND
 #include "utils/builtins.h" /* pgrminclude ignore */	/* needed on some
 														 * platforms */
 #include "utils/inet.h"
+#else
+/*
+ * In a frontend build, we can't include inet.h, but we still need to have
+ * sensible definitions of these two constants.  Note that pg_inet_net_ntop()
+ * assumes that PGSQL_AF_INET is equal to AF_INET.
+ */
+#define PGSQL_AF_INET	(AF_INET + 0)
+#define PGSQL_AF_INET6	(AF_INET + 1)
+#endif
 
 
 static int	inet_net_pton_ipv4(const char *src, u_char *dst);
 static int	inet_cidr_pton_ipv4(const char *src, u_char *dst, size_t size);
-static int	inet_net_pton_ipv6(const char *src, u_char *dst);
-static int	inet_cidr_pton_ipv6(const char *src, u_char *dst, size_t size);
+static int	inet_pton_ipv6_internal(const char *src, u_char *dst, size_t size,
+									bool allow_cidr);
 
 
 /*
@@ -68,9 +82,9 @@ pg_inet_net_pton(int af, const char *src, void *dst, size_t size)
 				inet_net_pton_ipv4(src, dst) :
 				inet_cidr_pton_ipv4(src, dst, size);
 		case PGSQL_AF_INET6:
-			return size == -1 ?
-				inet_net_pton_ipv6(src, dst) :
-				inet_cidr_pton_ipv6(src, dst, size);
+			return inet_pton_ipv6_internal(src, dst,
+										   (size == -1) ? 16 : size,
+										   true /* allow CIDR */);
 		default:
 			errno = EAFNOSUPPORT;
 			return -1;
@@ -346,12 +360,21 @@ emsgsize:
 }
 
 static int
-getbits(const char *src, int *bitsp)
+getbits(const char *src, int *bitsp, bool allow_cidr)
 {
 	static const char digits[] = "0123456789";
 	int			n;
 	int			val;
 	char		ch;
+
+	if (!allow_cidr)
+	{
+		/*
+		 * If we got here, the top-level call is to pg_inet_pton() and the
+		 * caller supplied a CIDR mask, which isn't allowed.
+		 */
+		return 0;
+	}
 
 	val = 0;
 	n = 0;
@@ -379,7 +402,7 @@ getbits(const char *src, int *bitsp)
 }
 
 static int
-getv4(const char *src, u_char *dst, int *bitsp)
+getv4(const char *src, u_char *dst, int *bitsp, bool allow_cidr)
 {
 	static const char digits[] = "0123456789";
 	u_char	   *odst = dst;
@@ -410,7 +433,7 @@ getv4(const char *src, u_char *dst, int *bitsp)
 				return 0;
 			*dst++ = val;
 			if (ch == '/')
-				return getbits(src, bitsp);
+				return getbits(src, bitsp, allow_cidr);
 			val = 0;
 			n = 0;
 			continue;
@@ -425,18 +448,12 @@ getv4(const char *src, u_char *dst, int *bitsp)
 	return 1;
 }
 
-static int
-inet_net_pton_ipv6(const char *src, u_char *dst)
-{
-	return inet_cidr_pton_ipv6(src, dst, 16);
-}
-
 #define NS_IN6ADDRSZ 16
 #define NS_INT16SZ 2
 #define NS_INADDRSZ 4
 
 static int
-inet_cidr_pton_ipv6(const char *src, u_char *dst, size_t size)
+inet_pton_ipv6_internal(const char *src, u_char *dst, size_t size, bool allow_cidr)
 {
 	static const char xdigits_l[] = "0123456789abcdef",
 				xdigits_u[] = "0123456789ABCDEF";
@@ -504,13 +521,13 @@ inet_cidr_pton_ipv6(const char *src, u_char *dst, size_t size)
 			continue;
 		}
 		if (ch == '.' && ((tp + NS_INADDRSZ) <= endp) &&
-			getv4(curtok, tp, &bits) > 0)
+			getv4(curtok, tp, &bits, allow_cidr) > 0)
 		{
 			tp += NS_INADDRSZ;
 			saw_xdigit = 0;
 			break;				/* '\0' was seen by inet_pton4(). */
 		}
-		if (ch == '/' && getbits(src, &bits) > 0)
+		if (ch == '/' && getbits(src, &bits, allow_cidr) > 0)
 			break;
 		goto enoent;
 	}
@@ -523,6 +540,9 @@ inet_cidr_pton_ipv6(const char *src, u_char *dst, size_t size)
 	}
 	if (bits == -1)
 		bits = 128;
+
+	/* Without a CIDR mask, the above should guarantee a complete address. */
+	Assert(allow_cidr || bits == 128);
 
 	endp = tmp + 16;
 
@@ -561,4 +581,30 @@ enoent:
 emsgsize:
 	errno = EMSGSIZE;
 	return -1;
+}
+
+/*
+ * Converts a network address in presentation format to network format. The main
+ * difference between this and pg_inet_net_pton() above is that CIDR notation is
+ * not allowed.
+ *
+ * The memory pointed to by dst depends on the address family:
+ *
+ *     PGSQL_AF_INET:  not implemented yet (returns -1 with EAFNOSUPPORT)
+ *     PGSQL_AF_INET6: *dst must be a u_char[16]
+ *
+ * Over and above the standard inet_pton() functionality, we also set errno on
+ * parse failure, with the same meanings as with pg_inet_net_pton().
+ */
+int
+pg_inet_pton(int af, const char *src, void *dst)
+{
+	if (af != PGSQL_AF_INET6)
+	{
+		/* Currently only IPv6 is implemented. */
+		errno = EAFNOSUPPORT;
+		return -1;
+	}
+
+	return (inet_pton_ipv6_internal(src, dst, 16, false /* no CIDR */) == 128);
 }

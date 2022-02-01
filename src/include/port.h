@@ -515,6 +515,10 @@ extern int	pg_codepage_to_encoding(UINT cp);
 extern char *pg_inet_net_ntop(int af, const void *src, int bits,
 							  char *dst, size_t size);
 
+/* port/inet_net_pton.c */
+extern int	pg_inet_net_pton(int af, const char *src, void *dst, size_t size);
+extern int	pg_inet_pton(int af, const char *src, void *dst);
+
 /* port/pg_strong_random.c */
 extern void pg_strong_random_init(void);
 extern bool pg_strong_random(void *buf, size_t len);

@@ -220,6 +220,58 @@ sub promote_standby
 	return;
 }
 
+sub run_pg_rewind_archive
+{
+	my $test_mode = shift;
+	my $restore_command;
+	my $cli_option = '--restore-target-wal';
+
+	# Remove the existing archive directory and move all WAL
+	# segments from the old primary to the archives.  These
+	# will be used by pg_rewind.
+	rmtree($node_primary->archive_dir);
+	PostgreSQL::Test::RecursiveCopy::copypath($node_primary->data_dir . '/pg_wal',
+		$node_primary->archive_dir);
+
+	# Fast way to remove entire directory content
+	rmtree($node_primary->data_dir . '/pg_wal');
+	mkdir($node_primary->data_dir . '/pg_wal');
+
+	# Make sure that directories have the right umask as this is
+	# required by a follow-up check on permissions, and better
+	# safe than sorry.
+	chmod(0700, $node_primary->archive_dir);
+	chmod(0700, $node_primary->data_dir . '/pg_wal');
+
+	# Add appropriate restore_command to the target cluster
+	$restore_command = $node_primary->enable_restoring($node_primary, 0);
+
+	# In archive_cli mode pass restore_command as a command line option
+	# instead of taking it from postgresql.conf
+	if ($test_mode eq 'archive_cli') {
+		$cli_option = "--target-restore-command=$restore_command";
+	}
+
+	# Stop the new primary and be ready to perform the rewind.
+	$node_standby->stop;
+
+	# Note the use of --no-ensure-shutdown here.  WAL files are
+	# gone in this mode and the primary has been stopped
+	# gracefully already.
+	command_ok(
+		[
+			'pg_rewind',
+			'--debug',
+			'--source-pgdata=' . $node_standby->data_dir,
+			'--target-pgdata=' . $node_primary->data_dir,
+			'--no-sync',
+			'--no-ensure-shutdown',
+			$cli_option
+		],
+		"pg_rewind $test_mode");
+
+}
+
 sub run_pg_rewind
 {
 	my $test_mode       = shift;
@@ -231,7 +283,7 @@ sub run_pg_rewind
 	# Append the rewind-specific role to the connection string.
 	$standby_connstr = "$standby_connstr user=rewind_user";
 
-	if ($test_mode eq 'archive')
+	if ($test_mode eq 'archive' or $test_mode eq 'archive_cli')
 	{
 		# pg_rewind is tested with --restore-target-wal by moving all
 		# WAL files to a secondary location.  Note that this leads to
@@ -304,50 +356,13 @@ sub run_pg_rewind
 		$node_standby->safe_psql('postgres',
 			"ALTER ROLE rewind_user WITH REPLICATION;");
 	}
-	elsif ($test_mode eq "archive")
+	elsif ($test_mode eq "archive" or $test_mode eq "archive_cli")
 	{
-
 		# Do rewind using a local pgdata as source and specified
 		# directory with target WAL archive.  The old primary has
 		# to be stopped at this point.
 
-		# Remove the existing archive directory and move all WAL
-		# segments from the old primary to the archives.  These
-		# will be used by pg_rewind.
-		rmtree($node_primary->archive_dir);
-		PostgreSQL::Test::RecursiveCopy::copypath($node_primary->data_dir . "/pg_wal",
-			$node_primary->archive_dir);
-
-		# Fast way to remove entire directory content
-		rmtree($node_primary->data_dir . "/pg_wal");
-		mkdir($node_primary->data_dir . "/pg_wal");
-
-		# Make sure that directories have the right umask as this is
-		# required by a follow-up check on permissions, and better
-		# safe than sorry.
-		chmod(0700, $node_primary->archive_dir);
-		chmod(0700, $node_primary->data_dir . "/pg_wal");
-
-		# Add appropriate restore_command to the target cluster
-		$node_primary->enable_restoring($node_primary, 0);
-
-		# Stop the new primary and be ready to perform the rewind.
-		$node_standby->stop;
-
-		# Note the use of --no-ensure-shutdown here.  WAL files are
-		# gone in this mode and the primary has been stopped
-		# gracefully already.
-		command_ok(
-			[
-				'pg_rewind',
-				"--debug",
-				"--source-pgdata=$standby_pgdata",
-				"--target-pgdata=$primary_pgdata",
-				"--no-sync",
-				"--no-ensure-shutdown",
-				"--restore-target-wal"
-			],
-			'pg_rewind archive');
+		run_pg_rewind_archive($test_mode);
 	}
 	else
 	{

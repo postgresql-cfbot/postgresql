@@ -242,6 +242,25 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><option>-C <replaceable class="parameter">restore_command</replaceable></option></term>
+      <term><option>--target-restore-command=<replaceable class="parameter">restore_command</replaceable></option></term>
+      <listitem>
+       <para>
+        Specifies the <varname>restore_command</varname> to use for retrieving
+        WAL files from the WAL archive if these files are no longer available
+        in the <filename>pg_wal</filename> directory of the target cluster.
+       </para>
+       <para>
+        If <varname>restore_command</varname> is already set in
+        <filename>postgresql.conf</filename>, you can provide the
+        <option>--restore-target-wal</option> option instead. If both options
+        are provided, then <option>--target-restore-command</option>
+        will be used.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>--debug</option></term>
       <listitem>
        <para>

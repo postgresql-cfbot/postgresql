@@ -84,21 +84,22 @@ usage(const char *progname)
 	printf(_("%s resynchronizes a PostgreSQL cluster with another copy of the cluster.\n\n"), progname);
 	printf(_("Usage:\n  %s [OPTION]...\n\n"), progname);
 	printf(_("Options:\n"));
-	printf(_("  -c, --restore-target-wal       use restore_command in target configuration to\n"
-			 "                                 retrieve WAL files from archives\n"));
-	printf(_("  -D, --target-pgdata=DIRECTORY  existing data directory to modify\n"));
-	printf(_("      --source-pgdata=DIRECTORY  source data directory to synchronize with\n"));
-	printf(_("      --source-server=CONNSTR    source server to synchronize with\n"));
-	printf(_("  -n, --dry-run                  stop before modifying anything\n"));
-	printf(_("  -N, --no-sync                  do not wait for changes to be written\n"
-			 "                                 safely to disk\n"));
-	printf(_("  -P, --progress                 write progress messages\n"));
-	printf(_("  -R, --write-recovery-conf      write configuration for replication\n"
-			 "                                 (requires --source-server)\n"));
-	printf(_("      --debug                    write a lot of debug messages\n"));
-	printf(_("      --no-ensure-shutdown       do not automatically fix unclean shutdown\n"));
-	printf(_("  -V, --version                  output version information, then exit\n"));
-	printf(_("  -?, --help                     show this help, then exit\n"));
+	printf(_("  -c, --restore-target-wal              use restore_command in target configuration to\n"
+			 "                                        retrieve WAL files from archives\n"));
+	printf(_("  -C, --target-restore-command=COMMAND  target WAL restore_command\n"));
+	printf(_("  -D, --target-pgdata=DIRECTORY         existing data directory to modify\n"));
+	printf(_("      --source-pgdata=DIRECTORY         source data directory to synchronize with\n"));
+	printf(_("      --source-server=CONNSTR           source server to synchronize with\n"));
+	printf(_("  -n, --dry-run                         stop before modifying anything\n"));
+	printf(_("  -N, --no-sync                         do not wait for changes to be written\n"
+			 "                                        safely to disk\n"));
+	printf(_("  -P, --progress                        write progress messages\n"));
+	printf(_("  -R, --write-recovery-conf             write configuration for replication\n"
+			 "                                        (requires --source-server)\n"));
+	printf(_("      --debug                           write a lot of debug messages\n"));
+	printf(_("      --no-ensure-shutdown              do not automatically fix unclean shutdown\n"));
+	printf(_("  -V, --version                         output version information, then exit\n"));
+	printf(_("  -?, --help                            show this help, then exit\n"));
 	printf(_("\nReport bugs to <%s>.\n"), PACKAGE_BUGREPORT);
 	printf(_("%s home page: <%s>\n"), PACKAGE_NAME, PACKAGE_URL);
 }
@@ -116,6 +117,7 @@ main(int argc, char **argv)
 		{"no-ensure-shutdown", no_argument, NULL, 4},
 		{"version", no_argument, NULL, 'V'},
 		{"restore-target-wal", no_argument, NULL, 'c'},
+		{"target-restore-command", required_argument, NULL, 'C'},
 		{"dry-run", no_argument, NULL, 'n'},
 		{"no-sync", no_argument, NULL, 'N'},
 		{"progress", no_argument, NULL, 'P'},
@@ -156,7 +158,7 @@ main(int argc, char **argv)
 		}
 	}
 
-	while ((c = getopt_long(argc, argv, "cD:nNPR", long_options, &option_index)) != -1)
+	while ((c = getopt_long(argc, argv, "cC:D:nNPR", long_options, &option_index)) != -1)
 	{
 		switch (c)
 		{
@@ -166,6 +168,11 @@ main(int argc, char **argv)
 
 			case 'c':
 				restore_wal = true;
+				break;
+
+			case 'C':
+				restore_wal = true;
+				restore_command = pg_strdup(optarg);
 				break;
 
 			case 'P':
@@ -1019,7 +1026,11 @@ getRestoreCommand(const char *argv0)
 				postgres_cmd[MAXPGPATH],
 				cmd_output[MAXPGPATH];
 
-	if (!restore_wal)
+	/*
+	 * Take restore_command from the postgresql.conf only if it is not already
+	 * provided as a command line option.
+	 */
+	if (!restore_wal || restore_command != NULL)
 		return;
 
 	/* find postgres executable */

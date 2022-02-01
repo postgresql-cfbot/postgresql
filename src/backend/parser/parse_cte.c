@@ -80,6 +80,8 @@ typedef struct CteState
 	/* working state for checkWellFormedRecursion walk only: */
 	int			selfrefcount;	/* number of self-references detected */
 	RecursionContext context;	/* context to allow or disallow self-ref */
+	bool		root_is_union;	/* root of non-recursive term is SETOP_UNION */
+	bool		rotate;			/* self-reference in non-recursive term detected */
 } CteState;
 
 
@@ -853,11 +855,51 @@ checkWellFormedRecursion(CteState *cstate)
 					 parser_errposition(cstate->pstate, cte->location)));
 
 		/* The left-hand operand mustn't contain self-reference at all */
-		cstate->curitem = i;
-		cstate->innerwiths = NIL;
-		cstate->selfrefcount = 0;
-		cstate->context = RECURSION_NONRECURSIVETERM;
-		checkWellFormedRecursionWalker((Node *) stmt->larg, cstate);
+		do {
+			cstate->curitem = i;
+			cstate->innerwiths = NIL;
+			cstate->selfrefcount = 0;
+			cstate->context = RECURSION_NONRECURSIVETERM;
+			cstate->root_is_union = stmt->larg->op == SETOP_UNION;
+			cstate->rotate = false;
+			checkWellFormedRecursionWalker((Node *) stmt->larg, cstate);
+
+			/* The well formed recursion check failed and might have set the
+			 * rotate flag.
+			 */
+			if (cstate->root_is_union && cstate->rotate)
+			{
+				/* By default, the parser creates a left-deep UNION [ALL] tree.
+				 * Usage of multiple recursive terms requires a different
+				 * grouping of the terms. We have to perform a tree rotation to
+				 * the right to fix the structure. Example:
+				 *
+				 * A is a non-recursive term. B, and C both contain a recursive
+				 * reference.
+				 *
+				 *      UNION   --->   UNION
+				 *     /     \        /     \
+				 *   UNION    C      A    UNION
+				 *  /     \              /     \
+				 * A       B            B       C
+				 *
+				 * NOTE: A, B, and C are arbitrary SelectStmt nodes.
+				 */
+				SelectStmt *rarg = stmt->rarg;
+				bool all = stmt->larg->all;
+
+				stmt->rarg = stmt->larg;
+				stmt->larg = stmt->larg->larg;
+				stmt->rarg->larg = stmt->rarg->rarg;
+				stmt->rarg->rarg = rarg;
+				/*
+				 * Make sure that the UNION [ALL] flag is set correctly.
+				 */
+				stmt->rarg->all = stmt->all;
+				stmt->all = all;
+			}
+		} while (cstate->root_is_union && cstate->rotate);
+
 		Assert(cstate->innerwiths == NIL);
 
 		/* Right-hand operand should contain one reference in a valid place */
@@ -955,6 +997,12 @@ checkWellFormedRecursionWalker(Node *node, CteState *cstate)
 			mycte = cstate->items[cstate->curitem].cte;
 			if (strcmp(rv->relname, mycte->ctename) == 0)
 			{
+				/* Found a recursive reference, but it might be fixable */
+				if (cstate->context == RECURSION_NONRECURSIVETERM && cstate->root_is_union)
+				{
+					cstate->rotate = true;
+					return false;
+				}
 				/* Found a recursive reference to the active query */
 				if (cstate->context != RECURSION_OK)
 					ereport(ERROR,
@@ -1117,9 +1165,29 @@ checkWellFormedSelectStmt(SelectStmt *stmt, CteState *cstate)
 		{
 			case SETOP_NONE:
 			case SETOP_UNION:
-				raw_expression_tree_walker((Node *) stmt,
-										   checkWellFormedRecursionWalker,
-										   (void *) cstate);
+				/* check selfrefcount for each recursive member individually */
+				if (stmt->larg != NULL && stmt->rarg != NULL)
+				{
+					int curr_selfrefcount;
+					int selfrefcount = cstate->selfrefcount;
+
+					checkWellFormedRecursionWalker((Node *) stmt->larg, cstate);
+
+					/* Restore selfrefcount to allow multiple linear recursive references */
+					curr_selfrefcount = cstate->selfrefcount;
+					cstate->selfrefcount = selfrefcount;
+
+					checkWellFormedRecursionWalker((Node *) stmt->rarg, cstate);
+					/* Recursive anchors can contain recursive references, but don't have to. */
+					if (cstate->selfrefcount < curr_selfrefcount)
+						cstate->selfrefcount = curr_selfrefcount;
+				}
+				else
+				{
+					raw_expression_tree_walker((Node *) stmt,
+											   checkWellFormedRecursionWalker,
+											   (void *) cstate);
+				}
 				break;
 			case SETOP_INTERSECT:
 				if (stmt->all)

@@ -2205,6 +2205,44 @@ GROUP BY sub_part
 </programlisting>
   </para>
 
+ <sect3 id="queries-recursive-terms">
+  <title>Multiple Recursive Terms</title>
+
+  <para>
+   The <firstterm>recursive term</firstterm> of a recursive <literal>WITH</literal>
+   query may contain exactly one self-reference. Multiple such self-references
+   are only allowed if the <literal>WITH</literal> query features multiple recursive
+   terms, all of which are joined by <literal>UNION</literal> (or <literal>UNION ALL</literal>).
+   Consider the example query below which computes the transitive closure of travel connections
+   from <literal>'my_city'</literal>. Flight and train routes are found in separate tables
+   <literal>flights(source,dest,carrier)</literal> and <literal>trains(source,dest)</literal>.
+   Two recursive terms, joined by <literal>UNION ALL</literal>, use two recursive
+   self-references to <literal>connections</literal> to find viable onward jorneys,
+   in both the <literal>flights</literal> and <literal>trains</literal> tables.
+
+<programlisting>
+WITH RECURSIVE connections(source, dest, carrier) AS (
+     SELECT f.source, f.dest, f.carrier
+      FROM flights f
+      WHERE f.source = 'my_city'
+    UNION ALL
+      SELECT r.source, r.dest, 'Rail' AS carrier
+      FROM trains r
+      WHERE r.source = 'my_city'
+  UNION ALL -- two recursive terms below
+     SELECT c.source, f.dest, f.carrier
+      FROM <emphasis>connections c</emphasis>, flights f
+      WHERE c.dest = f.source
+    UNION ALL
+      SELECT c.source, r.dest, 'Rail' AS carrier
+      FROM <emphasis>connections c</emphasis>, trains r
+      WHERE c.dest = r.source
+)
+SELECT * FROM connections;
+</programlisting>
+  </para>
+ </sect3>
+
   <sect3 id="queries-with-search">
    <title>Search Order</title>
 

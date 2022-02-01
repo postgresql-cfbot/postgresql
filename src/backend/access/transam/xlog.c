@@ -1858,7 +1858,7 @@ WaitXLogInsertionsToFinish(XLogRecPtr upto)
 	if (upto > reservedUpto)
 	{
 		ereport(LOG,
-				(errmsg("request to flush past end of generated WAL; request %X/%X, current position %X/%X",
+				(errmsg("request to flush past end of generated WAL; request lsn %X/%X, current lsn %X/%X",
 						LSN_FORMAT_ARGS(upto), LSN_FORMAT_ARGS(reservedUpto))));
 		upto = reservedUpto;
 	}
@@ -5962,7 +5962,7 @@ recoveryStopsBefore(XLogReaderState *record)
 		recoveryStopTime = 0;
 		recoveryStopName[0] = '\0';
 		ereport(LOG,
-				(errmsg("recovery stopping before WAL location (LSN) \"%X/%X\"",
+				(errmsg("recovery stopping before WAL LSN \"%X/%X\"",
 						LSN_FORMAT_ARGS(recoveryStopLSN))));
 		return true;
 	}
@@ -6125,7 +6125,7 @@ recoveryStopsAfter(XLogReaderState *record)
 		recoveryStopTime = 0;
 		recoveryStopName[0] = '\0';
 		ereport(LOG,
-				(errmsg("recovery stopping after WAL location (LSN) \"%X/%X\"",
+				(errmsg("recovery stopping after WAL LSN \"%X/%X\"",
 						LSN_FORMAT_ARGS(recoveryStopLSN))));
 		return true;
 	}
@@ -6715,7 +6715,7 @@ StartupXLOG(void)
 	 */
 	if (!XRecOffIsValid(ControlFile->checkPoint))
 		ereport(FATAL,
-				(errmsg("control file contains invalid checkpoint location")));
+				(errmsg("control file contains invalid checkpoint LSN")));
 
 	switch (ControlFile->state)
 	{
@@ -6843,7 +6843,7 @@ StartupXLOG(void)
 							recoveryTargetName)));
 		else if (recoveryTarget == RECOVERY_TARGET_LSN)
 			ereport(LOG,
-					(errmsg("starting point-in-time recovery to WAL location (LSN) \"%X/%X\"",
+					(errmsg("starting point-in-time recovery to WAL LSN \"%X/%X\"",
 							LSN_FORMAT_ARGS(recoveryTargetLSN))));
 		else if (recoveryTarget == RECOVERY_TARGET_IMMEDIATE)
 			ereport(LOG,
@@ -6926,7 +6926,7 @@ StartupXLOG(void)
 				if (!ReadRecord(xlogreader, LOG, false,
 								checkPoint.ThisTimeLineID))
 					ereport(FATAL,
-							(errmsg("could not find redo location referenced by checkpoint record"),
+							(errmsg("could not find redo LSN referenced by checkpoint record"),
 							 errhint("If you are restoring from a backup, touch \"%s/recovery.signal\" and add required recovery options.\n"
 									 "If you are not restoring from a backup, try removing the file \"%s/backup_label\".\n"
 									 "Be careful: removing \"%s/backup_label\" will result in a corrupt cluster if restoring from a backup.",
@@ -8923,7 +8923,8 @@ LogCheckpointEnd(bool restartpoint)
 						"%d WAL file(s) added, %d removed, %d recycled; "
 						"write=%ld.%03d s, sync=%ld.%03d s, total=%ld.%03d s; "
 						"sync files=%d, longest=%ld.%03d s, average=%ld.%03d s; "
-						"distance=%d kB, estimate=%d kB",
+						"distance=%d kB, estimate=%d kB; "
+						"lsn=%X/%X, redo lsn=%X/%X",
 						CheckpointStats.ckpt_bufs_written,
 						(double) CheckpointStats.ckpt_bufs_written * 100 / NBuffers,
 						CheckpointStats.ckpt_segs_added,
@@ -8936,14 +8937,17 @@ LogCheckpointEnd(bool restartpoint)
 						longest_msecs / 1000, (int) (longest_msecs % 1000),
 						average_msecs / 1000, (int) (average_msecs % 1000),
 						(int) (PrevCheckPointDistance / 1024.0),
-						(int) (CheckPointDistanceEstimate / 1024.0))));
+						(int) (CheckPointDistanceEstimate / 1024.0),
+						LSN_FORMAT_ARGS(ControlFile->checkPoint),
+						LSN_FORMAT_ARGS(ControlFile->checkPointCopy.redo))));
 	else
 		ereport(LOG,
 				(errmsg("checkpoint complete: wrote %d buffers (%.1f%%); "
 						"%d WAL file(s) added, %d removed, %d recycled; "
 						"write=%ld.%03d s, sync=%ld.%03d s, total=%ld.%03d s; "
 						"sync files=%d, longest=%ld.%03d s, average=%ld.%03d s; "
-						"distance=%d kB, estimate=%d kB",
+						"distance=%d kB, estimate=%d kB; "
+						"lsn=%X/%X, redo lsn=%X/%X",
 						CheckpointStats.ckpt_bufs_written,
 						(double) CheckpointStats.ckpt_bufs_written * 100 / NBuffers,
 						CheckpointStats.ckpt_segs_added,
@@ -8956,7 +8960,9 @@ LogCheckpointEnd(bool restartpoint)
 						longest_msecs / 1000, (int) (longest_msecs % 1000),
 						average_msecs / 1000, (int) (average_msecs % 1000),
 						(int) (PrevCheckPointDistance / 1024.0),
-						(int) (CheckPointDistanceEstimate / 1024.0))));
+						(int) (CheckPointDistanceEstimate / 1024.0),
+						LSN_FORMAT_ARGS(ControlFile->checkPoint),
+						LSN_FORMAT_ARGS(ControlFile->checkPointCopy.redo))));
 }
 
 /*

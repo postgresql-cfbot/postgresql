@@ -79,7 +79,7 @@ rewind_parseTimeLineHistory(char *buffer, TimeLineID targetTLI, int *nentries)
 		if (nfields != 3)
 		{
 			pg_log_error("syntax error in history file: %s", fline);
-			pg_log_error("Expected a write-ahead log switchpoint location.");
+			pg_log_error("Expected a WAL switchpoint LSN.");
 			exit(1);
 		}
 		if (entries && tli <= lasttli)

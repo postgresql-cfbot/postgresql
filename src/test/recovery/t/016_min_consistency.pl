@@ -126,7 +126,7 @@ my @control_data = split("\n", $stdout);
 my $offline_recovery_lsn = undef;
 foreach (@control_data)
 {
-	if ($_ =~ /^Minimum recovery ending location:\s*(.*)$/mg)
+	if ($_ =~ /^Minimum recovery ending LSN:\s*(.*)$/mg)
 	{
 		$offline_recovery_lsn = $1;
 		last;

@@ -473,7 +473,7 @@ reached_end_position(XLogRecPtr segendpos, uint32 timeline,
 
 			if (sscanf(xlogend, "%X/%X", &hi, &lo) != 2)
 			{
-				pg_log_error("could not parse write-ahead log location \"%s\"",
+				pg_log_error("could not parse WAL LSN \"%s\"",
 							 xlogend);
 				exit(1);
 			}
@@ -612,7 +612,7 @@ StartLogStreamer(char *startpos, uint32 timeline, char *sysidentifier)
 	/* Convert the starting position */
 	if (sscanf(startpos, "%X/%X", &hi, &lo) != 2)
 	{
-		pg_log_error("could not parse write-ahead log location \"%s\"",
+		pg_log_error("could not parse WAL LSN \"%s\"",
 					 startpos);
 		exit(1);
 	}
@@ -2220,7 +2220,7 @@ BaseBackup(void)
 		 */
 		if (sscanf(xlogend, "%X/%X", &hi, &lo) != 2)
 		{
-			pg_log_error("could not parse write-ahead log location \"%s\"",
+			pg_log_error("could not parse WAL LSN \"%s\"",
 						 xlogend);
 			exit(1);
 		}

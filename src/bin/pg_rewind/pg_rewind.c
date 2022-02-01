@@ -343,7 +343,7 @@ main(int argc, char **argv)
 		XLogRecPtr	chkptendrec;
 
 		findCommonAncestorTimeline(&divergerec, &lastcommontliIndex);
-		pg_log_info("servers diverged at WAL location %X/%X on timeline %u",
+		pg_log_info("servers diverged at WAL LSN %X/%X on timeline %u",
 					LSN_FORMAT_ARGS(divergerec),
 					targetHistory[lastcommontliIndex].tli);
 

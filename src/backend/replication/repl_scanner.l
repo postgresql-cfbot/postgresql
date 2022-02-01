@@ -148,7 +148,7 @@ MANIFEST_CHECKSUMS	{ return K_MANIFEST_CHECKSUMS; }
 					uint32	hi,
 							lo;
 					if (sscanf(yytext, "%X/%X", &hi, &lo) != 2)
-						yyerror("invalid streaming start location");
+						yyerror("invalid streaming start LSN");
 					yylval.recptr = ((uint64) hi) << 32 | lo;
 					return RECPTR;
 				}

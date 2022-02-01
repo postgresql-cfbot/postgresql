@@ -235,9 +235,9 @@ main(int argc, char *argv[])
 		   dbState(ControlFile->state));
 	printf(_("pg_control last modified:             %s\n"),
 		   pgctime_str);
-	printf(_("Latest checkpoint location:           %X/%X\n"),
+	printf(_("Latest checkpoint LSN:                %X/%X\n"),
 		   LSN_FORMAT_ARGS(ControlFile->checkPoint));
-	printf(_("Latest checkpoint's REDO location:    %X/%X\n"),
+	printf(_("Latest checkpoint's REDO LSN:         %X/%X\n"),
 		   LSN_FORMAT_ARGS(ControlFile->checkPointCopy.redo));
 	printf(_("Latest checkpoint's REDO WAL file:    %s\n"),
 		   xlogfilename);
@@ -274,13 +274,13 @@ main(int argc, char *argv[])
 		   ckpttime_str);
 	printf(_("Fake LSN counter for unlogged rels:   %X/%X\n"),
 		   LSN_FORMAT_ARGS(ControlFile->unloggedLSN));
-	printf(_("Minimum recovery ending location:     %X/%X\n"),
+	printf(_("Minimum recovery ending LSN:          %X/%X\n"),
 		   LSN_FORMAT_ARGS(ControlFile->minRecoveryPoint));
 	printf(_("Min recovery ending loc's timeline:   %u\n"),
 		   ControlFile->minRecoveryPointTLI);
-	printf(_("Backup start location:                %X/%X\n"),
+	printf(_("Backup start LSN:                     %X/%X\n"),
 		   LSN_FORMAT_ARGS(ControlFile->backupStartPoint));
-	printf(_("Backup end location:                  %X/%X\n"),
+	printf(_("Backup end LSN:                       %X/%X\n"),
 		   LSN_FORMAT_ARGS(ControlFile->backupEndPoint));
 	printf(_("End-of-backup record required:        %s\n"),
 		   ControlFile->backupEndRequired ? _("yes") : _("no"));

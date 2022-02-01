@@ -447,7 +447,7 @@ RunIdentifySystem(PGconn *conn, char **sysid, TimeLineID *starttli,
 	{
 		if (sscanf(PQgetvalue(res, 0, 2), "%X/%X", &hi, &lo) != 2)
 		{
-			pg_log_error("could not parse write-ahead log location \"%s\"",
+			pg_log_error("could not parse WAL LSN \"%s\"",
 						 PQgetvalue(res, 0, 2));
 
 			PQclear(res);

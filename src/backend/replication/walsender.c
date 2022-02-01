@@ -812,7 +812,7 @@ StartReplication(StartReplicationCmd *cmd)
 		if (FlushPtr < cmd->startpoint)
 		{
 			ereport(ERROR,
-					(errmsg("requested starting point %X/%X is ahead of the WAL flush position of this server %X/%X",
+					(errmsg("requested starting point %X/%X is ahead of the WAL flush LSN of this server %X/%X",
 							LSN_FORMAT_ARGS(cmd->startpoint),
 							LSN_FORMAT_ARGS(FlushPtr))));
 		}

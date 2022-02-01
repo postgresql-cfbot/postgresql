@@ -753,7 +753,7 @@ main(int argc, char **argv)
 			case 'E':
 				if (sscanf(optarg, "%X/%X", &hi, &lo) != 2)
 				{
-					pg_log_error("could not parse end position \"%s\"", optarg);
+					pg_log_error("could not parse end LSN \"%s\"", optarg);
 					exit(1);
 				}
 				endpos = ((uint64) hi) << 32 | lo;

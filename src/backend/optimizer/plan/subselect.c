@@ -1216,6 +1216,7 @@ inline_cte_walker(Node *node, inline_cte_walker_context *context)
 			rte->rtekind = RTE_SUBQUERY;
 			rte->subquery = newquery;
 			rte->security_barrier = false;
+			rte->security_invoker = false;
 
 			/* Zero out CTE-specific fields */
 			rte->ctename = NULL;

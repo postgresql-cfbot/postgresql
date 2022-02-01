@@ -261,15 +261,26 @@ CREATE VIEW mysecview3 WITH (security_barrier=false)
        AS SELECT * FROM tbl1 WHERE a < 0;
 CREATE VIEW mysecview4 WITH (security_barrier)
        AS SELECT * FROM tbl1 WHERE a <> 0;
-CREATE VIEW mysecview5 WITH (security_barrier=100)	-- Error
+CREATE VIEW mysecview5 WITH (security_invoker=true)
+       AS SELECT * FROM tbl1 WHERE a = 100;
+CREATE VIEW mysecview6 WITH (security_invoker=false)
        AS SELECT * FROM tbl1 WHERE a > 100;
+CREATE VIEW mysecview7 WITH (security_invoker)
+       AS SELECT * FROM tbl1 WHERE a < 100;
+CREATE VIEW mysecview8 WITH (security_barrier=100)	-- Error
+       AS SELECT * FROM tbl1 WHERE a <> 100;
 ERROR:  invalid value for boolean option "security_barrier": 100
-CREATE VIEW mysecview6 WITH (invalid_option)		-- Error
+CREATE VIEW mysecview9 WITH (security_invoker=100)	-- Error
+       AS SELECT * FROM tbl1 WHERE a = 100;
+ERROR:  invalid value for boolean option "security_invoker": 100
+CREATE VIEW mysecview10 WITH (invalid_option)		-- Error
        AS SELECT * FROM tbl1 WHERE a < 100;
 ERROR:  unrecognized parameter "invalid_option"
 SELECT relname, relkind, reloptions FROM pg_class
        WHERE oid in ('mysecview1'::regclass, 'mysecview2'::regclass,
-                     'mysecview3'::regclass, 'mysecview4'::regclass)
+                     'mysecview3'::regclass, 'mysecview4'::regclass,
+                     'mysecview5'::regclass, 'mysecview6'::regclass,
+                     'mysecview7'::regclass)
        ORDER BY relname;
   relname   | relkind |        reloptions        
 ------------+---------+--------------------------
@@ -277,7 +288,10 @@ SELECT relname, relkind, reloptions FROM pg_class
  mysecview2 | v       | {security_barrier=true}
  mysecview3 | v       | {security_barrier=false}
  mysecview4 | v       | {security_barrier=true}
-(4 rows)
+ mysecview5 | v       | {security_invoker=true}
+ mysecview6 | v       | {security_invoker=false}
+ mysecview7 | v       | {security_invoker=true}
+(7 rows)
 
 CREATE OR REPLACE VIEW mysecview1
        AS SELECT * FROM tbl1 WHERE a = 256;
@@ -287,9 +301,17 @@ CREATE OR REPLACE VIEW mysecview3 WITH (security_barrier=true)
        AS SELECT * FROM tbl1 WHERE a < 256;
 CREATE OR REPLACE VIEW mysecview4 WITH (security_barrier=false)
        AS SELECT * FROM tbl1 WHERE a <> 256;
+CREATE OR REPLACE VIEW mysecview5
+       AS SELECT * FROM tbl1 WHERE a > 256;
+CREATE OR REPLACE VIEW mysecview6 WITH (security_invoker=true)
+       AS SELECT * FROM tbl1 WHERE a < 256;
+CREATE OR REPLACE VIEW mysecview7 WITH (security_invoker=false)
+       AS SELECT * FROM tbl1 WHERE a <> 256;
 SELECT relname, relkind, reloptions FROM pg_class
        WHERE oid in ('mysecview1'::regclass, 'mysecview2'::regclass,
-                     'mysecview3'::regclass, 'mysecview4'::regclass)
+                     'mysecview3'::regclass, 'mysecview4'::regclass,
+                     'mysecview5'::regclass, 'mysecview6'::regclass,
+                     'mysecview7'::regclass)
        ORDER BY relname;
   relname   | relkind |        reloptions        
 ------------+---------+--------------------------
@@ -297,7 +319,10 @@ SELECT relname, relkind, reloptions FROM pg_class
  mysecview2 | v       | 
  mysecview3 | v       | {security_barrier=true}
  mysecview4 | v       | {security_barrier=false}
-(4 rows)
+ mysecview5 | v       | 
+ mysecview6 | v       | {security_invoker=true}
+ mysecview7 | v       | {security_invoker=false}
+(7 rows)
 
 -- Check that unknown literals are converted to "text" in CREATE VIEW,
 -- so that we don't end up with unknown-type columns.
@@ -2010,7 +2035,7 @@ drop cascades to view aliased_view_2
 drop cascades to view aliased_view_3
 drop cascades to view aliased_view_4
 DROP SCHEMA testviewschm2 CASCADE;
-NOTICE:  drop cascades to 74 other objects
+NOTICE:  drop cascades to 77 other objects
 DETAIL:  drop cascades to table t1
 drop cascades to view temporal1
 drop cascades to view temporal2
@@ -2031,6 +2056,9 @@ drop cascades to view mysecview1
 drop cascades to view mysecview2
 drop cascades to view mysecview3
 drop cascades to view mysecview4
+drop cascades to view mysecview5
+drop cascades to view mysecview6
+drop cascades to view mysecview7
 drop cascades to view unspecified_types
 drop cascades to table tt1
 drop cascades to table tx1

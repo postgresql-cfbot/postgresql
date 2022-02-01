@@ -11,9 +11,11 @@ DROP USER IF EXISTS regress_rls_alice;
 DROP USER IF EXISTS regress_rls_bob;
 DROP USER IF EXISTS regress_rls_carol;
 DROP USER IF EXISTS regress_rls_dave;
+DROP USER IF EXISTS regress_rls_grace;
 DROP USER IF EXISTS regress_rls_exempt_user;
 DROP ROLE IF EXISTS regress_rls_group1;
 DROP ROLE IF EXISTS regress_rls_group2;
+DROP ROLE IF EXISTS regress_rls_group3;
 
 DROP SCHEMA IF EXISTS regress_rls_schema CASCADE;
 
@@ -24,12 +26,15 @@ CREATE USER regress_rls_alice NOLOGIN;
 CREATE USER regress_rls_bob NOLOGIN;
 CREATE USER regress_rls_carol NOLOGIN;
 CREATE USER regress_rls_dave NOLOGIN;
+CREATE USER regress_rls_grace NOLOGIN;
 CREATE USER regress_rls_exempt_user BYPASSRLS NOLOGIN;
 CREATE ROLE regress_rls_group1 NOLOGIN;
 CREATE ROLE regress_rls_group2 NOLOGIN;
+CREATE ROLE regress_rls_group3 NOLOGIN;
 
 GRANT regress_rls_group1 TO regress_rls_bob;
 GRANT regress_rls_group2 TO regress_rls_carol;
+GRANT regress_rls_group3 TO regress_rls_grace;
 
 CREATE SCHEMA regress_rls_schema;
 GRANT ALL ON SCHEMA regress_rls_schema to public;
@@ -224,6 +229,27 @@ SET SESSION AUTHORIZATION regress_rls_alice;
 SET row_security TO OFF;
 SELECT * FROM document;
 SELECT * FROM category;
+
+-- Test views with security_invoker reloption set
+RESET SESSION AUTHORIZATION;
+SET row_security TO ON;
+CREATE POLICY p3 ON category FOR ALL TO regress_rls_group3 USING (cname = 'novel');
+CREATE VIEW v1 WITH (security_invoker=true) AS
+SELECT * FROM category;
+CREATE OR REPLACE FUNCTION security_invoker_func() RETURNS SETOF category
+    AS 'SELECT * FROM category'
+    LANGUAGE SQL STABLE STRICT;
+CREATE VIEW v1f WITH (security_invoker=true) AS
+SELECT * FROM security_invoker_func();
+
+GRANT SELECT ON category TO regress_rls_group3;
+GRANT SELECT ON v1 TO regress_rls_group3;
+GRANT SELECT ON v1f TO regress_rls_group3;
+
+SET SESSION AUTHORIZATION regress_rls_grace;
+SELECT * FROM category;
+SELECT * FROM v1;
+SELECT * FROM v1f;
 
 --
 -- Table inheritance and RLS policy

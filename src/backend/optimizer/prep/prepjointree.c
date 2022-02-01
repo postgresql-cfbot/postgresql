@@ -660,6 +660,7 @@ preprocess_function_rtes(PlannerInfo *root)
 				rte->rtekind = RTE_SUBQUERY;
 				rte->subquery = funcquery;
 				rte->security_barrier = false;
+				rte->security_invoker = false;
 				/* Clear fields that should not be set in a subquery RTE */
 				rte->functions = NIL;
 				rte->funcordinality = false;

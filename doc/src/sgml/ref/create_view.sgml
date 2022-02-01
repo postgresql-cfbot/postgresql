@@ -152,6 +152,23 @@ CREATE VIEW [ <replaceable>schema</replaceable> . ] <replaceable>view_name</repl
          </para>
         </listitem>
        </varlistentry>
+
+       <varlistentry>
+        <term><literal>security_invoker</literal> (<type>boolean</type>)</term>
+        <listitem>
+         <para>
+          If this option is set, it will cause all access to the underlying
+          tables to be checked as referenced by the invoking user, rather than
+          the view owner.  This will only take effect when row level security is
+          enabled on the underlying tables (using <link linkend="sql-altertable">
+          <command>ALTER TABLE ... ENABLE ROW LEVEL SECURITY</command></link>).
+         </para>
+         <para>This option can be changed on existing views using <link
+          linkend="sql-alterview"><command>ALTER VIEW</command></link>. See
+          <xref linkend="ddl-rowsecurity"/> for more details on row level security.
+         </para>
+        </listitem>
+       </varlistentry>
       </variablelist></para>
     </listitem>
    </varlistentry>
@@ -265,13 +282,20 @@ CREATE VIEW vista AS SELECT text 'Hello World' AS hello;
    </para>
 
    <para>
-    Access to tables referenced in the view is determined by permissions of
-    the view owner.  In some cases, this can be used to provide secure but
-    restricted access to the underlying tables.  However, not all views are
-    secure against tampering; see <xref linkend="rules-privileges"/> for
-    details.  Functions called in the view are treated the same as if they had
-    been called directly from the query using the view.  Therefore the user of
-    a view must have permissions to call all functions used by the view.
+    By default, access to tables referenced in the view is determined by
+    permissions of the view owner.  In some cases, this can be used to provide
+    secure but restricted access to the underlying tables.  However, not all
+    views are secure against tampering; see <xref linkend="rules-privileges"/>
+    for details.  Functions called in the view are treated the same as if they
+    had been called directly from the query using the view.  Therefore the user
+    of a view must have permissions to call all functions used by the view.
+   </para>
+
+   <para>
+    If the <firstterm>security_invoker</firstterm> option is set on the view,
+    access to tables is determined by permissions of the invoking user, rather
+    than the view owner.  This can be used to provide stricter permission
+    checking to the underlying tables than by default.
    </para>
 
    <para>

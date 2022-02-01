@@ -542,7 +542,7 @@ select explain_analyze_without_memory('select * from (select * from t order by a
          Full-sort Groups: 2  Sort Methods: top-N heapsort, quicksort  Average Memory: NNkB  Peak Memory: NNkB
          ->  Sort (actual rows=101 loops=1)
                Sort Key: t.a
-               Sort Method: quicksort  Memory: NNkB
+               Sort Method: quicksort
                ->  Seq Scan on t (actual rows=1000 loops=1)
 (9 rows)
 
@@ -745,7 +745,7 @@ select explain_analyze_without_memory('select * from (select * from t order by a
          Pre-sorted Groups: 5  Sort Methods: top-N heapsort, quicksort  Average Memory: NNkB  Peak Memory: NNkB
          ->  Sort (actual rows=1000 loops=1)
                Sort Key: t.a
-               Sort Method: quicksort  Memory: NNkB
+               Sort Method: quicksort
                ->  Seq Scan on t (actual rows=1000 loops=1)
 (10 rows)
 

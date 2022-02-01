@@ -1550,27 +1550,15 @@ insert into sq_limit values
     (6, 2, 2),
     (7, 3, 3),
     (8, 4, 4);
-create function explain_sq_limit() returns setof text language plpgsql as
-$$
-declare ln text;
-begin
-    for ln in
-        explain (analyze, summary off, timing off, costs off)
-        select * from (select pk,c2 from sq_limit order by c1,pk) as x limit 3
-    loop
-        ln := regexp_replace(ln, 'Memory: \S*',  'Memory: xxx');
-        return next ln;
-    end loop;
-end;
-$$;
-select * from explain_sq_limit();
-                        explain_sq_limit                        
+explain (analyze)
+        select * from (select pk,c2 from sq_limit order by c1,pk) as x limit 3;
+                           QUERY PLAN                           
 ----------------------------------------------------------------
  Limit (actual rows=3 loops=1)
    ->  Subquery Scan on x (actual rows=3 loops=1)
          ->  Sort (actual rows=3 loops=1)
                Sort Key: sq_limit.c1, sq_limit.pk
-               Sort Method: top-N heapsort  Memory: xxx
+               Sort Method: top-N heapsort
                ->  Seq Scan on sq_limit (actual rows=8 loops=1)
 (6 rows)
 
@@ -1582,7 +1570,6 @@ select * from (select pk,c2 from sq_limit order by c1,pk) as x limit 3;
   2 |  2
 (3 rows)
 
-drop function explain_sq_limit();
 drop table sq_limit;
 --
 -- Ensure that backward scan direction isn't propagated into

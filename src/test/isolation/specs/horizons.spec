@@ -82,7 +82,7 @@ step pruner_vacuum
 step pruner_query
 {
     SELECT explain_json($$
-        EXPLAIN (FORMAT json, BUFFERS, ANALYZE)
+        EXPLAIN (FORMAT json, BUFFERS, ANALYZE, machine)
 	  SELECT * FROM horizons_tst ORDER BY data;$$)->0->'Plan'->'Heap Fetches';
 }
 

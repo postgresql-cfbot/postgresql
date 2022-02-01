@@ -731,8 +731,8 @@ EXPLAIN ANALYZE SELECT * FROM polygon_tbl WHERE f1 @&gt; polygon '(0.5,2.0)';
    </para>
 
    <para>
-    <command>EXPLAIN</command> has a <literal>BUFFERS</literal> option that can be used with
-    <literal>ANALYZE</literal> to get even more run time statistics:
+    <command>EXPLAIN ANALYZE</command> has a <literal>BUFFERS</literal> option which
+    provides even more run time statistics:
 
 <screen>
 EXPLAIN (ANALYZE, BUFFERS) SELECT * FROM tenk1 WHERE unique1 &lt; 100 AND unique2 &gt; 9000;

@@ -45,6 +45,7 @@
 #include "catalog/pg_authid.h"
 #include "catalog/storage.h"
 #include "commands/async.h"
+#include "commands/explain.h"
 #include "commands/prepare.h"
 #include "commands/tablespace.h"
 #include "commands/trigger.h"
@@ -1470,6 +1471,18 @@ static struct config_bool ConfigureNamesBool[] =
 		true,
 		NULL, NULL, NULL
 	},
+
+	{
+		{"explain_regress", PGC_USERSET, DEVELOPER_OPTIONS,
+			gettext_noop("Change defaults of EXPLAIN to avoid unstable output."),
+			NULL,
+			GUC_NOT_IN_SAMPLE | GUC_EXPLAIN
+		},
+		&explain_regress,
+		false,
+		NULL, NULL, NULL
+	},
+
 	{
 		{"log_parser_stats", PGC_SUSET, STATS_MONITORING,
 			gettext_noop("Writes parser performance statistics to the server log."),

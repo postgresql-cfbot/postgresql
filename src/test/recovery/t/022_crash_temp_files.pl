@@ -143,7 +143,8 @@ $node->poll_query_until('postgres', undef, '');
 
 # Check for temporary files
 is( $node->safe_psql(
-		'postgres', 'SELECT COUNT(1) FROM pg_ls_dir($$base/pgsql_tmp$$)'),
+		'postgres',
+		'SELECT COUNT(1) FROM pg_ls_dir($$base$$) WHERE pg_ls_dir = \'pgsql_tmp\''),
 	qq(0),
 	'no temporary files');
 
@@ -241,7 +242,8 @@ $node->restart();
 
 # Check the temporary files -- should be gone
 is( $node->safe_psql(
-		'postgres', 'SELECT COUNT(1) FROM pg_ls_dir($$base/pgsql_tmp$$)'),
+		'postgres',
+		'SELECT COUNT(1) FROM pg_ls_dir($$base$$) WHERE pg_ls_dir = \'pgsql_tmp\''),
 	qq(0),
 	'temporary file was removed');
 

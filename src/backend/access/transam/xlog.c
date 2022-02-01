@@ -56,7 +56,6 @@
 #include "replication/logical.h"
 #include "replication/origin.h"
 #include "replication/slot.h"
-#include "replication/snapbuild.h"
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
 #include "storage/bufmgr.h"
@@ -7157,16 +7156,19 @@ StartupXLOG(void)
 	XLogCtl->ckptFullXid = checkPoint.nextXid;
 
 	/*
+	 * Startup logical state, needs to be setup now so we have proper data
+	 * during crash recovery.
+	 *
+	 * NB: This also performs some important cleanup that must be done prior to
+	 * other replication slot steps (e.g., StartupReplicationSlots()).
+	 */
+	StartupReorderBuffer();
+
+	/*
 	 * Initialize replication slots, before there's a chance to remove
 	 * required resources.
 	 */
 	StartupReplicationSlots();
-
-	/*
-	 * Startup logical state, needs to be setup now so we have proper data
-	 * during crash recovery.
-	 */
-	StartupReorderBuffer();
 
 	/*
 	 * Startup CLOG. This must be done after ShmemVariableCache->nextXid has
@@ -9569,8 +9571,7 @@ CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 {
 	CheckPointRelationMap();
 	CheckPointReplicationSlots();
-	CheckPointSnapBuild();
-	CheckPointLogicalRewriteHeap();
+	CheckPointLogicalRewriteHeap(flags & (CHECKPOINT_IS_SHUTDOWN | CHECKPOINT_END_OF_RECOVERY));
 	CheckPointReplicationOrigin();
 
 	/* Write out all dirty data in SLRUs and the main buffer pool */

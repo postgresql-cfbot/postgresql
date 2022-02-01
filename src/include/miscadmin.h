@@ -329,6 +329,7 @@ typedef enum BackendType
 	B_BG_WORKER,
 	B_BG_WRITER,
 	B_CHECKPOINTER,
+	B_CUSTODIAN,
 	B_STARTUP,
 	B_WAL_RECEIVER,
 	B_WAL_SENDER,
@@ -433,6 +434,7 @@ typedef enum
 	BgWriterProcess,
 	ArchiverProcess,
 	CheckpointerProcess,
+	CustodianProcess,
 	WalWriterProcess,
 	WalReceiverProcess,
 
@@ -445,6 +447,7 @@ extern AuxProcType MyAuxProcType;
 #define AmBackgroundWriterProcess() (MyAuxProcType == BgWriterProcess)
 #define AmArchiverProcess()			(MyAuxProcType == ArchiverProcess)
 #define AmCheckpointerProcess()		(MyAuxProcType == CheckpointerProcess)
+#define AmCustodianProcess()		(MyAuxProcType == CustodianProcess)
 #define AmWalWriterProcess()		(MyAuxProcType == WalWriterProcess)
 #define AmWalReceiverProcess()		(MyAuxProcType == WalReceiverProcess)
 

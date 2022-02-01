@@ -681,5 +681,6 @@ TransactionId ReorderBufferGetOldestXmin(ReorderBuffer *rb);
 void		ReorderBufferSetRestartPoint(ReorderBuffer *, XLogRecPtr ptr);
 
 void		StartupReorderBuffer(void);
+void		RemoveStagedSlotDirectories(void);
 
 #endif

@@ -170,6 +170,12 @@ static bool call_enum_check_hook(struct config_enum *conf, int *newval,
 								 void **extra, GucSource source, int elevel);
 
 static bool check_log_destination(char **newval, void **extra, GucSource source);
+static bool check_local_preload_libraries(char **newval, void **extra,
+		GucSource source);
+static bool check_session_preload_libraries(char **newval, void **extra,
+		GucSource source);
+static bool check_shared_preload_libraries(char **newval, void **extra,
+		GucSource source);
 static void assign_log_destination(const char *newval, void *extra);
 
 static bool check_wal_consistency_checking(char **newval, void **extra,
@@ -4188,7 +4194,7 @@ static struct config_string ConfigureNamesString[] =
 		},
 		&session_preload_libraries_string,
 		"",
-		NULL, NULL, NULL
+		check_session_preload_libraries, NULL, NULL
 	},
 
 	{
@@ -4199,7 +4205,7 @@ static struct config_string ConfigureNamesString[] =
 		},
 		&shared_preload_libraries_string,
 		"",
-		NULL, NULL, NULL
+		check_shared_preload_libraries, NULL, NULL
 	},
 
 	{
@@ -4210,7 +4216,7 @@ static struct config_string ConfigureNamesString[] =
 		},
 		&local_preload_libraries_string,
 		"",
-		NULL, NULL, NULL
+		check_local_preload_libraries, NULL, NULL
 	},
 
 	{
@@ -12137,6 +12143,79 @@ check_max_worker_processes(int *newval, void **extra, GucSource source)
 		*newval + max_wal_senders > MAX_BACKENDS)
 		return false;
 	return true;
+}
+
+/*
+ * See also load_libraries() and internal_load_library().
+ */
+static bool
+check_preload_libraries(char **newval, void **extra, GucSource source,
+	bool restricted)
+{
+	char		*rawstring;
+	List		*elemlist;
+	ListCell	*l;
+
+	/* nothing to do if empty */
+	if (newval == NULL || *newval[0] == '\0')
+		return true;
+
+	/* Need a modifiable copy of string */
+	rawstring = pstrdup(*newval);
+
+	/* Parse string into list of filename paths */
+	if (!SplitDirectoriesString(rawstring, ',', &elemlist))
+	{
+		/* Should not happen ? */
+		return false;
+	}
+
+	foreach(l, elemlist)
+	{
+		/* Note that filename was already canonicalized */
+		char       *filename = (char *) lfirst(l);
+		char       *expanded = NULL;
+
+		/* If restricting, insert $libdir/plugins if not mentioned already */
+		if (restricted && first_dir_separator(filename) == NULL)
+		{
+			expanded = psprintf("$libdir/plugins/%s", filename);
+			filename = expanded;
+		}
+
+		/*
+		 * stat()/access() only check that the library exists, not that it has
+		 * the correct magic number or even a library.  But error messages from
+		 * dlopen() are not portable, so it'd be hard to report any problem
+		 * other than "does not exist".
+		 */
+		if (access(filename, R_OK) == -1) // F_OK
+			ereport(WARNING,
+					errcode_for_file_access(),
+					 errmsg("could not access file \"%s\"", filename));
+	}
+
+	list_free_deep(elemlist);
+	pfree(rawstring);
+	return true;
+}
+
+static bool
+check_shared_preload_libraries(char **newval, void **extra, GucSource source)
+{
+	return check_preload_libraries(newval, extra, source, true);
+}
+
+static bool
+check_local_preload_libraries(char **newval, void **extra, GucSource source)
+{
+	return check_preload_libraries(newval, extra, source, false);
+}
+
+static bool
+check_session_preload_libraries(char **newval, void **extra, GucSource source)
+{
+	return check_preload_libraries(newval, extra, source, true);
 }
 
 static bool

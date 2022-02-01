@@ -1658,7 +1658,7 @@ load_libraries(const char *libraries, const char *gucname, bool restricted)
 			expanded = psprintf("$libdir/plugins/%s", filename);
 			filename = expanded;
 		}
-		load_file(filename, restricted);
+		load_file_guc(filename, restricted, gucname);
 		ereport(DEBUG1,
 				(errmsg_internal("loaded library \"%s\"", filename)));
 		if (expanded)

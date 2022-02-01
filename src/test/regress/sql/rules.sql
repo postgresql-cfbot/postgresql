@@ -1198,6 +1198,7 @@ drop table hat_data;
 
 -- test for pg_get_functiondef properly regurgitating SET parameters
 -- Note that the function is kept around to stress pg_dump.
+SET check_function_bodies=no;
 CREATE FUNCTION func_with_set_params() RETURNS integer
     AS 'select 1;'
     LANGUAGE SQL

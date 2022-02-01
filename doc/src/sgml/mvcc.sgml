@@ -588,7 +588,7 @@ ERROR:  could not serialize access due to concurrent update
     applications using this level must
     be prepared to retry transactions due to serialization failures.
     In fact, this isolation level works exactly the same as Repeatable
-    Read except that it monitors for conditions which could make
+    Read except that it also monitors for conditions which could make
     execution of a concurrent set of serializable transactions behave
     in a manner inconsistent with all possible serial (one at a time)
     executions of those transactions.  This monitoring does not
@@ -1718,6 +1718,54 @@ SELECT pg_advisory_lock(q.id) FROM
      frozen.
     </para>
    </sect2>
+  </sect1>
+
+  <sect1 id="xact-retryable-error-handling">
+   <title>Retryable Error Handling</title>
+
+   <indexterm>
+    <primary>retryable error</primary>
+   </indexterm>
+
+   <para>
+    Both Repeatable Read and Serializable isolation levels can produce errors
+    that are designed to avoid serialization anomalies. As previously advised,
+    applications using this level must be prepared to retry transactions that
+    fail due to serialization failures. The exact error message will vary
+    according to the precise circumstances of the error, should always return
+    with an SQLSTATE value of '40001', with a condition name of
+    'serialization_failure'.
+   </para>
+
+   <para>
+    Currently, if a table has multiple unique
+    indexes defined, <productname>PostgreSQL</productname> can return an
+    SQLSTATE value of '23505', with a condition name of 'unique_violation',
+    though this may be change in later releases.
+   </para>
+
+   <para>
+    Should a deadlock condition occur an SQLSTATE value of '40P01' will be set,
+    with a condition name of 'deadlock_detected'.
+   </para>
+
+   <para>
+    For both SQLSTATE '40001' and '40P01', the transaction has definitely
+    rolled back and can be retried. It is important to retry the complete
+    transaction, including all logic that decided whch SQL and/or whch values
+    to use for transactions. As a result, <productname>PostgreSQL</productname>
+    does not offer an automatic retry facility, since it cannot do so with
+    any guarantee of safety, in the general case.
+   </para>
+
+   <para>
+    Transaction retry does not guarantee that the retried transaction will
+    complete. In cases with very high contention, it is possible that eventual
+    completion of a transaction may take many attempts. In cases involving
+    a prepared transaction, it may not be possible to make progress until the
+    conflicting prepared transaction commits or rolls back.
+   </para>
+
   </sect1>
 
   <sect1 id="mvcc-caveats">

@@ -33,7 +33,55 @@ extern void PgArchiverMain(void) pg_attribute_noreturn();
 extern void PgArchWakeup(void);
 extern void PgArchForceDirScan(void);
 
-/* in shell_archive.c */
-extern bool shell_archive_file(const char *file, const char *path);
+/*
+ * The value of the archive_library GUC.
+ */
+extern char *XLogArchiveLibrary;
+
+/*
+ * Callback that gets called to determine if the archive module is
+ * configured.
+ */
+typedef bool (*ArchiveCheckConfiguredCB) (void);
+
+/*
+ * Callback called to archive a single WAL file.
+ */
+typedef bool (*ArchiveFileCB) (const char *file, const char *path);
+
+/*
+ * Called to shutdown an archive module.
+ */
+typedef void (*ArchiveShutdownCB) (void);
+
+/*
+ * Archive module callbacks
+ */
+typedef struct ArchiveModuleCallbacks
+{
+	ArchiveCheckConfiguredCB check_configured_cb;
+	ArchiveFileCB archive_file_cb;
+	ArchiveShutdownCB shutdown_cb;
+} ArchiveModuleCallbacks;
+
+/*
+ * Type of the shared library symbol _PG_archive_module_init that is looked
+ * up when loading an archive library.
+ */
+typedef void (*ArchiveModuleInit) (ArchiveModuleCallbacks *cb);
+
+/*
+ * Since the logic for archiving via a shell command is in the core server
+ * and does not need to be loaded via a shared library, it has a special
+ * initialization function.
+ */
+extern void shell_archive_init(ArchiveModuleCallbacks *cb);
+
+/*
+ * We consider archiving via shell to be enabled if archive_library is
+ * empty or if archive_library is set to "shell".
+ */
+#define ShellArchivingEnabled() \
+	(XLogArchiveLibrary[0] == '\0' || strcmp(XLogArchiveLibrary, "shell") == 0)
 
 #endif							/* _PGARCH_H */

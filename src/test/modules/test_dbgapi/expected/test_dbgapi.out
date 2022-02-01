@@ -1,0 +1,90 @@
+CREATE EXTENSION test_dbgapi;
+/*
+ * There is lot of shadowed variables "v". The test should to
+ * choose the variable "v" from namespace that is assigned to
+ * current statement, and show the value before and after an
+ * execution of any statement.
+ */
+CREATE OR REPLACE FUNCTION trace_variable_test_func(v int)
+RETURNS void AS $$
+BEGIN
+  v := v + 1;
+
+<<b1>>
+  DECLARE
+    v int DEFAULT trace_variable_test_func.v + 100;
+  BEGIN
+    v := v + 1;
+    FOR v IN v + 10 .. v + 13
+    LOOP
+      RAISE NOTICE 'v = %', v;
+    END LOOP;
+  END;
+END;
+$$ LANGUAGE plpgsql;
+/*
+ * Prepare simple tracer
+ */
+SELECT trace_plpgsql(true);
+ trace_plpgsql 
+---------------
+ 
+(1 row)
+
+SET test_dbgapi.trace_variable = 'v';
+SET test_dbgapi.trace_forloop_variable = ON;
+SELECT trace_variable_test_func(10);
+NOTICE:  start of function: "trace_variable_test_func(integer)"
+NOTICE:  start of statement: "statement block", no: 6 on line 2
+NOTICE:  value of variable "v" is "10" (before)
+NOTICE:  start of statement: "assignment", no: 1 on line 3
+NOTICE:  value of variable "v" is "10" (before)
+NOTICE:  end of statement: "assignment", no: 1 on line 3
+NOTICE:  value of variable "v" is "11" (after)
+NOTICE:  start of statement: "statement block", no: 5 on line 8
+NOTICE:  value of variable "v" is "11" (before)
+NOTICE:  start of statement: "assignment", no: 2 on line 9
+NOTICE:  value of variable "v" is "111" (before)
+NOTICE:  end of statement: "assignment", no: 2 on line 9
+NOTICE:  value of variable "v" is "112" (after)
+NOTICE:  start of statement: "FOR with integer loop variable", no: 3 on line 10
+NOTICE:  value of variable "v" is "112" (before)
+NOTICE:  start of statement: "RAISE", no: 4 on line 12
+NOTICE:  most inner fori loop control variable "v" is 122
+NOTICE:  value of variable "v" is "122" (before)
+NOTICE:  v = 122
+NOTICE:  end of statement: "RAISE", no: 4 on line 12
+NOTICE:  value of variable "v" is "122" (after)
+NOTICE:  start of statement: "RAISE", no: 4 on line 12
+NOTICE:  most inner fori loop control variable "v" is 123
+NOTICE:  value of variable "v" is "123" (before)
+NOTICE:  v = 123
+NOTICE:  end of statement: "RAISE", no: 4 on line 12
+NOTICE:  value of variable "v" is "123" (after)
+NOTICE:  start of statement: "RAISE", no: 4 on line 12
+NOTICE:  most inner fori loop control variable "v" is 124
+NOTICE:  value of variable "v" is "124" (before)
+NOTICE:  v = 124
+NOTICE:  end of statement: "RAISE", no: 4 on line 12
+NOTICE:  value of variable "v" is "124" (after)
+NOTICE:  start of statement: "RAISE", no: 4 on line 12
+NOTICE:  most inner fori loop control variable "v" is 125
+NOTICE:  value of variable "v" is "125" (before)
+NOTICE:  v = 125
+NOTICE:  end of statement: "RAISE", no: 4 on line 12
+NOTICE:  value of variable "v" is "125" (after)
+NOTICE:  end of statement: "FOR with integer loop variable", no: 3 on line 10
+NOTICE:  value of variable "v" is "125" (after)
+NOTICE:  end of statement: "statement block", no: 5 on line 8
+NOTICE:  value of variable "v" is "112" (after)
+NOTICE:  start of statement: "RETURN", no: 7 on line 0
+NOTICE:  now, there is not any outer fori cycle
+NOTICE:  end of statement: "RETURN", no: 7 on line 0
+NOTICE:  end of statement: "statement block", no: 6 on line 2
+NOTICE:  value of variable "v" is "11" (after)
+NOTICE:  end of function: "trace_variable_test_func(integer)"
+ trace_variable_test_func 
+--------------------------
+ 
+(1 row)
+

@@ -25,9 +25,14 @@
 
 #include "access/transam.h"
 #include "catalog/dependency.h"
+#include "catalog/pg_proc.h"
+#include "nodes/nodeFuncs.h"
+#include "optimizer/clauses.h"
+#include "optimizer/optimizer.h"
 #include "postgres_fdw.h"
 #include "utils/hsearch.h"
 #include "utils/inval.h"
+#include "utils/lsyscache.h"
 #include "utils/syscache.h"
 
 /* Hash table for caching the results of shippability lookups */
@@ -52,6 +57,7 @@ typedef struct
 	bool		shippable;
 } ShippableCacheEntry;
 
+static bool contain_params_walker(Node *node, bool *context);
 
 /*
  * Flush cache entries when pg_foreign_server is updated.
@@ -208,4 +214,72 @@ is_shippable(Oid objectId, Oid classId, PgFdwRelationInfo *fpinfo)
 	}
 
 	return entry->shippable;
+}
+
+/*
+ * contain_params
+ *   Does this node has params?
+ */
+static bool
+contain_params(Node *node)
+{
+	bool		contains = false;
+
+	contain_params_walker(node, (void *) &contains);
+
+	return contains;
+}
+
+static bool
+contain_params_walker(Node *node, bool *context)
+{
+	if (node == NULL)
+		return false;
+	if (IsA(node, Param))
+	{
+		*context = true;
+
+		return false;
+	}
+	return expression_tree_walker(node, contain_params_walker,
+								  (void *) context);
+}
+
+/*
+ * Check if expression is stable
+ */
+bool
+is_stable_expr(Node *node)
+{
+	if (node == NULL)
+		return false;
+
+	/* No need to turn on 'ship stable expression' machinery in these cases */
+	if (IsA(node, Const) || IsA(node, List))
+		return false;
+
+	/* Expression shouldn't reference any table */
+	if (contain_var_clause(node))
+		return false;
+
+	if (contain_volatile_functions(node))
+		return false;
+
+	if (contain_subplans(node))
+		return false;
+
+	if (contain_params(node))
+		return false;
+
+	if (contain_agg_clause(node))
+		return false;
+
+	if (contain_mutable_functions(node))
+	{
+		/* These are not volatile functions, so they are stable */
+		if (exprType(node) != InvalidOid)
+			return true;
+	}
+
+	return false;
 }

@@ -1791,16 +1791,24 @@ match_unsorted_outer(PlannerInfo *root,
 	 * partial path and the joinrel is parallel-safe.  However, we can't
 	 * handle JOIN_UNIQUE_OUTER, because the outer path will be partial, and
 	 * therefore we won't be able to properly guarantee uniqueness.  Nor can
-	 * we handle joins needing lateral rels, since partial paths must not be
-	 * parameterized. Similarly, we can't handle JOIN_FULL and JOIN_RIGHT,
-	 * because they can produce false null extended rows.
+	 * we handle JOIN_FULL and JOIN_RIGHT, because they can produce false null
+	 * extended rows.
+	 *
+	 * Partial paths may only have parameters in limited cases
+	 * where the parameterization is fully satisfied without sharing state
+	 * between workers, so we only allow lateral rels on inputs to the join
+	 * if the resulting join contains no lateral rels, the inner rel's laterals
+	 * are fully satisfied by the outer rel, and the outer rel doesn't depend
+	 * on the inner rel to produce any laterals.
 	 */
 	if (joinrel->consider_parallel &&
 		save_jointype != JOIN_UNIQUE_OUTER &&
 		save_jointype != JOIN_FULL &&
 		save_jointype != JOIN_RIGHT &&
 		outerrel->partial_pathlist != NIL &&
-		bms_is_empty(joinrel->lateral_relids))
+		bms_is_empty(joinrel->lateral_relids) &&
+		bms_is_subset(innerrel->lateral_relids, outerrel->relids) &&
+		(bms_is_empty(outerrel->lateral_relids) || !bms_is_subset(outerrel->lateral_relids, innerrel->relids)))
 	{
 		if (nestjoinOK)
 			consider_parallel_nestloop(root, joinrel, outerrel, innerrel,

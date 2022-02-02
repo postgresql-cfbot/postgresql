@@ -1280,7 +1280,12 @@ CheckPointLogicalRewriteHeap(void)
 						(errcode_for_file_access(),
 						 errmsg("could not close file \"%s\": %m", path)));
 		}
+
+		CheckpointStats.repl_map_files_cnt++;
+		CheckpointStats.repl_map_files_sz += statbuf.st_size;
 	}
+
+	CheckpointStats.repl_map_cutoff_lsn = cutoff;
 	FreeDir(mappings_dir);
 
 	/* persist directory entries to disk */

@@ -232,6 +232,20 @@ typedef struct CheckpointStatsData
 									 * times, which is not necessarily the
 									 * same as the total elapsed time for the
 									 * entire sync phase. */
+
+	/* Statistics of snapshot files under "pg_logical/snapshots" */
+	Size repl_snap_files_sz;
+	uint64 repl_snap_files_cnt;
+	XLogRecPtr repl_snap_cutoff_lsn;
+	TimestampTz	repl_snap_start_t;
+	TimestampTz	repl_snap_end_t;
+
+	/* Statistics of map files under "pg_logical/mappings" */
+	Size repl_map_files_sz;
+	uint64 repl_map_files_cnt;
+	XLogRecPtr repl_map_cutoff_lsn;
+	TimestampTz	repl_map_start_t;
+	TimestampTz	repl_map_end_t;
 } CheckpointStatsData;
 
 extern CheckpointStatsData CheckpointStats;

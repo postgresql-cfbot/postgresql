@@ -183,7 +183,8 @@ typedef struct SISeg
 	SharedInvalidationMessage buffer[MAXNUMMESSAGES];
 
 	/*
-	 * Per-backend invalidation state info (has MaxBackends entries).
+	 * Invalidation state info for backends and startup process
+	 * (MaxBackends + 1 entries).
 	 */
 	ProcState	procState[FLEXIBLE_ARRAY_MEMBER];
 } SISeg;
@@ -205,7 +206,8 @@ SInvalShmemSize(void)
 	Size		size;
 
 	size = offsetof(SISeg, procState);
-	size = add_size(size, mul_size(sizeof(ProcState), MaxBackends));
+	/* The startup process also requires a slot, along with backends */
+	size = add_size(size, mul_size(sizeof(ProcState), MaxBackends + 1));
 
 	return size;
 }
@@ -231,7 +233,8 @@ CreateSharedInvalidationState(void)
 	shmInvalBuffer->maxMsgNum = 0;
 	shmInvalBuffer->nextThreshold = CLEANUP_MIN;
 	shmInvalBuffer->lastBackend = 0;
-	shmInvalBuffer->maxBackends = MaxBackends;
+	/* The startup process also requires a slot, along with backends */
+	shmInvalBuffer->maxBackends = MaxBackends + 1;
 	SpinLockInit(&shmInvalBuffer->msgnumLock);
 
 	/* The buffer[] array is initially all unused, so we need not fill it */
@@ -288,7 +291,7 @@ SharedInvalBackendInit(bool sendOnly)
 		else
 		{
 			/*
-			 * out of procState slots: MaxBackends exceeded -- report normally
+			 * out of procState slots: maxBackends exceeded -- report normally
 			 */
 			MyBackendId = InvalidBackendId;
 			LWLockRelease(SInvalWriteLock);

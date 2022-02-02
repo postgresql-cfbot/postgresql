@@ -22,6 +22,7 @@
 /* flag bits for ClusterParams->flags */
 #define CLUOPT_RECHECK 0x01		/* recheck relation state */
 #define CLUOPT_VERBOSE 0x02		/* print progress info */
+#define CLUOPT_RECHECK_ISCLUSTERED 0x04	/* recheck relation state for indisclustered */
 
 /* options for CLUSTER */
 typedef struct ClusterParams

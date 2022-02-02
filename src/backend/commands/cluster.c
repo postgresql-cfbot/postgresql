@@ -32,7 +32,9 @@
 #include "catalog/index.h"
 #include "catalog/namespace.h"
 #include "catalog/objectaccess.h"
+#include "catalog/partition.h"
 #include "catalog/pg_am.h"
+#include "catalog/pg_inherits.h"
 #include "catalog/toasting.h"
 #include "commands/cluster.h"
 #include "commands/defrem.h"
@@ -73,6 +75,9 @@ static void copy_table_data(Oid OIDNewHeap, Oid OIDOldHeap, Oid OIDOldIndex,
 							bool verbose, bool *pSwapToastByContent,
 							TransactionId *pFreezeXid, MultiXactId *pCutoffMulti);
 static List *get_tables_to_cluster(MemoryContext cluster_context);
+static List *get_tables_to_cluster_partitioned(MemoryContext cluster_context,
+		Oid indexOid);
+static void cluster_multiple_rels(List *rvs, int options);
 
 
 /*---------------------------------------------------------------------------
@@ -131,6 +136,7 @@ cluster(ParseState *pstate, ClusterStmt *stmt, bool isTopLevel)
 		Relation	rel;
 
 		/* Find, lock, and check permissions on the table */
+		/* Obtain AEL now to avoid lock-upgrade hazard in the single-transaction case */
 		tableOid = RangeVarGetRelidExtended(stmt->relation,
 											AccessExclusiveLock,
 											0,
@@ -145,14 +151,6 @@ cluster(ParseState *pstate, ClusterStmt *stmt, bool isTopLevel)
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("cannot cluster temporary tables of other sessions")));
-
-		/*
-		 * Reject clustering a partitioned table.
-		 */
-		if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("cannot cluster a partitioned table")));
 
 		if (stmt->indexname == NULL)
 		{
@@ -188,11 +186,50 @@ cluster(ParseState *pstate, ClusterStmt *stmt, bool isTopLevel)
 								stmt->indexname, stmt->relation->relname)));
 		}
 
-		/* close relation, keep lock till commit */
-		table_close(rel, NoLock);
+		if (rel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
+		{
+			/* close relation, keep lock till commit */
+			table_close(rel, NoLock);
 
-		/* Do the job. */
-		cluster_rel(tableOid, indexOid, &params);
+			/* Do the job. */
+			cluster_rel(tableOid, indexOid, &params);
+		}
+		else
+		{
+			List	   *rvs;
+			MemoryContext cluster_context;
+
+			/*
+			 * Expand partitioned relations for CLUSTER (the corresponding
+			 * thing for VACUUM FULL happens in and around expand_vacuum_rel()
+			 */
+
+			/* Refuse to hold strong locks in a user transaction */
+			PreventInTransactionBlock(isTopLevel, "CLUSTER");
+
+			cluster_context = AllocSetContextCreate(PortalContext,
+												"Cluster",
+												ALLOCSET_DEFAULT_SIZES);
+
+			rvs = get_tables_to_cluster_partitioned(cluster_context, indexOid);
+
+			/*
+			 * For now, partitioned indexes are not actually marked clustered.
+			 */
+			check_index_is_clusterable(rel, indexOid, true, AccessShareLock);
+
+			/* close relation, releasing lock on parent table */
+			table_close(rel, AccessExclusiveLock);
+
+			/* Do the job. */
+			cluster_multiple_rels(rvs, params.options);
+
+			/* Start a new transaction for the cleanup work. */
+			StartTransactionCommand();
+
+			/* Clean up working storage */
+			MemoryContextDelete(cluster_context);
+		}
 	}
 	else
 	{
@@ -202,7 +239,6 @@ cluster(ParseState *pstate, ClusterStmt *stmt, bool isTopLevel)
 		 */
 		MemoryContext cluster_context;
 		List	   *rvs;
-		ListCell   *rv;
 
 		/*
 		 * We cannot run this form of CLUSTER inside a user transaction block;
@@ -225,28 +261,7 @@ cluster(ParseState *pstate, ClusterStmt *stmt, bool isTopLevel)
 		 * cluster_context.
 		 */
 		rvs = get_tables_to_cluster(cluster_context);
-
-		/* Commit to get out of starting transaction */
-		PopActiveSnapshot();
-		CommitTransactionCommand();
-
-		/* Ok, now that we've got them all, cluster them one by one */
-		foreach(rv, rvs)
-		{
-			RelToCluster *rvtc = (RelToCluster *) lfirst(rv);
-			ClusterParams cluster_params = params;
-
-			/* Start a new transaction for each relation. */
-			StartTransactionCommand();
-			/* functions in indexes may want a snapshot set */
-			PushActiveSnapshot(GetTransactionSnapshot());
-			/* Do the job. */
-			cluster_params.options |= CLUOPT_RECHECK;
-			cluster_rel(rvtc->tableOid, rvtc->indexOid,
-						&cluster_params);
-			PopActiveSnapshot();
-			CommitTransactionCommand();
-		}
+		cluster_multiple_rels(rvs, params.options | CLUOPT_RECHECK_ISCLUSTERED);
 
 		/* Start a new transaction for the cleanup work. */
 		StartTransactionCommand();
@@ -327,10 +342,11 @@ cluster_rel(Oid tableOid, Oid indexOid, ClusterParams *params)
 		/*
 		 * Silently skip a temp table for a remote session.  Only doing this
 		 * check in the "recheck" case is appropriate (which currently means
-		 * somebody is executing a database-wide CLUSTER), because there is
-		 * another check in cluster() which will stop any attempt to cluster
-		 * remote temp tables by name.  There is another check in cluster_rel
-		 * which is redundant, but we leave it for extra safety.
+		 * somebody is executing a database-wide CLUSTER or on a partitioned
+		 * table), because there is another check in cluster() which will stop
+		 * any attempt to cluster remote temp tables by name.  There is another
+		 * check in cluster_rel which is redundant, but we leave it for extra
+		 * safety.
 		 */
 		if (RELATION_IS_OTHER_TEMP(OldHeap))
 		{
@@ -352,9 +368,10 @@ cluster_rel(Oid tableOid, Oid indexOid, ClusterParams *params)
 			}
 
 			/*
-			 * Check that the index is still the one with indisclustered set.
+			 * Check that the index is still the one with indisclustered set, if needed.
 			 */
-			if (!get_index_isclustered(indexOid))
+			if ((params->options & CLUOPT_RECHECK_ISCLUSTERED) != 0 &&
+					!get_index_isclustered(indexOid))
 			{
 				relation_close(OldHeap, AccessExclusiveLock);
 				pgstat_progress_end_command();
@@ -414,6 +431,9 @@ cluster_rel(Oid tableOid, Oid indexOid, ClusterParams *params)
 		pgstat_progress_end_command();
 		return;
 	}
+
+	// Should silently skip this rather than assert ?
+	Assert(RELKIND_HAS_STORAGE(OldHeap->rd_rel->relkind));
 
 	/*
 	 * All predicate locks on the tuples or pages are about to be made
@@ -585,8 +605,8 @@ rebuild_relation(Relation OldHeap, Oid indexOid, bool verbose)
 	TransactionId frozenXid;
 	MultiXactId cutoffMulti;
 
-	/* Mark the correct index as clustered */
 	if (OidIsValid(indexOid))
+		/* Mark the correct index as clustered */
 		mark_index_clustered(OldHeap, indexOid, true);
 
 	/* Remember info about rel before closing OldHeap */
@@ -1603,4 +1623,77 @@ get_tables_to_cluster(MemoryContext cluster_context)
 	relation_close(indRelation, AccessShareLock);
 
 	return rvs;
+}
+
+/*
+ * Return a List of tables and their associated indexes, where each index is a
+ * partition of the given index
+ * We're called with a lock held on the parent table.
+ */
+static List *
+get_tables_to_cluster_partitioned(MemoryContext cluster_context, Oid indexOid)
+{
+	List		*inhoids;
+	ListCell	*lc;
+	List		*rvs = NIL;
+	MemoryContext	old_context;
+
+	/* Do not lock the children until they're processed. */
+	inhoids = find_all_inheritors(indexOid, NoLock, NULL);
+
+	/*
+	 * We have to build the list in a different memory context so it will
+	 * survive the cross-transaction processing
+	 */
+	old_context = MemoryContextSwitchTo(cluster_context);
+
+	foreach(lc, inhoids)
+	{
+		Oid		indexrelid = lfirst_oid(lc);
+		Oid		relid = IndexGetRelation(indexrelid, false);
+		RelToCluster	*rvtc;
+
+		if (!RELKIND_HAS_STORAGE(get_rel_relkind(indexrelid)))
+			continue;
+
+		rvtc = (RelToCluster *) palloc(sizeof(RelToCluster));
+		rvtc->tableOid = relid;
+		rvtc->indexOid = indexrelid;
+		rvs = lappend(rvs, rvtc);
+	}
+
+	MemoryContextSwitchTo(old_context);
+	return rvs;
+}
+
+/* Cluster each relation in a separate transaction */
+static void
+cluster_multiple_rels(List *rvs, int options)
+{
+	ListCell *lc;
+
+	/* Commit to get out of starting transaction */
+	PopActiveSnapshot();
+	CommitTransactionCommand();
+
+	/* Ok, now that we've got them all, cluster them one by one */
+	foreach(lc, rvs)
+	{
+		RelToCluster *rvtc = (RelToCluster *) lfirst(lc);
+		ClusterParams cluster_params = { .options = options, };
+
+		/* Start a new transaction for each relation. */
+		StartTransactionCommand();
+
+		/* functions in indexes may want a snapshot set */
+		PushActiveSnapshot(GetTransactionSnapshot());
+
+		/* Do the job. */
+		cluster_params.options |= CLUOPT_RECHECK;
+		cluster_rel(rvtc->tableOid, rvtc->indexOid,
+					&cluster_params);
+
+		PopActiveSnapshot();
+		CommitTransactionCommand();
+	}
 }

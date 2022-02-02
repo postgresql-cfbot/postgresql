@@ -1211,9 +1211,8 @@ CheckPointLogicalRewriteHeap(void)
 		cutoff = redo;
 
 	mappings_dir = AllocateDir("pg_logical/mappings");
-	while ((mapping_de = ReadDir(mappings_dir, "pg_logical/mappings")) != NULL)
+	while ((mapping_de = ReadDirExtended(mappings_dir, "pg_logical/mappings", LOG)) != NULL)
 	{
-		struct stat statbuf;
 		Oid			dboid;
 		Oid			relid;
 		XLogRecPtr	lsn;
@@ -1227,26 +1226,42 @@ CheckPointLogicalRewriteHeap(void)
 			continue;
 
 		snprintf(path, sizeof(path), "pg_logical/mappings/%s", mapping_de->d_name);
-		if (lstat(path, &statbuf) == 0 && !S_ISREG(statbuf.st_mode))
-			continue;
 
 		/* Skip over files that cannot be ours. */
 		if (strncmp(mapping_de->d_name, "map-", 4) != 0)
 			continue;
 
+		/*
+		 * We just log a message if a file doesn't fit the pattern, it's
+		 * probably some editors lock/state file or similar...
+		 */
 		if (sscanf(mapping_de->d_name, LOGICAL_REWRITE_FORMAT,
 				   &dboid, &relid, &hi, &lo, &rewrite_xid, &create_xid) != 6)
-			elog(ERROR, "could not parse filename \"%s\"", mapping_de->d_name);
+		{
+			ereport(LOG,
+					(errmsg("could not parse file name \"%s\"", path)));
+			continue;
+		}
 
 		lsn = ((uint64) hi) << 32 | lo;
 
 		if (lsn < cutoff || cutoff == InvalidXLogRecPtr)
 		{
 			elog(DEBUG1, "removing logical rewrite file \"%s\"", path);
+
+			/*
+			 * It's not particularly harmful, though strange, if we can't
+			 * remove the file here. Don't prevent the checkpoint from
+			 * completing, that'd be a cure worse than the disease.
+			 */
 			if (unlink(path) < 0)
-				ereport(ERROR,
+			{
+				ereport(LOG,
 						(errcode_for_file_access(),
-						 errmsg("could not remove file \"%s\": %m", path)));
+						 errmsg("could not remove file \"%s\": %m",
+								path)));
+				continue;
+			}
 		}
 		else
 		{

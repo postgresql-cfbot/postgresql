@@ -1942,24 +1942,17 @@ CheckPointSnapBuild(void)
 		cutoff = redo;
 
 	snap_dir = AllocateDir("pg_logical/snapshots");
-	while ((snap_de = ReadDir(snap_dir, "pg_logical/snapshots")) != NULL)
+	while ((snap_de = ReadDirExtended(snap_dir, "pg_logical/snapshots", LOG)) != NULL)
 	{
 		uint32		hi;
 		uint32		lo;
 		XLogRecPtr	lsn;
-		struct stat statbuf;
 
 		if (strcmp(snap_de->d_name, ".") == 0 ||
 			strcmp(snap_de->d_name, "..") == 0)
 			continue;
 
 		snprintf(path, sizeof(path), "pg_logical/snapshots/%s", snap_de->d_name);
-
-		if (lstat(path, &statbuf) == 0 && !S_ISREG(statbuf.st_mode))
-		{
-			elog(DEBUG1, "only regular files expected: %s", path);
-			continue;
-		}
 
 		/*
 		 * temporary filenames from SnapBuildSerialize() include the LSN and

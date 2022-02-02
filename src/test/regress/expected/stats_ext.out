@@ -1988,6 +1988,18 @@ SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a = 1 OR b = '
        343 |    200
 (1 row)
 
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a > c');
+ estimated | actual 
+-----------+--------
+      1667 |   3750
+(1 row)
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a < c');
+ estimated | actual 
+-----------+--------
+      1667 |      0
+(1 row)
+
 SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a IN (1, 2, 51, 52) AND b IN ( ''1'', ''2'')');
  estimated | actual 
 -----------+--------
@@ -2133,6 +2145,18 @@ SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a = 1 OR b = '
  estimated | actual 
 -----------+--------
        200 |    200
+(1 row)
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a > c');
+ estimated | actual 
+-----------+--------
+      3750 |   3750
+(1 row)
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a < c');
+ estimated | actual 
+-----------+--------
+         1 |      0
 (1 row)
 
 SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a IN (1, 2, 51, 52) AND b IN ( ''1'', ''2'')');
@@ -2544,6 +2568,12 @@ SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a IS NULL AND 
       3750 |   2500
 (1 row)
 
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE b = d');
+ estimated | actual 
+-----------+--------
+        25 |   2500
+(1 row)
+
 -- create statistics
 CREATE STATISTICS mcv_lists_stats (mcv) ON a, b, d FROM mcv_lists;
 ANALYZE mcv_lists;
@@ -2572,6 +2602,12 @@ SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a = 1 OR b = '
 (1 row)
 
 SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a IS NULL AND (b = ''x'' OR d = ''x'')');
+ estimated | actual 
+-----------+--------
+      2500 |   2500
+(1 row)
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE b = d');
  estimated | actual 
 -----------+--------
       2500 |   2500
@@ -2669,6 +2705,18 @@ SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_bool WHERE NOT a AND
  estimated | actual 
 -----------+--------
       1094 |      0
+(1 row)
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_bool WHERE NOT a = b');
+ estimated | actual 
+-----------+--------
+      9950 |   2500
+(1 row)
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_bool WHERE NOT a = b AND b = c');
+ estimated | actual 
+-----------+--------
+        50 |   2500
 (1 row)
 
 CREATE STATISTICS mcv_lists_bool_stats (mcv) ON a, b, c
@@ -2826,6 +2874,18 @@ SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_partial WHERE (a = 0
 (1 row)
 
 DROP TABLE mcv_lists_partial;
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_bool WHERE NOT a = b');
+ estimated | actual 
+-----------+--------
+      2500 |   2500
+(1 row)
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_bool WHERE NOT a = b AND b = c');
+ estimated | actual 
+-----------+--------
+      2500 |   2500
+(1 row)
+
 -- check the ability to use multiple MCV lists
 CREATE TABLE mcv_lists_multi (
 	a INTEGER,
@@ -2885,6 +2945,24 @@ SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_multi WHERE a = 0 OR
       2649 |   1572
 (1 row)
 
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_multi WHERE a = b AND c = d');
+ estimated | actual 
+-----------+--------
+         1 |   5000
+(1 row)
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_multi WHERE a < b');
+ estimated | actual 
+-----------+--------
+      1667 |      0
+(1 row)
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_multi WHERE a <= b');
+ estimated | actual 
+-----------+--------
+      1667 |   5000
+(1 row)
+
 -- create separate MCV statistics
 CREATE STATISTICS mcv_lists_multi_1 (mcv) ON a, b FROM mcv_lists_multi;
 CREATE STATISTICS mcv_lists_multi_2 (mcv) ON c, d FROM mcv_lists_multi;
@@ -2929,6 +3007,24 @@ SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_multi WHERE a = 0 OR
  estimated | actual 
 -----------+--------
       1571 |   1572
+(1 row)
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_multi WHERE a = b AND c = d');
+ estimated | actual 
+-----------+--------
+      5000 |   5000
+(1 row)
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_multi WHERE a < b');
+ estimated | actual 
+-----------+--------
+         1 |      0
+(1 row)
+
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_multi WHERE a <= b');
+ estimated | actual 
+-----------+--------
+      5000 |   5000
 (1 row)
 
 DROP TABLE mcv_lists_multi;

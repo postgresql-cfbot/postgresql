@@ -351,6 +351,35 @@ make prefix=/usr/local/pgsql.new install
     </para>
    </step>
 
+   <step id="prepare-standby-upgrade">
+    <title>Prepare for standby server upgrades</title>
+
+    <para>
+     If you are upgrading standby servers using methods outlined in section <xref
+     linkend="pgupgrade-step-replicas"/>, you should consider dropping temporary
+     tables and truncating unlogged tables on the primary, since that will speed up
+     <application>rsync</application> and keep the down time short.
+     You could run the following <application>psql</application> commands
+     in all databases:
+
+<programlisting>
+SELECT format('DROP TABLE %s', oid::regclass) FROM pg_class WHERE relpersistence = 't' \gexec
+SELECT format('TRUNCATE %s', oid::regclass) FROM pg_class WHERE relpersistence = 'u' \gexec
+</programlisting>
+
+     After stopping the primary servers as described in the following step, verify that
+     the old standby servers have caught up by running
+     <application>pg_controldata</application> against the old primary and
+     standby clusters.  Verify that the <quote>Latest checkpoint location</quote>
+     values match in all clusters.
+     (There will be a mismatch if old standby servers were shut down
+     before the old primary or if the old standby servers are still running.)
+     Also, make sure <varname>wal_level</varname> is not set to
+     <literal>minimal</literal> in the <filename>postgresql.conf</filename> file on the
+     new primary cluster.
+    </para>
+   </step>
+
    <step>
     <title>Stop both servers</title>
 
@@ -373,23 +402,6 @@ NET STOP postgresql-&majorversion;
     <para>
      Streaming replication and log-shipping standby servers can
      remain running until a later step.
-    </para>
-   </step>
-
-   <step>
-    <title>Prepare for standby server upgrades</title>
-
-    <para>
-     If you are upgrading standby servers using methods outlined in section <xref
-     linkend="pgupgrade-step-replicas"/>, verify that the old standby
-     servers are caught up by running <application>pg_controldata</application>
-     against the old primary and standby clusters.  Verify that the
-     <quote>Latest checkpoint location</quote> values match in all clusters.
-     (There will be a mismatch if old standby servers were shut down
-     before the old primary or if the old standby servers are still running.)
-     Also, make sure <varname>wal_level</varname> is not set to
-     <literal>minimal</literal> in the <filename>postgresql.conf</filename> file on the
-     new primary cluster.
     </para>
    </step>
 
@@ -555,26 +567,26 @@ pg_upgrade.exe
 
       <para>
        When using link mode, standby servers can be quickly upgraded using
-       <application>rsync</application>.  To accomplish this, from a directory on
+       <application>rsync</application>.  To accomplish this, change into a directory on
        the primary server that is above the old and new database cluster
-       directories, run this on the <emphasis>primary</emphasis> for each standby
+       directories and run this on the <emphasis>primary</emphasis> for each standby
        server:
 
 <programlisting>
-rsync --archive --delete --hard-links --size-only --no-inc-recursive old_cluster new_cluster remote_dir
+rsync --archive --delete --hard-links --size-only --no-inc-recursive --relative old_cluster new_cluster remote_dir
 </programlisting>
 
        where <option>old_cluster</option> and <option>new_cluster</option> are relative
        to the current directory on the primary, and <option>remote_dir</option>
-       is <emphasis>above</emphasis> the old and new cluster directories
-       on the standby.  The directory structure under the specified
-       directories on the primary and standbys must match.  Consult the
+       is the directory on the standby that corresponds to your current directory
+       on the primary.  The directory structure under the specified
+       directories on the primary and standbys must be the same.  Consult the
        <application>rsync</application> manual page for details on specifying the
        remote directory, e.g.,
 
 <programlisting>
-rsync --archive --delete --hard-links --size-only --no-inc-recursive /opt/PostgreSQL/9.5 \
-      /opt/PostgreSQL/9.6 standby.example.com:/opt/PostgreSQL
+rsync --archive --delete --hard-links --size-only --no-inc-recursive --relative 9.6 13 \
+      standby.example.com:/var/lib/postgresql
 </programlisting>
 
        You can verify what the command will do using
@@ -595,7 +607,8 @@ rsync --archive --delete --hard-links --size-only --no-inc-recursive /opt/Postgr
        small.)  This provides rapid standby upgrades.  Unfortunately,
        <application>rsync</application> needlessly copies files associated with
        temporary and unlogged tables because these files don't normally
-       exist on standby servers.
+       exist on standby servers, so you should have truncated or dropped
+       such tables as described in <xref linkend="prepare-standby-upgrade"/>.
       </para>
 
       <para>
@@ -603,8 +616,8 @@ rsync --archive --delete --hard-links --size-only --no-inc-recursive /opt/Postgr
        <application>rsync</application> command for each tablespace directory, e.g.:
 
 <programlisting>
-rsync --archive --delete --hard-links --size-only --no-inc-recursive /vol1/pg_tblsp/PG_9.5_201510051 \
-      /vol1/pg_tblsp/PG_9.6_201608131 standby.example.com:/vol1/pg_tblsp
+rsync --archive --delete --hard-links --size-only --no-inc-recursive --relative \
+      PG_9.6_201608131 PG_13_202007201 standby.example.com:/vol1/tblsp
 </programlisting>
 
        If you have relocated <filename>pg_wal</filename> outside the data
@@ -614,13 +627,30 @@ rsync --archive --delete --hard-links --size-only --no-inc-recursive /vol1/pg_tb
      </step>
 
      <step>
-      <title>Configure streaming replication and log-shipping standby servers</title>
+      <title>Configure standby servers</title>
 
       <para>
-       Configure the servers for log shipping.  (You do not need to run
-       <function>pg_start_backup()</function> and <function>pg_stop_backup()</function>
-       or take a file system backup as the standbys are still synchronized
-       with the primary.)
+       Review the prior configuration of the standby servers and set up the
+       same configuration in the newly <application>rsync</application>'ed
+       directory.
+
+       <itemizedlist>
+        <listitem>
+         <para>
+          touch <filename>/path/to/replica/standby.signal</filename>
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          configure <varname>restore_command</varname> to pull from WAL archive
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          for streaming replicas, configure <varname>primary_conninfo</varname>
+         </para>
+        </listitem>
+       </itemizedlist>
       </para>
      </step>
 

@@ -92,6 +92,7 @@ extern PGDLLIMPORT double cpu_operator_cost;
 extern PGDLLIMPORT double parallel_tuple_cost;
 extern PGDLLIMPORT double parallel_setup_cost;
 extern PGDLLIMPORT int effective_cache_size;
+extern PGDLLIMPORT double recursive_worktable_estimate;
 
 extern double clamp_row_est(double nrows);
 

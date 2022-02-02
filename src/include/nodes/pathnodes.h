@@ -101,6 +101,9 @@ typedef struct PlannerGlobal
 
 	List	   *finalrtable;	/* "flat" rangetable for executor */
 
+	Bitmapset  *relationRTIs;	/* Indexes of RTE_RELATION entries in range
+								 * table */
+
 	List	   *finalrowmarks;	/* "flat" list of PlanRowMarks */
 
 	List	   *resultRelations;	/* "flat" list of integer RT indexes */
@@ -128,6 +131,9 @@ typedef struct PlannerGlobal
 	bool		parallelModeNeeded; /* parallel mode actually required? */
 
 	char		maxParallelHazard;	/* worst PROPARALLEL hazard level */
+
+	bool		usesPreExecPruning;	/* Do some Plan nodes use pre-execution
+									 * partition pruning */
 
 	PartitionDirectory partition_directory; /* partition descriptors */
 } PlannerGlobal;

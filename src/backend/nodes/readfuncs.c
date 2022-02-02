@@ -1585,9 +1585,11 @@ _readPlannedStmt(void)
 	READ_BOOL_FIELD(transientPlan);
 	READ_BOOL_FIELD(dependsOnRole);
 	READ_BOOL_FIELD(parallelModeNeeded);
+	READ_BOOL_FIELD(usesPreExecPruning);
 	READ_INT_FIELD(jitFlags);
 	READ_NODE_FIELD(planTree);
 	READ_NODE_FIELD(rtable);
+	READ_BITMAPSET_FIELD(relationRTIs);
 	READ_NODE_FIELD(resultRelations);
 	READ_NODE_FIELD(appendRelations);
 	READ_NODE_FIELD(subplans);
@@ -2534,6 +2536,7 @@ _readPartitionPruneInfo(void)
 	READ_LOCALS(PartitionPruneInfo);
 
 	READ_NODE_FIELD(prune_infos);
+	READ_BOOL_FIELD(contains_init_steps);
 	READ_BITMAPSET_FIELD(other_subplans);
 
 	READ_DONE();

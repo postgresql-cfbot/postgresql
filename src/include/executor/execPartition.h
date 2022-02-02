@@ -120,9 +120,14 @@ extern ResultRelInfo *ExecFindPartition(ModifyTableState *mtstate,
 extern void ExecCleanupTupleRouting(ModifyTableState *mtstate,
 									PartitionTupleRouting *proute);
 extern PartitionPruneState *ExecCreatePartitionPruneState(PlanState *planstate,
-														  PartitionPruneInfo *partitionpruneinfo);
+														  PartitionPruneInfo *partitionpruneinfo,
+														  bool consider_exec_steps,
+														  List *rtable, ExprContext *econtext,
+														  PartitionDirectory partdir);
 extern Bitmapset *ExecFindMatchingSubPlans(PartitionPruneState *prunestate);
 extern Bitmapset *ExecFindInitialMatchingSubPlans(PartitionPruneState *prunestate,
-												  int nsubplans);
+												  int nsubplans,
+												  PartitionPruneInfo *pruneinfo,
+												  Bitmapset **parentrelids);
 
 #endif							/* EXECPARTITION_H */

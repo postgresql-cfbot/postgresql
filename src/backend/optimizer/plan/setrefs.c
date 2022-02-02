@@ -483,6 +483,7 @@ static void
 add_rte_to_flat_rtable(PlannerGlobal *glob, RangeTblEntry *rte)
 {
 	RangeTblEntry *newrte;
+	Index		rti = list_length(glob->finalrtable) + 1;
 
 	/* flat copy to duplicate all the scalar fields */
 	newrte = (RangeTblEntry *) palloc(sizeof(RangeTblEntry));
@@ -517,7 +518,10 @@ add_rte_to_flat_rtable(PlannerGlobal *glob, RangeTblEntry *rte)
 	 * but it would probably cost more cycles than it would save.
 	 */
 	if (newrte->rtekind == RTE_RELATION)
+	{
+		glob->relationRTIs = bms_add_member(glob->relationRTIs, rti);
 		glob->relationOids = lappend_oid(glob->relationOids, newrte->relid);
+	}
 }
 
 /*
@@ -1548,6 +1552,9 @@ set_append_references(PlannerInfo *root,
 				pinfo->rtindex += rtoffset;
 			}
 		}
+
+		if (aplan->part_prune_info->contains_init_steps)
+			root->glob->usesPreExecPruning = true;
 	}
 
 	/* We don't need to recurse to lefttree or righttree ... */
@@ -1620,6 +1627,9 @@ set_mergeappend_references(PlannerInfo *root,
 				pinfo->rtindex += rtoffset;
 			}
 		}
+
+		if (mplan->part_prune_info->contains_init_steps)
+			root->glob->usesPreExecPruning = true;
 	}
 
 	/* We don't need to recurse to lefttree or righttree ... */

@@ -312,9 +312,11 @@ _outPlannedStmt(StringInfo str, const PlannedStmt *node)
 	WRITE_BOOL_FIELD(transientPlan);
 	WRITE_BOOL_FIELD(dependsOnRole);
 	WRITE_BOOL_FIELD(parallelModeNeeded);
+	WRITE_BOOL_FIELD(usesPreExecPruning);
 	WRITE_INT_FIELD(jitFlags);
 	WRITE_NODE_FIELD(planTree);
 	WRITE_NODE_FIELD(rtable);
+	WRITE_BITMAPSET_FIELD(relationRTIs);
 	WRITE_NODE_FIELD(resultRelations);
 	WRITE_NODE_FIELD(appendRelations);
 	WRITE_NODE_FIELD(subplans);
@@ -1004,6 +1006,7 @@ _outPartitionPruneInfo(StringInfo str, const PartitionPruneInfo *node)
 	WRITE_NODE_TYPE("PARTITIONPRUNEINFO");
 
 	WRITE_NODE_FIELD(prune_infos);
+	WRITE_BOOL_FIELD(contains_init_steps);
 	WRITE_BITMAPSET_FIELD(other_subplans);
 }
 
@@ -2274,6 +2277,7 @@ _outPlannerGlobal(StringInfo str, const PlannerGlobal *node)
 	WRITE_NODE_FIELD(subplans);
 	WRITE_BITMAPSET_FIELD(rewindPlanIDs);
 	WRITE_NODE_FIELD(finalrtable);
+	WRITE_BITMAPSET_FIELD(relationRTIs);
 	WRITE_NODE_FIELD(finalrowmarks);
 	WRITE_NODE_FIELD(resultRelations);
 	WRITE_NODE_FIELD(appendRelations);

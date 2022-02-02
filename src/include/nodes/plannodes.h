@@ -59,11 +59,17 @@ typedef struct PlannedStmt
 
 	bool		parallelModeNeeded; /* parallel mode required to execute? */
 
+	bool		usesPreExecPruning;	/* Do some Plan nodes use pre-execution
+									 * partition pruning */
+
 	int			jitFlags;		/* which forms of JIT should be performed */
 
 	struct Plan *planTree;		/* tree of Plan nodes */
 
 	List	   *rtable;			/* list of RangeTblEntry nodes */
+
+	Bitmapset  *relationRTIs;	/* Indexes of RTE_RELATION entries in range
+								 * table */
 
 	/* rtable indexes of target relations for INSERT/UPDATE/DELETE */
 	List	   *resultRelations;	/* integer list of RT indexes, or NIL */
@@ -1172,6 +1178,10 @@ typedef struct PlanRowMark
  * prune_infos			List of Lists containing PartitionedRelPruneInfo nodes,
  *						one sublist per run-time-prunable partition hierarchy
  *						appearing in the parent plan node's subplans.
+ *
+ * contains_init_steps	Does any of the PartitionedRelPruneInfos in
+ *						prune_infos have its initial_pruning_steps set?
+ *
  * other_subplans		Indexes of any subplans that are not accounted for
  *						by any of the PartitionedRelPruneInfo nodes in
  *						"prune_infos".  These subplans must not be pruned.
@@ -1180,6 +1190,7 @@ typedef struct PartitionPruneInfo
 {
 	NodeTag		type;
 	List	   *prune_infos;
+	bool		contains_init_steps;
 	Bitmapset  *other_subplans;
 } PartitionPruneInfo;
 

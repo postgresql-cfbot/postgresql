@@ -58,12 +58,14 @@
 
 #include "access/transam.h"
 #include "catalog/namespace.h"
+#include "executor/execPartition.h"
 #include "executor/executor.h"
 #include "miscadmin.h"
 #include "nodes/nodeFuncs.h"
 #include "optimizer/optimizer.h"
 #include "parser/analyze.h"
 #include "parser/parsetree.h"
+#include "partitioning/partdesc.h"
 #include "storage/lmgr.h"
 #include "tcop/pquery.h"
 #include "tcop/utility.h"
@@ -99,14 +101,25 @@ static dlist_head cached_expression_list = DLIST_STATIC_INIT(cached_expression_l
 static void ReleaseGenericPlan(CachedPlanSource *plansource);
 static List *RevalidateCachedQuery(CachedPlanSource *plansource,
 								   QueryEnvironment *queryEnv);
-static bool CheckCachedPlan(CachedPlanSource *plansource);
+static bool CheckCachedPlan(CachedPlanSource *plansource, ParamListInfo boundParams);
 static CachedPlan *BuildCachedPlan(CachedPlanSource *plansource, List *qlist,
 								   ParamListInfo boundParams, QueryEnvironment *queryEnv);
 static bool choose_custom_plan(CachedPlanSource *plansource,
 							   ParamListInfo boundParams);
 static double cached_plan_cost(CachedPlan *plan, bool include_planner);
 static Query *QueryListGetPrimaryStmt(List *stmts);
-static void AcquireExecutorLocks(List *stmt_list, bool acquire);
+static void AcquireExecutorLocks(List *stmt_list, bool acquire,
+								 ParamListInfo boundParams);
+struct GetLockableRelations_context
+{
+	PlannedStmt *plannedstmt;
+	Bitmapset *relations;
+	ParamListInfo params;
+};
+static Bitmapset *GetLockableRelations(PlannedStmt *plannedstmt,
+									   ParamListInfo boundParams);
+static bool GetLockableRelations_worker(Plan *plan,
+							struct GetLockableRelations_context *context);
 static void AcquirePlannerLocks(List *stmt_list, bool acquire);
 static void ScanQueryForLocks(Query *parsetree, bool acquire);
 static bool ScanQueryWalker(Node *node, bool *acquire);
@@ -792,7 +805,7 @@ RevalidateCachedQuery(CachedPlanSource *plansource,
  * (We must do this for the "true" result to be race-condition-free.)
  */
 static bool
-CheckCachedPlan(CachedPlanSource *plansource)
+CheckCachedPlan(CachedPlanSource *plansource, ParamListInfo boundParams)
 {
 	CachedPlan *plan = plansource->gplan;
 
@@ -826,7 +839,7 @@ CheckCachedPlan(CachedPlanSource *plansource)
 		 */
 		Assert(plan->refcount > 0);
 
-		AcquireExecutorLocks(plan->stmt_list, true);
+		AcquireExecutorLocks(plan->stmt_list, true, boundParams);
 
 		/*
 		 * If plan was transient, check to see if TransactionXmin has
@@ -848,7 +861,7 @@ CheckCachedPlan(CachedPlanSource *plansource)
 		}
 
 		/* Oops, the race case happened.  Release useless locks. */
-		AcquireExecutorLocks(plan->stmt_list, false);
+		AcquireExecutorLocks(plan->stmt_list, false, boundParams);
 	}
 
 	/*
@@ -1160,7 +1173,7 @@ GetCachedPlan(CachedPlanSource *plansource, ParamListInfo boundParams,
 
 	if (!customplan)
 	{
-		if (CheckCachedPlan(plansource))
+		if (CheckCachedPlan(plansource, boundParams))
 		{
 			/* We want a generic plan, and we already have a valid one */
 			plan = plansource->gplan;
@@ -1366,7 +1379,6 @@ CachedPlanAllowsSimpleValidityCheck(CachedPlanSource *plansource,
 	foreach(lc, plan->stmt_list)
 	{
 		PlannedStmt *plannedstmt = lfirst_node(PlannedStmt, lc);
-		ListCell   *lc2;
 
 		if (plannedstmt->commandType == CMD_UTILITY)
 			return false;
@@ -1375,13 +1387,8 @@ CachedPlanAllowsSimpleValidityCheck(CachedPlanSource *plansource,
 		 * We have to grovel through the rtable because it's likely to contain
 		 * an RTE_RESULT relation, rather than being totally empty.
 		 */
-		foreach(lc2, plannedstmt->rtable)
-		{
-			RangeTblEntry *rte = (RangeTblEntry *) lfirst(lc2);
-
-			if (rte->rtekind == RTE_RELATION)
-				return false;
-		}
+		if (!bms_is_empty(plannedstmt->relationRTIs))
+			return false;
 	}
 
 	/*
@@ -1740,14 +1747,15 @@ QueryListGetPrimaryStmt(List *stmts)
  * or release them if acquire is false.
  */
 static void
-AcquireExecutorLocks(List *stmt_list, bool acquire)
+AcquireExecutorLocks(List *stmt_list, bool acquire, ParamListInfo boundParams)
 {
 	ListCell   *lc1;
 
 	foreach(lc1, stmt_list)
 	{
 		PlannedStmt *plannedstmt = lfirst_node(PlannedStmt, lc1);
-		ListCell   *lc2;
+		Bitmapset  *relations;
+		int			rti;
 
 		if (plannedstmt->commandType == CMD_UTILITY)
 		{
@@ -1765,9 +1773,22 @@ AcquireExecutorLocks(List *stmt_list, bool acquire)
 			continue;
 		}
 
-		foreach(lc2, plannedstmt->rtable)
+		/*
+		 * Fetch the RT indexes of only the relations that will be actually
+		 * scanned when the plan is executed.  This skips over scan nodes
+		 * appearing as child subnodes of any Append/MergeAppend nodes present
+		 * in the plan tree.  It does so by performing
+		 * ExecFindInitialMatchingSubPlans() to run any pruning steps
+		 * contained in those nodes that can be safely run at this point, using
+		 * 'boundParams' to evaluate any EXTERN parameters contained in the
+		 * steps.
+		 */
+		relations = GetLockableRelations(plannedstmt, boundParams);
+
+		rti = -1;
+		while ((rti = bms_next_member(relations, rti)) >= 0)
 		{
-			RangeTblEntry *rte = (RangeTblEntry *) lfirst(lc2);
+			RangeTblEntry *rte = rt_fetch(rti, plannedstmt->rtable);
 
 			if (rte->rtekind != RTE_RELATION)
 				continue;
@@ -1784,6 +1805,178 @@ AcquireExecutorLocks(List *stmt_list, bool acquire)
 				UnlockRelationOid(rte->relid, rte->rellockmode);
 		}
 	}
+}
+
+/*
+ * GetLockableRelations
+ *		Returns set of RT indexes of relations that must be locked by
+ *		AcquireExecutorLocks()
+ */
+static Bitmapset *
+GetLockableRelations(PlannedStmt *plannedstmt, ParamListInfo boundParams)
+{
+	ListCell *lc;
+	struct GetLockableRelations_context context;
+
+	/* None of the relation scanning nodes are prunable here. */
+	if (!plannedstmt->usesPreExecPruning)
+		return plannedstmt->relationRTIs;
+
+	/*
+	 * Look for prunable nodes in the main plan tree, followed by those in
+	 * subplans.
+	 */
+	context.plannedstmt = plannedstmt;
+	context.params = boundParams;
+	context.relations = NULL;
+
+	(void) GetLockableRelations_worker(plannedstmt->planTree, &context);
+
+	foreach(lc, plannedstmt->subplans)
+	{
+		Plan *subplan = lfirst(lc);
+
+		(void) GetLockableRelations_worker(subplan, &context);
+	}
+
+	return context.relations;
+}
+
+/*
+ * GetLockableRelations_worker
+ *		Adds RT indexes of relations to be scanned by plan to
+ *		context->relations
+ *
+ * For plan node types that support pruning, this only adds child plan
+ * subnodes that satisfy the "initial" pruning steps.
+ */
+static bool
+GetLockableRelations_worker(Plan *plan,
+							struct GetLockableRelations_context *context)
+{
+	if (plan == NULL)
+		return false;
+
+	switch(nodeTag(plan))
+	{
+		/* Nodes scanning a relation or relations. */
+		case T_SeqScan:
+		case T_SampleScan:
+		case T_IndexScan:
+		case T_IndexOnlyScan:
+		case T_BitmapHeapScan:
+		case T_TidScan:
+		case T_TidRangeScan:
+			context->relations = bms_add_member(context->relations,
+												((Scan *) plan)->scanrelid);
+			return false;
+		case T_ForeignScan:
+			context->relations = bms_add_members(context->relations,
+												 ((ForeignScan *) plan)->fs_relids);
+			return false;
+		case T_CustomScan:
+			context->relations = bms_add_members(context->relations,
+												 ((CustomScan *) plan)->custom_relids);
+			return false;
+
+		/* Nodes containing prunable subnodes. */
+		case T_Append:
+		case T_MergeAppend:
+			{
+				PartitionPruneInfo *pruneinfo;
+
+				if (IsA(plan, Append))
+					pruneinfo = ((Append *) plan)->part_prune_info;
+				else
+					pruneinfo = ((MergeAppend *) plan)->part_prune_info;
+
+				if (pruneinfo && pruneinfo->contains_init_steps)
+				{
+					List	   *rtable = context->plannedstmt->rtable;
+					ParamListInfo params = context->params;
+					List	   *subplans;
+					Bitmapset  *validsubplans;
+					Bitmapset  *parentrelids;
+					int			i;
+					ExprContext	 *econtext;
+					PartitionDirectory pdir;
+					MemoryContext oldcontext,
+								  tmpcontext;
+					PartitionPruneState *prunestate;
+
+					if (IsA(plan, Append))
+						subplans = ((Append *) plan)->appendplans;
+					else
+						subplans = ((MergeAppend *) plan)->mergeplans;
+
+					/*
+					 * A temporary context to allocate stuff needded to run
+					 * the pruning steps.
+					 */
+					tmpcontext = AllocSetContextCreate(CurrentMemoryContext,
+													   "initial pruning working data",
+													   ALLOCSET_DEFAULT_SIZES);
+					oldcontext = MemoryContextSwitchTo(tmpcontext);
+
+					/* An ExprContext to evaluate expressions. */
+					econtext = CreateStandaloneExprContext();
+					econtext->ecxt_param_list_info = params;
+
+					/*
+					 * PartitionDirectory, to look up partition descriptors
+					 * Omits detached partitions, just like in the executor
+					 * proper.
+					 */
+					pdir = CreatePartitionDirectory(CurrentMemoryContext, false);
+					prunestate = ExecCreatePartitionPruneState(NULL,
+															   pruneinfo, false,
+															   rtable, econtext,
+															   pdir);
+					MemoryContextSwitchTo(oldcontext);
+
+					/* Do the "initial" pruning. */
+					validsubplans =
+						ExecFindInitialMatchingSubPlans(prunestate,
+														list_length(subplans),
+														pruneinfo,
+														&parentrelids);
+
+					FreeExprContext(econtext, true);
+					DestroyPartitionDirectory(pdir);
+					MemoryContextDelete(tmpcontext);
+
+					/* All relevant parents must be locked. */
+					Assert(bms_num_members(parentrelids) > 0);
+					context->relations = bms_add_members(context->relations,
+														 parentrelids);
+
+					/* And all leaf partitions that will be scanned. */
+					i = -1;
+					while ((i = bms_next_member(validsubplans, i)) >= 0)
+					{
+						Plan   *subplan = list_nth(subplans, i);
+
+						GetLockableRelations_worker(subplan, context);
+					}
+
+					return false;
+				}
+				else
+				{
+					/*
+					 * plan_tree_walker() will take care of walking *all* of
+					 * the node's child subplans to collect their relids.
+					 */
+				}
+			}
+			break;
+
+		default:
+			break;
+	}
+
+	return plan_tree_walker(plan, GetLockableRelations_worker,
+							(void *) context);
 }
 
 /*

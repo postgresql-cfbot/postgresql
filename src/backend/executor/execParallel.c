@@ -182,8 +182,10 @@ ExecSerializePlan(Plan *plan, EState *estate)
 	pstmt->transientPlan = false;
 	pstmt->dependsOnRole = false;
 	pstmt->parallelModeNeeded = false;
+	pstmt->usesPreExecPruning = false;
 	pstmt->planTree = plan;
 	pstmt->rtable = estate->es_range_table;
+	pstmt->relationRTIs = NULL;
 	pstmt->resultRelations = NIL;
 	pstmt->appendRelations = NIL;
 

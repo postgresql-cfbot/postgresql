@@ -43,6 +43,7 @@
 #include "executor/nodeMergeAppend.h"
 #include "lib/binaryheap.h"
 #include "miscadmin.h"
+#include "partitioning/partdesc.h"
 
 /*
  * We have one slot for each item in the heap array.  We use SlotNumber
@@ -89,8 +90,16 @@ ExecInitMergeAppend(MergeAppend *node, EState *estate, int eflags)
 		/* We may need an expression context to evaluate partition exprs */
 		ExecAssignExprContext(estate, &mergestate->ps);
 
+		/* For data reading, executor always omits detached partitions */
+		if (estate->es_partition_directory == NULL)
+			estate->es_partition_directory =
+				CreatePartitionDirectory(estate->es_query_cxt, false);
+
+		/* Create the working data structure for pruning. */
 		prunestate = ExecCreatePartitionPruneState(&mergestate->ps,
-												   node->part_prune_info);
+												   node->part_prune_info, true,
+												   NIL, mergestate->ps.ps_ExprContext,
+												   estate->es_partition_directory);
 		mergestate->ms_prune_state = prunestate;
 
 		/* Perform an initial partition prune, if required. */
@@ -98,7 +107,9 @@ ExecInitMergeAppend(MergeAppend *node, EState *estate, int eflags)
 		{
 			/* Determine which subplans survive initial pruning */
 			validsubplans = ExecFindInitialMatchingSubPlans(prunestate,
-															list_length(node->mergeplans));
+															list_length(node->mergeplans),
+															node->part_prune_info,
+															NULL);
 
 			nplans = bms_num_members(validsubplans);
 		}

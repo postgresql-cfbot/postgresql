@@ -144,7 +144,8 @@ static List *make_partitionedrel_pruneinfo(PlannerInfo *root,
 										   List *prunequal,
 										   Bitmapset *partrelids,
 										   int *relid_subplan_map,
-										   Bitmapset **matchedsubplans);
+										   Bitmapset **matchedsubplans,
+										   bool *contains_init_steps);
 static void gen_partprune_steps(RelOptInfo *rel, List *clauses,
 								PartClauseTarget target,
 								GeneratePruningStepsContext *context);
@@ -230,6 +231,7 @@ make_partition_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 	int		   *relid_subplan_map;
 	ListCell   *lc;
 	int			i;
+	bool		contains_init_steps = false;
 
 	/*
 	 * Scan the subpaths to see which ones are scans of partition child
@@ -309,12 +311,14 @@ make_partition_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 		Bitmapset  *partrelids = (Bitmapset *) lfirst(lc);
 		List	   *pinfolist;
 		Bitmapset  *matchedsubplans = NULL;
+		bool		partrel_contains_init_steps;
 
 		pinfolist = make_partitionedrel_pruneinfo(root, parentrel,
 												  prunequal,
 												  partrelids,
 												  relid_subplan_map,
-												  &matchedsubplans);
+												  &matchedsubplans,
+												  &partrel_contains_init_steps);
 
 		/* When pruning is possible, record the matched subplans */
 		if (pinfolist != NIL)
@@ -323,6 +327,8 @@ make_partition_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 			allmatchedsubplans = bms_join(matchedsubplans,
 										  allmatchedsubplans);
 		}
+		if (!contains_init_steps)
+			contains_init_steps = partrel_contains_init_steps;
 	}
 
 	pfree(relid_subplan_map);
@@ -337,6 +343,7 @@ make_partition_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 	/* Else build the result data structure */
 	pruneinfo = makeNode(PartitionPruneInfo);
 	pruneinfo->prune_infos = prunerelinfos;
+	pruneinfo->contains_init_steps = contains_init_steps;
 
 	/*
 	 * Some subplans may not belong to any of the identified partitioned rels.
@@ -435,13 +442,17 @@ add_part_relids(List *allpartrelids, Bitmapset *partrelids)
  * If we cannot find any useful run-time pruning steps, return NIL.
  * However, on success, each rel identified in partrelids will have
  * an element in the result list, even if some of them are useless.
+ * *contains_init_steps and are set to indicate that the returned
+ * PartitionedRelPruneInfos contains pruning steps that can be performed
+ * before execution begins.
  */
 static List *
 make_partitionedrel_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 							  List *prunequal,
 							  Bitmapset *partrelids,
 							  int *relid_subplan_map,
-							  Bitmapset **matchedsubplans)
+							  Bitmapset **matchedsubplans,
+							  bool *contains_init_steps)
 {
 	RelOptInfo *targetpart = NULL;
 	List	   *pinfolist = NIL;
@@ -451,6 +462,9 @@ make_partitionedrel_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 	ListCell   *lc;
 	int			rti;
 	int			i;
+
+	/* Will find out below. */
+	*contains_init_steps = false;
 
 	/*
 	 * Examine each partitioned rel, constructing a temporary array to map
@@ -539,6 +553,9 @@ make_partitionedrel_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 		 * executor per-scan pruning steps.  This first pass creates startup
 		 * pruning steps and detects whether there's any possibly-useful quals
 		 * that would require per-scan pruning.
+		 *
+		 * In the first pass, we note whether the 2nd pass is necessary by
+		 * by noting the presence of EXEC parameters.
 		 */
 		gen_partprune_steps(subpart, partprunequal, PARTTARGET_INITIAL,
 							&context);
@@ -612,6 +629,9 @@ make_partitionedrel_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 		pinfo->exec_pruning_steps = exec_pruning_steps;
 		pinfo->execparamids = execparamids;
 		/* Remaining fields will be filled in the next loop */
+
+		if (!*contains_init_steps)
+			*contains_init_steps = (initial_pruning_steps != NIL);
 
 		pinfolist = lappend(pinfolist, pinfo);
 	}
@@ -798,6 +818,7 @@ prune_append_rel_partitions(RelOptInfo *rel)
 
 	/* These are not valid when being called from the planner */
 	context.planstate = NULL;
+	context.exprcontext = NULL;
 	context.exprstates = NULL;
 
 	/* Actual pruning happens here. */
@@ -808,8 +829,8 @@ prune_append_rel_partitions(RelOptInfo *rel)
  * get_matching_partitions
  *		Determine partitions that survive partition pruning
  *
- * Note: context->planstate must be set to a valid PlanState when the
- * pruning_steps were generated with a target other than PARTTARGET_PLANNER.
+ * Note: context->exprcontext must be valid when the pruning_steps were
+ * generated with a target other than PARTTARGET_PLANNER.
  *
  * Returns a Bitmapset of the RelOptInfo->part_rels indexes of the surviving
  * partitions.
@@ -3654,7 +3675,7 @@ match_boolean_partition_clause(Oid partopfamily, Expr *clause, Expr *partkey,
  * exprstate array.
  *
  * Note that the evaluated result may be in the per-tuple memory context of
- * context->planstate->ps_ExprContext, and we may have leaked other memory
+ * context->exprcontext, and we may have leaked other memory
  * there too.  This memory must be recovered by resetting that ExprContext
  * after we're done with the pruning operation (see execPartition.c).
  */
@@ -3677,13 +3698,18 @@ partkey_datum_from_expr(PartitionPruneContext *context,
 		ExprContext *ectx;
 
 		/*
-		 * We should never see a non-Const in a step unless we're running in
-		 * the executor.
+		 * We should never see a non-Const in a step unless the caller has
+		 * passed a valid ExprContext.
+		 *
+		 * When context->planstate is valid, context->exprcontext is same
+		 * as context->planstate->ps_ExprContext.
 		 */
-		Assert(context->planstate != NULL);
+		Assert(context->planstate != NULL || context->exprcontext != NULL);
+		Assert(context->planstate == NULL ||
+			   (context->exprcontext == context->planstate->ps_ExprContext));
 
 		exprstate = context->exprstates[stateidx];
-		ectx = context->planstate->ps_ExprContext;
+		ectx = context->exprcontext;
 		*value = ExecEvalExprSwitchContext(exprstate, ectx, isnull);
 	}
 }

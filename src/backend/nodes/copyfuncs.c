@@ -94,9 +94,11 @@ _copyPlannedStmt(const PlannedStmt *from)
 	COPY_SCALAR_FIELD(transientPlan);
 	COPY_SCALAR_FIELD(dependsOnRole);
 	COPY_SCALAR_FIELD(parallelModeNeeded);
+	COPY_SCALAR_FIELD(usesPreExecPruning);
 	COPY_SCALAR_FIELD(jitFlags);
 	COPY_NODE_FIELD(planTree);
 	COPY_NODE_FIELD(rtable);
+	COPY_BITMAPSET_FIELD(relationRTIs);
 	COPY_NODE_FIELD(resultRelations);
 	COPY_NODE_FIELD(appendRelations);
 	COPY_NODE_FIELD(subplans);
@@ -1278,6 +1280,7 @@ _copyPartitionPruneInfo(const PartitionPruneInfo *from)
 	PartitionPruneInfo *newnode = makeNode(PartitionPruneInfo);
 
 	COPY_NODE_FIELD(prune_infos);
+	COPY_SCALAR_FIELD(contains_init_steps);
 	COPY_BITMAPSET_FIELD(other_subplans);
 
 	return newnode;

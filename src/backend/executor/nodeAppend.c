@@ -62,6 +62,7 @@
 #include "executor/execPartition.h"
 #include "executor/nodeAppend.h"
 #include "miscadmin.h"
+#include "partitioning/partdesc.h"
 #include "pgstat.h"
 #include "storage/latch.h"
 
@@ -141,9 +142,16 @@ ExecInitAppend(Append *node, EState *estate, int eflags)
 		/* We may need an expression context to evaluate partition exprs */
 		ExecAssignExprContext(estate, &appendstate->ps);
 
+		/* For data reading, executor always omits detached partitions */
+		if (estate->es_partition_directory == NULL)
+			estate->es_partition_directory =
+				CreatePartitionDirectory(estate->es_query_cxt, false);
+
 		/* Create the working data structure for pruning. */
 		prunestate = ExecCreatePartitionPruneState(&appendstate->ps,
-												   node->part_prune_info);
+												   node->part_prune_info, true,
+												   NIL, appendstate->ps.ps_ExprContext,
+												   estate->es_partition_directory);
 		appendstate->as_prune_state = prunestate;
 
 		/* Perform an initial partition prune, if required. */
@@ -151,7 +159,9 @@ ExecInitAppend(Append *node, EState *estate, int eflags)
 		{
 			/* Determine which subplans survive initial pruning */
 			validsubplans = ExecFindInitialMatchingSubPlans(prunestate,
-															list_length(node->appendplans));
+															list_length(node->appendplans),
+															node->part_prune_info,
+															NULL);
 
 			nplans = bms_num_members(validsubplans);
 		}

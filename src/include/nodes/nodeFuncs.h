@@ -158,5 +158,8 @@ extern bool raw_expression_tree_walker(Node *node, bool (*walker) (),
 struct PlanState;
 extern bool planstate_tree_walker(struct PlanState *planstate, bool (*walker) (),
 								  void *context);
+struct Plan;
+extern bool plan_tree_walker(struct Plan *plan, bool (*walker) (),
+				 void *context);
 
 #endif							/* NODEFUNCS_H */

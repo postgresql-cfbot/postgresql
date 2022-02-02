@@ -86,9 +86,9 @@ extern Oid	heap_create_with_catalog(const char *relname,
 
 extern void heap_drop_with_catalog(Oid relid);
 
-extern void heap_truncate(List *relids);
+extern void heap_truncate(List *relids, bool is_global_temp);
 
-extern void heap_truncate_one_rel(Relation rel);
+extern void heap_truncate_one_rel(Relation rel, LOCKMODE lockmode);
 
 extern void heap_truncate_check_FKs(List *relations, bool tempTables);
 
@@ -161,5 +161,5 @@ extern void StorePartitionKey(Relation rel,
 extern void RemovePartitionKeyByRelId(Oid relid);
 extern void StorePartitionBound(Relation rel, Relation parent,
 								PartitionBoundSpec *bound);
-
+extern void CheckGlobalTempTableNotInUse(Relation rel, const char *stmt);
 #endif							/* HEAP_H */

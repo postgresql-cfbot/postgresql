@@ -33,6 +33,7 @@
 #include "catalog/namespace.h"
 #include "catalog/objectaccess.h"
 #include "catalog/pg_am.h"
+#include "catalog/storage_gtt.h"
 #include "catalog/toasting.h"
 #include "commands/cluster.h"
 #include "commands/defrem.h"
@@ -391,6 +392,22 @@ cluster_rel(Oid tableOid, Oid indexOid, ClusterParams *params)
 	}
 
 	/*
+	 * Skip the global temporary table that did not initialize the storage
+	 * in this backend.
+	 */
+	if (RELATION_IS_GLOBAL_TEMP(OldHeap))
+	{
+		if (gtt_storage_attached(RelationGetRelid(OldHeap)))
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("cannot cluster global temporary table")));
+
+		relation_close(OldHeap, AccessExclusiveLock);
+		pgstat_progress_end_command();
+		return;
+	}
+
+	/*
 	 * Also check for active uses of the relation in the current transaction,
 	 * including open scans and pending AFTER trigger events.
 	 */
@@ -584,6 +601,9 @@ rebuild_relation(Relation OldHeap, Oid indexOid, bool verbose)
 	bool		swap_toast_by_content;
 	TransactionId frozenXid;
 	MultiXactId cutoffMulti;
+
+	/* not support cluster global temp table yet */
+	Assert(!RELATION_IS_GLOBAL_TEMP(OldHeap));
 
 	/* Mark the correct index as clustered */
 	if (OidIsValid(indexOid))
@@ -1429,7 +1449,7 @@ finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap,
 	pgstat_progress_update_param(PROGRESS_CLUSTER_PHASE,
 								 PROGRESS_CLUSTER_PHASE_REBUILD_INDEX);
 
-	reindex_relation(OIDOldHeap, reindex_flags, &reindex_params);
+	reindex_relation(OIDOldHeap, reindex_flags, &reindex_params, ShareLock);
 
 	/* Report that we are now doing clean up */
 	pgstat_progress_update_param(PROGRESS_CLUSTER_PHASE,

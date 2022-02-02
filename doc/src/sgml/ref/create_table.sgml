@@ -173,32 +173,67 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
     <listitem>
      <para>
       If specified, the table is created as a temporary table.
-      Temporary tables are automatically dropped at the end of a
-      session, or optionally at the end of the current transaction
-      (see <literal>ON COMMIT</literal> below).  The default
-      search_path includes the temporary schema first and so identically
-      named existing permanent tables are not chosen for new plans
+      Optionally, <literal>GLOBAL</literal> or <literal>LOCAL</literal>
+      can be written before <literal>TEMPORARY</literal> or <literal>TEMP</literal>.
+      They represent two types of temporary tables supported by <productname>PostgreSQL</productname>:
+      global temporary table and local temporary table. Without specified
+      GLOBAL or LOCAL, a local temporary table is created by default.
+     </para>
+
+    <para>
+     Both types of temporary tables’ data are truncated at the
+     end of a session or optionally at the end of the current transaction.
+     (see <literal>ON COMMIT</literal> below). For global temporary table,
+     its schema is reserved and reused by future sessions or transactions.
+     For local temporary table, both its data and its schema are dropped.
+    </para>
+
+    <variablelist>
+     <varlistentry>
+      <term><literal>Global Temporary Table</literal></term>
+      <listitem>
+       <para>
+        Global temporary table are defined just once and automatically exist
+        (starting with empty contents) in every session that needs them.
+        The schema definition of temporary tables is persistent and shared among sessions.
+        However, the data in temporary tables are kept private to sessions themselves,
+        even though they use same name and same schema.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><literal>Local Temporary Table</literal></term>
+     <listitem>
+     <para>
+      Local temporary table are automatically dropped at the end of a
+      session (include schema and data). Future sessions need to create
+      their own temporary tables when they are used.
+     </para>
+     <para>
+      The default search_path includes the temporary schema first and so
+      identically named existing permanent tables are not chosen for new plans
       while the temporary table exists, unless they are referenced
       with schema-qualified names. Any indexes created on a temporary
       table are automatically temporary as well.
      </para>
+     </listitem>
+     </varlistentry>
+    </variablelist>
 
-     <para>
-      The <link linkend="autovacuum">autovacuum daemon</link> cannot
-      access and therefore cannot vacuum or analyze temporary tables.
-      For this reason, appropriate vacuum and analyze operations should be
-      performed via session SQL commands.  For example, if a temporary
-      table is going to be used in complex queries, it is wise to run
-      <command>ANALYZE</command> on the temporary table after it is populated.
-     </para>
+    <para>
+     The <link linkend="autovacuum">autovacuum daemon</link> cannot
+     access and therefore cannot vacuum or analyze temporary tables.
+     For this reason, appropriate vacuum and analyze operations should be
+     performed via session SQL commands.  For example, if a temporary
+     table is going to be used in complex queries, it is wise to run
+     <command>ANALYZE</command> on the temporary table after it is populated.
+    </para>
+    <para>
+     The Temporary table resembles the SQL standard, but has some differences.
+     see <xref linkend="sql-createtable-compatibility"/> below.
+    </para>
 
-     <para>
-      Optionally, <literal>GLOBAL</literal> or <literal>LOCAL</literal>
-      can be written before <literal>TEMPORARY</literal> or <literal>TEMP</literal>.
-      This presently makes no difference in <productname>PostgreSQL</productname>
-      and is deprecated; see
-      <xref linkend="sql-createtable-compatibility"/> below.
-     </para>
     </listitem>
    </varlistentry>
 
@@ -2141,13 +2176,17 @@ CREATE TABLE cities_partdef
    <title>Temporary Tables</title>
 
    <para>
-    Although the syntax of <literal>CREATE TEMPORARY TABLE</literal>
-    resembles that of the SQL standard, the effect is not the same.  In the
-    standard,
-    temporary tables are defined just once and automatically exist (starting
-    with empty contents) in every session that needs them.
-    <productname>PostgreSQL</productname> instead
-    requires each session to issue its own <literal>CREATE TEMPORARY
+    Although the syntax of <literal>CREATE GLOBAL/LOCAL TEMPORARY TABLE</literal>
+    resembles that of the SQL standard, the effect is not the same.
+    The global temporary table follows the SQL standards while local temporary
+    table does not.
+   </para>
+
+   <para>
+    First, in the standard, both global and local temporary tables are defined just
+    once and automatically exist (starting with empty contents) in every session
+    that needs them. For local temporary tables, <productname>PostgreSQL</productname>
+    instead requires each session to issue its own <literal>CREATE LOCAL TEMPORARY
     TABLE</literal> command for each temporary table to be used.  This allows
     different sessions to use the same temporary table name for different
     purposes, whereas the standard's approach constrains all instances of a
@@ -2155,27 +2194,12 @@ CREATE TABLE cities_partdef
    </para>
 
    <para>
-    The standard's definition of the behavior of temporary tables is
-    widely ignored.  <productname>PostgreSQL</productname>'s behavior
-    on this point is similar to that of several other SQL databases.
-   </para>
-
-   <para>
-    The SQL standard also distinguishes between global and local temporary
+    Second, the SQL standard distinguishes between global and local temporary
     tables, where a local temporary table has a separate set of contents for
     each SQL module within each session, though its definition is still shared
-    across sessions.  Since <productname>PostgreSQL</productname> does not
+    across sessions. Since <productname>PostgreSQL</productname> does not
     support SQL modules, this distinction is not relevant in
     <productname>PostgreSQL</productname>.
-   </para>
-
-   <para>
-    For compatibility's sake, <productname>PostgreSQL</productname> will
-    accept the <literal>GLOBAL</literal> and <literal>LOCAL</literal> keywords
-    in a temporary table declaration, but they currently have no effect.
-    Use of these keywords is discouraged, since future versions of
-    <productname>PostgreSQL</productname> might adopt a more
-    standard-compliant interpretation of their meaning.
    </para>
 
    <para>
@@ -2185,7 +2209,8 @@ CREATE TABLE cities_partdef
     default behavior is <literal>ON COMMIT DELETE ROWS</literal>.  However, the
     default behavior in <productname>PostgreSQL</productname> is
     <literal>ON COMMIT PRESERVE ROWS</literal>.  The <literal>ON COMMIT
-    DROP</literal> option does not exist in SQL.
+    DROP</literal> option does not exist in SQL and is not supported by
+    global temporary table.
    </para>
   </refsect2>
 

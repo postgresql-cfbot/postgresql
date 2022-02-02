@@ -18,6 +18,7 @@
 #include "access/toast_internals.h"
 #include "access/visibilitymap.h"
 #include "catalog/pg_am.h"
+#include "catalog/storage_gtt.h"
 #include "funcapi.h"
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
@@ -336,6 +337,13 @@ verify_heapam(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_READ_ONLY_SQL_TRANSACTION),
 				 errmsg("cannot verify unlogged relation \"%s\" during recovery, skipping",
 						RelationGetRelationName(ctx.rel))));
+		relation_close(ctx.rel, AccessShareLock);
+		PG_RETURN_NULL();
+	}
+
+	if (RELATION_IS_GLOBAL_TEMP(ctx.rel) &&
+		!gtt_storage_attached(RelationGetRelid(ctx.rel)))
+	{
 		relation_close(ctx.rel, AccessShareLock);
 		PG_RETURN_NULL();
 	}

@@ -54,6 +54,7 @@
 #include "catalog/pg_trigger.h"
 #include "catalog/pg_type.h"
 #include "catalog/storage.h"
+#include "catalog/storage_gtt.h"
 #include "commands/event_trigger.h"
 #include "commands/progress.h"
 #include "commands/tablecmds.h"
@@ -125,7 +126,8 @@ static void UpdateIndexRelation(Oid indexoid, Oid heapoid,
 								bool isready);
 static void index_update_stats(Relation rel,
 							   bool hasindex,
-							   double reltuples);
+							   double reltuples,
+							   bool isreindex);
 static void IndexCheckExclusion(Relation heapRelation,
 								Relation indexRelation,
 								IndexInfo *indexInfo);
@@ -736,6 +738,21 @@ index_create(Relation heapRelation,
 	MultiXactId relminmxid;
 	bool		create_storage = !OidIsValid(relFileNode);
 
+	if (RELATION_IS_GLOBAL_TEMP(heapRelation))
+	{
+		/* disable create index on global temporary table with concurrent mode */
+		concurrent = false;
+
+		/*
+		 * For the case that some backend is applied relcache message to create
+		 * an index on a global temporary table, if this table in the current
+		 * backend are not initialized, the creation of index storage on the
+		 * table are also skipped.
+		 */
+		if (!gtt_storage_attached(RelationGetRelid(heapRelation)))
+			flags |= INDEX_CREATE_SKIP_BUILD;
+	}
+
 	/* constraint flags can only be set when a constraint is requested */
 	Assert((constr_flags == 0) ||
 		   ((flags & INDEX_CREATE_ADD_CONSTRAINT) != 0));
@@ -1242,7 +1259,8 @@ index_create(Relation heapRelation,
 		 */
 		index_update_stats(heapRelation,
 						   true,
-						   -1.0);
+						   -1.0,
+						   false);
 		/* Make the above update visible */
 		CommandCounterIncrement();
 	}
@@ -2149,7 +2167,7 @@ index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode)
 	 * lock (see comments in RemoveRelations), and a non-concurrent DROP is
 	 * more efficient.
 	 */
-	Assert(get_rel_persistence(indexId) != RELPERSISTENCE_TEMP ||
+	Assert(!RelpersistenceTsTemp(get_rel_persistence(indexId)) ||
 		   (!concurrent && !concurrent_lock_mode));
 
 	/*
@@ -2180,6 +2198,14 @@ index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode)
 	 * above locking won't prevent, so test explicitly.
 	 */
 	CheckTableNotInUse(userIndexRelation, "DROP INDEX");
+
+	/*
+	 * Allow to drop index on global temporary table when only current
+	 * backend use it.
+	 */
+	if (RELATION_IS_GLOBAL_TEMP(userHeapRelation))
+		CheckGlobalTempTableNotInUse(userHeapRelation,
+									 "DROP INDEX ON GLOBAL TEMPORARY TABLE");
 
 	/*
 	 * Drop Index Concurrently is more or less the reverse process of Create
@@ -2782,13 +2808,21 @@ FormIndexDatum(IndexInfo *indexInfo,
 static void
 index_update_stats(Relation rel,
 				   bool hasindex,
-				   double reltuples)
+				   double reltuples,
+				   bool isreindex)
 {
 	Oid			relid = RelationGetRelid(rel);
 	Relation	pg_class;
 	HeapTuple	tuple;
 	Form_pg_class rd_rel;
 	bool		dirty;
+
+	/*
+	 * Most of the global Temp table data is updated to the local hash, and reindex
+	 * does not refresh relcache, so call a separate function.
+	 */
+	if (RELATION_IS_GLOBAL_TEMP(rel))
+		return index_update_gtt_relstats(rel, hasindex, reltuples, isreindex);
 
 	/*
 	 * We always update the pg_class row using a non-transactional,
@@ -3009,6 +3043,25 @@ index_build(Relation heapRelation,
 		pgstat_progress_update_multi_param(6, progress_index, progress_vals);
 	}
 
+	/* For build index on global temporary table */
+	if (RELATION_IS_GLOBAL_TEMP(indexRelation))
+	{
+		/*
+		 * If the storage for the index in this session is not initialized,
+		 * it needs to be created.
+		 */
+		if (!gtt_storage_attached(RelationGetRelid(indexRelation)))
+		{
+			/* Before create init storage, fix the local Relcache first */
+			force_enable_gtt_index(indexRelation);
+
+			Assert(gtt_storage_attached(RelationGetRelid(heapRelation)));
+
+			/* Init storage for index */
+			RelationCreateStorage(indexRelation->rd_node, RELPERSISTENCE_GLOBAL_TEMP, indexRelation);
+		}
+	}
+
 	/*
 	 * Call the access method's build procedure
 	 */
@@ -3091,11 +3144,13 @@ index_build(Relation heapRelation,
 	 */
 	index_update_stats(heapRelation,
 					   true,
-					   stats->heap_tuples);
+					   stats->heap_tuples,
+					   isreindex);
 
 	index_update_stats(indexRelation,
 					   false,
-					   stats->index_tuples);
+					   stats->index_tuples,
+					   isreindex);
 
 	/* Make the updated catalog row versions visible */
 	CommandCounterIncrement();
@@ -3550,6 +3605,8 @@ reindex_index(Oid indexId, bool skip_constraint_checks, char persistence,
 	PGRUsage	ru0;
 	bool		progress = ((params->options & REINDEXOPT_REPORT_PROGRESS) != 0);
 	bool		set_tablespace = false;
+	LOCKMODE	lockmode_on_heap = ShareLock;
+	LOCKMODE	lockmode_on_index = AccessExclusiveLock;
 
 	pg_rusage_init(&ru0);
 
@@ -3563,10 +3620,35 @@ reindex_index(Oid indexId, bool skip_constraint_checks, char persistence,
 	if (!OidIsValid(heapId))
 		return;
 
+	/*
+	 * For reindex on global temporary table, If the storage for the index
+	 * in current session is not initialized, nothing is done.
+	 */
+	if (persistence == RELPERSISTENCE_GLOBAL_TEMP)
+	{
+		if (OidIsValid(params->tablespaceOid))
+			ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot change tablespace of global temporary table")));
+
+		if (!gtt_storage_attached(indexId))
+		{
+			/* Suppress use of the target index while rebuilding it */
+			SetReindexProcessing(heapId, indexId);
+			/* Re-allow use of target index */
+			ResetReindexProcessing();
+			return;
+		}
+
+		/* For global temp table reindex handles local data, using low-level locks */
+		lockmode_on_heap = AccessShareLock;
+		lockmode_on_index = AccessShareLock;
+	}
+
 	if ((params->options & REINDEXOPT_MISSING_OK) != 0)
-		heapRelation = try_table_open(heapId, ShareLock);
+		heapRelation = try_table_open(heapId, lockmode_on_heap);
 	else
-		heapRelation = table_open(heapId, ShareLock);
+		heapRelation = table_open(heapId, lockmode_on_heap);
 
 	/* if relation is gone, leave */
 	if (!heapRelation)
@@ -3592,7 +3674,7 @@ reindex_index(Oid indexId, bool skip_constraint_checks, char persistence,
 	 * Open the target index relation and get an exclusive lock on it, to
 	 * ensure that no one else is touching this particular index.
 	 */
-	iRel = index_open(indexId, AccessExclusiveLock);
+	iRel = index_open(indexId, lockmode_on_index);
 
 	if (progress)
 		pgstat_progress_update_param(PROGRESS_CREATEIDX_ACCESS_METHOD_OID,
@@ -3834,7 +3916,7 @@ reindex_index(Oid indexId, bool skip_constraint_checks, char persistence,
  * index rebuild.
  */
 bool
-reindex_relation(Oid relid, int flags, ReindexParams *params)
+reindex_relation(Oid relid, int flags, ReindexParams *params, LOCKMODE lockmode)
 {
 	Relation	rel;
 	Oid			toast_relid;
@@ -3850,9 +3932,9 @@ reindex_relation(Oid relid, int flags, ReindexParams *params)
 	 * should match ReindexTable().
 	 */
 	if ((params->options & REINDEXOPT_MISSING_OK) != 0)
-		rel = try_table_open(relid, ShareLock);
+		rel = try_table_open(relid, lockmode);
 	else
-		rel = table_open(relid, ShareLock);
+		rel = table_open(relid, lockmode);
 
 	/* if relation is gone, leave */
 	if (!rel)
@@ -3959,7 +4041,7 @@ reindex_relation(Oid relid, int flags, ReindexParams *params)
 
 		newparams.options &= ~(REINDEXOPT_MISSING_OK);
 		newparams.tablespaceOid = InvalidOid;
-		result |= reindex_relation(toast_relid, flags, &newparams);
+		result |= reindex_relation(toast_relid, flags, &newparams, lockmode);
 	}
 
 	return result;

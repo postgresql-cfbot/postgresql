@@ -288,6 +288,9 @@ extern int	tcp_user_timeout;
 extern bool trace_sort;
 #endif
 
+/* global temporary table */
+extern int	max_active_gtt;
+
 /*
  * Functions exported by guc.c
  */

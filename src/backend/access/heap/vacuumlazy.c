@@ -325,6 +325,9 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 	TransactionId FreezeLimit;
 	MultiXactId MultiXactCutoff;
 
+	Assert(TransactionIdIsNormal(rel->rd_rel->relfrozenxid));
+        Assert(MultiXactIdIsValid(rel->rd_rel->relminmxid));
+
 	verbose = (params->options & VACOPT_VERBOSE) != 0;
 	instrument = (verbose || (IsAutoVacuumWorkerProcess() &&
 							  params->log_min_duration >= 0));

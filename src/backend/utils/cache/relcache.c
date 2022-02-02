@@ -65,6 +65,7 @@
 #include "catalog/pg_type.h"
 #include "catalog/schemapg.h"
 #include "catalog/storage.h"
+#include "catalog/storage_gtt.h"
 #include "commands/policy.h"
 #include "commands/trigger.h"
 #include "miscadmin.h"
@@ -1152,6 +1153,36 @@ retry:
 				relation->rd_islocaltemp = false;
 			}
 			break;
+		case RELPERSISTENCE_GLOBAL_TEMP:
+			{
+				BlockNumber     relpages = 0;
+				double          reltuples = 0;
+				BlockNumber     relallvisible = 0;
+				TransactionId	relfrozenxid = InvalidTransactionId;
+				MultiXactId 	relminmxid = InvalidMultiXactId;
+
+				relation->rd_backend = BackendIdForTempRelations();
+				relation->rd_islocaltemp = false;
+
+				/*
+				 * For global temporary table
+				 * get session level relstats from localhash
+				 * and set it to local relcache
+				 */
+				get_gtt_relstats(RelationGetRelid(relation),
+								 &relpages, &reltuples, &relallvisible,
+								 &relfrozenxid, &relminmxid);
+
+				relation->rd_rel->relpages = (int32)relpages;
+				relation->rd_rel->reltuples = (float4)reltuples;
+				relation->rd_rel->relallvisible = (int32)relallvisible;
+				if (TransactionIdIsNormal(relfrozenxid))
+					relation->rd_rel->relfrozenxid = relfrozenxid;
+
+				if (MultiXactIdIsValid(relminmxid))
+					relation->rd_rel->relminmxid = relminmxid;
+			}
+			break;
 		default:
 			elog(ERROR, "invalid relpersistence: %c",
 				 relation->rd_rel->relpersistence);
@@ -1211,6 +1242,15 @@ retry:
 		RelationInitTableAccessMethod(relation);
 	else
 		Assert(relation->rd_rel->relam == InvalidOid);
+
+	/*
+	 * For one global temporary table,
+	 * other session may created one index, that triggers relcache reload for this session.
+	 * If table already has data at this session, to avoid rebuilding index,
+	 * accept the structure of the index but set the local state to indisvalid.
+	 */
+	if (relation->rd_rel->relkind == RELKIND_INDEX)
+		gtt_correct_index_session_state(relation);
 
 	/* extract reloptions if any */
 	RelationParseRelOptions(relation, pg_class_tuple);
@@ -1335,7 +1375,23 @@ RelationInitPhysicalAddr(Relation relation)
 			heap_freetuple(phys_tuple);
 		}
 
-		relation->rd_node.relNode = relation->rd_rel->relfilenode;
+		/*
+		 * For global temporary table,
+		 * the latest relfilenode is saved in localHash(see RelationSetNewRelfilenode()),
+		 * get it and put it to local relcache.
+		 */
+		if (RELATION_IS_GLOBAL_TEMP(relation))
+		{
+			Oid newrelnode = gtt_fetch_current_relfilenode(RelationGetRelid(relation));
+
+			if (OidIsValid(newrelnode) &&
+				newrelnode != relation->rd_rel->relfilenode)
+				relation->rd_node.relNode = newrelnode;
+			else
+				relation->rd_node.relNode = relation->rd_rel->relfilenode;
+		}
+		else
+			relation->rd_node.relNode = relation->rd_rel->relfilenode;
 	}
 	else
 	{
@@ -2288,6 +2344,14 @@ RelationReloadIndexInfo(Relation relation)
 							   HeapTupleHeaderGetXmin(tuple->t_data));
 
 		ReleaseSysCache(tuple);
+
+		/*
+		 * For one global temporary table,
+		 * other session may created one index, that triggers relcache reload for this session.
+		 * If table already has data at this session, to avoid rebuilding index,
+		 * accept the structure of the index but set the local state to indisvalid.
+		 */
+		gtt_correct_index_session_state(relation);
 	}
 
 	/* Okay, now it's valid again */
@@ -3568,6 +3632,10 @@ RelationBuildLocalRelation(const char *relname,
 			rel->rd_backend = BackendIdForTempRelations();
 			rel->rd_islocaltemp = true;
 			break;
+		case RELPERSISTENCE_GLOBAL_TEMP:
+			rel->rd_backend = BackendIdForTempRelations();
+			rel->rd_islocaltemp = false;
+			break;
 		default:
 			elog(ERROR, "invalid relpersistence: %c", relpersistence);
 			break;
@@ -3681,6 +3749,13 @@ RelationSetNewRelfilenode(Relation relation, char persistence)
 	TransactionId freezeXid = InvalidTransactionId;
 	RelFileNode newrnode;
 
+	/*
+	 * For global temporary table, storage information for each session is
+	 * maintained locally, not in pg_class.
+	 */
+	if (RELATION_IS_GLOBAL_TEMP(relation))
+		return GlobalTempRelationSetNewRelfilenode(relation);
+
 	/* Allocate a new relfilenode */
 	newrelfilenode = GetNewRelFileNode(relation->rd_rel->reltablespace, NULL,
 									   persistence);
@@ -3724,7 +3799,7 @@ RelationSetNewRelfilenode(Relation relation, char persistence)
 		/* handle these directly, at least for now */
 		SMgrRelation srel;
 
-		srel = RelationCreateStorage(newrnode, persistence);
+		srel = RelationCreateStorage(newrnode, persistence, relation);
 		smgrclose(srel);
 	}
 	else

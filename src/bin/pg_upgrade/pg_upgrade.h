@@ -371,7 +371,7 @@ void		check_loadable_libraries(void);
 FileNameMap *gen_db_file_maps(DbInfo *old_db,
 							  DbInfo *new_db, int *nmaps, const char *old_pgdata,
 							  const char *new_pgdata);
-void		get_db_and_rel_infos(ClusterInfo *cluster);
+void		get_db_and_rel_infos(ClusterInfo *cluster, bool skip_global_temp);
 
 /* option.c */
 

@@ -5835,6 +5835,7 @@ heap_abort_speculative(Relation relation, ItemPointer tid)
 	Buffer		buffer;
 	TransactionId prune_xid;
 
+	Assert(TransactionIdIsNormal(relation->rd_rel->relfrozenxid));
 	Assert(ItemPointerIsValid(tid));
 
 	block = ItemPointerGetBlockNumber(tid);

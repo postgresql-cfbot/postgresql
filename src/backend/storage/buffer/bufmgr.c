@@ -38,6 +38,7 @@
 #include "access/xlogutils.h"
 #include "catalog/catalog.h"
 #include "catalog/storage.h"
+#include "catalog/storage_gtt.h"
 #include "executor/instrument.h"
 #include "lib/binaryheap.h"
 #include "miscadmin.h"
@@ -2935,7 +2936,15 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 BlockNumber
 RelationGetNumberOfBlocksInFork(Relation relation, ForkNumber forkNum)
 {
-	if (RELKIND_HAS_TABLE_AM(relation->rd_rel->relkind))
+	/*
+	 * Returns 0 if this global temporary table is not initialized in this session.
+	 */
+	if (RELATION_IS_GLOBAL_TEMP(relation) &&
+		!gtt_storage_attached(RelationGetRelid(relation)))
+	{
+		return 0;
+	}
+	else if (RELKIND_HAS_TABLE_AM(relation->rd_rel->relkind))
 	{
 		/*
 		 * Not every table AM uses BLCKSZ wide fixed size blocks.

@@ -60,6 +60,7 @@
 #include <signal.h>
 #include <fcntl.h>
 #include <grp.h>
+#include <pgstat.h>
 #include <unistd.h>
 #include <sys/file.h>
 #include <sys/socket.h>
@@ -77,11 +78,14 @@
 
 #include "common/ip.h"
 #include "libpq/libpq.h"
+#include "libpq/pqformat.h"
 #include "miscadmin.h"
 #include "port/pg_bswap.h"
 #include "storage/ipc.h"
 #include "utils/guc.h"
 #include "utils/memutils.h"
+#include "utils/builtins.h"
+#include "common/zpq_stream.h"
 
 /*
  * Cope with the various platform-specific ways to spell TCP keepalive socket
@@ -108,6 +112,9 @@
 int			Unix_socket_permissions;
 char	   *Unix_socket_group;
 
+/* GUC variable containing the allowed compression algorithms list (separated by comma) */
+char	   *libpq_compress_algorithms = "off";
+
 /* Where the Unix socket files are (list of palloc'd strings) */
 static List *sock_paths = NIL;
 
@@ -129,6 +136,9 @@ static int	PqSendStart;		/* Next index to send a byte in PqSendBuffer */
 static char PqRecvBuffer[PQ_RECV_BUFFER_SIZE];
 static int	PqRecvPointer;		/* Next index to read a byte from PqRecvBuffer */
 static int	PqRecvLength;		/* End of data available in PqRecvBuffer */
+
+static ZpqStream * PqStream;
+
 
 /*
  * Message status
@@ -167,6 +177,145 @@ const PQcommMethods *PqCommMethods = &PqCommSocketMethods;
 
 WaitEventSet *FeBeWaitSet;
 
+static ssize_t
+write_compressed(void *arg, void const *data, size_t size)
+{
+	ssize_t		rc = secure_write((Port *) arg, (void *) data, size);
+
+	if (rc > 0)
+		pgstat_report_network_traffic(0, 0, 0, rc);
+	return rc;
+}
+
+static ssize_t
+read_compressed(void *arg, void *data, size_t size)
+{
+	ssize_t		rc = secure_read((Port *) arg, data, size);
+
+	if (rc > 0)
+		pgstat_report_network_traffic(0, 0, rc, 0);
+	return rc;
+}
+
+/*
+ * Send the chosen compression algorithms to the client
+ */
+static void
+SendCompressionACK(char *compressors_str)
+{
+	StringInfoData buf;
+
+	pq_beginmessage(&buf, 'z');
+	pq_sendstring(&buf, compressors_str);
+	pq_endmessage(&buf);
+	pq_flush();
+}
+
+/* --------------------------------
+ *		pq_configure - configure connection using port settings
+ *
+ * Right now only compression is toggled in the configure.
+ * Function returns 0 in case of success, non-null in case of error
+ * --------------------------------
+ */
+int
+pq_configure(Port *port)
+{
+	zpq_compressor *server_compressors;
+	zpq_compressor *client_compressors;
+	zpq_compressor *res_compressors;
+	size_t		n_client_compressors;
+	size_t		n_server_compressors;
+	size_t		n_res_compressors = 0;
+	char	   *res_compressors_str;
+	char	   *client_compression_algorithms = port->compression_algorithms;
+
+	if (!client_compression_algorithms || !libpq_compress_algorithms)
+	{
+		return 0;
+	}
+
+	if (zpq_parse_compression_setting(libpq_compress_algorithms, &server_compressors, &n_server_compressors) == -1)
+	{
+		ereport(LOG, errmsg("failed to parse configured compression setting: %s", libpq_compress_algorithms));
+		return 0;
+	}
+
+	if (n_server_compressors == 0)
+	{
+		/*
+		 * No enabled server compressors available, abort the compression
+		 * initialization.
+		 */
+		/* Send the compression acknowledgment with empty compressors list. */
+		char	   *empty_response = "";
+
+		SendCompressionACK(empty_response);
+		return 0;
+	}
+
+	if (!zpq_deserialize_compressors(client_compression_algorithms, &client_compressors, &n_client_compressors))
+	{
+		ereport(LOG, (errmsg("failed to parse received client compression methods: %s", client_compression_algorithms)));
+		return 0;
+	}
+
+	if (n_client_compressors == 0)
+	{
+		/*
+		 * client did not provide any compression algorithms that server is
+		 * compiled to support
+		 */
+		ereport(LOG, (errmsg("server doesn't support any of the compression methods requested by the client: %s", client_compression_algorithms)));
+		return 0;
+	}
+
+	res_compressors = malloc(Max(n_client_compressors, n_server_compressors) * sizeof(zpq_compressor));
+
+	/*
+	 * Intersect client and server compressors to determine the final list of
+	 * the supported compressors. O(N^2) is negligible because of a small
+	 * number of the compression methods.
+	 */
+	for (size_t i = 0; i < n_client_compressors; i++)
+	{
+		for (size_t j = 0; j < n_server_compressors; j++)
+		{
+			if (client_compressors[i].impl == server_compressors[j].impl)
+			{
+				res_compressors[n_res_compressors].impl = client_compressors[i].impl;
+				/* prefer the lower compression level */
+				res_compressors[n_res_compressors++].level = Min(client_compressors[i].level, server_compressors[j].level);
+				break;
+			}
+		}
+	}
+	free(client_compressors);
+	free(server_compressors);
+
+	if (n_res_compressors == 0)
+	{
+		char	   *empty_response = "";
+
+		ereport(LOG, (errmsg("did not find any matches between the client and server compression methods, not enabling compression")));
+		free(res_compressors);
+		/* send the compression ack with empty compressors list */
+		SendCompressionACK(empty_response);
+		return 0;
+	}
+
+	res_compressors_str = zpq_serialize_compressors(res_compressors, n_res_compressors);
+	SendCompressionACK(res_compressors_str);
+
+	/* Init compression */
+	PqStream = zpq_create(res_compressors, n_res_compressors, write_compressed, read_compressed, MyProcPort, NULL, 0);
+	if (!PqStream)
+	{
+		ereport(LOG, (errmsg("failed to initialize the compression stream")));
+		return -1;
+	}
+	return 0;
+}
 
 /* --------------------------------
  *		pq_init - initialize libpq at backend startup
@@ -269,6 +418,9 @@ socket_close(int code, Datum arg)
 				gss_release_cred(&min_s, &MyProcPort->gss->cred);
 		}
 #endif							/* ENABLE_GSS */
+
+		/* Release compression streams */
+		zpq_free(PqStream);
 
 		/*
 		 * Cleanly shut down SSL layer.  Nowhere else does a postmaster child
@@ -941,12 +1093,15 @@ socket_set_nonblocking(bool nonblocking)
 /* --------------------------------
  *		pq_recvbuf - load some bytes into the input buffer
  *
- *		returns 0 if OK, EOF if trouble
+ *      nowait parameter toggles non-blocking mode.
+ *		returns number of read bytes, EOF if trouble
  * --------------------------------
  */
 static int
-pq_recvbuf(void)
+pq_recvbuf(bool nowait)
 {
+	int			r;
+
 	if (PqRecvPointer > 0)
 	{
 		if (PqRecvLength > PqRecvPointer)
@@ -962,20 +1117,39 @@ pq_recvbuf(void)
 	}
 
 	/* Ensure that we're in blocking mode */
-	socket_set_nonblocking(false);
+	socket_set_nonblocking(nowait);
 
 	/* Can fill buffer from PqRecvLength and upwards */
 	for (;;)
 	{
-		int			r;
-
-		r = secure_read(MyProcPort, PqRecvBuffer + PqRecvLength,
-						PQ_RECV_BUFFER_SIZE - PqRecvLength);
+		/*
+		 * If streaming compression is enabled then use correspondent
+		 * compression read function.
+		 */
+		r = PqStream
+			? zpq_read(PqStream, PqRecvBuffer + PqRecvLength,
+					   PQ_RECV_BUFFER_SIZE - PqRecvLength, false)
+			: secure_read(MyProcPort, PqRecvBuffer + PqRecvLength,
+						  PQ_RECV_BUFFER_SIZE - PqRecvLength);
 
 		if (r < 0)
 		{
+			if (r == ZS_DECOMPRESS_ERROR)
+			{
+				char const *msg = zpq_decompress_error(PqStream);
+
+				if (msg == NULL)
+					msg = "end of stream";
+				ereport(COMMERROR,
+						(errcode_for_socket_access(),
+						 errmsg("failed to decompress data: %s", msg)));
+				return EOF;
+			}
 			if (errno == EINTR)
 				continue;		/* Ok if interrupted */
+
+			if (nowait && (errno == EAGAIN || errno == EWOULDBLOCK))
+				return 0;
 
 			/*
 			 * Careful: an ereport() that tries to write to the client would
@@ -997,7 +1171,8 @@ pq_recvbuf(void)
 		}
 		/* r contains number of bytes read, so just incr length */
 		PqRecvLength += r;
-		return 0;
+		pgstat_report_network_traffic(r, 0, 0, 0);
+		return r;
 	}
 }
 
@@ -1012,7 +1187,8 @@ pq_getbyte(void)
 
 	while (PqRecvPointer >= PqRecvLength)
 	{
-		if (pq_recvbuf())		/* If nothing in buffer, then recv some */
+		if (pq_recvbuf(false) == EOF)	/* If nothing in buffer, then recv
+										 * some */
 			return EOF;			/* Failed to recv data */
 	}
 	return (unsigned char) PqRecvBuffer[PqRecvPointer++];
@@ -1031,7 +1207,8 @@ pq_peekbyte(void)
 
 	while (PqRecvPointer >= PqRecvLength)
 	{
-		if (pq_recvbuf())		/* If nothing in buffer, then recv some */
+		if (pq_recvbuf(false) == EOF)	/* If nothing in buffer, then recv
+										 * some */
 			return EOF;			/* Failed to recv data */
 	}
 	return (unsigned char) PqRecvBuffer[PqRecvPointer];
@@ -1048,48 +1225,15 @@ pq_peekbyte(void)
 int
 pq_getbyte_if_available(unsigned char *c)
 {
-	int			r;
+	int			r = 0;
 
 	Assert(PqCommReadingMsg);
 
-	if (PqRecvPointer < PqRecvLength)
+	if (PqRecvPointer < PqRecvLength || (r = pq_recvbuf(true)) > 0)
 	{
 		*c = PqRecvBuffer[PqRecvPointer++];
 		return 1;
 	}
-
-	/* Put the socket into non-blocking mode */
-	socket_set_nonblocking(true);
-
-	r = secure_read(MyProcPort, c, 1);
-	if (r < 0)
-	{
-		/*
-		 * Ok if no data available without blocking or interrupted (though
-		 * EINTR really shouldn't happen with a non-blocking socket). Report
-		 * other errors.
-		 */
-		if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
-			r = 0;
-		else
-		{
-			/*
-			 * Careful: an ereport() that tries to write to the client would
-			 * cause recursion to here, leading to stack overflow and core
-			 * dump!  This message must go *only* to the postmaster log.
-			 */
-			ereport(COMMERROR,
-					(errcode_for_socket_access(),
-					 errmsg("could not receive data from client: %m")));
-			r = EOF;
-		}
-	}
-	else if (r == 0)
-	{
-		/* EOF detected */
-		r = EOF;
-	}
-
 	return r;
 }
 
@@ -1110,7 +1254,8 @@ pq_getbytes(char *s, size_t len)
 	{
 		while (PqRecvPointer >= PqRecvLength)
 		{
-			if (pq_recvbuf())	/* If nothing in buffer, then recv some */
+			if (pq_recvbuf(false) == EOF)	/* If nothing in buffer, then recv
+											 * some */
 				return EOF;		/* Failed to recv data */
 		}
 		amount = PqRecvLength - PqRecvPointer;
@@ -1144,7 +1289,8 @@ pq_discardbytes(size_t len)
 	{
 		while (PqRecvPointer >= PqRecvLength)
 		{
-			if (pq_recvbuf())	/* If nothing in buffer, then recv some */
+			if (pq_recvbuf(false) == EOF)	/* If nothing in buffer, then recv
+											 * some */
 				return EOF;		/* Failed to recv data */
 		}
 		amount = PqRecvLength - PqRecvPointer;
@@ -1167,7 +1313,6 @@ pq_buffer_has_data(void)
 {
 	return (PqRecvPointer < PqRecvLength);
 }
-
 
 /* --------------------------------
  *		pq_startmsgread - begin reading a message from the client.
@@ -1372,13 +1517,24 @@ internal_flush(void)
 	char	   *bufptr = PqSendBuffer + PqSendStart;
 	char	   *bufend = PqSendBuffer + PqSendPointer;
 
-	while (bufptr < bufend)
+	while (bufptr < bufend || zpq_buffered_tx(PqStream) != 0)
+
+		/*
+		 * has more data to flush or unsent data in internal compression
+		 * buffer
+		 */
 	{
 		int			r;
+		size_t		processed = 0;
+		size_t		available = bufend - bufptr;
 
-		r = secure_write(MyProcPort, bufptr, bufend - bufptr);
+		r = PqStream
+			? zpq_write(PqStream, bufptr, available, &processed)
+			: secure_write(MyProcPort, bufptr, available);
+		bufptr += processed;
+		PqSendStart += processed;
 
-		if (r <= 0)
+		if (r < 0 || (r == 0 && available))
 		{
 			if (errno == EINTR)
 				continue;		/* Ok if we were interrupted */
@@ -1421,12 +1577,12 @@ internal_flush(void)
 			InterruptPending = 1;
 			return EOF;
 		}
+		pgstat_report_network_traffic(0, r, 0, 0);
 
 		last_reported_send_errno = 0;	/* reset after any successful send */
 		bufptr += r;
 		PqSendStart += r;
 	}
-
 	PqSendStart = PqSendPointer = 0;
 	return 0;
 }
@@ -1443,7 +1599,7 @@ socket_flush_if_writable(void)
 	int			res;
 
 	/* Quick exit if nothing to do */
-	if (PqSendPointer == PqSendStart)
+	if ((PqSendPointer == PqSendStart) && (zpq_buffered_tx(PqStream) == 0))
 		return 0;
 
 	/* No-op if reentrant call */
@@ -1466,7 +1622,7 @@ socket_flush_if_writable(void)
 static bool
 socket_is_send_pending(void)
 {
-	return (PqSendStart < PqSendPointer);
+	return (PqSendStart < PqSendPointer || (zpq_buffered_tx(PqStream) != 0));
 }
 
 /* --------------------------------
@@ -1988,4 +2144,17 @@ pq_check_connection(void)
 #endif
 
 	return true;
+}
+
+PG_FUNCTION_INFO_V1(pg_compression_algorithm);
+
+Datum
+pg_compression_algorithm(PG_FUNCTION_ARGS)
+{
+	char const *algorithm_name = PqStream ? zpq_compress_algorithm_name(PqStream) : NULL;
+
+	if (algorithm_name)
+		PG_RETURN_TEXT_P(cstring_to_text(algorithm_name));
+	else
+		PG_RETURN_NULL();
 }

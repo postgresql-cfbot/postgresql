@@ -92,6 +92,15 @@
    such as <command>COPY</command>.
   </para>
 
+  <para>
+    It is possible to compress protocol data to reduce traffic and speed-up client-server interaction.
+    Compression is especially useful for importing/exporting data to/from the database using the <literal>COPY</literal> command
+    and for replication (both physical and logical). Compression can also reduce the server's response time
+    for queries returning a large amount of data (for example, JSON, BLOBs, text, ...).
+    Currently, two libraries are supported: zlib (default) and lz4 (if Postgres was
+    configured with --with-lz4 option).
+  </para>
+
  <sect2 id="protocol-message-concepts">
   <title>Messaging Overview</title>
 
@@ -258,6 +267,21 @@
        <para>
         The connection attempt has been rejected.
         The server then immediately closes the connection.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term>CompressionAck</term>
+      <listitem>
+       <para>
+         The server accepts the client's compression request.
+         Compression is requested when a client connection includes the "compression" option, which contains a list of the requested compression algorithms.
+         The server intersects the requested compression algorithms with the allowed ones (controlled via the <literal>libpq_compression</literal> server config setting).
+         If the intersection is not empty, the server responds with CompressionAck containing the final list of the compression algorithms that can be used for the compression of libpq messages between the client and server.
+         If the intersection is empty (server does not accept any of the requested algorithms), then it replies with CompressionAck containing the empty list and it is up to the client whether to continue without compression or to report an error.
+         After sending the CompressionAck message, the server can send the SetCompressionMethod message to set the current compression algorithm for server-to-client traffic compression.
+         After receiving the CompressionAck message, the client can send the SetCompressionMethod message to set the current compression algorithm for client-to-server traffic compression.
        </para>
       </listitem>
      </varlistentry>
@@ -3735,6 +3759,141 @@ following:
 
 <varlistentry>
 <term>
+CompressionAck (B)
+</term>
+<listitem>
+<para>
+
+<variablelist>
+<varlistentry>
+<term>
+        Byte1('z')
+</term>
+<listitem>
+<para>
+                Acknowledge use of compression for protocol data.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int32
+</term>
+<listitem>
+<para>
+                Length of message contents in bytes, including self.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Byte<replaceable>n</replaceable>
+</term>
+<listitem>
+<para>
+                List of the negotiated compression algorithms.
+</para>
+</listitem>
+</varlistentry>
+</variablelist>
+
+</para>
+</listitem>
+</varlistentry>
+
+
+<varlistentry>
+<term>
+SetCompressionMethod (F &amp; B)
+</term>
+<listitem>
+<para>
+
+<variablelist>
+<varlistentry>
+<term>
+        Byte1('k')
+</term>
+<listitem>
+<para>
+                Switch the current compression algorithm. Following CompressedData messages will be compressed via the compressed algorithm specified in this message.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int32(5)
+</term>
+<listitem>
+<para>
+                Length of message contents in bytes, including self.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int8
+</term>
+<listitem>
+<para>
+                Index of the new compression algorithm.
+</para>
+</listitem>
+</varlistentry>
+</variablelist>
+
+</para>
+</listitem>
+</varlistentry>
+
+<varlistentry>
+<term>
+CompressedData (F &amp; B)
+</term>
+<listitem>
+<para>
+
+
+<variablelist>
+<varlistentry>
+<term>
+        Byte1('m')
+</term>
+<listitem>
+<para>
+                Identifies the message as compressed data.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Int32
+</term>
+<listitem>
+<para>
+                Length of message contents in bytes, including self.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+        Byte<replaceable>n</replaceable>
+</term>
+<listitem>
+<para>
+                Compressed message data.
+</para>
+</listitem>
+</varlistentry>
+</variablelist>
+
+</para>
+</listitem>
+</varlistentry>
+
+
+<varlistentry>
+<term>
 AuthenticationSASLContinue (B)
 </term>
 <listitem>
@@ -6295,6 +6454,21 @@ StartupMessage (F)
                         <literal>database</literal>, and the default is
                         <literal>false</literal>. See
                         <xref linkend="protocol-replication"/> for details.
+</para>
+</listitem>
+</varlistentry>
+<varlistentry>
+<term>
+                <literal>_pq_.compression</literal>
+</term>
+<listitem>
+<para>
+                        Request compression of libpq traffic. The value is a list of compression algorithms requested by the client with an optional
+                        specification of compression level: <literal>"zlib,lz4:5"</literal>.
+                        If the server does not support compression, the backend will ignore the _pq_.compression
+                        parameter and will not send the CompressionAck message to the frontend.
+                        By default, compression is disabled. Please note that using compression together with SSL may expose extra vulnerabilities:
+                        <ulink url="https://en.wikipedia.org/wiki/CRIME">CRIME</ulink>.
 </para>
 </listitem>
 </varlistentry>

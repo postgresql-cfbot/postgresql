@@ -1035,6 +1035,27 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-libpq-compression" xreflabel="libpq_compression">
+      <term><varname>libpq_compression</varname> (<type>string</type>)
+      <indexterm>
+       <primary><varname>libpq_compression</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        This parameter controls the available client-server traffic compression methods.
+        It allows rejecting compression requests even if it is supported by the server (for example, due to security, or CPU consumption).
+        The default is <literal>on</literal>, which means that all supported compression methods are allowed.
+        For more precise control, a list of the allowed compression methods can be specified.
+        For example, to allow only <literal>lz4</literal> and <literal>zlib</literal>, set the setting to <literal>lz4,zlib</literal>.
+        Also, maximal allowed compression level can be specified for each method, e.g. <literal>lz4:1,zlib:2</literal> setting will set the
+        maximal compression level for <literal>lz4</literal> to 1 and <literal>zlib</literal> to 2.
+        If a client requests the compression with a higher compression level, it will be set to the maximal allowed one.
+        Default (and recommended) maximal compression level for each algorithm is 1.
+       </para>
+      </listitem>
+     </varlistentry>
+
      </variablelist>
      </sect2>
 

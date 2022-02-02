@@ -381,6 +381,8 @@ task:
 
   configure_script:
     # copy errors out when using forward slashes
+    - choco install -y cmake
+    - ./src/tools/ci/install_zlib.bat
     - copy src\tools\ci\windows_build_config.pl src\tools\msvc\config.pl
     - vcvarsall x64
     - perl src/tools/msvc/mkvcbuild.pl

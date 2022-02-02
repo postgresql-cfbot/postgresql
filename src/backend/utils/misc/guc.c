@@ -52,6 +52,7 @@
 #include "commands/vacuum.h"
 #include "commands/variable.h"
 #include "common/string.h"
+#include "common/zpq_stream.h"
 #include "funcapi.h"
 #include "jit/jit.h"
 #include "libpq/auth.h"
@@ -192,6 +193,7 @@ static bool check_stage_log_stats(bool *newval, void **extra, GucSource source);
 static bool check_log_stats(bool *newval, void **extra, GucSource source);
 static bool check_canonical_path(char **newval, void **extra, GucSource source);
 static bool check_timezone_abbreviations(char **newval, void **extra, GucSource source);
+static bool check_libpq_compression(char **newval, void **extra, GucSource source);
 static void assign_timezone_abbreviations(const char *newval, void *extra);
 static void pg_timezone_abbrev_initialize(void);
 static const char *show_archive_command(void);
@@ -4594,6 +4596,16 @@ static struct config_string ConfigureNamesString[] =
 	},
 
 	{
+		{"libpq_compression", PGC_SIGHUP, CLIENT_CONN_OTHER,
+			gettext_noop("Sets the list of allowed libpq compression algorithms."),
+			NULL
+		},
+		&libpq_compress_algorithms,
+		"zlib",
+		check_libpq_compression, NULL, NULL
+	},
+
+	{
 		{"application_name", PGC_USERSET, LOGGING_WHAT,
 			gettext_noop("Sets the application name to be reported in statistics and logs."),
 			NULL,
@@ -5024,6 +5036,8 @@ static struct config_enum ConfigureNamesEnum[] =
 		RECOVERY_INIT_SYNC_METHOD_FSYNC, recovery_init_sync_method_options,
 		NULL, NULL, NULL
 	},
+
+
 
 	/* End-of-list marker */
 	{
@@ -11895,6 +11909,22 @@ check_ssl(bool *newval, void **extra, GucSource source)
 		return false;
 	}
 #endif
+	return true;
+}
+
+static bool
+check_libpq_compression(char **newval, void **extra, GucSource source)
+{
+	zpq_compressor *compressors;
+	size_t		n_compressors;
+
+	if (zpq_parse_compression_setting(*newval, &compressors, &n_compressors) == -1)
+	{
+		GUC_check_errdetail("Cannot parse the libpq_compression setting.");
+		return false;
+	}
+
+	free(compressors);
 	return true;
 }
 

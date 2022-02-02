@@ -932,11 +932,11 @@ is_exprlist_member(Expr *node, List *exprs)
 }
 
 /*
- * Find an equivalence class member expression, all of whose Vars, come from
- * the indicated relation.
+ * Find an equivalence class member, all of whose Vars, come from the
+ * indicated relation.
  */
-Expr *
-find_em_expr_for_rel(EquivalenceClass *ec, RelOptInfo *rel)
+EquivalenceMember *
+find_em_for_rel(EquivalenceClass *ec, RelOptInfo *rel)
 {
 	ListCell   *lc_em;
 
@@ -952,13 +952,29 @@ find_em_expr_for_rel(EquivalenceClass *ec, RelOptInfo *rel)
 			 * taken entirely from this relation, we'll be content to choose
 			 * any one of those.
 			 */
-			return em->em_expr;
+			return em;
 		}
 	}
 
 	/* We didn't find any suitable equivalence class expression */
 	return NULL;
 }
+
+/*
+ * Find an equivalence class member expression, all of whose Vars, come from
+ * the indicated relation.
+ */
+Expr *
+find_em_expr_for_rel(EquivalenceClass *ec, RelOptInfo *rel)
+{
+	EquivalenceMember *em = find_em_for_rel(ec, rel);
+
+	if (em != NULL)
+		return em->em_expr;
+
+	return NULL;
+}
+
 
 /*
  * relation_can_be_sorted_early

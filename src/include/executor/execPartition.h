@@ -124,5 +124,11 @@ extern PartitionPruneState *ExecCreatePartitionPruneState(PlanState *planstate,
 extern Bitmapset *ExecFindMatchingSubPlans(PartitionPruneState *prunestate);
 extern Bitmapset *ExecFindInitialMatchingSubPlans(PartitionPruneState *prunestate,
 												  int nsubplans);
+extern Relation find_leaf_part_for_key(Relation root_rel,
+					  int key_natts,
+					  const AttrNumber *key_attnums,
+					  Datum *key_vals, char *key_nulls,
+					  Oid root_idxoid, int lockmode,
+					  Oid *leaf_idxoid);
 
 #endif							/* EXECPARTITION_H */

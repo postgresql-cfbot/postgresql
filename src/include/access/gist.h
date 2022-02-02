@@ -50,6 +50,7 @@
 #define F_FOLLOW_RIGHT		(1 << 3)	/* page to the right has no downlink */
 #define F_HAS_GARBAGE		(1 << 4)	/* some tuples on the page are dead,
 										 * but not deleted yet */
+#define F_LP_SAFE_ON_STANDBY	(1 << 5) /* LP bits are safe to use on standby */
 
 /*
  * NSN (node sequence number) is a special-purpose LSN which is stored on each
@@ -178,6 +179,10 @@ typedef struct GISTENTRY
 #define GistPageHasGarbage(page) ( GistPageGetOpaque(page)->flags & F_HAS_GARBAGE)
 #define GistMarkPageHasGarbage(page) ( GistPageGetOpaque(page)->flags |= F_HAS_GARBAGE)
 #define GistClearPageHasGarbage(page)	( GistPageGetOpaque(page)->flags &= ~F_HAS_GARBAGE)
+
+#define GistPageHasLpSafeOnStandby(page) ( GistPageGetOpaque(page)->flags & F_LP_SAFE_ON_STANDBY)
+#define GistMarkPageHasLpSafeOnStandby(page) ( GistPageGetOpaque(page)->flags |= F_LP_SAFE_ON_STANDBY)
+#define GistClearPageHasLpSafeOnStandby(page)	( GistPageGetOpaque(page)->flags &= ~F_LP_SAFE_ON_STANDBY)
 
 #define GistFollowRight(page) ( GistPageGetOpaque(page)->flags & F_FOLLOW_RIGHT)
 #define GistMarkFollowRight(page) ( GistPageGetOpaque(page)->flags |= F_FOLLOW_RIGHT)

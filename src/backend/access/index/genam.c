@@ -106,18 +106,18 @@ RelationGetIndexScan(Relation indexRelation, int nkeys, int norderbys)
 	scan->xs_want_itup = false; /* may be set later */
 
 	/*
-	 * During recovery we ignore killed tuples and don't bother to kill them
-	 * either. We do this because the xmin on the primary node could easily be
-	 * later than the xmin on the standby node, so that what the primary
-	 * thinks is killed is supposed to be visible on standby. So for correct
-	 * MVCC for queries during recovery we must ignore these hints and check
-	 * all tuples. Do *not* set ignore_killed_tuples to true when running in a
-	 * transaction that was started during recovery. xactStartedInRecovery
-	 * should not be altered by index AMs.
-	 */
+	 * For correct MVCC for queries during recovery, we could use index LP_DEAD
+	 * bits as on the primary. But index AM should consider that it is possible
+	 * to receive such bits as part of FPI. The xmin on the primary node could
+	 * easily be later than the xmin on the standby node, so that what the
+	 * primary thinks is killed is supposed to be visible on standby.
+	 *
+	 * So for correct MVCC for queries during recovery we must mask these FPI
+	 * hints and check all tuples until standby-safe hints are set.
+	*/
 	scan->kill_prior_tuple = false;
+	scan->kill_prior_tuple_min_lsn = InvalidXLogRecPtr;
 	scan->xactStartedInRecovery = TransactionStartedDuringRecovery();
-	scan->ignore_killed_tuples = !scan->xactStartedInRecovery;
 
 	scan->opaque = NULL;
 

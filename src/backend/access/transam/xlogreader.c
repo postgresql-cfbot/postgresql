@@ -121,6 +121,7 @@ XLogReaderAllocate(int wal_segment_size, const char *waldir,
 		pfree(state);
 		return NULL;
 	}
+	state->EndOfWAL = false;
 	state->errormsg_buf[0] = '\0';
 
 	/*
@@ -292,6 +293,7 @@ XLogReadRecord(XLogReaderState *state, char **errormsg)
 	/* reset error state */
 	*errormsg = NULL;
 	state->errormsg_buf[0] = '\0';
+	state->EndOfWAL = false;
 
 	ResetDecoder(state);
 	state->abortedRecPtr = InvalidXLogRecPtr;
@@ -588,6 +590,15 @@ err:
 		 */
 		state->abortedRecPtr = RecPtr;
 		state->missingContrecPtr = targetPagePtr;
+
+		/*
+		 * If the message is not set yet, that means we failed to load the
+		 * page for the record.  Otherwise do not hide the existing message.
+		 */
+		if (state->errormsg_buf[0] == '\0')
+			report_invalid_record(state,
+								  "missing contrecord at %X/%X",
+								  LSN_FORMAT_ARGS(RecPtr));
 	}
 
 	/*
@@ -730,6 +741,40 @@ ValidXLogRecordHeader(XLogReaderState *state, XLogRecPtr RecPtr,
 					  XLogRecPtr PrevRecPtr, XLogRecord *record,
 					  bool randAccess)
 {
+	if (record->xl_tot_len == 0)
+	{
+		/*
+		 * We are almost sure reaching the end of WAL, make sure that the
+		 * whole page after the record is filled with zeroes.
+		 */
+		char	   *p;
+		char	   *pe;
+
+		/* scan from the beginning of the record to the end of block */
+		p = (char *) record;
+		pe = p + XLOG_BLCKSZ - (RecPtr & (XLOG_BLCKSZ - 1));
+
+		while (*p == 0 && p < pe)
+			p++;
+
+		if (p == pe)
+		{
+			/*
+			 * The page after the record is completely zeroed. That suggests
+			 * we don't have a record after this point. We don't bother
+			 * checking the pages after since they are not zeroed in the case
+			 * of recycled segments.
+			 */
+			report_invalid_record(state, "empty record found at %X/%X",
+								  LSN_FORMAT_ARGS(RecPtr));
+
+			/* notify end-of-wal to callers */
+			state->EndOfWAL = true;
+			return false;
+		}
+
+		/* The same condition will be caught as invalid record length */
+	}
 	if (record->xl_tot_len < SizeOfXLogRecord)
 	{
 		report_invalid_record(state,
@@ -836,6 +881,31 @@ XLogReaderValidatePageHeader(XLogReaderState *state, XLogRecPtr recptr,
 
 	XLogSegNoOffsetToRecPtr(segno, offset, state->segcxt.ws_segsize, recaddr);
 
+	StaticAssertStmt(XLOG_PAGE_MAGIC != 0, "XLOG_PAGE_MAGIC is zero");
+
+	if (hdr->xlp_magic == 0)
+	{
+		/* Regard an empty page as End-Of-WAL */
+		int			i;
+
+		for (i = 0; i < XLOG_BLCKSZ && phdr[i] == 0; i++);
+		if (i == XLOG_BLCKSZ)
+		{
+			char		fname[MAXFNAMELEN];
+
+			XLogFileName(fname, state->seg.ws_tli, segno,
+						 state->segcxt.ws_segsize);
+
+			report_invalid_record(state,
+								  "empty page in log segment %s, offset %u",
+								  fname,
+								  offset);
+			state->EndOfWAL = true;
+			return false;
+		}
+
+		/* The same condition will be caught as invalid magic number */
+	}
 	if (hdr->xlp_magic != XLOG_PAGE_MAGIC)
 	{
 		char		fname[MAXFNAMELEN];
@@ -921,6 +991,14 @@ XLogReaderValidatePageHeader(XLogReaderState *state, XLogRecPtr recptr,
 							  LSN_FORMAT_ARGS(hdr->xlp_pageaddr),
 							  fname,
 							  offset);
+
+		/*
+		 * If the page address is less than expected we assume it is an unused
+		 * page in a recycled segment.
+		 */
+		if (hdr->xlp_pageaddr < recaddr)
+			state->EndOfWAL = true;
+
 		return false;
 	}
 

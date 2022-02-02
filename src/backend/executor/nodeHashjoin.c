@@ -483,6 +483,14 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 					}
 
 					/*
+					 * In a right-antijoin, we never return a matched tuple.
+					 * And we need to use current outer tuple to scan the
+					 * bucket for matches
+					 */
+					if (node->js.jointype == JOIN_RIGHT_ANTI)
+						continue;
+
+					/*
 					 * If we only need to join to the first matching inner
 					 * tuple, then consider returning this one, but after that
 					 * continue with next outer tuple.
@@ -694,6 +702,7 @@ ExecInitHashJoin(HashJoin *node, EState *estate, int eflags)
 				ExecInitNullTupleSlot(estate, innerDesc, &TTSOpsVirtual);
 			break;
 		case JOIN_RIGHT:
+		case JOIN_RIGHT_ANTI:
 			hjstate->hj_NullOuterTupleSlot =
 				ExecInitNullTupleSlot(estate, outerDesc, &TTSOpsVirtual);
 			break;

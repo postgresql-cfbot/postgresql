@@ -9048,22 +9048,23 @@ update_checkpoint_display(int flags, bool restartpoint, bool reset)
  * In particular note that this routine is synchronous and does not pay
  * attention to CHECKPOINT_WAIT.
  *
- * If !shutdown then we are writing an online checkpoint. This is a very special
- * kind of operation and WAL record because the checkpoint action occurs over
- * a period of time yet logically occurs at just a single LSN. The logical
- * position of the WAL record (redo ptr) is the same or earlier than the
- * physical position. When we replay WAL we locate the checkpoint via its
- * physical position then read the redo ptr and actually start replay at the
- * earlier logical position. Note that we don't write *anything* to WAL at
- * the logical position, so that location could be any other kind of WAL record.
- * All of this mechanism allows us to continue working while we checkpoint.
- * As a result, timing of actions is critical here and be careful to note that
- * this function will likely take minutes to execute on a busy system.
+ * If neither CHECKPOINT_IS_SHUTDOWN nor CHECKPOINT_END_OF_RECOVERY is set, then
+ * we are writing an online checkpoint. This is a very special kind of operation
+ * and WAL record because the checkpoint action occurs over a period of time yet
+ * logically occurs at just a single LSN. The logical position of the WAL record
+ * (redo ptr) is the same or earlier than the physical position. When we replay
+ * WAL we locate the checkpoint via its physical position then read the redo ptr
+ * and actually start replay at the earlier logical position. Note that we don't
+ * write *anything* to WAL at the logical position, so that location could be
+ * any other kind of WAL record. All of this mechanism allows us to continue
+ * working while we checkpoint. As a result, timing of actions is critical here
+ * and be careful to note that this function will likely take minutes to execute
+ * on a busy system.
  */
 void
 CreateCheckPoint(int flags)
 {
-	bool		shutdown;
+	bool		online;
 	CheckPoint	checkPoint;
 	XLogRecPtr	recptr;
 	XLogSegNo	_logSegNo;
@@ -9077,13 +9078,13 @@ CreateCheckPoint(int flags)
 	int			oldXLogAllowed = 0;
 
 	/*
-	 * An end-of-recovery checkpoint is really a shutdown checkpoint, just
-	 * issued at a different time.
+	 * If we aren't taking a shutdown or end-of-recovery checkpoint, then this
+	 * is an online checkpoint.
 	 */
-	if (flags & (CHECKPOINT_IS_SHUTDOWN | CHECKPOINT_END_OF_RECOVERY))
-		shutdown = true;
+	if ((flags & (CHECKPOINT_IS_SHUTDOWN | CHECKPOINT_END_OF_RECOVERY)) != 0)
+		online = false;
 	else
-		shutdown = false;
+		online = true;
 
 	/* sanity check */
 	if (RecoveryInProgress() && (flags & CHECKPOINT_END_OF_RECOVERY) == 0)
@@ -9104,7 +9105,7 @@ CreateCheckPoint(int flags)
 	 */
 	START_CRIT_SECTION();
 
-	if (shutdown)
+	if ((flags & CHECKPOINT_IS_SHUTDOWN) != 0)
 	{
 		LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
 		ControlFile->state = DB_SHUTDOWNING;
@@ -9128,7 +9129,7 @@ CreateCheckPoint(int flags)
 	 * pointer. This allows us to begin accumulating changes to assemble our
 	 * starting snapshot of locks and transactions.
 	 */
-	if (!shutdown && XLogStandbyInfoActive())
+	if (online && XLogStandbyInfoActive())
 		checkPoint.oldestActiveXid = GetOldestActiveTransactionId();
 	else
 		checkPoint.oldestActiveXid = InvalidTransactionId;
@@ -9147,9 +9148,9 @@ CreateCheckPoint(int flags)
 	curInsert = XLogBytePosToRecPtr(Insert->CurrBytePos);
 
 	/*
-	 * If this isn't a shutdown or forced checkpoint, and if there has been no
-	 * WAL activity requiring a checkpoint, skip it.  The idea here is to
-	 * avoid inserting duplicate checkpoints when the system is idle.
+	 * If this isn't a shutdown, end-of-recovery, or forced checkpoint, and if
+	 * there has been no WAL activity requiring a checkpoint, skip it.  The idea
+	 * here is to avoid inserting duplicate checkpoints when the system is idle.
 	 */
 	if ((flags & (CHECKPOINT_IS_SHUTDOWN | CHECKPOINT_END_OF_RECOVERY |
 				  CHECKPOINT_FORCE)) == 0)
@@ -9169,11 +9170,11 @@ CreateCheckPoint(int flags)
 	 * write WAL. To allow us to write the checkpoint record, temporarily
 	 * enable XLogInsertAllowed.
 	 */
-	if (flags & CHECKPOINT_END_OF_RECOVERY)
+	if ((flags & CHECKPOINT_END_OF_RECOVERY) != 0)
 		oldXLogAllowed = LocalSetXLogInsertAllowed();
 
 	checkPoint.ThisTimeLineID = XLogCtl->InsertTimeLineID;
-	if (flags & CHECKPOINT_END_OF_RECOVERY)
+	if ((flags & CHECKPOINT_END_OF_RECOVERY) != 0)
 		checkPoint.PrevTimeLineID = XLogCtl->PrevTimeLineID;
 	else
 		checkPoint.PrevTimeLineID = checkPoint.ThisTimeLineID;
@@ -9255,11 +9256,11 @@ CreateCheckPoint(int flags)
 
 	LWLockAcquire(OidGenLock, LW_SHARED);
 	checkPoint.nextOid = ShmemVariableCache->nextOid;
-	if (!shutdown)
+	if (online)
 		checkPoint.nextOid += ShmemVariableCache->oidCount;
 	LWLockRelease(OidGenLock);
 
-	MultiXactGetCheckptMulti(shutdown,
+	MultiXactGetCheckptMulti(!online,
 							 &checkPoint.nextMulti,
 							 &checkPoint.nextMultiOffset,
 							 &checkPoint.oldestMulti,
@@ -9324,19 +9325,20 @@ CreateCheckPoint(int flags)
 	 * If we are shutting down, or Startup process is completing crash
 	 * recovery we don't need to write running xact data.
 	 */
-	if (!shutdown && XLogStandbyInfoActive())
+	if (online && XLogStandbyInfoActive())
 		LogStandbySnapshot();
 
 	START_CRIT_SECTION();
 
 	/*
-	 * Now insert the checkpoint record into XLOG.
+	 * Now insert the checkpoint record into XLOG. An end-of-recovery checkpoint
+	 * is essentially a special type of shutdown checkpoint, so both end-of-
+	 * recovery and shutdown checkpoints are logged as XLOG_CHECKPOINT_SHUTDOWN.
 	 */
 	XLogBeginInsert();
 	XLogRegisterData((char *) (&checkPoint), sizeof(checkPoint));
-	recptr = XLogInsert(RM_XLOG_ID,
-						shutdown ? XLOG_CHECKPOINT_SHUTDOWN :
-						XLOG_CHECKPOINT_ONLINE);
+	recptr = XLogInsert(RM_XLOG_ID, online ? XLOG_CHECKPOINT_ONLINE :
+						XLOG_CHECKPOINT_SHUTDOWN);
 
 	XLogFlush(recptr);
 
@@ -9347,21 +9349,20 @@ CreateCheckPoint(int flags)
 	 * to just temporarily disable writing until the system has exited
 	 * recovery.
 	 */
-	if (shutdown)
-	{
-		if (flags & CHECKPOINT_END_OF_RECOVERY)
-			LocalXLogInsertAllowed = oldXLogAllowed;
-		else
-			LocalXLogInsertAllowed = 0; /* never again write WAL */
-	}
+	if ((flags & CHECKPOINT_END_OF_RECOVERY) != 0)
+		LocalXLogInsertAllowed = oldXLogAllowed;
+	else if ((flags & CHECKPOINT_IS_SHUTDOWN) != 0)
+		LocalXLogInsertAllowed = 0; /* never again write WAL */
 
 	/*
 	 * We now have ProcLastRecPtr = start of actual checkpoint record, recptr
 	 * = end of actual checkpoint record.
 	 */
-	if (shutdown && checkPoint.redo != ProcLastRecPtr)
+	if (!online && checkPoint.redo != ProcLastRecPtr)
 		ereport(PANIC,
-				(errmsg("concurrent write-ahead log activity while database system is shutting down")));
+				(errmsg("concurrent write-ahead log activity while database "
+						"system is shutting down or performing end-of-recovery "
+						"checkpoint")));
 
 	/*
 	 * Remember the prior checkpoint's redo ptr for
@@ -9373,7 +9374,7 @@ CreateCheckPoint(int flags)
 	 * Update the control file.
 	 */
 	LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
-	if (shutdown)
+	if ((flags & CHECKPOINT_IS_SHUTDOWN) != 0)
 		ControlFile->state = DB_SHUTDOWNED;
 	ControlFile->checkPoint = ProcLastRecPtr;
 	ControlFile->checkPointCopy = checkPoint;
@@ -9439,7 +9440,7 @@ CreateCheckPoint(int flags)
 	 * Make more log segments if needed.  (Do this after recycling old log
 	 * segments, since that may supply some of the needed files.)
 	 */
-	if (!shutdown)
+	if (online)
 		PreallocXlogFiles(recptr, checkPoint.ThisTimeLineID);
 
 	/*

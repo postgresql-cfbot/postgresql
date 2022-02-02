@@ -573,7 +573,7 @@ neqsel(PG_FUNCTION_ARGS)
  * it will return an approximate estimate based on assuming that the constant
  * value falls in the middle of the bin identified by binary search.
  */
-static double
+double
 scalarineqsel(PlannerInfo *root, Oid operator, bool isgt, bool iseq,
 			  Oid collation,
 			  VariableStatData *vardata, Datum constval, Oid consttype)
@@ -4918,6 +4918,30 @@ ReleaseDummy(HeapTuple tuple)
 }
 
 /*
+ * examine_operator_expression
+ *		Try to derive optimizer statistics for the operator expression using
+ *		operator's oprstat function.
+ *
+ * There can be another OpExpr in one of the arguments, and it will be called
+ * recursively from the oprstat procedure through the following chain:
+ * get_restriction_variable() => examine_variable() =>
+ * examine_operator_expression().
+ */
+static void
+examine_operator_expression(PlannerInfo *root, OpExpr *opexpr, int varRelid,
+							VariableStatData *vardata)
+{
+	RegProcedure oprstat = get_oprstat(opexpr->opno);
+
+	if (OidIsValid(oprstat))
+		OidFunctionCall4(oprstat,
+						 PointerGetDatum(root),
+						 PointerGetDatum(opexpr),
+						 Int32GetDatum(varRelid),
+						 PointerGetDatum(vardata));
+}
+
+/*
  * examine_variable
  *		Try to look up statistical data about an expression.
  *		Fill in a VariableStatData struct to describe the expression.
@@ -5332,6 +5356,20 @@ examine_variable(PlannerInfo *root, Node *node, int varRelid,
 				pos++;
 			}
 		}
+
+		/*
+		 * If there's no index or extended statistics matching the expression,
+		 * try deriving the statistics from statistics on arguments of the
+		 * operator expression (OpExpr). We do this last because it may be quite
+		 * expensive, and it's unclear how accurate the statistics will be.
+		 *
+		 * More restrictions on the OpExpr (e.g. that one of the arguments
+		 * has to be a Const or something) can be put by the operator itself
+		 * in its oprstat function.
+		 */
+		if (!vardata->statsTuple && IsA(basenode, OpExpr))
+			examine_operator_expression(root, (OpExpr *) basenode, varRelid,
+										vardata);
 	}
 }
 
@@ -7915,4 +7953,59 @@ brincostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 		statsData.pagesPerRange;
 
 	*indexPages = index->pages;
+}
+
+/*
+ * stats_form_tuple - Form pg_statistic tuple from StatsData.
+ *
+ * If 'data' parameter is NULL, form all-NULL tuple (nullfrac = 1.0).
+ */
+HeapTuple
+stats_form_tuple(StatsData *data)
+{
+	Relation	rel;
+	HeapTuple	tuple;
+	Datum		values[Natts_pg_statistic];
+	bool		nulls[Natts_pg_statistic];
+	int			i;
+
+	for (i = 0; i < Natts_pg_statistic; ++i)
+		nulls[i] = false;
+
+	values[Anum_pg_statistic_starelid - 1] = ObjectIdGetDatum(InvalidOid);
+	values[Anum_pg_statistic_staattnum - 1] = Int16GetDatum(0);
+	values[Anum_pg_statistic_stainherit - 1] = BoolGetDatum(false);
+	values[Anum_pg_statistic_stanullfrac - 1] =
+									Float4GetDatum(data ? data->nullfrac : 1.0);
+	values[Anum_pg_statistic_stawidth - 1] =
+									Int32GetDatum(data ? data->width : 0);
+	values[Anum_pg_statistic_stadistinct - 1] =
+									Float4GetDatum(data ? data->distinct : 0);
+
+	for (i = 0; i < STATISTIC_NUM_SLOTS; i++)
+	{
+		StatsSlot *slot = data ? &data->slots[i] : NULL;
+
+		values[Anum_pg_statistic_stakind1 + i - 1] =
+								Int16GetDatum(slot ? slot->kind : 0);
+
+		values[Anum_pg_statistic_staop1 + i - 1] =
+					ObjectIdGetDatum(slot ? slot->opid : InvalidOid);
+
+		if (slot && DatumGetPointer(slot->numbers))
+			values[Anum_pg_statistic_stanumbers1 + i - 1] = slot->numbers;
+		else
+			nulls[Anum_pg_statistic_stanumbers1 + i - 1] = true;
+
+		if (slot && DatumGetPointer(slot->values))
+			values[Anum_pg_statistic_stavalues1 + i - 1] = slot->values;
+		else
+			nulls[Anum_pg_statistic_stavalues1 + i - 1] = true;
+	}
+
+	rel = table_open(StatisticRelationId, AccessShareLock);
+	tuple = heap_form_tuple(RelationGetDescr(rel), values, nulls);
+	table_close(rel, NoLock);
+
+	return tuple;
 }

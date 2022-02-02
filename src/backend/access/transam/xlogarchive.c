@@ -214,7 +214,7 @@ RestoreArchivedFile(char *path, const char *xlogfname,
 			else
 			{
 				ereport(LOG,
-						(errmsg("restored log file \"%s\" from archive",
+						(errmsg("restored WAL segment \"%s\" from archive",
 								xlogfname)));
 				strcpy(path, xlogpath);
 				return true;

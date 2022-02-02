@@ -87,6 +87,7 @@ extern char *PrimaryConnInfo;
 extern char *PrimarySlotName;
 extern bool wal_receiver_create_temp_slot;
 extern bool track_wal_io_timing;
+extern int log_wal_traffic;
 
 /* indirectly set via GUC system */
 extern TransactionId recoveryTargetXid;
@@ -145,6 +146,14 @@ typedef enum RecoveryPauseState
 	RECOVERY_PAUSE_REQUESTED,	/* pause requested, but not yet paused */
 	RECOVERY_PAUSED				/* recovery is paused */
 } RecoveryPauseState;
+
+/* Log WAL traffic states */
+typedef enum LogWalTraffic
+{
+	LOG_WAL_TRAFFIC_NONE = 0,
+	LOG_WAL_TRAFFIC_MEDIUM,
+	LOG_WAL_TRAFFIC_HIGH
+} LogWalTraffic;
 
 extern PGDLLIMPORT int wal_level;
 

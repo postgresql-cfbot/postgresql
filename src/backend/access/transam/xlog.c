@@ -91,6 +91,8 @@ extern uint32 bootstrap_data_checksum_version;
 /* timeline ID to be used when bootstrapping */
 #define BootstrapTimeLineID		1
 
+#define LOG_WAL_TRAFFIC_PER_SEGMENTS 128
+
 /* User-settable parameters */
 int			max_wal_size_mb = 1024; /* 1 GB */
 int			min_wal_size_mb = 80;	/* 80 MB */
@@ -115,6 +117,7 @@ int			CommitSiblings = 5; /* # concurrent xacts needed to sleep */
 int			wal_retrieve_retry_interval = 5000;
 int			max_slot_wal_keep_size_mb = -1;
 bool		track_wal_io_timing = false;
+int			log_wal_traffic = LOG_WAL_TRAFFIC_NONE;
 
 #ifdef WAL_DEBUG
 bool		XLOG_DEBUG = false;
@@ -181,6 +184,13 @@ const struct config_enum_entry recovery_target_action_options[] = {
 	{"pause", RECOVERY_TARGET_ACTION_PAUSE, false},
 	{"promote", RECOVERY_TARGET_ACTION_PROMOTE, false},
 	{"shutdown", RECOVERY_TARGET_ACTION_SHUTDOWN, false},
+	{NULL, 0, false}
+};
+
+const struct config_enum_entry log_wal_traffic_options[] = {
+	{"none", LOG_WAL_TRAFFIC_NONE, false},
+	{"medium", LOG_WAL_TRAFFIC_MEDIUM, false},
+	{"high", LOG_WAL_TRAFFIC_HIGH, false},
 	{NULL, 0, false}
 };
 
@@ -998,6 +1008,8 @@ static void WALInsertLockAcquire(void);
 static void WALInsertLockAcquireExclusive(void);
 static void WALInsertLockRelease(void);
 static void WALInsertLockUpdateInsertingAt(XLogRecPtr insertingAt);
+
+static bool IsLogWALTraffic(char *last_logged_xlogfname, char *xlogfname);
 
 /*
  * Insert an XLOG record represented by an already-constructed chain of data
@@ -3787,6 +3799,7 @@ XLogFileRead(XLogSegNo segno, int emode, TimeLineID tli,
 	char		activitymsg[MAXFNAMELEN + 16];
 	char		path[MAXPGPATH];
 	int			fd;
+	static	char last_logged_xlogfname[MAXFNAMELEN] = {'\0'};
 
 	XLogFileName(xlogfname, tli, segno, wal_segment_size);
 
@@ -3797,6 +3810,11 @@ XLogFileRead(XLogSegNo segno, int emode, TimeLineID tli,
 			snprintf(activitymsg, sizeof(activitymsg), "waiting for %s",
 					 xlogfname);
 			set_ps_display(activitymsg);
+
+			if (IsLogWALTraffic(last_logged_xlogfname, xlogfname))
+				ereport(LOG,
+						(errmsg("waiting for WAL segment \"%s\" from archive",
+								xlogfname)));
 
 			if (!RestoreArchivedFile(path, xlogfname,
 									 "RECOVERYXLOG",
@@ -3839,6 +3857,32 @@ XLogFileRead(XLogSegNo segno, int emode, TimeLineID tli,
 		snprintf(activitymsg, sizeof(activitymsg), "recovering %s",
 				 xlogfname);
 		set_ps_display(activitymsg);
+
+		if (IsLogWALTraffic(last_logged_xlogfname, xlogfname))
+		{
+			switch (source)
+			{
+				case XLOG_FROM_ARCHIVE:
+					ereport(LOG,
+							(errmsg("recovering WAL segment \"%s\" from archive",
+									xlogfname)));
+					break;
+				case XLOG_FROM_STREAM:
+					ereport(LOG,
+							(errmsg("recovering WAL segment \"%s\" from stream",
+									xlogfname)));
+					break;
+				case XLOG_FROM_PG_WAL:
+					ereport(LOG,
+							(errmsg("recovering WAL segment \"%s\" from pg_wal",
+									xlogfname)));
+					break;
+				case XLOG_FROM_ANY:
+					break;
+			}
+
+			memcpy(last_logged_xlogfname, xlogfname, MAXFNAMELEN);
+		}
 
 		/* Track source of data in assorted state variables */
 		readSource = source;
@@ -3930,7 +3974,6 @@ XLogFileReadAnyTLI(XLogSegNo segno, int emode, XLogSource source)
 							  XLOG_FROM_ARCHIVE, true);
 			if (fd != -1)
 			{
-				elog(DEBUG1, "got WAL segment from archive");
 				if (!expectedTLEs)
 					expectedTLEs = tles;
 				return fd;
@@ -13241,4 +13284,39 @@ void
 XLogRequestWalReceiverReply(void)
 {
 	doRequestWalReceiverReply = true;
+}
+
+/*
+ * Returns true if logging of WAL traffic is allowed, otherwise false.
+ */
+static bool
+IsLogWALTraffic(char *last_logged_xlogfname, char *xlogfname)
+{
+	bool emit_log = false;
+
+	if (log_wal_traffic == LOG_WAL_TRAFFIC_NONE)
+		return false;
+	else if (log_wal_traffic == LOG_WAL_TRAFFIC_MEDIUM)
+	{
+		/* first time, log the messages */
+		if (strlen(last_logged_xlogfname) == 0)
+			emit_log = true;
+		else if (IsXLogFileName(last_logged_xlogfname))
+		{
+			uint32		l_tli;
+			uint32		tli;
+			XLogSegNo	l_segno;
+			XLogSegNo	segno;
+
+			XLogFromFileName(last_logged_xlogfname, &l_tli, &l_segno, wal_segment_size);
+			XLogFromFileName(xlogfname, &tli, &segno, wal_segment_size);
+
+			if ((segno - l_segno) >= LOG_WAL_TRAFFIC_PER_SEGMENTS)
+				emit_log = true;
+		}
+	}
+	else if (log_wal_traffic == LOG_WAL_TRAFFIC_HIGH)
+		return true;
+
+	return emit_log;
 }

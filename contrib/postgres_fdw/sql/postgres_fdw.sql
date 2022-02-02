@@ -2755,15 +2755,15 @@ RESET enable_partitionwise_join;
 -- test partitionwise aggregates
 -- ===================================================================
 
-CREATE TABLE pagg_tab (a int, b int, c text) PARTITION BY RANGE(a);
+CREATE TABLE pagg_tab (a int, b int, c text, d numeric) PARTITION BY RANGE(a);
 
 CREATE TABLE pagg_tab_p1 (LIKE pagg_tab);
 CREATE TABLE pagg_tab_p2 (LIKE pagg_tab);
 CREATE TABLE pagg_tab_p3 (LIKE pagg_tab);
 
-INSERT INTO pagg_tab_p1 SELECT i % 30, i % 50, to_char(i/30, 'FM0000') FROM generate_series(1, 3000) i WHERE (i % 30) < 10;
-INSERT INTO pagg_tab_p2 SELECT i % 30, i % 50, to_char(i/30, 'FM0000') FROM generate_series(1, 3000) i WHERE (i % 30) < 20 and (i % 30) >= 10;
-INSERT INTO pagg_tab_p3 SELECT i % 30, i % 50, to_char(i/30, 'FM0000') FROM generate_series(1, 3000) i WHERE (i % 30) < 30 and (i % 30) >= 20;
+INSERT INTO pagg_tab_p1 SELECT i % 30, i % 50, to_char(i/30, 'FM0000'), i % 40 FROM generate_series(1, 3000) i WHERE (i % 30) < 10;
+INSERT INTO pagg_tab_p2 SELECT i % 30, i % 50, to_char(i/30, 'FM0000'), i % 40 FROM generate_series(1, 3000) i WHERE (i % 30) < 20 and (i % 30) >= 10;
+INSERT INTO pagg_tab_p3 SELECT i % 30, i % 50, to_char(i/30, 'FM0000'), i % 40 FROM generate_series(1, 3000) i WHERE (i % 30) < 30 and (i % 30) >= 20;
 
 -- Create foreign partitions
 CREATE FOREIGN TABLE fpagg_tab_p1 PARTITION OF pagg_tab FOR VALUES FROM (0) TO (10) SERVER loopback OPTIONS (table_name 'pagg_tab_p1');
@@ -2796,6 +2796,25 @@ SELECT a, count(t1) FROM pagg_tab t1 GROUP BY a HAVING avg(b) < 22 ORDER BY 1;
 -- When GROUP BY clause does not match with PARTITION KEY.
 EXPLAIN (COSTS OFF)
 SELECT b, avg(a), max(a), count(*) FROM pagg_tab GROUP BY b HAVING sum(a) < 700 ORDER BY 1;
+
+-- It's unsafe to push down having clause when there are partial aggregates
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT b, max(a), count(*) FROM pagg_tab GROUP BY b HAVING sum(a) < 700 ORDER BY 1;
+
+-- Partial aggregates are fine to push down without having clause
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT b, max(a), count(*) FROM pagg_tab GROUP BY b ORDER BY 1;
+SELECT b, max(a), count(*) FROM pagg_tab GROUP BY b ORDER BY 1;
+
+-- Partial aggregates are fine to push down
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT max(a), count(*), sum(d) FROM pagg_tab;
+SELECT max(a), count(*), sum(d) FROM pagg_tab;
+
+-- Shouldn't try to push down
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT max(a), count(distinct b) FROM pagg_tab;
+SELECT max(a), count(distinct b) FROM pagg_tab;
 
 -- ===================================================================
 -- access rights and superuser

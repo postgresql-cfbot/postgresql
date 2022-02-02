@@ -25464,6 +25464,30 @@ SELECT collation for ('foo' COLLATE "de_DE");
       <row>
        <entry role="func_table_entry"><para role="func_signature">
         <indexterm>
+         <primary>pg_log_query_plan</primary>
+        </indexterm>
+        <function>pg_log_query_plan</function> ( <parameter>pid</parameter> <type>integer</type> )
+        <returnvalue>boolean</returnvalue>
+       </para>
+       <para>
+        Requests to log the plan of the query currently running on the
+        backend with specified process ID.
+        It will be logged at <literal>LOG</literal> message level and
+        will appear in the server log based on the log
+        configuration set (See <xref linkend="runtime-config-logging"/>
+        for more information), but will not be sent to the client
+        regardless of <xref linkend="guc-client-min-messages"/>.
+        </para>
+        <para>
+        Note that the request to log the query plan will be ignored
+        if it's received during a short period while the target
+        backend is holding a page-level lock.
+        </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
          <primary>pg_reload_conf</primary>
         </indexterm>
         <function>pg_reload_conf</function> ()
@@ -25572,6 +25596,31 @@ LOG:  Grand total: 1651920 bytes in 201 blocks; 622360 free (88 chunks); 1029560
     100 child contexts are logged, along with a summary of the remaining contexts.
     Note that frequent calls to this function could incur significant overhead,
     because it may generate a large number of log messages.
+   </para>
+
+   <para>
+    <function>pg_log_query_plan</function> can be used
+    to log the plan of a backend process. For example:
+<programlisting>
+postgres=# SELECT pg_log_query_plan(201116);
+ pg_log_query_plan
+---------------------------
+ t
+(1 row)
+</programlisting>
+The format of the query plan is the same as when <literal>VERBOSE</literal>,
+<literal>COSTS</literal>, <literal>SETTINGS</literal> and
+<literal>FORMAT TEXT</literal> are used in the <command>EXPLAIN</command>
+command. For example:
+<screen>
+LOG:  query plan running on backend with PID 201116 is:
+        Query Text: SELECT * FROM pgbench_accounts;
+        Seq Scan on public.pgbench_accounts  (cost=0.00..52787.00 rows=2000000 width=97)
+          Output: aid, bid, abalance, filler
+        Settings: work_mem = '1MB'
+</screen>
+    Note that when the statements are executed inside a function, only the
+    plan of the most deeply nested query is logged.
    </para>
 
   </sect2>

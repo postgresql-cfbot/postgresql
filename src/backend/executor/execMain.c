@@ -76,6 +76,9 @@ ExecutorEnd_hook_type ExecutorEnd_hook = NULL;
 /* Hook for plugin to get control in ExecCheckRTPerms() */
 ExecutorCheckPerms_hook_type ExecutorCheckPerms_hook = NULL;
 
+/* Currently executing query's QueryDesc */
+QueryDesc *ActiveQueryDesc = NULL;
+
 /* decls for local routines only used within this module */
 static void InitPlan(QueryDesc *queryDesc, int eflags);
 static void CheckValidRowMarkRel(Relation rel, RowMarkType markType);
@@ -299,10 +302,17 @@ ExecutorRun(QueryDesc *queryDesc,
 			ScanDirection direction, uint64 count,
 			bool execute_once)
 {
+	QueryDesc *save_ActiveQueryDesc;
+
+	save_ActiveQueryDesc = ActiveQueryDesc;
+	ActiveQueryDesc = queryDesc;
+
 	if (ExecutorRun_hook)
 		(*ExecutorRun_hook) (queryDesc, direction, count, execute_once);
 	else
 		standard_ExecutorRun(queryDesc, direction, count, execute_once);
+
+	ActiveQueryDesc = save_ActiveQueryDesc;
 }
 
 void

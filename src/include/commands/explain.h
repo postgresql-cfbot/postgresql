@@ -59,6 +59,7 @@ typedef struct ExplainState
 	bool		hide_workers;	/* set if we find an invisible Gather */
 	/* state related to the current plan node */
 	ExplainWorkersState *workers_state; /* needed if parallel plan */
+	bool		running;		/* whether target query is already running */
 } ExplainState;
 
 /* Hook for plugins to get control in ExplainOneQuery() */
@@ -124,4 +125,6 @@ extern void ExplainOpenGroup(const char *objtype, const char *labelname,
 extern void ExplainCloseGroup(const char *objtype, const char *labelname,
 							  bool labeled, ExplainState *es);
 
+extern void HandleLogQueryPlanInterrupt(void);
+extern void ProcessLogQueryPlanInterrupt(void);
 #endif							/* EXPLAIN_H */

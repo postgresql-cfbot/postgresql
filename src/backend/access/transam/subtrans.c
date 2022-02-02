@@ -31,6 +31,7 @@
 #include "access/slru.h"
 #include "access/subtrans.h"
 #include "access/transam.h"
+#include "miscadmin.h"
 #include "pg_trace.h"
 #include "utils/snapmgr.h"
 
@@ -96,7 +97,7 @@ SubTransSetParent(TransactionId xid, TransactionId parent)
 	{
 		Assert(*ptr == InvalidTransactionId);
 		*ptr = parent;
-		SubTransCtl->shared->page_dirty[slotno] = true;
+		SubTransCtl->shared->page_entries[slotno].page_dirty = true;
 	}
 
 	LWLockRelease(SubtransSLRULock);
@@ -184,14 +185,14 @@ SubTransGetTopmostTransaction(TransactionId xid)
 Size
 SUBTRANSShmemSize(void)
 {
-	return SimpleLruShmemSize(NUM_SUBTRANS_BUFFERS, 0);
+	return SimpleLruShmemSize(subtrans_buffers, 0);
 }
 
 void
 SUBTRANSShmemInit(void)
 {
 	SubTransCtl->PagePrecedes = SubTransPagePrecedes;
-	SimpleLruInit(SubTransCtl, "Subtrans", NUM_SUBTRANS_BUFFERS, 0,
+	SimpleLruInit(SubTransCtl, "Subtrans", subtrans_buffers, 0,
 				  SubtransSLRULock, "pg_subtrans",
 				  LWTRANCHE_SUBTRANS_BUFFER, SYNC_HANDLER_NONE);
 	SlruPagePrecedesUnitTests(SubTransCtl, SUBTRANS_XACTS_PER_PAGE);
@@ -219,7 +220,7 @@ BootStrapSUBTRANS(void)
 
 	/* Make sure it's written out */
 	SimpleLruWritePage(SubTransCtl, slotno);
-	Assert(!SubTransCtl->shared->page_dirty[slotno]);
+	Assert(!SubTransCtl->shared->page_entries[slotno].page_dirty);
 
 	LWLockRelease(SubtransSLRULock);
 }

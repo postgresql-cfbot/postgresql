@@ -1952,6 +1952,141 @@ include_dir 'conf.d'
        </para>
       </listitem>
      </varlistentry>
+     
+    <varlistentry id="guc-multixact-offsets-buffers" xreflabel="multixact_offsets_buffers">
+      <term><varname>multixact_offsets_buffers</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>multixact_offsets_buffers</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies the amount of shared memory to use to cache the contents
+        of <literal>pg_multixact/offsets</literal> (see
+        <xref linkend="pgdata-contents-table"/>).
+        If this value is specified without units, it is taken as blocks,
+        that is <symbol>BLCKSZ</symbol> bytes, typically 8kB.
+        The default value is <literal>8</literal>.
+        This parameter can only be set at server start.
+       </para>
+      </listitem>
+     </varlistentry>
+
+    <varlistentry id="guc-multixact-members-buffers" xreflabel="multixact_members_buffers">
+      <term><varname>multixact_members_buffers</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>multixact_members_buffers</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies the amount of shared memory to use to cache the contents
+        of <literal>pg_multixact/members</literal> (see
+        <xref linkend="pgdata-contents-table"/>).
+        If this value is specified without units, it is taken as blocks,
+        that is <symbol>BLCKSZ</symbol> bytes, typically 8kB.
+        The default value is <literal>16</literal>.
+        This parameter can only be set at server start.
+       </para>
+      </listitem>
+     </varlistentry>
+     
+    <varlistentry id="guc-subtrans-buffers" xreflabel="subtrans_buffers">
+      <term><varname>subtrans_buffers</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>subtrans_buffers</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies the amount of shared memory to use to cache the contents
+        of <literal>pg_subtrans</literal> (see
+        <xref linkend="pgdata-contents-table"/>).
+        If this value is specified without units, it is taken as blocks,
+        that is <symbol>BLCKSZ</symbol> bytes, typically 8kB.
+        The default value is <literal>8</literal>.
+        This parameter can only be set at server start.
+       </para>
+      </listitem>
+     </varlistentry>
+     
+    <varlistentry id="guc-notify-buffers" xreflabel="notify_buffers">
+      <term><varname>notify_buffers</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>notify_buffers</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies the amount of shared memory to use to cache the contents
+        of <literal>pg_notify</literal> (see
+        <xref linkend="pgdata-contents-table"/>).
+        If this value is specified without units, it is taken as blocks,
+        that is <symbol>BLCKSZ</symbol> bytes, typically 8kB.
+        The default value is <literal>8</literal>.
+        This parameter can only be set at server start.
+       </para>
+      </listitem>
+     </varlistentry>
+     
+    <varlistentry id="guc-serial-buffers" xreflabel="serial_buffers">
+      <term><varname>serial_buffers</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>serial_buffers</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies the amount of shared memory to use to cache the contents
+        of <literal>pg_serial</literal> (see
+        <xref linkend="pgdata-contents-table"/>).
+        If this value is specified without units, it is taken as blocks,
+        that is <symbol>BLCKSZ</symbol> bytes, typically 8kB.
+        The default value is <literal>16</literal>.
+        This parameter can only be set at server start.
+       </para>
+      </listitem>
+     </varlistentry>
+     
+    <varlistentry id="guc-xact-buffers" xreflabel="xact_buffers">
+      <term><varname>xact_buffers</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>xact_buffers</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies the amount of shared memory to use to cache the contents
+        of <literal>pg_xact</literal> (see
+        <xref linkend="pgdata-contents-table"/>).
+        If this value is specified without units, it is taken as blocks,
+        that is <symbol>BLCKSZ</symbol> bytes, typically 8kB.
+        The default value is <literal>0</literal>, which requests
+        <varname>shared_buffers</varname> / 512, but not fewer than 4 blocks.
+        This parameter can only be set at server start.
+       </para>
+      </listitem>
+     </varlistentry>
+     
+    <varlistentry id="guc-commit-ts-buffers" xreflabel="commit_ts_buffers">
+      <term><varname>commit_ts_buffers</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>commit_ts_buffers</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies the amount of memory to use to cache the cotents of
+        <literal>pg_commit_ts</literal> (see
+        <xref linkend="pgdata-contents-table"/>).
+        If this value is specified without units, it is taken as blocks,
+        that is <symbol>BLCKSZ</symbol> bytes, typically 8kB.
+        The default value is <literal>0</literal>, which requests
+        <varname>shared_buffers</varname> / 1024, but not fewer than 4 blocks.
+        This parameter can only be set at server start.
+       </para>
+      </listitem>
+     </varlistentry>
 
      <varlistentry id="guc-max-stack-depth" xreflabel="max_stack_depth">
       <term><varname>max_stack_depth</varname> (<type>integer</type>)

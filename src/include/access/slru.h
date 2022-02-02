@@ -17,6 +17,11 @@
 #include "storage/lwlock.h"
 #include "storage/sync.h"
 
+/*
+ * To avoid overflowing internal arithmetic and the size_t data type, the
+ * number of buffers should not exceed this number.
+ */
+#define SLRU_MAX_ALLOWED_BUFFERS ((1024 * 1024 * 1024) / BLCKSZ)
 
 /*
  * Define SLRU segment size.  A page is the same BLCKSZ as is used everywhere
@@ -39,13 +44,21 @@
  * in the latter case it implies that the page has been re-dirtied since
  * the write started.
  */
-typedef enum
+typedef enum SlruPageStatus
 {
 	SLRU_PAGE_EMPTY,			/* buffer is not in use */
 	SLRU_PAGE_READ_IN_PROGRESS, /* page is being read in */
 	SLRU_PAGE_VALID,			/* page is valid and not being written */
 	SLRU_PAGE_WRITE_IN_PROGRESS /* page is being written out */
 } SlruPageStatus;
+
+typedef struct SlruPageEntry
+{
+	int32	page_number;
+	char	page_status;
+	bool	page_dirty;
+	uint16	padding;
+} SlruPageEntry;
 
 /*
  * Shared-memory state
@@ -56,15 +69,15 @@ typedef struct SlruSharedData
 
 	/* Number of buffers managed by this SLRU structure */
 	int			num_slots;
+	int			bank_size;
+	int			bank_mask;
 
 	/*
 	 * Arrays holding info for each buffer slot.  Page number is undefined
 	 * when status is EMPTY, as is page_lru_count.
 	 */
 	char	  **page_buffer;
-	SlruPageStatus *page_status;
-	bool	   *page_dirty;
-	int		   *page_number;
+	SlruPageEntry *page_entries;
 	int		   *page_lru_count;
 	LWLockPadded *buffer_locks;
 

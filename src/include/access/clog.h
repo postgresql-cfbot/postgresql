@@ -16,6 +16,16 @@
 #include "lib/stringinfo.h"
 
 /*
+ * Don't allow xact_buffers to be set higher than could possibly be useful or
+ * SLRU would allow.
+ */
+#define CLOG_XACTS_PER_BYTE 4
+#define CLOG_XACTS_PER_PAGE (BLCKSZ * CLOG_XACTS_PER_BYTE)
+#define CLOG_MAX_ALLOWED_BUFFERS \
+	Min(SLRU_MAX_ALLOWED_BUFFERS, \
+		(((MaxTransactionId / 2) + (CLOG_XACTS_PER_PAGE - 1)) / CLOG_XACTS_PER_PAGE))
+
+/*
  * Possible transaction statuses --- note that all-zeroes is the initial
  * state.
  *

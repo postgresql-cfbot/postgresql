@@ -150,3 +150,11 @@ int64		VacuumPageDirty = 0;
 
 int			VacuumCostBalance = 0;	/* working state for vacuum */
 bool		VacuumCostActive = false;
+
+int			multixact_offsets_buffers = 8;
+int			multixact_members_buffers = 16;
+int			subtrans_buffers = 32;
+int			notify_buffers = 8;
+int			serial_buffers = 16;
+int			xact_buffers = 0;
+int			commit_ts_buffers = 0;

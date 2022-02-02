@@ -245,13 +245,13 @@ LINE 1: ...y) do update set fruit = excluded.fruit RETURNING excluded.f...
 HINT:  There is an entry for table "excluded", but it cannot be referenced from this part of the query.
 -- Only suggest <table>.* column when inference element misspelled:
 insert into insertconflicttest values (1, 'Apple') on conflict (keyy) do update set fruit = excluded.fruit;
-ERROR:  column "keyy" does not exist
+ERROR:  column or variable  "keyy" does not exist
 LINE 1: ...nsertconflicttest values (1, 'Apple') on conflict (keyy) do ...
                                                              ^
 HINT:  Perhaps you meant to reference the column "insertconflicttest.key" or the column "excluded.key".
 -- Have useful HINT for EXCLUDED.* RTE within UPDATE:
 insert into insertconflicttest values (1, 'Apple') on conflict (key) do update set fruit = excluded.fruitt;
-ERROR:  column excluded.fruitt does not exist
+ERROR:  column or variable excluded.fruitt does not exist
 LINE 1: ... 'Apple') on conflict (key) do update set fruit = excluded.f...
                                                              ^
 HINT:  Perhaps you meant to reference the column "excluded.fruit".
@@ -448,7 +448,7 @@ drop table insertconflicttest;
 create table syscolconflicttest(key int4, data text);
 insert into syscolconflicttest values (1);
 insert into syscolconflicttest values (1) on conflict (key) do update set data = excluded.ctid::text;
-ERROR:  column excluded.ctid does not exist
+ERROR:  column or variable excluded.ctid does not exist
 LINE 1: ...values (1) on conflict (key) do update set data = excluded.c...
                                                              ^
 drop table syscolconflicttest;

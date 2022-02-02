@@ -33,6 +33,7 @@
 #include "access/nbtree.h"
 #include "catalog/objectaccess.h"
 #include "catalog/pg_type.h"
+#include "commands/session_variable.h"
 #include "executor/execExpr.h"
 #include "executor/nodeSubplan.h"
 #include "funcapi.h"
@@ -994,6 +995,60 @@ ExecInitExprRec(Expr *node, ExprState *state,
 						scratch.d.param.paramtype = param->paramtype;
 						ExprEvalPushStep(state, &scratch);
 						break;
+
+					case PARAM_VARIABLE:
+						{
+							int			es_num_session_variables = 0;
+							SessionVariableValue *es_session_variables = NULL;
+
+							if (state->parent && state->parent->state)
+							{
+								es_session_variables = state->parent->state->es_session_variables;
+								es_num_session_variables = state->parent->state->es_num_session_variables;
+							}
+
+							/*
+							 * We should use session variable buffer, when
+							 * it is available.
+							 */
+							if (es_session_variables)
+							{
+								SessionVariableValue *var;
+
+								/* check params, unexpected */
+								if (param->paramid >= es_num_session_variables)
+									elog(ERROR, "paramid of PARAM_VARIABLE param is out of range");
+
+								var = &es_session_variables[param->paramid];
+
+								/* unexpected */
+								if (var->typid != param->paramtype)
+									elog(ERROR, "type of buffered value is different than PARAM_VARIABLE type");
+
+								/*
+								 * In this case, the parameter is like a
+								 * constant
+								 */
+								scratch.opcode = EEOP_CONST;
+								scratch.d.constval.value = var->value;
+								scratch.d.constval.isnull = var->isnull;
+								ExprEvalPushStep(state, &scratch);
+							}
+							else
+							{
+								/*
+								 * When we have no full PlanState (plpgsql
+								 * simple expr evaluation), then we should
+								 * use direct access.
+								 */
+								scratch.opcode = EEOP_PARAM_VARIABLE;
+								scratch.d.vparam.varid = param->paramvarid;
+								scratch.d.vparam.vartype = param->paramtype;
+								ExprEvalPushStep(state, &scratch);
+							}
+						}
+						break;
+
 					case PARAM_EXTERN:
 
 						/*

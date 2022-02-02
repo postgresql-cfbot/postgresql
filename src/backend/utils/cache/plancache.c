@@ -58,6 +58,7 @@
 
 #include "access/transam.h"
 #include "catalog/namespace.h"
+#include "catalog/pg_variable.h"
 #include "executor/executor.h"
 #include "miscadmin.h"
 #include "nodes/nodeFuncs.h"
@@ -134,6 +135,7 @@ InitPlanCache(void)
 	CacheRegisterSyscacheCallback(AMOPOPID, PlanCacheSysCallback, (Datum) 0);
 	CacheRegisterSyscacheCallback(FOREIGNSERVEROID, PlanCacheSysCallback, (Datum) 0);
 	CacheRegisterSyscacheCallback(FOREIGNDATAWRAPPEROID, PlanCacheSysCallback, (Datum) 0);
+	CacheRegisterSyscacheCallback(VARIABLEOID, PlanCacheObjectCallback, (Datum) 0);
 }
 
 /*
@@ -1867,11 +1869,23 @@ ScanQueryForLocks(Query *parsetree, bool acquire)
 	 * Recurse into sublink subqueries, too.  But we already did the ones in
 	 * the rtable and cteList.
 	 */
-	if (parsetree->hasSubLinks)
+	if (parsetree->hasSubLinks ||
+		parsetree->hasSessionVariables)
 	{
 		query_tree_walker(parsetree, ScanQueryWalker,
 						  (void *) &acquire,
 						  QTW_IGNORE_RC_SUBQUERIES);
+	}
+
+	/* Process session variables */
+	if (OidIsValid(parsetree->resultVariable))
+	{
+		if (acquire)
+			LockDatabaseObject(VariableRelationId, parsetree->resultVariable,
+							   0, AccessShareLock);
+		else
+			UnlockDatabaseObject(VariableRelationId, parsetree->resultVariable,
+							   0, AccessShareLock);
 	}
 }
 
@@ -1890,6 +1904,20 @@ ScanQueryWalker(Node *node, bool *acquire)
 		/* Do what we came for */
 		ScanQueryForLocks(castNode(Query, sub->subselect), *acquire);
 		/* Fall through to process lefthand args of SubLink */
+	}
+	else if (IsA(node, Param))
+	{
+		Param *p = (Param *) node;
+
+		if (p->paramkind == PARAM_VARIABLE)
+		{
+			if (acquire)
+				LockDatabaseObject(VariableRelationId, p->paramvarid,
+								   0, AccessShareLock);
+			else
+				UnlockDatabaseObject(VariableRelationId, p->paramvarid,
+								   0, AccessShareLock);
+		}
 	}
 
 	/*
@@ -2022,7 +2050,9 @@ PlanCacheRelCallback(Datum arg, Oid relid)
 
 /*
  * PlanCacheObjectCallback
- *		Syscache inval callback function for PROCOID and TYPEOID caches
+ *		Syscache inval callback function for TYPEOID, PROCOID, NAMESPACEOID,
+ * OPEROID, AMOPOPID, FOREIGNSERVEROID, FOREIGNDATAWRAPPEROID and VARIABLEOID
+ * caches.
  *
  * Invalidate all plans mentioning the object with the specified hash value,
  * or all plans mentioning any member of this cache if hashvalue == 0.

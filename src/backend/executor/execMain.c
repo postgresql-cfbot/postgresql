@@ -47,8 +47,10 @@
 #include "catalog/pg_publication.h"
 #include "commands/matview.h"
 #include "commands/trigger.h"
+#include "commands/session_variable.h"
 #include "executor/execdebug.h"
 #include "executor/nodeSubplan.h"
+#include "executor/svariableReceiver.h"
 #include "foreign/fdwapi.h"
 #include "jit/jit.h"
 #include "mb/pg_wchar.h"
@@ -198,6 +200,52 @@ standard_ExecutorStart(QueryDesc *queryDesc, int eflags)
 	/* We now require all callers to provide sourceText */
 	Assert(queryDesc->sourceText != NULL);
 	estate->es_sourceText = queryDesc->sourceText;
+
+	/*
+	 * Prepare session variables, if not prepared in queryDesc
+	 */
+	if (queryDesc->num_session_variables > 0)
+	{
+		/*
+		 * link shared memory with working copy of session variable's values
+		 * used in this query. This access is used by parallel query executor's
+		 * workers.
+		 */
+		estate->es_session_variables = queryDesc->session_variables;
+		estate->es_num_session_variables = queryDesc->num_session_variables;
+	}
+	else if (queryDesc->plannedstmt->sessionVariables)
+	{
+		ListCell   *lc;
+		int			nSessionVariables;
+		int			i = 0;
+
+		nSessionVariables = list_length(queryDesc->plannedstmt->sessionVariables);
+
+		/* Create buffer used for session variables */
+		estate->es_session_variables = (SessionVariableValue *)
+			palloc(nSessionVariables * sizeof(SessionVariableValue));
+
+		foreach(lc, queryDesc->plannedstmt->sessionVariables)
+		{
+			AclResult	aclresult;
+			Oid			varid = lfirst_oid(lc);
+
+			aclresult = pg_variable_aclcheck(varid, GetUserId(), ACL_READ);
+			if (aclresult != ACLCHECK_OK)
+				aclcheck_error(aclresult, OBJECT_VARIABLE,
+							   get_session_variable_name(varid));
+
+			estate->es_session_variables[i].varid = varid;
+			estate->es_session_variables[i].value = CopySessionVariable(varid,
+																	  &estate->es_session_variables[i].isnull,
+																	  &estate->es_session_variables[i].typid);
+
+			i++;
+		}
+
+		estate->es_num_session_variables = nSessionVariables;
+	}
 
 	/*
 	 * Fill in the query environment, if any, from queryDesc.

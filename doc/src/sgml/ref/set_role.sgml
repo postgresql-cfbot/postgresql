@@ -98,7 +98,7 @@ RESET ROLE
   </para>
 
   <para>
-   <command>SET ROLE</command> does not process session variables as specified by
+   <command>SET ROLE</command> does not set run-time configuration parameters specified by
    the role's <link linkend="sql-alterrole"><command>ALTER ROLE</command></link> settings;  this only happens during
    login.
   </para>

@@ -26,6 +26,7 @@
 #include "catalog/pg_operator.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
+#include "commands/session_variable.h"
 #include "executor/executor.h"
 #include "executor/functions.h"
 #include "funcapi.h"
@@ -819,7 +820,8 @@ max_parallel_hazard_walker(Node *node, max_parallel_hazard_context *context)
 	{
 		Param	   *param = (Param *) node;
 
-		if (param->paramkind == PARAM_EXTERN)
+		if (param->paramkind == PARAM_EXTERN ||
+			param->paramkind == PARAM_VARIABLE)
 			return false;
 
 		if (param->paramkind != PARAM_EXEC ||
@@ -2229,6 +2231,7 @@ convert_saop_to_hashed_saop_walker(Node *node, void *context)
  *	  value of the Param.
  * 2. Fold stable, as well as immutable, functions to constants.
  * 3. Reduce PlaceHolderVar nodes to their contained expressions.
+ * 4. Current value of session variable can be used for estimation too.
  *--------------------
  */
 Node *
@@ -2350,6 +2353,30 @@ eval_const_expressions_mutator(Node *node,
 							return (Node *) con;
 						}
 					}
+				}
+				else if (param->paramkind == PARAM_VARIABLE &&
+						 context->estimate)
+				{
+					int16		typLen;
+					bool		typByVal;
+					Datum		pval;
+					bool		isnull;
+
+					get_typlenbyval(param->paramtype,
+									&typLen, &typByVal);
+
+					pval = GetSessionVariable(param->paramvarid,
+											 &isnull,
+											 param->paramtype,
+											 true);
+
+					return (Node *) makeConst(param->paramtype,
+											  param->paramtypmod,
+											  param->paramcollid,
+											  (int) typLen,
+											  pval,
+											  isnull,
+											  typByVal);
 				}
 
 				/*
@@ -4735,22 +4762,46 @@ substitute_actual_parameters_mutator(Node *node,
 {
 	if (node == NULL)
 		return NULL;
+
+	/*
+	 * The expression of SQL function can contain params of two separated
+	 * by different paramkind field. The nodes with paramkind PARAM_EXTERN
+	 * are related to function's arguments (and should be replaced in this
+	 * step), because this is mechanism how we apply the function's arguments
+	 * for an expression.
+	 *
+	 * The nodes with paramkind PARAM_VARIABLE are related to an usage of
+	 * session variables. The values of session variables are not passed
+	 * to expression by expression arguments, so it should not be replaced
+	 * here by function's arguments. Although we can substitute params
+	 * related to immutable session variables with default expression by
+	 * this default expression, it is safer don't do it. We don't need to
+	 * run security checks here. There can be some performance loss, but
+	 * an access to session variable is fast (and the result of default
+	 * expression is immediately materialized and can be reused).
+	 */
 	if (IsA(node, Param))
 	{
 		Param	   *param = (Param *) node;
 
-		if (param->paramkind != PARAM_EXTERN)
+		if (param->paramkind != PARAM_EXTERN &&
+			  param->paramkind != PARAM_VARIABLE)
 			elog(ERROR, "unexpected paramkind: %d", (int) param->paramkind);
-		if (param->paramid <= 0 || param->paramid > context->nargs)
-			elog(ERROR, "invalid paramid: %d", param->paramid);
 
-		/* Count usage of parameter */
-		context->usecounts[param->paramid - 1]++;
+		if (param->paramkind == PARAM_EXTERN)
+		{
+			if (param->paramid <= 0 || param->paramid > context->nargs)
+				elog(ERROR, "invalid paramid: %d", param->paramid);
 
-		/* Select the appropriate actual arg and replace the Param with it */
-		/* We don't need to copy at this time (it'll get done later) */
-		return list_nth(context->args, param->paramid - 1);
+			/* Count usage of parameter */
+			context->usecounts[param->paramid - 1]++;
+
+			/* Select the appropriate actual arg and replace the Param with it */
+			/* We don't need to copy at this time (it'll get done later) */
+			return list_nth(context->args, param->paramid - 1);
+		}
 	}
+
 	return expression_tree_mutator(node, substitute_actual_parameters_mutator,
 								   (void *) context);
 }

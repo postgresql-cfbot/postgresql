@@ -136,6 +136,7 @@
 #include "access/xact.h"
 #include "access/xlog_internal.h"
 #include "catalog/catalog.h"
+#include "catalog/indexing.h"
 #include "catalog/namespace.h"
 #include "catalog/partition.h"
 #include "catalog/pg_inherits.h"
@@ -2802,6 +2803,89 @@ LogicalRepApplyLoop(XLogRecPtr last_received)
 }
 
 /*
+ * Worker error recovery processing, in preparation for disabling the
+ * subscription.
+ */
+static void
+WorkerErrorRecovery(void)
+{
+	/* Emit the error */
+	EmitErrorReport();
+	/* Abort any active transaction */
+	AbortOutOfAnyTransaction();
+	/* Reset the ErrorContext */
+	FlushErrorState();
+}
+
+/*
+ * Disable the current subscription.
+ */
+static void
+DisableSubscriptionOnError(void)
+{
+	Relation	rel;
+	bool		nulls[Natts_pg_subscription];
+	bool		replaces[Natts_pg_subscription];
+	Datum		values[Natts_pg_subscription];
+	HeapTuple	tup;
+	Form_pg_subscription subform;
+
+	/* Disable the subscription in a fresh transaction */
+	StartTransactionCommand();
+
+	/* Look up our subscription in the catalogs */
+	rel = table_open(SubscriptionRelationId, RowExclusiveLock);
+	tup = SearchSysCacheCopy2(SUBSCRIPTIONNAME, MyDatabaseId,
+							  CStringGetDatum(MySubscription->name));
+	if (!HeapTupleIsValid(tup))
+		ereport(ERROR,
+				errcode(ERRCODE_UNDEFINED_OBJECT),
+				errmsg("subscription \"%s\" does not exist",
+					   MySubscription->name));
+
+	subform = (Form_pg_subscription) GETSTRUCT(tup);
+
+	/*
+	 * We would not be here unless this subscription's disableonerr field was
+	 * true when our worker began applying changes, but check whether that
+	 * field has changed in the interim.
+	 */
+	if (!subform->subdisableonerr)
+	{
+		heap_freetuple(tup);
+		table_close(rel, RowExclusiveLock);
+		CommitTransactionCommand();
+		return;
+	}
+
+	/* Notify the subscription will be no longer valid */
+	ereport(LOG,
+			errmsg("logical replication subscription \"%s\" will be disabled due to an error",
+				   MySubscription->name));
+
+	LockSharedObject(SubscriptionRelationId, subform->oid, 0, AccessExclusiveLock);
+
+	/* Form a new tuple. */
+	memset(values, 0, sizeof(values));
+	memset(nulls, false, sizeof(nulls));
+	memset(replaces, false, sizeof(replaces));
+
+	/* Set the subscription to disabled. */
+	values[Anum_pg_subscription_subenabled - 1] = BoolGetDatum(false);
+	replaces[Anum_pg_subscription_subenabled - 1] = true;
+
+	/* Update the catalog */
+	tup = heap_modify_tuple(tup, RelationGetDescr(rel), values, nulls,
+							replaces);
+	CatalogTupleUpdate(rel, &tup->t_self, tup);
+	heap_freetuple(tup);
+
+	table_close(rel, RowExclusiveLock);
+
+	CommitTransactionCommand();
+}
+
+/*
  * Send a Standby Status Update message to server.
  *
  * 'recvpos' is the latest LSN we've received data to, force is set if we need
@@ -3387,6 +3471,7 @@ ApplyWorkerMain(Datum main_arg)
 	char	   *myslotname;
 	WalRcvStreamOptions options;
 	int			server_version;
+	bool		error_recovery_done = false;
 
 	/* Attach to slot */
 	logicalrep_worker_attach(worker_slot);
@@ -3501,15 +3586,33 @@ ApplyWorkerMain(Datum main_arg)
 										  0,	/* message type */
 										  InvalidTransactionId,
 										  errdata->message);
-			MemoryContextSwitchTo(ecxt);
-			PG_RE_THROW();
+
+			if (MySubscription->disableonerr)
+			{
+				WorkerErrorRecovery();
+				error_recovery_done = true;
+			}
+			else
+			{
+				MemoryContextSwitchTo(ecxt);
+				PG_RE_THROW();
+			}
 		}
 		PG_END_TRY();
 
-		/* allocate slot name in long-lived context */
-		myslotname = MemoryContextStrdup(ApplyContext, syncslotname);
+		/* If we caught an error above, disable the subscription */
+		if (error_recovery_done)
+		{
+			DisableSubscriptionOnError();
+			proc_exit(0);
+		}
+		else
+		{
+			/* allocate slot name in long-lived context */
+			myslotname = MemoryContextStrdup(ApplyContext, syncslotname);
 
-		pfree(syncslotname);
+			pfree(syncslotname);
+		}
 	}
 	else
 	{
@@ -3628,10 +3731,11 @@ ApplyWorkerMain(Datum main_arg)
 	}
 	PG_CATCH();
 	{
+		MemoryContext ecxt = MemoryContextSwitchTo(cctx);
+
 		/* report the apply error */
 		if (apply_error_callback_arg.command != 0)
 		{
-			MemoryContext ecxt = MemoryContextSwitchTo(cctx);
 			ErrorData  *errdata = CopyErrorData();
 
 			pgstat_report_subworker_error(MyLogicalRepWorker->subid,
@@ -3642,12 +3746,28 @@ ApplyWorkerMain(Datum main_arg)
 										  apply_error_callback_arg.command,
 										  apply_error_callback_arg.remote_xid,
 										  errdata->message);
-			MemoryContextSwitchTo(ecxt);
-		}
 
-		PG_RE_THROW();
+			if (!MySubscription->disableonerr)
+			{
+				/*
+				 * Some work in error recovery work is done. Switch to the old
+				 * memory context and rethrow.
+				 */
+				MemoryContextSwitchTo(ecxt);
+				PG_RE_THROW();
+			}
+		}
+		else if (!MySubscription->disableonerr)
+			PG_RE_THROW();
+
+		/* Prepare to disable the subscription */
+		WorkerErrorRecovery();
+		error_recovery_done = true;
 	}
 	PG_END_TRY();
+
+	if (error_recovery_done)
+		DisableSubscriptionOnError();
 
 	proc_exit(0);
 }

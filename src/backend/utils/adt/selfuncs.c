@@ -5137,7 +5137,8 @@ examine_variable(PlannerInfo *root, Node *node, int varRelid,
 								 * Use checkAsUser if it's set, in case we're
 								 * accessing the table via a view.
 								 */
-								userid = rte->checkAsUser ? rte->checkAsUser : GetUserId();
+								userid = onerel->userid ?
+									onerel->userid : GetUserId();
 
 								/*
 								 * For simplicity, we insist on the whole
@@ -5189,7 +5190,8 @@ examine_variable(PlannerInfo *root, Node *node, int varRelid,
 										rte = planner_rt_fetch(varno, root);
 										Assert(rte->rtekind == RTE_RELATION);
 
-										userid = rte->checkAsUser ? rte->checkAsUser : GetUserId();
+										userid = onerel->userid ?
+											onerel->userid : GetUserId();
 
 										vardata->acl_ok =
 											rte->securityQuals == NIL &&
@@ -5268,7 +5270,8 @@ examine_variable(PlannerInfo *root, Node *node, int varRelid,
 					 * Use checkAsUser if it's set, in case we're accessing
 					 * the table via a view.
 					 */
-					userid = rte->checkAsUser ? rte->checkAsUser : GetUserId();
+					userid = onerel->userid ?
+						onerel->userid : GetUserId();
 
 					/*
 					 * For simplicity, we insist on the whole table being
@@ -5316,7 +5319,8 @@ examine_variable(PlannerInfo *root, Node *node, int varRelid,
 							rte = planner_rt_fetch(varno, root);
 							Assert(rte->rtekind == RTE_RELATION);
 
-							userid = rte->checkAsUser ? rte->checkAsUser : GetUserId();
+							userid = onerel->userid ?
+								onerel->userid : GetUserId();
 
 							vardata->acl_ok =
 								rte->securityQuals == NIL &&
@@ -5377,6 +5381,7 @@ examine_simple_variable(PlannerInfo *root, Var *var,
 
 		if (HeapTupleIsValid(vardata->statsTuple))
 		{
+			RelOptInfo *onerel = find_base_rel(root, var->varno);
 			Oid			userid;
 
 			/*
@@ -5385,7 +5390,8 @@ examine_simple_variable(PlannerInfo *root, Var *var,
 			 * from security barrier views or RLS policies.  Use checkAsUser
 			 * if it's set, in case we're accessing the table via a view.
 			 */
-			userid = rte->checkAsUser ? rte->checkAsUser : GetUserId();
+			userid = onerel->userid ?
+				onerel->userid : GetUserId();
 
 			vardata->acl_ok =
 				rte->securityQuals == NIL &&
@@ -5454,7 +5460,8 @@ examine_simple_variable(PlannerInfo *root, Var *var,
 				rte = planner_rt_fetch(varno, root);
 				Assert(rte->rtekind == RTE_RELATION);
 
-				userid = rte->checkAsUser ? rte->checkAsUser : GetUserId();
+				userid = onerel->userid ?
+					onerel->userid : GetUserId();
 
 				vardata->acl_ok =
 					rte->securityQuals == NIL &&

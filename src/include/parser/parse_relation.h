@@ -119,5 +119,8 @@ extern const NameData *attnumAttName(Relation rd, int attid);
 extern Oid	attnumTypeId(Relation rd, int attid);
 extern Oid	attnumCollationId(Relation rd, int attid);
 extern bool isQueryUsingTempRelation(Query *query);
+extern RelPermissionInfo *AddRelPermissionInfo(List **relpermlist, RangeTblEntry *rte);
+extern void MergeRelPermissionInfos(Query *dest_query, List *src_relpermlist);
+extern RelPermissionInfo *GetRelPermissionInfo(List *relpermlist, RangeTblEntry *rte, bool missing_ok);
 
 #endif							/* PARSE_RELATION_H */

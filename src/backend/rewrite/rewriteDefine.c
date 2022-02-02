@@ -31,6 +31,7 @@
 #include "commands/policy.h"
 #include "miscadmin.h"
 #include "nodes/nodeFuncs.h"
+#include "parser/parse_relation.h"
 #include "parser/parse_utilcmd.h"
 #include "rewrite/rewriteDefine.h"
 #include "rewrite/rewriteManip.h"
@@ -821,18 +822,20 @@ setRuleCheckAsUser_Query(Query *qry, Oid userid)
 {
 	ListCell   *l;
 
-	/* Set all the RTEs in this query node */
+	foreach(l, qry->relpermlist)
+	{
+		RelPermissionInfo *perminfo = (RelPermissionInfo *) lfirst(l);
+
+		perminfo->checkAsUser = userid;
+	}
+
+	/* Now recurse to any subquery RTEs */
 	foreach(l, qry->rtable)
 	{
 		RangeTblEntry *rte = (RangeTblEntry *) lfirst(l);
 
 		if (rte->rtekind == RTE_SUBQUERY)
-		{
-			/* Recurse into subquery in FROM */
 			setRuleCheckAsUser_Query(rte->subquery, userid);
-		}
-		else
-			rte->checkAsUser = userid;
 	}
 
 	/* Recurse into subquery-in-WITH */

@@ -627,6 +627,25 @@ DecodeCommit(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
 		commit_time = parsed->origin_timestamp;
 	}
 
+	/*
+	 * Mark the top transaction and its subtransactions as containing catalog
+	 * changes, if the commit record has invalidation message.  This is necessary
+	 * for the case where we decode only the commit record of the transaction
+	 * that actually has done catalog changes.
+	 */
+	if (parsed->xinfo & XACT_XINFO_HAS_INVALS)
+	{
+		ReorderBufferXidSetCatalogChanges(ctx->reorder, xid, buf->origptr);
+
+		for (int i = 0; i < parsed->nsubxacts; i++)
+		{
+			ReorderBufferAssignChild(ctx->reorder, xid, parsed->subxacts[i],
+									 buf->origptr);
+			ReorderBufferXidSetCatalogChanges(ctx->reorder, parsed->subxacts[i],
+											  buf->origptr);
+		}
+	}
+
 	SnapBuildCommitTxn(ctx->snapshot_builder, buf->origptr, xid,
 					   parsed->nsubxacts, parsed->subxacts);
 

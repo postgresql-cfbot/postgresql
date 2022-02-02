@@ -26,6 +26,9 @@
 
 typedef struct JitInstrumentation
 {
+	/* number of emitted modules */
+	size_t		created_modules;
+
 	/* number of emitted functions */
 	size_t		created_functions;
 

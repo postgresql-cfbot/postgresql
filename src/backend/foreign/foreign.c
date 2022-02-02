@@ -20,6 +20,7 @@
 #include "catalog/pg_user_mapping.h"
 #include "foreign/fdwapi.h"
 #include "foreign/foreign.h"
+#include "funcapi.h"
 #include "lib/stringinfo.h"
 #include "miscadmin.h"
 #include "utils/builtins.h"
@@ -499,30 +500,34 @@ IsImportableForeignTable(const char *tablename,
 
 
 /*
- * deflist_to_tuplestore - Helper function to convert DefElem list to
- * tuplestore usable in SRF.
+ * Convert options array to name/value table.  Useful for information
+ * schema and pg_dump.
  */
-static void
-deflist_to_tuplestore(ReturnSetInfo *rsinfo, List *options)
+Datum
+pg_options_to_table(PG_FUNCTION_ARGS)
 {
+	Datum		array = PG_GETARG_DATUM(0);
 	ListCell   *cell;
+	List *options;
+
+	ReturnSetInfo *rsinfo;
 	TupleDesc	tupdesc;
 	Tuplestorestate *tupstore;
-	Datum		values[2];
-	bool		nulls[2];
+
 	MemoryContext per_query_ctx;
 	MemoryContext oldcontext;
 
-	/* check to see if caller supports us returning a tuplestore */
-	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
+	Datum		values[2];
+	bool		nulls[2];
+
+	options = untransformRelOptions(array);
+	rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	if (!rsinfo->expectedDesc)
 		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("set-valued function called in context that cannot accept a set")));
-	if (!(rsinfo->allowedModes & SFRM_Materialize) ||
-		rsinfo->expectedDesc == NULL)
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("materialize mode required, but it is not allowed in this context")));
+				(errcode(ERRCODE_E_R_I_E_SRF_PROTOCOL_VIOLATED),
+				 errmsg("expected tuple format not specified as required for "
+						"set-returning function.")));
+
 
 	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
 	oldcontext = MemoryContextSwitchTo(per_query_ctx);
@@ -531,7 +536,7 @@ deflist_to_tuplestore(ReturnSetInfo *rsinfo, List *options)
 	 * Now prepare the result set.
 	 */
 	tupdesc = CreateTupleDescCopy(rsinfo->expectedDesc);
-	tupstore = tuplestore_begin_heap(true, false, work_mem);
+	tupstore = MakeFuncResultTuplestore(fcinfo, NULL);
 	rsinfo->returnMode = SFRM_Materialize;
 	rsinfo->setResult = tupstore;
 	rsinfo->setDesc = tupdesc;
@@ -559,20 +564,6 @@ deflist_to_tuplestore(ReturnSetInfo *rsinfo, List *options)
 	tuplestore_donestoring(tupstore);
 
 	MemoryContextSwitchTo(oldcontext);
-}
-
-
-/*
- * Convert options array to name/value table.  Useful for information
- * schema and pg_dump.
- */
-Datum
-pg_options_to_table(PG_FUNCTION_ARGS)
-{
-	Datum		array = PG_GETARG_DATUM(0);
-
-	deflist_to_tuplestore((ReturnSetInfo *) fcinfo->resultinfo,
-						  untransformRelOptions(array));
 
 	return (Datum) 0;
 }

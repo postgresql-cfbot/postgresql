@@ -24,6 +24,7 @@
 #include "common/hashfn.h"
 #include "common/int.h"
 #include "common/unicode_norm.h"
+#include "funcapi.h"
 #include "lib/hyperloglog.h"
 #include "libpq/pqformat.h"
 #include "miscadmin.h"
@@ -4852,22 +4853,18 @@ text_to_table(PG_FUNCTION_ARGS)
 	SplitTextOutputData tstate;
 	MemoryContext old_cxt;
 
-	/* check to see if caller supports us returning a tuplestore */
-	if (rsi == NULL || !IsA(rsi, ReturnSetInfo))
+	if (!rsi->expectedDesc)
 		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("set-valued function called in context that cannot accept a set")));
-	if (!(rsi->allowedModes & SFRM_Materialize))
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("materialize mode required, but it is not allowed in this context")));
+				(errcode(ERRCODE_E_R_I_E_SRF_PROTOCOL_VIOLATED),
+				 errmsg("expected tuple format not specified as required for "
+						"set-returning function.")));
 
 	/* OK, prepare tuplestore in per-query memory */
 	old_cxt = MemoryContextSwitchTo(rsi->econtext->ecxt_per_query_memory);
 
 	tstate.astate = NULL;
 	tstate.tupdesc = CreateTupleDescCopy(rsi->expectedDesc);
-	tstate.tupstore = tuplestore_begin_heap(true, false, work_mem);
+	tstate.tupstore = MakeFuncResultTuplestore(fcinfo, NULL);
 
 	MemoryContextSwitchTo(old_cxt);
 

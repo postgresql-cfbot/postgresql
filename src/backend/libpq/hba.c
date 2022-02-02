@@ -2714,29 +2714,12 @@ pg_hba_file_rules(PG_FUNCTION_ARGS)
 	 * up our current position in the parsed list every time.
 	 */
 	rsi = (ReturnSetInfo *) fcinfo->resultinfo;
-
-	/* Check to see if caller supports us returning a tuplestore */
-	if (rsi == NULL || !IsA(rsi, ReturnSetInfo))
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("set-valued function called in context that cannot accept a set")));
-	if (!(rsi->allowedModes & SFRM_Materialize))
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("materialize mode required, but it is not allowed in this context")));
-
 	rsi->returnMode = SFRM_Materialize;
-
-	/* Build a tuple descriptor for our result type */
-	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
-		elog(ERROR, "return type must be a row type");
 
 	/* Build tuplestore to hold the result rows */
 	old_cxt = MemoryContextSwitchTo(rsi->econtext->ecxt_per_query_memory);
 
-	tuple_store =
-		tuplestore_begin_heap(rsi->allowedModes & SFRM_Materialize_Random,
-							  false, work_mem);
+	tuple_store = MakeFuncResultTuplestore(fcinfo, &tupdesc);
 	rsi->setDesc = tupdesc;
 	rsi->setResult = tuple_store;
 

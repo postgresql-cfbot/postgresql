@@ -36,12 +36,11 @@ pg_config(PG_FUNCTION_ARGS)
 	char	   *values[2];
 	int			i = 0;
 
-	/* check to see if caller supports us returning a tuplestore */
-	if (!rsinfo || !(rsinfo->allowedModes & SFRM_Materialize))
+	if (!rsinfo->expectedDesc)
 		ereport(ERROR,
-				(errcode(ERRCODE_SYNTAX_ERROR),
-				 errmsg("materialize mode required, but it is not "
-						"allowed in this context")));
+				(errcode(ERRCODE_E_R_I_E_SRF_PROTOCOL_VIOLATED),
+				 errmsg("expected tuple format not specified as required for "
+						"set-returning function.")));
 
 	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
 	oldcontext = MemoryContextSwitchTo(per_query_ctx);
@@ -67,7 +66,7 @@ pg_config(PG_FUNCTION_ARGS)
 	rsinfo->returnMode = SFRM_Materialize;
 
 	/* initialize our tuplestore */
-	tupstore = tuplestore_begin_heap(true, false, work_mem);
+	tupstore = MakeFuncResultTuplestore(fcinfo, NULL);
 
 	configdata = get_configdata(my_exec_path, &configdata_len);
 	for (i = 0; i < configdata_len; i++)

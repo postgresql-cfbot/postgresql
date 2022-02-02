@@ -229,6 +229,8 @@ extern TupleDesc BlessTupleDesc(TupleDesc tupdesc);
 extern AttInMetadata *TupleDescGetAttInMetadata(TupleDesc tupdesc);
 extern HeapTuple BuildTupleFromCStrings(AttInMetadata *attinmeta, char **values);
 extern Datum HeapTupleHeaderGetDatum(HeapTupleHeader tuple);
+extern Tuplestorestate *MakeFuncResultTuplestore(FunctionCallInfo fcinfo,
+		TupleDesc *result_tupdesc);
 
 
 /*----------

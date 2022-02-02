@@ -13,6 +13,7 @@
  */
 #include "postgres.h"
 
+#include "miscadmin.h"
 #include "access/htup_details.h"
 #include "access/relation.h"
 #include "catalog/namespace.h"
@@ -27,6 +28,7 @@
 #include "utils/regproc.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
+#include "utils/tuplestore.h"
 #include "utils/typcache.h"
 
 
@@ -1758,6 +1760,41 @@ build_function_result_tupdesc_d(char prokind,
 	return desc;
 }
 
+/*
+ * Helper function to construct tuplestore
+ */
+Tuplestorestate *
+MakeFuncResultTuplestore(FunctionCallInfo fcinfo, TupleDesc *tupdesc)
+{
+	bool random_access;
+	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	Tuplestorestate *tupstore;
+
+	/* Must be called in per query memory context */
+	Assert(CurrentMemoryContext == rsinfo->econtext->ecxt_per_query_memory);
+
+	/* check to see if caller supports us returning a tuplestore */
+	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("set-valued function called in context that cannot accept a set")));
+	if (!(rsinfo->allowedModes & SFRM_Materialize))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("materialize mode required, but it is not allowed in this context")));
+
+	/* If needed, build a tuple descriptor for our result type */
+	if (tupdesc)
+	{
+		if (get_call_result_type(fcinfo, NULL, tupdesc) != TYPEFUNC_COMPOSITE)
+			elog(ERROR, "return type must be a row type");
+	}
+
+	random_access = (rsinfo->allowedModes & SFRM_Materialize_Random) != 0;
+	tupstore = tuplestore_begin_heap(random_access, false, work_mem);
+
+	return tupstore;
+}
 
 /*
  * RelationNameGetTupleDesc

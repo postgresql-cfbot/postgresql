@@ -321,6 +321,9 @@ typedef struct RmgrData
 
 extern const RmgrData RmgrTable[];
 
+extern RmgrData GetCustomRmgr(RmgrId rmid);
+extern void RegisterCustomRmgr(RmgrId rmid, RmgrData *rmgr);
+
 /*
  * Exported to support xlog switching from checkpointer
  */
@@ -337,5 +340,9 @@ extern bool ArchiveRecoveryRequested;
 extern bool InArchiveRecovery;
 extern bool StandbyMode;
 extern char *recoveryRestoreCommand;
+
+#define GetBuiltinRmgr(rmid) RmgrTable[(rmid)]
+#define GetRmgr(rmid) (((rmid) < RM_CUSTOM_MIN_ID) ? \
+					   GetBuiltinRmgr((rmid)) : GetCustomRmgr((rmid)))
 
 #endif							/* XLOG_INTERNAL_H */

@@ -31,5 +31,19 @@ typedef enum RmgrIds
 #undef PG_RMGR
 
 #define RM_MAX_ID				(RM_NEXT_ID - 1)
+#define RM_CUSTOM_MIN_ID		128
+#define RM_CUSTOM_MAX_ID		UINT8_MAX
+
+StaticAssertDecl(RM_MAX_ID < RM_CUSTOM_MIN_ID,
+				 "RM_MAX_ID >= RM_CUSTOM_MIN_ID");
+StaticAssertDecl(RM_CUSTOM_MIN_ID < RM_CUSTOM_MAX_ID,
+				 "RM_CUSTOM_MIN_ID >= RM_CUSTOM_MAX_ID");
+
+/*
+ * RmgrId to use for extensions that require an RmgrId, but are still in
+ * development and have not reserved their own unique RmgrId yet. See:
+ * https://wiki.postgresql.org/wiki/ExtensibleRmgr
+ */
+#define RM_EXPERIMENTAL_ID		128
 
 #endif							/* RMGR_H */

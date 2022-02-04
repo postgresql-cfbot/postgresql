@@ -558,6 +558,13 @@ static const struct config_enum_entry wal_compression_options[] = {
 	{NULL, 0, false}
 };
 
+const struct config_enum_entry wal_rcv_start_options[] = {
+	{"exhaust", WAL_RCV_START_AT_EXHAUST, false},
+	{"consistency", WAL_RCV_START_AT_CONSISTENCY, false},
+	{"startup", WAL_RCV_START_AT_STARTUP, false},
+	{NULL, 0, false}
+};
+
 /*
  * Options for enum values stored in other modules
  */
@@ -5032,6 +5039,17 @@ static struct config_enum ConfigureNamesEnum[] =
 		},
 		&recovery_init_sync_method,
 		RECOVERY_INIT_SYNC_METHOD_FSYNC, recovery_init_sync_method_options,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"wal_receiver_start_at", PGC_POSTMASTER, REPLICATION_STANDBY,
+			gettext_noop("When to start WAL receiver."),
+			NULL,
+		},
+		&wal_receiver_start_at,
+		WAL_RCV_START_AT_EXHAUST,
+		wal_rcv_start_options,
 		NULL, NULL, NULL
 	},
 

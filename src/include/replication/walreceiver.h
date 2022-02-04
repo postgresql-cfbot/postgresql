@@ -24,9 +24,19 @@
 #include "storage/spin.h"
 #include "utils/tuplestore.h"
 
+typedef enum
+{
+	WAL_RCV_START_AT_STARTUP,	/* start a WAL receiver immediately at startup */
+	WAL_RCV_START_AT_CONSISTENCY,	/* start a WAL receiver once consistency
+									 * has been reached */
+	WAL_RCV_START_AT_EXHAUST,	/* start a WAL receiver after WAL from archive
+								 * and pg_wal has been replayed (default) */
+} WalRcvStartCondition;
+
 /* user-settable parameters */
 extern int	wal_receiver_status_interval;
 extern int	wal_receiver_timeout;
+extern int	wal_receiver_start_at;
 extern bool hot_standby_feedback;
 
 /*

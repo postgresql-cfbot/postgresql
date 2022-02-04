@@ -2816,7 +2816,30 @@ P <optional> <replaceable>years</replaceable>-<replaceable>months</replaceable>-
      defined with a <replaceable>fields</replaceable> specification, the interpretation of
      unmarked quantities depends on the <replaceable>fields</replaceable>.  For
      example <literal>INTERVAL '1' YEAR</literal> is read as 1 year, whereas
-     <literal>INTERVAL '1'</literal> means 1 second.  Also, field values
+     <literal>INTERVAL '1'</literal> means 1 second. If the string provided contains
+     a <literal>:</literal> then the number to the left of the first <literal>:</literal>
+     will be used to fill in the most significant sub-day part of the
+     <replaceable>fields</replaceable> speficification. 
+
+<programlisting>
+SELECT INTERVAL '2' HOUR TO SECOND;
+ interval
+----------
+ 00:00:02
+
+SELECT INTERVAL '4:2' HOUR TO SECOND;
+ interval
+----------
+ 04:02:00
+
+
+SELECT INTERVAL '2:' DAY TO SECOND;
+ interval
+----------
+ 02:00:00
+</programlisting>
+
+     Also, field values
      <quote>to the right</quote> of the least significant field allowed by the
      <replaceable>fields</replaceable> specification are silently discarded.  For
      example, writing <literal>INTERVAL '1 day 2:03:04' HOUR TO MINUTE</literal>

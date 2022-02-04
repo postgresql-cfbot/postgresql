@@ -10536,6 +10536,9 @@ SELECT TIMESTAMP WITH TIME ZONE '2001-02-16 20:38:40-05' AT TIME ZONE 'America/D
 
 SELECT TIMESTAMP '2001-02-16 20:38:40' AT TIME ZONE 'Asia/Tokyo' AT TIME ZONE 'America/Chicago';
 <lineannotation>Result: </lineannotation><computeroutput>2001-02-16 05:38:40</computeroutput>
+
+SELECT TIMESTAMP '2001-02-16 20:38:40' AT TIME ZONE 'UTC' AT TIME ZONE INTERVAL '3:21:20' HOUR TO SECOND;
+<lineannotation>Result: </lineannotation><computeroutput>2001-02-17 00:00:00+00</computeroutput>
 </screen>
     The first example adds a time zone to a value that lacks it, and
     displays the value using the current <varname>TimeZone</varname>
@@ -10543,7 +10546,8 @@ SELECT TIMESTAMP '2001-02-16 20:38:40' AT TIME ZONE 'Asia/Tokyo' AT TIME ZONE 'A
     to the specified time zone, and returns the value without a time zone.
     This allows storage and display of values different from the current
     <varname>TimeZone</varname> setting.  The third example converts
-    Tokyo time to Chicago time.
+    Tokyo time to Chicago time. The fourth example adds the time zone UTC
+    to a value that lacks it, and then applies a highly contrived fixed offset.
    </para>
 
    <para>

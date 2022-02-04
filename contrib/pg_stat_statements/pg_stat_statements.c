@@ -88,7 +88,7 @@ PG_MODULE_MAGIC;
 #define PGSS_TEXT_FILE	PG_STAT_TMP_DIR "/pgss_query_texts.stat"
 
 /* Magic number identifying the stats file format */
-static const uint32 PGSS_FILE_HEADER = 0x20201227;
+static const uint32 PGSS_FILE_HEADER = 0x20210322;
 
 /* PostgreSQL major version number, changes in which invalidate all entries */
 static const uint32 PGSS_PG_MAJOR_VERSION = PG_VERSION_NUM / 100;
@@ -121,7 +121,8 @@ typedef enum pgssVersion
 	PGSS_V1_2,
 	PGSS_V1_3,
 	PGSS_V1_8,
-	PGSS_V1_9
+	PGSS_V1_9,
+	PGSS_V1_10
 } pgssVersion;
 
 typedef enum pgssStoreKind
@@ -168,6 +169,10 @@ typedef struct Counters
 										 * msec */
 	double		max_time[PGSS_NUMKIND]; /* maximum planning/execution time in
 										 * msec */
+	double		aux_min_time[PGSS_NUMKIND]; /* minimum planning/execution time
+											   * since aux reset in msec */
+	double		aux_max_time[PGSS_NUMKIND]; /* maximum planning/execution time
+											   * since aux reset in msec */
 	double		mean_time[PGSS_NUMKIND];	/* mean planning/execution time in
 											 * msec */
 	double		sum_var_time[PGSS_NUMKIND]; /* sum of variances in
@@ -209,12 +214,14 @@ typedef struct pgssGlobalStats
  */
 typedef struct pgssEntry
 {
-	pgssHashKey key;			/* hash key of entry - MUST BE FIRST */
-	Counters	counters;		/* the statistics for this query */
-	Size		query_offset;	/* query text offset in external file */
-	int			query_len;		/* # of valid bytes in query string, or -1 */
-	int			encoding;		/* query text encoding */
-	slock_t		mutex;			/* protects the counters only */
+	pgssHashKey key;				/* hash key of entry - MUST BE FIRST */
+	Counters	counters;			/* the statistics for this query */
+	Size		query_offset;		/* query text offset in external file */
+	int			query_len;			/* # of valid bytes in query string, or -1 */
+	int			encoding;			/* query text encoding */
+	TimestampTz	stats_since;		/* timestamp of entry allocation moment */
+	TimestampTz	aux_stats_since;	/* timestamp of last auxiliary statistics reset */
+	slock_t		mutex;				/* protects the counters only */
 } pgssEntry;
 
 /*
@@ -298,10 +305,12 @@ void		_PG_fini(void);
 
 PG_FUNCTION_INFO_V1(pg_stat_statements_reset);
 PG_FUNCTION_INFO_V1(pg_stat_statements_reset_1_7);
+PG_FUNCTION_INFO_V1(pg_stat_statements_aux_reset_1_10);
 PG_FUNCTION_INFO_V1(pg_stat_statements_1_2);
 PG_FUNCTION_INFO_V1(pg_stat_statements_1_3);
 PG_FUNCTION_INFO_V1(pg_stat_statements_1_8);
 PG_FUNCTION_INFO_V1(pg_stat_statements_1_9);
+PG_FUNCTION_INFO_V1(pg_stat_statements_1_10);
 PG_FUNCTION_INFO_V1(pg_stat_statements);
 PG_FUNCTION_INFO_V1(pg_stat_statements_info);
 
@@ -345,6 +354,7 @@ static char *qtext_fetch(Size query_offset, int query_len,
 						 char *buffer, Size buffer_size);
 static bool need_gc_qtexts(void);
 static void gc_qtexts(void);
+static void entry_reset_aux(Oid userid, Oid dbid, uint64 queryid);
 static void entry_reset(Oid userid, Oid dbid, uint64 queryid);
 static char *generate_normalized_query(JumbleState *jstate, const char *query,
 									   int query_loc, int *query_len_p);
@@ -649,6 +659,8 @@ pgss_shmem_startup(void)
 
 		/* copy in the actual stats */
 		entry->counters = temp.counters;
+		entry->stats_since = temp.stats_since;
+		entry->aux_stats_since = temp.aux_stats_since;
 	}
 
 	/* Read global statistics for pg_stat_statements */
@@ -1336,6 +1348,8 @@ pgss_store(const char *query, uint64 queryId,
 			e->counters.min_time[kind] = total_time;
 			e->counters.max_time[kind] = total_time;
 			e->counters.mean_time[kind] = total_time;
+			e->counters.aux_min_time[kind] = total_time;
+			e->counters.aux_max_time[kind] = total_time;
 		}
 		else
 		{
@@ -1355,6 +1369,24 @@ pgss_store(const char *query, uint64 queryId,
 				e->counters.min_time[kind] = total_time;
 			if (e->counters.max_time[kind] < total_time)
 				e->counters.max_time[kind] = total_time;
+
+			/*
+			 * Calculate auxiliary min and max time. aux_min == aux_max == 0
+			 * means that auxiliary stats reset was happen
+			 */
+			if (e->counters.aux_min_time[kind] == e->counters.aux_max_time[kind]
+				&& e->counters.aux_max_time[kind] == 0)
+			{
+				e->counters.aux_min_time[kind] = total_time;
+				e->counters.aux_max_time[kind] = total_time;
+			}
+			else
+			{
+				if (e->counters.aux_min_time[kind] > total_time)
+					e->counters.aux_min_time[kind] = total_time;
+				if (e->counters.aux_max_time[kind] < total_time)
+					e->counters.aux_max_time[kind] = total_time;
+			}
 		}
 		e->counters.rows += rows;
 		e->counters.shared_blks_hit += bufusage->shared_blks_hit;
@@ -1383,6 +1415,25 @@ done:
 	/* We postpone this clean-up until we're out of the lock */
 	if (norm_query)
 		pfree(norm_query);
+}
+
+/*
+ * Reset auxiliary statement statistics corresponding to userid, dbid, and queryid.
+ */
+Datum
+pg_stat_statements_aux_reset_1_10(PG_FUNCTION_ARGS)
+{
+	Oid			userid;
+	Oid			dbid;
+	uint64		queryid;
+
+	userid = PG_GETARG_OID(0);
+	dbid = PG_GETARG_OID(1);
+	queryid = (uint64) PG_GETARG_INT64(2);
+
+	entry_reset_aux(userid, dbid, queryid);
+
+	PG_RETURN_VOID();
 }
 
 /*
@@ -1422,7 +1473,8 @@ pg_stat_statements_reset(PG_FUNCTION_ARGS)
 #define PG_STAT_STATEMENTS_COLS_V1_3	23
 #define PG_STAT_STATEMENTS_COLS_V1_8	32
 #define PG_STAT_STATEMENTS_COLS_V1_9	33
-#define PG_STAT_STATEMENTS_COLS			33	/* maximum of above */
+#define PG_STAT_STATEMENTS_COLS_V1_10	39
+#define PG_STAT_STATEMENTS_COLS			39	/* maximum of above */
 
 /*
  * Retrieve statement statistics.
@@ -1434,6 +1486,16 @@ pg_stat_statements_reset(PG_FUNCTION_ARGS)
  * expected API version is identified by embedding it in the C name of the
  * function.  Unfortunately we weren't bright enough to do that for 1.1.
  */
+Datum
+pg_stat_statements_1_10(PG_FUNCTION_ARGS)
+{
+	bool		showtext = PG_GETARG_BOOL(0);
+
+	pg_stat_statements_internal(fcinfo, PGSS_V1_10, showtext);
+
+	return (Datum) 0;
+}
+
 Datum
 pg_stat_statements_1_9(PG_FUNCTION_ARGS)
 {
@@ -1567,6 +1629,10 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 			if (api_version != PGSS_V1_9)
 				elog(ERROR, "incorrect number of output arguments");
 			break;
+		case PG_STAT_STATEMENTS_COLS_V1_10:
+			if (api_version != PGSS_V1_10)
+				elog(ERROR, "incorrect number of output arguments");
+			break;
 		default:
 			elog(ERROR, "incorrect number of output arguments");
 	}
@@ -1652,6 +1718,8 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 		Counters	tmp;
 		double		stddev;
 		int64		queryid = entry->key.queryid;
+		TimestampTz	stats_since;
+		TimestampTz	aux_stats_since;
 
 		memset(values, 0, sizeof(values));
 		memset(nulls, 0, sizeof(nulls));
@@ -1720,6 +1788,8 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 
 			SpinLockAcquire(&e->mutex);
 			tmp = e->counters;
+			stats_since = e->stats_since;
+			aux_stats_since = e->aux_stats_since;
 			SpinLockRelease(&e->mutex);
 		}
 
@@ -1754,6 +1824,11 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 				else
 					stddev = 0.0;
 				values[i++] = Float8GetDatumFast(stddev);
+
+				if (api_version >= PGSS_V1_10) {
+					values[i++] = Float8GetDatumFast(tmp.aux_min_time[kind]);
+					values[i++] = Float8GetDatumFast(tmp.aux_max_time[kind]);
+				}
 			}
 		}
 		values[i++] = Int64GetDatumFast(tmp.rows);
@@ -1791,6 +1866,11 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 											Int32GetDatum(-1));
 			values[i++] = wal_bytes;
 		}
+		if (api_version >= PGSS_V1_10)
+		{
+			values[i++] = TimestampTzGetDatum(stats_since);
+			values[i++] = TimestampTzGetDatum(aux_stats_since);
+		}
 
 		Assert(i == (api_version == PGSS_V1_0 ? PG_STAT_STATEMENTS_COLS_V1_0 :
 					 api_version == PGSS_V1_1 ? PG_STAT_STATEMENTS_COLS_V1_1 :
@@ -1798,6 +1878,7 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 					 api_version == PGSS_V1_3 ? PG_STAT_STATEMENTS_COLS_V1_3 :
 					 api_version == PGSS_V1_8 ? PG_STAT_STATEMENTS_COLS_V1_8 :
 					 api_version == PGSS_V1_9 ? PG_STAT_STATEMENTS_COLS_V1_9 :
+					 api_version == PGSS_V1_10 ? PG_STAT_STATEMENTS_COLS_V1_10 :
 					 -1 /* fail if you forget to update this assert */ ));
 
 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
@@ -1913,6 +1994,8 @@ entry_alloc(pgssHashKey *key, Size query_offset, int query_len, int encoding,
 		entry->query_offset = query_offset;
 		entry->query_len = query_len;
 		entry->encoding = encoding;
+		entry->stats_since = GetCurrentTimestamp();
+		entry->aux_stats_since = entry->stats_since;
 	}
 
 	return entry;
@@ -2460,6 +2543,106 @@ gc_fail:
 }
 
 /*
+ * Reset auxiliary statistic values of specified entries
+ */
+static void
+entry_reset_aux(Oid userid, Oid dbid, uint64 queryid)
+{
+	HASH_SEQ_STATUS hash_seq;
+	pgssEntry  *entry;
+	Counters *entry_counters;
+	pgssHashKey key;
+	TimestampTz aux_stats_reset;
+
+	if (!pgss || !pgss_hash)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("pg_stat_statements must be loaded via shared_preload_libraries")));
+
+	LWLockAcquire(pgss->lock, LW_EXCLUSIVE);
+
+	aux_stats_reset = GetCurrentTimestamp();
+
+	if (userid != 0 && dbid != 0 && queryid != UINT64CONST(0))
+	{
+		/* If all the parameters are available, use the fast path. */
+		memset(&key, 0, sizeof(pgssHashKey));
+		key.userid = userid;
+		key.dbid = dbid;
+		key.queryid = queryid;
+
+		/*
+		 * Reset aux stats, starting with the nested-level entry
+		 * For min/max values reset sign is min = max = 0
+		 */
+		key.toplevel = false;
+		entry = (pgssEntry *) hash_search(pgss_hash, &key, HASH_FIND, NULL);
+		if (entry)				/* found */
+		{
+			entry_counters = &entry->counters;
+			for (int kind = 0; kind < PGSS_NUMKIND; kind++)
+			{
+				entry_counters->aux_max_time[kind] = 0;
+				entry_counters->aux_min_time[kind] = 0;
+			}
+			entry->aux_stats_since = aux_stats_reset;
+		}
+
+		/* Reset aux stats for top level statements */
+		key.toplevel = true;
+
+		entry = (pgssEntry *) hash_search(pgss_hash, &key, HASH_FIND, NULL);
+		if (entry)				/* found */
+		{
+			entry_counters = &entry->counters;
+			for (int kind = 0; kind < PGSS_NUMKIND; kind++)
+			{
+				entry_counters->aux_max_time[kind] = 0;
+				entry_counters->aux_min_time[kind] = 0;
+			}
+			entry->aux_stats_since = aux_stats_reset;
+		}
+	}
+	else if (userid != 0 || dbid != 0 || queryid != UINT64CONST(0))
+	{
+		/* Reset aux stats for entries  corresponding to valid parameters. */
+		hash_seq_init(&hash_seq, pgss_hash);
+		while ((entry = hash_seq_search(&hash_seq)) != NULL)
+		{
+			if ((!userid || entry->key.userid == userid) &&
+				(!dbid || entry->key.dbid == dbid) &&
+				(!queryid || entry->key.queryid == queryid))
+			{
+				entry_counters = &entry->counters;
+				for (int kind = 0; kind < PGSS_NUMKIND; kind++)
+				{
+					entry_counters->aux_max_time[kind] = 0;
+					entry_counters->aux_min_time[kind] = 0;
+				}
+				entry->aux_stats_since = aux_stats_reset;
+			}
+		}
+	}
+	else
+	{
+		/* Reset aux stats for all entries. */
+		hash_seq_init(&hash_seq, pgss_hash);
+		while ((entry = hash_seq_search(&hash_seq)) != NULL)
+		{
+			entry_counters = &entry->counters;
+			for (int kind = 0; kind < PGSS_NUMKIND; kind++)
+			{
+				entry_counters->aux_max_time[kind] = 0;
+				entry_counters->aux_min_time[kind] = 0;
+			}
+			entry->aux_stats_since = aux_stats_reset;
+		}
+	}
+
+	LWLockRelease(pgss->lock);
+}
+
+/*
  * Release entries corresponding to parameters passed.
  */
 static void
@@ -2488,7 +2671,7 @@ entry_reset(Oid userid, Oid dbid, uint64 queryid)
 		key.dbid = dbid;
 		key.queryid = queryid;
 
-		/* Remove the key if it exists, starting with the top-level entry  */
+		/* Remove the key if it exists, starting with the nested-level entry  */
 		key.toplevel = false;
 		entry = (pgssEntry *) hash_search(pgss_hash, &key, HASH_REMOVE, NULL);
 		if (entry)				/* found */

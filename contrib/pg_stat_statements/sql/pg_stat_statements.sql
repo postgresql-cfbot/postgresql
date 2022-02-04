@@ -442,4 +442,54 @@ SELECT (
 
 SELECT COUNT(*) FROM pg_stat_statements WHERE query LIKE '%SELECT GROUPING%';
 
+--
+-- statement timestamps
+--
+SELECT pg_stat_statements_reset();
+SELECT 1 AS "STMTTS1";
+SELECT now() AS ref_ts \gset
+SELECT 1,2 AS "STMTTS2";
+SELECT stats_since >= :'ref_ts', count(*) FROM pg_stat_statements
+WHERE query LIKE '%STMTTS%'
+GROUP BY stats_since >= :'ref_ts'
+ORDER BY stats_since >= :'ref_ts';
+
+-- auxiliary statistics reset
+-- Is there any statements with different regular and auxiliary values?
+SELECT count(*) > 0 FROM pg_stat_statements(true)
+WHERE
+    ROW(min_plan_time, max_plan_time, min_exec_time, max_exec_time)
+    IS DISTINCT FROM
+    ROW(aux_min_plan_time, aux_max_plan_time, aux_min_exec_time,
+        aux_max_exec_time);
+
+-- Move reference point
+SELECT now() AS ref_ts \gset
+
+-- Testing stats_since and aux_stats_since values before and after reset
+SELECT
+    /*pgss_aux_reset_test_query*/
+    bool_and(stats_since <= :'ref_ts') AS all_stats_before_ref,
+    bool_and(aux_stats_since >= :'ref_ts') AS all_aux_stats_after_ref
+FROM pg_stat_statements_aux
+WHERE query NOT LIKE '%pgss_aux_reset_test_query%';
+-- perform auxiliary statistics reset
+SELECT /*pgss_aux_reset_test_query*/ pg_stat_statements_aux_reset();
+
+SELECT
+    /*pgss_aux_reset_test_query*/
+    bool_and(stats_since <= :'ref_ts') AS all_stats_before_ref,
+    bool_and(aux_stats_since >= :'ref_ts') AS all_aux_stats_after_ref
+FROM pg_stat_statements_aux
+WHERE query NOT LIKE '%pgss_aux_reset_test_query%';
+
+-- Is there any statements with different regular and auxiliary
+-- values after aux reset?
+SELECT count(*) > 0 FROM pg_stat_statements(true)
+WHERE
+    ROW(min_plan_time, max_plan_time, min_exec_time, max_exec_time)
+    IS DISTINCT FROM
+    ROW(aux_min_plan_time, aux_max_plan_time, aux_min_exec_time,
+        aux_max_exec_time);
+
 DROP EXTENSION pg_stat_statements;

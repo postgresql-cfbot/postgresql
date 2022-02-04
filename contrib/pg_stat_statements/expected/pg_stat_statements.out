@@ -1077,4 +1077,94 @@ SELECT COUNT(*) FROM pg_stat_statements WHERE query LIKE '%SELECT GROUPING%';
      2
 (1 row)
 
+--
+-- statement timestamps
+--
+SELECT pg_stat_statements_reset();
+ pg_stat_statements_reset 
+--------------------------
+ 
+(1 row)
+
+SELECT 1 AS "STMTTS1";
+ STMTTS1 
+---------
+       1
+(1 row)
+
+SELECT now() AS ref_ts \gset
+SELECT 1,2 AS "STMTTS2";
+ ?column? | STMTTS2 
+----------+---------
+        1 |       2
+(1 row)
+
+SELECT stats_since >= :'ref_ts', count(*) FROM pg_stat_statements
+WHERE query LIKE '%STMTTS%'
+GROUP BY stats_since >= :'ref_ts'
+ORDER BY stats_since >= :'ref_ts';
+ ?column? | count 
+----------+-------
+ f        |     1
+ t        |     1
+(2 rows)
+
+-- auxiliary statistics reset
+-- Is there any statements with different regular and auxiliary values?
+SELECT count(*) > 0 FROM pg_stat_statements(true)
+WHERE
+    ROW(min_plan_time, max_plan_time, min_exec_time, max_exec_time)
+    IS DISTINCT FROM
+    ROW(aux_min_plan_time, aux_max_plan_time, aux_min_exec_time,
+        aux_max_exec_time);
+ ?column? 
+----------
+ f
+(1 row)
+
+-- Move reference point
+SELECT now() AS ref_ts \gset
+-- Testing stats_since and aux_stats_since values before and after reset
+SELECT
+    /*pgss_aux_reset_test_query*/
+    bool_and(stats_since <= :'ref_ts') AS all_stats_before_ref,
+    bool_and(aux_stats_since >= :'ref_ts') AS all_aux_stats_after_ref
+FROM pg_stat_statements_aux
+WHERE query NOT LIKE '%pgss_aux_reset_test_query%';
+ all_stats_before_ref | all_aux_stats_after_ref 
+----------------------+-------------------------
+ t                    | f
+(1 row)
+
+-- perform auxiliary statistics reset
+SELECT /*pgss_aux_reset_test_query*/ pg_stat_statements_aux_reset();
+ pg_stat_statements_aux_reset 
+------------------------------
+ 
+(1 row)
+
+SELECT
+    /*pgss_aux_reset_test_query*/
+    bool_and(stats_since <= :'ref_ts') AS all_stats_before_ref,
+    bool_and(aux_stats_since >= :'ref_ts') AS all_aux_stats_after_ref
+FROM pg_stat_statements_aux
+WHERE query NOT LIKE '%pgss_aux_reset_test_query%';
+ all_stats_before_ref | all_aux_stats_after_ref 
+----------------------+-------------------------
+ t                    | t
+(1 row)
+
+-- Is there any statements with different regular and auxiliary
+-- values after aux reset?
+SELECT count(*) > 0 FROM pg_stat_statements(true)
+WHERE
+    ROW(min_plan_time, max_plan_time, min_exec_time, max_exec_time)
+    IS DISTINCT FROM
+    ROW(aux_min_plan_time, aux_max_plan_time, aux_min_exec_time,
+        aux_max_exec_time);
+ ?column? 
+----------
+ t
+(1 row)
+
 DROP EXTENSION pg_stat_statements;

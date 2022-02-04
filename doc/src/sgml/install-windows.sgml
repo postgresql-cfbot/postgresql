@@ -160,7 +160,7 @@ $ENV{MSBFLAGS}="/m";
 </programlisting>
  </para>
 
- <sect2>
+ <sect2 id="install-windows-requirements">
   <title>Requirements</title>
   <para>
    The following additional products are required to build
@@ -346,7 +346,7 @@ $ENV{MSBFLAGS}="/m";
   </para>
  </sect2>
 
- <sect2>
+ <sect2 id="install-windows-considerations">
   <title>Special Considerations for 64-Bit Windows</title>
 
   <para>
@@ -371,7 +371,7 @@ $ENV{MSBFLAGS}="/m";
   </para>
  </sect2>
 
- <sect2>
+ <sect2 id="install-windows-build">
   <title>Building</title>
 
   <para>
@@ -408,7 +408,7 @@ $ENV{CONFIG}="Debug";
   </para>
  </sect2>
 
- <sect2>
+ <sect2 id="install-windows-clean-and-install">
   <title>Cleaning and Installing</title>
 
   <para>
@@ -441,7 +441,7 @@ $ENV{CONFIG}="Debug";
   </para>
  </sect2>
 
- <sect2>
+ <sect2 id="install-windows-regression-tests">
   <title>Running the Regression Tests</title>
 
   <para>
@@ -463,6 +463,14 @@ $ENV{CONFIG}="Debug";
 <userinput>vcregress bincheck</userinput>
 <userinput>vcregress recoverycheck</userinput>
 <userinput>vcregress upgradecheck</userinput>
+</screen>
+
+   To run an arbitrary TAP test set, run <command>vcregress taptest</command>
+   comamnd. For example, use the following command for running subcription TAP
+   tests:
+
+<screen>
+<userinput>vcregress taptest src/test/subscription</userinput>
 </screen>
 
    To change the schedule used (default is parallel), append it to the

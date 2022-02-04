@@ -48,14 +48,16 @@ install: all installdirs
 	$(INSTALL_DATA) utils/fmgroids.h '$(DESTDIR)$(includedir_server)/utils'
 	$(INSTALL_DATA) utils/fmgrprotos.h '$(DESTDIR)$(includedir_server)/utils'
 # We don't use INSTALL_DATA for performance reasons --- there are a lot of files
-# (in fact, we have to take some pains to avoid overlength shell commands here)
-	cp $(srcdir)/*.h '$(DESTDIR)$(includedir_server)'/
+# (in fact, we have to take some pains to avoid overlength shell commands here).
+# We preserve timestamps while copying to avoid recompiling dependent objects
+# such as third-party extensions.
+	cp -p $(srcdir)/*.h '$(DESTDIR)$(includedir_server)'/
 	for dir in $(SUBDIRS); do \
-	  cp $(srcdir)/$$dir/*.h '$(DESTDIR)$(includedir_server)'/$$dir/ || exit; \
+	  cp -p $(srcdir)/$$dir/*.h '$(DESTDIR)$(includedir_server)'/$$dir/ || exit; \
 	done
 ifeq ($(vpath_build),yes)
 	for file in catalog/schemapg.h catalog/system_fk_info.h catalog/pg_*_d.h parser/gram.h storage/lwlocknames.h utils/probes.h; do \
-	  cp $$file '$(DESTDIR)$(includedir_server)'/$$file || exit; \
+	  cp -p $$file '$(DESTDIR)$(includedir_server)'/$$file || exit; \
 	done
 endif
 	cd '$(DESTDIR)$(includedir_server)' && chmod $(INSTALL_DATA_MODE) *.h

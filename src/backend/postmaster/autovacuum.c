@@ -327,6 +327,7 @@ static void FreeWorkerInfo(int code, Datum arg);
 
 static autovac_table *table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 											TupleDesc pg_class_desc,
+											reloptions_function reloptions,
 											int effective_multixact_freeze_max_age);
 static void recheck_relation_needs_vacanalyze(Oid relid, AutoVacOpts *avopts,
 											  Form_pg_class classForm,
@@ -341,7 +342,7 @@ static void relation_needs_vacanalyze(Oid relid, AutoVacOpts *relopts,
 static void autovacuum_do_vac_analyze(autovac_table *tab,
 									  BufferAccessStrategy bstrategy);
 static AutoVacOpts *extract_autovac_opts(HeapTuple tup,
-										 TupleDesc pg_class_desc);
+										 TupleDesc pg_class_desc, reloptions_function reloptions);
 static PgStat_StatTabEntry *get_pgstat_tabentry_relid(Oid relid, bool isshared,
 													  PgStat_StatDBEntry *shared,
 													  PgStat_StatDBEntry *dbentry);
@@ -2118,7 +2119,8 @@ do_autovacuum(void)
 		}
 
 		/* Fetch reloptions and the pgstat entry for this table */
-		relopts = extract_autovac_opts(tuple, pg_class_desc);
+		relopts = extract_autovac_opts(tuple, pg_class_desc,
+									   classRel->rd_tableam->relation_options);
 		tabentry = get_pgstat_tabentry_relid(relid, classForm->relisshared,
 											 shared, dbentry);
 
@@ -2191,7 +2193,8 @@ do_autovacuum(void)
 		 * fetch reloptions -- if this toast table does not have them, try the
 		 * main rel
 		 */
-		relopts = extract_autovac_opts(tuple, pg_class_desc);
+		relopts = extract_autovac_opts(tuple, pg_class_desc,
+									   classRel->rd_tableam->relation_options);
 		if (relopts == NULL)
 		{
 			av_relation *hentry;
@@ -2427,6 +2430,7 @@ do_autovacuum(void)
 		 */
 		MemoryContextSwitchTo(AutovacMemCxt);
 		tab = table_recheck_autovac(relid, table_toast_map, pg_class_desc,
+									classRel->rd_tableam->relation_options,
 									effective_multixact_freeze_max_age);
 		if (tab == NULL)
 		{
@@ -2748,7 +2752,8 @@ deleted2:
  * be a risk; fortunately, it doesn't.
  */
 static AutoVacOpts *
-extract_autovac_opts(HeapTuple tup, TupleDesc pg_class_desc)
+extract_autovac_opts(HeapTuple tup, TupleDesc pg_class_desc,
+					 reloptions_function reloptions)
 {
 	bytea	   *relopts;
 	AutoVacOpts *av;
@@ -2757,7 +2762,7 @@ extract_autovac_opts(HeapTuple tup, TupleDesc pg_class_desc)
 		   ((Form_pg_class) GETSTRUCT(tup))->relkind == RELKIND_MATVIEW ||
 		   ((Form_pg_class) GETSTRUCT(tup))->relkind == RELKIND_TOASTVALUE);
 
-	relopts = extractRelOptions(tup, pg_class_desc, NULL);
+	relopts = extractRelOptions(tup, pg_class_desc, NULL, reloptions);
 	if (relopts == NULL)
 		return NULL;
 
@@ -2803,6 +2808,7 @@ get_pgstat_tabentry_relid(Oid relid, bool isshared, PgStat_StatDBEntry *shared,
 static autovac_table *
 table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 					  TupleDesc pg_class_desc,
+					  reloptions_function reloptions,
 					  int effective_multixact_freeze_max_age)
 {
 	Form_pg_class classForm;
@@ -2824,7 +2830,7 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 	 * Get the applicable reloptions.  If it is a TOAST table, try to get the
 	 * main table reloptions if the toast table itself doesn't have.
 	 */
-	avopts = extract_autovac_opts(classTup, pg_class_desc);
+	avopts = extract_autovac_opts(classTup, pg_class_desc, reloptions);
 	if (classForm->relkind == RELKIND_TOASTVALUE &&
 		avopts == NULL && table_toast_map != NULL)
 	{

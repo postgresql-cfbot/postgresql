@@ -809,24 +809,6 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	if (!OidIsValid(ownerId))
 		ownerId = GetUserId();
 
-	/*
-	 * Parse and validate reloptions, if any.
-	 */
-	reloptions = transformRelOptions((Datum) 0, stmt->options, NULL, validnsps,
-									 true, false);
-
-	switch (relkind)
-	{
-		case RELKIND_VIEW:
-			(void) view_reloptions(reloptions, true);
-			break;
-		case RELKIND_PARTITIONED_TABLE:
-			(void) partitioned_table_reloptions(reloptions, true);
-			break;
-		default:
-			(void) heap_reloptions(relkind, reloptions, true);
-	}
-
 	if (stmt->ofTypename)
 	{
 		AclResult	aclresult;
@@ -945,6 +927,52 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	/* look up the access method, verify it is for a table */
 	if (accessMethod != NULL)
 		accessMethodId = get_table_am_oid(accessMethod, false);
+
+	/*
+	 * Parse and validate reloptions, if any.
+	 */
+	reloptions = transformRelOptions((Datum) 0, stmt->options, NULL, validnsps,
+									 true, false);
+	switch (relkind)
+	{
+		case RELKIND_VIEW:
+			(void) view_reloptions(reloptions, true);
+			break;
+		case RELKIND_PARTITIONED_TABLE:
+			(void) partitioned_table_reloptions(reloptions, true);
+			break;
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_MATVIEW:
+			{
+				const TableAmRoutine *routine;
+				HeapTuple	tuple;
+				Form_pg_am	aform;
+
+				tuple = SearchSysCache1(AMOID, ObjectIdGetDatum(accessMethodId));
+				if (!HeapTupleIsValid(tuple))
+				{
+					elog(ERROR, "cache lookup failed for access method %u",
+						 accessMethodId);
+				}
+
+				aform = (Form_pg_am) GETSTRUCT(tuple);
+				routine = GetTableAmRoutine(aform->amhandler);
+				if (routine->relation_options == NULL)
+				{
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("specifying a table access method is not supported")));
+				}
+
+				(void) routine->relation_options(relkind, reloptions, true);
+				ReleaseSysCache(tuple);
+				break;
+			}
+
+		default:
+			(void) heap_reloptions(relkind, reloptions, true);
+	}
 
 	/*
 	 * Create the relation.  Inherited defaults and constraints are passed in
@@ -14137,7 +14165,7 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 		case RELKIND_RELATION:
 		case RELKIND_TOASTVALUE:
 		case RELKIND_MATVIEW:
-			(void) heap_reloptions(rel->rd_rel->relkind, newOptions, true);
+			rel->rd_tableam->relation_options(rel->rd_rel->relkind, newOptions, true);
 			break;
 		case RELKIND_PARTITIONED_TABLE:
 			(void) partitioned_table_reloptions(newOptions, true);

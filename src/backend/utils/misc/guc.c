@@ -236,6 +236,11 @@ static bool check_recovery_target_lsn(char **newval, void **extra, GucSource sou
 static void assign_recovery_target_lsn(const char *newval, void *extra);
 static bool check_primary_slot_name(char **newval, void **extra, GucSource source);
 static bool check_default_with_oids(bool *newval, void **extra, GucSource source);
+static void assign_work_mem(int newval, void* extra);
+static void assign_glibc_trim_threshold(int newval, void* extra);
+
+static void check_reserved_prefixes(const char *varName);
+static List *reserved_class_prefix = NIL;
 
 /* Private functions in guc-file.l that need to be called from guc.c */
 static ConfigVariable *ProcessConfigFileInternal(GucContext context,
@@ -2451,7 +2456,7 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&work_mem,
 		4096, 64, MAX_KILOBYTES,
-		NULL, NULL, NULL
+		NULL, &assign_work_mem, NULL
 	},
 
 	{
@@ -2476,6 +2481,21 @@ static struct config_int ConfigureNamesInt[] =
 		65536, 64, MAX_KILOBYTES,
 		NULL, NULL, NULL
 	},
+
+	{
+		{"glibc_malloc_max_trim_threshold", PGC_USERSET, RESOURCES_MEM,
+			gettext_noop("Sets the maximum value for glibc's M_TRIM_THRESHOLD option."),
+			gettext_noop("This controls how much memory glibc's will not return to the "
+						 "OS once freed. An idle backend can thus consume that much memory "
+						 "even if not in used. The default (-1) value disable static tuning "
+						 "and relies on the default dynamic adjustment"),
+			GUC_UNIT_KB
+		},
+		&glibc_malloc_max_trim_threshold,
+		-1, -1, MAX_KILOBYTES,
+		NULL, &assign_glibc_trim_threshold, NULL
+	},
+
 
 	/*
 	 * We use the hopefully-safely-small value of 100kB as the compiled-in
@@ -12633,6 +12653,7 @@ check_primary_slot_name(char **newval, void **extra, GucSource source)
 	return true;
 }
 
+
 static bool
 check_default_with_oids(bool *newval, void **extra, GucSource source)
 {
@@ -12646,6 +12667,20 @@ check_default_with_oids(bool *newval, void **extra, GucSource source)
 	}
 
 	return true;
+}
+
+static void
+assign_work_mem(int newval, void* extra)
+{
+	work_mem = newval;
+	MallocAdjustSettings();
+}
+
+static void
+assign_glibc_trim_threshold(int newval, void* extra)
+{
+	glibc_malloc_max_trim_threshold = newval;
+	MallocAdjustSettings();
 }
 
 #include "guc-file.c"

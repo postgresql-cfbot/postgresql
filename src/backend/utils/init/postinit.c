@@ -668,6 +668,12 @@ InitPostgres(const char *in_dbname, Oid dboid, const char *username,
 	InitCatalogCache();
 	InitPlanCache();
 
+	/* Adjust malloc options if needed.
+	 * This is done here because the implementation can vary depending on the
+	 * type of backend.
+	 */
+	MallocAdjustSettings();
+
 	/* Initialize portal manager */
 	EnablePortalManager();
 
@@ -1060,6 +1066,9 @@ InitPostgres(const char *in_dbname, Oid dboid, const char *username,
 
 	/* Initialize this backend's session state. */
 	InitializeSession();
+
+	/* Tune malloc options according to what we've read */
+	/* MallocTuneHook(); */
 
 	/* report this backend in the PgBackendStatus array */
 	if (!bootstrap)

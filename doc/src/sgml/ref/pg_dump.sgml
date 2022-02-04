@@ -124,6 +124,11 @@ PostgreSQL documentation
        </para>
 
        <para>
+        This option cannot be used together with the <option>--schema-only</option>,
+        or <option>--functions-only</option> option.
+       </para>
+
+       <para>
         This option is similar to, but for historical reasons not identical
         to, specifying <option>--section=data</option>.
        </para>
@@ -136,13 +141,14 @@ PostgreSQL documentation
       <listitem>
        <para>
         Include large objects in the dump.  This is the default behavior
-        except when <option>--schema</option>, <option>--table</option>, or
-        <option>--schema-only</option> is specified.  The <option>-b</option>
+        except when <option>--schema</option>, <option>--table</option>,
+        <option>--schema-only</option>, or <option>--functions-only</option>
+        is specified.  The <option>-b</option>
         switch is therefore only useful to add large objects to dumps
         where a specific schema or table has been requested.  Note that
         blobs are considered data and therefore will be included when
         <option>--data-only</option> is used, but not
-        when <option>--schema-only</option> is.
+        when <option>--schema-only</option> or <option>--functions-only</option> are.
        </para>
       </listitem>
      </varlistentry>
@@ -572,6 +578,11 @@ PostgreSQL documentation
         be dumped.
        </para>
 
+       <para>
+        This option cannot be used together with the <option>--functions-only</option>
+        option.
+       </para>
+
        <note>
         <para>
          When <option>-t</option> is specified, <application>pg_dump</application>
@@ -780,7 +791,22 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
-      <term><option>--if-exists</option></term>
+      <term><option>--functions-only</option></term>
+      <listitem>
+       <para>
+        Dump only the stored function and stored procedure definitions, not data or
+        definitions of other objects.
+       </para>
+
+       <para>
+        This option is the same than <option>--schema-only</option> but restricted
+        to stored functions and stored procedures.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+     <term><option>--if-exists</option></term>
       <listitem>
        <para>
         Use conditional commands (i.e., add an <literal>IF EXISTS</literal>
@@ -807,6 +833,11 @@ PostgreSQL documentation
         if needed to prevent the shell from expanding the wildcards; see
         <xref linkend="pg-dump-examples"/> below.
         The only exception is that an empty pattern is disallowed.
+       </para>
+
+       <para>
+        This option cannot be used together with the <option>--schema-only</option>,
+        or <option>--functions-only</option> option.
        </para>
 
        <note>

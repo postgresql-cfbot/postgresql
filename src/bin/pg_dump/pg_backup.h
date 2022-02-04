@@ -171,6 +171,7 @@ typedef struct _dumpOptions
 	/* flags for various command-line long options */
 	int			disable_dollar_quoting;
 	int			column_inserts;
+	int			functions_only;
 	int			if_exists;
 	int			no_comments;
 	int			no_security_labels;

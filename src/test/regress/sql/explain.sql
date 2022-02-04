@@ -120,3 +120,11 @@ select explain_filter('explain (verbose) select * from t1 where pg_temp.mysin(f1
 -- Test compute_query_id
 set compute_query_id = on;
 select explain_filter('explain (verbose) select * from int8_tbl i8');
+
+-- Test I/O timing for temp buffers
+set track_io_timing = on;
+set work_mem to '4MB';
+select explain_filter('explain (analyze, buffers) select count(*) from generate_series(1, 100000)');
+select explain_filter('explain (analyze, buffers, format json) select count(*) from generate_series(1, 100000)');
+reset track_io_timing;
+reset work_mem;

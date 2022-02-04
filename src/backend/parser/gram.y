@@ -1079,6 +1079,16 @@ CreateRoleStmt:
 					n->stmt_type = ROLESTMT_ROLE;
 					n->role = $3;
 					n->options = $5;
+					n->replace = false;
+					$$ = (Node *)n;
+				}
+			| CREATE OR REPLACE ROLE RoleId opt_with OptRoleList
+				{
+					CreateRoleStmt *n = makeNode(CreateRoleStmt);
+					n->stmt_type = ROLESTMT_ROLE;
+					n->role = $5;
+					n->options = $7;
+					n->replace = true;
 					$$ = (Node *)n;
 				}
 		;
@@ -1235,6 +1245,16 @@ CreateUserStmt:
 					n->stmt_type = ROLESTMT_USER;
 					n->role = $3;
 					n->options = $5;
+					n->replace = false;
+					$$ = (Node *)n;
+				}
+			| CREATE OR REPLACE USER RoleId opt_with OptRoleList
+				{
+					CreateRoleStmt *n = makeNode(CreateRoleStmt);
+					n->stmt_type = ROLESTMT_USER;
+					n->role = $5;
+					n->options = $7;
+					n->replace = true;
 					$$ = (Node *)n;
 				}
 		;
@@ -1374,6 +1394,16 @@ CreateGroupStmt:
 					n->stmt_type = ROLESTMT_GROUP;
 					n->role = $3;
 					n->options = $5;
+					n->replace = false;
+					$$ = (Node *)n;
+				}
+			| CREATE OR REPLACE GROUP_P RoleId opt_with OptRoleList
+				{
+					CreateRoleStmt *n = makeNode(CreateRoleStmt);
+					n->stmt_type = ROLESTMT_GROUP;
+					n->role = $5;
+					n->options = $7;
+					n->replace = true;
 					$$ = (Node *)n;
 				}
 		;

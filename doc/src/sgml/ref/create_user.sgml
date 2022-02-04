@@ -21,7 +21,7 @@ PostgreSQL documentation
 
  <refsynopsisdiv>
 <synopsis>
-CREATE USER <replaceable class="parameter">name</replaceable> [ [ WITH ] <replaceable class="parameter">option</replaceable> [ ... ] ]
+CREATE [ OR REPLACE ] USER <replaceable class="parameter">name</replaceable> [ [ WITH ] <replaceable class="parameter">option</replaceable> [ ... ] ]
 
 <phrase>where <replaceable class="parameter">option</replaceable> can be:</phrase>
 

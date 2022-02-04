@@ -96,3 +96,31 @@ DROP ROLE regress_test_def_replication;
 DROP ROLE regress_test_replication;
 DROP ROLE regress_test_def_bypassrls;
 DROP ROLE regress_test_bypassrls;
+
+-- CREATE OR REPLACE ROLE
+CREATE ROLE regress_test_exists_role;
+CREATE ROLE regress_test_exists_role;
+CREATE OR REPLACE ROLE regress_test_exists_role;
+DROP ROLE regress_test_exists_role;
+CREATE ROLE regress_test_exists_role WITH NOINHERIT;
+CREATE OR REPLACE ROLE regress_test_exists_role WITH INHERIT;
+SELECT rolname, rolinherit FROM pg_authid WHERE rolname = 'regress_test_exists_role';
+ALTER ROLE regress_test_exists_role WITH INHERIT;
+SELECT rolname, rolinherit FROM pg_authid WHERE rolname = 'regress_test_exists_role';
+DROP ROLE regress_test_exists_role;
+
+CREATE USER regress_test_exists_user;
+CREATE USER regress_test_exists_user;
+CREATE OR REPLACE USER regress_test_exists_user;
+DROP USER regress_test_exists_user;
+CREATE USER regress_test_exists_user WITH NOINHERIT;
+CREATE OR REPLACE USER regress_test_exists_user WITH INHERIT;
+SELECT rolname, rolinherit FROM pg_authid WHERE rolname = 'regress_test_exists_user';
+ALTER USER regress_test_exists_user WITH INHERIT;
+SELECT rolname, rolinherit FROM pg_authid WHERE rolname = 'regress_test_exists_user';
+DROP USER regress_test_exists_user;
+
+CREATE GROUP regress_test_exists_group;
+CREATE GROUP regress_test_exists_group;
+CREATE OR REPLACE GROUP regress_test_exists_group;
+DROP GROUP regress_test_exists_group;

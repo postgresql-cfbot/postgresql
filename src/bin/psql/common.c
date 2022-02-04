@@ -1195,7 +1195,6 @@ bool
 SendQuery(const char *query)
 {
 	bool		timing = pset.timing;
-	PGresult   *results;
 	PGTransactionStatusType transaction_status;
 	double		elapsed_msec = 0;
 	bool		OK = false;
@@ -1247,15 +1246,17 @@ SendQuery(const char *query)
 		!pset.autocommit &&
 		!command_no_begin(query))
 	{
-		results = PQexec(pset.db, "BEGIN");
-		if (PQresultStatus(results) != PGRES_COMMAND_OK)
+		PGresult   *result;
+
+		result = PQexec(pset.db, "BEGIN");
+		if (PQresultStatus(result) != PGRES_COMMAND_OK)
 		{
 			pg_log_info("%s", PQerrorMessage(pset.db));
-			ClearOrSaveResult(results);
+			ClearOrSaveResult(result);
 			ResetCancelConn();
 			goto sendquery_cleanup;
 		}
-		ClearOrSaveResult(results);
+		ClearOrSaveResult(result);
 		transaction_status = PQtransactionStatus(pset.db);
 	}
 
@@ -1264,15 +1265,17 @@ SendQuery(const char *query)
 		(pset.cur_cmd_interactive ||
 		 pset.on_error_rollback == PSQL_ERROR_ROLLBACK_ON))
 	{
-		results = PQexec(pset.db, "SAVEPOINT pg_psql_temporary_savepoint");
-		if (PQresultStatus(results) != PGRES_COMMAND_OK)
+		PGresult   *result;
+
+		result = PQexec(pset.db, "SAVEPOINT pg_psql_temporary_savepoint");
+		if (PQresultStatus(result) != PGRES_COMMAND_OK)
 		{
 			pg_log_info("%s", PQerrorMessage(pset.db));
-			ClearOrSaveResult(results);
+			ClearOrSaveResult(result);
 			ResetCancelConn();
 			goto sendquery_cleanup;
 		}
-		ClearOrSaveResult(results);
+		ClearOrSaveResult(result);
 		on_error_rollback_savepoint = true;
 	}
 
@@ -1281,7 +1284,6 @@ SendQuery(const char *query)
 		/* Describe query's result columns, without executing it */
 		OK = DescribeQuery(query, &elapsed_msec);
 		ResetCancelConn();
-		results = NULL;			/* PQclear(NULL) does nothing */
 	}
 	else if (pset.fetch_count <= 0 || pset.gexec_flag ||
 			 pset.crosstab_flag || !is_select_command(query))
@@ -1289,15 +1291,19 @@ SendQuery(const char *query)
 		/* Default fetch-it-all-and-print mode */
 		instr_time	before,
 					after;
+		PGresult  **results;
+		PGresult  **res;
 
 		if (timing)
 			INSTR_TIME_SET_CURRENT(before);
 
-		results = PQexec(pset.db, query);
+		results = PQexecMulti(pset.db, query);
 
 		/* these operations are included in the timing result: */
 		ResetCancelConn();
-		OK = ProcessResult(&results);
+		OK = false;
+		for (res = results; *res; res++)
+			OK |= ProcessResult(res);
 
 		if (timing)
 		{
@@ -1307,15 +1313,18 @@ SendQuery(const char *query)
 		}
 
 		/* but printing results isn't: */
-		if (OK && results)
-			OK = PrintQueryResults(results);
+		if (OK)
+			for (res = results; *res; res++)
+				OK |= PrintQueryResults(*res);
+
+		for (res = results; *res; res++)
+			ClearOrSaveResult(*res);
 	}
 	else
 	{
 		/* Fetch-in-segments mode */
 		OK = ExecQueryUsingCursor(query, &elapsed_msec);
 		ResetCancelConn();
-		results = NULL;			/* PQclear(NULL) does nothing */
 	}
 
 	if (!OK && pset.echo == PSQL_ECHO_ERRORS)
@@ -1341,6 +1350,7 @@ SendQuery(const char *query)
 
 			case PQTRANS_INTRANS:
 
+#if FIXME
 				/*
 				 * Do nothing if they are messing with savepoints themselves:
 				 * If the user did COMMIT AND CHAIN, RELEASE or ROLLBACK, our
@@ -1354,6 +1364,7 @@ SendQuery(const char *query)
 					 strcmp(PQcmdStatus(results), "ROLLBACK") == 0))
 					svptcmd = NULL;
 				else
+#endif
 					svptcmd = "RELEASE pg_psql_temporary_savepoint";
 				break;
 
@@ -1379,15 +1390,12 @@ SendQuery(const char *query)
 				ClearOrSaveResult(svptres);
 				OK = false;
 
-				PQclear(results);
 				ResetCancelConn();
 				goto sendquery_cleanup;
 			}
 			PQclear(svptres);
 		}
 	}
-
-	ClearOrSaveResult(results);
 
 	/* Possible microtiming output */
 	if (timing)

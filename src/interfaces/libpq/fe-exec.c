@@ -70,6 +70,7 @@ static void parseInput(PGconn *conn);
 static PGresult *getCopyResult(PGconn *conn, ExecStatusType copytype);
 static bool PQexecStart(PGconn *conn);
 static PGresult *PQexecFinish(PGconn *conn);
+static PGresult **PQexecFinishMulti(PGconn *conn);
 static int	PQsendDescribe(PGconn *conn, char desc_type,
 						   const char *desc_target);
 static int	check_field_number(const PGresult *res, int field_num);
@@ -2199,6 +2200,16 @@ PQexec(PGconn *conn, const char *query)
 	return PQexecFinish(conn);
 }
 
+PGresult **
+PQexecMulti(PGconn *conn, const char *query)
+{
+	if (!PQexecStart(conn))
+		return NULL;
+	if (!PQsendQuery(conn, query))
+		return NULL;
+	return PQexecFinishMulti(conn);
+}
+
 /*
  * PQexecParams
  *		Like PQexec, but use extended query protocol so we can pass parameters
@@ -2367,6 +2378,32 @@ PQexecFinish(PGconn *conn)
 	}
 
 	return lastResult;
+}
+
+static PGresult **
+PQexecFinishMulti(PGconn *conn)
+{
+	int			count = 0;
+	PGresult   *result;
+	PGresult  **ret = NULL;
+
+	while ((result = PQgetResult(conn)) != NULL)
+	{
+		count++;
+		ret = realloc(ret, count * sizeof(PGresult*));
+		ret[count - 1] = result;
+
+		if (result->resultStatus == PGRES_COPY_IN ||
+			result->resultStatus == PGRES_COPY_OUT ||
+			result->resultStatus == PGRES_COPY_BOTH ||
+			conn->status == CONNECTION_BAD)
+			break;
+	}
+
+	ret = realloc(ret, (count + 1) * sizeof(PGresult*));
+	ret[count] = NULL;
+
+	return ret;
 }
 
 /*

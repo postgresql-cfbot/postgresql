@@ -418,6 +418,7 @@ extern void PQsetTraceFlags(PGconn *conn, int flags);
 
 /* Simple synchronous query */
 extern PGresult *PQexec(PGconn *conn, const char *query);
+extern PGresult **PQexecMulti(PGconn *conn, const char *query);
 extern PGresult *PQexecParams(PGconn *conn,
 							  const char *command,
 							  int nParams,

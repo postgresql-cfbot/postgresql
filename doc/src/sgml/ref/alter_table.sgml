@@ -873,8 +873,10 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       This form changes the information which is written to the write-ahead log
       to identify rows which are updated or deleted.  This option has no effect
       except when logical replication is in use.
-      In all cases, no old values are logged unless at least one of the columns
-      that would be logged differs between the old and new versions of the row.
+      In all cases except toasted values, no old values are logged unless at
+      least one of the columns that would be logged differs between the old and
+      new versions of the row. We detoast the unchanged old toast values and log
+      it.
      <variablelist>
       <varlistentry>
        <term><literal>DEFAULT</literal></term>

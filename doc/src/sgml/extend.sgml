@@ -1408,6 +1408,43 @@ include $(PGXS)
      any particular database.
     </para>
    </sect2>
+
+   <sect2 id="create-extension-in-replication-setup">
+    <title>Creating An Extension In Replication Setup</title>
+
+    <para>
+     It is important to note few things before creating an extension in a
+     typical postgres replication setup with a primary and one or more standbys.
+     Firstly, <link linkend="sql-createextension"><command>CREATE EXTENSION</command></link>
+     commands are replicated to standbys whereas <link linkend="sql-altersystem">ALTER SYSTEM</link>
+     commands or configuration parameters set in <filename>postgresql.conf</filename>
+     file are not.
+    </para>
+
+    <para>
+     If the extension's shared library doesn't need to be specified in
+     <xref linkend="guc-shared-preload-libraries"/><indexterm><primary>shared_preload_libraries</primary></indexterm>
+     configuration parameter, then create the extension on the primary, there
+     is no need to create it on the standbys as the <link linkend="sql-createextension"><command>CREATE EXTENSION</command></link>
+     command is replicated.
+    </para>
+
+    <para>
+     If the extension's shared library needs to be specified in
+     <xref linkend="guc-shared-preload-libraries"/><indexterm><primary>shared_preload_libraries</primary></indexterm>
+     configuration parameter, then set it either via <link linkend="sql-altersystem">ALTER SYSTEM</link>
+     command or <filename>postgresql.conf</filename> file on both primary and
+     standys, reload the <filename>postgresql.conf</filename> file and restart
+     the servers. Create the extension on the primary, there is no need to
+     create it on the standbys as the <link linkend="sql-createextension"><command>CREATE EXTENSION</command></link>
+     command is replicated.
+    </para>
+
+    <para>
+     Note that the extension functions which perform writes to the database
+     will not work on standbys as they allow read-only transactions.
+    </para>
+   </sect2>
   </sect1>
 
   <sect1 id="extend-pgxs">

@@ -24,9 +24,6 @@ struct RelOptInfo;				/* avoid including pathnodes.h here */
  * descriptor, but may also be used to represent a virtual partitioned
  * table such as a partitioned joinrel within the planner.
  *
- * A list partition datum that is known to be NULL is never put into the
- * datums array. Instead, it is tracked using the null_index field.
- *
  * In the case of range partitioning, ndatums will typically be far less than
  * 2 * nparts, because a partition's upper bound and the next partition's lower
  * bound are the same in most common cases, and we only store one of them (the
@@ -37,6 +34,10 @@ struct RelOptInfo;				/* avoid including pathnodes.h here */
  * with key->partnatts datums each.  For hash partitioned tables, it is an array
  * of datum-tuples with 2 datums, modulus and remainder, corresponding to a
  * given partition.
+ *
+ * isnulls is an array of boolean-tuples with key->partnatts boolean values
+ * each.  Currently only used for list partitioning, it stores whether a
+ * given partition key accepts NULL as value.
  *
  * The datums in datums array are arranged in increasing order as defined by
  * functions qsort_partition_rbound_cmp(), qsort_partition_list_value_cmp() and
@@ -81,6 +82,7 @@ typedef struct PartitionBoundInfoData
 	char		strategy;		/* hash, list or range? */
 	int			ndatums;		/* Length of the datums[] array */
 	Datum	  **datums;
+	bool	  **isnulls;
 	PartitionRangeDatumKind **kind; /* The kind of each range bound datum;
 									 * NULL for hash and list partitioned
 									 * tables */
@@ -89,14 +91,13 @@ typedef struct PartitionBoundInfoData
 									 * only set for LIST partitioned tables */
 	int			nindexes;		/* Length of the indexes[] array */
 	int		   *indexes;		/* Partition indexes */
-	int			null_index;		/* Index of the null-accepting partition; -1
-								 * if there isn't one */
 	int			default_index;	/* Index of the default partition; -1 if there
 								 * isn't one */
 } PartitionBoundInfoData;
 
-#define partition_bound_accepts_nulls(bi) ((bi)->null_index != -1)
 #define partition_bound_has_default(bi) ((bi)->default_index != -1)
+
+extern bool partition_bound_accepts_nulls(PartitionBoundInfo boundinfo, int partnatts);
 
 extern int	get_hash_partition_greatest_modulus(PartitionBoundInfo b);
 extern uint64 compute_partition_hash_value(int partnatts, FmgrInfo *partsupfunc,
@@ -132,10 +133,15 @@ extern int32 partition_rbound_datum_cmp(FmgrInfo *partsupfunc,
 										Oid *partcollation,
 										Datum *rb_datums, PartitionRangeDatumKind *rb_kind,
 										Datum *tuple_datums, int n_tuple_datums);
+extern int32 partition_lbound_datum_cmp(FmgrInfo *partsupfunc,
+										Oid *partcollation,
+										Datum *lb_datums, bool *lb_isnulls,
+										Datum *values, bool *isnulls, int nvalues);
 extern int	partition_list_bsearch(FmgrInfo *partsupfunc,
 								   Oid *partcollation,
 								   PartitionBoundInfo boundinfo,
-								   Datum value, bool *is_equal);
+								   Datum *values, bool *isnulls,
+								   int nvalues, bool *is_equal);
 extern int	partition_range_datum_bsearch(FmgrInfo *partsupfunc,
 										  Oid *partcollation,
 										  PartitionBoundInfo boundinfo,

@@ -352,12 +352,6 @@ CREATE TABLE partitioned (
 	a int
 ) INHERITS (some_table) PARTITION BY LIST (a);
 ERROR:  cannot create partitioned table as inheritance child
--- cannot use more than 1 column as partition key for list partitioned table
-CREATE TABLE partitioned (
-	a1 int,
-	a2 int
-) PARTITION BY LIST (a1, a2);	-- fail
-ERROR:  cannot use "list" partition strategy with more than one column
 -- unsupported constraint type for partitioned tables
 CREATE TABLE partitioned (
 	a int,
@@ -677,6 +671,11 @@ CREATE TABLE fail_default_part PARTITION OF list_parted DEFAULT;
 ERROR:  partition "fail_default_part" conflicts with existing default partition "part_default"
 LINE 1: ...TE TABLE fail_default_part PARTITION OF list_parted DEFAULT;
                                                                ^
+-- trying to specify more number of values than the number of partition keys
+CREATE TABLE fail_part PARTITION OF list_parted FOR VALUES IN ((1, 2));
+ERROR:  Must specify exactly one value per partitioning column
+LINE 1: ...BLE fail_part PARTITION OF list_parted FOR VALUES IN ((1, 2)...
+                                                             ^
 -- specified literal can't be cast to the partition column data type
 CREATE TABLE bools (
 	a bool
@@ -919,6 +918,48 @@ CREATE TABLE fail_part PARTITION OF range_parted3 FOR VALUES FROM (1, minvalue) 
 ERROR:  partition "fail_part" would overlap partition "part10"
 LINE 1: ..._part PARTITION OF range_parted3 FOR VALUES FROM (1, minvalu...
                                                              ^
+-- now check for multi-column list partition key
+CREATE TABLE list_parted3 (
+	a int,
+	b varchar
+) PARTITION BY LIST (a, b);
+CREATE TABLE list_parted3_p1 PARTITION OF list_parted3 FOR VALUES IN ((1, 'A'));
+CREATE TABLE list_parted3_p2 PARTITION OF list_parted3 FOR VALUES IN ((1, 'B'),(1, 'E'), (1, 'E'), (2, 'C'),(2, 'D'));
+CREATE TABLE list_parted3_p3 PARTITION OF list_parted3 FOR VALUES IN ((1, NULL),(NULL, 'F'));
+CREATE TABLE list_parted3_p4 PARTITION OF list_parted3 FOR VALUES IN ((NULL, NULL));
+CREATE TABLE fail_part PARTITION OF list_parted3 FOR VALUES IN ((1, 'E'));
+ERROR:  partition "fail_part" would overlap partition "list_parted3_p2"
+LINE 1: ...ail_part PARTITION OF list_parted3 FOR VALUES IN ((1, 'E'));
+                                                                 ^
+CREATE TABLE fail_part PARTITION OF list_parted3 FOR VALUES IN ((1, NULL));
+ERROR:  partition "fail_part" would overlap partition "list_parted3_p3"
+LINE 1: ...il_part PARTITION OF list_parted3 FOR VALUES IN ((1, NULL));
+                                                                ^
+CREATE TABLE fail_part PARTITION OF list_parted3 FOR VALUES IN ((NULL, 'F'));
+ERROR:  partition "fail_part" would overlap partition "list_parted3_p3"
+LINE 1: ..._part PARTITION OF list_parted3 FOR VALUES IN ((NULL, 'F'));
+                                                                 ^
+CREATE TABLE fail_part PARTITION OF list_parted3 FOR VALUES IN ((NULL, NULL));
+ERROR:  partition "fail_part" would overlap partition "list_parted3_p4"
+LINE 1: ...part PARTITION OF list_parted3 FOR VALUES IN ((NULL, NULL));
+                                                                ^
+CREATE TABLE list_parted3_default PARTITION OF list_parted3 DEFAULT;
+-- trying to specify less number of values than the number of partition keys
+CREATE TABLE fail_part PARTITION OF list_parted3 FOR VALUES IN (10, 'N');
+ERROR:  Invalid list bound specification
+LINE 1: ...LE fail_part PARTITION OF list_parted3 FOR VALUES IN (10, 'N...
+                                                             ^
+CREATE TABLE fail_part PARTITION OF list_parted3 FOR VALUES IN ((10), ('N'));
+ERROR:  Invalid list bound specification
+LINE 1: ...LE fail_part PARTITION OF list_parted3 FOR VALUES IN ((10), ...
+                                                             ^
+-- trying to specify more number of values than the number of partition keys
+CREATE TABLE fail_part PARTITION OF list_parted3 FOR VALUES IN ((10, 'N', 10));
+ERROR:  Must specify exactly one value per partitioning column
+LINE 1: ...LE fail_part PARTITION OF list_parted3 FOR VALUES IN ((10, '...
+                                                             ^
+-- cleanup
+DROP TABLE list_parted3;
 -- check for partition bound overlap and other invalid specifications for the hash partition
 CREATE TABLE hash_parted2 (
 	a varchar

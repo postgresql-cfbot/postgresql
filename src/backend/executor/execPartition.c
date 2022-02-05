@@ -1265,19 +1265,13 @@ get_partition_for_tuple(PartitionDispatch pd, Datum *values, bool *isnull)
 			break;
 
 		case PARTITION_STRATEGY_LIST:
-			if (isnull[0])
-			{
-				if (partition_bound_accepts_nulls(boundinfo))
-					part_index = boundinfo->null_index;
-			}
-			else
 			{
 				bool		equal = false;
 
 				bound_offset = partition_list_bsearch(key->partsupfunc,
 													  key->partcollation,
-													  boundinfo,
-													  values[0], &equal);
+													  boundinfo, values, isnull,
+													  key->partnatts, &equal);
 				if (bound_offset >= 0 && equal)
 					part_index = boundinfo->indexes[bound_offset];
 			}

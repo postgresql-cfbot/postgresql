@@ -536,6 +536,48 @@ select tableoid::regclass::text, * from mcrparted order by 1;
 -- cleanup
 drop table mcrparted;
 
+-- Test multi-column list partitioning with 3 partition keys
+create table mclparted (a int, b text, c int) partition by list (a, b, c);
+create table mclparted_p1 partition of mclparted for values in ((1, 'a', 1));
+create table mclparted_p2 partition of mclparted for values in ((1, 'a', 2), (1, 'b', 1), (2, 'a', 1));
+create table mclparted_p3 partition of mclparted for values in ((3, 'c', 3), (4, 'd', 4), (5, 'e', 5), (6, null, 6));
+create table mclparted_p4 partition of mclparted for values in ((null, 'a', 1), (1, null, 1), (1, 'a', null));
+create table mclparted_p5 partition of mclparted for values in ((null, null, null));
+
+-- routed to mclparted_p1
+insert into mclparted values (1, 'a', 1);
+
+-- routed to mclparted_p2
+insert into mclparted values (1, 'a', 2);
+insert into mclparted values (1, 'b', 1);
+insert into mclparted values (2, 'a', 1);
+
+-- routed to mclparted_p3
+insert into mclparted values (3, 'c', 3);
+insert into mclparted values (4, 'd', 4);
+insert into mclparted values (5, 'e', 5);
+insert into mclparted values (6, null, 6);
+
+-- routed to mclparted_p4
+insert into mclparted values (null, 'a', 1);
+insert into mclparted values (1, null, 1);
+insert into mclparted values (1, 'a', null);
+
+-- routed to mclparted_p5
+insert into mclparted values (null, null, null);
+
+-- error cases
+insert into mclparted values (10, 'a', 1);
+insert into mclparted values (1, 'z', 1);
+insert into mclparted values (1, 'a', 10);
+insert into mclparted values (1, null, null);
+
+-- check rows
+select tableoid::regclass::text, * from mclparted order by 1, 2, 3, 4;
+
+-- cleanup
+drop table mclparted;
+
 -- check that a BR constraint can't make partition contain violating rows
 create table brtrigpartcon (a int, b text) partition by list (a);
 create table brtrigpartcon1 partition of brtrigpartcon for values in (1);
@@ -611,6 +653,28 @@ insert into mcrparted values ('aaa', 0), ('b', 0), ('bz', 10), ('c', -10),
     ('commons', 0), ('d', -10), ('e', 0);
 select tableoid::regclass, * from mcrparted order by a, b;
 drop table mcrparted;
+
+-- check multi-column list partitioning with partition key constraint
+create table mclparted (a text, b int) partition by list(a, b);
+create table mclparted_p1 partition of mclparted for values in (('a', 1));
+create table mclparted_p2 partition of mclparted for values in (('a', 2), ('b', 1), ('c', 3), ('d', 3), ('e', 3));
+create table mclparted_p3 partition of mclparted for values in (('a', 3), ('a', 4), ('a', null), (null, 1));
+create table mclparted_p4 partition of mclparted for values in (('b', null), (null, 2));
+create table mclparted_p5 partition of mclparted for values in ((null, null));
+create table mclparted_p6 partition of mclparted DEFAULT;
+
+\d+ mclparted
+\d+ mclparted_p1
+\d+ mclparted_p2
+\d+ mclparted_p3
+\d+ mclparted_p4
+\d+ mclparted_p5
+
+insert into mclparted values ('a', 1), ('a', 2), ('b', 1), ('c', 3), ('d', 3),
+	('e', 3), ('a', 3), ('a', 4), ('a', null), (null, 1), ('b', null),
+	(null, 2), (null, null), ('z', 10);
+select tableoid::regclass, * from mclparted order by a, b;
+drop table mclparted;
 
 -- check that wholerow vars in the RETURNING list work with partitioned tables
 create table returningwrtest (a int) partition by list (a);

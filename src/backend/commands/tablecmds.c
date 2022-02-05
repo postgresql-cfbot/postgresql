@@ -17121,13 +17121,6 @@ transformPartitionSpec(Relation rel, PartitionSpec *partspec, char *strategy)
 				 errmsg("unrecognized partitioning strategy \"%s\"",
 						partspec->strategy)));
 
-	/* Check valid number of columns for strategy */
-	if (*strategy == PARTITION_STRATEGY_LIST &&
-		list_length(partspec->partParams) != 1)
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
-				 errmsg("cannot use \"list\" partition strategy with more than one column")));
-
 	/*
 	 * Create a dummy ParseState and insert the target relation as its sole
 	 * rangetable entry.  We need a ParseState for transformExpr.

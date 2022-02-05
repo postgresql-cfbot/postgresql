@@ -168,6 +168,438 @@ explain (costs off) select * from coll_pruning where a collate "POSIX" = 'a' col
          Filter: ((a)::text = 'a'::text COLLATE "POSIX")
 (7 rows)
 
+-- multi-column keys for list partitioning
+create table mc3lp (a int, b text, c int) partition by list (a, b, c);
+create table mc3lp_default partition of mc3lp default;
+create table mc3lp1 partition of mc3lp for values in ((1, 'a', 1), (1, 'b', 1), (5, 'e', 1));
+create table mc3lp2 partition of mc3lp for values in ((4, 'c', 4));
+create table mc3lp3 partition of mc3lp for values in ((5, 'd', 2), (5, 'e', 3), (5, 'f', 4), (8, null, 6));
+create table mc3lp4 partition of mc3lp for values in ((5, 'e', 4), (5, 'e', 5), (5, 'e', 6), (5, 'e', 7));
+create table mc3lp5 partition of mc3lp for values in ((null, 'a', 1), (1, null, 1), (5, 'g', null), (5, 'e', null));
+create table mc3lp6 partition of mc3lp for values in ((null, null, null));
+explain (costs off) select * from mc3lp where a = 4;
+        QUERY PLAN        
+--------------------------
+ Seq Scan on mc3lp2 mc3lp
+   Filter: (a = 4)
+(2 rows)
+
+explain (costs off) select * from mc3lp where a < 4;
+               QUERY PLAN                
+-----------------------------------------
+ Append
+   ->  Seq Scan on mc3lp1 mc3lp_1
+         Filter: (a < 4)
+   ->  Seq Scan on mc3lp5 mc3lp_2
+         Filter: (a < 4)
+   ->  Seq Scan on mc3lp_default mc3lp_3
+         Filter: (a < 4)
+(7 rows)
+
+explain (costs off) select * from mc3lp where a <= 4;
+               QUERY PLAN                
+-----------------------------------------
+ Append
+   ->  Seq Scan on mc3lp1 mc3lp_1
+         Filter: (a <= 4)
+   ->  Seq Scan on mc3lp5 mc3lp_2
+         Filter: (a <= 4)
+   ->  Seq Scan on mc3lp2 mc3lp_3
+         Filter: (a <= 4)
+   ->  Seq Scan on mc3lp_default mc3lp_4
+         Filter: (a <= 4)
+(9 rows)
+
+explain (costs off) select * from mc3lp where a > 4;
+               QUERY PLAN                
+-----------------------------------------
+ Append
+   ->  Seq Scan on mc3lp1 mc3lp_1
+         Filter: (a > 4)
+   ->  Seq Scan on mc3lp5 mc3lp_2
+         Filter: (a > 4)
+   ->  Seq Scan on mc3lp3 mc3lp_3
+         Filter: (a > 4)
+   ->  Seq Scan on mc3lp4 mc3lp_4
+         Filter: (a > 4)
+   ->  Seq Scan on mc3lp_default mc3lp_5
+         Filter: (a > 4)
+(11 rows)
+
+explain (costs off) select * from mc3lp where a >= 4;
+               QUERY PLAN                
+-----------------------------------------
+ Append
+   ->  Seq Scan on mc3lp1 mc3lp_1
+         Filter: (a >= 4)
+   ->  Seq Scan on mc3lp5 mc3lp_2
+         Filter: (a >= 4)
+   ->  Seq Scan on mc3lp2 mc3lp_3
+         Filter: (a >= 4)
+   ->  Seq Scan on mc3lp3 mc3lp_4
+         Filter: (a >= 4)
+   ->  Seq Scan on mc3lp4 mc3lp_5
+         Filter: (a >= 4)
+   ->  Seq Scan on mc3lp_default mc3lp_6
+         Filter: (a >= 4)
+(13 rows)
+
+explain (costs off) select * from mc3lp where a is null;
+            QUERY PLAN            
+----------------------------------
+ Append
+   ->  Seq Scan on mc3lp5 mc3lp_1
+         Filter: (a IS NULL)
+   ->  Seq Scan on mc3lp6 mc3lp_2
+         Filter: (a IS NULL)
+(5 rows)
+
+explain (costs off) select * from mc3lp where a is not null;
+               QUERY PLAN                
+-----------------------------------------
+ Append
+   ->  Seq Scan on mc3lp1 mc3lp_1
+         Filter: (a IS NOT NULL)
+   ->  Seq Scan on mc3lp5 mc3lp_2
+         Filter: (a IS NOT NULL)
+   ->  Seq Scan on mc3lp2 mc3lp_3
+         Filter: (a IS NOT NULL)
+   ->  Seq Scan on mc3lp3 mc3lp_4
+         Filter: (a IS NOT NULL)
+   ->  Seq Scan on mc3lp4 mc3lp_5
+         Filter: (a IS NOT NULL)
+   ->  Seq Scan on mc3lp_default mc3lp_6
+         Filter: (a IS NOT NULL)
+(13 rows)
+
+explain (costs off) select * from mc3lp where b = 'c';
+               QUERY PLAN                
+-----------------------------------------
+ Append
+   ->  Seq Scan on mc3lp1 mc3lp_1
+         Filter: (b = 'c'::text)
+   ->  Seq Scan on mc3lp5 mc3lp_2
+         Filter: (b = 'c'::text)
+   ->  Seq Scan on mc3lp2 mc3lp_3
+         Filter: (b = 'c'::text)
+   ->  Seq Scan on mc3lp3 mc3lp_4
+         Filter: (b = 'c'::text)
+   ->  Seq Scan on mc3lp4 mc3lp_5
+         Filter: (b = 'c'::text)
+   ->  Seq Scan on mc3lp6 mc3lp_6
+         Filter: (b = 'c'::text)
+   ->  Seq Scan on mc3lp_default mc3lp_7
+         Filter: (b = 'c'::text)
+(15 rows)
+
+explain (costs off) select * from mc3lp where b < 'c';
+               QUERY PLAN                
+-----------------------------------------
+ Append
+   ->  Seq Scan on mc3lp1 mc3lp_1
+         Filter: (b < 'c'::text)
+   ->  Seq Scan on mc3lp5 mc3lp_2
+         Filter: (b < 'c'::text)
+   ->  Seq Scan on mc3lp2 mc3lp_3
+         Filter: (b < 'c'::text)
+   ->  Seq Scan on mc3lp3 mc3lp_4
+         Filter: (b < 'c'::text)
+   ->  Seq Scan on mc3lp4 mc3lp_5
+         Filter: (b < 'c'::text)
+   ->  Seq Scan on mc3lp6 mc3lp_6
+         Filter: (b < 'c'::text)
+   ->  Seq Scan on mc3lp_default mc3lp_7
+         Filter: (b < 'c'::text)
+(15 rows)
+
+explain (costs off) select * from mc3lp where b <= 'c';
+               QUERY PLAN                
+-----------------------------------------
+ Append
+   ->  Seq Scan on mc3lp1 mc3lp_1
+         Filter: (b <= 'c'::text)
+   ->  Seq Scan on mc3lp5 mc3lp_2
+         Filter: (b <= 'c'::text)
+   ->  Seq Scan on mc3lp2 mc3lp_3
+         Filter: (b <= 'c'::text)
+   ->  Seq Scan on mc3lp3 mc3lp_4
+         Filter: (b <= 'c'::text)
+   ->  Seq Scan on mc3lp4 mc3lp_5
+         Filter: (b <= 'c'::text)
+   ->  Seq Scan on mc3lp6 mc3lp_6
+         Filter: (b <= 'c'::text)
+   ->  Seq Scan on mc3lp_default mc3lp_7
+         Filter: (b <= 'c'::text)
+(15 rows)
+
+explain (costs off) select * from mc3lp where b > 'c';
+               QUERY PLAN                
+-----------------------------------------
+ Append
+   ->  Seq Scan on mc3lp1 mc3lp_1
+         Filter: (b > 'c'::text)
+   ->  Seq Scan on mc3lp5 mc3lp_2
+         Filter: (b > 'c'::text)
+   ->  Seq Scan on mc3lp2 mc3lp_3
+         Filter: (b > 'c'::text)
+   ->  Seq Scan on mc3lp3 mc3lp_4
+         Filter: (b > 'c'::text)
+   ->  Seq Scan on mc3lp4 mc3lp_5
+         Filter: (b > 'c'::text)
+   ->  Seq Scan on mc3lp6 mc3lp_6
+         Filter: (b > 'c'::text)
+   ->  Seq Scan on mc3lp_default mc3lp_7
+         Filter: (b > 'c'::text)
+(15 rows)
+
+explain (costs off) select * from mc3lp where b >= 'c';
+               QUERY PLAN                
+-----------------------------------------
+ Append
+   ->  Seq Scan on mc3lp1 mc3lp_1
+         Filter: (b >= 'c'::text)
+   ->  Seq Scan on mc3lp5 mc3lp_2
+         Filter: (b >= 'c'::text)
+   ->  Seq Scan on mc3lp2 mc3lp_3
+         Filter: (b >= 'c'::text)
+   ->  Seq Scan on mc3lp3 mc3lp_4
+         Filter: (b >= 'c'::text)
+   ->  Seq Scan on mc3lp4 mc3lp_5
+         Filter: (b >= 'c'::text)
+   ->  Seq Scan on mc3lp6 mc3lp_6
+         Filter: (b >= 'c'::text)
+   ->  Seq Scan on mc3lp_default mc3lp_7
+         Filter: (b >= 'c'::text)
+(15 rows)
+
+explain (costs off) select * from mc3lp where b is null;
+               QUERY PLAN                
+-----------------------------------------
+ Append
+   ->  Seq Scan on mc3lp1 mc3lp_1
+         Filter: (b IS NULL)
+   ->  Seq Scan on mc3lp5 mc3lp_2
+         Filter: (b IS NULL)
+   ->  Seq Scan on mc3lp2 mc3lp_3
+         Filter: (b IS NULL)
+   ->  Seq Scan on mc3lp3 mc3lp_4
+         Filter: (b IS NULL)
+   ->  Seq Scan on mc3lp4 mc3lp_5
+         Filter: (b IS NULL)
+   ->  Seq Scan on mc3lp6 mc3lp_6
+         Filter: (b IS NULL)
+   ->  Seq Scan on mc3lp_default mc3lp_7
+         Filter: (b IS NULL)
+(15 rows)
+
+explain (costs off) select * from mc3lp where b is not null;
+               QUERY PLAN                
+-----------------------------------------
+ Append
+   ->  Seq Scan on mc3lp1 mc3lp_1
+         Filter: (b IS NOT NULL)
+   ->  Seq Scan on mc3lp5 mc3lp_2
+         Filter: (b IS NOT NULL)
+   ->  Seq Scan on mc3lp2 mc3lp_3
+         Filter: (b IS NOT NULL)
+   ->  Seq Scan on mc3lp3 mc3lp_4
+         Filter: (b IS NOT NULL)
+   ->  Seq Scan on mc3lp4 mc3lp_5
+         Filter: (b IS NOT NULL)
+   ->  Seq Scan on mc3lp6 mc3lp_6
+         Filter: (b IS NOT NULL)
+   ->  Seq Scan on mc3lp_default mc3lp_7
+         Filter: (b IS NOT NULL)
+(15 rows)
+
+explain (costs off) select * from mc3lp where a = 5 and b = 'e';
+                  QUERY PLAN                   
+-----------------------------------------------
+ Append
+   ->  Seq Scan on mc3lp1 mc3lp_1
+         Filter: ((a = 5) AND (b = 'e'::text))
+   ->  Seq Scan on mc3lp5 mc3lp_2
+         Filter: ((a = 5) AND (b = 'e'::text))
+   ->  Seq Scan on mc3lp3 mc3lp_3
+         Filter: ((a = 5) AND (b = 'e'::text))
+   ->  Seq Scan on mc3lp4 mc3lp_4
+         Filter: ((a = 5) AND (b = 'e'::text))
+(9 rows)
+
+explain (costs off) select * from mc3lp where a = 5 and b < 'e';
+               QUERY PLAN                
+-----------------------------------------
+ Seq Scan on mc3lp3 mc3lp
+   Filter: ((b < 'e'::text) AND (a = 5))
+(2 rows)
+
+explain (costs off) select * from mc3lp where a = 5 and b > 'e';
+                  QUERY PLAN                   
+-----------------------------------------------
+ Append
+   ->  Seq Scan on mc3lp5 mc3lp_1
+         Filter: ((b > 'e'::text) AND (a = 5))
+   ->  Seq Scan on mc3lp3 mc3lp_2
+         Filter: ((b > 'e'::text) AND (a = 5))
+(5 rows)
+
+explain (costs off) select * from mc3lp where a is null and b is null;
+               QUERY PLAN                
+-----------------------------------------
+ Seq Scan on mc3lp6 mc3lp
+   Filter: ((a IS NULL) AND (b IS NULL))
+(2 rows)
+
+explain (costs off) select * from mc3lp where a is not null and b is not null;
+                      QUERY PLAN                       
+-------------------------------------------------------
+ Append
+   ->  Seq Scan on mc3lp1 mc3lp_1
+         Filter: ((a IS NOT NULL) AND (b IS NOT NULL))
+   ->  Seq Scan on mc3lp5 mc3lp_2
+         Filter: ((a IS NOT NULL) AND (b IS NOT NULL))
+   ->  Seq Scan on mc3lp2 mc3lp_3
+         Filter: ((a IS NOT NULL) AND (b IS NOT NULL))
+   ->  Seq Scan on mc3lp3 mc3lp_4
+         Filter: ((a IS NOT NULL) AND (b IS NOT NULL))
+   ->  Seq Scan on mc3lp4 mc3lp_5
+         Filter: ((a IS NOT NULL) AND (b IS NOT NULL))
+   ->  Seq Scan on mc3lp_default mc3lp_6
+         Filter: ((a IS NOT NULL) AND (b IS NOT NULL))
+(13 rows)
+
+explain (costs off) select * from mc3lp where a = 5 and c = 2;
+              QUERY PLAN               
+---------------------------------------
+ Append
+   ->  Seq Scan on mc3lp1 mc3lp_1
+         Filter: ((a = 5) AND (c = 2))
+   ->  Seq Scan on mc3lp5 mc3lp_2
+         Filter: ((a = 5) AND (c = 2))
+   ->  Seq Scan on mc3lp3 mc3lp_3
+         Filter: ((a = 5) AND (c = 2))
+   ->  Seq Scan on mc3lp4 mc3lp_4
+         Filter: ((a = 5) AND (c = 2))
+(9 rows)
+
+explain (costs off) select * from mc3lp where a = 5 and c < 2;
+              QUERY PLAN               
+---------------------------------------
+ Append
+   ->  Seq Scan on mc3lp1 mc3lp_1
+         Filter: ((c < 2) AND (a = 5))
+   ->  Seq Scan on mc3lp5 mc3lp_2
+         Filter: ((c < 2) AND (a = 5))
+   ->  Seq Scan on mc3lp3 mc3lp_3
+         Filter: ((c < 2) AND (a = 5))
+   ->  Seq Scan on mc3lp4 mc3lp_4
+         Filter: ((c < 2) AND (a = 5))
+(9 rows)
+
+explain (costs off) select * from mc3lp where a = 5 and c > 2;
+              QUERY PLAN               
+---------------------------------------
+ Append
+   ->  Seq Scan on mc3lp1 mc3lp_1
+         Filter: ((c > 2) AND (a = 5))
+   ->  Seq Scan on mc3lp5 mc3lp_2
+         Filter: ((c > 2) AND (a = 5))
+   ->  Seq Scan on mc3lp3 mc3lp_3
+         Filter: ((c > 2) AND (a = 5))
+   ->  Seq Scan on mc3lp4 mc3lp_4
+         Filter: ((c > 2) AND (a = 5))
+(9 rows)
+
+explain (costs off) select * from mc3lp where a is null and c is null;
+                  QUERY PLAN                   
+-----------------------------------------------
+ Append
+   ->  Seq Scan on mc3lp5 mc3lp_1
+         Filter: ((a IS NULL) AND (c IS NULL))
+   ->  Seq Scan on mc3lp6 mc3lp_2
+         Filter: ((a IS NULL) AND (c IS NULL))
+(5 rows)
+
+explain (costs off) select * from mc3lp where a is not null and c is not null;
+                      QUERY PLAN                       
+-------------------------------------------------------
+ Append
+   ->  Seq Scan on mc3lp1 mc3lp_1
+         Filter: ((a IS NOT NULL) AND (c IS NOT NULL))
+   ->  Seq Scan on mc3lp5 mc3lp_2
+         Filter: ((a IS NOT NULL) AND (c IS NOT NULL))
+   ->  Seq Scan on mc3lp2 mc3lp_3
+         Filter: ((a IS NOT NULL) AND (c IS NOT NULL))
+   ->  Seq Scan on mc3lp3 mc3lp_4
+         Filter: ((a IS NOT NULL) AND (c IS NOT NULL))
+   ->  Seq Scan on mc3lp4 mc3lp_5
+         Filter: ((a IS NOT NULL) AND (c IS NOT NULL))
+   ->  Seq Scan on mc3lp_default mc3lp_6
+         Filter: ((a IS NOT NULL) AND (c IS NOT NULL))
+(13 rows)
+
+explain (costs off) select * from mc3lp where a = 5 and b = 'e' and c = 4;
+                     QUERY PLAN                      
+-----------------------------------------------------
+ Seq Scan on mc3lp4 mc3lp
+   Filter: ((a = 5) AND (b = 'e'::text) AND (c = 4))
+(2 rows)
+
+explain (costs off) select * from mc3lp where a = 5 and b = 'e' and c < 4;
+                        QUERY PLAN                         
+-----------------------------------------------------------
+ Append
+   ->  Seq Scan on mc3lp1 mc3lp_1
+         Filter: ((c < 4) AND (a = 5) AND (b = 'e'::text))
+   ->  Seq Scan on mc3lp3 mc3lp_2
+         Filter: ((c < 4) AND (a = 5) AND (b = 'e'::text))
+(5 rows)
+
+explain (costs off) select * from mc3lp where a = 5 and b = 'e' and c <= 4;
+                         QUERY PLAN                         
+------------------------------------------------------------
+ Append
+   ->  Seq Scan on mc3lp1 mc3lp_1
+         Filter: ((c <= 4) AND (a = 5) AND (b = 'e'::text))
+   ->  Seq Scan on mc3lp3 mc3lp_2
+         Filter: ((c <= 4) AND (a = 5) AND (b = 'e'::text))
+   ->  Seq Scan on mc3lp4 mc3lp_3
+         Filter: ((c <= 4) AND (a = 5) AND (b = 'e'::text))
+(7 rows)
+
+explain (costs off) select * from mc3lp where a = 5 and b = 'e' and c > 4;
+                     QUERY PLAN                      
+-----------------------------------------------------
+ Seq Scan on mc3lp4 mc3lp
+   Filter: ((c > 4) AND (a = 5) AND (b = 'e'::text))
+(2 rows)
+
+explain (costs off) select * from mc3lp where a = 5 and b = 'e' and c >= 4;
+                      QUERY PLAN                      
+------------------------------------------------------
+ Seq Scan on mc3lp4 mc3lp
+   Filter: ((c >= 4) AND (a = 5) AND (b = 'e'::text))
+(2 rows)
+
+explain (costs off) select * from mc3lp where a = 5 and b = 'e' and c is null;
+                       QUERY PLAN                        
+---------------------------------------------------------
+ Seq Scan on mc3lp5 mc3lp
+   Filter: ((c IS NULL) AND (a = 5) AND (b = 'e'::text))
+(2 rows)
+
+explain (costs off) select * from mc3lp where a = 5 and b = 'e' and c is not null;
+                            QUERY PLAN                             
+-------------------------------------------------------------------
+ Append
+   ->  Seq Scan on mc3lp1 mc3lp_1
+         Filter: ((c IS NOT NULL) AND (a = 5) AND (b = 'e'::text))
+   ->  Seq Scan on mc3lp3 mc3lp_2
+         Filter: ((c IS NOT NULL) AND (a = 5) AND (b = 'e'::text))
+   ->  Seq Scan on mc3lp4 mc3lp_3
+         Filter: ((c IS NOT NULL) AND (a = 5) AND (b = 'e'::text))
+(7 rows)
+
 create table rlp (a int, b varchar) partition by range (a);
 create table rlp_default partition of rlp default partition by list (a);
 create table rlp_default_default partition of rlp_default default;

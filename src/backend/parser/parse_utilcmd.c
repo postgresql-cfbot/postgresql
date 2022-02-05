@@ -142,6 +142,9 @@ static void validateInfiniteBounds(ParseState *pstate, List *blist);
 static Const *transformPartitionBoundValue(ParseState *pstate, Node *con,
 										   const char *colName, Oid colType, int32 colTypmod,
 										   Oid partCollation);
+static List *transformPartitionListBounds(ParseState *pstate,
+										  PartitionBoundSpec *spec,
+										  Relation parent);
 
 
 /*
@@ -3987,6 +3990,26 @@ transformPartitionCmd(CreateStmtContext *cxt, PartitionCmd *cmd)
 }
 
 /*
+ * isListBoundDuplicated
+ *
+ * Returns TRUE if the list bound element 'new_bound' is already present
+ * in the target list 'list_bounds', FALSE otherwise.
+ */
+static bool
+isListBoundDuplicated(List *list_bounds, List *new_bound)
+{
+	ListCell   *cell = NULL;
+
+	foreach(cell, list_bounds)
+	{
+		if (equal(lfirst(cell), new_bound))
+			return true;
+	}
+
+	return false;
+}
+
+/*
  * transformPartitionBound
  *
  * Transform a partition bound specification
@@ -3999,7 +4022,6 @@ transformPartitionBound(ParseState *pstate, Relation parent,
 	PartitionKey key = RelationGetPartitionKey(parent);
 	char		strategy = get_partition_strategy(key);
 	int			partnatts = get_partition_natts(key);
-	List	   *partexprs = get_partition_exprs(key);
 
 	/* Avoid scribbling on input */
 	result_spec = copyObject(spec);
@@ -4049,62 +4071,14 @@ transformPartitionBound(ParseState *pstate, Relation parent,
 	}
 	else if (strategy == PARTITION_STRATEGY_LIST)
 	{
-		ListCell   *cell;
-		char	   *colname;
-		Oid			coltype;
-		int32		coltypmod;
-		Oid			partcollation;
-
 		if (spec->strategy != PARTITION_STRATEGY_LIST)
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
 					 errmsg("invalid bound specification for a list partition"),
 					 parser_errposition(pstate, exprLocation((Node *) spec))));
 
-		/* Get the only column's name in case we need to output an error */
-		if (key->partattrs[0] != 0)
-			colname = get_attname(RelationGetRelid(parent),
-								  key->partattrs[0], false);
-		else
-			colname = deparse_expression((Node *) linitial(partexprs),
-										 deparse_context_for(RelationGetRelationName(parent),
-															 RelationGetRelid(parent)),
-										 false, false);
-		/* Need its type data too */
-		coltype = get_partition_col_typid(key, 0);
-		coltypmod = get_partition_col_typmod(key, 0);
-		partcollation = get_partition_col_collation(key, 0);
-
-		result_spec->listdatums = NIL;
-		foreach(cell, spec->listdatums)
-		{
-			Node	   *expr = lfirst(cell);
-			Const	   *value;
-			ListCell   *cell2;
-			bool		duplicate;
-
-			value = transformPartitionBoundValue(pstate, expr,
-												 colname, coltype, coltypmod,
-												 partcollation);
-
-			/* Don't add to the result if the value is a duplicate */
-			duplicate = false;
-			foreach(cell2, result_spec->listdatums)
-			{
-				Const	   *value2 = lfirst_node(Const, cell2);
-
-				if (equal(value, value2))
-				{
-					duplicate = true;
-					break;
-				}
-			}
-			if (duplicate)
-				continue;
-
-			result_spec->listdatums = lappend(result_spec->listdatums,
-											  value);
-		}
+		result_spec->listdatums =
+			transformPartitionListBounds(pstate, spec, parent);
 	}
 	else if (strategy == PARTITION_STRATEGY_RANGE)
 	{
@@ -4138,6 +4112,98 @@ transformPartitionBound(ParseState *pstate, Relation parent,
 		elog(ERROR, "unexpected partition strategy: %d", (int) strategy);
 
 	return result_spec;
+}
+
+/*
+ * transformPartitionListBounds
+ *
+ * Converts the expressions of list partition bounds from the raw grammar
+ * representation. The result is a List of Lists of Const nodes to account for
+ * the partition key possibly containing more than one column.
+ */
+static List *
+transformPartitionListBounds(ParseState *pstate, PartitionBoundSpec *spec,
+							 Relation parent)
+{
+	int			i;
+	int			j = 0;
+	ListCell   *cell;
+	List	   *result = NIL;
+	PartitionKey key = RelationGetPartitionKey(parent);
+	List	   *partexprs = get_partition_exprs(key);
+	int			partnatts = get_partition_natts(key);
+	char	  **colname = (char **) palloc(partnatts * sizeof(char *));
+
+	for (i = 0; i < partnatts; i++)
+	{
+		if (key->partattrs[i] != 0)
+			colname[i] = get_attname(RelationGetRelid(parent),
+									 key->partattrs[i], false);
+		else
+		{
+			colname[i] =
+				deparse_expression((Node *) list_nth(partexprs, j),
+								   deparse_context_for(RelationGetRelationName(parent),
+													   RelationGetRelid(parent)),
+								   false, false);
+			++j;
+		}
+	}
+
+	foreach(cell, spec->listdatums)
+	{
+		Node	   *expr = lfirst(cell);
+		List	   *values = NIL;
+
+		if (IsA(expr, RowExpr) &&
+			partnatts != list_length(((RowExpr *) expr)->args))
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+					 errmsg("Must specify exactly one value per partitioning column"),
+					 parser_errposition(pstate, exprLocation((Node *) spec))));
+
+		if (partnatts == 1)
+		{
+			Const	   *val =
+			transformPartitionBoundValue(pstate, expr, colname[0],
+										 get_partition_col_typid(key, 0),
+										 get_partition_col_typmod(key, 0),
+										 get_partition_col_collation(key, 0));
+
+			values = lappend(values, val);
+		}
+		else
+		{
+			ListCell   *cell2;
+			RowExpr    *rowexpr = (RowExpr *) expr;
+
+			if (!IsA(rowexpr, RowExpr))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+						 errmsg("Invalid list bound specification"),
+						 parser_errposition(pstate, exprLocation((Node *) spec))));
+
+			foreach(cell2, rowexpr->args)
+			{
+				int			idx = foreach_current_index(cell2);
+				Node	   *expr = lfirst(cell2);
+				Const	   *val =
+				transformPartitionBoundValue(pstate, expr, colname[idx],
+											 get_partition_col_typid(key, idx),
+											 get_partition_col_typmod(key, idx),
+											 get_partition_col_collation(key, idx));
+
+				values = lappend(values, val);
+			}
+		}
+
+		/* Don't add to the result if the value is a duplicate */
+		if (!isListBoundDuplicated(result, values))
+			result = lappend(result, values);
+	}
+
+	pfree(colname);
+	return result;
 }
 
 /*

@@ -34,6 +34,48 @@ explain (costs off) select * from coll_pruning where a collate "C" = 'a' collate
 -- collation doesn't match the partitioning collation, no pruning occurs
 explain (costs off) select * from coll_pruning where a collate "POSIX" = 'a' collate "POSIX";
 
+-- multi-column keys for list partitioning
+create table mc3lp (a int, b text, c int) partition by list (a, b, c);
+create table mc3lp_default partition of mc3lp default;
+create table mc3lp1 partition of mc3lp for values in ((1, 'a', 1), (1, 'b', 1), (5, 'e', 1));
+create table mc3lp2 partition of mc3lp for values in ((4, 'c', 4));
+create table mc3lp3 partition of mc3lp for values in ((5, 'd', 2), (5, 'e', 3), (5, 'f', 4), (8, null, 6));
+create table mc3lp4 partition of mc3lp for values in ((5, 'e', 4), (5, 'e', 5), (5, 'e', 6), (5, 'e', 7));
+create table mc3lp5 partition of mc3lp for values in ((null, 'a', 1), (1, null, 1), (5, 'g', null), (5, 'e', null));
+create table mc3lp6 partition of mc3lp for values in ((null, null, null));
+
+explain (costs off) select * from mc3lp where a = 4;
+explain (costs off) select * from mc3lp where a < 4;
+explain (costs off) select * from mc3lp where a <= 4;
+explain (costs off) select * from mc3lp where a > 4;
+explain (costs off) select * from mc3lp where a >= 4;
+explain (costs off) select * from mc3lp where a is null;
+explain (costs off) select * from mc3lp where a is not null;
+explain (costs off) select * from mc3lp where b = 'c';
+explain (costs off) select * from mc3lp where b < 'c';
+explain (costs off) select * from mc3lp where b <= 'c';
+explain (costs off) select * from mc3lp where b > 'c';
+explain (costs off) select * from mc3lp where b >= 'c';
+explain (costs off) select * from mc3lp where b is null;
+explain (costs off) select * from mc3lp where b is not null;
+explain (costs off) select * from mc3lp where a = 5 and b = 'e';
+explain (costs off) select * from mc3lp where a = 5 and b < 'e';
+explain (costs off) select * from mc3lp where a = 5 and b > 'e';
+explain (costs off) select * from mc3lp where a is null and b is null;
+explain (costs off) select * from mc3lp where a is not null and b is not null;
+explain (costs off) select * from mc3lp where a = 5 and c = 2;
+explain (costs off) select * from mc3lp where a = 5 and c < 2;
+explain (costs off) select * from mc3lp where a = 5 and c > 2;
+explain (costs off) select * from mc3lp where a is null and c is null;
+explain (costs off) select * from mc3lp where a is not null and c is not null;
+explain (costs off) select * from mc3lp where a = 5 and b = 'e' and c = 4;
+explain (costs off) select * from mc3lp where a = 5 and b = 'e' and c < 4;
+explain (costs off) select * from mc3lp where a = 5 and b = 'e' and c <= 4;
+explain (costs off) select * from mc3lp where a = 5 and b = 'e' and c > 4;
+explain (costs off) select * from mc3lp where a = 5 and b = 'e' and c >= 4;
+explain (costs off) select * from mc3lp where a = 5 and b = 'e' and c is null;
+explain (costs off) select * from mc3lp where a = 5 and b = 'e' and c is not null;
+
 create table rlp (a int, b varchar) partition by range (a);
 create table rlp_default partition of rlp default partition by list (a);
 create table rlp_default_default partition of rlp_default default;

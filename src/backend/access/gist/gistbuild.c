@@ -480,6 +480,15 @@ gist_indexsortbuild_pagestate_add(GISTBuildState *state,
 	gistfillbuffer(pagestate->page, &itup, 1, InvalidOffsetNumber);
 }
 
+static int32
+it_cmp(const void *a, const void *b)
+{
+	IndexTuple it1 = *((const IndexTuple *) a);
+	IndexTuple it2 = *((const IndexTuple *) b);
+
+	return ItemPointerCompare(&(it1->t_tid), &(it2->t_tid));
+}
+
 static void
 gist_indexsortbuild_pagestate_flush(GISTBuildState *state,
 									GistSortedBuildPageState *pagestate)
@@ -518,6 +527,18 @@ gist_indexsortbuild_pagestate_flush(GISTBuildState *state,
 	union_tuple = gistunion(state->indexrel, itvec, vect_len,
 							state->giststate);
 	ItemPointerSetBlockNumber(&(union_tuple->t_tid), blkno);
+
+	/*
+	 * Sort index tuples by heap tuple TID within leaf pages
+	 */
+	if (isleaf)
+	{
+		Page sorted_page = PageGetTempPageCopySpecial(pagestate->page);
+		qsort(itvec, vect_len, sizeof(IndexTuple), it_cmp);
+		gistfillbuffer(sorted_page, itvec, vect_len, InvalidOffsetNumber);
+		PageRestoreTempPage(sorted_page, pagestate->page);
+	}
+
 	MemoryContextSwitchTo(oldCtx);
 
 	/*

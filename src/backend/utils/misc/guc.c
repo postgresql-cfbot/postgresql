@@ -52,6 +52,7 @@
 #include "commands/vacuum.h"
 #include "commands/variable.h"
 #include "common/string.h"
+#include "foreign/foreign.h"
 #include "funcapi.h"
 #include "jit/jit.h"
 #include "libpq/auth.h"
@@ -106,6 +107,7 @@
 #include "utils/queryjumble.h"
 #include "utils/rls.h"
 #include "utils/snapmgr.h"
+#include "utils/timeout.h"
 #include "utils/tzparser.h"
 #include "utils/inval.h"
 #include "utils/varlena.h"
@@ -3598,6 +3600,18 @@ static struct config_int ConfigureNamesInt[] =
 		&log_startup_progress_interval,
 		10000, 0, INT_MAX,
 		NULL, NULL, NULL
+	},
+
+
+	{
+		{"remote_servers_connection_check_interval", PGC_USERSET, CONN_AUTH_SETTINGS,
+			gettext_noop("Sets the time interval between checks for disconnection of remote servers."),
+			NULL,
+			GUC_UNIT_MS
+		},
+		&remote_servers_connection_check_interval,
+		0, 0, INT_MAX,
+		NULL, assign_remote_servers_connection_check_interval, NULL
 	},
 
 	/* End-of-list marker */

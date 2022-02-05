@@ -39,6 +39,7 @@
 #include "commands/trigger.h"
 #include "common/pg_prng.h"
 #include "executor/spi.h"
+#include "foreign/foreign.h"
 #include "libpq/be-fsstubs.h"
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
@@ -2365,6 +2366,9 @@ CommitTransaction(void)
 	XactTopFullTransactionId = InvalidFullTransactionId;
 	nParallelCurrentXids = 0;
 
+	/* stop checking remote servers */
+	DisableForeignCheckTimeout();
+
 	/*
 	 * done with commit processing, set current transaction state back to
 	 * default
@@ -2651,6 +2655,9 @@ PrepareTransaction(void)
 
 	XactTopFullTransactionId = InvalidFullTransactionId;
 	nParallelCurrentXids = 0;
+
+	/* stop checking remote servers */
+	DisableForeignCheckTimeout();
 
 	/*
 	 * done with 1st phase commit processing, set current transaction state

@@ -44,6 +44,7 @@
 #include "commands/prepare.h"
 #include "common/pg_prng.h"
 #include "executor/spi.h"
+#include "foreign/foreign.h"
 #include "jit/jit.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
@@ -350,6 +351,7 @@ SocketBackend(StringInfo inBuf)
 	 * Get message type code from the frontend.
 	 */
 	HOLD_CANCEL_INTERRUPTS();
+	HOLD_CHECKING_REMOTE_SERVERS_INTERRUPTS();
 	pq_startmsgread();
 	qtype = pq_getbyte();
 
@@ -456,6 +458,7 @@ SocketBackend(StringInfo inBuf)
 	 */
 	if (pq_getmessage(inBuf, maxmsglen))
 		return EOF;				/* suitable message already logged */
+	RESUME_CHECKING_REMOTE_SERVERS_INTERRUPTS();
 	RESUME_CANCEL_INTERRUPTS();
 
 	return qtype;
@@ -3223,6 +3226,29 @@ ProcessInterrupts(void)
 		ereport(FATAL,
 				(errcode(ERRCODE_CONNECTION_FAILURE),
 				 errmsg("connection to client lost")));
+	}
+
+	if (CheckingRemoteServersTimeoutPending)
+	{
+		if (CheckingRemoteServersHoldoffCount != 0 || DoingCommandRead)
+		{
+			/*
+			 * Skip checking foreign servers while reading messages or commands.
+			 */
+			InterruptPending = true;
+		}
+		else
+		{
+			CheckingRemoteServersTimeoutPending = false;
+
+			/* Check remote servers and re-arm, if still configured. */
+			if (remote_servers_connection_check_interval > 0)
+			{
+				CallCheckingRemoteServersCallbacks();
+				enable_timeout_after(CHECKING_REMOTE_SERVERS_TIMEOUT,
+									 remote_servers_connection_check_interval);
+			}
+		}
 	}
 
 	/*

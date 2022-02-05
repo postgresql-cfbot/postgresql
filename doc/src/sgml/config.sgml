@@ -1035,6 +1035,25 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-remote-servers-connection-check-interval" xreflabel="remote_servers_connection_check_interval">
+      <term><varname>remote_servers_connection_check_interval</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>remote_servers_connection_check_interval</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Sets the time interval between optional checks that the remote servers
+        are still alive. If this parameter is set to a valid value, registered
+        callback functions are executed at the specified time interval.
+        If your FDW extension does not implement a callback function, nothing
+        happens after the specified amount of time. If the value is specified
+        without units, it is taken as milliseconds. The default value is
+        <literal>0</literal>, this means the feature is disabled.
+       </para>
+      </listitem>
+     </varlistentry>
+
      </variablelist>
      </sect2>
 

@@ -26,7 +26,11 @@
 #include "utils/memutils.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
+#include "utils/timeout.h"
 
+/* for checking remote servers */
+int remote_servers_connection_check_interval = 0;
+static CheckingRemoteServersCallbackItem *fdw_callbacks = NULL;
 
 /*
  * GetForeignDataWrapper -	look up the foreign-data wrapper by OID.
@@ -835,4 +839,84 @@ GetExistingLocalJoinPath(RelOptInfo *joinrel)
 		return (Path *) joinpath;
 	}
 	return NULL;
+}
+
+/*
+ * Register callbacks for checking remote servers.
+ *
+ * This function is intended for use by FDW extensions.
+ * The checking timeout will be fired after registering the first callback.
+ */
+void
+RegisterCheckingRemoteServersCallback(CheckingRemoteServersCallback callback,
+									  void *arg)
+{
+	CheckingRemoteServersCallbackItem *item;
+
+	item = (CheckingRemoteServersCallbackItem *)
+			MemoryContextAlloc(TopMemoryContext,
+							   sizeof(CheckingRemoteServersCallbackItem));
+	item->callback = callback;
+	item->arg = arg;
+	item->next = fdw_callbacks;
+	fdw_callbacks = item;
+}
+
+/*
+ * Call callbacks for checking remote servers.
+ */
+void
+CallCheckingRemoteServersCallbacks(void)
+{
+	CheckingRemoteServersCallbackItem *item;
+
+	for (item = fdw_callbacks; item; item = item->next)
+		item->callback(item->arg);
+}
+
+/*
+ * enable timeout if it has been not started yet.
+ */
+void
+EnableForeignCheckTimeout(void)
+{
+	if (remote_servers_connection_check_interval > 0 &&
+		!get_timeout_active(CHECKING_REMOTE_SERVERS_TIMEOUT))
+		enable_timeout_after(CHECKING_REMOTE_SERVERS_TIMEOUT,
+							 remote_servers_connection_check_interval);
+}
+
+/*
+ * disable timeout if enabled.
+ */
+void
+DisableForeignCheckTimeout(void)
+{
+	if (get_timeout_active(CHECKING_REMOTE_SERVERS_TIMEOUT))
+		disable_timeout(CHECKING_REMOTE_SERVERS_TIMEOUT, false);
+}
+
+void
+assign_remote_servers_connection_check_interval(int newval,
+												void *extra)
+{
+	/* Quick return if we don't have any callbacks */
+	if (fdw_callbacks == NULL)
+		return;
+
+	if (get_timeout_active(CHECKING_REMOTE_SERVERS_TIMEOUT))
+	{
+		if (newval == 0)
+			disable_timeout(CHECKING_REMOTE_SERVERS_TIMEOUT, false);
+
+		/*
+		 * we don't have to do anything because
+		 * new value will be used in ProcessInterrupts().
+		 */
+		return;
+	}
+
+	/* Start timeout if anyone wants to */
+	if (newval > 0)
+		enable_timeout_after(CHECKING_REMOTE_SERVERS_TIMEOUT, newval);
 }

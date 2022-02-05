@@ -98,10 +98,13 @@ extern PGDLLIMPORT volatile sig_atomic_t LogMemoryContextPending;
 extern PGDLLIMPORT volatile sig_atomic_t CheckClientConnectionPending;
 extern PGDLLIMPORT volatile sig_atomic_t ClientConnectionLost;
 
+extern PGDLLIMPORT volatile sig_atomic_t CheckingRemoteServersTimeoutPending;
+
 /* these are marked volatile because they are examined by signal handlers: */
 extern PGDLLIMPORT volatile uint32 InterruptHoldoffCount;
 extern PGDLLIMPORT volatile uint32 QueryCancelHoldoffCount;
 extern PGDLLIMPORT volatile uint32 CritSectionCount;
+extern PGDLLIMPORT volatile uint32 CheckingRemoteServersHoldoffCount;
 
 /* in tcop/postgres.c */
 extern void ProcessInterrupts(void);
@@ -126,7 +129,7 @@ do { \
 /* Is ProcessInterrupts() guaranteed to clear InterruptPending? */
 #define INTERRUPTS_CAN_BE_PROCESSED() \
 	(InterruptHoldoffCount == 0 && CritSectionCount == 0 && \
-	 QueryCancelHoldoffCount == 0)
+	 QueryCancelHoldoffCount == 0 && CheckingRemoteServersHoldoffCount == 0)
 
 #define HOLD_INTERRUPTS()  (InterruptHoldoffCount++)
 
@@ -152,6 +155,13 @@ do { \
 	CritSectionCount--; \
 } while(0)
 
+#define HOLD_CHECKING_REMOTE_SERVERS_INTERRUPTS()  (CheckingRemoteServersHoldoffCount++)
+
+#define RESUME_CHECKING_REMOTE_SERVERS_INTERRUPTS() \
+do { \
+	Assert(CheckingRemoteServersHoldoffCount > 0); \
+	CheckingRemoteServersHoldoffCount--; \
+} while(0)
 
 /*****************************************************************************
  *	  globals.h --															 *

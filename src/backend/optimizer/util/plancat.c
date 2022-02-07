@@ -1452,6 +1452,20 @@ get_relation_statistics(RelOptInfo *rel, Relation relation)
 
 		get_relation_statistics_worker(&stainfos, rel, statOid, false, keys, exprs);
 
+		/* samples are built at runtime, so only check if it's enabled */
+		if (statext_is_kind_enabled(htup, STATS_EXT_SAMPLE))
+		{
+			StatisticExtInfo *info = makeNode(StatisticExtInfo);
+
+			info->statOid = statOid;
+			info->rel = rel;
+			info->kind = STATS_EXT_SAMPLE;
+			info->keys = bms_copy(keys);
+			info->exprs = exprs;
+
+			stainfos = lappend(stainfos, info);
+		}
+
 		ReleaseSysCache(htup);
 		bms_free(keys);
 	}

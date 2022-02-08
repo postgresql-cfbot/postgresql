@@ -138,6 +138,7 @@ AuxiliaryProcessMain(AuxProcType auxtype)
 	switch (MyAuxProcType)
 	{
 		case StartupProcess:
+			MyBackendId = MaxBackends + MyAuxProcType + 1;
 			StartupProcessMain();
 			proc_exit(1);
 

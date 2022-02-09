@@ -765,7 +765,10 @@ pgp_sym_encrypt(data, psw, 'compress-algo=1, cipher-algo=aes256')
    <title>cipher-algo</title>
 
    <para>
-    Which cipher algorithm to use.
+    Which cipher algorithm to use.  <literal>cast5</literal>, and
+    <literal>blowfish</literal> are only available
+    if <productname>PostgreSQL</productname> was built with
+    <productname>OpenSSL</productname>.
    </para>
 <literallayout>
 Values: bf, aes128, aes192, aes256, 3des, cast5
@@ -1157,8 +1160,8 @@ gen_random_uuid() returns uuid
    <para>
     <filename>pgcrypto</filename> configures itself according to the findings of the
     main PostgreSQL <literal>configure</literal> script.  The options that
-    affect it are <literal>--with-zlib</literal> and
-    <literal>--with-ssl=openssl</literal>.
+    affect it are <literal>--with-zlib</literal>,
+    <literal>--with-ssl=openssl</literal> and <literal>--with-ssl=nss</literal>.
    </para>
 
    <para>
@@ -1177,6 +1180,7 @@ gen_random_uuid() returns uuid
     <filename>openssl.cnf</filename> configuration file in order to use older
     ciphers like DES or Blowfish.
    </para>
+
   </sect3>
 
   <sect3>

@@ -12,15 +12,11 @@ use File::Copy;
 use FindBin;
 use lib $FindBin::RealBin;
 
-use SSLServer;
+use SSL::Server;
 
-if ($ENV{with_ssl} ne 'openssl')
+if (($ENV{with_ssl} ne 'openssl') && ($ENV{with_ssl} ne 'nss'))
 {
-	plan skip_all => 'OpenSSL not supported by this build';
-}
-else
-{
-	plan tests => 13;
+	plan skip_all => 'SSL not supported by this build';
 }
 
 #### Some configuration
@@ -64,10 +60,11 @@ configure_test_server_for_ssl($node, $SERVERHOSTADDR, $SERVERHOSTCIDR,
 # We aren't using any CRL's in this suite so we can keep using server-revoked
 # as server certificate for simple client.crt connection much like how the
 # 001 test does.
-switch_server_cert($node, 'server-revoked');
+switch_server_cert($node, certfile => 'server-revoked', nssdatabase => 'server-revoked.crt__server-revoked.key.db');
 
 $common_connstr =
   "sslrootcert=ssl/root+server_ca.crt sslmode=require dbname=certdb hostaddr=$SERVERHOSTADDR " .
+  "ssldatabase=ssl/nss/client_ext.crt__client_ext.key.db " .
   "user=ssltestuser sslcert=ssl/client_ext.crt sslkey=$client_tmp_key";
 
 # Make sure we can connect even though previous test suites have established this
@@ -106,32 +103,39 @@ $result = $node->safe_psql("certdb",
   connstr => $common_connstr);
 is($result, 't', "ssl_client_serial() compared with pg_stat_ssl");
 
-# Must not use safe_psql since we expect an error here
-$result = $node->psql("certdb", "SELECT ssl_client_dn_field('invalid');",
-  connstr => $common_connstr);
-is($result, '3', "ssl_client_dn_field() for an invalid field");
+SKIP:
+{
+	skip "OpenSSL not supported by this build", 6 unless ($ENV{with_ssl} eq 'openssl');
 
-$result = $node->safe_psql("trustdb", "SELECT ssl_client_dn_field('commonName');",
-  connstr => "sslrootcert=ssl/root+server_ca.crt sslmode=require " .
-  "dbname=trustdb hostaddr=$SERVERHOSTADDR user=ssltestuser");
-is($result, '', "ssl_client_dn_field() for connection without cert");
+	# Must not use safe_psql since we expect an error here
+	$result = $node->psql("certdb", "SELECT ssl_client_dn_field('invalid');",
+	  connstr => $common_connstr);
+	is($result, '3', "ssl_client_dn_field() for an invalid field");
 
-$result = $node->safe_psql("certdb",
-  "SELECT '/CN=' || ssl_client_dn_field('commonName') = client_dn FROM pg_stat_ssl WHERE pid = pg_backend_pid();",
-  connstr => $common_connstr);
-is($result, 't', "ssl_client_dn_field() for commonName");
+	$result = $node->safe_psql("trustdb", "SELECT ssl_client_dn_field('commonName');",
+	  connstr => "sslrootcert=ssl/root+server_ca.crt sslmode=require " .
+	  "dbname=trustdb hostaddr=$SERVERHOSTADDR user=ssltestuser");
+	is($result, '', "ssl_client_dn_field() for connection without cert");
 
-$result = $node->safe_psql("certdb",
-  "SELECT ssl_issuer_dn() = issuer_dn FROM pg_stat_ssl WHERE pid = pg_backend_pid();",
-  connstr => $common_connstr);
-is($result, 't', "ssl_issuer_dn() for connection with cert");
+	$result = $node->safe_psql("certdb",
+	  "SELECT '/CN=' || ssl_client_dn_field('commonName') = client_dn FROM pg_stat_ssl WHERE pid = pg_backend_pid();",
+	  connstr => $common_connstr);
+	is($result, 't', "ssl_client_dn_field() for commonName");
 
-$result = $node->safe_psql("certdb",
-  "SELECT '/CN=' || ssl_issuer_field('commonName') = issuer_dn FROM pg_stat_ssl WHERE pid = pg_backend_pid();",
-  connstr => $common_connstr);
-is($result, 't', "ssl_issuer_field() for commonName");
+	$result = $node->safe_psql("certdb",
+	  "SELECT ssl_issuer_dn() = issuer_dn FROM pg_stat_ssl WHERE pid = pg_backend_pid();",
+	  connstr => $common_connstr);
+	is($result, 't', "ssl_issuer_dn() for connection with cert");
 
-$result = $node->safe_psql("certdb",
-  "SELECT value, critical FROM ssl_extension_info() WHERE name = 'basicConstraints';",
-  connstr => $common_connstr);
-is($result, 'CA:FALSE|t', 'extract extension from cert');
+	$result = $node->safe_psql("certdb",
+	  "SELECT '/CN=' || ssl_issuer_field('commonName') = issuer_dn FROM pg_stat_ssl WHERE pid = pg_backend_pid();",
+	  connstr => $common_connstr);
+	is($result, 't', "ssl_issuer_field() for commonName");
+
+	$result = $node->safe_psql("certdb",
+	  "SELECT value, critical FROM ssl_extension_info() WHERE name = 'basicConstraints';",
+	  connstr => $common_connstr);
+	is($result, 'CA:FALSE|t', 'extract extension from cert');
+}
+
+done_testing();

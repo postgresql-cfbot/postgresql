@@ -185,7 +185,7 @@ ssl/%.csr: ssl/%.key conf/%.config
 # OpenSSL requires a directory to put all generated certificates in. We don't
 # use this for anything, but we need a location.
 ssl/new_certs_dir:
-	mkdir $@
+	$(MKDIR_P) $@
 
 ssl/%-certindex:
 	touch $@
@@ -225,7 +225,7 @@ ssl/client-crldir: ssl/client.crl
 crlhashfile = $(shell openssl crl -hash -noout -in $(1)).r0
 
 ssl/%-crldir:
-	mkdir -p $@
+	$(MKDIR_P) $@
 	rm -f $@/*.r0
 	$(foreach crl,$^,cp $(crl) $@/$(call crlhashfile,$(crl)) &&) true
 	touch $@

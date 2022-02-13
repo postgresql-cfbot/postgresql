@@ -165,7 +165,7 @@ extern void SetLatch(Latch *latch);
 extern void ResetLatch(Latch *latch);
 extern void ShutdownLatchSupport(void);
 
-extern WaitEventSet *CreateWaitEventSet(MemoryContext context, int nevents);
+extern WaitEventSet *CreateWaitEventSet(MemoryContext context);
 extern void FreeWaitEventSet(WaitEventSet *set);
 extern int	AddWaitEventToSet(WaitEventSet *set, uint32 events, pgsocket fd,
 							  Latch *latch, void *user_data);
@@ -179,6 +179,7 @@ extern int	WaitLatch(Latch *latch, int wakeEvents, long timeout,
 extern int	WaitLatchOrSocket(Latch *latch, int wakeEvents,
 							  pgsocket sock, long timeout, uint32 wait_event_info);
 extern void InitializeLatchWaitSet(void);
+extern void WaitEventSetReserve(WaitEventSet *set, int nevents);
 extern int	GetNumRegisteredWaitEvents(WaitEventSet *set);
 
 #endif							/* LATCH_H */

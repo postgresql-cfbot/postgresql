@@ -164,3 +164,10 @@ FROM (VALUES (0::int4, 0::int4),
 
 SELECT lcm((-2147483648)::int4, 1::int4); -- overflow
 SELECT lcm(2147483647::int4, 2147483646::int4); -- overflow
+
+
+-- non-decimal literals
+
+SELECT int4 '0b100101';
+SELECT int4 '0o273';
+SELECT int4 '0x42F';

@@ -431,3 +431,22 @@ SELECT lcm((-2147483648)::int4, 1::int4); -- overflow
 ERROR:  integer out of range
 SELECT lcm(2147483647::int4, 2147483646::int4); -- overflow
 ERROR:  integer out of range
+-- non-decimal literals
+SELECT int4 '0b100101';
+ int4 
+------
+   37
+(1 row)
+
+SELECT int4 '0o273';
+ int4 
+------
+  187
+(1 row)
+
+SELECT int4 '0x42F';
+ int4 
+------
+ 1071
+(1 row)
+

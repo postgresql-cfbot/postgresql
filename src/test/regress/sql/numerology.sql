@@ -3,6 +3,45 @@
 -- Test various combinations of numeric types and functions.
 --
 
+
+--
+-- numeric literals
+--
+
+SELECT 0b100101;
+SELECT 0o273;
+SELECT 0x42F;
+
+SELECT 1_000_000;
+SELECT 1_2_3;
+SELECT 0x1EEE_FFFF;
+SELECT 0o2_73;
+SELECT 0b_10_0101;
+
+-- error cases
+SELECT 123abc;
+SELECT 0x0o;
+SELECT 0.a;
+SELECT 0.0a;
+SELECT .0a;
+SELECT 0.0e1a;
+SELECT 0.0e;
+SELECT 0.0e+a;
+PREPARE p1 AS SELECT $1a;
+
+SELECT 0b;
+SELECT 1b;
+SELECT 0b0x;
+
+SELECT 0o;
+SELECT 1o;
+SELECT 0o0x;
+
+SELECT 0x;
+SELECT 1x;
+SELECT 0x0y;
+
+
 --
 -- Test implicit type conversions
 -- This fails for Postgres v6.1 (and earlier?)

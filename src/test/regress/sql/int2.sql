@@ -100,3 +100,10 @@ FROM (VALUES (-2.5::numeric),
              (0.5::numeric),
              (1.5::numeric),
              (2.5::numeric)) t(x);
+
+
+-- non-decimal literals
+
+SELECT int2 '0b100101';
+SELECT int2 '0o273';
+SELECT int2 '0x42F';

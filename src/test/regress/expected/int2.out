@@ -300,3 +300,22 @@ FROM (VALUES (-2.5::numeric),
   2.5 |          3
 (7 rows)
 
+-- non-decimal literals
+SELECT int2 '0b100101';
+ int2 
+------
+   37
+(1 row)
+
+SELECT int2 '0o273';
+ int2 
+------
+  187
+(1 row)
+
+SELECT int2 '0x42F';
+ int2 
+------
+ 1071
+(1 row)
+

@@ -81,6 +81,7 @@ extern char *recoveryRestoreCommand;
 extern char *recoveryEndCommand;
 extern char *archiveCleanupCommand;
 extern bool recoveryTargetInclusive;
+extern bool recoveryTargetUseOriginTime;
 extern int	recoveryTargetAction;
 extern int	recovery_min_apply_delay;
 extern char *PrimaryConnInfo;

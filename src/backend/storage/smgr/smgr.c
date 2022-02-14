@@ -17,6 +17,7 @@
  */
 #include "postgres.h"
 
+#include "access/slru.h"
 #include "access/xlogutils.h"
 #include "lib/ilist.h"
 #include "storage/bufmgr.h"
@@ -84,6 +85,14 @@ static const f_smgr smgrsw[] = {
 		.smgr_nblocks = mdnblocks,
 		.smgr_truncate = mdtruncate,
 		.smgr_immedsync = mdimmedsync,
+	},
+	/* "SLRU" storage */
+	{
+		.smgr_open = slruopen,
+		.smgr_close = slruclose,
+		.smgr_read = slruread,
+		.smgr_write = slruwrite,
+		.smgr_writeback = slruwriteback,
 	}
 };
 
@@ -178,13 +187,18 @@ smgropen(RelFileNode rnode, BackendId backend)
 		reln->smgr_targblock = InvalidBlockNumber;
 		for (int i = 0; i <= MAX_FORKNUM; ++i)
 			reln->smgr_cached_nblocks[i] = InvalidBlockNumber;
-		reln->smgr_which = 0;	/* we only have md.c at present */
 
-		/* implementation-specific initialization */
-		smgrsw[reln->smgr_which].smgr_open(reln);
+		/* XXX find some elegant way to do this, or something better */
+		if (rnode.dbNode == SLRU_DB_ID)
+			reln->smgr_which = 1;	/* slru.c */
+		else
+			reln->smgr_which = 0;	/* md.c */
 
 		/* it has no owner yet */
 		dlist_push_tail(&unowned_relns, &reln->node);
+
+		/* implementation-specific initialization */
+		smgrsw[reln->smgr_which].smgr_open(reln);
 	}
 
 	return reln;

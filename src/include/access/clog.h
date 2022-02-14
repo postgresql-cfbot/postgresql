@@ -40,17 +40,11 @@ extern void TransactionIdSetTreeStatus(TransactionId xid, int nsubxids,
 									   TransactionId *subxids, XidStatus status, XLogRecPtr lsn);
 extern XidStatus TransactionIdGetStatus(TransactionId xid, XLogRecPtr *lsn);
 
-extern Size CLOGShmemBuffers(void);
-extern Size CLOGShmemSize(void);
-extern void CLOGShmemInit(void);
 extern void BootStrapCLOG(void);
 extern void StartupCLOG(void);
 extern void TrimCLOG(void);
-extern void CheckPointCLOG(void);
 extern void ExtendCLOG(TransactionId newestXact);
 extern void TruncateCLOG(TransactionId oldestXact, Oid oldestxid_datoid);
-
-extern int	clogsyncfiletag(const FileTag *ftag, char *path);
 
 /* XLOG stuff */
 #define CLOG_ZEROPAGE		0x00

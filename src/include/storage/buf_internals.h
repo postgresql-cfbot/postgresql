@@ -230,6 +230,11 @@ typedef union BufferDescPadded
 #define BufferDescriptorGetContentLock(bdesc) \
 	((LWLock*) (&(bdesc)->content_lock))
 
+#define BufferGetExternalLSN(bufHdr) \
+	BufferExternalLSNs[(bufHdr)->buf_id]
+#define BufferSetExternalLSN(bufHdr, lsn) \
+	BufferExternalLSNs[(bufHdr)->buf_id] = (lsn)
+
 extern PGDLLIMPORT ConditionVariableMinimallyPadded *BufferIOCVArray;
 
 /*
@@ -276,6 +281,7 @@ typedef struct WritebackContext
 
 /* in buf_init.c */
 extern PGDLLIMPORT BufferDescPadded *BufferDescriptors;
+extern PGDLLIMPORT XLogRecPtr *BufferExternalLSNs;
 extern PGDLLIMPORT WritebackContext BackendWritebackContext;
 
 /* in localbuf.c */

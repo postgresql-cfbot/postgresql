@@ -1243,7 +1243,5 @@ extern void pgstat_count_slru_page_written(int slru_idx);
 extern void pgstat_count_slru_page_exists(int slru_idx);
 extern void pgstat_count_slru_flush(int slru_idx);
 extern void pgstat_count_slru_truncate(int slru_idx);
-extern const char *pgstat_slru_name(int slru_idx);
-extern int	pgstat_slru_index(const char *name);
 
 #endif							/* PGSTAT_H */

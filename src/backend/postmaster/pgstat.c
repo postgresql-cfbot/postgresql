@@ -34,6 +34,7 @@
 
 #include "access/heapam.h"
 #include "access/htup_details.h"
+#include "access/slru.h"
 #include "access/tableam.h"
 #include "access/transam.h"
 #include "access/twophase_rmgr.h"
@@ -143,30 +144,12 @@ PgStat_MsgWal WalStats;
 static WalUsage prevWalUsage;
 
 /*
- * List of SLRU names that we keep stats for.  There is no central registry of
- * SLRUs, so we use this fixed list instead.  The "other" entry is used for
- * all SLRUs without an explicit entry (e.g. SLRUs in extensions).
- */
-static const char *const slru_names[] = {
-	"CommitTs",
-	"MultiXactMember",
-	"MultiXactOffset",
-	"Notify",
-	"Serial",
-	"Subtrans",
-	"Xact",
-	"other"						/* has to be last */
-};
-
-#define SLRU_NUM_ELEMENTS	lengthof(slru_names)
-
-/*
  * SLRU statistics counts waiting to be sent to the collector.  These are
  * stored directly in stats message format so they can be sent without needing
  * to copy things around.  We assume this variable inits to zeroes.  Entries
  * are one-to-one with slru_names[].
  */
-static PgStat_MsgSLRU SLRUStats[SLRU_NUM_ELEMENTS];
+static PgStat_MsgSLRU SLRUStats[SLRU_NUM_RELS];
 
 /* ----------
  * Local data
@@ -282,7 +265,7 @@ static HTAB *pgStatDBHash = NULL;
 static PgStat_ArchiverStats archiverStats;
 static PgStat_GlobalStats globalStats;
 static PgStat_WalStats walStats;
-static PgStat_SLRUStats slruStats[SLRU_NUM_ELEMENTS];
+static PgStat_SLRUStats slruStats[SLRU_NUM_RELS];
 static HTAB *replSlotStatHash = NULL;
 
 /*
@@ -1587,7 +1570,7 @@ pgstat_reset_slru_counter(const char *name)
 		return;
 
 	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_RESETSLRUCOUNTER);
-	msg.m_index = (name) ? pgstat_slru_index(name) : -1;
+	msg.m_index = (name) ? SlruRelIdByName(name) : -1;
 
 	pgstat_send(&msg, sizeof(msg));
 }
@@ -3439,7 +3422,7 @@ pgstat_send_slru(void)
 	/* We assume this initializes to zeroes */
 	static const PgStat_MsgSLRU all_zeroes;
 
-	for (int i = 0; i < SLRU_NUM_ELEMENTS; i++)
+	for (int i = 0; i < SLRU_NUM_RELS; i++)
 	{
 		/*
 		 * This function can be called even if nothing at all has happened. In
@@ -4355,7 +4338,7 @@ pgstat_read_statsfiles(Oid onlydb, bool permanent, bool deep)
 	/*
 	 * Set the same reset timestamp for all SLRU items too.
 	 */
-	for (i = 0; i < SLRU_NUM_ELEMENTS; i++)
+	for (i = 0; i < SLRU_NUM_RELS; i++)
 		slruStats[i].stat_reset_timestamp = ts;
 
 	/*
@@ -4827,7 +4810,7 @@ pgstat_read_db_statsfile_timestamp(Oid databaseid, bool permanent,
 	PgStat_GlobalStats myGlobalStats;
 	PgStat_ArchiverStats myArchiverStats;
 	PgStat_WalStats myWalStats;
-	PgStat_SLRUStats mySLRUStats[SLRU_NUM_ELEMENTS];
+	PgStat_SLRUStats mySLRUStats[SLRU_NUM_RELS];
 	PgStat_StatReplSlotEntry myReplSlotStats;
 	FILE	   *fpin;
 	int32		format_id;
@@ -5589,7 +5572,7 @@ pgstat_recv_resetslrucounter(PgStat_MsgResetslrucounter *msg, int len)
 	int			i;
 	TimestampTz ts = GetCurrentTimestamp();
 
-	for (i = 0; i < SLRU_NUM_ELEMENTS; i++)
+	for (i = 0; i < SLRU_NUM_RELS; i++)
 	{
 		/* reset entry with the given index, or all entries (index is -1) */
 		if ((msg->m_index == -1) || (msg->m_index == i))
@@ -6314,44 +6297,6 @@ pgstat_reset_replslot(PgStat_StatReplSlotEntry *slotent, TimestampTz ts)
 }
 
 /*
- * pgstat_slru_index
- *
- * Determine index of entry for a SLRU with a given name. If there's no exact
- * match, returns index of the last "other" entry used for SLRUs defined in
- * external projects.
- */
-int
-pgstat_slru_index(const char *name)
-{
-	int			i;
-
-	for (i = 0; i < SLRU_NUM_ELEMENTS; i++)
-	{
-		if (strcmp(slru_names[i], name) == 0)
-			return i;
-	}
-
-	/* return index of the last entry (which is the "other" one) */
-	return (SLRU_NUM_ELEMENTS - 1);
-}
-
-/*
- * pgstat_slru_name
- *
- * Returns SLRU name for an index. The index may be above SLRU_NUM_ELEMENTS,
- * in which case this returns NULL. This allows writing code that does not
- * know the number of entries in advance.
- */
-const char *
-pgstat_slru_name(int slru_idx)
-{
-	if (slru_idx < 0 || slru_idx >= SLRU_NUM_ELEMENTS)
-		return NULL;
-
-	return slru_names[slru_idx];
-}
-
-/*
  * slru_entry
  *
  * Returns pointer to entry with counters for given SLRU (based on the name
@@ -6368,7 +6313,7 @@ slru_entry(int slru_idx)
 	 */
 	Assert(IsUnderPostmaster || !IsPostmasterEnvironment);
 
-	Assert((slru_idx >= 0) && (slru_idx < SLRU_NUM_ELEMENTS));
+	Assert((slru_idx >= 0) && (slru_idx < SLRU_NUM_RELS));
 
 	return &SLRUStats[slru_idx];
 }

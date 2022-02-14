@@ -20,6 +20,7 @@
 
 BufferDescPadded *BufferDescriptors;
 char	   *BufferBlocks;
+XLogRecPtr *BufferExternalLSNs;
 ConditionVariableMinimallyPadded *BufferIOCVArray;
 WritebackContext BackendWritebackContext;
 CkptSortItem *CkptBufferIds;
@@ -69,8 +70,10 @@ InitBufferPool(void)
 {
 	bool		foundBufs,
 				foundDescs,
+				foundLSNs,
 				foundIOCV,
 				foundBufCkpt;
+
 
 	/* Align descriptors to a cacheline boundary. */
 	BufferDescriptors = (BufferDescPadded *)
@@ -88,6 +91,11 @@ InitBufferPool(void)
 						NBuffers * sizeof(ConditionVariableMinimallyPadded),
 						&foundIOCV);
 
+	BufferExternalLSNs = (XLogRecPtr *)
+		ShmemInitStruct("Buffer External LSNs",
+						NBuffers * sizeof(XLogRecPtr),
+						&foundLSNs);
+
 	/*
 	 * The array used to sort to-be-checkpointed buffer ids is located in
 	 * shared memory, to avoid having to allocate significant amounts of
@@ -99,10 +107,10 @@ InitBufferPool(void)
 		ShmemInitStruct("Checkpoint BufferIds",
 						NBuffers * sizeof(CkptSortItem), &foundBufCkpt);
 
-	if (foundDescs || foundBufs || foundIOCV || foundBufCkpt)
+	if (foundDescs || foundBufs || foundIOCV || foundBufCkpt || foundLSNs)
 	{
 		/* should find all of these, or none of them */
-		Assert(foundDescs && foundBufs && foundIOCV && foundBufCkpt);
+		Assert(foundDescs && foundBufs && foundIOCV && foundBufCkpt && foundLSNs);
 		/* note: this path is only taken in EXEC_BACKEND case */
 	}
 	else
@@ -133,6 +141,8 @@ InitBufferPool(void)
 							 LWTRANCHE_BUFFER_CONTENT);
 
 			ConditionVariableInit(BufferDescriptorGetIOCV(buf));
+
+			BufferExternalLSNs[i] = InvalidXLogRecPtr;
 		}
 
 		/* Correct last entry of linked list */
@@ -165,6 +175,9 @@ BufferShmemSize(void)
 
 	/* size of data pages */
 	size = add_size(size, mul_size(NBuffers, BLCKSZ));
+
+	/* size of external LSNs */
+	size = add_size(size, mul_size(NBuffers, sizeof(XLogRecPtr)));
 
 	/* size of stuff controlled by freelist.c */
 	size = add_size(size, StrategyShmemSize());

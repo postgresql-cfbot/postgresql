@@ -56,10 +56,21 @@
 #include "utils/resowner_private.h"
 #include "utils/timestamp.h"
 
+/*
+ * XXX Ideally we'd switch to standard pages for SLRU data, but in the
+ * meantime we need some way to identify buffers that hold raw data (no
+ * invasive LSN, no checksums).
+ */
+#define BufferHasStandardPage(bufHdr)			\
+	((bufHdr)->tag.rnode.dbNode != 9)
+
+#define BufferHasExternalLSN(bufHdr)			\
+	!BufferHasStandardPage(bufHdr)
 
 /* Note: these two macros only work on shared buffers, not local ones! */
 #define BufHdrGetBlock(bufHdr)	((Block) (BufferBlocks + ((Size) (bufHdr)->buf_id) * BLCKSZ))
-#define BufferGetLSN(bufHdr)	(PageGetLSN(BufHdrGetBlock(bufHdr)))
+#define BufferGetLSN(bufHdr) \
+	(BufferHasExternalLSN(bufHdr) ? BufferGetExternalLSN(bufHdr) : PageGetLSN(BufHdrGetBlock(bufHdr)))
 
 /* Note: this macro only works on local buffers, not shared ones! */
 #define LocalBufHdrGetBlock(bufHdr) \
@@ -772,10 +783,9 @@ ReadBufferExtended(Relation reln, ForkNumber forkNum, BlockNumber blockNum,
  * ReadBufferWithoutRelcache -- like ReadBufferExtended, but doesn't require
  *		a relcache entry for the relation.
  *
- * NB: At present, this function may only be used on permanent relations, which
- * is OK, because we only use it during XLOG replay.  If in the future we
- * want to use it on temporary or unlogged relations, we could pass additional
- * parameters.
+ * NB: At present, this function may only be used on permanent relations,
+ * which is OK.  If in the future we want to use it on temporary or unlogged
+ * relations, we could pass additional parameters.
  */
 Buffer
 ReadBufferWithoutRelcache(RelFileNode rnode, ForkNumber forkNum,
@@ -786,10 +796,23 @@ ReadBufferWithoutRelcache(RelFileNode rnode, ForkNumber forkNum,
 
 	SMgrRelation smgr = smgropen(rnode, InvalidBackendId);
 
-	Assert(InRecovery);
-
 	return ReadBuffer_common(smgr, RELPERSISTENCE_PERMANENT, forkNum, blockNum,
 							 mode, strategy, &hit);
+}
+
+/*
+ * Like ReadBufferWithoutRelcache, but returns the hit flag.
+ * XXX Merge
+ */
+Buffer
+ReadBufferWithoutRelcacheWithHit(RelFileNode rnode, ForkNumber forkNum,
+								 BlockNumber blockNum, ReadBufferMode mode,
+								 bool *hit)
+{
+	SMgrRelation smgr = smgropen(rnode, InvalidBackendId);
+
+	return ReadBuffer_common(smgr, RELPERSISTENCE_PERMANENT, forkNum, blockNum,
+							 mode, NULL, hit);
 }
 
 
@@ -1012,7 +1035,8 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 			}
 
 			/* check for garbage data */
-			if (!PageIsVerifiedExtended((Page) bufBlock, blockNum,
+			if (BufferHasStandardPage(bufHdr) &&
+				!PageIsVerifiedExtended((Page) bufBlock, blockNum,
 										PIV_LOG_WARNING | PIV_REPORT_STAT))
 			{
 				if (mode == RBM_ZERO_ON_ERROR || zero_damaged_pages)
@@ -1433,6 +1457,9 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 
 	LWLockRelease(newPartitionLock);
 
+	if (BufferHasExternalLSN(buf))
+		BufferSetExternalLSN(buf, InvalidXLogRecPtr);
+
 	/*
 	 * Buffer contents are currently invalid.  Try to obtain the right to
 	 * start I/O.  If StartBufferIO returns false, then someone else managed
@@ -1551,6 +1578,84 @@ retry:
 	 * Insert the buffer at the head of the list of free buffers.
 	 */
 	StrategyFreeBuffer(buf);
+}
+
+/*
+ * DiscardBuffer -- drop a buffer from pool.
+ *
+ * If the buffer isn't present in shared buffers, nothing happens.  If it is
+ * present and not pinned, it is discarded without making any attempt to write
+ * it back out to the operating system.  If I/O is in progress, we wait for it
+ * to to complete.  If it is pinned, an error is raised (some other backend
+ * must still be interested in it, so it's an error to discard it).
+ */
+void
+DiscardBuffer(RelFileNode rnode, ForkNumber forkNum, BlockNumber blockNum)
+{
+	SMgrRelation smgr = smgropen(rnode, InvalidBackendId);
+	BufferTag	tag;			/* identity of target block */
+	uint32		hash;			/* hash value for tag */
+	LWLock	   *partitionLock;	/* buffer partition lock for it */
+	int			buf_id;
+	BufferDesc *bufHdr;
+	uint32		buf_state;
+
+	/* create a tag so we can lookup the buffer */
+	INIT_BUFFERTAG(tag, smgr->smgr_rnode.node, forkNum, blockNum);
+
+	/* determine its hash code and partition lock ID */
+	hash = BufTableHashCode(&tag);
+	partitionLock = BufMappingPartitionLock(hash);
+
+ retry:
+	/* see if the block is in the buffer pool */
+	LWLockAcquire(partitionLock, LW_SHARED);
+	buf_id = BufTableLookup(&tag, hash);
+	LWLockRelease(partitionLock);
+
+	/* didn't find it, so nothing to do */
+	if (buf_id < 0)
+		return;
+
+	/* take the buffer header lock */
+	bufHdr = GetBufferDescriptor(buf_id);
+	buf_state = LockBufHdr(bufHdr);
+
+	/*
+	 * The buffer might been evicted after we released the partition lock and
+	 * before we acquired the buffer header lock.  If so, the buffer we've
+	 * locked might contain some other data which we shouldn't touch. If the
+	 * buffer hasn't been recycled, we proceed to invalidate it.
+	 */
+	if (RelFileNodeEquals(bufHdr->tag.rnode, rnode) &&
+		bufHdr->tag.blockNum == blockNum &&
+		bufHdr->tag.forkNum == forkNum)
+	{
+		if (buf_state & BM_IO_IN_PROGRESS)
+		{
+			UnlockBufHdr(bufHdr, buf_state);
+			WaitIO(bufHdr);
+			goto retry;
+		}
+		else if (BUF_STATE_GET_REFCOUNT(buf_state) == 0)
+		{
+			/* Nobody has it pinned, so we can immediately invalidate it. */
+			InvalidateBuffer(bufHdr);	/* releases spinlock */
+		}
+		else
+		{
+			/*
+			 * XXX: Is it OK to say that the contract for DiscardBuffer() is
+			 * that the caller is asserting that no one else could be
+			 * interested in this buffer, and therefore it's a programming
+			 * error or corruption if you reach this case?
+			 */
+			UnlockBufHdr(bufHdr, buf_state);
+			elog(ERROR, "cannot discard buffer that is pinned");
+		}
+	}
+	else
+		UnlockBufHdr(bufHdr, buf_state);
 }
 
 /*
@@ -2884,7 +2989,10 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 	 * buffer, other processes might be updating hint bits in it, so we must
 	 * copy the page to private storage if we do checksumming.
 	 */
-	bufToWrite = PageSetChecksumCopy((Page) bufBlock, buf->tag.blockNum);
+	if (BufferHasStandardPage(buf))
+		bufToWrite = PageSetChecksumCopy((Page) bufBlock, buf->tag.blockNum);
+	else
+		bufToWrite = bufBlock;
 
 	if (track_io_timing)
 		INSTR_TIME_SET_CURRENT(io_start);
@@ -3013,7 +3121,10 @@ BufferGetLSNAtomic(Buffer buffer)
 	Assert(BufferIsPinned(buffer));
 
 	buf_state = LockBufHdr(bufHdr);
-	lsn = PageGetLSN(page);
+	if (BufferHasStandardPage(bufHdr))
+		lsn = PageGetLSN(page);
+	else
+		lsn = BufferGetExternalLSN(bufHdr);
 	UnlockBufHdr(bufHdr, buf_state);
 
 	return lsn;
@@ -3526,7 +3637,8 @@ FlushRelationBuffers(Relation rel)
 				errcallback.previous = error_context_stack;
 				error_context_stack = &errcallback;
 
-				PageSetChecksumInplace(localpage, bufHdr->tag.blockNum);
+				if (BufferHasStandardPage(bufHdr))
+					PageSetChecksumInplace(localpage, bufHdr->tag.blockNum);
 
 				smgrwrite(RelationGetSmgr(rel),
 						  bufHdr->tag.forkNum,
@@ -4842,4 +4954,30 @@ TestForOldSnapshot_impl(Snapshot snapshot, Relation relation)
 		ereport(ERROR,
 				(errcode(ERRCODE_SNAPSHOT_TOO_OLD),
 				 errmsg("snapshot too old")));
+}
+
+/*
+ * Check if a buffer tag is currently mapped.
+ *
+ * XXX Dubious semantics; needed only for multixact's handling for
+ * inconsistent states.
+ */
+bool
+BufferProbe(RelFileNode rnode, ForkNumber forkNum, BlockNumber blockNum)
+{
+	BufferTag	tag;
+	uint32		hash;
+	LWLock	   *partitionLock;
+	int			buf_id;
+
+	INIT_BUFFERTAG(tag, rnode, forkNum, blockNum);
+
+	hash = BufTableHashCode(&tag);
+	partitionLock = BufMappingPartitionLock(hash);
+
+	LWLockAcquire(partitionLock, LW_SHARED);
+	buf_id = BufTableLookup(&tag, hash);
+	LWLockRelease(partitionLock);
+
+	return buf_id >= 0;
 }

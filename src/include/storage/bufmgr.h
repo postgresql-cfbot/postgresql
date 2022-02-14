@@ -185,12 +185,21 @@ extern Buffer ReadBufferExtended(Relation reln, ForkNumber forkNum,
 extern Buffer ReadBufferWithoutRelcache(RelFileNode rnode,
 										ForkNumber forkNum, BlockNumber blockNum,
 										ReadBufferMode mode, BufferAccessStrategy strategy);
+extern Buffer ReadBufferWithoutRelcacheWithHit(RelFileNode rnode,
+											   ForkNumber forkNum, BlockNumber blockNum,
+											   ReadBufferMode mode, bool *hit);
 extern void ReleaseBuffer(Buffer buffer);
 extern void UnlockReleaseBuffer(Buffer buffer);
 extern void MarkBufferDirty(Buffer buffer);
 extern void IncrBufferRefCount(Buffer buffer);
 extern Buffer ReleaseAndReadBuffer(Buffer buffer, Relation relation,
 								   BlockNumber blockNum);
+extern void DiscardBuffer(RelFileNode rnode,
+						  ForkNumber forkNum,
+						  BlockNumber blockNum);
+extern bool BufferProbe(RelFileNode rnode,
+						ForkNumber forkNum,
+						BlockNumber blockNum);
 
 extern void InitBufferPool(void);
 extern void InitBufferPoolAccess(void);

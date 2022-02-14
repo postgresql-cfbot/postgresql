@@ -1938,14 +1938,6 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
        transaction commit timestamp.</entry>
      </row>
      <row>
-      <entry><literal>CommitTsBuffer</literal></entry>
-      <entry>Waiting for I/O on a commit timestamp SLRU buffer.</entry>
-     </row>
-     <row>
-      <entry><literal>CommitTsSLRU</literal></entry>
-      <entry>Waiting to access the commit timestamp SLRU cache.</entry>
-     </row>
-     <row>
       <entry><literal>ControlFile</literal></entry>
       <entry>Waiting to read or update the <filename>pg_control</filename>
        file or create a new WAL file.</entry>
@@ -1975,29 +1967,8 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
       <entry>Waiting to read or update shared multixact state.</entry>
      </row>
      <row>
-      <entry><literal>MultiXactMemberBuffer</literal></entry>
-      <entry>Waiting for I/O on a multixact member SLRU buffer.</entry>
-     </row>
-     <row>
-      <entry><literal>MultiXactMemberSLRU</literal></entry>
-      <entry>Waiting to access the multixact member SLRU cache.</entry>
-     </row>
-     <row>
-      <entry><literal>MultiXactOffsetBuffer</literal></entry>
-      <entry>Waiting for I/O on a multixact offset SLRU buffer.</entry>
-     </row>
-     <row>
-      <entry><literal>MultiXactOffsetSLRU</literal></entry>
-      <entry>Waiting to access the multixact offset SLRU cache.</entry>
-     </row>
-     <row>
       <entry><literal>MultiXactTruncation</literal></entry>
       <entry>Waiting to read or truncate multixact information.</entry>
-     </row>
-     <row>
-      <entry><literal>NotifyBuffer</literal></entry>
-      <entry>Waiting for I/O on a <command>NOTIFY</command> message SLRU
-       buffer.</entry>
      </row>
      <row>
       <entry><literal>NotifyQueue</literal></entry>
@@ -2007,11 +1978,6 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
       <entry><literal>NotifyQueueTail</literal></entry>
       <entry>Waiting to update limit on <command>NOTIFY</command> message
        storage.</entry>
-     </row>
-     <row>
-      <entry><literal>NotifySLRU</literal></entry>
-      <entry>Waiting to access the <command>NOTIFY</command> message SLRU
-       cache.</entry>
      </row>
      <row>
       <entry><literal>OidGen</literal></entry>
@@ -2098,11 +2064,6 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
       <entry>Waiting for I/O on a replication slot.</entry>
      </row>
      <row>
-      <entry><literal>SerialBuffer</literal></entry>
-      <entry>Waiting for I/O on a serializable transaction conflict SLRU
-       buffer.</entry>
-     </row>
-     <row>
       <entry><literal>SerializableFinishedList</literal></entry>
       <entry>Waiting to access the list of finished serializable
        transactions.</entry>
@@ -2116,11 +2077,6 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
       <entry><literal>SerializableXactHash</literal></entry>
       <entry>Waiting to read or update information about serializable
        transactions.</entry>
-     </row>
-     <row>
-      <entry><literal>SerialSLRU</literal></entry>
-      <entry>Waiting to access the serializable transaction conflict SLRU
-       cache.</entry>
      </row>
      <row>
       <entry><literal>SharedTidBitmap</literal></entry>
@@ -2188,10 +2144,6 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
       <entry><literal>WrapLimitsVacuum</literal></entry>
       <entry>Waiting to update limits on transaction id and multixact
        consumption.</entry>
-     </row>
-     <row>
-      <entry><literal>XactBuffer</literal></entry>
-      <entry>Waiting for I/O on a transaction status SLRU buffer.</entry>
      </row>
      <row>
       <entry><literal>XactSLRU</literal></entry>

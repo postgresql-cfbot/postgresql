@@ -311,6 +311,7 @@ sub GenerateFiles
 		HAVE_LIBXML2                                => undef,
 		HAVE_LIBXSLT                                => undef,
 		HAVE_LIBZ                   => $self->{options}->{zlib} ? 1 : undef,
+		HAVE_LIBZSTD                => $self->{options}->{zstd} ? 1 : undef,
 		HAVE_LINK                   => undef,
 		HAVE_LOCALE_T               => 1,
 		HAVE_LONG_INT_64            => undef,
@@ -945,7 +946,7 @@ sub AddProject
 	if ($self->{options}->{zlib})
 	{
 		$proj->AddIncludeDir($self->{options}->{zlib} . '\include');
-		$proj->AddLibrary($self->{options}->{zlib} . '\lib\zdll.lib');
+		$proj->AddLibrary($self->{options}->{zlib} . '\lib\zlibstatic.lib');
 	}
 	if ($self->{options}->{openssl})
 	{

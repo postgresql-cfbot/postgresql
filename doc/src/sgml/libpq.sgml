@@ -1260,6 +1260,43 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
       </listitem>
      </varlistentry>
 
+     <varlistentry id="libpq-connect-compression" xreflabel="compression">
+      <term><literal>compression</literal></term>
+      <listitem>
+      <para>
+        Request compression of libpq traffic. The client sends a request with
+        a list of compression algorithms. Compression can be requested by a client
+        by including the <literal>"compression"</literal> option in its connection string.
+        This can either be a boolean value to enable or disable compression
+        (<literal>"true"</literal>/<literal>"false"</literal>,
+        <literal>"on"</literal>/<literal>"off"</literal>,
+        <literal>"yes"</literal>/<literal>"no"</literal>,
+        <literal>"1"</literal>/<literal>"0"</literal>),
+        <literal>"any"</literal>,
+        or an explicit list of comma-separated compression algorithms
+        which can optionally include compression level (<literal>"zlib,lz4:2"</literal>).
+        If compression is enabled but an algorithm is not explicitly specified,
+        the client library sends its full list of supported algorithms.
+        The server intersects the received compression algorithms with the allowed ones (controlled via the <literal>libpq_compression</literal> server config setting).
+        If the intersection is not empty, the server responds with CompressionAck containing the final list of the compression algorithms that can be used for the compression of libpq messages between the client and server.
+        If the intersection is empty (server does not accept any of the requested algorithms), then it replies with CompressionAck containing the empty list and it is up to the client whether to continue without compression or to report an error.
+      </para>
+      <para>
+        After sending the CompressionAck message, the server can send the SetCompressionMethod message to set the current compression algorithm for server-to-client traffic compression.
+        After receiving the CompressionAck message, the client can send the SetCompressionMethod message to set the current compression algorithm for client-to-server traffic compression.
+        Compressed data is transmitted via the CompressedData messages.
+      </para>
+      <para>
+        Support for compression algorithms must be enabled when the server is compiled.
+        Currently, two libraries are supported: zlib (default) and lz4 (if Postgres was
+        configured with --with-lz4 option). In both cases, streaming mode is used.
+        By default, compression is not requested by the client.
+        Please note that using compression together with SSL may expose extra vulnerabilities:
+        <ulink url="https://en.wikipedia.org/wiki/CRIME">CRIME</ulink>
+      </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="libpq-connect-client-encoding" xreflabel="client_encoding">
       <term><literal>client_encoding</literal></term>
       <listitem>

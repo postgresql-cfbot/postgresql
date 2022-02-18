@@ -130,7 +130,7 @@ sub mkvcbuild
 	  keywords.c kwlookup.c link-canary.c md5_common.c
 	  pg_get_line.c pg_lzcompress.c pg_prng.c pgfnames.c psprintf.c relpath.c
 	  rmtree.c saslprep.c scram-common.c string.c stringinfo.c unicode_norm.c
-	  username.c wait_error.c wchar.c);
+	  username.c wait_error.c wchar.c z_stream.c zpq_stream.c);
 
 	if ($solution->{options}->{openssl})
 	{

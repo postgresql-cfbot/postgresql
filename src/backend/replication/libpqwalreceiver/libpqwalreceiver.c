@@ -203,11 +203,14 @@ libpqrcv_connect(const char *conninfo, bool logical, const char *appname,
 		else
 			io_flag = WL_SOCKET_WRITEABLE;
 
-		rc = WaitLatchOrSocket(MyLatch,
-							   WL_EXIT_ON_PM_DEATH | WL_LATCH_SET | io_flag,
-							   PQsocket(conn->streamConn),
-							   0,
-							   WAIT_EVENT_LIBPQWALRECEIVER_CONNECT);
+		if (status == PGRES_POLLING_READING && PQreadPending(conn->streamConn))
+			rc = WL_SOCKET_READABLE;
+		else
+			rc = WaitLatchOrSocket(MyLatch,
+								   WL_EXIT_ON_PM_DEATH | WL_LATCH_SET | io_flag,
+								   PQsocket(conn->streamConn),
+								   0,
+								   WAIT_EVENT_LIBPQWALRECEIVER_CONNECT);
 
 		/* Interrupted? */
 		if (rc & WL_LATCH_SET)

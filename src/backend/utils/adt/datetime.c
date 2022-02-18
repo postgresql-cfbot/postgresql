@@ -4376,11 +4376,14 @@ EncodeInterval(struct pg_tm *tm, fsec_t fsec, int style, char *str)
 			if (is_zero || hour != 0 || min != 0 || sec != 0 || fsec != 0)
 			{
 				bool		minus = (hour < 0 || min < 0 || sec < 0 || fsec < 0);
+				// need to special case hours being INT_MIN because you can't call abs(INT_MIN)
+				bool		int_min_hours = (hour == INT_MIN);
 
 				sprintf(cp, "%s%s%02d:%02d:",
 						is_zero ? "" : " ",
-						(minus ? "-" : (is_before ? "+" : "")),
-						abs(hour), abs(min));
+						(minus ? (int_min_hours ? "" : "-") : (is_before ? "+" : "")),
+						(int_min_hours ? hour : abs(hour)),
+						abs(min));
 				cp += strlen(cp);
 				cp = AppendSeconds(cp, sec, fsec, MAX_INTERVAL_PRECISION, true);
 				*cp = '\0';

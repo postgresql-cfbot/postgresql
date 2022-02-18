@@ -1043,3 +1043,11 @@ SELECT extract(epoch from interval '1000000000 days');
  86400000000000.000000
 (1 row)
 
+-- test that INT_MIN number of hours is formatted properly
+SET IntervalStyle to postgres;
+SELECT INTERVAL '-2147483648 hrs';
+     interval      
+-------------------
+ -2147483648:00:00
+(1 row)
+

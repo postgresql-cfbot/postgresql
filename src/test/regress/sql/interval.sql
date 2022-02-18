@@ -355,3 +355,7 @@ SELECT f1,
 
 -- internal overflow test case
 SELECT extract(epoch from interval '1000000000 days');
+
+-- test that INT_MIN number of hours is formatted properly
+SET IntervalStyle to postgres;
+SELECT INTERVAL '-2147483648 hrs';

@@ -2268,6 +2268,26 @@ deparseAnalyzeSizeSql(StringInfo buf, Relation rel)
 }
 
 /*
+ * Construct SELECT statement to acquire numbe of rows of given relation.
+ *
+ * Note: Maybe this should compare relpages and current relation size
+ * and adjust reltuples accordingly?
+ */
+void
+deparseAnalyzeTuplesSql(StringInfo buf, Relation rel)
+{
+	StringInfoData relname;
+
+	/* We'll need the remote relation name as a literal. */
+	initStringInfo(&relname);
+	deparseRelation(&relname, rel);
+
+	appendStringInfoString(buf, "SELECT reltuples FROM pg_catalog.pg_class WHERE oid = ");
+	deparseStringLiteral(buf, relname.data);
+	appendStringInfoString(buf, "::pg_catalog.regclass");
+}
+
+/*
  * Construct SELECT statement to acquire sample rows of given relation.
  *
  * SELECT command is appended to buf, and list of columns retrieved
@@ -2326,6 +2346,138 @@ deparseAnalyzeSql(StringInfo buf, Relation rel, List **retrieved_attrs)
 	 */
 	appendStringInfoString(buf, " FROM ");
 	deparseRelation(buf, rel);
+}
+
+/*
+ * Construct SELECT statement to acquire sample rows of given relation,
+ * by sampling a fraction of the table using TABLESAMPLE SYSTEM.
+ *
+ * SELECT command is appended to buf, and list of columns retrieved
+ * is returned to *retrieved_attrs.
+ *
+ * Note: We could allow selecting system/bernoulli, and maybe even the
+ * optional TSM modules (especially tsm_system_rows would help).
+ */
+void
+deparseAnalyzeTableSampleSql(StringInfo buf, Relation rel, List **retrieved_attrs, double sample_frac)
+{
+	Oid			relid = RelationGetRelid(rel);
+	TupleDesc	tupdesc = RelationGetDescr(rel);
+	int			i;
+	char	   *colname;
+	List	   *options;
+	ListCell   *lc;
+	bool		first = true;
+
+	*retrieved_attrs = NIL;
+
+	appendStringInfoString(buf, "SELECT ");
+	for (i = 0; i < tupdesc->natts; i++)
+	{
+		/* Ignore dropped columns. */
+		if (TupleDescAttr(tupdesc, i)->attisdropped)
+			continue;
+
+		if (!first)
+			appendStringInfoString(buf, ", ");
+		first = false;
+
+		/* Use attribute name or column_name option. */
+		colname = NameStr(TupleDescAttr(tupdesc, i)->attname);
+		options = GetForeignColumnOptions(relid, i + 1);
+
+		foreach(lc, options)
+		{
+			DefElem    *def = (DefElem *) lfirst(lc);
+
+			if (strcmp(def->defname, "column_name") == 0)
+			{
+				colname = defGetString(def);
+				break;
+			}
+		}
+
+		appendStringInfoString(buf, quote_identifier(colname));
+
+		*retrieved_attrs = lappend_int(*retrieved_attrs, i + 1);
+	}
+
+	/* Don't generate bad syntax for zero-column relation. */
+	if (first)
+		appendStringInfoString(buf, "NULL");
+
+	/*
+	 * Construct FROM clause
+	 */
+	appendStringInfoString(buf, " FROM ");
+	deparseRelation(buf, rel);
+	appendStringInfo(buf, " TABLESAMPLE SYSTEM(%f)", (100.0 * sample_frac));
+}
+
+/*
+ * Construct SELECT statement to acquire sample rows of given relation,
+ * by sampling a fraction of the table using TABLESAMPLE SYSTEM.
+ *
+ * SELECT command is appended to buf, and list of columns retrieved
+ * is returned to *retrieved_attrs.
+ *
+ * Note: We could allow selecting system/bernoulli, and maybe even the
+ * optional TSM modules (especially tsm_system_rows would help).
+ */
+void
+deparseAnalyzeLegacySampleSql(StringInfo buf, Relation rel, List **retrieved_attrs, double sample_frac)
+{
+	Oid			relid = RelationGetRelid(rel);
+	TupleDesc	tupdesc = RelationGetDescr(rel);
+	int			i;
+	char	   *colname;
+	List	   *options;
+	ListCell   *lc;
+	bool		first = true;
+
+	*retrieved_attrs = NIL;
+
+	appendStringInfoString(buf, "SELECT ");
+	for (i = 0; i < tupdesc->natts; i++)
+	{
+		/* Ignore dropped columns. */
+		if (TupleDescAttr(tupdesc, i)->attisdropped)
+			continue;
+
+		if (!first)
+			appendStringInfoString(buf, ", ");
+		first = false;
+
+		/* Use attribute name or column_name option. */
+		colname = NameStr(TupleDescAttr(tupdesc, i)->attname);
+		options = GetForeignColumnOptions(relid, i + 1);
+
+		foreach(lc, options)
+		{
+			DefElem    *def = (DefElem *) lfirst(lc);
+
+			if (strcmp(def->defname, "column_name") == 0)
+			{
+				colname = defGetString(def);
+				break;
+			}
+		}
+
+		appendStringInfoString(buf, quote_identifier(colname));
+
+		*retrieved_attrs = lappend_int(*retrieved_attrs, i + 1);
+	}
+
+	/* Don't generate bad syntax for zero-column relation. */
+	if (first)
+		appendStringInfoString(buf, "NULL");
+
+	/*
+	 * Construct FROM clause
+	 */
+	appendStringInfoString(buf, " FROM ");
+	deparseRelation(buf, rel);
+	appendStringInfo(buf, " WHERE random() < %f", sample_frac);
 }
 
 /*

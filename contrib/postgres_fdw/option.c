@@ -121,7 +121,8 @@ postgres_fdw_validator(PG_FUNCTION_ARGS)
 			strcmp(def->defname, "updatable") == 0 ||
 			strcmp(def->defname, "truncatable") == 0 ||
 			strcmp(def->defname, "async_capable") == 0 ||
-			strcmp(def->defname, "keep_connections") == 0)
+			strcmp(def->defname, "keep_connections") == 0 ||
+			strcmp(def->defname, "sample") == 0)
 		{
 			/* these accept only boolean values */
 			(void) defGetBoolean(def);
@@ -251,6 +252,10 @@ InitPgFdwOptions(void)
 		{"async_capable", ForeignTableRelationId, false},
 		{"keep_connections", ForeignServerRelationId, false},
 		{"password_required", UserMappingRelationId, false},
+
+		/* sampling is available on both server and table */
+		{"sample", ForeignServerRelationId, false},
+		{"sample", ForeignTableRelationId, false},
 
 		/*
 		 * sslcert and sslkey are in fact libpq options, but we repeat them

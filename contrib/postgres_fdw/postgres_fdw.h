@@ -208,8 +208,15 @@ extern void deparseDirectDeleteSql(StringInfo buf, PlannerInfo *root,
 								   List *returningList,
 								   List **retrieved_attrs);
 extern void deparseAnalyzeSizeSql(StringInfo buf, Relation rel);
+extern void deparseAnalyzeTuplesSql(StringInfo buf, Relation rel);
 extern void deparseAnalyzeSql(StringInfo buf, Relation rel,
 							  List **retrieved_attrs);
+extern void deparseAnalyzeTableSampleSql(StringInfo buf, Relation rel,
+										 List **retrieved_attrs,
+										 double sample_frac);
+extern void deparseAnalyzeLegacySampleSql(StringInfo buf, Relation rel,
+										  List **retrieved_attrs,
+										  double sample_frac);
 extern void deparseTruncateSql(StringInfo buf,
 							   List *rels,
 							   DropBehavior behavior,

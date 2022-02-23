@@ -4962,6 +4962,68 @@ postgresAnalyzeForeignTable(Relation relation,
 }
 
 /*
+ * postgresCountTuplesForForeignTable
+ *		Count tuples in foreign table (just get pg_class.reltuples).
+ *
+ * Note: It's unclear how accurate reltuples is, maybe size that using
+ * relpages and simple assumptions (1 tuples per page, ...)? Using
+ * tsm_system_rows wold make this somewhat unnecessary.
+ */
+static double
+postgresCountTuplesForForeignTable(Relation relation)
+{
+	ForeignTable *table;
+	UserMapping *user;
+	PGconn	   *conn;
+	StringInfoData sql;
+	PGresult   *volatile res = NULL;
+	double		reltuples = -1;
+
+	/*
+	 * Now we have to get the number of pages.  It's annoying that the ANALYZE
+	 * API requires us to return that now, because it forces some duplication
+	 * of effort between this routine and postgresAcquireSampleRowsFunc.  But
+	 * it's probably not worth redefining that API at this point.
+	 */
+
+	/*
+	 * Get the connection to use.  We do the remote access as the table's
+	 * owner, even if the ANALYZE was started by some other user.
+	 */
+	table = GetForeignTable(RelationGetRelid(relation));
+	user = GetUserMapping(relation->rd_rel->relowner, table->serverid);
+	conn = GetConnection(user, false, NULL);
+
+	/*
+	 * Construct command to get page count for relation.
+	 */
+	initStringInfo(&sql);
+	deparseAnalyzeTuplesSql(&sql, relation);
+
+	/* In what follows, do not risk leaking any PGresults. */
+	PG_TRY();
+	{
+		res = pgfdw_exec_query(conn, sql.data, NULL);
+		if (PQresultStatus(res) != PGRES_TUPLES_OK)
+			pgfdw_report_error(ERROR, res, conn, false, sql.data);
+
+		if (PQntuples(res) != 1 || PQnfields(res) != 1)
+			elog(ERROR, "unexpected result from deparseAnalyzeSizeSql query");
+		reltuples = strtod(PQgetvalue(res, 0, 0), NULL);
+	}
+	PG_FINALLY();
+	{
+		if (res)
+			PQclear(res);
+	}
+	PG_END_TRY();
+
+	ReleaseConnection(conn);
+
+	return reltuples;
+}
+
+/*
  * Acquire a random sample of rows from foreign table managed by postgres_fdw.
  *
  * We fetch the whole table from the remote side and pick out some sample rows.
@@ -4991,6 +5053,14 @@ postgresAcquireSampleRowsFunc(Relation relation, int elevel,
 	unsigned int cursor_number;
 	StringInfoData sql;
 	PGresult   *volatile res = NULL;
+	ListCell   *lc;
+	int			server_version_num;
+
+	/* sampling enabled by default */
+	bool		do_sample = true;
+	bool		use_tablesample = true;
+	double		sample_frac = -1.0;
+	double		reltuples;
 
 	/* Initialize workspace state */
 	astate.rel = relation;
@@ -5018,20 +5088,83 @@ postgresAcquireSampleRowsFunc(Relation relation, int elevel,
 	user = GetUserMapping(relation->rd_rel->relowner, table->serverid);
 	conn = GetConnection(user, false, NULL);
 
+	/* We'll need server version, so fetch it now. */
+	server_version_num = PQserverVersion(conn);
+
+	/* disable tablesample on old remote servers */
+	if (server_version_num < 95000)
+		use_tablesample = false;
+
+	/*
+	 * Should we use TABLESAMPLE to collect the remote sample?
+	 */
+	foreach(lc, server->options)
+	{
+		DefElem    *def = (DefElem *) lfirst(lc);
+
+		if (strcmp(def->defname, "sample") == 0)
+		{
+			do_sample = defGetBoolean(def);
+			break;
+		}
+	}
+	foreach(lc, table->options)
+	{
+		DefElem    *def = (DefElem *) lfirst(lc);
+
+		if (strcmp(def->defname, "sample") == 0)
+		{
+			do_sample = defGetBoolean(def);
+			break;
+		}
+	}
+
+	if (do_sample)
+	{
+		reltuples = postgresCountTuplesForForeignTable(relation);
+
+		if ((reltuples <= 0) || (targrows >= reltuples))
+			do_sample = false;
+
+		sample_frac = targrows / reltuples;
+
+		/* Let's sample a bit more, we'll reduce the sample locally. */
+		sample_frac *= 1.25;
+
+		/* Sanity checks. */
+		sample_frac = Min(1.0, Max(0.0, sample_frac));
+
+		/*
+		 * When sampling too large fraction, just read everything.
+		 *
+		 * XXX It's not clear where exactly the threshold is, with slow
+		 * network it may be cheaper to sample even 90%.
+		 */
+		if (sample_frac > 0.5)
+			do_sample = false;
+	}
+
 	/*
 	 * Construct cursor that retrieves whole rows from remote.
 	 */
 	cursor_number = GetCursorNumber(conn);
 	initStringInfo(&sql);
 	appendStringInfo(&sql, "DECLARE c%u CURSOR FOR ", cursor_number);
-	deparseAnalyzeSql(&sql, relation, &astate.retrieved_attrs);
+
+	if (do_sample && use_tablesample)
+		deparseAnalyzeTableSampleSql(&sql, relation, &astate.retrieved_attrs, sample_frac);
+	else if (do_sample)
+		deparseAnalyzeLegacySampleSql(&sql, relation, &astate.retrieved_attrs, sample_frac);
+	else
+		deparseAnalyzeSql(&sql, relation, &astate.retrieved_attrs);
+
+	elog(WARNING, "SQL: %s", sql.data);
 
 	/* In what follows, do not risk leaking any PGresults. */
 	PG_TRY();
 	{
 		char		fetch_sql[64];
 		int			fetch_size;
-		ListCell   *lc;
 
 		res = pgfdw_exec_query(conn, sql.data, NULL);
 		if (PQresultStatus(res) != PGRES_COMMAND_OK)
@@ -5120,7 +5253,10 @@ postgresAcquireSampleRowsFunc(Relation relation, int elevel,
 	*totaldeadrows = 0.0;
 
 	/* We've retrieved all living tuples from foreign server. */
-	*totalrows = astate.samplerows;
+	if (do_sample)
+		*totalrows = reltuples;
+	else
+		*totalrows = astate.samplerows;
 
 	/*
 	 * Emit some interesting relation info

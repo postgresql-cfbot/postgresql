@@ -23,6 +23,15 @@ env:
   PG_TEST_EXTRA: kerberos ldap ssl libpq_encryption load_balance
   PG_FAILED_TESTDIR: ${CIRRUS_WORKING_DIR}/failed.build
 
+  # The commit that this branch is rebased on.  There's no easy way to find this.
+  # This does the right thing for cfbot, which always squishes all patches into a single commit.
+  # And does the right thing for any 1-patch commits.
+  # Patch series manually submitted to cirrus would benefit from setting this to the
+  # number of patches in the series (or directly to the commit the series was rebased on).
+  #BASE_COMMIT: HEAD~1
+  # For demo purposes:
+  BASE_COMMIT: HEAD~55
+
 
 # What files to preserve in case tests fail
 on_failure_ac: &on_failure_ac
@@ -785,7 +794,7 @@ task:
       time make -s -j${BUILD_JOBS} world-bin
 
   ###
-  # Verify docs can be built
+  # Verify docs can be built, and upload changed docs as artifacts
   ###
   # XXX: Only do this if there have been changes in doc/ since last build
   always:
@@ -795,6 +804,20 @@ task:
         CC="ccache gcc" CXX="ccache g++" CLANG="ccache clang-16"
       make -s -j${BUILD_JOBS} clean
       time make -s -j${BUILD_JOBS} -C doc
+      cp -r doc new-docs
+
+      # Re-build HTML docs from the base commit.
+      git checkout "$BASE_COMMIT" -- doc
+      make -s -C doc clean
+      time make -s -C doc html
+      cp -r doc old-docs
+
+    copy_changed_docs_script:
+      - src/tools/ci/copy-changed-docs "old-docs" "new-docs" "html_docs"
+
+    html_docs_artifacts:
+      paths: ['html_docs/*.html', 'html_docs/*.png', 'html_docs/*.css']
+
 
   ###
   # Verify headerscheck / cpluspluscheck succeed

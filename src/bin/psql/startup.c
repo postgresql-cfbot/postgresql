@@ -173,6 +173,7 @@ main(int argc, char *argv[])
 
 	pset.popt.topt.csvFieldSep[0] = DEFAULT_CSV_FIELD_SEP;
 	pset.popt.topt.csvFieldSep[1] = '\0';
+	pset.popt.topt.formfeed = false;
 
 	pset.popt.topt.unicode_border_linestyle = UNICODE_LINESTYLE_SINGLE;
 	pset.popt.topt.unicode_column_linestyle = UNICODE_LINESTYLE_SINGLE;
@@ -518,6 +519,7 @@ parse_psql_options(int argc, char *argv[], struct adhoc_opts *options)
 		{"no-psqlrc", no_argument, NULL, 'X'},
 		{"help", optional_argument, NULL, 1},
 		{"csv", no_argument, NULL, 2},
+		{"formfeed", no_argument, NULL, 3},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -713,6 +715,9 @@ parse_psql_options(int argc, char *argv[], struct adhoc_opts *options)
 				break;
 			case 2:
 				pset.popt.topt.format = PRINT_CSV;
+				break;
+			case 3:
+				pset.popt.topt.formfeed = true;
 				break;
 			default:
 		unknown_option:

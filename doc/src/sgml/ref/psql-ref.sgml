@@ -257,6 +257,16 @@ EOF
     </varlistentry>
 
     <varlistentry>
+      <term><option>--formfeed</option></term>
+      <listitem>
+      <para>
+      Turn on the formfeed. This is equivalent to
+      <command>\pset formfeed</command>.
+      </para>
+      </listitem>
+    </varlistentry>
+
+    <varlistentry>
       <term><option>-h <replaceable class="parameter">hostname</replaceable></option></term>
       <term><option>--host=<replaceable class="parameter">hostname</replaceable></option></term>
       <listitem>
@@ -2877,6 +2887,14 @@ lo_import 152801
           <literal>latex-longtable</literal>, <literal>troff-ms</literal>,
           <literal>unaligned</literal>, or <literal>wrapped</literal>.
           Unique abbreviations are allowed.
+          </para>
+
+          <varlistentry>
+          <term><literal>formfeed</literal></term>
+          <listitem>
+          <para>
+          Outputs formfeed after every result when using the
+          <literal>\watch</literal> command.
           </para>
 
           <para><literal>aligned</literal> format is the standard,

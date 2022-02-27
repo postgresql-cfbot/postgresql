@@ -68,7 +68,7 @@ usage(unsigned short int pager)
 	 * Keep this line count in sync with the number of lines printed below!
 	 * Use "psql --help=options | wc" to count correctly.
 	 */
-	output = PageOutput(63, pager ? &(pset.popt.topt) : NULL);
+	output = PageOutput(64, pager ? &(pset.popt.topt) : NULL);
 
 	fprintf(output, _("psql is the PostgreSQL interactive terminal.\n\n"));
 	fprintf(output, _("Usage:\n"));
@@ -117,6 +117,7 @@ usage(unsigned short int pager)
 	fprintf(output, _("  -R, --record-separator=STRING\n"
 					  "                           record separator for unaligned output (default: newline)\n"));
 	fprintf(output, _("  -t, --tuples-only        print rows only\n"));
+	fprintf(output, _("      --formfeed           output after every result when using the \\watch command\n"));
 	fprintf(output, _("  -T, --table-attr=TEXT    set HTML table tag attributes (e.g., width, border)\n"));
 	fprintf(output, _("  -x, --expanded           turn on expanded table output\n"));
 	fprintf(output, _("  -z, --field-separator-zero\n"
@@ -282,7 +283,7 @@ slashUsage(unsigned short int pager)
 			ON(pset.popt.topt.format == PRINT_HTML));
 	fprintf(output, _("  \\pset [NAME [VALUE]]   set table output option\n"
 					  "                         (border|columns|csv_fieldsep|expanded|fieldsep|\n"
-					  "                         fieldsep_zero|footer|format|linestyle|null|\n"
+					  "                         fieldsep_zero|footer|format|formfeed|linestyle|null|\n"
 					  "                         numericlocale|pager|pager_min_lines|recordsep|\n"
 					  "                         recordsep_zero|tableattr|title|tuples_only|\n"
 					  "                         unicode_border_linestyle|unicode_column_linestyle|\n"
@@ -348,7 +349,7 @@ helpVariables(unsigned short int pager)
 	 * Windows builds currently print one fewer line than non-Windows builds.
 	 * Using the larger number is fine.
 	 */
-	output = PageOutput(161, pager ? &(pset.popt.topt) : NULL);
+	output = PageOutput(163, pager ? &(pset.popt.topt) : NULL);
 
 	fprintf(output, _("List of specially treated variables\n\n"));
 
@@ -449,6 +450,8 @@ helpVariables(unsigned short int pager)
 					  "    enable or disable display of the table footer [on, off]\n"));
 	fprintf(output, _("  format\n"
 					  "    set output format [unaligned, aligned, wrapped, html, asciidoc, ...]\n"));
+	fprintf(output, _("  formfeed\n"
+					  "    output formfeed [on, off]\n"));
 	fprintf(output, _("  linestyle\n"
 					  "    set the border line drawing style [ascii, old-ascii, unicode]\n"));
 	fprintf(output, _("  null\n"

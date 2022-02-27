@@ -2717,12 +2717,27 @@ interval_justify_interval(PG_FUNCTION_ARGS)
 	result->day = span->day;
 	result->time = span->time;
 
+	/* pre-justify days if it might prevent overflow */
+	if ((result->day > 0 && result->time > 0) ||
+		(result->day < 0 && result->time < 0))
+	{
+		wholemonth = result->day / DAYS_PER_MONTH;
+		result->day -= wholemonth * DAYS_PER_MONTH;
+		if (pg_add_s32_overflow(result->month, wholemonth, &result->month))
+			ereport(ERROR,
+					(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+					 errmsg("interval out of range")));
+	}
+
 	TMODULO(result->time, wholeday, USECS_PER_DAY);
-	result->day += wholeday;	/* could overflow... */
+	result->day += wholeday;
 
 	wholemonth = result->day / DAYS_PER_MONTH;
 	result->day -= wholemonth * DAYS_PER_MONTH;
-	result->month += wholemonth;
+	if (pg_add_s32_overflow(result->month, wholemonth, &result->month))
+		ereport(ERROR,
+				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+				 errmsg("interval out of range")));
 
 	if (result->month > 0 &&
 		(result->day < 0 || (result->day == 0 && result->time < 0)))
@@ -2772,7 +2787,10 @@ interval_justify_hours(PG_FUNCTION_ARGS)
 	result->time = span->time;
 
 	TMODULO(result->time, wholeday, USECS_PER_DAY);
-	result->day += wholeday;	/* could overflow... */
+	if (pg_add_s32_overflow(result->day, wholeday, &result->day))
+		ereport(ERROR,
+				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+				errmsg("interval out of range")));
 
 	if (result->day > 0 && result->time < 0)
 	{
@@ -2808,7 +2826,10 @@ interval_justify_days(PG_FUNCTION_ARGS)
 
 	wholemonth = result->day / DAYS_PER_MONTH;
 	result->day -= wholemonth * DAYS_PER_MONTH;
-	result->month += wholemonth;
+	if (pg_add_s32_overflow(result->month, wholemonth, &result->month))
+		ereport(ERROR,
+				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+				errmsg("interval out of range")));
 
 	if (result->month > 0 && result->day < 0)
 	{

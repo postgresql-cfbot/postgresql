@@ -2538,6 +2538,10 @@ makeTableDataInfo(DumpOptions *dopt, TableInfo *tbinfo)
 		dopt->no_unlogged_table_data)
 		return;
 
+	/* Don't dump data in global temporary table/sequence */
+	if (tbinfo->relpersistence == RELPERSISTENCE_GLOBAL_TEMP)
+		return;
+
 	/* Check that the data is not explicitly excluded */
 	if (simple_oid_list_member(&tabledata_exclude_oids,
 							   tbinfo->dobj.catId.oid))
@@ -14973,6 +14977,7 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 		char	   *ftoptions = NULL;
 		char	   *srvname = NULL;
 		char	   *foreign = "";
+		char	   *table_type = NULL;
 
 		/*
 		 * Set reltypename, and collect any relkind-specific data that we
@@ -15048,9 +15053,15 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 			binary_upgrade_set_pg_class_oids(fout, q,
 											 tbinfo->dobj.catId.oid, false);
 
+		if (tbinfo->relpersistence == RELPERSISTENCE_UNLOGGED)
+			table_type = "UNLOGGED ";
+		else if (tbinfo->relpersistence == RELPERSISTENCE_GLOBAL_TEMP)
+			table_type = "GLOBAL TEMPORARY ";
+		else
+			table_type = "";
+
 		appendPQExpBuffer(q, "CREATE %s%s %s",
-						  tbinfo->relpersistence == RELPERSISTENCE_UNLOGGED ?
-						  "UNLOGGED " : "",
+						  table_type,
 						  reltypename,
 						  qualrelname);
 
@@ -15419,13 +15430,22 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 		}
 
 		/*
+		 * Transaction information for the global temporary table is not stored
+		 * in the pg_class.
+		 */
+		if (tbinfo->relpersistence == RELPERSISTENCE_GLOBAL_TEMP)
+		{
+			Assert(tbinfo->frozenxid == 0);
+			Assert(tbinfo->minmxid == 0);
+		}
+		/*
 		 * In binary_upgrade mode, arrange to restore the old relfrozenxid and
 		 * relminmxid of all vacuumable relations.  (While vacuum.c processes
 		 * TOAST tables semi-independently, here we see them only as children
 		 * of other relations; so this "if" lacks RELKIND_TOASTVALUE, and the
 		 * child toast table is handled below.)
 		 */
-		if (dopt->binary_upgrade &&
+		else if (dopt->binary_upgrade &&
 			(tbinfo->relkind == RELKIND_RELATION ||
 			 tbinfo->relkind == RELKIND_MATVIEW))
 		{
@@ -16448,6 +16468,7 @@ dumpSequence(Archive *fout, const TableInfo *tbinfo)
 	PQExpBuffer query = createPQExpBuffer();
 	PQExpBuffer delqry = createPQExpBuffer();
 	char	   *qseqname;
+	bool	   global_temp_seq = false;
 
 	qseqname = pg_strdup(fmtId(tbinfo->dobj.name));
 
@@ -16457,9 +16478,12 @@ dumpSequence(Archive *fout, const TableInfo *tbinfo)
 						  "SELECT format_type(seqtypid, NULL), "
 						  "seqstart, seqincrement, "
 						  "seqmax, seqmin, "
-						  "seqcache, seqcycle "
-						  "FROM pg_catalog.pg_sequence "
-						  "WHERE seqrelid = '%u'::oid",
+						  "seqcache, seqcycle, "
+						  "c.relpersistence "
+						  "FROM pg_catalog.pg_sequence s, "
+						  "pg_catalog.pg_class c "
+						  "WHERE seqrelid = '%u'::oid "
+						  "and s.seqrelid = c.oid",
 						  tbinfo->dobj.catId.oid);
 	}
 	else
@@ -16495,6 +16519,9 @@ dumpSequence(Archive *fout, const TableInfo *tbinfo)
 	minv = PQgetvalue(res, 0, 4);
 	cache = PQgetvalue(res, 0, 5);
 	cycled = (strcmp(PQgetvalue(res, 0, 6), "t") == 0);
+
+	if (fout->remoteVersion >= 150000)
+		global_temp_seq = (strcmp(PQgetvalue(res, 0, 7), "g") == 0);
 
 	/* Calculate default limits for a sequence of this type */
 	is_ascending = (incby[0] != '-');
@@ -16573,9 +16600,13 @@ dumpSequence(Archive *fout, const TableInfo *tbinfo)
 	}
 	else
 	{
-		appendPQExpBuffer(query,
-						  "CREATE SEQUENCE %s\n",
-						  fmtQualifiedDumpable(tbinfo));
+		appendPQExpBuffer(query, "CREATE ");
+
+		if (global_temp_seq)
+			appendPQExpBuffer(query, "GLOBAL TEMP ");
+
+		appendPQExpBuffer(query, "SEQUENCE %s\n",
+								  fmtQualifiedDumpable(tbinfo));
 
 		if (strcmp(seqtype, "bigint") != 0)
 			appendPQExpBuffer(query, "    AS %s\n", seqtype);

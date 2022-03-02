@@ -111,6 +111,7 @@ struct ReindexIndexCallbackState
 {
 	ReindexParams params;		/* options from statement */
 	Oid			locked_table_oid;	/* tracks previously locked table */
+	LOCKMODE	lockmode;
 };
 
 /*
@@ -570,7 +571,7 @@ DefineIndex(Oid relationId,
 	 * is more efficient.  Do this before any use of the concurrent option is
 	 * done.
 	 */
-	if (stmt->concurrent && get_rel_persistence(relationId) != RELPERSISTENCE_TEMP)
+	if (stmt->concurrent && !RelpersistenceTsTemp(get_rel_persistence(relationId)))
 		concurrent = true;
 	else
 		concurrent = false;
@@ -2582,24 +2583,46 @@ ReindexIndex(RangeVar *indexRelation, ReindexParams *params, bool isTopLevel)
 	 */
 	state.params = *params;
 	state.locked_table_oid = InvalidOid;
+	state.lockmode = AccessShareLock;
 	indOid = RangeVarGetRelidExtended(indexRelation,
-									  (params->options & REINDEXOPT_CONCURRENTLY) != 0 ?
-									  ShareUpdateExclusiveLock : AccessExclusiveLock,
+									  AccessShareLock,
 									  0,
 									  RangeVarCallbackForReindexIndex,
 									  &state);
 
 	/*
 	 * Obtain the current persistence and kind of the existing index.  We
-	 * already hold a lock on the index.
+	 * already hold a AccessShareLock on the index.
+	 * If this is not a global temp object, apply a larger lock.
 	 */
 	persistence = get_rel_persistence(indOid);
-	relkind = get_rel_relkind(indOid);
+	if (persistence != RELPERSISTENCE_GLOBAL_TEMP)
+	{
+		LOCKMODE	table_lockmode;
+		LOCKMODE	index_lockmode;
 
+		if ((params->options & REINDEXOPT_CONCURRENTLY) != 0)
+		{
+			table_lockmode = ShareUpdateExclusiveLock;
+			index_lockmode = ShareUpdateExclusiveLock;
+		}
+		else
+		{
+			table_lockmode = ShareLock;
+			index_lockmode = AccessExclusiveLock;
+		}
+
+		/* lock heap first */
+		Assert(OidIsValid(state.locked_table_oid));
+		LockRelationOid(state.locked_table_oid, table_lockmode);
+		LockRelationOid(indOid, index_lockmode);
+	}
+
+	relkind = get_rel_relkind(indOid);
 	if (relkind == RELKIND_PARTITIONED_INDEX)
 		ReindexPartitions(indOid, params, isTopLevel);
 	else if ((params->options & REINDEXOPT_CONCURRENTLY) != 0 &&
-			 persistence != RELPERSISTENCE_TEMP)
+			 !RelpersistenceTsTemp(persistence))
 		ReindexRelationConcurrently(indOid, params);
 	else
 	{
@@ -2621,15 +2644,7 @@ RangeVarCallbackForReindexIndex(const RangeVar *relation,
 {
 	char		relkind;
 	struct ReindexIndexCallbackState *state = arg;
-	LOCKMODE	table_lockmode;
-
-	/*
-	 * Lock level here should match table lock in reindex_index() for
-	 * non-concurrent case and table locks used by index_concurrently_*() for
-	 * concurrent case.
-	 */
-	table_lockmode = (state->params.options & REINDEXOPT_CONCURRENTLY) != 0 ?
-		ShareUpdateExclusiveLock : ShareLock;
+	LOCKMODE	table_lockmode = state->lockmode;
 
 	/*
 	 * If we previously locked some other index's heap, and the name we're
@@ -2690,6 +2705,8 @@ ReindexTable(RangeVar *relation, ReindexParams *params, bool isTopLevel)
 {
 	Oid			heapOid;
 	bool		result;
+	char		relpersistence;
+	LOCKMODE	lockmode;
 
 	/*
 	 * The lock level used here should match reindex_relation().
@@ -2700,15 +2717,27 @@ ReindexTable(RangeVar *relation, ReindexParams *params, bool isTopLevel)
 	 * locks on our temporary table.
 	 */
 	heapOid = RangeVarGetRelidExtended(relation,
-									   (params->options & REINDEXOPT_CONCURRENTLY) != 0 ?
-									   ShareUpdateExclusiveLock : ShareLock,
+									   AccessShareLock,
 									   0,
 									   RangeVarCallbackOwnsTable, NULL);
+
+	relpersistence = get_rel_persistence(heapOid);
+	if (relpersistence == RELPERSISTENCE_GLOBAL_TEMP)
+		lockmode = AccessShareLock;
+	else
+	{
+		if ((params->options & REINDEXOPT_CONCURRENTLY) != 0)
+			lockmode = ShareUpdateExclusiveLock;
+		else
+			lockmode = ShareLock;
+
+		LockRelationOid(heapOid, lockmode);
+	}
 
 	if (get_rel_relkind(heapOid) == RELKIND_PARTITIONED_TABLE)
 		ReindexPartitions(heapOid, params, isTopLevel);
 	else if ((params->options & REINDEXOPT_CONCURRENTLY) != 0 &&
-			 get_rel_persistence(heapOid) != RELPERSISTENCE_TEMP)
+			 !RelpersistenceTsTemp(relpersistence))
 	{
 		result = ReindexRelationConcurrently(heapOid, params);
 
@@ -2725,7 +2754,8 @@ ReindexTable(RangeVar *relation, ReindexParams *params, bool isTopLevel)
 		result = reindex_relation(heapOid,
 								  REINDEX_REL_PROCESS_TOAST |
 								  REINDEX_REL_CHECK_CONSTRAINTS,
-								  &newparams);
+								  &newparams,
+								  lockmode);
 		if (!result)
 			ereport(NOTICE,
 					(errmsg("table \"%s\" has no indexes to reindex",
@@ -3120,7 +3150,7 @@ ReindexMultipleInternal(List *relids, ReindexParams *params)
 		Assert(!RELKIND_HAS_PARTITIONS(relkind));
 
 		if ((params->options & REINDEXOPT_CONCURRENTLY) != 0 &&
-			relpersistence != RELPERSISTENCE_TEMP)
+			!RelpersistenceTsTemp(relpersistence))
 		{
 			ReindexParams newparams = *params;
 
@@ -3142,13 +3172,20 @@ ReindexMultipleInternal(List *relids, ReindexParams *params)
 		{
 			bool		result;
 			ReindexParams newparams = *params;
+			LOCKMODE	lockmode;
+
+			if (relpersistence == RELPERSISTENCE_GLOBAL_TEMP)
+				lockmode = AccessShareLock;
+			else
+				lockmode = ShareLock;
 
 			newparams.options |=
 				REINDEXOPT_REPORT_PROGRESS | REINDEXOPT_MISSING_OK;
 			result = reindex_relation(relid,
 									  REINDEX_REL_PROCESS_TOAST |
 									  REINDEX_REL_CHECK_CONSTRAINTS,
-									  &newparams);
+									  &newparams,
+									  lockmode);
 
 			if (result && (params->options & REINDEXOPT_VERBOSE) != 0)
 				ereport(INFO,

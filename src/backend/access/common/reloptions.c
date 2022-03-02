@@ -159,6 +159,18 @@ static relopt_bool boolRelOpts[] =
 		},
 		true
 	},
+	/*
+	 * For global temporary table save on commit clause info to reloptions.
+	 */
+	{
+		{
+			"on_commit_delete_rows",
+			"global temporary table on commit options",
+			RELOPT_KIND_HEAP,
+			ShareUpdateExclusiveLock
+		},
+		true
+	},
 	/* list terminator */
 	{{NULL}}
 };
@@ -1834,6 +1846,8 @@ bytea *
 default_reloptions(Datum reloptions, bool validate, relopt_kind kind)
 {
 	static const relopt_parse_elt tab[] = {
+		{"on_commit_delete_rows", RELOPT_TYPE_BOOL,
+		offsetof(StdRdOptions, on_commit_delete_rows)},
 		{"fillfactor", RELOPT_TYPE_INT, offsetof(StdRdOptions, fillfactor)},
 		{"autovacuum_enabled", RELOPT_TYPE_BOOL,
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, enabled)},

@@ -82,6 +82,7 @@ static void expandTupleDesc(TupleDesc tupdesc, Alias *eref,
 							List **colnames, List **colvars);
 static int	specialAttNum(const char *attname);
 static bool isQueryUsingTempRelation_walker(Node *node, void *context);
+static bool isQueryUsingGlobalTempRelation_walker(Node *node, void *context);
 
 
 /*
@@ -3664,4 +3665,53 @@ isQueryUsingTempRelation_walker(Node *node, void *context)
 	return expression_tree_walker(node,
 								  isQueryUsingTempRelation_walker,
 								  context);
+}
+
+/*
+ * Like function isQueryUsingTempRelation_walker
+ * return true if any relation underlying
+ * the query is a global temporary table.
+ */
+static bool
+isQueryUsingGlobalTempRelation_walker(Node *node, void *context)
+{
+	if (node == NULL)
+		return false;
+
+	if (IsA(node, Query))
+	{
+		Query	   *query = (Query *) node;
+		ListCell   *rtable;
+
+		foreach(rtable, query->rtable)
+		{
+			RangeTblEntry *rte = lfirst(rtable);
+
+			if (rte->rtekind == RTE_RELATION)
+			{
+				Relation	rel = table_open(rte->relid, AccessShareLock);
+				char		relpersistence = rel->rd_rel->relpersistence;
+
+				table_close(rel, AccessShareLock);
+				if (relpersistence == RELPERSISTENCE_GLOBAL_TEMP)
+					return true;
+			}
+		}
+
+		return query_tree_walker(query,
+								 isQueryUsingGlobalTempRelation_walker,
+								 context,
+								 QTW_IGNORE_JOINALIASES);
+	}
+
+	return expression_tree_walker(node,
+								  isQueryUsingGlobalTempRelation_walker,
+								  context);
+}
+
+/* Check if the query uses global temporary table */
+bool
+isQueryUsingGlobalTempRelation(Query *query)
+{
+	return isQueryUsingGlobalTempRelation_walker((Node *) query, NULL);
 }

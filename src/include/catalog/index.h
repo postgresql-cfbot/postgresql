@@ -158,7 +158,7 @@ extern void reindex_index(Oid indexId, bool skip_constraint_checks,
 #define REINDEX_REL_FORCE_INDEXES_UNLOGGED	0x08
 #define REINDEX_REL_FORCE_INDEXES_PERMANENT 0x10
 
-extern bool reindex_relation(Oid relid, int flags, ReindexParams *params);
+extern bool reindex_relation(Oid relid, int flags, ReindexParams *params, LOCKMODE lockmode);
 
 extern bool ReindexIsProcessingHeap(Oid heapOid);
 extern bool ReindexIsProcessingIndex(Oid indexOid);

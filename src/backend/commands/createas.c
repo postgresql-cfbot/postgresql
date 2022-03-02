@@ -32,6 +32,7 @@
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "catalog/namespace.h"
+#include "catalog/storage_gtt.h"
 #include "catalog/toasting.h"
 #include "commands/createas.h"
 #include "commands/matview.h"
@@ -519,6 +520,12 @@ intorel_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 	 * Finally we can open the target table
 	 */
 	intoRelationDesc = table_open(intoRelationAddr.objectId, AccessExclusiveLock);
+
+	/*
+	 * Try initializing the global Temp table storage file before writing data
+	 * to the table.
+	 */
+	gtt_init_storage(CMD_INSERT, intoRelationDesc);
 
 	/*
 	 * Make sure the constructed table does not have RLS enabled.

@@ -655,6 +655,10 @@
 					# autovacuum, -1 means use
 					# vacuum_cost_limit
 
+#max_active_global_temporary_table = 1000   # default active global temporary table
+                                            # -1 means disable gLobal temporary table
+
+#vacuum_gtt_defer_check_age = 10000         # global temporary table age check
 
 #------------------------------------------------------------------------------
 # CLIENT CONNECTION DEFAULTS

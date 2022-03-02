@@ -39,7 +39,9 @@
 #include "catalog/pg_database.h"
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_namespace.h"
+#include "catalog/storage_gtt.h"
 #include "commands/cluster.h"
+#include "commands/dbcommands.h"
 #include "commands/defrem.h"
 #include "commands/vacuum.h"
 #include "miscadmin.h"
@@ -1332,6 +1334,11 @@ vac_update_relstats(Relation relation,
 	Form_pg_class pgcform;
 	bool		dirty;
 
+	if (RELATION_IS_GLOBAL_TEMP(relation))
+		return vac_update_gtt_relstats(relation, num_pages, num_tuples,
+									   num_all_visible_pages, hasindex,
+									   frozenxid, minmulti, in_outer_xact);
+
 	rd = table_open(RelationRelationId, RowExclusiveLock);
 
 	/* Fetch a copy of the tuple to scribble on */
@@ -1434,7 +1441,6 @@ vac_update_relstats(Relation relation,
 	table_close(rd, RowExclusiveLock);
 }
 
-
 /*
  *	vac_update_datfrozenxid() -- update pg_database.datfrozenxid for our DB
  *
@@ -1527,6 +1533,13 @@ vac_update_datfrozenxid(void)
 		}
 
 		/*
+		 * The relfrozenxid for a global temporary talble is stored in localhash,
+		 * not pg_class, See list_all_session_gtt_frozenxids()
+		 */
+		if (classForm->relpersistence == RELPERSISTENCE_GLOBAL_TEMP)
+			continue;
+
+		/*
 		 * Some table AMs might not need per-relation xid / multixid horizons.
 		 * It therefore seems reasonable to allow relfrozenxid and relminmxid
 		 * to not be set (i.e. set to their respective Invalid*Id)
@@ -1582,6 +1595,42 @@ vac_update_datfrozenxid(void)
 
 	Assert(TransactionIdIsNormal(newFrozenXid));
 	Assert(MultiXactIdIsValid(newMinMulti));
+
+	/* If enable global temporary table */
+	if (max_active_gtt > 0)
+	{
+		TransactionId	safe_age;
+		TransactionId	oldest_gtt_frozenxid =
+			gtt_get_oldest_frozenxids_in_current_database(NULL, NULL);
+
+		if (TransactionIdIsNormal(oldest_gtt_frozenxid))
+		{
+			safe_age = oldest_gtt_frozenxid + vacuum_gtt_defer_check_age;
+			if (safe_age < FirstNormalTransactionId)
+				safe_age += FirstNormalTransactionId;
+
+			/*
+			 * We tolerate that the minimum age of gtt is less than
+			 * the minimum age of conventional tables, otherwise it will
+			 * throw warning message.
+			 */
+			if (TransactionIdIsNormal(safe_age) &&
+				TransactionIdPrecedes(safe_age, newFrozenXid))
+			{
+				ereport(WARNING,
+						(errmsg("global temporary table oldest relfrozenxid %u is far in the past",
+								oldest_gtt_frozenxid),
+						 errdetail("The oldest relfrozenxid %u in database \"%s\"", newFrozenXid, get_database_name(MyDatabaseId)),
+						 errhint("please consider cleaning up the data in global temporary table to avoid wraparound problems.")));
+			}
+
+			/*
+			 * We need to ensure that the clog required by gtt is not cleand.
+			 */
+			if (TransactionIdPrecedes(oldest_gtt_frozenxid, newFrozenXid))
+				newFrozenXid = oldest_gtt_frozenxid;
+		}
+	}
 
 	/* Now fetch the pg_database tuple we need to update. */
 	relation = table_open(DatabaseRelationId, RowExclusiveLock);
@@ -1928,6 +1977,19 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params)
 		ereport(WARNING,
 				(errmsg("skipping \"%s\" --- cannot vacuum non-tables or special system tables",
 						RelationGetRelationName(rel))));
+		relation_close(rel, lmode);
+		PopActiveSnapshot();
+		CommitTransactionCommand();
+		return false;
+	}
+
+	/*
+	 * Skip those global temporary table that are not initialized in
+	 * this session.
+	 */
+	if (RELATION_IS_GLOBAL_TEMP(rel) &&
+		!gtt_storage_attached(RelationGetRelid(rel)))
+	{
 		relation_close(rel, lmode);
 		PopActiveSnapshot();
 		CommitTransactionCommand();

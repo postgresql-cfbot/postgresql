@@ -39,7 +39,7 @@ TestSpec		parseresult;			/* result of parsing is left here */
 }
 
 %type <ptr_list> setup_list
-%type <str>  opt_setup opt_teardown
+%type <str>  opt_setup opt_teardown opt_initialize opt_destroy
 %type <str> setup
 %type <ptr_list> step_list session_list permutation_list opt_permutation_list
 %type <ptr_list> permutation_step_list blocker_list
@@ -51,23 +51,27 @@ TestSpec		parseresult;			/* result of parsing is left here */
 
 %token <str> sqlblock identifier
 %token <integer> INTEGER
-%token NOTICES PERMUTATION SESSION SETUP STEP TEARDOWN TEST
+%token NOTICES PERMUTATION SESSION SETUP STEP TEARDOWN TEST INITIALIZE DESTROY
 
 %%
 
 TestSpec:
+			opt_initialize
 			setup_list
 			opt_teardown
+			opt_destroy
 			session_list
 			opt_permutation_list
 			{
-				parseresult.setupsqls = (char **) $1.elements;
-				parseresult.nsetupsqls = $1.nelements;
-				parseresult.teardownsql = $2;
-				parseresult.sessions = (Session **) $3.elements;
-				parseresult.nsessions = $3.nelements;
-				parseresult.permutations = (Permutation **) $4.elements;
-				parseresult.npermutations = $4.nelements;
+				parseresult.setupsqls = (char **) $2.elements;
+				parseresult.nsetupsqls = $2.nelements;
+				parseresult.teardownsql = $3;
+				parseresult.sessions = (Session **) $5.elements;
+				parseresult.nsessions = $5.nelements;
+				parseresult.permutations = (Permutation **) $6.elements;
+				parseresult.npermutations = $6.nelements;
+				parseresult.initialize = $1;
+				parseresult.destroy = $4;
 			}
 		;
 
@@ -98,6 +102,16 @@ setup:
 opt_teardown:
 			/* EMPTY */			{ $$ = NULL; }
 			| TEARDOWN sqlblock	{ $$ = $2; }
+		;
+
+opt_initialize:
+			/* EMPTY */			{ $$ = NULL; }
+			| INITIALIZE sqlblock	{ $$ = $2; }
+		;
+
+opt_destroy:
+			/* EMPTY */			{ $$ = NULL; }
+			| DESTROY sqlblock	{ $$ = $2; }
 		;
 
 session_list:

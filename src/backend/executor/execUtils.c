@@ -50,6 +50,7 @@
 #include "access/table.h"
 #include "access/tableam.h"
 #include "access/transam.h"
+#include "catalog/storage_gtt.h"
 #include "executor/executor.h"
 #include "executor/execPartition.h"
 #include "jit/jit.h"
@@ -832,7 +833,7 @@ ExecGetRangeTableRelation(EState *estate, Index rti)
  */
 void
 ExecInitResultRelation(EState *estate, ResultRelInfo *resultRelInfo,
-					   Index rti)
+					   Index rti, CmdType operation)
 {
 	Relation	resultRelationDesc;
 
@@ -842,6 +843,9 @@ ExecInitResultRelation(EState *estate, ResultRelInfo *resultRelInfo,
 					  rti,
 					  NULL,
 					  estate->es_instrument);
+
+	/* Check and init global temporary table storage in this session */
+	gtt_init_storage(operation, resultRelationDesc);
 
 	if (estate->es_result_relations == NULL)
 		estate->es_result_relations = (ResultRelInfo **)

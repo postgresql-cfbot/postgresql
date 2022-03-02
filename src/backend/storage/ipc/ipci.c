@@ -23,6 +23,7 @@
 #include "access/syncscan.h"
 #include "access/twophase.h"
 #include "access/xlogrecovery.h"
+#include "catalog/storage_gtt.h"
 #include "commands/async.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -145,6 +146,7 @@ CalculateShmemSize(int *num_semaphores)
 	size = add_size(size, BTreeShmemSize());
 	size = add_size(size, SyncScanShmemSize());
 	size = add_size(size, AsyncShmemSize());
+	size = add_size(size, active_gtt_shared_hash_size());
 #ifdef EXEC_BACKEND
 	size = add_size(size, ShmemBackendArraySize());
 #endif
@@ -249,6 +251,8 @@ CreateSharedMemoryAndSemaphores(void)
 	SUBTRANSShmemInit();
 	MultiXactShmemInit();
 	InitBufferPool();
+	/* For global temporary table shared hashtable */
+	active_gtt_shared_hash_init();
 
 	/*
 	 * Set up lock manager

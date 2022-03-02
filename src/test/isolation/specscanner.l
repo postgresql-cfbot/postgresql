@@ -67,6 +67,8 @@ session			{ return SESSION; }
 setup			{ return SETUP; }
 step			{ return STEP; }
 teardown		{ return TEARDOWN; }
+initialize		 { return INITIALIZE; }
+destroy			 { return DESTROY; }
 
  /* Whitespace and comments */
 [\n]			{ yyline++; }

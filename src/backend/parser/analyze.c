@@ -96,7 +96,7 @@ static bool test_raw_expression_coverage(Node *node, void *context);
 
 
 /*
- * parse_analyze
+ * parse_analyze_fixedparams
  *		Analyze a raw parse tree and transform it to Query form.
  *
  * Optionally, information about $n parameter types can be supplied.
@@ -107,8 +107,8 @@ static bool test_raw_expression_coverage(Node *node, void *context);
  * a dummy CMD_UTILITY Query node.
  */
 Query *
-parse_analyze(RawStmt *parseTree, const char *sourceText,
-			  Oid *paramTypes, int numParams,
+parse_analyze_fixedparams(RawStmt *parseTree, const char *sourceText,
+			  const Oid *paramTypes, int numParams,
 			  QueryEnvironment *queryEnv)
 {
 	ParseState *pstate = make_parsestate(NULL);
@@ -120,7 +120,7 @@ parse_analyze(RawStmt *parseTree, const char *sourceText,
 	pstate->p_sourcetext = sourceText;
 
 	if (numParams > 0)
-		parse_fixed_parameters(pstate, paramTypes, numParams);
+		setup_parse_fixed_parameters(pstate, paramTypes, numParams);
 
 	pstate->p_queryEnv = queryEnv;
 
@@ -148,7 +148,8 @@ parse_analyze(RawStmt *parseTree, const char *sourceText,
  */
 Query *
 parse_analyze_varparams(RawStmt *parseTree, const char *sourceText,
-						Oid **paramTypes, int *numParams)
+						Oid **paramTypes, int *numParams,
+						QueryEnvironment *queryEnv)
 {
 	ParseState *pstate = make_parsestate(NULL);
 	Query	   *query;
@@ -158,7 +159,9 @@ parse_analyze_varparams(RawStmt *parseTree, const char *sourceText,
 
 	pstate->p_sourcetext = sourceText;
 
-	parse_variable_parameters(pstate, paramTypes, numParams);
+	setup_parse_variable_parameters(pstate, paramTypes, numParams);
+
+	pstate->p_queryEnv = queryEnv;
 
 	query = transformTopLevelStmt(pstate, parseTree);
 
@@ -177,6 +180,44 @@ parse_analyze_varparams(RawStmt *parseTree, const char *sourceText,
 
 	return query;
 }
+
+/*
+ * parse_analyze_withcb
+ *
+ * This variant is used when the caller supplies their own parser callback to
+ * resolve parameters and possibly other things.
+ */
+Query *
+parse_analyze_withcb(RawStmt *parseTree, const char *sourceText,
+					 ParserSetupHook parserSetup,
+					 void *parserSetupArg,
+					 QueryEnvironment *queryEnv)
+{
+	ParseState *pstate = make_parsestate(NULL);
+	Query	   *query;
+	JumbleState *jstate = NULL;
+
+	Assert(sourceText != NULL); /* required as of 8.4 */
+
+	pstate->p_sourcetext = sourceText;
+	pstate->p_queryEnv = queryEnv;
+	(*parserSetup) (pstate, parserSetupArg);
+
+	query = transformTopLevelStmt(pstate, parseTree);
+
+	if (IsQueryIdEnabled())
+		jstate = JumbleQuery(query, sourceText);
+
+	if (post_parse_analyze_hook)
+		(*post_parse_analyze_hook) (pstate, query, jstate);
+
+	free_parsestate(pstate);
+
+	pgstat_report_query_id(query->queryId, false);
+
+	return query;
+}
+
 
 /*
  * parse_sub_analyze

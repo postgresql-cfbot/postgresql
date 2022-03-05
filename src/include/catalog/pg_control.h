@@ -132,6 +132,10 @@ typedef struct ControlFileData
 
 	CheckPoint	checkPointCopy; /* copy of last check point record */
 
+	XLogRecPtr	lastRecoveryLSN;	/* redo LSN of last recovery checkpoint */
+	XLogRecPtr	lastRecoveryTime;	/* time of last recovery checkpoint */
+	uint64		recoveryCount;		/* number of recoveries since last reset */
+
 	XLogRecPtr	unloggedLSN;	/* current fake LSN value, for unlogged rels */
 
 	/*

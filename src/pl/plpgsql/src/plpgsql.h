@@ -443,6 +443,7 @@ typedef struct PLpgSQL_nsitem
 	 */
 	int			itemno;
 	struct PLpgSQL_nsitem *prev;
+	char	   *alias;							/* used when original name should not be used */
 	char		name[FLEXIBLE_ARRAY_MEMBER];	/* nul-terminated string */
 } PLpgSQL_nsitem;
 
@@ -1012,6 +1013,9 @@ typedef struct PLpgSQL_function
 	/* these fields change when the function is used */
 	struct PLpgSQL_execstate *cur_estate;
 	unsigned long use_count;
+
+	/* routine level namespace entry */
+	struct PLpgSQL_nsitem *root_ns;
 } PLpgSQL_function;
 
 /*

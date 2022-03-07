@@ -44,9 +44,17 @@
 #define LZ4_MAX_BLCKSZ		0
 #endif
 
+#ifdef USE_ZSTD
+#include <zstd.h>
+#define ZSTD_MAX_BLCKSZ		ZSTD_COMPRESSBOUND(BLCKSZ)
+#else
+#define ZSTD_MAX_BLCKSZ		0
+#endif
+
+/* Buffer size required to store a compressed version of backup block image */
 #define PGLZ_MAX_BLCKSZ		PGLZ_MAX_OUTPUT(BLCKSZ)
 
-#define COMPRESS_BUFSIZE	Max(PGLZ_MAX_BLCKSZ, LZ4_MAX_BLCKSZ)
+#define COMPRESS_BUFSIZE	Max(Max(PGLZ_MAX_BLCKSZ, LZ4_MAX_BLCKSZ), ZSTD_MAX_BLCKSZ)
 
 /*
  * For each block reference registered with XLogRegisterBuffer, we fill in
@@ -681,25 +689,10 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
 				bimg.length = compressed_len;
 
 				/* Set the compression method used for this block */
-				switch ((WalCompression) wal_compression)
-				{
-					case WAL_COMPRESSION_PGLZ:
-						bimg.bimg_info |= BKPIMAGE_COMPRESS_PGLZ;
-						break;
+				Assert(wal_compression < (1 << BKPIMAGE_COMPRESS_BITS));
 
-					case WAL_COMPRESSION_LZ4:
-#ifdef USE_LZ4
-						bimg.bimg_info |= BKPIMAGE_COMPRESS_LZ4;
-#else
-						elog(ERROR, "LZ4 is not supported by this build");
-#endif
-						break;
-
-					case WAL_COMPRESSION_NONE:
-						Assert(false);	/* cannot happen */
-						break;
-						/* no default case, so that compiler will warn */
-				}
+				bimg.bimg_info |=
+					wal_compression << BKPIMAGE_COMPRESS_OFFSET_BITS;
 
 				rdt_datas_last->data = regbuf->compressed_page;
 				rdt_datas_last->len = compressed_len;
@@ -894,12 +887,23 @@ XLogCompressBackupBlock(char *page, uint16 hole_offset, uint16 hole_length,
 
 		case WAL_COMPRESSION_LZ4:
 #ifdef USE_LZ4
-			len = LZ4_compress_default(source, dest, orig_len,
-									   COMPRESS_BUFSIZE);
+			len = LZ4_compress_fast(source, dest, orig_len,
+									   COMPRESS_BUFSIZE, wal_compression_level);
 			if (len <= 0)
 				len = -1;		/* failure */
 #else
 			elog(ERROR, "LZ4 is not supported by this build");
+#endif
+			break;
+
+		case WAL_COMPRESSION_ZSTD:
+#ifdef USE_ZSTD
+			len = ZSTD_compress(dest, COMPRESS_BUFSIZE, source, orig_len,
+								wal_compression_level);
+			if (ZSTD_isError(len))
+				len = -1;
+#else
+			elog(ERROR, "ZSTD is not supported by this build");
 #endif
 			break;
 

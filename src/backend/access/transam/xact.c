@@ -204,7 +204,7 @@ typedef struct TransactionStateData
 	int			prevSecContext; /* previous SecurityRestrictionContext */
 	bool		prevXactReadOnly;	/* entry-time xact r/o state */
 	bool		startedInRecovery;	/* did we start in recovery? */
-	bool		didLogXid;		/* has xid been included in WAL record? */
+	XLogRecPtr 	minLSN;			/* LSN needed to reach to record the xid */
 	int			parallelModeLevel;	/* Enter/ExitParallelMode counter */
 	bool		chain;			/* start a new block after this one */
 	bool		topXidLogged;	/* for a subxact: is top-level XID logged? */
@@ -523,12 +523,16 @@ GetCurrentFullTransactionIdIfAny(void)
  *	MarkCurrentTransactionIdLoggedIfAny
  *
  * Remember that the current xid - if it is assigned - now has been wal logged.
+ *
+ * upto is the LSN up to which we need to flush WAL to ensure the current xid
+ * to be persistent. See EnsureCurrentTransactionIdLogged().
  */
 void
-MarkCurrentTransactionIdLoggedIfAny(void)
+MarkCurrentTransactionIdLoggedIfAny(XLogRecPtr upto)
 {
-	if (FullTransactionIdIsValid(CurrentTransactionState->fullTransactionId))
-		CurrentTransactionState->didLogXid = true;
+	if (FullTransactionIdIsValid(CurrentTransactionState->fullTransactionId) &&
+		XLogRecPtrIsInvalid(CurrentTransactionState->minLSN))
+		CurrentTransactionState->minLSN = upto;
 }
 
 /*
@@ -580,6 +584,35 @@ MarkSubxactTopXidLogged(void)
 	Assert(IsSubxactTopXidLogPending());
 
 	CurrentTransactionState->topXidLogged = true;
+}
+
+/*
+ *	EnsureCurrentTransactionIdLogged
+ *
+ * Make sure that the current top XID is WAL-logged.
+ */
+void
+EnsureTopTransactionIdLogged(void)
+{
+	/*
+	 * We need at least one WAL record for the current top transaction to be
+	 * flushed out.  Write one if we don't have one yet.
+	 */
+	if (XLogRecPtrIsInvalid(TopTransactionStateData.minLSN))
+	{
+		xl_xact_assignment xlrec;
+
+		xlrec.xtop = XidFromFullTransactionId(XactTopFullTransactionId);
+		Assert(TransactionIdIsValid(xlrec.xtop));
+		xlrec.nsubxacts = 0;
+
+		XLogBeginInsert();
+		XLogRegisterData((char *) &xlrec, MinSizeOfXactAssignment);
+		TopTransactionStateData.minLSN =
+			XLogInsert(RM_XACT_ID, XLOG_XACT_ASSIGNMENT);
+	}
+
+	XLogFlush(TopTransactionStateData.minLSN);
 }
 
 /*
@@ -669,14 +702,14 @@ AssignTransactionId(TransactionState s)
 	 * When wal_level=logical, guarantee that a subtransaction's xid can only
 	 * be seen in the WAL stream if its toplevel xid has been logged before.
 	 * If necessary we log an xact_assignment record with fewer than
-	 * PGPROC_MAX_CACHED_SUBXIDS. Note that it is fine if didLogXid isn't set
+	 * PGPROC_MAX_CACHED_SUBXIDS. Note that it is fine if minLSN isn't set
 	 * for a transaction even though it appears in a WAL record, we just might
 	 * superfluously log something. That can happen when an xid is included
 	 * somewhere inside a wal record, but not in XLogRecord->xl_xid, like in
 	 * xl_standby_locks.
 	 */
 	if (isSubXact && XLogLogicalInfoActive() &&
-		!TopTransactionStateData.didLogXid)
+		XLogRecPtrIsInvalid(TopTransactionStateData.minLSN))
 		log_unknown_top = true;
 
 	/*
@@ -746,6 +779,7 @@ AssignTransactionId(TransactionState s)
 			log_unknown_top)
 		{
 			xl_xact_assignment xlrec;
+			XLogRecPtr		   endptr;
 
 			/*
 			 * xtop is always set by now because we recurse up transaction
@@ -760,11 +794,13 @@ AssignTransactionId(TransactionState s)
 			XLogRegisterData((char *) unreportedXids,
 							 nUnreportedXids * sizeof(TransactionId));
 
-			(void) XLogInsert(RM_XACT_ID, XLOG_XACT_ASSIGNMENT);
+			endptr = XLogInsert(RM_XACT_ID, XLOG_XACT_ASSIGNMENT);
 
 			nUnreportedXids = 0;
-			/* mark top, not current xact as having been logged */
-			TopTransactionStateData.didLogXid = true;
+
+			/* set minLSN of top, not of current xact if not yet */
+			if (XLogRecPtrIsInvalid(TopTransactionStateData.minLSN))
+				TopTransactionStateData.minLSN = endptr;
 		}
 	}
 }
@@ -2049,7 +2085,7 @@ StartTransaction(void)
 	 * initialize reported xid accounting
 	 */
 	nUnreportedXids = 0;
-	s->didLogXid = false;
+	s->minLSN = InvalidXLogRecPtr;
 
 	/*
 	 * must initialize resource-management stuff first

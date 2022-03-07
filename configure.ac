@@ -1060,7 +1060,7 @@ fi
 # ZSTD
 #
 AC_MSG_CHECKING([whether to build with ZSTD support])
-PGAC_ARG_BOOL(with, zstd, no, [build with ZSTD support],
+PGAC_ARG_BOOL(with, zstd, yes, [build with ZSTD support],
               [AC_DEFINE([USE_ZSTD], 1, [Define to 1 to build with ZSTD support. (--with-zstd)])])
 AC_MSG_RESULT([$with_zstd])
 AC_SUBST(with_zstd)

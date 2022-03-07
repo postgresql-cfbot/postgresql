@@ -16,6 +16,8 @@
 #include "datatype/timestamp.h"
 #include "lib/stringinfo.h"
 #include "nodes/pg_list.h"
+#include "storage/fd.h"
+#include "utils/guc.h"
 
 
 /* Sync methods */
@@ -51,6 +53,10 @@ extern char *wal_consistency_checking_string;
 extern bool log_checkpoints;
 extern bool track_wal_io_timing;
 
+extern char *wal_compression_string;
+extern int wal_compression;
+extern int wal_compression_level;
+
 extern int	CheckPointSegments;
 
 /* Archive modes */
@@ -75,7 +81,8 @@ typedef enum WalCompression
 {
 	WAL_COMPRESSION_NONE = 0,
 	WAL_COMPRESSION_PGLZ,
-	WAL_COMPRESSION_LZ4
+	WAL_COMPRESSION_LZ4,
+	WAL_COMPRESSION_ZSTD
 } WalCompression;
 
 /* Recovery states */
@@ -246,6 +253,11 @@ extern void SetWalWriterSleeping(bool sleeping);
 
 extern void assign_max_wal_size(int newval, void *extra);
 extern void assign_checkpoint_completion_target(double newval, void *extra);
+
+/* GUC */
+extern bool check_wal_compression(char **newval, void **extra, GucSource source);
+extern void assign_wal_compression(const char *newval, void *extra);
+
 
 /*
  * Routines used by xlogrecovery.c to call back into xlog.c during recovery.

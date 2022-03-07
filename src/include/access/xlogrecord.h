@@ -147,10 +147,18 @@ typedef struct XLogRecordBlockImageHeader
 #define BKPIMAGE_APPLY			0x02	/* page image should be restored
 										 * during replay */
 /* compression methods supported */
-#define BKPIMAGE_COMPRESS_PGLZ	0x04
-#define BKPIMAGE_COMPRESS_LZ4	0x08
+#define BKPIMAGE_COMPRESS_METHOD1	0x04	/* bits to encode compression method */
+#define BKPIMAGE_COMPRESS_METHOD2	0x08	/* 0=none, 1=pglz, 2=lz4, 3=zstd */
+
+/* How many bits to shift to extract compression */
+#define	BKPIMAGE_COMPRESS_OFFSET_BITS	2
+/* How many bits are for compression */
+#define	BKPIMAGE_COMPRESS_BITS			2
+/* Extract the compression from the bimg_info */
+#define	BKPIMAGE_COMPRESSION(info)		((info >> BKPIMAGE_COMPRESS_OFFSET_BITS) & ((1<<BKPIMAGE_COMPRESS_BITS) - 1))
+// #define	BKPIMAGE_COMPRESSED(info)	(BKPIMAGE_COMPRESSION(info) != 0)
 #define	BKPIMAGE_COMPRESSED(info) \
-	((info & (BKPIMAGE_COMPRESS_PGLZ | BKPIMAGE_COMPRESS_LZ4)) != 0)
+	((info & (BKPIMAGE_COMPRESS_METHOD1 | BKPIMAGE_COMPRESS_METHOD2)) != 0)
 
 /*
  * Extra header information used when page image has "hole" and

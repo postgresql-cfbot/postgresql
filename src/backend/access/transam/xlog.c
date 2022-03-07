@@ -120,7 +120,9 @@ char	   *XLogArchiveCommand = NULL;
 bool		EnableHotStandby = false;
 bool		fullPageWrites = true;
 bool		wal_log_hints = false;
-int			wal_compression = WAL_COMPRESSION_NONE;
+int			wal_compression = WAL_COMPRESSION_ZSTD;
+char		*wal_compression_string = ""; /* Overwritten by GUC */
+int			wal_compression_level = 1;
 char	   *wal_consistency_checking_string = NULL;
 bool	   *wal_consistency_checking = NULL;
 bool		wal_init_zero = true;
@@ -913,7 +915,7 @@ XLogInsertRecord(XLogRecData *rdata,
 
 	END_CRIT_SECTION();
 
-	MarkCurrentTransactionIdLoggedIfAny();
+	MarkCurrentTransactionIdLoggedIfAny(EndPos);
 
 	/*
 	 * Mark top transaction id is logged (if needed) so that we should not try
@@ -7921,6 +7923,24 @@ assign_xlog_sync_method(int new_sync_method, void *extra)
 				XLogFileClose();
 		}
 	}
+}
+
+bool
+check_wal_compression(char **newval, void **extra, GucSource source)
+{
+	int tmp;
+	if (get_compression_level(*newval, &tmp) != -1)
+		return true;
+
+	return false;
+}
+
+/* Parse the GUC into integers for wal_compression and wal_compression_level */
+void
+assign_wal_compression(const char *newval, void *extra)
+{
+	wal_compression = get_compression_level(newval, &wal_compression_level);
+	Assert(wal_compression >= 0);
 }
 
 

@@ -18,6 +18,7 @@
 #include <unistd.h>
 
 #include "access/transam.h"
+#include "access/xlog.h"
 #include "access/xlog_internal.h"
 #include "access/xlogreader.h"
 #include "access/xlogrecord.h"
@@ -556,15 +557,10 @@ XLogDumpDisplayRecord(XLogDumpConfig *config, XLogReaderState *record)
 
 				if (BKPIMAGE_COMPRESSED(bimg_info))
 				{
-					const char *method;
+					int compressid = BKPIMAGE_COMPRESSION(bimg_info);
+					const char *methods[] = {"none", "pglz", "lz4", "zstd"};
 
-					if ((bimg_info & BKPIMAGE_COMPRESS_PGLZ) != 0)
-						method = "pglz";
-					else if ((bimg_info & BKPIMAGE_COMPRESS_LZ4) != 0)
-						method = "lz4";
-					else
-						method = "unknown";
-
+					Assert(compressid < lengthof(methods));
 					printf(" (FPW%s); hole: offset: %u, length: %u, "
 						   "compression saved: %u, method: %s",
 						   XLogRecBlockImageApply(record, block_id) ?
@@ -574,7 +570,7 @@ XLogDumpDisplayRecord(XLogDumpConfig *config, XLogReaderState *record)
 						   BLCKSZ -
 						   record->blocks[block_id].hole_length -
 						   record->blocks[block_id].bimg_len,
-						   method);
+						   methods[compressid]);
 				}
 				else
 				{

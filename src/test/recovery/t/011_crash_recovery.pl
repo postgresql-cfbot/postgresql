@@ -12,7 +12,7 @@ use Test::More;
 use Config;
 
 my $node = PostgreSQL::Test::Cluster->new('primary');
-$node->init(allows_streaming => 1);
+$node->init(allows_streaming => 0);
 $node->start;
 
 my ($stdin, $stdout, $stderr) = ('', '', '');

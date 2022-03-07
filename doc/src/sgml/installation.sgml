@@ -273,6 +273,14 @@ su - postgres
 
     <listitem>
      <para>
+      The <productname>ZSTD</productname> library can be used to enable
+      compression using that method; see
+      <xref linkend="guc-wal-compression"/>.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
       To build the <productname>PostgreSQL</productname> documentation,
       there is a separate set of requirements; see
       <xref linkend="docguide-toolsets"/>.
@@ -988,6 +996,8 @@ build-postgresql:
        <listitem>
         <para>
          Build with <productname>ZSTD</productname> compression support.
+         This enables use of <productname>ZSTD</productname> for
+         compression of WAL data.
         </para>
        </listitem>
       </varlistentry>

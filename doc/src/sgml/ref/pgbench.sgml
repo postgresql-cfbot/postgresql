@@ -152,7 +152,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
 
     <variablelist>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-dbname">
       <term><replaceable class="parameter">dbname</replaceable></term>
       <listitem>
        <para>
@@ -164,7 +164,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-initialize">
       <term><option>-i</option></term>
       <term><option>--initialize</option></term>
       <listitem>
@@ -174,7 +174,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-init-steps">
       <term><option>-I <replaceable>init_steps</replaceable></option></term>
       <term><option>--init-steps=<replaceable>init_steps</replaceable></option></term>
       <listitem>
@@ -187,7 +187,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
         The available steps are:
 
         <variablelist>
-         <varlistentry>
+         <varlistentry id="pgbench-options-init-steps-d">
           <term><literal>d</literal> (Drop)</term>
           <listitem>
            <para>
@@ -195,7 +195,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
            </para>
           </listitem>
          </varlistentry>
-         <varlistentry>
+         <varlistentry id="pgbench-options-init-steps-t">
           <term><literal>t</literal> (create Tables)</term>
           <listitem>
            <para>
@@ -208,7 +208,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
            </para>
           </listitem>
          </varlistentry>
-         <varlistentry>
+         <varlistentry id="pgbench-options-init-steps-g">
           <term><literal>g</literal> or <literal>G</literal> (Generate data, client-side or server-side)</term>
           <listitem>
            <para>
@@ -242,7 +242,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
            </para>
           </listitem>
          </varlistentry>
-         <varlistentry>
+         <varlistentry id="pgbench-options-init-steps-v">
           <term><literal>v</literal> (Vacuum)</term>
           <listitem>
            <para>
@@ -250,7 +250,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
            </para>
           </listitem>
          </varlistentry>
-         <varlistentry>
+         <varlistentry id="pgbench-options-init-steps-p">
           <term><literal>p</literal> (create Primary keys)</term>
           <listitem>
            <para>
@@ -258,7 +258,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
            </para>
           </listitem>
          </varlistentry>
-         <varlistentry>
+         <varlistentry id="pgbench-options-init-steps-f">
          <term><literal>f</literal> (create Foreign keys)</term>
           <listitem>
            <para>
@@ -271,7 +271,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-fillfactor">
       <term><option>-F</option> <replaceable>fillfactor</replaceable></term>
       <term><option>--fillfactor=</option><replaceable>fillfactor</replaceable></term>
       <listitem>
@@ -284,7 +284,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-no-vacuum-init">
       <term><option>-n</option></term>
       <term><option>--no-vacuum</option></term>
       <listitem>
@@ -296,7 +296,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-quiet">
       <term><option>-q</option></term>
       <term><option>--quiet</option></term>
       <listitem>
@@ -312,7 +312,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-scale-init">
       <term><option>-s</option> <replaceable>scale_factor</replaceable></term>
       <term><option>--scale=</option><replaceable>scale_factor</replaceable></term>
       <listitem>
@@ -329,7 +329,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-foreign-keys">
       <term><option>--foreign-keys</option></term>
       <listitem>
        <para>
@@ -340,7 +340,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-index-tablespace">
       <term><option>--index-tablespace=<replaceable>index_tablespace</replaceable></option></term>
       <listitem>
        <para>
@@ -350,7 +350,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-partition-method">
       <term><option>--partition-method=<replaceable>NAME</replaceable></option></term>
       <listitem>
        <para>
@@ -363,7 +363,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-partitions">
       <term><option>--partitions=<replaceable>NUM</replaceable></option></term>
       <listitem>
        <para>
@@ -375,7 +375,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-tablespace">
       <term><option>--tablespace=<replaceable>tablespace</replaceable></option></term>
       <listitem>
        <para>
@@ -385,7 +385,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-unlogged-tables">
       <term><option>--unlogged-tables</option></term>
       <listitem>
        <para>
@@ -407,7 +407,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
     benchmarking arguments:
 
     <variablelist>
-     <varlistentry>
+     <varlistentry id="pgbench-options-builtin">
       <term><option>-b</option> <replaceable>scriptname[@weight]</replaceable></term>
       <term><option>--builtin</option>=<replaceable>scriptname[@weight]</replaceable></term>
       <listitem>
@@ -428,7 +428,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-client">
       <term><option>-c</option> <replaceable>clients</replaceable></term>
       <term><option>--client=</option><replaceable>clients</replaceable></term>
       <listitem>
@@ -439,7 +439,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-connect">
       <term><option>-C</option></term>
       <term><option>--connect</option></term>
       <listitem>
@@ -451,7 +451,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-debug">
       <term><option>-d</option></term>
       <term><option>--debug</option></term>
       <listitem>
@@ -461,7 +461,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-define">
       <term><option>-D</option> <replaceable>varname</replaceable><literal>=</literal><replaceable>value</replaceable></term>
       <term><option>--define=</option><replaceable>varname</replaceable><literal>=</literal><replaceable>value</replaceable></term>
       <listitem>
@@ -472,7 +472,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-file">
       <term><option>-f</option> <replaceable>filename[@weight]</replaceable></term>
       <term><option>--file=</option><replaceable>filename[@weight]</replaceable></term>
       <listitem>
@@ -492,7 +492,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-jobs">
       <term><option>-j</option> <replaceable>threads</replaceable></term>
       <term><option>--jobs=</option><replaceable>threads</replaceable></term>
       <listitem>
@@ -505,7 +505,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-log">
       <term><option>-l</option></term>
       <term><option>--log</option></term>
       <listitem>
@@ -516,7 +516,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-latency-limit">
       <term><option>-L</option> <replaceable>limit</replaceable></term>
       <term><option>--latency-limit=</option><replaceable>limit</replaceable></term>
       <listitem>
@@ -534,7 +534,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
        </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-protocol">
       <term><option>-M</option> <replaceable>querymode</replaceable></term>
       <term><option>--protocol=</option><replaceable>querymode</replaceable></term>
       <listitem>
@@ -564,7 +564,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-no-vacuum-run">
       <term><option>-n</option></term>
       <term><option>--no-vacuum</option></term>
       <listitem>
@@ -579,7 +579,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-skip-some-updates">
       <term><option>-N</option></term>
       <term><option>--skip-some-updates</option></term>
       <listitem>
@@ -590,7 +590,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-progress">
       <term><option>-P</option> <replaceable>sec</replaceable></term>
       <term><option>--progress=</option><replaceable>sec</replaceable></term>
       <listitem>
@@ -606,7 +606,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-report-latencies">
       <term><option>-r</option></term>
       <term><option>--report-latencies</option></term>
       <listitem>
@@ -618,7 +618,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-rate">
       <term><option>-R</option> <replaceable>rate</replaceable></term>
       <term><option>--rate=</option><replaceable>rate</replaceable></term>
       <listitem>
@@ -669,7 +669,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-scale-run">
       <term><option>-s</option> <replaceable>scale_factor</replaceable></term>
       <term><option>--scale=</option><replaceable>scale_factor</replaceable></term>
       <listitem>
@@ -684,7 +684,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-select-only">
       <term><option>-S</option></term>
       <term><option>--select-only</option></term>
       <listitem>
@@ -695,7 +695,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-transactions">
       <term><option>-t</option> <replaceable>transactions</replaceable></term>
       <term><option>--transactions=</option><replaceable>transactions</replaceable></term>
       <listitem>
@@ -705,7 +705,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-time">
       <term><option>-T</option> <replaceable>seconds</replaceable></term>
       <term><option>--time=</option><replaceable>seconds</replaceable></term>
       <listitem>
@@ -717,7 +717,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-vacuum-all">
       <term><option>-v</option></term>
       <term><option>--vacuum-all</option></term>
       <listitem>
@@ -730,7 +730,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-aggregate-interval">
       <term><option>--aggregate-interval=<replaceable>seconds</replaceable></option></term>
       <listitem>
        <para>
@@ -741,7 +741,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-log-prefix">
       <term><option>--log-prefix=<replaceable>prefix</replaceable></option></term>
       <listitem>
        <para>
@@ -751,7 +751,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-progress-timestamp">
       <term><option>--progress-timestamp</option></term>
       <listitem>
        <para>
@@ -764,7 +764,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-random-seed">
       <term><option>--random-seed=</option><replaceable>seed</replaceable></term>
       <listitem>
        <para>
@@ -801,7 +801,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-sampling-rate">
       <term><option>--sampling-rate=<replaceable>rate</replaceable></option></term>
       <listitem>
        <para>
@@ -819,7 +819,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-show-script">
       <term><option>--show-script=</option><replaceable>scriptname</replaceable></term>
       <listitem>
        <para>
@@ -843,7 +843,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
 
     <variablelist>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-host">
       <term><option>-h</option> <replaceable>hostname</replaceable></term>
       <term><option>--host=</option><replaceable>hostname</replaceable></term>
       <listitem>
@@ -853,7 +853,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-port">
       <term><option>-p</option> <replaceable>port</replaceable></term>
       <term><option>--port=</option><replaceable>port</replaceable></term>
       <listitem>
@@ -863,7 +863,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-username">
       <term><option>-U</option> <replaceable>login</replaceable></term>
       <term><option>--username=</option><replaceable>login</replaceable></term>
       <listitem>
@@ -873,7 +873,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-version">
       <term><option>-V</option></term>
       <term><option>--version</option></term>
       <listitem>
@@ -883,7 +883,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="pgbench-options-help">
       <term><option>-?</option></term>
       <term><option>--help</option></term>
       <listitem>
@@ -917,7 +917,7 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
   <title>Environment</title>
 
   <variablelist>
-   <varlistentry>
+   <varlistentry id="pgbench-environment-pgdatabase-et-al">
     <term><envar>PGDATABASE</envar></term>
     <term><envar>PGHOST</envar></term>
     <term><envar>PGPORT</envar></term>
@@ -1142,7 +1142,7 @@ SELECT 4 AS four \; SELECT 5 AS five \aset
     </listitem>
    </varlistentry>
 
-   <varlistentry>
+   <varlistentry id="pgbench-metacommand-if-else">
     <term><literal>\if</literal> <replaceable class="parameter">expression</replaceable></term>
     <term><literal>\elif</literal> <replaceable class="parameter">expression</replaceable></term>
     <term><literal>\else</literal></term>
@@ -1212,7 +1212,7 @@ SELECT 4 AS four \; SELECT 5 AS five \aset
     </listitem>
    </varlistentry>
 
-   <varlistentry>
+   <varlistentry id="pgbench-metacommand-sleep">
     <term>
      <literal>\sleep <replaceable>number</replaceable> [ us | ms | s ]</literal>
     </term>
@@ -1235,7 +1235,7 @@ SELECT 4 AS four \; SELECT 5 AS five \aset
     </listitem>
    </varlistentry>
 
-   <varlistentry>
+   <varlistentry id="pgbench-metacommand-setshell">
     <term>
      <literal>\setshell <replaceable>varname</replaceable> <replaceable>command</replaceable> [ <replaceable>argument</replaceable> ... ]</literal>
     </term>
@@ -1263,7 +1263,7 @@ SELECT 4 AS four \; SELECT 5 AS five \aset
     </listitem>
    </varlistentry>
 
-   <varlistentry>
+   <varlistentry id="pgbench-metacommand-shell">
     <term>
      <literal>\shell <replaceable>command</replaceable> [ <replaceable>argument</replaceable> ... ]</literal>
     </term>

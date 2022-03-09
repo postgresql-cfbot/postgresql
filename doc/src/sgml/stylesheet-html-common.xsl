@@ -301,4 +301,115 @@ set       toc,title
   </xsl:choose>
 </xsl:template>
 
+
+<!-- Overridden template to add links to ids in varlists -->
+<xsl:template match="varlistentry">
+  <dt>
+    <xsl:call-template name="id.attribute"/>
+    <xsl:call-template name="anchor"/>
+    <xsl:apply-templates select="term"/>
+    <xsl:call-template name="pg.id.link"/>
+  </dt>
+  <dd>
+    <xsl:apply-templates select="listitem"/>
+  </dd>
+</xsl:template>
+
+<!-- Overridden template to add links to ids in sections -->
+<xsl:template name="section.heading">
+  <xsl:param name="section" select="."/>
+  <xsl:param name="level" select="1"/>
+  <xsl:param name="allow-anchors" select="1"/>
+  <xsl:param name="title"/>
+  <xsl:param name="class" select="'title'"/>
+
+  <xsl:variable name="id">
+    <xsl:choose>
+      <!-- Make sure the subtitle doesn't get the same id as the title -->
+      <xsl:when test="self::subtitle">
+        <xsl:call-template name="object.id">
+          <xsl:with-param name="object" select="."/>
+        </xsl:call-template>
+      </xsl:when>
+      <!-- if title is in an *info wrapper, get the grandparent -->
+      <xsl:when test="contains(local-name(..), 'info')">
+        <xsl:call-template name="object.id">
+          <xsl:with-param name="object" select="../.."/>
+        </xsl:call-template>
+      </xsl:when>
+      <xsl:otherwise>
+        <xsl:call-template name="object.id">
+          <xsl:with-param name="object" select=".."/>
+        </xsl:call-template>
+      </xsl:otherwise>
+    </xsl:choose>
+  </xsl:variable>
+
+  <!-- HTML H level is one higher than section level -->
+  <xsl:variable name="hlevel">
+    <xsl:choose>
+      <!-- highest valid HTML H level is H6; so anything nested deeper
+           than 5 levels down just becomes H6 -->
+      <xsl:when test="$level &gt; 5">6</xsl:when>
+      <xsl:otherwise>
+        <xsl:value-of select="$level + 1"/>
+      </xsl:otherwise>
+    </xsl:choose>
+  </xsl:variable>
+  <xsl:element name="h{$hlevel}" namespace="http://www.w3.org/1999/xhtml">
+    <xsl:attribute name="class"><xsl:value-of select="$class"/></xsl:attribute>
+    <xsl:if test="$css.decoration != '0'">
+      <xsl:if test="$hlevel&lt;3">
+        <xsl:attribute name="style">clear: both</xsl:attribute>
+      </xsl:if>
+    </xsl:if>
+    <xsl:if test="$allow-anchors != 0">
+      <xsl:call-template name="anchor">
+        <xsl:with-param name="node" select="$section"/>
+        <xsl:with-param name="conditional" select="0"/>
+      </xsl:call-template>
+    </xsl:if>
+    <xsl:copy-of select="$title"/>
+    <xsl:call-template name="pg.id.link">
+      <xsl:with-param name="object" select="$section"/>
+    </xsl:call-template>
+  </xsl:element>
+</xsl:template>
+
+<!-- Creates a link pointing to an id within the document -->
+<xsl:template name="pg.id.link">
+  <xsl:param name="object" select="."/>
+  <xsl:choose>
+    <xsl:when test="$object/@id or $object/@xml:id">
+      <a>
+        <xsl:attribute name="href">
+          <xsl:text>#</xsl:text>
+          <xsl:call-template name="object.id">
+            <xsl:with-param name="object" select="$object"/>
+          </xsl:call-template>
+        </xsl:attribute>
+        <xsl:attribute name="class">
+          <xsl:text>id_link</xsl:text>
+        </xsl:attribute>
+        <xsl:text> #</xsl:text>
+      </a>
+    </xsl:when>
+    <xsl:otherwise>
+      <!-- Only complain about varlistentries if at least one entry in the list has an id -->
+      <xsl:if test="name($object) != 'varlistentry' or $object/parent::variablelist/varlistentry[@id]">
+        <xsl:message terminate="no">
+          <xsl:value-of select ="name($object)"/>
+          <xsl:text> element without id. Please add an id to make it usable</xsl:text>
+          <xsl:text> as stable anchor in the public HTML documentation.</xsl:text>
+        </xsl:message>
+        <xsl:comment>
+          <xsl:text>Please add an id to the </xsl:text>
+          <xsl:value-of select ="name($object)"/>
+          <xsl:text> element in the sgml source code.</xsl:text>
+        </xsl:comment>
+      </xsl:if>
+    </xsl:otherwise>
+  </xsl:choose>
+</xsl:template>
+
 </xsl:stylesheet>

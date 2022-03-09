@@ -29,7 +29,7 @@
   using <command>GRANT</command>.
  </para>
 
- <sect2>
+ <sect2 id="pgbuffercache-pg_buffercache">
   <title>The <structname>pg_buffercache</structname> View</title>
 
   <para>
@@ -164,7 +164,7 @@
   </para>
  </sect2>
 
- <sect2>
+ <sect2 id="pgbuffercache-sample-output">
   <title>Sample Output</title>
 
 <screen>
@@ -194,7 +194,7 @@ regression=# SELECT n.nspname, c.relname, count(*) AS buffers
 </screen>
  </sect2>
 
- <sect2>
+ <sect2 id="pgbuffercache-authors">
   <title>Authors</title>
 
   <para>

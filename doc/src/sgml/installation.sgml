@@ -655,7 +655,7 @@ build-postgresql:
      </para>
 
      <variablelist>
-      <varlistentry>
+      <varlistentry id="configure-options-prefix">
        <term><option>--prefix=<replaceable>PREFIX</replaceable></option></term>
        <listitem>
         <para>
@@ -668,7 +668,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-exec-prefix">
        <term><option>--exec-prefix=<replaceable>EXEC-PREFIX</replaceable></option></term>
        <listitem>
         <para>
@@ -684,7 +684,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-bindir">
        <term><option>--bindir=<replaceable>DIRECTORY</replaceable></option></term>
        <listitem>
         <para>
@@ -695,7 +695,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-sysconfdir">
        <term><option>--sysconfdir=<replaceable>DIRECTORY</replaceable></option></term>
        <listitem>
         <para>
@@ -705,7 +705,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-libdir">
        <term><option>--libdir=<replaceable>DIRECTORY</replaceable></option></term>
        <listitem>
         <para>
@@ -716,7 +716,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-includedir">
        <term><option>--includedir=<replaceable>DIRECTORY</replaceable></option></term>
        <listitem>
         <para>
@@ -726,7 +726,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-datarootdir">
        <term><option>--datarootdir=<replaceable>DIRECTORY</replaceable></option></term>
        <listitem>
         <para>
@@ -738,7 +738,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-datadir">
        <term><option>--datadir=<replaceable>DIRECTORY</replaceable></option></term>
        <listitem>
         <para>
@@ -750,7 +750,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-localedir">
        <term><option>--localedir=<replaceable>DIRECTORY</replaceable></option></term>
        <listitem>
         <para>
@@ -761,7 +761,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-mandir">
        <term><option>--mandir=<replaceable>DIRECTORY</replaceable></option></term>
        <listitem>
         <para>
@@ -773,7 +773,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-docdir">
        <term><option>--docdir=<replaceable>DIRECTORY</replaceable></option></term>
        <listitem>
         <para>
@@ -785,7 +785,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-htmldir">
        <term><option>--htmldir=<replaceable>DIRECTORY</replaceable></option></term>
        <listitem>
         <para>
@@ -840,7 +840,7 @@ build-postgresql:
 
      <variablelist>
 
-      <varlistentry>
+      <varlistentry id="configure-options-enable-nls">
        <term><option>--enable-nls<optional>=<replaceable>LANGUAGES</replaceable></optional></option></term>
        <listitem>
         <para>
@@ -863,7 +863,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-with-perl">
        <term><option>--with-perl</option></term>
        <listitem>
         <para>
@@ -872,7 +872,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-with-python">
        <term><option>--with-python</option></term>
        <listitem>
         <para>
@@ -881,7 +881,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-with-tcl">
        <term><option>--with-tcl</option></term>
        <listitem>
         <para>
@@ -890,7 +890,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-with-tclconfig">
        <term><option>--with-tclconfig=<replaceable>DIRECTORY</replaceable></option></term>
        <listitem>
         <para>
@@ -904,7 +904,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-with-icu">
        <term><option>--with-icu</option></term>
        <listitem>
         <para>
@@ -974,7 +974,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-with-lz4">
        <term><option>--with-lz4</option></term>
        <listitem>
         <para>
@@ -983,7 +983,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-with-zstd">
        <term><option>--with-zstd</option></term>
        <listitem>
         <para>
@@ -992,7 +992,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-with-ssl">
        <term><option>--with-ssl=<replaceable>LIBRARY</replaceable></option>
        <indexterm>
         <primary>OpenSSL</primary>
@@ -1013,7 +1013,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-with-openssl">
        <term><option>--with-openssl</option></term>
        <listitem>
         <para>
@@ -1022,7 +1022,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-with-gssapi">
        <term><option>--with-gssapi</option></term>
        <listitem>
         <para>
@@ -1039,7 +1039,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-with-ldap">
        <term><option>--with-ldap</option></term>
        <listitem>
         <para>
@@ -1057,7 +1057,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-with-pam">
        <term><option>--with-pam</option></term>
        <listitem>
         <para>
@@ -1067,7 +1067,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-with-bsd-auth">
        <term><option>--with-bsd-auth</option></term>
        <listitem>
         <para>
@@ -1078,7 +1078,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-with-systemd">
        <term><option>--with-systemd</option></term>
        <listitem>
         <para>
@@ -1093,7 +1093,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-with-bonjour">
        <term><option>--with-bonjour</option></term>
        <listitem>
         <para>
@@ -1104,7 +1104,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-with-uuid">
        <term><option>--with-uuid=<replaceable>LIBRARY</replaceable></option></term>
        <listitem>
         <para>
@@ -1138,7 +1138,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-with-ossp-uuid">
        <term><option>--with-ossp-uuid</option></term>
        <listitem>
         <para>
@@ -1147,7 +1147,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-with-libxml">
        <term><option>--with-libxml</option></term>
        <listitem>
         <para>
@@ -1180,7 +1180,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-with-libxslt">
        <term><option>--with-libxslt</option></term>
        <listitem>
         <para>
@@ -1209,7 +1209,7 @@ build-postgresql:
 
      <variablelist>
 
-      <varlistentry>
+      <varlistentry id="configure-options-without-readline">
        <term><option>--without-readline</option></term>
        <listitem>
         <para>
@@ -1221,7 +1221,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-with-libedit-preferred">
        <term><option>--with-libedit-preferred</option></term>
        <listitem>
         <para>
@@ -1233,7 +1233,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-without-zlib">
        <term><option>--without-zlib</option></term>
        <listitem>
         <para>
@@ -1248,7 +1248,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-disable-spinlocks">
        <term><option>--disable-spinlocks</option></term>
        <listitem>
         <para>
@@ -1264,7 +1264,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-disable-atomics">
        <term><option>--disable-atomics</option></term>
        <listitem>
         <para>
@@ -1276,7 +1276,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-disable-thread-safety">
        <term><option>--disable-thread-safety</option></term>
        <listitem>
         <para>
@@ -1298,7 +1298,7 @@ build-postgresql:
 
      <variablelist>
 
-      <varlistentry>
+      <varlistentry id="configure-options-with-includes">
        <term><option>--with-includes=<replaceable>DIRECTORIES</replaceable></option></term>
        <listitem>
         <para>
@@ -1316,7 +1316,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-with-libraries">
        <term><option>--with-libraries=<replaceable>DIRECTORIES</replaceable></option></term>
        <listitem>
         <para>
@@ -1332,7 +1332,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-with-system-tzdata">
        <term><option>--with-system-tzdata=<replaceable>DIRECTORY</replaceable></option>
        <indexterm>
         <primary>time zone data</primary>
@@ -1372,7 +1372,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-with-extra-version">
        <term><option>--with-extra-version=<replaceable>STRING</replaceable></option></term>
        <listitem>
         <para>
@@ -1385,7 +1385,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-disable-rpath">
        <term><option>--disable-rpath</option></term>
        <listitem>
         <para>
@@ -1419,7 +1419,7 @@ build-postgresql:
 
      <variablelist>
 
-      <varlistentry>
+      <varlistentry id="configure-options-with-pgport">
        <term><option>--with-pgport=<replaceable>NUMBER</replaceable></option></term>
        <listitem>
         <para>
@@ -1434,7 +1434,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-with-krb-srvnam">
        <term><option>--with-krb-srvnam=<replaceable>NAME</replaceable></option></term>
        <listitem>
         <para>
@@ -1448,7 +1448,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-with-segsize">
        <term><option>--with-segsize=<replaceable>SEGSIZE</replaceable></option></term>
        <listitem>
         <para>
@@ -1473,7 +1473,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-with-blocksize">
        <term><option>--with-blocksize=<replaceable>BLOCKSIZE</replaceable></option></term>
        <listitem>
         <para>
@@ -1489,7 +1489,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-with-wal-blocksize">
        <term><option>--with-wal-blocksize=<replaceable>BLOCKSIZE</replaceable></option></term>
        <listitem>
         <para>
@@ -1531,7 +1531,7 @@ build-postgresql:
 
      <variablelist>
 
-      <varlistentry>
+      <varlistentry id="configure-options-enable-debug">
        <term><option>--enable-debug</option></term>
        <listitem>
         <para>
@@ -1549,7 +1549,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-enable-cassert">
        <term><option>--enable-cassert</option></term>
        <listitem>
         <para>
@@ -1568,7 +1568,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-enable-tap-tests">
        <term><option>--enable-tap-tests</option></term>
        <listitem>
         <para>
@@ -1579,7 +1579,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-enable-depend">
        <term><option>--enable-depend</option></term>
        <listitem>
         <para>
@@ -1593,7 +1593,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-enable-coverage">
        <term><option>--enable-coverage</option></term>
        <listitem>
         <para>
@@ -1608,7 +1608,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-enable-profiling">
        <term><option>--enable-profiling</option></term>
        <listitem>
         <para>
@@ -1621,7 +1621,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-options-enable-dtrace">
        <term><option>--enable-dtrace</option></term>
        <listitem>
         <para>
@@ -1710,7 +1710,7 @@ build-postgresql:
      this manner:
 
      <variablelist>
-      <varlistentry>
+      <varlistentry id="configure-envvars-bison">
        <term><envar>BISON</envar></term>
        <listitem>
         <para>
@@ -1719,7 +1719,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-envvars-cc">
        <term><envar>CC</envar></term>
        <listitem>
         <para>
@@ -1728,7 +1728,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-envvars-cflags">
        <term><envar>CFLAGS</envar></term>
        <listitem>
         <para>
@@ -1737,7 +1737,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-envvars-clang">
        <term><envar>CLANG</envar></term>
        <listitem>
         <para>
@@ -1747,7 +1747,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-envvars-cpp">
        <term><envar>CPP</envar></term>
        <listitem>
         <para>
@@ -1756,7 +1756,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-envvars-cppflags">
        <term><envar>CPPFLAGS</envar></term>
        <listitem>
         <para>
@@ -1765,7 +1765,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-envvars-cxx">
        <term><envar>CXX</envar></term>
        <listitem>
         <para>
@@ -1774,7 +1774,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-envvars-cxxflags">
        <term><envar>CXXFLAGS</envar></term>
        <listitem>
         <para>
@@ -1783,7 +1783,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-envvars-dtrace">
        <term><envar>DTRACE</envar></term>
        <listitem>
         <para>
@@ -1792,7 +1792,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-envvars-dtraceflags">
        <term><envar>DTRACEFLAGS</envar></term>
        <listitem>
         <para>
@@ -1801,7 +1801,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-envvars-flex">
        <term><envar>FLEX</envar></term>
        <listitem>
         <para>
@@ -1810,7 +1810,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-envvars-ldflags">
        <term><envar>LDFLAGS</envar></term>
        <listitem>
         <para>
@@ -1819,7 +1819,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-envvars-ldflags_ex">
        <term><envar>LDFLAGS_EX</envar></term>
        <listitem>
         <para>
@@ -1828,7 +1828,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-envvars-ldflags_sl">
        <term><envar>LDFLAGS_SL</envar></term>
        <listitem>
         <para>
@@ -1837,7 +1837,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-envvars-llvm_config">
        <term><envar>LLVM_CONFIG</envar></term>
        <listitem>
         <para>
@@ -1847,7 +1847,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-envvars-msgfmt">
        <term><envar>MSGFMT</envar></term>
        <listitem>
         <para>
@@ -1856,7 +1856,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-envvars-perl">
        <term><envar>PERL</envar></term>
        <listitem>
         <para>
@@ -1867,7 +1867,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-envvars-python">
        <term><envar>PYTHON</envar></term>
        <listitem>
         <para>
@@ -1879,7 +1879,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-envvars-tclsh">
        <term><envar>TCLSH</envar></term>
        <listitem>
         <para>
@@ -1892,7 +1892,7 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="configure-envvars-xml2_config">
        <term><envar>XML2_CONFIG</envar></term>
        <listitem>
         <para>
@@ -2041,7 +2041,7 @@ libpq.so.2.1: cannot open shared object file: No such file or directory
    </para>
   </sect2>
 
-  <sect2>
+  <sect2 id="install-post-env-vars">
    <title>Environment Variables</title>
 
    <indexterm>
@@ -2184,7 +2184,7 @@ export MANPATH
     community.
    </para>
 
-   <sect3>
+   <sect3 id="installation-notes-aix-mem-management">
     <title>Memory Management</title>
     <!-- https://archives.postgresql.org/message-id/603bgqmpl9.fsf@dba2.int.libertyrms.com -->
 
@@ -2533,7 +2533,7 @@ xcrun --show-sdk-path
     operating system, the fewer issues you will experience.
    </para>
 
-   <sect3>
+   <sect3 id="installation-notes-solaris-req-tools">
     <title>Required Tools</title>
 
     <para>
@@ -2558,7 +2558,7 @@ xcrun --show-sdk-path
     </para>
    </sect3>
 
-   <sect3>
+   <sect3 id="installation-notes-solaris-configure-complains">
     <title>configure Complains About a Failed Test Program</title>
 
     <para>
@@ -2577,7 +2577,7 @@ configure ... LDFLAGS="-R /usr/sfw/lib:/opt/sfw/lib:/usr/local/lib"
     </para>
    </sect3>
 
-   <sect3>
+   <sect3 id="installation-notes-solaris-comp-opt-perf">
     <title>Compiling for Optimal Performance</title>
 
     <para>
@@ -2598,7 +2598,7 @@ configure ... LDFLAGS="-R /usr/sfw/lib:/opt/sfw/lib:/usr/local/lib"
     </para>
    </sect3>
 
-   <sect3>
+   <sect3 id="installation-notes-solaris-using-dtrace">
     <title>Using DTrace for Tracing PostgreSQL</title>
 
     <para>

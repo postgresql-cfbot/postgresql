@@ -30,7 +30,7 @@
   on the current database.
  </para>
 
- <sect2>
+ <sect2 id="intarray-funcs-ops">
   <title><filename>intarray</filename> Functions and Operators</title>
 
   <para>
@@ -386,7 +386,7 @@
   </para>
  </sect2>
 
- <sect2>
+ <sect2 id="intarray-index">
   <title>Index Support</title>
 
   <para>
@@ -438,7 +438,7 @@
   </para>
  </sect2>
 
- <sect2>
+ <sect2 id="intarray-example">
   <title>Example</title>
 
 <programlisting>
@@ -459,7 +459,7 @@ SELECT message.mid FROM message WHERE message.sections @@ '1&amp;2'::query_int;
 </programlisting>
  </sect2>
 
- <sect2>
+ <sect2 id="intarray-benchmark">
   <title>Benchmark</title>
 
   <para>
@@ -483,7 +483,7 @@ psql -c "CREATE EXTENSION intarray" TEST
   </para>
  </sect2>
 
- <sect2>
+ <sect2 id="intarray-Authors">
   <title>Authors</title>
 
   <para>

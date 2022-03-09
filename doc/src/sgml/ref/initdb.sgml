@@ -124,7 +124,7 @@ PostgreSQL documentation
 
    <para>
     <variablelist>
-     <varlistentry>
+     <varlistentry id="app-initdb-options-auth">
       <term><option>-A <replaceable class="parameter">authmethod</replaceable></option></term>
       <term><option>--auth=<replaceable class="parameter">authmethod</replaceable></option></term>
       <listitem>
@@ -144,7 +144,7 @@ PostgreSQL documentation
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="app-initdb-options-auth-host">
       <term><option>--auth-host=<replaceable class="parameter">authmethod</replaceable></option></term>
       <listitem>
        <para>
@@ -155,7 +155,7 @@ PostgreSQL documentation
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="app-initdb-options-auth-local">
       <term><option>--auth-local=<replaceable class="parameter">authmethod</replaceable></option></term>
       <listitem>
        <para>
@@ -166,7 +166,7 @@ PostgreSQL documentation
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="app-initdb-options-pgdata">
       <term><option>-D <replaceable class="parameter">directory</replaceable></option></term>
       <term><option>--pgdata=<replaceable class="parameter">directory</replaceable></option></term>
       <listitem>
@@ -182,7 +182,7 @@ PostgreSQL documentation
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="app-initdb-options-encoding">
       <term><option>-E <replaceable class="parameter">encoding</replaceable></option></term>
       <term><option>--encoding=<replaceable class="parameter">encoding</replaceable></option></term>
       <listitem>
@@ -227,7 +227,7 @@ PostgreSQL documentation
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="app-initdb-options-locale">
       <term><option>--locale=<replaceable>locale</replaceable></option></term>
       <listitem>
        <para>
@@ -239,7 +239,7 @@ PostgreSQL documentation
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="app-initdb-options-lc-collate-et-al">
       <term><option>--lc-collate=<replaceable>locale</replaceable></option></term>
       <term><option>--lc-ctype=<replaceable>locale</replaceable></option></term>
       <term><option>--lc-messages=<replaceable>locale</replaceable></option></term>
@@ -255,7 +255,7 @@ PostgreSQL documentation
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="app-initdb-options-no-locale">
       <term><option>--no-locale</option></term>
       <listitem>
        <para>
@@ -264,7 +264,7 @@ PostgreSQL documentation
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="app-initdb-options-no-sync">
       <term><option>-N</option></term>
       <term><option>--no-sync</option></term>
       <listitem>
@@ -279,7 +279,7 @@ PostgreSQL documentation
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="app-initdb-options-no-instructions">
       <term><option>--no-instructions</option></term>
       <listitem>
        <para>
@@ -292,7 +292,7 @@ PostgreSQL documentation
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="app-initdb-options-pwfile">
       <term><option>--pwfile=<replaceable>filename</replaceable></option></term>
       <listitem>
        <para>
@@ -302,7 +302,7 @@ PostgreSQL documentation
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="app-initdb-options-sync-only">
       <term><option>-S</option></term>
       <term><option>--sync-only</option></term>
       <listitem>
@@ -316,7 +316,7 @@ PostgreSQL documentation
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="app-initdb-options-text-search-config">
       <term><option>-T <replaceable>config</replaceable></option></term>
       <term><option>--text-search-config=<replaceable>config</replaceable></option></term>
       <listitem>
@@ -327,7 +327,7 @@ PostgreSQL documentation
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="app-initdb-options-username">
       <term><option>-U <replaceable class="parameter">username</replaceable></option></term>
       <term><option>--username=<replaceable class="parameter">username</replaceable></option></term>
       <listitem>
@@ -342,7 +342,7 @@ PostgreSQL documentation
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="app-initdb-options-pwprompt">
       <term><option>-W</option></term>
       <term><option>--pwprompt</option></term>
       <listitem>
@@ -356,7 +356,7 @@ PostgreSQL documentation
       </listitem>
      </varlistentry>
 
-      <varlistentry>
+      <varlistentry id="app-initdb-options-waldir">
       <term><option>-X <replaceable class="parameter">directory</replaceable></option></term>
       <term><option>--waldir=<replaceable class="parameter">directory</replaceable></option></term>
       <listitem>
@@ -367,7 +367,7 @@ PostgreSQL documentation
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="app-initdb-options-wal-segsize">
       <term><option>--wal-segsize=<replaceable>size</replaceable></option></term>
       <listitem>
        <para>
@@ -394,7 +394,7 @@ PostgreSQL documentation
     Other, less commonly used, options are also available:
 
     <variablelist>
-     <varlistentry>
+     <varlistentry id="app-initdb-options-debug">
       <term><option>-d</option></term>
       <term><option>--debug</option></term>
       <listitem>
@@ -408,7 +408,7 @@ PostgreSQL documentation
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="app-initdb-options-discard-caches">
       <term><option>--discard-caches</option></term>
       <listitem>
        <para>
@@ -419,7 +419,7 @@ PostgreSQL documentation
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="app-initdb-options-l">
       <term><option>-L <replaceable class="parameter">directory</replaceable></option></term>
       <listitem>
        <para>
@@ -431,7 +431,7 @@ PostgreSQL documentation
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="app-initdb-options-no-clean">
       <term><option>-n</option></term>
       <term><option>--no-clean</option></term>
       <listitem>
@@ -451,7 +451,7 @@ PostgreSQL documentation
     Other options:
 
     <variablelist>
-     <varlistentry>
+     <varlistentry id="app-initdb-options-version">
        <term><option>-V</option></term>
        <term><option>--version</option></term>
        <listitem>
@@ -461,7 +461,7 @@ PostgreSQL documentation
        </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="app-initdb-options-help">
        <term><option>-?</option></term>
        <term><option>--help</option></term>
        <listitem>
@@ -481,7 +481,7 @@ PostgreSQL documentation
   <title>Environment</title>
 
   <variablelist>
-   <varlistentry>
+   <varlistentry id="app-initdb-environment-pgdata">
     <term><envar>PGDATA</envar></term>
 
     <listitem>
@@ -492,7 +492,7 @@ PostgreSQL documentation
     </listitem>
    </varlistentry>
 
-   <varlistentry>
+   <varlistentry id="app-initdb-environment-pg_color">
     <term><envar>PG_COLOR</envar></term>
     <listitem>
      <para>
@@ -503,7 +503,7 @@ PostgreSQL documentation
     </listitem>
    </varlistentry>
 
-   <varlistentry>
+   <varlistentry id="app-initdb-environment-tz">
     <term><envar>TZ</envar></term>
 
     <listitem>

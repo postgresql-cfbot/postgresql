@@ -314,7 +314,7 @@ UPDATE pg_settings SET setting = reset_val WHERE name = 'configuration_parameter
 
    </sect2>
 
-   <sect2>
+   <sect2 id="config-setting-parameter-interaction">
     <title>Parameter Interaction via the Shell</title>
 
      <para>
@@ -1339,7 +1339,7 @@ include_dir 'conf.d'
        <para>
         Explanation of the default value:
         <variablelist>
-         <varlistentry>
+         <varlistentry id="guc-ssl-ciphers-high">
           <term><literal>HIGH</literal></term>
           <listitem>
            <para>
@@ -1349,7 +1349,7 @@ include_dir 'conf.d'
           </listitem>
          </varlistentry>
 
-         <varlistentry>
+         <varlistentry id="guc-ssl-ciphers-medium">
           <term><literal>MEDIUM</literal></term>
           <listitem>
            <para>
@@ -1359,7 +1359,7 @@ include_dir 'conf.d'
           </listitem>
          </varlistentry>
 
-         <varlistentry>
+         <varlistentry id="guc-ssl-ciphers-plus-3des">
           <term><literal>+3DES</literal></term>
           <listitem>
            <para>
@@ -1373,7 +1373,7 @@ include_dir 'conf.d'
           </listitem>
          </varlistentry>
 
-         <varlistentry>
+         <varlistentry id="guc-ssl-ciphers-not-anull">
           <term><literal>!aNULL</literal></term>
           <listitem>
            <para>
@@ -6742,7 +6742,7 @@ local0.*    /var/log/postgresql
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="guc-debug_print_parse-et-al">
       <term><varname>debug_print_parse</varname> (<type>boolean</type>)
       <indexterm>
        <primary><varname>debug_print_parse</varname> configuration parameter</primary>
@@ -6773,7 +6773,7 @@ local0.*    /var/log/postgresql
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="guc-debug_pretty_print">
       <term><varname>debug_pretty_print</varname> (<type>boolean</type>)
       <indexterm>
        <primary><varname>debug_pretty_print</varname> configuration parameter</primary>
@@ -7687,7 +7687,7 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
      </table>
     </sect2>
 
-   <sect2>
+   <sect2 id="runtime-config-logging-proc-title">
     <title>Process Title</title>
 
     <para>
@@ -7952,7 +7952,7 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="guc-log_statement_stats-et-al">
       <term><varname>log_statement_stats</varname> (<type>boolean</type>)
       <indexterm>
        <primary><varname>log_statement_stats</varname> configuration parameter</primary>
@@ -10918,7 +10918,7 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="guc-trace_locks">
       <term><varname>trace_locks</varname> (<type>boolean</type>)
       <indexterm>
        <primary><varname>trace_locks</varname> configuration parameter</primary>
@@ -10959,7 +10959,7 @@ LOG:  CleanUpLock: deleting: lock(0xb7acd844) id(24688,24696,0,0,0,1)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="guc-trace_lwlocks">
       <term><varname>trace_lwlocks</varname> (<type>boolean</type>)
       <indexterm>
        <primary><varname>trace_lwlocks</varname> configuration parameter</primary>
@@ -10979,7 +10979,7 @@ LOG:  CleanUpLock: deleting: lock(0xb7acd844) id(24688,24696,0,0,0,1)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="guc-trace_userlocks">
       <term><varname>trace_userlocks</varname> (<type>boolean</type>)
       <indexterm>
        <primary><varname>trace_userlocks</varname> configuration parameter</primary>
@@ -10998,7 +10998,7 @@ LOG:  CleanUpLock: deleting: lock(0xb7acd844) id(24688,24696,0,0,0,1)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="guc-trace_lock_oidmin">
       <term><varname>trace_lock_oidmin</varname> (<type>integer</type>)
       <indexterm>
        <primary><varname>trace_lock_oidmin</varname> configuration parameter</primary>
@@ -11017,7 +11017,7 @@ LOG:  CleanUpLock: deleting: lock(0xb7acd844) id(24688,24696,0,0,0,1)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="guc-trace_lock_table">
       <term><varname>trace_lock_table</varname> (<type>integer</type>)
       <indexterm>
        <primary><varname>trace_lock_table</varname> configuration parameter</primary>
@@ -11035,7 +11035,7 @@ LOG:  CleanUpLock: deleting: lock(0xb7acd844) id(24688,24696,0,0,0,1)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="guc-debug_deadlocks">
       <term><varname>debug_deadlocks</varname> (<type>boolean</type>)
       <indexterm>
        <primary><varname>debug_deadlocks</varname> configuration parameter</primary>
@@ -11054,7 +11054,7 @@ LOG:  CleanUpLock: deleting: lock(0xb7acd844) id(24688,24696,0,0,0,1)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="guc-log_btree_build_stats">
       <term><varname>log_btree_build_stats</varname> (<type>boolean</type>)
       <indexterm>
        <primary><varname>log_btree_build_stats</varname> configuration parameter</primary>

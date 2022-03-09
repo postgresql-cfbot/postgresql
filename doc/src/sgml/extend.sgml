@@ -120,7 +120,7 @@
     types, container types, domains, and pseudo-types.
    </para>
 
-   <sect2>
+   <sect2 id="extend-type-system-base">
     <title>Base Types</title>
 
     <para>
@@ -143,7 +143,7 @@
     </para>
    </sect2>
 
-   <sect2>
+   <sect2 id="extend-type-system-container">
     <title>Container Types</title>
 
     <para>
@@ -193,7 +193,7 @@
     </para>
    </sect2>
 
-   <sect2>
+   <sect2 id="extend-type-system-pseudo">
     <title>Pseudo-Types</title>
 
     <para>
@@ -628,7 +628,7 @@ RETURNS anycompatible AS ...
     dropping the whole extension.
    </para>
 
-   <sect2>
+   <sect2 id="extend-extensions-files">
     <title>Extension Files</title>
 
    <indexterm>
@@ -663,7 +663,7 @@ RETURNS anycompatible AS ...
     </para>
 
     <variablelist>
-     <varlistentry>
+     <varlistentry id="extend-extensions-files-directory">
       <term><varname>directory</varname> (<type>string</type>)</term>
       <listitem>
        <para>
@@ -676,7 +676,7 @@ RETURNS anycompatible AS ...
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="extend-extensions-files-default_version">
       <term><varname>default_version</varname> (<type>string</type>)</term>
       <listitem>
        <para>
@@ -689,7 +689,7 @@ RETURNS anycompatible AS ...
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="extend-extensions-files-comment">
       <term><varname>comment</varname> (<type>string</type>)</term>
       <listitem>
        <para>
@@ -702,7 +702,7 @@ RETURNS anycompatible AS ...
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="extend-extensions-files-encoding">
       <term><varname>encoding</varname> (<type>string</type>)</term>
       <listitem>
        <para>
@@ -713,7 +713,7 @@ RETURNS anycompatible AS ...
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="extend-extensions-files-module_pathname">
       <term><varname>module_pathname</varname> (<type>string</type>)</term>
       <listitem>
        <para>
@@ -728,7 +728,7 @@ RETURNS anycompatible AS ...
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="extend-extensions-files-requires">
       <term><varname>requires</varname> (<type>string</type>)</term>
       <listitem>
        <para>
@@ -739,7 +739,7 @@ RETURNS anycompatible AS ...
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="extend-extensions-files-superuser">
       <term><varname>superuser</varname> (<type>boolean</type>)</term>
       <listitem>
        <para>
@@ -756,7 +756,7 @@ RETURNS anycompatible AS ...
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="extend-extensions-files-trusted">
       <term><varname>trusted</varname> (<type>boolean</type>)</term>
       <listitem>
        <para>
@@ -781,7 +781,7 @@ RETURNS anycompatible AS ...
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="extend-extensions-files-relocatable">
       <term><varname>relocatable</varname> (<type>boolean</type>)</term>
       <listitem>
        <para>
@@ -794,7 +794,7 @@ RETURNS anycompatible AS ...
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="extend-extensions-files-schema">
       <term><varname>schema</varname> (<type>string</type>)</term>
       <listitem>
        <para>
@@ -1063,7 +1063,7 @@ SELECT pg_catalog.pg_extension_config_dump('my_config', 'WHERE NOT standard_entr
     </para>
    </sect2>
 
-   <sect2>
+   <sect2 id="extend-extensions-updates">
     <title>Extension Updates</title>
 
     <para>
@@ -1144,7 +1144,7 @@ SELECT * FROM pg_extension_update_paths('<replaceable>extension_name</replaceabl
     </para>
    </sect2>
 
-   <sect2>
+   <sect2 id="extend-extensions-update-scripts">
     <title>Installing Extensions Using Update Scripts</title>
 
     <para>
@@ -1464,7 +1464,7 @@ include $(PGXS)
     Set one of these three variables to specify what is built:
 
     <variablelist>
-     <varlistentry>
+     <varlistentry id="extend-pgxs-modules">
       <term><varname>MODULES</varname></term>
       <listitem>
        <para>
@@ -1474,7 +1474,7 @@ include $(PGXS)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="extend-pgxs-module_big">
       <term><varname>MODULE_big</varname></term>
       <listitem>
        <para>
@@ -1484,7 +1484,7 @@ include $(PGXS)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="extend-pgxs-program">
       <term><varname>PROGRAM</varname></term>
       <listitem>
        <para>
@@ -1498,7 +1498,7 @@ include $(PGXS)
     The following variables can also be set:
 
     <variablelist>
-     <varlistentry>
+     <varlistentry id="extend-pgxs-extension">
       <term><varname>EXTENSION</varname></term>
       <listitem>
        <para>
@@ -1510,7 +1510,7 @@ include $(PGXS)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="extend-pgxs-moduledir">
       <term><varname>MODULEDIR</varname></term>
       <listitem>
        <para>
@@ -1523,7 +1523,7 @@ include $(PGXS)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="extend-pgxs-data">
       <term><varname>DATA</varname></term>
       <listitem>
        <para>
@@ -1532,7 +1532,7 @@ include $(PGXS)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="extend-pgxs-data_built">
       <term><varname>DATA_built</varname></term>
       <listitem>
        <para>
@@ -1543,7 +1543,7 @@ include $(PGXS)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="extend-pgxs-data_tsearch">
       <term><varname>DATA_TSEARCH</varname></term>
       <listitem>
        <para>
@@ -1553,7 +1553,7 @@ include $(PGXS)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="extend-pgxs-docs">
       <term><varname>DOCS</varname></term>
       <listitem>
        <para>
@@ -1563,7 +1563,7 @@ include $(PGXS)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="extend-pgxs-headers">
       <term><varname>HEADERS</varname></term>
       <term><varname>HEADERS_built</varname></term>
       <listitem>
@@ -1579,7 +1579,7 @@ include $(PGXS)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="extend-pgxs-headers_module">
       <term><varname>HEADERS_$MODULE</varname></term>
       <term><varname>HEADERS_built_$MODULE</varname></term>
       <listitem>
@@ -1605,7 +1605,7 @@ include $(PGXS)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="extend-pgxs-scripts">
       <term><varname>SCRIPTS</varname></term>
       <listitem>
        <para>
@@ -1615,7 +1615,7 @@ include $(PGXS)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="extend-pgxs-scripts_built">
       <term><varname>SCRIPTS_built</varname></term>
       <listitem>
        <para>
@@ -1626,7 +1626,7 @@ include $(PGXS)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="extend-pgxs-regress">
       <term><varname>REGRESS</varname></term>
       <listitem>
        <para>
@@ -1635,7 +1635,7 @@ include $(PGXS)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="extend-pgxs-regress_opts">
       <term><varname>REGRESS_OPTS</varname></term>
       <listitem>
        <para>
@@ -1644,7 +1644,7 @@ include $(PGXS)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="extend-pgxs-isolation">
       <term><varname>ISOLATION</varname></term>
       <listitem>
        <para>
@@ -1653,7 +1653,7 @@ include $(PGXS)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="extend-pgxs-isolation_opts">
       <term><varname>ISOLATION_OPTS</varname></term>
       <listitem>
        <para>
@@ -1663,7 +1663,7 @@ include $(PGXS)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="extend-pgxs-tap_tests">
       <term><varname>TAP_TESTS</varname></term>
       <listitem>
        <para>
@@ -1672,7 +1672,7 @@ include $(PGXS)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="extend-pgxs-no_install">
       <term><varname>NO_INSTALL</varname></term>
       <listitem>
        <para>
@@ -1682,7 +1682,7 @@ include $(PGXS)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="extend-pgxs-no_installcheck">
       <term><varname>NO_INSTALLCHECK</varname></term>
       <listitem>
        <para>
@@ -1691,7 +1691,7 @@ include $(PGXS)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="extend-pgxs-extra_clean">
       <term><varname>EXTRA_CLEAN</varname></term>
       <listitem>
        <para>
@@ -1700,7 +1700,7 @@ include $(PGXS)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="extend-pgxs-pg_cppflags">
       <term><varname>PG_CPPFLAGS</varname></term>
       <listitem>
        <para>
@@ -1709,7 +1709,7 @@ include $(PGXS)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="extend-pgxs-pg_cflags">
       <term><varname>PG_CFLAGS</varname></term>
       <listitem>
        <para>
@@ -1718,7 +1718,7 @@ include $(PGXS)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="extend-pgxs-pg_cxxflags">
       <term><varname>PG_CXXFLAGS</varname></term>
       <listitem>
        <para>
@@ -1727,7 +1727,7 @@ include $(PGXS)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="extend-pgxs-pg_ldflags">
       <term><varname>PG_LDFLAGS</varname></term>
       <listitem>
        <para>
@@ -1736,7 +1736,7 @@ include $(PGXS)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="extend-pgxs-pg_libs">
       <term><varname>PG_LIBS</varname></term>
       <listitem>
        <para>
@@ -1745,7 +1745,7 @@ include $(PGXS)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="extend-pgxs-shlib_link">
       <term><varname>SHLIB_LINK</varname></term>
       <listitem>
        <para>
@@ -1754,7 +1754,7 @@ include $(PGXS)
       </listitem>
      </varlistentry>
 
-     <varlistentry>
+     <varlistentry id="extend-pgxs-pg_config">
       <term><varname>PG_CONFIG</varname></term>
       <listitem>
        <para>

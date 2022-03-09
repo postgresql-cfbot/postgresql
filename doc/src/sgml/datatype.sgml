@@ -1454,7 +1454,7 @@ SELECT b, char_length(b) FROM test2;
     mostly the same.
    </para>
 
-  <sect2>
+  <sect2 id="datatype-binary-bytea-hex-format">
    <title><type>bytea</type> Hex Format</title>
 
    <para>
@@ -1481,7 +1481,7 @@ SELECT '\xDEADBEEF';
    </para>
   </sect2>
 
-  <sect2>
+  <sect2 id="datatype-binary-bytea-escape-format">
    <title><type>bytea</type> Escape Format</title>
 
    <para>
@@ -1887,7 +1887,7 @@ MINUTE TO SECOND
      more than 6 digits).
     </para>
 
-    <sect3>
+    <sect3 id="datatype-datetime-input-dates">
     <title>Dates</title>
 
     <indexterm>
@@ -1986,7 +1986,7 @@ MINUTE TO SECOND
      </table>
     </sect3>
 
-    <sect3>
+    <sect3 id="datatype-datetime-input-times">
      <title>Times</title>
 
      <indexterm>
@@ -2150,7 +2150,7 @@ MINUTE TO SECOND
     </para>
     </sect3>
 
-    <sect3>
+    <sect3 id="datatype-datetime-input-time-stamps">
     <title>Time Stamps</title>
 
     <indexterm>
@@ -3155,7 +3155,7 @@ SELECT * FROM test1 WHERE a;
     a piece of data.
    </para>
 
-   <sect2>
+   <sect2 id="datatype-enum-declaration">
     <title>Declaration of Enumerated Types</title>
 
     <para>
@@ -3185,7 +3185,7 @@ SELECT * FROM person WHERE current_mood = 'happy';
     </para>
     </sect2>
 
-    <sect2>
+    <sect2 id="datatype-enum-ordering">
      <title>Ordering</title>
 
      <para>
@@ -3222,7 +3222,7 @@ WHERE current_mood = (SELECT MIN(current_mood) FROM person);
      </para>
    </sect2>
 
-   <sect2>
+   <sect2 id="datatype-enum-type-safety">
     <title>Type Safety</title>
 
     <para>
@@ -3262,7 +3262,7 @@ SELECT person.name, holidays.num_weeks FROM person, holidays
     </para>
    </sect2>
 
-   <sect2>
+   <sect2 id="datatype-enum-implementation-details">
     <title>Implementation Details</title>
 
     <para>
@@ -3379,7 +3379,7 @@ SELECT person.name, holidays.num_weeks FROM person, holidays
     intersections.  They are explained in <xref linkend="functions-geometry"/>.
    </para>
 
-   <sect2>
+   <sect2 id="datatype-geometric-points">
     <title>Points</title>
 
     <indexterm>
@@ -3473,7 +3473,7 @@ SELECT person.name, holidays.num_weeks FROM person, holidays
     </para>
    </sect2>
 
-   <sect2>
+   <sect2 id="datatype-geometric-boxes">
     <title>Boxes</title>
 
     <indexterm>
@@ -3514,7 +3514,7 @@ SELECT person.name, holidays.num_weeks FROM person, holidays
     </para>
    </sect2>
 
-   <sect2>
+   <sect2 id="datatype-geometric-paths">
     <title>Paths</title>
 
     <indexterm>
@@ -4405,7 +4405,7 @@ a0ee-bc99-9c0b-4ef8-bb6d-6bb9-bd38-0a11
     can be found in <xref linkend="xml-limits-conformance"/>.
    </para>
 
-   <sect2>
+   <sect2 id="datatype-xml-creating">
     <title>Creating XML Values</title>
    <para>
     To produce a value of type <type>xml</type> from character data,
@@ -4475,7 +4475,7 @@ SET xmloption TO { DOCUMENT | CONTENT };
 
    </sect2>
 
-   <sect2>
+   <sect2 id="datatype-xml-encoding-handling">
     <title>Encoding Handling</title>
    <para>
     Care must be taken when dealing with multiple character encodings
@@ -4533,7 +4533,7 @@ SET xmloption TO { DOCUMENT | CONTENT };
    </caution>
    </sect2>
 
-   <sect2>
+   <sect2 id="datatype-xml-accessing-xml-values">
    <title>Accessing XML Values</title>
 
    <para>

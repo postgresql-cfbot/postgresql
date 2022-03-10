@@ -1074,7 +1074,9 @@ FreePageBtreeSearch(FreePageManager *fpm, Size first_page,
 	if (btp == NULL)
 	{
 		result->page = NULL;
+		result->index = 0;
 		result->found = false;
+		result->split_pages = 0;
 		return;
 	}
 

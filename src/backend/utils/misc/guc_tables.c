@@ -731,6 +731,7 @@ const char *const config_type_names[] =
 {
 	[PGC_BOOL] = "bool",
 	[PGC_INT] = "integer",
+	[PGC_INT64] = "int64",
 	[PGC_REAL] = "real",
 	[PGC_STRING] = "string",
 	[PGC_ENUM] = "enum",
@@ -3398,33 +3399,6 @@ struct config_int ConfigureNamesInt[] =
 		NULL, NULL, NULL
 	},
 	{
-		{"autovacuum_vacuum_threshold", PGC_SIGHUP, AUTOVACUUM,
-			gettext_noop("Minimum number of tuple updates or deletes prior to vacuum."),
-			NULL
-		},
-		&autovacuum_vac_thresh,
-		50, 0, INT_MAX,
-		NULL, NULL, NULL
-	},
-	{
-		{"autovacuum_vacuum_insert_threshold", PGC_SIGHUP, AUTOVACUUM,
-			gettext_noop("Minimum number of tuple inserts prior to vacuum, or -1 to disable insert vacuums."),
-			NULL
-		},
-		&autovacuum_vac_ins_thresh,
-		1000, -1, INT_MAX,
-		NULL, NULL, NULL
-	},
-	{
-		{"autovacuum_analyze_threshold", PGC_SIGHUP, AUTOVACUUM,
-			gettext_noop("Minimum number of tuple inserts, updates, or deletes prior to analyze."),
-			NULL
-		},
-		&autovacuum_anl_thresh,
-		50, 0, INT_MAX,
-		NULL, NULL, NULL
-	},
-	{
 		/* see varsup.c for why this is PGC_POSTMASTER not PGC_SIGHUP */
 		{"autovacuum_freeze_max_age", PGC_POSTMASTER, AUTOVACUUM,
 			gettext_noop("Age at which to autovacuum a table to prevent transaction ID wraparound."),
@@ -3714,6 +3688,42 @@ struct config_int ConfigureNamesInt[] =
 		NULL, NULL, NULL
 	},
 
+	/* End-of-list marker */
+	{
+		{NULL, 0, 0, NULL, NULL}, NULL, 0, 0, 0, NULL, NULL, NULL
+	}
+};
+
+
+struct config_int64 ConfigureNamesInt64[] =
+{
+	{
+		{"autovacuum_vacuum_threshold", PGC_SIGHUP, AUTOVACUUM,
+			gettext_noop("Minimum number of tuple updates or deletes prior to vacuum."),
+			NULL
+		},
+		&autovacuum_vac_thresh,
+		INT64CONST(50), INT64CONST(0), PG_INT64_MAX,
+		NULL, NULL, NULL
+	},
+	{
+		{"autovacuum_vacuum_insert_threshold", PGC_SIGHUP, AUTOVACUUM,
+			gettext_noop("Minimum number of tuple inserts prior to vacuum, or -1 to disable insert vacuums."),
+			NULL
+		},
+		&autovacuum_vac_ins_thresh,
+		INT64CONST(1000), INT64CONST(-1), PG_INT64_MAX,
+		NULL, NULL, NULL
+	},
+	{
+		{"autovacuum_analyze_threshold", PGC_SIGHUP, AUTOVACUUM,
+			gettext_noop("Minimum number of tuple inserts, updates, or deletes prior to analyze."),
+			NULL
+		},
+		&autovacuum_anl_thresh,
+		INT64CONST(50), INT64CONST(0), PG_INT64_MAX,
+		NULL, NULL, NULL
+	},
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, 0, 0, 0, NULL, NULL, NULL

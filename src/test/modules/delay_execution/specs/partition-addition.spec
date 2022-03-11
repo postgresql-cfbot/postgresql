@@ -25,12 +25,12 @@ teardown
 
 session "s1"
 step "s1exec"	{ LOAD 'delay_execution';
-		  SET delay_execution.post_planning_lock_id = 12345;
+		  SET delay_execution.post_planning_lock_id = 0x1122334455667788;
 		  SELECT * FROM foo WHERE a <> 1 AND a <> (SELECT 3); }
 
 session "s2"
-step "s2lock"	{ SELECT pg_advisory_lock(12345); }
-step "s2unlock"	{ SELECT pg_advisory_unlock(12345); }
+step "s2lock"	{ SELECT pg_advisory_lock(0x1122334455667788); }
+step "s2unlock"	{ SELECT pg_advisory_unlock(0x1122334455667788); }
 step "s2addp"	{ CREATE TABLE foo2 (LIKE foo);
 		  ALTER TABLE foo ATTACH PARTITION foo2 FOR VALUES IN (2);
 		  INSERT INTO foo VALUES (2, 'ADD2'); }

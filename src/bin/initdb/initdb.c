@@ -243,8 +243,8 @@ static char **replace_token(char **lines,
 #ifndef HAVE_UNIX_SOCKETS
 static char **filter_lines_with_token(char **lines, const char *token);
 #endif
-static char **readfile(const char *path);
-static void writefile(char *path, char **lines);
+static char **read_text_file(const char *path);
+static void write_text_file(char *path, char **lines);
 static FILE *popen_check(const char *command, const char *mode);
 static char *get_id(void);
 static int	get_encoding_id(const char *encoding_name);
@@ -453,7 +453,7 @@ filter_lines_with_token(char **lines, const char *token)
  * get the lines from a text file
  */
 static char **
-readfile(const char *path)
+read_text_file(const char *path)
 {
 	char	  **result;
 	FILE	   *infile;
@@ -500,7 +500,7 @@ readfile(const char *path)
  * so that the resulting configuration files are nicely editable on Windows.
  */
 static void
-writefile(char *path, char **lines)
+write_text_file(char *path, char **lines)
 {
 	FILE	   *out_file;
 	char	  **line;
@@ -1063,7 +1063,7 @@ setup_config(void)
 
 	/* postgresql.conf */
 
-	conflines = readfile(conf_file);
+	conflines = read_text_file(conf_file);
 
 	snprintf(repltok, sizeof(repltok), "max_connections = %d", n_connections);
 	conflines = replace_token(conflines, "#max_connections = 100", repltok);
@@ -1214,7 +1214,7 @@ setup_config(void)
 
 	snprintf(path, sizeof(path), "%s/postgresql.conf", pg_data);
 
-	writefile(path, conflines);
+	write_text_file(path, conflines);
 	if (chmod(path, pg_file_create_mode) != 0)
 	{
 		pg_log_error("could not change permissions of \"%s\": %m", path);
@@ -1233,7 +1233,7 @@ setup_config(void)
 
 	sprintf(path, "%s/postgresql.auto.conf", pg_data);
 
-	writefile(path, autoconflines);
+	write_text_file(path, autoconflines);
 	if (chmod(path, pg_file_create_mode) != 0)
 	{
 		pg_log_error("could not change permissions of \"%s\": %m", path);
@@ -1245,7 +1245,7 @@ setup_config(void)
 
 	/* pg_hba.conf */
 
-	conflines = readfile(hba_file);
+	conflines = read_text_file(hba_file);
 
 #ifndef HAVE_UNIX_SOCKETS
 	conflines = filter_lines_with_token(conflines, "@remove-line-for-nolocal@");
@@ -1319,7 +1319,7 @@ setup_config(void)
 
 	snprintf(path, sizeof(path), "%s/pg_hba.conf", pg_data);
 
-	writefile(path, conflines);
+	write_text_file(path, conflines);
 	if (chmod(path, pg_file_create_mode) != 0)
 	{
 		pg_log_error("could not change permissions of \"%s\": %m", path);
@@ -1330,11 +1330,11 @@ setup_config(void)
 
 	/* pg_ident.conf */
 
-	conflines = readfile(ident_file);
+	conflines = read_text_file(ident_file);
 
 	snprintf(path, sizeof(path), "%s/pg_ident.conf", pg_data);
 
-	writefile(path, conflines);
+	write_text_file(path, conflines);
 	if (chmod(path, pg_file_create_mode) != 0)
 	{
 		pg_log_error("could not change permissions of \"%s\": %m", path);
@@ -1362,7 +1362,7 @@ bootstrap_template1(void)
 	printf(_("running bootstrap script ... "));
 	fflush(stdout);
 
-	bki_lines = readfile(bki_file);
+	bki_lines = read_text_file(bki_file);
 
 	/* Check that bki file appears to be of the right version */
 
@@ -1547,7 +1547,7 @@ setup_run_file(FILE *cmdfd, const char *filename)
 {
 	char	  **lines;
 
-	lines = readfile(filename);
+	lines = read_text_file(filename);
 
 	for (char **line = lines; *line != NULL; line++)
 	{

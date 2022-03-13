@@ -26,6 +26,7 @@
 #include "catalog/pg_control.h"
 #include "common/controldata_utils.h"
 #include "common/file_perm.h"
+#include "common/file_utils.h"
 #include "common/logging.h"
 #include "common/string.h"
 #include "getopt_long.h"
@@ -150,8 +151,6 @@ static PTOKEN_PRIVILEGES GetPrivilegesToDelete(HANDLE hToken);
 #endif
 
 static pgpid_t get_pgpid(bool is_status_request);
-static char **readfile(const char *path, int *numlines);
-static void free_readfile(char **optlines);
 static pgpid_t start_postmaster(void);
 static void read_post_opts(void);
 
@@ -306,125 +305,6 @@ get_pgpid(bool is_status_request)
 	return (pgpid_t) pid;
 }
 
-
-/*
- * get the lines from a text file - return NULL if file can't be opened
- *
- * Trailing newlines are deleted from the lines (this is a change from pre-v10)
- *
- * *numlines is set to the number of line pointers returned; there is
- * also an additional NULL pointer after the last real line.
- */
-static char **
-readfile(const char *path, int *numlines)
-{
-	int			fd;
-	int			nlines;
-	char	  **result;
-	char	   *buffer;
-	char	   *linebegin;
-	int			i;
-	int			n;
-	int			len;
-	struct stat statbuf;
-
-	*numlines = 0;				/* in case of failure or empty file */
-
-	/*
-	 * Slurp the file into memory.
-	 *
-	 * The file can change concurrently, so we read the whole file into memory
-	 * with a single read() call. That's not guaranteed to get an atomic
-	 * snapshot, but in practice, for a small file, it's close enough for the
-	 * current use.
-	 */
-	fd = open(path, O_RDONLY | PG_BINARY, 0);
-	if (fd < 0)
-		return NULL;
-	if (fstat(fd, &statbuf) < 0)
-	{
-		close(fd);
-		return NULL;
-	}
-	if (statbuf.st_size == 0)
-	{
-		/* empty file */
-		close(fd);
-		result = (char **) pg_malloc(sizeof(char *));
-		*result = NULL;
-		return result;
-	}
-	buffer = pg_malloc(statbuf.st_size + 1);
-
-	len = read(fd, buffer, statbuf.st_size + 1);
-	close(fd);
-	if (len != statbuf.st_size)
-	{
-		/* oops, the file size changed between fstat and read */
-		free(buffer);
-		return NULL;
-	}
-
-	/*
-	 * Count newlines. We expect there to be a newline after each full line,
-	 * including one at the end of file. If there isn't a newline at the end,
-	 * any characters after the last newline will be ignored.
-	 */
-	nlines = 0;
-	for (i = 0; i < len; i++)
-	{
-		if (buffer[i] == '\n')
-			nlines++;
-	}
-
-	/* set up the result buffer */
-	result = (char **) pg_malloc((nlines + 1) * sizeof(char *));
-	*numlines = nlines;
-
-	/* now split the buffer into lines */
-	linebegin = buffer;
-	n = 0;
-	for (i = 0; i < len; i++)
-	{
-		if (buffer[i] == '\n')
-		{
-			int			slen = &buffer[i] - linebegin;
-			char	   *linebuf = pg_malloc(slen + 1);
-
-			memcpy(linebuf, linebegin, slen);
-			/* we already dropped the \n, but get rid of any \r too */
-			if (slen > 0 && linebuf[slen - 1] == '\r')
-				slen--;
-			linebuf[slen] = '\0';
-			result[n++] = linebuf;
-			linebegin = &buffer[i + 1];
-		}
-	}
-	result[n] = NULL;
-
-	free(buffer);
-
-	return result;
-}
-
-
-/*
- * Free memory allocated for optlines through readfile()
- */
-static void
-free_readfile(char **optlines)
-{
-	char	   *curr_line = NULL;
-	int			i = 0;
-
-	if (!optlines)
-		return;
-
-	while ((curr_line = optlines[i++]))
-		free(curr_line);
-
-	free(optlines);
-}
 
 /*
  * start/test/stop routines

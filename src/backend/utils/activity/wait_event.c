@@ -346,6 +346,9 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 		case WAIT_EVENT_EXECUTE_GATHER:
 			event_name = "ExecuteGather";
 			break;
+		case WAIT_EVENT_FORWARD_SYNC_REQUEST:
+			event_name = "ForwardSyncRequest";
+			break;
 		case WAIT_EVENT_HASH_BATCH_ALLOCATE:
 			event_name = "HashBatchAllocate";
 			break;
@@ -484,6 +487,9 @@ pgstat_get_wait_timeout(WaitEventTimeout w)
 	{
 		case WAIT_EVENT_BASE_BACKUP_THROTTLE:
 			event_name = "BaseBackupThrottle";
+			break;
+		case WAIT_EVENT_CHECKPOINT_WRITE_DELAY:
+			event_name = "CheckpointWriteDelay";
 			break;
 		case WAIT_EVENT_PG_SLEEP:
 			event_name = "PgSleep";

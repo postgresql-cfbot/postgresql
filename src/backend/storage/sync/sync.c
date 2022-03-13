@@ -31,6 +31,7 @@
 #include "storage/bufmgr.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
+#include "storage/latch.h"
 #include "storage/md.h"
 #include "utils/hsearch.h"
 #include "utils/inval.h"
@@ -584,30 +585,23 @@ RegisterSyncRequest(const FileTag *ftag, SyncRequestType type,
 		return true;
 	}
 
-	for (;;)
-	{
-		/*
-		 * Notify the checkpointer about it.  If we fail to queue a message in
-		 * retryOnError mode, we have to sleep and try again ... ugly, but
-		 * hopefully won't happen often.
-		 *
-		 * XXX should we CHECK_FOR_INTERRUPTS in this loop?  Escaping with an
-		 * error in the case of SYNC_UNLINK_REQUEST would leave the
-		 * no-longer-used file still present on disk, which would be bad, so
-		 * I'm inclined to assume that the checkpointer will always empty the
-		 * queue soon.
-		 */
-		ret = ForwardSyncRequest(ftag, type);
-
-		/*
-		 * If we are successful in queueing the request, or we failed and were
-		 * instructed not to retry on error, break.
-		 */
-		if (ret || (!ret && !retryOnError))
-			break;
-
-		pg_usleep(10000L);
-	}
+	/*
+	 * Notify the checkpointer about it.  If we fail to queue a message in
+	 * retryOnError mode, we wait until space is available ... ugly, but
+	 * hopefully won't happen often.
+	 *
+	 * Don't allow interrupts while waiting.  Escaping with an error in the
+	 * case of SYNC_UNLINK_REQUEST would leave the no-longer-used file still
+	 * present on disk, which would be bad, so I'm inclined to assume that the
+	 * checkpointer will always empty the queue soon.
+	 *
+	 * XXX This concern would go away along with SYNC_UNLINK_REQUEST if we
+	 * figure out how to get rid of 'tombstone files'.  That would be a good
+	 * idea because holding interrupts is bad for ProcSignalBarrier.
+	 */
+	HOLD_INTERRUPTS();
+	ret = ForwardSyncRequest(ftag, type, retryOnError /* wait */);
+	RESUME_INTERRUPTS();
 
 	return ret;
 }

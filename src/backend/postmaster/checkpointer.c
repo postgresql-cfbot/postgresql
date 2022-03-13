@@ -128,6 +128,7 @@ typedef struct
 	uint32		num_backend_writes; /* counts user backend buffer writes */
 	uint32		num_backend_fsync;	/* counts user backend fsync calls */
 
+	ConditionVariable requests_not_full_cv;	/* signaled when space available */
 	int			num_requests;	/* current # of requests */
 	int			max_requests;	/* allocated array size */
 	CheckpointerRequest requests[FLEXIBLE_ARRAY_MEMBER];
@@ -484,6 +485,9 @@ CheckpointerMain(void)
 			}
 
 			ckpt_active = false;
+
+			/* We may have received an interrupt during the checkpoint. */
+			HandleCheckpointerInterrupts();
 		}
 
 		/* Check for archive_timeout and switch xlog files if necessary. */
@@ -726,7 +730,10 @@ CheckpointWriteDelay(int flags, double progress)
 		 * Checkpointer and bgwriter are no longer related so take the Big
 		 * Sleep.
 		 */
-		pg_usleep(100000L);
+		WaitLatch(MyLatch, WL_LATCH_SET | WL_EXIT_ON_PM_DEATH | WL_TIMEOUT,
+				  100,
+				  WAIT_EVENT_CHECKPOINT_WRITE_DELAY);
+		ResetLatch(MyLatch);
 	}
 	else if (--absorb_counter <= 0)
 	{
@@ -897,6 +904,7 @@ CheckpointerShmemInit(void)
 		CheckpointerShmem->max_requests = NBuffers;
 		ConditionVariableInit(&CheckpointerShmem->start_cv);
 		ConditionVariableInit(&CheckpointerShmem->done_cv);
+		ConditionVariableInit(&CheckpointerShmem->requests_not_full_cv);
 	}
 }
 
@@ -1070,10 +1078,11 @@ RequestCheckpoint(int flags)
  * to perform its own fsync, which is far more expensive in practice.  It
  * is theoretically possible a backend fsync might still be necessary, if
  * the queue is full and contains no duplicate entries.  In that case, we
- * let the backend know by returning false.
+ * let the backend know by returning false, or if 'wait' is true, then we
+ * wait for space to become available.
  */
 bool
-ForwardSyncRequest(const FileTag *ftag, SyncRequestType type)
+ForwardSyncRequest(const FileTag *ftag, SyncRequestType type, bool wait)
 {
 	CheckpointerRequest *request;
 	bool		too_full;
@@ -1095,9 +1104,9 @@ ForwardSyncRequest(const FileTag *ftag, SyncRequestType type)
 	 * backend will have to perform its own fsync request.  But before forcing
 	 * that to happen, we can try to compact the request queue.
 	 */
-	if (CheckpointerShmem->checkpointer_pid == 0 ||
-		(CheckpointerShmem->num_requests >= CheckpointerShmem->max_requests &&
-		 !CompactCheckpointerRequestQueue()))
+	if (CheckpointerShmem->num_requests >= CheckpointerShmem->max_requests &&
+		!CompactCheckpointerRequestQueue() &&
+		!wait)
 	{
 		/*
 		 * Count the subset of writes where backends have to do their own
@@ -1107,6 +1116,24 @@ ForwardSyncRequest(const FileTag *ftag, SyncRequestType type)
 			CheckpointerShmem->num_backend_fsync++;
 		LWLockRelease(CheckpointerCommLock);
 		return false;
+	}
+
+	/*
+	 * If we still don't have enough space and the caller asked us to wait,
+	 * wait for the checkpointer to advertise that there is space.
+	 */
+	if (CheckpointerShmem->num_requests >= CheckpointerShmem->max_requests)
+	{
+		ConditionVariablePrepareToSleep(&CheckpointerShmem->requests_not_full_cv);
+		while (CheckpointerShmem->num_requests >=
+			   CheckpointerShmem->max_requests)
+		{
+			LWLockRelease(CheckpointerCommLock);
+			ConditionVariableSleep(&CheckpointerShmem->requests_not_full_cv,
+								   WAIT_EVENT_FORWARD_SYNC_REQUEST);
+			LWLockAcquire(CheckpointerCommLock, LW_EXCLUSIVE);
+		}
+		ConditionVariableCancelSleep();
 	}
 
 	/* OK, insert request */
@@ -1255,6 +1282,7 @@ AbsorbSyncRequests(void)
 	CheckpointerRequest *requests = NULL;
 	CheckpointerRequest *request;
 	int			n;
+	bool		was_full;
 
 	if (!AmCheckpointerProcess())
 		return;
@@ -1287,6 +1315,8 @@ AbsorbSyncRequests(void)
 		memcpy(requests, CheckpointerShmem->requests, n * sizeof(CheckpointerRequest));
 	}
 
+	was_full = n >= CheckpointerShmem->max_requests;
+
 	START_CRIT_SECTION();
 
 	CheckpointerShmem->num_requests = 0;
@@ -1297,6 +1327,10 @@ AbsorbSyncRequests(void)
 		RememberSyncRequest(&request->ftag, request->type);
 
 	END_CRIT_SECTION();
+
+	/* Wake anyone waiting for space in ForwardSyncRequest(). */
+	if (was_full)
+		ConditionVariableBroadcast(&CheckpointerShmem->requests_not_full_cv);
 
 	if (requests)
 		pfree(requests);

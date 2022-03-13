@@ -1627,6 +1627,11 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
        executing a <literal>Gather</literal> plan node.</entry>
      </row>
      <row>
+      <entry><literal>ForwardSyncRequest</literal></entry>
+      <entry>Waiting while sending synchronization requests to the
+       checkpointer, because the request queue is full.</entry>
+     </row>
+     <row>
       <entry><literal>HashBatchAllocate</literal></entry>
       <entry>Waiting for an elected Parallel Hash participant to allocate a hash
        table.</entry>
@@ -2234,6 +2239,10 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
      <row>
       <entry><literal>BaseBackupThrottle</literal></entry>
       <entry>Waiting during base backup when throttling activity.</entry>
+     </row>
+     <row>
+      <entry><literal>CheckpointerWriteDelay</literal></entry>
+      <entry>Waiting between writes while performing a checkpoint.</entry>
      </row>
      <row>
       <entry><literal>PgSleep</literal></entry>

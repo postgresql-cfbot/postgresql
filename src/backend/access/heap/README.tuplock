@@ -152,4 +152,4 @@ The following infomask bits are applicable:
   whether the XMAX is a TransactionId or a MultiXactId.
 
 We currently never set the HEAP_XMAX_COMMITTED when the HEAP_XMAX_IS_MULTI bit
-is set.
+or the HEAP_XMAX_LOCK_ONLY bit is set.

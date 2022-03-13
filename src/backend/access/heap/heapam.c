@@ -5151,6 +5151,12 @@ l5:
 		MultiXactStatus status;
 		MultiXactStatus new_status;
 
+		/*
+		 * Currently we don't allow XMAX_LOCK_ONLY and XMAX_COMMITTED to both be
+		 * set in a tuple header, so cross-check.
+		 */
+		Assert(!HEAP_XMAX_IS_LOCKED_ONLY(old_infomask));
+
 		if (old_infomask2 & HEAP_KEYS_UPDATED)
 			status = MultiXactStatusUpdate;
 		else

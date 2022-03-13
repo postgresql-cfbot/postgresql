@@ -127,6 +127,12 @@ SetHintBits(HeapTupleHeader tuple, Buffer buffer,
 	}
 
 	tuple->t_infomask |= infomask;
+
+	Assert(!((tuple->t_infomask & HEAP_XMAX_COMMITTED) &&
+			 HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_infomask)));
+	Assert(!((tuple->t_infomask & HEAP_XMAX_COMMITTED) &&
+			 (tuple->t_infomask & HEAP_XMAX_IS_MULTI)));
+
 	MarkBufferDirtyHint(buffer, true);
 }
 
@@ -272,8 +278,28 @@ HeapTupleSatisfiesSelf(HeapTuple htup, Snapshot snapshot, Buffer buffer)
 
 	if (tuple->t_infomask & HEAP_XMAX_COMMITTED)
 	{
-		if (HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_infomask))
-			return true;
+		if (unlikely(HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_infomask)))
+		{
+			if (tuple->t_infomask & HEAP_XMAX_LOCK_ONLY)
+				ereport(ERROR,
+						(errcode(ERRCODE_DATA_CORRUPTED),
+						 errmsg_internal("found tuple with HEAP_XMAX_COMMITTED "
+										 "and HEAP_XMAX_LOCK_ONLY")));
+
+			/* pre-v9.3 lock-only bit pattern */
+			ereport(ERROR,
+					(errcode(ERRCODE_DATA_CORRUPTED),
+					 errmsg_internal("found tuple with HEAP_XMAX_COMMITTED and"
+									 "HEAP_XMAX_EXCL_LOCK set and"
+									 "HEAP_XMAX_IS_MULTI unset")));
+		}
+
+		if (unlikely(tuple->t_infomask & HEAP_XMAX_IS_MULTI))
+			ereport(ERROR,
+					(errcode(ERRCODE_DATA_CORRUPTED),
+					 errmsg_internal("found tuple with HEAP_XMAX_COMMITTED and "
+									 "HEAP_XMAX_IS_MULTI")));
+
 		return false;			/* updated by other */
 	}
 
@@ -605,8 +631,28 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
 
 	if (tuple->t_infomask & HEAP_XMAX_COMMITTED)
 	{
-		if (HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_infomask))
-			return TM_Ok;
+		if (unlikely(HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_infomask)))
+		{
+			if (tuple->t_infomask & HEAP_XMAX_LOCK_ONLY)
+				ereport(ERROR,
+						(errcode(ERRCODE_DATA_CORRUPTED),
+						 errmsg_internal("found tuple with HEAP_XMAX_COMMITTED "
+										 "and HEAP_XMAX_LOCK_ONLY")));
+
+			/* pre-v9.3 lock-only bit pattern */
+			ereport(ERROR,
+					(errcode(ERRCODE_DATA_CORRUPTED),
+					 errmsg_internal("found tuple with HEAP_XMAX_COMMITTED and"
+									 "HEAP_XMAX_EXCL_LOCK set and "
+									 "HEAP_XMAX_IS_MULTI unset")));
+		}
+
+		if (unlikely(tuple->t_infomask & HEAP_XMAX_IS_MULTI))
+			ereport(ERROR,
+					(errcode(ERRCODE_DATA_CORRUPTED),
+					 errmsg_internal("found tuple with HEAP_XMAX_COMMITTED and "
+									 "HEAP_XMAX_IS_MULTI")));
+
 		if (!ItemPointerEquals(&htup->t_self, &tuple->t_ctid))
 			return TM_Updated;	/* updated by other */
 		else
@@ -867,8 +913,28 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
 
 	if (tuple->t_infomask & HEAP_XMAX_COMMITTED)
 	{
-		if (HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_infomask))
-			return true;
+		if (unlikely(HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_infomask)))
+		{
+			if (tuple->t_infomask & HEAP_XMAX_LOCK_ONLY)
+				ereport(ERROR,
+						(errcode(ERRCODE_DATA_CORRUPTED),
+						 errmsg_internal("found tuple with HEAP_XMAX_COMMITTED "
+										 "and HEAP_XMAX_LOCK_ONLY")));
+
+			/* pre-v9.3 lock-only bit pattern */
+			ereport(ERROR,
+					(errcode(ERRCODE_DATA_CORRUPTED),
+					 errmsg_internal("found tuple with HEAP_XMAX_COMMITTED and"
+									 "HEAP_XMAX_EXCL_LOCK set and "
+									 "HEAP_XMAX_IS_MULTI unset")));
+		}
+
+		if (unlikely(tuple->t_infomask & HEAP_XMAX_IS_MULTI))
+			ereport(ERROR,
+					(errcode(ERRCODE_DATA_CORRUPTED),
+					 errmsg_internal("found tuple with HEAP_XMAX_COMMITTED and "
+									 "HEAP_XMAX_IS_MULTI")));
+
 		return false;			/* updated by other */
 	}
 
@@ -1304,33 +1370,46 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
 
 	if (HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_infomask))
 	{
+		if (unlikely(tuple->t_infomask & HEAP_XMAX_COMMITTED))
+		{
+			if (tuple->t_infomask & HEAP_XMAX_LOCK_ONLY)
+				ereport(ERROR,
+						(errcode(ERRCODE_DATA_CORRUPTED),
+						 errmsg_internal("found tuple with HEAP_XMAX_COMMITTED "
+										 "and HEAP_XMAX_LOCK_ONLY")));
+
+			/* pre-v9.3 lock-only bit pattern */
+			ereport(ERROR,
+					(errcode(ERRCODE_DATA_CORRUPTED),
+					 errmsg_internal("found tuple with HEAP_XMAX_COMMITTED and"
+									 "HEAP_XMAX_EXCL_LOCK set and "
+									 "HEAP_XMAX_IS_MULTI unset")));
+		}
+
 		/*
 		 * "Deleting" xact really only locked it, so the tuple is live in any
-		 * case.  However, we should make sure that either XMAX_COMMITTED or
-		 * XMAX_INVALID gets set once the xact is gone, to reduce the costs of
-		 * examining the tuple for future xacts.
+		 * case.  However, we should make sure that XMAX_INVALID gets set once
+		 * the xact is gone, to reduce the costs of examining the tuple for
+		 * future xacts.
 		 */
-		if (!(tuple->t_infomask & HEAP_XMAX_COMMITTED))
+		if (tuple->t_infomask & HEAP_XMAX_IS_MULTI)
 		{
-			if (tuple->t_infomask & HEAP_XMAX_IS_MULTI)
-			{
-				/*
-				 * If it's a pre-pg_upgrade tuple, the multixact cannot
-				 * possibly be running; otherwise have to check.
-				 */
-				if (!HEAP_LOCKED_UPGRADED(tuple->t_infomask) &&
-					MultiXactIdIsRunning(HeapTupleHeaderGetRawXmax(tuple),
-										 true))
-					return HEAPTUPLE_LIVE;
-				SetHintBits(tuple, buffer, HEAP_XMAX_INVALID, InvalidTransactionId);
-			}
-			else
-			{
-				if (TransactionIdIsInProgress(HeapTupleHeaderGetRawXmax(tuple)))
-					return HEAPTUPLE_LIVE;
-				SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
-							InvalidTransactionId);
-			}
+			/*
+			 * If it's a pre-pg_upgrade tuple, the multixact cannot
+			 * possibly be running; otherwise have to check.
+			 */
+			if (!HEAP_LOCKED_UPGRADED(tuple->t_infomask) &&
+				MultiXactIdIsRunning(HeapTupleHeaderGetRawXmax(tuple),
+									 true))
+				return HEAPTUPLE_LIVE;
+			SetHintBits(tuple, buffer, HEAP_XMAX_INVALID, InvalidTransactionId);
+		}
+		else
+		{
+			if (TransactionIdIsInProgress(HeapTupleHeaderGetRawXmax(tuple)))
+				return HEAPTUPLE_LIVE;
+			SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
+						InvalidTransactionId);
 		}
 
 		/*
@@ -1351,6 +1430,12 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
 
 		/* not LOCKED_ONLY, so it has to have an xmax */
 		Assert(TransactionIdIsValid(xmax));
+
+		if (unlikely(tuple->t_infomask & HEAP_XMAX_COMMITTED))
+			ereport(ERROR,
+					(errcode(ERRCODE_DATA_CORRUPTED),
+					 errmsg_internal("found tuple with HEAP_XMAX_COMMITTED and "
+									 "HEAP_XMAX_IS_MULTI")));
 
 		if (TransactionIdIsInProgress(xmax))
 			return HEAPTUPLE_DELETE_IN_PROGRESS;

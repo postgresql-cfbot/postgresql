@@ -55,6 +55,8 @@ RelationPutHeapTuple(Relation relation,
 	 */
 	Assert(!((tuple->t_data->t_infomask & HEAP_XMAX_COMMITTED) &&
 			 (tuple->t_data->t_infomask & HEAP_XMAX_IS_MULTI)));
+	Assert(!((tuple->t_data->t_infomask & HEAP_XMAX_COMMITTED) &&
+			 HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_data->t_infomask)));
 
 	/* Add the tuple to the page */
 	pageHeader = BufferGetPage(buffer);

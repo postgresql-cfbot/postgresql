@@ -716,6 +716,22 @@ StartLogStreamer(char *startpos, uint32 timeline, char *sysidentifier)
 			pg_log_error("could not create directory \"%s\": %m", statusdir);
 			exit(1);
 		}
+
+		/*
+		 * Also create pg_wal/preallocated_segments if necessary.
+		 */
+		if (PQserverVersion(conn) >= 150000)
+		{
+			char prealloc_dir[MAXPGPATH];
+
+			snprintf(prealloc_dir, sizeof(prealloc_dir), "%s/pg_wal/preallocated_segments",
+					 basedir);
+			if (pg_mkdir_p(prealloc_dir, pg_dir_create_mode) != 0 && errno != EEXIST)
+			{
+				pg_log_error("could not create directory \"%s\": %m", prealloc_dir);
+				exit(1);
+			}
+		}
 	}
 
 	/*

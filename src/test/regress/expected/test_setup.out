@@ -14,6 +14,13 @@
 --
 SET synchronous_commit = on;
 --
+-- synchronous_commit setting affects the time when hint bits are set which
+-- in its turn has an effect on the query plans. This means that in the
+-- general case we can't guarantee that all the tests will pass regardless of
+-- synchronous_commit value in postgresql.conf.
+--
+SET synchronous_commit = on;
+--
 -- Postgres formerly made the public schema read/write by default,
 -- and most of the core regression tests still expect that.
 --

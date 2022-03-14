@@ -10,6 +10,14 @@
 \set regresslib :libdir '/regress' :dlsuffix
 
 --
+-- synchronous_commit setting affects the time when hint bits are set which
+-- in its turn has an effect on the query plans. This means that in the
+-- general case we can't guarantee that all the tests will pass regardless of
+-- synchronous_commit value in postgresql.conf.
+--
+SET synchronous_commit = on;
+
+--
 -- synchronous_commit=off delays when hint bits may be set. Some plans change
 -- depending on the number of all-visible pages, which in turn can be
 -- influenced by the delayed hint bits. Force synchronous_commit=on to avoid

@@ -42,4 +42,7 @@ extern void CheckpointerShmemInit(void);
 
 extern bool FirstCallSinceLastCheckpoint(void);
 
+extern void CheckPointSetLogicalRewriteCutoff(XLogRecPtr cutoff);
+extern XLogRecPtr CheckPointGetLogicalRewriteCutoff(bool *value_set);
+
 #endif							/* _BGWRITER_H */

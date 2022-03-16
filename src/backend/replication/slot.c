@@ -1489,6 +1489,10 @@ StartupReplicationSlots(void)
 			continue;
 		}
 
+		/* if it's an old slot directory that's staged for removal, ignore it */
+		if (strstr(replication_de->d_name, ".to_remove") != NULL)
+			continue;
+
 		/* looks like a slot in a normal state, restore */
 		RestoreSlotFromDisk(replication_de->d_name);
 	}

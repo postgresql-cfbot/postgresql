@@ -128,6 +128,9 @@ typedef struct
 	uint32		num_backend_writes; /* counts user backend buffer writes */
 	uint32		num_backend_fsync;	/* counts user backend fsync calls */
 
+	XLogRecPtr	logical_rewrite_mappings_cutoff;	/* can remove older mappings */
+	bool		logical_rewrite_mappings_cutoff_set;
+
 	int			num_requests;	/* current # of requests */
 	int			max_requests;	/* allocated array size */
 	CheckpointerRequest requests[FLEXIBLE_ARRAY_MEMBER];
@@ -1347,4 +1350,34 @@ FirstCallSinceLastCheckpoint(void)
 	ckpt_done = new_done;
 
 	return FirstCall;
+}
+
+/*
+ * Used by CheckPointLogicalRewriteHeap() to tell the custodian which logical
+ * rewrite mapping files it can remove.
+ */
+void
+CheckPointSetLogicalRewriteCutoff(XLogRecPtr cutoff)
+{
+	SpinLockAcquire(&CheckpointerShmem->ckpt_lck);
+	CheckpointerShmem->logical_rewrite_mappings_cutoff = cutoff;
+	CheckpointerShmem->logical_rewrite_mappings_cutoff_set = true;
+	SpinLockRelease(&CheckpointerShmem->ckpt_lck);
+}
+
+/*
+ * Used by the custodian to determine which logical rewrite mapping files it can
+ * remove.
+ */
+XLogRecPtr
+CheckPointGetLogicalRewriteCutoff(bool *value_set)
+{
+	XLogRecPtr	cutoff;
+
+	SpinLockAcquire(&CheckpointerShmem->ckpt_lck);
+	cutoff = CheckpointerShmem->logical_rewrite_mappings_cutoff;
+	*value_set = CheckpointerShmem->logical_rewrite_mappings_cutoff_set;
+	SpinLockRelease(&CheckpointerShmem->ckpt_lck);
+
+	return cutoff;
 }

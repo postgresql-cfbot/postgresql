@@ -719,6 +719,7 @@ TransactionId ReorderBufferGetOldestXmin(ReorderBuffer *rb);
 void		ReorderBufferSetRestartPoint(ReorderBuffer *, XLogRecPtr ptr);
 
 void		StartupReorderBuffer(void);
+void		RemoveStagedSlotDirectories(void);
 
 bool		ReorderBufferSequenceIsTransactional(ReorderBuffer *rb,
 												 RelFileNode rnode, bool created);

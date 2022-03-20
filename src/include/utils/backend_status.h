@@ -168,6 +168,10 @@ typedef struct PgBackendStatus
 
 	/* query identifier, optionally computed using post_parse_analyze_hook */
 	uint64		st_query_id;
+
+	/* time spent in respective states in usec */
+	int64		st_total_active_time;
+	int64		st_total_transaction_idle_time;
 } PgBackendStatus;
 
 
@@ -231,6 +235,12 @@ typedef struct PgBackendStatus
 	((before_changecount) == (after_changecount) && \
 	 ((before_changecount) & 1) == 0)
 
+/* Macros to identify the states for time accounting */
+#define PGSTAT_IS_ACTIVE(s) \
+	((s)->st_state == STATE_RUNNING || (s)->st_state == STATE_FASTPATH)
+#define PGSTAT_IS_IDLEINTRANSACTION(s) \
+	((s)->st_state == STATE_IDLEINTRANSACTION || \
+	 (s)->st_state == STATE_IDLEINTRANSACTION_ABORTED)
 
 /* ----------
  * LocalPgBackendStatus
@@ -305,6 +315,8 @@ extern const char *pgstat_get_backend_current_activity(int pid, bool checkUser);
 extern const char *pgstat_get_crashed_backend_activity(int pid, char *buffer,
 													   int buflen);
 extern uint64 pgstat_get_my_query_id(void);
+extern uint64 pgstat_get_my_active_time(void);
+extern uint64 pgstat_get_my_transaction_idle_time(void);
 
 
 /* ----------

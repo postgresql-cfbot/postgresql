@@ -1033,13 +1033,6 @@ extern PgStat_MsgWal WalStats;
 extern PgStat_Counter pgStatBlockReadTime;
 extern PgStat_Counter pgStatBlockWriteTime;
 
-/*
- * Updated by pgstat_count_conn_*_time macros, called by
- * pgstat_report_activity().
- */
-extern PgStat_Counter pgStatActiveTime;
-extern PgStat_Counter pgStatTransactionIdleTime;
-
 
 /*
  * Updated by the traffic cop and in errfinish()
@@ -1145,10 +1138,6 @@ extern void pgstat_initstats(Relation rel);
 	(pgStatBlockReadTime += (n))
 #define pgstat_count_buffer_write_time(n)							\
 	(pgStatBlockWriteTime += (n))
-#define pgstat_count_conn_active_time(n)							\
-	(pgStatActiveTime += (n))
-#define pgstat_count_conn_txn_idle_time(n)							\
-	(pgStatTransactionIdleTime += (n))
 
 extern void pgstat_count_heap_insert(Relation rel, PgStat_Counter n);
 extern void pgstat_count_heap_update(Relation rel, bool hot);

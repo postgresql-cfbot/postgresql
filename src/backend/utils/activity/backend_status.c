@@ -473,6 +473,13 @@ pgstat_beshutdown_hook(int code, Datum arg)
 
 	beentry->st_procpid = 0;	/* mark invalid */
 
+	/*
+	 * Reset per-backend counters so that accumulated values for the current
+	 * backend are not used for future backends.
+	 */
+	beentry->st_total_active_time = 0;
+	beentry->st_total_transaction_idle_time = 0;
+
 	PGSTAT_END_WRITE_ACTIVITY(beentry);
 
 	/* so that functions can check if backend_status.c is up via MyBEEntry */
@@ -529,6 +536,8 @@ pgstat_report_activity(BackendState state, const char *cmd_str)
 	TimestampTz start_timestamp;
 	TimestampTz current_timestamp;
 	int			len = 0;
+	int64		active_time_diff = 0;
+	int64		transaction_idle_time_diff = 0;
 
 	TRACE_POSTGRESQL_STATEMENT_STATUS(cmd_str);
 
@@ -555,6 +564,9 @@ pgstat_report_activity(BackendState state, const char *cmd_str)
 			beentry->st_xact_start_timestamp = 0;
 			beentry->st_query_id = UINT64CONST(0);
 			proc->wait_event_info = 0;
+
+			beentry->st_total_active_time = 0;
+			beentry->st_total_transaction_idle_time = 0;
 			PGSTAT_END_WRITE_ACTIVITY(beentry);
 		}
 		return;
@@ -580,24 +592,31 @@ pgstat_report_activity(BackendState state, const char *cmd_str)
 	 * If the state has changed from "active" or "idle in transaction",
 	 * calculate the duration.
 	 */
-	if ((beentry->st_state == STATE_RUNNING ||
-		 beentry->st_state == STATE_FASTPATH ||
-		 beentry->st_state == STATE_IDLEINTRANSACTION ||
-		 beentry->st_state == STATE_IDLEINTRANSACTION_ABORTED) &&
+	if ((PGSTAT_IS_ACTIVE(beentry) || PGSTAT_IS_IDLEINTRANSACTION(beentry)) &&
 		state != beentry->st_state)
 	{
 		long		secs;
 		int			usecs;
+		int64		usecs_diff;
 
 		TimestampDifference(beentry->st_state_start_timestamp,
 							current_timestamp,
 							&secs, &usecs);
+		usecs_diff = secs * 1000000 + usecs;
 
-		if (beentry->st_state == STATE_RUNNING ||
-			beentry->st_state == STATE_FASTPATH)
-			pgstat_count_conn_active_time((PgStat_Counter) secs * 1000000 + usecs);
+		/*
+		 * We update per-backend st_total_active_time and st_total_transaction_idle_time
+		 * separately from pgStatActiveTime and pgStatTransactionIdleTime
+		 * used in pg_stat_database to provide per-DB statistics because
+		 * 1. Changing the former values implies modifying beentry and thus
+		 * have to be wrapped into PGSTAT_*_WRITE_ACTIVITY macros (see below).
+		 * 2. The latter values are reset to 0 once the data has been sent
+		 * to the statistics collector.
+		 */
+		if (PGSTAT_IS_ACTIVE(beentry))
+			active_time_diff = usecs_diff;
 		else
-			pgstat_count_conn_txn_idle_time((PgStat_Counter) secs * 1000000 + usecs);
+			transaction_idle_time_diff = usecs_diff;
 	}
 
 	/*
@@ -622,6 +641,9 @@ pgstat_report_activity(BackendState state, const char *cmd_str)
 		beentry->st_activity_raw[len] = '\0';
 		beentry->st_activity_start_timestamp = start_timestamp;
 	}
+
+	beentry->st_total_active_time += active_time_diff;
+	beentry->st_total_transaction_idle_time += transaction_idle_time_diff;
 
 	PGSTAT_END_WRITE_ACTIVITY(beentry);
 }
@@ -1051,6 +1073,48 @@ pgstat_get_my_query_id(void)
 	 * backend which means that there won't be concurrent writes.
 	 */
 	return MyBEEntry->st_query_id;
+}
+
+
+/* ----------
+ * pgstat_get_my_active_time() -
+ *
+ * Return current backend's accumulated active time.
+ */
+uint64
+pgstat_get_my_active_time(void)
+{
+	if (!MyBEEntry)
+		return 0;
+
+	/*
+	 * There's no need for a lock around pgstat_begin_read_activity /
+	 * pgstat_end_read_activity here as it's only called from
+	 * pg_stat_get_activity which is already protected, or from the same
+	 * backend which means that there won't be concurrent writes.
+	 */
+	return MyBEEntry->st_total_active_time;
+}
+
+
+/* ----------
+ * pgstat_get_my_transaction_idle_time() -
+ *
+ * Return current backend's accumulated in-transaction idle time.
+ */
+uint64
+pgstat_get_my_transaction_idle_time(void)
+{
+	if (!MyBEEntry)
+		return 0;
+
+	/*
+	 * There's no need for a lock around pgstat_begin_read_activity /
+	 * pgstat_end_read_activity here as it's only called from
+	 * pg_stat_get_activity which is already protected, or from the same
+	 * backend which means that there won't be concurrent writes.
+	 */
+	return MyBEEntry->st_total_transaction_idle_time;
 }
 
 

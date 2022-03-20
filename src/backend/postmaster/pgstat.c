@@ -255,8 +255,8 @@ static int	pgStatXactRollback = 0;
 PgStat_Counter pgStatBlockReadTime = 0;
 PgStat_Counter pgStatBlockWriteTime = 0;
 static PgStat_Counter pgLastSessionReportTime = 0;
-PgStat_Counter pgStatActiveTime = 0;
-PgStat_Counter pgStatTransactionIdleTime = 0;
+PgStat_Counter pgStatLastActiveTime = 0;
+PgStat_Counter pgStatLastTransactionIdleTime = 0;
 SessionEndType pgStatSessionEndCause = DISCONNECT_NORMAL;
 
 /* Record that's written to 2PC state file when pgstat state is persisted */
@@ -1059,8 +1059,12 @@ pgstat_update_dbstats(PgStat_MsgTabstat *tsmsg, TimestampTz now)
 			TimestampDifference(pgLastSessionReportTime, now, &secs, &usecs);
 			pgLastSessionReportTime = now;
 			tsmsg->m_session_time = (PgStat_Counter) secs * 1000000 + usecs;
-			tsmsg->m_active_time = pgStatActiveTime;
-			tsmsg->m_idle_in_xact_time = pgStatTransactionIdleTime;
+
+			/* send the difference since the last report */
+			tsmsg->m_active_time =
+				pgstat_get_my_active_time() - pgStatLastActiveTime;
+			tsmsg->m_idle_in_xact_time =
+				pgstat_get_my_transaction_idle_time() - pgStatLastTransactionIdleTime;
 		}
 		else
 		{
@@ -1072,8 +1076,8 @@ pgstat_update_dbstats(PgStat_MsgTabstat *tsmsg, TimestampTz now)
 		pgStatXactRollback = 0;
 		pgStatBlockReadTime = 0;
 		pgStatBlockWriteTime = 0;
-		pgStatActiveTime = 0;
-		pgStatTransactionIdleTime = 0;
+		pgStatLastActiveTime = pgstat_get_my_active_time();
+		pgStatLastTransactionIdleTime = pgstat_get_my_transaction_idle_time();
 	}
 	else
 	{

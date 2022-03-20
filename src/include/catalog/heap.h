@@ -121,6 +121,9 @@ extern Oid	StoreAttrDefault(Relation rel, AttrNumber attnum,
 							 Node *expr, bool is_internal,
 							 bool add_column_mode);
 
+extern Oid	GetAttrDefaultOid(Oid relid, AttrNumber attnum);
+extern ObjectAddress GetAttrDefaultColumnAddress(Oid attrdefoid);
+
 extern Node *cookDefault(ParseState *pstate,
 						 Node *raw_default,
 						 Oid atttypid,

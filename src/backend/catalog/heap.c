@@ -2336,37 +2336,23 @@ StoreAttrDefault(Relation rel, AttrNumber attnum,
 
 	/*
 	 * Make a dependency so that the pg_attrdef entry goes away if the column
-	 * (or whole table) is deleted.
+	 * (or whole table) is deleted.  In the case of a generated column, make
+	 * it an internal dependency to prevent the default expression from being
+	 * deleted separately.
 	 */
 	colobject.classId = RelationRelationId;
 	colobject.objectId = RelationGetRelid(rel);
 	colobject.objectSubId = attnum;
 
-	recordDependencyOn(&defobject, &colobject, DEPENDENCY_AUTO);
+	recordDependencyOn(&defobject, &colobject,
+					   attgenerated ? DEPENDENCY_INTERNAL : DEPENDENCY_AUTO);
 
 	/*
 	 * Record dependencies on objects used in the expression, too.
 	 */
-	if (attgenerated)
-	{
-		/*
-		 * Generated column: Dropping anything that the generation expression
-		 * refers to automatically drops the generated column.
-		 */
-		recordDependencyOnSingleRelExpr(&colobject, expr, RelationGetRelid(rel),
-										DEPENDENCY_AUTO,
-										DEPENDENCY_AUTO, false);
-	}
-	else
-	{
-		/*
-		 * Normal default: Dropping anything that the default refers to
-		 * requires CASCADE and drops the default only.
-		 */
-		recordDependencyOnSingleRelExpr(&defobject, expr, RelationGetRelid(rel),
-										DEPENDENCY_NORMAL,
-										DEPENDENCY_NORMAL, false);
-	}
+	recordDependencyOnSingleRelExpr(&defobject, expr, RelationGetRelid(rel),
+									DEPENDENCY_NORMAL,
+									DEPENDENCY_NORMAL, false);
 
 	/*
 	 * Post creation hook for attribute defaults.
@@ -2380,6 +2366,86 @@ StoreAttrDefault(Relation rel, AttrNumber attnum,
 								  RelationGetRelid(rel), attnum, is_internal);
 
 	return attrdefOid;
+}
+
+/*
+ * Get the pg_attrdef OID of the default expression for a column
+ * identified by relation OID and and column number.
+ *
+ * Returns InvalidOid if there is no such pg_attrdef entry.
+ */
+Oid
+GetAttrDefaultOid(Oid relid, AttrNumber attnum)
+{
+	Oid			result = InvalidOid;
+	Relation	attrdef;
+	ScanKeyData keys[2];
+	SysScanDesc scan;
+	HeapTuple	tup;
+
+	attrdef = table_open(AttrDefaultRelationId, AccessShareLock);
+	ScanKeyInit(&keys[0],
+				Anum_pg_attrdef_adrelid,
+				BTEqualStrategyNumber,
+				F_OIDEQ,
+				ObjectIdGetDatum(relid));
+	ScanKeyInit(&keys[1],
+				Anum_pg_attrdef_adnum,
+				BTEqualStrategyNumber,
+				F_INT2EQ,
+				Int16GetDatum(attnum));
+	scan = systable_beginscan(attrdef, AttrDefaultIndexId, true,
+							  NULL, 2, keys);
+
+	if (HeapTupleIsValid(tup = systable_getnext(scan)))
+	{
+		Form_pg_attrdef atdform = (Form_pg_attrdef) GETSTRUCT(tup);
+
+		result = atdform->oid;
+	}
+
+	systable_endscan(scan);
+	table_close(attrdef, AccessShareLock);
+
+	return result;
+}
+
+/*
+ * Given a pg_attrdef OID, return the relation OID and column number of
+ * the owning column (represented as an ObjectAddress for convenience).
+ *
+ * Returns InvalidObjectAddress if there is no such pg_attrdef entry.
+ */
+ObjectAddress
+GetAttrDefaultColumnAddress(Oid attrdefoid)
+{
+	ObjectAddress result = InvalidObjectAddress;
+	Relation	attrdef;
+	ScanKeyData skey[1];
+	SysScanDesc scan;
+	HeapTuple	tup;
+
+	attrdef = table_open(AttrDefaultRelationId, AccessShareLock);
+	ScanKeyInit(&skey[0],
+				Anum_pg_attrdef_oid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(attrdefoid));
+	scan = systable_beginscan(attrdef, AttrDefaultOidIndexId, true,
+							  NULL, 1, skey);
+
+	if (HeapTupleIsValid(tup = systable_getnext(scan)))
+	{
+		Form_pg_attrdef atdform = (Form_pg_attrdef) GETSTRUCT(tup);
+
+		result.classId = RelationRelationId;
+		result.objectId = atdform->adrelid;
+		result.objectSubId = atdform->adnum;
+	}
+
+	systable_endscan(scan);
+	table_close(attrdef, AccessShareLock);
+
+	return result;
 }
 
 /*

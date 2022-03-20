@@ -529,12 +529,12 @@ WaitLatchOrSocket(Latch *latch, int wakeEvents, pgsocket sock,
 	if (wakeEvents & WL_SOCKET_MASK)
 	{
 		int			ev;
-
 		ev = wakeEvents & WL_SOCKET_MASK;
 		AddWaitEventToSet(set, ev, sock, NULL, NULL);
 	}
-
+elog(LOG, "WaitLatchOrSocket before WaitEventSetWait");
 	rc = WaitEventSetWait(set, timeout, &event, 1, wait_event_info);
+elog(LOG, "WaitLatchOrSocket after WaitEventSetWait");
 
 	if (rc == 0)
 		ret |= WL_TIMEOUT;
@@ -1296,6 +1296,7 @@ WaitEventAdjustWin32(WaitEventSet *set, WaitEvent *event)
 				elog(ERROR, "failed to create event for socket: error code %d",
 					 WSAGetLastError());
 		}
+elog(LOG, "WSAEventSelect event->fd: %d, flags: %x", event->fd, flags);
 		if (WSAEventSelect(event->fd, *handle, flags) != 0)
 			elog(ERROR, "failed to set up event for socket: error code %d",
 				 WSAGetLastError());
@@ -1408,8 +1409,10 @@ WaitEventSetWait(WaitEventSet *set, long timeout,
 		 * this file. If -1 is returned, a timeout has occurred, if 0 we have
 		 * to retry, everything >= 1 is the number of returned events.
 		 */
+elog(LOG, "WaitEventSetWait before WaitEventSetWaitBlock");
 		rc = WaitEventSetWaitBlock(set, cur_timeout,
 								   occurred_events, nevents);
+elog(LOG, "WaitEventSetWait after WaitEventSetWaitBlock");
 
 		if (set->latch)
 		{
@@ -1934,9 +1937,11 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 	 *
 	 * Need to wait for ->nevents + 1, because signal handle is in [0].
 	 */
+elog(LOG, "WaitEventSetWaitBlock before WaitForMultipleObjects: %d", set->nevents);
 	rc = WaitForMultipleObjects(set->nevents + 1, set->handles, FALSE,
 								cur_timeout);
 
+elog(LOG, "WaitEventSetWaitBlock after WaitForMultipleObjects");
 	/* Check return code */
 	if (rc == WAIT_FAILED)
 		elog(ERROR, "WaitForMultipleObjects() failed: error code %lu",

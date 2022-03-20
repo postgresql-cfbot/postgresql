@@ -426,6 +426,7 @@ WalReceiverMain(void)
 				bool		endofwal = false;
 				pgsocket	wait_fd = PGINVALID_SOCKET;
 				int			rc;
+elog(LOG, "!!!wal receiver loop");
 
 				/*
 				 * Exit walreceiver if we're not in recovery. This should not
@@ -448,6 +449,8 @@ WalReceiverMain(void)
 
 				/* See if we can read data immediately */
 				len = walrcv_receive(wrconn, &buf, &wait_fd);
+elog(LOG, "!!!walrcv_receive returned %d", len);
+
 				if (len != 0)
 				{
 					/*
@@ -515,6 +518,7 @@ WalReceiverMain(void)
 									   wait_fd,
 									   NAPTIME_PER_CYCLE,
 									   WAIT_EVENT_WAL_RECEIVER_MAIN);
+elog(LOG, "!!!WaitLatchOrSocket returned %d", rc);
 				if (rc & WL_LATCH_SET)
 				{
 					ResetLatch(MyLatch);
@@ -584,6 +588,7 @@ WalReceiverMain(void)
 					XLogWalRcvSendHSFeedback(false);
 				}
 			}
+elog(LOG, "!!!wal receiver loop finished");
 
 			/*
 			 * The backend finished streaming. Exit streaming COPY-mode from

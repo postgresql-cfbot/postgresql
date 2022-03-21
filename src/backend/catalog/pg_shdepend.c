@@ -46,6 +46,7 @@
 #include "catalog/pg_ts_dict.h"
 #include "catalog/pg_type.h"
 #include "catalog/pg_user_mapping.h"
+#include "catalog/pg_variable.h"
 #include "commands/alter.h"
 #include "commands/collationcmds.h"
 #include "commands/conversioncmds.h"
@@ -1593,6 +1594,7 @@ shdepReassignOwned(List *roleids, Oid newrole)
 				case DatabaseRelationId:
 				case TSConfigRelationId:
 				case TSDictionaryRelationId:
+				case VariableRelationId:
 					{
 						Oid			classId = sdepForm->classid;
 						Relation	catalog;

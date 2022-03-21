@@ -92,7 +92,9 @@ typedef uint32 AclMode;			/* a bitmask of privilege bits */
 #define ACL_CREATE		(1<<9)	/* for namespaces and databases */
 #define ACL_CREATE_TEMP (1<<10) /* for databases */
 #define ACL_CONNECT		(1<<11) /* for databases */
-#define N_ACL_RIGHTS	12		/* 1 plus the last 1<<x */
+#define ACL_READ		(1<<12) /* for variables */
+#define ACL_WRITE		(1<<13) /* for variables */
+#define N_ACL_RIGHTS	14		/* 1 plus the last 1<<x */
 #define ACL_NO_RIGHTS	0
 /* Currently, SELECT ... FOR [KEY] UPDATE/SHARE requires UPDATE privileges */
 #define ACL_SELECT_FOR_UPDATE	ACL_UPDATE
@@ -129,7 +131,7 @@ typedef struct Query
 
 	int			resultRelation; /* rtable index of target relation for
 								 * INSERT/UPDATE/DELETE; 0 for SELECT */
-
+	Oid			resultVariable;	/* target variable of LET statement */
 	bool		hasAggs;		/* has aggregates in tlist or havingQual */
 	bool		hasWindowFuncs; /* has window functions in tlist */
 	bool		hasTargetSRFs;	/* has set-returning functions in tlist */
@@ -139,6 +141,7 @@ typedef struct Query
 	bool		hasModifyingCTE;	/* has INSERT/UPDATE/DELETE in WITH */
 	bool		hasForUpdate;	/* FOR [KEY] UPDATE/SHARE was specified */
 	bool		hasRowSecurity; /* rewriter has applied some RLS policy */
+	bool		hasSessionVariables; /* uses session variables */
 
 	bool		isReturn;		/* is a RETURN statement */
 
@@ -1629,6 +1632,21 @@ typedef struct UpdateStmt
 } UpdateStmt;
 
 /* ----------------------
+ *		Let Statement
+ * ----------------------
+ */
+typedef struct LetStmt
+{
+	NodeTag		type;
+	List	   *target;			/* target variable */
+	Node	   *query;			/* source expression */
+	bool		set_default;	/* true, when set to DEFAULt is wanted */
+	bool		plpgsql_mode;	/* true, when command will be executed (parsed)
+								 * by plpgsql runtime */
+	int			location;
+}			LetStmt;
+
+/* ----------------------
  *		Select Statement
  *
  * A "simple" SELECT is represented in the output of gram.y by a single
@@ -1837,6 +1855,7 @@ typedef enum ObjectType
 	OBJECT_TSTEMPLATE,
 	OBJECT_TYPE,
 	OBJECT_USER_MAPPING,
+	OBJECT_VARIABLE,
 	OBJECT_VIEW
 } ObjectType;
 
@@ -2675,6 +2694,23 @@ typedef struct AlterSeqStmt
 } AlterSeqStmt;
 
 /* ----------------------
+ *		{Create|Alter} VARIABLE Statement
+ * ----------------------
+ */
+typedef struct CreateSessionVarStmt
+{
+	NodeTag		type;
+	RangeVar   *variable;		/* the variable to create */
+	TypeName   *typeName;		/* the type of variable */
+	CollateClause *collClause;
+	Node	   *defexpr;		/* default expression */
+	char		eoxaction;		/* on commit action */
+	bool		if_not_exists;	/* do nothing if it already exists */
+	bool		is_not_null;	/* Disallow nulls */
+	bool		is_immutable;	/* Don't allow changes */
+}			CreateSessionVarStmt;
+
+/* ----------------------
  *		Create {Aggregate|Operator|Type} Statement
  * ----------------------
  */
@@ -3454,7 +3490,8 @@ typedef enum DiscardMode
 	DISCARD_ALL,
 	DISCARD_PLANS,
 	DISCARD_SEQUENCES,
-	DISCARD_TEMP
+	DISCARD_TEMP,
+	DISCARD_VARIABLES
 } DiscardMode;
 
 typedef struct DiscardStmt

@@ -254,6 +254,10 @@ CREATE VIEW mysecview5 WITH (security_barrier=100)	-- Error
        AS SELECT * FROM tbl1 WHERE a > 100;
 CREATE VIEW mysecview6 WITH (invalid_option)		-- Error
        AS SELECT * FROM tbl1 WHERE a < 100;
+CREATE VIEW mysecview7 WITH (toast.vacuum_index_cleanup=OFF)	-- Error
+       AS SELECT * FROM tbl1 WHERE a < 100;
+CREATE VIEW mysecview8 WITH (nonsense.instanity)	-- Error
+       AS SELECT * FROM tbl1 WHERE a < 100;
 SELECT relname, relkind, reloptions FROM pg_class
        WHERE oid in ('mysecview1'::regclass, 'mysecview2'::regclass,
                      'mysecview3'::regclass, 'mysecview4'::regclass)

@@ -295,3 +295,59 @@ EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF)
   CREATE MATERIALIZED VIEW IF NOT EXISTS matview_ine_tab AS
     SELECT 1 / 0 WITH NO DATA; -- ok
 DROP MATERIALIZED VIEW matview_ine_tab;
+
+-- Test supported storage parameters
+CREATE MATERIALIZED VIEW matview_opts
+  WITH (toast.vacuum_index_cleanup=auto, fillfactor=30, parallel_workers=5)
+  AS SELECT gs, gs::text AS i FROM generate_series(1,100) gs;
+DROP MATERIALIZED VIEW matview_opts;
+
+-- Test supported toast storage parameters with materialzed views lacking
+-- toastable columns
+CREATE MATERIALIZED VIEW matview_opts WITH (toast.vacuum_index_cleanup=auto)
+  AS SELECT gs AS i FROM generate_series(1,100) gs;
+DROP MATERIALIZED VIEW matview_opts;
+
+-- Test unsupported toast storage parameters with materialzed views lacking
+-- toastable columns
+CREATE MATERIALIZED VIEW matview_uns_opts WITH (toast.no_such_option)
+  AS SELECT gs AS i FROM generate_series(1,100) gs;
+
+-- Test the interaction of supported storage parameters with delayed population
+CREATE MATERIALIZED VIEW matview_opts
+  WITH (toast.vacuum_index_cleanup=auto, fillfactor=30, parallel_workers=5)
+  AS SELECT gs, gs::text AS i FROM generate_series(1,100) gs
+  WITH NO DATA;
+REFRESH MATERIALIZED VIEW matview_opts;
+SELECT rel.reloptions, toast.reloptions AS toastoptions
+  FROM pg_class rel LEFT JOIN pg_class toast ON rel.reltoastrelid = toast.oid
+  WHERE rel.relname = 'matview_opts';
+DROP MATERIALIZED VIEW matview_opts;
+
+-- Test unsupported storage parameters
+CREATE MATERIALIZED VIEW matview_uns_opts WITH (pages_per_range=40)  -- from brin
+  AS SELECT gs, gs::text AS i FROM generate_series(1,100) gs;
+CREATE MATERIALIZED VIEW matview_uns_opts WITH (autosummarize=true)  -- from brin
+  AS SELECT gs, gs::text AS i FROM generate_series(1,100) gs;
+CREATE MATERIALIZED VIEW matview_uns_opts WITH (deduplicate_items=true)  -- from btree
+  AS SELECT gs, gs::text AS i FROM generate_series(1,100) gs;
+CREATE MATERIALIZED VIEW matview_uns_opts WITH (fastupdate=on)  -- from gin
+  AS SELECT gs, gs::text AS i FROM generate_series(1,100) gs;
+CREATE MATERIALIZED VIEW matview_uns_opts WITH (gin_pending_list_limit=1000)  -- from gin
+  AS SELECT gs, gs::text AS i FROM generate_series(1,100) gs;
+CREATE MATERIALIZED VIEW matview_uns_opts WITH (buffering=on)  -- from gist
+  AS SELECT gs, gs::text AS i FROM generate_series(1,100) gs;
+CREATE MATERIALIZED VIEW matview_uns_opts WITH (seq_page_cost=1.0)  -- from tablespace
+  AS SELECT gs, gs::text AS i FROM generate_series(1,100) gs;
+CREATE MATERIALIZED VIEW matview_uns_opts WITH (random_page_cost=4.0)  -- from tablespace
+  AS SELECT gs, gs::text AS i FROM generate_series(1,100) gs;
+CREATE MATERIALIZED VIEW matview_uns_opts WITH (effective_io_concurrency=5) -- from tablespace
+  AS SELECT gs, gs::text AS i FROM generate_series(1,100) gs;
+CREATE MATERIALIZED VIEW matview_uns_opts WITH (maintenance_io_concurrency=5) -- from tablespace
+  AS SELECT gs, gs::text AS i FROM generate_series(1,100) gs;
+
+-- Test nonsense storage parameters
+CREATE MATERIALIZED VIEW matview_uns_opts WITH (nonsense)
+  AS SELECT gs, gs::text AS i FROM generate_series(1,100) gs;
+CREATE MATERIALIZED VIEW matview_uns_opts WITH (toast.nonsense)
+  AS SELECT gs, gs::text AS i FROM generate_series(1,100) gs;

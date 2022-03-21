@@ -543,6 +543,8 @@ static relopt_string stringRelOpts[] =
 	{{NULL}}
 };
 
+static const char *heapNsps[] = HEAP_RELOPT_NAMESPACES;
+
 static relopt_gen **relOpts = NULL;
 static bits32 last_assigned_kind = RELOPT_KIND_LAST_DEFAULT;
 
@@ -1147,7 +1149,7 @@ add_local_string_reloption(local_relopts *relopts, const char *name,
  */
 Datum
 transformRelOptions(Datum oldOptions, List *defList, const char *namspace,
-					char *validnsps[], bool acceptOidsOff, bool isReset)
+					const char *validnsps[], bool acceptOidsOff, bool isReset)
 {
 	Datum		result;
 	ArrayBuildState *astate;
@@ -1316,6 +1318,32 @@ transformRelOptions(Datum oldOptions, List *defList, const char *namspace,
 	return result;
 }
 
+/*
+ * Get the default list of reloption namespaces accepted for the given relkind,
+ * or NULL if the relkind accepts no namespace qualified reloptions.
+ */
+const char **
+reloptNsps(char relkind)
+{
+	switch (relkind)
+	{
+		case RELKIND_MATVIEW:
+		case RELKIND_PARTITIONED_TABLE:
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+			return heapNsps;
+		case RELKIND_COMPOSITE_TYPE:
+		case RELKIND_FOREIGN_TABLE:
+		case RELKIND_INDEX:
+		case RELKIND_PARTITIONED_INDEX:
+		case RELKIND_SEQUENCE:
+		case RELKIND_VIEW:
+			return NULL;
+		default:
+			Assert(false);
+	}
+	return NULL;		/* keep compiler quiet */
+}
 
 /*
  * Convert the text-array format of reloptions into a List of DefElem.

@@ -373,6 +373,34 @@ INSERT INTO delete_test_table SELECT i, 1, 2, 3 FROM generate_series(1,1000) i;
 -- Test unsupported btree opclass parameters
 create index on btree_tall_tbl (id int4_ops(foo=1));
 ERROR:  operator class int4_ops has no options
+-- Test unsupported storage parameters
+create index on btree_tall_tbl (id) with (pages_per_range=40);  -- from brin
+ERROR:  unrecognized parameter "pages_per_range"
+create index on btree_tall_tbl (id) with (autosummarize=true);  -- from brin
+ERROR:  unrecognized parameter "autosummarize"
+create index on btree_tall_tbl (id) with (fastupdate=on);  -- from gin
+ERROR:  unrecognized parameter "fastupdate"
+create index on btree_tall_tbl (id) with (gin_pending_list_limit=1000);  -- from gin
+ERROR:  unrecognized parameter "gin_pending_list_limit"
+create index on btree_tall_tbl (id) with (buffering=on);  -- from gist
+ERROR:  unrecognized parameter "buffering"
+create index on btree_tall_tbl (id) with (parallel_workers=5);  -- from heap
+ERROR:  unrecognized parameter "parallel_workers"
+create index on btree_tall_tbl (id) with (seq_page_cost=1.0);  -- from tablespace
+ERROR:  unrecognized parameter "seq_page_cost"
+create index on btree_tall_tbl (id) with (random_page_cost=4.0);  -- from tablespace
+ERROR:  unrecognized parameter "random_page_cost"
+create index on btree_tall_tbl (id) with (effective_io_concurrency=5); -- from tablespace
+ERROR:  unrecognized parameter "effective_io_concurrency"
+create index on btree_tall_tbl (id) with (maintenance_io_concurrency=5); -- from tablespace
+ERROR:  unrecognized parameter "maintenance_io_concurrency"
+create index on btree_tall_tbl (id) with (toast.vacuum_index_cleanup=auto);  -- from toast
+ERROR:  unrecognized parameter namespace "toast"
+-- Test nonsense storage parameters
+create index on btree_tall_tbl (id) with (nonsense);
+ERROR:  unrecognized parameter "nonsense"
+create index on btree_tall_tbl (id) with (toast.nonsense);
+ERROR:  unrecognized parameter namespace "toast"
 -- Test case of ALTER INDEX with abuse of column names for indexes.
 -- This grammar is not officially supported, but the parser allows it.
 CREATE INDEX btree_tall_idx2 ON btree_tall_tbl (id);

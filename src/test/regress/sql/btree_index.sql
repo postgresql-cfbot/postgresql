@@ -232,6 +232,23 @@ INSERT INTO delete_test_table SELECT i, 1, 2, 3 FROM generate_series(1,1000) i;
 -- Test unsupported btree opclass parameters
 create index on btree_tall_tbl (id int4_ops(foo=1));
 
+-- Test unsupported storage parameters
+create index on btree_tall_tbl (id) with (pages_per_range=40);  -- from brin
+create index on btree_tall_tbl (id) with (autosummarize=true);  -- from brin
+create index on btree_tall_tbl (id) with (fastupdate=on);  -- from gin
+create index on btree_tall_tbl (id) with (gin_pending_list_limit=1000);  -- from gin
+create index on btree_tall_tbl (id) with (buffering=on);  -- from gist
+create index on btree_tall_tbl (id) with (parallel_workers=5);  -- from heap
+create index on btree_tall_tbl (id) with (seq_page_cost=1.0);  -- from tablespace
+create index on btree_tall_tbl (id) with (random_page_cost=4.0);  -- from tablespace
+create index on btree_tall_tbl (id) with (effective_io_concurrency=5); -- from tablespace
+create index on btree_tall_tbl (id) with (maintenance_io_concurrency=5); -- from tablespace
+create index on btree_tall_tbl (id) with (toast.vacuum_index_cleanup=auto);  -- from toast
+
+-- Test nonsense storage parameters
+create index on btree_tall_tbl (id) with (nonsense);
+create index on btree_tall_tbl (id) with (toast.nonsense);
+
 -- Test case of ALTER INDEX with abuse of column names for indexes.
 -- This grammar is not officially supported, but the parser allows it.
 CREATE INDEX btree_tall_idx2 ON btree_tall_tbl (id);

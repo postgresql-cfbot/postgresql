@@ -264,3 +264,21 @@ CREATE INDEX hash_f8_index2 ON hash_f8_heap USING hash (random float8_ops)
 	WITH (fillfactor=9);
 CREATE INDEX hash_f8_index2 ON hash_f8_heap USING hash (random float8_ops)
 	WITH (fillfactor=101);
+
+-- Test unsupported storage parameters
+CREATE INDEX ON hash_f8_heap USING hash (random) WITH (autosummarize=true);  -- from brin
+CREATE INDEX ON hash_f8_heap USING hash (random) WITH (pages_per_range=40);  -- from brin
+CREATE INDEX ON hash_f8_heap USING hash (random) WITH (deduplicate_items=on);  -- from btree
+CREATE INDEX ON hash_f8_heap USING hash (random) WITH (fastupdate=on);  -- from gin
+CREATE INDEX ON hash_f8_heap USING hash (random) WITH (gin_pending_list_limit=1000);  -- from gin
+CREATE INDEX ON hash_f8_heap USING hash (random) WITH (buffering=on);  -- from gist
+CREATE INDEX ON hash_f8_heap USING hash (random) WITH (parallel_workers=5);  -- from heap
+CREATE INDEX ON hash_f8_heap USING hash (random) WITH (seq_page_cost=1.0);  -- from tablespace
+CREATE INDEX ON hash_f8_heap USING hash (random) WITH (random_page_cost=4.0);  -- from tablespace
+CREATE INDEX ON hash_f8_heap USING hash (random) WITH (effective_io_concurrency=5); -- from tablespace
+CREATE INDEX ON hash_f8_heap USING hash (random) WITH (maintenance_io_concurrency=5); -- from tablespace
+CREATE INDEX ON hash_f8_heap USING hash (random) WITH (toast.vacuum_index_cleanup=auto);  -- from toast
+
+-- Test nonsense storage parameters
+CREATE INDEX ON hash_f8_heap USING hash (random) WITH (nonsense);
+CREATE INDEX ON hash_f8_heap USING hash (random) WITH (toast.nonsense);

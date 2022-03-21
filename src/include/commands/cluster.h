@@ -45,5 +45,6 @@ extern void finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap,
 							 TransactionId frozenXid,
 							 MultiXactId minMulti,
 							 char newrelpersistence);
+extern bool is_inside_rebuild_relation(void);
 
 #endif							/* CLUSTER_H */

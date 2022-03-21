@@ -6012,6 +6012,53 @@ heap_abort_speculative(Relation relation, ItemPointer tid)
 }
 
 /*
+ * Prepare tuple for inplace update.  TOASTed attributes can't be modified
+ * by in-place upgrade.  Simultaneously, new tuple is flatten.  So, we just
+ * replace TOASTed attributes with their values of old tuple.
+ */
+static HeapTuple
+heap_inplace_update_prepare_tuple(Relation relation,
+								  HeapTuple oldtup,
+								  HeapTuple newtup)
+{
+	TupleDesc	desc = relation->rd_att;
+	HeapTuple	result;
+	Datum	   *oldvals,
+			   *newvals;
+	bool	   *oldnulls,
+			   *newnulls;
+	int			i,
+				natts = desc->natts;
+
+	oldvals = (Datum *) palloc(sizeof(Datum) * natts);
+	newvals = (Datum *) palloc(sizeof(Datum) * natts);
+	oldnulls = (bool *) palloc(sizeof(bool) * natts);
+	newnulls = (bool *) palloc(sizeof(bool) * natts);
+
+	heap_deform_tuple(oldtup, desc, oldvals, oldnulls);
+	heap_deform_tuple(newtup, desc, newvals, newnulls);
+
+	for (i = 0; i < natts; i++)
+	{
+		Form_pg_attribute att = &desc->attrs[i];
+
+		if (att->attlen == -1 &&
+			!oldnulls[i] &&
+			VARATT_IS_EXTENDED(oldvals[i]))
+		{
+			Assert(!newnulls[i]);
+			newvals[i] = oldvals[i];
+		}
+	}
+
+	result = heap_form_tuple(desc, newvals, newnulls);
+
+	result->t_self = newtup->t_self;
+
+	return result;
+}
+
+/*
  * heap_inplace_update - update a tuple "in place" (ie, overwrite it)
  *
  * Overwriting violates both MVCC and transactional safety, so the uses
@@ -6040,6 +6087,8 @@ heap_inplace_update(Relation relation, HeapTuple tuple)
 	HeapTupleHeader htup;
 	uint32		oldlen;
 	uint32		newlen;
+	HeapTupleData oldtup;
+	HeapTuple	newtup;
 
 	/*
 	 * For now, we don't allow parallel updates.  Unlike a regular update,
@@ -6065,16 +6114,26 @@ heap_inplace_update(Relation relation, HeapTuple tuple)
 
 	htup = (HeapTupleHeader) PageGetItem(page, lp);
 
+	oldtup.t_tableOid = RelationGetRelid(relation);
+	oldtup.t_data = htup;
+	oldtup.t_len = ItemIdGetLength(lp);
+	oldtup.t_self = tuple->t_self;
+#ifdef XID_IS_64BIT
+	HeapTupleCopyBaseFromPage(&oldtup, page);
+#endif
+
+	newtup = heap_inplace_update_prepare_tuple(relation, &oldtup, tuple);
+
 	oldlen = ItemIdGetLength(lp) - htup->t_hoff;
-	newlen = tuple->t_len - tuple->t_data->t_hoff;
-	if (oldlen != newlen || htup->t_hoff != tuple->t_data->t_hoff)
+	newlen = newtup->t_len - newtup->t_data->t_hoff;
+	if (oldlen != newlen || htup->t_hoff != newtup->t_data->t_hoff)
 		elog(ERROR, "wrong tuple length");
 
 	/* NO EREPORT(ERROR) from here till changes are logged */
 	START_CRIT_SECTION();
 
 	memcpy((char *) htup + htup->t_hoff,
-		   (char *) tuple->t_data + tuple->t_data->t_hoff,
+		   (char *) newtup->t_data + newtup->t_data->t_hoff,
 		   newlen);
 
 	MarkBufferDirty(buffer);
@@ -6085,7 +6144,7 @@ heap_inplace_update(Relation relation, HeapTuple tuple)
 		xl_heap_inplace xlrec;
 		XLogRecPtr	recptr;
 
-		xlrec.offnum = ItemPointerGetOffsetNumber(&tuple->t_self);
+		xlrec.offnum = ItemPointerGetOffsetNumber(&newtup->t_self);
 
 		XLogBeginInsert();
 		XLogRegisterData((char *) &xlrec, SizeOfHeapInplace);

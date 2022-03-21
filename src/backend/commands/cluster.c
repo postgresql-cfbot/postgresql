@@ -564,6 +564,8 @@ mark_index_clustered(Relation rel, Oid indexOid, bool is_internal)
 	table_close(pg_index, RowExclusiveLock);
 }
 
+bool inside_rebuild_relation = false;
+
 /*
  * rebuild_relation: rebuild an existing relation in index or physical order
  *
@@ -585,37 +587,53 @@ rebuild_relation(Relation OldHeap, Oid indexOid, bool verbose)
 	TransactionId frozenXid;
 	MultiXactId cutoffMulti;
 
-	/* Mark the correct index as clustered */
-	if (OidIsValid(indexOid))
-		mark_index_clustered(OldHeap, indexOid, true);
+	PG_TRY();
+	{
+		inside_rebuild_relation = true;
 
-	/* Remember info about rel before closing OldHeap */
-	relpersistence = OldHeap->rd_rel->relpersistence;
-	is_system_catalog = IsSystemRelation(OldHeap);
+		/* Mark the correct index as clustered */
+		if (OidIsValid(indexOid))
+			mark_index_clustered(OldHeap, indexOid, true);
 
-	/* Close relcache entry, but keep lock until transaction commit */
-	table_close(OldHeap, NoLock);
+		/* Remember info about rel before closing OldHeap */
+		relpersistence = OldHeap->rd_rel->relpersistence;
+		is_system_catalog = IsSystemRelation(OldHeap);
 
-	/* Create the transient table that will receive the re-ordered data */
-	OIDNewHeap = make_new_heap(tableOid, tableSpace,
-							   accessMethod,
-							   relpersistence,
-							   AccessExclusiveLock);
+		/* Close relcache entry, but keep lock until transaction commit */
+		table_close(OldHeap, NoLock);
 
-	/* Copy the heap data into the new table in the desired order */
-	copy_table_data(OIDNewHeap, tableOid, indexOid, verbose,
-					&swap_toast_by_content, &frozenXid, &cutoffMulti);
+		/* Create the transient table that will receive the re-ordered data */
+		OIDNewHeap = make_new_heap(tableOid, tableSpace,
+								   accessMethod,
+								   relpersistence,
+								   AccessExclusiveLock);
 
-	/*
-	 * Swap the physical files of the target and transient tables, then
-	 * rebuild the target's indexes and throw away the transient table.
-	 */
-	finish_heap_swap(tableOid, OIDNewHeap, is_system_catalog,
-					 swap_toast_by_content, false, true,
-					 frozenXid, cutoffMulti,
-					 relpersistence);
+		/* Copy the heap data into the new table in the desired order */
+		copy_table_data(OIDNewHeap, tableOid, indexOid, verbose,
+						&swap_toast_by_content, &frozenXid, &cutoffMulti);
+
+		/*
+		 * Swap the physical files of the target and transient tables, then
+		 * rebuild the target's indexes and throw away the transient table.
+		 */
+		finish_heap_swap(tableOid, OIDNewHeap, is_system_catalog,
+						 swap_toast_by_content, false, true,
+						 frozenXid, cutoffMulti,
+						 relpersistence);
+	}
+	PG_CATCH();
+	{
+		inside_rebuild_relation = false;
+		PG_RE_THROW();
+	}
+	PG_END_TRY();
 }
 
+bool
+is_inside_rebuild_relation()
+{
+	return inside_rebuild_relation;
+}
 
 /*
  * Create the transient table that will be filled with new data during

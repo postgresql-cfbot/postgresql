@@ -135,3 +135,6 @@ test: fast_default
 
 # run stats by itself because its delay may be insufficient under heavy load
 test: stats
+
+# global temp table test
+test: global_temporary_table

@@ -48,6 +48,7 @@
 #include "catalog/storage.h"
 #include "catalog/storage_xlog.h"
 #include "catalog/toasting.h"
+#include "catalog/storage_gtt.h"
 #include "commands/cluster.h"
 #include "commands/comment.h"
 #include "commands/defrem.h"
@@ -119,6 +120,7 @@ typedef struct OnCommitItem
 	 */
 	SubTransactionId creating_subid;
 	SubTransactionId deleting_subid;
+	bool			 is_global_temp;
 } OnCommitItem;
 
 static List *on_commits = NIL;
@@ -625,7 +627,7 @@ static void refuseDupeIndexAttach(Relation parentIdx, Relation partIdx,
 static List *GetParentedForeignKeyRefs(Relation partition);
 static void ATDetachCheckNoForeignKeyRefs(Relation partition);
 static char GetAttributeCompression(Oid atttypid, char *compression);
-
+static OnCommitAction gtt_oncommit_option(List *options);
 
 /* ----------------------------------------------------------------
  *		DefineRelation
@@ -670,6 +672,7 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	LOCKMODE	parentLockmode;
 	const char *accessMethod = NULL;
 	Oid			accessMethodId = InvalidOid;
+	OnCommitAction	oncommit_action = ONCOMMIT_NOOP;
 
 	/*
 	 * Truncate relname to appropriate length (probably a waste of time, as
@@ -681,7 +684,7 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	 * Check consistency of arguments
 	 */
 	if (stmt->oncommit != ONCOMMIT_NOOP
-		&& stmt->relation->relpersistence != RELPERSISTENCE_TEMP)
+		&& !RelpersistenceTsTemp(stmt->relation->relpersistence))
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
 				 errmsg("ON COMMIT can only be used on temporary tables")));
@@ -711,7 +714,7 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	 * code.  This is needed because calling code might not expect untrusted
 	 * tables to appear in pg_temp at the front of its search path.
 	 */
-	if (stmt->relation->relpersistence == RELPERSISTENCE_TEMP
+	if (RelpersistenceTsTemp(stmt->relation->relpersistence)
 		&& InSecurityRestrictedOperation())
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
@@ -812,6 +815,59 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	/*
 	 * Parse and validate reloptions, if any.
 	 */
+	/* For global temporary table */
+	oncommit_action = gtt_oncommit_option(stmt->options);
+	if (stmt->relation->relpersistence == RELPERSISTENCE_GLOBAL_TEMP)
+	{
+		if (!(relkind == RELKIND_RELATION || relkind == RELKIND_SEQUENCE))
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+					 errmsg("global temporary relation can only be a regular table or sequence")));
+
+		if (inheritOids)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+					 errmsg("cannot create global temporary inherit table or global temporary partitioned table")));
+
+		/* Check oncommit clause and save to reloptions */
+		if (oncommit_action != ONCOMMIT_NOOP)
+		{
+			if (stmt->oncommit != ONCOMMIT_NOOP)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+						 errmsg("cannot specify both ON COMMIT clause and on_commit_delete_rows")));
+
+			stmt->oncommit = oncommit_action;
+		}
+		else
+		{
+			DefElem *opt = makeNode(DefElem);
+
+			opt->type = T_DefElem;
+			opt->defnamespace = NULL;
+			opt->defname = "on_commit_delete_rows";
+			opt->defaction = DEFELEM_UNSPEC;
+
+			/* use reloptions to remember on commit clause */
+			if (stmt->oncommit == ONCOMMIT_DELETE_ROWS)
+				opt->arg  = (Node *)makeString("true");
+			else if (stmt->oncommit == ONCOMMIT_PRESERVE_ROWS)
+				opt->arg  = (Node *)makeString("false");
+			else if (stmt->oncommit == ONCOMMIT_NOOP)
+				opt->arg  = (Node *)makeString("false");
+			else if (stmt->oncommit == ONCOMMIT_DROP)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+						 errmsg("specifying ON COMMIT DROP is not supported on a global temporary table")));
+
+			stmt->options = lappend(stmt->options, opt);
+		}
+	}
+	else if (oncommit_action != ONCOMMIT_NOOP)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+				 errmsg("on_commit_delete_rows can only be used on global temporary table")));
+
 	reloptions = transformRelOptions((Datum) 0, stmt->options, NULL, validnsps,
 									 true, false);
 
@@ -1436,7 +1492,7 @@ RemoveRelations(DropStmt *drop)
 		 * relation persistence cannot be known without its OID.
 		 */
 		if (drop->concurrent &&
-			get_rel_persistence(relOid) != RELPERSISTENCE_TEMP)
+			!RelpersistenceTsTemp(get_rel_persistence(relOid)))
 		{
 			Assert(list_length(drop->objects) == 1 &&
 				   drop->removeType == OBJECT_INDEX);
@@ -1645,9 +1701,9 @@ ExecuteTruncate(TruncateStmt *stmt)
 		Relation	rel;
 		bool		recurse = rv->inh;
 		Oid			myrelid;
-		LOCKMODE	lockmode = AccessExclusiveLock;
+		LOCKMODE	lockmode;
 
-		myrelid = RangeVarGetRelidExtended(rv, lockmode,
+		myrelid = RangeVarGetRelidExtended(rv, AccessShareLock,
 										   0, RangeVarCallbackForTruncate,
 										   NULL);
 
@@ -1655,8 +1711,20 @@ ExecuteTruncate(TruncateStmt *stmt)
 		if (list_member_oid(relids, myrelid))
 			continue;
 
-		/* open the relation, we already hold a lock on it */
+		/* open the relation, we need hold a low-level lock first */
 		rel = table_open(myrelid, NoLock);
+
+		/*
+		 * Truncate global temp table only cleans up the data in current session,
+		 * only low-level locks are required.
+		 */
+		if (RELATION_IS_GLOBAL_TEMP(rel))
+			lockmode = AccessShareLock;
+		else
+		{
+			lockmode = AccessExclusiveLock;
+			LockRelationOid(myrelid, lockmode);
+		}
 
 		/*
 		 * RangeVarGetRelidExtended() has done most checks with its callback,
@@ -1907,6 +1975,7 @@ ExecuteTruncateGuts(List *explicit_rels,
 	foreach(cell, rels)
 	{
 		Relation	rel = (Relation) lfirst(cell);
+		LOCKMODE	lockmode;
 
 		/* Skip partitioned tables as there is nothing to do */
 		if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
@@ -1958,6 +2027,19 @@ ExecuteTruncateGuts(List *explicit_rels,
 		}
 
 		/*
+		 * Skip the global temporary table that is not initialized for storage
+		 * in current session.
+		 */
+		if (RELATION_IS_GLOBAL_TEMP(rel))
+		{
+			lockmode = AccessShareLock;
+			if (!gtt_storage_attached(RelationGetRelid(rel)))
+				continue;
+		}
+		else
+			lockmode = AccessExclusiveLock;
+
+		/*
 		 * Normally, we need a transaction-safe truncation here.  However, if
 		 * the table was either created in the current (sub)transaction or has
 		 * a new relfilenode in the current (sub)transaction, then we can just
@@ -1968,7 +2050,7 @@ ExecuteTruncateGuts(List *explicit_rels,
 			rel->rd_newRelfilenodeSubid == mySubid)
 		{
 			/* Immediate, non-rollbackable truncation is OK */
-			heap_truncate_one_rel(rel);
+			heap_truncate_one_rel(rel, lockmode);
 		}
 		else
 		{
@@ -2002,7 +2084,7 @@ ExecuteTruncateGuts(List *explicit_rels,
 			if (OidIsValid(toast_relid))
 			{
 				Relation	toastrel = relation_open(toast_relid,
-													 AccessExclusiveLock);
+													 lockmode);
 
 				RelationSetNewRelfilenode(toastrel,
 										  toastrel->rd_rel->relpersistence);
@@ -2013,7 +2095,7 @@ ExecuteTruncateGuts(List *explicit_rels,
 			 * Reconstruct the indexes to match, and we're done.
 			 */
 			reindex_relation(heap_relid, REINDEX_REL_PROCESS_TOAST,
-							 &reindex_params);
+							 &reindex_params, lockmode);
 		}
 
 		pgstat_count_truncate(rel);
@@ -3284,6 +3366,12 @@ CheckRelationTableSpaceMove(Relation rel, Oid newTableSpaceId)
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("cannot move temporary tables of other sessions")));
 
+	if (RELATION_IS_GLOBAL_TEMP(rel))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot move global temporary table \"%s\"",
+				 		RelationGetRelationName(rel))));
+
 	return true;
 }
 
@@ -4052,6 +4140,10 @@ AlterTable(AlterTableStmt *stmt, LOCKMODE lockmode,
 
 	/* Caller is required to provide an adequate lock. */
 	rel = relation_open(context->relid, NoLock);
+
+	/* We allow to alter global temporary table only current session use it */
+	if (RELATION_IS_GLOBAL_TEMP(rel))
+		CheckGlobalTempTableNotInUse(rel, "ALTER GLOBAL TEMPORARY TABLE");
 
 	CheckTableNotInUse(rel, "ALTER TABLE");
 
@@ -5384,6 +5476,25 @@ ATRewriteTables(AlterTableStmt *parsetree, List **wqueue, LOCKMODE lockmode,
 
 			rel = table_open(tab->relid, NoLock);
 			find_composite_type_dependencies(rel->rd_rel->reltype, rel, NULL);
+
+			if (RELATION_IS_GLOBAL_TEMP(rel) && tab->rewrite > 0)
+			{
+				if (tab->chgPersistence)
+					ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("cannot change global temporary table persistence setting")));
+
+				if(gtt_storage_attached(tab->relid))
+					ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("cannot rewrite global temporary table \"%s\" when it has data in this session",
+								RelationGetRelationName(rel)),
+						 errhint("Please create a new connection and execute ALTER TABLE on the new connection.")));
+
+				/* global temp table has no data in this session, so only change catalog */
+				tab->rewrite = 0;
+			}
+
 			table_close(rel, NoLock);
 		}
 
@@ -5434,6 +5545,9 @@ ATRewriteTables(AlterTableStmt *parsetree, List **wqueue, LOCKMODE lockmode,
 				ereport(ERROR,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 						 errmsg("cannot rewrite temporary tables of other sessions")));
+
+			/* Not support rewrite global temp table */
+			Assert(!RELATION_IS_GLOBAL_TEMP(OldHeap));
 
 			/*
 			 * Select destination tablespace (same as original unless user
@@ -9081,6 +9195,12 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
 						 errmsg("constraints on temporary tables must involve temporary tables of this session")));
+			break;
+		case RELPERSISTENCE_GLOBAL_TEMP:
+			if (pkrel->rd_rel->relpersistence != RELPERSISTENCE_GLOBAL_TEMP)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+						 errmsg("constraints on global temporary tables may reference only global temporary tables")));
 			break;
 	}
 
@@ -13440,7 +13560,9 @@ TryReuseIndex(Oid oldId, IndexStmt *stmt)
 		Relation	irel = index_open(oldId, NoLock);
 
 		/* If it's a partitioned index, there is no storage to share. */
-		if (irel->rd_rel->relkind != RELKIND_PARTITIONED_INDEX)
+		/* multiple global temp table are not allow use same relfilenode */
+		if (irel->rd_rel->relkind != RELKIND_PARTITIONED_INDEX &&
+			!RELATION_IS_GLOBAL_TEMP(irel))
 		{
 			stmt->oldNode = irel->rd_node.relNode;
 			stmt->oldCreateSubid = irel->rd_createSubid;
@@ -14102,6 +14224,11 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 	if (defList == NIL && operation != AT_ReplaceRelOptions)
 		return;					/* nothing to do */
 
+	/* option on_commit_delete_rows is only for global temp table and cannot be set by ALTER TABLE */
+	if (gtt_oncommit_option(defList) != ONCOMMIT_NOOP)
+		elog(ERROR, "cannot set \"on_commit_delete_rows\" for relation \"%s\"",
+					RelationGetRelationName(rel));
+
 	pgclass = table_open(RelationRelationId, RowExclusiveLock);
 
 	/* Fetch heap tuple */
@@ -14602,7 +14729,7 @@ index_copy_data(Relation rel, RelFileNode newrnode)
 	 * NOTE: any conflict in relfilenode value will be caught in
 	 * RelationCreateStorage().
 	 */
-	RelationCreateStorage(newrnode, rel->rd_rel->relpersistence);
+	RelationCreateStorage(newrnode, rel->rd_rel->relpersistence, rel);
 
 	/* copy main fork */
 	RelationCopyStorage(RelationGetSmgr(rel), dstrel, MAIN_FORKNUM,
@@ -16203,6 +16330,7 @@ ATPrepChangePersistence(Relation rel, bool toLogged)
 	switch (rel->rd_rel->relpersistence)
 	{
 		case RELPERSISTENCE_TEMP:
+		case RELPERSISTENCE_GLOBAL_TEMP:
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
 					 errmsg("cannot change logged status of table \"%s\" because it is temporary",
@@ -16644,7 +16772,7 @@ AlterSeqNamespaces(Relation classRel, Relation rel,
  * Register a newly-created relation's ON COMMIT action.
  */
 void
-register_on_commit_action(Oid relid, OnCommitAction action)
+register_on_commit_action(Oid relid, OnCommitAction action, bool is_gloal_temp)
 {
 	OnCommitItem *oc;
 	MemoryContext oldcxt;
@@ -16663,6 +16791,7 @@ register_on_commit_action(Oid relid, OnCommitAction action)
 	oc->oncommit = action;
 	oc->creating_subid = GetCurrentSubTransactionId();
 	oc->deleting_subid = InvalidSubTransactionId;
+	oc->is_global_temp = is_gloal_temp;
 
 	/*
 	 * We use lcons() here so that ON COMMIT actions are processed in reverse
@@ -16708,6 +16837,7 @@ PreCommit_on_commit_actions(void)
 	ListCell   *l;
 	List	   *oids_to_truncate = NIL;
 	List	   *oids_to_drop = NIL;
+	List	   *oids_to_truncate_gtt = NIL;
 
 	foreach(l, on_commits)
 	{
@@ -16731,7 +16861,12 @@ PreCommit_on_commit_actions(void)
 				 * tables, as they must still be empty.
 				 */
 				if ((MyXactFlags & XACT_FLAGS_ACCESSEDTEMPNAMESPACE))
-					oids_to_truncate = lappend_oid(oids_to_truncate, oc->relid);
+				{
+					if (oc->is_global_temp)
+						oids_to_truncate_gtt = lappend_oid(oids_to_truncate_gtt, oc->relid);
+					else
+						oids_to_truncate = lappend_oid(oids_to_truncate, oc->relid);
+				}
 				break;
 			case ONCOMMIT_DROP:
 				oids_to_drop = lappend_oid(oids_to_drop, oc->relid);
@@ -16748,7 +16883,10 @@ PreCommit_on_commit_actions(void)
 	 * exists at truncation time.
 	 */
 	if (oids_to_truncate != NIL)
-		heap_truncate(oids_to_truncate);
+		heap_truncate(oids_to_truncate, false);
+
+	if (oids_to_truncate_gtt != NIL)
+		heap_truncate(oids_to_truncate_gtt, true);
 
 	if (oids_to_drop != NIL)
 	{
@@ -17746,6 +17884,13 @@ ATExecAttachPartition(List **wqueue, Relation rel, PartitionCmd *cmd,
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 errmsg("cannot attach temporary relation of another session as partition")));
+
+	/* If the parent is permanent, so must be all of its partitions. */
+	if (attachrel->rd_rel->relpersistence == RELPERSISTENCE_GLOBAL_TEMP)
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("cannot attach a global temporary relation as partition of permanent relation \"%s\"",
+						RelationGetRelationName(rel))));
 
 	/* Check if there are any columns in attachrel that aren't in the parent */
 	tupleDesc = RelationGetDescr(attachrel);
@@ -19238,4 +19383,40 @@ GetAttributeCompression(Oid atttypid, char *compression)
 				 errmsg("invalid compression method \"%s\"", compression)));
 
 	return cmethod;
+}
+
+/*
+ * Parse the on commit clause for the temporary table
+ */
+static OnCommitAction
+gtt_oncommit_option(List *options)
+{
+	ListCell		*listptr;
+	OnCommitAction	action = ONCOMMIT_NOOP;
+
+	foreach(listptr, options)
+	{
+		DefElem    *def = (DefElem *) lfirst(listptr);
+
+		if (strcmp(def->defname, "on_commit_delete_rows") == 0)
+		{
+			bool	res = false;
+			char	*sval = defGetString(def);
+
+			/* It has to be a Boolean value */
+			if (!parse_bool(sval, &res))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("parameter \"on_commit_delete_rows\" requires a Boolean value")));
+
+			if (res)
+				action = ONCOMMIT_DELETE_ROWS;
+			else
+				action = ONCOMMIT_PRESERVE_ROWS;
+
+			break;
+		}
+	}
+
+	return action;
 }

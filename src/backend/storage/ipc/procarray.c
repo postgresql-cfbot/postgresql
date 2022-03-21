@@ -65,6 +65,7 @@
 #include "utils/builtins.h"
 #include "utils/rel.h"
 #include "utils/snapmgr.h"
+#include "utils/guc.h"
 
 #define UINT32_ACCESS_ONCE(var)		 ((uint32)(*((volatile uint32 *)&(var))))
 
@@ -5174,4 +5175,67 @@ KnownAssignedXidsReset(void)
 	pArray->headKnownAssignedXids = 0;
 
 	LWLockRelease(ProcArrayLock);
+}
+
+/*
+ * Search all active session to get db level oldest frozenxid
+ * for global temporary table.
+ *
+ * Pids and Xids are used to store the session level oldest frozenxid if specified
+ */
+TransactionId
+gtt_get_oldest_frozenxids_in_current_database(List **pids, List **xids)
+{
+	ProcArrayStruct		*arrayP = NULL;
+	TransactionId		result = InvalidTransactionId;
+	int			index = 0;
+	int			i = 0;
+	uint8		flags = 0;
+
+	/* return 0 if feature is disabled */
+	if (max_active_gtt <= 0)
+		return InvalidTransactionId;
+
+	/* Disable in standby node */
+	if (RecoveryInProgress())
+		return InvalidTransactionId;
+
+	flags |= PROC_IS_AUTOVACUUM;
+	flags |= PROC_IN_LOGICAL_DECODING;
+
+	LWLockAcquire(ProcArrayLock, LW_SHARED);
+	arrayP = procArray;
+	for (index = 0; index < arrayP->numProcs; index++)
+	{
+		int			pgprocno = arrayP->pgprocnos[index];
+		PGPROC	   *proc = &allProcs[pgprocno];
+		uint8		statusFlags = ProcGlobal->statusFlags[index];
+		TransactionId	gtt_frozenxid = InvalidTransactionId;
+
+		if (statusFlags & flags)
+			continue;
+
+		/* Fetch all session level frozenxid that is belonging to current database */
+		gtt_frozenxid = proc->gtt_frozenxid;
+		if (proc->databaseId == MyDatabaseId &&
+			TransactionIdIsNormal(gtt_frozenxid))
+		{
+			if (result == InvalidTransactionId)
+				result = gtt_frozenxid;
+			else if (TransactionIdPrecedes(gtt_frozenxid, result))
+				result = gtt_frozenxid;
+
+			/* save backend pid and session level oldest relfrozenxid */
+			if (pids)
+				*pids = lappend_int(*pids, proc->pid);
+
+			if (xids)
+				*xids = lappend_oid(*xids, gtt_frozenxid);
+
+			i++;
+		}
+	}
+	LWLockRelease(ProcArrayLock);
+
+	return result;
 }

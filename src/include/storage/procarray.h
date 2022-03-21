@@ -94,4 +94,6 @@ extern void ProcArraySetReplicationSlotXmin(TransactionId xmin,
 extern void ProcArrayGetReplicationSlotXmin(TransactionId *xmin,
 											TransactionId *catalog_xmin);
 
+extern TransactionId gtt_get_oldest_frozenxids_in_current_database(List **pids, List **xids);
+
 #endif							/* PROCARRAY_H */

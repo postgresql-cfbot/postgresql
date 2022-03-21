@@ -982,6 +982,13 @@ pg_relation_filepath(PG_FUNCTION_ARGS)
 				Assert(backend != InvalidBackendId);
 			}
 			break;
+		case RELPERSISTENCE_GLOBAL_TEMP:
+			/*
+			 * For global temporary table ,each backend has its own storage,
+			 * also only sees its own storage. Use Backendid to identify them.
+			 */
+			backend = BackendIdForTempRelations();
+			break;
 		default:
 			elog(ERROR, "invalid relpersistence: %c", relform->relpersistence);
 			backend = InvalidBackendId; /* placate compiler */

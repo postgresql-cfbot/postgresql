@@ -38,6 +38,7 @@
 #include "access/tableam.h"
 #include "access/xact.h"
 #include "catalog/catalog.h"
+#include "catalog/storage_gtt.h"
 #include "commands/trigger.h"
 #include "executor/execPartition.h"
 #include "executor/executor.h"
@@ -3062,13 +3063,13 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 	{
 		mtstate->rootResultRelInfo = makeNode(ResultRelInfo);
 		ExecInitResultRelation(estate, mtstate->rootResultRelInfo,
-							   node->rootRelation);
+							   node->rootRelation, operation);
 	}
 	else
 	{
 		mtstate->rootResultRelInfo = mtstate->resultRelInfo;
 		ExecInitResultRelation(estate, mtstate->resultRelInfo,
-							   linitial_int(node->resultRelations));
+							   linitial_int(node->resultRelations), operation);
 	}
 
 	/* set up epqstate with dummy subplan data for the moment */
@@ -3096,7 +3097,7 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 
 		if (resultRelInfo != mtstate->rootResultRelInfo)
 		{
-			ExecInitResultRelation(estate, resultRelInfo, resultRelation);
+			ExecInitResultRelation(estate, resultRelInfo, resultRelation, operation);
 
 			/*
 			 * For child result relations, store the root result relation

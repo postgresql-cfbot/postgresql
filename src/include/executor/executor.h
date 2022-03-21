@@ -577,7 +577,7 @@ exec_rt_fetch(Index rti, EState *estate)
 
 extern Relation ExecGetRangeTableRelation(EState *estate, Index rti);
 extern void ExecInitResultRelation(EState *estate, ResultRelInfo *resultRelInfo,
-								   Index rti);
+								   Index rti, CmdType operation);
 
 extern int	executor_errposition(EState *estate, int location);
 

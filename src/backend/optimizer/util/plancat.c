@@ -31,6 +31,7 @@
 #include "catalog/pg_proc.h"
 #include "catalog/pg_statistic_ext.h"
 #include "catalog/pg_statistic_ext_data.h"
+#include "catalog/storage_gtt.h"
 #include "foreign/fdwapi.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
@@ -217,6 +218,14 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 			 * queries.
 			 */
 			if (indexRelation->rd_rel->relkind == RELKIND_PARTITIONED_INDEX)
+			{
+				index_close(indexRelation, NoLock);
+				continue;
+			}
+
+			/* Ignore empty index for global temporary table in this session */
+			if (RELATION_IS_GLOBAL_TEMP(indexRelation) &&
+				!gtt_storage_attached(RelationGetRelid(indexRelation)))
 			{
 				index_close(indexRelation, NoLock);
 				continue;

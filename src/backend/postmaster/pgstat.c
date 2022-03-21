@@ -53,6 +53,7 @@
 #include "postmaster/postmaster.h"
 #include "replication/slot.h"
 #include "replication/walsender.h"
+#include "replication/logicalworker.h"
 #include "storage/backendid.h"
 #include "storage/dsm.h"
 #include "storage/fd.h"
@@ -226,6 +227,7 @@ static void pgstat_recv_replslot(PgStat_MsgReplSlot *msg, int len);
 static void pgstat_recv_tempfile(PgStat_MsgTempFile *msg, int len);
 static void pgstat_recv_subscription_drop(PgStat_MsgSubscriptionDrop *msg, int len);
 static void pgstat_recv_subscription_error(PgStat_MsgSubscriptionError *msg, int len);
+static void pgstat_recv_subscription_xact(PgStat_MsgSubscriptionXact *msg, int len);
 
 /* ------------------------------------------------------------
  * Public functions called from postmaster follow
@@ -1105,6 +1107,58 @@ pgstat_reset_shared_counters(const char *target)
 }
 
 /* ----------
+ * pgstat_report_subscription_xact() -
+ *
+ *	Tell the collector about subscriptions transaction stats.
+ *	The statistics are cleared upon sending.
+ *
+ *	Setting 'force' to true makes sure that no stats data
+ *	related to subscription commit/rollback is lost before the
+ *	logical worker exit.
+ * ----------
+ */
+void
+pgstat_report_subscription_xact(Oid subid, SubscriptionXactStats * stats, bool force)
+{
+	static TimestampTz last_report = 0;
+	PgStat_MsgSubscriptionXact msg;
+
+	/* Bailout early if nothing to do */
+	if (!OidIsValid(subid) ||
+		(stats->apply_commit_count == 0 && stats->apply_rollback_count == 0))
+		return;
+
+	if (!force)
+	{
+		TimestampTz now = GetCurrentTimestamp();
+
+		/*
+		 * Don't send a message unless it's been at least PGSTAT_STAT_INTERVAL
+		 * msec since we last sent one. This is to avoid overloading the stats
+		 * collector.
+		 */
+		if (!TimestampDifferenceExceeds(last_report, now, PGSTAT_STAT_INTERVAL))
+			return;
+		last_report = now;
+	}
+
+	/*
+	 * Prepare and send the message.
+	 */
+	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_SUBSCRIPTIONXACT);
+	msg.m_subid = subid;
+	msg.m_apply_commit_count = stats->apply_commit_count;
+	msg.m_apply_rollback_count = stats->apply_rollback_count;
+	pgstat_send(&msg, sizeof(PgStat_MsgSubscriptionXact));
+
+	/*
+	 * Clear out the statistics.
+	 */
+	stats->apply_commit_count = 0;
+	stats->apply_rollback_count = 0;
+}
+
+/* ----------
  * pgstat_ping() -
  *
  *	Send some junk data to the collector to increase traffic.
@@ -1871,6 +1925,10 @@ PgstatCollectorMain(int argc, char *argv[])
 
 				case PGSTAT_MTYPE_SUBSCRIPTIONERROR:
 					pgstat_recv_subscription_error(&msg.msg_subscriptionerror, len);
+					break;
+
+				case PGSTAT_MTYPE_SUBSCRIPTIONXACT:
+					pgstat_recv_subscription_xact(&msg.msg_subscriptionxact, len);
 					break;
 
 				default:
@@ -4284,6 +4342,25 @@ pgstat_recv_subscription_error(PgStat_MsgSubscriptionError *msg, int len)
 }
 
 /* ----------
+ * pgstat_recv_subscription_xact() -
+ *
+ *	Process a SUBSCRIPTIONXACT message.
+ * ----------
+ */
+static void
+pgstat_recv_subscription_xact(PgStat_MsgSubscriptionXact *msg, int len)
+{
+	PgStat_StatSubEntry *subentry;
+
+	/* Get the subscription stats */
+	subentry = pgstat_get_subscription_entry(msg->m_subid, true);
+	Assert(subentry);
+
+	subentry->apply_commit_count += msg->m_apply_commit_count;
+	subentry->apply_rollback_count += msg->m_apply_rollback_count;
+}
+
+/* ----------
  * pgstat_write_statsfile_needed() -
  *
  *	Do we need to write out any stats files?
@@ -4460,5 +4537,7 @@ pgstat_reset_subscription(PgStat_StatSubEntry *subentry, TimestampTz ts)
 {
 	subentry->apply_error_count = 0;
 	subentry->sync_error_count = 0;
+	subentry->apply_commit_count = 0;
+	subentry->apply_rollback_count = 0;
 	subentry->stat_reset_timestamp = ts;
 }

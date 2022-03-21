@@ -15,6 +15,7 @@
 #include "portability/instr_time.h"
 #include "postmaster/pgarch.h"	/* for MAX_XFN_CHARS */
 #include "replication/logicalproto.h"
+#include "replication/logicalworker.h"
 #include "utils/backend_progress.h" /* for backward compatibility */
 #include "utils/backend_status.h"	/* for backward compatibility */
 #include "utils/hsearch.h"
@@ -87,6 +88,7 @@ typedef enum StatMsgType
 	PGSTAT_MTYPE_DISCONNECT,
 	PGSTAT_MTYPE_SUBSCRIPTIONDROP,
 	PGSTAT_MTYPE_SUBSCRIPTIONERROR,
+	PGSTAT_MTYPE_SUBSCRIPTIONXACT
 } StatMsgType;
 
 /* ----------
@@ -577,6 +579,23 @@ typedef struct PgStat_MsgSubscriptionError
 	bool		m_is_apply_error;
 } PgStat_MsgSubscriptionError;
 
+
+/* ----------
+ * PgStat_MsgSubscriptionXact          Sent by the subscription worker to report transaction
+ *                                                                     ends.
+ * ----------
+ */
+typedef struct PgStat_MsgSubscriptionXact
+{
+	PgStat_MsgHdr m_hdr;
+
+	/* determine the subscription entry */
+	Oid			m_subid;
+
+	PgStat_Counter m_apply_commit_count;
+	PgStat_Counter m_apply_rollback_count;
+} PgStat_MsgSubscriptionXact;
+
 /* ----------
  * PgStat_MsgRecoveryConflict	Sent by the backend upon recovery conflict
  * ----------
@@ -757,6 +776,7 @@ typedef union PgStat_Msg
 	PgStat_MsgDisconnect msg_disconnect;
 	PgStat_MsgSubscriptionError msg_subscriptionerror;
 	PgStat_MsgSubscriptionDrop msg_subscriptiondrop;
+	PgStat_MsgSubscriptionXact msg_subscriptionxact;
 } PgStat_Msg;
 
 
@@ -981,6 +1001,9 @@ typedef struct PgStat_StatSubEntry
 
 	PgStat_Counter apply_error_count;
 	PgStat_Counter sync_error_count;
+	PgStat_Counter apply_commit_count;
+	PgStat_Counter apply_rollback_count;
+
 	TimestampTz stat_reset_timestamp;
 } PgStat_StatSubEntry;
 
@@ -1180,6 +1203,9 @@ extern void pgstat_send_archiver(const char *xlog, bool failed);
 extern void pgstat_send_bgwriter(void);
 extern void pgstat_send_checkpointer(void);
 extern void pgstat_send_wal(bool force);
+extern void pgstat_report_subscription_xact(Oid subid,
+											SubscriptionXactStats *stats,
+											bool force);
 
 /* ----------
  * Support functions for the SQL-callable functions to

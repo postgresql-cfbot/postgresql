@@ -1402,6 +1402,7 @@ LogicalRepRelId
 LogicalRepRelMapEntry
 LogicalRepRelation
 LogicalRepRollbackPreparedTxnData
+LogicalRepSubscriptionStats
 LogicalRepTupleData
 LogicalRepTyp
 LogicalRepWorker
@@ -1952,6 +1953,7 @@ PgStat_MsgResetsubcounter
 PgStat_MsgSLRU
 PgStat_MsgSubscriptionDrop
 PgStat_MsgSubscriptionError
+PgStat_MsgSubscriptionXact
 PgStat_MsgTabpurge
 PgStat_MsgTabstat
 PgStat_MsgTempFile

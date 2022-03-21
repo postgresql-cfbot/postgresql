@@ -629,8 +629,9 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
 
      <row>
       <entry><structname>pg_stat_subscription_stats</structname><indexterm><primary>pg_stat_subscription_stats</primary></indexterm></entry>
-      <entry>One row per subscription, showing statistics about errors.
-      See <link linkend="monitoring-pg-stat-subscription-stats">
+      <entry>One row per subscription, showing statistics about errors and
+      transactions. See
+      <link linkend="monitoring-pg-stat-subscription-stats">
       <structname>pg_stat_subscription_stats</structname></link> for details.
       </entry>
      </row>
@@ -3132,6 +3133,28 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
       <para>
        Number of times an error occurred during the initial table
        synchronization
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>apply_commit_count</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of transactions successfully applied in this subscription.
+       Both <command>COMMIT</command> and <command>COMMIT PREPARED</command>
+       increment this counter.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>apply_rollback_count</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of transactions rollbacks in this subscription. Both
+       <command>ROLLBACK</command> and <command>ROLLBACK PREPARED</command>
+       increment this counter.
       </para></entry>
      </row>
 

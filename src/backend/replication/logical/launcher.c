@@ -77,6 +77,7 @@ static bool on_commit_launcher_wakeup = false;
 
 Datum		pg_stat_get_subscription(PG_FUNCTION_ARGS);
 
+extern SubscriptionXactStats subStats;
 
 /*
  * Load the list of subscriptions.
@@ -646,6 +647,11 @@ logicalrep_worker_onexit(int code, Datum arg)
 	/* Disconnect gracefully from the remote side. */
 	if (LogRepWorkerWalRcvConn)
 		walrcv_disconnect(LogRepWorkerWalRcvConn);
+
+	/* Unless we exit too early, report the stats */
+	if (MyLogicalRepWorker)
+		pgstat_report_subscription_xact(MyLogicalRepWorker->subid,
+										&subStats, true);
 
 	logicalrep_worker_detach();
 

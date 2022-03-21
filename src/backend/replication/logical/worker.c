@@ -240,6 +240,12 @@ static ApplyErrorCallbackArg apply_error_callback_arg =
 	.origin_name = NULL,
 };
 
+SubscriptionXactStats subStats =
+{
+	.apply_commit_count = 0,
+	.apply_rollback_count = 0,
+};
+
 static MemoryContext ApplyMessageContext = NULL;
 MemoryContext ApplyContext = NULL;
 
@@ -332,6 +338,9 @@ static void apply_handle_tuple_routing(ApplyExecutionData *edata,
 
 /* Compute GID for two_phase transactions */
 static void TwoPhaseTransactionGid(Oid subid, TransactionId xid, char *gid, int szgid);
+
+static void subscription_stats_incr_commit(void);
+static void subscription_stats_incr_rollback(void);
 
 /* Common streaming function to apply all the spooled messages */
 static void apply_spooled_messages(TransactionId xid, XLogRecPtr lsn);
@@ -963,6 +972,8 @@ apply_handle_commit_prepared(StringInfo s)
 	CommitTransactionCommand();
 	pgstat_report_stat(false);
 
+	subscription_stats_incr_commit();
+
 	store_flush_position(prepare_data.end_lsn);
 	in_remote_transaction = false;
 
@@ -1010,6 +1021,8 @@ apply_handle_rollback_prepared(StringInfo s)
 		FinishPreparedTransaction(gid, false);
 		end_replication_step();
 		CommitTransactionCommand();
+
+		subscription_stats_incr_rollback();
 	}
 
 	pgstat_report_stat(false);
@@ -1221,6 +1234,8 @@ apply_handle_stream_abort(StringInfo s)
 	{
 		set_apply_error_context_xact(xid, InvalidXLogRecPtr);
 		stream_cleanup_files(MyLogicalRepWorker->subid, xid);
+
+		subscription_stats_incr_rollback();
 	}
 	else
 	{
@@ -1466,6 +1481,8 @@ apply_handle_commit_internal(LogicalRepCommitData *commit_data)
 
 		CommitTransactionCommand();
 		pgstat_report_stat(false);
+
+		subscription_stats_incr_commit();
 
 		store_flush_position(commit_data->end_lsn);
 	}
@@ -2721,6 +2738,8 @@ LogicalRepApplyLoop(XLogRecPtr last_received)
 		if (endofstream)
 			break;
 
+		pgstat_report_subscription_xact(MySubscription->oid, &subStats, false);
+
 		/*
 		 * Wait for more data or latch.  If we have unflushed transactions,
 		 * wake up after WalWriterDelay to see if they've been flushed yet (in
@@ -3452,6 +3471,24 @@ start_apply(XLogRecPtr origin_startpos)
 		}
 	}
 	PG_END_TRY();
+}
+
+/*
+ * Increment the counter of commit for subscription statistics.
+ */
+static void
+subscription_stats_incr_commit(void)
+{
+	subStats.apply_commit_count++;
+}
+
+/*
+ * Increment the counter of rollback for subscription statistics.
+ */
+static void
+subscription_stats_incr_rollback(void)
+{
+	subStats.apply_rollback_count++;
 }
 
 /* Logical Replication Apply worker entry point */

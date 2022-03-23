@@ -148,7 +148,7 @@ ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> RENAME TO <
     <listitem>
      <para>
       Fetch missing table information from publisher.  This will start
-      replication of tables that were added to the subscribed-to publications
+      replication of tables and sequences that were added to the subscribed-to publications
       since <command>CREATE SUBSCRIPTION</command> or
       the last invocation of <command>REFRESH PUBLICATION</command>.
      </para>
@@ -169,6 +169,7 @@ ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> RENAME TO <
          <para>
           Previously subscribed tables are not copied, even if a table's row
           filter <literal>WHERE</literal> clause has since been modified.
+          Previously-subscribed sequences are not copied either.
          </para>
         </listitem>
        </varlistentry>

@@ -39,6 +39,7 @@
 #include "access/xlog.h"
 #include "access/xlog_internal.h"
 #include "access/xlogrecovery.h"
+#include "commands/progress.h"
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -664,6 +665,9 @@ static bool
 ImmediateCheckpointRequested(void)
 {
 	volatile CheckpointerShmemStruct *cps = CheckpointerShmem;
+
+	pgstat_progress_update_param(PROGRESS_CHECKPOINT_NEXT_CHECKPOINT_FLAGS,
+								 cps->ckpt_flags);
 
 	/*
 	 * We don't need to acquire the ckpt_lck in this case because we're only

@@ -14,6 +14,7 @@ SUBDIRS = \
 		  plsample \
 		  snapshot_too_old \
 		  spgist_name_ops \
+		  test_auth_provider \
 		  test_bloomfilter \
 		  test_ddl_deparse \
 		  test_extensions \

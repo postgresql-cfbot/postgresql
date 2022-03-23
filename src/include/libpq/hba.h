@@ -38,6 +38,7 @@ typedef enum UserAuth
 	uaLDAP,
 	uaCert,
 	uaRADIUS,
+	uaCustom,
 	uaPeer
 #define USER_AUTH_LAST uaPeer	/* Must be last value of this enum */
 } UserAuth;
@@ -76,6 +77,13 @@ typedef enum ClientCertName
 	clientCertCN,
 	clientCertDN
 } ClientCertName;
+
+/* Struct for custom options defined by custom auth plugins */
+typedef struct CustomOption
+{
+	char	*name;
+	char	*value;
+}CustomOption;
 
 typedef struct HbaLine
 {
@@ -120,6 +128,8 @@ typedef struct HbaLine
 	char	   *radiusidentifiers_s;
 	List	   *radiusports;
 	char	   *radiusports_s;
+	char	   *custom_provider;
+	List	   *custom_auth_options;
 } HbaLine;
 
 typedef struct IdentLine

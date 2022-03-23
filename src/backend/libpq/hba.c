@@ -31,6 +31,7 @@
 #include "common/ip.h"
 #include "common/string.h"
 #include "funcapi.h"
+#include "libpq/auth.h"
 #include "libpq/ifaddr.h"
 #include "libpq/libpq.h"
 #include "miscadmin.h"
@@ -134,6 +135,7 @@ static const char *const UserAuthName[] =
 	"ldap",
 	"cert",
 	"radius",
+	"custom",
 	"peer"
 };
 
@@ -1399,6 +1401,8 @@ parse_hba_line(TokenizedLine *tok_line, int elevel)
 #endif
 	else if (strcmp(token->string, "radius") == 0)
 		parsedline->auth_method = uaRADIUS;
+	else if (strcmp(token->string, "custom") == 0)
+		parsedline->auth_method = uaCustom;
 	else
 	{
 		ereport(elevel,
@@ -1691,6 +1695,14 @@ parse_hba_line(TokenizedLine *tok_line, int elevel)
 		parsedline->clientcert = clientCertFull;
 	}
 
+	/*
+	 * Ensure that the provider name is specified for custom authentication method.
+	 */
+	if (parsedline->auth_method == uaCustom)
+	{
+		MANDATORY_AUTH_ARG(parsedline->custom_provider, "provider", "custom");
+	}
+
 	return parsedline;
 }
 
@@ -1717,8 +1729,9 @@ parse_hba_auth_opt(char *name, char *val, HbaLine *hbaline,
 			hbaline->auth_method != uaPeer &&
 			hbaline->auth_method != uaGSS &&
 			hbaline->auth_method != uaSSPI &&
-			hbaline->auth_method != uaCert)
-			INVALID_AUTH_OPTION("map", gettext_noop("ident, peer, gssapi, sspi, and cert"));
+			hbaline->auth_method != uaCert &&
+			hbaline->auth_method != uaCustom)
+			INVALID_AUTH_OPTION("map", gettext_noop("ident, peer, gssapi, sspi, cert and custom"));
 		hbaline->usermap = pstrdup(val);
 	}
 	else if (strcmp(name, "clientcert") == 0)
@@ -2102,17 +2115,81 @@ parse_hba_auth_opt(char *name, char *val, HbaLine *hbaline,
 		hbaline->radiusidentifiers = parsed_identifiers;
 		hbaline->radiusidentifiers_s = pstrdup(val);
 	}
+	else if (strcmp(name, "provider") == 0)
+	{
+		REQUIRE_AUTH_OPTION(uaCustom, "provider", "custom");
+
+		/*
+		 * Verify that the provider mentioned is loaded via shared_preload_libraries.
+		 */
+		if (get_provider_by_name(val) == NULL)
+		{
+			ereport(elevel,
+					(errcode(ERRCODE_CONFIG_FILE_ERROR),
+					 errmsg("cannot use authentication provider %s",val),
+					 errhint("Load authentication provider via shared_preload_libraries."),
+					 errcontext("line %d of configuration file \"%s\"",
+								line_num, HbaFileName)));
+			*err_msg = psprintf("cannot use authentication provider %s", val);
+
+			return false;
+		}
+		else
+		{
+			hbaline->custom_provider = pstrdup(val);
+		}
+	}
 	else
 	{
-		ereport(elevel,
-				(errcode(ERRCODE_CONFIG_FILE_ERROR),
-				 errmsg("unrecognized authentication option name: \"%s\"",
-						name),
-				 errcontext("line %d of configuration file \"%s\"",
-							line_num, HbaFileName)));
-		*err_msg = psprintf("unrecognized authentication option name: \"%s\"",
-							name);
-		return false;
+		/*
+		 * Allow custom providers to validate their options if they have an
+		 * option validation function defined.
+		 */
+		if (hbaline->auth_method == uaCustom && (hbaline->custom_provider != NULL))
+		{
+			bool valid_option = false;
+			CustomAuthProvider *provider = get_provider_by_name(hbaline->custom_provider);
+			if (provider->auth_options_hook)
+			{
+				valid_option = provider->auth_options_hook(name, val, hbaline, err_msg);
+				if (valid_option)
+				{
+					CustomOption *option = palloc(sizeof(CustomOption));
+					option->name = pstrdup(name);
+					option->value = pstrdup(val);
+					hbaline->custom_auth_options = lappend(hbaline->custom_auth_options,
+														   option);
+				}
+			}
+			else
+			{
+				*err_msg = psprintf("unrecognized authentication option name: \"%s\"",
+									name);
+			}
+
+			/* Report the error returned by the provider as it is */
+			if (!valid_option)
+			{
+				ereport(elevel,
+						(errcode(ERRCODE_CONFIG_FILE_ERROR),
+						 errmsg("%s", *err_msg),
+						 errcontext("line %d of configuration file \"%s\"",
+									line_num, HbaFileName)));
+				return false;
+			}
+		}
+		else
+		{
+			ereport(elevel,
+					(errcode(ERRCODE_CONFIG_FILE_ERROR),
+					 errmsg("unrecognized authentication option name: \"%s\"",
+							name),
+					 errcontext("line %d of configuration file \"%s\"",
+								line_num, HbaFileName)));
+			*err_msg = psprintf("unrecognized authentication option name: \"%s\"",
+								name);
+			return false;
+		}
 	}
 	return true;
 }
@@ -2440,6 +2517,23 @@ gethba_options(HbaLine *hba)
 		if (hba->radiusports_s)
 			options[noptions++] =
 				CStringGetTextDatum(psprintf("radiusports=%s", hba->radiusports_s));
+	}
+
+	if (hba->auth_method == uaCustom)
+	{
+		if (hba->custom_provider)
+			options[noptions++] =
+				CStringGetTextDatum(psprintf("provider=%s",hba->custom_provider));
+		if (hba->custom_auth_options)
+		{
+			ListCell *lc;
+			foreach(lc, hba->custom_auth_options)
+			{
+				CustomOption *option = (CustomOption *)lfirst(lc);
+				options[noptions++] =
+					CStringGetTextDatum(psprintf("%s=%s",option->name, option->value));
+			}
+		}
 	}
 
 	/* If you add more options, consider increasing MAX_HBA_OPTIONS. */

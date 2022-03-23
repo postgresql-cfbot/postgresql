@@ -47,8 +47,6 @@
  *----------------------------------------------------------------
  */
 static void auth_failed(Port *port, int status, const char *logdetail);
-static char *recv_password_packet(Port *port);
-static void set_authn_id(Port *port, const char *id);
 
 
 /*----------------------------------------------------------------
@@ -206,22 +204,11 @@ static int	pg_SSPI_make_upn(char *accountname,
 static int	CheckRADIUSAuth(Port *port);
 static int	PerformRadiusTransaction(const char *server, const char *secret, const char *portstr, const char *identifier, const char *user_name, const char *passwd);
 
-
-/*
- * Maximum accepted size of GSS and SSPI authentication tokens.
- * We also use this as a limit on ordinary password packet lengths.
- *
- * Kerberos tickets are usually quite small, but the TGTs issued by Windows
- * domain controllers include an authorization field known as the Privilege
- * Attribute Certificate (PAC), which contains the user's Windows permissions
- * (group memberships etc.). The PAC is copied into all tickets obtained on
- * the basis of this TGT (even those issued by Unix realms which the Windows
- * realm trusts), and can be several kB in size. The maximum token size
- * accepted by Windows systems is determined by the MaxAuthToken Windows
- * registry setting. Microsoft recommends that it is not set higher than
- * 65535 bytes, so that seems like a reasonable limit for us as well.
+/*----------------------------------------------------------------
+ * Custom Authentication
+ *----------------------------------------------------------------
  */
-#define PG_MAX_AUTH_TOKEN_LENGTH	65535
+static List *custom_auth_providers = NIL;
 
 /*----------------------------------------------------------------
  * Global authentication functions
@@ -311,6 +298,15 @@ auth_failed(Port *port, int status, const char *logdetail)
 		case uaRADIUS:
 			errstr = gettext_noop("RADIUS authentication failed for user \"%s\"");
 			break;
+		case uaCustom:
+			{
+				CustomAuthProvider *provider = get_provider_by_name(port->hba->custom_provider);
+				if (provider->auth_error_hook)
+					errstr = provider->auth_error_hook(port);
+				else
+					errstr = gettext_noop("Custom authentication failed for user \"%s\"");
+				break;
+			}
 		default:
 			errstr = gettext_noop("authentication failed for user \"%s\": invalid authentication method");
 			break;
@@ -345,7 +341,7 @@ auth_failed(Port *port, int status, const char *logdetail)
  * lifetime of the Port, so it is safe to pass a string that is managed by an
  * external library.
  */
-static void
+void
 set_authn_id(Port *port, const char *id)
 {
 	Assert(id);
@@ -630,6 +626,13 @@ ClientAuthentication(Port *port)
 		case uaTrust:
 			status = STATUS_OK;
 			break;
+		case uaCustom:
+			{
+				CustomAuthProvider *provider = get_provider_by_name(port->hba->custom_provider);
+				if (provider->auth_check_hook)
+					status = provider->auth_check_hook(port);
+				break;
+			}
 	}
 
 	if ((status == STATUS_OK && port->hba->clientcert == clientCertFull)
@@ -689,7 +692,7 @@ sendAuthRequest(Port *port, AuthRequest areq, const char *extradata, int extrale
  *
  * Returns NULL if couldn't get password, else palloc'd string.
  */
-static char *
+char *
 recv_password_packet(Port *port)
 {
 	StringInfoData buf;
@@ -3342,4 +3345,73 @@ PerformRadiusTransaction(const char *server, const char *secret, const char *por
 			continue;
 		}
 	}							/* while (true) */
+}
+
+/*----------------------------------------------------------------
+ * Custom authentication
+ *----------------------------------------------------------------
+ */
+
+/*
+ * RegisterAuthProvider registers a custom authentication provider to be
+ * used for authentication. It validates the inputs and adds the provider
+ * name and it's hooks to a list of loaded providers. The right provider's
+ * hooks can then be called based on the provider name specified in
+ * pg_hba.conf.
+ *
+ * This function should be called in _PG_init() by any extension looking to
+ * add a custom authentication method.
+ */
+void RegisterAuthProvider(const char *provider_name,
+		CustomAuthenticationCheck_hook_type AuthenticationCheckFunction,
+		CustomAuthenticationError_hook_type AuthenticationErrorFunction,
+		CustomAuthenticationValidateOptions_hook_type AuthenticationOptionsFunction)
+{
+	CustomAuthProvider *provider = NULL;
+	MemoryContext old_context;
+
+	if (provider_name == NULL)
+	{
+		ereport(ERROR,
+				(errmsg("cannot register authentication provider without name")));
+	}
+
+	if (AuthenticationCheckFunction == NULL)
+	{
+		ereport(ERROR,
+				(errmsg("cannot register authentication provider without a check function")));
+	}
+
+	/*
+	 * Allocate in top memory context as we need to read this whenever
+	 * we parse pg_hba.conf
+	 */
+	old_context = MemoryContextSwitchTo(TopMemoryContext);
+	provider = palloc(sizeof(CustomAuthProvider));
+	provider->name = MemoryContextStrdup(TopMemoryContext,provider_name);
+	provider->auth_check_hook = AuthenticationCheckFunction;
+	provider->auth_error_hook = AuthenticationErrorFunction;
+	provider->auth_options_hook = AuthenticationOptionsFunction;
+	custom_auth_providers = lappend(custom_auth_providers, provider);
+	MemoryContextSwitchTo(old_context);
+}
+
+/*
+ * Returns the authentication provider (which includes it's
+ * callback functions) based on name specified.
+ */
+CustomAuthProvider *get_provider_by_name(const char *name)
+{
+	ListCell *lc;
+
+	foreach(lc, custom_auth_providers)
+	{
+		CustomAuthProvider *provider = (CustomAuthProvider *) lfirst(lc);
+		if (strcmp(provider->name,name) == 0)
+		{
+			return provider;
+		}
+	}
+
+	return NULL;
 }

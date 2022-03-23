@@ -3741,6 +3741,19 @@ static struct config_real ConfigureNamesReal[] =
 	},
 
 	{
+		{"recursive_worktable_estimate", PGC_USERSET, QUERY_TUNING_OTHER,
+			gettext_noop("Sets the planner's estimate of the average size "
+						 "of the worktable as a multiple of the initial "
+						 "non-recursive term of the query."),
+			NULL,
+			GUC_EXPLAIN
+		},
+		&recursive_worktable_estimate,
+		DEFAULT_RECURSIVE_WORKTABLE_ESTIMATE, 0.0, 1000000.0,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"geqo_selection_bias", PGC_USERSET, QUERY_TUNING_GEQO,
 			gettext_noop("GEQO: selective pressure within the population."),
 			NULL,

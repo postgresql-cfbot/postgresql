@@ -123,6 +123,7 @@ double		cpu_index_tuple_cost = DEFAULT_CPU_INDEX_TUPLE_COST;
 double		cpu_operator_cost = DEFAULT_CPU_OPERATOR_COST;
 double		parallel_tuple_cost = DEFAULT_PARALLEL_TUPLE_COST;
 double		parallel_setup_cost = DEFAULT_PARALLEL_SETUP_COST;
+double		recursive_worktable_estimate = DEFAULT_RECURSIVE_WORKTABLE_ESTIMATE;
 
 int			effective_cache_size = DEFAULT_EFFECTIVE_CACHE_SIZE;
 
@@ -5664,11 +5665,20 @@ set_cte_size_estimates(PlannerInfo *root, RelOptInfo *rel, double cte_rows)
 
 	if (rte->self_reference)
 	{
+		double multiplier = recursive_worktable_estimate;
+
 		/*
-		 * In a self-reference, arbitrarily assume the average worktable size
-		 * is about 10 times the nonrecursive term's size.
+		 * Reserve zero as a special case meaning use-the-built-in-calculation.
 		 */
-		rel->tuples = 10 * cte_rows;
+		if (recursive_worktable_estimate == 0.0)
+			multiplier = DEFAULT_RECURSIVE_WORKTABLE_ESTIMATE;
+
+		/*
+		 * Use recursive_worktable_estimate to get average size of worktable,
+		 * across all iterations. This will vary depending upon how bushy the
+		 * data is, so allow the user to set based upon their data.
+		 */
+		rel->tuples = clamp_row_est(multiplier * cte_rows);
 	}
 	else
 	{

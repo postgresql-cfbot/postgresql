@@ -5919,6 +5919,23 @@ SELECT * FROM parent WHERE key = 2400;
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-recursive-worktable-estimate" xreflabel="recursive_worktable_estimate">
+      <term><varname>recursive_worktable_estimate</varname> (<type>floating point</type>)
+      <indexterm>
+       <primary><varname>recursive_worktable_estimate</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Sets the planner's estimate of the average size of the worktable as a multiple of
+        the initial non-recursive term of the query.  The default is 10.0.
+        This helps the planner choose the most appropriate method for joining the worktable
+        to the query's other tables.  A setting of 1.0 is appropriate for shortest path
+        queries; graph analytics queries may benefit from larger values.
+       </para>
+      </listitem>
+     </varlistentry>
+
      </variablelist>
     </sect2>
    </sect1>

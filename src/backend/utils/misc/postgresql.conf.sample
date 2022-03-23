@@ -426,6 +426,7 @@
 					# JOIN clauses
 #plan_cache_mode = auto			# auto, force_generic_plan or
 					# force_custom_plan
+#recursive_worktable_estimate = 10.0 # Set to 1.0 for shortest path queries
 
 
 #------------------------------------------------------------------------------

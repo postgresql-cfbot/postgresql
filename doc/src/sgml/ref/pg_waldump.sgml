@@ -101,6 +101,45 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><option>-k <replaceable>block</replaceable></option></term>
+      <term><option>--block=<replaceable>block</replaceable></option></term>
+      <listitem>
+       <para>
+        Display only records touching the given block. (Requires also
+        providing the relation via <option>--relation</option>.)
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-F <replaceable>block</replaceable></option></term>
+      <term><option>--fork=<replaceable>fork</replaceable></option></term>
+      <listitem>
+       <para>
+        If provided, output only records from the given fork.  The valid
+        values here are <literal>0</literal> for the main
+        fork, <literal>1</literal> for the Free Space
+        Map, <literal>2</literal> for the Visibility Map,
+        and <literal>3</literal> for the Init fork.  If unspecified, defaults
+        to all forks.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-l <replaceable>tbl</replaceable>/<replaceable>db</replaceable>/<replaceable>rel</replaceable></option></term>
+      <term><option>--relation=<replaceable>tbl</replaceable>/<replaceable>db</replaceable>/<replaceable>rel</replaceable></option></term>
+      <listitem>
+       <para>
+        Display only records touching the given relation.  The relation is
+        specified via tablespace OID, database OID, and relfilenode separated
+        by slashes, for instance, <literal>1234/12345/12345</literal>.  This
+        is the same format used for relations in the WAL dump output.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>-n <replaceable>limit</replaceable></option></term>
       <term><option>--limit=<replaceable>limit</replaceable></option></term>
       <listitem>
@@ -179,6 +218,16 @@ PostgreSQL documentation
        <listitem>
        <para>
        Print the <application>pg_waldump</application> version and exit.
+       </para>
+       </listitem>
+     </varlistentry>
+
+     <varlistentry>
+       <term><option>-w</option></term>
+       <term><option>--fullpage</option></term>
+       <listitem>
+       <para>
+       Filter records to only those which have full page writes.
        </para>
        </listitem>
      </varlistentry>

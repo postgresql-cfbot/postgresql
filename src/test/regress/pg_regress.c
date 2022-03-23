@@ -95,6 +95,8 @@ static char *dlpath = PKGLIBDIR;
 static char *user = NULL;
 static _stringlist *extraroles = NULL;
 static char *config_auth_datadir = NULL;
+static char *format = NULL;
+static char *psql_formatting = NULL;
 
 /* internal variables */
 static const char *progname;
@@ -120,11 +122,68 @@ static int	fail_ignore_count = 0;
 static bool directory_exists(const char *dir);
 static void make_directory(const char *dir);
 
-static void header(const char *fmt,...) pg_attribute_printf(1, 2);
+struct output_func
+{
+	void (*header)(const char *line);
+	void (*footer)(const char *difffilename, const char *logfilename);
+	void (*comment)(bool diagnostic, const char *comment);
+
+	void (*test_status_preamble)(const char *testname);
+
+	void (*test_status_ok)(const char *testname);
+	void (*test_status_failed)(const char *testname, bool ignore, char *tags);
+
+	void (*test_runtime)(const char *testname, double runtime);
+};
+
+
+void (*test_runtime)(const char *testname, double runtime);
+/* Text output format */
+static void header_text(const char *line);
+static void footer_text(const char *difffilename, const char *logfilename);
+static void comment_text(bool diagnostic, const char *comment);
+static void test_status_preamble_text(const char *testname);
+static void test_status_ok_text(const char *testname);
+static void test_status_failed_text(const char *testname, bool ignore, char *tags);
+static void test_runtime_text(const char *testname, double runtime);
+
+struct output_func output_func_text =
+{
+	header_text,
+	footer_text,
+	comment_text,
+	test_status_preamble_text,
+	test_status_ok_text,
+	test_status_failed_text,
+	test_runtime_text
+};
+
+/* TAP output format */
+static void footer_tap(const char *difffilename, const char *logfilename);
+static void comment_tap(bool diagnostic, const char *comment);
+static void test_status_ok_tap(const char *testname);
+static void test_status_failed_tap(const char *testname, bool ignore, char *tags);
+
+struct output_func output_func_tap =
+{
+	NULL,
+	footer_tap,
+	comment_tap,
+	NULL,
+	test_status_ok_tap,
+	test_status_failed_tap,
+	NULL
+};
+
+struct output_func *output = &output_func_text;
+
+static void test_status_ok(const char *testname);
+
 static void status(const char *fmt,...) pg_attribute_printf(1, 2);
 static StringInfo psql_start_command(void);
 static void psql_add_command(StringInfo buf, const char *query,...) pg_attribute_printf(2, 3);
 static void psql_end_command(StringInfo buf, const char *database);
+static void status_end(void);
 
 /*
  * allow core files if possible.
@@ -209,17 +268,215 @@ split_to_stringlist(const char *s, const char *delim, _stringlist **listhead)
  * Print a progress banner on stdout.
  */
 static void
+header_text(const char *line)
+{
+	fprintf(stdout, "============== %-38s ==============\n", line);
+	fflush(stdout);
+}
+
+static void
 header(const char *fmt,...)
 {
 	char		tmp[64];
 	va_list		ap;
 
+	if (!output->header)
+		return;
+
 	va_start(ap, fmt);
 	vsnprintf(tmp, sizeof(tmp), fmt, ap);
 	va_end(ap);
 
-	fprintf(stdout, "============== %-38s ==============\n", tmp);
-	fflush(stdout);
+	output->header(tmp);
+}
+
+static void
+footer_tap(const char *difffilename, const char *logfilename)
+{
+	status("1..%i\n", (fail_count + fail_ignore_count + success_count));
+	status_end();
+}
+
+static void
+footer(const char *difffilename, const char *logfilename)
+{
+	if (output->footer)
+		output->footer(difffilename, logfilename);
+}
+
+static void
+comment_text(bool diagnostic, const char *comment)
+{
+	status("%s", comment);
+}
+
+static void
+comment_tap(bool diagnostic, const char *comment)
+{
+	if (!diagnostic)
+		return;
+
+	status("# %s", comment);
+}
+
+static void
+comment(bool diagnostic, const char *fmt,...)
+{
+	char		tmp[256];
+	va_list		ap;
+
+	if (!output->comment)
+		return;
+
+	va_start(ap, fmt);
+	vsnprintf(tmp, sizeof(tmp), fmt, ap);
+	va_end(ap);
+
+	output->comment(diagnostic, tmp);
+}
+
+static void
+test_status_preamble_text(const char *testname)
+{
+	status(_("test %-28s ... "), testname);
+}
+
+static void
+test_status_preamble(const char *testname)
+{
+	if (output->test_status_preamble)
+		output->test_status_preamble(testname);
+}
+
+static void
+test_status_ok_tap(const char *testname)
+{
+	/* There is no NLS translation here as "ok" is a protocol message */
+	status("ok %i - %s",
+		   (fail_count + fail_ignore_count + success_count),
+		   testname);
+}
+
+static void
+test_status_ok_text(const char *testname)
+{
+	(void) testname; /* unused */
+	status(_("ok    "));	/* align with FAILED */
+}
+
+static void
+test_status_ok(const char *testname)
+{
+	success_count++;
+	if (output->test_status_ok)
+		output->test_status_ok(testname);
+}
+
+static void
+test_status_failed_tap(const char *testname, bool ignore, char *tags)
+{
+	if (ignore)
+	{
+		status("ok %i - %s ",
+			   (fail_count + fail_ignore_count + success_count),
+			   testname);
+		comment(true, "SKIP (ignored)");
+	}
+	else
+		status("not ok %i - %s",
+			   (fail_count + fail_ignore_count + success_count),
+			   testname);
+
+	if (tags && strlen(tags) > 0)
+	{
+		fprintf(stdout, "\n");
+		comment(true, tags);
+	}
+}
+
+
+static void
+test_status_failed_text(const char *testname, bool ignore, char *tags)
+{
+	if (ignore)
+		status(_("%s failed (ignored)"), tags);
+	else
+		status(_("%s FAILED"), tags);
+}
+
+static void
+test_status_failed(const char *testname, bool ignore, char *tags)
+{
+	if (ignore)
+		fail_ignore_count++;
+	else
+		fail_count++;
+
+	if (output->test_status_failed)
+		output->test_status_failed(testname, ignore, tags);
+}
+
+static void
+test_runtime_text(const char *testname, double runtime)
+{
+	(void)testname;
+	status(_(" %8.0f ms"), runtime);
+}
+
+static void
+runtime(const char *testname, double runtime)
+{
+	if (output->test_runtime)
+		output->test_runtime(testname, runtime);
+}
+
+static void
+footer_text(const char *difffilename, const char *logfilename)
+{
+	char buf[256];
+
+	/*
+	 * Emit nice-looking summary message
+	 */
+	if (fail_count == 0 && fail_ignore_count == 0)
+		snprintf(buf, sizeof(buf),
+				 _(" All %d tests passed. "),
+				 success_count);
+	else if (fail_count == 0)	/* fail_count=0, fail_ignore_count>0 */
+		snprintf(buf, sizeof(buf),
+				 _(" %d of %d tests passed, %d failed test(s) ignored. "),
+				 success_count,
+				 success_count + fail_ignore_count,
+				 fail_ignore_count);
+	else if (fail_ignore_count == 0)	/* fail_count>0 && fail_ignore_count=0 */
+		snprintf(buf, sizeof(buf),
+				 _(" %d of %d tests failed. "),
+				 fail_count,
+				 success_count + fail_count);
+	else
+		/* fail_count>0 && fail_ignore_count>0 */
+		snprintf(buf, sizeof(buf),
+				 _(" %d of %d tests failed, %d of these failures ignored. "),
+				 fail_count + fail_ignore_count,
+				 success_count + fail_count + fail_ignore_count,
+				 fail_ignore_count);
+
+	putchar('\n');
+	for (int i = strlen(buf); i > 0; i--)
+		putchar('=');
+	printf("\n%s\n", buf);
+	for (int i = strlen(buf); i > 0; i--)
+		putchar('=');
+	putchar('\n');
+	putchar('\n');
+
+	if (difffilename && logfilename)
+	{
+		printf(_("The differences that caused some tests to fail can be viewed in the\n"
+				 "file \"%s\".  A copy of the test summary that you see\n"
+				 "above is saved in the file \"%s\".\n\n"),
+			   difffilename, logfilename);
+	}
 }
 
 /*
@@ -758,13 +1015,13 @@ initialize_environment(void)
 		}
 
 		if (pghost && pgport)
-			printf(_("(using postmaster on %s, port %s)\n"), pghost, pgport);
+			comment(false, _("(using postmaster on %s, port %s)\n"), pghost, pgport);
 		if (pghost && !pgport)
-			printf(_("(using postmaster on %s, default port)\n"), pghost);
+			comment(false, _("(using postmaster on %s, default port)\n"), pghost);
 		if (!pghost && pgport)
-			printf(_("(using postmaster on Unix socket, port %s)\n"), pgport);
+			comment(false, _("(using postmaster on Unix socket, port %s)\n"), pgport);
 		if (!pghost && !pgport)
-			printf(_("(using postmaster on Unix socket, default port)\n"));
+			comment(false, _("(using postmaster on Unix socket, default port)\n"));
 	}
 
 	load_resultmap();
@@ -990,9 +1247,10 @@ psql_start_command(void)
 	StringInfo	buf = makeStringInfo();
 
 	appendStringInfo(buf,
-					 "\"%s%spsql\" -X",
+					 "\"%s%spsql\" -X %s",
 					 bindir ? bindir : "",
-					 bindir ? "/" : "");
+					 bindir ? "/" : "",
+					 psql_formatting ? psql_formatting : "");
 	return buf;
 }
 
@@ -1495,7 +1753,7 @@ wait_for_tests(PID_TYPE * pids, int *statuses, instr_time *stoptimes,
 				statuses[i] = (int) exit_status;
 				INSTR_TIME_SET_CURRENT(stoptimes[i]);
 				if (names)
-					status(" %s", names[i]);
+					comment(false, " %s", names[i]);
 				tests_left--;
 				break;
 			}
@@ -1551,11 +1809,14 @@ run_schedule(const char *schedule, test_start_function startfunc,
 	char		scbuf[1024];
 	FILE	   *scf;
 	int			line_num = 0;
+	StringInfoData tagbuf;
 
 	memset(tests, 0, sizeof(tests));
 	memset(resultfiles, 0, sizeof(resultfiles));
 	memset(expectfiles, 0, sizeof(expectfiles));
 	memset(tags, 0, sizeof(tags));
+
+	initStringInfo(&tagbuf);
 
 	scf = fopen(schedule, "r");
 	if (!scf)
@@ -1649,7 +1910,7 @@ run_schedule(const char *schedule, test_start_function startfunc,
 
 		if (num_tests == 1)
 		{
-			status(_("test %-28s ... "), tests[0]);
+			test_status_preamble(tests[0]);
 			pids[0] = (startfunc) (tests[0], &resultfiles[0], &expectfiles[0], &tags[0]);
 			INSTR_TIME_SET_CURRENT(starttimes[0]);
 			wait_for_tests(pids, statuses, stoptimes, NULL, 1);
@@ -1665,8 +1926,8 @@ run_schedule(const char *schedule, test_start_function startfunc,
 		{
 			int			oldest = 0;
 
-			status(_("parallel group (%d tests, in groups of %d): "),
-				   num_tests, max_connections);
+			comment(false, _("parallel group (%d tests, in groups of %d): "),
+					  num_tests, max_connections);
 			for (i = 0; i < num_tests; i++)
 			{
 				if (i - oldest >= max_connections)
@@ -1686,7 +1947,7 @@ run_schedule(const char *schedule, test_start_function startfunc,
 		}
 		else
 		{
-			status(_("parallel group (%d tests): "), num_tests);
+			comment(false, _("parallel group (%d tests): "), num_tests);
 			for (i = 0; i < num_tests; i++)
 			{
 				pids[i] = (startfunc) (tests[i], &resultfiles[i], &expectfiles[i], &tags[i]);
@@ -1704,8 +1965,10 @@ run_schedule(const char *schedule, test_start_function startfunc,
 					   *tl;
 			bool		differ = false;
 
+			resetStringInfo(&tagbuf);
+
 			if (num_tests > 1)
-				status(_("     %-28s ... "), tests[i]);
+				test_status_preamble(tests[i]);
 
 			/*
 			 * Advance over all three lists simultaneously.
@@ -1726,7 +1989,7 @@ run_schedule(const char *schedule, test_start_function startfunc,
 				newdiff = results_differ(tests[i], rl->str, el->str);
 				if (newdiff && tl)
 				{
-					printf("%s ", tl->str);
+					appendStringInfo(&tagbuf, "%s ", tl->str);
 				}
 				differ |= newdiff;
 			}
@@ -1744,28 +2007,17 @@ run_schedule(const char *schedule, test_start_function startfunc,
 						break;
 					}
 				}
-				if (ignore)
-				{
-					status(_("failed (ignored)"));
-					fail_ignore_count++;
-				}
-				else
-				{
-					status(_("FAILED"));
-					fail_count++;
-				}
+
+				test_status_failed(tests[i], ignore, tagbuf.data);
 			}
 			else
-			{
-				status(_("ok    "));	/* align with FAILED */
-				success_count++;
-			}
+				test_status_ok(tests[i]);
 
 			if (statuses[i] != 0)
 				log_child_failure(statuses[i]);
 
 			INSTR_TIME_SUBTRACT(stoptimes[i], starttimes[i]);
-			status(_(" %8.0f ms"), INSTR_TIME_GET_MILLISEC(stoptimes[i]));
+			runtime(tests[i], INSTR_TIME_GET_MILLISEC(stoptimes[i]));
 
 			status_end();
 		}
@@ -1780,6 +2032,7 @@ run_schedule(const char *schedule, test_start_function startfunc,
 		}
 	}
 
+	pg_free(tagbuf.data);
 	free_stringlist(&ignorelist);
 
 	fclose(scf);
@@ -1803,11 +2056,13 @@ run_single_test(const char *test, test_start_function startfunc,
 			   *el,
 			   *tl;
 	bool		differ = false;
+	StringInfoData tagbuf;
 
-	status(_("test %-28s ... "), test);
+	test_status_preamble(test);
 	pid = (startfunc) (test, &resultfiles, &expectfiles, &tags);
 	INSTR_TIME_SET_CURRENT(starttime);
 	wait_for_tests(&pid, &exit_status, &stoptime, NULL, 1);
+	initStringInfo(&tagbuf);
 
 	/*
 	 * Advance over all three lists simultaneously.
@@ -1828,27 +2083,23 @@ run_single_test(const char *test, test_start_function startfunc,
 		newdiff = results_differ(test, rl->str, el->str);
 		if (newdiff && tl)
 		{
-			printf("%s ", tl->str);
+			appendStringInfo(&tagbuf, "%s ", tl->str);
 		}
 		differ |= newdiff;
 	}
 
 	if (differ)
-	{
-		status(_("FAILED"));
-		fail_count++;
-	}
+		test_status_failed(test, false, tagbuf.data);
 	else
-	{
-		status(_("ok    "));	/* align with FAILED */
-		success_count++;
-	}
+		test_status_ok(test);
 
 	if (exit_status != 0)
 		log_child_failure(exit_status);
 
 	INSTR_TIME_SUBTRACT(stoptime, starttime);
-	status(_(" %8.0f ms"), INSTR_TIME_GET_MILLISEC(stoptime));
+	runtime(_(" %8.0f ms"), INSTR_TIME_GET_MILLISEC(stoptime));
+
+	pg_free(tagbuf.data);
 
 	status_end();
 }
@@ -1989,6 +2240,7 @@ help(void)
 	printf(_("      --debug                   turn on debug mode in programs that are run\n"));
 	printf(_("      --dlpath=DIR              look for dynamic libraries in DIR\n"));
 	printf(_("      --encoding=ENCODING       use ENCODING as the encoding\n"));
+	printf(_("      --format=(regress|tap)    output format to use\n"));
 	printf(_("  -h, --help                    show this help, then exit\n"));
 	printf(_("      --inputdir=DIR            take input files from DIR (default \".\")\n"));
 	printf(_("      --launcher=CMD            use CMD as launcher of psql\n"));
@@ -2052,6 +2304,7 @@ regression_main(int argc, char *argv[],
 		{"load-extension", required_argument, NULL, 22},
 		{"config-auth", required_argument, NULL, 24},
 		{"max-concurrent-tests", required_argument, NULL, 25},
+ 		{"format", required_argument, NULL, 26},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -2181,6 +2434,9 @@ regression_main(int argc, char *argv[],
 			case 25:
 				max_concurrent_tests = atoi(optarg);
 				break;
+			case 26:
+				format = pg_strdup(optarg);
+				break;
 			default:
 				/* getopt_long already emitted a complaint */
 				fprintf(stderr, _("\nTry \"%s -h\" for more information.\n"),
@@ -2205,6 +2461,24 @@ regression_main(int argc, char *argv[],
 			config_sspi_auth(config_auth_datadir, user);
 #endif
 		exit(0);
+	}
+
+	/*
+	 * text (regress) is the default so we don't need to set any variables in
+	 * that case.
+	 */
+	if (format)
+	{
+		if (strcmp(format, "tap") == 0)
+		{
+			output = &output_func_tap;
+			psql_formatting = pg_strdup("-q");
+		}
+		else if (strcmp(format, "regress") != 0)
+		{
+			fprintf(stderr, _("\n%s: invalid format specified: \"%s\". Supported formats are \"tap\" and \"regress\"\n"), progname, format);
+			exit(2);
+		}
 	}
 
 	if (temp_instance && !port_specified_by_user)
@@ -2461,7 +2735,7 @@ regression_main(int argc, char *argv[],
 #else
 #define ULONGPID(x) (unsigned long) (x)
 #endif
-		printf(_("running on port %d with PID %lu\n"),
+		comment(false, _("running on port %d with PID %lu\n"),
 			   port, ULONGPID(postmaster_pid));
 	}
 	else
@@ -2529,53 +2803,19 @@ regression_main(int argc, char *argv[],
 
 	fclose(logfile);
 
-	/*
-	 * Emit nice-looking summary message
-	 */
-	if (fail_count == 0 && fail_ignore_count == 0)
-		snprintf(buf, sizeof(buf),
-				 _(" All %d tests passed. "),
-				 success_count);
-	else if (fail_count == 0)	/* fail_count=0, fail_ignore_count>0 */
-		snprintf(buf, sizeof(buf),
-				 _(" %d of %d tests passed, %d failed test(s) ignored. "),
-				 success_count,
-				 success_count + fail_ignore_count,
-				 fail_ignore_count);
-	else if (fail_ignore_count == 0)	/* fail_count>0 && fail_ignore_count=0 */
-		snprintf(buf, sizeof(buf),
-				 _(" %d of %d tests failed. "),
-				 fail_count,
-				 success_count + fail_count);
-	else
-		/* fail_count>0 && fail_ignore_count>0 */
-		snprintf(buf, sizeof(buf),
-				 _(" %d of %d tests failed, %d of these failures ignored. "),
-				 fail_count + fail_ignore_count,
-				 success_count + fail_count + fail_ignore_count,
-				 fail_ignore_count);
-
-	putchar('\n');
-	for (i = strlen(buf); i > 0; i--)
-		putchar('=');
-	printf("\n%s\n", buf);
-	for (i = strlen(buf); i > 0; i--)
-		putchar('=');
-	putchar('\n');
-	putchar('\n');
-
-	if (file_size(difffilename) > 0)
-	{
-		printf(_("The differences that caused some tests to fail can be viewed in the\n"
-				 "file \"%s\".  A copy of the test summary that you see\n"
-				 "above is saved in the file \"%s\".\n\n"),
-			   difffilename, logfilename);
-	}
-	else
+	if (file_size(difffilename) <= 0)
 	{
 		unlink(difffilename);
 		unlink(logfilename);
+
+		free(difffilename);
+		difffilename = NULL;
+		free(logfilename);
+		logfilename = NULL;
 	}
+
+	footer(difffilename, logfilename);
+	status_end();
 
 	if (fail_count != 0)
 		exit(1);

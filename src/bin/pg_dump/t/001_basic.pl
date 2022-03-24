@@ -127,6 +127,16 @@ command_fails_like(
 	'pg_dump: -Z/--compress must be in range');
 
 command_fails_like(
+	[ 'pg_dump', '--compress', 'garbage' ],
+	qr/\Qpg_dump: error: invalid compression method "garbage" (gzip, lz4, none)\E/,
+	'pg_dump: invalid --compress');
+
+command_fails_like(
+	[ 'pg_dump', '--compress', 'none:1' ],
+	qr/\Qpg_dump: error: can only specify -Z\/--compress [LEVEL] when method is set\E/,
+	'pg_dump: can only specify -Z/--compress [LEVEL] when method is gzip');
+
+command_fails_like(
 	[ 'pg_dump', '--extra-float-digits', '-16' ],
 	qr/\Qpg_dump: error: --extra-float-digits must be in range\E/,
 	'pg_dump: --extra-float-digits must be in range');

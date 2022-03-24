@@ -55,6 +55,171 @@ my %pgdump_runs = (
 			"$tempdir/binary_upgrade.dump",
 		],
 	},
+
+	# Do not use --no-sync to give test coverage for data sync.
+	compression_gzip_custom_format => {
+		test_key => 'compression',
+		dump_cmd => [
+			'pg_dump',
+			'--format=custom', '--compress=gzip:1',
+			"--file=$tempdir/compression_gzip_custom_format.dump",
+			'postgres',
+		],
+		restore_cmd => [
+			'pg_restore',
+			"--file=$tempdir/compression_gzip_custom_format.sql",
+			"$tempdir/compression_gzip_custom_format.dump",
+		],
+	},
+
+	# Do not use --no-sync to give test coverage for data sync.
+	compression_gzip_directory_format => {
+		test_key => 'compression',
+		dump_cmd => [
+			'pg_dump',
+			'--format=directory', '--compress=1',
+			"--file=$tempdir/compression_gzip_directory_format",
+			'postgres',
+		],
+		# Give coverage for manually compressed blob.toc files during restore.
+		compression => {
+			method => 'gzip',
+			cmd => [
+				$ENV{'GZIP_PROGRAM'},
+				'-f',
+				"$tempdir/compression_gzip_directory_format/blobs.toc",
+			],
+		},
+		restore_cmd => [
+			'pg_restore',
+			"--file=$tempdir/compression_gzip_directory_format.sql",
+			"$tempdir/compression_gzip_directory_format",
+		],
+	},
+
+	compression_gzip_directory_format_parallel => {
+		test_key => 'compression',
+		dump_cmd => [
+			'pg_dump', '--jobs=2',
+			'--format=directory', '--compress=gzip:6',
+			"--file=$tempdir/compression_gzip_directory_format_parallel",
+			'postgres',
+		],
+		# Give coverage for manually compressed toc.dat files during restore.
+		compression => {
+			method => 'gzip',
+			cmd => [
+				$ENV{'GZIP_PROGRAM'},
+				'-f',
+				"$tempdir/compression_gzip_directory_format_parallel/toc.dat",
+			],
+		},
+		restore_cmd => [
+			'pg_restore',
+			'--jobs=3',
+			"--file=$tempdir/compression_gzip_directory_format_parallel.sql",
+			"$tempdir/compression_gzip_directory_format_parallel",
+		],
+	},
+
+	# Check that the output is valid gzip
+	compression_gzip_plain_format => {
+		test_key => 'compression',
+		dump_cmd => [
+			'pg_dump', '--format=plain', '-Z1',
+			"--file=$tempdir/compression_gzip_plain_format.sql.gz",
+			'postgres',
+		],
+		compression => {
+			method => 'gzip',
+			cmd => [
+				$ENV{'GZIP_PROGRAM'},
+				'-k', '-d',
+				"$tempdir/compression_gzip_plain_format.sql.gz",
+			],
+		},
+	},
+	compression_lz4_custom_format => {
+		test_key => 'compression',
+		dump_cmd => [
+			'pg_dump', '--no-sync',
+			'--format=custom', '--compress=lz4:9',
+			"--file=$tempdir/compression_lz4_custom_format.dump",
+			'postgres',
+		],
+		restore_cmd => [
+			'pg_restore',
+			"--file=$tempdir/compression_lz4_custom_format.sql",
+			"$tempdir/compression_lz4_custom_format.dump",
+		],
+	},
+	compression_lz4_directory_format => {
+		test_key => 'compression',
+		dump_cmd => [
+			'pg_dump', '--no-sync',
+			'--format=directory', '--compress=lz4',
+			"--file=$tempdir/compression_lz4_directory_format",
+			'postgres',
+		],
+		# Give coverage for manually compressed toc.dat files during restore.
+		compression => {
+			method => 'lz4',
+			cmd => [
+				$ENV{'LZ4'},
+				'-z', '-f', '--rm',
+				"$tempdir/compression_lz4_directory_format/toc.dat",
+				"$tempdir/compression_lz4_directory_format/toc.dat.lz4",
+			],
+		},
+		restore_cmd => [
+			'pg_restore',
+			"--file=$tempdir/compression_lz4_directory_format.sql",
+			"$tempdir/compression_lz4_directory_format",
+		],
+	},
+	compression_lz4_directory_format_parallel => {
+		test_key => 'compression',
+		dump_cmd => [
+			'pg_dump', '--no-sync', '--jobs=2',
+			'--format=directory', '--compress=lz4:9',
+			"--file=$tempdir/compression_lz4_directory_format_parallel",
+			'postgres',
+		],
+		# Give coverage for manually compressed blob.toc files during restore.
+		compression => {
+			method => 'lz4',
+			cmd => [
+				$ENV{'LZ4'},
+				'-z', '-f', '--rm',
+				"$tempdir/compression_lz4_directory_format_parallel/blobs.toc",
+				"$tempdir/compression_lz4_directory_format_parallel/blobs.toc.lz4",
+			],
+		},
+		restore_cmd => [
+			'pg_restore', '--jobs=2',
+			"--file=$tempdir/compression_lz4_directory_format_parallel.sql",
+			"$tempdir/compression_lz4_directory_format_parallel",
+		],
+	},
+	# Check that the output is valid lz4
+	compression_lz4_plain_format => {
+		test_key => 'compression',
+		dump_cmd => [
+			'pg_dump',
+			'--no-sync',
+			'--format=plain', '--compress=lz4:1',
+			"--file=$tempdir/compression_lz4_plain_format.sql.lz4",
+			'postgres',
+		],
+		compression => {
+			method => 'lz4',
+			cmd => [
+				$ENV{LZ4}, '-d', '-f',
+				"$tempdir/compression_lz4_plain_format.sql.lz4",
+				"$tempdir/compression_lz4_plain_format.sql",
+			],
+		}
+	},
 	clean => {
 		dump_cmd => [
 			'pg_dump',
@@ -425,6 +590,7 @@ my %full_runs = (
 	binary_upgrade           => 1,
 	clean                    => 1,
 	clean_if_exists          => 1,
+	compression              => 1,
 	createdb                 => 1,
 	defaults                 => 1,
 	exclude_dump_test_schema => 1,
@@ -3007,6 +3173,7 @@ my %tests = (
 			binary_upgrade          => 1,
 			clean                   => 1,
 			clean_if_exists         => 1,
+			compression             => 1,
 			createdb                => 1,
 			defaults                => 1,
 			exclude_test_table      => 1,
@@ -3080,6 +3247,7 @@ my %tests = (
 			binary_upgrade           => 1,
 			clean                    => 1,
 			clean_if_exists          => 1,
+			compression              => 1,
 			createdb                 => 1,
 			defaults                 => 1,
 			exclude_dump_test_schema => 1,
@@ -3856,8 +4024,29 @@ foreach my $run (sort keys %pgdump_runs)
 	my $test_key = $run;
 	my $run_db   = 'postgres';
 
+	my $gzip_program = defined($ENV{GZIP_PROGRAM}) && $ENV{GZIP_PROGRAM} ne '';
+	my $lz4_program = defined($ENV{LZ4}) && $ENV{LZ4} ne '';
+	my $supports_gzip = check_pg_config("#define HAVE_LIBZ 1");
+	my $supports_compression = check_pg_config("#define HAVE_LIBZ 1") ||
+							   $supports_lz4;
+
 	$node->command_ok(\@{ $pgdump_runs{$run}->{dump_cmd} },
 		"$run: pg_dump runs");
+
+	if (defined($pgdump_runs{$run}->{'compression'}))
+	{
+		# Skip compression_cmd tests when compression is not supported,
+		# as the result is uncompressed or the utility program does not
+		# exist
+		next if !$supports_compression;
+
+		my ($compression) = $pgdump_runs{$run}->{'compression'};
+
+		next if ${compression}->{method} eq 'gzip' && (!$gzip_program || !$supports_gzip);
+		next if ${compression}->{method} eq 'lz4'  && (!$lz4_program || !$supports_lz4);
+
+		command_ok( \@{ $compression->{cmd} }, "$run: compression commands");
+	}
 
 	if ($pgdump_runs{$run}->{restore_cmd})
 	{

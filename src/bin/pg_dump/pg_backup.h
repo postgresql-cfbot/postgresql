@@ -75,6 +75,13 @@ enum _dumpPreparedQueries
 	NUM_PREP_QUERIES			/* must be last */
 };
 
+typedef enum _compressionMethod
+{
+	COMPRESSION_GZIP,
+	COMPRESSION_LZ4,
+	COMPRESSION_NONE
+} CompressionMethod;
+
 /* Parameters needed by ConnectDatabase; same for dump and restore */
 typedef struct _connParams
 {
@@ -143,7 +150,8 @@ typedef struct _restoreOptions
 
 	int			noDataForFailedTables;
 	int			exit_on_error;
-	int			compression;
+	CompressionMethod compressionMethod;
+	int			compressionLevel;
 	int			suppressDumpWarnings;	/* Suppress output of WARNING entries
 										 * to stderr */
 	bool		single_txn;
@@ -303,7 +311,9 @@ extern Archive *OpenArchive(const char *FileSpec, const ArchiveFormat fmt);
 
 /* Create a new archive */
 extern Archive *CreateArchive(const char *FileSpec, const ArchiveFormat fmt,
-							  const int compression, bool dosync, ArchiveMode mode,
+							  const CompressionMethod compressionMethod,
+							  const int compression,
+							  bool dosync, ArchiveMode mode,
 							  SetupWorkerPtrType setupDumpWorker);
 
 /* The --list option */

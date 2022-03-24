@@ -35,6 +35,7 @@
 #include <unistd.h>
 
 #include "common/file_utils.h"
+#include "compress_io.h"
 #include "fe_utils/string_utils.h"
 #include "pg_backup_archiver.h"
 #include "pg_backup_tar.h"
@@ -199,7 +200,7 @@ InitArchiveFmt_Tar(ArchiveHandle *AH)
 		 * possible since gzdopen uses buffered IO which totally screws file
 		 * positioning.
 		 */
-		if (AH->compression != 0)
+		if (AH->compressionMethod != COMPRESSION_NONE)
 			fatal("compression is not supported by tar archive format");
 	}
 	else
@@ -249,7 +250,7 @@ _ArchiveEntry(ArchiveHandle *AH, TocEntry *te)
 	if (te->dataDumper != NULL)
 	{
 #ifdef HAVE_LIBZ
-		if (AH->compression == 0)
+		if (AH->compressionMethod == COMPRESSION_NONE)
 			sprintf(fn, "%d.dat", te->dumpId);
 		else
 			sprintf(fn, "%d.dat.gz", te->dumpId);
@@ -346,7 +347,7 @@ tarOpen(ArchiveHandle *AH, const char *filename, char mode)
 
 #ifdef HAVE_LIBZ
 
-		if (AH->compression == 0)
+		if (AH->compressionMethod == COMPRESSION_NONE)
 			tm->nFH = ctx->tarFH;
 		else
 			fatal("compression is not supported by tar archive format");
@@ -407,9 +408,9 @@ tarOpen(ArchiveHandle *AH, const char *filename, char mode)
 
 #ifdef HAVE_LIBZ
 
-		if (AH->compression != 0)
+		if (AH->compressionMethod != COMPRESSION_NONE)
 		{
-			sprintf(fmode, "wb%d", AH->compression);
+			sprintf(fmode, "wb%d", AH->compressionLevel);
 			tm->zFH = gzdopen(dup(fileno(tm->tmpFH)), fmode);
 			if (tm->zFH == NULL)
 				fatal("could not open temporary file");
@@ -437,7 +438,7 @@ tarClose(ArchiveHandle *AH, TAR_MEMBER *th)
 	/*
 	 * Close the GZ file since we dup'd. This will flush the buffers.
 	 */
-	if (AH->compression != 0)
+	if (AH->compressionMethod != COMPRESSION_NONE)
 	{
 		errno = 0;				/* in case gzclose() doesn't set it */
 		if (GZCLOSE(th->zFH) != 0)
@@ -865,7 +866,6 @@ _CloseArchive(ArchiveHandle *AH)
 		memcpy(ropt, AH->public.ropt, sizeof(RestoreOptions));
 		ropt->filename = NULL;
 		ropt->dropSchema = 1;
-		ropt->compression = 0;
 		ropt->superuser = NULL;
 		ropt->suppressDumpWarnings = true;
 
@@ -954,7 +954,7 @@ _StartBlob(ArchiveHandle *AH, TocEntry *te, Oid oid)
 	if (oid == 0)
 		fatal("invalid OID for large object (%u)", oid);
 
-	if (AH->compression != 0)
+	if (AH->compressionMethod != COMPRESSION_NONE)
 		sfx = ".gz";
 	else
 		sfx = "";

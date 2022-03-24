@@ -298,7 +298,9 @@ _StartData(ArchiveHandle *AH, TocEntry *te)
 	_WriteByte(AH, BLK_DATA);	/* Block type */
 	WriteInt(AH, te->dumpId);	/* For sanity check */
 
-	ctx->cs = AllocateCompressor(AH->compression, _CustomWriteFunc);
+	ctx->cs = AllocateCompressor(AH->compressionMethod,
+								 AH->compressionLevel,
+								 _CustomWriteFunc);
 }
 
 /*
@@ -377,7 +379,9 @@ _StartBlob(ArchiveHandle *AH, TocEntry *te, Oid oid)
 
 	WriteInt(AH, oid);
 
-	ctx->cs = AllocateCompressor(AH->compression, _CustomWriteFunc);
+	ctx->cs = AllocateCompressor(AH->compressionMethod,
+								 AH->compressionLevel,
+								 _CustomWriteFunc);
 }
 
 /*
@@ -566,7 +570,8 @@ _PrintTocData(ArchiveHandle *AH, TocEntry *te)
 static void
 _PrintData(ArchiveHandle *AH)
 {
-	ReadDataFromArchive(AH, AH->compression, _CustomReadFunc);
+	ReadDataFromArchive(AH, AH->compressionMethod, AH->compressionLevel,
+						_CustomReadFunc);
 }
 
 static void

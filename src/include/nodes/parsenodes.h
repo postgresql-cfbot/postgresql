@@ -123,7 +123,8 @@ typedef struct Query
 
 	QuerySource querySource;	/* where did I come from? */
 
-	uint64		queryId;		/* query identifier (can be set by plugins) */
+	uint64		queryId pg_node_attr(equal_ignore);		/* query identifier (can be set by plugins);
+														   ignored for equal, might not be set */
 
 	bool		canSetTag;		/* do I set the command result tag? */
 

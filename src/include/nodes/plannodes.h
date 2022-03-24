@@ -275,10 +275,10 @@ typedef struct MergeAppend
 	List	   *mergeplans;
 	/* these fields are just like the sort-key info in struct Sort: */
 	int			numCols;		/* number of sort-key columns */
-	AttrNumber *sortColIdx;		/* their indexes in the target list */
-	Oid		   *sortOperators;	/* OIDs of operators to sort them by */
-	Oid		   *collations;		/* OIDs of collations */
-	bool	   *nullsFirst;		/* NULLS FIRST/LAST directions */
+	AttrNumber *sortColIdx pg_node_attr(array_size(numCols));		/* their indexes in the target list */
+	Oid		   *sortOperators pg_node_attr(array_size(numCols));	/* OIDs of operators to sort them by */
+	Oid		   *collations pg_node_attr(array_size(numCols));		/* OIDs of collations */
+	bool	   *nullsFirst pg_node_attr(array_size(numCols));		/* NULLS FIRST/LAST directions */
 	/* Info for run-time subplan pruning; NULL if we're not doing that */
 	struct PartitionPruneInfo *part_prune_info;
 } MergeAppend;
@@ -298,9 +298,9 @@ typedef struct RecursiveUnion
 	/* Remaining fields are zero/null in UNION ALL case */
 	int			numCols;		/* number of columns to check for
 								 * duplicate-ness */
-	AttrNumber *dupColIdx;		/* their indexes in the target list */
-	Oid		   *dupOperators;	/* equality operators to compare with */
-	Oid		   *dupCollations;
+	AttrNumber *dupColIdx pg_node_attr(array_size(numCols));		/* their indexes in the target list */
+	Oid		   *dupOperators pg_node_attr(array_size(numCols));	/* equality operators to compare with */
+	Oid		   *dupCollations pg_node_attr(array_size(numCols));
 	long		numGroups;		/* estimated number of groups in input */
 } RecursiveUnion;
 
@@ -765,10 +765,10 @@ typedef struct MergeJoin
 	bool		skip_mark_restore;	/* Can we skip mark/restore calls? */
 	List	   *mergeclauses;	/* mergeclauses as expression trees */
 	/* these are arrays, but have the same length as the mergeclauses list: */
-	Oid		   *mergeFamilies;	/* per-clause OIDs of btree opfamilies */
-	Oid		   *mergeCollations;	/* per-clause OIDs of collations */
-	int		   *mergeStrategies;	/* per-clause ordering (ASC or DESC) */
-	bool	   *mergeNullsFirst;	/* per-clause nulls ordering */
+	Oid		   *mergeFamilies pg_node_attr(array_size(mergeclauses));	/* per-clause OIDs of btree opfamilies */
+	Oid		   *mergeCollations pg_node_attr(array_size(mergeclauses));	/* per-clause OIDs of collations */
+	int		   *mergeStrategies pg_node_attr(array_size(mergeclauses));	/* per-clause ordering (ASC or DESC) */
+	bool	   *mergeNullsFirst pg_node_attr(array_size(mergeclauses));	/* per-clause nulls ordering */
 } MergeJoin;
 
 /* ----------------
@@ -808,8 +808,8 @@ typedef struct Memoize
 
 	int			numKeys;		/* size of the two arrays below */
 
-	Oid		   *hashOperators;	/* hash operators for each key */
-	Oid		   *collations;		/* cache keys */
+	Oid		   *hashOperators pg_node_attr(array_size(numKeys));	/* hash operators for each key */
+	Oid		   *collations pg_node_attr(array_size(numKeys));		/* cache keys */
 	List	   *param_exprs;	/* exprs containing parameters */
 	bool		singlerow;		/* true if the cache entry should be marked as
 								 * complete after we store the first tuple in
@@ -830,10 +830,10 @@ typedef struct Sort
 {
 	Plan		plan;
 	int			numCols;		/* number of sort-key columns */
-	AttrNumber *sortColIdx;		/* their indexes in the target list */
-	Oid		   *sortOperators;	/* OIDs of operators to sort them by */
-	Oid		   *collations;		/* OIDs of collations */
-	bool	   *nullsFirst;		/* NULLS FIRST/LAST directions */
+	AttrNumber *sortColIdx pg_node_attr(array_size(numCols));		/* their indexes in the target list */
+	Oid		   *sortOperators pg_node_attr(array_size(numCols));	/* OIDs of operators to sort them by */
+	Oid		   *collations pg_node_attr(array_size(numCols));		/* OIDs of collations */
+	bool	   *nullsFirst pg_node_attr(array_size(numCols));		/* NULLS FIRST/LAST directions */
 } Sort;
 
 /* ----------------
@@ -856,9 +856,9 @@ typedef struct Group
 {
 	Plan		plan;
 	int			numCols;		/* number of grouping columns */
-	AttrNumber *grpColIdx;		/* their indexes in the target list */
-	Oid		   *grpOperators;	/* equality operators to compare with */
-	Oid		   *grpCollations;
+	AttrNumber *grpColIdx pg_node_attr(array_size(numCols));		/* their indexes in the target list */
+	Oid		   *grpOperators pg_node_attr(array_size(numCols));	/* equality operators to compare with */
+	Oid		   *grpCollations pg_node_attr(array_size(numCols));
 } Group;
 
 /* ---------------
@@ -881,9 +881,9 @@ typedef struct Agg
 	AggStrategy aggstrategy;	/* basic strategy, see nodes.h */
 	AggSplit	aggsplit;		/* agg-splitting mode, see nodes.h */
 	int			numCols;		/* number of grouping columns */
-	AttrNumber *grpColIdx;		/* their indexes in the target list */
-	Oid		   *grpOperators;	/* equality operators to compare with */
-	Oid		   *grpCollations;
+	AttrNumber *grpColIdx pg_node_attr(array_size(numCols));		/* their indexes in the target list */
+	Oid		   *grpOperators pg_node_attr(array_size(numCols));	/* equality operators to compare with */
+	Oid		   *grpCollations pg_node_attr(array_size(numCols));
 	long		numGroups;		/* estimated number of groups in input */
 	uint64		transitionSpace;	/* for pass-by-ref transition data */
 	Bitmapset  *aggParams;		/* IDs of Params used in Aggref inputs */
@@ -901,13 +901,13 @@ typedef struct WindowAgg
 	Plan		plan;
 	Index		winref;			/* ID referenced by window functions */
 	int			partNumCols;	/* number of columns in partition clause */
-	AttrNumber *partColIdx;		/* their indexes in the target list */
-	Oid		   *partOperators;	/* equality operators for partition columns */
-	Oid		   *partCollations; /* collations for partition columns */
+	AttrNumber *partColIdx pg_node_attr(array_size(partNumCols));		/* their indexes in the target list */
+	Oid		   *partOperators pg_node_attr(array_size(partNumCols));	/* equality operators for partition columns */
+	Oid		   *partCollations pg_node_attr(array_size(partNumCols)); /* collations for partition columns */
 	int			ordNumCols;		/* number of columns in ordering clause */
-	AttrNumber *ordColIdx;		/* their indexes in the target list */
-	Oid		   *ordOperators;	/* equality operators for ordering columns */
-	Oid		   *ordCollations;	/* collations for ordering columns */
+	AttrNumber *ordColIdx pg_node_attr(array_size(ordNumCols));		/* their indexes in the target list */
+	Oid		   *ordOperators pg_node_attr(array_size(ordNumCols));	/* equality operators for ordering columns */
+	Oid		   *ordCollations pg_node_attr(array_size(ordNumCols));	/* collations for ordering columns */
 	int			frameOptions;	/* frame_clause options, see WindowDef */
 	Node	   *startOffset;	/* expression for starting bound, if any */
 	Node	   *endOffset;		/* expression for ending bound, if any */
@@ -927,9 +927,9 @@ typedef struct Unique
 {
 	Plan		plan;
 	int			numCols;		/* number of columns to check for uniqueness */
-	AttrNumber *uniqColIdx;		/* their indexes in the target list */
-	Oid		   *uniqOperators;	/* equality operators to compare with */
-	Oid		   *uniqCollations; /* collations for equality comparisons */
+	AttrNumber *uniqColIdx pg_node_attr(array_size(numCols));		/* their indexes in the target list */
+	Oid		   *uniqOperators pg_node_attr(array_size(numCols));	/* equality operators to compare with */
+	Oid		   *uniqCollations pg_node_attr(array_size(numCols)); /* collations for equality comparisons */
 } Unique;
 
 /* ------------
@@ -965,10 +965,10 @@ typedef struct GatherMerge
 	int			rescan_param;	/* ID of Param that signals a rescan, or -1 */
 	/* remaining fields are just like the sort-key info in struct Sort */
 	int			numCols;		/* number of sort-key columns */
-	AttrNumber *sortColIdx;		/* their indexes in the target list */
-	Oid		   *sortOperators;	/* OIDs of operators to sort them by */
-	Oid		   *collations;		/* OIDs of collations */
-	bool	   *nullsFirst;		/* NULLS FIRST/LAST directions */
+	AttrNumber *sortColIdx pg_node_attr(array_size(numCols));		/* their indexes in the target list */
+	Oid		   *sortOperators pg_node_attr(array_size(numCols));	/* OIDs of operators to sort them by */
+	Oid		   *collations pg_node_attr(array_size(numCols));		/* OIDs of collations */
+	bool	   *nullsFirst pg_node_attr(array_size(numCols));		/* NULLS FIRST/LAST directions */
 	Bitmapset  *initParam;		/* param id's of initplans which are referred
 								 * at gather merge or one of it's child node */
 } GatherMerge;
@@ -1008,9 +1008,9 @@ typedef struct SetOp
 	SetOpStrategy strategy;		/* how to do it, see nodes.h */
 	int			numCols;		/* number of columns to check for
 								 * duplicate-ness */
-	AttrNumber *dupColIdx;		/* their indexes in the target list */
-	Oid		   *dupOperators;	/* equality operators to compare with */
-	Oid		   *dupCollations;
+	AttrNumber *dupColIdx pg_node_attr(array_size(numCols));		/* their indexes in the target list */
+	Oid		   *dupOperators pg_node_attr(array_size(numCols));	/* equality operators to compare with */
+	Oid		   *dupCollations pg_node_attr(array_size(numCols));
 	AttrNumber	flagColIdx;		/* where is the flag column, if any */
 	int			firstFlag;		/* flag value for first input relation */
 	long		numGroups;		/* estimated number of groups in input */
@@ -1046,9 +1046,9 @@ typedef struct Limit
 	Node	   *limitCount;		/* COUNT parameter, or NULL if none */
 	LimitOption limitOption;	/* limit type */
 	int			uniqNumCols;	/* number of columns to check for similarity  */
-	AttrNumber *uniqColIdx;		/* their indexes in the target list */
-	Oid		   *uniqOperators;	/* equality operators to compare with */
-	Oid		   *uniqCollations; /* collations for equality comparisons */
+	AttrNumber *uniqColIdx pg_node_attr(array_size(uniqNumCols));		/* their indexes in the target list */
+	Oid		   *uniqOperators pg_node_attr(array_size(uniqNumCols));	/* equality operators to compare with */
+	Oid		   *uniqCollations pg_node_attr(array_size(uniqNumCols)); /* collations for equality comparisons */
 } Limit;
 
 
@@ -1207,9 +1207,9 @@ typedef struct PartitionedRelPruneInfo
 	Bitmapset  *present_parts;	/* Indexes of all partitions which subplans or
 								 * subparts are present for */
 	int			nparts;			/* Length of the following arrays: */
-	int		   *subplan_map;	/* subplan index by partition index, or -1 */
-	int		   *subpart_map;	/* subpart index by partition index, or -1 */
-	Oid		   *relid_map;		/* relation OID by partition index, or 0 */
+	int		   *subplan_map pg_node_attr(array_size(nparts));	/* subplan index by partition index, or -1 */
+	int		   *subpart_map pg_node_attr(array_size(nparts));	/* subpart index by partition index, or -1 */
+	Oid		   *relid_map pg_node_attr(array_size(nparts));		/* relation OID by partition index, or 0 */
 
 	/*
 	 * initial_pruning_steps shows how to prune during executor startup (i.e.,

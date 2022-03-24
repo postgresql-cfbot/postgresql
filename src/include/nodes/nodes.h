@@ -27,6 +27,8 @@ typedef enum NodeTag
 {
 	T_Invalid = 0,
 
+#include "nodes/nodetags.h"
+#ifdef OBSOLETE
 	/*
 	 * TAGS FOR EXECUTOR NODES (execnodes.h)
 	 */
@@ -528,7 +530,32 @@ typedef enum NodeTag
 	T_SupportRequestCost,		/* in nodes/supportnodes.h */
 	T_SupportRequestRows,		/* in nodes/supportnodes.h */
 	T_SupportRequestIndexCondition	/* in nodes/supportnodes.h */
+#endif /*OBSOLETE*/
 } NodeTag;
+
+/*
+ * Used in node definitions to set extra information for gen_node_support.pl
+ *
+ * The argument is a space-separated list of attributes.  The following
+ * attributes are currently used:
+ *
+ * - array_size(OTHERFIELD): This field is a dynamically allocated array with
+ *   size indicated by the mentioned other field.  The other field is either a
+ *   scalar or a list, in which case the length of the list is used.
+ *
+ * - copy_ignore: Ignore the field for copy.
+ *
+ * - equal_ignore: Ignore the field for equality.
+ *
+ * - equal_ignore_if_zero: Ignore the field for equality if it is zero.
+ *   (Otherwise, compare normally.)
+ *
+ * - readwrite_ignore: Ignore the field for read/write.
+ *
+ * Unknown attributes are ignored.  Some additional attributes are used for
+ * special "hack" cases.
+ */
+#define pg_node_attr(attrs)
 
 /*
  * The first field of a node of any type is guaranteed to be the NodeTag.

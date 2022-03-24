@@ -227,7 +227,7 @@ struct PlannerInfo
 	 * GEQO.
 	 */
 	List	   *join_rel_list;	/* list of join-relation RelOptInfos */
-	struct HTAB *join_rel_hash; /* optional hashtable for join relations */
+	struct HTAB *join_rel_hash pg_node_attr(readwrite_ignore); /* optional hashtable for join relations */
 
 	/*
 	 * When doing a dynamic-programming-style join search, join_rel_level[k]
@@ -329,10 +329,10 @@ struct PlannerInfo
 	List	   *update_colnos;
 
 	/* Fields filled during create_plan() for use in setrefs.c */
-	AttrNumber *grouping_map;	/* for GroupingFunc fixup */
+	AttrNumber *grouping_map pg_node_attr(array_size(update_colnos));	/* for GroupingFunc fixup */
 	List	   *minmax_aggs;	/* List of MinMaxAggInfos */
 
-	MemoryContext planner_cxt;	/* context holding PlannerInfo */
+	MemoryContext planner_cxt pg_node_attr(readwrite_ignore);	/* context holding PlannerInfo */
 
 	Cardinality	total_table_pages;	/* # of pages in all non-dummy tables of
 									 * query */
@@ -369,8 +369,8 @@ struct PlannerInfo
 	List	   *curOuterParams; /* not-yet-assigned NestLoopParams */
 
 	/* These fields are workspace for setrefs.c */
-	bool	   *isAltSubplan;	/* array corresponding to glob->subplans */
-	bool	   *isUsedSubplan;	/* array corresponding to glob->subplans */
+	bool	   *isAltSubplan pg_node_attr(array_size(curOuterParams));	/* array corresponding to glob->subplans */
+	bool	   *isUsedSubplan pg_node_attr(array_size(curOuterParams));	/* array corresponding to glob->subplans */
 
 	/* optional private data for join_search_hook, e.g., GEQO */
 	void	   *join_search_private;
@@ -711,8 +711,8 @@ typedef struct RelOptInfo
 	RTEKind		rtekind;		/* RELATION, SUBQUERY, FUNCTION, etc */
 	AttrNumber	min_attr;		/* smallest attrno of rel (often <0) */
 	AttrNumber	max_attr;		/* largest attrno of rel */
-	Relids	   *attr_needed;	/* array indexed [min_attr .. max_attr] */
-	int32	   *attr_widths;	/* array indexed [min_attr .. max_attr] */
+	Relids	   *attr_needed pg_node_attr(readwrite_ignore);	/* array indexed [min_attr .. max_attr] */
+	int32	   *attr_widths pg_node_attr(readwrite_ignore);	/* array indexed [min_attr .. max_attr] */
 	List	   *lateral_vars;	/* LATERAL Vars and PHVs referenced by rel */
 	Relids		lateral_referencers;	/* rels that reference me laterally */
 	List	   *indexlist;		/* list of IndexOptInfo */
@@ -733,13 +733,14 @@ typedef struct RelOptInfo
 	Oid			userid;			/* identifies user to check access as */
 	bool		useridiscurrent;	/* join is only valid for current user */
 	/* use "struct FdwRoutine" to avoid including fdwapi.h here */
-	struct FdwRoutine *fdwroutine;
-	void	   *fdw_private;
+	struct FdwRoutine *fdwroutine pg_node_attr(readwrite_ignore);
+	void	   *fdw_private pg_node_attr(readwrite_ignore);
 
-	/* cache space for remembering if we have proven this relation unique */
-	List	   *unique_for_rels;	/* known unique for these other relid
+	/* cache space for remembering if we have proven this relation unique;
+	   can't print, BMSes aren't Nodes */
+	List	   *unique_for_rels pg_node_attr(readwrite_ignore);	/* known unique for these other relid
 									 * set(s) */
-	List	   *non_unique_for_rels;	/* known not unique for these set(s) */
+	List	   *non_unique_for_rels pg_node_attr(readwrite_ignore);	/* known not unique for these set(s) */
 
 	/* used by various scans and joins: */
 	List	   *baserestrictinfo;	/* RestrictInfo structures (if base rel) */
@@ -837,7 +838,7 @@ struct IndexOptInfo
 
 	Oid			indexoid;		/* OID of the index relation */
 	Oid			reltablespace;	/* tablespace of index (not table) */
-	RelOptInfo *rel;			/* back-link to index's table */
+	RelOptInfo *rel pg_node_attr(readwrite_ignore);			/* back-link to index's table; don't print, else infinite recursion */
 
 	/* index-size statistics (from pg_class and elsewhere) */
 	BlockNumber pages;			/* number of disk pages in index */
@@ -847,20 +848,22 @@ struct IndexOptInfo
 	/* index descriptor information */
 	int			ncolumns;		/* number of columns in index */
 	int			nkeycolumns;	/* number of key columns in index */
-	int		   *indexkeys;		/* column numbers of index's attributes both
+	/* array fields aren't really worth the trouble to print */
+	int		   *indexkeys pg_node_attr(readwrite_ignore);		/* column numbers of index's attributes both
 								 * key and included columns, or 0 */
-	Oid		   *indexcollations;	/* OIDs of collations of index columns */
-	Oid		   *opfamily;		/* OIDs of operator families for columns */
-	Oid		   *opcintype;		/* OIDs of opclass declared input data types */
-	Oid		   *sortopfamily;	/* OIDs of btree opfamilies, if orderable */
-	bool	   *reverse_sort;	/* is sort order descending? */
-	bool	   *nulls_first;	/* do NULLs come first in the sort order? */
-	bytea	  **opclassoptions; /* opclass-specific options for columns */
-	bool	   *canreturn;		/* which index cols can be returned in an
+	Oid		   *indexcollations pg_node_attr(readwrite_ignore);	/* OIDs of collations of index columns */
+	Oid		   *opfamily pg_node_attr(readwrite_ignore);		/* OIDs of operator families for columns */
+	Oid		   *opcintype pg_node_attr(readwrite_ignore);		/* OIDs of opclass declared input data types */
+	Oid		   *sortopfamily pg_node_attr(readwrite_ignore);	/* OIDs of btree opfamilies, if orderable */
+	bool	   *reverse_sort pg_node_attr(readwrite_ignore);	/* is sort order descending? */
+	bool	   *nulls_first pg_node_attr(readwrite_ignore);	/* do NULLs come first in the sort order? */
+	bytea	  **opclassoptions pg_node_attr(readwrite_ignore); /* opclass-specific options for columns */
+	bool	   *canreturn pg_node_attr(readwrite_ignore);		/* which index cols can be returned in an
 								 * index-only scan? */
 	Oid			relam;			/* OID of the access method (in pg_am) */
 
-	List	   *indexprs;		/* expressions for non-simple index columns */
+	/* indexprs is redundant to print since we print indextlist */
+	List	   *indexprs pg_node_attr(readwrite_ignore);		/* expressions for non-simple index columns */
 	List	   *indpred;		/* predicate if a partial index, else NIL */
 
 	List	   *indextlist;		/* targetlist representing index columns */
@@ -877,14 +880,14 @@ struct IndexOptInfo
 	bool		hypothetical;	/* true if index doesn't really exist */
 
 	/* Remaining fields are copied from the index AM's API struct: */
-	bool		amcanorderbyop; /* does AM support order by operator result? */
-	bool		amoptionalkey;	/* can query omit key for the first column? */
-	bool		amsearcharray;	/* can AM handle ScalarArrayOpExpr quals? */
-	bool		amsearchnulls;	/* can AM search for NULL/NOT NULL entries? */
-	bool		amhasgettuple;	/* does AM have amgettuple interface? */
-	bool		amhasgetbitmap; /* does AM have amgetbitmap interface? */
-	bool		amcanparallel;	/* does AM support parallel scan? */
-	bool		amcanmarkpos;	/* does AM support mark/restore? */
+	bool		amcanorderbyop pg_node_attr(readwrite_ignore); /* does AM support order by operator result? */
+	bool		amoptionalkey pg_node_attr(readwrite_ignore);	/* can query omit key for the first column? */
+	bool		amsearcharray pg_node_attr(readwrite_ignore);	/* can AM handle ScalarArrayOpExpr quals? */
+	bool		amsearchnulls pg_node_attr(readwrite_ignore);	/* can AM search for NULL/NOT NULL entries? */
+	bool		amhasgettuple pg_node_attr(readwrite_ignore);	/* does AM have amgettuple interface? */
+	bool		amhasgetbitmap pg_node_attr(readwrite_ignore); /* does AM have amgetbitmap interface? */
+	bool		amcanparallel pg_node_attr(readwrite_ignore);	/* does AM support parallel scan? */
+	bool		amcanmarkpos pg_node_attr(readwrite_ignore);	/* does AM support mark/restore? */
 	/* Rather than include amapi.h here, we declare amcostestimate like this */
 	void		(*amcostestimate) ();	/* AM's cost estimator */
 };
@@ -905,9 +908,9 @@ typedef struct ForeignKeyOptInfo
 	Index		con_relid;		/* RT index of the referencing table */
 	Index		ref_relid;		/* RT index of the referenced table */
 	int			nkeys;			/* number of columns in the foreign key */
-	AttrNumber	conkey[INDEX_MAX_KEYS]; /* cols in referencing table */
-	AttrNumber	confkey[INDEX_MAX_KEYS];	/* cols in referenced table */
-	Oid			conpfeqop[INDEX_MAX_KEYS];	/* PK = FK operator OIDs */
+	AttrNumber	conkey[INDEX_MAX_KEYS] pg_node_attr(array_size(nkeys)); /* cols in referencing table */
+	AttrNumber	confkey[INDEX_MAX_KEYS] pg_node_attr(array_size(nkeys));	/* cols in referenced table */
+	Oid			conpfeqop[INDEX_MAX_KEYS] pg_node_attr(array_size(nkeys));	/* PK = FK operator OIDs */
 
 	/* Derived info about whether FK's equality conditions match the query: */
 	int			nmatched_ec;	/* # of FK cols matched by ECs */
@@ -934,8 +937,9 @@ typedef struct StatisticExtInfo
 	NodeTag		type;
 
 	Oid			statOid;		/* OID of the statistics row */
-	bool		inherit;		/* includes child relations */
-	RelOptInfo *rel;			/* back-link to statistic's table */
+	bool		inherit pg_node_attr(readwrite_ignore);		/* includes child relations */
+	RelOptInfo *rel pg_node_attr(readwrite_ignore);			/* back-link to statistic's table;
+															   don't print, infinite recursion on plan tree dump */
 	char		kind;			/* statistics kind of this entry */
 	Bitmapset  *keys;			/* attnums of the columns covered */
 	List	   *exprs;			/* expressions */
@@ -1109,7 +1113,7 @@ typedef struct PathTarget
 {
 	NodeTag		type;
 	List	   *exprs;			/* list of expressions to be computed */
-	Index	   *sortgrouprefs;	/* corresponding sort/group refnos, or 0 */
+	Index	   *sortgrouprefs pg_node_attr(array_size(exprs));	/* corresponding sort/group refnos, or 0 */
 	QualCost	cost;			/* cost of evaluating the expressions */
 	int			width;			/* estimated avg width of result tuples */
 	VolatileFunctionStatus has_volatile_expr;	/* indicates if exprs contain
@@ -1180,10 +1184,10 @@ typedef struct Path
 
 	NodeTag		pathtype;		/* tag identifying scan/join method */
 
-	RelOptInfo *parent;			/* the relation this path can build */
-	PathTarget *pathtarget;		/* list of Vars/Exprs, cost, width */
+	RelOptInfo *parent pg_node_attr(path_hack1);			/* the relation this path can build */
+	PathTarget *pathtarget pg_node_attr(path_hack2);		/* list of Vars/Exprs, cost, width */
 
-	ParamPathInfo *param_info;	/* parameterization info, or NULL if none */
+	ParamPathInfo *param_info pg_node_attr(path_hack3);	/* parameterization info, or NULL if none */
 
 	bool		parallel_aware; /* engage parallel-aware logic? */
 	bool		parallel_safe;	/* OK to use as part of parallel plan? */
@@ -2050,6 +2054,12 @@ typedef struct LimitPath
  * apply only one.  We mark clauses of this kind by setting parent_ec to
  * point to the generating EquivalenceClass.  Multiple clauses with the same
  * parent_ec in the same join are redundant.
+ *
+ * Most fields are ignored for equality, since they may not be set yet, and
+ * should be derivable from the clause anyway.
+ *
+ * parent_ec, left_ec, right_ec are not printed, lest it lead to infinite
+ * recursion in plan tree dump.
  */
 
 typedef struct RestrictInfo
@@ -2062,19 +2072,19 @@ typedef struct RestrictInfo
 
 	bool		outerjoin_delayed;	/* true if delayed by lower outer join */
 
-	bool		can_join;		/* see comment above */
+	bool		can_join pg_node_attr(equal_ignore);		/* see comment above */
 
-	bool		pseudoconstant; /* see comment above */
+	bool		pseudoconstant pg_node_attr(equal_ignore); /* see comment above */
 
-	bool		leakproof;		/* true if known to contain no leaked Vars */
+	bool		leakproof pg_node_attr(equal_ignore);		/* true if known to contain no leaked Vars */
 
-	VolatileFunctionStatus has_volatile;	/* to indicate if clause contains
+	VolatileFunctionStatus has_volatile pg_node_attr(equal_ignore);	/* to indicate if clause contains
 											 * any volatile functions. */
 
 	Index		security_level; /* see comment above */
 
 	/* The set of relids (varnos) actually referenced in the clause: */
-	Relids		clause_relids;
+	Relids		clause_relids pg_node_attr(equal_ignore);
 
 	/* The set of relids required to evaluate the clause: */
 	Relids		required_relids;
@@ -2086,48 +2096,54 @@ typedef struct RestrictInfo
 	Relids		nullable_relids;
 
 	/* These fields are set for any binary opclause: */
-	Relids		left_relids;	/* relids in left side of clause */
-	Relids		right_relids;	/* relids in right side of clause */
+	Relids		left_relids pg_node_attr(equal_ignore);	/* relids in left side of clause */
+	Relids		right_relids pg_node_attr(equal_ignore);	/* relids in right side of clause */
 
 	/* This field is NULL unless clause is an OR clause: */
-	Expr	   *orclause;		/* modified clause with RestrictInfos */
+	Expr	   *orclause pg_node_attr(equal_ignore);		/* modified clause with RestrictInfos */
 
 	/* This field is NULL unless clause is potentially redundant: */
-	EquivalenceClass *parent_ec;	/* generating EquivalenceClass */
+	EquivalenceClass *parent_ec pg_node_attr(equal_ignore readwrite_ignore);	/* generating EquivalenceClass */
 
 	/* cache space for cost and selectivity */
-	QualCost	eval_cost;		/* eval cost of clause; -1 if not yet set */
-	Selectivity norm_selec;		/* selectivity for "normal" (JOIN_INNER)
+	QualCost	eval_cost pg_node_attr(equal_ignore);		/* eval cost of clause; -1 if not yet set */
+	Selectivity norm_selec pg_node_attr(equal_ignore);		/* selectivity for "normal" (JOIN_INNER)
 								 * semantics; -1 if not yet set; >1 means a
 								 * redundant clause */
-	Selectivity outer_selec;	/* selectivity for outer join semantics; -1 if
+	Selectivity outer_selec pg_node_attr(equal_ignore);	/* selectivity for outer join semantics; -1 if
 								 * not yet set */
 
 	/* valid if clause is mergejoinable, else NIL */
-	List	   *mergeopfamilies;	/* opfamilies containing clause operator */
+	List	   *mergeopfamilies pg_node_attr(equal_ignore);	/* opfamilies containing clause operator */
 
 	/* cache space for mergeclause processing; NULL if not yet set */
-	EquivalenceClass *left_ec;	/* EquivalenceClass containing lefthand */
-	EquivalenceClass *right_ec; /* EquivalenceClass containing righthand */
-	EquivalenceMember *left_em; /* EquivalenceMember for lefthand */
-	EquivalenceMember *right_em;	/* EquivalenceMember for righthand */
-	List	   *scansel_cache;	/* list of MergeScanSelCache structs */
+	EquivalenceClass *left_ec pg_node_attr(equal_ignore readwrite_ignore);	/* EquivalenceClass containing lefthand */
+	EquivalenceClass *right_ec pg_node_attr(equal_ignore readwrite_ignore); /* EquivalenceClass containing righthand */
+	EquivalenceMember *left_em pg_node_attr(equal_ignore); /* EquivalenceMember for lefthand */
+	EquivalenceMember *right_em pg_node_attr(equal_ignore);	/* EquivalenceMember for righthand */
+
+	/*
+	 * List of MergeScanSelCache structs.  Those aren't Nodes, so hard to
+	 * copy.  Ignoring it will have the effect that copying will just reset
+	 * the cache.
+	 */
+	List	   *scansel_cache pg_node_attr(copy_ignore equal_ignore);
 
 	/* transient workspace for use while considering a specific join path */
-	bool		outer_is_left;	/* T = outer var on left, F = on right */
+	bool		outer_is_left pg_node_attr(equal_ignore);	/* T = outer var on left, F = on right */
 
 	/* valid if clause is hashjoinable, else InvalidOid: */
-	Oid			hashjoinoperator;	/* copy of clause operator */
+	Oid			hashjoinoperator pg_node_attr(equal_ignore);	/* copy of clause operator */
 
 	/* cache space for hashclause processing; -1 if not yet set */
-	Selectivity left_bucketsize;	/* avg bucketsize of left side */
-	Selectivity right_bucketsize;	/* avg bucketsize of right side */
-	Selectivity left_mcvfreq;	/* left side's most common val's freq */
-	Selectivity right_mcvfreq;	/* right side's most common val's freq */
+	Selectivity left_bucketsize pg_node_attr(equal_ignore);	/* avg bucketsize of left side */
+	Selectivity right_bucketsize pg_node_attr(equal_ignore);	/* avg bucketsize of right side */
+	Selectivity left_mcvfreq pg_node_attr(equal_ignore);	/* left side's most common val's freq */
+	Selectivity right_mcvfreq pg_node_attr(equal_ignore);	/* right side's most common val's freq */
 
 	/* hash equality operators used for memoize nodes, else InvalidOid */
-	Oid			left_hasheqoperator;
-	Oid			right_hasheqoperator;
+	Oid			left_hasheqoperator pg_node_attr(equal_ignore);
+	Oid			right_hasheqoperator pg_node_attr(equal_ignore);
 } RestrictInfo;
 
 /*
@@ -2177,13 +2193,24 @@ typedef struct MergeScanSelCache
  * Although the planner treats this as an expression node type, it is not
  * recognized by the parser or executor, so we declare it here rather than
  * in primnodes.h.
+ *
+ * We intentionally do not compare phexpr.  Two PlaceHolderVars with the
+ * same ID and levelsup should be considered equal even if the contained
+ * expressions have managed to mutate to different states.  This will
+ * happen during final plan construction when there are nested PHVs, since
+ * the inner PHV will get replaced by a Param in some copies of the outer
+ * PHV.  Another way in which it can happen is that initplan sublinks
+ * could get replaced by differently-numbered Params when sublink folding
+ * is done.  (The end result of such a situation would be some
+ * unreferenced initplans, which is annoying but not really a problem.) On
+ * the same reasoning, there is no need to examine phrels.
  */
 
 typedef struct PlaceHolderVar
 {
 	Expr		xpr;
-	Expr	   *phexpr;			/* the represented expression */
-	Relids		phrels;			/* base relids syntactically within expr src */
+	Expr	   *phexpr pg_node_attr(equal_ignore);			/* the represented expression */
+	Relids		phrels pg_node_attr(equal_ignore);			/* base relids syntactically within expr src */
 	Index		phid;			/* ID for PHV (unique within planner run) */
 	Index		phlevelsup;		/* > 0 if PHV belongs to outer query */
 } PlaceHolderVar;
@@ -2344,7 +2371,7 @@ typedef struct AppendRelInfo
 	 * child column is dropped or doesn't exist in the parent.
 	 */
 	int			num_child_cols; /* length of array */
-	AttrNumber *parent_colnos;	/* array of parent attnos, or zeroes */
+	AttrNumber *parent_colnos pg_node_attr(array_size(num_child_cols));	/* array of parent attnos, or zeroes */
 
 	/*
 	 * We store the parent table's OID here for inheritance, or InvalidOid for
@@ -2413,7 +2440,7 @@ typedef struct PlaceHolderInfo
 	NodeTag		type;
 
 	Index		phid;			/* ID for PH (unique within planner run) */
-	PlaceHolderVar *ph_var;		/* copy of PlaceHolderVar tree */
+	PlaceHolderVar *ph_var;		/* copy of PlaceHolderVar tree (should be redundant for comparison, could be ignored) */
 	Relids		ph_eval_at;		/* lowest level we can evaluate value at */
 	Relids		ph_lateral;		/* relids of contained lateral refs, if any */
 	Relids		ph_needed;		/* highest level the value is needed at */
@@ -2432,7 +2459,8 @@ typedef struct MinMaxAggInfo
 	Oid			aggfnoid;		/* pg_proc Oid of the aggregate */
 	Oid			aggsortop;		/* Oid of its sort operator */
 	Expr	   *target;			/* expression we are aggregating on */
-	PlannerInfo *subroot;		/* modified "root" for planning the subquery */
+	PlannerInfo *subroot pg_node_attr(readwrite_ignore);		/* modified "root" for planning the subquery;
+																   not printed, too large, not interesting enough */
 	Path	   *path;			/* access path for subquery */
 	Cost		pathcost;		/* estimated cost to fetch first row */
 	Param	   *param;			/* param for subplan's output */

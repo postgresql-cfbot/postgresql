@@ -397,10 +397,15 @@ AS_IF([test "$with_llvm" = yes], [
 unset CFLAGS
 unset CXXFLAGS
 
+DLSUFFIX=".so"
+
 #
 # Read the template
 #
 . "$srcdir/src/template/$template" || exit
+
+AC_SUBST(DLSUFFIX)
+AC_DEFINE_UNQUOTED([DLSUFFIX], ["$DLSUFFIX"], [Define to the file name extension of dynamically-loadable modules.])dnl
 
 # C[XX]FLAGS are selected so:
 # If the user specifies something in the environment, that is used.

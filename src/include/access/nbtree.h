@@ -1064,6 +1064,9 @@ typedef struct BTScanOpaqueData
 	 */
 	int			markItemIndex;	/* itemIndex, or -1 if not valid */
 
+	/* Work space for _bt_skip */
+	BTScanInsert	skipScanKey;	/* used to control skipping */
+
 	/* keep these last in struct for efficiency */
 	BTScanPosData currPos;		/* current position data */
 	BTScanPosData markPos;		/* marked position, if any */
@@ -1229,6 +1232,8 @@ extern OffsetNumber _bt_binsrch_insert(Relation rel, BTInsertState insertstate);
 extern int32 _bt_compare(Relation rel, BTScanInsert key, Page page, OffsetNumber offnum);
 extern bool _bt_first(IndexScanDesc scan, ScanDirection dir);
 extern bool _bt_next(IndexScanDesc scan, ScanDirection dir);
+extern bool _bt_skip(IndexScanDesc scan, ScanDirection dir,
+					 ScanDirection indexdir, int prefix);
 extern Buffer _bt_get_endpoint(Relation rel, uint32 level, bool rightmost,
 							   Snapshot snapshot);
 
@@ -1253,6 +1258,8 @@ extern void _bt_end_vacuum_callback(int code, Datum arg);
 extern Size BTreeShmemSize(void);
 extern void BTreeShmemInit(void);
 extern bytea *btoptions(Datum reloptions, bool validate);
+extern bool btskip(IndexScanDesc scan, ScanDirection dir,
+				   ScanDirection indexdir, int prefix);
 extern bool btproperty(Oid index_oid, int attno,
 					   IndexAMProperty prop, const char *propname,
 					   bool *res, bool *isnull);

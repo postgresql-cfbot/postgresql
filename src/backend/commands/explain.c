@@ -152,6 +152,7 @@ static void ExplainXMLTag(const char *tagname, int flags, ExplainState *es);
 static void ExplainIndentText(ExplainState *es);
 static void ExplainJSONLineEnding(ExplainState *es);
 static void ExplainYAMLLineStarting(ExplainState *es);
+static void ExplainIndexSkipScanKeys(int skipPrefixSize, ExplainState *es);
 static void escape_yaml(StringInfo buf, const char *str);
 
 
@@ -1121,6 +1122,21 @@ ExplainPreScanNode(PlanState *planstate, Bitmapset **rels_used)
 }
 
 /*
+ * ExplainIndexSkipScanKeys -
+ *	  Append information about index skip scan to es->str.
+ *
+ * Can be used to print the skip prefix size.
+ */
+static void
+ExplainIndexSkipScanKeys(int skipPrefixSize, ExplainState *es)
+{
+	if (skipPrefixSize > 0)
+	{
+		ExplainPropertyInteger("Distinct Prefix", NULL, skipPrefixSize, es);
+	}
+}
+
+/*
  * ExplainNode -
  *	  Appends a description of a plan tree to es->str
  *
@@ -1477,6 +1493,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			{
 				IndexOnlyScan *indexonlyscan = (IndexOnlyScan *) plan;
 
+
 				ExplainIndexScanDetails(indexonlyscan->indexid,
 										indexonlyscan->indexorderdir,
 										es);
@@ -1737,6 +1754,12 @@ ExplainNode(PlanState *planstate, List *ancestors,
 	switch (nodeTag(plan))
 	{
 		case T_IndexScan:
+			if (((IndexScan *) plan)->indexskipprefixsize > 0)
+			{
+				IndexScan  *indexscan = (IndexScan *) plan;
+				ExplainPropertyBool("Skip scan", true, es);
+				ExplainIndexSkipScanKeys(indexscan->indexskipprefixsize, es);
+			}
 			show_scan_qual(((IndexScan *) plan)->indexqualorig,
 						   "Index Cond", planstate, ancestors, es);
 			if (((IndexScan *) plan)->indexqualorig)
@@ -1750,6 +1773,12 @@ ExplainNode(PlanState *planstate, List *ancestors,
 										   planstate, es);
 			break;
 		case T_IndexOnlyScan:
+			if (((IndexOnlyScan *) plan)->indexskipprefixsize > 0)
+			{
+				IndexOnlyScan *indexonlyscan = (IndexOnlyScan *) plan;
+				ExplainPropertyBool("Skip scan", true, es);
+				ExplainIndexSkipScanKeys(indexonlyscan->indexskipprefixsize, es);
+			}
 			show_scan_qual(((IndexOnlyScan *) plan)->indexqual,
 						   "Index Cond", planstate, ancestors, es);
 			if (((IndexOnlyScan *) plan)->recheckqual)

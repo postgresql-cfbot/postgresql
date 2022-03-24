@@ -74,6 +74,14 @@ typedef struct ScanKeyData
 
 typedef ScanKeyData *ScanKey;
 
+typedef struct ScanLooseKeyData
+{
+	ScanKey start;
+	ScanKey end;
+} ScanLooseKeyData;
+
+typedef ScanLooseKeyData *ScanLooseKey;
+
 /*
  * About row comparisons:
  *

@@ -1011,6 +1011,16 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
+		{"enable_indexskipscan", PGC_USERSET, QUERY_TUNING_METHOD,
+			gettext_noop("Enables the planner's use of index-skip-scan plans."),
+			NULL,
+			GUC_EXPLAIN
+		},
+		&enable_indexskipscan,
+		true,
+		NULL, NULL, NULL
+	},
+	{
 		{"enable_bitmapscan", PGC_USERSET, QUERY_TUNING_METHOD,
 			gettext_noop("Enables the planner's use of bitmap-scan plans."),
 			NULL,

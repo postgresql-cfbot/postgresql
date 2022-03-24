@@ -50,11 +50,139 @@ select relname, relkind, relhassubclass, inhparent::regclass
 (8 rows)
 
 drop table idxpart;
--- Some unsupported features
+-- CIC on partitioned table
 create table idxpart (a int, b int, c text) partition by range (a);
-create table idxpart1 partition of idxpart for values from (0) to (10);
-create index concurrently on idxpart (a);
-ERROR:  cannot create index on partitioned table "idxpart" concurrently
+create table idxpart1 partition of idxpart for values from (0) to (10) partition by range(a);
+create table idxpart11 partition of idxpart1 for values from (0) to (10) partition by range(a);
+create table idxpart111 partition of idxpart11 default partition by range(a);
+create table idxpart1111 partition of idxpart111 default partition by range(a);
+create table idxpart2 partition of idxpart for values from (10) to (20);
+create table idxpart3 partition of idxpart for values from (30) to (40) partition by range(a);
+create table idxpart31 partition of idxpart3 default;
+insert into idxpart2 values(10),(10); -- not unique
+create index concurrently on idxpart (a); -- partitioned
+create index concurrently on idxpart1 (a); -- partitioned and partition
+create index concurrently on idxpart11 (a); -- partitioned and partition, with no leaves
+create index concurrently on idxpart2 (a); -- leaf
+create unique index concurrently on idxpart (a); -- partitioned, unique failure
+ERROR:  could not create unique index "idxpart2_a_idx2_ccnew"
+DETAIL:  Key (a)=(10) is duplicated.
+\d idxpart
+        Partitioned table "public.idxpart"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           |          | 
+ b      | integer |           |          | 
+ c      | text    |           |          | 
+Partition key: RANGE (a)
+Indexes:
+    "idxpart_a_idx" btree (a)
+    "idxpart_a_idx1" UNIQUE, btree (a) INVALID
+Number of partitions: 3 (Use \d+ to list them.)
+
+\d idxpart1
+        Partitioned table "public.idxpart1"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           |          | 
+ b      | integer |           |          | 
+ c      | text    |           |          | 
+Partition of: idxpart FOR VALUES FROM (0) TO (10)
+Partition key: RANGE (a)
+Indexes:
+    "idxpart1_a_idx" btree (a)
+    "idxpart1_a_idx1" btree (a)
+    "idxpart1_a_idx2" UNIQUE, btree (a) INVALID
+Number of partitions: 1 (Use \d+ to list them.)
+
+\d idxpart11
+       Partitioned table "public.idxpart11"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           |          | 
+ b      | integer |           |          | 
+ c      | text    |           |          | 
+Partition of: idxpart1 FOR VALUES FROM (0) TO (10)
+Partition key: RANGE (a)
+Indexes:
+    "idxpart11_a_idx" btree (a)
+    "idxpart11_a_idx1" btree (a)
+    "idxpart11_a_idx2" btree (a)
+    "idxpart11_a_idx3" UNIQUE, btree (a) INVALID
+Number of partitions: 1 (Use \d+ to list them.)
+
+\d idxpart111
+       Partitioned table "public.idxpart111"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           |          | 
+ b      | integer |           |          | 
+ c      | text    |           |          | 
+Partition of: idxpart11 DEFAULT
+Partition key: RANGE (a)
+Indexes:
+    "idxpart111_a_idx" btree (a)
+    "idxpart111_a_idx1" btree (a)
+    "idxpart111_a_idx2" btree (a)
+    "idxpart111_a_idx3" UNIQUE, btree (a) INVALID
+Number of partitions: 1 (Use \d+ to list them.)
+
+\d idxpart1111
+      Partitioned table "public.idxpart1111"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           |          | 
+ b      | integer |           |          | 
+ c      | text    |           |          | 
+Partition of: idxpart111 DEFAULT
+Partition key: RANGE (a)
+Indexes:
+    "idxpart1111_a_idx" btree (a)
+    "idxpart1111_a_idx1" btree (a)
+    "idxpart1111_a_idx2" btree (a)
+    "idxpart1111_a_idx3" UNIQUE, btree (a) INVALID
+Number of partitions: 0
+
+\d idxpart2
+              Table "public.idxpart2"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           |          | 
+ b      | integer |           |          | 
+ c      | text    |           |          | 
+Partition of: idxpart FOR VALUES FROM (10) TO (20)
+Indexes:
+    "idxpart2_a_idx" btree (a)
+    "idxpart2_a_idx1" btree (a)
+    "idxpart2_a_idx2" UNIQUE, btree (a) INVALID
+    "idxpart2_a_idx2_ccnew" UNIQUE, btree (a) INVALID
+
+\d idxpart3
+        Partitioned table "public.idxpart3"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           |          | 
+ b      | integer |           |          | 
+ c      | text    |           |          | 
+Partition of: idxpart FOR VALUES FROM (30) TO (40)
+Partition key: RANGE (a)
+Indexes:
+    "idxpart3_a_idx" btree (a)
+    "idxpart3_a_idx1" UNIQUE, btree (a) INVALID
+Number of partitions: 1 (Use \d+ to list them.)
+
+\d idxpart31
+             Table "public.idxpart31"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           |          | 
+ b      | integer |           |          | 
+ c      | text    |           |          | 
+Partition of: idxpart3 DEFAULT
+Indexes:
+    "idxpart31_a_idx" btree (a)
+    "idxpart31_a_idx1" UNIQUE, btree (a) INVALID
+
 drop table idxpart;
 -- Verify bugfix with query on indexed partitioned table with no partitions
 -- https://postgr.es/m/20180124162006.pmapfiznhgngwtjf@alvherre.pgsql

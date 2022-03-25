@@ -1040,24 +1040,21 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
 			break;
 		case XID_IN_FUTURE:
 			report_corruption(ctx,
-							  psprintf("xmin %llu equals or exceeds next valid transaction ID %u:%llu",
+							  psprintf("xmin %llu equals or exceeds next valid transaction ID %llu",
 									   (unsigned long long) xmin,
-									   EpochFromFullTransactionId(ctx->next_fxid),
-									   (unsigned long long) XidFromFullTransactionId(ctx->next_fxid)));
+									   (unsigned long long) U64FromFullTransactionId(ctx->next_fxid)));
 			return false;
 		case XID_PRECEDES_CLUSTERMIN:
 			report_corruption(ctx,
-							  psprintf("xmin %llu precedes oldest valid transaction ID %u:%llu",
+							  psprintf("xmin %llu precedes oldest valid transaction ID %llu",
 									   (unsigned long long) xmin,
-									   EpochFromFullTransactionId(ctx->oldest_fxid),
-									   (unsigned long long) XidFromFullTransactionId(ctx->oldest_fxid)));
+									   (unsigned long long) U64FromFullTransactionId(ctx->oldest_fxid)));
 			return false;
 		case XID_PRECEDES_RELMIN:
 			report_corruption(ctx,
-							  psprintf("xmin %llu precedes relation freeze threshold %u:%llu",
+							  psprintf("xmin %llu precedes relation freeze threshold %llu",
 									   (unsigned long long) xmin,
-									   EpochFromFullTransactionId(ctx->relfrozenfxid),
-									   (unsigned long long) XidFromFullTransactionId(ctx->relfrozenfxid)));
+									   (unsigned long long) U64FromFullTransactionId(ctx->relfrozenfxid)));
 			return false;
 	}
 
@@ -1081,24 +1078,21 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
 					return false;
 				case XID_IN_FUTURE:
 					report_corruption(ctx,
-									  psprintf("old-style VACUUM FULL transaction ID %llu for moved off tuple equals or exceeds next valid transaction ID %u:%llu",
+									  psprintf("old-style VACUUM FULL transaction ID %llu for moved off tuple equals or exceeds next valid transaction ID %llu",
 											   (unsigned long long) xvac,
-											   EpochFromFullTransactionId(ctx->next_fxid),
-											   (unsigned long long) XidFromFullTransactionId(ctx->next_fxid)));
+											   (unsigned long long) U64FromFullTransactionId(ctx->next_fxid)));
 					return false;
 				case XID_PRECEDES_RELMIN:
 					report_corruption(ctx,
-									  psprintf("old-style VACUUM FULL transaction ID %llu for moved off tuple precedes relation freeze threshold %u:%llu",
+									  psprintf("old-style VACUUM FULL transaction ID %llu for moved off tuple precedes relation freeze threshold %llu",
 											   (unsigned long long) xvac,
-											   EpochFromFullTransactionId(ctx->relfrozenfxid),
-											   (unsigned long long) XidFromFullTransactionId(ctx->relfrozenfxid)));
+											   (unsigned long long) U64FromFullTransactionId(ctx->relfrozenfxid)));
 					return false;
 				case XID_PRECEDES_CLUSTERMIN:
 					report_corruption(ctx,
-									  psprintf("old-style VACUUM FULL transaction ID %llu for moved off tuple precedes oldest valid transaction ID %u:%llu",
+									  psprintf("old-style VACUUM FULL transaction ID %llu for moved off tuple precedes oldest valid transaction ID %llu",
 											   (unsigned long long) xvac,
-											   EpochFromFullTransactionId(ctx->oldest_fxid),
-											   (unsigned long long) XidFromFullTransactionId(ctx->oldest_fxid)));
+											   (unsigned long long) U64FromFullTransactionId(ctx->oldest_fxid)));
 					return false;
 				case XID_BOUNDS_OK:
 					break;
@@ -1150,24 +1144,21 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
 					return false;
 				case XID_IN_FUTURE:
 					report_corruption(ctx,
-									  psprintf("old-style VACUUM FULL transaction ID %llu for moved in tuple equals or exceeds next valid transaction ID %u:%llu",
+									  psprintf("old-style VACUUM FULL transaction ID %llu for moved in tuple equals or exceeds next valid transaction ID %llu",
 											   (unsigned long long) xvac,
-											   EpochFromFullTransactionId(ctx->next_fxid),
-											   (unsigned long long) XidFromFullTransactionId(ctx->next_fxid)));
+											   (unsigned long long) U64FromFullTransactionId(ctx->next_fxid)));
 					return false;
 				case XID_PRECEDES_RELMIN:
 					report_corruption(ctx,
-									  psprintf("old-style VACUUM FULL transaction ID %llu for moved in tuple precedes relation freeze threshold %u:%llu",
+									  psprintf("old-style VACUUM FULL transaction ID %llu for moved in tuple precedes relation freeze threshold %llu",
 											   (unsigned long long) xvac,
-											   EpochFromFullTransactionId(ctx->relfrozenfxid),
-											   (unsigned long long) XidFromFullTransactionId(ctx->relfrozenfxid)));
+											   (unsigned long long) U64FromFullTransactionId(ctx->relfrozenfxid)));
 					return false;
 				case XID_PRECEDES_CLUSTERMIN:
 					report_corruption(ctx,
-									  psprintf("old-style VACUUM FULL transaction ID %llu for moved in tuple precedes oldest valid transaction ID %u:%llu",
+									  psprintf("old-style VACUUM FULL transaction ID %llu for moved in tuple precedes oldest valid transaction ID %llu",
 											   (unsigned long long) xvac,
-											   EpochFromFullTransactionId(ctx->oldest_fxid),
-											   (unsigned long long) XidFromFullTransactionId(ctx->oldest_fxid)));
+											   (unsigned long long) U64FromFullTransactionId(ctx->oldest_fxid)));
 					return false;
 				case XID_BOUNDS_OK:
 					break;
@@ -1313,24 +1304,21 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
 				return true;
 			case XID_IN_FUTURE:
 				report_corruption(ctx,
-								  psprintf("update xid %llu equals or exceeds next valid transaction ID %u:%llu",
+								  psprintf("update xid %llu equals or exceeds next valid transaction ID %llu",
 										   (unsigned long long) xmax,
-										   EpochFromFullTransactionId(ctx->next_fxid),
-										   (unsigned long long) XidFromFullTransactionId(ctx->next_fxid)));
+										   (unsigned long long) U64FromFullTransactionId(ctx->next_fxid)));
 				return true;
 			case XID_PRECEDES_RELMIN:
 				report_corruption(ctx,
-								  psprintf("update xid %llu precedes relation freeze threshold %u:%llu",
+								  psprintf("update xid %llu precedes relation freeze threshold %llu",
 										   (unsigned long long) xmax,
-										   EpochFromFullTransactionId(ctx->relfrozenfxid),
-										   (unsigned long long) XidFromFullTransactionId(ctx->relfrozenfxid)));
+										   (unsigned long long) U64FromFullTransactionId(ctx->relfrozenfxid)));
 				return true;
 			case XID_PRECEDES_CLUSTERMIN:
 				report_corruption(ctx,
-								  psprintf("update xid %llu precedes oldest valid transaction ID %u:%llu",
+								  psprintf("update xid %llu precedes oldest valid transaction ID %llu",
 										   (unsigned long long) xmax,
-										   EpochFromFullTransactionId(ctx->oldest_fxid),
-										   (unsigned long long) XidFromFullTransactionId(ctx->oldest_fxid)));
+										   (unsigned long long) U64FromFullTransactionId(ctx->oldest_fxid)));
 				return true;
 			case XID_BOUNDS_OK:
 				break;
@@ -1378,24 +1366,21 @@ check_tuple_visibility(HeapCheckContext *ctx, bool *xmin_commit_status_ok,
 			return true;
 		case XID_IN_FUTURE:
 			report_corruption(ctx,
-							  psprintf("xmax %llu equals or exceeds next valid transaction ID %u:%llu",
+							  psprintf("xmax %llu equals or exceeds next valid transaction ID %llu",
 									   (unsigned long long) xmax,
-									   EpochFromFullTransactionId(ctx->next_fxid),
-									   (unsigned long long) XidFromFullTransactionId(ctx->next_fxid)));
+									   (unsigned long long) U64FromFullTransactionId(ctx->next_fxid)));
 			return false;		/* corrupt */
 		case XID_PRECEDES_RELMIN:
 			report_corruption(ctx,
-							  psprintf("xmax %llu precedes relation freeze threshold %u:%llu",
+							  psprintf("xmax %llu precedes relation freeze threshold %llu",
 									   (unsigned long long) xmax,
-									   EpochFromFullTransactionId(ctx->relfrozenfxid),
-									   (unsigned long long) XidFromFullTransactionId(ctx->relfrozenfxid)));
+									   (unsigned long long) U64FromFullTransactionId(ctx->relfrozenfxid)));
 			return false;		/* corrupt */
 		case XID_PRECEDES_CLUSTERMIN:
 			report_corruption(ctx,
-							  psprintf("xmax %llu precedes oldest valid transaction ID %u:%llu",
+							  psprintf("xmax %llu precedes oldest valid transaction ID %llu",
 									   (unsigned long long) xmax,
-									   EpochFromFullTransactionId(ctx->oldest_fxid),
-									   (unsigned long long) XidFromFullTransactionId(ctx->oldest_fxid)));
+									   (unsigned long long) U64FromFullTransactionId(ctx->oldest_fxid)));
 			return false;		/* corrupt */
 		case XID_BOUNDS_OK:
 			break;

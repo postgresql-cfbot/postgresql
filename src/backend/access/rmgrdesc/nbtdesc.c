@@ -94,10 +94,9 @@ btree_desc(StringInfo buf, XLogReaderState *record)
 			{
 				xl_btree_unlink_page *xlrec = (xl_btree_unlink_page *) rec;
 
-				appendStringInfo(buf, "left: %u, right: %u, level: %u, safexid: %u:%llu, ",
+				appendStringInfo(buf, "left: %u, right: %u, level: %u, safexid: %llu, ",
 								 xlrec->leftsib, xlrec->rightsib, xlrec->level,
-								 EpochFromFullTransactionId(xlrec->safexid),
-								 (unsigned long long) XidFromFullTransactionId(xlrec->safexid));
+								 (unsigned long long) U64FromFullTransactionId(xlrec->safexid));
 				appendStringInfo(buf, "leafleft: %u, leafright: %u, leaftopparent: %u",
 								 xlrec->leafleftsib, xlrec->leafrightsib,
 								 xlrec->leaftopparent);
@@ -114,11 +113,10 @@ btree_desc(StringInfo buf, XLogReaderState *record)
 			{
 				xl_btree_reuse_page *xlrec = (xl_btree_reuse_page *) rec;
 
-				appendStringInfo(buf, "rel: %u/%u/%u, snapshotConflictHorizon: %u:%llu, isCatalogRel: %c",
+				appendStringInfo(buf, "rel: %u/%u/%u, snapshotConflictHorizon: %llu, isCatalogRel: %c",
 								 xlrec->locator.spcOid, xlrec->locator.dbOid,
 								 xlrec->locator.relNumber,
-								 EpochFromFullTransactionId(xlrec->snapshotConflictHorizon),
-								 (unsigned long long) XidFromFullTransactionId(xlrec->snapshotConflictHorizon),
+								 (unsigned long long) U64FromFullTransactionId(xlrec->snapshotConflictHorizon),
 								 xlrec->isCatalogRel ? 'T' : 'F');
 				break;
 			}

@@ -34,8 +34,9 @@ commit_ts_desc(StringInfo buf, XLogReaderState *record)
 	{
 		xl_commit_ts_truncate *trunc = (xl_commit_ts_truncate *) rec;
 
-		appendStringInfo(buf, "pageno %lld, oldestXid %u",
-						 (long long) trunc->pageno, trunc->oldestXid);
+		appendStringInfo(buf, "pageno %lld, oldestXid %llu",
+						 (long long) trunc->pageno,
+						 (unsigned long long) trunc->oldestXid);
 	}
 }
 

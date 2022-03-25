@@ -1168,7 +1168,7 @@ typedef void (*LogicalDecodeStreamTruncateCB) (struct LogicalDecodingContext *ct
      output plugin:
 <programlisting>
 OutputPluginPrepareWrite(ctx, true);
-appendStringInfo(ctx->out, "BEGIN %u", txn->xid);
+appendStringInfo(ctx->out, "BEGIN %llu", (unsigned long long) txn->xid);
 OutputPluginWrite(ctx, true);
 </programlisting>
     </para>

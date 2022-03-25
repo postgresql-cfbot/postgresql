@@ -35,8 +35,9 @@ clog_desc(StringInfo buf, XLogReaderState *record)
 		xl_clog_truncate xlrec;
 
 		memcpy(&xlrec, rec, sizeof(xl_clog_truncate));
-		appendStringInfo(buf, "page %lld; oldestXact %u",
-						 (long long) xlrec.pageno, xlrec.oldestXact);
+		appendStringInfo(buf, "page %lld; oldestXact %llu",
+						 (long long) xlrec.pageno,
+						 (unsigned long long) xlrec.oldestXact);
 	}
 }
 

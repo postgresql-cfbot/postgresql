@@ -172,16 +172,16 @@ GetNewTransactionId(bool isSubXact)
 			/* complain even if that DB has disappeared */
 			if (oldest_datname)
 				ereport(WARNING,
-						(errmsg("database \"%s\" must be vacuumed within %u transactions",
+						(errmsg("database \"%s\" must be vacuumed within %llu transactions",
 								oldest_datname,
-								xidWrapLimit - xid),
+								(unsigned long long) xidWrapLimit - xid),
 						 errhint("To avoid XID assignment failures, execute a database-wide VACUUM in that database.\n"
 								 "You might also need to commit or roll back old prepared transactions, or drop stale replication slots.")));
 			else
 				ereport(WARNING,
-						(errmsg("database with OID %u must be vacuumed within %u transactions",
+						(errmsg("database with OID %u must be vacuumed within %llu transactions",
 								oldest_datoid,
-								xidWrapLimit - xid),
+								(unsigned long long) xidWrapLimit - xid),
 						 errhint("To avoid XID assignment failures, execute a database-wide VACUUM in that database.\n"
 								 "You might also need to commit or roll back old prepared transactions, or drop stale replication slots.")));
 		}
@@ -452,8 +452,8 @@ SetTransactionIdLimit(TransactionId oldest_datfrozenxid, Oid oldest_datoid)
 
 	/* Log the info */
 	ereport(DEBUG1,
-			(errmsg_internal("transaction ID wrap limit is %u, limited by database with OID %u",
-							 xidWrapLimit, oldest_datoid)));
+			(errmsg_internal("transaction ID wrap limit is %llu, limited by database with OID %u",
+							 (unsigned long long) xidWrapLimit, oldest_datoid)));
 
 	/*
 	 * If past the autovacuum force point, immediately signal an autovac
@@ -487,16 +487,16 @@ SetTransactionIdLimit(TransactionId oldest_datfrozenxid, Oid oldest_datoid)
 
 		if (oldest_datname)
 			ereport(WARNING,
-					(errmsg("database \"%s\" must be vacuumed within %u transactions",
+					(errmsg("database \"%s\" must be vacuumed within %llu transactions",
 							oldest_datname,
-							xidWrapLimit - curXid),
+							(unsigned long long) xidWrapLimit - curXid),
 					 errhint("To avoid XID assignment failures, execute a database-wide VACUUM in that database.\n"
 							 "You might also need to commit or roll back old prepared transactions, or drop stale replication slots.")));
 		else
 			ereport(WARNING,
-					(errmsg("database with OID %u must be vacuumed within %u transactions",
+					(errmsg("database with OID %u must be vacuumed within %llu transactions",
 							oldest_datoid,
-							xidWrapLimit - curXid),
+							(unsigned long long) xidWrapLimit - curXid),
 					 errhint("To avoid XID assignment failures, execute a database-wide VACUUM in that database.\n"
 							 "You might also need to commit or roll back old prepared transactions, or drop stale replication slots.")));
 	}

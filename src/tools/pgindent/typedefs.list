@@ -1236,6 +1236,17 @@ JsonPathParseResult
 JsonPathPredicateCallback
 JsonPathString
 JsonSemAction
+JsonTable
+JsonTableColumn
+JsonTableColumnType
+JsonTableContext
+JsonTableJoinState
+JsonTableParent
+JsonTablePlan
+JsonTablePlanJoinType
+JsonTablePlanType
+JsonTableScanState
+JsonTableSibling
 JsonTokenType
 JsonTransformStringValuesAction
 JsonTypeCategory
@@ -2638,6 +2649,7 @@ TableFunc
 TableFuncRoutine
 TableFuncScan
 TableFuncScanState
+TableFuncType
 TableInfo
 TableLikeClause
 TableSampleClause

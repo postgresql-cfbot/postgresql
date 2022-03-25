@@ -138,11 +138,6 @@ typedef struct
  * array of AppendRelInfo nodes, indexed by child relid.  We use that to map
  * child-table Vars to their inheritance parents.
  *
- * In some cases we need to make names of merged JOIN USING columns unique
- * across the whole query, not only per-RTE.  If so, unique_using is true
- * and using_names is a list of C strings representing names already assigned
- * to USING columns.
- *
  * When deparsing plan trees, there is always just a single item in the
  * deparse_namespace list (since a plan tree never contains Vars with
  * varlevelsup > 0).  We store the Plan node that is the immediate
@@ -157,13 +152,13 @@ typedef struct
 {
 	List	   *rtable;			/* List of RangeTblEntry nodes */
 	List	   *rtable_names;	/* Parallel list of names for RTEs */
+	List	   *join_using_aliases;	/* Parallel list of join using aliases */
 	List	   *rtable_columns; /* Parallel list of deparse_columns structs */
 	List	   *subplans;		/* List of Plan trees for SubPlans */
 	List	   *ctes;			/* List of CommonTableExpr nodes */
 	AppendRelInfo **appendrels; /* Array of AppendRelInfo nodes, or NULL */
 	/* Workspace for column alias assignment: */
 	bool		unique_using;	/* Are we making USING names globally unique */
-	List	   *using_names;	/* List of assigned names for USING columns */
 	/* Remaining fields are used only when deparsing a Plan tree: */
 	Plan	   *plan;			/* immediate parent of current expression */
 	List	   *ancestors;		/* ancestors of plan */
@@ -3841,6 +3836,7 @@ set_rtable_names(deparse_namespace *dpns, List *parent_namespaces,
 	{
 		RangeTblEntry *rte = (RangeTblEntry *) lfirst(lc);
 		char	   *refname;
+		char	   *join_using_alias;
 
 		/* Just in case this takes an unreasonable amount of time ... */
 		CHECK_FOR_INTERRUPTS();
@@ -3870,6 +3866,16 @@ set_rtable_names(deparse_namespace *dpns, List *parent_namespaces,
 			/* Otherwise use whatever the parser assigned */
 			refname = rte->eref->aliasname;
 		}
+
+		if (rte->rtekind == RTE_JOIN && rte->joinmergedcols)
+		{
+			if (rte->join_using_alias)
+				join_using_alias = rte->join_using_alias->aliasname;
+			else
+				join_using_alias = "ju";
+		}
+		else
+			join_using_alias = NULL;
 
 		/*
 		 * If the selected name isn't unique, append digits to make it so, and
@@ -3918,7 +3924,49 @@ set_rtable_names(deparse_namespace *dpns, List *parent_namespaces,
 			}
 		}
 
+		if (join_using_alias)
+		{
+			hentry = (NameHashEntry *) hash_search(names_hash,
+												   join_using_alias,
+												   HASH_ENTER,
+												   &found);
+			if (found)
+			{
+				/* Name already in use, must choose a new one */
+				int			refnamelen = strlen(join_using_alias);
+				char	   *modname = (char *) palloc(refnamelen + 16);
+				NameHashEntry *hentry2;
+
+				do
+				{
+					hentry->counter++;
+					for (;;)
+					{
+						memcpy(modname, join_using_alias, refnamelen);
+						sprintf(modname + refnamelen, "_%d", hentry->counter);
+						if (strlen(modname) < NAMEDATALEN)
+							break;
+						/* drop chars from refname to keep all the digits */
+						refnamelen = pg_mbcliplen(join_using_alias, refnamelen,
+												  refnamelen - 1);
+					}
+					hentry2 = (NameHashEntry *) hash_search(names_hash,
+															modname,
+															HASH_ENTER,
+															&found);
+				} while (found);
+				hentry2->counter = 0;	/* init new hash entry */
+				join_using_alias = modname;
+			}
+			else
+			{
+				/* Name not previously used, need only initialize hentry */
+				hentry->counter = 0;
+			}
+		}
+
 		dpns->rtable_names = lappend(dpns->rtable_names, refname);
+		dpns->join_using_aliases = lappend(dpns->join_using_aliases, join_using_alias);
 		rtindex++;
 	}
 
@@ -4219,9 +4267,6 @@ set_using_names(deparse_namespace *dpns, Node *jtnode, List *parentUsing)
 						colname = strVal(list_nth(rte->alias->colnames, i));
 					/* Make it appropriately unique */
 					colname = make_colname_unique(colname, dpns, colinfo);
-					if (dpns->unique_using)
-						dpns->using_names = lappend(dpns->using_names,
-													colname);
 					/* Save it as output column name, too */
 					colinfo->colnames[i] = colname;
 				}
@@ -4705,7 +4750,6 @@ colname_is_unique(const char *colname, deparse_namespace *dpns,
 				  deparse_columns *colinfo)
 {
 	int			i;
-	ListCell   *lc;
 
 	/* Check against already-assigned column aliases within RTE */
 	for (i = 0; i < colinfo->num_cols; i++)
@@ -4725,24 +4769,6 @@ colname_is_unique(const char *colname, deparse_namespace *dpns,
 		char	   *oldname = colinfo->new_colnames[i];
 
 		if (oldname && strcmp(oldname, colname) == 0)
-			return false;
-	}
-
-	/* Also check against USING-column names that must be globally unique */
-	foreach(lc, dpns->using_names)
-	{
-		char	   *oldname = (char *) lfirst(lc);
-
-		if (strcmp(oldname, colname) == 0)
-			return false;
-	}
-
-	/* Also check against names already assigned for parent-join USING cols */
-	foreach(lc, colinfo->parentUsing)
-	{
-		char	   *oldname = (char *) lfirst(lc);
-
-		if (strcmp(oldname, colname) == 0)
 			return false;
 	}
 
@@ -7047,6 +7073,7 @@ get_variable(Var *var, int levelsup, bool istoplevel, deparse_context *context)
 	AttrNumber	varattno;
 	deparse_columns *colinfo;
 	char	   *refname;
+	char	   *join_using_alias;
 	char	   *attname;
 
 	/* Find appropriate nesting depth */
@@ -7130,6 +7157,10 @@ get_variable(Var *var, int levelsup, bool istoplevel, deparse_context *context)
 
 		rte = rt_fetch(varno, dpns->rtable);
 		refname = (char *) list_nth(dpns->rtable_names, varno - 1);
+		if (dpns->join_using_aliases)
+			join_using_alias = (char *) list_nth(dpns->join_using_aliases, varno - 1);
+		else
+			join_using_alias = NULL;
 		colinfo = deparse_columns_fetch(varno, dpns);
 		attnum = varattno;
 	}
@@ -7239,6 +7270,11 @@ get_variable(Var *var, int levelsup, bool istoplevel, deparse_context *context)
 	if (refname && (context->varprefix || attname == NULL))
 	{
 		appendStringInfoString(buf, quote_identifier(refname));
+		appendStringInfoChar(buf, '.');
+	}
+	else if (join_using_alias && (context->varprefix || attname == NULL))
+	{
+		appendStringInfoString(buf, quote_identifier(join_using_alias));
 		appendStringInfoChar(buf, '.');
 	}
 	if (attname)
@@ -11026,6 +11062,7 @@ get_from_clause_item(Node *jtnode, Query *query, deparse_context *context)
 		JoinExpr   *j = (JoinExpr *) jtnode;
 		deparse_columns *colinfo = deparse_columns_fetch(j->rtindex, dpns);
 		bool		need_paren_on_right;
+		char	   *join_using_alias = list_nth(dpns->join_using_aliases, j->rtindex - 1);
 
 		need_paren_on_right = PRETTY_PAREN(context) &&
 			!IsA(j->rarg, RangeTblRef) &&
@@ -11098,9 +11135,14 @@ get_from_clause_item(Node *jtnode, Query *query, deparse_context *context)
 			}
 			appendStringInfoChar(buf, ')');
 
-			if (j->join_using_alias)
+			/*
+			 * If it's a generated JOIN USING alias, only print it if we
+			 * really need it to qualify some column.
+			 */
+			if (j->join_using_alias ||
+				(join_using_alias && dpns->unique_using))
 				appendStringInfo(buf, " AS %s",
-								 quote_identifier(j->join_using_alias->aliasname));
+								 quote_identifier(join_using_alias));
 		}
 		else if (j->quals)
 		{

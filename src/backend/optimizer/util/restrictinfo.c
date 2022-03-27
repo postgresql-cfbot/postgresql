@@ -201,6 +201,7 @@ make_restrictinfo_internal(PlannerInfo *root,
 	restrictinfo->outer_selec = -1;
 
 	restrictinfo->mergeopfamilies = NIL;
+	restrictinfo->btreeineqopfamilies = NIL;
 
 	restrictinfo->left_ec = NULL;
 	restrictinfo->right_ec = NULL;

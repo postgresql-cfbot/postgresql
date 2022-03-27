@@ -619,6 +619,7 @@ subquery_planner(PlannerGlobal *glob, Query *parse,
 	root->multiexpr_params = NIL;
 	root->eq_classes = NIL;
 	root->ec_merging_done = false;
+	root->correlative_quals = NIL;
 	root->all_result_relids =
 		parse->resultRelation ? bms_make_singleton(parse->resultRelation) : NULL;
 	root->leaf_result_relids = NULL;	/* we'll find out leaf-ness later */

@@ -112,7 +112,7 @@ transformGenericOptions(Oid catalogId,
 						List *options,
 						Oid fdwvalidator)
 {
-	List	   *resultOptions = untransformRelOptions(oldOptions);
+	List	   *resultOptions = optionsTextArrayToDefList(oldOptions);
 	ListCell   *optcell;
 	Datum		result;
 

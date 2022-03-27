@@ -105,6 +105,13 @@ SELECT reloptions FROM pg_class WHERE oid = 'reloptions_test'::regclass;
 SELECT reloptions FROM pg_class WHERE oid = (
 	SELECT reltoastrelid FROM pg_class WHERE oid = 'reloptions_test'::regclass);
 
+-- Can reset option that is not allowed, but for some reason is already set
+UPDATE pg_class
+	SET reloptions = '{fillfactor=13,autovacuum_enabled=false,illegal_option=4}'
+	WHERE oid = 'reloptions_test'::regclass;
+ALTER TABLE reloptions_test RESET (illegal_option);
+SELECT reloptions FROM pg_class WHERE oid = 'reloptions_test'::regclass;
+
 --
 -- CREATE INDEX, ALTER INDEX for btrees
 --

@@ -228,3 +228,6 @@ CREATE INDEX bloomidx2 ON tst USING bloom (i, t) WITH (length=0);
 ERROR:  value 0 out of bounds for option "length"
 CREATE INDEX bloomidx2 ON tst USING bloom (i, t) WITH (col1=0);
 ERROR:  value 0 out of bounds for option "col1"
+-- check post_validate for colN<lengh
+CREATE INDEX bloomidx2 ON tst USING bloom (i, t) WITH (length=10,col1=11);
+ERROR:  col0 should not be grater than length

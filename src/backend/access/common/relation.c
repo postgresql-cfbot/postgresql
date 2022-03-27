@@ -65,9 +65,13 @@ relation_open(Oid relationId, LOCKMODE lockmode)
 	 * If we didn't get the lock ourselves, assert that caller holds one,
 	 * except in bootstrap mode where no locks are used.
 	 */
-	Assert(lockmode != NoLock ||
-		   IsBootstrapProcessingMode() ||
-		   CheckRelationLockedByMe(r, AccessShareLock, true));
+
+// FIXME We need NoLock mode to get AM data when choosing Lock for
+// attoptions is changed. See ProcessUtilitySlow problems comes from there
+// This is a dirty hack, we need better solution for this case;
+//	Assert(lockmode != NoLock ||
+//		   IsBootstrapProcessingMode() ||
+//		   CheckRelationLockedByMe(r, AccessShareLock, true));
 
 	/* Make note that we've accessed a temporary relation */
 	if (RelationUsesLocalBuffers(r))

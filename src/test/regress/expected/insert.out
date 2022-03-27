@@ -9,6 +9,7 @@ insert into inserttest (col2, col3) values (3, DEFAULT);
 insert into inserttest (col1, col2, col3) values (DEFAULT, 5, DEFAULT);
 insert into inserttest values (DEFAULT, 5, 'test');
 insert into inserttest values (DEFAULT, 7);
+insert into inserttest set col1 = DEFAULT, col2 = 9;
 select * from inserttest;
  col1 | col2 |  col3   
 ------+------+---------
@@ -16,7 +17,8 @@ select * from inserttest;
       |    5 | testing
       |    5 | test
       |    7 | testing
-(4 rows)
+      |    9 | testing
+(5 rows)
 
 --
 -- insert with similar expression / target_list values (all fail)
@@ -44,7 +46,8 @@ select * from inserttest;
       |    5 | testing
       |    5 | test
       |    7 | testing
-(4 rows)
+      |    9 | testing
+(5 rows)
 
 --
 -- VALUES test
@@ -58,10 +61,11 @@ select * from inserttest;
       |    5 | testing
       |    5 | test
       |    7 | testing
+      |    9 | testing
    10 |   20 | 40
    -1 |    2 | testing
     2 |    3 | values are fun!
-(7 rows)
+(8 rows)
 
 --
 -- TOASTed value test
@@ -74,11 +78,12 @@ select col1, col2, char_length(col3) from inserttest;
       |    5 |           7
       |    5 |           4
       |    7 |           7
+      |    9 |           7
    10 |   20 |           2
    -1 |    2 |           7
     2 |    3 |          15
    30 |   50 |       10000
-(8 rows)
+(9 rows)
 
 drop table inserttest;
 --

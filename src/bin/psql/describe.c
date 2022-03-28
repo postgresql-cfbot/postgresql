@@ -19,6 +19,7 @@
 #include "catalog/pg_attribute_d.h"
 #include "catalog/pg_cast_d.h"
 #include "catalog/pg_class_d.h"
+#include "catalog/pg_constraint_d.h"
 #include "catalog/pg_default_acl_d.h"
 #include "common.h"
 #include "common/logging.h"
@@ -4590,6 +4591,103 @@ listExtendedStats(const char *pattern)
 
 	myopt.nullPrint = NULL;
 	myopt.title = _("List of extended statistics");
+	myopt.translate_header = true;
+
+	printQuery(res, &myopt, pset.queryFout, false, pset.logfile);
+
+	PQclear(res);
+	return true;
+}
+
+/*
+ * \dco
+ *
+ * Describes constraints
+ *
+ * As with \d, you can specify the kinds of constraints you want:
+ *
+ * c for check
+ * f for foreign key
+ * p for primary key
+ * t for trigger
+ * u for unique
+ * x for exclusion
+ *
+ * and you can mix and match these in any order.
+ */
+bool
+listConstraints(const char *contypes, const char *pattern, bool showSystem)
+{
+	bool		showCheck = strchr(contypes, CONSTRAINT_CHECK) != NULL;
+	bool		showForeign = strchr(contypes, CONSTRAINT_FOREIGN) != NULL;
+	bool		showPrimary = strchr(contypes, CONSTRAINT_PRIMARY) != NULL;
+	bool		showTrigger = strchr(contypes, CONSTRAINT_TRIGGER) != NULL;
+	bool		showUnique = strchr(contypes, CONSTRAINT_UNIQUE) != NULL;
+	bool		showExclusion = strchr(contypes, CONSTRAINT_EXCLUSION) != NULL;
+	bool		showAllkinds = false;
+	PQExpBufferData buf;
+	PGresult   *res;
+	printQueryOpt myopt = pset.popt;
+
+	/* If contype was not selected, show them all */
+	if (!(showCheck || showForeign || showPrimary || showTrigger || showUnique || showExclusion))
+		showAllkinds = true;
+
+	initPQExpBuffer(&buf);
+	printfPQExpBuffer(&buf,
+					  "SELECT \n"
+					  "    n.nspname AS \"%s\", \n"
+					  "    cst.conname AS \"%s\", \n"
+					  "    pg_catalog.pg_get_constraintdef(cst.oid) AS \"%s\", \n"
+					  "    conrelid::pg_catalog.regclass AS \"%s\" \n"
+					  "FROM pg_catalog.pg_constraint cst \n"
+					  "    JOIN pg_catalog.pg_namespace n ON n.oid = cst.connamespace \n",
+					  gettext_noop("Schema"),
+					  gettext_noop("Name"),
+					  gettext_noop("Definition"),
+					  gettext_noop("Table")
+	);
+
+	if (!showSystem && !pattern)
+		appendPQExpBufferStr(&buf,
+							 "WHERE n.nspname <> 'pg_catalog' \n"
+							 "  AND n.nspname <> 'information_schema' \n");
+
+	processSQLNamePattern(pset.db, &buf, pattern,
+						  !showSystem && !pattern, false,
+						  "n.nspname", "cst.conname",
+						  NULL, "pg_catalog.pg_table_is_visible(cst.conrelid)");
+
+	if (!showAllkinds)
+	{
+		appendPQExpBufferStr(&buf, "  AND cst.contype in (");
+
+		if (showCheck)
+			appendPQExpBufferStr(&buf, CppAsString2(CONSTRAINT_CHECK) ",");
+		if (showForeign)
+			appendPQExpBufferStr(&buf, CppAsString2(CONSTRAINT_FOREIGN) ",");
+		if (showPrimary)
+			appendPQExpBufferStr(&buf, CppAsString2(CONSTRAINT_PRIMARY) ",");
+		if (showTrigger)
+			appendPQExpBufferStr(&buf, CppAsString2(CONSTRAINT_TRIGGER) ",");
+		if (showUnique)
+			appendPQExpBufferStr(&buf, CppAsString2(CONSTRAINT_UNIQUE) ",");
+		if (showExclusion)
+			appendPQExpBufferStr(&buf, CppAsString2(CONSTRAINT_EXCLUSION) ",");
+
+		appendPQExpBufferStr(&buf, "''");	/* dummy */
+		appendPQExpBufferStr(&buf, ")\n");
+	}
+
+	appendPQExpBufferStr(&buf, "ORDER BY 1, 2, 3;");
+
+	res = PSQLexec(buf.data);
+	termPQExpBuffer(&buf);
+	if (!res)
+		return false;
+
+	myopt.nullPrint = NULL;
+	myopt.title = _("List of constraints");
 	myopt.translate_header = true;
 
 	printQuery(res, &myopt, pset.queryFout, false, pset.logfile);

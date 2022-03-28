@@ -231,6 +231,7 @@ slashUsage(unsigned short int pager)
 	fprintf(output, _("  \\dAp[+] [AMPTRN [OPFPTRN]]   list support functions of operator families\n"));
 	fprintf(output, _("  \\db[+]  [PATTERN]      list tablespaces\n"));
 	fprintf(output, _("  \\dc[S+] [PATTERN]      list conversions\n"));
+	fprintf(output, _("  \\dco[cfptuxS] [PATTERN] list constraints\n"));
 	fprintf(output, _("  \\dC[+]  [PATTERN]      list casts\n"));
 	fprintf(output, _("  \\dd[S]  [PATTERN]      show object descriptions not displayed elsewhere\n"));
 	fprintf(output, _("  \\dD[S+] [PATTERN]      list domains\n"));

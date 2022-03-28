@@ -1966,6 +1966,25 @@ text_starts_with(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(result);
 }
 
+/*
+ * Generally speaking, we should be resistant to marking anything leakproof
+ * unless it has a very small code footprint that can be easily audited. In
+ * particular, anything that shares a lot of infrastructure with not-leakproof
+ * functions seems quite hazardous. Even if we go through the code and
+ * convince ourselves that it's OK today, innocent changes to the shared
+ * infrastructure could break the leakproofness tomorrow.
+ *
+ * The function bttextcmp() and its cohorts are marked as leakproof, but the
+ * user-visible string processing functions, like upper(), are not, because:
+ *
+ * 1. The query-optimization usefulness of having those be leakproof
+ * is extremely high.
+ *
+ * 2. btree comparison functions should really not have any user-reachable
+ * failure modes (which comes close to being the definition of leakproof). If one
+ * did, that would mean there were legal values of the type that couldn't be put
+ * into a btree index.
+ */
 Datum
 bttextcmp(PG_FUNCTION_ARGS)
 {

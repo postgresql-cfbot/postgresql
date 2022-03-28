@@ -7,11 +7,17 @@
 #
 # This file controls PostgreSQL user name mapping.  It maps external
 # user names to their corresponding PostgreSQL user names.  Records
-# are of the form:
+# are one of these forms:
 #
+# include  FILE
 # MAPNAME  SYSTEM-USERNAME  PG-USERNAME
 #
 # (The uppercase quantities must be replaced by actual values.)
+#
+# If the first field is "include", it's not an authentication record but a
+# directive to include records from another file, specified in the field.  FILE
+# is the file to include.  It can be specified with a relative or absolute
+# path, and can be double quoted if it contains spaces.
 #
 # MAPNAME is the (otherwise freely chosen) map name that was used in
 # pg_hba.conf.  SYSTEM-USERNAME is the detected user name of the

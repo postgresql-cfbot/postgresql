@@ -594,6 +594,15 @@ LANGUAGE internal
 STRICT IMMUTABLE PARALLEL SAFE
 AS 'unicode_is_normalized';
 
+CREATE OR REPLACE FUNCTION
+  pg_hba_matches(
+    IN address inet, IN role text, IN ssl bool DEFAULT false,
+    OUT file_name text, OUT line_num int4, OUT raw_line text)
+RETURNS RECORD
+LANGUAGE INTERNAL
+VOLATILE
+AS 'pg_hba_matches';
+
 --
 -- The default permissions for functions mean that anyone can execute them.
 -- A number of functions shouldn't be executable by just anyone, but rather

@@ -89,8 +89,17 @@
   </para>
 
   <para>
-   Each record specifies a connection type, a client IP address range
-   (if relevant for the connection type), a database name, a user name,
+   Each record can either be an inclusion directive or an authentication rule.
+   Inclusion records specifies files that can be included, which contains
+   additional records.  The records will be inserted in lieu of the inclusion
+   records.  Those records only contains two fields: the
+   <literal>include</literal> directive and the file to be included.  The file
+   can be a relative of absolute path, and can be double quoted if needed.
+  </para>
+
+  <para>
+   Each authentication record specifies a connection type, a client IP address
+   range (if relevant for the connection type), a database name, a user name,
    and the authentication method to be used for connections matching
    these parameters. The first record with a matching connection type,
    client address, requested database, and user name is used to perform
@@ -103,6 +112,7 @@
   <para>
    A record can have several formats:
 <synopsis>
+include       <replaceable>file</replaceable>
 local         <replaceable>database</replaceable>  <replaceable>user</replaceable>  <replaceable>auth-method</replaceable> <optional><replaceable>auth-options</replaceable></optional>
 host          <replaceable>database</replaceable>  <replaceable>user</replaceable>  <replaceable>address</replaceable>     <replaceable>auth-method</replaceable>  <optional><replaceable>auth-options</replaceable></optional>
 hostssl       <replaceable>database</replaceable>  <replaceable>user</replaceable>  <replaceable>address</replaceable>     <replaceable>auth-method</replaceable>  <optional><replaceable>auth-options</replaceable></optional>
@@ -118,6 +128,15 @@ hostnogssenc  <replaceable>database</replaceable>  <replaceable>user</replaceabl
    The meaning of the fields is as follows:
 
    <variablelist>
+    <varlistentry>
+     <term><literal>include</literal></term>
+     <listitem>
+      <para>
+       This line will be replaced with the content of the given file.
+      </para>
+     </listitem>
+    </varlistentry>
+
     <varlistentry>
      <term><literal>local</literal></term>
      <listitem>
@@ -835,8 +854,9 @@ local   db1,db2,@demodbs  all                                   md5
    cluster's data directory.  (It is possible to place the map file
    elsewhere, however; see the <xref linkend="guc-ident-file"/>
    configuration parameter.)
-   The ident map file contains lines of the general form:
+   The ident map file contains lines of two general form:
 <synopsis>
+<replaceable>include</replaceable> <replaceable>file</replaceable>
 <replaceable>map-name</replaceable> <replaceable>system-username</replaceable> <replaceable>database-username</replaceable>
 </synopsis>
    Comments, whitespace and line continuations are handled in the same way as in
@@ -846,6 +866,14 @@ local   db1,db2,@demodbs  all                                   md5
    two fields specify an operating system user name and a matching
    database user name. The same <replaceable>map-name</replaceable> can be
    used repeatedly to specify multiple user-mappings within a single map.
+  </para>
+  <para>
+   The lines can record can either be an inclusion directive or an authentication rule.
+   Inclusion records specifies files that can be included, which contains
+   additional records.  The records will be inserted in lieu of the inclusion
+   records.  Those records only contains two fields: the
+   <literal>include</literal> directive and the file to be included.  The file
+   can be a relative of absolute path, and can be double quoted if needed.
   </para>
   <para>
    There is no restriction regarding how many database users a given
@@ -894,6 +922,16 @@ mymap   /^(.*)@otherdomain\.com$   guest
    (using <literal>pg_ctl reload</literal>, calling the SQL function
    <function>pg_reload_conf()</function>, or using <literal>kill
    -HUP</literal>) to make it re-read the file.
+  </para>
+
+  <para>
+   The system view
+   <link linkend="view-pg-ident-file-mappings"><structname>pg_ident_file_mappings</structname></link>
+   can be helpful for pre-testing changes to the
+   <filename>pg_ident.conf</filename> file, or for diagnosing problems if
+   loading of the file did not have the desired effects.  Rows in the view with
+   non-null <structfield>error</structfield> fields indicate problems in the
+   corresponding lines of the file.
   </para>
 
   <para>

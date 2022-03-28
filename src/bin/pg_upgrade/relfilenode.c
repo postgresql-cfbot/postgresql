@@ -17,6 +17,7 @@
 
 static void transfer_single_new_db(FileNameMap *maps, int size, char *old_tablespace);
 static void transfer_relfile(FileNameMap *map, const char *suffix, bool vm_must_add_frozenbit);
+void process_relfile_segment(FileNameMap *map, const char *suffix, bool vm_must_add_frozenbit, const char *old_file, const char *new_file);
 
 
 /*
@@ -230,30 +231,40 @@ transfer_relfile(FileNameMap *map, const char *type_suffix, bool vm_must_add_fro
 		/* Copying files might take some time, so give feedback. */
 		pg_log(PG_STATUS, "%s", old_file);
 
-		if (vm_must_add_frozenbit && strcmp(type_suffix, "_vm") == 0)
-		{
-			/* Need to rewrite visibility map format */
-			pg_log(PG_VERBOSE, "rewriting \"%s\" to \"%s\"\n",
-				   old_file, new_file);
-			rewriteVisibilityMap(old_file, new_file, map->nspname, map->relname);
-		}
-		else
-			switch (user_opts.transfer_mode)
-			{
-				case TRANSFER_MODE_CLONE:
-					pg_log(PG_VERBOSE, "cloning \"%s\" to \"%s\"\n",
-						   old_file, new_file);
-					cloneFile(old_file, new_file, map->nspname, map->relname);
-					break;
-				case TRANSFER_MODE_COPY:
-					pg_log(PG_VERBOSE, "copying \"%s\" to \"%s\"\n",
-						   old_file, new_file);
-					copyFile(old_file, new_file, map->nspname, map->relname);
-					break;
-				case TRANSFER_MODE_LINK:
-					pg_log(PG_VERBOSE, "linking \"%s\" to \"%s\"\n",
-						   old_file, new_file);
-					linkFile(old_file, new_file, map->nspname, map->relname);
-			}
+		parallel_process_relfile_segment(map, type_suffix, vm_must_add_frozenbit, old_file, new_file);
 	}
+}
+
+
+
+void
+process_relfile_segment(FileNameMap *map, const char *type_suffix, bool vm_must_add_frozenbit, const char *old_file, const char *new_file)
+{
+
+	if (vm_must_add_frozenbit && strcmp(type_suffix, "_vm") == 0)
+	{
+		/* Need to rewrite visibility map format */
+		pg_log(PG_VERBOSE, "rewriting \"%s\" to \"%s\"\n",
+			   old_file, new_file);
+		rewriteVisibilityMap(old_file, new_file, map->nspname, map->relname);
+	}
+	else
+		switch (user_opts.transfer_mode)
+		{
+			case TRANSFER_MODE_CLONE:
+				pg_log(PG_VERBOSE, "cloning \"%s\" to \"%s\"\n",
+					   old_file, new_file);
+				cloneFile(old_file, new_file, map->nspname, map->relname);
+				break;
+			case TRANSFER_MODE_COPY:
+				pg_log(PG_VERBOSE, "copying \"%s\" to \"%s\"\n",
+					   old_file, new_file);
+				copyFile(old_file, new_file, map->nspname, map->relname);
+				break;
+			case TRANSFER_MODE_LINK:
+				pg_log(PG_VERBOSE, "linking \"%s\" to \"%s\"\n",
+					   old_file, new_file);
+				linkFile(old_file, new_file, map->nspname, map->relname);
+				break;
+		}
 }

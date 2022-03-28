@@ -90,6 +90,8 @@
 #define PRETTYFLAG_INDENT		0x0002
 #define PRETTYFLAG_SCHEMA		0x0004
 
+#define GET_PRETTY_FLAGS(pretty) ((pretty) ? (PRETTYFLAG_PAREN | PRETTYFLAG_INDENT | PRETTYFLAG_SCHEMA) : PRETTYFLAG_INDENT)
+
 /* Default line length for pretty-print wrapping: 0 means wrap always */
 #define WRAP_COLUMN_DEFAULT		0
 
@@ -532,7 +534,7 @@ pg_get_ruledef_ext(PG_FUNCTION_ARGS)
 	int			prettyFlags;
 	char	   *res;
 
-	prettyFlags = pretty ? (PRETTYFLAG_PAREN | PRETTYFLAG_INDENT | PRETTYFLAG_SCHEMA) : PRETTYFLAG_INDENT;
+	prettyFlags = GET_PRETTY_FLAGS(pretty);
 
 	res = pg_get_ruledef_worker(ruleoid, prettyFlags);
 
@@ -653,7 +655,7 @@ pg_get_viewdef_ext(PG_FUNCTION_ARGS)
 	int			prettyFlags;
 	char	   *res;
 
-	prettyFlags = pretty ? (PRETTYFLAG_PAREN | PRETTYFLAG_INDENT | PRETTYFLAG_SCHEMA) : PRETTYFLAG_INDENT;
+	prettyFlags = GET_PRETTY_FLAGS(pretty);
 
 	res = pg_get_viewdef_worker(viewoid, prettyFlags, WRAP_COLUMN_DEFAULT);
 
@@ -673,7 +675,7 @@ pg_get_viewdef_wrap(PG_FUNCTION_ARGS)
 	char	   *res;
 
 	/* calling this implies we want pretty printing */
-	prettyFlags = PRETTYFLAG_PAREN | PRETTYFLAG_INDENT | PRETTYFLAG_SCHEMA;
+	prettyFlags = GET_PRETTY_FLAGS(true);
 
 	res = pg_get_viewdef_worker(viewoid, prettyFlags, wrap);
 
@@ -719,7 +721,7 @@ pg_get_viewdef_name_ext(PG_FUNCTION_ARGS)
 	Oid			viewoid;
 	char	   *res;
 
-	prettyFlags = pretty ? (PRETTYFLAG_PAREN | PRETTYFLAG_INDENT | PRETTYFLAG_SCHEMA) : PRETTYFLAG_INDENT;
+	prettyFlags = GET_PRETTY_FLAGS(pretty);
 
 	/* Look up view name.  Can't lock it - we might not have privileges. */
 	viewrel = makeRangeVarFromNameList(textToQualifiedNameList(viewname));
@@ -1062,7 +1064,7 @@ pg_get_triggerdef_worker(Oid trigid, bool pretty)
 		context.windowClause = NIL;
 		context.windowTList = NIL;
 		context.varprefix = true;
-		context.prettyFlags = pretty ? (PRETTYFLAG_PAREN | PRETTYFLAG_INDENT | PRETTYFLAG_SCHEMA) : PRETTYFLAG_INDENT;
+		context.prettyFlags = GET_PRETTY_FLAGS(pretty);
 		context.wrapColumn = WRAP_COLUMN_DEFAULT;
 		context.indentLevel = PRETTYINDENT_STD;
 		context.special_exprkind = EXPR_KIND_NONE;
@@ -1152,7 +1154,7 @@ pg_get_indexdef_ext(PG_FUNCTION_ARGS)
 	int			prettyFlags;
 	char	   *res;
 
-	prettyFlags = pretty ? (PRETTYFLAG_PAREN | PRETTYFLAG_INDENT | PRETTYFLAG_SCHEMA) : PRETTYFLAG_INDENT;
+	prettyFlags = GET_PRETTY_FLAGS(pretty);
 
 	res = pg_get_indexdef_worker(indexrelid, colno, NULL,
 								 colno != 0, false,
@@ -1185,12 +1187,35 @@ pg_get_indexdef_columns(Oid indexrelid, bool pretty)
 {
 	int			prettyFlags;
 
-	prettyFlags = pretty ? (PRETTYFLAG_PAREN | PRETTYFLAG_INDENT | PRETTYFLAG_SCHEMA) : PRETTYFLAG_INDENT;
+	prettyFlags = GET_PRETTY_FLAGS(pretty);
 
 	return pg_get_indexdef_worker(indexrelid, 0, NULL,
 								  true, true,
 								  false, false,
 								  prettyFlags, false);
+}
+
+/* ----------
+ * pg_get_querydef
+ *
+ * Public wrapper around get_query_def to parse back one query parsetree.  The
+ * pretty flags are determined by GET_PRETTY_FLAGS(pretty).
+ *
+ * The result is a palloc'd C string.
+ */
+char *
+pg_get_querydef(Query *query, bool pretty)
+{
+	StringInfoData buf;
+	int			prettyFlags;
+
+	prettyFlags = GET_PRETTY_FLAGS(pretty);
+
+	initStringInfo(&buf);
+
+	get_query_def(query, &buf, NIL, NULL, prettyFlags, WRAP_COLUMN_DEFAULT, 0);
+
+	return buf.data;
 }
 
 /*
@@ -1848,7 +1873,7 @@ pg_get_partkeydef_columns(Oid relid, bool pretty)
 {
 	int			prettyFlags;
 
-	prettyFlags = pretty ? (PRETTYFLAG_PAREN | PRETTYFLAG_INDENT | PRETTYFLAG_SCHEMA) : PRETTYFLAG_INDENT;
+	prettyFlags = GET_PRETTY_FLAGS(pretty);
 
 	return pg_get_partkeydef_worker(relid, prettyFlags, true, false);
 }
@@ -2095,7 +2120,7 @@ pg_get_constraintdef_ext(PG_FUNCTION_ARGS)
 	int			prettyFlags;
 	char	   *res;
 
-	prettyFlags = pretty ? (PRETTYFLAG_PAREN | PRETTYFLAG_INDENT | PRETTYFLAG_SCHEMA) : PRETTYFLAG_INDENT;
+	prettyFlags = GET_PRETTY_FLAGS(pretty);
 
 	res = pg_get_constraintdef_worker(constraintId, false, prettyFlags, true);
 
@@ -2625,7 +2650,7 @@ pg_get_expr_ext(PG_FUNCTION_ARGS)
 	int			prettyFlags;
 	char	   *relname;
 
-	prettyFlags = pretty ? (PRETTYFLAG_PAREN | PRETTYFLAG_INDENT | PRETTYFLAG_SCHEMA) : PRETTYFLAG_INDENT;
+	prettyFlags = GET_PRETTY_FLAGS(pretty);
 
 	if (OidIsValid(relid))
 	{
@@ -11217,6 +11242,16 @@ get_from_clause_item(Node *jtnode, Query *query, deparse_context *context)
 			 */
 			if (strcmp(refname, rte->ctename) != 0)
 				printalias = true;
+		}
+		else if (rte->rtekind == RTE_SUBQUERY)
+		{
+			/*
+			 * For a subquery RTE, always print alias.  A user-specified query
+			 * should only be valid if an alias is provided, but our view
+			 * expansion doesn't generate aliases, so a rewritten query might
+			 * not be valid SQL.
+			 */
+			printalias = true;
 		}
 		if (printalias)
 			appendStringInfo(buf, " %s", quote_identifier(refname));

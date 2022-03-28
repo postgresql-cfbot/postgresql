@@ -23,13 +23,15 @@
  * many upper pages if the keys are reasonable-size) without risking a lot of
  * cascading splits during early insertions.
  *
- * Formerly the index pages being built were kept in shared buffers, but
- * that is of no value (since other backends have no interest in them yet)
- * and it created locking problems for CHECKPOINT, because the upper-level
- * pages were held exclusive-locked for long periods.  Now we just build
- * the pages in local memory and smgrwrite or smgrextend them as we finish
- * them.  They will need to be re-read into shared buffers on first use after
- * the build finishes.
+ * If indexing little enough data, it can be built efficiently in shared
+ * buffers, leaving checkpointer to deal with fsync'ing the data at its
+ * convenience. However, if indexing many pages, building the index in shared
+ * buffers could delay CHECKPOINTs--since the upper-level pages are
+ * exclusive-locked for long periods. In that case, build the pages in local
+ * memory and write or extend them with directmgr as they are finished. If a
+ * CHECKPOINT has begun since the build started, directmgr will fsync the
+ * relation file itself after finishing the build. The index will then need to
+ * be re-read into shared buffers on first use after the build finishes.
  *
  * This code isn't concerned about the FSM at all. The caller is responsible
  * for initializing that.
@@ -57,7 +59,7 @@
 #include "executor/instrument.h"
 #include "miscadmin.h"
 #include "pgstat.h"
-#include "storage/smgr.h"
+#include "storage/directmgr.h"
 #include "tcop/tcopprot.h"		/* pgrminclude ignore */
 #include "utils/rel.h"
 #include "utils/sortsupport.h"
@@ -236,6 +238,7 @@ typedef struct BTPageState
 {
 	Page		btps_page;		/* workspace for page building */
 	BlockNumber btps_blkno;		/* block # to write this page at */
+	Buffer btps_buf; /* buffer to write this page to */
 	IndexTuple	btps_lowkey;	/* page's strict lower bound pivot tuple */
 	OffsetNumber btps_lastoff;	/* last item offset loaded */
 	Size		btps_lastextra; /* last item's extra posting list space */
@@ -253,9 +256,26 @@ typedef struct BTWriteState
 	Relation	index;
 	BTScanInsert inskey;		/* generic insertion scankey */
 	bool		btws_use_wal;	/* dump pages to WAL? */
-	BlockNumber btws_pages_alloced; /* # pages allocated */
-	BlockNumber btws_pages_written; /* # pages written out */
+	BlockNumber btws_pages_alloced; /* # pages allocated for index builds outside SB */
+	BlockNumber btws_pages_written; /* # pages written out for index builds outside SB */
 	Page		btws_zeropage;	/* workspace for filling zeroes */
+	UnBufferedWriteState ub_wstate;
+	/*
+	 * Allocate a new btree page. This does not initialize the page.
+	 */
+	Page (*_bt_bl_alloc_page) (struct BTWriteState *wstate, BlockNumber
+			*blockno, Buffer *buf);
+	/*
+	 * Emit a completed btree page, and release the working storage.
+	 */
+	void (*_bt_blwritepage) (struct BTWriteState *wstate, Page page,
+			BlockNumber blkno, Buffer buf);
+
+	void (*_bt_bl_unbuffered_prep) (UnBufferedWriteState *wstate, bool do_wal,
+			bool do_optimization);
+
+	void (*_bt_bl_unbuffered_finish) (UnBufferedWriteState *wstate,
+			SMgrRelation smgrrel, ForkNumber forknum);
 } BTWriteState;
 
 
@@ -264,10 +284,22 @@ static double _bt_spools_heapscan(Relation heap, Relation index,
 static void _bt_spooldestroy(BTSpool *btspool);
 static void _bt_spool(BTSpool *btspool, ItemPointer self,
 					  Datum *values, bool *isnull);
-static void _bt_leafbuild(BTSpool *btspool, BTSpool *btspool2);
+static void _bt_leafbuild(BTWriteState *wstate, BTSpool *btspool, BTSpool *btspool2);
 static void _bt_build_callback(Relation index, ItemPointer tid, Datum *values,
 							   bool *isnull, bool tupleIsAlive, void *state);
-static Page _bt_blnewpage(uint32 level);
+
+static Page
+_bt_bl_alloc_page_direct(BTWriteState *wstate, BlockNumber *blockno, Buffer *buf);
+static Page
+_bt_bl_alloc_page_shared(BTWriteState *wstate, BlockNumber *blockno, Buffer *buf);
+
+static Page _bt_blnewpage(uint32 level, Page page);
+
+static void
+_bt_blwritepage_direct(BTWriteState *wstate, Page page, BlockNumber blkno, Buffer buf);
+static void
+_bt_blwritepage_shared(BTWriteState *wstate, Page page, BlockNumber blkno, Buffer buf);
+
 static BTPageState *_bt_pagestate(BTWriteState *wstate, uint32 level);
 static void _bt_slideleft(Page rightmostpage);
 static void _bt_sortaddtup(Page page, Size itemsize,
@@ -278,9 +310,10 @@ static void _bt_buildadd(BTWriteState *wstate, BTPageState *state,
 static void _bt_sort_dedup_finish_pending(BTWriteState *wstate,
 										  BTPageState *state,
 										  BTDedupState dstate);
-static void _bt_uppershutdown(BTWriteState *wstate, BTPageState *state);
 static void _bt_load(BTWriteState *wstate,
 					 BTSpool *btspool, BTSpool *btspool2);
+static void _bt_uppershutdown(BTWriteState *wstate, BTPageState *state, Buffer
+		metabuf, Page metapage);
 static void _bt_begin_parallel(BTBuildState *buildstate, bool isconcurrent,
 							   int request);
 static void _bt_end_parallel(BTLeader *btleader);
@@ -293,6 +326,21 @@ static void _bt_parallel_scan_and_sort(BTSpool *btspool, BTSpool *btspool2,
 									   Sharedsort *sharedsort2, int sortmem,
 									   bool progress);
 
+#define BT_BUILD_SB_THRESHOLD 1024
+
+static const BTWriteState wstate_shared = {
+	._bt_bl_alloc_page = _bt_bl_alloc_page_shared,
+	._bt_blwritepage = _bt_blwritepage_shared,
+	._bt_bl_unbuffered_prep = NULL,
+	._bt_bl_unbuffered_finish = NULL,
+};
+
+static const BTWriteState wstate_direct = {
+	._bt_bl_alloc_page = _bt_bl_alloc_page_direct,
+	._bt_blwritepage = _bt_blwritepage_direct,
+	._bt_bl_unbuffered_prep = unbuffered_prep,
+	._bt_bl_unbuffered_finish = unbuffered_finish,
+};
 
 /*
  *	btbuild() -- build a new btree index.
@@ -302,6 +350,7 @@ btbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 {
 	IndexBuildResult *result;
 	BTBuildState buildstate;
+	BTWriteState writestate;
 	double		reltuples;
 
 #ifdef BTREE_BUILD_STATS
@@ -332,8 +381,12 @@ btbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 	 * Finish the build by (1) completing the sort of the spool file, (2)
 	 * inserting the sorted tuples into btree pages and (3) building the upper
 	 * levels.  Finally, it may also be necessary to end use of parallelism.
+	 *
+	 * Don't use shared buffers if the number of tuples is too large.
 	 */
-	_bt_leafbuild(buildstate.spool, buildstate.spool2);
+	writestate = reltuples < BT_BUILD_SB_THRESHOLD ? wstate_shared : wstate_direct;
+
+	_bt_leafbuild(&writestate, buildstate.spool, buildstate.spool2);
 	_bt_spooldestroy(buildstate.spool);
 	if (buildstate.spool2)
 		_bt_spooldestroy(buildstate.spool2);
@@ -541,10 +594,8 @@ _bt_spool(BTSpool *btspool, ItemPointer self, Datum *values, bool *isnull)
  * create an entire btree.
  */
 static void
-_bt_leafbuild(BTSpool *btspool, BTSpool *btspool2)
+_bt_leafbuild(BTWriteState *wstate, BTSpool *btspool, BTSpool *btspool2)
 {
-	BTWriteState wstate;
-
 #ifdef BTREE_BUILD_STATS
 	if (log_btree_build_stats)
 	{
@@ -564,21 +615,38 @@ _bt_leafbuild(BTSpool *btspool, BTSpool *btspool2)
 		tuplesort_performsort(btspool2->sortstate);
 	}
 
-	wstate.heap = btspool->heap;
-	wstate.index = btspool->index;
-	wstate.inskey = _bt_mkscankey(wstate.index, NULL);
-	/* _bt_mkscankey() won't set allequalimage without metapage */
-	wstate.inskey->allequalimage = _bt_allequalimage(wstate.index, true);
-	wstate.btws_use_wal = RelationNeedsWAL(wstate.index);
+	wstate->heap = btspool->heap;
+	wstate->index = btspool->index;
+	wstate->inskey = _bt_mkscankey(wstate->index, NULL);
+	/* _bt-mkscankey() won't set allequalimage without metapage */
+	wstate->inskey->allequalimage = _bt_allequalimage(wstate->index, true);
+	wstate->btws_use_wal = RelationNeedsWAL(wstate->index);
 
 	/* reserve the metapage */
-	wstate.btws_pages_alloced = BTREE_METAPAGE + 1;
-	wstate.btws_pages_written = 0;
-	wstate.btws_zeropage = NULL;	/* until needed */
+	wstate->btws_pages_alloced = 0;
+	wstate->btws_pages_written = 0;
+	wstate->btws_zeropage = NULL;
 
 	pgstat_progress_update_param(PROGRESS_CREATEIDX_SUBPHASE,
 								 PROGRESS_BTREE_PHASE_LEAF_LOAD);
-	_bt_load(&wstate, btspool, btspool2);
+
+	/*
+	 * If not using shared buffers, for a WAL-logged relation, save the redo
+	 * pointer location in case a checkpoint begins during the index build.
+	 */
+	if (wstate->_bt_bl_unbuffered_prep)
+		wstate->_bt_bl_unbuffered_prep(&wstate->ub_wstate,
+				wstate->btws_use_wal, wstate->btws_use_wal);
+
+	_bt_load(wstate, btspool, btspool2);
+
+	/*
+	 * If not using shared buffers, for a WAL-logged relation, check if backend
+	 * must fsync the page itself.
+	 */
+	if (wstate->_bt_bl_unbuffered_finish)
+		wstate->_bt_bl_unbuffered_finish(&wstate->ub_wstate,
+				RelationGetSmgr(wstate->index), MAIN_FORKNUM);
 }
 
 /*
@@ -611,15 +679,15 @@ _bt_build_callback(Relation index,
 }
 
 /*
- * allocate workspace for a new, clean btree page, not linked to any siblings.
+ * Set up workspace for a new, clean btree page, not linked to any siblings.
+ * Caller must allocate the passed in page.
  */
 static Page
-_bt_blnewpage(uint32 level)
+_bt_blnewpage(uint32 level, Page page)
 {
-	Page		page;
 	BTPageOpaque opaque;
 
-	page = (Page) palloc(BLCKSZ);
+	Assert(page);
 
 	/* Zero the page and set up standard page header info */
 	_bt_pageinit(page, BLCKSZ);
@@ -637,19 +705,9 @@ _bt_blnewpage(uint32 level)
 	return page;
 }
 
-/*
- * emit a completed btree page, and release the working storage.
- */
 static void
-_bt_blwritepage(BTWriteState *wstate, Page page, BlockNumber blkno)
+_bt_blwritepage_direct(BTWriteState *wstate, Page page, BlockNumber blkno, Buffer buf)
 {
-	/* XLOG stuff */
-	if (wstate->btws_use_wal)
-	{
-		/* We use the XLOG_FPI record type for this */
-		log_newpage(&wstate->index->rd_node, MAIN_FORKNUM, blkno, page, true);
-	}
-
 	/*
 	 * If we have to write pages nonsequentially, fill in the space with
 	 * zeroes until we come back and overwrite.  This is not logically
@@ -661,34 +719,89 @@ _bt_blwritepage(BTWriteState *wstate, Page page, BlockNumber blkno)
 	{
 		if (!wstate->btws_zeropage)
 			wstate->btws_zeropage = (Page) palloc0(BLCKSZ);
-		/* don't set checksum for all-zero page */
-		smgrextend(RelationGetSmgr(wstate->index), MAIN_FORKNUM,
-				   wstate->btws_pages_written++,
-				   (char *) wstate->btws_zeropage,
-				   true);
+
+		unbuffered_extend(&wstate->ub_wstate, RelationGetSmgr(wstate->index),
+				MAIN_FORKNUM, wstate->btws_pages_written++,
+				wstate->btws_zeropage, true);
 	}
 
-	PageSetChecksumInplace(page, blkno);
 
-	/*
-	 * Now write the page.  There's no need for smgr to schedule an fsync for
-	 * this write; we'll do it ourselves before ending the build.
-	 */
+	/* Now write the page. Either we are extending the file... */
 	if (blkno == wstate->btws_pages_written)
 	{
-		/* extending the file... */
-		smgrextend(RelationGetSmgr(wstate->index), MAIN_FORKNUM, blkno,
-				   (char *) page, true);
+		unbuffered_extend(&wstate->ub_wstate, RelationGetSmgr(wstate->index),
+				MAIN_FORKNUM, blkno, page, false);
+
 		wstate->btws_pages_written++;
 	}
+
+	/* or we are overwriting a block we zero-filled before. */
 	else
 	{
-		/* overwriting a block we zero-filled before */
-		smgrwrite(RelationGetSmgr(wstate->index), MAIN_FORKNUM, blkno,
-				  (char *) page, true);
-	}
+		unbuffered_write(&wstate->ub_wstate, RelationGetSmgr(wstate->index),
+				MAIN_FORKNUM, blkno, page);
 
+		/* We use the XLOG_FPI record type for this */
+		if (wstate->btws_use_wal)
+			log_newpage(&wstate->index->rd_node, MAIN_FORKNUM, blkno, page, true);
+
+	}
 	pfree(page);
+}
+
+static void
+_bt_blwritepage_shared(BTWriteState *wstate, Page page, BlockNumber blkno, Buffer buf)
+{
+	/*
+	 * Indexes built in shared buffers need only to mark the buffer as dirty
+	 * and XLOG it.
+	 */
+	Assert(buf);
+	START_CRIT_SECTION();
+	MarkBufferDirty(buf);
+	if (wstate->btws_use_wal)
+		log_newpage_buffer(buf, true);
+	END_CRIT_SECTION();
+	_bt_relbuf(wstate->index, buf);
+}
+
+static Page
+_bt_bl_alloc_page_direct(BTWriteState *wstate, BlockNumber *blockno, Buffer *buf)
+{
+	 /* buf is only used when using shared buffers, so set it to InvalidBuffer */
+	*buf = InvalidBuffer;
+
+	/*
+	 * Assign block number for the page.
+	 * This will be used to link to sibling page(s) later and, if this is the
+	 * initial page in the level, saved in the BTPageState
+	 */
+	*blockno = wstate->btws_pages_alloced++;
+
+	/* now allocate and set up the new page */
+	return palloc(BLCKSZ);
+}
+
+static Page
+_bt_bl_alloc_page_shared(BTWriteState *wstate, BlockNumber *blockno, Buffer *buf)
+{
+	/*
+	 * Find a shared buffer for the page. Pass mode RBM_ZERO_AND_LOCK to get an
+	 * exclusive lock on the buffer content. No lock on the relation as a whole
+	 * is needed (as in LockRelationForExtension()) because the initial index
+	 * build is not yet complete.
+	 */
+	*buf = ReadBufferExtended(wstate->index, MAIN_FORKNUM, P_NEW,
+			RBM_ZERO_AND_LOCK, NULL);
+
+	/*
+	 * bufmgr will assign a block number for the new page.
+	 * This will be used to link to sibling page(s) later and, if this is the
+	 * initial page in the level, saved in the BTPageState
+	 */
+	*blockno = BufferGetBlockNumber(*buf);
+
+	return BufferGetPage(*buf);
 }
 
 /*
@@ -698,13 +811,20 @@ _bt_blwritepage(BTWriteState *wstate, Page page, BlockNumber blkno)
 static BTPageState *
 _bt_pagestate(BTWriteState *wstate, uint32 level)
 {
+	Buffer buf;
+	BlockNumber blockno;
+
 	BTPageState *state = (BTPageState *) palloc0(sizeof(BTPageState));
 
-	/* create initial page for level */
-	state->btps_page = _bt_blnewpage(level);
+	/*
+	 * Allocate and initialize initial page for the level, and if using shared
+	 * buffers, extend the relation and allocate a shared buffer for the block.
+	 */
+	state->btps_page = _bt_blnewpage(level, wstate->_bt_bl_alloc_page(wstate,
+				&blockno, &buf));
 
-	/* and assign it a page position */
-	state->btps_blkno = wstate->btws_pages_alloced++;
+	state->btps_blkno = blockno;
+	state->btps_buf = buf;
 
 	state->btps_lowkey = NULL;
 	/* initialize lastoff so first item goes into P_FIRSTKEY */
@@ -839,6 +959,7 @@ _bt_buildadd(BTWriteState *wstate, BTPageState *state, IndexTuple itup,
 {
 	Page		npage;
 	BlockNumber nblkno;
+	Buffer nbuf;
 	OffsetNumber last_off;
 	Size		last_truncextra;
 	Size		pgspc;
@@ -853,6 +974,7 @@ _bt_buildadd(BTWriteState *wstate, BTPageState *state, IndexTuple itup,
 
 	npage = state->btps_page;
 	nblkno = state->btps_blkno;
+	nbuf = state->btps_buf;
 	last_off = state->btps_lastoff;
 	last_truncextra = state->btps_lastextra;
 	state->btps_lastextra = truncextra;
@@ -909,15 +1031,14 @@ _bt_buildadd(BTWriteState *wstate, BTPageState *state, IndexTuple itup,
 		 */
 		Page		opage = npage;
 		BlockNumber oblkno = nblkno;
+		Buffer obuf = nbuf;
 		ItemId		ii;
 		ItemId		hii;
 		IndexTuple	oitup;
 
-		/* Create new page of same level */
-		npage = _bt_blnewpage(state->btps_level);
-
-		/* and assign it a page position */
-		nblkno = wstate->btws_pages_alloced++;
+		/* Create and initialize a new page of same level */
+		npage = _bt_blnewpage(state->btps_level,
+				wstate->_bt_bl_alloc_page(wstate, &nblkno, &nbuf));
 
 		/*
 		 * We copy the last item on the page into the new page, and then
@@ -1027,9 +1148,12 @@ _bt_buildadd(BTWriteState *wstate, BTPageState *state, IndexTuple itup,
 
 		/*
 		 * Write out the old page.  We never need to touch it again, so we can
-		 * free the opage workspace too.
+		 * free the opage workspace too. obuf has been released and is no longer
+		 * valid.
 		 */
-		_bt_blwritepage(wstate, opage, oblkno);
+		 wstate->_bt_blwritepage(wstate, opage, oblkno, obuf);
+		 obuf = InvalidBuffer;
+		 opage = NULL;
 
 		/*
 		 * Reset last_off to point to new page
@@ -1064,6 +1188,7 @@ _bt_buildadd(BTWriteState *wstate, BTPageState *state, IndexTuple itup,
 
 	state->btps_page = npage;
 	state->btps_blkno = nblkno;
+	state->btps_buf = nbuf;
 	state->btps_lastoff = last_off;
 }
 
@@ -1109,12 +1234,12 @@ _bt_sort_dedup_finish_pending(BTWriteState *wstate, BTPageState *state,
  * Finish writing out the completed btree.
  */
 static void
-_bt_uppershutdown(BTWriteState *wstate, BTPageState *state)
+_bt_uppershutdown(BTWriteState *wstate, BTPageState *state, Buffer metabuf,
+		Page metapage)
 {
 	BTPageState *s;
 	BlockNumber rootblkno = P_NONE;
 	uint32		rootlevel = 0;
-	Page		metapage;
 
 	/*
 	 * Each iteration of this loop completes one more level of the tree.
@@ -1160,20 +1285,24 @@ _bt_uppershutdown(BTWriteState *wstate, BTPageState *state)
 		 * back one slot.  Then we can dump out the page.
 		 */
 		_bt_slideleft(s->btps_page);
-		_bt_blwritepage(wstate, s->btps_page, s->btps_blkno);
+		wstate->_bt_blwritepage(wstate, s->btps_page, s->btps_blkno, s->btps_buf);
+		s->btps_buf = InvalidBuffer;
 		s->btps_page = NULL;	/* writepage freed the workspace */
 	}
 
 	/*
-	 * As the last step in the process, construct the metapage and make it
+	 * As the last step in the process, initialize the metapage and make it
 	 * point to the new root (unless we had no data at all, in which case it's
 	 * set to point to "P_NONE").  This changes the index to the "valid" state
 	 * by filling in a valid magic number in the metapage.
+	 * After this, metapage will have been freed or invalid and metabuf, if ever
+	 * valid, will have been released.
 	 */
-	metapage = (Page) palloc(BLCKSZ);
 	_bt_initmetapage(metapage, rootblkno, rootlevel,
 					 wstate->inskey->allequalimage);
-	_bt_blwritepage(wstate, metapage, BTREE_METAPAGE);
+	wstate->_bt_blwritepage(wstate, metapage, BTREE_METAPAGE, metabuf);
+	metabuf = InvalidBuffer;
+	metapage = NULL;
 }
 
 /*
@@ -1183,6 +1312,10 @@ _bt_uppershutdown(BTWriteState *wstate, BTPageState *state)
 static void
 _bt_load(BTWriteState *wstate, BTSpool *btspool, BTSpool *btspool2)
 {
+	Page metapage;
+	BlockNumber metablkno;
+	Buffer metabuf;
+
 	BTPageState *state = NULL;
 	bool		merge = (btspool2 != NULL);
 	IndexTuple	itup,
@@ -1197,6 +1330,27 @@ _bt_load(BTWriteState *wstate, BTSpool *btspool, BTSpool *btspool2)
 
 	deduplicate = wstate->inskey->allequalimage && !btspool->isunique &&
 		BTGetDeduplicateItems(wstate->index);
+
+	/*
+	 * Reserve block 0 for the metapage up front.
+	 *
+	 * When using the shared buffers API it is easier to allocate the buffer
+	 * for block 0 first instead of trying skip block 0 and allocate it at the
+	 * end of index build.
+	 *
+	 * When not using the shared buffers API, there is no harm in allocating
+	 * the metapage first. When block 1 is written, the direct writepage
+	 * function will zero-fill block 0. When writing out the metapage at the
+	 * end of index build, it will overwrite that block 0.
+	 *
+	 * The metapage will be initialized and written out at the end of the index
+	 * build when all of the information needed to do so is available.
+	 *
+	 * The block number will always be BTREE_METAPAGE, so the metablkno
+	 * variable is unused and only created to avoid a special case in the
+	 * direct alloc function.
+	 */
+	metapage = wstate->_bt_bl_alloc_page(wstate, &metablkno, &metabuf);
 
 	if (merge)
 	{
@@ -1419,19 +1573,7 @@ _bt_load(BTWriteState *wstate, BTSpool *btspool, BTSpool *btspool2)
 	}
 
 	/* Close down final pages and write the metapage */
-	_bt_uppershutdown(wstate, state);
-
-	/*
-	 * When we WAL-logged index pages, we must nonetheless fsync index files.
-	 * Since we're building outside shared buffers, a CHECKPOINT occurring
-	 * during the build has no way to flush the previously written data to
-	 * disk (indeed it won't know the index even exists).  A crash later on
-	 * would replay WAL from the checkpoint, therefore it wouldn't replay our
-	 * earlier WAL entries. If we do not fsync those pages here, they might
-	 * still not be on disk when the crash occurs.
-	 */
-	if (wstate->btws_use_wal)
-		smgrimmedsync(RelationGetSmgr(wstate->index), MAIN_FORKNUM);
+	_bt_uppershutdown(wstate, state, metabuf, metapage);
 }
 
 /*

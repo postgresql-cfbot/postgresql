@@ -43,6 +43,7 @@
 #include "miscadmin.h"
 #include "optimizer/optimizer.h"
 #include "storage/bufmgr.h"
+#include "storage/directmgr.h"
 #include "storage/smgr.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
@@ -91,6 +92,7 @@ typedef struct
 
 	int64		indtuples;		/* number of tuples indexed */
 
+	UnBufferedWriteState ub_wstate;
 	/*
 	 * Extra data structures used during a buffering build. 'gfbb' contains
 	 * information related to managing the build buffers. 'parentMap' is a
@@ -410,13 +412,15 @@ gist_indexsortbuild(GISTBuildState *state)
 	state->pages_written = 0;
 	state->ready_num_pages = 0;
 
+	unbuffered_prep(&state->ub_wstate, RelationNeedsWAL(state->indexrel), false);
+
 	/*
 	 * Write an empty page as a placeholder for the root page. It will be
 	 * replaced with the real root page at the end.
 	 */
 	page = palloc0(BLCKSZ);
-	smgrextend(RelationGetSmgr(state->indexrel), MAIN_FORKNUM, GIST_ROOT_BLKNO,
-			   page, true);
+	unbuffered_extend(&state->ub_wstate, RelationGetSmgr(state->indexrel),
+			MAIN_FORKNUM, GIST_ROOT_BLKNO, page, true);
 	state->pages_allocated++;
 	state->pages_written++;
 
@@ -458,27 +462,19 @@ gist_indexsortbuild(GISTBuildState *state)
 
 	/* Write out the root */
 	PageSetLSN(levelstate->pages[0], GistBuildLSN);
-	PageSetChecksumInplace(levelstate->pages[0], GIST_ROOT_BLKNO);
-	smgrwrite(RelationGetSmgr(state->indexrel), MAIN_FORKNUM, GIST_ROOT_BLKNO,
-			  levelstate->pages[0], true);
+
+	unbuffered_write(&state->ub_wstate, RelationGetSmgr(state->indexrel),
+			MAIN_FORKNUM, GIST_ROOT_BLKNO, levelstate->pages[0]);
+
 	if (RelationNeedsWAL(state->indexrel))
 		log_newpage(&state->indexrel->rd_node, MAIN_FORKNUM, GIST_ROOT_BLKNO,
 					levelstate->pages[0], true);
 
+	unbuffered_finish(&state->ub_wstate, RelationGetSmgr(state->indexrel),
+			MAIN_FORKNUM);
+
 	pfree(levelstate->pages[0]);
 	pfree(levelstate);
-
-	/*
-	 * When we WAL-logged index pages, we must nonetheless fsync index files.
-	 * Since we're building outside shared buffers, a CHECKPOINT occurring
-	 * during the build has no way to flush the previously written data to
-	 * disk (indeed it won't know the index even exists).  A crash later on
-	 * would replay WAL from the checkpoint, therefore it wouldn't replay our
-	 * earlier WAL entries. If we do not fsync those pages here, they might
-	 * still not be on disk when the crash occurs.
-	 */
-	if (RelationNeedsWAL(state->indexrel))
-		smgrimmedsync(RelationGetSmgr(state->indexrel), MAIN_FORKNUM);
 }
 
 /*
@@ -645,26 +641,18 @@ gist_indexsortbuild_flush_ready_pages(GISTBuildState *state)
 	if (state->ready_num_pages == 0)
 		return;
 
+	/* Currently, the blocks must be buffered in order. */
 	for (int i = 0; i < state->ready_num_pages; i++)
 	{
-		Page		page = state->ready_pages[i];
-		BlockNumber blkno = state->ready_blknos[i];
-
-		/* Currently, the blocks must be buffered in order. */
-		if (blkno != state->pages_written)
+		if (state->ready_blknos[i] != state->pages_written)
 			elog(ERROR, "unexpected block number to flush GiST sorting build");
-
-		PageSetLSN(page, GistBuildLSN);
-		PageSetChecksumInplace(page, blkno);
-		smgrextend(RelationGetSmgr(state->indexrel), MAIN_FORKNUM, blkno, page,
-				   true);
-
 		state->pages_written++;
 	}
 
-	if (RelationNeedsWAL(state->indexrel))
-		log_newpages(&state->indexrel->rd_node, MAIN_FORKNUM, state->ready_num_pages,
-					 state->ready_blknos, state->ready_pages, true);
+	unbuffered_extend_range(&state->ub_wstate,
+			RelationGetSmgr(state->indexrel), MAIN_FORKNUM,
+			state->ready_num_pages, state->ready_blknos, state->ready_pages,
+			false, GistBuildLSN);
 
 	for (int i = 0; i < state->ready_num_pages; i++)
 		pfree(state->ready_pages[i]);

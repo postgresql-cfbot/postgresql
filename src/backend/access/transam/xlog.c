@@ -5986,6 +5986,19 @@ GetLastImportantRecPtr(void)
 	return res;
 }
 
+bool RedoRecPtrChanged(XLogRecPtr comparator_ptr)
+{
+	XLogRecPtr ptr;
+	SpinLockAcquire(&XLogCtl->info_lck);
+	ptr = XLogCtl->RedoRecPtr;
+	SpinLockRelease(&XLogCtl->info_lck);
+
+	if (RedoRecPtr < ptr)
+		RedoRecPtr = ptr;
+
+	return RedoRecPtr != comparator_ptr;
+}
+
 /*
  * Get the time and LSN of the last xlog segment switch
  */

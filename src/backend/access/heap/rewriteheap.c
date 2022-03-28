@@ -81,15 +81,15 @@
  * in the whole table.  Note that if we do fail halfway through a CLUSTER,
  * the old table is still valid, so failure is not catastrophic.
  *
- * We can't use the normal heap_insert function to insert into the new
- * heap, because heap_insert overwrites the visibility information.
- * We use a special-purpose raw_heap_insert function instead, which
- * is optimized for bulk inserting a lot of tuples, knowing that we have
- * exclusive access to the heap.  raw_heap_insert builds new pages in
- * local storage.  When a page is full, or at the end of the process,
- * we insert it to WAL as a single record and then write it to disk
- * directly through smgr.  Note, however, that any data sent to the new
- * heap's TOAST table will go through the normal bufmgr.
+ * We can't use the normal heap_insert function to insert into the new heap,
+ * because heap_insert overwrites the visibility information. We use a
+ * special-purpose raw_heap_insert function instead, which is optimized for
+ * bulk inserting a lot of tuples, knowing that we have exclusive access to the
+ * heap.  raw_heap_insert builds new pages in local storage.  When a page is
+ * full, or at the end of the process, we insert it to WAL as a single record
+ * and then write it to disk directly through directmgr.  Note, however, that
+ * any data sent to the new heap's TOAST table will go through the normal
+ * bufmgr.
  *
  *
  * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
@@ -119,9 +119,9 @@
 #include "replication/logical.h"
 #include "replication/slot.h"
 #include "storage/bufmgr.h"
+#include "storage/directmgr.h"
 #include "storage/fd.h"
 #include "storage/procarray.h"
-#include "storage/smgr.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
 
@@ -152,6 +152,7 @@ typedef struct RewriteStateData
 	HTAB	   *rs_old_new_tid_map; /* unmatched B tuples */
 	HTAB	   *rs_logical_mappings;	/* logical remapping files */
 	uint32		rs_num_rewrite_mappings;	/* # in memory mappings */
+	UnBufferedWriteState rs_unbuffered_wstate;
 }			RewriteStateData;
 
 /*
@@ -265,6 +266,9 @@ begin_heap_rewrite(Relation old_heap, Relation new_heap, TransactionId oldest_xm
 	state->rs_cutoff_multi = cutoff_multi;
 	state->rs_cxt = rw_cxt;
 
+	unbuffered_prep(&state->rs_unbuffered_wstate,
+			RelationNeedsWAL(state->rs_new_rel), false);
+
 	/* Initialize hash tables used to track update chains */
 	hash_ctl.keysize = sizeof(TidHashKey);
 	hash_ctl.entrysize = sizeof(UnresolvedTupData);
@@ -317,28 +321,13 @@ end_heap_rewrite(RewriteState state)
 	/* Write the last page, if any */
 	if (state->rs_buffer_valid)
 	{
-		if (RelationNeedsWAL(state->rs_new_rel))
-			log_newpage(&state->rs_new_rel->rd_node,
-						MAIN_FORKNUM,
-						state->rs_blockno,
-						state->rs_buffer,
-						true);
-
-		PageSetChecksumInplace(state->rs_buffer, state->rs_blockno);
-
-		smgrextend(RelationGetSmgr(state->rs_new_rel), MAIN_FORKNUM,
-				   state->rs_blockno, (char *) state->rs_buffer, true);
+		unbuffered_extend(&state->rs_unbuffered_wstate,
+				RelationGetSmgr(state->rs_new_rel), MAIN_FORKNUM,
+				state->rs_blockno, state->rs_buffer, false);
 	}
 
-	/*
-	 * When we WAL-logged rel pages, we must nonetheless fsync them.  The
-	 * reason is the same as in storage.c's RelationCopyStorage(): we're
-	 * writing data that's not in shared buffers, and so a CHECKPOINT
-	 * occurring during the rewriteheap operation won't have fsync'd data we
-	 * wrote before the checkpoint.
-	 */
-	if (RelationNeedsWAL(state->rs_new_rel))
-		smgrimmedsync(RelationGetSmgr(state->rs_new_rel), MAIN_FORKNUM);
+	unbuffered_finish(&state->rs_unbuffered_wstate,
+			RelationGetSmgr(state->rs_new_rel), MAIN_FORKNUM);
 
 	logical_end_heap_rewrite(state);
 
@@ -676,24 +665,9 @@ raw_heap_insert(RewriteState state, HeapTuple tup)
 			 * contains a tuple.  Hence, unlike RelationGetBufferForTuple(),
 			 * enforce saveFreeSpace unconditionally.
 			 */
-
-			/* XLOG stuff */
-			if (RelationNeedsWAL(state->rs_new_rel))
-				log_newpage(&state->rs_new_rel->rd_node,
-							MAIN_FORKNUM,
-							state->rs_blockno,
-							page,
-							true);
-
-			/*
-			 * Now write the page. We say skipFsync = true because there's no
-			 * need for smgr to schedule an fsync for this write; we'll do it
-			 * ourselves in end_heap_rewrite.
-			 */
-			PageSetChecksumInplace(page, state->rs_blockno);
-
-			smgrextend(RelationGetSmgr(state->rs_new_rel), MAIN_FORKNUM,
-					   state->rs_blockno, (char *) page, true);
+			unbuffered_extend(&state->rs_unbuffered_wstate,
+					RelationGetSmgr(state->rs_new_rel), MAIN_FORKNUM,
+					state->rs_blockno, page, false);
 
 			state->rs_blockno++;
 			state->rs_buffer_valid = false;

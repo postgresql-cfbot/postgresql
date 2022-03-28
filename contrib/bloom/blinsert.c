@@ -19,8 +19,8 @@
 #include "catalog/index.h"
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
+#include "storage/directmgr.h"
 #include "storage/indexfsm.h"
-#include "storage/smgr.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
 
@@ -164,6 +164,16 @@ void
 blbuildempty(Relation index)
 {
 	Page		metapage;
+	UnBufferedWriteState wstate;
+
+	/*
+	 * Though this is an unlogged relation, pass do_wal=true since the init
+	 * fork of an unlogged index must be wal-logged and fsync'd. This currently
+	 * has no effect, as unbuffered_write() does not do log_newpage()
+	 * internally. However, were this to be replaced with unbuffered_extend(),
+	 * do_wal must be true to ensure the data is logged and fsync'd.
+	 */
+	unbuffered_prep(&wstate, true, false);
 
 	/* Construct metapage. */
 	metapage = (Page) palloc(BLCKSZ);
@@ -176,18 +186,13 @@ blbuildempty(Relation index)
 	 * XLOG_DBASE_CREATE or XLOG_TBLSPC_CREATE record.  Therefore, we need
 	 * this even when wal_level=minimal.
 	 */
-	PageSetChecksumInplace(metapage, BLOOM_METAPAGE_BLKNO);
-	smgrwrite(RelationGetSmgr(index), INIT_FORKNUM, BLOOM_METAPAGE_BLKNO,
-			  (char *) metapage, true);
+	unbuffered_write(&wstate, RelationGetSmgr(index), INIT_FORKNUM,
+			BLOOM_METAPAGE_BLKNO, metapage);
+
 	log_newpage(&(RelationGetSmgr(index))->smgr_rnode.node, INIT_FORKNUM,
 				BLOOM_METAPAGE_BLKNO, metapage, true);
 
-	/*
-	 * An immediate sync is required even if we xlog'd the page, because the
-	 * write did not go through shared_buffers and therefore a concurrent
-	 * checkpoint may have moved the redo pointer past our xlog record.
-	 */
-	smgrimmedsync(RelationGetSmgr(index), INIT_FORKNUM);
+	unbuffered_finish(&wstate, RelationGetSmgr(index), INIT_FORKNUM);
 }
 
 /*

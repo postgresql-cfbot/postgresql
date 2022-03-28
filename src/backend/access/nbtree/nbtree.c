@@ -30,10 +30,10 @@
 #include "pgstat.h"
 #include "postmaster/autovacuum.h"
 #include "storage/condition_variable.h"
+#include "storage/directmgr.h"
 #include "storage/indexfsm.h"
 #include "storage/ipc.h"
 #include "storage/lmgr.h"
-#include "storage/smgr.h"
 #include "utils/builtins.h"
 #include "utils/index_selfuncs.h"
 #include "utils/memutils.h"
@@ -152,30 +152,24 @@ void
 btbuildempty(Relation index)
 {
 	Page		metapage;
+	Buffer metabuf;
 
-	/* Construct metapage. */
-	metapage = (Page) palloc(BLCKSZ);
+	/*
+	 * Allocate a buffer for metapage and initialize metapage.
+	 */
+	metabuf = ReadBufferExtended(index, INIT_FORKNUM, P_NEW, RBM_ZERO_AND_LOCK,
+			NULL);
+	metapage = BufferGetPage(metabuf);
 	_bt_initmetapage(metapage, P_NONE, 0, _bt_allequalimage(index, false));
 
 	/*
-	 * Write the page and log it.  It might seem that an immediate sync would
-	 * be sufficient to guarantee that the file exists on disk, but recovery
-	 * itself might remove it while replaying, for example, an
-	 * XLOG_DBASE_CREATE or XLOG_TBLSPC_CREATE record.  Therefore, we need
-	 * this even when wal_level=minimal.
+	 * Mark metapage buffer as dirty and XLOG it
 	 */
-	PageSetChecksumInplace(metapage, BTREE_METAPAGE);
-	smgrwrite(RelationGetSmgr(index), INIT_FORKNUM, BTREE_METAPAGE,
-			  (char *) metapage, true);
-	log_newpage(&RelationGetSmgr(index)->smgr_rnode.node, INIT_FORKNUM,
-				BTREE_METAPAGE, metapage, true);
-
-	/*
-	 * An immediate sync is required even if we xlog'd the page, because the
-	 * write did not go through shared_buffers and therefore a concurrent
-	 * checkpoint may have moved the redo pointer past our xlog record.
-	 */
-	smgrimmedsync(RelationGetSmgr(index), INIT_FORKNUM);
+	START_CRIT_SECTION();
+	MarkBufferDirty(metabuf);
+	log_newpage_buffer(metabuf, true);
+	END_CRIT_SECTION();
+	_bt_relbuf(index, metabuf);
 }
 
 /*
@@ -959,7 +953,7 @@ btvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	 * delete some deletable tuples.  Hence, we must repeatedly check the
 	 * relation length.  We must acquire the relation-extension lock while
 	 * doing so to avoid a race condition: if someone else is extending the
-	 * relation, there is a window where bufmgr/smgr have created a new
+	 * relation, there is a window where bufmgr/directmgr have created a new
 	 * all-zero page but it hasn't yet been write-locked by _bt_getbuf(). If
 	 * we manage to scan such a page here, we'll improperly assume it can be
 	 * recycled.  Taking the lock synchronizes things enough to prevent a

@@ -25,7 +25,7 @@
 #include "catalog/index.h"
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
-#include "storage/smgr.h"
+#include "storage/directmgr.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
 
@@ -156,48 +156,43 @@ void
 spgbuildempty(Relation index)
 {
 	Page		page;
+	UnBufferedWriteState wstate;
+
+	/*
+	 * Though this is an unlogged relation, pass do_wal=true since the init
+	 * fork of an unlogged index must be wal-logged and fsync'd. This currently
+	 * has no effect, as unbuffered_write() does not do log_newpage()
+	 * internally. However, were this to be replaced with unbuffered_extend(),
+	 * do_wal must be true to ensure the data is logged and fsync'd.
+	 */
+	unbuffered_prep(&wstate, true, false);
 
 	/* Construct metapage. */
 	page = (Page) palloc(BLCKSZ);
 	SpGistInitMetapage(page);
 
-	/*
-	 * Write the page and log it unconditionally.  This is important
-	 * particularly for indexes created on tablespaces and databases whose
-	 * creation happened after the last redo pointer as recovery removes any
-	 * of their existing content when the corresponding create records are
-	 * replayed.
-	 */
-	PageSetChecksumInplace(page, SPGIST_METAPAGE_BLKNO);
-	smgrwrite(RelationGetSmgr(index), INIT_FORKNUM, SPGIST_METAPAGE_BLKNO,
-			  (char *) page, true);
+	unbuffered_write(&wstate, RelationGetSmgr(index), INIT_FORKNUM,
+			SPGIST_METAPAGE_BLKNO, page);
 	log_newpage(&(RelationGetSmgr(index))->smgr_rnode.node, INIT_FORKNUM,
 				SPGIST_METAPAGE_BLKNO, page, true);
 
 	/* Likewise for the root page. */
 	SpGistInitPage(page, SPGIST_LEAF);
 
-	PageSetChecksumInplace(page, SPGIST_ROOT_BLKNO);
-	smgrwrite(RelationGetSmgr(index), INIT_FORKNUM, SPGIST_ROOT_BLKNO,
-			  (char *) page, true);
+	unbuffered_write(&wstate, RelationGetSmgr(index), INIT_FORKNUM,
+			SPGIST_ROOT_BLKNO, page);
 	log_newpage(&(RelationGetSmgr(index))->smgr_rnode.node, INIT_FORKNUM,
 				SPGIST_ROOT_BLKNO, page, true);
 
 	/* Likewise for the null-tuples root page. */
 	SpGistInitPage(page, SPGIST_LEAF | SPGIST_NULLS);
 
-	PageSetChecksumInplace(page, SPGIST_NULL_BLKNO);
-	smgrwrite(RelationGetSmgr(index), INIT_FORKNUM, SPGIST_NULL_BLKNO,
-			  (char *) page, true);
+	unbuffered_write(&wstate, RelationGetSmgr(index), INIT_FORKNUM,
+			SPGIST_NULL_BLKNO, page);
 	log_newpage(&(RelationGetSmgr(index))->smgr_rnode.node, INIT_FORKNUM,
 				SPGIST_NULL_BLKNO, page, true);
 
-	/*
-	 * An immediate sync is required even if we xlog'd the pages, because the
-	 * writes did not go through shared buffers and therefore a concurrent
-	 * checkpoint may have moved the redo pointer past our xlog record.
-	 */
-	smgrimmedsync(RelationGetSmgr(index), INIT_FORKNUM);
+	unbuffered_finish(&wstate, RelationGetSmgr(index), INIT_FORKNUM);
 }
 
 /*

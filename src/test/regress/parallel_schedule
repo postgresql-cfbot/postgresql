@@ -70,7 +70,7 @@ ignore: random
 # join depends on create_misc
 # ----------
 test: select_into select_distinct select_distinct_on select_implicit select_having subselect union case join aggregates transactions random portals arrays btree_index hash_index update delete namespace prepared_xacts
-
+test: uniquekey
 # ----------
 # Another group of parallel tests
 # ----------

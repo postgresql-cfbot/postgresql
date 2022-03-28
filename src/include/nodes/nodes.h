@@ -283,7 +283,8 @@ typedef enum NodeTag
 	T_RollupData,
 	T_GroupingSetData,
 	T_StatisticExtInfo,
-
+	T_UniqueKey,
+	T_SingleRow,
 	/*
 	 * TAGS FOR MEMORY NODES (memnodes.h)
 	 */

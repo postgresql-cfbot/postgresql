@@ -355,6 +355,40 @@ set_base_rel_pathlists(PlannerInfo *root)
 }
 
 /*
+ * set_baserel_notnull_attrs
+ *
+ *	Set baserel's notnullattrs based on baserestrictinfo
+ */
+static void
+set_baserel_notnull_attrs(RelOptInfo *rel)
+{
+	List *clauses = extract_actual_clauses(rel->baserestrictinfo, false);
+	ListCell	*lc;
+	foreach(lc, find_nonnullable_vars((Node *)clauses))
+	{
+		Var *var = (Var *) lfirst(lc);
+		if (var->varno != rel->relid)
+		{
+			/* Lateral Join */
+			continue;
+		}
+		Assert(var->varno == rel->relid);
+		rel->notnull_attrs[0] = bms_add_member(rel->notnull_attrs[0],
+											   var->varattno - FirstLowInvalidHeapAttributeNumber);
+	}
+
+	/* Debug Only, Will be removed at last. */
+	if (false)
+	{
+		elog(INFO, "FirstLowInvalidHeapAttributeNumber = %d, BaseRel(%d), notnull_attrs = %s",
+			 FirstLowInvalidHeapAttributeNumber,
+			 rel->relid,
+			 bmsToString(rel->notnull_attrs[0])
+			);
+	}
+}
+
+/*
  * set_rel_size
  *	  Set size estimates for a base relation
  */
@@ -362,6 +396,9 @@ static void
 set_rel_size(PlannerInfo *root, RelOptInfo *rel,
 			 Index rti, RangeTblEntry *rte)
 {
+	/* Set the notnull before the UniqueKey population. */
+	set_baserel_notnull_attrs(rel);
+
 	if (rel->reloptkind == RELOPT_BASEREL &&
 		relation_excluded_by_constraints(root, rel, rte))
 	{
@@ -456,6 +493,8 @@ set_rel_size(PlannerInfo *root, RelOptInfo *rel,
 				break;
 		}
 	}
+
+
 
 	/*
 	 * We insist that all non-dummy rels have a nonzero rowcount estimate.
@@ -579,6 +618,8 @@ set_plain_rel_size(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *rte)
 	 * first since partial unique indexes can affect size estimates.
 	 */
 	check_index_predicates(root, rel);
+
+	populate_baserel_uniquekeys(root, rel);
 
 	/* Mark rel with estimated output rows, width, etc */
 	set_baserel_size_estimates(root, rel);
@@ -2313,6 +2354,8 @@ set_subquery_pathlist(PlannerInfo *root, RelOptInfo *rel,
 		set_dummy_rel_pathlist(rel);
 		return;
 	}
+
+	populate_subquery_uniquekeys(root, rel, sub_final_rel);
 
 	/*
 	 * Mark rel with estimated output rows, width, etc.  Note that we have to

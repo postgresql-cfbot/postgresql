@@ -772,6 +772,26 @@ get_eclass_for_sort_expr(PlannerInfo *root,
 
 /*
  * find_ec_member_matching_expr
+ *		Locate an EquivalenceClass matching the given expr, if any;
+ *		return NULL if no match.
+ */
+EquivalenceClass *
+find_ec_matching_expr(PlannerInfo *root,
+					  Expr *expr,
+					  RelOptInfo *baserel)
+{
+	int i = -1;
+	while ((i = bms_next_member(baserel->eclass_indexes, i)) >= 0)
+	{
+		EquivalenceClass *ec = list_nth(root->eq_classes, i);
+		if (find_ec_member_matching_expr(ec, expr, baserel->relids))
+			return ec;
+	}
+	return NULL;
+}
+
+/*
+ * find_ec_member_matching_expr
  *		Locate an EquivalenceClass member matching the given expr, if any;
  *		return NULL if no match.
  *
@@ -958,6 +978,73 @@ find_em_expr_for_rel(EquivalenceClass *ec, RelOptInfo *rel)
 
 	/* We didn't find any suitable equivalence class expression */
 	return NULL;
+}
+
+
+/*
+ * build_equivalanceclass_list_for_exprs
+ *
+ * 	Given a list of expr, find the related ECs for everyone of them.
+ * if any exprs has no EC related, return NIL.
+ */
+List *
+build_equivalanceclass_list_for_exprs(PlannerInfo *root,
+									  List *exprs,
+									  RelOptInfo *rel)
+{
+	ListCell	*lc;
+	List	*ecs = NIL;
+
+	foreach(lc, exprs)
+	{
+		EquivalenceClass *ec = find_ec_matching_expr(root, lfirst(lc), rel);
+		if (!ec)
+			return NIL;
+		ecs = lappend(ecs, ec);
+	}
+	return ecs;
+}
+
+/*
+ * ec_useful_for_merging
+ *	check if the ec exists in rel's merageable restrictinfo_lists.
+ */
+bool
+ec_useful_for_merging(PlannerInfo *root, RelOptInfo *rel,
+					  EquivalenceClass *ec)
+{
+	/*
+	 * First look into the EquivalenceClass to see if there are any members
+	 * not yet joined to the rel.
+	 */
+	if (rel->has_eclass_joins &&
+		eclass_useful_for_merging(root, ec, rel))
+		return true;
+	else
+	{
+		/*
+		 * Otherwise search the rel's joininfo list, which contains
+		 * non-EquivalenceClass-derivable join clauses that might
+		 * nonetheless be mergejoinable.
+		 */
+		ListCell	*j;
+		foreach(j, rel->joininfo)
+		{
+			RestrictInfo *restrictinfo = (RestrictInfo *) lfirst(j);
+
+			if (restrictinfo->mergeopfamilies == NIL)
+				continue;
+			update_mergeclause_eclasses(root, restrictinfo);
+
+			if (ec == restrictinfo->left_ec ||
+			    ec == restrictinfo->right_ec)
+			{
+				return true;
+			}
+		}
+	}
+
+	return false;
 }
 
 /*

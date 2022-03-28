@@ -4864,6 +4864,8 @@ has_privs_of_role(Oid member, Oid role)
  * Is member a member of role (directly or indirectly)?
  *
  * This is defined to recurse through roles regardless of rolinherit.
+ *
+ * Do not use this for privilege checking, instead use has_privs_of_role()
  */
 bool
 is_member_of_role(Oid member, Oid role)
@@ -4904,6 +4906,8 @@ check_is_member_of_role(Oid member, Oid role)
  *
  * This is identical to is_member_of_role except we ignore superuser
  * status.
+ *
+ * Do not use this for privilege checking, instead use has_privs_of_role()
  */
 bool
 is_member_of_role_nosuper(Oid member, Oid role)

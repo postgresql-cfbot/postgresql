@@ -20016,10 +20016,40 @@ SELECT NULLIF(value, '(none)') ...
       <row>
        <entry role="func_table_entry"><para role="func_signature">
         <indexterm>
+         <primary>range_agg</primary>
+        </indexterm>
+        <function>range_agg</function> ( <parameter>value</parameter>
+         <type>anymultirange</type> )
+        <returnvalue>anymultirange</returnvalue>
+       </para>
+       <para>
+        Computes the union of the non-null input values.
+       </para></entry>
+       <entry>No</entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
          <primary>range_intersect_agg</primary>
         </indexterm>
         <function>range_intersect_agg</function> ( <parameter>value</parameter>
          <type>anyrange</type> )
+        <returnvalue>anymultirange</returnvalue>
+       </para>
+       <para>
+        Computes the intersection of the non-null input values.
+       </para></entry>
+       <entry>No</entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>range_intersect_agg</primary>
+        </indexterm>
+        <function>range_intersect_agg</function> ( <parameter>value</parameter>
+         <type>anymultirange</type> )
         <returnvalue>anymultirange</returnvalue>
        </para>
        <para>

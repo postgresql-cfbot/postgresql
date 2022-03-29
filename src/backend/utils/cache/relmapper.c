@@ -46,6 +46,8 @@
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "access/xloginsert.h"
+#include "access/xlogrecovery.h"
+#include "access/xlogutils.h"
 #include "catalog/catalog.h"
 #include "catalog/pg_tablespace.h"
 #include "catalog/storage.h"
@@ -249,6 +251,63 @@ RelationMapFilenodeToOid(Oid filenode, bool shared)
 	}
 
 	return InvalidOid;
+}
+
+/*
+ * RelationMapOidToFilenodeForDatabase
+ *
+ * Like RelationMapOidToFilenode, but reads the mapping from the indicated
+ * path instead of using the one for the current database.
+ */
+Oid
+RelationMapOidToFilenodeForDatabase(char *dbpath, Oid relationId)
+{
+	RelMapFile	map;
+	int			i;
+
+	/* Read the relmap file from the source database. */
+	read_relmap_file(&map, dbpath, false, ERROR);
+
+	/* Iterate over the relmap entries to find the input relation OID. */
+	for (i = 0; i < map.num_mappings; i++)
+	{
+		if (relationId == map.mappings[i].mapoid)
+			return map.mappings[i].mapfilenode;
+	}
+
+	return InvalidOid;
+}
+
+/*
+ * RelationMapCopy
+ *
+ * Copy relmapfile from source db path to the destination db path and WAL log
+ * the operation. This is intended for use in creating a new relmap file
+ * for a database that doesn't have one yet, not for replacing an existing
+ * relmap file.
+ */
+void
+RelationMapCopy(Oid dbid, Oid tsid, char *srcdbpath, char *dstdbpath)
+{
+	RelMapFile map;
+
+	/*
+	 * Read the relmap file from the source database.
+	 */
+	read_relmap_file(&map, srcdbpath, false, ERROR);
+
+	/*
+	 * Write the same data into the destination database's relmap file.
+	 *
+	 * No sinval is needed because no one can be connected to the destination
+	 * database yet. For the same reason, there is no need to acquire
+	 * RelationMappingLock.
+	 *
+	 * There's no point in trying to preserve files here. The new database
+	 * isn't usable yet anyway, and won't ever be if we can't install a
+	 * relmap file.
+	 */
+	write_relmap_file(&map, true, false, false, dbid, tsid, dstdbpath);
 }
 
 /*
@@ -1023,6 +1082,33 @@ relmap_redo(XLogReaderState *record)
 
 		/* We need to construct the pathname for this database */
 		dbpath = GetDatabasePath(xlrec->dbid, xlrec->tsid);
+		if (!reachedConsistency)
+		{
+			struct stat st;
+
+			/*
+			 * Skip replaying relmap file writes if the parent database
+			 * directory isn't present.  The reason we need to skip it is that
+			 * if we build the database using the wal_log strategy, then we
+			 * will be creating a new relmap file, and if we skipped creating
+			 * the database directory due to a missing tablespace directory,
+			 * then we will also need to skip this step.  For more details on
+			 * why the database directory creation WAL is skipped, refer to
+			 * comments in dbase_redo().
+			 */
+			if (!(stat(dbpath, &st) == 0 && S_ISDIR(st.st_mode)))
+			{
+				XLogRememberMissingDir(xlrec->tsid, xlrec->dbid, dbpath);
+				ereport(WARNING,
+						(errmsg("skipping replay of relmap file write WAL record"),
+						 errdetail("The target database \"%s\" directory was not found.",
+								   dbpath),
+						 errhint("A future WAL record that removes the directory before reaching consistent mode is expected.")));
+				pfree(dbpath);
+
+				return;
+			}
+		}
 
 		/*
 		 * Write out the new map and send sinval, but of course don't write a
@@ -1031,6 +1117,13 @@ relmap_redo(XLogReaderState *record)
 		 *
 		 * There shouldn't be anyone else updating relmaps during WAL replay,
 		 * but grab the lock to interlock against load_relmap_file().
+		 *
+		 * Note that we use the same WAL record for updating the relmap of
+		 * an existing database as we do for creating a new database. In
+		 * the latter case, taking the relmap log and sending sinval messages
+		 * is unnecessary, but harmless. If we wanted to avoid it, we could
+		 * add a flag to the WAL record to indicate which opration is being
+		 * performed.
 		 */
 		LWLockAcquire(RelationMappingLock, LW_EXCLUSIVE);
 		write_relmap_file(&newmap, false, true, false,

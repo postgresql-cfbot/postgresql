@@ -21,6 +21,24 @@ select 'lax $'::jsonpath;
  $
 (1 row)
 
+select 'pg $'::jsonpath;
+ jsonpath 
+----------
+ pg $
+(1 row)
+
+select 'pg strict $'::jsonpath;
+  jsonpath   
+-------------
+ pg strict $
+(1 row)
+
+select 'pg lax $'::jsonpath;
+ jsonpath 
+----------
+ pg $
+(1 row)
+
 select '$.a'::jsonpath;
  jsonpath 
 ----------
@@ -546,6 +564,72 @@ select '((($ + 1)).a + ((2)).b ? ((((@ > 1)) || (exists(@.c)))))'::jsonpath;
                      jsonpath                      
 ---------------------------------------------------
  (($ + 1)."a" + (2)."b"?(@ > 1 || exists (@."c")))
+(1 row)
+
+select 'pg 1, 2 + 3, $.a[*] + 5'::jsonpath;
+         jsonpath          
+---------------------------
+ pg 1, 2 + 3, $."a"[*] + 5
+(1 row)
+
+select 'pg (1, 2, $.a)'::jsonpath;
+    jsonpath    
+----------------
+ pg 1, 2, $."a"
+(1 row)
+
+select 'pg (1, 2, $.a).a[*]'::jsonpath;
+        jsonpath         
+-------------------------
+ pg (1, 2, $."a")."a"[*]
+(1 row)
+
+select 'pg (1, 2, $.a) == 5'::jsonpath;
+        jsonpath         
+-------------------------
+ pg ((1, 2, $."a") == 5)
+(1 row)
+
+select 'pg $[(1, 2, $.a) to (3, 4)]'::jsonpath;
+           jsonpath            
+-------------------------------
+ pg $[(1, 2, $."a") to (3, 4)]
+(1 row)
+
+select 'pg $[(1, (2, $.a)), 3, (4, 5)]'::jsonpath;
+            jsonpath            
+--------------------------------
+ pg $[(1, (2, $."a")),3,(4, 5)]
+(1 row)
+
+select 'pg []'::jsonpath;
+ jsonpath 
+----------
+ pg []
+(1 row)
+
+select 'pg [[1, 2], ([(3, 4, 5), 6], []), $.a[*]]'::jsonpath;
+                  jsonpath                   
+---------------------------------------------
+ pg [[1, 2], ([(3, 4, 5), 6], []), $."a"[*]]
+(1 row)
+
+select 'pg {}'::jsonpath;
+ jsonpath 
+----------
+ pg {}
+(1 row)
+
+select 'pg {a: 1 + 2}'::jsonpath;
+    jsonpath     
+-----------------
+ pg {"a": 1 + 2}
+(1 row)
+
+select 'pg {a: 1 + 2, b : (1,2), c: [$[*],4,5], d: { "e e e": "f f f" }}'::jsonpath;
+                                 jsonpath                                 
+--------------------------------------------------------------------------
+ pg {"a": 1 + 2, "b": (1, 2), "c": [$[*], 4, 5], "d": {"e e e": "f f f"}}
 (1 row)
 
 select '$ ? (@.a < 1)'::jsonpath;

@@ -846,7 +846,7 @@ DoCopyTo(CopyToState cstate)
 															  cstate->file_encoding);
 
 		/* if a header has been requested send the line */
-		if (cstate->opts.header_line)
+		if (cstate->opts.header_line != COPY_HEADER_ABSENT)
 		{
 			bool		hdr_delim = false;
 

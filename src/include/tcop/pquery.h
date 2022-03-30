@@ -21,6 +21,8 @@ struct PlannedStmt;				/* avoid including plannodes.h here */
 
 
 extern PGDLLIMPORT Portal ActivePortal;
+extern PGDLLIMPORT QueryDesc *ActiveQueryDesc;
+extern PGDLLIMPORT QueryDesc *save_ActiveQueryDesc;
 
 
 extern PortalStrategy ChoosePortalStrategy(List *stmts);

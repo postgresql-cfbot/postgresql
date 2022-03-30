@@ -412,6 +412,8 @@ task:
 
   test_regress_parallel_script: |
     %T_C% perl src/tools/msvc/vcregress.pl check parallel
+  test_contrib_basebackup_to_shell_script: |
+    %T_C% perl src/tools/msvc/vcregress.pl taptest ./contrib/basebackup_to_shell
   startcreate_script: |
     rem paths to binaries need backslashes
     tmp_install\bin\pg_ctl.exe initdb -D tmp_check/db -l tmp_check/initdb.log --options=--no-sync

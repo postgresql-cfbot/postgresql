@@ -21,6 +21,8 @@
  * allpaths.c
  */
 extern PGDLLIMPORT bool enable_geqo;
+extern PGDLLIMPORT bool enable_fractional_paths;
+extern PGDLLIMPORT bool enable_fractional_incremental_paths;
 extern PGDLLIMPORT int geqo_threshold;
 extern PGDLLIMPORT int min_parallel_table_scan_size;
 extern PGDLLIMPORT int min_parallel_index_scan_size;
@@ -207,10 +209,13 @@ extern Path *get_cheapest_path_for_pathkeys(List *paths, List *pathkeys,
 											Relids required_outer,
 											CostSelector cost_criterion,
 											bool require_parallel_safe);
-extern Path *get_cheapest_fractional_path_for_pathkeys(List *paths,
+extern Path *get_cheapest_fractional_path_for_pathkeys(PlannerInfo *root,
+													   RelOptInfo *rel,
+													   List *paths,
 													   List *pathkeys,
 													   Relids required_outer,
-													   double fraction);
+													   double fraction,
+													   bool incremental_sort);
 extern Path *get_cheapest_parallel_safe_total_inner(List *paths);
 extern List *build_index_pathkeys(PlannerInfo *root, IndexOptInfo *index,
 								  ScanDirection scandir);

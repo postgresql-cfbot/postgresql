@@ -60,6 +60,8 @@ typedef struct pushdown_safety_info
 
 /* These parameters are set by GUC */
 bool		enable_geqo = false;	/* just in case GUC doesn't set it */
+bool		enable_fractional_paths = true;	/* just in case GUC doesn't set it */
+bool		enable_fractional_incremental_paths = true;	/* just in case GUC doesn't set it */
 int			geqo_threshold;
 int			min_parallel_table_scan_size;
 int			min_parallel_index_scan_size;
@@ -1784,15 +1786,18 @@ generate_orderedappend_paths(PlannerInfo *root, RelOptInfo *rel,
 			 * When needed (building fractional path), determine the cheapest
 			 * fractional path too.
 			 */
-			if (root->tuple_fraction > 0)
+			if (enable_fractional_paths && (root->tuple_fraction > 0))
 			{
 				double	path_fraction = (1.0 / root->tuple_fraction);
 
 				cheapest_fractional =
-					get_cheapest_fractional_path_for_pathkeys(childrel->pathlist,
+					get_cheapest_fractional_path_for_pathkeys(root,
+															  childrel,
+															  childrel->pathlist,
 															  pathkeys,
 															  NULL,
-															  path_fraction);
+															  path_fraction,
+															  enable_fractional_incremental_paths);
 
 				/*
 				 * If we found no path with matching pathkeys, use the cheapest

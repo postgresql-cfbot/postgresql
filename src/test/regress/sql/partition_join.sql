@@ -1165,5 +1165,53 @@ SELECT * FROM fract_t x LEFT JOIN fract_t y USING (id) ORDER BY id DESC LIMIT 10
 -- cleanup
 DROP TABLE fract_t;
 
+-- partitionwise join with fractional paths and incremental sort
+CREATE TABLE fract_t (id1 BIGINT, id2 BIGINT, PRIMARY KEY (id1)) PARTITION BY RANGE (id1);
+CREATE TABLE fract_t0 PARTITION OF fract_t FOR VALUES FROM ('0') TO ('1000');
+CREATE TABLE fract_t1 PARTITION OF fract_t FOR VALUES FROM ('1000') TO ('2000');
+
+
+CREATE INDEX ON fract_t0 (id1, id2);
+
+-- insert data
+INSERT INTO fract_t (id1, id2) (SELECT i, i FROM generate_series(0, 1999) s(i));
+ANALYZE fract_t;
+
+-- verify plan; nested index only scans
+SET max_parallel_workers_per_gather = 0;
+
+-- important, otherwise a plan with higher cost wins
+SET enable_partitionwise_join = off;
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM fract_t x LEFT JOIN fract_t y USING (id1, id2) ORDER BY id1 ASC, id2 ASC LIMIT 10;
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM fract_t x LEFT JOIN fract_t y USING (id1, id2) ORDER BY id1 DESC, id2 DESC LIMIT 10;
+
+-- no incremental sorts below append
+SET enable_fractional_incremental_paths = off;
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM fract_t x LEFT JOIN fract_t y USING (id1, id2) ORDER BY id1 ASC, id2 ASC LIMIT 10;
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM fract_t x LEFT JOIN fract_t y USING (id1, id2) ORDER BY id1 DESC, id2 DESC LIMIT 10;
+
+-- no fractional paths
+SET enable_fractional_paths = off;
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM fract_t x LEFT JOIN fract_t y USING (id1, id2) ORDER BY id1 ASC, id2 ASC LIMIT 10;
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM fract_t x LEFT JOIN fract_t y USING (id1, id2) ORDER BY id1 DESC, id2 DESC LIMIT 10;
+
+
+-- cleanup
+DROP TABLE fract_t;
+
+
+
 RESET max_parallel_workers_per_gather;
 RESET enable_partitionwise_join;

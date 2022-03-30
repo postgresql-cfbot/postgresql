@@ -11,19 +11,21 @@
  * CREATE SCHEMA testlibpq3;
  * SET search_path = testlibpq3;
  * SET standard_conforming_strings = ON;
- * CREATE TABLE test1 (i int4, t text, b bytea);
- * INSERT INTO test1 values (1, 'joe''s place', '\000\001\002\003\004');
- * INSERT INTO test1 values (2, 'ho there', '\004\003\002\001\000');
+ * CREATE TABLE test1 (i int4, r real, t text, b bytea);
+ * INSERT INTO test1 values (1, 2.3, 'joe''s place', '\000\001\002\003\004');
+ * INSERT INTO test1 values (2, 4.5 'ho there', '\004\003\002\001\000');
  *
  * The expected output is:
  *
  * tuple 0: got
  *	i = (4 bytes) 1
+ *	r = (4 bytes) 2.3
  *	t = (11 bytes) 'joe's place'
  *	b = (5 bytes) \000\001\002\003\004
  *
  * tuple 0: got
  *	i = (4 bytes) 2
+ *	r = (4 bytes) 4.5
  *	t = (8 bytes) 'ho there'
  *	b = (5 bytes) \004\003\002\001\000
  */
@@ -62,32 +64,41 @@ show_binary_results(PGresult *res)
 	int			i,
 				j;
 	int			i_fnum,
+				r_fnum,
 				t_fnum,
 				b_fnum;
 
 	/* Use PQfnumber to avoid assumptions about field order in result */
 	i_fnum = PQfnumber(res, "i");
+	r_fnum = PQfnumber(res, "r");
 	t_fnum = PQfnumber(res, "t");
 	b_fnum = PQfnumber(res, "b");
 
 	for (i = 0; i < PQntuples(res); i++)
 	{
 		char	   *iptr;
+		char	   *rptr;
 		char	   *tptr;
 		char	   *bptr;
 		int			blen;
 		int			ival;
+		union {
+			int		ival;
+			float	fval;
+		}			rval;
 
 		/* Get the field values (we ignore possibility they are null!) */
 		iptr = PQgetvalue(res, i, i_fnum);
+		rptr = PQgetvalue(res, i, r_fnum);
 		tptr = PQgetvalue(res, i, t_fnum);
 		bptr = PQgetvalue(res, i, b_fnum);
 
 		/*
-		 * The binary representation of INT4 is in network byte order, which
-		 * we'd better coerce to the local byte order.
+		 * The binary representation of INT4 and REAL are in network byte
+		 * order, which we'd better coerce to the local byte order.
 		 */
 		ival = ntohl(*((uint32_t *) iptr));
+		rval.ival = ntohl(*((uint32_t *) rptr));
 
 		/*
 		 * The binary representation of TEXT is, well, text, and since libpq
@@ -102,6 +113,8 @@ show_binary_results(PGresult *res)
 		printf("tuple %d: got\n", i);
 		printf(" i = (%d bytes) %d\n",
 			   PQgetlength(res, i, i_fnum), ival);
+		printf(" r = (%d bytes) %f\n",
+			   PQgetlength(res, i, r_fnum), rval.fval);
 		printf(" t = (%d bytes) '%s'\n",
 			   PQgetlength(res, i, t_fnum), tptr);
 		printf(" b = (%d bytes) ", blen);

@@ -47,7 +47,7 @@ my @contrib_excludes = (
 	'hstore_plperl',    'hstore_plpython',
 	'intagg',           'jsonb_plperl',
 	'jsonb_plpython',   'ltree_plpython',
-	'sepgsql',
+	'sepgsql',			'test_dependencies',
 	'brin',             'test_extensions',
 	'test_misc',        'test_pg_dump',
 	'snapshot_too_old', 'unsafe_tests');

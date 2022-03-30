@@ -83,6 +83,7 @@
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
 
+#include "utils/snapmgr.h"
 
 /*
  * Deletion processing requires additional state for each ObjectAddress that
@@ -105,6 +106,7 @@ typedef struct
 #define DEPFLAG_REVERSE		0x0040	/* reverse internal/extension link */
 #define DEPFLAG_IS_PART		0x0080	/* has a partition dependency */
 #define DEPFLAG_SUBOBJECT	0x0100	/* subobject of another deletable object */
+#define DEPFLAG_DIRTY		0x0200	/* reached thanks to dirty snapshot */
 
 
 /* expansible list of ObjectAddresses */
@@ -491,6 +493,7 @@ findDependentObjects(const ObjectAddress *object,
 	int			maxDependentObjects;
 	ObjectAddressStack mystack;
 	ObjectAddressExtra extra;
+	Snapshot dirtySnapshot;
 
 	/*
 	 * If the target object is already being visited in an outer recursion
@@ -566,8 +569,17 @@ findDependentObjects(const ObjectAddress *object,
 		nkeys = 2;
 	}
 
+	/*
+	 * We use a dirty snapshot so that we see all potential dependencies,
+	 * committed or not. Without doing this we would miss objects created
+	 * during in-flight transactions.
+	 */
+	UseDirtyCatalogSnapshot = true;
+
+	dirtySnapshot = GetCatalogSnapshot(RelationGetRelid(*depRel));
+
 	scan = systable_beginscan(*depRel, DependDependerIndexId, true,
-							  NULL, nkeys, key);
+							  dirtySnapshot, nkeys, key);
 
 	/* initialize variables that loop may fill */
 	memset(&owningObject, 0, sizeof(owningObject));
@@ -580,6 +592,16 @@ findDependentObjects(const ObjectAddress *object,
 		otherObject.classId = foundDep->refclassid;
 		otherObject.objectId = foundDep->refobjid;
 		otherObject.objectSubId = foundDep->refobjsubid;
+
+		/*
+		 * dirtySnapshot->xmin is set to the tuple's xmin
+		 * if that is another transaction that's still in
+		 * progress; or to InvalidTransactionId if the
+		 * tuple's xmin is committed good, committed dead,
+		 * or my own xact. See snapshot.h comments.
+		 */
+		if(TransactionIdIsValid(dirtySnapshot->xmin))
+			objflags |= DEPFLAG_DIRTY;
 
 		/*
 		 * When scanning dependencies of a whole object, we may find rows
@@ -704,7 +726,7 @@ findDependentObjects(const ObjectAddress *object,
 				 * interesting anymore.  We test this by checking the
 				 * pg_depend entry (see notes below).
 				 */
-				if (!systable_recheck_tuple(scan, tup))
+				if (!systable_recheck_tuple(scan, tup, true))
 				{
 					systable_endscan(scan);
 					ReleaseDeletionLock(&otherObject);
@@ -859,8 +881,18 @@ findDependentObjects(const ObjectAddress *object,
 	else
 		nkeys = 2;
 
+	/*
+	 * We use a dirty snapshot so that we see all potential dependencies,
+	 * committed or not. Without doing this we would miss objects created
+	 * during in-flight transactions.
+	 */
+
+	UseDirtyCatalogSnapshot = true;
+
+	dirtySnapshot = GetCatalogSnapshot(RelationGetRelid(*depRel));
+
 	scan = systable_beginscan(*depRel, DependReferenceIndexId, true,
-							  NULL, nkeys, key);
+							  dirtySnapshot, nkeys, key);
 
 	while (HeapTupleIsValid(tup = systable_getnext(scan)))
 	{
@@ -893,7 +925,7 @@ findDependentObjects(const ObjectAddress *object,
 		 * if the pg_depend tuple we are looking at is still live. (If the
 		 * object got deleted, the tuple would have been deleted too.)
 		 */
-		if (!systable_recheck_tuple(scan, tup))
+		if (!systable_recheck_tuple(scan, tup, true))
 		{
 			/* release the now-useless lock */
 			ReleaseDeletionLock(&otherObject);
@@ -930,6 +962,10 @@ findDependentObjects(const ObjectAddress *object,
 				subflags = 0;	/* keep compiler quiet */
 				break;
 		}
+
+		/* This tuple is for an in-flight transaction. */
+		if(TransactionIdIsValid(dirtySnapshot->xmin))
+			subflags |= DEPFLAG_DIRTY;
 
 		/* And add it to the pending-objects list */
 		if (numDependentObjects >= maxDependentObjects)
@@ -1025,6 +1061,7 @@ reportDependentObjects(const ObjectAddresses *targetObjects,
 	int			numReportedClient = 0;
 	int			numNotReportedClient = 0;
 	int			i;
+	int			num_dirty;
 
 	/*
 	 * If we need to delete any partition-dependent objects, make sure that
@@ -1036,9 +1073,15 @@ reportDependentObjects(const ObjectAddresses *targetObjects,
 	 * trigger this complaint is to explicitly try to delete one partition of
 	 * a partitioned object.
 	 */
+
+	num_dirty = 0;
+
 	for (i = 0; i < targetObjects->numrefs; i++)
 	{
 		const ObjectAddressExtra *extra = &targetObjects->extras[i];
+
+		if (extra->flags & DEPFLAG_DIRTY)
+			num_dirty++;
 
 		if ((extra->flags & DEPFLAG_IS_PART) &&
 			!(extra->flags & DEPFLAG_PARTITION))
@@ -1061,6 +1104,7 @@ reportDependentObjects(const ObjectAddresses *targetObjects,
 	 * the work.
 	 */
 	if (behavior == DROP_CASCADE &&
+		num_dirty == 0 &&
 		!message_level_is_interesting(msglevel))
 		return;
 
@@ -1092,6 +1136,10 @@ reportDependentObjects(const ObjectAddresses *targetObjects,
 		if (extra->flags & DEPFLAG_SUBOBJECT)
 			continue;
 
+		/* We need a dirty snapshot to get its description. */
+		if (extra->flags & DEPFLAG_DIRTY)
+			UseDirtyCatalogSnapshot = true;
+
 		objDesc = getObjectDescription(obj, false);
 
 		/* An object being dropped concurrently doesn't need to be reported */
@@ -1118,7 +1166,7 @@ reportDependentObjects(const ObjectAddresses *targetObjects,
 					(errmsg_internal("drop auto-cascades to %s",
 									 objDesc)));
 		}
-		else if (behavior == DROP_RESTRICT)
+		else if (behavior == DROP_RESTRICT || (behavior == DROP_CASCADE && num_dirty > 0))
 		{
 			char	   *otherDesc = getObjectDescription(&extra->dependee,
 														 false);
@@ -1130,8 +1178,12 @@ reportDependentObjects(const ObjectAddresses *targetObjects,
 					/* separate entries with a newline */
 					if (clientdetail.len != 0)
 						appendStringInfoChar(&clientdetail, '\n');
-					appendStringInfo(&clientdetail, _("%s depends on %s"),
-									 objDesc, otherDesc);
+					if (!(extra->flags & DEPFLAG_DIRTY))
+						appendStringInfo(&clientdetail, _("%s depends on %s"),
+										 objDesc, otherDesc);
+					else
+						appendStringInfo(&clientdetail, _("%s (not yet committed) depends on %s"),
+										 objDesc, otherDesc);
 					numReportedClient++;
 				}
 				else
@@ -1139,8 +1191,12 @@ reportDependentObjects(const ObjectAddresses *targetObjects,
 				/* separate entries with a newline */
 				if (logdetail.len != 0)
 					appendStringInfoChar(&logdetail, '\n');
-				appendStringInfo(&logdetail, _("%s depends on %s"),
-								 objDesc, otherDesc);
+				if (!(extra->flags & DEPFLAG_DIRTY))
+					appendStringInfo(&logdetail, _("%s depends on %s"),
+									 objDesc, otherDesc);
+				else
+					appendStringInfo(&logdetail, _("%s (not yet committed) depends on %s"),
+									 objDesc, otherDesc);
 				pfree(otherDesc);
 			}
 			else
@@ -1180,6 +1236,12 @@ reportDependentObjects(const ObjectAddresses *targetObjects,
 
 	if (!ok)
 	{
+		const char *hint_msg;
+		if (num_dirty > 0)
+			hint_msg = "DROP and DROP CASCADE won't work when there are uncommitted dependencies.";
+		else
+			hint_msg = "Use DROP ... CASCADE to drop the dependent objects too.";
+
 		if (origObject)
 			ereport(ERROR,
 					(errcode(ERRCODE_DEPENDENT_OBJECTS_STILL_EXIST),
@@ -1187,14 +1249,14 @@ reportDependentObjects(const ObjectAddresses *targetObjects,
 							getObjectDescription(origObject, false)),
 					 errdetail("%s", clientdetail.data),
 					 errdetail_log("%s", logdetail.data),
-					 errhint("Use DROP ... CASCADE to drop the dependent objects too.")));
+					 errhint("%s", hint_msg)));
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_DEPENDENT_OBJECTS_STILL_EXIST),
 					 errmsg("cannot drop desired object(s) because other objects depend on them"),
 					 errdetail("%s", clientdetail.data),
 					 errdetail_log("%s", logdetail.data),
-					 errhint("Use DROP ... CASCADE to drop the dependent objects too.")));
+					 errhint("%s", hint_msg)));
 	}
 	else if (numReportedClient > 1)
 	{

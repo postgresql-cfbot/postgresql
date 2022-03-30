@@ -95,6 +95,7 @@ volatile OldSnapshotControlData *oldSnapshotControl;
 static SnapshotData CurrentSnapshotData = {SNAPSHOT_MVCC};
 static SnapshotData SecondarySnapshotData = {SNAPSHOT_MVCC};
 SnapshotData CatalogSnapshotData = {SNAPSHOT_MVCC};
+SnapshotData DirtyCatalogSnapshotData = {SNAPSHOT_DIRTY};
 SnapshotData SnapshotSelfData = {SNAPSHOT_SELF};
 SnapshotData SnapshotAnyData = {SNAPSHOT_ANY};
 
@@ -102,6 +103,7 @@ SnapshotData SnapshotAnyData = {SNAPSHOT_ANY};
 static Snapshot CurrentSnapshot = NULL;
 static Snapshot SecondarySnapshot = NULL;
 static Snapshot CatalogSnapshot = NULL;
+static Snapshot DirtyCatalogSnapshot = NULL;
 static Snapshot HistoricSnapshot = NULL;
 
 /*
@@ -147,6 +149,7 @@ static pairingheap RegisteredSnapshots = {&xmin_cmp, NULL, NULL};
 
 /* first GetTransactionSnapshot call in a transaction? */
 bool		FirstSnapshotSet = false;
+bool		UseDirtyCatalogSnapshot = false;
 
 /*
  * Remember the serializable transaction snapshot, if any.  We cannot trust
@@ -310,6 +313,7 @@ GetTransactionSnapshot(void)
 
 	/* Don't allow catalog snapshot to be older than xact snapshot. */
 	InvalidateCatalogSnapshot();
+	InvalidateDirtyCatalogSnapshot();
 
 	CurrentSnapshot = GetSnapshotData(&CurrentSnapshotData);
 
@@ -407,6 +411,9 @@ GetCatalogSnapshot(Oid relid)
 Snapshot
 GetNonHistoricCatalogSnapshot(Oid relid)
 {
+	Snapshot *snap;
+	SnapshotData *snapdata;
+
 	/*
 	 * If the caller is trying to scan a relation that has no syscache, no
 	 * catcache invalidations will be sent when it is updated.  For a few key
@@ -414,15 +421,31 @@ GetNonHistoricCatalogSnapshot(Oid relid)
 	 * scan a relation for which neither catcache nor snapshot invalidations
 	 * are sent, we must refresh the snapshot every time.
 	 */
-	if (CatalogSnapshot &&
+	if (!UseDirtyCatalogSnapshot)
+	{
+		snap = &CatalogSnapshot;
+		snapdata = &CatalogSnapshotData;
+	}
+	else
+	{
+		snap = &DirtyCatalogSnapshot;
+		snapdata = &DirtyCatalogSnapshotData;
+	}
+
+	if (*snap &&
 		!RelationInvalidatesSnapshotsOnly(relid) &&
 		!RelationHasSysCache(relid))
-		InvalidateCatalogSnapshot();
+	{
+		if (!UseDirtyCatalogSnapshot)
+			InvalidateCatalogSnapshot();
+		else
+			InvalidateDirtyCatalogSnapshot();
+	}
 
-	if (CatalogSnapshot == NULL)
+	if (*snap == NULL)
 	{
 		/* Get new snapshot. */
-		CatalogSnapshot = GetSnapshotData(&CatalogSnapshotData);
+		*snap = GetSnapshotData(snapdata);
 
 		/*
 		 * Make sure the catalog snapshot will be accounted for in decisions
@@ -436,10 +459,11 @@ GetNonHistoricCatalogSnapshot(Oid relid)
 		 * NB: it had better be impossible for this to throw error, since the
 		 * CatalogSnapshot pointer is already valid.
 		 */
-		pairingheap_add(&RegisteredSnapshots, &CatalogSnapshot->ph_node);
+		pairingheap_add(&RegisteredSnapshots, &snapdata->ph_node);
 	}
 
-	return CatalogSnapshot;
+	UseDirtyCatalogSnapshot = false;
+	return *snap;
 }
 
 /*
@@ -463,6 +487,26 @@ InvalidateCatalogSnapshot(void)
 	}
 }
 
+/*
+ * InvalidateDirtyCatalogSnapshot
+ *		Mark the current catalog snapshot, if any, as invalid
+ *
+ * We could change this API to allow the caller to provide more fine-grained
+ * invalidation details, so that a change to relation A wouldn't prevent us
+ * from using our cached snapshot to scan relation B, but so far there's no
+ * evidence that the CPU cycles we spent tracking such fine details would be
+ * well-spent.
+ */
+void
+InvalidateDirtyCatalogSnapshot(void)
+{
+	if (DirtyCatalogSnapshot)
+	{
+		pairingheap_remove(&RegisteredSnapshots, &DirtyCatalogSnapshot->ph_node);
+		DirtyCatalogSnapshot = NULL;
+		SnapshotResetXmin();
+	}
+}
 /*
  * InvalidateCatalogSnapshotConditionally
  *		Drop catalog snapshot if it's the only one we have
@@ -1074,6 +1118,7 @@ AtEOXact_Snapshot(bool isCommit, bool resetXmin)
 
 	/* Drop catalog snapshot if any */
 	InvalidateCatalogSnapshot();
+	InvalidateDirtyCatalogSnapshot();
 
 	/* On commit, complain about leftover snapshots */
 	if (isCommit)
@@ -1100,6 +1145,7 @@ AtEOXact_Snapshot(bool isCommit, bool resetXmin)
 	SecondarySnapshot = NULL;
 
 	FirstSnapshotSet = false;
+	UseDirtyCatalogSnapshot = false;
 
 	/*
 	 * During normal commit processing, we call ProcArrayEndTransaction() to

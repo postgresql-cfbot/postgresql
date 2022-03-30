@@ -16,6 +16,7 @@ SUBDIRS = \
 		  spgist_name_ops \
 		  test_bloomfilter \
 		  test_ddl_deparse \
+		  test_dependencies \
 		  test_extensions \
 		  test_ginpostinglist \
 		  test_integerset \

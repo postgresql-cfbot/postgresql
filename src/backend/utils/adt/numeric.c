@@ -5772,6 +5772,52 @@ int8_avg_deserialize(PG_FUNCTION_ARGS)
 }
 
 /*
+ * int8_sum_to_internal_serialize
+ *		Convert int8 argument to serialized internal representation
+ */
+Datum
+int8_sum_to_internal_serialize(PG_FUNCTION_ARGS)
+{
+	PolyNumAggState *state = NULL;
+	StringInfoData buf;
+	bytea	   *result;
+	NumericVar	tmp_var;
+
+	state = (PolyNumAggState *) palloc0(sizeof(PolyNumAggState));
+	state->calcSumX2 = false;
+
+	if (!PG_ARGISNULL(0))
+	{
+#ifdef HAVE_INT128
+		do_int128_accum(state, (int128) PG_GETARG_INT64(0));
+#else
+		do_numeric_accum(state, int64_to_numeric(PG_GETARG_INT64(0)));
+#endif
+	}
+
+	init_var(&tmp_var);
+
+	pq_begintypsend(&buf);
+
+	/* N */
+	pq_sendint64(&buf, state->N);
+
+	/* sumX */
+#ifdef HAVE_INT128
+	int128_to_numericvar(state->sumX, &tmp_var);
+#else
+	accum_sum_final(&state->sumX, &tmp_var);
+#endif
+	numericvar_serialize(&buf, &tmp_var);
+
+	result = pq_endtypsend(&buf);
+
+	free_var(&tmp_var);
+
+	PG_RETURN_BYTEA_P(result);
+}
+
+/*
  * Inverse transition functions to go with the above.
  */
 
@@ -5994,6 +6040,56 @@ numeric_sum(PG_FUNCTION_ARGS)
 	free_var(&sumX_var);
 
 	PG_RETURN_NUMERIC(result);
+}
+
+/*
+ * numeric_sum_to_internal_serialize
+ *		Convert numeric argument to serialized internal representation
+ */
+Datum
+numeric_sum_to_internal_serialize(PG_FUNCTION_ARGS)
+{
+	NumericAggState *state = NULL;
+	StringInfoData buf;
+	bytea	   *result;
+	NumericVar	tmp_var;
+
+	state = makeNumericAggStateCurrentContext(false);
+
+	if (!PG_ARGISNULL(0))
+		do_numeric_accum(state, PG_GETARG_NUMERIC(0));
+
+	init_var(&tmp_var);
+
+	pq_begintypsend(&buf);
+
+	/* N */
+	pq_sendint64(&buf, state->N);
+
+	/* sumX */
+	accum_sum_final(&state->sumX, &tmp_var);
+	numericvar_serialize(&buf, &tmp_var);
+
+	/* maxScale */
+	pq_sendint32(&buf, state->maxScale);
+
+	/* maxScaleCount */
+	pq_sendint64(&buf, state->maxScaleCount);
+
+	/* NaNcount */
+	pq_sendint64(&buf, state->NaNcount);
+
+	/* pInfcount */
+	pq_sendint64(&buf, state->pInfcount);
+
+	/* nInfcount */
+	pq_sendint64(&buf, state->nInfcount);
+
+	result = pq_endtypsend(&buf);
+
+	free_var(&tmp_var);
+
+	PG_RETURN_BYTEA_P(result);
 }
 
 /*

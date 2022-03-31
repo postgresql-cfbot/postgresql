@@ -9333,13 +9333,13 @@ RESET enable_partitionwise_join;
 -- ===================================================================
 -- test partitionwise aggregates
 -- ===================================================================
-CREATE TABLE pagg_tab (a int, b int, c text) PARTITION BY RANGE(a);
+CREATE TABLE pagg_tab (a int, b int, c text, d numeric) PARTITION BY RANGE(a);
 CREATE TABLE pagg_tab_p1 (LIKE pagg_tab);
 CREATE TABLE pagg_tab_p2 (LIKE pagg_tab);
 CREATE TABLE pagg_tab_p3 (LIKE pagg_tab);
-INSERT INTO pagg_tab_p1 SELECT i % 30, i % 50, to_char(i/30, 'FM0000') FROM generate_series(1, 3000) i WHERE (i % 30) < 10;
-INSERT INTO pagg_tab_p2 SELECT i % 30, i % 50, to_char(i/30, 'FM0000') FROM generate_series(1, 3000) i WHERE (i % 30) < 20 and (i % 30) >= 10;
-INSERT INTO pagg_tab_p3 SELECT i % 30, i % 50, to_char(i/30, 'FM0000') FROM generate_series(1, 3000) i WHERE (i % 30) < 30 and (i % 30) >= 20;
+INSERT INTO pagg_tab_p1 SELECT i % 30, i % 50, to_char(i/30, 'FM0000'), i % 40 FROM generate_series(1, 3000) i WHERE (i % 30) < 10;
+INSERT INTO pagg_tab_p2 SELECT i % 30, i % 50, to_char(i/30, 'FM0000'), i % 40 FROM generate_series(1, 3000) i WHERE (i % 30) < 20 and (i % 30) >= 10;
+INSERT INTO pagg_tab_p3 SELECT i % 30, i % 50, to_char(i/30, 'FM0000'), i % 40 FROM generate_series(1, 3000) i WHERE (i % 30) < 30 and (i % 30) >= 20;
 -- Create foreign partitions
 CREATE FOREIGN TABLE fpagg_tab_p1 PARTITION OF pagg_tab FOR VALUES FROM (0) TO (10) SERVER loopback OPTIONS (table_name 'pagg_tab_p1');
 CREATE FOREIGN TABLE fpagg_tab_p2 PARTITION OF pagg_tab FOR VALUES FROM (10) TO (20) SERVER loopback OPTIONS (table_name 'pagg_tab_p2');
@@ -9398,8 +9398,8 @@ SELECT a, sum(b), min(b), count(*) FROM pagg_tab GROUP BY a HAVING avg(b) < 22 O
 -- Should have all the columns in the target list for the given relation
 EXPLAIN (VERBOSE, COSTS OFF)
 SELECT a, count(t1) FROM pagg_tab t1 GROUP BY a HAVING avg(b) < 22 ORDER BY 1;
-                               QUERY PLAN                               
-------------------------------------------------------------------------
+                                QUERY PLAN                                 
+---------------------------------------------------------------------------
  Sort
    Output: t1.a, (count(((t1.*)::pagg_tab)))
    Sort Key: t1.a
@@ -9410,21 +9410,21 @@ SELECT a, count(t1) FROM pagg_tab t1 GROUP BY a HAVING avg(b) < 22 ORDER BY 1;
                Filter: (avg(t1.b) < '22'::numeric)
                ->  Foreign Scan on public.fpagg_tab_p1 t1
                      Output: t1.a, t1.*, t1.b
-                     Remote SQL: SELECT a, b, c FROM public.pagg_tab_p1
+                     Remote SQL: SELECT a, b, c, d FROM public.pagg_tab_p1
          ->  HashAggregate
                Output: t1_1.a, count(((t1_1.*)::pagg_tab))
                Group Key: t1_1.a
                Filter: (avg(t1_1.b) < '22'::numeric)
                ->  Foreign Scan on public.fpagg_tab_p2 t1_1
                      Output: t1_1.a, t1_1.*, t1_1.b
-                     Remote SQL: SELECT a, b, c FROM public.pagg_tab_p2
+                     Remote SQL: SELECT a, b, c, d FROM public.pagg_tab_p2
          ->  HashAggregate
                Output: t1_2.a, count(((t1_2.*)::pagg_tab))
                Group Key: t1_2.a
                Filter: (avg(t1_2.b) < '22'::numeric)
                ->  Foreign Scan on public.fpagg_tab_p3 t1_2
                      Output: t1_2.a, t1_2.*, t1_2.b
-                     Remote SQL: SELECT a, b, c FROM public.pagg_tab_p3
+                     Remote SQL: SELECT a, b, c, d FROM public.pagg_tab_p3
 (25 rows)
 
 SELECT a, count(t1) FROM pagg_tab t1 GROUP BY a HAVING avg(b) < 22 ORDER BY 1;
@@ -9459,6 +9459,173 @@ SELECT b, avg(a), max(a), count(*) FROM pagg_tab GROUP BY b HAVING sum(a) < 700 
                      Group Key: pagg_tab_2.b
                      ->  Foreign Scan on fpagg_tab_p3 pagg_tab_2
 (15 rows)
+
+-- It's unsafe to push down having clause when there are partial aggregates
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT b, max(a), count(*) FROM pagg_tab GROUP BY b HAVING sum(a) < 700 ORDER BY 1;
+                                                    QUERY PLAN                                                    
+------------------------------------------------------------------------------------------------------------------
+ Sort
+   Output: pagg_tab.b, (max(pagg_tab.a)), (count(*))
+   Sort Key: pagg_tab.b
+   ->  Finalize HashAggregate
+         Output: pagg_tab.b, max(pagg_tab.a), count(*)
+         Group Key: pagg_tab.b
+         Filter: (sum(pagg_tab.a) < 700)
+         ->  Append
+               ->  Partial HashAggregate
+                     Output: pagg_tab.b, PARTIAL max(pagg_tab.a), PARTIAL count(*), PARTIAL sum(pagg_tab.a)
+                     Group Key: pagg_tab.b
+                     ->  Foreign Scan on public.fpagg_tab_p1 pagg_tab
+                           Output: pagg_tab.b, pagg_tab.a
+                           Remote SQL: SELECT a, b FROM public.pagg_tab_p1
+               ->  Partial HashAggregate
+                     Output: pagg_tab_1.b, PARTIAL max(pagg_tab_1.a), PARTIAL count(*), PARTIAL sum(pagg_tab_1.a)
+                     Group Key: pagg_tab_1.b
+                     ->  Foreign Scan on public.fpagg_tab_p2 pagg_tab_1
+                           Output: pagg_tab_1.b, pagg_tab_1.a
+                           Remote SQL: SELECT a, b FROM public.pagg_tab_p2
+               ->  Partial HashAggregate
+                     Output: pagg_tab_2.b, PARTIAL max(pagg_tab_2.a), PARTIAL count(*), PARTIAL sum(pagg_tab_2.a)
+                     Group Key: pagg_tab_2.b
+                     ->  Foreign Scan on public.fpagg_tab_p3 pagg_tab_2
+                           Output: pagg_tab_2.b, pagg_tab_2.a
+                           Remote SQL: SELECT a, b FROM public.pagg_tab_p3
+(26 rows)
+
+-- Partial aggregates are fine to push down without having clause
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT b, max(a), count(*) FROM pagg_tab GROUP BY b ORDER BY 1;
+                                          QUERY PLAN                                           
+-----------------------------------------------------------------------------------------------
+ Sort
+   Output: pagg_tab.b, (max(pagg_tab.a)), (count(*))
+   Sort Key: pagg_tab.b
+   ->  Finalize HashAggregate
+         Output: pagg_tab.b, max(pagg_tab.a), count(*)
+         Group Key: pagg_tab.b
+         ->  Append
+               ->  Foreign Scan
+                     Output: pagg_tab.b, (PARTIAL max(pagg_tab.a)), (PARTIAL count(*))
+                     Relations: Aggregate on (public.fpagg_tab_p1 pagg_tab)
+                     Remote SQL: SELECT b, max(a), count(*) FROM public.pagg_tab_p1 GROUP BY 1
+               ->  Foreign Scan
+                     Output: pagg_tab_1.b, (PARTIAL max(pagg_tab_1.a)), (PARTIAL count(*))
+                     Relations: Aggregate on (public.fpagg_tab_p2 pagg_tab_1)
+                     Remote SQL: SELECT b, max(a), count(*) FROM public.pagg_tab_p2 GROUP BY 1
+               ->  Foreign Scan
+                     Output: pagg_tab_2.b, (PARTIAL max(pagg_tab_2.a)), (PARTIAL count(*))
+                     Relations: Aggregate on (public.fpagg_tab_p3 pagg_tab_2)
+                     Remote SQL: SELECT b, max(a), count(*) FROM public.pagg_tab_p3 GROUP BY 1
+(19 rows)
+
+SELECT b, max(a), count(*) FROM pagg_tab GROUP BY b ORDER BY 1;
+ b  | max | count 
+----+-----+-------
+  0 |  20 |    60
+  1 |  21 |    60
+  2 |  22 |    60
+  3 |  23 |    60
+  4 |  24 |    60
+  5 |  25 |    60
+  6 |  26 |    60
+  7 |  27 |    60
+  8 |  28 |    60
+  9 |  29 |    60
+ 10 |  20 |    60
+ 11 |  21 |    60
+ 12 |  22 |    60
+ 13 |  23 |    60
+ 14 |  24 |    60
+ 15 |  25 |    60
+ 16 |  26 |    60
+ 17 |  27 |    60
+ 18 |  28 |    60
+ 19 |  29 |    60
+ 20 |  20 |    60
+ 21 |  21 |    60
+ 22 |  22 |    60
+ 23 |  23 |    60
+ 24 |  24 |    60
+ 25 |  25 |    60
+ 26 |  26 |    60
+ 27 |  27 |    60
+ 28 |  28 |    60
+ 29 |  29 |    60
+ 30 |  20 |    60
+ 31 |  21 |    60
+ 32 |  22 |    60
+ 33 |  23 |    60
+ 34 |  24 |    60
+ 35 |  25 |    60
+ 36 |  26 |    60
+ 37 |  27 |    60
+ 38 |  28 |    60
+ 39 |  29 |    60
+ 40 |  20 |    60
+ 41 |  21 |    60
+ 42 |  22 |    60
+ 43 |  23 |    60
+ 44 |  24 |    60
+ 45 |  25 |    60
+ 46 |  26 |    60
+ 47 |  27 |    60
+ 48 |  28 |    60
+ 49 |  29 |    60
+(50 rows)
+
+-- Partial aggregates are fine to push down
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT max(a), count(*), sum(d) FROM pagg_tab;
+                                             QUERY PLAN                                             
+----------------------------------------------------------------------------------------------------
+ Finalize Aggregate
+   Output: max(pagg_tab.a), count(*), sum(pagg_tab.d)
+   ->  Append
+         ->  Foreign Scan
+               Output: (PARTIAL max(pagg_tab.a)), (PARTIAL count(*)), (PARTIAL sum(pagg_tab.d))
+               Relations: Aggregate on (public.fpagg_tab_p1 pagg_tab)
+               Remote SQL: SELECT max(a), count(*), sum(d) FROM public.pagg_tab_p1
+         ->  Foreign Scan
+               Output: (PARTIAL max(pagg_tab_1.a)), (PARTIAL count(*)), (PARTIAL sum(pagg_tab_1.d))
+               Relations: Aggregate on (public.fpagg_tab_p2 pagg_tab_1)
+               Remote SQL: SELECT max(a), count(*), sum(d) FROM public.pagg_tab_p2
+         ->  Foreign Scan
+               Output: (PARTIAL max(pagg_tab_2.a)), (PARTIAL count(*)), (PARTIAL sum(pagg_tab_2.d))
+               Relations: Aggregate on (public.fpagg_tab_p3 pagg_tab_2)
+               Remote SQL: SELECT max(a), count(*), sum(d) FROM public.pagg_tab_p3
+(15 rows)
+
+SELECT max(a), count(*), sum(d) FROM pagg_tab;
+ max | count |  sum  
+-----+-------+-------
+  29 |  3000 | 58500
+(1 row)
+
+-- Shouldn't try to push down
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT max(a), count(distinct b) FROM pagg_tab;
+                          QUERY PLAN                           
+---------------------------------------------------------------
+ Aggregate
+   Output: max(pagg_tab.a), count(DISTINCT pagg_tab.b)
+   ->  Append
+         ->  Foreign Scan on public.fpagg_tab_p1 pagg_tab_1
+               Output: pagg_tab_1.a, pagg_tab_1.b
+               Remote SQL: SELECT a, b FROM public.pagg_tab_p1
+         ->  Foreign Scan on public.fpagg_tab_p2 pagg_tab_2
+               Output: pagg_tab_2.a, pagg_tab_2.b
+               Remote SQL: SELECT a, b FROM public.pagg_tab_p2
+         ->  Foreign Scan on public.fpagg_tab_p3 pagg_tab_3
+               Output: pagg_tab_3.a, pagg_tab_3.b
+               Remote SQL: SELECT a, b FROM public.pagg_tab_p3
+(12 rows)
+
+SELECT max(a), count(distinct b) FROM pagg_tab;
+ max | count 
+-----+-------
+  29 |    50
+(1 row)
 
 -- ===================================================================
 -- access rights and superuser

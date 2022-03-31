@@ -69,11 +69,13 @@ DefineAggregate(ParseState *pstate,
 	List	   *combinefuncName = NIL;
 	List	   *serialfuncName = NIL;
 	List	   *deserialfuncName = NIL;
+	List	   *partialconverterfuncName = NIL;
 	List	   *mtransfuncName = NIL;
 	List	   *minvtransfuncName = NIL;
 	List	   *mfinalfuncName = NIL;
 	bool		finalfuncExtraArgs = false;
 	bool		mfinalfuncExtraArgs = false;
+	bool		partialPushdownSafe = false;
 	char		finalfuncModify = 0;
 	char		mfinalfuncModify = 0;
 	List	   *sortoperatorName = NIL;
@@ -142,6 +144,8 @@ DefineAggregate(ParseState *pstate,
 			serialfuncName = defGetQualifiedName(defel);
 		else if (strcmp(defel->defname, "deserialfunc") == 0)
 			deserialfuncName = defGetQualifiedName(defel);
+		else if (strcmp(defel->defname, "partialconverterfunc") == 0)
+			partialconverterfuncName = defGetQualifiedName(defel);
 		else if (strcmp(defel->defname, "msfunc") == 0)
 			mtransfuncName = defGetQualifiedName(defel);
 		else if (strcmp(defel->defname, "minvfunc") == 0)
@@ -189,6 +193,8 @@ DefineAggregate(ParseState *pstate,
 			minitval = defGetString(defel);
 		else if (strcmp(defel->defname, "parallel") == 0)
 			parallel = defGetString(defel);
+		else if (strcmp(defel->defname, "partial_pushdown_safe") == 0)
+			partialPushdownSafe = defGetBoolean(defel);
 		else
 			ereport(WARNING,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -372,6 +378,18 @@ DefineAggregate(ParseState *pstate,
 				 errmsg("must specify both or neither of serialization and deserialization functions")));
 	}
 
+	if (partialconverterfuncName)
+	{
+		/*
+		 * Converter is only needed/allowed for transtype INTERNAL.
+		 */
+		if (transTypeId != INTERNALOID)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_FUNCTION_DEFINITION),
+					 errmsg("partial converters may be specified only when the aggregate transition data type is %s",
+							format_type_be(INTERNALOID))));
+	}
+
 	/*
 	 * If a moving-aggregate transtype is specified, look that up.  Same
 	 * restrictions as for transtype.
@@ -457,6 +475,8 @@ DefineAggregate(ParseState *pstate,
 						   combinefuncName, /* combine function name */
 						   serialfuncName,	/* serial function name */
 						   deserialfuncName,	/* deserial function name */
+						   partialconverterfuncName,	/* partial converter function
+													 * name */
 						   mtransfuncName,	/* fwd trans function name */
 						   minvtransfuncName,	/* inv trans function name */
 						   mfinalfuncName,	/* final function name */
@@ -471,7 +491,8 @@ DefineAggregate(ParseState *pstate,
 						   mtransSpace, /* transition space */
 						   initval, /* initial condition */
 						   minitval,	/* initial condition */
-						   proparallel);	/* parallel safe? */
+						   proparallel, /* parallel safe? */
+						   partialPushdownSafe);	/* partial pushdown safe? */
 }
 
 /*

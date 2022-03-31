@@ -197,6 +197,7 @@ static bool is_subquery_var(Var *node, RelOptInfo *foreignrel,
 static void get_relation_column_alias_ids(Var *node, RelOptInfo *foreignrel,
 										  int *relno, int *colno);
 
+static bool partial_agg_ok(Aggref *agg);
 
 /*
  * Examine each qual clause in input_conds, and classify them into two groups,
@@ -833,7 +834,10 @@ foreign_expr_walker(Node *node,
 					return false;
 
 				/* Only non-split aggregates are pushable. */
-				if (agg->aggsplit != AGGSPLIT_SIMPLE)
+				if ((agg->aggsplit != AGGSPLIT_SIMPLE) && (agg->aggsplit != AGGSPLIT_INITIAL_SERIAL))
+					return false;
+
+				if (agg->aggsplit == AGGSPLIT_INITIAL_SERIAL && !partial_agg_ok(agg))
 					return false;
 
 				/* As usual, it must be shippable. */
@@ -3348,8 +3352,8 @@ deparseAggref(Aggref *node, deparse_expr_cxt *context)
 	StringInfo	buf = context->buf;
 	bool		use_variadic;
 
-	/* Only basic, non-split aggregation accepted. */
-	Assert(node->aggsplit == AGGSPLIT_SIMPLE);
+	/* Only non-split aggregation accepted. */
+	Assert(node->aggsplit == AGGSPLIT_SIMPLE || node->aggsplit == AGGSPLIT_INITIAL_SERIAL);
 
 	/* Check if need to print VARIADIC (cf. ruleutils.c) */
 	use_variadic = node->aggvariadic;
@@ -3818,4 +3822,57 @@ get_relation_column_alias_ids(Var *node, RelOptInfo *foreignrel,
 
 	/* Shouldn't get here */
 	elog(ERROR, "unexpected expression in subquery output");
+}
+
+/*
+ * Check that partial aggregate agg is fine to push down
+ *
+ * Check that it's AGGKIND_NORMAL aggregate without
+ * distinct or order by clauses, which has aggpartialpushdownsafe
+ * property. If aggtranstype is internal, aggpartialconverterfn
+ * should be defined. Otherwise aggfn return type should match aggtranstype.
+ */
+static bool
+partial_agg_ok(Aggref *agg)
+{
+	HeapTuple	aggtup;
+	Form_pg_aggregate aggform;
+
+	Assert(agg->aggsplit == AGGSPLIT_INITIAL_SERIAL);
+
+	/* We don't support complex partial aggregates */
+	if (agg->aggdistinct || agg->aggvariadic || agg->aggkind != AGGKIND_NORMAL || agg->aggorder != NIL)
+		return false;
+
+	aggtup = SearchSysCache1(AGGFNOID, ObjectIdGetDatum(agg->aggfnoid));
+	if (!HeapTupleIsValid(aggtup))
+		elog(ERROR, "cache lookup failed for function %u", agg->aggfnoid);
+	aggform = (Form_pg_aggregate) GETSTRUCT(aggtup);
+
+	/* Only aggregates, marked as pushdown safe, are allowed */
+	if (!aggform->aggpartialpushdownsafe)
+	{
+		ReleaseSysCache(aggtup);
+		return false;
+	}
+
+	/*
+	 * If an aggregate requires serialization/deserialization, partial
+	 * converter should be defined
+	 */
+	if (agg->aggtranstype == INTERNALOID && aggform->aggpartialconverterfn == InvalidOid)
+	{
+		ReleaseSysCache(aggtup);
+		return false;
+	}
+
+	/* In this case we currently don't use converter */
+	if (agg->aggtranstype != INTERNALOID && get_func_rettype(agg->aggfnoid) != agg->aggtranstype)
+	{
+		ReleaseSysCache(aggtup);
+		return false;
+	}
+
+	ReleaseSysCache(aggtup);
+	return true;
 }

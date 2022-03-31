@@ -873,75 +873,90 @@ static bool
 gist_box_leaf_consistent(BOX *key, BOX *query, StrategyNumber strategy)
 {
 	bool		retval;
+	bool		isnull = false;
 
 	switch (strategy)
 	{
 		case RTLeftStrategyNumber:
-			retval = DatumGetBool(DirectFunctionCall2(box_left,
-													  PointerGetDatum(key),
-													  PointerGetDatum(query)));
+			retval = DatumGetBool(DirectFunctionCall2Ext(box_left,
+														 PointerGetDatum(key),
+														 PointerGetDatum(query),
+														 &isnull));
 			break;
 		case RTOverLeftStrategyNumber:
-			retval = DatumGetBool(DirectFunctionCall2(box_overleft,
-													  PointerGetDatum(key),
-													  PointerGetDatum(query)));
+			retval = DatumGetBool(DirectFunctionCall2Ext(box_overleft,
+														 PointerGetDatum(key),
+														 PointerGetDatum(query),
+														 &isnull));
 			break;
 		case RTOverlapStrategyNumber:
-			retval = DatumGetBool(DirectFunctionCall2(box_overlap,
-													  PointerGetDatum(key),
-													  PointerGetDatum(query)));
+			retval = DatumGetBool(DirectFunctionCall2Ext(box_overlap,
+														 PointerGetDatum(key),
+														 PointerGetDatum(query),
+														 &isnull));
 			break;
 		case RTOverRightStrategyNumber:
-			retval = DatumGetBool(DirectFunctionCall2(box_overright,
-													  PointerGetDatum(key),
-													  PointerGetDatum(query)));
+			retval = DatumGetBool(DirectFunctionCall2Ext(box_overright,
+														 PointerGetDatum(key),
+														 PointerGetDatum(query),
+														 &isnull));
 			break;
 		case RTRightStrategyNumber:
-			retval = DatumGetBool(DirectFunctionCall2(box_right,
-													  PointerGetDatum(key),
-													  PointerGetDatum(query)));
+			retval = DatumGetBool(DirectFunctionCall2Ext(box_right,
+														 PointerGetDatum(key),
+														 PointerGetDatum(query),
+														 &isnull));
 			break;
 		case RTSameStrategyNumber:
-			retval = DatumGetBool(DirectFunctionCall2(box_same,
-													  PointerGetDatum(key),
-													  PointerGetDatum(query)));
+			retval = DatumGetBool(DirectFunctionCall2Ext(box_same,
+														 PointerGetDatum(key),
+														 PointerGetDatum(query),
+														 &isnull));
 			break;
 		case RTContainsStrategyNumber:
-			retval = DatumGetBool(DirectFunctionCall2(box_contain,
-													  PointerGetDatum(key),
-													  PointerGetDatum(query)));
+			retval = DatumGetBool(DirectFunctionCall2Ext(box_contain,
+														 PointerGetDatum(key),
+														 PointerGetDatum(query),
+														 &isnull));
 			break;
 		case RTContainedByStrategyNumber:
-			retval = DatumGetBool(DirectFunctionCall2(box_contained,
-													  PointerGetDatum(key),
-													  PointerGetDatum(query)));
+			retval = DatumGetBool(DirectFunctionCall2Ext(box_contained,
+														 PointerGetDatum(key),
+														 PointerGetDatum(query),
+														 &isnull));
 			break;
 		case RTOverBelowStrategyNumber:
-			retval = DatumGetBool(DirectFunctionCall2(box_overbelow,
-													  PointerGetDatum(key),
-													  PointerGetDatum(query)));
+			retval = DatumGetBool(DirectFunctionCall2Ext(box_overbelow,
+														 PointerGetDatum(key),
+														 PointerGetDatum(query),
+														 &isnull));
 			break;
 		case RTBelowStrategyNumber:
-			retval = DatumGetBool(DirectFunctionCall2(box_below,
-													  PointerGetDatum(key),
-													  PointerGetDatum(query)));
+			retval = DatumGetBool(DirectFunctionCall2Ext(box_below,
+														 PointerGetDatum(key),
+														 PointerGetDatum(query),
+														 &isnull));
 			break;
 		case RTAboveStrategyNumber:
-			retval = DatumGetBool(DirectFunctionCall2(box_above,
-													  PointerGetDatum(key),
-													  PointerGetDatum(query)));
+			retval = DatumGetBool(DirectFunctionCall2Ext(box_above,
+														 PointerGetDatum(key),
+														 PointerGetDatum(query),
+														 &isnull));
 			break;
 		case RTOverAboveStrategyNumber:
-			retval = DatumGetBool(DirectFunctionCall2(box_overabove,
-													  PointerGetDatum(key),
-													  PointerGetDatum(query)));
+			retval = DatumGetBool(DirectFunctionCall2Ext(box_overabove,
+														 PointerGetDatum(key),
+														 PointerGetDatum(query),
+														 &isnull));
 			break;
 		default:
 			elog(ERROR, "unrecognized strategy number: %d", strategy);
 			retval = false;		/* keep compiler quiet */
 			break;
 	}
-	return retval;
+
+	/* consider null as false */
+	return retval && !isnull;
 }
 
 /*****************************************
@@ -958,71 +973,85 @@ static bool
 rtree_internal_consistent(BOX *key, BOX *query, StrategyNumber strategy)
 {
 	bool		retval;
+	bool		isnull = false;
 
 	switch (strategy)
 	{
 		case RTLeftStrategyNumber:
-			retval = !DatumGetBool(DirectFunctionCall2(box_overright,
-													   PointerGetDatum(key),
-													   PointerGetDatum(query)));
+			retval = !DatumGetBool(DirectFunctionCall2Ext(box_overright,
+														  PointerGetDatum(key),
+														  PointerGetDatum(query),
+														  &isnull));
 			break;
 		case RTOverLeftStrategyNumber:
-			retval = !DatumGetBool(DirectFunctionCall2(box_right,
-													   PointerGetDatum(key),
-													   PointerGetDatum(query)));
+			retval = !DatumGetBool(DirectFunctionCall2Ext(box_right,
+														  PointerGetDatum(key),
+														  PointerGetDatum(query),
+														  &isnull));
 			break;
 		case RTOverlapStrategyNumber:
-			retval = DatumGetBool(DirectFunctionCall2(box_overlap,
-													  PointerGetDatum(key),
-													  PointerGetDatum(query)));
+			retval = DatumGetBool(DirectFunctionCall2Ext(box_overlap,
+														 PointerGetDatum(key),
+														 PointerGetDatum(query),
+														 &isnull));
 			break;
 		case RTOverRightStrategyNumber:
-			retval = !DatumGetBool(DirectFunctionCall2(box_left,
-													   PointerGetDatum(key),
-													   PointerGetDatum(query)));
+			retval = !DatumGetBool(DirectFunctionCall2Ext(box_left,
+														  PointerGetDatum(key),
+														  PointerGetDatum(query),
+														  &isnull));
 			break;
 		case RTRightStrategyNumber:
-			retval = !DatumGetBool(DirectFunctionCall2(box_overleft,
-													   PointerGetDatum(key),
-													   PointerGetDatum(query)));
+			retval = !DatumGetBool(DirectFunctionCall2Ext(box_overleft,
+														  PointerGetDatum(key),
+														  PointerGetDatum(query),
+														  &isnull));
 			break;
 		case RTSameStrategyNumber:
 		case RTContainsStrategyNumber:
-			retval = DatumGetBool(DirectFunctionCall2(box_contain,
-													  PointerGetDatum(key),
-													  PointerGetDatum(query)));
+			retval = DatumGetBool(DirectFunctionCall2Ext(box_contain,
+														 PointerGetDatum(key),
+														 PointerGetDatum(query),
+														 &isnull));
 			break;
 		case RTContainedByStrategyNumber:
-			retval = DatumGetBool(DirectFunctionCall2(box_overlap,
-													  PointerGetDatum(key),
-													  PointerGetDatum(query)));
+			retval = DatumGetBool(DirectFunctionCall2Ext(box_overlap,
+														 PointerGetDatum(key),
+														 PointerGetDatum(query),
+														 &isnull));
 			break;
 		case RTOverBelowStrategyNumber:
-			retval = !DatumGetBool(DirectFunctionCall2(box_above,
-													   PointerGetDatum(key),
-													   PointerGetDatum(query)));
+			retval = !DatumGetBool(DirectFunctionCall2Ext(box_above,
+														  PointerGetDatum(key),
+														  PointerGetDatum(query),
+														  &isnull));
 			break;
 		case RTBelowStrategyNumber:
-			retval = !DatumGetBool(DirectFunctionCall2(box_overabove,
-													   PointerGetDatum(key),
-													   PointerGetDatum(query)));
+			retval = !DatumGetBool(DirectFunctionCall2Ext(box_overabove,
+														  PointerGetDatum(key),
+														  PointerGetDatum(query),
+														  &isnull));
 			break;
 		case RTAboveStrategyNumber:
-			retval = !DatumGetBool(DirectFunctionCall2(box_overbelow,
-													   PointerGetDatum(key),
-													   PointerGetDatum(query)));
+			retval = !DatumGetBool(DirectFunctionCall2Ext(box_overbelow,
+														  PointerGetDatum(key),
+														  PointerGetDatum(query),
+														  &isnull));
 			break;
 		case RTOverAboveStrategyNumber:
-			retval = !DatumGetBool(DirectFunctionCall2(box_below,
-													   PointerGetDatum(key),
-													   PointerGetDatum(query)));
+			retval = !DatumGetBool(DirectFunctionCall2Ext(box_below,
+														  PointerGetDatum(key),
+														  PointerGetDatum(query),
+														  &isnull));
 			break;
 		default:
 			elog(ERROR, "unrecognized strategy number: %d", strategy);
 			retval = false;		/* keep compiler quiet */
 			break;
 	}
-	return retval;
+
+	/* consider null as false */
+	return retval || isnull;
 }
 
 /**************************************************
@@ -1237,22 +1266,30 @@ computeDistance(bool isLeaf, BOX *box, Point *point)
 	else if (point->x <= box->high.x && point->x >= box->low.x)
 	{
 		/* point is over or below box */
-		Assert(box->low.y <= box->high.y);
+		Assert(box->low.y <= box->high.y
+			   || isnan(box->low.y) || isnan(box->high.y));
+
 		if (point->y > box->high.y)
 			result = float8_mi(point->y, box->high.y);
 		else if (point->y < box->low.y)
 			result = float8_mi(box->low.y, point->y);
+		else if (isnan(point->y) || isnan(box->high.y) || isnan(box->low.y))
+			result = get_float8_nan();
 		else
 			elog(ERROR, "inconsistent point values");
 	}
 	else if (point->y <= box->high.y && point->y >= box->low.y)
 	{
 		/* point is to left or right of box */
-		Assert(box->low.x <= box->high.x);
+		Assert(box->low.x <= box->high.x
+			   || isnan(box->low.y) || isnan(box->high.y));
+
 		if (point->x > box->high.x)
 			result = float8_mi(point->x, box->high.x);
 		else if (point->x < box->low.x)
 			result = float8_mi(box->low.x, point->x);
+		else if (isnan(point->x) || isnan(box->high.x) || isnan(box->low.x))
+			result = get_float8_nan();
 		else
 			elog(ERROR, "inconsistent point values");
 	}
@@ -1406,12 +1443,18 @@ gist_point_consistent(PG_FUNCTION_ARGS)
 					 * of polygon's bounding box and point
 					 */
 					BOX		   *box = DatumGetBoxP(entry->key);
+					bool		isnull = false;
 
-					Assert(box->high.x == box->low.x
-						   && box->high.y == box->low.y);
-					result = DatumGetBool(DirectFunctionCall2(poly_contain_pt,
-															  PolygonPGetDatum(query),
-															  PointPGetDatum(&box->high)));
+					Assert((box->high.x == box->low.x
+							&& box->high.y == box->low.y) ||
+						   (isnan(box->high.x) && isnan(box->low.x)) ||
+						   (isnan(box->high.y) && isnan(box->low.y)));
+						   
+					result = DatumGetBool(DirectFunctionCall2Ext(poly_contain_pt,
+																 PolygonPGetDatum(query),
+																 PointPGetDatum(&box->high),
+																 &isnull));
+					result &= !isnull;
 					*recheck = false;
 				}
 			}
@@ -1433,12 +1476,18 @@ gist_point_consistent(PG_FUNCTION_ARGS)
 					 * of polygon's bounding box and point
 					 */
 					BOX		   *box = DatumGetBoxP(entry->key);
+					bool		isnull = false;
 
-					Assert(box->high.x == box->low.x
-						   && box->high.y == box->low.y);
-					result = DatumGetBool(DirectFunctionCall2(circle_contain_pt,
-															  CirclePGetDatum(query),
-															  PointPGetDatum(&box->high)));
+					Assert((box->high.x == box->low.x
+							&& box->high.y == box->low.y) ||
+						   (isnan(box->high.x) && isnan(box->low.x)) ||
+						   (isnan(box->high.y) && isnan(box->low.y)));
+					result = DatumGetBool(DirectFunctionCall2Ext(circle_contain_pt,
+																 CirclePGetDatum(query),
+																 PointPGetDatum(&box->high),
+																 &isnull));
+					result &= !isnull;
+
 					*recheck = false;
 				}
 			}

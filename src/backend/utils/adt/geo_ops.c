@@ -44,14 +44,14 @@
  *
  * Common operators are:
  * * Intersection point:
- *   bool type1_interpt_type2(Point *result, Type1 *obj1, Type2 *obj2);
+ *   tsbool type1_interpt_type2(Point *result, Type1 *obj1, Type2 *obj2);
  *		Return whether the two objects intersect. If *result is not NULL,
  *		it is set to the intersection point.
  *
  * * Containment:
- *   bool type1_contain_type2(Type1 *obj1, Type2 *obj2);
+ *   tsbool type1_contain_type2(Type1 *obj1, Type2 *obj2);
  *		Return whether obj1 contains obj2.
- *   bool type1_contain_type2(Type1 *contains_obj, Type1 *contained_obj);
+ *   tsbool type1_contain_type2(Type1 *contains_obj, Type1 *contained_obj);
  *		Return whether obj1 contains obj2 (used when types are the same)
  *
  * * Distance of closest point in or on obj1 to obj2:
@@ -61,7 +61,8 @@
  *
  * These functions may be used to implement multiple SQL-level operators.  For
  * example, determining whether two lines are parallel is done by checking
- * whether they don't intersect.
+ * whether they don't intersect. tsbool-returning functions return TS_NULL if
+ * its calculation involves NaN.
  */
 
 /*
@@ -79,7 +80,7 @@ static inline void point_add_point(Point *result, Point *pt1, Point *pt2);
 static inline void point_sub_point(Point *result, Point *pt1, Point *pt2);
 static inline void point_mul_point(Point *result, Point *pt1, Point *pt2);
 static inline void point_div_point(Point *result, Point *pt1, Point *pt2);
-static inline bool point_eq_point(Point *pt1, Point *pt2);
+static inline tsbool point_eq_point(Point *pt1, Point *pt2);
 static inline float8 point_dt(Point *pt1, Point *pt2);
 static inline float8 point_sl(Point *pt1, Point *pt2);
 static int	point_inside(Point *p, int npts, Point *plist);
@@ -88,18 +89,18 @@ static int	point_inside(Point *p, int npts, Point *plist);
 static inline void line_construct(LINE *result, Point *pt, float8 m);
 static inline float8 line_sl(LINE *line);
 static inline float8 line_invsl(LINE *line);
-static bool line_interpt_line(Point *result, LINE *l1, LINE *l2);
-static bool line_contain_point(LINE *line, Point *point);
+static tsbool line_interpt_line(Point *result, LINE *l1, LINE *l2);
+static tsbool line_contain_point(LINE *line, Point *point);
 static float8 line_closept_point(Point *result, LINE *line, Point *pt);
 
 /* Routines for line segments */
 static inline void statlseg_construct(LSEG *lseg, Point *pt1, Point *pt2);
 static inline float8 lseg_sl(LSEG *lseg);
 static inline float8 lseg_invsl(LSEG *lseg);
-static bool lseg_interpt_line(Point *result, LSEG *lseg, LINE *line);
-static bool lseg_interpt_lseg(Point *result, LSEG *l1, LSEG *l2);
+static tsbool lseg_interpt_line(Point *result, LSEG *lseg, LINE *line);
+static tsbool lseg_interpt_lseg(Point *result, LSEG *l1, LSEG *l2);
 static int	lseg_crossing(float8 x, float8 y, float8 px, float8 py);
-static bool lseg_contain_point(LSEG *lseg, Point *point);
+static tsbool lseg_contain_point(LSEG *lseg, Point *point);
 static float8 lseg_closept_point(Point *result, LSEG *lseg, Point *pt);
 static float8 lseg_closept_line(Point *result, LSEG *lseg, LINE *line);
 static float8 lseg_closept_lseg(Point *result, LSEG *on_lseg, LSEG *to_lseg);
@@ -107,14 +108,14 @@ static float8 lseg_closept_lseg(Point *result, LSEG *on_lseg, LSEG *to_lseg);
 /* Routines for boxes */
 static inline void box_construct(BOX *result, Point *pt1, Point *pt2);
 static void box_cn(Point *center, BOX *box);
-static bool box_ov(BOX *box1, BOX *box2);
+static tsbool box_ov(BOX *box1, BOX *box2);
 static float8 box_ar(BOX *box);
 static float8 box_ht(BOX *box);
 static float8 box_wd(BOX *box);
-static bool box_contain_point(BOX *box, Point *point);
-static bool box_contain_box(BOX *contains_box, BOX *contained_box);
-static bool box_contain_lseg(BOX *box, LSEG *lseg);
-static bool box_interpt_lseg(Point *result, BOX *box, LSEG *lseg);
+static tsbool box_contain_point(BOX *box, Point *point);
+static tsbool box_contain_box(BOX *contains_box, BOX *contained_box);
+static tsbool box_contain_lseg(BOX *box, LSEG *lseg);
+static tsbool box_interpt_lseg(Point *result, BOX *box, LSEG *lseg);
 static float8 box_closept_point(Point *result, BOX *box, Point *point);
 static float8 box_closept_lseg(Point *result, BOX *box, LSEG *lseg);
 
@@ -124,9 +125,9 @@ static float8 circle_ar(CIRCLE *circle);
 /* Routines for polygons */
 static void make_bound_box(POLYGON *poly);
 static void poly_to_circle(CIRCLE *result, POLYGON *poly);
-static bool lseg_inside_poly(Point *a, Point *b, POLYGON *poly, int start);
-static bool poly_contain_poly(POLYGON *contains_poly, POLYGON *contained_poly);
-static bool plist_same(int npts, Point *p1, Point *p2);
+static tsbool lseg_inside_poly(Point *a, Point *b, POLYGON *poly, int start);
+static tsbool poly_contain_poly(POLYGON *contains_poly, POLYGON *contained_poly);
+static tsbool plist_same(int npts, Point *p1, Point *p2);
 static float8 dist_ppoly_internal(Point *pt, POLYGON *poly);
 
 /* Routines for encoding and decoding */
@@ -540,9 +541,13 @@ box_same(PG_FUNCTION_ARGS)
 {
 	BOX		   *box1 = PG_GETARG_BOX_P(0);
 	BOX		   *box2 = PG_GETARG_BOX_P(1);
+	tsbool		res1 = point_eq_point(&box1->high, &box2->high);
+	tsbool		res2 = point_eq_point(&box1->low, &box2->low);
 
-	PG_RETURN_BOOL(point_eq_point(&box1->high, &box2->high) &&
-				   point_eq_point(&box1->low, &box2->low));
+	if (res1 == TS_NULL || res2 == TS_NULL)
+		PG_RETURN_NULL();
+
+	PG_RETURN_BOOL(res1 && res2);
 }
 
 /*		box_overlap		-		does box1 overlap box2?
@@ -553,16 +558,16 @@ box_overlap(PG_FUNCTION_ARGS)
 	BOX		   *box1 = PG_GETARG_BOX_P(0);
 	BOX		   *box2 = PG_GETARG_BOX_P(1);
 
-	PG_RETURN_BOOL(box_ov(box1, box2));
+	PG_RETURN_TSBOOL(box_ov(box1, box2));
 }
 
-static bool
+static tsbool
 box_ov(BOX *box1, BOX *box2)
 {
-	return (FPle(box1->low.x, box2->high.x) &&
-			FPle(box2->low.x, box1->high.x) &&
-			FPle(box1->low.y, box2->high.y) &&
-			FPle(box2->low.y, box1->high.y));
+	return TS_AND4(FPTle(box1->low.x, box2->high.x),
+				   FPTle(box2->low.x, box1->high.x),
+				   FPTle(box1->low.y, box2->high.y),
+				   FPTle(box2->low.y, box1->high.y));
 }
 
 /*		box_left		-		is box1 strictly left of box2?
@@ -573,7 +578,7 @@ box_left(PG_FUNCTION_ARGS)
 	BOX		   *box1 = PG_GETARG_BOX_P(0);
 	BOX		   *box2 = PG_GETARG_BOX_P(1);
 
-	PG_RETURN_BOOL(FPlt(box1->high.x, box2->low.x));
+	PG_RETURN_TSBOOL(FPTlt(box1->high.x, box2->low.x));
 }
 
 /*		box_overleft	-		is the right edge of box1 at or left of
@@ -588,7 +593,7 @@ box_overleft(PG_FUNCTION_ARGS)
 	BOX		   *box1 = PG_GETARG_BOX_P(0);
 	BOX		   *box2 = PG_GETARG_BOX_P(1);
 
-	PG_RETURN_BOOL(FPle(box1->high.x, box2->high.x));
+	PG_RETURN_TSBOOL(FPTle(box1->high.x, box2->high.x));
 }
 
 /*		box_right		-		is box1 strictly right of box2?
@@ -599,7 +604,7 @@ box_right(PG_FUNCTION_ARGS)
 	BOX		   *box1 = PG_GETARG_BOX_P(0);
 	BOX		   *box2 = PG_GETARG_BOX_P(1);
 
-	PG_RETURN_BOOL(FPgt(box1->low.x, box2->high.x));
+	PG_RETURN_TSBOOL(FPTgt(box1->low.x, box2->high.x));
 }
 
 /*		box_overright	-		is the left edge of box1 at or right of
@@ -614,7 +619,7 @@ box_overright(PG_FUNCTION_ARGS)
 	BOX		   *box1 = PG_GETARG_BOX_P(0);
 	BOX		   *box2 = PG_GETARG_BOX_P(1);
 
-	PG_RETURN_BOOL(FPge(box1->low.x, box2->low.x));
+	PG_RETURN_TSBOOL(FPTge(box1->low.x, box2->low.x));
 }
 
 /*		box_below		-		is box1 strictly below box2?
@@ -625,7 +630,7 @@ box_below(PG_FUNCTION_ARGS)
 	BOX		   *box1 = PG_GETARG_BOX_P(0);
 	BOX		   *box2 = PG_GETARG_BOX_P(1);
 
-	PG_RETURN_BOOL(FPlt(box1->high.y, box2->low.y));
+	PG_RETURN_TSBOOL(FPTlt(box1->high.y, box2->low.y));
 }
 
 /*		box_overbelow	-		is the upper edge of box1 at or below
@@ -637,7 +642,7 @@ box_overbelow(PG_FUNCTION_ARGS)
 	BOX		   *box1 = PG_GETARG_BOX_P(0);
 	BOX		   *box2 = PG_GETARG_BOX_P(1);
 
-	PG_RETURN_BOOL(FPle(box1->high.y, box2->high.y));
+	PG_RETURN_TSBOOL(FPTle(box1->high.y, box2->high.y));
 }
 
 /*		box_above		-		is box1 strictly above box2?
@@ -648,7 +653,7 @@ box_above(PG_FUNCTION_ARGS)
 	BOX		   *box1 = PG_GETARG_BOX_P(0);
 	BOX		   *box2 = PG_GETARG_BOX_P(1);
 
-	PG_RETURN_BOOL(FPgt(box1->low.y, box2->high.y));
+	PG_RETURN_TSBOOL(FPTgt(box1->low.y, box2->high.y));
 }
 
 /*		box_overabove	-		is the lower edge of box1 at or above
@@ -660,7 +665,7 @@ box_overabove(PG_FUNCTION_ARGS)
 	BOX		   *box1 = PG_GETARG_BOX_P(0);
 	BOX		   *box2 = PG_GETARG_BOX_P(1);
 
-	PG_RETURN_BOOL(FPge(box1->low.y, box2->low.y));
+	PG_RETURN_TSBOOL(FPTge(box1->low.y, box2->low.y));
 }
 
 /*		box_contained	-		is box1 contained by box2?
@@ -671,7 +676,7 @@ box_contained(PG_FUNCTION_ARGS)
 	BOX		   *box1 = PG_GETARG_BOX_P(0);
 	BOX		   *box2 = PG_GETARG_BOX_P(1);
 
-	PG_RETURN_BOOL(box_contain_box(box2, box1));
+	PG_RETURN_TSBOOL(box_contain_box(box2, box1));
 }
 
 /*		box_contain		-		does box1 contain box2?
@@ -682,19 +687,19 @@ box_contain(PG_FUNCTION_ARGS)
 	BOX		   *box1 = PG_GETARG_BOX_P(0);
 	BOX		   *box2 = PG_GETARG_BOX_P(1);
 
-	PG_RETURN_BOOL(box_contain_box(box1, box2));
+	PG_RETURN_TSBOOL(box_contain_box(box1, box2));
 }
 
 /*
  * Check whether the second box is in the first box or on its border
  */
-static bool
+static tsbool
 box_contain_box(BOX *contains_box, BOX *contained_box)
 {
-	return FPge(contains_box->high.x, contained_box->high.x) &&
-		FPle(contains_box->low.x, contained_box->low.x) &&
-		FPge(contains_box->high.y, contained_box->high.y) &&
-		FPle(contains_box->low.y, contained_box->low.y);
+	return TS_AND4(FPTge(contains_box->high.x, contained_box->high.x),
+				   FPTle(contains_box->low.x, contained_box->low.x),
+				   FPTge(contains_box->high.y, contained_box->high.y),
+				   FPTle(contains_box->low.y, contained_box->low.y));
 }
 
 
@@ -712,7 +717,7 @@ box_below_eq(PG_FUNCTION_ARGS)
 	BOX		   *box1 = PG_GETARG_BOX_P(0);
 	BOX		   *box2 = PG_GETARG_BOX_P(1);
 
-	PG_RETURN_BOOL(FPle(box1->high.y, box2->low.y));
+	PG_RETURN_TSBOOL(FPTle(box1->high.y, box2->low.y));
 }
 
 Datum
@@ -721,7 +726,7 @@ box_above_eq(PG_FUNCTION_ARGS)
 	BOX		   *box1 = PG_GETARG_BOX_P(0);
 	BOX		   *box2 = PG_GETARG_BOX_P(1);
 
-	PG_RETURN_BOOL(FPge(box1->low.y, box2->high.y));
+	PG_RETURN_TSBOOL(FPTge(box1->low.y, box2->high.y));
 }
 
 
@@ -734,7 +739,7 @@ box_lt(PG_FUNCTION_ARGS)
 	BOX		   *box1 = PG_GETARG_BOX_P(0);
 	BOX		   *box2 = PG_GETARG_BOX_P(1);
 
-	PG_RETURN_BOOL(FPlt(box_ar(box1), box_ar(box2)));
+	PG_RETURN_TSBOOL(FPTlt(box_ar(box1), box_ar(box2)));
 }
 
 Datum
@@ -743,7 +748,7 @@ box_gt(PG_FUNCTION_ARGS)
 	BOX		   *box1 = PG_GETARG_BOX_P(0);
 	BOX		   *box2 = PG_GETARG_BOX_P(1);
 
-	PG_RETURN_BOOL(FPgt(box_ar(box1), box_ar(box2)));
+	PG_RETURN_TSBOOL(FPTgt(box_ar(box1), box_ar(box2)));
 }
 
 Datum
@@ -752,7 +757,7 @@ box_eq(PG_FUNCTION_ARGS)
 	BOX		   *box1 = PG_GETARG_BOX_P(0);
 	BOX		   *box2 = PG_GETARG_BOX_P(1);
 
-	PG_RETURN_BOOL(FPeq(box_ar(box1), box_ar(box2)));
+	PG_RETURN_TSBOOL(FPTeq(box_ar(box1), box_ar(box2)));
 }
 
 Datum
@@ -761,7 +766,7 @@ box_le(PG_FUNCTION_ARGS)
 	BOX		   *box1 = PG_GETARG_BOX_P(0);
 	BOX		   *box2 = PG_GETARG_BOX_P(1);
 
-	PG_RETURN_BOOL(FPle(box_ar(box1), box_ar(box2)));
+	PG_RETURN_TSBOOL(FPTle(box_ar(box1), box_ar(box2)));
 }
 
 Datum
@@ -770,7 +775,7 @@ box_ge(PG_FUNCTION_ARGS)
 	BOX		   *box1 = PG_GETARG_BOX_P(0);
 	BOX		   *box2 = PG_GETARG_BOX_P(1);
 
-	PG_RETURN_BOOL(FPge(box_ar(box1), box_ar(box2)));
+	PG_RETURN_TSBOOL(FPTge(box_ar(box1), box_ar(box2)));
 }
 
 
@@ -904,9 +909,9 @@ box_intersect(PG_FUNCTION_ARGS)
 
 	result = (BOX *) palloc(sizeof(BOX));
 
-	result->high.x = float8_min(box1->high.x, box2->high.x);
+	result->high.x = float8_min_nan(box1->high.x, box2->high.x);
 	result->low.x = float8_max(box1->low.x, box2->low.x);
-	result->high.y = float8_min(box1->high.y, box2->high.y);
+	result->high.y = float8_min_nan(box1->high.y, box2->high.y);
 	result->low.y = float8_max(box1->low.y, box2->low.y);
 
 	PG_RETURN_BOX_P(result);
@@ -981,7 +986,7 @@ line_in(PG_FUNCTION_ARGS)
 	else
 	{
 		path_decode(s, true, 2, &lseg.p[0], &isopen, NULL, "line", str);
-		if (point_eq_point(&lseg.p[0], &lseg.p[1]))
+		if (point_eq_point(&lseg.p[0], &lseg.p[1]) == TS_TRUE)
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 					 errmsg("invalid line specification: must be two distinct points")));
@@ -1061,15 +1066,23 @@ line_construct(LINE *result, Point *pt, float8 m)
 		result->A = -1.0;
 		result->B = 0.0;
 		result->C = pt->x;
+
+		/* Avoid creating a valid line from an invalid point */
+		if (likely(!isnan(pt->x) && !isnan(pt->y)))
+			return;
 	}
-	else if (m == 0)
+	else if (m == 0.0)
 	{
 		/* horizontal - use "y = C" */
 		result->A = 0.0;
 		result->B = -1.0;
 		result->C = pt->y;
+
+		/* Avoid creating a valid line from an invalid point */
+		if (likely(!isnan(pt->x) && !isnan(pt->y)))
+			return;
 	}
-	else
+	else if (!isnan(m))
 	{
 		/* use "mx - y + yinter = 0" */
 		result->A = m;
@@ -1078,7 +1091,12 @@ line_construct(LINE *result, Point *pt, float8 m)
 		/* on some platforms, the preceding expression tends to produce -0 */
 		if (result->C == 0.0)
 			result->C = 0.0;
+
+		if (likely(!isnan(result->C)))
+			return;
 	}
+
+	result->A = result->B = result->C = get_float8_nan();
 }
 
 /* line_construct_pp()
@@ -1091,7 +1109,8 @@ line_construct_pp(PG_FUNCTION_ARGS)
 	Point	   *pt2 = PG_GETARG_POINT_P(1);
 	LINE	   *result = (LINE *) palloc(sizeof(LINE));
 
-	if (point_eq_point(pt1, pt2))
+	/* NaNs are considered to be equal by point_eq_point */
+	if (point_eq_point(pt1, pt2) == TS_TRUE)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("invalid line specification: must be two distinct points")));
@@ -1111,8 +1130,17 @@ line_intersect(PG_FUNCTION_ARGS)
 {
 	LINE	   *l1 = PG_GETARG_LINE_P(0);
 	LINE	   *l2 = PG_GETARG_LINE_P(1);
+	Point		xp;
+	tsbool		r;
 
-	PG_RETURN_BOOL(line_interpt_line(NULL, l1, l2));
+	if ((r = line_interpt_line(&xp, l1, l2)) == TS_TRUE)
+	{
+		if (!isnan(xp.x) && !isnan(xp.y))
+			PG_RETURN_BOOL(true);
+		PG_RETURN_NULL();
+	}
+	else
+		PG_RETURN_TSBOOL(r);
 }
 
 Datum
@@ -1121,7 +1149,7 @@ line_parallel(PG_FUNCTION_ARGS)
 	LINE	   *l1 = PG_GETARG_LINE_P(0);
 	LINE	   *l2 = PG_GETARG_LINE_P(1);
 
-	PG_RETURN_BOOL(!line_interpt_line(NULL, l1, l2));
+	PG_RETURN_TSBOOL(TS_NOT(line_interpt_line(NULL, l1, l2)));
 }
 
 Datum
@@ -1130,6 +1158,14 @@ line_perp(PG_FUNCTION_ARGS)
 	LINE	   *l1 = PG_GETARG_LINE_P(0);
 	LINE	   *l2 = PG_GETARG_LINE_P(1);
 
+	if (unlikely(isnan(l1->A) || isnan(l1->B) || isnan(l1->C) ||
+				 isnan(l2->A) || isnan(l2->B) || isnan(l2->C)))
+		PG_RETURN_NULL();
+
+	/*
+	 * Since the coefficients are all non-NaN, we don't need to use the
+	 * tristate versions of FPTxx functions here.
+	 */
 	if (FPzero(l1->A))
 		PG_RETURN_BOOL(FPzero(l2->B));
 	if (FPzero(l2->A))
@@ -1139,6 +1175,10 @@ line_perp(PG_FUNCTION_ARGS)
 	if (FPzero(l2->B))
 		PG_RETURN_BOOL(FPzero(l1->A));
 
+	/*
+	 * We don't reach here with numbers less than EPSILON. Thus the following
+	 * arithmetic cannot yield NaN.
+	 */
 	PG_RETURN_BOOL(FPeq(float8_div(float8_mul(l1->A, l2->A),
 								   float8_mul(l1->B, l2->B)), -1.0));
 }
@@ -1148,7 +1188,11 @@ line_vertical(PG_FUNCTION_ARGS)
 {
 	LINE	   *line = PG_GETARG_LINE_P(0);
 
-	PG_RETURN_BOOL(FPzero(line->B));
+	/* is it correct to return NULL for C = NaN? */
+	if (unlikely(isnan(line->A) || isnan(line->C)))
+		PG_RETURN_NULL();
+		
+	PG_RETURN_TSBOOL(FPTzero(line->B));
 }
 
 Datum
@@ -1156,7 +1200,11 @@ line_horizontal(PG_FUNCTION_ARGS)
 {
 	LINE	   *line = PG_GETARG_LINE_P(0);
 
-	PG_RETURN_BOOL(FPzero(line->A));
+	/* is it correct to return NULL for C = NaN? */
+	if (unlikely(isnan(line->B) || isnan(line->C)))
+		PG_RETURN_NULL();
+		
+	PG_RETURN_TSBOOL(FPTzero(line->A));
 }
 
 
@@ -1170,14 +1218,10 @@ line_eq(PG_FUNCTION_ARGS)
 	LINE	   *l2 = PG_GETARG_LINE_P(1);
 	float8		ratio;
 
-	/* If any NaNs are involved, insist on exact equality */
+	/* If any NaNs are involved, the two cannot be equal */
 	if (unlikely(isnan(l1->A) || isnan(l1->B) || isnan(l1->C) ||
 				 isnan(l2->A) || isnan(l2->B) || isnan(l2->C)))
-	{
-		PG_RETURN_BOOL(float8_eq(l1->A, l2->A) &&
-					   float8_eq(l1->B, l2->B) &&
-					   float8_eq(l1->C, l2->C));
-	}
+		PG_RETURN_NULL();
 
 	/* Otherwise, lines whose parameters are proportional are the same */
 	if (!FPzero(l2->A))
@@ -1206,9 +1250,20 @@ static inline float8
 line_sl(LINE *line)
 {
 	if (FPzero(line->A))
+	{
+		/* C is likely to be NaN than B */
+		if (unlikely(isnan(line->C) || isnan(line->B)))
+			return get_float8_nan();
 		return 0.0;
+	}
 	if (FPzero(line->B))
+	{
+		/* C is likely to be NaN than A */
+		if (unlikely(isnan(line->C) || isnan(line->A)))
+			return get_float8_nan();
 		return get_float8_infinity();
+	}
+
 	return float8_div(line->A, -line->B);
 }
 
@@ -1220,9 +1275,20 @@ static inline float8
 line_invsl(LINE *line)
 {
 	if (FPzero(line->A))
+	{
+		/* C is likely to be NaN than B */
+		if (unlikely(isnan(line->C) || isnan(line->B)))
+			return get_float8_nan();
 		return get_float8_infinity();
+	}
+
 	if (FPzero(line->B))
+	{
+		/* C is likely to be NaN than A */
+		if (unlikely(isnan(line->C) || isnan(line->A)))
+			return get_float8_nan();
 		return 0.0;
+	}
 	return float8_div(line->B, line->A);
 }
 
@@ -1235,14 +1301,23 @@ line_distance(PG_FUNCTION_ARGS)
 {
 	LINE	   *l1 = PG_GETARG_LINE_P(0);
 	LINE	   *l2 = PG_GETARG_LINE_P(1);
+	Point		xp;
 	float8		ratio;
 
-	if (line_interpt_line(NULL, l1, l2))	/* intersecting? */
-		PG_RETURN_FLOAT8(0.0);
+	if (line_interpt_line(&xp, l1, l2) == TS_TRUE) /* intersecting? */
+	{
+		/* return NaN if NaN is involved */
+		if (isnan(xp.x) || isnan(xp.y))
+			PG_RETURN_FLOAT8(get_float8_nan());
 
-	if (!FPzero(l1->A) && !isnan(l1->A) && !FPzero(l2->A) && !isnan(l2->A))
+		PG_RETURN_FLOAT8(0.0);
+	}
+
+	if (unlikely(isnan(l1->A) || isnan(l1->B) || isnan(l2->A) || isnan(l2->B)))
+		ratio = get_float8_nan();
+	else if (!FPzero(l1->A) && !FPzero(l2->A))
 		ratio = float8_div(l1->A, l2->A);
-	else if (!FPzero(l1->B) && !isnan(l1->B) && !FPzero(l2->B) && !isnan(l2->B))
+	else if (!FPzero(l1->B) && !FPzero(l2->B))
 		ratio = float8_div(l1->B, l2->B);
 	else
 		ratio = 1.0;
@@ -1264,8 +1339,13 @@ line_interpt(PG_FUNCTION_ARGS)
 
 	result = (Point *) palloc(sizeof(Point));
 
-	if (!line_interpt_line(result, l1, l2))
+	if (line_interpt_line(result, l1, l2) != TS_TRUE ||
+		isnan(result->x) || isnan(result->y))
+	{
+		pfree(result);
 		PG_RETURN_NULL();
+	}
+
 	PG_RETURN_POINT_P(result);
 }
 
@@ -1283,36 +1363,64 @@ line_interpt(PG_FUNCTION_ARGS)
  * point would have NaN coordinates.  We shouldn't return false in this case
  * because that would mean the lines are parallel.
  */
-static bool
+static tsbool
 line_interpt_line(Point *result, LINE *l1, LINE *l2)
 {
 	float8		x,
 				y;
+	tsbool		t;
 
-	if (!FPzero(l1->B))
+	if ((t = FPTzero(l1->B)) == TS_FALSE)
 	{
-		if (FPeq(l2->A, float8_mul(l1->A, float8_div(l2->B, l1->B))))
-			return false;
+		/* l1 is not virtucal */
+		t = FPTne(l2->A, float8_mul(l1->A, float8_div(l2->B, l1->B)));
+		if (t != TS_TRUE)
+			return t;
 
 		x = float8_div(float8_mi(float8_mul(l1->B, l2->C),
 								 float8_mul(l2->B, l1->C)),
 					   float8_mi(float8_mul(l1->A, l2->B),
 								 float8_mul(l2->A, l1->B)));
-		y = float8_div(-float8_pl(float8_mul(l1->A, x), l1->C), l1->B);
-	}
-	else if (!FPzero(l2->B))
-	{
-		if (FPeq(l1->A, float8_mul(l2->A, float8_div(l1->B, l2->B))))
-			return false;
-
-		x = float8_div(float8_mi(float8_mul(l2->B, l1->C),
-								 float8_mul(l1->B, l2->C)),
+		/*
+		 * You might want to simplify this expression by using x, but that can
+		 * introduce unnecessary indeterminants (inf-inf) into the calculation,
+		 * which leads to a wrong result.
+		 * (For example, (-1, -1, Inf) and (1, -1, 0))
+		 */
+		y = float8_div(float8_mi(float8_mul(l1->A, l2->C),
+								 float8_mul(l2->A, l1->C)),
 					   float8_mi(float8_mul(l2->A, l1->B),
 								 float8_mul(l1->A, l2->B)));
-		y = float8_div(-float8_pl(float8_mul(l2->A, x), l2->C), l2->B);
 	}
+	else if (t == TS_TRUE && (t = FPTzero(l2->B)) == TS_FALSE)
+	{
+		/* l2 is not virtical */
+		/*
+		 * We know that l1 is vertical here. The lines cannot be parallel and
+		 * the x-coord of the cross point is -C/A of l1.
+		 */
+		x = -float8_div(l1->C, l1->A);
+
+		/*
+		 * When l2->A is zero, y is determined independently from x even if it
+		 * is Inf.
+		 */
+		switch (FPTzero(l2->A))
+		{
+			case TS_TRUE:
+				y = -float8_div(l2->C, l2->B);
+				break;
+			case TS_FALSE:
+				y = float8_div(-float8_pl(float8_mul(l2->A, x), l2->C), l2->B);
+				break;
+			case TS_NULL:
+				return TS_NULL;
+		}
+	}
+	else if (t != TS_NULL)
+		return TS_FALSE;
 	else
-		return false;
+		return TS_NULL;
 
 	/* On some platforms, the preceding expressions tend to produce -0. */
 	if (x == 0.0)
@@ -1323,7 +1431,7 @@ line_interpt_line(Point *result, LINE *l1, LINE *l2)
 	if (result != NULL)
 		point_construct(result, x, y);
 
-	return true;
+	return TS_TRUE;
 }
 
 
@@ -1630,6 +1738,7 @@ path_inter(PG_FUNCTION_ARGS)
 				j;
 	LSEG		seg1,
 				seg2;
+	tsbool		r;
 
 	Assert(p1->npts > 0 && p2->npts > 0);
 
@@ -1639,20 +1748,21 @@ path_inter(PG_FUNCTION_ARGS)
 	{
 		b1.high.x = float8_max(p1->p[i].x, b1.high.x);
 		b1.high.y = float8_max(p1->p[i].y, b1.high.y);
-		b1.low.x = float8_min(p1->p[i].x, b1.low.x);
-		b1.low.y = float8_min(p1->p[i].y, b1.low.y);
+		b1.low.x = float8_min_nan(p1->p[i].x, b1.low.x);
+		b1.low.y = float8_min_nan(p1->p[i].y, b1.low.y);
 	}
+
 	b2.high.x = b2.low.x = p2->p[0].x;
 	b2.high.y = b2.low.y = p2->p[0].y;
 	for (i = 1; i < p2->npts; i++)
 	{
 		b2.high.x = float8_max(p2->p[i].x, b2.high.x);
 		b2.high.y = float8_max(p2->p[i].y, b2.high.y);
-		b2.low.x = float8_min(p2->p[i].x, b2.low.x);
-		b2.low.y = float8_min(p2->p[i].y, b2.low.y);
+		b2.low.x = float8_min_nan(p2->p[i].x, b2.low.x);
+		b2.low.y = float8_min_nan(p2->p[i].y, b2.low.y);
 	}
-	if (!box_ov(&b1, &b2))
-		PG_RETURN_BOOL(false);
+	if ((r = box_ov(&b1, &b2)) != TS_TRUE)
+		PG_RETURN_TSBOOL(r);
 
 	/* pairwise check lseg intersections */
 	for (i = 0; i < p1->npts; i++)
@@ -1671,6 +1781,7 @@ path_inter(PG_FUNCTION_ARGS)
 		for (j = 0; j < p2->npts; j++)
 		{
 			int			jprev;
+			tsbool		t;
 
 			if (j > 0)
 				jprev = j - 1;
@@ -1683,13 +1794,14 @@ path_inter(PG_FUNCTION_ARGS)
 
 			statlseg_construct(&seg1, &p1->p[iprev], &p1->p[i]);
 			statlseg_construct(&seg2, &p2->p[jprev], &p2->p[j]);
-			if (lseg_interpt_lseg(NULL, &seg1, &seg2))
-				PG_RETURN_BOOL(true);
+			t = lseg_interpt_lseg(NULL, &seg1, &seg2);
+			if (t != TS_FALSE)
+				PG_RETURN_TSBOOL(t);
 		}
 	}
 
 	/* if we dropped through, no two segs intersected */
-	PG_RETURN_BOOL(false);
+	PG_RETURN_TSBOOL(TS_FALSE);
 }
 
 /* path_distance()
@@ -1739,6 +1851,11 @@ path_distance(PG_FUNCTION_ARGS)
 			statlseg_construct(&seg2, &p2->p[jprev], &p2->p[j]);
 
 			tmp = lseg_closept_lseg(NULL, &seg1, &seg2);
+
+			/* return NULL immediately if NaN is involved */
+			if (isnan(tmp))
+				PG_RETURN_NULL();
+
 			if (!have_min || float8_lt(tmp, min))
 			{
 				min = tmp;
@@ -1925,8 +2042,12 @@ point_eq(PG_FUNCTION_ARGS)
 {
 	Point	   *pt1 = PG_GETARG_POINT_P(0);
 	Point	   *pt2 = PG_GETARG_POINT_P(1);
+	tsbool		res = point_eq_point(pt1, pt2);
 
-	PG_RETURN_BOOL(point_eq_point(pt1, pt2));
+	if (res == TS_NULL)
+		PG_RETURN_NULL();
+
+	PG_RETURN_BOOL(res);
 }
 
 Datum
@@ -1934,23 +2055,22 @@ point_ne(PG_FUNCTION_ARGS)
 {
 	Point	   *pt1 = PG_GETARG_POINT_P(0);
 	Point	   *pt2 = PG_GETARG_POINT_P(1);
+	tsbool		res = point_eq_point(pt1, pt2);
 
-	PG_RETURN_BOOL(!point_eq_point(pt1, pt2));
+	if (res == TS_NULL)
+		PG_RETURN_NULL();
+
+	PG_RETURN_BOOL(!res);
 }
 
 
 /*
  * Check whether the two points are the same
  */
-static inline bool
+static inline tsbool
 point_eq_point(Point *pt1, Point *pt2)
 {
-	/* If any NaNs are involved, insist on exact equality */
-	if (unlikely(isnan(pt1->x) || isnan(pt1->y) ||
-				 isnan(pt2->x) || isnan(pt2->y)))
-		return (float8_eq(pt1->x, pt2->x) && float8_eq(pt1->y, pt2->y));
-
-	return (FPeq(pt1->x, pt2->x) && FPeq(pt1->y, pt2->y));
+	return TS_AND2(FPTeq(pt1->x, pt2->x), FPTeq(pt1->y, pt2->y));
 }
 
 
@@ -1991,10 +2111,21 @@ point_slope(PG_FUNCTION_ARGS)
 static inline float8
 point_sl(Point *pt1, Point *pt2)
 {
+	/* NaN doesn't equal to NaN, so don't bother using a tri-state value */
 	if (FPeq(pt1->x, pt2->x))
+	{
+		if (unlikely(isnan(pt1->y) || isnan(pt2->y)))
+			return get_float8_nan();
 		return get_float8_infinity();
+	}
+
 	if (FPeq(pt1->y, pt2->y))
+	{
+		if (unlikely(isnan(pt1->x) || isnan(pt2->x)))
+			return get_float8_nan();
 		return 0.0;
+	}
+
 	return float8_div(float8_mi(pt1->y, pt2->y), float8_mi(pt1->x, pt2->x));
 }
 
@@ -2007,10 +2138,21 @@ point_sl(Point *pt1, Point *pt2)
 static inline float8
 point_invsl(Point *pt1, Point *pt2)
 {
+	/* NaN doesn't equal to NaN, so don't bother using a tri-state value */
 	if (FPeq(pt1->x, pt2->x))
+	{
+		if (unlikely(isnan(pt1->y) || isnan(pt2->y)))
+			return get_float8_nan();
 		return 0.0;
+	}
+
 	if (FPeq(pt1->y, pt2->y))
+	{
+		if (unlikely(isnan(pt1->x) || isnan(pt2->x)))
+			return get_float8_nan();
 		return get_float8_infinity();
+	}
+
 	return float8_div(float8_mi(pt1->x, pt2->x), float8_mi(pt2->y, pt1->y));
 }
 
@@ -2155,7 +2297,7 @@ lseg_intersect(PG_FUNCTION_ARGS)
 	LSEG	   *l1 = PG_GETARG_LSEG_P(0);
 	LSEG	   *l2 = PG_GETARG_LSEG_P(1);
 
-	PG_RETURN_BOOL(lseg_interpt_lseg(NULL, l1, l2));
+	PG_RETURN_TSBOOL(lseg_interpt_lseg(NULL, l1, l2));
 }
 
 
@@ -2165,7 +2307,7 @@ lseg_parallel(PG_FUNCTION_ARGS)
 	LSEG	   *l1 = PG_GETARG_LSEG_P(0);
 	LSEG	   *l2 = PG_GETARG_LSEG_P(1);
 
-	PG_RETURN_BOOL(FPeq(lseg_sl(l1), lseg_sl(l2)));
+	PG_RETURN_TSBOOL(FPTeq(lseg_sl(l1), lseg_sl(l2)));
 }
 
 /*
@@ -2177,7 +2319,7 @@ lseg_perp(PG_FUNCTION_ARGS)
 	LSEG	   *l1 = PG_GETARG_LSEG_P(0);
 	LSEG	   *l2 = PG_GETARG_LSEG_P(1);
 
-	PG_RETURN_BOOL(FPeq(lseg_sl(l1), lseg_invsl(l2)));
+	PG_RETURN_TSBOOL(FPTeq(lseg_sl(l1), lseg_invsl(l2)));
 }
 
 Datum
@@ -2185,7 +2327,7 @@ lseg_vertical(PG_FUNCTION_ARGS)
 {
 	LSEG	   *lseg = PG_GETARG_LSEG_P(0);
 
-	PG_RETURN_BOOL(FPeq(lseg->p[0].x, lseg->p[1].x));
+	PG_RETURN_TSBOOL(FPTeq(lseg->p[0].x, lseg->p[1].x));
 }
 
 Datum
@@ -2193,7 +2335,7 @@ lseg_horizontal(PG_FUNCTION_ARGS)
 {
 	LSEG	   *lseg = PG_GETARG_LSEG_P(0);
 
-	PG_RETURN_BOOL(FPeq(lseg->p[0].y, lseg->p[1].y));
+	PG_RETURN_TSBOOL(FPTeq(lseg->p[0].y, lseg->p[1].y));
 }
 
 
@@ -2203,8 +2345,8 @@ lseg_eq(PG_FUNCTION_ARGS)
 	LSEG	   *l1 = PG_GETARG_LSEG_P(0);
 	LSEG	   *l2 = PG_GETARG_LSEG_P(1);
 
-	PG_RETURN_BOOL(point_eq_point(&l1->p[0], &l2->p[0]) &&
-				   point_eq_point(&l1->p[1], &l2->p[1]));
+	PG_RETURN_TSBOOL(TS_AND2(point_eq_point(&l1->p[0], &l2->p[0]),
+							 point_eq_point(&l1->p[1], &l2->p[1])));
 }
 
 Datum
@@ -2213,8 +2355,9 @@ lseg_ne(PG_FUNCTION_ARGS)
 	LSEG	   *l1 = PG_GETARG_LSEG_P(0);
 	LSEG	   *l2 = PG_GETARG_LSEG_P(1);
 
-	PG_RETURN_BOOL(!point_eq_point(&l1->p[0], &l2->p[0]) ||
-				   !point_eq_point(&l1->p[1], &l2->p[1]));
+	PG_RETURN_TSBOOL(TS_OR2(
+						 TS_NOT(point_eq_point(&l1->p[0], &l2->p[0])),
+						 TS_NOT(point_eq_point(&l1->p[1], &l2->p[1]))));
 }
 
 Datum
@@ -2223,8 +2366,8 @@ lseg_lt(PG_FUNCTION_ARGS)
 	LSEG	   *l1 = PG_GETARG_LSEG_P(0);
 	LSEG	   *l2 = PG_GETARG_LSEG_P(1);
 
-	PG_RETURN_BOOL(FPlt(point_dt(&l1->p[0], &l1->p[1]),
-						point_dt(&l2->p[0], &l2->p[1])));
+	PG_RETURN_TSBOOL(FPTlt(point_dt(&l1->p[0], &l1->p[1]),
+						   point_dt(&l2->p[0], &l2->p[1])));
 }
 
 Datum
@@ -2233,8 +2376,8 @@ lseg_le(PG_FUNCTION_ARGS)
 	LSEG	   *l1 = PG_GETARG_LSEG_P(0);
 	LSEG	   *l2 = PG_GETARG_LSEG_P(1);
 
-	PG_RETURN_BOOL(FPle(point_dt(&l1->p[0], &l1->p[1]),
-						point_dt(&l2->p[0], &l2->p[1])));
+	PG_RETURN_TSBOOL(FPTle(point_dt(&l1->p[0], &l1->p[1]),
+						   point_dt(&l2->p[0], &l2->p[1])));
 }
 
 Datum
@@ -2243,8 +2386,8 @@ lseg_gt(PG_FUNCTION_ARGS)
 	LSEG	   *l1 = PG_GETARG_LSEG_P(0);
 	LSEG	   *l2 = PG_GETARG_LSEG_P(1);
 
-	PG_RETURN_BOOL(FPgt(point_dt(&l1->p[0], &l1->p[1]),
-						point_dt(&l2->p[0], &l2->p[1])));
+	PG_RETURN_TSBOOL(FPTgt(point_dt(&l1->p[0], &l1->p[1]),
+						   point_dt(&l2->p[0], &l2->p[1])));
 }
 
 Datum
@@ -2253,8 +2396,8 @@ lseg_ge(PG_FUNCTION_ARGS)
 	LSEG	   *l1 = PG_GETARG_LSEG_P(0);
 	LSEG	   *l2 = PG_GETARG_LSEG_P(1);
 
-	PG_RETURN_BOOL(FPge(point_dt(&l1->p[0], &l1->p[1]),
-						point_dt(&l2->p[0], &l2->p[1])));
+	PG_RETURN_TSBOOL(FPTge(point_dt(&l1->p[0], &l1->p[1]),
+						   point_dt(&l2->p[0], &l2->p[1])));
 }
 
 
@@ -2299,27 +2442,28 @@ lseg_center(PG_FUNCTION_ARGS)
  * This function is almost perfectly symmetric, even though it doesn't look
  * like it.  See lseg_interpt_line() for the other half of it.
  */
-static bool
+static tsbool
 lseg_interpt_lseg(Point *result, LSEG *l1, LSEG *l2)
 {
 	Point		interpt;
 	LINE		tmp;
+	tsbool		r;
 
 	line_construct(&tmp, &l2->p[0], lseg_sl(l2));
-	if (!lseg_interpt_line(&interpt, l1, &tmp))
-		return false;
+	if ((r = lseg_interpt_line(&interpt, l1, &tmp)) != TS_TRUE)
+		return r;
 
 	/*
 	 * If the line intersection point isn't within l2, there is no valid
 	 * segment intersection point at all.
 	 */
-	if (!lseg_contain_point(l2, &interpt))
-		return false;
+	if ((r = lseg_contain_point(l2, &interpt)) != TS_TRUE)
+		return r;
 
 	if (result != NULL)
 		*result = interpt;
 
-	return true;
+	return TS_TRUE;
 }
 
 Datum
@@ -2331,7 +2475,7 @@ lseg_interpt(PG_FUNCTION_ARGS)
 
 	result = (Point *) palloc(sizeof(Point));
 
-	if (!lseg_interpt_lseg(result, l1, l2))
+	if (lseg_interpt_lseg(result, l1, l2) != TS_TRUE)
 		PG_RETURN_NULL();
 	PG_RETURN_POINT_P(result);
 }
@@ -2426,6 +2570,11 @@ dist_ppath_internal(Point *pt, PATH *path)
 
 		statlseg_construct(&lseg, &path->p[iprev], &path->p[i]);
 		tmp = lseg_closept_point(NULL, &lseg, pt);
+
+		/* return NaN if NaN is involved */
+		if (unlikely(isnan(tmp)))
+			return tmp;
+
 		if (!have_min || float8_lt(tmp, result))
 		{
 			result = tmp;
@@ -2598,8 +2747,13 @@ dist_ppoly_internal(Point *pt, POLYGON *poly)
 	float8		d;
 	int			i;
 	LSEG		seg;
+	int			inside;
 
-	if (point_inside(pt, poly->npts, poly->p) != 0)
+	inside = point_inside(pt, poly->npts, poly->p);
+	if (inside == -1)
+		return get_float8_nan();
+
+	if (inside != 0)
 		return 0.0;
 
 	/* initialize distance with segment between first and last points */
@@ -2619,6 +2773,8 @@ dist_ppoly_internal(Point *pt, POLYGON *poly)
 		d = lseg_closept_point(NULL, &seg, pt);
 		if (float8_lt(d, result))
 			result = d;
+		else if (unlikely(isnan(d)))
+			return get_float8_nan();
 	}
 
 	return result;
@@ -2636,11 +2792,12 @@ dist_ppoly_internal(Point *pt, POLYGON *poly)
  * Return whether the line segment intersect with the line. If *result is not
  * NULL, it is set to the intersection point.
  */
-static bool
+static tsbool
 lseg_interpt_line(Point *result, LSEG *lseg, LINE *line)
 {
 	Point		interpt;
 	LINE		tmp;
+	tsbool		r;
 
 	/*
 	 * First, we promote the line segment to a line, because we know how to
@@ -2648,31 +2805,40 @@ lseg_interpt_line(Point *result, LSEG *lseg, LINE *line)
 	 * intersection point, we are done.
 	 */
 	line_construct(&tmp, &lseg->p[0], lseg_sl(lseg));
-	if (!line_interpt_line(&interpt, &tmp, line))
-		return false;
+	if ((r = line_interpt_line(&interpt, &tmp, line)) != TS_TRUE)
+		return r;
+
+	if (unlikely(isnan(interpt.x) || isnan(interpt.y)))
+		return TS_FALSE;
 
 	/*
 	 * Then, we check whether the intersection point is actually on the line
 	 * segment.
 	 */
-	if (!lseg_contain_point(lseg, &interpt))
-		return false;
+	if ((r = lseg_contain_point(lseg, &interpt)) != TS_TRUE)
+		return r;
+
 	if (result != NULL)
 	{
+		tsbool	r;
+
 		/*
 		 * If there is an intersection, then check explicitly for matching
 		 * endpoints since there may be rounding effects with annoying LSB
 		 * residue.
 		 */
-		if (point_eq_point(&lseg->p[0], &interpt))
+		if ((r = point_eq_point(&lseg->p[0], &interpt)) == TS_TRUE)
 			*result = lseg->p[0];
-		else if (point_eq_point(&lseg->p[1], &interpt))
+		else if (r == TS_FALSE &&
+				 (r = point_eq_point(&lseg->p[1], &interpt)) == TS_TRUE)
 			*result = lseg->p[1];
-		else
+		else if (r == TS_FALSE)
 			*result = interpt;
+		else
+			return r;
 	}
 
-	return true;
+	return TS_TRUE;
 }
 
 /*---------------------------------------------------------------------
@@ -2690,6 +2856,78 @@ line_closept_point(Point *result, LINE *line, Point *point)
 {
 	Point		closept;
 	LINE		tmp;
+	float8		val;
+
+	/*
+	 * Treat specially the cases where A = 0 and B = 0, which we regard the
+	 * line is perfectly horizontal and vertical correspondingly, not applying
+	 * the normal formula involving the behavior of inf*0 =NaN defined by
+	 * IEEE754.
+	 */
+	if (FPzero(line->A))
+	{
+		float8 y;
+
+		/* the line is horizontal */
+		Assert(!FPzero(line->B));
+
+		y = -line->C / line->B;
+
+		/* Avoid -0 */
+		if (y == 0.0)
+			y = 0.0;
+
+		if (result != NULL)
+		{
+			result->x = point->x;
+			result->y = y;
+		}
+
+		if (unlikely(isnan(point->x)))
+			return get_float8_nan();
+
+		return fabs(point->y - y);
+	}
+	else if (FPzero(line->B))
+	{
+		float x;
+
+		/* the line is virtical */
+		Assert(!FPzero(line->A));
+
+		x = -line->C / line->A;
+
+		/* Avoid -0 */
+		if (x == 0)
+			x = 0;
+
+		if (result != NULL)
+		{
+			result->x = x;
+			result->y = point->y;
+		}
+
+		if (unlikely(isnan(point->y)))
+			return get_float8_nan();
+
+		return fabs(point->x - x);
+	}
+
+	/*
+	 * If it is unclear whether the point is on the line or not, then the
+	 * results are ill-defined.  This eliminates cases where any of the given
+	 * coordinates are NaN, as well as cases where infinite coordinates give
+	 * rise to Inf - Inf, 0 * Inf, etc.
+	 */
+	val = float8_pl(float8_pl(float8_mul(line->A, point->x),
+							  float8_mul(line->B, point->y)),
+					line->C);
+	if (unlikely(isnan(val)))
+	{
+		if (result != NULL)
+			result->x = result->y = get_float8_nan();
+		return get_float8_nan();
+	}
 
 	/*
 	 * We drop a perpendicular to find the intersection point.  Ordinarily we
@@ -2700,7 +2938,7 @@ line_closept_point(Point *result, LINE *line, Point *point)
 	if (!line_interpt_line(&closept, &tmp, line))
 	{
 		if (result != NULL)
-			*result = *point;
+			result->x = result->y = get_float8_nan();
 
 		return get_float8_nan();
 	}
@@ -2708,7 +2946,17 @@ line_closept_point(Point *result, LINE *line, Point *point)
 	if (result != NULL)
 		*result = closept;
 
-	return point_dt(&closept, point);
+	/*
+	 * If the closest point contains Inf's, the closest point may lose
+	 * arithmetic relationship with the point which lets point_dt wrongly give
+	 * NaN. To avoid that kind of failure, we calculate the distance using the
+	 * following formula instead of using the closest point.
+	 *
+	 * | A*x + B*y + C | / sqrt(A^2 + B^2)
+	 *
+	 * The dividend have been already calculated so just divide it.
+	 */
+	return float8_div(fabs(val), HYPOT(line->A, line->B));
 }
 
 Datum
@@ -2720,7 +2968,9 @@ close_pl(PG_FUNCTION_ARGS)
 
 	result = (Point *) palloc(sizeof(Point));
 
-	if (isnan(line_closept_point(result, line, pt)))
+	(void) line_closept_point(result, line, pt);
+
+	if (unlikely(isnan(result->x) || isnan(result->y)))
 		PG_RETURN_NULL();
 
 	PG_RETURN_POINT_P(result);
@@ -2777,10 +3027,18 @@ lseg_closept_lseg(Point *result, LSEG *on_lseg, LSEG *to_lseg)
 	Point		point;
 	float8		dist,
 				d;
+	bool		anynan = false;
 
 	/* First, we handle the case when the line segments are intersecting. */
-	if (lseg_interpt_lseg(result, on_lseg, to_lseg))
-		return 0.0;
+	switch(lseg_interpt_lseg(result, on_lseg, to_lseg))
+	{
+		case TS_TRUE:
+			return 0.0;
+		case TS_NULL:
+			return get_float8_nan();
+		case TS_FALSE:
+			break;
+	}
 
 	/*
 	 * Then, we find the closest points from the endpoints of the second line
@@ -2788,6 +3046,7 @@ lseg_closept_lseg(Point *result, LSEG *on_lseg, LSEG *to_lseg)
 	 */
 	dist = lseg_closept_point(result, on_lseg, &to_lseg->p[0]);
 	d = lseg_closept_point(&point, on_lseg, &to_lseg->p[1]);
+	anynan |= (isnan(dist) || isnan(d));
 	if (float8_lt(d, dist))
 	{
 		dist = d;
@@ -2797,6 +3056,7 @@ lseg_closept_lseg(Point *result, LSEG *on_lseg, LSEG *to_lseg)
 
 	/* The closest point can still be one of the endpoints, so we test them. */
 	d = lseg_closept_point(NULL, to_lseg, &on_lseg->p[0]);
+	anynan |= isnan(d);
 	if (float8_lt(d, dist))
 	{
 		dist = d;
@@ -2804,6 +3064,7 @@ lseg_closept_lseg(Point *result, LSEG *on_lseg, LSEG *to_lseg)
 			*result = on_lseg->p[0];
 	}
 	d = lseg_closept_point(NULL, to_lseg, &on_lseg->p[1]);
+	anynan |= isnan(d);
 	if (float8_lt(d, dist))
 	{
 		dist = d;
@@ -2811,6 +3072,12 @@ lseg_closept_lseg(Point *result, LSEG *on_lseg, LSEG *to_lseg)
 			*result = on_lseg->p[1];
 	}
 
+	if (unlikely(anynan))
+	{
+		if (result != NULL)
+			result->x = result->y = get_float8_nan();
+		return get_float8_nan();
+	}
 	return dist;
 }
 
@@ -2847,13 +3114,21 @@ box_closept_point(Point *result, BOX *box, Point *pt)
 	Point		point,
 				closept;
 	LSEG		lseg;
+	bool		anynan = false;
 
-	if (box_contain_point(box, pt))
+	switch(box_contain_point(box, pt))
 	{
-		if (result != NULL)
-			*result = *pt;
+		case TS_TRUE:
+			if (result != NULL)
+				*result = *pt;
 
-		return 0.0;
+			return 0.0;
+
+		case TS_NULL:
+			return get_float8_nan();
+
+		case TS_FALSE:
+			break;
 	}
 
 	/* pairwise check lseg distances */
@@ -2861,9 +3136,10 @@ box_closept_point(Point *result, BOX *box, Point *pt)
 	point.y = box->high.y;
 	statlseg_construct(&lseg, &box->low, &point);
 	dist = lseg_closept_point(result, &lseg, pt);
-
+	anynan |= isnan(dist);
 	statlseg_construct(&lseg, &box->high, &point);
 	d = lseg_closept_point(&closept, &lseg, pt);
+	anynan |= isnan(d);
 	if (float8_lt(d, dist))
 	{
 		dist = d;
@@ -2875,6 +3151,7 @@ box_closept_point(Point *result, BOX *box, Point *pt)
 	point.y = box->low.y;
 	statlseg_construct(&lseg, &box->low, &point);
 	d = lseg_closept_point(&closept, &lseg, pt);
+	anynan |= isnan(d);
 	if (float8_lt(d, dist))
 	{
 		dist = d;
@@ -2884,11 +3161,19 @@ box_closept_point(Point *result, BOX *box, Point *pt)
 
 	statlseg_construct(&lseg, &box->high, &point);
 	d = lseg_closept_point(&closept, &lseg, pt);
+	anynan |= isnan(d);
 	if (float8_lt(d, dist))
 	{
 		dist = d;
 		if (result != NULL)
 			*result = closept;
+	}
+
+	if (unlikely(anynan))
+	{
+		if (result != NULL)
+			result->x = result->y = get_float8_nan();
+		return get_float8_nan();
 	}
 
 	return dist;
@@ -2920,15 +3205,24 @@ close_pb(PG_FUNCTION_ARGS)
  * even because of simple roundoff issues, there may not be a single closest
  * point.  We are likely to set the result to the second endpoint in these
  * cases.
+ * Returns Nan and stores {NaN,NaN} to result if NaN is involved,
  */
 static float8
 lseg_closept_line(Point *result, LSEG *lseg, LINE *line)
 {
 	float8		dist1,
 				dist2;
+	tsbool		r;
 
-	if (lseg_interpt_line(result, lseg, line))
+	if ((r = lseg_interpt_line(result, lseg, line)) == TS_TRUE)
 		return 0.0;
+	else if (r == TS_NULL)
+	{
+		if (result != NULL)
+			result->x = result->y = get_float8_nan();
+
+		return get_float8_nan();
+	}
 
 	dist1 = line_closept_point(NULL, line, &lseg->p[0]);
 	dist2 = line_closept_point(NULL, line, &lseg->p[1]);
@@ -2942,6 +3236,14 @@ lseg_closept_line(Point *result, LSEG *lseg, LINE *line)
 	}
 	else
 	{
+		/* return NaN if any of the two is NaN */
+		if (unlikely(isnan(dist1) || isnan(dist2)))
+		{
+			if (result != NULL)
+				result->x = result->y = get_float8_nan();
+			return get_float8_nan();
+		}
+
 		if (result != NULL)
 			*result = lseg->p[1];
 
@@ -2983,8 +3285,15 @@ box_closept_lseg(Point *result, BOX *box, LSEG *lseg)
 				closept;
 	LSEG		bseg;
 
-	if (box_interpt_lseg(result, box, lseg))
-		return 0.0;
+	switch (box_interpt_lseg(result, box, lseg))
+	{
+		case TS_TRUE:
+			return 0.0;
+		case TS_NULL:
+			return get_float8_nan();
+		case TS_FALSE:
+			break;
+	}
 
 	/* pairwise check lseg distances */
 	point.x = box->low.x;
@@ -3048,12 +3357,35 @@ close_sb(PG_FUNCTION_ARGS)
 /*
  *		Does the point satisfy the equation?
  */
-static bool
+static tsbool
 line_contain_point(LINE *line, Point *point)
 {
-	return FPzero(float8_pl(float8_pl(float8_mul(line->A, point->x),
-									  float8_mul(line->B, point->y)),
-							line->C));
+	/*
+	 * Treat specially way the cases where A = 0 and B = 0, which we regard the
+	 * line is perfectly horizontal and vertical correspondingly to avoid the
+	 * normal formula based on the IEEE754's definitions yields unwanted NaNs.
+	 */
+	if (line->A == 0.0)
+	{
+		/* the line is horizontal */
+		Assert(line->B != 0.0);
+
+		/* inf == inf here */
+		return FPTeq(point->y, -line->C / line->B);
+	}
+	else if (line->B == 0.0)
+	{
+		/* the line is vertical */
+		Assert(line->A != 0.0);
+
+		/* inf == inf here */
+		return FPTeq(point->x, -line->C / line->A);
+	}
+
+	return FPTzero(float8_pl(
+					   float8_pl(float8_mul(line->A, point->x),
+								 float8_mul(line->B, point->y)),
+					   line->C));
 }
 
 Datum
@@ -3062,7 +3394,7 @@ on_pl(PG_FUNCTION_ARGS)
 	Point	   *pt = PG_GETARG_POINT_P(0);
 	LINE	   *line = PG_GETARG_LINE_P(1);
 
-	PG_RETURN_BOOL(line_contain_point(line, pt));
+	PG_RETURN_TSBOOL(line_contain_point(line, pt));
 }
 
 
@@ -3070,12 +3402,12 @@ on_pl(PG_FUNCTION_ARGS)
  *		Determine colinearity by detecting a triangle inequality.
  * This algorithm seems to behave nicely even with lsb residues - tgl 1997-07-09
  */
-static bool
+static tsbool
 lseg_contain_point(LSEG *lseg, Point *pt)
 {
-	return FPeq(point_dt(pt, &lseg->p[0]) +
-				point_dt(pt, &lseg->p[1]),
-				point_dt(&lseg->p[0], &lseg->p[1]));
+	return FPTeq(point_dt(pt, &lseg->p[0]) +
+				 point_dt(pt, &lseg->p[1]),
+				 point_dt(&lseg->p[0], &lseg->p[1]));
 }
 
 Datum
@@ -3084,18 +3416,25 @@ on_ps(PG_FUNCTION_ARGS)
 	Point	   *pt = PG_GETARG_POINT_P(0);
 	LSEG	   *lseg = PG_GETARG_LSEG_P(1);
 
-	PG_RETURN_BOOL(lseg_contain_point(lseg, pt));
+	PG_RETURN_TSBOOL(lseg_contain_point(lseg, pt));
 }
 
 
 /*
  * Check whether the point is in the box or on its border
  */
-static bool
+static tsbool
 box_contain_point(BOX *box, Point *point)
 {
-	return box->high.x >= point->x && box->low.x <= point->x &&
-		box->high.y >= point->y && box->low.y <= point->y;
+	if (box->high.x >= point->x && box->low.x <= point->x &&
+		box->high.y >= point->y && box->low.y <= point->y)
+		return TS_TRUE;
+	else if (!isnan(box->high.x) && !isnan(box->high.y) &&
+			 !isnan(box->low.x) && !isnan(box->low.y) &&
+			 !isnan(point->x) && !isnan(point->y))
+		return TS_FALSE;
+
+	return TS_NULL;
 }
 
 Datum
@@ -3104,7 +3443,7 @@ on_pb(PG_FUNCTION_ARGS)
 	Point	   *pt = PG_GETARG_POINT_P(0);
 	BOX		   *box = PG_GETARG_BOX_P(1);
 
-	PG_RETURN_BOOL(box_contain_point(box, pt));
+	PG_RETURN_TSBOOL(box_contain_point(box, pt));
 }
 
 Datum
@@ -3113,7 +3452,7 @@ box_contain_pt(PG_FUNCTION_ARGS)
 	BOX		   *box = PG_GETARG_BOX_P(0);
 	Point	   *pt = PG_GETARG_POINT_P(1);
 
-	PG_RETURN_BOOL(box_contain_point(box, pt));
+	PG_RETURN_TSBOOL(box_contain_point(box, pt));
 }
 
 /* on_ppath -
@@ -3136,24 +3475,38 @@ on_ppath(PG_FUNCTION_ARGS)
 				n;
 	float8		a,
 				b;
+	int			inside;
 
 	/*-- OPEN --*/
 	if (!path->closed)
 	{
+		tsbool r;
+
 		n = path->npts - 1;
 		a = point_dt(pt, &path->p[0]);
 		for (i = 0; i < n; i++)
 		{
 			b = point_dt(pt, &path->p[i + 1]);
-			if (FPeq(float8_pl(a, b), point_dt(&path->p[i], &path->p[i + 1])))
-				PG_RETURN_BOOL(true);
+			r = FPTeq(float8_pl(a, b), point_dt(&path->p[i], &path->p[i + 1]));
+			if (r != TS_FALSE)
+				PG_RETURN_TSBOOL(r);
 			a = b;
 		}
+		/* See the PG_RETURN_BOOL at the end of this function */
 		PG_RETURN_BOOL(false);
 	}
 
 	/*-- CLOSED --*/
-	PG_RETURN_BOOL(point_inside(pt, path->npts, path->p) != 0);
+	inside = point_inside(pt, path->npts, path->p);
+
+	if (inside < 0)
+		PG_RETURN_NULL();
+
+	/*
+	 * PG_RETURN_BOOL is compatible and faster than PG_RETURN_TSBOOL when the
+	 * value is guaranteed to be in bool.
+	 */
+	PG_RETURN_BOOL(inside != 0);
 }
 
 
@@ -3168,8 +3521,8 @@ on_sl(PG_FUNCTION_ARGS)
 	LSEG	   *lseg = PG_GETARG_LSEG_P(0);
 	LINE	   *line = PG_GETARG_LINE_P(1);
 
-	PG_RETURN_BOOL(line_contain_point(line, &lseg->p[0]) &&
-				   line_contain_point(line, &lseg->p[1]));
+	PG_RETURN_TSBOOL(TS_AND2(line_contain_point(line, &lseg->p[0]),
+							 line_contain_point(line, &lseg->p[1])));
 }
 
 
@@ -3178,11 +3531,11 @@ on_sl(PG_FUNCTION_ARGS)
  *
  * It is, if both of its points are in the box or on its border.
  */
-static bool
+static tsbool
 box_contain_lseg(BOX *box, LSEG *lseg)
 {
-	return box_contain_point(box, &lseg->p[0]) &&
-		box_contain_point(box, &lseg->p[1]);
+	return TS_AND2(box_contain_point(box, &lseg->p[0]),
+				   box_contain_point(box, &lseg->p[1]));
 }
 
 Datum
@@ -3191,7 +3544,7 @@ on_sb(PG_FUNCTION_ARGS)
 	LSEG	   *lseg = PG_GETARG_LSEG_P(0);
 	BOX		   *box = PG_GETARG_BOX_P(1);
 
-	PG_RETURN_BOOL(box_contain_lseg(box, lseg));
+	PG_RETURN_TSBOOL(box_contain_lseg(box, lseg));
 }
 
 /*---------------------------------------------------------------------
@@ -3205,7 +3558,7 @@ inter_sl(PG_FUNCTION_ARGS)
 	LSEG	   *lseg = PG_GETARG_LSEG_P(0);
 	LINE	   *line = PG_GETARG_LINE_P(1);
 
-	PG_RETURN_BOOL(lseg_interpt_line(NULL, lseg, line));
+	PG_RETURN_TSBOOL(lseg_interpt_line(NULL, lseg, line));
 }
 
 
@@ -3224,12 +3577,13 @@ inter_sl(PG_FUNCTION_ARGS)
  * Optimize for non-intersection by checking for box intersection first.
  * - thomas 1998-01-30
  */
-static bool
+static tsbool
 box_interpt_lseg(Point *result, BOX *box, LSEG *lseg)
 {
 	BOX			lbox;
 	LSEG		bseg;
 	Point		point;
+	tsbool		r;
 
 	lbox.low.x = float8_min(lseg->p[0].x, lseg->p[1].x);
 	lbox.low.y = float8_min(lseg->p[0].y, lseg->p[1].y);
@@ -3237,8 +3591,8 @@ box_interpt_lseg(Point *result, BOX *box, LSEG *lseg)
 	lbox.high.y = float8_max(lseg->p[0].y, lseg->p[1].y);
 
 	/* nothing close to overlap? then not going to intersect */
-	if (!box_ov(&lbox, box))
-		return false;
+	if ((r = box_ov(&lbox, box)) != TS_TRUE)
+		return r;
 
 	if (result != NULL)
 	{
@@ -3247,30 +3601,30 @@ box_interpt_lseg(Point *result, BOX *box, LSEG *lseg)
 	}
 
 	/* an endpoint of segment is inside box? then clearly intersects */
-	if (box_contain_point(box, &lseg->p[0]) ||
-		box_contain_point(box, &lseg->p[1]))
-		return true;
+	if ((r = TS_OR2(box_contain_point(box, &lseg->p[0]),
+					box_contain_point(box, &lseg->p[1]))) != TS_FALSE)
+		return r;
 
 	/* pairwise check lseg intersections */
 	point.x = box->low.x;
 	point.y = box->high.y;
 	statlseg_construct(&bseg, &box->low, &point);
-	if (lseg_interpt_lseg(NULL, &bseg, lseg))
-		return true;
+	if ((r = lseg_interpt_lseg(NULL, &bseg, lseg)) != TS_FALSE)
+		return r;
 
 	statlseg_construct(&bseg, &box->high, &point);
-	if (lseg_interpt_lseg(NULL, &bseg, lseg))
-		return true;
+	if ((r = lseg_interpt_lseg(NULL, &bseg, lseg)) != TS_FALSE)
+		return r;
 
 	point.x = box->high.x;
 	point.y = box->low.y;
 	statlseg_construct(&bseg, &box->low, &point);
-	if (lseg_interpt_lseg(NULL, &bseg, lseg))
-		return true;
+	if ((r = lseg_interpt_lseg(NULL, &bseg, lseg)) != TS_FALSE)
+		return r;
 
 	statlseg_construct(&bseg, &box->high, &point);
-	if (lseg_interpt_lseg(NULL, &bseg, lseg))
-		return true;
+	if ((r = lseg_interpt_lseg(NULL, &bseg, lseg)) != TS_FALSE)
+		return r;
 
 	/* if we dropped through, no two segs intersected */
 	return false;
@@ -3282,7 +3636,7 @@ inter_sb(PG_FUNCTION_ARGS)
 	LSEG	   *lseg = PG_GETARG_LSEG_P(0);
 	BOX		   *box = PG_GETARG_BOX_P(1);
 
-	PG_RETURN_BOOL(box_interpt_lseg(NULL, box, lseg));
+	PG_RETURN_TSBOOL(box_interpt_lseg(NULL, box, lseg));
 }
 
 
@@ -3297,6 +3651,7 @@ inter_lb(PG_FUNCTION_ARGS)
 	LSEG		bseg;
 	Point		p1,
 				p2;
+	tsbool		r;
 
 	/* pairwise check lseg intersections */
 	p1.x = box->low.x;
@@ -3304,25 +3659,28 @@ inter_lb(PG_FUNCTION_ARGS)
 	p2.x = box->low.x;
 	p2.y = box->high.y;
 	statlseg_construct(&bseg, &p1, &p2);
-	if (lseg_interpt_line(NULL, &bseg, line))
-		PG_RETURN_BOOL(true);
+	if ((r = lseg_interpt_line(NULL, &bseg, line)) != TS_FALSE)
+		PG_RETURN_TSBOOL(r);
 	p1.x = box->high.x;
 	p1.y = box->high.y;
 	statlseg_construct(&bseg, &p1, &p2);
-	if (lseg_interpt_line(NULL, &bseg, line))
-		PG_RETURN_BOOL(true);
+	if ((r = lseg_interpt_line(NULL, &bseg, line)) != TS_FALSE)
+		PG_RETURN_TSBOOL(r);
 	p2.x = box->high.x;
 	p2.y = box->low.y;
 	statlseg_construct(&bseg, &p1, &p2);
-	if (lseg_interpt_line(NULL, &bseg, line))
-		PG_RETURN_BOOL(true);
+	if ((r = lseg_interpt_line(NULL, &bseg, line)) != TS_FALSE)
+		PG_RETURN_TSBOOL(r);
 	p1.x = box->low.x;
 	p1.y = box->low.y;
 	statlseg_construct(&bseg, &p1, &p2);
-	if (lseg_interpt_line(NULL, &bseg, line))
-		PG_RETURN_BOOL(true);
+	if ((r = lseg_interpt_line(NULL, &bseg, line)) != TS_FALSE)
+		PG_RETURN_TSBOOL(r);
 
-	/* if we dropped through, no intersection */
+	/*
+	 * if we dropped through, no intersection "false" doesn't need
+	 * PG_RETURN_TSBOOL()
+	 */
 	PG_RETURN_BOOL(false);
 }
 
@@ -3352,6 +3710,12 @@ make_bound_box(POLYGON *poly)
 	y2 = y1 = poly->p[0].y;
 	for (i = 1; i < poly->npts; i++)
 	{
+		/* if NaN found, make an invalid boundbox */
+		if (unlikely(isnan(poly->p[i].x) || isnan(poly->p[i].y)))
+		{
+			x1 = x2 = y1 = y2 = get_float8_nan();
+			break;
+		}
 		if (float8_lt(poly->p[i].x, x1))
 			x1 = poly->p[i].x;
 		if (float8_gt(poly->p[i].x, x2))
@@ -3498,6 +3862,9 @@ poly_left(PG_FUNCTION_ARGS)
 	POLYGON    *polyb = PG_GETARG_POLYGON_P(1);
 	bool		result;
 
+	if (isnan(polya->boundbox.high.x) || isnan(polyb->boundbox.high.x))
+		PG_RETURN_NULL();
+
 	result = polya->boundbox.high.x < polyb->boundbox.low.x;
 
 	/*
@@ -3520,6 +3887,9 @@ poly_overleft(PG_FUNCTION_ARGS)
 	POLYGON    *polya = PG_GETARG_POLYGON_P(0);
 	POLYGON    *polyb = PG_GETARG_POLYGON_P(1);
 	bool		result;
+
+	if (isnan(polya->boundbox.high.x) || isnan(polyb->boundbox.high.x))
+		PG_RETURN_NULL();
 
 	result = polya->boundbox.high.x <= polyb->boundbox.high.x;
 
@@ -3544,6 +3914,9 @@ poly_right(PG_FUNCTION_ARGS)
 	POLYGON    *polyb = PG_GETARG_POLYGON_P(1);
 	bool		result;
 
+	if (isnan(polya->boundbox.high.x) || isnan(polyb->boundbox.high.x))
+		PG_RETURN_NULL();
+
 	result = polya->boundbox.low.x > polyb->boundbox.high.x;
 
 	/*
@@ -3566,6 +3939,9 @@ poly_overright(PG_FUNCTION_ARGS)
 	POLYGON    *polya = PG_GETARG_POLYGON_P(0);
 	POLYGON    *polyb = PG_GETARG_POLYGON_P(1);
 	bool		result;
+
+	if (isnan(polya->boundbox.high.x) || isnan(polyb->boundbox.high.x))
+		PG_RETURN_NULL();
 
 	result = polya->boundbox.low.x >= polyb->boundbox.low.x;
 
@@ -3590,6 +3966,9 @@ poly_below(PG_FUNCTION_ARGS)
 	POLYGON    *polyb = PG_GETARG_POLYGON_P(1);
 	bool		result;
 
+	if (isnan(polya->boundbox.high.x) || isnan(polyb->boundbox.high.x))
+		PG_RETURN_NULL();
+
 	result = polya->boundbox.high.y < polyb->boundbox.low.y;
 
 	/*
@@ -3612,6 +3991,9 @@ poly_overbelow(PG_FUNCTION_ARGS)
 	POLYGON    *polya = PG_GETARG_POLYGON_P(0);
 	POLYGON    *polyb = PG_GETARG_POLYGON_P(1);
 	bool		result;
+
+	if (isnan(polya->boundbox.high.x) || isnan(polyb->boundbox.high.x))
+		PG_RETURN_NULL();
 
 	result = polya->boundbox.high.y <= polyb->boundbox.high.y;
 
@@ -3636,6 +4018,9 @@ poly_above(PG_FUNCTION_ARGS)
 	POLYGON    *polyb = PG_GETARG_POLYGON_P(1);
 	bool		result;
 
+	if (isnan(polya->boundbox.high.x) || isnan(polyb->boundbox.high.x))
+		PG_RETURN_NULL();
+
 	result = polya->boundbox.low.y > polyb->boundbox.high.y;
 
 	/*
@@ -3659,6 +4044,9 @@ poly_overabove(PG_FUNCTION_ARGS)
 	POLYGON    *polyb = PG_GETARG_POLYGON_P(1);
 	bool		result;
 
+	if (isnan(polya->boundbox.high.x) || isnan(polyb->boundbox.high.x))
+		PG_RETURN_NULL();
+
 	result = polya->boundbox.low.y >= polyb->boundbox.low.y;
 
 	/*
@@ -3677,16 +4065,20 @@ poly_overabove(PG_FUNCTION_ARGS)
  * Check all points for matches in both forward and reverse
  *	direction since polygons are non-directional and are
  *	closed shapes.
+ *
+ * XXX: returns TS_FALSE when the two polygons consists of
+ * different number of points even if any of the points were
+ * NaN.  It might be thewrong defintion.
  *-------------------------------------------------------*/
 Datum
 poly_same(PG_FUNCTION_ARGS)
 {
 	POLYGON    *polya = PG_GETARG_POLYGON_P(0);
 	POLYGON    *polyb = PG_GETARG_POLYGON_P(1);
-	bool		result;
+	tsbool		result;
 
 	if (polya->npts != polyb->npts)
-		result = false;
+		result = TS_FALSE;
 	else
 		result = plist_same(polya->npts, polya->p, polyb->p);
 
@@ -3702,22 +4094,25 @@ poly_same(PG_FUNCTION_ARGS)
 /*-----------------------------------------------------------------
  * Determine if polygon A overlaps polygon B
  *-----------------------------------------------------------------*/
-static bool
+static tsbool
 poly_overlap_internal(POLYGON *polya, POLYGON *polyb)
 {
-	bool		result;
+	tsbool		result;
 
 	Assert(polya->npts > 0 && polyb->npts > 0);
 
 	/* Quick check by bounding box */
 	result = box_ov(&polya->boundbox, &polyb->boundbox);
 
+	if (result == TS_NULL)
+		return TS_NULL;
+
 	/*
 	 * Brute-force algorithm - try to find intersected edges, if so then
 	 * polygons are overlapped else check is one polygon inside other or not
 	 * by testing single point of them.
 	 */
-	if (result)
+	if (result == TS_TRUE)
 	{
 		int			ia,
 					ib;
@@ -3726,9 +4121,9 @@ poly_overlap_internal(POLYGON *polya, POLYGON *polyb)
 
 		/* Init first of polya's edge with last point */
 		sa.p[0] = polya->p[polya->npts - 1];
-		result = false;
+		result = TS_FALSE;
 
-		for (ia = 0; ia < polya->npts && !result; ia++)
+		for (ia = 0; ia < polya->npts && result != TS_TRUE; ia++)
 		{
 			/* Second point of polya's edge is a current one */
 			sa.p[1] = polya->p[ia];
@@ -3749,8 +4144,12 @@ poly_overlap_internal(POLYGON *polya, POLYGON *polyb)
 			sa.p[0] = sa.p[1];
 		}
 
-		if (!result)
+		if (result == TS_NULL)
+			return TS_NULL;
+
+		if (result == TS_FALSE)
 		{
+			/* in the case of NaN is handled ealier */
 			result = (point_inside(polya->p, polyb->npts, polyb->p) ||
 					  point_inside(polyb->p, polya->npts, polya->p));
 		}
@@ -3764,7 +4163,7 @@ poly_overlap(PG_FUNCTION_ARGS)
 {
 	POLYGON    *polya = PG_GETARG_POLYGON_P(0);
 	POLYGON    *polyb = PG_GETARG_POLYGON_P(1);
-	bool		result;
+	tsbool		result;
 
 	result = poly_overlap_internal(polya, polyb);
 
@@ -3774,7 +4173,7 @@ poly_overlap(PG_FUNCTION_ARGS)
 	PG_FREE_IF_COPY(polya, 0);
 	PG_FREE_IF_COPY(polyb, 1);
 
-	PG_RETURN_BOOL(result);
+	PG_RETURN_TSBOOL(result);
 }
 
 /*
@@ -3788,35 +4187,62 @@ poly_overlap(PG_FUNCTION_ARGS)
  *	  mean that segment is in polygon!
  */
 
-static bool
+static tsbool
 touched_lseg_inside_poly(Point *a, Point *b, LSEG *s, POLYGON *poly, int start)
 {
 	/* point a is on s, b is not */
 	LSEG		t;
+	tsbool		r;
 
 	t.p[0] = *a;
 	t.p[1] = *b;
 
-	if (point_eq_point(a, s->p))
+	/*
+	 * assume no parameters have NaN, so the tsbool functions shouldn't return
+	 * TS_NULL.
+	 */
+	Assert(!isnan(a->x) && !isnan(a->y) && !isnan(b->x) && !isnan(b->y) &&
+		   !isnan(poly->boundbox.high.x));
+	if ((r = point_eq_point(a, s->p)) == TS_TRUE)
 	{
-		if (lseg_contain_point(&t, s->p + 1))
-			return lseg_inside_poly(b, s->p + 1, poly, start);
+		switch(lseg_contain_point(&t, s->p + 1))
+		{
+			case TS_TRUE:
+				return lseg_inside_poly(b, s->p + 1, poly, start);
+			case TS_NULL:
+				return TS_NULL;
+			case TS_FALSE:
+				break;
+		}
 	}
-	else if (point_eq_point(a, s->p + 1))
+	else if (r != TS_NULL &&
+			 (r = point_eq_point(a, s->p + 1)) == TS_TRUE)
 	{
-		if (lseg_contain_point(&t, s->p))
-			return lseg_inside_poly(b, s->p, poly, start);
+		switch(lseg_contain_point(&t, s->p))
+		{
+			case TS_TRUE:
+				return lseg_inside_poly(b, s->p, poly, start);
+			case TS_NULL:
+				return TS_NULL;
+			case TS_FALSE:
+				break;
+		}
 	}
-	else if (lseg_contain_point(&t, s->p))
+	else if (r != TS_NULL &&
+			 (r = lseg_contain_point(&t, s->p)) == TS_TRUE)
 	{
 		return lseg_inside_poly(b, s->p, poly, start);
 	}
-	else if (lseg_contain_point(&t, s->p + 1))
+	else if (r != TS_NULL &&
+			 (r = lseg_contain_point(&t, s->p + 1)) == TS_TRUE)
 	{
 		return lseg_inside_poly(b, s->p + 1, poly, start);
 	}
 
-	return true;				/* may be not true, but that will check later */
+	if (r == TS_NULL)
+		return TS_NULL;
+
+	return TS_TRUE;			/* may be not true, but that will check later */
 }
 
 /*
@@ -3824,56 +4250,75 @@ touched_lseg_inside_poly(Point *a, Point *b, LSEG *s, POLYGON *poly, int start)
  * start is used for optimization - function checks
  * polygon's edges starting from start
  */
-static bool
+static tsbool
 lseg_inside_poly(Point *a, Point *b, POLYGON *poly, int start)
 {
 	LSEG		s,
 				t;
 	int			i;
-	bool		res = true,
-				intersection = false;
+	tsbool		res = TS_TRUE;
+	bool		intersection = false;
+	tsbool		res1;
+	tsbool		res2;
+	tsbool		maybe_contained;
 
 	t.p[0] = *a;
 	t.p[1] = *b;
 	s.p[0] = poly->p[(start == 0) ? (poly->npts - 1) : (start - 1)];
 
+	/* Fast path. Check against boundbox. Also checks NaNs. */
+	res1 = box_contain_point(&poly->boundbox, a);
+	res2 = box_contain_point(&poly->boundbox, b);
+
+	maybe_contained = TS_AND2(res1, res2);
+	if (maybe_contained != TS_TRUE)
+		return maybe_contained;
+
 	for (i = start; i < poly->npts && res; i++)
 	{
 		Point		interpt;
+		tsbool		r;
 
 		CHECK_FOR_INTERRUPTS();
 
 		s.p[1] = poly->p[i];
 
-		if (lseg_contain_point(&s, t.p))
+		if ((r = lseg_contain_point(&s, t.p)) == TS_TRUE)
 		{
-			if (lseg_contain_point(&s, t.p + 1))
-				return true;	/* t is contained by s */
+			r = lseg_contain_point(&s, t.p + 1);
+			if (r != TS_FALSE)
+				return r;		/* t is contained by s, or NaN involved */
 
 			/* Y-cross */
 			res = touched_lseg_inside_poly(t.p, t.p + 1, &s, poly, i + 1);
 		}
-		else if (lseg_contain_point(&s, t.p + 1))
+		else if (r != TS_NULL &&
+				 (r = lseg_contain_point(&s, t.p + 1)) == TS_TRUE)
 		{
 			/* Y-cross */
 			res = touched_lseg_inside_poly(t.p + 1, t.p, &s, poly, i + 1);
 		}
-		else if (lseg_interpt_lseg(&interpt, &t, &s))
+		else if (r != TS_NULL &&
+				 (r = lseg_interpt_lseg(&interpt, &t, &s)) == TS_TRUE)
 		{
 			/*
 			 * segments are X-crossing, go to check each subsegment
 			 */
 
 			intersection = true;
+
+			/* the calls below won't return TS_NULL */
 			res = lseg_inside_poly(t.p, &interpt, poly, i + 1);
 			if (res)
 				res = lseg_inside_poly(t.p + 1, &interpt, poly, i + 1);
 		}
+		else if (r == TS_NULL)
+			return TS_NULL;
 
 		s.p[0] = s.p[1];
 	}
 
-	if (res && !intersection)
+	if (res == TS_TRUE && !intersection)
 	{
 		Point		p;
 
@@ -3884,7 +4329,19 @@ lseg_inside_poly(Point *a, Point *b, POLYGON *poly, int start)
 		p.x = float8_div(float8_pl(t.p[0].x, t.p[1].x), 2.0);
 		p.y = float8_div(float8_pl(t.p[0].y, t.p[1].y), 2.0);
 
-		res = point_inside(&p, poly->npts, poly->p);
+		switch (point_inside(&p, poly->npts, poly->p))
+		{
+			case 0:
+				res = TS_FALSE;
+				break;
+			case 1:
+			case 2:
+				res = TS_TRUE;
+				break;
+			case -1:
+				res = TS_NULL;
+				break;
+		}
 	}
 
 	return res;
@@ -3893,11 +4350,12 @@ lseg_inside_poly(Point *a, Point *b, POLYGON *poly, int start)
 /*
  * Check whether the first polygon contains the second
  */
-static bool
+static tsbool
 poly_contain_poly(POLYGON *contains_poly, POLYGON *contained_poly)
 {
 	int			i;
 	LSEG		s;
+	tsbool		r;
 
 	Assert(contains_poly->npts > 0 && contained_poly->npts > 0);
 
@@ -3905,20 +4363,22 @@ poly_contain_poly(POLYGON *contains_poly, POLYGON *contained_poly)
 	 * Quick check to see if contained's bounding box is contained in
 	 * contains' bb.
 	 */
-	if (!box_contain_box(&contains_poly->boundbox, &contained_poly->boundbox))
-		return false;
+	r = box_contain_box(&contains_poly->boundbox, &contained_poly->boundbox);
+	if (r != TS_TRUE)
+		return r;
 
 	s.p[0] = contained_poly->p[contained_poly->npts - 1];
 
 	for (i = 0; i < contained_poly->npts; i++)
 	{
 		s.p[1] = contained_poly->p[i];
-		if (!lseg_inside_poly(s.p, s.p + 1, contains_poly, 0))
-			return false;
+		r = lseg_inside_poly(s.p, s.p + 1, contains_poly, 0);
+		if (r != TS_TRUE)
+			return r;
 		s.p[0] = s.p[1];
 	}
 
-	return true;
+	return TS_TRUE;
 }
 
 Datum
@@ -3926,7 +4386,7 @@ poly_contain(PG_FUNCTION_ARGS)
 {
 	POLYGON    *polya = PG_GETARG_POLYGON_P(0);
 	POLYGON    *polyb = PG_GETARG_POLYGON_P(1);
-	bool		result;
+	tsbool		result;
 
 	result = poly_contain_poly(polya, polyb);
 
@@ -3936,7 +4396,7 @@ poly_contain(PG_FUNCTION_ARGS)
 	PG_FREE_IF_COPY(polya, 0);
 	PG_FREE_IF_COPY(polyb, 1);
 
-	PG_RETURN_BOOL(result);
+	PG_RETURN_TSBOOL(result);
 }
 
 
@@ -3948,7 +4408,7 @@ poly_contained(PG_FUNCTION_ARGS)
 {
 	POLYGON    *polya = PG_GETARG_POLYGON_P(0);
 	POLYGON    *polyb = PG_GETARG_POLYGON_P(1);
-	bool		result;
+	tsbool		result;
 
 	/* Just switch the arguments and pass it off to poly_contain */
 	result = poly_contain_poly(polyb, polya);
@@ -3959,7 +4419,7 @@ poly_contained(PG_FUNCTION_ARGS)
 	PG_FREE_IF_COPY(polya, 0);
 	PG_FREE_IF_COPY(polyb, 1);
 
-	PG_RETURN_BOOL(result);
+	PG_RETURN_TSBOOL(result);
 }
 
 
@@ -3968,8 +4428,12 @@ poly_contain_pt(PG_FUNCTION_ARGS)
 {
 	POLYGON    *poly = PG_GETARG_POLYGON_P(0);
 	Point	   *p = PG_GETARG_POINT_P(1);
+	int			r = point_inside(p, poly->npts, poly->p);
 
-	PG_RETURN_BOOL(point_inside(p, poly->npts, poly->p) != 0);
+	if (r >= 0)
+		PG_RETURN_BOOL(r != 0);
+
+	PG_RETURN_NULL();
 }
 
 Datum
@@ -3977,8 +4441,12 @@ pt_contained_poly(PG_FUNCTION_ARGS)
 {
 	Point	   *p = PG_GETARG_POINT_P(0);
 	POLYGON    *poly = PG_GETARG_POLYGON_P(1);
+	int			r = point_inside(p, poly->npts, poly->p);
 
-	PG_RETURN_BOOL(point_inside(p, poly->npts, poly->p) != 0);
+	if (r >= 0)
+		PG_RETURN_BOOL(r != 0);
+
+	PG_RETURN_NULL();
 }
 
 
@@ -4000,9 +4468,16 @@ poly_distance(PG_FUNCTION_ARGS)
 	 * path distance will not give the right answer if one poly is entirely
 	 * within the other.
 	 */
-	if (poly_overlap_internal(polya, polyb))
-		PG_RETURN_FLOAT8(0.0);
-
+	switch (poly_overlap_internal(polya, polyb))
+	{
+		case TS_TRUE:
+			PG_RETURN_FLOAT8(0.0);
+		case TS_NULL:
+			PG_RETURN_FLOAT8(get_float8_nan());
+		case TS_FALSE:
+			break;
+	}
+			
 	/*
 	 * When they don't overlap, the distance calculation is identical to that
 	 * for closed paths (i.e., we needn't care about the fact that polygons
@@ -4707,9 +5182,9 @@ circle_same(PG_FUNCTION_ARGS)
 	CIRCLE	   *circle1 = PG_GETARG_CIRCLE_P(0);
 	CIRCLE	   *circle2 = PG_GETARG_CIRCLE_P(1);
 
-	PG_RETURN_BOOL(((isnan(circle1->radius) && isnan(circle1->radius)) ||
-					FPeq(circle1->radius, circle2->radius)) &&
-				   point_eq_point(&circle1->center, &circle2->center));
+	PG_RETURN_TSBOOL(
+		TS_AND2(FPTeq(circle1->radius, circle2->radius),
+				point_eq_point(&circle1->center, &circle2->center)));
 }
 
 /*		circle_overlap	-		does circle1 overlap circle2?
@@ -4720,8 +5195,8 @@ circle_overlap(PG_FUNCTION_ARGS)
 	CIRCLE	   *circle1 = PG_GETARG_CIRCLE_P(0);
 	CIRCLE	   *circle2 = PG_GETARG_CIRCLE_P(1);
 
-	PG_RETURN_BOOL(FPle(point_dt(&circle1->center, &circle2->center),
-						float8_pl(circle1->radius, circle2->radius)));
+	PG_RETURN_TSBOOL(FPTle(point_dt(&circle1->center, &circle2->center),
+						   float8_pl(circle1->radius, circle2->radius)));
 }
 
 /*		circle_overleft -		is the right edge of circle1 at or left of
@@ -4733,8 +5208,8 @@ circle_overleft(PG_FUNCTION_ARGS)
 	CIRCLE	   *circle1 = PG_GETARG_CIRCLE_P(0);
 	CIRCLE	   *circle2 = PG_GETARG_CIRCLE_P(1);
 
-	PG_RETURN_BOOL(FPle(float8_pl(circle1->center.x, circle1->radius),
-						float8_pl(circle2->center.x, circle2->radius)));
+	PG_RETURN_TSBOOL(FPTle(float8_pl(circle1->center.x, circle1->radius),
+						   float8_pl(circle2->center.x, circle2->radius)));
 }
 
 /*		circle_left		-		is circle1 strictly left of circle2?
@@ -4745,8 +5220,8 @@ circle_left(PG_FUNCTION_ARGS)
 	CIRCLE	   *circle1 = PG_GETARG_CIRCLE_P(0);
 	CIRCLE	   *circle2 = PG_GETARG_CIRCLE_P(1);
 
-	PG_RETURN_BOOL(FPlt(float8_pl(circle1->center.x, circle1->radius),
-						float8_mi(circle2->center.x, circle2->radius)));
+	PG_RETURN_TSBOOL(FPTlt(float8_pl(circle1->center.x, circle1->radius),
+						   float8_mi(circle2->center.x, circle2->radius)));
 }
 
 /*		circle_right	-		is circle1 strictly right of circle2?
@@ -4757,8 +5232,8 @@ circle_right(PG_FUNCTION_ARGS)
 	CIRCLE	   *circle1 = PG_GETARG_CIRCLE_P(0);
 	CIRCLE	   *circle2 = PG_GETARG_CIRCLE_P(1);
 
-	PG_RETURN_BOOL(FPgt(float8_mi(circle1->center.x, circle1->radius),
-						float8_pl(circle2->center.x, circle2->radius)));
+	PG_RETURN_TSBOOL(FPTgt(float8_mi(circle1->center.x, circle1->radius),
+						   float8_pl(circle2->center.x, circle2->radius)));
 }
 
 /*		circle_overright	-	is the left edge of circle1 at or right of
@@ -4770,8 +5245,8 @@ circle_overright(PG_FUNCTION_ARGS)
 	CIRCLE	   *circle1 = PG_GETARG_CIRCLE_P(0);
 	CIRCLE	   *circle2 = PG_GETARG_CIRCLE_P(1);
 
-	PG_RETURN_BOOL(FPge(float8_mi(circle1->center.x, circle1->radius),
-						float8_mi(circle2->center.x, circle2->radius)));
+	PG_RETURN_TSBOOL(FPTge(float8_mi(circle1->center.x, circle1->radius),
+						   float8_mi(circle2->center.x, circle2->radius)));
 }
 
 /*		circle_contained		-		is circle1 contained by circle2?
@@ -4794,8 +5269,8 @@ circle_contain(PG_FUNCTION_ARGS)
 	CIRCLE	   *circle1 = PG_GETARG_CIRCLE_P(0);
 	CIRCLE	   *circle2 = PG_GETARG_CIRCLE_P(1);
 
-	PG_RETURN_BOOL(FPle(point_dt(&circle1->center, &circle2->center),
-						float8_mi(circle1->radius, circle2->radius)));
+	PG_RETURN_TSBOOL(FPTle(point_dt(&circle1->center, &circle2->center),
+						   float8_mi(circle1->radius, circle2->radius)));
 }
 
 
@@ -4807,8 +5282,8 @@ circle_below(PG_FUNCTION_ARGS)
 	CIRCLE	   *circle1 = PG_GETARG_CIRCLE_P(0);
 	CIRCLE	   *circle2 = PG_GETARG_CIRCLE_P(1);
 
-	PG_RETURN_BOOL(FPlt(float8_pl(circle1->center.y, circle1->radius),
-						float8_mi(circle2->center.y, circle2->radius)));
+	PG_RETURN_TSBOOL(FPTlt(float8_pl(circle1->center.y, circle1->radius),
+						   float8_mi(circle2->center.y, circle2->radius)));
 }
 
 /*		circle_above	-		is circle1 strictly above circle2?
@@ -4819,8 +5294,8 @@ circle_above(PG_FUNCTION_ARGS)
 	CIRCLE	   *circle1 = PG_GETARG_CIRCLE_P(0);
 	CIRCLE	   *circle2 = PG_GETARG_CIRCLE_P(1);
 
-	PG_RETURN_BOOL(FPgt(float8_mi(circle1->center.y, circle1->radius),
-						float8_pl(circle2->center.y, circle2->radius)));
+	PG_RETURN_TSBOOL(FPTgt(float8_mi(circle1->center.y, circle1->radius),
+						   float8_pl(circle2->center.y, circle2->radius)));
 }
 
 /*		circle_overbelow -		is the upper edge of circle1 at or below
@@ -4832,8 +5307,8 @@ circle_overbelow(PG_FUNCTION_ARGS)
 	CIRCLE	   *circle1 = PG_GETARG_CIRCLE_P(0);
 	CIRCLE	   *circle2 = PG_GETARG_CIRCLE_P(1);
 
-	PG_RETURN_BOOL(FPle(float8_pl(circle1->center.y, circle1->radius),
-						float8_pl(circle2->center.y, circle2->radius)));
+	PG_RETURN_TSBOOL(FPTle(float8_pl(circle1->center.y, circle1->radius),
+						   float8_pl(circle2->center.y, circle2->radius)));
 }
 
 /*		circle_overabove	-	is the lower edge of circle1 at or above
@@ -4845,13 +5320,15 @@ circle_overabove(PG_FUNCTION_ARGS)
 	CIRCLE	   *circle1 = PG_GETARG_CIRCLE_P(0);
 	CIRCLE	   *circle2 = PG_GETARG_CIRCLE_P(1);
 
-	PG_RETURN_BOOL(FPge(float8_mi(circle1->center.y, circle1->radius),
-						float8_mi(circle2->center.y, circle2->radius)));
+	PG_RETURN_TSBOOL(FPTge(float8_mi(circle1->center.y, circle1->radius),
+						   float8_mi(circle2->center.y, circle2->radius)));
 }
 
 
 /*		circle_relop	-		is area(circle1) relop area(circle2), within
  *								our accuracy constraint?
+ *
+ *  XXX; area comparison doen't consider the NaN-ness of the center location.
  */
 Datum
 circle_eq(PG_FUNCTION_ARGS)
@@ -4859,7 +5336,7 @@ circle_eq(PG_FUNCTION_ARGS)
 	CIRCLE	   *circle1 = PG_GETARG_CIRCLE_P(0);
 	CIRCLE	   *circle2 = PG_GETARG_CIRCLE_P(1);
 
-	PG_RETURN_BOOL(FPeq(circle_ar(circle1), circle_ar(circle2)));
+	PG_RETURN_TSBOOL(FPTeq(circle_ar(circle1), circle_ar(circle2)));
 }
 
 Datum
@@ -4868,7 +5345,7 @@ circle_ne(PG_FUNCTION_ARGS)
 	CIRCLE	   *circle1 = PG_GETARG_CIRCLE_P(0);
 	CIRCLE	   *circle2 = PG_GETARG_CIRCLE_P(1);
 
-	PG_RETURN_BOOL(FPne(circle_ar(circle1), circle_ar(circle2)));
+	PG_RETURN_TSBOOL(FPTne(circle_ar(circle1), circle_ar(circle2)));
 }
 
 Datum
@@ -4877,7 +5354,7 @@ circle_lt(PG_FUNCTION_ARGS)
 	CIRCLE	   *circle1 = PG_GETARG_CIRCLE_P(0);
 	CIRCLE	   *circle2 = PG_GETARG_CIRCLE_P(1);
 
-	PG_RETURN_BOOL(FPlt(circle_ar(circle1), circle_ar(circle2)));
+	PG_RETURN_TSBOOL(FPTlt(circle_ar(circle1), circle_ar(circle2)));
 }
 
 Datum
@@ -4886,7 +5363,7 @@ circle_gt(PG_FUNCTION_ARGS)
 	CIRCLE	   *circle1 = PG_GETARG_CIRCLE_P(0);
 	CIRCLE	   *circle2 = PG_GETARG_CIRCLE_P(1);
 
-	PG_RETURN_BOOL(FPgt(circle_ar(circle1), circle_ar(circle2)));
+	PG_RETURN_TSBOOL(FPTgt(circle_ar(circle1), circle_ar(circle2)));
 }
 
 Datum
@@ -4895,7 +5372,7 @@ circle_le(PG_FUNCTION_ARGS)
 	CIRCLE	   *circle1 = PG_GETARG_CIRCLE_P(0);
 	CIRCLE	   *circle2 = PG_GETARG_CIRCLE_P(1);
 
-	PG_RETURN_BOOL(FPle(circle_ar(circle1), circle_ar(circle2)));
+	PG_RETURN_TSBOOL(FPTle(circle_ar(circle1), circle_ar(circle2)));
 }
 
 Datum
@@ -4904,7 +5381,7 @@ circle_ge(PG_FUNCTION_ARGS)
 	CIRCLE	   *circle1 = PG_GETARG_CIRCLE_P(0);
 	CIRCLE	   *circle2 = PG_GETARG_CIRCLE_P(1);
 
-	PG_RETURN_BOOL(FPge(circle_ar(circle1), circle_ar(circle2)));
+	PG_RETURN_TSBOOL(FPTge(circle_ar(circle1), circle_ar(circle2)));
 }
 
 
@@ -5040,6 +5517,11 @@ circle_contain_pt(PG_FUNCTION_ARGS)
 	float8		d;
 
 	d = point_dt(&circle->center, point);
+
+	if (isnan(d) || isnan(circle->radius))
+		PG_RETURN_NULL();
+
+	/*  XXX: why don't we use FP(T)le? */
 	PG_RETURN_BOOL(d <= circle->radius);
 }
 
@@ -5052,6 +5534,10 @@ pt_contained_circle(PG_FUNCTION_ARGS)
 	float8		d;
 
 	d = point_dt(&circle->center, point);
+	if (isnan(d) || isnan(circle->radius))
+		PG_RETURN_NULL();
+
+	/*  XXX: why don't we use FP(T)le? */
 	PG_RETURN_BOOL(d <= circle->radius);
 }
 
@@ -5278,8 +5764,9 @@ poly_circle(PG_FUNCTION_ARGS)
  ***********************************************************************/
 
 /*
- *	Test to see if the point is inside the polygon, returns 1/0, or 2 if
- *	the point is on the polygon.
+ *	Test to see if the point is inside the polygon, returns 1/0, or 2 if the
+ *	point is on the polygon. -1 means undetermined, in case any operand is an
+ *	invalid object. (-1, 0 and 1 are compatible with tsbool type)
  *	Code adapted but not copied from integer-based routines in WN: A
  *	Server for the HTTP
  *	version 1.15.1, file wn/image.c
@@ -5309,6 +5796,10 @@ point_inside(Point *p, int npts, Point *plist)
 	x0 = float8_mi(plist[0].x, p->x);
 	y0 = float8_mi(plist[0].y, p->y);
 
+	/* NaN makes the point cannot be inside the polygon */
+	if (unlikely(isnan(x0) || isnan(y0) || isnan(p->x) || isnan(p->y)))
+		return -1;
+
 	prev_x = x0;
 	prev_y = y0;
 	/* loop over polygon points and aggregate total_cross */
@@ -5317,6 +5808,10 @@ point_inside(Point *p, int npts, Point *plist)
 		/* compute next polygon point relative to single point */
 		x = float8_mi(plist[i].x, p->x);
 		y = float8_mi(plist[i].y, p->y);
+
+		/* NaN makes the point cannot be inside the polygon */
+		if (unlikely(isnan(x) || isnan(y)))
+			return -1;
 
 		/* compute previous to current point crossing */
 		if ((cross = lseg_crossing(x, y, prev_x, prev_y)) == POINT_ON_POLYGON)
@@ -5343,6 +5838,8 @@ point_inside(Point *p, int npts, Point *plist)
  * Returns +/-1 if one point is on the positive X-axis.
  * Returns 0 if both points are on the positive X-axis, or there is no crossing.
  * Returns POINT_ON_POLYGON if the segment contains (0,0).
+ * This function doesn't check if the parameters contain NaNs, it's the
+ * responsibility of the callers.
  * Wow, that is one confusing API, but it is used above, and when summed,
  * can tell is if a point is in a polygon.
  */
@@ -5407,17 +5904,18 @@ lseg_crossing(float8 x, float8 y, float8 prev_x, float8 prev_y)
 }
 
 
-static bool
+static tsbool
 plist_same(int npts, Point *p1, Point *p2)
 {
 	int			i,
 				ii,
 				j;
+	tsbool		r;
 
 	/* find match for first point */
 	for (i = 0; i < npts; i++)
 	{
-		if (point_eq_point(&p2[i], &p1[0]))
+		if ((r = point_eq_point(&p2[i], &p1[0])) == TS_TRUE)
 		{
 
 			/* match found? then look forward through remaining points */
@@ -5425,26 +5923,29 @@ plist_same(int npts, Point *p1, Point *p2)
 			{
 				if (j >= npts)
 					j = 0;
-				if (!point_eq_point(&p2[j], &p1[ii]))
+				if ((r = point_eq_point(&p2[j], &p1[ii])) != TS_TRUE)
 					break;
 			}
 			if (ii == npts)
-				return true;
+				return TS_TRUE;
 
 			/* match not found forwards? then look backwards */
 			for (ii = 1, j = i - 1; ii < npts; ii++, j--)
 			{
 				if (j < 0)
 					j = (npts - 1);
-				if (!point_eq_point(&p2[j], &p1[ii]))
+				if ((r = point_eq_point(&p2[j], &p1[ii])) != TS_TRUE)
 					break;
 			}
 			if (ii == npts)
-				return true;
+				return TS_TRUE;
 		}
+
+		if (r == TS_NULL)
+			return TS_NULL;
 	}
 
-	return false;
+	return TS_FALSE;
 }
 
 

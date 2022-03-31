@@ -78,10 +78,11 @@ select * from LINE_TBL;
  {-1,0,3}
 (10 rows)
 
+-- Both of them return null
 select '{nan, 1, nan}'::line = '{nan, 1, nan}'::line as true,
 	   '{nan, 1, nan}'::line = '{nan, 2, nan}'::line as false;
  true | false 
 ------+-------
- t    | f
+      | 
 (1 row)
 

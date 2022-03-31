@@ -1121,8 +1121,11 @@ typedef struct PLpgSQL_execstate
  *
  * Also, immediately before any call to func_setup, PL/pgSQL fills in the
  * error_callback and assign_expr fields with pointers to its own
- * plpgsql_exec_error_callback and exec_assign_expr functions.  This is
- * a somewhat ad-hoc expedient to simplify life for debugger plugins.
+ * plpgsql_exec_error_callback and exec_assign_expr functions. eval_datum
+ * is assigned to function exec_eval_datum, and cast_value to function
+ * do_cast_value. With last two functions is easy to get content of
+ * any PLpgSQL_datum in any expected type. This is a somewhat ad-hoc
+ * expedient to simplify life for debugger plugins.
  */
 typedef struct PLpgSQL_plugin
 {
@@ -1137,6 +1140,13 @@ typedef struct PLpgSQL_plugin
 	void		(*error_callback) (void *arg);
 	void		(*assign_expr) (PLpgSQL_execstate *estate, PLpgSQL_datum *target,
 								PLpgSQL_expr *expr);
+	void		(*eval_datum) (PLpgSQL_execstate *estate, PLpgSQL_datum *datum,
+								Oid *typeid, int32 *typetypmod, Datum *value,
+								bool *isnull);
+	Datum		(*cast_value) (PLpgSQL_execstate *estate,
+								Datum value, bool *isnull,
+								Oid valtype, int32 valtypmod,
+								Oid reqtype, int32 reqtypmod);
 } PLpgSQL_plugin;
 
 /*

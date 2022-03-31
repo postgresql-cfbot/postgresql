@@ -31,17 +31,7 @@ static const char rcsid[] = "Id: inet_net_ntop.c,v 1.1.2.2 2004/03/09 09:17:27 m
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-#ifndef FRONTEND
-#include "utils/inet.h"
-#else
-/*
- * In a frontend build, we can't include inet.h, but we still need to have
- * sensible definitions of these two constants.  Note that pg_inet_net_ntop()
- * assumes that PGSQL_AF_INET is equal to AF_INET.
- */
-#define PGSQL_AF_INET	(AF_INET + 0)
-#define PGSQL_AF_INET6	(AF_INET + 1)
-#endif
+#include "common/inet-common.h"
 
 
 #define NS_IN6ADDRSZ 16

@@ -14,6 +14,7 @@
 #ifndef INET_H
 #define INET_H
 
+#include "common/inet-common.h"
 #include "fmgr.h"
 
 /*
@@ -26,18 +27,6 @@ typedef struct
 	unsigned char bits;			/* number of bits in netmask */
 	unsigned char ipaddr[16];	/* up to 128 bits of address */
 } inet_struct;
-
-/*
- * We use these values for the "family" field.
- *
- * Referencing all of the non-AF_INET types to AF_INET lets us work on
- * machines which may not have the appropriate address family (like
- * inet6 addresses when AF_INET6 isn't present) but doesn't cause a
- * dump/reload requirement.  Pre-7.4 databases used AF_INET for the family
- * type on disk.
- */
-#define PGSQL_AF_INET	(AF_INET + 0)
-#define PGSQL_AF_INET6	(AF_INET + 1)
 
 /*
  * Both INET and CIDR addresses are represented within Postgres as varlena

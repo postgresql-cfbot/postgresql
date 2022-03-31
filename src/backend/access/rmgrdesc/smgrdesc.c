@@ -40,6 +40,46 @@ smgr_desc(StringInfo buf, XLogReaderState *record)
 						 xlrec->blkno, xlrec->flags);
 		pfree(path);
 	}
+	else if (info == XLOG_SMGR_UNLINK)
+	{
+		xl_smgr_unlink *xlrec = (xl_smgr_unlink *) rec;
+		char	   *path = relpathperm(xlrec->rnode, xlrec->forkNum);
+
+		appendStringInfoString(buf, path);
+		pfree(path);
+	}
+	else if (info == XLOG_SMGR_MARK)
+	{
+		xl_smgr_mark *xlrec = (xl_smgr_mark *) rec;
+		char	   *path = GetRelationPath(xlrec->rnode.dbNode,
+										   xlrec->rnode.spcNode,
+										   xlrec->rnode.relNode,
+										   InvalidBackendId,
+										   xlrec->forkNum, xlrec->mark);
+		char	   *action = "<none>";
+
+		switch (xlrec->action)
+		{
+			case XLOG_SMGR_MARK_CREATE:
+				action = "CREATE";
+				break;
+			case XLOG_SMGR_MARK_UNLINK:
+				action = "DELETE";
+				break;
+		}
+
+		appendStringInfo(buf, "%s %s", action, path);
+		pfree(path);
+	}
+	else if (info == XLOG_SMGR_BUFPERSISTENCE)
+	{
+		xl_smgr_bufpersistence *xlrec = (xl_smgr_bufpersistence *) rec;
+		char	   *path = relpathperm(xlrec->rnode, MAIN_FORKNUM);
+
+		appendStringInfoString(buf, path);
+		appendStringInfo(buf, " persistence %d", xlrec->persistence);
+		pfree(path);
+	}
 }
 
 const char *
@@ -54,6 +94,15 @@ smgr_identify(uint8 info)
 			break;
 		case XLOG_SMGR_TRUNCATE:
 			id = "TRUNCATE";
+			break;
+		case XLOG_SMGR_UNLINK:
+			id = "UNLINK";
+			break;
+		case XLOG_SMGR_MARK:
+			id = "MARK";
+			break;
+		case XLOG_SMGR_BUFPERSISTENCE:
+			id = "BUFPERSISTENCE";
 			break;
 	}
 

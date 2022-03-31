@@ -1188,6 +1188,7 @@ sendDir(bbsink *sink, const char *path, int basepathlen, bool sizeonly,
 		bool		excludeFound;
 		ForkNumber	relForkNum; /* Type of fork if file is a relation */
 		int			relOidChars;	/* Chars in filename that are the rel oid */
+		StorageMarks mark;
 
 		/* Skip special stuff */
 		if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0)
@@ -1238,7 +1239,7 @@ sendDir(bbsink *sink, const char *path, int basepathlen, bool sizeonly,
 		/* Exclude all forks for unlogged tables except the init fork */
 		if (isDbDir &&
 			parse_filename_for_nontemp_relation(de->d_name, &relOidChars,
-												&relForkNum))
+												&relForkNum, &mark))
 		{
 			/* Never exclude init forks */
 			if (relForkNum != INIT_FORKNUM)

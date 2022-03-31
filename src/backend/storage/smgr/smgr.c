@@ -63,6 +63,10 @@ typedef struct f_smgr
 	void		(*smgr_truncate) (SMgrRelation reln, ForkNumber forknum,
 								  BlockNumber nblocks);
 	void		(*smgr_immedsync) (SMgrRelation reln, ForkNumber forknum);
+	void		(*smgr_createmark) (SMgrRelation reln, ForkNumber forknum,
+									StorageMarks mark, bool isRedo);
+	void		(*smgr_unlinkmark) (SMgrRelation reln, ForkNumber forknum,
+									StorageMarks mark, bool isRedo);
 } f_smgr;
 
 static const f_smgr smgrsw[] = {
@@ -84,6 +88,8 @@ static const f_smgr smgrsw[] = {
 		.smgr_nblocks = mdnblocks,
 		.smgr_truncate = mdtruncate,
 		.smgr_immedsync = mdimmedsync,
+		.smgr_createmark = mdcreatemark,
+		.smgr_unlinkmark = mdunlinkmark,
 	}
 };
 
@@ -335,6 +341,26 @@ void
 smgrcreate(SMgrRelation reln, ForkNumber forknum, bool isRedo)
 {
 	smgrsw[reln->smgr_which].smgr_create(reln, forknum, isRedo);
+}
+
+/*
+ *	smgrcreatemark() -- Create a mark file
+ */
+void
+smgrcreatemark(SMgrRelation reln, ForkNumber forknum, StorageMarks mark,
+			   bool isRedo)
+{
+	smgrsw[reln->smgr_which].smgr_createmark(reln, forknum, mark, isRedo);
+}
+
+/*
+ *	smgrunlinkmark() -- Delete a mark file
+ */
+void
+smgrunlinkmark(SMgrRelation reln, ForkNumber forknum, StorageMarks mark,
+			   bool isRedo)
+{
+	smgrsw[reln->smgr_which].smgr_unlinkmark(reln, forknum, mark, isRedo);
 }
 
 /*
@@ -662,6 +688,12 @@ void
 smgrimmedsync(SMgrRelation reln, ForkNumber forknum)
 {
 	smgrsw[reln->smgr_which].smgr_immedsync(reln, forknum);
+}
+
+void
+smgrunlink(SMgrRelation reln, ForkNumber forknum, bool isRedo)
+{
+	smgrsw[reln->smgr_which].smgr_unlink(reln->smgr_rnode, forknum, isRedo);
 }
 
 /*

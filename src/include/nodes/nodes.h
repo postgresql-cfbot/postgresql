@@ -444,6 +444,7 @@ typedef enum NodeTag
 	T_AlterCollationStmt,
 	T_CallStmt,
 	T_AlterStatsStmt,
+	T_AlterTableSetLoggedAllStmt,
 
 	/*
 	 * TAGS FOR PARSE TREE NODES (parsenodes.h)

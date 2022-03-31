@@ -413,7 +413,6 @@ main(int argc, char **argv)
 	if (showprogress)
 		pg_log_info("reading source file list");
 	source->traverse_files(source, &process_source_file);
-
 	if (showprogress)
 		pg_log_info("reading target file list");
 	traverse_datadir(datadir_target, &process_target_file);

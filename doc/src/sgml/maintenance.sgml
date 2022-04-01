@@ -585,9 +585,11 @@
     statistics in the system tables <structname>pg_class</structname> and
     <structname>pg_database</structname>.  In particular,
     the <structfield>relfrozenxid</structfield> column of a table's
-    <structname>pg_class</structname> row contains the freeze cutoff XID that was used
-    by the last aggressive <command>VACUUM</command> for that table.  All rows
-    inserted by transactions with XIDs older than this cutoff XID are
+    <structname>pg_class</structname> row contains the oldest
+    remaining XID at the end of the most recent <command>VACUUM</command>
+    that successfully advanced <structfield>relfrozenxid</structfield>
+    (typically the most recent aggressive VACUUM).  All rows inserted
+    by transactions with XIDs older than this cutoff XID are
     guaranteed to have been frozen.  Similarly,
     the <structfield>datfrozenxid</structfield> column of a database's
     <structname>pg_database</structname> row is a lower bound on the unfrozen XIDs
@@ -610,6 +612,17 @@ SELECT datname, age(datfrozenxid) FROM pg_database;
     cutoff XID to the current transaction's XID.
    </para>
 
+   <tip>
+    <para>
+     <literal>VACUUM VERBOSE</literal> outputs information about
+     <structfield>relfrozenxid</structfield> and/or
+     <structfield>relminmxid</structfield> when either field was
+     advanced.  The same details appear in the server log when <xref
+      linkend="guc-log-autovacuum-min-duration"/> reports on vacuuming
+     by autovacuum.
+    </para>
+   </tip>
+
    <para>
     <command>VACUUM</command> normally only scans pages that have been modified
     since the last vacuum, but <structfield>relfrozenxid</structfield> can only be
@@ -624,7 +637,11 @@ SELECT datname, age(datfrozenxid) FROM pg_database;
     set <literal>age(relfrozenxid)</literal> to a value just a little more than the
     <varname>vacuum_freeze_min_age</varname> setting
     that was used (more by the number of transactions started since the
-    <command>VACUUM</command> started).  If no <structfield>relfrozenxid</structfield>-advancing
+    <command>VACUUM</command> started).  <command>VACUUM</command>
+    will set <structfield>relfrozenxid</structfield> to the oldest XID
+    that remains in the table, so it's possible that the final value
+    will be much more recent than strictly required.
+    If no <structfield>relfrozenxid</structfield>-advancing
     <command>VACUUM</command> is issued on the table until
     <varname>autovacuum_freeze_max_age</varname> is reached, an autovacuum will soon
     be forced for the table.
@@ -711,8 +728,9 @@ HINT:  Stop the postmaster and vacuum that database in single-user mode.
     </para>
 
     <para>
-     Aggressive <command>VACUUM</command> scans, regardless of
-     what causes them, enable advancing the value for that table.
+     Aggressive <command>VACUUM</command> scans, regardless of what
+     causes them, are <emphasis>guaranteed</emphasis> to be able to
+     advance the table's <structfield>relminmxid</structfield>.
      Eventually, as all tables in all databases are scanned and their
      oldest multixact values are advanced, on-disk storage for older
      multixacts can be removed.

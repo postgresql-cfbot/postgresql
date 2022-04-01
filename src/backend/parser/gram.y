@@ -450,7 +450,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				prep_type_clause
 				execute_param_clause using_clause returning_clause
 				opt_enum_val_list enum_val_list table_func_column_list
-				create_generic_options alter_generic_options
+				create_generic_options alter_generic_options alter_am_options
 				relation_expr_list dostmt_opt_list
 				transform_element_list transform_type_list
 				TriggerTransitions TriggerReferencing
@@ -557,8 +557,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 %type <str>		generic_option_name
 %type <node>	generic_option_arg
-%type <defelt>	generic_option_elem alter_generic_option_elem
-%type <list>	generic_option_list alter_generic_option_list
+%type <defelt>	generic_option_elem alter_generic_option_elem alter_am_option_elem
+%type <list>	generic_option_list alter_generic_option_list alter_am_option_list
 
 %type <ival>	reindex_target_type reindex_target_multitable
 
@@ -2747,6 +2747,14 @@ alter_table_cmd:
 					n->name = $4;
 					$$ = (Node *)n;
 				}
+			/* ALTER TABLE <name> SET ACCESS METHOD <amname> [OPTIONS]*/
+			| SET ACCESS METHOD name alter_am_options
+				{
+					AlterTableCmd *n = makeNode(AlterTableCmd);
+					n->subtype = AT_SetAccessMethod;
+					n->name = $4;
+					$$ = (Node *)n;
+				}
 			/* ALTER TABLE <name> SET TABLESPACE <tablespacename> */
 			| SET TABLESPACE name
 				{
@@ -2815,6 +2823,35 @@ alter_table_cmd:
 					$$ = (Node *) n;
 				}
 		;
+
+/* Options definition for ALTER TABLE <name> SET ACCESS METHOD <amname> OPTIONS (...) */
+alter_am_options:
+			OPTIONS '(' alter_am_option_list ')'               { $$ = $3; }
+		;
+
+alter_am_option_list:
+			alter_am_option_elem
+				{
+					$$ = list_make1($1);
+				}
+			| alter_am_option_list ',' alter_am_option_elem
+				{
+					$$ = lappend($1, $3);
+				}
+		;
+
+alter_am_option_elem:
+			ADD_P generic_option_elem
+				{
+					$$ = $2;
+					$$->defaction = DEFELEM_ADD;
+				}
+			| DROP generic_option_elem
+				{
+					$$ = makeDefElemExtended(NULL, $2, NULL, DEFELEM_DROP, @2);
+				}
+		;
+
 
 alter_column_default:
 			SET DEFAULT a_expr			{ $$ = $3; }

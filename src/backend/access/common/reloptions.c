@@ -1381,7 +1381,8 @@ untransformRelOptions(Datum options)
  */
 bytea *
 extractRelOptions(HeapTuple tuple, TupleDesc tupdesc,
-				  amoptions_function amoptions)
+				 amoptions_function amoptions,
+				 reloptions_function reloptions)
 {
 	bytea	   *options;
 	bool		isnull;
@@ -1403,7 +1404,9 @@ extractRelOptions(HeapTuple tuple, TupleDesc tupdesc,
 		case RELKIND_RELATION:
 		case RELKIND_TOASTVALUE:
 		case RELKIND_MATVIEW:
-			options = heap_reloptions(classForm->relkind, datum, false);
+			options = table_reloptions(reloptions,
+							classForm->relkind,
+							datum, false);
 			break;
 		case RELKIND_PARTITIONED_TABLE:
 			options = partitioned_table_reloptions(datum, false);
@@ -2018,7 +2021,8 @@ view_reloptions(Datum reloptions, bool validate)
 }
 
 /*
- * Parse options for heaps, views and toast tables.
+ * Parse options for heaps, views and toast tables. This is
+ * implementation of relOptions for access method heap.
  */
 bytea *
 heap_reloptions(char relkind, Datum reloptions, bool validate)
@@ -2047,6 +2051,26 @@ heap_reloptions(char relkind, Datum reloptions, bool validate)
 	}
 }
 
+
+/*
+ * Parse options for tables.
+ *
+ *	reloptions	tables AM's option parser function
+ *	reloptions	options as text[] datum
+ *	validate	error flag
+ */
+bytea *
+table_reloptions(reloptions_function reloptsfun, char relkind,
+				 Datum reloptions, bool validate)
+{
+	Assert(reloptsfun != NULL);
+
+	/* Assume function is strict */
+	if (!PointerIsValid(DatumGetPointer(reloptions)))
+		return NULL;
+
+	return reloptsfun(relkind, reloptions, validate);
+}
 
 /*
  * Parse options for indexes.

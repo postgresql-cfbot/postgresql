@@ -575,6 +575,7 @@ static void ATPrepSetTableSpace(AlteredTableInfo *tab, Relation rel,
 								const char *tablespacename, LOCKMODE lockmode);
 static void ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode);
 static void ATExecSetTableSpaceNoStorage(Relation rel, Oid newTableSpace);
+static void ATExecSetAMOptions(Relation rel, List *defList, AlterTableType operation, LOCKMODE lockmode);
 static void ATExecSetRelOptions(Relation rel, List *defList,
 								AlterTableType operation,
 								LOCKMODE lockmode);
@@ -817,24 +818,6 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	if (!OidIsValid(ownerId))
 		ownerId = GetUserId();
 
-	/*
-	 * Parse and validate reloptions, if any.
-	 */
-	reloptions = transformRelOptions((Datum) 0, stmt->options, NULL, validnsps,
-									 true, false);
-
-	switch (relkind)
-	{
-		case RELKIND_VIEW:
-			(void) view_reloptions(reloptions, true);
-			break;
-		case RELKIND_PARTITIONED_TABLE:
-			(void) partitioned_table_reloptions(reloptions, true);
-			break;
-		default:
-			(void) heap_reloptions(relkind, reloptions, true);
-	}
-
 	if (stmt->ofTypename)
 	{
 		AclResult	aclresult;
@@ -953,6 +936,52 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	/* look up the access method, verify it is for a table */
 	if (accessMethod != NULL)
 		accessMethodId = get_table_am_oid(accessMethod, false);
+
+	/*
+	 * Parse and validate reloptions, if any.
+	 */
+	reloptions = transformRelOptions((Datum) 0, stmt->options, NULL, validnsps,
+									 true, false);
+	switch (relkind)
+	{
+		case RELKIND_VIEW:
+			(void) view_reloptions(reloptions, true);
+			break;
+		case RELKIND_PARTITIONED_TABLE:
+			(void) partitioned_table_reloptions(reloptions, true);
+			break;
+		case RELKIND_RELATION:
+		case RELKIND_TOASTVALUE:
+		case RELKIND_MATVIEW:
+			{
+				const TableAmRoutine *routine;
+				HeapTuple	tuple;
+				Form_pg_am	aform;
+
+				tuple = SearchSysCache1(AMOID, ObjectIdGetDatum(accessMethodId));
+				if (!HeapTupleIsValid(tuple))
+				{
+					elog(ERROR, "cache lookup failed for access method %u",
+						 accessMethodId);
+				}
+
+				aform = (Form_pg_am) GETSTRUCT(tuple);
+				routine = GetTableAmRoutine(aform->amhandler);
+				if (routine->relation_options == NULL)
+				{
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("specifying a table access method is not supported")));
+				}
+
+				(void) routine->relation_options(relkind, reloptions, true);
+				ReleaseSysCache(tuple);
+				break;
+			}
+
+		default:
+			(void) heap_reloptions(relkind, reloptions, true);
+	}
 
 	/*
 	 * Create the relation.  Inherited defaults and constraints are passed in
@@ -5088,6 +5117,7 @@ ATExecCmd(List **wqueue, AlteredTableInfo *tab,
 			break;
 		case AT_SetAccessMethod:	/* SET ACCESS METHOD */
 			/* handled specially in Phase 3 */
+			ATExecSetAMOptions(rel, (List *) cmd->def, cmd->subtype, lockmode);
 			break;
 		case AT_SetTableSpace:	/* SET TABLESPACE */
 
@@ -14104,6 +14134,152 @@ ATPrepSetTableSpace(AlteredTableInfo *tab, Relation rel, const char *tablespacen
 	tab->newTableSpace = tablespaceId;
 }
 
+/*TODO: This needs to be removed. Same function is already present in foreigncmds.c*/
+static Datum
+optionListToArray(List *options)
+{
+	ArrayBuildState *astate = NULL;
+	ListCell   *cell;
+
+	foreach(cell, options)
+	{
+		DefElem    *def = lfirst(cell);
+		const char *value;
+		Size		len;
+		text	   *t;
+
+		value = defGetString(def);
+		len = VARHDRSZ + strlen(def->defname) + 1 + strlen(value);
+		t = palloc(len + 1);
+		SET_VARSIZE(t, len);
+		sprintf(VARDATA(t), "%s=%s", def->defname, value);
+
+		astate = accumArrayResult(astate, PointerGetDatum(t),
+								  false, TEXTOID,
+								  CurrentMemoryContext);
+	}
+
+	if (astate)
+		return makeArrayResult(astate, CurrentMemoryContext);
+
+	return PointerGetDatum(NULL);
+}
+
+/* ADD or DROP reloptions in SET ACCESS METHOD.*/
+static void
+ATExecSetAMOptions(Relation rel, List *defList, AlterTableType operation,
+					LOCKMODE lockmode)
+{
+	Oid			relid;
+	Relation	pgclass;
+	HeapTuple	tuple;
+	HeapTuple	newtuple;
+	Datum		datum;
+	bool		isnull;
+	Datum		newOptions;
+	Datum		repl_val[Natts_pg_class];
+	bool		repl_null[Natts_pg_class];
+	bool		repl_repl[Natts_pg_class];
+	List		*resultOptions;
+	ListCell	*optcell;
+
+	if (defList == NIL)
+		return; /* nothing to do */
+
+	pgclass = table_open(RelationRelationId, RowExclusiveLock);
+
+	/* Fetch heap tuple */
+	relid = RelationGetRelid(rel);
+	tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(relid));
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "cache lookup failed for relation %u", relid);
+
+	/* Get the old reloptions */
+	datum = SysCacheGetAttr(RELOID, tuple, Anum_pg_class_reloptions,
+								&isnull);
+	resultOptions = untransformRelOptions(datum);
+
+	foreach(optcell, defList)
+	{
+		DefElem    *od = lfirst(optcell);
+		ListCell   *cell;
+
+		/* Search in existing options */
+		foreach(cell, resultOptions)
+		{
+			DefElem    *def = lfirst(cell);
+
+			if (strcmp(def->defname, od->defname) == 0)
+				break;
+		}
+
+		/*
+		 * It is possible to perform multiple ADD/DROP actions on the same
+		 * option.  The standard permits this, as long as the options to be
+		 * added are unique.
+		 */
+		switch (od->defaction)
+		{
+			case DEFELEM_ADD:
+				if (cell)
+					ereport(ERROR,
+							(errcode(ERRCODE_DUPLICATE_OBJECT),
+							 errmsg("option \"%s\" provided more than once",
+									od->defname)));
+				resultOptions = lappend(resultOptions, od);
+				break;
+
+			case DEFELEM_DROP:
+				if (!cell)
+					ereport(ERROR,
+							(errcode(ERRCODE_UNDEFINED_OBJECT),
+							 errmsg("option \"%s\" not found",
+									od->defname)));
+				resultOptions = list_delete_cell(resultOptions, cell);
+				break;
+
+			default:
+				elog(ERROR, "unrecognized action %d on option \"%s\"",
+					 (int) od->defaction, od->defname);
+				break;
+		}
+	}
+
+	newOptions = optionListToArray(resultOptions);
+
+	/* DO need to call the handler function to validate ?*/
+
+	/*
+	 * All we need do here is update the pg_class row; the new options will be
+	 * propagated into relcaches during post-commit cache inval.
+	 */
+	memset(repl_val, 0, sizeof(repl_val));
+	memset(repl_null, false, sizeof(repl_null));
+	memset(repl_repl, false, sizeof(repl_repl));
+
+	if (newOptions != (Datum) 0)
+		repl_val[Anum_pg_class_reloptions - 1] = newOptions;
+	else
+		repl_null[Anum_pg_class_reloptions - 1] = true;
+
+	repl_repl[Anum_pg_class_reloptions - 1] = true;
+
+	newtuple = heap_modify_tuple(tuple, RelationGetDescr(pgclass),
+								 repl_val, repl_null, repl_repl);
+
+	CatalogTupleUpdate(pgclass, &newtuple->t_self, newtuple);
+
+
+	InvokeObjectPostAlterHook(RelationRelationId, RelationGetRelid(rel),
+								  InvalidOid);
+
+	heap_freetuple(newtuple);
+
+	ReleaseSysCache(tuple);
+
+	table_close(pgclass, RowExclusiveLock);
+}
+
 /*
  * Set, reset, or replace reloptions.
  */
@@ -14161,7 +14337,7 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 		case RELKIND_RELATION:
 		case RELKIND_TOASTVALUE:
 		case RELKIND_MATVIEW:
-			(void) heap_reloptions(rel->rd_rel->relkind, newOptions, true);
+			rel->rd_tableam->relation_options(rel->rd_rel->relkind, newOptions, true);
 			break;
 		case RELKIND_PARTITIONED_TABLE:
 			(void) partitioned_table_reloptions(newOptions, true);

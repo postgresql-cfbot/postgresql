@@ -3370,6 +3370,7 @@ drop table hats;
 drop table hat_data;
 -- test for pg_get_functiondef properly regurgitating SET parameters
 -- Note that the function is kept around to stress pg_dump.
+SET check_function_bodies=no;
 CREATE FUNCTION func_with_set_params() RETURNS integer
     AS 'select 1;'
     LANGUAGE SQL
@@ -3379,6 +3380,14 @@ CREATE FUNCTION func_with_set_params() RETURNS integer
     SET datestyle to iso, mdy
     SET local_preload_libraries TO "Mixed/Case", 'c:/''a"/path', '', '0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789'
     IMMUTABLE STRICT;
+WARNING:  could not access file "Mixed/Case"
+HINT:  The server will fail to start with the existing configuration.  If it is is shut down, it will be necessary to manually edit the postgresql.auto.conf file to allow it to start.
+WARNING:  could not access file "c:/'a"/path"
+HINT:  The server will fail to start with the existing configuration.  If it is is shut down, it will be necessary to manually edit the postgresql.auto.conf file to allow it to start.
+WARNING:  could not access file ""
+HINT:  The server will fail to start with the existing configuration.  If it is is shut down, it will be necessary to manually edit the postgresql.auto.conf file to allow it to start.
+WARNING:  could not access file "0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789"
+HINT:  The server will fail to start with the existing configuration.  If it is is shut down, it will be necessary to manually edit the postgresql.auto.conf file to allow it to start.
 SELECT pg_get_functiondef('func_with_set_params()'::regprocedure);
                                                                             pg_get_functiondef                                                                            
 --------------------------------------------------------------------------------------------------------------------------------------------------------------------------

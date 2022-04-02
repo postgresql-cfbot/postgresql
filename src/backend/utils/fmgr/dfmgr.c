@@ -34,6 +34,7 @@
 #include "lib/stringinfo.h"
 #include "miscadmin.h"
 #include "storage/shmem.h"
+#include "utils/guc_tables.h"
 #include "utils/hsearch.h"
 
 
@@ -76,7 +77,7 @@ static DynamicFileList *file_tail = NULL;
 
 char	   *Dynamic_library_path;
 
-static void *internal_load_library(const char *libname);
+static void *internal_load_library(const char *libname, const char *gucname);
 static void incompatible_module_error(const char *libname,
 									  const Pg_magic_struct *module_magic_data) pg_attribute_noreturn();
 static void internal_unload_library(const char *libname);
@@ -115,7 +116,7 @@ load_external_function(const char *filename, const char *funcname,
 	fullname = expand_dynamic_library_name(filename);
 
 	/* Load the shared library, unless we already did */
-	lib_handle = internal_load_library(fullname);
+	lib_handle = internal_load_library(fullname, NULL);
 
 	/* Return handle if caller wants it */
 	if (filehandle)
@@ -145,6 +146,14 @@ load_external_function(const char *filename, const char *funcname,
 void
 load_file(const char *filename, bool restricted)
 {
+	load_file_guc(filename, restricted, NULL);
+}
+
+/*
+ * Also accepts a GUC arg, for error reports
+ */
+void load_file_guc(const char *filename, bool restricted, const char *gucname)
+{
 	char	   *fullname;
 
 	/* Apply security restriction if requested */
@@ -158,7 +167,7 @@ load_file(const char *filename, bool restricted)
 	internal_unload_library(fullname);
 
 	/* Load the shared library */
-	(void) internal_load_library(fullname);
+	(void) internal_load_library(fullname, gucname);
 
 	pfree(fullname);
 }
@@ -179,9 +188,10 @@ lookup_external_function(void *filehandle, const char *funcname)
  * loaded.  Return the pg_dl* handle for the file.
  *
  * Note: libname is expected to be an exact name for the library file.
+ * gucname may be passed for error reports.
  */
 static void *
-internal_load_library(const char *libname)
+internal_load_library(const char *libname, const char *gucname)
 {
 	DynamicFileList *file_scanner;
 	PGModuleMagicFunction magic_func;
@@ -204,10 +214,17 @@ internal_load_library(const char *libname)
 		 * Check for same files - different paths (ie, symlink or link)
 		 */
 		if (stat(libname, &stat_buf) == -1)
+		{
+			char *errstr = strerror(errno);
+			int linenum;
+			char *sourcefile = gucname ? GetConfigSourceFile(gucname, &linenum) : NULL;
 			ereport(ERROR,
 					(errcode_for_file_access(),
-					 errmsg("could not access file \"%s\": %m",
-							libname)));
+					 gucname ? errcontext("while loading shared libraries for setting \"%s\"", gucname) : 0,
+					 sourcefile ? errcontext("from %s:%d", sourcefile, linenum) : 0,
+					 errmsg("could not access file \"%s\": %s",
+							libname, errstr)));
+		}
 
 		for (file_scanner = file_list;
 			 file_scanner != NULL &&
@@ -271,7 +288,7 @@ internal_load_library(const char *libname)
 		}
 		else
 		{
-			/* try to close library */
+			/* try to close library */ // Not needed due to ERROR ? //
 			dlclose(file_scanner->handle);
 			free((char *) file_scanner);
 			/* complain */
@@ -759,7 +776,7 @@ RestoreLibraryState(char *start_address)
 {
 	while (*start_address != '\0')
 	{
-		internal_load_library(start_address);
+		internal_load_library(start_address, NULL);
 		start_address += strlen(start_address) + 1;
 	}
 }

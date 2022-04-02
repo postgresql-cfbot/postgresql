@@ -1066,6 +1066,7 @@ GRANT pg_read_all_settings TO regress_role_haspriv;
 BEGIN;
 -- A GUC using GUC_SUPERUSER_ONLY is useful for negative tests.
 SET LOCAL session_preload_libraries TO 'path-to-preload-libraries';
+WARNING:  could not access file "$libdir/plugins/path-to-preload-libraries"
 SET SESSION AUTHORIZATION regress_role_haspriv;
 -- passes with role member of pg_read_all_settings
 SHOW session_preload_libraries;

@@ -8,6 +8,7 @@
  */
 
 #include "postgres_fe.h"
+#include "access/transam.h"
 
 #include <ctype.h>
 
@@ -263,13 +264,22 @@ get_control_data(ClusterInfo *cluster, bool live_check)
 		}
 		else if ((p = strstr(bufin, "Latest checkpoint's NextXID:")) != NULL)
 		{
+			FullTransactionId		xid;
+
 			p = strchr(p, ':');
 
 			if (p == NULL || strlen(p) <= 1)
 				pg_fatal("%d: controldata retrieval problem\n", __LINE__);
 
 			p++;				/* remove ':' char */
-			cluster->controldata.chkpnt_nxtepoch = str2uint(p);
+
+			/*
+			 * NextXID representation in controldata file changed from Epoch:Xid
+			 * to 64-bit FullTransactionId representation as a part of making
+			 * xids 64-bit in the future. Here we support both controldata
+			 * formats.
+			 */
+			xid.value = strtou64(p, NULL, 10);
 
 			/*
 			 * Delimiter changed from '/' to ':' in 9.6.  We don't test for
@@ -284,11 +294,23 @@ get_control_data(ClusterInfo *cluster, bool live_check)
 			else
 				p = NULL;
 
-			if (p == NULL || strlen(p) <= 1)
-				pg_fatal("%d: controldata retrieval problem\n", __LINE__);
+			if (p == NULL)
+			{
+				/* FullTransactionId representation */
+				cluster->controldata.chkpnt_nxtxid = XidFromFullTransactionId(xid);
+				cluster->controldata.chkpnt_nxtepoch = EpochFromFullTransactionId(xid);
+			}
+			else
+			{
+				if (strlen(p) <= 1)
+					pg_fatal("%d: controldata retrieval problem\n", __LINE__);
 
-			p++;				/* remove '/' or ':' char */
-			cluster->controldata.chkpnt_nxtxid = str2uint(p);
+				/* Epoch:Xid representation */
+				p++;				/* remove '/' or ':' char */
+				cluster->controldata.chkpnt_nxtxid = str2uint(p);
+				cluster->controldata.chkpnt_nxtepoch = (TransactionId) XidFromFullTransactionId(xid);
+			}
+
 			got_xid = true;
 		}
 		else if ((p = strstr(bufin, "Latest checkpoint's NextOID:")) != NULL)

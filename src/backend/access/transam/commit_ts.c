@@ -111,7 +111,7 @@ static void TransactionIdSetCommitTs(TransactionId xid, TimestampTz ts,
 									 RepOriginId nodeid, int slotno);
 static void error_commit_ts_disabled(void);
 static int	ZeroCommitTsPage(int pageno, bool writeXlog);
-static bool CommitTsPagePrecedes(int page1, int page2);
+static bool CommitTsPagePrecedes(int64 page1, int64 page2);
 static void ActivateCommitTs(void);
 static void DeactivateCommitTs(void);
 static void WriteZeroPageXlogRec(int pageno);
@@ -279,7 +279,8 @@ TransactionIdGetCommitTsData(TransactionId xid, TimestampTz *ts,
 	if (!TransactionIdIsValid(xid))
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("cannot retrieve commit timestamp for transaction %u", xid)));
+				 errmsg("cannot retrieve commit timestamp for transaction %llu",
+						(unsigned long long) xid)));
 	else if (!TransactionIdIsNormal(xid))
 	{
 		/* frozen and bootstrap xids are always committed far in the past */
@@ -939,7 +940,7 @@ AdvanceOldestCommitTsXid(TransactionId oldestXact)
  * oldestXact=N+2.1, it would be precious at oldestXact=N+2.9.
  */
 static bool
-CommitTsPagePrecedes(int page1, int page2)
+CommitTsPagePrecedes(int64 page1, int64 page2)
 {
 	TransactionId xid1;
 	TransactionId xid2;

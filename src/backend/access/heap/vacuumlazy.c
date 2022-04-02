@@ -690,21 +690,21 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 								 vacrel->missed_dead_pages);
 			diff = (int32) (ReadNextTransactionId() - OldestXmin);
 			appendStringInfo(&buf,
-							 _("removable cutoff: %u, older by %d xids when operation ended\n"),
-							 OldestXmin, diff);
+							 _("removable cutoff: %llu, older by %d xids when operation ended\n"),
+							 (unsigned long long) OldestXmin, diff);
 			if (frozenxid_updated)
 			{
 				diff = (int32) (FreezeLimit - vacrel->relfrozenxid);
 				appendStringInfo(&buf,
-								 _("new relfrozenxid: %u, which is %d xids ahead of previous value\n"),
-								 FreezeLimit, diff);
+								 _("new relfrozenxid: %llu, which is %d xids ahead of previous value\n"),
+								 (unsigned long long) FreezeLimit, diff);
 			}
 			if (minmulti_updated)
 			{
 				diff = (int32) (MultiXactCutoff - vacrel->relminmxid);
 				appendStringInfo(&buf,
-								 _("new relminmxid: %u, which is %d mxids ahead of previous value\n"),
-								 MultiXactCutoff, diff);
+								 _("new relminmxid: %llu, which is %d mxids ahead of previous value\n"),
+								 (unsigned long long) MultiXactCutoff, diff);
 			}
 			if (orig_rel_pages > 0)
 			{

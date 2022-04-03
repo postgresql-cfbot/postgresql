@@ -246,7 +246,7 @@ struct Tuplesortstate
 {
 	TupSortStatus status;		/* enumerated value as shown above */
 	int			nKeys;			/* number of columns in sort key */
-	bool		randomAccess;	/* did caller request random access? */
+	int			sortopt;		/* Bitmask of flags used to setup sort */
 	bool		bounded;		/* did caller specify a maximum number of
 								 * tuples to return? */
 	bool		boundUsed;		/* true if we made use of a bounded heap */
@@ -558,12 +558,12 @@ struct Sharedsort
  * may or may not match the in-memory representation of the tuple ---
  * any conversion needed is the job of the writetup and readtup routines.
  *
- * If state->randomAccess is true, then the stored representation of the
- * tuple must be followed by another "unsigned int" that is a copy of the
- * length --- so the total tape space used is actually sizeof(unsigned int)
- * more than the stored length value.  This allows read-backwards.  When
- * randomAccess is not true, the write/read routines may omit the extra
- * length word.
+ * If state->sortopt contains TUPLESORT_RANDOMACCESS, then the stored
+ * representation of the tuple must be followed by another "unsigned int" that
+ * is a copy of the length --- so the total tape space used is actually
+ * sizeof(unsigned int) more than the stored length value.  This allows
+ * read-backwards.  When the random access flag was not specified, the
+ * write/read routines may omit the extra length word.
  *
  * writetup is expected to write both length words as well as the tuple
  * data.  When readtup is called, the tape is positioned just after the
@@ -608,7 +608,7 @@ struct Sharedsort
 
 static Tuplesortstate *tuplesort_begin_common(int workMem,
 											  SortCoordinate coordinate,
-											  bool randomAccess);
+											  int sortopt);
 static void tuplesort_begin_batch(Tuplesortstate *state);
 static void puttuple_common(Tuplesortstate *state, SortTuple *tuple);
 static bool consider_abort_common(Tuplesortstate *state);
@@ -800,21 +800,20 @@ qsort_tuple_int32_compare(SortTuple *a, SortTuple *b, Tuplesortstate *state)
  * Each variant of tuplesort_begin has a workMem parameter specifying the
  * maximum number of kilobytes of RAM to use before spilling data to disk.
  * (The normal value of this parameter is work_mem, but some callers use
- * other values.)  Each variant also has a randomAccess parameter specifying
- * whether the caller needs non-sequential access to the sort result.
+ * other values.)  Each variant also has a sortopt which is a bitmask of
+ * sort options.  See TUPLESORT_* definitions in tuplesort.h
  */
 
 static Tuplesortstate *
-tuplesort_begin_common(int workMem, SortCoordinate coordinate,
-					   bool randomAccess)
+tuplesort_begin_common(int workMem, SortCoordinate coordinate, int sortopt)
 {
 	Tuplesortstate *state;
 	MemoryContext maincontext;
 	MemoryContext sortcontext;
 	MemoryContext oldcontext;
 
-	/* See leader_takeover_tapes() remarks on randomAccess support */
-	if (coordinate && randomAccess)
+	/* See leader_takeover_tapes() remarks on random access support */
+	if (coordinate && (sortopt & TUPLESORT_RANDOMACCESS))
 		elog(ERROR, "random access disallowed under parallel sort");
 
 	/*
@@ -851,7 +850,7 @@ tuplesort_begin_common(int workMem, SortCoordinate coordinate,
 		pg_rusage_init(&state->ru_start);
 #endif
 
-	state->randomAccess = randomAccess;
+	state->sortopt = sortopt;
 	state->tuples = true;
 
 	/*
@@ -930,11 +929,21 @@ tuplesort_begin_batch(Tuplesortstate *state)
 	 * eases memory management.  Resetting at key points reduces
 	 * fragmentation. Note that the memtuples array of SortTuples is allocated
 	 * in the parent context, not this context, because there is no need to
-	 * free memtuples early.
+	 * free memtuples early.  For bounded sorts, tuples may be pfreed in any
+	 * order, so we use a regular aset.c context so that it can make use of
+	 * free'd memory.  When the sort is not bounded, we make use of a
+	 * generation.c context as this keeps allocations more compact with less
+	 * wastage.  Allocations are also slightly more CPU efficient.
 	 */
-	state->tuplecontext = AllocSetContextCreate(state->sortcontext,
-												"Caller tuples",
-												ALLOCSET_DEFAULT_SIZES);
+	if (state->sortopt & TUPLESORT_ALLOWBOUNDED)
+		state->tuplecontext = AllocSetContextCreate(state->sortcontext,
+													"Caller tuples",
+													ALLOCSET_DEFAULT_SIZES);
+	else
+		state->tuplecontext = GenerationContextCreate(state->sortcontext,
+													  "Caller tuples",
+													  ALLOCSET_DEFAULT_SIZES);
+
 
 	state->status = TSS_INITIAL;
 	state->bounded = false;
@@ -985,10 +994,10 @@ tuplesort_begin_heap(TupleDesc tupDesc,
 					 int nkeys, AttrNumber *attNums,
 					 Oid *sortOperators, Oid *sortCollations,
 					 bool *nullsFirstFlags,
-					 int workMem, SortCoordinate coordinate, bool randomAccess)
+					 int workMem, SortCoordinate coordinate, int sortopt)
 {
 	Tuplesortstate *state = tuplesort_begin_common(workMem, coordinate,
-												   randomAccess);
+												   sortopt);
 	MemoryContext oldcontext;
 	int			i;
 
@@ -1000,7 +1009,7 @@ tuplesort_begin_heap(TupleDesc tupDesc,
 	if (trace_sort)
 		elog(LOG,
 			 "begin tuple sort: nkeys = %d, workMem = %d, randomAccess = %c",
-			 nkeys, workMem, randomAccess ? 't' : 'f');
+			 nkeys, workMem, sortopt & TUPLESORT_RANDOMACCESS ? 't' : 'f');
 #endif
 
 	state->nKeys = nkeys;
@@ -1009,7 +1018,7 @@ tuplesort_begin_heap(TupleDesc tupDesc,
 								false,	/* no unique check */
 								nkeys,
 								workMem,
-								randomAccess,
+								sortopt & TUPLESORT_RANDOMACCESS,
 								PARALLEL_SORT(state));
 
 	state->comparetup = comparetup_heap;
@@ -1058,10 +1067,10 @@ Tuplesortstate *
 tuplesort_begin_cluster(TupleDesc tupDesc,
 						Relation indexRel,
 						int workMem,
-						SortCoordinate coordinate, bool randomAccess)
+						SortCoordinate coordinate, int sortopt)
 {
 	Tuplesortstate *state = tuplesort_begin_common(workMem, coordinate,
-												   randomAccess);
+												   sortopt);
 	BTScanInsert indexScanKey;
 	MemoryContext oldcontext;
 	int			i;
@@ -1075,7 +1084,7 @@ tuplesort_begin_cluster(TupleDesc tupDesc,
 		elog(LOG,
 			 "begin tuple sort: nkeys = %d, workMem = %d, randomAccess = %c",
 			 RelationGetNumberOfAttributes(indexRel),
-			 workMem, randomAccess ? 't' : 'f');
+			 workMem, sortopt & TUPLESORT_RANDOMACCESS ? 't' : 'f');
 #endif
 
 	state->nKeys = IndexRelationGetNumberOfKeyAttributes(indexRel);
@@ -1084,7 +1093,7 @@ tuplesort_begin_cluster(TupleDesc tupDesc,
 								false,	/* no unique check */
 								state->nKeys,
 								workMem,
-								randomAccess,
+								sortopt & TUPLESORT_RANDOMACCESS,
 								PARALLEL_SORT(state));
 
 	state->comparetup = comparetup_cluster;
@@ -1156,10 +1165,10 @@ tuplesort_begin_index_btree(Relation heapRel,
 							bool uniqueNullsNotDistinct,
 							int workMem,
 							SortCoordinate coordinate,
-							bool randomAccess)
+							int sortopt)
 {
 	Tuplesortstate *state = tuplesort_begin_common(workMem, coordinate,
-												   randomAccess);
+												   sortopt);
 	BTScanInsert indexScanKey;
 	MemoryContext oldcontext;
 	int			i;
@@ -1171,7 +1180,7 @@ tuplesort_begin_index_btree(Relation heapRel,
 		elog(LOG,
 			 "begin index sort: unique = %c, workMem = %d, randomAccess = %c",
 			 enforceUnique ? 't' : 'f',
-			 workMem, randomAccess ? 't' : 'f');
+			 workMem, sortopt & TUPLESORT_RANDOMACCESS ? 't' : 'f');
 #endif
 
 	state->nKeys = IndexRelationGetNumberOfKeyAttributes(indexRel);
@@ -1180,7 +1189,7 @@ tuplesort_begin_index_btree(Relation heapRel,
 								enforceUnique,
 								state->nKeys,
 								workMem,
-								randomAccess,
+								sortopt & TUPLESORT_RANDOMACCESS,
 								PARALLEL_SORT(state));
 
 	state->comparetup = comparetup_index_btree;
@@ -1237,10 +1246,10 @@ tuplesort_begin_index_hash(Relation heapRel,
 						   uint32 max_buckets,
 						   int workMem,
 						   SortCoordinate coordinate,
-						   bool randomAccess)
+						   int sortopt)
 {
 	Tuplesortstate *state = tuplesort_begin_common(workMem, coordinate,
-												   randomAccess);
+												   sortopt);
 	MemoryContext oldcontext;
 
 	oldcontext = MemoryContextSwitchTo(state->maincontext);
@@ -1253,7 +1262,8 @@ tuplesort_begin_index_hash(Relation heapRel,
 			 high_mask,
 			 low_mask,
 			 max_buckets,
-			 workMem, randomAccess ? 't' : 'f');
+			 workMem,
+			 sortopt & TUPLESORT_RANDOMACCESS ? 't' : 'f');
 #endif
 
 	state->nKeys = 1;			/* Only one sort column, the hash code */
@@ -1280,10 +1290,10 @@ tuplesort_begin_index_gist(Relation heapRel,
 						   Relation indexRel,
 						   int workMem,
 						   SortCoordinate coordinate,
-						   bool randomAccess)
+						   int sortopt)
 {
 	Tuplesortstate *state = tuplesort_begin_common(workMem, coordinate,
-												   randomAccess);
+												   sortopt);
 	MemoryContext oldcontext;
 	int			i;
 
@@ -1293,7 +1303,7 @@ tuplesort_begin_index_gist(Relation heapRel,
 	if (trace_sort)
 		elog(LOG,
 			 "begin index sort: workMem = %d, randomAccess = %c",
-			 workMem, randomAccess ? 't' : 'f');
+			 workMem, sortopt & TUPLESORT_RANDOMACCESS ? 't' : 'f');
 #endif
 
 	state->nKeys = IndexRelationGetNumberOfKeyAttributes(indexRel);
@@ -1335,10 +1345,10 @@ tuplesort_begin_index_gist(Relation heapRel,
 Tuplesortstate *
 tuplesort_begin_datum(Oid datumType, Oid sortOperator, Oid sortCollation,
 					  bool nullsFirstFlag, int workMem,
-					  SortCoordinate coordinate, bool randomAccess)
+					  SortCoordinate coordinate, int sortopt)
 {
 	Tuplesortstate *state = tuplesort_begin_common(workMem, coordinate,
-												   randomAccess);
+												   sortopt);
 	MemoryContext oldcontext;
 	int16		typlen;
 	bool		typbyval;
@@ -1349,7 +1359,7 @@ tuplesort_begin_datum(Oid datumType, Oid sortOperator, Oid sortCollation,
 	if (trace_sort)
 		elog(LOG,
 			 "begin datum sort: workMem = %d, randomAccess = %c",
-			 workMem, randomAccess ? 't' : 'f');
+			 workMem, sortopt & TUPLESORT_RANDOMACCESS ? 't' : 'f');
 #endif
 
 	state->nKeys = 1;			/* always a one-column sort */
@@ -1358,7 +1368,7 @@ tuplesort_begin_datum(Oid datumType, Oid sortOperator, Oid sortCollation,
 								false,	/* no unique check */
 								1,
 								workMem,
-								randomAccess,
+								sortopt & TUPLESORT_RANDOMACCESS,
 								PARALLEL_SORT(state));
 
 	state->comparetup = comparetup_datum;
@@ -1424,6 +1434,8 @@ tuplesort_set_bound(Tuplesortstate *state, int64 bound)
 {
 	/* Assert we're called before loading any tuples */
 	Assert(state->status == TSS_INITIAL && state->memtupcount == 0);
+	/* Assert we allow bounded sorts */
+	Assert(state->sortopt & TUPLESORT_ALLOWBOUNDED);
 	/* Can't set the bound twice, either */
 	Assert(!state->bounded);
 	/* Also, this shouldn't be called in a parallel worker */
@@ -2252,7 +2264,7 @@ tuplesort_gettuple_common(Tuplesortstate *state, bool forward,
 	switch (state->status)
 	{
 		case TSS_SORTEDINMEM:
-			Assert(forward || state->randomAccess);
+			Assert(forward || state->sortopt & TUPLESORT_RANDOMACCESS);
 			Assert(!state->slabAllocatorUsed);
 			if (forward)
 			{
@@ -2296,7 +2308,7 @@ tuplesort_gettuple_common(Tuplesortstate *state, bool forward,
 			break;
 
 		case TSS_SORTEDONTAPE:
-			Assert(forward || state->randomAccess);
+			Assert(forward || state->sortopt & TUPLESORT_RANDOMACCESS);
 			Assert(state->slabAllocatorUsed);
 
 			/*
@@ -3071,7 +3083,8 @@ mergeruns(Tuplesortstate *state)
 			 * sorted tape, we can stop at this point and do the final merge
 			 * on-the-fly.
 			 */
-			if (!state->randomAccess && state->nInputRuns <= state->nInputTapes
+			if ((state->sortopt & TUPLESORT_RANDOMACCESS) == 0
+				&& state->nInputRuns <= state->nInputTapes
 				&& !WORKER(state))
 			{
 				/* Tell logtape.c we won't be writing anymore */
@@ -3317,7 +3330,7 @@ tuplesort_rescan(Tuplesortstate *state)
 {
 	MemoryContext oldcontext = MemoryContextSwitchTo(state->sortcontext);
 
-	Assert(state->randomAccess);
+	Assert(state->sortopt & TUPLESORT_RANDOMACCESS);
 
 	switch (state->status)
 	{
@@ -3350,7 +3363,7 @@ tuplesort_markpos(Tuplesortstate *state)
 {
 	MemoryContext oldcontext = MemoryContextSwitchTo(state->sortcontext);
 
-	Assert(state->randomAccess);
+	Assert(state->sortopt & TUPLESORT_RANDOMACCESS);
 
 	switch (state->status)
 	{
@@ -3381,7 +3394,7 @@ tuplesort_restorepos(Tuplesortstate *state)
 {
 	MemoryContext oldcontext = MemoryContextSwitchTo(state->sortcontext);
 
-	Assert(state->randomAccess);
+	Assert(state->sortopt & TUPLESORT_RANDOMACCESS);
 
 	switch (state->status)
 	{
@@ -3965,7 +3978,7 @@ writetup_heap(Tuplesortstate *state, LogicalTape *tape, SortTuple *stup)
 
 	LogicalTapeWrite(tape, (void *) &tuplen, sizeof(tuplen));
 	LogicalTapeWrite(tape, (void *) tupbody, tupbodylen);
-	if (state->randomAccess)	/* need trailing length word? */
+	if (state->sortopt & TUPLESORT_RANDOMACCESS)	/* need trailing length word? */
 		LogicalTapeWrite(tape, (void *) &tuplen, sizeof(tuplen));
 
 	if (!state->slabAllocatorUsed)
@@ -3988,7 +4001,7 @@ readtup_heap(Tuplesortstate *state, SortTuple *stup,
 	/* read in the tuple proper */
 	tuple->t_len = tuplen;
 	LogicalTapeReadExact(tape, tupbody, tupbodylen);
-	if (state->randomAccess)	/* need trailing length word? */
+	if (state->sortopt & TUPLESORT_RANDOMACCESS)	/* need trailing length word? */
 		LogicalTapeReadExact(tape, &tuplen, sizeof(tuplen));
 	stup->tuple = (void *) tuple;
 	/* set up first-column key value */
@@ -4199,7 +4212,7 @@ writetup_cluster(Tuplesortstate *state, LogicalTape *tape, SortTuple *stup)
 	LogicalTapeWrite(tape, &tuplen, sizeof(tuplen));
 	LogicalTapeWrite(tape, &tuple->t_self, sizeof(ItemPointerData));
 	LogicalTapeWrite(tape, tuple->t_data, tuple->t_len);
-	if (state->randomAccess)	/* need trailing length word? */
+	if (state->sortopt & TUPLESORT_RANDOMACCESS)	/* need trailing length word? */
 		LogicalTapeWrite(tape, &tuplen, sizeof(tuplen));
 
 	if (!state->slabAllocatorUsed)
@@ -4225,7 +4238,7 @@ readtup_cluster(Tuplesortstate *state, SortTuple *stup,
 	tuple->t_tableOid = InvalidOid;
 	/* Read in the tuple body */
 	LogicalTapeReadExact(tape, tuple->t_data, tuple->t_len);
-	if (state->randomAccess)	/* need trailing length word? */
+	if (state->sortopt & TUPLESORT_RANDOMACCESS)	/* need trailing length word? */
 		LogicalTapeReadExact(tape, &tuplen, sizeof(tuplen));
 	stup->tuple = (void *) tuple;
 	/* set up first-column key value, if it's a simple column */
@@ -4449,7 +4462,7 @@ writetup_index(Tuplesortstate *state, LogicalTape *tape, SortTuple *stup)
 	tuplen = IndexTupleSize(tuple) + sizeof(tuplen);
 	LogicalTapeWrite(tape, (void *) &tuplen, sizeof(tuplen));
 	LogicalTapeWrite(tape, (void *) tuple, IndexTupleSize(tuple));
-	if (state->randomAccess)	/* need trailing length word? */
+	if (state->sortopt & TUPLESORT_RANDOMACCESS)	/* need trailing length word? */
 		LogicalTapeWrite(tape, (void *) &tuplen, sizeof(tuplen));
 
 	if (!state->slabAllocatorUsed)
@@ -4467,7 +4480,7 @@ readtup_index(Tuplesortstate *state, SortTuple *stup,
 	IndexTuple	tuple = (IndexTuple) readtup_alloc(state, tuplen);
 
 	LogicalTapeReadExact(tape, tuple, tuplen);
-	if (state->randomAccess)	/* need trailing length word? */
+	if (state->sortopt & TUPLESORT_RANDOMACCESS)	/* need trailing length word? */
 		LogicalTapeReadExact(tape, &tuplen, sizeof(tuplen));
 	stup->tuple = (void *) tuple;
 	/* set up first-column key value */
@@ -4537,7 +4550,7 @@ writetup_datum(Tuplesortstate *state, LogicalTape *tape, SortTuple *stup)
 
 	LogicalTapeWrite(tape, (void *) &writtenlen, sizeof(writtenlen));
 	LogicalTapeWrite(tape, waddr, tuplen);
-	if (state->randomAccess)	/* need trailing length word? */
+	if (state->sortopt & TUPLESORT_RANDOMACCESS)	/* need trailing length word? */
 		LogicalTapeWrite(tape, (void *) &writtenlen, sizeof(writtenlen));
 
 	if (!state->slabAllocatorUsed && stup->tuple)
@@ -4577,7 +4590,7 @@ readtup_datum(Tuplesortstate *state, SortTuple *stup,
 		stup->tuple = raddr;
 	}
 
-	if (state->randomAccess)	/* need trailing length word? */
+	if (state->sortopt & TUPLESORT_RANDOMACCESS)	/* need trailing length word? */
 		LogicalTapeReadExact(tape, &tuplen, sizeof(tuplen));
 }
 

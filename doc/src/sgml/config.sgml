@@ -10228,9 +10228,14 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
       <listitem>
        <para>
         When set to on, which is the default, <productname>PostgreSQL</productname>
-        will automatically reinitialize after a backend crash.  Leaving this
-        value set to on is normally the best way to maximize the availability
-        of the database.  However, in some circumstances, such as when
+        will automatically reinitialize after a <glossterm linkend="glossary-backend">backend</glossterm>
+        or an <glossterm linkend="glossary-auxiliary-proc">auxiliary process</glossterm>
+        (except the <glossterm linkend="glossary-startup-process">startup process</glossterm>,
+        <glossterm linkend="glossary-logger">logger</glossterm> and the
+        <glossterm linkend="glossary-stats-collector">statistics collector</glossterm>)
+        or a <glossterm linkend="glossary-background-worker">background worker</glossterm>
+        crash.  Leaving this value set to on is normally the best way to maximize the
+        availability of the database.  However, in some circumstances, such as when
         <productname>PostgreSQL</productname> is being invoked by clusterware, it may be
         useful to disable the restart so that the clusterware can gain
         control and take any actions it deems appropriate.
@@ -11335,11 +11340,18 @@ LOG:  CleanUpLock: deleting: lock(0xb7acd844) id(24688,24696,0,0,0,1)
        <para>
         When set to <literal>on</literal>, which is the default,
         <productname>PostgreSQL</productname> will automatically remove
-        temporary files after a backend crash. If disabled, the files will be
-        retained and may be used for debugging, for example. Repeated crashes
-        may however result in accumulation of useless files. This parameter
-        can only be set in the <filename>postgresql.conf</filename> file or on
-        the server command line.
+        temporary files after a <glossterm linkend="glossary-backend">backend</glossterm>
+        or an <glossterm linkend="glossary-auxiliary-proc">auxiliary process</glossterm>
+        (except the <glossterm linkend="glossary-startup-process">startup process</glossterm>,
+        <glossterm linkend="glossary-logger">logger</glossterm> and
+        the <glossterm linkend="glossary-stats-collector">statistics collector</glossterm>)
+        or a <glossterm linkend="glossary-background-worker">background worker</glossterm>
+        crash. If disabled, the files will be retained and may be used for
+        debugging, for example. Repeated crashes may however result in
+        accumulation of useless files. This parameter can only be set in the
+        <filename>postgresql.conf</filename> file or on the server command line
+        and it will be effective only when <xref linkend="guc-restart-after-crash"/>
+        is set to <literal>on</literal>.
        </para>
       </listitem>
      </varlistentry>

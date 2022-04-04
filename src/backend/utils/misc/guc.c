@@ -1425,7 +1425,8 @@ static struct config_bool ConfigureNamesBool[] =
 	},
 	{
 		{"restart_after_crash", PGC_SIGHUP, ERROR_HANDLING_OPTIONS,
-			gettext_noop("Reinitialize server after backend crash."),
+			gettext_noop("Reinitialize server after backend or auxiliary process (except "
+						 "startup, syslogger and stats collector) or background worker crash."),
 			NULL
 		},
 		&restart_after_crash,
@@ -1434,7 +1435,8 @@ static struct config_bool ConfigureNamesBool[] =
 	},
 	{
 		{"remove_temp_files_after_crash", PGC_SIGHUP, DEVELOPER_OPTIONS,
-			gettext_noop("Remove temporary files after backend crash."),
+			gettext_noop("Remove temporary files after backend or auxiliary process (except "
+						 "startup, syslogger and stats collector) or background worker crash."),
 			NULL,
 			GUC_NOT_IN_SAMPLE
 		},

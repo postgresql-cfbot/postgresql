@@ -195,6 +195,7 @@ ClassifyUtilityCommandAsReadOnly(Node *parsetree)
 		case T_CreateSubscriptionStmt:
 		case T_CreateTableAsStmt:
 		case T_CreateTableSpaceStmt:
+		case T_CreateToasterStmt:
 		case T_CreateTransformStmt:
 		case T_CreateTrigStmt:
 		case T_CreateUserMappingStmt:
@@ -1826,6 +1827,10 @@ ProcessUtilitySlow(ParseState *pstate,
 				address = CreateAccessMethod((CreateAmStmt *) parsetree);
 				break;
 
+			case T_CreateToasterStmt:
+				address = CreateToaster((CreateToasterStmt *) parsetree);
+				break;
+
 			case T_CreatePublicationStmt:
 				address = CreatePublication(pstate, (CreatePublicationStmt *) parsetree);
 				break;
@@ -3033,6 +3038,10 @@ CreateCommandTag(Node *parsetree)
 			tag = CMDTAG_CREATE_ACCESS_METHOD;
 			break;
 
+		case T_CreateToasterStmt:
+			tag = CMDTAG_CREATE_TOASTER;
+			break;
+
 		case T_CreatePublicationStmt:
 			tag = CMDTAG_CREATE_PUBLICATION;
 			break;
@@ -3647,6 +3656,10 @@ GetCommandLogLevel(Node *parsetree)
 			break;
 
 		case T_CreateAmStmt:
+			lev = LOGSTMT_DDL;
+			break;
+
+		case T_CreateToasterStmt:
 			lev = LOGSTMT_DDL;
 			break;
 

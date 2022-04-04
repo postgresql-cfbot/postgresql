@@ -2713,6 +2713,16 @@ LogicalRepApplyLoop(XLogRecPtr last_received)
 	TimeLineID	tli;
 	ErrorContextCallback errcallback;
 
+	if (am_tablesync_worker())
+	{
+		/*
+		 * Give the tablesync worker an opportunity see if it can immediately
+		 * exit, instead of handling a message (which the apply worker could
+		 * handle) before discovering that.
+		 */
+		process_syncing_tables(last_received);
+	}
+
 	/*
 	 * Init the ApplyMessageContext which we clean up after each replication
 	 * protocol message.

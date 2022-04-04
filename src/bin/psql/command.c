@@ -2242,8 +2242,8 @@ exec_command_pset(PsqlScanState scan_state, bool active_branch)
 			int			i;
 			static const char *const my_list[] = {
 				"border", "columns", "csv_fieldsep", "expanded", "fieldsep",
-				"fieldsep_zero", "footer", "format", "linestyle", "null",
-				"numericlocale", "pager", "pager_min_lines",
+				"fieldsep_zero", "footer", "format", "formfeed", "linestyle",
+				"null", "numericlocale", "pager", "pager_min_lines",
 				"recordsep", "recordsep_zero",
 				"tableattr", "title", "tuples_only",
 				"unicode_border_linestyle",
@@ -4529,6 +4529,16 @@ do_pset(const char *param, const char *value, printQueryOpt *popt, bool quiet)
 		if (value)
 			popt->topt.columns = atoi(value);
 	}
+
+	/* toggle output formfeed */
+	else if (strcmp(param, "formfeed") == 0)
+	{
+		if (value)
+			return ParseVariableBool(value, param, &popt->topt.formfeed);
+		else
+			popt->topt.formfeed = !popt->topt.formfeed;
+	}
+
 	else
 	{
 		pg_log_error("\\pset: unknown option: %s", param);
@@ -4696,6 +4706,15 @@ printPsetInfo(const char *param, printQueryOpt *popt)
 			printf(_("Tuples only is on.\n"));
 		else
 			printf(_("Tuples only is off.\n"));
+	}
+
+	/* show toggle output formfeed */
+	else if (strcmp(param, "formfeed") == 0)
+	{
+		if (popt->topt.formfeed)
+			printf(_("formfeed is on.\n"));
+		else
+			printf(_("formfeed is off.\n"));
 	}
 
 	/* Unicode style formatting */
@@ -4892,6 +4911,8 @@ pset_value_string(const char *param, printQueryOpt *popt)
 		return popt->title ? pset_quoted_string(popt->title) : pstrdup("");
 	else if (strcmp(param, "tuples_only") == 0)
 		return pstrdup(pset_bool_string(popt->topt.tuples_only));
+	else if (strcmp(param, "formfeed") == 0)
+		return pstrdup(pset_bool_string(popt->topt.formfeed));
 	else if (strcmp(param, "unicode_border_linestyle") == 0)
 		return pstrdup(_unicode_linestyle2string(popt->topt.unicode_border_linestyle));
 	else if (strcmp(param, "unicode_column_linestyle") == 0)

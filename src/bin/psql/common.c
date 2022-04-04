@@ -648,6 +648,8 @@ PSQLexecWatch(const char *query, const printQueryOpt *opt, FILE *printQueryFout)
 	{
 		case PGRES_TUPLES_OK:
 			printQuery(res, opt, fout, false, pset.logfile);
+			if (opt->topt.formfeed)
+				fprintf(fout, "\f\n");
 			break;
 
 		case PGRES_COMMAND_OK:

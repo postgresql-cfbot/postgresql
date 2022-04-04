@@ -125,6 +125,7 @@ typedef struct printTableOpt
 	unicode_linestyle unicode_border_linestyle;
 	unicode_linestyle unicode_column_linestyle;
 	unicode_linestyle unicode_header_linestyle;
+	bool		formfeed;		/* output formfeed after every result */
 } printTableOpt;
 
 /*

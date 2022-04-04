@@ -47,6 +47,7 @@ void
 open_target_file(const char *path, bool trunc)
 {
 	int			mode;
+	int			len;
 
 	if (dry_run)
 		return;
@@ -57,7 +58,9 @@ open_target_file(const char *path, bool trunc)
 
 	close_target_file();
 
-	snprintf(dstpath, sizeof(dstpath), "%s/%s", datadir_target, path);
+	len = snprintf(dstpath, sizeof(dstpath), "%s/%s", datadir_target, path);
+	if (len >= sizeof(dstpath))
+		pg_fatal("filepath buffer too small");	/* shouldn't happen */
 
 	mode = O_WRONLY | O_CREAT | PG_BINARY;
 	if (trunc)

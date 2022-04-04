@@ -4211,6 +4211,39 @@ int64_div_fast_to_numeric(int64 val1, int log10val2)
 	return res;
 }
 
+/*
+ * typeName is the user-visible type name of uint64 used for the error
+ * reporting.
+ */
+uint64
+numeric_to_uint64_type(Numeric num, char *typeName)
+{
+	NumericVar	x;
+	uint64		result;
+
+	if (NUMERIC_IS_SPECIAL(num))
+	{
+		if (NUMERIC_IS_NAN(num))
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("cannot convert NaN to %s", typeName)));
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("cannot convert infinity to %s", typeName)));
+	}
+
+	/* Convert to variable format and thence to pg_lsn */
+	init_var_from_num(num, &x);
+
+	if (!numericvar_to_uint64(&x, &result))
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("%s out of range", typeName)));
+
+	return result;
+}
+
 Datum
 int4_numeric(PG_FUNCTION_ARGS)
 {
@@ -4547,28 +4580,9 @@ Datum
 numeric_pg_lsn(PG_FUNCTION_ARGS)
 {
 	Numeric		num = PG_GETARG_NUMERIC(0);
-	NumericVar	x;
 	XLogRecPtr	result;
 
-	if (NUMERIC_IS_SPECIAL(num))
-	{
-		if (NUMERIC_IS_NAN(num))
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("cannot convert NaN to %s", "pg_lsn")));
-		else
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("cannot convert infinity to %s", "pg_lsn")));
-	}
-
-	/* Convert to variable format and thence to pg_lsn */
-	init_var_from_num(num, &x);
-
-	if (!numericvar_to_uint64(&x, (uint64 *) &result))
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("pg_lsn out of range")));
+	result = (XLogRecPtr) numeric_to_uint64_type(num, "pg_lsn");
 
 	PG_RETURN_LSN(result);
 }

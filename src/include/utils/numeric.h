@@ -74,6 +74,7 @@ extern char *numeric_normalize(Numeric num);
 
 extern Numeric int64_to_numeric(int64 val);
 extern Numeric int64_div_fast_to_numeric(int64 val1, int log10val2);
+extern uint64 numeric_to_uint64_type(Numeric num, char *typeName);
 
 extern Numeric numeric_add_opt_error(Numeric num1, Numeric num2,
 									 bool *have_error);

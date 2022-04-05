@@ -74,6 +74,14 @@ $node->safe_psql('postgres',
 );
 $ENV{"PGPASSWORD"} = 'pass';
 
+# Set up a table for parallel worker testing.
+$node->safe_psql('postgres',
+	'CREATE TABLE nulls (n) AS SELECT NULL FROM generate_series(1, 200000);'
+);
+$node->safe_psql('postgres',
+	'GRANT SELECT ON nulls TO md5_role;'
+);
+
 # For "trust" method, all users should be able to connect. These users are not
 # considered to be authenticated.
 reset_pg_hba($node, 'trust');
@@ -81,6 +89,23 @@ test_role($node, 'scram_role', 'trust', 0,
 	log_unlike => [qr/connection authenticated:/]);
 test_role($node, 'md5_role', 'trust', 0,
 	log_unlike => [qr/connection authenticated:/]);
+
+my $res =
+  $node->safe_psql('postgres', "SELECT pg_session_authn_id() IS NULL;");
+is($res, 't', "users with trust authentication have NULL authn_id");
+
+# Test pg_session_authn_id() with parallel workers.
+$res = $node->safe_psql(
+	'postgres', '
+		SET min_parallel_table_scan_size TO 0;
+		SET parallel_setup_cost TO 0;
+		SET parallel_tuple_cost TO 0;
+		SET max_parallel_workers_per_gather TO 2;
+
+		SELECT bool_and(pg_session_authn_id() IS NOT DISTINCT FROM n) FROM nulls;
+	',
+	connstr => "user=md5_role");
+is($res, 't', "parallel workers return a null authn_id when not authenticated");
 
 # For plain "password" method, all users should also be able to connect.
 reset_pg_hba($node, 'password');
@@ -90,6 +115,25 @@ test_role($node, 'scram_role', 'password', 0,
 test_role($node, 'md5_role', 'password', 0,
 	log_like =>
 	  [qr/connection authenticated: identity="md5_role" method=password/]);
+
+$res = $node->safe_psql(
+	'postgres',
+	"SELECT pg_session_authn_id();",
+	connstr => "user=md5_role");
+is($res, 'md5_role',
+	"users with md5 authentication have authn_id matching role name");
+
+$res = $node->safe_psql(
+	'postgres', '
+		SET min_parallel_table_scan_size TO 0;
+		SET parallel_setup_cost TO 0;
+		SET parallel_tuple_cost TO 0;
+		SET max_parallel_workers_per_gather TO 2;
+
+		SELECT bool_and(pg_session_authn_id() IS DISTINCT FROM n) FROM nulls;
+	',
+	connstr => "user=md5_role");
+is($res, 't', "parallel workers return a non-null authn_id when authenticated");
 
 # For "scram-sha-256" method, user "scram_role" should be able to connect.
 reset_pg_hba($node, 'scram-sha-256');

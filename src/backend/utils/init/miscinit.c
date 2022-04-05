@@ -929,6 +929,77 @@ GetUserNameFromId(Oid roleid, bool noerr)
 	return result;
 }
 
+/* ------------------------------------------------------------------------
+ *				Parallel connection state
+ *
+ * MyParallelProcInfo contains pieces of information about the client that need
+ * to be synced to parallel workers when they initialize. Over time, this list
+ * will probably grow, and may subsume some of the "user state" variables above.
+ *-------------------------------------------------------------------------
+ */
+
+ParallelProcInfo MyParallelProcInfo;
+
+/*
+ * Calculate the space needed to serialize MyParallelProcInfo.
+ */
+Size
+EstimateParallelProcInfoSpace(void)
+{
+	Size		size = 1;
+
+	if (MyParallelProcInfo.authn_id)
+		size = add_size(size, strlen(MyParallelProcInfo.authn_id) + 1);
+
+	return size;
+}
+
+/*
+ * Serialize MyParallelProcInfo for use by parallel workers.
+ */
+void
+SerializeParallelProcInfo(Size maxsize, char *start_address)
+{
+	/*
+	 * First byte is an indication of whether or not authn_id has been set to
+	 * non-NULL, to differentiate that case from the empty string.
+	 */
+	Assert(maxsize > 0);
+	start_address[0] = MyParallelProcInfo.authn_id ? 1 : 0;
+	start_address++;
+	maxsize--;
+
+	if (MyParallelProcInfo.authn_id)
+	{
+		Size len;
+
+		len = strlcpy(start_address, MyParallelProcInfo.authn_id, maxsize) + 1;
+		Assert(len <= maxsize);
+		maxsize -= len;
+		start_address += len;
+	}
+}
+
+/*
+ * Restore MyParallelProcInfo from its serialized representation.
+ */
+void
+RestoreParallelProcInfo(char *procinfo)
+{
+	if (procinfo[0] == 0)
+	{
+		MyParallelProcInfo.authn_id = NULL;
+		procinfo++;
+	}
+	else
+	{
+		procinfo++;
+		MyParallelProcInfo.authn_id = MemoryContextStrdup(TopMemoryContext,
+														  procinfo);
+		procinfo += strlen(procinfo) + 1;
+	}
+}
+
 
 /*-------------------------------------------------------------------------
  *				Interlock-file support

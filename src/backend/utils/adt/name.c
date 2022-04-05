@@ -23,6 +23,7 @@
 #include "catalog/namespace.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_type.h"
+#include "libpq/libpq-be.h"
 #include "libpq/pqformat.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
@@ -257,7 +258,7 @@ namestrcmp(Name name, const char *str)
 
 
 /*
- * SQL-functions CURRENT_USER, SESSION_USER
+ * SQL-functions CURRENT_USER, SESSION_USER, PG_SESSION_AUTHN_ID
  */
 Datum
 current_user(PG_FUNCTION_ARGS)
@@ -269,6 +270,15 @@ Datum
 session_user(PG_FUNCTION_ARGS)
 {
 	PG_RETURN_DATUM(DirectFunctionCall1(namein, CStringGetDatum(GetUserNameFromId(GetSessionUserId(), false))));
+}
+
+Datum
+pg_session_authn_id(PG_FUNCTION_ARGS)
+{
+	if (!MyParallelProcInfo.authn_id)
+		PG_RETURN_NULL();
+
+	PG_RETURN_TEXT_P(cstring_to_text(MyParallelProcInfo.authn_id));
 }
 
 

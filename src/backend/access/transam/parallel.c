@@ -76,6 +76,7 @@
 #define PARALLEL_KEY_REINDEX_STATE			UINT64CONST(0xFFFFFFFFFFFF000C)
 #define PARALLEL_KEY_RELMAPPER_STATE		UINT64CONST(0xFFFFFFFFFFFF000D)
 #define PARALLEL_KEY_UNCOMMITTEDENUMS		UINT64CONST(0xFFFFFFFFFFFF000E)
+#define PARALLEL_KEY_PROCINFO				UINT64CONST(0xFFFFFFFFFFFF000F)
 
 /* Fixed-size parallel state. */
 typedef struct FixedParallelState
@@ -212,6 +213,7 @@ InitializeParallelDSM(ParallelContext *pcxt)
 	Size		reindexlen = 0;
 	Size		relmapperlen = 0;
 	Size		uncommittedenumslen = 0;
+	Size		procinfolen = 0;
 	Size		segsize = 0;
 	int			i;
 	FixedParallelState *fps;
@@ -272,8 +274,10 @@ InitializeParallelDSM(ParallelContext *pcxt)
 		shm_toc_estimate_chunk(&pcxt->estimator, relmapperlen);
 		uncommittedenumslen = EstimateUncommittedEnumsSpace();
 		shm_toc_estimate_chunk(&pcxt->estimator, uncommittedenumslen);
+		procinfolen = EstimateParallelProcInfoSpace();
+		shm_toc_estimate_chunk(&pcxt->estimator, procinfolen);
 		/* If you add more chunks here, you probably need to add keys. */
-		shm_toc_estimate_keys(&pcxt->estimator, 11);
+		shm_toc_estimate_keys(&pcxt->estimator, 12);
 
 		/* Estimate space need for error queues. */
 		StaticAssertStmt(BUFFERALIGN(PARALLEL_ERROR_QUEUE_SIZE) ==
@@ -352,6 +356,7 @@ InitializeParallelDSM(ParallelContext *pcxt)
 		char	   *session_dsm_handle_space;
 		char	   *entrypointstate;
 		char	   *uncommittedenumsspace;
+		char	   *procinfospace;
 		Size		lnamelen;
 
 		/* Serialize shared libraries we have loaded. */
@@ -421,6 +426,12 @@ InitializeParallelDSM(ParallelContext *pcxt)
 		SerializeUncommittedEnums(uncommittedenumsspace, uncommittedenumslen);
 		shm_toc_insert(pcxt->toc, PARALLEL_KEY_UNCOMMITTEDENUMS,
 					   uncommittedenumsspace);
+
+		/* Serialize our ParallelProcInfo. */
+		procinfospace = shm_toc_allocate(pcxt->toc, procinfolen);
+		SerializeParallelProcInfo(procinfolen, procinfospace);
+		shm_toc_insert(pcxt->toc, PARALLEL_KEY_PROCINFO,
+					   procinfospace);
 
 		/* Allocate space for worker information. */
 		pcxt->worker = palloc0(sizeof(ParallelWorkerInfo) * pcxt->nworkers);
@@ -1270,6 +1281,7 @@ ParallelWorkerMain(Datum main_arg)
 	char	   *reindexspace;
 	char	   *relmapperspace;
 	char	   *uncommittedenumsspace;
+	char	   *procinfospace;
 	StringInfoData msgbuf;
 	char	   *session_dsm_handle_space;
 	Snapshot	tsnapshot;
@@ -1478,6 +1490,10 @@ ParallelWorkerMain(Datum main_arg)
 	uncommittedenumsspace = shm_toc_lookup(toc, PARALLEL_KEY_UNCOMMITTEDENUMS,
 										   false);
 	RestoreUncommittedEnums(uncommittedenumsspace);
+
+	/* Restore the ParallelProcInfo. */
+	procinfospace = shm_toc_lookup(toc, PARALLEL_KEY_PROCINFO, false);
+	RestoreParallelProcInfo(procinfospace);
 
 	/* Attach to the leader's serializable transaction, if SERIALIZABLE. */
 	AttachSerializableXact(fps->serializable_xact_handle);

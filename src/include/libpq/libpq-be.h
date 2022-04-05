@@ -100,6 +100,27 @@ typedef struct
 #endif
 
 /*
+ * Fields from Port that need to be copied over to parallel workers go into the
+ * ParallelProcInfo. The same rules apply for allocations here as for Port (must
+ * be malloc'd or palloc'd in TopMemoryContext).
+ */
+typedef struct
+{
+	/*
+	 * Authenticated identity.  The meaning of this identifier is dependent on
+	 * hba->auth_method; it is the identity (if any) that the user presented
+	 * during the authentication cycle, before they were assigned a database
+	 * role.  (It is effectively the "SYSTEM-USERNAME" of a pg_ident usermap
+	 * -- though the exact string in use may be different, depending on pg_hba
+	 * options.)
+	 *
+	 * authn_id is NULL if the user has not actually been authenticated, for
+	 * example if the "trust" auth method is in use.
+	 */
+	const char *authn_id;
+} ParallelProcInfo;
+
+/*
  * This is used by the postmaster in its communication with frontends.  It
  * contains all state information needed during this communication before the
  * backend is run.  The Port structure is kept in malloc'd memory and is
@@ -158,19 +179,6 @@ typedef struct Port
 	 * Information that needs to be held during the authentication cycle.
 	 */
 	HbaLine    *hba;
-
-	/*
-	 * Authenticated identity.  The meaning of this identifier is dependent on
-	 * hba->auth_method; it is the identity (if any) that the user presented
-	 * during the authentication cycle, before they were assigned a database
-	 * role.  (It is effectively the "SYSTEM-USERNAME" of a pg_ident usermap
-	 * -- though the exact string in use may be different, depending on pg_hba
-	 * options.)
-	 *
-	 * authn_id is NULL if the user has not actually been authenticated, for
-	 * example if the "trust" auth method is in use.
-	 */
-	const char *authn_id;
 
 	/*
 	 * TCP keepalive and user timeout settings.
@@ -328,6 +336,7 @@ extern ssize_t be_gssapi_write(Port *port, void *ptr, size_t len);
 #endif							/* ENABLE_GSS */
 
 extern ProtocolVersion FrontendProtocol;
+extern ParallelProcInfo MyParallelProcInfo;
 
 /* TCP keepalives configuration. These are no-ops on an AF_UNIX socket. */
 

@@ -92,6 +92,11 @@ GRANT { USAGE | ALL [ PRIVILEGES ] }
     TO <replaceable class="parameter">role_specification</replaceable> [, ...] [ WITH GRANT OPTION ]
     [ GRANTED BY <replaceable class="parameter">role_specification</replaceable> ]
 
+GRANT { { SET | ALTER SYSTEM } [, ... ] | ALL [ PRIVILEGES ] }
+    ON PARAMETER <replaceable class="parameter">configuration_parameter</replaceable> [, ...]
+    TO <replaceable class="parameter">role_specification</replaceable> [, ...] [ WITH GRANT OPTION ]
+    [ GRANTED BY <replaceable class="parameter">role_specification</replaceable> ]
+
 GRANT <replaceable class="parameter">role_name</replaceable> [, ...] TO <replaceable class="parameter">role_specification</replaceable> [, ...]
     [ WITH ADMIN OPTION ]
     [ GRANTED BY <replaceable class="parameter">role_specification</replaceable> ]
@@ -185,6 +190,8 @@ GRANT <replaceable class="parameter">role_name</replaceable> [, ...] TO <replace
      <term><literal>TEMPORARY</literal></term>
      <term><literal>EXECUTE</literal></term>
      <term><literal>USAGE</literal></term>
+     <term><literal>SET</literal></term>
+     <term><literal>ALTER SYSTEM</literal></term>
      <listitem>
       <para>
        Specific types of privileges, as defined in <xref linkend="ddl-priv"/>.

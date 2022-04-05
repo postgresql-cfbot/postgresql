@@ -34,10 +34,10 @@ SET [ SESSION | LOCAL ] TIME ZONE { <replaceable class="parameter">timezone</rep
    parameters.  Many of the run-time parameters listed in
    <xref linkend="runtime-config"/> can be changed on-the-fly with
    <command>SET</command>.
-   (But some require superuser privileges to change, and others cannot
-   be changed after server or session start.)
-   <command>SET</command> only affects the value used by the current
-   session.
+   (But some require either superuser privileges or granted
+   <literal>SET</literal> privileges to change, and others cannot be changed
+   after server or session start.) <command>SET</command> only affects the
+   value used by the current session.
   </para>
 
   <para>

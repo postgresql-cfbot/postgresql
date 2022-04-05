@@ -118,6 +118,13 @@ REVOKE [ GRANT OPTION FOR ]
     [ GRANTED BY <replaceable class="parameter">role_specification</replaceable> ]
     [ CASCADE | RESTRICT ]
 
+REVOKE [ GRANT OPTION FOR ]
+    { { SET | ALTER SYSTEM } [, ...] | ALL [ PRIVILEGES ] }
+    ON PARAMETER <replaceable class="parameter">configuration_parameter</replaceable> [, ...]
+    FROM <replaceable class="parameter">role_specification</replaceable> [, ...]
+    [ GRANTED BY <replaceable class="parameter">role_specification</replaceable> ]
+    [ CASCADE | RESTRICT ]
+
 REVOKE [ ADMIN OPTION FOR ]
     <replaceable class="parameter">role_name</replaceable> [, ...] FROM <replaceable class="parameter">role_specification</replaceable> [, ...]
     [ GRANTED BY <replaceable class="parameter">role_specification</replaceable> ]

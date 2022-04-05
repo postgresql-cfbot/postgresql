@@ -135,6 +135,7 @@ setup_dynamic_shared_memory(int64 queue_size, int nworkers,
 	hdr->workers_total = nworkers;
 	hdr->workers_attached = 0;
 	hdr->workers_ready = 0;
+	hdr->messages_xfred = 0;
 	shm_toc_insert(toc, 0, hdr);
 
 	/* Set up one message queue per worker, plus one. */

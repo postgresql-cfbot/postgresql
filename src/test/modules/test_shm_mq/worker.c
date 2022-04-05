@@ -31,7 +31,8 @@
 static void attach_to_queues(dsm_segment *seg, shm_toc *toc,
 							 int myworkernumber, shm_mq_handle **inqhp,
 							 shm_mq_handle **outqhp);
-static void copy_messages(shm_mq_handle *inqh, shm_mq_handle *outqh);
+static void copy_messages(volatile test_shm_mq_header *hdr,
+						  shm_mq_handle *inqh, shm_mq_handle *outqh);
 
 /*
  * Background worker entrypoint.
@@ -131,7 +132,7 @@ test_shm_mq_main(Datum main_arg)
 	SetLatch(&registrant->procLatch);
 
 	/* Do the work. */
-	copy_messages(inqh, outqh);
+	copy_messages(hdr, inqh, outqh);
 
 	/*
 	 * We're done.  For cleanliness, explicitly detach from the shared memory
@@ -173,7 +174,8 @@ attach_to_queues(dsm_segment *seg, shm_toc *toc, int myworkernumber,
  * after this point is cleanup.
  */
 static void
-copy_messages(shm_mq_handle *inqh, shm_mq_handle *outqh)
+copy_messages(volatile test_shm_mq_header *hdr,
+			  shm_mq_handle *inqh, shm_mq_handle *outqh)
 {
 	Size		len;
 	void	   *data;
@@ -189,7 +191,12 @@ copy_messages(shm_mq_handle *inqh, shm_mq_handle *outqh)
 		if (res != SHM_MQ_SUCCESS)
 			break;
 
-		/* Send it back out. */
+		/* Create some contention on the mutex. */
+		SpinLockAcquire(&hdr->mutex);
+		++hdr->messages_xfred;
+		SpinLockRelease(&hdr->mutex);
+
+		/* Send the message back out. */
 		res = shm_mq_send(outqh, len, data, false, true);
 		if (res != SHM_MQ_SUCCESS)
 			break;

@@ -32,6 +32,7 @@ typedef struct
 	int			workers_total;
 	int			workers_attached;
 	int			workers_ready;
+	uint64		messages_xfred;
 } test_shm_mq_header;
 
 /* Set up dynamic shared memory and background workers for test run. */

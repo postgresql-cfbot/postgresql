@@ -1066,6 +1066,26 @@ CREATE VIEW pg_stat_user_functions AS
     WHERE P.prolang != 12  -- fast check to eliminate built-in functions
           AND pg_stat_get_function_calls(P.oid) IS NOT NULL;
 
+
+CREATE OR REPLACE VIEW pg_stat_toast AS
+ SELECT
+    n.nspname AS schemaname,
+    a.attrelid AS reloid,
+    a.attnum AS attnum,
+    c.relname AS relname,
+    a.attname AS attname,
+    attstorage AS storagemethod,
+    pg_stat_get_toast_externalizations(a.attrelid,a.attnum) AS externalized,
+    attcompression AS compressmethod,
+    pg_stat_get_toast_compressions(a.attrelid,a.attnum) AS compressattempts,
+    pg_stat_get_toast_compressionsuccesses(a.attrelid,a.attnum) AS compresssuccesses,
+    pg_stat_get_toast_compressedsizesum(a.attrelid,a.attnum) AS compressedsize,
+    pg_stat_get_toast_originalsizesum(a.attrelid,a.attnum) AS originalsize,
+    pg_stat_get_toast_total_time(a.attrelid,a.attnum) AS total_time
+   FROM pg_attribute a
+   JOIN pg_class c ON c.oid = a.attrelid
+   LEFT JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE pg_stat_get_toast_externalizations(a.attrelid,a.attnum) IS NOT NULL;
 CREATE VIEW pg_stat_xact_user_functions AS
     SELECT
             P.oid AS funcid,

@@ -252,6 +252,7 @@ typedef enum StatMsgType
 	PGSTAT_MTYPE_DISCONNECT,
 	PGSTAT_MTYPE_SUBSCRIPTIONDROP,
 	PGSTAT_MTYPE_SUBSCRIPTIONERROR,
+	PGSTAT_MTYPE_TOASTSTAT,
 } StatMsgType;
 
 /* ----------
@@ -727,6 +728,80 @@ typedef struct PgStat_MsgDisconnect
 } PgStat_MsgDisconnect;
 
 /* ----------
+ * PgStat_BackendAttrIdentifier	Identifier for a single attribute/column (OID + attr)
+ * Used as a hashable identifier for (e.g.) TOAST columns
+ * ----------
+ */
+typedef struct PgStat_BackendAttrIdentifier
+{
+	Oid			relid;
+	int			attr;
+} PgStat_BackendAttrIdentifier;
+
+/* ----------
+ * PgStat_ToastCounts	The actual per-TOAST counts kept by a backend
+ *
+ * This struct should contain only actual event counters, because we memcmp
+ * it against zeroes to detect whether there are any counts to transmit.
+ *
+ * Note that the time counters are in instr_time format here.  We convert to
+ * microseconds in PgStat_Counter format when transmitting to the collector.
+ * ----------
+ */
+typedef struct PgStat_ToastCounts
+{
+	PgStat_Counter	t_numexternalized;
+	PgStat_Counter	t_numcompressed;
+	PgStat_Counter	t_numcompressionsuccess;
+	uint64		t_size_orig;
+	uint64		t_size_compressed;
+	instr_time	t_comp_time;
+} PgStat_ToastCounts;
+
+/* ----------
+ * PgStat_BackendToastEntry	Entry in backend's per-toast-attr hash table
+ * ----------
+ */
+typedef struct PgStat_BackendToastEntry
+{
+	PgStat_BackendAttrIdentifier	attr;
+	PgStat_ToastCounts 		t_counts;
+} PgStat_BackendToastEntry;
+
+/* ----------
+ * PgStat_ToastEntry			Per-TOAST-column info in a MsgToaststat
+ * ----------
+ */
+typedef struct PgStat_ToastEntry
+{
+	PgStat_BackendAttrIdentifier	attr;
+	PgStat_Counter 			t_numexternalized;
+	PgStat_Counter 			t_numcompressed;
+	PgStat_Counter 			t_numcompressionsuccess;
+	uint64		   		t_size_orig;
+	uint64		   		t_size_compressed;
+	PgStat_Counter			t_comp_time;	/* time in microseconds */
+} PgStat_ToastEntry;
+
+/* ----------
+ * PgStat_MsgToaststat			Sent by the backend to report function
+ *								usage statistics.
+ * ----------
+ */
+#define PGSTAT_NUM_TOASTENTRIES	\
+	((PGSTAT_MSG_PAYLOAD - sizeof(Oid) - sizeof(int))  \
+	 / sizeof(PgStat_ToastEntry))
+
+typedef struct PgStat_MsgToaststat
+{
+	PgStat_MsgHdr m_hdr;
+	Oid			m_databaseid;
+	int			m_nentries;
+	PgStat_ToastEntry m_entry[PGSTAT_NUM_TOASTENTRIES];
+} PgStat_MsgToaststat;
+
+
+/* ----------
  * PgStat_Msg					Union over all possible messages.
  * ----------
  */
@@ -754,6 +829,7 @@ typedef union PgStat_Msg
 	PgStat_MsgSLRU msg_slru;
 	PgStat_MsgFuncstat msg_funcstat;
 	PgStat_MsgFuncpurge msg_funcpurge;
+	PgStat_MsgToaststat msg_toaststat;
 	PgStat_MsgRecoveryConflict msg_recoveryconflict;
 	PgStat_MsgDeadlock msg_deadlock;
 	PgStat_MsgTempFile msg_tempfile;
@@ -851,6 +927,7 @@ typedef struct PgStat_StatDBEntry
 	 */
 	HTAB	   *tables;
 	HTAB	   *functions;
+	HTAB	   *toastactivity;
 } PgStat_StatDBEntry;
 
 typedef struct PgStat_StatFuncEntry
@@ -905,6 +982,17 @@ typedef struct PgStat_StatSubEntry
 	PgStat_Counter sync_error_count;
 	TimestampTz stat_reset_timestamp;
 } PgStat_StatSubEntry;
+
+typedef struct PgStat_StatToastEntry
+{
+	PgStat_BackendAttrIdentifier t_id;
+	PgStat_Counter t_numexternalized;
+	PgStat_Counter t_numcompressed;
+	PgStat_Counter t_numcompressionsuccess;
+	uint64		   t_size_orig;
+	uint64		   t_size_compressed;
+	PgStat_Counter t_comp_time;	/* time in microseconds */
+} PgStat_StatToastEntry;
 
 typedef struct PgStat_StatTabEntry
 {
@@ -991,6 +1079,7 @@ extern PgStat_BgWriterStats *pgstat_fetch_stat_bgwriter(void);
 extern PgStat_CheckpointerStats *pgstat_fetch_stat_checkpointer(void);
 extern PgStat_StatDBEntry *pgstat_fetch_stat_dbentry(Oid dbid);
 extern PgStat_StatFuncEntry *pgstat_fetch_stat_funcentry(Oid funcid);
+extern PgStat_StatToastEntry *pgstat_fetch_stat_toastentry(Oid rel_id, int attr);
 extern PgStat_GlobalStats *pgstat_fetch_global(void);
 extern PgStat_StatReplSlotEntry *pgstat_fetch_replslot(NameData slotname);
 extern PgStat_StatSubEntry *pgstat_fetch_stat_subscription(Oid subid);
@@ -1163,6 +1252,17 @@ extern void pgstat_report_subscription_drop(Oid subid);
 
 extern void pgstat_send_wal(bool force);
 
+/*
+ * Functions in pgstat_toast.c
+ */
+
+extern void pgstat_send_toaststats(void);
+extern void pgstat_report_toast_activity(Oid relid, int attr,
+							bool externalized,
+							bool compressed,
+							int32 old_size,
+							int32 new_size,
+							instr_time start_time);
 
 /*
  * Variables in pgstat.c
@@ -1171,6 +1271,7 @@ extern void pgstat_send_wal(bool force);
 /* GUC parameters */
 extern PGDLLIMPORT bool pgstat_track_counts;
 extern PGDLLIMPORT int pgstat_track_functions;
+extern PGDLLIMPORT bool pgstat_track_toast;
 extern char *pgstat_stat_directory;
 extern char *pgstat_stat_tmpname;
 extern char *pgstat_stat_filename;

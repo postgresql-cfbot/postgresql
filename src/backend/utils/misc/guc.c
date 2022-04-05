@@ -1558,6 +1558,15 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
+		{"track_toast", PGC_SUSET, STATS_COLLECTOR,
+			gettext_noop("Collects statistics on TOAST activity."),
+			NULL
+		},
+		&pgstat_track_toast,
+		false,
+		NULL, NULL, NULL
+	},
+	{
 		{"track_io_timing", PGC_SUSET, STATS_COLLECTOR,
 			gettext_noop("Collects timing statistics for database I/O activity."),
 			NULL

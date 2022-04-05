@@ -411,6 +411,78 @@ pg_stat_get_function_self_time(PG_FUNCTION_ARGS)
 }
 
 Datum
+pg_stat_get_toast_externalizations(PG_FUNCTION_ARGS)
+{
+	Oid			relid = PG_GETARG_OID(0);
+	int			attr = PG_GETARG_INT16(1);
+	PgStat_StatToastEntry *toastentry;
+
+	if ((toastentry = pgstat_fetch_stat_toastentry(relid,attr - 1)) == NULL)
+		PG_RETURN_NULL();
+	PG_RETURN_INT64(toastentry->t_numexternalized);
+}
+
+Datum
+pg_stat_get_toast_compressions(PG_FUNCTION_ARGS)
+{
+	Oid			relid = PG_GETARG_OID(0);
+	int			attr = PG_GETARG_INT16(1);
+	PgStat_StatToastEntry *toastentry;
+
+	if ((toastentry = pgstat_fetch_stat_toastentry(relid,attr - 1)) == NULL)
+		PG_RETURN_NULL();
+	PG_RETURN_INT64(toastentry->t_numcompressed);
+}
+
+Datum
+pg_stat_get_toast_compressionsuccesses(PG_FUNCTION_ARGS)
+{
+	Oid			relid = PG_GETARG_OID(0);
+	int			attr = PG_GETARG_INT16(1);
+	PgStat_StatToastEntry *toastentry;
+
+	if ((toastentry = pgstat_fetch_stat_toastentry(relid,attr - 1)) == NULL)
+		PG_RETURN_NULL();
+	PG_RETURN_INT64(toastentry->t_numcompressionsuccess);
+}
+
+Datum
+pg_stat_get_toast_originalsizesum(PG_FUNCTION_ARGS)
+{
+	Oid			relid = PG_GETARG_OID(0);
+	int			attr = PG_GETARG_INT16(1);
+	PgStat_StatToastEntry *toastentry;
+
+	if ((toastentry = pgstat_fetch_stat_toastentry(relid,attr - 1)) == NULL)
+		PG_RETURN_NULL();
+	PG_RETURN_INT64(toastentry->t_size_orig);
+}
+
+Datum
+pg_stat_get_toast_compressedsizesum(PG_FUNCTION_ARGS)
+{
+	Oid			relid = PG_GETARG_OID(0);
+	int			attr = PG_GETARG_INT16(1);
+	PgStat_StatToastEntry *toastentry;
+
+	if ((toastentry = pgstat_fetch_stat_toastentry(relid,attr - 1)) == NULL)
+		PG_RETURN_NULL();
+	PG_RETURN_INT64(toastentry->t_size_compressed);
+}
+
+Datum
+pg_stat_get_toast_total_time(PG_FUNCTION_ARGS)
+{
+	Oid			relid = PG_GETARG_OID(0);
+	int			attr = PG_GETARG_INT16(1);
+	PgStat_StatToastEntry *toastentry;
+
+	if ((toastentry = pgstat_fetch_stat_toastentry(relid,attr - 1)) == NULL)
+		PG_RETURN_NULL();
+	PG_RETURN_INT64(toastentry->t_comp_time);
+}
+
+Datum
 pg_stat_get_backend_idset(PG_FUNCTION_ARGS)
 {
 	FuncCallContext *funcctx;

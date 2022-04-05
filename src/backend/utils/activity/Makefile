@@ -26,6 +26,7 @@ OBJS = \
 	pgstat_subscription.o \
 	pgstat_wal.o \
 	pgstat_slru.o \
+	pgstat_toast.o \
 	wait_event.o
 
 include $(top_srcdir)/src/backend/common.mk

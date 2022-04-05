@@ -613,6 +613,7 @@
 #track_io_timing = off
 #track_wal_io_timing = off
 #track_functions = none			# none, pl, all
+#track_toast = off
 #stats_temp_directory = 'pg_stat_tmp'
 
 

@@ -116,7 +116,7 @@ static void pgstat_reset_subscription(PgStat_StatSubEntry *subentry, TimestampTz
 static void pgstat_write_statsfiles(bool permanent, bool allDbs);
 static void pgstat_write_db_statsfile(PgStat_StatDBEntry *dbentry, bool permanent);
 static HTAB *pgstat_read_statsfiles(Oid onlydb, bool permanent, bool deep);
-static void pgstat_read_db_statsfile(Oid databaseid, HTAB *tabhash, HTAB *funchash,
+static void pgstat_read_db_statsfile(Oid databaseid, HTAB *tabhash, HTAB *funchash, HTAB *toasthash,
 									 bool permanent);
 static void backend_read_statsfile(void);
 
@@ -159,6 +159,7 @@ static void pgstat_recv_replslot(PgStat_MsgReplSlot *msg, int len);
 static void pgstat_recv_tempfile(PgStat_MsgTempFile *msg, int len);
 static void pgstat_recv_subscription_drop(PgStat_MsgSubscriptionDrop *msg, int len);
 static void pgstat_recv_subscription_error(PgStat_MsgSubscriptionError *msg, int len);
+static void pgstat_recv_toaststat(PgStat_MsgToaststat *msg, int len);
 
 
 /* ----------
@@ -946,6 +947,9 @@ pgstat_report_stat(bool disconnect)
 	/* Now, send function statistics */
 	pgstat_send_funcstats();
 
+	/* Now, send TOAST statistics */
+	pgstat_send_toaststats();
+
 	/* Send WAL statistics */
 	pgstat_send_wal(true);
 
@@ -1434,6 +1438,33 @@ pgstat_fetch_stat_funcentry(Oid func_id)
 	return funcentry;
 }
 
+/* ----------
+ *	Support function for the SQL-callable pgstat* functions. Returns
+ *	the collected statistics for one TOAST attribute or NULL.
+ * ----------
+ */
+PgStat_StatToastEntry *
+pgstat_fetch_stat_toastentry(Oid rel_id, int attr)
+{
+	PgStat_StatDBEntry *dbentry;
+	PgStat_BackendAttrIdentifier toast_id = { rel_id, attr };
+	PgStat_StatToastEntry *toastentry = NULL;
+
+	/* load the stats file if needed */
+	backend_read_statsfile();
+
+	/* Lookup our database, then find the requested TOAST activity stats.  */
+	dbentry = pgstat_fetch_stat_dbentry(MyDatabaseId);
+	if (dbentry != NULL && dbentry->toastactivity != NULL)
+	{
+		toastentry = (PgStat_StatToastEntry *) hash_search(dbentry->toastactivity,
+														 (void *) &toast_id,
+														 HASH_FIND, NULL);
+	}
+
+	return toastentry;
+}
+
 /*
  * Support function for the SQL-callable pgstat* functions. Returns
  * a pointer to the archiver statistics struct.
@@ -1814,6 +1845,10 @@ PgstatCollectorMain(int argc, char *argv[])
 					pgstat_recv_funcpurge(&msg.msg_funcpurge, len);
 					break;
 
+				case PGSTAT_MTYPE_TOASTSTAT:
+					pgstat_recv_toaststat(&msg.msg_toaststat, len);
+					break;
+
 				case PGSTAT_MTYPE_RECOVERYCONFLICT:
 					pgstat_recv_recoveryconflict(&msg.msg_recoveryconflict,
 												 len);
@@ -1948,6 +1983,13 @@ reset_dbentry_counters(PgStat_StatDBEntry *dbentry)
 	hash_ctl.entrysize = sizeof(PgStat_StatFuncEntry);
 	dbentry->functions = hash_create("Per-database function",
 									 PGSTAT_FUNCTION_HASH_SIZE,
+									 &hash_ctl,
+									 HASH_ELEM | HASH_BLOBS);
+
+	hash_ctl.keysize = sizeof(PgStat_BackendAttrIdentifier);
+	hash_ctl.entrysize = sizeof(PgStat_StatToastEntry);
+	dbentry->toastactivity = hash_create("Per-database TOAST",
+									 PGSTAT_TOAST_HASH_SIZE,
 									 &hash_ctl,
 									 HASH_ELEM | HASH_BLOBS);
 }
@@ -2245,7 +2287,7 @@ pgstat_write_statsfiles(bool permanent, bool allDbs)
 	while ((dbentry = (PgStat_StatDBEntry *) hash_seq_search(&hstat)) != NULL)
 	{
 		/*
-		 * Write out the table and function stats for this DB into the
+		 * Write out the table, function and TOAST stats for this DB into the
 		 * appropriate per-DB stat file, if required.
 		 */
 		if (allDbs || pgstat_db_requested(dbentry->databaseid))
@@ -2374,8 +2416,10 @@ pgstat_write_db_statsfile(PgStat_StatDBEntry *dbentry, bool permanent)
 {
 	HASH_SEQ_STATUS tstat;
 	HASH_SEQ_STATUS fstat;
+	HASH_SEQ_STATUS ostat;
 	PgStat_StatTabEntry *tabentry;
 	PgStat_StatFuncEntry *funcentry;
+	PgStat_StatToastEntry *toastentry;
 	FILE	   *fpout;
 	int32		format_id;
 	Oid			dbid = dbentry->databaseid;
@@ -2427,6 +2471,17 @@ pgstat_write_db_statsfile(PgStat_StatDBEntry *dbentry, bool permanent)
 	{
 		fputc('F', fpout);
 		rc = fwrite(funcentry, sizeof(PgStat_StatFuncEntry), 1, fpout);
+		(void) rc;				/* we'll check for error with ferror */
+	}
+
+	/*
+	 * Walk through the database's TOAST stats table.
+	 */
+	hash_seq_init(&ostat, dbentry->toastactivity);
+	while ((toastentry = (PgStat_StatToastEntry *) hash_seq_search(&ostat)) != NULL)
+	{
+		fputc('O', fpout);
+		rc = fwrite(toastentry, sizeof(PgStat_StatToastEntry), 1, fpout);
 		(void) rc;				/* we'll check for error with ferror */
 	}
 
@@ -2665,6 +2720,7 @@ pgstat_read_statsfiles(Oid onlydb, bool permanent, bool deep)
 				memcpy(dbentry, &dbbuf, sizeof(PgStat_StatDBEntry));
 				dbentry->tables = NULL;
 				dbentry->functions = NULL;
+				dbentry->toastactivity = NULL;
 
 				/*
 				 * In the collector, disregard the timestamp we read from the
@@ -2702,6 +2758,14 @@ pgstat_read_statsfiles(Oid onlydb, bool permanent, bool deep)
 												 &hash_ctl,
 												 HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
 
+				hash_ctl.keysize = sizeof(PgStat_BackendAttrIdentifier);
+				hash_ctl.entrysize = sizeof(PgStat_StatToastEntry);
+				hash_ctl.hcxt = pgStatLocalContext;
+				dbentry->toastactivity = hash_create("Per-database toast information",
+												 PGSTAT_TOAST_HASH_SIZE,
+												 &hash_ctl,
+												 HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+
 				/*
 				 * If requested, read the data from the database-specific
 				 * file.  Otherwise we just leave the hashtables empty.
@@ -2710,6 +2774,7 @@ pgstat_read_statsfiles(Oid onlydb, bool permanent, bool deep)
 					pgstat_read_db_statsfile(dbentry->databaseid,
 											 dbentry->tables,
 											 dbentry->functions,
+											 dbentry->toastactivity,
 											 permanent);
 
 				break;
@@ -2829,13 +2894,15 @@ done:
  * at the moment though.
  */
 static void
-pgstat_read_db_statsfile(Oid databaseid, HTAB *tabhash, HTAB *funchash,
+pgstat_read_db_statsfile(Oid databaseid, HTAB *tabhash, HTAB *funchash, HTAB *toasthash,
 						 bool permanent)
 {
 	PgStat_StatTabEntry *tabentry;
 	PgStat_StatTabEntry tabbuf;
 	PgStat_StatFuncEntry funcbuf;
 	PgStat_StatFuncEntry *funcentry;
+	PgStat_StatToastEntry toastbuf;
+	PgStat_StatToastEntry *toastentry;
 	FILE	   *fpin;
 	int32		format_id;
 	bool		found;
@@ -2947,6 +3014,32 @@ pgstat_read_db_statsfile(Oid databaseid, HTAB *tabhash, HTAB *funchash,
 				}
 
 				memcpy(funcentry, &funcbuf, sizeof(funcbuf));
+				break;
+
+
+				/*
+				 * 'O'	A PgStat_StatToastEntry follows (tOast)
+				 */
+			case 'O':
+				if (fread(&toastbuf, 1, sizeof(PgStat_StatToastEntry),
+						  fpin) != sizeof(PgStat_StatToastEntry))
+				{
+					ereport(pgStatRunningInCollector ? LOG : WARNING,
+							(errmsg("corrupted statistics file \"%s\"",
+									statfile)));
+					goto done;
+				}
+
+				/*
+				 * Skip if TOAST data not wanted.
+				 */
+				if (toasthash == NULL)
+					break;
+
+				toastentry = (PgStat_StatToastEntry *) hash_search(toasthash,
+																 (void *) &toastbuf.t_id,
+																 HASH_ENTER, &found);
+				memcpy(toastentry, &toastbuf, sizeof(toastbuf));
 				break;
 
 				/*
@@ -3602,6 +3695,8 @@ pgstat_recv_dropdb(PgStat_MsgDropdb *msg, int len)
 			hash_destroy(dbentry->tables);
 		if (dbentry->functions != NULL)
 			hash_destroy(dbentry->functions);
+		if (dbentry->toastactivity != NULL)
+			hash_destroy(dbentry->toastactivity);
 
 		if (hash_search(pgStatDBHash,
 						(void *) &dbid,
@@ -3635,6 +3730,8 @@ pgstat_recv_resetcounter(PgStat_MsgResetcounter *msg, int len)
 		hash_destroy(dbentry->tables);
 	if (dbentry->functions != NULL)
 		hash_destroy(dbentry->functions);
+	if (dbentry->toastactivity != NULL)
+		hash_destroy(dbentry->toastactivity);
 
 	dbentry->tables = NULL;
 	dbentry->functions = NULL;
@@ -4233,7 +4330,58 @@ pgstat_recv_funcpurge(PgStat_MsgFuncpurge *msg, int len)
 }
 
 /*
- * Process a SUBSCRIPTIONDROP message.
+ *	Count what the backend has done.
+ */
+static void
+pgstat_recv_toaststat(PgStat_MsgToaststat *msg, int len)
+{
+	PgStat_ToastEntry *toastmsg = &(msg->m_entry[0]);
+	PgStat_StatDBEntry *dbentry;
+	PgStat_StatToastEntry *toastentry;
+	int			i;
+	bool		found;
+
+	dbentry = pgstat_get_db_entry(msg->m_databaseid, true);
+
+	/*
+	 * Process all TOAST entries in the message.
+	 */
+	for (i = 0; i < msg->m_nentries; i++, toastmsg++)
+	{
+		toastentry = (PgStat_StatToastEntry *) hash_search(dbentry->toastactivity,
+														 (void *) &(toastmsg->attr),
+														 HASH_ENTER, &found);
+
+		if (!found)
+		{
+			/*
+			 * If it's a new entry, initialize counters to the values
+			 * we just got.
+			 */
+			toastentry->t_numexternalized = toastmsg->t_numexternalized;
+			toastentry->t_numcompressed = toastmsg->t_numcompressed;
+			toastentry->t_numcompressionsuccess = toastmsg->t_numcompressionsuccess;
+			toastentry->t_size_orig = toastmsg->t_size_orig;
+			toastentry->t_size_compressed = toastmsg->t_size_compressed;
+			toastentry->t_comp_time = toastmsg->t_comp_time;
+		}
+		else
+		{
+			/*
+			 * Otherwise add the values to the existing entry.
+			 */
+			toastentry->t_numexternalized += toastmsg->t_numexternalized;
+			toastentry->t_numcompressed += toastmsg->t_numcompressed;
+			toastentry->t_numcompressionsuccess += toastmsg->t_numcompressionsuccess;
+			toastentry->t_size_orig += toastmsg->t_size_orig;
+			toastentry->t_size_compressed += toastmsg->t_size_compressed;
+			toastentry->t_comp_time += toastmsg->t_comp_time;
+		}
+	}
+}
+
+/* ----------
+ *	Process a SUBSCRIPTIONDROP message.
  */
 static void
 pgstat_recv_subscription_drop(PgStat_MsgSubscriptionDrop *msg, int len)

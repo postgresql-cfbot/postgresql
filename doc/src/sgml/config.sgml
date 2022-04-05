@@ -7935,6 +7935,32 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-track-toast" xreflabel="track_toast">
+      <term><varname>track_toast</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>track_toast</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Enables tracking of <link linkend="storage-toast">TOAST</link> activities.
+        Compressions and externalizations are tracked.
+        The default is <literal>off</literal>.
+        Only superusers can change this setting.
+       </para>
+
+       <note>
+        <para>
+        Be aware that this feature, depending on the amount of TOASTable columns in
+        your databases, may significantly increase the size of the statistics files
+        and the workload of the statistics collector. If your databases have a very high 
+        amount of TOASTable colums, it is recommended to only temporarily activate this
+        setting to assess the right compression and storage method for a column.
+        </para>
+       </note>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-stats-temp-directory" xreflabel="stats_temp_directory">
       <term><varname>stats_temp_directory</varname> (<type>string</type>)
       <indexterm>

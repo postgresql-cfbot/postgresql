@@ -36,7 +36,7 @@ extern void PgArchForceDirScan(void);
 /*
  * The value of the archive_library GUC.
  */
-extern char *XLogArchiveLibrary;
+extern PGDLLIMPORT char *XLogArchiveLibrary;
 
 /*
  * Archive module callbacks

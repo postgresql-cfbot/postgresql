@@ -1171,9 +1171,9 @@ extern void pgstat_send_wal(bool force);
 /* GUC parameters */
 extern PGDLLIMPORT bool pgstat_track_counts;
 extern PGDLLIMPORT int pgstat_track_functions;
-extern char *pgstat_stat_directory;
-extern char *pgstat_stat_tmpname;
-extern char *pgstat_stat_filename;
+extern PGDLLIMPORT char *pgstat_stat_directory;
+extern PGDLLIMPORT char *pgstat_stat_tmpname;
+extern PGDLLIMPORT char *pgstat_stat_filename;
 
 
 /*
@@ -1181,7 +1181,7 @@ extern char *pgstat_stat_filename;
  */
 
 /* updated directly by bgwriter and bufmgr */
-extern PgStat_MsgBgWriter PendingBgWriterStats;
+extern PGDLLIMPORT PgStat_MsgBgWriter PendingBgWriterStats;
 
 
 /*
@@ -1192,7 +1192,7 @@ extern PgStat_MsgBgWriter PendingBgWriterStats;
  * Checkpointer statistics counters are updated directly by checkpointer and
  * bufmgr.
  */
-extern PgStat_MsgCheckpointer PendingCheckpointerStats;
+extern PGDLLIMPORT PgStat_MsgCheckpointer PendingCheckpointerStats;
 
 
 /*
@@ -1200,18 +1200,18 @@ extern PgStat_MsgCheckpointer PendingCheckpointerStats;
  */
 
 /* Updated by pgstat_count_buffer_*_time macros */
-extern PgStat_Counter pgStatBlockReadTime;
-extern PgStat_Counter pgStatBlockWriteTime;
+extern PGDLLIMPORT PgStat_Counter pgStatBlockReadTime;
+extern PGDLLIMPORT PgStat_Counter pgStatBlockWriteTime;
 
 /*
  * Updated by pgstat_count_conn_*_time macros, called by
  * pgstat_report_activity().
  */
-extern PgStat_Counter pgStatActiveTime;
-extern PgStat_Counter pgStatTransactionIdleTime;
+extern PGDLLIMPORT PgStat_Counter pgStatActiveTime;
+extern PGDLLIMPORT PgStat_Counter pgStatTransactionIdleTime;
 
 /* updated by the traffic cop and in errfinish() */
-extern SessionEndType pgStatSessionEndCause;
+extern PGDLLIMPORT SessionEndType pgStatSessionEndCause;
 
 
 /*
@@ -1219,7 +1219,7 @@ extern SessionEndType pgStatSessionEndCause;
  */
 
 /* updated directly by backends and background processes */
-extern PgStat_MsgWal WalStats;
+extern PGDLLIMPORT PgStat_MsgWal WalStats;
 
 
 #endif							/* PGSTAT_H */

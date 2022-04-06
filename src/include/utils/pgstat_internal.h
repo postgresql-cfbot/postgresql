@@ -133,29 +133,29 @@ extern bool pgstat_wal_pending(void);
  * Variables in pgstat.c
  */
 
-extern pgsocket pgStatSock;
+extern PGDLLIMPORT pgsocket pgStatSock;
 
 
 /*
  * Variables in pgstat_database.c
  */
 
-extern int	pgStatXactCommit;
-extern int	pgStatXactRollback;
+extern PGDLLIMPORT int pgStatXactCommit;
+extern PGDLLIMPORT int pgStatXactRollback;
 
 
 /*
  * Variables in pgstat_functions.c
  */
 
-extern bool have_function_stats;
+extern PGDLLIMPORT bool have_function_stats;
 
 
 /*
  * Variables in pgstat_relation.c
  */
 
-extern bool have_relation_stats;
+extern PGDLLIMPORT bool have_relation_stats;
 
 
 #endif							/* PGSTAT_INTERNAL_H */

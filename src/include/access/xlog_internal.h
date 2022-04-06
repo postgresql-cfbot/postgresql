@@ -319,7 +319,7 @@ typedef struct RmgrData
 							  struct XLogRecordBuffer *buf);
 } RmgrData;
 
-extern const RmgrData RmgrTable[];
+extern PGDLLIMPORT const RmgrData RmgrTable[];
 
 /*
  * Exported to support xlog switching from checkpointer
@@ -333,9 +333,9 @@ extern void GetOldestRestartPoint(XLogRecPtr *oldrecptr, TimeLineID *oldtli);
  * Exported for the functions in timeline.c and xlogarchive.c.  Only valid
  * in the startup process.
  */
-extern bool ArchiveRecoveryRequested;
-extern bool InArchiveRecovery;
-extern bool StandbyMode;
-extern char *recoveryRestoreCommand;
+extern PGDLLIMPORT bool ArchiveRecoveryRequested;
+extern PGDLLIMPORT bool InArchiveRecovery;
+extern PGDLLIMPORT bool StandbyMode;
+extern PGDLLIMPORT char *recoveryRestoreCommand;
 
 #endif							/* XLOG_INTERNAL_H */

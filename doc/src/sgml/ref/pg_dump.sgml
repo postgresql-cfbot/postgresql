@@ -254,6 +254,29 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><option>--exclude-extension=<replaceable class="parameter">pattern</replaceable></option></term>
+      <listitem>
+       <para>
+        Do not dump extensions matching
+        <replaceable class="parameter">pattern</replaceable>. The pattern is
+        interpreted according to the same rules as <option>-e</option>.
+        <option>--exclude-extension</option> can be given more than once to
+        exclude extensions matching any of several patterns.
+       </para>
+
+       <para>
+        When both <option>-e</option> and <option>--exclude-extension</option>,
+        the behavior is to dump just the extensions that match at least one
+        <option>-e</option> switch but no <option>--exclude-extension</option>
+        switches. If <option>--exclude-extension</option> appears without
+        <option>-e</option> then extensions matching 
+        <option>--exclude-extension</option> are excluded from what is
+        otherwise a normal dump.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>-E <replaceable class="parameter">encoding</replaceable></option></term>
       <term><option>--encoding=<replaceable class="parameter">encoding</replaceable></option></term>
       <listitem>

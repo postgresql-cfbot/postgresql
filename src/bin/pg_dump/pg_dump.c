@@ -126,6 +126,8 @@ static SimpleOidList foreign_servers_include_oids = {NULL, NULL};
 
 static SimpleStringList extension_include_patterns = {NULL, NULL};
 static SimpleOidList extension_include_oids = {NULL, NULL};
+static SimpleStringList extension_exclude_patterns = {NULL, NULL};
+static SimpleOidList extension_exclude_oids = {NULL, NULL};
 
 static const CatalogId nilCatalogId = {0, 0};
 
@@ -409,6 +411,7 @@ main(int argc, char **argv)
 		{"on-conflict-do-nothing", no_argument, &dopt.do_nothing, 1},
 		{"rows-per-insert", required_argument, NULL, 10},
 		{"include-foreign-data", required_argument, NULL, 11},
+		{"exclude-extension", required_argument, NULL, 12},
 
 		{NULL, 0, NULL, 0}
 	};
@@ -619,6 +622,10 @@ main(int argc, char **argv)
 										  optarg);
 				break;
 
+			case 12:			/* exclude extensions */
+				simple_string_list_append(&extension_exclude_patterns, optarg);
+				break;
+
 			default:
 				fprintf(stderr, _("Try \"%s --help\" for more information.\n"), progname);
 				exit_nicely(1);
@@ -808,7 +815,9 @@ main(int argc, char **argv)
 		if (extension_include_oids.head == NULL)
 			fatal("no matching extensions were found");
 	}
-
+	expand_extension_name_patterns(fout, &extension_exclude_patterns,
+								   &extension_exclude_oids,
+								   strict_names);
 	/*
 	 * Dumping blobs is the default for dumps where an inclusion switch is not
 	 * used (an "include everything" dump).  -B can be used to exclude blobs
@@ -1012,6 +1021,7 @@ help(const char *progname)
 	printf(_("  -c, --clean                  clean (drop) database objects before recreating\n"));
 	printf(_("  -C, --create                 include commands to create database in dump\n"));
 	printf(_("  -e, --extension=PATTERN      dump the specified extension(s) only\n"));
+	printf(_("  --exclude-extension=PATTERN  do NOT dump the specified extension(s)\n"));
 	printf(_("  -E, --encoding=ENCODING      dump the data in encoding ENCODING\n"));
 	printf(_("  -n, --schema=PATTERN         dump the specified schema(s) only\n"));
 	printf(_("  -N, --exclude-schema=PATTERN do NOT dump the specified schema(s)\n"));
@@ -1854,6 +1864,11 @@ selectDumpableExtension(ExtensionInfo *extinfo, DumpOptions *dopt)
 				simple_oid_list_member(&extension_include_oids,
 									   extinfo->dobj.catId.oid) ?
 				DUMP_COMPONENT_ALL : DUMP_COMPONENT_NONE;
+		else if (extension_exclude_oids.head != NULL)
+			extinfo->dobj.dump = extinfo->dobj.dump_contains =
+				simple_oid_list_member(&extension_exclude_oids,
+									   extinfo->dobj.catId.oid) ?
+				DUMP_COMPONENT_NONE : DUMP_COMPONENT_ALL;
 		else
 			extinfo->dobj.dump = extinfo->dobj.dump_contains =
 				dopt->include_everything ?
@@ -17493,11 +17508,17 @@ processExtensionTables(Archive *fout, ExtensionInfo extinfo[],
 		int			nconditionitems = 0;
 
 		/*
-		 * Check if this extension is listed as to include in the dump.  If
-		 * not, any table data associated with it is discarded.
+		 * Check if this extension is listed to be included in, or excluded
+		 * from, the dump.  If the extension isn't included, any table data
+		 * associated with it is discarded.
 		 */
 		if (extension_include_oids.head != NULL &&
 			!simple_oid_list_member(&extension_include_oids,
+									curext->dobj.catId.oid))
+			continue;
+
+		if (extension_exclude_oids.head != NULL &&
+			simple_oid_list_member(&extension_exclude_oids,
 									curext->dobj.catId.oid))
 			continue;
 

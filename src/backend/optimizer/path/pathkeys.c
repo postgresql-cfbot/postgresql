@@ -102,6 +102,27 @@ make_canonical_pathkey(PlannerInfo *root,
 }
 
 /*
+ * append_pathkeys
+ *		Append all non-redundant PathKeys in 'source' onto 'target'
+ */
+List *
+append_pathkeys(List *target, List *source)
+{
+	ListCell   *lc;
+
+	Assert(target != NIL);
+
+	foreach(lc, source)
+	{
+		PathKey    *pk = lfirst_node(PathKey, lc);
+
+		if (!pathkey_is_redundant(pk, target))
+			target = lappend(target, pk);
+	}
+	return target;
+}
+
+/*
  * pathkey_is_redundant
  *	   Is a pathkey redundant with one already in the given list?
  *

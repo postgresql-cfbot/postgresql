@@ -2678,12 +2678,12 @@ typedef struct JoinCostWorkspace
 typedef struct AggInfo
 {
 	/*
-	 * Link to an Aggref expr this state value is for.
+	 * List of Aggref exprs that this state value is for.
 	 *
-	 * There can be multiple identical Aggref's sharing the same per-agg. This
-	 * points to the first one of them.
+	 * There will always be at least one, but there can be multiple identical
+	 * Aggref's sharing the same per-agg.
 	 */
-	Aggref	   *representative_aggref;
+	List	   *aggrefs;
 
 	int			transno;
 

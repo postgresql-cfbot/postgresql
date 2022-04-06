@@ -694,6 +694,7 @@ _readAggref(void)
 	READ_BOOL_FIELD(aggstar);
 	READ_BOOL_FIELD(aggvariadic);
 	READ_CHAR_FIELD(aggkind);
+	READ_BOOL_FIELD(aggpresorted);
 	READ_UINT_FIELD(agglevelsup);
 	READ_ENUM_FIELD(aggsplit, AggSplit);
 	READ_INT_FIELD(aggno);

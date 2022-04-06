@@ -1541,6 +1541,7 @@ _copyAggref(const Aggref *from)
 	COPY_SCALAR_FIELD(aggstar);
 	COPY_SCALAR_FIELD(aggvariadic);
 	COPY_SCALAR_FIELD(aggkind);
+	COPY_SCALAR_FIELD(aggpresorted);
 	COPY_SCALAR_FIELD(agglevelsup);
 	COPY_SCALAR_FIELD(aggsplit);
 	COPY_SCALAR_FIELD(aggno);

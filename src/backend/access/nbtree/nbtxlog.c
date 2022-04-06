@@ -1084,6 +1084,21 @@ btree_xlog_cleanup(void)
 }
 
 /*
+ * Mask a btree page that LP_DEAD bits are not safe for the standby.
+ */
+void
+btree_fpi_mask(char *pagedata, BlockNumber blkno)
+{
+	Page		page = (Page) pagedata;
+	BTPageOpaque maskopaq = (BTPageOpaque) PageGetSpecialPointer(page);
+
+	if (P_ISLEAF(maskopaq))
+	{
+		maskopaq->btpo_flags &= ~BTP_LP_SAFE_ON_STANDBY;
+	}
+}
+
+/*
  * Mask a btree page before performing consistency checks on it.
  */
 void
@@ -1092,6 +1107,7 @@ btree_mask(char *pagedata, BlockNumber blkno)
 	Page		page = (Page) pagedata;
 	BTPageOpaque maskopaq;
 
+	btree_fpi_mask(pagedata, blkno);
 	mask_page_lsn_and_checksum(page);
 
 	mask_page_hint_bits(page);

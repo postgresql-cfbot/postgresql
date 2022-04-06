@@ -347,5 +347,6 @@ extern const char *btree_identify(uint8 info);
 extern void btree_xlog_startup(void);
 extern void btree_xlog_cleanup(void);
 extern void btree_mask(char *pagedata, BlockNumber blkno);
+extern void btree_fpi_mask(char *pagedata, BlockNumber blkno);
 
 #endif							/* NBTXLOG_H */

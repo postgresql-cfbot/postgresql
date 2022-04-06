@@ -263,5 +263,6 @@ extern void hash_redo(XLogReaderState *record);
 extern void hash_desc(StringInfo buf, XLogReaderState *record);
 extern const char *hash_identify(uint8 info);
 extern void hash_mask(char *pagedata, BlockNumber blkno);
+extern void hash_fpi_mask(char *pagedata, BlockNumber blkno);
 
 #endif							/* HASH_XLOG_H */

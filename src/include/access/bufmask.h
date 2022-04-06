@@ -28,5 +28,6 @@ extern void mask_page_hint_bits(Page page);
 extern void mask_unused_space(Page page);
 extern void mask_lp_flags(Page page);
 extern void mask_page_content(Page page);
+extern void mask_lp_dead(Page page);
 
 #endif

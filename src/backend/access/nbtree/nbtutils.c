@@ -17,6 +17,7 @@
 
 #include <time.h>
 
+#include "access/bufmask.h"
 #include "access/nbtree.h"
 #include "access/reloptions.h"
 #include "access/relscan.h"
@@ -1732,6 +1733,7 @@ _bt_killitems(IndexScanDesc scan)
 	int			i;
 	int			numKilled = so->numKilled;
 	bool		killedsomething = false;
+	bool		dirty = false;
 	bool		droppedpin PG_USED_FOR_ASSERTS_ONLY;
 
 	Assert(BTScanPosIsValid(so->currPos));
@@ -1741,6 +1743,15 @@ _bt_killitems(IndexScanDesc scan)
 	 * pages.
 	 */
 	so->numKilled = 0;
+
+	/*
+	 * Standby was promoted after start of current transaction. It is not
+	 * required for correctness, but it is better to just skip everything.
+	 */
+	if (scan->xactStartedInRecovery && !RecoveryInProgress())
+	{
+		return;
+	}
 
 	if (BTScanPosIsPinned(so->currPos))
 	{
@@ -1777,6 +1788,23 @@ _bt_killitems(IndexScanDesc scan)
 	opaque = BTPageGetOpaque(page);
 	minoff = P_FIRSTDATAKEY(opaque);
 	maxoff = PageGetMaxOffsetNumber(page);
+
+	if (P_LP_SAFE_ON_STANDBY(opaque) && !scan->xactStartedInRecovery)
+	{
+		/* Seems like server was promoted some time ago,
+		 * clear the flag just for accuracy. */
+		opaque->btpo_flags &= ~BTP_LP_SAFE_ON_STANDBY;
+		dirty = true;
+	}
+	else if (!P_LP_SAFE_ON_STANDBY(opaque) && scan->xactStartedInRecovery)
+	{
+		/* LP_DEAD flags were set by primary. We need to clear them,
+		 * and allow standby to set own. */
+		mask_lp_dead(page);
+		pg_memory_barrier();
+		opaque->btpo_flags |= BTP_LP_SAFE_ON_STANDBY;
+		dirty = true;
+	}
 
 	for (i = 0; i < numKilled; i++)
 	{
@@ -1873,7 +1901,7 @@ _bt_killitems(IndexScanDesc scan)
 			{
 				/* found the item/all posting list items */
 				ItemIdMarkDead(iid);
-				killedsomething = true;
+				killedsomething = dirty = true;
 				break;			/* out of inner search loop */
 			}
 			offnum = OffsetNumberNext(offnum);
@@ -1890,6 +1918,9 @@ _bt_killitems(IndexScanDesc scan)
 	if (killedsomething)
 	{
 		opaque->btpo_flags |= BTP_HAS_GARBAGE;
+	}
+	if (dirty)
+	{
 		MarkBufferDirtyHint(so->currPos.buf, true);
 	}
 

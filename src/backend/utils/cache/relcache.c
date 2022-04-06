@@ -4082,7 +4082,7 @@ RelationCacheInitializePhase3(void)
 							AuthIdRelationId);
 		load_critical_index(AuthIdOidIndexId,
 							AuthIdRelationId);
-		load_critical_index(AuthMemMemRoleIndexId,
+		load_critical_index(AuthMemMemRoleDbIndexId,
 							AuthMemRelationId);
 		load_critical_index(SharedSecLabelObjectIndexId,
 							SharedSecLabelRelationId);

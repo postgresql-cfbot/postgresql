@@ -24,6 +24,7 @@
 #include "access/twophase.h"
 #include "access/xlogrecovery.h"
 #include "commands/async.h"
+#include "commands/progress.h"
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "postmaster/autovacuum.h"
@@ -145,6 +146,7 @@ CalculateShmemSize(int *num_semaphores)
 	size = add_size(size, BTreeShmemSize());
 	size = add_size(size, SyncScanShmemSize());
 	size = add_size(size, AsyncShmemSize());
+	size = add_size(size, ProgressParallelShmemSize());
 #ifdef EXEC_BACKEND
 	size = add_size(size, ShmemBackendArraySize());
 #endif
@@ -296,6 +298,7 @@ CreateSharedMemoryAndSemaphores(void)
 	BTreeShmemInit();
 	SyncScanShmemInit();
 	AsyncShmemInit();
+	ProgressParallelShmemInit();
 
 #ifdef EXEC_BACKEND
 

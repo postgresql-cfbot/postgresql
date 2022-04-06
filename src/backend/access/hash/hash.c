@@ -632,6 +632,7 @@ loop_top:
 	stats->estimated_count = false;
 	stats->num_index_tuples = num_index_tuples;
 	stats->tuples_removed += tuples_removed;
+	pgstat_progress_update_param(PROGRESS_VACUUM_TUPLES_REMOVED, stats->tuples_removed);
 	/* hashvacuumcleanup will fill in num_pages */
 
 	return stats;

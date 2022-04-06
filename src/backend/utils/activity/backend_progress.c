@@ -10,10 +10,30 @@
  */
 #include "postgres.h"
 
+#include "commands/progress.h"
 #include "port/atomics.h"		/* for memory barriers */
+#include "storage/ipc.h"
+#include "storage/lmgr.h"
+#include "storage/shmem.h"
 #include "utils/backend_progress.h"
 #include "utils/backend_status.h"
 
+/*
+ * Structs for parallel progress tracking.
+ *
+ * The parallel workers and leader report progress
+ * into a hash entry with a key of the leader pid.
+ */
+typedef struct ProgressParallelEntry
+{
+	pid_t   leader_pid;
+	int64 	st_progress_param[PGSTAT_NUM_PROGRESS_PARAM];
+} ProgressParallelEntry;
+
+static HTAB *ProgressParallelHash;
+
+/* We can only have as many parallel progress entries as max_worker_processes */
+#define PROGRESS_PARALLEL_NUM_ENTRIES max_worker_processes
 
 /*-----------
  * pgstat_progress_start_command() -
@@ -109,4 +129,150 @@ pgstat_progress_end_command(void)
 	beentry->st_progress_command = PROGRESS_COMMAND_INVALID;
 	beentry->st_progress_command_target = InvalidOid;
 	PGSTAT_END_WRITE_ACTIVITY(beentry);
+}
+
+/*-----------
+ * ProgressParallelShmemInit() -
+ *
+ * Initialize the parallel progress hash.
+ *-----------
+ */
+void
+ProgressParallelShmemInit(void)
+{
+	HASHCTL     info;
+
+	info.keysize = sizeof(pid_t);
+	info.entrysize = sizeof(ProgressParallelEntry);
+
+	ProgressParallelHash = ShmemInitHash("Parallel Progress hash",
+									   PROGRESS_PARALLEL_NUM_ENTRIES,
+									   PROGRESS_PARALLEL_NUM_ENTRIES,
+									   &info,
+									   HASH_ELEM | HASH_BLOBS);
+}
+
+/*-----------
+ * ProgressParallelShmemSize() -
+ *
+ * Calculate the size of the parallel progress hash.
+ *-----------
+ */
+Size
+ProgressParallelShmemSize(void)
+{
+   Size        size = 0;
+
+   /* parallel progress hash table */
+   size = add_size(size, hash_estimate_size(PROGRESS_PARALLEL_NUM_ENTRIES,
+											sizeof(ProgressParallelEntry)));
+
+   return size;
+}
+
+/*-----------
+ * pgstat_progress_update_param_parallel() -
+ *
+ * Update the index'th member in the st_progress_param[] of the
+ * parallel progress hash table.
+ *-----------
+ */
+void
+pgstat_progress_update_param_parallel(int leader_pid, int index, int64 val)
+{
+	ProgressParallelEntry *entry;
+	bool found;
+
+	LWLockAcquire(ProgressParallelLock, LW_EXCLUSIVE);
+
+	entry = (ProgressParallelEntry *) hash_search(ProgressParallelHash, &leader_pid, HASH_ENTER, &found);
+
+	/*
+	 * If the entry is not found, set the value for the index'th member,
+	 * else increment the current value of the index'th member.
+	 */
+	if (!found)
+		entry->st_progress_param[index] = val;
+	else
+		entry->st_progress_param[index] += val;
+
+	LWLockRelease(ProgressParallelLock);
+}
+
+/*-----------
+ * pgstat_progress_end_parallel() -
+ *
+ * This removes an entry with from the parallel progress
+ * hash table.
+ *-----------
+ */
+void
+pgstat_progress_end_parallel(int leader_pid)
+{
+	LWLockAcquire(ProgressParallelLock, LW_EXCLUSIVE);
+
+	/*
+	* Remove from hashtable. It should always be present,
+	* but don't complain if it's not.
+	*/
+	hash_search(ProgressParallelHash, &leader_pid, HASH_REMOVE, NULL);
+
+	LWLockRelease(ProgressParallelLock);
+}
+
+/*-----------
+ * pgstat_progress_end_parallel_callback() -
+ *
+ * PG_ENSURE_ERROR_CLEANUP callback. The caller is responsible
+ * for ensuring cleanup when invoking pgstat_progress_update_param_parallel.
+ *-----------
+ */
+void
+pgstat_progress_end_parallel_callback(int code, Datum arg)
+{
+	pgstat_progress_end_parallel(DatumGetInt32(arg));
+}
+
+/*-----------
+ * pgstat_progress_set_parallel() -
+ *
+ * This routine is called by pg_stat_get_progress_info
+ * to update the datum with values from the parallel progress
+ * hash.
+ *-----------
+ */
+void
+pgstat_progress_set_parallel(Datum *values)
+{
+	ProgressParallelEntry *entry;
+	/* First element of the datum is always the pid */
+	int leader_pid = values[0];
+
+	LWLockAcquire(ProgressParallelLock, LW_SHARED);
+
+	entry = (ProgressParallelEntry *) hash_search(ProgressParallelHash, &leader_pid, HASH_FIND, NULL);
+
+	/*
+	 * If an entry is not found, it is because we looked at a pid that is not involved in a parallel command,
+	 * therefore release the read lock and return.
+	 */
+	if (!entry)
+	{
+		LWLockRelease(ProgressParallelLock);
+		return;
+	}
+
+	for (int i = 0; i < PGSTAT_NUM_PROGRESS_PARAM; i++)
+	{
+		int64 val = entry->st_progress_param[i];
+
+		/*
+		 * We only care about hash entry members that have been updated by
+		 * parallel workers ( or leader ). This is true if the member's value > 0.
+		 */
+		if (val > 0)
+			values[i + PGSTAT_NUM_PROGRESS_COMMON] = val;
+	}
+
+	LWLockRelease(ProgressParallelLock);
 }

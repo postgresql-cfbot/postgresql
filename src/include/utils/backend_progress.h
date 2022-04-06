@@ -31,7 +31,7 @@ typedef enum ProgressCommandType
 } ProgressCommandType;
 
 #define PGSTAT_NUM_PROGRESS_PARAM	20
-
+#define PGSTAT_NUM_PROGRESS_COMMON	3
 
 extern void pgstat_progress_start_command(ProgressCommandType cmdtype,
 										  Oid relid);
@@ -40,5 +40,15 @@ extern void pgstat_progress_update_multi_param(int nparam, const int *index,
 											   const int64 *val);
 extern void pgstat_progress_end_command(void);
 
+/* -----------
+ * Routines for parallel command progress reporting
+ * -----------
+ */
+extern void ProgressParallelShmemInit(void);
+extern Size ProgressParallelShmemSize(void);
+extern void pgstat_progress_update_param_parallel(int leader_pid, int index, int64 val);
+extern void pgstat_progress_end_parallel(int leader_pid);
+extern void pgstat_progress_end_parallel_callback(int code, Datum arg);
+extern void pgstat_progress_set_parallel(Datum *values);
 
 #endif							/* BACKEND_PROGRESS_H */

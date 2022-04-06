@@ -17,9 +17,11 @@
 #include "access/genam.h"
 #include "access/gist_private.h"
 #include "access/transam.h"
+#include "commands/progress.h"
 #include "commands/vacuum.h"
 #include "lib/integerset.h"
 #include "miscadmin.h"
+#include "pgstat.h"
 #include "storage/indexfsm.h"
 #include "storage/lmgr.h"
 #include "utils/memutils.h"
@@ -381,6 +383,7 @@ restart:
 			END_CRIT_SECTION();
 
 			vstate->stats->tuples_removed += ntodelete;
+			pgstat_progress_update_param(PROGRESS_VACUUM_TUPLES_REMOVED, vstate->stats->tuples_removed);
 			/* must recompute maxoff */
 			maxoff = PageGetMaxOffsetNumber(page);
 		}

@@ -18,6 +18,7 @@
 #include "access/xlog.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_type.h"
+#include "commands/progress.h"
 #include "common/ip.h"
 #include "funcapi.h"
 #include "miscadmin.h"
@@ -456,7 +457,7 @@ pg_stat_get_backend_idset(PG_FUNCTION_ARGS)
 Datum
 pg_stat_get_progress_info(PG_FUNCTION_ARGS)
 {
-#define PG_STAT_GET_PROGRESS_COLS	PGSTAT_NUM_PROGRESS_PARAM + 3
+#define PG_STAT_GET_PROGRESS_COLS	PGSTAT_NUM_PROGRESS_PARAM + PGSTAT_NUM_PROGRESS_COMMON
 	int			num_backends = pgstat_fetch_stat_numbackends();
 	int			curr_backend;
 	char	   *cmd = text_to_cstring(PG_GETARG_TEXT_PP(0));
@@ -518,14 +519,17 @@ pg_stat_get_progress_info(PG_FUNCTION_ARGS)
 		{
 			values[2] = ObjectIdGetDatum(beentry->st_progress_command_target);
 			for (i = 0; i < PGSTAT_NUM_PROGRESS_PARAM; i++)
-				values[i + 3] = Int64GetDatum(beentry->st_progress_param[i]);
+				values[i + PGSTAT_NUM_PROGRESS_COMMON] = Int64GetDatum(beentry->st_progress_param[i]);
 		}
 		else
 		{
 			nulls[2] = true;
 			for (i = 0; i < PGSTAT_NUM_PROGRESS_PARAM; i++)
-				nulls[i + 3] = true;
+				nulls[i + PGSTAT_NUM_PROGRESS_COMMON] = true;
 		}
+
+		/* Before returning the datum, set the fields from parallel progress tracking */
+		pgstat_progress_set_parallel(values);
 
 		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
 	}

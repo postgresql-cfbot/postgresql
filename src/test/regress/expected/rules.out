@@ -2014,11 +2014,28 @@ pg_stat_progress_vacuum| SELECT s.pid,
     s.param2 AS heap_blks_total,
     s.param3 AS heap_blks_scanned,
     s.param4 AS heap_blks_vacuumed,
-    s.param5 AS index_vacuum_count,
+    s.param5 AS index_vacuum_cycle_count,
     s.param6 AS max_dead_tuples,
-    s.param7 AS num_dead_tuples
+    s.param7 AS num_dead_tuples,
+    s.param8 AS indexes_total,
+    s.param9 AS indexes_processed
    FROM (pg_stat_get_progress_info('VACUUM'::text) s(pid, datid, relid, param1, param2, param3, param4, param5, param6, param7, param8, param9, param10, param11, param12, param13, param14, param15, param16, param17, param18, param19, param20)
-     LEFT JOIN pg_database d ON ((s.datid = d.oid)));
+     LEFT JOIN pg_database d ON ((s.datid = d.oid)))
+  WHERE (s.pid = s.param12);
+pg_stat_progress_vacuum_index| SELECT s.pid,
+    s.datid,
+    d.datname,
+    s.param10 AS indexrelid,
+    s.param12 AS leader_pid,
+        CASE s.param1
+            WHEN 2 THEN 'vacuuming indexes'::text
+            WHEN 4 THEN 'cleaning up indexes'::text
+            ELSE NULL::text
+        END AS phase,
+    s.param11 AS tuples_removed
+   FROM (pg_stat_get_progress_info('VACUUM'::text) s(pid, datid, relid, param1, param2, param3, param4, param5, param6, param7, param8, param9, param10, param11, param12, param13, param14, param15, param16, param17, param18, param19, param20)
+     LEFT JOIN pg_database d ON ((s.datid = d.oid)))
+  WHERE ((s.param1 = ANY (ARRAY[(2)::bigint, (4)::bigint])) AND (s.param10 > 0));
 pg_stat_replication| SELECT s.pid,
     s.usesysid,
     u.rolname AS usename,

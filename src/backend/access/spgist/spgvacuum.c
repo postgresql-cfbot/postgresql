@@ -21,8 +21,10 @@
 #include "access/transam.h"
 #include "access/xloginsert.h"
 #include "catalog/storage_xlog.h"
+#include "commands/progress.h"
 #include "commands/vacuum.h"
 #include "miscadmin.h"
+#include "pgstat.h"
 #include "storage/bufmgr.h"
 #include "storage/indexfsm.h"
 #include "storage/lmgr.h"
@@ -160,6 +162,7 @@ vacuumLeafPage(spgBulkDeleteState *bds, Relation index, Buffer buffer,
 				bds->stats->tuples_removed += 1;
 				deletable[i] = true;
 				nDeletable++;
+				pgstat_progress_update_param(PROGRESS_VACUUM_TUPLES_REMOVED, bds->stats->tuples_removed);
 			}
 			else
 			{
@@ -430,6 +433,7 @@ vacuumLeafRoot(spgBulkDeleteState *bds, Relation index, Buffer buffer)
 				bds->stats->tuples_removed += 1;
 				toDelete[xlrec.nDelete] = i;
 				xlrec.nDelete++;
+				pgstat_progress_update_param(PROGRESS_VACUUM_TUPLES_REMOVED, bds->stats->tuples_removed);
 			}
 			else
 			{

@@ -29,6 +29,7 @@
 #include "access/amapi.h"
 #include "access/table.h"
 #include "catalog/index.h"
+#include "commands/progress.h"
 #include "commands/vacuum.h"
 #include "optimizer/paths.h"
 #include "pgstat.h"
@@ -101,6 +102,9 @@ typedef struct PVShared
 
 	/* Counter for vacuuming and cleanup */
 	pg_atomic_uint32 idx;
+
+	/* Leader PID of the vacuum */
+	int      leader_pid;
 } PVShared;
 
 /* Status used during parallel index vacuum or cleanup */
@@ -357,6 +361,7 @@ parallel_vacuum_init(Relation rel, Relation *indrels, int nindexes,
 		(nindexes_mwm > 0) ?
 		maintenance_work_mem / Min(parallel_workers, nindexes_mwm) :
 		maintenance_work_mem;
+	shared->leader_pid = MyProcPid;
 
 	pg_atomic_init_u32(&(shared->cost_balance), 0);
 	pg_atomic_init_u32(&(shared->active_nworkers), 0);
@@ -840,13 +845,20 @@ parallel_vacuum_process_one_index(ParallelVacuumState *pvs, Relation indrel,
 	pvs->indname = pstrdup(RelationGetRelationName(indrel));
 	pvs->status = indstats->status;
 
+	/* Advertise the index we are cleaning or vacuuming */
+	pgstat_progress_update_param(PROGRESS_VACUUM_INDEXRELID, RelationGetRelid(indrel));
+
 	switch (indstats->status)
 	{
 		case PARALLEL_INDVAC_STATUS_NEED_BULKDELETE:
+			pgstat_progress_update_param(PROGRESS_VACUUM_PHASE, PROGRESS_VACUUM_PHASE_VACUUM_INDEX);
 			istat_res = vac_bulkdel_one_index(&ivinfo, istat, pvs->dead_items);
+			pgstat_progress_update_param_parallel(pvs->shared->leader_pid, PROGRESS_VACUUM_INDEXES_PROCESSED, 1);
 			break;
 		case PARALLEL_INDVAC_STATUS_NEED_CLEANUP:
+			pgstat_progress_update_param(PROGRESS_VACUUM_PHASE, PROGRESS_VACUUM_PHASE_INDEX_CLEANUP);
 			istat_res = vac_cleanup_one_index(&ivinfo, istat);
+			pgstat_progress_update_param_parallel(pvs->shared->leader_pid, PROGRESS_VACUUM_INDEXES_PROCESSED, 1);
 			break;
 		default:
 			elog(ERROR, "unexpected parallel vacuum index status %d for index \"%s\"",
@@ -880,6 +892,10 @@ parallel_vacuum_process_one_index(ParallelVacuumState *pvs, Relation indrel,
 	 * touches different indexes.
 	 */
 	indstats->status = PARALLEL_INDVAC_STATUS_COMPLETED;
+
+	/* Advertise we are no longer vacuuming/cleaning an index */
+	pgstat_progress_update_param(PROGRESS_VACUUM_INDEXRELID, 0);
+	pgstat_progress_update_param(PROGRESS_VACUUM_TUPLES_REMOVED, 0);
 
 	/* Reset error traceback information */
 	pvs->status = PARALLEL_INDVAC_STATUS_COMPLETED;
@@ -965,6 +981,8 @@ parallel_vacuum_main(dsm_segment *seg, shm_toc *toc)
 	 * workers.
 	 */
 	rel = table_open(shared->relid, ShareUpdateExclusiveLock);
+	pgstat_progress_start_command(PROGRESS_COMMAND_VACUUM, RelationGetRelid(rel));
+	pgstat_progress_update_param(PROGRESS_VACUUM_LEADER_PID, shared->leader_pid);
 
 	/*
 	 * Open all indexes. indrels are sorted in order by OID, which should be
@@ -1035,6 +1053,7 @@ parallel_vacuum_main(dsm_segment *seg, shm_toc *toc)
 
 	vac_close_indexes(nindexes, indrels, RowExclusiveLock);
 	table_close(rel, ShareUpdateExclusiveLock);
+	pgstat_progress_end_command();
 	FreeAccessStrategy(pvs.bstrategy);
 }
 

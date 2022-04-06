@@ -58,6 +58,7 @@
 #include "postmaster/autovacuum.h"
 #include "storage/bufmgr.h"
 #include "storage/freespace.h"
+#include "storage/ipc.h"
 #include "storage/lmgr.h"
 #include "tcop/tcopprot.h"
 #include "utils/lsyscache.h"
@@ -347,6 +348,7 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 
 	pgstat_progress_start_command(PROGRESS_COMMAND_VACUUM,
 								  RelationGetRelid(rel));
+	pgstat_progress_update_param(PROGRESS_VACUUM_LEADER_PID, MyProcPid);
 
 	/*
 	 * Get OldestXmin cutoff, which is used to determine which deleted tuples
@@ -2312,17 +2314,30 @@ lazy_vacuum_all_indexes(LVRelState *vacrel)
 	/* Report that we are now vacuuming indexes */
 	pgstat_progress_update_param(PROGRESS_VACUUM_PHASE,
 								 PROGRESS_VACUUM_PHASE_VACUUM_INDEX);
+	/* Advertise the number of indexes we are vacuuming */
+	pgstat_progress_update_param(PROGRESS_VACUUM_TOTAL_INDEXES, vacrel->nindexes);
 
 	if (!ParallelVacuumIsActive(vacrel))
 	{
+		int indexes_processed = 1;
+
 		for (int idx = 0; idx < vacrel->nindexes; idx++)
 		{
 			Relation	indrel = vacrel->indrels[idx];
 			IndexBulkDeleteResult *istat = vacrel->indstats[idx];
 
+			/* Advertise the index being vacuumed in non-parallel vacuum */
+			pgstat_progress_update_param(PROGRESS_VACUUM_INDEXRELID, RelationGetRelid(indrel));
+
 			vacrel->indstats[idx] =
 				lazy_vacuum_one_index(indrel, istat, vacrel->old_live_tuples,
 									  vacrel);
+
+			pgstat_progress_update_param(PROGRESS_VACUUM_INDEXES_PROCESSED, indexes_processed++);
+
+			/* Advertise we are done vacuuming indexes in non-parallel vacuum */
+			pgstat_progress_update_param(PROGRESS_VACUUM_INDEXRELID, 0);
+			pgstat_progress_update_param(PROGRESS_VACUUM_TUPLES_REMOVED, 0);
 
 			if (lazy_check_wraparound_failsafe(vacrel))
 			{
@@ -2334,9 +2349,21 @@ lazy_vacuum_all_indexes(LVRelState *vacrel)
 	}
 	else
 	{
-		/* Outsource everything to parallel variant */
-		parallel_vacuum_bulkdel_all_indexes(vacrel->pvs, vacrel->old_live_tuples,
-											vacrel->num_index_scans);
+		/*
+		 * Outsource everything to parallel variant
+		 *
+		 * To ensure cleanup of the progress worker hash entry,
+		 * wrap parallel_vacuum_bulkdel_all_indexes in a
+		 * PG_ENSURE_ERROR_CLEANUP
+		 *
+		 */
+		PG_ENSURE_ERROR_CLEANUP(pgstat_progress_end_parallel_callback, Int32GetDatum(MyProcPid));
+		{
+			parallel_vacuum_bulkdel_all_indexes(vacrel->pvs, vacrel->old_live_tuples,
+												vacrel->num_index_scans);
+		}
+		PG_END_ENSURE_ERROR_CLEANUP(pgstat_progress_end_parallel_callback, Int32GetDatum(MyProcPid));
+		pgstat_progress_end_parallel(MyProcPid);
 
 		/*
 		 * Do a postcheck to consider applying wraparound failsafe now.  Note
@@ -2344,7 +2371,11 @@ lazy_vacuum_all_indexes(LVRelState *vacrel)
 		 */
 		if (lazy_check_wraparound_failsafe(vacrel))
 			allindexes = false;
+
 	}
+
+	/* reset index progress */
+	pgstat_progress_update_param(PROGRESS_VACUUM_INDEXES_PROCESSED, 0);
 
 	/*
 	 * We delete all LP_DEAD items from the first heap pass in all indexes on
@@ -2627,6 +2658,8 @@ lazy_check_wraparound_failsafe(LVRelState *vacrel)
 		vacrel->do_index_vacuuming = false;
 		vacrel->do_index_cleanup = false;
 		vacrel->do_rel_truncate = false;
+		pgstat_progress_update_param(PROGRESS_VACUUM_TOTAL_INDEXES, 0);
+		pgstat_progress_update_param(PROGRESS_VACUUM_INDEXES_PROCESSED, 0);
 
 		ereport(WARNING,
 				(errmsg("bypassing nonessential maintenance of table \"%s.%s.%s\" as a failsafe after %d index scans",
@@ -2663,26 +2696,53 @@ lazy_cleanup_all_indexes(LVRelState *vacrel)
 	/* Report that we are now cleaning up indexes */
 	pgstat_progress_update_param(PROGRESS_VACUUM_PHASE,
 								 PROGRESS_VACUUM_PHASE_INDEX_CLEANUP);
+	/* Advertise the number of indexes we are cleaning up */
+	pgstat_progress_update_param(PROGRESS_VACUUM_TOTAL_INDEXES, vacrel->nindexes);
 
 	if (!ParallelVacuumIsActive(vacrel))
 	{
+		int indexes_processed = 1;
+
 		for (int idx = 0; idx < vacrel->nindexes; idx++)
 		{
 			Relation	indrel = vacrel->indrels[idx];
 			IndexBulkDeleteResult *istat = vacrel->indstats[idx];
 
+			/* Advertise the index being cleaned in non-parallel vacuum */
+			pgstat_progress_update_param(PROGRESS_VACUUM_INDEXRELID, RelationGetRelid(indrel));
+
 			vacrel->indstats[idx] =
 				lazy_cleanup_one_index(indrel, istat, reltuples,
 									   estimated_count, vacrel);
+
+			pgstat_progress_update_param(PROGRESS_VACUUM_INDEXES_PROCESSED, indexes_processed++);
+
+			/* Advertise we are done cleaning indexes in non-parallel vacuum */
+			pgstat_progress_update_param(PROGRESS_VACUUM_INDEXRELID, 0);
 		}
 	}
 	else
 	{
-		/* Outsource everything to parallel variant */
-		parallel_vacuum_cleanup_all_indexes(vacrel->pvs, reltuples,
-											vacrel->num_index_scans,
-											estimated_count);
+		/*
+		 * Outsource everything to parallel variant
+		 *
+		 * To ensure cleanup of the parallel progress hash entry,
+		 * wrap parallel_vacuum_bulkdel_all_indexes in a
+		 * PG_ENSURE_ERROR_CLEANUP
+		 *
+		 */
+		PG_ENSURE_ERROR_CLEANUP(pgstat_progress_end_parallel_callback, Int32GetDatum(MyProcPid));
+		{
+			parallel_vacuum_cleanup_all_indexes(vacrel->pvs, reltuples,
+												vacrel->num_index_scans,
+												estimated_count);
+		}
+		PG_END_ENSURE_ERROR_CLEANUP(pgstat_progress_end_parallel_callback, Int32GetDatum(MyProcPid));
+		pgstat_progress_end_parallel(MyProcPid);
 	}
+
+	/* reset index progress */
+	pgstat_progress_update_param(PROGRESS_VACUUM_INDEXES_PROCESSED, 0);
 }
 
 /*

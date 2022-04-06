@@ -1150,10 +1150,27 @@ CREATE VIEW pg_stat_progress_vacuum AS
                       WHEN 6 THEN 'performing final cleanup'
                       END AS phase,
         S.param2 AS heap_blks_total, S.param3 AS heap_blks_scanned,
-        S.param4 AS heap_blks_vacuumed, S.param5 AS index_vacuum_count,
-        S.param6 AS max_dead_tuples, S.param7 AS num_dead_tuples
+        S.param4 AS heap_blks_vacuumed, S.param5 AS index_vacuum_cycle_count,
+        S.param6 AS max_dead_tuples, S.param7 AS num_dead_tuples,
+        S.param8 AS indexes_total, S.param9 AS indexes_processed
     FROM pg_stat_get_progress_info('VACUUM') AS S
-        LEFT JOIN pg_database D ON S.datid = D.oid;
+        LEFT JOIN pg_database D ON S.datid = D.oid
+    WHERE S.pid = S.param12;
+
+CREATE VIEW pg_stat_progress_vacuum_index AS
+    SELECT
+        S.pid AS pid,
+        S.datid AS datid,
+        D.datname AS datname,
+        S.param10 AS indexrelid,
+        S.param12 AS leader_pid,
+        CASE S.param1 WHEN 2 THEN 'vacuuming indexes'
+                      WHEN 4 THEN 'cleaning up indexes'
+                      END AS phase,
+        S.param11 AS tuples_removed
+    FROM pg_stat_get_progress_info('VACUUM') AS S
+        LEFT JOIN pg_database D ON S.datid = D.oid
+    WHERE S.param1 IN (2, 4) AND S.param10 > 0;
 
 CREATE VIEW pg_stat_progress_cluster AS
     SELECT

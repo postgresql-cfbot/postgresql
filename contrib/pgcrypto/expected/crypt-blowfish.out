@@ -13,6 +13,13 @@ SELECT crypt('foox', '$2a$06$RQiOJ.3ELirrXwxIZY8q0O');
  $2a$06$RQiOJ.3ELirrXwxIZY8q0OR3CVJrAfda1z26CCHPnB6mmVZD8p0/C
 (1 row)
 
+-- support $2b$ hashes
+SELECT crypt('password', '$2b$06$cqhNY4qXkVeKliLWOxCFieDY6/J4SmCEojsXfHs7iF4X1r3tuNepW');
+                            crypt                             
+--------------------------------------------------------------
+ $2b$06$cqhNY4qXkVeKliLWOxCFieDY6/J4SmCEojsXfHs7iF4X1r3tuNepW
+(1 row)
+
 -- error, salt too short:
 SELECT crypt('foox', '$2a$');
 ERROR:  invalid salt

@@ -6,6 +6,9 @@ SELECT crypt('', '$2a$06$RQiOJ.3ELirrXwxIZY8q0O');
 
 SELECT crypt('foox', '$2a$06$RQiOJ.3ELirrXwxIZY8q0O');
 
+-- support $2b$ hashes
+SELECT crypt('password', '$2b$06$cqhNY4qXkVeKliLWOxCFieDY6/J4SmCEojsXfHs7iF4X1r3tuNepW');
+
 -- error, salt too short:
 SELECT crypt('foox', '$2a$');
 

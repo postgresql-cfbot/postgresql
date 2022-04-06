@@ -91,17 +91,9 @@
  * requesting backends since the last checkpoint start.  The flags are
  * chosen so that OR'ing is the correct way to combine multiple requests.
  *
- * num_backend_writes is used to count the number of buffer writes performed
- * by user backend processes.  This counter should be wide enough that it
- * can't overflow during a single processing cycle.  num_backend_fsync
- * counts the subset of those writes that also had to do their own fsync,
- * because the checkpointer failed to absorb their request.
- *
  * The requests array holds fsync requests sent by backends and not yet
  * absorbed by the checkpointer.
  *
- * Unlike the checkpoint fields, num_backend_writes, num_backend_fsync, and
- * the requests fields are protected by CheckpointerCommLock.
  *----------
  */
 typedef struct
@@ -124,9 +116,6 @@ typedef struct
 
 	ConditionVariable start_cv; /* signaled when ckpt_started advances */
 	ConditionVariable done_cv;	/* signaled when ckpt_done advances */
-
-	uint32		num_backend_writes; /* counts user backend buffer writes */
-	uint32		num_backend_fsync;	/* counts user backend fsync calls */
 
 	int			num_requests;	/* current # of requests */
 	int			max_requests;	/* allocated array size */
@@ -1092,10 +1081,6 @@ ForwardSyncRequest(const FileTag *ftag, SyncRequestType type)
 
 	LWLockAcquire(CheckpointerCommLock, LW_EXCLUSIVE);
 
-	/* Count all backend writes regardless of if they fit in the queue */
-	if (!AmBackgroundWriterProcess())
-		CheckpointerShmem->num_backend_writes++;
-
 	/*
 	 * If the checkpointer isn't running or the request queue is full, the
 	 * backend will have to perform its own fsync request.  But before forcing
@@ -1105,13 +1090,13 @@ ForwardSyncRequest(const FileTag *ftag, SyncRequestType type)
 		(CheckpointerShmem->num_requests >= CheckpointerShmem->max_requests &&
 		 !CompactCheckpointerRequestQueue()))
 	{
+		LWLockRelease(CheckpointerCommLock);
+
 		/*
 		 * Count the subset of writes where backends have to do their own
 		 * fsync
 		 */
-		if (!AmBackgroundWriterProcess())
-			CheckpointerShmem->num_backend_fsync++;
-		LWLockRelease(CheckpointerCommLock);
+		pgstat_inc_ioop(IOOP_FSYNC, IOPATH_SHARED);
 		return false;
 	}
 
@@ -1266,15 +1251,6 @@ AbsorbSyncRequests(void)
 		return;
 
 	LWLockAcquire(CheckpointerCommLock, LW_EXCLUSIVE);
-
-	/* Transfer stats counts into pending pgstats message */
-	PendingCheckpointerStats.m_buf_written_backend
-		+= CheckpointerShmem->num_backend_writes;
-	PendingCheckpointerStats.m_buf_fsync_backend
-		+= CheckpointerShmem->num_backend_fsync;
-
-	CheckpointerShmem->num_backend_writes = 0;
-	CheckpointerShmem->num_backend_fsync = 0;
 
 	/*
 	 * We try to avoid holding the lock for a long time by copying the request

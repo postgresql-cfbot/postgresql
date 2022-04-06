@@ -38,7 +38,7 @@ int			pgstat_track_activity_query_size = 1024;
 PgBackendStatus *MyBEEntry = NULL;
 
 
-static PgBackendStatus *BackendStatusArray = NULL;
+PgBackendStatus *BackendStatusArray = NULL;
 static char *BackendAppnameBuffer = NULL;
 static char *BackendClientHostnameBuffer = NULL;
 static char *BackendActivityBuffer = NULL;
@@ -241,12 +241,29 @@ CreateSharedBackendStatus(void)
 #endif
 }
 
+const char *
+GetIOPathDesc(IOPath io_path)
+{
+	switch (io_path)
+	{
+		case IOPATH_DIRECT:
+			return "direct";
+		case IOPATH_LOCAL:
+			return "local";
+		case IOPATH_SHARED:
+			return "shared";
+		case IOPATH_STRATEGY:
+			return "strategy";
+	}
+	return "unknown IO path";
+}
+
 /*
- * Initialize pgstats backend activity state, and set up our on-proc-exit
- * hook.  Called from InitPostgres and AuxiliaryProcessMain. For auxiliary
- * process, MyBackendId is invalid. Otherwise, MyBackendId must be set, but we
- * must not have started any transaction yet (since the exit hook must run
- * after the last transaction exit).
+ * Initialize pgstats backend activity state, and set up our on-proc-exit hook.
+ *
+ * For auxiliary process, MyBackendId is invalid. Otherwise, MyBackendId must
+ * be set, but we must not have started any transaction yet (since the exit
+ * hook must run after the last transaction exit).
  *
  * NOTE: MyDatabaseId isn't set yet; so the shutdown hook has to be careful.
  */
@@ -284,7 +301,6 @@ pgstat_beinit(void)
  * pgstat_bestart() -
  *
  *	Initialize this backend's entry in the PgBackendStatus array.
- *	Called from InitPostgres.
  *
  *	Apart from auxiliary processes, MyBackendId, MyDatabaseId,
  *	session userid, and application_name must be set for a
@@ -404,6 +420,16 @@ pgstat_bestart(void)
 	lbeentry.st_progress_command = PROGRESS_COMMAND_INVALID;
 	lbeentry.st_progress_command_target = InvalidOid;
 	lbeentry.st_query_id = UINT64CONST(0);
+
+	for (int i = 0; i < IOPATH_NUM_TYPES; i++)
+	{
+		IOOpCounters *io_ops = &lbeentry.io_path_stats[i];
+
+		pg_atomic_init_u64(&io_ops->allocs, 0);
+		pg_atomic_init_u64(&io_ops->extends, 0);
+		pg_atomic_init_u64(&io_ops->fsyncs, 0);
+		pg_atomic_init_u64(&io_ops->writes, 0);
+	}
 
 	/*
 	 * we don't zero st_progress_param here to save cycles; nobody should
@@ -624,6 +650,33 @@ pgstat_report_activity(BackendState state, const char *cmd_str)
 	}
 
 	PGSTAT_END_WRITE_ACTIVITY(beentry);
+}
+
+/*
+ * Iterate through BackendStatusArray and capture live backends' stats on IOOps
+ * for all IOPaths, adding them to that backend type's member of the
+ * backend_io_path_ops structure.
+ */
+void
+pgstat_report_live_backend_io_path_ops(PgStatIOPathOps *backend_io_path_ops)
+{
+	PgBackendStatus *beentry = BackendStatusArray;
+
+	/*
+	 * Loop through live backends and capture reset values
+	 */
+	for (int i = 0; i < GetMaxBackends() + NUM_AUXPROCTYPES; i++, beentry++)
+	{
+		int idx;
+
+		/* Don't count dead backends or those with type B_INVALID. */
+		if (beentry->st_procpid == 0 || beentry->st_backendType == B_INVALID)
+			continue;
+
+		idx = backend_type_get_idx(beentry->st_backendType);
+		pgstat_sum_io_path_ops(backend_io_path_ops[idx].io_path_ops,
+				(IOOpCounters *) beentry->io_path_stats);
+	}
 }
 
 /* --------

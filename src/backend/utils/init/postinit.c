@@ -727,6 +727,8 @@ InitPostgres(const char *in_dbname, Oid dboid, const char *username,
 		RegisterTimeout(CLIENT_CONNECTION_CHECK_TIMEOUT, ClientCheckTimeoutHandler);
 	}
 
+	pgstat_beinit();
+
 	/*
 	 * If this is either a bootstrap process or a standalone backend, start
 	 * up the XLOG machinery, and register to have it closed down at exit.
@@ -742,6 +744,7 @@ InitPostgres(const char *in_dbname, Oid dboid, const char *username,
 		 */
 		CreateAuxProcessResourceOwner();
 
+		pgstat_bestart();
 		StartupXLOG();
 		/* Release (and warn about) any buffer pins leaked in StartupXLOG */
 		ReleaseAuxProcessResources(true);
@@ -769,7 +772,6 @@ InitPostgres(const char *in_dbname, Oid dboid, const char *username,
 	EnablePortalManager();
 
 	/* Initialize status reporting */
-	pgstat_beinit();
 
 	/*
 	 * Load relcache entries for the shared system catalogs.  This must create
@@ -1007,10 +1009,7 @@ InitPostgres(const char *in_dbname, Oid dboid, const char *username,
 		 * transaction we started before returning.
 		 */
 		if (!bootstrap)
-		{
-			pgstat_bestart();
 			CommitTransactionCommand();
-		}
 		return;
 	}
 

@@ -519,6 +519,17 @@ pg_atomic_sub_fetch_u64(volatile pg_atomic_uint64 *ptr, int64 sub_)
 	return pg_atomic_sub_fetch_u64_impl(ptr, sub_);
 }
 
+/*
+ * On modern systems this is really just *counter++. On some older systems
+ * there might be more to it (due to an inability to read and write 64-bit
+ * values atomically).
+ */
+static inline void
+pg_atomic_unlocked_inc_counter(pg_atomic_uint64 *counter)
+{
+	pg_atomic_write_u64(counter, pg_atomic_read_u64(counter) + 1);
+}
+
 #undef INSIDE_ATOMICS_H
 
 #endif							/* ATOMICS_H */

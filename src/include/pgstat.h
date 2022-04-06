@@ -62,7 +62,7 @@ typedef int64 PgStat_Counter;
 typedef enum PgStat_Shared_Reset_Target
 {
 	RESET_ARCHIVER,
-	RESET_BGWRITER,
+	RESET_BUFFERS,
 	RESET_WAL
 } PgStat_Shared_Reset_Target;
 
@@ -164,6 +164,11 @@ typedef struct PgStat_TableCounts
 	PgStat_Counter t_blocks_hit;
 } PgStat_TableCounts;
 
+/* ------------------------------------------------------------
+ * Structures kept in backend local memory while accumulating counts
+ * ------------------------------------------------------------
+ */
+
 /* ----------
  * PgStat_TableStatus			Per-table status within a backend
  *
@@ -239,6 +244,7 @@ typedef enum StatMsgType
 	PGSTAT_MTYPE_ARCHIVER,
 	PGSTAT_MTYPE_BGWRITER,
 	PGSTAT_MTYPE_CHECKPOINTER,
+	PGSTAT_MTYPE_IO_PATH_OPS,
 	PGSTAT_MTYPE_WAL,
 	PGSTAT_MTYPE_SLRU,
 	PGSTAT_MTYPE_FUNCSTAT,
@@ -372,6 +378,53 @@ typedef struct PgStat_MsgDropdb
 	Oid			m_databaseid;
 } PgStat_MsgDropdb;
 
+
+/*
+ * Structure for counting all types of IOOps in the stats collector
+ */
+typedef struct PgStatIOOpCounters
+{
+	PgStat_Counter allocs;
+	PgStat_Counter extends;
+	PgStat_Counter fsyncs;
+	PgStat_Counter writes;
+} PgStatIOOpCounters;
+
+/*
+ * Structure for counting all IOOps on all types of IOPaths.
+ */
+typedef struct PgStatIOPathOps
+{
+	PgStatIOOpCounters io_path_ops[IOPATH_NUM_TYPES];
+} PgStatIOPathOps;
+
+/*
+ * Sent by a backend to the stats collector to report all IOOps for all IOPaths
+ * for a given type of a backend. This will happen when the backend exits or
+ * when stats are reset.
+ */
+typedef struct PgStat_MsgIOPathOps
+{
+	PgStat_MsgHdr m_hdr;
+
+	BackendType backend_type;
+	PgStatIOPathOps iop;
+} PgStat_MsgIOPathOps;
+
+/*
+ * Structure used by stats collector to keep track of all types of exited
+ * backends' IOOps for all IOPaths as well as all stats from live backends at
+ * the time of stats reset. resets is populated using a reset message sent to
+ * the stats collector.
+ */
+typedef struct PgStat_BackendIOPathOps
+{
+	TimestampTz stat_reset_timestamp;
+	PgStatIOPathOps ops[BACKEND_NUM_TYPES];
+	PgStatIOPathOps resets[BACKEND_NUM_TYPES];
+} PgStat_BackendIOPathOps;
+
+
 /* ----------
  * PgStat_MsgResetcounter		Sent by the backend to tell the collector
  *								to reset counters
@@ -383,15 +436,28 @@ typedef struct PgStat_MsgResetcounter
 	Oid			m_databaseid;
 } PgStat_MsgResetcounter;
 
-/* ----------
- * PgStat_MsgResetsharedcounter Sent by the backend to tell the collector
- *								to reset a shared counter
- * ----------
+/*
+ * Sent by the backend to tell the collector to reset a shared counter.
+ *
+ * In addition to the message header and reset target, the message also
+ * contains an array with all of the IO operations for all IO paths done by a
+ * particular backend type.
+ *
+ * This is needed because the IO operation stats for live backends cannot be
+ * safely modified by other processes. Therefore, to correctly calculate the
+ * total IO operations for a particular backend type after a reset, the balance
+ * of IO operations for live backends at the time of prior resets must be
+ * subtracted from the total IO operations.
+ *
+ * To satisfy this requirement, the process initiating the reset will read the
+ * IO operations counters from live backends and send them to the stats
+ * collector which maintains an array of reset values.
  */
 typedef struct PgStat_MsgResetsharedcounter
 {
 	PgStat_MsgHdr m_hdr;
 	PgStat_Shared_Reset_Target m_resettarget;
+	PgStat_MsgIOPathOps m_backend_resets;
 } PgStat_MsgResetsharedcounter;
 
 /* ----------
@@ -507,9 +573,7 @@ typedef struct PgStat_MsgBgWriter
 {
 	PgStat_MsgHdr m_hdr;
 
-	PgStat_Counter m_buf_written_clean;
 	PgStat_Counter m_maxwritten_clean;
-	PgStat_Counter m_buf_alloc;
 } PgStat_MsgBgWriter;
 
 /* ----------
@@ -522,9 +586,6 @@ typedef struct PgStat_MsgCheckpointer
 
 	PgStat_Counter m_timed_checkpoints;
 	PgStat_Counter m_requested_checkpoints;
-	PgStat_Counter m_buf_written_checkpoints;
-	PgStat_Counter m_buf_written_backend;
-	PgStat_Counter m_buf_fsync_backend;
 	PgStat_Counter m_checkpoint_write_time; /* times in milliseconds */
 	PgStat_Counter m_checkpoint_sync_time;
 } PgStat_MsgCheckpointer;
@@ -750,6 +811,7 @@ typedef union PgStat_Msg
 	PgStat_MsgArchiver msg_archiver;
 	PgStat_MsgBgWriter msg_bgwriter;
 	PgStat_MsgCheckpointer msg_checkpointer;
+	PgStat_MsgIOPathOps msg_io_path_ops;
 	PgStat_MsgWal msg_wal;
 	PgStat_MsgSLRU msg_slru;
 	PgStat_MsgFuncstat msg_funcstat;
@@ -791,10 +853,7 @@ typedef struct PgStat_ArchiverStats
 
 typedef struct PgStat_BgWriterStats
 {
-	PgStat_Counter buf_written_clean;
 	PgStat_Counter maxwritten_clean;
-	PgStat_Counter buf_alloc;
-	TimestampTz stat_reset_timestamp;
 } PgStat_BgWriterStats;
 
 typedef struct PgStat_CheckpointerStats
@@ -869,6 +928,7 @@ typedef struct PgStat_GlobalStats
 
 	PgStat_CheckpointerStats checkpointer;
 	PgStat_BgWriterStats bgwriter;
+	PgStat_BackendIOPathOps buffers;
 } PgStat_GlobalStats;
 
 typedef struct PgStat_StatReplSlotEntry
@@ -1120,11 +1180,36 @@ extern void pgstat_twophase_postabort(TransactionId xid, uint16 info,
 									  void *recdata, uint32 len);
 
 extern PgStat_TableStatus *find_tabstat_entry(Oid rel_id);
+extern void pgstat_send_archiver(const char *xlog, bool failed);
+extern void pgstat_send_bgwriter(void);
+
+/*
+ * While some processes send some types of statistics to the collector at
+ * regular intervals (e.g. CheckpointerMain() calling
+ * pgstat_send_checkpointer()), IO operations stats are only sent by
+ * pgstat_send_buffers() when a process exits (in pgstat_shutdown_hook()). IO
+ * operations stats from live backends can be read from their PgBackendStatuses
+ * and, if desired, summed with totals from exited backends persisted by the
+ * stats collector.
+ */
+extern void pgstat_send_buffers(void);
+extern void pgstat_sum_io_path_ops(PgStatIOOpCounters *dest, IOOpCounters *src);
 
 
 /*
  * Functions in pgstat_replslot.c
  */
+extern PgStat_BackendIOPathOps *pgstat_fetch_exited_backend_buffers(void);
+extern PgStat_StatDBEntry *pgstat_fetch_stat_dbentry(Oid dbid);
+extern PgStat_StatTabEntry *pgstat_fetch_stat_tabentry(Oid relid);
+extern PgStat_StatFuncEntry *pgstat_fetch_stat_funcentry(Oid funcid);
+extern PgStat_ArchiverStats *pgstat_fetch_stat_archiver(void);
+extern PgStat_BgWriterStats *pgstat_fetch_stat_bgwriter(void);
+extern PgStat_CheckpointerStats *pgstat_fetch_stat_checkpointer(void);
+extern PgStat_GlobalStats *pgstat_fetch_global(void);
+extern PgStat_WalStats *pgstat_fetch_stat_wal(void);
+extern PgStat_SLRUStats *pgstat_fetch_slru(void);
+extern PgStat_StatReplSlotEntry *pgstat_fetch_replslot(NameData slotname);
 
 extern void pgstat_reset_replslot_counter(const char *name);
 extern void pgstat_report_replslot(const PgStat_StatReplSlotEntry *repSlotStat);

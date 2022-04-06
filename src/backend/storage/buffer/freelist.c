@@ -19,6 +19,7 @@
 #include "storage/buf_internals.h"
 #include "storage/bufmgr.h"
 #include "storage/proc.h"
+#include "utils/backend_status.h"
 
 #define INT_ACCESS_ONCE(var)	((int)(*((volatile int *)&(var))))
 
@@ -198,7 +199,7 @@ have_free_buffer(void)
  *	return the buffer with the buffer header spinlock still held.
  */
 BufferDesc *
-StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
+StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state, bool *from_ring)
 {
 	BufferDesc *buf;
 	int			bgwprocno;
@@ -212,7 +213,8 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 	if (strategy != NULL)
 	{
 		buf = GetBufferFromRing(strategy, buf_state);
-		if (buf != NULL)
+		*from_ring = buf != NULL;
+		if (*from_ring)
 			return buf;
 	}
 
@@ -247,6 +249,7 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 	 * the rate of buffer consumption.  Note that buffers recycled by a
 	 * strategy object are intentionally not counted here.
 	 */
+	pgstat_inc_ioop(IOOP_ALLOC, IOPATH_SHARED);
 	pg_atomic_fetch_add_u32(&StrategyControl->numBufferAllocs, 1);
 
 	/*
@@ -683,8 +686,14 @@ AddBufferToRing(BufferAccessStrategy strategy, BufferDesc *buf)
  * if this buffer should be written and re-used.
  */
 bool
-StrategyRejectBuffer(BufferAccessStrategy strategy, BufferDesc *buf)
+StrategyRejectBuffer(BufferAccessStrategy strategy, BufferDesc *buf, bool *from_ring)
 {
+	/*
+	 * Start by assuming that we will use the dirty buffer selected by
+	 * StrategyGetBuffer().
+	 */
+	*from_ring = true;
+
 	/* We only do this in bulkread mode */
 	if (strategy->btype != BAS_BULKREAD)
 		return false;
@@ -699,6 +708,13 @@ StrategyRejectBuffer(BufferAccessStrategy strategy, BufferDesc *buf)
 	 * loop if all ring members are dirty.
 	 */
 	strategy->buffers[strategy->current] = InvalidBuffer;
+
+	/*
+	 * Since we will not be writing out a dirty buffer from the ring, set
+	 * from_ring to false so that the caller does not count this write as a
+	 * "strategy write" and can do proper bookkeeping.
+	 */
+	*from_ring = false;
 
 	return true;
 }

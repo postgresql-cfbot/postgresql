@@ -1089,19 +1089,30 @@ CREATE VIEW pg_stat_archiver AS
         s.stats_reset
     FROM pg_stat_get_archiver() s;
 
+CREATE VIEW pg_stat_buffers AS
+SELECT
+       b.backend_type,
+       b.io_path,
+       b.alloc,
+       b.extend,
+       b.fsync,
+       b.write,
+       b.stats_reset
+FROM pg_stat_get_buffers() b;
+
 CREATE VIEW pg_stat_bgwriter AS
     SELECT
         pg_stat_get_bgwriter_timed_checkpoints() AS checkpoints_timed,
         pg_stat_get_bgwriter_requested_checkpoints() AS checkpoints_req,
         pg_stat_get_checkpoint_write_time() AS checkpoint_write_time,
         pg_stat_get_checkpoint_sync_time() AS checkpoint_sync_time,
-        pg_stat_get_bgwriter_buf_written_checkpoints() AS buffers_checkpoint,
-        pg_stat_get_bgwriter_buf_written_clean() AS buffers_clean,
+        (SELECT write FROM pg_stat_buffers WHERE backend_type = 'checkpointer' AND io_path = 'shared') AS buffers_checkpoint,
+        (SELECT write FROM pg_stat_buffers WHERE backend_type = 'background writer' AND io_path = 'shared') AS buffers_clean,
         pg_stat_get_bgwriter_maxwritten_clean() AS maxwritten_clean,
-        pg_stat_get_buf_written_backend() AS buffers_backend,
-        pg_stat_get_buf_fsync_backend() AS buffers_backend_fsync,
-        pg_stat_get_buf_alloc() AS buffers_alloc,
-        pg_stat_get_bgwriter_stat_reset_time() AS stats_reset;
+        (SELECT write FROM pg_stat_buffers WHERE backend_type = 'client backend' AND io_path = 'shared') AS buffers_backend,
+        (SELECT fsync FROM pg_stat_buffers WHERE backend_type = 'client backend' AND io_path = 'shared') AS buffers_backend_fsync,
+        (SELECT alloc FROM pg_stat_buffers WHERE backend_type = 'client backend' AND io_path = 'shared') AS buffers_alloc,
+        (SELECT stats_reset FROM pg_stat_buffers LIMIT 1) AS stats_reset;
 
 CREATE VIEW pg_stat_wal AS
     SELECT

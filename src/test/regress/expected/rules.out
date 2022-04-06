@@ -1813,13 +1813,33 @@ pg_stat_bgwriter| SELECT pg_stat_get_bgwriter_timed_checkpoints() AS checkpoints
     pg_stat_get_bgwriter_requested_checkpoints() AS checkpoints_req,
     pg_stat_get_checkpoint_write_time() AS checkpoint_write_time,
     pg_stat_get_checkpoint_sync_time() AS checkpoint_sync_time,
-    pg_stat_get_bgwriter_buf_written_checkpoints() AS buffers_checkpoint,
-    pg_stat_get_bgwriter_buf_written_clean() AS buffers_clean,
+    ( SELECT pg_stat_buffers.write
+           FROM pg_stat_buffers
+          WHERE ((pg_stat_buffers.backend_type = 'checkpointer'::text) AND (pg_stat_buffers.io_path = 'shared'::text))) AS buffers_checkpoint,
+    ( SELECT pg_stat_buffers.write
+           FROM pg_stat_buffers
+          WHERE ((pg_stat_buffers.backend_type = 'background writer'::text) AND (pg_stat_buffers.io_path = 'shared'::text))) AS buffers_clean,
     pg_stat_get_bgwriter_maxwritten_clean() AS maxwritten_clean,
-    pg_stat_get_buf_written_backend() AS buffers_backend,
-    pg_stat_get_buf_fsync_backend() AS buffers_backend_fsync,
-    pg_stat_get_buf_alloc() AS buffers_alloc,
-    pg_stat_get_bgwriter_stat_reset_time() AS stats_reset;
+    ( SELECT pg_stat_buffers.write
+           FROM pg_stat_buffers
+          WHERE ((pg_stat_buffers.backend_type = 'client backend'::text) AND (pg_stat_buffers.io_path = 'shared'::text))) AS buffers_backend,
+    ( SELECT pg_stat_buffers.fsync
+           FROM pg_stat_buffers
+          WHERE ((pg_stat_buffers.backend_type = 'client backend'::text) AND (pg_stat_buffers.io_path = 'shared'::text))) AS buffers_backend_fsync,
+    ( SELECT pg_stat_buffers.alloc
+           FROM pg_stat_buffers
+          WHERE ((pg_stat_buffers.backend_type = 'client backend'::text) AND (pg_stat_buffers.io_path = 'shared'::text))) AS buffers_alloc,
+    ( SELECT pg_stat_buffers.stats_reset
+           FROM pg_stat_buffers
+         LIMIT 1) AS stats_reset;
+pg_stat_buffers| SELECT b.backend_type,
+    b.io_path,
+    b.alloc,
+    b.extend,
+    b.fsync,
+    b.write,
+    b.stats_reset
+   FROM pg_stat_get_buffers() b(backend_type, io_path, alloc, extend, fsync, write, stats_reset);
 pg_stat_database| SELECT d.oid AS datid,
     d.datname,
         CASE

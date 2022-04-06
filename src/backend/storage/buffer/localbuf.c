@@ -20,6 +20,7 @@
 #include "executor/instrument.h"
 #include "storage/buf_internals.h"
 #include "storage/bufmgr.h"
+#include "utils/backend_status.h"
 #include "utils/guc.h"
 #include "utils/memutils.h"
 #include "utils/resowner_private.h"
@@ -225,6 +226,8 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 				  bufHdr->tag.blockNum,
 				  localpage,
 				  false);
+
+		pgstat_inc_ioop(IOOP_WRITE, IOPATH_LOCAL);
 
 		/* Mark not-dirty now in case we error out below */
 		buf_state &= ~BM_DIRTY;

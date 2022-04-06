@@ -1682,18 +1682,6 @@ pg_stat_get_bgwriter_requested_checkpoints(PG_FUNCTION_ARGS)
 }
 
 Datum
-pg_stat_get_bgwriter_buf_written_checkpoints(PG_FUNCTION_ARGS)
-{
-	PG_RETURN_INT64(pgstat_fetch_stat_checkpointer()->buf_written_checkpoints);
-}
-
-Datum
-pg_stat_get_bgwriter_buf_written_clean(PG_FUNCTION_ARGS)
-{
-	PG_RETURN_INT64(pgstat_fetch_stat_bgwriter()->buf_written_clean);
-}
-
-Datum
 pg_stat_get_bgwriter_maxwritten_clean(PG_FUNCTION_ARGS)
 {
 	PG_RETURN_INT64(pgstat_fetch_stat_bgwriter()->maxwritten_clean);
@@ -1715,28 +1703,154 @@ pg_stat_get_checkpoint_sync_time(PG_FUNCTION_ARGS)
 					 pgstat_fetch_stat_checkpointer()->checkpoint_sync_time);
 }
 
-Datum
-pg_stat_get_bgwriter_stat_reset_time(PG_FUNCTION_ARGS)
+/*
+* When adding a new column to the pg_stat_buffers view, add a new enum
+* value here above BUFFERS_NUM_COLUMNS.
+*/
+enum
 {
-	PG_RETURN_TIMESTAMPTZ(pgstat_fetch_stat_bgwriter()->stat_reset_timestamp);
+	BUFFERS_COLUMN_BACKEND_TYPE,
+	BUFFERS_COLUMN_IO_PATH,
+	BUFFERS_COLUMN_ALLOCS,
+	BUFFERS_COLUMN_EXTENDS,
+	BUFFERS_COLUMN_FSYNCS,
+	BUFFERS_COLUMN_WRITES,
+	BUFFERS_COLUMN_RESET_TIME,
+	BUFFERS_NUM_COLUMNS,
+};
+
+/*
+ * Helper function to get the correct row in the pg_stat_buffers view.
+ */
+static inline Datum *
+get_pg_stat_buffers_row(Datum all_values[BACKEND_NUM_TYPES][IOPATH_NUM_TYPES][BUFFERS_NUM_COLUMNS],
+		BackendType backend_type, IOPath io_path)
+{
+	return all_values[backend_type_get_idx(backend_type)][io_path];
 }
 
 Datum
-pg_stat_get_buf_written_backend(PG_FUNCTION_ARGS)
+pg_stat_get_buffers(PG_FUNCTION_ARGS)
 {
-	PG_RETURN_INT64(pgstat_fetch_stat_checkpointer()->buf_written_backend);
-}
+	PgStat_BackendIOPathOps *backend_io_path_ops;
+	PgBackendStatus *beentry;
+	Datum		reset_time;
 
-Datum
-pg_stat_get_buf_fsync_backend(PG_FUNCTION_ARGS)
-{
-	PG_RETURN_INT64(pgstat_fetch_stat_checkpointer()->buf_fsync_backend);
-}
+	ReturnSetInfo *rsinfo;
+	TupleDesc	tupdesc;
+	Tuplestorestate *tupstore;
+	MemoryContext per_query_ctx;
+	MemoryContext oldcontext;
 
-Datum
-pg_stat_get_buf_alloc(PG_FUNCTION_ARGS)
-{
-	PG_RETURN_INT64(pgstat_fetch_stat_bgwriter()->buf_alloc);
+	Datum		all_values[BACKEND_NUM_TYPES][IOPATH_NUM_TYPES][BUFFERS_NUM_COLUMNS];
+	bool		all_nulls[BACKEND_NUM_TYPES][IOPATH_NUM_TYPES][BUFFERS_NUM_COLUMNS];
+
+	rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+
+	/* check to see if caller supports us returning a tuplestore */
+	if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("set-valued function called in context that cannot accept a set")));
+	if (!(rsinfo->allowedModes & SFRM_Materialize))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("materialize mode required, but it is not allowed in this context")));
+
+	/* Build a tuple descriptor for our result type */
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+
+	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+	oldcontext = MemoryContextSwitchTo(per_query_ctx);
+	tupstore = tuplestore_begin_heap((bool) (rsinfo->allowedModes & SFRM_Materialize_Random),
+			false, work_mem);
+	rsinfo->returnMode = SFRM_Materialize;
+	rsinfo->setResult = tupstore;
+	rsinfo->setDesc = tupdesc;
+	MemoryContextSwitchTo(oldcontext);
+
+	memset(all_values, 0, sizeof(all_values));
+	memset(all_nulls, 0, sizeof(all_nulls));
+
+	 /* Loop through all live backends and count their IO Ops for each IO Path */
+	beentry = BackendStatusArray;
+
+	for (int i = 0; i < GetMaxBackends() + NUM_AUXPROCTYPES; i++, beentry++)
+	{
+		IOOpCounters   *io_ops;
+
+		/*
+		 * Don't count dead backends. They will be added below. There are no
+		 * rows in the view for BackendType B_INVALID, so skip those as well.
+		 */
+		if (beentry->st_procpid == 0 || beentry->st_backendType == B_INVALID)
+			continue;
+
+		io_ops = beentry->io_path_stats;
+
+		for (int i = 0; i < IOPATH_NUM_TYPES; i++)
+		{
+			Datum *row = get_pg_stat_buffers_row(all_values, beentry->st_backendType, i);
+
+			/*
+			 * BUFFERS_COLUMN_RESET_TIME, BUFFERS_COLUMN_BACKEND_TYPE, and
+			 * BUFFERS_COLUMN_IO_PATH will all be set when looping through
+			 * exited backends array
+			 */
+			row[BUFFERS_COLUMN_ALLOCS] += pg_atomic_read_u64(&io_ops->allocs);
+			row[BUFFERS_COLUMN_EXTENDS] += pg_atomic_read_u64(&io_ops->extends);
+			row[BUFFERS_COLUMN_FSYNCS] += pg_atomic_read_u64(&io_ops->fsyncs);
+			row[BUFFERS_COLUMN_WRITES] += pg_atomic_read_u64(&io_ops->writes);
+			io_ops++;
+		}
+	}
+
+	/* Add stats from all exited backends */
+	backend_io_path_ops = pgstat_fetch_exited_backend_buffers();
+
+	reset_time = TimestampTzGetDatum(backend_io_path_ops->stat_reset_timestamp);
+
+	for (int i = 0; i < BACKEND_NUM_TYPES; i++)
+	{
+		BackendType backend_type = idx_get_backend_type(i);
+
+		PgStatIOOpCounters *io_ops =
+			backend_io_path_ops->ops[i].io_path_ops;
+		PgStatIOOpCounters *resets =
+			backend_io_path_ops->resets[i].io_path_ops;
+
+		Datum		backend_type_desc =
+			CStringGetTextDatum(GetBackendTypeDesc(backend_type));
+
+		for (int j = 0; j < IOPATH_NUM_TYPES; j++)
+		{
+			Datum *row = get_pg_stat_buffers_row(all_values, backend_type, j);
+
+			row[BUFFERS_COLUMN_BACKEND_TYPE] = backend_type_desc;
+			row[BUFFERS_COLUMN_IO_PATH] = CStringGetTextDatum(GetIOPathDesc(j));
+			row[BUFFERS_COLUMN_RESET_TIME] = reset_time;
+			row[BUFFERS_COLUMN_ALLOCS] += io_ops->allocs - resets->allocs;
+			row[BUFFERS_COLUMN_EXTENDS] += io_ops->extends - resets->extends;
+			row[BUFFERS_COLUMN_FSYNCS] += io_ops->fsyncs - resets->fsyncs;
+			row[BUFFERS_COLUMN_WRITES] += io_ops->writes - resets->writes;
+			io_ops++;
+			resets++;
+		}
+	}
+
+	for (int i = 0; i < BACKEND_NUM_TYPES; i++)
+	{
+		for (int j = 0; j < IOPATH_NUM_TYPES; j++)
+		{
+			Datum	   *values = all_values[i][j];
+			bool	   *nulls = all_nulls[i][j];
+
+			tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+		}
+	}
+
+	return (Datum) 0;
 }
 
 /*

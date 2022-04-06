@@ -139,6 +139,7 @@ extern void MultiXactGetCheckptMulti(bool is_shutdown,
 									 MultiXactId *oldestMulti,
 									 Oid *oldestMultiDB);
 extern void CheckPointMultiXact(void);
+extern MultiXactId GetOurOldestMultiXactId(void);
 extern MultiXactId GetOldestMultiXactId(void);
 extern void TruncateMultiXact(MultiXactId oldestMulti, Oid oldestMultiDB);
 extern void MultiXactSetNextMXact(MultiXactId nextMulti,

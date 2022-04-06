@@ -201,6 +201,7 @@ struct XLogReaderState
 	 */
 	XLogRecPtr	ReadRecPtr;		/* start of last record read */
 	XLogRecPtr	EndRecPtr;		/* end+1 of last record read */
+	bool		EndOfWAL;		/* was the last attempt EOW? */
 
 	/*
 	 * Set at the end of recovery: the start point of a partial record at the

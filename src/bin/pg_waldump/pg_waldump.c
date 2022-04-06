@@ -1310,9 +1310,16 @@ main(int argc, char **argv)
 		exit(0);
 
 	if (errormsg)
-		fatal_error("error in WAL record at %X/%X: %s",
-					LSN_FORMAT_ARGS(xlogreader_state->ReadRecPtr),
-					errormsg);
+	{
+		if (xlogreader_state->EndOfWAL)
+			pg_log_info("end of WAL at %X/%X: %s",
+						LSN_FORMAT_ARGS(xlogreader_state->EndRecPtr),
+						errormsg);
+		else
+			fatal_error("error in WAL record at %X/%X: %s",
+						LSN_FORMAT_ARGS(xlogreader_state->EndRecPtr),
+						errormsg);
+	}
 
 	XLogReaderFree(xlogreader_state);
 

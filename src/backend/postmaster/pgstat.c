@@ -37,6 +37,7 @@
 #include "access/tableam.h"
 #include "access/transam.h"
 #include "access/xact.h"
+#include "access/xlogprefetcher.h"
 #include "catalog/catalog.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_proc.h"
@@ -1125,11 +1126,16 @@ pgstat_reset_shared_counters(const char *target)
 		msg.m_resettarget = RESET_BGWRITER;
 	else if (strcmp(target, "wal") == 0)
 		msg.m_resettarget = RESET_WAL;
+	else if (strcmp(target, "prefetch_recovery") == 0)
+	{
+		XLogPrefetchRequestResetStats();
+		return;
+	}
 	else
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("unrecognized reset target: \"%s\"", target),
-				 errhint("Target must be \"archiver\", \"bgwriter\", or \"wal\".")));
+				 errhint("Target must be \"archiver\", \"bgwriter\", \"wal\", or \"prefetch_recovery\".")));
 
 	pgstat_setheader(&msg.m_hdr, PGSTAT_MTYPE_RESETSHAREDCOUNTER);
 	pgstat_send(&msg, sizeof(msg));

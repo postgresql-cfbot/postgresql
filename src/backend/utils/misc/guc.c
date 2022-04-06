@@ -216,7 +216,6 @@ static bool check_effective_io_concurrency(int *newval, void **extra, GucSource 
 static bool check_maintenance_io_concurrency(int *newval, void **extra, GucSource source);
 static bool check_huge_page_size(int *newval, void **extra, GucSource source);
 static bool check_client_connection_check_interval(int *newval, void **extra, GucSource source);
-static void assign_pgstat_temp_directory(const char *newval, void *extra);
 static bool check_application_name(char **newval, void **extra, GucSource source);
 static void assign_application_name(const char *newval, void *extra);
 static bool check_cluster_name(char **newval, void **extra, GucSource source);
@@ -372,6 +371,16 @@ static const struct config_enum_entry track_function_options[] = {
 };
 
 StaticAssertDecl(lengthof(track_function_options) == (TRACK_FUNC_ALL + 2),
+				 "array length mismatch");
+
+static const struct config_enum_entry stats_fetch_consistency[] = {
+	{"none", PGSTAT_FETCH_CONSISTENCY_NONE, false},
+	{"cache", PGSTAT_FETCH_CONSISTENCY_CACHE, false},
+	{"snapshot", PGSTAT_FETCH_CONSISTENCY_SNAPSHOT, false},
+	{NULL, 0, false}
+};
+
+StaticAssertDecl(lengthof(stats_fetch_consistency) == (PGSTAT_FETCH_CONSISTENCY_SNAPSHOT + 2),
 				 "array length mismatch");
 
 static const struct config_enum_entry xmlbinary_options[] = {
@@ -800,8 +809,8 @@ const char *const config_group_names[] =
 	gettext_noop("Reporting and Logging / Process Title"),
 	/* STATS_MONITORING */
 	gettext_noop("Statistics / Monitoring"),
-	/* STATS_COLLECTOR */
-	gettext_noop("Statistics / Query and Index Statistics Collector"),
+	/* STATS_CUMULATIVE */
+	gettext_noop("Statistics / Cumulative Query and Index Statistics"),
 	/* AUTOVACUUM */
 	gettext_noop("Autovacuum"),
 	/* CLIENT_CONN_STATEMENT */
@@ -1538,7 +1547,7 @@ static struct config_bool ConfigureNamesBool[] =
 #endif
 
 	{
-		{"track_activities", PGC_SUSET, STATS_COLLECTOR,
+		{"track_activities", PGC_SUSET, STATS_CUMULATIVE,
 			gettext_noop("Collects information about executing commands."),
 			gettext_noop("Enables the collection of information on the currently "
 						 "executing command of each session, along with "
@@ -1549,7 +1558,7 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
-		{"track_counts", PGC_SUSET, STATS_COLLECTOR,
+		{"track_counts", PGC_SUSET, STATS_CUMULATIVE,
 			gettext_noop("Collects statistics on database activity."),
 			NULL
 		},
@@ -1558,7 +1567,7 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
-		{"track_io_timing", PGC_SUSET, STATS_COLLECTOR,
+		{"track_io_timing", PGC_SUSET, STATS_CUMULATIVE,
 			gettext_noop("Collects timing statistics for database I/O activity."),
 			NULL
 		},
@@ -1567,7 +1576,7 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
-		{"track_wal_io_timing", PGC_SUSET, STATS_COLLECTOR,
+		{"track_wal_io_timing", PGC_SUSET, STATS_CUMULATIVE,
 			gettext_noop("Collects timing statistics for WAL I/O activity."),
 			NULL
 		},
@@ -3529,7 +3538,7 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
-		{"track_activity_query_size", PGC_POSTMASTER, STATS_COLLECTOR,
+		{"track_activity_query_size", PGC_POSTMASTER, STATS_CUMULATIVE,
 			gettext_noop("Sets the size reserved for pg_stat_activity.query, in bytes."),
 			NULL,
 			GUC_UNIT_BYTE
@@ -4550,17 +4559,6 @@ static struct config_string ConfigureNamesString[] =
 	},
 
 	{
-		{"stats_temp_directory", PGC_SIGHUP, STATS_COLLECTOR,
-			gettext_noop("Writes temporary statistics files to the specified directory."),
-			NULL,
-			GUC_SUPERUSER_ONLY
-		},
-		&pgstat_temp_directory,
-		PG_STAT_TMP_DIR,
-		check_canonical_path, assign_pgstat_temp_directory, NULL
-	},
-
-	{
 		{"synchronous_standby_names", PGC_SIGHUP, REPLICATION_PRIMARY,
 			gettext_noop("Number of synchronous standbys and list of names of potential synchronous ones."),
 			NULL,
@@ -4908,12 +4906,23 @@ static struct config_enum ConfigureNamesEnum[] =
 	},
 
 	{
-		{"track_functions", PGC_SUSET, STATS_COLLECTOR,
+		{"track_functions", PGC_SUSET, STATS_CUMULATIVE,
 			gettext_noop("Collects function-level statistics on database activity."),
 			NULL
 		},
 		&pgstat_track_functions,
 		TRACK_FUNC_OFF, track_function_options,
+		NULL, NULL, NULL
+	},
+
+
+	{
+		{"stats_fetch_consistency", PGC_USERSET, STATS_CUMULATIVE,
+			gettext_noop("Sets the consistency of accesses to statistics data"),
+			NULL
+		},
+		&pgstat_fetch_consistency,
+		PGSTAT_FETCH_CONSISTENCY_CACHE, stats_fetch_consistency,
 		NULL, NULL, NULL
 	},
 
@@ -12248,35 +12257,6 @@ check_client_connection_check_interval(int *newval, void **extra, GucSource sour
 		return false;
 	}
 	return true;
-}
-
-static void
-assign_pgstat_temp_directory(const char *newval, void *extra)
-{
-	/* check_canonical_path already canonicalized newval for us */
-	char	   *dname;
-	char	   *tname;
-	char	   *fname;
-
-	/* directory */
-	dname = guc_malloc(ERROR, strlen(newval) + 1);	/* runtime dir */
-	sprintf(dname, "%s", newval);
-
-	/* global stats */
-	tname = guc_malloc(ERROR, strlen(newval) + 12); /* /global.tmp */
-	sprintf(tname, "%s/global.tmp", newval);
-	fname = guc_malloc(ERROR, strlen(newval) + 13); /* /global.stat */
-	sprintf(fname, "%s/global.stat", newval);
-
-	if (pgstat_stat_directory)
-		free(pgstat_stat_directory);
-	pgstat_stat_directory = dname;
-	if (pgstat_stat_tmpname)
-		free(pgstat_stat_tmpname);
-	pgstat_stat_tmpname = tname;
-	if (pgstat_stat_filename)
-		free(pgstat_stat_filename);
-	pgstat_stat_filename = fname;
 }
 
 static bool

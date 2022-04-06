@@ -1869,7 +1869,7 @@ AdvanceXLInsertBuffer(XLogRecPtr upto, TimeLineID tli, bool opportunistic)
 					WriteRqst.Flush = 0;
 					XLogWrite(WriteRqst, tli, false);
 					LWLockRelease(WALWriteLock);
-					WalStats.m_wal_buffers_full++;
+					PendingWalStats.wal_buffers_full++;
 					TRACE_POSTGRESQL_WAL_BUFFER_WRITE_DIRTY_DONE();
 				}
 				/* Re-acquire WALBufMappingLock and retry */
@@ -2227,10 +2227,10 @@ XLogWrite(XLogwrtRqst WriteRqst, TimeLineID tli, bool flexible)
 
 					INSTR_TIME_SET_CURRENT(duration);
 					INSTR_TIME_SUBTRACT(duration, start);
-					WalStats.m_wal_write_time += INSTR_TIME_GET_MICROSEC(duration);
+					PendingWalStats.wal_write_time += INSTR_TIME_GET_MICROSEC(duration);
 				}
 
-				WalStats.m_wal_write++;
+				PendingWalStats.wal_write++;
 
 				if (written <= 0)
 				{
@@ -4904,6 +4904,7 @@ StartupXLOG(void)
 	XLogCtlInsert *Insert;
 	CheckPoint	checkPoint;
 	bool		wasShutdown;
+	bool		didCrash;
 	bool		haveTblspcMap;
 	bool		haveBackupLabel;
 	XLogRecPtr	EndOfLog;
@@ -5021,7 +5022,10 @@ StartupXLOG(void)
 	{
 		RemoveTempXlogFiles();
 		SyncDataDirectory();
+		didCrash = true;
 	}
+	else
+		didCrash = false;
 
 	/*
 	 * Prepare for WAL recovery if needed.
@@ -5133,6 +5137,22 @@ StartupXLOG(void)
 	 */
 	restoreTwoPhaseData();
 
+	/*
+	 * When starting with crash recovery, reset pgstat data - it might not be
+	 * valid. Otherwise restore pgstat data. It's safe to do this here,
+	 * because postmaster will not yet have started any other processes.
+	 *
+	 * NB: Restoring replication slot stats relies on slot state to have
+	 * already been restored from disk.
+	 *
+	 * TODO: With a bit of extra work we could just start with a pgstat file
+	 * associated with the checkpoint redo location we're starting from.
+	 */
+	if (didCrash)
+		pgstat_discard_stats();
+	else
+		pgstat_restore_stats();
+
 	lastFullPageWrites = checkPoint.fullPageWrites;
 
 	RedoRecPtr = XLogCtl->RedoRecPtr = XLogCtl->Insert.RedoRecPtr = checkPoint.redo;
@@ -5206,11 +5226,6 @@ StartupXLOG(void)
 			LocalMinRecoveryPoint = InvalidXLogRecPtr;
 			LocalMinRecoveryPointTLI = 0;
 		}
-
-		/*
-		 * Reset pgstat data, because it may be invalid after recovery.
-		 */
-		pgstat_reset_all();
 
 		/* Check that the GUCs used to generate the WAL allow recovery */
 		CheckRequiredParameterValues();
@@ -5302,7 +5317,9 @@ StartupXLOG(void)
 		performedWalRecovery = true;
 	}
 	else
+	{
 		performedWalRecovery = false;
+	}
 
 	/*
 	 * Finish WAL recovery.
@@ -6104,8 +6121,8 @@ LogCheckpointEnd(bool restartpoint)
 												 CheckpointStats.ckpt_sync_end_t);
 
 	/* Accumulate checkpoint timing summary data, in milliseconds. */
-	PendingCheckpointerStats.m_checkpoint_write_time += write_msecs;
-	PendingCheckpointerStats.m_checkpoint_sync_time += sync_msecs;
+	PendingCheckpointerStats.checkpoint_write_time += write_msecs;
+	PendingCheckpointerStats.checkpoint_sync_time += sync_msecs;
 
 	/*
 	 * All of the published timing statistics are accounted for.  Only
@@ -8032,10 +8049,10 @@ issue_xlog_fsync(int fd, XLogSegNo segno, TimeLineID tli)
 
 		INSTR_TIME_SET_CURRENT(duration);
 		INSTR_TIME_SUBTRACT(duration, start);
-		WalStats.m_wal_sync_time += INSTR_TIME_GET_MICROSEC(duration);
+		PendingWalStats.wal_sync_time += INSTR_TIME_GET_MICROSEC(duration);
 	}
 
-	WalStats.m_wal_sync++;
+	PendingWalStats.wal_sync++;
 }
 
 /*

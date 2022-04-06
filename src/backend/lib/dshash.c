@@ -604,8 +604,8 @@ dshash_memhash(const void *v, size_t size, void *arg)
  * Sequentially scan through dshash table and return all the elements one by
  * one, return NULL when all elements have been returned.
  *
- * dshash_seq_term needs to be called when a scan finished.  The caller may
- * delete returned elements midst of a scan by using dshash_delete_current()
+ * dshash_seq_term needs to be called when a scan is finished.  The caller may
+ * delete returned elements middle of a scan by using dshash_delete_current()
  * if exclusive = true.
  */
 void

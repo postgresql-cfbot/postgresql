@@ -99,9 +99,6 @@ static int	basebackup_read_file(int fd, char *buf, size_t nbytes, off_t offset,
 /* Was the backup currently in-progress initiated in recovery mode? */
 static bool backup_started_in_recovery = false;
 
-/* Relative path of temporary statistics directory */
-static char *statrelpath = NULL;
-
 /* Total number of checksum failures during base backup. */
 static long long int total_checksum_failures;
 
@@ -131,9 +128,8 @@ struct exclude_list_item
 static const char *const excludeDirContents[] =
 {
 	/*
-	 * Skip temporary statistics files. PG_STAT_TMP_DIR must be skipped even
-	 * when stats_temp_directory is set because PGSS_TEXT_FILE is always
-	 * created there.
+	 * Skip temporary statistics files. PG_STAT_TMP_DIR must be skipped
+	 * because extensions like pg_stat_statements store data there.
 	 */
 	PG_STAT_TMP_DIR,
 
@@ -239,7 +235,6 @@ perform_base_backup(basebackup_options *opt, bbsink *sink)
 	StringInfo	labelfile;
 	StringInfo	tblspc_map_file;
 	backup_manifest_info manifest;
-	int			datadirpathlen;
 
 	/* Initial backup state, insofar as we know it now. */
 	state.tablespaces = NIL;
@@ -251,8 +246,6 @@ perform_base_backup(basebackup_options *opt, bbsink *sink)
 	/* we're going to use a BufFile, so we need a ResourceOwner */
 	Assert(CurrentResourceOwner == NULL);
 	CurrentResourceOwner = ResourceOwnerCreate(NULL, "base backup");
-
-	datadirpathlen = strlen(DataDir);
 
 	backup_started_in_recovery = RecoveryInProgress();
 
@@ -280,18 +273,6 @@ perform_base_backup(basebackup_options *opt, bbsink *sink)
 	{
 		ListCell   *lc;
 		tablespaceinfo *ti;
-
-		/*
-		 * Calculate the relative path of temporary statistics directory in
-		 * order to skip the files which are located in that directory later.
-		 */
-		if (is_absolute_path(pgstat_stat_directory) &&
-			strncmp(pgstat_stat_directory, DataDir, datadirpathlen) == 0)
-			statrelpath = psprintf("./%s", pgstat_stat_directory + datadirpathlen + 1);
-		else if (strncmp(pgstat_stat_directory, "./", 2) != 0)
-			statrelpath = psprintf("./%s", pgstat_stat_directory);
-		else
-			statrelpath = pgstat_stat_directory;
 
 		/* Add a node for the base directory at the end */
 		ti = palloc0(sizeof(tablespaceinfo));
@@ -1313,19 +1294,6 @@ sendDir(bbsink *sink, const char *path, int basepathlen, bool sizeonly,
 			continue;
 
 		/*
-		 * Exclude contents of directory specified by statrelpath if not set
-		 * to the default (pg_stat_tmp) which is caught in the loop above.
-		 */
-		if (statrelpath != NULL && strcmp(pathbuf, statrelpath) == 0)
-		{
-			elog(DEBUG1, "contents of directory \"%s\" excluded from backup", statrelpath);
-			convert_link_to_directory(pathbuf, &statbuf);
-			size += _tarWriteHeader(sink, pathbuf + basepathlen + 1, NULL,
-									&statbuf, sizeonly);
-			continue;
-		}
-
-		/*
 		 * We can skip pg_wal, the WAL segments need to be fetched from the
 		 * WAL archive anyway. But include it as an empty directory anyway, so
 		 * we get permissions right.
@@ -1507,8 +1475,8 @@ is_checksummed_file(const char *fullpath, const char *filename)
  *
  * If 'missing_ok' is true, will not throw an error if the file is not found.
  *
- * If dboid is anything other than InvalidOid then any checksum failures detected
- * will get reported to the stats collector.
+ * If dboid is anything other than InvalidOid then any checksum failures
+ * detected will get reported to the cumulative stats system.
  *
  * Returns true if the file was successfully sent, false if 'missing_ok',
  * and the file did not exist.

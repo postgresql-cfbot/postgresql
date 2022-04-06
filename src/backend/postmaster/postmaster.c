@@ -255,7 +255,6 @@ static pid_t StartupPID = 0,
 			WalReceiverPID = 0,
 			AutoVacPID = 0,
 			PgArchPID = 0,
-			PgStatPID = 0,
 			SysLoggerPID = 0;
 
 /* Startup process's status */
@@ -517,7 +516,6 @@ typedef struct
 	PGPROC	   *AuxiliaryProcs;
 	PGPROC	   *PreparedXactProcs;
 	PMSignalData *PMSignalState;
-	InheritableSocket pgStatSock;
 	pid_t		PostmasterPid;
 	TimestampTz PgStartTime;
 	TimestampTz PgReloadTime;
@@ -652,9 +650,8 @@ PostmasterMain(int argc, char *argv[])
 	 * CAUTION: when changing this list, check for side-effects on the signal
 	 * handling setup of child processes.  See tcop/postgres.c,
 	 * bootstrap/bootstrap.c, postmaster/bgwriter.c, postmaster/walwriter.c,
-	 * postmaster/autovacuum.c, postmaster/pgarch.c, postmaster/pgstat.c,
-	 * postmaster/syslogger.c, postmaster/bgworker.c and
-	 * postmaster/checkpointer.c.
+	 * postmaster/autovacuum.c, postmaster/pgarch.c, postmaster/syslogger.c,
+	 * postmaster/bgworker.c and postmaster/checkpointer.c.
 	 */
 	pqinitmask();
 	PG_SETMASK(&BlockSig);
@@ -1392,12 +1389,6 @@ PostmasterMain(int argc, char *argv[])
 	RemovePgTempFiles();
 
 	/*
-	 * Initialize stats collection subsystem (this does NOT start the
-	 * collector process!)
-	 */
-	pgstat_init();
-
-	/*
 	 * Initialize the autovacuum subsystem (again, no process start yet)
 	 */
 	autovac_init();
@@ -1851,11 +1842,6 @@ ServerLoop(void)
 			if (AutoVacPID != 0)
 				start_autovac_launcher = false; /* signal processed */
 		}
-
-		/* If we have lost the stats collector, try to start a new one */
-		if (PgStatPID == 0 &&
-			(pmState == PM_RUN || pmState == PM_HOT_STANDBY))
-			PgStatPID = pgstat_start();
 
 		/* If we have lost the archiver, try to start a new one. */
 		if (PgArchPID == 0 && PgArchStartupAllowed())
@@ -2791,8 +2777,6 @@ SIGHUP_handler(SIGNAL_ARGS)
 			signal_child(PgArchPID, SIGHUP);
 		if (SysLoggerPID != 0)
 			signal_child(SysLoggerPID, SIGHUP);
-		if (PgStatPID != 0)
-			signal_child(PgStatPID, SIGHUP);
 
 		/* Reload authentication config files too */
 		if (!load_hba())
@@ -3121,8 +3105,6 @@ reaper(SIGNAL_ARGS)
 				AutoVacPID = StartAutoVacLauncher();
 			if (PgArchStartupAllowed() && PgArchPID == 0)
 				PgArchPID = StartArchiver();
-			if (PgStatPID == 0)
-				PgStatPID = pgstat_start();
 
 			/* workers may be scheduled to start now */
 			maybe_start_bgworkers();
@@ -3189,13 +3171,6 @@ reaper(SIGNAL_ARGS)
 				SignalChildren(SIGUSR2);
 
 				pmState = PM_SHUTDOWN_2;
-
-				/*
-				 * We can also shut down the stats collector now; there's
-				 * nothing left for it to do.
-				 */
-				if (PgStatPID != 0)
-					signal_child(PgStatPID, SIGQUIT);
 			}
 			else
 			{
@@ -3271,22 +3246,6 @@ reaper(SIGNAL_ARGS)
 								 _("archiver process"));
 			if (PgArchStartupAllowed())
 				PgArchPID = StartArchiver();
-			continue;
-		}
-
-		/*
-		 * Was it the statistics collector?  If so, just try to start a new
-		 * one; no need to force reset of the rest of the system.  (If fail,
-		 * we'll try again in future cycles of the main loop.)
-		 */
-		if (pid == PgStatPID)
-		{
-			PgStatPID = 0;
-			if (!EXIT_STATUS_0(exitstatus))
-				LogChildExit(LOG, _("statistics collector process"),
-							 pid, exitstatus);
-			if (pmState == PM_RUN || pmState == PM_HOT_STANDBY)
-				PgStatPID = pgstat_start();
 			continue;
 		}
 
@@ -3731,22 +3690,6 @@ HandleChildCrash(int pid, int exitstatus, const char *procname)
 		signal_child(PgArchPID, (SendStop ? SIGSTOP : SIGQUIT));
 	}
 
-	/*
-	 * Force a power-cycle of the pgstat process too.  (This isn't absolutely
-	 * necessary, but it seems like a good idea for robustness, and it
-	 * simplifies the state-machine logic in the case where a shutdown request
-	 * arrives during crash processing.)
-	 */
-	if (PgStatPID != 0 && take_action)
-	{
-		ereport(DEBUG2,
-				(errmsg_internal("sending %s to process %d",
-								 "SIGQUIT",
-								 (int) PgStatPID)));
-		signal_child(PgStatPID, SIGQUIT);
-		allow_immediate_pgstat_restart();
-	}
-
 	/* We do NOT restart the syslogger */
 
 	if (Shutdown != ImmediateShutdown)
@@ -3968,12 +3911,10 @@ PostmasterStateMachine(void)
 					FatalError = true;
 					pmState = PM_WAIT_DEAD_END;
 
-					/* Kill the walsenders, archiver and stats collector too */
+					/* Kill the walsenders and archiver too */
 					SignalChildren(SIGQUIT);
 					if (PgArchPID != 0)
 						signal_child(PgArchPID, SIGQUIT);
-					if (PgStatPID != 0)
-						signal_child(PgStatPID, SIGQUIT);
 				}
 			}
 		}
@@ -3997,8 +3938,7 @@ PostmasterStateMachine(void)
 	{
 		/*
 		 * PM_WAIT_DEAD_END state ends when the BackendList is entirely empty
-		 * (ie, no dead_end children remain), and the archiver and stats
-		 * collector are gone too.
+		 * (ie, no dead_end children remain), and the archiver is gone too.
 		 *
 		 * The reason we wait for those two is to protect them against a new
 		 * postmaster starting conflicting subprocesses; this isn't an
@@ -4008,8 +3948,7 @@ PostmasterStateMachine(void)
 		 * normal state transition leading up to PM_WAIT_DEAD_END, or during
 		 * FatalError processing.
 		 */
-		if (dlist_is_empty(&BackendList) &&
-			PgArchPID == 0 && PgStatPID == 0)
+		if (dlist_is_empty(&BackendList) && PgArchPID == 0)
 		{
 			/* These other guys should be dead already */
 			Assert(StartupPID == 0);
@@ -4229,8 +4168,6 @@ TerminateChildren(int signal)
 		signal_child(AutoVacPID, signal);
 	if (PgArchPID != 0)
 		signal_child(PgArchPID, signal);
-	if (PgStatPID != 0)
-		signal_child(PgStatPID, signal);
 }
 
 /*
@@ -5162,12 +5099,6 @@ SubPostmasterMain(int argc, char *argv[])
 
 		StartBackgroundWorker();
 	}
-	if (strcmp(argv[1], "--forkcol") == 0)
-	{
-		/* Do not want to attach to shared memory */
-
-		PgstatCollectorMain(argc, argv);	/* does not return */
-	}
 	if (strcmp(argv[1], "--forklog") == 0)
 	{
 		/* Do not want to attach to shared memory */
@@ -5271,12 +5202,6 @@ sigusr1_handler(SIGNAL_ARGS)
 	if (CheckPostmasterSignal(PMSIGNAL_BEGIN_HOT_STANDBY) &&
 		pmState == PM_RECOVERY && Shutdown == NoShutdown)
 	{
-		/*
-		 * Likewise, start other special children as needed.
-		 */
-		Assert(PgStatPID == 0);
-		PgStatPID = pgstat_start();
-
 		ereport(LOG,
 				(errmsg("database system is ready to accept read-only connections")));
 
@@ -6192,7 +6117,6 @@ extern slock_t *ShmemLock;
 extern slock_t *ProcStructLock;
 extern PGPROC *AuxiliaryProcs;
 extern PMSignalData *PMSignalState;
-extern pgsocket pgStatSock;
 extern pg_time_t first_syslogger_file_time;
 
 #ifndef WIN32
@@ -6248,8 +6172,6 @@ save_backend_variables(BackendParameters *param, Port *port,
 	param->AuxiliaryProcs = AuxiliaryProcs;
 	param->PreparedXactProcs = PreparedXactProcs;
 	param->PMSignalState = PMSignalState;
-	if (!write_inheritable_socket(&param->pgStatSock, pgStatSock, childPid))
-		return false;
 
 	param->PostmasterPid = PostmasterPid;
 	param->PgStartTime = PgStartTime;
@@ -6483,7 +6405,6 @@ restore_backend_variables(BackendParameters *param, Port *port)
 	AuxiliaryProcs = param->AuxiliaryProcs;
 	PreparedXactProcs = param->PreparedXactProcs;
 	PMSignalState = param->PMSignalState;
-	read_inheritable_socket(&pgStatSock, &param->pgStatSock);
 
 	PostmasterPid = param->PostmasterPid;
 	PgStartTime = param->PgStartTime;
@@ -6522,8 +6443,6 @@ restore_backend_variables(BackendParameters *param, Port *port)
 	if (postmaster_alive_fds[1] >= 0)
 		ReserveExternalFD();
 #endif
-	if (pgStatSock != PGINVALID_SOCKET)
-		ReserveExternalFD();
 }
 
 

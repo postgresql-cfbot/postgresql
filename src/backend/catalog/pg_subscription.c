@@ -71,6 +71,7 @@ GetSubscription(Oid subid, bool missing_ok)
 	sub->twophasestate = subform->subtwophasestate;
 	sub->disableonerr = subform->subdisableonerr;
 	sub->skiplsn = subform->subskiplsn;
+	sub->applydelay = subform->subapplydelay;
 
 	/* Get conninfo */
 	datum = SysCacheGetAttr(SUBSCRIPTIONOID,

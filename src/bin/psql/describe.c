@@ -6280,7 +6280,7 @@ describeSubscriptions(const char *pattern, bool verbose)
 	PGresult   *res;
 	printQueryOpt myopt = pset.popt;
 	static const bool translate_columns[] = {false, false, false, false,
-	false, false, false, false, false, false, false};
+	false, false, false, false, false, false, false, false};
 
 	if (pset.sversion < 100000)
 	{
@@ -6314,13 +6314,18 @@ describeSubscriptions(const char *pattern, bool verbose)
 							  gettext_noop("Binary"),
 							  gettext_noop("Streaming"));
 
-		/* Two_phase and disable_on_error are only supported in v15 and higher */
+		/*
+		 * two_phase, disable_on_error and min_apply_delay are only supported
+		 * in v15 and higher.
+		 */
 		if (pset.sversion >= 150000)
 			appendPQExpBuffer(&buf,
 							  ", subtwophasestate AS \"%s\"\n"
-							  ", subdisableonerr AS \"%s\"\n",
+							  ", subdisableonerr AS \"%s\"\n"
+							  ", subapplydelay AS \"%s\"\n",
 							  gettext_noop("Two phase commit"),
-							  gettext_noop("Disable on error"));
+							  gettext_noop("Disable on error"),
+							  gettext_noop("Apply delay"));
 
 		appendPQExpBuffer(&buf,
 						  ",  subsynccommit AS \"%s\"\n"

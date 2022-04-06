@@ -253,6 +253,7 @@ WalReceiverConn *LogRepWorkerWalRcvConn = NULL;
 
 Subscription *MySubscription = NULL;
 bool		MySubscriptionValid = false;
+TimestampTz	MySubscriptionMinApplyDelayUntil = 0;
 
 bool		in_remote_transaction = false;
 static XLogRecPtr remote_final_lsn = InvalidXLogRecPtr;
@@ -324,6 +325,8 @@ static void store_flush_position(XLogRecPtr remote_lsn);
 static void maybe_reread_subscription(void);
 
 static void DisableSubscriptionAndExit(void);
+
+static void apply_delay(TimestampTz ts);
 
 /* prototype needed because of stream_commit */
 static void apply_dispatch(StringInfo s);
@@ -806,6 +809,58 @@ slot_modify_data(TupleTableSlot *slot, TupleTableSlot *srcslot,
 }
 
 /*
+ * Apply the informed delay for the transaction.
+ *
+ * A regular transaction uses the commit time to calculate the delay. A
+ * prepared transaction uses the prepare time to calculate the delay (the
+ * commit time is unknown at prepare time).
+ *
+ * FIXME A streamed transaction could be delayed too but there is no timestamp
+ * in the STREAM START protocol message. Hence, if it is a streamed (regular or
+ * prepared) transaction, no delay is applied.
+ */
+static void
+apply_delay(TimestampTz ts)
+{
+	/* nothing to do if no delay set */
+	if (MySubscription->applydelay <= 0)
+		return;
+
+	/* set apply delay */
+	MySubscriptionMinApplyDelayUntil = TimestampTzPlusMilliseconds(TimestampTzGetDatum(ts),
+												MySubscription->applydelay);
+
+	while (true)
+	{
+		int			diffms;
+
+		diffms = TimestampDifferenceMilliseconds(GetCurrentTimestamp(), MySubscriptionMinApplyDelayUntil);
+
+		elog(DEBUG2, "logical replication apply delay: %u ms", diffms);
+
+		/*
+		 * Exit without arming the latch if it's already past time to apply
+		 * this transaction.
+		 */
+		if (diffms <= 0)
+			break;
+
+		WaitLatch(MyLatch,
+				  WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+				  diffms,
+				  WAIT_EVENT_RECOVERY_APPLY_DELAY);
+		ResetLatch(MyLatch);
+
+		CHECK_FOR_INTERRUPTS();
+	}
+
+	/*
+	 * Delay applied. Reset state.
+	 */
+	MySubscriptionMinApplyDelayUntil = 0;
+}
+
+/*
  * Handle BEGIN message.
  */
 static void
@@ -815,6 +870,9 @@ apply_handle_begin(StringInfo s)
 
 	logicalrep_read_begin(s, &begin_data);
 	set_apply_error_context_xact(begin_data.xid, begin_data.final_lsn);
+
+	/* Should we delay the current transaction? */
+	apply_delay(begin_data.committime);
 
 	remote_final_lsn = begin_data.final_lsn;
 
@@ -869,6 +927,9 @@ apply_handle_begin_prepare(StringInfo s)
 
 	logicalrep_read_begin_prepare(s, &begin_data);
 	set_apply_error_context_xact(begin_data.xid, begin_data.prepare_lsn);
+
+	/* Should we delay the current prepared transaction? */
+	apply_delay(begin_data.prepare_time);
 
 	remote_final_lsn = begin_data.prepare_lsn;
 

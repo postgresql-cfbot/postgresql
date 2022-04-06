@@ -70,6 +70,7 @@ CATALOG(pg_subscription,6100,SubscriptionRelationId) BKI_SHARED_RELATION BKI_ROW
 
 	bool		subdisableonerr;	/* True if a worker error should cause the
 									 * subscription to be disabled */
+	int64		subapplydelay;		/* Replication apply delay */
 
 	XLogRecPtr	subskiplsn;		/* All changes finished at this LSN are
 								 * skipped */
@@ -115,6 +116,7 @@ typedef struct Subscription
 								 * occurs */
 	XLogRecPtr	skiplsn;		/* All changes finished at this LSN are
 								 * skipped */
+	int64		applydelay;		/* Replication apply delay */
 	char	   *conninfo;		/* Connection string to the publisher */
 	char	   *slotname;		/* Name of the replication slot */
 	char	   *synccommit;		/* Synchronous commit setting for worker */

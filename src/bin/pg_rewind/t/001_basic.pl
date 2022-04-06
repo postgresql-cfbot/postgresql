@@ -190,5 +190,6 @@ in primary, before promotion
 run_test('local');
 run_test('remote');
 run_test('archive');
+run_test('archive_cli');
 
 done_testing();

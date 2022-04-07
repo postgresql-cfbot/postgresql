@@ -33,7 +33,7 @@ static const char *map_typename_pattern(const char *pattern);
 static bool describeOneTableDetails(const char *schemaname,
 									const char *relationname,
 									const char *oid,
-									bool verbose);
+									int verbose);
 static void add_tablespace_footer(printTableContent *const cont, char relkind,
 								  Oid tablespace, const bool newline);
 static void add_role_attribute(PQExpBuffer buf, const char *const str);
@@ -62,7 +62,7 @@ static bool listOneExtensionContents(const char *extname, const char *oid);
  * Takes an optional regexp to select particular aggregates
  */
 bool
-describeAggregates(const char *pattern, bool verbose, bool showSystem)
+describeAggregates(const char *pattern, int verbose, bool showSystem)
 {
 	PQExpBufferData buf;
 	PGresult   *res;
@@ -128,12 +128,12 @@ describeAggregates(const char *pattern, bool verbose, bool showSystem)
  * Takes an optional regexp to select particular access methods
  */
 bool
-describeAccessMethods(const char *pattern, bool verbose)
+describeAccessMethods(const char *pattern, int verbose)
 {
 	PQExpBufferData buf;
 	PGresult   *res;
 	printQueryOpt myopt = pset.popt;
-	static const bool translate_columns[] = {false, true, false, false};
+	static const bool translate_columns[] = {false, true, false, false, false};
 
 	if (pset.sversion < 90600)
 	{
@@ -158,13 +158,18 @@ describeAccessMethods(const char *pattern, bool verbose)
 					  gettext_noop("Table"),
 					  gettext_noop("Type"));
 
-	if (verbose)
+	if (verbose > 0)
 	{
 		appendPQExpBuffer(&buf,
 						  ",\n  amhandler AS \"%s\",\n"
 						  "  pg_catalog.obj_description(oid, 'pg_am') AS \"%s\"",
 						  gettext_noop("Handler"),
 						  gettext_noop("Description"));
+
+		if (verbose > 1 && pset.sversion >= 150000)
+			appendPQExpBuffer(&buf,
+							  ",\n  pg_catalog.pg_size_pretty(pg_catalog.pg_am_size(oid)) AS \"%s\"",
+							  gettext_noop("Size"));
 	}
 
 	appendPQExpBufferStr(&buf,
@@ -198,7 +203,7 @@ describeAccessMethods(const char *pattern, bool verbose)
  * Takes an optional regexp to select particular tablespaces
  */
 bool
-describeTablespaces(const char *pattern, bool verbose)
+describeTablespaces(const char *pattern, int verbose)
 {
 	PQExpBufferData buf;
 	PGresult   *res;
@@ -214,18 +219,22 @@ describeTablespaces(const char *pattern, bool verbose)
 					  gettext_noop("Owner"),
 					  gettext_noop("Location"));
 
-	if (verbose)
+	if (verbose > 0)
 	{
 		appendPQExpBufferStr(&buf, ",\n  ");
 		printACLColumn(&buf, "spcacl");
+
 		appendPQExpBuffer(&buf,
 						  ",\n  spcoptions AS \"%s\""
-						  ",\n  pg_catalog.pg_size_pretty(pg_catalog.pg_tablespace_size(oid)) AS \"%s\""
 						  ",\n  pg_catalog.shobj_description(oid, 'pg_tablespace') AS \"%s\"",
 						  gettext_noop("Options"),
-						  gettext_noop("Size"),
 						  gettext_noop("Description"));
 	}
+
+	if (verbose > 1)
+		appendPQExpBuffer(&buf,
+						  ",\n  pg_catalog.pg_size_pretty(pg_catalog.pg_tablespace_size(oid)) AS \"%s\"",
+						  gettext_noop("Size"));
 
 	appendPQExpBufferStr(&buf,
 						 "\nFROM pg_catalog.pg_tablespace\n");
@@ -269,7 +278,7 @@ describeTablespaces(const char *pattern, bool verbose)
 bool
 describeFunctions(const char *functypes, const char *func_pattern,
 				  char **arg_patterns, int num_arg_patterns,
-				  bool verbose, bool showSystem)
+				  int verbose, bool showSystem)
 {
 	bool		showAggregate = strchr(functypes, 'a') != NULL;
 	bool		showNormal = strchr(functypes, 'n') != NULL;
@@ -354,7 +363,7 @@ describeFunctions(const char *functypes, const char *func_pattern,
 						  gettext_noop("func"),
 						  gettext_noop("Type"));
 
-	if (verbose)
+	if (verbose > 0)
 	{
 		appendPQExpBuffer(&buf,
 						  ",\n CASE\n"
@@ -414,7 +423,7 @@ describeFunctions(const char *functypes, const char *func_pattern,
 						  i, i, i, i, i, i);
 	}
 
-	if (verbose)
+	if (verbose > 0)
 		appendPQExpBufferStr(&buf,
 							 "     LEFT JOIN pg_catalog.pg_language l ON l.oid = p.prolang\n");
 
@@ -592,7 +601,7 @@ describeFunctions(const char *functypes, const char *func_pattern,
  * describe types
  */
 bool
-describeTypes(const char *pattern, bool verbose, bool showSystem)
+describeTypes(const char *pattern, int verbose, bool showSystem)
 {
 	PQExpBufferData buf;
 	PGresult   *res;
@@ -605,7 +614,7 @@ describeTypes(const char *pattern, bool verbose, bool showSystem)
 					  "  pg_catalog.format_type(t.oid, NULL) AS \"%s\",\n",
 					  gettext_noop("Schema"),
 					  gettext_noop("Name"));
-	if (verbose)
+	if (verbose > 0)
 	{
 		appendPQExpBuffer(&buf,
 						  "  t.typname AS \"%s\",\n"
@@ -745,7 +754,7 @@ map_typename_pattern(const char *pattern)
 bool
 describeOperators(const char *oper_pattern,
 				  char **arg_patterns, int num_arg_patterns,
-				  bool verbose, bool showSystem)
+				  int verbose, bool showSystem)
 {
 	PQExpBufferData buf;
 	PGresult   *res;
@@ -781,7 +790,7 @@ describeOperators(const char *oper_pattern,
 					  gettext_noop("Right arg type"),
 					  gettext_noop("Result type"));
 
-	if (verbose)
+	if (verbose > 0)
 		appendPQExpBuffer(&buf,
 						  "  o.oprcode AS \"%s\",\n",
 						  gettext_noop("Function"));
@@ -877,7 +886,7 @@ describeOperators(const char *oper_pattern,
  * for \l, \list, and -l switch
  */
 bool
-listAllDbs(const char *pattern, bool verbose)
+listAllDbs(const char *pattern, int verbose)
 {
 	PGresult   *res;
 	PQExpBufferData buf;
@@ -910,20 +919,25 @@ listAllDbs(const char *pattern, bool verbose)
 						  gettext_noop("Locale Provider"));
 	appendPQExpBufferStr(&buf, "       ");
 	printACLColumn(&buf, "d.datacl");
-	if (verbose)
+
+	if (verbose > 0)
+		appendPQExpBuffer(&buf,
+						  ",\n       t.spcname as \"%s\""
+						  ",\n       pg_catalog.shobj_description(d.oid, 'pg_database') as \"%s\"",
+						  gettext_noop("Tablespace"),
+						  gettext_noop("Description"));
+
+	if (verbose > 1)
 		appendPQExpBuffer(&buf,
 						  ",\n       CASE WHEN pg_catalog.has_database_privilege(d.datname, 'CONNECT')\n"
 						  "            THEN pg_catalog.pg_size_pretty(pg_catalog.pg_database_size(d.datname))\n"
 						  "            ELSE 'No Access'\n"
-						  "       END as \"%s\""
-						  ",\n       t.spcname as \"%s\""
-						  ",\n       pg_catalog.shobj_description(d.oid, 'pg_database') as \"%s\"",
-						  gettext_noop("Size"),
-						  gettext_noop("Tablespace"),
-						  gettext_noop("Description"));
+						  "       END as \"%s\"",
+						  gettext_noop("Size"));
+
 	appendPQExpBufferStr(&buf,
 						 "\nFROM pg_catalog.pg_database d\n");
-	if (verbose)
+	if (verbose > 0)
 		appendPQExpBufferStr(&buf,
 							 "  JOIN pg_catalog.pg_tablespace t on d.dattablespace = t.oid\n");
 
@@ -1362,10 +1376,10 @@ objectDescription(const char *pattern, bool showSystem)
  * This routine finds the tables to be displayed, and calls
  * describeOneTableDetails for each one.
  *
- * verbose: if true, this is \d+
+ * verbose: this is \d+ (or \d++)
  */
 bool
-describeTableDetails(const char *pattern, bool verbose, bool showSystem)
+describeTableDetails(const char *pattern, int verbose, bool showSystem)
 {
 	PQExpBufferData buf;
 	PGresult   *res;
@@ -1446,7 +1460,7 @@ static bool
 describeOneTableDetails(const char *schemaname,
 						const char *relationname,
 						const char *oid,
-						bool verbose)
+						int verbose)
 {
 	bool		retval = false;
 	PQExpBufferData buf;
@@ -1820,7 +1834,7 @@ describeOneTableDetails(const char *schemaname,
 							 "  pg_catalog.pg_options_to_table(attfdwoptions)), ', ') || ')' END AS attfdwoptions");
 		fdwopts_col = cols++;
 	}
-	if (verbose)
+	if (verbose > 0)
 	{
 		appendPQExpBufferStr(&buf, ",\n  a.attstorage");
 		attstorage_col = cols++;
@@ -2078,7 +2092,7 @@ describeOneTableDetails(const char *schemaname,
 						  "false as inhdetachpending");
 
 		/* If verbose, also request the partition constraint definition */
-		if (verbose)
+		if (verbose > 0)
 			appendPQExpBufferStr(&buf,
 								 ",\n  pg_catalog.pg_get_partition_constraintdef(c.oid)");
 		appendPQExpBuffer(&buf,
@@ -2101,7 +2115,7 @@ describeOneTableDetails(const char *schemaname,
 							  strcmp(detached, "t") == 0 ? " DETACH PENDING" : "");
 			printTableAddFooter(&cont, tmpbuf.data);
 
-			if (verbose)
+			if (verbose > 0)
 			{
 				char	   *partconstraintdef = NULL;
 
@@ -3339,7 +3353,7 @@ describeOneTableDetails(const char *schemaname,
 			printfPQExpBuffer(&buf, _("Number of partitions: %d"), tuples);
 			printTableAddFooter(&cont, buf.data);
 		}
-		else if (!verbose)
+		else if (verbose == 0)
 		{
 			/* print the number of child tables, if any */
 			if (tuples > 0)
@@ -3389,7 +3403,7 @@ describeOneTableDetails(const char *schemaname,
 			printTableAddFooter(&cont, buf.data);
 		}
 
-		if (verbose &&
+		if (verbose > 0 &&
 			(tableinfo.relkind == RELKIND_RELATION ||
 			 tableinfo.relkind == RELKIND_MATVIEW) &&
 
@@ -3413,7 +3427,7 @@ describeOneTableDetails(const char *schemaname,
 		}
 
 		/* OIDs, if verbose and not a materialized view */
-		if (verbose && tableinfo.relkind != RELKIND_MATVIEW && tableinfo.hasoids)
+		if (verbose > 0 && tableinfo.relkind != RELKIND_MATVIEW && tableinfo.hasoids)
 			printTableAddFooter(&cont, _("Has OIDs: yes"));
 
 		/* Tablespace info */
@@ -3421,7 +3435,7 @@ describeOneTableDetails(const char *schemaname,
 							  true);
 
 		/* Access method info */
-		if (verbose && tableinfo.relam != NULL && !pset.hide_tableam)
+		if (verbose > 0 && tableinfo.relam != NULL && !pset.hide_tableam)
 		{
 			printfPQExpBuffer(&buf, _("Access method: %s"), tableinfo.relam);
 			printTableAddFooter(&cont, buf.data);
@@ -3429,7 +3443,7 @@ describeOneTableDetails(const char *schemaname,
 	}
 
 	/* reloptions, if verbose */
-	if (verbose &&
+	if (verbose > 0 &&
 		tableinfo.reloptions && tableinfo.reloptions[0] != '\0')
 	{
 		const char *t = _("Options");
@@ -3531,7 +3545,7 @@ add_tablespace_footer(printTableContent *const cont, char relkind,
  * Describes roles.  Any schema portion of the pattern is ignored.
  */
 bool
-describeRoles(const char *pattern, bool verbose, bool showSystem)
+describeRoles(const char *pattern, int verbose, bool showSystem)
 {
 	PQExpBufferData buf;
 	PGresult   *res;
@@ -3557,11 +3571,12 @@ describeRoles(const char *pattern, bool verbose, bool showSystem)
 					  "        JOIN pg_catalog.pg_roles b ON (m.roleid = b.oid)\n"
 					  "        WHERE m.member = r.oid) as memberof");
 
-	if (verbose)
+	if (verbose > 0)
 	{
 		appendPQExpBufferStr(&buf, "\n, pg_catalog.shobj_description(r.oid, 'pg_authid') AS description");
 		ncols++;
 	}
+
 	appendPQExpBufferStr(&buf, "\n, r.rolreplication");
 
 	if (pset.sversion >= 90500)
@@ -3593,7 +3608,7 @@ describeRoles(const char *pattern, bool verbose, bool showSystem)
 	/* ignores implicit memberships from superuser & pg_database_owner */
 	printTableAddHeader(&cont, gettext_noop("Member of"), true, align);
 
-	if (verbose)
+	if (verbose > 0)
 		printTableAddHeader(&cont, gettext_noop("Description"), true, align);
 
 	for (i = 0; i < nrows; i++)
@@ -3652,7 +3667,7 @@ describeRoles(const char *pattern, bool verbose, bool showSystem)
 
 		printTableAddCell(&cont, PQgetvalue(res, i, 8), false, false);
 
-		if (verbose)
+		if (verbose > 0)
 			printTableAddCell(&cont, PQgetvalue(res, i, 9), false, false);
 	}
 	termPQExpBuffer(&buf);
@@ -3755,7 +3770,7 @@ listDbRoleSettings(const char *pattern, const char *pattern2)
  * (any order of the above is fine)
  */
 bool
-listTables(const char *tabtypes, const char *pattern, bool verbose, bool showSystem)
+listTables(const char *tabtypes, const char *pattern, int verbose, bool showSystem)
 {
 	bool		showTables = strchr(tabtypes, 't') != NULL;
 	bool		showIndexes = strchr(tabtypes, 'i') != NULL;
@@ -3814,7 +3829,7 @@ listTables(const char *tabtypes, const char *pattern, bool verbose, bool showSys
 		cols_so_far++;
 	}
 
-	if (verbose)
+	if (verbose > 0)
 	{
 		/*
 		 * Show whether a relation is permanent, temporary, or unlogged.
@@ -3843,10 +3858,13 @@ listTables(const char *tabtypes, const char *pattern, bool verbose, bool showSys
 							  gettext_noop("Access method"));
 
 		appendPQExpBuffer(&buf,
-						  ",\n  pg_catalog.pg_size_pretty(pg_catalog.pg_table_size(c.oid)) as \"%s\""
 						  ",\n  pg_catalog.obj_description(c.oid, 'pg_class') as \"%s\"",
-						  gettext_noop("Size"),
 						  gettext_noop("Description"));
+
+		if (verbose > 1)
+			appendPQExpBuffer(&buf,
+							  ",\n  pg_catalog.pg_size_pretty(pg_catalog.pg_table_size(c.oid)) as \"%s\"",
+							  gettext_noop("Size"));
 	}
 
 	appendPQExpBufferStr(&buf,
@@ -3949,7 +3967,7 @@ listTables(const char *tabtypes, const char *pattern, bool verbose, bool showSys
  * and you can mix and match these in any order.
  */
 bool
-listPartitionedTables(const char *reltypes, const char *pattern, bool verbose)
+listPartitionedTables(const char *reltypes, const char *pattern, int verbose)
 {
 	bool		showTables = strchr(reltypes, 't') != NULL;
 	bool		showIndexes = strchr(reltypes, 'i') != NULL;
@@ -4024,7 +4042,12 @@ listPartitionedTables(const char *reltypes, const char *pattern, bool verbose)
 						  ",\n c2.oid::pg_catalog.regclass as \"%s\"",
 						  gettext_noop("Table"));
 
-	if (verbose)
+	if (verbose > 0)
+		appendPQExpBuffer(&buf,
+						  ",\n  pg_catalog.obj_description(c.oid, 'pg_class') as \"%s\"",
+						  gettext_noop("Description"));
+
+	if (verbose > 1)
 	{
 		if (showNested)
 		{
@@ -4041,9 +4064,6 @@ listPartitionedTables(const char *reltypes, const char *pattern, bool verbose)
 							  ",\n  s.tps as \"%s\"",
 							  gettext_noop("Total size"));
 
-		appendPQExpBuffer(&buf,
-						  ",\n  pg_catalog.obj_description(c.oid, 'pg_class') as \"%s\"",
-						  gettext_noop("Description"));
 	}
 
 	appendPQExpBufferStr(&buf,
@@ -4059,7 +4079,7 @@ listPartitionedTables(const char *reltypes, const char *pattern, bool verbose)
 		appendPQExpBufferStr(&buf,
 							 "\n     LEFT JOIN pg_catalog.pg_inherits inh ON c.oid = inh.inhrelid");
 
-	if (verbose)
+	if (verbose > 0)
 	{
 		if (pset.sversion < 120000)
 		{
@@ -4145,7 +4165,7 @@ listPartitionedTables(const char *reltypes, const char *pattern, bool verbose)
  * Describes languages.
  */
 bool
-listLanguages(const char *pattern, bool verbose, bool showSystem)
+listLanguages(const char *pattern, int verbose, bool showSystem)
 {
 	PQExpBufferData buf;
 	PGresult   *res;
@@ -4161,7 +4181,7 @@ listLanguages(const char *pattern, bool verbose, bool showSystem)
 					  gettext_noop("Owner"),
 					  gettext_noop("Trusted"));
 
-	if (verbose)
+	if (verbose > 0)
 	{
 		appendPQExpBuffer(&buf,
 						  ",\n       NOT l.lanispl AS \"%s\",\n"
@@ -4215,7 +4235,7 @@ listLanguages(const char *pattern, bool verbose, bool showSystem)
  * Describes domains.
  */
 bool
-listDomains(const char *pattern, bool verbose, bool showSystem)
+listDomains(const char *pattern, int verbose, bool showSystem)
 {
 	PQExpBufferData buf;
 	PGresult   *res;
@@ -4242,7 +4262,7 @@ listDomains(const char *pattern, bool verbose, bool showSystem)
 					  gettext_noop("Default"),
 					  gettext_noop("Check"));
 
-	if (verbose)
+	if (verbose > 0)
 	{
 		appendPQExpBufferStr(&buf, ",\n  ");
 		printACLColumn(&buf, "t.typacl");
@@ -4255,7 +4275,7 @@ listDomains(const char *pattern, bool verbose, bool showSystem)
 						 "\nFROM pg_catalog.pg_type t\n"
 						 "     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace\n");
 
-	if (verbose)
+	if (verbose > 0)
 		appendPQExpBufferStr(&buf,
 							 "     LEFT JOIN pg_catalog.pg_description d "
 							 "ON d.classoid = t.tableoid AND d.objoid = t.oid "
@@ -4294,7 +4314,7 @@ listDomains(const char *pattern, bool verbose, bool showSystem)
  * Describes conversions.
  */
 bool
-listConversions(const char *pattern, bool verbose, bool showSystem)
+listConversions(const char *pattern, int verbose, bool showSystem)
 {
 	PQExpBufferData buf;
 	PGresult   *res;
@@ -4318,7 +4338,7 @@ listConversions(const char *pattern, bool verbose, bool showSystem)
 					  gettext_noop("yes"), gettext_noop("no"),
 					  gettext_noop("Default?"));
 
-	if (verbose)
+	if (verbose > 0)
 		appendPQExpBuffer(&buf,
 						  ",\n       d.description AS \"%s\"",
 						  gettext_noop("Description"));
@@ -4328,7 +4348,7 @@ listConversions(const char *pattern, bool verbose, bool showSystem)
 						 "     JOIN pg_catalog.pg_namespace n "
 						 "ON n.oid = c.connamespace\n");
 
-	if (verbose)
+	if (verbose > 0)
 		appendPQExpBufferStr(&buf,
 							 "LEFT JOIN pg_catalog.pg_description d "
 							 "ON d.classoid = c.tableoid\n"
@@ -4370,7 +4390,7 @@ listConversions(const char *pattern, bool verbose, bool showSystem)
  * Describes Event Triggers.
  */
 bool
-listEventTriggers(const char *pattern, bool verbose)
+listEventTriggers(const char *pattern, int verbose)
 {
 	PQExpBufferData buf;
 	PGresult   *res;
@@ -4411,7 +4431,7 @@ listEventTriggers(const char *pattern, bool verbose)
 					  gettext_noop("Enabled"),
 					  gettext_noop("Function"),
 					  gettext_noop("Tags"));
-	if (verbose)
+	if (verbose > 0)
 		appendPQExpBuffer(&buf,
 						  ",\npg_catalog.obj_description(e.oid, 'pg_event_trigger') as \"%s\"",
 						  gettext_noop("Description"));
@@ -4538,7 +4558,7 @@ listExtendedStats(const char *pattern)
  * Describes casts.
  */
 bool
-listCasts(const char *pattern, bool verbose)
+listCasts(const char *pattern, int verbose)
 {
 	PQExpBufferData buf;
 	PGresult   *res;
@@ -4579,7 +4599,7 @@ listCasts(const char *pattern, bool verbose)
 					  gettext_noop("yes"),
 					  gettext_noop("Implicit?"));
 
-	if (verbose)
+	if (verbose > 0)
 		appendPQExpBuffer(&buf,
 						  ",\n       d.description AS \"%s\"",
 						  gettext_noop("Description"));
@@ -4600,7 +4620,7 @@ listCasts(const char *pattern, bool verbose)
 						 "     LEFT JOIN pg_catalog.pg_namespace nt\n"
 						 "     ON nt.oid = tt.typnamespace\n");
 
-	if (verbose)
+	if (verbose > 0)
 		appendPQExpBufferStr(&buf,
 							 "     LEFT JOIN pg_catalog.pg_description d\n"
 							 "     ON d.classoid = c.tableoid AND d.objoid = "
@@ -4649,7 +4669,7 @@ listCasts(const char *pattern, bool verbose)
  * Describes collations.
  */
 bool
-listCollations(const char *pattern, bool verbose, bool showSystem)
+listCollations(const char *pattern, int verbose, bool showSystem)
 {
 	PQExpBufferData buf;
 	PGresult   *res;
@@ -4697,7 +4717,7 @@ listCollations(const char *pattern, bool verbose, bool showSystem)
 						  gettext_noop("yes"),
 						  gettext_noop("Deterministic?"));
 
-	if (verbose)
+	if (verbose > 0)
 		appendPQExpBuffer(&buf,
 						  ",\n       pg_catalog.obj_description(c.oid, 'pg_collation') AS \"%s\"",
 						  gettext_noop("Description"));
@@ -4747,7 +4767,7 @@ listCollations(const char *pattern, bool verbose, bool showSystem)
  * Describes schemas (namespaces)
  */
 bool
-listSchemas(const char *pattern, bool verbose, bool showSystem)
+listSchemas(const char *pattern, int verbose, bool showSystem)
 {
 	PQExpBufferData buf;
 	PGresult   *res;
@@ -4762,13 +4782,18 @@ listSchemas(const char *pattern, bool verbose, bool showSystem)
 					  gettext_noop("Name"),
 					  gettext_noop("Owner"));
 
-	if (verbose)
+	if (verbose > 0)
 	{
 		appendPQExpBufferStr(&buf, ",\n  ");
 		printACLColumn(&buf, "n.nspacl");
 		appendPQExpBuffer(&buf,
 						  ",\n  pg_catalog.obj_description(n.oid, 'pg_namespace') AS \"%s\"",
 						  gettext_noop("Description"));
+
+		if (verbose > 1 && pset.sversion >= 150000)
+			appendPQExpBuffer(&buf,
+							  ",\n  pg_catalog.pg_size_pretty(pg_namespace_size(n.oid)) AS \"%s\"",
+							  gettext_noop("Size"));
 	}
 
 	appendPQExpBufferStr(&buf,
@@ -4869,13 +4894,13 @@ listSchemas(const char *pattern, bool verbose, bool showSystem)
  * list text search parsers
  */
 bool
-listTSParsers(const char *pattern, bool verbose)
+listTSParsers(const char *pattern, int verbose)
 {
 	PQExpBufferData buf;
 	PGresult   *res;
 	printQueryOpt myopt = pset.popt;
 
-	if (verbose)
+	if (verbose > 0)
 		return listTSParsersVerbose(pattern);
 
 	initPQExpBuffer(&buf);
@@ -5106,7 +5131,7 @@ describeOneTSParser(const char *oid, const char *nspname, const char *prsname)
  * list text search dictionaries
  */
 bool
-listTSDictionaries(const char *pattern, bool verbose)
+listTSDictionaries(const char *pattern, int verbose)
 {
 	PQExpBufferData buf;
 	PGresult   *res;
@@ -5121,7 +5146,7 @@ listTSDictionaries(const char *pattern, bool verbose)
 					  gettext_noop("Schema"),
 					  gettext_noop("Name"));
 
-	if (verbose)
+	if (verbose > 0)
 	{
 		appendPQExpBuffer(&buf,
 						  "  ( SELECT COALESCE(nt.nspname, '(null)')::pg_catalog.text || '.' || t.tmplname FROM\n"
@@ -5167,7 +5192,7 @@ listTSDictionaries(const char *pattern, bool verbose)
  * list text search templates
  */
 bool
-listTSTemplates(const char *pattern, bool verbose)
+listTSTemplates(const char *pattern, int verbose)
 {
 	PQExpBufferData buf;
 	PGresult   *res;
@@ -5175,7 +5200,7 @@ listTSTemplates(const char *pattern, bool verbose)
 
 	initPQExpBuffer(&buf);
 
-	if (verbose)
+	if (verbose > 0)
 		printfPQExpBuffer(&buf,
 						  "SELECT\n"
 						  "  n.nspname AS \"%s\",\n"
@@ -5228,13 +5253,13 @@ listTSTemplates(const char *pattern, bool verbose)
  * list text search configurations
  */
 bool
-listTSConfigs(const char *pattern, bool verbose)
+listTSConfigs(const char *pattern, int verbose)
 {
 	PQExpBufferData buf;
 	PGresult   *res;
 	printQueryOpt myopt = pset.popt;
 
-	if (verbose)
+	if (verbose > 0)
 		return listTSConfigsVerbose(pattern);
 
 	initPQExpBuffer(&buf);
@@ -5424,7 +5449,7 @@ describeOneTSConfig(const char *oid, const char *nspname, const char *cfgname,
  * Describes foreign-data wrappers
  */
 bool
-listForeignDataWrappers(const char *pattern, bool verbose)
+listForeignDataWrappers(const char *pattern, int verbose)
 {
 	PQExpBufferData buf;
 	PGresult   *res;
@@ -5441,7 +5466,7 @@ listForeignDataWrappers(const char *pattern, bool verbose)
 					  gettext_noop("Handler"),
 					  gettext_noop("Validator"));
 
-	if (verbose)
+	if (verbose > 0)
 	{
 		appendPQExpBufferStr(&buf, ",\n  ");
 		printACLColumn(&buf, "fdwacl");
@@ -5459,7 +5484,7 @@ listForeignDataWrappers(const char *pattern, bool verbose)
 
 	appendPQExpBufferStr(&buf, "\nFROM pg_catalog.pg_foreign_data_wrapper fdw\n");
 
-	if (verbose)
+	if (verbose > 0)
 		appendPQExpBufferStr(&buf,
 							 "LEFT JOIN pg_catalog.pg_description d\n"
 							 "       ON d.classoid = fdw.tableoid "
@@ -5491,7 +5516,7 @@ listForeignDataWrappers(const char *pattern, bool verbose)
  * Describes foreign servers.
  */
 bool
-listForeignServers(const char *pattern, bool verbose)
+listForeignServers(const char *pattern, int verbose)
 {
 	PQExpBufferData buf;
 	PGresult   *res;
@@ -5506,7 +5531,7 @@ listForeignServers(const char *pattern, bool verbose)
 					  gettext_noop("Owner"),
 					  gettext_noop("Foreign-data wrapper"));
 
-	if (verbose)
+	if (verbose > 0)
 	{
 		appendPQExpBufferStr(&buf, ",\n  ");
 		printACLColumn(&buf, "s.srvacl");
@@ -5531,7 +5556,7 @@ listForeignServers(const char *pattern, bool verbose)
 						 "\nFROM pg_catalog.pg_foreign_server s\n"
 						 "     JOIN pg_catalog.pg_foreign_data_wrapper f ON f.oid=s.srvfdw\n");
 
-	if (verbose)
+	if (verbose > 0)
 		appendPQExpBufferStr(&buf,
 							 "LEFT JOIN pg_catalog.pg_description d\n       "
 							 "ON d.classoid = s.tableoid AND d.objoid = s.oid "
@@ -5563,7 +5588,7 @@ listForeignServers(const char *pattern, bool verbose)
  * Describes user mappings.
  */
 bool
-listUserMappings(const char *pattern, bool verbose)
+listUserMappings(const char *pattern, int verbose)
 {
 	PQExpBufferData buf;
 	PGresult   *res;
@@ -5576,7 +5601,7 @@ listUserMappings(const char *pattern, bool verbose)
 					  gettext_noop("Server"),
 					  gettext_noop("User name"));
 
-	if (verbose)
+	if (verbose > 0)
 		appendPQExpBuffer(&buf,
 						  ",\n CASE WHEN umoptions IS NULL THEN '' ELSE "
 						  "  '(' || pg_catalog.array_to_string(ARRAY(SELECT "
@@ -5614,7 +5639,7 @@ listUserMappings(const char *pattern, bool verbose)
  * Describes foreign tables.
  */
 bool
-listForeignTables(const char *pattern, bool verbose)
+listForeignTables(const char *pattern, int verbose)
 {
 	PQExpBufferData buf;
 	PGresult   *res;
@@ -5629,7 +5654,7 @@ listForeignTables(const char *pattern, bool verbose)
 					  gettext_noop("Table"),
 					  gettext_noop("Server"));
 
-	if (verbose)
+	if (verbose > 0)
 		appendPQExpBuffer(&buf,
 						  ",\n CASE WHEN ftoptions IS NULL THEN '' ELSE "
 						  "  '(' || pg_catalog.array_to_string(ARRAY(SELECT "
@@ -5649,7 +5674,7 @@ listForeignTables(const char *pattern, bool verbose)
 						 " ON n.oid = c.relnamespace\n"
 						 "  INNER JOIN pg_catalog.pg_foreign_server s"
 						 " ON s.oid = ft.ftserver\n");
-	if (verbose)
+	if (verbose > 0)
 		appendPQExpBufferStr(&buf,
 							 "   LEFT JOIN pg_catalog.pg_description d\n"
 							 "          ON d.classoid = c.tableoid AND "
@@ -6131,7 +6156,7 @@ error_return:
  * Takes an optional regexp to select particular subscriptions
  */
 bool
-describeSubscriptions(const char *pattern, bool verbose)
+describeSubscriptions(const char *pattern, int verbose)
 {
 	PQExpBufferData buf;
 	PGresult   *res;
@@ -6161,7 +6186,7 @@ describeSubscriptions(const char *pattern, bool verbose)
 					  gettext_noop("Enabled"),
 					  gettext_noop("Publication"));
 
-	if (verbose)
+	if (verbose > 0)
 	{
 		/* Binary mode and streaming are only supported in v14 and higher */
 		if (pset.sversion >= 140000)
@@ -6245,7 +6270,7 @@ printACLColumn(PQExpBuffer buf, const char *colname)
  */
 bool
 listOperatorClasses(const char *access_method_pattern,
-					const char *type_pattern, bool verbose)
+					const char *type_pattern, int verbose)
 {
 	PQExpBufferData buf;
 	PGresult   *res;
@@ -6280,7 +6305,7 @@ listOperatorClasses(const char *access_method_pattern,
 					  gettext_noop("yes"),
 					  gettext_noop("no"),
 					  gettext_noop("Default?"));
-	if (verbose)
+	if (verbose > 0)
 		appendPQExpBuffer(&buf,
 						  ",\n  CASE\n"
 						  "    WHEN pg_catalog.pg_opfamily_is_visible(of.oid)\n"
@@ -6296,7 +6321,7 @@ listOperatorClasses(const char *access_method_pattern,
 						 "  LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.opcnamespace\n"
 						 "  LEFT JOIN pg_catalog.pg_type t ON t.oid = c.opcintype\n"
 						 "  LEFT JOIN pg_catalog.pg_namespace tn ON tn.oid = t.typnamespace\n");
-	if (verbose)
+	if (verbose > 0)
 		appendPQExpBufferStr(&buf,
 							 "  LEFT JOIN pg_catalog.pg_opfamily of ON of.oid = c.opcfamily\n"
 							 "  LEFT JOIN pg_catalog.pg_namespace ofn ON ofn.oid = of.opfnamespace\n");
@@ -6339,7 +6364,7 @@ listOperatorClasses(const char *access_method_pattern,
  */
 bool
 listOperatorFamilies(const char *access_method_pattern,
-					 const char *type_pattern, bool verbose)
+					 const char *type_pattern, int verbose)
 {
 	PQExpBufferData buf;
 	PGresult   *res;
@@ -6364,7 +6389,7 @@ listOperatorFamilies(const char *access_method_pattern,
 					  gettext_noop("AM"),
 					  gettext_noop("Operator family"),
 					  gettext_noop("Applicable types"));
-	if (verbose)
+	if (verbose > 0)
 		appendPQExpBuffer(&buf,
 						  ",\n  pg_catalog.pg_get_userbyid(f.opfowner) AS \"%s\"\n",
 						  gettext_noop("Owner"));
@@ -6421,7 +6446,7 @@ listOperatorFamilies(const char *access_method_pattern,
  */
 bool
 listOpFamilyOperators(const char *access_method_pattern,
-					  const char *family_pattern, bool verbose)
+					  const char *family_pattern, int verbose)
 {
 	PQExpBufferData buf;
 	PGresult   *res;
@@ -6454,7 +6479,7 @@ listOpFamilyOperators(const char *access_method_pattern,
 					  gettext_noop("search"),
 					  gettext_noop("Purpose"));
 
-	if (verbose)
+	if (verbose > 0)
 		appendPQExpBuffer(&buf,
 						  ", ofs.opfname AS \"%s\"\n",
 						  gettext_noop("Sort opfamily"));
@@ -6463,7 +6488,7 @@ listOpFamilyOperators(const char *access_method_pattern,
 						 "  LEFT JOIN pg_catalog.pg_opfamily of ON of.oid = o.amopfamily\n"
 						 "  LEFT JOIN pg_catalog.pg_am am ON am.oid = of.opfmethod AND am.oid = o.amopmethod\n"
 						 "  LEFT JOIN pg_catalog.pg_namespace nsf ON of.opfnamespace = nsf.oid\n");
-	if (verbose)
+	if (verbose > 0)
 		appendPQExpBufferStr(&buf,
 							 "  LEFT JOIN pg_catalog.pg_opfamily ofs ON ofs.oid = o.amopsortfamily\n");
 
@@ -6508,7 +6533,7 @@ listOpFamilyOperators(const char *access_method_pattern,
  */
 bool
 listOpFamilyFunctions(const char *access_method_pattern,
-					  const char *family_pattern, bool verbose)
+					  const char *family_pattern, int verbose)
 {
 	PQExpBufferData buf;
 	PGresult   *res;
@@ -6535,7 +6560,7 @@ listOpFamilyFunctions(const char *access_method_pattern,
 					  gettext_noop("Registered right type"),
 					  gettext_noop("Number"));
 
-	if (!verbose)
+	if (verbose == 0)
 		appendPQExpBuffer(&buf,
 						  ", p.proname AS \"%s\"\n",
 						  gettext_noop("Function"));
@@ -6585,7 +6610,7 @@ listOpFamilyFunctions(const char *access_method_pattern,
  * Lists large objects
  */
 bool
-listLargeObjects(bool verbose)
+listLargeObjects(int verbose)
 {
 	PQExpBufferData buf;
 	PGresult   *res;
@@ -6599,7 +6624,7 @@ listLargeObjects(bool verbose)
 					  gettext_noop("ID"),
 					  gettext_noop("Owner"));
 
-	if (verbose)
+	if (verbose > 0)
 	{
 		printACLColumn(&buf, "lomacl");
 		appendPQExpBufferStr(&buf, ",\n  ");

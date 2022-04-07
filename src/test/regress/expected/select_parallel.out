@@ -551,51 +551,34 @@ explain (analyze, timing off, summary off, costs off)
    ->  Nested Loop (actual rows=98000 loops=1)
          ->  Seq Scan on tenk2 (actual rows=10 loops=1)
                Filter: (thousand = 0)
-               Rows Removed by Filter: 9990
          ->  Gather (actual rows=9800 loops=10)
                Workers Planned: 4
-               Workers Launched: 4
                ->  Parallel Seq Scan on tenk1 (actual rows=1960 loops=50)
                      Filter: (hundred > 1)
-                     Rows Removed by Filter: 40
-(11 rows)
+(8 rows)
 
 alter table tenk2 reset (parallel_workers);
 reset work_mem;
-create function explain_parallel_sort_stats() returns setof text
-language plpgsql as
-$$
-declare ln text;
-begin
-    for ln in
-        explain (analyze, timing off, summary off, costs off)
-          select * from
+explain (analyze)
+select * from
           (select ten from tenk1 where ten < 100 order by ten) ss
-          right join (values (1),(2),(3)) v(x) on true
-    loop
-        ln := regexp_replace(ln, 'Memory: \S*',  'Memory: xxx');
-        return next ln;
-    end loop;
-end;
-$$;
-select * from explain_parallel_sort_stats();
-                       explain_parallel_sort_stats                        
+          right join (values (1),(2),(3)) v(x) on true;
+                                QUERY PLAN                                
 --------------------------------------------------------------------------
  Nested Loop Left Join (actual rows=30000 loops=1)
    ->  Values Scan on "*VALUES*" (actual rows=3 loops=1)
    ->  Gather Merge (actual rows=10000 loops=3)
          Workers Planned: 4
-         Workers Launched: 4
          ->  Sort (actual rows=2000 loops=15)
                Sort Key: tenk1.ten
-               Sort Method: quicksort  Memory: xxx
-               Worker 0:  Sort Method: quicksort  Memory: xxx
-               Worker 1:  Sort Method: quicksort  Memory: xxx
-               Worker 2:  Sort Method: quicksort  Memory: xxx
-               Worker 3:  Sort Method: quicksort  Memory: xxx
+               Sort Method: quicksort
+               Worker 0:  Sort Method: quicksort
+               Worker 1:  Sort Method: quicksort
+               Worker 2:  Sort Method: quicksort
+               Worker 3:  Sort Method: quicksort
                ->  Parallel Seq Scan on tenk1 (actual rows=2000 loops=15)
                      Filter: (ten < 100)
-(14 rows)
+(13 rows)
 
 reset enable_indexscan;
 reset enable_hashjoin;
@@ -603,7 +586,6 @@ reset enable_mergejoin;
 reset enable_material;
 reset effective_io_concurrency;
 drop table bmscantest;
-drop function explain_parallel_sort_stats();
 -- test parallel merge join path.
 set enable_hashjoin to off;
 set enable_nestloop to off;
@@ -1048,9 +1030,8 @@ EXPLAIN (analyze, timing off, summary off, costs off) SELECT * FROM tenk1;
 -------------------------------------------------------------
  Gather (actual rows=10000 loops=1)
    Workers Planned: 4
-   Workers Launched: 4
    ->  Parallel Seq Scan on tenk1 (actual rows=2000 loops=5)
-(4 rows)
+(3 rows)
 
 ROLLBACK TO SAVEPOINT settings;
 -- provoke error in worker

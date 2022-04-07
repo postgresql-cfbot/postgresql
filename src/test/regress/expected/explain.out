@@ -8,6 +8,9 @@
 -- To produce stable regression test output, it's usually necessary to
 -- ignore details such as exact costs or row counts.  These filter
 -- functions replace changeable output details with fixed strings.
+-- Output normal, user-facing details, not the sanitized version used for the
+-- rest of the regression tests
+set explain_regress = off;
 create function explain_filter(text) returns setof text
 language plpgsql as
 $$
@@ -276,6 +279,61 @@ select explain_filter('explain (buffers, format json) select * from int8_tbl i8'
  ]
 (1 row)
 
+-- HashAgg
+begin;
+SET work_mem='64kB';
+select explain_filter('explain (analyze) SELECT a, COUNT(1) FROM generate_series(1,9999)a GROUP BY 1');
+                                                 explain_filter                                                 
+----------------------------------------------------------------------------------------------------------------
+ HashAggregate  (cost=N.N..N.N rows=N width=N) (actual time=N.N..N.N rows=N loops=N)
+   Group Key: a
+   Batches: N  Memory Usage: NkB  Disk Usage: NkB
+   ->  Function Scan on generate_series a  (cost=N.N..N.N rows=N width=N) (actual time=N.N..N.N rows=N loops=N)
+ Planning Time: N.N ms
+ Execution Time: N.N ms
+(6 rows)
+
+select explain_filter('explain (analyze, machine off) SELECT a, COUNT(1) FROM generate_series(1,9999)a GROUP BY 1');
+                                                 explain_filter                                                 
+----------------------------------------------------------------------------------------------------------------
+ HashAggregate  (cost=N.N..N.N rows=N width=N) (actual time=N.N..N.N rows=N loops=N)
+   Group Key: a
+   ->  Function Scan on generate_series a  (cost=N.N..N.N rows=N width=N) (actual time=N.N..N.N rows=N loops=N)
+ Planning Time: N.N ms
+ Execution Time: N.N ms
+(5 rows)
+
+rollback;
+-- Bitmap scan
+begin;
+SET enable_indexscan=no;
+CREATE TABLE explainbitmap AS SELECT i AS a FROM generate_series(1,999) AS i;
+ANALYZE explainbitmap;
+CREATE INDEX ON explainbitmap(a);
+select explain_filter('explain (analyze) SELECT * FROM explainbitmap WHERE a<9');
+                                                    explain_filter                                                    
+----------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on explainbitmap  (cost=N.N..N.N rows=N width=N) (actual time=N.N..N.N rows=N loops=N)
+   Recheck Cond: (a < N)
+   Heap Blocks: exact=N
+   ->  Bitmap Index Scan on explainbitmap_a_idx  (cost=N.N..N.N rows=N width=N) (actual time=N.N..N.N rows=N loops=N)
+         Index Cond: (a < N)
+ Planning Time: N.N ms
+ Execution Time: N.N ms
+(7 rows)
+
+select explain_filter('explain (analyze, machine off) SELECT * FROM explainbitmap WHERE a<9');
+                                                    explain_filter                                                    
+----------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on explainbitmap  (cost=N.N..N.N rows=N width=N) (actual time=N.N..N.N rows=N loops=N)
+   Recheck Cond: (a < N)
+   ->  Bitmap Index Scan on explainbitmap_a_idx  (cost=N.N..N.N rows=N width=N) (actual time=N.N..N.N rows=N loops=N)
+         Index Cond: (a < N)
+ Planning Time: N.N ms
+ Execution Time: N.N ms
+(6 rows)
+
+rollback;
 -- SETTINGS option
 -- We have to ignore other settings that might be imposed by the environment,
 -- so printing the whole Settings field unfortunately won't do.

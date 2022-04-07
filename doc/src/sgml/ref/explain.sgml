@@ -190,7 +190,7 @@ ROLLBACK;
       The number of blocks shown for an
       upper-level node includes those used by all its child nodes.  In text
       format, only non-zero values are printed.  It defaults to
-      <literal>FALSE</literal>.
+      <literal>TRUE</literal>.
      </para>
     </listitem>
    </varlistentry>

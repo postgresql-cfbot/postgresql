@@ -3121,7 +3121,7 @@ estimate_path_cost_size(PlannerInfo *root,
 		 * values, so don't request params_list.
 		 */
 		initStringInfo(&sql);
-		appendStringInfoString(&sql, "EXPLAIN ");
+		appendStringInfoString(&sql, "EXPLAIN (COSTS)");
 		deparseSelectStmtForRel(&sql, root, foreignrel, fdw_scan_tlist,
 								remote_conds, pathkeys,
 								fpextra ? fpextra->has_final_sort : false,

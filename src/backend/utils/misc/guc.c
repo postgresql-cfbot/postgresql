@@ -11882,15 +11882,29 @@ check_wal_consistency_checking(char **newval, void **extra, GucSource source)
 	{
 		char	   *tok = (char *) lfirst(l);
 		bool		found = false;
-		RmgrId		rmid;
+		int			rmid;
 
 		/* Check for 'all'. */
 		if (pg_strcasecmp(tok, "all") == 0)
 		{
-			for (rmid = 0; rmid <= RM_MAX_ID; rmid++)
-				if (RmgrTable[rmid].rm_mask != NULL)
+			for (rmid = 0; rmid <= RM_MAX_BUILTIN_ID; rmid++)
+				if (GetRmgr(rmid).rm_mask != NULL)
 					newwalconsistency[rmid] = true;
 			found = true;
+		}
+		else if (sscanf(tok, "custom%03d", &rmid) == 1)
+		{
+			/*
+			 * The server hasn't loaded the shared_preload_libraries yet, so
+			 * we don't have access to the custom resource manager
+			 * names. Allow the form "custom###", where "###" is the 3-digit
+			 * resource manager ID.
+			 */
+			if (RMID_IS_CUSTOM(rmid))
+			{
+				newwalconsistency[rmid] = true;
+				found = true;
+			}
 		}
 		else
 		{
@@ -11898,10 +11912,10 @@ check_wal_consistency_checking(char **newval, void **extra, GucSource source)
 			 * Check if the token matches with any individual resource
 			 * manager.
 			 */
-			for (rmid = 0; rmid <= RM_MAX_ID; rmid++)
+			for (rmid = 0; rmid <= RM_MAX_BUILTIN_ID; rmid++)
 			{
-				if (pg_strcasecmp(tok, RmgrTable[rmid].rm_name) == 0 &&
-					RmgrTable[rmid].rm_mask != NULL)
+				if (GetRmgr(rmid).rm_mask != NULL &&
+					pg_strcasecmp(tok, GetRmgr(rmid).rm_name) == 0)
 				{
 					newwalconsistency[rmid] = true;
 					found = true;

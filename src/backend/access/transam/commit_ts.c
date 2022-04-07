@@ -230,7 +230,7 @@ SetXidCommitTsInPage(TransactionId xid, int nsubxids,
 	for (i = 0; i < nsubxids; i++)
 		TransactionIdSetCommitTs(subxids[i], ts, nodeid, slotno);
 
-	CommitTsCtl->shared->page_dirty[slotno] = true;
+	CommitTsCtl->shared->page_entries[slotno].page_dirty = true;
 
 	LWLockRelease(CommitTsSLRULock);
 }
@@ -514,10 +514,15 @@ pg_xact_commit_timestamp_origin(PG_FUNCTION_ARGS)
  * We use a very similar logic as for the number of CLOG buffers (except we
  * scale up twice as fast with shared buffers, and the maximum is twice as
  * high); see comments in CLOGShmemBuffers.
+ * By default, we'll use 1MB of for every 1GB of shared buffers, up to the
+ * maximum value that slru.c will allow, but always at least 4 buffers.
  */
 Size
 CommitTsShmemBuffers(void)
 {
+	/* Use configured value if provided. */
+	if (commit_ts_buffers > 0)
+		return Max(4, commit_ts_buffers);
 	return Min(256, Max(4, NBuffers / 256));
 }
 
@@ -733,7 +738,7 @@ ActivateCommitTs(void)
 		LWLockAcquire(CommitTsSLRULock, LW_EXCLUSIVE);
 		slotno = ZeroCommitTsPage(pageno, false);
 		SimpleLruWritePage(CommitTsCtl, slotno);
-		Assert(!CommitTsCtl->shared->page_dirty[slotno]);
+		Assert(!CommitTsCtl->shared->page_entries[slotno].page_dirty);
 		LWLockRelease(CommitTsSLRULock);
 	}
 
@@ -1003,7 +1008,7 @@ commit_ts_redo(XLogReaderState *record)
 
 		slotno = ZeroCommitTsPage(pageno, false);
 		SimpleLruWritePage(CommitTsCtl, slotno);
-		Assert(!CommitTsCtl->shared->page_dirty[slotno]);
+		Assert(!CommitTsCtl->shared->page_entries[slotno].page_dirty);
 
 		LWLockRelease(CommitTsSLRULock);
 	}

@@ -899,7 +899,7 @@ RecordNewMultiXact(MultiXactId multi, MultiXactOffset offset,
 
 	*offptr = offset;
 
-	MultiXactOffsetCtl->shared->page_dirty[slotno] = true;
+	MultiXactOffsetCtl->shared->page_entries[slotno].page_dirty = true;
 
 	/* Exchange our lock */
 	LWLockRelease(MultiXactOffsetSLRULock);
@@ -943,7 +943,7 @@ RecordNewMultiXact(MultiXactId multi, MultiXactOffset offset,
 		flagsval |= (members[i].status << bshift);
 		*flagsptr = flagsval;
 
-		MultiXactMemberCtl->shared->page_dirty[slotno] = true;
+		MultiXactMemberCtl->shared->page_entries[slotno].page_dirty = true;
 	}
 
 	LWLockRelease(MultiXactMemberSLRULock);
@@ -1846,8 +1846,8 @@ MultiXactShmemSize(void)
 			 mul_size(sizeof(MultiXactId) * 2, GetMaxOldestSlot()))
 
 	size = SHARED_MULTIXACT_STATE_SIZE;
-	size = add_size(size, SimpleLruShmemSize(NUM_MULTIXACTOFFSET_BUFFERS, 0));
-	size = add_size(size, SimpleLruShmemSize(NUM_MULTIXACTMEMBER_BUFFERS, 0));
+	size = add_size(size, SimpleLruShmemSize(multixact_offsets_buffers, 0));
+	size = add_size(size, SimpleLruShmemSize(multixact_members_buffers, 0));
 
 	return size;
 }
@@ -1863,13 +1863,13 @@ MultiXactShmemInit(void)
 	MultiXactMemberCtl->PagePrecedes = MultiXactMemberPagePrecedes;
 
 	SimpleLruInit(MultiXactOffsetCtl,
-				  "MultiXactOffset", NUM_MULTIXACTOFFSET_BUFFERS, 0,
+				  "MultiXactOffset", multixact_offsets_buffers, 0,
 				  MultiXactOffsetSLRULock, "pg_multixact/offsets",
 				  LWTRANCHE_MULTIXACTOFFSET_BUFFER,
 				  SYNC_HANDLER_MULTIXACT_OFFSET);
 	SlruPagePrecedesUnitTests(MultiXactOffsetCtl, MULTIXACT_OFFSETS_PER_PAGE);
 	SimpleLruInit(MultiXactMemberCtl,
-				  "MultiXactMember", NUM_MULTIXACTMEMBER_BUFFERS, 0,
+				  "MultiXactMember", multixact_offsets_buffers, 0,
 				  MultiXactMemberSLRULock, "pg_multixact/members",
 				  LWTRANCHE_MULTIXACTMEMBER_BUFFER,
 				  SYNC_HANDLER_MULTIXACT_MEMBER);
@@ -1914,7 +1914,7 @@ BootStrapMultiXact(void)
 
 	/* Make sure it's written out */
 	SimpleLruWritePage(MultiXactOffsetCtl, slotno);
-	Assert(!MultiXactOffsetCtl->shared->page_dirty[slotno]);
+	Assert(!MultiXactOffsetCtl->shared->page_entries[slotno].page_dirty);
 
 	LWLockRelease(MultiXactOffsetSLRULock);
 
@@ -1925,7 +1925,7 @@ BootStrapMultiXact(void)
 
 	/* Make sure it's written out */
 	SimpleLruWritePage(MultiXactMemberCtl, slotno);
-	Assert(!MultiXactMemberCtl->shared->page_dirty[slotno]);
+	Assert(!MultiXactMemberCtl->shared->page_entries[slotno].page_dirty);
 
 	LWLockRelease(MultiXactMemberSLRULock);
 }
@@ -2086,7 +2086,7 @@ TrimMultiXact(void)
 
 		MemSet(offptr, 0, BLCKSZ - (entryno * sizeof(MultiXactOffset)));
 
-		MultiXactOffsetCtl->shared->page_dirty[slotno] = true;
+		MultiXactOffsetCtl->shared->page_entries[slotno].page_dirty = true;
 	}
 
 	LWLockRelease(MultiXactOffsetSLRULock);
@@ -2124,7 +2124,7 @@ TrimMultiXact(void)
 		 * writing.
 		 */
 
-		MultiXactMemberCtl->shared->page_dirty[slotno] = true;
+		MultiXactMemberCtl->shared->page_entries[slotno].page_dirty = true;
 	}
 
 	LWLockRelease(MultiXactMemberSLRULock);
@@ -3264,7 +3264,7 @@ multixact_redo(XLogReaderState *record)
 
 		slotno = ZeroMultiXactOffsetPage(pageno, false);
 		SimpleLruWritePage(MultiXactOffsetCtl, slotno);
-		Assert(!MultiXactOffsetCtl->shared->page_dirty[slotno]);
+		Assert(!MultiXactOffsetCtl->shared->page_entries[slotno].page_dirty);
 
 		LWLockRelease(MultiXactOffsetSLRULock);
 	}
@@ -3279,7 +3279,7 @@ multixact_redo(XLogReaderState *record)
 
 		slotno = ZeroMultiXactMemberPage(pageno, false);
 		SimpleLruWritePage(MultiXactMemberCtl, slotno);
-		Assert(!MultiXactMemberCtl->shared->page_dirty[slotno]);
+		Assert(!MultiXactMemberCtl->shared->page_entries[slotno].page_dirty);
 
 		LWLockRelease(MultiXactMemberSLRULock);
 	}

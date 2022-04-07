@@ -32,9 +32,11 @@
 #endif
 #include <unistd.h>
 
+#include "access/clog.h"
 #include "access/commit_ts.h"
 #include "access/gin.h"
 #include "access/rmgr.h"
+#include "access/slru.h"
 #include "access/tableam.h"
 #include "access/toast_compression.h"
 #include "access/transam.h"
@@ -209,6 +211,8 @@ static const char *show_tcp_keepalives_idle(void);
 static const char *show_tcp_keepalives_interval(void);
 static const char *show_tcp_keepalives_count(void);
 static const char *show_tcp_user_timeout(void);
+static const char *show_xact_buffers(void);
+static const char *show_commit_ts_buffers(void);
 static bool check_maxconnections(int *newval, void **extra, GucSource source);
 static bool check_max_worker_processes(int *newval, void **extra, GucSource source);
 static bool check_autovacuum_max_workers(int *newval, void **extra, GucSource source);
@@ -2424,6 +2428,83 @@ static struct config_int ConfigureNamesInt[] =
 		&shared_memory_size_in_huge_pages,
 		-1, -1, INT_MAX,
 		NULL, NULL, NULL
+	},
+
+	{
+		{"multixact_offsets_buffers", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Sets the number of shared memory buffers used for the MultiXact offset SLRU cache."),
+			NULL,
+			GUC_UNIT_BLOCKS
+		},
+		&multixact_offsets_buffers,
+		8, 2, SLRU_MAX_ALLOWED_BUFFERS,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"multixact_members_buffers", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Sets the number of shared memory buffers used for the MultiXact member SLRU cache."),
+			NULL,
+			GUC_UNIT_BLOCKS
+		},
+		&multixact_members_buffers,
+		16, 2, SLRU_MAX_ALLOWED_BUFFERS,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"subtrans_buffers", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Sets the number of shared memory buffers used for the sub-transaction SLRU cache."),
+			NULL,
+			GUC_UNIT_BLOCKS
+		},
+		&subtrans_buffers,
+		32, 2, SLRU_MAX_ALLOWED_BUFFERS,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"notify_buffers", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Sets the number of shared memory buffers used for the NOTIFY message SLRU cache."),
+			NULL,
+			GUC_UNIT_BLOCKS
+		},
+		&notify_buffers,
+		8, 2, SLRU_MAX_ALLOWED_BUFFERS,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"serial_buffers", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Sets the number of shared memory buffers used for the serializable transaction SLRU cache."),
+			NULL,
+			GUC_UNIT_BLOCKS
+		},
+		&serial_buffers,
+		16, 2, SLRU_MAX_ALLOWED_BUFFERS,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"xact_buffers", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Sets the number of shared memory buffers used for the transaction status SLRU cache."),
+			NULL,
+			GUC_UNIT_BLOCKS
+		},
+		&xact_buffers,
+		0, 0, CLOG_MAX_ALLOWED_BUFFERS,
+		NULL, NULL, show_xact_buffers
+	},
+
+	{
+		{"commit_ts_buffers", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Sets the size of the dedicated buffer pool used for the commit timestamp SLRU cache."),
+			NULL,
+			GUC_UNIT_BLOCKS
+		},
+		&commit_ts_buffers,
+		0, 0, SLRU_MAX_ALLOWED_BUFFERS,
+		NULL, NULL, show_commit_ts_buffers
 	},
 
 	{
@@ -12348,6 +12429,24 @@ show_tcp_user_timeout(void)
 	static char nbuf[16];
 
 	snprintf(nbuf, sizeof(nbuf), "%d", pq_gettcpusertimeout(MyProcPort));
+	return nbuf;
+}
+
+static const char *
+show_xact_buffers(void)
+{
+	static char nbuf[16];
+
+	snprintf(nbuf, sizeof(nbuf), "%zu", CLOGShmemBuffers());
+	return nbuf;
+}
+
+static const char *
+show_commit_ts_buffers(void)
+{
+	static char nbuf[16];
+
+	snprintf(nbuf, sizeof(nbuf), "%zu", CommitTsShmemBuffers());
 	return nbuf;
 }
 

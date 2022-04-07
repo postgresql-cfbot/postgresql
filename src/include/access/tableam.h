@@ -252,6 +252,10 @@ typedef void (*IndexBuildCallback) (Relation index,
 									bool tupleIsAlive,
 									void *state);
 
+/* This callback parse the table reloptions and returns in bytea format */
+typedef bytea *(*reloptions_function) (char relkind,
+									   Datum reloptions, bool validate);
+
 /*
  * API struct for a table AM.  Note this must be allocated in a
  * server-lifetime manner, typically as a static const struct, which then gets
@@ -692,6 +696,8 @@ typedef struct TableAmRoutine
 	 * ------------------------------------------------------------------------
 	 */
 
+	reloptions_function relation_options;
+
 	/*
 	 * See table_relation_size().
 	 *
@@ -701,7 +707,6 @@ typedef struct TableAmRoutine
 	 * point.
 	 */
 	uint64		(*relation_size) (Relation rel, ForkNumber forkNumber);
-
 
 	/*
 	 * This callback should return true if the relation requires a TOAST table
@@ -2073,5 +2078,6 @@ extern const TableAmRoutine *GetTableAmRoutine(Oid amhandler);
 extern const TableAmRoutine *GetHeapamTableAmRoutine(void);
 extern bool check_default_table_access_method(char **newval, void **extra,
 											  GucSource source);
+extern bytea *heap_reloptions(char relkind, Datum reloptions, bool validate);
 
 #endif							/* TABLEAM_H */

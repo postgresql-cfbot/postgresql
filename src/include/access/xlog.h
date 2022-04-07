@@ -51,6 +51,18 @@ extern char *wal_consistency_checking_string;
 extern bool log_checkpoints;
 extern bool track_wal_io_timing;
 
+#ifdef USE_LIBPMEM
+extern bool wal_pmem_map;
+#else
+/*
+ * If USE_LIBPMEM is not defined (that is, no --with-libpmem), wal_pmem_map
+ * is always false and is never used essentially. Using #if(n)def everywhere
+ * is not good for code readability, so let wal_pmem_map be constant. This
+ * may help compilers optimize conditional branches.
+ */
+#define wal_pmem_map false
+#endif
+
 extern int	CheckPointSegments;
 
 /* Archive modes */

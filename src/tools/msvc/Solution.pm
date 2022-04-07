@@ -306,6 +306,7 @@ sub GenerateFiles
 		HAVE_LIBLZ4                                 => undef,
 		HAVE_LIBM                                   => undef,
 		HAVE_LIBPAM                                 => undef,
+		HAVE_LIBPMEM                                => undef,
 		HAVE_LIBREADLINE                            => undef,
 		HAVE_LIBSELINUX                             => undef,
 		HAVE_LIBSSL                                 => undef,
@@ -493,6 +494,7 @@ sub GenerateFiles
 		USE_BONJOUR         => undef,
 		USE_BSD_AUTH        => undef,
 		USE_ICU => $self->{options}->{icu} ? 1 : undef,
+		USE_LIBPMEM                => undef,
 		USE_LIBXML                 => undef,
 		USE_LIBXSLT                => undef,
 		USE_LZ4                    => undef,
@@ -548,6 +550,11 @@ sub GenerateFiles
 	{
 		$define{HAVE_LIBZSTD} = 1;
 		$define{USE_ZSTD}     = 1;
+	}
+	if ($self->{options}->{pmem})
+	{
+		$define{HAVE_LIBPMEM} = 1;
+		$define{USE_LIBPMEM}  = 1;
 	}
 	if ($self->{options}->{openssl})
 	{
@@ -1101,6 +1108,11 @@ sub AddProject
 		$proj->AddIncludeDir($self->{options}->{uuid} . '\include');
 		$proj->AddLibrary($self->{options}->{uuid} . '\lib\uuid.lib');
 	}
+	if ($self->{options}->{pmem})
+	{
+		$proj->AddIncludeDir($self->{options}->{pmem} . '\include');
+		$proj->AddLibrary($self->{options}->{pmem} . '\lib\libpmem.lib');
+	}
 	return $proj;
 }
 
@@ -1214,6 +1226,7 @@ sub GetFakeConfigure
 	$cfg .= ' --with-tcl'           if ($self->{options}->{tcl});
 	$cfg .= ' --with-perl'          if ($self->{options}->{perl});
 	$cfg .= ' --with-python'        if ($self->{options}->{python});
+	$cfg .= ' --with-libpmem'       if ($self->{options}->{pmem});
 	my $port = $self->{options}->{'--with-pgport'};
 	$cfg .= " --with-pgport=$port" if defined($port);
 

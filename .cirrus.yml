@@ -25,6 +25,7 @@ env:
   PGCTLTIMEOUT: 120 # avoids spurious failures during parallel tests
   TEMP_CONFIG: ${CIRRUS_WORKING_DIR}/src/tools/ci/pg_ci_base.conf
   PG_TEST_EXTRA: kerberos ldap ssl
+  PMEM_IS_PMEM_FORCE: 1
 
 
 # What files to preserve in case tests fail
@@ -79,6 +80,7 @@ task:
     sysctl kern.corefile='/tmp/cores/%N.%P.core'
   setup_additional_packages_script: |
     #pkg install -y ...
+    pkg install -y devel/pmdk
 
   # NB: Intentionally build without --with-llvm. The freebsd image size is
   # already large enough to make VM startup slow, and even without llvm
@@ -92,6 +94,7 @@ task:
         --with-gssapi \
         --with-icu \
         --with-ldap \
+        --with-libpmem \
         --with-libxml \
         --with-libxslt \
         --with-lz4 \
@@ -131,6 +134,7 @@ LINUX_CONFIGURE_FEATURES: &LINUX_CONFIGURE_FEATURES >-
   --with-gssapi
   --with-icu
   --with-ldap
+  --with-libpmem
   --with-libxml
   --with-libxslt
   --with-llvm
@@ -191,6 +195,9 @@ task:
   setup_additional_packages_script: |
     #apt-get update
     #DEBIAN_FRONTEND=noninteractive apt-get -y install ...
+    echo 'deb http://deb.debian.org/debian bullseye universe' >>/etc/apt/sources.list
+    apt-get -y update
+    DEBIAN_FRONTEND=noninteractive apt-get -y install libpmem-dev
 
   configure_script: |
     su postgres <<-EOF
@@ -261,6 +268,7 @@ task:
   # packages do not need to be downloaded.
   homebrew_cache:
     folder: $HOMEBREW_CACHE
+  # TODO: Install libpmem
   setup_additional_packages_script: |
     brew install \
       ccache \
@@ -302,6 +310,7 @@ task:
       --with-gssapi \
       --with-icu \
       --with-ldap \
+      --with-libpmem \
       --with-libxml \
       --with-libxslt \
       --with-lz4 \
@@ -399,6 +408,7 @@ task:
     powershell -Command get-psdrive -psprovider filesystem
     set
 
+  # TODO: install libpmem
   setup_additional_packages_script: |
     REM choco install -y --no-progress ...
 

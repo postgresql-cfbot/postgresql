@@ -3253,6 +3253,33 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-wal-pmem-map" xreflabel="wal_pmem_map">
+      <term><varname>wal_pmem_map</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>wal_pmem_map</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        If set to <literal>on</literal>, this parameter causes WAL files to be
+        memory-mapped and used as WAL buffer pages.  The WAL files in pg_wal
+        directory (or the directory given by <command>initdb -X</command>
+        option) should be on <firstterm>persistent memory</firstterm> (PMEM) and
+        the filesystem for those files should support the <firstterm>Direct
+        Access</firstterm> (DAX) feature.  <varname>wal_sync_method</varname>
+        for the primary server is ignored and WAL updates are forced out to
+        PMEM in a more optimal way which avoids calling into the kernel.
+        <varname>min_wal_size</varname> should be multiple of the size of a
+        WAL file, and <varname>wal_buffers</varname> is ignored and set to
+        the equivalent of <varname>min_wal_size</varname>.
+       </para>
+       <para>
+        This parameter can only be set at server start. The default is
+        <literal>off</literal>.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-wal-writer-delay" xreflabel="wal_writer_delay">
       <term><varname>wal_writer_delay</varname> (<type>integer</type>)
       <indexterm>

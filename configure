@@ -704,6 +704,7 @@ LDFLAGS_EX
 ZSTD_LIBS
 ZSTD_CFLAGS
 with_zstd
+with_libpmem
 LZ4_LIBS
 LZ4_CFLAGS
 with_lz4
@@ -875,6 +876,7 @@ with_system_tzdata
 with_zlib
 with_lz4
 with_zstd
+with_libpmem
 with_gnu_ld
 with_ssl
 with_openssl
@@ -1586,6 +1588,7 @@ Optional Packages:
   --without-zlib          do not use Zlib
   --with-lz4              build with LZ4 support
   --with-zstd             build with ZSTD support
+  --with-libpmem          build with PMEM support
   --with-gnu-ld           assume the C compiler uses GNU ld [default=no]
   --with-ssl=LIB          use LIB for SSL/TLS support (openssl)
   --with-openssl          obsolete spelling of --with-ssl=openssl
@@ -9194,6 +9197,42 @@ fi
     esac
   done
 fi
+
+#
+# libpmem
+#
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking whether to build with PMEM support" >&5
+$as_echo_n "checking whether to build with PMEM support... " >&6; }
+
+
+
+# Check whether --with-libpmem was given.
+if test "${with_libpmem+set}" = set; then :
+  withval=$with_libpmem;
+  case $withval in
+    yes)
+
+$as_echo "#define USE_LIBPMEM 1" >>confdefs.h
+
+      ;;
+    no)
+      :
+      ;;
+    *)
+      as_fn_error $? "no argument expected for --with-libpmem option" "$LINENO" 5
+      ;;
+  esac
+
+else
+  with_libpmem=no
+
+fi
+
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $with_libpmem" >&5
+$as_echo "$with_libpmem" >&6; }
+
+
 #
 # Assignments
 #
@@ -13713,6 +13752,56 @@ fi
 fi
 
 
+if test "$with_libpmem" = yes; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for pmem_memcpy in -lpmem" >&5
+$as_echo_n "checking for pmem_memcpy in -lpmem... " >&6; }
+if ${ac_cv_lib_pmem_pmem_memcpy+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lpmem  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char pmem_memcpy ();
+int
+main ()
+{
+return pmem_memcpy ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_pmem_pmem_memcpy=yes
+else
+  ac_cv_lib_pmem_pmem_memcpy=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_pmem_pmem_memcpy" >&5
+$as_echo "$ac_cv_lib_pmem_pmem_memcpy" >&6; }
+if test "x$ac_cv_lib_pmem_pmem_memcpy" = xyes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_LIBPMEM 1
+_ACEOF
+
+  LIBS="-lpmem $LIBS"
+
+else
+  as_fn_error $? "library 'libpmem' (version >= 1.5) is required for PMEM support" "$LINENO" 5
+fi
+
+fi
+
 
 ##
 ## Header files
@@ -14542,6 +14631,17 @@ _ACEOF
 fi
 
 done
+
+fi
+
+if test "$with_libpmem" = yes ; then
+  ac_fn_c_check_header_mongrel "$LINENO" "libpmem.h" "ac_cv_header_libpmem_h" "$ac_includes_default"
+if test "x$ac_cv_header_libpmem_h" = xyes; then :
+
+else
+  as_fn_error $? "header file <libpmem.h> is required for PMEM support" "$LINENO" 5
+fi
+
 
 fi
 

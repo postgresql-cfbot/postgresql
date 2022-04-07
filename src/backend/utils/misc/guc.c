@@ -1373,6 +1373,20 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 
+#ifdef USE_LIBPMEM
+	{
+		{"wal_pmem_map", PGC_POSTMASTER, WAL_SETTINGS,
+			gettext_noop("Map WAL segment files on PMEM as WAL buffers."),
+			gettext_noop("If true, postgres will memory-map WAL segment files "
+						 "on PMEM to use them as WAL buffers instead of the "
+						 "traditional volatile ones."),
+		},
+		&wal_pmem_map,
+		false,
+		NULL, NULL, NULL
+	},
+#endif
+
 	{
 		{"log_checkpoints", PGC_SIGHUP, LOGGING_WHAT,
 			gettext_noop("Logs each checkpoint."),
@@ -2892,7 +2906,7 @@ static struct config_int ConfigureNamesInt[] =
 			GUC_UNIT_XBLOCKS
 		},
 		&XLOGbuffers,
-		-1, -1, (INT_MAX / XLOG_BLCKSZ),
+		-1, -1, INT_MAX,
 		check_wal_buffers, NULL, NULL
 	},
 

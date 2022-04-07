@@ -225,6 +225,8 @@
 #wal_recycle = on			# recycle WAL files
 #wal_buffers = -1			# min 32kB, -1 sets based on shared_buffers
 					# (change requires restart)
+#wal_pmem_map = off			# use WAL segment files as WAL buffers
+					# wal_buffers will be ignored
 #wal_writer_delay = 200ms		# 1-10000 milliseconds
 #wal_writer_flush_after = 1MB		# measured in pages, 0 disables
 #wal_skip_threshold = 2MB

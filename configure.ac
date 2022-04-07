@@ -1087,6 +1087,16 @@ if test "$with_zstd" = yes; then
     esac
   done
 fi
+
+#
+# libpmem
+#
+AC_MSG_CHECKING([whether to build with PMEM support])
+PGAC_ARG_BOOL(with, libpmem, no, [build with PMEM support],
+              [AC_DEFINE([USE_LIBPMEM], 1, [Define to 1 to build with PMEM support. (--with-libpmem)])])
+AC_MSG_RESULT([$with_libpmem])
+AC_SUBST(with_libpmem)
+
 #
 # Assignments
 #
@@ -1423,6 +1433,10 @@ elif test "$with_uuid" = ossp ; then
 fi
 AC_SUBST(UUID_LIBS)
 
+if test "$with_libpmem" = yes; then
+  AC_CHECK_LIB(pmem, pmem_memcpy, [], [AC_MSG_ERROR([library 'libpmem' (version >= 1.5) is required for PMEM support])])
+fi
+
 
 ##
 ## Header files
@@ -1615,6 +1629,10 @@ fi
 
 if test "$PORTNAME" = "win32" ; then
    AC_CHECK_HEADERS(crtdefs.h)
+fi
+
+if test "$with_libpmem" = yes ; then
+  AC_CHECK_HEADER(libpmem.h, [], [AC_MSG_ERROR([header file <libpmem.h> is required for PMEM support])])
 fi
 
 ##

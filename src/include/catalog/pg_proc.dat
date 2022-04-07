@@ -10979,6 +10979,23 @@
   proname => 'pg_logical_emit_message', provolatile => 'v', proparallel => 'u',
   prorettype => 'pg_lsn', proargtypes => 'bool text bytea',
   prosrc => 'pg_logical_emit_message_bytea' },
+{ oid => '9297', descr => 'emit a logical insert',
+  proname => 'pg_logical_emit_insert', provolatile => 'v', proparallel => 'u',
+  prorettype => 'pg_lsn', proargtypes => 'regclass record',
+  prosrc => 'pg_logical_emit_insert' },
+{ oid => '9298', descr => 'emit a logical update',
+  proname => 'pg_logical_emit_update', provolatile => 'v', proparallel => 'u',
+  prorettype => 'pg_lsn', proargtypes => 'regclass record record',
+  prosrc => 'pg_logical_emit_update' },
+{ oid => '9299', descr => 'emit a logical delete',
+  proname => 'pg_logical_emit_delete', provolatile => 'v', proparallel => 'u',
+  prorettype => 'pg_lsn', proargtypes => 'regclass record',
+  prosrc => 'pg_logical_emit_delete' },
+{ oid => '9300', descr => 'emit a logical truncate',
+  proname => 'pg_logical_emit_truncate', provolatile => 'v', proparallel => 'u',
+  prorettype => 'pg_lsn', proargtypes => '_regclass bool bool',
+  prosrc => 'pg_logical_emit_truncate' },
+
 
 # event triggers
 { oid => '3566', descr => 'list objects dropped by the current command',

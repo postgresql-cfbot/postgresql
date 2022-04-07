@@ -177,6 +177,8 @@ extern void simple_heap_insert(Relation relation, HeapTuple tup);
 extern void simple_heap_delete(Relation relation, ItemPointer tid);
 extern void simple_heap_update(Relation relation, ItemPointer otid,
 							   HeapTuple tup);
+extern HeapTuple ExtractReplicaIdentity(Relation rel, HeapTuple tup,
+										bool key_required, bool *copy);
 
 extern TransactionId heap_index_delete_tuples(Relation rel,
 											  TM_IndexDeleteOp *delstate);

@@ -35,22 +35,28 @@
 #include "access/xlogrecord.h"
 #include "access/xlogutils.h"
 #include "catalog/pg_control.h"
+#include "commands/sequence.h"
 #include "replication/decode.h"
 #include "replication/logical.h"
-#include "replication/message.h"
+#include "replication/logical_xlog.h"
 #include "replication/origin.h"
 #include "replication/reorderbuffer.h"
 #include "replication/snapbuild.h"
 #include "storage/standby.h"
-#include "commands/sequence.h"
 
 /* individual record(group)'s handlers */
-static void DecodeInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
-static void DecodeUpdate(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
-static void DecodeDelete(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
-static void DecodeTruncate(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
+static void DecodeHeapInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
+static void DecodeHeapUpdate(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
+static void DecodeHeapDelete(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
+static void DecodeHeapTruncate(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
 static void DecodeMultiInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
 static void DecodeSpecConfirm(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
+
+static void DecodeLogicalMsg(LogicalDecodingContext *cxt, XLogRecordBuffer *buf);
+static void DecodeLogicalInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
+static void DecodeLogicalUpdate(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
+static void DecodeLogicalDelete(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
+static void DecodeLogicalTruncate(LogicalDecodingContext *ctx, XLogRecordBuffer *buf);
 
 static void DecodeCommit(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
 						 xl_xact_parsed_commit *parsed, TransactionId xid,
@@ -457,7 +463,7 @@ heap_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 	{
 		case XLOG_HEAP_INSERT:
 			if (SnapBuildProcessChange(builder, xid, buf->origptr))
-				DecodeInsert(ctx, buf);
+				DecodeHeapInsert(ctx, buf);
 			break;
 
 			/*
@@ -468,17 +474,17 @@ heap_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 		case XLOG_HEAP_HOT_UPDATE:
 		case XLOG_HEAP_UPDATE:
 			if (SnapBuildProcessChange(builder, xid, buf->origptr))
-				DecodeUpdate(ctx, buf);
+				DecodeHeapUpdate(ctx, buf);
 			break;
 
 		case XLOG_HEAP_DELETE:
 			if (SnapBuildProcessChange(builder, xid, buf->origptr))
-				DecodeDelete(ctx, buf);
+				DecodeHeapDelete(ctx, buf);
 			break;
 
 		case XLOG_HEAP_TRUNCATE:
 			if (SnapBuildProcessChange(builder, xid, buf->origptr))
-				DecodeTruncate(ctx, buf);
+				DecodeHeapTruncate(ctx, buf);
 			break;
 
 		case XLOG_HEAP_INPLACE:
@@ -559,30 +565,70 @@ FilterByOrigin(LogicalDecodingContext *ctx, RepOriginId origin_id)
  * Handle rmgr LOGICALMSG_ID records for DecodeRecordIntoReorderBuffer().
  */
 void
-logicalmsg_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
+logical_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 {
-	SnapBuild  *builder = ctx->snapshot_builder;
 	XLogReaderState *r = buf->record;
+	SnapBuild  *builder = ctx->snapshot_builder;
 	TransactionId xid = XLogRecGetXid(r);
 	uint8		info = XLogRecGetInfo(r) & ~XLR_INFO_MASK;
-	RepOriginId origin_id = XLogRecGetOrigin(r);
-	Snapshot	snapshot;
-	xl_logical_message *message;
 
-	if (info != XLOG_LOGICAL_MESSAGE)
-		elog(ERROR, "unexpected RM_LOGICALMSG_ID record type: %u", info);
-
-	ReorderBufferProcessXid(ctx->reorder, XLogRecGetXid(r), buf->origptr);
+	ReorderBufferProcessXid(ctx->reorder, xid, buf->origptr);
 
 	/*
 	 * If we don't have snapshot or we are just fast-forwarding, there is no
-	 * point in decoding messages.
+	 * point in decoding data changes.
 	 */
 	if (SnapBuildCurrentState(builder) < SNAPBUILD_FULL_SNAPSHOT ||
 		ctx->fast_forward)
 		return;
 
+	switch (info)
+	{
+		case XLOG_LOGICAL_MESSAGE:
+			DecodeLogicalMsg(ctx, buf);
+			break;
+
+		case XLOG_LOGICAL_INSERT:
+			if (SnapBuildProcessChange(builder, xid, buf->origptr))
+				DecodeLogicalInsert(ctx, buf);
+			break;
+
+		case XLOG_LOGICAL_UPDATE:
+			if (SnapBuildProcessChange(builder, xid, buf->origptr))
+				DecodeLogicalUpdate(ctx, buf);
+			break;
+
+		case XLOG_LOGICAL_DELETE:
+			if (SnapBuildProcessChange(builder, xid, buf->origptr))
+				DecodeLogicalDelete(ctx, buf);
+			break;
+
+		case XLOG_LOGICAL_TRUNCATE:
+			if (SnapBuildProcessChange(builder, xid, buf->origptr))
+				DecodeLogicalTruncate(ctx, buf);
+			break;
+
+		default:
+			elog(ERROR, "unexpected RM_LOGICAL_ID record type: %u", info);
+			break;
+	}
+}
+
+static void
+DecodeLogicalMsg(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
+{
+	XLogReaderState *r = buf->record;
+	SnapBuild  *builder = ctx->snapshot_builder;
+	TransactionId xid = XLogRecGetXid(r);
+	RepOriginId origin_id = XLogRecGetOrigin(r);
+	Snapshot	snapshot;
+	xl_logical_message *message;
+
 	message = (xl_logical_message *) XLogRecGetData(r);
+
+	if (message->transactional &&
+		!SnapBuildProcessChange(builder, xid, buf->origptr))
+		return;
 
 	if (message->dbId != ctx->slot->data.database ||
 		FilterByOrigin(ctx, origin_id))
@@ -603,6 +649,187 @@ logicalmsg_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 												 * prefix */
 							  message->message_size,
 							  message->message + message->prefix_size);
+
+}
+
+/*
+ * Parse XLOG_HEAP_INSERT (not MULTI_INSERT!) records into tuplebufs.
+ *
+ * Deletes can contain the new tuple.
+ */
+static void
+DecodeLogicalInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
+{
+	XLogReaderState *r = buf->record;
+	Size		datalen = XLogRecGetDataLen(r) - SizeOfLogicalInsert;
+	char	   *tupledata = XLogRecGetData(r) + SizeOfLogicalInsert;
+	Size		tuplelen = datalen - SizeOfHeapHeader;
+	xl_logical_insert *xlrec;
+	ReorderBufferChange *change;
+
+	xlrec = (xl_logical_insert *) XLogRecGetData(r);
+
+	/* only interested in our database */
+	if (xlrec->node.dbNode != ctx->slot->data.database)
+		return;
+
+	/* output plugin doesn't look for this origin, no need to queue */
+	if (FilterByOrigin(ctx, XLogRecGetOrigin(r)))
+		return;
+
+	change = ReorderBufferGetChange(ctx->reorder);
+	change->action = REORDER_BUFFER_CHANGE_INSERT;
+	change->origin_id = XLogRecGetOrigin(r);
+
+	memcpy(&change->data.tp.relnode, &xlrec->node, sizeof(RelFileNode));
+
+	change->data.tp.newtuple =
+		ReorderBufferGetTupleBuf(ctx->reorder, tuplelen);
+
+	DecodeXLogTuple(tupledata, datalen, change->data.tp.newtuple);
+
+	change->data.tp.clear_toast_afterwards = true;
+
+	ReorderBufferQueueChange(ctx->reorder, XLogRecGetXid(r), buf->origptr,
+							 change, false);
+}
+
+/*
+ * Parse XLOG_LOGICAL_UPDATE from wal into proper tuplebufs.
+ *
+ * Updates can possibly contain a new tuple and the old primary key.
+ */
+static void
+DecodeLogicalUpdate(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
+{
+	XLogReaderState *r = buf->record;
+	xl_logical_update *xlrec = (xl_logical_update *) XLogRecGetData(r);
+	char	   *new_tupledata = XLogRecGetData(r) + SizeOfLogicalUpdate;
+	Size		new_datalen = xlrec->new_datalen;
+	Size		new_tuplelen = new_datalen - SizeOfHeapHeader;
+	ReorderBufferChange *change;
+
+	/* only interested in our database */
+	if (xlrec->node.dbNode != ctx->slot->data.database)
+		return;
+
+	/* output plugin doesn't look for this origin, no need to queue */
+	if (FilterByOrigin(ctx, XLogRecGetOrigin(r)))
+		return;
+
+	change = ReorderBufferGetChange(ctx->reorder);
+	change->action = REORDER_BUFFER_CHANGE_UPDATE;
+	change->origin_id = XLogRecGetOrigin(r);
+
+	memcpy(&change->data.tp.relnode, &xlrec->node, sizeof(RelFileNode));
+
+	change->data.tp.newtuple =
+		ReorderBufferGetTupleBuf(ctx->reorder, new_tuplelen);
+
+	DecodeXLogTuple(new_tupledata, new_datalen, change->data.tp.newtuple);
+
+	if (xlrec->flags & XLL_UPDATE_CONTAINS_OLD)
+	{
+		char	*old_tupledata = new_tupledata + new_datalen;
+		Size	 old_datalen;
+		Size	 old_tuplelen;
+
+		/* remaining data is the old tuple */
+		old_datalen = XLogRecGetDataLen(r) - new_datalen - SizeOfLogicalUpdate;
+		old_tuplelen = old_datalen - SizeOfHeapHeader;
+
+		change->data.tp.oldtuple =
+			ReorderBufferGetTupleBuf(ctx->reorder, old_tuplelen);
+
+		DecodeXLogTuple(old_tupledata, old_datalen, change->data.tp.oldtuple);
+	}
+
+	change->data.tp.clear_toast_afterwards = true;
+
+	ReorderBufferQueueChange(ctx->reorder, XLogRecGetXid(r), buf->origptr,
+							 change, false);
+}
+
+/*
+ * Parse XLOG_LOGICAL_DELETE from wal into proper tuplebufs.
+ *
+ * Deletes can possibly contain the old primary key.
+ */
+static void
+DecodeLogicalDelete(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
+{
+	XLogReaderState *r = buf->record;
+	xl_logical_delete *xlrec;
+	ReorderBufferChange *change;
+
+	xlrec = (xl_logical_delete *) XLogRecGetData(r);
+
+	/* only interested in our database */
+	if (xlrec->node.dbNode != ctx->slot->data.database)
+		return;
+
+	/* output plugin doesn't look for this origin, no need to queue */
+	if (FilterByOrigin(ctx, XLogRecGetOrigin(r)))
+		return;
+
+	change = ReorderBufferGetChange(ctx->reorder);
+	change->action = REORDER_BUFFER_CHANGE_DELETE;
+	change->origin_id = XLogRecGetOrigin(r);
+
+	memcpy(&change->data.tp.relnode, &xlrec->node, sizeof(RelFileNode));
+
+	if (xlrec->flags & XLL_DELETE_CONTAINS_OLD)
+	{
+		Size	 old_datalen   = XLogRecGetDataLen(r) - SizeOfLogicalDelete;
+		char	*old_tupledata = XLogRecGetData(r) + SizeOfLogicalDelete;
+		Size	 old_tuplelen  = old_datalen - SizeOfHeapHeader;
+
+		change->data.tp.oldtuple =
+			ReorderBufferGetTupleBuf(ctx->reorder, old_tuplelen);
+
+		DecodeXLogTuple(old_tupledata, old_datalen, change->data.tp.oldtuple);
+	}
+
+	change->data.tp.clear_toast_afterwards = true;
+
+	ReorderBufferQueueChange(ctx->reorder, XLogRecGetXid(r), buf->origptr,
+							 change, false);
+}
+
+/*
+ * Parse XLOG_LOGICAL_TRUNCATE from wal
+ */
+static void
+DecodeLogicalTruncate(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
+{
+	XLogReaderState *r = buf->record;
+	xl_logical_truncate *xlrec;
+	ReorderBufferChange *change;
+
+	xlrec = (xl_logical_truncate *) XLogRecGetData(r);
+
+	/* only interested in our database */
+	if (xlrec->dbId != ctx->slot->data.database)
+		return;
+
+	/* output plugin doesn't look for this origin, no need to queue */
+	if (FilterByOrigin(ctx, XLogRecGetOrigin(r)))
+		return;
+
+	change = ReorderBufferGetChange(ctx->reorder);
+	change->action = REORDER_BUFFER_CHANGE_TRUNCATE;
+	change->origin_id = XLogRecGetOrigin(r);
+	if (xlrec->flags & XLL_TRUNCATE_CASCADE)
+		change->data.truncate.cascade = true;
+	if (xlrec->flags & XLL_TRUNCATE_RESTART_SEQS)
+		change->data.truncate.restart_seqs = true;
+	change->data.truncate.nrelids = xlrec->nrelids;
+	change->data.truncate.relids = ReorderBufferGetRelids(ctx->reorder,
+														  xlrec->nrelids);
+	memcpy(change->data.truncate.relids, xlrec->relids,
+		   xlrec->nrelids * sizeof(Oid));
+	ReorderBufferQueueChange(ctx->reorder, XLogRecGetXid(r),
+							 buf->origptr, change, false);
 }
 
 /*
@@ -839,7 +1066,7 @@ DecodeAbort(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
  * Deletes can contain the new tuple.
  */
 static void
-DecodeInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
+DecodeHeapInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 {
 	Size		datalen;
 	char	   *tupledata;
@@ -898,7 +1125,7 @@ DecodeInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
  * Updates can possibly contain a new tuple and the old primary key.
  */
 static void
-DecodeUpdate(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
+DecodeHeapUpdate(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 {
 	XLogReaderState *r = buf->record;
 	xl_heap_update *xlrec;
@@ -965,7 +1192,7 @@ DecodeUpdate(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
  * Deletes can possibly contain the old primary key.
  */
 static void
-DecodeDelete(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
+DecodeHeapDelete(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 {
 	XLogReaderState *r = buf->record;
 	xl_heap_delete *xlrec;
@@ -1019,7 +1246,7 @@ DecodeDelete(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
  * Parse XLOG_HEAP_TRUNCATE from wal
  */
 static void
-DecodeTruncate(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
+DecodeHeapTruncate(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 {
 	XLogReaderState *r = buf->record;
 	xl_heap_truncate *xlrec;

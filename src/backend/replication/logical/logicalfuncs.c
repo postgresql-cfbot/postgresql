@@ -17,6 +17,7 @@
 
 #include <unistd.h>
 
+#include "access/relation.h"
 #include "access/xact.h"
 #include "access/xlog_internal.h"
 #include "access/xlogrecovery.h"
@@ -29,7 +30,7 @@
 #include "nodes/makefuncs.h"
 #include "replication/decode.h"
 #include "replication/logical.h"
-#include "replication/message.h"
+#include "replication/logical_xlog.h"
 #include "storage/fd.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
@@ -388,4 +389,166 @@ pg_logical_emit_message_text(PG_FUNCTION_ARGS)
 {
 	/* bytea and text are compatible */
 	return pg_logical_emit_message_bytea(fcinfo);
+}
+
+/*
+ * SQL function for writing logical insert into WAL.
+ */
+Datum
+pg_logical_emit_insert(PG_FUNCTION_ARGS)
+{
+	Oid				 relid = PG_GETARG_OID(0);
+	HeapTupleHeader	 htup  = PG_GETARG_HEAPTUPLEHEADER(1);
+	Relation		 rel   = relation_open(relid, AccessShareLock);
+	HeapTupleData	 tuple;
+	TupleTableSlot	*slot;
+	Oid				 rel_type;
+	Oid				 tup_type;
+	XLogRecPtr		 lsn;
+
+	/* check that tuple matches the type of the relation */
+	rel_type = get_rel_type_id(relid);
+	tup_type = HeapTupleHeaderGetTypeId(htup);
+	if (rel_type != tup_type)
+		ereport(ERROR, (errmsg("record type must match table type")));
+
+	tuple.t_len = HeapTupleHeaderGetDatumLength(htup);
+	ItemPointerSetInvalid(&(tuple.t_self));
+	tuple.t_tableOid = relid;
+	tuple.t_data = htup;
+
+	slot = MakeTupleTableSlot(rel->rd_att, &TTSOpsHeapTuple);
+	ExecClearTuple(slot);
+	ExecStoreHeapTuple(&tuple, slot, false);
+
+	lsn = LogLogicalInsert(rel, slot);
+
+	ExecDropSingleTupleTableSlot(slot);
+
+	relation_close(rel, NoLock);
+
+	PG_RETURN_LSN(lsn);
+}
+
+/*
+ * SQL function for writing logical update into WAL.
+ */
+Datum
+pg_logical_emit_update(PG_FUNCTION_ARGS)
+{
+	Oid				 relid = PG_GETARG_OID(0);
+	HeapTupleHeader	 old_htup  = PG_GETARG_HEAPTUPLEHEADER(1);
+	HeapTupleHeader	 new_htup  = PG_GETARG_HEAPTUPLEHEADER(2);
+	Relation		 rel   = relation_open(relid, AccessShareLock);
+	HeapTupleData	 old_tuple;
+	HeapTupleData	 new_tuple;
+	TupleTableSlot	*old_slot;
+	TupleTableSlot	*new_slot;
+	Oid				 rel_type;
+	Oid				 old_tup_type;
+	Oid				 new_tup_type;
+	XLogRecPtr		 lsn;
+
+	/* check that tuple matches the type of the relation */
+	rel_type = get_rel_type_id(relid);
+	old_tup_type = HeapTupleHeaderGetTypeId(old_htup);
+	new_tup_type = HeapTupleHeaderGetTypeId(new_htup);
+
+	if (rel_type != old_tup_type || rel_type != new_tup_type)
+		ereport(ERROR, (errmsg("record type must match table type")));
+
+	old_tuple.t_len = HeapTupleHeaderGetDatumLength(old_htup);
+	ItemPointerSetInvalid(&(old_tuple.t_self));
+	old_tuple.t_tableOid = relid;
+	old_tuple.t_data = old_htup;
+
+	new_tuple.t_len = HeapTupleHeaderGetDatumLength(new_htup);
+	ItemPointerSetInvalid(&(new_tuple.t_self));
+	new_tuple.t_tableOid = relid;
+	new_tuple.t_data = new_htup;
+
+	old_slot = MakeTupleTableSlot(rel->rd_att, &TTSOpsHeapTuple);
+	new_slot = MakeTupleTableSlot(rel->rd_att, &TTSOpsHeapTuple);
+	ExecClearTuple(old_slot);
+	ExecClearTuple(new_slot);
+	ExecStoreHeapTuple(&old_tuple, old_slot, false);
+	ExecStoreHeapTuple(&new_tuple, new_slot, false);
+
+	lsn = LogLogicalUpdate(rel, old_slot, new_slot);
+
+	ExecDropSingleTupleTableSlot(old_slot);
+	ExecDropSingleTupleTableSlot(new_slot);
+
+	relation_close(rel, NoLock);
+
+	PG_RETURN_LSN(lsn);
+}
+
+/*
+ * SQL function for writing logical delete into WAL.
+ */
+Datum
+pg_logical_emit_delete(PG_FUNCTION_ARGS)
+{
+	Oid				 relid = PG_GETARG_OID(0);
+	HeapTupleHeader	 htup  = PG_GETARG_HEAPTUPLEHEADER(1);
+	Relation		 rel   = relation_open(relid, AccessShareLock);
+	HeapTupleData	 tuple;
+	TupleTableSlot	*slot;
+	Oid				 rel_type;
+	Oid				 tup_type;
+	XLogRecPtr		 lsn;
+
+	/* check that tuple matches the type of the relation */
+	rel_type = get_rel_type_id(relid);
+	tup_type = HeapTupleHeaderGetTypeId(htup);
+	if (rel_type != tup_type)
+		ereport(ERROR, (errmsg("record type must match table type")));
+
+	tuple.t_len = HeapTupleHeaderGetDatumLength(htup);
+	ItemPointerSetInvalid(&(tuple.t_self));
+	tuple.t_tableOid = relid;
+	tuple.t_data = htup;
+
+	slot = MakeTupleTableSlot(rel->rd_att, &TTSOpsHeapTuple);
+	ExecClearTuple(slot);
+	ExecStoreHeapTuple(&tuple, slot, false);
+
+	lsn = LogLogicalDelete(rel, slot);
+
+	ExecDropSingleTupleTableSlot(slot);
+
+	relation_close(rel, NoLock);
+
+	PG_RETURN_LSN(lsn);
+}
+
+/*
+ * SQL function for writing logical truncate into WAL.
+ */
+Datum
+pg_logical_emit_truncate(PG_FUNCTION_ARGS)
+{
+	ArrayType	*arr		  = PG_GETARG_ARRAYTYPE_P(0);
+	bool		 cascade	  = PG_GETARG_BOOL(1);
+	bool		 restart_seqs = PG_GETARG_BOOL(2);
+	Datum		*values;
+	bool		*nulls;
+	int			 nrelids;
+	List		*relids		  = NIL;
+	XLogRecPtr	 lsn;
+
+	deconstruct_array(arr, REGCLASSOID, sizeof(Oid), true, TYPALIGN_INT,
+					  &values, &nulls, &nrelids);
+
+	for (int i = 0; i < nrelids; i++)
+	{
+		if (nulls[i])
+			ereport(ERROR, (errmsg("unexpected NULL element")));
+		relids = lappend_oid(relids, DatumGetObjectId(values[i]));
+	}
+
+	lsn = LogLogicalTruncate(relids, cascade, restart_seqs);
+
+	PG_RETURN_LSN(lsn);
 }

@@ -124,6 +124,9 @@ typedef struct xl_heap_delete
  * For truncate we list all truncated relids in an array, followed by all
  * sequence relids that need to be restarted, if any.
  * All rels are always within the same database, so we just list dbid once.
+ *
+ * Note: identical to xl_logical_truncate, except that for
+ * xl_logical_truncate, no redo is performed.
  */
 typedef struct xl_heap_truncate
 {

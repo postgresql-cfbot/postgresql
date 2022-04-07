@@ -43,19 +43,29 @@ ExceptionalCondition(const char *conditionName,
 					 errorType, conditionName,
 					 fileName, lineNumber, (int) getpid());
 
-	/* Usually this shouldn't be needed, but make sure the msg went out */
-	fflush(stderr);
-
 	/* If we have support for it, dump a simple backtrace */
 #ifdef HAVE_BACKTRACE_SYMBOLS
 	{
 		void	   *buf[100];
 		int			nframes;
+		char	  **strfrms;
 
 		nframes = backtrace(buf, lengthof(buf));
-		backtrace_symbols_fd(buf, nframes, fileno(stderr));
+		strfrms = backtrace_symbols(buf, nframes);
+		if (strfrms != NULL)
+		{
+			for (int i = 0; i < nframes; i++)
+				write_stderr("%s\n", strfrms[i]);
+			if (nframes >= lengthof(buf))
+				write_stderr("(backtrace limited to %zu frames)\n",
+							 lengthof(buf));
+			free(strfrms);
+		}
 	}
 #endif
+
+	/* Usually this shouldn't be needed, but make sure the msg went out */
+	fflush(stderr);
 
 	/*
 	 * If configured to do so, sleep indefinitely to allow user to attach a

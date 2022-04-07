@@ -966,6 +966,9 @@ set_backtrace(ErrorData *edata, int num_skip)
 
 		for (int i = num_skip; i < nframes; i++)
 			appendStringInfo(&errtrace, "\n%s", strfrms[i]);
+		if (nframes >= lengthof(buf))
+			appendStringInfo(&errtrace, "\n(backtrace limited to %zu frames)",
+							 lengthof(buf));
 		free(strfrms);
 	}
 #else

@@ -105,6 +105,8 @@ int			PostAuthDelay = 0;
 /* Time between checks that the client is still connected. */
 int			client_connection_check_interval = 0;
 
+char 		*QueryCancelMessage = NULL;
+
 /* ----------------
  *		private typedefs etc
  * ----------------
@@ -3342,7 +3344,19 @@ ProcessInterrupts(void)
 			LockErrorCleanup();
 			ereport(ERROR,
 					(errcode(ERRCODE_QUERY_CANCELED),
+					 QueryCancelMessage ?
+					 errmsg("%s", QueryCancelMessage) :
 					 errmsg("canceling statement due to user request")));
+		}
+		else if (QueryCancelMessage != NULL)
+		{
+			/*
+			 * If we reach here someone wanted to cancel query but it was skepped
+			 * because connection status was idle. So re-arm Pending flags
+			 * for next iteration.
+			 */
+			InterruptPending = true;
+			QueryCancelPending = true;
 		}
 	}
 
@@ -4271,6 +4285,9 @@ PostgresMain(const char *dbname, const char *username)
 
 		/* Report the error to the client and/or server log */
 		EmitErrorReport();
+
+		/* Make sure QueryCancelMessage is reset. */
+		QueryCancelMessage = NULL;
 
 		/*
 		 * Make sure debug_query_string gets reset before we possibly clobber

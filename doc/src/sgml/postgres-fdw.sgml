@@ -1074,6 +1074,32 @@ postgres=# SELECT postgres_fdw_disconnect_all();
 
     </listitem>
    </varlistentry>
+   <varlistentry id="guc-pgfdw-health-check-interval" xreflabel="postgres_fdw.health_check_interval">
+    <term>
+     <varname>postgres_fdw.health_check_interval</varname> (<type>integer</type>)
+     <indexterm>
+      <primary><varname>postgres_fdw.health_check_interval</varname> configuration parameter</primary>
+     </indexterm>
+    </term>
+    <listitem>
+     <para>
+      Sets the time interval between optional checks that remote servers
+      are still alive. When losing a remote connection is detected,
+      the running transaction is aborted. This feature is performed
+      by polling the socket.
+     </para>
+     <para>
+      this option relies on kernel events exposed by Linux, macOS,
+      illumos and the BSD family of operating systems, and is not currently available 
+      on other systems.
+     </para>
+     <para>
+      If the value is specified without units, it is taken as milliseconds.
+      The default value is <literal>0</literal>, which disables connection
+      checks.
+     </para>
+    </listitem>
+   </varlistentry>
   </variablelist>
  </sect2>
 

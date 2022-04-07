@@ -18,6 +18,7 @@
 #include "libpq-fe.h"
 #include "nodes/execnodes.h"
 #include "nodes/pathnodes.h"
+#include "utils/guc.h"
 #include "utils/relcache.h"
 
 /*
@@ -151,6 +152,10 @@ extern PGresult *pgfdw_exec_query(PGconn *conn, const char *query,
 								  PgFdwConnState *state);
 extern void pgfdw_report_error(int elevel, PGresult *res, PGconn *conn,
 							   bool clear, const char *sql);
+extern bool check_pgfdw_health_check_interval(int *newval, void **extra,
+											  GucSource source);
+extern void assign_pgfdw_health_check_interval(int newval, void *extra);
+extern int pgfdw_health_check_interval;
 
 /* in option.c */
 extern int	ExtractConnectionOptions(List *defelems,

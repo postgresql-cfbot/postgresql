@@ -540,5 +540,18 @@ _PG_init(void)
 							   NULL,
 							   NULL);
 
+	DefineCustomIntVariable("postgres_fdw.health_check_interval",
+							"Sets the time interval between checks of remote servers.",
+							NULL,
+							&pgfdw_health_check_interval,
+							0,
+							0,
+							INT_MAX,
+							PGC_USERSET,
+							GUC_UNIT_MS,
+							check_pgfdw_health_check_interval,
+							assign_pgfdw_health_check_interval,
+							NULL);
+
 	MarkGUCPrefixReserved("postgres_fdw");
 }

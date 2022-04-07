@@ -23,12 +23,14 @@
 #include "postgres_fdw.h"
 #include "storage/fd.h"
 #include "storage/latch.h"
+#include "tcop/tcopprot.h"
 #include "utils/builtins.h"
 #include "utils/datetime.h"
 #include "utils/hsearch.h"
 #include "utils/inval.h"
 #include "utils/memutils.h"
 #include "utils/syscache.h"
+#include "utils/timeout.h"
 
 /*
  * Connection cache hash table entry
@@ -116,6 +118,10 @@ static void pgfdw_finish_pre_subcommit_cleanup(List *pending_entries,
 											   int curlevel);
 static bool UserMappingPasswordRequired(UserMapping *user);
 static bool disconnect_cached_connections(Oid serverid);
+static void pgfdw_connection_check(void);
+static bool pgfdw_connection_check_internal(PGconn *conn);
+static TimeoutId pgfdw_health_check_timeout = MAX_TIMEOUTS;
+int pgfdw_health_check_interval;
 
 /*
  * Get a PGconn which can be used to execute queries on the remote PostgreSQL
@@ -160,6 +166,9 @@ GetConnection(UserMapping *user, bool will_prep_stmt, PgFdwConnState **state)
 									  pgfdw_inval_callback, (Datum) 0);
 		CacheRegisterSyscacheCallback(USERMAPPINGOID,
 									  pgfdw_inval_callback, (Datum) 0);
+
+		/* Register a timeout for checking remote servers */
+		pgfdw_health_check_timeout = RegisterTimeout(USER_TIMEOUT, pgfdw_connection_check);
 	}
 
 	/* Set flag that we did GetConnection during the current transaction */
@@ -282,6 +291,12 @@ GetConnection(UserMapping *user, bool will_prep_stmt, PgFdwConnState **state)
 	/* If caller needs access to the per-connection state, return it. */
 	if (state)
 		*state = &entry->state;
+
+	/* Fire timeout if needed */
+	if (pgfdw_health_check_interval > 0 &&
+		!get_timeout_active(pgfdw_health_check_timeout))
+		enable_timeout_after(pgfdw_health_check_timeout,
+							 pgfdw_health_check_interval);
 
 	return entry->conn;
 }
@@ -1038,6 +1053,9 @@ pgfdw_xact_callback(XactEvent event, void *arg)
 	 * this saves a useless scan of the hashtable during COMMIT or PREPARE.)
 	 */
 	xact_got_connection = false;
+
+	/* stop timer because checking is no more needed. */
+	disable_timeout(pgfdw_health_check_timeout, false);
 
 	/* Also reset cursor numbering for next transaction */
 	cursor_number = 0;
@@ -1862,4 +1880,134 @@ disconnect_cached_connections(Oid serverid)
 	}
 
 	return result;
+}
+
+/*
+ * Signal handler for checking remote servers.
+ *
+ * This function searches the hash table from the beginning
+ * and performs a health-check on each entry.
+ *
+ * Raise SIGINT if someone might be down, otherwise do nothing.
+ */
+void
+pgfdw_connection_check(void)
+{
+	HASH_SEQ_STATUS scan;
+	ConnCacheEntry *entry;
+
+	Assert(ConnectionHash);
+
+	/*
+	 * checking will be done by waiting WL_SOCKET_CLOSED event,
+	 * so exit immediately if it cannot be used in this system.
+	 */
+	if (!WaitEventSetCanReportClosed())
+		return;
+
+	/* Quick exit if QueryCancelMessage has already set. */
+	if (QueryCancelMessage != NULL)
+		return;
+
+	hash_seq_init(&scan, ConnectionHash);
+	while ((entry = (ConnCacheEntry *) hash_seq_search(&scan)))
+	{
+		if (entry->conn == NULL || entry->xact_depth == 0)
+			continue;
+		if (!pgfdw_connection_check_internal(entry->conn))
+		{
+			/*
+			 * Foreign server might be down, so raise SIGINT.
+			 * Note that error message is passed to QueryCancelMessage
+			 * for reporting error in ProcessInterrupts().
+			 */
+			char msg[31 + MAXDATELEN];
+			MemoryContext old;
+			ForeignServer *server;
+
+			/*
+			 * Switch to CurTransactionContext in order to
+			 * make sure that the lifetime of palloc'd is transaction.
+			 */
+			old = MemoryContextSwitchTo(CurTransactionContext);
+			server = GetForeignServer(entry->serverid);
+			snprintf(msg, sizeof(msg), "Foreign Server %s might be down.", server->servername);
+			QueryCancelMessage = pstrdup(msg);
+			MemoryContextSwitchTo(old);
+
+			disconnect_pg_server(entry);
+			hash_seq_term(&scan);
+
+			raise(SIGINT);
+			break;
+		}
+	}
+
+	/* re-schedule timer if needed. */
+	if (pgfdw_health_check_interval > 0)
+		enable_timeout_after(pgfdw_health_check_timeout,
+							 pgfdw_health_check_interval);
+
+	return;
+}
+
+/*
+ * helper function for pgfdw_connection_check
+ */
+static bool
+pgfdw_connection_check_internal(PGconn *conn)
+{
+	WaitEventSet *eventset;
+	WaitEvent events;
+
+	Assert(WaitEventSetCanReportClosed());
+
+	eventset = CreateWaitEventSet(CurrentMemoryContext, 1);
+	AddWaitEventToSet(eventset, WL_SOCKET_CLOSED, PQsocket(conn), NULL, NULL);
+
+	WaitEventSetWait(eventset, 0, &events, 1, 0);
+
+	if (events.events & WL_SOCKET_CLOSED)
+	{
+		FreeWaitEventSet(eventset);
+		return false;
+	}
+	FreeWaitEventSet(eventset);
+
+	return true;
+}
+
+bool
+check_pgfdw_health_check_interval(int *newval, void **extra, GucSource source)
+{
+	if (!WaitEventSetCanReportClosed() && *newval != 0)
+	{
+		GUC_check_errdetail("pgfdw_health_check_interval must be set to 0 on this platform");
+		return false;
+	}
+	return true;
+}
+
+void
+assign_pgfdw_health_check_interval(int newval, void *extra)
+{
+	/* Quick return if timeout is not registered yet. */
+	if (pgfdw_health_check_timeout == MAX_TIMEOUTS)
+		return;
+
+	if (get_timeout_active(pgfdw_health_check_timeout))
+	{
+		if (newval == 0)
+			disable_timeout(pgfdw_health_check_timeout, false);
+
+		/*
+		 * we don't have to do anything because
+		 * new value will be used in pgfdw_connection_check().
+		 */
+		return;
+	}
+
+	/* Start timeout if wants to */
+	if (newval > 0)
+		enable_timeout_after(pgfdw_health_check_timeout, newval);
 }

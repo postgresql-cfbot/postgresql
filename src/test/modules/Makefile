@@ -19,6 +19,7 @@ SUBDIRS = \
 		  test_extensions \
 		  test_ginpostinglist \
 		  test_integerset \
+			test_logging \
 		  test_misc \
 		  test_oat_hooks \
 		  test_parser \

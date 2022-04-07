@@ -1,0 +1,5 @@
+# test_logging extension
+comment = 'test_logging - simple extension for emitting logs'
+default_version = '1.0'
+module_pathname = '$libdir/test_logging'
+relocatable = true

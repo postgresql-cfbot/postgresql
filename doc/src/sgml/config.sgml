@@ -7483,6 +7483,7 @@ log_line_prefix = '%m [%p] %q%u@%d/%a '
         and query id.
         Here is a sample table definition for storing CSV-format log output:
 
+<!-- Don't forget to also update file_fdw.sgml if you change this table definition -->
 <programlisting>
 CREATE TABLE postgres_log
 (
@@ -7512,6 +7513,7 @@ CREATE TABLE postgres_log
   backend_type text,
   leader_pid integer,
   query_id bigint,
+  tags json,
   PRIMARY KEY (session_id, session_line_num)
 );
 </programlisting>
@@ -7751,6 +7753,11 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
          <entry><literal>query_id</literal></entry>
          <entry>number</entry>
          <entry>Query ID</entry>
+        </row>
+        <row>
+         <entry><literal>tags</literal></entry>
+         <entry>object</entry>
+         <entry>Additional error tags</entry>
         </row>
        </tbody>
       </tgroup>

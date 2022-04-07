@@ -6175,6 +6175,12 @@
   proargnames => '{xid,timestamp,roident}',
   prosrc => 'pg_last_committed_xact' },
 
+{ oid => '9861',
+  descr => 'get commit lsn of latest transaction commit',
+  proname => 'pg_last_commit_lsn', provolatile => 'v',
+  prorettype => 'pg_lsn', proargtypes => '',
+  prosrc => 'pg_last_commit_lsn' },
+
 { oid => '3537', descr => 'get identification of SQL object',
   proname => 'pg_describe_object', provolatile => 's', prorettype => 'text',
   proargtypes => 'oid oid int4', prosrc => 'pg_describe_object' },

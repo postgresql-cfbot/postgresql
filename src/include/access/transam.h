@@ -241,6 +241,8 @@ typedef struct VariableCacheData
 	 */
 	FullTransactionId latestCompletedXid;	/* newest full XID that has
 											 * committed or aborted */
+	/* */
+	XLogRecPtr finishedProcsLastCommitLSN;
 
 	/*
 	 * Number of top-level transactions with xids (i.e. which may have

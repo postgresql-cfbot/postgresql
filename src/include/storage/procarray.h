@@ -95,4 +95,6 @@ extern void ProcArraySetReplicationSlotXmin(TransactionId xmin,
 extern void ProcArrayGetReplicationSlotXmin(TransactionId *xmin,
 											TransactionId *catalog_xmin);
 
+extern XLogRecPtr GetLastCommitLSN(void);
+
 #endif							/* PROCARRAY_H */

@@ -439,6 +439,7 @@ CreateSharedProcArray(void)
 		procArray->replication_slot_xmin = InvalidTransactionId;
 		procArray->replication_slot_catalog_xmin = InvalidTransactionId;
 		ShmemVariableCache->xactCompletionCount = 1;
+		ShmemVariableCache->finishedProcsLastCommitLSN = InvalidXLogRecPtr;
 	}
 
 	allProcs = ProcGlobal->allProcs;
@@ -588,6 +589,9 @@ ProcArrayRemove(PGPROC *proc, TransactionId latestXid)
 
 		/* Same with xactCompletionCount  */
 		ShmemVariableCache->xactCompletionCount++;
+
+		if (proc->lastCommitLSN > ShmemVariableCache->finishedProcsLastCommitLSN)
+			ShmemVariableCache->finishedProcsLastCommitLSN = proc->lastCommitLSN;
 
 		ProcGlobal->xids[myoff] = InvalidTransactionId;
 		ProcGlobal->subxidStates[myoff].overflowed = false;
@@ -3938,6 +3942,36 @@ ProcArrayGetReplicationSlotXmin(TransactionId *xmin,
 		*catalog_xmin = procArray->replication_slot_catalog_xmin;
 
 	LWLockRelease(ProcArrayLock);
+}
+
+/*
+ * GetLastCommitLSN
+ *
+ * Return LSN of the most recent COMMIT record written to WAL.
+ *
+ * For performance reasons we do not guarantee the result to be perfectly in
+ * line with current visibility.
+ */
+XLogRecPtr
+GetLastCommitLSN(void)
+{
+	ProcArrayStruct *arrayP = procArray;
+	XLogRecPtr	lsn;
+	int			i;
+
+	LWLockAcquire(ProcArrayLock, LW_SHARED);
+	lsn = ShmemVariableCache->finishedProcsLastCommitLSN;
+	for (i = 0; i < arrayP->numProcs; i++)
+	{
+		int         pgprocno = arrayP->pgprocnos[i];
+		PGPROC     *proc = &allProcs[pgprocno];
+
+		if (proc->lastCommitLSN > lsn)
+			lsn = proc->lastCommitLSN;
+	}
+	LWLockRelease(ProcArrayLock);
+
+	return lsn;
 }
 
 /*

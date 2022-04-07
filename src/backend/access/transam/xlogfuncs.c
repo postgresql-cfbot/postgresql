@@ -29,6 +29,7 @@
 #include "replication/walreceiver.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
+#include "storage/procarray.h"
 #include "storage/smgr.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
@@ -314,6 +315,22 @@ pg_last_wal_replay_lsn(PG_FUNCTION_ARGS)
 		PG_RETURN_NULL();
 
 	PG_RETURN_LSN(recptr);
+}
+
+/*
+ * pg_last_commit_lsn
+ *
+ * SQL-callable wrapper to obtain the lsn of the last commit.
+ */
+Datum
+pg_last_commit_lsn(PG_FUNCTION_ARGS)
+{
+	XLogRecPtr lsn = GetLastCommitLSN();
+
+	if (lsn == InvalidXLogRecPtr)
+		PG_RETURN_NULL();
+	else
+		PG_RETURN_DATUM(LSNGetDatum(lsn));
 }
 
 /*

@@ -15,6 +15,7 @@
 #define ELOG_H
 
 #include <setjmp.h>
+#include "nodes/pg_list.h"
 
 /* Error level codes */
 #define DEBUG5		10			/* Debugging messages, in categories of
@@ -192,6 +193,8 @@ extern int	errhint(const char *fmt,...) pg_attribute_printf(1, 2);
 
 extern int	errhint_plural(const char *fmt_singular, const char *fmt_plural,
 						   unsigned long n,...) pg_attribute_printf(1, 4) pg_attribute_printf(2, 4);
+
+extern int	errtag(const char *tag, const char *fmt_value,...) pg_attribute_printf(2, 3);
 
 /*
  * errcontext() is typically called in error context callback functions, not
@@ -395,10 +398,17 @@ typedef struct ErrorData
 	int			internalpos;	/* cursor index into internalquery */
 	char	   *internalquery;	/* text of internally-generated query */
 	int			saved_errno;	/* errno at entry */
+	List	   *tags;			/* List of error tags */
 
 	/* context containing associated non-constant strings */
 	struct MemoryContextData *assoc_context;
 } ErrorData;
+
+typedef struct ErrorTag
+{
+	const char *tagname;
+	char	   *tagvalue;
+} ErrorTag;
 
 extern void EmitErrorReport(void);
 extern ErrorData *CopyErrorData(void);

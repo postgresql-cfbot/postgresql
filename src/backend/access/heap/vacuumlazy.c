@@ -1561,7 +1561,6 @@ lazy_scan_prune(LVRelState *vacrel,
 
 	Assert(BufferGetBlockNumber(buf) == blkno);
 
-	maxoff = PageGetMaxOffsetNumber(page);
 
 retry:
 
@@ -1585,6 +1584,12 @@ retry:
 	tuples_deleted = heap_page_prune(rel, buf, vacrel->vistest,
 									 InvalidTransactionId, 0, &nnewlpdead,
 									 &vacrel->offnum);
+
+	/*
+	 * Get maxoff after each heap_page_prune, as the maxoff might have gone
+	 * down due to removed trailing LP_UNUSED items.
+	 */
+	maxoff = PageGetMaxOffsetNumber(page);
 
 	/*
 	 * Now scan the page to collect LP_DEAD items and check for tuples

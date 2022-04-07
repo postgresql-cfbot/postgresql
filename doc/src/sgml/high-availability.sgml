@@ -1410,6 +1410,47 @@ synchronous_standby_names = 'ANY 2 (s1, s2, s3)'
      <literal>on</literal> and <literal>always</literal> modes.
    </para>
   </sect2>
+
+  <sect2 id="configure-external-modules-in-physical-replication-setup">
+    <title>Configuring External Modules in Physical Replication Setup</title>
+
+   <indexterm>
+     <primary>Configuring External Modules in Physical Replication Setup</primary>
+   </indexterm>
+
+    <para>
+     It is important to note few things before configuring an external module
+     in a typical postgres physical replication setup with a primary and one or
+     more standbys. Firstly, the module's shared library must be present on
+     both primary and standbys. If the module exposes SQL functions, running
+     <link linkend="sql-createextension"><command>CREATE EXTENSION</command></link>
+     command on primary is sufficient as standbys will receive it via physical
+     replication. Attempting to run <command>CREATE EXTENSION</command> on
+     standbys will anyways fail as they allow read-only transactions. The
+     module's shared library gets loaded upon first usage of any of its
+     functions on primary and standbys. 
+    </para>
+
+    <para>
+     If the module doesn't expose SQL functions, the shared library has to be
+     loaded separately on primary and standbys, either by
+     <link linkend="sql-load"><command>LOAD</command></link> command or by
+     setting parameter <xref linkend="guc-session-preload-libraries"/> or
+     <xref linkend="guc-shared-preload-libraries"/> or
+     <xref linkend="guc-local-preload-libraries"/>, depending on module's need.
+    </para>
+
+    <para>
+     If the module contains any configuration parameters, they need to be set
+     separately on primary and standbys separately as they aren't streamed via
+     physical replication (for that matter, any configuration parameter set
+     either in <filename>postgresql.conf</filename> file or by
+     <link linkend="sql-altersystem">ALTER SYSTEM</link> command aren't
+     streamed to standbys by the primary. However, the module can have
+     different configuration parameter values set on primary and standbys.
+    </para>
+ </sect2>
+
   </sect1>
 
   <sect1 id="warm-standby-failover">

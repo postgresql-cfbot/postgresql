@@ -2821,7 +2821,13 @@ should_attempt_truncation(LVRelState *vacrel)
 	if (possibly_freeable > 0 &&
 		(possibly_freeable >= REL_TRUNCATE_MINIMUM ||
 		 possibly_freeable >= vacrel->rel_pages / REL_TRUNCATE_FRACTION))
+	{
+		/* Perform a final failsafe check out of an abundance of caution */
+		if (lazy_check_wraparound_failsafe(vacrel))
+			return false;
+
 		return true;
+	}
 
 	return false;
 }

@@ -241,4 +241,101 @@ test=# SELECT dmetaphone('gumbo');
 </screen>
  </sect2>
 
+ <sect2>
+  <title>Daitch-Mokotoff Soundex</title>
+
+  <para>
+   Compared to the American Soundex System implemented in the
+   <function>soundex</function> function, the major improvements of the
+   Daitch-Mokotoff Soundex System are:
+
+   <itemizedlist spacing="compact" mark="bullet">
+    <listitem>
+     <para>
+      Information is coded to the first six meaningful letters rather than
+      four.
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+      The initial letter is coded rather than kept as is.
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+      Where two consecutive letters have a single sound, they are coded as a
+      single number.
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+      When a letter or combination of letters may have two different sounds,
+      it is double coded under the two different codes.
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+      A letter or combination of letters maps into ten possible codes rather
+      than seven.
+     </para>
+    </listitem>
+   </itemizedlist>
+  </para>
+
+  <indexterm>
+   <primary>daitch_mokotoff</primary>
+  </indexterm>
+
+  <para>
+   The following function generates Daitch-Mokotoff soundex codes for matching
+   of similar-sounding input:
+  </para>
+
+<synopsis>
+daitch_mokotoff(text source) returns text
+</synopsis>
+
+  <para>
+   Since a Daitch-Mokotoff soundex code consists of only 6 digits,
+   <literal>source</literal> should be preferably a single word or name.
+   Any alternative soundex codes are separated by space, which makes the returned
+   text suited for use in Full Text Search, see <xref linkend="textsearch"/> and
+   <xref linkend="functions-textsearch"/>.
+  </para>
+
+  <para>
+   Example:
+  </para>
+
+<programlisting>
+CREATE OR REPLACE FUNCTION soundex_name(v_name text) RETURNS text AS $$
+  SELECT string_agg(daitch_mokotoff(n), ' ')
+  FROM regexp_split_to_table(v_name, '\s+') AS n
+$$ LANGUAGE sql STRICT IMMUTABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION soundex_tsvector(v_name text) RETURNS tsvector AS $$
+  SELECT to_tsvector('simple', soundex_name(v_name))
+$$ LANGUAGE sql STRICT IMMUTABLE PARALLEL SAFE;
+
+CREATE OR REPLACE FUNCTION soundex_tsquery(v_name text) RETURNS tsquery AS $$
+  SELECT to_tsquery('simple', quote_literal(soundex_name(v_name)))
+$$ LANGUAGE sql STRICT IMMUTABLE PARALLEL SAFE;
+
+-- Note that searches could be more efficient with the tsvector in a separate column
+-- (no recalculation on table row recheck).
+CREATE TABLE s (nm text);
+CREATE INDEX ix_s_txt ON s USING gin (soundex_tsvector(nm)) WITH (fastupdate = off);
+
+INSERT INTO s VALUES ('John Doe');
+INSERT INTO s VALUES ('Jane Roe');
+INSERT INTO s VALUES ('Public John Q.');
+INSERT INTO s VALUES ('George Best');
+
+SELECT * FROM s WHERE soundex_tsvector(nm) @@ soundex_tsquery('john');
+SELECT * FROM s WHERE soundex_tsvector(nm) @@ soundex_tsquery('jane doe');
+SELECT * FROM s WHERE soundex_tsvector(nm) @@ soundex_tsquery('john public');
+SELECT * FROM s WHERE soundex_tsvector(nm) @@ soundex_tsquery('besst, giorgio');
+</programlisting>
+ </sect2>
+
 </sect1>

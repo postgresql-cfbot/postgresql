@@ -1262,7 +1262,7 @@ ShutdownPostgres(int code, Datum arg)
 	 * User locks are not released by transaction end, so be sure to release
 	 * them explicitly.
 	 */
-	LockReleaseAll(USER_LOCKMETHOD, true);
+	LockReleaseSession(USER_LOCKMETHOD);
 
 	/*
 	 * temp debugging aid to analyze 019_replslot_limit failures

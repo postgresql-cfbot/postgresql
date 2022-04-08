@@ -22333,7 +22333,12 @@ SELECT * FROM pg_ls_dir('.') WITH ORDINALITY AS t(ls,n);
         connection,
         or <literal>NULL</literal> if the current connection is via a
         Unix-domain socket.
-       </para></entry>
+       </para>
+       <para>
+        If the connection is a PROXY connection, this function returns the
+        IP address used to connect to the proxy server.
+       </para>
+       </entry>
       </row>
 
       <row>
@@ -22349,7 +22354,13 @@ SELECT * FROM pg_ls_dir('.') WITH ORDINALITY AS t(ls,n);
         connection,
         or <literal>NULL</literal> if the current connection is via a
         Unix-domain socket.
-       </para></entry>
+       </para>
+       <para>
+        If the connection is a PROXY connection, this function returns the
+        port used to connect to the proxy server.
+       </para>
+
+       </entry>
       </row>
 
       <row>

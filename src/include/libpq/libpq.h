@@ -42,6 +42,12 @@ typedef struct
 
 extern const PGDLLIMPORT PQcommMethods *PqCommMethods;
 
+typedef struct
+{
+	pgsocket	socket;
+	bool		isProxy;
+} PQlistenSocket;
+
 #define pq_comm_reset() (PqCommMethods->comm_reset())
 #define pq_flush() (PqCommMethods->flush())
 #define pq_flush_if_writable() (PqCommMethods->flush_if_writable())
@@ -64,9 +70,9 @@ extern WaitEventSet *FeBeWaitSet;
 #define FeBeWaitSetLatchPos 1
 #define FeBeWaitSetNEvents 3
 
-extern int	StreamServerPort(int family, const char *hostName,
-							 unsigned short portNumber, const char *unixSocketDir,
-							 pgsocket ListenSocket[], int MaxListen);
+extern PQlistenSocket *StreamServerPort(int family, const char *hostName,
+										unsigned short portNumber, const char *unixSocketDir,
+										PQlistenSocket PQlistenSocket[], int MaxListen);
 extern int	StreamConnection(pgsocket server_fd, Port *port);
 extern void StreamClose(pgsocket sock);
 extern void TouchSocketFiles(void);
@@ -79,6 +85,7 @@ extern bool pq_is_reading_msg(void);
 extern int	pq_getmessage(StringInfo s, int maxlen);
 extern int	pq_getbyte(void);
 extern int	pq_peekbyte(void);
+extern int	pq_discardbytes(size_t len);
 extern int	pq_getbyte_if_available(unsigned char *c);
 extern bool pq_buffer_has_data(void);
 extern int	pq_putmessage_v2(char msgtype, const char *s, size_t len);

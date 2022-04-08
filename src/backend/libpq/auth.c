@@ -1698,6 +1698,14 @@ ident_inet(hbaPort *port)
 			   *la = NULL,
 				hints;
 
+	if (port->isProxy)
+	{
+		ereport(LOG,
+				(errcode_for_socket_access(),
+				 errmsg("Ident authentication cannot be used over PROXY connections")));
+		return STATUS_ERROR;
+	}
+
 	/*
 	 * Might look a little weird to first convert it to text and then back to
 	 * sockaddr, but it's protocol independent.

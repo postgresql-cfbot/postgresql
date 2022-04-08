@@ -103,6 +103,7 @@
 #include "common/string.h"
 #include "lib/ilist.h"
 #include "libpq/auth.h"
+#include "libpq/ifaddr.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
 #include "libpq/pqsignal.h"
@@ -198,14 +199,21 @@ BackgroundWorker *MyBgworkerEntry = NULL;
 
 
 
-/* The socket number we are listening for connections on */
+/* The TCP port number we are listening for connections on */
 int			PostPortNumber;
+
+/* The TCP port number we are listening for proxy connections on */
+int			ProxyPortNumber;
 
 /* The directory names for Unix socket(s) */
 char	   *Unix_socket_directories;
 
 /* The TCP listen address(es) */
 char	   *ListenAddresses;
+
+/* Trusted proxy servers */
+char	   *TrustedProxyServersString = NULL;
+struct sockaddr_storage *TrustedProxyServers = NULL;
 
 /*
  * ReservedBackends is the number of backends reserved for superuser use.
@@ -220,7 +228,7 @@ int			ReservedBackends;
 
 /* The socket(s) we're listening to. */
 #define MAXLISTEN	64
-static pgsocket ListenSocket[MAXLISTEN];
+static PQlistenSocket ListenSocket[MAXLISTEN];
 
 /*
  * These globals control the behavior of the postmaster in case some
@@ -579,6 +587,7 @@ PostmasterMain(int argc, char *argv[])
 	bool		listen_addr_saved = false;
 	int			i;
 	char	   *output_config_variable = NULL;
+	PQlistenSocket *socket = NULL;
 
 	InitProcessGlobals();
 
@@ -1181,7 +1190,10 @@ PostmasterMain(int argc, char *argv[])
 	 * charged with closing the sockets again at postmaster shutdown.
 	 */
 	for (i = 0; i < MAXLISTEN; i++)
-		ListenSocket[i] = PGINVALID_SOCKET;
+	{
+		ListenSocket[i].socket = PGINVALID_SOCKET;
+		ListenSocket[i].isProxy = false;
+	}
 
 	on_proc_exit(CloseServerPorts, 0);
 
@@ -1210,17 +1222,17 @@ PostmasterMain(int argc, char *argv[])
 			char	   *curhost = (char *) lfirst(l);
 
 			if (strcmp(curhost, "*") == 0)
-				status = StreamServerPort(AF_UNSPEC, NULL,
+				socket = StreamServerPort(AF_UNSPEC, NULL,
 										  (unsigned short) PostPortNumber,
 										  NULL,
 										  ListenSocket, MAXLISTEN);
 			else
-				status = StreamServerPort(AF_UNSPEC, curhost,
+				socket = StreamServerPort(AF_UNSPEC, curhost,
 										  (unsigned short) PostPortNumber,
 										  NULL,
 										  ListenSocket, MAXLISTEN);
 
-			if (status == STATUS_OK)
+			if (socket)
 			{
 				success++;
 				/* record the first successful host addr in lockfile */
@@ -1234,6 +1246,30 @@ PostmasterMain(int argc, char *argv[])
 				ereport(WARNING,
 						(errmsg("could not create listen socket for \"%s\"",
 								curhost)));
+
+			/* Also listen to the PROXY port on this address, if configured */
+			if (ProxyPortNumber)
+			{
+				if (strcmp(curhost, "*") == 0)
+					socket = StreamServerPort(AF_UNSPEC, NULL,
+											  (unsigned short) ProxyPortNumber,
+											  NULL,
+											  ListenSocket, MAXLISTEN);
+				else
+					socket = StreamServerPort(AF_UNSPEC, curhost,
+											  (unsigned short) ProxyPortNumber,
+											  NULL,
+											  ListenSocket, MAXLISTEN);
+				if (socket)
+				{
+					success++;
+					socket->isProxy = true;
+				}
+				else
+					ereport(WARNING,
+							(errmsg("could not create PROXY listen socket for \"%s\"",
+									curhost)));
+			}
 		}
 
 		if (!success && elemlist != NIL)
@@ -1246,7 +1282,7 @@ PostmasterMain(int argc, char *argv[])
 
 #ifdef USE_BONJOUR
 	/* Register for Bonjour only if we opened TCP socket(s) */
-	if (enable_bonjour && ListenSocket[0] != PGINVALID_SOCKET)
+	if (enable_bonjour && ListenSocket[0].socket != PGINVALID_SOCKET)
 	{
 		DNSServiceErrorType err;
 
@@ -1308,12 +1344,12 @@ PostmasterMain(int argc, char *argv[])
 		{
 			char	   *socketdir = (char *) lfirst(l);
 
-			status = StreamServerPort(AF_UNIX, NULL,
+			socket = StreamServerPort(AF_UNIX, NULL,
 									  (unsigned short) PostPortNumber,
 									  socketdir,
 									  ListenSocket, MAXLISTEN);
 
-			if (status == STATUS_OK)
+			if (socket)
 			{
 				success++;
 				/* record the first successful Unix socket in lockfile */
@@ -1324,9 +1360,23 @@ PostmasterMain(int argc, char *argv[])
 				ereport(WARNING,
 						(errmsg("could not create Unix-domain socket in directory \"%s\"",
 								socketdir)));
+
+			if (ProxyPortNumber)
+			{
+				socket = StreamServerPort(AF_UNIX, NULL,
+										  (unsigned short) ProxyPortNumber,
+										  socketdir,
+										  ListenSocket, MAXLISTEN);
+				if (socket)
+					socket->isProxy = true;
+				else
+					ereport(WARNING,
+							(errmsg("could not create Unix-domain PROXY socket for \"%s\"",
+									socketdir)));
+			}
 		}
 
-		if (!success && elemlist != NIL)
+		if (socket == NULL && elemlist != NIL)
 			ereport(FATAL,
 					(errmsg("could not create any Unix-domain sockets")));
 
@@ -1338,7 +1388,7 @@ PostmasterMain(int argc, char *argv[])
 	/*
 	 * check that we have some socket to listen on
 	 */
-	if (ListenSocket[0] == PGINVALID_SOCKET)
+	if (ListenSocket[0].socket == PGINVALID_SOCKET)
 		ereport(FATAL,
 				(errmsg("no socket created for listening")));
 
@@ -1487,10 +1537,10 @@ CloseServerPorts(int status, Datum arg)
 	 */
 	for (i = 0; i < MAXLISTEN; i++)
 	{
-		if (ListenSocket[i] != PGINVALID_SOCKET)
+		if (ListenSocket[i].socket != PGINVALID_SOCKET)
 		{
-			StreamClose(ListenSocket[i]);
-			ListenSocket[i] = PGINVALID_SOCKET;
+			StreamClose(ListenSocket[i].socket);
+			ListenSocket[i].socket = PGINVALID_SOCKET;
 		}
 	}
 
@@ -1779,15 +1829,17 @@ ServerLoop(void)
 
 			for (i = 0; i < MAXLISTEN; i++)
 			{
-				if (ListenSocket[i] == PGINVALID_SOCKET)
+				if (ListenSocket[i].socket == PGINVALID_SOCKET)
 					break;
-				if (FD_ISSET(ListenSocket[i], &rmask))
+				if (FD_ISSET(ListenSocket[i].socket, &rmask))
 				{
 					Port	   *port;
 
-					port = ConnCreate(ListenSocket[i]);
+					port = ConnCreate(ListenSocket[i].socket);
 					if (port)
 					{
+						port->isProxy = ListenSocket[i].isProxy;
+
 						BackendStartup(port);
 
 						/*
@@ -1950,7 +2002,7 @@ initMasks(fd_set *rmask)
 
 	for (i = 0; i < MAXLISTEN; i++)
 	{
-		int			fd = ListenSocket[i];
+		int			fd = ListenSocket[i].socket;
 
 		if (fd == PGINVALID_SOCKET)
 			break;
@@ -1963,6 +2015,284 @@ initMasks(fd_set *rmask)
 	return maxsock + 1;
 }
 
+static int
+UnwrapProxyConnection(Port *port)
+{
+	char		proxyver;
+	uint16		proxyaddrlen;
+	SockAddr	raddr_save;
+	SockAddr	laddr_save;
+	int			i;
+	bool		useproxy = false;
+
+	/*
+	 * These structs are from the PROXY protocol docs at
+	 * http://www.haproxy.org/download/1.8/doc/proxy-protocol.txt
+	 */
+	union
+	{
+		struct
+		{						/* for TCP/UDP over IPv4, len = 12 */
+			uint32		src_addr;
+			uint32		dst_addr;
+			uint16		src_port;
+			uint16		dst_port;
+		}			ip4;
+		struct
+		{						/* for TCP/UDP over IPv6, len = 36 */
+			uint8		src_addr[16];
+			uint8		dst_addr[16];
+			uint16		src_port;
+			uint16		dst_port;
+		}			ip6;
+	}			proxyaddr;
+	struct
+	{
+		uint8		sig[12];	/* hex 0D 0A 0D 0A 00 0D 0A 51 55 49 54 0A */
+		uint8		ver_cmd;	/* protocol version and command */
+		uint8		fam;		/* protocol family and address */
+		uint16		len;		/* number of following bytes part of the
+								 * header */
+	}			proxyheader;
+
+	/*
+	 * Assert the size of the structs that are part of the protocol,
+	 * to defend against strange compilers.
+	 */
+	StaticAssertStmt(sizeof(proxyheader) == 16, "proxy header struct has invalid size");
+	StaticAssertStmt(sizeof(proxyaddr.ip4) == 12, "proxy address ipv4 struct has invalid size");
+	StaticAssertStmt(sizeof(proxyaddr.ip6) == 36, "proxy address ipv6 struct has invalid size");
+
+
+	/* Else if it's on our list of trusted proxies */
+	if (TrustedProxyServers)
+	{
+		for (i = 0; i < *((int *) TrustedProxyServers) * 2; i += 2)
+		{
+			if (port->raddr.addr.ss_family == TrustedProxyServers[i + 1].ss_family)
+			{
+				/*
+				 * Connection over unix sockets don't give us the source, so
+				 * just check if they're allowed at all.  For IP connections,
+				 * verify that it's an allowed address.
+				 */
+				if (port->raddr.addr.ss_family == AF_UNIX ||
+					pg_range_sockaddr(&port->raddr.addr,
+									  &TrustedProxyServers[i + 1],
+									  &TrustedProxyServers[i + 2]))
+				{
+					useproxy = true;
+					break;
+				}
+			}
+		}
+	}
+	if (!useproxy)
+	{
+		/*
+		 * Connection is not from one of our trusted proxies, so reject it.
+		 */
+		ereport(COMMERROR,
+				(errcode(ERRCODE_PROTOCOL_VIOLATION),
+				 errmsg("connection from unauthorized proxy server")));
+		return STATUS_ERROR;
+	}
+
+	/* Store a copy of the original address, for logging */
+	memcpy(&raddr_save, &port->raddr, sizeof(SockAddr));
+	memcpy(&laddr_save, &port->laddr, sizeof(SockAddr));
+
+	pq_startmsgread();
+
+	/*
+	 * PROXY requests always start with:
+	 * \x0D \x0A \x0D \x0A \x00 \x0D \x0A \x51 \x55 \x49 \x54 \x0A
+	 */
+
+	if (pq_getbytes((char *) &proxyheader, sizeof(proxyheader)) != 0)
+	{
+		ereport(COMMERROR,
+				(errcode(ERRCODE_PROTOCOL_VIOLATION),
+				 errmsg("incomplete proxy packet")));
+		return STATUS_ERROR;
+	}
+
+	if (memcmp(proxyheader.sig, "\x0d\x0a\x0d\x0a\x00\x0d\x0a\x51\x55\x49\x54\x0a", sizeof(proxyheader.sig)) != 0)
+	{
+		ereport(COMMERROR,
+				(errcode(ERRCODE_PROTOCOL_VIOLATION),
+				 errmsg("invalid proxy packet")));
+		return STATUS_ERROR;
+	}
+
+	/* Proxy version is in the high 4 bits of the first byte */
+	proxyver = (proxyheader.ver_cmd & 0xF0) >> 4;
+	if (proxyver != 2)
+	{
+		ereport(COMMERROR,
+				(errcode(ERRCODE_PROTOCOL_VIOLATION),
+				 errmsg("invalid proxy protocol version: %x", proxyver)));
+		return STATUS_ERROR;
+	}
+
+	/*
+	 * Proxy command is in the low 4 bits of the first byte.
+	 * 0x00 = local, 0x01 = proxy, all others should be rejected
+	 */
+	if ((proxyheader.ver_cmd & 0x0F) == 0x00)
+	{
+		if (proxyheader.fam != 0)
+		{
+			ereport(COMMERROR,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					 errmsg("invalid proxy protocol family %x for local connection", proxyheader.fam)));
+			return STATUS_ERROR;
+		}
+	}
+	else if ((proxyheader.ver_cmd & 0x0F) == 0x01)
+	{
+		if (proxyheader.fam == 0)
+		{
+			ereport(COMMERROR,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					 errmsg("invalid proxy protocol family 0 for non-local connection")));
+			return STATUS_ERROR;
+		}
+	}
+	else
+	{
+		ereport(COMMERROR,
+				(errcode(ERRCODE_PROTOCOL_VIOLATION),
+				 errmsg("invalid proxy protocol command: %x", (proxyheader.ver_cmd & 0x0f))));
+		return STATUS_ERROR;
+	}
+
+	proxyaddrlen = pg_ntoh16(proxyheader.len);
+
+	if (pq_getbytes((char *) &proxyaddr, proxyaddrlen > sizeof(proxyaddr) ? sizeof(proxyaddr) : proxyaddrlen) == EOF)
+	{
+		ereport(COMMERROR,
+				(errcode(ERRCODE_PROTOCOL_VIOLATION),
+				 errmsg("incomplete proxy packet")));
+		return STATUS_ERROR;
+	}
+
+	/* Connection family */
+	if (proxyheader.fam == 0)
+	{
+		/*
+		 * UNSPEC connection over LOCAL (verified above).
+		 * in this case we just ignore the address included.
+		 */
+	}
+	else if (proxyheader.fam == 0x11)
+	{
+		/* TCPv4 */
+		if (proxyaddrlen < 12)
+		{
+			ereport(COMMERROR,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					 errmsg("incomplete proxy packet")));
+			return STATUS_ERROR;
+		}
+		port->raddr.addr.ss_family = AF_INET;
+		port->raddr.salen = sizeof(struct sockaddr_in);
+		((struct sockaddr_in *) &port->raddr.addr)->sin_addr.s_addr = proxyaddr.ip4.src_addr;
+		((struct sockaddr_in *) &port->raddr.addr)->sin_port = proxyaddr.ip4.src_port;
+
+		port->daddr.addr.ss_family = AF_INET;
+		port->daddr.salen = sizeof(struct sockaddr_in);
+		((struct sockaddr_in *) &port->daddr.addr)->sin_addr.s_addr = proxyaddr.ip4.dst_addr;
+		((struct sockaddr_in *) &port->daddr.addr)->sin_port = proxyaddr.ip4.dst_port;
+	}
+	else if (proxyheader.fam == 0x21)
+	{
+		/* TCPv6 */
+		if (proxyaddrlen < 36)
+		{
+			ereport(COMMERROR,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					 errmsg("incomplete proxy packet")));
+			return STATUS_ERROR;
+		}
+		port->raddr.addr.ss_family = AF_INET6;
+		port->raddr.salen = sizeof(struct sockaddr_in6);
+		memcpy(&((struct sockaddr_in6 *) &port->raddr.addr)->sin6_addr, proxyaddr.ip6.src_addr, 16);
+		((struct sockaddr_in6 *) &port->raddr.addr)->sin6_port = proxyaddr.ip6.src_port;
+
+
+		port->daddr.addr.ss_family = AF_INET6;
+		port->daddr.salen = sizeof(struct sockaddr_in6);
+		memcpy(&((struct sockaddr_in6 *) &port->daddr.addr)->sin6_addr, proxyaddr.ip6.dst_addr, 16);
+		((struct sockaddr_in6 *) &port->daddr.addr)->sin6_port = proxyaddr.ip6.dst_port;
+	}
+	else
+	{
+		ereport(COMMERROR,
+				(errcode(ERRCODE_PROTOCOL_VIOLATION),
+				 errmsg("invalid proxy protocol connection type: %x", proxyheader.fam)));
+		return STATUS_ERROR;
+	}
+
+	/* If there is any more header data present, skip past it */
+	if (proxyaddrlen > sizeof(proxyaddr))
+	{
+		if (pq_discardbytes(proxyaddrlen - sizeof(proxyaddr)) == EOF)
+		{
+			ereport(COMMERROR,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					 errmsg("incomplete proxy packet")));
+			return STATUS_ERROR;
+		}
+	}
+
+	pq_endmsgread();
+
+	/*
+	 * Log what we've done if connection logging is enabled. We log the proxy
+	 * connection here, and let the normal connection logging mechanism log
+	 * the unwrapped connection.
+	 */
+	if (Log_connections)
+	{
+		char		remote_host[NI_MAXHOST];
+		char		remote_port[NI_MAXSERV];
+		char		proxy_host[NI_MAXHOST];
+		char		proxy_port[NI_MAXSERV];
+		int			ret;
+
+		remote_host[0] = '\0';
+		remote_port[0] = '\0';
+		if ((ret = pg_getnameinfo_all(&raddr_save.addr, raddr_save.salen,
+									  remote_host, sizeof(remote_host),
+									  remote_port, sizeof(remote_port),
+									  (log_hostname ? 0 : NI_NUMERICHOST) | NI_NUMERICSERV)) != 0)
+			ereport(WARNING,
+					(errmsg_internal("pg_getnameinfo_all() failed: %s",
+									 gai_strerror(ret))));
+
+		proxy_host[0] = '\0';
+		proxy_port[0] = '\0';
+		if ((ret = pg_getnameinfo_all(&laddr_save.addr, laddr_save.salen,
+									  proxy_host, sizeof(proxy_host),
+									  proxy_port, sizeof(proxy_port),
+									  (log_hostname ? 0 : NI_NUMERICHOST) | NI_NUMERICSERV)) != 0)
+			ereport(WARNING,
+					(errmsg_internal("pg_getnameinfo_all() failed: %s",
+									 gai_strerror(ret))));
+
+
+		ereport(LOG,
+				(errmsg("proxy connection from: host=%s port=%s (proxy host=%s port=%s)",
+						remote_host,
+						remote_port,
+						proxy_host,
+						proxy_port)));
+
+	}
+
+	return STATUS_OK;
+}
 
 /*
  * Read a client's startup packet and do something according to it.
@@ -2632,10 +2962,10 @@ ClosePostmasterPorts(bool am_syslogger)
 	 */
 	for (i = 0; i < MAXLISTEN; i++)
 	{
-		if (ListenSocket[i] != PGINVALID_SOCKET)
+		if (ListenSocket[i].socket != PGINVALID_SOCKET)
 		{
-			StreamClose(ListenSocket[i]);
-			ListenSocket[i] = PGINVALID_SOCKET;
+			StreamClose(ListenSocket[i].socket);
+			ListenSocket[i].socket = PGINVALID_SOCKET;
 		}
 	}
 
@@ -4352,6 +4682,31 @@ BackendInitialize(Port *port)
 	PG_SETMASK(&StartupBlockSig);
 
 	/*
+	 * Ready to begin client interaction.  We will give up and _exit(1) after
+	 * a time delay, so that a broken client can't hog a connection
+	 * indefinitely.  PreAuthDelay and any DNS interactions above don't count
+	 * against the time limit.
+	 *
+	 * If this is a proxy connection, we apply the timeout once while waiting
+	 * for the proxy header. It is then reapplied further down when we process
+	 * the startup packet, which means it can apply multiple times.
+	 *
+	 * For the time being we re-use AuthenticationTimeout for this, but it may
+	 * be considered for a separate tunable in the future.
+	 */
+	RegisterTimeout(STARTUP_PACKET_TIMEOUT, StartupPacketTimeoutHandler);
+
+	/* Check if this is a proxy connection and if so unwrap the proxying */
+	if (port->isProxy)
+	{
+		enable_timeout_after(STARTUP_PACKET_TIMEOUT, AuthenticationTimeout * 1000);
+		if (UnwrapProxyConnection(port) != STATUS_OK)
+			proc_exit(0);
+		disable_timeout(STARTUP_PACKET_TIMEOUT, false);
+	}
+
+
+	/*
 	 * Get the remote host name and port for logging and status display.
 	 */
 	remote_host[0] = '\0';
@@ -4403,27 +4758,20 @@ BackendInitialize(Port *port)
 		port->remote_hostname = strdup(remote_host);
 
 	/*
-	 * Ready to begin client interaction.  We will give up and _exit(1) after
-	 * a time delay, so that a broken client can't hog a connection
-	 * indefinitely.  PreAuthDelay and any DNS interactions above don't count
-	 * against the time limit.
+	 * Receive the startup packet (which might turn out to be a cancel request
+	 * packet).
 	 *
 	 * Note: AuthenticationTimeout is applied here while waiting for the
 	 * startup packet, and then again in InitPostgres for the duration of any
 	 * authentication operations.  So a hostile client could tie up the
-	 * process for nearly twice AuthenticationTimeout before we kick him off.
+	 * process for nearly twice (or three times in the case of a proxy connection)
+	 * AuthenticationTimeout before we kick him off.
 	 *
 	 * Note: because PostgresMain will call InitializeTimeouts again, the
 	 * registration of STARTUP_PACKET_TIMEOUT will be lost.  This is okay
 	 * since we never use it again after this function.
 	 */
-	RegisterTimeout(STARTUP_PACKET_TIMEOUT, StartupPacketTimeoutHandler);
 	enable_timeout_after(STARTUP_PACKET_TIMEOUT, AuthenticationTimeout * 1000);
-
-	/*
-	 * Receive the startup packet (which might turn out to be a cancel request
-	 * packet).
-	 */
 	status = ProcessStartupPacket(port, false, false);
 
 	/*

@@ -354,6 +354,15 @@ hostnogssenc  <replaceable>database</replaceable>  <replaceable>user</replaceabl
       </para>
 
       <para>
+       If <xref linkend="guc-proxy-port"/> is enabled and the
+       connection is made through a proxy server using the PROXY
+       protocol, the actual IP address of the client will be used
+       for matching. If a connection is made through a proxy server
+       not using the PROXY protocol, the IP address of the
+       proxy server will be used.
+      </para>
+
+      <para>
        These fields do not apply to <literal>local</literal> records.
       </para>
 

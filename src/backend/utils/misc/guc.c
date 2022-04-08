@@ -55,10 +55,12 @@
 #include "commands/user.h"
 #include "commands/vacuum.h"
 #include "commands/variable.h"
+#include "common/ip.h"
 #include "common/string.h"
 #include "funcapi.h"
 #include "jit/jit.h"
 #include "libpq/auth.h"
+#include "libpq/ifaddr.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
 #include "miscadmin.h"
@@ -242,6 +244,8 @@ static bool check_recovery_target_lsn(char **newval, void **extra, GucSource sou
 static void assign_recovery_target_lsn(const char *newval, void *extra);
 static bool check_primary_slot_name(char **newval, void **extra, GucSource source);
 static bool check_default_with_oids(bool *newval, void **extra, GucSource source);
+static bool check_proxy_servers(char **newval, void **extra, GucSource source);
+static void assign_proxy_servers(const char *newval, void *extra);
 
 /* Private functions in guc-file.l that need to be called from guc.c */
 static ConfigVariable *ProcessConfigFileInternal(GucContext context,
@@ -2448,6 +2452,16 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"proxy_port", PGC_POSTMASTER, CONN_AUTH_SETTINGS,
+			gettext_noop("Sets the TCP port the server listens for PROXY connections on."),
+			NULL
+		},
+		&ProxyPortNumber,
+		0, 0, 65535,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"unix_socket_permissions", PGC_POSTMASTER, CONN_AUTH_SETTINGS,
 			gettext_noop("Sets the access permissions of the Unix-domain socket."),
 			gettext_noop("Unix-domain sockets use the usual Unix file system "
@@ -4467,6 +4481,17 @@ static struct config_string ConfigureNamesString[] =
 		&ListenAddresses,
 		"localhost",
 		NULL, NULL, NULL
+	},
+
+	{
+		{"proxy_servers", PGC_SIGHUP, CONN_AUTH_SETTINGS,
+			gettext_noop("Sets the addresses for trusted proxy servers."),
+			NULL,
+			GUC_LIST_INPUT
+		},
+		&TrustedProxyServersString,
+		"",
+		check_proxy_servers, assign_proxy_servers, NULL
 	},
 
 	{
@@ -12889,6 +12914,120 @@ check_default_with_oids(bool *newval, void **extra, GucSource source)
 	}
 
 	return true;
+}
+
+static bool
+check_proxy_servers(char **newval, void **extra, GucSource source)
+{
+	char	   *rawstring;
+	List	   *elemlist;
+	ListCell   *l;
+	struct sockaddr_storage *myextra;
+
+	/* Special case when it's empty */
+	if (**newval == '\0')
+	{
+		*extra = NULL;
+		return true;
+	}
+
+	/* Need a modifiable copy of string */
+	rawstring = pstrdup(*newval);
+
+	/* Parse string into list of identifiers */
+	if (!SplitIdentifierString(rawstring, ',', &elemlist))
+	{
+		/* syntax error in list */
+		GUC_check_errdetail("List syntax is invalid.");
+		pfree(rawstring);
+		list_free(elemlist);
+		return false;
+	}
+
+	if (list_length(elemlist) == 0)
+	{
+		/* If it had only whitespace */
+		pfree(rawstring);
+		list_free(elemlist);
+
+		*extra = NULL;
+		return true;
+	}
+
+	/*
+	 * We store the result in an array of sockaddr_storage. The first entry is
+	 * just an overloaded int which holds the size of the array.
+	 */
+	myextra = (struct sockaddr_storage *) guc_malloc(ERROR, sizeof(struct sockaddr_storage) * (list_length(elemlist) * 2 + 1));
+	*((int *) &myextra[0]) = list_length(elemlist);
+
+	foreach(l, elemlist)
+	{
+		char	   *tok = (char *) lfirst(l);
+		char	   *netmasktok = NULL;
+		int			ret;
+		struct addrinfo *gai_result;
+		struct addrinfo hints;
+
+		/*
+		 * Unix sockets don't have endpoint addresses, so just flag them as
+		 * AF_UNIX
+		 */
+		if (pg_strcasecmp(tok, "unix") == 0)
+		{
+			myextra[foreach_current_index(l) * 2 + 1].ss_family = AF_UNIX;
+			continue;
+		}
+
+		netmasktok = strchr(tok, '/');
+		if (netmasktok)
+		{
+			*netmasktok = '\0';
+			netmasktok++;
+		}
+
+		memset((char *) &hints, 0, sizeof(hints));
+		hints.ai_flags = AI_NUMERICHOST;
+		hints.ai_family = AF_UNSPEC;
+
+		ret = pg_getaddrinfo_all(tok, NULL, &hints, &gai_result);
+		if (ret != 0 || gai_result == NULL)
+		{
+			GUC_check_errdetail("Invalid IP address %s", tok);
+			pfree(rawstring);
+			list_free(elemlist);
+			free(myextra);
+			return false;
+		}
+
+		memcpy((char *) &myextra[foreach_current_index(l) * 2 + 1], gai_result->ai_addr, gai_result->ai_addrlen);
+		pg_freeaddrinfo_all(hints.ai_family, gai_result);
+
+		/* A NULL netmasktok means the fully set hostmask */
+		if (pg_sockaddr_cidr_mask(&myextra[foreach_current_index(l) * 2 + 2], netmasktok, myextra[foreach_current_index(l) * 2 + 1].ss_family) != 0)
+		{
+			if (netmasktok)
+				GUC_check_errdetail("Invalid netmask %s", netmasktok);
+			else
+				GUC_check_errdetail("Could not create netmask");
+			pfree(rawstring);
+			list_free(elemlist);
+			free(myextra);
+			return false;
+		}
+	}
+
+	pfree(rawstring);
+	list_free(elemlist);
+	*extra = (void *) myextra;
+
+	return true;
+}
+
+static void
+assign_proxy_servers(const char *newval, void *extra)
+{
+	TrustedProxyServers = (struct sockaddr_storage *) extra;
 }
 
 #include "guc-file.c"

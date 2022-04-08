@@ -685,6 +685,56 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-proxy-port" xreflabel="proxy_port">
+      <term><varname>proxy_port</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>proxy_port</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        The TCP port the server listens on for PROXY connections, disabled by
+        default. If set to a number, <productname>PostgreSQL</productname>
+        will listen on this port on the same addresses as for regular
+        connections, but expect all connections to use the PROXY protocol to
+        identify the client.  This parameter can only be set at server start.
+       </para>
+       <para>
+        If a proxy connection is made over this port, and the proxy is listed
+        in <xref linkend="guc-proxy-servers" />, the actual client address
+        will be considered as the address of the client, instead of listing
+        all connections as coming from the proxy server.
+       </para>
+       <para>
+         The <ulink url="http://www.haproxy.org/download/1.9/doc/proxy-protocol.txt">PROXY
+         protocol</ulink> is maintained by <productname>HAProxy</productname>,
+         and supported in many proxies and load
+         balancers. <productname>PostgreSQL</productname> supports version 2
+         of the protocol.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-proxy-servers" xreflabel="proxy_servers">
+      <term><varname>proxy_servers</varname> (<type>string</type>)
+      <indexterm>
+       <primary><varname>proxy_servers</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        A comma separated list of one or more ip addresses, cidr specifications or the
+        literal <literal>unix</literal>, indicating which proxy servers to trust when
+        connecting on the port specified in <xref linkend="guc-proxy-port" />.
+       </para>
+       <para>
+        If a proxy connection is made from an IP address not covered by this
+        list, the connection will be rejected. By default no proxy is trusted
+        and all proxy connections will be rejected.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-max-connections" xreflabel="max_connections">
       <term><varname>max_connections</varname> (<type>integer</type>)
       <indexterm>

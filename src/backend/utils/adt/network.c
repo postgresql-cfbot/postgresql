@@ -1787,6 +1787,8 @@ inet_client_port(PG_FUNCTION_ARGS)
 
 /*
  * IP address that the server accepted the connection on (NULL if Unix socket)
+ * If the connection is a PROXY connection, then this returns the IP address/port of
+ * the proxy server, and not the local connection!
  */
 Datum
 inet_server_addr(PG_FUNCTION_ARGS)
@@ -1798,7 +1800,7 @@ inet_server_addr(PG_FUNCTION_ARGS)
 	if (port == NULL)
 		PG_RETURN_NULL();
 
-	switch (port->laddr.addr.ss_family)
+	switch (port->daddr.addr.ss_family)
 	{
 		case AF_INET:
 #ifdef HAVE_IPV6
@@ -1811,14 +1813,14 @@ inet_server_addr(PG_FUNCTION_ARGS)
 
 	local_host[0] = '\0';
 
-	ret = pg_getnameinfo_all(&port->laddr.addr, port->laddr.salen,
+	ret = pg_getnameinfo_all(&port->daddr.addr, port->daddr.salen,
 							 local_host, sizeof(local_host),
 							 NULL, 0,
 							 NI_NUMERICHOST | NI_NUMERICSERV);
 	if (ret != 0)
 		PG_RETURN_NULL();
 
-	clean_ipv6_addr(port->laddr.addr.ss_family, local_host);
+	clean_ipv6_addr(port->daddr.addr.ss_family, local_host);
 
 	PG_RETURN_INET_P(network_in(local_host, false));
 }
@@ -1826,6 +1828,8 @@ inet_server_addr(PG_FUNCTION_ARGS)
 
 /*
  * port that the server accepted the connection on (NULL if Unix socket)
+ * If the connection is a PROXY connection, then this returns the IP address/port of
+ * the proxy server, and not the local connection!
  */
 Datum
 inet_server_port(PG_FUNCTION_ARGS)
@@ -1837,7 +1841,7 @@ inet_server_port(PG_FUNCTION_ARGS)
 	if (port == NULL)
 		PG_RETURN_NULL();
 
-	switch (port->laddr.addr.ss_family)
+	switch (port->daddr.addr.ss_family)
 	{
 		case AF_INET:
 #ifdef HAVE_IPV6
@@ -1850,7 +1854,7 @@ inet_server_port(PG_FUNCTION_ARGS)
 
 	local_port[0] = '\0';
 
-	ret = pg_getnameinfo_all(&port->laddr.addr, port->laddr.salen,
+	ret = pg_getnameinfo_all(&port->daddr.addr, port->daddr.salen,
 							 NULL, 0,
 							 local_port, sizeof(local_port),
 							 NI_NUMERICHOST | NI_NUMERICSERV);

@@ -998,7 +998,9 @@ exec_simple_query(const char *query_string)
 	bool		save_log_statement_stats = log_statement_stats;
 	bool		was_logged = false;
 	bool		use_implicit_block;
+	int			msecs;
 	char		msec_str[32];
+	int64		jit_time = 0;
 
 	/*
 	 * Report query to various monitoring facilities.
@@ -1257,6 +1259,16 @@ exec_simple_query(const char *query_string)
 
 		receiver->rDestroy(receiver);
 
+		/* Collect JIT timings in case it's active */
+		if (jit_enabled && jit_warn_above_fraction > 0 && portal->queryDesc && portal->queryDesc->estate->es_jit)
+		{
+			jit_time +=
+				INSTR_TIME_GET_MILLISEC(portal->queryDesc->estate->es_jit->instr.generation_counter) +
+				INSTR_TIME_GET_MILLISEC(portal->queryDesc->estate->es_jit->instr.inlining_counter) +
+				INSTR_TIME_GET_MILLISEC(portal->queryDesc->estate->es_jit->instr.optimization_counter) +
+				INSTR_TIME_GET_MILLISEC(portal->queryDesc->estate->es_jit->instr.emission_counter);
+		}
+
 		PortalDrop(portal, false);
 
 		if (lnext(parsetree_list, parsetree_item) == NULL)
@@ -1327,7 +1339,7 @@ exec_simple_query(const char *query_string)
 	/*
 	 * Emit duration logging if appropriate.
 	 */
-	switch (check_log_duration(msec_str, was_logged))
+	switch (check_log_duration(&msecs, msec_str, was_logged))
 	{
 		case 1:
 			ereport(LOG,
@@ -1341,6 +1353,17 @@ exec_simple_query(const char *query_string)
 					 errhidestmt(true),
 					 errdetail_execute(parsetree_list)));
 			break;
+	}
+
+	if (jit_enabled && jit_warn_above_fraction > 0)
+	{
+		if (jit_time > msecs * jit_warn_above_fraction)
+		{
+			ereport(WARNING,
+					(errmsg("JIT total processing time was %lld ms of %d ms",
+							(long long) jit_time, msecs)),
+					errhint("Consider turning of JIT or changing the threshold for this particular query"));
+		}
 	}
 
 	if (save_log_statement_stats)
@@ -1370,6 +1393,7 @@ exec_parse_message(const char *query_string,	/* string to execute */
 	CachedPlanSource *psrc;
 	bool		is_named;
 	bool		save_log_statement_stats = log_statement_stats;
+	int			msecs;
 	char		msec_str[32];
 
 	/*
@@ -1563,7 +1587,7 @@ exec_parse_message(const char *query_string,	/* string to execute */
 	/*
 	 * Emit duration logging if appropriate.
 	 */
-	switch (check_log_duration(msec_str, false))
+	switch (check_log_duration(&msecs, msec_str, false))
 	{
 		case 1:
 			ereport(LOG,
@@ -1610,6 +1634,7 @@ exec_bind_message(StringInfo input_message)
 	MemoryContext oldContext;
 	bool		save_log_statement_stats = log_statement_stats;
 	bool		snapshot_set = false;
+	int			msecs;
 	char		msec_str[32];
 	ParamsErrorCbData params_data;
 	ErrorContextCallback params_errcxt;
@@ -2022,7 +2047,7 @@ exec_bind_message(StringInfo input_message)
 	/*
 	 * Emit duration logging if appropriate.
 	 */
-	switch (check_log_duration(msec_str, false))
+	switch (check_log_duration(&msecs, msec_str, false))
 	{
 		case 1:
 			ereport(LOG,
@@ -2068,6 +2093,7 @@ exec_execute_message(const char *portal_name, long max_rows)
 	bool		is_xact_command;
 	bool		execute_is_fetch;
 	bool		was_logged = false;
+	int			msecs;
 	char		msec_str[32];
 	ParamsErrorCbData params_data;
 	ErrorContextCallback params_errcxt;
@@ -2259,7 +2285,7 @@ exec_execute_message(const char *portal_name, long max_rows)
 	/*
 	 * Emit duration logging if appropriate.
 	 */
-	switch (check_log_duration(msec_str, was_logged))
+	switch (check_log_duration(&msecs, msec_str, was_logged))
 	{
 		case 1:
 			ereport(LOG,
@@ -2280,6 +2306,24 @@ exec_execute_message(const char *portal_name, long max_rows)
 					 errhidestmt(true),
 					 errdetail_params(portalParams)));
 			break;
+	}
+
+	if (jit_enabled && jit_warn_above_fraction > 0)
+	{
+		int64 jit_time =
+			INSTR_TIME_GET_MILLISEC(portal->queryDesc->estate->es_jit->instr.generation_counter) +
+			INSTR_TIME_GET_MILLISEC(portal->queryDesc->estate->es_jit->instr.inlining_counter) +
+			INSTR_TIME_GET_MILLISEC(portal->queryDesc->estate->es_jit->instr.optimization_counter) +
+			INSTR_TIME_GET_MILLISEC(portal->queryDesc->estate->es_jit->instr.emission_counter);
+
+		if (jit_time > msecs * jit_warn_above_fraction)
+		{
+			ereport(WARNING,
+					(errmsg("JIT total processing time was %lld ms of %d ms",
+							(long long) jit_time, msecs)),
+					errhint("Consider turning of JIT or changing the threshold for this particular query"));
+
+		}
 	}
 
 	if (save_log_statement_stats)
@@ -2328,6 +2372,10 @@ check_log_statement(List *stmt_list)
  *		1 if just the duration should be logged
  *		2 if duration and query details should be logged
  *
+ * The millisecond runtime of the query is stored in msecs if any logging parameter
+ * that requires the calculation of time is enabled, even if the result is not that
+ * the entry should be logged. In other cases, it is set to -1.
+ *
  * If logging is needed, the duration in msec is formatted into msec_str[],
  * which must be a 32-byte buffer.
  *
@@ -2335,14 +2383,13 @@ check_log_statement(List *stmt_list)
  * essentially prevents 2 from being returned).
  */
 int
-check_log_duration(char *msec_str, bool was_logged)
+check_log_duration(int *msecs, char *msec_str, bool was_logged)
 {
 	if (log_duration || log_min_duration_sample >= 0 ||
-		log_min_duration_statement >= 0 || xact_is_sampled)
+	log_min_duration_statement >= 0 || xact_is_sampled || jit_warn_above_fraction > 0)
 	{
 		long		secs;
 		int			usecs;
-		int			msecs;
 		bool		exceeded_duration;
 		bool		exceeded_sample_duration;
 		bool		in_sample = false;
@@ -2350,7 +2397,7 @@ check_log_duration(char *msec_str, bool was_logged)
 		TimestampDifference(GetCurrentStatementStartTimestamp(),
 							GetCurrentTimestamp(),
 							&secs, &usecs);
-		msecs = usecs / 1000;
+		*msecs = usecs / 1000;
 
 		/*
 		 * This odd-looking test for log_min_duration_* being exceeded is
@@ -2360,12 +2407,12 @@ check_log_duration(char *msec_str, bool was_logged)
 		exceeded_duration = (log_min_duration_statement == 0 ||
 							 (log_min_duration_statement > 0 &&
 							  (secs > log_min_duration_statement / 1000 ||
-							   secs * 1000 + msecs >= log_min_duration_statement)));
+							   secs * 1000 + *msecs >= log_min_duration_statement)));
 
 		exceeded_sample_duration = (log_min_duration_sample == 0 ||
 									(log_min_duration_sample > 0 &&
 									 (secs > log_min_duration_sample / 1000 ||
-									  secs * 1000 + msecs >= log_min_duration_sample)));
+									  secs * 1000 + *msecs >= log_min_duration_sample)));
 
 		/*
 		 * Do not log if log_statement_sample_rate = 0. Log a sample if
@@ -2380,12 +2427,16 @@ check_log_duration(char *msec_str, bool was_logged)
 		if (exceeded_duration || in_sample || log_duration || xact_is_sampled)
 		{
 			snprintf(msec_str, 32, "%ld.%03d",
-					 secs * 1000 + msecs, usecs % 1000);
+					 secs * 1000 + *msecs, usecs % 1000);
 			if ((exceeded_duration || in_sample || xact_is_sampled) && !was_logged)
 				return 2;
 			else
 				return 1;
 		}
+	}
+	else
+	{
+		*msecs = -1;
 	}
 
 	return 0;

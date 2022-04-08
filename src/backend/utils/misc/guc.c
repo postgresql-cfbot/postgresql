@@ -642,6 +642,7 @@ int			log_parameter_max_length_on_error = 0;
 int			log_temp_files = -1;
 double		log_statement_sample_rate = 1.0;
 double		log_xact_sample_rate = 0;
+double		jit_warn_above_fraction = 0;
 int			trace_recovery_messages = LOG;
 char	   *backtrace_functions;
 char	   *backtrace_symbol_list;
@@ -3939,6 +3940,19 @@ static struct config_real ConfigureNamesReal[] =
 						 "statements for all transactions).")
 		},
 		&log_xact_sample_rate,
+		0.0, 0.0, 1.0,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"jit_warn_above_fraction", PGC_USERSET, LOGGING_WHEN,
+			gettext_noop("Sets the fraction of query time spent on JIT before writing "
+						 "a warning to the log."),
+			gettext_noop("Write a message to the server log if more than this "
+						 "fraction of the query runtime is spent on JIT. "
+						 "Zero turns off the warning.")
+		},
+		&jit_warn_above_fraction,
 		0.0, 0.0, 1.0,
 		NULL, NULL, NULL
 	},

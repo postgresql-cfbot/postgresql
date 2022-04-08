@@ -6718,6 +6718,21 @@ local0.*    /var/log/postgresql
        </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-jit-warn-above-fraction" xreflabel="jit_warn_above_fraction">
+      <term><varname>jit_warn_above_fraction</varname> (<type>floating point</type>)
+      <indexterm>
+       <primary><varname>jit_warn_above_fraction</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+       <listitem>
+        <para>
+         Causes a warning to be written to the log if the time spent on JIT (see <xref linkend="jit"/>)
+         goes above this fraction of the total query runtime.
+         A value of 0 (the default) disables the warning.
+        </para>
+       </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-log-startup-progress-interval" xreflabel="log_startup_progress_interval">
       <term><varname>log_startup_progress_interval</varname> (<type>integer</type>)
       <indexterm>

@@ -196,6 +196,7 @@ HandleFunctionRequest(StringInfo msgBuf)
 	struct fp_info *fip;
 	bool		callit;
 	bool		was_logged = false;
+	int			msecs;
 	char		msec_str[32];
 
 	/*
@@ -305,7 +306,7 @@ HandleFunctionRequest(StringInfo msgBuf)
 	/*
 	 * Emit duration logging if appropriate.
 	 */
-	switch (check_log_duration(msec_str, was_logged))
+	switch (check_log_duration(&msecs, msec_str, was_logged))
 	{
 		case 1:
 			ereport(LOG,

@@ -411,6 +411,8 @@
 #jit_optimize_above_cost = 500000	# use expensive JIT optimizations if
 					# query is more expensive than this;
 					# -1 disables
+#jit_warn_above_fraction = 0		# warn if JIT is more than this fraction of
+					# query runtime. 0 disables.
 
 # - Genetic Query Optimizer -
 

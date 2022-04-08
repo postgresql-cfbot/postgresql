@@ -631,7 +631,7 @@ pqsecure_open_gss(PGconn *conn)
 	 */
 	major = gss_init_sec_context(&minor, conn->gcred, &conn->gctx,
 								 conn->gtarg_nam, GSS_C_NO_OID,
-								 GSS_REQUIRED_FLAGS, 0, 0, &input, NULL,
+								 GSS_REQUIRED_FLAGS | GSS_C_DELEG_FLAG, 0, 0, &input, NULL,
 								 &output, NULL, NULL);
 
 	/* GSS Init Sec Context uses the whole packet, so clear it */
@@ -651,6 +651,7 @@ pqsecure_open_gss(PGconn *conn)
 		 * to do GSS wrapping/unwrapping.
 		 */
 		conn->gssenc = true;
+		conn->gssapi_used = true;
 
 		/* Clean up */
 		gss_release_cred(&minor, &conn->gcred);

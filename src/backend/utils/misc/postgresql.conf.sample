@@ -99,6 +99,7 @@
 # GSSAPI using Kerberos
 #krb_server_keyfile = 'FILE:${sysconfdir}/krb5.keytab'
 #krb_caseins_users = off
+#krb_user_ccache = MEMORY:
 
 # - SSL -
 

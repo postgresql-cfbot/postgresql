@@ -61,6 +61,7 @@ pg_GSS_continue(PGconn *conn, int payloadlen)
 				lmin_s;
 	gss_buffer_desc ginbuf;
 	gss_buffer_desc goutbuf;
+	gss_cred_id_t proxy;
 
 	/*
 	 * On first call, there's no input token. On subsequent calls, read the
@@ -93,12 +94,16 @@ pg_GSS_continue(PGconn *conn, int payloadlen)
 		ginbuf.value = NULL;
 	}
 
+	/* Check if we can aquire a proxy credential. */
+	if (!pg_GSS_have_cred_cache(&proxy))
+		proxy = GSS_C_NO_CREDENTIAL;
+
 	maj_stat = gss_init_sec_context(&min_stat,
-									GSS_C_NO_CREDENTIAL,
+									proxy,
 									&conn->gctx,
 									conn->gtarg_nam,
 									GSS_C_NO_OID,
-									GSS_C_MUTUAL_FLAG,
+									GSS_C_MUTUAL_FLAG | GSS_C_DELEG_FLAG,
 									0,
 									GSS_C_NO_CHANNEL_BINDINGS,
 									(ginbuf.value == NULL) ? GSS_C_NO_BUFFER : &ginbuf,
@@ -138,7 +143,10 @@ pg_GSS_continue(PGconn *conn, int payloadlen)
 	}
 
 	if (maj_stat == GSS_S_COMPLETE)
+	{
 		gss_release_name(&lmin_s, &conn->gtarg_nam);
+		conn->gssapi_used = true;
+	}
 
 	return STATUS_OK;
 }

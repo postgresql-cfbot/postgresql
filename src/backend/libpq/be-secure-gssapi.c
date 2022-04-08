@@ -504,6 +504,9 @@ secure_open_gssapi(Port *port)
 	port->gss = (pg_gssinfo *)
 		MemoryContextAllocZero(TopMemoryContext, sizeof(pg_gssinfo));
 
+	port->gss->proxy = NULL;
+	port->gss->proxy_creds = false;
+
 	/*
 	 * Allocate buffers and initialize state variables.  By malloc'ing the
 	 * buffers at this point, we avoid wasting static data space in processes
@@ -588,7 +591,8 @@ secure_open_gssapi(Port *port)
 									   GSS_C_NO_CREDENTIAL, &input,
 									   GSS_C_NO_CHANNEL_BINDINGS,
 									   &port->gss->name, NULL, &output, NULL,
-									   NULL, NULL);
+									   NULL, &port->gss->proxy);
+
 		if (GSS_ERROR(major))
 		{
 			pg_GSS_error(_("could not accept GSSAPI security context"),
@@ -730,4 +734,17 @@ be_gssapi_get_princ(Port *port)
 		return NULL;
 
 	return port->gss->princ;
+}
+
+/*
+ * Return if GSSAPI delegated/proxy credentials were included on this
+ * connection.
+ */
+bool
+be_gssapi_get_proxy(Port *port)
+{
+	if (!port || !port->gss)
+		return NULL;
+
+	return port->gss->proxy_creds;
 }

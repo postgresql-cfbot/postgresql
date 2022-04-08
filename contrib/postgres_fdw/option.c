@@ -262,6 +262,9 @@ InitPgFdwOptions(void)
 		{"sslcert", UserMappingRelationId, true},
 		{"sslkey", UserMappingRelationId, true},
 
+		/* gssencmode is also libpq option, same to above. */
+		{"gssencmode", UserMappingRelationId, true},
+
 		{NULL, InvalidOid, false}
 	};
 

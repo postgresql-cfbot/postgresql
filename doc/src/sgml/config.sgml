@@ -1129,6 +1129,34 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-krb-user-ccache" xreflabel="krb_user_ccache">
+      <term><varname>krb_user_ccache</varname> (<type>string</type>)
+      <indexterm>
+       <primary><varname>krb_user_ccache</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Sets the location of the Kerberos credential cache to be used for
+        regular user backends which go through authentication.  The default is
+        <filename>MEMORY:</filename>, which is where delegated credentials
+        are stored (and is otherwise empty).  Care should be used when changing
+        this value- setting it to a file-based credential cache will mean that
+        user backends could potentially use any credentials stored to access
+        other systems.
+        If this parameter is set to an empty string, then the variable will be
+		explicit un-set and the system-dependent default is used, which may be a
+		file-based credential cache with the same caveats as previously
+		mentioned.  If the special value 'environment' is used, then the variable
+		is left untouched and will be whatever was set in the environment at
+		startup time.
+        This parameter can only be set in the
+        <filename>postgresql.conf</filename> file or on the server command line.
+        See <xref linkend="gssapi-auth"/> for more information.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-db-user-namespace" xreflabel="db_user_namespace">
       <term><varname>db_user_namespace</varname> (<type>boolean</type>)
       <indexterm>

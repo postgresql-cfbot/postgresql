@@ -19,6 +19,7 @@
 extern char *pg_krb_server_keyfile;
 extern bool pg_krb_caseins_users;
 extern char *pg_krb_realm;
+extern char *pg_krb_user_ccache;
 
 extern void ClientAuthentication(Port *port);
 extern void sendAuthRequest(Port *port, AuthRequest areq, const char *extradata,

@@ -64,6 +64,10 @@ get_hba_options(HbaLine *hba)
 		if (hba->krb_realm)
 			options[noptions++] =
 				CStringGetTextDatum(psprintf("krb_realm=%s", hba->krb_realm));
+
+		if (hba->allow_cred_delegation)
+			options[noptions++] =
+				CStringGetTextDatum("allow_cred_delegation=true");
 	}
 
 	if (hba->usermap)

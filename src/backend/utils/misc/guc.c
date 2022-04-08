@@ -119,6 +119,10 @@
 #define PG_KRB_SRVTAB ""
 #endif
 
+#ifndef PG_KRB_USER_CCACHE
+#define PG_KRB_USER_CCACHE "MEMORY:"
+#endif
+
 #define CONFIG_FILENAME "postgresql.conf"
 #define HBA_FILENAME	"pg_hba.conf"
 #define IDENT_FILENAME	"pg_ident.conf"
@@ -4187,6 +4191,17 @@ static struct config_string ConfigureNamesString[] =
 		},
 		&pg_krb_server_keyfile,
 		PG_KRB_SRVTAB,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"krb_user_ccache", PGC_SIGHUP, CONN_AUTH_AUTH,
+			gettext_noop("Sets the Kerberos credential cache location for user authenticated backends."),
+			NULL,
+			GUC_SUPERUSER_ONLY
+		},
+		&pg_krb_user_ccache,
+		PG_KRB_USER_CCACHE,
 		NULL, NULL, NULL
 	},
 

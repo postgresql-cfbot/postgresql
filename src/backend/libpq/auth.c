@@ -170,6 +170,7 @@ static int	CheckCertAuth(Port *port);
  */
 char	   *pg_krb_server_keyfile;
 bool		pg_krb_caseins_users;
+char	   *pg_krb_user_ccache;
 
 
 /*----------------------------------------------------------------
@@ -422,6 +423,17 @@ ClientAuthentication(Port *port)
 					 errmsg("connection requires a valid client certificate")));
 	}
 
+#ifdef ENABLE_GSS
+	/*
+	 * Set the credential cache to use for user backends which go through
+	 * regular authentication.
+	 */
+	if (!pg_krb_user_ccache || pg_krb_user_ccache[0] == '\0')
+		unsetenv("KRB5CCNAME");
+	else if (pg_strcasecmp(pg_krb_user_ccache, "environment") != 0)
+		setenv("KRB5CCNAME", pg_krb_user_ccache, 1);
+#endif
+
 	/*
 	 * Now proceed to do the actual authentication check
 	 */
@@ -563,6 +575,16 @@ ClientAuthentication(Port *port)
 			{
 				sendAuthRequest(port, AUTH_REQ_GSS, NULL, 0);
 				status = pg_GSS_recvauth(port);
+			}
+
+			/*
+			 * If the HBA line allows and we were delegated credentials then
+			 * store them.
+			 */
+			if (port->hba->allow_cred_delegation && port->gss->proxy)
+			{
+				pg_store_proxy_credential(port->gss->proxy);
+				port->gss->proxy_creds = true;
 			}
 #else
 			Assert(false);
@@ -949,6 +971,9 @@ pg_GSS_recvauth(Port *port)
 	 */
 	port->gss->ctx = GSS_C_NO_CONTEXT;
 
+	port->gss->proxy = NULL;
+	port->gss->proxy_creds = false;
+
 	/*
 	 * Loop through GSSAPI message exchange. This exchange can consist of
 	 * multiple messages sent in both directions. First message is always from
@@ -999,7 +1024,7 @@ pg_GSS_recvauth(Port *port)
 										  &port->gss->outbuf,
 										  &gflags,
 										  NULL,
-										  NULL);
+										  &port->gss->proxy);
 
 		/* gbuf no longer used */
 		pfree(buf.data);

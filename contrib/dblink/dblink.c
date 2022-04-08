@@ -2643,7 +2643,7 @@ dblink_security_check(PGconn *conn, remoteConn *rconn)
 {
 	if (!superuser())
 	{
-		if (!PQconnectionUsedPassword(conn))
+		if (!(PQconnectionUsedPassword(conn) || PQconnectionUsedGSSAPI(conn)))
 		{
 			PQfinish(conn);
 			ReleaseExternalFD();
@@ -2652,8 +2652,8 @@ dblink_security_check(PGconn *conn, remoteConn *rconn)
 
 			ereport(ERROR,
 					(errcode(ERRCODE_S_R_E_PROHIBITED_SQL_STATEMENT_ATTEMPTED),
-					 errmsg("password is required"),
-					 errdetail("Non-superuser cannot connect if the server does not request a password."),
+					 errmsg("password or GSSAPI is required"),
+					 errdetail("Non-superuser cannot connect if the server does not request a password or use GSSAPI."),
 					 errhint("Target server's authentication method must be changed.")));
 		}
 	}

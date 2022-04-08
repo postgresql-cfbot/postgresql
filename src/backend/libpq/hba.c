@@ -1469,6 +1469,16 @@ parse_hba_line(TokenizedAuthLine *tok_line, int elevel)
 		parsedline->upn_username = false;
 	}
 
+	/*
+	 * For GSS, set the default value of allow_cred_delegation to true.
+	 * This should generally be safe as the delegated credentials are those of
+	 * the user who has been authorized, and will only happen if the user chooses
+	 * to authenticate with a credential that can be delegated, but admins are
+	 * able to disable it if they wish to.
+	 */
+	if (parsedline->auth_method == uaGSS)
+		parsedline->allow_cred_delegation = true;
+
 	/* Parse remaining arguments */
 	while ((field = lnext(tok_line->fields, field)) != NULL)
 	{
@@ -1938,6 +1948,15 @@ parse_hba_auth_opt(char *name, char *val, HbaLine *hbaline,
 			hbaline->upn_username = true;
 		else
 			hbaline->upn_username = false;
+	}
+	else if (strcmp(name, "allow_cred_delegation") == 0)
+	{
+		if (hbaline->auth_method != uaGSS)
+			INVALID_AUTH_OPTION("allow_cred_delegation", gettext_noop("gssapi"));
+		if (strcmp(val, "1") == 0)
+			hbaline->allow_cred_delegation = true;
+		else
+			hbaline->allow_cred_delegation = false;
 	}
 	else if (strcmp(name, "radiusservers") == 0)
 	{

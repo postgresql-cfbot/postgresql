@@ -188,7 +188,7 @@ ALTER USER MAPPING FOR public SERVER testserver1
 ALTER USER MAPPING FOR public SERVER testserver1
 	OPTIONS (ADD sslmode 'require');
 ERROR:  invalid option "sslmode"
-HINT:  Valid options in this context are: user, password, sslpassword, password_required, sslcert, sslkey
+HINT:  Valid options in this context are: user, password, sslpassword, password_required, sslcert, sslkey, gssencmode
 -- But we can add valid ones fine
 ALTER USER MAPPING FOR public SERVER testserver1
 	OPTIONS (ADD sslpassword 'dummy');

@@ -112,6 +112,7 @@ typedef struct HbaLine
 	bool		include_realm;
 	bool		compat_realm;
 	bool		upn_username;
+	bool		allow_cred_delegation;
 	List	   *radiusservers;
 	char	   *radiusservers_s;
 	List	   *radiussecrets;

@@ -45,6 +45,7 @@ elsif ($^O eq 'linux')
 
 my $krb5_config  = 'krb5-config';
 my $kinit        = 'kinit';
+my $klist        = 'klist';
 my $kdb5_util    = 'kdb5_util';
 my $kadmin_local = 'kadmin.local';
 my $krb5kdc      = 'krb5kdc';
@@ -53,6 +54,7 @@ if ($krb5_bin_dir && -d $krb5_bin_dir)
 {
 	$krb5_config = $krb5_bin_dir . '/' . $krb5_config;
 	$kinit       = $krb5_bin_dir . '/' . $kinit;
+	$klist       = $krb5_bin_dir . '/' . $klist;
 }
 if ($krb5_sbin_dir && -d $krb5_sbin_dir)
 {
@@ -97,6 +99,7 @@ kdc = FILE:$kdc_log
 
 [libdefaults]
 default_realm = $realm
+forwardable = false
 
 [realms]
 $realm = {
@@ -174,7 +177,21 @@ lc_messages = 'C'
 });
 $node->start;
 
+my $port = $node->port();
+
 $node->safe_psql('postgres', 'CREATE USER test1;');
+$node->safe_psql('postgres', 'CREATE EXTENSION postgres_fdw;');
+$node->safe_psql('postgres', 'CREATE EXTENSION dblink;');
+$node->safe_psql('postgres', "CREATE SERVER s1 FOREIGN DATA WRAPPER postgres_fdw OPTIONS (host '$host', hostaddr '$hostaddr', port '$port', dbname 'postgres');");
+
+$node->safe_psql('postgres', 'GRANT USAGE ON FOREIGN SERVER s1 TO test1;');
+
+$node->safe_psql('postgres', "CREATE USER MAPPING FOR test1 SERVER s1 OPTIONS (user 'test1', password_required 'false');");
+$node->safe_psql('postgres', "CREATE TABLE t1 (c1 int);");
+$node->safe_psql('postgres', "INSERT INTO t1 VALUES (1);");
+$node->safe_psql('postgres', "CREATE FOREIGN TABLE tf1 (c1 int) SERVER s1 OPTIONS (schema_name 'public', table_name 't1');");
+$node->safe_psql('postgres', "GRANT SELECT ON t1 TO test1;");
+$node->safe_psql('postgres', "GRANT SELECT ON tf1 TO test1;");
 
 note "running tests";
 
@@ -240,6 +257,7 @@ $node->restart;
 test_access($node, 'test1', 'SELECT true', 2, '', 'fails without ticket');
 
 run_log [ $kinit, 'test1' ], \$test1_password or BAIL_OUT($?);
+run_log [ $klist, '-f' ] or BAIL_OUT($?);
 
 test_access(
 	$node,
@@ -262,7 +280,7 @@ test_access(
 	'',
 	'succeeds with mapping with default gssencmode and host hba',
 	"connection authenticated: identity=\"test1\@$realm\" method=gss",
-	"connection authorized: user=$username database=$dbname application_name=$application GSS (authenticated=yes, encrypted=yes, principal=test1\@$realm)"
+	"connection authorized: user=$username database=$dbname application_name=$application GSS (authenticated=yes, encrypted=yes, proxy_credentials=no, principal=test1\@$realm)"
 );
 
 test_access(
@@ -273,7 +291,7 @@ test_access(
 	'gssencmode=prefer',
 	'succeeds with GSS-encrypted access preferred with host hba',
 	"connection authenticated: identity=\"test1\@$realm\" method=gss",
-	"connection authorized: user=$username database=$dbname application_name=$application GSS (authenticated=yes, encrypted=yes, principal=test1\@$realm)"
+	"connection authorized: user=$username database=$dbname application_name=$application GSS (authenticated=yes, encrypted=yes, proxy_credentials=no, principal=test1\@$realm)"
 );
 test_access(
 	$node,
@@ -283,7 +301,7 @@ test_access(
 	'gssencmode=require',
 	'succeeds with GSS-encrypted access required with host hba',
 	"connection authenticated: identity=\"test1\@$realm\" method=gss",
-	"connection authorized: user=$username database=$dbname application_name=$application GSS (authenticated=yes, encrypted=yes, principal=test1\@$realm)"
+	"connection authorized: user=$username database=$dbname application_name=$application GSS (authenticated=yes, encrypted=yes, proxy_credentials=no, principal=test1\@$realm)"
 );
 
 # Test that we can transport a reasonable amount of data.
@@ -312,6 +330,11 @@ $node->append_conf('pg_hba.conf',
 	qq{hostgssenc all all $hostaddr/32 gss map=mymap});
 $node->restart;
 
+string_replace_file($krb5_conf, "forwardable = false", "forwardable = true");
+
+run_log [ $kinit, 'test1' ], \$test1_password or BAIL_OUT($?);
+run_log [ $klist, '-f' ] or BAIL_OUT($?);
+
 test_access(
 	$node,
 	'test1',
@@ -320,7 +343,7 @@ test_access(
 	'gssencmode=prefer',
 	'succeeds with GSS-encrypted access preferred and hostgssenc hba',
 	"connection authenticated: identity=\"test1\@$realm\" method=gss",
-	"connection authorized: user=$username database=$dbname application_name=$application GSS (authenticated=yes, encrypted=yes, principal=test1\@$realm)"
+	"connection authorized: user=$username database=$dbname application_name=$application GSS (authenticated=yes, encrypted=yes, proxy_credentials=yes, principal=test1\@$realm)"
 );
 test_access(
 	$node,
@@ -330,7 +353,7 @@ test_access(
 	'gssencmode=require',
 	'succeeds with GSS-encrypted access required and hostgssenc hba',
 	"connection authenticated: identity=\"test1\@$realm\" method=gss",
-	"connection authorized: user=$username database=$dbname application_name=$application GSS (authenticated=yes, encrypted=yes, principal=test1\@$realm)"
+	"connection authorized: user=$username database=$dbname application_name=$application GSS (authenticated=yes, encrypted=yes, proxy_credentials=yes, principal=test1\@$realm)"
 );
 test_access($node, 'test1', 'SELECT true', 2, 'gssencmode=disable',
 	'fails with GSS encryption disabled and hostgssenc hba');
@@ -348,7 +371,7 @@ test_access(
 	'gssencmode=prefer',
 	'succeeds with GSS-encrypted access preferred and hostnogssenc hba, but no encryption',
 	"connection authenticated: identity=\"test1\@$realm\" method=gss",
-	"connection authorized: user=$username database=$dbname application_name=$application GSS (authenticated=yes, encrypted=no, principal=test1\@$realm)"
+	"connection authorized: user=$username database=$dbname application_name=$application GSS (authenticated=yes, encrypted=no, proxy_credentials=yes, principal=test1\@$realm)"
 );
 test_access($node, 'test1', 'SELECT true', 2, 'gssencmode=require',
 	'fails with GSS-encrypted access required and hostnogssenc hba');
@@ -360,8 +383,24 @@ test_access(
 	'gssencmode=disable',
 	'succeeds with GSS encryption disabled and hostnogssenc hba',
 	"connection authenticated: identity=\"test1\@$realm\" method=gss",
-	"connection authorized: user=$username database=$dbname application_name=$application GSS (authenticated=yes, encrypted=no, principal=test1\@$realm)"
+	"connection authorized: user=$username database=$dbname application_name=$application GSS (authenticated=yes, encrypted=no, proxy_credentials=yes, principal=test1\@$realm)"
 );
+
+test_query(
+	$node,
+	'test1',
+	"SELECT * FROM dblink('user=test1 dbname=$dbname host=$host hostaddr=$hostaddr port=$port password=1234','select 1') as t1(c1 int);",
+	qr/^1$/s,
+	'gssencmode=prefer',
+	'dblink works not-encrypted');
+
+test_query(
+	$node,
+	'test1',
+	"TABLE tf1;",
+	qr/^1$/s,
+	'gssencmode=prefer',
+	'postgres_fdw works not-encrypted');
 
 truncate($node->data_dir . '/pg_ident.conf', 0);
 unlink($node->data_dir . '/pg_hba.conf');
@@ -377,8 +416,24 @@ test_access(
 	'',
 	'succeeds with include_realm=0 and defaults',
 	"connection authenticated: identity=\"test1\@$realm\" method=gss",
-	"connection authorized: user=$username database=$dbname application_name=$application GSS (authenticated=yes, encrypted=yes, principal=test1\@$realm)"
+	"connection authorized: user=$username database=$dbname application_name=$application GSS (authenticated=yes, encrypted=yes, proxy_credentials=yes, principal=test1\@$realm)"
 );
+
+test_query(
+	$node,
+	'test1',
+	"SELECT * FROM dblink('user=test1 dbname=$dbname host=$host hostaddr=$hostaddr port=$port password=1234','select 1') as t1(c1 int);",
+	qr/^1$/s,
+	'gssencmode=require',
+	'dblink works encrypted');
+
+test_query(
+	$node,
+	'test1',
+	"TABLE tf1;",
+	qr/^1$/s,
+	'gssencmode=require',
+	'postgres_fdw works encrypted');
 
 # Reset pg_hba.conf, and cause a usermap failure with an authentication
 # that has passed.
@@ -395,5 +450,62 @@ test_access(
 	'',
 	'fails with wrong krb_realm, but still authenticates',
 	"connection authenticated: identity=\"test1\@$realm\" method=gss");
+
+# Reset pg_hba.conf, and have the server refuse delegated credentials.
+unlink($node->data_dir . '/pg_hba.conf');
+$node->append_conf('pg_hba.conf',
+	qq{host all all $hostaddr/32 gss include_realm=0 allow_cred_delegation=0});
+$node->restart;
+
+my ($psql_stdout, $psql_stderr, $psql_timed_out);
+my $psql_cmdret = $node->psql('postgres',
+	"SELECT * FROM dblink('user=test1 dbname=$dbname host=$host hostaddr=$hostaddr port=$port password=1234','select 1') as t1(c1 int);",
+	stdout => \$psql_stdout, stderr => \$psql_stderr,
+	connstr => $node->connstr('postgres') . " user=test1 host=$host hostaddr=$hostaddr gssencmode=require");
+
+ok ($psql_cmdret == 3, 'error result from dblink failing without delegated credentials');
+like ($psql_stderr, qr/could not establish connection/, 'dblink fails due to missing delegated credentials');
+
+$node->append_conf(
+	'postgresql.conf', qq{
+krb_user_ccache = 'blah'
+});
+$node->restart;
+
+$psql_cmdret = $node->psql('postgres',
+	"SELECT * FROM dblink('user=test1 dbname=$dbname host=$host hostaddr=$hostaddr port=$port password=1234','select 1') as t1(c1 int);",
+	stdout => \$psql_stdout, stderr => \$psql_stderr,
+	connstr => $node->connstr('postgres') . " user=test1 host=$host hostaddr=$hostaddr gssencmode=require");
+
+ok ($psql_cmdret == 3, 'error result from dblink failing due to invalid credential cache');
+like ($psql_stderr, qr/could not establish connection/, 'dblink fails due to invalid credential cache');
+
+$node->append_conf(
+	'postgresql.conf', qq{
+krb_user_ccache = ''
+});
+$node->restart;
+
+$psql_cmdret = $node->psql('postgres',
+	"SELECT * FROM dblink('user=test1 dbname=$dbname host=$host hostaddr=$hostaddr port=$port password=1234','select 1') as t1(c1 int);",
+	stdout => \$psql_stdout, stderr => \$psql_stderr,
+	connstr => $node->connstr('postgres') . " user=test1 host=$host hostaddr=$hostaddr gssencmode=require");
+
+ok ($psql_cmdret == 3, 'error result from dblink failing with un-set credential cache');
+like ($psql_stderr, qr/could not establish connection/, 'dblink fails with un-set credential cache');
+
+$node->append_conf(
+	'postgresql.conf', qq{
+krb_user_ccache = 'environment'
+});
+$node->restart;
+
+test_query(
+	$node,
+	'test1',
+	"SELECT * FROM dblink('user=test1 dbname=$dbname host=$host hostaddr=$hostaddr port=$port password=1234','select 1') as t1(c1 int);",
+	qr/^1$/s,
+	'gssencmode=require',
+	'dblink works with environment ccache and not delegated credentials');
 
 done_testing();

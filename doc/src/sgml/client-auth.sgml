@@ -1369,6 +1369,19 @@ omicron         bryanh                  guest1
        </para>
       </listitem>
      </varlistentry>
+
+     <varlistentry>
+      <term><literal>allow_cred_delegation</literal></term>
+      <listitem>
+       <para>
+        If set to 0, credential delegation will not be allowed.  The default
+        setting (1) allows an authenticated client to delegate credentials to the 
+        server which will allow the server to then use those credentials to
+        authenticate when connecting to other systems such as with dblink or when
+        using a foreign data wrapper (FDW).
+       </para>
+      </listitem>
+     </varlistentry>
     </variablelist>
    </para>
 

@@ -2281,7 +2281,11 @@ GetSnapshotData(Snapshot snapshot)
 	 */
 	LWLockAcquire(ProcArrayLock, LW_SHARED);
 
-	if (GetSnapshotDataReuse(snapshot))
+	/*
+	 * A dirty snapshot is not a candidate for GetSnapshotDataReuse
+	 * as its xmin and/or xmax may have changed
+	 */
+	if (!IsDirtySnapshot(snapshot) && GetSnapshotDataReuse(snapshot))
 	{
 		LWLockRelease(ProcArrayLock);
 		return snapshot;

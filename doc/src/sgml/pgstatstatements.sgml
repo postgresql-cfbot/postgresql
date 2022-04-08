@@ -447,10 +447,30 @@
   <para>
    In some cases, queries with visibly different texts might get merged into a
    single <structname>pg_stat_statements</structname> entry.  Normally this will happen
-   only for semantically equivalent queries, but there is a small chance of
-   hash collisions causing unrelated queries to be merged into one entry.
-   (This cannot happen for queries belonging to different users or databases,
-   however.)
+   only for semantically equivalent queries, for example when queries are
+   different only in values of constants they use. Another valid possibility for
+   merging queries into a single <structname>pg_stat_statements</structname>
+   entry is when <xref linkend="guc-const-merge-threshold"/> is nonzero and the
+   queries contain an array with more than <varname>const_merge_threshold</varname>
+   constants in it:
+
+<screen>
+=# SET const_merge_threshold = 5;
+=# SELECT pg_stat_statements_reset();
+=# SELECT * FROM test WHERE a IN (1, 2, 3, 4, 5, 6, 7, 8, 9);
+=# SELECT * FROM test WHERE a IN (1, 2, 3, 4, 5, 6, 7);
+=# SELECT query, calls FROM pg_stat_statements;
+-[ RECORD 1 ]------------------------------
+query | SELECT * FROM test WHERE a IN (...)
+calls | 2
+-[ RECORD 2 ]------------------------------
+query | SELECT pg_stat_statements_reset()
+calls | 1
+</screen>
+
+   But there is a small chance of hash collisions causing unrelated queries to
+   be merged into one entry. (This cannot happen for queries belonging to
+   different users or databases, however.)
   </para>
 
   <para>

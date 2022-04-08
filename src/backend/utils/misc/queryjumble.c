@@ -42,6 +42,9 @@
 /* GUC parameters */
 int			compute_query_id = COMPUTE_QUERY_ID_AUTO;
 
+/* Minimal numer of constants in an array after which they will be merged */
+int			const_merge_threshold = 0;
+
 /* True when compute_query_id is ON, or AUTO and a module requests them */
 bool		query_id_enabled = false;
 
@@ -52,7 +55,8 @@ static void JumbleQueryInternal(JumbleState *jstate, Query *query);
 static void JumbleRangeTable(JumbleState *jstate, List *rtable);
 static void JumbleRowMarks(JumbleState *jstate, List *rowMarks);
 static void JumbleExpr(JumbleState *jstate, Node *node);
-static void RecordConstLocation(JumbleState *jstate, int location);
+static void JumbleExprList(JumbleState *jstate, List *node);
+static void RecordConstLocation(JumbleState *jstate, int location, bool merged);
 
 /*
  * Given a possibly multi-statement source string, confine our attention to the
@@ -119,7 +123,7 @@ JumbleQuery(Query *query, const char *querytext)
 		jstate->jumble_len = 0;
 		jstate->clocations_buf_size = 32;
 		jstate->clocations = (LocationLen *)
-			palloc(jstate->clocations_buf_size * sizeof(LocationLen));
+			palloc0(jstate->clocations_buf_size * sizeof(LocationLen));
 		jstate->clocations_count = 0;
 		jstate->highest_extern_param_id = 0;
 
@@ -342,6 +346,90 @@ JumbleRowMarks(JumbleState *jstate, List *rowMarks)
 }
 
 /*
+ * Jubmle a list of expressions
+ *
+ * This function enforces const_merge_threshold limitation, i.e. if the
+ * provided list contains only constant expressions and its length is greater
+ * than or equal to const_merge_threshold, such list will not contribute to
+ * jumble. Otherwise it falls back to JumbleExpr.
+ */
+static void
+JumbleExprList(JumbleState *jstate, List *elements)
+{
+	ListCell   *temp;
+	Node	   *firstExpr = NULL;
+	bool		allConst = true;
+
+	if (elements == NULL)
+		return;
+
+	if (const_merge_threshold == 0)
+	{
+		/* Merging is disabled, process everything one by one. */
+		JumbleExpr(jstate, (Node *) elements);
+		return;
+	}
+
+	if (elements->length < const_merge_threshold)
+	{
+		/* The list is not large enough to collapse it. */
+		JumbleExpr(jstate, (Node *) elements);
+		return;
+	}
+
+	/* Guard against stack overflow due to overly complex expressions */
+	check_stack_depth();
+
+	firstExpr = linitial(elements);
+
+	/*
+	 * We always emit the node's NodeTag, then any additional fields that are
+	 * considered significant, and then we recurse to any child nodes.
+	 */
+	APP_JUMB(elements->type);
+
+	/*
+	 * If the first expression is a constant, verify if the following elements
+	 * are constants as well. If yes, the list is eligible for collapsing --
+	 * mark it as merged and return from the function.
+	 */
+	if (IsA(firstExpr, Const))
+	{
+		foreach(temp, elements)
+		{
+			Node 	*expr = (Node *) lfirst(temp);
+
+			if (!IsA(expr, Const))
+			{
+				allConst = false;
+				break;
+			}
+		}
+
+		if (allConst)
+		{
+			Const *firstConst = (Const *) firstExpr;
+			Const *lastConst = llast_node(Const, elements);
+
+			/*
+			 * First and last constants are needed to identify which part of
+			 * the query to skip in generate_normalized_query.
+			 */
+			RecordConstLocation(jstate, firstConst->location, true);
+			RecordConstLocation(jstate, lastConst->location, true);
+			return;
+		}
+	}
+
+	/*
+	 * If we end up here, it means no constants merging is possible, process
+	 * the list as usual.
+	 */
+	JumbleExpr(jstate, (Node *) elements);
+	return;
+}
+
+/*
  * Jumble an expression tree
  *
  * In general this function should handle all the same node types that
@@ -390,7 +478,7 @@ JumbleExpr(JumbleState *jstate, Node *node)
 				/* We jumble only the constant's type, not its value */
 				APP_JUMB(c->consttype);
 				/* Also, record its parse location for query normalization */
-				RecordConstLocation(jstate, c->location);
+				RecordConstLocation(jstate, c->location, false);
 			}
 			break;
 		case T_Param:
@@ -579,7 +667,7 @@ JumbleExpr(JumbleState *jstate, Node *node)
 			}
 			break;
 		case T_ArrayExpr:
-			JumbleExpr(jstate, (Node *) ((ArrayExpr *) node)->elements);
+			JumbleExprList(jstate, (List *) ((ArrayExpr *) node)->elements);
 			break;
 		case T_RowExpr:
 			JumbleExpr(jstate, (Node *) ((RowExpr *) node)->args);
@@ -903,11 +991,13 @@ JumbleExpr(JumbleState *jstate, Node *node)
 }
 
 /*
- * Record location of constant within query string of query tree
- * that is currently being walked.
+ * Record location of constant within query string of query tree that is
+ * currently being walked. Merged argument signals that the constant do not
+ * contribute to the jumble hash, and any reader of constants array may want to
+ * use this information to represent such constants differently.
  */
 static void
-RecordConstLocation(JumbleState *jstate, int location)
+RecordConstLocation(JumbleState *jstate, int location, bool merged)
 {
 	/* -1 indicates unknown or undefined location */
 	if (location >= 0)
@@ -922,6 +1012,7 @@ RecordConstLocation(JumbleState *jstate, int location)
 						 sizeof(LocationLen));
 		}
 		jstate->clocations[jstate->clocations_count].location = location;
+		jstate->clocations[jstate->clocations_count].merged = merged;
 		/* initialize lengths to -1 to simplify third-party module usage */
 		jstate->clocations[jstate->clocations_count].length = -1;
 		jstate->clocations_count++;

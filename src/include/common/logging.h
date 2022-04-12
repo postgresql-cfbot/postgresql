@@ -104,48 +104,39 @@ void		pg_log_generic_v(enum pg_log_level level, enum pg_log_part part,
  * pg_log_generic[_v] directly, except perhaps in error interface code.
  */
 #define pg_log_error(...) do { \
-		if (likely(__pg_log_level <= PG_LOG_ERROR)) \
-			pg_log_generic(PG_LOG_ERROR, PG_LOG_PRIMARY, __VA_ARGS__); \
+		pg_log_generic(PG_LOG_ERROR, PG_LOG_PRIMARY, __VA_ARGS__); \
 	} while(0)
 
 #define pg_log_error_detail(...) do { \
-		if (likely(__pg_log_level <= PG_LOG_ERROR)) \
-			pg_log_generic(PG_LOG_ERROR, PG_LOG_DETAIL, __VA_ARGS__); \
+		pg_log_generic(PG_LOG_ERROR, PG_LOG_DETAIL, __VA_ARGS__); \
 	} while(0)
 
 #define pg_log_error_hint(...) do { \
-		if (likely(__pg_log_level <= PG_LOG_ERROR)) \
-			pg_log_generic(PG_LOG_ERROR, PG_LOG_HINT, __VA_ARGS__); \
+		pg_log_generic(PG_LOG_ERROR, PG_LOG_HINT, __VA_ARGS__); \
 	} while(0)
 
 #define pg_log_warning(...) do { \
-		if (likely(__pg_log_level <= PG_LOG_WARNING)) \
-			pg_log_generic(PG_LOG_WARNING, PG_LOG_PRIMARY, __VA_ARGS__); \
+		pg_log_generic(PG_LOG_WARNING, PG_LOG_PRIMARY, __VA_ARGS__); \
 	} while(0)
 
 #define pg_log_warning_detail(...) do { \
-		if (likely(__pg_log_level <= PG_LOG_WARNING)) \
-			pg_log_generic(PG_LOG_WARNING, PG_LOG_DETAIL, __VA_ARGS__); \
+		pg_log_generic(PG_LOG_WARNING, PG_LOG_DETAIL, __VA_ARGS__); \
 	} while(0)
 
 #define pg_log_warning_hint(...) do { \
-		if (likely(__pg_log_level <= PG_LOG_WARNING)) \
-			pg_log_generic(PG_LOG_WARNING, PG_LOG_HINT, __VA_ARGS__); \
+		pg_log_generic(PG_LOG_WARNING, PG_LOG_HINT, __VA_ARGS__); \
 	} while(0)
 
 #define pg_log_info(...) do { \
-		if (likely(__pg_log_level <= PG_LOG_INFO)) \
-			pg_log_generic(PG_LOG_INFO, PG_LOG_PRIMARY, __VA_ARGS__); \
+		pg_log_generic(PG_LOG_INFO, PG_LOG_PRIMARY, __VA_ARGS__); \
 	} while(0)
 
 #define pg_log_info_detail(...) do { \
-		if (likely(__pg_log_level <= PG_LOG_INFO)) \
-			pg_log_generic(PG_LOG_INFO, PG_LOG_DETAIL, __VA_ARGS__); \
+		pg_log_generic(PG_LOG_INFO, PG_LOG_DETAIL, __VA_ARGS__); \
 	} while(0)
 
 #define pg_log_info_hint(...) do { \
-		if (likely(__pg_log_level <= PG_LOG_INFO)) \
-			pg_log_generic(PG_LOG_INFO, PG_LOG_HINT, __VA_ARGS__); \
+		pg_log_generic(PG_LOG_INFO, PG_LOG_HINT, __VA_ARGS__); \
 	} while(0)
 
 #define pg_log_debug(...) do { \
@@ -167,8 +158,7 @@ void		pg_log_generic_v(enum pg_log_level level, enum pg_log_part part,
  * A common shortcut: pg_log_error() and immediately exit(1).
  */
 #define pg_fatal(...) do { \
-		if (likely(__pg_log_level <= PG_LOG_ERROR)) \
-			pg_log_generic(PG_LOG_ERROR, PG_LOG_PRIMARY, __VA_ARGS__); \
+		pg_log_generic(PG_LOG_ERROR, PG_LOG_PRIMARY, __VA_ARGS__); \
 		exit(1); \
 	} while(0)
 

@@ -28,7 +28,7 @@ UPDATE [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ * ] [ 
           ( <replaceable class="parameter">column_name</replaceable> [, ...] ) = ( <replaceable class="parameter">sub-SELECT</replaceable> )
         } [, ...]
     [ FROM <replaceable class="parameter">from_item</replaceable> [, ...] ]
-    [ WHERE <replaceable class="parameter">condition</replaceable> | WHERE CURRENT OF <replaceable class="parameter">cursor_name</replaceable> ]
+    [ WHERE <replaceable class="parameter">condition</replaceable> | WHERE CURRENT OF <replaceable class="parameter">cursor_name</replaceable> | WHERE OFFSET <replaceable class="parameter">offset</replaceable> OF <replaceable class="parameter">cursor_name</replaceable> ]
     [ RETURNING * | <replaceable class="parameter">output_expression</replaceable> [ [ AS ] <replaceable class="parameter">output_name</replaceable> ] [, ...] ]
 </synopsis>
  </refsynopsisdiv>
@@ -199,11 +199,26 @@ UPDATE [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ * ] [ 
     <listitem>
      <para>
       The name of the cursor to use in a <literal>WHERE CURRENT OF</literal>
-      condition.  The row to be updated is the one most recently fetched
-      from this cursor.  The cursor must be a non-grouping
-      query on the <command>UPDATE</command>'s target table.
-      Note that <literal>WHERE CURRENT OF</literal> cannot be
-      specified together with a Boolean condition.  See
+      or in a <literal>WHERE OFFSET IN</literal> condition.
+      The cursor must be a non-grouping query on the
+      <command>UPDATE</command>'s target table and a
+      <literal>FOR UPDATE</literal> query on the same table to use the
+      <literal>WHERE OFFSET IN</literal> condition
+     </para>
+     <para>
+      The row to be updated for <literal>WHERE CURRENT OF</literal>
+      is the one most recently fetched from this cursor.
+     </para>
+     <para>
+      If multiple rows were fetched in the last <command>FETCH</command>
+      statement, <literal>WHERE OFFSET IN</literal> may be used with a
+      negative or zero offset value relative to the cursor's current position and
+      the direction of the last <command>FETCH</command> statement.
+      Zero offset is identical to <literal>WHERE CURRENT OF</literal>.
+     </para>
+     <para>
+      Note that <literal>WHERE CURRENT OF</literal> and <literal>WHERE OFFSET IN</literal>
+      cannot be specified together with a Boolean condition.  See
       <xref linkend="sql-declare"/>
       for more information about using cursors with
       <literal>WHERE CURRENT OF</literal>.
@@ -449,7 +464,8 @@ UPDATE films SET kind = 'Dramatic' WHERE CURRENT OF c_films;
 
   <para>
    This command conforms to the <acronym>SQL</acronym> standard, except
-   that the <literal>FROM</literal> and <literal>RETURNING</literal> clauses
+   that the <literal>FROM</literal>, <literal>RETURNING</literal> and
+   <literal>WHERE OFFSET IN</literal> clauses
    are <productname>PostgreSQL</productname> extensions, as is the ability
    to use <literal>WITH</literal> with <command>UPDATE</command>.
   </para>

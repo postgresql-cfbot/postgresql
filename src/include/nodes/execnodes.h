@@ -690,10 +690,10 @@ typedef struct EState
  * subqueries-in-FROM will have an ExecRowMark with relation == NULL.  See
  * PlanRowMark for details about most of the fields.  In addition to fields
  * directly derived from PlanRowMark, we store an activity flag (to denote
- * inactive children of inheritance trees), curCtid, which is used by the
- * WHERE CURRENT OF code, and ermExtra, which is available for use by the plan
- * node that sources the relation (e.g., for a foreign table the FDW can use
- * ermExtra to hold information).
+ * inactive children of inheritance trees), curCtidList, which is used by the
+ * WHERE CURRENT OF/WHERE OFFSET IN code, and ermExtra, which is available
+ * for use by the plan node that sources the relation (e.g., for a foreign
+ * table the FDW can use ermExtra to hold information).
  *
  * EState->es_rowmarks is an array of these structs, indexed by RT index,
  * with NULLs for irrelevant RT indexes.  es_rowmarks itself is NULL if
@@ -710,7 +710,7 @@ typedef struct ExecRowMark
 	LockClauseStrength strength;	/* LockingClause's strength, or LCS_NONE */
 	LockWaitPolicy waitPolicy;	/* NOWAIT and SKIP LOCKED */
 	bool		ermActive;		/* is this mark relevant for current tuple? */
-	ItemPointerData curCtid;	/* ctid of currently locked tuple, if any */
+	List	   *curCtidList;	/* list of ItemPointerData, ctid of currently locked tuple(s), if any */
 	void	   *ermExtra;		/* available for use by relation source node */
 } ExecRowMark;
 

@@ -131,17 +131,22 @@ execCurrentOf(CurrentOfExpr *cexpr,
 		 * The cursor must have a current result row: per the SQL spec, it's
 		 * an error if not.
 		 */
-		if (portal->atStart || portal->atEnd)
+		if ((portal->atStart || portal->atEnd) && cexpr->cursor_offset == 0)
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_CURSOR_STATE),
 					 errmsg("cursor \"%s\" is not positioned on a row",
 							cursor_name)));
 
 		/* Return the currently scanned TID, if there is one */
-		if (ItemPointerIsValid(&(erm->curCtid)))
-		{
-			*current_tid = erm->curCtid;
-			return true;
+		if (erm->curCtidList) {
+			int cursor_offset = list_length(erm->curCtidList) - 1 + cexpr->cursor_offset + ((portal->atStart || portal->atEnd) ? 1 : 0);
+			ListCell *ctidCell = NULL;
+			if (cursor_offset >= 0 && cursor_offset < list_length(erm->curCtidList))
+				ctidCell = list_nth_cell(erm->curCtidList, cursor_offset);
+			if (ctidCell && ItemPointerIsValid((ItemPointer)(ctidCell->ptr_value))) {
+				*current_tid = *(ItemPointer)(ctidCell->ptr_value);
+				return true;
+			}
 		}
 
 		/*
@@ -160,6 +165,12 @@ execCurrentOf(CurrentOfExpr *cexpr,
 		 */
 		ScanState  *scanstate;
 		bool		pending_rescan = false;
+
+		if (cexpr->cursor_is_offsetof)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_CURSOR_STATE),
+					 errmsg("cursor \"%s\" must use FOR UPDATE to use WHERE OFFSET IN",
+							cursor_name)));
 
 		scanstate = search_plan_tree(queryDesc->planstate, table_oid,
 									 &pending_rescan);

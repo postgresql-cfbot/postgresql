@@ -79,6 +79,7 @@ lnext:
 		Datum		datum;
 		bool		isNull;
 		ItemPointerData tid;
+		ItemPointer *tid_ptr;
 		TM_FailureData tmfd;
 		LockTupleMode lockmode;
 		int			lockflags = 0;
@@ -107,7 +108,8 @@ lnext:
 			{
 				/* this child is inactive right now */
 				erm->ermActive = false;
-				ItemPointerSetInvalid(&(erm->curCtid));
+				list_free_deep(erm->curCtidList);
+				erm->curCtidList = NIL;
 				ExecClearTuple(markSlot);
 				continue;
 			}
@@ -249,7 +251,9 @@ lnext:
 		}
 
 		/* Remember locked tuple's TID for EPQ testing and WHERE CURRENT OF */
-		erm->curCtid = tid;
+		tid_ptr = palloc(sizeof(ItemPointerData));
+		memcpy(tid_ptr, &tid, sizeof(ItemPointerData));
+		erm->curCtidList = lappend(erm->curCtidList, tid_ptr);
 	}
 
 	/*

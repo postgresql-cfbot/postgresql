@@ -881,7 +881,7 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 			erm->strength = rc->strength;
 			erm->waitPolicy = rc->waitPolicy;
 			erm->ermActive = false;
-			ItemPointerSetInvalid(&(erm->curCtid));
+			erm->curCtidList = NIL;
 			erm->ermExtra = NULL;
 
 			Assert(erm->rti > 0 && erm->rti <= estate->es_range_table_size &&

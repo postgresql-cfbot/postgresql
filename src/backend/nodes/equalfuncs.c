@@ -812,6 +812,8 @@ _equalCurrentOfExpr(const CurrentOfExpr *a, const CurrentOfExpr *b)
 	COMPARE_SCALAR_FIELD(cvarno);
 	COMPARE_STRING_FIELD(cursor_name);
 	COMPARE_SCALAR_FIELD(cursor_param);
+	COMPARE_SCALAR_FIELD(cursor_offset);
+	COMPARE_SCALAR_FIELD(cursor_is_offsetof);
 
 	return true;
 }

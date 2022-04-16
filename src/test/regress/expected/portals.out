@@ -1536,3 +1536,96 @@ fetch backward all in c2;
 (3 rows)
 
 rollback;
+-- Check WHERE OFFSET IN
+-- The cursor ends with no current row
+begin;
+create table cursor (id serial, t text);
+insert into cursor (t) values ('a'),('b'),('c');
+declare c1 cursor for select * from cursor order by id for update;
+fetch all from c1;
+ id | t 
+----+---
+  1 | a
+  2 | b
+  3 | c
+(3 rows)
+
+update cursor set t='cc' where offset -1 in c1;
+update cursor set t='bb' where offset -2 in c1;
+update cursor set t='aa' where offset -3 in c1;
+select * from cursor order by id;
+ id | t  
+----+----
+  1 | aa
+  2 | bb
+  3 | cc
+(3 rows)
+
+update cursor set t='xx' where offset 0 in c1;
+ERROR:  cursor "c1" is not positioned on a row
+rollback;
+-- The cursor ends with current row
+begin;
+create table cursor (id serial, t text);
+insert into cursor (t) values ('a'),('b'),('c');
+declare c1 cursor for select * from cursor order by id for update;
+fetch 3 from c1;
+ id | t 
+----+---
+  1 | a
+  2 | b
+  3 | c
+(3 rows)
+
+update cursor set t='cc' where offset 0 in c1;
+update cursor set t='bb' where offset -1 in c1;
+update cursor set t='aa' where offset -2 in c1;
+select * from cursor order by id;
+ id | t  
+----+----
+  1 | aa
+  2 | bb
+  3 | cc
+(3 rows)
+
+rollback;
+-- Invalid offsets
+begin;
+create table cursor (id serial, t text);
+insert into cursor (t) values ('a'),('b'),('c');
+declare c1 cursor for select * from cursor order by id for update;
+fetch 3 from c1;
+ id | t 
+----+---
+  1 | a
+  2 | b
+  3 | c
+(3 rows)
+
+update cursor set t='cc' where offset 100 in c1;
+update cursor set t='bb' where offset -100 in c1;
+select * from cursor order by id;
+ id | t 
+----+---
+  1 | a
+  2 | b
+  3 | c
+(3 rows)
+
+rollback;
+-- Query without FOR UPDATE
+begin;
+create table cursor (id serial, t text);
+insert into cursor (t) values ('a'),('b'),('c');
+declare c1 cursor for select * from cursor order by id;
+fetch 3 from c1;
+ id | t 
+----+---
+  1 | a
+  2 | b
+  3 | c
+(3 rows)
+
+update cursor set t='cc' where offset 0 in c1;
+ERROR:  cursor "c1" must use FOR UPDATE to use WHERE OFFSET IN
+rollback;

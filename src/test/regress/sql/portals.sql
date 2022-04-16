@@ -581,3 +581,50 @@ declare c2 scroll cursor for select generate_series(1,3) as g;
 fetch all in c2;
 fetch backward all in c2;
 rollback;
+
+-- Check WHERE OFFSET IN
+
+-- The cursor ends with no current row
+begin;
+create table cursor (id serial, t text);
+insert into cursor (t) values ('a'),('b'),('c');
+declare c1 cursor for select * from cursor order by id for update;
+fetch all from c1;
+update cursor set t='cc' where offset -1 in c1;
+update cursor set t='bb' where offset -2 in c1;
+update cursor set t='aa' where offset -3 in c1;
+select * from cursor order by id;
+update cursor set t='xx' where offset 0 in c1;
+rollback;
+
+-- The cursor ends with current row
+begin;
+create table cursor (id serial, t text);
+insert into cursor (t) values ('a'),('b'),('c');
+declare c1 cursor for select * from cursor order by id for update;
+fetch 3 from c1;
+update cursor set t='cc' where offset 0 in c1;
+update cursor set t='bb' where offset -1 in c1;
+update cursor set t='aa' where offset -2 in c1;
+select * from cursor order by id;
+rollback;
+
+-- Invalid offsets
+begin;
+create table cursor (id serial, t text);
+insert into cursor (t) values ('a'),('b'),('c');
+declare c1 cursor for select * from cursor order by id for update;
+fetch 3 from c1;
+update cursor set t='cc' where offset 100 in c1;
+update cursor set t='bb' where offset -100 in c1;
+select * from cursor order by id;
+rollback;
+
+-- Query without FOR UPDATE
+begin;
+create table cursor (id serial, t text);
+insert into cursor (t) values ('a'),('b'),('c');
+declare c1 cursor for select * from cursor order by id;
+fetch 3 from c1;
+update cursor set t='cc' where offset 0 in c1;
+rollback;

@@ -1676,6 +1676,8 @@ _outCurrentOfExpr(StringInfo str, const CurrentOfExpr *node)
 	WRITE_UINT_FIELD(cvarno);
 	WRITE_STRING_FIELD(cursor_name);
 	WRITE_INT_FIELD(cursor_param);
+	WRITE_INT_FIELD(cursor_offset);
+	WRITE_BOOL_FIELD(cursor_is_offsetof);
 }
 
 static void

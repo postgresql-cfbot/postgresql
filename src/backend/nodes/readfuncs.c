@@ -1311,6 +1311,8 @@ _readCurrentOfExpr(void)
 	READ_UINT_FIELD(cvarno);
 	READ_STRING_FIELD(cursor_name);
 	READ_INT_FIELD(cursor_param);
+	READ_INT_FIELD(cursor_offset);
+	READ_BOOL_FIELD(cursor_is_offsetof);
 
 	READ_DONE();
 }

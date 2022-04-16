@@ -13131,6 +13131,18 @@ where_or_current_clause:
 					/* cvarno is filled in by parse analysis */
 					n->cursor_name = $4;
 					n->cursor_param = 0;
+					n->cursor_is_offsetof = false;
+					n->cursor_offset = 0;
+					$$ = (Node *) n;
+				}
+			| WHERE OFFSET SignedIconst IN_P cursor_name
+				{
+					CurrentOfExpr *n = makeNode(CurrentOfExpr);
+					/* cvarno is filled in by parse analysis */
+					n->cursor_name = $5;
+					n->cursor_param = 0;
+					n->cursor_is_offsetof = true;
+					n->cursor_offset = $3;
 					$$ = (Node *) n;
 				}
 			| /*EMPTY*/								{ $$ = NULL; }

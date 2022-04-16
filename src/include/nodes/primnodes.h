@@ -1621,6 +1621,8 @@ typedef struct CurrentOfExpr
 	Index		cvarno;			/* RT index of target relation */
 	char	   *cursor_name;	/* name of referenced cursor, or NULL */
 	int			cursor_param;	/* refcursor parameter number, or 0 */
+	int			cursor_offset;
+	bool		cursor_is_offsetof;
 } CurrentOfExpr;
 
 /*

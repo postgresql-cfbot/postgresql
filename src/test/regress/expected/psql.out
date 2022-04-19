@@ -5549,3 +5549,224 @@ SELECT * FROM bla ORDER BY 1;
 # final ON_ERROR_ROLLBACK: off
 DROP TABLE bla;
 DROP FUNCTION psql_error;
+-- check describing invalid multipart names
+\dA regression.heap
+improper qualified name (too many dotted names): regression.heap
+\dA nonesuch.heap
+improper qualified name (too many dotted names): nonesuch.heap
+\dt host.regression.pg_catalog.pg_class
+improper qualified name (too many dotted names): host.regression.pg_catalog.pg_class
+\dt |.pg_catalog.pg_class
+cross-database references are not implemented: |.pg_catalog.pg_class
+\dt nonesuch.pg_catalog.pg_class
+cross-database references are not implemented: nonesuch.pg_catalog.pg_class
+\da host.regression.pg_catalog.sum
+improper qualified name (too many dotted names): host.regression.pg_catalog.sum
+\da +.pg_catalog.sum
+cross-database references are not implemented: +.pg_catalog.sum
+\da nonesuch.pg_catalog.sum
+cross-database references are not implemented: nonesuch.pg_catalog.sum
+\dAc nonesuch.brin
+improper qualified name (too many dotted names): nonesuch.brin
+\dAc regression.brin
+improper qualified name (too many dotted names): regression.brin
+\dAf nonesuch.brin
+improper qualified name (too many dotted names): nonesuch.brin
+\dAf regression.brin
+improper qualified name (too many dotted names): regression.brin
+\dAo nonesuch.brin
+improper qualified name (too many dotted names): nonesuch.brin
+\dAo regression.brin
+improper qualified name (too many dotted names): regression.brin
+\dAp nonesuch.brin
+improper qualified name (too many dotted names): nonesuch.brin
+\dAp regression.brin
+improper qualified name (too many dotted names): regression.brin
+\db nonesuch.pg_default
+improper qualified name (too many dotted names): nonesuch.pg_default
+\db regression.pg_default
+improper qualified name (too many dotted names): regression.pg_default
+\dc host.regression.public.conversion
+improper qualified name (too many dotted names): host.regression.public.conversion
+\dc (.public.conversion
+cross-database references are not implemented: (.public.conversion
+\dc nonesuch.public.conversion
+cross-database references are not implemented: nonesuch.public.conversion
+\dC host.regression.pg_catalog.int8
+improper qualified name (too many dotted names): host.regression.pg_catalog.int8
+\dC ).pg_catalog.int8
+cross-database references are not implemented: ).pg_catalog.int8
+\dC nonesuch.pg_catalog.int8
+cross-database references are not implemented: nonesuch.pg_catalog.int8
+\dd host.regression.pg_catalog.pg_class
+improper qualified name (too many dotted names): host.regression.pg_catalog.pg_class
+\dd [.pg_catalog.pg_class
+cross-database references are not implemented: [.pg_catalog.pg_class
+\dd nonesuch.pg_catalog.pg_class
+cross-database references are not implemented: nonesuch.pg_catalog.pg_class
+\dD host.regression.public.gtestdomain1
+improper qualified name (too many dotted names): host.regression.public.gtestdomain1
+\dD ].public.gtestdomain1
+cross-database references are not implemented: ].public.gtestdomain1
+\dD nonesuch.public.gtestdomain1
+cross-database references are not implemented: nonesuch.public.gtestdomain1
+\ddp host.regression.pg_catalog.pg_class
+improper qualified name (too many dotted names): host.regression.pg_catalog.pg_class
+\ddp {.pg_catalog.pg_class
+cross-database references are not implemented: {.pg_catalog.pg_class
+\ddp nonesuch.pg_catalog.pg_class
+cross-database references are not implemented: nonesuch.pg_catalog.pg_class
+\dE host.regression.public.ft
+improper qualified name (too many dotted names): host.regression.public.ft
+\dE }.public.ft
+cross-database references are not implemented: }.public.ft
+\dE nonesuch.public.ft
+cross-database references are not implemented: nonesuch.public.ft
+\di host.regression.public.tenk1_hundred
+improper qualified name (too many dotted names): host.regression.public.tenk1_hundred
+\di ..public.tenk1_hundred
+improper qualified name (too many dotted names): ..public.tenk1_hundred
+\di nonesuch.public.tenk1_hundred
+cross-database references are not implemented: nonesuch.public.tenk1_hundred
+\dm host.regression.public.mvtest_bb
+improper qualified name (too many dotted names): host.regression.public.mvtest_bb
+\dm ^.public.mvtest_bb
+cross-database references are not implemented: ^.public.mvtest_bb
+\dm nonesuch.public.mvtest_bb
+cross-database references are not implemented: nonesuch.public.mvtest_bb
+\ds host.regression.public.check_seq
+improper qualified name (too many dotted names): host.regression.public.check_seq
+\ds regression|mydb.public.check_seq
+cross-database references are not implemented: regression|mydb.public.check_seq
+\ds nonesuch.public.check_seq
+cross-database references are not implemented: nonesuch.public.check_seq
+\dt host.regression.public.b_star
+improper qualified name (too many dotted names): host.regression.public.b_star
+\dt regres+ion.public.b_star
+cross-database references are not implemented: regres+ion.public.b_star
+\dt nonesuch.public.b_star
+cross-database references are not implemented: nonesuch.public.b_star
+\dv host.regression.public.shoe
+improper qualified name (too many dotted names): host.regression.public.shoe
+\dv regress(ion).public.shoe
+cross-database references are not implemented: regress(ion).public.shoe
+\dv nonesuch.public.shoe
+cross-database references are not implemented: nonesuch.public.shoe
+\des nonesuch.server
+improper qualified name (too many dotted names): nonesuch.server
+\des regression.server
+improper qualified name (too many dotted names): regression.server
+\des nonesuch.server
+improper qualified name (too many dotted names): nonesuch.server
+\des regression.server
+improper qualified name (too many dotted names): regression.server
+\des nonesuch.username
+improper qualified name (too many dotted names): nonesuch.username
+\des regression.username
+improper qualified name (too many dotted names): regression.username
+\dew nonesuch.fdw
+improper qualified name (too many dotted names): nonesuch.fdw
+\dew regression.fdw
+improper qualified name (too many dotted names): regression.fdw
+\df host.regression.public.namelen
+improper qualified name (too many dotted names): host.regression.public.namelen
+\df regres[qrstuv]ion.public.namelen
+cross-database references are not implemented: regres[qrstuv]ion.public.namelen
+\df nonesuch.public.namelen
+cross-database references are not implemented: nonesuch.public.namelen
+\dF host.regression.pg_catalog.arabic
+improper qualified name (too many dotted names): host.regression.pg_catalog.arabic
+\dF regres{1,2}ion.pg_catalog.arabic
+cross-database references are not implemented: regres{1,2}ion.pg_catalog.arabic
+\dF nonesuch.pg_catalog.arabic
+cross-database references are not implemented: nonesuch.pg_catalog.arabic
+\dFd host.regression.pg_catalog.arabic_stem
+improper qualified name (too many dotted names): host.regression.pg_catalog.arabic_stem
+\dFd regres?ion.pg_catalog.arabic_stem
+cross-database references are not implemented: regres?ion.pg_catalog.arabic_stem
+\dFd nonesuch.pg_catalog.arabic_stem
+cross-database references are not implemented: nonesuch.pg_catalog.arabic_stem
+\dFp host.regression.pg_catalog.default
+improper qualified name (too many dotted names): host.regression.pg_catalog.default
+\dFp ^regression.pg_catalog.default
+cross-database references are not implemented: ^regression.pg_catalog.default
+\dFp nonesuch.pg_catalog.default
+cross-database references are not implemented: nonesuch.pg_catalog.default
+\dFt host.regression.pg_catalog.ispell
+improper qualified name (too many dotted names): host.regression.pg_catalog.ispell
+\dFt regression$.pg_catalog.ispell
+cross-database references are not implemented: regression$.pg_catalog.ispell
+\dFt nonesuch.pg_catalog.ispell
+cross-database references are not implemented: nonesuch.pg_catalog.ispell
+\dg nonesuch.pg_database_owner
+improper qualified name (too many dotted names): nonesuch.pg_database_owner
+\dg regression.pg_database_owner
+improper qualified name (too many dotted names): regression.pg_database_owner
+\dL host.regression.plpgsql
+improper qualified name (too many dotted names): host.regression.plpgsql
+\dL *.plpgsql
+cross-database references are not implemented: *.plpgsql
+\dL nonesuch.plpgsql
+cross-database references are not implemented: nonesuch.plpgsql
+\dn host.regression.public
+improper qualified name (too many dotted names): host.regression.public
+\dn """".public
+cross-database references are not implemented: """".public
+\dn nonesuch.public
+cross-database references are not implemented: nonesuch.public
+\do host.regression.public.!=-
+improper qualified name (too many dotted names): host.regression.public.!=-
+\do "regression|mydb".public.!=-
+cross-database references are not implemented: "regression|mydb".public.!=-
+\do nonesuch.public.!=-
+cross-database references are not implemented: nonesuch.public.!=-
+\dO host.regression.pg_catalog.POSIX
+improper qualified name (too many dotted names): host.regression.pg_catalog.POSIX
+\dO .pg_catalog.POSIX
+cross-database references are not implemented: .pg_catalog.POSIX
+\dO nonesuch.pg_catalog.POSIX
+cross-database references are not implemented: nonesuch.pg_catalog.POSIX
+\dp host.regression.public.a_star
+improper qualified name (too many dotted names): host.regression.public.a_star
+\dp "regres+ion".public.a_star
+cross-database references are not implemented: "regres+ion".public.a_star
+\dp nonesuch.public.a_star
+cross-database references are not implemented: nonesuch.public.a_star
+\dP host.regression.public.mlparted
+improper qualified name (too many dotted names): host.regression.public.mlparted
+\dP "regres(sion)".public.mlparted
+cross-database references are not implemented: "regres(sion)".public.mlparted
+\dP nonesuch.public.mlparted
+cross-database references are not implemented: nonesuch.public.mlparted
+\drds nonesuch.lc_messages
+improper qualified name (too many dotted names): nonesuch.lc_messages
+\drds regression.lc_messages
+improper qualified name (too many dotted names): regression.lc_messages
+\dRp public.mypub
+improper qualified name (too many dotted names): public.mypub
+\dRp regression.mypub
+improper qualified name (too many dotted names): regression.mypub
+\dRs public.mysub
+improper qualified name (too many dotted names): public.mysub
+\dRs regression.mysub
+improper qualified name (too many dotted names): regression.mysub
+\dT host.regression.public.widget
+improper qualified name (too many dotted names): host.regression.public.widget
+\dT "regression{1,2}".public.widget
+cross-database references are not implemented: "regression{1,2}".public.widget
+\dT nonesuch.public.widget
+cross-database references are not implemented: nonesuch.public.widget
+\dx regression.plpgsql
+improper qualified name (too many dotted names): regression.plpgsql
+\dx nonesuch.plpgsql
+improper qualified name (too many dotted names): nonesuch.plpgsql
+\dX host.regression.public.func_deps_stat
+improper qualified name (too many dotted names): host.regression.public.func_deps_stat
+\dX "^regression$".public.func_deps_stat
+cross-database references are not implemented: "^regression$".public.func_deps_stat
+\dX nonesuch.public.func_deps_stat
+cross-database references are not implemented: nonesuch.public.func_deps_stat
+\dy regression.myevt
+improper qualified name (too many dotted names): regression.myevt
+\dy nonesuch.myevt
+improper qualified name (too many dotted names): nonesuch.myevt

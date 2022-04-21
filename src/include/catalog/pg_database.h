@@ -49,6 +49,9 @@ CATALOG(pg_database,1262,DatabaseRelationId) BKI_SHARED_RELATION BKI_ROWTYPE_OID
 	/* new connections allowed? */
 	bool		datallowconn;
 
+	/* database has login event triggers? */
+	bool		dathasloginevt;
+
 	/* max connections allowed (-1=no limit) */
 	int32		datconnlimit;
 

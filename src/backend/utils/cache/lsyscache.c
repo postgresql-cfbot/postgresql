@@ -2117,6 +2117,24 @@ get_transform_tosql(Oid typid, Oid langid, List *trftypes)
 		return InvalidOid;
 }
 
+/*
+ * get_call_trftypes
+ *
+ *		A helper function that does not itself query the transform cache, but
+ *		constructs the transform-type List expected by the functions above.
+ */
+List *
+get_call_trftypes(HeapTuple procTup)
+{
+	Datum		protrftypes;
+	bool		isNull;
+
+	protrftypes = SysCacheGetAttr(PROCOID, procTup,
+								  Anum_pg_proc_protrftypes,
+								  &isNull);
+	return isNull ?  NIL : oid_array_to_list(protrftypes);
+}
+
 
 /*				---------- TYPE CACHE ----------						 */
 

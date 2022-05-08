@@ -34,6 +34,37 @@ NOTICE:  argument: 0; name: a1; value: {foo,bar,hoge}
  
 (1 row)
 
+/*
+ * Create a bogus transform using a couple existing functions that
+ * happen to have the right parameter and return types. Calamity does
+ * not ensue, because plsample will merely announce what transform functions
+ * it "would" apply, and not really call them.
+ */
+CREATE TRANSFORM FOR text LANGUAGE plsample (
+  FROM SQL WITH FUNCTION prsd_lextype, TO SQL WITH FUNCTION textrecv
+);
+CREATE OR REPLACE FUNCTION
+  plsample_result_text(a1 numeric, a2 text, a3 integer[])
+RETURNS text
+TRANSFORM FOR TYPE text
+AS $$
+  Example of source with text result.
+$$ LANGUAGE plsample;
+SELECT plsample_result_text(1.23, 'abc', '{4, 5, 6}');
+NOTICE:  source text of function "plsample_result_text": 
+  Example of source with text result.
+
+NOTICE:  argument: 0; name: a1; value: 1.23
+NOTICE:  argument: 1; name: a2; transformed with: prsd_lextype(internal)
+NOTICE:  argument: 2; name: a3; value: {4,5,6}
+NOTICE:  return value: transformed with: textrecv(internal)
+         plsample_result_text          
+---------------------------------------
+                                      +
+   Example of source with text result.+
+ 
+(1 row)
+
 CREATE FUNCTION my_trigger_func() RETURNS trigger AS $$
 if TD_event == "INSERT"
     return TD_NEW

@@ -23,6 +23,7 @@
 #include "funcapi.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
+#include "utils/regproc.h"   /* only for format_procedure() */
 #include "utils/syscache.h"
 
 PG_MODULE_MAGIC;
@@ -102,12 +103,15 @@ plsample_func_handler(PG_FUNCTION_ARGS)
 	Form_pg_proc pl_struct;
 	volatile MemoryContext proc_cxt = NULL;
 	Oid		   *argtypes;
+	List	   *trftypes;
 	char	  **argnames;
 	char	   *argmodes;
 	char	   *proname;
 	Form_pg_type pg_type_entry;
 	Oid			result_typioparam;
 	Oid			prorettype;
+	Oid			prolang;
+	Oid			tosql;
 	FmgrInfo	result_in_func;
 	int			numargs;
 
@@ -123,6 +127,7 @@ plsample_func_handler(PG_FUNCTION_ARGS)
 	 * a base for the function validation and execution.
 	 */
 	pl_struct = (Form_pg_proc) GETSTRUCT(pl_tuple);
+	prolang = pl_struct->prolang;
 	proname = pstrdup(NameStr(pl_struct->proname));
 	ret = SysCacheGetAttr(PROCOID, pl_tuple, Anum_pg_proc_prosrc, &isnull);
 	if (isnull)
@@ -141,8 +146,42 @@ plsample_func_handler(PG_FUNCTION_ARGS)
 									 "PL/Sample function",
 									 ALLOCSET_SMALL_SIZES);
 
+	/*
+	 * This array of FmgrInfo will hold, for each supplied input argument,
+	 * the resolved output-to-text function for that argument's type.
+	 * fcinfo->nargs comes from the caller, and reflects the number of input
+	 * arguments supplied in this call.
+	 */
 	arg_out_func = (FmgrInfo *) palloc0(fcinfo->nargs * sizeof(FmgrInfo));
+
+	/*
+	 * Obtain the types, names, and modes (IN/OUT/INOUT/...) for all of
+	 * the function's statically declared arguments, returning their number
+	 * (giving the size of each result array). numargs can be larger than
+	 * fcinfo->nargs (which only reflects IN arguments). numargs can also be
+	 * smaller than fcinfo->nargs (in the case of a function declared
+	 * VARIADIC "any", but it is rare for a PL to support that).
+	 */
 	numargs = get_func_arg_info(pl_tuple, &argtypes, &argnames, &argmodes);
+
+	/*
+	 * For now, PL/Sample does not support any argument with mode other than IN.
+	 * When mode is IN for every argument, argmodes will be NULL, so report
+	 * an error if it is not. To more helpfully report the error at the time
+	 * of declaration, a validator function can check this too.
+	 */
+	if ( argmodes != NULL )
+		ereport(ERROR,
+				(errmsg("only IN arguments supported for PL/Sample")));
+
+	/*
+	 * Obtain the types for which transforms should be applied.
+	 * For a PL that does not support transforms, it could be considerate to
+	 * report an error here (or earlier, in a validator) if trftypes is not NIL,
+	 * rather than simply ignoring any transforms that might be mistakenly
+	 * declared.
+	 */
+	trftypes = get_call_trftypes(pl_tuple);
 
 	/*
 	 * Iterate through all of the function arguments, printing each input
@@ -151,16 +190,48 @@ plsample_func_handler(PG_FUNCTION_ARGS)
 	for (int i = 0; i < numargs; i++)
 	{
 		Oid			argtype = pl_struct->proargtypes.values[i];
+		Oid			fromsql;
 		char	   *value;
+
+		/*
+		 * Get the Oid of the "from SQL" transform function if this arg's type
+		 * is one of those to which transforms should be applied, or InvalidOid
+		 * if not.
+		 */
+		fromsql = get_transform_fromsql(argtype, prolang, trftypes);
 
 		type_tuple = SearchSysCache1(TYPEOID, ObjectIdGetDatum(argtype));
 		if (!HeapTupleIsValid(type_tuple))
 			elog(ERROR, "cache lookup failed for type %u", argtype);
 
 		type_struct = (Form_pg_type) GETSTRUCT(type_tuple);
+
+		/*
+		 * Look up the type's output function and save the details
+		 * in arg_out_func[i].
+		 */
 		fmgr_info_cxt(type_struct->typoutput, &(arg_out_func[i]), proc_cxt);
+
 		ReleaseSysCache(type_tuple);
 
+		/*
+		 * If a transform function was found for this arg, use it instead of
+		 * the default conversion below. In this example, "use it" means
+		 * reporting the transform function's name. A real PL would, of course,
+		 * apply that function to the argument value and use the result.
+		 */
+		if ( OidIsValid(fromsql) )
+		{
+			ereport(NOTICE,
+					(errmsg("argument: %d; name: %s; transformed with: %s",
+							i, argnames[i], format_procedure(fromsql))));
+			continue;
+		}
+
+		/*
+		 * No transform, so apply the default conversion that calls the type's
+		 * output function to obtain a string.
+		 */
 		value = OutputFunctionCall(&arg_out_func[i], fcinfo->args[i].value);
 		ereport(NOTICE,
 				(errmsg("argument: %d; name: %s; value: %s",
@@ -181,6 +252,15 @@ plsample_func_handler(PG_FUNCTION_ARGS)
 	 */
 	if (prorettype != TEXTOID)
 		PG_RETURN_NULL();
+
+	tosql = get_transform_tosql(prorettype, prolang, trftypes);
+
+	if ( OidIsValid(tosql) )
+	{
+		ereport(NOTICE,
+				(errmsg("return value: transformed with: %s",
+						format_procedure(tosql))));
+	}
 
 	type_tuple = SearchSysCache1(TYPEOID,
 								 ObjectIdGetDatum(prorettype));

@@ -22,8 +22,8 @@ PostgreSQL documentation
  <refsynopsisdiv>
 <synopsis>
 CREATE [ OR REPLACE ] TRANSFORM FOR <replaceable>type_name</replaceable> LANGUAGE <replaceable>lang_name</replaceable> (
-    FROM SQL WITH FUNCTION <replaceable>from_sql_function_name</replaceable> [ (<replaceable>argument_type</replaceable> [, ...]) ],
-    TO SQL WITH FUNCTION <replaceable>to_sql_function_name</replaceable> [ (<replaceable>argument_type</replaceable> [, ...]) ]
+    FROM SQL WITH FUNCTION <replaceable>from_sql_function_name</replaceable> [ (<type>internal</type>) ],
+    TO SQL WITH FUNCTION <replaceable>to_sql_function_name</replaceable> [ (<type>internal</type>) ]
 );
 </synopsis>
  </refsynopsisdiv>
@@ -80,6 +80,19 @@ CREATE [ OR REPLACE ] TRANSFORM FOR <replaceable>type_name</replaceable> LANGUAG
    have <literal>EXECUTE</literal> privilege on the from-SQL and to-SQL
    functions, if specified.
   </para>
+
+  <para>
+   Typically, <command>CREATE TRANSFORM</command> will be used to register
+   transforms developed by others (or, even more typically, they will be
+   packaged in an extension, and <command>CREATE EXTENSION</command> will
+   do the registration).
+   To develop new transform functions for a given procedural language, you must
+   be familiar with its implementation, which determines whether it supports
+   transforms at all, and defines the details, such as what is expected for
+   the return and parameter types declared <type>internal</type>.
+   To develop a procedural language with support for transforms, see
+   <xref linkend="plhandler-call-types-transform"/>.
+  </para>
  </refsect1>
 
  <refsect1>
@@ -107,18 +120,19 @@ CREATE [ OR REPLACE ] TRANSFORM FOR <replaceable>type_name</replaceable> LANGUAG
     </varlistentry>
 
     <varlistentry>
-     <term><literal><replaceable>from_sql_function_name</replaceable>[(<replaceable>argument_type</replaceable> [, ...])]</literal></term>
+     <term><literal><replaceable>from_sql_function_name</replaceable>[(<type>internal</type>)]</literal></term>
 
      <listitem>
       <para>
        The name of the function for converting the type from the SQL
        environment to the language.  It must take one argument of
        type <type>internal</type> and return type <type>internal</type>.  The
-       actual argument will be of the type for the transform, and the function
-       should be coded as if it were.  (But it is not allowed to declare an
-       SQL-level function returning <type>internal</type> without at
-       least one argument of type <type>internal</type>.)  The actual return
-       value will be something specific to the language implementation.
+       actual argument will be supplied by the language handler. It will
+       typically be of the type for the transform (even though declared
+       <type>internal</type>), but when writing transforms for a particular
+       language, its implementation should be consulted for the details.
+       The actual return
+       value will also be something specific to the language implementation.
        If no argument list is specified, the function name must be unique in
        its schema.
       </para>
@@ -126,7 +140,7 @@ CREATE [ OR REPLACE ] TRANSFORM FOR <replaceable>type_name</replaceable> LANGUAG
     </varlistentry>
 
     <varlistentry>
-     <term><literal><replaceable>to_sql_function_name</replaceable>[(<replaceable>argument_type</replaceable> [, ...])]</literal></term>
+     <term><literal><replaceable>to_sql_function_name</replaceable>[(<type>internal</type>)]</literal></term>
 
      <listitem>
       <para>
@@ -192,11 +206,34 @@ CREATE TRANSFORM FOR hstore LANGUAGE plpython3u (
   <title>Compatibility</title>
 
   <para>
-   This form of <command>CREATE TRANSFORM</command> is a
-   <productname>PostgreSQL</productname> extension.  There is a <command>CREATE
-   TRANSFORM</command> command in the <acronym>SQL</acronym> standard, but it
-   is for adapting data types to client languages.  That usage is not supported
-   by <productname>PostgreSQL</productname>.
+   There is a <command>CREATE TRANSFORM</command> command in the
+   <acronym>SQL</acronym> standard.
+   <literal>LANGUAGE <replaceable>lang_name</replaceable></literal> is a
+   <productname>PostgreSQL</productname> extension.
+   A transform in the <acronym>SQL</acronym> standard may be created only for
+   a <quote>user-defined</quote> type, and transforms it to a standard
+   <acronym>SQL</acronym> type that is expected to have cross-language support.
+   A <productname>PostgreSQL</productname> transform can be created for
+   any type, and transforms it directly to a language-specific type.
+  </para>
+
+  <para>
+   A transform in the <acronym>SQL</acronym> standard is applied
+   for server-side routines and also for embedded-<acronym>SQL</acronym> client
+   languages. In <productname>PostgreSQL</productname>, a transform is only
+   applied for server-side routines.
+  </para>
+
+  <para>
+   In the <acronym>SQL</acronym> standard, a transform group (one pair of
+   from-<acronym>SQL</acronym> and to-<acronym>SQL</acronym> functions) may have
+   a group name, allowing multiple transforms to exist for the same type, and
+   each routine may declare which one to apply, by giving its name.
+   Transform groups are not named in <productname>PostgreSQL</productname>,
+   so only one transform for a given type and procedural language may exist at
+   any time. Routines using that language may choose between two mappings for
+   the type: the built-in default, or the one defined by the single available
+   transform.
   </para>
  </refsect1>
 

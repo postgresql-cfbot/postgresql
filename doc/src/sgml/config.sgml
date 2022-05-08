@@ -3380,6 +3380,24 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-log-wal-traffic" xreflabel="log_wal_traffic">
+      <term><varname>log_wal_traffic</varname> (<type>enum</type>)
+      <indexterm>
+       <primary><varname>log_wal_traffic</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies the amount of WAL processing information written to
+        the server log. Valid values are <literal>none</literal> (which is the
+        default), <literal>medium</literal> and <literal>high</literal>. The
+        value <literal>none</literal> logs no information, <literal>medium</literal>
+        logs messages per each 128 WAL segments processed and <literal>high</literal>
+        logs messages per each WAL segment processed.
+       </para>
+      </listitem>
+     </varlistentry>
+
      </variablelist>
      </sect2>
      <sect2 id="runtime-config-wal-checkpoints">

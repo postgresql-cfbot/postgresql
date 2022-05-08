@@ -4047,6 +4047,7 @@ XLogFileRead(XLogSegNo segno, int emode, TimeLineID tli,
 	char		activitymsg[MAXFNAMELEN + 16];
 	char		path[MAXPGPATH];
 	int			fd;
+	static	char last_logged_xlogfname[MAXFNAMELEN] = {'\0'};
 
 	XLogFileName(xlogfname, tli, segno, wal_segment_size);
 
@@ -4057,6 +4058,11 @@ XLogFileRead(XLogSegNo segno, int emode, TimeLineID tli,
 			snprintf(activitymsg, sizeof(activitymsg), "waiting for %s",
 					 xlogfname);
 			set_ps_display(activitymsg);
+
+			if (LogWALTraffic(last_logged_xlogfname, xlogfname))
+				ereport(LOG,
+						(errmsg("waiting for WAL segment \"%s\" from archive",
+								xlogfname)));
 
 			if (!RestoreArchivedFile(path, xlogfname,
 									 "RECOVERYXLOG",
@@ -4099,6 +4105,32 @@ XLogFileRead(XLogSegNo segno, int emode, TimeLineID tli,
 		snprintf(activitymsg, sizeof(activitymsg), "recovering %s",
 				 xlogfname);
 		set_ps_display(activitymsg);
+
+		if (LogWALTraffic(last_logged_xlogfname, xlogfname))
+		{
+			switch (source)
+			{
+				case XLOG_FROM_ARCHIVE:
+					ereport(LOG,
+							(errmsg("recovering WAL segment \"%s\" from archive",
+									xlogfname)));
+					break;
+				case XLOG_FROM_STREAM:
+					ereport(LOG,
+							(errmsg("recovering WAL segment \"%s\" from stream",
+									xlogfname)));
+					break;
+				case XLOG_FROM_PG_WAL:
+					ereport(LOG,
+							(errmsg("recovering WAL segment \"%s\" from pg_wal",
+									xlogfname)));
+					break;
+				case XLOG_FROM_ANY:
+					break;
+			}
+
+			memcpy(last_logged_xlogfname, xlogfname, MAXFNAMELEN);
+		}
 
 		/* Track source of data in assorted state variables */
 		readSource = source;
@@ -4190,7 +4222,6 @@ XLogFileReadAnyTLI(XLogSegNo segno, int emode, XLogSource source)
 							  XLOG_FROM_ARCHIVE, true);
 			if (fd != -1)
 			{
-				elog(DEBUG1, "got WAL segment from archive");
 				if (!expectedTLEs)
 					expectedTLEs = tles;
 				return fd;

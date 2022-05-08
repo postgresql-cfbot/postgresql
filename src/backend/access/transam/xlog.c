@@ -142,6 +142,7 @@ bool		XLOG_DEBUG = false;
 #endif
 
 int			wal_segment_size = DEFAULT_XLOG_SEG_SIZE;
+int			log_wal_traffic = LOG_WAL_TRAFFIC_NONE;
 
 /*
  * Number of WAL insertion locks to use. A higher value allows more insertions
@@ -195,6 +196,13 @@ const struct config_enum_entry archive_mode_options[] = {
 	{"no", ARCHIVE_MODE_OFF, true},
 	{"1", ARCHIVE_MODE_ON, true},
 	{"0", ARCHIVE_MODE_OFF, true},
+	{NULL, 0, false}
+};
+
+const struct config_enum_entry log_wal_traffic_options[] = {
+	{"none", LOG_WAL_TRAFFIC_NONE, false},
+	{"medium", LOG_WAL_TRAFFIC_MEDIUM, false},
+	{"high", LOG_WAL_TRAFFIC_HIGH, false},
 	{NULL, 0, false}
 };
 
@@ -8867,4 +8875,39 @@ SetWalWriterSleeping(bool sleeping)
 	SpinLockAcquire(&XLogCtl->info_lck);
 	XLogCtl->WalWriterSleeping = sleeping;
 	SpinLockRelease(&XLogCtl->info_lck);
+}
+
+/*
+ * Returns true if logging of WAL traffic is allowed, otherwise false.
+ */
+bool
+LogWALTraffic(char *last_logged_xlogfname, char *xlogfname)
+{
+	bool emit_log = false;
+
+	if (log_wal_traffic == LOG_WAL_TRAFFIC_NONE)
+		return false;
+	else if (log_wal_traffic == LOG_WAL_TRAFFIC_MEDIUM)
+	{
+		/* first time, log the messages */
+		if (strlen(last_logged_xlogfname) == 0)
+			emit_log = true;
+		else if (IsXLogFileName(last_logged_xlogfname))
+		{
+			uint32		l_tli;
+			uint32		tli;
+			XLogSegNo	l_segno;
+			XLogSegNo	segno;
+
+			XLogFromFileName(last_logged_xlogfname, &l_tli, &l_segno, wal_segment_size);
+			XLogFromFileName(xlogfname, &tli, &segno, wal_segment_size);
+
+			if ((segno - l_segno) >= LOG_WAL_TRAFFIC_PER_SEGMENTS)
+				emit_log = true;
+		}
+	}
+	else if (log_wal_traffic == LOG_WAL_TRAFFIC_HIGH)
+		return true;
+
+	return emit_log;
 }

@@ -51,6 +51,7 @@ extern PGDLLIMPORT char *wal_consistency_checking_string;
 extern PGDLLIMPORT bool log_checkpoints;
 extern PGDLLIMPORT bool track_wal_io_timing;
 extern PGDLLIMPORT int wal_decode_buffer_size;
+extern PGDLLIMPORT int log_wal_traffic;
 
 extern PGDLLIMPORT int CheckPointSegments;
 
@@ -87,6 +88,14 @@ typedef enum RecoveryState
 	RECOVERY_STATE_ARCHIVE,		/* archive recovery */
 	RECOVERY_STATE_DONE			/* currently in production */
 } RecoveryState;
+
+/* Log WAL traffic states */
+typedef enum LogWalTraffic
+{
+	LOG_WAL_TRAFFIC_NONE = 0,
+	LOG_WAL_TRAFFIC_MEDIUM,
+	LOG_WAL_TRAFFIC_HIGH
+} LogWalTraffic;
 
 extern PGDLLIMPORT int wal_level;
 
@@ -151,6 +160,7 @@ extern PGDLLIMPORT bool XLOG_DEBUG;
 #define XLOG_INCLUDE_ORIGIN		0x01	/* include the replication origin */
 #define XLOG_MARK_UNIMPORTANT	0x02	/* record not important for durability */
 
+#define LOG_WAL_TRAFFIC_PER_SEGMENTS 128
 
 /* Checkpoint statistics */
 typedef struct CheckpointStatsData
@@ -248,6 +258,7 @@ extern void SetWalWriterSleeping(bool sleeping);
 
 extern void assign_max_wal_size(int newval, void *extra);
 extern void assign_checkpoint_completion_target(double newval, void *extra);
+extern bool LogWALTraffic(char *last_logged_xlogfname, char *xlogfname);
 
 /*
  * Routines used by xlogrecovery.c to call back into xlog.c during recovery.

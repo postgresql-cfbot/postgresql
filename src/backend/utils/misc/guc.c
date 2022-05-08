@@ -604,6 +604,7 @@ extern const struct config_enum_entry archive_mode_options[];
 extern const struct config_enum_entry recovery_target_action_options[];
 extern const struct config_enum_entry sync_method_options[];
 extern const struct config_enum_entry dynamic_shared_memory_options[];
+extern const struct config_enum_entry log_wal_traffic_options[];
 
 /*
  * GUC option variables that are exported from this module
@@ -4978,6 +4979,16 @@ static struct config_enum ConfigureNamesEnum[] =
 		},
 		&wal_level,
 		WAL_LEVEL_REPLICA, wal_level_options,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"log_wal_traffic", PGC_USERSET, WAL_SETTINGS,
+			gettext_noop("Sets the amount of WAL processing information written to the server log."),
+			NULL
+		},
+		&log_wal_traffic,
+		LOG_WAL_TRAFFIC_NONE, log_wal_traffic_options,
 		NULL, NULL, NULL
 	},
 

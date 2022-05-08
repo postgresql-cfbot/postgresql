@@ -34,11 +34,12 @@ InstrAlloc(int n, int instrument_options, bool async_mode)
 
 	/* initialize all fields to zeroes, then modify as needed */
 	instr = palloc0(n * sizeof(Instrumentation));
-	if (instrument_options & (INSTRUMENT_BUFFERS | INSTRUMENT_TIMER | INSTRUMENT_WAL))
+	if (instrument_options & (INSTRUMENT_BUFFERS | INSTRUMENT_TIMER | INSTRUMENT_WAL | INSTRUMENT_EXTRA))
 	{
 		bool		need_buffers = (instrument_options & INSTRUMENT_BUFFERS) != 0;
 		bool		need_wal = (instrument_options & INSTRUMENT_WAL) != 0;
 		bool		need_timer = (instrument_options & INSTRUMENT_TIMER) != 0;
+		bool		need_extra = (instrument_options & INSTRUMENT_EXTRA) != 0;
 		int			i;
 
 		for (i = 0; i < n; i++)
@@ -46,6 +47,7 @@ InstrAlloc(int n, int instrument_options, bool async_mode)
 			instr[i].need_bufusage = need_buffers;
 			instr[i].need_walusage = need_wal;
 			instr[i].need_timer = need_timer;
+			instr[i].need_extra = need_extra;
 			instr[i].async_mode = async_mode;
 		}
 	}
@@ -61,6 +63,7 @@ InstrInit(Instrumentation *instr, int instrument_options)
 	instr->need_bufusage = (instrument_options & INSTRUMENT_BUFFERS) != 0;
 	instr->need_walusage = (instrument_options & INSTRUMENT_WAL) != 0;
 	instr->need_timer = (instrument_options & INSTRUMENT_TIMER) != 0;
+	instr->need_extra = (instrument_options & INSTRUMENT_EXTRA) != 0;
 }
 
 /* Entry to a plan node */
@@ -154,6 +157,35 @@ InstrEndLoop(Instrumentation *instr)
 	instr->startup += instr->firsttuple;
 	instr->total += totaltime;
 	instr->ntuples += instr->tuplecount;
+
+	/*
+	 * this is first loop
+	 *
+	 * We only initialize the min values. We don't need to bother with the
+	 * max, because those are 0 and the non-zero values will get updated a
+	 * couple lines later.
+	 */
+	if (instr->need_extra)
+	{
+		if (instr->nloops == 0)
+		{
+			instr->min_t = totaltime;
+			instr->min_tuples = instr->tuplecount;
+		}
+
+		if (instr->min_t > totaltime)
+			instr->min_t = totaltime;
+
+		if (instr->max_t < totaltime)
+			instr->max_t = totaltime;
+
+		if (instr->min_tuples > instr->tuplecount)
+			instr->min_tuples = instr->tuplecount;
+
+		if (instr->max_tuples < instr->tuplecount)
+			instr->max_tuples = instr->tuplecount;
+	}
+
 	instr->nloops += 1;
 
 	/* Reset for next cycle (if any) */
@@ -186,6 +218,10 @@ InstrAggNode(Instrumentation *dst, Instrumentation *add)
 	dst->nloops += add->nloops;
 	dst->nfiltered1 += add->nfiltered1;
 	dst->nfiltered2 += add->nfiltered2;
+	dst->min_t = Min(dst->min_t, add->min_t);
+	dst->max_t = Max(dst->max_t, add->max_t);
+	dst->min_tuples = Min(dst->min_tuples, add->min_tuples);
+	dst->max_tuples = Max(dst->max_tuples, add->max_tuples);
 
 	/* Add delta of buffer usage since entry to node's totals */
 	if (dst->need_bufusage)

@@ -469,6 +469,25 @@ begin
 end;
 $$;
 
+create function explain_verbose_parallel_append(text) returns setof text
+language plpgsql as
+$$
+declare
+    ln text;
+begin
+    for ln in
+        execute format('explain (analyze, verbose, costs off, summary off, timing off) %s',
+            $1)
+    loop
+        ln := regexp_replace(ln, 'Workers Launched: \d+', 'Workers Launched: N');
+        ln := regexp_replace(ln, 'actual rows=\d+ loops=\d+', 'actual rows=N loops=N');
+        ln := regexp_replace(ln, 'Loop Min Rows: \d+  Max Rows: \d+  Total Rows: \d+',
+                                 'Loop Min Rows: N  Max Rows: N  Total Rows: N');
+        return next ln;
+    end loop;
+end;
+$$;
+
 prepare ab_q4 (int, int) as
 select avg(a) from ab where a between $1 and $2 and b < 4;
 
@@ -527,6 +546,12 @@ insert into lprt_a values(3),(3);
 
 select explain_parallel_append('select avg(ab.a) from ab inner join lprt_a a on ab.a = a.a where a.a in(1, 0, 3)');
 select explain_parallel_append('select avg(ab.a) from ab inner join lprt_a a on ab.a = a.a where a.a in(1, 0, 0)');
+
+-- Tests for extra statistics
+create table lprt_b (b int not null);
+insert into lprt_b select generate_series(1,20);
+select explain_verbose_parallel_append('select * from lprt_a join lprt_b on a != b');
+drop table lprt_b;
 
 delete from lprt_a where a = 1;
 
@@ -653,6 +678,13 @@ order by tbl1.col1, tprt.col1;
 select tbl1.col1, tprt.col1 from tbl1
 inner join tprt on tbl1.col1 = tprt.col1
 order by tbl1.col1, tprt.col1;
+
+-- Tests for extra statistics
+explain (analyze, verbose, costs off, summary off, timing off)
+select * from tbl1 inner join tprt on tbl1.col1 > tprt.col1;
+
+explain (analyze, verbose, costs off, summary off, timing off)
+select * from tbl1 inner join tprt on tbl1.col1 = tprt.col1;
 
 -- Last partition
 delete from tbl1;

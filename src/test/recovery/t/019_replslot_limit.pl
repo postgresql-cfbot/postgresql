@@ -188,7 +188,7 @@ for (my $i = 0; $i < 10000; $i++)
 {
 	if (find_in_log(
 			$node_primary,
-			"invalidating slot \"rep1\" because its restart_lsn [0-9A-F/]+ exceeds max_slot_wal_keep_size",
+			"invalidating slot \"rep1\" because its restart_lsn [0-9A-F/]+ exceeds the limit [0-9A-F/]+",
 			$logstart))
 	{
 		$invalidated = 1;

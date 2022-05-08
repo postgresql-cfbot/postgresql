@@ -1376,6 +1376,7 @@ RI_Initial_Check(Trigger *trigger, Relation fk_rel, Relation pk_rel)
 	char		workmembuf[32];
 	int			spi_result;
 	SPIPlanPtr	qplan;
+	SPIPrepareOptions options;
 
 	riinfo = ri_FetchConstraintInfo(trigger, fk_rel, false);
 
@@ -1542,10 +1543,12 @@ RI_Initial_Check(Trigger *trigger, Relation fk_rel, Relation pk_rel)
 	 * Generate the plan.  We don't need to cache it, and there are no
 	 * arguments to the plan.
 	 */
-	qplan = SPI_prepare(querybuf.data, 0, NULL);
+	memset(&options, 0, sizeof(options));
+	options.cursorOptions = CURSOR_OPT_PARALLEL_OK;
+	qplan = SPI_prepare_extended(querybuf.data, &options);
 
 	if (qplan == NULL)
-		elog(ERROR, "SPI_prepare returned %s for %s",
+		elog(ERROR, "SPI_prepare_extended returned %s for %s",
 			 SPI_result_code_string(SPI_result), querybuf.data);
 
 	/*

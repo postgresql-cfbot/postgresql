@@ -1853,7 +1853,28 @@ heap_drop_with_catalog(Oid relid)
 	 * Schedule unlinking of the relation's physical files at commit.
 	 */
 	if (RELKIND_HAS_STORAGE(rel->rd_rel->relkind))
-		RelationDropStorage(rel);
+		switch (rel->rd_rel->relkind)
+		{
+			case RELKIND_VIEW:
+			case RELKIND_COMPOSITE_TYPE:
+			case RELKIND_FOREIGN_TABLE:
+			case RELKIND_PARTITIONED_TABLE:
+			case RELKIND_PARTITIONED_INDEX:
+				Assert(false);
+				break;
+
+			case RELKIND_INDEX:
+			case RELKIND_SEQUENCE:
+				RelationDropStorage(rel);
+				break;
+
+			case RELKIND_RELATION:
+			case RELKIND_TOASTVALUE:
+			case RELKIND_MATVIEW:
+				table_relation_reset_filenode(rel);
+				break;
+
+		}
 
 	/* ensure that stats are dropped if transaction commits */
 	pgstat_drop_relation(rel);

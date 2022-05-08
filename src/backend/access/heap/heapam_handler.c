@@ -616,6 +616,12 @@ heapam_relation_set_new_filenode(Relation rel,
 }
 
 static void
+heapam_relation_reset_filenode(Relation rel)
+{
+	RelationDropStorage(rel);
+}
+
+static void
 heapam_relation_nontransactional_truncate(Relation rel)
 {
 	RelationTruncate(rel, 0);
@@ -2570,6 +2576,7 @@ static const TableAmRoutine heapam_methods = {
 	.index_delete_tuples = heap_index_delete_tuples,
 
 	.relation_set_new_filenode = heapam_relation_set_new_filenode,
+	.relation_reset_filenode = heapam_relation_reset_filenode,
 	.relation_nontransactional_truncate = heapam_relation_nontransactional_truncate,
 	.relation_copy_data = heapam_relation_copy_data,
 	.relation_copy_for_cluster = heapam_relation_copy_for_cluster,

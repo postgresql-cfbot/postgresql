@@ -582,6 +582,14 @@ typedef struct TableAmRoutine
 											  MultiXactId *minmulti);
 
 	/*
+	 * This callback needs to schedule the removal of all associations with the
+	 * relation `rel` since the relation is about to be dropped.
+	 *
+	 * See also table_relation_reset_filenode().
+	 */
+	void        (*relation_reset_filenode) (Relation rel);
+
+	/*
 	 * This callback needs to remove all contents from `rel`'s current
 	 * relfilenode. No provisions for transactional behaviour need to be made.
 	 * Often this can be implemented by truncating the underlying storage to
@@ -1597,6 +1605,18 @@ table_relation_set_new_filenode(Relation rel,
 {
 	rel->rd_tableam->relation_set_new_filenode(rel, newrnode, persistence,
 											   freezeXid, minmulti);
+}
+
+/*
+ * Schedule the removal of all association with storage for the relation.
+ *
+ * This is used when a relation is about to be dropped and removed from the
+ * catalog.
+ */
+static inline void
+table_relation_reset_filenode(Relation rel)
+{
+	rel->rd_tableam->relation_reset_filenode(rel);
 }
 
 /*

@@ -158,19 +158,11 @@ connectMaintenanceDatabase(ConnParams *cparams,
 void
 disconnectDatabase(PGconn *conn)
 {
-	char		errbuf[256];
-
 	Assert(conn != NULL);
 
 	if (PQtransactionStatus(conn) == PQTRANS_ACTIVE)
 	{
-		PGcancel   *cancel;
-
-		if ((cancel = PQgetCancel(conn)))
-		{
-			(void) PQcancel(cancel, errbuf, sizeof(errbuf));
-			PQfreeCancel(cancel);
-		}
+		(void) PQrequestCancel(conn);
 	}
 
 	PQfinish(conn);

@@ -201,6 +201,12 @@ pqsecure_close(PGconn *conn)
  * On failure, this function is responsible for appending a suitable message
  * to conn->errorMessage.  The caller must still inspect errno, but only
  * to determine whether to continue/retry after error.
+ *
+ * Returns -1 in case of failures, except in the case of where a failure means
+ * that there was a clean connection closure, in those cases -2 is return.
+ * Currently only the TLS implementation of pqsecure_read ever returns -2. For
+ * the other implementations a clean connection closure is detected in
+ * pqReadData instead.
  */
 ssize_t
 pqsecure_read(PGconn *conn, void *ptr, size_t len)

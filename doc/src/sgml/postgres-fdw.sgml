@@ -121,7 +121,8 @@
     <itemizedlist spacing="compact">
      <listitem>
       <para>
-       <literal>user</literal>, <literal>password</literal> and <literal>sslpassword</literal> (specify these
+       <literal>user</literal>, <literal>authuser</literal>,
+       <literal>password</literal> and <literal>sslpassword</literal> (specify these
        in a user mapping, instead, or use a service file)
       </para>
      </listitem>

@@ -344,6 +344,10 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 		"Target-Session-Attrs", "", 15, /* sizeof("prefer-standby") = 15 */
 	offsetof(struct pg_conn, target_session_attrs)},
 
+	{"authuser", "PGAUTHUSER", NULL, NULL,
+		"Auth-User", "", 20,
+	offsetof(struct pg_conn, pgauthuser)},
+
 	/* Terminating entry --- MUST BE LAST */
 	{NULL, NULL, NULL, NULL,
 	NULL, NULL, 0}

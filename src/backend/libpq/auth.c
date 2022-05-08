@@ -2481,8 +2481,10 @@ CheckLDAPAuth(Port *port)
 	char	   *passwd;
 	LDAP	   *ldap;
 	int			r;
+	const char *ldapuser;
 	char	   *fulluser;
 	const char *server_name;
+	const char *map_name;
 
 #ifdef HAVE_LDAP_INITIALIZE
 
@@ -2534,6 +2536,11 @@ CheckLDAPAuth(Port *port)
 		return STATUS_ERROR;
 	}
 
+	/* If a PGAUTHUSER was not provided, default to PGUSER. */
+	ldapuser = port->auth_user;
+	if (!ldapuser || !ldapuser[0])
+		ldapuser = port->user_name;
+
 	if (port->hba->ldapbasedn)
 	{
 		/*
@@ -2545,7 +2552,7 @@ CheckLDAPAuth(Port *port)
 		LDAPMessage *entry;
 		char	   *attributes[] = {LDAP_NO_ATTRS, NULL};
 		char	   *dn;
-		char	   *c;
+		const char *c;
 		int			count;
 
 		/*
@@ -2554,7 +2561,7 @@ CheckLDAPAuth(Port *port)
 		 * them would make it possible to inject any kind of custom filters in
 		 * the LDAP filter.
 		 */
-		for (c = port->user_name; *c; c++)
+		for (c = ldapuser; *c; c++)
 		{
 			if (*c == '*' ||
 				*c == '(' ||
@@ -2592,11 +2599,11 @@ CheckLDAPAuth(Port *port)
 
 		/* Build a custom filter or a single attribute filter? */
 		if (port->hba->ldapsearchfilter)
-			filter = FormatSearchFilter(port->hba->ldapsearchfilter, port->user_name);
+			filter = FormatSearchFilter(port->hba->ldapsearchfilter, ldapuser);
 		else if (port->hba->ldapsearchattribute)
-			filter = psprintf("(%s=%s)", port->hba->ldapsearchattribute, port->user_name);
+			filter = psprintf("(%s=%s)", port->hba->ldapsearchattribute, ldapuser);
 		else
-			filter = psprintf("(uid=%s)", port->user_name);
+			filter = psprintf("(uid=%s)", ldapuser);
 
 		r = ldap_search_s(ldap,
 						  port->hba->ldapbasedn,
@@ -2623,12 +2630,12 @@ CheckLDAPAuth(Port *port)
 		{
 			if (count == 0)
 				ereport(LOG,
-						(errmsg("LDAP user \"%s\" does not exist", port->user_name),
+						(errmsg("LDAP user \"%s\" does not exist", ldapuser),
 						 errdetail("LDAP search for filter \"%s\" on server \"%s\" returned no entries.",
 								   filter, server_name)));
 			else
 				ereport(LOG,
-						(errmsg("LDAP user \"%s\" is not unique", port->user_name),
+						(errmsg("LDAP user \"%s\" is not unique", ldapuser),
 						 errdetail_plural("LDAP search for filter \"%s\" on server \"%s\" returned %d entry.",
 										  "LDAP search for filter \"%s\" on server \"%s\" returned %d entries.",
 										  count,
@@ -2693,7 +2700,7 @@ CheckLDAPAuth(Port *port)
 	else
 		fulluser = psprintf("%s%s%s",
 							port->hba->ldapprefix ? port->hba->ldapprefix : "",
-							port->user_name,
+							ldapuser,
 							port->hba->ldapsuffix ? port->hba->ldapsuffix : "");
 
 	r = ldap_simple_bind_s(ldap, fulluser, passwd);
@@ -2715,9 +2722,22 @@ CheckLDAPAuth(Port *port)
 
 	ldap_unbind(ldap);
 	pfree(passwd);
+
+	/*
+	 * Check the usermap for authorization. If ldap_map_dn is set and the admin
+	 * has set up an explicit map, we use the full distinguised name during the
+	 * mapping.  Otherwise we just check the bare LDAP username.
+	 */
+	map_name = ldapuser;
+	if (port->hba->usermap && port->hba->usermap[0] && port->hba->ldap_map_dn)
+		map_name = fulluser;
+
+	r = check_usermap(port->hba->usermap, port->user_name, map_name,
+					  pg_krb_caseins_users);
+
 	pfree(fulluser);
 
-	return STATUS_OK;
+	return r;
 }
 
 /*

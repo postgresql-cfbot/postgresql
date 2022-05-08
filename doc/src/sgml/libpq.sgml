@@ -1455,6 +1455,28 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
       </listitem>
      </varlistentry>
 
+     <varlistentry id="libpq-connect-authuser" xreflabel="authuser">
+      <term><literal>authuser</literal></term>
+      <listitem>
+       <para>
+        When connecting to servers that use LDAP authentication, this option
+        sets the username that should be used to bind to the LDAP server.
+        By default, the <productname>PostgreSQL</productname> user name
+        (<xref linkend="libpq-connect-user"/>) is used to bind.
+       </para>
+
+       <note>
+        <para>
+         For this option to be useful, the server must be appropriately
+         configured with a user name map (<xref linkend="auth-username-maps"/>).
+         Server versions prior to 15 always use the
+         <productname>PostgreSQL</productname> user name to bind and cannot make
+         use of this option.
+        </para>
+       </note>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="libpq-connect-gssencmode" xreflabel="gssencmode">
       <term><literal>gssencmode</literal></term>
       <listitem>
@@ -7923,6 +7945,16 @@ myEventProc(PGEventId evtId, void *evtInfo, void *passThrough)
       </indexterm>
       <envar>PGSSLMINPROTOCOLVERSION</envar> behaves the same as the <xref
       linkend="libpq-connect-ssl-min-protocol-version"/> connection parameter.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      <indexterm>
+       <primary><envar>PGAUTHUSER</envar></primary>
+      </indexterm>
+      <envar>PGAUTHUSER</envar> behaves the same as the
+      <xref linkend="libpq-connect-authuser"/> connection parameter.
      </para>
     </listitem>
 

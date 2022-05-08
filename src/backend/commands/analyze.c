@@ -67,6 +67,7 @@
 #include "utils/spccache.h"
 #include "utils/syscache.h"
 #include "utils/timestamp.h"
+#include "utils/typcache.h"
 
 
 /* Per-index data for ANALYZE */
@@ -91,6 +92,10 @@ static void do_analyze_rel(Relation onerel,
 						   VacuumParams *params, List *va_cols,
 						   AcquireSampleRowsFunc acquirefunc, BlockNumber relpages,
 						   bool inh, bool in_outer_xact, int elevel);
+static void do_analyze_merge_rel(Relation onerel,
+								 VacuumParams *params, List *va_cols,
+								 AcquireSampleRowsFunc acquirefunc, BlockNumber relpages,
+								 bool inh, bool in_outer_xact, int elevel);
 static void compute_index_stats(Relation onerel, double totalrows,
 								AnlIndexData *indexdata, int nindexes,
 								HeapTuple *rows, int numrows,
@@ -126,12 +131,16 @@ analyze_rel(Oid relid, RangeVar *relation,
 	int			elevel;
 	AcquireSampleRowsFunc acquirefunc = NULL;
 	BlockNumber relpages = 0;
+	bool		merge_stats;
 
 	/* Select logging level */
 	if (params->options & VACOPT_VERBOSE)
 		elevel = INFO;
 	else
 		elevel = DEBUG2;
+
+	/* requested to merge child statistics instead of sampling */
+	merge_stats = (params->options & VACOPT_MERGE_STATS);
 
 	/* Set up static variables */
 	vac_strategy = bstrategy;
@@ -264,10 +273,19 @@ analyze_rel(Oid relid, RangeVar *relation,
 
 	/*
 	 * If there are child tables, do recursive ANALYZE.
+	 *
+	 * If ANALYZE (MERGE) was requested, simply fetch and merge statistics
+	 * from the children, instead of sampling the data.
 	 */
 	if (onerel->rd_rel->relhassubclass)
-		do_analyze_rel(onerel, params, va_cols, acquirefunc, relpages,
-					   true, in_outer_xact, elevel);
+	{
+		if (merge_stats)
+			do_analyze_merge_rel(onerel, params, va_cols, acquirefunc, relpages,
+								 true, in_outer_xact, elevel);
+		else
+			do_analyze_rel(onerel, params, va_cols, acquirefunc, relpages,
+						   true, in_outer_xact, elevel);
+	}
 
 	/*
 	 * Close source relation now, but keep lock so that no one deletes it
@@ -802,6 +820,814 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 							 (long long) AnalyzePageHit,
 							 (long long) AnalyzePageMiss,
 							 (long long) AnalyzePageDirty);
+			appendStringInfo(&buf, _("system usage: %s"), pg_rusage_show(&ru0));
+
+			ereport(LOG,
+					(errmsg_internal("%s", buf.data)));
+
+			pfree(buf.data);
+		}
+	}
+
+	/* Roll back any GUC changes executed by index functions */
+	AtEOXact_GUC(false, save_nestlevel);
+
+	/* Restore userid and security context */
+	SetUserIdAndSecContext(save_userid, save_sec_context);
+
+	/* Restore current context and release memory */
+	MemoryContextSwitchTo(caller_context);
+	MemoryContextDelete(anl_context);
+	anl_context = NULL;
+}
+
+/* merging of statistics from children tables (MCV, histogram) */
+
+typedef struct MCVMergeItem {
+	Datum	value;
+	double	nrows;
+} MCVMergeItem;
+
+typedef struct HistogramMergeItem {
+	Datum	minval;
+	Datum	maxval;
+	double	nrows;
+} HistogramMergeItem;
+
+typedef struct merge_context_t {
+	FmgrInfo	opproc;
+	Oid			collation;
+} merge_context_t;
+
+/* compare MCV items by the values */
+static int
+compare_mcv_merge_item(const void *a, const void *b, void *arg)
+{
+	bool		ltcmp;
+	MCVMergeItem *ma = (MCVMergeItem *) a;
+	MCVMergeItem *mb = (MCVMergeItem *) b;
+	merge_context_t *cxt = (merge_context_t *) arg;
+
+	ltcmp = DatumGetBool(FunctionCall2Coll(&cxt->opproc, cxt->collation,
+										   ma->value, mb->value));
+
+	if (ltcmp)
+		return -1;
+
+	ltcmp = DatumGetBool(FunctionCall2Coll(&cxt->opproc, cxt->collation,
+										   mb->value, ma->value));
+
+	if (ltcmp)
+		return 1;
+
+	return 0;
+}
+
+/* sort the MCV items by tuples in descending order */
+static int
+compare_mcv_by_tuples(const void *a, const void *b)
+{
+	MCVMergeItem *ma = (MCVMergeItem *) a;
+	MCVMergeItem *mb = (MCVMergeItem *) b;
+
+	if (ma->nrows > mb->nrows)
+		return -1;
+	else if (ma->nrows > mb->nrows)
+		return 1;
+
+	return 0;
+}
+
+/*
+ * Combine duplicate items from multiple MCV lists, build a new list.
+ *
+ * XXX In principle the size of the MCV list should be determined the same
+ * way analyze_mcv_list() does it for individual tables, but we have only
+ * very unreliable ndistinct estimate. So we simply assume that whatever
+ * got into the per-table MCV list, is worth keeping in the MCV list for
+ * the parent too.
+ */
+static int
+merge_mcv(MCVMergeItem *mcv, int *mcv_items, merge_context_t *cxt)
+{
+	int			i;
+	int			n;
+
+	if (*mcv_items == 0)
+		return 0;
+
+	qsort_arg(mcv, *mcv_items, sizeof(MCVMergeItem),
+			  compare_mcv_merge_item, cxt);
+
+	n = 1;
+	for (i = 1; i < *mcv_items; i++)
+	{
+		if (compare_mcv_merge_item(&mcv[i-1], &mcv[i], cxt) == 0)
+			continue;
+
+		mcv[n] = mcv[i];
+		n++;
+	}
+
+	*mcv_items = n;
+
+	pg_qsort(mcv, n, sizeof(MCVMergeItem), compare_mcv_by_tuples);
+
+	if (*mcv_items > default_statistics_target)
+		n = default_statistics_target;
+
+	return n;
+}
+
+/* compare datum using the comparator / collation */
+static int
+compare_values(const void *a, const void *b, void *arg)
+{
+	bool		ltcmp;
+	merge_context_t *cxt = (merge_context_t *) arg;
+
+	Datum da = * (Datum *) a;
+	Datum db = * (Datum *) b;
+
+	ltcmp = DatumGetBool(FunctionCall2Coll(&cxt->opproc, cxt->collation,
+										   da, db));
+
+	if (ltcmp)
+		return -1;
+
+	ltcmp = DatumGetBool(FunctionCall2Coll(&cxt->opproc, cxt->collation,
+										   db, da));
+
+	if (ltcmp)
+		return 1;
+
+	return 0;
+}
+
+/* merge ranges from multiple histograms, build a new histogram */
+static Datum *
+merge_histogram(HistogramMergeItem *hist, int hist_items, int *nitems,
+				merge_context_t *cxt)
+{
+	int			i;
+	int			n;
+	double		nrows_total;
+	Datum	   *values;
+	int			nvalues;
+	int			new_hist_items;
+	HistogramMergeItem *new_hist;
+	double		step;
+	double		next;
+	double		curr;
+
+	if (hist_items == 0)
+	{
+		*nitems = 0;
+		return NULL;
+	}
+
+	/* total number of rows in the histogram */
+	nrows_total = 0;
+	for (i = 0; i < hist_items; i++)
+		nrows_total += hist[i].nrows;
+
+	/* construct non-overlapping intervals - we don't split */
+	nvalues = 0;
+	values = (Datum *) palloc(2 * hist_items * sizeof(Datum));
+	for (i = 0; i < hist_items; i++)
+	{
+		values[nvalues++] = hist[i].minval;
+		values[nvalues++] = hist[i].maxval;
+	}
+
+	qsort_arg(values, nvalues, sizeof(Datum), compare_values, cxt);
+
+	n = 1;
+	for (i = 1; i < nvalues; i++)
+	{
+		if (compare_values(&values[i-1], &values[i], cxt) == 0)
+			continue;
+
+		values[n++] = values[i];
+	}
+	nvalues = n;
+
+	/* transform the values into histogram */
+	new_hist_items  = (nvalues - 1);
+	new_hist = (HistogramMergeItem *) palloc0(sizeof(HistogramMergeItem) * new_hist_items);
+	for (i = 0; i < new_hist_items; i++)
+	{
+		new_hist[i].minval = values[i];
+		new_hist[i].maxval = values[i+1];
+	}
+
+	/* redistribute the rows from the old into the new histogram */
+	for (i = 0; i < hist_items; i++)
+	{
+		int	startidx = 0;
+		int	endidx = 0;
+		double	nrows;
+		int		j;
+
+		/* find the first matching bin in the new histogram - loop until we
+		 * find the first bin after it, then go one step back */
+		while (true)
+		{
+			if ((startidx == new_hist_items) ||
+				compare_values(&hist[i].minval, &new_hist[startidx].minval, cxt) < 0)
+			{
+				startidx--;
+				break;
+			}
+
+			startidx++;
+		}
+
+		Assert(startidx >= 0);
+		Assert(startidx < new_hist_items);
+
+		/* find the last matching bin in the new histogram - loop until we
+		 * find the first bin after it, then go one step back */
+		while (true)
+		{
+			if ((endidx == new_hist_items) ||
+				compare_values(&hist[i].maxval, &new_hist[endidx].minval, cxt) < 0)
+			{
+				endidx--;
+				break;
+			}
+
+			endidx++;
+		}
+
+		Assert(endidx >= startidx);
+		Assert(startidx < new_hist_items);
+
+		/*
+		 * Redistribute the counts between the matching ranges equally.
+		 *
+		 * XXX We could do better for data types with "distance", maybe?
+		 */
+		nrows = hist[i].nrows / (endidx - startidx + 1);
+
+		for (j = startidx; j <= endidx; j++)
+			new_hist[j].nrows += nrows;
+	}
+
+	nrows_total = 0;
+	for (i = 0; i < new_hist_items; i++)
+		nrows_total += new_hist[i].nrows;
+
+	step = (nrows_total / default_statistics_target);
+	next = step;
+	curr = 0;
+
+	values[0] = new_hist[0].minval;
+	n = 1;
+
+	for (i = 0; i < new_hist_items; i++)
+	{
+		curr += new_hist[i].nrows;
+
+		/* not reached the next threshold */
+		if (curr < next)
+			continue;
+
+		while (curr >= next)
+		{
+			values[n++] = new_hist[i].maxval;
+			next += step;
+		}
+	}
+
+	*nitems = n;
+
+	return values;
+}
+
+/*
+ *	do_analyze_merge_rel() -- analyze partitioned relation by merging stats
+ * from child tables
+ */
+static void
+do_analyze_merge_rel(Relation onerel, VacuumParams *params,
+					 List *va_cols, AcquireSampleRowsFunc acquirefunc,
+					 BlockNumber relpages, bool inh, bool in_outer_xact,
+					 int elevel)
+{
+	int			attr_cnt,
+				tcnt,
+				i;
+	VacAttrStats **vacattrstats;
+	PGRUsage	ru0;
+	TimestampTz starttime = 0;
+	MemoryContext caller_context;
+	Oid			save_userid;
+	int			save_sec_context;
+	int			save_nestlevel;
+	int64		AnalyzePageHit = VacuumPageHit;
+	int64		AnalyzePageMiss = VacuumPageMiss;
+	int64		AnalyzePageDirty = VacuumPageDirty;
+	PgStat_Counter startreadtime = 0;
+	PgStat_Counter startwritetime = 0;
+	List	   *children;
+	Relation   *rels;
+	int			nrels;
+	ListCell   *lc;
+
+	double	   *relblocks;
+	double	   *reltuples;
+	double		totalblocks;
+	double		totaltuples;
+
+	/* pointers to pg_statistic tuples */
+	HeapTuple  *statistic_tuples;
+
+	/* partitioned tables / inheritance trees only */
+	Assert(inh);
+
+	/*
+	 * Set up a working context so that we can easily free whatever junk gets
+	 * created.
+	 */
+	anl_context = AllocSetContextCreate(CurrentMemoryContext,
+										"Analyze",
+										ALLOCSET_DEFAULT_SIZES);
+	caller_context = MemoryContextSwitchTo(anl_context);
+
+	/*
+	 * Switch to the table owner's userid, so that any index functions are run
+	 * as that user.  Also lock down security-restricted operations and
+	 * arrange to make GUC variable changes local to this command.
+	 *
+	 * XXX Probably not needed, we're not going to run any functions.
+	 */
+	GetUserIdAndSecContext(&save_userid, &save_sec_context);
+	SetUserIdAndSecContext(onerel->rd_rel->relowner,
+						   save_sec_context | SECURITY_RESTRICTED_OPERATION);
+	save_nestlevel = NewGUCNestLevel();
+
+	/* measure elapsed time iff autovacuum logging requires it */
+	if (IsAutoVacuumWorkerProcess() && params->log_min_duration >= 0)
+	{
+		if (track_io_timing)
+		{
+			startreadtime = pgStatBlockReadTime;
+			startwritetime = pgStatBlockWriteTime;
+		}
+
+		pg_rusage_init(&ru0);
+		if (params->log_min_duration >= 0)
+			starttime = GetCurrentTimestamp();
+	}
+
+	/*
+	 * Determine which columns to analyze
+	 *
+	 * Note that system attributes are never analyzed, so we just reject them
+	 * at the lookup stage.  We also reject duplicate column mentions.  (We
+	 * could alternatively ignore duplicates, but analyzing a column twice
+	 * won't work; we'd end up making a conflicting update in pg_statistic.)
+	 */
+	if (va_cols != NIL)
+	{
+		Bitmapset  *unique_cols = NULL;
+		ListCell   *le;
+
+		vacattrstats = (VacAttrStats **) palloc(list_length(va_cols) *
+												sizeof(VacAttrStats *));
+		tcnt = 0;
+		foreach(le, va_cols)
+		{
+			char	   *col = strVal(lfirst(le));
+
+			i = attnameAttNum(onerel, col, false);
+			if (i == InvalidAttrNumber)
+				ereport(ERROR,
+						(errcode(ERRCODE_UNDEFINED_COLUMN),
+						 errmsg("column \"%s\" of relation \"%s\" does not exist",
+								col, RelationGetRelationName(onerel))));
+			if (bms_is_member(i, unique_cols))
+				ereport(ERROR,
+						(errcode(ERRCODE_DUPLICATE_COLUMN),
+						 errmsg("column \"%s\" of relation \"%s\" appears more than once",
+								col, RelationGetRelationName(onerel))));
+			unique_cols = bms_add_member(unique_cols, i);
+
+			vacattrstats[tcnt] = examine_attribute(onerel, i, NULL);
+			if (vacattrstats[tcnt] != NULL)
+				tcnt++;
+		}
+		attr_cnt = tcnt;
+	}
+	else
+	{
+		attr_cnt = onerel->rd_att->natts;
+		vacattrstats = (VacAttrStats **)
+			palloc(attr_cnt * sizeof(VacAttrStats *));
+		tcnt = 0;
+		for (i = 1; i <= attr_cnt; i++)
+		{
+			vacattrstats[tcnt] = examine_attribute(onerel, i, NULL);
+			if (vacattrstats[tcnt] != NULL)
+				tcnt++;
+		}
+		attr_cnt = tcnt;
+	}
+
+	/*
+	 * XXX We don't want to touch the parent's indexes at all.
+	 */
+
+	/**/
+	children = find_all_inheritors(RelationGetRelid(onerel), AccessShareLock, NULL);
+
+	/* filter interesting relations (leafs only) */
+	rels = (Relation *) palloc(list_length(children) * sizeof(Relation));
+	relblocks = (double *) palloc(list_length(children) * sizeof(double));
+	reltuples = (double *) palloc(list_length(children) * sizeof(double));
+	totalblocks = 0;
+	totaltuples = 0;
+
+	nrels = 0;
+
+	foreach(lc, children)
+	{
+		Oid			childoid = lfirst_oid(lc);
+		Relation	childrel;
+
+		/* We already got the needed lock */
+		childrel = table_open(childoid, NoLock);
+
+		/* Ignore if temp table of another backend */
+		if (RELATION_IS_OTHER_TEMP(childrel))
+		{
+			/* ... but release the lock on it */
+			Assert(childrel != onerel);
+			table_close(childrel, AccessShareLock);
+			continue;
+		}
+
+		/*
+		 * ignore anything but valid leaf relatiins with data, but release
+		 * the lock on it.  don't try to unlock the passed-in relation
+		 */
+		if (childrel->rd_rel->relkind != RELKIND_RELATION &&
+			childrel->rd_rel->relkind != RELKIND_MATVIEW &&
+			childrel->rd_rel->relkind != RELKIND_FOREIGN_TABLE)
+		{
+			Assert(childrel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE);
+			if (childrel != onerel)
+				table_close(childrel, AccessShareLock);
+			else
+				table_close(childrel, NoLock);
+			continue;
+		}
+
+		/* OK, we'll process this child */
+		rels[nrels] = childrel;
+		relblocks[nrels] = (double) RelationGetNumberOfBlocks(childrel);
+		reltuples[nrels] = (double) childrel->rd_rel->reltuples;
+		totalblocks += relblocks[nrels];
+		totaltuples += reltuples[nrels];
+		nrels++;
+	}
+
+	statistic_tuples = (HeapTuple *) palloc(list_length(children) * sizeof(HeapTuple));
+
+	/* FIXME do the merge here */
+	for (i = 0; i < attr_cnt; i++)
+	{
+		int		j;
+		float4	r_correlation,
+				r_nullfrac;
+		int		slot_idx;
+		int64	r_stawidth = 0;
+		double	r_ndistinct = 0;
+
+		MCVMergeItem *mcv;
+		int		max_mcv_items = 64;
+		int		mcv_items = 0;
+		int		mcv_size;
+
+		HistogramMergeItem *hist;
+		int		max_hist_items = 64;
+		int		hist_items = 0;
+
+		Datum  *values;
+		int		nvalues;
+
+		TypeCacheEntry *typcache;
+		merge_context_t cxt;
+
+		VacAttrStats *stats = vacattrstats[i];
+
+			Oid		ltopr,
+					eqopr;
+
+			/* Look for default "<" and "=" operators for column's type */
+			get_sort_group_operators(stats->attrtypid,
+									 false, false, false,
+									 &ltopr, &eqopr, NULL,
+									 NULL);
+
+		typcache = lookup_type_cache(vacattrstats[i]->attr->atttypid,
+									 TYPECACHE_LT_OPR);
+
+		mcv = (MCVMergeItem *) palloc(sizeof(MCVMergeItem) * max_mcv_items);
+		hist = (HistogramMergeItem *) palloc(sizeof(HistogramMergeItem) * max_hist_items);
+
+		r_correlation = 0;
+		r_nullfrac = 0;
+
+		/* fetch stats for the attribute from all children */
+		for (j = 0; j < nrels; j++)
+		{
+			HeapTuple htup;
+			Form_pg_statistic stats;
+			double nullfrac;
+			double mcvfrac;
+
+			statistic_tuples[j] = NULL;
+
+			htup = SearchSysCache3(STATRELATTINH,
+								   ObjectIdGetDatum(RelationGetRelid(rels[j])),
+								   Int16GetDatum(vacattrstats[i]->attr->attnum),
+								   BoolGetDatum(false));
+
+			if (!HeapTupleIsValid(htup))
+			{
+				elog(WARNING, "stats for %d %d not found",
+					 RelationGetRelid(rels[j]), vacattrstats[i]->attr->attnum);
+				continue;
+			}
+
+			stats = (Form_pg_statistic) GETSTRUCT(htup);
+
+			nullfrac = stats->stanullfrac;
+			mcvfrac = 0;
+
+			/* increment the result null fraction */
+			r_nullfrac += (nullfrac * reltuples[j]);
+
+			/* increment the average width */
+			r_stawidth += (stats->stawidth * reltuples[j]);
+
+			/*
+			 * XXX We sum the ndistinct for child tables. This is probably
+			 * overkill, because the child tables likely share at least some
+			 * values (except for the partition key case). But it's similar
+			 * to what we do to estimate number of groups before calling
+			 * create_gather_merge_path, etc.
+			 */
+			if (stats->stadistinct < 0)
+				r_ndistinct += -(stats->stadistinct * reltuples[j]);
+			else
+				r_ndistinct += stats->stadistinct;
+
+			/* FIXME do ACL checks here */
+
+			/* extract stats about the attribute */
+			{
+				AttStatsSlot sslot;
+
+				/* expand the MCV list */
+				if (get_attstatsslot(&sslot, htup,
+									 STATISTIC_KIND_MCV, InvalidOid,
+									 ATTSTATSSLOT_VALUES | ATTSTATSSLOT_NUMBERS))
+				{
+					int k;
+
+					for (k = 0; k < sslot.nvalues; k++)
+					{
+						if (max_mcv_items == mcv_items)
+						{
+							max_mcv_items *= 2;
+							mcv = repalloc(mcv, sizeof(MCVMergeItem) * max_mcv_items);
+						}
+
+						mcvfrac += sslot.numbers[k];
+
+						mcv[mcv_items].value = sslot.values[k];
+						mcv[mcv_items].nrows = (sslot.numbers[k] * reltuples[j]);
+						mcv_items++;
+					}
+				}
+
+				/* expand the histogram */
+				if (get_attstatsslot(&sslot, htup,
+									 STATISTIC_KIND_HISTOGRAM, InvalidOid,
+									 ATTSTATSSLOT_VALUES))
+				{
+					int k;
+					/* one histogram bin represents this fraction of rows */
+					double	frac = (1 - mcvfrac - nullfrac) / (sslot.nvalues - 1);
+
+					for (k = 0; k < sslot.nvalues - 1; k++)
+					{
+						if (max_hist_items == hist_items)
+						{
+							max_hist_items *= 2;
+							hist = repalloc(hist, sizeof(HistogramMergeItem) * max_hist_items);
+						}
+
+						hist[hist_items].minval = sslot.values[k];
+						hist[hist_items].maxval = sslot.values[k+1];
+						hist[hist_items].nrows = (frac * reltuples[j]);
+						hist_items++;
+					}
+				}
+
+				/* expand the correlation */
+				if (get_attstatsslot(&sslot, htup,
+									 STATISTIC_KIND_CORRELATION, InvalidOid,
+									 ATTSTATSSLOT_NUMBERS))
+					r_correlation += sslot.numbers[0] * (reltuples[j] / totaltuples);
+
+				/* FIXME handle the other stakind types (array elements etc.) */
+			}
+
+			statistic_tuples[j] = htup;
+		}
+
+		fmgr_info(get_opcode(typcache->lt_opr), &cxt.opproc);
+		cxt.collation = stats->attrcollid;
+
+		/* merge values in the MCV lists (if any) */
+		mcv_size = merge_mcv(mcv, &mcv_items, &cxt);
+
+		/*
+		 * If there are MCV items that did not make it to the combined MCV list,
+		 * add them to the histogram as ranges.
+		 */
+		for (j = mcv_size; j < mcv_items; j++)
+		{
+			if (max_hist_items == hist_items)
+			{
+				max_hist_items *= 2;
+				hist = repalloc(hist, sizeof(HistogramMergeItem) * max_hist_items);
+			}
+
+			hist[hist_items].minval = mcv[j].value;
+			hist[hist_items].maxval = mcv[j].value;
+			hist[hist_items].nrows = mcv[j].nrows;
+			hist_items++;
+		}
+
+		/* merge histograms and remaining parts of MCV */
+		values = merge_histogram(hist, hist_items, &nvalues, &cxt);
+
+		slot_idx = 0;
+
+		if (mcv_size > 0)
+		{
+			Datum  *mcv_values = (Datum *) palloc(sizeof(Datum) * mcv_size);
+			float4 *mcv_freqs  = (float4 *) palloc(sizeof(float4) * mcv_size);
+
+			for (j = 0; j < mcv_size; j++)
+			{
+				mcv_values[j] = mcv[j].value;
+				mcv_freqs[j] = (mcv[j].nrows / totaltuples);
+			}
+
+			stats->stakind[slot_idx] = STATISTIC_KIND_MCV;
+			stats->staop[slot_idx] = eqopr;
+			stats->stacoll[slot_idx] = stats->attrcollid;
+			stats->stanumbers[slot_idx] = mcv_freqs;
+			stats->numnumbers[slot_idx] = mcv_size;
+			stats->stavalues[slot_idx] = mcv_values;
+			stats->numvalues[slot_idx] = mcv_size;
+			slot_idx++;
+		}
+
+		if (nvalues > 0)
+		{
+			stats->stakind[slot_idx] = STATISTIC_KIND_HISTOGRAM;
+			stats->staop[slot_idx] = ltopr;
+			stats->stacoll[slot_idx] = stats->attrcollid;
+			stats->stavalues[slot_idx] = values;
+			stats->numvalues[slot_idx] = nvalues;
+			slot_idx++;
+		}
+
+		{
+			float4 *corrs = (float4 *) palloc(sizeof(float4));
+			corrs[0] = r_correlation;
+
+			stats->stakind[slot_idx] = STATISTIC_KIND_CORRELATION;
+			stats->staop[slot_idx] = ltopr;
+			stats->stacoll[slot_idx] = stats->attrcollid;
+			stats->stanumbers[slot_idx] = corrs;
+			stats->numnumbers[slot_idx] = 1;
+			slot_idx++;
+		}
+
+		stats->stanullfrac = r_nullfrac / totaltuples;
+		stats->stawidth = r_stawidth / totaltuples;
+
+		if (r_ndistinct > 0.1 * totaltuples)
+			stats->stadistinct = -(r_ndistinct / totaltuples);
+		else
+			stats->stadistinct = r_ndistinct;
+
+		stats->stats_valid = true;
+
+		/* update the statistics */
+		update_attstats(RelationGetRelid(onerel), inh,
+						1, &stats);
+
+		/* release the stat tuples */
+		for (j = 0; j < nrels; j++)
+			ReleaseSysCache(statistic_tuples[j]);
+	}
+
+	/* close the remaining rels */
+	for (i = 0; i < nrels; i++)
+		table_close(rels[i], NoLock);
+
+	pgstat_progress_update_param(PROGRESS_ANALYZE_PHASE,
+								 PROGRESS_ANALYZE_PHASE_FINALIZE_ANALYZE);
+
+	/* Log the action if appropriate */
+	if (IsAutoVacuumWorkerProcess() && params->log_min_duration >= 0)
+	{
+		TimestampTz endtime = GetCurrentTimestamp();
+
+		if (params->log_min_duration == 0 ||
+			TimestampDifferenceExceeds(starttime, endtime,
+									   params->log_min_duration))
+		{
+			long		delay_in_ms;
+			double		read_rate = 0;
+			double		write_rate = 0;
+			StringInfoData buf;
+
+			/*
+			 * Calculate the difference in the Page Hit/Miss/Dirty that
+			 * happened as part of the analyze by subtracting out the
+			 * pre-analyze values which we saved above.
+			 */
+			AnalyzePageHit = VacuumPageHit - AnalyzePageHit;
+			AnalyzePageMiss = VacuumPageMiss - AnalyzePageMiss;
+			AnalyzePageDirty = VacuumPageDirty - AnalyzePageDirty;
+
+			/*
+			 * We do not expect an analyze to take > 25 days and it simplifies
+			 * things a bit to use TimestampDifferenceMilliseconds.
+			 */
+			delay_in_ms = TimestampDifferenceMilliseconds(starttime, endtime);
+
+			/*
+			 * Note that we are reporting these read/write rates in the same
+			 * manner as VACUUM does, which means that while the 'average read
+			 * rate' here actually corresponds to page misses and resulting
+			 * reads which are also picked up by track_io_timing, if enabled,
+			 * the 'average write rate' is actually talking about the rate of
+			 * pages being dirtied, not being written out, so it's typical to
+			 * have a non-zero 'avg write rate' while I/O Timings only reports
+			 * reads.
+			 *
+			 * It's not clear that an ANALYZE will ever result in
+			 * FlushBuffer() being called, but we track and support reporting
+			 * on I/O write time in case that changes as it's practically free
+			 * to do so anyway.
+			 */
+
+			if (delay_in_ms > 0)
+			{
+				read_rate = (double) BLCKSZ * AnalyzePageMiss / (1024 * 1024) /
+					(delay_in_ms / 1000.0);
+				write_rate = (double) BLCKSZ * AnalyzePageDirty / (1024 * 1024) /
+					(delay_in_ms / 1000.0);
+			}
+
+			/*
+			 * We split this up so we don't emit empty I/O timing values when
+			 * track_io_timing isn't enabled.
+			 */
+
+			initStringInfo(&buf);
+			appendStringInfo(&buf, _("automatic analyze of table \"%s.%s.%s\"\n"),
+							 get_database_name(MyDatabaseId),
+							 get_namespace_name(RelationGetNamespace(onerel)),
+							 RelationGetRelationName(onerel));
+			appendStringInfo(&buf, _("buffer usage: %lld hits, %lld misses, %lld dirtied\n"),
+							 (long long) AnalyzePageHit,
+							 (long long) AnalyzePageMiss,
+							 (long long) AnalyzePageDirty);
+			appendStringInfo(&buf, _("avg read rate: %.3f MB/s, avg write rate: %.3f MB/s\n"),
+							 read_rate, write_rate);
+			if (track_io_timing)
+			{
+				appendStringInfoString(&buf, _("I/O Timings:"));
+				if (pgStatBlockReadTime - startreadtime > 0)
+					appendStringInfo(&buf, _(" read=%.3f"),
+									 (double) (pgStatBlockReadTime - startreadtime) / 1000);
+				if (pgStatBlockWriteTime - startwritetime > 0)
+					appendStringInfo(&buf, _(" write=%.3f"),
+									 (double) (pgStatBlockWriteTime - startwritetime) / 1000);
+				appendStringInfoChar(&buf, '\n');
+			}
 			appendStringInfo(&buf, _("system usage: %s"), pg_rusage_show(&ru0));
 
 			ereport(LOG,

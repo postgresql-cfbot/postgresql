@@ -4061,7 +4061,8 @@ static struct config_string ConfigureNamesString[] =
 	{
 		{"promote_trigger_file", PGC_SIGHUP, REPLICATION_STANDBY,
 			gettext_noop("Specifies a file name whose presence ends recovery in the standby."),
-			NULL
+			NULL,
+			GUC_NOT_IN_SAMPLE
 		},
 		&PromoteTriggerFile,
 		"",

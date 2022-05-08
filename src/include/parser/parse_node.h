@@ -181,6 +181,8 @@ struct ParseState
 	ParseState *parentParseState;	/* stack link */
 	const char *p_sourcetext;	/* source text, or NULL if not available */
 	List	   *p_rtable;		/* range table so far */
+	List	   *p_relpermlist;	/* list of RelPermissionInfo nodes for
+									 * the RTE_RELATION entries in rtable */
 	List	   *p_joinexprs;	/* JoinExprs for RTE_JOIN p_rtable entries */
 	List	   *p_joinlist;		/* join items so far (will become FromExpr
 								 * node's fromlist) */
@@ -234,7 +236,8 @@ struct ParseState
  * join's first N columns, the net effect is just that we expose only those
  * join columns via this nsitem.)
  *
- * p_rte and p_rtindex link to the underlying rangetable entry.
+ * p_rte and p_rtindex link to the underlying rangetable entry, and
+ * p_perminfo to the entry in relpermlist.
  *
  * The p_nscolumns array contains info showing how to construct Vars
  * referencing the names appearing in the p_names->colnames list.
@@ -268,6 +271,7 @@ struct ParseNamespaceItem
 	Alias	   *p_names;		/* Table and column names */
 	RangeTblEntry *p_rte;		/* The relation's rangetable entry */
 	int			p_rtindex;		/* The relation's index in the rangetable */
+	RelPermissionInfo *p_perminfo;	/* The relation's permissions entry */
 	/* array of same length as p_names->colnames: */
 	ParseNamespaceColumn *p_nscolumns;	/* per-column data */
 	bool		p_rel_visible;	/* Relation name is visible? */

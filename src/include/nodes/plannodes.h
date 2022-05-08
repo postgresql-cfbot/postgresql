@@ -66,6 +66,9 @@ typedef struct PlannedStmt
 
 	List	   *rtable;			/* list of RangeTblEntry nodes */
 
+	List	   *relpermlist;	/* list of RelPermissionInfo nodes for
+								 * the RTE_RELATION entries in rtable */
+
 	/* rtable indexes of target relations for INSERT/UPDATE/DELETE */
 	List	   *resultRelations;	/* integer list of RT indexes, or NIL */
 
@@ -666,6 +669,7 @@ typedef struct ForeignScan
 	Scan		scan;
 	CmdType		operation;		/* SELECT/INSERT/UPDATE/DELETE */
 	Index		resultRelation; /* direct modification target's RT index */
+	Oid			checkAsUser;	/* copy of RelOptInfo.userid */
 	Oid			fs_server;		/* OID of foreign server */
 	List	   *fdw_exprs;		/* expressions that FDW may evaluate */
 	List	   *fdw_private;	/* private data for FDW */

@@ -1200,7 +1200,8 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 			}
 
 			attmap = build_attrmap_by_name(RelationGetDescr(rel),
-										   RelationGetDescr(parent));
+										   RelationGetDescr(parent),
+										   false);
 			idxstmt =
 				generateClonedIndexStmt(NULL, idxRel,
 										attmap, &constraintOid);
@@ -9649,7 +9650,8 @@ addFkRecurseReferenced(List **wqueue, Constraint *fkconstraint, Relation rel,
 			 * definition to match the partition's column layout.
 			 */
 			map = build_attrmap_by_name_if_req(RelationGetDescr(partRel),
-											   RelationGetDescr(pkrel));
+											   RelationGetDescr(pkrel),
+											   false);
 			if (map)
 			{
 				mapped_pkattnum = palloc(sizeof(AttrNumber) * numfks);
@@ -9816,7 +9818,8 @@ addFkRecurseReferencing(List **wqueue, Constraint *fkconstraint, Relation rel,
 			CheckTableNotInUse(partition, "ALTER TABLE");
 
 			attmap = build_attrmap_by_name(RelationGetDescr(partition),
-										   RelationGetDescr(rel));
+										   RelationGetDescr(rel),
+										   false);
 			for (int j = 0; j < numfks; j++)
 				mapped_fkattnum[j] = attmap->attnums[fkattnum[j] - 1];
 
@@ -10022,7 +10025,8 @@ CloneFkReferenced(Relation parentRel, Relation partitionRel)
 	trigrel = table_open(TriggerRelationId, RowExclusiveLock);
 
 	attmap = build_attrmap_by_name(RelationGetDescr(partitionRel),
-								   RelationGetDescr(parentRel));
+								   RelationGetDescr(parentRel),
+								   false);
 	foreach(cell, clone)
 	{
 		Oid			constrOid = lfirst_oid(cell);
@@ -10200,7 +10204,8 @@ CloneFkReferencing(List **wqueue, Relation parentRel, Relation partRel)
 	 * different.  This map is used to convert them.
 	 */
 	attmap = build_attrmap_by_name(RelationGetDescr(partRel),
-								   RelationGetDescr(parentRel));
+								   RelationGetDescr(parentRel),
+								   false);
 
 	partFKs = copyObject(RelationGetFKeyList(partRel));
 
@@ -12294,7 +12299,8 @@ ATPrepAlterColumnType(List **wqueue,
 				cmd = copyObject(cmd);
 
 				attmap = build_attrmap_by_name(RelationGetDescr(childrel),
-											   RelationGetDescr(rel));
+											   RelationGetDescr(rel),
+											   false);
 				((ColumnDef *) cmd->def)->cooked_default =
 					map_variable_attnos(def->cooked_default,
 										1, 0,
@@ -18045,7 +18051,8 @@ AttachPartitionEnsureIndexes(Relation rel, Relation attachrel)
 		/* construct an indexinfo to compare existing indexes against */
 		info = BuildIndexInfo(idxRel);
 		attmap = build_attrmap_by_name(RelationGetDescr(attachrel),
-									   RelationGetDescr(rel));
+									   RelationGetDescr(rel),
+									   false);
 		constraintOid = get_relation_idx_constraint_oid(RelationGetRelid(rel), idx);
 
 		/*
@@ -18972,7 +18979,8 @@ ATExecAttachPartitionIdx(List **wqueue, Relation parentIdx, RangeVar *name)
 		childInfo = BuildIndexInfo(partIdx);
 		parentInfo = BuildIndexInfo(parentIdx);
 		attmap = build_attrmap_by_name(RelationGetDescr(partTbl),
-									   RelationGetDescr(parentTbl));
+									   RelationGetDescr(parentTbl),
+									   false);
 		if (!CompareIndexInfo(childInfo, parentInfo,
 							  partIdx->rd_indcollation,
 							  parentIdx->rd_indcollation,

@@ -184,6 +184,7 @@ ExecSerializePlan(Plan *plan, EState *estate)
 	pstmt->parallelModeNeeded = false;
 	pstmt->planTree = plan;
 	pstmt->rtable = estate->es_range_table;
+	pstmt->relpermlist = NIL;
 	pstmt->resultRelations = NIL;
 	pstmt->appendRelations = NIL;
 

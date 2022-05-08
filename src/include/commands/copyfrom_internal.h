@@ -93,7 +93,8 @@ typedef struct CopyFromStateData
 	int		   *defmap;			/* array of default att numbers */
 	ExprState **defexprs;		/* array of default att expressions */
 	bool		volatile_defexprs;	/* is any of defexprs volatile? */
-	List	   *range_table;
+	List	   *range_table;	/* single element list of RangeTblEntry */
+	List	   *relpermlist;	/* single element list of RelPermissionInfo */
 	ExprState  *qualexpr;
 
 	TransitionCaptureState *transition_capture;

@@ -97,6 +97,7 @@ _copyPlannedStmt(const PlannedStmt *from)
 	COPY_SCALAR_FIELD(jitFlags);
 	COPY_NODE_FIELD(planTree);
 	COPY_NODE_FIELD(rtable);
+	COPY_NODE_FIELD(relpermlist);
 	COPY_NODE_FIELD(resultRelations);
 	COPY_NODE_FIELD(appendRelations);
 	COPY_NODE_FIELD(subplans);
@@ -783,6 +784,7 @@ _copyForeignScan(const ForeignScan *from)
 	 */
 	COPY_SCALAR_FIELD(operation);
 	COPY_SCALAR_FIELD(resultRelation);
+	COPY_SCALAR_FIELD(checkAsUser);
 	COPY_SCALAR_FIELD(fs_server);
 	COPY_NODE_FIELD(fdw_exprs);
 	COPY_NODE_FIELD(fdw_private);
@@ -1273,6 +1275,25 @@ _copyPlanRowMark(const PlanRowMark *from)
 	COPY_SCALAR_FIELD(strength);
 	COPY_SCALAR_FIELD(waitPolicy);
 	COPY_SCALAR_FIELD(isParent);
+
+	return newnode;
+}
+/*
+ * _copyRelPermissionInfo
+ */
+static RelPermissionInfo *
+_copyRelPermissionInfo(const RelPermissionInfo *from)
+{
+	RelPermissionInfo *newnode = makeNode(RelPermissionInfo);
+
+	COPY_SCALAR_FIELD(relid);
+	COPY_SCALAR_FIELD(inh);
+	COPY_SCALAR_FIELD(requiredPerms);
+	COPY_SCALAR_FIELD(checkAsUser);
+	COPY_BITMAPSET_FIELD(selectedCols);
+	COPY_BITMAPSET_FIELD(insertedCols);
+	COPY_BITMAPSET_FIELD(updatedCols);
+	COPY_BITMAPSET_FIELD(extraUpdatedCols);
 
 	return newnode;
 }
@@ -2948,6 +2969,7 @@ _copyRangeTblEntry(const RangeTblEntry *from)
 	COPY_SCALAR_FIELD(relkind);
 	COPY_SCALAR_FIELD(rellockmode);
 	COPY_NODE_FIELD(tablesample);
+	COPY_SCALAR_FIELD(perminfoindex);
 	COPY_NODE_FIELD(subquery);
 	COPY_SCALAR_FIELD(security_barrier);
 	COPY_SCALAR_FIELD(jointype);
@@ -2973,12 +2995,6 @@ _copyRangeTblEntry(const RangeTblEntry *from)
 	COPY_SCALAR_FIELD(lateral);
 	COPY_SCALAR_FIELD(inh);
 	COPY_SCALAR_FIELD(inFromCl);
-	COPY_SCALAR_FIELD(requiredPerms);
-	COPY_SCALAR_FIELD(checkAsUser);
-	COPY_BITMAPSET_FIELD(selectedCols);
-	COPY_BITMAPSET_FIELD(insertedCols);
-	COPY_BITMAPSET_FIELD(updatedCols);
-	COPY_BITMAPSET_FIELD(extraUpdatedCols);
 	COPY_NODE_FIELD(securityQuals);
 
 	return newnode;
@@ -3698,6 +3714,7 @@ _copyQuery(const Query *from)
 	COPY_SCALAR_FIELD(isReturn);
 	COPY_NODE_FIELD(cteList);
 	COPY_NODE_FIELD(rtable);
+	COPY_NODE_FIELD(relpermlist);
 	COPY_NODE_FIELD(jointree);
 	COPY_NODE_FIELD(targetList);
 	COPY_SCALAR_FIELD(override);
@@ -5709,6 +5726,9 @@ copyObjectImpl(const void *from)
 			break;
 		case T_PlanRowMark:
 			retval = _copyPlanRowMark(from);
+			break;
+		case T_RelPermissionInfo:
+			retval = _copyRelPermissionInfo(from);
 			break;
 		case T_PartitionPruneInfo:
 			retval = _copyPartitionPruneInfo(from);

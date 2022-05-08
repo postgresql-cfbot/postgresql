@@ -82,6 +82,12 @@ static void expandTupleDesc(TupleDesc tupdesc, Alias *eref,
 							List **colnames, List **colvars);
 static int	specialAttNum(const char *attname);
 static bool isQueryUsingTempRelation_walker(Node *node, void *context);
+static RelPermissionInfo *AddRelPermissionInfoInternal(List **relpermlist, Oid relid,
+							 Index *perminfoindex);
+static RelPermissionInfo *GetRelPermissionInfoInternal(List *relpermlist, Oid relid,
+							 Index *perminfoindex,
+							 bool missing_ok);
+static Index GetRelPermissionInfoIndex(List *relpermlist, Oid relid);
 
 
 /*
@@ -1021,10 +1027,13 @@ markRTEForSelectPriv(ParseState *pstate, int rtindex, AttrNumber col)
 
 	if (rte->rtekind == RTE_RELATION)
 	{
+		RelPermissionInfo *perminfo =
+			GetRelPermissionInfo(pstate->p_relpermlist, rte);
+
 		/* Make sure the rel as a whole is marked for SELECT access */
-		rte->requiredPerms |= ACL_SELECT;
+		perminfo->requiredPerms |= ACL_SELECT;
 		/* Must offset the attnum to fit in a bitmapset */
-		rte->selectedCols = bms_add_member(rte->selectedCols,
+		perminfo->selectedCols = bms_add_member(perminfo->selectedCols,
 										   col - FirstLowInvalidHeapAttributeNumber);
 	}
 	else if (rte->rtekind == RTE_JOIN)
@@ -1235,10 +1244,13 @@ chooseScalarFunctionAlias(Node *funcexpr, char *funcname,
  *
  * rte: the new RangeTblEntry for the rel
  * rtindex: its index in the rangetable list
+ * perminfo: permission list entry for the rel
  * tupdesc: the physical column information
  */
 static ParseNamespaceItem *
-buildNSItemFromTupleDesc(RangeTblEntry *rte, Index rtindex, TupleDesc tupdesc)
+buildNSItemFromTupleDesc(RangeTblEntry *rte, Index rtindex,
+						 RelPermissionInfo *perminfo,
+						 TupleDesc tupdesc)
 {
 	ParseNamespaceItem *nsitem;
 	ParseNamespaceColumn *nscolumns;
@@ -1274,6 +1286,7 @@ buildNSItemFromTupleDesc(RangeTblEntry *rte, Index rtindex, TupleDesc tupdesc)
 	nsitem->p_names = rte->eref;
 	nsitem->p_rte = rte;
 	nsitem->p_rtindex = rtindex;
+	nsitem->p_perminfo = perminfo;
 	nsitem->p_nscolumns = nscolumns;
 	/* set default visibility flags; might get changed later */
 	nsitem->p_rel_visible = true;
@@ -1417,6 +1430,7 @@ addRangeTableEntry(ParseState *pstate,
 				   bool inFromCl)
 {
 	RangeTblEntry *rte = makeNode(RangeTblEntry);
+	RelPermissionInfo *perminfo;
 	char	   *refname = alias ? alias->aliasname : relation->relname;
 	LOCKMODE	lockmode;
 	Relation	rel;
@@ -1453,7 +1467,7 @@ addRangeTableEntry(ParseState *pstate,
 	buildRelationAliases(rel->rd_att, alias, rte->eref);
 
 	/*
-	 * Set flags and access permissions.
+	 * Set flags and initialize access permissions.
 	 *
 	 * The initial default on access checks is always check-for-READ-access,
 	 * which is the right thing for all except target tables.
@@ -1462,12 +1476,14 @@ addRangeTableEntry(ParseState *pstate,
 	rte->inh = inh;
 	rte->inFromCl = inFromCl;
 
-	rte->requiredPerms = ACL_SELECT;
-	rte->checkAsUser = InvalidOid;	/* not set-uid by default, either */
-	rte->selectedCols = NULL;
-	rte->insertedCols = NULL;
-	rte->updatedCols = NULL;
-	rte->extraUpdatedCols = NULL;
+	perminfo = AddRelPermissionInfo(&pstate->p_relpermlist, rte);
+	perminfo->inh |= inh;
+
+	/*
+	 * Using |=, not = just in case the permissions entry is shared with
+	 * another RT entry for the same table.
+	 */
+	perminfo->requiredPerms |= ACL_SELECT;
 
 	/*
 	 * Add completed RTE to pstate's range table list, so that we know its
@@ -1481,7 +1497,7 @@ addRangeTableEntry(ParseState *pstate,
 	 * list --- caller must do that if appropriate.
 	 */
 	nsitem = buildNSItemFromTupleDesc(rte, list_length(pstate->p_rtable),
-									  rel->rd_att);
+									  perminfo, rel->rd_att);
 
 	/*
 	 * Drop the rel refcount, but keep the access lock till end of transaction
@@ -1518,6 +1534,7 @@ addRangeTableEntryForRelation(ParseState *pstate,
 							  bool inFromCl)
 {
 	RangeTblEntry *rte = makeNode(RangeTblEntry);
+	RelPermissionInfo *perminfo;
 	char	   *refname = alias ? alias->aliasname : RelationGetRelationName(rel);
 
 	Assert(pstate != NULL);
@@ -1541,7 +1558,7 @@ addRangeTableEntryForRelation(ParseState *pstate,
 	buildRelationAliases(rel->rd_att, alias, rte->eref);
 
 	/*
-	 * Set flags and access permissions.
+	 * Set flags and initialize access permissions.
 	 *
 	 * The initial default on access checks is always check-for-READ-access,
 	 * which is the right thing for all except target tables.
@@ -1550,12 +1567,14 @@ addRangeTableEntryForRelation(ParseState *pstate,
 	rte->inh = inh;
 	rte->inFromCl = inFromCl;
 
-	rte->requiredPerms = ACL_SELECT;
-	rte->checkAsUser = InvalidOid;	/* not set-uid by default, either */
-	rte->selectedCols = NULL;
-	rte->insertedCols = NULL;
-	rte->updatedCols = NULL;
-	rte->extraUpdatedCols = NULL;
+	perminfo = AddRelPermissionInfo(&pstate->p_relpermlist, rte);
+	perminfo->inh |= inh;
+
+	/*
+	 * Using |=, not = just in case the permissions entry is shared with
+	 * another RT entry for the same table.
+	 */
+	perminfo->requiredPerms |= ACL_SELECT;
 
 	/*
 	 * Add completed RTE to pstate's range table list, so that we know its
@@ -1569,7 +1588,7 @@ addRangeTableEntryForRelation(ParseState *pstate,
 	 * list --- caller must do that if appropriate.
 	 */
 	return buildNSItemFromTupleDesc(rte, list_length(pstate->p_rtable),
-									rel->rd_att);
+									perminfo, rel->rd_att);
 }
 
 /*
@@ -1639,20 +1658,14 @@ addRangeTableEntryForSubquery(ParseState *pstate,
 	rte->eref = eref;
 
 	/*
-	 * Set flags and access permissions.
+	 * Set flags.
 	 *
-	 * Subqueries are never checked for access rights.
+	 * Subqueries are never checked for access rights, so no need to perform
+	 * AddRelPermissionInfo().
 	 */
 	rte->lateral = lateral;
 	rte->inh = false;			/* never true for subqueries */
 	rte->inFromCl = inFromCl;
-
-	rte->requiredPerms = 0;
-	rte->checkAsUser = InvalidOid;
-	rte->selectedCols = NULL;
-	rte->insertedCols = NULL;
-	rte->updatedCols = NULL;
-	rte->extraUpdatedCols = NULL;
 
 	/*
 	 * Add completed RTE to pstate's range table list, so that we know its
@@ -1946,19 +1959,12 @@ addRangeTableEntryForFunction(ParseState *pstate,
 	/*
 	 * Set flags and access permissions.
 	 *
-	 * Functions are never checked for access rights (at least, not by the RTE
-	 * permissions mechanism).
+	 * Functions are never checked for access rights (at least, not by
+	 * ExecCheckPermissions()), so no need to perform AddRelPermissionsInfo().
 	 */
 	rte->lateral = lateral;
 	rte->inh = false;			/* never true for functions */
 	rte->inFromCl = inFromCl;
-
-	rte->requiredPerms = 0;
-	rte->checkAsUser = InvalidOid;
-	rte->selectedCols = NULL;
-	rte->insertedCols = NULL;
-	rte->updatedCols = NULL;
-	rte->extraUpdatedCols = NULL;
 
 	/*
 	 * Add completed RTE to pstate's range table list, so that we know its
@@ -1971,7 +1977,7 @@ addRangeTableEntryForFunction(ParseState *pstate,
 	 * Build a ParseNamespaceItem, but don't add it to the pstate's namespace
 	 * list --- caller must do that if appropriate.
 	 */
-	return buildNSItemFromTupleDesc(rte, list_length(pstate->p_rtable),
+	return buildNSItemFromTupleDesc(rte, list_length(pstate->p_rtable), NULL,
 									tupdesc);
 }
 
@@ -2018,19 +2024,12 @@ addRangeTableEntryForTableFunc(ParseState *pstate,
 	/*
 	 * Set flags and access permissions.
 	 *
-	 * Tablefuncs are never checked for access rights (at least, not by the
-	 * RTE permissions mechanism).
+	 * Tablefuncs are never checked for access rights (at least, not by
+	 * ExecCheckPermissions()), so no need to perform AddRelPermissionsInfo().
 	 */
 	rte->lateral = lateral;
 	rte->inh = false;			/* never true for tablefunc RTEs */
 	rte->inFromCl = inFromCl;
-
-	rte->requiredPerms = 0;
-	rte->checkAsUser = InvalidOid;
-	rte->selectedCols = NULL;
-	rte->insertedCols = NULL;
-	rte->updatedCols = NULL;
-	rte->extraUpdatedCols = NULL;
 
 	/*
 	 * Add completed RTE to pstate's range table list, so that we know its
@@ -2106,18 +2105,12 @@ addRangeTableEntryForValues(ParseState *pstate,
 	/*
 	 * Set flags and access permissions.
 	 *
-	 * Subqueries are never checked for access rights.
+	 * Subqueries are never checked for access rights, so no need to perform
+	 * AddRelPermissionInfo().
 	 */
 	rte->lateral = lateral;
 	rte->inh = false;			/* never true for values RTEs */
 	rte->inFromCl = inFromCl;
-
-	rte->requiredPerms = 0;
-	rte->checkAsUser = InvalidOid;
-	rte->selectedCols = NULL;
-	rte->insertedCols = NULL;
-	rte->updatedCols = NULL;
-	rte->extraUpdatedCols = NULL;
 
 	/*
 	 * Add completed RTE to pstate's range table list, so that we know its
@@ -2197,18 +2190,12 @@ addRangeTableEntryForJoin(ParseState *pstate,
 	/*
 	 * Set flags and access permissions.
 	 *
-	 * Joins are never checked for access rights.
+	 * Joins are never checked for access rights, so no need to perform
+	 * AddRelPermissionInfo().
 	 */
 	rte->lateral = false;
 	rte->inh = false;			/* never true for joins */
 	rte->inFromCl = inFromCl;
-
-	rte->requiredPerms = 0;
-	rte->checkAsUser = InvalidOid;
-	rte->selectedCols = NULL;
-	rte->insertedCols = NULL;
-	rte->updatedCols = NULL;
-	rte->extraUpdatedCols = NULL;
 
 	/*
 	 * Add completed RTE to pstate's range table list, so that we know its
@@ -2224,6 +2211,7 @@ addRangeTableEntryForJoin(ParseState *pstate,
 	nsitem = (ParseNamespaceItem *) palloc(sizeof(ParseNamespaceItem));
 	nsitem->p_names = rte->eref;
 	nsitem->p_rte = rte;
+	nsitem->p_perminfo = NULL;
 	nsitem->p_rtindex = list_length(pstate->p_rtable);
 	nsitem->p_nscolumns = nscolumns;
 	/* set default visibility flags; might get changed later */
@@ -2347,18 +2335,12 @@ addRangeTableEntryForCTE(ParseState *pstate,
 	/*
 	 * Set flags and access permissions.
 	 *
-	 * Subqueries are never checked for access rights.
+	 * Subqueries are never checked for access rights, so no need to perform
+	 * AddRelPermissionInfo().
 	 */
 	rte->lateral = false;
 	rte->inh = false;			/* never true for subqueries */
 	rte->inFromCl = inFromCl;
-
-	rte->requiredPerms = 0;
-	rte->checkAsUser = InvalidOid;
-	rte->selectedCols = NULL;
-	rte->insertedCols = NULL;
-	rte->updatedCols = NULL;
-	rte->extraUpdatedCols = NULL;
 
 	/*
 	 * Add completed RTE to pstate's range table list, so that we know its
@@ -2473,15 +2455,12 @@ addRangeTableEntryForENR(ParseState *pstate,
 	/*
 	 * Set flags and access permissions.
 	 *
-	 * ENRs are never checked for access rights.
+	 * ENRs are never checked for access rights, so no need to perform
+	 * AddRelPermissionInfo().
 	 */
 	rte->lateral = false;
 	rte->inh = false;			/* never true for ENRs */
 	rte->inFromCl = inFromCl;
-
-	rte->requiredPerms = 0;
-	rte->checkAsUser = InvalidOid;
-	rte->selectedCols = NULL;
 
 	/*
 	 * Add completed RTE to pstate's range table list, so that we know its
@@ -2494,7 +2473,7 @@ addRangeTableEntryForENR(ParseState *pstate,
 	 * Build a ParseNamespaceItem, but don't add it to the pstate's namespace
 	 * list --- caller must do that if appropriate.
 	 */
-	return buildNSItemFromTupleDesc(rte, list_length(pstate->p_rtable),
+	return buildNSItemFromTupleDesc(rte, list_length(pstate->p_rtable), NULL,
 									tupdesc);
 }
 
@@ -3115,6 +3094,7 @@ expandNSItemAttrs(ParseState *pstate, ParseNamespaceItem *nsitem,
 				  int sublevels_up, bool require_col_privs, int location)
 {
 	RangeTblEntry *rte = nsitem->p_rte;
+	RelPermissionInfo *perminfo = nsitem->p_perminfo;
 	List	   *names,
 			   *vars;
 	ListCell   *name,
@@ -3132,7 +3112,10 @@ expandNSItemAttrs(ParseState *pstate, ParseNamespaceItem *nsitem,
 	 * relation of UPDATE/DELETE, which cannot be under a join.)
 	 */
 	if (rte->rtekind == RTE_RELATION)
-		rte->requiredPerms |= ACL_SELECT;
+	{
+		Assert(perminfo != NULL);
+		perminfo->requiredPerms |= ACL_SELECT;
+	}
 
 	forboth(name, names, var, vars)
 	{
@@ -3680,4 +3663,222 @@ isQueryUsingTempRelation_walker(Node *node, void *context)
 	return expression_tree_walker(node,
 								  isQueryUsingTempRelation_walker,
 								  context);
+}
+
+/*
+ * AddRelPermissionInfo
+ *		Creates RelPermissionInfo for a given relation and adds it into the
+ *		provided list unless one with the same OID is found in it
+ *
+ * Returns the RelPermssionInfo and sets rte->perminfoindex if needed.
+ */
+RelPermissionInfo *
+AddRelPermissionInfo(List **relpermlist, RangeTblEntry *rte)
+{
+	Assert(rte->rtekind == RTE_RELATION);
+
+	Assert(rte->perminfoindex == 0);
+	return AddRelPermissionInfoInternal(relpermlist, rte->relid,
+										&rte->perminfoindex);
+}
+
+/*
+ * AddRelPermissionInfoInternal
+ *		Sub-routine of AddRelPermissionInfo that does the actual work
+ */
+static RelPermissionInfo *
+AddRelPermissionInfoInternal(List **relpermlist, Oid relid,
+							 Index *perminfoindex)
+{
+	RelPermissionInfo *perminfo;
+
+	/*
+	 * To prevent duplicate entries for a given relation, check if already in
+	 * the list.
+	 */
+	perminfo = GetRelPermissionInfoInternal(*relpermlist, relid, perminfoindex,
+											true);
+	if (perminfo)
+	{
+		Assert(*perminfoindex >= 0);
+		return perminfo;
+	}
+
+	/* Nope, so make one and add to the list. */
+	perminfo = makeNode(RelPermissionInfo);
+	perminfo->relid = relid;
+	/* Other information is set by fetching the node as and where needed. */
+
+	*relpermlist = lappend(*relpermlist, perminfo);
+
+	/* Note its index.  */
+	*perminfoindex = list_length(*relpermlist);
+
+	return perminfo;
+}
+
+/*
+ * GetRelPermissionInfo
+ *		Find RelPermissionInfo for a given relation in the provided list
+ *
+ * This is a simple list_nth() operation though it's good to have the function
+ * for the various sanity checks.
+ */
+RelPermissionInfo *
+GetRelPermissionInfo(List *relpermlist, RangeTblEntry *rte)
+{
+	RelPermissionInfo *perminfo;
+
+	Assert(rte->rtekind == RTE_RELATION);
+	Assert(rte->perminfoindex > 0);
+	if (rte->perminfoindex > list_length(relpermlist))
+		elog(ERROR, "invalid perminfoindex in RTE with relid %u",
+			 rte->relid);
+	perminfo = GetRelPermissionInfoInternal(relpermlist, rte->relid,
+											&rte->perminfoindex, false);
+	if (rte->relid != perminfo->relid)
+		elog(ERROR, "permission info at index %u (with OID %u) does not match requested OID %u",
+			 rte->perminfoindex, perminfo->relid, rte->relid);
+	return perminfo;
+}
+
+/*
+ * GetRelPermissionInfoInternal
+ *		Sub-routine of GetRelPermissionInfo that does the actual work
+ *
+ * If *perminfoindex is 0, the list is scanned to find one with given relid.
+ * If found, *perminfoindex is set to its 1-based index in the list.
+ *
+ * If *perminfoindex is already valid (> 0), it means that the caller expects
+ * to find the entry it's looking for at that location in the list.
+ */
+static RelPermissionInfo *
+GetRelPermissionInfoInternal(List *relpermlist, Oid relid,
+							 Index *perminfoindex,
+							 bool missing_ok)
+{
+	RelPermissionInfo *perminfo;
+
+	if (*perminfoindex == 0)
+	{
+		ListCell   *lc;
+
+		foreach(lc, relpermlist)
+		{
+			perminfo = (RelPermissionInfo *) lfirst(lc);
+			if (perminfo->relid == relid)
+			{
+				*perminfoindex = foreach_current_index(lc) + 1;
+				return perminfo;
+			}
+		}
+	}
+	else if (*perminfoindex > 0)
+	{
+
+		perminfo = (RelPermissionInfo *)
+			list_nth(relpermlist, *perminfoindex - 1);
+		Assert(perminfo != NULL && OidIsValid(perminfo->relid));
+
+		return perminfo;
+	}
+
+	if (!missing_ok)
+		elog(ERROR, "permission info of relation %u not found", relid);
+
+	return NULL;
+}
+
+/*
+ * GetRelPermissionInfoIndex
+ *		Returns a 1-based index of the RelPermissionInfo of matching relid if
+ *		found in the given list
+ *
+ * 0 indicates that one was not found.
+ */
+static Index
+GetRelPermissionInfoIndex(List *relpermlist, Oid relid)
+{
+	ListCell   *lc;
+
+	foreach(lc, relpermlist)
+	{
+		RelPermissionInfo *perminfo = (RelPermissionInfo *) lfirst(lc);
+
+		if (perminfo->relid == relid)
+			return foreach_current_index(lc) + 1;
+	}
+
+	return 0;
+}
+
+/*
+ * MergeRelPermissionInfos
+ *		Adds the RelPermissionInfos found in a source query (src_relpermlist)
+ *		into the destination query's list (*dest_relpermlist), "merging"
+ *		properties of any that are present in both.
+ *
+ * Caller must subsequently call ReassignRangeTablePermInfoIndexes() on the
+ * source query's range table.
+ */
+void
+MergeRelPermissionInfos(List **dest_relpermlist, List *src_relpermlist)
+{
+	ListCell *l;
+
+	if (src_relpermlist == NIL)
+		return;
+
+	foreach(l, src_relpermlist)
+	{
+		RelPermissionInfo *src_perminfo = (RelPermissionInfo *) lfirst(l);
+		RelPermissionInfo *dest_perminfo;
+		Index		ignored = 0;
+
+		dest_perminfo = AddRelPermissionInfoInternal(dest_relpermlist,
+													 src_perminfo->relid,
+													 &ignored);
+
+		dest_perminfo->inh |= src_perminfo->inh;
+		dest_perminfo->requiredPerms |= src_perminfo->requiredPerms;
+		if (!OidIsValid(dest_perminfo->checkAsUser))
+			dest_perminfo->checkAsUser = src_perminfo->checkAsUser;
+		dest_perminfo->selectedCols = bms_union(dest_perminfo->selectedCols,
+												src_perminfo->selectedCols);
+		dest_perminfo->insertedCols = bms_union(dest_perminfo->insertedCols,
+												src_perminfo->insertedCols);
+		dest_perminfo->updatedCols = bms_union(dest_perminfo->updatedCols,
+											   src_perminfo->updatedCols);
+		dest_perminfo->extraUpdatedCols = bms_union(dest_perminfo->extraUpdatedCols,
+													src_perminfo->extraUpdatedCols);
+	}
+}
+
+/*
+ * ReassignRangeTablePermInfoIndexes
+ * 		Updates perminfoindex of the relation RTEs in rtable so that they reflect
+ * 		their respective RelPermissionInfo entry's current position in permlist.
+ *
+ * This is provided for the sites that use MergeRelPermissionInfos() to merge
+ * the RelPermissionInfo entries of two queries.
+ */
+void
+ReassignRangeTablePermInfoIndexes(List *rtable, List *relpermlist)
+{
+	ListCell   *l;
+
+	foreach(l, rtable)
+	{
+		RangeTblEntry  *rte = (RangeTblEntry *) lfirst(l);
+
+		/*
+		 * Only RELATIONs would have been assigned a RelPermissionInfo and that
+		 * too only those that are mentioned in the query (not inheritance
+		 * child relations that are added afterwards), so we also check that
+		 * the RTE's existing index is valid.
+		 */
+		if (rte->rtekind != RTE_RELATION && rte->perminfoindex > 0)
+			continue;
+		rte->perminfoindex = GetRelPermissionInfoIndex(relpermlist, rte->relid);
+	}
 }

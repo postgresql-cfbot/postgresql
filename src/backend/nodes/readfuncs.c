@@ -264,6 +264,7 @@ _readQuery(void)
 	READ_BOOL_FIELD(isReturn);
 	READ_NODE_FIELD(cteList);
 	READ_NODE_FIELD(rtable);
+	READ_NODE_FIELD(relpermlist);
 	READ_NODE_FIELD(jointree);
 	READ_NODE_FIELD(targetList);
 	READ_ENUM_FIELD(override, OverridingKind);
@@ -1668,6 +1669,7 @@ _readRangeTblEntry(void)
 			READ_CHAR_FIELD(relkind);
 			READ_INT_FIELD(rellockmode);
 			READ_NODE_FIELD(tablesample);
+			READ_INT_FIELD(perminfoindex);
 			break;
 		case RTE_SUBQUERY:
 			READ_NODE_FIELD(subquery);
@@ -1731,13 +1733,24 @@ _readRangeTblEntry(void)
 	READ_BOOL_FIELD(lateral);
 	READ_BOOL_FIELD(inh);
 	READ_BOOL_FIELD(inFromCl);
-	READ_UINT_FIELD(requiredPerms);
+	READ_NODE_FIELD(securityQuals);
+
+	READ_DONE();
+}
+
+static RelPermissionInfo *
+_readRelPermissionInfo(void)
+{
+	READ_LOCALS(RelPermissionInfo);
+
+	READ_OID_FIELD(relid);
+	READ_BOOL_FIELD(inh);
+	READ_INT_FIELD(requiredPerms);
 	READ_OID_FIELD(checkAsUser);
 	READ_BITMAPSET_FIELD(selectedCols);
 	READ_BITMAPSET_FIELD(insertedCols);
 	READ_BITMAPSET_FIELD(updatedCols);
 	READ_BITMAPSET_FIELD(extraUpdatedCols);
-	READ_NODE_FIELD(securityQuals);
 
 	READ_DONE();
 }
@@ -1816,6 +1829,7 @@ _readPlannedStmt(void)
 	READ_INT_FIELD(jitFlags);
 	READ_NODE_FIELD(planTree);
 	READ_NODE_FIELD(rtable);
+	READ_NODE_FIELD(relpermlist);
 	READ_NODE_FIELD(resultRelations);
 	READ_NODE_FIELD(appendRelations);
 	READ_NODE_FIELD(subplans);
@@ -2304,6 +2318,7 @@ _readForeignScan(void)
 
 	READ_ENUM_FIELD(operation, CmdType);
 	READ_UINT_FIELD(resultRelation);
+	READ_OID_FIELD(checkAsUser);
 	READ_OID_FIELD(fs_server);
 	READ_NODE_FIELD(fdw_exprs);
 	READ_NODE_FIELD(fdw_private);
@@ -3085,6 +3100,8 @@ parseNodeString(void)
 		return_value = _readAppendRelInfo();
 	else if (MATCH("RANGETBLENTRY", 13))
 		return_value = _readRangeTblEntry();
+	else if (MATCH("RELPERMISSIONINFO", 17))
+		return_value = _readRelPermissionInfo();
 	else if (MATCH("RANGETBLFUNCTION", 16))
 		return_value = _readRangeTblFunction();
 	else if (MATCH("TABLESAMPLECLAUSE", 17))

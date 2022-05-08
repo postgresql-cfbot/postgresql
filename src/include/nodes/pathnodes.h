@@ -101,6 +101,8 @@ typedef struct PlannerGlobal
 
 	List	   *finalrtable;	/* "flat" rangetable for executor */
 
+	List	   *finalrelpermlist;	/* "flat" list of RelPermissionInfo */
+
 	List	   *finalrowmarks;	/* "flat" list of PlanRowMarks */
 
 	List	   *resultRelations;	/* "flat" list of integer RT indexes */

@@ -2475,8 +2475,8 @@ create view at_view_2 as select *, to_json(v1) as j from at_view_1 v1;
  id     | integer |           |          |         | plain    | 
  stuff  | text    |           |          |         | extended | 
 View definition:
- SELECT bt.id,
-    bt.stuff
+ SELECT id,
+    stuff
    FROM at_base_table bt;
 
 \d+ at_view_2
@@ -2487,8 +2487,8 @@ View definition:
  stuff  | text    |           |          |         | extended | 
  j      | json    |           |          |         | extended | 
 View definition:
- SELECT v1.id,
-    v1.stuff,
+ SELECT id,
+    stuff,
     to_json(v1.*) AS j
    FROM at_view_1 v1;
 
@@ -2514,8 +2514,8 @@ create or replace view at_view_1 as select *, 2+2 as more from at_base_table bt;
  stuff  | text    |           |          |         | extended | 
  more   | integer |           |          |         | plain    | 
 View definition:
- SELECT bt.id,
-    bt.stuff,
+ SELECT id,
+    stuff,
     2 + 2 AS more
    FROM at_base_table bt;
 
@@ -2527,8 +2527,8 @@ View definition:
  stuff  | text    |           |          |         | extended | 
  j      | json    |           |          |         | extended | 
 View definition:
- SELECT v1.id,
-    v1.stuff,
+ SELECT id,
+    stuff,
     to_json(v1.*) AS j
    FROM at_view_1 v1;
 

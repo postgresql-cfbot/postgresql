@@ -1332,6 +1332,7 @@ _equalQuery(const Query *a, const Query *b)
 	COMPARE_SCALAR_FIELD(isReturn);
 	COMPARE_NODE_FIELD(cteList);
 	COMPARE_NODE_FIELD(rtable);
+	COMPARE_NODE_FIELD(relpermlist);
 	COMPARE_NODE_FIELD(jointree);
 	COMPARE_NODE_FIELD(targetList);
 	COMPARE_SCALAR_FIELD(override);
@@ -3130,6 +3131,7 @@ _equalRangeTblEntry(const RangeTblEntry *a, const RangeTblEntry *b)
 	COMPARE_SCALAR_FIELD(relkind);
 	COMPARE_SCALAR_FIELD(rellockmode);
 	COMPARE_NODE_FIELD(tablesample);
+	COMPARE_SCALAR_FIELD(perminfoindex);
 	COMPARE_NODE_FIELD(subquery);
 	COMPARE_SCALAR_FIELD(security_barrier);
 	COMPARE_SCALAR_FIELD(jointype);
@@ -3155,17 +3157,25 @@ _equalRangeTblEntry(const RangeTblEntry *a, const RangeTblEntry *b)
 	COMPARE_SCALAR_FIELD(lateral);
 	COMPARE_SCALAR_FIELD(inh);
 	COMPARE_SCALAR_FIELD(inFromCl);
+	COMPARE_NODE_FIELD(securityQuals);
+
+	return true;
+}
+
+static bool
+_equalRelPermissionInfo(const RelPermissionInfo *a, const RelPermissionInfo *b)
+{
+	COMPARE_SCALAR_FIELD(relid);
+	COMPARE_SCALAR_FIELD(inh);
 	COMPARE_SCALAR_FIELD(requiredPerms);
 	COMPARE_SCALAR_FIELD(checkAsUser);
 	COMPARE_BITMAPSET_FIELD(selectedCols);
 	COMPARE_BITMAPSET_FIELD(insertedCols);
 	COMPARE_BITMAPSET_FIELD(updatedCols);
 	COMPARE_BITMAPSET_FIELD(extraUpdatedCols);
-	COMPARE_NODE_FIELD(securityQuals);
 
 	return true;
 }
-
 static bool
 _equalRangeTblFunction(const RangeTblFunction *a, const RangeTblFunction *b)
 {
@@ -4289,6 +4299,9 @@ equal(const void *a, const void *b)
 			break;
 		case T_RangeTblEntry:
 			retval = _equalRangeTblEntry(a, b);
+			break;
+		case T_RelPermissionInfo:
+			retval = _equalRelPermissionInfo(a, b);
 			break;
 		case T_RangeTblFunction:
 			retval = _equalRangeTblFunction(a, b);

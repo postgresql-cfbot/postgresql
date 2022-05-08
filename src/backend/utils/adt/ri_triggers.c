@@ -1367,8 +1367,8 @@ RI_Initial_Check(Trigger *trigger, Relation fk_rel, Relation pk_rel)
 	char		fkrelname[MAX_QUOTED_REL_NAME_LEN];
 	char		pkattname[MAX_QUOTED_NAME_LEN + 3];
 	char		fkattname[MAX_QUOTED_NAME_LEN + 3];
-	RangeTblEntry *pkrte;
-	RangeTblEntry *fkrte;
+	RelPermissionInfo *pk_perminfo;
+	RelPermissionInfo *fk_perminfo;
 	const char *sep;
 	const char *fk_only;
 	const char *pk_only;
@@ -1386,32 +1386,26 @@ RI_Initial_Check(Trigger *trigger, Relation fk_rel, Relation pk_rel)
 	 *
 	 * XXX are there any other show-stopper conditions to check?
 	 */
-	pkrte = makeNode(RangeTblEntry);
-	pkrte->rtekind = RTE_RELATION;
-	pkrte->relid = RelationGetRelid(pk_rel);
-	pkrte->relkind = pk_rel->rd_rel->relkind;
-	pkrte->rellockmode = AccessShareLock;
-	pkrte->requiredPerms = ACL_SELECT;
+	pk_perminfo = makeNode(RelPermissionInfo);
+	pk_perminfo->relid = RelationGetRelid(pk_rel);
+	pk_perminfo->requiredPerms = ACL_SELECT;
 
-	fkrte = makeNode(RangeTblEntry);
-	fkrte->rtekind = RTE_RELATION;
-	fkrte->relid = RelationGetRelid(fk_rel);
-	fkrte->relkind = fk_rel->rd_rel->relkind;
-	fkrte->rellockmode = AccessShareLock;
-	fkrte->requiredPerms = ACL_SELECT;
+	fk_perminfo = makeNode(RelPermissionInfo);
+	fk_perminfo->relid = RelationGetRelid(fk_rel);
+	fk_perminfo->requiredPerms = ACL_SELECT;
 
 	for (int i = 0; i < riinfo->nkeys; i++)
 	{
 		int			attno;
 
 		attno = riinfo->pk_attnums[i] - FirstLowInvalidHeapAttributeNumber;
-		pkrte->selectedCols = bms_add_member(pkrte->selectedCols, attno);
+		pk_perminfo->selectedCols = bms_add_member(pk_perminfo->selectedCols, attno);
 
 		attno = riinfo->fk_attnums[i] - FirstLowInvalidHeapAttributeNumber;
-		fkrte->selectedCols = bms_add_member(fkrte->selectedCols, attno);
+		fk_perminfo->selectedCols = bms_add_member(fk_perminfo->selectedCols, attno);
 	}
 
-	if (!ExecCheckRTPerms(list_make2(fkrte, pkrte), false))
+	if (!ExecCheckPermissions(list_make2(fk_perminfo, pk_perminfo), false))
 		return false;
 
 	/*
@@ -1421,9 +1415,9 @@ RI_Initial_Check(Trigger *trigger, Relation fk_rel, Relation pk_rel)
 	 */
 	if (!has_bypassrls_privilege(GetUserId()) &&
 		((pk_rel->rd_rel->relrowsecurity &&
-		  !pg_class_ownercheck(pkrte->relid, GetUserId())) ||
+		  !pg_class_ownercheck(pk_perminfo->relid, GetUserId())) ||
 		 (fk_rel->rd_rel->relrowsecurity &&
-		  !pg_class_ownercheck(fkrte->relid, GetUserId()))))
+		  !pg_class_ownercheck(fk_perminfo->relid, GetUserId()))))
 		return false;
 
 	/*----------

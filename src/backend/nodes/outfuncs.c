@@ -322,6 +322,7 @@ _outPlannedStmt(StringInfo str, const PlannedStmt *node)
 	WRITE_INT_FIELD(jitFlags);
 	WRITE_NODE_FIELD(planTree);
 	WRITE_NODE_FIELD(rtable);
+	WRITE_NODE_FIELD(relpermlist);
 	WRITE_NODE_FIELD(resultRelations);
 	WRITE_NODE_FIELD(appendRelations);
 	WRITE_NODE_FIELD(subplans);
@@ -719,6 +720,7 @@ _outForeignScan(StringInfo str, const ForeignScan *node)
 
 	WRITE_ENUM_FIELD(operation, CmdType);
 	WRITE_UINT_FIELD(resultRelation);
+	WRITE_OID_FIELD(checkAsUser);
 	WRITE_OID_FIELD(fs_server);
 	WRITE_NODE_FIELD(fdw_exprs);
 	WRITE_NODE_FIELD(fdw_private);
@@ -1008,6 +1010,21 @@ _outPlanRowMark(StringInfo str, const PlanRowMark *node)
 	WRITE_ENUM_FIELD(strength, LockClauseStrength);
 	WRITE_ENUM_FIELD(waitPolicy, LockWaitPolicy);
 	WRITE_BOOL_FIELD(isParent);
+}
+
+static void
+_outRelPermissionInfo(StringInfo str, const RelPermissionInfo *node)
+{
+	WRITE_NODE_TYPE("RELPERMISSIONINFO");
+
+	WRITE_UINT_FIELD(relid);
+	WRITE_BOOL_FIELD(inh);
+	WRITE_UINT_FIELD(requiredPerms);
+	WRITE_UINT_FIELD(checkAsUser);
+	WRITE_BITMAPSET_FIELD(selectedCols);
+	WRITE_BITMAPSET_FIELD(insertedCols);
+	WRITE_BITMAPSET_FIELD(updatedCols);
+	WRITE_BITMAPSET_FIELD(extraUpdatedCols);
 }
 
 static void
@@ -2429,6 +2446,7 @@ _outPlannerGlobal(StringInfo str, const PlannerGlobal *node)
 	WRITE_NODE_FIELD(subplans);
 	WRITE_BITMAPSET_FIELD(rewindPlanIDs);
 	WRITE_NODE_FIELD(finalrtable);
+	WRITE_NODE_FIELD(finalrelpermlist);
 	WRITE_NODE_FIELD(finalrowmarks);
 	WRITE_NODE_FIELD(resultRelations);
 	WRITE_NODE_FIELD(appendRelations);
@@ -3234,6 +3252,7 @@ _outQuery(StringInfo str, const Query *node)
 	WRITE_BOOL_FIELD(isReturn);
 	WRITE_NODE_FIELD(cteList);
 	WRITE_NODE_FIELD(rtable);
+	WRITE_NODE_FIELD(relpermlist);
 	WRITE_NODE_FIELD(jointree);
 	WRITE_NODE_FIELD(targetList);
 	WRITE_ENUM_FIELD(override, OverridingKind);
@@ -3442,6 +3461,7 @@ _outRangeTblEntry(StringInfo str, const RangeTblEntry *node)
 			WRITE_CHAR_FIELD(relkind);
 			WRITE_INT_FIELD(rellockmode);
 			WRITE_NODE_FIELD(tablesample);
+			WRITE_INT_FIELD(perminfoindex);
 			break;
 		case RTE_SUBQUERY:
 			WRITE_NODE_FIELD(subquery);
@@ -3495,12 +3515,6 @@ _outRangeTblEntry(StringInfo str, const RangeTblEntry *node)
 	WRITE_BOOL_FIELD(lateral);
 	WRITE_BOOL_FIELD(inh);
 	WRITE_BOOL_FIELD(inFromCl);
-	WRITE_UINT_FIELD(requiredPerms);
-	WRITE_OID_FIELD(checkAsUser);
-	WRITE_BITMAPSET_FIELD(selectedCols);
-	WRITE_BITMAPSET_FIELD(insertedCols);
-	WRITE_BITMAPSET_FIELD(updatedCols);
-	WRITE_BITMAPSET_FIELD(extraUpdatedCols);
 	WRITE_NODE_FIELD(securityQuals);
 }
 
@@ -4192,6 +4206,9 @@ outNode(StringInfo str, const void *obj)
 				break;
 			case T_PlanRowMark:
 				_outPlanRowMark(str, obj);
+				break;
+			case T_RelPermissionInfo:
+				_outRelPermissionInfo(str, obj);
 				break;
 			case T_PartitionPruneInfo:
 				_outPartitionPruneInfo(str, obj);

@@ -548,6 +548,14 @@ typedef struct ResultRelInfo
 	TupleConversionMap *ri_ChildToRootMap;
 	bool		ri_ChildToRootMapValid;
 
+	/*
+	 * Map used to convert "root" table column bitmapsets into the ones that
+	 * describe a given child table's columns; see ExecGetInsertedCols() et
+	 * al.  Like ri_ChildToRootMap, computed only if needed.
+	 */
+	AttrMap	   *ri_RootToChildMap;
+	bool		ri_RootToChildMapValid;
+
 	/* for use by copyfrom.c when performing multi-inserts */
 	struct CopyMultiInsertBuffer *ri_CopyMultiInsertBuffer;
 
@@ -595,6 +603,7 @@ typedef struct EState
 								 * pointers, or NULL if not yet opened */
 	struct ExecRowMark **es_rowmarks;	/* Array of per-range-table-entry
 										 * ExecRowMarks, or NULL if none */
+	List	   *es_relpermlist;	/* List of RelPermissionInfo */
 	PlannedStmt *es_plannedstmt;	/* link to top of plan tree */
 	const char *es_sourceText;	/* Source text from QueryDesc */
 

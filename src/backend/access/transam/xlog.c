@@ -6921,6 +6921,9 @@ CreateRestartPoint(int flags)
 	XLogSegNo	_logSegNo;
 	TimestampTz xtime;
 
+	/* Concurrent checkpoint/restartpoint cannot happen */
+	Assert (!IsUnderPostmaster || MyBackendType == B_CHECKPOINTER);
+
 	/* Get a local copy of the last safe checkpoint record. */
 	SpinLockAcquire(&XLogCtl->info_lck);
 	lastCheckPointRecPtr = XLogCtl->lastCheckPointRecPtr;
@@ -7013,30 +7016,33 @@ CreateRestartPoint(int flags)
 	 */
 	PriorRedoPtr = ControlFile->checkPointCopy.redo;
 
-	/*
-	 * Update pg_control, using current time.  Check that it still shows
-	 * DB_IN_ARCHIVE_RECOVERY state and an older checkpoint, else do nothing;
-	 * this is a quick hack to make sure nothing really bad happens if somehow
-	 * we get here after the end-of-recovery checkpoint.
-	 */
+	/* Update pg_control, using current time */
 	LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
-	if (ControlFile->state == DB_IN_ARCHIVE_RECOVERY &&
-		ControlFile->checkPointCopy.redo < lastCheckPoint.redo)
+
+	/*
+	 * Check if the control file still shows an older checkpoint, and update
+	 * its information.
+	 */
+	if (ControlFile->checkPointCopy.redo < lastCheckPoint.redo)
 	{
 		ControlFile->checkPoint = lastCheckPointRecPtr;
 		ControlFile->checkPointCopy = lastCheckPoint;
+	}
 
-		/*
-		 * Ensure minRecoveryPoint is past the checkpoint record.  Normally,
-		 * this will have happened already while writing out dirty buffers,
-		 * but not necessarily - e.g. because no buffers were dirtied.  We do
-		 * this because a backup performed in recovery uses minRecoveryPoint to
-		 * determine which WAL files must be included in the backup, and the
-		 * file (or files) containing the checkpoint record must be included,
-		 * at a minimum. Note that for an ordinary restart of recovery there's
-		 * no value in having the minimum recovery point any earlier than this
-		 * anyway, because redo will begin just after the checkpoint record.
-		 */
+	/*
+	 * Ensure minRecoveryPoint is past the checkpoint record while archive
+	 * recovery is still ongoing.  Normally, this will have happened already
+	 * while writing out dirty buffers, but not necessarily - e.g. because no
+	 * buffers were dirtied.  We do this because a base backup uses
+	 * minRecoveryPoint to determine which WAL files must be included in the
+	 * backup, and the file (or files) containing the checkpoint record must
+	 * be included, at a minimum.  Note that for an ordinary restart of
+	 * recovery there's no value in having the minimum recovery point any
+	 * earlier than this anyway, because redo will begin just after the
+	 * checkpoint record.
+	 */
+	if (ControlFile->state == DB_IN_ARCHIVE_RECOVERY)
+	{
 		if (ControlFile->minRecoveryPoint < lastCheckPointEndPtr)
 		{
 			ControlFile->minRecoveryPoint = lastCheckPointEndPtr;
@@ -7046,10 +7052,12 @@ CreateRestartPoint(int flags)
 			LocalMinRecoveryPoint = ControlFile->minRecoveryPoint;
 			LocalMinRecoveryPointTLI = ControlFile->minRecoveryPointTLI;
 		}
+
 		if (flags & CHECKPOINT_IS_SHUTDOWN)
 			ControlFile->state = DB_SHUTDOWNED_IN_RECOVERY;
-		UpdateControlFile();
 	}
+
+	UpdateControlFile();
 	LWLockRelease(ControlFileLock);
 
 	/*

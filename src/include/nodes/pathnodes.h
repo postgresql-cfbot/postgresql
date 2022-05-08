@@ -2495,7 +2495,7 @@ typedef struct MinMaxAggInfo
  * for conflicting purposes.
  *
  * In addition, PARAM_EXEC slots are assigned for Params representing outputs
- * from subplans (values that are setParam items for those subplans).  These
+ * from subplans (values that are setParam items for those subplans). [TODO: is this true, or only for init plans?]  These
  * IDs need not be tracked via PlannerParamItems, since we do not need any
  * duplicate-elimination nor later processing of the represented expressions.
  * Instead, we just record the assignment of the slot number by appending to

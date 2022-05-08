@@ -9675,6 +9675,16 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
      </row>
 
      <row>
+      <entry><link linkend="view-pg-ownerships"><structname>pg_ownerships</structname></link></entry>
+      <entry>ownerships</entry>
+     </row>
+
+     <row>
+      <entry><link linkend="view-pg-permissions"><structname>pg_permissions</structname></link></entry>
+      <entry>permissions</entry>
+     </row>
+
+     <row>
       <entry><link linkend="view-pg-policies"><structname>pg_policies</structname></link></entry>
       <entry>policies</entry>
      </row>
@@ -11295,6 +11305,256 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
       </para>
       <para>
        Materialized view definition (a reconstructed <xref linkend="sql-select"/> query)
+      </para></entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
+
+ </sect1>
+
+ <sect1 id="view-pg-ownerships">
+  <title><structname>pg_ownerships</structname></title>
+
+  <indexterm zone="view-pg-ownerships">
+   <primary>pg_ownerships</primary>
+  </indexterm>
+
+  <para>
+   The view <structname>pg_ownerships</structname> provides access to information about object ownerships.
+  </para>
+
+  <table>
+   <title><structname>pg_ownerships</structname> Columns</title>
+   <tgroup cols="1">
+    <thead>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       Column Type
+      </para>
+      <para>
+       Description
+      </para></entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+        <structfield>classid</structfield> <type>regclass</type>
+        (references <link linkend="catalog-pg-class"><structname>pg_class</structname></link>.<structfield>oid</structfield>)
+      </para>
+      <para>
+        The <type>regclass</type> OID of the system catalog the owned object is in
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+        <structfield>objid</structfield> <type>oid</type>
+        (references any OID column)
+      </para>
+      <para>
+        The OID of the specific owned object
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>objsubid</structfield> <type>int4</type>
+      </para>
+      <para>
+       For a table column, this is the column number (the
+       <structfield>objid</structfield> and <structfield>classid</structfield> refer to the
+       table itself).  For all other object types, this column is
+       zero.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>type</structfield> <type>text</type>
+      </para>
+      <para>
+      Identifies the type of database object
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>schema</structfield> <type>text</type>
+      </para>
+      <para>
+      The schema name that the object belongs in, or NULL for object types that do not belong to schemas
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>name</structfield> <type>text</type>
+      </para>
+      <para>
+      The name of the object, quoted if necessary, if the name (along with schema name, if pertinent) is sufficient to uniquely identify the object, otherwise NULL
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>identity</structfield> <type>text</type>
+      </para>
+      <para>
+      The complete object identity, with the precise format depending on object type, and each name within the format being schema-qualified and quoted as necessary
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>owner</structfield> <type>regrole</type>
+       (references <link linkend="catalog-pg-authid"><structname>pg_authid</structname></link>.<structfield>rolname</structfield>)
+      </para>
+      <para>
+       Owner of the object
+      </para></entry>
+     </row>
+
+    </tbody>
+   </tgroup>
+  </table>
+
+ </sect1>
+
+ <sect1 id="view-pg-permissions">
+  <title><structname>pg_permissions</structname></title>
+
+  <indexterm zone="view-pg-permissions">
+   <primary>pg_permissions</primary>
+  </indexterm>
+
+  <para>
+   The view <structname>pg_permissions</structname> provides access to information about explicitly granted privileges on database objects.
+   The special <structname>grantee</structname> value <literal>-</literal> means the privilege is granted to <literal>PUBLIC</literal>.
+  </para>
+
+  <table>
+   <title><structname>pg_permissions</structname> Columns</title>
+   <tgroup cols="1">
+    <thead>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       Column Type
+      </para>
+      <para>
+       Description
+      </para></entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+        <structfield>classid</structfield> <type>regclass</type>
+        (references <link linkend="catalog-pg-class"><structname>pg_class</structname></link>.<structfield>oid</structfield>)
+      </para>
+      <para>
+        The <type>regclass</type> OID of the system catalog the granted object is in
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+        <structfield>objid</structfield> <type>oid</type>
+        (references any OID column)
+      </para>
+      <para>
+        The OID of the specific granted object
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>objsubid</structfield> <type>int4</type>
+      </para>
+      <para>
+       For a table column, this is the column number (the
+       <structfield>objid</structfield> and <structfield>classid</structfield> refer to the
+       table itself).  For all other object types, this column is
+       zero.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>type</structfield> <type>text</type>
+      </para>
+      <para>
+      Identifies the type of database object
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>schema</structfield> <type>text</type>
+      </para>
+      <para>
+      The schema name that the object belongs in, or NULL for object types that do not belong to schemas
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>name</structfield> <type>text</type>
+      </para>
+      <para>
+      The name of the object, quoted if necessary, if the name (along with schema name, if pertinent) is sufficient to uniquely identify the object, otherwise NULL
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>identity</structfield> <type>text</type>
+      </para>
+      <para>
+      The complete object identity, with the precise format depending on object type, and each name within the format being schema-qualified and quoted as necessary
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>grantor</structfield> <type>regrole</type>
+       (references <link linkend="catalog-pg-authid"><structname>pg_authid</structname></link>.<structfield>rolname</structfield>)
+      </para>
+      <para>
+       Role that granted this permission
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>grantee</structfield> <type>regrole</type>
+       (references <link linkend="catalog-pg-authid"><structname>pg_authid</structname></link>.<structfield>rolname</structfield>)
+      </para>
+      <para>
+       Role to whom permission is granted
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>privilege_type</structfield> <type>text</type>
+      </para>
+      <para>
+       Type of the privilege: <literal>SELECT</literal>,
+       <literal>INSERT</literal>, <literal>UPDATE</literal>, or
+       <literal>REFERENCES</literal>
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>is_grantable</structfield> <type>boolean</type>
+      </para>
+      <para>
+       <literal>true</literal> if the privilege is grantable, <literal>false</literal> if not
       </para></entry>
      </row>
     </tbody>

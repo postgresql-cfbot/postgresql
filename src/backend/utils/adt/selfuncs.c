@@ -6471,6 +6471,14 @@ genericcostestimate(PlannerInfo *root,
 		 */
 		numIndexTuples = rint(numIndexTuples / num_sa_scans);
 	}
+	else if (costs->indexSelectivity > 0. &&
+		indexSelectivity > costs->indexSelectivity)
+		/*
+		 * If caller give us an estimation of amount of fetched index tuples,
+		 * it could give the selectivity estimation. In this case amount of
+		 * returned tuples can't be more than amount of fetched tuples.
+		 */
+		indexSelectivity = costs->indexSelectivity;
 
 	/*
 	 * We can bound the number of tuples by the index size in any case. Also,
@@ -6655,6 +6663,7 @@ btcostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 	bool		found_is_null_op;
 	double		num_sa_scans;
 	ListCell   *lc;
+	Selectivity btreeSelectivity;
 
 	/*
 	 * For a btree scan, only leading '=' quals plus inequality quals for the
@@ -6759,19 +6768,23 @@ btcostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 	/*
 	 * If index is unique and we found an '=' clause for each column, we can
 	 * just assume numIndexTuples = 1 and skip the expensive
-	 * clauselist_selectivity calculations.  However, a ScalarArrayOp or
+	 * clauselist_selectivity calculations. However, a ScalarArrayOp or
 	 * NullTest invalidates that theory, even though it sets eqQualHere.
+	 * Value of btreeSelectivity is used as a top bound for selectivity
+	 * estimation of returned tuples in the genericcostestimate routine.
 	 */
 	if (index->unique &&
 		indexcol == index->nkeycolumns - 1 &&
 		eqQualHere &&
 		!found_saop &&
 		!found_is_null_op)
+	{
 		numIndexTuples = 1.0;
+		btreeSelectivity = 1. / index->rel->tuples;
+	}
 	else
 	{
 		List	   *selectivityQuals;
-		Selectivity btreeSelectivity;
 
 		/*
 		 * If the index is partial, AND the index predicate with the
@@ -6799,6 +6812,7 @@ btcostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 	 */
 	MemSet(&costs, 0, sizeof(costs));
 	costs.numIndexTuples = numIndexTuples;
+	costs.indexSelectivity = btreeSelectivity;
 
 	genericcostestimate(root, path, loop_count, &costs);
 

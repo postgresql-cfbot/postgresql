@@ -3242,3 +3242,41 @@ NOTICE:  drop cascades to 2 other objects
 DETAIL:  drop cascades to table tststats.priv_test_tbl
 drop cascades to view tststats.priv_test_view
 DROP USER regress_stats_user1;
+-- Reproduction of the problem with picking of suboptimal index.
+SET enable_bitmapscan = 'off';
+-- Table with specific distribution of values
+CREATE TABLE tbl42 AS (
+	SELECT
+		gs % 10 AS x,
+		(gs % 10 + (gs/10::int4) % 10) % 10 AS y,
+		(gs / 100)::int4 AS z
+	FROM generate_series(1,1000) AS gs
+);
+INSERT INTO tbl42 (
+	SELECT gs,gs,gs FROM generate_series(1000,2000) AS gs
+);
+CREATE UNIQUE INDEX good ON tbl42 (x,y,z);
+CREATE INDEX bad ON tbl42(x);
+ANALYZE tbl42;
+-- Optimizer picks optimal, a primary key unique index
+EXPLAIN (COSTS OFF)
+SELECT * FROM tbl42 WHERE x=1 AND y=1 AND z=1;
+                   QUERY PLAN                    
+-------------------------------------------------
+ Index Only Scan using good on tbl42
+   Index Cond: ((x = 1) AND (y = 1) AND (z = 1))
+(2 rows)
+
+CREATE STATISTICS aestat(dependencies,ndistinct) ON x,y,z FROM tbl42;
+ANALYZE tbl42;
+-- Optimizer picks suboptimal index
+EXPLAIN (COSTS OFF)
+SELECT * FROM tbl42 WHERE x=1 AND y=1 AND z=1;
+                   QUERY PLAN                    
+-------------------------------------------------
+ Index Only Scan using good on tbl42
+   Index Cond: ((x = 1) AND (y = 1) AND (z = 1))
+(2 rows)
+
+-- Clean up
+DROP TABLE tbl42 CASCADE;

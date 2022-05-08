@@ -162,9 +162,9 @@ typedef struct Counters
 	double		total_time[PGSS_NUMKIND];	/* total planning/execution time,
 											 * in msec */
 	double		min_time[PGSS_NUMKIND]; /* minimum planning/execution time in
-										 * msec */
+										 * msec since min/max reset */
 	double		max_time[PGSS_NUMKIND]; /* maximum planning/execution time in
-										 * msec */
+										 * msec since min/max reset */
 	double		mean_time[PGSS_NUMKIND];	/* mean planning/execution time in
 											 * msec */
 	double		sum_var_time[PGSS_NUMKIND]; /* sum of variances in
@@ -220,12 +220,14 @@ typedef struct pgssGlobalStats
  */
 typedef struct pgssEntry
 {
-	pgssHashKey key;			/* hash key of entry - MUST BE FIRST */
-	Counters	counters;		/* the statistics for this query */
-	Size		query_offset;	/* query text offset in external file */
-	int			query_len;		/* # of valid bytes in query string, or -1 */
-	int			encoding;		/* query text encoding */
-	slock_t		mutex;			/* protects the counters only */
+	pgssHashKey key;				/* hash key of entry - MUST BE FIRST */
+	Counters	counters;			/* the statistics for this query */
+	Size		query_offset;		/* query text offset in external file */
+	int			query_len;			/* # of valid bytes in query string, or -1 */
+	int			encoding;			/* query text encoding */
+	TimestampTz	stats_since;		/* timestamp of entry allocation */
+	TimestampTz	minmax_stats_since;	/* timestamp of last min/max values reset */
+	slock_t		mutex;				/* protects the counters only */
 } pgssEntry;
 
 /*
@@ -309,6 +311,7 @@ void		_PG_fini(void);
 
 PG_FUNCTION_INFO_V1(pg_stat_statements_reset);
 PG_FUNCTION_INFO_V1(pg_stat_statements_reset_1_7);
+PG_FUNCTION_INFO_V1(pg_stat_statements_reset_1_10);
 PG_FUNCTION_INFO_V1(pg_stat_statements_1_2);
 PG_FUNCTION_INFO_V1(pg_stat_statements_1_3);
 PG_FUNCTION_INFO_V1(pg_stat_statements_1_8);
@@ -358,7 +361,7 @@ static char *qtext_fetch(Size query_offset, int query_len,
 						 char *buffer, Size buffer_size);
 static bool need_gc_qtexts(void);
 static void gc_qtexts(void);
-static void entry_reset(Oid userid, Oid dbid, uint64 queryid);
+static TimestampTz entry_reset(Oid userid, Oid dbid, uint64 queryid, bool minmax_only);
 static char *generate_normalized_query(JumbleState *jstate, const char *query,
 									   int query_loc, int *query_len_p);
 static void fill_in_constant_lengths(JumbleState *jstate, const char *query,
@@ -662,6 +665,8 @@ pgss_shmem_startup(void)
 
 		/* copy in the actual stats */
 		entry->counters = temp.counters;
+		entry->stats_since = temp.stats_since;
+		entry->minmax_stats_since = temp.minmax_stats_since;
 	}
 
 	/* Read global statistics for pg_stat_statements */
@@ -1368,11 +1373,23 @@ pgss_store(const char *query, uint64 queryId,
 			e->counters.sum_var_time[kind] +=
 				(total_time - old_mean) * (total_time - e->counters.mean_time[kind]);
 
-			/* calculate min and max time */
-			if (e->counters.min_time[kind] > total_time)
+			/*
+			 * Calculate min and max time. min = 0 and max = 0
+			 * means that the min/max statistics were reset
+			 */
+			if (e->counters.min_time[kind] == 0
+				&& e->counters.max_time[kind] == 0)
+			{
 				e->counters.min_time[kind] = total_time;
-			if (e->counters.max_time[kind] < total_time)
 				e->counters.max_time[kind] = total_time;
+			}
+			else
+			{
+				if (e->counters.min_time[kind] > total_time)
+					e->counters.min_time[kind] = total_time;
+				if (e->counters.max_time[kind] < total_time)
+					e->counters.max_time[kind] = total_time;
+			}
 		}
 		e->counters.rows += rows;
 		e->counters.shared_blks_hit += bufusage->shared_blks_hit;
@@ -1436,9 +1453,25 @@ pg_stat_statements_reset_1_7(PG_FUNCTION_ARGS)
 	dbid = PG_GETARG_OID(1);
 	queryid = (uint64) PG_GETARG_INT64(2);
 
-	entry_reset(userid, dbid, queryid);
+	entry_reset(userid, dbid, queryid, false);
 
 	PG_RETURN_VOID();
+}
+
+Datum
+pg_stat_statements_reset_1_10(PG_FUNCTION_ARGS)
+{
+	Oid			userid;
+	Oid			dbid;
+	uint64		queryid;
+	bool		minmax_only;
+
+	userid = PG_GETARG_OID(0);
+	dbid = PG_GETARG_OID(1);
+	queryid = (uint64) PG_GETARG_INT64(2);
+	minmax_only = PG_GETARG_BOOL(3);
+
+	PG_RETURN_TIMESTAMPTZ(entry_reset(userid, dbid, queryid, minmax_only));
 }
 
 /*
@@ -1447,7 +1480,7 @@ pg_stat_statements_reset_1_7(PG_FUNCTION_ARGS)
 Datum
 pg_stat_statements_reset(PG_FUNCTION_ARGS)
 {
-	entry_reset(0, 0, 0);
+	entry_reset(0, 0, 0, false);
 
 	PG_RETURN_VOID();
 }
@@ -1459,8 +1492,8 @@ pg_stat_statements_reset(PG_FUNCTION_ARGS)
 #define PG_STAT_STATEMENTS_COLS_V1_3	23
 #define PG_STAT_STATEMENTS_COLS_V1_8	32
 #define PG_STAT_STATEMENTS_COLS_V1_9	33
-#define PG_STAT_STATEMENTS_COLS_V1_10	43
-#define PG_STAT_STATEMENTS_COLS			43	/* maximum of above */
+#define PG_STAT_STATEMENTS_COLS_V1_10	45
+#define PG_STAT_STATEMENTS_COLS			45	/* maximum of above */
 
 /*
  * Retrieve statement statistics.
@@ -1677,6 +1710,8 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 		Counters	tmp;
 		double		stddev;
 		int64		queryid = entry->key.queryid;
+		TimestampTz	stats_since;
+		TimestampTz	minmax_stats_since;
 
 		memset(values, 0, sizeof(values));
 		memset(nulls, 0, sizeof(nulls));
@@ -1745,6 +1780,8 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 
 			SpinLockAcquire(&e->mutex);
 			tmp = e->counters;
+			stats_since = e->stats_since;
+			minmax_stats_since = e->minmax_stats_since;
 			SpinLockRelease(&e->mutex);
 		}
 
@@ -1831,6 +1868,8 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 			values[i++] = Float8GetDatumFast(tmp.jit_optimization_time);
 			values[i++] = Int64GetDatumFast(tmp.jit_emission_count);
 			values[i++] = Float8GetDatumFast(tmp.jit_emission_time);
+			values[i++] = TimestampTzGetDatum(stats_since);
+			values[i++] = TimestampTzGetDatum(minmax_stats_since);
 		}
 
 		Assert(i == (api_version == PGSS_V1_0 ? PG_STAT_STATEMENTS_COLS_V1_0 :
@@ -1952,6 +1991,8 @@ entry_alloc(pgssHashKey *key, Size query_offset, int query_len, int encoding,
 		entry->query_offset = query_offset;
 		entry->query_len = query_len;
 		entry->encoding = encoding;
+		entry->stats_since = GetCurrentTimestamp();
+		entry->minmax_stats_since = entry->stats_since;
 	}
 
 	return entry;
@@ -2498,11 +2539,30 @@ gc_fail:
 	record_gc_qtexts();
 }
 
+#define SINGLE_ENTRY_RESET(e) \
+if (e) { \
+	if (minmax_only) { \
+		/* When requested reset only min/max statistics of an entry */ \
+		for (int kind = 0; kind < PGSS_NUMKIND; kind++) \
+		{ \
+			e->counters.max_time[kind] = 0; \
+			e->counters.min_time[kind] = 0; \
+		} \
+		e->minmax_stats_since = stats_reset; \
+	} \
+	else \
+	{ \
+		/* Remove the key otherwise  */ \
+		hash_search(pgss_hash, &e->key, HASH_REMOVE, NULL); \
+		num_remove++; \
+	} \
+}
+
 /*
- * Release entries corresponding to parameters passed.
+ * Reset entries corresponding to parameters passed.
  */
-static void
-entry_reset(Oid userid, Oid dbid, uint64 queryid)
+static TimestampTz
+entry_reset(Oid userid, Oid dbid, uint64 queryid, bool minmax_only)
 {
 	HASH_SEQ_STATUS hash_seq;
 	pgssEntry  *entry;
@@ -2510,6 +2570,7 @@ entry_reset(Oid userid, Oid dbid, uint64 queryid)
 	long		num_entries;
 	long		num_remove = 0;
 	pgssHashKey key;
+	TimestampTz stats_reset;
 
 	if (!pgss || !pgss_hash)
 		ereport(ERROR,
@@ -2519,6 +2580,8 @@ entry_reset(Oid userid, Oid dbid, uint64 queryid)
 	LWLockAcquire(pgss->lock, LW_EXCLUSIVE);
 	num_entries = hash_get_num_entries(pgss_hash);
 
+	stats_reset = GetCurrentTimestamp();
+
 	if (userid != 0 && dbid != 0 && queryid != UINT64CONST(0))
 	{
 		/* If all the parameters are available, use the fast path. */
@@ -2527,23 +2590,21 @@ entry_reset(Oid userid, Oid dbid, uint64 queryid)
 		key.dbid = dbid;
 		key.queryid = queryid;
 
-		/* Remove the key if it exists, starting with the top-level entry  */
+		/* Reset is started from nested-level */
 		key.toplevel = false;
-		entry = (pgssEntry *) hash_search(pgss_hash, &key, HASH_REMOVE, NULL);
-		if (entry)				/* found */
-			num_remove++;
+		entry = (pgssEntry *) hash_search(pgss_hash, &key, HASH_FIND, NULL);
 
-		/* Also remove entries for top level statements */
+		SINGLE_ENTRY_RESET(entry);
+
+		/* Reset entries for top level statements */
 		key.toplevel = true;
+		entry = (pgssEntry *) hash_search(pgss_hash, &key, HASH_FIND, NULL);
 
-		/* Remove the key if exists */
-		entry = (pgssEntry *) hash_search(pgss_hash, &key, HASH_REMOVE, NULL);
-		if (entry)				/* found */
-			num_remove++;
+		SINGLE_ENTRY_RESET(entry);
 	}
 	else if (userid != 0 || dbid != 0 || queryid != UINT64CONST(0))
 	{
-		/* Remove entries corresponding to valid parameters. */
+		/* Reset entries corresponding to valid parameters. */
 		hash_seq_init(&hash_seq, pgss_hash);
 		while ((entry = hash_seq_search(&hash_seq)) != NULL)
 		{
@@ -2551,8 +2612,7 @@ entry_reset(Oid userid, Oid dbid, uint64 queryid)
 				(!dbid || entry->key.dbid == dbid) &&
 				(!queryid || entry->key.queryid == queryid))
 			{
-				hash_search(pgss_hash, &entry->key, HASH_REMOVE, NULL);
-				num_remove++;
+				SINGLE_ENTRY_RESET(entry);
 			}
 		}
 	}
@@ -2562,8 +2622,7 @@ entry_reset(Oid userid, Oid dbid, uint64 queryid)
 		hash_seq_init(&hash_seq, pgss_hash);
 		while ((entry = hash_seq_search(&hash_seq)) != NULL)
 		{
-			hash_search(pgss_hash, &entry->key, HASH_REMOVE, NULL);
-			num_remove++;
+			SINGLE_ENTRY_RESET(entry);
 		}
 	}
 
@@ -2577,7 +2636,6 @@ entry_reset(Oid userid, Oid dbid, uint64 queryid)
 	 */
 	{
 		volatile pgssSharedState *s = (volatile pgssSharedState *) pgss;
-		TimestampTz stats_reset = GetCurrentTimestamp();
 
 		SpinLockAcquire(&s->mutex);
 		s->stats.dealloc = 0;
@@ -2615,6 +2673,8 @@ done:
 
 release_lock:
 	LWLockRelease(pgss->lock);
+
+	return stats_reset;
 }
 
 /*

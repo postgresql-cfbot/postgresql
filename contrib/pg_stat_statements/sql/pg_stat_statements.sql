@@ -5,7 +5,7 @@ CREATE EXTENSION pg_stat_statements;
 --
 SET pg_stat_statements.track_utility = FALSE;
 SET pg_stat_statements.track_planning = TRUE;
-SELECT pg_stat_statements_reset();
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
 
 SELECT 1 AS "int";
 
@@ -57,7 +57,7 @@ SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
 --
 -- CRUD: INSERT SELECT UPDATE DELETE on test table
 --
-SELECT pg_stat_statements_reset();
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
 
 -- utility "create table" should not be shown
 CREATE TEMP TABLE test (a int, b char(20));
@@ -105,7 +105,7 @@ SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
 --
 -- INSERT, UPDATE, DELETE on test table to validate WAL generation metrics
 --
-SELECT pg_stat_statements_reset();
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
 
 -- utility "create table" should not be shown
 CREATE TABLE pgss_test (a int, b char(20));
@@ -129,7 +129,7 @@ FROM pg_stat_statements ORDER BY query COLLATE "C";
 -- pg_stat_statements.track = none
 --
 SET pg_stat_statements.track = 'none';
-SELECT pg_stat_statements_reset();
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
 
 SELECT 1 AS "one";
 SELECT 1 + 1 AS "two";
@@ -140,7 +140,7 @@ SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
 -- pg_stat_statements.track = top
 --
 SET pg_stat_statements.track = 'top';
-SELECT pg_stat_statements_reset();
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
 
 DO LANGUAGE plpgsql $$
 BEGIN
@@ -174,7 +174,7 @@ SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
 -- pg_stat_statements.track = all
 --
 SET pg_stat_statements.track = 'all';
-SELECT pg_stat_statements_reset();
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
 
 -- we drop and recreate the functions to avoid any caching funnies
 DROP FUNCTION PLUS_ONE(INTEGER);
@@ -207,7 +207,7 @@ SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
 CREATE TABLE pgss_a (id integer PRIMARY KEY);
 CREATE TABLE pgss_b (id integer PRIMARY KEY, a_id integer REFERENCES pgss_a);
 
-SELECT pg_stat_statements_reset();
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
 
 -- control query
 SELECT * FROM pgss_a JOIN pgss_b ON pgss_b.a_id = pgss_a.id;
@@ -236,7 +236,7 @@ DROP TABLE pgss_a, pgss_b CASCADE;
 -- utility commands
 --
 SET pg_stat_statements.track_utility = TRUE;
-SELECT pg_stat_statements_reset();
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
 
 SELECT 1;
 CREATE INDEX test_b ON test(b);
@@ -255,7 +255,7 @@ SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
 -- commands of COPY, FETCH, CREATE TABLE AS, CREATE MATERIALIZED VIEW,
 -- REFRESH MATERIALIZED VIEW and SELECT INTO
 --
-SELECT pg_stat_statements_reset();
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
 
 CREATE TABLE pgss_ctas AS SELECT a, 'ctas' b FROM generate_series(1, 10) a;
 SELECT generate_series(1, 10) c INTO pgss_select_into;
@@ -278,7 +278,7 @@ SELECT query, plans, calls, rows FROM pg_stat_statements ORDER BY query COLLATE 
 --
 -- Track user activity and reset them
 --
-SELECT pg_stat_statements_reset();
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
 CREATE ROLE regress_stats_user1;
 CREATE ROLE regress_stats_user2;
 
@@ -299,7 +299,7 @@ SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
 --
 -- Don't reset anything if any of the parameter is NULL
 --
-SELECT pg_stat_statements_reset(NULL);
+SELECT pg_stat_statements_reset(NULL) IS NOT NULL AS t;
 SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
 
 --
@@ -310,27 +310,27 @@ SELECT pg_stat_statements_reset(
 	(SELECT r.oid FROM pg_roles AS r WHERE r.rolname = 'regress_stats_user2'),
 	(SELECT d.oid FROM pg_database As d where datname = current_database()),
 	(SELECT s.queryid FROM pg_stat_statements AS s
-				WHERE s.query = 'SELECT $1+$2 AS "TWO"' LIMIT 1));
+				WHERE s.query = 'SELECT $1+$2 AS "TWO"' LIMIT 1)) IS NOT NULL AS t;
 SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
 
 --
 -- remove query ('SELECT $1 AS "ONE"') executed by two users
 --
-SELECT pg_stat_statements_reset(0,0,s.queryid)
+SELECT pg_stat_statements_reset(0,0,s.queryid) IS NOT NULL AS t
 	FROM pg_stat_statements AS s WHERE s.query = 'SELECT $1 AS "ONE"';
 SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
 
 --
 -- remove query of a user (regress_stats_user1)
 --
-SELECT pg_stat_statements_reset(r.oid)
+SELECT pg_stat_statements_reset(r.oid) IS NOT NULL AS t
 		FROM pg_roles AS r WHERE r.rolname = 'regress_stats_user1';
 SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
 
 --
 -- reset all
 --
-SELECT pg_stat_statements_reset(0,0,0);
+SELECT pg_stat_statements_reset(0,0,0) IS NOT NULL AS t;
 SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
 
 --
@@ -345,7 +345,7 @@ DROP TABLE pgss_select_into;
 --
 -- [re]plan counting
 --
-SELECT pg_stat_statements_reset();
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
 CREATE TABLE test ();
 PREPARE prep1 AS SELECT COUNT(*) FROM test;
 EXECUTE prep1;
@@ -366,8 +366,12 @@ SELECT query, plans >= 2 AND plans <= calls AS plans_ok, calls, rows FROM pg_sta
 --
 -- access to pg_stat_statements_info view
 --
-SELECT pg_stat_statements_reset();
-SELECT dealloc FROM pg_stat_statements_info;
+SELECT now() AS ref_ts \gset
+SELECT dealloc, stats_reset >= :'ref_ts' AS reset_after_ref FROM pg_stat_statements_info;
+SELECT pg_stat_statements_reset() AS stats_reset_ts \gset
+SELECT dealloc, stats_reset >= :'ref_ts' AS reset_after_ref FROM pg_stat_statements_info;
+-- check stats_reset timestamp
+SELECT stats_reset = :'stats_reset_ts' AS reset_ts_match FROM pg_stat_statements_info;
 
 --
 -- top level handling
@@ -441,5 +445,114 @@ SELECT (
 ) FROM (VALUES(6,7)) v3(e,f) GROUP BY ROLLUP(e,f);
 
 SELECT COUNT(*) FROM pg_stat_statements WHERE query LIKE '%SELECT GROUPING%';
+
+--
+-- statement timestamps
+--
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
+SELECT 1 AS "STMTTS1";
+SELECT now() AS ref_ts \gset
+SELECT 1,2 AS "STMTTS2";
+SELECT stats_since >= :'ref_ts', count(*) FROM pg_stat_statements
+WHERE query LIKE '%STMTTS%'
+GROUP BY stats_since >= :'ref_ts'
+ORDER BY stats_since >= :'ref_ts';
+
+SELECT now() AS ref_ts \gset
+SELECT
+  count(*) as total,
+  count(*) FILTER (
+    WHERE min_plan_time + max_plan_time = 0
+  ) as minmax_plan_zero,
+  count(*) FILTER (
+    WHERE min_exec_time + max_exec_time = 0
+  ) as minmax_exec_zero,
+  count(*) FILTER (
+    WHERE minmax_stats_since >= :'ref_ts'
+  ) as minmax_stats_since_after_ref,
+  count(*) FILTER (
+    WHERE stats_since >= :'ref_ts'
+  ) as stats_since_after_ref
+FROM pg_stat_statements
+WHERE query LIKE '%STMTTS%';
+
+-- Perform single min/max reset
+SELECT pg_stat_statements_reset(0, 0, queryid, true) AS minmax_reset_ts
+FROM pg_stat_statements
+WHERE query LIKE '%STMTTS1%' \gset
+
+-- check
+SELECT
+  count(*) as total,
+  count(*) FILTER (
+    WHERE min_plan_time + max_plan_time = 0
+  ) as minmax_plan_zero,
+  count(*) FILTER (
+    WHERE min_exec_time + max_exec_time = 0
+  ) as minmax_exec_zero,
+  count(*) FILTER (
+    WHERE minmax_stats_since >= :'ref_ts'
+  ) as minmax_stats_since_after_ref,
+  count(*) FILTER (
+    WHERE stats_since >= :'ref_ts'
+  ) as stats_since_after_ref
+FROM pg_stat_statements
+WHERE query LIKE '%STMTTS%';
+
+-- check minmax reset timestamps
+SELECT
+query, minmax_stats_since = :'minmax_reset_ts' AS reset_ts_match
+FROM pg_stat_statements
+WHERE query LIKE '%STMTTS%'
+ORDER BY query COLLATE "C";
+
+-- check that minmax reset does not set stats_reset
+SELECT
+stats_reset = :'minmax_reset_ts' AS stats_reset_ts_match
+FROM pg_stat_statements_info;
+
+-- Perform common min/max reset
+SELECT pg_stat_statements_reset(0, 0, 0, true) AS minmax_reset_ts \gset
+
+-- check again
+SELECT
+  count(*) as total,
+  count(*) FILTER (
+    WHERE min_plan_time + max_plan_time = 0
+  ) as minmax_plan_zero,
+  count(*) FILTER (
+    WHERE min_exec_time + max_exec_time = 0
+  ) as minmax_exec_zero,
+  count(*) FILTER (
+    WHERE minmax_stats_since >= :'ref_ts'
+  ) as minmax_ts_after_ref,
+  count(*) FILTER (
+    WHERE minmax_stats_since = :'minmax_reset_ts'
+  ) as minmax_ts_match,
+  count(*) FILTER (
+    WHERE stats_since >= :'ref_ts'
+  ) as stats_since_after_ref
+FROM pg_stat_statements
+WHERE query LIKE '%STMTTS%';
+
+-- Execute first query once more to check stats update
+SELECT 1 AS "STMTTS1";
+
+-- check
+-- we don't check planing times here to be independent of
+-- plan caching approach
+SELECT
+  count(*) as total,
+  count(*) FILTER (
+    WHERE min_exec_time + max_exec_time = 0
+  ) as minmax_exec_zero,
+  count(*) FILTER (
+    WHERE minmax_stats_since >= :'ref_ts'
+  ) as minmax_ts_after_ref,
+  count(*) FILTER (
+    WHERE stats_since >= :'ref_ts'
+  ) as stats_since_after_ref
+FROM pg_stat_statements
+WHERE query LIKE '%STMTTS%';
 
 DROP EXTENSION pg_stat_statements;

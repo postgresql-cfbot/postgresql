@@ -183,7 +183,7 @@ ReplicationSlotShmemExit(int code, Datum arg)
 
 	/* Make sure active replication slots are released */
 	if (MyReplicationSlot != NULL)
-		ReplicationSlotRelease();
+		ReplicationSlotRelease(true);
 
 	/* Also cleanup all the temporary slots. */
 	ReplicationSlotCleanup();
@@ -366,6 +366,10 @@ ReplicationSlotCreate(const char *name, bool db_specific,
 
 	/* Let everybody know we've modified this slot */
 	ConditionVariableBroadcast(&slot->active_cv);
+
+	ereport(log_replication_commands ? LOG : DEBUG3,
+			(errmsg("created replication slot \"%s\"",
+					NameStr(slot->data.name))));
 }
 
 /*
@@ -422,7 +426,7 @@ ReplicationSlotIndex(ReplicationSlot *slot)
  * nowait is false, we sleep until the slot is released by the owning process.
  */
 void
-ReplicationSlotAcquire(const char *name, bool nowait)
+ReplicationSlotAcquire(const char *name, bool nowait, bool msg_ok)
 {
 	ReplicationSlot *s;
 	int			active_pid;
@@ -503,6 +507,11 @@ retry:
 	/* We made this slot active, so it's ours now. */
 	MyReplicationSlot = s;
 
+	if (msg_ok)
+		ereport(log_replication_commands ? LOG : DEBUG3,
+				(errmsg("acquired replication slot \"%s\"",
+						NameStr(s->data.name))));
+
 	/*
 	 * The call to pgstat_acquire_replslot() protects against stats for
 	 * a different slot, from before a restart or such, being present during
@@ -519,7 +528,7 @@ retry:
  * Resources this slot requires will be preserved.
  */
 void
-ReplicationSlotRelease(void)
+ReplicationSlotRelease(bool msg_ok)
 {
 	ReplicationSlot *slot = MyReplicationSlot;
 
@@ -569,6 +578,11 @@ ReplicationSlotRelease(void)
 	MyProc->statusFlags &= ~PROC_IN_LOGICAL_DECODING;
 	ProcGlobal->statusFlags[MyProc->pgxactoff] = MyProc->statusFlags;
 	LWLockRelease(ProcArrayLock);
+
+	if (msg_ok)
+		ereport(log_replication_commands ? LOG : DEBUG3,
+				(errmsg("released replication slot \"%s\"",
+						NameStr(slot->data.name))));
 }
 
 /*
@@ -626,7 +640,7 @@ ReplicationSlotDrop(const char *name, bool nowait)
 {
 	Assert(MyReplicationSlot == NULL);
 
-	ReplicationSlotAcquire(name, nowait);
+	ReplicationSlotAcquire(name, nowait, false);
 
 	ReplicationSlotDropAcquired();
 }
@@ -658,7 +672,9 @@ ReplicationSlotDropPtr(ReplicationSlot *slot)
 	char		tmppath[MAXPGPATH];
 
 	/* temp debugging aid to analyze 019_replslot_limit failures */
-	elog(DEBUG3, "replication slot drop: %s: begin", NameStr(slot->data.name));
+	ereport(log_replication_commands ? LOG : DEBUG3,
+			(errmsg("replication slot drop: %s: begin",
+					NameStr(slot->data.name))));
 
 	/*
 	 * If some other backend ran this code concurrently with us, we might try
@@ -710,8 +726,9 @@ ReplicationSlotDropPtr(ReplicationSlot *slot)
 						path, tmppath)));
 	}
 
-	elog(DEBUG3, "replication slot drop: %s: removed on-disk",
-		 NameStr(slot->data.name));
+	ereport(log_replication_commands ? LOG : DEBUG3,
+			(errmsg("replication slot drop: %s: removed on-disk",
+					NameStr(slot->data.name))));
 
 	/*
 	 * The slot is definitely gone.  Lock out concurrent scans of the array
@@ -768,8 +785,9 @@ ReplicationSlotDropPtr(ReplicationSlot *slot)
 	 */
 	LWLockRelease(ReplicationSlotAllocationLock);
 
-	elog(DEBUG3, "replication slot drop: %s: done",
-		 NameStr(slot->data.name));
+	ereport(log_replication_commands ? LOG : DEBUG3,
+			(errmsg("replication slot drop: %s: done",
+					NameStr(slot->data.name))));
 }
 
 /*
@@ -1364,7 +1382,7 @@ InvalidatePossiblyObsoleteSlot(ReplicationSlot *s, XLogRecPtr oldestLSN,
 			/* Make sure the invalidated state persists across server restart */
 			ReplicationSlotMarkDirty();
 			ReplicationSlotSave();
-			ReplicationSlotRelease();
+			ReplicationSlotRelease(true);
 
 			ereport(LOG,
 					(errmsg("invalidating slot \"%s\" because its restart_lsn %X/%X exceeds max_slot_wal_keep_size",

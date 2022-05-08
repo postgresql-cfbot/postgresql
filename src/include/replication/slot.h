@@ -199,8 +199,8 @@ extern void ReplicationSlotCreate(const char *name, bool db_specific,
 extern void ReplicationSlotPersist(void);
 extern void ReplicationSlotDrop(const char *name, bool nowait);
 
-extern void ReplicationSlotAcquire(const char *name, bool nowait);
-extern void ReplicationSlotRelease(void);
+extern void ReplicationSlotAcquire(const char *name, bool nowait, bool msg_ok);
+extern void ReplicationSlotRelease(bool msg_ok);
 extern void ReplicationSlotCleanup(void);
 extern void ReplicationSlotSave(void);
 extern void ReplicationSlotMarkDirty(void);

@@ -201,7 +201,7 @@ pg_logical_slot_get_changes_guts(FunctionCallInfo fcinfo, bool confirm, bool bin
 	else
 		end_of_wal = GetXLogReplayRecPtr(NULL);
 
-	ReplicationSlotAcquire(NameStr(*name), true);
+	ReplicationSlotAcquire(NameStr(*name), true, true);
 
 	PG_TRY();
 	{
@@ -315,7 +315,7 @@ pg_logical_slot_get_changes_guts(FunctionCallInfo fcinfo, bool confirm, bool bin
 		/* free context, call shutdown callback */
 		FreeDecodingContext(ctx);
 
-		ReplicationSlotRelease();
+		ReplicationSlotRelease(true);
 		InvalidateSystemCaches();
 	}
 	PG_CATCH();

@@ -4295,7 +4295,7 @@ PostgresMain(const char *dbname, const char *username)
 		 * callback ensuring correct cleanup on FATAL errors.
 		 */
 		if (MyReplicationSlot != NULL)
-			ReplicationSlotRelease();
+			ReplicationSlotRelease(true);
 
 		/* We also want to cleanup temporary slots on error. */
 		ReplicationSlotCleanup();

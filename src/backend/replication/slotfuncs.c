@@ -100,7 +100,7 @@ pg_create_physical_replication_slot(PG_FUNCTION_ARGS)
 	tuple = heap_form_tuple(tupdesc, values, nulls);
 	result = HeapTupleGetDatum(tuple);
 
-	ReplicationSlotRelease();
+	ReplicationSlotRelease(false);
 
 	PG_RETURN_DATUM(result);
 }
@@ -202,7 +202,7 @@ pg_create_logical_replication_slot(PG_FUNCTION_ARGS)
 	/* ok, slot is now fully created, mark it as persistent if needed */
 	if (!temporary)
 		ReplicationSlotPersist();
-	ReplicationSlotRelease();
+	ReplicationSlotRelease(false);
 
 	PG_RETURN_DATUM(result);
 }
@@ -605,7 +605,7 @@ pg_replication_slot_advance(PG_FUNCTION_ARGS)
 		moveto = Min(moveto, GetXLogReplayRecPtr(NULL));
 
 	/* Acquire the slot so we "own" it */
-	ReplicationSlotAcquire(NameStr(*slotname), true);
+	ReplicationSlotAcquire(NameStr(*slotname), true, true);
 
 	/* A slot whose restart_lsn has never been reserved cannot be advanced */
 	if (XLogRecPtrIsInvalid(MyReplicationSlot->data.restart_lsn))
@@ -648,7 +648,7 @@ pg_replication_slot_advance(PG_FUNCTION_ARGS)
 	ReplicationSlotsComputeRequiredXmin(false);
 	ReplicationSlotsComputeRequiredLSN();
 
-	ReplicationSlotRelease();
+	ReplicationSlotRelease(true);
 
 	/* Return the reached position. */
 	values[1] = LSNGetDatum(endlsn);
@@ -879,7 +879,7 @@ copy_replication_slot(FunctionCallInfo fcinfo, bool logical_slot)
 	tuple = heap_form_tuple(tupdesc, values, nulls);
 	result = HeapTupleGetDatum(tuple);
 
-	ReplicationSlotRelease();
+	ReplicationSlotRelease(false);
 
 	PG_RETURN_DATUM(result);
 }

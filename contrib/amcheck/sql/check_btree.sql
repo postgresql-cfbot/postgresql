@@ -115,11 +115,25 @@ INSERT INTO toast_bug SELECT repeat('a', 2200);
 -- Should not get false positive report of corruption:
 SELECT bt_index_check('toasty', true);
 
+-- UNIQUE constraint check
+SELECT bt_index_check('bttest_a_idx', true, true);
+SELECT bt_index_check('bttest_b_idx', false, true);
+SELECT bt_index_parent_check('bttest_a_idx', true, true, true);
+SELECT bt_index_parent_check('bttest_b_idx', true, false, true);
+
+-- Check null values in unique index are not treated as equal
+CREATE TABLE bttest_unique_nulls (a serial, b int, c int UNIQUE);
+INSERT INTO bttest_unique_nulls VALUES (generate_series(1, 10000), 2, default);
+SELECT bt_index_check('bttest_unique_nulls_c_key', true, true);
+CREATE INDEX on bttest_unique_nulls (b,c);
+SELECT bt_index_check('bttest_unique_nulls_b_c_idx', true, true);
+
 -- cleanup
 DROP TABLE bttest_a;
 DROP TABLE bttest_b;
 DROP TABLE bttest_multi;
 DROP TABLE delete_test_table;
 DROP TABLE toast_bug;
+DROP TABLE bttest_unique_nulls;
 DROP OWNED BY regress_bttest_role; -- permissions
 DROP ROLE regress_bttest_role;

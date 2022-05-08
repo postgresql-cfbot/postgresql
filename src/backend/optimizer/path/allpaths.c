@@ -3385,7 +3385,7 @@ standard_join_search(PlannerInfo *root, int levels_needed, List *initial_rels)
 			 * partial paths.  We'll do the same for the topmost scan/join rel
 			 * once we know the final targetlist (see grouping_planner).
 			 */
-			if (lev < levels_needed)
+			if (!bms_equal(rel->relids, root->all_baserels))
 				generate_useful_gather_paths(root, rel, false);
 
 			/* Find and save the cheapest paths for this rel */

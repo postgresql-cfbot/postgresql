@@ -19,6 +19,7 @@ PG_FUNCTION_INFO_V1(gbt_bit_picksplit);
 PG_FUNCTION_INFO_V1(gbt_bit_consistent);
 PG_FUNCTION_INFO_V1(gbt_bit_penalty);
 PG_FUNCTION_INFO_V1(gbt_bit_same);
+PG_FUNCTION_INFO_V1(gbt_bit_sortsupport);
 
 
 /* define for comparison */
@@ -207,4 +208,40 @@ gbt_bit_penalty(PG_FUNCTION_ARGS)
 
 	PG_RETURN_POINTER(gbt_var_penalty(result, o, n, PG_GET_COLLATION(),
 									  &tinfo, fcinfo->flinfo));
+}
+
+static int
+gbt_bit_sort_build_cmp(Datum a, Datum b, SortSupport ssup)
+{
+	GBT_VARKEY_R ra = gbt_var_key_readable((GBT_VARKEY *) PG_DETOAST_DATUM(a));
+	GBT_VARKEY_R rb = gbt_var_key_readable((GBT_VARKEY *) PG_DETOAST_DATUM(b));
+	/*
+	 * Use byteacmp(), like gbt_bitcmp() does.
+	 * In btree_gist, the *_cmp() function operates on non-leaf values, and
+	 * *_lt(), *_gt() et al operate on leaf values. For all other datatypes,
+	 * the leaf and non-leaf representation is the same, but for bit/varbit,
+	 * the non-leaf representation is different.
+	 * The leaf representation is VarBit, and non-leaf is just the bits without
+	 * the 'bit_len' field. That's why it is indeed correct for gbt_bitcmp() to
+	 * just use byteacmp(), whereas gbt_bitlt() et al compares the 'bit_len'
+	 * field separately.
+	 */
+	return DatumGetInt32(DirectFunctionCall2(byteacmp,
+											 PointerGetDatum(ra.lower),
+											 PointerGetDatum(rb.lower)));
+}
+
+/*
+ * Sort support routine for fast GiST index build by sorting.
+ */
+Datum
+gbt_bit_sortsupport(PG_FUNCTION_ARGS)
+{
+	SortSupport ssup = (SortSupport) PG_GETARG_POINTER(0);
+
+	ssup->comparator = gbt_bit_sort_build_cmp;
+	ssup->abbrev_converter = NULL;
+	ssup->abbrev_abort = NULL;
+	ssup->abbrev_full_comparator = NULL;
+	PG_RETURN_VOID();
 }

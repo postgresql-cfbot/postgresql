@@ -19,6 +19,8 @@ SELECT count(*) FROM timetmp WHERE a >  '10:57:11';
 SELECT a, a <-> '10:57:11' FROM timetmp ORDER BY a <-> '10:57:11' LIMIT 3;
 
 CREATE INDEX timeidx ON timetmp USING gist ( a );
+CREATE INDEX timeidx_b ON timetmp USING gist ( a ) WITH (buffering=on);
+DROP INDEX timeidx_b;
 
 SET enable_seqscan=off;
 

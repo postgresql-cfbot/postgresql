@@ -16,6 +16,8 @@ SELECT count(*) FROM oidtmp WHERE oid >= 17;
 SELECT count(*) FROM oidtmp WHERE oid >  17;
 
 CREATE INDEX oididx ON oidtmp USING gist ( oid );
+CREATE INDEX oididx_b ON oidtmp USING gist ( oid ) WITH (buffering=on);
+DROP INDEX oididx_b;
 
 SET enable_seqscan=off;
 

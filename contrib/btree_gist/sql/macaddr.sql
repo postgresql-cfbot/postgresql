@@ -17,6 +17,8 @@ SELECT count(*) FROM macaddrtmp WHERE a >= '22:00:5c:e5:9b:0d';
 SELECT count(*) FROM macaddrtmp WHERE a >  '22:00:5c:e5:9b:0d';
 
 CREATE INDEX macaddridx ON macaddrtmp USING gist ( a );
+CREATE INDEX macaddridx_b ON macaddrtmp USING gist ( a ) WITH (buffering=on);
+DROP INDEX macaddridx_b;
 
 SET enable_seqscan=off;
 

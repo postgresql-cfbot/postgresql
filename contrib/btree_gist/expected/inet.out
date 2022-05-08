@@ -33,6 +33,8 @@ SELECT count(*) FROM inettmp WHERE a >  '89.225.196.191';
 (1 row)
 
 CREATE INDEX inetidx ON inettmp USING gist ( a );
+CREATE INDEX inetidx_b ON inettmp USING gist ( a ) WITH (buffering=on);
+DROP INDEX inetidx_b;
 SET enable_seqscan=off;
 SELECT count(*) FROM inettmp WHERE a <  '89.225.196.191'::inet;
  count 

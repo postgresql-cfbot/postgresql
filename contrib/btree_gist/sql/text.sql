@@ -18,6 +18,8 @@ SELECT count(*) FROM texttmp WHERE a >=  '31b0';
 SELECT count(*) FROM texttmp WHERE a >   '31b0';
 
 CREATE INDEX textidx ON texttmp USING GIST ( a );
+CREATE INDEX textidx_b ON texttmp USING GIST ( a ) WITH (buffering=on);
+DROP INDEX textidx_b;
 
 SET enable_seqscan=off;
 

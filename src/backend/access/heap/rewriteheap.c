@@ -1247,6 +1247,8 @@ CheckPointLogicalRewriteHeap(void)
 				ereport(ERROR,
 						(errcode_for_file_access(),
 						 errmsg("could not remove file \"%s\": %m", path)));
+
+			CheckpointStats.repl_map_files_rmvd_cnt++;
 		}
 		else
 		{
@@ -1280,6 +1282,8 @@ CheckPointLogicalRewriteHeap(void)
 						(errcode_for_file_access(),
 						 errmsg("could not close file \"%s\": %m", path)));
 		}
+
+		CheckpointStats.repl_map_files_syncd_cnt++;
 	}
 	FreeDir(mappings_dir);
 

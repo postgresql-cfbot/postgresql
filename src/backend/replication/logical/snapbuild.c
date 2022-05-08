@@ -1996,6 +1996,8 @@ CheckPointSnapBuild(void)
 								path)));
 				continue;
 			}
+
+			CheckpointStats.repl_snap_files_rmvd_cnt++;
 		}
 	}
 	FreeDir(snap_dir);

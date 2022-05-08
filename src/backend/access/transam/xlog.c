@@ -6050,30 +6050,18 @@ ShutdownXLOG(int code, Datum arg)
 static void
 LogCheckpointStart(int flags, bool restartpoint)
 {
-	if (restartpoint)
-		ereport(LOG,
-		/* translator: the placeholders show checkpoint options */
-				(errmsg("restartpoint starting:%s%s%s%s%s%s%s%s",
-						(flags & CHECKPOINT_IS_SHUTDOWN) ? " shutdown" : "",
-						(flags & CHECKPOINT_END_OF_RECOVERY) ? " end-of-recovery" : "",
-						(flags & CHECKPOINT_IMMEDIATE) ? " immediate" : "",
-						(flags & CHECKPOINT_FORCE) ? " force" : "",
-						(flags & CHECKPOINT_WAIT) ? " wait" : "",
-						(flags & CHECKPOINT_CAUSE_XLOG) ? " wal" : "",
-						(flags & CHECKPOINT_CAUSE_TIME) ? " time" : "",
-						(flags & CHECKPOINT_FLUSH_ALL) ? " flush-all" : "")));
-	else
-		ereport(LOG,
-		/* translator: the placeholders show checkpoint options */
-				(errmsg("checkpoint starting:%s%s%s%s%s%s%s%s",
-						(flags & CHECKPOINT_IS_SHUTDOWN) ? " shutdown" : "",
-						(flags & CHECKPOINT_END_OF_RECOVERY) ? " end-of-recovery" : "",
-						(flags & CHECKPOINT_IMMEDIATE) ? " immediate" : "",
-						(flags & CHECKPOINT_FORCE) ? " force" : "",
-						(flags & CHECKPOINT_WAIT) ? " wait" : "",
-						(flags & CHECKPOINT_CAUSE_XLOG) ? " wal" : "",
-						(flags & CHECKPOINT_CAUSE_TIME) ? " time" : "",
-						(flags & CHECKPOINT_FLUSH_ALL) ? " flush-all" : "")));
+	ereport(LOG,
+	/* translator: the placeholders after first %s show restartpoint/checkpoint options */
+			(errmsg("%s starting:%s%s%s%s%s%s%s%s",
+					restartpoint ? _("restartpoint") : _("checkpoint"),
+					(flags & CHECKPOINT_IS_SHUTDOWN) ? " shutdown" : "",
+					(flags & CHECKPOINT_END_OF_RECOVERY) ? " end-of-recovery" : "",
+					(flags & CHECKPOINT_IMMEDIATE) ? " immediate" : "",
+					(flags & CHECKPOINT_FORCE) ? " force" : "",
+					(flags & CHECKPOINT_WAIT) ? " wait" : "",
+					(flags & CHECKPOINT_CAUSE_XLOG) ? " wal" : "",
+					(flags & CHECKPOINT_CAUSE_TIME) ? " time" : "",
+					(flags & CHECKPOINT_FLUSH_ALL) ? " flush-all" : "")));
 }
 
 /*
@@ -6088,6 +6076,7 @@ LogCheckpointEnd(bool restartpoint)
 				longest_msecs,
 				average_msecs;
 	uint64		average_sync_time;
+	StringInfoData logmsg;
 
 	CheckpointStats.ckpt_end_t = GetCurrentTimestamp();
 
@@ -6123,46 +6112,63 @@ LogCheckpointEnd(bool restartpoint)
 			CheckpointStats.ckpt_sync_rels;
 	average_msecs = (long) ((average_sync_time + 999) / 1000);
 
+	initStringInfo(&logmsg);
+
 	if (restartpoint)
-		ereport(LOG,
-				(errmsg("restartpoint complete: wrote %d buffers (%.1f%%); "
-						"%d WAL file(s) added, %d removed, %d recycled; "
-						"write=%ld.%03d s, sync=%ld.%03d s, total=%ld.%03d s; "
-						"sync files=%d, longest=%ld.%03d s, average=%ld.%03d s; "
-						"distance=%d kB, estimate=%d kB",
-						CheckpointStats.ckpt_bufs_written,
-						(double) CheckpointStats.ckpt_bufs_written * 100 / NBuffers,
-						CheckpointStats.ckpt_segs_added,
-						CheckpointStats.ckpt_segs_removed,
-						CheckpointStats.ckpt_segs_recycled,
-						write_msecs / 1000, (int) (write_msecs % 1000),
-						sync_msecs / 1000, (int) (sync_msecs % 1000),
-						total_msecs / 1000, (int) (total_msecs % 1000),
-						CheckpointStats.ckpt_sync_rels,
-						longest_msecs / 1000, (int) (longest_msecs % 1000),
-						average_msecs / 1000, (int) (average_msecs % 1000),
-						(int) (PrevCheckPointDistance / 1024.0),
-						(int) (CheckPointDistanceEstimate / 1024.0))));
+		appendStringInfo(&logmsg, _("restartpoint complete: "));
 	else
-		ereport(LOG,
-				(errmsg("checkpoint complete: wrote %d buffers (%.1f%%); "
-						"%d WAL file(s) added, %d removed, %d recycled; "
-						"write=%ld.%03d s, sync=%ld.%03d s, total=%ld.%03d s; "
-						"sync files=%d, longest=%ld.%03d s, average=%ld.%03d s; "
-						"distance=%d kB, estimate=%d kB",
-						CheckpointStats.ckpt_bufs_written,
-						(double) CheckpointStats.ckpt_bufs_written * 100 / NBuffers,
-						CheckpointStats.ckpt_segs_added,
-						CheckpointStats.ckpt_segs_removed,
-						CheckpointStats.ckpt_segs_recycled,
-						write_msecs / 1000, (int) (write_msecs % 1000),
-						sync_msecs / 1000, (int) (sync_msecs % 1000),
-						total_msecs / 1000, (int) (total_msecs % 1000),
-						CheckpointStats.ckpt_sync_rels,
-						longest_msecs / 1000, (int) (longest_msecs % 1000),
-						average_msecs / 1000, (int) (average_msecs % 1000),
-						(int) (PrevCheckPointDistance / 1024.0),
-						(int) (CheckPointDistanceEstimate / 1024.0))));
+		appendStringInfo(&logmsg, _("checkpoint complete: "));
+
+	appendStringInfo(&logmsg,
+					_("wrote %d buffers (%.1f%%); "
+					  "%d WAL file(s) added, %d removed, %d recycled; "
+					  "write=%ld.%03d s, sync=%ld.%03d s, total=%ld.%03d s; "
+					  "sync files=%d, longest=%ld.%03d s, average=%ld.%03d s; "
+					  "distance=%d kB, estimate=%d kB"),
+					  CheckpointStats.ckpt_bufs_written,
+					  (double) CheckpointStats.ckpt_bufs_written * 100 / NBuffers,
+					  CheckpointStats.ckpt_segs_added,
+					  CheckpointStats.ckpt_segs_removed,
+					  CheckpointStats.ckpt_segs_recycled,
+					  write_msecs / 1000, (int) (write_msecs % 1000),
+					  sync_msecs / 1000, (int) (sync_msecs % 1000),
+					  total_msecs / 1000, (int) (total_msecs % 1000),
+					  CheckpointStats.ckpt_sync_rels,
+					  longest_msecs / 1000, (int) (longest_msecs % 1000),
+					  average_msecs / 1000, (int) (average_msecs % 1000),
+					  (int) (PrevCheckPointDistance / 1024.0),
+					  (int) (CheckPointDistanceEstimate / 1024.0));
+
+	if (CheckpointStats.repl_snap_files_rmvd_cnt > 0)
+	{
+		long t_msecs;
+
+		t_msecs = TimestampDifferenceMilliseconds(CheckpointStats.repl_snap_start_t,
+												  CheckpointStats.repl_snap_end_t);
+
+		appendStringInfo(&logmsg,
+						_("; logical snapshot file(s) removed=%llu, time=%ld.%03d s"),
+						  (unsigned long long) CheckpointStats.repl_snap_files_rmvd_cnt,
+						  t_msecs / 1000, (int) (t_msecs % 1000));
+	}
+
+	if (CheckpointStats.repl_map_files_rmvd_cnt ||
+		CheckpointStats.repl_map_files_syncd_cnt > 0)
+	{
+		long t_msecs;
+
+		t_msecs = TimestampDifferenceMilliseconds(CheckpointStats.repl_snap_start_t,
+												  CheckpointStats.repl_snap_end_t);
+
+		appendStringInfo(&logmsg,
+						_("; logical rewrite mapping file(s) removed=%llu, synced=%llu, time=%ld.%03d s"),
+						  (unsigned long long) CheckpointStats.repl_map_files_rmvd_cnt,
+						  (unsigned long long) CheckpointStats.repl_map_files_syncd_cnt,
+						  t_msecs / 1000, (int) (t_msecs % 1000));
+	}
+
+	ereport(LOG, errmsg_internal("%s", logmsg.data));
+	pfree(logmsg.data);
 }
 
 /*
@@ -6831,8 +6837,15 @@ CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 {
 	CheckPointRelationMap();
 	CheckPointReplicationSlots();
+
+	CheckpointStats.repl_snap_start_t = GetCurrentTimestamp();
 	CheckPointSnapBuild();
+	CheckpointStats.repl_snap_end_t = GetCurrentTimestamp();
+
+	CheckpointStats.repl_map_start_t = GetCurrentTimestamp();
 	CheckPointLogicalRewriteHeap();
+	CheckpointStats.repl_map_end_t = GetCurrentTimestamp();
+
 	CheckPointReplicationOrigin();
 
 	/* Write out all dirty data in SLRUs and the main buffer pool */

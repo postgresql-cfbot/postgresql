@@ -670,6 +670,14 @@ ExecInitPartitionInfo(ModifyTableState *mtstate, EState *estate,
 						leaf_part_rri, partidx, false);
 
 	/*
+	 * If a partition's root parent isn't allowed to use it, neither is the
+	 * partition.
+	 */
+	if (rootResultRelInfo->ri_usesMultiInsert)
+		leaf_part_rri->ri_usesMultiInsert =
+			ExecMultiInsertAllowed(leaf_part_rri);
+
+	/*
 	 * If there is an ON CONFLICT clause, initialize state for it.
 	 */
 	if (node && node->onConflictAction != ONCONFLICT_NONE)

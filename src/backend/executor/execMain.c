@@ -1260,7 +1260,52 @@ InitResultRelInfo(ResultRelInfo *resultRelInfo,
 	resultRelInfo->ri_PartitionTupleSlot = NULL;	/* ditto */
 	resultRelInfo->ri_ChildToRootMap = NULL;
 	resultRelInfo->ri_ChildToRootMapValid = false;
+	resultRelInfo->ri_usesMultiInsert = false;
 	resultRelInfo->ri_CopyMultiInsertBuffer = NULL;
+}
+
+/*
+ * ExecMultiInsertAllowed
+ *		Does this relation allow caller to use multi-insert mode when
+ *		inserting rows into it?
+ */
+bool
+ExecMultiInsertAllowed(const ResultRelInfo *rri)
+{
+	/*
+	 * Can't support multi-inserts when there are any BEFORE/INSTEAD OF
+	 * triggers on the table. Such triggers might query the table we're
+	 * inserting into and act differently if the tuples that have already
+	 * been processed and prepared for insertion are not there.
+	 */
+	if (rri->ri_TrigDesc != NULL &&
+		(rri->ri_TrigDesc->trig_insert_before_row ||
+		 rri->ri_TrigDesc->trig_insert_instead_row))
+		return false;
+
+	/*
+	 * For partitioned tables we can't support multi-inserts when there are
+	 * any statement level insert triggers. It might be possible to allow
+	 * partitioned tables with such triggers in the future, but for now,
+	 * CopyMultiInsertInfoFlush expects that any before row insert and
+	 * statement level insert triggers are on the same relation.
+	 */
+	if (rri->ri_RelationDesc->rd_rel->relkind == RELKIND_PARTITIONED_TABLE &&
+		rri->ri_TrigDesc != NULL &&
+		rri->ri_TrigDesc->trig_insert_new_table)
+		return false;
+
+	if (rri->ri_FdwRoutine != NULL &&
+		(rri->ri_FdwRoutine->ExecForeignBatchInsert == NULL ||
+		rri->ri_BatchSize <= 1))
+		/*
+		 * Foreign tables don't support multi-inserts, unless their FDW
+		 * provides the necessary bulk insert interface.
+		 */
+		return false;
+
+	/* OK, caller can use multi-insert on this relation. */
+	return true;
 }
 
 /*

@@ -203,6 +203,7 @@ extern void InitResultRelInfo(ResultRelInfo *resultRelInfo,
 							  Index resultRelationIndex,
 							  ResultRelInfo *partition_root_rri,
 							  int instrument_options);
+extern bool ExecMultiInsertAllowed(const ResultRelInfo *rri);
 extern ResultRelInfo *ExecGetTriggerResultRel(EState *estate, Oid relid,
 											  ResultRelInfo *rootRelInfo);
 extern List *ExecGetAncestorResultRels(EState *estate, ResultRelInfo *resultRelInfo);

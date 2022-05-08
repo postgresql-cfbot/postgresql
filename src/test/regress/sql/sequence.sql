@@ -412,5 +412,17 @@ CREATE SEQUENCE test_seq1 CACHE 10;
 SELECT nextval('test_seq1');
 SELECT nextval('test_seq1');
 SELECT nextval('test_seq1');
+SELECT nextval('test_seq1', 2);
+SELECT nextval('test_seq1', 30);
 
 DROP SEQUENCE test_seq1;
+
+-- grab multiple values
+CREATE SEQUENCE multi_seq;
+SELECT nextval('multi_seq', 2);
+SELECT nextval('multi_seq', -1); -- error
+SELECT nextval('multi_seq', 6);
+
+CREATE SEQUENCE multi_reverse_seq INCREMENT BY -1;
+SELECT nextval('multi_reverse_seq', 2);
+SELECT nextval('multi_reverse_seq', 2);

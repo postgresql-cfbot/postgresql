@@ -51,7 +51,7 @@ typedef struct xl_seq_rec
 	/* SEQUENCE TUPLE DATA FOLLOWS AT THE END */
 } xl_seq_rec;
 
-extern int64 nextval_internal(Oid relid, bool check_permissions);
+extern int64 nextval_internal(Oid relid, bool check_permissions, int64 request);
 extern Datum nextval(PG_FUNCTION_ARGS);
 extern List *sequence_options(Oid relid);
 

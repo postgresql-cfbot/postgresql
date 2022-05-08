@@ -838,4 +838,45 @@ SELECT nextval('test_seq1');
        3
 (1 row)
 
+SELECT nextval('test_seq1', 2);
+ nextval 
+---------
+       5
+(1 row)
+
+SELECT nextval('test_seq1', 30);
+ nextval 
+---------
+      35
+(1 row)
+
 DROP SEQUENCE test_seq1;
+-- grab multiple values
+CREATE SEQUENCE multi_seq;
+SELECT nextval('multi_seq', 2);
+ nextval 
+---------
+       2
+(1 row)
+
+SELECT nextval('multi_seq', -1); -- error
+ERROR:  nextval: can't request -1 values from a sequence
+SELECT nextval('multi_seq', 6);
+ nextval 
+---------
+       8
+(1 row)
+
+CREATE SEQUENCE multi_reverse_seq INCREMENT BY -1;
+SELECT nextval('multi_reverse_seq', 2);
+ nextval 
+---------
+      -2
+(1 row)
+
+SELECT nextval('multi_reverse_seq', 2);
+ nextval 
+---------
+      -4
+(1 row)
+

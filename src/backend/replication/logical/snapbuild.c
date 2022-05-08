@@ -532,7 +532,10 @@ SnapBuildInitialSnapshot(SnapBuild *builder)
 	Snapshot	snap;
 	TransactionId xid;
 	TransactionId *newxip;
-	int			newxcnt = 0;
+	TransactionId *newsubxip;
+	int			newxcnt;
+	int			newsubxcnt;
+	bool		overflowed = false;
 
 	Assert(!FirstSnapshotSet);
 	Assert(XactIsoLevel == XACT_REPEATABLE_READ);
@@ -568,9 +571,17 @@ SnapBuildInitialSnapshot(SnapBuild *builder)
 
 	MyProc->xmin = snap->xmin;
 
-	/* allocate in transaction context */
+	/*
+	 * Allocate in transaction context.	
+	 *
+	 * We could use only subxip to store all xids (takenduringrecovery
+	 * snapshot) but that causes useless visibility checks later so we hasle to
+	 * create a normal snapshot.
+	 */
 	newxip = (TransactionId *)
 		palloc(sizeof(TransactionId) * GetMaxSnapshotXidCount());
+	newsubxip = (TransactionId *)
+		palloc(sizeof(TransactionId) * GetMaxSnapshotSubxidCount());
 
 	/*
 	 * snapbuild.c builds transactions in an "inverted" manner, which means it
@@ -578,6 +589,9 @@ SnapBuildInitialSnapshot(SnapBuild *builder)
 	 * classical snapshot by marking all non-committed transactions as
 	 * in-progress. This can be expensive.
 	 */
+	newxcnt = 0;
+	newsubxcnt = 0;
+
 	for (xid = snap->xmin; NormalTransactionIdPrecedes(xid, snap->xmax);)
 	{
 		void	   *test;
@@ -591,12 +605,24 @@ SnapBuildInitialSnapshot(SnapBuild *builder)
 
 		if (test == NULL)
 		{
-			if (newxcnt >= GetMaxSnapshotXidCount())
-				ereport(ERROR,
-						(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
-						 errmsg("initial slot snapshot too large")));
-
-			newxip[newxcnt++] = xid;
+			/* Store the xid to the appropriate xid array */
+			if (ReorderBufferXidIsKnownSubXact(builder->reorder, xid))
+			{
+				if (!overflowed)
+				{
+					if (newsubxcnt >= GetMaxSnapshotSubxidCount())
+						overflowed = true;
+					else
+						newsubxip[newsubxcnt++] = xid;
+				}
+			}
+			else
+			{
+				if (newxcnt >= GetMaxSnapshotXidCount())
+					elog(ERROR,
+						 "too many transactions while creating snapshot");
+				newxip[newxcnt++] = xid;
+			}
 		}
 
 		TransactionIdAdvance(xid);
@@ -606,6 +632,9 @@ SnapBuildInitialSnapshot(SnapBuild *builder)
 	snap->snapshot_type = SNAPSHOT_MVCC;
 	snap->xcnt = newxcnt;
 	snap->xip = newxip;
+	snap->subxcnt = newsubxcnt;
+	snap->subxip = newsubxip;
+	snap->suboverflowed = overflowed;
 
 	return snap;
 }

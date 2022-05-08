@@ -155,8 +155,6 @@ TablespaceCreateDbspace(Oid spcNode, Oid dbNode, bool isRedo)
 				/* Directory creation failed? */
 				if (MakePGDirectory(dir) < 0)
 				{
-					char	   *parentdir;
-
 					/* Failure other than not exists or not in WAL replay? */
 					if (errno != ENOENT || !isRedo)
 						ereport(ERROR,
@@ -169,32 +167,8 @@ TablespaceCreateDbspace(Oid spcNode, Oid dbNode, bool isRedo)
 					 * continue by creating simple parent directories rather
 					 * than a symlink.
 					 */
-
-					/* create two parents up if not exist */
-					parentdir = pstrdup(dir);
-					get_parent_directory(parentdir);
-					get_parent_directory(parentdir);
-					/* Can't create parent and it doesn't already exist? */
-					if (MakePGDirectory(parentdir) < 0 && errno != EEXIST)
-						ereport(ERROR,
-								(errcode_for_file_access(),
-								 errmsg("could not create directory \"%s\": %m",
-										parentdir)));
-					pfree(parentdir);
-
-					/* create one parent up if not exist */
-					parentdir = pstrdup(dir);
-					get_parent_directory(parentdir);
-					/* Can't create parent and it doesn't already exist? */
-					if (MakePGDirectory(parentdir) < 0 && errno != EEXIST)
-						ereport(ERROR,
-								(errcode_for_file_access(),
-								 errmsg("could not create directory \"%s\": %m",
-										parentdir)));
-					pfree(parentdir);
-
 					/* Create database directory */
-					if (MakePGDirectory(dir) < 0)
+					if (pg_mkdir_p(dir, pg_dir_create_mode) < 0)
 						ereport(ERROR,
 								(errcode_for_file_access(),
 								 errmsg("could not create directory \"%s\": %m",

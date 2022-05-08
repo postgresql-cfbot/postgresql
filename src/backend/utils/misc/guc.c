@@ -43,6 +43,7 @@
 #include "access/xlog_internal.h"
 #include "access/xlogprefetcher.h"
 #include "access/xlogrecovery.h"
+#include "access/xlogutils.h"
 #include "catalog/namespace.h"
 #include "catalog/objectaccess.h"
 #include "catalog/pg_authid.h"
@@ -141,7 +142,6 @@ extern int	CommitSiblings;
 extern char *default_tablespace;
 extern char *temp_tablespaces;
 extern bool ignore_checksum_failure;
-extern bool ignore_invalid_pages;
 extern bool synchronize_seqscans;
 
 #ifdef TRACE_SYNCSCAN
@@ -1336,10 +1336,12 @@ static struct config_bool ConfigureNamesBool[] =
 		{"ignore_invalid_pages", PGC_POSTMASTER, DEVELOPER_OPTIONS,
 			gettext_noop("Continues recovery after an invalid pages failure."),
 			gettext_noop("Detection of WAL records having references to "
-						 "invalid pages during recovery causes PostgreSQL to "
+						 "invalid pages or WAL records resulting in invalid "
+						 "directory operations during "
+						 "recovery that cause PostgreSQL"
 						 "raise a PANIC-level error, aborting the recovery. "
 						 "Setting ignore_invalid_pages to true causes "
-						 "the system to ignore invalid page references "
+						 "the system to ignore those inconsistencies "
 						 "in WAL records (but still report a warning), "
 						 "and continue recovery. This behavior may cause "
 						 "crashes, data loss, propagate or hide corruption, "

@@ -11362,11 +11362,12 @@ LOG:  CleanUpLock: deleting: lock(0xb7acd844) id(24688,24696,0,0,0,1)
       <listitem>
        <para>
         If set to <literal>off</literal> (the default), detection of
-        WAL records having references to invalid pages during
+        WAL records having references to invalid pages or
+        WAL records resulting in invalid directory operations during
         recovery causes <productname>PostgreSQL</productname> to
         raise a PANIC-level error, aborting the recovery. Setting
         <varname>ignore_invalid_pages</varname> to <literal>on</literal>
-        causes the system to ignore invalid page references in WAL records
+        causes the system to ignore invalid actions caused by such WAL records
         (but still report a warning), and continue the recovery.
         This behavior may <emphasis>cause crashes, data loss,
         propagate or hide corruption, or other serious problems</emphasis>.

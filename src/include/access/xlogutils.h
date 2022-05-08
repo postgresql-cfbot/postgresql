@@ -54,6 +54,8 @@ typedef enum
 
 extern PGDLLIMPORT HotStandbyState standbyState;
 
+extern bool ignore_invalid_pages;
+
 #define InHotStandby (standbyState >= STANDBY_SNAPSHOT_PENDING)
 
 

@@ -30,6 +30,7 @@
 #include "access/tableam.h"
 #include "access/xact.h"
 #include "access/xloginsert.h"
+#include "access/xlogrecovery.h"
 #include "access/xlogutils.h"
 #include "catalog/catalog.h"
 #include "catalog/dependency.h"
@@ -47,6 +48,7 @@
 #include "commands/defrem.h"
 #include "commands/seclabel.h"
 #include "commands/tablespace.h"
+#include "common/file_perm.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -62,6 +64,7 @@
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
+#include "utils/guc.h"
 #include "utils/pg_locale.h"
 #include "utils/relmapper.h"
 #include "utils/snapmgr.h"
@@ -135,6 +138,7 @@ static void CreateDirAndVersionFile(char *dbpath, Oid dbid, Oid tsid,
 									bool isRedo);
 static void CreateDatabaseUsingFileCopy(Oid src_dboid, Oid dboid, Oid src_tsid,
 										Oid dst_tsid);
+static void maybe_create_directory(char *path);
 
 /*
  * Create a new database using the WAL_LOG strategy.
@@ -3009,6 +3013,43 @@ get_database_name(Oid dbid)
 }
 
 /*
+ * maybe_create_directory()
+ *
+ * During recovery, there's a case where we validly need to recover a missing
+ * tablespace directory so that recovery can continue.  This happens when
+ * recovery wants to create a database but the holding tablespace has been
+ * removed before the server stopped.  Since we expect that the directory will
+ * be gone before reaching recovery consistency, and we have no knowledge about
+ * the tablespace other than its OID here, we create a real directory under
+ * pg_tblspc here instead of restoring the symlink.  ignore_invalid_pages=on
+ * reduces the error level so that recovery can continue.
+ */
+static void
+maybe_create_directory(char *path)
+{
+	struct stat	st;
+
+	Assert(RecoveryInProgress());
+
+	if (stat(path, &st) == 0)
+		return;
+
+	/* XXX: Do we make sure that the path is under pg_tblspc? */
+
+	if (reachedConsistency && !ignore_invalid_pages)
+		ereport(PANIC,
+				errmsg("missing directory \"%s\"", path));
+
+	elog(reachedConsistency ? WARNING : DEBUG1,
+		 "creating missing directory: %s", path);
+
+	if (pg_mkdir_p(path, pg_dir_create_mode) != 0)
+		ereport(PANIC,
+				errmsg("could not create missing directory \"%s\": %m", path));
+}
+
+
+/*
  * DATABASE resource manager's routines
  */
 void
@@ -3044,6 +3085,30 @@ dbase_redo(XLogReaderState *record)
 								dst_path)));
 		}
 
+		if (stat(dst_path, &st) < 0)
+		{
+			char *parent_path;
+
+			if (errno != ENOENT)
+				ereport(FATAL,
+						errmsg("could not stat directory \"%s\": %m",
+							   dst_path));
+
+			/* create the parent directory if needed and valid */
+			parent_path = pstrdup(dst_path);
+			get_parent_directory(parent_path);
+			maybe_create_directory(parent_path);
+		}
+
+		/*
+		 * There's a case where the copy source directory is missing for the
+		 * same reason above.  Create the emtpy source directory so that
+		 * copydir below doesn't fail.  The directory will be dropped soon by
+		 * recovery.
+		 */
+		if (stat(src_path, &st) < 0 && errno == ENOENT)
+			maybe_create_directory(src_path);
+
 		/*
 		 * Force dirty buffers out to disk, to ensure source database is
 		 * up-to-date for the copy.
@@ -3068,8 +3133,14 @@ dbase_redo(XLogReaderState *record)
 		xl_dbase_create_wal_log_rec *xlrec =
 		(xl_dbase_create_wal_log_rec *) XLogRecGetData(record);
 		char	   *dbpath;
+		char	   *parent_path;
 
 		dbpath = GetDatabasePath(xlrec->db_id, xlrec->tablespace_id);
+
+		/* create the parent directory if needed and valid */
+		parent_path = pstrdup(dbpath);
+		get_parent_directory(parent_path);
+		maybe_create_directory(parent_path);
 
 		/* Create the database directory with the version file. */
 		CreateDirAndVersionFile(dbpath, xlrec->db_id, xlrec->tablespace_id,

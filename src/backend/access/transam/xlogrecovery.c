@@ -2009,6 +2009,53 @@ xlogrecovery_redo(XLogReaderState *record, TimeLineID replayTLI)
 }
 
 /*
+ * Makes sure that ./pg_tblspc directory doesn't contain a real directory.
+ *
+ * This is intended to be called after reaching consistency.
+ * ignore_invalid_pages=on turns into the PANIC error into WARNING so that
+ * recovery can continue.
+ * 
+ * Note that it is the normal behavior when allow_in_place_tablespaces=on, but
+ * we don't bother caring that case since it is a developer-only setting.
+ */
+static void
+CheckTablespaceDirectory(void)
+{
+	char *tblspc_path = "./pg_tblspc";
+	DIR		   *dir;
+	struct dirent *de;
+
+	dir = AllocateDir(tblspc_path);
+	while ((de = ReadDir(dir, tblspc_path)) != NULL)
+	{
+		char	path[MAXPGPATH];
+		char   *p;
+#ifndef WIN32
+		struct stat st;
+#endif
+
+		/* Skip entries of non-oid names */
+		for (p = de->d_name; *p && isdigit(*p); p++);
+		if (*p)
+			continue;
+
+		snprintf(path, MAXPGPATH, "%s/%s", tblspc_path, de->d_name);
+
+#ifndef WIN32
+		if (lstat(path, &st) < 0)
+			ereport(ERROR, errcode_for_file_access(),
+					errmsg("could not stat file \"%s\": %m", path));
+
+		if (!S_ISLNK(st.st_mode))
+#else
+		if (!pgwin32_is_junction(path))
+#endif
+			elog(ignore_invalid_pages ? WARNING : PANIC,
+				 "real directory found in pg_tblspc directory: %s", de->d_name);
+	}
+}
+
+/*
  * Checks if recovery has reached a consistent state. When consistency is
  * reached and we have a valid starting standby snapshot, tell postmaster
  * that it can start accepting read-only connections.
@@ -2073,6 +2120,14 @@ CheckRecoveryConsistency(void)
 		ereport(LOG,
 				(errmsg("consistent recovery state reached at %X/%X",
 						LSN_FORMAT_ARGS(lastReplayedEndRecPtr))));
+
+		/*
+		 * Check that pg_tblspc doesn't contain a real
+		 * directory. Database/CREATE_* records may create a tablespace
+		 * directory that should have been removed until consistency is
+		 * reached.
+		 */
+		CheckTablespaceDirectory();
 	}
 
 	/*

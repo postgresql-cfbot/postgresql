@@ -139,6 +139,123 @@ WITH RECURSIVE outermost(x) AS (
  )
  SELECT * FROM outermost ORDER BY 1;
 
+-- Test multiple self-references in different recursive anchors
+WITH RECURSIVE foo(i) AS
+    (values (1)
+    UNION ALL
+       (SELECT i+1 FROM foo WHERE i < 5
+          UNION ALL
+       SELECT i+1 FROM foo WHERE i < 2)
+) SELECT * FROM foo;
+
+-- No explicit parentheses
+WITH RECURSIVE foo(i) AS
+    (values (1)
+      UNION ALL
+    SELECT i+1 FROM foo WHERE i < 5
+      UNION ALL
+    SELECT i+1 FROM foo WHERE i < 2
+) SELECT * FROM foo;
+
+WITH RECURSIVE foo(i) AS
+    (values (1)
+    UNION ALL
+	   SELECT * FROM
+       (SELECT i+1 FROM foo WHERE i < 5
+          UNION ALL
+       SELECT i+1 FROM foo WHERE i < 2) AS t
+) SELECT * FROM foo;
+
+CREATE TEMP TABLE flights (
+  source  TEXT,
+  dest    TEXT,
+  carrier TEXT
+);
+
+INSERT INTO flights VALUES
+('A', 'B', 'C1'),
+('A', 'C', 'C2'),
+('A', 'D', 'C1'),
+('B', 'D', 'C3'),
+('C', 'E', 'C3')
+;
+
+CREATE TEMP TABLE trains (
+  source TEXT,
+  dest   TEXT
+);
+
+INSERT INTO trains VALUES
+('B', 'C'),
+('A', 'E'),
+('C', 'E')
+;
+
+WITH RECURSIVE connections(source, dest, carrier) AS (
+     SELECT f.source, f.dest, f.carrier
+      FROM flights f
+      WHERE f.source = 'A'
+    UNION ALL
+      SELECT r.source, r.dest, 'Rail' AS carrier
+      FROM trains r
+      WHERE r.source = 'A'
+  UNION ALL -- two recursive terms below
+     SELECT c.source, f.dest, f.carrier
+      FROM connections c, flights f
+      WHERE c.dest = f.source
+    UNION ALL
+      SELECT c.source, r.dest, 'Rail' AS carrier
+      FROM connections c, trains r
+      WHERE c.dest = r.source
+)
+SELECT * FROM connections;
+
+-- Test mixed UNION and UNION ALL with multiple recursive anchors
+WITH RECURSIVE t(x) AS
+(
+  SELECT 2
+    UNION
+  SELECT 1
+    UNION ALL
+  SELECT x+1
+  FROM   t
+  WHERE  x < 4
+    UNION
+  SELECT x*2
+  FROM   t
+  WHERE  x >= 4 AND x < 8
+    UNION ALL
+  SELECT x+1
+  FROM   t
+  WHERE  x >= 4 AND x < 8
+) SELECT * FROM t;
+
+WITH RECURSIVE foo(i) AS
+    (values (1)
+      UNION
+    SELECT i+1 FROM foo WHERE i < 2
+      UNION ALL
+    SELECT i+1 FROM foo WHERE i < 2
+      UNION
+    SELECT i+1 FROM foo WHERE i < 2
+      UNION ALL
+    SELECT i+1 FROM foo WHERE i < 2
+      UNION
+    SELECT i+1 FROM foo WHERE i < 2
+      UNION ALL
+    SELECT i+1 FROM foo WHERE i < 2
+      UNION
+    SELECT i+1 FROM foo WHERE i < 2
+      UNION ALL
+    SELECT i+1 FROM foo WHERE i < 2
+      UNION
+    SELECT i+1 FROM foo WHERE i < 2
+      UNION ALL
+    SELECT i+1 FROM foo WHERE i < 2
+      UNION
+    SELECT i+1 FROM foo WHERE i < 2
+) SELECT * FROM foo;
+
 --
 -- Some examples with a tree
 --
@@ -887,7 +1004,7 @@ SELECT * FROM x;
 WITH RECURSIVE foo(i) AS
     (values (1)
     UNION ALL
-       (SELECT i+1 FROM foo WHERE i < 10
+       (SELECT x.i+y.i FROM foo AS x, foo AS y WHERE x.i < 10
           UNION ALL
        SELECT i+1 FROM foo WHERE i < 5)
 ) SELECT * FROM foo;
@@ -896,7 +1013,7 @@ WITH RECURSIVE foo(i) AS
     (values (1)
     UNION ALL
 	   SELECT * FROM
-       (SELECT i+1 FROM foo WHERE i < 10
+       (SELECT x.i+y.i FROM foo AS x, foo as y WHERE x.i < 10
           UNION ALL
        SELECT i+1 FROM foo WHERE i < 5) AS t
 ) SELECT * FROM foo;

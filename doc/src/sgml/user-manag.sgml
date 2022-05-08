@@ -236,6 +236,44 @@ CREATE USER <replaceable>name</replaceable>;
        </para>
       </listitem>
      </varlistentry>
+
+     <varlistentry>
+      <term>inheritance of privileges<indexterm><primary>role</primary><secondary>privilege to inherit</secondary></indexterm></term>
+      <listitem>
+       <para>
+        A role can explicitly be restricted at time of creation from inheriting privileges of 
+        roles it is a member of (except for superusers, since those bypass all permission checks.)
+        Restricting privileges is done by the <literal>NOINHERIT</literal> option.
+        If no option is specified, <literal>INHERIT</literal> is the default. So to create a role that inherits
+        privileges, use either: 
+<programlisting>
+CREATE ROLE <replaceable>name</replaceable> INHERIT;
+CREATE ROLE <replaceable>name</replaceable>;
+</programlisting>
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term>bypass row-level security<indexterm><primary>role</primary><secondary>privilege to bypass</secondary></indexterm></term>
+      <listitem>
+       <para>
+        A role must be explicitly given permission to bypass row-level security (RLS) policy.
+        (except for superusers, since those bypass all permission checks).
+        To create such a role, use <literal>CREATE ROLE <replaceable>name</replaceable> BYPASSRLS</literal>.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term>connection limit<indexterm><primary>role</primary><secondary>privilege to limit connection</secondary></indexterm></term>
+      <listitem>
+       <para>
+        Connection limit can specify how many concurrent connections a role can make.
+        -1 (the default) means no limit. To create such a role, use <literal>CREATE ROLE <replaceable>name</replaceable> CONNECTION LIMIT<replaceable> connlimit</replaceable> LOGIN</literal>.
+       </para>
+      </listitem>
+     </varlistentry>
     </variablelist>
 
     A role's attributes can be modified after creation with

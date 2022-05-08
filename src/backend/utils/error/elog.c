@@ -616,6 +616,8 @@ errfinish(const char *filename, int lineno, const char *funcname)
 		pfree(edata->constraint_name);
 	if (edata->internalquery)
 		pfree(edata->internalquery);
+	if (edata->query)
+		pfree(edata->query);
 
 	errordata_stack_depth--;
 
@@ -1594,6 +1596,8 @@ CopyErrorData(void)
 		newedata->constraint_name = pstrdup(newedata->constraint_name);
 	if (newedata->internalquery)
 		newedata->internalquery = pstrdup(newedata->internalquery);
+	if (newedata->query)
+		newedata->query = pstrdup(newedata->query);
 
 	/* Use the calling context for string allocation */
 	newedata->assoc_context = CurrentMemoryContext;
@@ -1634,6 +1638,8 @@ FreeErrorData(ErrorData *edata)
 		pfree(edata->constraint_name);
 	if (edata->internalquery)
 		pfree(edata->internalquery);
+	if (edata->query)
+		pfree(edata->query);
 	pfree(edata);
 }
 
@@ -1713,6 +1719,8 @@ ThrowErrorData(ErrorData *edata)
 	newedata->internalpos = edata->internalpos;
 	if (edata->internalquery)
 		newedata->internalquery = pstrdup(edata->internalquery);
+	if (edata->query)
+		newedata->query = pstrdup(edata->query);
 
 	MemoryContextSwitchTo(oldcontext);
 	recursion_depth--;
@@ -1779,6 +1787,8 @@ ReThrowError(ErrorData *edata)
 		newedata->constraint_name = pstrdup(newedata->constraint_name);
 	if (newedata->internalquery)
 		newedata->internalquery = pstrdup(newedata->internalquery);
+	if (newedata->query)
+		newedata->query = pstrdup(newedata->query);
 
 	/* Reset the assoc_context to be ErrorContext */
 	newedata->assoc_context = ErrorContext;
@@ -3427,4 +3437,35 @@ trace_recovery(int trace_level)
 		return LOG;
 
 	return trace_level;
+}
+
+/*
+ * set_errquery --- set the query in the PL/PGSQL block, which is causing the exception
+ *
+ * We have PG_CONTEXT diagnostic item, which returns a text string with line(s) of text describing the call stack.
+ * To get the exact SQL query which is causing the error requires some text processing.
+ *
+ * To skip the text processing to get the sql query, we store the SQL statement in the 'ErrorData' object, and return the plain SQL when the user requests for it.
+ * In PL/PGSQL context, at this moment the `ErrorData` holds two types of SQL error members.
+ * 1. internalquery, which always returns the sql query which is not a valid sql statement
+ * 2. query, which always returns the sql query which is causing the current exception
+ */
+int
+set_errquery(const char *query)
+{
+	ErrorData  *edata = &errordata[errordata_stack_depth];
+
+	/* we don't bother incrementing recursion_depth */
+	CHECK_STACK_DEPTH();
+
+	if (edata->query)
+	{
+		pfree(edata->query);
+		edata->query = NULL;
+	}
+
+	if (query)
+		edata->query = MemoryContextStrdup(edata->assoc_context, query);
+
+	return 0;
 }

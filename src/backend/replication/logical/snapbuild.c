@@ -123,6 +123,7 @@
 #include "access/heapam_xlog.h"
 #include "access/transam.h"
 #include "access/xact.h"
+#include "common/file_utils.h"
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "replication/logical.h"
@@ -1946,15 +1947,13 @@ CheckPointSnapBuild(void)
 		uint32		hi;
 		uint32		lo;
 		XLogRecPtr	lsn;
-		struct stat statbuf;
 
 		if (strcmp(snap_de->d_name, ".") == 0 ||
 			strcmp(snap_de->d_name, "..") == 0)
 			continue;
 
 		snprintf(path, sizeof(path), "pg_logical/snapshots/%s", snap_de->d_name);
-
-		if (lstat(path, &statbuf) == 0 && !S_ISREG(statbuf.st_mode))
+		if (get_dirent_type(path, snap_de, false, ERROR) != PGFILETYPE_REG)
 		{
 			elog(DEBUG1, "only regular files expected: %s", path);
 			continue;
@@ -1965,16 +1964,10 @@ CheckPointSnapBuild(void)
 		 * everything but are postfixed by .$pid.tmp. We can just remove them
 		 * the same as other files because there can be none that are
 		 * currently being written that are older than cutoff.
-		 *
-		 * We just log a message if a file doesn't fit the pattern, it's
-		 * probably some editors lock/state file or similar...
 		 */
 		if (sscanf(snap_de->d_name, "%X-%X.snap", &hi, &lo) != 2)
-		{
-			ereport(LOG,
+			ereport(ERROR,
 					(errmsg("could not parse file name \"%s\"", path)));
-			continue;
-		}
 
 		lsn = ((uint64) hi) << 32 | lo;
 
@@ -1983,19 +1976,11 @@ CheckPointSnapBuild(void)
 		{
 			elog(DEBUG1, "removing snapbuild snapshot %s", path);
 
-			/*
-			 * It's not particularly harmful, though strange, if we can't
-			 * remove the file here. Don't prevent the checkpoint from
-			 * completing, that'd be a cure worse than the disease.
-			 */
 			if (unlink(path) < 0)
-			{
-				ereport(LOG,
+				ereport(ERROR,
 						(errcode_for_file_access(),
 						 errmsg("could not remove file \"%s\": %m",
 								path)));
-				continue;
-			}
 		}
 	}
 	FreeDir(snap_dir);

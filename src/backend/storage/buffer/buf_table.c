@@ -143,10 +143,13 @@ BufTableInsert(BufferTag *tagPtr, uint32 hashcode, int buf_id)
  * BufTableDelete
  *		Delete the hashtable entry for given tag (which must exist)
  *
+ * If reuse flag is true, deleted entry is cached for reuse, and caller
+ * must call BufTableInsert next.
+ *
  * Caller must hold exclusive lock on BufMappingLock for tag's partition
  */
 void
-BufTableDelete(BufferTag *tagPtr, uint32 hashcode)
+BufTableDelete(BufferTag *tagPtr, uint32 hashcode, bool reuse)
 {
 	BufferLookupEnt *result;
 
@@ -154,7 +157,7 @@ BufTableDelete(BufferTag *tagPtr, uint32 hashcode)
 		hash_search_with_hash_value(SharedBufHash,
 									(void *) tagPtr,
 									hashcode,
-									HASH_REMOVE,
+									reuse ? HASH_REUSE : HASH_REMOVE,
 									NULL);
 
 	if (!result)				/* shouldn't happen */

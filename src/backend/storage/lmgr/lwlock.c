@@ -155,6 +155,8 @@ static const char *const BuiltinTrancheNames[] = {
 	"LockFastPath",
 	/* LWTRANCHE_BUFFER_MAPPING: */
 	"BufferMapping",
+	/* LWTRANCHE_BUFFER_EVICT: */
+	"BufferEvict",
 	/* LWTRANCHE_LOCK_MANAGER: */
 	"LockManager",
 	/* LWTRANCHE_PREDICATE_LOCK_MANAGER: */
@@ -531,6 +533,9 @@ InitializeLWLocks(void)
 	lock = MainLWLockArray + BUFFER_MAPPING_LWLOCK_OFFSET;
 	for (id = 0; id < NUM_BUFFER_PARTITIONS; id++, lock++)
 		LWLockInitialize(&lock->lock, LWTRANCHE_BUFFER_MAPPING);
+	lock = MainLWLockArray + BUFFER_EVICT_LWLOCK_OFFSET;
+	for (id = 0; id < NUM_BUFFER_EVICT_PARTITIONS; id++, lock++)
+		LWLockInitialize(&lock->lock, LWTRANCHE_BUFFER_EVICT);
 
 	/* Initialize lmgrs' LWLocks in main array */
 	lock = MainLWLockArray + LOCK_MANAGER_LWLOCK_OFFSET;

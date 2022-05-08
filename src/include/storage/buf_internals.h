@@ -126,9 +126,14 @@ typedef struct buftag
  */
 #define BufTableHashPartition(hashcode) \
 	((hashcode) % NUM_BUFFER_PARTITIONS)
+#define BufTableEvictPartition(hashcode) \
+	((hashcode) % NUM_BUFFER_EVICT_PARTITIONS)
 #define BufMappingPartitionLock(hashcode) \
 	(&MainLWLockArray[BUFFER_MAPPING_LWLOCK_OFFSET + \
 		BufTableHashPartition(hashcode)].lock)
+#define BufEvictPartitionLock(hashcode) \
+	(&MainLWLockArray[BUFFER_EVICT_LWLOCK_OFFSET + \
+		BufTableEvictPartition(hashcode)].lock)
 #define BufMappingPartitionLockByIndex(i) \
 	(&MainLWLockArray[BUFFER_MAPPING_LWLOCK_OFFSET + (i)].lock)
 
@@ -328,7 +333,7 @@ extern void InitBufTable(int size);
 extern uint32 BufTableHashCode(BufferTag *tagPtr);
 extern int	BufTableLookup(BufferTag *tagPtr, uint32 hashcode);
 extern int	BufTableInsert(BufferTag *tagPtr, uint32 hashcode, int buf_id);
-extern void BufTableDelete(BufferTag *tagPtr, uint32 hashcode);
+extern void BufTableDelete(BufferTag *tagPtr, uint32 hashcode, bool reuse);
 
 /* localbuf.c */
 extern PrefetchBufferResult PrefetchLocalBuffer(SMgrRelation smgr,

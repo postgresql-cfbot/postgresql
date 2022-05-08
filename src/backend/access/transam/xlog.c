@@ -6129,7 +6129,8 @@ LogCheckpointEnd(bool restartpoint)
 						"%d WAL file(s) added, %d removed, %d recycled; "
 						"write=%ld.%03d s, sync=%ld.%03d s, total=%ld.%03d s; "
 						"sync files=%d, longest=%ld.%03d s, average=%ld.%03d s; "
-						"distance=%d kB, estimate=%d kB",
+						"distance=%d kB, estimate=%d kB; "
+						"lsn=%X/%X, redo lsn=%X/%X",
 						CheckpointStats.ckpt_bufs_written,
 						(double) CheckpointStats.ckpt_bufs_written * 100 / NBuffers,
 						CheckpointStats.ckpt_segs_added,
@@ -6142,14 +6143,21 @@ LogCheckpointEnd(bool restartpoint)
 						longest_msecs / 1000, (int) (longest_msecs % 1000),
 						average_msecs / 1000, (int) (average_msecs % 1000),
 						(int) (PrevCheckPointDistance / 1024.0),
-						(int) (CheckPointDistanceEstimate / 1024.0))));
+						(int) (CheckPointDistanceEstimate / 1024.0),
+						/*
+						 * ControlFileLock is not required as we are the only
+						 * updator of these variables.
+						 */
+						LSN_FORMAT_ARGS(ControlFile->checkPoint),
+						LSN_FORMAT_ARGS(ControlFile->checkPointCopy.redo))));
 	else
 		ereport(LOG,
 				(errmsg("checkpoint complete: wrote %d buffers (%.1f%%); "
 						"%d WAL file(s) added, %d removed, %d recycled; "
 						"write=%ld.%03d s, sync=%ld.%03d s, total=%ld.%03d s; "
 						"sync files=%d, longest=%ld.%03d s, average=%ld.%03d s; "
-						"distance=%d kB, estimate=%d kB",
+						"distance=%d kB, estimate=%d kB; "
+						"lsn=%X/%X, redo lsn=%X/%X",
 						CheckpointStats.ckpt_bufs_written,
 						(double) CheckpointStats.ckpt_bufs_written * 100 / NBuffers,
 						CheckpointStats.ckpt_segs_added,
@@ -6162,7 +6170,13 @@ LogCheckpointEnd(bool restartpoint)
 						longest_msecs / 1000, (int) (longest_msecs % 1000),
 						average_msecs / 1000, (int) (average_msecs % 1000),
 						(int) (PrevCheckPointDistance / 1024.0),
-						(int) (CheckPointDistanceEstimate / 1024.0))));
+						(int) (CheckPointDistanceEstimate / 1024.0),
+						/*
+						 * ControlFileLock is not required as we are the only
+						 * updator of these variables.
+						 */
+						LSN_FORMAT_ARGS(ControlFile->checkPoint),
+						LSN_FORMAT_ARGS(ControlFile->checkPointCopy.redo))));
 }
 
 /*

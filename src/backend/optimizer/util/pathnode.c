@@ -4241,7 +4241,14 @@ do { \
 
 		MemoryContextSwitchTo(oldcontext);
 	}
-	bms_free(required_outer);
+
+	/*
+	 * If adjust_child_relids_multilevel don't do replacements it returns
+	 * the original set, not a copy. It is possible in the case of asymmetric
+	 * JOIN and child_rel->relids contains relids only of plane relations.
+	 */
+	if (required_outer != old_ppi->ppi_req_outer)
+		bms_free(required_outer);
 
 	new_path->param_info = new_ppi;
 

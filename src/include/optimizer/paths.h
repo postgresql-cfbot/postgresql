@@ -110,7 +110,12 @@ extern bool have_join_order_restriction(PlannerInfo *root,
 extern bool have_dangerous_phv(PlannerInfo *root,
 							   Relids outer_relids, Relids inner_params);
 extern void mark_dummy_rel(RelOptInfo *rel);
-
+extern void try_asymmetric_partitionwise_join(PlannerInfo *root,
+											  RelOptInfo *joinrel,
+											  RelOptInfo *outer_rel,
+											  RelOptInfo *inner_rel,
+											  JoinType jointype,
+											  JoinPathExtraData *extra);
 /*
  * equivclass.c
  *	  routines for managing EquivalenceClasses

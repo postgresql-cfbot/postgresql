@@ -199,6 +199,9 @@ extern bool get_index_isreplident(Oid index_oid);
 extern bool get_index_isvalid(Oid index_oid);
 extern bool get_index_isclustered(Oid index_oid);
 
+extern char *get_statistics_name(Oid stxid);
+extern Oid	get_statistics_namespace(Oid stxid);
+
 #define type_is_array(typid)  (get_element_type(typid) != InvalidOid)
 /* type_is_array_domain accepts both plain arrays and domains over arrays */
 #define type_is_array_domain(typid)  (get_base_element_type(typid) != InvalidOid)

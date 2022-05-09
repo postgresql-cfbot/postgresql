@@ -31,6 +31,7 @@ extern void psql_setup_cancel_handler(void);
 extern PGresult *PSQLexec(const char *query);
 extern int	PSQLexecWatch(const char *query, const printQueryOpt *opt, FILE *printQueryFout);
 
+extern void echoQuery(FILE *out, bool is_internal, const char *query);
 extern bool SendQuery(const char *query);
 
 extern bool is_superuser(void);

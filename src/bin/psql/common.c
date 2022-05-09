@@ -539,6 +539,18 @@ PrintTiming(double elapsed_msec)
 		   elapsed_msec, days, (int) hours, (int) minutes, seconds);
 }
 
+/*
+ * Echo user query
+ */
+void
+echoQuery(FILE *out, bool is_internal, const char *query)
+{
+	if (is_internal)
+		fprintf(out, _("-- INTERNAL QUERY:\n%s\n\n"), query);
+	else
+		fprintf(out, _("-- QUERY:\n%s\n\n"), query);
+	fflush(out);
+}
 
 /*
  * PSQLexec
@@ -565,18 +577,9 @@ PSQLexec(const char *query)
 
 	if (pset.echo_hidden != PSQL_ECHO_HIDDEN_OFF)
 	{
-		printf(_("********* QUERY **********\n"
-				 "%s\n"
-				 "**************************\n\n"), query);
-		fflush(stdout);
+		echoQuery(stdout, true, query);
 		if (pset.logfile)
-		{
-			fprintf(pset.logfile,
-					_("********* QUERY **********\n"
-					  "%s\n"
-					  "**************************\n\n"), query);
-			fflush(pset.logfile);
-		}
+			echoQuery(pset.logfile, true, query);
 
 		if (pset.echo_hidden == PSQL_ECHO_HIDDEN_NOEXEC)
 			return NULL;
@@ -813,10 +816,7 @@ ExecQueryTuples(const PGresult *result)
 				 * assumes that MainLoop did that, so we have to do it here.
 				 */
 				if (pset.echo == PSQL_ECHO_ALL && !pset.singlestep)
-				{
-					puts(query);
-					fflush(stdout);
-				}
+					echoQuery(stdout, false, query);
 
 				if (!SendQuery(query))
 				{
@@ -1148,13 +1148,7 @@ SendQuery(const char *query)
 	}
 
 	if (pset.logfile)
-	{
-		fprintf(pset.logfile,
-				_("********* QUERY **********\n"
-				  "%s\n"
-				  "**************************\n\n"), query);
-		fflush(pset.logfile);
-	}
+		echoQuery(pset.logfile, false, query);
 
 	SetCancelConn(pset.db);
 

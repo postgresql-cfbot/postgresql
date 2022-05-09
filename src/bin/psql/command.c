@@ -5191,18 +5191,9 @@ echo_hidden_command(const char *query)
 {
 	if (pset.echo_hidden != PSQL_ECHO_HIDDEN_OFF)
 	{
-		printf(_("********* QUERY **********\n"
-				 "%s\n"
-				 "**************************\n\n"), query);
-		fflush(stdout);
+		echoQuery(stdout, true, query);
 		if (pset.logfile)
-		{
-			fprintf(pset.logfile,
-					_("********* QUERY **********\n"
-					  "%s\n"
-					  "**************************\n\n"), query);
-			fflush(pset.logfile);
-		}
+			echoQuery(pset.logfile, true, query);
 
 		if (pset.echo_hidden == PSQL_ECHO_HIDDEN_NOEXEC)
 			return false;

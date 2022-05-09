@@ -29,24 +29,58 @@ SELECT * FROM test_extdep_commands;
 
 -- First, test that dependent objects go away when the extension is dropped.
 SELECT * FROM test_extdep_commands \gexec
+-- QUERY:
  CREATE SCHEMA test_ext
+
+-- QUERY:
  CREATE EXTENSION test_ext5 SCHEMA test_ext
+
+-- QUERY:
  SET search_path TO test_ext
+
+-- QUERY:
  CREATE TABLE a (a1 int)
 
+-- QUERY:
+
+
+-- QUERY:
  CREATE FUNCTION b() RETURNS TRIGGER LANGUAGE plpgsql AS
    $$ BEGIN NEW.a1 := NEW.a1 + 42; RETURN NEW; END; $$
+
+-- QUERY:
  ALTER FUNCTION b() DEPENDS ON EXTENSION test_ext5
 
+-- QUERY:
+
+
+-- QUERY:
  CREATE TRIGGER c BEFORE INSERT ON a FOR EACH ROW EXECUTE PROCEDURE b()
+
+-- QUERY:
  ALTER TRIGGER c ON a DEPENDS ON EXTENSION test_ext5
 
+-- QUERY:
+
+
+-- QUERY:
  CREATE MATERIALIZED VIEW d AS SELECT * FROM a
+
+-- QUERY:
  ALTER MATERIALIZED VIEW d DEPENDS ON EXTENSION test_ext5
 
+-- QUERY:
+
+
+-- QUERY:
  CREATE INDEX e ON a (a1)
+
+-- QUERY:
  ALTER INDEX e DEPENDS ON EXTENSION test_ext5
+
+-- QUERY:
  RESET search_path
+
 -- A dependent object made dependent again has no effect
 ALTER FUNCTION test_ext.b() DEPENDS ON EXTENSION test_ext5;
 -- make sure we have the right dependencies on the extension
@@ -78,24 +112,58 @@ NOTICE:  drop cascades to table test_ext.a
 -- Second test: If we drop the table, the objects are dropped too and no
 -- vestige remains in pg_depend.
 SELECT * FROM test_extdep_commands \gexec
+-- QUERY:
  CREATE SCHEMA test_ext
+
+-- QUERY:
  CREATE EXTENSION test_ext5 SCHEMA test_ext
+
+-- QUERY:
  SET search_path TO test_ext
+
+-- QUERY:
  CREATE TABLE a (a1 int)
 
+-- QUERY:
+
+
+-- QUERY:
  CREATE FUNCTION b() RETURNS TRIGGER LANGUAGE plpgsql AS
    $$ BEGIN NEW.a1 := NEW.a1 + 42; RETURN NEW; END; $$
+
+-- QUERY:
  ALTER FUNCTION b() DEPENDS ON EXTENSION test_ext5
 
+-- QUERY:
+
+
+-- QUERY:
  CREATE TRIGGER c BEFORE INSERT ON a FOR EACH ROW EXECUTE PROCEDURE b()
+
+-- QUERY:
  ALTER TRIGGER c ON a DEPENDS ON EXTENSION test_ext5
 
+-- QUERY:
+
+
+-- QUERY:
  CREATE MATERIALIZED VIEW d AS SELECT * FROM a
+
+-- QUERY:
  ALTER MATERIALIZED VIEW d DEPENDS ON EXTENSION test_ext5
 
+-- QUERY:
+
+
+-- QUERY:
  CREATE INDEX e ON a (a1)
+
+-- QUERY:
  ALTER INDEX e DEPENDS ON EXTENSION test_ext5
+
+-- QUERY:
  RESET search_path
+
 DROP TABLE test_ext.a;		-- should fail, require cascade
 ERROR:  cannot drop table test_ext.a because other objects depend on it
 DETAIL:  materialized view test_ext.d depends on table test_ext.a
@@ -116,24 +184,58 @@ DROP EXTENSION test_ext5;
 DROP SCHEMA test_ext CASCADE;
 -- Third test: we can drop the objects individually
 SELECT * FROM test_extdep_commands \gexec
+-- QUERY:
  CREATE SCHEMA test_ext
+
+-- QUERY:
  CREATE EXTENSION test_ext5 SCHEMA test_ext
+
+-- QUERY:
  SET search_path TO test_ext
+
+-- QUERY:
  CREATE TABLE a (a1 int)
 
+-- QUERY:
+
+
+-- QUERY:
  CREATE FUNCTION b() RETURNS TRIGGER LANGUAGE plpgsql AS
    $$ BEGIN NEW.a1 := NEW.a1 + 42; RETURN NEW; END; $$
+
+-- QUERY:
  ALTER FUNCTION b() DEPENDS ON EXTENSION test_ext5
 
+-- QUERY:
+
+
+-- QUERY:
  CREATE TRIGGER c BEFORE INSERT ON a FOR EACH ROW EXECUTE PROCEDURE b()
+
+-- QUERY:
  ALTER TRIGGER c ON a DEPENDS ON EXTENSION test_ext5
 
+-- QUERY:
+
+
+-- QUERY:
  CREATE MATERIALIZED VIEW d AS SELECT * FROM a
+
+-- QUERY:
  ALTER MATERIALIZED VIEW d DEPENDS ON EXTENSION test_ext5
 
+-- QUERY:
+
+
+-- QUERY:
  CREATE INDEX e ON a (a1)
+
+-- QUERY:
  ALTER INDEX e DEPENDS ON EXTENSION test_ext5
+
+-- QUERY:
  RESET search_path
+
 SET search_path TO test_ext;
 DROP TRIGGER c ON a;
 DROP FUNCTION b();
@@ -156,24 +258,58 @@ NOTICE:  drop cascades to extension test_ext5
 -- Fourth test: we can mark the objects as dependent, then unmark; then the
 -- drop of the extension does nothing
 SELECT * FROM test_extdep_commands \gexec
+-- QUERY:
  CREATE SCHEMA test_ext
+
+-- QUERY:
  CREATE EXTENSION test_ext5 SCHEMA test_ext
+
+-- QUERY:
  SET search_path TO test_ext
+
+-- QUERY:
  CREATE TABLE a (a1 int)
 
+-- QUERY:
+
+
+-- QUERY:
  CREATE FUNCTION b() RETURNS TRIGGER LANGUAGE plpgsql AS
    $$ BEGIN NEW.a1 := NEW.a1 + 42; RETURN NEW; END; $$
+
+-- QUERY:
  ALTER FUNCTION b() DEPENDS ON EXTENSION test_ext5
 
+-- QUERY:
+
+
+-- QUERY:
  CREATE TRIGGER c BEFORE INSERT ON a FOR EACH ROW EXECUTE PROCEDURE b()
+
+-- QUERY:
  ALTER TRIGGER c ON a DEPENDS ON EXTENSION test_ext5
 
+-- QUERY:
+
+
+-- QUERY:
  CREATE MATERIALIZED VIEW d AS SELECT * FROM a
+
+-- QUERY:
  ALTER MATERIALIZED VIEW d DEPENDS ON EXTENSION test_ext5
 
+-- QUERY:
+
+
+-- QUERY:
  CREATE INDEX e ON a (a1)
+
+-- QUERY:
  ALTER INDEX e DEPENDS ON EXTENSION test_ext5
+
+-- QUERY:
  RESET search_path
+
 SET search_path TO test_ext;
 ALTER FUNCTION b() NO DEPENDS ON EXTENSION test_ext5;
 ALTER TRIGGER c ON a NO DEPENDS ON EXTENSION test_ext5;

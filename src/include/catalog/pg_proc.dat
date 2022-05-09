@@ -6398,6 +6398,10 @@
   prorettype => 'text', proargtypes => 'text',
   prosrc => 'pg_current_logfile_1arg' },
 
+{ oid => '9777', descr => 'test ProcSignalBarrier',
+  proname => 'pg_test_procsignal_barrier', provolatile => 'v', prorettype => 'void',
+  proargtypes => '', prosrc => 'pg_test_procsignal_barrier' },
+
 { oid => '2623', descr => 'get information about file',
   proname => 'pg_stat_file', provolatile => 'v', prorettype => 'record',
   proargtypes => 'text',

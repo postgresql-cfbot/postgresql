@@ -393,6 +393,11 @@ WaitForProcSignalBarrier(uint64 generation)
 {
 	Assert(generation <= pg_atomic_read_u64(&ProcSignal->psh_barrierGeneration));
 
+	elog(DEBUG1,
+		 "waiting for all backends to process ProcSignalBarrier generation "
+		 UINT64_FORMAT,
+		 generation);
+
 	for (int i = NumProcSignalSlots - 1; i >= 0; i--)
 	{
 		ProcSignalSlot *slot = &ProcSignal->psh_slot[i];
@@ -407,12 +412,21 @@ WaitForProcSignalBarrier(uint64 generation)
 		oldval = pg_atomic_read_u64(&slot->pss_barrierGeneration);
 		while (oldval < generation)
 		{
-			ConditionVariableSleep(&slot->pss_barrierCV,
-								   WAIT_EVENT_PROC_SIGNAL_BARRIER);
+			if (ConditionVariableTimedSleep(&slot->pss_barrierCV,
+											5000,
+											WAIT_EVENT_PROC_SIGNAL_BARRIER))
+				elog(LOG,
+					 "still waiting for pid %d to accept ProcSignalBarrier",
+					 slot->pss_pid);
 			oldval = pg_atomic_read_u64(&slot->pss_barrierGeneration);
 		}
 		ConditionVariableCancelSleep();
 	}
+
+	elog(DEBUG1,
+		 "finished waiting for all backends to process ProcSignalBarrier generation "
+		 UINT64_FORMAT,
+		 generation);
 
 	/*
 	 * The caller is probably calling this function because it wants to read
@@ -527,6 +541,10 @@ ProcessProcSignalBarrier(void)
 				type = (ProcSignalBarrierType) pg_rightmost_one_pos32(flags);
 				switch (type)
 				{
+					case PROCSIGNAL_BARRIER_TEST:
+						processed = true;		/* dummy test barrier */
+						break;
+
 					case PROCSIGNAL_BARRIER_SMGRRELEASE:
 						processed = ProcessBarrierSmgrRelease();
 						break;
@@ -664,4 +682,20 @@ procsignal_sigusr1_handler(SIGNAL_ARGS)
 	SetLatch(MyLatch);
 
 	errno = save_errno;
+}
+
+/*
+ * A user-callable test of ProcSignalBarrier speed, that does nothing.
+ */
+Datum
+pg_test_procsignal_barrier(PG_FUNCTION_ARGS)
+{
+	if (!superuser())
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				 errmsg("must be superuser")));
+
+	WaitForProcSignalBarrier(EmitProcSignalBarrier(PROCSIGNAL_BARRIER_TEST));
+
+	PG_RETURN_VOID();
 }

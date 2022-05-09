@@ -52,6 +52,7 @@ typedef struct CompiledExprState
 } CompiledExprState;
 
 
+static Datum ExecCompileExpr(ExprState *state, ExprContext *econtext, bool *isNull);
 static Datum ExecRunCompiledExpr(ExprState *state, ExprContext *econtext, bool *isNull);
 
 static LLVMValueRef BuildV1Call(LLVMJitContext *context, LLVMBuilderRef b,
@@ -70,17 +71,63 @@ static LLVMValueRef create_LifetimeEnd(LLVMModuleRef mod);
 					   lengthof(((LLVMValueRef[]){__VA_ARGS__})), \
 					   ((LLVMValueRef[]){__VA_ARGS__}))
 
-
 /*
- * JIT compile expression.
+ * Prepare the JIT compile expression.
  */
 bool
 llvm_compile_expr(ExprState *state)
 {
 	PlanState  *parent = state->parent;
-	char	   *funcname;
-
 	LLVMJitContext *context = NULL;
+
+
+	/*
+	 * Right now we don't support compiling expressions without a parent, as
+	 * we need access to the EState.
+	 */
+	Assert(parent);
+
+	llvm_enter_fatal_on_oom();
+
+	/* get or create JIT context */
+	if (parent->state->es_jit)
+		context = (LLVMJitContext *) parent->state->es_jit;
+	else
+	{
+		context = llvm_create_context(parent->state->es_jit_flags);
+		parent->state->es_jit = &context->base;
+	}
+
+	/*
+	 * Don't immediately emit nor actually generate the function.
+	 * Instead do so the first time the expression is actually evaluated.
+	 * This helps with not compiling functions that will never be evaluated,
+	 * as can be the case if e.g. a parallel append node is distributing
+	 * workers between its child nodes.
+	 */
+	{
+
+		CompiledExprState *cstate = palloc0(sizeof(CompiledExprState));
+
+		cstate->context = context;
+
+		state->evalfunc = ExecCompileExpr;
+		state->evalfunc_private = cstate;
+	}
+
+	llvm_leave_fatal_on_oom();
+
+	return true;
+}
+
+/*
+ * JIT compile expression.
+ */
+static Datum
+ExecCompileExpr(ExprState *state, ExprContext *econtext, bool *isNull)
+{
+	CompiledExprState *cstate = state->evalfunc_private;
+	LLVMJitContext *context = cstate->context;
 
 	LLVMBuilderRef b;
 	LLVMModuleRef mod;
@@ -125,31 +172,16 @@ llvm_compile_expr(ExprState *state)
 
 	llvm_enter_fatal_on_oom();
 
-	/*
-	 * Right now we don't support compiling expressions without a parent, as
-	 * we need access to the EState.
-	 */
-	Assert(parent);
-
-	/* get or create JIT context */
-	if (parent->state->es_jit)
-		context = (LLVMJitContext *) parent->state->es_jit;
-	else
-	{
-		context = llvm_create_context(parent->state->es_jit_flags);
-		parent->state->es_jit = &context->base;
-	}
-
 	INSTR_TIME_SET_CURRENT(starttime);
 
 	mod = llvm_mutable_module(context);
 
 	b = LLVMCreateBuilder();
 
-	funcname = llvm_expand_funcname(context, "evalexpr");
+	cstate->funcname = llvm_expand_funcname(context, "evalexpr");
 
 	/* create function */
-	eval_fn = LLVMAddFunction(mod, funcname,
+	eval_fn = LLVMAddFunction(mod, cstate->funcname,
 							  llvm_pg_var_func_type("TypeExprStateEvalFunc"));
 	LLVMSetLinkage(eval_fn, LLVMExternalLinkage);
 	LLVMSetVisibility(eval_fn, LLVMDefaultVisibility);
@@ -2373,30 +2405,16 @@ llvm_compile_expr(ExprState *state)
 
 	LLVMDisposeBuilder(b);
 
-	/*
-	 * Don't immediately emit function, instead do so the first time the
-	 * expression is actually evaluated. That allows to emit a lot of
-	 * functions together, avoiding a lot of repeated llvm and memory
-	 * remapping overhead.
-	 */
-	{
-
-		CompiledExprState *cstate = palloc0(sizeof(CompiledExprState));
-
-		cstate->context = context;
-		cstate->funcname = funcname;
-
-		state->evalfunc = ExecRunCompiledExpr;
-		state->evalfunc_private = cstate;
-	}
-
 	llvm_leave_fatal_on_oom();
 
 	INSTR_TIME_SET_CURRENT(endtime);
 	INSTR_TIME_ACCUM_DIFF(context->base.instr.generation_counter,
 						  endtime, starttime);
 
-	return true;
+	/* remove indirection via this function for future calls */
+	state->evalfunc = ExecRunCompiledExpr;
+
+	return ExecRunCompiledExpr(state, econtext, isNull);
 }
 
 /*

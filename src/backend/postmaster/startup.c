@@ -206,6 +206,10 @@ HandleStartupProcInterrupts(void)
 	/* Perform logging of memory contexts of this process */
 	if (LogMemoryContextPending)
 		ProcessLogMemoryContextInterrupt();
+
+	/* Perform logging of backtrace of this process */
+	if (LogBacktracePending)
+		ProcessLogBacktraceInterrupt();
 }
 
 

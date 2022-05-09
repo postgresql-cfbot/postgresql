@@ -349,8 +349,8 @@ select count(*) > 0 as ok from (select pg_ls_waldir()) ss;
 
 -- Test not-run-to-completion cases.
 select * from pg_ls_waldir() limit 0;
- name | size | modification 
-------+------+--------------
+ name | size | access | modification | change | creation | isdir 
+------+------+--------+--------------+--------+----------+-------
 (0 rows)
 
 select count(*) > 0 as ok from (select * from pg_ls_waldir() limit 1) ss;
@@ -415,6 +415,89 @@ select count(*) > 0 from
 ----------
  t
 (1 row)
+
+select * from (select pg_ls_dir('.', false, true) as name) as ls where ls.name='.'; -- include_dot_dirs=true
+ name 
+------
+ .
+(1 row)
+
+select * from (select pg_ls_dir('.', false, false) as name) as ls where ls.name='.'; -- include_dot_dirs=false
+ name 
+------
+(0 rows)
+
+select pg_ls_dir('does not exist', true, false); -- ok with missingok=true
+ pg_ls_dir 
+-----------
+(0 rows)
+
+select pg_ls_dir('does not exist'); -- fails with missingok=false
+ERROR:  could not open directory "does not exist": No such file or directory
+-- Check that expected columns are present
+select * from pg_ls_archive_statusdir() limit 0;
+ name | size | access | modification | change | creation | isdir 
+------+------+--------+--------------+--------+----------+-------
+(0 rows)
+
+select * from pg_ls_logdir() limit 0;
+ name | size | access | modification | change | creation | isdir 
+------+------+--------+--------------+--------+----------+-------
+(0 rows)
+
+select * from pg_ls_logicalmapdir() limit 0;
+ name | size | access | modification | change | creation | isdir 
+------+------+--------+--------------+--------+----------+-------
+(0 rows)
+
+select * from pg_ls_logicalsnapdir() limit 0;
+ name | size | access | modification | change | creation | isdir 
+------+------+--------+--------------+--------+----------+-------
+(0 rows)
+
+select * from pg_ls_replslotdir('') limit 0;
+ name | size | access | modification | change | creation | isdir 
+------+------+--------+--------------+--------+----------+-------
+(0 rows)
+
+select * from pg_ls_tmpdir() limit 0;
+ name | size | access | modification | change | creation | isdir 
+------+------+--------+--------------+--------+----------+-------
+(0 rows)
+
+select * from pg_ls_waldir() limit 0;
+ name | size | access | modification | change | creation | isdir 
+------+------+--------+--------------+--------+----------+-------
+(0 rows)
+
+select * from pg_stat_file('.') limit 0;
+ size | access | modification | change | creation | isdir 
+------+--------+--------------+--------+----------+-------
+(0 rows)
+
+-- This tests the missing_ok parameter, which causes pg_ls_tmpdir to succeed even if the tmpdir doesn't exist yet
+-- The name='' condition is never true, so the function runs to completion but returns zero rows.
+select * from pg_ls_tmpdir() where name='Does not exist';
+ name | size | access | modification | change | creation | isdir 
+------+------+--------+--------------+--------+----------+-------
+(0 rows)
+
+select filename, isdir from pg_ls_dir_metadata('.') where filename='.';
+ filename | isdir 
+----------+-------
+ .        | t
+(1 row)
+
+select filename, isdir from pg_ls_dir_metadata('.', false, false) where filename='.'; -- include_dot_dirs=false
+ filename | isdir 
+----------+-------
+(0 rows)
+
+-- Check that expected columns are present
+select * from pg_ls_dir_metadata('.') limit 0;
+ filename | size | access | modification | change | creation | isdir 
+----------+------+--------+--------------+--------+----------+-------
+(0 rows)
 
 --
 -- Test replication slot directory functions

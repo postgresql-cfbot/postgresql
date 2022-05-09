@@ -605,6 +605,7 @@ _readIntoClause(void)
 	READ_STRING_FIELD(tableSpaceName);
 	READ_NODE_FIELD(viewQuery);
 	READ_BOOL_FIELD(skipData);
+	READ_BOOL_FIELD(ivm);
 
 	READ_DONE();
 }
@@ -1668,6 +1669,7 @@ _readRangeTblEntry(void)
 			READ_CHAR_FIELD(relkind);
 			READ_INT_FIELD(rellockmode);
 			READ_NODE_FIELD(tablesample);
+			READ_BOOL_FIELD(relisivm);
 			break;
 		case RTE_SUBQUERY:
 			READ_NODE_FIELD(subquery);

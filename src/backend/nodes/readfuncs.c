@@ -164,6 +164,11 @@
 	token = pg_strtok(&length);		/* skip :fldname */ \
 	local_node->fldname = readIntCols(len)
 
+/* Read an Index array */
+#define READ_INDEX_ARRAY(fldname, len) \
+	token = pg_strtok(&length);		/* skip :fldname */ \
+	local_node->fldname = readIndexCols(len)
+
 /* Read a bool array */
 #define READ_BOOL_ARRAY(fldname, len) \
 	token = pg_strtok(&length);		/* skip :fldname */ \
@@ -1815,7 +1820,10 @@ _readPlannedStmt(void)
 	READ_BOOL_FIELD(parallelModeNeeded);
 	READ_INT_FIELD(jitFlags);
 	READ_NODE_FIELD(planTree);
+	READ_NODE_FIELD(partPruneInfos);
+	READ_BOOL_FIELD(containsInitialPruning);
 	READ_NODE_FIELD(rtable);
+	READ_BITMAPSET_FIELD(minLockRelids);
 	READ_NODE_FIELD(resultRelations);
 	READ_NODE_FIELD(appendRelations);
 	READ_NODE_FIELD(subplans);
@@ -1947,7 +1955,7 @@ _readAppend(void)
 	READ_NODE_FIELD(appendplans);
 	READ_INT_FIELD(nasyncplans);
 	READ_INT_FIELD(first_partial_plan);
-	READ_NODE_FIELD(part_prune_info);
+	READ_INT_FIELD(part_prune_index);
 
 	READ_DONE();
 }
@@ -1969,7 +1977,7 @@ _readMergeAppend(void)
 	READ_OID_ARRAY(sortOperators, local_node->numCols);
 	READ_OID_ARRAY(collations, local_node->numCols);
 	READ_BOOL_ARRAY(nullsFirst, local_node->numCols);
-	READ_NODE_FIELD(part_prune_info);
+	READ_INT_FIELD(part_prune_index);
 
 	READ_DONE();
 }
@@ -2767,6 +2775,8 @@ _readPartitionPruneInfo(void)
 	READ_LOCALS(PartitionPruneInfo);
 
 	READ_NODE_FIELD(prune_infos);
+	READ_BOOL_FIELD(needs_init_pruning);
+	READ_BOOL_FIELD(needs_exec_pruning);
 	READ_BITMAPSET_FIELD(other_subplans);
 
 	READ_DONE();
@@ -2783,6 +2793,7 @@ _readPartitionedRelPruneInfo(void)
 	READ_INT_ARRAY(subplan_map, local_node->nparts);
 	READ_INT_ARRAY(subpart_map, local_node->nparts);
 	READ_OID_ARRAY(relid_map, local_node->nparts);
+	READ_INDEX_ARRAY(rti_map, local_node->nparts);
 	READ_NODE_FIELD(initial_pruning_steps);
 	READ_NODE_FIELD(exec_pruning_steps);
 	READ_BITMAPSET_FIELD(execparamids);
@@ -2932,6 +2943,21 @@ _readPartitionRangeDatum(void)
 	READ_ENUM_FIELD(kind, PartitionRangeDatumKind);
 	READ_NODE_FIELD(value);
 	READ_LOCATION_FIELD(location);
+
+	READ_DONE();
+}
+
+
+/*
+ * _readPartitionPruneResult
+ */
+static PartitionPruneResult *
+_readPartitionPruneResult(void)
+{
+	READ_LOCALS(PartitionPruneResult);
+
+	READ_NODE_FIELD(valid_subplan_offs_list);
+	READ_BITMAPSET_FIELD(scan_leafpart_rtis);
 
 	READ_DONE();
 }
@@ -3233,6 +3259,8 @@ parseNodeString(void)
 		return_value = _readJsonTableParent();
 	else if (MATCH("JSONTABSNODE", 12))
 		return_value = _readJsonTableSibling();
+	else if (MATCH("PARTITIONPRUNERESULT", 20))
+		return_value = _readPartitionPruneResult();
 	else
 	{
 		elog(ERROR, "badly formatted node string \"%.32s\"...", token);
@@ -3374,6 +3402,30 @@ readIntCols(int numCols)
 	}
 
 	return int_vals;
+}
+
+/*
+ * readIndexCols
+ */
+Index *
+readIndexCols(int numCols)
+{
+	int			tokenLength,
+				i;
+	const char *token;
+	Index	   *index_vals;
+
+	if (numCols <= 0)
+		return NULL;
+
+	index_vals = (Index *) palloc(numCols * sizeof(Index));
+	for (i = 0; i < numCols; i++)
+	{
+		token = pg_strtok(&tokenLength);
+		index_vals[i] = atoui(token);
+	}
+
+	return index_vals;
 }
 
 /*

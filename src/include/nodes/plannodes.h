@@ -64,7 +64,19 @@ typedef struct PlannedStmt
 
 	struct Plan *planTree;		/* tree of Plan nodes */
 
+	List	   *partPruneInfos;	/* List of PartitionPruneInfo contained in
+								 * the plan */
+
+	bool		containsInitialPruning;	/* Do any of those PartitionPruneInfos
+										 * have initial (pre-exec) pruning
+										 * steps in them? */
+
 	List	   *rtable;			/* list of RangeTblEntry nodes */
+
+	Bitmapset  *minLockRelids;	/* Indexes of all range table entries minus
+								 * indexes of range table entries of the leaf
+								 * partitions scanned by prunable subplans;
+								 * see AcquireExecutorLocks() */
 
 	/* rtable indexes of target relations for INSERT/UPDATE/DELETE */
 	List	   *resultRelations;	/* integer list of RT indexes, or NIL */
@@ -262,8 +274,8 @@ typedef struct Append
 	 */
 	int			first_partial_plan;
 
-	/* Info for run-time subplan pruning; NULL if we're not doing that */
-	struct PartitionPruneInfo *part_prune_info;
+	/* Index to PlannerInfo.partPruneInfos or -1 if no run-time pruning */
+	int			part_prune_index;
 } Append;
 
 /* ----------------
@@ -282,8 +294,9 @@ typedef struct MergeAppend
 	Oid		   *sortOperators;	/* OIDs of operators to sort them by */
 	Oid		   *collations;		/* OIDs of collations */
 	bool	   *nullsFirst;		/* NULLS FIRST/LAST directions */
-	/* Info for run-time subplan pruning; NULL if we're not doing that */
-	struct PartitionPruneInfo *part_prune_info;
+
+	/* Index to PlannerInfo.partPruneInfos or -1 if no run-time pruning */
+	int			part_prune_index;
 } MergeAppend;
 
 /* ----------------
@@ -1191,6 +1204,13 @@ typedef struct PlanRowMark
  * prune_infos			List of Lists containing PartitionedRelPruneInfo nodes,
  *						one sublist per run-time-prunable partition hierarchy
  *						appearing in the parent plan node's subplans.
+ *
+ * needs_init_pruning	Does any of the PartitionedRelPruneInfos in
+ *						prune_infos have its initial_pruning_steps set?
+ *
+ * needs_exec_pruning	Does any of the PartitionedRelPruneInfos in
+ *						prune_infos have its exec_pruning_steps set?
+ *
  * other_subplans		Indexes of any subplans that are not accounted for
  *						by any of the PartitionedRelPruneInfo nodes in
  *						"prune_infos".  These subplans must not be pruned.
@@ -1199,6 +1219,8 @@ typedef struct PartitionPruneInfo
 {
 	NodeTag		type;
 	List	   *prune_infos;
+	bool		needs_init_pruning;
+	bool		needs_exec_pruning;
 	Bitmapset  *other_subplans;
 } PartitionPruneInfo;
 
@@ -1229,6 +1251,7 @@ typedef struct PartitionedRelPruneInfo
 	int		   *subplan_map;	/* subplan index by partition index, or -1 */
 	int		   *subpart_map;	/* subpart index by partition index, or -1 */
 	Oid		   *relid_map;		/* relation OID by partition index, or 0 */
+	Index	   *rti_map;		/* Range table index by partition index, 0. */
 
 	/*
 	 * initial_pruning_steps shows how to prune during executor startup (i.e.,

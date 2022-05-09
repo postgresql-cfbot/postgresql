@@ -99,14 +99,19 @@ static dlist_head cached_expression_list = DLIST_STATIC_INIT(cached_expression_l
 static void ReleaseGenericPlan(CachedPlanSource *plansource);
 static List *RevalidateCachedQuery(CachedPlanSource *plansource,
 								   QueryEnvironment *queryEnv);
-static bool CheckCachedPlan(CachedPlanSource *plansource);
+static bool CheckCachedPlan(CachedPlanSource *plansource, ParamListInfo boundParams,
+							List **part_prune_result_list);
 static CachedPlan *BuildCachedPlan(CachedPlanSource *plansource, List *qlist,
-								   ParamListInfo boundParams, QueryEnvironment *queryEnv);
+								   ParamListInfo boundParams, QueryEnvironment *queryEnv,
+								   List **part_prune_result_list);
 static bool choose_custom_plan(CachedPlanSource *plansource,
 							   ParamListInfo boundParams);
 static double cached_plan_cost(CachedPlan *plan, bool include_planner);
 static Query *QueryListGetPrimaryStmt(List *stmts);
-static void AcquireExecutorLocks(List *stmt_list, bool acquire);
+static void AcquireExecutorLocks(List *stmt_list, ParamListInfo boundParams,
+								 List **part_prune_result_list,
+								 List **lockedRelids_per_stmt);
+static void ReleaseExecutorLocks(List *stmt_list, List *lockedRelids_per_stmt);
 static void AcquirePlannerLocks(List *stmt_list, bool acquire);
 static void ScanQueryForLocks(Query *parsetree, bool acquire);
 static bool ScanQueryWalker(Node *node, bool *acquire);
@@ -790,14 +795,19 @@ RevalidateCachedQuery(CachedPlanSource *plansource,
  *
  * On a "true" return, we have acquired the locks needed to run the plan.
  * (We must do this for the "true" result to be race-condition-free.)
+ *
+ * See GetCachedPlan()'s comment for a description of part_prune_result_list.
  */
 static bool
-CheckCachedPlan(CachedPlanSource *plansource)
+CheckCachedPlan(CachedPlanSource *plansource, ParamListInfo boundParams,
+				List **part_prune_result_list)
 {
 	CachedPlan *plan = plansource->gplan;
 
 	/* Assert that caller checked the querytree */
 	Assert(plansource->is_valid);
+
+	*part_prune_result_list = NIL;
 
 	/* If there's no generic plan, just say "false" */
 	if (!plan)
@@ -820,13 +830,21 @@ CheckCachedPlan(CachedPlanSource *plansource)
 	 */
 	if (plan->is_valid)
 	{
+		List   *lockedRelids_per_stmt;
+
 		/*
 		 * Plan must have positive refcount because it is referenced by
 		 * plansource; so no need to fear it disappears under us here.
 		 */
 		Assert(plan->refcount > 0);
 
-		AcquireExecutorLocks(plan->stmt_list, true);
+		/*
+		 * Lock relations scanned by the plan.  This is where the pruning
+		 * happens if needed.
+		 */
+		AcquireExecutorLocks(plan->stmt_list, boundParams,
+							 part_prune_result_list,
+							 &lockedRelids_per_stmt);
 
 		/*
 		 * If plan was transient, check to see if TransactionXmin has
@@ -848,7 +866,14 @@ CheckCachedPlan(CachedPlanSource *plansource)
 		}
 
 		/* Oops, the race case happened.  Release useless locks. */
-		AcquireExecutorLocks(plan->stmt_list, false);
+		ReleaseExecutorLocks(plan->stmt_list, lockedRelids_per_stmt);
+
+		/*
+		 * The output list and any objects therein have been allocated in the
+		 * caller's hopefully short-lived context, so will not remain leaked
+		 * for long, though reset to avoid its accidentally being looked at.
+		 */
+		*part_prune_result_list = NIL;
 	}
 
 	/*
@@ -874,10 +899,15 @@ CheckCachedPlan(CachedPlanSource *plansource)
  * Planning work is done in the caller's memory context.  The finished plan
  * is in a child memory context, which typically should get reparented
  * (unless this is a one-shot plan, in which case we don't copy the plan).
+ *
+ * A list of NULLs is returned in *part_prune_result_list, meaning that no
+ * PartitionPruneResult nodes have yet been created for the plans in
+ * stmt_list.
  */
 static CachedPlan *
 BuildCachedPlan(CachedPlanSource *plansource, List *qlist,
-				ParamListInfo boundParams, QueryEnvironment *queryEnv)
+				ParamListInfo boundParams, QueryEnvironment *queryEnv,
+				List **part_prune_result_list)
 {
 	CachedPlan *plan;
 	List	   *plist;
@@ -1007,6 +1037,17 @@ BuildCachedPlan(CachedPlanSource *plansource, List *qlist,
 
 	MemoryContextSwitchTo(oldcxt);
 
+	/*
+	 * No actual PartitionPruneResults yet to add, though must initialize
+	 * the list to have the same number of elements as the list of
+	 * PlannedStmts.
+	 */
+	*part_prune_result_list = NIL;
+	foreach(lc, plist)
+	{
+		*part_prune_result_list = lappend(*part_prune_result_list, NULL);
+	}
+
 	return plan;
 }
 
@@ -1126,6 +1167,17 @@ cached_plan_cost(CachedPlan *plan, bool include_planner)
  * plan or a custom plan for the given parameters: the caller does not know
  * which it will get.
  *
+ * For every PlannedStmt found in the returned CachedPlan, an element that
+ * is either a PartitionPruneResult or a NULL is added to
+ * *part_prune_result_list if needed.  The former if the PlannedStmt is from
+ * the existing CachedPlan that is otherwise valid and contains at least one
+ * PartitionPruneInfo that has "initial" pruning steps.  Those steps are
+ * performed by calling ExecutorDoInitialPruning() to determine only those
+ * leaf partitions that need to be locked by AcquireExecutorLocks() by pruning
+ * away subplans that don't match the pruning conditions.  The
+ * PartitionPruneResult contains a list of bitmapsets of the indexes of
+ * matching subplans, one for each PartitionPruneInfo.
+ *
  * On return, the plan is valid and we have sufficient locks to begin
  * execution.
  *
@@ -1139,11 +1191,13 @@ cached_plan_cost(CachedPlan *plan, bool include_planner)
  */
 CachedPlan *
 GetCachedPlan(CachedPlanSource *plansource, ParamListInfo boundParams,
-			  ResourceOwner owner, QueryEnvironment *queryEnv)
+			  ResourceOwner owner, QueryEnvironment *queryEnv,
+			  List **part_prune_result_list)
 {
 	CachedPlan *plan = NULL;
 	List	   *qlist;
 	bool		customplan;
+	List	   *my_part_prune_result_list;
 
 	/* Assert caller is doing things in a sane order */
 	Assert(plansource->magic == CACHEDPLANSOURCE_MAGIC);
@@ -1160,7 +1214,8 @@ GetCachedPlan(CachedPlanSource *plansource, ParamListInfo boundParams,
 
 	if (!customplan)
 	{
-		if (CheckCachedPlan(plansource))
+		if (CheckCachedPlan(plansource, boundParams,
+							&my_part_prune_result_list))
 		{
 			/* We want a generic plan, and we already have a valid one */
 			plan = plansource->gplan;
@@ -1169,7 +1224,8 @@ GetCachedPlan(CachedPlanSource *plansource, ParamListInfo boundParams,
 		else
 		{
 			/* Build a new generic plan */
-			plan = BuildCachedPlan(plansource, qlist, NULL, queryEnv);
+			plan = BuildCachedPlan(plansource, qlist, NULL, queryEnv,
+								   &my_part_prune_result_list);
 			/* Just make real sure plansource->gplan is clear */
 			ReleaseGenericPlan(plansource);
 			/* Link the new generic plan into the plansource */
@@ -1214,7 +1270,8 @@ GetCachedPlan(CachedPlanSource *plansource, ParamListInfo boundParams,
 	if (customplan)
 	{
 		/* Build a custom plan */
-		plan = BuildCachedPlan(plansource, qlist, boundParams, queryEnv);
+		plan = BuildCachedPlan(plansource, qlist, boundParams, queryEnv,
+							   &my_part_prune_result_list);
 		/* Accumulate total costs of custom plans */
 		plansource->total_custom_cost += cached_plan_cost(plan, true);
 
@@ -1245,6 +1302,9 @@ GetCachedPlan(CachedPlanSource *plansource, ParamListInfo boundParams,
 		MemoryContextSetParent(plan->context, CacheMemoryContext);
 		plan->is_saved = true;
 	}
+
+	if (part_prune_result_list)
+		*part_prune_result_list = my_part_prune_result_list;
 
 	return plan;
 }
@@ -1737,17 +1797,29 @@ QueryListGetPrimaryStmt(List *stmts)
 
 /*
  * AcquireExecutorLocks: acquire locks needed for execution of a cached plan;
- * or release them if acquire is false.
+ *
+ * See GetCachedPlan()'s comment for a description of part_prune_result_list.
+ *
+ * On return, *lockedRelids_per_stmt will contain a bitmapset for every
+ * PlannedStmt in stmt_list, containing the RT indexes of relation entries
+ * in its range table that were actually locked, or NULL if the PlannedStmt
+ * contains a utility statement.
  */
 static void
-AcquireExecutorLocks(List *stmt_list, bool acquire)
+AcquireExecutorLocks(List *stmt_list, ParamListInfo boundParams,
+					 List **part_prune_result_list,
+					 List **lockedRelids_per_stmt)
 {
 	ListCell   *lc1;
 
+	*part_prune_result_list = *lockedRelids_per_stmt = NIL;
 	foreach(lc1, stmt_list)
 	{
 		PlannedStmt *plannedstmt = lfirst_node(PlannedStmt, lc1);
-		ListCell   *lc2;
+		PartitionPruneResult *part_prune_result = NULL;
+		Bitmapset  *allLockRelids;
+		Bitmapset  *lockedRelids = NULL;
+		int			rti;
 
 		if (plannedstmt->commandType == CMD_UTILITY)
 		{
@@ -1761,13 +1833,35 @@ AcquireExecutorLocks(List *stmt_list, bool acquire)
 			Query	   *query = UtilityContainsQuery(plannedstmt->utilityStmt);
 
 			if (query)
-				ScanQueryForLocks(query, acquire);
+				ScanQueryForLocks(query, true);
+			*part_prune_result_list = lappend(*part_prune_result_list, NULL);
 			continue;
 		}
 
-		foreach(lc2, plannedstmt->rtable)
+		/*
+		 * Figure out the set of relations that would need to be locked
+		 * before executing the plan.
+		 */
+		if (plannedstmt->containsInitialPruning)
 		{
-			RangeTblEntry *rte = (RangeTblEntry *) lfirst(lc2);
+			/*
+			 * Obtain the set of partitions to be locked from the
+			 * PartitionPruneInfos by considering the result of performing
+			 * initial partition pruning.
+			 */
+			PartitionPruneResult *part_prune_result =
+				ExecutorDoInitialPruning(plannedstmt, boundParams);
+
+			allLockRelids = bms_union(plannedstmt->minLockRelids,
+									  part_prune_result->scan_leafpart_rtis);
+		}
+		else
+			allLockRelids = plannedstmt->minLockRelids;
+
+		rti = -1;
+		while ((rti = bms_next_member(allLockRelids, rti)) > 0)
+		{
+			RangeTblEntry *rte = rt_fetch(rti, plannedstmt->rtable);
 
 			if (rte->rtekind != RTE_RELATION)
 				continue;
@@ -1778,10 +1872,58 @@ AcquireExecutorLocks(List *stmt_list, bool acquire)
 			 * fail if it's been dropped entirely --- we'll just transiently
 			 * acquire a non-conflicting lock.
 			 */
-			if (acquire)
-				LockRelationOid(rte->relid, rte->rellockmode);
-			else
-				UnlockRelationOid(rte->relid, rte->rellockmode);
+			LockRelationOid(rte->relid, rte->rellockmode);
+			lockedRelids = bms_add_member(lockedRelids, rti);
+		}
+
+		*part_prune_result_list = lappend(*part_prune_result_list,
+										  part_prune_result);
+		*lockedRelids_per_stmt = lappend(*lockedRelids_per_stmt, lockedRelids);
+	}
+}
+
+/*
+ * ReleaseExecutorLocks
+ * 		Release locks that would've been acquired by an earlier call to
+ * 		AcquireExecutorLocks()
+ */
+static void
+ReleaseExecutorLocks(List *stmt_list, List *lockedRelids_per_stmt)
+{
+	ListCell   *lc1,
+			   *lc2;
+
+	forboth(lc1, stmt_list, lc2, lockedRelids_per_stmt)
+	{
+		PlannedStmt *plannedstmt = lfirst_node(PlannedStmt, lc1);
+		Bitmapset  *lockedRelids = lfirst(lc2);
+		int			rti;
+
+		if (plannedstmt->commandType == CMD_UTILITY)
+		{
+			/*
+			 * Ignore utility statements, except those (such as EXPLAIN) that
+			 * contain a parsed-but-not-planned query.  Note: it's okay to use
+			 * ScanQueryForLocks, even though the query hasn't been through
+			 * rule rewriting, because rewriting doesn't change the query
+			 * representation.
+			 */
+			Query	   *query = UtilityContainsQuery(plannedstmt->utilityStmt);
+
+			if (query)
+				ScanQueryForLocks(query, false);
+			continue;
+		}
+
+		rti = -1;
+		while ((rti = bms_next_member(lockedRelids, rti)) >= 0)
+		{
+			RangeTblEntry *rte = rt_fetch(rti, plannedstmt->rtable);
+
+			Assert(rte->rtekind == RTE_RELATION);
+
+			/* See the comment in AcquireExecutorLocks(). */
+			UnlockRelationOid(rte->relid, rte->rellockmode);
 		}
 	}
 }

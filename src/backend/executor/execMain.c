@@ -49,11 +49,13 @@
 #include "commands/matview.h"
 #include "commands/trigger.h"
 #include "executor/execdebug.h"
+#include "executor/execPartition.h"
 #include "executor/nodeSubplan.h"
 #include "foreign/fdwapi.h"
 #include "jit/jit.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
+#include "nodes/nodeFuncs.h"
 #include "parser/parsetree.h"
 #include "storage/bufmgr.h"
 #include "storage/lmgr.h"
@@ -104,6 +106,49 @@ static void EvalPlanQualStart(EPQState *epqstate, Plan *planTree);
 
 /* end of local decls */
 
+/* ----------------------------------------------------------------
+ *		ExecutorDoInitialPruning
+ *
+ *		Performs initial partition pruning to figure out the minimal set of
+ *		subplans to be executed and the set of RT indexes of the corresponding
+ *		leaf partitions
+ *
+ * Returned PartitionPruneResult must be subsequently passed to the executor
+ * so that it can reuse the result of pruning.  It's important that the
+ * has the same view of which partitions are initially pruned (by not doing
+ * the pruning again itself) or otherwise it risks initializing subplans whose
+ * partitions would not have been locked.
+ *
+ * Note: Partitioned tables mentioned in PartitionedRelPruneInfo nodes that
+ * drive the pruning will be locked before doing the pruning.
+ *
+ * ----------------------------------------------------------------
+ */
+PartitionPruneResult *
+ExecutorDoInitialPruning(PlannedStmt *plannedstmt, ParamListInfo params)
+{
+	PartitionPruneResult *result;
+	ListCell *lc;
+
+	/* Only get here if there is any pruning to do. */
+	Assert(plannedstmt->containsInitialPruning);
+
+	result = makeNode(PartitionPruneResult);
+	foreach(lc, plannedstmt->partPruneInfos)
+	{
+		PartitionPruneInfo *pruneinfo = lfirst(lc);
+		Bitmapset *valid_subplan_offs;
+
+		valid_subplan_offs =
+			ExecPartitionDoInitialPruning(plannedstmt, params, pruneinfo,
+										  &result->scan_leafpart_rtis);
+		result->valid_subplan_offs_list =
+			lappend(result->valid_subplan_offs_list,
+					valid_subplan_offs);
+	}
+
+	return result;
+}
 
 /* ----------------------------------------------------------------
  *		ExecutorStart
@@ -806,6 +851,7 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 {
 	CmdType		operation = queryDesc->operation;
 	PlannedStmt *plannedstmt = queryDesc->plannedstmt;
+	PartitionPruneResult *part_prune_result = queryDesc->part_prune_result;
 	Plan	   *plan = plannedstmt->planTree;
 	List	   *rangeTable = plannedstmt->rtable;
 	EState	   *estate = queryDesc->estate;
@@ -825,6 +871,8 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 	ExecInitRangeTable(estate, rangeTable);
 
 	estate->es_plannedstmt = plannedstmt;
+	estate->es_part_prune_infos = plannedstmt->partPruneInfos;
+	estate->es_part_prune_result = part_prune_result;
 
 	/*
 	 * Next, build the ExecRowMark array from the PlanRowMark(s), if any.

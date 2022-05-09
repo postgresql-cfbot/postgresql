@@ -97,6 +97,9 @@ typedef enum NodeTag
 	T_PartitionPruneStepCombine,
 	T_PlanInvalItem,
 
+	/* TAGS FOR EXECUTOR PREP NODES (execnodes.h) */
+	T_PartitionPruneResult,
+
 	/*
 	 * TAGS FOR PLAN STATE NODES (execnodes.h)
 	 *
@@ -674,6 +677,7 @@ extern struct Bitmapset *readBitmapset(void);
 extern uintptr_t readDatum(bool typbyval);
 extern bool *readBoolCols(int numCols);
 extern int *readIntCols(int numCols);
+extern Index *readIndexCols(int numCols);
 extern Oid *readOidCols(int numCols);
 extern int16 *readAttrNumberCols(int numCols);
 

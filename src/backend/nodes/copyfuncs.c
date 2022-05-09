@@ -96,7 +96,10 @@ _copyPlannedStmt(const PlannedStmt *from)
 	COPY_SCALAR_FIELD(parallelModeNeeded);
 	COPY_SCALAR_FIELD(jitFlags);
 	COPY_NODE_FIELD(planTree);
+	COPY_NODE_FIELD(partPruneInfos);
+	COPY_SCALAR_FIELD(containsInitialPruning);
 	COPY_NODE_FIELD(rtable);
+	COPY_BITMAPSET_FIELD(minLockRelids);
 	COPY_NODE_FIELD(resultRelations);
 	COPY_NODE_FIELD(appendRelations);
 	COPY_NODE_FIELD(subplans);
@@ -253,7 +256,7 @@ _copyAppend(const Append *from)
 	COPY_NODE_FIELD(appendplans);
 	COPY_SCALAR_FIELD(nasyncplans);
 	COPY_SCALAR_FIELD(first_partial_plan);
-	COPY_NODE_FIELD(part_prune_info);
+	COPY_SCALAR_FIELD(part_prune_index);
 
 	return newnode;
 }
@@ -281,7 +284,7 @@ _copyMergeAppend(const MergeAppend *from)
 	COPY_POINTER_FIELD(sortOperators, from->numCols * sizeof(Oid));
 	COPY_POINTER_FIELD(collations, from->numCols * sizeof(Oid));
 	COPY_POINTER_FIELD(nullsFirst, from->numCols * sizeof(bool));
-	COPY_NODE_FIELD(part_prune_info);
+	COPY_SCALAR_FIELD(part_prune_index);
 
 	return newnode;
 }
@@ -1283,6 +1286,8 @@ _copyPartitionPruneInfo(const PartitionPruneInfo *from)
 	PartitionPruneInfo *newnode = makeNode(PartitionPruneInfo);
 
 	COPY_NODE_FIELD(prune_infos);
+	COPY_SCALAR_FIELD(needs_init_pruning);
+	COPY_SCALAR_FIELD(needs_exec_pruning);
 	COPY_BITMAPSET_FIELD(other_subplans);
 
 	return newnode;
@@ -1299,6 +1304,7 @@ _copyPartitionedRelPruneInfo(const PartitionedRelPruneInfo *from)
 	COPY_POINTER_FIELD(subplan_map, from->nparts * sizeof(int));
 	COPY_POINTER_FIELD(subpart_map, from->nparts * sizeof(int));
 	COPY_POINTER_FIELD(relid_map, from->nparts * sizeof(Oid));
+	COPY_POINTER_FIELD(rti_map, from->nparts * sizeof(Index));
 	COPY_NODE_FIELD(initial_pruning_steps);
 	COPY_NODE_FIELD(exec_pruning_steps);
 	COPY_BITMAPSET_FIELD(execparamids);
@@ -5474,6 +5480,21 @@ _copyExtensibleNode(const ExtensibleNode *from)
 }
 
 /* ****************************************************************
+ *					execnodes.h copy functions
+ * ****************************************************************
+ */
+static PartitionPruneResult *
+_copyPartitionPruneResult(const PartitionPruneResult *from)
+{
+	PartitionPruneResult *newnode = makeNode(PartitionPruneResult);
+
+	COPY_NODE_FIELD(valid_subplan_offs_list);
+	COPY_BITMAPSET_FIELD(scan_leafpart_rtis);
+
+	return newnode;
+}
+
+/* ****************************************************************
  *					value.h copy functions
  * ****************************************************************
  */
@@ -5526,7 +5547,6 @@ _copyBitString(const BitString *from)
 
 	return newnode;
 }
-
 
 static ForeignKeyCacheInfo *
 _copyForeignKeyCacheInfo(const ForeignKeyCacheInfo *from)
@@ -6567,6 +6587,13 @@ copyObjectImpl(const void *from)
 			break;
 		case T_PublicationTable:
 			retval = _copyPublicationTable(from);
+			break;
+
+			/*
+			 * EXECUTION NODES
+			 */
+		case T_PartitionPruneResult:
+			retval = _copyPartitionPruneResult(from);
 			break;
 
 			/*

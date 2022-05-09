@@ -66,6 +66,7 @@
 #define PARALLEL_KEY_QUERY_TEXT		UINT64CONST(0xE000000000000008)
 #define PARALLEL_KEY_JIT_INSTRUMENTATION UINT64CONST(0xE000000000000009)
 #define PARALLEL_KEY_WAL_USAGE			UINT64CONST(0xE00000000000000A)
+#define PARALLEL_KEY_PARTITIONPRUNERESULT	UINT64CONST(0xE00000000000000B)
 
 #define PARALLEL_TUPLE_QUEUE_SIZE		65536
 
@@ -182,7 +183,9 @@ ExecSerializePlan(Plan *plan, EState *estate)
 	pstmt->transientPlan = false;
 	pstmt->dependsOnRole = false;
 	pstmt->parallelModeNeeded = false;
+	pstmt->containsInitialPruning = false;
 	pstmt->planTree = plan;
+	pstmt->partPruneInfos = estate->es_part_prune_infos;
 	pstmt->rtable = estate->es_range_table;
 	pstmt->resultRelations = NIL;
 	pstmt->appendRelations = NIL;
@@ -596,12 +599,15 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 	FixedParallelExecutorState *fpes;
 	char	   *pstmt_data;
 	char	   *pstmt_space;
+	char	   *part_prune_result_data;
+	char	   *part_prune_result_space;
 	char	   *paramlistinfo_space;
 	BufferUsage *bufusage_space;
 	WalUsage   *walusage_space;
 	SharedExecutorInstrumentation *instrumentation = NULL;
 	SharedJitInstrumentation *jit_instrumentation = NULL;
 	int			pstmt_len;
+	int			part_prune_result_len;
 	int			paramlistinfo_len;
 	int			instrumentation_len = 0;
 	int			jit_instrumentation_len = 0;
@@ -630,6 +636,7 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 
 	/* Fix up and serialize plan to be sent to workers. */
 	pstmt_data = ExecSerializePlan(planstate->plan, estate);
+	part_prune_result_data = nodeToString(estate->es_part_prune_result);
 
 	/* Create a parallel context. */
 	pcxt = CreateParallelContext("postgres", "ParallelQueryMain", nworkers);
@@ -654,6 +661,11 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 	/* Estimate space for serialized PlannedStmt. */
 	pstmt_len = strlen(pstmt_data) + 1;
 	shm_toc_estimate_chunk(&pcxt->estimator, pstmt_len);
+	shm_toc_estimate_keys(&pcxt->estimator, 1);
+
+	/* Estimate space for serialized PartitionPruneResult. */
+	part_prune_result_len = strlen(part_prune_result_data) + 1;
+	shm_toc_estimate_chunk(&pcxt->estimator, part_prune_result_len);
 	shm_toc_estimate_keys(&pcxt->estimator, 1);
 
 	/* Estimate space for serialized ParamListInfo. */
@@ -749,6 +761,12 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 	pstmt_space = shm_toc_allocate(pcxt->toc, pstmt_len);
 	memcpy(pstmt_space, pstmt_data, pstmt_len);
 	shm_toc_insert(pcxt->toc, PARALLEL_KEY_PLANNEDSTMT, pstmt_space);
+
+	/* Store serialized PartitionPruneResult */
+	part_prune_result_space = shm_toc_allocate(pcxt->toc, part_prune_result_len);
+	memcpy(part_prune_result_space, part_prune_result_data, part_prune_result_len);
+	shm_toc_insert(pcxt->toc, PARALLEL_KEY_PARTITIONPRUNERESULT,
+				   part_prune_result_space);
 
 	/* Store serialized ParamListInfo. */
 	paramlistinfo_space = shm_toc_allocate(pcxt->toc, paramlistinfo_len);
@@ -1231,8 +1249,10 @@ ExecParallelGetQueryDesc(shm_toc *toc, DestReceiver *receiver,
 						 int instrument_options)
 {
 	char	   *pstmtspace;
+	char	   *part_prune_result_space;
 	char	   *paramspace;
 	PlannedStmt *pstmt;
+	PartitionPruneResult *part_prune_result;
 	ParamListInfo paramLI;
 	char	   *queryString;
 
@@ -1243,12 +1263,18 @@ ExecParallelGetQueryDesc(shm_toc *toc, DestReceiver *receiver,
 	pstmtspace = shm_toc_lookup(toc, PARALLEL_KEY_PLANNEDSTMT, false);
 	pstmt = (PlannedStmt *) stringToNode(pstmtspace);
 
+	/* Reconstruct leader-supplied PartitionPruneResult. */
+	part_prune_result_space =
+		shm_toc_lookup(toc, PARALLEL_KEY_PARTITIONPRUNERESULT, false);
+	part_prune_result = (PartitionPruneResult *)
+		stringToNode(part_prune_result_space);
+
 	/* Reconstruct ParamListInfo. */
 	paramspace = shm_toc_lookup(toc, PARALLEL_KEY_PARAMLISTINFO, false);
 	paramLI = RestoreParamList(&paramspace);
 
 	/* Create a QueryDesc for the query. */
-	return CreateQueryDesc(pstmt,
+	return CreateQueryDesc(pstmt, part_prune_result,
 						   queryString,
 						   GetActiveSnapshot(), InvalidSnapshot,
 						   receiver, paramLI, NULL, instrument_options);

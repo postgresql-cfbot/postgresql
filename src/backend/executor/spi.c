@@ -1578,6 +1578,7 @@ SPI_cursor_open_internal(const char *name, SPIPlanPtr plan,
 	CachedPlanSource *plansource;
 	CachedPlan *cplan;
 	List	   *stmt_list;
+	List	   *part_prune_result_list;
 	char	   *query_string;
 	Snapshot	snapshot;
 	MemoryContext oldcontext;
@@ -1657,7 +1658,10 @@ SPI_cursor_open_internal(const char *name, SPIPlanPtr plan,
 	 */
 
 	/* Replan if needed, and increment plan refcount for portal */
-	cplan = GetCachedPlan(plansource, paramLI, NULL, _SPI_current->queryEnv);
+	cplan = GetCachedPlan(plansource, paramLI, NULL, _SPI_current->queryEnv,
+						  &part_prune_result_list);
+	Assert(list_length(cplan->stmt_list) ==
+		   list_length(part_prune_result_list));
 	stmt_list = cplan->stmt_list;
 
 	if (!plan->saved)
@@ -1684,6 +1688,9 @@ SPI_cursor_open_internal(const char *name, SPIPlanPtr plan,
 					  plansource->commandTag,
 					  stmt_list,
 					  cplan);
+
+	/* Copy PartitionPruneResults into the portal's context. */
+	PortalStorePartitionPruneResults(portal, part_prune_result_list);
 
 	/*
 	 * Set up options for portal.  Default SCROLL type is chosen the same way
@@ -2092,7 +2099,8 @@ SPI_plan_get_cached_plan(SPIPlanPtr plan)
 	/* Get the generic plan for the query */
 	cplan = GetCachedPlan(plansource, NULL,
 						  plan->saved ? CurrentResourceOwner : NULL,
-						  _SPI_current->queryEnv);
+						  _SPI_current->queryEnv,
+						  NULL /* Not interested in PartitionPruneResults */);
 	Assert(cplan == plansource->gplan);
 
 	/* Pop the error context stack */
@@ -2473,7 +2481,9 @@ _SPI_execute_plan(SPIPlanPtr plan, const SPIExecuteOptions *options,
 	{
 		CachedPlanSource *plansource = (CachedPlanSource *) lfirst(lc1);
 		List	   *stmt_list;
-		ListCell   *lc2;
+		List	   *part_prune_result_list;
+		ListCell   *lc2,
+				   *lc3;
 
 		spicallbackarg.query = plansource->query_string;
 
@@ -2549,8 +2559,10 @@ _SPI_execute_plan(SPIPlanPtr plan, const SPIExecuteOptions *options,
 		 * plan, the refcount must be backed by the plan_owner.
 		 */
 		cplan = GetCachedPlan(plansource, options->params,
-							  plan_owner, _SPI_current->queryEnv);
-
+							  plan_owner, _SPI_current->queryEnv,
+							 &part_prune_result_list);
+		Assert(list_length(cplan->stmt_list) ==
+			   list_length(part_prune_result_list));
 		stmt_list = cplan->stmt_list;
 
 		/*
@@ -2589,9 +2601,10 @@ _SPI_execute_plan(SPIPlanPtr plan, const SPIExecuteOptions *options,
 			}
 		}
 
-		foreach(lc2, stmt_list)
+		forboth(lc2, stmt_list, lc3, part_prune_result_list)
 		{
 			PlannedStmt *stmt = lfirst_node(PlannedStmt, lc2);
+			PartitionPruneResult *part_prune_result = lfirst_node(PartitionPruneResult, lc3);
 			bool		canSetTag = stmt->canSetTag;
 			DestReceiver *dest;
 
@@ -2663,7 +2676,7 @@ _SPI_execute_plan(SPIPlanPtr plan, const SPIExecuteOptions *options,
 				else
 					snap = InvalidSnapshot;
 
-				qdesc = CreateQueryDesc(stmt,
+				qdesc = CreateQueryDesc(stmt, part_prune_result,
 										plansource->query_string,
 										snap, crosscheck_snapshot,
 										dest,

@@ -1600,7 +1600,9 @@ build_join_pathkeys(PlannerInfo *root,
 					JoinType jointype,
 					List *outer_pathkeys)
 {
-	if (jointype == JOIN_FULL || jointype == JOIN_RIGHT)
+	if (jointype == JOIN_FULL ||
+		jointype == JOIN_RIGHT ||
+		jointype == JOIN_RIGHT_ANTI)
 		return NIL;
 
 	/*

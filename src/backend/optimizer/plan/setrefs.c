@@ -2230,6 +2230,7 @@ set_join_references(PlannerInfo *root, Join *join, int rtoffset)
 			inner_itlist->has_non_vars = false;
 			break;
 		case JOIN_RIGHT:
+		case JOIN_RIGHT_ANTI:
 			outer_itlist->has_non_vars = false;
 			break;
 		case JOIN_FULL:

@@ -3504,7 +3504,7 @@ relation_has_unique_index_for(PlannerInfo *root, RelOptInfo *rel,
 	Assert(list_length(exprlist) == list_length(oprlist));
 
 	/* Short-circuit if no indexes... */
-	if (rel->indexlist == NIL)
+	if (rel->indexlist == NIL && rel->partedIndexlist == NIL)
 		return false;
 
 	/*
@@ -3549,7 +3549,7 @@ relation_has_unique_index_for(PlannerInfo *root, RelOptInfo *rel,
 		return false;
 
 	/* Examine each index of the relation ... */
-	foreach(ic, rel->indexlist)
+	foreach(ic, list_concat(rel->indexlist, rel->partedIndexlist))
 	{
 		IndexOptInfo *ind = (IndexOptInfo *) lfirst(ic);
 		int			c;

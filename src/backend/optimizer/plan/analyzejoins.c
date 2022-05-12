@@ -23,6 +23,7 @@
 #include "postgres.h"
 
 #include "nodes/nodeFuncs.h"
+#include "nodes/nodes.h"
 #include "optimizer/clauses.h"
 #include "optimizer/joininfo.h"
 #include "optimizer/optimizer.h"
@@ -598,7 +599,7 @@ rel_supports_distinctness(PlannerInfo *root, RelOptInfo *rel)
 		 */
 		ListCell   *lc;
 
-		foreach(lc, rel->indexlist)
+		foreach(lc, list_concat(rel->indexlist, rel->partedIndexlist))
 		{
 			IndexOptInfo *ind = (IndexOptInfo *) lfirst(lc);
 

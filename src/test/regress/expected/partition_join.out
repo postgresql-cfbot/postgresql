@@ -4855,14 +4855,42 @@ SELECT t1.*, t2.* FROM alpha t1 INNER JOIN beta t2 ON (t1.a = t2.a AND t1.b = t2
 CREATE TABLE fract_t (id BIGINT, PRIMARY KEY (id)) PARTITION BY RANGE (id);
 CREATE TABLE fract_t0 PARTITION OF fract_t FOR VALUES FROM ('0') TO ('1000');
 CREATE TABLE fract_t1 PARTITION OF fract_t FOR VALUES FROM ('1000') TO ('2000');
+CREATE TABLE fract_x (id BIGINT, PRIMARY KEY (id)) PARTITION BY RANGE (id);
+CREATE TABLE fract_x0 PARTITION OF fract_x FOR VALUES FROM ('0') TO ('1000');
+CREATE TABLE fract_x1 PARTITION OF fract_x FOR VALUES FROM ('1000') TO ('2000');
 -- insert data
 INSERT INTO fract_t (id) (SELECT generate_series(0, 1999));
 ANALYZE fract_t;
--- verify plan; nested index only scans
+INSERT INTO fract_x (id) (SELECT generate_series(0, 1999));
+ANALYZE fract_x;
+SET max_parallel_workers_per_gather = 0;
+SET enable_partitionwise_join = on;
+-- verify partition pruning
 SET max_parallel_workers_per_gather = 0;
 SET enable_partitionwise_join = on;
 EXPLAIN (COSTS OFF)
-SELECT * FROM fract_t x LEFT JOIN fract_t y USING (id) ORDER BY id ASC LIMIT 10;
+SELECT x.id FROM fract_x x LEFT JOIN fract_t y USING (id) ORDER BY id ASC LIMIT 10;
+                           QUERY PLAN                            
+-----------------------------------------------------------------
+ Limit
+   ->  Append
+         ->  Index Only Scan using fract_x0_pkey on fract_x0 x_1
+         ->  Index Only Scan using fract_x1_pkey on fract_x1 x_2
+(4 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT x.id FROM fract_x x LEFT JOIN fract_t y USING (id) ORDER BY id ASC LIMIT 10;
+                           QUERY PLAN                            
+-----------------------------------------------------------------
+ Limit
+   ->  Append
+         ->  Index Only Scan using fract_x0_pkey on fract_x0 x_1
+         ->  Index Only Scan using fract_x1_pkey on fract_x1 x_2
+(4 rows)
+
+-- verify plan; nested index only scans
+EXPLAIN (COSTS OFF)
+SELECT x.id, y.id FROM fract_x x LEFT JOIN fract_t y USING (id) ORDER BY x.id ASC LIMIT 10;
                               QUERY PLAN                               
 -----------------------------------------------------------------------
  Limit
@@ -4870,32 +4898,33 @@ SELECT * FROM fract_t x LEFT JOIN fract_t y USING (id) ORDER BY id ASC LIMIT 10;
          Sort Key: x.id
          ->  Merge Left Join
                Merge Cond: (x_1.id = y_1.id)
-               ->  Index Only Scan using fract_t0_pkey on fract_t0 x_1
+               ->  Index Only Scan using fract_x0_pkey on fract_x0 x_1
                ->  Index Only Scan using fract_t0_pkey on fract_t0 y_1
          ->  Merge Left Join
                Merge Cond: (x_2.id = y_2.id)
-               ->  Index Only Scan using fract_t1_pkey on fract_t1 x_2
+               ->  Index Only Scan using fract_x1_pkey on fract_x1 x_2
                ->  Index Only Scan using fract_t1_pkey on fract_t1 y_2
 (11 rows)
 
 EXPLAIN (COSTS OFF)
-SELECT * FROM fract_t x LEFT JOIN fract_t y USING (id) ORDER BY id DESC LIMIT 10;
+SELECT x.id, y.id FROM fract_x x LEFT JOIN fract_t y USING (id) ORDER BY x.id DESC LIMIT 10;
                                    QUERY PLAN                                   
 --------------------------------------------------------------------------------
  Limit
    ->  Merge Append
          Sort Key: x.id DESC
          ->  Nested Loop Left Join
-               ->  Index Only Scan Backward using fract_t0_pkey on fract_t0 x_1
+               ->  Index Only Scan Backward using fract_x0_pkey on fract_x0 x_1
                ->  Index Only Scan using fract_t0_pkey on fract_t0 y_1
                      Index Cond: (id = x_1.id)
          ->  Nested Loop Left Join
-               ->  Index Only Scan Backward using fract_t1_pkey on fract_t1 x_2
+               ->  Index Only Scan Backward using fract_x1_pkey on fract_x1 x_2
                ->  Index Only Scan using fract_t1_pkey on fract_t1 y_2
                      Index Cond: (id = x_2.id)
 (11 rows)
 
 -- cleanup
 DROP TABLE fract_t;
+DROP TABLE fract_x;
 RESET max_parallel_workers_per_gather;
 RESET enable_partitionwise_join;

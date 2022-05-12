@@ -241,6 +241,85 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+       <term><option>-W <replaceable>save_path</replaceable></option></term>
+       <term><option>--save-fullpage=<replaceable>save_path</replaceable></option></term>
+       <term><option>-X <replaceable>save_path</replaceable></option></term>
+       <term><option>--save-fullpage-fixup=<replaceable>save_path</replaceable></option></term>
+       <listitem>
+       <para>
+        Save full page images seen in the WAL stream to the
+        <replaceable>save_path</replaceable> directory, which will be created
+        if it does not exist.  The images saved will be subject to the same
+        filtering and limiting criteria as display records, but in this
+        mode <application>pg_waldump</application> will not output any other
+        information.
+       </para>
+       <para>
+        If invoked using
+        the <literal>-X</literal>/<literal>--save-fullpage-fixup</literal>
+        option, this page image will include the <literal>pd_lsn</literal> of
+        the replayed record rather than the raw page image; as well,
+        the <literal>pd_checksum</literal> field will be updated if it had
+        previously existed.
+       </para>
+       <para>
+        The page images will be saved with the file
+        format: <literal><replaceable>LSN</replaceable>.<replaceable>TSOID</replaceable>.<replaceable>DBOID</replaceable>.<replaceable>RELNODE</replaceable>.<replaceable>BLKNO</replaceable><replaceable>FORK</replaceable></literal>
+
+        The dot-separated components are (in order):
+
+        <informaltable>
+         <tgroup cols="2">
+          <thead>
+           <row>
+            <entry>Component</entry>
+            <entry>Description</entry>
+           </row>
+          </thead>
+
+          <tbody>
+           <row>
+            <entry>LSN</entry>
+            <entry>The LSN of the record with this block, formatted
+             as two 8-character hexadecimal numbers <literal>%08X-%08X</literal></entry>
+           </row>
+
+           <row>
+            <entry>TSOID</entry>
+            <entry>tablespace OID for the block</entry>
+           </row>
+
+           <row>
+            <entry>DBOID</entry>
+            <entry>database OID for the block</entry>
+           </row>
+
+           <row>
+            <entry>RELNODE</entry>
+            <entry>relnode id for the block</entry>
+           </row>
+
+           <row>
+            <entry>BLKNO</entry>
+            <entry>the block number of this block</entry>
+           </row>
+
+           <row>
+            <entry>FORK</entry>
+            <entry>
+             if coming from the main fork, will be empty, otherwise will be
+             one of <literal>_fsm</literal>, <literal>_vm</literal>,
+             or <literal>_init</literal>.
+            </entry>
+           </row>
+          </tbody>
+         </tgroup>
+        </informaltable>
+       </para>
+       </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>-x <replaceable>xid</replaceable></option></term>
       <term><option>--xid=<replaceable>xid</replaceable></option></term>
       <listitem>

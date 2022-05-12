@@ -24,8 +24,12 @@
 #include "access/xlogstats.h"
 #include "common/fe_memutils.h"
 #include "common/logging.h"
+#include "common/relpath.h"
 #include "getopt_long.h"
 #include "rmgrdesc.h"
+#include "storage/bufpage.h"
+#include "storage/checksum.h"
+#include "storage/checksum_impl.h"
 
 /*
  * NOTE: For any code change or issue fix here, it is highly recommended to
@@ -70,6 +74,11 @@ typedef struct XLogDumpConfig
 	bool		filter_by_relation_block_enabled;
 	ForkNumber	filter_by_relation_forknum;
 	bool		filter_by_fpw;
+
+	/* save options */
+	bool		save_fpw;
+	bool		fixup_fpw;
+	char	   *save_fpw_path;
 } XLogDumpConfig;
 
 
@@ -440,6 +449,109 @@ XLogRecordHasFPW(XLogReaderState *record)
 }
 
 /*
+ * Function to externally save all FPWs stored in the given WAL record
+ */
+static void
+XLogRecordSaveFPWs(XLogReaderState *record, const char *savepath, bool fixup)
+{
+	int			block_id;
+
+	for (block_id = 0; block_id <= XLogRecMaxBlockId(record); block_id++)
+	{
+		if (!XLogRecHasBlockRef(record, block_id))
+			continue;
+
+		if (XLogRecHasBlockImage(record, block_id))
+		{
+			char		page[BLCKSZ];
+
+			memset(page, 0, BLCKSZ);
+
+			if (RestoreBlockImage(record, block_id, page))
+			{
+				/* we have our extracted FPI, let's save it now */
+				char		filename[MAXPGPATH];
+				char		forkname[FORKNAMECHARS + 2];	/* _ + \0 */
+				FILE	   *OPF;
+				BlockNumber blk;
+				RelFileNode rnode;
+				ForkNumber	fork;
+
+				XLogRecGetBlockTagExtended(record, block_id,
+										   &rnode, &fork, &blk, NULL);
+
+				/*
+				 * The raw page as stored in the WAL record includes the LSN
+				 * of the block as it appeared when it was originally written,
+				 * however this differs than the effects of replaying this
+				 * same FPI in recovery, as recovery calls RestoreBlockImage()
+				 * and then sets the LSN as part of one action.  What this
+				 * means is that a page as recovered from WAL and the version
+				 * of the page saved here will differ by the LSN and the
+				 * checksum (if enabled).
+				 *
+				 * There are potentially use-cases for both versions (with and
+				 * without mentioned fixups), so allow this to be
+				 * user-selected, unless the restored page was empty, in which
+				 * case we leave it alone.
+				 */
+
+				if (fixup && !PageIsNew(page))
+				{
+					PageSetLSN(page, record->ReadRecPtr);
+
+					/*
+					 * If checksum field is non-zero then we have checksums
+					 * enabled, so recalculate the checksum with new LSN
+					 * (whether this is considered a hack or heuristics is an
+					 * exercise for the reader).
+					 *
+					 * We make this choice to allow pages saved by this
+					 * function to work as expected with the checksum-related
+					 * functions in pageinspect without having to worry about
+					 * zero_damaged_pages or other considerations.
+					 *
+					 * FPIs in WAL do not have the checksum field updated in
+					 * the page image; in a checksums-enabled cluster, this
+					 * task is handled by FlushBuffer() when a dirty buffer is
+					 * written out to disk.  Since we are running outside of
+					 * Postmaster that won't work in this case, so we handle
+					 * ourselves.
+					 */
+
+					if (((PageHeader) page)->pd_checksum)
+						((PageHeader) page)->pd_checksum = pg_checksum_page((char *) page, blk);
+				}
+
+				if (fork >= 0 && fork <= MAX_FORKNUM)
+				{
+					if (fork)
+						sprintf(forkname, "_%s", forkNames[fork]);
+					else
+						forkname[0] = 0;
+				}
+				else
+					pg_fatal("found invalid fork number: %u", fork);
+
+				snprintf(filename, MAXPGPATH, "%s/%08X-%08X.%u.%u.%u.%u%s", savepath,
+						 LSN_FORMAT_ARGS(record->ReadRecPtr),
+						 rnode.spcNode, rnode.dbNode, rnode.relNode, blk, forkname);
+
+				OPF = fopen(filename, PG_BINARY_W);
+				if (!OPF)
+					pg_fatal("couldn't open file for output: %s", filename);
+
+				if (pg_pwrite(fileno(OPF), page, BLCKSZ, 0) != BLCKSZ)
+					pg_fatal("couldn't write out complete fullpage image to file: %s", filename);
+
+				fsync(fileno(OPF));
+				fclose(OPF);
+			}
+		}
+	}
+}
+
+/*
  * Print a record to stdout
  */
 static void
@@ -660,29 +772,32 @@ usage(void)
 	printf(_("Usage:\n"));
 	printf(_("  %s [OPTION]... [STARTSEG [ENDSEG]]\n"), progname);
 	printf(_("\nOptions:\n"));
-	printf(_("  -b, --bkp-details      output detailed information about backup blocks\n"));
-	printf(_("  -B, --block=N          with --relation, only show records that modify block N\n"));
-	printf(_("  -e, --end=RECPTR       stop reading at WAL location RECPTR\n"));
-	printf(_("  -f, --follow           keep retrying after reaching end of WAL\n"));
-	printf(_("  -F, --fork=FORK        only show records that modify blocks in fork FORK;\n"
-			 "                         valid names are main, fsm, vm, init\n"));
-	printf(_("  -n, --limit=N          number of records to display\n"));
-	printf(_("  -p, --path=PATH        directory in which to find log segment files or a\n"
-			 "                         directory with a ./pg_wal that contains such files\n"
-			 "                         (default: current directory, ./pg_wal, $PGDATA/pg_wal)\n"));
-	printf(_("  -q, --quiet            do not print any output, except for errors\n"));
-	printf(_("  -r, --rmgr=RMGR        only show records generated by resource manager RMGR;\n"
-			 "                         use --rmgr=list to list valid resource manager names\n"));
-	printf(_("  -R, --relation=T/D/R   only show records that modify blocks in relation T/D/R\n"));
-	printf(_("  -s, --start=RECPTR     start reading at WAL location RECPTR\n"));
-	printf(_("  -t, --timeline=TLI     timeline from which to read log records\n"
-			 "                         (default: 1 or the value used in STARTSEG)\n"));
-	printf(_("  -V, --version          output version information, then exit\n"));
-	printf(_("  -w, --fullpage         only show records with a full page write\n"));
-	printf(_("  -x, --xid=XID          only show records with transaction ID XID\n"));
-	printf(_("  -z, --stats[=record]   show statistics instead of records\n"
-			 "                         (optionally, show per-record statistics)\n"));
-	printf(_("  -?, --help             show this help, then exit\n"));
+	printf(_("  -b, --bkp-details               output detailed information about backup blocks\n"));
+	printf(_("  -B, --block=N                   with --relation, only show records that modify block N\n"));
+	printf(_("  -e, --end=RECPTR                stop reading at WAL location RECPTR\n"));
+	printf(_("  -f, --follow                    keep retrying after reaching end of WAL\n"));
+	printf(_("  -F, --fork=FORK                 only show records that modify blocks in fork FORK;\n"
+			 "                                  valid names are main, fsm, vm, init\n"));
+	printf(_("  -n, --limit=N                   number of records to display\n"));
+	printf(_("  -p, --path=PATH                 directory in which to find log segment files or a\n"
+			 "                                  directory with a ./pg_wal that contains such files\n"
+			 "                                  (default: current directory, ./pg_wal, $PGDATA/pg_wal)\n"));
+	printf(_("  -q, --quiet                     do not print any output, except for errors\n"));
+	printf(_("  -r, --rmgr=RMGR                 only show records generated by resource manager RMGR;\n"
+			 "                                  use --rmgr=list to list valid resource manager names\n"));
+	printf(_("  -R, --relation=T/D/R            only show records that modify blocks in relation T/D/R\n"));
+	printf(_("  -s, --start=RECPTR              start reading at WAL location RECPTR\n"));
+	printf(_("  -t, --timeline=TLI              timeline from which to read log records\n"
+			 "                                  (default: 1 or the value used in STARTSEG)\n"));
+	printf(_("  -V, --version                   output version information, then exit\n"));
+	printf(_("  -w, --fullpage                  only show records with a full page write\n"));
+	printf(_("  -W, --save-fullpage=path        save found full page images to given path\n"
+			 "                                  as LSN.T.D.R.B_F\n"));
+	printf(_("  -X, --save-fullpage-fixup=path  like -W, but include page-level fixups in saved page\n"));
+	printf(_("  -x, --xid=XID                   only show records with transaction ID XID\n"));
+	printf(_("  -z, --stats[=record]            show statistics instead of records\n"
+			 "                                  (optionally, show per-record statistics)\n"));
+	printf(_("  -?, --help                      show this help, then exit\n"));
 	printf(_("\nReport bugs to <%s>.\n"), PACKAGE_BUGREPORT);
 	printf(_("%s home page: <%s>\n"), PACKAGE_NAME, PACKAGE_URL);
 }
@@ -695,7 +810,7 @@ main(int argc, char **argv)
 	XLogReaderState *xlogreader_state;
 	XLogDumpPrivate private;
 	XLogDumpConfig config;
-	XLogStats stats;
+	XLogStats	stats;
 	XLogRecord *record;
 	XLogRecPtr	first_record;
 	char	   *waldir = NULL;
@@ -712,6 +827,8 @@ main(int argc, char **argv)
 		{"limit", required_argument, NULL, 'n'},
 		{"path", required_argument, NULL, 'p'},
 		{"quiet", no_argument, NULL, 'q'},
+		{"save-fullpage", required_argument, NULL, 'W'},
+		{"save-fullpage-fixup", required_argument, NULL, 'X'},
 		{"relation", required_argument, NULL, 'R'},
 		{"rmgr", required_argument, NULL, 'r'},
 		{"start", required_argument, NULL, 's'},
@@ -772,6 +889,9 @@ main(int argc, char **argv)
 	config.filter_by_fpw = false;
 	config.stats = false;
 	config.stats_per_record = false;
+	config.save_fpw = false;
+	config.fixup_fpw = false;
+	config.save_fpw_path = NULL;
 
 	stats.startptr = InvalidXLogRecPtr;
 	stats.endptr = InvalidXLogRecPtr;
@@ -782,7 +902,7 @@ main(int argc, char **argv)
 		goto bad_argument;
 	}
 
-	while ((option = getopt_long(argc, argv, "bB:e:fF:n:p:qr:R:s:t:wx:z",
+	while ((option = getopt_long(argc, argv, "bB:e:fF:n:p:qr:R:s:t:wW:x:X:z",
 								 long_options, &optindex)) != -1)
 	{
 		switch (option)
@@ -919,6 +1039,12 @@ main(int argc, char **argv)
 			case 'w':
 				config.filter_by_fpw = true;
 				break;
+			case 'W':
+			case 'X':
+				config.save_fpw = true;
+				config.fixup_fpw = (option == 'X');
+				config.save_fpw_path = pg_strdup(optarg);
+				break;
 			case 'x':
 				if (sscanf(optarg, "%u", &config.filter_by_xid) != 1)
 				{
@@ -968,6 +1094,24 @@ main(int argc, char **argv)
 		if (!verify_directory(waldir))
 		{
 			pg_log_error("could not open directory \"%s\": %m", waldir);
+			goto bad_argument;
+		}
+	}
+
+	if (config.save_fpw_path != NULL)
+	{
+		int			dir_status = pg_check_dir(config.save_fpw_path);
+
+		if (dir_status < 0)
+		{
+			pg_log_error("could not access output directory: %s", config.save_fpw_path);
+			goto bad_argument;
+		}
+
+		if (!dir_status && mkdir(config.save_fpw_path, 0700) < 0)
+		{
+			pg_log_error("could not create output directory \"%s\": %m",
+						 config.save_fpw_path);
 			goto bad_argument;
 		}
 	}
@@ -1149,6 +1293,11 @@ main(int argc, char **argv)
 			{
 				XLogRecStoreStats(&stats, xlogreader_state);
 				stats.endptr = xlogreader_state->EndRecPtr;
+			}
+			else if (config.save_fpw)
+			{
+				if (XLogRecordHasFPW(xlogreader_state))
+					XLogRecordSaveFPWs(xlogreader_state, config.save_fpw_path, config.fixup_fpw);
 			}
 			else
 				XLogDumpDisplayRecord(&config, xlogreader_state);

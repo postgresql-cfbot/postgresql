@@ -578,11 +578,20 @@ task:
 
   build_script: |
     vcvarsall x64
-    ninja -C build
+    ninja -C build |tee build.txt
+    REM Since pipes lose the exit status of the preceding command, rerun the compilation
+    REM without the pipe, exiting now if it fails, to avoid trying to run checks
+    ninja -C build > nul
 
   check_world_script: |
     vcvarsall x64
     meson test %MTEST_ARGS% --num-processes %TEST_JOBS%
+
+  # This should be last, so check_world is run even if there are warnings
+  always:
+    compiler_warnings_script:
+      # this avoids using metachars which would be interpretted by the windows shell
+      - sh -c 'if grep ": warning " build.txt; then exit 1; fi; exit 0'
 
   on_failure:
     <<: *on_failure_meson

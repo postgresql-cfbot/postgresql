@@ -548,6 +548,12 @@ task:
   env:
     TEST_JOBS: 8 # wild guess, data based value welcome
 
+    CC: c:\msys64\ucrt64\bin\ccache.exe cl.exe
+    CCACHE_DIR: $CIRRUS_WORKING_DIR/.ccache
+    CCACHE_MAXSIZE: "500M"
+    CCACHE_SLOPPINESS: pch_defines,time_macros
+    CCACHE_DEPEND: 1
+
     # Cirrus defaults to SetErrorMode(SEM_NOGPFAULTERRORBOX | ...). That
     # prevents crash reporting from working unless binaries do SetErrorMode()
     # themselves. Furthermore, it appears that either python or, more likely,
@@ -565,6 +571,9 @@ task:
   setup_additional_packages_script: |
     REM choco install -y --no-progress ...
 
+  ccache_cache:
+    folder: $CCACHE_DIR
+
   setup_hosts_file_script: |
     echo 127.0.0.1 pg-loadbalancetest >> c:\Windows\System32\Drivers\etc\hosts
     echo 127.0.0.2 pg-loadbalancetest >> c:\Windows\System32\Drivers\etc\hosts
@@ -572,9 +581,10 @@ task:
     type c:\Windows\System32\Drivers\etc\hosts
 
   # Use /DEBUG:FASTLINK to avoid high memory usage during linking
+  # Use /Z7 to write separate debug files, to allow ccache to work
   configure_script: |
     vcvarsall x64
-    meson setup --backend ninja --buildtype debug -Dc_link_args=/DEBUG:FASTLINK -Dcassert=true -Dinjection_points=true -Db_pch=true -Dextra_lib_dirs=c:\openssl\1.1\lib -Dextra_include_dirs=c:\openssl\1.1\include -DTAR=%TAR% -DPG_TEST_EXTRA="%PG_TEST_EXTRA%" build
+    meson setup build --backend ninja --buildtype debug -Dc_link_args=/DEBUG:FASTLINK -Dcassert=true -Dinjection_points=true -Db_pch=true -Dextra_lib_dirs=c:\openssl\1.1\lib -Dextra_include_dirs=c:\openssl\1.1\include -DTAR=%TAR% -DPG_TEST_EXTRA="%PG_TEST_EXTRA%" -Dc_args="/Z7"
 
   build_script: |
     vcvarsall x64
@@ -582,6 +592,9 @@ task:
     REM Since pipes lose the exit status of the preceding command, rerun the compilation
     REM without the pipe, exiting now if it fails, to avoid trying to run checks
     ninja -C build > nul
+
+  always:
+    upload_caches: [ccache]
 
   check_world_script: |
     vcvarsall x64

@@ -1077,7 +1077,7 @@ get_publication_name(Oid pubid, bool missing_ok)
 }
 
 /*
- * Returns information of tables in a publication.
+ * Returns information about tables in a publication.
  */
 Datum
 pg_get_publication_tables(PG_FUNCTION_ARGS)

@@ -11673,7 +11673,7 @@
   prosrc => 'pg_show_replication_origin_status' },
 
 # publications
-{ oid => '6119', descr => 'get information of tables in a publication',
+{ oid => '6119', descr => 'get information about tables in a publication',
   proname => 'pg_get_publication_tables', prorows => '1000', proretset => 't',
   provolatile => 's', prorettype => 'record', proargtypes => 'text',
   proallargtypes => '{text,oid,int2vector,pg_node_tree}', proargmodes => '{i,o,o,o}',

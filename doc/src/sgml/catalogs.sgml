@@ -9701,7 +9701,7 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
 
      <row>
       <entry><link linkend="view-pg-publication-tables"><structname>pg_publication_tables</structname></link></entry>
-      <entry>publications and information of their associated tables</entry>
+      <entry>publications and information about their associated tables</entry>
      </row>
 
      <row>
@@ -11645,7 +11645,7 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
 
   <para>
    The view <structname>pg_publication_tables</structname> provides
-   information about the mapping between publications and information of
+   information about the mapping between publications and information about
    tables they contain.  Unlike the underlying catalog
    <link linkend="catalog-pg-publication-rel"><structname>pg_publication_rel</structname></link>,
    this view expands publications defined as <literal>FOR ALL TABLES</literal>
@@ -11705,7 +11705,7 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
       </para>
       <para>
        Names of table columns included in the publication. This contains all
-       the columns of the table when the user didn't specify the column list
+       the columns of the table when the user didn't specify a column list
        for the table.
       </para></entry>
      </row>

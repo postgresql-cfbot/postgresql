@@ -16,6 +16,9 @@
 #ifdef USE_LZ4
 #include <lz4.h>
 #endif
+#ifdef USE_ZSTD
+#include <zstd.h>
+#endif
 
 #include "access/detoast.h"
 #include "access/toast_compression.h"
@@ -26,11 +29,11 @@
 /* GUC */
 int			default_toast_compression = TOAST_PGLZ_COMPRESSION;
 
-#define NO_LZ4_SUPPORT() \
+#define NO_METHOD_SUPPORT(method) \
 	ereport(ERROR, \
 			(errcode(ERRCODE_FEATURE_NOT_SUPPORTED), \
-			 errmsg("compression method lz4 not supported"), \
-			 errdetail("This functionality requires the server to be built with lz4 support.")))
+			 errmsg("compression method %s not supported", method), \
+			 errdetail("This functionality requires the server to be built with %s support.", method)))
 
 /*
  * Compress a varlena using PGLZ.
@@ -140,7 +143,7 @@ struct varlena *
 lz4_compress_datum(const struct varlena *value)
 {
 #ifndef USE_LZ4
-	NO_LZ4_SUPPORT();
+	NO_METHOD_SUPPORT("lz4");
 	return NULL;				/* keep compiler quiet */
 #else
 	int32		valsize;
@@ -183,7 +186,7 @@ struct varlena *
 lz4_decompress_datum(const struct varlena *value)
 {
 #ifndef USE_LZ4
-	NO_LZ4_SUPPORT();
+	NO_METHOD_SUPPORT("lz4");
 	return NULL;				/* keep compiler quiet */
 #else
 	int32		rawsize;
@@ -216,7 +219,7 @@ struct varlena *
 lz4_decompress_datum_slice(const struct varlena *value, int32 slicelength)
 {
 #ifndef USE_LZ4
-	NO_LZ4_SUPPORT();
+	NO_METHOD_SUPPORT("lz4");
 	return NULL;				/* keep compiler quiet */
 #else
 	int32		rawsize;
@@ -241,6 +244,143 @@ lz4_decompress_datum_slice(const struct varlena *value, int32 slicelength)
 				 errmsg_internal("compressed lz4 data is corrupt")));
 
 	SET_VARSIZE(result, rawsize + VARHDRSZ);
+
+	return result;
+#endif
+}
+
+/*
+ * Compress a varlena using Zstandard.
+ *
+ * Returns the compressed varlena, or NULL if compression fails.
+ */
+struct varlena *
+zstd_compress_datum(const struct varlena *value)
+{
+#ifndef USE_ZSTD
+	NO_METHOD_SUPPORT("zstd");
+	return NULL;				/* keep compiler quiet */
+#else
+	int32		valsize;
+	int32		len;
+	int32		max_size;
+	struct varlena *tmp = NULL;
+
+	valsize = VARSIZE_ANY_EXHDR(value);
+
+	/*
+	 * Figure out the maximum possible size of the ZSTD output, add the bytes
+	 * that will be needed for varlena overhead, and allocate that amount.
+	 */
+	max_size = ZSTD_compressBound(valsize);
+	tmp = (struct varlena *) palloc(max_size + VARHDRSZ_COMPRESSED);
+
+	len = ZSTD_compress((char *) tmp + VARHDRSZ_COMPRESSED,
+						max_size, VARDATA_ANY(value), valsize,
+						ZSTD_CLEVEL_DEFAULT);
+	if (ZSTD_isError(len))
+		elog(ERROR, "zstd compression failed: %s",
+			 ZSTD_getErrorName(len));
+
+	/* data is incompressible so just free the memory and return NULL */
+	if (len > valsize)
+	{
+		pfree(tmp);
+		return NULL;
+	}
+
+	SET_VARSIZE_COMPRESSED(tmp, len + VARHDRSZ_COMPRESSED);
+
+	return tmp;
+#endif
+}
+
+/*
+ * Decompress a varlena that was compressed using Zstandard.
+ */
+struct varlena *
+zstd_decompress_datum(const struct varlena *value)
+{
+#ifndef USE_ZSTD
+	NO_METHOD_SUPPORT("zstd");
+	return NULL;				/* keep compiler quiet */
+#else
+	int32		rawsize;
+	struct varlena *result;
+
+	/* allocate memory for the uncompressed data */
+	result = (struct varlena *) palloc(VARDATA_COMPRESSED_GET_EXTSIZE(value) + VARHDRSZ);
+
+	/* decompress the data */
+	rawsize = ZSTD_decompress(VARDATA(result),
+							  VARDATA_COMPRESSED_GET_EXTSIZE(value),
+							  (char *) value + VARHDRSZ_COMPRESSED,
+							  VARSIZE(value) - VARHDRSZ_COMPRESSED);
+	if (ZSTD_isError(rawsize))
+		ereport(ERROR,
+				(errcode(ERRCODE_DATA_CORRUPTED),
+				 errmsg_internal("compressed zstd data is corrupt: %s",
+								 ZSTD_getErrorName(rawsize))));
+
+	SET_VARSIZE(result, rawsize + VARHDRSZ);
+
+	return result;
+#endif
+}
+
+/*
+ * Decompress part of a varlena that was compressed using Zstandard.
+ *
+ * ZSTD_decompress() is not able to decompress a partial portion, but streams
+ * can do that.
+ */
+struct varlena *
+zstd_decompress_datum_slice(const struct varlena *value, int32 slicelength)
+{
+#ifndef USE_ZSTD
+	NO_METHOD_SUPPORT("zstd");
+	return NULL;				/* keep compiler quiet */
+#else
+
+	struct varlena *result;
+
+	ZSTD_inBuffer inBuf;
+	ZSTD_outBuffer outBuf;
+	ZSTD_DCtx *dctx = ZSTD_createDCtx();
+
+	if (dctx == NULL)
+		elog(ERROR, "could not create zstd decompression context");
+
+	inBuf.src = (char *) value + VARHDRSZ_COMPRESSED;
+	inBuf.size = VARSIZE(value) - VARHDRSZ_COMPRESSED;
+	inBuf.pos = 0;
+
+	result = (struct varlena *) palloc(slicelength + VARHDRSZ);
+
+	outBuf.dst = (char *) result + VARHDRSZ;
+	outBuf.size = slicelength;
+	outBuf.pos = 0;
+
+	while (inBuf.pos < inBuf.size &&
+		   outBuf.pos < outBuf.size)
+	{
+		size_t ret;
+
+		ret = ZSTD_decompressStream(dctx, &outBuf, &inBuf);
+
+		if (ZSTD_isError(ret))
+		{
+			ZSTD_freeDCtx(dctx);
+			ereport(ERROR,
+					(errcode(ERRCODE_DATA_CORRUPTED),
+					 errmsg_internal("compressed zstd data is corrupt: %s",
+									 ZSTD_getErrorName(ret))));
+		}
+	}
+
+	Assert(outBuf.size == slicelength && outBuf.pos == slicelength);
+	SET_VARSIZE(result, outBuf.pos + VARHDRSZ);
+	ZSTD_freeDCtx(dctx);
 
 	return result;
 #endif
@@ -290,9 +430,16 @@ CompressionNameToMethod(const char *compression)
 	else if (strcmp(compression, "lz4") == 0)
 	{
 #ifndef USE_LZ4
-		NO_LZ4_SUPPORT();
+		NO_METHOD_SUPPORT("lz4");
 #endif
 		return TOAST_LZ4_COMPRESSION;
+	}
+	else if (strcmp(compression, "zstd") == 0)
+	{
+#ifndef USE_ZSTD
+		NO_METHOD_SUPPORT("zstd");
+#endif
+		return TOAST_ZSTD_COMPRESSION;
 	}
 
 	return InvalidCompressionMethod;
@@ -310,6 +457,8 @@ GetCompressionMethodName(char method)
 			return "pglz";
 		case TOAST_LZ4_COMPRESSION:
 			return "lz4";
+		case TOAST_ZSTD_COMPRESSION:
+			return "zstd";
 		default:
 			elog(ERROR, "invalid compression method %c", method);
 			return NULL;		/* keep compiler quiet */

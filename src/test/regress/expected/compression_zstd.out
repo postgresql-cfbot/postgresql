@@ -1,0 +1,79 @@
+\set HIDE_TOAST_COMPRESSION false
+-- ensure we get stable results regardless of installation's default
+SET default_toast_compression = 'pglz';
+-- test creating table with compression method
+CREATE TABLE cmdata_zstd(f1 TEXT COMPRESSION zstd);
+INSERT INTO cmdata_zstd VALUES(repeat('1234567890', 1004));
+\d+ cmdata_zstd
+                                      Table "public.cmdata_zstd"
+ Column | Type | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | text |           |          |         | extended | zstd        |              | 
+
+-- verify stored compression method in the data
+SELECT pg_column_compression(f1) FROM cmdata_zstd;
+ pg_column_compression 
+-----------------------
+ zstd
+(1 row)
+
+-- decompress data slice
+SELECT SUBSTR(f1, 2000, 50) FROM cmdata_zstd;
+                       substr                       
+----------------------------------------------------
+ 01234567890123456789012345678901234567890123456789
+(1 row)
+
+-- test LIKE INCLUDING COMPRESSION
+CREATE TABLE cmdata_zstd_2 (LIKE cmdata_zstd INCLUDING COMPRESSION);
+\d+ cmdata_zstd_2
+                                     Table "public.cmdata_zstd_2"
+ Column | Type | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+------+-----------+----------+---------+----------+-------------+--------------+-------------
+ f1     | text |           |          |         | extended | zstd        |              | 
+
+DROP TABLE cmdata_zstd_2;
+-- test externally stored compressed data
+CREATE OR REPLACE FUNCTION large_val() RETURNS TEXT LANGUAGE SQL AS
+'select array_agg(md5(g::text))::text from generate_series(1, 256) g';
+INSERT INTO cmdata_zstd SELECT large_val() || repeat('a', 4000);
+SELECT pg_column_compression(f1) FROM cmdata_zstd;
+ pg_column_compression 
+-----------------------
+ zstd
+ zstd
+(2 rows)
+
+SELECT SUBSTR(f1, 200, 5) FROM cmdata_zstd;
+ substr 
+--------
+ 01234
+ 8f14e
+(2 rows)
+
+-- test compression with materialized view
+CREATE MATERIALIZED VIEW compressmv_zstd(x) AS SELECT * FROM cmdata_zstd;
+\d+ compressmv_zstd
+                              Materialized view "public.compressmv_zstd"
+ Column | Type | Collation | Nullable | Default | Storage  | Compression | Stats target | Description 
+--------+------+-----------+----------+---------+----------+-------------+--------------+-------------
+ x      | text |           |          |         | extended |             |              | 
+View definition:
+ SELECT cmdata_zstd.f1 AS x
+   FROM cmdata_zstd;
+
+SELECT pg_column_compression(f1) FROM cmdata_zstd;
+ pg_column_compression 
+-----------------------
+ zstd
+ zstd
+(2 rows)
+
+SELECT pg_column_compression(x) FROM compressmv_zstd;
+ pg_column_compression 
+-----------------------
+ zstd
+ zstd
+(2 rows)
+
+\set HIDE_TOAST_COMPRESSION true

@@ -223,17 +223,6 @@ CREATE TABLE cminh(f1 TEXT COMPRESSION lz4) INHERITS(cmdata);
 NOTICE:  merging column "f1" with inherited definition
 ERROR:  column "f1" has a compression method conflict
 DETAIL:  pglz versus lz4
--- test default_toast_compression GUC
-SET default_toast_compression = '';
-ERROR:  invalid value for parameter "default_toast_compression": ""
-HINT:  Available values: pglz.
-SET default_toast_compression = 'I do not exist compression';
-ERROR:  invalid value for parameter "default_toast_compression": "I do not exist compression"
-HINT:  Available values: pglz.
-SET default_toast_compression = 'lz4';
-ERROR:  invalid value for parameter "default_toast_compression": "lz4"
-HINT:  Available values: pglz.
-SET default_toast_compression = 'pglz';
 -- test alter compression method
 ALTER TABLE cmdata ALTER COLUMN f1 SET COMPRESSION lz4;
 ERROR:  compression method lz4 not supported

@@ -896,6 +896,7 @@ ExplainPrintJIT(ExplainState *es, int jit_flags, JitInstrumentation *ji)
 		appendStringInfoString(es->str, "JIT:\n");
 		es->indent++;
 
+		ExplainPropertyInteger("Modules", NULL, ji->created_modules, es);
 		ExplainPropertyInteger("Functions", NULL, ji->created_functions, es);
 
 		ExplainIndentText(es);

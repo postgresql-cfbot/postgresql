@@ -1006,6 +1006,7 @@ copy_table_data(Oid OIDNewHeap, Oid OIDOldHeap, Oid OIDOldIndex, bool verbose,
 	relform = (Form_pg_class) GETSTRUCT(reltup);
 
 	relform->relpages = num_pages;
+	relform->relallvisible = num_pages;
 	relform->reltuples = num_tuples;
 
 	/* Don't update the stats for pg_class.  See swap_relation_files. */

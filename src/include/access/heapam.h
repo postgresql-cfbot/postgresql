@@ -200,6 +200,9 @@ extern void heap_get_root_tuples(Page page, OffsetNumber *root_offsets);
 struct VacuumParams;
 extern void heap_vacuum_rel(Relation rel,
 							struct VacuumParams *params, BufferAccessStrategy bstrategy);
+extern void heap_page_update_vm_flags(HeapTuple tuple, TransactionId OldestXmin,
+									  bool is_live, bool check_infomask,
+									  bool *all_visible, bool *all_frozen);
 
 /* in heap/heapam_visibility.c */
 extern bool HeapTupleSatisfiesVisibility(HeapTuple stup, Snapshot snapshot,

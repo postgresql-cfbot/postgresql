@@ -184,6 +184,7 @@ typedef struct
 	Datum		datum1;			/* value of first key column */
 	bool		isnull1;		/* is first key column NULL? */
 	int			srctape;		/* source tape number */
+	bool		is_live;		/* is the tuple alive? */
 } SortTuple;
 
 /*
@@ -1859,7 +1860,7 @@ tuplesort_puttupleslot(Tuplesortstate *state, TupleTableSlot *slot)
  * Note that the input data is always copied; the caller need not save it.
  */
 void
-tuplesort_putheaptuple(Tuplesortstate *state, HeapTuple tup)
+tuplesort_putheaptuple(Tuplesortstate *state, HeapTuple tup, bool is_live)
 {
 	MemoryContext oldcontext = MemoryContextSwitchTo(state->sortcontext);
 	SortTuple	stup;
@@ -1871,6 +1872,7 @@ tuplesort_putheaptuple(Tuplesortstate *state, HeapTuple tup)
 	COPYTUP(state, &stup, (void *) tup);
 
 	puttuple_common(state, &stup);
+	stup.is_live = is_live;
 
 	MemoryContextSwitchTo(oldcontext);
 }
@@ -2595,7 +2597,7 @@ tuplesort_gettupleslot(Tuplesortstate *state, bool forward, bool copy,
  * remaining valid after any further manipulation of tuplesort.
  */
 HeapTuple
-tuplesort_getheaptuple(Tuplesortstate *state, bool forward)
+tuplesort_getheaptuple(Tuplesortstate *state, bool forward, bool *is_live)
 {
 	MemoryContext oldcontext = MemoryContextSwitchTo(state->sortcontext);
 	SortTuple	stup;
@@ -2604,6 +2606,9 @@ tuplesort_getheaptuple(Tuplesortstate *state, bool forward)
 		stup.tuple = NULL;
 
 	MemoryContextSwitchTo(oldcontext);
+
+	if (is_live)
+		*is_live = stup.is_live;
 
 	return stup.tuple;
 }

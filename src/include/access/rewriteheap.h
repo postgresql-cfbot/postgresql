@@ -25,8 +25,8 @@ extern RewriteState begin_heap_rewrite(Relation OldHeap, Relation NewHeap,
 									   TransactionId OldestXmin, TransactionId FreezeXid,
 									   MultiXactId MultiXactCutoff);
 extern void end_heap_rewrite(RewriteState state);
-extern void rewrite_heap_tuple(RewriteState state, HeapTuple oldTuple,
-							   HeapTuple newTuple);
+extern void rewrite_heap_tuple(RewriteState state, bool is_live,
+							   HeapTuple oldTuple, HeapTuple newTuple);
 extern bool rewrite_heap_dead_tuple(RewriteState state, HeapTuple oldTuple);
 
 /*

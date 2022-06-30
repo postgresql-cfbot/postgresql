@@ -243,7 +243,7 @@ extern bool tuplesort_used_bound(Tuplesortstate *state);
 
 extern void tuplesort_puttupleslot(Tuplesortstate *state,
 								   TupleTableSlot *slot);
-extern void tuplesort_putheaptuple(Tuplesortstate *state, HeapTuple tup);
+extern void tuplesort_putheaptuple(Tuplesortstate *state, HeapTuple tup, bool is_live);
 extern void tuplesort_putindextuplevalues(Tuplesortstate *state,
 										  Relation rel, ItemPointer self,
 										  Datum *values, bool *isnull);
@@ -254,7 +254,7 @@ extern void tuplesort_performsort(Tuplesortstate *state);
 
 extern bool tuplesort_gettupleslot(Tuplesortstate *state, bool forward,
 								   bool copy, TupleTableSlot *slot, Datum *abbrev);
-extern HeapTuple tuplesort_getheaptuple(Tuplesortstate *state, bool forward);
+extern HeapTuple tuplesort_getheaptuple(Tuplesortstate *state, bool forward, bool *is_live);
 extern IndexTuple tuplesort_getindextuple(Tuplesortstate *state, bool forward);
 extern bool tuplesort_getdatum(Tuplesortstate *state, bool forward,
 							   Datum *val, bool *isNull, Datum *abbrev);

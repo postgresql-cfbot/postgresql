@@ -3211,6 +3211,53 @@ dead_items_cleanup(LVRelState *vacrel)
 }
 
 /*
+ * Update all_visible and all_frozen flags according to the tuple.  We
+ * use simplified check assuming that HeapTupleSatisfiesVacuum() should already
+ * set tuple hint bits.
+ */
+void
+heap_page_update_vm_flags(HeapTuple tuple, TransactionId OldestXmin,
+						  bool is_live, bool check_infomask,
+						  bool *all_visible, bool *all_frozen)
+{
+	TransactionId xmin;
+
+	/* Check comments in lazy_scan_prune. */
+	if (!HeapTupleHeaderXminCommitted(tuple->t_data) || !is_live)
+	{
+		*all_visible = false;
+		*all_frozen = false;
+		return;
+	}
+
+	/*
+	 * The inserter definitely committed. But is it old enough
+	 * that everyone sees it as committed?
+	 */
+	xmin = HeapTupleHeaderGetXmin(tuple->t_data);
+	if (!TransactionIdPrecedes(xmin, OldestXmin))
+	{
+		*all_visible = false;
+		*all_frozen = false;
+		return;
+	}
+
+	if (check_infomask &&
+		!(tuple->t_data->t_infomask & HEAP_XMAX_INVALID) &&
+		!HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_data->t_infomask))
+	{
+		*all_visible = false;
+		*all_frozen = false;
+		return;
+	}
+
+	/* Check whether this tuple is already frozen or not */
+	if (*all_visible && *all_frozen &&
+		heap_tuple_needs_eventual_freeze(tuple->t_data))
+		*all_frozen = false;
+}
+
+/*
  * Check if every tuple in the given page is visible to all current and future
  * transactions. Also return the visibility_cutoff_xid which is the highest
  * xmin amongst the visible tuples.  Set *all_frozen to true if every tuple
@@ -3279,34 +3326,14 @@ heap_page_is_all_visible(LVRelState *vacrel, Buffer buf,
 				{
 					TransactionId xmin;
 
-					/* Check comments in lazy_scan_prune. */
-					if (!HeapTupleHeaderXminCommitted(tuple.t_data))
-					{
-						all_visible = false;
-						*all_frozen = false;
-						break;
-					}
-
-					/*
-					 * The inserter definitely committed. But is it old enough
-					 * that everyone sees it as committed?
-					 */
-					xmin = HeapTupleHeaderGetXmin(tuple.t_data);
-					if (!TransactionIdPrecedes(xmin, vacrel->OldestXmin))
-					{
-						all_visible = false;
-						*all_frozen = false;
-						break;
-					}
+					heap_page_update_vm_flags(&tuple, vacrel->OldestXmin,
+											  true, false,
+											  &all_visible, all_frozen);
 
 					/* Track newest xmin on page. */
+					xmin = HeapTupleHeaderGetXmin(tuple.t_data);
 					if (TransactionIdFollows(xmin, *visibility_cutoff_xid))
 						*visibility_cutoff_xid = xmin;
-
-					/* Check whether this tuple is already frozen or not */
-					if (all_visible && *all_frozen &&
-						heap_tuple_needs_eventual_freeze(tuple.t_data))
-						*all_frozen = false;
 				}
 				break;
 

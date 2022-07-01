@@ -887,6 +887,11 @@ execute_extension_script(Oid extensionOid, ExtensionControlFile *control,
 
 	filename = get_extension_script_filename(control, from_version, version);
 
+	if (from_version == NULL)
+		ereport(DEBUG1, errmsg("executing extension script for version '%s'", version));
+	else
+		ereport(DEBUG1, errmsg("executing extension update script from version '%s' to '%s'", from_version, version));
+
 	/*
 	 * If installing a trusted extension on behalf of a non-superuser, become
 	 * the bootstrap superuser.  (This switch will be cleaned up automatically

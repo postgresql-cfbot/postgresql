@@ -78,6 +78,9 @@ static void show_qual(List *qual, const char *qlabel,
 static void show_scan_qual(List *qual, const char *qlabel,
 						   PlanState *planstate, List *ancestors,
 						   ExplainState *es);
+static void show_scan_stats(List *stats, List *clauses, List *ors,
+							PlanState *planstate, List *ancestors,
+							ExplainState *es);
 static void show_upper_qual(List *qual, const char *qlabel,
 							PlanState *planstate, List *ancestors,
 							ExplainState *es);
@@ -1751,6 +1754,10 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			if (plan->qual)
 				show_instrumentation_count("Rows Removed by Filter", 1,
 										   planstate, es);
+			if (es->verbose)
+				show_scan_stats(plan->applied_stats, plan->applied_clauses,
+								plan->applied_clauses_or,
+								planstate, ancestors, es);
 			break;
 		case T_IndexOnlyScan:
 			show_scan_qual(((IndexOnlyScan *) plan)->indexqual,
@@ -1767,10 +1774,18 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			if (es->analyze)
 				ExplainPropertyFloat("Heap Fetches", NULL,
 									 planstate->instrument->ntuples2, 0, es);
+			if (es->verbose)
+				show_scan_stats(plan->applied_stats, plan->applied_clauses,
+								plan->applied_clauses_or,
+								planstate, ancestors, es);
 			break;
 		case T_BitmapIndexScan:
 			show_scan_qual(((BitmapIndexScan *) plan)->indexqualorig,
 						   "Index Cond", planstate, ancestors, es);
+			if (es->verbose)
+				show_scan_stats(plan->applied_stats, plan->applied_clauses,
+								plan->applied_clauses_or,
+								planstate, ancestors, es);
 			break;
 		case T_BitmapHeapScan:
 			show_scan_qual(((BitmapHeapScan *) plan)->bitmapqualorig,
@@ -1800,6 +1815,10 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			if (plan->qual)
 				show_instrumentation_count("Rows Removed by Filter", 1,
 										   planstate, es);
+			if (es->verbose)
+				show_scan_stats(plan->applied_stats, plan->applied_clauses,
+								plan->applied_clauses_or,
+								planstate, ancestors, es);
 			break;
 		case T_Gather:
 			{
@@ -1987,6 +2006,10 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			if (plan->qual)
 				show_instrumentation_count("Rows Removed by Filter", 1,
 										   planstate, es);
+			if (es->verbose)
+				show_scan_stats(plan->applied_stats, plan->applied_clauses,
+								plan->applied_clauses_or,
+								planstate, ancestors, es);
 			break;
 		case T_WindowAgg:
 			show_upper_qual(plan->qual, "Filter", planstate, ancestors, es);
@@ -2002,6 +2025,10 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			if (plan->qual)
 				show_instrumentation_count("Rows Removed by Filter", 1,
 										   planstate, es);
+			if (es->verbose)
+				show_scan_stats(plan->applied_stats, plan->applied_clauses,
+								plan->applied_clauses_or,
+								planstate, ancestors, es);
 			break;
 		case T_Sort:
 			show_sort_keys(castNode(SortState, planstate), ancestors, es);
@@ -2319,6 +2346,76 @@ show_scan_qual(List *qual, const char *qlabel,
 
 	useprefix = (IsA(planstate->plan, SubqueryScan) || es->verbose);
 	show_qual(qual, qlabel, planstate, ancestors, useprefix, es);
+}
+
+/*
+ * Show a generic expression
+ */
+static char *
+deparse_stat_expression(Node *node,
+						PlanState *planstate, List *ancestors,
+						ExplainState *es)
+{
+	List	   *context;
+
+	/* Set up deparsing context */
+	context = set_deparse_context_plan(es->deparse_cxt,
+									   planstate->plan,
+									   ancestors);
+
+	/* Deparse the expression */
+	return deparse_expression(node, context, false, false);
+}
+
+/*
+ * Show a qualifier expression (which is a List with implicit AND semantics)
+ */
+static char *
+show_stat_qual(List *qual, bool is_or,
+			   PlanState *planstate, List *ancestors,
+			   ExplainState *es)
+{
+	Node	   *node;
+
+	/* No work if empty qual */
+	if (qual == NIL)
+		return NULL;
+
+	/* Convert AND list to explicit AND */
+	if (is_or)
+		node = (Node *) make_ors_explicit(qual);
+	else
+		node = (Node *) make_ands_explicit(qual);
+
+	/* And show it */
+	return deparse_stat_expression(node, planstate, ancestors, es);
+}
+
+/*
+ * Show applied statistics for scan plan node
+ */
+static void
+show_scan_stats(List *stats, List *clauses, List *ors,
+				PlanState *planstate, List *ancestors, ExplainState *es)
+{
+	ListCell   *lc1, *lc2, *lc3;
+	StringInfoData	str;
+
+	forthree (lc1, stats, lc2, clauses, lc3, ors)
+	{
+		StatisticExtInfo   *stat = (StatisticExtInfo *) lfirst(lc1);
+		List   *clauses = (List *) lfirst(lc2);
+		int		is_or = lfirst_int(lc3);
+
+		initStringInfo(&str);
+
+		appendStringInfo(&str, "%s.%s  Clauses: %s",
+						 get_namespace_name(get_statistics_namespace(stat->statOid)),
+						 get_statistics_name(stat->statOid),
+						 show_stat_qual(clauses, is_or, planstate, ancestors, es));
+
+		ExplainPropertyText("Statistics", str.data, es);
+	}
 }
 
 /*

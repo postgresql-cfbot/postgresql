@@ -1857,6 +1857,10 @@ ReadCommonPlan(Plan *local_node)
 	READ_NODE_FIELD(initPlan);
 	READ_BITMAPSET_FIELD(extParam);
 	READ_BITMAPSET_FIELD(allParam);
+
+	READ_NODE_FIELD(applied_stats);
+	READ_NODE_FIELD(applied_clauses);
+	READ_NODE_FIELD(applied_clauses_or);
 }
 
 /*

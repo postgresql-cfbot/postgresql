@@ -774,6 +774,11 @@ typedef struct RelOptInfo
 	Relids		all_partrels;	/* Relids set of all partition relids */
 	List	  **partexprs;		/* Non-nullable partition key expressions */
 	List	  **nullable_partexprs; /* Nullable partition key expressions */
+
+	/* info about applied extended statistics */
+	List	   *applied_stats;		/* list of StatisticExtInfo */
+	List	   *applied_clauses;	/* list of lists (of clauses) */
+	List	   *applied_clauses_or;	/* are the clauses AND or OR */
 } RelOptInfo;
 
 /*

@@ -24256,6 +24256,11 @@ SELECT has_function_privilege('joeuser', 'myfunc(int, text)', 'execute');
        </para>
        <para>
         Constructs an <type>aclitem</type> with the given properties.
+        Multiple privilege types can be listed separated by commas, in which
+        case all privileges would be set in the <type>aclitem</type>.
+        (As with <type>has_foo_privilege()</type> set of functions,
+        case of the privilege string is not significant, and extra whitespace
+        is allowed between but not within privilege names)
        </para></entry>
       </row>
      </tbody>

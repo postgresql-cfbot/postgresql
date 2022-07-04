@@ -182,12 +182,6 @@ holdMask -
     subset of the PGPROC object's heldLocks mask (if the PGPROC is
     currently waiting for another lock mode on this lock).
 
-releaseMask -
-    A bitmask for the lock modes due to be released during LockReleaseAll.
-    This must be a subset of the holdMask.  Note that it is modified without
-    taking the partition LWLock, and therefore it is unsafe for any
-    backend except the one owning the PROCLOCK to examine/change it.
-
 lockLink -
     List link for shared memory queue of all the PROCLOCK objects for the
     same LOCK.
@@ -321,8 +315,7 @@ and will notice any weak lock we take when it does.
 
 Fast-path VXID locks do not use the FastPathStrongRelationLocks table.  The
 first lock taken on a VXID is always the ExclusiveLock taken by its owner.
-Any subsequent lockers are share lockers waiting for the VXID to terminate.
-Indeed, the only reason VXID locks use the lock manager at all (rather than
+Any subsequent lockers are share lockers wait 
 waiting for the VXID to terminate via some other method) is for deadlock
 detection.  Thus, the initial VXID lock can *always* be taken via the fast
 path without checking for conflicts.  Any subsequent locker must check

@@ -33,6 +33,7 @@
 #include "utils/resowner_private.h"
 #include "utils/snapmgr.h"
 
+#include "lib/ilist.h"
 
 /*
  * All resource IDs managed by this code are required to fit into a Datum,
@@ -133,9 +134,7 @@ typedef struct ResourceOwnerData
 	ResourceArray cryptohasharr;	/* cryptohash contexts */
 	ResourceArray hmacarr;		/* HMAC contexts */
 
-	/* We can remember up to MAX_RESOWNER_LOCKS references to local locks. */
-	int			nlocks;			/* number of owned locks */
-	LOCALLOCK  *locks[MAX_RESOWNER_LOCKS];	/* list of owned locks */
+	dlist_head  locks;			/* dlist of owned locks */
 }			ResourceOwnerData;
 
 
@@ -452,6 +451,7 @@ ResourceOwnerCreate(ResourceOwner parent, const char *name)
 	ResourceArrayInit(&(owner->jitarr), PointerGetDatum(NULL));
 	ResourceArrayInit(&(owner->cryptohasharr), PointerGetDatum(NULL));
 	ResourceArrayInit(&(owner->hmacarr), PointerGetDatum(NULL));
+	dlist_init(&owner->locks);
 
 	return owner;
 }
@@ -585,8 +585,15 @@ ResourceOwnerReleaseInternal(ResourceOwner owner,
 	}
 	else if (phase == RESOURCE_RELEASE_LOCKS)
 	{
+		dlist_mutable_iter iter;
+
 		if (isTopLevel)
 		{
+			dlist_foreach_modify(iter, &owner->locks)
+				LockReleaseCurrentOwner(owner, iter.cur);
+
+			Assert(dlist_is_empty(&owner->locks));
+
 			/*
 			 * For a top-level xact we are going to release all locks (or at
 			 * least all non-session locks), so just do a single lmgr call at
@@ -605,30 +612,20 @@ ResourceOwnerReleaseInternal(ResourceOwner owner,
 			 * subtransaction, we do NOT release its locks yet, but transfer
 			 * them to the parent.
 			 */
-			LOCALLOCK **locks;
-			int			nlocks;
-
-			Assert(owner->parent != NULL);
-
-			/*
-			 * Pass the list of locks owned by this resource owner to the lock
-			 * manager, unless it has overflowed.
-			 */
-			if (owner->nlocks > MAX_RESOWNER_LOCKS)
-			{
-				locks = NULL;
-				nlocks = 0;
-			}
-			else
-			{
-				locks = owner->locks;
-				nlocks = owner->nlocks;
-			}
-
 			if (isCommit)
-				LockReassignCurrentOwner(locks, nlocks);
+			{
+				dlist_foreach_modify(iter, &owner->locks)
+					LockReassignCurrentOwner(owner, iter.cur);
+
+				Assert(dlist_is_empty(&owner->locks));
+			}
 			else
-				LockReleaseCurrentOwner(locks, nlocks);
+			{
+				dlist_foreach_modify(iter, &owner->locks)
+					LockReleaseCurrentOwner(owner, iter.cur);
+
+				Assert(dlist_is_empty(&owner->locks));
+			}
 		}
 	}
 	else if (phase == RESOURCE_RELEASE_AFTER_LOCKS)
@@ -752,7 +749,7 @@ ResourceOwnerDelete(ResourceOwner owner)
 	Assert(owner->jitarr.nitems == 0);
 	Assert(owner->cryptohasharr.nitems == 0);
 	Assert(owner->hmacarr.nitems == 0);
-	Assert(owner->nlocks == 0 || owner->nlocks == MAX_RESOWNER_LOCKS + 1);
+	Assert(dlist_is_empty(&owner->locks));
 
 	/*
 	 * Delete children.  The recursive call will delink the child from me, so
@@ -973,54 +970,61 @@ ResourceOwnerForgetBuffer(ResourceOwner owner, Buffer buffer)
 
 /*
  * Remember that a Local Lock is owned by a ResourceOwner
- *
- * This is different from the other Remember functions in that the list of
- * locks is only a lossy cache. It can hold up to MAX_RESOWNER_LOCKS entries,
- * and when it overflows, we stop tracking locks. The point of only remembering
- * only up to MAX_RESOWNER_LOCKS entries is that if a lot of locks are held,
- * ResourceOwnerForgetLock doesn't need to scan through a large array to find
- * the entry.
  */
 void
-ResourceOwnerRememberLock(ResourceOwner owner, LOCALLOCK *locallock)
+ResourceOwnerRememberLock(ResourceOwner owner, LOCALLOCKOWNER *locallockowner)
 {
-	Assert(locallock != NULL);
+	Assert(owner != NULL);
+	Assert(locallockowner != NULL);
 
-	if (owner->nlocks > MAX_RESOWNER_LOCKS)
-		return;					/* we have already overflowed */
-
-	if (owner->nlocks < MAX_RESOWNER_LOCKS)
-		owner->locks[owner->nlocks] = locallock;
-	else
+#ifdef USE_ASSERT_CHECKING
 	{
-		/* overflowed */
+		dlist_iter iter;
+
+		dlist_foreach(iter, &owner->locks)
+		{
+			LOCALLOCKOWNER *i = dlist_container(LOCALLOCKOWNER, resowner_node, iter.cur);
+
+			Assert(i->locallock != locallockowner->locallock);
+		}
 	}
-	owner->nlocks++;
+#endif
+
+	dlist_push_tail(&owner->locks, &locallockowner->resowner_node);
 }
 
 /*
- * Forget that a Local Lock is owned by a ResourceOwner
+ * Forget that a Local Lock is owned by the given LOCALLOCKOWNER.
  */
 void
-ResourceOwnerForgetLock(ResourceOwner owner, LOCALLOCK *locallock)
+ResourceOwnerForgetLock(LOCALLOCKOWNER *locallockowner)
 {
-	int			i;
+#ifdef USE_ASSERT_CHECKING
+	ResourceOwner owner;
 
-	if (owner->nlocks > MAX_RESOWNER_LOCKS)
-		return;					/* we have overflowed */
+	Assert(locallockowner != NULL);
 
-	Assert(owner->nlocks > 0);
-	for (i = owner->nlocks - 1; i >= 0; i--)
+	owner = locallockowner->owner;
+
 	{
-		if (locallock == owner->locks[i])
+		dlist_iter iter;
+		bool found = false;
+
+		dlist_foreach(iter, &owner->locks)
 		{
-			owner->locks[i] = owner->locks[owner->nlocks - 1];
-			owner->nlocks--;
-			return;
+			LOCALLOCKOWNER *owner = dlist_container(LOCALLOCKOWNER, resowner_node, iter.cur);
+
+			if (locallockowner == owner)
+			{
+				Assert(!found);
+				found = true;
+			}
 		}
+
+		Assert(found);
 	}
-	elog(ERROR, "lock reference %p is not owned by resource owner %s",
-		 locallock, owner->name);
+#endif
+	dlist_delete(&locallockowner->resowner_node);
 }
 
 /*

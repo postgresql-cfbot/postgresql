@@ -580,6 +580,8 @@ CREATE [ UNIQUE ] INDEX [ CONCURRENTLY ] [ [ IF NOT EXISTS ] <replaceable class=
     <para>
      Defines whether a summarization run is invoked for the previous page
      range whenever an insertion is detected on the next one.
+     See <xref linkend="brin-operation"/> for more details.
+     The default is <literal>off</literal>.
     </para>
     </listitem>
    </varlistentry>

@@ -73,31 +73,55 @@
    summarized range, that range does not automatically acquire a summary
    tuple; those tuples remain unsummarized until a summarization run is
    invoked later, creating initial summaries.
-   This process can be invoked manually using the
-   <function>brin_summarize_range(regclass, bigint)</function> or
-   <function>brin_summarize_new_values(regclass)</function> functions;
-   automatically when <command>VACUUM</command> processes the table;
-   or by automatic summarization executed by autovacuum, as insertions
-   occur.  (This last trigger is disabled by default and can be enabled
-   with the <literal>autosummarize</literal> parameter.)
-   Conversely, a range can be de-summarized using the
-   <function>brin_desummarize_range(regclass, bigint)</function> function,
-   which is useful when the index tuple is no longer a very good
-   representation because the existing values have changed.
+  </para>
+
+  <para>
+   There are several triggers for initial summarization of a page range
+   to occur.  If the table is vacuumed, either because
+   <xref linkend="sql-vacuum" /> has been manually invoked or because
+   autovacuum causes it,
+   all existing unsummarized page ranges are summarized.
+   Also, if the index has the
+   <xref linkend="index-reloption-autosummarize"/> parameter set to on,
+   then any run of autovacuum in the database will summarize all
+   unsummarized page ranges that have been completely filled recently,
+   regardless of whether the table is processed by autovacuum for other
+   reasons; see below.
+   Lastly, the following functions can be used:
+
+   <simplelist>
+    <member>
+     <function>brin_summarize_range(regclass, bigint)</function>
+     summarizes all unsummarized ranges
+    </member>
+    <member>
+     <function>brin_summarize_new_values(regclass)</function>
+     summarizes one specific range, if it is unsummarized
+    </member>
+   </simplelist>
   </para>
 
   <para>
    When autosummarization is enabled, each time a page range is filled a
-   request is sent to autovacuum for it to execute a targeted summarization
-   for that range, to be fulfilled at the end of the next worker run on the
-   same database.  If the request queue is full, the request is not recorded
-   and a message is sent to the server log:
+   request is sent to <literal>autovacuum</literal> for it to execute a targeted
+   summarization for that range, to be fulfilled at the end of the next
+   autovacuum worker run on the same database. If the request queue is full, the
+   request is not recorded and a message is sent to the server log:
 <screen>
 LOG:  request for BRIN range summarization for index "brin_wi_idx" page 128 was not recorded
 </screen>
    When this happens, the range will be summarized normally during the next
    regular vacuum of the table.
   </para>
+
+  <para>
+   Conversely, a range can be de-summarized using the
+   <function>brin_desummarize_range(regclass, bigint)</function> function,
+   which is useful when the index tuple is no longer a very good
+   representation because the existing values have changed.
+   See <xref linkend="functions-admin-index"/> for details.
+  </para>
+
  </sect2>
 </sect1>
 

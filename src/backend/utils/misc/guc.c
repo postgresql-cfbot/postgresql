@@ -716,6 +716,7 @@ static char *recovery_target_string;
 static char *recovery_target_xid_string;
 static char *recovery_target_name_string;
 static char *recovery_target_lsn_string;
+static char *password_duration_string;
 
 
 /* should be static, but commands/variable.c needs to get at this */
@@ -4719,6 +4720,17 @@ static struct config_string ConfigureNamesString[] =
 		&backtrace_functions,
 		"",
 		check_backtrace_functions, assign_backtrace_functions, NULL
+	},
+
+	{
+		{"password_valid_duration", PGC_SUSET, CONN_AUTH_AUTH,
+			gettext_noop("Specifies the default validity duration of new passwords."),
+			NULL,
+			GUC_SUPERUSER_ONLY | GUC_NOT_IN_SAMPLE
+		},
+		&password_duration_string,
+		NULL,
+		check_password_duration, assign_password_duration, show_password_duration
 	},
 
 	/* End-of-list marker */

@@ -42,9 +42,8 @@ CATALOG(pg_authid,1260,AuthIdRelationId) BKI_SHARED_RELATION BKI_ROWTYPE_OID(284
 	int32		rolconnlimit;	/* max connections allowed (-1=no limit) */
 
 	/* remaining fields may be null; use heap_getattr to read them! */
-#ifdef CATALOG_VARLEN			/* variable-length fields start here */
-	text		rolpassword;	/* password, if any */
-	timestamptz rolvaliduntil;	/* password expiration time, if any */
+#ifdef CATALOG_VARLEN
+	timestamptz rolvaliduntil BKI_FORCE_NULL;	/* role expiration time, if any */
 #endif
 } FormData_pg_authid;
 
@@ -54,8 +53,6 @@ CATALOG(pg_authid,1260,AuthIdRelationId) BKI_SHARED_RELATION BKI_ROWTYPE_OID(284
  * ----------------
  */
 typedef FormData_pg_authid *Form_pg_authid;
-
-DECLARE_TOAST_WITH_MACRO(pg_authid, 4175, 4176, PgAuthidToastTable, PgAuthidToastIndex);
 
 DECLARE_UNIQUE_INDEX(pg_authid_rolname_index, 2676, AuthIdRolnameIndexId, on pg_authid using btree(rolname name_ops));
 DECLARE_UNIQUE_INDEX_PKEY(pg_authid_oid_index, 2677, AuthIdOidIndexId, on pg_authid using btree(oid oid_ops));

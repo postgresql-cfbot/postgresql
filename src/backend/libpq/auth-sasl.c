@@ -33,7 +33,7 @@
  * implementation.
  *
  * shadow_pass is an optional pointer to the stored secret of the role
- * authenticated, from pg_authid.rolpassword.  For mechanisms that use
+ * authenticated, from pg_auth_password.password.  For mechanisms that use
  * shadowed passwords, a NULL pointer here means that an entry could not
  * be found for the role (or the user does not exist), and the mechanism
  * should fail the authentication exchange.
@@ -49,7 +49,7 @@
  * should just pass NULL.
  */
 int
-CheckSASLAuth(const pg_be_sasl_mech *mech, Port *port, char *shadow_pass,
+CheckSASLAuth(const pg_be_sasl_mech *mech, Port *port, const char **passwords, int num,
 			  const char **logdetail)
 {
 	StringInfoData sasl_mechs;
@@ -136,7 +136,7 @@ CheckSASLAuth(const pg_be_sasl_mech *mech, Port *port, char *shadow_pass,
 			 * This is because we don't want to reveal to an attacker what
 			 * usernames are valid, nor which users have a valid password.
 			 */
-			opaq = mech->init(port, selected_mech, shadow_pass);
+			opaq = mech->init(port, selected_mech, passwords, num);
 
 			inputlen = pq_getmsgint(&buf, 4);
 			if (inputlen == -1)

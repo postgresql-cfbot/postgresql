@@ -77,7 +77,7 @@ typedef struct pg_be_sasl_mech
 	 *				 disclosing valid user names.
 	 *---------
 	 */
-	void	   *(*init) (Port *port, const char *mech, const char *shadow_pass);
+	void	   *(*init) (Port *port, const char *mech, const char **secrets, const int num_secrets);
 
 	/*---------
 	 * exchange()
@@ -131,6 +131,6 @@ typedef struct pg_be_sasl_mech
 
 /* Common implementation for auth.c */
 extern int	CheckSASLAuth(const pg_be_sasl_mech *mech, Port *port,
-						  char *shadow_pass, const char **logdetail);
+						  const char **passwords, int num, const char **logdetail);
 
 #endif							/* PG_SASL_H */

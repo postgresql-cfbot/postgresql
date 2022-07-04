@@ -19,11 +19,15 @@
 /* GUC. Is actually of type PasswordType. */
 extern PGDLLIMPORT int Password_encryption;
 
+/* GUC. system-wide password validity duration */
+extern Interval *default_password_duration;
+
 /* Hook to check passwords in CreateRole() and AlterRole() */
 typedef void (*check_password_hook_type) (const char *username, const char *shadow_pass, PasswordType password_type, Datum validuntil_time, bool validuntil_null);
 
 extern PGDLLIMPORT check_password_hook_type check_password_hook;
 
+extern bool is_role_valid(const char *rolename, const char **logdetail);
 extern Oid	CreateRole(ParseState *pstate, CreateRoleStmt *stmt);
 extern Oid	AlterRole(ParseState *pstate, AlterRoleStmt *stmt);
 extern Oid	AlterRoleSet(AlterRoleSetStmt *stmt);

@@ -790,7 +790,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	DOUBLE_P DROP
 
 	EACH ELSE EMPTY_P ENABLE_P ENCODING ENCRYPTED END_P ENUM_P ERROR_P ESCAPE
-	EVENT EXCEPT EXCLUDE EXCLUDING EXCLUSIVE EXECUTE EXISTS EXPLAIN EXPRESSION
+	EVENT EXCEPT EXCLUDE EXCLUDING EXCLUSIVE EXECUTE EXISTS EXPIRES EXPLAIN EXPRESSION
 	EXTENSION EXTERNAL EXTRACT
 
 	FALSE_P FAMILY FETCH FILTER FINALIZE FIRST_P FLOAT_P FOLLOWING FOR
@@ -826,8 +826,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	ORDER ORDINALITY OTHERS OUT_P OUTER_P
 	OVER OVERLAPS OVERLAY OVERRIDING OWNED OWNER
 
-	PARALLEL PARAMETER PARSER PARTIAL PARTITION PASSING PASSWORD PATH
-	PLACING PLAN PLANS POLICY
+	PARALLEL PARAMETER PARSER PARTIAL PARTITION PASSING PASSNAME PASSWORD
+	PATH PLACING PLAN PLANS POLICY
 	POSITION PRECEDING PRECISION PRESERVE PREPARE PREPARED PRIMARY
 	PRIOR PRIVILEGES PROCEDURAL PROCEDURE PROCEDURES PROGRAM PUBLICATION
 
@@ -1260,6 +1260,21 @@ AlterOptRoleElem:
 							 errmsg("UNENCRYPTED PASSWORD is no longer supported"),
 							 errhint("Remove UNENCRYPTED to store the password in encrypted form instead."),
 							 parser_errposition(@1)));
+				}
+			| PASSNAME Sconst
+				{
+					$$ = makeDefElem("passname",
+									 (Node *)makeString($2), @1);
+				}
+			| EXPIRES IN_P Sconst opt_interval
+				{
+					TypeName *t = SystemTypeName("interval");
+					t->typmods = $4;
+					$$ = makeDefElem("expiresin", (Node *)makeStringConstCast($3, @3, t), @1);
+				}
+			| VALID FOR Sconst
+				{
+					$$ = makeDefElem("validFor", (Node *)makeString($3), @1);
 				}
 			| INHERIT
 				{
@@ -17757,6 +17772,7 @@ unreserved_keyword:
 			| EXCLUDING
 			| EXCLUSIVE
 			| EXECUTE
+			| EXPIRES
 			| EXPLAIN
 			| EXPRESSION
 			| EXTENSION
@@ -17863,6 +17879,7 @@ unreserved_keyword:
 			| PARTIAL
 			| PARTITION
 			| PASSING
+			| PASSNAME
 			| PASSWORD
 			| PATH
 			| PLAN
@@ -18330,6 +18347,7 @@ bare_label_keyword:
 			| EXCLUSIVE
 			| EXECUTE
 			| EXISTS
+			| EXPIRES
 			| EXPLAIN
 			| EXPRESSION
 			| EXTENSION
@@ -18481,6 +18499,7 @@ bare_label_keyword:
 			| PARTIAL
 			| PARTITION
 			| PASSING
+			| PASSNAME
 			| PASSWORD
 			| PATH
 			| PLACING

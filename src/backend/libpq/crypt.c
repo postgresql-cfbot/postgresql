@@ -2,7 +2,7 @@
  *
  * crypt.c
  *	  Functions for dealing with encrypted passwords stored in
- *	  pg_authid.rolpassword.
+ *	  pg_auth_password.password.
  *
  * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
@@ -16,12 +16,14 @@
 #include <unistd.h>
 
 #include "catalog/pg_authid.h"
+#include "catalog/pg_auth_password.h"
 #include "common/md5.h"
 #include "common/scram-common.h"
 #include "libpq/crypt.h"
 #include "libpq/scram.h"
 #include "miscadmin.h"
 #include "utils/builtins.h"
+#include "utils/catcache.h"
 #include "utils/syscache.h"
 #include "utils/timestamp.h"
 
@@ -33,14 +35,17 @@
  * for the postmaster log, in *logdetail.  The error reason should *not* be
  * sent to the client, to avoid giving away user information!
  */
-char *
-get_role_password(const char *role, const char **logdetail)
+char **
+get_role_passwords(const char *role, const char **logdetail, int *num)
 {
-	TimestampTz vuntil = 0;
 	HeapTuple	roleTup;
 	Datum		datum;
+	TimestampTz current, vuntil = 0;
+
 	bool		isnull;
-	char	   *shadow_pass;
+	char	   **passwords;
+	CatCList   *passlist;
+	int		    i, j = 0, num_valid_passwords = 0;
 
 	/* Get role info from pg_authid */
 	roleTup = SearchSysCache1(AUTHNAME, PointerGetDatum(role));
@@ -48,38 +53,64 @@ get_role_password(const char *role, const char **logdetail)
 	{
 		*logdetail = psprintf(_("Role \"%s\" does not exist."),
 							  role);
+		*num = 0;
 		return NULL;			/* no such user */
 	}
 
-	datum = SysCacheGetAttr(AUTHNAME, roleTup,
-							Anum_pg_authid_rolpassword, &isnull);
-	if (isnull)
+	datum = SysCacheGetAttr(AUTHNAME, roleTup, Anum_pg_authid_oid, &isnull);
+	ReleaseSysCache(roleTup);
+	/* Find any existing password that is not the one being updated to get the salt */
+	passlist = SearchSysCacheList1(AUTHPASSWORDNAME, datum);
+
+	if (passlist->n_members == 0)
 	{
-		ReleaseSysCache(roleTup);
+		*num = 0;
 		*logdetail = psprintf(_("User \"%s\" has no password assigned."),
 							  role);
+		ReleaseCatCacheList(passlist);
 		return NULL;			/* user has no password */
 	}
-	shadow_pass = TextDatumGetCString(datum);
 
-	datum = SysCacheGetAttr(AUTHNAME, roleTup,
-							Anum_pg_authid_rolvaliduntil, &isnull);
-	if (!isnull)
-		vuntil = DatumGetTimestampTz(datum);
+	current = GetCurrentTimestamp();
 
-	ReleaseSysCache(roleTup);
-
-	/*
-	 * Password OK, but check to be sure we are not past rolvaliduntil
-	 */
-	if (!isnull && vuntil < GetCurrentTimestamp())
+	for (i = 0; i < passlist->n_members; i++)
 	{
-		*logdetail = psprintf(_("User \"%s\" has an expired password."),
-							  role);
-		return NULL;
+		HeapTuple	tup = &passlist->members[i]->tuple;
+
+		datum = SysCacheGetAttr(AUTHPASSWORDNAME, tup,
+							Anum_pg_auth_password_expiration, &isnull);
+
+		if (!isnull)
+			vuntil = DatumGetTimestampTz(datum);
+
+		if (isnull || vuntil > current)
+			num_valid_passwords++;
 	}
 
-	return shadow_pass;
+	passwords = palloc0(sizeof(char *) * num_valid_passwords);
+	*num = num_valid_passwords;
+
+	for (i = 0; i < passlist->n_members; i++)
+	{
+		HeapTuple	tup = &passlist->members[i]->tuple;
+
+		datum = SysCacheGetAttr(AUTHPASSWORDNAME, tup,
+							Anum_pg_auth_password_expiration, &isnull);
+
+		if (!isnull)
+			vuntil = DatumGetTimestampTz(datum);
+
+		if (isnull || vuntil > current)
+		{
+			datum = SysCacheGetAttr(AUTHPASSWORDNAME, tup,
+								Anum_pg_auth_password_password, &isnull);
+			passwords[j++] = pstrdup(TextDatumGetCString(datum));
+		}
+	}
+
+	ReleaseCatCacheList(passlist);
+
+	return passwords;
 }
 
 /*
@@ -111,7 +142,7 @@ get_password_type(const char *shadow_pass)
  * hash, so it is stored as it is regardless of the requested type.
  */
 char *
-encrypt_password(PasswordType target_type, const char *role,
+encrypt_password(PasswordType target_type, const char *salt,
 				 const char *password)
 {
 	PasswordType guessed_type = get_password_type(password);
@@ -132,13 +163,13 @@ encrypt_password(PasswordType target_type, const char *role,
 		case PASSWORD_TYPE_MD5:
 			encrypted_password = palloc(MD5_PASSWD_LEN + 1);
 
-			if (!pg_md5_encrypt(password, role, strlen(role),
+			if (!pg_md5_encrypt(password, salt, strlen(salt),
 								encrypted_password, &errstr))
-				elog(ERROR, "password encryption failed: %s", errstr);
+				elog(ERROR, "password encryption failed %s", errstr);
 			return encrypted_password;
 
 		case PASSWORD_TYPE_SCRAM_SHA_256:
-			return pg_be_scram_build_secret(password);
+			return pg_be_scram_build_secret(password, salt);
 
 		case PASSWORD_TYPE_PLAINTEXT:
 			elog(ERROR, "cannot encrypt password with 'plaintext'");
@@ -156,7 +187,7 @@ encrypt_password(PasswordType target_type, const char *role,
  * Check MD5 authentication response, and return STATUS_OK or STATUS_ERROR.
  *
  * 'shadow_pass' is the user's correct password or password hash, as stored
- * in pg_authid.rolpassword.
+ * in pg_auth_password.password.
  * 'client_pass' is the response given by the remote user to the MD5 challenge.
  * 'md5_salt' is the salt used in the MD5 authentication challenge.
  *
@@ -211,7 +242,7 @@ md5_crypt_verify(const char *role, const char *shadow_pass,
  * Check given password for given user, and return STATUS_OK or STATUS_ERROR.
  *
  * 'shadow_pass' is the user's correct password hash, as stored in
- * pg_authid.rolpassword.
+ * pg_auth_password.password.
  * 'client_pass' is the password given by the remote user.
  *
  * In the error case, store a string at *logdetail that will be sent to the

@@ -21,7 +21,7 @@
  * Plaintext passwords can be passed in by the user, in a CREATE/ALTER USER
  * command. They will be encrypted to MD5 or SCRAM-SHA-256 format, before
  * storing on-disk, so only MD5 and SCRAM-SHA-256 passwords should appear
- * in pg_authid.rolpassword. They are also the allowed values for the
+ * in pg_auth_password.password. They are also the allowed values for the
  * password_encryption GUC.
  */
 typedef enum PasswordType
@@ -35,7 +35,7 @@ extern PasswordType get_password_type(const char *shadow_pass);
 extern char *encrypt_password(PasswordType target_type, const char *role,
 							  const char *password);
 
-extern char *get_role_password(const char *role, const char **logdetail);
+extern char **get_role_passwords(const char *role, const char **logdetail, int *num);
 
 extern int	md5_crypt_verify(const char *role, const char *shadow_pass,
 							 const char *client_pass, const char *md5_salt,

@@ -109,7 +109,7 @@
 
 static void scram_get_mechanisms(Port *port, StringInfo buf);
 static void *scram_init(Port *port, const char *selected_mech,
-						const char *shadow_pass);
+						const char **secrets, const int num_secrets);
 static int	scram_exchange(void *opaq, const char *input, int inputlen,
 						   char **output, int *outputlen,
 						   const char **logdetail);
@@ -134,6 +134,13 @@ typedef enum
 
 typedef struct
 {
+	uint8		StoredKey[SCRAM_KEY_LEN];
+	uint8		ServerKey[SCRAM_KEY_LEN];
+} scram_secret;
+
+
+typedef struct
+{
 	scram_state_enum state;
 
 	const char *username;		/* username from startup packet */
@@ -141,10 +148,16 @@ typedef struct
 	Port	   *port;
 	bool		channel_binding_in_use;
 
+	/*
+	 * The salt and iterations must be the same for all
+	 * secrets since they are sent as part of the initial message
+	 */
 	int			iterations;
 	char	   *salt;			/* base64-encoded */
-	uint8		StoredKey[SCRAM_KEY_LEN];
-	uint8		ServerKey[SCRAM_KEY_LEN];
+	/* Array of possible secrets */
+	scram_secret *secrets;
+	int			num_secrets;
+	int			chosen_secret; /* secret chosen during final client message */
 
 	/* Fields of the first message from client */
 	char		cbind_flag;
@@ -220,17 +233,20 @@ scram_get_mechanisms(Port *port, StringInfo buf)
  * It should be one of the mechanisms that we support, as returned by
  * scram_get_mechanisms().
  *
- * 'shadow_pass' is the role's stored secret, from pg_authid.rolpassword.
+ * 'passwords' are the role's stored secrets, from pg_auth_password.password.
  * The username was provided by the client in the startup message, and is
  * available in port->user_name.  If 'shadow_pass' is NULL, we still perform
  * an authentication exchange, but it will fail, as if an incorrect password
  * was given.
  */
 static void *
-scram_init(Port *port, const char *selected_mech, const char *shadow_pass)
+scram_init(Port *port, const char *selected_mech, const char **secrets, const int num_secrets)
 {
 	scram_state *state;
-	bool		got_secret;
+	bool		got_secret = false;
+	int			i;
+	int	iterations;
+	char *salt = NULL;			/* base64-encoded */
 
 	state = (scram_state *) palloc0(sizeof(scram_state));
 	state->port = port;
@@ -260,46 +276,47 @@ scram_init(Port *port, const char *selected_mech, const char *shadow_pass)
 	/*
 	 * Parse the stored secret.
 	 */
-	if (shadow_pass)
+	if (secrets)
 	{
-		int			password_type = get_password_type(shadow_pass);
-
-		if (password_type == PASSWORD_TYPE_SCRAM_SHA_256)
+		state->secrets = palloc0(sizeof(scram_secret) * num_secrets);
+		state->num_secrets = num_secrets;
+		for (i = 0; i < num_secrets; i++)
 		{
-			if (parse_scram_secret(shadow_pass, &state->iterations, &state->salt,
-								   state->StoredKey, state->ServerKey))
-				got_secret = true;
-			else
+			int			password_type = get_password_type(secrets[i]);
+
+			if (password_type == PASSWORD_TYPE_SCRAM_SHA_256)
 			{
-				/*
-				 * The password looked like a SCRAM secret, but could not be
-				 * parsed.
-				 */
-				ereport(LOG,
-						(errmsg("invalid SCRAM secret for user \"%s\"",
-								state->port->user_name)));
-				got_secret = false;
+				if (parse_scram_secret(secrets[i], &state->iterations, &state->salt,
+									state->secrets[i].StoredKey, state->secrets[i].ServerKey))
+				{
+					if (salt) {
+						/* The stored iterations and salt must match or we cannot proceed, allow failure via mock */
+						if (strcmp(salt, state->salt) || iterations != state->iterations) {
+							ereport(WARNING, (errmsg("inconsistent salt or iterations for user \"%s\"",
+									state->port->user_name)));
+							got_secret = false; /* fail and allow mock creditials to be created */
+							break;
+						}
+					}
+					else
+					{
+						salt = state->salt;
+						iterations = state->iterations;
+						got_secret = true; /* We got at least one good SCRAM secret */
+					}
+				}
+				else
+				{
+					/*
+					* The password looked like a SCRAM secret, but could not be
+					* parsed.
+					*/
+					ereport(LOG,
+							(errmsg("invalid SCRAM secret for user \"%s\"",
+									state->port->user_name)));
+				}
 			}
 		}
-		else
-		{
-			/*
-			 * The user doesn't have SCRAM secret. (You cannot do SCRAM
-			 * authentication with an MD5 hash.)
-			 */
-			state->logdetail = psprintf(_("User \"%s\" does not have a valid SCRAM secret."),
-										state->port->user_name);
-			got_secret = false;
-		}
-	}
-	else
-	{
-		/*
-		 * The caller requested us to perform a dummy authentication.  This is
-		 * considered normal, since the caller requested it, so don't set log
-		 * detail.
-		 */
-		got_secret = false;
 	}
 
 	/*
@@ -310,8 +327,10 @@ scram_init(Port *port, const char *selected_mech, const char *shadow_pass)
 	 */
 	if (!got_secret)
 	{
+		state->secrets = palloc0(sizeof(scram_secret));
+
 		mock_scram_secret(state->port->user_name, &state->iterations,
-						  &state->salt, state->StoredKey, state->ServerKey);
+						  &state->salt, state->secrets[0].StoredKey, state->secrets[0].ServerKey);
 		state->doomed = true;
 	}
 
@@ -454,12 +473,12 @@ scram_exchange(void *opaq, const char *input, int inputlen,
 }
 
 /*
- * Construct a SCRAM secret, for storing in pg_authid.rolpassword.
+ * Construct a SCRAM secret, for storing in pg_auth_password.password.
  *
  * The result is palloc'd, so caller is responsible for freeing it.
  */
 char *
-pg_be_scram_build_secret(const char *password)
+pg_be_scram_build_secret(const char *password, const char *salt)
 {
 	char	   *prep_password;
 	pg_saslprep_rc rc;
@@ -476,11 +495,13 @@ pg_be_scram_build_secret(const char *password)
 	if (rc == SASLPREP_SUCCESS)
 		password = (const char *) prep_password;
 
-	/* Generate random salt */
-	if (!pg_strong_random(saltbuf, SCRAM_DEFAULT_SALT_LEN))
+	/* Use passed in salt or generate random salt */
+	if (!salt && !pg_strong_random(saltbuf, SCRAM_DEFAULT_SALT_LEN))
 		ereport(ERROR,
 				(errcode(ERRCODE_INTERNAL_ERROR),
 				 errmsg("could not generate random salt")));
+	else if (salt)
+		pg_b64_decode(salt, strlen(salt), saltbuf, SCRAM_DEFAULT_SALT_LEN);
 
 	result = scram_build_secret(saltbuf, SCRAM_DEFAULT_SALT_LEN,
 								SCRAM_DEFAULT_ITERATIONS, password,
@@ -1114,47 +1135,57 @@ verify_client_proof(scram_state *state)
 	uint8		ClientSignature[SCRAM_KEY_LEN];
 	uint8		ClientKey[SCRAM_KEY_LEN];
 	uint8		client_StoredKey[SCRAM_KEY_LEN];
-	pg_hmac_ctx *ctx = pg_hmac_create(PG_SHA256);
-	int			i;
+	pg_hmac_ctx *ctx;
+	int			i, j;
 	const char *errstr = NULL;
-
 	/*
 	 * Calculate ClientSignature.  Note that we don't log directly a failure
 	 * here even when processing the calculations as this could involve a mock
 	 * authentication.
 	 */
-	if (pg_hmac_init(ctx, state->StoredKey, SCRAM_KEY_LEN) < 0 ||
-		pg_hmac_update(ctx,
-					   (uint8 *) state->client_first_message_bare,
-					   strlen(state->client_first_message_bare)) < 0 ||
-		pg_hmac_update(ctx, (uint8 *) ",", 1) < 0 ||
-		pg_hmac_update(ctx,
-					   (uint8 *) state->server_first_message,
-					   strlen(state->server_first_message)) < 0 ||
-		pg_hmac_update(ctx, (uint8 *) ",", 1) < 0 ||
-		pg_hmac_update(ctx,
-					   (uint8 *) state->client_final_message_without_proof,
-					   strlen(state->client_final_message_without_proof)) < 0 ||
-		pg_hmac_final(ctx, ClientSignature, sizeof(ClientSignature)) < 0)
+	for (j = 0; j < state->num_secrets; j++)
 	{
-		elog(ERROR, "could not calculate client signature: %s",
-			 pg_hmac_error(ctx));
+		ctx = pg_hmac_create(PG_SHA256);
+		elog(LOG, "Trying to verify password %d", j);
+
+		if (pg_hmac_init(ctx, state->secrets[j].StoredKey, SCRAM_KEY_LEN) < 0 ||
+			pg_hmac_update(ctx,
+						(uint8 *) state->client_first_message_bare,
+						strlen(state->client_first_message_bare)) < 0 ||
+			pg_hmac_update(ctx, (uint8 *) ",", 1) < 0 ||
+			pg_hmac_update(ctx,
+						(uint8 *) state->server_first_message,
+						strlen(state->server_first_message)) < 0 ||
+			pg_hmac_update(ctx, (uint8 *) ",", 1) < 0 ||
+			pg_hmac_update(ctx,
+						(uint8 *) state->client_final_message_without_proof,
+						strlen(state->client_final_message_without_proof)) < 0 ||
+			pg_hmac_final(ctx, ClientSignature, sizeof(ClientSignature)) < 0)
+		{
+			elog(LOG, "could not calculate client signature");
+			pg_hmac_free(ctx);
+			continue;
+		}
+
+		elog(LOG, "success on %d", j);
+
+		pg_hmac_free(ctx);
+
+		for (i = 0; i < SCRAM_KEY_LEN; i++)
+			ClientKey[i] = state->ClientProof[i] ^ ClientSignature[i];
+
+		/* Hash it one more time, and compare with StoredKey */
+		if (scram_H(ClientKey, SCRAM_KEY_LEN, client_StoredKey, &errstr) < 0)
+			elog(ERROR, "could not hash stored key: %s", errstr);
+
+		if (memcmp(client_StoredKey, state->secrets[j].StoredKey, SCRAM_KEY_LEN) == 0) {
+			elog(LOG, "Moving forward with Password %d", j);
+			state->chosen_secret = j;
+			return true;
+		}
 	}
 
-	pg_hmac_free(ctx);
-
-	/* Extract the ClientKey that the client calculated from the proof */
-	for (i = 0; i < SCRAM_KEY_LEN; i++)
-		ClientKey[i] = state->ClientProof[i] ^ ClientSignature[i];
-
-	/* Hash it one more time, and compare with StoredKey */
-	if (scram_H(ClientKey, SCRAM_KEY_LEN, client_StoredKey, &errstr) < 0)
-		elog(ERROR, "could not hash stored key: %s", errstr);
-
-	if (memcmp(client_StoredKey, state->StoredKey, SCRAM_KEY_LEN) != 0)
-		return false;
-
-	return true;
+	return false;
 }
 
 /*
@@ -1380,7 +1411,7 @@ build_server_final_message(scram_state *state)
 	pg_hmac_ctx *ctx = pg_hmac_create(PG_SHA256);
 
 	/* calculate ServerSignature */
-	if (pg_hmac_init(ctx, state->ServerKey, SCRAM_KEY_LEN) < 0 ||
+	if (pg_hmac_init(ctx, state->secrets[state->chosen_secret].ServerKey, SCRAM_KEY_LEN) < 0 ||
 		pg_hmac_update(ctx,
 					   (uint8 *) state->client_first_message_bare,
 					   strlen(state->client_first_message_bare)) < 0 ||

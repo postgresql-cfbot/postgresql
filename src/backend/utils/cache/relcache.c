@@ -50,6 +50,7 @@
 #include "catalog/pg_attrdef.h"
 #include "catalog/pg_auth_members.h"
 #include "catalog/pg_authid.h"
+#include "catalog/pg_auth_password.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_namespace.h"
@@ -113,6 +114,7 @@ static const FormData_pg_attribute Desc_pg_proc[Natts_pg_proc] = {Schema_pg_proc
 static const FormData_pg_attribute Desc_pg_type[Natts_pg_type] = {Schema_pg_type};
 static const FormData_pg_attribute Desc_pg_database[Natts_pg_database] = {Schema_pg_database};
 static const FormData_pg_attribute Desc_pg_authid[Natts_pg_authid] = {Schema_pg_authid};
+static const FormData_pg_attribute Desc_pg_auth_password[Natts_pg_auth_password] = {Schema_pg_auth_password};
 static const FormData_pg_attribute Desc_pg_auth_members[Natts_pg_auth_members] = {Schema_pg_auth_members};
 static const FormData_pg_attribute Desc_pg_index[Natts_pg_index] = {Schema_pg_index};
 static const FormData_pg_attribute Desc_pg_shseclabel[Natts_pg_shseclabel] = {Schema_pg_shseclabel};
@@ -3485,6 +3487,7 @@ RelationBuildLocalRelation(const char *relname,
 	{
 		case DatabaseRelationId:
 		case AuthIdRelationId:
+		case AuthPasswordRelationId:
 		case AuthMemRelationId:
 		case RelationRelationId:
 		case AttributeRelationId:
@@ -3905,7 +3908,7 @@ RelationCacheInitialize(void)
  *		RelationCacheInitializePhase2
  *
  *		This is called to prepare for access to shared catalogs during startup.
- *		We must at least set up nailed reldescs for pg_database, pg_authid,
+ *		We must at least set up nailed reldescs for pg_database, pg_authid, pg_auth_password,
  *		pg_auth_members, and pg_shseclabel. Ideally we'd like to have reldescs
  *		for their indexes, too.  We attempt to load this information from the
  *		shared relcache init file.  If that's missing or broken, just make
@@ -3950,8 +3953,10 @@ RelationCacheInitializePhase2(void)
 				  Natts_pg_shseclabel, Desc_pg_shseclabel);
 		formrdesc("pg_subscription", SubscriptionRelation_Rowtype_Id, true,
 				  Natts_pg_subscription, Desc_pg_subscription);
+		formrdesc("pg_auth_password", AuthPasswordRelation_Rowtype_Id, true,
+				  Natts_pg_auth_password, Desc_pg_auth_password);
 
-#define NUM_CRITICAL_SHARED_RELS	5	/* fix if you change list above */
+#define NUM_CRITICAL_SHARED_RELS	6	/* fix if you change list above */
 	}
 
 	MemoryContextSwitchTo(oldcxt);
@@ -4090,8 +4095,10 @@ RelationCacheInitializePhase3(void)
 							AuthMemRelationId);
 		load_critical_index(SharedSecLabelObjectIndexId,
 							SharedSecLabelRelationId);
+		load_critical_index(AuthPasswordRoleOidIndexId,
+							AuthPasswordRelationId);
 
-#define NUM_CRITICAL_SHARED_INDEXES 6	/* fix if you change list above */
+#define NUM_CRITICAL_SHARED_INDEXES 7	/* fix if you change list above */
 
 		criticalSharedRelcachesBuilt = true;
 	}

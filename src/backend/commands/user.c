@@ -23,6 +23,7 @@
 #include "catalog/objectaccess.h"
 #include "catalog/pg_auth_members.h"
 #include "catalog/pg_authid.h"
+#include "catalog/pg_auth_password.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_db_role_setting.h"
 #include "commands/comment.h"
@@ -30,11 +31,14 @@
 #include "commands/defrem.h"
 #include "commands/seclabel.h"
 #include "commands/user.h"
+#include "common/scram-common.h"
 #include "libpq/crypt.h"
+#include "libpq/scram.h"
 #include "miscadmin.h"
 #include "storage/lmgr.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
+#include "utils/catcache.h"
 #include "utils/fmgroids.h"
 #include "utils/syscache.h"
 #include "utils/timestamp.h"
@@ -43,8 +47,12 @@
 Oid			binary_upgrade_next_pg_authid_oid = InvalidOid;
 
 
-/* GUC parameter */
+/* GUC parameters */
 int			Password_encryption = PASSWORD_TYPE_SCRAM_SHA_256;
+Interval *default_password_duration = NULL;
+
+/* default password name */
+const char* default_passname = "__def__";
 
 /* Hook to check passwords in CreateRole() and AlterRole() */
 check_password_hook_type check_password_hook = NULL;
@@ -64,6 +72,178 @@ have_createrole_privilege(void)
 	return has_createrole_privilege(GetUserId());
 }
 
+/*
+ * Is the role able to log in
+*/
+bool
+is_role_valid(const char *rolename, const char **logdetail)
+{
+	HeapTuple	roleTup;
+	Datum		datum;
+	bool		isnull;
+	TimestampTz vuntil = 0;
+
+	/* Get role info from pg_authid */
+	roleTup = SearchSysCache1(AUTHNAME, PointerGetDatum(rolename));
+	if (!HeapTupleIsValid(roleTup))
+	{
+		*logdetail = psprintf(_("Role \"%s\" does not exist."),
+							  rolename);
+		return false;			/* no such user */
+	}
+
+	datum = SysCacheGetAttr(AUTHNAME, roleTup,
+							Anum_pg_authid_rolvaliduntil, &isnull);
+	ReleaseSysCache(roleTup);
+
+	if (!isnull)
+		vuntil = DatumGetTimestampTz(datum);
+
+	if (!isnull && vuntil < GetCurrentTimestamp())
+	{
+		*logdetail = psprintf(_("User \"%s\" has an expired password."), rolename);
+		return false;
+	}
+
+	return true;
+}
+
+
+static
+bool
+validate_and_get_salt(char *rolename, char **salt, const char **logdetail)
+{
+	char	  **current_secrets;
+	char	   *salt1, *salt2 = NULL;
+	int			i, num;
+	PasswordType passtype;
+
+	if (Password_encryption == PASSWORD_TYPE_MD5)
+	{
+		*salt = rolename; /* md5 always uses role name, no need to look through the passwords */
+		return true;
+	}
+	else if (Password_encryption == PASSWORD_TYPE_PLAINTEXT)
+	{
+		*salt = NULL; /* Plaintext does not have a salt */
+		return true;
+	}
+
+	current_secrets = get_role_passwords(rolename, logdetail, &num);
+	if (num == 0)
+	{
+		*salt = NULL; /* No existing passwords, allow one to be generated */
+		return true;
+	}
+	for (i = 0; i < num; i++) {
+		passtype = get_password_type(current_secrets[i]);
+		if (passtype == PASSWORD_TYPE_MD5 || passtype == PASSWORD_TYPE_PLAINTEXT)
+			continue; /* md5 uses rolename as salt so it is always the same and plaintext has no salt */
+		else if (passtype == PASSWORD_TYPE_SCRAM_SHA_256) {
+				int			iterations;
+				uint8		stored_key[SCRAM_KEY_LEN];
+				uint8		server_key[SCRAM_KEY_LEN];
+
+				parse_scram_secret(current_secrets[i], &iterations, &salt1,
+									stored_key, server_key);
+
+				if (salt2 != NULL) {
+					if (strcmp(salt1, salt2)) {
+						*logdetail = psprintf(_("inconsistent salts, clearing password"));
+						*salt = NULL;
+						return false;
+					}
+				}
+				else
+					salt2 = salt1;
+		}
+
+	}
+	for (i = 0; i < num; i++)
+		pfree(current_secrets[i]);
+	pfree(current_secrets);
+	if (salt2)
+		*salt = pstrdup(salt2);
+	return true;
+}
+
+static
+Datum
+expires_in_datum(DefElem *passExpiresIn)
+{
+	Interval *interval;
+	Node	   *arg;
+	A_Const    *con;
+	TimestampTz now = GetCurrentTimestamp();
+	Datum		passExpiresIn_datum;
+	char *dateout;
+
+	if (default_password_duration != NULL)
+	{
+		/* The default duration GUC is set, use it if nothing came from SQL
+		 * or if something came from SQL, reject it if not from a superuser
+		 */
+
+		if (passExpiresIn != NULL)
+			if (!superuser())
+				ereport(ERROR,
+						(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+						 errmsg("must be superuser to override password_validity_duration GUC")));
+			else
+				goto bypass;
+		else
+		{
+			passExpiresIn_datum =  DirectFunctionCall2(timestamptz_pl_interval,
+										TimestampGetDatum(now),
+										 PointerGetDatum(default_password_duration));
+
+			dateout =
+				DatumGetCString(DirectFunctionCall1(timestamp_out,
+													passExpiresIn_datum));
+
+			ereport(NOTICE,
+				(errmsg("Password will expire at: \"%s\" (from GUC)", dateout)));
+
+			return passExpiresIn_datum;
+		}
+	}
+
+	if (passExpiresIn == NULL) 	/* No duration requested via SQL and no system default, no expiration */
+		return PointerGetDatum(NULL);
+
+bypass:
+	arg = (Node *)passExpiresIn->arg;
+	if (IsA(arg, TypeCast))
+	{
+		TypeCast   *tc = (TypeCast *) passExpiresIn->arg;
+		arg = tc->arg;
+	}
+
+	if (!IsA(arg, A_Const))
+	{
+		elog(ERROR, "unrecognized node type: %d", (int) nodeTag(arg));
+		return PointerGetDatum(NULL);
+	}
+	con = (A_Const *) arg;
+
+	interval = DatumGetIntervalP(DirectFunctionCall3(interval_in,
+								CStringGetDatum(strVal(&con->val)),
+								ObjectIdGetDatum(InvalidOid),
+								Int32GetDatum(-1)));
+
+	passExpiresIn_datum =  DirectFunctionCall2(timestamptz_pl_interval,
+										TimestampGetDatum(now),
+										PointerGetDatum(interval));
+
+	dateout =
+				DatumGetCString(DirectFunctionCall1(timestamp_out,
+													passExpiresIn_datum));
+
+	ereport(NOTICE,
+		(errmsg("Password will expire at: \"%s\" (from SQL)", dateout)));
+
+	return passExpiresIn_datum;
+}
 
 /*
  * CREATE ROLE
@@ -80,6 +260,7 @@ CreateRole(ParseState *pstate, CreateRoleStmt *stmt)
 	ListCell   *item;
 	ListCell   *option;
 	char	   *password = NULL;	/* user password */
+	char       *passname = NULL;    /* name of the password for managing multiple passwords */
 	bool		issuper = false;	/* Make the user a superuser? */
 	bool		inherit = true; /* Auto inherit privileges? */
 	bool		createrole = false; /* Can this user create roles? */
@@ -107,6 +288,8 @@ CreateRole(ParseState *pstate, CreateRoleStmt *stmt)
 	DefElem    *dadminmembers = NULL;
 	DefElem    *dvalidUntil = NULL;
 	DefElem    *dbypassRLS = NULL;
+	DefElem    *dpassName = NULL;
+	DefElem    *dpassExpiresIn = NULL;
 
 	/* The defaults can vary depending on the original statement type */
 	switch (stmt->stmt_type)
@@ -209,6 +392,19 @@ CreateRole(ParseState *pstate, CreateRoleStmt *stmt)
 				errorConflictingDefElem(defel, pstate);
 			dbypassRLS = defel;
 		}
+		else if (strcmp(defel->defname, "passname") == 0)
+		{
+			if (dpassName)
+				errorConflictingDefElem(defel, pstate);
+			dpassName = defel;
+		}
+		else if (strcmp(defel->defname, "expiresin") == 0)
+		{
+			if (dpassExpiresIn)
+				errorConflictingDefElem(defel, pstate);
+			dpassExpiresIn = defel;
+		}
+
 		else
 			elog(ERROR, "option \"%s\" not recognized",
 				 defel->defname);
@@ -246,6 +442,8 @@ CreateRole(ParseState *pstate, CreateRoleStmt *stmt)
 		validUntil = strVal(dvalidUntil->arg);
 	if (dbypassRLS)
 		bypassrls = boolVal(dbypassRLS->arg);
+	if (dpassName)
+		passname = strVal(dpassName->arg);
 
 	/* Check some permissions first */
 	if (issuper)
@@ -351,43 +549,6 @@ CreateRole(ParseState *pstate, CreateRoleStmt *stmt)
 	new_record[Anum_pg_authid_rolcanlogin - 1] = BoolGetDatum(canlogin);
 	new_record[Anum_pg_authid_rolreplication - 1] = BoolGetDatum(isreplication);
 	new_record[Anum_pg_authid_rolconnlimit - 1] = Int32GetDatum(connlimit);
-
-	if (password)
-	{
-		char	   *shadow_pass;
-		const char *logdetail = NULL;
-
-		/*
-		 * Don't allow an empty password. Libpq treats an empty password the
-		 * same as no password at all, and won't even try to authenticate. But
-		 * other clients might, so allowing it would be confusing. By clearing
-		 * the password when an empty string is specified, the account is
-		 * consistently locked for all clients.
-		 *
-		 * Note that this only covers passwords stored in the database itself.
-		 * There are also checks in the authentication code, to forbid an
-		 * empty password from being used with authentication methods that
-		 * fetch the password from an external system, like LDAP or PAM.
-		 */
-		if (password[0] == '\0' ||
-			plain_crypt_verify(stmt->role, password, "", &logdetail) == STATUS_OK)
-		{
-			ereport(NOTICE,
-					(errmsg("empty string is not a valid password, clearing password")));
-			new_record_nulls[Anum_pg_authid_rolpassword - 1] = true;
-		}
-		else
-		{
-			/* Encrypt the password to the requested format. */
-			shadow_pass = encrypt_password(Password_encryption, stmt->role,
-										   password);
-			new_record[Anum_pg_authid_rolpassword - 1] =
-				CStringGetTextDatum(shadow_pass);
-		}
-	}
-	else
-		new_record_nulls[Anum_pg_authid_rolpassword - 1] = true;
-
 	new_record[Anum_pg_authid_rolvaliduntil - 1] = validUntil_datum;
 	new_record_nulls[Anum_pg_authid_rolvaliduntil - 1] = validUntil_null;
 
@@ -421,6 +582,75 @@ CreateRole(ParseState *pstate, CreateRoleStmt *stmt)
 	 * Insert new record in the pg_authid table
 	 */
 	CatalogTupleInsert(pg_authid_rel, tuple);
+
+	if (password)
+	{
+		char	   *shadow_pass, *salt;
+		const char	   *logdetail;
+		Datum		new_password_record[Natts_pg_auth_password];
+		bool		new_password_record_nulls[Natts_pg_auth_password];
+		Relation	pg_auth_password_rel;
+		TupleDesc	pg_auth_password_dsc;
+		HeapTuple	new_tuple;
+		Datum		passExpiresIn_datum;
+
+		/*
+		 * Don't allow an empty password. Libpq treats an empty password the
+		 * same as no password at all, and won't even try to authenticate. But
+		 * other clients might, so allowing it would be confusing. By clearing
+		 * the password when an empty string is specified, the account is
+		 * consistently locked for all clients.
+		 *
+		 * Note that this only covers passwords stored in the database itself.
+		 * There are also checks in the authentication code, to forbid an
+		 * empty password from being used with authentication methods that
+		 * fetch the password from an external system, like LDAP or PAM.
+		 */
+		if (password[0] == '\0' ||
+			plain_crypt_verify(stmt->role, password, "", &logdetail) == STATUS_OK)
+		{
+			ereport(NOTICE,
+					(errmsg("empty string is not a valid password, clearing password")));
+		}
+		else
+		{
+			MemSet(new_password_record, 0, sizeof(new_password_record));
+			MemSet(new_password_record_nulls, false, sizeof(new_password_record_nulls));
+
+			passExpiresIn_datum = expires_in_datum(dpassExpiresIn);
+			if (passExpiresIn_datum != PointerGetDatum(NULL))
+				new_password_record[Anum_pg_auth_password_expiration - 1] = passExpiresIn_datum;
+			else
+				new_password_record_nulls[Anum_pg_auth_password_expiration - 1] = true;
+
+			/* Encrypt the password to the requested format. */
+			validate_and_get_salt(stmt->role, &salt, &logdetail);
+			shadow_pass = encrypt_password(Password_encryption, salt,
+										   password);
+
+			if (passname != NULL)
+				new_password_record[Anum_pg_auth_password_name - 1] =
+								DirectFunctionCall1(namein, CStringGetDatum(passname));
+			else
+				new_password_record[Anum_pg_auth_password_name - 1] =
+								DirectFunctionCall1(namein, CStringGetDatum(default_passname));
+
+			/* open password table and insert it. */
+			pg_auth_password_rel = table_open(AuthPasswordRelationId, RowExclusiveLock);
+			pg_auth_password_dsc = RelationGetDescr(pg_auth_password_rel);
+
+			new_password_record[Anum_pg_auth_password_password - 1] =
+				CStringGetTextDatum(shadow_pass);
+			new_password_record[Anum_pg_auth_password_roleid - 1] = roleid;
+
+			new_tuple = heap_form_tuple(pg_auth_password_dsc,
+										new_password_record, new_password_record_nulls);
+			CatalogTupleInsert(pg_auth_password_rel, new_tuple);
+			heap_freetuple(new_tuple);
+			table_close(pg_auth_password_rel, NoLock);
+
+		}
+	}
 
 	/*
 	 * Advance command counter so we can see new record; else tests in
@@ -495,6 +725,9 @@ AlterRole(ParseState *pstate, AlterRoleStmt *stmt)
 	Datum		new_record[Natts_pg_authid];
 	bool		new_record_nulls[Natts_pg_authid];
 	bool		new_record_repl[Natts_pg_authid];
+	Datum		new_password_record[Natts_pg_auth_password];
+	bool		new_password_record_nulls[Natts_pg_auth_password];
+	bool		new_password_record_repl[Natts_pg_auth_password];
 	Relation	pg_authid_rel;
 	TupleDesc	pg_authid_dsc;
 	HeapTuple	tuple,
@@ -503,10 +736,12 @@ AlterRole(ParseState *pstate, AlterRoleStmt *stmt)
 	ListCell   *option;
 	char	   *rolename;
 	char	   *password = NULL;	/* user password */
+	char       *passname = NULL;    /* password name for managing multiple passwords */
 	int			connlimit = -1; /* maximum connections allowed */
 	char	   *validUntil = NULL;	/* time the login is valid until */
 	Datum		validUntil_datum;	/* same, as timestamptz Datum */
 	bool		validUntil_null;
+	Datum		passExpiresIn_datum; /* Time period until password expires */
 	DefElem    *dpassword = NULL;
 	DefElem    *dissuper = NULL;
 	DefElem    *dinherit = NULL;
@@ -518,6 +753,8 @@ AlterRole(ParseState *pstate, AlterRoleStmt *stmt)
 	DefElem    *drolemembers = NULL;
 	DefElem    *dvalidUntil = NULL;
 	DefElem    *dbypassRLS = NULL;
+	DefElem    *dpassName = NULL;
+	DefElem	   *dpassExpiresIn = NULL;
 	Oid			roleid;
 
 	check_rolespec_name(stmt->role,
@@ -595,6 +832,18 @@ AlterRole(ParseState *pstate, AlterRoleStmt *stmt)
 				errorConflictingDefElem(defel, pstate);
 			dbypassRLS = defel;
 		}
+		else if (strcmp(defel->defname, "passname") == 0)
+		{
+			if (dpassName)
+				errorConflictingDefElem(defel, pstate);
+			dpassName = defel;
+		}
+		else if (strcmp(defel->defname, "expiresin") == 0)
+		{
+			if (dpassExpiresIn)
+				errorConflictingDefElem(defel, pstate);
+			dpassExpiresIn = defel;
+		}
 		else
 			elog(ERROR, "option \"%s\" not recognized",
 				 defel->defname);
@@ -612,6 +861,9 @@ AlterRole(ParseState *pstate, AlterRoleStmt *stmt)
 	}
 	if (dvalidUntil)
 		validUntil = strVal(dvalidUntil->arg);
+	if (dpassName)
+		passname = strVal(dpassName->arg);
+
 
 	/*
 	 * Scan the pg_authid relation to be certain the user exists.
@@ -623,6 +875,7 @@ AlterRole(ParseState *pstate, AlterRoleStmt *stmt)
 	authform = (Form_pg_authid) GETSTRUCT(tuple);
 	rolename = pstrdup(NameStr(authform->rolname));
 	roleid = authform->oid;
+
 
 	/*
 	 * To mess with a superuser or replication role in any way you gotta be
@@ -694,6 +947,17 @@ AlterRole(ParseState *pstate, AlterRoleStmt *stmt)
 	MemSet(new_record, 0, sizeof(new_record));
 	MemSet(new_record_nulls, false, sizeof(new_record_nulls));
 	MemSet(new_record_repl, false, sizeof(new_record_repl));
+	MemSet(new_password_record, 0, sizeof(new_password_record));
+	MemSet(new_password_record_nulls, false, sizeof(new_password_record_nulls));
+	MemSet(new_password_record_repl, false, sizeof(new_password_record_repl));
+
+	passExpiresIn_datum = expires_in_datum(dpassExpiresIn);
+	if (passExpiresIn_datum != PointerGetDatum(NULL)) {
+		new_password_record[Anum_pg_auth_password_expiration - 1] = passExpiresIn_datum;
+		new_password_record_repl[Anum_pg_auth_password_expiration - 1] = true;
+	}
+	else
+		new_password_record_nulls[Anum_pg_auth_password_expiration - 1] = true;
 
 	/*
 	 * issuper/createrole/etc
@@ -743,8 +1007,9 @@ AlterRole(ParseState *pstate, AlterRoleStmt *stmt)
 	/* password */
 	if (password)
 	{
-		char	   *shadow_pass;
-		const char *logdetail = NULL;
+		char	*salt = NULL;
+		const char 	*logdetail = NULL;
+		char	*shadow_pass;
 
 		/* Like in CREATE USER, don't allow an empty password. */
 		if (password[0] == '\0' ||
@@ -752,24 +1017,37 @@ AlterRole(ParseState *pstate, AlterRoleStmt *stmt)
 		{
 			ereport(NOTICE,
 					(errmsg("empty string is not a valid password, clearing password")));
-			new_record_nulls[Anum_pg_authid_rolpassword - 1] = true;
+			new_password_record_nulls[Anum_pg_auth_password_password - 1] = true;
 		}
 		else
 		{
-			/* Encrypt the password to the requested format. */
-			shadow_pass = encrypt_password(Password_encryption, rolename,
-										   password);
-			new_record[Anum_pg_authid_rolpassword - 1] =
-				CStringGetTextDatum(shadow_pass);
+			if (!validate_and_get_salt(rolename, &salt, &logdetail))
+				new_password_record_nulls[Anum_pg_auth_password_password - 1] = true;
+			else
+			{
+				/* Encrypt the password to the requested format. */
+				shadow_pass = encrypt_password(Password_encryption, salt,
+											password);
+				new_password_record[Anum_pg_auth_password_password - 1] =
+					CStringGetTextDatum(shadow_pass);
+
+				new_password_record_repl[Anum_pg_auth_password_password - 1] = true;
+
+				if (passname)
+					new_password_record[Anum_pg_auth_password_name - 1] =
+						DirectFunctionCall1(namein, CStringGetDatum(passname));
+				else
+					new_password_record[Anum_pg_auth_password_name - 1] =
+					DirectFunctionCall1(namein, CStringGetDatum(default_passname));
+			}
 		}
-		new_record_repl[Anum_pg_authid_rolpassword - 1] = true;
 	}
 
 	/* unset password */
 	if (dpassword && dpassword->arg == NULL)
 	{
-		new_record_repl[Anum_pg_authid_rolpassword - 1] = true;
-		new_record_nulls[Anum_pg_authid_rolpassword - 1] = true;
+		new_password_record_repl[Anum_pg_auth_password_password - 1] = true;
+		new_password_record_nulls[Anum_pg_auth_password_password - 1] = true;
 	}
 
 	/* valid until */
@@ -786,11 +1064,51 @@ AlterRole(ParseState *pstate, AlterRoleStmt *stmt)
 	new_tuple = heap_modify_tuple(tuple, pg_authid_dsc, new_record,
 								  new_record_nulls, new_record_repl);
 	CatalogTupleUpdate(pg_authid_rel, &tuple->t_self, new_tuple);
-
-	InvokeObjectPostAlterHook(AuthIdRelationId, roleid, 0);
-
 	ReleaseSysCache(tuple);
 	heap_freetuple(new_tuple);
+
+	if (new_password_record_repl[Anum_pg_auth_password_password - 1] == true
+		|| new_password_record_repl[Anum_pg_auth_password_expiration - 1] == true)
+	{
+		Relation	pg_auth_password_rel;
+		TupleDesc	pg_auth_password_dsc;
+		HeapTuple   password_tuple;
+
+		pg_auth_password_rel = table_open(AuthPasswordRelationId, RowExclusiveLock);
+		pg_auth_password_dsc = RelationGetDescr(pg_auth_password_rel);
+		if (dpassName)
+			password_tuple = SearchSysCache2(AUTHPASSWORDNAME, ObjectIdGetDatum(roleid), CStringGetDatum(passname));
+		else
+			password_tuple = SearchSysCache2(AUTHPASSWORDNAME, ObjectIdGetDatum(roleid), CStringGetDatum(default_passname));
+
+		if (new_password_record_nulls[Anum_pg_auth_password_password - 1] == true) /* delete existing password */
+		{
+			if (HeapTupleIsValid(password_tuple)) {
+				CatalogTupleDelete(pg_auth_password_rel, &password_tuple->t_self);
+				ReleaseSysCache(password_tuple);
+			}
+		}
+		else if (HeapTupleIsValid(password_tuple)) /* update existing password */
+		{
+			new_tuple = heap_modify_tuple(password_tuple, pg_auth_password_dsc, new_password_record,
+										new_password_record_nulls, new_password_record_repl);
+			CatalogTupleUpdate(pg_auth_password_rel, &password_tuple->t_self, new_tuple);
+			ReleaseSysCache(password_tuple);
+			heap_freetuple(new_tuple);
+		}
+		else /* insert new password */
+		{
+			new_password_record[Anum_pg_auth_password_roleid - 1] = roleid;
+
+			new_tuple = heap_form_tuple(pg_auth_password_dsc,
+										new_password_record, new_password_record_nulls);
+			CatalogTupleInsert(pg_auth_password_rel, new_tuple);
+			heap_freetuple(new_tuple);
+		}
+
+		table_close(pg_auth_password_rel, NoLock);
+	}
+	InvokeObjectPostAlterHook(AuthIdRelationId, roleid, 0);
 
 	/*
 	 * Advance command counter so we can see new record; else tests in
@@ -901,7 +1219,6 @@ AlterRoleSet(AlterRoleSetStmt *stmt)
 	return roleid;
 }
 
-
 /*
  * DROP ROLE
  */
@@ -909,7 +1226,8 @@ void
 DropRole(DropRoleStmt *stmt)
 {
 	Relation	pg_authid_rel,
-				pg_auth_members_rel;
+				pg_auth_members_rel,
+				pg_auth_password_rel;
 	ListCell   *item;
 
 	if (!have_createrole_privilege())
@@ -923,6 +1241,8 @@ DropRole(DropRoleStmt *stmt)
 	 */
 	pg_authid_rel = table_open(AuthIdRelationId, RowExclusiveLock);
 	pg_auth_members_rel = table_open(AuthMemRelationId, RowExclusiveLock);
+	pg_auth_password_rel = table_open(AuthPasswordRelationId, RowExclusiveLock);
+
 
 	foreach(item, stmt->roles)
 	{
@@ -1057,6 +1377,24 @@ DropRole(DropRoleStmt *stmt)
 		DeleteSharedSecurityLabel(roleid, AuthIdRelationId);
 
 		/*
+		 * Drop password(s)
+		 */
+		ScanKeyInit(&scankey,
+					Anum_pg_auth_password_roleid,
+					BTEqualStrategyNumber, F_OIDEQ,
+					ObjectIdGetDatum(roleid));
+
+		sscan = systable_beginscan(pg_auth_password_rel, AuthPasswordRoleOidIndexId,
+								   true, NULL, 1, &scankey);
+
+		while (HeapTupleIsValid(tmp_tuple = systable_getnext(sscan)))
+		{
+			CatalogTupleDelete(pg_auth_password_rel, &tmp_tuple->t_self);
+		}
+
+		systable_endscan(sscan);
+
+		/*
 		 * Remove settings for this role.
 		 */
 		DropSetting(InvalidOid, roleid);
@@ -1077,7 +1415,9 @@ DropRole(DropRoleStmt *stmt)
 	 * Now we can clean up; but keep locks until commit.
 	 */
 	table_close(pg_auth_members_rel, NoLock);
+	table_close(pg_auth_password_rel, NoLock);
 	table_close(pg_authid_rel, NoLock);
+
 }
 
 /*
@@ -1087,11 +1427,15 @@ ObjectAddress
 RenameRole(const char *oldname, const char *newname)
 {
 	HeapTuple	oldtuple,
-				newtuple;
+				newtuple,
+				passtuple;
 	TupleDesc	dsc;
+	ScanKeyData scankey;
+	SysScanDesc sscan;
+
 	Relation	rel;
 	Datum		datum;
-	bool		isnull;
+	bool		isnull = true;
 	Datum		repl_val[Natts_pg_authid];
 	bool		repl_null[Natts_pg_authid];
 	bool		repl_repl[Natts_pg_authid];
@@ -1099,6 +1443,7 @@ RenameRole(const char *oldname, const char *newname)
 	Oid			roleid;
 	ObjectAddress address;
 	Form_pg_authid authform;
+	Relation	pg_auth_password_rel;
 
 	rel = table_open(AuthIdRelationId, RowExclusiveLock);
 	dsc = RelationGetDescr(rel);
@@ -1189,17 +1534,37 @@ RenameRole(const char *oldname, const char *newname)
 															   CStringGetDatum(newname));
 	repl_null[Anum_pg_authid_rolname - 1] = false;
 
-	datum = heap_getattr(oldtuple, Anum_pg_authid_rolpassword, dsc, &isnull);
+	ScanKeyInit(&scankey,
+				Anum_pg_auth_password_roleid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(roleid));
 
-	if (!isnull && get_password_type(TextDatumGetCString(datum)) == PASSWORD_TYPE_MD5)
+	pg_auth_password_rel = table_open(AuthPasswordRelationId, RowExclusiveLock);
+
+	sscan = systable_beginscan(pg_auth_password_rel, AuthPasswordRoleOidIndexId,
+								true, NULL, 1, &scankey);
+
+	while (HeapTupleIsValid(passtuple = systable_getnext(sscan)))
 	{
-		/* MD5 uses the username as salt, so just clear it on a rename */
-		repl_repl[Anum_pg_authid_rolpassword - 1] = true;
-		repl_null[Anum_pg_authid_rolpassword - 1] = true;
+		datum = SysCacheGetAttr(AUTHPASSWORDNAME, passtuple,
+							Anum_pg_auth_password_password, &isnull);
 
-		ereport(NOTICE,
-				(errmsg("MD5 password cleared because of role rename")));
+		if (!isnull && get_password_type(TextDatumGetCString(datum)) == PASSWORD_TYPE_MD5)
+		{
+
+			/* MD5 uses the username as salt, so just clear it on a rename */
+
+			if (HeapTupleIsValid(passtuple)) {
+				CatalogTupleDelete(pg_auth_password_rel, &passtuple->t_self);
+				ereport(NOTICE,
+					(errmsg("MD5 password cleared because of role rename")));
+
+			}
+		}
 	}
+
+	systable_endscan(sscan);
+	table_close(pg_auth_password_rel, NoLock);
 
 	newtuple = heap_modify_tuple(oldtuple, dsc, repl_val, repl_null, repl_repl);
 	CatalogTupleUpdate(rel, &oldtuple->t_self, newtuple);

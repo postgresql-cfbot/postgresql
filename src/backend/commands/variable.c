@@ -24,6 +24,7 @@
 #include "access/xlog.h"
 #include "catalog/pg_authid.h"
 #include "commands/variable.h"
+#include "commands/user.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "utils/acl.h"
@@ -932,4 +933,108 @@ show_role(void)
 
 	/* Otherwise we can just use the GUC string */
 	return role_string ? role_string : "none";
+}
+
+
+/*
+ * check_password_duration: GUC check_hook for password_duration
+ */
+bool
+check_password_duration(char **newval, void **extra, GucSource source)
+{
+	Interval	*new_interval;
+	char	   *endptr;
+
+	const char *valueptr = *newval;
+	char	   *val;
+	Interval   *interval;
+
+	if (newval == NULL || *newval == NULL) {
+		extra = NULL;
+		return true;
+	}
+
+	elog(NOTICE,"Setting password duration to \"%s\"",
+					*newval);
+
+	while (isspace((unsigned char) *valueptr))
+		valueptr++;
+	if (*valueptr != '\'') {
+		val = pstrdup(valueptr);
+	}
+	else
+	{
+		valueptr++;
+		val = pstrdup(valueptr);
+		/* Check and remove trailing quote */
+		endptr = strchr(val, '\'');
+		if (!endptr || endptr[1] != '\0')
+		{
+			pfree(val);
+			return false;
+		}
+		*endptr = '\0';
+	}
+
+	/*
+		* Try to parse it.  XXX an invalid interval format will result in
+		* ereport(ERROR), which is not desirable for GUC.  We did what we
+		* could to guard against this in flatten_set_variable_args, but a
+		* string coming in from postgresql.conf might contain anything.
+		*/
+	interval = DatumGetIntervalP(DirectFunctionCall3(interval_in,
+														CStringGetDatum(val),
+														ObjectIdGetDatum(InvalidOid),
+														Int32GetDatum(-1)));
+
+	pfree(val);
+
+	if (!interval) {
+		return false;
+	}
+
+	new_interval = malloc(sizeof(Interval));
+	memcpy(new_interval, interval, sizeof(Interval));
+	pfree(interval);
+
+	/*
+	 * Pass back data for assign_password_validity to use
+	 */
+	*extra = malloc(sizeof(Interval *));
+	if (!*extra)
+		return false;
+	*((Interval **) *extra) = new_interval;
+
+	return true;
+}
+
+/*
+ * assign_password_validity: GUC assign_hook for timezone
+ */
+void
+assign_password_duration(const char *newval, void *extra)
+{
+	if (extra == NULL)
+		default_password_duration = NULL;
+	else
+		default_password_duration = *((Interval **) extra);
+}
+
+/*
+ * show_password_validity: GUC show_hook for timezone
+ */
+const char *
+show_password_duration(void)
+{
+	const char *intervalout;
+	if (default_password_duration == NULL) {
+		return "";
+	}
+	intervalout = DatumGetCString(DirectFunctionCall1(interval_out,
+										PointerGetDatum(default_password_duration)));
+
+	if (intervalout != NULL)
+		return intervalout;
+
+	return "";
 }

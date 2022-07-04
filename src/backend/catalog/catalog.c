@@ -28,6 +28,7 @@
 #include "catalog/catalog.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_auth_members.h"
+#include "catalog/pg_auth_password.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_db_role_setting.h"
@@ -246,6 +247,7 @@ IsSharedRelation(Oid relationId)
 {
 	/* These are the shared catalogs (look for BKI_SHARED_RELATION) */
 	if (relationId == AuthIdRelationId ||
+		relationId == AuthPasswordRelationId ||
 		relationId == AuthMemRelationId ||
 		relationId == DatabaseRelationId ||
 		relationId == DbRoleSettingRelationId ||
@@ -260,6 +262,8 @@ IsSharedRelation(Oid relationId)
 	/* These are their indexes */
 	if (relationId == AuthIdOidIndexId ||
 		relationId == AuthIdRolnameIndexId ||
+		relationId == AuthPasswordRoleOidIndexId ||
+		relationId == AuthMemRoleMemIndexId ||
 		relationId == AuthMemMemRoleIndexId ||
 		relationId == AuthMemRoleMemIndexId ||
 		relationId == DatabaseNameIndexId ||
@@ -279,8 +283,8 @@ IsSharedRelation(Oid relationId)
 		relationId == TablespaceOidIndexId)
 		return true;
 	/* These are their toast tables and toast indexes */
-	if (relationId == PgAuthidToastTable ||
-		relationId == PgAuthidToastIndex ||
+	if (relationId == PgAuthPasswordToastTable ||
+		relationId == PgAuthPasswordToastIndex ||
 		relationId == PgDatabaseToastTable ||
 		relationId == PgDatabaseToastIndex ||
 		relationId == PgDbRoleSettingToastTable ||

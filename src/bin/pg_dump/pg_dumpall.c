@@ -737,7 +737,18 @@ dumpRoles(PGconn *conn)
 	int			i;
 
 	/* note: rolconfig is dumped later */
-	if (server_version >= 90600)
+	if (server_version >= 150000)
+		printfPQExpBuffer(buf,
+						  "SELECT oid, rolname, rolsuper, rolinherit, "
+						  "rolcreaterole, rolcreatedb, "
+						  "rolcanlogin, rolconnlimit, p.password as rolpassword, "
+						  "rolvaliduntil, rolreplication, rolbypassrls, "
+						  "pg_catalog.shobj_description(oid, '%s') as rolcomment, "
+						  "rolname = current_user AS is_current_user "
+						  "FROM %s LEFT JOIN pg_auth_password p ON %s.oid = p.roleid "
+						  "WHERE rolname !~ '^pg_' "
+						  "ORDER BY 2", role_catalog, role_catalog, role_catalog);
+	else if (server_version >= 90600)
 		printfPQExpBuffer(buf,
 						  "SELECT oid, rolname, rolsuper, rolinherit, "
 						  "rolcreaterole, rolcreatedb, "

@@ -40,11 +40,14 @@ CREATE VIEW pg_shadow AS
         rolsuper AS usesuper,
         rolreplication AS userepl,
         rolbypassrls AS usebypassrls,
-        rolpassword AS passwd,
+        p.password AS passwd,
         rolvaliduntil AS valuntil,
         setconfig AS useconfig
     FROM pg_authid LEFT JOIN pg_db_role_setting s
     ON (pg_authid.oid = setrole AND setdatabase = 0)
+    LEFT JOIN pg_auth_password p
+    ON p.roleid = pg_authid.oid
+
     WHERE rolcanlogin;
 
 REVOKE ALL ON pg_shadow FROM public;

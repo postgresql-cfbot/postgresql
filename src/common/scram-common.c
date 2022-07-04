@@ -181,7 +181,7 @@ scram_ServerKey(const uint8 *salted_password, uint8 *result,
 
 
 /*
- * Construct a SCRAM secret, for storing in pg_authid.rolpassword.
+ * Construct a SCRAM secret, for storing in pg_auth_password.password.
  *
  * The password should already have been processed with SASLprep, if necessary!
  *

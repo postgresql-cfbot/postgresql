@@ -1725,11 +1725,12 @@ pg_shadow| SELECT pg_authid.rolname AS usename,
     pg_authid.rolsuper AS usesuper,
     pg_authid.rolreplication AS userepl,
     pg_authid.rolbypassrls AS usebypassrls,
-    pg_authid.rolpassword AS passwd,
+    p.password AS passwd,
     pg_authid.rolvaliduntil AS valuntil,
     s.setconfig AS useconfig
-   FROM (pg_authid
+   FROM ((pg_authid
      LEFT JOIN pg_db_role_setting s ON (((pg_authid.oid = s.setrole) AND (s.setdatabase = (0)::oid))))
+     LEFT JOIN pg_auth_password p ON ((p.roleid = pg_authid.oid)))
   WHERE pg_authid.rolcanlogin;
 pg_shmem_allocations| SELECT pg_get_shmem_allocations.name,
     pg_get_shmem_allocations.off,

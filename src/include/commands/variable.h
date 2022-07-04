@@ -34,5 +34,9 @@ extern void assign_session_authorization(const char *newval, void *extra);
 extern bool check_role(char **newval, void **extra, GucSource source);
 extern void assign_role(const char *newval, void *extra);
 extern const char *show_role(void);
+extern bool check_password_duration(char **newval, void **extra, GucSource source);
+extern void assign_password_duration(const char *newval, void *extra);
+extern const char *show_password_duration(void);
+
 
 #endif							/* VARIABLE_H */

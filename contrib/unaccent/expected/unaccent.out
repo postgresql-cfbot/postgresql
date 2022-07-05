@@ -37,6 +37,18 @@ SELECT unaccent('À');  -- Remove combining diacritical 0x0300
  A
 (1 row)
 
+SELECT unaccent('ℌ'); -- Controversial conversion from Latin-ASCII.xml
+ unaccent 
+----------
+ x
+(1 row)
+
+SELECT unaccent('Chrząszcza szczudłem przechrzcił wąż, Strząsa skrzydła z dżdżu,'); -- Polish
+                            unaccent                             
+-----------------------------------------------------------------
+ Chrzaszcza szczudlem przechrzcil waz, Strzasa skrzydla z dzdzu,
+(1 row)
+
 SELECT unaccent('unaccent', 'foobar');
  unaccent 
 ----------
@@ -67,6 +79,12 @@ SELECT unaccent('unaccent', 'À');
  A
 (1 row)
 
+SELECT unaccent('unaccent', 'Łódź ąćęłńóśżź ĄĆĘŁŃÓŚŻŹ'); -- Polish letters
+         unaccent         
+--------------------------
+ Lodz acelnoszz ACELNOSZZ
+(1 row)
+
 SELECT ts_lexize('unaccent', 'foobar');
  ts_lexize 
 -----------
@@ -95,5 +113,17 @@ SELECT ts_lexize('unaccent', 'À');
  ts_lexize 
 -----------
  {A}
+(1 row)
+
+SELECT unaccent('unaccent', '⅓ ⅜ ℃ ℉ ℗');
+     unaccent      
+-------------------
+ 1/3 3/8 °C °F (P)
+(1 row)
+
+SELECT unaccent('unaccent', '㎡ ㎥ ㎢ ㎣ ㎧');
+     unaccent      
+-------------------
+ m2 m3 km2 mm3 m/s
 (1 row)
 

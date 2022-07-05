@@ -35,13 +35,16 @@ import xml.etree.ElementTree as ET
 sys.stdout = codecs.getwriter('utf8')(sys.stdout.buffer)
 
 # The ranges of Unicode characters that we consider to be "plain letters".
-# For now we are being conservative by including only Latin and Greek.  This
-# could be extended in future based on feedback from people with relevant
-# language knowledge.
+# For now we are being conservative by including only Latin, Greek and Cyrillic.
+# This could be extended in future based on feedback from people with
+# relevant language knowledge.
 PLAIN_LETTER_RANGES = ((ord('a'), ord('z')),  # Latin lower case
                        (ord('A'), ord('Z')),  # Latin upper case
-                       (0x03b1, 0x03c9),      # GREEK SMALL LETTER ALPHA, GREEK SMALL LETTER OMEGA
-                       (0x0391, 0x03a9))      # GREEK CAPITAL LETTER ALPHA, GREEK CAPITAL LETTER OMEGA
+                       (ord('0'), ord('9')),  # Digits
+                       (0x0391, 0x03a9),      # Greek capital letters (ALPHA-OMEGA)
+                       (0x03b1, 0x03c9),      # Greek small letters (ALPHA-OMEGA)
+                       (0x0410, 0x044f),      # Cyrillic capital and small letters
+                       (0x00b0, 0x00b0))      # Degree sign
 
 # Combining marks follow a "base" character, and result in a composite
 # character. Example: "U&'A\0300'"produces "À".There are three types of
@@ -103,7 +106,7 @@ def is_letter_with_marks(codepoint, table):
     # Letter may have no combining characters, in which case it has
     # no marks.
     if len(codepoint.combining_ids) == 1:
-        return False
+        return codepoint.combining_ids[0] in table and is_letter(table[codepoint.combining_ids[0]], table)
 
     # A letter without diacritical marks has none of them.
     if any(is_mark(table[i]) for i in codepoint.combining_ids[1:]) is False:
@@ -128,35 +131,35 @@ def get_plain_letter(codepoint, table):
     than one combining character, do a recursive lookup on the table to
     find out its plain base letter."""
     if is_letter_with_marks(codepoint, table):
-        if len(table[codepoint.combining_ids[0]].combining_ids) > 1:
+        if len(table[codepoint.combining_ids[0]].combining_ids) >= 1:
             return get_plain_letter(table[codepoint.combining_ids[0]], table)
         elif is_plain_letter(table[codepoint.combining_ids[0]]):
             return table[codepoint.combining_ids[0]]
 
         # Should not come here
-        assert(False)
+        assert False, 'Codepoint U+%0.2X' % codepoint.id
     elif is_plain_letter(codepoint):
         return codepoint
 
     # Should not come here
-    assert(False)
+    assert False, 'Codepoint U+%0.2X' % codepoint.id
 
 
 def is_ligature(codepoint, table):
     """Return true for letters combined with letters."""
-    return all(is_letter(table[i], table) for i in codepoint.combining_ids)
+    return all(i in table and is_letter(table[i], table) for i in codepoint.combining_ids)
 
 
 def get_plain_letters(codepoint, table):
     """Return a list of plain letters from a ligature."""
-    assert(is_ligature(codepoint, table))
+    assert is_ligature(codepoint, table), 'Codepoint U+%0.2X' % codepoint.id
     return [get_plain_letter(table[id], table) for id in codepoint.combining_ids]
 
 
 def parse_cldr_latin_ascii_transliterator(latinAsciiFilePath):
     """Parse the XML file and return a set of tuples (src, trg), where "src"
     is the original character and "trg" the substitute."""
-    charactersSet = set()
+    charactersDict = {}
 
     # RegEx to parse rules
     rulePattern = re.compile(r'^(?:(.)|(\\u[0-9a-fA-F]{4})) \u2192 (?:\'(.+)\'|(.+)) ;')
@@ -196,25 +199,19 @@ def parse_cldr_latin_ascii_transliterator(latinAsciiFilePath):
             # the parser of unaccent only accepts non-whitespace characters
             # for "src" and "trg" (see unaccent.c)
             if not src.isspace() and not trg.isspace():
-                charactersSet.add((ord(src), trg))
+                charactersDict[ord(src)] = trg
 
-    return charactersSet
+    return charactersDict
 
 
 def special_cases():
     """Returns the special cases which are not handled by other methods"""
-    charactersSet = set()
+    charactersDict = {}
 
-    # Cyrillic
-    charactersSet.add((0x0401, "\u0415"))  # CYRILLIC CAPITAL LETTER IO
-    charactersSet.add((0x0451, "\u0435"))  # CYRILLIC SMALL LETTER IO
+    # Template example (already unnecessary):
+    #charactersDict[0x2103] = "\xb0C"   # DEGREE CELSIUS
 
-    # Symbols of "Letterlike Symbols" Unicode Block (U+2100 to U+214F)
-    charactersSet.add((0x2103, "\xb0C"))   # DEGREE CELSIUS
-    charactersSet.add((0x2109, "\xb0F"))   # DEGREE FAHRENHEIT
-    charactersSet.add((0x2117, "(P)"))     # SOUND RECORDING COPYRIGHT
-
-    return charactersSet
+    return charactersDict
 
 
 def main(args):
@@ -224,8 +221,8 @@ def main(args):
     table = {}
     all = []
 
-    # unordered set for ensure uniqueness
-    charactersSet = set()
+    # dictionary for ensure uniqueness
+    charactersDict = {}
 
     # read file UnicodeData.txt
     with codecs.open(
@@ -248,29 +245,32 @@ def main(args):
     # walk through all the codepoints looking for interesting mappings
     for codepoint in all:
         if codepoint.general_category.startswith('L') and \
-           len(codepoint.combining_ids) > 1:
+           len(codepoint.combining_ids) > 0:
             if is_letter_with_marks(codepoint, table):
-                charactersSet.add((codepoint.id,
-                                   chr(get_plain_letter(codepoint, table).id)))
+                charactersDict[codepoint.id] = chr(get_plain_letter(codepoint, table).id)
             elif args.noLigaturesExpansion is False and is_ligature(codepoint, table):
-                charactersSet.add((codepoint.id,
-                                   "".join(chr(combining_codepoint.id)
+                charactersDict[codepoint.id] = "".join(chr(combining_codepoint.id)
                                            for combining_codepoint
-                                           in get_plain_letters(codepoint, table))))
+                                           in get_plain_letters(codepoint, table))
+        elif (codepoint.general_category.startswith('N') or codepoint.general_category.startswith('So')) and \
+           len(codepoint.combining_ids) > 0 and \
+           args.noLigaturesExpansion is False and is_ligature(codepoint, table):
+            charactersDict[codepoint.id] = "".join(chr(combining_codepoint.id)
+                                       for combining_codepoint
+                                       in get_plain_letters(codepoint, table))
         elif is_mark_to_remove(codepoint):
-            charactersSet.add((codepoint.id, None))
+            charactersDict[codepoint.id] = None
 
     # add CLDR Latin-ASCII characters
     if not args.noLigaturesExpansion:
-        charactersSet |= parse_cldr_latin_ascii_transliterator(args.latinAsciiFilePath)
-        charactersSet |= special_cases()
+        charactersDict |= parse_cldr_latin_ascii_transliterator(args.latinAsciiFilePath)
+        charactersDict |= special_cases()
 
     # sort for more convenient display
-    charactersList = sorted(charactersSet, key=lambda characterPair: characterPair[0])
+    charactersList = sorted(charactersDict.keys(), key=lambda charId: charId)
 
-    for characterPair in charactersList:
-        print_record(characterPair[0], characterPair[1])
-
+    for charId in charactersList:
+        print_record(charId, charactersDict[charId])
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='This script builds unaccent.rules on standard output when given the contents of UnicodeData.txt and Latin-ASCII.xml given as arguments.')

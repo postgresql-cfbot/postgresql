@@ -31,6 +31,7 @@ static void check_for_jsonb_9_4_usage(ClusterInfo *cluster);
 static void check_for_pg_role_prefix(ClusterInfo *cluster);
 static void check_for_new_tablespace_dir(ClusterInfo *new_cluster);
 static void check_for_user_defined_encoding_conversions(ClusterInfo *cluster);
+static void check_for_incompatible_polymorphics(ClusterInfo *cluster);
 static char *get_canonical_locale_name(int category, const char *locale);
 
 
@@ -121,6 +122,12 @@ check_and_dump_old_cluster(bool live_check)
 	 */
 	if (GET_MAJOR_VERSION(old_cluster.major_version) <= 1300)
 		check_for_user_defined_postfix_ops(&old_cluster);
+
+	/*
+	 * PG 14 changed polymorphic functions from anyarray to anycompatiblearray.
+	 */
+	if (GET_MAJOR_VERSION(old_cluster.major_version) <= 1300)
+		check_for_incompatible_polymorphics(&old_cluster);
 
 	/*
 	 * Pre-PG 12 allowed tables to be declared WITH OIDS, which is not
@@ -774,6 +781,130 @@ check_proper_datallowconn(ClusterInfo *cluster)
 		check_ok();
 }
 
+
+/*
+ *	check_for_incompatible_polymorphics()
+ *
+ *	Make sure nothing is using old polymorphic functions with
+ *	anyarray/anyelement rather than the new anycompatible variants.
+ */
+static void
+check_for_incompatible_polymorphics(ClusterInfo *cluster)
+{
+	PGresult   *res;
+	FILE	   *script = NULL;
+	char		output_path[MAXPGPATH];
+	PQExpBufferData old_polymorphics;
+
+	initPQExpBuffer(&old_polymorphics);
+
+	if (GET_MAJOR_VERSION(old_cluster.major_version) >= 903)
+		appendPQExpBufferStr(&old_polymorphics,
+							"'array_remove(anyarray,anyelement)', "
+							"'array_replace(anyarray,anyelement,anyelement)', ");
+
+	if (GET_MAJOR_VERSION(old_cluster.major_version) >= 905)
+		appendPQExpBufferStr(&old_polymorphics,
+							"'array_position(anyarray,anyelement)', "
+							"'array_position(anyarray,anyelement,integer)', "
+							"'array_positions(anyarray,anyelement)', "
+							"'width_bucket(anyelement,anyarray)', ");
+
+	appendPQExpBufferStr(&old_polymorphics,
+						"'array_append(anyarray,anyelement)', "
+						"'array_cat(anyarray,anyarray)', "
+						"'array_prepend(anyelement,anyarray)' ");
+
+	prep_status("Checking for incompatible polymorphic functions");
+
+	snprintf(output_path, sizeof(output_path), "%s/%s",
+			 log_opts.basedir,
+			 "incompatible_polymorphics.txt");
+
+	for (int dbnum = 0; dbnum < cluster->dbarr.ndbs; dbnum++)
+	{
+		bool		db_used = false;
+		DbInfo	   *active_db = &cluster->dbarr.dbs[dbnum];
+		PGconn	   *conn = connectToServer(cluster, active_db->db_name);
+		int			ntups;
+		int			i_objkind,
+					i_objname;
+
+		/*
+		 * The query below hardcodes FirstNormalObjectId as 16384 rather than
+		 * interpolating that C #define into the query because, if that
+		 * #define is ever changed, the cutoff we want to use is the value
+		 * used by pre-version 14 servers, not that of some future version.
+		 */
+		res = executeQueryOrDie(conn,
+								/* Aggregate transition functions */
+								"SELECT 'aggregate' AS objkind, p.oid::regprocedure::text AS objname "
+								"FROM pg_proc AS p "
+								"JOIN pg_aggregate AS a ON a.aggfnoid=p.oid "
+								"JOIN pg_proc AS transfn ON transfn.oid=a.aggtransfn "
+								"WHERE p.oid >= 16384 "
+								/* Before v11, used proisagg=true, and afterwards uses prokind='a' */
+								"AND a.aggtransfn = ANY(ARRAY[%s]::regprocedure[]) "
+
+								/* Aggregate final functions */
+								"UNION ALL "
+								"SELECT 'aggregate' AS objkind, p.oid::regprocedure::text AS objname "
+								"FROM pg_proc AS p "
+								"JOIN pg_aggregate AS a ON a.aggfnoid=p.oid "
+								"JOIN pg_proc AS finalfn ON finalfn.oid=a.aggfinalfn "
+								"WHERE p.oid >= 16384 "
+								"AND a.aggfinalfn = ANY(ARRAY[%s]::regprocedure[]) "
+
+								/* Operators */
+								"UNION ALL "
+								"SELECT 'operator' AS objkind, op.oid::regoperator::text AS objname "
+								"FROM pg_operator AS op "
+								"WHERE op.oid >= 16384 "
+								"AND oprcode = ANY(ARRAY[%s]::regprocedure[]);",
+								old_polymorphics.data, old_polymorphics.data, old_polymorphics.data);
+
+		ntups = PQntuples(res);
+
+		i_objkind = PQfnumber(res, "objkind");
+		i_objname = PQfnumber(res, "objname");
+
+		for (int rowno = 0; rowno < ntups; rowno++)
+		{
+			if (script == NULL && (script = fopen_priv(output_path, "w")) == NULL)
+				pg_fatal("could not open file \"%s\": %s\n",
+						 output_path, strerror(errno));
+
+			if (!db_used)
+			{
+				db_used = true;
+				fprintf(script, "In database: %s\n", active_db->db_name);
+			}
+
+			fprintf(script, "  %s: %s\n",
+					PQgetvalue(res, rowno, i_objkind),
+					PQgetvalue(res, rowno, i_objname));
+		}
+
+		PQclear(res);
+		PQfinish(conn);
+	}
+
+	if (script)
+	{
+		fclose(script);
+		pg_log(PG_REPORT, "fatal\n");
+		pg_fatal("The cluster contains user-defined objects which refer to internal polymorphic\n"
+				"functions with arguments of type 'anyarray' or 'anyelement'. These user-defined\n"
+				"objects must be dropped before upgrading and restored afterwards to refer to the\n"
+				"corresponding functions with arguments of type 'anycompatiblearray' and\n"
+				"'anycompatible'.  A list of the problem objects is in the file:\n"
+				"    %s\n\n", output_path);
+	}
+	else
+		check_ok();
+
+	termPQExpBuffer(&old_polymorphics);
+}
 
 /*
  *	check_for_prepared_transactions()

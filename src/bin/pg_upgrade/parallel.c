@@ -17,6 +17,9 @@
 #include "pg_upgrade.h"
 
 static int	parallel_jobs;
+static int	current_jobs = 0;
+
+static bool      reap_subchild(bool wait_for_child);
 
 #ifdef WIN32
 /*
@@ -271,6 +274,60 @@ win32_transfer_all_new_dbs(transfer_thread_arg *args)
 #endif
 
 
+
+/*
+ * parallel_process_relfile_segment()
+ *
+ * Copy or link file from old cluster to new one.  If vm_must_add_frozenbit
+ * is true, visibility map forks are converted and rewritten, even in link
+ * mode.
+ */
+void
+parallel_process_relfile_segment(FileNameMap *map, const char *type_suffix, bool vm_must_add_frozenbit, const char *old_file, const char *new_file)
+{
+#ifndef WIN32
+	pid_t		child;
+#else
+	HANDLE		child;
+	transfer_thread_arg *new_arg;
+#endif
+	if (user_opts.jobs <= 1 || user_opts.jobs_per_disk <= 1)
+		process_relfile_segment(map, type_suffix, vm_must_add_frozenbit, old_file, new_file);
+	else
+	{
+		/* parallel */
+
+		/* harvest any dead children */
+		while (reap_subchild(false) == true)
+			;
+
+		/* must we wait for a dead child? use a maximum of 3 childs per tablespace */
+		if (current_jobs >= user_opts.jobs_per_disk)
+			reap_subchild(true);
+
+		/* set this before we start the job */
+		current_jobs++;
+
+		/* Ensure stdio state is quiesced before forking */
+		fflush(NULL);
+
+#ifndef WIN32
+		child = fork();
+		if (child == 0)
+		{
+			process_relfile_segment(map, type_suffix, vm_must_add_frozenbit, old_file, new_file);
+			/* use _exit to skip atexit() functions */
+			_exit(0);
+		}
+		else if (child < 0)
+			/* fork failed */
+			pg_fatal("could not create worker process: %s\n", strerror(errno));
+#endif
+	}
+}
+
+
+
 /*
  *	collect status from a completed worker child
  */
@@ -336,6 +393,42 @@ reap_child(bool wait_for_child)
 
 	/* do this after job has been removed */
 	parallel_jobs--;
+
+	return true;
+}
+
+
+
+
+/*
+ *	collect status from a completed worker subchild
+ */
+static bool
+reap_subchild(bool wait_for_child)
+{
+#ifndef WIN32
+	int			work_status;
+	pid_t		child;
+#else
+	int			thread_num;
+	DWORD		res;
+#endif
+
+	if (user_opts.jobs <= 1 || current_jobs == 0)
+		return false;
+
+#ifndef WIN32
+	child = waitpid(-1, &work_status, wait_for_child ? 0 : WNOHANG);
+	if (child == (pid_t) -1)
+		pg_fatal("waitpid() failed: %s\n", strerror(errno));
+	if (child == 0)
+		return false;			/* no children, or no dead children */
+	if (work_status != 0)
+		pg_fatal("child process exited abnormally: status %d\n", work_status);
+#endif
+
+	/* do this after job has been removed */
+	current_jobs--;
 
 	return true;
 }

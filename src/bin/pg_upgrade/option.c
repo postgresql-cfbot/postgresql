@@ -53,6 +53,7 @@ parseCommandLine(int argc, char *argv[])
 		{"link", no_argument, NULL, 'k'},
 		{"retain", no_argument, NULL, 'r'},
 		{"jobs", required_argument, NULL, 'j'},
+		{"jobs-per-disks", required_argument, NULL, 'J'},
 		{"socketdir", required_argument, NULL, 's'},
 		{"verbose", no_argument, NULL, 'v'},
 		{"clone", no_argument, NULL, 1},
@@ -99,7 +100,7 @@ parseCommandLine(int argc, char *argv[])
 	if (os_user_effective_id == 0)
 		pg_fatal("%s: cannot be run as root\n", os_info.progname);
 
-	while ((option = getopt_long(argc, argv, "d:D:b:B:cj:kNo:O:p:P:rs:U:v",
+	while ((option = getopt_long(argc, argv, "d:D:b:B:cj:J:kNo:O:p:P:rs:U:v",
 								 long_options, &optindex)) != -1)
 	{
 		switch (option)
@@ -126,6 +127,10 @@ parseCommandLine(int argc, char *argv[])
 
 			case 'j':
 				user_opts.jobs = atoi(optarg);
+				break;
+
+			case 'J':
+				user_opts.jobs_per_disk = atoi(optarg);
 				break;
 
 			case 'k':
@@ -271,6 +276,7 @@ usage(void)
 	printf(_("  -d, --old-datadir=DATADIR     old cluster data directory\n"));
 	printf(_("  -D, --new-datadir=DATADIR     new cluster data directory\n"));
 	printf(_("  -j, --jobs=NUM                number of simultaneous processes or threads to use\n"));
+	printf(_("  -J, --jobs_per_disk=NUM       number of simultaneous processes or threads to use per tablespace\n"));
 	printf(_("  -k, --link                    link instead of copying files to new cluster\n"));
 	printf(_("  -N, --no-sync                 do not wait for changes to be written safely to disk\n"));
 	printf(_("  -o, --old-options=OPTIONS     old cluster options to pass to the server\n"));

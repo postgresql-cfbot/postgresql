@@ -296,6 +296,7 @@ typedef struct
 	bool		do_sync;		/* flush changes to disk */
 	transferMode transfer_mode; /* copy files or link them? */
 	int			jobs;			/* number of processes/threads to use */
+	int			jobs_per_disk;			/* number of processes/threads to use */
 	char	   *socketdir;		/* directory to use for Unix sockets */
 } UserOpts;
 
@@ -463,4 +464,7 @@ void		parallel_exec_prog(const char *log_file, const char *opt_log_file,
 void		parallel_transfer_all_new_dbs(DbInfoArr *old_db_arr, DbInfoArr *new_db_arr,
 										  char *old_pgdata, char *new_pgdata,
 										  char *old_tablespace);
+
+void 		process_relfile_segment(FileNameMap *map, const char *suffix, bool vm_must_add_frozenbit, const char *old_file, const char *new_file);
+void 		parallel_process_relfile_segment(FileNameMap *map, const char *suffix, bool vm_must_add_frozenbit, const char *old_file, const char *new_file);
 bool		reap_child(bool wait_for_child);

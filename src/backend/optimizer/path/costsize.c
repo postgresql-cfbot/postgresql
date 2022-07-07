@@ -5428,6 +5428,138 @@ get_parameterized_joinrel_size(PlannerInfo *root, RelOptInfo *rel,
 	return nrows;
 }
 
+
+/*
+ * Given a mergeable RestrictInfo, find out which relid should be used for
+ * eliminating Corrective Qual Selectivity.
+ */
+static int
+find_relid_to_eliminate(PlannerInfo *root, RestrictInfo *rinfo)
+{
+	int left_relid,  right_relid;
+	RelOptInfo *lrel, *rrel;
+	bool res;
+
+	res = bms_get_singleton_member(rinfo->left_relids, &left_relid);
+	Assert(res);
+	res = bms_get_singleton_member(rinfo->left_relids, &right_relid);
+	Assert(res);
+
+	lrel = root->simple_rel_array[left_relid];
+	rrel = root->simple_rel_array[right_relid];
+
+	/* XXX: Assumed only one CorrectiveQual exists */
+
+	if (lrel->cqual_selectivity[0] > rrel->cqual_selectivity[0])
+		return left_relid;
+
+	return right_relid;
+}
+
+/*
+ * calc_join_cqual_selectivity
+ *
+ *	When join two relations, if both sides are impacted by the same CorrectiveQuals,
+ * we need to eliminate one of them and note the other one for future eliminating when join
+ * another corrective relation. or else just note the joinrel still being impacted by the
+ * single sides's CorrectiveQuals.
+ *
+ * Return value is the Selectivity we need to eliminate for estimating the current
+ * joinrel.
+ */
+static double
+calc_join_cqual_selectivity(PlannerInfo *root,
+							RelOptInfo *joinrel,
+							RelOptInfo *outer_rel,
+							RelOptInfo *inner_rel,
+							RestrictInfo *rinfo)
+{
+	double res = 1;
+	ListCell *lc1, *lc2;
+	Selectivity left_sel;  /* The cqual selectivity still impacted on this joinrel. */
+
+	/*
+	 * Find how many CorrectiveQual for this joinrel and allocate space for each left Selectivity
+	 * for each CorrectiveQual here.
+	 */
+	List	*final_cq_list = list_union_int(outer_rel->cqual_indexes, inner_rel->cqual_indexes);
+
+	joinrel->cqual_selectivity = palloc(sizeof(Selectivity) * list_length(final_cq_list));
+
+	foreach(lc1, outer_rel->cqual_indexes)
+	{
+		int outer_cq_index = lfirst_int(lc1);
+		int inner_cq_pos = -1;
+		int outer_idx = foreach_current_index(lc1);
+		int curr_sel_len;
+
+		/*
+		 * Check if the same corrective quals applied in both sides,
+		 * if yes, we need to decide which one to eliminate and which one
+		 * to keep. or else, we just keep the selectivity for feature use.
+		 */
+		foreach(lc2, inner_rel->cqual_indexes)
+		{
+			if (outer_cq_index == lfirst_int(lc2))
+				inner_cq_pos = foreach_current_index(lc2);
+		}
+
+		if (inner_cq_pos >= 0)
+		{
+			/* Find the CorrectiveQual which impacts both side. */
+			int relid = find_relid_to_eliminate(root, rinfo);
+			if (bms_is_member(relid, outer_rel->relids))
+			{
+				/* XXXX: we assume only 1 CorrectiveQual exist, so [0] directly. */
+				res *= outer_rel->cqual_selectivity[0];
+				left_sel = inner_rel->cqual_selectivity[0];
+			}
+			else
+			{
+				/* XXXX: we assume only 1 CorrectiveQual exist */
+				res *= inner_rel->cqual_selectivity[0];
+				left_sel = outer_rel->cqual_selectivity[0];
+			}
+		}
+		else
+		{
+			/* Only shown in outer side. */
+			left_sel = outer_rel->cqual_selectivity[outer_idx];
+		}
+
+		/*
+		 * If any side of join relation is impacted by a cqual, it is impacted for the joinrel
+		 * for sure.
+		 */
+		curr_sel_len = list_length(joinrel->cqual_indexes);
+		joinrel->cqual_indexes = lappend_int(joinrel->cqual_indexes, outer_idx);
+
+		joinrel->cqual_selectivity[curr_sel_len] = left_sel;
+		// elog(INFO, "left_sel %f", left_sel);
+	}
+
+	/* Push any cqual information which exists in inner_rel only to join rel. */
+	foreach(lc1, inner_rel->cqual_indexes)
+	{
+		int inner_cq_index = lfirst_int(lc1);
+		int curr_sel_len;
+
+		if (list_member_int(outer_rel->cqual_indexes, inner_cq_index))
+			/* have been handled in the previous loop */
+			continue;
+
+		curr_sel_len = list_length(joinrel->cqual_indexes);
+		joinrel->cqual_selectivity[curr_sel_len] = inner_rel->cqual_selectivity[foreach_current_index(lc1)];
+	}
+
+	pfree(final_cq_list);
+
+	// elog(INFO, "Final adjust sel (%s): %f", bmsToString(joinrel->relids), res);
+
+	return res;
+}
+
+
 /*
  * calc_joinrel_size_estimate
  *		Workhorse for set_joinrel_size_estimates and
@@ -5569,6 +5701,56 @@ calc_joinrel_size_estimate(PlannerInfo *root,
 			elog(ERROR, "unrecognized join type: %d", (int) jointype);
 			nrows = 0;			/* keep compiler quiet */
 			break;
+	}
+
+	{
+		Selectivity m1 = 1;
+		bool should_eliminate = false;
+		RestrictInfo *rinfo;
+
+		// XXX: For hack only, the aim is the "only one" restrictinfo is the one impacted by "the only one"
+		// CorrectiveQuals. for example:
+		// SELECT * FROM t1, t2, t3 WHERE t1.a = t2.a and t2.a = t3.a and t3.a > 2;
+
+		if (list_length(root->correlative_quals) == 1 &&
+			list_length(restrictlist) == 1 &&
+			jointype == JOIN_INNER)
+		{
+			int left_relid, right_relid;
+			rinfo = linitial_node(RestrictInfo, restrictlist);
+			if (rinfo->mergeopfamilies != NIL &&
+				bms_get_singleton_member(rinfo->left_relids, &left_relid) &&
+				bms_get_singleton_member(rinfo->right_relids, &right_relid))
+			{
+				List *interset_cq_indexes = list_intersection_int(
+					root->simple_rel_array[left_relid]->cqual_indexes,
+					root->simple_rel_array[right_relid]->cqual_indexes);
+
+				if (interset_cq_indexes != NIL &&
+					!root->simple_rte_array[left_relid]->inh &&
+					!root->simple_rte_array[right_relid]->inh)
+					should_eliminate = true;
+			}
+		}
+
+		// elog(INFO, "joinrel: %s, %d", bmsToString(joinrel->relids), should_eliminate);
+
+		if (should_eliminate)
+			m1 = calc_join_cqual_selectivity(root, joinrel, outer_rel, inner_rel, rinfo);
+
+		/* elog(INFO, */
+		/*	 "joinrelids: %s, outer_rel: %s, inner_rel: %s, join_clauselist: %s outer rows: %f, inner_rows: %f, join rows: %f, jselec: %f, m1 = %f, m2 = %f", */
+		/*	 bmsToString(joinrel->relids), */
+		/*	 bmsToString(outer_rel->relids), */
+		/*	 bmsToString(inner_rel->relids), */
+		/*	 bmsToString(join_list_relids), */
+		/*	 outer_rel->rows, */
+		/*	 inner_rel->rows, */
+		/*	 nrows, */
+		/*	 jselec, */
+		/*	 m1, */
+		/*	 m2); */
+		nrows /= m1;
 	}
 
 	return clamp_row_est(nrows);

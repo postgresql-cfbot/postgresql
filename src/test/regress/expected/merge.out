@@ -1437,17 +1437,17 @@ SELECT explain_merge('
 MERGE INTO ex_mtarget t USING ex_msource s ON t.a = s.a AND t.a < -1000
 WHEN MATCHED AND t.a < 10 THEN
 	DO NOTHING');
-                           explain_merge                            
---------------------------------------------------------------------
+                        explain_merge                         
+--------------------------------------------------------------
  Merge on ex_mtarget t (actual rows=0 loops=1)
    ->  Hash Join (actual rows=0 loops=1)
-         Hash Cond: (s.a = t.a)
-         ->  Seq Scan on ex_msource s (actual rows=1 loops=1)
-         ->  Hash (actual rows=0 loops=1)
-               Buckets: xxx  Batches: xxx  Memory Usage: xxx
-               ->  Seq Scan on ex_mtarget t (actual rows=0 loops=1)
+         Hash Cond: (t.a = s.a)
+         ->  Seq Scan on ex_mtarget t (actual rows=0 loops=1)
+               Filter: (a < '-1000'::integer)
+               Rows Removed by Filter: 54
+         ->  Hash (never executed)
+               ->  Seq Scan on ex_msource s (never executed)
                      Filter: (a < '-1000'::integer)
-                     Rows Removed by Filter: 54
 (9 rows)
 
 DROP TABLE ex_msource, ex_mtarget;

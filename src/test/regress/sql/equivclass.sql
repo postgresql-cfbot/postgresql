@@ -269,3 +269,15 @@ create temp view overview as
   select f1::information_schema.sql_identifier as sqli, f2 from undername;
 explain (costs off)  -- this should not require a sort
   select * from overview where sqli = 'foo' order by sqli;
+
+
+-- test equivalence filters
+explain (costs off)
+  select * from ec0
+  inner join ec1 on ec0.ff = ec1.ff
+  where ec0.ff between 1 and 10;
+
+explain (costs off)
+  select * from ec0
+  inner join ec1 on ec0.ff = ec1.ff
+  where ec1.ff between 1 and 10;

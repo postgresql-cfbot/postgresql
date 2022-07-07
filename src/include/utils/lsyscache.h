@@ -78,7 +78,9 @@ extern bool get_ordering_op_properties(Oid opno,
 									   Oid *opfamily, Oid *opcintype, int16 *strategy);
 extern Oid	get_equality_op_for_ordering_op(Oid opno, bool *reverse);
 extern Oid	get_ordering_op_for_equality_op(Oid opno, bool use_lhs_type);
+extern List *get_opfamilies(Oid opno, Oid method);
 extern List *get_mergejoin_opfamilies(Oid opno);
+extern void get_btree_opfamilies(Oid opno, List **mergeable_opfamilies, List **unmergeable_btree_opfamilies);
 extern bool get_compatible_hash_operators(Oid opno,
 										  Oid *lhs_opno, Oid *rhs_opno);
 extern bool get_op_hash_functions(Oid opno,

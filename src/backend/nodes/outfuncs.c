@@ -2666,6 +2666,20 @@ _outEquivalenceMember(StringInfo str, const EquivalenceMember *node)
 }
 
 static void
+_outEquivalenceFilter(StringInfo str, const EquivalenceFilter *node)
+{
+	WRITE_NODE_TYPE("EQUIVALENCEFILTER");
+
+	WRITE_NODE_FIELD(ef_const);
+	WRITE_OID_FIELD(ef_opno);
+	WRITE_BOOL_FIELD(ef_const_is_left);
+	WRITE_UINT_FIELD(ef_source_rel);
+	WRITE_OID_FIELD(opfamily);
+	WRITE_INT_FIELD(amstrategy);
+	WRITE_NODE_FIELD(rinfo);
+}
+
+static void
 _outPathKey(StringInfo str, const PathKey *node)
 {
 	WRITE_NODE_TYPE("PATHKEY");
@@ -4495,6 +4509,9 @@ outNode(StringInfo str, const void *obj)
 				break;
 			case T_EquivalenceMember:
 				_outEquivalenceMember(str, obj);
+				break;
+			case T_EquivalenceFilter:
+				_outEquivalenceFilter(str, obj);
 				break;
 			case T_PathKey:
 				_outPathKey(str, obj);

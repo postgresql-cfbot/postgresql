@@ -463,6 +463,33 @@ set_rel_size(PlannerInfo *root, RelOptInfo *rel,
 	 * We insist that all non-dummy rels have a nonzero rowcount estimate.
 	 */
 	Assert(rel->rows > 0 || IS_DUMMY_REL(rel));
+
+	/* Now calculating the selectivity impacted by Corrective Qual */
+	if (!rte->inh)  /* Inherited table is not supported in this PoC */
+	{
+		ListCell *l;
+		int i = 0;
+		rel->cqual_selectivity = palloc(sizeof(Selectivity) * list_length(rel->cqual_indexes));
+
+		foreach(l, rel->cqual_indexes)
+		{
+			int cq_index = lfirst_int(l);
+			CorrelativeQuals *cquals = list_nth_node(CorrelativeQuals, root->correlative_quals, cq_index);
+			ListCell *l2;
+			bool found = false;
+			foreach(l2, cquals->corr_restrictinfo)
+			{
+				RestrictInfo *rinfo = lfirst_node(RestrictInfo, l2);
+				if (bms_equal(rinfo->clause_relids, rel->relids))
+				{
+					found = true;
+					rel->cqual_selectivity[i] = rinfo->norm_selec > 0 ? rinfo->norm_selec : rinfo->outer_selec;
+					Assert(rel->cqual_selectivity[i] > 0);
+				}
+			}
+			Assert(found);
+		}
+	}
 }
 
 /*

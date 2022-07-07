@@ -53,7 +53,7 @@ static void extract_lateral_references(PlannerInfo *root, RelOptInfo *brel,
 static List *deconstruct_recurse(PlannerInfo *root, Node *jtnode,
 								 bool below_outer_join,
 								 Relids *qualscope, Relids *inner_join_rels,
-								 List **postponed_qual_list);
+								 List **postponed_qual_list, List **filter_qual_list);
 static void process_security_barrier_quals(PlannerInfo *root,
 										   int rti, Relids qualscope,
 										   bool below_outer_join);
@@ -70,13 +70,14 @@ static void distribute_qual_to_rels(PlannerInfo *root, Node *clause,
 									Relids qualscope,
 									Relids ojscope,
 									Relids outerjoin_nonnullable,
-									List **postponed_qual_list);
+									List **postponed_qual_list,
+									List **filter_qual_list);
 static bool check_outerjoin_delay(PlannerInfo *root, Relids *relids_p,
 								  Relids *nullable_relids_p, bool is_pushed_down);
 static bool check_equivalence_delay(PlannerInfo *root,
 									RestrictInfo *restrictinfo);
 static bool check_redundant_nullability_qual(PlannerInfo *root, Node *clause);
-static void check_mergejoinable(RestrictInfo *restrictinfo);
+static void check_btreeable(RestrictInfo *restrictinfo);
 static void check_hashjoinable(RestrictInfo *restrictinfo);
 static void check_memoizable(RestrictInfo *restrictinfo);
 
@@ -650,7 +651,6 @@ create_lateral_join_info(PlannerInfo *root)
 	}
 }
 
-
 /*****************************************************************************
  *
  *	  JOIN TREE PROCESSING
@@ -690,6 +690,7 @@ deconstruct_jointree(PlannerInfo *root)
 	Relids		qualscope;
 	Relids		inner_join_rels;
 	List	   *postponed_qual_list = NIL;
+	List	   *filter_qual_list = NIL;
 
 	/* Start recursion at top of jointree */
 	Assert(root->parse->jointree != NULL &&
@@ -700,10 +701,13 @@ deconstruct_jointree(PlannerInfo *root)
 
 	result = deconstruct_recurse(root, (Node *) root->parse->jointree, false,
 								 &qualscope, &inner_join_rels,
-								 &postponed_qual_list);
+								 &postponed_qual_list, &filter_qual_list);
 
 	/* Shouldn't be any leftover quals */
 	Assert(postponed_qual_list == NIL);
+
+	/* try and match each filter_qual_list item up with an eclass. */
+	distribute_filter_quals_to_eclass(root, filter_qual_list);
 
 	return result;
 }
@@ -725,6 +729,8 @@ deconstruct_jointree(PlannerInfo *root)
  *		or free this, either)
  *	*postponed_qual_list is a list of PostponedQual structs, which we can
  *		add quals to if they turn out to belong to a higher join level
+ *	*filter_qual_list is appended to with a list of quals which may be useful
+ *		include as EquivalenceFilters.
  *	Return value is the appropriate joinlist for this jointree node
  *
  * In addition, entries will be added to root->join_info_list for outer joins.
@@ -732,7 +738,7 @@ deconstruct_jointree(PlannerInfo *root)
 static List *
 deconstruct_recurse(PlannerInfo *root, Node *jtnode, bool below_outer_join,
 					Relids *qualscope, Relids *inner_join_rels,
-					List **postponed_qual_list)
+					List **postponed_qual_list, List **filter_qual_list)
 {
 	List	   *joinlist;
 
@@ -785,7 +791,8 @@ deconstruct_recurse(PlannerInfo *root, Node *jtnode, bool below_outer_join,
 											   below_outer_join,
 											   &sub_qualscope,
 											   inner_join_rels,
-											   &child_postponed_quals);
+											   &child_postponed_quals,
+											   filter_qual_list);
 			*qualscope = bms_add_members(*qualscope, sub_qualscope);
 			sub_members = list_length(sub_joinlist);
 			remaining--;
@@ -819,7 +826,8 @@ deconstruct_recurse(PlannerInfo *root, Node *jtnode, bool below_outer_join,
 										below_outer_join, JOIN_INNER,
 										root->qual_security_level,
 										*qualscope, NULL, NULL,
-										NULL);
+										NULL,
+										filter_qual_list);
 			else
 				*postponed_qual_list = lappend(*postponed_qual_list, pq);
 		}
@@ -835,7 +843,8 @@ deconstruct_recurse(PlannerInfo *root, Node *jtnode, bool below_outer_join,
 									below_outer_join, JOIN_INNER,
 									root->qual_security_level,
 									*qualscope, NULL, NULL,
-									postponed_qual_list);
+									postponed_qual_list,
+									filter_qual_list);
 		}
 	}
 	else if (IsA(jtnode, JoinExpr))
@@ -873,11 +882,13 @@ deconstruct_recurse(PlannerInfo *root, Node *jtnode, bool below_outer_join,
 				leftjoinlist = deconstruct_recurse(root, j->larg,
 												   below_outer_join,
 												   &leftids, &left_inners,
-												   &child_postponed_quals);
+												   &child_postponed_quals,
+												   filter_qual_list);
 				rightjoinlist = deconstruct_recurse(root, j->rarg,
 													below_outer_join,
 													&rightids, &right_inners,
-													&child_postponed_quals);
+													&child_postponed_quals,
+													filter_qual_list);
 				*qualscope = bms_union(leftids, rightids);
 				*inner_join_rels = *qualscope;
 				/* Inner join adds no restrictions for quals */
@@ -890,11 +901,13 @@ deconstruct_recurse(PlannerInfo *root, Node *jtnode, bool below_outer_join,
 				leftjoinlist = deconstruct_recurse(root, j->larg,
 												   below_outer_join,
 												   &leftids, &left_inners,
-												   &child_postponed_quals);
+												   &child_postponed_quals,
+												   filter_qual_list);
 				rightjoinlist = deconstruct_recurse(root, j->rarg,
 													true,
 													&rightids, &right_inners,
-													&child_postponed_quals);
+													&child_postponed_quals,
+													filter_qual_list);
 				*qualscope = bms_union(leftids, rightids);
 				*inner_join_rels = bms_union(left_inners, right_inners);
 				nonnullable_rels = leftids;
@@ -904,11 +917,13 @@ deconstruct_recurse(PlannerInfo *root, Node *jtnode, bool below_outer_join,
 				leftjoinlist = deconstruct_recurse(root, j->larg,
 												   below_outer_join,
 												   &leftids, &left_inners,
-												   &child_postponed_quals);
+												   &child_postponed_quals,
+												   filter_qual_list);
 				rightjoinlist = deconstruct_recurse(root, j->rarg,
 													below_outer_join,
 													&rightids, &right_inners,
-													&child_postponed_quals);
+													&child_postponed_quals,
+													filter_qual_list);
 				*qualscope = bms_union(leftids, rightids);
 				*inner_join_rels = bms_union(left_inners, right_inners);
 				/* Semi join adds no restrictions for quals */
@@ -925,11 +940,13 @@ deconstruct_recurse(PlannerInfo *root, Node *jtnode, bool below_outer_join,
 				leftjoinlist = deconstruct_recurse(root, j->larg,
 												   true,
 												   &leftids, &left_inners,
-												   &child_postponed_quals);
+												   &child_postponed_quals,
+												   filter_qual_list);
 				rightjoinlist = deconstruct_recurse(root, j->rarg,
 													true,
 													&rightids, &right_inners,
-													&child_postponed_quals);
+													&child_postponed_quals,
+													filter_qual_list);
 				*qualscope = bms_union(leftids, rightids);
 				*inner_join_rels = bms_union(left_inners, right_inners);
 				/* each side is both outer and inner */
@@ -1013,7 +1030,8 @@ deconstruct_recurse(PlannerInfo *root, Node *jtnode, bool below_outer_join,
 									root->qual_security_level,
 									*qualscope,
 									ojscope, nonnullable_rels,
-									postponed_qual_list);
+									postponed_qual_list,
+									filter_qual_list);
 		}
 
 		/* Now we can add the SpecialJoinInfo to join_info_list */
@@ -1116,6 +1134,7 @@ process_security_barrier_quals(PlannerInfo *root,
 									security_level,
 									qualscope,
 									qualscope,
+									NULL,
 									NULL,
 									NULL);
 		}
@@ -1610,7 +1629,8 @@ distribute_qual_to_rels(PlannerInfo *root, Node *clause,
 						Relids qualscope,
 						Relids ojscope,
 						Relids outerjoin_nonnullable,
-						List **postponed_qual_list)
+						List **postponed_qual_list,
+						List **filter_qual_list)
 {
 	Relids		relids;
 	bool		is_pushed_down;
@@ -1620,6 +1640,7 @@ distribute_qual_to_rels(PlannerInfo *root, Node *clause,
 	bool		maybe_outer_join;
 	Relids		nullable_relids;
 	RestrictInfo *restrictinfo;
+	int	relid;
 
 	/*
 	 * Retrieve all relids mentioned within the clause.
@@ -1874,8 +1895,11 @@ distribute_qual_to_rels(PlannerInfo *root, Node *clause,
 	 * We check "mergejoinability" of every clause, not only join clauses,
 	 * because we want to know about equivalences between vars of the same
 	 * relation, or between vars and consts.
+	 *
+	 * We also checked the btree-able properity at the same round of checking
+	 * mergejoinability to support ec filter function.
 	 */
-	check_mergejoinable(restrictinfo);
+	check_btreeable(restrictinfo);
 
 	/*
 	 * If it is a true equivalence clause, send it to the EquivalenceClass
@@ -1964,6 +1988,22 @@ distribute_qual_to_rels(PlannerInfo *root, Node *clause,
 
 	/* No EC special case applies, so push it into the clause lists */
 	distribute_restrictinfo_to_rels(root, restrictinfo);
+
+	/* Check if the qual looks useful to harvest as an EquivalenceFilter */
+	if (filter_qual_list != NULL &&
+
+		// Must be an OpExpr for now.
+		is_opclause(restrictinfo->clause) &&
+		// Checking volatile against RestrictInfo so that the result can be cached.
+		!contain_volatile_functions((Node *)restrictinfo) &&
+
+		restrictinfo->btreeineqopfamilies != NIL && /* ineq expression */
+
+		/* simple & common enough filter, one side references one relation and the other one is a constant */
+		((bms_is_empty(restrictinfo->left_relids) && bms_get_singleton_member(restrictinfo->right_relids, &relid)) ||
+		 (bms_is_empty(restrictinfo->right_relids) && bms_get_singleton_member(restrictinfo->left_relids, &relid)))
+		)
+		*filter_qual_list = lappend(*filter_qual_list, restrictinfo);
 }
 
 /*
@@ -2389,7 +2429,7 @@ process_implied_equality(PlannerInfo *root,
 	 * from an EquivalenceClass; but we could have reduced the original clause
 	 * to a constant.
 	 */
-	check_mergejoinable(restrictinfo);
+	check_btreeable(restrictinfo);
 
 	/*
 	 * Note we don't do initialize_mergeclause_eclasses(); the caller can
@@ -2456,8 +2496,8 @@ build_implied_join_equality(PlannerInfo *root,
 									 NULL,	/* outer_relids */
 									 nullable_relids);	/* nullable_relids */
 
-	/* Set mergejoinability/hashjoinability flags */
-	check_mergejoinable(restrictinfo);
+	/* Set btreeability/hashjoinability flags */
+	check_btreeable(restrictinfo);
 	check_hashjoinable(restrictinfo);
 	check_memoizable(restrictinfo);
 
@@ -2641,20 +2681,16 @@ match_foreign_keys_to_quals(PlannerInfo *root)
  *****************************************************************************/
 
 /*
- * check_mergejoinable
- *	  If the restrictinfo's clause is mergejoinable, set the mergejoin
- *	  info fields in the restrictinfo.
- *
- *	  Currently, we support mergejoin for binary opclauses where
- *	  the operator is a mergejoinable operator.  The arguments can be
- *	  anything --- as long as there are no volatile functions in them.
+ * check_btreeable
+ *	  If the restrictinfo's clause is btreeable, set the mergejoin
+ *	  info field and btreeineq info field in the restrictinfo. btreeable
+ *	  now is a superset of mergeable.
  */
 static void
-check_mergejoinable(RestrictInfo *restrictinfo)
+check_btreeable(RestrictInfo *restrictinfo)
 {
 	Expr	   *clause = restrictinfo->clause;
 	Oid			opno;
-	Node	   *leftarg;
 
 	if (restrictinfo->pseudoconstant)
 		return;
@@ -2664,11 +2700,11 @@ check_mergejoinable(RestrictInfo *restrictinfo)
 		return;
 
 	opno = ((OpExpr *) clause)->opno;
-	leftarg = linitial(((OpExpr *) clause)->args);
 
-	if (op_mergejoinable(opno, exprType(leftarg)) &&
-		!contain_volatile_functions((Node *) restrictinfo))
-		restrictinfo->mergeopfamilies = get_mergejoin_opfamilies(opno);
+	if (!contain_volatile_functions((Node *) restrictinfo))
+		get_btree_opfamilies(opno,
+							 &restrictinfo->mergeopfamilies,
+							 &restrictinfo->btreeineqopfamilies);
 
 	/*
 	 * Note: op_mergejoinable is just a hint; if we fail to find the operator

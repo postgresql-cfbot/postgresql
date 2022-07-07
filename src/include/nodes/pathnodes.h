@@ -251,6 +251,8 @@ struct PlannerInfo
 
 	bool		ec_merging_done;	/* set true once ECs are canonical */
 
+	List		*correlative_quals;  /* list of CorrelativeQuals for this subquery */
+
 	List	   *canon_pathkeys; /* list of "canonical" PathKeys */
 
 	List	   *left_join_clauses;	/* list of RestrictInfos for mergejoinable
@@ -767,6 +769,18 @@ typedef struct RelOptInfo
 	 * Indexes in PlannerInfo's eq_classes list of ECs that mention this rel
 	 */
 	Bitmapset  *eclass_indexes;
+	List		*cqual_indexes; /* Indexes in PlannerInfo's correlative_quals list of
+								 * CorrelativeQuals that this rel has applied. It is valid
+								 * on both baserel and joinrel. Used to quick check is the
+								 * both sides contains the same CorrectiveQuals object.
+								 */
+	Selectivity	*cqual_selectivity; /*
+								   * The number of elements in cqual_selectivity equals
+								   * the length of cqual_indexes. The semantics is which
+								   * selectivity in the corresponding CorectiveQuals's qual
+								   * list is taking effect. At only time, only 1 Qual
+								   * Selectivity is counted for any-level of joinrel.
+								   */
 	PlannerInfo *subroot;		/* if subquery */
 	List	   *subplan_params; /* if subquery */
 	/* wanted number of parallel workers */
@@ -1132,6 +1146,7 @@ typedef struct EquivalenceClass
 	List	   *ec_members;		/* list of EquivalenceMembers */
 	List	   *ec_sources;		/* list of generating RestrictInfos */
 	List	   *ec_derives;		/* list of derived RestrictInfos */
+	List	   *ec_filters;
 	Relids		ec_relids;		/* all relids appearing in ec_members, except
 								 * for child members (see below) */
 	bool		ec_has_const;	/* any pseudoconstants in ec_members? */
@@ -1143,6 +1158,60 @@ typedef struct EquivalenceClass
 	Index		ec_max_security;	/* maximum security_level in ec_sources */
 	struct EquivalenceClass *ec_merged; /* set if merged into another EC */
 } EquivalenceClass;
+
+/*
+ * EquivalenceFilter - List of filters on Consts which belong to the
+ * EquivalenceClass.
+ *
+ * When building the equivalence classes we also collected a list of quals in
+ * the form of; "Expr op Const" and "Const op Expr". These are collected in the
+ * hope that we'll later generate an equivalence class which contains the
+ * "Expr" part. For example, if we parse a query such as;
+ *
+ *		SELECT * FROM t1 INNER JOIN t2 ON t1.id = t2.id WHERE t1.id < 10;
+ *
+ * then since we'll end up with an equivalence class containing {t1.id,t2.id},
+ * we'll tag the "< 10" filter onto the eclass. We are able to do this because
+ * the eclass proves equality between each class member, therefore all members
+ * must be below 10.
+ *
+ * EquivalenceFilters store the details required to allow us to push these
+ * filter clauses down into other relations which share an equivalence class
+ * containing a member which matches the expression of this EquivalenceFilter.
+ *
+ * ef_const is the Const value which this filter should filter against.
+ * ef_opno is the operator to filter on.
+ * ef_const_is_left marks if the OpExpr was in the form "Const op Expr" or
+ * "Expr op Const".
+ * ef_source_rel is the relation id of where this qual originated from.
+ */
+typedef struct EquivalenceFilter
+{
+	NodeTag		type;
+
+	Const	   *ef_const;		/* the constant expression to filter on */
+	Oid			ef_opno;		/* Operator Oid of filter operator */
+	bool		ef_const_is_left; /* Is the Const on the left of the OpExrp? */
+	Index		ef_source_rel;	/* relid of originating relation. */
+	Oid			opfamily;
+	int			amstrategy;
+	struct RestrictInfo	*rinfo;		/* source restrictInfo for this EquivalenceFilter */
+} EquivalenceFilter;
+
+
+/*
+ * Currently it is as simple as a List of RestrictInfo, it means a). For any joinrel size
+ * estimation, only one restrictinfo on this group should be counted. b). During execution,
+ * at least 1 restrictinfo in this group should be executed.
+ *
+ * Define it as a Node just for better extendability, we can stripe it to a List *
+ * if we are sure nothing else is needed.
+ */
+typedef struct CorrelativeQuals
+{
+	NodeTag	type;
+	List	*corr_restrictinfo;
+} CorrelativeQuals;
 
 /*
  * If an EC contains a const and isn't below-outer-join, any PathKey depending
@@ -2305,6 +2374,7 @@ typedef struct RestrictInfo
 	 * mergejoinable, else NIL
 	 */
 	List	   *mergeopfamilies;
+	List		*btreeineqopfamilies; /* btree families except the mergeable ones */
 
 	/*
 	 * cache space for mergeclause processing; NULL if not yet set
@@ -2832,7 +2902,7 @@ typedef enum
  *
  * flags indicating what kinds of grouping are possible.
  * partial_costs_set is true if the agg_partial_costs and agg_final_costs
- * 		have been initialized.
+ *		have been initialized.
  * agg_partial_costs gives partial aggregation costs.
  * agg_final_costs gives finalization costs.
  * target_parallel_safe is true if target is parallel safe.
@@ -2862,8 +2932,8 @@ typedef struct
  * limit_tuples is an estimated bound on the number of output tuples,
  *		or -1 if no LIMIT or couldn't estimate.
  * count_est and offset_est are the estimated values of the LIMIT and OFFSET
- * 		expressions computed by preprocess_limit() (see comments for
- * 		preprocess_limit() for more information).
+ *		expressions computed by preprocess_limit() (see comments for
+ *		preprocess_limit() for more information).
  */
 typedef struct
 {

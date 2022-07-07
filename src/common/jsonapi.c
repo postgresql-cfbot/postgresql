@@ -24,6 +24,12 @@
 #include "miscadmin.h"
 #endif
 
+/*  WIP: put somewhere sensible and consider removing CRC from the names */
+#if (defined (__x86_64__) || defined(_M_AMD64)) && (defined(USE_SSE42_CRC32C) || defined(USE_SSE42_CRC32C_WITH_RUNTIME_CHECK))
+#include <nmmintrin.h>
+#define USE_SSE2
+#endif
+
 /*
  * The context of the parser is maintained by the recursive descent
  * mechanism, but is passed explicitly to the error reporting routine
@@ -519,26 +525,23 @@ JsonParseErrorType
 json_lex(JsonLexContext *lex)
 {
 	char	   *s;
-	int			len;
+	char	   *const end = lex->input + lex->input_length;
 	JsonParseErrorType result;
 
 	/* Skip leading whitespace. */
 	s = lex->token_terminator;
-	len = s - lex->input;
-	while (len < lex->input_length &&
-		   (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r'))
+	while (s < end && (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r'))
 	{
 		if (*s++ == '\n')
 		{
 			++lex->line_number;
 			lex->line_start = s;
 		}
-		len++;
 	}
 	lex->token_start = s;
 
 	/* Determine token type. */
-	if (len >= lex->input_length)
+	if (s >= end)
 	{
 		lex->token_start = NULL;
 		lex->prev_token_terminator = lex->token_terminator;
@@ -623,7 +626,7 @@ json_lex(JsonLexContext *lex)
 					 * the whole word as an unexpected token, rather than just
 					 * some unintuitive prefix thereof.
 					 */
-					for (p = s; p - s < lex->input_length - len && JSON_ALPHANUMERIC_CHAR(*p); p++)
+					for (p = s; p < end && JSON_ALPHANUMERIC_CHAR(*p); p++)
 						 /* skip */ ;
 
 					/*
@@ -672,7 +675,7 @@ static inline JsonParseErrorType
 json_lex_string(JsonLexContext *lex)
 {
 	char	   *s;
-	int			len;
+	char	   *const end = lex->input + lex->input_length;
 	int			hi_surrogate = -1;
 
 	if (lex->strval != NULL)
@@ -680,32 +683,20 @@ json_lex_string(JsonLexContext *lex)
 
 	Assert(lex->input_length > 0);
 	s = lex->token_start;
-	len = lex->token_start - lex->input;
 	for (;;)
 	{
 		s++;
-		len++;
 		/* Premature end of the string. */
-		if (len >= lex->input_length)
+		if (s >= end)
 		{
 			lex->token_terminator = s;
 			return JSON_INVALID_TOKEN;
-		}
-		else if (*s == '"')
-			break;
-		else if ((unsigned char) *s < 32)
-		{
-			/* Per RFC4627, these characters MUST be escaped. */
-			/* Since *s isn't printable, exclude it from the context string */
-			lex->token_terminator = s;
-			return JSON_ESCAPING_REQUIRED;
 		}
 		else if (*s == '\\')
 		{
 			/* OK, we have an escape character. */
 			s++;
-			len++;
-			if (len >= lex->input_length)
+			if (s >= end)
 			{
 				lex->token_terminator = s;
 				return JSON_INVALID_TOKEN;
@@ -718,8 +709,7 @@ json_lex_string(JsonLexContext *lex)
 				for (i = 1; i <= 4; i++)
 				{
 					s++;
-					len++;
-					if (len >= lex->input_length)
+					if (s >= end)
 					{
 						lex->token_terminator = s;
 						return JSON_INVALID_TOKEN;
@@ -856,22 +846,91 @@ json_lex_string(JsonLexContext *lex)
 				return JSON_ESCAPING_INVALID;
 			}
 		}
-		else if (lex->strval != NULL)
+		else
 		{
+#ifdef USE_SSE2
+			__m128i		block,
+						has_backslash,
+						has_doublequote,
+						control,
+						has_control,
+						error_cum = _mm_setzero_si128();
+			const		__m128i backslash = _mm_set1_epi8('\\');
+			const		__m128i doublequote = _mm_set1_epi8('"');
+			const		__m128i max_control = _mm_set1_epi8(0x1F);
+#endif
+			/* start lookahead at current byte */
+			char	   *p = s;
+
 			if (hi_surrogate != -1)
 				return JSON_UNICODE_LOW_SURROGATE;
 
-			appendStringInfoChar(lex->strval, *s);
+#ifdef USE_SSE2
+			while (p < end - sizeof(__m128i))
+			{
+				block = _mm_loadu_si128((const __m128i *) p);
+
+				/* direct comparison to quotes and backslashes */
+				has_backslash = _mm_cmpeq_epi8(block, backslash);
+				has_doublequote = _mm_cmpeq_epi8(block, doublequote);
+
+				/*
+				 * use saturation arithmetic to check for <= highest control
+				 * char
+				 */
+				control = _mm_subs_epu8(block, max_control);
+				has_control = _mm_cmpeq_epi8(control, _mm_setzero_si128());
+
+				/*
+				 * set bits in error_cum where the corresponding lanes in has_*
+				 * are set
+				 */
+				error_cum = _mm_or_si128(error_cum, has_backslash);
+				error_cum = _mm_or_si128(error_cum, has_doublequote);
+				error_cum = _mm_or_si128(error_cum, has_control);
+
+				if (_mm_movemask_epi8(error_cum))
+					break;
+
+				p += sizeof(__m128i);
+			}
+#endif							/* USE_SSE2 */
+
+			while (p < end)
+			{
+				if (*p == '\\' || *p == '"')
+					break;
+				else if ((unsigned char) *p < 32)
+				{
+					/* Per RFC4627, these characters MUST be escaped. */
+					/*
+					 * Since *s isn't printable, exclude it from the context
+					 * string
+					 */
+					lex->token_terminator = p;
+					return JSON_ESCAPING_REQUIRED;
+				}
+				p++;
+			}
+
+			if (lex->strval != NULL)
+				appendBinaryStringInfo(lex->strval, s, p - s);
+
+			if (*p == '"')
+			{
+				/* Hooray, we found the end of the string! */
+				lex->prev_token_terminator = lex->token_terminator;
+				lex->token_terminator = p + 1;
+				return JSON_SUCCESS;
+			}
+
+			/*
+			 * s will be incremented at the top of the loop, so set it to just
+			 * behind our lookahead position
+			 */
+			s = p - 1;
 		}
 	}
-
-	if (hi_surrogate != -1)
-		return JSON_UNICODE_LOW_SURROGATE;
-
-	/* Hooray, we found the end of the string! */
-	lex->prev_token_terminator = lex->token_terminator;
-	lex->token_terminator = s + 1;
-	return JSON_SUCCESS;
 }
 
 /*

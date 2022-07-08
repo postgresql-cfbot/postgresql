@@ -307,13 +307,13 @@ drop table insertconflict;
 -- *                                                                *
 -- ******************************************************************
 create table cities (
-	name		text,
-	population	float8,
-	altitude	int		-- (in ft)
+  name    text,
+  population  float8,
+  altitude  int   -- (in ft)
 );
 
 create table capitals (
-	state		char(2)
+  state   char(2)
 ) inherits (cities);
 
 -- Create unique indexes.  Due to a general limitation of inheritance,
@@ -559,7 +559,7 @@ declare
     r record;
 begin
  for r in select * from inserted loop
-	raise notice 'a = %, b = %, c = %', r.a, r.b, r.c;
+  raise notice 'a = %, b = %, c = %', r.a, r.b, r.c;
  end loop;
  return new;
 end;

@@ -7342,6 +7342,13 @@ if test "$PORTNAME" = "solaris"; then
   CPPFLAGS="$CPPFLAGS -D_POSIX_PTHREAD_SEMANTICS"
 fi
 
+# On Solaris, we need this #define to access memset_s function
+if test "$PORTNAME" = "solaris"; then
+
+$as_echo "#define __STDC_WANT_LIB_EXT1__ 1" >>confdefs.h
+
+fi
+
 # We already have this in Makefile.win32, but configure needs it too
 if test "$PORTNAME" = "win32"; then
   CPPFLAGS="$CPPFLAGS -I$srcdir/src/include/port/win32"

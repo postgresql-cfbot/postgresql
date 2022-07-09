@@ -595,7 +595,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 %type <node>	TableConstraint TableLikeClause
 %type <ival>	TableLikeOptionList TableLikeOption
-%type <str>		column_compression opt_column_compression
+%type <str>		column_compression opt_column_compression key_index
 %type <list>	ColQualList
 %type <node>	ColConstraint ColConstraintElem ConstraintAttr
 %type <ival>	key_match
@@ -3997,7 +3997,7 @@ ColConstraintElem:
 
 					$$ = (Node *) n;
 				}
-			| REFERENCES qualified_name opt_column_list key_match key_actions
+			| REFERENCES qualified_name opt_column_list key_index key_match key_actions
 				{
 					Constraint *n = makeNode(Constraint);
 
@@ -4006,10 +4006,11 @@ ColConstraintElem:
 					n->pktable = $2;
 					n->fk_attrs = NIL;
 					n->pk_attrs = $3;
-					n->fk_matchtype = $4;
-					n->fk_upd_action = ($5)->updateAction->action;
-					n->fk_del_action = ($5)->deleteAction->action;
-					n->fk_del_set_cols = ($5)->deleteAction->cols;
+					n->pk_indexname = $4;
+					n->fk_matchtype = $5;
+					n->fk_upd_action = ($6)->updateAction->action;
+					n->fk_del_action = ($6)->deleteAction->action;
+					n->fk_del_set_cols = ($6)->deleteAction->cols;
 					n->skip_validation = false;
 					n->initially_valid = true;
 					$$ = (Node *) n;
@@ -4229,7 +4230,7 @@ ConstraintElem:
 					$$ = (Node *) n;
 				}
 			| FOREIGN KEY '(' columnList ')' REFERENCES qualified_name
-				opt_column_list key_match key_actions ConstraintAttributeSpec
+				opt_column_list key_index key_match key_actions ConstraintAttributeSpec
 				{
 					Constraint *n = makeNode(Constraint);
 
@@ -4238,11 +4239,12 @@ ConstraintElem:
 					n->pktable = $7;
 					n->fk_attrs = $4;
 					n->pk_attrs = $8;
-					n->fk_matchtype = $9;
-					n->fk_upd_action = ($10)->updateAction->action;
-					n->fk_del_action = ($10)->deleteAction->action;
-					n->fk_del_set_cols = ($10)->deleteAction->cols;
-					processCASbits($11, @11, "FOREIGN KEY",
+					n->pk_indexname	= $9;
+					n->fk_matchtype = $10;
+					n->fk_upd_action = ($11)->updateAction->action;
+					n->fk_del_action = ($11)->deleteAction->action;
+					n->fk_del_set_cols = ($11)->deleteAction->cols;
+					processCASbits($12, @12, "FOREIGN KEY",
 								   &n->deferrable, &n->initdeferred,
 								   &n->skip_validation, NULL,
 								   yyscanner);
@@ -4273,6 +4275,16 @@ columnElem: ColId
 
 opt_c_include:	INCLUDE '(' columnList ')'			{ $$ = $3; }
 			 |		/* EMPTY */						{ $$ = NIL; }
+		;
+
+key_index:	USING INDEX name
+			{
+				$$ = $3;
+			}
+		| /* EMPTY */
+			{
+				$$ = NULL;
+			}
 		;
 
 key_match:  MATCH FULL

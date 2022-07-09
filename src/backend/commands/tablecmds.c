@@ -378,7 +378,10 @@ static int	transformFkeyGetPrimaryKey(Relation pkrel, Oid *indexOid,
 									   int16 *attnums, Oid *atttypids,
 									   Oid *opclasses);
 static Oid	transformFkeyCheckAttrs(Relation pkrel,
-									int numattrs, int16 *attnums,
+									int numattrs, int16 *attnums, Oid *pktypoid,
+									Oid *opclasses);
+static Oid	transformFkeyCheckIndex(Relation pkrel, const char *pk_indexname,
+									int numattrs, int16 *attnums, Oid *pktypoid,
 									Oid *opclasses);
 static void checkFkeyPermissions(Relation rel, int16 *attnums, int natts);
 static CoercionPathType findFkeyCast(Oid targetTypeId, Oid sourceTypeId,
@@ -9152,9 +9155,20 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 		numpks = transformColumnNameList(RelationGetRelid(pkrel),
 										 fkconstraint->pk_attrs,
 										 pkattnum, pktypoid);
-		/* Look for an index matching the column list */
-		indexOid = transformFkeyCheckAttrs(pkrel, numpks, pkattnum,
-										   opclasses);
+
+		/*
+		 * Look for an index matching the column list. If an explicit index name
+		 * is specified in the constraint then use that index.
+		 */
+		if (fkconstraint->pk_indexname == NULL)
+			indexOid = transformFkeyCheckAttrs(pkrel,
+											   numpks, pkattnum, pktypoid,
+											   opclasses);
+		else
+			indexOid = transformFkeyCheckIndex(pkrel,
+											   fkconstraint->pk_indexname,
+											   numpks, pkattnum, pktypoid,
+											   opclasses);
 	}
 
 	/*
@@ -11292,7 +11306,7 @@ transformFkeyGetPrimaryKey(Relation pkrel, Oid *indexOid,
  */
 static Oid
 transformFkeyCheckAttrs(Relation pkrel,
-						int numattrs, int16 *attnums,
+						int numattrs, int16 *attnums, Oid *pktypoid,
 						Oid *opclasses) /* output parameter */
 {
 	Oid			indexoid = InvalidOid;
@@ -11406,6 +11420,85 @@ transformFkeyCheckAttrs(Relation pkrel,
 			break;
 	}
 
+	/*
+	 * If the search doesn't find an index with the same key columns as the
+	 * referenced columns, then as a fallback, (re)test the primary key against
+	 * a subset of the referenced columns.
+	 */
+	if (!found && OidIsValid(indexoid = RelationGetPrimaryKeyIndex(pkrel)))
+	{
+		HeapTuple		indexTuple;
+		Form_pg_index	indexStruct;
+
+		indexTuple = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(indexoid));
+		if (!HeapTupleIsValid(indexTuple))
+			elog(ERROR, "cache lookup failed for index %u", indexoid);
+		indexStruct = (Form_pg_index) GETSTRUCT(indexTuple);
+
+		/*
+		 * A primary key index must be unique, valid, expressionless, and
+		 * predicateless.
+		 */
+		Assert(indexStruct->indisunique);
+		Assert(indexStruct->indisvalid);
+		Assert(heap_attisnull(indexTuple, Anum_pg_index_indexprs, NULL));
+		Assert(heap_attisnull(indexTuple, Anum_pg_index_indpred, NULL));
+
+		if (indexStruct->indnkeyatts < numattrs && indexStruct->indimmediate)
+		{
+			Datum		indclassDatum;
+			bool		isnull;
+			oidvector  *indclass;
+
+			indclassDatum = SysCacheGetAttr(INDEXRELID, indexTuple,
+											Anum_pg_index_indclass, &isnull);
+			Assert(!isnull);
+			indclass = (oidvector *) DatumGetPointer(indclassDatum);
+
+			found = true;
+			for (j = 0; j < indexStruct->indnkeyatts; j++)
+			{
+				for (i = 0; i < numattrs; i++)
+				{
+					if (attnums[i] == indexStruct->indkey.values[j])
+						goto next_indkey;
+				}
+
+				found = false;
+				break;
+
+			next_indkey:
+				opclasses[i] = indclass->values[j];
+			}
+		}
+
+		if (found)
+		{
+			HeapTuple	classTuple;
+			Oid			amid;
+
+			classTuple = SearchSysCache1(RELOID, ObjectIdGetDatum(indexoid));
+			if (!HeapTupleIsValid(classTuple))
+				elog(ERROR, "cache lookup failed for relation %u", indexoid);
+			amid = ((Form_pg_class) GETSTRUCT(classTuple))->relam;
+			ReleaseSysCache(classTuple);
+
+			/*
+			* Use the default opclass for the column type with the same access
+			* method as the index for each referenced column that isn't an index
+			* column.
+			*/
+			for (i = 0; i < numattrs; i++)
+			{
+				if (opclasses[i] != InvalidOid)
+					continue;
+				opclasses[i] = ResolveOpClass(NIL, pktypoid[i], "btree", amid);
+			}
+		}
+
+		ReleaseSysCache(indexTuple);
+	}
+
 	if (!found)
 	{
 		if (found_deferrable)
@@ -11422,6 +11515,186 @@ transformFkeyCheckAttrs(Relation pkrel,
 
 	list_free(indexoidlist);
 
+	return indexoid;
+}
+
+/*
+ * transformFkeyCheckIndex -
+ *
+ *  Make sure that the specified index is usable with this foreign key
+ *  constraint. Return the OID of the index supporting the constraint, as well
+ *  as the opclasses associated with the referenced columns.
+ */
+static Oid
+transformFkeyCheckIndex(Relation pkrel, const char *pk_indexname,
+						int numattrs, int16 *attnums, Oid *pktypoid,
+						Oid *opclasses) /* output parameter */
+{
+	Oid				indexoid = InvalidOid,
+					amid;
+	HeapTuple		classTuple,
+					indexTuple;
+	Form_pg_class	classStruct;
+	Form_pg_index	indexStruct;
+	int				i,
+					j;
+	Datum			indclassDatum;
+	bool			isnull;
+	oidvector  		*indclass;
+
+	/*
+	 * Reject duplicate appearances of columns in the referenced-columns list.
+	 * Such a case is forbidden by the SQL standard, and even if we thought it
+	 * useful to allow it, there would be ambiguity about how to match the
+	 * list to unique indexes (in particular, it'd be unclear which index
+	 * opclass goes with which FK column).
+	 */
+	for (i = 0; i < numattrs; i++)
+	{
+		for (j = i + 1; j < numattrs; j++)
+		{
+			if (attnums[i] == attnums[j])
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_FOREIGN_KEY),
+						 errmsg("foreign key referenced-columns list must not contain duplicates")));
+		}
+	}
+
+	/* Look for the index in the same schema as the table */
+	classTuple = SearchSysCache2(RELNAMENSP, PointerGetDatum(pk_indexname),
+								 ObjectIdGetDatum(RelationGetNamespace(pkrel)));
+	if (!HeapTupleIsValid(classTuple))
+		ereport(ERROR,
+				errcode(ERRCODE_UNDEFINED_OBJECT),
+				errmsg("index \"%s\" for table \"%s\" does not exist",
+					   pk_indexname, RelationGetRelationName(pkrel)));
+	classStruct = (Form_pg_class) GETSTRUCT(classTuple);
+
+	if (classStruct->relkind != RELKIND_INDEX &&
+		classStruct->relkind != RELKIND_PARTITIONED_INDEX)
+		ereport(ERROR,
+				errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				errmsg("\"%s\" is not an index", pk_indexname));
+
+	indexoid = classStruct->oid;
+	amid = classStruct->relam;
+	ReleaseSysCache(classTuple);
+
+	indexTuple = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(indexoid));
+	if (!HeapTupleIsValid(indexTuple))
+		elog(ERROR, "cache lookup failed for index %u", indexoid);
+	indexStruct = (Form_pg_index) GETSTRUCT(indexTuple);
+
+	/*
+	 * The index must belong to the primary key relation. It can't have more key
+	 * columns than are referenced. It must be unique and not a partial index;
+	 * forget it if there are any expressions, too. Invalid indexes are out as
+	 * well.
+	 */
+	if (indexStruct->indrelid != RelationGetRelid(pkrel))
+		ereport(ERROR,
+				errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				errmsg("index \"%s\" does not belong to table \"%s\"",
+					   pk_indexname, RelationGetRelationName(pkrel)));
+
+	/* TODO */
+	if (indexStruct->indnkeyatts > numattrs)
+		ereport(ERROR,
+				errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				errmsg("\"%s\" is not a usable index with given keys for referenced table \"%s\"",
+					   pk_indexname, RelationGetRelationName(pkrel)),
+				errdetail("Cannot create a foreign key constraint using an "
+						  "index unless the index's key columns are a subset "
+						  "of the referenced columns"));
+
+	if (!indexStruct->indisvalid)
+		ereport(ERROR,
+				errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				errmsg("index \"%s\" is not valid", pk_indexname));
+
+	if (!indexStruct->indisunique)
+		ereport(ERROR,
+				errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				errmsg("\"%s\" is not a unique index",
+					   pk_indexname),
+				errdetail("Cannot create a foreign key constraint using such an index."));
+
+	if (!heap_attisnull(indexTuple, Anum_pg_index_indexprs, NULL))
+		ereport(ERROR,
+				errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				errmsg("index \"%s\" contains expressions",
+					   pk_indexname),
+				errdetail("Cannot create a foreign key constraint using such an index."));
+
+	if (!heap_attisnull(indexTuple, Anum_pg_index_indpred, NULL))
+		ereport(ERROR,
+				errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				errmsg("\"%s\" is a partial index",
+					   pk_indexname),
+				errdetail("Cannot create a foreign key constraint using such an index."));
+
+	/*
+	 * Also, refuse to use a deferrable unique/primary key. This is per SQL
+	 * spec, and there would be a lot of interesting semantic problems if we
+	 * tried to allow it.
+	 */
+	if (!indexStruct->indimmediate)
+		ereport(ERROR,
+				errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				errmsg("\"%s\" is a deferrable index",
+					   pk_indexname),
+				errdetail("Cannot create a foreign key constraint using such an index."));
+
+	/* Must get indclass the hard way */
+	indclassDatum = SysCacheGetAttr(INDEXRELID, indexTuple,
+									Anum_pg_index_indclass, &isnull);
+	Assert(!isnull);
+	indclass = (oidvector *) DatumGetPointer(indclassDatum);
+
+	/*
+	 * The given attnum list may match the index columns in any order. Check for
+	 * a match, and extract the appropriate opclasses while we're at it.
+	 *
+	 * We know that attnums[] is duplicate-free per the test at the start of
+	 * this function, and we checked above that the number of index columns
+	 * is no more than the number of referenced columns, so if we find a match
+	 * for an attnums[] entry then we must have a unique match in some order.
+	 */
+	for (j = 0; j < indexStruct->indnkeyatts; j++)
+	{
+		for (i = 0; i < numattrs; i++)
+		{
+			if (attnums[i] == indexStruct->indkey.values[j])
+				goto next_indkey;
+		}
+
+		/* TODO */
+		ereport(ERROR,
+				errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				errmsg("\"%s\" is not a usable index with given keys for referenced table \"%s\"",
+					   pk_indexname, RelationGetRelationName(pkrel)),
+				errdetail("Cannot create a foreign key constraint using an "
+						  "index unless the index's key columns are a subset "
+						  "of the referenced columns"));
+
+	next_indkey:
+		opclasses[i] = indclass->values[j];
+	}
+
+	/*
+	 * Use the default opclass for the column type with the same access method
+	 * as the index for each referenced column that isn't an index column.
+	 */
+	for (i = 0; i < numattrs; i++)
+	{
+		if (opclasses[i] != InvalidOid)
+			continue;
+
+		/* Currently no index AMs other than btree support unique indexes */
+		opclasses[i] = ResolveOpClass(NIL, pktypoid[i], "btree", amid);
+	}
+
+	ReleaseSysCache(indexTuple);
 	return indexoid;
 }
 

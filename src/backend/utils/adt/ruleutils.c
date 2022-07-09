@@ -2231,6 +2231,9 @@ pg_get_constraintdef_worker(Oid constraintId, bool fullCommand,
 		case CONSTRAINT_FOREIGN:
 			{
 				Datum		val;
+				Oid			indexId;
+				HeapTuple	indtup;
+				int			nKeys;
 				bool		isnull;
 				const char *string;
 
@@ -2244,7 +2247,7 @@ pg_get_constraintdef_worker(Oid constraintId, bool fullCommand,
 					elog(ERROR, "null conkey for constraint %u",
 						 constraintId);
 
-				decompile_column_index_array(val, conForm->conrelid, &buf);
+				nKeys = decompile_column_index_array(val, conForm->conrelid, &buf);
 
 				/* add foreign relation name */
 				appendStringInfo(&buf, ") REFERENCES %s(",
@@ -2258,9 +2261,36 @@ pg_get_constraintdef_worker(Oid constraintId, bool fullCommand,
 					elog(ERROR, "null confkey for constraint %u",
 						 constraintId);
 
-				decompile_column_index_array(val, conForm->confrelid, &buf);
+				nKeys = decompile_column_index_array(val, conForm->confrelid, &buf);
 
 				appendStringInfoChar(&buf, ')');
+
+				indexId = conForm->conindid;
+
+				/* Add USING INDEX clause */
+				indtup = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(indexId));
+				if (!HeapTupleIsValid(indtup))
+					elog(ERROR, "cache lookup failed for index %u", indexId);
+
+				val = SysCacheGetAttr(INDEXRELID, indtup,
+									  Anum_pg_index_indisprimary, &isnull);
+				if (isnull)
+					elog(ERROR, "null indisprimary for index %u", indexId);
+
+				if (!DatumGetBool(val))
+				{
+					val = SysCacheGetAttr(INDEXRELID, indtup,
+										  Anum_pg_index_indnkeyatts, &isnull);
+					if (isnull)
+						elog(ERROR, "null indnkeyatts for index %u", indexId);
+
+					if (DatumGetInt32(val) < nKeys)
+						appendStringInfo(&buf, " USING INDEX %s",
+										 generate_relation_name(conForm->conindid,
+																NIL));
+				}
+
+				ReleaseSysCache(indtup);
 
 				/* Add match type */
 				switch (conForm->confmatchtype)

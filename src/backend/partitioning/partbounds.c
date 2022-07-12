@@ -651,7 +651,7 @@ create_list_bounds(PartitionBoundSpec **boundspecs, int nparts,
 				 * Mark the NULL partition as interleaved if we find that it
 				 * allows some other non-NULL Datum.
 				 */
-				if (partition_bound_accepts_nulls(boundinfo) &&
+				else if (partition_bound_accepts_nulls(boundinfo) &&
 					index == boundinfo->null_index)
 					boundinfo->interleaved_parts = bms_add_member(boundinfo->interleaved_parts,
 																  boundinfo->null_index);

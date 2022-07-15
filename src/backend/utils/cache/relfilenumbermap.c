@@ -143,7 +143,7 @@ RelidByRelfilenumber(Oid reltablespace, RelFileNumber relfilenumber)
 	SysScanDesc scandesc;
 	Relation	relation;
 	HeapTuple	ntp;
-	ScanKeyData skey[2];
+	ScanKeyData skey[2] = {0};
 	Oid			relid;
 
 	if (RelfilenumberMapHash == NULL)
@@ -153,7 +153,6 @@ RelidByRelfilenumber(Oid reltablespace, RelFileNumber relfilenumber)
 	if (reltablespace == MyDatabaseTableSpace)
 		reltablespace = 0;
 
-	MemSet(&key, 0, sizeof(key));
 	key.reltablespace = reltablespace;
 	key.relfilenumber = relfilenumber;
 

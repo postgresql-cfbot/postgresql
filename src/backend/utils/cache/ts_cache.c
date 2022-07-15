@@ -414,7 +414,7 @@ lookup_ts_config_cache(Oid cfgId)
 		ScanKeyData mapskey;
 		SysScanDesc mapscan;
 		HeapTuple	maptup;
-		ListDictionary maplists[MAXTOKENTYPE + 1];
+		ListDictionary maplists[MAXTOKENTYPE + 1] = {0};
 		Oid			mapdicts[MAXDICTSPERTT];
 		int			maxtokentype;
 		int			ndicts;
@@ -468,7 +468,6 @@ lookup_ts_config_cache(Oid cfgId)
 		 * see the entries in maptokentype order, and in mapseqno order for
 		 * each token type, even though we didn't explicitly ask for that.
 		 */
-		MemSet(maplists, 0, sizeof(maplists));
 		maxtokentype = 0;
 		ndicts = 0;
 

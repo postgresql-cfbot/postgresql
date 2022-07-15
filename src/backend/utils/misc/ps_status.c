@@ -376,7 +376,7 @@ set_ps_display(const char *activity)
 #ifdef PS_USE_CLOBBER_ARGV
 	/* pad unused memory; need only clobber remainder of old status string */
 	if (last_status_len > ps_buffer_cur_len)
-		MemSet(ps_buffer + ps_buffer_cur_len, PS_PADDING,
+		memset(ps_buffer + ps_buffer_cur_len, PS_PADDING,
 			   last_status_len - ps_buffer_cur_len);
 	last_status_len = ps_buffer_cur_len;
 #endif							/* PS_USE_CLOBBER_ARGV */

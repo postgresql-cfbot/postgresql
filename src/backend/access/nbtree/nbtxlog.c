@@ -717,7 +717,7 @@ btree_xlog_mark_page_halfdead(uint8 info, XLogReaderState *record)
 	Buffer		buffer;
 	Page		page;
 	BTPageOpaque pageop;
-	IndexTupleData trunctuple;
+	IndexTupleData trunctuple = {0};
 
 	/*
 	 * In normal operation, we would lock all the pages this WAL record
@@ -780,7 +780,6 @@ btree_xlog_mark_page_halfdead(uint8 info, XLogReaderState *record)
 	 * Construct a dummy high key item that points to top parent page (value
 	 * is InvalidBlockNumber when the top parent page is the leaf page itself)
 	 */
-	MemSet(&trunctuple, 0, sizeof(IndexTupleData));
 	trunctuple.t_info = sizeof(IndexTupleData);
 	BTreeTupleSetTopParent(&trunctuple, xlrec->topparent);
 
@@ -898,7 +897,7 @@ btree_xlog_unlink_page(uint8 info, XLogReaderState *record)
 		 * we'll delete in the subtree undergoing deletion.
 		 */
 		Buffer		leafbuf;
-		IndexTupleData trunctuple;
+		IndexTupleData trunctuple = {0};
 
 		Assert(!isleaf);
 
@@ -915,7 +914,6 @@ btree_xlog_unlink_page(uint8 info, XLogReaderState *record)
 		pageop->btpo_cycleid = 0;
 
 		/* Add a dummy hikey item */
-		MemSet(&trunctuple, 0, sizeof(IndexTupleData));
 		trunctuple.t_info = sizeof(IndexTupleData);
 		BTreeTupleSetTopParent(&trunctuple, xlrec->leaftopparent);
 

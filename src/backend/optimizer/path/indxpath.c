@@ -238,9 +238,6 @@ create_index_paths(PlannerInfo *root, RelOptInfo *rel)
 	List	   *bitindexpaths;
 	List	   *bitjoinpaths;
 	List	   *joinorclauses;
-	IndexClauseSet rclauseset;
-	IndexClauseSet jclauseset;
-	IndexClauseSet eclauseset;
 	ListCell   *lc;
 
 	/* Skip the whole mess if no indexes */
@@ -253,6 +250,9 @@ create_index_paths(PlannerInfo *root, RelOptInfo *rel)
 	/* Examine each index in turn */
 	foreach(lc, rel->indexlist)
 	{
+		IndexClauseSet rclauseset = {0};
+		IndexClauseSet jclauseset = {0};
+		IndexClauseSet eclauseset = {0};
 		IndexOptInfo *index = (IndexOptInfo *) lfirst(lc);
 
 		/* Protect limited-size array in IndexClauseSets */
@@ -269,7 +269,6 @@ create_index_paths(PlannerInfo *root, RelOptInfo *rel)
 		/*
 		 * Identify the restriction clauses that can match the index.
 		 */
-		MemSet(&rclauseset, 0, sizeof(rclauseset));
 		match_restriction_clauses_to_index(root, index, &rclauseset);
 
 		/*
@@ -286,7 +285,6 @@ create_index_paths(PlannerInfo *root, RelOptInfo *rel)
 		 * step finds only "loose" join clauses that have not been merged into
 		 * EquivalenceClasses.  Also, collect join OR clauses for later.
 		 */
-		MemSet(&jclauseset, 0, sizeof(jclauseset));
 		match_join_clauses_to_index(root, rel, index,
 									&jclauseset, &joinorclauses);
 
@@ -294,7 +292,6 @@ create_index_paths(PlannerInfo *root, RelOptInfo *rel)
 		 * Look for EquivalenceClasses that can generate joinclauses matching
 		 * the index.
 		 */
-		MemSet(&eclauseset, 0, sizeof(eclauseset));
 		match_eclass_clauses_to_index(root, index,
 									  &eclauseset);
 

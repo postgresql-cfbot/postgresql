@@ -3285,18 +3285,16 @@ extract_query_dependencies(Node *query,
 						   List **invalItems,
 						   bool *hasRowSecurity)
 {
-	PlannerGlobal glob;
-	PlannerInfo root;
+	PlannerGlobal glob = {0};
+	PlannerInfo root = {0};
 
 	/* Make up dummy planner state so we can use this module's machinery */
-	MemSet(&glob, 0, sizeof(glob));
 	glob.type = T_PlannerGlobal;
 	glob.relationOids = NIL;
 	glob.invalItems = NIL;
 	/* Hack: we use glob.dependsOnRole to collect hasRowSecurity flags */
 	glob.dependsOnRole = false;
 
-	MemSet(&root, 0, sizeof(root));
 	root.type = T_PlannerInfo;
 	root.glob = &glob;
 

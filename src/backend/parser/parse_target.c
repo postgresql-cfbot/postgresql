@@ -1594,9 +1594,8 @@ expandRecordVariable(ParseState *pstate, Var *var, int levelsup)
 					 * to.  We have to build an additional level of ParseState
 					 * to keep in step with varlevelsup in the subselect.
 					 */
-					ParseState	mypstate;
+					ParseState	mypstate = {0};
 
-					MemSet(&mypstate, 0, sizeof(mypstate));
 					mypstate.parentParseState = pstate;
 					mypstate.p_rtable = rte->subquery->rtable;
 					/* don't bother filling the rest of the fake pstate */
@@ -1649,10 +1648,9 @@ expandRecordVariable(ParseState *pstate, Var *var, int levelsup)
 					 * in step with varlevelsup in the CTE; furthermore it
 					 * could be an outer CTE.
 					 */
-					ParseState	mypstate;
+					ParseState	mypstate = {0};
 					Index		levelsup;
 
-					MemSet(&mypstate, 0, sizeof(mypstate));
 					/* this loop must work, since GetCTEForRTE did */
 					for (levelsup = 0;
 						 levelsup < rte->ctelevelsup + netlevelsup;

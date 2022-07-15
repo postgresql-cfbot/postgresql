@@ -331,7 +331,7 @@ StreamServerPort(int family, const char *hostName, unsigned short portNumber,
 	char	   *service;
 	struct addrinfo *addrs = NULL,
 			   *addr;
-	struct addrinfo hint;
+	struct addrinfo hint = {0};
 	int			listen_index = 0;
 	int			added = 0;
 
@@ -343,7 +343,6 @@ StreamServerPort(int family, const char *hostName, unsigned short portNumber,
 #endif
 
 	/* Initialize hint structure */
-	MemSet(&hint, 0, sizeof(hint));
 	hint.ai_family = family;
 	hint.ai_flags = AI_PASSIVE;
 	hint.ai_socktype = SOCK_STREAM;

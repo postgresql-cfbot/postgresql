@@ -317,7 +317,7 @@ plpgsql_inline_handler(PG_FUNCTION_ARGS)
 	LOCAL_FCINFO(fake_fcinfo, 0);
 	InlineCodeBlock *codeblock = castNode(InlineCodeBlock, DatumGetPointer(PG_GETARG_DATUM(0)));
 	PLpgSQL_function *func;
-	FmgrInfo	flinfo;
+	FmgrInfo	flinfo = {0};
 	EState	   *simple_eval_estate;
 	ResourceOwner simple_eval_resowner;
 	Datum		retval;
@@ -341,7 +341,6 @@ plpgsql_inline_handler(PG_FUNCTION_ARGS)
 	 * with no arguments passed.
 	 */
 	MemSet(fake_fcinfo, 0, SizeForFunctionCallInfo(0));
-	MemSet(&flinfo, 0, sizeof(flinfo));
 	fake_fcinfo->flinfo = &flinfo;
 	flinfo.fn_oid = InvalidOid;
 	flinfo.fn_mcxt = CurrentMemoryContext;
@@ -502,10 +501,10 @@ plpgsql_validator(PG_FUNCTION_ARGS)
 	if (check_function_bodies)
 	{
 		LOCAL_FCINFO(fake_fcinfo, 0);
-		FmgrInfo	flinfo;
+		FmgrInfo	flinfo = {0};
 		int			rc;
-		TriggerData trigdata;
-		EventTriggerData etrigdata;
+		TriggerData trigdata = {0};
+		EventTriggerData etrigdata = {0};
 
 		/*
 		 * Connect to SPI manager (is this needed for compilation?)
@@ -518,19 +517,16 @@ plpgsql_validator(PG_FUNCTION_ARGS)
 		 * plpgsql_compile().
 		 */
 		MemSet(fake_fcinfo, 0, SizeForFunctionCallInfo(0));
-		MemSet(&flinfo, 0, sizeof(flinfo));
 		fake_fcinfo->flinfo = &flinfo;
 		flinfo.fn_oid = funcoid;
 		flinfo.fn_mcxt = CurrentMemoryContext;
 		if (is_dml_trigger)
 		{
-			MemSet(&trigdata, 0, sizeof(trigdata));
 			trigdata.type = T_TriggerData;
 			fake_fcinfo->context = (Node *) &trigdata;
 		}
 		else if (is_event_trigger)
 		{
-			MemSet(&etrigdata, 0, sizeof(etrigdata));
 			etrigdata.type = T_EventTriggerData;
 			fake_fcinfo->context = (Node *) &etrigdata;
 		}

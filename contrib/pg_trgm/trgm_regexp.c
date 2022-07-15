@@ -905,7 +905,7 @@ static void
 transformGraph(TrgmNFA *trgmNFA)
 {
 	HASHCTL		hashCtl;
-	TrgmStateKey initkey;
+	TrgmStateKey initkey = {0};
 	TrgmState  *initstate;
 	ListCell   *lc;
 
@@ -926,7 +926,6 @@ transformGraph(TrgmNFA *trgmNFA)
 	trgmNFA->nstates = 0;
 
 	/* Create initial state: ambiguous prefix, NFA's initial state */
-	MemSet(&initkey, 0, sizeof(initkey));
 	initkey.prefix.colors[0] = COLOR_UNKNOWN;
 	initkey.prefix.colors[1] = COLOR_UNKNOWN;
 	initkey.nstate = pg_reg_getinitialstate(trgmNFA->regex);
@@ -1014,21 +1013,18 @@ processState(TrgmNFA *trgmNFA, TrgmState *state)
  *
  * Note that we don't generate any actual arcs here.  addArcs will do that
  * later, after we have identified all the enter keys for this state.
+ *
+ * Ensure any pad bytes in destKey are zero, since it may get used as a
+ * hashtable key by getState.
  */
 static void
 addKey(TrgmNFA *trgmNFA, TrgmState *state, TrgmStateKey *key)
 {
 	regex_arc_t *arcs;
-	TrgmStateKey destKey;
+	TrgmStateKey destKey = {0};
 	ListCell   *cell;
 	int			i,
 				arcsCount;
-
-	/*
-	 * Ensure any pad bytes in destKey are zero, since it may get used as a
-	 * hashtable key by getState.
-	 */
-	MemSet(&destKey, 0, sizeof(destKey));
 
 	/*
 	 * Compare key to each existing enter key of the state to check for
@@ -1195,21 +1191,18 @@ addKeyToQueue(TrgmNFA *trgmNFA, TrgmStateKey *key)
 
 /*
  * Add outgoing arcs from given state, whose enter keys are all now known.
+ *
+ * Ensure any pad bytes in destKey are zero, since it may get used as a
+ * hashtable key by getState.
  */
 static void
 addArcs(TrgmNFA *trgmNFA, TrgmState *state)
 {
-	TrgmStateKey destKey;
+	TrgmStateKey destKey = {0};
 	ListCell   *cell;
 	regex_arc_t *arcs;
 	int			arcsCount,
 				i;
-
-	/*
-	 * Ensure any pad bytes in destKey are zero, since it may get used as a
-	 * hashtable key by getState.
-	 */
-	MemSet(&destKey, 0, sizeof(destKey));
 
 	/*
 	 * Iterate over enter keys associated with this expanded-graph state. This

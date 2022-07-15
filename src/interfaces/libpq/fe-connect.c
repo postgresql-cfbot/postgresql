@@ -2325,7 +2325,7 @@ keep_going:						/* We will come back to here until there is
 	if (conn->try_next_host)
 	{
 		pg_conn_host *ch;
-		struct addrinfo hint;
+		struct addrinfo hint = {0};
 		int			thisport;
 		int			ret;
 		char		portstr[MAXPGPATH];
@@ -2364,7 +2364,6 @@ keep_going:						/* We will come back to here until there is
 		ch = &conn->connhost[conn->whichhost];
 
 		/* Initialize hint structure */
-		MemSet(&hint, 0, sizeof(hint));
 		hint.ai_socktype = SOCK_STREAM;
 		conn->addrlist_family = hint.ai_family = AF_UNSPEC;
 

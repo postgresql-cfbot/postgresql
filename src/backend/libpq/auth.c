@@ -3022,7 +3022,7 @@ PerformRadiusTransaction(const char *server, const char *secret, const char *por
 	struct sockaddr_in localaddr;
 	struct sockaddr_in remoteaddr;
 #endif
-	struct addrinfo hint;
+	struct addrinfo hint = {0};
 	struct addrinfo *serveraddrs;
 	int			port;
 	socklen_t	addrsize;
@@ -3038,7 +3038,6 @@ PerformRadiusTransaction(const char *server, const char *secret, const char *por
 	if (identifier == NULL)
 		identifier = "postgresql";
 
-	MemSet(&hint, 0, sizeof(hint));
 	hint.ai_socktype = SOCK_DGRAM;
 	hint.ai_family = AF_UNSPEC;
 	port = atoi(portstr);

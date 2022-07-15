@@ -853,7 +853,7 @@ calc_rank_cd(const float4 *arrdata, TSVector txt, TSQuery query, int method)
 	int			len,
 				i,
 				doclen = 0;
-	CoverExt	ext;
+	CoverExt	ext = {0};
 	double		Wdoc = 0.0;
 	double		invws[lengthof(weights)];
 	double		SumDist = 0.0,
@@ -883,7 +883,6 @@ calc_rank_cd(const float4 *arrdata, TSVector txt, TSQuery query, int method)
 		return 0.0;
 	}
 
-	MemSet(&ext, 0, sizeof(CoverExt));
 	while (Cover(doc, doclen, &qr, &ext))
 	{
 		double		Cpos = 0.0;

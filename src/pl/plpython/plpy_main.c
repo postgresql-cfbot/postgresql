@@ -266,8 +266,8 @@ plpython3_inline_handler(PG_FUNCTION_ARGS)
 {
 	LOCAL_FCINFO(fake_fcinfo, 0);
 	InlineCodeBlock *codeblock = (InlineCodeBlock *) DatumGetPointer(PG_GETARG_DATUM(0));
-	FmgrInfo	flinfo;
-	PLyProcedure proc;
+	FmgrInfo	flinfo = {0};
+	PLyProcedure proc = {0};
 	PLyExecutionContext *exec_ctx;
 	ErrorContextCallback plerrcontext;
 
@@ -278,12 +278,10 @@ plpython3_inline_handler(PG_FUNCTION_ARGS)
 		elog(ERROR, "SPI_connect failed");
 
 	MemSet(fcinfo, 0, SizeForFunctionCallInfo(0));
-	MemSet(&flinfo, 0, sizeof(flinfo));
 	fake_fcinfo->flinfo = &flinfo;
 	flinfo.fn_oid = InvalidOid;
 	flinfo.fn_mcxt = CurrentMemoryContext;
 
-	MemSet(&proc, 0, sizeof(PLyProcedure));
 	proc.mcxt = AllocSetContextCreate(TopMemoryContext,
 									  "__plpython_inline_block",
 									  ALLOCSET_DEFAULT_SIZES);

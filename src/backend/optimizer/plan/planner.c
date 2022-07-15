@@ -3350,9 +3350,8 @@ create_grouping_paths(PlannerInfo *root,
 	Query	   *parse = root->parse;
 	RelOptInfo *grouped_rel;
 	RelOptInfo *partially_grouped_rel;
-	AggClauseCosts agg_costs;
+	AggClauseCosts agg_costs = {0};
 
-	MemSet(&agg_costs, 0, sizeof(AggClauseCosts));
 	get_agg_clause_costs(root, AGGSPLIT_SIMPLE, &agg_costs);
 
 	/*
@@ -5908,16 +5907,14 @@ expression_planner_with_deps(Expr *expr,
 							 List **invalItems)
 {
 	Node	   *result;
-	PlannerGlobal glob;
-	PlannerInfo root;
+	PlannerGlobal glob = {0};
+	PlannerInfo root = {0};
 
 	/* Make up dummy planner state so we can use setrefs machinery */
-	MemSet(&glob, 0, sizeof(glob));
 	glob.type = T_PlannerGlobal;
 	glob.relationOids = NIL;
 	glob.invalItems = NIL;
 
-	MemSet(&root, 0, sizeof(root));
 	root.type = T_PlannerInfo;
 	root.glob = &glob;
 

@@ -127,9 +127,8 @@ typedef struct crosstab_cat_desc
 
 #define crosstab_HashTableLookup(HASHTAB, CATNAME, CATDESC) \
 do { \
-	crosstab_HashEnt *hentry; char key[MAX_CATNAME_LEN]; \
+	crosstab_HashEnt *hentry; char key[MAX_CATNAME_LEN] = {0}; \
 	\
-	MemSet(key, 0, MAX_CATNAME_LEN); \
 	snprintf(key, MAX_CATNAME_LEN - 1, "%s", CATNAME); \
 	hentry = (crosstab_HashEnt*) hash_search(HASHTAB, \
 										 key, HASH_FIND, NULL); \
@@ -141,9 +140,8 @@ do { \
 
 #define crosstab_HashTableInsert(HASHTAB, CATDESC) \
 do { \
-	crosstab_HashEnt *hentry; bool found; char key[MAX_CATNAME_LEN]; \
+	crosstab_HashEnt *hentry; bool found; char key[MAX_CATNAME_LEN] = {0}; \
 	\
-	MemSet(key, 0, MAX_CATNAME_LEN); \
 	snprintf(key, MAX_CATNAME_LEN - 1, "%s", CATDESC->catname); \
 	hentry = (crosstab_HashEnt*) hash_search(HASHTAB, \
 										 key, HASH_ENTER, &found); \

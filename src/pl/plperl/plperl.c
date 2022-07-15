@@ -1841,10 +1841,9 @@ plperl_call_handler(PG_FUNCTION_ARGS)
 	Datum		retval = (Datum) 0;
 	plperl_call_data *volatile save_call_data = current_call_data;
 	plperl_interp_desc *volatile oldinterp = plperl_active_interp;
-	plperl_call_data this_call_data;
+	plperl_call_data this_call_data = {0};
 
 	/* Initialize current-call status record */
-	MemSet(&this_call_data, 0, sizeof(this_call_data));
 	this_call_data.fcinfo = fcinfo;
 
 	PG_TRY();
@@ -1882,15 +1881,12 @@ plperl_inline_handler(PG_FUNCTION_ARGS)
 {
 	LOCAL_FCINFO(fake_fcinfo, 0);
 	InlineCodeBlock *codeblock = (InlineCodeBlock *) PG_GETARG_POINTER(0);
-	FmgrInfo	flinfo;
-	plperl_proc_desc desc;
+	FmgrInfo	flinfo = {0};
+	plperl_proc_desc desc = {0};
 	plperl_call_data *volatile save_call_data = current_call_data;
 	plperl_interp_desc *volatile oldinterp = plperl_active_interp;
-	plperl_call_data this_call_data;
+	plperl_call_data this_call_data = {0};
 	ErrorContextCallback pl_error_context;
-
-	/* Initialize current-call status record */
-	MemSet(&this_call_data, 0, sizeof(this_call_data));
 
 	/* Set up a callback for error reporting */
 	pl_error_context.callback = plperl_inline_callback;
@@ -1904,8 +1900,6 @@ plperl_inline_handler(PG_FUNCTION_ARGS)
 	 * with no arguments passed, and a result type of VOID.
 	 */
 	MemSet(fake_fcinfo, 0, SizeForFunctionCallInfo(0));
-	MemSet(&flinfo, 0, sizeof(flinfo));
-	MemSet(&desc, 0, sizeof(desc));
 	fake_fcinfo->flinfo = &flinfo;
 	flinfo.fn_oid = InvalidOid;
 	flinfo.fn_mcxt = CurrentMemoryContext;

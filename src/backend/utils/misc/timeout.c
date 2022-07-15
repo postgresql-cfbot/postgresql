@@ -211,12 +211,10 @@ schedule_alarm(TimestampTz now)
 {
 	if (num_active_timeouts > 0)
 	{
-		struct itimerval timeval;
+		struct itimerval timeval = {0};
 		TimestampTz nearest_timeout;
 		long		secs;
 		int			usecs;
-
-		MemSet(&timeval, 0, sizeof(struct itimerval));
 
 		/*
 		 * If we think there's a signal pending, but current time is more than

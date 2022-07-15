@@ -4924,13 +4924,13 @@ pg_timezone_abbrevs(PG_FUNCTION_ARGS)
 	Datum		result;
 	HeapTuple	tuple;
 	Datum		values[3];
-	bool		nulls[3];
+	bool		nulls[3] = {0};
 	const datetkn *tp;
 	char		buffer[TOKMAXLEN + 1];
 	int			gmtoffset;
 	bool		is_dst;
 	unsigned char *p;
-	struct pg_itm_in itm_in;
+	struct pg_itm_in itm_in = {0};
 	Interval   *resInterval;
 
 	/* stuff done only on the first call of the function */
@@ -5011,8 +5011,6 @@ pg_timezone_abbrevs(PG_FUNCTION_ARGS)
 			break;
 	}
 
-	MemSet(nulls, 0, sizeof(nulls));
-
 	/*
 	 * Convert name to text, using upcasing conversion that is the inverse of
 	 * what ParseDateTime() uses.
@@ -5024,7 +5022,6 @@ pg_timezone_abbrevs(PG_FUNCTION_ARGS)
 	values[0] = CStringGetTextDatum(buffer);
 
 	/* Convert offset (in seconds) to an interval; can't overflow */
-	MemSet(&itm_in, 0, sizeof(struct pg_itm_in));
 	itm_in.tm_usec = (int64) gmtoffset * USECS_PER_SEC;
 	resInterval = (Interval *) palloc(sizeof(Interval));
 	(void) itmin2interval(&itm_in, resInterval);
@@ -5051,13 +5048,13 @@ pg_timezone_names(PG_FUNCTION_ARGS)
 	pg_tzenum  *tzenum;
 	pg_tz	   *tz;
 	Datum		values[4];
-	bool		nulls[4];
+	bool		nulls[4] = {0};
 	int			tzoff;
 	struct pg_tm tm;
 	fsec_t		fsec;
 	const char *tzn;
 	Interval   *resInterval;
-	struct pg_itm_in itm_in;
+	struct pg_itm_in itm_in = {0};
 
 	SetSingleFuncCall(fcinfo, 0);
 
@@ -5088,13 +5085,10 @@ pg_timezone_names(PG_FUNCTION_ARGS)
 		if (tzn && strlen(tzn) > 31)
 			continue;
 
-		MemSet(nulls, 0, sizeof(nulls));
-
 		values[0] = CStringGetTextDatum(pg_get_timezone_name(tz));
 		values[1] = CStringGetTextDatum(tzn ? tzn : "");
 
 		/* Convert tzoff to an interval; can't overflow */
-		MemSet(&itm_in, 0, sizeof(struct pg_itm_in));
 		itm_in.tm_usec = (int64) -tzoff * USECS_PER_SEC;
 		resInterval = (Interval *) palloc(sizeof(Interval));
 		(void) itmin2interval(&itm_in, resInterval);

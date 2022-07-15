@@ -391,7 +391,6 @@ static void getInstallationPaths(const char *argv0);
 static void checkControlFile(void);
 static Port *ConnCreate(int serverFd);
 static void ConnFree(Port *port);
-static void reset_shared(void);
 static void SIGHUP_handler(SIGNAL_ARGS);
 static void pmdie(SIGNAL_ARGS);
 static void reaper(SIGNAL_ARGS);
@@ -1082,7 +1081,7 @@ PostmasterMain(int argc, char *argv[])
 	/*
 	 * Set up shared memory and semaphores.
 	 */
-	reset_shared();
+	CreateSharedMemoryAndSemaphores();
 
 	/*
 	 * Estimate number of openable files.  This must happen after setting up
@@ -2724,23 +2723,6 @@ InitProcessGlobals(void)
 
 
 /*
- * reset_shared -- reset shared memory and semaphores
- */
-static void
-reset_shared(void)
-{
-	/*
-	 * Create or re-create shared memory and semaphores.
-	 *
-	 * Note: in each "cycle of life" we will normally assign the same IPC keys
-	 * (if using SysV shmem and/or semas).  This helps ensure that we will
-	 * clean up dead IPC objects if the postmaster crashes and is restarted.
-	 */
-	CreateSharedMemoryAndSemaphores();
-}
-
-
-/*
  * SIGHUP -- reread config files, and tell children to do same
  */
 static void
@@ -4022,7 +4004,14 @@ PostmasterStateMachine(void)
 		/* re-read control file into local memory */
 		LocalProcessControlFile(true);
 
-		reset_shared();
+		/*
+		 * Create or re-create shared memory and semaphores.
+		 *
+		 * Note: in each "cycle of life" we will normally assign the same IPC keys
+		 * (if using SysV shmem and/or semas).  This helps ensure that we will
+		 * clean up dead IPC objects if the postmaster crashes and is restarted.
+		 */
+		CreateSharedMemoryAndSemaphores();
 
 		StartupPID = StartupDataBase();
 		Assert(StartupPID != 0);

@@ -555,6 +555,15 @@ if test "$GCC" = yes -a "$ICC" = no; then
   if test -n "$NOT_THE_CFLAGS"; then
     CFLAGS="$CFLAGS -Wno-stringop-truncation"
   fi
+
+  # If the compiler knows how to hide symbols, use that. But only for shared libraries,
+  # for postgres itself that'd be too verbose for now.
+  PGAC_PROG_CC_VAR_OPT(CFLAGS_SL_MOD, [-fvisibility=hidden])
+  if test "$pgac_cv_prog_CC_cflags__fvisibility_hidden" = yes; then
+     AC_DEFINE(HAVE_VISIBILITY_ATTRIBUTE, 1,
+               [Define to 1 if your compiler knows the visibility("hidden") attribute.])
+  fi
+
 elif test "$ICC" = yes; then
   # Intel's compiler has a bug/misoptimization in checking for
   # division by NAN (NaN == 0), -mp1 fixes it, so add it to the CFLAGS.
@@ -573,6 +582,7 @@ fi
 
 AC_SUBST(CFLAGS_UNROLL_LOOPS)
 AC_SUBST(CFLAGS_VECTORIZE)
+AC_SUBST(CFLAGS_SL_MOD)
 
 # Determine flags used to emit bitcode for JIT inlining.
 # 1. We must duplicate any behaviour-changing compiler flags used above,
@@ -2578,3 +2588,9 @@ AC_CONFIG_HEADERS([src/interfaces/ecpg/include/ecpg_config.h],
                   [echo >src/interfaces/ecpg/include/stamp-h])
 
 AC_OUTPUT
+
+# Ensure that any meson build directories would reconfigure and see that
+# there's a conflicting in-tree build and can error out.
+if test "$vpath_build"="no"; then
+  touch meson.build
+fi

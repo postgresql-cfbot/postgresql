@@ -429,6 +429,7 @@ sub GenerateFiles
 		HAVE_WINLDAP_H                           => undef,
 		HAVE_WCSTOMBS_L                          => 1,
 		HAVE_WCTYPE_H                            => 1,
+		HAVE_VISIBILITY_ATTRIBUTE                => undef,
 		HAVE_WRITEV                              => undef,
 		HAVE_X509_GET_SIGNATURE_NID              => 1,
 		HAVE_X86_64_POPCNTQ                      => undef,
@@ -624,9 +625,8 @@ sub GenerateFiles
 			'src/backend/storage/lmgr/lwlocknames.txt'))
 	{
 		print "Generating lwlocknames.c and lwlocknames.h...\n";
-		chdir('src/backend/storage/lmgr');
-		system('perl generate-lwlocknames.pl lwlocknames.txt');
-		chdir('../../../..');
+		my $lmgr = 'src/backend/storage/lmgr';
+		system("perl $lmgr/generate-lwlocknames.pl --outdir $lmgr $lmgr/lwlocknames.txt");
 	}
 	if (IsNewer(
 			'src/include/storage/lwlocknames.h',
@@ -662,7 +662,7 @@ sub GenerateFiles
 	{
 		print "Generating errcodes.h...\n";
 		system(
-			'perl src/backend/utils/generate-errcodes.pl src/backend/utils/errcodes.txt > src/backend/utils/errcodes.h'
+			'perl src/backend/utils/generate-errcodes.pl --outfile src/backend/utils/errcodes.h src/backend/utils/errcodes.txt'
 		);
 		copyFile('src/backend/utils/errcodes.h',
 			'src/include/utils/errcodes.h');
@@ -691,9 +691,8 @@ sub GenerateFiles
 	if (IsNewer('src/bin/psql/sql_help.h', 'src/bin/psql/create_help.pl'))
 	{
 		print "Generating sql_help.h...\n";
-		chdir('src/bin/psql');
-		system("perl create_help.pl ../../../doc/src/sgml/ref sql_help");
-		chdir('../../..');
+		my $psql = 'src/bin/psql';
+		system("perl $psql/create_help.pl --docdir doc/src/sgml/ref --outdir $psql --basename sql_help");
 	}
 
 	if (IsNewer('src/common/kwlist_d.h', 'src/include/parser/kwlist.h'))
@@ -746,9 +745,8 @@ sub GenerateFiles
 			'src/backend/parser/gram.y'))
 	{
 		print "Generating preproc.y...\n";
-		chdir('src/interfaces/ecpg/preproc');
-		system('perl parse.pl < ../../../backend/parser/gram.y > preproc.y');
-		chdir('../../../..');
+		my $ecpg = 'src/interfaces/ecpg';
+		system("perl $ecpg/preproc/parse.pl --srcdir $ecpg/preproc --parser src/backend/parser/gram.y --output $ecpg/preproc/preproc.y");
 	}
 
 	unless (-f "src/port/pg_config_paths.h")
@@ -867,15 +865,12 @@ EOF
 		  utils/rel.h
 		);
 
-		chdir('src/backend/nodes');
+		my @node_files = map { "src/include/$_" } @node_headers;
 
-		my @node_files = map { "../../../src/include/$_" } @node_headers;
-
-		system("perl gen_node_support.pl @node_files");
-		open(my $f, '>', 'node-support-stamp')
+		system("perl src/backend/nodes/gen_node_support.pl --outdir src/backend/nodes @node_files");
+		open(my $f, '>', 'src/backend/nodes/node-support-stamp')
 		  || confess "Could not touch node-support-stamp";
 		close($f);
-		chdir('../../..');
 	}
 
 	if (IsNewer(

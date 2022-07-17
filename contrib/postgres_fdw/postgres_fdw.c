@@ -4847,12 +4847,9 @@ prepare_query_params(PlanState *node,
 	}
 
 	/*
-	 * Prepare remote-parameter expressions for evaluation.  (Note: in
-	 * practice, we expect that all these expressions will be just Params, so
-	 * we could possibly do something more efficient than using the full
-	 * expression-eval machinery for this.  But probably there would be little
-	 * benefit, and it'd require postgres_fdw to know more than is desirable
-	 * about Param evaluation.)
+	 * Prepare remote-parameter expressions for evaluation.  (Note: we cannot
+	 * expect that all these expressions will be just Params, so we should use
+	 * the full expression-eval machinery for this).
 	 */
 	*param_exprs = ExecInitExprList(fdw_exprs, node);
 

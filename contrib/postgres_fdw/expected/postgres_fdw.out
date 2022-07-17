@@ -1073,6 +1073,93 @@ SELECT * FROM ft1 t1 WHERE t1.c1 === t1.c2 order by t1.c2 limit 1;
   1 |  1 | 00001 | Fri Jan 02 00:00:00 1970 PST | Fri Jan 02 00:00:00 1970 | 1  | 1          | foo
 (1 row)
 
+-- Test stable expressions pushdown
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT c1,c2,c4 FROM ft2 WHERE c4 = current_timestamp;
+                                           QUERY PLAN                                            
+-------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft2
+   Output: c1, c2, c4
+   Remote SQL: SELECT "C 1", c2, c4 FROM "S 1"."T 1" WHERE ((c4 = $1::timestamp with time zone))
+(3 rows)
+
+SELECT c1,c2,c4 FROM ft2 WHERE c4 = current_timestamp;
+ c1 | c2 | c4 
+----+----+----
+(0 rows)
+
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT c1,c2,c5 FROM ft2 WHERE c5 > localtimestamp - interval '1000 years' AND c1 > 990 ORDER BY c1;
+                                                                      QUERY PLAN                                                                      
+------------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft2
+   Output: c1, c2, c5
+   Remote SQL: SELECT "C 1", c2, c5 FROM "S 1"."T 1" WHERE (("C 1" > 990)) AND ((c5 > $1::timestamp without time zone)) ORDER BY "C 1" ASC NULLS LAST
+(3 rows)
+
+SELECT c1,c2,c5 FROM ft2 WHERE c5 > localtimestamp - interval '1000 years' AND c1 > 990 ORDER BY c1;
+  c1  | c2 |            c5            
+------+----+--------------------------
+  991 |  1 | Thu Apr 02 00:00:00 1970
+  992 |  2 | Fri Apr 03 00:00:00 1970
+  993 |  3 | Sat Apr 04 00:00:00 1970
+  994 |  4 | Sun Apr 05 00:00:00 1970
+  995 |  5 | Mon Apr 06 00:00:00 1970
+  996 |  6 | Tue Apr 07 00:00:00 1970
+  997 |  7 | Wed Apr 08 00:00:00 1970
+  998 |  8 | Thu Apr 09 00:00:00 1970
+  999 |  9 | Fri Apr 10 00:00:00 1970
+ 1000 |  0 | Thu Jan 01 00:00:00 1970
+(10 rows)
+
+-- also shippable as whole expression is executed locally
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT c1,c2,c4 FROM ft2 WHERE c4 > current_timestamp - interval '1000 years' AND c1 > 990 ORDER BY c1;
+                                                                    QUERY PLAN                                                                     
+---------------------------------------------------------------------------------------------------------------------------------------------------
+ Foreign Scan on public.ft2
+   Output: c1, c2, c4
+   Remote SQL: SELECT "C 1", c2, c4 FROM "S 1"."T 1" WHERE (("C 1" > 990)) AND ((c4 > $1::timestamp with time zone)) ORDER BY "C 1" ASC NULLS LAST
+(3 rows)
+
+SELECT c1,c2,c4 FROM ft2 WHERE c4 > current_timestamp - interval '1000 years' AND c1 > 990 ORDER BY c1;
+  c1  | c2 |              c4              
+------+----+------------------------------
+  991 |  1 | Thu Apr 02 00:00:00 1970 PST
+  992 |  2 | Fri Apr 03 00:00:00 1970 PST
+  993 |  3 | Sat Apr 04 00:00:00 1970 PST
+  994 |  4 | Sun Apr 05 00:00:00 1970 PST
+  995 |  5 | Mon Apr 06 00:00:00 1970 PST
+  996 |  6 | Tue Apr 07 00:00:00 1970 PST
+  997 |  7 | Wed Apr 08 00:00:00 1970 PST
+  998 |  8 | Thu Apr 09 00:00:00 1970 PST
+  999 |  9 | Fri Apr 10 00:00:00 1970 PST
+ 1000 |  0 | Thu Jan 01 00:00:00 1970 PST
+(10 rows)
+
+-- direct modify
+EXPLAIN (VERBOSE, COSTS OFF)
+UPDATE ft2 SET c4 = current_timestamp WHERE c4 < current_timestamp;
+                                                        QUERY PLAN                                                        
+--------------------------------------------------------------------------------------------------------------------------
+ Update on public.ft2
+   ->  Foreign Update on public.ft2
+         Remote SQL: UPDATE "S 1"."T 1" SET c4 = $1::timestamp with time zone WHERE ((c4 < $1::timestamp with time zone))
+(3 rows)
+
+-- check that we don't try to push down parameter in group by
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT sum(c1), current_timestamp FROM ft2 WHERE c1 > 990 GROUP BY current_timestamp;
+                               QUERY PLAN                                
+-------------------------------------------------------------------------
+ GroupAggregate
+   Output: sum(c1), (CURRENT_TIMESTAMP)
+   Group Key: CURRENT_TIMESTAMP
+   ->  Foreign Scan on public.ft2
+         Output: CURRENT_TIMESTAMP, c1
+         Remote SQL: SELECT "C 1" FROM "S 1"."T 1" WHERE (("C 1" > 990))
+(6 rows)
+
 -- Test CASE pushdown
 EXPLAIN (VERBOSE, COSTS OFF)
 SELECT c1,c2,c3 FROM ft2 WHERE CASE WHEN c1 > 990 THEN c1 END < 1000 ORDER BY c1;

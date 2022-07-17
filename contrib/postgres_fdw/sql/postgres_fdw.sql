@@ -413,6 +413,28 @@ EXPLAIN (VERBOSE, COSTS OFF)
   SELECT * FROM ft1 t1 WHERE t1.c1 === t1.c2 order by t1.c2 limit 1;
 SELECT * FROM ft1 t1 WHERE t1.c1 === t1.c2 order by t1.c2 limit 1;
 
+-- Test stable expressions pushdown
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT c1,c2,c4 FROM ft2 WHERE c4 = current_timestamp;
+SELECT c1,c2,c4 FROM ft2 WHERE c4 = current_timestamp;
+
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT c1,c2,c5 FROM ft2 WHERE c5 > localtimestamp - interval '1000 years' AND c1 > 990 ORDER BY c1;
+SELECT c1,c2,c5 FROM ft2 WHERE c5 > localtimestamp - interval '1000 years' AND c1 > 990 ORDER BY c1;
+
+-- also shippable as whole expression is executed locally
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT c1,c2,c4 FROM ft2 WHERE c4 > current_timestamp - interval '1000 years' AND c1 > 990 ORDER BY c1;
+SELECT c1,c2,c4 FROM ft2 WHERE c4 > current_timestamp - interval '1000 years' AND c1 > 990 ORDER BY c1;
+
+-- direct modify
+EXPLAIN (VERBOSE, COSTS OFF)
+UPDATE ft2 SET c4 = current_timestamp WHERE c4 < current_timestamp;
+
+-- check that we don't try to push down parameter in group by
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT sum(c1), current_timestamp FROM ft2 WHERE c1 > 990 GROUP BY current_timestamp;
+
 -- Test CASE pushdown
 EXPLAIN (VERBOSE, COSTS OFF)
 SELECT c1,c2,c3 FROM ft2 WHERE CASE WHEN c1 > 990 THEN c1 END < 1000 ORDER BY c1;

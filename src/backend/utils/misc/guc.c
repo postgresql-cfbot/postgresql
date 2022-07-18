@@ -11689,7 +11689,8 @@ validate_option_array_item(const char *name, const char *value,
 		 * We cannot do any meaningful check on the value, so only permissions
 		 * are useful to check.
 		 */
-		if (superuser())
+		if (superuser() ||
+			pg_parameter_aclcheck(gconf->name, GetUserId(), ACL_SET) == ACLCHECK_OK)
 			return true;
 		if (skipIfNoPermissions)
 			return false;
@@ -11702,6 +11703,8 @@ validate_option_array_item(const char *name, const char *value,
 	if (gconf->context == PGC_USERSET)
 		 /* ok */ ;
 	else if (gconf->context == PGC_SUSET && superuser())
+		 /* ok */ ;
+	else if (pg_parameter_aclcheck(gconf->name, GetUserId(), ACL_SET) == ACLCHECK_OK)
 		 /* ok */ ;
 	else if (skipIfNoPermissions)
 		return false;

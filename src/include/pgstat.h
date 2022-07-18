@@ -14,6 +14,7 @@
 #include "datatype/timestamp.h"
 #include "portability/instr_time.h"
 #include "postmaster/pgarch.h"	/* for MAX_XFN_CHARS */
+#include "storage/lwlock.h"
 #include "utils/backend_progress.h" /* for backward compatibility */
 #include "utils/backend_status.h"	/* for backward compatibility */
 #include "utils/relcache.h"
@@ -48,6 +49,7 @@ typedef enum PgStat_Kind
 	PGSTAT_KIND_ARCHIVER,
 	PGSTAT_KIND_BGWRITER,
 	PGSTAT_KIND_CHECKPOINTER,
+	PGSTAT_KIND_IOOPS,
 	PGSTAT_KIND_SLRU,
 	PGSTAT_KIND_WAL,
 } PgStat_Kind;
@@ -276,6 +278,50 @@ typedef struct PgStat_CheckpointerStats
 	PgStat_Counter buf_fsync_backend;
 } PgStat_CheckpointerStats;
 
+/*
+ * Types related to counting IO Operations for various IO Paths
+ */
+
+typedef enum IOOp
+{
+	IOOP_ALLOC,
+	IOOP_EXTEND,
+	IOOP_FSYNC,
+	IOOP_READ,
+	IOOP_WRITE,
+} IOOp;
+
+#define IOOP_NUM_TYPES (IOOP_WRITE + 1)
+
+typedef enum IOPath
+{
+	IOPATH_LOCAL,
+	IOPATH_SHARED,
+	IOPATH_STRATEGY,
+} IOPath;
+
+#define IOPATH_NUM_TYPES (IOPATH_STRATEGY + 1)
+
+typedef struct PgStat_IOOpCounters
+{
+	PgStat_Counter allocs;
+	PgStat_Counter extends;
+	PgStat_Counter fsyncs;
+	PgStat_Counter reads;
+	PgStat_Counter writes;
+} PgStat_IOOpCounters;
+
+typedef struct PgStat_IOPathOps
+{
+	PgStat_IOOpCounters data[IOPATH_NUM_TYPES];
+} PgStat_IOPathOps;
+
+typedef struct PgStat_BackendIOPathOps
+{
+	TimestampTz stat_reset_timestamp;
+	PgStat_IOPathOps stats[BACKEND_NUM_TYPES];
+} PgStat_BackendIOPathOps;
+
 typedef struct PgStat_StatDBEntry
 {
 	PgStat_Counter n_xact_commit;
@@ -451,6 +497,18 @@ extern PgStat_BgWriterStats *pgstat_fetch_stat_bgwriter(void);
 
 extern void pgstat_report_checkpointer(void);
 extern PgStat_CheckpointerStats *pgstat_fetch_stat_checkpointer(void);
+
+
+/*
+ * Functions in pgstat_io_ops.c
+ */
+
+extern void pgstat_count_io_op(IOOp io_op, IOPath io_path);
+extern bool pgstat_flush_io_ops(bool nowait);
+extern PgStat_BackendIOPathOps *pgstat_fetch_backend_io_path_ops(void);
+extern PgStat_Counter pgstat_fetch_cumulative_io_ops(IOPath io_path, IOOp io_op);
+extern const char *pgstat_io_op_desc(IOOp io_op);
+extern const char *pgstat_io_path_desc(IOPath io_path);
 
 
 /*

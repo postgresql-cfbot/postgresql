@@ -1873,6 +1873,15 @@ pg_stat_gssapi| SELECT s.pid,
     s.gss_enc AS encrypted
    FROM pg_stat_get_activity(NULL::integer) s(datid, pid, usesysid, application_name, state, query, wait_event_type, wait_event, xact_start, query_start, backend_start, state_change, client_addr, client_hostname, client_port, backend_xid, backend_xmin, backend_type, ssl, sslversion, sslcipher, sslbits, ssl_client_dn, ssl_client_serial, ssl_issuer_dn, gss_auth, gss_princ, gss_enc, leader_pid, query_id)
   WHERE (s.client_port IS NOT NULL);
+pg_stat_io| SELECT b.backend_type,
+    b.io_path,
+    b.alloc,
+    b.extend,
+    b.fsync,
+    b.read,
+    b.write,
+    b.stats_reset
+   FROM pg_stat_get_io() b(backend_type, io_path, alloc, extend, fsync, read, write, stats_reset);
 pg_stat_progress_analyze| SELECT s.pid,
     s.datid,
     d.datname,

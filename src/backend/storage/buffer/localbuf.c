@@ -15,6 +15,7 @@
  */
 #include "postgres.h"
 
+#include "pgstat.h"
 #include "access/parallel.h"
 #include "catalog/catalog.h"
 #include "executor/instrument.h"
@@ -196,6 +197,8 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 				LocalRefCount[b]++;
 				ResourceOwnerRememberBuffer(CurrentResourceOwner,
 											BufferDescriptorGetBuffer(bufHdr));
+
+				pgstat_count_io_op(IOOP_ALLOC, IOPATH_LOCAL);
 				break;
 			}
 		}
@@ -225,6 +228,8 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 				  bufHdr->tag.blockNum,
 				  localpage,
 				  false);
+
+		pgstat_count_io_op(IOOP_WRITE, IOPATH_LOCAL);
 
 		/* Mark not-dirty now in case we error out below */
 		buf_state &= ~BM_DIRTY;

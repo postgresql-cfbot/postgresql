@@ -306,7 +306,6 @@ extern const char *pgstat_get_crashed_backend_activity(int pid, char *buffer,
 													   int buflen);
 extern uint64 pgstat_get_my_query_id(void);
 
-
 /* ----------
  * Support functions for the SQL-callable functions to
  * generate the pgstat* views.

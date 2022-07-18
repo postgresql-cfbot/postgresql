@@ -15,6 +15,7 @@
  */
 #include "postgres.h"
 
+#include "pgstat.h"
 #include "port/atomics.h"
 #include "storage/buf_internals.h"
 #include "storage/bufmgr.h"
@@ -198,12 +199,14 @@ have_free_buffer(void)
  *	return the buffer with the buffer header spinlock still held.
  */
 BufferDesc *
-StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
+StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state, bool *from_ring)
 {
 	BufferDesc *buf;
 	int			bgwprocno;
 	int			trycounter;
 	uint32		local_buf_state;	/* to avoid repeated (de-)referencing */
+
+	*from_ring = false;
 
 	/*
 	 * If given a strategy object, see whether it can select a buffer. We
@@ -212,8 +215,21 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 	if (strategy != NULL)
 	{
 		buf = GetBufferFromRing(strategy, buf_state);
-		if (buf != NULL)
+		*from_ring = buf != NULL;
+		if (*from_ring)
+		{
+			/*
+			 * When a strategy is in use, reused buffers from the strategy ring will
+			 * be counted as allocations for the purposes of IO Operation statistics
+			 * tracking.
+			 *
+			 * However, even when a strategy is in use, if a new buffer must be
+			 * allocated from shared buffers and added to the ring, this is counted
+			 * as a IOPATH_SHARED allocation.
+			 */
+			pgstat_count_io_op(IOOP_ALLOC, IOPATH_STRATEGY);
 			return buf;
+		}
 	}
 
 	/*
@@ -247,6 +263,7 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 	 * the rate of buffer consumption.  Note that buffers recycled by a
 	 * strategy object are intentionally not counted here.
 	 */
+	pgstat_count_io_op(IOOP_ALLOC, IOPATH_SHARED);
 	pg_atomic_fetch_add_u32(&StrategyControl->numBufferAllocs, 1);
 
 	/*
@@ -684,11 +701,13 @@ AddBufferToRing(BufferAccessStrategy strategy, BufferDesc *buf)
 bool
 StrategyRejectBuffer(BufferAccessStrategy strategy, BufferDesc *buf)
 {
+
 	/* We only do this in bulkread mode */
 	if (strategy->btype != BAS_BULKREAD)
 		return false;
 
-	/* Don't muck with behavior of normal buffer-replacement strategy */
+	/*
+	 * Don't muck with behavior of normal buffer-replacement strategy */
 	if (!strategy->current_was_in_ring ||
 		strategy->buffers[strategy->current] != BufferDescriptorGetBuffer(buf))
 		return false;

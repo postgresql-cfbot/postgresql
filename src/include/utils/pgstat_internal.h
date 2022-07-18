@@ -329,6 +329,19 @@ typedef struct PgStatShared_Checkpointer
 	PgStat_CheckpointerStats reset_offset;
 } PgStatShared_Checkpointer;
 
+typedef struct PgStatShared_IOPathOps
+{
+	LWLock		lock;
+	PgStat_IOOpCounters data[IOPATH_NUM_TYPES];
+} PgStatShared_IOPathOps;
+
+typedef struct PgStatShared_BackendIOPathOps
+{
+	TimestampTz stat_reset_timestamp;
+	PgStatShared_IOPathOps stats[BACKEND_NUM_TYPES];
+} PgStatShared_BackendIOPathOps;
+
+
 typedef struct PgStatShared_SLRU
 {
 	/* lock protects ->stats */
@@ -419,6 +432,7 @@ typedef struct PgStat_ShmemControl
 	PgStatShared_Archiver archiver;
 	PgStatShared_BgWriter bgwriter;
 	PgStatShared_Checkpointer checkpointer;
+	PgStatShared_BackendIOPathOps io_ops;
 	PgStatShared_SLRU slru;
 	PgStatShared_Wal wal;
 } PgStat_ShmemControl;
@@ -441,6 +455,8 @@ typedef struct PgStat_Snapshot
 	PgStat_BgWriterStats bgwriter;
 
 	PgStat_CheckpointerStats checkpointer;
+
+	PgStat_BackendIOPathOps io_ops;
 
 	PgStat_SLRUStats slru[SLRU_NUM_ELEMENTS];
 
@@ -547,6 +563,14 @@ extern void pgstat_database_reset_timestamp_cb(PgStatShared_Common *header, Time
  */
 
 extern bool pgstat_function_flush_cb(PgStat_EntryRef *entry_ref, bool nowait);
+
+
+/*
+ * Functions in pgstat_io_ops.c
+ */
+
+extern void pgstat_io_ops_snapshot_cb(void);
+extern void pgstat_io_ops_reset_all_cb(TimestampTz ts);
 
 
 /*

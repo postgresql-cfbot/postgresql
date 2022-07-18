@@ -1116,6 +1116,7 @@ ForwardSyncRequest(const FileTag *ftag, SyncRequestType type)
 		if (!AmBackgroundWriterProcess())
 			CheckpointerShmem->num_backend_fsync++;
 		LWLockRelease(CheckpointerCommLock);
+		pgstat_count_io_op(IOOP_FSYNC, IOPATH_SHARED);
 		return false;
 	}
 

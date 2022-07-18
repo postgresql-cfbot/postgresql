@@ -359,6 +359,15 @@ static const PgStat_KindInfo pgstat_kind_infos[PGSTAT_NUM_KINDS] = {
 		.snapshot_cb = pgstat_checkpointer_snapshot_cb,
 	},
 
+	[PGSTAT_KIND_IOOPS] = {
+		.name = "io_ops",
+
+		.fixed_amount = true,
+
+		.reset_all_cb = pgstat_io_ops_reset_all_cb,
+		.snapshot_cb = pgstat_io_ops_snapshot_cb,
+	},
+
 	[PGSTAT_KIND_SLRU] = {
 		.name = "slru",
 
@@ -627,6 +636,9 @@ pgstat_report_stat(bool force)
 
 	/* flush database / relation / function / ... stats */
 	partial_flush |= pgstat_flush_pending_entries(nowait);
+
+	/* flush IO Operations stats */
+	partial_flush |= pgstat_flush_io_ops(nowait);
 
 	/* flush wal stats */
 	partial_flush |= pgstat_flush_wal(nowait);
@@ -1313,6 +1325,12 @@ pgstat_write_statsfile(void)
 	write_chunk_s(fpout, &pgStatLocal.snapshot.checkpointer);
 
 	/*
+	 * Write IO Operations stats struct
+	 */
+	pgstat_build_snapshot_fixed(PGSTAT_KIND_IOOPS);
+	write_chunk_s(fpout, &pgStatLocal.snapshot.io_ops);
+
+	/*
 	 * Write SLRU stats struct
 	 */
 	pgstat_build_snapshot_fixed(PGSTAT_KIND_SLRU);
@@ -1427,8 +1445,10 @@ pgstat_read_statsfile(void)
 	FILE	   *fpin;
 	int32		format_id;
 	bool		found;
+	PgStat_BackendIOPathOps io_stats;
 	const char *statfile = PGSTAT_STAT_PERMANENT_FILENAME;
 	PgStat_ShmemControl *shmem = pgStatLocal.shmem;
+	PgStatShared_BackendIOPathOps *io_stats_shmem = &shmem->io_ops;
 
 	/* shouldn't be called from postmaster */
 	Assert(IsUnderPostmaster || !IsPostmasterEnvironment);
@@ -1485,6 +1505,22 @@ pgstat_read_statsfile(void)
 	 */
 	if (!read_chunk_s(fpin, &shmem->checkpointer.stats))
 		goto error;
+
+	/*
+	 * Read IO Operations stats struct
+	 */
+	if (!read_chunk_s(fpin, &io_stats))
+		goto error;
+
+	io_stats_shmem->stat_reset_timestamp = io_stats.stat_reset_timestamp;
+
+	for (int i = 0; i < BACKEND_NUM_TYPES; i++)
+	{
+		PgStat_IOPathOps *stats = &io_stats.stats[i];
+		PgStatShared_IOPathOps *stats_shmem = &io_stats_shmem->stats[i];
+
+		memcpy(stats_shmem->data, stats->data, sizeof(stats->data));
+	}
 
 	/*
 	 * Read SLRU stats struct

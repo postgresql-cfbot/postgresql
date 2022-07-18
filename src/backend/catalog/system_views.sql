@@ -1115,6 +1115,18 @@ CREATE VIEW pg_stat_bgwriter AS
         pg_stat_get_buf_alloc() AS buffers_alloc,
         pg_stat_get_bgwriter_stat_reset_time() AS stats_reset;
 
+CREATE VIEW pg_stat_io AS
+SELECT
+       b.backend_type,
+       b.io_path,
+       b.alloc,
+       b.extend,
+       b.fsync,
+       b.read,
+       b.write,
+       b.stats_reset
+FROM pg_stat_get_io() b;
+
 CREATE VIEW pg_stat_wal AS
     SELECT
         w.wal_records,

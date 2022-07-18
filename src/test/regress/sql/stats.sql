@@ -285,4 +285,95 @@ SELECT pg_stat_get_live_tuples(:drop_stats_test_subxact_oid);
 
 DROP TABLE trunc_stats_test, trunc_stats_test1, trunc_stats_test2, trunc_stats_test3, trunc_stats_test4;
 DROP TABLE prevstats;
+
+-- Test that allocs, extends, reads, and writes to Shared Buffers and fsyncs
+-- done to ensure durability of Shared Buffers are tracked in pg_stat_io.
+SELECT sum(alloc) AS io_sum_shared_allocs_before FROM pg_stat_io WHERE io_path = 'Shared' \gset
+SELECT sum(extend) AS io_sum_shared_extends_before FROM pg_stat_io WHERE io_path = 'Shared' \gset
+SELECT sum(fsync) AS io_sum_shared_fsyncs_before FROM pg_stat_io WHERE io_path = 'Shared' \gset
+SELECT sum(read) AS io_sum_shared_reads_before FROM pg_stat_io WHERE io_path = 'Shared' \gset
+SELECT sum(write) AS io_sum_shared_writes_before FROM pg_stat_io WHERE io_path = 'Shared' \gset
+-- Create a regular table and insert some data to generate IOPATH_SHARED allocs and extends.
+CREATE TABLE test_io_shared(a int);
+INSERT INTO test_io_shared SELECT i FROM generate_series(1,100)i;
+SELECT pg_stat_force_next_flush();
+-- After a checkpoint, there should be some additional IOPATH_SHARED writes and fsyncs.
+CHECKPOINT;
+SELECT sum(alloc) AS io_sum_shared_allocs_after FROM pg_stat_io WHERE io_path = 'Shared' \gset
+SELECT sum(extend) AS io_sum_shared_extends_after FROM pg_stat_io WHERE io_path = 'Shared' \gset
+SELECT sum(write) AS io_sum_shared_writes_after FROM pg_stat_io WHERE io_path = 'Shared' \gset
+SELECT sum(fsync) AS io_sum_shared_fsyncs_after FROM pg_stat_io WHERE io_path = 'Shared' \gset
+SELECT :io_sum_shared_allocs_after > :io_sum_shared_allocs_before;
+SELECT :io_sum_shared_extends_after > :io_sum_shared_extends_before;
+SELECT current_setting('fsync') = 'off' OR :io_sum_shared_fsyncs_after > :io_sum_shared_fsyncs_before;
+SELECT :io_sum_shared_writes_after > :io_sum_shared_writes_before;
+-- Change the tablespace so that the table is rewritten directly, then SELECT
+-- from it to cause it to be read back into Shared Buffers.
+SET allow_in_place_tablespaces = true;
+CREATE TABLESPACE test_io_shared_stats_tblspc LOCATION '';
+ALTER TABLE test_io_shared SET TABLESPACE test_io_shared_stats_tblspc;
+SELECT COUNT(*) FROM test_io_shared;
+SELECT pg_stat_force_next_flush();
+SELECT sum(read) AS io_sum_shared_reads_after FROM pg_stat_io WHERE io_path = 'Shared' \gset
+SELECT :io_sum_shared_reads_after > :io_sum_shared_reads_before;
+DROP TABLE test_io_shared;
+DROP TABLESPACE test_io_shared_stats_tblspc;
+
+-- Test that allocs, extends, reads, and writes of temporary tables are tracked
+-- in pg_stat_io.
+CREATE TEMPORARY TABLE test_io_local(a int, b TEXT);
+SELECT sum(alloc) AS io_sum_local_allocs_before FROM pg_stat_io WHERE io_path = 'Local' \gset
+SELECT sum(extend) AS io_sum_local_extends_before FROM pg_stat_io WHERE io_path = 'Local' \gset
+SELECT sum(read) AS io_sum_local_reads_before FROM pg_stat_io WHERE io_path = 'Local' \gset
+SELECT sum(write) AS io_sum_local_writes_before FROM pg_stat_io WHERE io_path = 'Local' \gset
+-- Insert enough values that we need to reuse and write out dirty local
+-- buffers.
+INSERT INTO test_io_local SELECT generate_series(1, 80000) as id,
+'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+-- Read in evicted buffers.
+SELECT COUNT(*) FROM test_io_local;
+SELECT pg_stat_force_next_flush();
+SELECT sum(alloc) AS io_sum_local_allocs_after FROM pg_stat_io WHERE io_path = 'Local' \gset
+SELECT sum(extend) AS io_sum_local_extends_after FROM pg_stat_io WHERE io_path = 'Local' \gset
+SELECT sum(read) AS io_sum_local_reads_after FROM pg_stat_io WHERE io_path = 'Local' \gset
+SELECT sum(write) AS io_sum_local_writes_after FROM pg_stat_io WHERE io_path = 'Local' \gset
+SELECT :io_sum_local_allocs_after > :io_sum_local_allocs_before;
+SELECT :io_sum_local_extends_after > :io_sum_local_extends_before;
+SELECT :io_sum_local_reads_after > :io_sum_local_reads_before;
+SELECT :io_sum_local_writes_after > :io_sum_local_writes_before;
+
+-- Test that, when using a Strategy, reusing buffers from the Strategy ring
+-- count as "Strategy" allocs in pg_stat_io. Also test that Strategy reads are
+-- counted as such.
+SELECT sum(alloc) AS io_sum_strategy_allocs_before FROM pg_stat_io WHERE io_path = 'Strategy' \gset
+SELECT sum(read) AS io_sum_strategy_reads_before FROM pg_stat_io WHERE io_path = 'Strategy' \gset
+CREATE TABLE test_io_strategy(a INT, b INT);
+ALTER TABLE test_io_strategy SET (autovacuum_enabled = 'false');
+INSERT INTO test_io_strategy SELECT i, i from generate_series(1, 8000)i;
+-- Ensure that the next VACUUM will need to perform IO by rewriting the table
+-- first with VACUUM (FULL).
+VACUUM (FULL) test_io_strategy;
+VACUUM (PARALLEL 0) test_io_strategy;
+SELECT pg_stat_force_next_flush();
+SELECT sum(alloc) AS io_sum_strategy_allocs_after FROM pg_stat_io WHERE io_path = 'Strategy' \gset
+SELECT sum(read) AS io_sum_strategy_reads_after FROM pg_stat_io WHERE io_path = 'Strategy' \gset
+SELECT :io_sum_strategy_allocs_after > :io_sum_strategy_allocs_before;
+SELECT :io_sum_strategy_reads_after > :io_sum_strategy_reads_before;
+DROP TABLE test_io_strategy;
+
+-- Test that, when using a Strategy, if creating a relation, Strategy extends
+-- are counted in pg_stat_io.
+-- A CTAS uses a Bulkwrite strategy.
+SELECT sum(extend) AS io_sum_strategy_extends_before FROM pg_stat_io WHERE io_path = 'Strategy' \gset
+CREATE TABLE test_io_strategy_extend AS SELECT i FROM generate_series(1,100)i;
+SELECT pg_stat_force_next_flush();
+SELECT sum(extend) AS io_sum_strategy_extends_after FROM pg_stat_io WHERE io_path = 'Strategy' \gset
+SELECT :io_sum_strategy_extends_after > :io_sum_strategy_extends_before;
+DROP TABLE test_io_strategy_extend;
+
+SELECT sum(alloc) + sum(extend) + sum(fsync) + sum(read) + sum(write) AS io_stats_pre_reset FROM pg_stat_io \gset
+SELECT pg_stat_reset_shared('io');
+SELECT sum(alloc) + sum(extend) + sum(fsync) + sum(read) + sum(write) AS io_stats_post_reset FROM pg_stat_io \gset
+SELECT :io_stats_post_reset < :io_stats_pre_reset;
+
 -- End of Stats Test

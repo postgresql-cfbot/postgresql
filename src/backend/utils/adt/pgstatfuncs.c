@@ -1734,6 +1734,116 @@ pg_stat_get_buf_alloc(PG_FUNCTION_ARGS)
 }
 
 /*
+* When adding a new column to the pg_stat_io view, add a new enum
+* value here above IO_NUM_COLUMNS.
+*/
+enum
+{
+	IO_COLUMN_BACKEND_TYPE,
+	IO_COLUMN_IO_PATH,
+	IO_COLUMN_ALLOCS,
+	IO_COLUMN_EXTENDS,
+	IO_COLUMN_FSYNCS,
+	IO_COLUMN_READS,
+	IO_COLUMN_WRITES,
+	IO_COLUMN_RESET_TIME,
+	IO_NUM_COLUMNS,
+};
+
+Datum
+pg_stat_get_io(PG_FUNCTION_ARGS)
+{
+	PgStat_BackendIOPathOps *io_stats;
+	ReturnSetInfo *rsinfo;
+	Datum reset_time;
+
+	SetSingleFuncCall(fcinfo, 0);
+	rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+
+	io_stats = pgstat_fetch_backend_io_path_ops();
+
+	/*
+	* Currently it is not permitted to reset IO operation stats for individual
+	* IO Paths or individual BackendTypes. All IO Operation statistics are
+	* reset together. As such, it is easiest to reuse the first reset timestamp
+	* available.
+	*/
+	reset_time = TimestampTzGetDatum(io_stats->stat_reset_timestamp);
+
+	for (int i = 0; i < BACKEND_NUM_TYPES; i++)
+	{
+		bool uses_local;
+		bool uses_strategy;
+		Datum backend_type_desc = CStringGetTextDatum(GetBackendTypeDesc(i));
+		PgStat_IOPathOps *io_path_ops = &io_stats->stats[i];
+
+
+	 /*
+		* IO Operation statistics are not collected for all BackendTypes.
+		* For those BackendTypes without IO Operation stats, skip representing them
+		* in the view altogether.
+		*
+		* The following BackendTypes do not participate in the cumulative stats
+		* subsystem or do not do IO operations worth reporting statistics on:
+		* - Startup process because it does not have relation OIDs
+		* - Syslogger because it is not connected to shared memory
+		* - Archiver because most relevant archiving IO is delegated to a
+		*   specialized command or module
+		* - WAL Receiver and WAL Writer IO is not tracked in pg_stat_io for now
+		*/
+		if (i == B_INVALID || i == B_ARCHIVER || i == B_LOGGER || i == B_STARTUP ||
+				i == B_WAL_RECEIVER || i == B_WAL_WRITER)
+			continue;
+
+		/*
+		 * Not all BackendTypes will use a BufferAccessStrategy. Omit those rows
+		 * from the view.
+		 */
+		uses_strategy = i == B_AUTOVAC_WORKER || i == B_BACKEND || i ==
+			B_STANDALONE_BACKEND || i == B_BG_WORKER;
+
+		uses_local = i == B_BACKEND || i == B_WAL_SENDER;
+
+		for (int j = 0; j < IOPATH_NUM_TYPES; j++)
+		{
+			PgStat_IOOpCounters *counters = &io_path_ops->data[j];
+			Datum values[IO_NUM_COLUMNS];
+			bool nulls[IO_NUM_COLUMNS];
+
+			if (j == IOPATH_STRATEGY && !uses_strategy)
+				continue;
+
+			if (j == IOPATH_LOCAL && !uses_local)
+				continue;
+
+			memset(values, 0, sizeof(values));
+			memset(nulls, 0, sizeof(nulls));
+
+			values[IO_COLUMN_BACKEND_TYPE] = backend_type_desc;
+			values[IO_COLUMN_IO_PATH] = CStringGetTextDatum(pgstat_io_path_desc(j));
+			values[IO_COLUMN_RESET_TIME] = TimestampTzGetDatum(reset_time);
+			values[IO_COLUMN_ALLOCS] = Int64GetDatum(counters->allocs);
+			values[IO_COLUMN_EXTENDS] = Int64GetDatum(counters->extends);
+			values[IO_COLUMN_FSYNCS] = Int64GetDatum(counters->fsyncs);
+			values[IO_COLUMN_READS] = Int64GetDatum(counters->reads);
+			values[IO_COLUMN_WRITES] = Int64GetDatum(counters->writes);
+
+		 /*
+			* Temporary tables using local buffers are not logged and thus do not
+			* require fsync'ing. Set this cell to NULL to differentiate between an
+			* invalid combination and 0 observed IO Operations.
+			*/
+			if (j == IOPATH_LOCAL)
+				nulls[IO_COLUMN_FSYNCS] = true;
+
+			tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
+		}
+	}
+
+	return (Datum) 0;
+}
+
+/*
  * Returns statistics of WAL activity
  */
 Datum
@@ -2092,6 +2202,8 @@ pg_stat_reset_shared(PG_FUNCTION_ARGS)
 		pgstat_reset_of_kind(PGSTAT_KIND_BGWRITER);
 		pgstat_reset_of_kind(PGSTAT_KIND_CHECKPOINTER);
 	}
+	else if (strcmp(target, "io") == 0)
+		pgstat_reset_of_kind(PGSTAT_KIND_IOOPS);
 	else if (strcmp(target, "recovery_prefetch") == 0)
 		XLogPrefetchResetStats();
 	else if (strcmp(target, "wal") == 0)
@@ -2100,7 +2212,7 @@ pg_stat_reset_shared(PG_FUNCTION_ARGS)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("unrecognized reset target: \"%s\"", target),
-				 errhint("Target must be \"archiver\", \"bgwriter\", \"recovery_prefetch\", or \"wal\".")));
+				 errhint("Target must be \"archiver\", \"io\", \"bgwriter\", \"recovery_prefetch\", or \"wal\".")));
 
 	PG_RETURN_VOID();
 }

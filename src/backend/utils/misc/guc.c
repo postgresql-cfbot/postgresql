@@ -11660,18 +11660,11 @@ validate_option_array_item(const char *name, const char *value,
 	struct config_generic *gconf;
 
 	/*
-	 * There are three cases to consider:
+	 * There are two cases to consider:
 	 *
 	 * name is a known GUC variable.  Check the value normally, check
 	 * permissions normally (i.e., allow if variable is USERSET, or if it's
 	 * SUSET and user is superuser).
-	 *
-	 * name is not known, but exists or can be created as a placeholder (i.e.,
-	 * it has a valid custom name).  We allow this case if you're a superuser,
-	 * otherwise not.  Superusers are assumed to know what they're doing. We
-	 * can't allow it for other users, because when the placeholder is
-	 * resolved it might turn out to be a SUSET variable;
-	 * define_custom_variable assumes we checked that.
 	 *
 	 * name is not known and can't be created as a placeholder.  Throw error,
 	 * unless skipIfNoPermissions is true, in which case return false.
@@ -11681,21 +11674,6 @@ validate_option_array_item(const char *name, const char *value,
 	{
 		/* not known, failed to make a placeholder */
 		return false;
-	}
-
-	if (gconf->flags & GUC_CUSTOM_PLACEHOLDER)
-	{
-		/*
-		 * We cannot do any meaningful check on the value, so only permissions
-		 * are useful to check.
-		 */
-		if (superuser())
-			return true;
-		if (skipIfNoPermissions)
-			return false;
-		ereport(ERROR,
-				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-				 errmsg("permission denied to set parameter \"%s\"", name)));
 	}
 
 	/* manual permissions check so we can avoid an error being thrown */

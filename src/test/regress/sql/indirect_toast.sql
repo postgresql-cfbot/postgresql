@@ -76,7 +76,18 @@ SELECT substring(indtoasttest::text, 1, 200) FROM indtoasttest;
 VACUUM FREEZE indtoasttest;
 SELECT substring(indtoasttest::text, 1, 200) FROM indtoasttest;
 
+create or replace function random_string(len integer) returns text as $$
+select substr((select string_agg(r,'') from (select random()::text as r from generate_series(1,(len+15)/16)) s1), 1, len);
+$$ language sql;
+
+create table toasttest_main(t text);
+alter table toasttest_main alter column t set storage main;
+
+insert into toasttest_main (select random_string(len) from generate_series(7000,8000) len);
+
 DROP TABLE indtoasttest;
+DROP TABLE toasttest_main;
 DROP FUNCTION update_using_indirect();
+DROP FUNCTION random_string(integer);
 
 RESET default_toast_compression;

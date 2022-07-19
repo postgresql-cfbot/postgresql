@@ -260,6 +260,11 @@ XLogRegisterBuffer(uint8 block_id, Buffer buffer, uint8 flags)
 	BufferGetTag(buffer, &regbuf->rlocator, &regbuf->forkno, &regbuf->block);
 	regbuf->page = BufferGetPage(buffer);
 	regbuf->flags = flags;
+	if (IsBufferConverted(buffer))
+	{
+		regbuf->flags |= REGBUF_CONVERTED;
+		MarkBufferConverted(buffer, false);
+	}
 	regbuf->rdata_tail = (XLogRecData *) &regbuf->rdata_head;
 	regbuf->rdata_len = 0;
 
@@ -575,6 +580,8 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
 			needs_backup = true;
 		else if (regbuf->flags & REGBUF_NO_IMAGE)
 			needs_backup = false;
+		else if (regbuf->flags & REGBUF_CONVERTED)
+			needs_backup = true;
 		else if (!doPageWrites)
 			needs_backup = false;
 		else

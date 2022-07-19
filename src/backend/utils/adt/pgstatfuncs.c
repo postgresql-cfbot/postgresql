@@ -15,6 +15,7 @@
 #include "postgres.h"
 
 #include "access/htup_details.h"
+#include "access/xact.h"
 #include "access/xlog.h"
 #include "access/xlogprefetcher.h"
 #include "catalog/pg_authid.h"

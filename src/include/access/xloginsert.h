@@ -37,6 +37,7 @@
 									 * will be skipped) */
 #define REGBUF_KEEP_DATA	0x10	/* include data even if a full-page image
 									 * is taken */
+#define REGBUF_CONVERTED	0x20	/* buffer had format convertion */
 
 /* prototypes for public functions in xloginsert.c: */
 extern void XLogBeginInsert(void);

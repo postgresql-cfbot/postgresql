@@ -23,6 +23,7 @@
 #include "access/htup_details.h"
 #include "access/transam.h"
 #include "access/xact.h"
+#include "catalog/catalog.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_operator.h"
 #include "catalog/pg_type.h"
@@ -1255,4 +1256,293 @@ get_columns_length(PG_FUNCTION_ARGS)
 	}
 
 	PG_RETURN_INT32(column_offset);
+}
+
+#include "access/hio.h"
+#include "access/relation.h"
+#include "storage/bufmgr.h"
+#include "utils/rel.h"
+
+static void
+CheckNewPage(char *msg, Page page)
+{
+	uint16			size;
+
+	if (PageGetPageLayoutVersion(page) != PG_PAGE_LAYOUT_VERSION)
+		elog(ERROR, "%s: page version is %d, expected %d ",
+			 msg, PageGetPageLayoutVersion(page), PG_PAGE_LAYOUT_VERSION);
+
+	size = PageGetSpecialSize(page);
+	if (size == MAXALIGN(sizeof(HeapPageSpecialData)))
+		elog(INFO, "%s: page is converted to xid64 format", msg);
+	else if (HeapPageIsDoubleXmax(page))
+		elog(INFO, "%s: page is converted into double xmax format", msg);
+	else
+		elog(ERROR, "%s: converted page has pageSpecial size %u, expected %llu",
+			 msg, size,
+			 (unsigned long long) MAXALIGN(sizeof(HeapPageSpecialData)));
+}
+
+/*
+ * Get page from relation.
+ * Make this page look like in 32-bit xid format.
+ * Convert it to 64-bit xid format.
+ * Run basic checks.
+ */
+PG_FUNCTION_INFO_V1(xid64_test_1);
+Datum
+xid64_test_1(PG_FUNCTION_ARGS)
+{
+	Oid					relid;
+	Relation			rel;
+	Buffer				buf;
+	Page				page;
+	PageHeader			hdr;
+
+	relid = PG_GETARG_OID(0);
+	rel = relation_open(relid, AccessExclusiveLock);
+	buf = ReadBuffer(rel, 0);
+	LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
+
+	page = BufferGetPage(buf);
+	hdr = (PageHeader) page;
+
+	if (PageGetSpecialSize(page) != MAXALIGN(sizeof(HeapPageSpecialData)))
+		elog(ERROR, "page expected in new format");
+
+	if (PageGetPageLayoutVersion(page) != PG_PAGE_LAYOUT_VERSION)
+		elog(ERROR, "unknown page version (%u)",
+			 PageGetPageLayoutVersion(page));
+
+	hdr->pd_special = BLCKSZ;
+	PageSetPageSizeAndVersion(page, BLCKSZ, PG_PAGE_LAYOUT_VERSION - 1);
+
+	convert_page(rel, page, buf, 0);
+	CheckNewPage("test 1", page);
+
+	UnlockReleaseBuffer(buf);
+	relation_close(rel, AccessExclusiveLock);
+
+	PG_RETURN_VOID();
+}
+
+typedef struct TupleCheckValues
+{
+	TransactionId		xmin;
+	TransactionId		xmax;
+} TupleCheckValues;
+
+typedef struct RelCheckValues
+{
+	TupleCheckValues   *tcv;
+	Size				ntuples;
+} RelCheckValues;
+
+static RelCheckValues
+FillRelCheckValues(Relation rel, Page page)
+{
+	RelCheckValues		set;
+	Size				n;
+
+#define DEFAULT_SET_SIZE 64
+	n = DEFAULT_SET_SIZE;
+	set.ntuples = 0;
+	set.tcv = palloc(sizeof(set.tcv[0]) * n);
+
+	{
+		OffsetNumber		maxoff,
+							offnum;
+		HeapTupleHeader		tuphdr;
+		ItemId				itemid;
+		HeapTupleData		tuple;
+		TransactionId		xmin,
+							xmax;
+
+		maxoff = PageGetMaxOffsetNumber(page);
+
+		for (offnum = FirstOffsetNumber;
+			 offnum <= maxoff;
+			 offnum = OffsetNumberNext(offnum))
+		{
+			itemid = PageGetItemId(page, offnum);
+			tuphdr = (HeapTupleHeader) PageGetItem(page, itemid);
+			tuple.t_data = tuphdr;
+			tuple.t_len = ItemIdGetLength(itemid);
+			tuple.t_tableOid = RelationGetRelid(rel);
+
+			if (HeapPageGetSpecial(page) == heapDoubleXmaxSpecial)
+			{
+				xmin = tuphdr->t_choice.t_heap.t_xmin;
+				xmax = tuphdr->t_choice.t_heap.t_xmax;
+			}
+			else
+			{
+				HeapTupleCopyBaseFromPage(&tuple, page, IsToastRelation(rel));
+
+				xmin = HeapTupleGetRawXmin(&tuple);
+				xmax = HeapTupleGetRawXmax(&tuple);
+			}
+
+			if (set.ntuples == n)
+			{
+				n *= 2;
+				set.tcv = repalloc(set.tcv, sizeof(set.tcv[0]) * n);
+			}
+
+			set.tcv[set.ntuples].xmin = xmin;
+			set.tcv[set.ntuples].xmax = xmax;
+			set.ntuples++;
+		}
+	}
+
+	return set;
+}
+
+/*
+ * Test xmin/xmax invariant when converting page from 32bit xid to 64xid.
+ *
+ * Scenario:
+ * - enforce all relation pages to 32bit xid format, discarding pd_xid_base and
+ *   pd_multi_base
+ * - store all xmin/xmax in array
+ * - convert all the pages from relation into 64xid format
+ * - store all new xmin/xmax in array
+ * - compare old and new xmin/xmax
+ *
+ * NOTE: inital xid value does not affect test as pd_xid_base/pd_multi_base
+ * discarded.
+ */
+PG_FUNCTION_INFO_V1(xid64_test_2);
+Datum
+xid64_test_2(PG_FUNCTION_ARGS)
+{
+	Oid					relid;
+	Relation			rel;
+	RelCheckValues		before,
+						after;
+	BlockNumber			pageno,
+						npages;
+	Size				i;
+
+	relid = PG_GETARG_OID(0);
+	rel = relation_open(relid, AccessExclusiveLock);
+	npages = RelationGetNumberOfBlocks(rel);
+
+	for (pageno = 0; pageno != npages; ++pageno)
+	{
+		Buffer			buf;
+		Page			page;
+		PageHeader		hdr;
+
+		/* get page */
+		buf = ReadBuffer(rel, pageno);
+		LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
+		page = BufferGetPage(buf);
+		hdr = (PageHeader) page;
+
+		/* make page look like 32-bit xid page */
+		hdr->pd_special = BLCKSZ;
+		PageSetPageSizeAndVersion(page, BLCKSZ, PG_PAGE_LAYOUT_VERSION - 1);
+
+		before = FillRelCheckValues(rel, page);
+		convert_page(rel, page, buf, pageno);
+		after = FillRelCheckValues(rel, page);
+
+		/* check */
+		if (before.ntuples != after.ntuples)
+			elog(ERROR, "numer of tuples must be equal");
+
+		for (i = 0; i != before.ntuples; ++i)
+		{
+			if (before.tcv[i].xmin != after.tcv[i].xmin && after.tcv[i].xmin)
+				elog(ERROR, "old and new xmin does not match (%llu != %llu)",
+					 (unsigned long long) before.tcv[i].xmin,
+					 (unsigned long long) after.tcv[i].xmin);
+
+			if (before.tcv[i].xmax != after.tcv[i].xmax)
+				elog(ERROR, "old and new xmax does not match (%llu != %llu)",
+					 (unsigned long long) before.tcv[i].xmax,
+					 (unsigned long long) after.tcv[i].xmax);
+		}
+
+		Assert(npages != 0);
+		pfree(before.tcv);
+		pfree(after.tcv);
+
+		UnlockReleaseBuffer(buf);
+	}
+
+	relation_close(rel, AccessExclusiveLock);
+
+	PG_RETURN_VOID();
+}
+
+PG_FUNCTION_INFO_V1(xid64_test_double_xmax);
+Datum
+xid64_test_double_xmax(PG_FUNCTION_ARGS)
+{
+	Oid					relid;
+	Relation			rel;
+	BlockNumber			pageno,
+						npages;
+	bool				found;
+
+	relid = PG_GETARG_OID(0);
+	rel = relation_open(relid, AccessExclusiveLock);
+	npages = RelationGetNumberOfBlocks(rel);
+	found = false;
+
+	for (pageno = 0; pageno != npages; ++pageno)
+	{
+		Buffer			buf;
+		Page			page;
+		PageHeader		hdr;
+		ItemId			itemid;
+		OffsetNumber 	offnum;
+		HeapTupleHeader	tuphdr;
+
+		buf = ReadBuffer(rel, pageno);
+		LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
+		page = BufferGetPage(buf);
+		hdr = (PageHeader) page;
+
+		if (pageno == 0)
+		{
+			itemid = PageGetItemId(page, FirstOffsetNumber);
+			itemid->lp_len += 16; /* Move to overlap special */
+		}
+
+		for (offnum = FirstOffsetNumber;
+			 offnum <= PageGetMaxOffsetNumber(page);
+			 offnum = OffsetNumberNext(offnum))
+		{
+			itemid = PageGetItemId(page, offnum);
+			tuphdr = (HeapTupleHeader) PageGetItem(page, itemid);
+			tuphdr->t_infomask |= HEAP_XMIN_COMMITTED;
+		}
+
+		hdr->pd_special = BLCKSZ;
+		PageSetPageSizeAndVersion(page, BLCKSZ, PG_PAGE_LAYOUT_VERSION - 1);
+
+		convert_page(rel, page, buf, pageno);
+
+		if (HeapPageIsDoubleXmax(page))
+		{
+			found = true;
+			elog(INFO, "test double xmax: page %u is converted into double xmax format",
+				 pageno);
+		}
+
+		UnlockReleaseBuffer(buf);
+	}
+
+	if (!found)
+		elog(ERROR, "test double xmax: failed, no double xmax");
+
+	Assert(npages != 0);
+	elog(INFO, "test double xmax: end");
+
+	relation_close(rel, AccessExclusiveLock);
+
+	PG_RETURN_VOID();
 }

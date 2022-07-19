@@ -4510,16 +4510,24 @@ UPDATE ft2 SET c2 = c2 + 300, c3 = c3 || '_update3' WHERE c1 % 10 = 3;          
 
 UPDATE ft2 SET c2 = c2 + 300, c3 = c3 || '_update3' WHERE c1 % 10 = 3;
 EXPLAIN (verbose, costs off)
-UPDATE ft2 SET c2 = c2 + 400, c3 = c3 || '_update7' WHERE c1 % 10 = 7 RETURNING *;  -- can be pushed down
-                                                                         QUERY PLAN                                                                         
-------------------------------------------------------------------------------------------------------------------------------------------------------------
- Update on public.ft2
-   Output: c1, c2, c3, c4, c5, c6, c7, c8
-   ->  Foreign Update on public.ft2
-         Remote SQL: UPDATE "S 1"."T 1" SET c2 = (c2 + 400), c3 = (c3 || '_update7') WHERE ((("C 1" % 10) = 7)) RETURNING "C 1", c2, c3, c4, c5, c6, c7, c8
-(4 rows)
+WITH t AS (UPDATE ft2 SET c2 = c2 + 400, c3 = c3 || '_update7' WHERE c1 % 10 = 7 RETURNING *)
+SELECT * FROM t ORDER BY c1;                                                        -- can be pushed down
+                                                                             QUERY PLAN                                                                             
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Sort
+   Output: t.c1, t.c2, t.c3, t.c4, t.c5, t.c6, t.c7, t.c8
+   Sort Key: t.c1
+   CTE t
+     ->  Update on public.ft2
+           Output: ft2.c1, ft2.c2, ft2.c3, ft2.c4, ft2.c5, ft2.c6, ft2.c7, ft2.c8
+           ->  Foreign Update on public.ft2
+                 Remote SQL: UPDATE "S 1"."T 1" SET c2 = (c2 + 400), c3 = (c3 || '_update7') WHERE ((("C 1" % 10) = 7)) RETURNING "C 1", c2, c3, c4, c5, c6, c7, c8
+   ->  CTE Scan on t
+         Output: t.c1, t.c2, t.c3, t.c4, t.c5, t.c6, t.c7, t.c8
+(10 rows)
 
-UPDATE ft2 SET c2 = c2 + 400, c3 = c3 || '_update7' WHERE c1 % 10 = 7 RETURNING *;
+WITH t AS (UPDATE ft2 SET c2 = c2 + 400, c3 = c3 || '_update7' WHERE c1 % 10 = 7 RETURNING *)
+SELECT * FROM t ORDER BY c1;
   c1  | c2  |         c3         |              c4              |            c5            | c6 |     c7     | c8  
 ------+-----+--------------------+------------------------------+--------------------------+----+------------+-----
     7 | 407 | 00007_update7      | Thu Jan 08 00:00:00 1970 PST | Thu Jan 08 00:00:00 1970 | 7  | 7          | foo
@@ -4639,16 +4647,24 @@ UPDATE ft2 SET c2 = ft2.c2 + 500, c3 = ft2.c3 || '_update9', c7 = DEFAULT
 UPDATE ft2 SET c2 = ft2.c2 + 500, c3 = ft2.c3 || '_update9', c7 = DEFAULT
   FROM ft1 WHERE ft1.c1 = ft2.c2 AND ft1.c1 % 10 = 9;
 EXPLAIN (verbose, costs off)
-  DELETE FROM ft2 WHERE c1 % 10 = 5 RETURNING c1, c4;                               -- can be pushed down
-                                         QUERY PLAN                                         
---------------------------------------------------------------------------------------------
- Delete on public.ft2
-   Output: c1, c4
-   ->  Foreign Delete on public.ft2
-         Remote SQL: DELETE FROM "S 1"."T 1" WHERE ((("C 1" % 10) = 5)) RETURNING "C 1", c4
-(4 rows)
+  WITH t AS (DELETE FROM ft2 WHERE c1 % 10 = 5 RETURNING c1, c4)
+  SELECT * FROM t ORDER BY c1;                                                      -- can be pushed down
+                                             QUERY PLAN                                             
+----------------------------------------------------------------------------------------------------
+ Sort
+   Output: t.c1, t.c4
+   Sort Key: t.c1
+   CTE t
+     ->  Delete on public.ft2
+           Output: ft2.c1, ft2.c4
+           ->  Foreign Delete on public.ft2
+                 Remote SQL: DELETE FROM "S 1"."T 1" WHERE ((("C 1" % 10) = 5)) RETURNING "C 1", c4
+   ->  CTE Scan on t
+         Output: t.c1, t.c4
+(10 rows)
 
-DELETE FROM ft2 WHERE c1 % 10 = 5 RETURNING c1, c4;
+WITH t AS (DELETE FROM ft2 WHERE c1 % 10 = 5 RETURNING c1, c4)
+SELECT * FROM t ORDER BY c1;
   c1  |              c4              
 ------+------------------------------
     5 | Tue Jan 06 00:00:00 1970 PST
@@ -5909,7 +5925,8 @@ INSERT INTO ft2 (c1,c2,c3,c6) VALUES (1218, 818, 'ggg', '(--;') RETURNING *;
  1218 | 818 | ggg_trig_update |    |    | (--; | ft2        | 
 (1 row)
 
-UPDATE ft2 SET c2 = c2 + 600 WHERE c1 % 10 = 8 AND c1 < 1200 RETURNING *;
+WITH t AS (UPDATE ft2 SET c2 = c2 + 600 WHERE c1 % 10 = 8 AND c1 < 1200 RETURNING *)
+SELECT * FROM t ORDER BY c1;
   c1  | c2  |           c3           |              c4              |            c5            | c6 |     c7     | c8  
 ------+-----+------------------------+------------------------------+--------------------------+----+------------+-----
     8 | 608 | 00008_trig_update      | Fri Jan 09 00:00:00 1970 PST | Fri Jan 09 00:00:00 1970 | 8  | 8          | foo

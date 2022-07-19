@@ -247,4 +247,10 @@ typedef struct ControlFileData
  */
 #define PG_CONTROL_FILE_SIZE		8192
 
+#define CONTROLFILE_GET_OLDEDITION(control)	\
+	((control)->pg_old_version >> 16)
+
+#define CONTROLFILE_SET_OLDEDITION(control, v)	\
+	(control)->pg_old_version = ((v) << 16)
+
 #endif							/* PG_CONTROL_H */

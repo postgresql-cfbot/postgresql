@@ -2366,10 +2366,10 @@
 { oid => '1181',
   descr => 'age of a transaction ID, in transactions before current transaction',
   proname => 'age', provolatile => 's', proparallel => 'r',
-  prorettype => 'int4', proargtypes => 'xid', prosrc => 'xid_age' },
+  prorettype => 'int8', proargtypes => 'xid', prosrc => 'xid_age' },
 { oid => '3939',
   descr => 'age of a multi-transaction ID, in multi-transactions before current multi-transaction',
-  proname => 'mxid_age', provolatile => 's', prorettype => 'int4',
+  proname => 'mxid_age', provolatile => 's', prorettype => 'int8',
   proargtypes => 'xid', prosrc => 'mxid_age' },
 
 { oid => '1188',
@@ -2704,11 +2704,11 @@
   prosrc => 'bpcharlen' },
 
 { oid => '1319',
-  proname => 'xideqint4', proleakproof => 't', prorettype => 'bool',
-  proargtypes => 'xid int4', prosrc => 'xideq' },
+  proname => 'xideqint8', proleakproof => 't', prorettype => 'bool',
+  proargtypes => 'xid int8', prosrc => 'xideq' },
 { oid => '3309',
-  proname => 'xidneqint4', proleakproof => 't', prorettype => 'bool',
-  proargtypes => 'xid int4', prosrc => 'xidneq' },
+  proname => 'xidneqint8', proleakproof => 't', prorettype => 'bool',
+  proargtypes => 'xid int8', prosrc => 'xidneq' },
 
 { oid => '1326',
   proname => 'interval_div', prorettype => 'interval',

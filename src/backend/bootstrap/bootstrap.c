@@ -120,7 +120,7 @@ static const struct typinfo TypInfo[] = {
 	F_OIDIN, F_OIDOUT},
 	{"tid", TIDOID, 0, 6, false, TYPALIGN_SHORT, TYPSTORAGE_PLAIN, InvalidOid,
 	F_TIDIN, F_TIDOUT},
-	{"xid", XIDOID, 0, 4, true, TYPALIGN_INT, TYPSTORAGE_PLAIN, InvalidOid,
+	{"xid", XIDOID, 0, 8, FLOAT8PASSBYVAL, TYPALIGN_XID, TYPSTORAGE_PLAIN, InvalidOid,
 	F_XIDIN, F_XIDOUT},
 	{"cid", CIDOID, 0, 4, true, TYPALIGN_INT, TYPSTORAGE_PLAIN, InvalidOid,
 	F_CIDIN, F_CIDOUT},
@@ -221,7 +221,7 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 	argv++;
 	argc--;
 
-	while ((flag = getopt(argc, argv, "B:c:d:D:Fkr:X:-:")) != -1)
+	while ((flag = getopt(argc, argv, "B:c:d:D:Fkm:o:r:X:x:-:")) != -1)
 	{
 		switch (flag)
 		{
@@ -250,6 +250,38 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 			case 'k':
 				bootstrap_data_checksum_version = PG_DATA_CHECKSUM_VERSION;
 				break;
+			case 'm':
+				{
+					char	   *endptr;
+
+					errno = 0;
+					start_mxid = strtoull(optarg, &endptr, 0);
+
+					if (endptr == optarg || *endptr != '\0' || errno != 0 ||
+						!StartMultiXactIdIsValid(start_mxid))
+					{
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("invalid initial database cluster multixact id")));
+					}
+				}
+				break;
+			case 'o':
+				{
+					char	   *endptr;
+
+					errno = 0;
+					start_mxoff = strtoull(optarg, &endptr, 0);
+
+					if (endptr == optarg || *endptr != '\0' || errno != 0 ||
+						!StartMultiXactOffsetIsValid(start_mxoff))
+					{
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("invalid initial database cluster multixact offset")));
+					}
+				}
+				break;
 			case 'r':
 				strlcpy(OutputFileName, optarg, MAXPGPATH);
 				break;
@@ -263,6 +295,22 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 								 errmsg("-X requires a power of two value between 1 MB and 1 GB")));
 					SetConfigOption("wal_segment_size", optarg, PGC_INTERNAL,
 									PGC_S_DYNAMIC_DEFAULT);
+				}
+				break;
+			case 'x':
+				{
+					char	   *endptr;
+
+					errno = 0;
+					start_xid = strtoull(optarg, &endptr, 0);
+
+					if (endptr == optarg || *endptr != '\0' || errno != 0 ||
+						!StartTransactionIdIsValid(start_xid))
+					{
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("invalid initial database cluster xid value")));
+					}
 				}
 				break;
 			case 'c':

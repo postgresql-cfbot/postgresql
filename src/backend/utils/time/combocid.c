@@ -101,12 +101,13 @@ static CommandId GetRealCmax(CommandId combocid);
  */
 
 CommandId
-HeapTupleHeaderGetCmin(HeapTupleHeader tup)
+HeapTupleGetCmin(HeapTuple tuple)
 {
+	HeapTupleHeader tup = tuple->t_data;
 	CommandId	cid = HeapTupleHeaderGetRawCommandId(tup);
 
 	Assert(!(tup->t_infomask & HEAP_MOVED));
-	Assert(TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetXmin(tup)));
+	Assert(TransactionIdIsCurrentTransactionId(HeapTupleGetXmin(tuple)));
 
 	if (tup->t_infomask & HEAP_COMBOCID)
 		return GetRealCmin(cid);
@@ -115,8 +116,9 @@ HeapTupleHeaderGetCmin(HeapTupleHeader tup)
 }
 
 CommandId
-HeapTupleHeaderGetCmax(HeapTupleHeader tup)
+HeapTupleGetCmax(HeapTuple tuple)
 {
+	HeapTupleHeader tup = tuple->t_data;
 	CommandId	cid = HeapTupleHeaderGetRawCommandId(tup);
 
 	Assert(!(tup->t_infomask & HEAP_MOVED));
@@ -128,7 +130,7 @@ HeapTupleHeaderGetCmax(HeapTupleHeader tup)
 	 * things too much.
 	 */
 	Assert(CritSectionCount > 0 ||
-		   TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetUpdateXid(tup)));
+		   TransactionIdIsCurrentTransactionId(HeapTupleGetUpdateXidAny(tuple)));
 
 	if (tup->t_infomask & HEAP_COMBOCID)
 		return GetRealCmax(cid);
@@ -150,7 +152,7 @@ HeapTupleHeaderGetCmax(HeapTupleHeader tup)
  * changes the tuple in shared buffers.
  */
 void
-HeapTupleHeaderAdjustCmax(HeapTupleHeader tup,
+HeapTupleHeaderAdjustCmax(HeapTuple tup,
 						  CommandId *cmax,
 						  bool *iscombo)
 {
@@ -160,10 +162,10 @@ HeapTupleHeaderAdjustCmax(HeapTupleHeader tup,
 	 * Test for HeapTupleHeaderXminCommitted() first, because it's cheaper
 	 * than a TransactionIdIsCurrentTransactionId call.
 	 */
-	if (!HeapTupleHeaderXminCommitted(tup) &&
-		TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetRawXmin(tup)))
+	if (!HeapTupleHeaderXminCommitted(tup->t_data) &&
+		TransactionIdIsCurrentTransactionId(HeapTupleGetRawXmin(tup)))
 	{
-		CommandId	cmin = HeapTupleHeaderGetCmin(tup);
+		CommandId	cmin = HeapTupleGetCmin(tup);
 
 		*cmax = GetComboCommandId(cmin, *cmax);
 		*iscombo = true;

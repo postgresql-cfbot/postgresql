@@ -298,11 +298,11 @@ typedef struct _tableInfo
 	bool		rowsec;			/* is row security enabled? */
 	bool		forcerowsec;	/* is row security forced? */
 	bool		hasoids;		/* does it have OIDs? */
-	uint32		frozenxid;		/* table's relfrozenxid */
-	uint32		minmxid;		/* table's relminmxid */
+	uint64		frozenxid;		/* table's relfrozenxid */
+	uint64		minmxid;		/* table's relminmxid */
 	Oid			toast_oid;		/* toast table's OID, or 0 if none */
-	uint32		toast_frozenxid;	/* toast table's relfrozenxid, if any */
-	uint32		toast_minmxid;	/* toast table's relminmxid */
+	uint64		toast_frozenxid;	/* toast table's relfrozenxid, if any */
+	uint64		toast_minmxid;	/* toast table's relminmxid */
 	int			ncheck;			/* # of CHECK expressions */
 	Oid			reltype;		/* OID of table's composite type, if any */
 	Oid			reloftype;		/* underlying type for typed table */

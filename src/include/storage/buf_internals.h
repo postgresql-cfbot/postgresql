@@ -40,10 +40,10 @@
  */
 #define BUF_REFCOUNT_ONE 1
 #define BUF_REFCOUNT_MASK ((1U << 18) - 1)
-#define BUF_USAGECOUNT_MASK 0x003C0000U
+#define BUF_USAGECOUNT_MASK 0x001C0000U
 #define BUF_USAGECOUNT_ONE (1U << 18)
 #define BUF_USAGECOUNT_SHIFT 18
-#define BUF_FLAG_MASK 0xFFC00000U
+#define BUF_FLAG_MASK 0xFFE00000U
 
 /* Get refcount and usagecount from buffer state */
 #define BUF_STATE_GET_REFCOUNT(state) ((state) & BUF_REFCOUNT_MASK)
@@ -55,6 +55,7 @@
  * Note: BM_TAG_VALID essentially means that there is a buffer hashtable
  * entry associated with the buffer's tag.
  */
+#define BM_CONVERTED			(1U << 21)	/* buffer were converted to 64xid */
 #define BM_LOCKED				(1U << 22)	/* buffer header is locked */
 #define BM_DIRTY				(1U << 23)	/* data needs writing */
 #define BM_VALID				(1U << 24)	/* data is valid */

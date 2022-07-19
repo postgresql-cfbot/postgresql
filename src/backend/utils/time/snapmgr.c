@@ -948,15 +948,15 @@ SnapshotResetXmin(void)
 
 	if (pairingheap_is_empty(&RegisteredSnapshots))
 	{
-		MyProc->xmin = InvalidTransactionId;
+		pg_atomic_write_u64(&MyProc->xmin, InvalidTransactionId);
 		return;
 	}
 
 	minSnapshot = pairingheap_container(SnapshotData, ph_node,
 										pairingheap_first(&RegisteredSnapshots));
 
-	if (TransactionIdPrecedes(MyProc->xmin, minSnapshot->xmin))
-		MyProc->xmin = minSnapshot->xmin;
+	if (TransactionIdPrecedes(pg_atomic_read_u64(&MyProc->xmin), minSnapshot->xmin))
+		pg_atomic_write_u64(&MyProc->xmin, minSnapshot->xmin);
 }
 
 /*
@@ -1109,7 +1109,7 @@ AtEOXact_Snapshot(bool isCommit, bool resetXmin)
 	if (resetXmin)
 		SnapshotResetXmin();
 
-	Assert(resetXmin || MyProc->xmin == 0);
+	Assert(resetXmin || pg_atomic_read_u64(&MyProc->xmin) == 0);
 }
 
 
@@ -1174,8 +1174,9 @@ ExportSnapshot(Snapshot snapshot)
 	 * Generate file path for the snapshot.  We start numbering of snapshots
 	 * inside the transaction from 1.
 	 */
-	snprintf(path, sizeof(path), SNAPSHOT_EXPORT_DIR "/%08X-%08X-%d",
-			 MyProc->backendId, MyProc->lxid, list_length(exportedSnapshots) + 1);
+	snprintf(path, sizeof(path), SNAPSHOT_EXPORT_DIR "/%08X-%08X%08X-%d",
+			 MyProc->backendId, (uint32) (MyProc->lxid >> 32),
+			 (uint32) MyProc->lxid, list_length(exportedSnapshots) + 1);
 
 	/*
 	 * Copy the snapshot into TopTransactionContext, add it to the
@@ -1202,14 +1203,15 @@ ExportSnapshot(Snapshot snapshot)
 	 */
 	initStringInfo(&buf);
 
-	appendStringInfo(&buf, "vxid:%d/%u\n", MyProc->backendId, MyProc->lxid);
+	appendStringInfo(&buf, "vxid:%d/%llu\n", MyProc->backendId,
+					 (unsigned long long) MyProc->lxid);
 	appendStringInfo(&buf, "pid:%d\n", MyProcPid);
 	appendStringInfo(&buf, "dbid:%u\n", MyDatabaseId);
 	appendStringInfo(&buf, "iso:%d\n", XactIsoLevel);
 	appendStringInfo(&buf, "ro:%d\n", XactReadOnly);
 
-	appendStringInfo(&buf, "xmin:%u\n", snapshot->xmin);
-	appendStringInfo(&buf, "xmax:%u\n", snapshot->xmax);
+	appendStringInfo(&buf, "xmin:%llu\n", (unsigned long long) snapshot->xmin);
+	appendStringInfo(&buf, "xmax:%llu\n", (unsigned long long) snapshot->xmax);
 
 	/*
 	 * We must include our own top transaction ID in the top-xid data, since
@@ -1226,9 +1228,10 @@ ExportSnapshot(Snapshot snapshot)
 				 TransactionIdPrecedes(topXid, snapshot->xmax)) ? 1 : 0;
 	appendStringInfo(&buf, "xcnt:%d\n", snapshot->xcnt + addTopXid);
 	for (i = 0; i < snapshot->xcnt; i++)
-		appendStringInfo(&buf, "xip:%u\n", snapshot->xip[i]);
+		appendStringInfo(&buf, "xip:%llu\n",
+						 (unsigned long long) snapshot->xip[i]);
 	if (addTopXid)
-		appendStringInfo(&buf, "xip:%u\n", topXid);
+		appendStringInfo(&buf, "xip:%llu\n", (unsigned long long) topXid);
 
 	/*
 	 * Similarly, we add our subcommitted child XIDs to the subxid data. Here,
@@ -1242,9 +1245,11 @@ ExportSnapshot(Snapshot snapshot)
 		appendStringInfoString(&buf, "sof:0\n");
 		appendStringInfo(&buf, "sxcnt:%d\n", snapshot->subxcnt + nchildren);
 		for (i = 0; i < snapshot->subxcnt; i++)
-			appendStringInfo(&buf, "sxp:%u\n", snapshot->subxip[i]);
+			appendStringInfo(&buf, "sxp:%llu\n",
+							 (unsigned long long) snapshot->subxip[i]);
 		for (i = 0; i < nchildren; i++)
-			appendStringInfo(&buf, "sxp:%u\n", children[i]);
+			appendStringInfo(&buf, "sxp:%llu\n",
+							 (unsigned long long) children[i]);
 	}
 	appendStringInfo(&buf, "rec:%u\n", snapshot->takenDuringRecovery);
 
@@ -1347,7 +1352,7 @@ parseXidFromText(const char *prefix, char **s, const char *filename)
 				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 				 errmsg("invalid snapshot data in file \"%s\"", filename)));
 	ptr += prefixlen;
-	if (sscanf(ptr, "%u", &val) != 1)
+	if (sscanf(ptr, "%" INT64_MODIFIER "u", &val) != 1)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 				 errmsg("invalid snapshot data in file \"%s\"", filename)));
@@ -1372,7 +1377,7 @@ parseVxidFromText(const char *prefix, char **s, const char *filename,
 				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 				 errmsg("invalid snapshot data in file \"%s\"", filename)));
 	ptr += prefixlen;
-	if (sscanf(ptr, "%d/%u", &vxid->backendId, &vxid->localTransactionId) != 2)
+	if (sscanf(ptr, "%d/%" INT64_MODIFIER "u", &vxid->backendId, &vxid->localTransactionId) != 2)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 				 errmsg("invalid snapshot data in file \"%s\"", filename)));
@@ -1831,7 +1836,7 @@ TransactionIdLimitedForOldSnapshots(TransactionId recentXmin,
 	 */
 	if (old_snapshot_threshold == 0)
 	{
-		if (TransactionIdPrecedes(latest_xmin, MyProc->xmin)
+		if (TransactionIdPrecedes(latest_xmin, pg_atomic_read_u64(&MyProc->xmin))
 			&& TransactionIdFollows(latest_xmin, xlimit))
 			xlimit = latest_xmin;
 

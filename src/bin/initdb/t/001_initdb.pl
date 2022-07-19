@@ -138,4 +138,90 @@ command_fails(
 	],
 	'fails for invalid option combination');
 
+# Set non-standard initial mxid/mxoff/xid.
+command_fails_like(
+	[ 'initdb', '-m', '9223372036854775807', $datadir ],
+	qr/initdb: error: invalid initial database cluster multixact id/,
+	'fails for invalid initial database cluster multixact id');
+command_fails_like(
+	[ 'initdb', '-o', '9223372036854775807', $datadir ],
+	qr/initdb: error: invalid initial database cluster multixact offset/,
+	'fails for invalid initial database cluster multixact offset');
+command_fails_like(
+	[ 'initdb', '-x', '9223372036854775807', $datadir ],
+	qr/initdb: error: invalid value for initial database cluster xid/,
+	'fails for invalid initial database cluster xid');
+
+command_fails_like(
+	[ 'initdb', '-m', '0x10000000000000000', $datadir ],
+	qr/initdb: error: invalid initial database cluster multixact id/,
+	'fails for invalid initial database cluster multixact id');
+command_fails_like(
+	[ 'initdb', '-o', '0x10000000000000000', $datadir ],
+	qr/initdb: error: invalid initial database cluster multixact offset/,
+	'fails for invalid initial database cluster multixact offset');
+command_fails_like(
+	[ 'initdb', '-x', '0x10000000000000000', $datadir ],
+	qr/initdb: error: invalid value for initial database cluster xid/,
+	'fails for invalid initial database cluster xid');
+
+command_fails_like(
+	[ 'initdb', '-m', 'seven', $datadir ],
+	qr/initdb: error: invalid initial database cluster multixact id/,
+	'fails for invalid initial database cluster multixact id');
+command_fails_like(
+	[ 'initdb', '-o', 'seven', $datadir ],
+	qr/initdb: error: invalid initial database cluster multixact offset/,
+	'fails for invalid initial database cluster multixact offset');
+command_fails_like(
+	[ 'initdb', '-x', 'seven', $datadir ],
+	qr/initdb: error: invalid value for initial database cluster xid/,
+	'fails for invalid initial database cluster xid');
+
+command_checks_all(
+	[ 'initdb', '-m', '65535', "$tempdir/data-m65535" ],
+	0,
+	[qr/selecting initial multixact id ... 65535/],
+	[],
+	'selecting initial multixact id');
+command_checks_all(
+	[ 'initdb', '-o', '65535', "$tempdir/data-o65535" ],
+	0,
+	[qr/selecting initial multixact offset ... 65535/],
+	[],
+	'selecting initial multixact offset');
+command_checks_all(
+	[ 'initdb', '-x', '65535', "$tempdir/data-x65535" ],
+	0,
+	[qr/selecting initial xid ... 65535/],
+	[],
+	'selecting initial xid');
+
+# Setup new cluster with given mxid/mxoff/xid.
+my $node;
+my $result;
+
+$node = PostgreSQL::Test::Cluster->new('test-mxid');
+$node->init(extra => ['-m', '16777215']); # 0xFFFFFF
+$node->start;
+$result = $node->safe_psql('postgres', "SELECT next_multixact_id FROM pg_control_checkpoint();");
+ok($result >= 16777215, 'setup cluster with given mxid');
+$node->stop;
+
+$node = PostgreSQL::Test::Cluster->new('test-mxoff');
+$node->init(extra => ['-o', '16777215']); # 0xFFFFFF
+$node->start;
+$result = $node->safe_psql('postgres', "SELECT next_multi_offset FROM pg_control_checkpoint();");
+ok($result >= 16777215, 'setup cluster with given mxoff');
+$node->stop;
+
+$node = PostgreSQL::Test::Cluster->new('test-xid');
+$node->init(extra => ['-x', '16777215']); # 0xFFFFFF
+$node->start;
+$result = $node->safe_psql('postgres', "SELECT txid_current();");
+ok($result >= 16777215, 'setup cluster with given xid - check 1');
+$result = $node->safe_psql('postgres', "SELECT oldest_xid FROM pg_control_checkpoint();");
+ok($result >= 16777215, 'setup cluster with given xid - check 2');
+$node->stop;
+
 done_testing();

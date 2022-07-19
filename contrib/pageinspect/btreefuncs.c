@@ -105,6 +105,9 @@ GetBTPageStatistics(BlockNumber blkno, Buffer buffer, BTPageStat *stat)
 
 	stat->page_size = PageGetPageSize(page);
 
+	stat->btpo_prev = opaque->btpo_prev;
+	stat->btpo_level = opaque->btpo_level;
+
 	/* page type (flags) */
 	if (P_ISDELETED(opaque))
 	{
@@ -125,13 +128,19 @@ GetBTPageStatistics(BlockNumber blkno, Buffer buffer, BTPageStat *stat)
 		{
 			FullTransactionId safexid = BTPageGetDeleteXid(page);
 
-			elog(DEBUG2, "deleted page from block %u has safexid %u:%u",
-				 blkno, EpochFromFullTransactionId(safexid),
-				 XidFromFullTransactionId(safexid));
+			elog(DEBUG2, "deleted page from block %u has safexid %llu",
+				 blkno, (unsigned long long) XidFromFullTransactionId(safexid));
 		}
 		else
+		{
+			ShortTransactionId safexid = BTP_GET_XACT(opaque);
+
+			stat->btpo_prev = 0;
+			stat->btpo_level = 0;
+
 			elog(DEBUG2, "deleted page from block %u has safexid %u",
-				 blkno, opaque->btpo_level);
+				 blkno, safexid);
+		}
 
 		/* Don't interpret BTDeletedPageData as index tuples */
 		maxoff = InvalidOffsetNumber;
@@ -146,9 +155,7 @@ GetBTPageStatistics(BlockNumber blkno, Buffer buffer, BTPageStat *stat)
 		stat->type = 'i';
 
 	/* btpage opaque data */
-	stat->btpo_prev = opaque->btpo_prev;
 	stat->btpo_next = opaque->btpo_next;
-	stat->btpo_level = opaque->btpo_level;
 	stat->btpo_flags = opaque->btpo_flags;
 	stat->btpo_cycleid = opaque->btpo_cycleid;
 

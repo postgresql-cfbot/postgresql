@@ -14,8 +14,8 @@
 
 #include "access/transam.h"
 
-#define DatumGetFullTransactionId(X) (FullTransactionIdFromU64(DatumGetUInt64(X)))
-#define FullTransactionIdGetDatum(X) (UInt64GetDatum(U64FromFullTransactionId(X)))
+#define DatumGetFullTransactionId(X) (FullTransactionIdFromXid(DatumGetUInt64(X)))
+#define FullTransactionIdGetDatum(X) (UInt64GetDatum(XidFromFullTransactionId(X)))
 #define PG_GETARG_FULLTRANSACTIONID(X) DatumGetFullTransactionId(PG_GETARG_DATUM(X))
 #define PG_RETURN_FULLTRANSACTIONID(X) return FullTransactionIdGetDatum(X)
 

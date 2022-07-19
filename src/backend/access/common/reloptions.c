@@ -262,58 +262,6 @@ static relopt_int intRelOpts[] =
 	},
 	{
 		{
-			"autovacuum_freeze_min_age",
-			"Minimum age at which VACUUM should freeze a table row, for autovacuum",
-			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
-			ShareUpdateExclusiveLock
-		},
-		-1, 0, 1000000000
-	},
-	{
-		{
-			"autovacuum_multixact_freeze_min_age",
-			"Minimum multixact age at which VACUUM should freeze a row multixact's, for autovacuum",
-			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
-			ShareUpdateExclusiveLock
-		},
-		-1, 0, 1000000000
-	},
-	{
-		{
-			"autovacuum_freeze_max_age",
-			"Age at which to autovacuum a table to prevent transaction ID wraparound",
-			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
-			ShareUpdateExclusiveLock
-		},
-		-1, 100000, 2000000000
-	},
-	{
-		{
-			"autovacuum_multixact_freeze_max_age",
-			"Multixact age at which to autovacuum a table to prevent multixact wraparound",
-			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
-			ShareUpdateExclusiveLock
-		},
-		-1, 10000, 2000000000
-	},
-	{
-		{
-			"autovacuum_freeze_table_age",
-			"Age at which VACUUM should perform a full table sweep to freeze row versions",
-			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
-			ShareUpdateExclusiveLock
-		}, -1, 0, 2000000000
-	},
-	{
-		{
-			"autovacuum_multixact_freeze_table_age",
-			"Age of multixact at which VACUUM should perform a full table sweep to freeze row versions",
-			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
-			ShareUpdateExclusiveLock
-		}, -1, 0, 2000000000
-	},
-	{
-		{
 			"log_autovacuum_min_duration",
 			"Sets the minimum execution time above which autovacuum actions will be logged",
 			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
@@ -382,7 +330,66 @@ static relopt_int intRelOpts[] =
 		},
 		-1, 0, 1024
 	},
+	/* list terminator */
+	{{NULL}}
+};
 
+static relopt_int64 int64RelOpts[] =
+{
+	{
+		{
+			"autovacuum_freeze_min_age",
+				"Minimum age at which VACUUM should freeze a table row, for autovacuum",
+				RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
+				ShareUpdateExclusiveLock
+		},
+			INT64CONST(-1), INT64CONST(0), INT64CONST(1000000000)
+	},
+	{
+		{
+			"autovacuum_multixact_freeze_min_age",
+				"Minimum multixact age at which VACUUM should freeze a row multixact's, for autovacuum",
+				RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
+				ShareUpdateExclusiveLock
+		},
+			INT64CONST(-1), INT64CONST(0), INT64CONST(1000000000)
+	},
+	{
+		{
+			"autovacuum_freeze_max_age",
+				"Age at which to autovacuum a table to prevent transaction ID wraparound",
+				RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
+				ShareUpdateExclusiveLock
+		},
+			INT64CONST(-1), INT64CONST(100000), INT64CONST(2000000000)
+	},
+	{
+		{
+			"autovacuum_multixact_freeze_max_age",
+				"Multixact age at which to autovacuum a table to prevent multixact wraparound",
+				RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
+				ShareUpdateExclusiveLock
+		},
+			INT64CONST(-1), INT64CONST(10000), INT64CONST(2000000000)
+	},
+	{
+		{
+			"autovacuum_freeze_table_age",
+				"Age at which VACUUM should perform a full table sweep to freeze row versions",
+				RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
+				ShareUpdateExclusiveLock
+		},
+			INT64CONST(-1), INT64CONST(0), INT64CONST(2000000000)
+	},
+	{
+		{
+			"autovacuum_multixact_freeze_table_age",
+				"Age of multixact at which VACUUM should perform a full table sweep to freeze row versions",
+				RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
+				ShareUpdateExclusiveLock
+		},
+			INT64CONST(-1), INT64CONST(0), INT64CONST(2000000000)
+	},
 	/* list terminator */
 	{{NULL}}
 };
@@ -597,6 +604,12 @@ initialize_reloptions(void)
 								   intRelOpts[i].gen.lockmode));
 		j++;
 	}
+	for (i = 0; int64RelOpts[i].gen.name; i++)
+	{
+		Assert(DoLockModesConflict(int64RelOpts[i].gen.lockmode,
+								   int64RelOpts[i].gen.lockmode));
+		j++;
+	}
 	for (i = 0; realRelOpts[i].gen.name; i++)
 	{
 		Assert(DoLockModesConflict(realRelOpts[i].gen.lockmode,
@@ -635,6 +648,14 @@ initialize_reloptions(void)
 	{
 		relOpts[j] = &intRelOpts[i].gen;
 		relOpts[j]->type = RELOPT_TYPE_INT;
+		relOpts[j]->namelen = strlen(relOpts[j]->name);
+		j++;
+	}
+
+	for (i = 0; int64RelOpts[i].gen.name; i++)
+	{
+		relOpts[j] = &int64RelOpts[i].gen;
+		relOpts[j]->type = RELOPT_TYPE_INT64;
 		relOpts[j]->namelen = strlen(relOpts[j]->name);
 		j++;
 	}
@@ -794,6 +815,9 @@ allocate_reloption(bits32 kinds, int type, const char *name, const char *desc,
 		case RELOPT_TYPE_INT:
 			size = sizeof(relopt_int);
 			break;
+		case RELOPT_TYPE_INT64:
+			size = sizeof(relopt_int64);
+			break;
 		case RELOPT_TYPE_REAL:
 			size = sizeof(relopt_real);
 			break;
@@ -946,6 +970,25 @@ init_real_reloption(bits32 kinds, const char *name, const char *desc,
 	newoption->max = max_val;
 
 	return newoption;
+}
+
+/*
+ * add_int64_reloption
+ *		Add a new 64-bit integer reloption
+ */
+void
+add_int64_reloption(bits32 kinds, char *name, char *desc, int64 default_val,
+					int64 min_val, int64 max_val, LOCKMODE lockmode)
+{
+	relopt_int64 *newoption;
+
+	newoption = (relopt_int64 *) allocate_reloption(kinds, RELOPT_TYPE_INT64,
+													name, desc, lockmode);
+	newoption->default_val = default_val;
+	newoption->min = min_val;
+	newoption->max = max_val;
+
+	add_reloption((relopt_gen *) newoption);
 }
 
 /*
@@ -1619,6 +1662,27 @@ parse_one_reloption(relopt_value *option, char *text_str, int text_len,
 									   optint->min, optint->max)));
 			}
 			break;
+		case RELOPT_TYPE_INT64:
+			{
+				relopt_int64 *optint = (relopt_int64 *) option->gen;
+
+				parsed = parse_int64(value, &option->values.int64_val, 0, NULL);
+				if (validate && !parsed)
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							 errmsg("invalid value for 64-bit integer option \"%s\": %s",
+									option->gen->name, value)));
+				if (validate && (option->values.int64_val < optint->min ||
+								 option->values.int64_val > optint->max))
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							 errmsg("value %s out of bounds for option \"%s\"",
+									value, option->gen->name),
+							 errdetail("Valid values are between \"%lld"
+									   "\" and \"%lld\".",
+									   (long long ) optint->min, (long long) optint->max)));
+			}
+			break;
 		case RELOPT_TYPE_REAL:
 			{
 				relopt_real *optreal = (relopt_real *) option->gen;
@@ -1774,6 +1838,11 @@ fillRelOptions(void *rdopts, Size basesize,
 							options[i].values.int_val :
 							((relopt_int *) options[i].gen)->default_val;
 						break;
+					case RELOPT_TYPE_INT64:
+						*(int64 *) itempos = options[i].isset ?
+							options[i].values.int64_val :
+							((relopt_int64 *) options[i].gen)->default_val;
+						break;
 					case RELOPT_TYPE_REAL:
 						*(double *) itempos = options[i].isset ?
 							options[i].values.real_val :
@@ -1851,17 +1920,17 @@ default_reloptions(Datum reloptions, bool validate, relopt_kind kind)
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, analyze_threshold)},
 		{"autovacuum_vacuum_cost_limit", RELOPT_TYPE_INT,
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, vacuum_cost_limit)},
-		{"autovacuum_freeze_min_age", RELOPT_TYPE_INT,
+		{"autovacuum_freeze_min_age", RELOPT_TYPE_INT64,
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, freeze_min_age)},
-		{"autovacuum_freeze_max_age", RELOPT_TYPE_INT,
+		{"autovacuum_freeze_max_age", RELOPT_TYPE_INT64,
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, freeze_max_age)},
-		{"autovacuum_freeze_table_age", RELOPT_TYPE_INT,
+		{"autovacuum_freeze_table_age", RELOPT_TYPE_INT64,
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, freeze_table_age)},
-		{"autovacuum_multixact_freeze_min_age", RELOPT_TYPE_INT,
+		{"autovacuum_multixact_freeze_min_age", RELOPT_TYPE_INT64,
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, multixact_freeze_min_age)},
-		{"autovacuum_multixact_freeze_max_age", RELOPT_TYPE_INT,
+		{"autovacuum_multixact_freeze_max_age", RELOPT_TYPE_INT64,
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, multixact_freeze_max_age)},
-		{"autovacuum_multixact_freeze_table_age", RELOPT_TYPE_INT,
+		{"autovacuum_multixact_freeze_table_age", RELOPT_TYPE_INT64,
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, multixact_freeze_table_age)},
 		{"log_autovacuum_min_duration", RELOPT_TYPE_INT,
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, log_min_duration)},

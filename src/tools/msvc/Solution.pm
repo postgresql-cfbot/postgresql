@@ -462,6 +462,7 @@ sub GenerateFiles
 		PACKAGE_TARNAME     => lc qq{"$package_name"},
 		PACKAGE_URL         => qq{"$package_url"},
 		PACKAGE_VERSION     => qq{"$package_version"},
+		XID_IS_64BIT		=> 1,
 		PG_INT128_TYPE      => undef,
 		PG_INT64_TYPE       => 'long long int',
 		PG_KRB_SRVNAM       => qq{"postgres"},

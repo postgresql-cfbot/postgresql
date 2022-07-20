@@ -6118,6 +6118,11 @@
   proname => 'pg_settings_get_flags', provolatile => 's', prorettype => '_text',
   proargtypes => 'text', prosrc => 'pg_settings_get_flags' },
 
+{ oid => '9956', descr => 'normalize value to the unit of specified GUC',
+  proname => 'pg_normalize_config_value', proisstrict => 'f',
+  provolatile => 's', prorettype => 'text', proargtypes => 'text text',
+  proargnames => '{varname,value}', prosrc => 'pg_normalize_config_value' },
+
 { oid => '3329', descr => 'show config file settings',
   proname => 'pg_show_all_file_settings', prorows => '1000', proretset => 't',
   provolatile => 'v', prorettype => 'record', proargtypes => '',

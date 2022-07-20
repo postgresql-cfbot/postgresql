@@ -476,7 +476,7 @@
 					# in all cases.
 
 # These are relevant when logging to syslog:
-#syslog_facility = 'LOCAL0'
+#syslog_facility = 'local0'
 #syslog_ident = 'postgres'
 #syslog_sequence_numbers = on
 #syslog_split_messages = on
@@ -709,7 +709,7 @@
 
 # - Locale and Formatting -
 
-#datestyle = 'iso, mdy'
+#datestyle = 'ISO, MDY'
 #intervalstyle = 'postgres'
 #timezone = 'GMT'
 #timezone_abbreviations = 'Default'     # Select the set of available time zone
@@ -721,7 +721,7 @@
 					# share/timezonesets/.
 #extra_float_digits = 1			# min -15, max 3; any value >0 actually
 					# selects precise output mode
-#client_encoding = sql_ascii		# actually, defaults to database
+#client_encoding = SQL_ASCII		# actually, defaults to database
 					# encoding
 
 # These settings are initialized by initdb, but they can be changed.

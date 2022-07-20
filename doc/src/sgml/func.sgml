@@ -24978,6 +24978,10 @@ SELECT currval(pg_get_serial_sequence('sometable', 'id'));
         Only the most useful flags are exposed, as of the following:
         <simplelist>
          <member>
+          <literal>DYNAMIC_DEFAULT</literal>: parameters whose default varies by
+          platform, or compile-time options, or initdb.
+         </member>
+         <member>
           <literal>EXPLAIN</literal>: parameters included in
           <command>EXPLAIN (SETTINGS)</command> commands.
          </member>

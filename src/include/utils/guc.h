@@ -221,14 +221,14 @@ typedef enum
 
 #define GUC_UNIT_KB				0x1000	/* value is in kilobytes */
 #define GUC_UNIT_BLOCKS			0x2000	/* value is in blocks */
-#define GUC_UNIT_XBLOCKS		0x3000	/* value is in xlog blocks */
+#define GUC_UNIT_XBLOCKS		0x3000	/* value is in xlog blocks */ //
 #define GUC_UNIT_MB				0x4000	/* value is in megabytes */
 #define GUC_UNIT_BYTE			0x8000	/* value is in bytes */
 #define GUC_UNIT_MEMORY			0xF000	/* mask for size-related units */
 
 #define GUC_UNIT_MS			   0x10000	/* value is in milliseconds */
 #define GUC_UNIT_S			   0x20000	/* value is in seconds */
-#define GUC_UNIT_MIN		   0x30000	/* value is in minutes */
+#define GUC_UNIT_MIN		   0x30000	/* value is in minutes */ //
 #define GUC_UNIT_TIME		   0xF0000	/* mask for time-related units */
 
 #define GUC_EXPLAIN			  0x100000	/* include in explain */
@@ -238,6 +238,8 @@ typedef enum
  * available via 'postgres -C' if the server is not running.
  */
 #define GUC_RUNTIME_COMPUTED  0x200000
+
+#define GUC_DYNAMIC_DEFAULT		  0x400000	/* default value is dynamic */
 
 #define GUC_UNIT				(GUC_UNIT_MEMORY | GUC_UNIT_TIME)
 

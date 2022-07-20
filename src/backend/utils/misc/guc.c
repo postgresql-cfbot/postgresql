@@ -1435,7 +1435,7 @@ static struct config_bool ConfigureNamesBool[] =
 		{"debug_assertions", PGC_INTERNAL, PRESET_OPTIONS,
 			gettext_noop("Shows whether the running server has assertion checks enabled."),
 			NULL,
-			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE | GUC_DYNAMIC_DEFAULT
 		},
 		&assert_enabled,
 #ifdef USE_ASSERT_CHECKING
@@ -1611,7 +1611,8 @@ static struct config_bool ConfigureNamesBool[] =
 	{
 		{"update_process_title", PGC_SUSET, PROCESS_TITLE,
 			gettext_noop("Updates the process title to show the active SQL command."),
-			gettext_noop("Enables updating of the process title every time a new SQL command is received by the server.")
+			gettext_noop("Enables updating of the process title every time a new SQL command is received by the server."),
+			GUC_DYNAMIC_DEFAULT
 		},
 		&update_process_title,
 #ifdef WIN32
@@ -2362,6 +2363,7 @@ static struct config_int ConfigureNamesInt[] =
 			gettext_noop("Sets the maximum number of concurrent connections."),
 			NULL
 		},
+
 		&MaxConnections,
 		100, 1, MAX_BACKENDS,
 		check_maxconnections, NULL, NULL
@@ -2397,7 +2399,7 @@ static struct config_int ConfigureNamesInt[] =
 		{"shared_buffers", PGC_POSTMASTER, RESOURCES_MEM,
 			gettext_noop("Sets the number of shared memory buffers used by the server."),
 			NULL,
-			GUC_UNIT_BLOCKS
+			GUC_UNIT_BLOCKS | GUC_DYNAMIC_DEFAULT
 		},
 		&NBuffers,
 		16384, 16, INT_MAX / 2,
@@ -3142,7 +3144,7 @@ static struct config_int ConfigureNamesInt[] =
 			RESOURCES_ASYNCHRONOUS,
 			gettext_noop("Number of simultaneous requests that can be handled efficiently by the disk subsystem."),
 			NULL,
-			GUC_EXPLAIN
+			GUC_EXPLAIN|GUC_DYNAMIC_DEFAULT
 		},
 		&effective_io_concurrency,
 #ifdef USE_PREFETCH
@@ -3160,7 +3162,7 @@ static struct config_int ConfigureNamesInt[] =
 			RESOURCES_ASYNCHRONOUS,
 			gettext_noop("A variant of effective_io_concurrency that is used for maintenance work."),
 			NULL,
-			GUC_EXPLAIN
+			GUC_EXPLAIN|GUC_DYNAMIC_DEFAULT
 		},
 		&maintenance_io_concurrency,
 #ifdef USE_PREFETCH
@@ -3327,9 +3329,11 @@ static struct config_int ConfigureNamesInt[] =
 			gettext_noop("Shows the size of write ahead log segments."),
 			NULL,
 			GUC_UNIT_BYTE | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE | GUC_RUNTIME_COMPUTED
+
 		},
 		&wal_segment_size,
 		DEFAULT_XLOG_SEG_SIZE,
+
 		WalSegMinSize,
 		WalSegMaxSize,
 		NULL, NULL, NULL
@@ -3523,6 +3527,7 @@ static struct config_int ConfigureNamesInt[] =
 			GUC_UNIT_BLOCKS | GUC_EXPLAIN,
 		},
 		&effective_cache_size,
+
 		DEFAULT_EFFECTIVE_CACHE_SIZE, 1, INT_MAX,
 		NULL, NULL, NULL
 	},
@@ -3620,7 +3625,7 @@ static struct config_int ConfigureNamesInt[] =
 		{"debug_discard_caches", PGC_SUSET, DEVELOPER_OPTIONS,
 			gettext_noop("Aggressively flush system caches for debugging purposes."),
 			NULL,
-			GUC_NOT_IN_SAMPLE
+			GUC_NOT_IN_SAMPLE | GUC_DYNAMIC_DEFAULT
 		},
 		&debug_discard_caches,
 #ifdef DISCARD_CACHES_ENABLED
@@ -4447,7 +4452,7 @@ static struct config_string ConfigureNamesString[] =
 		{"unix_socket_directories", PGC_POSTMASTER, CONN_AUTH_SETTINGS,
 			gettext_noop("Sets the directories where Unix-domain sockets will be created."),
 			NULL,
-			GUC_LIST_INPUT | GUC_LIST_QUOTE | GUC_SUPERUSER_ONLY
+			GUC_LIST_INPUT | GUC_LIST_QUOTE | GUC_SUPERUSER_ONLY | GUC_DYNAMIC_DEFAULT
 		},
 		&Unix_socket_directories,
 #ifdef HAVE_UNIX_SOCKETS
@@ -4532,7 +4537,7 @@ static struct config_string ConfigureNamesString[] =
 		{"ssl_library", PGC_INTERNAL, PRESET_OPTIONS,
 			gettext_noop("Shows the name of the SSL library."),
 			NULL,
-			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE | GUC_DYNAMIC_DEFAULT
 		},
 		&ssl_library,
 #ifdef USE_SSL
@@ -4618,7 +4623,7 @@ static struct config_string ConfigureNamesString[] =
 		{"ssl_ciphers", PGC_SIGHUP, CONN_AUTH_SSL,
 			gettext_noop("Sets the list of allowed SSL ciphers."),
 			NULL,
-			GUC_SUPERUSER_ONLY
+			GUC_SUPERUSER_ONLY | GUC_DYNAMIC_DEFAULT
 		},
 		&SSLCipherSuites,
 #ifdef USE_OPENSSL
@@ -4633,7 +4638,7 @@ static struct config_string ConfigureNamesString[] =
 		{"ssl_ecdh_curve", PGC_SIGHUP, CONN_AUTH_SSL,
 			gettext_noop("Sets the curve to use for ECDH."),
 			NULL,
-			GUC_SUPERUSER_ONLY
+			GUC_SUPERUSER_ONLY | GUC_DYNAMIC_DEFAULT
 		},
 		&SSLECDHCurve,
 #ifdef USE_SSL
@@ -4871,7 +4876,8 @@ static struct config_enum ConfigureNamesEnum[] =
 	{
 		{"syslog_facility", PGC_SIGHUP, LOGGING_WHERE,
 			gettext_noop("Sets the syslog \"facility\" to be used when syslog enabled."),
-			NULL
+			NULL,
+			GUC_DYNAMIC_DEFAULT
 		},
 		&syslog_facility,
 #ifdef HAVE_SYSLOG
@@ -4984,7 +4990,8 @@ static struct config_enum ConfigureNamesEnum[] =
 	{
 		{"dynamic_shared_memory_type", PGC_POSTMASTER, RESOURCES_MEM,
 			gettext_noop("Selects the dynamic shared memory implementation used."),
-			NULL
+			NULL,
+			GUC_DYNAMIC_DEFAULT
 		},
 		&dynamic_shared_memory_type,
 		DEFAULT_DYNAMIC_SHARED_MEMORY_TYPE, dynamic_shared_memory_options,
@@ -5008,6 +5015,7 @@ static struct config_enum ConfigureNamesEnum[] =
 		},
 		&sync_method,
 		DEFAULT_SYNC_METHOD, sync_method_options,
+
 		NULL, assign_xlog_sync_method, NULL
 	},
 
@@ -7530,6 +7538,76 @@ parse_and_validate_value(struct config_generic *record,
 	return true;
 }
 
+/*
+ * Helper function for pg_normalize_config_value().
+ * Makes a palloced copy of src then link val to it.
+ * DO NOT destroy val while dst is in use.
+ */
+static struct config_generic *
+copy_config_and_set_value(struct config_generic *src, union config_var_val *val)
+{
+	struct config_generic *dst;
+
+#define CREATE_CONFIG_COPY(dst, src, t)	\
+	dst = palloc(sizeof(struct t));				\
+	*(struct t *) dst = *(struct t *) src;		\
+	
+	switch (src->vartype)
+	{
+		case PGC_BOOL:
+			CREATE_CONFIG_COPY(dst, src, config_bool);
+			((struct config_bool *)dst)->variable = &val->boolval;
+			break;
+		case PGC_INT:
+			CREATE_CONFIG_COPY(dst, src, config_int);
+			((struct config_int *)dst)->variable = &val->intval;
+			break;
+		case PGC_REAL:
+			CREATE_CONFIG_COPY(dst, src, config_real);
+			((struct config_real *)dst)->variable = &val->realval;
+			break;
+		case PGC_STRING:
+			CREATE_CONFIG_COPY(dst, src, config_string);
+			((struct config_string *)dst)->variable = &val->stringval;
+			break;
+		case PGC_ENUM:
+			CREATE_CONFIG_COPY(dst, src, config_enum);
+			((struct config_enum *)dst)->variable = &val->enumval;
+			break;
+	}
+
+	return dst;
+}
+
+
+/*
+ * Normalize given value according to the specified GUC variable
+ */
+Datum
+pg_normalize_config_value(PG_FUNCTION_ARGS)
+{
+	char   *name = "";
+	char   *value = "";
+	struct config_generic *record;
+	char   *result;
+	void   *extra;
+	union config_var_val altval;
+
+	if (!PG_ARGISNULL(0))
+		name = text_to_cstring(PG_GETARG_TEXT_PP(0));
+	if (!PG_ARGISNULL(1))
+		value = text_to_cstring(PG_GETARG_TEXT_PP(1));
+
+	record = find_option(name, true, false, ERROR);
+
+	parse_and_validate_value(record, name, value, PGC_S_TEST, WARNING,
+							 &altval, &extra);
+	record = copy_config_and_set_value(record, &altval);
+
+	result = _ShowOption(record, true);
+
+	PG_RETURN_TEXT_P(cstring_to_text(result));
+}
 
 /*
  * set_config_option: sets option `name' to given value.
@@ -10021,7 +10099,7 @@ GetConfigOptionByName(const char *name, const char **varname, bool missing_ok)
 Datum
 pg_settings_get_flags(PG_FUNCTION_ARGS)
 {
-#define MAX_GUC_FLAGS	5
+#define MAX_GUC_FLAGS	6
 	char	   *varname = TextDatumGetCString(PG_GETARG_DATUM(0));
 	struct config_generic *record;
 	int			cnt = 0;
@@ -10034,6 +10112,8 @@ pg_settings_get_flags(PG_FUNCTION_ARGS)
 	if (record == NULL)
 		PG_RETURN_NULL();
 
+	if (record->flags & GUC_DYNAMIC_DEFAULT)
+		flags[cnt++] = CStringGetTextDatum("DYNAMIC_DEFAULT");
 	if (record->flags & GUC_EXPLAIN)
 		flags[cnt++] = CStringGetTextDatum("EXPLAIN");
 	if (record->flags & GUC_NO_RESET_ALL)

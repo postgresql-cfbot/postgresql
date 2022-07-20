@@ -239,6 +239,8 @@ typedef enum
  */
 #define GUC_RUNTIME_COMPUTED  0x200000
 
+#define GUC_NO_RESET		  0x400000	/* not support RESET and save */
+
 #define GUC_UNIT				(GUC_UNIT_MEMORY | GUC_UNIT_TIME)
 
 

@@ -1752,7 +1752,7 @@ static struct config_bool ConfigureNamesBool[] =
 		{"transaction_read_only", PGC_USERSET, CLIENT_CONN_STATEMENT,
 			gettext_noop("Sets the current transaction's read-only status."),
 			NULL,
-			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+			GUC_NO_RESET | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
 		},
 		&XactReadOnly,
 		false,
@@ -1771,7 +1771,7 @@ static struct config_bool ConfigureNamesBool[] =
 		{"transaction_deferrable", PGC_USERSET, CLIENT_CONN_STATEMENT,
 			gettext_noop("Whether to defer a read-only serializable transaction until it can be executed with no possible serialization failures."),
 			NULL,
-			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+			GUC_NO_RESET | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
 		},
 		&XactDeferrable,
 		false,
@@ -4808,7 +4808,7 @@ static struct config_enum ConfigureNamesEnum[] =
 		{"transaction_isolation", PGC_USERSET, CLIENT_CONN_STATEMENT,
 			gettext_noop("Sets the current transaction's isolation level."),
 			NULL,
-			GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+			GUC_NO_RESET | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
 		},
 		&XactIsoLevel,
 		XACT_READ_COMMITTED, isolation_level_options,
@@ -7841,6 +7841,17 @@ set_config_option_ext(const char *name, const char *value,
 		}
 	}
 
+	/* Disallow resetting and saving (and restoring) GUC_NO_RESET values */
+	if ((record->flags & GUC_NO_RESET) &&
+		(value == NULL || action == GUC_ACTION_SAVE))
+	{
+		ereport(elevel,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("parameter \"%s\" cannot be reset",
+						name)));
+		return 0;
+	}
+
 	/*
 	 * Should we set reset/stacked values?	(If so, the behavior is not
 	 * transactional.)	This is done either when we get a default value from
@@ -10021,7 +10032,7 @@ GetConfigOptionByName(const char *name, const char **varname, bool missing_ok)
 Datum
 pg_settings_get_flags(PG_FUNCTION_ARGS)
 {
-#define MAX_GUC_FLAGS	5
+#define MAX_GUC_FLAGS	6
 	char	   *varname = TextDatumGetCString(PG_GETARG_DATUM(0));
 	struct config_generic *record;
 	int			cnt = 0;
@@ -10036,6 +10047,8 @@ pg_settings_get_flags(PG_FUNCTION_ARGS)
 
 	if (record->flags & GUC_EXPLAIN)
 		flags[cnt++] = CStringGetTextDatum("EXPLAIN");
+	if (record->flags & GUC_NO_RESET)
+		flags[cnt++] = CStringGetTextDatum("NO_RESET");
 	if (record->flags & GUC_NO_RESET_ALL)
 		flags[cnt++] = CStringGetTextDatum("NO_RESET_ALL");
 	if (record->flags & GUC_NO_SHOW_ALL)

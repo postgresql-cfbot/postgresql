@@ -24986,6 +24986,10 @@ SELECT currval(pg_get_serial_sequence('sometable', 'id'));
           <command>SHOW ALL</command> commands.
          </member>
          <member>
+          <literal>NO_RESET</literal>: parameters do not support
+          <command>RESET</command> commands.
+         </member>
+         <member>
           <literal>NO_RESET_ALL</literal>: parameters excluded from
           <command>RESET ALL</command> commands.
          </member>

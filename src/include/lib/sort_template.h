@@ -135,7 +135,7 @@
 
 /*
  * If the user wants to be able to pass in compare functions at runtime,
- * we'll need to make that an argument of the sort and med3 functions.
+ * we'll need to make that an argument of the sort functions.
  */
 #ifdef ST_COMPARE_RUNTIME_POINTER
 /*
@@ -161,8 +161,8 @@
 
 /*
  * If the user wants to use a compare function or expression that takes an
- * extra argument, we'll need to make that an argument of the sort, compare and
- * med3 functions.
+ * extra argument, we'll need to make that an argument of the sort and compare
+ * functions.
  */
 #ifdef ST_COMPARE_ARG_TYPE
 #define ST_SORT_PROTO_ARG , ST_COMPARE_ARG_TYPE *arg
@@ -170,6 +170,11 @@
 #else
 #define ST_SORT_PROTO_ARG
 #define ST_SORT_INVOKE_ARG
+#endif
+
+/* Default input size threshold to control algorithm choice. */
+#ifndef ST_INSERTION_SORT_THRESHOLD
+#define ST_INSERTION_SORT_THRESHOLD 12
 #endif
 
 #ifdef ST_DECLARE
@@ -190,7 +195,7 @@ ST_SCOPE void ST_SORT(ST_ELEMENT_TYPE * first, size_t n
 #ifdef ST_DEFINE
 
 /* sort private helper functions */
-#define ST_MED3 ST_MAKE_NAME(ST_SORT, med3)
+#define ST_SORT_INTERNAL ST_MAKE_NAME(ST_SORT, internal)
 #define ST_SWAP ST_MAKE_NAME(ST_SORT, swap)
 #define ST_SWAPN ST_MAKE_NAME(ST_SORT, swapn)
 
@@ -202,8 +207,8 @@ ST_SCOPE void ST_SORT(ST_ELEMENT_TYPE * first, size_t n
 #endif
 
 /*
- * Create wrapper macros that know how to invoke compare, med3 and sort with
- * the right arguments.
+ * Create wrapper macros that know how to invoke compare and sort with the
+ * right arguments.
  */
 #ifdef ST_COMPARE_RUNTIME_POINTER
 #define DO_COMPARE(a_, b_) ST_COMPARE((a_), (b_) ST_SORT_INVOKE_ARG)
@@ -212,12 +217,8 @@ ST_SCOPE void ST_SORT(ST_ELEMENT_TYPE * first, size_t n
 #else
 #define DO_COMPARE(a_, b_) ST_COMPARE((a_), (b_))
 #endif
-#define DO_MED3(a_, b_, c_)												\
-	ST_MED3((a_), (b_), (c_)											\
-			ST_SORT_INVOKE_COMPARE										\
-			ST_SORT_INVOKE_ARG)
 #define DO_SORT(a_, n_)													\
-	ST_SORT((a_), (n_)													\
+	ST_SORT_INTERNAL((a_), (n_)													\
 			ST_SORT_INVOKE_ELEMENT_SIZE									\
 			ST_SORT_INVOKE_COMPARE										\
 			ST_SORT_INVOKE_ARG)
@@ -239,23 +240,6 @@ ST_SCOPE void ST_SORT(ST_ELEMENT_TYPE * first, size_t n
 #define DO_SWAP(a_, b_) DO_SWAPN((a_), (b_), element_size)
 #endif
 
-/*
- * Find the median of three values.  Currently, performance seems to be best
- * if the comparator is inlined here, but the med3 function is not inlined
- * in the qsort function.
- */
-static pg_noinline ST_ELEMENT_TYPE *
-ST_MED3(ST_ELEMENT_TYPE * a,
-		ST_ELEMENT_TYPE * b,
-		ST_ELEMENT_TYPE * c
-		ST_SORT_PROTO_COMPARE
-		ST_SORT_PROTO_ARG)
-{
-	return DO_COMPARE(a, b) < 0 ?
-		(DO_COMPARE(b, c) < 0 ? b : (DO_COMPARE(a, c) < 0 ? c : a))
-		: (DO_COMPARE(b, c) > 0 ? b : (DO_COMPARE(a, c) < 0 ? a : c));
-}
-
 static inline void
 ST_SWAP(ST_POINTER_TYPE * a, ST_POINTER_TYPE * b)
 {
@@ -273,15 +257,27 @@ ST_SWAPN(ST_POINTER_TYPE * a, ST_POINTER_TYPE * b, size_t n)
 }
 
 /*
- * Sort an array.
+ * Workhorse for ST_SORT
  */
-ST_SCOPE void
-ST_SORT(ST_ELEMENT_TYPE * data, size_t n
+static void
+ST_SORT_INTERNAL(ST_POINTER_TYPE * data, size_t n
 		ST_SORT_PROTO_ELEMENT_SIZE
 		ST_SORT_PROTO_COMPARE
 		ST_SORT_PROTO_ARG)
 {
-	ST_POINTER_TYPE *a = (ST_POINTER_TYPE *) data,
+	ST_POINTER_TYPE *a = data,
+				*left,
+				*right,
+				*e1,
+				*e2,
+				*e3,
+				*e4,
+				*e5,
+				*pivot1,
+				*pivot2,
+				*less,
+				*great,
+				*k,
 			   *pa,
 			   *pb,
 			   *pc,
@@ -290,13 +286,16 @@ ST_SORT(ST_ELEMENT_TYPE * data, size_t n
 			   *pm,
 			   *pn;
 	size_t		d1,
-				d2;
+				d2,
+				d3,
+				seventh;
 	int			r,
 				presorted;
+	bool		unique_hint = true;
 
 loop:
 	DO_CHECK_FOR_INTERRUPTS();
-	if (n < 7)
+	if (n < ST_INSERTION_SORT_THRESHOLD)
 	{
 		for (pm = a + ST_POINTER_STEP; pm < a + n * ST_POINTER_STEP;
 			 pm += ST_POINTER_STEP)
@@ -318,22 +317,164 @@ loop:
 	}
 	if (presorted)
 		return;
-	pm = a + (n / 2) * ST_POINTER_STEP;
-	if (n > 7)
-	{
-		pl = a;
-		pn = a + (n - 1) * ST_POINTER_STEP;
-		if (n > 40)
-		{
-			size_t		d = (n / 8) * ST_POINTER_STEP;
 
-			pl = DO_MED3(pl, pl + d, pl + 2 * d);
-			pm = DO_MED3(pm - d, pm, pm + d);
-			pn = DO_MED3(pn - 2 * d, pn - d, pn);
-		}
-		pm = DO_MED3(pl, pm, pn);
+	left = a;
+	right = a + (n - 1) * ST_POINTER_STEP;
+
+#ifdef QSORT_DEBUG
+	elog(NOTICE, "start:");
+
+	for (ST_POINTER_TYPE *i = left; i <= right; i += ST_POINTER_STEP)
+	{
+			elog(NOTICE, "%d ", *i);
 	}
-	DO_SWAP(a, pm);
+#endif
+
+	/* select five pivot candidates spaced equally around the midpoint */
+	seventh = n / 7 * ST_POINTER_STEP;
+	e3 = a + (n / 2) * ST_POINTER_STEP;
+	e2 = e3 - seventh;
+	e1 = e2 - seventh;
+	e4 = e3 + seventh;
+	e5 = e4 + seventh;
+
+	/* do insertion sort on pivot candidates */
+	for (pm = e2; pm <= e5; pm += seventh)
+		for (pl = pm; pl > e1 && (r = DO_COMPARE(pl - seventh, pl)) >= 0;
+			 pl -= seventh)
+			{
+				if (r == 0)
+				{
+					/* found two equal candidates */
+					unique_hint = false;
+					break;
+				}
+				else
+					DO_SWAP(pl, pl - seventh);
+			}
+
+	/*
+	 * If the pivot candidates were all unique, use dual-pivot quicksort,
+	 * otherwise use B&M quicksort since it is faster on inputs with many
+	 * duplicates.
+	 */
+	if (unique_hint)
+	{
+		DO_SWAP(e2, left);
+		DO_SWAP(e4, right);
+
+		pivot1 = left;
+		pivot2 = right;
+		less = left + ST_POINTER_STEP;
+		great = right - ST_POINTER_STEP;
+
+		/*
+		 * dual-pivot partitioning
+		 *
+		 *   left part           center part                   right part
+		 * +--------------------------------------------------------------+
+		 * |  < pivot1  |  pivot1 <= && <= pivot2  |    ?    |  > pivot2  |
+		 * +--------------------------------------------------------------+
+		 *               ^                          ^       ^
+		 *               |                          |       |
+		 *              less                        k     great
+		 *
+		 * Invariants:
+		 *
+		 *              all in (left, less)   < pivot1
+		 *    pivot1 <= all in [less, k)     <= pivot2
+		 *              all in (great, right) > pivot2
+		 *
+		 * k points to the first element in the "?" part
+		 */
+		for (k = less; k <= great; k += ST_POINTER_STEP)
+		{
+			if (DO_COMPARE(k, pivot1) < 0)
+			{
+				if (k > less)
+					DO_SWAP(k, less);
+				less += ST_POINTER_STEP;
+			}
+			else if (DO_COMPARE(k, pivot2) > 0)
+			{
+				while (k < great && DO_COMPARE(great, pivot2) > 0)
+				{
+					great-= ST_POINTER_STEP;
+					DO_CHECK_FOR_INTERRUPTS();
+				}
+
+				DO_SWAP(k, great);
+				great-= ST_POINTER_STEP;
+
+				if (DO_COMPARE(k, pivot1) < 0)
+				{
+					if (k > less)
+						DO_SWAP(k, less);
+					less += ST_POINTER_STEP;
+				}
+			}
+			DO_CHECK_FOR_INTERRUPTS();
+		}
+
+		DO_SWAP(less - ST_POINTER_STEP, pivot1);
+		DO_SWAP(great + ST_POINTER_STEP, pivot2);
+
+		d1 = (less - ST_POINTER_STEP) - left;
+		d2 = (great + ST_POINTER_STEP) - less;
+		d3 = right - (great + ST_POINTER_STEP);
+
+		/* recurse on shorter subarrays to save stack space */
+		if (d1 > d2)
+		{
+			/* recurse on d2 */
+			DO_SORT(less, d2 / ST_POINTER_STEP);
+			if (d1 > d3)
+			{
+				/* recurse on d3 */
+				DO_SORT(great + 2 * ST_POINTER_STEP, d3 / ST_POINTER_STEP);
+				/* iterate on d1 */
+				/* DO_SORT(left, d1 / ST_POINTER_STEP) */
+				n = d1 / ST_POINTER_STEP;
+				goto loop;
+			}
+			else
+			{
+				goto recurse_d1;
+			}
+		}
+		else
+		{
+recurse_d1:
+			/* recurse on d1 */
+			DO_SORT(left, d1 / ST_POINTER_STEP);
+			if (d2 > d3)
+			{
+				/* recurse on d3 */
+				DO_SORT(great + 2 * ST_POINTER_STEP, d3 / ST_POINTER_STEP);
+				/* iterate on d2 */
+				/* DO_SORT(less, d2 / ST_POINTER_STEP) */
+				a = less;
+				n = d2 / ST_POINTER_STEP;
+				goto loop;
+			}
+			else
+			{
+				/* recurse on d2 */
+				DO_SORT(less, d2 / ST_POINTER_STEP);
+				/* iterate on d3 */
+				/* DO_SORT(great + 2 * ST_POINTER_STEP, d3 / ST_POINTER_STEP) */
+				a = great + 2 * ST_POINTER_STEP;
+				n = d3 / ST_POINTER_STEP;
+				goto loop;
+			}
+		}
+	}
+	else
+	/* classic B&M quicksort with a single pivot */
+	// WIP: clean up variables to match dual pivot more closely
+	{
+	/* use median of five for the pivot */
+	DO_SWAP(a, e3);
 	pa = pb = a + ST_POINTER_STEP;
 	pc = pd = a + (n - 1) * ST_POINTER_STEP;
 	for (;;)
@@ -398,12 +539,36 @@ loop:
 			goto loop;
 		}
 	}
+	}
+}
+
+/*
+ * Sort an array.
+ */
+ST_SCOPE void
+ST_SORT(ST_ELEMENT_TYPE * data, size_t n
+		ST_SORT_PROTO_ELEMENT_SIZE
+		ST_SORT_PROTO_COMPARE
+		ST_SORT_PROTO_ARG)
+{
+	ST_POINTER_TYPE *begin = (ST_POINTER_TYPE *) data;
+
+	DO_SORT(begin, n);
+
+#ifdef USE_ASSERT_CHECKING
+	/* WIP: verify the sorting worked */
+	for (ST_POINTER_TYPE *pm = begin + ST_POINTER_STEP; pm < begin + n * ST_POINTER_STEP;
+		 pm += ST_POINTER_STEP)
+	{
+		if (DO_COMPARE(pm, pm - ST_POINTER_STEP) < 0)
+			Assert(false);
+	}
+#endif							/* USE_ASSERT_CHECKING */
 }
 #endif
 
 #undef DO_CHECK_FOR_INTERRUPTS
 #undef DO_COMPARE
-#undef DO_MED3
 #undef DO_SORT
 #undef DO_SWAP
 #undef DO_SWAPN
@@ -414,14 +579,15 @@ loop:
 #undef ST_COMPARE_RUNTIME_POINTER
 #undef ST_ELEMENT_TYPE
 #undef ST_ELEMENT_TYPE_VOID
+#undef ST_INSERTION_SORT_THRESHOLD
 #undef ST_MAKE_NAME
 #undef ST_MAKE_NAME_
 #undef ST_MAKE_PREFIX
-#undef ST_MED3
 #undef ST_POINTER_STEP
 #undef ST_POINTER_TYPE
 #undef ST_SCOPE
 #undef ST_SORT
+#undef ST_SORT_INTERNAL
 #undef ST_SORT_INVOKE_ARG
 #undef ST_SORT_INVOKE_COMPARE
 #undef ST_SORT_INVOKE_ELEMENT_SIZE

@@ -1,0 +1,1 @@
+CREATE FUNCTION test_sort_cmp_weight(int4) RETURNS void AS 'MODULE_PATHNAME' LANGUAGE C;

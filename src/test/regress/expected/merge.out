@@ -1554,11 +1554,11 @@ SELECT * FROM pa_target ORDER BY tid;
    5 |     500 | initial
    5 |      50 | inserted by merge
    6 |      60 | inserted by merge
-   7 |     700 | initial
    7 |      70 | inserted by merge
+   7 |     700 | initial
    8 |      80 | inserted by merge
-   9 |      90 | inserted by merge
    9 |     900 | initial
+   9 |      90 | inserted by merge
   10 |     100 | inserted by merge
   11 |    1100 | initial
   11 |     110 | inserted by merge
@@ -1583,12 +1583,12 @@ SELECT * FROM pa_target ORDER BY tid;
 -----+---------+--------------------------
    2 |     110 | initial updated by merge
    2 |      20 | inserted by merge
-   4 |      40 | inserted by merge
    4 |     330 | initial updated by merge
-   6 |     550 | initial updated by merge
+   4 |      40 | inserted by merge
    6 |      60 | inserted by merge
-   8 |      80 | inserted by merge
+   6 |     550 | initial updated by merge
    8 |     770 | initial updated by merge
+   8 |      80 | inserted by merge
   10 |     990 | initial updated by merge
   10 |     100 | inserted by merge
   12 |    1210 | initial updated by merge
@@ -1658,18 +1658,18 @@ SELECT * FROM pa_target ORDER BY tid;
 -----+---------+--------------------------
    1 |     110 | initial updated by merge
    2 |      20 | inserted by merge
-   3 |      30 | inserted by merge
    3 |     300 | initial
+   3 |      30 | inserted by merge
    4 |      40 | inserted by merge
    6 |      60 | inserted by merge
-   7 |     700 | initial
    7 |      70 | inserted by merge
+   7 |     700 | initial
    8 |      80 | inserted by merge
    9 |     900 | initial
    9 |      90 | inserted by merge
   10 |     100 | inserted by merge
-  11 |     110 | inserted by merge
   11 |    1100 | initial
+  11 |     110 | inserted by merge
   12 |     120 | inserted by merge
   13 |    1300 | initial
   13 |     130 | inserted by merge
@@ -1691,12 +1691,12 @@ SELECT * FROM pa_target ORDER BY tid;
 -----+---------+--------------------------
    2 |     110 | initial updated by merge
    2 |      20 | inserted by merge
-   4 |      40 | inserted by merge
    4 |     330 | initial updated by merge
-   6 |     550 | initial updated by merge
+   4 |      40 | inserted by merge
    6 |      60 | inserted by merge
-   8 |      80 | inserted by merge
+   6 |     550 | initial updated by merge
    8 |     770 | initial updated by merge
+   8 |      80 | inserted by merge
   10 |     990 | initial updated by merge
   10 |     100 | inserted by merge
   12 |    1210 | initial updated by merge

@@ -23,13 +23,13 @@ SELECT depname, empno, salary, sum(salary) OVER (PARTITION BY depname) FROM emps
 -----------+-------+--------+-------
  develop   |     7 |   4200 | 25100
  develop   |     9 |   4500 | 25100
- develop   |    11 |   5200 | 25100
  develop   |    10 |   5200 | 25100
+ develop   |    11 |   5200 | 25100
  develop   |     8 |   6000 | 25100
  personnel |     5 |   3500 |  7400
  personnel |     2 |   3900 |  7400
- sales     |     3 |   4800 | 14600
  sales     |     4 |   4800 | 14600
+ sales     |     3 |   4800 | 14600
  sales     |     1 |   5000 | 14600
 (10 rows)
 
@@ -38,13 +38,13 @@ SELECT depname, empno, salary, rank() OVER (PARTITION BY depname ORDER BY salary
 -----------+-------+--------+------
  develop   |     7 |   4200 |    1
  develop   |     9 |   4500 |    2
- develop   |    11 |   5200 |    3
  develop   |    10 |   5200 |    3
+ develop   |    11 |   5200 |    3
  develop   |     8 |   6000 |    5
  personnel |     5 |   3500 |    1
  personnel |     2 |   3900 |    2
- sales     |     3 |   4800 |    1
  sales     |     4 |   4800 |    1
+ sales     |     3 |   4800 |    1
  sales     |     1 |   5000 |    3
 (10 rows)
 
@@ -78,16 +78,16 @@ GROUP BY four, ten ORDER BY four, ten;
 SELECT depname, empno, salary, sum(salary) OVER w FROM empsalary WINDOW w AS (PARTITION BY depname);
   depname  | empno | salary |  sum  
 -----------+-------+--------+-------
- develop   |    11 |   5200 | 25100
+ develop   |    10 |   5200 | 25100
  develop   |     7 |   4200 | 25100
  develop   |     9 |   4500 | 25100
  develop   |     8 |   6000 | 25100
- develop   |    10 |   5200 | 25100
+ develop   |    11 |   5200 | 25100
  personnel |     5 |   3500 |  7400
  personnel |     2 |   3900 |  7400
- sales     |     3 |   4800 | 14600
  sales     |     1 |   5000 | 14600
  sales     |     4 |   4800 | 14600
+ sales     |     3 |   4800 | 14600
 (10 rows)
 
 SELECT depname, empno, salary, rank() OVER w FROM empsalary WINDOW w AS (PARTITION BY depname ORDER BY salary) ORDER BY rank() OVER w;
@@ -95,13 +95,13 @@ SELECT depname, empno, salary, rank() OVER w FROM empsalary WINDOW w AS (PARTITI
 -----------+-------+--------+------
  develop   |     7 |   4200 |    1
  personnel |     5 |   3500 |    1
- sales     |     3 |   4800 |    1
  sales     |     4 |   4800 |    1
- personnel |     2 |   3900 |    2
+ sales     |     3 |   4800 |    1
  develop   |     9 |   4500 |    2
- sales     |     1 |   5000 |    3
- develop   |    11 |   5200 |    3
+ personnel |     2 |   3900 |    2
  develop   |    10 |   5200 |    3
+ develop   |    11 |   5200 |    3
+ sales     |     1 |   5000 |    3
  develop   |     8 |   6000 |    5
 (10 rows)
 
@@ -394,11 +394,11 @@ SELECT first_value(ten) OVER (PARTITION BY four ORDER BY ten), ten, four FROM te
 SELECT last_value(four) OVER (ORDER BY ten), ten, four FROM tenk1 WHERE unique2 < 10;
  last_value | ten | four 
 ------------+-----+------
-          0 |   0 |    0
-          0 |   0 |    2
-          0 |   0 |    0
-          1 |   1 |    1
+          2 |   0 |    0
+          2 |   0 |    0
+          2 |   0 |    2
           1 |   1 |    3
+          1 |   1 |    1
           1 |   1 |    1
           3 |   3 |    3
           0 |   4 |    0
@@ -803,14 +803,14 @@ SELECT sum(unique1) over (order by four range between current row and unbounded 
 FROM tenk1 WHERE unique1 < 10;
  sum | unique1 | four 
 -----+---------+------
-  45 |       0 |    0
-  45 |       8 |    0
   45 |       4 |    0
-  33 |       5 |    1
-  33 |       9 |    1
+  45 |       8 |    0
+  45 |       0 |    0
   33 |       1 |    1
-  18 |       6 |    2
+  33 |       9 |    1
+  33 |       5 |    1
   18 |       2 |    2
+  18 |       6 |    2
   10 |       3 |    3
   10 |       7 |    3
 (10 rows)
@@ -922,14 +922,14 @@ SELECT first_value(unique1) over (ORDER BY four rows between current row and 2 f
 FROM tenk1 WHERE unique1 < 10;
  first_value | unique1 | four 
 -------------+---------+------
-           8 |       0 |    0
-           4 |       8 |    0
-           5 |       4 |    0
-           9 |       5 |    1
-           1 |       9 |    1
-           6 |       1 |    1
-           2 |       6 |    2
-           3 |       2 |    2
+           8 |       4 |    0
+           0 |       8 |    0
+           1 |       0 |    0
+           9 |       1 |    1
+           5 |       9 |    1
+           2 |       5 |    1
+           6 |       2 |    2
+           3 |       6 |    2
            7 |       3 |    3
              |       7 |    3
 (10 rows)
@@ -939,14 +939,14 @@ SELECT first_value(unique1) over (ORDER BY four rows between current row and 2 f
 FROM tenk1 WHERE unique1 < 10;
  first_value | unique1 | four 
 -------------+---------+------
-             |       0 |    0
-           5 |       8 |    0
-           5 |       4 |    0
-             |       5 |    1
-           6 |       9 |    1
-           6 |       1 |    1
-           3 |       6 |    2
+             |       4 |    0
+           1 |       8 |    0
+           1 |       0 |    0
+             |       1 |    1
+           2 |       9 |    1
+           2 |       5 |    1
            3 |       2 |    2
+           3 |       6 |    2
              |       3 |    3
              |       7 |    3
 (10 rows)
@@ -956,14 +956,14 @@ SELECT first_value(unique1) over (ORDER BY four rows between current row and 2 f
 FROM tenk1 WHERE unique1 < 10;
  first_value | unique1 | four 
 -------------+---------+------
-           0 |       0 |    0
-           8 |       8 |    0
            4 |       4 |    0
-           5 |       5 |    1
-           9 |       9 |    1
+           8 |       8 |    0
+           0 |       0 |    0
            1 |       1 |    1
-           6 |       6 |    2
+           9 |       9 |    1
+           5 |       5 |    1
            2 |       2 |    2
+           6 |       6 |    2
            3 |       3 |    3
            7 |       7 |    3
 (10 rows)
@@ -973,14 +973,14 @@ SELECT last_value(unique1) over (ORDER BY four rows between current row and 2 fo
 FROM tenk1 WHERE unique1 < 10;
  last_value | unique1 | four 
 ------------+---------+------
-          4 |       0 |    0
-          5 |       8 |    0
-          9 |       4 |    0
-          1 |       5 |    1
-          6 |       9 |    1
-          2 |       1 |    1
-          3 |       6 |    2
-          7 |       2 |    2
+          0 |       4 |    0
+          1 |       8 |    0
+          9 |       0 |    0
+          5 |       1 |    1
+          2 |       9 |    1
+          6 |       5 |    1
+          3 |       2 |    2
+          7 |       6 |    2
           7 |       3 |    3
             |       7 |    3
 (10 rows)
@@ -990,14 +990,14 @@ SELECT last_value(unique1) over (ORDER BY four rows between current row and 2 fo
 FROM tenk1 WHERE unique1 < 10;
  last_value | unique1 | four 
 ------------+---------+------
-            |       0 |    0
-          5 |       8 |    0
-          9 |       4 |    0
-            |       5 |    1
-          6 |       9 |    1
-          2 |       1 |    1
-          3 |       6 |    2
-          7 |       2 |    2
+            |       4 |    0
+          1 |       8 |    0
+          9 |       0 |    0
+            |       1 |    1
+          2 |       9 |    1
+          6 |       5 |    1
+          3 |       2 |    2
+          7 |       6 |    2
             |       3 |    3
             |       7 |    3
 (10 rows)
@@ -1007,14 +1007,14 @@ SELECT last_value(unique1) over (ORDER BY four rows between current row and 2 fo
 FROM tenk1 WHERE unique1 < 10;
  last_value | unique1 | four 
 ------------+---------+------
-          0 |       0 |    0
-          5 |       8 |    0
-          9 |       4 |    0
-          5 |       5 |    1
-          6 |       9 |    1
-          2 |       1 |    1
-          3 |       6 |    2
-          7 |       2 |    2
+          4 |       4 |    0
+          1 |       8 |    0
+          9 |       0 |    0
+          1 |       1 |    1
+          2 |       9 |    1
+          6 |       5 |    1
+          3 |       2 |    2
+          7 |       6 |    2
           3 |       3 |    3
           7 |       7 |    3
 (10 rows)
@@ -1075,14 +1075,14 @@ SELECT sum(unique1) over (w range between current row and unbounded following),
 FROM tenk1 WHERE unique1 < 10 WINDOW w AS (order by four);
  sum | unique1 | four 
 -----+---------+------
-  45 |       0 |    0
-  45 |       8 |    0
   45 |       4 |    0
-  33 |       5 |    1
-  33 |       9 |    1
+  45 |       8 |    0
+  45 |       0 |    0
   33 |       1 |    1
-  18 |       6 |    2
+  33 |       9 |    1
+  33 |       5 |    1
   18 |       2 |    2
+  18 |       6 |    2
   10 |       3 |    3
   10 |       7 |    3
 (10 rows)
@@ -1092,14 +1092,14 @@ SELECT sum(unique1) over (w range between unbounded preceding and current row ex
 FROM tenk1 WHERE unique1 < 10 WINDOW w AS (order by four);
  sum | unique1 | four 
 -----+---------+------
-  12 |       0 |    0
-   4 |       8 |    0
    8 |       4 |    0
-  22 |       5 |    1
-  18 |       9 |    1
+   4 |       8 |    0
+  12 |       0 |    0
   26 |       1 |    1
-  29 |       6 |    2
+  18 |       9 |    1
+  22 |       5 |    1
   33 |       2 |    2
+  29 |       6 |    2
   42 |       3 |    3
   38 |       7 |    3
 (10 rows)
@@ -1109,14 +1109,14 @@ SELECT sum(unique1) over (w range between unbounded preceding and current row ex
 FROM tenk1 WHERE unique1 < 10 WINDOW w AS (order by four);
  sum | unique1 | four 
 -----+---------+------
-     |       0 |    0
-     |       8 |    0
      |       4 |    0
-  12 |       5 |    1
-  12 |       9 |    1
+     |       8 |    0
+     |       0 |    0
   12 |       1 |    1
-  27 |       6 |    2
+  12 |       9 |    1
+  12 |       5 |    1
   27 |       2 |    2
+  27 |       6 |    2
   35 |       3 |    3
   35 |       7 |    3
 (10 rows)
@@ -1126,14 +1126,14 @@ SELECT sum(unique1) over (w range between unbounded preceding and current row ex
 FROM tenk1 WHERE unique1 < 10 WINDOW w AS (order by four);
  sum | unique1 | four 
 -----+---------+------
-   0 |       0 |    0
-   8 |       8 |    0
    4 |       4 |    0
-  17 |       5 |    1
-  21 |       9 |    1
+   8 |       8 |    0
+   0 |       0 |    0
   13 |       1 |    1
-  33 |       6 |    2
+  21 |       9 |    1
+  17 |       5 |    1
   29 |       2 |    2
+  33 |       6 |    2
   38 |       3 |    3
   42 |       7 |    3
 (10 rows)
@@ -1145,14 +1145,14 @@ FROM tenk1 WHERE unique1 < 10
 WINDOW w AS (order by four range between current row and unbounded following);
  first_value | nth_2 | last_value | unique1 | four 
 -------------+-------+------------+---------+------
-           0 |     8 |          7 |       0 |    0
-           0 |     8 |          7 |       8 |    0
-           0 |     8 |          7 |       4 |    0
-           5 |     9 |          7 |       5 |    1
-           5 |     9 |          7 |       9 |    1
-           5 |     9 |          7 |       1 |    1
-           6 |     2 |          7 |       6 |    2
-           6 |     2 |          7 |       2 |    2
+           4 |     8 |          7 |       4 |    0
+           4 |     8 |          7 |       8 |    0
+           4 |     8 |          7 |       0 |    0
+           1 |     9 |          7 |       1 |    1
+           1 |     9 |          7 |       9 |    1
+           1 |     9 |          7 |       5 |    1
+           2 |     6 |          7 |       2 |    2
+           2 |     6 |          7 |       6 |    2
            3 |     7 |          7 |       3 |    3
            3 |     7 |          7 |       7 |    3
 (10 rows)
@@ -1349,14 +1349,14 @@ SELECT sum(unique1) over (order by four range between 2::int8 preceding and 1::i
 FROM tenk1 WHERE unique1 < 10;
  sum | unique1 | four 
 -----+---------+------
-     |       0 |    0
-     |       8 |    0
      |       4 |    0
-  12 |       5 |    1
-  12 |       9 |    1
+     |       8 |    0
+     |       0 |    0
   12 |       1 |    1
-  27 |       6 |    2
+  12 |       9 |    1
+  12 |       5 |    1
   27 |       2 |    2
+  27 |       6 |    2
   23 |       3 |    3
   23 |       7 |    3
 (10 rows)
@@ -1368,14 +1368,14 @@ FROM tenk1 WHERE unique1 < 10;
 -----+---------+------
      |       3 |    3
      |       7 |    3
-  10 |       6 |    2
   10 |       2 |    2
+  10 |       6 |    2
+  18 |       1 |    1
   18 |       9 |    1
   18 |       5 |    1
-  18 |       1 |    1
-  23 |       0 |    0
-  23 |       8 |    0
   23 |       4 |    0
+  23 |       8 |    0
+  23 |       0 |    0
 (10 rows)
 
 SELECT sum(unique1) over (order by four range between 2::int8 preceding and 1::int2 preceding exclude no others),
@@ -1383,14 +1383,14 @@ SELECT sum(unique1) over (order by four range between 2::int8 preceding and 1::i
 FROM tenk1 WHERE unique1 < 10;
  sum | unique1 | four 
 -----+---------+------
-     |       0 |    0
-     |       8 |    0
      |       4 |    0
-  12 |       5 |    1
-  12 |       9 |    1
+     |       8 |    0
+     |       0 |    0
   12 |       1 |    1
-  27 |       6 |    2
+  12 |       9 |    1
+  12 |       5 |    1
   27 |       2 |    2
+  27 |       6 |    2
   23 |       3 |    3
   23 |       7 |    3
 (10 rows)
@@ -1400,14 +1400,14 @@ SELECT sum(unique1) over (order by four range between 2::int8 preceding and 1::i
 FROM tenk1 WHERE unique1 < 10;
  sum | unique1 | four 
 -----+---------+------
-     |       0 |    0
-     |       8 |    0
      |       4 |    0
-  12 |       5 |    1
-  12 |       9 |    1
+     |       8 |    0
+     |       0 |    0
   12 |       1 |    1
-  27 |       6 |    2
+  12 |       9 |    1
+  12 |       5 |    1
   27 |       2 |    2
+  27 |       6 |    2
   23 |       3 |    3
   23 |       7 |    3
 (10 rows)
@@ -1417,14 +1417,14 @@ SELECT sum(unique1) over (order by four range between 2::int8 preceding and 1::i
 FROM tenk1 WHERE unique1 < 10;
  sum | unique1 | four 
 -----+---------+------
-     |       0 |    0
-     |       8 |    0
      |       4 |    0
-  12 |       5 |    1
-  12 |       9 |    1
+     |       8 |    0
+     |       0 |    0
   12 |       1 |    1
-  27 |       6 |    2
+  12 |       9 |    1
+  12 |       5 |    1
   27 |       2 |    2
+  27 |       6 |    2
   23 |       3 |    3
   23 |       7 |    3
 (10 rows)
@@ -1434,14 +1434,14 @@ SELECT sum(unique1) over (order by four range between 2::int8 preceding and 1::i
 FROM tenk1 WHERE unique1 < 10;
  sum | unique1 | four 
 -----+---------+------
-     |       0 |    0
-     |       8 |    0
      |       4 |    0
-  12 |       5 |    1
-  12 |       9 |    1
+     |       8 |    0
+     |       0 |    0
   12 |       1 |    1
-  27 |       6 |    2
+  12 |       9 |    1
+  12 |       5 |    1
   27 |       2 |    2
+  27 |       6 |    2
   23 |       3 |    3
   23 |       7 |    3
 (10 rows)
@@ -1451,14 +1451,14 @@ SELECT sum(unique1) over (order by four range between 2::int8 preceding and 6::i
 FROM tenk1 WHERE unique1 < 10;
  sum | unique1 | four 
 -----+---------+------
-  33 |       0 |    0
-  41 |       8 |    0
   37 |       4 |    0
-  35 |       5 |    1
-  39 |       9 |    1
+  41 |       8 |    0
+  33 |       0 |    0
   31 |       1 |    1
-  43 |       6 |    2
+  39 |       9 |    1
+  35 |       5 |    1
   39 |       2 |    2
+  43 |       6 |    2
   26 |       3 |    3
   30 |       7 |    3
 (10 rows)
@@ -1468,14 +1468,14 @@ SELECT sum(unique1) over (order by four range between 2::int8 preceding and 6::i
 FROM tenk1 WHERE unique1 < 10;
  sum | unique1 | four 
 -----+---------+------
-  33 |       0 |    0
-  33 |       8 |    0
   33 |       4 |    0
-  30 |       5 |    1
-  30 |       9 |    1
+  33 |       8 |    0
+  33 |       0 |    0
   30 |       1 |    1
-  37 |       6 |    2
+  30 |       9 |    1
+  30 |       5 |    1
   37 |       2 |    2
+  37 |       6 |    2
   23 |       3 |    3
   23 |       7 |    3
 (10 rows)
@@ -1521,13 +1521,13 @@ select sum(salary) over (order by enroll_date range between '1 year'::interval p
  34900 |   5000 | 10-01-2006
  34900 |   6000 | 10-01-2006
  38400 |   3900 | 12-23-2006
- 47100 |   4800 | 08-01-2007
  47100 |   5200 | 08-01-2007
+ 47100 |   4800 | 08-01-2007
  47100 |   4800 | 08-08-2007
  47100 |   5200 | 08-15-2007
  36100 |   3500 | 12-10-2007
- 32200 |   4500 | 01-01-2008
  32200 |   4200 | 01-01-2008
+ 32200 |   4500 | 01-01-2008
 (10 rows)
 
 select sum(salary) over (order by enroll_date desc range between '1 year'::interval preceding and '1 year'::interval following),
@@ -1539,8 +1539,8 @@ select sum(salary) over (order by enroll_date desc range between '1 year'::inter
  36100 |   3500 | 12-10-2007
  47100 |   5200 | 08-15-2007
  47100 |   4800 | 08-08-2007
- 47100 |   4800 | 08-01-2007
  47100 |   5200 | 08-01-2007
+ 47100 |   4800 | 08-01-2007
  38400 |   3900 | 12-23-2006
  34900 |   5000 | 10-01-2006
  34900 |   6000 | 10-01-2006
@@ -1555,8 +1555,8 @@ select sum(salary) over (order by enroll_date desc range between '1 year'::inter
      |   3500 | 12-10-2007
      |   5200 | 08-15-2007
      |   4800 | 08-08-2007
-     |   4800 | 08-01-2007
      |   5200 | 08-01-2007
+     |   4800 | 08-01-2007
      |   3900 | 12-23-2006
      |   5000 | 10-01-2006
      |   6000 | 10-01-2006
@@ -1569,13 +1569,13 @@ select sum(salary) over (order by enroll_date range between '1 year'::interval p
  29900 |   5000 | 10-01-2006
  28900 |   6000 | 10-01-2006
  34500 |   3900 | 12-23-2006
- 42300 |   4800 | 08-01-2007
  41900 |   5200 | 08-01-2007
+ 42300 |   4800 | 08-01-2007
  42300 |   4800 | 08-08-2007
  41900 |   5200 | 08-15-2007
  32600 |   3500 | 12-10-2007
- 27700 |   4500 | 01-01-2008
  28000 |   4200 | 01-01-2008
+ 27700 |   4500 | 01-01-2008
 (10 rows)
 
 select sum(salary) over (order by enroll_date range between '1 year'::interval preceding and '1 year'::interval following
@@ -1585,13 +1585,13 @@ select sum(salary) over (order by enroll_date range between '1 year'::interval p
  23900 |   5000 | 10-01-2006
  23900 |   6000 | 10-01-2006
  34500 |   3900 | 12-23-2006
- 37100 |   4800 | 08-01-2007
  37100 |   5200 | 08-01-2007
+ 37100 |   4800 | 08-01-2007
  42300 |   4800 | 08-08-2007
  41900 |   5200 | 08-15-2007
  32600 |   3500 | 12-10-2007
- 23500 |   4500 | 01-01-2008
  23500 |   4200 | 01-01-2008
+ 23500 |   4500 | 01-01-2008
 (10 rows)
 
 select sum(salary) over (order by enroll_date range between '1 year'::interval preceding and '1 year'::interval following
@@ -1601,13 +1601,13 @@ select sum(salary) over (order by enroll_date range between '1 year'::interval p
  28900 |   5000 | 10-01-2006
  29900 |   6000 | 10-01-2006
  38400 |   3900 | 12-23-2006
- 41900 |   4800 | 08-01-2007
  42300 |   5200 | 08-01-2007
+ 41900 |   4800 | 08-01-2007
  47100 |   4800 | 08-08-2007
  47100 |   5200 | 08-15-2007
  36100 |   3500 | 12-10-2007
- 28000 |   4500 | 01-01-2008
  27700 |   4200 | 01-01-2008
+ 28000 |   4500 | 01-01-2008
 (10 rows)
 
 select first_value(salary) over(order by salary range between 1000 preceding and 1000 following),
@@ -1692,13 +1692,13 @@ select first_value(salary) over(order by enroll_date range between unbounded pre
         5000 |       5200 |   5000 | 10-01-2006
         6000 |       5200 |   6000 | 10-01-2006
         5000 |       3500 |   3900 | 12-23-2006
-        5000 |       4200 |   4800 | 08-01-2007
-        5000 |       4200 |   5200 | 08-01-2007
-        5000 |       4200 |   4800 | 08-08-2007
-        5000 |       4200 |   5200 | 08-15-2007
-        5000 |       4200 |   3500 | 12-10-2007
-        5000 |       4200 |   4500 | 01-01-2008
-        5000 |       4200 |   4200 | 01-01-2008
+        5000 |       4500 |   5200 | 08-01-2007
+        5000 |       4500 |   4800 | 08-01-2007
+        5000 |       4500 |   4800 | 08-08-2007
+        5000 |       4500 |   5200 | 08-15-2007
+        5000 |       4500 |   3500 | 12-10-2007
+        5000 |       4500 |   4200 | 01-01-2008
+        5000 |       4500 |   4500 | 01-01-2008
 (10 rows)
 
 select first_value(salary) over(order by enroll_date range between unbounded preceding and '1 year'::interval following
@@ -1711,13 +1711,13 @@ select first_value(salary) over(order by enroll_date range between unbounded pre
         5000 |       5200 |   5000 | 10-01-2006
         6000 |       5200 |   6000 | 10-01-2006
         5000 |       3500 |   3900 | 12-23-2006
-        5000 |       4200 |   4800 | 08-01-2007
-        5000 |       4200 |   5200 | 08-01-2007
-        5000 |       4200 |   4800 | 08-08-2007
-        5000 |       4200 |   5200 | 08-15-2007
-        5000 |       4200 |   3500 | 12-10-2007
-        5000 |       4500 |   4500 | 01-01-2008
+        5000 |       4500 |   5200 | 08-01-2007
+        5000 |       4500 |   4800 | 08-01-2007
+        5000 |       4500 |   4800 | 08-08-2007
+        5000 |       4500 |   5200 | 08-15-2007
+        5000 |       4500 |   3500 | 12-10-2007
         5000 |       4200 |   4200 | 01-01-2008
+        5000 |       4500 |   4500 | 01-01-2008
 (10 rows)
 
 select first_value(salary) over(order by enroll_date range between unbounded preceding and '1 year'::interval following
@@ -1730,13 +1730,13 @@ select first_value(salary) over(order by enroll_date range between unbounded pre
         3900 |       5200 |   5000 | 10-01-2006
         3900 |       5200 |   6000 | 10-01-2006
         5000 |       3500 |   3900 | 12-23-2006
-        5000 |       4200 |   4800 | 08-01-2007
-        5000 |       4200 |   5200 | 08-01-2007
-        5000 |       4200 |   4800 | 08-08-2007
-        5000 |       4200 |   5200 | 08-15-2007
-        5000 |       4200 |   3500 | 12-10-2007
-        5000 |       3500 |   4500 | 01-01-2008
+        5000 |       4500 |   5200 | 08-01-2007
+        5000 |       4500 |   4800 | 08-01-2007
+        5000 |       4500 |   4800 | 08-08-2007
+        5000 |       4500 |   5200 | 08-15-2007
+        5000 |       4500 |   3500 | 12-10-2007
         5000 |       3500 |   4200 | 01-01-2008
+        5000 |       3500 |   4500 | 01-01-2008
 (10 rows)
 
 select first_value(salary) over(order by enroll_date range between unbounded preceding and '1 year'::interval following
@@ -1749,13 +1749,13 @@ select first_value(salary) over(order by enroll_date range between unbounded pre
         6000 |       5200 |   5000 | 10-01-2006
         5000 |       5200 |   6000 | 10-01-2006
         5000 |       3500 |   3900 | 12-23-2006
-        5000 |       4200 |   4800 | 08-01-2007
-        5000 |       4200 |   5200 | 08-01-2007
-        5000 |       4200 |   4800 | 08-08-2007
-        5000 |       4200 |   5200 | 08-15-2007
-        5000 |       4200 |   3500 | 12-10-2007
-        5000 |       4200 |   4500 | 01-01-2008
+        5000 |       4500 |   5200 | 08-01-2007
+        5000 |       4500 |   4800 | 08-01-2007
+        5000 |       4500 |   4800 | 08-08-2007
+        5000 |       4500 |   5200 | 08-15-2007
+        5000 |       4500 |   3500 | 12-10-2007
         5000 |       4500 |   4200 | 01-01-2008
+        5000 |       4200 |   4500 | 01-01-2008
 (10 rows)
 
 -- RANGE offset PRECEDING/FOLLOWING with null values
@@ -1810,8 +1810,8 @@ window w as
   (order by x desc nulls first range between 2 preceding and 2 following);
  x | y  | first_value | last_value 
 ---+----+-------------+------------
-   | 43 |          43 |         42
-   | 42 |          43 |         42
+   | 42 |          42 |         43
+   | 43 |          42 |         43
  5 |  5 |           5 |          3
  4 |  4 |           5 |          2
  3 |  3 |           5 |          1
@@ -2392,10 +2392,10 @@ window w as (order by f_time desc range between
  10 | 20:00:00 |          10 |          8
   9 | 19:00:00 |          10 |          7
   8 | 18:00:00 |           9 |          7
-  7 | 17:00:00 |           8 |          5
-  6 | 15:00:00 |           6 |          3
-  5 | 15:00:00 |           6 |          3
-  4 | 14:00:00 |           6 |          2
+  7 | 17:00:00 |           8 |          6
+  5 | 15:00:00 |           5 |          3
+  6 | 15:00:00 |           5 |          3
+  4 | 14:00:00 |           5 |          2
   3 | 13:00:00 |           4 |          1
   2 | 12:00:00 |           3 |          1
   1 | 11:00:00 |           2 |          1
@@ -2428,10 +2428,10 @@ window w as (order by f_timetz desc range between
  10 | 20:00:00+01 |          10 |          8
   9 | 19:00:00+01 |          10 |          7
   8 | 18:00:00+01 |           9 |          7
-  7 | 17:00:00+01 |           8 |          5
-  6 | 15:00:00+01 |           6 |          3
-  5 | 15:00:00+01 |           6 |          3
-  4 | 14:00:00+01 |           6 |          2
+  7 | 17:00:00+01 |           8 |          6
+  5 | 15:00:00+01 |           5 |          3
+  6 | 15:00:00+01 |           5 |          3
+  4 | 14:00:00+01 |           5 |          2
   3 | 13:00:00+01 |           4 |          1
   2 | 12:00:00+01 |           3 |          1
   1 | 11:00:00+01 |           2 |          1
@@ -2465,9 +2465,9 @@ window w as (order by f_interval desc range between
   9 | @ 9 years  |          10 |          8
   8 | @ 8 years  |           9 |          7
   7 | @ 7 years  |           8 |          7
-  6 | @ 5 years  |           6 |          4
-  5 | @ 5 years  |           6 |          4
-  4 | @ 4 years  |           6 |          3
+  5 | @ 5 years  |           5 |          4
+  6 | @ 5 years  |           5 |          4
+  4 | @ 4 years  |           5 |          3
   3 | @ 3 years  |           4 |          2
   2 | @ 2 years  |           3 |          1
   1 | @ 1 year   |           2 |          1
@@ -2503,10 +2503,10 @@ window w as (order by f_timestamptz desc range between
   7 | Wed Oct 19 02:23:54 2005 PDT |           8 |          6
   6 | Tue Oct 19 02:23:54 2004 PDT |           7 |          5
   5 | Sun Oct 19 02:23:54 2003 PDT |           6 |          4
-  4 | Sat Oct 19 02:23:54 2002 PDT |           5 |          2
-  3 | Fri Oct 19 02:23:54 2001 PDT |           4 |          1
+  4 | Sat Oct 19 02:23:54 2002 PDT |           5 |          3
   2 | Fri Oct 19 02:23:54 2001 PDT |           4 |          1
-  1 | Thu Oct 19 02:23:54 2000 PDT |           3 |          1
+  3 | Fri Oct 19 02:23:54 2001 PDT |           4 |          1
+  1 | Thu Oct 19 02:23:54 2000 PDT |           2 |          1
 (10 rows)
 
 select id, f_timestamp, first_value(id) over w, last_value(id) over w
@@ -2539,10 +2539,10 @@ window w as (order by f_timestamp desc range between
   7 | Wed Oct 19 10:23:54 2005 |           8 |          6
   6 | Tue Oct 19 10:23:54 2004 |           7 |          5
   5 | Sun Oct 19 10:23:54 2003 |           6 |          4
-  4 | Sat Oct 19 10:23:54 2002 |           5 |          2
-  3 | Fri Oct 19 10:23:54 2001 |           4 |          1
+  4 | Sat Oct 19 10:23:54 2002 |           5 |          3
   2 | Fri Oct 19 10:23:54 2001 |           4 |          1
-  1 | Thu Oct 19 10:23:54 2000 |           3 |          1
+  3 | Fri Oct 19 10:23:54 2001 |           4 |          1
+  1 | Thu Oct 19 10:23:54 2000 |           2 |          1
 (10 rows)
 
 -- RANGE offset PRECEDING/FOLLOWING error cases
@@ -2588,14 +2588,14 @@ SELECT sum(unique1) over (order by four groups between unbounded preceding and c
 FROM tenk1 WHERE unique1 < 10;
  sum | unique1 | four 
 -----+---------+------
-  12 |       0 |    0
-  12 |       8 |    0
   12 |       4 |    0
-  27 |       5 |    1
-  27 |       9 |    1
+  12 |       8 |    0
+  12 |       0 |    0
   27 |       1 |    1
-  35 |       6 |    2
+  27 |       9 |    1
+  27 |       5 |    1
   35 |       2 |    2
+  35 |       6 |    2
   45 |       3 |    3
   45 |       7 |    3
 (10 rows)
@@ -2605,14 +2605,14 @@ SELECT sum(unique1) over (order by four groups between unbounded preceding and u
 FROM tenk1 WHERE unique1 < 10;
  sum | unique1 | four 
 -----+---------+------
-  45 |       0 |    0
-  45 |       8 |    0
   45 |       4 |    0
-  45 |       5 |    1
-  45 |       9 |    1
+  45 |       8 |    0
+  45 |       0 |    0
   45 |       1 |    1
-  45 |       6 |    2
+  45 |       9 |    1
+  45 |       5 |    1
   45 |       2 |    2
+  45 |       6 |    2
   45 |       3 |    3
   45 |       7 |    3
 (10 rows)
@@ -2622,14 +2622,14 @@ SELECT sum(unique1) over (order by four groups between current row and unbounded
 FROM tenk1 WHERE unique1 < 10;
  sum | unique1 | four 
 -----+---------+------
-  45 |       0 |    0
-  45 |       8 |    0
   45 |       4 |    0
-  33 |       5 |    1
-  33 |       9 |    1
+  45 |       8 |    0
+  45 |       0 |    0
   33 |       1 |    1
-  18 |       6 |    2
+  33 |       9 |    1
+  33 |       5 |    1
   18 |       2 |    2
+  18 |       6 |    2
   10 |       3 |    3
   10 |       7 |    3
 (10 rows)
@@ -2639,14 +2639,14 @@ SELECT sum(unique1) over (order by four groups between 1 preceding and unbounded
 FROM tenk1 WHERE unique1 < 10;
  sum | unique1 | four 
 -----+---------+------
-  45 |       0 |    0
-  45 |       8 |    0
   45 |       4 |    0
-  45 |       5 |    1
-  45 |       9 |    1
+  45 |       8 |    0
+  45 |       0 |    0
   45 |       1 |    1
-  33 |       6 |    2
+  45 |       9 |    1
+  45 |       5 |    1
   33 |       2 |    2
+  33 |       6 |    2
   18 |       3 |    3
   18 |       7 |    3
 (10 rows)
@@ -2656,14 +2656,14 @@ SELECT sum(unique1) over (order by four groups between 1 following and unbounded
 FROM tenk1 WHERE unique1 < 10;
  sum | unique1 | four 
 -----+---------+------
-  33 |       0 |    0
-  33 |       8 |    0
   33 |       4 |    0
-  18 |       5 |    1
-  18 |       9 |    1
+  33 |       8 |    0
+  33 |       0 |    0
   18 |       1 |    1
-  10 |       6 |    2
+  18 |       9 |    1
+  18 |       5 |    1
   10 |       2 |    2
+  10 |       6 |    2
      |       3 |    3
      |       7 |    3
 (10 rows)
@@ -2673,14 +2673,14 @@ SELECT sum(unique1) over (order by four groups between unbounded preceding and 2
 FROM tenk1 WHERE unique1 < 10;
  sum | unique1 | four 
 -----+---------+------
-  35 |       0 |    0
-  35 |       8 |    0
   35 |       4 |    0
-  45 |       5 |    1
-  45 |       9 |    1
+  35 |       8 |    0
+  35 |       0 |    0
   45 |       1 |    1
-  45 |       6 |    2
+  45 |       9 |    1
+  45 |       5 |    1
   45 |       2 |    2
+  45 |       6 |    2
   45 |       3 |    3
   45 |       7 |    3
 (10 rows)
@@ -2690,14 +2690,14 @@ SELECT sum(unique1) over (order by four groups between 2 preceding and 1 precedi
 FROM tenk1 WHERE unique1 < 10;
  sum | unique1 | four 
 -----+---------+------
-     |       0 |    0
-     |       8 |    0
      |       4 |    0
-  12 |       5 |    1
-  12 |       9 |    1
+     |       8 |    0
+     |       0 |    0
   12 |       1 |    1
-  27 |       6 |    2
+  12 |       9 |    1
+  12 |       5 |    1
   27 |       2 |    2
+  27 |       6 |    2
   23 |       3 |    3
   23 |       7 |    3
 (10 rows)
@@ -2707,14 +2707,14 @@ SELECT sum(unique1) over (order by four groups between 2 preceding and 1 followi
 FROM tenk1 WHERE unique1 < 10;
  sum | unique1 | four 
 -----+---------+------
-  27 |       0 |    0
-  27 |       8 |    0
   27 |       4 |    0
-  35 |       5 |    1
-  35 |       9 |    1
+  27 |       8 |    0
+  27 |       0 |    0
   35 |       1 |    1
-  45 |       6 |    2
+  35 |       9 |    1
+  35 |       5 |    1
   45 |       2 |    2
+  45 |       6 |    2
   33 |       3 |    3
   33 |       7 |    3
 (10 rows)
@@ -2724,14 +2724,14 @@ SELECT sum(unique1) over (order by four groups between 0 preceding and 0 followi
 FROM tenk1 WHERE unique1 < 10;
  sum | unique1 | four 
 -----+---------+------
-  12 |       0 |    0
-  12 |       8 |    0
   12 |       4 |    0
-  15 |       5 |    1
-  15 |       9 |    1
+  12 |       8 |    0
+  12 |       0 |    0
   15 |       1 |    1
-   8 |       6 |    2
+  15 |       9 |    1
+  15 |       5 |    1
    8 |       2 |    2
+   8 |       6 |    2
   10 |       3 |    3
   10 |       7 |    3
 (10 rows)
@@ -2741,14 +2741,14 @@ SELECT sum(unique1) over (order by four groups between 2 preceding and 1 followi
 FROM tenk1 WHERE unique1 < 10;
  sum | unique1 | four 
 -----+---------+------
-  27 |       0 |    0
-  19 |       8 |    0
   23 |       4 |    0
-  30 |       5 |    1
-  26 |       9 |    1
+  19 |       8 |    0
+  27 |       0 |    0
   34 |       1 |    1
-  39 |       6 |    2
+  26 |       9 |    1
+  30 |       5 |    1
   43 |       2 |    2
+  39 |       6 |    2
   30 |       3 |    3
   26 |       7 |    3
 (10 rows)
@@ -2758,14 +2758,14 @@ SELECT sum(unique1) over (order by four groups between 2 preceding and 1 followi
 FROM tenk1 WHERE unique1 < 10;
  sum | unique1 | four 
 -----+---------+------
-  15 |       0 |    0
-  15 |       8 |    0
   15 |       4 |    0
-  20 |       5 |    1
-  20 |       9 |    1
+  15 |       8 |    0
+  15 |       0 |    0
   20 |       1 |    1
-  37 |       6 |    2
+  20 |       9 |    1
+  20 |       5 |    1
   37 |       2 |    2
+  37 |       6 |    2
   23 |       3 |    3
   23 |       7 |    3
 (10 rows)
@@ -2775,14 +2775,14 @@ SELECT sum(unique1) over (order by four groups between 2 preceding and 1 followi
 FROM tenk1 WHERE unique1 < 10;
  sum | unique1 | four 
 -----+---------+------
-  15 |       0 |    0
-  23 |       8 |    0
   19 |       4 |    0
-  25 |       5 |    1
-  29 |       9 |    1
+  23 |       8 |    0
+  15 |       0 |    0
   21 |       1 |    1
-  43 |       6 |    2
+  29 |       9 |    1
+  25 |       5 |    1
   39 |       2 |    2
+  43 |       6 |    2
   26 |       3 |    3
   30 |       7 |    3
 (10 rows)
@@ -2863,14 +2863,14 @@ select first_value(salary) over(order by enroll_date groups between 1 preceding 
 -------------+------+-----------+--------+-------------
         5000 | 6000 |      5000 |   5000 | 10-01-2006
         5000 | 3900 |      5000 |   6000 | 10-01-2006
-        5000 | 4800 |      5000 |   3900 | 12-23-2006
-        3900 | 5200 |      3900 |   4800 | 08-01-2007
+        5000 | 5200 |      5000 |   3900 | 12-23-2006
         3900 | 4800 |      3900 |   5200 | 08-01-2007
-        4800 | 5200 |      4800 |   4800 | 08-08-2007
+        3900 | 4800 |      3900 |   4800 | 08-01-2007
+        5200 | 5200 |      5200 |   4800 | 08-08-2007
         4800 | 3500 |      4800 |   5200 | 08-15-2007
-        5200 | 4500 |      5200 |   3500 | 12-10-2007
-        3500 | 4200 |      3500 |   4500 | 01-01-2008
-        3500 |      |      3500 |   4200 | 01-01-2008
+        5200 | 4200 |      5200 |   3500 | 12-10-2007
+        3500 | 4500 |      3500 |   4200 | 01-01-2008
+        3500 |      |      3500 |   4500 | 01-01-2008
 (10 rows)
 
 select last_value(salary) over(order by enroll_date groups between 1 preceding and 1 following),
@@ -2880,14 +2880,14 @@ select last_value(salary) over(order by enroll_date groups between 1 preceding a
 ------------+------+--------+-------------
        3900 |      |   5000 | 10-01-2006
        3900 | 5000 |   6000 | 10-01-2006
-       5200 | 6000 |   3900 | 12-23-2006
-       4800 | 3900 |   4800 | 08-01-2007
-       4800 | 4800 |   5200 | 08-01-2007
-       5200 | 5200 |   4800 | 08-08-2007
+       4800 | 6000 |   3900 | 12-23-2006
+       4800 | 3900 |   5200 | 08-01-2007
+       4800 | 5200 |   4800 | 08-01-2007
+       5200 | 4800 |   4800 | 08-08-2007
        3500 | 4800 |   5200 | 08-15-2007
-       4200 | 5200 |   3500 | 12-10-2007
-       4200 | 3500 |   4500 | 01-01-2008
-       4200 | 4500 |   4200 | 01-01-2008
+       4500 | 5200 |   3500 | 12-10-2007
+       4500 | 3500 |   4200 | 01-01-2008
+       4500 | 4200 |   4500 | 01-01-2008
 (10 rows)
 
 select first_value(salary) over(order by enroll_date groups between 1 following and 3 following
@@ -2900,14 +2900,14 @@ select first_value(salary) over(order by enroll_date groups between 1 following 
 -------------+------+-----------+--------+-------------
         3900 | 6000 |      3900 |   5000 | 10-01-2006
         3900 | 3900 |      3900 |   6000 | 10-01-2006
-        4800 | 4800 |      4800 |   3900 | 12-23-2006
-        4800 | 5200 |      4800 |   4800 | 08-01-2007
+        5200 | 5200 |      5200 |   3900 | 12-23-2006
         4800 | 4800 |      4800 |   5200 | 08-01-2007
+        4800 | 4800 |      4800 |   4800 | 08-01-2007
         5200 | 5200 |      5200 |   4800 | 08-08-2007
         3500 | 3500 |      3500 |   5200 | 08-15-2007
-        4500 | 4500 |      4500 |   3500 | 12-10-2007
-             | 4200 |           |   4500 | 01-01-2008
-             |      |           |   4200 | 01-01-2008
+        4200 | 4200 |      4200 |   3500 | 12-10-2007
+             | 4500 |           |   4200 | 01-01-2008
+             |      |           |   4500 | 01-01-2008
 (10 rows)
 
 select last_value(salary) over(order by enroll_date groups between 1 following and 3 following
@@ -2919,13 +2919,13 @@ select last_value(salary) over(order by enroll_date groups between 1 following a
        4800 |      |   5000 | 10-01-2006
        4800 | 5000 |   6000 | 10-01-2006
        5200 | 6000 |   3900 | 12-23-2006
-       3500 | 3900 |   4800 | 08-01-2007
-       3500 | 4800 |   5200 | 08-01-2007
-       4200 | 5200 |   4800 | 08-08-2007
-       4200 | 4800 |   5200 | 08-15-2007
-       4200 | 5200 |   3500 | 12-10-2007
-            | 3500 |   4500 | 01-01-2008
-            | 4500 |   4200 | 01-01-2008
+       3500 | 3900 |   5200 | 08-01-2007
+       3500 | 5200 |   4800 | 08-01-2007
+       4500 | 4800 |   4800 | 08-08-2007
+       4500 | 4800 |   5200 | 08-15-2007
+       4500 | 5200 |   3500 | 12-10-2007
+            | 3500 |   4200 | 01-01-2008
+            | 4200 |   4500 | 01-01-2008
 (10 rows)
 
 -- Show differences in offset interpretation between ROWS, RANGE, and GROUPS
@@ -3686,7 +3686,7 @@ SELECT * FROM
   depname  | empno | salary | enroll_date | c1 | rn | c2 | c3 
 -----------+-------+--------+-------------+----+----+----+----
  personnel |     5 |   3500 | 12-10-2007  |  2 |  1 |  2 |  2
- sales     |     3 |   4800 | 08-01-2007  |  3 |  1 |  3 |  3
+ sales     |     1 |   5000 | 10-01-2006  |  3 |  1 |  3 |  3
 (2 rows)
 
 -- Tests to ensure we don't push down the run condition when it's not valid to
@@ -3824,7 +3824,7 @@ WHERE first_emp = 1 OR last_emp = 1;
   depname  | empno | salary | enroll_date | first_emp | last_emp 
 -----------+-------+--------+-------------+-----------+----------
  develop   |     8 |   6000 | 10-01-2006  |         1 |        5
- develop   |     7 |   4200 | 01-01-2008  |         5 |        1
+ develop   |     7 |   4200 | 01-01-2008  |         4 |        1
  personnel |     2 |   3900 | 12-23-2006  |         1 |        2
  personnel |     5 |   3500 | 12-10-2007  |         2 |        1
  sales     |     1 |   5000 | 10-01-2006  |         1 |        3

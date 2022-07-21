@@ -3283,7 +3283,7 @@ CREATE OR REPLACE FUNCTION retcomposite(IN integer, IN integer,
     </para>
    </sect2>
 
-   <sect2>
+   <sect2 id="xfunc-c-polymorphism">
     <title>Polymorphic Arguments and Return Types</title>
 
     <para>

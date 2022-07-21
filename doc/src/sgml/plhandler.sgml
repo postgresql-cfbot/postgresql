@@ -1,7 +1,7 @@
 <!-- doc/src/sgml/plhandler.sgml -->
 
  <chapter id="plhandler">
-   <title>Writing a Procedural Language Handler</title>
+   <title>Implementing a new Procedural Language</title>
 
    <indexterm zone="plhandler">
     <primary>procedural language</primary>
@@ -9,184 +9,438 @@
    </indexterm>
 
    <para>
-    All calls to functions that are written in a language other than
-    the current <quote>version 1</quote> interface for compiled
-    languages (this includes functions in user-defined procedural languages
-    and functions written in SQL) go through a <firstterm>call handler</firstterm>
-    function for the specific language.  It is the responsibility of
-    the call handler to execute the function in a meaningful way, such
-    as by interpreting the supplied source text.  This chapter outlines
-    how a new procedural language's call handler can be written.
+    To make a new procedural language available in
+    <productname>PostgreSQL</productname>, at least one dedicated handler
+    function, and optionally one or two others, must be written and then named
+    in a <xref linkend="sql-createlanguage"/> command. They are:
+    <variablelist>
+     <varlistentry>
+      <term>call handler</term>
+      <listitem>
+       <para>
+        (Required.) Responsible for executing
+        <glossterm linkend="glossary-routine">routines</glossterm>
+        (<glossterm linkend="glossary-function">functions</glossterm> or
+        <glossterm linkend="glossary-procedure">procedures</glossterm>) defined
+        in the procedural language.
+       </para>
+      </listitem>
+     </varlistentry>
+     <varlistentry>
+      <term>validator</term>
+      <listitem>
+       <para>
+        (Optional.) If provided, this will be called whenever a routine using
+        the procedural language has been created or updated, and should check
+        the definition to report any errors detectable at that time.
+       </para>
+      </listitem>
+     </varlistentry>
+     <varlistentry>
+      <term>inline handler</term>
+      <listitem>
+       <para>
+        (Optional.) If the procedural language can be used inline in
+        a <xref linkend="sql-do"/> statement, this handler must be provided,
+        and is responsible for executing such inline code.
+       </para>
+      </listitem>
+     </varlistentry>
+    </variablelist>
    </para>
 
    <para>
-    The call handler for a procedural language is a
-    <quote>normal</quote> function that must be written in a compiled
-    language such as C, using the version-1 interface, and registered
-    with <productname>PostgreSQL</productname> as taking no arguments
-    and returning the type <type>language_handler</type>.  This
-    special pseudo-type identifies the function as a call handler and
-    prevents it from being called directly in SQL commands.
-    For more details on C language calling conventions and dynamic loading,
-    see <xref linkend="xfunc-c"/>.
+    This chapter outlines how a new procedural language's handlers can be
+    written.
    </para>
 
-   <para>
-    The call handler is called in the same way as any other function:
-    It receives a pointer to a
-    <structname>FunctionCallInfoBaseData</structname> <type>struct</type> containing
-    argument values and information about the called function, and it
-    is expected to return a <type>Datum</type> result (and possibly
-    set the <structfield>isnull</structfield> field of the
-    <structname>FunctionCallInfoBaseData</structname> structure, if it wishes
-    to return an SQL null result).  The difference between a call
-    handler and an ordinary callee function is that the
-    <structfield>flinfo-&gt;fn_oid</structfield> field of the
-    <structname>FunctionCallInfoBaseData</structname> structure will contain
-    the OID of the actual function to be called, not of the call
-    handler itself.  The call handler must use this field to determine
-    which function to execute.  Also, the passed argument list has
-    been set up according to the declaration of the target function,
-    not of the call handler.
-   </para>
+   <sect1 id="plhandler-call">
+    <title>Call handler function</title>
 
-   <para>
-    It's up to the call handler to fetch the entry of the function from the
-    <classname>pg_proc</classname> system catalog and to analyze the argument
-    and return types of the called function. The <literal>AS</literal> clause from the
-    <command>CREATE FUNCTION</command> command for the function will be found
-    in the <literal>prosrc</literal> column of the
-    <classname>pg_proc</classname> row. This is commonly source
-    text in the procedural language, but in theory it could be something else,
-    such as a path name to a file, or anything else that tells the call handler
-    what to do in detail.
-   </para>
+    <para>
+     Every routine defined with a language name other than
+     <literal>internal</literal> (as defined in
+     <xref linkend="xfunc-internal"/>)
+     or <literal>c</literal> (<xref linkend="xfunc-c"/>) will be called by
+     invoking the procedural language's call handler.
+     <footnote>
+      <para>
+       This is true even of routines with language name <literal>sql</literal>,
+       though, as a special case, that call handler has no entry in the system
+       catalogs.
+      </para>
+     </footnote>
+     It is the responsibility of
+     the call handler to execute the routine in a meaningful way, such
+     as by interpreting the supplied source text.
+    </para>
 
-   <para>
-    Often, the same function is called many times per SQL statement.
-    A call handler can avoid repeated lookups of information about the
-    called function by using the
-    <structfield>flinfo-&gt;fn_extra</structfield> field.  This will
-    initially be <symbol>NULL</symbol>, but can be set by the call handler to point at
-    information about the called function.  On subsequent calls, if
-    <structfield>flinfo-&gt;fn_extra</structfield> is already non-<symbol>NULL</symbol>
-    then it can be used and the information lookup step skipped.  The
-    call handler must make sure that
-    <structfield>flinfo-&gt;fn_extra</structfield> is made to point at
-    memory that will live at least until the end of the current query,
-    since an <structname>FmgrInfo</structname> data structure could be
-    kept that long.  One way to do this is to allocate the extra data
-    in the memory context specified by
-    <structfield>flinfo-&gt;fn_mcxt</structfield>; such data will
-    normally have the same lifespan as the
-    <structname>FmgrInfo</structname> itself.  But the handler could
-    also choose to use a longer-lived memory context so that it can cache
-    function definition information across queries.
-   </para>
+    <para>
+     The call handler is a <quote>normal</quote> user-defined function that must
+     be declared to <productname>PostgreSQL</productname> as taking no arguments
+     and returning the type <type>language_handler</type>.  This
+     special pseudo-type identifies the function as a call handler and
+     prevents it from being called directly in SQL commands.
+     This handler must not require a call handler of its own, which makes
+     the predefined languages <literal>internal</literal> or
+     <literal>c</literal> the only choices for the handler's own declaration.
+     Typically, it will be a loadable function in language
+     <literal>c</literal>, as described in <xref linkend="xfunc-c"/>.
+     <footnote>
+      <para>
+       It may be implemented in a language other than C, as long as it can be
+       built into a loadable object with compatible calling conventions.
+      </para>
+     </footnote>
+    </para>
 
-   <para>
-    When a procedural-language function is invoked as a trigger, no arguments
-    are passed in the usual way, but the
-    <structname>FunctionCallInfoBaseData</structname>'s
-    <structfield>context</structfield> field points at a
-    <structname>TriggerData</structname> structure, rather than being <symbol>NULL</symbol>
-    as it is in a plain function call.  A language handler should
-    provide mechanisms for procedural-language functions to get at the trigger
-    information.
-   </para>
+    <para>
+     The call handler is called in the same way as any other function:
+     It receives a pointer to a
+     <structname>FunctionCallInfoBaseData</structname> <type>struct</type>
+     containing argument values and information about the called routine, and it
+     is expected to return a <type>Datum</type> result (and possibly
+     set the <structfield>isnull</structfield> field of the
+     <structname>FunctionCallInfoBaseData</structname> structure, if it wishes
+     to return an SQL null result).  The difference between a call
+     handler and an ordinary callee is that the
+     <structfield>flinfo-&gt;fn_oid</structfield> field of the
+     <structname>FunctionCallInfoBaseData</structname> structure will contain
+     the OID of the actual routine to be called, not of the call
+     handler itself.  The call handler must use this field to determine
+     which routine to execute.  Also, the passed argument list has
+     been set up according to the declaration of the target routine,
+     not of the call handler.
+    </para>
 
-   <para>
-    A template for a procedural-language handler written as a C extension is
-    provided in <literal>src/test/modules/plsample</literal>.  This is a
-    working sample demonstrating one way to create a procedural-language
-    handler, process parameters, and return a value.
-   </para>
+    <para>
+     It's up to the call handler to fetch the routine's defining
+     <classname>pg_proc</classname> row from the system catalog cache
+     to determine what to execute, what parameter and return types are expected,
+     and so on.
+     The <literal>AS</literal> clause from the
+     <command>CREATE FUNCTION</command> or <command>CREATE PROCEDURE</command>
+     command for the routine will be found
+     in the <literal>prosrc</literal> column of the
+     <classname>pg_proc</classname> row. This is commonly source
+     text in the procedural language, but in theory it could be something else,
+     such as a path name to a file, or anything else that tells the call handler
+     what to do in detail.
+    </para>
 
-   <para>
-    Although providing a call handler is sufficient to create a minimal
-    procedural language, there are two other functions that can optionally
-    be provided to make the language more convenient to use.  These
-    are a <firstterm>validator</firstterm> and an
-    <firstterm>inline handler</firstterm>.  A validator can be provided
-    to allow language-specific checking to be done during
-    <xref linkend="sql-createfunction"/>.
-    An inline handler can be provided to allow the language to support
-    anonymous code blocks executed via the <xref linkend="sql-do"/> command.
-   </para>
+    <para>
+     The handler may also examine the passed
+     <structname>FunctionCallInfoBaseData</structname> structure for information
+     on the context of the call. If the procedural language will support
+     returning sets, the structure may contain a pointer to a
+     <structname>ReturnSetInfo</structname> structure for use as described in
+     <xref linkend="xfunc-c-return-set"/>. If the language will support triggers
+     or event triggers, the structure may hold a pointer to one of
+     the structures described in <xref linkend="trigger-interface"/> or
+     <xref linkend="event-trigger-interface"/>, and the procedural language
+     should provide some way for the called function to use the information
+     they carry.
+    </para>
 
-   <para>
-    If a validator is provided by a procedural language, it
-    must be declared as a function taking a single parameter of type
-    <type>oid</type>.  The validator's result is ignored, so it is customarily
-    declared to return <type>void</type>.  The validator will be called at
-    the end of a <command>CREATE FUNCTION</command> command that has created
-    or updated a function written in the procedural language.
-    The passed-in OID is the OID of the function's <classname>pg_proc</classname>
-    row.  The validator must fetch this row in the usual way, and do
-    whatever checking is appropriate.
-    First, call <function>CheckFunctionValidatorAccess()</function> to diagnose
-    explicit calls to the validator that the user could not achieve through
-    <command>CREATE FUNCTION</command>.  Typical checks then include verifying
-    that the function's argument and result types are supported by the
-    language, and that the function's body is syntactically correct
-    in the language.  If the validator finds the function to be okay,
-    it should just return.  If it finds an error, it should report that
-    via the normal <function>ereport()</function> error reporting mechanism.
-    Throwing an error will force a transaction rollback and thus prevent
-    the incorrect function definition from being committed.
-   </para>
+    <sect2 id="plhandler-call-args">
+     <title>Parameter and return type resolution</title>
 
-   <para>
-    Validator functions should typically honor the <xref
-    linkend="guc-check-function-bodies"/> parameter: if it is turned off then
-    any expensive or context-sensitive checking should be skipped.  If the
-    language provides for code execution at compilation time, the validator
-    must suppress checks that would induce such execution.  In particular,
-    this parameter is turned off by <application>pg_dump</application> so that it can
-    load procedural language functions without worrying about side effects or
-    dependencies of the function bodies on other database objects.
-    (Because of this requirement, the call handler should avoid
-    assuming that the validator has fully checked the function.  The point
-    of having a validator is not to let the call handler omit checks, but
-    to notify the user immediately if there are obvious errors in a
-    <command>CREATE FUNCTION</command> command.)
-    While the choice of exactly what to check is mostly left to the
-    discretion of the validator function, note that the core
-    <command>CREATE FUNCTION</command> code only executes <literal>SET</literal> clauses
-    attached to a function when <varname>check_function_bodies</varname> is on.
-    Therefore, checks whose results might be affected by GUC parameters
-    definitely should be skipped when <varname>check_function_bodies</varname> is
-    off, to avoid false failures when reloading a dump.
-   </para>
+     <para>
+      A routine's statically-declared parameter types (and, for a function,
+      return type) are found in the <literal>proargtypes</literal> and
+      <literal>prorettype</literal> columns of the
+      <classname>pg_proc</classname> row.
+      If a routine has <literal>OUT</literal> parameters, those types are
+      included in the <literal>proallargtypes</literal> column, and their names
+      in <literal>proargnames</literal>.
+      Convenience functions declared in <filename>funcapi.h</filename> are
+      available for extracting that information.
+     </para>
 
-   <para>
-    If an inline handler is provided by a procedural language, it
-    must be declared as a function taking a single parameter of type
-    <type>internal</type>.  The inline handler's result is ignored, so it is
-    customarily declared to return <type>void</type>.  The inline handler
-    will be called when a <command>DO</command> statement is executed specifying
-    the procedural language.  The parameter actually passed is a pointer
-    to an <structname>InlineCodeBlock</structname> struct, which contains information
-    about the <command>DO</command> statement's parameters, in particular the
-    text of the anonymous code block to be executed.  The inline handler
-    should execute this code and return.
-   </para>
+     <para>
+      The statically-declared types may include polymorphic types that need
+      to be resolved according to the actual types present at the call site,
+      as described in <xref linkend="xfunc-c-polymorphism"/>.
+     </para>
 
-   <para>
-    It's recommended that you wrap all these function declarations,
-    as well as the <command>CREATE LANGUAGE</command> command itself, into
-    an <firstterm>extension</firstterm> so that a simple <command>CREATE EXTENSION</command>
-    command is sufficient to install the language.  See
-    <xref linkend="extend-extensions"/> for information about writing
-    extensions.
-   </para>
+    </sect2>
 
-   <para>
-    The procedural languages included in the standard distribution
-    are good references when trying to write your own language handler.
-    Look into the <filename>src/pl</filename> subdirectory of the source tree.
-    The <xref linkend="sql-createlanguage"/>
-    reference page also has some useful details.
-   </para>
+    <sect2 id="plhandler-call-types">
+     <title>Mapping to procedural language types</title>
+
+     <para>
+      Once the <productname>PostgreSQL</productname> types of any parameters
+      and results have been resolved, the handler must determine how it will
+      map their values to and from suitable types that exist in the procedural
+      language.
+     </para>
+
+     <para>
+      The designer of a procedural language will typically document what types
+      will be supported and how they will be mapped, which could be as simple
+      as using every type's text input/output format to map it to the target
+      language's string type, or could directly map many types to corresponding
+      ones the target language provides. The handler function will implement
+      those rules.
+     </para>
+
+     <sect3 id="plhandler-call-types-transform">
+      <title>Type transforms</title>
+
+      <para>
+       Because <productname>PostgreSQL</productname> is extensible, and
+       an extension can easily supply new types, a procedural language handler
+       may encounter types it has no predefined mappings for, or only an awkward
+       default mapping such as to a text string. A procedural language can be
+       designed so that its type mappings are also extensible, and an extension
+       can add mappings between new <productname>PostgreSQL</productname> types
+       and suitable types in the target language.
+      </para>
+
+      <para>
+       One mechanism <productname>PostgreSQL</productname> provides that may be
+       used for that purpose is <xref linkend="sql-createtransform"/>.
+       The command associates a <productname>PostgreSQL</productname> type and
+       a specific procedural language with a pair of functions to handle the
+       mapping of that type to a corresponding procedural language type
+       and back.
+      </para>
+
+      <para>
+       For a procedural language to support transforms, its call handler is
+       responsible for consulting the <literal>protrftypes</literal> column of
+       a routine's <classname>pg_proc</classname> row to determine which types
+       should have transforms applied.
+       A convenience function <function>get_call_trftypes</function> is
+       available.
+       The call handler must then resolve the <quote>from SQL</quote> function
+       for each affected parameter type, and the <quote>to SQL</quote> function
+       for any affected result.
+       It may use the <function>get_transform_fromsql</function> and
+       <function>get_transform_tosql</function> functions for that.
+      </para>
+
+      <para>
+       The handler must then apply the proper <quote>from SQL</quote> functions
+       to all affected inputs (including elements within array or composite
+       types) and, after calling the target routine, apply the proper
+       <quote>to SQL</quote> functions similarly to any results.
+       If the target routine might interact with the database using SPI,
+       the handler may arrange for the requested transforms to be applied
+       in those operations as well.
+      </para>
+
+      <para>
+       Because the procedural language implementation, and not
+       <productname>PostgreSQL</productname> itself, is responsible for calling
+       the transform functions, it is free to define what it will pass as the
+       parameter to each function (declared as <type>internal</type> for both),
+       and how it will interpret the result (also declared
+       <type>internal</type>) of the <quote>from SQL</quote> function.
+       Effectively, each procedural language's implementation defines the API
+       that must be adhered to by any author of transforms for that language.
+      </para>
+
+      <para>
+       A procedural language might impose limits on where and how it will apply
+       transforms (such as on array or domain types). The
+       <function>get_transform_fromsql</function> and
+       <function>get_transform_tosql</function> functions mentioned above
+       consider each type only shallowly, and will not, for example, return
+       a transform function for a domain type if only its base type was listed
+       in the <literal>TRANSFORM</literal> clause.
+       If a procedural language's call handler does not implement transforms
+       at all, no <literal>TRANSFORM</literal> clause will have any effect
+       for routines declared in that language.
+       The language's validator function can be used to give immediate feedback
+       if a routine is declared with <literal>TRANSFORM</literal> clauses
+       the implementation cannot support.
+      </para>
+
+     </sect3>
+
+    </sect2>
+
+    <sect2 id="plhandler-call-cache">
+     <title>Caching resolved routine information</title>
+
+    <para>
+     Often, the same routine is called many times per SQL statement.
+     A call handler can avoid repeated lookups of information about the
+     called routine by using the
+     <structfield>flinfo-&gt;fn_extra</structfield> field.  This will
+     initially be <symbol>NULL</symbol>, but can be set by the call handler
+     to point at information about the called routine.  On subsequent calls,
+     if <structfield>flinfo-&gt;fn_extra</structfield> is already
+     non-<symbol>NULL</symbol> then it can be used and the information lookup
+     step skipped.  The call handler must make sure that
+     <structfield>flinfo-&gt;fn_extra</structfield> is made to point at
+     memory that will live at least until the end of the current query,
+     since an <structname>FmgrInfo</structname> data structure could be
+     kept that long.  One way to do this is to allocate the extra data
+     in the memory context specified by
+     <structfield>flinfo-&gt;fn_mcxt</structfield>; such data will
+     normally have the same lifespan as the
+     <structname>FmgrInfo</structname> itself.  But the handler could
+     also choose to use a longer-lived memory context so that it can cache
+     routine definition information across queries.
+    </para>
+
+    <para>
+     If the handler supports returning sets, and uses the ValuePerCall mode
+     helper macros described in <xref linkend="xfunc-c-return-set"/>, it must
+     not use <structfield>fn_extra</structfield> during set-returning calls.
+     The helper macros use that field for their own purposes. After
+     <literal>SRF_FIRSTCALL_INIT</literal> has been called, the field will point
+     to a <structname>FuncCallContext</structname> structure, which has
+     a <structfield>user_fctx</structfield> field that can be used similarly,
+     but only through the sequence of calls returning one set result.
+    </para>
+
+    </sect2>
+
+   </sect1>
+
+   <sect1 id="plhandler-validator">
+    <title>Validator function</title>
+
+    <para>
+     If a validator is provided by a procedural language, it
+     must be declared as a function taking a single parameter of type
+     <type>oid</type>.  The validator's result is ignored, so it is customarily
+     declared to return <type>void</type>.
+     The validator itself may be written in any procedural language able to
+     receive an <type>oid</type>-typed parameter and query system catalogs.
+    </para>
+
+    <para>
+     The validator will be called at
+     the end of a <command>CREATE FUNCTION</command> or
+     <command>CREATE PROCEDURE</command> command that has created
+     or updated a routine written in the procedural language.
+     The passed-in OID is the OID of the routine's
+     <classname>pg_proc</classname> row.  The validator must fetch this row
+     in the usual way, and do whatever checking is appropriate.
+    </para>
+
+    <para>
+     First, call <function>CheckFunctionValidatorAccess()</function>
+     to diagnose explicit calls to the validator that the user could not achieve
+     through <command>CREATE FUNCTION</command> or
+     <command>CREATE PROCEDURE</command>.
+     Typical checks then include verifying
+     that the routine's argument and result types are supported by the
+     language, and that the routine's body is syntactically correct
+     in the language.  If the validator finds the routine to be okay,
+     it should just return.  If it finds an error, it should report that
+     via the normal <function>ereport()</function> error reporting mechanism.
+     Throwing an error will force a transaction rollback and thus prevent
+     the incorrect routine definition from being committed.
+    </para>
+
+    <para>
+     Validator functions should typically honor the <xref
+     linkend="guc-check-function-bodies"/> parameter: if it is turned off then
+     any expensive or context-sensitive checking should be skipped.  If the
+     language provides for code execution at compilation time, the validator
+     must suppress checks that would induce such execution.  In particular,
+     this parameter is turned off by <application>pg_dump</application> so that
+     it can load procedural language routines without worrying about
+     side effects or dependencies of the routine bodies on other database
+     objects.
+     (Because of this requirement, the call handler should avoid
+     assuming that the validator has fully checked the routine.  The point
+     of having a validator is not to let the call handler omit checks, but
+     to notify the user immediately if there are obvious errors in a
+     <command>CREATE FUNCTION</command> or <command>CREATE PROCEDURE</command>
+     command.)
+    </para>
+
+    <para>
+     While the choice of exactly what to check is mostly left to the
+     discretion of the validator function, note that the core
+     <command>CREATE FUNCTION</command> and <command>CREATE PROCEDURE</command>
+     code only executes <literal>SET</literal> clauses
+     attached to a routine when <varname>check_function_bodies</varname> is on.
+     Therefore, checks whose results might be affected by GUC parameters
+     definitely should be skipped when <varname>check_function_bodies</varname>
+     is off, to avoid false failures when reloading a dump.
+    </para>
+
+    <para>
+     If a language's call handler does not apply parameter and return type
+     transforms, then no <literal>TRANSFORM</literal> clause in a routine
+     declaration will have any effect. To provide immediate feedback if a
+     declaration contains such a clause, the validator can report a suitable
+     error whenever the <literal>protrftypes</literal> column of the routine's
+     <classname>pg_proc</classname> row is non-null.
+    </para>
+
+   </sect1>
+
+   <sect1 id="plhandler-inline">
+    <title>Inline handler function</title>
+
+    <para>
+     If this handler is provided by a procedural language, it
+     must be declared as a function taking a single parameter of type
+     <type>internal</type>, which will be a pointer
+     to an <structname>InlineCodeBlock</structname> struct when the handler
+     is called.  The result is ignored, so the return type is customarily
+     declared as <type>void</type>.
+     The inline handler itself may be written in any procedural language that
+     permits declaring an <type>internal</type> parameter with a suitable
+     language binding for accessing it as an
+     <structname>InlineCodeBlock</structname> struct.
+    </para>
+
+    <para>
+     The inline handler
+     will be called when a <command>DO</command> statement is executed
+     specifying the procedural language.
+     The <structname>InlineCodeBlock</structname> struct contains information
+     about the <command>DO</command> statement's parameters, in particular the
+     text of the anonymous code block to be executed.
+     It also contains the OID of the intended procedural language and whether
+     that procedural language is declared as <literal>TRUSTED</literal>, useful
+     if a single inline handler is supporting more than one procedural language.
+     The inline handler should execute the code block and return.
+    </para>
+
+   </sect1>
+
+   <sect1 id="plhandler-packaging">
+    <title>Packaging the language handlers</title>
+
+    <para>
+     It's recommended that you wrap all these function declarations,
+     as well as the <command>CREATE LANGUAGE</command> command itself, into
+     an <firstterm>extension</firstterm> so that a simple
+     <command>CREATE EXTENSION</command> command is sufficient to install
+     the language.  See <xref linkend="extend-extensions"/> for information
+     about writing extensions.
+    </para>
+
+   </sect1>
+
+   <sect1 id="plhandler-examples">
+    <title>Example code</title>
+
+    <para>
+     A template for a procedural-language handler written as a C extension is
+     provided in <literal>src/test/modules/plsample</literal>.  This is a
+     working sample demonstrating one way to create a procedural-language
+     handler, process parameters, and return a value.
+    </para>
+
+    <para>
+     The procedural languages included in the standard distribution
+     are good references when trying to write your own language handler.
+     Look into the <filename>src/pl</filename> subdirectory of the source tree.
+     The <xref linkend="sql-createlanguage"/>
+     reference page also has some useful details.
+    </para>
+
+   </sect1>
 
  </chapter>

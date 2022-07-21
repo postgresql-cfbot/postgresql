@@ -560,7 +560,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <defelt>	generic_option_elem alter_generic_option_elem
 %type <list>	generic_option_list alter_generic_option_list
 
-%type <ival>	reindex_target_type reindex_target_multitable reindex_name_optional
+%type <ival>	reindex_target_type reindex_target_type_multi
 
 %type <node>	copy_generic_opt_arg copy_generic_opt_arg_list_item
 %type <defelt>	copy_generic_opt_elem
@@ -9085,7 +9085,9 @@ DropTransformStmt: DROP TRANSFORM opt_if_exists FOR Typename LANGUAGE name opt_d
  *
  *		QUERY:
  *
- *		REINDEX [ (options) ] type [CONCURRENTLY] <name>
+ *		REINDEX [ (options) ] {TABLE | INDEX} [CONCURRENTLY] <name>
+ *		REINDEX [ (options) ] SCHEMA [CONCURRENTLY] <name>
+ *		REINDEX [ (options) ] {SYSTEM | DATABASE} [<name>]
  *****************************************************************************/
 
 ReindexStmt:
@@ -9102,37 +9104,6 @@ ReindexStmt:
 											makeDefElem("concurrently", NULL, @3));
 					$$ = (Node *) n;
 				}
-			| REINDEX reindex_target_multitable opt_concurrently name
-				{
-					ReindexStmt *n = makeNode(ReindexStmt);
-
-					n->kind = $2;
-					n->name = $4;
-					n->relation = NULL;
-					n->params = NIL;
-					if ($3)
-						n->params = lappend(n->params,
-											makeDefElem("concurrently", NULL, @3));
-					$$ = (Node *) n;
-				}
-			| REINDEX reindex_name_optional
-				{
-					ReindexStmt *n = makeNode(ReindexStmt);
-					n->kind = $2;
-					n->name = NULL;
-					n->relation = NULL;
-					n->params = NIL;
-					$$ = (Node *)n;
-				}
-			| REINDEX '(' utility_option_list ')' reindex_name_optional
-				{
-					ReindexStmt *n = makeNode(ReindexStmt);
-					n->kind = $5;
-					n->name = NULL;
-					n->relation = NULL;
-					n->params = $3;
-					$$ = (Node *)n;
-				}
 			| REINDEX '(' utility_option_list ')' reindex_target_type opt_concurrently qualified_name
 				{
 					ReindexStmt *n = makeNode(ReindexStmt);
@@ -9146,11 +9117,25 @@ ReindexStmt:
 											makeDefElem("concurrently", NULL, @6));
 					$$ = (Node *) n;
 				}
-			| REINDEX '(' utility_option_list ')' reindex_target_multitable opt_concurrently name
+
+			| REINDEX SCHEMA opt_concurrently name
 				{
 					ReindexStmt *n = makeNode(ReindexStmt);
 
-					n->kind = $5;
+					n->kind = REINDEX_OBJECT_SCHEMA;
+					n->name = $4;
+					n->relation = NULL;
+					n->params = NIL;
+					if ($3)
+						n->params = lappend(n->params,
+											makeDefElem("concurrently", NULL, @3));
+					$$ = (Node *) n;
+				}
+			| REINDEX '(' utility_option_list ')' SCHEMA opt_concurrently name
+				{
+					ReindexStmt *n = makeNode(ReindexStmt);
+
+					n->kind = REINDEX_OBJECT_SCHEMA;
 					n->name = $7;
 					n->relation = NULL;
 					n->params = $3;
@@ -9159,18 +9144,31 @@ ReindexStmt:
 											makeDefElem("concurrently", NULL, @6));
 					$$ = (Node *) n;
 				}
+			| REINDEX reindex_target_type_multi OptSchemaName
+				{
+					ReindexStmt *n = makeNode(ReindexStmt);
+					n->kind = $2;
+					n->name = NULL;
+					n->relation = NULL;
+					n->params = NIL;
+					$$ = (Node *)n;
+				}
+			| REINDEX '(' utility_option_list ')' reindex_target_type_multi OptSchemaName
+				{
+					ReindexStmt *n = makeNode(ReindexStmt);
+					n->kind = $5;
+					n->name = $6;
+					n->relation = NULL;
+					n->params = $3;
+					$$ = (Node *)n;
+				}
 		;
 reindex_target_type:
 			INDEX					{ $$ = REINDEX_OBJECT_INDEX; }
 			| TABLE					{ $$ = REINDEX_OBJECT_TABLE; }
 		;
-reindex_target_multitable:
-			SCHEMA					{ $$ = REINDEX_OBJECT_SCHEMA; }
-			| SYSTEM_P				{ $$ = REINDEX_OBJECT_SYSTEM; }
-			| DATABASE				{ $$ = REINDEX_OBJECT_DATABASE; }
-		;
 /* For these options the name is optional */
-reindex_name_optional:
+reindex_target_type_multi:
 			SYSTEM_P				{ $$ = REINDEX_OBJECT_SYSTEM; }
 			| DATABASE				{ $$ = REINDEX_OBJECT_DATABASE; }
 		;

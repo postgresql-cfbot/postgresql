@@ -575,33 +575,22 @@ create view tt14v as select t.* from tt14f() t;
 select pg_get_viewdef('tt14v', true);
 select * from tt14v;
 
-begin;
+alter table tt14t drop column f3;  -- fail, view has explicit reference to f3
 
--- this perhaps should be rejected, but it isn't:
-alter table tt14t drop column f3;
+drop view tt14v;
 
--- column f3 is still in the view, sort of ...
+create view tt14v as select t.f1, t.f4 from tt14f() t;
+
 select pg_get_viewdef('tt14v', true);
--- ... and you can even EXPLAIN it ...
+select * from tt14v;
+
+alter table tt14t drop column f3;  -- ok
+
+select pg_get_viewdef('tt14v', true);
 explain (verbose, costs off) select * from tt14v;
--- but it will fail at execution
-select f1, f4 from tt14v;
 select * from tt14v;
 
-rollback;
-
-begin;
-
--- this perhaps should be rejected, but it isn't:
-alter table tt14t alter column f4 type integer using f4::integer;
-
--- f4 is still in the view ...
-select pg_get_viewdef('tt14v', true);
--- but will fail at execution
-select f1, f3 from tt14v;
-select * from tt14v;
-
-rollback;
+alter table tt14t alter column f4 type integer using f4::integer;  -- fail
 
 -- check display of whole-row variables in some corner cases
 

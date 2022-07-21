@@ -682,12 +682,8 @@ SELECT * FROM ROWS FROM(get_users(), generate_series(10,11)) WITH ORDINALITY;
 select * from usersview;
 alter table users add column junk text;
 select * from usersview;
-begin;
-alter table users drop column moredrop;
-select * from usersview;  -- expect clean failure
-rollback;
-alter table users alter column seq type numeric;
-select * from usersview;  -- expect clean failure
+alter table users drop column moredrop;  -- fail
+alter table users alter column seq type numeric;  -- fail
 
 drop view usersview;
 drop function get_first_user();

@@ -2247,15 +2247,13 @@ select * from usersview;
  id2    |   2 | email2 |       12 | t       |              11 |          2
 (2 rows)
 
-begin;
-alter table users drop column moredrop;
-select * from usersview;  -- expect clean failure
-ERROR:  attribute 5 of type record has been dropped
-rollback;
-alter table users alter column seq type numeric;
-select * from usersview;  -- expect clean failure
-ERROR:  attribute 2 of type record has wrong type
-DETAIL:  Table has type numeric, but query expects integer.
+alter table users drop column moredrop;  -- fail
+ERROR:  cannot drop column moredrop of table users because other objects depend on it
+DETAIL:  view usersview depends on column moredrop of table users
+HINT:  Use DROP ... CASCADE to drop the dependent objects too.
+alter table users alter column seq type numeric;  -- fail
+ERROR:  cannot alter type of a column used by a view or rule
+DETAIL:  rule _RETURN on view usersview depends on column "seq"
 drop view usersview;
 drop function get_first_user();
 drop function get_users();

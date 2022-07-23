@@ -2,6 +2,7 @@
 
 amcheck_sources = files(
   'amcheck.c',
+  'verify_gin.c',
   'verify_gist.c',
   'verify_heapam.c',
   'verify_nbtree.c',
@@ -38,6 +39,7 @@ tests += {
     'sql': [
       'check',
       'check_btree',
+      'check_gin',
       'check_gist',
       'check_heap',
     ],

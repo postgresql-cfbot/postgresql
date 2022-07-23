@@ -12,3 +12,12 @@ AS 'MODULE_PATHNAME', 'gist_index_check'
 LANGUAGE C STRICT;
 
 REVOKE ALL ON FUNCTION gist_index_check(regclass, boolean) FROM PUBLIC;
+
+-- gin_index_parent_check()
+--
+CREATE FUNCTION gin_index_parent_check(index regclass)
+RETURNS VOID
+AS 'MODULE_PATHNAME', 'gin_index_parent_check'
+LANGUAGE C STRICT;
+
+REVOKE ALL ON FUNCTION gin_index_parent_check(regclass) FROM PUBLIC;

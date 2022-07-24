@@ -602,6 +602,7 @@ static const struct config_enum_entry wal_compression_options[] = {
 extern const struct config_enum_entry wal_level_options[];
 extern const struct config_enum_entry archive_mode_options[];
 extern const struct config_enum_entry recovery_target_action_options[];
+extern const struct config_enum_entry insufficient_standby_setting_action_options[];
 extern const struct config_enum_entry sync_method_options[];
 extern const struct config_enum_entry dynamic_shared_memory_options[];
 
@@ -4920,6 +4921,17 @@ static struct config_enum ConfigureNamesEnum[] =
 		},
 		&recoveryTargetAction,
 		RECOVERY_TARGET_ACTION_PAUSE, recovery_target_action_options,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"insufficient_standby_setting_action", PGC_POSTMASTER, REPLICATION_STANDBY,
+			gettext_noop("Sets the action to perform when hot standby cannot "
+						 "continue due to insufficient parameter settings."),
+			NULL
+		},
+		&insufficient_standby_setting_action,
+		INSUFFICIENT_STANDBY_SETTING_ACTION_PAUSE, insufficient_standby_setting_action_options,
 		NULL, NULL, NULL
 	},
 

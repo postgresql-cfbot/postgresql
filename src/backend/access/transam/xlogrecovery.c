@@ -74,6 +74,12 @@ const struct config_enum_entry recovery_target_action_options[] = {
 	{NULL, 0, false}
 };
 
+const struct config_enum_entry insufficient_standby_setting_action_options[] = {
+	{"pause", INSUFFICIENT_STANDBY_SETTING_ACTION_PAUSE, false},
+	{"shutdown", INSUFFICIENT_STANDBY_SETTING_ACTION_SHUTDOWN, false},
+	{NULL, 0, false}
+};
+
 /* options formerly taken from recovery.conf for archive recovery */
 char	   *recoveryRestoreCommand = NULL;
 char	   *recoveryEndCommand = NULL;
@@ -93,6 +99,9 @@ char	   *PrimaryConnInfo = NULL;
 char	   *PrimarySlotName = NULL;
 char	   *PromoteTriggerFile = NULL;
 bool		wal_receiver_create_temp_slot = false;
+
+/* other GUC options */
+int			insufficient_standby_setting_action = INSUFFICIENT_STANDBY_SETTING_ACTION_PAUSE;
 
 /*
  * recoveryTargetTimeLineGoal: what the user requested, if any
@@ -4533,7 +4542,8 @@ RecoveryRequiresIntParameter(const char *param_name, int currValue, int minValue
 {
 	if (currValue < minValue)
 	{
-		if (HotStandbyActiveInReplay())
+		if (HotStandbyActiveInReplay() &&
+			insufficient_standby_setting_action == INSUFFICIENT_STANDBY_SETTING_ACTION_PAUSE)
 		{
 			bool		warned_for_promote = false;
 

@@ -2043,9 +2043,11 @@ LOG:  database system is ready to accept read-only connections
 
    <para>
     The WAL tracks changes to these parameters on the
-    primary.  If a hot standby processes WAL that indicates that the current
-    value on the primary is higher than its own value, it will log a warning
-    and pause recovery, for example:
+    primary.  When a hot standby processes WAL that indicates that the current
+    value on the primary is higher than its own value, it will take the action
+    specified by <xref linkend="guc-insufficient-standby-setting-action"/>.  If
+    this parameter is set to <literal>'pause'</literal> (the default), the
+    standby will log a warning and pause recovery.  For example:
 <screen>
 WARNING:  hot standby is not possible because of insufficient parameter settings
 DETAIL:  max_connections = 80 is a lower setting than on the primary server, where its value was 100.
@@ -2055,9 +2057,9 @@ HINT:  You can then restart the server after making the necessary configuration 
 </screen>
     At that point, the settings on the standby need to be updated and the
     instance restarted before recovery can continue.  If the standby is not a
-    hot standby, then when it encounters the incompatible parameter change, it
-    will shut down immediately without pausing, since there is then no value
-    in keeping it up.
+    hot standby or <varname>insufficient_standby_setting_action</varname> is set
+    to <literal>'shutdown'</literal>, then when it encounters the incompatible
+    parameter change, it will shut down immediately without pausing.
    </para>
 
    <para>

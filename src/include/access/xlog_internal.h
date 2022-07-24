@@ -325,6 +325,15 @@ typedef enum
 	RECOVERY_TARGET_ACTION_SHUTDOWN
 }			RecoveryTargetAction;
 
+/*
+ * Insufficient hot standby parameter setting action.
+ */
+typedef enum
+{
+	INSUFFICIENT_STANDBY_SETTING_ACTION_PAUSE,
+	INSUFFICIENT_STANDBY_SETTING_ACTION_SHUTDOWN
+} InsufficientStandbySettingAction;
+
 struct LogicalDecodingContext;
 struct XLogRecordBuffer;
 

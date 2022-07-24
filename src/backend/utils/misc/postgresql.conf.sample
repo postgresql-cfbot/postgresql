@@ -329,29 +329,30 @@
 
 # These settings are ignored on a primary server.
 
-#primary_conninfo = ''			# connection string to sending server
-#primary_slot_name = ''			# replication slot on sending server
-#promote_trigger_file = ''		# file name whose presence ends recovery
-#hot_standby = on			# "off" disallows queries during recovery
-					# (change requires restart)
-#max_standby_archive_delay = 30s	# max delay before canceling queries
-					# when reading WAL from archive;
-					# -1 allows indefinite delay
-#max_standby_streaming_delay = 30s	# max delay before canceling queries
-					# when reading streaming WAL;
-					# -1 allows indefinite delay
-#wal_receiver_create_temp_slot = off	# create temp slot if primary_slot_name
-					# is not set
-#wal_receiver_status_interval = 10s	# send replies at least this often
-					# 0 disables
-#hot_standby_feedback = off		# send info from standby to prevent
-					# query conflicts
-#wal_receiver_timeout = 60s		# time that receiver waits for
-					# communication from primary
-					# in milliseconds; 0 disables
-#wal_retrieve_retry_interval = 5s	# time to wait before retrying to
-					# retrieve WAL after a failed attempt
-#recovery_min_apply_delay = 0		# minimum delay for applying changes during recovery
+#primary_conninfo = ''				# connection string to sending server
+#primary_slot_name = ''				# replication slot on sending server
+#promote_trigger_file = ''			# file name whose presence ends recovery
+#hot_standby = on				# "off" disallows queries during recovery
+						# (change requires restart)
+#max_standby_archive_delay = 30s		# max delay before canceling queries
+						# when reading WAL from archive;
+						# -1 allows indefinite delay
+#max_standby_streaming_delay = 30s		# max delay before canceling queries
+						# when reading streaming WAL;
+						# -1 allows indefinite delay
+#wal_receiver_create_temp_slot = off		# create temp slot if primary_slot_name
+						# is not set
+#wal_receiver_status_interval = 10s		# send replies at least this often
+						# 0 disables
+#hot_standby_feedback = off			# send info from standby to prevent
+						# query conflicts
+#wal_receiver_timeout = 60s			# time that receiver waits for
+						# communication from primary
+						# in milliseconds; 0 disables
+#wal_retrieve_retry_interval = 5s		# time to wait before retrying to
+						# retrieve WAL after a failed attempt
+#recovery_min_apply_delay = 0			# minimum delay for applying changes during recovery
+#insufficient_standby_setting_action = 'pause'	# 'pause', 'shutdown'
 
 # - Subscribers -
 

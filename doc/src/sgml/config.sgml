@@ -4901,6 +4901,27 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-insufficient-standby-setting-action" xreflabel="insufficient_standby_setting_action">
+      <term><varname>insufficient_standby_setting_action</varname> (<type>enum</type>)
+      <indexterm>
+       <primary><varname>insufficient_standby_setting_action</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies what action a hot standby server should take when it
+        encounters an incompatible parameter change (see
+        <xref linkend="hot-standby-admin"/>).  The default is
+        <literal>'pause'</literal>, which means recovery will be paused.  After
+        recovery is paused due to an incompatible parameter change, unpausing
+        will cause the server to shut down.  <literal>'shutdown'</literal> means
+        that the server should immediately shut down without pausing.  This
+        parameter can only be set in the <filename>postgresql.conf</filename>
+        file or on the server command line.
+       </para>
+      </listitem>
+     </varlistentry>
+
      </variablelist>
     </sect2>
 

@@ -3828,3 +3828,127 @@ pg_pwritev_with_retry(int fd, const struct iovec *iov, int iovcnt, off_t offset)
 
 	return sum;
 }
+
+/*
+ * CreateEmptyWalSegment
+ *
+ * Create a new file that can be used as a new WAL segment.  The caller is
+ * responsible for installing the new file in pg_wal.
+ */
+bool
+CreateEmptyWalSegment(const char *path, int elevel)
+{
+	PGAlignedXLogBlock zbuffer;
+	int			fd;
+	int			save_errno;
+
+	unlink(path);
+
+	/* do not use get_sync_bit() here --- want to fsync only at end of fill */
+	fd = BasicOpenFile(path, O_RDWR | O_CREAT | O_EXCL | PG_BINARY);
+	if (fd < 0)
+	{
+		ereport(elevel,
+				(errcode_for_file_access(),
+				 errmsg("could not create file \"%s\": %m", path)));
+		return false;
+	}
+
+	memset(zbuffer.data, 0, XLOG_BLCKSZ);
+
+	pgstat_report_wait_start(WAIT_EVENT_WAL_INIT_WRITE);
+	save_errno = 0;
+	if (wal_init_zero)
+	{
+		struct iovec iov[PG_IOV_MAX];
+		int			blocks;
+
+		/*
+		 * Zero-fill the file.  With this setting, we do this the hard way to
+		 * ensure that all the file space has really been allocated.  On
+		 * platforms that allow "holes" in files, just seeking to the end
+		 * doesn't allocate intermediate space.  This way, we know that we
+		 * have all the space and (after the fsync below) that all the
+		 * indirect blocks are down on disk.  Therefore, fdatasync(2) or
+		 * O_DSYNC will be sufficient to sync future writes to the log file.
+		 */
+
+		/* Prepare to write out a lot of copies of our zero buffer at once. */
+		for (int i = 0; i < lengthof(iov); ++i)
+		{
+			iov[i].iov_base = zbuffer.data;
+			iov[i].iov_len = XLOG_BLCKSZ;
+		}
+
+		/* Loop, writing as many blocks as we can for each system call. */
+		blocks = wal_segment_size / XLOG_BLCKSZ;
+		for (int i = 0; i < blocks;)
+		{
+			int			iovcnt = Min(blocks - i, lengthof(iov));
+			off_t		offset = i * XLOG_BLCKSZ;
+
+			if (pg_pwritev_with_retry(fd, iov, iovcnt, offset) < 0)
+			{
+				save_errno = errno;
+				break;
+			}
+
+			i += iovcnt;
+		}
+	}
+	else
+	{
+		/*
+		 * Otherwise, seeking to the end and writing a solitary byte is
+		 * enough.
+		 */
+		errno = 0;
+		if (pg_pwrite(fd, zbuffer.data, 1, wal_segment_size - 1) != 1)
+		{
+			/* if write didn't set errno, assume no disk space */
+			save_errno = errno ? errno : ENOSPC;
+		}
+	}
+	pgstat_report_wait_end();
+
+	if (save_errno)
+	{
+		/*
+		 * If we fail to make the file, delete it to release disk space
+		 */
+		unlink(path);
+
+		close(fd);
+
+		errno = save_errno;
+
+		ereport(elevel,
+				(errcode_for_file_access(),
+				 errmsg("could not write to file \"%s\": %m", path)));
+		return false;
+	}
+
+	pgstat_report_wait_start(WAIT_EVENT_WAL_INIT_SYNC);
+	if (pg_fsync(fd) != 0)
+	{
+		int			save_errno = errno;
+
+		close(fd);
+		errno = save_errno;
+		ereport(elevel,
+				(errcode_for_file_access(),
+				 errmsg("could not fsync file \"%s\": %m", path)));
+		return false;
+	}
+	pgstat_report_wait_end();
+
+	if (close(fd) != 0)
+	{
+		ereport(elevel,
+				(errcode_for_file_access(),
+				 errmsg("could not close file \"%s\": %m", path)));
+		return false;
+	}
+
+	return true;
+}

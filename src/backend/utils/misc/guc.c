@@ -2919,6 +2919,17 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"wal_preallocate_max_size", PGC_SIGHUP, WAL_SETTINGS,
+			gettext_noop("Sets the maximum amount of WAL to pre-allocate."),
+			NULL,
+			GUC_UNIT_MB
+		},
+		&wal_prealloc_max_size_mb,
+		64, 0, 102400,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"wal_buffers", PGC_POSTMASTER, WAL_SETTINGS,
 			gettext_noop("Sets the number of disk-page buffers in shared memory for WAL."),
 			NULL,

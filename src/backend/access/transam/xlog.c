@@ -2918,11 +2918,11 @@ XLogFileInitInternal(XLogSegNo logsegno, TimeLineID logtli,
 					 bool *added, char *path)
 {
 	char		tmppath[MAXPGPATH];
-	PGAlignedXLogBlock zbuffer;
 	XLogSegNo	installed_segno;
 	XLogSegNo	max_segno;
 	int			fd;
-	int			save_errno;
+	int			prealloc_segs;
+	bool		found_prealloc = false;
 
 	Assert(logtli != 0);
 
@@ -2944,114 +2944,45 @@ XLogFileInitInternal(XLogSegNo logsegno, TimeLineID logtli,
 		return fd;
 
 	/*
-	 * Initialize an empty (all zeroes) segment.  NOTE: it is possible that
-	 * another process is doing the same thing.  If so, we will end up
-	 * pre-creating an extra log segment.  That seems OK, and better than
-	 * holding the lock throughout this lengthy process.
+	 * Try to use a pre-allocated segment, if one exists.  If none are
+	 * available, we fall back to creating a new segment on our own.
+	 *
+	 * Note that we still look for a pre-allocated segment even if the pre-
+	 * allocation functionality is disabled via the GUCs.  This ensures that any
+	 * pre-allocated segments left over after turning off the pre-allocation
+	 * functionality are still eligible for use.
 	 */
-	elog(DEBUG2, "creating and filling new WAL file");
-
-	snprintf(tmppath, MAXPGPATH, XLOGDIR "/xlogtemp.%d", (int) getpid());
-
-	unlink(tmppath);
-
-	/* do not use get_sync_bit() here --- want to fsync only at end of fill */
-	fd = BasicOpenFile(tmppath, O_RDWR | O_CREAT | O_EXCL | PG_BINARY);
-	if (fd < 0)
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not create file \"%s\": %m", tmppath)));
-
-	memset(zbuffer.data, 0, XLOG_BLCKSZ);
-
-	pgstat_report_wait_start(WAIT_EVENT_WAL_INIT_WRITE);
-	save_errno = 0;
-	if (wal_init_zero)
+	LWLockAcquire(WALPreallocationLock, LW_EXCLUSIVE);
+	prealloc_segs = GetNumPreallocatedWalSegs();
+	if (prealloc_segs > 0)
 	{
-		struct iovec iov[PG_IOV_MAX];
-		int			blocks;
+		elog(DEBUG2, "using pre-allocated WAL file");
 
-		/*
-		 * Zero-fill the file.  With this setting, we do this the hard way to
-		 * ensure that all the file space has really been allocated.  On
-		 * platforms that allow "holes" in files, just seeking to the end
-		 * doesn't allocate intermediate space.  This way, we know that we
-		 * have all the space and (after the fsync below) that all the
-		 * indirect blocks are down on disk.  Therefore, fdatasync(2) or
-		 * O_DSYNC will be sufficient to sync future writes to the log file.
-		 */
-
-		/* Prepare to write out a lot of copies of our zero buffer at once. */
-		for (int i = 0; i < lengthof(iov); ++i)
-		{
-			iov[i].iov_base = zbuffer.data;
-			iov[i].iov_len = XLOG_BLCKSZ;
-		}
-
-		/* Loop, writing as many blocks as we can for each system call. */
-		blocks = wal_segment_size / XLOG_BLCKSZ;
-		for (int i = 0; i < blocks;)
-		{
-			int			iovcnt = Min(blocks - i, lengthof(iov));
-			off_t		offset = i * XLOG_BLCKSZ;
-
-			if (pg_pwritev_with_retry(fd, iov, iovcnt, offset) < 0)
-			{
-				save_errno = errno;
-				break;
-			}
-
-			i += iovcnt;
-		}
+		found_prealloc = true;
+		prealloc_segs--;
+		SetNumPreallocatedWalSegs(prealloc_segs);
+		snprintf(tmppath, MAXPGPATH, "%s/preallocated_segments/xlogtemp.%d",
+				 XLOGDIR, prealloc_segs);
 	}
 	else
 	{
 		/*
-		 * Otherwise, seeking to the end and writing a solitary byte is
-		 * enough.
+		 * We're not using a pre-allocated segment, so there's no need to keep
+		 * holding the WALPreallocationLock.
 		 */
-		errno = 0;
-		if (pg_pwrite(fd, zbuffer.data, 1, wal_segment_size - 1) != 1)
-		{
-			/* if write didn't set errno, assume no disk space */
-			save_errno = errno ? errno : ENOSPC;
-		}
-	}
-	pgstat_report_wait_end();
+		LWLockRelease(WALPreallocationLock);
 
-	if (save_errno)
-	{
 		/*
-		 * If we fail to make the file, delete it to release disk space
+		 * Initialize an empty (all zeroes) segment.  NOTE: it is possible that
+		 * another process is doing the same thing.  If so, we will end up
+		 * pre-creating an extra log segment.  That seems OK, and better than
+		 * holding the lock throughout this lengthy process.
 		 */
-		unlink(tmppath);
+		elog(DEBUG2, "creating and filling new WAL file");
 
-		close(fd);
-
-		errno = save_errno;
-
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not write to file \"%s\": %m", tmppath)));
+		snprintf(tmppath, MAXPGPATH, XLOGDIR "/xlogtemp.%d", (int) getpid());
+		CreateEmptyWalSegment(tmppath, ERROR);
 	}
-
-	pgstat_report_wait_start(WAIT_EVENT_WAL_INIT_SYNC);
-	if (pg_fsync(fd) != 0)
-	{
-		int			save_errno = errno;
-
-		close(fd);
-		errno = save_errno;
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not fsync file \"%s\": %m", tmppath)));
-	}
-	pgstat_report_wait_end();
-
-	if (close(fd) != 0)
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not close file \"%s\": %m", tmppath)));
 
 	/*
 	 * Now move the segment into place with its final name.  Cope with
@@ -3074,7 +3005,7 @@ XLogFileInitInternal(XLogSegNo logsegno, TimeLineID logtli,
 							   logtli))
 	{
 		*added = true;
-		elog(DEBUG2, "done creating and filling new WAL file");
+		elog(DEBUG2, "done installing new WAL file");
 	}
 	else
 	{
@@ -3086,6 +3017,18 @@ XLogFileInitInternal(XLogSegNo logsegno, TimeLineID logtli,
 		unlink(tmppath);
 		elog(DEBUG2, "abandoned new WAL file");
 	}
+
+	/*
+	 * If we are using a pre-allocated segment, we've been holding onto the
+	 * WALPreallocationLock all this time so that the checkpointer process can't
+	 * overwrite the file before we've installed it.
+	 *
+	 * While we're at it, also nudge the checkpointer process so that it pre-
+	 * allocates new segments if possible.
+	 */
+	if (found_prealloc)
+		LWLockRelease(WALPreallocationLock);
+	RequestWalPreallocation();
 
 	return -1;
 }

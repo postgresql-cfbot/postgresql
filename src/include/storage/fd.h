@@ -189,6 +189,7 @@ extern int	durable_rename(const char *oldfile, const char *newfile, int loglevel
 extern int	durable_unlink(const char *fname, int loglevel);
 extern void SyncDataDirectory(void);
 extern int	data_sync_elevel(int elevel);
+extern bool CreateEmptyWalSegment(const char *path, int elevel);
 
 /* Filename components */
 #define PG_TEMP_FILES_DIR "pgsql_tmp"

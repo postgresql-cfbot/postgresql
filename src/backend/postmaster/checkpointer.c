@@ -128,6 +128,9 @@ typedef struct
 	uint32		num_backend_writes; /* counts user backend buffer writes */
 	uint32		num_backend_fsync;	/* counts user backend fsync calls */
 
+	bool		wal_prealloc_requested;	/* protected by ckpt_lck */
+	int			num_prealloc_segs;	/* protected by WALPreallocationLock */
+
 	int			num_requests;	/* current # of requests */
 	int			max_requests;	/* allocated array size */
 	CheckpointerRequest requests[FLEXIBLE_ARRAY_MEMBER];
@@ -144,6 +147,7 @@ static CheckpointerShmemStruct *CheckpointerShmem;
 int			CheckPointTimeout = 300;
 int			CheckPointWarning = 30;
 double		CheckPointCompletionTarget = 0.9;
+int			wal_prealloc_max_size_mb = 0;
 
 /*
  * Private state
@@ -166,6 +170,10 @@ static bool IsCheckpointOnSchedule(double progress);
 static bool ImmediateCheckpointRequested(void);
 static bool CompactCheckpointerRequestQueue(void);
 static void UpdateSharedMemoryConfig(void);
+static void ScanForExistingPreallocatedSegments(void);
+static bool InstallPreallocatedWalSeg(const char *path);
+static void DoWalPreAllocation(void);
+static int GetMaxPreallocatedWalSegs(void);
 
 /* Signal handlers */
 static void ReqCheckpointHandler(SIGNAL_ARGS);
@@ -341,6 +349,11 @@ CheckpointerMain(void)
 	ProcGlobal->checkpointerLatch = &MyProc->procLatch;
 
 	/*
+	 * Look for any leftover pre-allocated segments we can use.
+	 */
+	ScanForExistingPreallocatedSegments();
+
+	/*
 	 * Loop forever
 	 */
 	for (;;)
@@ -359,6 +372,11 @@ CheckpointerMain(void)
 		 */
 		AbsorbSyncRequests();
 		HandleCheckpointerInterrupts();
+
+		/*
+		 * First do WAL pre-allocation.
+		 */
+		DoWalPreAllocation();
 
 		/*
 		 * Detect a pending checkpoint request by checking whether the flags
@@ -511,6 +529,12 @@ CheckpointerMain(void)
 		 * checkpoint without sleeping.
 		 */
 		if (((volatile CheckpointerShmemStruct *) CheckpointerShmem)->ckpt_flags)
+			continue;
+
+		/*
+		 * Also skip sleeping if WAL pre-allocation has been requested.
+		 */
+		if (((volatile CheckpointerShmemStruct *) CheckpointerShmem)->wal_prealloc_requested)
 			continue;
 
 		/*
@@ -692,6 +716,8 @@ ImmediateCheckpointRequested(void)
  *
  * 'progress' is an estimate of how much of the work has been done, as a
  * fraction between 0.0 meaning none, and 1.0 meaning all done.
+ *
+ * This function also takes care of handling any WAL pre-allocation requests.
  */
 void
 CheckpointWriteDelay(int flags, double progress)
@@ -701,6 +727,15 @@ CheckpointWriteDelay(int flags, double progress)
 	/* Do nothing if checkpoint is being executed by non-checkpointer process */
 	if (!AmCheckpointerProcess())
 		return;
+
+	/*
+	 * WAL pre-allocation has nothing to do with throttling BufferSync()'s write
+	 * rate.  However, since this function is called frequently during
+	 * checkpoints, it is a convenient place to handle any pending WAL pre-
+	 * allocation requests.
+	 */
+	if (((volatile CheckpointerShmemStruct *) CheckpointerShmem)->wal_prealloc_requested)
+		DoWalPreAllocation();
 
 	/*
 	 * Perform the usual duties and take a nap, unless we're behind schedule,
@@ -834,6 +869,203 @@ IsCheckpointOnSchedule(double progress)
 	return true;
 }
 
+/*
+ * GetNumPreallocatedWalSegs
+ *
+ * Returns the number of pre-allocated WAL segments in the preallocated_segments
+ * directory.  Callers are expected to hold the WALPreallocationLock.
+ */
+int
+GetNumPreallocatedWalSegs(void)
+{
+	Assert(LWLockHeldByMe(WALPreallocationLock));
+	return CheckpointerShmem->num_prealloc_segs;
+}
+
+/*
+ * SetNumPreallocatedWalSegs
+ *
+ * Sets the number of pre-allocated WAL segments in the preallocated_segments
+ * directory.  Callers are expected to hold the WALPreallocationLock
+ * exclusively.
+ */
+void
+SetNumPreallocatedWalSegs(int i)
+{
+	Assert(LWLockHeldByMeInMode(WALPreallocationLock, LW_EXCLUSIVE));
+	CheckpointerShmem->num_prealloc_segs = i;
+}
+
+/*
+ * ScanForExistingPreallocatedSegments
+ *
+ * This function searches through pg_wal/preallocated_segments for any segments
+ * that were left over and sets the tracking variable in shared memory
+ * accordingly.
+ */
+static void
+ScanForExistingPreallocatedSegments(void)
+{
+	int		i = 0;
+
+	/*
+	 * fsync the preallocated_segments directory in case any renames have yet to
+	 * be flushed to disk.
+	 */
+	fsync_fname_ext(XLOGDIR "/preallocated_segments", true, false, FATAL);
+
+	/*
+	 * Gather all the preallocated segments we can find.
+	 */
+	while (true)
+	{
+		FILE *fd;
+		char path[MAXPGPATH];
+
+		snprintf(path, MAXPGPATH, "%s/preallocated_segments/xlogtemp.%d",
+				 XLOGDIR, i);
+
+		fd = AllocateFile(path, "r");
+		if (fd != NULL)
+		{
+			FreeFile(fd);
+			i++;
+		}
+		else
+		{
+			if (errno != ENOENT)
+				ereport(FATAL,
+						(errcode_for_file_access(),
+						 errmsg("could not open file \"%s\": %m", path)));
+			break;
+		}
+	}
+
+	LWLockAcquire(WALPreallocationLock, LW_EXCLUSIVE);
+	SetNumPreallocatedWalSegs(i);
+	LWLockRelease(WALPreallocationLock);
+
+	elog(DEBUG2, "found %d preallocated segments during startup", i);
+}
+
+/*
+ * InstallPreallocatedWalSeg
+ *
+ * Renames the file at "path" to the next open pre-allocated segment slot and
+ * bumps up num_prealloc_segs.  If there is a problem, a WARNING is emitted, we
+ * attempt to delete the file, and false is returned.  Otherwise, true is
+ * returned.
+ */
+static bool
+InstallPreallocatedWalSeg(const char *path)
+{
+	char	newpath[MAXPGPATH];
+	int		rc;
+
+	LWLockAcquire(WALPreallocationLock, LW_EXCLUSIVE);
+
+	snprintf(newpath, MAXPGPATH, "%s/preallocated_segments/xlogtemp.%d",
+	XLOGDIR, CheckpointerShmem->num_prealloc_segs);
+
+	rc = durable_rename(path, newpath, DEBUG1);
+	if (rc == 0)
+		CheckpointerShmem->num_prealloc_segs++;
+	else
+	{
+		ereport(WARNING,
+				(errcode_for_file_access(),
+				 errmsg("file \"%s\" could not be renamed to \"%s\": %m",
+						path, newpath)));
+
+		(void) durable_unlink(path, DEBUG1);
+		(void) durable_unlink(newpath, DEBUG1);
+	}
+
+	LWLockRelease(WALPreallocationLock);
+
+	return (rc == 0);
+}
+
+/*
+ * DoWalPreAllocation
+ *
+ * Tries to allocate up to wal_preallocate_max_size worth of WAL.
+ */
+static void
+DoWalPreAllocation(void)
+{
+	int		segs_to_prealloc;
+
+	/*
+	 * Reset the request flag.
+	 */
+	SpinLockAcquire(&CheckpointerShmem->ckpt_lck);
+	CheckpointerShmem->wal_prealloc_requested = false;
+	SpinLockRelease(&CheckpointerShmem->ckpt_lck);
+
+	/*
+	 * Determine how many segments to pre-allocate.
+	 */
+	LWLockAcquire(WALPreallocationLock, LW_SHARED);
+	segs_to_prealloc = GetMaxPreallocatedWalSegs() - GetNumPreallocatedWalSegs();
+	LWLockRelease(WALPreallocationLock);
+
+	/*
+	 * Do the pre-allocation.
+	 */
+	for (int i = 0; i < segs_to_prealloc; i++)
+	{
+		char	tmppath[MAXPGPATH];
+
+		snprintf(tmppath, MAXPGPATH, "%s/preallocated_segments/xlogtemp", XLOGDIR);
+
+		if (!CreateEmptyWalSegment(tmppath, WARNING) ||
+			!InstallPreallocatedWalSeg(tmppath))
+		{
+			elog(DEBUG2, "failed to pre-allocate WAL segment");
+			return;
+		}
+		else
+			elog(DEBUG2, "pre-allocated WAL segment");
+
+		/* Check for barrier events. */
+		if (ProcSignalBarrierPending)
+			ProcessProcSignalBarrier();
+
+		if (ShutdownRequestPending)
+			return;
+	}
+}
+
+/*
+ * GetMaxPreallocatedWalSegs
+ *
+ * Returns the maximum number of pre-allocated WAL segments to create based on
+ * the current value of wal_preallocate_max_size.
+ */
+static int
+GetMaxPreallocatedWalSegs(void)
+{
+	return wal_prealloc_max_size_mb / (wal_segment_size / (1024 * 1024));
+}
+
+/*
+ * RequestWalPreallocation
+ *
+ * Requests that more segments be pre-allocated for future use.
+ */
+void
+RequestWalPreallocation(void)
+{
+	SpinLockAcquire(&CheckpointerShmem->ckpt_lck);
+	CheckpointerShmem->wal_prealloc_requested = true;
+	SpinLockRelease(&CheckpointerShmem->ckpt_lck);
+
+	if (ProcGlobal->checkpointerLatch &&
+		GetMaxPreallocatedWalSegs() > 0)
+		SetLatch(ProcGlobal->checkpointerLatch);
+}
+
 
 /* --------------------------------
  *		signal handler routines
@@ -907,6 +1139,8 @@ CheckpointerShmemInit(void)
 		CheckpointerShmem->max_requests = NBuffers;
 		ConditionVariableInit(&CheckpointerShmem->start_cv);
 		ConditionVariableInit(&CheckpointerShmem->done_cv);
+		CheckpointerShmem->wal_prealloc_requested = false;
+		CheckpointerShmem->num_prealloc_segs = 0;
 	}
 }
 

@@ -3219,6 +3219,29 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-wal-preallocate-max-size" xreflabel="wal_preallocate_max_size">
+      <term><varname>wal_preallocate_max_size</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>wal_preallocate_max_size</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        The maximum amount of WAL to pre-allocate for use when a new WAL segment
+        must be initialized.  Setting this parameter to a size less than the WAL
+        segment size disables this behavior.  The default value is 64 megabytes
+        (<literal>64MB</literal>).  This parameter can only be set in the
+        <filename>postgresql.conf</filename> file or on the server command line.
+       </para>
+
+       <para>
+        WAL pre-allocation may improve performance in scenarios where new WAL
+        segments must be created (e.g., during checkpoints when WAL segments
+        cannot be recycled).
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-wal-buffers" xreflabel="wal_buffers">
       <term><varname>wal_buffers</varname> (<type>integer</type>)
       <indexterm>

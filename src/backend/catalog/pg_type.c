@@ -26,6 +26,7 @@
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
+#include "commands/defrem.h"
 #include "commands/typecmds.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
@@ -936,17 +937,17 @@ makeMultirangeTypeName(const char *rangeTypeName, Oid typeNamespace)
  * makeUniqueTypeName
  *		Generate a unique name for a prospective new type
  *
- * Given a typeName, return a new palloc'ed name by prepending underscores
- * until a non-conflicting name results.
+ * Given a typeName, return a new palloc'ed name by prepending underscore
+ * and (if needed) adding a suffix to the end of the type name.
  *
  * If tryOriginal, first try with zero underscores.
  */
 static char *
 makeUniqueTypeName(const char *typeName, Oid typeNamespace, bool tryOriginal)
 {
-	int			i;
-	int			namelen;
-	char		dest[NAMEDATALEN];
+	int		pass = 0;
+	char	suffix[NAMEDATALEN];
+	char   *type_name;
 
 	Assert(strlen(typeName) <= NAMEDATALEN - 1);
 
@@ -956,23 +957,25 @@ makeUniqueTypeName(const char *typeName, Oid typeNamespace, bool tryOriginal)
 							   ObjectIdGetDatum(typeNamespace)))
 		return pstrdup(typeName);
 
-	/*
-	 * The idea is to prepend underscores as needed until we make a name that
-	 * doesn't collide with anything ...
-	 */
-	namelen = strlen(typeName);
-	for (i = 1; i < NAMEDATALEN - 1; i++)
-	{
-		dest[i - 1] = '_';
-		strlcpy(dest + i, typeName, NAMEDATALEN - i);
-		if (namelen + i >= NAMEDATALEN)
-			truncate_identifier(dest, NAMEDATALEN, false);
+	/* Prepare initial object name. Just for compatibility. */
+	type_name = makeObjectName("", typeName, NULL);
 
+	/*
+	 * The idea of unique name generation is similar to ChooseRelationName()
+	 * implementation logic.
+	 */
+	for(;;)
+	{
 		if (!SearchSysCacheExists2(TYPENAMENSP,
-								   CStringGetDatum(dest),
+								   CStringGetDatum(type_name),
 								   ObjectIdGetDatum(typeNamespace)))
-			return pstrdup(dest);
+			break;
+
+		/* Previous attempt was failed. Prepare a new one. */
+		pfree(type_name);
+		snprintf(suffix, sizeof(suffix), "%d", ++pass);
+		type_name = makeObjectName("", typeName, suffix);
 	}
 
-	return NULL;
+	return type_name;
 }

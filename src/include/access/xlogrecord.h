@@ -55,6 +55,19 @@ typedef struct XLogRecord
 #define SizeOfXLogRecord	(offsetof(XLogRecord, xl_crc) + sizeof(pg_crc32c))
 
 /*
+ * XLogReader needs to allocate all the data of an xlog record in a single
+ * chunk. This means that a single XLogRecord cannot exceed MaxAllocSize
+ * in length if we ignore any allocation overhead of the XLogReader.
+ *
+ * To accommodate some overhead, hhis MaxXLogRecordSize value allows for
+ * 4MB -1b of allocation overhead in anything that allocates xlog record
+ * data, which should be enough for effectively all purposes.
+ */
+#define MaxXLogRecordSize	(1020 * 1024 * 1024)
+
+#define XLogRecordLengthIsValid(len) ((len) >= 0 && (len) < MaxXLogRecordSize)
+
+/*
  * The high 4 bits in xl_info may be used freely by rmgr. The
  * XLR_SPECIAL_REL_UPDATE and XLR_CHECK_CONSISTENCY bits can be passed by
  * XLogInsert caller. The rest are set internally by XLogInsert.

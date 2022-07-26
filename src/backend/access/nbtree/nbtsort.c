@@ -662,7 +662,7 @@ _bt_blwritepage(BTWriteState *wstate, Page page, BlockNumber blkno)
 		if (!wstate->btws_zeropage)
 			wstate->btws_zeropage = (Page) palloc0(BLCKSZ);
 		/* don't set checksum for all-zero page */
-		smgrextend(RelationGetSmgr(wstate->index), MAIN_FORKNUM,
+		smgrextend(RelationGetSmgr(wstate->index, MAIN_FORKNUM),
 				   wstate->btws_pages_written++,
 				   (char *) wstate->btws_zeropage,
 				   true);
@@ -677,14 +677,14 @@ _bt_blwritepage(BTWriteState *wstate, Page page, BlockNumber blkno)
 	if (blkno == wstate->btws_pages_written)
 	{
 		/* extending the file... */
-		smgrextend(RelationGetSmgr(wstate->index), MAIN_FORKNUM, blkno,
+		smgrextend(RelationGetSmgr(wstate->index, MAIN_FORKNUM), blkno,
 				   (char *) page, true);
 		wstate->btws_pages_written++;
 	}
 	else
 	{
 		/* overwriting a block we zero-filled before */
-		smgrwrite(RelationGetSmgr(wstate->index), MAIN_FORKNUM, blkno,
+		smgrwrite(RelationGetSmgr(wstate->index, MAIN_FORKNUM), blkno,
 				  (char *) page, true);
 	}
 
@@ -1431,7 +1431,7 @@ _bt_load(BTWriteState *wstate, BTSpool *btspool, BTSpool *btspool2)
 	 * still not be on disk when the crash occurs.
 	 */
 	if (wstate->btws_use_wal)
-		smgrimmedsync(RelationGetSmgr(wstate->index), MAIN_FORKNUM);
+		smgrimmedsync(RelationGetSmgr(wstate->index, MAIN_FORKNUM));
 }
 
 /*

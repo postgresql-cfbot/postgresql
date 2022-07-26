@@ -415,7 +415,7 @@ gist_indexsortbuild(GISTBuildState *state)
 	 * replaced with the real root page at the end.
 	 */
 	page = palloc0(BLCKSZ);
-	smgrextend(RelationGetSmgr(state->indexrel), MAIN_FORKNUM, GIST_ROOT_BLKNO,
+	smgrextend(RelationGetSmgr(state->indexrel, MAIN_FORKNUM), GIST_ROOT_BLKNO,
 			   page, true);
 	state->pages_allocated++;
 	state->pages_written++;
@@ -459,7 +459,7 @@ gist_indexsortbuild(GISTBuildState *state)
 	/* Write out the root */
 	PageSetLSN(levelstate->pages[0], GistBuildLSN);
 	PageSetChecksumInplace(levelstate->pages[0], GIST_ROOT_BLKNO);
-	smgrwrite(RelationGetSmgr(state->indexrel), MAIN_FORKNUM, GIST_ROOT_BLKNO,
+	smgrwrite(RelationGetSmgr(state->indexrel, MAIN_FORKNUM), GIST_ROOT_BLKNO,
 			  levelstate->pages[0], true);
 	if (RelationNeedsWAL(state->indexrel))
 		log_newpage(&state->indexrel->rd_locator, MAIN_FORKNUM, GIST_ROOT_BLKNO,
@@ -478,7 +478,7 @@ gist_indexsortbuild(GISTBuildState *state)
 	 * still not be on disk when the crash occurs.
 	 */
 	if (RelationNeedsWAL(state->indexrel))
-		smgrimmedsync(RelationGetSmgr(state->indexrel), MAIN_FORKNUM);
+		smgrimmedsync(RelationGetSmgr(state->indexrel, MAIN_FORKNUM));
 }
 
 /*
@@ -656,7 +656,7 @@ gist_indexsortbuild_flush_ready_pages(GISTBuildState *state)
 
 		PageSetLSN(page, GistBuildLSN);
 		PageSetChecksumInplace(page, blkno);
-		smgrextend(RelationGetSmgr(state->indexrel), MAIN_FORKNUM, blkno, page,
+		smgrextend(RelationGetSmgr(state->indexrel, MAIN_FORKNUM), blkno, page,
 				   true);
 
 		state->pages_written++;
@@ -942,8 +942,7 @@ gistBuildCallback(Relation index,
 	 */
 	if ((buildstate->buildMode == GIST_BUFFERING_AUTO &&
 		 buildstate->indtuples % BUFFERING_MODE_SWITCH_CHECK_STEP == 0 &&
-		 effective_cache_size < smgrnblocks(RelationGetSmgr(index),
-											MAIN_FORKNUM)) ||
+		 effective_cache_size < smgrnblocks(RelationGetSmgr(index, MAIN_FORKNUM))) ||
 		(buildstate->buildMode == GIST_BUFFERING_STATS &&
 		 buildstate->indtuples >= BUFFERING_MODE_TUPLE_SIZE_STATS_TARGET))
 	{

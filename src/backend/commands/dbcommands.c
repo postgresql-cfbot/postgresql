@@ -280,7 +280,7 @@ ScanSourceDatabasePgClass(Oid tbid, Oid dbid, char *srcpath)
 	 * invalidations.
 	 */
 	rel = CreateFakeRelcacheEntry(rlocator);
-	nblocks = smgrnblocks(RelationGetSmgr(rel), MAIN_FORKNUM);
+	nblocks = smgrnblocks(RelationGetSmgr(rel, MAIN_FORKNUM));
 	FreeFakeRelcacheEntry(rel);
 
 	/* Use a buffer access strategy since this is a bulk read operation. */

@@ -14593,9 +14593,7 @@ AlterTableMoveAll(AlterTableMoveAllStmt *stmt)
 static void
 index_copy_data(Relation rel, RelFileLocator newrlocator)
 {
-	SMgrRelation dstrel;
-
-	dstrel = smgropen(newrlocator, rel->rd_backend);
+	SMgrFileHandle dstmain;
 
 	/*
 	 * Since we copy the file directly without looking at the shared buffers,
@@ -14615,16 +14613,20 @@ index_copy_data(Relation rel, RelFileLocator newrlocator)
 	RelationCreateStorage(newrlocator, rel->rd_rel->relpersistence, true);
 
 	/* copy main fork */
-	RelationCopyStorage(RelationGetSmgr(rel), dstrel, MAIN_FORKNUM,
+	dstmain = smgropen(newrlocator, rel->rd_backend, MAIN_FORKNUM);
+	RelationCopyStorage(RelationGetSmgr(rel, MAIN_FORKNUM), dstmain,
 						rel->rd_rel->relpersistence);
 
 	/* copy those extra forks that exist */
 	for (ForkNumber forkNum = MAIN_FORKNUM + 1;
 		 forkNum <= MAX_FORKNUM; forkNum++)
 	{
-		if (smgrexists(RelationGetSmgr(rel), forkNum))
+		if (smgrexists(RelationGetSmgr(rel, forkNum)))
 		{
-			smgrcreate(dstrel, forkNum, false);
+			SMgrFileHandle src_fork = RelationGetSmgr(rel, forkNum);
+			SMgrFileHandle dst_fork = smgropen(newrlocator, rel->rd_backend, forkNum);
+
+			smgrcreate(dst_fork, false);
 
 			/*
 			 * WAL log creation if the relation is persistent, or this is the
@@ -14634,14 +14636,15 @@ index_copy_data(Relation rel, RelFileLocator newrlocator)
 				(rel->rd_rel->relpersistence == RELPERSISTENCE_UNLOGGED &&
 				 forkNum == INIT_FORKNUM))
 				log_smgrcreate(&newrlocator, forkNum);
-			RelationCopyStorage(RelationGetSmgr(rel), dstrel, forkNum,
+			RelationCopyStorage(src_fork, dst_fork,
 								rel->rd_rel->relpersistence);
+			smgrclose(dst_fork);
 		}
 	}
 
 	/* drop old relation, and close new one */
 	RelationDropStorage(rel);
-	smgrclose(dstrel);
+	smgrclose(dstmain);
 }
 
 /*

@@ -54,7 +54,7 @@ typedef LockInfoData *LockInfo;
 typedef struct RelationData
 {
 	RelFileLocator rd_locator;	/* relation physical identifier */
-	SMgrRelation rd_smgr;		/* cached file handle, or NULL */
+	SMgrFileHandle rd_smgr[MAX_FORKNUM + 1];		/* cached file handles, or NULLs */
 	int			rd_refcnt;		/* reference count */
 	BackendId	rd_backend;		/* owning backend id, if temporary relation */
 	bool		rd_islocaltemp; /* rel is a temp rel of this session */
@@ -562,15 +562,15 @@ typedef struct ViewOptions
  * Note: since a relcache flush can cause the file handle to be closed again,
  * it's unwise to hold onto the pointer returned by this function for any
  * long period.  Recommended practice is to just re-execute RelationGetSmgr
- * each time you need to access the SMgrRelation.  It's quite cheap in
+ * each time you need to access the SMgrFileHandle.  It's quite cheap in
  * comparison to whatever an smgr function is going to do.
  */
-static inline SMgrRelation
-RelationGetSmgr(Relation rel)
+static inline SMgrFileHandle
+RelationGetSmgr(Relation rel, ForkNumber forkNum)
 {
-	if (unlikely(rel->rd_smgr == NULL))
-		smgrsetowner(&(rel->rd_smgr), smgropen(rel->rd_locator, rel->rd_backend));
-	return rel->rd_smgr;
+	if (unlikely(rel->rd_smgr[forkNum] == NULL))
+		smgrsetowner(&(rel->rd_smgr[forkNum]), smgropen(rel->rd_locator, rel->rd_backend, forkNum));
+	return rel->rd_smgr[forkNum];
 }
 #endif
 
@@ -580,14 +580,18 @@ RelationGetSmgr(Relation rel)
  *
  * Note: smgrclose should unhook from owner pointer, hence the Assert.
  */
-#define RelationCloseSmgr(relation) \
-	do { \
-		if ((relation)->rd_smgr != NULL) \
-		{ \
-			smgrclose((relation)->rd_smgr); \
-			Assert((relation)->rd_smgr == NULL); \
-		} \
-	} while (0)
+static inline void
+RelationCloseSmgr(Relation relation)
+{
+	for (int i = 0; i <= MAX_FORKNUM; i++)
+	{
+		if (relation->rd_smgr[i] != NULL)
+		{
+			smgrclose(relation->rd_smgr[i]);
+			Assert(relation->rd_smgr[i] == NULL);
+		}
+	}
+}
 
 /*
  * RelationGetTargetBlock
@@ -598,7 +602,7 @@ RelationGetSmgr(Relation rel)
  * so there's no need to re-open the smgr handle if it's not currently open.
  */
 #define RelationGetTargetBlock(relation) \
-	( (relation)->rd_smgr != NULL ? (relation)->rd_smgr->smgr_targblock : InvalidBlockNumber )
+	( (relation)->rd_smgr[MAIN_FORKNUM] != NULL ? (relation)->rd_smgr[MAIN_FORKNUM]->smgr_targblock : InvalidBlockNumber )
 
 /*
  * RelationSetTargetBlock
@@ -606,7 +610,7 @@ RelationGetSmgr(Relation rel)
  */
 #define RelationSetTargetBlock(relation, targblock) \
 	do { \
-		RelationGetSmgr(relation)->smgr_targblock = (targblock); \
+		RelationGetSmgr(relation, MAIN_FORKNUM)->smgr_targblock = (targblock); \
 	} while (0)
 
 /*

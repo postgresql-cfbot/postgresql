@@ -21,28 +21,26 @@
 
 /* md storage manager functionality */
 extern void mdinit(void);
-extern void mdopen(SMgrRelation reln);
-extern void mdclose(SMgrRelation reln, ForkNumber forknum);
-extern void mdcreate(SMgrRelation reln, ForkNumber forknum, bool isRedo);
-extern bool mdexists(SMgrRelation reln, ForkNumber forknum);
-extern void mdunlink(RelFileLocatorBackend rlocator, ForkNumber forknum, bool isRedo);
-extern void mdextend(SMgrRelation reln, ForkNumber forknum,
+extern void mdopen(SMgrFileHandle sfile);
+extern void mdclose(SMgrFileHandle sfile);
+extern void mdcreate(SMgrFileHandle sfile, bool isRedo);
+extern bool mdexists(SMgrFileHandle sfile);
+extern void mdunlink(SMgrFileLocator slocator, bool isRedo);
+extern void mdextend(SMgrFileHandle sfile,
 					 BlockNumber blocknum, char *buffer, bool skipFsync);
-extern bool mdprefetch(SMgrRelation reln, ForkNumber forknum,
+extern bool mdprefetch(SMgrFileHandle sfile,
 					   BlockNumber blocknum);
-extern void mdread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+extern void mdread(SMgrFileHandle sfile, BlockNumber blocknum,
 				   char *buffer);
-extern void mdwrite(SMgrRelation reln, ForkNumber forknum,
+extern void mdwrite(SMgrFileHandle sfile,
 					BlockNumber blocknum, char *buffer, bool skipFsync);
-extern void mdwriteback(SMgrRelation reln, ForkNumber forknum,
+extern void mdwriteback(SMgrFileHandle sfile,
 						BlockNumber blocknum, BlockNumber nblocks);
-extern BlockNumber mdnblocks(SMgrRelation reln, ForkNumber forknum);
-extern void mdtruncate(SMgrRelation reln, ForkNumber forknum,
-					   BlockNumber nblocks);
-extern void mdimmedsync(SMgrRelation reln, ForkNumber forknum);
+extern BlockNumber mdnblocks(SMgrFileHandle sfile);
+extern void mdtruncate(SMgrFileHandle sfile, BlockNumber nblocks);
+extern void mdimmedsync(SMgrFileHandle sfile);
 
 extern void ForgetDatabaseSyncRequests(Oid dbid);
-extern void DropRelationFiles(RelFileLocator *delrels, int ndelrels, bool isRedo);
 
 /* md sync callbacks */
 extern int	mdsyncfiletag(const FileTag *ftag, char *path);

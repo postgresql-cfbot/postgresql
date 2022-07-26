@@ -116,9 +116,7 @@ CalculateShmemSize(int *num_semaphores)
 	size = add_size(size, XLogPrefetchShmemSize());
 	size = add_size(size, XLOGShmemSize());
 	size = add_size(size, XLogRecoveryShmemSize());
-	size = add_size(size, CLOGShmemSize());
 	size = add_size(size, CommitTsShmemSize());
-	size = add_size(size, SUBTRANSShmemSize());
 	size = add_size(size, TwoPhaseShmemSize());
 	size = add_size(size, BackgroundWorkerShmemSize());
 	size = add_size(size, MultiXactShmemSize());
@@ -240,9 +238,7 @@ CreateSharedMemoryAndSemaphores(void)
 	XLOGShmemInit();
 	XLogPrefetchShmemInit();
 	XLogRecoveryShmemInit();
-	CLOGShmemInit();
 	CommitTsShmemInit();
-	SUBTRANSShmemInit();
 	MultiXactShmemInit();
 	InitBufferPool();
 

@@ -74,13 +74,6 @@ typedef struct CommitTimestampEntry
 	((xid) % (TransactionId) COMMIT_TS_XACTS_PER_PAGE)
 
 /*
- * Link to shared-memory data structures for CommitTs control
- */
-static SlruCtlData CommitTsCtlData;
-
-#define CommitTsCtl (&CommitTsCtlData)
-
-/*
  * We keep a cache of the last value set in shared memory.
  *
  * This is also good place to keep the activation status.  We keep this
@@ -110,7 +103,7 @@ static void SetXidCommitTsInPage(TransactionId xid, int nsubxids,
 static void TransactionIdSetCommitTs(TransactionId xid, TimestampTz ts,
 									 RepOriginId nodeid, int slotno);
 static void error_commit_ts_disabled(void);
-static int	ZeroCommitTsPage(int pageno, bool writeXlog);
+static Buffer ZeroCommitTsPage(int pageno, bool writeXlog);
 static bool CommitTsPagePrecedes(int page1, int page2);
 static void ActivateCommitTs(void);
 static void DeactivateCommitTs(void);
@@ -219,30 +212,27 @@ SetXidCommitTsInPage(TransactionId xid, int nsubxids,
 					 TransactionId *subxids, TimestampTz ts,
 					 RepOriginId nodeid, int pageno)
 {
-	int			slotno;
 	int			i;
+	Buffer		buffer;
 
-	LWLockAcquire(CommitTsSLRULock, LW_EXCLUSIVE);
+	buffer = ReadSlruBuffer(SLRU_COMMIT_TS_ID, pageno);
+	LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
 
-	slotno = SimpleLruReadPage(CommitTsCtl, pageno, true, xid);
-
-	TransactionIdSetCommitTs(xid, ts, nodeid, slotno);
+	TransactionIdSetCommitTs(xid, ts, nodeid, buffer);
 	for (i = 0; i < nsubxids; i++)
-		TransactionIdSetCommitTs(subxids[i], ts, nodeid, slotno);
+		TransactionIdSetCommitTs(subxids[i], ts, nodeid, buffer);
 
-	CommitTsCtl->shared->page_dirty[slotno] = true;
+	MarkBufferDirty(buffer);
 
-	LWLockRelease(CommitTsSLRULock);
+	UnlockReleaseBuffer(buffer);
 }
 
 /*
  * Sets the commit timestamp of a single transaction.
- *
- * Must be called with CommitTsSLRULock held
  */
 static void
 TransactionIdSetCommitTs(TransactionId xid, TimestampTz ts,
-						 RepOriginId nodeid, int slotno)
+						 RepOriginId nodeid, Buffer buffer)
 {
 	int			entryno = TransactionIdToCTsEntry(xid);
 	CommitTimestampEntry entry;
@@ -252,8 +242,7 @@ TransactionIdSetCommitTs(TransactionId xid, TimestampTz ts,
 	entry.time = ts;
 	entry.nodeid = nodeid;
 
-	memcpy(CommitTsCtl->shared->page_buffer[slotno] +
-		   SizeOfCommitTimestampEntry * entryno,
+	memcpy(BufferGetPage(buffer) + SizeOfCommitTimestampEntry * entryno,
 		   &entry, SizeOfCommitTimestampEntry);
 }
 
@@ -271,10 +260,10 @@ TransactionIdGetCommitTsData(TransactionId xid, TimestampTz *ts,
 {
 	int			pageno = TransactionIdToCTsPage(xid);
 	int			entryno = TransactionIdToCTsEntry(xid);
-	int			slotno;
 	CommitTimestampEntry entry;
 	TransactionId oldestCommitTsXid;
 	TransactionId newestCommitTsXid;
+	Buffer		buffer;
 
 	if (!TransactionIdIsValid(xid))
 		ereport(ERROR,
@@ -328,10 +317,11 @@ TransactionIdGetCommitTsData(TransactionId xid, TimestampTz *ts,
 		return false;
 	}
 
-	/* lock is acquired by SimpleLruReadPage_ReadOnly */
-	slotno = SimpleLruReadPage_ReadOnly(CommitTsCtl, pageno, xid);
+	buffer = ReadSlruBuffer(SLRU_COMMIT_TS_ID, pageno);
+	LockBuffer(buffer, BUFFER_LOCK_SHARE);
+
 	memcpy(&entry,
-		   CommitTsCtl->shared->page_buffer[slotno] +
+		   BufferGetPage(buffer) +
 		   SizeOfCommitTimestampEntry * entryno,
 		   SizeOfCommitTimestampEntry);
 
@@ -339,7 +329,7 @@ TransactionIdGetCommitTsData(TransactionId xid, TimestampTz *ts,
 	if (nodeid)
 		*nodeid = entry.nodeid;
 
-	LWLockRelease(CommitTsSLRULock);
+	UnlockReleaseBuffer(buffer);
 	return *ts != 0;
 }
 
@@ -509,26 +499,12 @@ pg_xact_commit_timestamp_origin(PG_FUNCTION_ARGS)
 }
 
 /*
- * Number of shared CommitTS buffers.
- *
- * We use a very similar logic as for the number of CLOG buffers (except we
- * scale up twice as fast with shared buffers, and the maximum is twice as
- * high); see comments in CLOGShmemBuffers.
- */
-Size
-CommitTsShmemBuffers(void)
-{
-	return Min(256, Max(4, NBuffers / 256));
-}
-
-/*
  * Shared memory sizing for CommitTs
  */
 Size
 CommitTsShmemSize(void)
 {
-	return SimpleLruShmemSize(CommitTsShmemBuffers(), 0) +
-		sizeof(CommitTimestampShared);
+	return sizeof(CommitTimestampShared);
 }
 
 /*
@@ -540,12 +516,7 @@ CommitTsShmemInit(void)
 {
 	bool		found;
 
-	CommitTsCtl->PagePrecedes = CommitTsPagePrecedes;
-	SimpleLruInit(CommitTsCtl, "CommitTs", CommitTsShmemBuffers(), 0,
-				  CommitTsSLRULock, "pg_commit_ts",
-				  LWTRANCHE_COMMITTS_BUFFER,
-				  SYNC_HANDLER_COMMIT_TS);
-	SlruPagePrecedesUnitTests(CommitTsCtl, COMMIT_TS_XACTS_PER_PAGE);
+	SlruPagePrecedesUnitTests(CommitTsPagePrecedes, COMMIT_TS_XACTS_PER_PAGE);
 
 	commitTsShared = ShmemInitStruct("CommitTs shared",
 									 sizeof(CommitTimestampShared),
@@ -589,17 +560,18 @@ BootStrapCommitTs(void)
  *
  * Control lock must be held at entry, and will be held at exit.
  */
-static int
+static Buffer
 ZeroCommitTsPage(int pageno, bool writeXlog)
 {
-	int			slotno;
+	Buffer		buffer;
 
-	slotno = SimpleLruZeroPage(CommitTsCtl, pageno);
+	buffer = ZeroSlruBuffer(SLRU_COMMIT_TS_ID, pageno);
+	MarkBufferDirty(buffer);
 
 	if (writeXlog)
 		WriteZeroPageXlogRec(pageno);
 
-	return slotno;
+	return buffer;
 }
 
 /*
@@ -698,13 +670,6 @@ ActivateCommitTs(void)
 	pageno = TransactionIdToCTsPage(xid);
 
 	/*
-	 * Re-Initialize our idea of the latest page number.
-	 */
-	LWLockAcquire(CommitTsSLRULock, LW_EXCLUSIVE);
-	CommitTsCtl->shared->latest_page_number = pageno;
-	LWLockRelease(CommitTsSLRULock);
-
-	/*
 	 * If CommitTs is enabled, but it wasn't in the previous server run, we
 	 * need to set the oldest and newest values to the next Xid; that way, we
 	 * will not try to read data that might not have been set.
@@ -726,15 +691,14 @@ ActivateCommitTs(void)
 	LWLockRelease(CommitTsLock);
 
 	/* Create the current segment file, if necessary */
-	if (!SimpleLruDoesPhysicalPageExist(CommitTsCtl, pageno))
+	if (!SimpleLruDoesPhysicalPageExist(SLRU_COMMIT_TS_ID, pageno))
 	{
-		int			slotno;
+		Buffer		buffer;
 
-		LWLockAcquire(CommitTsSLRULock, LW_EXCLUSIVE);
-		slotno = ZeroCommitTsPage(pageno, false);
-		SimpleLruWritePage(CommitTsCtl, slotno);
-		Assert(!CommitTsCtl->shared->page_dirty[slotno]);
-		LWLockRelease(CommitTsSLRULock);
+		buffer = ZeroSlruBuffer(SLRU_COMMIT_TS_ID, pageno);
+		MarkBufferDirty(buffer);
+		FlushOneBuffer(buffer);
+		UnlockReleaseBuffer(buffer);
 	}
 
 	/* Change the activation status in shared memory. */
@@ -783,23 +747,9 @@ DeactivateCommitTs(void)
 	 * be overwritten anyway when we wrap around, but it seems better to be
 	 * tidy.)
 	 */
-	LWLockAcquire(CommitTsSLRULock, LW_EXCLUSIVE);
-	(void) SlruScanDirectory(CommitTsCtl, SlruScanDirCbDeleteAll, NULL);
-	LWLockRelease(CommitTsSLRULock);
-}
-
-/*
- * Perform a checkpoint --- either during shutdown, or on-the-fly
- */
-void
-CheckPointCommitTs(void)
-{
-	/*
-	 * Write dirty CommitTs pages to disk.  This may result in sync requests
-	 * queued for later handling by ProcessSyncRequests(), as part of the
-	 * checkpoint.
-	 */
-	SimpleLruWriteAll(CommitTsCtl, true);
+	(void) SlruScanDirectory(SLRU_COMMIT_TS_ID,
+							 CommitTsPagePrecedes,
+							 SlruScanDirCbDeleteAll, NULL);
 }
 
 /*
@@ -837,12 +787,8 @@ ExtendCommitTs(TransactionId newestXact)
 
 	pageno = TransactionIdToCTsPage(newestXact);
 
-	LWLockAcquire(CommitTsSLRULock, LW_EXCLUSIVE);
-
 	/* Zero the page and make an XLOG entry about it */
-	ZeroCommitTsPage(pageno, !InRecovery);
-
-	LWLockRelease(CommitTsSLRULock);
+	UnlockReleaseBuffer(ZeroCommitTsPage(pageno, !InRecovery));
 }
 
 /*
@@ -863,7 +809,9 @@ TruncateCommitTs(TransactionId oldestXact)
 	cutoffPage = TransactionIdToCTsPage(oldestXact);
 
 	/* Check to see if there's any files that could be removed */
-	if (!SlruScanDirectory(CommitTsCtl, SlruScanDirCbReportPresence,
+	if (!SlruScanDirectory(SLRU_COMMIT_TS_ID,
+						   CommitTsPagePrecedes,
+						   SlruScanDirCbReportPresence,
 						   &cutoffPage))
 		return;					/* nothing to remove */
 
@@ -871,7 +819,7 @@ TruncateCommitTs(TransactionId oldestXact)
 	WriteTruncateXlogRec(cutoffPage, oldestXact);
 
 	/* Now we can remove the old CommitTs segment(s) */
-	SimpleLruTruncate(CommitTsCtl, cutoffPage);
+	SimpleLruTruncate(SLRU_COMMIT_TS_ID, CommitTsPagePrecedes, cutoffPage);
 }
 
 /*
@@ -995,17 +943,14 @@ commit_ts_redo(XLogReaderState *record)
 	if (info == COMMIT_TS_ZEROPAGE)
 	{
 		int			pageno;
-		int			slotno;
+		Buffer		buffer;
 
 		memcpy(&pageno, XLogRecGetData(record), sizeof(int));
 
-		LWLockAcquire(CommitTsSLRULock, LW_EXCLUSIVE);
-
-		slotno = ZeroCommitTsPage(pageno, false);
-		SimpleLruWritePage(CommitTsCtl, slotno);
-		Assert(!CommitTsCtl->shared->page_dirty[slotno]);
-
-		LWLockRelease(CommitTsSLRULock);
+		buffer = ZeroSlruBuffer(SLRU_COMMIT_TS_ID, pageno);
+		MarkBufferDirty(buffer);
+		FlushOneBuffer(buffer);
+		UnlockReleaseBuffer(buffer);
 	}
 	else if (info == COMMIT_TS_TRUNCATE)
 	{
@@ -1013,23 +958,8 @@ commit_ts_redo(XLogReaderState *record)
 
 		AdvanceOldestCommitTsXid(trunc->oldestXid);
 
-		/*
-		 * During XLOG replay, latest_page_number isn't set up yet; insert a
-		 * suitable value to bypass the sanity test in SimpleLruTruncate.
-		 */
-		CommitTsCtl->shared->latest_page_number = trunc->pageno;
-
-		SimpleLruTruncate(CommitTsCtl, trunc->pageno);
+		SimpleLruTruncate(SLRU_COMMIT_TS_ID, CommitTsPagePrecedes, trunc->pageno);
 	}
 	else
 		elog(PANIC, "commit_ts_redo: unknown op code %u", info);
-}
-
-/*
- * Entrypoint for sync.c to sync commit_ts files.
- */
-int
-committssyncfiletag(const FileTag *ftag, char *path)
-{
-	return SlruSyncFileTag(CommitTsCtl, ftag, path);
 }

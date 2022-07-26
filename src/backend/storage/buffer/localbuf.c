@@ -61,14 +61,13 @@ static Block GetLocalBufferStorage(void);
  * No-op if prefetching isn't compiled in.
  */
 PrefetchBufferResult
-PrefetchLocalBuffer(SMgrRelation smgr, ForkNumber forkNum,
-					BlockNumber blockNum)
+PrefetchLocalBuffer(SMgrFileHandle sfile, BlockNumber blockNum)
 {
 	PrefetchBufferResult result = {InvalidBuffer, false};
 	BufferTag	newTag;			/* identity of requested block */
 	LocalBufferLookupEnt *hresult;
 
-	INIT_BUFFERTAG(newTag, smgr->smgr_rlocator.locator, forkNum, blockNum);
+	INIT_BUFFERTAG(newTag, sfile->smgr_locator.locator, sfile->smgr_locator.forknum, blockNum);
 
 	/* Initialize local buffers if first request in this session */
 	if (LocalBufHash == NULL)
@@ -87,7 +86,7 @@ PrefetchLocalBuffer(SMgrRelation smgr, ForkNumber forkNum,
 	{
 #ifdef USE_PREFETCH
 		/* Not in buffers, so initiate prefetch */
-		smgrprefetch(smgr, forkNum, blockNum);
+		smgrprefetch(sfile, blockNum);
 		result.initiated_io = true;
 #endif							/* USE_PREFETCH */
 	}
@@ -106,8 +105,7 @@ PrefetchLocalBuffer(SMgrRelation smgr, ForkNumber forkNum,
  * (hence, usage_count is always advanced).
  */
 BufferDesc *
-LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
-				 bool *foundPtr)
+LocalBufferAlloc(SMgrFileHandle sfile, BlockNumber blockNum, bool *foundPtr)
 {
 	BufferTag	newTag;			/* identity of requested block */
 	LocalBufferLookupEnt *hresult;
@@ -117,7 +115,7 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 	bool		found;
 	uint32		buf_state;
 
-	INIT_BUFFERTAG(newTag, smgr->smgr_rlocator.locator, forkNum, blockNum);
+	INIT_BUFFERTAG(newTag, sfile->smgr_locator.locator, sfile->smgr_locator.forknum, blockNum);
 
 	/* Initialize local buffers if first request in this session */
 	if (LocalBufHash == NULL)
@@ -134,7 +132,7 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 		Assert(BUFFERTAGS_EQUAL(bufHdr->tag, newTag));
 #ifdef LBDEBUG
 		fprintf(stderr, "LB ALLOC (%u,%d,%d) %d\n",
-				smgr->smgr_rlocator.locator.relNumber, forkNum, blockNum, -b - 1);
+				sfile->smgr_locator.locator.relNumber, sfile->smgr_locator.forknum, blockNum, -b - 1);
 #endif
 		buf_state = pg_atomic_read_u32(&bufHdr->state);
 
@@ -162,7 +160,7 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 
 #ifdef LBDEBUG
 	fprintf(stderr, "LB ALLOC (%u,%d,%d) %d\n",
-			smgr->smgr_rlocator.locator.relNumber, forkNum, blockNum,
+			sfile->smgr_locator.locator.relNumber, sfile->smgr_locator.forknum, blockNum,
 			-nextFreeLocalBuf - 1);
 #endif
 
@@ -211,17 +209,16 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 	 */
 	if (buf_state & BM_DIRTY)
 	{
-		SMgrRelation oreln;
+		SMgrFileHandle ofile;
 		Page		localpage = (char *) LocalBufHdrGetBlock(bufHdr);
 
-		/* Find smgr relation for buffer */
-		oreln = smgropen(bufHdr->tag.rlocator, MyBackendId);
+		/* Find smgr file handle for buffer */
+		ofile = smgropen(bufHdr->tag.rlocator, MyBackendId, bufHdr->tag.forkNum);
 
 		PageSetChecksumInplace(localpage, bufHdr->tag.blockNum);
 
 		/* And write... */
-		smgrwrite(oreln,
-				  bufHdr->tag.forkNum,
+		smgrwrite(ofile,
 				  bufHdr->tag.blockNum,
 				  localpage,
 				  false);

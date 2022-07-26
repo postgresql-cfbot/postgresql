@@ -231,6 +231,7 @@ typedef union BufferDescPadded
 	((LWLock*) (&(bdesc)->content_lock))
 
 extern PGDLLIMPORT ConditionVariableMinimallyPadded *BufferIOCVArray;
+extern PGDLLIMPORT ConditionVariableMinimallyPadded *BufferInsertionCVArray;
 
 /*
  * The freeNext field is either the index of the next freelist entry,
@@ -327,7 +328,7 @@ extern Size BufTableShmemSize(int size);
 extern void InitBufTable(int size);
 extern uint32 BufTableHashCode(BufferTag *tagPtr);
 extern int	BufTableLookup(BufferTag *tagPtr, uint32 hashcode);
-extern int	BufTableInsert(BufferTag *tagPtr, uint32 hashcode, int buf_id);
+extern volatile int *BufTableInsert(BufferTag *tagPtr, uint32 hashcode);
 extern void BufTableDelete(BufferTag *tagPtr, uint32 hashcode);
 
 /* localbuf.c */

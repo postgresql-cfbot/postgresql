@@ -57,6 +57,7 @@ extern void ConditionVariableSleep(ConditionVariable *cv, uint32 wait_event_info
 extern bool ConditionVariableTimedSleep(ConditionVariable *cv, long timeout,
 										uint32 wait_event_info);
 extern void ConditionVariableCancelSleep(void);
+extern void ConditionVariableSleepOnce(ConditionVariable *cv, uint32 wait_event_info);
 
 /*
  * Optionally, ConditionVariablePrepareToSleep can be called before entering
@@ -69,5 +70,6 @@ extern void ConditionVariablePrepareToSleep(ConditionVariable *cv);
 /* Wake up a single waiter (via signal) or all waiters (via broadcast). */
 extern void ConditionVariableSignal(ConditionVariable *cv);
 extern void ConditionVariableBroadcast(ConditionVariable *cv);
+extern void ConditionVariableBroadcastFast(ConditionVariable *cv);
 
 #endif							/* CONDITION_VARIABLE_H */

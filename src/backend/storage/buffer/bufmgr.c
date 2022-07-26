@@ -166,6 +166,9 @@ static bool IsForInput;
 /* local state for LockBufferForCleanup */
 static BufferDesc *PinCountWaitBuf = NULL;
 
+/* tag of speculatively inserted placeholder */
+static BufferTag PlaceholderTag = {{0, 0, 0}, 0, 0};
+
 /*
  * Backend-Private refcount management:
  *
@@ -506,7 +509,7 @@ PrefetchSharedBuffer(SMgrRelation smgr_reln,
 					 ForkNumber forkNum,
 					 BlockNumber blockNum)
 {
-	PrefetchBufferResult result = {InvalidBuffer, false};
+	PrefetchBufferResult result = {InvalidBuffer, false, false};
 	BufferTag	newTag;			/* identity of requested block */
 	uint32		newHash;		/* hash value for newTag */
 	LWLock	   *newPartitionLock;	/* buffer partition lock for it */
@@ -528,7 +531,7 @@ PrefetchSharedBuffer(SMgrRelation smgr_reln,
 	LWLockRelease(newPartitionLock);
 
 	/* If not in buffers, initiate prefetch */
-	if (buf_id < 0)
+	if (buf_id == -1)
 	{
 #ifdef USE_PREFETCH
 		/*
@@ -539,7 +542,7 @@ PrefetchSharedBuffer(SMgrRelation smgr_reln,
 			result.initiated_io = true;
 #endif							/* USE_PREFETCH */
 	}
-	else
+	else if (buf_id >= 0)
 	{
 		/*
 		 * Report the buffer it was in at that time.  The caller may be able
@@ -547,6 +550,11 @@ PrefetchSharedBuffer(SMgrRelation smgr_reln,
 		 * rechecked!
 		 */
 		result.recent_buffer = buf_id + 1;
+	}
+	else
+	{
+		/* Other backend is in process of insertion. */
+		result.concurrent_io = true;
 	}
 
 	/*
@@ -1124,13 +1132,17 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	BufferTag	newTag;			/* identity of requested block */
 	uint32		newHash;		/* hash value for newTag */
 	LWLock	   *newPartitionLock;	/* buffer partition lock for it */
+	ConditionVariable *insertionCV;
 	BufferTag	oldTag;			/* previous identity of selected buffer */
 	uint32		oldHash;		/* hash value for oldTag */
 	LWLock	   *oldPartitionLock;	/* buffer partition lock for it */
 	uint32		oldFlags;
 	int			buf_id;
+	int			backId;
+	volatile int *buf_id_p;
 	BufferDesc *buf;
 	bool		valid;
+	bool		wait;
 	uint32		buf_state;
 
 	/* create a tag so we can lookup the buffer */
@@ -1141,6 +1153,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	newPartitionLock = BufMappingPartitionLock(newHash);
 
 	/* see if the block is in the buffer pool already */
+retry:
 	LWLockAcquire(newPartitionLock, LW_SHARED);
 	buf_id = BufTableLookup(&newTag, newHash);
 	if (buf_id >= 0)
@@ -1183,9 +1196,58 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 
 	/*
 	 * Didn't find it in the buffer pool.  We'll have to initialize a new
-	 * buffer.  Remember to unlock the mapping lock while doing the work.
+	 * buffer.
+	 *
+	 * First, we insert placeholder to indicate we're working on (or to find
+	 * someone else is working). So re-lock partition in exclusive mode.
 	 */
 	LWLockRelease(newPartitionLock);
+	LWLockAcquire(newPartitionLock, LW_EXCLUSIVE);
+
+	buf_id_p = BufTableInsert(&newTag, newHash);
+	buf_id = *buf_id_p;
+
+	/* During startup MyBackendId == -1, so workaround. */
+	backId = MyBackendId > 0 ? MyBackendId - 1 : MaxBackends;
+
+	if (buf_id == -1)
+	{
+		/* Ok, we are first, who tried this buffer. Mark with our backend id. */
+		*buf_id_p = -2 - backId;
+		/* And remember we're inserting it for cleanup procs */
+		PlaceholderTag = newTag;
+	}
+	else if (buf_id < -1)
+	{
+		/* Someone else is trying to insert this buffer. We should wait him. */
+		insertionCV = &BufferInsertionCVArray[-2 - buf_id].cv;
+		ConditionVariablePrepareToSleep(insertionCV);
+
+		/*
+		 * buf_id_p is finally written further without holding partition lock.
+		 * So backend which inserted it could already call CVBroadcast before
+		 * we enqueue ourselves into CV. Therefore, we must recheck buf_id_p
+		 * content now.
+		 *
+		 * buf_id_p is still valid pointer since it could be deleted/reused
+		 * only with exclusive partition lock.
+		 *
+		 * We are relying on 32bit atomicity here as in several other places.
+		 */
+		wait = *buf_id_p == buf_id;
+	}
+	LWLockRelease(newPartitionLock);
+
+	if (buf_id < -1)
+	{
+		if (wait)
+			ConditionVariableSleepOnce(insertionCV, WAIT_EVENT_BUFFER_INSERT);
+		else
+			ConditionVariableCancelSleep();
+	}
+
+	if (buf_id != -1)
+		goto retry;
 
 	/* Loop here in case we have to try another victim buffer */
 	for (;;)
@@ -1293,7 +1355,10 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 
 		/*
 		 * To change the association of a valid buffer, we'll need to have
-		 * exclusive lock on both the old and new mapping partitions.
+		 * exclusive lock on old mapping partition.
+		 *
+		 * Note: we don't need to have the lock on new partition since we're
+		 * effectively locking placeholder entry.
 		 */
 		if (oldFlags & BM_TAG_VALID)
 		{
@@ -1306,91 +1371,14 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 			oldHash = BufTableHashCode(&oldTag);
 			oldPartitionLock = BufMappingPartitionLock(oldHash);
 
-			/*
-			 * Must lock the lower-numbered partition first to avoid
-			 * deadlocks.
-			 */
-			if (oldPartitionLock < newPartitionLock)
-			{
-				LWLockAcquire(oldPartitionLock, LW_EXCLUSIVE);
-				LWLockAcquire(newPartitionLock, LW_EXCLUSIVE);
-			}
-			else if (oldPartitionLock > newPartitionLock)
-			{
-				LWLockAcquire(newPartitionLock, LW_EXCLUSIVE);
-				LWLockAcquire(oldPartitionLock, LW_EXCLUSIVE);
-			}
-			else
-			{
-				/* only one partition, only one lock */
-				LWLockAcquire(newPartitionLock, LW_EXCLUSIVE);
-			}
+			LWLockAcquire(oldPartitionLock, LW_EXCLUSIVE);
 		}
 		else
 		{
-			/* if it wasn't valid, we need only the new partition */
-			LWLockAcquire(newPartitionLock, LW_EXCLUSIVE);
 			/* remember we have no old-partition lock or tag */
 			oldPartitionLock = NULL;
 			/* keep the compiler quiet about uninitialized variables */
 			oldHash = 0;
-		}
-
-		/*
-		 * Try to make a hashtable entry for the buffer under its new tag.
-		 * This could fail because while we were writing someone else
-		 * allocated another buffer for the same block we want to read in.
-		 * Note that we have not yet removed the hashtable entry for the old
-		 * tag.
-		 */
-		buf_id = BufTableInsert(&newTag, newHash, buf->buf_id);
-
-		if (buf_id >= 0)
-		{
-			/*
-			 * Got a collision. Someone has already done what we were about to
-			 * do. We'll just handle this as if it were found in the buffer
-			 * pool in the first place.  First, give up the buffer we were
-			 * planning to use.
-			 */
-			UnpinBuffer(buf, true);
-
-			/* Can give up that buffer's mapping partition lock now */
-			if (oldPartitionLock != NULL &&
-				oldPartitionLock != newPartitionLock)
-				LWLockRelease(oldPartitionLock);
-
-			/* remaining code should match code at top of routine */
-
-			buf = GetBufferDescriptor(buf_id);
-
-			valid = PinBuffer(buf, strategy);
-
-			/* Can release the mapping lock as soon as we've pinned it */
-			LWLockRelease(newPartitionLock);
-
-			*foundPtr = true;
-
-			if (!valid)
-			{
-				/*
-				 * We can only get here if (a) someone else is still reading
-				 * in the page, or (b) a previous read attempt failed.  We
-				 * have to wait for any active read attempt to finish, and
-				 * then set up our own read attempt if the page is still not
-				 * BM_VALID.  StartBufferIO does it all.
-				 */
-				if (StartBufferIO(buf, true))
-				{
-					/*
-					 * If we get here, previous attempts to read the buffer
-					 * must have failed ... but we shall bravely try again.
-					 */
-					*foundPtr = false;
-				}
-			}
-
-			return buf;
 		}
 
 		/*
@@ -1400,20 +1388,16 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 
 		/*
 		 * Somebody could have pinned or re-dirtied the buffer while we were
-		 * doing the I/O and making the new hashtable entry.  If so, we can't
-		 * recycle this buffer; we must undo everything we've done and start
-		 * over with a new victim buffer.
+		 * doing the I/O.  If so, we can't recycle this buffer; we must undo
+		 * everything we've done and start over with a new victim buffer.
 		 */
 		oldFlags = buf_state & BUF_FLAG_MASK;
 		if (BUF_STATE_GET_REFCOUNT(buf_state) == 1 && !(oldFlags & BM_DIRTY))
 			break;
 
 		UnlockBufHdr(buf, buf_state);
-		BufTableDelete(&newTag, newHash);
-		if (oldPartitionLock != NULL &&
-			oldPartitionLock != newPartitionLock)
+		if (oldPartitionLock != NULL)
 			LWLockRelease(oldPartitionLock);
-		LWLockRelease(newPartitionLock);
 		UnpinBuffer(buf, true);
 	}
 
@@ -1439,16 +1423,24 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	else
 		buf_state |= BM_TAG_VALID | BUF_USAGECOUNT_ONE;
 
+	/*
+	 * need to write buf_id_p before unlock buffer header since BM_TAG_VALID
+	 * means BufTable has an entry pointing to this buffer header.
+	 */
+	*buf_id_p = buf->buf_id;
 	UnlockBufHdr(buf, buf_state);
+
+	/* We're done. Forget about placeholder */
+	CLEAR_BUFFERTAG(PlaceholderTag);
 
 	if (oldPartitionLock != NULL)
 	{
 		BufTableDelete(&oldTag, oldHash);
-		if (oldPartitionLock != newPartitionLock)
-			LWLockRelease(oldPartitionLock);
+		LWLockRelease(oldPartitionLock);
 	}
 
-	LWLockRelease(newPartitionLock);
+	insertionCV = &BufferInsertionCVArray[backId].cv;
+	ConditionVariableBroadcastFast(insertionCV);
 
 	/*
 	 * Buffer contents are currently invalid.  Try to obtain the right to
@@ -2586,16 +2578,50 @@ SyncOneBuffer(int buf_id, bool skip_recently_used, WritebackContext *wb_context)
 	return result | BUF_WRITTEN;
 }
 
+static void
+BufferCleanupPlaceholder(void)
+{
+	uint32		hash;			/* hash value for newTag */
+	LWLock	   *partitionLock;	/* buffer partition lock for it */
+	int			backId;
+
+	if (likely(PlaceholderTag.rnode.relNode == InvalidOid))
+		return;
+
+	hash = BufTableHashCode(&PlaceholderTag);
+	partitionLock = BufMappingPartitionLock(hash);
+
+	/* During startup MyBackendId == -1, so workaround. */
+	backId = MyBackendId > 0 ? MyBackendId - 1 : MaxBackends;
+	LWLockAcquire(partitionLock, LW_EXCLUSIVE);
+
+	/*
+	 * Just last sanity check. should always be true. I don't know how to
+	 * trigger this in tests, so no Assert here.
+	 */
+	if (BufTableLookup(&PlaceholderTag, hash) == -2 - backId)
+		BufTableDelete(&PlaceholderTag, hash);
+	LWLockRelease(partitionLock);
+
+	ConditionVariableBroadcastFast(&BufferInsertionCVArray[backId].cv);
+
+	CLEAR_BUFFERTAG(PlaceholderTag);
+}
+
 /*
  *		AtEOXact_Buffers - clean up at end of transaction.
  *
  *		As of PostgreSQL 8.0, buffer pins should get released by the
  *		ResourceOwner mechanism.  This routine is just a debugging
  *		cross-check that no pins remain.
+ *
+ *		Except for sanity check process didn't fall during buffer
+ *		insertion. Then it should delete placeholder.
  */
 void
 AtEOXact_Buffers(bool isCommit)
 {
+	BufferCleanupPlaceholder();
 	CheckForBufferLeaks();
 
 	AtEOXact_LocalBuffers(isCommit);
@@ -2638,6 +2664,7 @@ InitBufferPoolAccess(void)
 static void
 AtProcExit_Buffers(int code, Datum arg)
 {
+	BufferCleanupPlaceholder();
 	AbortBufferIO();
 	UnlockBuffers();
 
@@ -3376,6 +3403,7 @@ FindAndDropRelationBuffers(RelFileLocator rlocator, ForkNumber forkNum,
 		buf_id = BufTableLookup(&bufTag, bufHash);
 		LWLockRelease(bufPartitionLock);
 
+		Assert(buf_id >= -1);
 		if (buf_id < 0)
 			continue;
 

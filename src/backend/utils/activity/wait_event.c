@@ -331,6 +331,9 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 		case WAIT_EVENT_BTREE_PAGE:
 			event_name = "BtreePage";
 			break;
+		case WAIT_EVENT_BUFFER_INSERT:
+			event_name = "BufferInsert";
+			break;
 		case WAIT_EVENT_BUFFER_IO:
 			event_name = "BufferIO";
 			break;

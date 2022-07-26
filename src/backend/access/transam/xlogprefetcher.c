@@ -783,6 +783,16 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 				block->prefetch_buffer = InvalidBuffer;
 				return LRQ_NEXT_IO;
 			}
+			else if (result.concurrent_io)
+			{
+				/*
+				 * Could it happen at all, i.e. could be there concurrent
+				 * backend trying to load same page? Anyway, try to do
+				 * something meaningful.
+				 */
+				block->prefetch_buffer = InvalidBuffer;
+				return LRQ_NEXT_NO_IO;
+			}
 			else
 			{
 				/*

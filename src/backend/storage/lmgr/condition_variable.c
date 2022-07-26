@@ -30,6 +30,9 @@
 /* Initially, we are not prepared to sleep on any condition variable. */
 static ConditionVariable *cv_sleep_target = NULL;
 
+static bool ConditionVariableTimedSleepImpl(ConditionVariable *cv, long timeout,
+											uint32 wait_event_info, bool once);
+
 /*
  * Initialize a condition variable.
  */
@@ -97,8 +100,15 @@ ConditionVariablePrepareToSleep(ConditionVariable *cv)
 void
 ConditionVariableSleep(ConditionVariable *cv, uint32 wait_event_info)
 {
-	(void) ConditionVariableTimedSleep(cv, -1 /* no timeout */ ,
-									   wait_event_info);
+	(void) ConditionVariableTimedSleepImpl(cv, -1 /* no timeout */ ,
+										   wait_event_info, false);
+}
+
+void
+ConditionVariableSleepOnce(ConditionVariable *cv, uint32 wait_event_info)
+{
+	(void) ConditionVariableTimedSleepImpl(cv, -1 /* no timeout */ ,
+										   wait_event_info, true);
 }
 
 /*
@@ -111,6 +121,20 @@ ConditionVariableSleep(ConditionVariable *cv, uint32 wait_event_info)
 bool
 ConditionVariableTimedSleep(ConditionVariable *cv, long timeout,
 							uint32 wait_event_info)
+{
+	return ConditionVariableTimedSleepImpl(cv, timeout, wait_event_info, false);
+}
+
+/*
+ * Wait for a condition variable to be signaled or a timeout to be reached.
+ *
+ * Returns true when timeout expires, otherwise returns false.
+ *
+ * See ConditionVariableSleep() for general usage.
+ */
+static bool
+ConditionVariableTimedSleepImpl(ConditionVariable *cv, long timeout,
+								uint32 wait_event_info, bool once)
 {
 	long		cur_timeout = -1;
 	instr_time	start_time;
@@ -134,6 +158,9 @@ ConditionVariableTimedSleep(ConditionVariable *cv, long timeout,
 	 */
 	if (cv_sleep_target != cv)
 	{
+		if (once)
+			elog(FATAL, "ConditionVariable could be waited once only if it is "
+				 "prepared to sleep.");
 		ConditionVariablePrepareToSleep(cv);
 		return false;
 	}
@@ -184,7 +211,8 @@ ConditionVariableTimedSleep(ConditionVariable *cv, long timeout,
 		if (!proclist_contains(&cv->wakeup, MyProc->pgprocno, cvWaitLink))
 		{
 			done = true;
-			proclist_push_tail(&cv->wakeup, MyProc->pgprocno, cvWaitLink);
+			if (!once)
+				proclist_push_tail(&cv->wakeup, MyProc->pgprocno, cvWaitLink);
 		}
 		SpinLockRelease(&cv->mutex);
 
@@ -199,7 +227,11 @@ ConditionVariableTimedSleep(ConditionVariable *cv, long timeout,
 
 		/* We were signaled, so return */
 		if (done)
+		{
+			if (once && cv == cv_sleep_target)
+				cv_sleep_target = NULL;
 			return false;
+		}
 
 		/* If we're not done, update cur_timeout for next iteration */
 		if (timeout >= 0)
@@ -361,4 +393,88 @@ ConditionVariableBroadcast(ConditionVariable *cv)
 		if (proc != NULL && proc != MyProc)
 			SetLatch(&proc->procLatch);
 	}
+}
+
+void
+ConditionVariableBroadcastFast(ConditionVariable *cv)
+{
+	int			pgprocno = MyProc->pgprocno;
+	bool		have_sentinel = false;
+#define BATCH_SIZE 16
+	PGPROC	   *proc = NULL;
+	PGPROC	   *procs[BATCH_SIZE] = {NULL};
+	int			nprocs = 0;
+
+	/*
+	 * In some use-cases, it is common for awakened processes to immediately
+	 * re-queue themselves.  If we just naively try to reduce the wakeup list
+	 * to empty, we'll get into a potentially-indefinite loop against such a
+	 * process.  The semantics we really want are just to be sure that we have
+	 * wakened all processes that were in the list at entry.  We can use our
+	 * own cvWaitLink as a sentinel to detect when we've finished.
+	 *
+	 * A seeming flaw in this approach is that someone else might signal the
+	 * CV and in doing so remove our sentinel entry.  But that's fine: since
+	 * CV waiters are always added and removed in order, that must mean that
+	 * every previous waiter has been wakened, so we're done.  We'll get an
+	 * extra "set" on our latch from the someone else's signal, which is
+	 * slightly inefficient but harmless.
+	 *
+	 * We can't insert our cvWaitLink as a sentinel if it's already in use in
+	 * some other proclist.  While that's not expected to be true for typical
+	 * uses of this function, we can deal with it by simply canceling any
+	 * prepared CV sleep.  The next call to ConditionVariableSleep will take
+	 * care of re-establishing the lost state.
+	 */
+	if (cv_sleep_target != NULL)
+		ConditionVariableCancelSleep();
+
+	do
+	{
+		/*
+		 * Fetch processes from proclist in batches.
+		 *
+		 * If there were less entries than batch size on first iteration, we
+		 * will done immediately. Otherwise we insert sentinel entry do detect
+		 * part of list we are responsible for.
+		 *
+		 * Notice that if someone else removes our sentinel, we will waken up
+		 * to BATCH_SIZE of additional processes before exiting.  That's
+		 * intentional, because if someone else signals the CV, they may be
+		 * intending to waken some third process that added itself to the list
+		 * after we added the sentinel.  Better to give a spurious wakeup
+		 * (which should be harmless beyond wasting some cycles) than to lose
+		 * a wakeup.
+		 */
+		SpinLockAcquire(&cv->mutex);
+		if (!have_sentinel)
+			/* While we're here, let's assert we're not in the list. */
+			Assert(!proclist_contains(&cv->wakeup, pgprocno, cvWaitLink));
+
+		while (nprocs < BATCH_SIZE && !proclist_is_empty(&cv->wakeup))
+		{
+			proc = proclist_pop_head_node(&cv->wakeup, cvWaitLink);
+			if (proc == MyProc)
+				break;
+			procs[nprocs++] = proc;
+		}
+
+		if (!have_sentinel && !proclist_is_empty(&cv->wakeup))
+		{
+			proclist_push_tail(&cv->wakeup, pgprocno, cvWaitLink);
+			have_sentinel = true;
+		}
+		else if (have_sentinel)
+		{
+			have_sentinel = proclist_contains(&cv->wakeup, pgprocno, cvWaitLink);
+		}
+		SpinLockRelease(&cv->mutex);
+
+		/* Awaken waiters batch, if there were some. */
+		while (nprocs > 0)
+		{
+			proc = procs[--nprocs];
+			SetLatch(&proc->procLatch);
+		}
+	} while (have_sentinel);
 }

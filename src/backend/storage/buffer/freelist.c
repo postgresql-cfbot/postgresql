@@ -454,8 +454,8 @@ StrategyShmemSize(void)
 {
 	Size		size = 0;
 
-	/* size of lookup hash table ... see comment in StrategyInitialize */
-	size = add_size(size, BufTableShmemSize(NBuffers + NUM_BUFFER_PARTITIONS));
+	/* size of lookup hash table */
+	size = add_size(size, BufTableShmemSize(NBuffers));
 
 	/* size of the shared replacement strategy control block */
 	size = add_size(size, MAXALIGN(sizeof(BufferStrategyControl)));
@@ -477,15 +477,8 @@ StrategyInitialize(bool init)
 
 	/*
 	 * Initialize the shared buffer lookup hashtable.
-	 *
-	 * Since we can't tolerate running out of lookup table entries, we must be
-	 * sure to specify an adequate table size here.  The maximum steady-state
-	 * usage is of course NBuffers entries, but BufferAlloc() tries to insert
-	 * a new entry before deleting the old.  In principle this could be
-	 * happening in each partition concurrently, so we could need as many as
-	 * NBuffers + NUM_BUFFER_PARTITIONS entries.
 	 */
-	InitBufTable(NBuffers + NUM_BUFFER_PARTITIONS);
+	InitBufTable(NBuffers);
 
 	/*
 	 * Get or create the shared strategy control block

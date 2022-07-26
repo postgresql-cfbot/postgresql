@@ -23,15 +23,17 @@
 
 #include "storage/buf_internals.h"
 #include "storage/bufmgr.h"
+#include "miscadmin.h"
 
 /* entry for buffer lookup hashtable */
 typedef struct
 {
 	BufferTag	key;			/* Tag of a disk page */
-	int			id;				/* Associated buffer ID */
+	volatile int id;			/* Associated buffer ID */
 } BufferLookupEnt;
 
 static HTAB *SharedBufHash;
+ConditionVariableMinimallyPadded *BufferInsertionCVArray;
 
 
 /*
@@ -41,7 +43,29 @@ static HTAB *SharedBufHash;
 Size
 BufTableShmemSize(int size)
 {
-	return hash_estimate_size(size, sizeof(BufferLookupEnt));
+	Size		sz;
+
+	/*
+	 * BufferAlloc inserts new buffer entry before deleting the old. That is
+	 * why there is a need in additional free entry for every backend.
+	 *
+	 * Also size could not be less than NUM_BUFFER_PARTITIONS.
+	 *
+	 * And since get_hash_entry is not very  inefficiency of dynahash's
+	 * get_hash_entry, it is better to have more spare entries, so we use both
+	 * MaxBackends and NUM_BUFFER_PARTITIONS.
+	 */
+	size += MaxBackends + NUM_BUFFER_PARTITIONS;
+	sz = hash_estimate_size(size, sizeof(BufferLookupEnt));
+
+	/*
+	 * Every backend should have associated ConditionVariable so we could map
+	 * them 1:1 without resolving collisions. And additional one is allocated
+	 * for startup process (xlog player), which have MyBackendId == -1.
+	 */
+	sz = add_size(sz, mul_size(MaxBackends + 1,
+							   sizeof(ConditionVariableMinimallyPadded)));
+	return sz;
 }
 
 /*
@@ -52,6 +76,10 @@ void
 InitBufTable(int size)
 {
 	HASHCTL		info;
+	bool		found;
+
+	/* see comments in BufTableShmemSize */
+	size += MaxBackends + NUM_BUFFER_PARTITIONS;
 
 	/* assume no locking is needed yet */
 
@@ -63,7 +91,18 @@ InitBufTable(int size)
 	SharedBufHash = ShmemInitHash("Shared Buffer Lookup Table",
 								  size, size,
 								  &info,
-								  HASH_ELEM | HASH_BLOBS | HASH_PARTITION);
+								  HASH_ELEM | HASH_BLOBS | HASH_PARTITION |
+								  HASH_FIXED_SIZE);
+	BufferInsertionCVArray = (ConditionVariableMinimallyPadded *)
+		ShmemInitStruct("Shared Buffer Backend Insertion CV",
+						(MaxBackends + 1) *
+						sizeof(ConditionVariableMinimallyPadded),
+						&found);
+	if (!found)
+	{
+		for (int i = 0; i < MaxBackends + 1; i++)
+			ConditionVariableInit(&BufferInsertionCVArray[i].cv);
+	}
 }
 
 /*
@@ -110,18 +149,17 @@ BufTableLookup(BufferTag *tagPtr, uint32 hashcode)
  *		Insert a hashtable entry for given tag and buffer ID,
  *		unless an entry already exists for that tag
  *
- * Returns -1 on successful insertion.  If a conflicting entry exists
- * already, returns the buffer ID in that entry.
+ * Returns pointer to volatile int holding buffer index.
+ * If table entry were just inserted, index is filled with -1.
  *
  * Caller must hold exclusive lock on BufMappingLock for tag's partition
  */
-int
-BufTableInsert(BufferTag *tagPtr, uint32 hashcode, int buf_id)
+volatile int *
+BufTableInsert(BufferTag *tagPtr, uint32 hashcode)
 {
 	BufferLookupEnt *result;
 	bool		found;
 
-	Assert(buf_id >= 0);		/* -1 is reserved for not-in-table */
 	Assert(tagPtr->blockNum != P_NEW);	/* invalid tag */
 
 	result = (BufferLookupEnt *)
@@ -131,12 +169,10 @@ BufTableInsert(BufferTag *tagPtr, uint32 hashcode, int buf_id)
 									HASH_ENTER,
 									&found);
 
-	if (found)					/* found something already in the table */
-		return result->id;
+	if (!found)
+		result->id = -1;
 
-	result->id = buf_id;
-
-	return -1;
+	return &result->id;
 }
 
 /*

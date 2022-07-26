@@ -53,6 +53,8 @@ typedef struct PrefetchBufferResult
 {
 	Buffer		recent_buffer;	/* If valid, a hit (recheck needed!) */
 	bool		initiated_io;	/* If true, a miss resulting in async I/O */
+	bool		concurrent_io;	/* If true, other backend is trying to load
+								 * page at the moment */
 } PrefetchBufferResult;
 
 /* forward declared, to avoid having to expose buf_internals.h here */

@@ -2115,7 +2115,15 @@ btoptions(Datum reloptions, bool validate)
 		{"vacuum_cleanup_index_scale_factor", RELOPT_TYPE_REAL,
 		offsetof(BTOptions, vacuum_cleanup_index_scale_factor)},
 		{"deduplicate_items", RELOPT_TYPE_BOOL,
-		offsetof(BTOptions, deduplicate_items)}
+		offsetof(BTOptions, deduplicate_items)},
+		{"compresstype", RELOPT_TYPE_ENUM,
+		offsetof(BTOptions, compress) + offsetof(PageCompressOpts, compresstype)},
+		{"compresslevel", RELOPT_TYPE_INT,
+		offsetof(BTOptions, compress) + offsetof(PageCompressOpts, compresslevel)},
+		{"compress_chunk_size", RELOPT_TYPE_INT,
+		offsetof(BTOptions, compress) + offsetof(PageCompressOpts, compress_chunk_size)},
+		{"compress_prealloc_chunks", RELOPT_TYPE_INT,
+		offsetof(BTOptions, compress) + offsetof(PageCompressOpts, compress_prealloc_chunks)}
 	};
 
 	return (bytea *) build_reloptions(reloptions, validate,

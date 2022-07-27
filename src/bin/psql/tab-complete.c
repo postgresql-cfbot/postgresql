@@ -1278,6 +1278,10 @@ static const char *const table_storage_parameters[] = {
 	"autovacuum_vacuum_insert_threshold",
 	"autovacuum_vacuum_scale_factor",
 	"autovacuum_vacuum_threshold",
+	"compress_chunk_size",
+	"compress_prealloc_chunks",
+	"compresslevel",
+	"compresstype",
 	"fillfactor",
 	"log_autovacuum_min_duration",
 	"parallel_workers",
@@ -2000,6 +2004,8 @@ psql_completion(const char *text, int start, int end)
 	/* ALTER INDEX <foo> SET|RESET ( */
 	else if (Matches("ALTER", "INDEX", MatchAny, "RESET", "("))
 		COMPLETE_WITH("fillfactor",
+					  "compress_prealloc_chunks",
+					  "compresslevel",
 					  "deduplicate_items",	/* BTREE */
 					  "fastupdate", "gin_pending_list_limit",	/* GIN */
 					  "buffering",	/* GiST */
@@ -2007,6 +2013,8 @@ psql_completion(const char *text, int start, int end)
 			);
 	else if (Matches("ALTER", "INDEX", MatchAny, "SET", "("))
 		COMPLETE_WITH("fillfactor =",
+					  "compress_prealloc_chunks =",
+					  "compresslevel =",
 					  "deduplicate_items =",	/* BTREE */
 					  "fastupdate =", "gin_pending_list_limit =",	/* GIN */
 					  "buffering =",	/* GiST */

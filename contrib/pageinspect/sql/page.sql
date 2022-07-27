@@ -97,3 +97,20 @@ SHOW block_size \gset
 SELECT fsm_page_contents(decode(repeat('00', :block_size), 'hex'));
 SELECT page_header(decode(repeat('00', :block_size), 'hex'));
 SELECT page_checksum(decode(repeat('00', :block_size), 'hex'), 1);
+
+-- check functions for compressed relation
+CREATE TABLE test_compressed(a int, b int) WITH(compresstype=pglz,compress_chunk_size=1024,compress_prealloc_chunks=4);
+INSERT INTO test_compressed SELECT id,id FROM generate_series(1,1000)id;
+CHECKPOINT;
+
+SELECT nblocks, allocated_chunks, chunk_size, algorithm FROM get_compress_address_header('test_compressed',0);
+SELECT nblocks, allocated_chunks, chunk_size, algorithm FROM get_compress_address_header('xxx',0); --fail
+SELECT nblocks, allocated_chunks, chunk_size, algorithm FROM get_compress_address_header('test_compressed',1); --fail
+
+SELECT * FROM get_compress_address_items('test_compressed',0);
+SELECT * FROM get_compress_address_items('xxx',0); --fail
+SELECT * FROM get_compress_address_items('test_compressed',1); --fail
+
+SELECT octet_length(page_compress(get_raw_page('test_compressed', 'main', 0), 'pglz', 0)) > 0 AS page_compress_test;
+SELECT octet_length(page_compress(get_raw_page('test_compressed', 'main', 0), 'xxx', 0)) > 0 AS page_compress_test; --fail
+

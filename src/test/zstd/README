@@ -1,0 +1,3 @@
+This directory contains tests for page compression with ztsd.
+
+The premise of running this test is to enable the '-with-zstd' option when running configure

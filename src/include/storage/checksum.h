@@ -21,4 +21,10 @@
  */
 extern uint16 pg_checksum_page(char *page, BlockNumber blkno);
 
+/*
+ * Compute the checksum for a chunk of compressed page.  The chunk must be
+ * aligned on a 4-byte boundary.
+ */
+extern uint16 pg_checksum_compress_chunk(char *chunk, int chunk_size, uint32 chunckno);
+
 #endif							/* CHECKSUM_H */

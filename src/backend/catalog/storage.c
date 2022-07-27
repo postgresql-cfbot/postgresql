@@ -91,7 +91,7 @@ AddPendingSync(const RelFileLocator *rlocator)
 	{
 		HASHCTL		ctl;
 
-		ctl.keysize = sizeof(RelFileLocator);
+		ctl.keysize = offsetof(RelFileLocator, compressOpt);
 		ctl.entrysize = sizeof(PendingRelSync);
 		ctl.hcxt = TopTransactionContext;
 		pendingSyncHash = hash_create("pending sync hash", 16, &ctl,
@@ -100,6 +100,7 @@ AddPendingSync(const RelFileLocator *rlocator)
 
 	pending = hash_search(pendingSyncHash, rlocator, HASH_ENTER, &found);
 	Assert(!found);
+	pending->rlocator.compressOpt = rlocator->compressOpt;
 	pending->is_truncated = false;
 }
 
@@ -588,7 +589,7 @@ SerializePendingSyncs(Size maxSize, char *startAddress)
 		goto terminate;
 
 	/* Create temporary hash to collect active relfilelocators */
-	ctl.keysize = sizeof(RelFileLocator);
+	ctl.keysize = offsetof(RelFileLocator, compressOpt);
 	ctl.entrysize = sizeof(RelFileLocator);
 	ctl.hcxt = CurrentMemoryContext;
 	tmphash = hash_create("tmp relfilelocators",
@@ -598,7 +599,11 @@ SerializePendingSyncs(Size maxSize, char *startAddress)
 	/* collect all rlocator from pending syncs */
 	hash_seq_init(&scan, pendingSyncHash);
 	while ((sync = (PendingRelSync *) hash_seq_search(&scan)))
-		(void) hash_search(tmphash, &sync->rlocator, HASH_ENTER, NULL);
+	{
+		RelFileLocator *rlocator;
+		rlocator = hash_search(tmphash, &sync->rlocator, HASH_ENTER, NULL);
+		rlocator->compressOpt = sync->rlocator.compressOpt;
+	}
 
 	/* remove deleted rnodes */
 	for (delete = pendingDeletes; delete != NULL; delete = delete->next)

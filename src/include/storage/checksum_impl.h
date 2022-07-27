@@ -101,6 +101,7 @@
  */
 
 #include "storage/bufpage.h"
+#include "storage/page_compression.h"
 
 /* number of checksums to calculate in parallel */
 #define N_SUMS 32
@@ -139,11 +140,11 @@ do { \
 } while (0)
 
 /*
- * Block checksum algorithm.  The page must be adequately aligned
+ * Data checksum algorithm.  The data must be adequately aligned
  * (at least on 4-byte boundary).
  */
 static uint32
-pg_checksum_block(const PGChecksummablePage *page)
+pg_checksum_data(const char *data, int size)
 {
 	uint32		sums[N_SUMS];
 	uint32		result = 0;
@@ -151,15 +152,16 @@ pg_checksum_block(const PGChecksummablePage *page)
 				j;
 
 	/* ensure that the size is compatible with the algorithm */
-	Assert(sizeof(PGChecksummablePage) == BLCKSZ);
+	Assert(size > 0);
+	Assert(chunk_size == (size / (sizeof(uint32) * N_SUMS)) * (sizeof(uint32) * N_SUMS));
 
 	/* initialize partial checksums to their corresponding offsets */
 	memcpy(sums, checksumBaseOffsets, sizeof(checksumBaseOffsets));
 
 	/* main checksum calculation */
-	for (i = 0; i < (uint32) (BLCKSZ / (sizeof(uint32) * N_SUMS)); i++)
+	for (i = 0; i < (uint32) (size / (sizeof(uint32) * N_SUMS)); i++)
 		for (j = 0; j < N_SUMS; j++)
-			CHECKSUM_COMP(sums[j], page->data[i][j]);
+			CHECKSUM_COMP(sums[j], ((uint32 *) data)[i * N_SUMS + j]);
 
 	/* finally add in two rounds of zeroes for additional mixing */
 	for (i = 0; i < 2; i++)
@@ -201,7 +203,7 @@ pg_checksum_page(char *page, BlockNumber blkno)
 	 */
 	save_checksum = cpage->phdr.pd_checksum;
 	cpage->phdr.pd_checksum = 0;
-	checksum = pg_checksum_block(cpage);
+	checksum = pg_checksum_data(page, BLCKSZ);
 	cpage->phdr.pd_checksum = save_checksum;
 
 	/* Mix in the block number to detect transposed pages */
@@ -209,6 +211,45 @@ pg_checksum_page(char *page, BlockNumber blkno)
 
 	/*
 	 * Reduce to a uint16 (to fit in the pd_checksum field) with an offset of
+	 * one. That avoids checksums of zero, which seems like a good idea.
+	 */
+	return (uint16) ((checksum % 65535) + 1);
+}
+
+
+/*
+ * Compute the checksum for a chunk of compressed page.
+ *
+ * The chunk must be adequately aligned (at least on a 4-byte boundary).
+ * Beware also that the checksum field of the page is transiently zeroed.
+ *
+ * The checksum includes the chunck number (to detect the case where a chunk
+ * is somehow moved to a different location), the chunk header (excluding the
+ * checksum itself), and the chunk data.
+ */
+uint16
+pg_checksum_compress_chunk(char *chunk, int chunk_size, uint32 chunckno)
+{
+	PageCompressChunk *pcchunk = (PageCompressChunk *) chunk;
+	uint16		save_checksum;
+	uint32		checksum;
+
+	/*
+	 * Save pd_checksum and temporarily set it to zero, so that the checksum
+	 * calculation isn't affected by the old checksum stored on the page.
+	 * Restore it after, because actually updating the checksum is NOT part of
+	 * the API of this function.
+	 */
+	save_checksum = pcchunk->checksum;
+	pcchunk->checksum = 0;
+	checksum = pg_checksum_data(chunk, chunk_size);
+	pcchunk->checksum = save_checksum;
+
+	/* Mix in the chunk number to detect transposed pages */
+	checksum ^= chunckno;
+
+	/*
+	 * Reduce to a uint16 (to fit in the checksum field) with an offset of
 	 * one. That avoids checksums of zero, which seems like a good idea.
 	 */
 	return (uint16) ((checksum % 65535) + 1);

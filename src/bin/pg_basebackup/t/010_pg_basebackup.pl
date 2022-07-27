@@ -178,6 +178,17 @@ my $baseUnloggedPath = $node->safe_psql('postgres',
 ok(-f "$pgdata/${baseUnloggedPath}_init", 'unlogged init fork in base');
 ok(-f "$pgdata/$baseUnloggedPath",        'unlogged main fork in base');
 
+# Create an compressed table to test that pca and pcd file are copied.
+$node->safe_psql('postgres', 'CREATE TABLE base_compressed (id int) WITH(compresstype=pglz)');
+
+my $baseCompressedPath = $node->safe_psql('postgres',
+	q{select pg_relation_filepath('base_compressed')});
+
+# Make sure compressed relation's address and data files exist
+ok(-f "$pgdata/$baseCompressedPath",       'compressed main fork in base');
+ok(-f "$pgdata/${baseCompressedPath}_pca", 'compressed address file in base');
+ok(-f "$pgdata/${baseCompressedPath}_pcd", 'compressed data file in base');
+
 # Create files that look like temporary relations to ensure they are ignored.
 my $postgresOid = $node->safe_psql('postgres',
 	q{select oid from pg_database where datname = 'postgres'});
@@ -237,6 +248,14 @@ ok(-f "$tempdir/backup/${baseUnloggedPath}_init",
 	'unlogged init fork in backup');
 ok( !-f "$tempdir/backup/$baseUnloggedPath",
 	'unlogged main fork not in backup');
+
+# Compressed relation fork's address and data should be copied
+ok(-f "$tempdir/backup/${baseCompressedPath}",
+	'compressed main fork in backup');
+ok(-f "$tempdir/backup/${baseCompressedPath}_pca",
+	'compressed address file in backup');
+ok(-f "$tempdir/backup/${baseCompressedPath}_pcd",
+	'compressed data file in backup');
 
 # Temp relations should not be copied.
 foreach my $filename (@tempRelationFiles)

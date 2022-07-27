@@ -30,6 +30,10 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#include "access/hash.h"
+#include "access/gin_private.h"
+#include "access/gist_private.h"
+#include "access/spgist_private.h"
 #include "access/htup_details.h"
 #include "access/multixact.h"
 #include "access/nbtree.h"
@@ -76,6 +80,7 @@
 #include "rewrite/rewriteDefine.h"
 #include "rewrite/rowsecurity.h"
 #include "storage/lmgr.h"
+#include "storage/page_compression.h"
 #include "storage/smgr.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
@@ -316,6 +321,7 @@ static OpClassCacheEnt *LookupOpclassInfo(Oid operatorClassOid,
 										  StrategyNumber numSupport);
 static void RelationCacheInitFileRemoveInDir(const char *tblspcpath);
 static void unlink_initfile(const char *initfilename, int elevel);
+static void SetupPageCompressForRelation(Relation relation, PageCompressOpts *compress_options);
 
 
 /*
@@ -1380,6 +1386,40 @@ RelationInitPhysicalAddr(Relation relation)
 			relation->rd_firstRelfilelocatorSubid = TopSubTransactionId;
 		else
 			relation->rd_firstRelfilelocatorSubid = InvalidSubTransactionId;
+	}
+
+	/* setup page compression option */
+	if (relation->rd_options)
+	{
+		switch (relation->rd_rel->relam)
+		{
+			case HEAP_TABLE_AM_OID:
+				SetupPageCompressForRelation(relation, &((StdRdOptions *) (relation->rd_options))->compress);
+				break;
+
+			case BTREE_AM_OID:
+				SetupPageCompressForRelation(relation, &((BTOptions *) (relation->rd_options))->compress);
+				break;
+
+			case HASH_AM_OID:
+				SetupPageCompressForRelation(relation, &((HashOptions *) (relation->rd_options))->compress);
+				break;
+
+			case GIN_AM_OID:
+				SetupPageCompressForRelation(relation, &((GinOptions *) (relation->rd_options))->compress);
+				break;
+
+			case GIST_AM_OID:
+				SetupPageCompressForRelation(relation, &((GiSTOptions *) (relation->rd_options))->compress);
+				break;
+
+			case SPGIST_AM_OID:
+				SetupPageCompressForRelation(relation, &((SpGistOptions *) (relation->rd_options))->compress);
+				break;
+
+			default:
+				break;
+		}
 	}
 }
 
@@ -3464,7 +3504,8 @@ RelationBuildLocalRelation(const char *relname,
 						   bool shared_relation,
 						   bool mapped_relation,
 						   char relpersistence,
-						   char relkind)
+						   char relkind,
+						   Datum reloptions)
 {
 	Relation	rel;
 	MemoryContext oldcxt;
@@ -3640,6 +3681,17 @@ RelationBuildLocalRelation(const char *relname,
 	RelationInitLockInfo(rel);	/* see lmgr.c */
 
 	RelationInitPhysicalAddr(rel);
+
+	/* setup page compression option */
+	if (reloptions &&
+		(relkind == RELKIND_RELATION ||
+		 relkind == RELKIND_MATVIEW ||
+		 relkind == RELKIND_INDEX))
+	{
+		StdRdOptions *options = (StdRdOptions *) default_reloptions(reloptions, false, RELOPT_KIND_HEAP);
+
+		SetupPageCompressForRelation(rel, &options->compress);
+	}
 
 	rel->rd_rel->relam = accessmtd;
 
@@ -6718,5 +6770,62 @@ unlink_initfile(const char *initfilename, int elevel)
 					(errcode_for_file_access(),
 					 errmsg("could not remove cache file \"%s\": %m",
 							initfilename)));
+	}
+}
+
+/* setup page compression options for relation */
+static void
+SetupPageCompressForRelation(Relation relation, PageCompressOpts *compress_options)
+{
+	if (compress_options->compresstype == PAGE_COMPRESSION_NONE)
+	{
+		relation->rd_locator.compressOpt.algorithm = PAGE_COMPRESSION_NONE;
+		relation->rd_locator.compressOpt.level = 0;
+		relation->rd_locator.compressOpt.chunks_pre_block = 0;
+		relation->rd_locator.compressOpt.prealloc_chunks = 0;
+	}
+	else
+	{
+		if (!SUPPORT_PAGE_COMPRESSION)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("page compression is not supported by this build")));
+
+#ifndef USE_LZ4
+		if (compress_options->compresstype == PAGE_COMPRESSION_LZ4)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("lz4 compression is not supported by this build")));
+#endif
+
+#ifndef USE_ZSTD
+		if (compress_options->compresstype == PAGE_COMPRESSION_ZSTD)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("zstd compression is not supported by this build")));
+#endif
+
+		relation->rd_locator.compressOpt.algorithm = compress_options->compresstype;
+		relation->rd_locator.compressOpt.level = compress_options->compresslevel;
+
+		if (compress_options->compress_chunk_size != BLCKSZ / 2 &&
+			compress_options->compress_chunk_size != BLCKSZ / 4 &&
+			compress_options->compress_chunk_size != BLCKSZ / 8 &&
+			compress_options->compress_chunk_size != BLCKSZ / 16)
+		{
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("invalid compress_chunk_size %d, must be one of %d, %d, %d or %d",
+							compress_options->compress_chunk_size,
+							BLCKSZ / 16, BLCKSZ / 8, BLCKSZ / 4, BLCKSZ / 2),
+					 errtable(relation)));
+		}
+
+		relation->rd_locator.compressOpt.chunks_pre_block = BLCKSZ / compress_options->compress_chunk_size;
+
+		if (compress_options->compress_prealloc_chunks >= BLCKSZ / compress_options->compress_chunk_size)
+			relation->rd_locator.compressOpt.prealloc_chunks = (uint8) (BLCKSZ / compress_options->compress_chunk_size - 1);
+		else
+			relation->rd_locator.compressOpt.prealloc_chunks = (uint8) (compress_options->compress_prealloc_chunks);
 	}
 }

@@ -21,6 +21,7 @@
 #include "storage/bufmgr.h"
 #include "storage/buffile.h"
 #include "utils/hsearch.h"
+#include "utils/rel.h"
 #include "access/genam.h"
 
 /*
@@ -396,6 +397,7 @@ typedef struct GiSTOptions
 	int32		vl_len_;		/* varlena header (do not touch directly!) */
 	int			fillfactor;		/* page fill factor in percent (0..100) */
 	GistOptBufferingMode buffering_mode;	/* buffering build mode */
+	PageCompressOpts	compress; /* page compression related options */
 } GiSTOptions;
 
 /* gist.c */

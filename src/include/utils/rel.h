@@ -23,6 +23,7 @@
 #include "partitioning/partdefs.h"
 #include "rewrite/prs2lock.h"
 #include "storage/block.h"
+#include "storage/page_compression.h"
 #include "storage/relfilelocator.h"
 #include "storage/smgr.h"
 #include "utils/relcache.h"
@@ -329,6 +330,18 @@ typedef enum StdRdOptIndexCleanup
 	STDRD_OPTION_VACUUM_INDEX_CLEANUP_ON
 } StdRdOptIndexCleanup;
 
+/* PageCompressOpts->compresstype values */
+typedef PageCompression compressTypeOption;
+
+ /* page compression related reloptions. */
+typedef struct PageCompressOpts
+{
+	compressTypeOption	compresstype; 				/* compress algorithm */
+	int					compresslevel;				/* compress level */
+	int					compress_chunk_size;		/* chunk size of compressed data */
+	int					compress_prealloc_chunks;	/* prealloced chunks to store compressed data */
+} PageCompressOpts;
+
 typedef struct StdRdOptions
 {
 	int32		vl_len_;		/* varlena header (do not touch directly!) */
@@ -339,6 +352,7 @@ typedef struct StdRdOptions
 	int			parallel_workers;	/* max number of parallel workers */
 	StdRdOptIndexCleanup vacuum_index_cleanup;	/* controls index vacuuming */
 	bool		vacuum_truncate;	/* enables vacuum to truncate a relation */
+	PageCompressOpts	compress; /* page compression related reloptions. */
 } StdRdOptions;
 
 #define HEAP_MIN_FILLFACTOR			10

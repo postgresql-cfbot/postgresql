@@ -89,6 +89,7 @@
 
 #include "access/xact.h"
 #include "access/xlog.h"
+#include "access/xlogutils.h"
 #include "catalog/pg_tablespace.h"
 #include "common/file_perm.h"
 #include "common/file_utils.h"
@@ -100,6 +101,7 @@
 #include "postmaster/startup.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
+#include "storage/page_compression.h"
 #include "utils/guc.h"
 #include "utils/resowner_private.h"
 
@@ -204,6 +206,8 @@ typedef struct vfd
 	/* NB: fileName is malloc'd, and must be free'd when closing the VFD */
 	int			fileFlags;		/* open(2) flags for (re)opening the file */
 	mode_t		fileMode;		/* mode to pass to open(2) */
+	bool		with_pcmap;		/* is page compression relation */
+	PageCompressHeader *pcmap;	/* memory map of page compression address file */
 } Vfd;
 
 /*
@@ -1223,6 +1227,17 @@ LruDelete(File file)
 
 	vfdP = &VfdCache[file];
 
+	if (vfdP->with_pcmap && vfdP->pcmap != NULL)
+	{
+		if (pc_munmap(vfdP->pcmap) != 0)
+			ereport(vfdP->fdstate & FD_TEMP_FILE_LIMIT ? LOG : data_sync_elevel(LOG),
+					(errcode_for_dynamic_shared_memory(),
+					 errmsg("could not munmap file \"%s\": %m",
+							vfdP->fileName)));
+
+		vfdP->pcmap = NULL;
+	}
+
 	/*
 	 * Close the file.  We aren't expecting this to fail; if it does, better
 	 * to leak the FD than to mess up our internal state.
@@ -1559,6 +1574,8 @@ PathNameOpenFilePerm(const char *fileName, int fileFlags, mode_t fileMode)
 	vfdP->fileSize = 0;
 	vfdP->fdstate = 0x0;
 	vfdP->resowner = NULL;
+	vfdP->with_pcmap = false;
+	vfdP->pcmap = NULL;
 
 	Insert(file);
 
@@ -1908,6 +1925,18 @@ FileClose(File file)
 
 	if (!FileIsNotOpen(file))
 	{
+		/* close the pcmap */
+		if (vfdP->with_pcmap && vfdP->pcmap != NULL)
+		{
+			if (pc_munmap(vfdP->pcmap) != 0)
+				ereport(vfdP->fdstate & FD_TEMP_FILE_LIMIT ? LOG : data_sync_elevel(LOG),
+						(errcode_for_dynamic_shared_memory(),
+						 errmsg("could not munmap file \"%s\": %m",
+								vfdP->fileName)));
+
+			vfdP->pcmap = NULL;
+		}
+
 		/* close the file */
 		if (close(vfdP->fd) != 0)
 		{
@@ -2264,6 +2293,105 @@ FileTruncate(File file, off_t offset, uint32 wait_event_info)
 	}
 
 	return returnCode;
+}
+
+/*
+ * initialize page compression memory map.
+ * While file_pcd is valid, will try to fix pca file in recovery mode.
+ */
+void
+SetupPageCompressMemoryMap(File file, File file_pcd, int chunk_size, uint8 algorithm)
+{
+	int			returnCode;
+	Vfd		   *vfdP;
+	PageCompressHeader *map;
+
+	Assert(FileIsValid(file));
+
+	vfdP = &VfdCache[file];
+
+	returnCode = FileAccess(file);
+	if (returnCode < 0)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not open file \"%s\": %m",
+						vfdP->fileName)));
+
+	map = pc_mmap(vfdP->fd, chunk_size, false);
+	if (map == MAP_FAILED)
+		ereport(ERROR,
+				(errcode_for_dynamic_shared_memory(),
+				 errmsg("could not mmap file \"%s\": %m",
+						vfdP->fileName)));
+
+	/* initialize page compression header */
+	if (map->chunk_size == 0 && map->algorithm == 0)
+	{
+		map->chunk_size = chunk_size;
+		map->algorithm = algorithm;
+
+		if (pc_msync(map) != 0)
+			ereport(data_sync_elevel(ERROR),
+					(errcode_for_dynamic_shared_memory(),
+					 errmsg("could not msync file \"%s\": %m",
+							vfdP->fileName)));
+	}
+
+	if (InRecovery && FileIsValid(file_pcd))
+	{
+		Vfd		   *vfdP_pcd = &VfdCache[file_pcd];
+
+		returnCode = FileAccess(file_pcd);
+		if (returnCode < 0)
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not open file \"%s\": %m",
+							vfdP->fileName)));
+
+		check_and_repair_compress_address(map, chunk_size, algorithm, vfdP->fileName, vfdP_pcd->fd, vfdP_pcd->fileName);
+	}
+
+	vfdP->with_pcmap = true;
+	vfdP->pcmap = map;
+}
+
+/*
+ * Returns the page compression memory map.
+ *
+ */
+void *
+GetPageCompressMemoryMap(File file, int chunk_size)
+{
+	int			returnCode;
+	Vfd		   *vfdP;
+	PageCompressHeader *map;
+
+	Assert(FileIsValid(file));
+
+	vfdP = &VfdCache[file];
+
+	returnCode = FileAccess(file);
+	if (returnCode < 0)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not open file \"%s\": %m",
+						vfdP->fileName)));
+
+	Assert(vfdP->with_pcmap);
+
+	if (vfdP->pcmap == NULL)
+	{
+		map = pc_mmap(vfdP->fd, chunk_size, false);
+		if (map == MAP_FAILED)
+			ereport(ERROR,
+					(errcode_for_dynamic_shared_memory(),
+					 errmsg("could not mmap file \"%s\": %m",
+							vfdP->fileName)));
+
+		vfdP->pcmap = map;
+	}
+
+	return vfdP->pcmap;
 }
 
 /*

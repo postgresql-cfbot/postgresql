@@ -18,6 +18,10 @@ ifeq ($(with_icu),yes)
 SUBDIRS += icu
 endif
 
+ifeq ($(with_zstd),yes)
+SUBDIRS += zstd
+endif
+
 # Test suites that are not safe by default but can be run if selected
 # by the user via the whitespace-separated list in variable
 # PG_TEST_EXTRA:

@@ -24,6 +24,7 @@
 #include "lib/stringinfo.h"
 #include "storage/bufmgr.h"
 #include "storage/shm_toc.h"
+#include "utils/rel.h"
 
 /* There's room for a 16-bit vacuum cycle ID in BTPageOpaqueData */
 typedef uint16 BTCycleId;
@@ -1090,6 +1091,7 @@ typedef struct BTOptions
 	int			fillfactor;		/* page fill factor in percent (0..100) */
 	float8		vacuum_cleanup_index_scale_factor;	/* deprecated */
 	bool		deduplicate_items;	/* Try to deduplicate items? */
+	PageCompressOpts	compress; /* page compression related options */
 } BTOptions;
 
 #define BTGetFillFactor(relation) \

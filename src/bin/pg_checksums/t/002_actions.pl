@@ -85,6 +85,84 @@ sub check_relation_corruption
 	return;
 }
 
+# Utility routine to create and check a compressed table with corrupted checksums
+# on a wanted tablespace.  Note that this stops and starts the node
+# multiple times to perform the checks, leaving the node started
+# at the end.
+sub check_compressed_relation_corruption
+{
+	my $node       = shift;
+	my $table      = shift;
+	my $tablespace = shift;
+	my $pgdata     = $node->data_dir;
+
+	$node->safe_psql(
+		'postgres',
+		"CREATE TABLE $table (a int) WITH(compresstype=pglz, autovacuum_enabled=false);
+		 INSERT INTO $table SELECT a FROM generate_series(1,10000)a;");
+
+	$node->safe_psql('postgres',
+		"ALTER TABLE " . $table . " SET TABLESPACE " . $tablespace . ";");
+
+	my $file_corrupted =
+	  $node->safe_psql('postgres', "SELECT pg_relation_filepath('$table');") . "_pcd";
+	my $relfilenode_corrupted = $node->safe_psql('postgres',
+		"SELECT relfilenode FROM pg_class WHERE relname = '$table';");
+
+	# Set page header and block size
+	my $pageheader_size = 24;
+	my $block_size = $node->safe_psql('postgres', 'SHOW block_size;');
+	$node->stop;
+
+	# Checksums are correct for single relfilenode as the table is not
+	# corrupted yet.
+	command_ok(
+		[
+			'pg_checksums', '--check',
+			'-D',           $pgdata,
+			'--filenode',   $relfilenode_corrupted
+		],
+		"succeeds for single relfilenode on tablespace $tablespace with offline cluster"
+	);
+
+	# Time to create some corruption
+	open my $file, '+<', "$pgdata/$file_corrupted";
+	seek($file, $pageheader_size, 0);
+	syswrite($file, "\0\0\0\0\0\0\0\0\0");
+	close $file;
+
+	# Checksum checks on single relfilenode fail
+	$node->command_checks_all(
+		[
+			'pg_checksums', '--check',
+			'-D',           $pgdata,
+			'--filenode',   $relfilenode_corrupted
+		],
+		1,
+		[qr/Bad checksums:.*1/],
+		[qr/could not decompress block/],
+		"fails with corrupted data for single relfilenode on tablespace $tablespace"
+	);
+
+	# Global checksum checks fail as well
+	$node->command_checks_all(
+		[ 'pg_checksums', '--check', '-D', $pgdata ],
+		1,
+		[qr/Bad checksums:.*1/],
+		[qr/could not decompress block/],
+		"fails with corrupted data on tablespace $tablespace");
+
+	# Drop corrupted table again and make sure there is no more corruption.
+	$node->start;
+	$node->safe_psql('postgres', "DROP TABLE $table;");
+	$node->stop;
+	$node->command_ok([ 'pg_checksums', '--check', '-D', $pgdata ],
+		"succeeds again after table drop on tablespace $tablespace");
+
+	$node->start;
+	return;
+}
+
 # Initialize node with checksums disabled.
 my $node = PostgreSQL::Test::Cluster->new('node_checksum');
 $node->init();
@@ -113,6 +191,15 @@ mkdir "$pgdata/global/pgsql_tmp";
 append_to_file "$pgdata/global/pgsql_tmp/1.1",        "foo";
 append_to_file "$pgdata/global/pg_internal.init",     "foo";
 append_to_file "$pgdata/global/pg_internal.init.123", "foo";
+
+# Create a compressed table and index before vertify enable checksums
+$node->start;
+$node->safe_psql(
+	'postgres',
+	"CREATE TABLE compressed_table(a int) WITH(compresstype=pglz, autovacuum_enabled=false);
+	 INSERT INTO compressed_table SELECT a FROM generate_series(1,10000)a;
+	 CREATE INDEX ON compressed_table(a) WITH(compresstype=pglz);");
+$node->stop;
 
 # Enable checksums.
 command_ok([ 'pg_checksums', '--enable', '--no-sync', '-D', $pgdata ],
@@ -195,6 +282,7 @@ command_fails([ 'pg_checksums', '--check', '-D', $pgdata ],
 
 # Check corruption of table on default tablespace.
 check_relation_corruption($node, 'corrupt1', 'pg_default');
+check_compressed_relation_corruption($node, 'compressed_corrupt1', 'pg_default');
 
 # Create tablespace to check corruptions in a non-default tablespace.
 my $basedir        = $node->basedir;
@@ -203,6 +291,7 @@ mkdir($tablespace_dir);
 $node->safe_psql('postgres',
 	"CREATE TABLESPACE ts_corrupt LOCATION '$tablespace_dir';");
 check_relation_corruption($node, 'corrupt2', 'ts_corrupt');
+check_compressed_relation_corruption($node, 'compressed_corrupt2', 'ts_corrupt');
 
 # Utility routine to check that pg_checksums is able to detect
 # correctly-named relation files filled with some corrupted data.

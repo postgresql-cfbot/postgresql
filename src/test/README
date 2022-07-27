@@ -48,3 +48,6 @@ ssl/
 
 subscription/
   Tests for logical replication
+
+zstd/
+  Tests for page compression with zstd

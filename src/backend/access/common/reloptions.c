@@ -382,7 +382,33 @@ static relopt_int intRelOpts[] =
 		},
 		-1, 0, 1024
 	},
-
+	{
+		{
+			"compresslevel",
+			"Level of page compression.",
+			RELOPT_KIND_HEAP | RELOPT_KIND_BTREE | RELOPT_KIND_HASH | RELOPT_KIND_GIN | RELOPT_KIND_GIST | RELOPT_KIND_SPGIST,
+			ShareUpdateExclusiveLock
+		},
+		0, -127, 127
+	},
+	{
+		{
+			"compress_chunk_size",
+			"Size of chunk to store compressed page.",
+			RELOPT_KIND_HEAP | RELOPT_KIND_BTREE | RELOPT_KIND_HASH | RELOPT_KIND_GIN | RELOPT_KIND_GIST | RELOPT_KIND_SPGIST,
+			AccessExclusiveLock
+		},
+		BLCKSZ / 2, BLCKSZ / 16, BLCKSZ / 2
+	},
+	{
+		{
+			"compress_prealloc_chunks",
+			"Number of prealloced chunks for each block.",
+			RELOPT_KIND_HEAP | RELOPT_KIND_BTREE | RELOPT_KIND_HASH | RELOPT_KIND_GIN | RELOPT_KIND_GIST | RELOPT_KIND_SPGIST,
+			ShareUpdateExclusiveLock
+		},
+		0, 0, 15
+	},
 	/* list terminator */
 	{{NULL}}
 };
@@ -507,6 +533,17 @@ static relopt_enum_elt_def viewCheckOptValues[] =
 	{(const char *) NULL}		/* list terminator */
 };
 
+/* values from compressTypeOption */
+relopt_enum_elt_def compressTypeOptValues[] =
+{
+	/* no value for NOT_SET */
+	{"none", PAGE_COMPRESSION_NONE},
+	{"pglz", PAGE_COMPRESSION_PGLZ},
+	{"lz4", PAGE_COMPRESSION_LZ4},
+	{"zstd", PAGE_COMPRESSION_ZSTD},
+	{(const char *) NULL}		/* list terminator */
+};
+
 static relopt_enum enumRelOpts[] =
 {
 	{
@@ -541,6 +578,17 @@ static relopt_enum enumRelOpts[] =
 		viewCheckOptValues,
 		VIEW_OPTION_CHECK_OPTION_NOT_SET,
 		gettext_noop("Valid values are \"local\" and \"cascaded\".")
+	},
+	{
+		{
+			"compresstype",
+			"Compression type (none, pglz, lz4 or zstd).",
+			RELOPT_KIND_HEAP | RELOPT_KIND_BTREE | RELOPT_KIND_HASH | RELOPT_KIND_GIN | RELOPT_KIND_GIST | RELOPT_KIND_SPGIST,
+			AccessExclusiveLock
+		},
+		compressTypeOptValues,
+		PAGE_COMPRESSION_NONE,
+		gettext_noop("Valid values are \"none\", \"pglz\", \"lz4\" and \"zstd\".")
 	},
 	/* list terminator */
 	{{NULL}}
@@ -1882,7 +1930,15 @@ default_reloptions(Datum reloptions, bool validate, relopt_kind kind)
 		{"vacuum_index_cleanup", RELOPT_TYPE_ENUM,
 		offsetof(StdRdOptions, vacuum_index_cleanup)},
 		{"vacuum_truncate", RELOPT_TYPE_BOOL,
-		offsetof(StdRdOptions, vacuum_truncate)}
+		offsetof(StdRdOptions, vacuum_truncate)},
+		{"compresstype", RELOPT_TYPE_ENUM,
+		offsetof(StdRdOptions, compress) + offsetof(PageCompressOpts, compresstype)},
+		{"compresslevel", RELOPT_TYPE_INT,
+		offsetof(StdRdOptions, compress) + offsetof(PageCompressOpts, compresslevel)},
+		{"compress_chunk_size", RELOPT_TYPE_INT,
+		offsetof(StdRdOptions, compress) + offsetof(PageCompressOpts, compress_chunk_size)},
+		{"compress_prealloc_chunks", RELOPT_TYPE_INT,
+		offsetof(StdRdOptions, compress) + offsetof(PageCompressOpts, compress_prealloc_chunks)}
 	};
 
 	return (bytea *) build_reloptions(reloptions, validate, kind,

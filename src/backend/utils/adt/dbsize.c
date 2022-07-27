@@ -314,16 +314,58 @@ calculate_relation_size(RelFileLocator *rfn, BackendId backend, ForkNumber forkn
 			snprintf(pathname, MAXPGPATH, "%s.%u",
 					 relationpath, segcount);
 
-		if (stat(pathname, &fst) < 0)
+		if (rfn->compressOpt.algorithm != PAGE_COMPRESSION_NONE &&
+			forknum == MAIN_FORKNUM)
 		{
-			if (errno == ENOENT)
-				break;
-			else
-				ereport(ERROR,
-						(errcode_for_file_access(),
-						 errmsg("could not stat file \"%s\": %m", pathname)));
+			char	   *pcfile_segpath;
+
+			/* calculate size of page compression address file */
+			pcfile_segpath = psprintf("%s_pca", pathname);
+			if (stat(pcfile_segpath, &fst) < 0)
+			{
+				if (errno == ENOENT)
+				{
+					pfree(pcfile_segpath);
+					break;
+				}
+				else
+					ereport(ERROR,
+							(errcode_for_file_access(),
+							 errmsg("could not stat file \"%s\": %m", pcfile_segpath)));
+			}
+			totalsize += fst.st_size;
+			pfree(pcfile_segpath);
+
+			/* calculate size of page compression data file */
+			pcfile_segpath = psprintf("%s_pcd", pathname);
+			if (stat(pcfile_segpath, &fst) < 0)
+			{
+				if (errno == ENOENT)
+				{
+					pfree(pcfile_segpath);
+					break;
+				}
+				else
+					ereport(ERROR,
+							(errcode_for_file_access(),
+							 errmsg("could not stat file \"%s\": %m", pcfile_segpath)));
+			}
+			totalsize += fst.st_size;
+			pfree(pcfile_segpath);
 		}
-		totalsize += fst.st_size;
+		else
+		{
+			if (stat(pathname, &fst) < 0)
+			{
+				if (errno == ENOENT)
+					break;
+				else
+					ereport(ERROR,
+							(errcode_for_file_access(),
+							 errmsg("could not stat file \"%s\": %m", pathname)));
+			}
+			totalsize += fst.st_size;
+		}
 	}
 
 	return totalsize;

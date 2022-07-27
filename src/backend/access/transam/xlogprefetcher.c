@@ -365,7 +365,7 @@ XLogPrefetcherAllocate(XLogReaderState *reader)
 {
 	XLogPrefetcher *prefetcher;
 	static HASHCTL hash_table_ctl = {
-		.keysize = sizeof(RelFileLocator),
+		.keysize = offsetof(RelFileLocator, compressOpt),
 		.entrysize = sizeof(XLogPrefetcherFilter)
 	};
 
@@ -869,6 +869,7 @@ XLogPrefetcherAddFilter(XLogPrefetcher *prefetcher, RelFileLocator rlocator,
 		/*
 		 * Don't allow any prefetching of this block or higher until replayed.
 		 */
+		filter->rlocator.compressOpt = rlocator.compressOpt;
 		filter->filter_until_replayed = lsn;
 		filter->filter_from_block = blockno;
 		dlist_push_head(&prefetcher->filter_queue, &filter->link);

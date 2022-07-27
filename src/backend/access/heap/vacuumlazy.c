@@ -59,6 +59,7 @@
 #include "storage/bufmgr.h"
 #include "storage/freespace.h"
 #include "storage/lmgr.h"
+#include "storage/page_compression.h"
 #include "tcop/tcopprot.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
@@ -444,7 +445,8 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 	vacrel->consider_bypass_optimization = true;
 	vacrel->do_index_vacuuming = true;
 	vacrel->do_index_cleanup = true;
-	vacrel->do_rel_truncate = (params->truncate != VACOPTVALUE_DISABLED);
+	vacrel->do_rel_truncate = (params->truncate != VACOPTVALUE_DISABLED) &&
+							  (rel->rd_locator.compressOpt.algorithm == PAGE_COMPRESSION_NONE);
 	if (params->index_cleanup == VACOPTVALUE_DISABLED)
 	{
 		/* Force disable index vacuuming up-front */
@@ -2807,7 +2809,7 @@ lazy_cleanup_one_index(Relation indrel, IndexBulkDeleteResult *istat,
  */
 static bool
 should_attempt_truncation(LVRelState *vacrel)
-{
+{ 
 	BlockNumber possibly_freeable;
 
 	if (!vacrel->do_rel_truncate || vacrel->failsafe_active ||

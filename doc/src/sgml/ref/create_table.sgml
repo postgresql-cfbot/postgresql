@@ -1808,6 +1808,106 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
     </listitem>
    </varlistentry>
 
+   <varlistentry id="reloption-compresstype" xreflabel="compresstype">
+    <term><literal>compresstype</literal> (<type>enum</type>)
+    <indexterm>
+     <primary><varname>compresstype</varname></primary>
+     <secondary>storage parameter</secondary>
+    </indexterm>
+    </term>
+    <listitem>
+     <para>
+      This parameter sets the compression method for table.
+      The supported compression methods are <literal>none</literal>,
+      <literal>pglz</literal>, <literal>lz4</literal> and
+      <literal>zstd</literal>(<literal>lz4</literal> requires PostgreSQL
+      to be compiled with <option>--with-lz4</option> and
+      <literal>zstd</literal> with <option>--with-zstd</option>).
+      And this parameter cannot be modified by <command>ALTER TABLE</command>.
+      The default is <literal>none</literal>, means do not enable compression.
+     </para>
+     <para>
+      It should be noted that freed space at the end of a compressed relation
+      cannot be released to the operating system. All space allocated to a
+      relation remains associated with that relation for reuse only within
+      that relation unless explicitly freed (for example, with
+      <command>VACUUM FULL</command>).
+      And for compressed relations, <application>pg_rewind</application> will
+      copy the entire relation files, not just the changed blocks.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="reloption-compresslevel" xreflabel="compresslevel">
+    <term><literal>compresslevel</literal> (<type>enum</type>)
+    <indexterm>
+     <primary><varname>compresslevel</varname></primary>
+     <secondary>storage parameter</secondary>
+    </indexterm>
+    </term>
+    <listitem>
+     <para>
+      This parameter sets the compression level for a compressed relation.
+      Currently, compression level is only supported by
+      <literal>zstd</literal>, and will be ignore when use other compression
+      method. For <literal>zstd</literal> the compression level should be an
+      integer between <literal>-127</literal> and <literal>22</literal>, a
+      value greater than <literal>22</literal> will be treated as
+      <literal>22</literal>, and a value less than <literal>-127</literal> will
+      be treated as <literal>-127</literal>.
+      The default is <literal>0</literal>, means the default compression level
+      for the specific compression method. For <literal>zstd</literal>, the
+      default compression level is <literal>1</literal>.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="reloption-compress-chunk-size" xreflabel="compress_chunk_size">
+    <term><literal>compress_chunk_size</literal> (<type>enum</type>)
+    <indexterm>
+     <primary><varname>compress_chunk_size</varname></primary>
+     <secondary>storage parameter</secondary>
+    </indexterm>
+    </term>
+    <listitem>
+     <para>
+      This parameter sets the chunk size for a compressed relation. For
+      compressed relations, storage space is allocated in chunks, and the data
+      of each block is stored in one or more chunks.
+      The chunk size must be <literal>BLCKSZ/16</literal>,
+      <literal>BLCKSZ/8</literal>, <literal>BLCKSZ/4</literal> or
+      <literal>BLCKSZ/2</literal>. For typically <symbol>BLCKSZ</symbol> of
+      <literal>8kB</literal>, the value of
+      <literal>compress_chunk_size</literal> should be one of
+      <literal>512</literal>, <literal>1024</literal>, <literal>2048</literal>
+      and <literal>4096</literal>. A smaller chunk size can achieve a higher
+      compression ratio, but it is also prone to storage fragmentation.
+      And this parameter cannot be modified by <command>ALTER TABLE</command>.
+      The default is <literal>BLCKSZ/2</literal>.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="reloption-compress-prealloc-chunks" xreflabel="compress_prealloc_chunks">
+    <term><literal>compress_prealloc_chunks</literal> (<type>enum</type>)
+    <indexterm>
+     <primary><varname>compress_prealloc_chunks</varname></primary>
+     <secondary>storage parameter</secondary>
+    </indexterm>
+    </term>
+    <listitem>
+     <para>
+      This parameter sets the minimum number of chunks allocated for each block
+      of a compressed relation. Proper settings can effectively reduce storage
+      fragmentation, especially when
+      <xref linkend="reloption-compress-chunk-size"/> is small. The valid
+      maximum value for this parameter is
+      <literal>BLCKSZ/compress_chunk_size - 1</literal>.
+      The default is <literal>0</literal>.
+     </para>
+    </listitem>
+   </varlistentry>
+
    </variablelist>
 
   </refsect2>

@@ -744,6 +744,12 @@ pgstat_get_wait_io(WaitEventIO w)
 		case WAIT_EVENT_WAL_WRITE:
 			event_name = "WALWrite";
 			break;
+		case WAIT_EVENT_COMPRESS_ADDRESS_FILE_FLUSH:
+			event_name = "CompressAddressFileFlush";
+			break;
+		case WAIT_EVENT_COMPRESS_ADDRESS_FILE_SYNC:
+			event_name = "CompressAddressFileSync";
+			break;
 
 			/* no default case, so that compiler will warn */
 	}

@@ -18,6 +18,17 @@
 #include "storage/backendid.h"
 
 /*
+* compression options for compressed relation
+*/
+typedef struct RelFileNodeCompressOpts
+{
+    uint8       algorithm;          /* compression algorithm */
+    int8        level;              /* compression level */
+    uint8       chunks_pre_block;   /* number of chunks per block for compressed relation */
+    uint8       prealloc_chunks;    /* prealloced chunks to store compressed data */
+} RelFileNodeCompressOpts;
+
+/*
  * RelFileLocator must provide all that we need to know to physically access
  * a relation, with the exception of the backend ID, which can be provided
  * separately. Note, however, that a "physical" relation is comprised of
@@ -59,6 +70,7 @@ typedef struct RelFileLocator
 	Oid			spcOid;			/* tablespace */
 	Oid			dbOid;			/* database */
 	RelFileNumber relNumber;	/* relation */
+    RelFileNodeCompressOpts compressOpt;    /* compression options */
 } RelFileLocator;
 
 /*

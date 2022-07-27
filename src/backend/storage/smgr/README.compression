@@ -1,0 +1,213 @@
+src/backend/storage/smgr/README.compression
+
+Page Compression
+================
+Page compression is a method of compressing tables and indexes to save storage
+space by applying a common compression algorithm (such as zstd and lz4) to the
+pages.
+
+The basic principle is:
+1. When writing a page (or block) to disk, compress the data in the page. The
+   compressed data is stored in the compressed data file, and the storage
+   location of each page in the compressed data file is recorded in the
+   compressed address file.
+2. When reading a page, first find the corresponding storage location of the
+   page from the compressed address file, then read the required data from
+   the compressed data file, and decompress it to restore the original page.
+
+The design goal of page compression is to meet the data compression
+requirements in high concurrency and frequent data update scenarios. Therefore,
+in the trade-off between performance loss and space saving (compression ratio),
+reducing performance loss will be prioritized.
+
+
+Data storage
+------------
+Compared with the normal relation(table or index), each segment of the
+compressed relation adds the following two files.
+
+1. compressed data file (_pcd suffix)
+
+Compressed data file store compressed page content. In order to easily
+access the metadata of pages, the header of each page is not compressed, only
+compresssing the rest data. Therefore, one compressed page consists of the
+following parts.
+
+  * page header
+  * size of compressed data
+  * compressed data
+
+The basic storage unit in the compressed data file is chunk, the compressed
+page is stored in one or more chunks, and the space exceeding the compressed
+page size is filled with zeros.
+The size of each chunk can be configured at the relation level, but currently
+chunk size can only be 1/16, 1/8, 1/4 or 1/2 of BLCKSZ.
+The smaller the chunk size, the higher the compression ratio can be obtained,
+but the more prone to fragmentation.
+
+Each chunk consists of two parts: header and data. The header part records the
+blockno of the page stored in this chunk, as well as other information such as
+checksum. The data part stores the compressed page.
+
+The storage layout of the compressed data files is as follows:
+
+    chunk 1: header | data
+    chunk 2: header | data
+    chunk 3: header | data
+    chunk 4: header | data
+    ...
+
+In order to easily distinguish unallocated storage space in the compressed
+address file, the number of chunks (chunkno) starts from 1.
+
+2. compressed address file (_pca suffix)
+
+The compressed address file is used to manage the space allocation of
+compressed data files. Its content includes a header and several addresses.
+The header records information such as the total number of pages (nblocks)
+and the total number of chunks allocated in the compressed data file
+(allocated_chunks).
+
+Each address corresponds to a page, which records how many chunks (nchunks)
+are actually used by this page, how many chunks (allocated_chunks) have been
+allocated for this page, and the numbers of these chunks (chunknos).
+
+details as follows:
+
+    header : nblocks | allocated_chunks | chunk_size | algorithm | ...
+    addr 0 : nchunks | allocated_chunks | chunknos[BLCKSZ/chunk_size + 1]
+    addr 1 : nchunks | allocated_chunks | chunknos[BLCKSZ/chunk_size + 1]
+    addr 2 : nchunks | allocated_chunks | chunknos[BLCKSZ/chunk_size + 1]
+    ...
+
+The number of chunks (nchunks) used by each page is recorded in the address
+instead of the size of the compressed page, which can reduce the update of
+the compressed address file.
+The size of the chunknos array is 'BLCKSZ/chunk_size + 1', that is, maximum
+size of one compressed page is allowed to occupy the space of 'BLCKSZ + chunk_size'.
+
+
+Data access
+-----------
+The compressed data files are accessed through conventional file reading and
+writing. And for compressed address files, in order to reduce IO frequency and
+synchronize data between different backends, use mmap to map the compressed
+address files into shared memory.
+In order to adapt to mmap, the compressed address file will be pre-allocated
+according to the maximum required space. The specific required size is related
+to the 'chunk_size'. When the 'chunk_size' is 'BLCKSZ/8', it is about 5MB.
+So page compression is not suitable for very small relations considering the
+storage space occupied by compressed address files.
+
+
+Space allocation & Storage fragment
+-----------------------------------
+If a page is modified multiple times, and its compressed size will change. If
+the change is large enough, the number of chunks required to store the page
+will also change, and two situations may occur.
+  * The chunks required to store the compressed page is smaller than the
+    allocated chunks. At this time, some fragmented free chunks will be
+    generated. If these fragmented free spaces are allocated to new pages, it
+    will lead to storage fragmentation.
+  * The chunks required to store the compressed page is larger than the
+    allocated chunk. At this time, additional new chunks is required, and the
+    newly allocated chunks is likely to be discontinuous with the existing
+    chunk for this page, which will also lead to storage fragmentation.
+
+Storage fragmentation will cause multiple IOs to be required to read one page,
+which will have a negative impact on performance.
+In order to reduce performance loss, the following strategies are used to
+reduce storage fragmentation as much as possible
+
+1. Once a chunk is allocated to a page, it will always belong to this page,
+and the temporarily unused chunks are reserved for this page to be used later.
+2. It is allowed to set a pre-allocated number of chunks. When allocating
+space to a page, if the number of chunks it needs is less than the number of
+pre-allocated chunks, space is allocated according to the number of
+pre-allocated chunks. This ensures as much as possible that each page is
+allocated enough contiguous chunks at the beginning.
+
+The costs of the above strategies is a lower compression ratio, especially for
+relations with a high proportion of free space, such as this is easy to happen
+after deleting a large amount of data from a table.
+For relations that have a lot of free space and cannot be released, you can
+shrink the space by executing 'VACUUM FULL'.
+
+
+Crash safe
+----------
+If postgres crashes, the WAL record provides the page content change
+information needed to repair the page.
+However, WAL logs are not recorded when the compressed address file is modified.
+Because doing so would have to expose the details of page compression and
+compression space allocation to the outside of the storage layer.
+
+As an alternative to WAL, the following measures are taken to ensure the
+consistency of address allocation information in the compressed address file.
+
+1. Divide the compressed address file into several storage units according to
+   the atomic write size (such as 512 bytes) applicable to most storage devices.
+   And the address data of one page is not allowed to span two storage units
+   to prevent partial writes.
+2. The allocated chunks are never reclaimed unless the entire segment is
+   truncated.
+3. After a certain number of chunks are allocated, such as 32MB, the compressed
+   address file will be automatically flushed synchronously.
+4. If a crash occurs, in the subsequent recovery phase, when accessing the
+   compressed address file for the first time, initiate automatic repair refer
+   to the contents of the compressed data file.
+
+    * Repair of the header
+
+          header  : nblocks | allocated_chunks | chunk_size | algorithm | ...
+
+      'chunk_size' and 'algorithm' do not change and do not need to be fixed.
+      'nblocks' can be repaired based on infomation of all address data, and
+      WAL replay will also restore 'nblocks' to the correct value.
+      'allocated_chunks' can be fixed based on the actual size of the
+      compressed data file.
+
+    * Repair of the address data of each page
+
+          addr 0 : nchunks | allocated_chunks | chunknos[BLCKSZ/chunk_size + 1]
+          addr 1 : nchunks | allocated_chunks | chunknos[BLCKSZ/chunk_size + 1]
+          addr 2 : nchunks | allocated_chunks | chunknos[BLCKSZ/chunk_size + 1]
+          ...
+
+      Since in the crash recovery stage, the initial access to each page always
+      uses the FPW image to overwrite the page content, so it doesn't matter
+      whether the value of the 'nchunks' above is correct, only need to fix
+      'allocated_chunks' and 'chunknos'.
+
+      For the address of a single page, if 'allocated_chunks' and 'chunknos'
+      are inconsistent, 'allocated_chunks' can be repaired according to
+      'chunknos'.
+      But on the whole, there may be some allocated chunks that are not
+      recorded in the compressed address file, and the number of these chunks
+      will not exceed the number of chunks allocated since the last
+      synchronization of the compressed address file.
+      For these chunks, the compressed data file can be read, and the address
+      data of the corresponding page in the compressed address file can be
+      repaired according to the 'blockno' recorded in the header of each chunk.
+
+
+Limitations
+-----------
+   * 'full_page_writes' must be on
+     In scenarios such as server crash or online backup, the pages of
+     compressed relations are more likely to be in an inconsistent state than
+     ordinary uncompressed relations, and need to be repaired through full
+     page write.
+   * Only supports truncation of the entire segment, does not support
+     truncation of idle pages at the end of the segment.
+     Because the free page at the end of the segment is not stored in
+     continuous chunks at the end of the compressed data file, Truncate these
+     pages may not release a lot of store space, but it may lead to
+     inconsistency in the content of the compressed data file and the
+     compressed address file.
+   * Not suitable for relations that are too small
+     The compressed address file needs to occupy a fixed size of space (the
+     smaller the 'chunk_size' is, the larger the space is, about 10MB when
+     the 'chunk_size' is 512), rather than gradually growing as the data
+     increases. Therefore, for relations that are too small, the overall
+     space occupied by compression may be larger than if not compressed.

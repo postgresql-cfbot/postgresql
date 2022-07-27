@@ -922,7 +922,15 @@ gistoptions(Datum reloptions, bool validate)
 {
 	static const relopt_parse_elt tab[] = {
 		{"fillfactor", RELOPT_TYPE_INT, offsetof(GiSTOptions, fillfactor)},
-		{"buffering", RELOPT_TYPE_ENUM, offsetof(GiSTOptions, buffering_mode)}
+		{"buffering", RELOPT_TYPE_ENUM, offsetof(GiSTOptions, buffering_mode)},
+		{"compresstype", RELOPT_TYPE_ENUM,
+		offsetof(GiSTOptions, compress) + offsetof(PageCompressOpts, compresstype)},
+		{"compresslevel", RELOPT_TYPE_INT,
+		offsetof(GiSTOptions, compress) + offsetof(PageCompressOpts, compresslevel)},
+		{"compress_chunk_size", RELOPT_TYPE_INT,
+		offsetof(GiSTOptions, compress) + offsetof(PageCompressOpts, compress_chunk_size)},
+		{"compress_prealloc_chunks", RELOPT_TYPE_INT,
+		offsetof(GiSTOptions, compress) + offsetof(PageCompressOpts, compress_prealloc_chunks)}
 	};
 
 	return (bytea *) build_reloptions(reloptions, validate,

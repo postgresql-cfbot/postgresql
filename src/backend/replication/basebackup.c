@@ -38,6 +38,7 @@
 #include "storage/dsm_impl.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
+#include "storage/page_compression.h"
 #include "storage/reinit.h"
 #include "utils/builtins.h"
 #include "utils/ps_status.h"
@@ -93,6 +94,8 @@ static void perform_base_backup(basebackup_options *opt, bbsink *sink);
 static void parse_basebackup_options(List *options, basebackup_options *opt);
 static int	compareWalFileNames(const ListCell *a, const ListCell *b);
 static bool is_checksummed_file(const char *fullpath, const char *filename);
+static bool is_compressed_datafile(const char *fullpath, const char *filename);
+static int	get_chunk_size_of_compressed_datafile(const char *pcd_filepath);
 static int	basebackup_read_file(int fd, char *buf, size_t nbytes, off_t offset,
 								 const char *filename, bool partial_read_ok);
 
@@ -1448,6 +1451,7 @@ is_checksummed_file(const char *fullpath, const char *filename)
 		strncmp(fullpath, "/", 1) == 0)
 	{
 		int			excludeIdx;
+		size_t		filenameLen;
 
 		/* Compare file against noChecksumFiles skip list */
 		for (excludeIdx = 0; noChecksumFiles[excludeIdx].name != NULL; excludeIdx++)
@@ -1461,11 +1465,98 @@ is_checksummed_file(const char *fullpath, const char *filename)
 				return false;
 		}
 
+		/*
+		 * Skip checksum check of compressed relation files. Compressed page
+		 * may be stored in multiple non-continuous chunks, and cannot perform
+		 * checksum while transferring data.
+		 */
+		filenameLen = strlen(filename);
+		if (filenameLen >= 4)
+		{
+			if (strncmp(filename + filenameLen - 4, "_pca", 4) == 0)
+				return false;
+		}
+
 		return true;
 	}
 	else
 		return false;
 }
+
+/*
+ * Check if the file is a page compression data file.
+ */
+static bool
+is_compressed_datafile(const char *fullpath, const char *filename)
+{
+	/* Check that the file is in a tablespace */
+	if (strncmp(fullpath, "./global/", 9) == 0 ||
+		strncmp(fullpath, "./base/", 7) == 0 ||
+		strncmp(fullpath, "/", 1) == 0)
+	{
+		size_t		filenameLen;
+
+		filenameLen = strlen(filename);
+		if (filenameLen >= 4)
+		{
+			if (strncmp(filename + filenameLen - 4, "_pcd", 4) == 0)
+				return true;
+		}
+
+		return false;
+	}
+	else
+		return false;
+}
+
+/**
+ * Get chunk size of a page compression data file,
+ * and return -1 if failed.
+*/
+static int
+get_chunk_size_of_compressed_datafile(const char *pcd_filepath)
+{
+	int			fd;
+	int			read_cnt;
+	size_t		filepath_len;
+	char		pca_filepath[MAXPGPATH];
+	PageCompressHeader pcheader;
+
+	/* setup pca file path */
+	filepath_len = strlen(pcd_filepath);
+	memcpy(pca_filepath, pcd_filepath, filepath_len + 1);
+	pca_filepath[filepath_len - 1] = 'a';
+
+	/* get chunk size from pca file */
+	fd = OpenTransientFile(pca_filepath, O_RDONLY | PG_BINARY);
+	if (fd < 0)
+	{
+		ereport(WARNING,
+				(errcode_for_file_access(),
+				 errmsg("could not open file \"%s\": %m", pca_filepath)));
+		return -1;
+	}
+
+	read_cnt = basebackup_read_file(fd,
+									(char *) &pcheader,
+									sizeof(PageCompressHeader),
+									0,
+									pca_filepath,
+									true);
+	CloseTransientFile(fd);
+
+	if (read_cnt != sizeof(PageCompressHeader))
+	{
+		ereport(WARNING,
+				(errcode_for_file_access(),
+				 errmsg("could not read file \"%s\": read only %d of %zu bytes",
+						pca_filepath, read_cnt, sizeof(PageCompressHeader))));
+		return -1;
+	}
+
+	return pcheader.chunk_size;
+}
+
 
 /*****
  * Functions for handling tar file format
@@ -1504,6 +1595,9 @@ sendFile(bbsink *sink, const char *readfilename, const char *tarfilename,
 	char	   *segmentpath;
 	bool		verify_checksum = false;
 	pg_checksum_context checksum_ctx;
+	bool		verify_pcd_checksum = false;
+	int			chunk_size = 0;
+	uint32		chunkno = 1;
 
 	if (pg_checksum_init(&checksum_ctx, manifest->checksum_type) < 0)
 		elog(ERROR, "could not initialize checksum of file \"%s\"",
@@ -1549,6 +1643,23 @@ sendFile(bbsink *sink, const char *readfilename, const char *tarfilename,
 							(errmsg("invalid segment number %d in file \"%s\"",
 									segmentno, filename)));
 			}
+
+			/* Check if this's compressed data file */
+			if (is_compressed_datafile(readfilename, filename))
+			{
+				chunk_size = get_chunk_size_of_compressed_datafile(readfilename);
+				if (IsValidPageCompressChunkSize(chunk_size))
+				{
+					verify_pcd_checksum = true;
+				}
+				else
+				{
+					ereport(WARNING,
+							(errmsg("could not verify checksum in file \"%s\""
+									": invalid chunk size %d",
+									readfilename, chunk_size)));
+				}
+			}
 		}
 	}
 
@@ -1575,25 +1686,124 @@ sendFile(bbsink *sink, const char *readfilename, const char *tarfilename,
 		if (cnt == 0)
 			break;
 
-		/*
-		 * The checksums are verified at block level, so we iterate over the
-		 * buffer in chunks of BLCKSZ, after making sure that
-		 * TAR_SEND_SIZE/buf is divisible by BLCKSZ and we read a multiple of
-		 * BLCKSZ bytes.
-		 */
-		Assert((sink->bbs_buffer_length % BLCKSZ) == 0);
-
-		if (verify_checksum && (cnt % BLCKSZ != 0))
+		if (verify_pcd_checksum)
 		{
-			ereport(WARNING,
-					(errmsg("could not verify checksum in file \"%s\", block "
-							"%u: read buffer size %d and page size %d "
-							"differ",
-							readfilename, blkno, (int) cnt, BLCKSZ)));
-			verify_checksum = false;
+			/*
+			 * The checksums are verified at compressed chunk level, so we
+			 * iterate over the buffer in chunks of chunk_size, after making
+			 * sure that TAR_SEND_SIZE/buf is divisible by chunk_size and we
+			 * read a multiple of chunk_size bytes.
+			 */
+			Assert((sink->bbs_buffer_length % chunk_size) == 0);
+
+			if (cnt % chunk_size != 0)
+			{
+				ereport(WARNING,
+						(errmsg("could not verify checksum in file \"%s\", chunk "
+								"%u: read buffer size %d and chunk size %d "
+								"differ",
+								readfilename, chunkno, (int) cnt, chunk_size)));
+				verify_pcd_checksum = false;
+				verify_checksum = false;
+			}
+		}
+		else if (verify_checksum)
+		{
+			/*
+			 * The checksums are verified at block level, so we iterate over
+			 * the buffer in chunks of BLCKSZ, after making sure that
+			 * TAR_SEND_SIZE/buf is divisible by BLCKSZ and we read a multiple
+			 * of BLCKSZ bytes.
+			 */
+			Assert((sink->bbs_buffer_length % BLCKSZ) == 0);
+
+			if (verify_checksum && (cnt % BLCKSZ != 0))
+			{
+				ereport(WARNING,
+						(errmsg("could not verify checksum in file \"%s\", block "
+								"%u: read buffer size %d and page size %d "
+								"differ",
+								readfilename, blkno, (int) cnt, BLCKSZ)));
+				verify_checksum = false;
+			}
 		}
 
-		if (verify_checksum)
+		if (verify_pcd_checksum)
+		{
+			bool		chunk_retry = false;
+
+			for (i = 0; i < cnt / chunk_size; i++)
+			{
+				char	   *chunk;
+				PageCompressChunk *pcchunk;;
+
+				chunk = sink->bbs_buffer + chunk_size * i;
+				pcchunk = (PageCompressChunk *) chunk;
+				checksum = pg_checksum_compress_chunk(chunk, chunk_size, chunkno);
+				if (pcchunk->checksum != checksum)
+				{
+					/*
+					 * Retry the chunk on the first failure.  It's possible
+					 * that we read the part of the chunk just before postgres
+					 * updated the entire chunk so it ends up looking torn to
+					 * us.  We only need to retry once because the LSN should
+					 * be updated to something we can ignore on the next pass.
+					 * If the error happens again then it is a true validation
+					 * failure.
+					 */
+					if (chunk_retry == false)
+					{
+						int			reread_cnt;
+
+						/* Reread the failed chunk */
+						reread_cnt =
+							basebackup_read_file(fd,
+												 sink->bbs_buffer + chunk_size * i,
+												 chunk_size, len + chunk_size * i,
+												 readfilename,
+												 false);
+						if (reread_cnt == 0)
+						{
+							/*
+							 * If we hit end-of-file, a concurrent truncation
+							 * must have occurred, so break out of this loop
+							 * just as if the initial fread() returned 0.
+							 * We'll drop through to the same code that
+							 * handles that case. (We must fix up cnt first,
+							 * though.)
+							 */
+							cnt = chunk_size * i;
+							break;
+						}
+
+						/* Set flag so we know a retry was attempted */
+						chunk_retry = true;
+
+						/* Reset loop to validate the block again */
+						i--;
+						continue;
+					}
+
+					checksum_failures++;
+
+					if (checksum_failures <= 5)
+						ereport(WARNING,
+								(errmsg("checksum verification failed in "
+										"file \"%s\", chunk %u, blockno %u, chunkseq %u: calculated "
+										"%X but expected %X",
+										readfilename, chunkno, pcchunk->blockno, pcchunk->chunkseq,
+										checksum, pcchunk->checksum)));
+					if (checksum_failures == 5)
+						ereport(WARNING,
+								(errmsg("further checksum verification "
+										"failures in file \"%s\" will not "
+										"be reported", readfilename)));
+				}
+				chunk_retry = false;
+				chunkno++;
+			}
+		}
+		else if (verify_checksum)
 		{
 			for (i = 0; i < cnt / BLCKSZ; i++)
 			{

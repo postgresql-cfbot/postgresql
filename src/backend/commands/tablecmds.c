@@ -16,11 +16,16 @@
 
 #include "access/attmap.h"
 #include "access/genam.h"
+#include "access/gin_private.h"
+#include "access/gist_private.h"
+#include "access/hash.h"
 #include "access/heapam.h"
 #include "access/heapam_xlog.h"
 #include "access/multixact.h"
+#include "access/nbtree.h"
 #include "access/reloptions.h"
 #include "access/relscan.h"
+#include "access/spgist_private.h"
 #include "access/sysattr.h"
 #include "access/tableam.h"
 #include "access/toast_compression.h"
@@ -14107,6 +14112,8 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 	Datum		repl_val[Natts_pg_class];
 	bool		repl_null[Natts_pg_class];
 	bool		repl_repl[Natts_pg_class];
+	bytea		*byteaOpts;
+	PageCompressOpts *newPcOpts = NULL;
 	static char *validnsps[] = HEAP_RELOPT_NAMESPACES;
 
 	if (defList == NIL && operation != AT_ReplaceRelOptions)
@@ -14147,7 +14154,9 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 		case RELKIND_RELATION:
 		case RELKIND_TOASTVALUE:
 		case RELKIND_MATVIEW:
-			(void) heap_reloptions(rel->rd_rel->relkind, newOptions, true);
+			byteaOpts = heap_reloptions(rel->rd_rel->relkind, newOptions, true);
+			if(byteaOpts)
+				newPcOpts = &((StdRdOptions *)byteaOpts)->compress;
 			break;
 		case RELKIND_PARTITIONED_TABLE:
 			(void) partitioned_table_reloptions(newOptions, true);
@@ -14157,7 +14166,35 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 			break;
 		case RELKIND_INDEX:
 		case RELKIND_PARTITIONED_INDEX:
-			(void) index_reloptions(rel->rd_indam->amoptions, newOptions, true);
+			byteaOpts = index_reloptions(rel->rd_indam->amoptions, newOptions, true);
+			if(byteaOpts)
+			{
+				switch(rel->rd_rel->relam)
+				{
+					case BTREE_AM_OID:
+						newPcOpts = &((BTOptions *)byteaOpts)->compress;
+						break;
+
+					case HASH_AM_OID:
+						newPcOpts = &((HashOptions *)byteaOpts)->compress;
+						break;
+
+					case GIN_AM_OID:
+						newPcOpts = &((GinOptions *)byteaOpts)->compress;
+						break;
+
+					case GIST_AM_OID:
+						newPcOpts = &((GiSTOptions *)byteaOpts)->compress;
+						break;
+
+					case SPGIST_AM_OID:
+						newPcOpts = &((SpGistOptions *)byteaOpts)->compress;
+						break;
+
+					default:
+						break;
+				}
+			}
 			break;
 		default:
 			ereport(ERROR,
@@ -14199,6 +14236,26 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 						 errmsg("WITH CHECK OPTION is supported only on automatically updatable views"),
 						 errhint("%s", _(view_updatable_error))));
 		}
+	}
+
+	/* check if changing page compression store format */
+	if(newPcOpts != NULL)
+	{
+		if(newPcOpts->compresstype != rel->rd_locator.compressOpt.algorithm)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("change compresstype parameter is not supported")));
+
+		if(rel->rd_locator.compressOpt.algorithm != PAGE_COMPRESSION_NONE &&
+			newPcOpts->compress_chunk_size != BLCKSZ / rel->rd_locator.compressOpt.chunks_pre_block)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("change compress_chunk_size parameter is not supported")));
+	}else{
+		if(rel->rd_locator.compressOpt.algorithm != PAGE_COMPRESSION_NONE)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("change compresstype parameter is not supported")));
 	}
 
 	/*

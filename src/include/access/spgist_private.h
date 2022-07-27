@@ -20,6 +20,7 @@
 #include "nodes/tidbitmap.h"
 #include "storage/buf.h"
 #include "utils/geo_decls.h"
+#include "utils/rel.h"
 #include "utils/relcache.h"
 
 
@@ -27,6 +28,7 @@ typedef struct SpGistOptions
 {
 	int32		varlena_header_;	/* varlena header (do not touch directly!) */
 	int			fillfactor;		/* page fill factor in percent (0..100) */
+	PageCompressOpts	compress; /* page compression related options */
 } SpGistOptions;
 
 #define SpGistGetFillFactor(relation) \

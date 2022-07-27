@@ -210,6 +210,7 @@ Boot_CreateStmt:
 												   RELPERSISTENCE_PERMANENT,
 												   shared_relation,
 												   mapped_relation,
+												   (Datum) 0,
 												   true,
 												   &relfrozenxid,
 												   &relminmxid,

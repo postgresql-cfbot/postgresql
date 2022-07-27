@@ -156,6 +156,10 @@ extern void ReleaseExternalFD(void);
 /* Make a directory with default permissions */
 extern int	MakePGDirectory(const char *directoryName);
 
+/* Page compression support routines */
+extern void SetupPageCompressMemoryMap(File file, File file_pcd, int chunk_size, uint8 algorithm);
+extern void *GetPageCompressMemoryMap(File file, int chunk_size);
+
 /* Miscellaneous support routines */
 extern void InitFileAccess(void);
 extern void InitTemporaryFileAccess(void);

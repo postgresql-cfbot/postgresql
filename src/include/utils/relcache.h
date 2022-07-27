@@ -108,7 +108,8 @@ extern Relation RelationBuildLocalRelation(const char *relname,
 										   bool shared_relation,
 										   bool mapped_relation,
 										   char relpersistence,
-										   char relkind);
+										   char relkind,
+										   Datum reloptions);
 
 /*
  * Routines to manage assignment of new relfilenumber to a relation

@@ -1105,7 +1105,7 @@ IndexScanOK(CatCache *cache, ScanKey cur_skey)
 
 		case AUTHNAME:
 		case AUTHOID:
-		case AUTHMEMMEMROLE:
+		case AUTHMEMMEMROLEDB:
 		case DATABASEOID:
 
 			/*

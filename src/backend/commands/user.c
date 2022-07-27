@@ -51,10 +51,10 @@ check_password_hook_type check_password_hook = NULL;
 
 static void AddRoleMems(const char *rolename, Oid roleid,
 						List *memberSpecs, List *memberIds,
-						Oid grantorId, bool admin_opt);
+						Oid grantorId, bool admin_opt, Oid dbid);
 static void DelRoleMems(const char *rolename, Oid roleid,
 						List *memberSpecs, List *memberIds,
-						bool admin_opt);
+						bool admin_opt, Oid dbid);
 
 
 /* Check if current user has createrole privileges */
@@ -449,7 +449,7 @@ CreateRole(ParseState *pstate, CreateRoleStmt *stmt)
 			AddRoleMems(oldrolename, oldroleid,
 						thisrole_list,
 						thisrole_oidlist,
-						GetUserId(), false);
+						GetUserId(), false, InvalidOid);
 
 			ReleaseSysCache(oldroletup);
 		}
@@ -461,10 +461,10 @@ CreateRole(ParseState *pstate, CreateRoleStmt *stmt)
 	 */
 	AddRoleMems(stmt->role, roleid,
 				adminmembers, roleSpecsToIds(adminmembers),
-				GetUserId(), true);
+				GetUserId(), true, InvalidOid);
 	AddRoleMems(stmt->role, roleid,
 				rolemembers, roleSpecsToIds(rolemembers),
-				GetUserId(), false);
+				GetUserId(), false, InvalidOid);
 
 	/* Post creation hook for new role */
 	InvokeObjectPostCreateHook(AuthIdRelationId, roleid, 0);
@@ -805,11 +805,11 @@ AlterRole(ParseState *pstate, AlterRoleStmt *stmt)
 		if (stmt->action == +1) /* add members to role */
 			AddRoleMems(rolename, roleid,
 						rolemembers, roleSpecsToIds(rolemembers),
-						GetUserId(), false);
+						GetUserId(), false, InvalidOid);
 		else if (stmt->action == -1)	/* drop members from role */
 			DelRoleMems(rolename, roleid,
 						rolemembers, roleSpecsToIds(rolemembers),
-						false);
+						false, InvalidOid);
 	}
 
 	/*
@@ -1025,7 +1025,7 @@ DropRole(DropRoleStmt *stmt)
 					BTEqualStrategyNumber, F_OIDEQ,
 					ObjectIdGetDatum(roleid));
 
-		sscan = systable_beginscan(pg_auth_members_rel, AuthMemRoleMemIndexId,
+		sscan = systable_beginscan(pg_auth_members_rel, AuthMemRoleMemDbIndexId,
 								   true, NULL, 1, &scankey);
 
 		while (HeapTupleIsValid(tmp_tuple = systable_getnext(sscan)))
@@ -1040,7 +1040,7 @@ DropRole(DropRoleStmt *stmt)
 					BTEqualStrategyNumber, F_OIDEQ,
 					ObjectIdGetDatum(roleid));
 
-		sscan = systable_beginscan(pg_auth_members_rel, AuthMemMemRoleIndexId,
+		sscan = systable_beginscan(pg_auth_members_rel, AuthMemMemRoleDbIndexId,
 								   true, NULL, 1, &scankey);
 
 		while (HeapTupleIsValid(tmp_tuple = systable_getnext(sscan)))
@@ -1230,6 +1230,17 @@ GrantRole(GrantRoleStmt *stmt)
 	Oid			grantor;
 	List	   *grantee_ids;
 	ListCell   *item;
+	Oid dbid;
+
+	/* Determine if this grant/revoke is database-specific */
+	if (stmt->database == NULL) {
+		dbid = InvalidOid;
+	} else if (strcmp(stmt->database, "") == 0) {
+		dbid = MyDatabaseId;
+	} else {
+		dbid = get_database_oid(stmt->database, false);
+	}
+
 
 	if (stmt->grantor)
 		grantor = get_rolespec_oid(stmt->grantor, false);
@@ -1264,11 +1275,11 @@ GrantRole(GrantRoleStmt *stmt)
 		if (stmt->is_grant)
 			AddRoleMems(rolename, roleid,
 						stmt->grantee_roles, grantee_ids,
-						grantor, stmt->admin_opt);
+						grantor, stmt->admin_opt, dbid);
 		else
 			DelRoleMems(rolename, roleid,
 						stmt->grantee_roles, grantee_ids,
-						stmt->admin_opt);
+						stmt->admin_opt, dbid);
 	}
 
 	/*
@@ -1375,7 +1386,7 @@ roleSpecsToIds(List *memberNames)
 static void
 AddRoleMems(const char *rolename, Oid roleid,
 			List *memberSpecs, List *memberIds,
-			Oid grantorId, bool admin_opt)
+			Oid grantorId, bool admin_opt, Oid dbid)
 {
 	Relation	pg_authmem_rel;
 	TupleDesc	pg_authmem_dsc;
@@ -1402,7 +1413,7 @@ AddRoleMems(const char *rolename, Oid roleid,
 	else
 	{
 		if (!have_createrole_privilege() &&
-			!is_admin_of_role(grantorId, roleid))
+			!is_admin_of_role(grantorId, roleid, dbid))
 			ereport(ERROR,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 					 errmsg("must have admin option on role \"%s\"",
@@ -1485,16 +1496,23 @@ AddRoleMems(const char *rolename, Oid roleid,
 		 * Check if entry for this role/member already exists; if so, give
 		 * warning unless we are adding admin option.
 		 */
-		authmem_tuple = SearchSysCache2(AUTHMEMROLEMEM,
+		authmem_tuple = SearchSysCache3(AUTHMEMROLEMEMDB,
 										ObjectIdGetDatum(roleid),
-										ObjectIdGetDatum(memberid));
+										ObjectIdGetDatum(memberid),
+										ObjectIdGetDatum(dbid));
 		if (HeapTupleIsValid(authmem_tuple) &&
 			(!admin_opt ||
 			 ((Form_pg_auth_members) GETSTRUCT(authmem_tuple))->admin_option))
 		{
-			ereport(NOTICE,
-					(errmsg("role \"%s\" is already a member of role \"%s\"",
-							get_rolespec_name(memberRole), rolename)));
+			if (dbid == InvalidOid) {
+				ereport(NOTICE,
+						(errmsg("role \"%s\" is already a member of role \"%s\"",
+								get_rolespec_name(memberRole), rolename)));
+			} else {
+				ereport(NOTICE,
+						(errmsg("role \"%s\" is already a member of role \"%s\" in database \"%s\"",
+								get_rolespec_name(memberRole), rolename, get_database_name(dbid))));
+			}
 			ReleaseSysCache(authmem_tuple);
 			continue;
 		}
@@ -1504,6 +1522,7 @@ AddRoleMems(const char *rolename, Oid roleid,
 		new_record[Anum_pg_auth_members_member - 1] = ObjectIdGetDatum(memberid);
 		new_record[Anum_pg_auth_members_grantor - 1] = ObjectIdGetDatum(grantorId);
 		new_record[Anum_pg_auth_members_admin_option - 1] = BoolGetDatum(admin_opt);
+		new_record[Anum_pg_auth_members_dbid - 1] = ObjectIdGetDatum(dbid);
 
 		if (HeapTupleIsValid(authmem_tuple))
 		{
@@ -1544,7 +1563,7 @@ AddRoleMems(const char *rolename, Oid roleid,
 static void
 DelRoleMems(const char *rolename, Oid roleid,
 			List *memberSpecs, List *memberIds,
-			bool admin_opt)
+			bool admin_opt, Oid dbid)
 {
 	Relation	pg_authmem_rel;
 	TupleDesc	pg_authmem_dsc;
@@ -1571,7 +1590,7 @@ DelRoleMems(const char *rolename, Oid roleid,
 	else
 	{
 		if (!have_createrole_privilege() &&
-			!is_admin_of_role(GetUserId(), roleid))
+			!is_admin_of_role(GetUserId(), roleid, dbid))
 			ereport(ERROR,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 					 errmsg("must have admin option on role \"%s\"",
@@ -1590,14 +1609,21 @@ DelRoleMems(const char *rolename, Oid roleid,
 		/*
 		 * Find entry for this role/member
 		 */
-		authmem_tuple = SearchSysCache2(AUTHMEMROLEMEM,
+		authmem_tuple = SearchSysCache3(AUTHMEMROLEMEMDB,
 										ObjectIdGetDatum(roleid),
-										ObjectIdGetDatum(memberid));
+										ObjectIdGetDatum(memberid),
+										ObjectIdGetDatum(dbid));
 		if (!HeapTupleIsValid(authmem_tuple))
 		{
-			ereport(WARNING,
-					(errmsg("role \"%s\" is not a member of role \"%s\"",
-							get_rolespec_name(memberRole), rolename)));
+			if (dbid == InvalidOid){
+				ereport(WARNING,
+						(errmsg("role \"%s\" is not a member of role \"%s\"",
+								get_rolespec_name(memberRole), rolename)));
+			} else {
+				ereport(WARNING,
+						(errmsg("role \"%s\" is not a member of role \"%s\" in database \"%s\"",
+								get_rolespec_name(memberRole), rolename, get_database_name(dbid))));
+			}
 			continue;
 		}
 
@@ -1634,4 +1660,43 @@ DelRoleMems(const char *rolename, Oid roleid,
 	 * Close pg_authmem, but keep lock till commit.
 	 */
 	table_close(pg_authmem_rel, NoLock);
+}
+
+/*
+ * DropDatabaseSpecificRoles
+ *
+ * Delete pg_auth_members entries corresponding to a database that's being
+ * dropped.
+ */
+void
+DropDatabaseSpecificRoles(Oid databaseId)
+{
+	Relation	pg_authmem_rel;
+	ScanKeyData key[1];
+	SysScanDesc scan;
+	HeapTuple	tup;
+
+	pg_authmem_rel = table_open(AuthMemRelationId, RowExclusiveLock);
+
+	/*
+	 * First, delete all the entries that have the database Oid in the dbid
+	 * field.
+	 */
+	ScanKeyInit(&key[0],
+				Anum_pg_auth_members_dbid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(databaseId));
+	/* We leave the other index fields unspecified */
+
+	scan = systable_beginscan(pg_authmem_rel, AuthMemDbMemRoleIndexId, true,
+							  NULL, 1, key);
+
+	while (HeapTupleIsValid(tup = systable_getnext(scan)))
+	{
+		CatalogTupleDelete(pg_authmem_rel, &tup->t_self);
+	}
+
+	systable_endscan(scan);
+
+	table_close(pg_authmem_rel, RowExclusiveLock);
 }

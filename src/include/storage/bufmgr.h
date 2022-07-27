@@ -143,6 +143,8 @@ extern void DropRelationBuffers(struct SMgrRelationData *smgr_reln,
 								int nforks, BlockNumber *firstDelBlock);
 extern void DropRelationsAllBuffers(struct SMgrRelationData **smgr_reln,
 									int nlocators);
+extern void SetRelationBuffersPersistence(struct SMgrRelationData *srel,
+										  bool permanent, bool isRedo);
 extern void DropDatabaseBuffers(Oid dbid);
 
 #define RelationGetNumberOfBlocks(reln) \

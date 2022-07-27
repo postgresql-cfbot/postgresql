@@ -3172,6 +3172,91 @@ DropRelationBuffers(SMgrRelation smgr_reln, ForkNumber *forkNum,
 }
 
 /* ---------------------------------------------------------------------
+ *		SetRelationBuffersPersistence
+ *
+ *		This function changes the persistence of all buffer pages of a relation
+ *		then writes all dirty pages of the relation out to disk when switching
+ *		to PERMANENT. (or more accurately, out to kernel disk buffers),
+ *		ensuring that the kernel has an up-to-date view of the relation.
+ *
+ *		Generally, the caller should be holding AccessExclusiveLock on the
+ *		target relation to ensure that no other backend is busy dirtying
+ *		more blocks of the relation; the effects can't be expected to last
+ *		after the lock is released.
+ *
+ *		XXX currently it sequentially searches the buffer pool, should be
+ *		changed to more clever ways of searching.  This routine is not
+ *		used in any performance-critical code paths, so it's not worth
+ *		adding additional overhead to normal paths to make it go faster;
+ *		but see also DropRelFileLocatorBuffers.
+ * --------------------------------------------------------------------
+ */
+void
+SetRelationBuffersPersistence(SMgrRelation srel, bool permanent, bool isRedo)
+{
+	int			i;
+	RelFileLocatorBackend rlocator = srel->smgr_rlocator;
+
+	Assert(!RelFileLocatorBackendIsTemp(rlocator));
+
+	if (!isRedo)
+		log_smgrbufpersistence(&srel->smgr_rlocator.locator, permanent);
+
+	ResourceOwnerEnlargeBuffers(CurrentResourceOwner);
+
+	for (i = 0; i < NBuffers; i++)
+	{
+		BufferDesc *bufHdr = GetBufferDescriptor(i);
+		uint32		buf_state;
+
+		if (!RelFileLocatorEquals(bufHdr->tag.rlocator, rlocator.locator))
+			continue;
+
+		ReservePrivateRefCountEntry();
+
+		buf_state = LockBufHdr(bufHdr);
+
+		if (!RelFileLocatorEquals(bufHdr->tag.rlocator, rlocator.locator))
+		{
+			UnlockBufHdr(bufHdr, buf_state);
+			continue;
+		}
+
+		if (permanent)
+		{
+			/* Init fork is being dropped, drop buffers for it. */
+			if (bufHdr->tag.forkNum == INIT_FORKNUM)
+			{
+				InvalidateBuffer(bufHdr);
+				continue;
+			}
+
+			buf_state |= BM_PERMANENT;
+			pg_atomic_write_u32(&bufHdr->state, buf_state);
+
+			/* we flush this buffer when switching to PERMANENT */
+			if ((buf_state & (BM_VALID | BM_DIRTY)) == (BM_VALID | BM_DIRTY))
+			{
+				PinBuffer_Locked(bufHdr);
+				LWLockAcquire(BufferDescriptorGetContentLock(bufHdr),
+							  LW_SHARED);
+				FlushBuffer(bufHdr, srel);
+				LWLockRelease(BufferDescriptorGetContentLock(bufHdr));
+				UnpinBuffer(bufHdr, true);
+			}
+			else
+				UnlockBufHdr(bufHdr, buf_state);
+		}
+		else
+		{
+			/* There shouldn't be an init fork */
+			Assert(bufHdr->tag.forkNum != INIT_FORKNUM);
+			UnlockBufHdr(bufHdr, buf_state);
+		}
+	}
+}
+
+/* ---------------------------------------------------------------------
  *		DropRelationsAllBuffers
  *
  *		This function removes from the buffer pool all the pages of all

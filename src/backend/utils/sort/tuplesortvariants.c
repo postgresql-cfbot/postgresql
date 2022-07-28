@@ -1387,6 +1387,8 @@ comparetup_index_hash(const SortTuple *a, const SortTuple *b,
 {
 	Bucket		bucket1;
 	Bucket		bucket2;
+	uint32		hash1;
+	uint32		hash2;
 	IndexTuple	tuple1;
 	IndexTuple	tuple2;
 	TuplesortPublic *base = TuplesortstateGetPublic(state);
@@ -1407,6 +1409,18 @@ comparetup_index_hash(const SortTuple *a, const SortTuple *b,
 	if (bucket1 > bucket2)
 		return 1;
 	else if (bucket1 < bucket2)
+		return -1;
+
+	/*
+	 * If bucket values are equal, sort by hash values. This allows us to
+	 * insert directly onto bucket/overflow pages, where the index tuples
+	 * are stored in hash order to allow fast binary search within each page.
+	 */
+	hash1 = DatumGetUInt32(a->datum1);
+	hash2 = DatumGetUInt32(b->datum1);
+	if (hash1 > hash2)
+		return 1;
+	else if (hash1 < hash2)
 		return -1;
 
 	/*

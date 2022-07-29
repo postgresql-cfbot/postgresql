@@ -123,6 +123,35 @@ from (select pg_ls_waldir() w) ss where length((w).name) = 24 limit 1;
 
 select count(*) >= 0 as ok from pg_ls_archive_statusdir();
 
+-- pg_read_file()
+\pset null <null>
+select substr(pg_read_file('pg_hba.conf'), 1, 30);
+select pg_read_file('pg_hba.conf', 0, 30);
+-- Test missing_ok
+select pg_read_file('does not exist'); -- error
+select pg_read_file('does not exist', false); -- error
+select pg_read_file('does not exist', 0, 30, false); -- error
+select pg_read_file('does not exist', true); -- ok
+select pg_read_file('does not exist', 0, 30, true); -- ok
+-- Test invalid argument
+select pg_read_file('does not exist', 0, -1); -- error
+select pg_read_file('does not exist', 0, -1, true); -- error
+
+-- pg_read_binary_file()
+select substr(pg_read_binary_file('pg_hba.conf'), 1, 30);
+select pg_read_binary_file('pg_hba.conf', 0, 30);
+-- Test missing_ok
+select pg_read_binary_file('does not exist'); -- error
+select pg_read_binary_file('does not exist', false); -- error
+select pg_read_binary_file('does not exist', 0, 30, false); -- error
+select pg_read_binary_file('does not exist', true); -- ok
+select pg_read_binary_file('does not exist', 0, 30, true); -- ok
+-- Test invalid argument
+select pg_read_binary_file('does not exist', 0, -1); -- error
+select pg_read_binary_file('does not exist', 0, -1, true); -- error
+\pset null
+
+-- pg_ls_dir()
 select * from (select pg_ls_dir('.') a) a where a = 'base' limit 1;
 -- Test missing_ok (second argument)
 select pg_ls_dir('does not exist', false, false); -- error
@@ -132,6 +161,8 @@ select count(*) = 1 as dot_found
   from pg_ls_dir('.', false, true) as ls where ls = '.';
 select count(*) = 1 as dot_found
   from pg_ls_dir('.', false, false) as ls where ls = '.';
+
+
 
 select * from (select (pg_timezone_names()).name) ptn where name='UTC' limit 1;
 

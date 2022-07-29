@@ -28636,7 +28636,7 @@ SELECT pg_size_pretty(sum(pg_relation_size(relid))) AS total_size
         <indexterm>
          <primary>pg_read_file</primary>
         </indexterm>
-        <function>pg_read_file</function> ( <parameter>filename</parameter> <type>text</type> <optional>, <parameter>offset</parameter> <type>bigint</type>, <parameter>length</parameter> <type>bigint</type> <optional>, <parameter>missing_ok</parameter> <type>boolean</type> </optional></optional> )
+        <function>pg_read_file</function> ( <parameter>filename</parameter> <type>text</type> <optional>, <parameter>offset</parameter> <type>bigint</type>, <parameter>length</parameter> <type>bigint</type> </optional> <optional>, <parameter>missing_ok</parameter> <type>boolean</type> </optional> )
         <returnvalue>text</returnvalue>
        </para>
        <para>
@@ -28661,7 +28661,7 @@ SELECT pg_size_pretty(sum(pg_relation_size(relid))) AS total_size
         <indexterm>
          <primary>pg_read_binary_file</primary>
         </indexterm>
-        <function>pg_read_binary_file</function> ( <parameter>filename</parameter> <type>text</type> <optional>, <parameter>offset</parameter> <type>bigint</type>, <parameter>length</parameter> <type>bigint</type> <optional>, <parameter>missing_ok</parameter> <type>boolean</type> </optional></optional> )
+        <function>pg_read_binary_file</function> ( <parameter>filename</parameter> <type>text</type> <optional>, <parameter>offset</parameter> <type>bigint</type>, <parameter>length</parameter> <type>bigint</type> </optional> <optional>, <parameter>missing_ok</parameter> <type>boolean</type> </optional> )
         <returnvalue>bytea</returnvalue>
        </para>
        <para>

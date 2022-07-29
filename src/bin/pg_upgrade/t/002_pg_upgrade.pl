@@ -30,6 +30,39 @@ sub generate_db
 		"created database with ASCII characters from $from_char to $to_char");
 }
 
+# Filter the contents of a dump before its use in a content comparison.
+# This returns the path to the filtered dump.
+sub filter_dump
+{
+	my ($node, $tempdir, $dump_file_name) = @_;
+	my $dump_file     = "$tempdir/$dump_file_name";
+	my $dump_contents = slurp_file($dump_file);
+
+	# Remove the comments.
+	$dump_contents =~ s/^\-\-.*//mgx;
+	# Remove empty lines.
+	$dump_contents =~ s/^\n//mgx;
+
+	# Locale setup has changed for collations in 15~.
+	$dump_contents =~
+	  s/(^CREATE\sCOLLATION\s.*?)\slocale\s=\s'und'/$1 locale = ''/mgx
+	  if ($node->pg_version < 15);
+
+	# Dumps taken from <= 11 use EXECUTE PROCEDURE.  Replace it
+	# with EXECUTE FUNCTION.
+	$dump_contents =~
+	  s/(^CREATE\sTRIGGER\s.*?)\sEXECUTE\sPROCEDURE/$1 EXECUTE FUNCTION/mgx
+	  if ($node->pg_version < 12);
+
+	my $dump_file_filtered = "$tempdir/${dump_file_name}_filter";
+	open(my $dh, '>', $dump_file_filtered)
+	  || die "opening $dump_file_filtered";
+	print $dh $dump_contents;
+	close($dh);
+
+	return $dump_file_filtered;
+}
+
 # The test of pg_upgrade requires two clusters, an old one and a new one
 # that gets upgraded.  Before running the upgrade, a logical dump of the
 # old cluster is taken, and a second logical dump of the new one is taken
@@ -60,7 +93,10 @@ my $oldnode =
 # To increase coverage of non-standard segment size and group access without
 # increasing test runtime, run these tests with a custom setting.
 # --allow-group-access and --wal-segsize have been added in v11.
-$oldnode->init(extra => [ '--wal-segsize', '1', '--allow-group-access' ]);
+my %node_params = ();
+$node_params{extra} = [ '--wal-segsize', '1', '--allow-group-access' ]
+    if $oldnode->pg_version >= 11;
+$oldnode->init(%node_params);
 $oldnode->start;
 
 # The default location of the source code is the root of this directory.
@@ -147,19 +183,19 @@ if (defined($ENV{oldinstall}))
 
 # Initialize a new node for the upgrade.
 my $newnode = PostgreSQL::Test::Cluster->new('new_node');
-$newnode->init(extra => [ '--wal-segsize', '1', '--allow-group-access' ]);
+$newnode->init(%node_params);
 my $newbindir = $newnode->config_data('--bindir');
 my $oldbindir = $oldnode->config_data('--bindir');
 
 # Take a dump before performing the upgrade as a base comparison. Note
 # that we need to use pg_dumpall from the new node here.
-$newnode->command_ok(
-	[
-		'pg_dumpall', '--no-sync',
-		'-d',         $oldnode->connstr('postgres'),
-		'-f',         "$tempdir/dump1.sql"
-	],
-	'dump before running pg_upgrade');
+my @dump_command = (
+	'pg_dumpall', '--no-sync', '-d', $oldnode->connstr('postgres'),
+	'-f',         "$tempdir/dump1.sql");
+# --extra-float-digits is needed when upgrading from a version older than 11.
+push(@dump_command, '--extra-float-digits', '0')
+  if ($oldnode->pg_version < 12);
+$newnode->command_ok(\@dump_command, 'dump before running pg_upgrade');
 
 # After dumping, update references to the old source tree's regress.so
 # to point to the new tree.
@@ -286,24 +322,35 @@ if (-d $log_path)
 }
 
 # Second dump from the upgraded instance.
-$newnode->command_ok(
-	[
-		'pg_dumpall', '--no-sync',
-		'-d',         $newnode->connstr('postgres'),
-		'-f',         "$tempdir/dump2.sql"
-	],
-	'dump after running pg_upgrade');
+@dump_command = (
+	'pg_dumpall', '--no-sync', '-d', $newnode->connstr('postgres'),
+	'-f',         "$tempdir/dump2.sql");
+# --extra-float-digits is needed when upgrading from a version older than 11.
+push(@dump_command, '--extra-float-digits', '0')
+  if ($oldnode->pg_version < 12);
+$newnode->command_ok(\@dump_command, 'dump after running pg_upgrade');
+
+# Filter the contents of the dumps from the old version of any contents.
+my $dump1_filtered = "$tempdir/dump1.sql";
+my $dump2_filtered = "$tempdir/dump2.sql";
+
+# No need to apply filters on the dumps if working on the same version.
+if ($oldnode->pg_version != $newnode->pg_version)
+{
+	$dump1_filtered = filter_dump($oldnode, $tempdir, "dump1.sql");
+	$dump2_filtered = filter_dump($newnode, $tempdir, "dump2.sql");
+}
 
 # Compare the two dumps, there should be no differences.
-my $compare_res = compare("$tempdir/dump1.sql", "$tempdir/dump2.sql");
+my $compare_res = compare($dump1_filtered, $dump2_filtered);
 is($compare_res, 0, 'old and new dumps match after pg_upgrade');
 
 # Provide more context if the dumps do not match.
 if ($compare_res != 0)
 {
 	my ($stdout, $stderr) =
-	  run_command([ 'diff', "$tempdir/dump1.sql", "$tempdir/dump2.sql" ]);
-	print "=== diff of $tempdir/dump1.sql and $tempdir/dump2.sql\n";
+	  run_command([ 'diff', $dump1_filtered, $dump2_filtered ]);
+	print "=== diff of $dump1_filtered and $dump2_filtered\n";
 	print "=== stdout ===\n";
 	print $stdout;
 	print "=== stderr ===\n";

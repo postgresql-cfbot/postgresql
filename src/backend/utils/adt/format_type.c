@@ -27,7 +27,6 @@
 #include "utils/numeric.h"
 #include "utils/syscache.h"
 
-static char *printTypmod(const char *typname, int32 typmod, Oid typmodout);
 
 
 /*
@@ -367,7 +366,7 @@ format_type_with_typemod(Oid type_oid, int32 typemod)
 /*
  * Add typmod decoration to the basic type name
  */
-static char *
+char *
 printTypmod(const char *typname, int32 typmod, Oid typmodout)
 {
 	char	   *res;

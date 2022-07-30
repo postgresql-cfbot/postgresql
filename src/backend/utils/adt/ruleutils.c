@@ -358,7 +358,6 @@ static int	print_function_arguments(StringInfo buf, HeapTuple proctup,
 									 bool print_table_args, bool print_defaults);
 static void print_function_rettype(StringInfo buf, HeapTuple proctup);
 static void print_function_trftypes(StringInfo buf, HeapTuple proctup);
-static void print_function_sqlbody(StringInfo buf, HeapTuple proctup);
 static void set_rtable_names(deparse_namespace *dpns, List *parent_namespaces,
 							 Bitmapset *rels_used);
 static void set_deparse_for_query(deparse_namespace *dpns, Query *query,
@@ -488,22 +487,15 @@ static void get_from_clause_coldeflist(RangeTblFunction *rtfunc,
 									   deparse_context *context);
 static void get_tablesample_def(TableSampleClause *tablesample,
 								deparse_context *context);
-static void get_opclass_name(Oid opclass, Oid actual_datatype,
-							 StringInfo buf);
 static Node *processIndirection(Node *node, deparse_context *context);
 static void printSubscripts(SubscriptingRef *sbsref, deparse_context *context);
 static char *get_relation_name(Oid relid);
 static char *generate_relation_name(Oid relid, List *namespaces);
 static char *generate_qualified_relation_name(Oid relid);
-static char *generate_function_name(Oid funcid, int nargs,
-									List *argnames, Oid *argtypes,
-									bool has_variadic, bool *use_variadic_p,
-									ParseExprKind special_exprkind);
 static char *generate_operator_name(Oid operid, Oid arg1, Oid arg2);
 static void add_cast_to(StringInfo buf, Oid typid);
 static char *generate_qualified_type_name(Oid typid);
 static text *string_to_text(char *str);
-static char *flatten_reloptions(Oid relid);
 static void get_reloptions(StringInfo buf, Datum reloptions);
 static void get_json_path_spec(Node *path_spec, deparse_context *context,
 							   bool showimplicit);
@@ -1025,65 +1017,12 @@ pg_get_triggerdef_worker(Oid trigid, bool pretty)
 	if (!isnull)
 	{
 		Node	   *qual;
-		char		relkind;
-		deparse_context context;
-		deparse_namespace dpns;
-		RangeTblEntry *oldrte;
-		RangeTblEntry *newrte;
-
-		appendStringInfoString(&buf, "WHEN (");
+		char       *qualstr;
 
 		qual = stringToNode(TextDatumGetCString(value));
+		qualstr = pg_get_trigger_whenclause(trigrec, qual, pretty);
 
-		relkind = get_rel_relkind(trigrec->tgrelid);
-
-		/* Build minimal OLD and NEW RTEs for the rel */
-		oldrte = makeNode(RangeTblEntry);
-		oldrte->rtekind = RTE_RELATION;
-		oldrte->relid = trigrec->tgrelid;
-		oldrte->relkind = relkind;
-		oldrte->rellockmode = AccessShareLock;
-		oldrte->alias = makeAlias("old", NIL);
-		oldrte->eref = oldrte->alias;
-		oldrte->lateral = false;
-		oldrte->inh = false;
-		oldrte->inFromCl = true;
-
-		newrte = makeNode(RangeTblEntry);
-		newrte->rtekind = RTE_RELATION;
-		newrte->relid = trigrec->tgrelid;
-		newrte->relkind = relkind;
-		newrte->rellockmode = AccessShareLock;
-		newrte->alias = makeAlias("new", NIL);
-		newrte->eref = newrte->alias;
-		newrte->lateral = false;
-		newrte->inh = false;
-		newrte->inFromCl = true;
-
-		/* Build two-element rtable */
-		memset(&dpns, 0, sizeof(dpns));
-		dpns.rtable = list_make2(oldrte, newrte);
-		dpns.subplans = NIL;
-		dpns.ctes = NIL;
-		dpns.appendrels = NULL;
-		set_rtable_names(&dpns, NIL, NULL);
-		set_simple_column_names(&dpns);
-
-		/* Set up context with one-deep namespace stack */
-		context.buf = &buf;
-		context.namespaces = list_make1(&dpns);
-		context.windowClause = NIL;
-		context.windowTList = NIL;
-		context.varprefix = true;
-		context.prettyFlags = GET_PRETTY_FLAGS(pretty);
-		context.wrapColumn = WRAP_COLUMN_DEFAULT;
-		context.indentLevel = PRETTYINDENT_STD;
-		context.special_exprkind = EXPR_KIND_NONE;
-		context.appendparents = NULL;
-
-		get_rule_expr(qual, &context, false);
-
-		appendStringInfoString(&buf, ") ");
+		appendStringInfo(&buf, "WHEN (%s) ", qualstr);
 	}
 
 	appendStringInfo(&buf, "EXECUTE FUNCTION %s(",
@@ -1122,6 +1061,64 @@ pg_get_triggerdef_worker(Oid trigid, bool pretty)
 	table_close(tgrel, AccessShareLock);
 
 	return buf.data;
+}
+
+char *
+pg_get_trigger_whenclause(Form_pg_trigger trigrec, Node *whenClause, bool pretty)
+{
+	StringInfoData buf;
+	char        relkind;
+	deparse_context context;
+	deparse_namespace dpns;
+	RangeTblEntry *oldrte;
+	RangeTblEntry *newrte;
+
+   initStringInfo(&buf);
+
+   relkind = get_rel_relkind(trigrec->tgrelid);
+
+   /* Build minimal OLD and NEW RTEs for the rel */
+   oldrte = makeNode(RangeTblEntry);
+   oldrte->rtekind = RTE_RELATION;
+   oldrte->relid = trigrec->tgrelid;
+   oldrte->relkind = relkind;
+   oldrte->alias = makeAlias("old", NIL);
+   oldrte->eref = oldrte->alias;
+   oldrte->lateral = false;
+   oldrte->inh = false;
+   oldrte->inFromCl = true;
+
+   newrte = makeNode(RangeTblEntry);
+   newrte->rtekind = RTE_RELATION;
+   newrte->relid = trigrec->tgrelid;
+   newrte->relkind = relkind;
+   newrte->alias = makeAlias("new", NIL);
+   newrte->eref = newrte->alias;
+   newrte->lateral = false;
+   newrte->inh = false;
+   newrte->inFromCl = true;
+
+   /* Build two-element rtable */
+   memset(&dpns, 0, sizeof(dpns));
+   dpns.rtable = list_make2(oldrte, newrte);
+   dpns.ctes = NIL;
+   set_rtable_names(&dpns, NIL, NULL);
+   set_simple_column_names(&dpns);
+
+   /* Set up context with one-deep namespace stack */
+   context.buf = &buf;
+   context.namespaces = list_make1(&dpns);
+   context.windowClause = NIL;
+   context.windowTList = NIL;
+   context.varprefix = true;
+   context.prettyFlags = pretty ? PRETTYFLAG_PAREN | PRETTYFLAG_INDENT : PRETTYFLAG_INDENT;
+   context.wrapColumn = WRAP_COLUMN_DEFAULT;
+   context.indentLevel = PRETTYINDENT_STD;
+   context.special_exprkind = EXPR_KIND_NONE;
+
+   get_rule_expr(whenClause, &context, false);
+
+   return buf.data;
 }
 
 /* ----------
@@ -1891,6 +1888,13 @@ pg_get_partkeydef_columns(Oid relid, bool pretty)
 	return pg_get_partkeydef_worker(relid, prettyFlags, true, false);
 }
 
+/* Internal version that reports the full partition key definition */
+char *
+pg_get_partkeydef_simple(Oid relid)
+{
+	return pg_get_partkeydef_worker(relid, 0, false, false);
+}
+
 /*
  * Internal workhorse to decompile a partition key definition.
  */
@@ -2141,6 +2145,15 @@ pg_get_constraintdef_ext(PG_FUNCTION_ARGS)
 		PG_RETURN_NULL();
 
 	PG_RETURN_TEXT_P(string_to_text(res));
+}
+
+/*
+ * Internal version that returns definition of a CONSTRAINT command
+ */
+char *
+pg_get_constraintdef_command_simple(Oid constraintId)
+{
+	return pg_get_constraintdef_worker(constraintId, false, 0, false);
 }
 
 /*
@@ -3513,7 +3526,7 @@ pg_get_function_arg_default(PG_FUNCTION_ARGS)
 	PG_RETURN_TEXT_P(string_to_text(str));
 }
 
-static void
+void
 print_function_sqlbody(StringInfo buf, HeapTuple proctup)
 {
 	int			numargs;
@@ -12053,7 +12066,7 @@ get_tablesample_def(TableSampleClause *tablesample, deparse_context *context)
  * actual_datatype.  (If you don't want this behavior, just pass
  * InvalidOid for actual_datatype.)
  */
-static void
+void
 get_opclass_name(Oid opclass, Oid actual_datatype,
 				 StringInfo buf)
 {
@@ -12447,7 +12460,7 @@ generate_qualified_relation_name(Oid relid)
  *
  * The result includes all necessary quoting and schema-prefixing.
  */
-static char *
+char *
 generate_function_name(Oid funcid, int nargs, List *argnames, Oid *argtypes,
 					   bool has_variadic, bool *use_variadic_p,
 					   ParseExprKind special_exprkind)
@@ -12833,7 +12846,7 @@ get_reloptions(StringInfo buf, Datum reloptions)
 /*
  * Generate a C string representing a relation's reloptions, or NULL if none.
  */
-static char *
+char *
 flatten_reloptions(Oid relid)
 {
 	char	   *result = NULL;

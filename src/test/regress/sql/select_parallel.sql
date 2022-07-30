@@ -455,4 +455,13 @@ EXPLAIN (COSTS OFF)
 SELECT 1 FROM tenk1_vw_sec
   WHERE (SELECT sum(f1) FROM int4_tbl WHERE f1 < unique1) < 100;
 
+-- test gather for subproblem's topmost scan/join rel
+set join_collapse_limit to 2;
+alter table d_star set (parallel_workers = 0);
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM tenk1 a JOIN tenk1 b ON a.two = b.two JOIN d_star c ON b.two > c.aa;
+
+alter table d_star reset (parallel_workers);
+
 rollback;

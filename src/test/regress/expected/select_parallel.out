@@ -1194,4 +1194,24 @@ SELECT 1 FROM tenk1_vw_sec
                  Filter: (f1 < tenk1_vw_sec.unique1)
 (9 rows)
 
+-- test gather for subproblem's topmost scan/join rel
+set join_collapse_limit to 2;
+alter table d_star set (parallel_workers = 0);
+EXPLAIN (COSTS OFF)
+SELECT * FROM tenk1 a JOIN tenk1 b ON a.two = b.two JOIN d_star c ON b.two > c.aa;
+                      QUERY PLAN                      
+------------------------------------------------------
+ Nested Loop
+   Join Filter: (b.two > c.aa)
+   ->  Seq Scan on d_star c
+   ->  Gather
+         Workers Planned: 4
+         ->  Parallel Hash Join
+               Hash Cond: (a.two = b.two)
+               ->  Parallel Seq Scan on tenk1 a
+               ->  Parallel Hash
+                     ->  Parallel Seq Scan on tenk1 b
+(10 rows)
+
+alter table d_star reset (parallel_workers);
 rollback;

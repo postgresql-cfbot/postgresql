@@ -10,6 +10,7 @@
  */
 #include "postgres.h"
 
+#include "access/xact.h"
 #include "catalog/objectaccess.h"
 #include "catalog/pg_class.h"
 #include "catalog/pg_namespace.h"
@@ -40,6 +41,7 @@ RunObjectPostCreateHook(Oid classId, Oid objectId, int subId,
 	memset(&pc_arg, 0, sizeof(ObjectAccessPostCreate));
 	pc_arg.is_internal = is_internal;
 
+	CommandCounterIncrement();
 	(*object_access_hook) (OAT_POST_CREATE,
 						   classId, objectId, subId,
 						   (void *) &pc_arg);

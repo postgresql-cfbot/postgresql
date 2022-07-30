@@ -37,6 +37,7 @@ REVOKE ALL ON PARAMETER "none.such" FROM PUBLIC;
 
 -- Create objects for use in the test
 CREATE USER regress_test_user;
+CREATE EXTENSION test_ext1;
 CREATE TABLE regress_test_table (t text);
 CREATE INDEX regress_test_table_t_idx ON regress_test_table (t);
 GRANT SELECT ON Table regress_test_table TO public;
@@ -96,6 +97,8 @@ DROP INDEX CONCURRENTLY regress_test_table_t_idx;
 -- Clean up
 SET test_oat_hooks.audit = false;
 DROP ROLE regress_role_joe;  -- fails
+DROP EXTENSION test_ext1;
+DROP TABLE regress_test_table;
 REVOKE ALL PRIVILEGES ON PARAMETER
 	none.such, another.bogus,
 	test_oat_hooks.user_var1, test_oat_hooks.super_var1,

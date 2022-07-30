@@ -64,6 +64,13 @@ NOTICE:  in process utility: superuser attempting CreateRoleStmt
 NOTICE:  in object access: superuser attempting create (subId=0x0) [explicit]
 NOTICE:  in object access: superuser finished create (subId=0x0) [explicit]
 NOTICE:  in process utility: superuser finished CreateRoleStmt
+CREATE EXTENSION test_ext1;
+NOTICE:  in process utility: superuser attempting CreateExtensionStmt
+NOTICE:  in object access: superuser attempting namespace search (subId=0x0) [no report on violation, allowed]
+NOTICE:  in object access: superuser finished namespace search (subId=0x0) [no report on violation, allowed]
+NOTICE:  in object access: superuser attempting create (subId=0x0) [explicit]
+NOTICE:  in object access: superuser finished create (subId=0x0) [explicit]
+NOTICE:  in process utility: superuser finished CreateExtensionStmt
 CREATE TABLE regress_test_table (t text);
 NOTICE:  in process utility: superuser attempting CreateStmt
 NOTICE:  in object access: superuser attempting namespace search (subId=0x0) [no report on violation, allowed]
@@ -307,6 +314,8 @@ privileges for parameter test_oat_hooks.user_var2
 privileges for parameter test_oat_hooks.super_var2
 privileges for parameter none.such
 privileges for parameter another.bogus
+DROP EXTENSION test_ext1;
+DROP TABLE regress_test_table;
 REVOKE ALL PRIVILEGES ON PARAMETER
 	none.such, another.bogus,
 	test_oat_hooks.user_var1, test_oat_hooks.super_var1,

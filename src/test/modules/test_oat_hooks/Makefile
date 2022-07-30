@@ -6,6 +6,10 @@ OBJS = \
 	test_oat_hooks.o
 PGFILEDESC = "test_oat_hooks - example use of object access hooks"
 
+EXTENSION = test_ext1
+
+DATA = test_ext1--1.0.sql
+
 REGRESS = test_oat_hooks
 
 # disable installcheck for now

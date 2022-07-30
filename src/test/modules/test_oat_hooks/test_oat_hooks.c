@@ -14,13 +14,19 @@
 #include "postgres.h"
 
 #include "access/parallel.h"
+#include "access/relation.h"
 #include "catalog/dependency.h"
 #include "catalog/objectaccess.h"
+#include "catalog/pg_authid.h"
+#include "catalog/pg_class.h"
+#include "catalog/pg_extension.h"
 #include "catalog/pg_proc.h"
+#include "commands/extension.h"
 #include "executor/executor.h"
 #include "fmgr.h"
 #include "miscadmin.h"
 #include "tcop/utility.h"
+#include "utils/lsyscache.h"
 
 PG_MODULE_MAGIC;
 
@@ -67,6 +73,7 @@ static void REGRESS_utility_command(PlannedStmt *pstmt,
 static const char *nodetag_to_string(NodeTag tag);
 static char *accesstype_to_string(ObjectAccessType access, int subId);
 static char *accesstype_arg_to_string(ObjectAccessType access, void *arg);
+static void CheckObjectVisible(Oid classId, Oid objectId);
 
 
 /*
@@ -335,6 +342,12 @@ REGRESS_object_access_hook(ObjectAccessType access, Oid classId, Oid objectId, i
 				 errmsg("permission denied: %s [%s]",
 						accesstype_to_string(access, 0),
 						accesstype_arg_to_string(access, arg))));
+
+	/* See if new object is visible */
+	if (access == OAT_POST_CREATE)
+	{
+		CheckObjectVisible(classId, objectId);
+	}
 
 	/* Forward to next hook in the chain */
 	if (next_object_access_hook)
@@ -1832,4 +1845,42 @@ accesstype_arg_to_string(ObjectAccessType access, void *arg)
 	}
 
 	return pstrdup("unknown");
+}
+
+/* Checks to see if created object is visible in its respective table*/
+static void
+CheckObjectVisible(Oid classId, Oid objectId)
+{
+	switch (classId)
+	{
+		case RelationRelationId:
+			{
+				if (get_rel_name(objectId) == NULL)
+				{
+					ereport(ERROR, errmsg("Relation object with OID %d is not visible in POST_CREATE access hook",
+										  objectId));
+				}
+				break;
+			}
+		case ExtensionRelationId:
+			{
+				if (get_extension_name(objectId) == NULL)
+				{
+					ereport(ERROR, errmsg("Extension object with OID %d is not visible in POST_CREATE access hook",
+										  objectId));
+				}
+				break;
+			}
+		case AuthIdRelationId:
+			{
+				if (GetUserNameFromId(objectId, true) == NULL)
+				{
+					ereport(ERROR, errmsg("AuthId object with OID %d is not visible in POST_CREATE access hook",
+										  objectId));
+				}
+				break;
+			}
+		default:
+			return;
+	}
 }

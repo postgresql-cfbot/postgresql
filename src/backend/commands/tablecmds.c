@@ -576,7 +576,7 @@ static void ATPrepSetTableSpace(AlteredTableInfo *tab, Relation rel,
 								const char *tablespacename, LOCKMODE lockmode);
 static void ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode);
 static void ATExecSetTableSpaceNoStorage(Relation rel, Oid newTableSpace);
-static void ATExecSetRelOptions(Relation rel, List *defList,
+static ObjectAddress ATExecSetRelOptions(Relation rel, List *defList,
 								AlterTableType operation,
 								LOCKMODE lockmode);
 static void ATExecEnableDisableTrigger(Relation rel, const char *trigname,
@@ -592,8 +592,8 @@ static ObjectAddress ATExecAddOf(Relation rel, const TypeName *ofTypename, LOCKM
 static void ATExecDropOf(Relation rel, LOCKMODE lockmode);
 static void ATExecReplicaIdentity(Relation rel, ReplicaIdentityStmt *stmt, LOCKMODE lockmode);
 static void ATExecGenericOptions(Relation rel, List *options);
-static void ATExecSetRowSecurity(Relation rel, bool rls);
-static void ATExecForceNoForceRowSecurity(Relation rel, bool force_rls);
+static ObjectAddress ATExecSetRowSecurity(Relation rel, bool rls);
+static ObjectAddress ATExecForceNoForceRowSecurity(Relation rel, bool force_rls);
 static ObjectAddress ATExecSetCompression(Relation rel,
 										  const char *column, Node *newValue, LOCKMODE lockmode);
 
@@ -5115,7 +5115,7 @@ ATExecCmd(List **wqueue, AlteredTableInfo *tab,
 		case AT_SetRelOptions:	/* SET (...) */
 		case AT_ResetRelOptions:	/* RESET (...) */
 		case AT_ReplaceRelOptions:	/* replace entire option list */
-			ATExecSetRelOptions(rel, (List *) cmd->def, cmd->subtype, lockmode);
+			address = ATExecSetRelOptions(rel, (List *) cmd->def, cmd->subtype, lockmode);
 			break;
 		case AT_EnableTrig:		/* ENABLE TRIGGER name */
 			ATExecEnableDisableTrigger(rel, cmd->name,
@@ -5183,16 +5183,16 @@ ATExecCmd(List **wqueue, AlteredTableInfo *tab,
 			ATExecReplicaIdentity(rel, (ReplicaIdentityStmt *) cmd->def, lockmode);
 			break;
 		case AT_EnableRowSecurity:
-			ATExecSetRowSecurity(rel, true);
+			address = ATExecSetRowSecurity(rel, true);
 			break;
 		case AT_DisableRowSecurity:
-			ATExecSetRowSecurity(rel, false);
+			address = ATExecSetRowSecurity(rel, false);
 			break;
 		case AT_ForceRowSecurity:
-			ATExecForceNoForceRowSecurity(rel, true);
+			address = ATExecForceNoForceRowSecurity(rel, true);
 			break;
 		case AT_NoForceRowSecurity:
-			ATExecForceNoForceRowSecurity(rel, false);
+			address = ATExecForceNoForceRowSecurity(rel, false);
 			break;
 		case AT_GenericOptions:
 			ATExecGenericOptions(rel, (List *) cmd->def);
@@ -5202,11 +5202,11 @@ ATExecCmd(List **wqueue, AlteredTableInfo *tab,
 									  cur_pass, context);
 			Assert(cmd != NULL);
 			if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
-				ATExecAttachPartition(wqueue, rel, (PartitionCmd *) cmd->def,
-									  context);
+				address = ATExecAttachPartition(wqueue, rel, (PartitionCmd *) cmd->def,
+												context);
 			else
-				ATExecAttachPartitionIdx(wqueue, rel,
-										 ((PartitionCmd *) cmd->def)->name);
+				address = ATExecAttachPartitionIdx(wqueue, rel,
+												   ((PartitionCmd *) cmd->def)->name);
 			break;
 		case AT_DetachPartition:
 			cmd = ATParseTransformCmd(wqueue, tab, rel, cmd, false, lockmode,
@@ -5214,12 +5214,12 @@ ATExecCmd(List **wqueue, AlteredTableInfo *tab,
 			Assert(cmd != NULL);
 			/* ATPrepCmd ensures it must be a table */
 			Assert(rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE);
-			ATExecDetachPartition(wqueue, tab, rel,
-								  ((PartitionCmd *) cmd->def)->name,
-								  ((PartitionCmd *) cmd->def)->concurrent);
+			address = ATExecDetachPartition(wqueue, tab, rel,
+											((PartitionCmd *) cmd->def)->name,
+											((PartitionCmd *) cmd->def)->concurrent);
 			break;
 		case AT_DetachPartitionFinalize:
-			ATExecDetachPartitionFinalize(rel, ((PartitionCmd *) cmd->def)->name);
+			address = ATExecDetachPartitionFinalize(rel, ((PartitionCmd *) cmd->def)->name);
 			break;
 		default:				/* oops */
 			elog(ERROR, "unrecognized alter table type: %d",
@@ -14102,7 +14102,7 @@ ATPrepSetTableSpace(AlteredTableInfo *tab, Relation rel, const char *tablespacen
 /*
  * Set, reset, or replace reloptions.
  */
-static void
+static ObjectAddress
 ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 					LOCKMODE lockmode)
 {
@@ -14117,9 +14117,13 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 	bool		repl_null[Natts_pg_class];
 	bool		repl_repl[Natts_pg_class];
 	static char *validnsps[] = HEAP_RELOPT_NAMESPACES;
+	ObjectAddress address;
 
 	if (defList == NIL && operation != AT_ReplaceRelOptions)
-		return;					/* nothing to do */
+	{
+		ObjectAddressSet(address, RelationRelationId, RelationGetRelid(rel));
+		return address;					/* nothing to do */
+	}
 
 	pgclass = table_open(RelationRelationId, RowExclusiveLock);
 
@@ -14298,7 +14302,9 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 		table_close(toastrel, NoLock);
 	}
 
+	ObjectAddressSet(address, RelationRelationId, RelationGetRelid(rel));
 	table_close(pgclass, RowExclusiveLock);
+	return address;
 }
 
 /*
@@ -15992,12 +15998,13 @@ ATExecReplicaIdentity(Relation rel, ReplicaIdentityStmt *stmt, LOCKMODE lockmode
 /*
  * ALTER TABLE ENABLE/DISABLE ROW LEVEL SECURITY
  */
-static void
+static ObjectAddress
 ATExecSetRowSecurity(Relation rel, bool rls)
 {
 	Relation	pg_class;
 	Oid			relid;
 	HeapTuple	tuple;
+	ObjectAddress address;
 
 	relid = RelationGetRelid(rel);
 
@@ -16012,19 +16019,24 @@ ATExecSetRowSecurity(Relation rel, bool rls)
 	((Form_pg_class) GETSTRUCT(tuple))->relrowsecurity = rls;
 	CatalogTupleUpdate(pg_class, &tuple->t_self, tuple);
 
+	ObjectAddressSet(address, RelationRelationId, relid);
+
 	table_close(pg_class, RowExclusiveLock);
 	heap_freetuple(tuple);
+
+	return address;
 }
 
 /*
  * ALTER TABLE FORCE/NO FORCE ROW LEVEL SECURITY
  */
-static void
+static ObjectAddress
 ATExecForceNoForceRowSecurity(Relation rel, bool force_rls)
 {
 	Relation	pg_class;
 	Oid			relid;
 	HeapTuple	tuple;
+	ObjectAddress address;
 
 	relid = RelationGetRelid(rel);
 
@@ -16038,8 +16050,12 @@ ATExecForceNoForceRowSecurity(Relation rel, bool force_rls)
 	((Form_pg_class) GETSTRUCT(tuple))->relforcerowsecurity = force_rls;
 	CatalogTupleUpdate(pg_class, &tuple->t_self, tuple);
 
+	ObjectAddressSet(address, RelationRelationId, relid);
+
 	table_close(pg_class, RowExclusiveLock);
 	heap_freetuple(tuple);
+
+	return address;
 }
 
 /*

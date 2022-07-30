@@ -169,6 +169,15 @@ explain (verbose, costs off)
 select p from gist_tbl order by circle(p,1) <-> point(0,0) limit 1;
 select p from gist_tbl order by circle(p,1) <-> point(0,0) limit 1;
 
+
+-- Build an index using buffering caused by a index build that don't fit on cache.
+set effective_cache_size = '1MB';
+create index gist_tbl_box_index_buffering on gist_tbl using gist (p, b, c);
+reset effective_cache_size;
+
+-- Force an index build using buffering.
+create index gist_tbl_box_index_forcing_buffering on gist_tbl using gist (p) with (buffering=on, fillfactor=50);
+
 -- Clean up
 reset enable_seqscan;
 reset enable_bitmapscan;

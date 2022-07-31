@@ -6839,7 +6839,7 @@ trim_array(PG_FUNCTION_ARGS)
 {
 	ArrayType  *v = PG_GETARG_ARRAYTYPE_P(0);
 	int			n = PG_GETARG_INT32(1);
-	int			array_length = ARR_DIMS(v)[0];
+	int			array_length = (ARR_NDIM(v) > 0) ? ARR_DIMS(v)[0] : 0;
 	int16		elmlen;
 	bool		elmbyval;
 	char		elmalign;

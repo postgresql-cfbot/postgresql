@@ -386,6 +386,9 @@ task:
     # currently have a tool for that...
     CIRRUS_ESCAPING_PROCESSES: 1
 
+    # Enable locale testing by importing system locales
+    ENCODING: "WIN1252"
+
   only_if: $CIRRUS_CHANGE_MESSAGE !=~ '.*\nci-os-only:.*' || $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-os-only:[^\n]*windows.*'
 
   windows_container:

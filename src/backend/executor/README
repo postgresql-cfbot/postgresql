@@ -65,6 +65,34 @@ found there.  This currently only occurs for Append and MergeAppend nodes.  In
 this case the non-required subplans are ignored and the executor state's
 subnode array will become out of sequence to the plan's subplan list.
 
+Actually, the so-called execution time pruning may also occur even before the
+execution has started.  One case where that occurs is when a cached generic
+plan is being validated for execution by plancache.c: GetCachedPlan(), which
+works by locking all the relations that will be scanned by that plan.  If the
+generic plan contains nodes that can perform execution time partition pruning
+(that is, contain a PartitionPruneInfo), a subset of pruning steps contained
+in a given node's PartitionPruneInfo that do not depend on the execution
+actually having started (called "initial" pruning steps) are performed at this
+point to figure out the minimal set of child subplans that satisfy those
+pruning steps.  AcquireExecutorLocks() looking at a given plan tree will then
+lock only the relations scanned by the child subplans that survived such
+pruning, along with those present in PlannedStmt.minLockRelids.  Note that the
+subplans are only notionally pruned in that they are not removed from the plan
+tree as such.
+
+To prevent the executor and any third party execution code that can look at
+the plan tree from trying to execute the subplans that were pruned as
+described above, the result of pruning is passed to the executor as a
+PartitionPruneResult node via the QueryDesc.  It consists of the set of
+indexes of surviving subplans in their respective parent plan node's list of
+child subplans, saved as a list of bitmapsets, with one element for every
+parent plan node whose PartitionPruneInfo is present in
+PlannedStmt.partPruneInfos.  In other words, the executor should not
+re-evaluate the set of initially valid subplans by redoing the initial pruning
+if it was already done by AcquireExecutorLocks(), because the re-evaluation may
+very well end up resulting in a different set of subplans, containing some
+whose relations were not locked by AcquireExecutorLocks().
+
 Each Plan node may have expression trees associated with it, to represent
 its target list, qualification conditions, etc.  These trees are also
 read-only to the executor, but the executor state for expression evaluation
@@ -285,6 +313,10 @@ Query Processing Control Flow
 -----------------------------
 
 This is a sketch of control flow for full query processing:
+
+  [ ExecutorDoInitialPruning ] --- an optional step to perform initial
+		partition pruning on the plan tree the result of which is passed
+		to the executor via QueryDesc
 
 	CreateQueryDesc
 

@@ -842,7 +842,7 @@ postquel_start(execution_state *es, SQLFunctionCachePtr fcache)
 	else
 		dest = None_Receiver;
 
-	es->qd = CreateQueryDesc(es->stmt,
+	es->qd = CreateQueryDesc(es->stmt, NULL,
 							 fcache->src,
 							 GetActiveSnapshot(),
 							 InvalidSnapshot,

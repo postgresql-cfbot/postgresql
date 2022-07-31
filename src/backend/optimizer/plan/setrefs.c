@@ -271,6 +271,16 @@ set_plan_references(PlannerInfo *root, Plan *plan)
 	add_rtes_to_flat_rtable(root, false);
 
 	/*
+	 * Add the query's adjusted range of RT indexes to glob->minLockRelids.
+	 * The adjusted RT indexes of prunable relations will be deleted from the
+	 * set below where PartitionPruneInfos are processed.
+	 */
+	glob->minLockRelids =
+		bms_add_range(glob->minLockRelids,
+					  rtoffset + 1,
+					  rtoffset + list_length(root->parse->rtable));
+
+	/*
 	 * Adjust RT indexes of PlanRowMarks and add to final rowmarks list
 	 */
 	foreach(lc, root->rowMarks)
@@ -347,6 +357,65 @@ set_plan_references(PlannerInfo *root, Plan *plan)
 				lfirst(lc) = NULL;
 		}
 	}
+
+	/* Also fix up the information in PartitionPruneInfos. */
+	foreach (lc, root->partPruneInfos)
+	{
+		PartitionPruneInfo *pruneinfo = lfirst(lc);
+		Bitmapset *leafpart_rtis = NULL;
+		ListCell  *l;
+
+		foreach(l, pruneinfo->prune_infos)
+		{
+			List	   *prune_infos = lfirst(l);
+			ListCell   *l2;
+
+			foreach(l2, prune_infos)
+			{
+				PartitionedRelPruneInfo *pinfo = lfirst(l2);
+				int		i;
+
+				/* RT index of the table to which the pinfo belongs. */
+				pinfo->rtindex += rtoffset;
+
+				/* Also of the leaf partitions that might be scanned. */
+				for (i = 0; i < pinfo->nparts; i++)
+				{
+					if (pinfo->rti_map[i] > 0 && pinfo->subplan_map[i] >= 0)
+					{
+						pinfo->rti_map[i] += rtoffset;
+						leafpart_rtis = bms_add_member(leafpart_rtis,
+													   pinfo->rti_map[i]);
+					}
+				}
+			}
+		}
+
+		if (pruneinfo->needs_init_pruning)
+		{
+			glob->containsInitialPruning = true;
+
+			/*
+			 * Delete the leaf partition RTIs from the global set of relations
+			 * to be locked before executing the plan.  AcquireExecutorLocks()
+			 * will find the ones to add to the set after performing initial
+			 * pruning.
+			 */
+			glob->minLockRelids = bms_del_members(glob->minLockRelids,
+												  leafpart_rtis);
+		}
+
+		glob->partPruneInfos = lappend(glob->partPruneInfos, pruneinfo);
+	}
+
+	/*
+	 * It seems worth doing a bms_copy() on glob->minLockRelids if we deleted
+	 * bits from it above to get rid of any empty tail bits.  It seems better
+	 * for the loop over this set in AcquireExecutorLocks() to not have to go
+	 * through those useless bit words.
+	 */
+	if (glob->containsInitialPruning)
+		glob->minLockRelids = bms_copy(glob->minLockRelids);
 
 	return result;
 }
@@ -1658,21 +1727,12 @@ set_append_references(PlannerInfo *root,
 
 	aplan->apprelids = offset_relid_set(aplan->apprelids, rtoffset);
 
-	if (aplan->part_prune_info)
-	{
-		foreach(l, aplan->part_prune_info->prune_infos)
-		{
-			List	   *prune_infos = lfirst(l);
-			ListCell   *l2;
-
-			foreach(l2, prune_infos)
-			{
-				PartitionedRelPruneInfo *pinfo = lfirst(l2);
-
-				pinfo->rtindex += rtoffset;
-			}
-		}
-	}
+	/*
+	 * PartitionPruneInfos will be added to a list in PlannerGlobal, so update
+	 * the index.
+	 */
+	if (aplan->part_prune_index >= 0)
+		aplan->part_prune_index += list_length(root->glob->partPruneInfos);
 
 	/* We don't need to recurse to lefttree or righttree ... */
 	Assert(aplan->plan.lefttree == NULL);
@@ -1734,21 +1794,12 @@ set_mergeappend_references(PlannerInfo *root,
 
 	mplan->apprelids = offset_relid_set(mplan->apprelids, rtoffset);
 
-	if (mplan->part_prune_info)
-	{
-		foreach(l, mplan->part_prune_info->prune_infos)
-		{
-			List	   *prune_infos = lfirst(l);
-			ListCell   *l2;
-
-			foreach(l2, prune_infos)
-			{
-				PartitionedRelPruneInfo *pinfo = lfirst(l2);
-
-				pinfo->rtindex += rtoffset;
-			}
-		}
-	}
+	/*
+	 * PartitionPruneInfos will be added to a list in PlannerGlobal, so update
+	 * the index.
+	 */
+	if (mplan->part_prune_index >= 0)
+		mplan->part_prune_index += list_length(root->glob->partPruneInfos);
 
 	/* We don't need to recurse to lefttree or righttree ... */
 	Assert(mplan->plan.lefttree == NULL);

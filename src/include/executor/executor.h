@@ -185,6 +185,8 @@ ExecGetJunkAttribute(TupleTableSlot *slot, AttrNumber attno, bool *isNull)
 /*
  * prototypes from functions in execMain.c
  */
+extern PartitionPruneResult *ExecutorDoInitialPruning(PlannedStmt *plannedstmt,
+													  ParamListInfo params);
 extern void ExecutorStart(QueryDesc *queryDesc, int eflags);
 extern void standard_ExecutorStart(QueryDesc *queryDesc, int eflags);
 extern void ExecutorRun(QueryDesc *queryDesc,

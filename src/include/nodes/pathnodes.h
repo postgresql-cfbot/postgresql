@@ -122,6 +122,22 @@ typedef struct PlannerGlobal
 	/* "flat" list of AppendRelInfos */
 	List	   *appendRelations;
 
+	/* List of PartitionPruneInfo contained in the plan */
+	List	   *partPruneInfos;
+
+	/*
+	 * Do any of those PartitionPruneInfos have initial (pre-exec) pruning
+	 * steps in them?
+	 */
+	bool		containsInitialPruning;
+
+	/*
+	 * Indexes of all range table entries minus indexes of range table entries
+	 * of the leaf partitions scanned by prunable subplans; see
+	 * AcquireExecutorLocks()
+	 */
+	Bitmapset  *minLockRelids;
+
 	/* OIDs of relations the plan depends on */
 	List	   *relationOids;
 
@@ -488,6 +504,9 @@ struct PlannerInfo
 
 	/* Does this query modify any partition key columns? */
 	bool		partColsUpdated;
+
+	/* PartitionPruneInfos added in this query's plan. */
+	List	   *partPruneInfos;
 };
 
 

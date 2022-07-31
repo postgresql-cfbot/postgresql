@@ -155,6 +155,7 @@ ExecuteQuery(ParseState *pstate,
 	PreparedStatement *entry;
 	CachedPlan *cplan;
 	List	   *plan_list;
+	List	   *part_prune_result_list;
 	ParamListInfo paramLI = NULL;
 	EState	   *estate = NULL;
 	Portal		portal;
@@ -193,7 +194,10 @@ ExecuteQuery(ParseState *pstate,
 									   entry->plansource->query_string);
 
 	/* Replan if needed, and increment plan refcount for portal */
-	cplan = GetCachedPlan(entry->plansource, paramLI, NULL, NULL);
+	cplan = GetCachedPlan(entry->plansource, paramLI, NULL, NULL,
+						  &part_prune_result_list);
+	Assert(list_length(cplan->stmt_list) ==
+		   list_length(part_prune_result_list));
 	plan_list = cplan->stmt_list;
 
 	/*
@@ -206,6 +210,9 @@ ExecuteQuery(ParseState *pstate,
 					  entry->plansource->commandTag,
 					  plan_list,
 					  cplan);
+
+	/* Copy PartitionPruneResults into the portal's context. */
+	PortalStorePartitionPruneResults(portal, part_prune_result_list);
 
 	/*
 	 * For CREATE TABLE ... AS EXECUTE, we must verify that the prepared
@@ -576,7 +583,9 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 	const char *query_string;
 	CachedPlan *cplan;
 	List	   *plan_list;
-	ListCell   *p;
+	List	   *part_prune_result_list;
+	ListCell   *p,
+			   *pp;
 	ParamListInfo paramLI = NULL;
 	EState	   *estate = NULL;
 	instr_time	planstart;
@@ -619,7 +628,10 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 
 	/* Replan if needed, and acquire a transient refcount */
 	cplan = GetCachedPlan(entry->plansource, paramLI,
-						  CurrentResourceOwner, queryEnv);
+						  CurrentResourceOwner, queryEnv,
+						  &part_prune_result_list);
+	Assert(list_length(cplan->stmt_list) ==
+		   list_length(part_prune_result_list));
 
 	INSTR_TIME_SET_CURRENT(planduration);
 	INSTR_TIME_SUBTRACT(planduration, planstart);
@@ -634,13 +646,15 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 	plan_list = cplan->stmt_list;
 
 	/* Explain each query */
-	foreach(p, plan_list)
+	forboth(p, plan_list, pp, part_prune_result_list)
 	{
 		PlannedStmt *pstmt = lfirst_node(PlannedStmt, p);
+		PartitionPruneResult *part_prune_result = lfirst_node(PartitionPruneResult, pp);
 
 		if (pstmt->commandType != CMD_UTILITY)
-			ExplainOnePlan(pstmt, into, es, query_string, paramLI, queryEnv,
-						   &planduration, (es->buffers ? &bufusage : NULL));
+			ExplainOnePlan(pstmt, part_prune_result, into, es, query_string,
+						   paramLI, queryEnv, &planduration,
+						   (es->buffers ? &bufusage : NULL));
 		else
 			ExplainOneUtility(pstmt->utilityStmt, into, es, query_string,
 							  paramLI, queryEnv);

@@ -1,5 +1,32 @@
+-- Before going ahead with the to-be-tested installations, verify that
+-- only superusers can install plperlu.
+CREATE USER regress_user1;
+SET ROLE regress_user1;
+CREATE EXTENSION plperlu;  -- fail
+ERROR:  permission denied to create extension "plperlu"
+HINT:  Must be superuser to create this extension.
+RESET ROLE;
+DO $$
+begin
+  execute format('grant create on database %I to regress_user1',
+                 current_database());
+end;
+$$;
+SET ROLE regress_user1;
+CREATE EXTENSION plperlu;  -- fail
+ERROR:  permission denied to create extension "plperlu"
+HINT:  Must be superuser to create this extension.
+RESET ROLE;
+DO $$
+begin
+  execute format('revoke create on database %I from regress_user1',
+                 current_database());
+end;
+$$;
+DROP ROLE regress_user1;
 -- Use ONLY plperlu tests here. For plperl/plerlu combined tests
 -- see plperl_plperlu.sql
+CREATE EXTENSION plperlu;
 -- This test tests setting on_plperlu_init after loading plperl
 LOAD 'plperl';
 -- Test plperl.on_plperlu_init gets run

@@ -8,10 +8,12 @@ PGFILEDESC = "jsonb_plperl - jsonb transform for plperl"
 
 PG_CPPFLAGS = -I$(top_srcdir)/src/pl/plperl
 
-EXTENSION = jsonb_plperlu jsonb_plperl
-DATA = jsonb_plperlu--1.0.sql jsonb_plperl--1.0.sql
-
-REGRESS = jsonb_plperl jsonb_plperlu
+# We do not yet know whether we are building with trusted PL/Perl, untrusted
+# PL/Perl, or both, so for now we assume we are just building trusted PL/Perl.
+# We'll adjust these later on if this assumption was accurate.
+EXTENSION = jsonb_plperl
+DATA = jsonb_plperl--1.0.sql
+REGRESS = jsonb_plperl
 
 SHLIB_LINK += $(filter -lm, $(LIBS))
 
@@ -39,3 +41,17 @@ endif
 
 # As with plperl we need to include the perl_includespec directory last.
 override CPPFLAGS := $(CPPFLAGS) $(perl_embed_ccflags) $(perl_includespec)
+
+# Since we now know whether we are building trusted PL/Perl, untrusted PL/Perl,
+# or both, we should adjust the relevant variables accordingly.
+ifeq ($(PERL_TRUSTED), no)
+    override undefine EXTENSION
+    override undefine DATA
+    override undefine REGRESS
+endif
+
+ifeq ($(PERL_UNTRUSTED), yes)
+    override EXTENSION += jsonb_plperlu
+    override DATA += jsonb_plperlu--1.0.sql
+    override REGRESS += jsonb_plperlu
+endif

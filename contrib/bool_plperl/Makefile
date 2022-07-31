@@ -8,10 +8,12 @@ PGFILEDESC = "bool_plperl - bool transform for plperl"
 
 PG_CPPFLAGS = -I$(top_srcdir)/src/pl/plperl
 
-EXTENSION = bool_plperlu bool_plperl
-DATA = bool_plperlu--1.0.sql bool_plperl--1.0.sql
-
-REGRESS = bool_plperl bool_plperlu
+# We do not yet know whether we are building with trusted PL/Perl, untrusted
+# PL/Perl, or both, so for now we assume we are just building trusted PL/Perl.
+# We'll adjust these later on if this assumption was accurate.
+EXTENSION = bool_plperl
+DATA = bool_plperl--1.0.sql
+REGRESS = bool_plperl
 
 ifdef USE_PGXS
 PG_CONFIG = pg_config
@@ -37,3 +39,17 @@ endif
 
 # As with plperl we need to include the perl_includespec directory last.
 override CPPFLAGS := $(CPPFLAGS) $(perl_embed_ccflags) $(perl_includespec)
+
+# Since we now know whether we are building trusted PL/Perl, untrusted PL/Perl,
+# or both, we should adjust the relevant variables accordingly.
+ifeq ($(PERL_TRUSTED), no)
+	override undefine EXTENSION
+	override undefine DATA
+	override undefine REGRESS
+endif
+
+ifeq ($(PERL_UNTRUSTED), yes)
+	override EXTENSION += bool_plperlu
+	override DATA += bool_plperlu--1.0.sql
+	override REGRESS += bool_plperlu
+endif

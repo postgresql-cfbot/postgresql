@@ -817,9 +817,39 @@ fi
 # Optionally build Tcl modules (PL/Tcl)
 #
 AC_MSG_CHECKING([whether to build with Tcl])
-PGAC_ARG_BOOL(with, tcl, no, [build Tcl modules (PL/Tcl)])
+PGAC_ARG_OPTARG(with, tcl,
+[TRUSTWORTHINESS], [build Tcl modules (PL/Tcl)],
+[
+  TCL_TRUSTED=yes
+  TCL_UNTRUSTED=yes
+],
+[
+  if test "$withval" = trusted ; then
+    TCL_TRUSTED=yes
+    TCL_UNTRUSTED=no
+  elif test "$withval" = untrusted ; then
+    TCL_TRUSTED=no
+    TCL_UNTRUSTED=yes
+  else
+    AC_MSG_ERROR([invalid --with-tcl value: argument must be omitted or specified as 'trusted' or 'untrusted'])
+  fi
+],
+[
+  if test "$TCL_TRUSTED" = yes ; then
+    AC_DEFINE([USE_TCL], 1, [Define to 1 to build with trusted Tcl support. (--with-tcl='trusted')])
+  fi
+  if test "$TCL_UNTRUSTED" = yes ; then
+    AC_DEFINE([USE_TCLU], 1, [Define to 1 to build with untrusted Tcl support. (--with-tcl='untrusted')])
+  fi
+],
+[
+  TCL_TRUSTED=no
+  TCL_UNTRUSTED=no
+])
 AC_MSG_RESULT([$with_tcl])
 AC_SUBST([with_tcl])
+AC_SUBST(TCL_TRUSTED)
+AC_SUBST(TCL_UNTRUSTED)
 
 # We see if the path to the Tcl/Tk configuration scripts is specified.
 # This will override the use of tclsh to find the paths to search.
@@ -830,9 +860,39 @@ PGAC_ARG_REQ(with, tclconfig, [DIR], [tclConfig.sh is in DIR])
 # Optionally build Perl modules (PL/Perl)
 #
 AC_MSG_CHECKING([whether to build Perl modules])
-PGAC_ARG_BOOL(with, perl, no, [build Perl modules (PL/Perl)])
+PGAC_ARG_OPTARG(with, perl,
+[TRUSTWORTHINESS], [build Perl modules (PL/Perl)],
+[
+  PERL_TRUSTED=yes
+  PERL_UNTRUSTED=yes
+],
+[
+  if test "$withval" = trusted ; then
+    PERL_TRUSTED=yes
+    PERL_UNTRUSTED=no
+  elif test "$withval" = untrusted ; then
+    PERL_TRUSTED=no
+    PERL_UNTRUSTED=yes
+  else
+    AC_MSG_ERROR([invalid --with-perl value: argument must be omitted or specified as 'trusted' or 'untrusted'])
+  fi
+],
+[
+  if test "$PERL_TRUSTED" = yes ; then
+    AC_DEFINE([USE_PERL], 1, [Define to 1 to build with trusted Perl support. (--with-perl='trusted')])
+  fi
+  if test "$PERL_UNTRUSTED" = yes ; then
+    AC_DEFINE([USE_PERLU], 1, [Define to 1 to build with untrusted Perl support. (--with-perl='untrusted')])
+  fi
+],
+[
+  PERL_TRUSTED=no
+  PERL_UNTRUSTED=no
+])
 AC_MSG_RESULT([$with_perl])
 AC_SUBST(with_perl)
+AC_SUBST(PERL_TRUSTED)
+AC_SUBST(PERL_UNTRUSTED)
 
 #
 # Optionally build Python modules (PL/Python)

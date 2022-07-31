@@ -6,11 +6,13 @@ OBJS = \
 	hstore_plperl.o
 PGFILEDESC = "hstore_plperl - hstore transform for plperl"
 
+# We do not yet know whether we are building with trusted PL/Perl, untrusted
+# PL/Perl, or both, so for now we assume we are just building trusted PL/Perl.
+# We'll adjust these later on if this assumption was accurate.
+EXTENSION = hstore_plperl
+DATA = hstore_plperl--1.0.sql
+REGRESS = hstore_plperl create_transform
 
-EXTENSION = hstore_plperl hstore_plperlu
-DATA = hstore_plperl--1.0.sql hstore_plperlu--1.0.sql
-
-REGRESS = hstore_plperl hstore_plperlu create_transform
 EXTRA_INSTALL = contrib/hstore
 
 ifdef USE_PGXS
@@ -39,3 +41,17 @@ endif
 
 # As with plperl we need to include the perl_includespec directory last.
 override CPPFLAGS := $(CPPFLAGS) $(perl_embed_ccflags) $(perl_includespec)
+
+# Since we now know whether we are building trusted PL/Perl, untrusted PL/Perl,
+# or both, we should adjust the relevant variables accordingly.
+ifeq ($(PERL_TRUSTED), no)
+	override undefine EXTENSION
+	override undefine DATA
+	override undefine REGRESS
+endif
+
+ifeq ($(PERL_UNTRUSTED), yes)
+	override EXTENSION += hstore_plperlu
+	override DATA += hstore_plperlu--1.0.sql
+	override REGRESS += hstore_plperlu
+endif

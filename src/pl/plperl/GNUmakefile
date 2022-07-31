@@ -27,8 +27,13 @@ NAME = plperl
 
 OBJS = plperl.o SPI.o Util.o $(WIN32RES)
 
-DATA = plperl.control plperl--1.0.sql \
-       plperlu.control plperlu--1.0.sql
+ifeq ($(PERL_TRUSTED), yes)
+	DATA += plperl.control plperl--1.0.sql
+endif
+
+ifeq ($(PERL_UNTRUSTED), yes)
+	DATA += plperlu.control plperlu--1.0.sql
+endif
 
 PERLCHUNKS = plc_perlboot.pl plc_trusted.pl
 
@@ -56,14 +61,26 @@ endif # win32
 SHLIB_LINK = $(perl_embed_ldflags)
 
 REGRESS_OPTS = --dbname=$(PL_TESTDB)
-REGRESS = plperl_setup plperl plperl_lc plperl_trigger plperl_shared \
-	plperl_elog plperl_util plperl_init plperlu plperl_array \
-	plperl_call plperl_transaction
-# if Perl can support two interpreters in one backend,
-# test plperl-and-plperlu cases
-ifneq ($(PERL),)
-ifeq ($(shell $(PERL) -V:usemultiplicity), usemultiplicity='define';)
-	REGRESS += plperl_plperlu
+
+ifeq ($(PERL_TRUSTED), yes)
+	REGRESS = plperl_setup plperl plperl_lc plperl_trigger plperl_shared \
+		plperl_elog plperl_util plperl_init plperl_array plperl_call \
+		plperl_transaction
+endif
+
+ifeq ($(PERL_UNTRUSTED), yes)
+	REGRESS += plperlu
+endif
+
+ifeq ($(PERL_TRUSTED), yes)
+ifeq ($(PERL_UNTRUSTED), yes)
+	# if Perl can support two interpreters in one backend,
+	# test plperl-and-plperlu cases
+	ifneq ($(PERL),)
+		ifeq ($(shell $(PERL) -V:usemultiplicity), usemultiplicity='define';)
+			REGRESS += plperl_plperlu
+		endif
+	endif
 endif
 endif
 

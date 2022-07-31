@@ -521,3 +521,10 @@ $$ LANGUAGE plperl;
 
 SELECT self_modify(42);
 SELECT self_modify(42);
+
+-- make sure lanpltrusted is ignored
+CREATE OR REPLACE LANGUAGE mylang
+	HANDLER plperl_call_handler
+	INLINE plperl_inline_handler
+	VALIDATOR plperl_validator;
+CREATE OR REPLACE FUNCTION myfunc(TEXT) RETURNS TEXT LANGUAGE mylang AS $$ return `$_[0]`; $$;

@@ -723,7 +723,11 @@ with_krb_srvnam
 krb_srvtab
 with_gssapi
 with_python
+PERL_UNTRUSTED
+PERL_TRUSTED
 with_perl
+TCL_UNTRUSTED
+TCL_TRUSTED
 with_tcl
 ICU_LIBS
 ICU_CFLAGS
@@ -1563,9 +1567,11 @@ Optional Packages:
   --with-CC=CMD           set compiler (deprecated)
   --with-llvm             build with LLVM based JIT support
   --with-icu              build with ICU support
-  --with-tcl              build Tcl modules (PL/Tcl)
+  --with-tcl[=TRUSTWORTHINESS]
+                          build Tcl modules (PL/Tcl)
   --with-tclconfig=DIR    tclConfig.sh is in DIR
-  --with-perl             build Perl modules (PL/Perl)
+  --with-perl[=TRUSTWORTHINESS]
+                          build Perl modules (PL/Perl)
   --with-python           build Python modules (PL/Python)
   --with-gssapi           build with GSSAPI support
   --with-krb-srvnam=NAME  default service principal name in Kerberos (GSSAPI)
@@ -8151,24 +8157,60 @@ if test "${with_tcl+set}" = set; then :
   withval=$with_tcl;
   case $withval in
     yes)
-      :
+
+  TCL_TRUSTED=yes
+  TCL_UNTRUSTED=yes
+
       ;;
     no)
       :
       ;;
     *)
-      as_fn_error $? "no argument expected for --with-tcl option" "$LINENO" 5
+      with_tcl=yes
+
+  if test "$withval" = trusted ; then
+    TCL_TRUSTED=yes
+    TCL_UNTRUSTED=no
+  elif test "$withval" = untrusted ; then
+    TCL_TRUSTED=no
+    TCL_UNTRUSTED=yes
+  else
+    as_fn_error $? "invalid --with-tcl value: argument must be omitted or specified as 'trusted' or 'untrusted'" "$LINENO" 5
+  fi
+
       ;;
   esac
 
 else
   with_tcl=no
-
 fi
 
 
+
+if test "$with_tcl" = yes; then
+
+  if test "$TCL_TRUSTED" = yes ; then
+
+$as_echo "#define USE_TCL 1" >>confdefs.h
+
+  fi
+  if test "$TCL_UNTRUSTED" = yes ; then
+
+$as_echo "#define USE_TCLU 1" >>confdefs.h
+
+  fi
+
+else
+
+  TCL_TRUSTED=no
+  TCL_UNTRUSTED=no
+
+fi
+
 { $as_echo "$as_me:${as_lineno-$LINENO}: result: $with_tcl" >&5
 $as_echo "$with_tcl" >&6; }
+
+
 
 
 # We see if the path to the Tcl/Tk configuration scripts is specified.
@@ -8209,24 +8251,60 @@ if test "${with_perl+set}" = set; then :
   withval=$with_perl;
   case $withval in
     yes)
-      :
+
+  PERL_TRUSTED=yes
+  PERL_UNTRUSTED=yes
+
       ;;
     no)
       :
       ;;
     *)
-      as_fn_error $? "no argument expected for --with-perl option" "$LINENO" 5
+      with_perl=yes
+
+  if test "$withval" = trusted ; then
+    PERL_TRUSTED=yes
+    PERL_UNTRUSTED=no
+  elif test "$withval" = untrusted ; then
+    PERL_TRUSTED=no
+    PERL_UNTRUSTED=yes
+  else
+    as_fn_error $? "invalid --with-perl value: argument must be omitted or specified as 'trusted' or 'untrusted'" "$LINENO" 5
+  fi
+
       ;;
   esac
 
 else
   with_perl=no
-
 fi
 
 
+
+if test "$with_perl" = yes; then
+
+  if test "$PERL_TRUSTED" = yes ; then
+
+$as_echo "#define USE_PERL 1" >>confdefs.h
+
+  fi
+  if test "$PERL_UNTRUSTED" = yes ; then
+
+$as_echo "#define USE_PERLU 1" >>confdefs.h
+
+  fi
+
+else
+
+  PERL_TRUSTED=no
+  PERL_UNTRUSTED=no
+
+fi
+
 { $as_echo "$as_me:${as_lineno-$LINENO}: result: $with_perl" >&5
 $as_echo "$with_perl" >&6; }
+
+
 
 
 #

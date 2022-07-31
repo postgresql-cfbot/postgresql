@@ -873,10 +873,31 @@ build-postgresql:
       </varlistentry>
 
       <varlistentry>
-       <term><option>--with-perl</option></term>
+       <term><option>--with-perl<optional>=<replaceable>TRUSTWORTHINESS</replaceable></optional></option></term>
        <listitem>
         <para>
          Build the <application>PL/Perl</application> server-side language.
+         <replaceable>TRUSTWORTHINESS</replaceable> is an optional argument and,
+         if provided, must be one of:
+        </para>
+        <itemizedlist>
+         <listitem>
+          <para>
+           <option>trusted</option> to build only trusted
+           <application>PL/Perl</application>
+          </para>
+         </listitem>
+         <listitem>
+          <para>
+           <option>untrusted</option> to build only untrusted
+           <application>PL/Perl</application>
+           (<application>PL/PerlU</application>)
+          </para>
+         </listitem>
+        </itemizedlist>
+        <para>
+         If <replaceable>TRUSTWORTHINESS</replaceable> is not specified, both
+         trusted and untrusted <application>PL/Perl</application> will be built.
         </para>
        </listitem>
       </varlistentry>
@@ -891,10 +912,31 @@ build-postgresql:
       </varlistentry>
 
       <varlistentry>
-       <term><option>--with-tcl</option></term>
+       <term><option>--with_tcl<optional>=<replaceable>TRUSTWORTHINESS</replaceable></optional></option></term>
        <listitem>
         <para>
          Build the <application>PL/Tcl</application> server-side language.
+         <replaceable>TRUSTWORTHINESS</replaceable> is an optional argument and,
+         if provided, must be one of:
+        </para>
+        <itemizedlist>
+         <listitem>
+          <para>
+           <option>trusted</option> to build only trusted
+           <application>PL/Tcl</application>
+          </para>
+         </listitem>
+         <listitem>
+          <para>
+           <option>untrusted</option> to build only untrusted
+           <application>PL/Tcl</application>
+           (<application>PL/TclU</application>)
+          </para>
+         </listitem>
+        </itemizedlist>
+        <para>
+         If <replaceable>TRUSTWORTHINESS</replaceable> is not specified, both
+         trusted and untrusted <application>PL/Tcl</application> will be built.
         </para>
        </listitem>
       </varlistentry>

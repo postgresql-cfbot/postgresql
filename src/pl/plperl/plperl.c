@@ -251,15 +251,20 @@ static void plperl_destroy_interp(PerlInterpreter **);
 static void plperl_fini(int code, Datum arg);
 static void set_interp_require(bool trusted);
 
-static Datum plperl_func_handler(PG_FUNCTION_ARGS);
-static Datum plperl_trigger_handler(PG_FUNCTION_ARGS);
-static void plperl_event_trigger_handler(PG_FUNCTION_ARGS);
+static Datum plperl_call_handler_internal(PG_FUNCTION_ARGS, bool trusted);
+static Datum plperl_inline_handler_internal(PG_FUNCTION_ARGS, bool trusted);
+static Datum plperl_validator_internal(PG_FUNCTION_ARGS, bool trusted);
+
+static Datum plperl_func_handler(PG_FUNCTION_ARGS, bool trusted);
+static Datum plperl_trigger_handler(PG_FUNCTION_ARGS, bool trusted);
+static void plperl_event_trigger_handler(PG_FUNCTION_ARGS, bool trusted);
 
 static void free_plperl_function(plperl_proc_desc *prodesc);
 
 static plperl_proc_desc *compile_plperl_function(Oid fn_oid,
 												 bool is_trigger,
-												 bool is_event_trigger);
+												 bool is_event_trigger,
+												 bool trusted);
 
 static SV  *plperl_hash_from_tuple(HeapTuple tuple, TupleDesc tupdesc, bool include_generated);
 static SV  *plperl_hash_from_datum(Datum attr);
@@ -439,6 +444,7 @@ _PG_init(void)
 	 * OK since the worst result would be an error.  Your code oughta pass
 	 * use_strict anyway ;-)
 	 */
+#ifdef USE_PERL
 	DefineCustomStringVariable("plperl.on_plperl_init",
 							   gettext_noop("Perl initialization code to execute once when plperl is first used."),
 							   NULL,
@@ -446,7 +452,9 @@ _PG_init(void)
 							   NULL,
 							   PGC_SUSET, 0,
 							   NULL, NULL, NULL);
+#endif  /* USE_PERL */
 
+#ifdef USE_PERLU
 	DefineCustomStringVariable("plperl.on_plperlu_init",
 							   gettext_noop("Perl initialization code to execute once when plperlu is first used."),
 							   NULL,
@@ -454,6 +462,7 @@ _PG_init(void)
 							   NULL,
 							   PGC_SUSET, 0,
 							   NULL, NULL, NULL);
+#endif  /* USE_PERLU */
 
 	MarkGUCPrefixReserved("plperl");
 
@@ -1824,18 +1833,11 @@ plperl_modify_tuple(HV *hvTD, TriggerData *tdata, HeapTuple otup)
 
 
 /*
- * There are three externally visible pieces to plperl: plperl_call_handler,
- * plperl_inline_handler, and plperl_validator.
- */
-
-/*
  * The call handler is called to run normal functions (including trigger
  * functions) that are defined in pg_proc.
  */
-PG_FUNCTION_INFO_V1(plperl_call_handler);
-
 Datum
-plperl_call_handler(PG_FUNCTION_ARGS)
+plperl_call_handler_internal(PG_FUNCTION_ARGS, bool trusted)
 {
 	Datum		retval = (Datum) 0;
 	plperl_call_data *volatile save_call_data = current_call_data;
@@ -1850,14 +1852,14 @@ plperl_call_handler(PG_FUNCTION_ARGS)
 	{
 		current_call_data = &this_call_data;
 		if (CALLED_AS_TRIGGER(fcinfo))
-			retval = PointerGetDatum(plperl_trigger_handler(fcinfo));
+			retval = PointerGetDatum(plperl_trigger_handler(fcinfo, trusted));
 		else if (CALLED_AS_EVENT_TRIGGER(fcinfo))
 		{
-			plperl_event_trigger_handler(fcinfo);
+			plperl_event_trigger_handler(fcinfo, trusted);
 			retval = (Datum) 0;
 		}
 		else
-			retval = plperl_func_handler(fcinfo);
+			retval = plperl_func_handler(fcinfo, trusted);
 	}
 	PG_FINALLY();
 	{
@@ -1874,10 +1876,8 @@ plperl_call_handler(PG_FUNCTION_ARGS)
 /*
  * The inline handler runs anonymous code blocks (DO blocks).
  */
-PG_FUNCTION_INFO_V1(plperl_inline_handler);
-
 Datum
-plperl_inline_handler(PG_FUNCTION_ARGS)
+plperl_inline_handler_internal(PG_FUNCTION_ARGS, bool trusted)
 {
 	LOCAL_FCINFO(fake_fcinfo, 0);
 	InlineCodeBlock *codeblock = (InlineCodeBlock *) PG_GETARG_POINTER(0);
@@ -1914,7 +1914,7 @@ plperl_inline_handler(PG_FUNCTION_ARGS)
 
 	desc.lang_oid = codeblock->langOid;
 	desc.trftypes = NIL;
-	desc.lanpltrusted = codeblock->langIsTrusted;
+	desc.lanpltrusted = trusted;
 
 	desc.fn_retistuple = false;
 	desc.fn_retisset = false;
@@ -1969,10 +1969,8 @@ plperl_inline_handler(PG_FUNCTION_ARGS)
  * being created/replaced. The precise behavior of the validator may be
  * modified by the check_function_bodies GUC.
  */
-PG_FUNCTION_INFO_V1(plperl_validator);
-
 Datum
-plperl_validator(PG_FUNCTION_ARGS)
+plperl_validator_internal(PG_FUNCTION_ARGS, bool trusted)
 {
 	Oid			funcoid = PG_GETARG_OID(0);
 	HeapTuple	tuple;
@@ -2031,7 +2029,8 @@ plperl_validator(PG_FUNCTION_ARGS)
 	/* Postpone body checks if !check_function_bodies */
 	if (check_function_bodies)
 	{
-		(void) compile_plperl_function(funcoid, is_trigger, is_event_trigger);
+		(void) compile_plperl_function(funcoid, is_trigger, is_event_trigger,
+									   trusted);
 	}
 
 	/* the result of a validator is ignored */
@@ -2040,19 +2039,50 @@ plperl_validator(PG_FUNCTION_ARGS)
 
 
 /*
+ * There are three externally visible pieces to plperl: plperl_call_handler,
+ * plperl_inline_handler, and plperl_validator.
+ */
+#ifdef USE_PERL
+
+PG_FUNCTION_INFO_V1(plperl_call_handler);
+
+Datum
+plperl_call_handler(PG_FUNCTION_ARGS)
+{
+	return plperl_call_handler_internal(fcinfo, true);
+}
+
+PG_FUNCTION_INFO_V1(plperl_inline_handler);
+
+Datum
+plperl_inline_handler(PG_FUNCTION_ARGS)
+{
+	return plperl_inline_handler_internal(fcinfo, true);
+}
+
+PG_FUNCTION_INFO_V1(plperl_validator);
+
+Datum
+plperl_validator(PG_FUNCTION_ARGS)
+{
+	return plperl_validator_internal(fcinfo, true);
+}
+
+#endif  /* USE_PERL */
+
+
+/*
  * plperlu likewise requires three externally visible functions:
  * plperlu_call_handler, plperlu_inline_handler, and plperlu_validator.
- * These are currently just aliases that send control to the plperl
- * handler functions, and we decide whether a particular function is
- * trusted or not by inspecting the actual pg_language tuple.
  */
+#ifdef USE_PERLU
 
 PG_FUNCTION_INFO_V1(plperlu_call_handler);
 
 Datum
 plperlu_call_handler(PG_FUNCTION_ARGS)
 {
-	return plperl_call_handler(fcinfo);
+	return plperl_call_handler_internal(fcinfo, false);
 }
 
 PG_FUNCTION_INFO_V1(plperlu_inline_handler);
@@ -2060,7 +2090,7 @@ PG_FUNCTION_INFO_V1(plperlu_inline_handler);
 Datum
 plperlu_inline_handler(PG_FUNCTION_ARGS)
 {
-	return plperl_inline_handler(fcinfo);
+	return plperl_inline_handler_internal(fcinfo, false);
 }
 
 PG_FUNCTION_INFO_V1(plperlu_validator);
@@ -2069,8 +2099,10 @@ Datum
 plperlu_validator(PG_FUNCTION_ARGS)
 {
 	/* call plperl validator with our fcinfo so it gets our oid */
-	return plperl_validator(fcinfo);
+	return plperl_validator_internal(fcinfo, false);
 }
+
+#endif  /* USE_PERLU */
 
 
 /*
@@ -2385,7 +2417,7 @@ plperl_call_perl_event_trigger_func(plperl_proc_desc *desc,
 }
 
 static Datum
-plperl_func_handler(PG_FUNCTION_ARGS)
+plperl_func_handler(PG_FUNCTION_ARGS, bool trusted)
 {
 	bool		nonatomic;
 	plperl_proc_desc *prodesc;
@@ -2401,7 +2433,7 @@ plperl_func_handler(PG_FUNCTION_ARGS)
 	if (SPI_connect_ext(nonatomic ? SPI_OPT_NONATOMIC : 0) != SPI_OK_CONNECT)
 		elog(ERROR, "could not connect to SPI manager");
 
-	prodesc = compile_plperl_function(fcinfo->flinfo->fn_oid, false, false);
+	prodesc = compile_plperl_function(fcinfo->flinfo->fn_oid, false, false, trusted);
 	current_call_data->prodesc = prodesc;
 	increment_prodesc_refcount(prodesc);
 
@@ -2504,7 +2536,7 @@ plperl_func_handler(PG_FUNCTION_ARGS)
 
 
 static Datum
-plperl_trigger_handler(PG_FUNCTION_ARGS)
+plperl_trigger_handler(PG_FUNCTION_ARGS, bool trusted)
 {
 	plperl_proc_desc *prodesc;
 	SV		   *perlret;
@@ -2525,7 +2557,7 @@ plperl_trigger_handler(PG_FUNCTION_ARGS)
 	Assert(rc >= 0);
 
 	/* Find or compile the function */
-	prodesc = compile_plperl_function(fcinfo->flinfo->fn_oid, true, false);
+	prodesc = compile_plperl_function(fcinfo->flinfo->fn_oid, true, false, trusted);
 	current_call_data->prodesc = prodesc;
 	increment_prodesc_refcount(prodesc);
 
@@ -2617,7 +2649,7 @@ plperl_trigger_handler(PG_FUNCTION_ARGS)
 
 
 static void
-plperl_event_trigger_handler(PG_FUNCTION_ARGS)
+plperl_event_trigger_handler(PG_FUNCTION_ARGS, bool trusted)
 {
 	plperl_proc_desc *prodesc;
 	SV		   *svTD;
@@ -2628,7 +2660,7 @@ plperl_event_trigger_handler(PG_FUNCTION_ARGS)
 		elog(ERROR, "could not connect to SPI manager");
 
 	/* Find or compile the function */
-	prodesc = compile_plperl_function(fcinfo->flinfo->fn_oid, false, true);
+	prodesc = compile_plperl_function(fcinfo->flinfo->fn_oid, false, true, trusted);
 	current_call_data->prodesc = prodesc;
 	increment_prodesc_refcount(prodesc);
 
@@ -2701,7 +2733,7 @@ free_plperl_function(plperl_proc_desc *prodesc)
 
 
 static plperl_proc_desc *
-compile_plperl_function(Oid fn_oid, bool is_trigger, bool is_event_trigger)
+compile_plperl_function(Oid fn_oid, bool is_trigger, bool is_event_trigger, bool trusted)
 {
 	HeapTuple	procTup;
 	Form_pg_proc procStruct;
@@ -2718,31 +2750,14 @@ compile_plperl_function(Oid fn_oid, bool is_trigger, bool is_event_trigger)
 		elog(ERROR, "cache lookup failed for function %u", fn_oid);
 	procStruct = (Form_pg_proc) GETSTRUCT(procTup);
 
-	/*
-	 * Try to find function in plperl_proc_hash.  The reason for this
-	 * overcomplicated-seeming lookup procedure is that we don't know whether
-	 * it's plperl or plperlu, and don't want to spend a lookup in pg_language
-	 * to find out.
-	 */
+	/* Try to find function in plperl_proc_hash. */
 	proc_key.proc_id = fn_oid;
 	proc_key.is_trigger = is_trigger;
-	proc_key.user_id = GetUserId();
+	proc_key.user_id = trusted ? GetUserId() : InvalidOid;
 	proc_ptr = hash_search(plperl_proc_hash, &proc_key,
 						   HASH_FIND, NULL);
 	if (validate_plperl_function(proc_ptr, procTup))
 	{
-		/* Found valid plperl entry */
-		ReleaseSysCache(procTup);
-		return proc_ptr->proc_ptr;
-	}
-
-	/* If not found or obsolete, maybe it's plperlu */
-	proc_key.user_id = InvalidOid;
-	proc_ptr = hash_search(plperl_proc_hash, &proc_key,
-						   HASH_FIND, NULL);
-	if (validate_plperl_function(proc_ptr, procTup))
-	{
-		/* Found valid plperlu entry */
 		ReleaseSysCache(procTup);
 		return proc_ptr->proc_ptr;
 	}
@@ -2796,6 +2811,7 @@ compile_plperl_function(Oid fn_oid, bool is_trigger, bool is_event_trigger)
 		prodesc->arg_out_func = (FmgrInfo *) palloc0(prodesc->nargs * sizeof(FmgrInfo));
 		prodesc->arg_is_rowtype = (bool *) palloc0(prodesc->nargs * sizeof(bool));
 		prodesc->arg_arraytype = (Oid *) palloc0(prodesc->nargs * sizeof(Oid));
+		prodesc->lanpltrusted = trusted;
 		MemoryContextSwitchTo(oldcontext);
 
 		/* Remember if function is STABLE/IMMUTABLE */
@@ -2819,7 +2835,6 @@ compile_plperl_function(Oid fn_oid, bool is_trigger, bool is_event_trigger)
 				 procStruct->prolang);
 		langStruct = (Form_pg_language) GETSTRUCT(langTup);
 		prodesc->lang_oid = langStruct->oid;
-		prodesc->lanpltrusted = langStruct->lanpltrusted;
 		ReleaseSysCache(langTup);
 
 		/************************************************************

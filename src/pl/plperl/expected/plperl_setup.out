@@ -1,18 +1,15 @@
 --
--- Install the plperl and plperlu extensions
+-- Install plperl
 --
 -- Before going ahead with the to-be-tested installations, verify that
--- a non-superuser is allowed to install plperl (but not plperlu) when
--- suitable permissions have been granted.
+-- a non-superuser is allowed to install plperl when suitable permissions
+-- have been granted.
 CREATE USER regress_user1;
 CREATE USER regress_user2;
 SET ROLE regress_user1;
 CREATE EXTENSION plperl;  -- fail
 ERROR:  permission denied to create extension "plperl"
 HINT:  Must have CREATE privilege on current database to create this extension.
-CREATE EXTENSION plperlu;  -- fail
-ERROR:  permission denied to create extension "plperlu"
-HINT:  Must be superuser to create this extension.
 RESET ROLE;
 DO $$
 begin
@@ -22,9 +19,6 @@ end;
 $$;
 SET ROLE regress_user1;
 CREATE EXTENSION plperl;
-CREATE EXTENSION plperlu;  -- fail
-ERROR:  permission denied to create extension "plperlu"
-HINT:  Must be superuser to create this extension.
 CREATE SCHEMA plperl_setup_scratch;
 SET search_path = plperl_setup_scratch;
 GRANT ALL ON SCHEMA plperl_setup_scratch TO regress_user2;
@@ -68,6 +62,5 @@ RESET ROLE;
 DROP OWNED BY regress_user1;
 DROP USER regress_user1;
 DROP USER regress_user2;
--- Now install the versions that will be used by subsequent test scripts.
+-- Now install the version that will be used by subsequent test scripts.
 CREATE EXTENSION plperl;
-CREATE EXTENSION plperlu;

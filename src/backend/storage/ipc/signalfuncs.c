@@ -303,3 +303,33 @@ pg_rotate_logfile_v2(PG_FUNCTION_ARGS)
 	SendPostmasterSignal(PMSIGNAL_ROTATE_LOGFILE);
 	PG_RETURN_BOOL(true);
 }
+
+/*
+ * pg_log_backtrace
+ *		Signal a backend or an auxiliary process to log its backtrace.
+ *
+ * By default, only superusers are allowed to signal to log the backtrace
+ * because allowing any user to issue this request at an unbounded
+ * rate would cause lots of log messages which can lead to denial of service.
+ * Additional roles can be permitted with GRANT.
+ *
+ * On receipt of this signal, a backend or an auxiliary process sets the flag
+ * in the signal handler, which causes the next CHECK_FOR_INTERRUPTS()
+ * or process-specific interrupt handler to log the backtrace.
+ */
+Datum
+pg_log_backtrace(PG_FUNCTION_ARGS)
+{
+	int			pid = PG_GETARG_INT32(0);
+	bool		result;
+
+#ifndef HAVE_BACKTRACE_SYMBOLS
+	ereport(WARNING,
+			errmsg("backtrace generation is not supported by this installation"),
+			errhint("You need to rebuild PostgreSQL using a library containing backtrace_symbols."));
+	PG_RETURN_BOOL(false);
+#endif
+
+	result = SendProcSignalBackendOrAuxproc(pid, PROCSIG_LOG_BACKTRACE);
+	PG_RETURN_BOOL(result);
+}

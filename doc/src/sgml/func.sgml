@@ -25470,6 +25470,30 @@ SELECT collation for ('foo' COLLATE "de_DE");
       <row>
        <entry role="func_table_entry"><para role="func_signature">
         <indexterm>
+         <primary>pg_log_backtrace</primary>
+        </indexterm>
+        <function>pg_log_backtrace</function> ( <parameter>pid</parameter> <type>integer</type> )
+        <returnvalue>boolean</returnvalue>
+       </para>
+       <para>
+        Requests to log the backtrace of the backend with the
+        specified process ID.  This function can send the request to
+        backends and auxiliary processes except the logger and statistics
+        collector.  The backtraces will be logged at <literal>LOG</literal>
+        message level. They will appear in the server log based on the log
+        configuration set (See <xref linkend="runtime-config-logging"/> for
+        more information), but will not be sent to the client regardless of
+        <xref linkend="guc-client-min-messages"/>. A backtrace identifies
+        which function a process is currently executing and it may be useful
+        for developers to diagnose stuck processes and other problems. This
+        function is supported only if PostgreSQL was built with the ability to
+        capture backtraces, otherwise it will emit a warning.
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
          <primary>pg_identify_object</primary>
         </indexterm>
         <function>pg_identify_object</function> ( <parameter>classid</parameter> <type>oid</type>, <parameter>objid</parameter> <type>oid</type>, <parameter>objsubid</parameter> <type>integer</type> )
@@ -26700,6 +26724,44 @@ LOG:  Grand total: 1651920 bytes in 201 blocks; 622360 free (88 chunks); 1029560
     100 child contexts are logged, along with a summary of the remaining contexts.
     Note that frequent calls to this function could incur significant overhead,
     because it may generate a large number of log messages.
+   </para>
+
+   <para>
+    <function>pg_log_backtrace</function> can be used to log the backtrace of
+    a backend process. For example:
+<programlisting>
+postgres=# select pg_log_backtrace(pg_backend_pid());
+ pg_log_backtrace
+------------------
+ t
+(1 row)
+</programlisting>
+The backtrace will be logged as specified by the logging configuration.
+For example:
+<screen>
+2021-01-27 11:33:50.247 IST [111735] LOG:  current backtrace:
+        postgres: postgresdba postgres [local] SELECT(set_backtrace+0x38) [0xae06c5]
+        postgres: postgresdba postgres [local] SELECT(ProcessInterrupts+0x788) [0x950c34]
+        postgres: postgresdba postgres [local] SELECT() [0x761e89]
+        postgres: postgresdba postgres [local] SELECT() [0x71bbda]
+        postgres: postgresdba postgres [local] SELECT() [0x71e380]
+        postgres: postgresdba postgres [local] SELECT(standard_ExecutorRun+0x1d6) [0x71c1fe]
+        postgres: postgresdba postgres [local] SELECT(ExecutorRun+0x55) [0x71c026]
+        postgres: postgresdba postgres [local] SELECT() [0x953fc5]
+        postgres: postgresdba postgres [local] SELECT(PortalRun+0x262) [0x953c7e]
+        postgres: postgresdba postgres [local] SELECT() [0x94db78]
+        postgres: postgresdba postgres [local] SELECT(PostgresMain+0x7d7) [0x951e72]
+        postgres: postgresdba postgres [local] SELECT() [0x896b2f]
+        postgres: postgresdba postgres [local] SELECT() [0x8964b5]
+        postgres: postgresdba postgres [local] SELECT() [0x892a79]
+        postgres: postgresdba postgres [local] SELECT(PostmasterMain+0x116b) [0x892350]
+        postgres: postgresdba postgres [local] SELECT() [0x795f72]
+        /lib64/libc.so.6(__libc_start_main+0xf5) [0x7f2107bbd505]
+        postgres: postgresdba postgres [local] SELECT() [0x4842a9]
+</screen>
+    You can obtain the file name and line number from the logged details by using
+    gdb/addr2line in linux platforms (users must ensure gdb/addr2line is
+    already installed).
    </para>
 
   </sect2>

@@ -471,4 +471,6 @@ extern void set_syslog_parameters(const char *ident, int facility);
  */
 extern void write_stderr(const char *fmt,...) pg_attribute_printf(1, 2);
 
+extern pg_noinline char *set_backtrace(int num_skip);
+
 #endif							/* ELOG_H */

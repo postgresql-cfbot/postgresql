@@ -835,6 +835,10 @@ HandleAutoVacLauncherInterrupts(void)
 	if (LogMemoryContextPending)
 		ProcessLogMemoryContextInterrupt();
 
+	/* Perform logging of backtrace of this process */
+	if (LogBacktracePending)
+		ProcessLogBacktraceInterrupt();
+
 	/* Process sinval catchup interrupts that happened while sleeping */
 	ProcessCatchupInterrupt();
 }

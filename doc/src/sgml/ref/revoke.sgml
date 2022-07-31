@@ -125,7 +125,7 @@ REVOKE [ GRANT OPTION FOR ]
     [ GRANTED BY <replaceable class="parameter">role_specification</replaceable> ]
     [ CASCADE | RESTRICT ]
 
-REVOKE [ ADMIN OPTION FOR ]
+REVOKE [ { ADMIN | INHERIT } OPTION FOR ]
     <replaceable class="parameter">role_name</replaceable> [, ...] FROM <replaceable class="parameter">role_specification</replaceable> [, ...]
     [ GRANTED BY <replaceable class="parameter">role_specification</replaceable> ]
     [ CASCADE | RESTRICT ]
@@ -198,6 +198,9 @@ REVOKE [ ADMIN OPTION FOR ]
   <para>
    When revoking membership in a role, <literal>GRANT OPTION</literal> is instead
    called <literal>ADMIN OPTION</literal>, but the behavior is similar.
+   It is also possible to revoke the <literal>INHERIT OPTION</literal>,
+   which is equivalent to setting the value of that option to
+   <literal>FALSE</literal>.
    This form of the command also allows a <literal>GRANTED BY</literal>
    option, but that option is currently ignored (except for checking
    the existence of the named role).

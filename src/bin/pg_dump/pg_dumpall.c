@@ -924,13 +924,21 @@ static void
 dumpRoleMembership(PGconn *conn)
 {
 	PQExpBuffer buf = createPQExpBuffer();
+	PQExpBuffer	optbuf = createPQExpBuffer();
 	PGresult   *res;
 	int			i;
+	bool		server_has_inherit_option;
+	int			i_inherit_option;
+	int			i_grantor;
+
+	server_has_inherit_option = (server_version >= 160000);
 
 	printfPQExpBuffer(buf, "SELECT ur.rolname AS roleid, "
 					  "um.rolname AS member, "
-					  "a.admin_option, "
-					  "ug.rolname AS grantor "
+					  "a.admin_option");
+	if (server_has_inherit_option)
+		appendPQExpBuffer(buf, ", a.inherit_option");
+	appendPQExpBuffer(buf, ", ug.rolname AS grantor "
 					  "FROM pg_auth_members a "
 					  "LEFT JOIN %s ur on ur.oid = a.roleid "
 					  "LEFT JOIN %s um on um.oid = a.member "
@@ -938,6 +946,8 @@ dumpRoleMembership(PGconn *conn)
 					  "WHERE NOT (ur.rolname ~ '^pg_' AND um.rolname ~ '^pg_')"
 					  "ORDER BY 1,2,3", role_catalog, role_catalog, role_catalog);
 	res = executeQuery(conn, buf->data);
+	i_inherit_option = PQfnumber(res, "inherit_option");
+	i_grantor = PQfnumber(res, "grantor");
 
 	if (PQntuples(res) > 0)
 		fprintf(OPF, "--\n-- Role memberships\n--\n\n");
@@ -946,20 +956,33 @@ dumpRoleMembership(PGconn *conn)
 	{
 		char	   *roleid = PQgetvalue(res, i, 0);
 		char	   *member = PQgetvalue(res, i, 1);
-		char	   *option = PQgetvalue(res, i, 2);
+		char	   *admin_option = PQgetvalue(res, i, 2);
+
+		resetPQExpBuffer(optbuf);
 
 		fprintf(OPF, "GRANT %s", fmtId(roleid));
 		fprintf(OPF, " TO %s", fmtId(member));
-		if (*option == 't')
-			fprintf(OPF, " WITH ADMIN OPTION");
+
+		if (*admin_option == 't')
+			appendPQExpBuffer(optbuf, "ADMIN OPTION");
+		if (server_has_inherit_option)
+		{
+			char *inherit_option = PQgetvalue(res, i, i_inherit_option);
+
+			appendPQExpBuffer(optbuf, "%sINHERIT %s",
+							  optbuf->len > 0 ? ", " : "",
+							  *inherit_option == 't' ? "TRUE" : "FALSE");
+		}
+		if (optbuf->data[0] != '\0')
+			fprintf(OPF, " WITH %s", optbuf->data);
 
 		/*
 		 * We don't track the grantor very carefully in the backend, so cope
 		 * with the possibility that it has been dropped.
 		 */
-		if (!PQgetisnull(res, i, 3))
+		if (!PQgetisnull(res, i, i_grantor))
 		{
-			char	   *grantor = PQgetvalue(res, i, 3);
+			char	   *grantor = PQgetvalue(res, i, i_grantor);
 
 			fprintf(OPF, " GRANTED BY %s", fmtId(grantor));
 		}

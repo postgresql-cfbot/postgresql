@@ -66,7 +66,7 @@ typedef struct
  */
 enum RoleRecurseType
 {
-	ROLERECURSE_PRIVS = 0,		/* recurse if rolinherit */
+	ROLERECURSE_PRIVS = 0,		/* recurse through inheritable grants */
 	ROLERECURSE_MEMBERS = 1		/* recurse unconditionally */
 };
 static Oid	cached_role[] = {InvalidOid, InvalidOid};
@@ -4735,8 +4735,8 @@ initialize_acl(void)
 
 		/*
 		 * In normal mode, set a callback on any syscache invalidation of rows
-		 * of pg_auth_members (for roles_is_member_of()), pg_authid (for
-		 * has_rolinherit()), or pg_database (for roles_is_member_of())
+		 * of pg_auth_members (for roles_is_member_of()) pg_database (for
+		 * roles_is_member_of())
 		 */
 		CacheRegisterSyscacheCallback(AUTHMEMROLEMEM,
 									  RoleMembershipCacheCallback,
@@ -4769,29 +4769,11 @@ RoleMembershipCacheCallback(Datum arg, int cacheid, uint32 hashvalue)
 	cached_role[ROLERECURSE_MEMBERS] = InvalidOid;
 }
 
-
-/* Check if specified role has rolinherit set */
-static bool
-has_rolinherit(Oid roleid)
-{
-	bool		result = false;
-	HeapTuple	utup;
-
-	utup = SearchSysCache1(AUTHOID, ObjectIdGetDatum(roleid));
-	if (HeapTupleIsValid(utup))
-	{
-		result = ((Form_pg_authid) GETSTRUCT(utup))->rolinherit;
-		ReleaseSysCache(utup);
-	}
-	return result;
-}
-
-
 /*
  * Get a list of roles that the specified roleid is a member of
  *
- * Type ROLERECURSE_PRIVS recurses only through roles that have rolinherit
- * set, while ROLERECURSE_MEMBERS recurses through all roles.  This sets
+ * Type ROLERECURSE_PRIVS recurses only through inheritable grants,
+ * while ROLERECURSE_MEMBERS recurses through all grants.  This sets
  * *is_admin==true if and only if role "roleid" has an ADMIN OPTION membership
  * in role "admin_of".
  *
@@ -4856,23 +4838,32 @@ roles_is_member_of(Oid roleid, enum RoleRecurseType type,
 		CatCList   *memlist;
 		int			i;
 
-		if (type == ROLERECURSE_PRIVS && !has_rolinherit(memberid))
-			continue;			/* ignore non-inheriting roles */
-
 		/* Find roles that memberid is directly a member of */
 		memlist = SearchSysCacheList1(AUTHMEMMEMROLE,
 									  ObjectIdGetDatum(memberid));
 		for (i = 0; i < memlist->n_members; i++)
 		{
 			HeapTuple	tup = &memlist->members[i]->tuple;
-			Oid			otherid = ((Form_pg_auth_members) GETSTRUCT(tup))->roleid;
+			Form_pg_auth_members form = (Form_pg_auth_members) GETSTRUCT(tup);
+			Oid			otherid = form->roleid;
+
+			/*
+			 * If we're supposed to ignore non-heritable grants, do so.
+			 *
+			 * Any given GRANT might be WITH INHERIT FALSE, in which case it
+			 * is not inherited regardless of anything else, or it might be
+			 * WITH INHERIT TRUE, in which case it definitely is inherited,
+			 * or it might be WITH INHERIT DEFAULT, in which case it depends
+			 * on whether the role is INHERIT or NOINHERIT.
+			 */
+			if (type == ROLERECURSE_PRIVS && !form->inherit_option)
+				continue;
 
 			/*
 			 * While otherid==InvalidOid shouldn't appear in the catalog, the
 			 * OidIsValid() avoids crashing if that arises.
 			 */
-			if (otherid == admin_of &&
-				((Form_pg_auth_members) GETSTRUCT(tup))->admin_option &&
+			if (otherid == admin_of && form->admin_option &&
 				OidIsValid(admin_of))
 				*is_admin = true;
 
@@ -4915,8 +4906,8 @@ roles_is_member_of(Oid roleid, enum RoleRecurseType type,
 /*
  * Does member have the privileges of role (directly or indirectly)?
  *
- * This is defined not to recurse through roles that don't have rolinherit
- * set; for such roles, membership implies the ability to do SET ROLE, but
+ * This is defined not to recurse through grants that are not inherited;
+ * in such cases, membership implies the ability to do SET ROLE, but
  * the privileges are not available until you've done so.
  */
 bool
@@ -4943,7 +4934,7 @@ has_privs_of_role(Oid member, Oid role)
 /*
  * Is member a member of role (directly or indirectly)?
  *
- * This is defined to recurse through roles regardless of rolinherit.
+ * This is defined to recurse through grants whether they are inherited or not.
  *
  * Do not use this for privilege checking, instead use has_privs_of_role()
  */

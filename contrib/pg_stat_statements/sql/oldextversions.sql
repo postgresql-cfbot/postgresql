@@ -38,10 +38,15 @@ SELECT pg_get_functiondef('pg_stat_statements_reset'::regproc);
 
 -- New function pg_stat_statement_info, and new function
 -- and view for pg_stat_statements introduced in 1.9
-AlTER EXTENSION pg_stat_statements UPDATE TO '1.9';
+ALTER EXTENSION pg_stat_statements UPDATE TO '1.9';
 SELECT pg_get_functiondef('pg_stat_statements_info'::regproc);
 \d pg_stat_statements
 SELECT count(*) > 0 AS has_data FROM pg_stat_statements;
+\d pg_stat_statements_info
+SELECT pg_get_functiondef('pg_stat_statements_reset'::regproc);
+SET SESSION AUTHORIZATION pg_read_all_stats;
+SELECT pg_stat_statements_reset();
+RESET SESSION AUTHORIZATION;
 
 -- New functions and views for pg_stat_statements in 1.10
 AlTER EXTENSION pg_stat_statements UPDATE TO '1.10';

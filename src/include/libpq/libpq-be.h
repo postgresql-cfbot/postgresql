@@ -147,6 +147,12 @@ typedef struct Port
 	List	   *guc_options;
 
 	/*
+	 * The username to use during authentication, if different from user_name,
+	 * or else NULL. Currently only supported for the LDAP auth method.
+	 */
+	const char *auth_user;
+
+	/*
 	 * The startup packet application name, only used here for the "connection
 	 * authorized" log message. We shouldn't use this post-startup, instead
 	 * the GUC should be used as application can change it afterward.

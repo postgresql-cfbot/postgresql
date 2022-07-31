@@ -216,6 +216,77 @@ test_access(
 		qr/connection authenticated: identity="uid=test1,dc=example,dc=net" method=ldap/
 	],);
 
+note "ident mapping";
+
+unlink($node->data_dir . '/pg_hba.conf');
+$node->append_conf('pg_hba.conf',
+	qq{local all all ldap ldapserver=$ldap_server ldapport=$ldap_port ldapprefix="uid=" ldapsuffix=",dc=example,dc=net" map=mymap}
+);
+$node->restart;
+
+$ENV{"PGPASSWORD"} = 'secret1';
+test_access(
+	$node, 'test1', 2,
+	'fails without mapping',
+	log_like => [
+		qr/connection authenticated: identity="uid=test1,dc=example,dc=net" method=ldap/,
+		qr/no match in usermap "mymap" for user "test1"/,
+	]);
+
+$node->append_conf('pg_ident.conf', qq{mymap  /^  test1});
+$node->restart;
+
+test_access(
+	$node, 'test1', 0,
+	'succeeds with mapping',
+	log_like => [
+		qr/connection authenticated: identity="uid=test1,dc=example,dc=net" method=ldap/,
+	]);
+
+$ENV{"PGPASSWORD"} = 'secret2';
+test_access(
+	$node, 'test2', 2,
+	'fails with unmapped role',
+	log_like => [
+		qr/connection authenticated: identity="uid=test2,dc=example,dc=net" method=ldap/,
+		qr/no match in usermap "mymap" for user "test2" authenticated as "test2"/,
+	]);
+
+$ENV{"PGAUTHUSER"} = 'test2';
+test_access(
+	$node, 'test1', 0,
+	'succeeds with different PGAUTHUSER',
+	log_like => [
+		qr/connection authenticated: identity="uid=test2,dc=example,dc=net" method=ldap/,
+		qr/connection authorized: user=test1/,
+	]);
+delete $ENV{"PGAUTHUSER"};
+
+unlink($node->data_dir . '/pg_hba.conf');
+$node->append_conf('pg_hba.conf',
+	qq{local all all ldap ldapserver=$ldap_server ldapport=$ldap_port ldapprefix="uid=" ldapsuffix=",dc=example,dc=net" map=mymap ldap_map_dn=1}
+);
+unlink($node->data_dir . '/pg_ident.conf');
+$node->append_conf('pg_ident.conf', qq{mymap  "/,dc=example,dc=net\$"  test1});
+$node->restart;
+
+$ENV{"PGPASSWORD"} = 'secret1';
+test_access(
+	$node, 'test1', 0,
+	'succeeds with full DN mapping',
+	log_like => [
+		qr/connection authenticated: identity="uid=test1,dc=example,dc=net" method=ldap/,
+	]);
+
+$ENV{"PGPASSWORD"} = 'secret2';
+test_access(
+	$node, 'test2', 2,
+	'fails with unmapped role for full DN mapping',
+	log_like => [
+		qr/connection authenticated: identity="uid=test2,dc=example,dc=net" method=ldap/,
+		qr/no match in usermap "mymap" for user "test2" authenticated as "uid=test2,dc=example,dc=net"/,
+	]);
+
 note "search+bind";
 
 unlink($node->data_dir . '/pg_hba.conf');
@@ -236,6 +307,78 @@ test_access(
 	log_like => [
 		qr/connection authenticated: identity="uid=test1,dc=example,dc=net" method=ldap/
 	],);
+
+note "search+bind ident mapping";
+
+unlink($node->data_dir . '/pg_ident.conf');
+unlink($node->data_dir . '/pg_hba.conf');
+$node->append_conf('pg_hba.conf',
+	qq{local all all ldap ldapserver=$ldap_server ldapport=$ldap_port ldapbasedn="$ldap_basedn" map=mymap}
+);
+$node->restart;
+
+$ENV{"PGPASSWORD"} = 'secret1';
+test_access(
+	$node, 'test1', 2,
+	'fails without mapping',
+	log_like => [
+		qr/connection authenticated: identity="uid=test1,dc=example,dc=net" method=ldap/,
+		qr/no match in usermap "mymap" for user "test1" authenticated as "test1"/,
+	]);
+
+$node->append_conf('pg_ident.conf', qq{mymap  /^  test1});
+$node->restart;
+
+test_access(
+	$node, 'test1', 0,
+	'succeeds with mapping',
+	log_like => [
+		qr/connection authenticated: identity="uid=test1,dc=example,dc=net" method=ldap/,
+	]);
+
+$ENV{"PGPASSWORD"} = 'secret2';
+test_access(
+	$node, 'test2', 2,
+	'fails with unmapped role',
+	log_like => [
+		qr/connection authenticated: identity="uid=test2,dc=example,dc=net" method=ldap/,
+		qr/no match in usermap "mymap" for user "test2" authenticated as "test2"/,
+	]);
+
+$ENV{"PGAUTHUSER"} = 'test2';
+test_access(
+	$node, 'test1', 0,
+	'succeeds with different PGAUTHUSER',
+	log_like => [
+		qr/connection authenticated: identity="uid=test2,dc=example,dc=net" method=ldap/,
+		qr/connection authorized: user=test1/,
+	]);
+delete $ENV{"PGAUTHUSER"};
+
+unlink($node->data_dir . '/pg_hba.conf');
+$node->append_conf('pg_hba.conf',
+	qq{local all all ldap ldapserver=$ldap_server ldapport=$ldap_port ldapbasedn="$ldap_basedn" map=mymap ldap_map_dn=1}
+);
+unlink($node->data_dir . '/pg_ident.conf');
+$node->append_conf('pg_ident.conf', qq{mymap  "/,dc=example,dc=net\$"  test1});
+$node->restart;
+
+$ENV{"PGPASSWORD"} = 'secret1';
+test_access(
+	$node, 'test1', 0,
+	'succeeds with full DN mapping',
+	log_like => [
+		qr/connection authenticated: identity="uid=test1,dc=example,dc=net" method=ldap/,
+	]);
+
+$ENV{"PGPASSWORD"} = 'secret2';
+test_access(
+	$node, 'test2', 2,
+	'fails with unmapped role for full DN mapping',
+	log_like => [
+		qr/connection authenticated: identity="uid=test2,dc=example,dc=net" method=ldap/,
+		qr/no match in usermap "mymap" for user "test2" authenticated as "uid=test2,dc=example,dc=net"/,
+	]);
 
 note "multiple servers";
 

@@ -1636,10 +1636,11 @@ omicron         bryanh                  guest1
     This authentication method operates similarly to
     <literal>password</literal> except that it uses LDAP
     as the password verification method. LDAP is used only to validate
-    the user name/password pairs. Therefore the user must already
-    exist in the database before LDAP can be used for
-    authentication.
-   </para>
+    the user name/password pairs. Therefore database users must already
+    exist in the database before LDAP can be used for authentication. User name
+    mapping can be used to allow the LDAP user name to be different from the
+    database user name.
+</para>
 
    <para>
     LDAP authentication can operate in two modes. In the first mode,
@@ -1713,6 +1714,42 @@ omicron         bryanh                  guest1
         operation per <ulink url="https://tools.ietf.org/html/rfc4513">RFC 4513</ulink>.
         See also the <literal>ldapscheme</literal> option for an alternative.
        </para>
+      </listitem>
+     </varlistentry>
+     <varlistentry>
+      <term><literal>map</literal></term>
+      <listitem>
+       <para>
+        Allows for mapping between LDAP and database user names. See
+        <xref linkend="auth-username-maps"/> for details.
+       </para>
+      </listitem>
+     </varlistentry>
+     <varlistentry>
+      <term><literal>ldap_map_dn</literal></term>
+      <listitem>
+       <para>
+        Set to 1 to use the user's full Distinguished Name (e.g.
+        <literal>uid=someuser,dc=example,dc=com</literal>) during user name
+        mapping. When set to 0 (the default), only the bare username (in this
+        example, <literal>someuser</literal>) will be mapped. This option may
+        only be used in conjunction with the <literal>map</literal> option.
+       </para>
+       <note>
+        <para>
+         When using regular expression matching in combination with this option,
+         care should be taken to correctly anchor the regular expression in
+         order to avoid false positives. For example, the anchored expression
+         <literal>/,dc=example,dc=com$</literal> will match only DNs underneath
+         the <literal>example.com</literal> subtree, whereas the unanchored
+         <literal>/dc=example,dc=com</literal> could match
+         <literal>uid=mal,dc=example,dc=community,dc=invalid</literal>
+         or any number of DNs that are not rooted at
+         <literal>example.com</literal>. (Whether these DNs exist in the LDAP
+         tree to be abused is dependent on the LDAP deployment and outside the
+         scope of this documentation.)
+        </para>
+       </note>
       </listitem>
      </varlistentry>
     </variablelist>

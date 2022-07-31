@@ -106,6 +106,7 @@ typedef struct HbaLine
 	int			ldapscope;
 	char	   *ldapprefix;
 	char	   *ldapsuffix;
+	bool		ldap_map_dn;
 	ClientCertMode clientcert;
 	ClientCertName clientcertname;
 	char	   *krb_realm;

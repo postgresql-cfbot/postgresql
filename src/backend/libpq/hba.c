@@ -1565,6 +1565,24 @@ parse_hba_line(TokenizedAuthLine *tok_line, int elevel)
 			*err_msg = "cannot use ldapsearchattribute together with ldapsearchfilter";
 			return NULL;
 		}
+
+		/*
+		 * Setting ldap_map_dn=1 tells the server to use the full DN when
+		 * mapping users, but it doesn't do anything if there's no usermap
+		 * defined. To prevent confusion, don't allow this to be set without a
+		 * map.
+		 */
+		if (parsedline->ldap_map_dn
+			&& !(parsedline->usermap && parsedline->usermap[0]))
+		{
+			ereport(elevel,
+					(errcode(ERRCODE_CONFIG_FILE_ERROR),
+					 errmsg("authentication option \"ldap_map_dn\" requires argument \"map\" to be set"),
+					 errcontext("line %d of configuration file \"%s\"",
+								line_num, HbaFileName)));
+			*err_msg = "authentication option \"ldap_map_dn\" requires argument \"map\" to be set";
+			return NULL;
+		}
 	}
 
 	if (parsedline->auth_method == uaRADIUS)
@@ -1686,8 +1704,9 @@ parse_hba_auth_opt(char *name, char *val, HbaLine *hbaline,
 			hbaline->auth_method != uaPeer &&
 			hbaline->auth_method != uaGSS &&
 			hbaline->auth_method != uaSSPI &&
+			hbaline->auth_method != uaLDAP &&
 			hbaline->auth_method != uaCert)
-			INVALID_AUTH_OPTION("map", gettext_noop("ident, peer, gssapi, sspi, and cert"));
+			INVALID_AUTH_OPTION("map", gettext_noop("ident, peer, gssapi, sspi, ldap, and cert"));
 		hbaline->usermap = pstrdup(val);
 	}
 	else if (strcmp(name, "clientcert") == 0)
@@ -1902,6 +1921,14 @@ parse_hba_auth_opt(char *name, char *val, HbaLine *hbaline,
 	{
 		REQUIRE_AUTH_OPTION(uaLDAP, "ldapsuffix", "ldap");
 		hbaline->ldapsuffix = pstrdup(val);
+	}
+	else if (strcmp(name, "ldap_map_dn") == 0)
+	{
+		REQUIRE_AUTH_OPTION(uaLDAP, "ldap_map_dn", "ldap");
+		if (strcmp(val, "1") == 0)
+			hbaline->ldap_map_dn = true;
+		else
+			hbaline->ldap_map_dn = false;
 	}
 	else if (strcmp(name, "krb_realm") == 0)
 	{

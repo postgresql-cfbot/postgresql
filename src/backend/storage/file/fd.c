@@ -76,6 +76,7 @@
 #include <sys/file.h>
 #include <sys/param.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #ifndef WIN32
 #include <sys/mman.h>
@@ -90,6 +91,7 @@
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "catalog/pg_tablespace.h"
+#include "common/int.h"
 #include "common/file_perm.h"
 #include "common/file_utils.h"
 #include "common/pg_prng.h"
@@ -97,6 +99,7 @@
 #include "pgstat.h"
 #include "port/pg_iovec.h"
 #include "portability/mem.h"
+#include "postmaster/custodian.h"
 #include "postmaster/startup.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
@@ -111,6 +114,8 @@
 #elif defined(USE_POSIX_FADVISE) && defined(POSIX_FADV_DONTNEED)
 #define PG_FLUSH_DATA_WORKS 1
 #endif
+
+#define PG_TEMP_TO_REMOVE_DIR (PG_TEMP_FILES_DIR "_staged_for_removal")
 
 /*
  * We must leave some file descriptors free for system(), the dynamic loader,
@@ -338,6 +343,8 @@ static void BeforeShmemExit_Files(int code, Datum arg);
 static void CleanupTempFiles(bool isCommit, bool isProcExit);
 static void RemovePgTempRelationFiles(const char *tsdirname);
 static void RemovePgTempRelationFilesInDbspace(const char *dbspacedirname);
+static void StagePgTempDirForRemoval(const char *tmp_dir);
+static void RemoveStagedPgTempDirs(const char *spc_dir);
 
 static void walkdir(const char *path,
 					void (*action) (const char *fname, bool isdir, int elevel),
@@ -1573,9 +1580,9 @@ PathNameOpenFilePerm(const char *fileName, int fileFlags, mode_t fileMode)
  *
  * Directories created within the top-level temporary directory should begin
  * with PG_TEMP_FILE_PREFIX, so that they can be identified as temporary and
- * deleted at startup by RemovePgTempFiles().  Further subdirectories below
- * that do not need any particular prefix.
-*/
+ * deleted by RemovePgTempFiles().  Further subdirectories below that do not
+ * need any particular prefix.
+ */
 void
 PathNameCreateTemporaryDir(const char *basedir, const char *directory)
 {
@@ -1773,9 +1780,9 @@ OpenTemporaryFileInTablespace(Oid tblspcOid, bool rejectError)
  *
  * If the file is inside the top-level temporary directory, its name should
  * begin with PG_TEMP_FILE_PREFIX so that it can be identified as temporary
- * and deleted at startup by RemovePgTempFiles().  Alternatively, it can be
- * inside a directory created with PathNameCreateTemporaryDir(), in which case
- * the prefix isn't needed.
+ * and deleted by RemovePgTempFiles().  Alternatively, it can be inside a
+ * directory created with PathNameCreateTemporaryDir(), in which case the prefix
+ * isn't needed.
  */
 File
 PathNameCreateTemporaryFile(const char *path, bool error_on_failure)
@@ -3065,26 +3072,63 @@ CleanupTempFiles(bool isCommit, bool isProcExit)
 		FreeDesc(&allocatedDescs[0]);
 }
 
+/*
+ * Stage temporary files left over from a prior postmaster session for removal.
+ *
+ * This function also removes any leftover temporary relation files.  Unlike
+ * temporary files stored in pgsql_tmp directories, temporary relation files do
+ * not live in their own directory, so there isn't a tremendously beneficial way
+ * to stage them for removal at a later time.
+ *
+ * RemovePgTempFiles() should be called at some point after this function in
+ * order to remove the staged temporary directories.
+ *
+ * In EXEC_BACKEND case there is a pgsql_tmp directory at the top level of
+ * DataDir as well.  However, that is *not* cleaned here because doing so would
+ * create a race condition.  It's done separately, earlier in postmaster
+ * startup.
+ */
+void
+StagePgTempFilesForRemoval(void)
+{
+	char		temp_path[MAXPGPATH + 10 + sizeof(TABLESPACE_VERSION_DIRECTORY) + sizeof(PG_TEMP_FILES_DIR)];
+	DIR		   *spc_dir;
+	struct dirent *spc_de;
+
+	/*
+	 * First process temp files in pg_default ($PGDATA/base)
+	 */
+	snprintf(temp_path, sizeof(temp_path), "base/%s", PG_TEMP_FILES_DIR);
+	StagePgTempDirForRemoval(temp_path);
+
+	RemovePgTempRelationFiles("base");
+
+	/*
+	 * Cycle through temp directories for all non-default tablespaces.
+	 */
+	spc_dir = AllocateDir("pg_tblspc");
+
+	while ((spc_de = ReadDir(spc_dir, "pg_tblspc")) != NULL)
+	{
+		if (strcmp(spc_de->d_name, ".") == 0 ||
+			strcmp(spc_de->d_name, "..") == 0)
+			continue;
+
+		snprintf(temp_path, sizeof(temp_path), "pg_tblspc/%s/%s/%s",
+				 spc_de->d_name, TABLESPACE_VERSION_DIRECTORY, PG_TEMP_FILES_DIR);
+		StagePgTempDirForRemoval(temp_path);
+
+		snprintf(temp_path, sizeof(temp_path), "pg_tblspc/%s/%s",
+				 spc_de->d_name, TABLESPACE_VERSION_DIRECTORY);
+		RemovePgTempRelationFiles(temp_path);
+	}
+
+	FreeDir(spc_dir);
+}
 
 /*
- * Remove temporary and temporary relation files left over from a prior
- * postmaster session
- *
- * This should be called during postmaster startup.  It will forcibly
- * remove any leftover files created by OpenTemporaryFile and any leftover
- * temporary relation files created by mdcreate.
- *
- * During post-backend-crash restart cycle, this routine is called when
- * remove_temp_files_after_crash GUC is enabled. Multiple crashes while
- * queries are using temp files could result in useless storage usage that can
- * only be reclaimed by a service restart. The argument against enabling it is
- * that someone might want to examine the temporary files for debugging
- * purposes. This does however mean that OpenTemporaryFile had better allow for
- * collision with an existing temp file name.
- *
- * NOTE: this function and its subroutines generally report syscall failures
- * with ereport(LOG) and keep going.  Removing temp files is not so critical
- * that we should fail to start the database when we can't do it.
+ * Remove temporary files that have been previously staged for removal by
+ * StagePgTempFilesForRemoval().
  */
 void
 RemovePgTempFiles(void)
@@ -3096,46 +3140,144 @@ RemovePgTempFiles(void)
 	/*
 	 * First process temp files in pg_default ($PGDATA/base)
 	 */
-	snprintf(temp_path, sizeof(temp_path), "base/%s", PG_TEMP_FILES_DIR);
-	RemovePgTempFilesInDir(temp_path, true, false);
-	RemovePgTempRelationFiles("base");
+	RemoveStagedPgTempDirs("base");
 
 	/*
 	 * Cycle through temp directories for all non-default tablespaces.
 	 */
 	spc_dir = AllocateDir("pg_tblspc");
 
-	while ((spc_de = ReadDirExtended(spc_dir, "pg_tblspc", LOG)) != NULL)
+	while ((spc_de = ReadDir(spc_dir, "pg_tblspc")) != NULL)
 	{
 		if (strcmp(spc_de->d_name, ".") == 0 ||
 			strcmp(spc_de->d_name, "..") == 0)
 			continue;
 
-		snprintf(temp_path, sizeof(temp_path), "pg_tblspc/%s/%s/%s",
-				 spc_de->d_name, TABLESPACE_VERSION_DIRECTORY, PG_TEMP_FILES_DIR);
-		RemovePgTempFilesInDir(temp_path, true, false);
-
 		snprintf(temp_path, sizeof(temp_path), "pg_tblspc/%s/%s",
 				 spc_de->d_name, TABLESPACE_VERSION_DIRECTORY);
-		RemovePgTempRelationFiles(temp_path);
+		RemoveStagedPgTempDirs(temp_path);
 	}
 
 	FreeDir(spc_dir);
-
-	/*
-	 * In EXEC_BACKEND case there is a pgsql_tmp directory at the top level of
-	 * DataDir as well.  However, that is *not* cleaned here because doing so
-	 * would create a race condition.  It's done separately, earlier in
-	 * postmaster startup.
-	 */
 }
 
 /*
- * Process one pgsql_tmp directory for RemovePgTempFiles.
+ * StagePgTempDirForRemoval
+ *
+ * This function moves the given directory to a staging directory and renames
+ * it in preparation for removal by a later call to RemoveStagedPgTempDirs().
+ * The current timestamp is appended to the end of the new directory name in
+ * case previously staged pgsql_tmp directories have not yet been removed.
+ */
+static void
+StagePgTempDirForRemoval(const char *tmp_dir)
+{
+	struct stat st;
+	char		stage_path[MAXPGPATH * 2];
+	char		parent_path[MAXPGPATH * 2];
+	char		to_remove_path[MAXPGPATH * 2];
+	struct timeval tv;
+	uint64		epoch;
+
+	/*
+	 * If tmp_dir doesn't exist, there is nothing to stage.
+	 */
+	if (stat(tmp_dir, &st) != 0)
+	{
+		if (errno != ENOENT)
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not stat file \"%s\": %m", tmp_dir)));
+		return;
+	}
+	else if (!S_ISDIR(st.st_mode))
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("\"%s\" is not a directory", tmp_dir)));
+
+	strlcpy(parent_path, tmp_dir, MAXPGPATH * 2);
+	get_parent_directory(parent_path);
+
+	/*
+	 * get_parent_directory() returns an empty string if the input argument is
+	 * just a file name (see comments in path.c), so handle that as being the
+	 * current directory.
+	 */
+	if (strlen(parent_path) == 0)
+		strlcpy(parent_path, ".", MAXPGPATH * 2);
+
+	/*
+	 * Make sure the pgsql_tmp_staged_for_removal directory exists.
+	 */
+	snprintf(to_remove_path, sizeof(to_remove_path), "%s/%s", parent_path,
+			 PG_TEMP_TO_REMOVE_DIR);
+	if (MakePGDirectory(to_remove_path) != 0 && errno != EEXIST)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not create directory \"%s\": %m",
+						to_remove_path)));
+
+	/*
+	 * Pick a sufficiently unique name for the stage directory.  We just append
+	 * the current timestamp to the end of the name.
+	 */
+	gettimeofday(&tv, NULL);
+	if (pg_mul_u64_overflow((uint64) 1000, (uint64) tv.tv_sec, &epoch) ||
+		pg_add_u64_overflow(epoch, (uint64) tv.tv_usec, &epoch))
+		elog(ERROR, "could not stage temporary file directory for removal");
+
+	snprintf(stage_path, sizeof(stage_path), "%s/%s." UINT64_FORMAT,
+			 to_remove_path, PG_TEMP_FILES_DIR, epoch);
+
+	/*
+	 * Rename the temporary directory.
+	 */
+	if (rename(tmp_dir, stage_path) != 0)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not rename directory \"%s\" to \"%s\": %m",
+						tmp_dir, stage_path)));
+}
+
+/*
+ * RemoveStagedPgTempDirs
+ *
+ * This function removes all pgsql_tmp directories that have been staged for
+ * removal by StagePgTempDirForRemoval() in the given tablespace directory.
+ */
+static void
+RemoveStagedPgTempDirs(const char *spc_dir)
+{
+	char		stage_path[MAXPGPATH * 2];
+	char		temp_path[MAXPGPATH * 2];
+	DIR		   *dir;
+	struct dirent *de;
+
+	snprintf(stage_path, sizeof(stage_path), "%s/%s", spc_dir,
+			 PG_TEMP_TO_REMOVE_DIR);
+
+	dir = AllocateDir(stage_path);
+	if (dir == NULL && errno == ENOENT)
+		return;
+
+	while ((de = ReadDir(dir, stage_path)) != NULL)
+	{
+		if (strncmp(de->d_name, PG_TEMP_FILES_DIR,
+					strlen(PG_TEMP_FILES_DIR)) != 0)
+			continue;
+
+		snprintf(temp_path, sizeof(temp_path), "%s/%s", stage_path, de->d_name);
+		RemovePgTempDir(temp_path, true, false);
+	}
+	FreeDir(dir);
+}
+
+/*
+ * Process one pgsql_tmp directory for RemoveStagedPgTempDirs.
  *
  * If missing_ok is true, it's all right for the named directory to not exist.
- * Any other problem results in a LOG message.  (missing_ok should be true at
- * the top level, since pgsql_tmp directories are not created until needed.)
+ * Any other problem results in an ERROR.  (missing_ok should be true at the
+ * top level, since pgsql_tmp directories are not created until needed.)
  *
  * At the top level, this should be called with unlink_all = false, so that
  * only files matching the temporary name prefix will be unlinked.  When
@@ -3146,7 +3288,7 @@ RemovePgTempFiles(void)
  * them separate.)
  */
 void
-RemovePgTempFilesInDir(const char *tmpdirname, bool missing_ok, bool unlink_all)
+RemovePgTempDir(const char *tmpdirname, bool missing_ok, bool unlink_all)
 {
 	DIR		   *temp_dir;
 	struct dirent *temp_de;
@@ -3157,7 +3299,7 @@ RemovePgTempFilesInDir(const char *tmpdirname, bool missing_ok, bool unlink_all)
 	if (temp_dir == NULL && errno == ENOENT && missing_ok)
 		return;
 
-	while ((temp_de = ReadDirExtended(temp_dir, tmpdirname, LOG)) != NULL)
+	while ((temp_de = ReadDir(temp_dir, tmpdirname)) != NULL)
 	{
 		if (strcmp(temp_de->d_name, ".") == 0 ||
 			strcmp(temp_de->d_name, "..") == 0)
@@ -3174,40 +3316,37 @@ RemovePgTempFilesInDir(const char *tmpdirname, bool missing_ok, bool unlink_all)
 			struct stat statbuf;
 
 			if (lstat(rm_path, &statbuf) < 0)
-			{
-				ereport(LOG,
+				ereport(ERROR,
 						(errcode_for_file_access(),
 						 errmsg("could not stat file \"%s\": %m", rm_path)));
-				continue;
-			}
 
 			if (S_ISDIR(statbuf.st_mode))
 			{
 				/* recursively remove contents, then directory itself */
-				RemovePgTempFilesInDir(rm_path, false, true);
-
-				if (rmdir(rm_path) < 0)
-					ereport(LOG,
-							(errcode_for_file_access(),
-							 errmsg("could not remove directory \"%s\": %m",
-									rm_path)));
+				RemovePgTempDir(rm_path, false, true);
 			}
 			else
 			{
 				if (unlink(rm_path) < 0)
-					ereport(LOG,
+					ereport(ERROR,
 							(errcode_for_file_access(),
 							 errmsg("could not remove file \"%s\": %m",
 									rm_path)));
 			}
 		}
 		else
-			ereport(LOG,
+			ereport(ERROR,
 					(errmsg("unexpected file found in temporary-files directory: \"%s\"",
 							rm_path)));
 	}
 
 	FreeDir(temp_dir);
+
+	if (rmdir(tmpdirname) < 0)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not remove directory \"%s\": %m",
+						tmpdirname)));
 }
 
 /* Process one tablespace directory, look for per-DB subdirectories */
@@ -3220,7 +3359,7 @@ RemovePgTempRelationFiles(const char *tsdirname)
 
 	ts_dir = AllocateDir(tsdirname);
 
-	while ((de = ReadDirExtended(ts_dir, tsdirname, LOG)) != NULL)
+	while ((de = ReadDir(ts_dir, tsdirname)) != NULL)
 	{
 		/*
 		 * We're only interested in the per-database directories, which have
@@ -3248,7 +3387,7 @@ RemovePgTempRelationFilesInDbspace(const char *dbspacedirname)
 
 	dbspace_dir = AllocateDir(dbspacedirname);
 
-	while ((de = ReadDirExtended(dbspace_dir, dbspacedirname, LOG)) != NULL)
+	while ((de = ReadDir(dbspace_dir, dbspacedirname)) != NULL)
 	{
 		if (!looks_like_temp_rel_name(de->d_name))
 			continue;
@@ -3257,7 +3396,7 @@ RemovePgTempRelationFilesInDbspace(const char *dbspacedirname)
 				 dbspacedirname, de->d_name);
 
 		if (unlink(rm_path) < 0)
-			ereport(LOG,
+			ereport(ERROR,
 					(errcode_for_file_access(),
 					 errmsg("could not remove file \"%s\": %m",
 							rm_path)));

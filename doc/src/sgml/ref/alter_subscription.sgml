@@ -161,12 +161,20 @@ ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> RENAME TO <
 
       <variablelist>
        <varlistentry>
-        <term><literal>copy_data</literal> (<type>boolean</type>)</term>
+        <term><literal>copy_data</literal> (<type>enum</type>)</term>
         <listitem>
          <para>
           Specifies whether to copy pre-existing data in the publications
-          that are being subscribed to when the replication starts.
-          The default is <literal>true</literal>.
+          that are being subscribed to when the replication starts. This
+          parameter may be either <literal>true</literal>,
+          <literal>false</literal> or <literal>force</literal>. The default is
+          <literal>true</literal>.
+         </para>
+         <para>
+          Refer to the <xref linkend="sql-createsubscription-notes"/> for the
+          usage of <literal>force</literal> for <literal>copy_data</literal>
+          parameter and its interaction with the <literal>origin</literal>
+          parameter.
          </para>
          <para>
           Previously subscribed tables are not copied, even if a table's row

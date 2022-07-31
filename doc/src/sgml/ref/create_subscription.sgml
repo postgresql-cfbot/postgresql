@@ -115,7 +115,8 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
           (You cannot combine setting <literal>connect</literal>
           to <literal>false</literal> with
           setting <literal>create_slot</literal>, <literal>enabled</literal>,
-          or <literal>copy_data</literal> to <literal>true</literal>.)
+          or <literal>copy_data</literal> to
+          <literal>true</literal>/<literal>force</literal>.)
          </para>
 
          <para>
@@ -201,17 +202,25 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
        </varlistentry>
 
        <varlistentry>
-        <term><literal>copy_data</literal> (<type>boolean</type>)</term>
+        <term><literal>copy_data</literal> (<type>enum</type>)</term>
         <listitem>
          <para>
           Specifies whether to copy pre-existing data in the publications
-          that are being subscribed to when the replication starts.
-          The default is <literal>true</literal>.
+          that are being subscribed to when the replication starts. This
+          parameter may be either <literal>true</literal>,
+          <literal>false</literal> or <literal>force</literal>. The default is
+          <literal>true</literal>.
          </para>
          <para>
           If the publications contain <literal>WHERE</literal> clauses, it
           will affect what data is copied. Refer to the
           <xref linkend="sql-createsubscription-notes" /> for details.
+         </para>
+         <para>
+          Refer to the <xref linkend="sql-createsubscription-notes"/> for the
+          usage of <literal>force</literal> for <literal>copy_data</literal>
+          parameter and its interaction with the <literal>origin</literal>
+          parameter.
          </para>
         </listitem>
        </varlistentry>
@@ -315,6 +324,12 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
           to <literal>any</literal> means that the publisher sends changes
           regardless of their origin. The default is <literal>any</literal>.
          </para>
+         <para>
+          Refer to the <xref linkend="sql-createsubscription-notes"/> for the
+          usage of <literal>force</literal> for <literal>copy_data</literal>
+          parameter and its interaction with the <literal>origin</literal>
+          parameter.
+         </para>
         </listitem>
        </varlistentry>
       </variablelist></para>
@@ -384,6 +399,18 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
    those later. This means
    <link linkend="catalog-pg-subscription"><structname>pg_subscription</structname></link>
    can have non-existent publications.
+  </para>
+
+  <para>
+   If the subscription is created with <literal>origin = none</literal> and
+   <literal>copy_data = true</literal>, it will check if the publisher has
+   subscribed to the same table from other publishers and, if so, throw an
+   error to prevent replicating data that has an origin. The user can override
+   this check and continue with the copy operation by specifying
+   <literal>copy_data = force</literal>. Refer to
+   <xref linkend="replication-between-primaries"/> for how
+   <literal>copy_data</literal> and <literal>origin</literal> can be used to
+   set up replication between primaries.
   </para>
 
  </refsect1>

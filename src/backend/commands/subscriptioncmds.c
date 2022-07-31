@@ -70,6 +70,16 @@
 #define IsSet(val, bits)  (((val) & (bits)) == (bits))
 
 /*
+ * Represents whether copy_data parameter is specified with off, on, or force.
+ */
+typedef enum CopyData
+{
+	COPY_DATA_OFF = 0,
+	COPY_DATA_ON,
+	COPY_DATA_FORCE
+} CopyData;
+
+/*
  * Structure to hold a bitmap representing the user-provided CREATE/ALTER
  * SUBSCRIPTION command options and the parsed/default values of each of them.
  */
@@ -81,7 +91,7 @@ typedef struct SubOpts
 	bool		connect;
 	bool		enabled;
 	bool		create_slot;
-	bool		copy_data;
+	CopyData	copy_data;
 	bool		refresh;
 	bool		binary;
 	bool		streaming;
@@ -92,10 +102,68 @@ typedef struct SubOpts
 } SubOpts;
 
 static List *fetch_table_list(WalReceiverConn *wrconn, List *publications);
+static void check_pub_table_subscribed(WalReceiverConn *wrconn,
+									   List *publications, CopyData copydata,
+									   char *origin, Oid *subrel_local_oids,
+									   int subrel_count);
 static void check_duplicates_in_publist(List *publist, Datum *datums);
 static List *merge_publications(List *oldpublist, List *newpublist, bool addpub, const char *subname);
 static void ReportSlotConnectionError(List *rstates, Oid subid, char *slotname, char *err);
 
+/*
+ * Validate the value specified for copy_data parameter.
+ */
+static CopyData
+defGetCopyData(DefElem *def)
+{
+	/*
+	 * If no parameter value given, assume "true" is meant.
+	 */
+	if (def->arg == NULL)
+		return COPY_DATA_ON;
+
+	/*
+	 * Allow 0, 1, "true", "false", "on", "off" or "force".
+	 */
+	switch (nodeTag(def->arg))
+	{
+		case T_Integer:
+			switch (intVal(def->arg))
+			{
+				case 0:
+					return COPY_DATA_OFF;
+				case 1:
+					return COPY_DATA_ON;
+				default:
+					/* otherwise, error out below */
+					break;
+			}
+			break;
+		default:
+			{
+				char	   *sval = defGetString(def);
+
+				/*
+				 * The set of strings accepted here must include all those
+				 * accepted by the grammar's opt_boolean_or_string production.
+				 */
+				if (pg_strcasecmp(sval, "false") == 0 ||
+					pg_strcasecmp(sval, "off") == 0)
+					return COPY_DATA_OFF;
+				if (pg_strcasecmp(sval, "true") == 0 ||
+					pg_strcasecmp(sval, "on") == 0)
+					return COPY_DATA_ON;
+				if (pg_strcasecmp(sval, "force") == 0)
+					return COPY_DATA_FORCE;
+			}
+			break;
+	}
+
+	ereport(ERROR,
+			errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+			errmsg("%s requires a boolean or \"force\"", def->defname));
+	return COPY_DATA_OFF;		/* keep compiler quiet */
+}
 
 /*
  * Common option parsing function for CREATE and ALTER SUBSCRIPTION commands.
@@ -128,7 +196,7 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 	if (IsSet(supported_opts, SUBOPT_CREATE_SLOT))
 		opts->create_slot = true;
 	if (IsSet(supported_opts, SUBOPT_COPY_DATA))
-		opts->copy_data = true;
+		opts->copy_data = COPY_DATA_ON;
 	if (IsSet(supported_opts, SUBOPT_REFRESH))
 		opts->refresh = true;
 	if (IsSet(supported_opts, SUBOPT_BINARY))
@@ -196,7 +264,7 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 				errorConflictingDefElem(defel, pstate);
 
 			opts->specified_opts |= SUBOPT_COPY_DATA;
-			opts->copy_data = defGetBoolean(defel);
+			opts->copy_data = defGetCopyData(defel);
 		}
 		else if (IsSet(supported_opts, SUBOPT_SYNCHRONOUS_COMMIT) &&
 				 strcmp(defel->defname, "synchronous_commit") == 0)
@@ -352,12 +420,12 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
 					 errmsg("%s and %s are mutually exclusive options",
-							"connect = false", "copy_data = true")));
+							"connect = false", "copy_data = true/force")));
 
 		/* Change the defaults of other options. */
 		opts->enabled = false;
 		opts->create_slot = false;
-		opts->copy_data = false;
+		opts->copy_data = COPY_DATA_OFF;
 	}
 
 	/*
@@ -680,6 +748,8 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 		PG_TRY();
 		{
 			check_publications(wrconn, publications);
+			check_pub_table_subscribed(wrconn, publications, opts.copy_data,
+									   opts.origin, NULL, 0);
 
 			/*
 			 * Set sync state based on if we were asked to do data copy or
@@ -775,7 +845,7 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 }
 
 static void
-AlterSubscription_refresh(Subscription *sub, bool copy_data,
+AlterSubscription_refresh(Subscription *sub, CopyData copy_data,
 						  List *validate_publications)
 {
 	char	   *err;
@@ -786,6 +856,7 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data,
 	ListCell   *lc;
 	int			off;
 	int			remove_rel_len;
+	int			subrel_count;
 	Relation	rel = NULL;
 	typedef struct SubRemoveRels
 	{
@@ -815,13 +886,14 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data,
 
 		/* Get local table list. */
 		subrel_states = GetSubscriptionRelations(sub->oid, false);
+		subrel_count = list_length(subrel_states);
 
 		/*
 		 * Build qsorted array of local table oids for faster lookup. This can
 		 * potentially contain all tables in the database so speed of lookup
 		 * is important.
 		 */
-		subrel_local_oids = palloc(list_length(subrel_states) * sizeof(Oid));
+		subrel_local_oids = palloc(subrel_count * sizeof(Oid));
 		off = 0;
 		foreach(lc, subrel_states)
 		{
@@ -829,14 +901,19 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data,
 
 			subrel_local_oids[off++] = relstate->relid;
 		}
-		qsort(subrel_local_oids, list_length(subrel_states),
+		qsort(subrel_local_oids, subrel_count,
 			  sizeof(Oid), oid_cmp);
+
+		/* Check whether we can allow copy of newly added relations. */
+		check_pub_table_subscribed(wrconn, sub->publications, copy_data,
+								   sub->origin, subrel_local_oids,
+								   subrel_count);
 
 		/*
 		 * Rels that we want to remove from subscription and drop any slots
 		 * and origins corresponding to them.
 		 */
-		sub_remove_rels = palloc(list_length(subrel_states) * sizeof(SubRemoveRels));
+		sub_remove_rels = palloc(subrel_count * sizeof(SubRemoveRels));
 
 		/*
 		 * Walk over the remote tables and try to match them to locally known
@@ -862,7 +939,7 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data,
 			pubrel_local_oids[off++] = relid;
 
 			if (!bsearch(&relid, subrel_local_oids,
-						 list_length(subrel_states), sizeof(Oid), oid_cmp))
+						 subrel_count, sizeof(Oid), oid_cmp))
 			{
 				AddSubscriptionRelState(sub->oid, relid,
 										copy_data ? SUBREL_STATE_INIT : SUBREL_STATE_READY,
@@ -881,7 +958,7 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data,
 			  sizeof(Oid), oid_cmp);
 
 		remove_rel_len = 0;
-		for (off = 0; off < list_length(subrel_states); off++)
+		for (off = 0; off < subrel_count; off++)
 		{
 			Oid			relid = subrel_local_oids[off];
 
@@ -1779,6 +1856,122 @@ AlterSubscriptionOwner_oid(Oid subid, Oid newOwnerId)
 	heap_freetuple(tup);
 
 	table_close(rel, RowExclusiveLock);
+}
+
+/*
+ * Check and throw an error if the publisher has subscribed to the same table
+ * from some other publisher. This check is required only if "copy_data = true"
+ * and "origin = none" for CREATE SUBSCRIPTION and
+ * ALTER SUBSCRIPTION ... REFRESH statements to avoid replicating data that has
+ * an origin.
+ *
+ * This check need not be performed on the tables that are already added
+ * because incremental sync for those tables will happen through WAL and the
+ * origin of the data can be identified from the WAL records.
+ *
+ * subrel_local_oids contains the list of relation oids that are already
+ * present on the subscriber.
+ */
+static void
+check_pub_table_subscribed(WalReceiverConn *wrconn, List *publications,
+						   CopyData copydata, char *origin,
+						   Oid *subrel_local_oids, int subrel_count)
+{
+	WalRcvExecResult *res;
+	StringInfoData cmd;
+	TupleTableSlot *slot;
+	Oid			tableRow[2] = {TEXTOID, TEXTOID};
+
+	if (copydata != COPY_DATA_ON || !origin ||
+		(pg_strcasecmp(origin, LOGICALREP_ORIGIN_NONE) != 0))
+		return;
+
+	initStringInfo(&cmd);
+	appendStringInfoString(&cmd,
+						   "SELECT DISTINCT N.nspname AS schemaname,\n"
+						   "				C.relname AS tablename\n"
+						   "FROM pg_publication P,\n"
+						   "	 LATERAL pg_get_publication_tables(P.pubname) GPT\n"
+						   "	 LEFT JOIN pg_subscription_rel PS ON (GPT.relid = PS.srrelid),\n"
+						   "	 pg_class C JOIN pg_namespace N ON (N.oid = C.relnamespace)\n"
+						   "WHERE C.oid = GPT.relid AND PS.srrelid IS NOT NULL AND P.pubname IN (");
+	get_publications_str(publications, &cmd, true);
+	appendStringInfoChar(&cmd, ')');
+
+	res = walrcv_exec(wrconn, cmd.data, 2, tableRow);
+	pfree(cmd.data);
+
+	if (res->status != WALRCV_OK_TUPLES)
+		ereport(ERROR,
+				(errcode(ERRCODE_CONNECTION_FAILURE),
+				 errmsg("could not receive list of replicated tables from the publisher: %s",
+						res->err)));
+
+	/* Process tables. */
+	slot = MakeSingleTupleTableSlot(res->tupledesc, &TTSOpsMinimalTuple);
+	while (tuplestore_gettupleslot(res->tuplestore, true, false, slot))
+	{
+		char	   *nspname;
+		char	   *relname;
+		bool		isnull;
+		bool		isnewtable = true;
+
+		nspname = TextDatumGetCString(slot_getattr(slot, 1, &isnull));
+		Assert(!isnull);
+		relname = TextDatumGetCString(slot_getattr(slot, 2, &isnull));
+		Assert(!isnull);
+
+		/* Skip already added tables */
+		if (subrel_count)
+		{
+			RangeVar   *rv;
+			Oid			relid;
+
+			rv = makeRangeVar(nspname, relname, -1);
+			relid = RangeVarGetRelid(rv, AccessShareLock, false);
+
+			/* Check for supported relkind. */
+			CheckSubscriptionRelkind(get_rel_relkind(relid),
+									 rv->schemaname, rv->relname);
+
+			if (bsearch(&relid, subrel_local_oids,
+						subrel_count, sizeof(Oid), oid_cmp))
+				isnewtable = false;
+		}
+
+		ExecClearTuple(slot);
+
+		if (!isnewtable)
+		{
+			pfree(nspname);
+			pfree(relname);
+			continue;
+		}
+
+		/*
+		 * Throw an error if the publisher has subscribed to the same table
+		 * from some other publisher. We cannot know the origin of data during
+		 * the initial sync. Data origins can be found only from the WAL by
+		 * looking at the origin id.
+		 *
+		 * XXX: For simplicity, we don't check whether the table has any data
+		 * or not. If the table doesn't have any data then we don't need to
+		 * distinguish between data having origin and data not having origin so
+		 * we can avoid throwing an error in that case.
+		 */
+		ereport(ERROR,
+				errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				errmsg("could not replicate table \"%s.%s\"",
+					   nspname, relname),
+				errdetail("CREATE/ALTER SUBSCRIPTION with %s and %s is not allowed when the publisher has subscribed same table.",
+						  "origin = none",  "copy_data = true"),
+				errhint("Use CREATE/ALTER SUBSCRIPTION with %s.",
+						"copy_data = false/force"));
+	}
+
+	ExecDropSingleTupleTableSlot(slot);
+
+	walrcv_clear_result(res);
 }
 
 /*

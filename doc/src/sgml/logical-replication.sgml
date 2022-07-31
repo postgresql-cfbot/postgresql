@@ -514,6 +514,446 @@ test_sub=# SELECT * FROM t3;
 
  </sect1>
 
+ <sect1 id="replication-between-primaries">
+  <title>Replication between primaries</title>
+
+   <para>
+    Replication between primaries is useful for creating a multi-master
+    database environment for replicating write operations performed by any of
+    the member primaries. The steps to create replication between primaries in
+    various scenarios are given below.
+   </para>
+
+   <note>
+    <para>
+     The user is responsible for designing their schemas in a way to minimize
+     the risk of conflicts. See <xref linkend="logical-replication-conflicts"/>
+     for the details of logical replication conflicts. The logical replication
+     restrictions apply to the replication between primaries also. See
+     <xref linkend="logical-replication-restrictions"/> for the details of
+     logical replication restrictions.
+    </para>
+   </note>
+
+   <warning>
+    <para>
+     Setting up replication between primaries requires multiple steps to be
+     performed on various primaries. Because not all operations are
+     transactional, the user is advised to take backups. Backups can be taken
+     as described in <xref linkend="backup-base-backup"/>.
+    </para>
+   </warning>
+
+  <sect2 id="setting-replication-between-two-primaries">
+   <title>Setting replication between two primaries</title>
+   <para>
+    The following steps demonstrate how to set up replication between two
+    primaries (<literal>primary1</literal> and <literal>primary2</literal>)
+    when there is no table data present on both primaries:
+   </para>
+
+   <para>
+    Create a publication on <literal>primary1</literal>:
+<programlisting>
+primary1=# CREATE PUBLICATION pub_primary1 FOR TABLE t1;
+CREATE PUBLICATION
+</programlisting></para>
+
+   <para>
+    Create a publication on <literal>primary2</literal>:
+<programlisting>
+primary2=# CREATE PUBLICATION pub_primary2 FOR TABLE t1;
+CREATE PUBLICATION
+</programlisting></para>
+
+   <para>
+    Lock the table <literal>t1</literal> on <literal>primary1</literal> and
+    <literal>primary2</literal> in <literal>EXCLUSIVE</literal> mode until the
+    setup is completed.
+   </para>
+
+   <para>
+    Create a subscription on <literal>primary2</literal> to subscribe to
+    <literal>primary1</literal>:
+<programlisting>
+primary2=# CREATE SUBSCRIPTION sub_primary2_primary1
+primary2-# CONNECTION 'dbname=foo host=primary1 user=repuser'
+primary2-# PUBLICATION pub_primary1
+primary2-# WITH (copy_data = false, origin = none);
+CREATE SUBSCRIPTION
+</programlisting></para>
+
+   <para>
+    Create a subscription on <literal>primary1</literal> to subscribe to
+    <literal>primary2</literal>:
+<programlisting>
+primary1=# CREATE SUBSCRIPTION sub_primary1_primary2
+primary1-# CONNECTION 'dbname=foo host=primary2 user=repuser'
+primary1-# PUBLICATION pub_primary2
+primary1-# WITH (copy_data = false, origin = none);
+CREATE SUBSCRIPTION
+</programlisting></para>
+
+   <para>
+    Now the replication setup between primaries <literal>primary1</literal> and
+    <literal>primary2</literal> is complete. Any incremental changes from
+    <literal>primary1</literal> will be replicated to
+    <literal>primary2</literal>, and any incremental changes from
+    <literal>primary2</literal> will be replicated to
+    <literal>primary1</literal>.
+   </para>
+  </sect2>
+
+  <sect2 id="add-new-primary">
+   <title>Adding a new primary when there is no table data on any of the primaries</title>
+   <para>
+    The following steps demonstrate adding a new primary
+    (<literal>primary3</literal>) to the existing primaries
+    (<literal>primary1</literal> and <literal>primary2</literal>) when there is
+    no <literal>t1</literal> data on any of the primaries. This requires
+    creating subscriptions on <literal>primary1</literal> and
+    <literal>primary2</literal> to replicate the data from
+    <literal>primary3</literal> and creating subscriptions on
+    <literal>primary3</literal> to replicate data from
+    <literal>primary1</literal> and <literal>primary2</literal>. Note: These
+    steps assume that the replication between the primaries
+    <literal>primary1</literal> and <literal>primary2</literal> is already
+    completed.
+   </para>
+
+   <para>
+    Create a publication on <literal>primary3</literal>:
+<programlisting>
+primary3=# CREATE PUBLICATION pub_primary3 FOR TABLE t1;
+CREATE PUBLICATION
+</programlisting></para>
+
+   <para>
+    Lock table <literal>t1</literal> on all the primaries
+    <literal>primary1</literal>, <literal>primary2</literal> and
+    <literal>primary3</literal> in <literal>EXCLUSIVE</literal> mode until the
+    setup is completed.
+   </para>
+
+   <para>
+    Create a subscription on <literal>primary1</literal> to subscribe to
+    <literal>primary3</literal>:
+<programlisting>
+primary1=# CREATE SUBSCRIPTION sub_primary1_primary3
+primary1-# CONNECTION 'dbname=foo host=primary3 user=repuser'
+primary1-# PUBLICATION pub_primary3
+primary1-# WITH (copy_data = false, origin = none);
+CREATE SUBSCRIPTION
+</programlisting></para>
+
+   <para>
+    Create a subscription on <literal>primary2</literal> to subscribe to
+    <literal>primary3</literal>:
+<programlisting>
+primary2=# CREATE SUBSCRIPTION sub_primary2_primary3
+primary2-# CONNECTION 'dbname=foo host=primary3 user=repuser'
+primary2-# PUBLICATION pub_primary3
+primary2-# WITH (copy_data = false, origin = none);
+CREATE SUBSCRIPTION
+</programlisting></para>
+
+   <para>
+    Create a subscription on <literal>primary3</literal> to subscribe to
+    <literal>primary1</literal>:
+<programlisting>
+primary3=# CREATE SUBSCRIPTION sub_primary3_primary1
+primary3-# CONNECTION 'dbname=foo host=primary1 user=repuser'
+primary3-# PUBLICATION pub_primary1
+primary3-# WITH (copy_data = false, origin = none);
+CREATE SUBSCRIPTION
+</programlisting></para>
+
+   <para>
+    Create a subscription on <literal>primary3</literal> to subscribe to
+    <literal>primary2</literal>:
+<programlisting>
+primary3=# CREATE SUBSCRIPTION sub_primary3_primary2
+primary3-# CONNECTION 'dbname=foo host=primary2 user=repuser'
+primary3-# PUBLICATION pub_primary2
+primary3-# WITH (copy_data = false, origin = none);
+CREATE SUBSCRIPTION
+</programlisting></para>
+
+   <para>
+    Now the replication setup between primaries <literal>primary1</literal>,
+    <literal>primary2</literal> and <literal>primary3</literal> is complete.
+    Incremental changes made on any primary will be replicated to the other two
+    primaries.
+   </para>
+  </sect2>
+
+  <sect2 id="add-new-primary-data-on-existing-primary">
+   <title>Adding a new primary when table data is present on the existing primaries</title>
+    <para>
+     The following steps demonstrate adding a new primary
+     (<literal>primary3</literal>)
+     that has no <literal>t1</literal> data to the existing primaries
+     (<literal>primary1</literal> and <literal>primary2</literal>) where
+     <literal>t1</literal> data is present. This needs similar steps; the only
+     change required here is that <literal>primary3</literal> should create a
+     subscription with <literal>copy_data = force</literal> to one of the
+     existing primaries so it can receive the existing <literal>t1</literal>
+     data during initial data synchronization. Note: These steps assume that
+     the replication between the primaries <literal>primary1</literal> and
+     <literal>primary2</literal> is already completed, and the pre-existing
+     data in table <literal>t1</literal> is already synchronized on both those
+     primaries.
+   </para>
+
+   <para>
+    Create a publication on <literal>primary3</literal>:
+<programlisting>
+primary3=# CREATE PUBLICATION pub_primary3 FOR TABLE t1;
+CREATE PUBLICATION
+</programlisting></para>
+
+   <para>
+    Lock table <literal>t1</literal> on <literal>primary2</literal> and
+    <literal>primary3</literal> in <literal>EXCLUSIVE</literal> mode until the
+    setup is completed. There is no need to lock table <literal>t1</literal> on
+    <literal>primary1</literal> because any data changes made will be
+    synchronized while creating the subscription with
+    <literal>copy_data = force</literal>.
+   </para>
+
+   <para>
+    Create a subscription on <literal>primary1</literal> to subscribe to
+    <literal>primary3</literal>:
+<programlisting>
+primary1=# CREATE SUBSCRIPTION sub_primary1_primary3
+primary1-# CONNECTION 'dbname=foo host=primary3 user=repuser'
+primary1-# PUBLICATION pub_primary3
+primary1-# WITH (copy_data = false, origin = none);
+CREATE SUBSCRIPTION
+</programlisting></para>
+
+   <para>
+    Create a subscription on <literal>primary2</literal> to subscribe to
+    <literal>primary3</literal>:
+<programlisting>
+primary2=# CREATE SUBSCRIPTION sub_primary2_primary3
+primary2-# CONNECTION 'dbname=foo host=primary3 user=repuser'
+primary2-# PUBLICATION pub_primary3
+primary2-# WITH (copy_data = false, origin = none);
+CREATE SUBSCRIPTION
+</programlisting></para>
+
+   <para>
+    Create a subscription on <literal>primary3</literal> to subscribe to
+    <literal>primary1</literal>. Use <literal>copy_data = force </literal> so
+    that the existing table data is copied during initial sync:
+<programlisting>
+primary3=# CREATE SUBSCRIPTION sub_primary3_primary1
+primary3-# CONNECTION 'dbname=foo host=primary1 user=repuser'
+primary3-# PUBLICATION pub_primary1
+primary3-# WITH (copy_data = force, origin = none);
+CREATE SUBSCRIPTION
+</programlisting></para>
+
+   <para>
+    Create a subscription on <literal>primary3</literal> to subscribe to
+    <literal>primary2</literal>. Use <literal>copy_data = false</literal>
+    because the initial table data would have been
+    already copied in the previous step:
+<programlisting>
+primary3=# CREATE SUBSCRIPTION sub_primary3_primary2
+primary3-# CONNECTION 'dbname=foo host=primary2 user=repuser'
+primary3-# PUBLICATION pub_primary2
+primary3-# WITH (copy_data = false, origin = none);
+CREATE SUBSCRIPTION
+</programlisting></para>
+
+   <para>
+    Now the replication setup between primaries <literal>primary1</literal>,
+    <literal>primary2</literal> and <literal>primary3</literal> is complete.
+    Incremental changes made on any primary will be replicated to the other two
+    primaries.
+   </para>
+  </sect2>
+
+  <sect2 id="generic-steps-add-new-primary">
+   <title>Generic steps for adding a new primary to an existing set of primaries</title>
+   <para>
+    Step-1: Create a publication on the new primary.
+   </para>
+   <para>
+    Step-2: Lock the required tables of the new primary in
+    <literal>EXCLUSIVE</literal> mode until the setup is complete. (This lock
+    is necessary to prevent any modifications from happening on the new
+    primary. If data modifications occurred after Step-3, there is a chance
+    they could be published to the first primary and then synchronized back to
+    the new primary while creating the subscription in Step-5. This would
+    result in inconsistent data).
+   </para>
+   <para>
+    Step-3. Create subscriptions on existing primaries to the publication on
+    the new primary with <literal>origin = none</literal> and
+    <literal>copy_data = false</literal>. (The
+    <literal>copy_data = false</literal> is OK here because it is asserted that
+    the published tables of the new primary will have no pre-existing data).
+   </para>
+   <para>
+    Step-4. Lock the required tables of the existing primaries except the first
+    primary in <literal>EXCLUSIVE</literal> mode until the setup is complete.
+    (This lock is necessary to prevent any modifications from happening. If
+    data modifications occur, there is a chance that modifications done between
+    Step-5 and Step-6 will not be synchronized to the new primary. This would
+    result in inconsistent data. There is no need to lock the required tables
+    on the first primary because any data changes made will be synchronized
+    while creating the subscription with <literal>copy_data = force</literal>).
+   </para>
+   <para>
+    Step-5. Create a subscription on the new primary to the publication on the
+    first primary with <literal>origin = none</literal> and
+    <literal>copy_data = force</literal>. (This will copy the same table data
+    from the existing primaries to the new primary).
+   </para>
+   <para>
+    Step-6. Create subscriptions on the new primary to publications on the
+    remaining primaries with <literal>origin = none</literal> and
+    <literal>copy_data = false</literal>. (The copy_data = false is OK here
+    because the existing primary data was already copied to the new primary in
+    Step-5).
+   </para>
+
+   <para>
+    Let's see an example using the above steps for adding a new primary
+    (<literal>primary4</literal>) to the existing primaries
+    (<literal>primary1</literal>, <literal>primary2</literal> and
+    <literal>primary3</literal>). Note: These steps assume that the replication
+    between the primaries (<literal>primary1</literal>,
+    <literal>primary2</literal> and <literal>primary3</literal>) is already
+    completed, and the pre-existing data in table <literal>t1</literal> is
+    already synchronized on the primaries.
+   </para>
+
+    <para>
+    Step-1. Create a publication on <literal>primary4</literal>:
+<programlisting>
+primary4=# CREATE PUBLICATION pub_primary4 FOR TABLE t1;
+CREATE PUBLICATION
+</programlisting></para>
+
+   <para>
+    Step-2. Lock table <literal>t1</literal> on <literal>primary4</literal> in
+    <literal>EXCLUSIVE</literal> mode until the setup is completed.
+   </para>
+
+   <para>
+    Step-3. Create subscriptions on existing primaries to the publication on
+    the new primary with <literal>origin = none</literal> and
+    <literal>copy_data = false</literal>.
+   </para>
+
+   <para>
+    Create a subscription on <literal>primary1</literal> to subscribe to
+    <literal>primary4</literal>:
+<programlisting>
+primary1=# CREATE SUBSCRIPTION sub_primary1_primary4
+primary1-# CONNECTION 'dbname=foo host=primary4 user=repuser'
+primary1-# PUBLICATION pub_primary4
+primary1-# WITH (copy_data = false, origin = none);
+CREATE SUBSCRIPTION
+</programlisting></para>
+
+   <para>
+    Create a subscription on <literal>primary2</literal> to subscribe to
+    <literal>primary4</literal>:
+<programlisting>
+primary2=# CREATE SUBSCRIPTION sub_primary2_primary4
+primary2-# CONNECTION 'dbname=foo host=primary4 user=repuser'
+primary2-# PUBLICATION pub_primary4
+primary2-# WITH (copy_data = false, origin = none);
+CREATE SUBSCRIPTION
+</programlisting></para>
+
+   <para>
+    Create a subscription on <literal>primary3</literal> to subscribe to
+    <literal>primary4</literal>:
+<programlisting>
+primary3=# CREATE SUBSCRIPTION sub_primary3_primary4
+primary3-# CONNECTION 'dbname=foo host=primary4 user=repuser'
+primary3-# PUBLICATION pub_primary4
+primary3-# WITH (copy_data = false, origin = none);
+CREATE SUBSCRIPTION
+</programlisting></para>
+
+   <para>
+    Step-4. Lock table <literal>t1</literal> on <literal>primary2</literal> and
+    <literal>primary3</literal> in <literal>EXCLUSIVE</literal> mode until the
+    setup is completed. There is no need to lock table <literal>t1</literal> on
+    <literal>primary1</literal> because any data changes made will be
+    synchronized while creating the subscription with
+    <literal>copy_data = force</literal>.
+   </para>
+
+   <para>
+    Step-5. Create a subscription on the new primary to the publication on the
+    first primary with <literal>origin = none</literal> and
+    <literal>copy_data = force</literal>.
+   </para>
+
+   <para>
+    Create a subscription on <literal>primary4</literal> to subscribe to
+    <literal>primary1</literal>. Use <literal>copy_data = force </literal> so
+    that the existing table data is copied during initial sync:
+<programlisting>
+primary4=# CREATE SUBSCRIPTION sub_primary4_primary1
+primary4-# CONNECTION 'dbname=foo host=primary1 user=repuser'
+primary4-# PUBLICATION pub_primary1
+primary4-# WITH (copy_data = force, origin = none);
+CREATE SUBSCRIPTION
+</programlisting></para>
+
+   <para>
+    Create a subscription on <literal>primary4</literal> to subscribe to
+    <literal>primary2</literal>. Use <literal>copy_data = false</literal>
+    because the initial table data would have been
+    already copied in the previous step:
+<programlisting>
+primary4=# CREATE SUBSCRIPTION sub_primary4_primary2
+primary4-# CONNECTION 'dbname=foo host=primary2 user=repuser'
+primary4-# PUBLICATION pub_primary2
+primary4-# WITH (copy_data = false, origin = none);
+CREATE SUBSCRIPTION
+</programlisting></para>
+
+   <para>
+    Create a subscription on <literal>primary4</literal> to subscribe to
+    <literal>primary3</literal>. Use <literal>copy_data = false</literal>
+    because the initial table data would have been
+    already copied in the previous step:
+<programlisting>
+primary4=# CREATE SUBSCRIPTION sub_primary4_primary3
+primary4-# CONNECTION 'dbname=foo host=primary3 user=repuser'
+primary4-# PUBLICATION pub_primary3
+primary4-# WITH (copy_data = false, origin = none);
+CREATE SUBSCRIPTION
+</programlisting></para>
+
+   <para>
+    Now the replication setup between primaries <literal>primary1</literal>,
+    <literal>primary2</literal>, <literal>primary3</literal> and
+    <literal>primary4</literal> is complete. Incremental changes made on any
+    primary will be replicated to the other three primaries.
+   </para>
+  </sect2>
+
+  <sect2 id="add-primary-data-present-on-new-primary">
+   <title>Adding a new primary that has existing table data</title>
+   <note>
+    <para>
+     Adding a new primary that has existing table data is not supported.
+    </para>
+   </note>
+  </sect2>
+ </sect1>
+
  <sect1 id="logical-replication-row-filter">
   <title>Row Filters</title>
 

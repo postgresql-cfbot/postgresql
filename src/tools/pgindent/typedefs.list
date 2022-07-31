@@ -456,6 +456,7 @@ ConvProcInfo
 ConversionLocation
 ConvertRowtypeExpr
 CookedConstraint
+CopyData
 CopyDest
 CopyFormatOptions
 CopyFromState

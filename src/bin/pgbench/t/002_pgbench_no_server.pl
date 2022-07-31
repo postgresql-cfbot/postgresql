@@ -8,12 +8,12 @@
 use strict;
 use warnings;
 
+use File::Basename;
 use PostgreSQL::Test::Utils;
 use Test::More;
 
 # create a directory for scripts
-my $testname = $0;
-$testname =~ s,.*/,,;
+my $testname = basename($0);
 $testname =~ s/\.pl$//;
 
 my $testdir = "$PostgreSQL::Test::Utils::tmp_check/t_${testname}_stuff";

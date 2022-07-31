@@ -70,10 +70,11 @@ my $rc =
 	  . $node_primary->host . " "
 	  . "--port="
 	  . $node_primary->port . " "
-	  . "--schedule=../regress/parallel_schedule "
+	  . "--schedule=\"$dlpath/parallel_schedule\" "
 	  . "--max-concurrent-tests=20 "
-	  . "--inputdir=../regress "
+	  . "--inputdir=\"$dlpath\" "
 	  . "--outputdir=\"$outputdir\"");
+
 if ($rc != 0)
 {
 	# Dump out the regression diffs file, if there is one

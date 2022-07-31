@@ -29,6 +29,10 @@ my @client_program_files = (
 	'pg_config',     'pg_dump',        'pg_dumpall', 'pg_isready',
 	'pg_receivewal', 'pg_recvlogical', 'pg_restore', 'psql',
 	'reindexdb',     'vacuumdb',       @client_contribs);
+my @test_program_files = (
+	'isolationtester',	'libpq_pipeline',	'libpq_testclient',
+	'libpq_uri_regress',	'pg_isolation_regress', 'pg_regress_ecpg',
+	'pg_regress',		'zic');
 
 sub lcopy
 {
@@ -264,9 +268,18 @@ sub CopySolutionOutput
 
 		$sln =~ s/$rem//;
 
+		# Only install client tools
 		next
 		  if ($insttype eq "client" && !grep { $_ eq $pf }
 			@client_program_files);
+
+		# Install test tools only in test mode
+		if (!$ENV{INSTALL_TESTS} && grep { $_ eq $pf }
+			@test_program_files)
+		{
+			print "Skipping install: $pf\n";
+			next;
+		}
 
 		my $proj = read_file("$pf.$vcproj")
 		  || croak "Could not open $pf.$vcproj\n";

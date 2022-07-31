@@ -51,7 +51,7 @@ if (-e "src/tools/msvc/buildenv.pl")
 
 my $what = shift || "";
 if ($what =~
-	/^(check|installcheck|plcheck|contribcheck|modulescheck|ecpgcheck|isolationcheck|upgradecheck|bincheck|recoverycheck|taptest)$/i
+	/^(check|installcheck|plcheck|contribcheck|modulescheck|ecpgcheck|isolationcheck|upgradecheck|bincheck|recoverycheck|taptest|alltaptests)$/i
   )
 {
 	$what = uc $what;
@@ -109,6 +109,7 @@ my %command = (
 	BINCHECK       => \&bincheck,
 	RECOVERYCHECK  => \&recoverycheck,
 	UPGRADECHECK   => \&upgradecheck,     # no-op
+	ALLTAPTESTS    => \&alltaptests,
 	TAPTEST        => \&taptest,);
 
 my $proc = $command{$what};
@@ -291,10 +292,8 @@ sub tap_check
 	$ENV{PG_REGRESS}    = "$topdir/$Config/pg_regress/pg_regress";
 	$ENV{REGRESS_SHLIB} = "$topdir/src/test/regress/regress.dll";
 
-	$ENV{TESTDIR} = "$dir";
-	my $module = basename $dir;
-	# add the module build dir as the second element in the PATH
-	$ENV{PATH} =~ s!;!;$topdir/$Config/$module;!;
+	print "============================================================\n";
+	print "Checking $dir: @args\n";
 
 	rmtree('tmp_check');
 	system(@args);
@@ -310,8 +309,7 @@ sub bincheck
 
 	my $mstat = 0;
 
-	# Find out all the existing TAP tests by looking for t/ directories
-	# in the tree.
+	# Find the TAP tests by looking for t/ directories
 	my @bin_dirs = glob("$topdir/src/bin/*");
 
 	# Process each test
@@ -323,6 +321,30 @@ sub bincheck
 		$mstat ||= $status;
 	}
 	exit $mstat if $mstat;
+	return;
+}
+
+sub alltaptests
+{
+	InstallTemp();
+
+	# Find out all the existing TAP tests by looking for t/ directories
+	# in the tree.
+	my @tap_dirs = ();
+	my @top_dir = ($topdir);
+	File::Find::find(
+		{   wanted => sub {
+			/^t\z/s
+			  && $File::Find::name !~ /\/(kerberos|ldap|ssl|ssl_passphrase_callback)\// # opt-in: warn about these?
+			  && push(@tap_dirs, $File::Find::name);
+			}
+		},
+		@top_dir);
+
+	# Run all the tap tests in a single prove instance for better performance
+	$ENV{PROVE_TESTS} = "@tap_dirs";
+	my $status = tap_check('PROVE_FLAGS=--ext=.pl', "$topdir");
+	exit $status if $status;
 	return;
 }
 
@@ -426,6 +448,7 @@ sub plcheck
 sub subdircheck
 {
 	my $module = shift;
+	my $installcheck = shift || 1;
 
 	if (   !-d "$module/sql"
 		|| !-d "$module/expected"
@@ -435,7 +458,7 @@ sub subdircheck
 	}
 
 	chdir $module;
-	my @tests = fetchTests();
+	my @tests = fetchTests($installcheck);
 
 	# Leave if no tests are listed in the module.
 	if (scalar @tests == 0)
@@ -445,12 +468,13 @@ sub subdircheck
 	}
 
 	my @opts = fetchRegressOpts();
+	push @opts, "--temp-instance=tmp_check" if $installcheck == -1;
 
 	print "============================================================\n";
 	print "Checking $module\n";
 	my @args = (
 		"$topdir/$Config/pg_regress/pg_regress",
-		"--bindir=${topdir}/${Config}/psql",
+		"--bindir=$tmp_installdir/bin",
 		"--dbname=contrib_regression", @opts, @tests);
 	print join(' ', @args), "\n";
 	system(@args);
@@ -460,6 +484,8 @@ sub subdircheck
 
 sub contribcheck
 {
+	my $mode = shift || '';
+
 	chdir "../../../contrib";
 	my $mstat = 0;
 	foreach my $module (glob("*"))
@@ -477,12 +503,25 @@ sub contribcheck
 		my $status = $? >> 8;
 		$mstat ||= $status;
 	}
+
+	# As above, but creates new DB instance for each module.  For CI.
+	if ($mode eq "install")
+	{
+		foreach my $module (glob("*"))
+		{
+			subdircheck("$module", -1);
+			$mstat ||= $? >> 8;
+		}
+	}
+
 	exit $mstat if $mstat;
 	return;
 }
 
 sub modulescheck
 {
+	my $mode = shift || '';
+
 	chdir "../../../src/test/modules";
 	my $mstat = 0;
 	foreach my $module (glob("*"))
@@ -491,6 +530,17 @@ sub modulescheck
 		my $status = $? >> 8;
 		$mstat ||= $status;
 	}
+
+	# As above, but creates new DB instance for each module.  For CI.
+	if ($mode eq "install")
+	{
+		foreach my $module (glob("*"))
+		{
+			subdircheck("$module", -1);
+			$mstat ||= $? >> 8;
+		}
+	}
+
 	exit $mstat if $mstat;
 	return;
 }
@@ -558,6 +608,7 @@ sub fetchRegressOpts
 		# option starting with "--".
 		@opts = grep { !/\$\(/ && /^--/ }
 		  map { (my $x = $_) =~ s/\Q$(top_builddir)\E/\"$topdir\"/; $x; }
+		  map { (my $x = $_) =~ s/\Q$(top_srcdir)\E/\"$topdir\"/; $x; }
 		  split(/\s+/, $1);
 	}
 	if ($m =~ /^\s*ENCODING\s*=\s*(\S+)/m)
@@ -583,14 +634,19 @@ sub fetchTests
 	my $m = <$handle>;
 	close($handle);
 	my $t = "";
+	my $installcheck = shift || 1;
 
 	$m =~ s{\\\r?\n}{}g;
 
-	# A module specifying NO_INSTALLCHECK does not support installcheck,
-	# so bypass its run by returning an empty set of tests.
 	if ($m =~ /^\s*NO_INSTALLCHECK\s*=\s*\S+/m)
 	{
-		return ();
+		# Skip modules marked installcheck unless running installcheck tests.
+		return () if $installcheck == 1;
+	}
+	else
+	{
+		# Skip modules not marked installcheck if running installcheck tests.
+		return () if $installcheck == -1;
 	}
 
 	if ($m =~ /^REGRESS\s*=\s*(.*)$/gm)
@@ -642,6 +698,7 @@ sub usage
 	print STDERR
 	  "Usage: vcregress.pl <mode> [<arg>]\n\n",
 	  "Options for <mode>:\n",
+	  "  alltaptests    run all tap tests (except kerberos, ldap, ssl, ssl_passphrase_callback)\n",
 	  "  bincheck       run tests of utilities in src/bin/\n",
 	  "  check          deploy instance and run regression tests on it\n",
 	  "  contribcheck   run tests of modules in contrib/\n",
@@ -656,7 +713,10 @@ sub usage
 	  "\nOptions for <arg>: (used by check and installcheck)\n",
 	  "  serial         serial mode\n",
 	  "  parallel       parallel mode\n",
+	  "\nOptions for <arg>: (used by contribcheck and modulescheck)\n",
+	  "  install        also run tests which require a new instance\n",
 	  "\nOption for <arg>: for taptest\n",
-	  "  TEST_DIR       (required) directory where tests reside\n";
+	  "  TEST_DIR       (required) directory where tests reside\n",
+	  "  PROVE_FLAGS    flags to pass to prove\n";
 	exit(1);
 }

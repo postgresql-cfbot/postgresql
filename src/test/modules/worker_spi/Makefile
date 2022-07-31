@@ -9,7 +9,7 @@ PGFILEDESC = "worker_spi - background worker example"
 REGRESS = worker_spi
 
 # enable our module in shared_preload_libraries for dynamic bgworkers
-REGRESS_OPTS = --temp-config $(top_srcdir)/src/test/modules/worker_spi/dynamic.conf
+REGRESS_OPTS = --temp-config=$(top_srcdir)/src/test/modules/worker_spi/dynamic.conf
 
 # Disable installcheck to ensure we cover dynamic bgworkers.
 NO_INSTALLCHECK = 1

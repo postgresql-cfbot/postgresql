@@ -145,6 +145,7 @@ test-build:
 
 check installcheck: export PATH := $(CURDIR)/test:$(PATH)
 
+# XXX
 check: test-build all
 	$(prove_check)
 

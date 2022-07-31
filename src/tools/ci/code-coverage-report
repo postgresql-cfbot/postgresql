@@ -1,0 +1,29 @@
+#! /bin/sh
+# Called during the linux CI task to generate a code coverage report.
+set -e
+
+base_branch=$1
+changed=`git diff --name-only "$base_branch" '*.c'` ||
+	[ $? -eq 1 ]
+
+outdir=coverage
+mkdir "$outdir"
+
+# Coverage is shown only for changed files
+# This is useful to see coverage of newly-added code, but won't
+# show added/lost coverage in files which this patch doesn't modify.
+
+gcov=$outdir/coverage.gcov
+for f in $changed
+do
+	# Avoid removed files
+	[ -f "$f" ] || continue
+
+	lcov --quiet --capture --directory "$f"
+done >"$gcov"
+
+# Exit successfully if no relevant files were changed
+[ -s "$gcov" ] || exit 0
+
+genhtml "$gcov" --show-details --legend --quiet --num-spaces=4 --output-directory "$outdir" --title="Coverage report of files changed since: $base_branch"
+cp "$outdir"/index.html "$outdir"/00-index.html

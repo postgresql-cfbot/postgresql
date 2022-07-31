@@ -81,13 +81,15 @@ EOF
   </PropertyGroup>
 EOF
 
+	my $debugformat = $ENV{'DebugInformationFormat'} || 'ProgramDatabase';
 	$self->WriteItemDefinitionGroup(
 		$f, 'Debug',
 		{
 			defs    => "_DEBUG;DEBUG=1",
 			opt     => 'Disabled',
 			strpool => 'false',
-			runtime => 'MultiThreadedDebugDLL'
+			runtime => 'MultiThreadedDebugDLL',
+			debugformat => $debugformat,
 		});
 	$self->WriteItemDefinitionGroup(
 		$f,
@@ -96,7 +98,8 @@ EOF
 			defs    => "",
 			opt     => 'Full',
 			strpool => 'true',
-			runtime => 'MultiThreadedDLL'
+			runtime => 'MultiThreadedDLL',
+			debugformat => $debugformat,
 		});
 	return;
 }
@@ -333,7 +336,7 @@ sub WriteItemDefinitionGroup
       <BrowseInformation>false</BrowseInformation>
       <WarningLevel>Level3</WarningLevel>
       <SuppressStartupBanner>true</SuppressStartupBanner>
-      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <DebugInformationFormat>$p->{debugformat}</DebugInformationFormat>
       <CompileAs>Default</CompileAs>
     </ClCompile>
     <Link>

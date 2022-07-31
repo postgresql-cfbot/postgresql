@@ -1,0 +1,35 @@
+#! /bin/sh
+# Copy HTML which differ between $old and $new into $outdir
+set -e
+
+old=$1
+new=$2
+outdir=$3
+branch=$4
+
+mkdir "$outdir"
+cp "$new"/src/sgml/html/*.css "$new"/src/sgml/html/*.svg "$outdir"
+
+# The index is useful to allow a static link to the artifacts for the most-recent, successful CI run for a branch
+# https://api.cirrus-ci.com/v1/artifact/github/USERNAME/postgres/Documentation/html_docs/html_docs/00-doc.html?branch=BRANCH
+index="$outdir/00-doc.html"
+echo "<html><head><title>Index of docs changed since: $branch</title></head><body><ul>" >"$index"
+
+changed=`git diff --no-index --name-only "$old"/src/sgml/html "$new"/src/sgml/html` ||
+	[ $? -eq 1 ]
+
+for f in $changed
+do
+	# Avoid removed files
+	[ -f "$f" ] || continue
+
+	cp -v "$f" "$outdir" >&2
+	fn=${f##*/}
+	# ?branch=... is needed for the static link for the branch
+	# It's not used if accessing artifacts for *this* CI run
+	echo "<li><a href='$fn?branch=$branch'>$fn</a>"
+done >>"$index"
+
+echo "</ul></body></html>" >>"$index"
+
+exit 0

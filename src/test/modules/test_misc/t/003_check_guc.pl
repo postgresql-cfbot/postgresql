@@ -35,7 +35,7 @@ my @not_in_sample_array = split("\n", lc($not_in_sample));
 
 # TAP tests are executed in the directory of the test, in the source tree,
 # even for VPATH builds, so rely on that to find postgresql.conf.sample.
-my $rootdir     = "../../../..";
+my $rootdir     = "$ENV{TESTDIR}/../../../..";
 my $sample_file = "$rootdir/src/backend/utils/misc/postgresql.conf.sample";
 
 # List of all the GUCs found in the sample file.

@@ -1,0 +1,16 @@
+#! /bin/sh
+# Success if the given file doesn't exist or is empty, else fail
+# This is a separate file only to avoid dealing with windows shell quoting and escaping.
+set -e
+
+fn=$1
+
+if [ -s "$fn" ]
+then
+	# Display the file's content, then exit indicating failure
+	cat "$fn"
+	exit 1
+else
+	# Success
+	exit 0
+fi

@@ -16,7 +16,9 @@ env:
   # Useful to be able to analyse what in a script takes long
   CIRRUS_LOG_TIMESTAMP: true
 
-  CCACHE_MAXSIZE: "250M"
+  CCACHE_MAXSIZE: "500M"
+  CCACHE_NOCOMPRESS: 1
+  #CCACHE_STATSLOG: ccache.log
 
   # target to test, for all but windows
   CHECK: check-world PROVE_FLAGS=$PROVE_FLAGS
@@ -25,6 +27,13 @@ env:
   PGCTLTIMEOUT: 120 # avoids spurious failures during parallel tests
   TEMP_CONFIG: ${CIRRUS_WORKING_DIR}/src/tools/ci/pg_ci_base.conf
   PG_TEST_EXTRA: kerberos ldap ssl
+
+  # The commit that this branch is rebased on.  There's no easy way to find this.
+  # This does the right thing for cfbot, which always squishes all patches into a single commit.
+  # And does the right thing for any 1-patch commits.
+  # Patch series manually submitted to cirrus would benefit from setting this to the
+  # number of patches in the series (or directly to the commit the series was rebased on).
+  BASE_COMMIT: HEAD~2
 
 
 # What files to preserve in case tests fail
@@ -40,11 +49,9 @@ task:
   name: FreeBSD - 13
 
   env:
-    # FreeBSD on GCP is slow when running with larger number of CPUS /
-    # jobs. Using one more job than cpus seems to work best.
-    CPUS: 2
-    BUILD_JOBS: 3
-    TEST_JOBS: 3
+    CPUS: 4
+    BUILD_JOBS: 4
+    TEST_JOBS: 6
 
     CCACHE_DIR: /tmp/ccache_dir
 
@@ -55,7 +62,7 @@ task:
     image: family/pg-ci-freebsd-13-1
     platform: freebsd
     cpu: $CPUS
-    memory: 2G
+    memory: 3G
     disk: 50
 
   sysinfo_script: |
@@ -110,7 +117,11 @@ task:
         CXX="ccache c++" \
         CFLAGS="-Og -ggdb"
     EOF
-  build_script: su postgres -c "gmake -s -j${BUILD_JOBS} world-bin"
+
+  build_script: |
+    ccache --zero-stats
+    su postgres -c "gmake -s -j${BUILD_JOBS} world-bin"
+    ccache --show-stats
   upload_caches: ccache
 
   # The use of script avoids make -Otarget complaints about fcntl() on
@@ -177,6 +188,7 @@ task:
     cat /proc/cmdline
     ulimit -a -H && ulimit -a -S
     export
+    git diff --name-only "$BASE_COMMIT"
   create_user_script: |
     useradd -m postgres
     chown -R postgres:postgres .
@@ -196,6 +208,7 @@ task:
     su postgres <<-EOF
       ./configure \
         --enable-cassert --enable-debug --enable-tap-tests \
+        --enable-coverage \
         --enable-nls \
         \
         ${LINUX_CONFIGURE_FEATURES} \
@@ -203,10 +216,14 @@ task:
         CC="ccache gcc" \
         CXX="ccache g++" \
         CLANG="ccache clang" \
-        CFLAGS="-Og -ggdb" \
-        CXXFLAGS="-Og -ggdb"
+        CFLAGS="-Og -ggdb -fsanitize=undefined,alignment -fno-sanitize-recover=all" \
+        CXXFLAGS="-Og -ggdb -fsanitize=undefined,alignment -fno-sanitize-recover=all"
     EOF
-  build_script: su postgres -c "make -s -j${BUILD_JOBS} world-bin"
+
+  build_script: |
+    ccache --zero-stats
+    su postgres -c "make -s -j${BUILD_JOBS} world-bin"
+    ccache --show-stats
   upload_caches: ccache
 
   test_world_script: |
@@ -214,6 +231,13 @@ task:
       ulimit -c unlimited # default is 0
       make -s ${CHECK} ${CHECKFLAGS} -j${TEST_JOBS}
     EOF
+
+  # Build coverage report for files changed since the base commit.
+  generate_coverage_report_script: |
+    src/tools/ci/code-coverage-report "$BASE_COMMIT"
+
+  coverage_artifacts:
+    paths: ['coverage/**/*.html', 'coverage/**/*.png', 'coverage/**/*.gcov', 'coverage/**/*.css' ]
 
   on_failure:
     <<: *on_failure
@@ -321,10 +345,15 @@ task:
       CLANG="ccache ${brewpath}/llvm/bin/ccache" \
       CFLAGS="-Og -ggdb" \
       CXXFLAGS="-Og -ggdb" \
+      CPPFLAGS="-DRELCACHE_FORCE_RELEASE -DCOPY_PARSE_PLAN_TREES -DWRITE_READ_PARSE_PLAN_TREES -DRAW_EXPRESSION_COVERAGE_TEST" \
       \
       LLVM_CONFIG=${brewpath}/llvm/bin/llvm-config \
       PYTHON=python3
-  build_script: gmake -s -j${BUILD_JOBS} world-bin
+
+  build_script: |
+    ccache --zero-stats
+    gmake -s -j${BUILD_JOBS} world-bin
+    ccache --show-stats
   upload_caches: ccache
 
   test_world_script: |
@@ -370,14 +399,20 @@ task:
     # ForceNoAlign prevents msbuild from introducing line-breaks for long lines
     # disable file tracker, we're never going to rebuild, and it slows down the
     #   build
-    MSBFLAGS: -m -verbosity:minimal "-consoleLoggerParameters:Summary;ForceNoAlign" /p:TrackFileAccess=false -nologo
+    # -fileLoggerParameters1: write warnings to msbuild.warn.log.
+    MSBFLAGS: -m -verbosity:minimal "-consoleLoggerParameters:Summary;ForceNoAlign" /p:TrackFileAccess=false -nologo -fileLoggerParameters1:warningsonly;logfile=msbuild.warn.log /p:UseMultiToolTask=true /p:EnforceProcessCountAcrossBuilds=true /p:CLToolPath=c:\ProgramData\chocolatey\bin
+
+    CCACHE_DIR: $CIRRUS_WORKING_DIR/.ccache
+    CCACHE_LOGFILE: ccache.log
+
+    DebugInformationFormat: OldStyle
 
     # If tests hang forever, cirrus eventually times out. In that case log
     # output etc is not uploaded, making the problem hard to debug. Of course
     # tests internally should have shorter timeouts, but that's proven to not
-    # be sufficient. 15min currently is fast enough to finish individual test
+    # be sufficient. 25min currently is fast enough to finish individual test
     # "suites".
-    T_C: "\"C:/Program Files/Git/usr/bin/timeout.exe\" -v -k60s 15m"
+    T_C: "\"C:/Program Files/Git/usr/bin/timeout.exe\" -v -k60s 25m"
 
     # startcreate_script starts a postgres instance that we don't want to get
     # killed at the end of that script (it's stopped in stop_script). Can't
@@ -392,6 +427,7 @@ task:
     image: $CONTAINER_REPO/windows_ci_vs_2019:latest
     cpu: $CPUS
     memory: 4G
+    greedy: true
 
   sysinfo_script: |
     chcp
@@ -399,8 +435,12 @@ task:
     powershell -Command get-psdrive -psprovider filesystem
     set
 
-  setup_additional_packages_script: |
-    REM choco install -y --no-progress ...
+  setup_additional_packages_script:
+    - choco install -y --no-progress ccache --version 4.6.1
+    - cp c:\ProgramData\chocolatey\lib\ccache\tools\ccache-4.6.1-windows-x86_64\ccache.exe \ProgramData\chocolatey\bin\cl.exe
+
+  ccache_cache:
+    folder: $CCACHE_DIR
 
   configure_script:
     # copy errors out when using forward slashes
@@ -408,11 +448,24 @@ task:
     - vcvarsall x64
     - perl src/tools/msvc/mkvcbuild.pl
   build_script:
+    #- ccache --clear
     - vcvarsall x64
+    - ccache --zero-stats
     - msbuild %MSBFLAGS% pgsql.sln
+    - ccache --show-stats
+
+  always:
+    upload_caches: ccache
+
   tempinstall_script:
     # Installation on windows currently only completely works from src/tools/msvc
+    - set INSTALL_TESTS=1
     - cd src/tools/msvc && perl install.pl %CIRRUS_WORKING_DIR%/tmp_install
+
+  this_tap_script: |
+    %T_C% perl src/tools/msvc/vcregress.pl taptest src/interfaces/libpq
+  test_tap_script: |
+    %T_C% perl src/tools/msvc/vcregress.pl alltaptests
 
   test_regress_parallel_script: |
     %T_C% perl src/tools/msvc/vcregress.pl check parallel
@@ -427,28 +480,25 @@ task:
   test_isolation_script: |
     %T_C% perl src/tools/msvc/vcregress.pl isolationcheck
   test_modules_script: |
-    %T_C% perl src/tools/msvc/vcregress.pl modulescheck
+    %T_C% perl src/tools/msvc/vcregress.pl modulescheck install
   test_contrib_script: |
-    %T_C% perl src/tools/msvc/vcregress.pl contribcheck
+    %T_C% perl src/tools/msvc/vcregress.pl contribcheck install
   stop_script: |
     tmp_install\bin\pg_ctl.exe stop -D tmp_check/db -l tmp_check/postmaster.log
   test_ssl_script: |
     set with_ssl=openssl
     %T_C% perl src/tools/msvc/vcregress.pl taptest ./src/test/ssl/
-  test_subscription_script: |
-    %T_C% perl src/tools/msvc/vcregress.pl taptest ./src/test/subscription/
-  test_authentication_script: |
-    %T_C% perl src/tools/msvc/vcregress.pl taptest ./src/test/authentication/
-  test_recovery_script: |
-    %T_C% perl src/tools/msvc/vcregress.pl recoverycheck
-  test_bin_script: |
-    %T_C% perl src/tools/msvc/vcregress.pl bincheck
   test_ecpg_script: |
     rem tries to build additional stuff
     vcvarsall x64
     rem References ecpg_regression.proj in the current dir
     cd src/tools/msvc
     %T_C% perl vcregress.pl ecpgcheck
+
+  # These should be last, so all the important checks are always run
+  always:
+    compiler_warnings_script:
+      - sh src\tools\ci\windows-compiler-warnings msbuild.warn.log
 
   on_failure:
     <<: *on_failure
@@ -518,7 +568,9 @@ task:
         ${LINUX_CONFIGURE_FEATURES} \
         CC="ccache gcc" CXX="ccache g++" CLANG="ccache clang"
       make -s -j${BUILD_JOBS} clean
+      ccache --zero-stats
       time make -s -j${BUILD_JOBS} world-bin
+      ccache --show-stats
 
   # gcc, cassert on, dtrace off
   always:
@@ -529,7 +581,9 @@ task:
         ${LINUX_CONFIGURE_FEATURES} \
         CC="ccache gcc" CXX="ccache g++" CLANG="ccache clang"
       make -s -j${BUILD_JOBS} clean
+      ccache --zero-stats
       time make -s -j${BUILD_JOBS} world-bin
+      ccache --show-stats
 
   # clang, cassert off, dtrace off
   always:
@@ -539,7 +593,9 @@ task:
         ${LINUX_CONFIGURE_FEATURES} \
         CC="ccache clang" CXX="ccache clang++" CLANG="ccache clang"
       make -s -j${BUILD_JOBS} clean
+      ccache --zero-stats
       time make -s -j${BUILD_JOBS} world-bin
+      ccache --show-stats
 
   # clang, cassert on, dtrace on
   always:
@@ -551,7 +607,9 @@ task:
         ${LINUX_CONFIGURE_FEATURES} \
         CC="ccache clang" CXX="ccache clang++" CLANG="ccache clang"
       make -s -j${BUILD_JOBS} clean
+      ccache --zero-stats
       time make -s -j${BUILD_JOBS} world-bin
+      ccache --show-stats
 
   # cross-compile to windows
   always:
@@ -562,21 +620,9 @@ task:
         CC="ccache x86_64-w64-mingw32-gcc" \
         CXX="ccache x86_64-w64-mingw32-g++"
       make -s -j${BUILD_JOBS} clean
+      ccache --zero-stats
       time make -s -j${BUILD_JOBS} world-bin
-
-  ###
-  # Verify docs can be built
-  ###
-  # XXX: Only do this if there have been changes in doc/ since last build
-  always:
-    docs_build_script: |
-      time ./configure \
-        --cache gcc.cache \
-        CC="ccache gcc" \
-        CXX="ccache g++" \
-        CLANG="ccache clang"
-      make -s -j${BUILD_JOBS} clean
-      time make -s -j${BUILD_JOBS} -C doc
+      ccache --show-stats
 
   ###
   # Verify headerscheck / cpluspluscheck succeed
@@ -603,3 +649,50 @@ task:
 
   always:
     upload_caches: ccache
+
+
+###
+# Verify docs can be built, and (only on cfbot) upload changed docs as artifacts
+###
+
+task:
+  name: Documentation
+
+  env:
+    CPUS: 1
+    BUILD_JOBS: 1
+
+  only_if: $CIRRUS_CHANGE_MESSAGE !=~ '.*\nci-os-only:.*' || $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-os-only:[^\n]*(docs|html).*'
+  #skip: "!changesInclude('.cirrus.yml', 'doc/**', 'src/tools/ci/copy-changed-docs')"
+
+  container:
+    image: $CONTAINER_REPO/linux_debian_bullseye_ci:latest
+    cpu: $CPUS
+    memory: 2G
+
+  sysinfo_script: |
+    id
+    uname -a
+    cat /proc/cmdline
+    ulimit -a -H && ulimit -a -S
+    export
+    git diff --name-only "$BASE_COMMIT"
+
+  # Exercise HTML and other docs:
+  docs_build_script: |
+    time ./configure
+    make -s -j${BUILD_JOBS} -C doc
+    cp -r doc new-docs
+
+    # Build HTML docs from the base commit.
+    git checkout "$BASE_COMMIT" -- doc
+    #html-stamp
+    make -s -C doc clean
+    make -s -C doc html
+    cp -r doc old-docs
+
+  copy_changed_docs_script: |
+    src/tools/ci/copy-changed-docs "old-docs" "new-docs" "html_docs" "$CIRRUS_BRANCH"
+
+  html_docs_artifacts:
+    paths: ['html_docs/*.html', 'html_docs/*.png', 'html_docs/*.css']

@@ -14,11 +14,11 @@ endif
 override CPPFLAGS := -I$(libpq_srcdir) $(CPPFLAGS)
 LDFLAGS_INTERNAL += $(libpq_pgport)
 
-PROGS = libpq_testclient libpq_uri_regress
+PROGRAMS = libpq_testclient libpq_uri_regress libpq_pipeline
 
-all: $(PROGS)
+all: $(PROGRAMS)
 
-$(PROGS): $(WIN32RES)
+$(PROGRAMS): $(WIN32RES)
 
 clean distclean maintainer-clean:
-	rm -f $(PROGS) *.o
+	rm -f $(PROGRAMS) *.o

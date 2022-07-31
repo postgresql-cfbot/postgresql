@@ -10,7 +10,7 @@ ISOLATION = mxact delayed_startup ondisk_startup concurrent_ddl_dml \
 	oldest_xmin snapshot_transfer subxact_without_top concurrent_stream \
 	twophase_snapshot slot_creation_error
 
-REGRESS_OPTS = --temp-config $(top_srcdir)/contrib/test_decoding/logical.conf
+REGRESS_OPTS = --temp-config=$(top_srcdir)/contrib/test_decoding/logical.conf
 ISOLATION_OPTS = --temp-config $(top_srcdir)/contrib/test_decoding/logical.conf
 
 # Disabled because these tests require "wal_level=logical", which

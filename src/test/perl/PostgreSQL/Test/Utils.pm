@@ -189,19 +189,31 @@ INIT
 	# test may still fail, but it's more likely to report useful facts.
 	$SIG{PIPE} = 'IGNORE';
 
-	# Determine output directories, and create them.  The base path is the
-	# TESTDIR environment variable, which is normally set by the invoking
-	# Makefile.
-	$tmp_check = $ENV{TESTDIR} ? "$ENV{TESTDIR}/tmp_check" : "tmp_check";
+	my $test_dir = File::Spec->rel2abs($ENV{PG_SUBDIR} || dirname(dirname($0)));
+	my $test_name = basename($0);
+	$test_name =~ s/\.[^.]+$//;
+
+	$ENV{TESTDIR} = $test_dir;
+
+	if ($PostgreSQL::Test::Utils::windows_os &&
+		$Config{osname} eq 'MSWin32')
+	{
+		$ENV{PATH} =~ s!;!;$test_dir;!;
+	}
+	else
+	{
+		$ENV{PATH} =~ s!:!:$test_dir:!;
+	}
+
+	# Determine output directories, and create them.
+	$tmp_check = "$test_dir/tmp_check";
 	$log_path = "$tmp_check/log";
 
 	mkdir $tmp_check;
 	mkdir $log_path;
 
 	# Open the test log file, whose name depends on the test name.
-	$test_logfile = basename($0);
-	$test_logfile =~ s/\.[^.]+$//;
-	$test_logfile = "$log_path/regress_log_$test_logfile";
+	$test_logfile = "$log_path/regress_log_$test_name";
 	open my $testlog, '>', $test_logfile
 	  or die "could not open STDOUT to logfile \"$test_logfile\": $!";
 

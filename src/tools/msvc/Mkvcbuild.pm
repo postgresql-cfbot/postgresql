@@ -37,11 +37,15 @@ my @unlink_on_exit;
 # Set of variables for modules in contrib/ and src/test/modules/
 my $contrib_defines        = {};
 my @contrib_uselibpq       = ();
-my @contrib_uselibpgport   = ();
-my @contrib_uselibpgcommon = ();
+my @contrib_uselibpgport   = ('libpq_uri_regress', 'libpq_testclient', 'libpq_pipeline');
+my @contrib_uselibpgcommon = ('libpq_pipeline');
 my $contrib_extralibs      = { 'libpq_pipeline' => ['ws2_32.lib'] };
 my $contrib_extraincludes  = {};
-my $contrib_extrasource    = {};
+my $contrib_extrasource    = {
+	'libpq_uri_regress' => ['src/interfaces/libpq/test/libpq_uri_regress.c'],
+	'libpq_testclient'  => ['src/interfaces/libpq/test/libpq_testclient.c'],
+	'libpq_pipeline'    => ['src/interfaces/libpq/test/libpq_pipeline.c'],
+};
 my @contrib_excludes       = (
 	'bool_plperl',     'commit_ts',
 	'hstore_plperl',   'hstore_plpython',
@@ -285,24 +289,6 @@ sub mkvcbuild
 	$libpqwalreceiver->AddIncludeDir('src/interfaces/libpq');
 	$libpqwalreceiver->AddReference($postgres, $libpq);
 
-	my $libpq_testclient =
-	  $solution->AddProject('libpq_testclient', 'exe', 'misc',
-		'src/interfaces/libpq/test');
-	$libpq_testclient->AddFile(
-		'src/interfaces/libpq/test/libpq_testclient.c');
-	$libpq_testclient->AddIncludeDir('src/interfaces/libpq');
-	$libpq_testclient->AddReference($libpgport, $libpq);
-	$libpq_testclient->AddLibrary('ws2_32.lib');
-
-	my $libpq_uri_regress =
-	  $solution->AddProject('libpq_uri_regress', 'exe', 'misc',
-		'src/interfaces/libpq/test');
-	$libpq_uri_regress->AddFile(
-		'src/interfaces/libpq/test/libpq_uri_regress.c');
-	$libpq_uri_regress->AddIncludeDir('src/interfaces/libpq');
-	$libpq_uri_regress->AddReference($libpgport, $libpq);
-	$libpq_uri_regress->AddLibrary('ws2_32.lib');
-
 	my $pgoutput = $solution->AddProject('pgoutput', 'dll', '',
 		'src/backend/replication/pgoutput');
 	$pgoutput->AddReference($postgres);
@@ -476,7 +462,7 @@ sub mkvcbuild
 		push @contrib_excludes, 'uuid-ossp';
 	}
 
-	foreach my $subdir ('contrib', 'src/test/modules')
+	foreach my $subdir ('contrib', 'src/test/modules', 'src/interfaces/libpq')
 	{
 		opendir($D, $subdir) || croak "Could not opendir on $subdir!\n";
 		while (my $d = readdir($D))
@@ -986,6 +972,15 @@ sub AddContrib
 		my $proj = $solution->AddProject($1, 'exe', 'contrib', "$subdir/$n");
 		AdjustContribProj($proj);
 		push @projects, $proj;
+	}
+	elsif ($mf =~ /^PROGRAMS\s*=\s*(.*)$/mg)
+	{
+		foreach my $proj (split /\s+/, $1)
+		{
+			my $p = $solution->AddProject($proj, 'exe', 'contrib', "$subdir/$n");
+			AdjustContribProj($p);
+			push @projects, $p;
+		}
 	}
 	else
 	{

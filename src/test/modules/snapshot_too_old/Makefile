@@ -5,7 +5,7 @@
 EXTRA_CLEAN = $(pg_regress_clean_files)
 
 ISOLATION = sto_using_cursor sto_using_select sto_using_hash_index
-ISOLATION_OPTS = --temp-config $(top_srcdir)/src/test/modules/snapshot_too_old/sto.conf
+ISOLATION_OPTS = --temp-config=$(top_srcdir)/src/test/modules/snapshot_too_old/sto.conf
 
 # Disabled because these tests require "old_snapshot_threshold" >= 0, which
 # typical installcheck users do not have (e.g. buildfarm clients).

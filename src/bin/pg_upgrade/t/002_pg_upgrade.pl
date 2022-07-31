@@ -64,7 +64,7 @@ $oldnode->init(extra => [ '--wal-segsize', '1', '--allow-group-access' ]);
 $oldnode->start;
 
 # The default location of the source code is the root of this directory.
-my $srcdir = abs_path("../../..");
+my $srcdir = abs_path("$ENV{TESTDIR}/../../..");
 
 # Set up the data of the old instance with a dump or pg_regress.
 if (defined($ENV{olddump}))

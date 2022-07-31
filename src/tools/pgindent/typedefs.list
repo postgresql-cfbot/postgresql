@@ -116,6 +116,10 @@ Append
 AppendPath
 AppendRelInfo
 AppendState
+ApplyBgworkerEntry
+ApplyBgworkerShared
+ApplyBgworkerState
+ApplyBgworkerStatus
 ApplyErrorCallbackArg
 ApplyExecutionData
 ApplySubXactData
@@ -1485,6 +1489,7 @@ LogicalRepRelId
 LogicalRepRelMapEntry
 LogicalRepRelation
 LogicalRepRollbackPreparedTxnData
+LogicalRepStreamAbortData
 LogicalRepTupleData
 LogicalRepTyp
 LogicalRepWorker
@@ -1886,6 +1891,7 @@ PageXLogRecPtr
 PagetableEntry
 Pairs
 ParallelAppendState
+ParallelApplySafety
 ParallelBitmapHeapState
 ParallelBlockTableScanDesc
 ParallelBlockTableScanWorker

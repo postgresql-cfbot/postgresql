@@ -19,12 +19,19 @@
 
 #include "access/table.h"
 #include "catalog/namespace.h"
+#include "catalog/pg_proc.h"
 #include "catalog/pg_subscription_rel.h"
+#include "commands/trigger.h"
 #include "executor/executor.h"
 #include "nodes/makefuncs.h"
+#include "optimizer/optimizer.h"
 #include "replication/logicalrelation.h"
 #include "replication/worker_internal.h"
+#include "rewrite/rewriteHandler.h"
 #include "utils/inval.h"
+#include "utils/lsyscache.h"
+#include "utils/syscache.h"
+#include "utils/typcache.h"
 
 
 static MemoryContext LogicalRepRelMapContext = NULL;
@@ -92,6 +99,26 @@ logicalrep_relmap_invalidate_cb(Datum arg, Oid reloid)
 }
 
 /*
+ * Relcache invalidation callback to reset parallel flag.
+ */
+static void
+logicalrep_relmap_reset_parallel_cb(Datum arg, int cacheid, uint32 hashvalue)
+{
+	HASH_SEQ_STATUS hash_seq;
+	LogicalRepRelMapEntry *entry;
+
+	if (LogicalRepRelMap == NULL)
+		return;
+
+	hash_seq_init(&hash_seq, LogicalRepRelMap);
+	while ((entry = hash_seq_search(&hash_seq)) != NULL)
+	{
+		entry->parallel_apply = PARALLEL_APPLY_UNKNOWN;
+		entry->localrelvalid = false;
+	}
+}
+
+/*
  * Initialize the relation map cache.
  */
 static void
@@ -115,6 +142,9 @@ logicalrep_relmap_init(void)
 
 	/* Watch for invalidation events. */
 	CacheRegisterRelcacheCallback(logicalrep_relmap_invalidate_cb,
+								  (Datum) 0);
+	CacheRegisterSyscacheCallback(PROCOID,
+								  logicalrep_relmap_reset_parallel_cb,
 								  (Datum) 0);
 }
 
@@ -142,6 +172,7 @@ logicalrep_relmap_free_entry(LogicalRepRelMapEntry *entry)
 		pfree(remoterel->atttyps);
 	}
 	bms_free(remoterel->attkeys);
+	bms_free(remoterel->attunique);
 
 	if (entry->attrmap)
 		free_attrmap(entry->attrmap);
@@ -190,6 +221,7 @@ logicalrep_relmap_update(LogicalRepRelation *remoterel)
 	}
 	entry->remoterel.replident = remoterel->replident;
 	entry->remoterel.attkeys = bms_copy(remoterel->attkeys);
+	entry->remoterel.attunique = bms_copy(remoterel->attunique);
 	MemoryContextSwitchTo(oldctx);
 }
 
@@ -308,6 +340,168 @@ logicalrep_rel_mark_updatable(LogicalRepRelMapEntry *entry)
 			break;
 		}
 	}
+}
+
+/*
+ * Check if changes on one relation can be applied by an apply background
+ * worker and assign the 'parallel_apply' flag.
+ *
+ * There are two requirements for applying changes in an apply background
+ * worker: 1) The unique column in the relation on the subscriber-side should
+ * also be the unique column on the publisher-side; 2) There cannot be any
+ * non-immutable functions used by the subscriber-side.
+ *
+ * We just mark the relation entry as 'PARALLEL_APPLY_UNSAFE' here if changes
+ * on one relation can not be applied by an apply background worker and leave
+ * it to apply_bgworker_relation_check() to throw the actual error if needed.
+ */
+static void
+logicalrep_rel_mark_parallel_apply(LogicalRepRelMapEntry *entry)
+{
+	Bitmapset   *ukey;
+	int			i;
+	TupleDesc	tupdesc;
+	int			attnum;
+	List	   *fkeys = NIL;
+
+	/* Fast path if 'parallel_apply' flag is already known. */
+	if (entry->parallel_apply != PARALLEL_APPLY_UNKNOWN)
+		return;
+
+	/* Initialize the flag. */
+	entry->parallel_apply = PARALLEL_APPLY_SAFE;
+
+	/*
+	 * First, check if the unique column in the relation on the subscriber-side
+	 * is also the unique column on the publisher-side.
+	 */
+	ukey = RelationGetIndexAttrBitmap(entry->localrel,
+									  INDEX_ATTR_BITMAP_KEY);
+
+	if (ukey)
+	{
+		i = -1;
+		while ((i = bms_next_member(ukey, i)) >= 0)
+		{
+			attnum = AttrNumberGetAttrOffset(i + FirstLowInvalidHeapAttributeNumber);
+
+			if (entry->attrmap->attnums[attnum] < 0 ||
+				!bms_is_member(entry->attrmap->attnums[attnum], entry->remoterel.attunique))
+			{
+				entry->parallel_apply = PARALLEL_APPLY_UNSAFE;
+				return;
+			}
+		}
+
+		bms_free(ukey);
+	}
+
+	/*
+	 * Then, check if there is any non-immutable function used by the local
+	 * table. Look for functions in the following places:
+	 * a. trigger functions;
+	 * b. Column default value expressions and domain constraints;
+	 * c. Constraint expressions;
+	 * d. Foreign keys.
+	 */
+	/* Check the trigger functions. */
+	if (entry->localrel->trigdesc != NULL)
+	{
+		for (i = 0; i < entry->localrel->trigdesc->numtriggers; i++)
+		{
+			Trigger    *trig = entry->localrel->trigdesc->triggers + i;
+
+			if (trig->tgenabled != TRIGGER_FIRES_ALWAYS &&
+				trig->tgenabled != TRIGGER_FIRES_ON_REPLICA)
+				continue;
+
+			if (func_volatile(trig->tgfoid) != PROVOLATILE_IMMUTABLE)
+			{
+				entry->parallel_apply = PARALLEL_APPLY_UNSAFE;
+				return;
+			}
+		}
+	}
+
+	/* Check the columns. */
+	tupdesc = RelationGetDescr(entry->localrel);
+	for (attnum = 0; attnum < tupdesc->natts; attnum++)
+	{
+		Form_pg_attribute att = TupleDescAttr(tupdesc, attnum);
+
+		/* We don't need info for dropped or generated attributes */
+		if (att->attisdropped || att->attgenerated)
+			continue;
+
+		/*
+		 * We don't need to check columns that only exist on the
+		 * subscriber
+		 */
+		if (entry->attrmap->attnums[attnum] < 0)
+			continue;
+
+		if (att->atthasdef)
+		{
+			Node	   *defaultexpr;
+
+			defaultexpr = build_column_default(entry->localrel, attnum + 1);
+			if (contain_mutable_functions(defaultexpr))
+			{
+				entry->parallel_apply = PARALLEL_APPLY_UNSAFE;
+				return;
+			}
+		}
+
+		/*
+		 * If the column is of a DOMAIN type, determine whether
+		 * that domain has any CHECK expressions that are not
+		 * immutable.
+		 */
+		if (get_typtype(att->atttypid) == TYPTYPE_DOMAIN)
+		{
+			List	   *domain_constraints;
+			ListCell   *lc;
+
+			domain_constraints = GetDomainConstraints(att->atttypid);
+
+			foreach(lc, domain_constraints)
+			{
+				DomainConstraintState *con = (DomainConstraintState *) lfirst(lc);
+
+				if (con->check_expr && contain_mutable_functions((Node *) con->check_expr))
+				{
+					entry->parallel_apply = PARALLEL_APPLY_UNSAFE;
+					return;
+				}
+			}
+		}
+	}
+
+	/* Check the constraints. */
+	if (tupdesc->constr)
+	{
+		ConstrCheck *check = tupdesc->constr->check;
+
+		/*
+		 * Determine if there are any CHECK constraints which
+		 * contains non-immutable function.
+		 */
+		for (i = 0; i < tupdesc->constr->num_check; i++)
+		{
+			Expr	   *check_expr = stringToNode(check[i].ccbin);
+
+			if (contain_mutable_functions((Node *) check_expr))
+			{
+				entry->parallel_apply = PARALLEL_APPLY_UNSAFE;
+				return;
+			}
+		}
+	}
+
+	/* Check the foreign keys. */
+	fkeys = RelationGetFKeyList(entry->localrel);
+	if (fkeys)
+		entry->parallel_apply = PARALLEL_APPLY_UNSAFE;
 }
 
 /*
@@ -437,6 +631,9 @@ logicalrep_rel_open(LogicalRepRelId remoteid, LOCKMODE lockmode)
 		 * update/delete.
 		 */
 		logicalrep_rel_mark_updatable(entry);
+
+		/* Set if changes could be applied in the apply background worker. */
+		logicalrep_rel_mark_parallel_apply(entry);
 
 		entry->localrelvalid = true;
 	}
@@ -653,6 +850,7 @@ logicalrep_partition_open(LogicalRepRelMapEntry *root,
 		}
 		entry->remoterel.replident = remoterel->replident;
 		entry->remoterel.attkeys = bms_copy(remoterel->attkeys);
+		entry->remoterel.attunique = bms_copy(remoterel->attunique);
 	}
 
 	entry->localrel = partrel;
@@ -695,6 +893,9 @@ logicalrep_partition_open(LogicalRepRelMapEntry *root,
 
 	/* Set if the table's replica identity is enough to apply update/delete. */
 	logicalrep_rel_mark_updatable(entry);
+
+	/* Set if changes could be applied in the apply background worker. */
+	logicalrep_rel_mark_parallel_apply(entry);
 
 	entry->localrelvalid = true;
 

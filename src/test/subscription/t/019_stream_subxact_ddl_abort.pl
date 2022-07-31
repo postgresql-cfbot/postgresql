@@ -9,6 +9,69 @@ use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
 use Test::More;
 
+# Encapsulate all the common test steps which are related to "streaming"
+# parameter so the same code can be run both for the streaming=on and
+# streaming=parallel cases.
+sub test_streaming
+{
+	my ($node_publisher, $node_subscriber, $appname, $is_parallel) = @_;
+
+	# Check that a background worker starts if "streaming" parameter is
+	# specified as "parallel".  We have to look for the DEBUG1 log messages
+	# about that, so temporarily bump up the log verbosity.
+	if ($is_parallel)
+	{
+		$node_subscriber->append_conf('postgresql.conf',
+			"log_min_messages = debug1");
+		$node_subscriber->reload;
+	}
+
+	# large (streamed) transaction with DDL, DML and ROLLBACKs
+	$node_publisher->safe_psql(
+		'postgres', q{
+	BEGIN;
+	INSERT INTO test_tab SELECT i, md5(i::text) FROM generate_series(3,500) s(i);
+	ALTER TABLE test_tab ADD COLUMN c INT;
+	SAVEPOINT s1;
+	INSERT INTO test_tab SELECT i, md5(i::text), -i FROM generate_series(501,1000) s(i);
+	ALTER TABLE test_tab ADD COLUMN d INT;
+	SAVEPOINT s2;
+	INSERT INTO test_tab SELECT i, md5(i::text), -i, 2*i FROM generate_series(1001,1500) s(i);
+	ALTER TABLE test_tab ADD COLUMN e INT;
+	SAVEPOINT s3;
+	INSERT INTO test_tab SELECT i, md5(i::text), -i, 2*i, -3*i FROM generate_series(1501,2000) s(i);
+	ALTER TABLE test_tab DROP COLUMN c;
+	ROLLBACK TO s1;
+	INSERT INTO test_tab SELECT i, md5(i::text), i FROM generate_series(501,1000) s(i);
+	COMMIT;
+	});
+
+	if ($is_parallel)
+	{
+		$node_subscriber->wait_for_log(qr/\[Apply BGW #\d+\] started/, 0);
+		$node_subscriber->append_conf('postgresql.conf',
+			"log_min_messages = warning");
+		$node_subscriber->reload;
+	}
+
+	$node_publisher->wait_for_catchup($appname);
+
+	my $result =
+	  $node_subscriber->safe_psql('postgres',
+		"SELECT count(*), count(c) FROM test_tab");
+	is($result, qq(1000|500),
+		'check rollback to savepoint was reflected on subscriber and extra columns contain local defaults'
+	);
+
+	# Cleanup the test data
+	$node_publisher->safe_psql(
+		'postgres', q{
+	DELETE FROM test_tab WHERE (a > 2);
+	ALTER TABLE test_tab DROP COLUMN c;
+	});
+	$node_publisher->wait_for_catchup($appname);
+}
+
 # Create publisher node
 my $node_publisher = PostgreSQL::Test::Cluster->new('publisher');
 $node_publisher->init(allows_streaming => 'logical');
@@ -37,6 +100,10 @@ $node_publisher->safe_psql('postgres',
 	"CREATE PUBLICATION tap_pub FOR TABLE test_tab");
 
 my $appname = 'tap_sub';
+
+################################
+# Test using streaming mode 'on'
+################################
 $node_subscriber->safe_psql('postgres',
 	"CREATE SUBSCRIPTION tap_sub CONNECTION '$publisher_connstr application_name=$appname' PUBLICATION tap_pub WITH (streaming = on)"
 );
@@ -54,34 +121,25 @@ my $result =
 	"SELECT count(*), count(c) FROM test_tab");
 is($result, qq(2|0), 'check initial data was copied to subscriber');
 
-# large (streamed) transaction with DDL, DML and ROLLBACKs
-$node_publisher->safe_psql(
-	'postgres', q{
-BEGIN;
-INSERT INTO test_tab SELECT i, md5(i::text) FROM generate_series(3,500) s(i);
-ALTER TABLE test_tab ADD COLUMN c INT;
-SAVEPOINT s1;
-INSERT INTO test_tab SELECT i, md5(i::text), -i FROM generate_series(501,1000) s(i);
-ALTER TABLE test_tab ADD COLUMN d INT;
-SAVEPOINT s2;
-INSERT INTO test_tab SELECT i, md5(i::text), -i, 2*i FROM generate_series(1001,1500) s(i);
-ALTER TABLE test_tab ADD COLUMN e INT;
-SAVEPOINT s3;
-INSERT INTO test_tab SELECT i, md5(i::text), -i, 2*i, -3*i FROM generate_series(1501,2000) s(i);
-ALTER TABLE test_tab DROP COLUMN c;
-ROLLBACK TO s1;
-INSERT INTO test_tab SELECT i, md5(i::text), i FROM generate_series(501,1000) s(i);
-COMMIT;
-});
+test_streaming($node_publisher, $node_subscriber, $appname, 0);
 
-$node_publisher->wait_for_catchup($appname);
-
-$result =
-  $node_subscriber->safe_psql('postgres',
-	"SELECT count(*), count(c) FROM test_tab");
-is($result, qq(1000|500),
-	'check rollback to savepoint was reflected on subscriber and extra columns contain local defaults'
+######################################
+# Test using streaming mode 'parallel'
+######################################
+my $oldpid = $node_publisher->safe_psql('postgres',
+	"SELECT pid FROM pg_stat_replication WHERE application_name = '$appname' AND state = 'streaming';"
 );
+
+$node_subscriber->safe_psql('postgres',
+	"ALTER SUBSCRIPTION tap_sub SET(streaming = parallel)");
+
+$node_publisher->poll_query_until('postgres',
+	"SELECT pid != $oldpid FROM pg_stat_replication WHERE application_name = '$appname' AND state = 'streaming';"
+  )
+  or die
+  "Timed out while waiting for apply to restart after changing SUBSCRIPTION";
+
+test_streaming($node_publisher, $node_subscriber, $appname, 1);
 
 $node_subscriber->stop;
 $node_publisher->stop;

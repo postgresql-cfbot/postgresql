@@ -15,6 +15,19 @@
 #include "access/attmap.h"
 #include "replication/logicalproto.h"
 
+/*
+ *	States to determine if changes on one relation can be applied using an
+ *	apply background worker.
+ */
+typedef enum ParalleApplySafety
+{
+	PARALLEL_APPLY_UNKNOWN = 0,	/* unknown  */
+	PARALLEL_APPLY_SAFE,		/* Can apply changes in an apply background
+								   worker */
+	PARALLEL_APPLY_UNSAFE		/* Can not apply changes in an apply background
+								   worker */
+} ParalleApplySafety;
+
 typedef struct LogicalRepRelMapEntry
 {
 	LogicalRepRelation remoterel;	/* key is remoterel.remoteid */
@@ -31,6 +44,8 @@ typedef struct LogicalRepRelMapEntry
 	Relation	localrel;		/* relcache entry (NULL when closed) */
 	AttrMap    *attrmap;		/* map of local attributes to remote ones */
 	bool		updatable;		/* Can apply updates/deletes? */
+	ParalleApplySafety	parallel_apply;	/* Can apply changes in an apply
+										   background worker? */
 
 	/* Sync state. */
 	char		state;

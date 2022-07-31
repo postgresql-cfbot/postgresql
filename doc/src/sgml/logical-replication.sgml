@@ -1153,6 +1153,16 @@ CONTEXT:  processing remote data for replication origin "pg_16395" during "INSER
    might not violate any constraint.  This can easily make the subscriber
    inconsistent.
   </para>
+
+  <para>
+   When the streaming mode is <literal>parallel</literal>, the finish LSN of
+   failed transactions may not be logged. In that case, it may be necessary to
+   change the streaming mode to <literal>on</literal> and cause the same
+   conflicts again so the finish LSN of the failed transaction will be written
+   to the server log. For the usage of finish LSN, please refer to <link
+   linkend="sql-altersubscription"><command>ALTER SUBSCRIPTION ...
+   SKIP</command></link>.
+  </para>
  </sect1>
 
  <sect1 id="logical-replication-restrictions">

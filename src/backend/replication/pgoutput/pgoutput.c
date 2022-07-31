@@ -1843,6 +1843,9 @@ pgoutput_stream_abort(struct LogicalDecodingContext *ctx,
 					  XLogRecPtr abort_lsn)
 {
 	ReorderBufferTXN *toptxn;
+	PGOutputData *data = (PGOutputData *) ctx->output_plugin_private;
+	bool write_abort_lsn = (data->protocol_version >=
+							LOGICALREP_PROTO_STREAM_PARALLEL_VERSION_NUM);
 
 	/*
 	 * The abort should happen outside streaming block, even for streamed
@@ -1856,7 +1859,8 @@ pgoutput_stream_abort(struct LogicalDecodingContext *ctx,
 	Assert(rbtxn_is_streamed(toptxn));
 
 	OutputPluginPrepareWrite(ctx, true);
-	logicalrep_write_stream_abort(ctx->out, toptxn->xid, txn->xid);
+	logicalrep_write_stream_abort(ctx->out, toptxn->xid, txn, abort_lsn,
+								  write_abort_lsn);
 	OutputPluginWrite(ctx, true);
 
 	cleanup_rel_sync_cache(toptxn->xid, false);

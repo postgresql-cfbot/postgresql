@@ -15,6 +15,7 @@ include $(top_builddir)/src/Makefile.global
 override CPPFLAGS := -I$(srcdir) $(CPPFLAGS)
 
 OBJS = \
+	applybgworker.o \
 	decode.o \
 	launcher.o \
 	logical.o \

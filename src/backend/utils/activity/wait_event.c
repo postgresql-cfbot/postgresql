@@ -388,6 +388,9 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 		case WAIT_EVENT_HASH_GROW_BUCKETS_REINSERT:
 			event_name = "HashGrowBucketsReinsert";
 			break;
+		case WAIT_EVENT_LOGICAL_APPLY_WORKER_STATE_CHANGE:
+			event_name = "LogicalApplyWorkerStateChange";
+			break;
 		case WAIT_EVENT_LOGICAL_SYNC_DATA:
 			event_name = "LogicalSyncData";
 			break;

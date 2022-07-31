@@ -1075,12 +1075,21 @@ ReplicationOriginExitCleanup(int code, Datum arg)
  * array doesn't have to be searched when calling
  * replorigin_session_advance().
  *
- * Obviously only one such cached origin can exist per process and the current
+ * Normally only one such cached origin can exist per process and the current
  * cached value can only be set again after the previous value is torn down
  * with replorigin_session_reset().
+ *
+ * However, if the function parameter 'must_acquire' is false, we allow the
+ * process to use the same slot already acquired by another process. It's safe
+ * because 1) The only caller (apply background workers) will maintain the
+ * commit order by allowing only one process to commit at a time, so no two
+ * workers will be operating on the same origin at the same time (see comments
+ * in logical/worker.c). 2) Even though we try to advance the session's origin
+ * concurrently, it's safe to do so as we change/advance the session_origin
+ * LSNs under replicate_state LWLock.
  */
 void
-replorigin_session_setup(RepOriginId node)
+replorigin_session_setup(RepOriginId node, bool must_acquire)
 {
 	static bool registered_cleanup;
 	int			i;
@@ -1122,7 +1131,7 @@ replorigin_session_setup(RepOriginId node)
 		if (curstate->roident != node)
 			continue;
 
-		else if (curstate->acquired_by != 0)
+		else if (curstate->acquired_by != 0 && must_acquire)
 		{
 			ereport(ERROR,
 					(errcode(ERRCODE_OBJECT_IN_USE),
@@ -1153,7 +1162,14 @@ replorigin_session_setup(RepOriginId node)
 
 	Assert(session_replication_state->roident != InvalidRepOriginId);
 
-	session_replication_state->acquired_by = MyProcPid;
+	if (must_acquire)
+		session_replication_state->acquired_by = MyProcPid;
+	else if (session_replication_state->acquired_by == 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_CONFIGURATION_LIMIT_EXCEEDED),
+				 errmsg("apply background worker could not find replication state slot for replication origin with OID %u",
+						node),
+				 errdetail("There is no replication state slot set by its main apply worker.")));
 
 	LWLockRelease(ReplicationOriginLock);
 
@@ -1337,7 +1353,7 @@ pg_replication_origin_session_setup(PG_FUNCTION_ARGS)
 
 	name = text_to_cstring((text *) DatumGetPointer(PG_GETARG_DATUM(0)));
 	origin = replorigin_by_name(name, false);
-	replorigin_session_setup(origin);
+	replorigin_session_setup(origin, true);
 
 	replorigin_session_origin = origin;
 

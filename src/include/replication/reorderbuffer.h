@@ -301,6 +301,7 @@ typedef struct ReorderBufferTXN
 	{
 		TimestampTz commit_time;
 		TimestampTz prepare_time;
+		TimestampTz abort_time;
 	}			xact_time;
 
 	/*
@@ -647,9 +648,11 @@ extern void ReorderBufferFinishPrepared(ReorderBuffer *rb, TransactionId xid,
 extern void ReorderBufferAssignChild(ReorderBuffer *, TransactionId, TransactionId, XLogRecPtr commit_lsn);
 extern void ReorderBufferCommitChild(ReorderBuffer *, TransactionId, TransactionId,
 									 XLogRecPtr commit_lsn, XLogRecPtr end_lsn);
-extern void ReorderBufferAbort(ReorderBuffer *, TransactionId, XLogRecPtr lsn);
+extern void ReorderBufferAbort(ReorderBuffer *, TransactionId, XLogRecPtr lsn,
+							   TimestampTz abort_time);
 extern void ReorderBufferAbortOld(ReorderBuffer *, TransactionId xid);
-extern void ReorderBufferForget(ReorderBuffer *, TransactionId, XLogRecPtr lsn);
+extern void ReorderBufferForget(ReorderBuffer *, TransactionId, XLogRecPtr lsn,
+								TimestampTz abort_time);
 extern void ReorderBufferInvalidate(ReorderBuffer *, TransactionId, XLogRecPtr lsn);
 
 extern void ReorderBufferSetBaseSnapshot(ReorderBuffer *, TransactionId, XLogRecPtr lsn, struct SnapshotData *snap);

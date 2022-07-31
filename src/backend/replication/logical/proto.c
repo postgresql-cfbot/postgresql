@@ -23,7 +23,8 @@
 /*
  * Protocol message flags.
  */
-#define LOGICALREP_IS_REPLICA_IDENTITY 1
+#define ATTR_IS_REPLICA_IDENTITY	(1 << 0)
+#define ATTR_IS_UNIQUE				(1 << 1)
 
 #define MESSAGE_TRANSACTIONAL (1<<0)
 #define TRUNCATE_CASCADE		(1<<0)
@@ -39,6 +40,68 @@ static void logicalrep_read_tuple(StringInfo in, LogicalRepTupleData *tuple);
 
 static void logicalrep_write_namespace(StringInfo out, Oid nspid);
 static const char *logicalrep_read_namespace(StringInfo in);
+
+static Bitmapset *RelationGetUniqueKeyBitmap(Relation rel);
+
+/*
+ * RelationGetUniqueKeyBitmap -- get a bitmap of unique attribute numbers
+ *
+ * This is similar to RelationGetIdentityKeyBitmap(), but returns a bitmap of
+ * index attribute numbers for all unique indexes.
+ */
+static Bitmapset *
+RelationGetUniqueKeyBitmap(Relation rel)
+{
+	List		   *indexoidlist = NIL;
+	ListCell	   *indexoidscan;
+	Bitmapset	   *attunique = NULL;
+
+	if (!rel->rd_rel->relhasindex)
+		return NULL;
+
+	indexoidlist = RelationGetIndexList(rel);
+
+	foreach(indexoidscan, indexoidlist)
+	{
+		Oid			indexoid = lfirst_oid(indexoidscan);
+		Relation	indexRel;
+		int			i;
+
+		/* Look up the description for index */
+		indexRel = RelationIdGetRelation(indexoid);
+
+		if (!RelationIsValid(indexRel))
+			elog(ERROR, "could not open relation with OID %u", indexoid);
+
+		if (!indexRel->rd_index->indisunique)
+		{
+			RelationClose(indexRel);
+			continue;
+		}
+
+		/* Add referenced attributes to idindexattrs */
+		for (i = 0; i < indexRel->rd_index->indnatts; i++)
+		{
+			int attrnum = indexRel->rd_index->indkey.values[i];
+
+			/*
+			 * We don't include non-key columns into idindexattrs
+			 * bitmaps. See RelationGetIndexAttrBitmap.
+			 */
+			if (attrnum != 0)
+			{
+				if (i < indexRel->rd_index->indnkeyatts &&
+					!bms_is_member(attrnum - FirstLowInvalidHeapAttributeNumber, attunique))
+					attunique = bms_add_member(attunique,
+											   attrnum - FirstLowInvalidHeapAttributeNumber);
+			}
+		}
+		RelationClose(indexRel);
+	}
+	list_free(indexoidlist);
+
+	return attunique;
+}
 
 /*
  * Check if a column is covered by a column list.
@@ -933,7 +996,8 @@ logicalrep_write_attrs(StringInfo out, Relation rel, Bitmapset *columns)
 	TupleDesc	desc;
 	int			i;
 	uint16		nliveatts = 0;
-	Bitmapset  *idattrs = NULL;
+	Bitmapset  *idattrs = NULL,
+			   *attunique = NULL;
 	bool		replidentfull;
 
 	desc = RelationGetDescr(rel);
@@ -958,6 +1022,9 @@ logicalrep_write_attrs(StringInfo out, Relation rel, Bitmapset *columns)
 	if (!replidentfull)
 		idattrs = RelationGetIdentityKeyBitmap(rel);
 
+	/* fetch bitmap of UNIQUE attributes */
+	attunique = RelationGetUniqueKeyBitmap(rel);
+
 	/* send the attributes */
 	for (i = 0; i < desc->natts; i++)
 	{
@@ -974,7 +1041,11 @@ logicalrep_write_attrs(StringInfo out, Relation rel, Bitmapset *columns)
 		if (replidentfull ||
 			bms_is_member(att->attnum - FirstLowInvalidHeapAttributeNumber,
 						  idattrs))
-			flags |= LOGICALREP_IS_REPLICA_IDENTITY;
+			flags |= ATTR_IS_REPLICA_IDENTITY;
+
+		if (bms_is_member(att->attnum - FirstLowInvalidHeapAttributeNumber,
+						  attunique))
+			flags |= ATTR_IS_UNIQUE;
 
 		pq_sendbyte(out, flags);
 
@@ -989,6 +1060,7 @@ logicalrep_write_attrs(StringInfo out, Relation rel, Bitmapset *columns)
 	}
 
 	bms_free(idattrs);
+	bms_free(attunique);
 }
 
 /*
@@ -1001,7 +1073,8 @@ logicalrep_read_attrs(StringInfo in, LogicalRepRelation *rel)
 	int			natts;
 	char	  **attnames;
 	Oid		   *atttyps;
-	Bitmapset  *attkeys = NULL;
+	Bitmapset  *attkeys = NULL,
+			   *attunique = NULL;
 
 	natts = pq_getmsgint(in, 2);
 	attnames = palloc(natts * sizeof(char *));
@@ -1014,8 +1087,12 @@ logicalrep_read_attrs(StringInfo in, LogicalRepRelation *rel)
 
 		/* Check for replica identity column */
 		flags = pq_getmsgbyte(in);
-		if (flags & LOGICALREP_IS_REPLICA_IDENTITY)
+		if (flags & ATTR_IS_REPLICA_IDENTITY)
 			attkeys = bms_add_member(attkeys, i);
+
+		/* Check for unique column */
+		if (flags & ATTR_IS_UNIQUE)
+			attunique = bms_add_member(attunique, i);
 
 		/* attribute name */
 		attnames[i] = pstrdup(pq_getmsgstring(in));
@@ -1030,6 +1107,7 @@ logicalrep_read_attrs(StringInfo in, LogicalRepRelation *rel)
 	rel->attnames = attnames;
 	rel->atttyps = atttyps;
 	rel->attkeys = attkeys;
+	rel->attunique = attunique;
 	rel->natts = natts;
 }
 
@@ -1163,31 +1241,56 @@ logicalrep_read_stream_commit(StringInfo in, LogicalRepCommitData *commit_data)
 /*
  * Write STREAM ABORT to the output stream. Note that xid and subxid will be
  * same for the top-level transaction abort.
+ *
+ * If write_abort_lsn is true, send the abort_lsn and abort_time fields,
+ * otherwise don't.
  */
 void
 logicalrep_write_stream_abort(StringInfo out, TransactionId xid,
-							  TransactionId subxid)
+							  ReorderBufferTXN *txn, XLogRecPtr abort_lsn,
+							  bool write_abort_lsn)
 {
 	pq_sendbyte(out, LOGICAL_REP_MSG_STREAM_ABORT);
 
-	Assert(TransactionIdIsValid(xid) && TransactionIdIsValid(subxid));
+	Assert(TransactionIdIsValid(xid) && TransactionIdIsValid(txn->xid));
 
 	/* transaction ID */
 	pq_sendint32(out, xid);
-	pq_sendint32(out, subxid);
+	pq_sendint32(out, txn->xid);
+
+	if (write_abort_lsn)
+	{
+		pq_sendint64(out, abort_lsn);
+		pq_sendint64(out, txn->xact_time.abort_time);
+	}
 }
 
 /*
  * Read STREAM ABORT from the output stream.
+ *
+ * If read_abort_lsn is true, try to read the abort_lsn and abort_time fields,
+ * otherwise don't.
  */
 void
-logicalrep_read_stream_abort(StringInfo in, TransactionId *xid,
-							 TransactionId *subxid)
+logicalrep_read_stream_abort(StringInfo in,
+							 LogicalRepStreamAbortData *abort_data,
+							 bool read_abort_lsn)
 {
-	Assert(xid && subxid);
+	Assert(abort_data);
 
-	*xid = pq_getmsgint(in, 4);
-	*subxid = pq_getmsgint(in, 4);
+	abort_data->xid = pq_getmsgint(in, 4);
+	abort_data->subxid = pq_getmsgint(in, 4);
+
+	if (read_abort_lsn)
+	{
+		abort_data->abort_lsn = pq_getmsgint64(in);
+		abort_data->abort_time = pq_getmsgint64(in);
+	}
+	else
+	{
+		abort_data->abort_lsn = InvalidXLogRecPtr;
+		abort_data->abort_time = 0;
+	}
 }
 
 /*

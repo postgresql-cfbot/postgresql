@@ -2541,6 +2541,23 @@ compare_values_of_enum(TypeCacheEntry *tcache, Oid arg1, Oid arg2)
 }
 
 /*
+ * GetDomainConstraints --- get DomainConstraintState list of specified domain type
+ */
+List *
+GetDomainConstraints(Oid type_id)
+{
+	TypeCacheEntry *typentry;
+	List		   *constraints = NIL;
+
+	typentry = lookup_type_cache(type_id, TYPECACHE_DOMAIN_CONSTR_INFO);
+
+	if(typentry->domainData != NULL)
+		constraints = typentry->domainData->constraints;
+
+	return constraints;
+}
+
+/*
  * Load (or re-load) the enumData member of the typcache entry.
  */
 static void

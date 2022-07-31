@@ -1317,6 +1317,23 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
       </listitem>
      </varlistentry>
 
+     <varlistentry id="libpq-load-balance-hosts" xreflabel="load_balance_hosts">
+      <term><literal>load_balance_hosts</literal></term>
+      <listitem>
+       <para>
+        Controls whether the client load balances connections across hosts and
+        adresses. The default value is 0, meaning off, this means that hosts are
+        tried in order they are provided and addresses are tried in the order
+        they are received from DNS or a hosts file. If this value is set to 1,
+        meaning on, the hosts and address that are tried in random order.
+        Subsequent queries once connected will still be sent to the same server.
+        Setting this to 1, is mostly useful when opening multiple connections at
+        the same time, possibly from different machines. This way connections
+        can be load balanced across multiple Postgres servers.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="libpq-keepalives" xreflabel="keepalives">
       <term><literal>keepalives</literal></term>
       <listitem>

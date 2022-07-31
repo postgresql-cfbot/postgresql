@@ -372,6 +372,7 @@ struct pg_conn
 	char	   *pgpassfile;		/* path to a file containing password(s) */
 	char	   *channel_binding;	/* channel binding mode
 									 * (require,prefer,disable) */
+	char	   *loadbalance;	/* load balance over hosts */
 	char	   *keepalives;		/* use TCP keepalives? */
 	char	   *keepalives_idle;	/* time between TCP keepalives */
 	char	   *keepalives_interval;	/* time between TCP keepalive
@@ -460,8 +461,10 @@ struct pg_conn
 	PGTargetServerType target_server_type;	/* desired session properties */
 	bool		try_next_addr;	/* time to advance to next address/host? */
 	bool		try_next_host;	/* time to advance to next connhost[]? */
-	struct addrinfo *addrlist;	/* list of addresses for current connhost */
-	struct addrinfo *addr_cur;	/* the one currently being tried */
+	int			naddr;			/* # of addrs returned by getaddrinfo */
+	int			whichaddr;		/* the addr currently being tried */
+	AddrInfo   *addr;			/* the array of addresses for the currently
+								 * tried host */
 	int			addrlist_family;	/* needed to know how to free addrlist */
 	bool		send_appname;	/* okay to send application_name? */
 

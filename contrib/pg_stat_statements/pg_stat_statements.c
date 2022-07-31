@@ -2635,6 +2635,9 @@ generate_normalized_query(JumbleState *jstate, const char *query,
 				n_quer_loc = 0, /* Normalized query byte location */
 				last_off = 0,	/* Offset from start for previous tok */
 				last_tok_len = 0;	/* Length (in bytes) of that tok */
+	bool		skip = false; 	/* Signals that certain constants are
+								   merged together and have to be skipped */
+
 
 	/*
 	 * Get constants' lengths (core system only gives us locations).  Note
@@ -2658,7 +2661,6 @@ generate_normalized_query(JumbleState *jstate, const char *query,
 	{
 		int			off,		/* Offset from start for cur tok */
 					tok_len;	/* Length (in bytes) of that tok */
-
 		off = jstate->clocations[i].location;
 		/* Adjust recorded location if we're dealing with partial string */
 		off -= query_loc;
@@ -2673,12 +2675,31 @@ generate_normalized_query(JumbleState *jstate, const char *query,
 		len_to_wrt -= last_tok_len;
 
 		Assert(len_to_wrt >= 0);
-		memcpy(norm_query + n_quer_loc, query + quer_loc, len_to_wrt);
-		n_quer_loc += len_to_wrt;
 
-		/* And insert a param symbol in place of the constant token */
-		n_quer_loc += sprintf(norm_query + n_quer_loc, "$%d",
-							  i + 1 + jstate->highest_extern_param_id);
+		/* Normal path, non merged constant */
+		if (!jstate->clocations[i].merged)
+		{
+			memcpy(norm_query + n_quer_loc, query + quer_loc, len_to_wrt);
+			n_quer_loc += len_to_wrt;
+
+			/* And insert a param symbol in place of the constant token */
+			n_quer_loc += sprintf(norm_query + n_quer_loc, "$%d",
+								  i + 1 + jstate->highest_extern_param_id);
+
+			/* In case previous constants were merged away, stop doing that */
+			if (skip)
+				skip = false;
+		}
+		/* The firsts merged constant */
+		else if (!skip)
+		{
+			memcpy(norm_query + n_quer_loc, query + quer_loc, len_to_wrt);
+			n_quer_loc += len_to_wrt;
+
+			/* Skip the following until a non merged constant appear */
+			skip = true;
+			n_quer_loc += sprintf(norm_query + n_quer_loc, "...");
+		}
 
 		quer_loc = off + tok_len;
 		last_off = off;

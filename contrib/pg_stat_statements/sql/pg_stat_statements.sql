@@ -442,4 +442,111 @@ SELECT (
 
 SELECT COUNT(*) FROM pg_stat_statements WHERE query LIKE '%SELECT GROUPING%';
 
+--
+-- Consts merging
+--
+CREATE TABLE test_merge (id int, data int);
+
+-- IN queries
+
+-- No merging
+SELECT pg_stat_statements_reset();
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8, 9);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+-- Normal
+SET const_merge_threshold = 5;
+
+SELECT pg_stat_statements_reset();
+SELECT * FROM test_merge WHERE id IN (1, 2, 3);
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8, 9);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+-- On the merge threshold
+SELECT pg_stat_statements_reset();
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4);
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8, 9);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+SELECT pg_stat_statements_reset();
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5);
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8, 9);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+SELECT pg_stat_statements_reset();
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6);
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8, 9);
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+-- With gaps on the threshold
+SELECT pg_stat_statements_reset();
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4);
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+SELECT pg_stat_statements_reset();
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5);
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+SELECT pg_stat_statements_reset();
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6);
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+-- test constants after merge
+SELECT pg_stat_statements_reset();
+
+SELECT * FROM test_merge WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10) and data = 2;
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+-- On table, numeric type causes every constant being wrapped into functions.
+CREATE TABLE test_merge_numeric (id int, data numeric(5, 2));
+SELECT pg_stat_statements_reset();
+SELECT * FROM test_merge_numeric WHERE id IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+SELECT query, calls FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+-- Test find_const_walker
+WITH cte AS (
+    SELECT 'const' as const FROM test_merge
+)
+SELECT ARRAY['a', 'b', 'c', const::varchar] AS result
+FROM cte;
+
+RESET const_merge_threshold;
+
 DROP EXTENSION pg_stat_statements;

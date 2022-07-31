@@ -696,10 +696,13 @@ CLOGShmemSize(void)
 void
 CLOGShmemInit(void)
 {
+	bool found;
+
 	XactCtl->PagePrecedes = CLOGPagePrecedes;
 	SimpleLruInit(XactCtl, "Xact", CLOGShmemBuffers(), CLOG_LSNS_PER_PAGE,
 				  XactSLRULock, "pg_xact", LWTRANCHE_XACT_BUFFER,
-				  SYNC_HANDLER_CLOG);
+				  SYNC_HANDLER_CLOG, &found);
+	Assert(found == IsUnderPostmaster);
 	SlruPagePrecedesUnitTests(XactCtl, CLOG_XACTS_PER_PAGE);
 }
 

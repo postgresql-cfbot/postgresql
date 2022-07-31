@@ -1,0 +1,86 @@
+--
+-- Unit tests for slru.c
+--
+-- directory paths and dlsuffix are passed to us in environment variables
+\getenv libdir PG_LIBDIR
+\getenv dlsuffix PG_DLSUFFIX
+\set regresslib :libdir '/regress' :dlsuffix
+CREATE FUNCTION test_slru() RETURNS VOID
+    AS :'regresslib', 'test_slru' LANGUAGE C STRICT;
+-- The test is executed twice to make sure the state is cleaned up properly.
+SELECT test_slru();
+NOTICE:  Creating TestSLRULock
+NOTICE:  Creating directory 'pg_test_slru', if not exists
+NOTICE:  Creating SLRU, if not exists
+NOTICE:  Calling SimpleLruZeroPage()
+NOTICE:  Success, shared->page_number[slotno] = 12345
+NOTICE:  SimpleLruDoesPhysicalPageExist() returned 0. Now writing the page.
+NOTICE:  SimpleLruDoesPhysicalPageExist() returned 1
+NOTICE:  Writing 48 more pages...
+NOTICE:  Reading page 12377 (in buffer) for read and write
+NOTICE:  Reading page 12377 (in buffer) for read-only
+NOTICE:  Reading page 12345 (not in buffer) for read and write
+NOTICE:  Reading page 12346 (not in buffer) for read-only
+NOTICE:  Calling SimpleLruWriteAll()
+NOTICE:  Calling SlruSyncFileTag() for segment 387
+NOTICE:  Done, path = pg_test_slru/0183
+NOTICE:  Calling SlruScanDirectory()
+NOTICE:  test_slru_scan_cb() called, (char*))data = Test data
+NOTICE:  test_slru_scan_cb() called, (char*))data = Test data
+NOTICE:  test_slru_scan_cb() called, (char*))data = Test data
+NOTICE:  Deleting segment 387
+NOTICE:  Calling SlruScanDirectory()
+NOTICE:  test_slru_scan_cb() called, (char*))data = Test data
+NOTICE:  test_slru_scan_cb() called, (char*))data = Test data
+NOTICE:  SimpleLruDoesPhysicalPageExist() returned 0
+NOTICE:  SimpleLruDoesPhysicalPageExist() returned 1 for page 12377
+NOTICE:  SimpleLruDoesPhysicalPageExist() returned 1 for page 12345
+NOTICE:  Truncating pages prior to 12377
+NOTICE:  SimpleLruDoesPhysicalPageExist() returned 1 for page 12377
+NOTICE:  SimpleLruDoesPhysicalPageExist() returned 0 for page 12345
+NOTICE:  Cleaning up.
+NOTICE:  SimpleLruDoesPhysicalPageExist() returned 0 for page 12377
+NOTICE:  SimpleLruDoesPhysicalPageExist() returned 0 for page 12345
+ test_slru 
+-----------
+ 
+(1 row)
+
+SELECT test_slru();
+NOTICE:  Creating TestSLRULock
+NOTICE:  Creating directory 'pg_test_slru', if not exists
+NOTICE:  Creating SLRU, if not exists
+NOTICE:  Calling SimpleLruZeroPage()
+NOTICE:  Success, shared->page_number[slotno] = 12345
+NOTICE:  SimpleLruDoesPhysicalPageExist() returned 0. Now writing the page.
+NOTICE:  SimpleLruDoesPhysicalPageExist() returned 1
+NOTICE:  Writing 48 more pages...
+NOTICE:  Reading page 12377 (in buffer) for read and write
+NOTICE:  Reading page 12377 (in buffer) for read-only
+NOTICE:  Reading page 12345 (not in buffer) for read and write
+NOTICE:  Reading page 12346 (not in buffer) for read-only
+NOTICE:  Calling SimpleLruWriteAll()
+NOTICE:  Calling SlruSyncFileTag() for segment 387
+NOTICE:  Done, path = pg_test_slru/0183
+NOTICE:  Calling SlruScanDirectory()
+NOTICE:  test_slru_scan_cb() called, (char*))data = Test data
+NOTICE:  test_slru_scan_cb() called, (char*))data = Test data
+NOTICE:  test_slru_scan_cb() called, (char*))data = Test data
+NOTICE:  Deleting segment 387
+NOTICE:  Calling SlruScanDirectory()
+NOTICE:  test_slru_scan_cb() called, (char*))data = Test data
+NOTICE:  test_slru_scan_cb() called, (char*))data = Test data
+NOTICE:  SimpleLruDoesPhysicalPageExist() returned 0
+NOTICE:  SimpleLruDoesPhysicalPageExist() returned 1 for page 12377
+NOTICE:  SimpleLruDoesPhysicalPageExist() returned 1 for page 12345
+NOTICE:  Truncating pages prior to 12377
+NOTICE:  SimpleLruDoesPhysicalPageExist() returned 1 for page 12377
+NOTICE:  SimpleLruDoesPhysicalPageExist() returned 0 for page 12345
+NOTICE:  Cleaning up.
+NOTICE:  SimpleLruDoesPhysicalPageExist() returned 0 for page 12377
+NOTICE:  SimpleLruDoesPhysicalPageExist() returned 0 for page 12345
+ test_slru 
+-----------
+ 
+(1 row)
+

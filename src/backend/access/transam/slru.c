@@ -182,27 +182,26 @@ SimpleLruShmemSize(int nslots, int nlsns)
  * ctllock: LWLock to use to control access to the shared control structure.
  * subdir: PGDATA-relative subdirectory that will contain the files.
  * tranche_id: LWLock tranche ID to use for the SLRU's per-buffer LWLocks.
+ * sync_handler: see comments for SyncRequestHandler enum
+ * found: whether the cache existed before the call
  */
 void
 SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 			  LWLock *ctllock, const char *subdir, int tranche_id,
-			  SyncRequestHandler sync_handler)
+			  SyncRequestHandler sync_handler, bool *found)
 {
 	SlruShared	shared;
-	bool		found;
 
 	shared = (SlruShared) ShmemInitStruct(name,
 										  SimpleLruShmemSize(nslots, nlsns),
-										  &found);
+										  found);
 
-	if (!IsUnderPostmaster)
+	if (!*found)
 	{
 		/* Initialize locks and shared memory area */
 		char	   *ptr;
 		Size		offset;
 		int			slotno;
-
-		Assert(!found);
 
 		memset(shared, 0, sizeof(SlruSharedData));
 
@@ -256,8 +255,6 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 		/* Should fit to estimated shmem size */
 		Assert(ptr - (char *) shared <= SimpleLruShmemSize(nslots, nlsns));
 	}
-	else
-		Assert(found);
 
 	/*
 	 * Initialize the unshared control struct, including directory path. We

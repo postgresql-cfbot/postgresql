@@ -532,7 +532,7 @@ AsyncShmemSize(void)
 void
 AsyncShmemInit(void)
 {
-	bool		found;
+	bool		found, slru_found;
 	Size		size;
 
 	/*
@@ -571,7 +571,8 @@ AsyncShmemInit(void)
 	NotifyCtl->PagePrecedes = asyncQueuePagePrecedes;
 	SimpleLruInit(NotifyCtl, "Notify", NUM_NOTIFY_BUFFERS, 0,
 				  NotifySLRULock, "pg_notify", LWTRANCHE_NOTIFY_BUFFER,
-				  SYNC_HANDLER_NONE);
+				  SYNC_HANDLER_NONE, &slru_found);
+	Assert(slru_found == IsUnderPostmaster);
 
 	if (!found)
 	{

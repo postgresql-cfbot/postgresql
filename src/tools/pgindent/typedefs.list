@@ -306,6 +306,10 @@ BtreeCheckState
 BtreeLevel
 Bucket
 BufFile
+BufFileCopyFDArg
+BufFileStream
+BufFileStreamFile
+BufFileStreamFileKind
 Buffer
 BufferAccessStrategy
 BufferAccessStrategyType

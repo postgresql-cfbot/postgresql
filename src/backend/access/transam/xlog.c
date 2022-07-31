@@ -84,6 +84,7 @@
 #include "replication/snapbuild.h"
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
+#include "storage/buffile.h"
 #include "storage/bufmgr.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
@@ -3146,20 +3147,22 @@ XLogFileCopy(TimeLineID destTLI, XLogSegNo destsegno,
 {
 	char		path[MAXPGPATH];
 	char		tmppath[MAXPGPATH];
-	PGAlignedXLogBlock buffer;
-	int			srcfd;
-	int			fd;
-	int			nbytes;
+	BufFileCopyFDArg src,
+				dst;
+	size_t		nvalid,
+				nzeros;
 
 	/*
 	 * Open the source file
 	 */
 	XLogFilePath(path, srcTLI, srcsegno, wal_segment_size);
-	srcfd = OpenTransientFile(path, O_RDONLY | PG_BINARY);
-	if (srcfd < 0)
+	src.path = path;
+	src.fd = OpenTransientFile(src.path, O_RDONLY | PG_BINARY);
+	if (src.fd < 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
-				 errmsg("could not open file \"%s\": %m", path)));
+				 errmsg("could not open file \"%s\": %m", src.path)));
+	src.wait_event_info = WAIT_EVENT_WAL_COPY_READ;
 
 	/*
 	 * Copy into a temp file name.
@@ -3169,92 +3172,61 @@ XLogFileCopy(TimeLineID destTLI, XLogSegNo destsegno,
 	unlink(tmppath);
 
 	/* do not use get_sync_bit() here --- want to fsync only at end of fill */
-	fd = OpenTransientFile(tmppath, O_RDWR | O_CREAT | O_EXCL | PG_BINARY);
-	if (fd < 0)
+	dst.path = tmppath;
+	dst.fd = OpenTransientFile(dst.path,
+							   O_RDWR | O_CREAT | O_EXCL | PG_BINARY);
+	if (dst.fd < 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
-				 errmsg("could not create file \"%s\": %m", tmppath)));
+				 errmsg("could not create file \"%s\": %m", dst.path)));
+	dst.wait_event_info = WAIT_EVENT_WAL_COPY_WRITE;
 
 	/*
 	 * Do the data copying.
+	 *
+	 * First, copy the valid data.
 	 */
-	for (nbytes = 0; nbytes < wal_segment_size; nbytes += sizeof(buffer))
+	nvalid = BufFileCopyFD(&dst, &src, XLOG_BLCKSZ, upto, 0, true);
+	Assert(nvalid <= wal_segment_size);
+	nzeros = wal_segment_size - nvalid;
+	/* Second, fill the rest of the destination file with zeros. */
+	if (nzeros > 0)
 	{
-		int			nread;
+		PGAlignedXLogBlock buffer;
 
-		nread = upto - nbytes;
+		memset(buffer.data, 0, sizeof(buffer));
 
-		/*
-		 * The part that is not read from the source file is filled with
-		 * zeros.
-		 */
-		if (nread < sizeof(buffer))
-			memset(buffer.data, 0, sizeof(buffer));
-
-		if (nread > 0)
+		while (nzeros > 0)
 		{
-			int			r;
+			int			nwrite;
 
-			if (nread > sizeof(buffer))
-				nread = sizeof(buffer);
-			pgstat_report_wait_start(WAIT_EVENT_WAL_COPY_READ);
-			r = read(srcfd, buffer.data, nread);
-			if (r != nread)
-			{
-				if (r < 0)
-					ereport(ERROR,
-							(errcode_for_file_access(),
-							 errmsg("could not read file \"%s\": %m",
-									path)));
-				else
-					ereport(ERROR,
-							(errcode(ERRCODE_DATA_CORRUPTED),
-							 errmsg("could not read file \"%s\": read %d of %zu",
-									path, r, (Size) nread)));
-			}
-			pgstat_report_wait_end();
+			nwrite = nzeros > XLOG_BLCKSZ ? XLOG_BLCKSZ : nzeros;
+			BufFileWriteFD(&dst, buffer.data, nwrite, true);
+			nzeros -= nwrite;
 		}
-		errno = 0;
-		pgstat_report_wait_start(WAIT_EVENT_WAL_COPY_WRITE);
-		if ((int) write(fd, buffer.data, sizeof(buffer)) != (int) sizeof(buffer))
-		{
-			int			save_errno = errno;
-
-			/*
-			 * If we fail to make the file, delete it to release disk space
-			 */
-			unlink(tmppath);
-			/* if write didn't set errno, assume problem is no disk space */
-			errno = save_errno ? save_errno : ENOSPC;
-
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not write to file \"%s\": %m", tmppath)));
-		}
-		pgstat_report_wait_end();
 	}
 
 	pgstat_report_wait_start(WAIT_EVENT_WAL_COPY_SYNC);
-	if (pg_fsync(fd) != 0)
+	if (pg_fsync(dst.fd) != 0)
 		ereport(data_sync_elevel(ERROR),
 				(errcode_for_file_access(),
-				 errmsg("could not fsync file \"%s\": %m", tmppath)));
+				 errmsg("could not fsync file \"%s\": %m", dst.path)));
 	pgstat_report_wait_end();
 
-	if (CloseTransientFile(fd) != 0)
+	if (CloseTransientFile(dst.fd) != 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
-				 errmsg("could not close file \"%s\": %m", tmppath)));
+				 errmsg("could not close file \"%s\": %m", dst.path)));
 
-	if (CloseTransientFile(srcfd) != 0)
+	if (CloseTransientFile(src.fd) != 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
-				 errmsg("could not close file \"%s\": %m", path)));
+				 errmsg("could not close file \"%s\": %m", src.path)));
 
 	/*
 	 * Now move the segment into place with its final name.
 	 */
-	if (!InstallXLogFileSegment(&destsegno, tmppath, false, 0, destTLI))
+	if (!InstallXLogFileSegment(&destsegno, dst.path, false, 0, destTLI))
 		elog(ERROR, "InstallXLogFileSegment should not have failed");
 }
 
@@ -3903,6 +3875,7 @@ static void
 WriteControlFile(void)
 {
 	int			fd;
+	BufFileStream stream;
 	char		buffer[PG_CONTROL_FILE_SIZE];	/* need not be aligned */
 
 	/*
@@ -3961,29 +3934,12 @@ WriteControlFile(void)
 				 errmsg("could not create file \"%s\": %m",
 						XLOG_CONTROL_FILE)));
 
-	errno = 0;
-	pgstat_report_wait_start(WAIT_EVENT_CONTROL_FILE_WRITE);
-	if (write(fd, buffer, PG_CONTROL_FILE_SIZE) != PG_CONTROL_FILE_SIZE)
-	{
-		/* if write didn't set errno, assume problem is no disk space */
-		if (errno == 0)
-			errno = ENOSPC;
-		ereport(PANIC,
-				(errcode_for_file_access(),
-				 errmsg("could not write to file \"%s\": %m",
-						XLOG_CONTROL_FILE)));
-	}
-	pgstat_report_wait_end();
+	BufFileStreamInitFD(&stream, fd, false, XLOG_CONTROL_FILE,
+						WAIT_EVENT_CONTROL_FILE_WRITE,
+						BLCKSZ, PANIC);
+	BufFileStreamWrite(&stream, buffer, PG_CONTROL_FILE_SIZE);
 
-	pgstat_report_wait_start(WAIT_EVENT_CONTROL_FILE_SYNC);
-	if (pg_fsync(fd) != 0)
-		ereport(PANIC,
-				(errcode_for_file_access(),
-				 errmsg("could not fsync file \"%s\": %m",
-						XLOG_CONTROL_FILE)));
-	pgstat_report_wait_end();
-
-	if (close(fd) != 0)
+	if (BufFileStreamClose(&stream, WAIT_EVENT_CONTROL_FILE_SYNC) != 0)
 		ereport(PANIC,
 				(errcode_for_file_access(),
 				 errmsg("could not close file \"%s\": %m",
@@ -3995,6 +3951,7 @@ ReadControlFile(void)
 {
 	pg_crc32c	crc;
 	int			fd;
+	BufFileStream stream;
 	static char wal_segsz_str[20];
 	int			r;
 
@@ -4009,24 +3966,21 @@ ReadControlFile(void)
 				 errmsg("could not open file \"%s\": %m",
 						XLOG_CONTROL_FILE)));
 
-	pgstat_report_wait_start(WAIT_EVENT_CONTROL_FILE_READ);
-	r = read(fd, ControlFile, sizeof(ControlFileData));
+	BufFileStreamInitFD(&stream, fd, false, XLOG_CONTROL_FILE,
+						WAIT_EVENT_CONTROL_FILE_READ,
+						BLCKSZ, PANIC);
+
+	r = BufFileStreamRead(&stream, ControlFile, sizeof(ControlFileData));
 	if (r != sizeof(ControlFileData))
 	{
-		if (r < 0)
-			ereport(PANIC,
-					(errcode_for_file_access(),
-					 errmsg("could not read file \"%s\": %m",
-							XLOG_CONTROL_FILE)));
-		else
-			ereport(PANIC,
-					(errcode(ERRCODE_DATA_CORRUPTED),
-					 errmsg("could not read file \"%s\": read %d of %zu",
-							XLOG_CONTROL_FILE, r, sizeof(ControlFileData))));
-	}
-	pgstat_report_wait_end();
+		Assert(r >= 0);
 
-	close(fd);
+		ereport(PANIC,
+				(errcode(ERRCODE_DATA_CORRUPTED),
+				 errmsg("could not read file \"%s\": read %d of %zu",
+						XLOG_CONTROL_FILE, r, sizeof(ControlFileData))));
+	}
+	BufFileStreamClose(&stream, 0);
 
 	/*
 	 * Check for expected pg_control format version.  If this is wrong, the

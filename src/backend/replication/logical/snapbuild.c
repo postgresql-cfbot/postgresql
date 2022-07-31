@@ -129,6 +129,7 @@
 #include "replication/reorderbuffer.h"
 #include "replication/snapbuild.h"
 #include "storage/block.h"		/* debugging output */
+#include "storage/buffile.h"
 #include "storage/fd.h"
 #include "storage/lmgr.h"
 #include "storage/proc.h"
@@ -1495,6 +1496,7 @@ SnapBuildSerialize(SnapBuild *builder, XLogRecPtr lsn)
 	SnapBuildOnDisk *ondisk = NULL;
 	char	   *ondisk_c;
 	int			fd;
+	BufFileStream stream;
 	char		tmppath[MAXPGPATH];
 	char		path[MAXPGPATH];
 	int			ret;
@@ -1619,21 +1621,11 @@ SnapBuildSerialize(SnapBuild *builder, XLogRecPtr lsn)
 				(errcode_for_file_access(),
 				 errmsg("could not open file \"%s\": %m", tmppath)));
 
-	errno = 0;
-	pgstat_report_wait_start(WAIT_EVENT_SNAPBUILD_WRITE);
-	if ((write(fd, ondisk, needed_length)) != needed_length)
-	{
-		int			save_errno = errno;
+	BufFileStreamInitFD(&stream, fd, true, tmppath,
+						WAIT_EVENT_SNAPBUILD_WRITE,
+						BLCKSZ, ERROR);
 
-		CloseTransientFile(fd);
-
-		/* if write didn't set errno, assume problem is no disk space */
-		errno = save_errno ? save_errno : ENOSPC;
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not write to file \"%s\": %m", tmppath)));
-	}
-	pgstat_report_wait_end();
+	BufFileStreamWrite(&stream, ondisk, needed_length);
 
 	/*
 	 * fsync the file before renaming so that even if we crash after this we
@@ -1646,20 +1638,7 @@ SnapBuildSerialize(SnapBuild *builder, XLogRecPtr lsn)
 	 * some noticeable overhead since it's performed synchronously during
 	 * decoding?
 	 */
-	pgstat_report_wait_start(WAIT_EVENT_SNAPBUILD_SYNC);
-	if (pg_fsync(fd) != 0)
-	{
-		int			save_errno = errno;
-
-		CloseTransientFile(fd);
-		errno = save_errno;
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not fsync file \"%s\": %m", tmppath)));
-	}
-	pgstat_report_wait_end();
-
-	if (CloseTransientFile(fd) != 0)
+	if (BufFileStreamClose(&stream, WAIT_EVENT_SNAPBUILD_SYNC) != 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not close file \"%s\": %m", tmppath)));
@@ -1705,6 +1684,7 @@ SnapBuildRestore(SnapBuild *builder, XLogRecPtr lsn)
 {
 	SnapBuildOnDisk ondisk;
 	int			fd;
+	BufFileStream stream;
 	char		path[MAXPGPATH];
 	Size		sz;
 	int			readBytes;
@@ -1726,6 +1706,9 @@ SnapBuildRestore(SnapBuild *builder, XLogRecPtr lsn)
 				(errcode_for_file_access(),
 				 errmsg("could not open file \"%s\": %m", path)));
 
+	BufFileStreamInitFD(&stream, fd, true, path, WAIT_EVENT_SNAPBUILD_READ,
+						BLCKSZ, ERROR);
+
 	/* ----
 	 * Make sure the snapshot had been stored safely to disk, that's normally
 	 * cheap.
@@ -1739,14 +1722,13 @@ SnapBuildRestore(SnapBuild *builder, XLogRecPtr lsn)
 
 
 	/* read statically sized portion of snapshot */
-	pgstat_report_wait_start(WAIT_EVENT_SNAPBUILD_READ);
-	readBytes = read(fd, &ondisk, SnapBuildOnDiskConstantSize);
-	pgstat_report_wait_end();
+	readBytes = BufFileStreamRead(&stream, &ondisk,
+								  SnapBuildOnDiskConstantSize);
 	if (readBytes != SnapBuildOnDiskConstantSize)
 	{
 		int			save_errno = errno;
 
-		CloseTransientFile(fd);
+		BufFileStreamClose(&stream, 0);
 
 		if (readBytes < 0)
 		{
@@ -1781,14 +1763,13 @@ SnapBuildRestore(SnapBuild *builder, XLogRecPtr lsn)
 				SnapBuildOnDiskConstantSize - SnapBuildOnDiskNotChecksummedSize);
 
 	/* read SnapBuild */
-	pgstat_report_wait_start(WAIT_EVENT_SNAPBUILD_READ);
-	readBytes = read(fd, &ondisk.builder, sizeof(SnapBuild));
-	pgstat_report_wait_end();
+	readBytes = BufFileStreamRead(&stream, &ondisk.builder,
+								  sizeof(SnapBuild));
 	if (readBytes != sizeof(SnapBuild))
 	{
 		int			save_errno = errno;
 
-		CloseTransientFile(fd);
+		BufFileStreamClose(&stream, 0);
 
 		if (readBytes < 0)
 		{
@@ -1808,14 +1789,13 @@ SnapBuildRestore(SnapBuild *builder, XLogRecPtr lsn)
 	/* restore committed xacts information */
 	sz = sizeof(TransactionId) * ondisk.builder.committed.xcnt;
 	ondisk.builder.committed.xip = MemoryContextAllocZero(builder->context, sz);
-	pgstat_report_wait_start(WAIT_EVENT_SNAPBUILD_READ);
-	readBytes = read(fd, ondisk.builder.committed.xip, sz);
-	pgstat_report_wait_end();
+	readBytes = BufFileStreamRead(&stream,
+								  ondisk.builder.committed.xip, sz);
 	if (readBytes != sz)
 	{
 		int			save_errno = errno;
 
-		CloseTransientFile(fd);
+		BufFileStreamClose(&stream, 0);
 
 		if (readBytes < 0)
 		{
@@ -1832,7 +1812,7 @@ SnapBuildRestore(SnapBuild *builder, XLogRecPtr lsn)
 	}
 	COMP_CRC32C(checksum, ondisk.builder.committed.xip, sz);
 
-	if (CloseTransientFile(fd) != 0)
+	if (BufFileStreamClose(&stream, 0) != 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not close file \"%s\": %m", path)));

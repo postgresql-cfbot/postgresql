@@ -96,6 +96,7 @@
 #include "replication/origin.h"
 #include "replication/syncrep.h"
 #include "replication/walsender.h"
+#include "storage/buffile.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/md.h"
@@ -1283,6 +1284,7 @@ ReadTwoPhaseFile(TransactionId xid, bool missing_ok)
 	char	   *buf;
 	TwoPhaseFileHeader *hdr;
 	int			fd;
+	BufFileStream stream;
 	struct stat stat;
 	uint32		crc_offset;
 	pg_crc32c	calc_crc,
@@ -1335,24 +1337,17 @@ ReadTwoPhaseFile(TransactionId xid, bool missing_ok)
 	 * OK, slurp in the file.
 	 */
 	buf = (char *) palloc(stat.st_size);
+	BufFileStreamInitFD(&stream, fd, true, path,
+						WAIT_EVENT_TWOPHASE_FILE_READ,
+						BLCKSZ, ERROR);
 
-	pgstat_report_wait_start(WAIT_EVENT_TWOPHASE_FILE_READ);
-	r = read(fd, buf, stat.st_size);
+	r = BufFileStreamRead(&stream, buf, stat.st_size);
 	if (r != stat.st_size)
-	{
-		if (r < 0)
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not read file \"%s\": %m", path)));
-		else
-			ereport(ERROR,
-					(errmsg("could not read file \"%s\": read %d of %lld",
-							path, r, (long long int) stat.st_size)));
-	}
+		ereport(ERROR,
+				(errmsg("could not read file \"%s\": read %d of %lld",
+						path, r, (long long int) stat.st_size)));
 
-	pgstat_report_wait_end();
-
-	if (CloseTransientFile(fd) != 0)
+	if (BufFileStreamClose(&stream, 0) != 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not close file \"%s\": %m", path)));
@@ -1715,6 +1710,7 @@ RecreateTwoPhaseFile(TransactionId xid, void *content, int len)
 	char		path[MAXPGPATH];
 	pg_crc32c	statefile_crc;
 	int			fd;
+	BufFileStream stream;
 
 	/* Recompute CRC */
 	INIT_CRC32C(statefile_crc);
@@ -1730,41 +1726,19 @@ RecreateTwoPhaseFile(TransactionId xid, void *content, int len)
 				(errcode_for_file_access(),
 				 errmsg("could not recreate file \"%s\": %m", path)));
 
+	BufFileStreamInitFD(&stream, fd, true, path,
+						WAIT_EVENT_TWOPHASE_FILE_WRITE,
+						BLCKSZ, ERROR);
+
 	/* Write content and CRC */
-	errno = 0;
-	pgstat_report_wait_start(WAIT_EVENT_TWOPHASE_FILE_WRITE);
-	if (write(fd, content, len) != len)
-	{
-		/* if write didn't set errno, assume problem is no disk space */
-		if (errno == 0)
-			errno = ENOSPC;
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not write file \"%s\": %m", path)));
-	}
-	if (write(fd, &statefile_crc, sizeof(pg_crc32c)) != sizeof(pg_crc32c))
-	{
-		/* if write didn't set errno, assume problem is no disk space */
-		if (errno == 0)
-			errno = ENOSPC;
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not write file \"%s\": %m", path)));
-	}
-	pgstat_report_wait_end();
+	BufFileStreamWrite(&stream, content, len);
+	BufFileStreamWrite(&stream, &statefile_crc, sizeof(pg_crc32c));
 
 	/*
 	 * We must fsync the file because the end-of-replay checkpoint will not do
 	 * so, there being no GXACT in shared memory yet to tell it to.
 	 */
-	pgstat_report_wait_start(WAIT_EVENT_TWOPHASE_FILE_SYNC);
-	if (pg_fsync(fd) != 0)
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not fsync file \"%s\": %m", path)));
-	pgstat_report_wait_end();
-
-	if (CloseTransientFile(fd) != 0)
+	if (BufFileStreamClose(&stream, WAIT_EVENT_TWOPHASE_FILE_SYNC) != 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not close file \"%s\": %m", path)));

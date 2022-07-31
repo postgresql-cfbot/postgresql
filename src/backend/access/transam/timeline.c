@@ -40,6 +40,7 @@
 #include "access/xlogarchive.h"
 #include "access/xlogdefs.h"
 #include "pgstat.h"
+#include "storage/buffile.h"
 #include "storage/fd.h"
 
 /*
@@ -308,9 +309,8 @@ writeTimeLineHistory(TimeLineID newTLI, TimeLineID parentTLI,
 	char		tmppath[MAXPGPATH];
 	char		histfname[MAXFNAMELEN];
 	char		buffer[BLCKSZ];
-	int			srcfd;
-	int			fd;
-	int			nbytes;
+	BufFileCopyFDArg src,
+				dst;
 
 	Assert(newTLI > parentTLI); /* else bad selection of newTLI */
 
@@ -322,11 +322,13 @@ writeTimeLineHistory(TimeLineID newTLI, TimeLineID parentTLI,
 	unlink(tmppath);
 
 	/* do not use get_sync_bit() here --- want to fsync only at end of fill */
-	fd = OpenTransientFile(tmppath, O_RDWR | O_CREAT | O_EXCL);
-	if (fd < 0)
+	dst.path = tmppath;
+	dst.fd = OpenTransientFile(tmppath, O_RDWR | O_CREAT | O_EXCL);
+	if (dst.fd < 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not create file \"%s\": %m", tmppath)));
+	dst.wait_event_info = WAIT_EVENT_TIMELINE_HISTORY_WRITE;
 
 	/*
 	 * If a history file exists for the parent, copy it verbatim
@@ -339,8 +341,10 @@ writeTimeLineHistory(TimeLineID newTLI, TimeLineID parentTLI,
 	else
 		TLHistoryFilePath(path, parentTLI);
 
-	srcfd = OpenTransientFile(path, O_RDONLY);
-	if (srcfd < 0)
+	src.path = path;
+	src.wait_event_info = WAIT_EVENT_TIMELINE_HISTORY_READ;
+	src.fd = OpenTransientFile(path, O_RDONLY);
+	if (src.fd < 0)
 	{
 		if (errno != ENOENT)
 			ereport(ERROR,
@@ -350,43 +354,9 @@ writeTimeLineHistory(TimeLineID newTLI, TimeLineID parentTLI,
 	}
 	else
 	{
-		for (;;)
-		{
-			errno = 0;
-			pgstat_report_wait_start(WAIT_EVENT_TIMELINE_HISTORY_READ);
-			nbytes = (int) read(srcfd, buffer, sizeof(buffer));
-			pgstat_report_wait_end();
-			if (nbytes < 0 || errno != 0)
-				ereport(ERROR,
-						(errcode_for_file_access(),
-						 errmsg("could not read file \"%s\": %m", path)));
-			if (nbytes == 0)
-				break;
-			errno = 0;
-			pgstat_report_wait_start(WAIT_EVENT_TIMELINE_HISTORY_WRITE);
-			if ((int) write(fd, buffer, nbytes) != nbytes)
-			{
-				int			save_errno = errno;
+		BufFileCopyFD(&dst, &src, BLCKSZ, 0, 0, true);
 
-				/*
-				 * If we fail to make the file, delete it to release disk
-				 * space
-				 */
-				unlink(tmppath);
-
-				/*
-				 * if write didn't set errno, assume problem is no disk space
-				 */
-				errno = save_errno ? save_errno : ENOSPC;
-
-				ereport(ERROR,
-						(errcode_for_file_access(),
-						 errmsg("could not write to file \"%s\": %m", tmppath)));
-			}
-			pgstat_report_wait_end();
-		}
-
-		if (CloseTransientFile(srcfd) != 0)
+		if (CloseTransientFile(src.fd) != 0)
 			ereport(ERROR,
 					(errcode_for_file_access(),
 					 errmsg("could not close file \"%s\": %m", path)));
@@ -400,39 +370,20 @@ writeTimeLineHistory(TimeLineID newTLI, TimeLineID parentTLI,
 	 */
 	snprintf(buffer, sizeof(buffer),
 			 "%s%u\t%X/%X\t%s\n",
-			 (srcfd < 0) ? "" : "\n",
+			 (src.fd < 0) ? "" : "\n",
 			 parentTLI,
 			 LSN_FORMAT_ARGS(switchpoint),
 			 reason);
-
-	nbytes = strlen(buffer);
-	errno = 0;
-	pgstat_report_wait_start(WAIT_EVENT_TIMELINE_HISTORY_WRITE);
-	if ((int) write(fd, buffer, nbytes) != nbytes)
-	{
-		int			save_errno = errno;
-
-		/*
-		 * If we fail to make the file, delete it to release disk space
-		 */
-		unlink(tmppath);
-		/* if write didn't set errno, assume problem is no disk space */
-		errno = save_errno ? save_errno : ENOSPC;
-
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not write to file \"%s\": %m", tmppath)));
-	}
-	pgstat_report_wait_end();
+	BufFileWriteFD(&dst, buffer, strlen(buffer), true);
 
 	pgstat_report_wait_start(WAIT_EVENT_TIMELINE_HISTORY_SYNC);
-	if (pg_fsync(fd) != 0)
+	if (pg_fsync(dst.fd) != 0)
 		ereport(data_sync_elevel(ERROR),
 				(errcode_for_file_access(),
 				 errmsg("could not fsync file \"%s\": %m", tmppath)));
 	pgstat_report_wait_end();
 
-	if (CloseTransientFile(fd) != 0)
+	if (CloseTransientFile(dst.fd) != 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not close file \"%s\": %m", tmppath)));

@@ -84,6 +84,7 @@
 #include "pgstat.h"
 #include "replication/logical.h"
 #include "replication/origin.h"
+#include "storage/buffile.h"
 #include "storage/condition_variable.h"
 #include "storage/copydir.h"
 #include "storage/fd.h"
@@ -571,6 +572,7 @@ CheckPointReplicationOrigin(void)
 	const char *tmppath = "pg_logical/replorigin_checkpoint.tmp";
 	const char *path = "pg_logical/replorigin_checkpoint";
 	int			tmpfd;
+	BufFileStream stream;
 	int			i;
 	uint32		magic = REPLICATION_STATE_MAGIC;
 	pg_crc32c	crc;
@@ -599,18 +601,11 @@ CheckPointReplicationOrigin(void)
 				 errmsg("could not create file \"%s\": %m",
 						tmppath)));
 
+	BufFileStreamInitFD(&stream, tmpfd, true, tmppath, 0, BLCKSZ, PANIC);
+
 	/* write magic */
-	errno = 0;
-	if ((write(tmpfd, &magic, sizeof(magic))) != sizeof(magic))
-	{
-		/* if write didn't set errno, assume problem is no disk space */
-		if (errno == 0)
-			errno = ENOSPC;
-		ereport(PANIC,
-				(errcode_for_file_access(),
-				 errmsg("could not write to file \"%s\": %m",
-						tmppath)));
-	}
+	BufFileStreamWrite(&stream, &magic, sizeof(magic));
+
 	COMP_CRC32C(crc, &magic, sizeof(magic));
 
 	/* prevent concurrent creations/drops */
@@ -641,18 +636,7 @@ CheckPointReplicationOrigin(void)
 		/* make sure we only write out a commit that's persistent */
 		XLogFlush(local_lsn);
 
-		errno = 0;
-		if ((write(tmpfd, &disk_state, sizeof(disk_state))) !=
-			sizeof(disk_state))
-		{
-			/* if write didn't set errno, assume problem is no disk space */
-			if (errno == 0)
-				errno = ENOSPC;
-			ereport(PANIC,
-					(errcode_for_file_access(),
-					 errmsg("could not write to file \"%s\": %m",
-							tmppath)));
-		}
+		BufFileStreamWrite(&stream, &disk_state, sizeof(disk_state));
 
 		COMP_CRC32C(crc, &disk_state, sizeof(disk_state));
 	}
@@ -661,19 +645,9 @@ CheckPointReplicationOrigin(void)
 
 	/* write out the CRC */
 	FIN_CRC32C(crc);
-	errno = 0;
-	if ((write(tmpfd, &crc, sizeof(crc))) != sizeof(crc))
-	{
-		/* if write didn't set errno, assume problem is no disk space */
-		if (errno == 0)
-			errno = ENOSPC;
-		ereport(PANIC,
-				(errcode_for_file_access(),
-				 errmsg("could not write to file \"%s\": %m",
-						tmppath)));
-	}
+	BufFileStreamWrite(&stream, &crc, sizeof(crc));
 
-	if (CloseTransientFile(tmpfd) != 0)
+	if (BufFileStreamClose(&stream, 0) != 0)
 		ereport(PANIC,
 				(errcode_for_file_access(),
 				 errmsg("could not close file \"%s\": %m",
@@ -696,6 +670,7 @@ StartupReplicationOrigin(void)
 {
 	const char *path = "pg_logical/replorigin_checkpoint";
 	int			fd;
+	BufFileStream stream;
 	int			readBytes;
 	uint32		magic = REPLICATION_STATE_MAGIC;
 	int			last_state = 0;
@@ -731,21 +706,16 @@ StartupReplicationOrigin(void)
 				 errmsg("could not open file \"%s\": %m",
 						path)));
 
+	BufFileStreamInitFD(&stream, fd, true, path, 0, BLCKSZ, PANIC);
+
 	/* verify magic, that is written even if nothing was active */
-	readBytes = read(fd, &magic, sizeof(magic));
+	readBytes = BufFileStreamRead(&stream, &magic, sizeof(magic));
+	Assert(readBytes >= 0);
 	if (readBytes != sizeof(magic))
-	{
-		if (readBytes < 0)
-			ereport(PANIC,
-					(errcode_for_file_access(),
-					 errmsg("could not read file \"%s\": %m",
-							path)));
-		else
-			ereport(PANIC,
-					(errcode(ERRCODE_DATA_CORRUPTED),
-					 errmsg("could not read file \"%s\": read %d of %zu",
-							path, readBytes, sizeof(magic))));
-	}
+		ereport(PANIC,
+				(errcode(ERRCODE_DATA_CORRUPTED),
+				 errmsg("could not read file \"%s\": read %d of %zu",
+						path, readBytes, sizeof(magic))));
 	COMP_CRC32C(crc, &magic, sizeof(magic));
 
 	if (magic != REPLICATION_STATE_MAGIC)
@@ -760,7 +730,9 @@ StartupReplicationOrigin(void)
 	{
 		ReplicationStateOnDisk disk_state;
 
-		readBytes = read(fd, &disk_state, sizeof(disk_state));
+		readBytes = BufFileStreamRead(&stream, &disk_state,
+									  sizeof(disk_state));
+		Assert(readBytes >= 0);
 
 		/* no further data */
 		if (readBytes == sizeof(crc))
@@ -768,14 +740,6 @@ StartupReplicationOrigin(void)
 			/* not pretty, but simple ... */
 			file_crc = *(pg_crc32c *) &disk_state;
 			break;
-		}
-
-		if (readBytes < 0)
-		{
-			ereport(PANIC,
-					(errcode_for_file_access(),
-					 errmsg("could not read file \"%s\": %m",
-							path)));
 		}
 
 		if (readBytes != sizeof(disk_state))
@@ -812,7 +776,7 @@ StartupReplicationOrigin(void)
 				 errmsg("replication slot checkpoint has wrong checksum %u, expected %u",
 						crc, file_crc)));
 
-	if (CloseTransientFile(fd) != 0)
+	if (BufFileStreamClose(&stream, 0) != 0)
 		ereport(PANIC,
 				(errcode_for_file_access(),
 				 errmsg("could not close file \"%s\": %m",

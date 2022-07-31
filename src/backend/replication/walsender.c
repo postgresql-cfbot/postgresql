@@ -77,6 +77,7 @@
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
 #include "replication/walsender_private.h"
+#include "storage/buffile.h"
 #include "storage/condition_variable.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
@@ -583,6 +584,7 @@ SendTimeLineHistory(TimeLineHistoryCmd *cmd)
 	char		histfname[MAXFNAMELEN];
 	char		path[MAXPGPATH];
 	int			fd;
+	BufFileStream stream;
 	off_t		histfilelen;
 	off_t		bytesleft;
 	Size		len;
@@ -629,21 +631,17 @@ SendTimeLineHistory(TimeLineHistoryCmd *cmd)
 
 	pq_sendint32(&buf, histfilelen);	/* col2 len */
 
+	BufFileStreamInitFD(&stream, fd, true, path,
+						WAIT_EVENT_WALSENDER_TIMELINE_HISTORY_READ,
+						BLCKSZ, ERROR);
 	bytesleft = histfilelen;
 	while (bytesleft > 0)
 	{
 		PGAlignedBlock rbuf;
 		int			nread;
 
-		pgstat_report_wait_start(WAIT_EVENT_WALSENDER_TIMELINE_HISTORY_READ);
-		nread = read(fd, rbuf.data, sizeof(rbuf));
-		pgstat_report_wait_end();
-		if (nread < 0)
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not read file \"%s\": %m",
-							path)));
-		else if (nread == 0)
+		nread = BufFileStreamRead(&stream, rbuf.data, sizeof(rbuf));
+		if (nread == 0)
 			ereport(ERROR,
 					(errcode(ERRCODE_DATA_CORRUPTED),
 					 errmsg("could not read file \"%s\": read %d of %zu",
@@ -653,7 +651,7 @@ SendTimeLineHistory(TimeLineHistoryCmd *cmd)
 		bytesleft -= nread;
 	}
 
-	if (CloseTransientFile(fd) != 0)
+	if (BufFileStreamClose(&stream, 0) != 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not close file \"%s\": %m", path)));

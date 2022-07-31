@@ -99,6 +99,7 @@
 #include "replication/slot.h"
 #include "replication/snapbuild.h"	/* just for SnapBuildSnapDecRefcount */
 #include "storage/bufmgr.h"
+#include "storage/buffile.h"
 #include "storage/fd.h"
 #include "storage/sinval.h"
 #include "utils/builtins.h"
@@ -131,21 +132,13 @@ typedef struct ReorderBufferTupleCidEnt
 	CommandId	combocid;		/* just for debugging */
 } ReorderBufferTupleCidEnt;
 
-/* Virtual file descriptor with file offset tracking */
-typedef struct TXNEntryFile
-{
-	File		vfd;			/* -1 when the file is closed */
-	off_t		curOffset;		/* offset for next write or read. Reset to 0
-								 * when vfd is opened. */
-} TXNEntryFile;
-
 /* k-way in-order change iteration support structures */
 typedef struct ReorderBufferIterTXNEntry
 {
 	XLogRecPtr	lsn;
 	ReorderBufferChange *change;
 	ReorderBufferTXN *txn;
-	TXNEntryFile file;
+	BufFileStream stream;
 	XLogSegNo	segno;
 } ReorderBufferIterTXNEntry;
 
@@ -246,11 +239,15 @@ static void ReorderBufferExecuteInvalidations(uint32 nmsgs, SharedInvalidationMe
 static void ReorderBufferCheckMemoryLimit(ReorderBuffer *rb);
 static void ReorderBufferSerializeTXN(ReorderBuffer *rb, ReorderBufferTXN *txn);
 static void ReorderBufferSerializeChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
-										 int fd, ReorderBufferChange *change);
+										 BufFileStream *stream, ReorderBufferChange *change);
 static Size ReorderBufferRestoreChanges(ReorderBuffer *rb, ReorderBufferTXN *txn,
-										TXNEntryFile *file, XLogSegNo *segno);
+										BufFileStream *stream, XLogSegNo *segno);
 static void ReorderBufferRestoreChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
-									   char *change);
+									   BufFileStream *stream);
+static ReorderBufferTupleBuf *ReorderBufferRestoreTuple(ReorderBuffer *rb,
+														BufFileStream *stream);
+static void ReorderBufferReadData(BufFileStream *stream, void *ptr, size_t size,
+								  bool *no_data_p);
 static void ReorderBufferRestoreCleanup(ReorderBuffer *rb, ReorderBufferTXN *txn);
 static void ReorderBufferTruncateTXN(ReorderBuffer *rb, ReorderBufferTXN *txn,
 									 bool txn_prepared);
@@ -349,8 +346,6 @@ ReorderBufferAllocate(void)
 	buffer->by_txn_last_xid = InvalidTransactionId;
 	buffer->by_txn_last_txn = NULL;
 
-	buffer->outbuf = NULL;
-	buffer->outbufsize = 0;
 	buffer->size = 0;
 
 	buffer->spillTxns = 0;
@@ -1248,7 +1243,7 @@ ReorderBufferIterTXNInit(ReorderBuffer *rb, ReorderBufferTXN *txn,
 
 	for (off = 0; off < state->nr_txns; off++)
 	{
-		state->entries[off].file.vfd = -1;
+		state->entries[off].stream.file.f.vfd = -1;
 		state->entries[off].segno = 0;
 	}
 
@@ -1276,7 +1271,7 @@ ReorderBufferIterTXNInit(ReorderBuffer *rb, ReorderBufferTXN *txn,
 		{
 			/* serialize remaining changes */
 			ReorderBufferSerializeTXN(rb, txn);
-			ReorderBufferRestoreChanges(rb, txn, &state->entries[off].file,
+			ReorderBufferRestoreChanges(rb, txn, &state->entries[off].stream,
 										&state->entries[off].segno);
 		}
 
@@ -1306,7 +1301,7 @@ ReorderBufferIterTXNInit(ReorderBuffer *rb, ReorderBufferTXN *txn,
 				/* serialize remaining changes */
 				ReorderBufferSerializeTXN(rb, cur_txn);
 				ReorderBufferRestoreChanges(rb, cur_txn,
-											&state->entries[off].file,
+											&state->entries[off].stream,
 											&state->entries[off].segno);
 			}
 			cur_change = dlist_head_element(ReorderBufferChange, node,
@@ -1391,7 +1386,7 @@ ReorderBufferIterTXNNext(ReorderBuffer *rb, ReorderBufferIterTXNState *state)
 		 * changes.
 		 */
 		rb->totalBytes += entry->txn->size;
-		if (ReorderBufferRestoreChanges(rb, entry->txn, &entry->file,
+		if (ReorderBufferRestoreChanges(rb, entry->txn, &entry->stream,
 										&state->entries[off].segno))
 		{
 			/* successfully restored changes from disk */
@@ -1430,8 +1425,8 @@ ReorderBufferIterTXNFinish(ReorderBuffer *rb,
 
 	for (off = 0; off < state->nr_txns; off++)
 	{
-		if (state->entries[off].file.vfd != -1)
-			FileClose(state->entries[off].file.vfd);
+		if (BufFileStreamIsOpen(state->entries[off].stream))
+			BufFileStreamClose(&state->entries[off].stream, 0);
 	}
 
 	/* free memory we might have "leaked" in the last *Next call */
@@ -3339,24 +3334,6 @@ ReorderBufferXidHasBaseSnapshot(ReorderBuffer *rb, TransactionId xid)
  */
 
 /*
- * Ensure the IO buffer is >= sz.
- */
-static void
-ReorderBufferSerializeReserve(ReorderBuffer *rb, Size sz)
-{
-	if (!rb->outbufsize)
-	{
-		rb->outbuf = MemoryContextAlloc(rb->context, sz);
-		rb->outbufsize = sz;
-	}
-	else if (rb->outbufsize < sz)
-	{
-		rb->outbuf = repalloc(rb->outbuf, sz);
-		rb->outbufsize = sz;
-	}
-}
-
-/*
  * Find the largest transaction (toplevel or subxact) to evict (spill to disk).
  *
  * XXX With many subtransactions this might be quite slow, because we'll have
@@ -3525,6 +3502,7 @@ ReorderBufferSerializeTXN(ReorderBuffer *rb, ReorderBufferTXN *txn)
 	dlist_iter	subtxn_i;
 	dlist_mutable_iter change_i;
 	int			fd = -1;
+	BufFileStream stream;
 	XLogSegNo	curOpenSegNo = 0;
 	Size		spilled = 0;
 	Size		size = txn->size;
@@ -3558,7 +3536,7 @@ ReorderBufferSerializeTXN(ReorderBuffer *rb, ReorderBufferTXN *txn)
 			char		path[MAXPGPATH];
 
 			if (fd != -1)
-				CloseTransientFile(fd);
+				BufFileStreamClose(&stream, 0);
 
 			XLByteToSeg(change->lsn, curOpenSegNo, wal_segment_size);
 
@@ -3577,9 +3555,13 @@ ReorderBufferSerializeTXN(ReorderBuffer *rb, ReorderBufferTXN *txn)
 				ereport(ERROR,
 						(errcode_for_file_access(),
 						 errmsg("could not open file \"%s\": %m", path)));
+
+			BufFileStreamInitFD(&stream, fd, true, path,
+								WAIT_EVENT_REORDER_BUFFER_WRITE,
+								BLCKSZ, ERROR);
 		}
 
-		ReorderBufferSerializeChange(rb, txn, fd, change);
+		ReorderBufferSerializeChange(rb, txn, &stream, change);
 		dlist_delete(&change->node);
 		ReorderBufferReturnChange(rb, change, true);
 
@@ -3605,7 +3587,7 @@ ReorderBufferSerializeTXN(ReorderBuffer *rb, ReorderBufferTXN *txn)
 	txn->txn_flags |= RBTXN_IS_SERIALIZED;
 
 	if (fd != -1)
-		CloseTransientFile(fd);
+		BufFileStreamClose(&stream, 0);
 }
 
 /*
@@ -3613,15 +3595,14 @@ ReorderBufferSerializeTXN(ReorderBuffer *rb, ReorderBufferTXN *txn)
  */
 static void
 ReorderBufferSerializeChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
-							 int fd, ReorderBufferChange *change)
+							 BufFileStream *stream,
+							 ReorderBufferChange *change)
 {
-	ReorderBufferDiskChange *ondisk;
+	ReorderBufferDiskChange hdr;
 	Size		sz = sizeof(ReorderBufferDiskChange);
 
-	ReorderBufferSerializeReserve(rb, sz);
-
-	ondisk = (ReorderBufferDiskChange *) rb->outbuf;
-	memcpy(&ondisk->change, change, sizeof(ReorderBufferChange));
+	memcpy((char *) &hdr + offsetof(ReorderBufferDiskChange, change),
+		   change, sizeof(ReorderBufferChange));
 
 	switch (change->action)
 	{
@@ -3631,7 +3612,6 @@ ReorderBufferSerializeChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
 		case REORDER_BUFFER_CHANGE_DELETE:
 		case REORDER_BUFFER_CHANGE_INTERNAL_SPEC_INSERT:
 			{
-				char	   *data;
 				ReorderBufferTupleBuf *oldtup,
 						   *newtup;
 				Size		oldlen = 0;
@@ -3654,84 +3634,65 @@ ReorderBufferSerializeChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
 					sz += newlen;
 				}
 
-				/* make sure we have enough space */
-				ReorderBufferSerializeReserve(rb, sz);
-
-				data = ((char *) rb->outbuf) + sizeof(ReorderBufferDiskChange);
-				/* might have been reallocated above */
-				ondisk = (ReorderBufferDiskChange *) rb->outbuf;
+				hdr.size = sz;
+				BufFileStreamWrite(stream, &hdr, sizeof(ReorderBufferDiskChange));
 
 				if (oldlen)
 				{
-					memcpy(data, &oldtup->tuple, sizeof(HeapTupleData));
-					data += sizeof(HeapTupleData);
-
-					memcpy(data, oldtup->tuple.t_data, oldlen);
-					data += oldlen;
+					BufFileStreamWrite(stream, &oldtup->tuple,
+									   sizeof(HeapTupleData));
+					BufFileStreamWrite(stream, oldtup->tuple.t_data, oldlen);
 				}
 
 				if (newlen)
 				{
-					memcpy(data, &newtup->tuple, sizeof(HeapTupleData));
-					data += sizeof(HeapTupleData);
-
-					memcpy(data, newtup->tuple.t_data, newlen);
-					data += newlen;
+					BufFileStreamWrite(stream, &newtup->tuple,
+									   sizeof(HeapTupleData));
+					BufFileStreamWrite(stream, newtup->tuple.t_data, newlen);
 				}
 				break;
 			}
 		case REORDER_BUFFER_CHANGE_MESSAGE:
 			{
-				char	   *data;
 				Size		prefix_size = strlen(change->data.msg.prefix) + 1;
 
 				sz += prefix_size + change->data.msg.message_size +
 					sizeof(Size) + sizeof(Size);
-				ReorderBufferSerializeReserve(rb, sz);
 
-				data = ((char *) rb->outbuf) + sizeof(ReorderBufferDiskChange);
-
-				/* might have been reallocated above */
-				ondisk = (ReorderBufferDiskChange *) rb->outbuf;
+				hdr.size = sz;
+				BufFileStreamWrite(stream, &hdr,
+								   sizeof(ReorderBufferDiskChange));
 
 				/* write the prefix including the size */
-				memcpy(data, &prefix_size, sizeof(Size));
-				data += sizeof(Size);
-				memcpy(data, change->data.msg.prefix,
-					   prefix_size);
-				data += prefix_size;
+				BufFileStreamWrite(stream, &prefix_size, sizeof(Size));
+				BufFileStreamWrite(stream, change->data.msg.prefix,
+								   prefix_size);
 
 				/* write the message including the size */
-				memcpy(data, &change->data.msg.message_size, sizeof(Size));
-				data += sizeof(Size);
-				memcpy(data, change->data.msg.message,
-					   change->data.msg.message_size);
-				data += change->data.msg.message_size;
+				BufFileStreamWrite(stream, &change->data.msg.message_size,
+								   sizeof(Size));
+				BufFileStreamWrite(stream, change->data.msg.message,
+								   change->data.msg.message_size);
 
 				break;
 			}
 		case REORDER_BUFFER_CHANGE_INVALIDATION:
 			{
-				char	   *data;
 				Size		inval_size = sizeof(SharedInvalidationMessage) *
 				change->data.inval.ninvalidations;
 
 				sz += inval_size;
 
-				ReorderBufferSerializeReserve(rb, sz);
-				data = ((char *) rb->outbuf) + sizeof(ReorderBufferDiskChange);
-
-				/* might have been reallocated above */
-				ondisk = (ReorderBufferDiskChange *) rb->outbuf;
-				memcpy(data, change->data.inval.invalidations, inval_size);
-				data += inval_size;
-
+				hdr.size = sz;
+				BufFileStreamWrite(stream, &hdr,
+								   sizeof(ReorderBufferDiskChange));
+				BufFileStreamWrite(stream, change->data.inval.invalidations,
+								   inval_size);
 				break;
 			}
 		case REORDER_BUFFER_CHANGE_INTERNAL_SNAPSHOT:
 			{
 				Snapshot	snap;
-				char	   *data;
 
 				snap = change->data.snapshot;
 
@@ -3739,77 +3700,46 @@ ReorderBufferSerializeChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
 					sizeof(TransactionId) * snap->xcnt +
 					sizeof(TransactionId) * snap->subxcnt;
 
-				/* make sure we have enough space */
-				ReorderBufferSerializeReserve(rb, sz);
-				data = ((char *) rb->outbuf) + sizeof(ReorderBufferDiskChange);
-				/* might have been reallocated above */
-				ondisk = (ReorderBufferDiskChange *) rb->outbuf;
+				hdr.size = sz;
+				BufFileStreamWrite(stream, &hdr,
+								   sizeof(ReorderBufferDiskChange));
 
-				memcpy(data, snap, sizeof(SnapshotData));
-				data += sizeof(SnapshotData);
+				BufFileStreamWrite(stream, snap, sizeof(SnapshotData));
 
 				if (snap->xcnt)
-				{
-					memcpy(data, snap->xip,
-						   sizeof(TransactionId) * snap->xcnt);
-					data += sizeof(TransactionId) * snap->xcnt;
-				}
+					BufFileStreamWrite(stream, snap->xip,
+									   sizeof(TransactionId) * snap->xcnt);
 
 				if (snap->subxcnt)
-				{
-					memcpy(data, snap->subxip,
-						   sizeof(TransactionId) * snap->subxcnt);
-					data += sizeof(TransactionId) * snap->subxcnt;
-				}
+					BufFileStreamWrite(stream, snap->subxip,
+									   sizeof(TransactionId) * snap->subxcnt);
 				break;
 			}
 		case REORDER_BUFFER_CHANGE_TRUNCATE:
 			{
 				Size		size;
-				char	   *data;
 
 				/* account for the OIDs of truncated relations */
 				size = sizeof(Oid) * change->data.truncate.nrelids;
 				sz += size;
 
-				/* make sure we have enough space */
-				ReorderBufferSerializeReserve(rb, sz);
+				hdr.size = sz;
+				BufFileStreamWrite(stream, &hdr,
+								   sizeof(ReorderBufferDiskChange));
 
-				data = ((char *) rb->outbuf) + sizeof(ReorderBufferDiskChange);
-				/* might have been reallocated above */
-				ondisk = (ReorderBufferDiskChange *) rb->outbuf;
-
-				memcpy(data, change->data.truncate.relids, size);
-				data += size;
-
+				BufFileStreamWrite(stream, change->data.truncate.relids,
+								   size);
 				break;
 			}
 		case REORDER_BUFFER_CHANGE_INTERNAL_SPEC_CONFIRM:
 		case REORDER_BUFFER_CHANGE_INTERNAL_SPEC_ABORT:
 		case REORDER_BUFFER_CHANGE_INTERNAL_COMMAND_ID:
 		case REORDER_BUFFER_CHANGE_INTERNAL_TUPLECID:
+			hdr.size = sz;
+			BufFileStreamWrite(stream, &hdr, sizeof(ReorderBufferDiskChange));
 			/* ReorderBufferChange contains everything important */
 			break;
 	}
-
-	ondisk->size = sz;
-
-	errno = 0;
-	pgstat_report_wait_start(WAIT_EVENT_REORDER_BUFFER_WRITE);
-	if (write(fd, rb->outbuf, ondisk->size) != ondisk->size)
-	{
-		int			save_errno = errno;
-
-		CloseTransientFile(fd);
-
-		/* if write didn't set errno, assume problem is no disk space */
-		errno = save_errno ? save_errno : ENOSPC;
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not write to data file for XID %u: %m",
-						txn->xid)));
-	}
-	pgstat_report_wait_end();
 
 	/*
 	 * Keep the transaction's final_lsn up to date with each change we send to
@@ -3821,8 +3751,6 @@ ReorderBufferSerializeChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
 	 */
 	if (txn->final_lsn < change->lsn)
 		txn->final_lsn = change->lsn;
-
-	Assert(ondisk->change.action == change->action);
 }
 
 /* Returns true, if the output plugin supports streaming, false, otherwise. */
@@ -4065,12 +3993,11 @@ ReorderBufferChangeSize(ReorderBufferChange *change)
  */
 static Size
 ReorderBufferRestoreChanges(ReorderBuffer *rb, ReorderBufferTXN *txn,
-							TXNEntryFile *file, XLogSegNo *segno)
+							BufFileStream *stream, XLogSegNo *segno)
 {
 	Size		restored = 0;
 	XLogSegNo	last_segno;
 	dlist_mutable_iter cleanup_iter;
-	File	   *fd = &file->vfd;
 
 	Assert(txn->first_lsn != InvalidXLogRecPtr);
 	Assert(txn->final_lsn != InvalidXLogRecPtr);
@@ -4091,12 +4018,10 @@ ReorderBufferRestoreChanges(ReorderBuffer *rb, ReorderBufferTXN *txn,
 
 	while (restored < max_changes_in_memory && *segno <= last_segno)
 	{
-		int			readBytes;
-		ReorderBufferDiskChange *ondisk;
-
-		if (*fd == -1)
+		if (stream->file.f.vfd == -1)
 		{
 			char		path[MAXPGPATH];
+			File		vfd;
 
 			/* first time in */
 			if (*segno == 0)
@@ -4111,86 +4036,38 @@ ReorderBufferRestoreChanges(ReorderBuffer *rb, ReorderBufferTXN *txn,
 			ReorderBufferSerializedPath(path, MyReplicationSlot, txn->xid,
 										*segno);
 
-			*fd = PathNameOpenFile(path, O_RDONLY | PG_BINARY);
+			vfd = PathNameOpenFile(path, O_RDONLY | PG_BINARY);
 
-			/* No harm in resetting the offset even in case of failure */
-			file->curOffset = 0;
-
-			if (*fd < 0 && errno == ENOENT)
+			if (vfd < 0 && errno == ENOENT)
 			{
-				*fd = -1;
+				stream->file.f.vfd = -1;
 				(*segno)++;
 				continue;
 			}
-			else if (*fd < 0)
+			else if (vfd < 0)
 				ereport(ERROR,
 						(errcode_for_file_access(),
 						 errmsg("could not open file \"%s\": %m",
 								path)));
+
+			/*
+			 * Initialize the stream so it returns data from the newly opened
+			 * file.
+			 */
+			BufFileStreamInitVFD(stream, vfd, path,
+								 WAIT_EVENT_REORDER_BUFFER_READ,
+								 BLCKSZ, ERROR);
 		}
 
-		/*
-		 * Read the statically sized part of a change which has information
-		 * about the total size. If we couldn't read a record, we're at the
-		 * end of this file.
-		 */
-		ReorderBufferSerializeReserve(rb, sizeof(ReorderBufferDiskChange));
-		readBytes = FileRead(file->vfd, rb->outbuf,
-							 sizeof(ReorderBufferDiskChange),
-							 file->curOffset, WAIT_EVENT_REORDER_BUFFER_READ);
-
-		/* eof */
-		if (readBytes == 0)
+		ReorderBufferRestoreChange(rb, txn, stream);
+		if (stream->file.f.vfd != -1)
+			restored++;
+		else
 		{
-			FileClose(*fd);
-			*fd = -1;
+			/* No data could be restored. */
 			(*segno)++;
 			continue;
 		}
-		else if (readBytes < 0)
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not read from reorderbuffer spill file: %m")));
-		else if (readBytes != sizeof(ReorderBufferDiskChange))
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not read from reorderbuffer spill file: read %d instead of %u bytes",
-							readBytes,
-							(uint32) sizeof(ReorderBufferDiskChange))));
-
-		file->curOffset += readBytes;
-
-		ondisk = (ReorderBufferDiskChange *) rb->outbuf;
-
-		ReorderBufferSerializeReserve(rb,
-									  sizeof(ReorderBufferDiskChange) + ondisk->size);
-		ondisk = (ReorderBufferDiskChange *) rb->outbuf;
-
-		readBytes = FileRead(file->vfd,
-							 rb->outbuf + sizeof(ReorderBufferDiskChange),
-							 ondisk->size - sizeof(ReorderBufferDiskChange),
-							 file->curOffset,
-							 WAIT_EVENT_REORDER_BUFFER_READ);
-
-		if (readBytes < 0)
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not read from reorderbuffer spill file: %m")));
-		else if (readBytes != ondisk->size - sizeof(ReorderBufferDiskChange))
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not read from reorderbuffer spill file: read %d instead of %u bytes",
-							readBytes,
-							(uint32) (ondisk->size - sizeof(ReorderBufferDiskChange)))));
-
-		file->curOffset += readBytes;
-
-		/*
-		 * ok, read a full change from disk, now restore it into proper
-		 * in-memory format
-		 */
-		ReorderBufferRestoreChange(rb, txn, rb->outbuf);
-		restored++;
 	}
 
 	return restored;
@@ -4200,25 +4077,36 @@ ReorderBufferRestoreChanges(ReorderBuffer *rb, ReorderBufferTXN *txn,
  * Convert change from its on-disk format to in-memory format and queue it onto
  * the TXN's ->changes list.
  *
- * Note: although "data" is declared char*, at entry it points to a
- * maxalign'd buffer, making it safe in most of this function to assume
- * that the pointed-to data is suitably aligned for direct access.
+ * If no data was found in the stream, close the file and the descriptor to
+ * -1.
  */
 static void
 ReorderBufferRestoreChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
-						   char *data)
+						   BufFileStream *stream)
 {
-	ReorderBufferDiskChange *ondisk;
+	ReorderBufferDiskChange ondisk;
+	bool		no_data;
 	ReorderBufferChange *change;
 
-	ondisk = (ReorderBufferDiskChange *) data;
+	/*
+	 * Read the statically sized part of a change which has information about
+	 * the total size. If we couldn't read a record, we're at the end of this
+	 * file.
+	 */
+	ReorderBufferReadData(stream, &ondisk, sizeof(ReorderBufferDiskChange),
+						  &no_data);
+
+	/* eof */
+	if (no_data)
+	{
+		BufFileStreamClose(stream, 0);
+		return;
+	}
 
 	change = ReorderBufferGetChange(rb);
 
 	/* copy static part */
-	memcpy(change, &ondisk->change, sizeof(ReorderBufferChange));
-
-	data += sizeof(ReorderBufferDiskChange);
+	memcpy(change, &ondisk.change, sizeof(ReorderBufferChange));
 
 	/* restore individual stuff */
 	switch (change->action)
@@ -4229,50 +4117,10 @@ ReorderBufferRestoreChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
 		case REORDER_BUFFER_CHANGE_DELETE:
 		case REORDER_BUFFER_CHANGE_INTERNAL_SPEC_INSERT:
 			if (change->data.tp.oldtuple)
-			{
-				uint32		tuplelen = ((HeapTuple) data)->t_len;
-
-				change->data.tp.oldtuple =
-					ReorderBufferGetTupleBuf(rb, tuplelen - SizeofHeapTupleHeader);
-
-				/* restore ->tuple */
-				memcpy(&change->data.tp.oldtuple->tuple, data,
-					   sizeof(HeapTupleData));
-				data += sizeof(HeapTupleData);
-
-				/* reset t_data pointer into the new tuplebuf */
-				change->data.tp.oldtuple->tuple.t_data =
-					ReorderBufferTupleBufData(change->data.tp.oldtuple);
-
-				/* restore tuple data itself */
-				memcpy(change->data.tp.oldtuple->tuple.t_data, data, tuplelen);
-				data += tuplelen;
-			}
+				change->data.tp.oldtuple = ReorderBufferRestoreTuple(rb, stream);
 
 			if (change->data.tp.newtuple)
-			{
-				/* here, data might not be suitably aligned! */
-				uint32		tuplelen;
-
-				memcpy(&tuplelen, data + offsetof(HeapTupleData, t_len),
-					   sizeof(uint32));
-
-				change->data.tp.newtuple =
-					ReorderBufferGetTupleBuf(rb, tuplelen - SizeofHeapTupleHeader);
-
-				/* restore ->tuple */
-				memcpy(&change->data.tp.newtuple->tuple, data,
-					   sizeof(HeapTupleData));
-				data += sizeof(HeapTupleData);
-
-				/* reset t_data pointer into the new tuplebuf */
-				change->data.tp.newtuple->tuple.t_data =
-					ReorderBufferTupleBufData(change->data.tp.newtuple);
-
-				/* restore tuple data itself */
-				memcpy(change->data.tp.newtuple->tuple.t_data, data, tuplelen);
-				data += tuplelen;
-			}
+				change->data.tp.newtuple = ReorderBufferRestoreTuple(rb, stream);
 
 			break;
 		case REORDER_BUFFER_CHANGE_MESSAGE:
@@ -4280,22 +4128,20 @@ ReorderBufferRestoreChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
 				Size		prefix_size;
 
 				/* read prefix */
-				memcpy(&prefix_size, data, sizeof(Size));
-				data += sizeof(Size);
+				ReorderBufferReadData(stream, &prefix_size, sizeof(Size), NULL);
 				change->data.msg.prefix = MemoryContextAlloc(rb->context,
 															 prefix_size);
-				memcpy(change->data.msg.prefix, data, prefix_size);
+				ReorderBufferReadData(stream, change->data.msg.prefix,
+									  prefix_size, NULL);
 				Assert(change->data.msg.prefix[prefix_size - 1] == '\0');
-				data += prefix_size;
 
 				/* read the message */
-				memcpy(&change->data.msg.message_size, data, sizeof(Size));
-				data += sizeof(Size);
+				ReorderBufferReadData(stream, &change->data.msg.message_size,
+									  sizeof(Size), NULL);
 				change->data.msg.message = MemoryContextAlloc(rb->context,
 															  change->data.msg.message_size);
-				memcpy(change->data.msg.message, data,
-					   change->data.msg.message_size);
-				data += change->data.msg.message_size;
+				ReorderBufferReadData(stream, change->data.msg.message,
+									  change->data.msg.message_size, NULL);
 
 				break;
 			}
@@ -4308,29 +4154,32 @@ ReorderBufferRestoreChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
 					MemoryContextAlloc(rb->context, inval_size);
 
 				/* read the message */
-				memcpy(change->data.inval.invalidations, data, inval_size);
+				ReorderBufferReadData(stream, change->data.inval.invalidations,
+									  inval_size, NULL);
 
 				break;
 			}
 		case REORDER_BUFFER_CHANGE_INTERNAL_SNAPSHOT:
 			{
-				Snapshot	oldsnap;
+				SnapshotData oldsnap;
 				Snapshot	newsnap;
 				Size		size;
 
-				oldsnap = (Snapshot) data;
+				ReorderBufferReadData(stream, &oldsnap, sizeof(SnapshotData), NULL);
 
 				size = sizeof(SnapshotData) +
-					sizeof(TransactionId) * oldsnap->xcnt +
-					sizeof(TransactionId) * (oldsnap->subxcnt + 0);
+					sizeof(TransactionId) * oldsnap.xcnt +
+					sizeof(TransactionId) * (oldsnap.subxcnt + 0);
 
 				change->data.snapshot = MemoryContextAllocZero(rb->context, size);
 
 				newsnap = change->data.snapshot;
 
-				memcpy(newsnap, data, size);
+				memcpy(newsnap, &oldsnap, sizeof(SnapshotData));
 				newsnap->xip = (TransactionId *)
 					(((char *) newsnap) + sizeof(SnapshotData));
+				ReorderBufferReadData(stream, newsnap->xip,
+									  size - sizeof(SnapshotData), NULL);
 				newsnap->subxip = newsnap->xip + newsnap->xcnt;
 				newsnap->copied = true;
 				break;
@@ -4342,7 +4191,9 @@ ReorderBufferRestoreChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
 
 				relids = ReorderBufferGetRelids(rb,
 												change->data.truncate.nrelids);
-				memcpy(relids, data, change->data.truncate.nrelids * sizeof(Oid));
+				ReorderBufferReadData(stream, relids,
+									  change->data.truncate.nrelids * sizeof(Oid),
+									  NULL);
 				change->data.truncate.relids = relids;
 
 				break;
@@ -4367,6 +4218,77 @@ ReorderBufferRestoreChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
 	 */
 	ReorderBufferChangeMemoryUpdate(rb, change, true,
 									ReorderBufferChangeSize(change));
+}
+
+/*
+ * Convert heap tuple from its on-disk format to in-memory format.
+ */
+static ReorderBufferTupleBuf *
+ReorderBufferRestoreTuple(ReorderBuffer *rb, BufFileStream *stream)
+{
+	HeapTupleData tupdata;
+	uint32		tuplelen;
+	ReorderBufferTupleBuf *result;
+
+	ReorderBufferReadData(stream, &tupdata, sizeof(HeapTupleData), NULL);
+	tuplelen = tupdata.t_len;
+
+	result = ReorderBufferGetTupleBuf(rb, tuplelen - SizeofHeapTupleHeader);
+
+	/* restore ->tuple */
+	memcpy(&result->tuple, &tupdata, sizeof(HeapTupleData));
+
+	/* reset t_data pointer into the new tuplebuf */
+	result->tuple.t_data = ReorderBufferTupleBufData(result);
+
+	/* restore tuple data itself */
+	ReorderBufferReadData(stream, result->tuple.t_data, tuplelen, NULL);
+
+	return result;
+}
+
+/*
+ * Wrapper for BufFileReadTransient() that raises ERROR if the expected amount
+ * of bytes was not read.
+ *
+ * If valid pointer is passed for no_data_p, set *no_data_p to indicate
+ * whether zero bytes was read. If NULL is passed, do not tolerate missing
+ * data.
+ */
+static void
+ReorderBufferReadData(BufFileStream *stream, void *ptr, size_t size,
+					  bool *no_data_p)
+{
+	int			readBytes;
+
+	/*
+	 * Caller should not request zero bytes. This assumption simplifies
+	 * setting of *no_data_p below.
+	 */
+	Assert(size > 0);
+
+	if ((readBytes = BufFileStreamRead(stream, ptr, size)) != size)
+	{
+		if (no_data_p)
+			*no_data_p = readBytes == 0;
+
+		/*
+		 * It is o.k. to receive exactly zero bytes if caller passed valid
+		 * no_data_p.
+		 */
+		if (no_data_p && *no_data_p)
+			return;
+
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not read from reorderbuffer spill file: read %d instead of %u bytes",
+						readBytes, (uint32) size)));
+	}
+	else if (no_data_p)
+	{
+		/* Given that size is non-zero, readBytes must be non-zero too. */
+		*no_data_p = false;
+	}
 }
 
 /*
@@ -4893,6 +4815,7 @@ ApplyLogicalMappingFile(HTAB *tuplecid_data, Oid relid, const char *fname)
 {
 	char		path[MAXPGPATH];
 	int			fd;
+	BufFileStream stream;
 	int			readBytes;
 	LogicalRewriteMappingData map;
 
@@ -4902,6 +4825,9 @@ ApplyLogicalMappingFile(HTAB *tuplecid_data, Oid relid, const char *fname)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not open file \"%s\": %m", path)));
+	BufFileStreamInitFD(&stream, fd, true, path,
+						WAIT_EVENT_REORDER_LOGICAL_MAPPING_READ,
+						BLCKSZ, ERROR);
 
 	while (true)
 	{
@@ -4914,16 +4840,10 @@ ApplyLogicalMappingFile(HTAB *tuplecid_data, Oid relid, const char *fname)
 		memset(&key, 0, sizeof(ReorderBufferTupleCidKey));
 
 		/* read all mappings till the end of the file */
-		pgstat_report_wait_start(WAIT_EVENT_REORDER_LOGICAL_MAPPING_READ);
-		readBytes = read(fd, &map, sizeof(LogicalRewriteMappingData));
-		pgstat_report_wait_end();
+		readBytes = BufFileStreamRead(&stream, &map, sizeof(LogicalRewriteMappingData));
+		Assert(readBytes >= 0);
 
-		if (readBytes < 0)
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not read file \"%s\": %m",
-							path)));
-		else if (readBytes == 0)	/* EOF */
+		if (readBytes == 0)		/* EOF */
 			break;
 		else if (readBytes != sizeof(LogicalRewriteMappingData))
 			ereport(ERROR,
@@ -4976,7 +4896,7 @@ ApplyLogicalMappingFile(HTAB *tuplecid_data, Oid relid, const char *fname)
 		}
 	}
 
-	if (CloseTransientFile(fd) != 0)
+	if (BufFileStreamClose(&stream, 0))
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not close file \"%s\": %m", path)));

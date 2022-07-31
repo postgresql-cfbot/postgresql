@@ -108,11 +108,12 @@ typedef struct PublicationRelInfo
 	Relation	relation;
 	Node	   *whereClause;
 	List	   *columns;
+	bool		except;
 } PublicationRelInfo;
 
 extern Publication *GetPublication(Oid pubid);
 extern Publication *GetPublicationByName(const char *pubname, bool missing_ok);
-extern List *GetRelationPublications(Oid relid);
+extern List *GetRelationPublications(Oid relid, bool except_flag);
 
 /*---------
  * Expected values for pub_partopt parameter of GetRelationPublications(),
@@ -132,7 +133,7 @@ typedef enum PublicationPartOpt
 
 extern List *GetPublicationRelations(Oid pubid, PublicationPartOpt pub_partopt);
 extern List *GetAllTablesPublications(void);
-extern List *GetAllTablesPublicationRelations(bool pubviaroot);
+extern List *GetAllTablesPublicationRelations(Oid pubid, bool pubviaroot);
 extern List *GetPublicationSchemas(Oid pubid);
 extern List *GetSchemaPublications(Oid schemaid);
 extern List *GetSchemaPublicationRelations(Oid schemaid,
@@ -143,7 +144,7 @@ extern List *GetPubPartitionOptionRelations(List *result,
 											PublicationPartOpt pub_partopt,
 											Oid relid);
 extern Oid	GetTopMostAncestorInPublication(Oid puboid, List *ancestors,
-											int *ancestor_level);
+											int *ancestor_level, bool puballtables);
 
 extern bool is_publishable_relation(Relation rel);
 extern bool is_schema_publication(Oid pubid);

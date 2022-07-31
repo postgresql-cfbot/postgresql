@@ -459,7 +459,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				transform_element_list transform_type_list
 				TriggerTransitions TriggerReferencing
 				vacuum_relation_list opt_vacuum_relation_list
-				drop_option_list pub_obj_list
+				drop_option_list pub_obj_list except_pub_obj_list
 
 %type <node>	opt_routine_body
 %type <groupclause> group_clause
@@ -593,6 +593,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <node>	var_value zone_value
 %type <rolespec> auth_ident RoleSpec opt_granted_by
 %type <publicationobjectspec> PublicationObjSpec
+%type <publicationobjectspec> ExceptPublicationObjSpec
 
 %type <keyword> unreserved_keyword type_func_name_keyword
 %type <keyword> col_name_keyword reserved_keyword
@@ -10418,7 +10419,7 @@ AlterOwnerStmt: ALTER AGGREGATE aggregate_with_argtypes OWNER TO RoleSpec
  *
  * CREATE PUBLICATION name [WITH options]
  *
- * CREATE PUBLICATION FOR ALL TABLES [WITH options]
+ * CREATE PUBLICATION FOR ALL TABLES [EXCEPT [TABLE] table [, ...]] [WITH options]
  *
  * CREATE PUBLICATION FOR pub_obj [, ...] [WITH options]
  *
@@ -10438,12 +10439,13 @@ CreatePublicationStmt:
 					n->options = $4;
 					$$ = (Node *) n;
 				}
-			| CREATE PUBLICATION name FOR ALL TABLES opt_definition
+			| CREATE PUBLICATION name FOR ALL TABLES except_pub_obj_list opt_definition
 				{
 					CreatePublicationStmt *n = makeNode(CreatePublicationStmt);
 
 					n->pubname = $3;
-					n->options = $7;
+					n->options = $8;
+					n->pubobjects = (List *)$7;
 					n->for_all_tables = true;
 					$$ = (Node *) n;
 				}
@@ -10481,6 +10483,7 @@ PublicationObjSpec:
 					$$->pubtable->relation = $2;
 					$$->pubtable->columns = $3;
 					$$->pubtable->whereClause = $4;
+					$$->location = @1;
 				}
 			| ALL TABLES IN_P SCHEMA ColId
 				{
@@ -10556,6 +10559,25 @@ pub_obj_list:	PublicationObjSpec
 					{ $$ = lappend($1, $3); }
 	;
 
+ExceptPublicationObjSpec:
+			 relation_expr
+				{
+					$$ = makeNode(PublicationObjSpec);
+					$$->pubobjtype = PUBLICATIONOBJ_EXCEPT_TABLE;
+					$$->pubtable = makeNode(PublicationTable);
+					$$->pubtable->except = true;
+					$$->pubtable->relation = $1;
+					$$->location = @1;
+				}
+	;
+
+except_pub_obj_list:	EXCEPT opt_table ExceptPublicationObjSpec
+					{ $$ = list_make1($3); }
+			| except_pub_obj_list ',' ExceptPublicationObjSpec
+					{ $$ = lappend($1, $3); }
+			|  /*EMPTY*/								{ $$ = NULL; }
+	;
+
 /*****************************************************************************
  *
  * ALTER PUBLICATION name SET ( options )
@@ -10565,6 +10587,10 @@ pub_obj_list:	PublicationObjSpec
  * ALTER PUBLICATION name DROP pub_obj [, ...]
  *
  * ALTER PUBLICATION name SET pub_obj [, ...]
+ *
+ * ALTER PUBLICATION name RESET
+ *
+ * ALTER PUBLICATION name ADD ALL TABLES EXCEPT [TABLE] table_name [, ...]
  *
  * pub_obj is one of:
  *
@@ -10592,6 +10618,15 @@ AlterPublicationStmt:
 					n->action = AP_AddObjects;
 					$$ = (Node *) n;
 				}
+			| ALTER PUBLICATION name ADD_P ALL TABLES except_pub_obj_list
+				{
+					AlterPublicationStmt *n = makeNode(AlterPublicationStmt);
+					n->pubname = $3;
+					n->pubobjects = $7;
+					n->for_all_tables = true;
+					n->action = AP_AddObjects;
+					$$ = (Node *)n;
+				}
 			| ALTER PUBLICATION name SET pub_obj_list
 				{
 					AlterPublicationStmt *n = makeNode(AlterPublicationStmt);
@@ -10611,6 +10646,13 @@ AlterPublicationStmt:
 					preprocess_pubobj_list(n->pubobjects, yyscanner);
 					n->action = AP_DropObjects;
 					$$ = (Node *) n;
+				}
+			| ALTER PUBLICATION name RESET
+				{
+					AlterPublicationStmt *n = makeNode(AlterPublicationStmt);
+					n->pubname = $3;
+					n->action = AP_ResetPublication;
+					$$ = (Node *)n;
 				}
 		;
 

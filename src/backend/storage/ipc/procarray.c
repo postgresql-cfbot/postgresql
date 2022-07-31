@@ -4617,18 +4617,24 @@ KnownAssignedXidsCompress(bool force)
 	{
 		/*
 		 * If we can choose how much to compress, use a heuristic to avoid
-		 * compressing too often or not often enough.
+		 * compressing too often or not often enough. "Compress" here means
+		 * simply moving the values to the beginning of the array, so is
+		 * not as complex or costly as typical data compression algorithms.
 		 *
-		 * Heuristic is if we have a large enough current spread and less than
-		 * 50% of the elements are currently in use, then compress. This
-		 * should ensure we compress fairly infrequently. We could compress
-		 * less often though the virtual array would spread out more and
-		 * snapshots would become more expensive.
+		 * Heuristic is if less than 50% of the elements are currently in
+		 * use, then compress. This ensures time to take a snapshot is
+		 * bounded at S=2N, using the same notation from earlier comments,
+		 * which is essential to avoid limiting scalability with high N.
+		 * Previously, we prevented compression until S=4M, ensuring that
+		 * snapshot speed would be slow and scale poorly with many CPUs.
+		 *
+		 * As noted earlier, compression is O(S), so now O(2N), while frequency
+		 * of compression is now O(1/N) so that as N varies, the algorithm
+		 * balances nicely the frequency and cost of compression.
 		 */
 		int			nelements = head - tail;
 
-		if (nelements < 4 * PROCARRAY_MAXPROCS ||
-			nelements < 2 * pArray->numKnownAssignedXids)
+		if (nelements < 2 * pArray->numKnownAssignedXids)
 			return;
 	}
 
@@ -4924,8 +4930,10 @@ KnownAssignedXidsRemoveTree(TransactionId xid, int nsubxids,
 	for (i = 0; i < nsubxids; i++)
 		KnownAssignedXidsRemove(subxids[i]);
 
-	/* Opportunistically compress the array */
-	KnownAssignedXidsCompress(false);
+	/* Opportunistically compress the array, every N commits */
+	if (TransactionIdIsValid(xid) &&
+		((int) xid) % 8 == 0)
+		KnownAssignedXidsCompress(false);
 }
 
 /*

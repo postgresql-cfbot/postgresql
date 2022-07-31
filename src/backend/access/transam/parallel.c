@@ -774,6 +774,22 @@ WaitForParallelWorkersToFinish(ParallelContext *pcxt)
 		 */
 		CHECK_FOR_INTERRUPTS();
 
+		/*
+		 * We call the parallel progress callback while
+		 * waiting for the parallel workers to finish.
+		 * This is to ensure that the leader keeps
+		 * updating progress when waiting for
+		 * parallel workers to finish.
+		 *
+		 * We must ensure that pcxt->parallel_progress_callback
+		 * is set before calling as not all parallel
+		 * operations will set a callback.
+		 */
+		if (pcxt->parallel_progress_callback)
+		{
+			pcxt->parallel_progress_callback(pcxt->parallel_progress_callback_arg);
+		}
+
 		for (i = 0; i < pcxt->nworkers_launched; ++i)
 		{
 			/*

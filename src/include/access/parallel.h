@@ -20,6 +20,9 @@
 #include "storage/shm_mq.h"
 #include "storage/shm_toc.h"
 
+/* progress callback definition */
+typedef void (*ParallelProgressCallback) (void *parallel_progress_callback_state);
+
 typedef void (*parallel_worker_main_type) (dsm_segment *seg, shm_toc *toc);
 
 typedef struct ParallelWorkerInfo
@@ -46,6 +49,8 @@ typedef struct ParallelContext
 	ParallelWorkerInfo *worker;
 	int			nknown_attached_workers;
 	bool	   *known_attached_workers;
+	ParallelProgressCallback parallel_progress_callback;
+	void            *parallel_progress_callback_arg;
 } ParallelContext;
 
 typedef struct ParallelWorkerContext

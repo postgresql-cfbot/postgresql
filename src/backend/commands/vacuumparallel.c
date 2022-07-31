@@ -30,6 +30,7 @@
 #include "access/table.h"
 #include "access/xact.h"
 #include "catalog/index.h"
+#include "commands/progress.h"
 #include "commands/vacuum.h"
 #include "optimizer/paths.h"
 #include "pgstat.h"
@@ -213,6 +214,7 @@ static void parallel_vacuum_process_one_index(ParallelVacuumState *pvs, Relation
 static bool parallel_vacuum_index_is_parallel_safe(Relation indrel, int num_index_scans,
 												   bool vacuum);
 static void parallel_vacuum_error_callback(void *arg);
+static void parallel_vacuum_progress_callback(void *arg);
 
 /*
  * Try to enter parallel mode and create a parallel context.  Then initialize
@@ -287,6 +289,10 @@ parallel_vacuum_init(Relation rel, Relation *indrels, int nindexes,
 	est_dead_items_len = vac_max_items_to_alloc_size(max_items);
 	shm_toc_estimate_chunk(&pcxt->estimator, est_dead_items_len);
 	shm_toc_estimate_keys(&pcxt->estimator, 1);
+
+	/* Setup the Parallel Progress Callback */
+	pvs->pcxt->parallel_progress_callback = parallel_vacuum_progress_callback;
+	pvs->pcxt->parallel_progress_callback_arg = pvs;
 
 	/*
 	 * Estimate space for BufferUsage and WalUsage --
@@ -885,6 +891,13 @@ parallel_vacuum_process_one_index(ParallelVacuumState *pvs, Relation indrel,
 
 	/* Reset error traceback information */
 	pvs->status = PARALLEL_INDVAC_STATUS_COMPLETED;
+
+	/*
+	 * If we are the leader, update index vacuum progress.
+	 */
+	if (!IsParallelWorker())
+		pvs->pcxt->parallel_progress_callback(pvs->pcxt->parallel_progress_callback_arg);
+
 	pfree(pvs->indname);
 	pvs->indname = NULL;
 }
@@ -1070,4 +1083,28 @@ parallel_vacuum_error_callback(void *arg)
 		default:
 			return;
 	}
+}
+
+/*
+ * Callback to report index vacuum progress.
+ * Vacuum Progress should only be reported
+ * to the leader process.
+ */
+static void
+parallel_vacuum_progress_callback(void *arg)
+{
+	ParallelVacuumState *pvs = (ParallelVacuumState *)arg;
+	int indexes_completed = 0;
+
+	Assert(!IsParallelWorker());
+
+	for (int i = 0; i < pvs->nindexes; i++)
+	{
+		PVIndStats *indstats = &(pvs->indstats[i]);
+
+		if (indstats->status == PARALLEL_INDVAC_STATUS_COMPLETED)
+			indexes_completed++;
+	}
+
+	pgstat_progress_update_param(PROGRESS_VACUUM_INDEXES_COMPLETED, indexes_completed);
 }

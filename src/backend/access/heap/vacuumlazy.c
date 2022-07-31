@@ -418,6 +418,9 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 	vacrel->rel = rel;
 	vac_open_indexes(vacrel->rel, RowExclusiveLock, &vacrel->nindexes,
 					 &vacrel->indrels);
+	/* Report the number of indexes to vacuum/cleanup */
+	pgstat_progress_update_param(PROGRESS_VACUUM_INDEXES_TOTAL, vacrel->nindexes);
+
 	if (instrument && vacrel->nindexes > 0)
 	{
 		/* Copy index names used by instrumentation (not error reporting) */
@@ -2327,6 +2330,8 @@ lazy_vacuum_all_indexes(LVRelState *vacrel)
 			vacrel->indstats[idx] =
 				lazy_vacuum_one_index(indrel, istat, vacrel->old_live_tuples,
 									  vacrel);
+			/* Report the number of indexes vacuumed */
+			pgstat_progress_update_param(PROGRESS_VACUUM_INDEXES_COMPLETED, idx + 1);
 
 			if (lazy_check_wraparound_failsafe(vacrel))
 			{
@@ -2360,6 +2365,10 @@ lazy_vacuum_all_indexes(LVRelState *vacrel)
 	Assert(vacrel->num_index_scans > 0 ||
 		   vacrel->dead_items->num_items == vacrel->lpdead_items);
 	Assert(allindexes || vacrel->failsafe_active);
+
+	/* Report that we're done vacuuming indexes */
+	pgstat_progress_update_param(PROGRESS_VACUUM_INDEXES_TOTAL, 0);
+	pgstat_progress_update_param(PROGRESS_VACUUM_INDEXES_COMPLETED, 0);
 
 	/*
 	 * Increase and report the number of index scans.
@@ -2625,6 +2634,10 @@ lazy_check_wraparound_failsafe(LVRelState *vacrel)
 		vacrel->do_index_cleanup = false;
 		vacrel->do_rel_truncate = false;
 
+		/* Report that we're no longer vacuuming indexes */
+		pgstat_progress_update_param(PROGRESS_VACUUM_INDEXES_TOTAL, 0);
+		pgstat_progress_update_param(PROGRESS_VACUUM_INDEXES_COMPLETED, 0);
+
 		ereport(WARNING,
 				(errmsg("bypassing nonessential maintenance of table \"%s.%s.%s\" as a failsafe after %d index scans",
 						get_database_name(MyDatabaseId),
@@ -2671,6 +2684,8 @@ lazy_cleanup_all_indexes(LVRelState *vacrel)
 			vacrel->indstats[idx] =
 				lazy_cleanup_one_index(indrel, istat, reltuples,
 									   estimated_count, vacrel);
+			/* Report the number of indexes cleaned */
+			pgstat_progress_update_param(PROGRESS_VACUUM_INDEXES_COMPLETED, idx + 1);
 		}
 	}
 	else
@@ -2680,6 +2695,10 @@ lazy_cleanup_all_indexes(LVRelState *vacrel)
 											vacrel->num_index_scans,
 											estimated_count);
 	}
+
+	/* Report that we're done cleaning up indexes */
+	pgstat_progress_update_param(PROGRESS_VACUUM_INDEXES_TOTAL, 0);
+	pgstat_progress_update_param(PROGRESS_VACUUM_INDEXES_COMPLETED, 0);
 }
 
 /*

@@ -95,8 +95,6 @@ bool		hot_standby_feedback;
 static WalReceiverConn *wrconn = NULL;
 WalReceiverFunctionsType *WalReceiverFunctions = NULL;
 
-#define NAPTIME_PER_CYCLE 100	/* max sleep time between cycles (100ms) */
-
 /*
  * These variables are used similarly to openLogFile/SegNo,
  * but for walreceiver to write the XLOG. recvFileTLI is the TimeLineID
@@ -116,6 +114,27 @@ static struct
 	XLogRecPtr	Flush;			/* last byte + 1 flushed in the standby */
 }			LogstreamResult;
 
+/*
+ * Reasons to wake up and perform periodic tasks.
+ */
+typedef enum WalRcvWakeupReason
+{
+	WALRCV_WAKEUP_TERMINATE,
+	WALRCV_WAKEUP_PING,
+	WALRCV_WAKEUP_REPLY,
+	WALRCV_WAKEUP_HSFEEDBACK,
+	NUM_WALRCV_WAKEUPS
+} WalRcvWakeupReason;
+
+/*
+ * A struct to keep track of non-shared state.
+ */
+typedef struct WalRcvInfo
+{
+	TimeLineID	startpointTLI;
+	TimestampTz	wakeup[NUM_WALRCV_WAKEUPS];
+} WalRcvInfo;
+
 static StringInfoData reply_message;
 static StringInfoData incoming_message;
 
@@ -123,15 +142,24 @@ static StringInfoData incoming_message;
 static void WalRcvFetchTimeLineHistoryFiles(TimeLineID first, TimeLineID last);
 static void WalRcvWaitForStartPosition(XLogRecPtr *startpoint, TimeLineID *startpointTLI);
 static void WalRcvDie(int code, Datum arg);
-static void XLogWalRcvProcessMsg(unsigned char type, char *buf, Size len,
+static void XLogWalRcvProcessMsg(WalRcvInfo *state,
+								 unsigned char type, char *buf, Size len,
 								 TimeLineID tli);
-static void XLogWalRcvWrite(char *buf, Size nbytes, XLogRecPtr recptr,
-							TimeLineID tli);
-static void XLogWalRcvFlush(bool dying, TimeLineID tli);
-static void XLogWalRcvClose(XLogRecPtr recptr, TimeLineID tli);
-static void XLogWalRcvSendReply(bool force, bool requestReply);
-static void XLogWalRcvSendHSFeedback(bool immed);
+static void XLogWalRcvWrite(WalRcvInfo *state, char *buf, Size nbytes,
+							XLogRecPtr recptr, TimeLineID tli);
+static void XLogWalRcvFlush(WalRcvInfo *state, bool dying, TimeLineID tli);
+static void XLogWalRcvClose(WalRcvInfo *state, XLogRecPtr recptr, TimeLineID tli);
+static void XLogWalRcvSendReply(WalRcvInfo *state,
+								TimestampTz now,
+								bool force,
+								bool requestReply);
+static void XLogWalRcvSendHSFeedback(WalRcvInfo *state,
+									 TimestampTz now,
+									 bool immed);
 static void ProcessWalSndrMessage(XLogRecPtr walEnd, TimestampTz sendTime);
+static void WalRcvComputeNextWakeup(WalRcvInfo *state,
+									WalRcvWakeupReason reason,
+									TimestampTz now);
 
 /*
  * Process any interrupts the walreceiver process may have received.
@@ -165,7 +193,6 @@ ProcessWalRcvInterrupts(void)
 	}
 }
 
-
 /* Main entry point for walreceiver process */
 void
 WalReceiverMain(void)
@@ -175,16 +202,14 @@ WalReceiverMain(void)
 	char		slotname[NAMEDATALEN];
 	bool		is_temp_slot;
 	XLogRecPtr	startpoint;
-	TimeLineID	startpointTLI;
 	TimeLineID	primaryTLI;
 	bool		first_stream;
 	WalRcvData *walrcv = WalRcv;
-	TimestampTz last_recv_timestamp;
 	TimestampTz now;
-	bool		ping_sent;
 	char	   *err;
 	char	   *sender_host = NULL;
 	int			sender_port = 0;
+	WalRcvInfo state = {0};
 
 	/*
 	 * WalRcv should be set up already (if we are a backend, we inherit this
@@ -238,7 +263,7 @@ WalReceiverMain(void)
 	strlcpy(slotname, (char *) walrcv->slotname, NAMEDATALEN);
 	is_temp_slot = walrcv->is_temp_slot;
 	startpoint = walrcv->receiveStart;
-	startpointTLI = walrcv->receiveStartTLI;
+	state.startpointTLI = walrcv->receiveStartTLI;
 
 	/*
 	 * At most one of is_temp_slot and slotname can be set; otherwise,
@@ -258,7 +283,7 @@ WalReceiverMain(void)
 	pg_atomic_write_u64(&WalRcv->writtenUpto, 0);
 
 	/* Arrange to clean up at walreceiver exit */
-	on_shmem_exit(WalRcvDie, PointerGetDatum(&startpointTLI));
+	on_shmem_exit(WalRcvDie, PointerGetDatum(&state));
 
 	/* Properly accept or ignore signals the postmaster might send us */
 	pqsignal(SIGHUP, SignalHandlerForConfigReload); /* set flag to read config
@@ -345,11 +370,11 @@ WalReceiverMain(void)
 		 * Confirm that the current timeline of the primary is the same or
 		 * ahead of ours.
 		 */
-		if (primaryTLI < startpointTLI)
+		if (primaryTLI < state.startpointTLI)
 			ereport(ERROR,
 					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 					 errmsg("highest timeline %u of the primary is behind recovery timeline %u",
-							primaryTLI, startpointTLI)));
+							primaryTLI, state.startpointTLI)));
 
 		/*
 		 * Get any missing history files. We do this always, even when we're
@@ -361,7 +386,7 @@ WalReceiverMain(void)
 		 * but let's avoid the confusion of timeline id collisions where we
 		 * can.
 		 */
-		WalRcvFetchTimeLineHistoryFiles(startpointTLI, primaryTLI);
+		WalRcvFetchTimeLineHistoryFiles(state.startpointTLI, primaryTLI);
 
 		/*
 		 * Create temporary replication slot if requested, and update slot
@@ -396,17 +421,17 @@ WalReceiverMain(void)
 		options.logical = false;
 		options.startpoint = startpoint;
 		options.slotname = slotname[0] != '\0' ? slotname : NULL;
-		options.proto.physical.startpointTLI = startpointTLI;
+		options.proto.physical.startpointTLI = state.startpointTLI;
 		if (walrcv_startstreaming(wrconn, &options))
 		{
 			if (first_stream)
 				ereport(LOG,
 						(errmsg("started streaming WAL from primary at %X/%X on timeline %u",
-								LSN_FORMAT_ARGS(startpoint), startpointTLI)));
+								LSN_FORMAT_ARGS(startpoint), state.startpointTLI)));
 			else
 				ereport(LOG,
 						(errmsg("restarted WAL streaming at %X/%X on timeline %u",
-								LSN_FORMAT_ARGS(startpoint), startpointTLI)));
+								LSN_FORMAT_ARGS(startpoint), state.startpointTLI)));
 			first_stream = false;
 
 			/* Initialize LogstreamResult and buffers for processing messages */
@@ -414,9 +439,10 @@ WalReceiverMain(void)
 			initStringInfo(&reply_message);
 			initStringInfo(&incoming_message);
 
-			/* Initialize the last recv timestamp */
-			last_recv_timestamp = GetCurrentTimestamp();
-			ping_sent = false;
+			/* Initialize nap wakeup times. */
+			now = GetCurrentTimestamp();
+			for (int i = 0; i < NUM_WALRCV_WAKEUPS; ++i)
+				WalRcvComputeNextWakeup(&state, i, now);
 
 			/* Loop until end-of-streaming or error */
 			for (;;)
@@ -426,6 +452,8 @@ WalReceiverMain(void)
 				bool		endofwal = false;
 				pgsocket	wait_fd = PGINVALID_SOCKET;
 				int			rc;
+				TimestampTz	nextWakeup;
+				int			nap;
 
 				/*
 				 * Exit walreceiver if we're not in recovery. This should not
@@ -443,11 +471,17 @@ WalReceiverMain(void)
 				{
 					ConfigReloadPending = false;
 					ProcessConfigFile(PGC_SIGHUP);
-					XLogWalRcvSendHSFeedback(true);
+					now = GetCurrentTimestamp();
+					for (int i = 0; i < NUM_WALRCV_WAKEUPS; ++i)
+						WalRcvComputeNextWakeup(&state, i, now);
+					XLogWalRcvSendHSFeedback(&state,
+											 GetCurrentTimestamp(),
+											 true);
 				}
 
 				/* See if we can read data immediately */
 				len = walrcv_receive(wrconn, &buf, &wait_fd);
+				now = GetCurrentTimestamp();
 				if (len != 0)
 				{
 					/*
@@ -459,13 +493,18 @@ WalReceiverMain(void)
 						if (len > 0)
 						{
 							/*
-							 * Something was received from primary, so reset
-							 * timeout
+							 * Something was received from primary, so adjust
+							 * the ping and terminate wakeup times.
 							 */
-							last_recv_timestamp = GetCurrentTimestamp();
-							ping_sent = false;
-							XLogWalRcvProcessMsg(buf[0], &buf[1], len - 1,
-												 startpointTLI);
+							WalRcvComputeNextWakeup(&state,
+													WALRCV_WAKEUP_TERMINATE,
+													now);
+							WalRcvComputeNextWakeup(&state,
+													WALRCV_WAKEUP_PING,
+													now);
+							XLogWalRcvProcessMsg(&state,
+												 buf[0], &buf[1], len - 1,
+												 state.startpointTLI);
 						}
 						else if (len == 0)
 							break;
@@ -474,28 +513,35 @@ WalReceiverMain(void)
 							ereport(LOG,
 									(errmsg("replication terminated by primary server"),
 									 errdetail("End of WAL reached on timeline %u at %X/%X.",
-											   startpointTLI,
+											   state.startpointTLI,
 											   LSN_FORMAT_ARGS(LogstreamResult.Write))));
 							endofwal = true;
 							break;
 						}
 						len = walrcv_receive(wrconn, &buf, &wait_fd);
+						now = GetCurrentTimestamp();
 					}
 
 					/* Let the primary know that we received some data. */
-					XLogWalRcvSendReply(false, false);
+					XLogWalRcvSendReply(&state, now, false, false);
 
 					/*
 					 * If we've written some records, flush them to disk and
 					 * let the startup process and primary server know about
 					 * them.
 					 */
-					XLogWalRcvFlush(false, startpointTLI);
+					XLogWalRcvFlush(&state, false, state.startpointTLI);
 				}
 
 				/* Check if we need to exit the streaming loop. */
 				if (endofwal)
 					break;
+
+				/* Find the soonest wakeup time, to limit our nap. */
+				nextWakeup = INT64_MAX;
+				for (int i = 0; i < NUM_WALRCV_WAKEUPS; ++i)
+					nextWakeup = Min(state.wakeup[i], nextWakeup);
+				nap = Max(0, (nextWakeup - now) / 1000);
 
 				/*
 				 * Ideally we would reuse a WaitEventSet object repeatedly
@@ -513,8 +559,9 @@ WalReceiverMain(void)
 									   WL_EXIT_ON_PM_DEATH | WL_SOCKET_READABLE |
 									   WL_TIMEOUT | WL_LATCH_SET,
 									   wait_fd,
-									   NAPTIME_PER_CYCLE,
+									   nap,
 									   WAIT_EVENT_WAL_RECEIVER_MAIN);
+				now = GetCurrentTimestamp();
 				if (rc & WL_LATCH_SET)
 				{
 					ResetLatch(MyLatch);
@@ -530,7 +577,7 @@ WalReceiverMain(void)
 						 */
 						walrcv->force_reply = false;
 						pg_memory_barrier();
-						XLogWalRcvSendReply(true, false);
+						XLogWalRcvSendReply(&state, now, true, false);
 					}
 				}
 				if (rc & WL_TIMEOUT)
@@ -550,38 +597,23 @@ WalReceiverMain(void)
 					 * Check if time since last receive from primary has
 					 * reached the configured limit.
 					 */
-					if (wal_receiver_timeout > 0)
+					if (now >= state.wakeup[WALRCV_WAKEUP_TERMINATE])
+						ereport(ERROR,
+								(errcode(ERRCODE_CONNECTION_FAILURE),
+								 errmsg("terminating walreceiver due to timeout")));
+
+					/*
+					 * We didn't receive anything new, for half of receiver
+					 * replication timeout. Ping the server.
+					 */
+					if (now >= state.wakeup[WALRCV_WAKEUP_PING])
 					{
-						TimestampTz now = GetCurrentTimestamp();
-						TimestampTz timeout;
-
-						timeout =
-							TimestampTzPlusMilliseconds(last_recv_timestamp,
-														wal_receiver_timeout);
-
-						if (now >= timeout)
-							ereport(ERROR,
-									(errcode(ERRCODE_CONNECTION_FAILURE),
-									 errmsg("terminating walreceiver due to timeout")));
-
-						/*
-						 * We didn't receive anything new, for half of
-						 * receiver replication timeout. Ping the server.
-						 */
-						if (!ping_sent)
-						{
-							timeout = TimestampTzPlusMilliseconds(last_recv_timestamp,
-																  (wal_receiver_timeout / 2));
-							if (now >= timeout)
-							{
-								requestReply = true;
-								ping_sent = true;
-							}
-						}
+						requestReply = true;
+						state.wakeup[WALRCV_WAKEUP_PING] = INT64_MAX;
 					}
 
-					XLogWalRcvSendReply(requestReply, requestReply);
-					XLogWalRcvSendHSFeedback(false);
+					XLogWalRcvSendReply(&state, now, requestReply, requestReply);
+					XLogWalRcvSendHSFeedback(&state, now, false);
 				}
 			}
 
@@ -596,12 +628,12 @@ WalReceiverMain(void)
 			 * know about when we began streaming, fetch its timeline history
 			 * file now.
 			 */
-			WalRcvFetchTimeLineHistoryFiles(startpointTLI, primaryTLI);
+			WalRcvFetchTimeLineHistoryFiles(state.startpointTLI, primaryTLI);
 		}
 		else
 			ereport(LOG,
 					(errmsg("primary server contains no more WAL on requested timeline %u",
-							startpointTLI)));
+							state.startpointTLI)));
 
 		/*
 		 * End of WAL reached on the requested timeline. Close the last
@@ -611,7 +643,7 @@ WalReceiverMain(void)
 		{
 			char		xlogfname[MAXFNAMELEN];
 
-			XLogWalRcvFlush(false, startpointTLI);
+			XLogWalRcvFlush(&state, false, state.startpointTLI);
 			XLogFileName(xlogfname, recvFileTLI, recvSegNo, wal_segment_size);
 			if (close(recvFile) != 0)
 				ereport(PANIC,
@@ -631,7 +663,7 @@ WalReceiverMain(void)
 		recvFile = -1;
 
 		elog(DEBUG1, "walreceiver ended streaming and awaits new instructions");
-		WalRcvWaitForStartPosition(&startpoint, &startpointTLI);
+		WalRcvWaitForStartPosition(&startpoint, &state.startpointTLI);
 	}
 	/* not reached */
 }
@@ -779,12 +811,10 @@ static void
 WalRcvDie(int code, Datum arg)
 {
 	WalRcvData *walrcv = WalRcv;
-	TimeLineID *startpointTLI_p = (TimeLineID *) DatumGetPointer(arg);
-
-	Assert(*startpointTLI_p != 0);
+	WalRcvInfo *state = (WalRcvInfo *) DatumGetPointer(arg);
 
 	/* Ensure that all WAL records received are flushed to disk */
-	XLogWalRcvFlush(true, *startpointTLI_p);
+	XLogWalRcvFlush(state, true, state->startpointTLI);
 
 	/* Mark ourselves inactive in shared memory */
 	SpinLockAcquire(&walrcv->mutex);
@@ -814,7 +844,8 @@ WalRcvDie(int code, Datum arg)
  * Accept the message from XLOG stream, and process it.
  */
 static void
-XLogWalRcvProcessMsg(unsigned char type, char *buf, Size len, TimeLineID tli)
+XLogWalRcvProcessMsg(WalRcvInfo *state,
+					 unsigned char type, char *buf, Size len, TimeLineID tli)
 {
 	int			hdrlen;
 	XLogRecPtr	dataStart;
@@ -844,7 +875,7 @@ XLogWalRcvProcessMsg(unsigned char type, char *buf, Size len, TimeLineID tli)
 
 				buf += hdrlen;
 				len -= hdrlen;
-				XLogWalRcvWrite(buf, len, dataStart, tli);
+				XLogWalRcvWrite(state, buf, len, dataStart, tli);
 				break;
 			}
 		case 'k':				/* Keepalive */
@@ -866,7 +897,7 @@ XLogWalRcvProcessMsg(unsigned char type, char *buf, Size len, TimeLineID tli)
 
 				/* If the primary requested a reply, send one immediately */
 				if (replyRequested)
-					XLogWalRcvSendReply(true, false);
+					XLogWalRcvSendReply(state, GetCurrentTimestamp(), true, false);
 				break;
 			}
 		default:
@@ -881,7 +912,8 @@ XLogWalRcvProcessMsg(unsigned char type, char *buf, Size len, TimeLineID tli)
  * Write XLOG data to disk.
  */
 static void
-XLogWalRcvWrite(char *buf, Size nbytes, XLogRecPtr recptr, TimeLineID tli)
+XLogWalRcvWrite(WalRcvInfo *state, char *buf, Size nbytes, XLogRecPtr recptr,
+				TimeLineID tli)
 {
 	int			startoff;
 	int			byteswritten;
@@ -894,7 +926,7 @@ XLogWalRcvWrite(char *buf, Size nbytes, XLogRecPtr recptr, TimeLineID tli)
 
 		/* Close the current segment if it's completed */
 		if (recvFile >= 0 && !XLByteInSeg(recptr, recvSegNo, wal_segment_size))
-			XLogWalRcvClose(recptr, tli);
+			XLogWalRcvClose(state, recptr, tli);
 
 		if (recvFile < 0)
 		{
@@ -954,7 +986,7 @@ XLogWalRcvWrite(char *buf, Size nbytes, XLogRecPtr recptr, TimeLineID tli)
 	 * segment is received and written.
 	 */
 	if (recvFile >= 0 && !XLByteInSeg(recptr, recvSegNo, wal_segment_size))
-		XLogWalRcvClose(recptr, tli);
+		XLogWalRcvClose(state, recptr, tli);
 }
 
 /*
@@ -964,7 +996,7 @@ XLogWalRcvWrite(char *buf, Size nbytes, XLogRecPtr recptr, TimeLineID tli)
  * an error, so we skip sending a reply in that case.
  */
 static void
-XLogWalRcvFlush(bool dying, TimeLineID tli)
+XLogWalRcvFlush(WalRcvInfo *state, bool dying, TimeLineID tli)
 {
 	Assert(tli != 0);
 
@@ -1004,8 +1036,8 @@ XLogWalRcvFlush(bool dying, TimeLineID tli)
 		/* Also let the primary know that we made some progress */
 		if (!dying)
 		{
-			XLogWalRcvSendReply(false, false);
-			XLogWalRcvSendHSFeedback(false);
+			XLogWalRcvSendReply(state, GetCurrentTimestamp(), false, false);
+			XLogWalRcvSendHSFeedback(state, GetCurrentTimestamp(), false);
 		}
 	}
 }
@@ -1019,7 +1051,7 @@ XLogWalRcvFlush(bool dying, TimeLineID tli)
  * Create an archive notification file since the segment is known completed.
  */
 static void
-XLogWalRcvClose(XLogRecPtr recptr, TimeLineID tli)
+XLogWalRcvClose(WalRcvInfo *state, XLogRecPtr recptr, TimeLineID tli)
 {
 	char		xlogfname[MAXFNAMELEN];
 
@@ -1030,7 +1062,7 @@ XLogWalRcvClose(XLogRecPtr recptr, TimeLineID tli)
 	 * fsync() and close current file before we switch to next one. We would
 	 * otherwise have to reopen this file to fsync it later
 	 */
-	XLogWalRcvFlush(false, tli);
+	XLogWalRcvFlush(state, false, tli);
 
 	XLogFileName(xlogfname, recvFileTLI, recvSegNo, wal_segment_size);
 
@@ -1071,13 +1103,12 @@ XLogWalRcvClose(XLogRecPtr recptr, TimeLineID tli)
  * wal_receiver_timeout.
  */
 static void
-XLogWalRcvSendReply(bool force, bool requestReply)
+XLogWalRcvSendReply(WalRcvInfo *state, TimestampTz now, bool force,
+					bool requestReply)
 {
 	static XLogRecPtr writePtr = 0;
 	static XLogRecPtr flushPtr = 0;
 	XLogRecPtr	applyPtr;
-	static TimestampTz sendTime = 0;
-	TimestampTz now;
 
 	/*
 	 * If the user doesn't want status to be reported to the primary, be sure
@@ -1085,9 +1116,6 @@ XLogWalRcvSendReply(bool force, bool requestReply)
 	 */
 	if (!force && wal_receiver_status_interval <= 0)
 		return;
-
-	/* Get current timestamp. */
-	now = GetCurrentTimestamp();
 
 	/*
 	 * We can compare the write and flush positions to the last message we
@@ -1101,10 +1129,11 @@ XLogWalRcvSendReply(bool force, bool requestReply)
 	if (!force
 		&& writePtr == LogstreamResult.Write
 		&& flushPtr == LogstreamResult.Flush
-		&& !TimestampDifferenceExceeds(sendTime, now,
-									   wal_receiver_status_interval * 1000))
+		&& now < state->wakeup[WALRCV_WAKEUP_REPLY])
 		return;
-	sendTime = now;
+
+	/* Make sure we wake up when it's time to send another reply. */
+	WalRcvComputeNextWakeup(state, WALRCV_WAKEUP_REPLY, now);
 
 	/* Construct a new message */
 	writePtr = LogstreamResult.Write;
@@ -1140,16 +1169,14 @@ XLogWalRcvSendReply(bool force, bool requestReply)
  * send a feedback message explicitly setting InvalidTransactionId).
  */
 static void
-XLogWalRcvSendHSFeedback(bool immed)
+XLogWalRcvSendHSFeedback(WalRcvInfo *state, TimestampTz now, bool immed)
 {
-	TimestampTz now;
 	FullTransactionId nextFullXid;
 	TransactionId nextXid;
 	uint32		xmin_epoch,
 				catalog_xmin_epoch;
 	TransactionId xmin,
 				catalog_xmin;
-	static TimestampTz sendTime = 0;
 
 	/* initially true so we always send at least one feedback message */
 	static bool primary_has_standby_xmin = true;
@@ -1162,19 +1189,12 @@ XLogWalRcvSendHSFeedback(bool immed)
 		!primary_has_standby_xmin)
 		return;
 
-	/* Get current timestamp. */
-	now = GetCurrentTimestamp();
+	/* Send feedback at most once per wal_receiver_status_interval. */
+	if (!immed && now < state->wakeup[WALRCV_WAKEUP_HSFEEDBACK])
+		return;
 
-	if (!immed)
-	{
-		/*
-		 * Send feedback at most once per wal_receiver_status_interval.
-		 */
-		if (!TimestampDifferenceExceeds(sendTime, now,
-										wal_receiver_status_interval * 1000))
-			return;
-		sendTime = now;
-	}
+	/* Make sure we wake up when it's time to send feedback again. */
+	WalRcvComputeNextWakeup(state, WALRCV_WAKEUP_HSFEEDBACK, now);
 
 	/*
 	 * If Hot Standby is not yet accepting connections there is nothing to
@@ -1282,6 +1302,47 @@ ProcessWalSndrMessage(XLogRecPtr walEnd, TimestampTz sendTime)
 
 		pfree(sendtime);
 		pfree(receipttime);
+	}
+}
+
+/*
+ * Compute the next wakeup time for a given wakeup reason.  Can be called to
+ * initialize a wakeup time, to adjust it for the next wakeup, or to
+ * reinitialize it when GUCs have changed.
+ */
+static void
+WalRcvComputeNextWakeup(WalRcvInfo *state,
+						WalRcvWakeupReason reason,
+						TimestampTz now)
+{
+	switch (reason)
+	{
+	case WALRCV_WAKEUP_TERMINATE:
+		if (wal_receiver_timeout <= 0)
+			state->wakeup[reason] = INT64_MAX;
+		else
+			state->wakeup[reason] = now + wal_receiver_timeout * 1000;
+		break;
+	case WALRCV_WAKEUP_PING:
+		if (wal_receiver_timeout <= 0)
+			state->wakeup[reason] = INT64_MAX;
+		else
+			state->wakeup[reason] = now + (wal_receiver_timeout / 2) * 1000;
+		break;
+	case WALRCV_WAKEUP_HSFEEDBACK:
+		if (!hot_standby_feedback || wal_receiver_status_interval <= 0)
+			state->wakeup[reason] = INT64_MAX;
+		else
+			state->wakeup[reason] = now + wal_receiver_status_interval * 1000000;
+		break;
+	case WALRCV_WAKEUP_REPLY:
+		if (wal_receiver_status_interval <= 0)
+			state->wakeup[reason] = INT64_MAX;
+		else
+			state->wakeup[reason] = now + wal_receiver_status_interval * 1000000;
+		break;
+	default:
+		break;
 	}
 }
 

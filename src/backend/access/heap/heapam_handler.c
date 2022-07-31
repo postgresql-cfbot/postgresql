@@ -45,6 +45,12 @@
 #include "utils/builtins.h"
 #include "utils/rel.h"
 
+static TM_Result heapam_tuple_lock_internal(Relation relation, ItemPointer tid,
+											Snapshot snapshot, TupleTableSlot *slot,
+											CommandId cid, LockTupleMode mode,
+											LockWaitPolicy wait_policy, uint8 flags,
+											TM_FailureData *tmfd, bool updated);
+
 static void reform_and_rewrite_tuple(HeapTuple tuple,
 									 Relation OldHeap, Relation NewHeap,
 									 Datum *values, bool *isnull, RewriteState rwstate);
@@ -299,14 +305,38 @@ heapam_tuple_complete_speculative(Relation relation, TupleTableSlot *slot,
 static TM_Result
 heapam_tuple_delete(Relation relation, ItemPointer tid, CommandId cid,
 					Snapshot snapshot, Snapshot crosscheck, bool wait,
-					TM_FailureData *tmfd, bool changingPart)
+					TM_FailureData *tmfd, bool changingPart,
+					bool lockUpdated, TupleTableSlot *lockedSlot)
 {
+	TM_Result	result;
+
 	/*
 	 * Currently Deleting of index tuples are handled at vacuum, in case if
 	 * the storage itself is cleaning the dead tuples by itself, it is the
 	 * time to call the index tuple deletion also.
 	 */
-	return heap_delete(relation, tid, cid, crosscheck, wait, tmfd, changingPart);
+	result = heap_delete(relation, tid, cid, crosscheck, wait, tmfd, changingPart);
+
+	if (result == TM_Updated && lockUpdated)
+	{
+		bool		updated = false;
+
+		if (!ItemPointerIndicatesMovedPartitions(&tmfd->ctid))
+			updated = true;
+		result = heapam_tuple_lock_internal(relation, tid, snapshot,
+											lockedSlot, cid, LockTupleExclusive,
+											LockWaitBlock,
+											TUPLE_LOCK_FLAG_FIND_LAST_VERSION,
+											tmfd, updated);
+
+		if (result == TM_Ok)
+		{
+			tmfd->traversed = true;
+			return TM_Updated;
+		}
+	}
+
+	return result;
 }
 
 
@@ -314,7 +344,8 @@ static TM_Result
 heapam_tuple_update(Relation relation, ItemPointer otid, TupleTableSlot *slot,
 					CommandId cid, Snapshot snapshot, Snapshot crosscheck,
 					bool wait, TM_FailureData *tmfd,
-					LockTupleMode *lockmode, bool *update_indexes)
+					LockTupleMode *lockmode, bool *update_indexes,
+					bool lockUpdated, TupleTableSlot *lockedSlot)
 {
 	bool		shouldFree = true;
 	HeapTuple	tuple = ExecFetchSlotHeapTuple(slot, true, &shouldFree);
@@ -341,14 +372,34 @@ heapam_tuple_update(Relation relation, ItemPointer otid, TupleTableSlot *slot,
 	if (shouldFree)
 		pfree(tuple);
 
+	if (result == TM_Updated && lockUpdated)
+	{
+		bool		updated = false;
+
+		if (!ItemPointerIndicatesMovedPartitions(&tmfd->ctid))
+			updated = true;
+
+		result = heapam_tuple_lock_internal(relation, otid, snapshot,
+											lockedSlot, cid, *lockmode,
+											LockWaitBlock,
+											TUPLE_LOCK_FLAG_FIND_LAST_VERSION,
+											tmfd, updated);
+
+		if (result == TM_Ok)
+		{
+			tmfd->traversed = true;
+			return TM_Updated;
+		}
+	}
+
 	return result;
 }
 
 static TM_Result
-heapam_tuple_lock(Relation relation, ItemPointer tid, Snapshot snapshot,
-				  TupleTableSlot *slot, CommandId cid, LockTupleMode mode,
-				  LockWaitPolicy wait_policy, uint8 flags,
-				  TM_FailureData *tmfd)
+heapam_tuple_lock_internal(Relation relation, ItemPointer tid, Snapshot snapshot,
+						   TupleTableSlot *slot, CommandId cid, LockTupleMode mode,
+						   LockWaitPolicy wait_policy, uint8 flags,
+						   TM_FailureData *tmfd, bool updated)
 {
 	BufferHeapTupleTableSlot *bslot = (BufferHeapTupleTableSlot *) slot;
 	TM_Result	result;
@@ -363,16 +414,30 @@ heapam_tuple_lock(Relation relation, ItemPointer tid, Snapshot snapshot,
 
 tuple_lock_retry:
 	tuple->t_self = *tid;
-	result = heap_lock_tuple(relation, tuple, cid, mode, wait_policy,
-							 follow_updates, &buffer, tmfd);
+	if (!updated)
+	{
+		result = heap_lock_tuple(relation, tuple, cid, mode, wait_policy,
+								 follow_updates, &buffer, tmfd);
+	}
+	else
+	{
+		result = TM_Updated;
+	}
 
 	if (result == TM_Updated &&
 		(flags & TUPLE_LOCK_FLAG_FIND_LAST_VERSION))
 	{
-		/* Should not encounter speculative tuple on recheck */
-		Assert(!HeapTupleHeaderIsSpeculative(tuple->t_data));
+		if (!updated)
+		{
+			/* Should not encounter speculative tuple on recheck */
+			Assert(!HeapTupleHeaderIsSpeculative(tuple->t_data));
 
-		ReleaseBuffer(buffer);
+			ReleaseBuffer(buffer);
+		}
+		else
+		{
+			updated = false;
+		}
 
 		if (!ItemPointerEquals(&tmfd->ctid, &tuple->t_self))
 		{
@@ -557,6 +622,16 @@ tuple_lock_retry:
 	ExecStorePinnedBufferHeapTuple(tuple, slot, buffer);
 
 	return result;
+}
+
+static TM_Result
+heapam_tuple_lock(Relation relation, ItemPointer tid, Snapshot snapshot,
+				  TupleTableSlot *slot, CommandId cid, LockTupleMode mode,
+				  LockWaitPolicy wait_policy, uint8 flags,
+				  TM_FailureData *tmfd)
+{
+	return heapam_tuple_lock_internal(relation, tid, snapshot, slot, cid, mode,
+									  wait_policy, flags, tmfd, false);
 }
 
 

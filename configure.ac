@@ -1253,8 +1253,6 @@ AC_SEARCH_LIBS(getopt_long, [getopt gnugetopt])
 AC_SEARCH_LIBS(shm_open, rt)
 AC_SEARCH_LIBS(shm_unlink, rt)
 AC_SEARCH_LIBS(clock_gettime, [rt posix4])
-# Solaris:
-AC_SEARCH_LIBS(fdatasync, [rt posix4])
 # Cygwin:
 AC_SEARCH_LIBS(shmget, cygipc)
 # *BSD:
@@ -1794,7 +1792,6 @@ AC_CHECK_FUNCS(m4_normalize([
 	backtrace_symbols
 	clock_gettime
 	copyfile
-	fdatasync
 	getifaddrs
 	getpeerucred
 	getrlimit

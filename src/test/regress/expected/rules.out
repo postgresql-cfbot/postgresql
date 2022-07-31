@@ -3392,6 +3392,14 @@ CREATE FUNCTION func_with_set_params() RETURNS integer
     SET datestyle to iso, mdy
     SET local_preload_libraries TO "Mixed/Case", 'c:/''a"/path', '', '0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789'
     IMMUTABLE STRICT;
+WARNING:  could not access file "Mixed/Case"
+DETAIL:  New sessions will currently fail to connect with the new setting.
+WARNING:  could not access file "c:/'a"/path"
+DETAIL:  New sessions will currently fail to connect with the new setting.
+WARNING:  could not access file ""
+DETAIL:  New sessions will currently fail to connect with the new setting.
+WARNING:  could not access file "0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789"
+DETAIL:  New sessions will currently fail to connect with the new setting.
 SELECT pg_get_functiondef('func_with_set_params()'::regprocedure);
                                                                             pg_get_functiondef                                                                            
 --------------------------------------------------------------------------------------------------------------------------------------------------------------------------

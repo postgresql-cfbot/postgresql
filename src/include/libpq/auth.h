@@ -28,4 +28,20 @@ extern void sendAuthRequest(Port *port, AuthRequest areq, const char *extradata,
 typedef void (*ClientAuthentication_hook_type) (Port *, int);
 extern PGDLLIMPORT ClientAuthentication_hook_type ClientAuthentication_hook;
 
+/*
+ * The failed connection events to be used in the FailedConnection_hook.
+ */
+typedef enum FailedConnectionEventType
+{
+	FCET_BAD_STARTUP_PACKET,
+	FCET_BAD_DATABASE_NAME,
+	FCET_BAD_DATABASE_OID,
+	FCET_BAD_DATABASE_PERMISSION
+} FailedConnectionEventType;
+
+/* kluge to avoid including libpq/libpq-be.h here */
+struct Port;
+typedef void (*FailedConnection_hook_type) (FailedConnectionEventType event, const struct Port *port);
+extern PGDLLIMPORT FailedConnection_hook_type FailedConnection_hook;
+
 #endif							/* AUTH_H */

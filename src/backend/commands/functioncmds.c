@@ -41,6 +41,7 @@
 #include "catalog/indexing.h"
 #include "catalog/objectaccess.h"
 #include "catalog/pg_aggregate.h"
+#include "catalog/pg_authid.h"
 #include "catalog/pg_cast.h"
 #include "catalog/pg_language.h"
 #include "catalog/pg_namespace.h"
@@ -672,6 +673,152 @@ update_proconfig_value(ArrayType *a, List *set_items)
 	return a;
 }
 
+/* We only enforce constraints on IMMUTABLE functions (because they can be
+ * used in indexes and search_path hacking can corrupt indexes for everyone)
+ * or SECURITY DEFINER functions (for obvious reasons). For these functions we
+ * enforce that the proconfig GUC settings should include search_path and that
+ * that search path should follow the recommendations listed at
+ * https://www.postgresql.org/docs/current/sql-createfunction.html#SQL-CREATEFUNCTION-SECURITY
+ */ 
+
+/* XXX Some or all of this logic should perhaps be moved to namespace.c XXX */
+#include "utils/varlena.h"
+
+static ArrayType *
+fixup_proconfig_value(ArrayType *a, char provolatile, bool prosecdef) {
+	char *search_path = NULL;
+
+	List	   *namelist;
+	ListCell   *l;
+	StringInfoData string;
+
+	if (provolatile != PROVOLATILE_IMMUTABLE && !prosecdef) {
+		return a;
+	}
+	if (a != NULL) {
+		search_path = GUCArrayLookup(a, "search_path");
+	}
+	if (!search_path) {
+		search_path = pstrdup(namespace_search_path);
+	}
+
+	/* Parse string into list of identifiers
+	 * GUCArrayLookup returns a pstrdup'd string so this is safe
+	 */
+	if (!SplitIdentifierString(search_path, ',', &namelist))
+	{
+		/* syntax error in name list */
+		elog(ERROR, "invalid list syntax in search_path setting on function");
+	}
+
+	initStringInfo(&string);
+	appendStringInfoString(&string, "pg_catalog");
+	foreach(l, namelist)
+	{
+		char	   *curname = (char *) lfirst(l);
+
+		if (strcmp(curname, "pg_catalog") == 0)
+		{
+			if (foreach_current_index(l) != 0)
+				elog(WARNING, "moving pg_catalog to first position in search_path for IMMUTABLE or SECURITY DEFINER function");
+			continue;
+		}
+		if (strcmp(curname, "pg_temp") == 0)
+		{
+			if (foreach_current_index(l) != namelist->length-1)
+				elog(WARNING, "moving pg_temp to last position in search_path for IMMUTABLE or SECURITY DEFINER function");
+			continue;
+		}
+		if (strcmp(curname, "$user") == 0)
+		{
+			/* $user --- substitute namespace matching user name, if any */
+			HeapTuple	tuple;
+
+			tuple = SearchSysCache1(AUTHOID, ObjectIdGetDatum(GetUserId()));
+			if (HeapTupleIsValid(tuple))
+			{
+				curname = NameStr(((Form_pg_authid) GETSTRUCT(tuple))->rolname);
+				ReleaseSysCache(tuple);
+				/*elog(WARNING, "IMMUTABLE or SECURITY DEFINER functions should not have a search path including $user");*/
+			} else {
+				/* No great options here */
+				ReleaseSysCache(tuple);
+				elog(WARNING, "removing invalid $user from search_path on IMMUTABLE or SECURITY DEFINER function");
+				continue;
+			}
+		}
+		appendStringInfoChar(&string, ',');
+		appendStringInfoString(&string, quote_identifier(curname));
+	}
+	appendStringInfoChar(&string, ',');
+	appendStringInfoString(&string, "pg_temp");
+
+	a = GUCArrayAdd(a, "search_path", string.data);
+	return a;
+}
+	
+
+static void
+verify_proconfig_value(ArrayType *a, char provolatile, bool prosecdef) {
+	char *proconfig_search_path = NULL;
+	List	   *namelist;
+	ListCell   *l;
+	bool has_dollar_user = false;
+	bool pg_catalog_first = true;
+	bool pg_temp_last = false;
+	bool is_first = true;
+	
+	if (provolatile != PROVOLATILE_IMMUTABLE && !prosecdef) {
+		return;
+	}
+
+	if (a != NULL) {
+		proconfig_search_path = GUCArrayLookup(a, "search_path");
+	}
+
+	if (!proconfig_search_path)
+	{
+		elog(WARNING, "IMMUTABLE and SECURITY DEFINER functions must have search_path set");
+		return;
+	}
+
+	/* Parse string into list of identifiers
+	 * GUCArrayLookup returns a pstrdup'd string so this is safe
+	 */
+	if (!SplitIdentifierString(proconfig_search_path, ',', &namelist))
+	{
+		/* syntax error in name list */
+		elog(ERROR, "invalid list syntax in search_path setting on function");
+	}
+
+	foreach(l, namelist)
+	{
+		char	   *curname = (char *) lfirst(l);
+
+		/* It's not last unless it's last... If it's missing pg_temp is
+		 * implicitly added as first */
+		pg_temp_last = false;
+
+		if (strcmp(curname, "$user") == 0)
+			has_dollar_user = true;
+		if (strcmp(curname, "pg_catalog") == 0 && !is_first)
+			pg_catalog_first = false;
+		if (strcmp(curname,"pg_temp") == 0)
+			pg_temp_last = true;
+		
+		is_first = false;
+	}
+
+	if (has_dollar_user)
+		elog(WARNING, "IMMUTABLE or SECURITY DEFINER functions should not have a search path including $user");
+
+	if (!pg_catalog_first)
+		elog(WARNING, "IMMUTABLE or SECURITY DEFINER functions should have pg_catalog first in search_path (or omit it implicitly placing it first)");
+
+	if (!pg_temp_last)
+		elog(WARNING, "IMMUTABLE or SECURITY DEFINER functions should explicitly place pg_temp last or else it's implicitly first");
+}
+
 static Oid
 interpret_func_support(DefElem *defel)
 {
@@ -1158,6 +1305,9 @@ CreateFunction(ParseState *pstate, CreateFunctionStmt *stmt)
 		}
 	}
 
+	proconfig = fixup_proconfig_value(proconfig, volatility, security);
+	verify_proconfig_value(proconfig, volatility, security);
+
 	/*
 	 * Convert remaining parameters of CREATE to form wanted by
 	 * ProcedureCreate.
@@ -1485,6 +1635,9 @@ AlterFunction(ParseState *pstate, AlterFunctionStmt *stmt)
 
 		/* update according to each SET or RESET item, left to right */
 		a = update_proconfig_value(a, set_items);
+
+		a = fixup_proconfig_value(a, procForm->provolatile, procForm->prosecdef);
+		verify_proconfig_value(a, procForm->provolatile, procForm->prosecdef);
 
 		/* update the tuple */
 		memset(repl_repl, false, sizeof(repl_repl));

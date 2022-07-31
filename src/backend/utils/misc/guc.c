@@ -11517,7 +11517,6 @@ ProcessGUCArray(ArrayType *array,
 	}
 }
 
-
 /*
  * Add an entry to an option array.  The array parameter may be NULL
  * to indicate the current table entry is NULL.
@@ -11592,6 +11591,62 @@ GUCArrayAdd(ArrayType *array, const char *name, const char *value)
 		a = construct_array_builtin(&datum, 1, TEXTOID);
 
 	return a;
+}
+
+/*
+ * Return palloced string with the value for a GUC in a GUCArray (i.e. array
+ * of foo=bar text datums) with name search_name. Returns NULL if the value of
+ * the GUC can not be parsed using ParseLongOption or if it's absent from the
+ * array.
+ */
+char *
+GUCArrayLookup(ArrayType *array, const char *search_name)
+{
+	int			i;
+
+	Assert(array != NULL);
+	Assert(ARR_ELEMTYPE(array) == TEXTOID);
+	Assert(ARR_NDIM(array) == 1);
+	Assert(ARR_LBOUND(array)[0] == 1);
+
+	for (i = 1; i <= ARR_DIMS(array)[0]; i++)
+	{
+		Datum		d;
+		bool		isnull;
+		char	   *s;
+		char	   *name;
+		char	   *value;
+		char	   *valuecopy = NULL;
+		bool        done = false;
+
+		d = array_ref(array, 1, &i,
+					  -1 /* varlenarray */ ,
+					  -1 /* TEXT's typlen */ ,
+					  false /* TEXT's typbyval */ ,
+					  TYPALIGN_INT /* TEXT's typalign */ ,
+					  &isnull);
+
+		if (isnull)
+			continue;
+
+		s = TextDatumGetCString(d);
+
+		/* ParseLongOption returns malloced storage */
+		ParseLongOption(s, &name, &value);
+		done = (strcmp(name, search_name) == 0);
+		
+		if (done && value) {
+			valuecopy = pstrdup(value);
+		}
+		if (name)
+			free(name);
+		if (value)
+			free(value);
+
+		if (done)
+			return valuecopy;
+	}
+	return NULL;
 }
 
 

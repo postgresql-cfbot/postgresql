@@ -1894,6 +1894,7 @@ void
 BootStrapMultiXact(void)
 {
 	int			slotno;
+	int			pageno;
 
 	LWLockAcquire(MultiXactOffsetSLRULock, LW_EXCLUSIVE);
 
@@ -1903,6 +1904,17 @@ BootStrapMultiXact(void)
 	/* Make sure it's written out */
 	SimpleLruWritePage(MultiXactOffsetCtl, slotno);
 	Assert(!MultiXactOffsetCtl->shared->page_dirty[slotno]);
+
+	pageno = MultiXactIdToOffsetPage(MultiXactState->nextMXact);
+	if (pageno != 0)
+	{
+		/* Create and zero the first page of the offsets log */
+		slotno = ZeroMultiXactOffsetPage(pageno, false);
+
+		/* Make sure it's written out */
+		SimpleLruWritePage(MultiXactOffsetCtl, slotno);
+		Assert(!MultiXactOffsetCtl->shared->page_dirty[slotno]);
+	}
 
 	LWLockRelease(MultiXactOffsetSLRULock);
 
@@ -1915,7 +1927,30 @@ BootStrapMultiXact(void)
 	SimpleLruWritePage(MultiXactMemberCtl, slotno);
 	Assert(!MultiXactMemberCtl->shared->page_dirty[slotno]);
 
+	pageno = MXOffsetToMemberPage(MultiXactState->nextOffset);
+	if (pageno != 0)
+	{
+		/* Create and zero the first page of the members log */
+		slotno = ZeroMultiXactMemberPage(pageno, false);
+
+		/* Make sure it's written out */
+		SimpleLruWritePage(MultiXactMemberCtl, slotno);
+		Assert(!MultiXactMemberCtl->shared->page_dirty[slotno]);
+	}
+
 	LWLockRelease(MultiXactMemberSLRULock);
+
+	/*
+	 * If we're starting not from zero offset, initilize dummy multixact to
+	 * evade too long loop in PerformMembersTruncation().
+	 */
+	if (MultiXactState->nextOffset > 0 && MultiXactState->nextMXact > 0)
+	{
+		RecordNewMultiXact(FirstMultiXactId,
+						   MultiXactState->nextOffset, 0, NULL);
+		RecordNewMultiXact(MultiXactState->nextMXact,
+						   MultiXactState->nextOffset, 0, NULL);
+	}
 }
 
 /*

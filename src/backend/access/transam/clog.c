@@ -713,6 +713,7 @@ void
 BootStrapCLOG(void)
 {
 	int			slotno;
+	int			pageno;
 
 	LWLockAcquire(XactSLRULock, LW_EXCLUSIVE);
 
@@ -722,6 +723,14 @@ BootStrapCLOG(void)
 	/* Make sure it's written out */
 	SimpleLruWritePage(XactCtl, slotno);
 	Assert(!XactCtl->shared->page_dirty[slotno]);
+
+	pageno = TransactionIdToPage(XidFromFullTransactionId(ShmemVariableCache->nextXid));
+	if (pageno != 0)
+	{
+		slotno = ZeroCLOGPage(pageno, false);
+		SimpleLruWritePage(XactCtl, slotno);
+		Assert(!XactCtl->shared->page_dirty[slotno]);
+	}
 
 	LWLockRelease(XactSLRULock);
 }

@@ -176,13 +176,6 @@ transform_MERGE_to_join(Query *parse)
 	joinrte->lateral = false;
 	joinrte->inh = false;
 	joinrte->inFromCl = true;
-	joinrte->requiredPerms = 0;
-	joinrte->checkAsUser = InvalidOid;
-	joinrte->selectedCols = NULL;
-	joinrte->insertedCols = NULL;
-	joinrte->updatedCols = NULL;
-	joinrte->extraUpdatedCols = NULL;
-	joinrte->securityQuals = NIL;
 
 	/*
 	 * Add completed RTE to pstate's range table list, so that we know its
@@ -1211,6 +1204,12 @@ pull_up_simple_subquery(PlannerInfo *root, Node *jtnode, RangeTblEntry *rte,
 	 */
 	parse->rtable = list_concat(parse->rtable, subquery->rtable);
 
+	/* Add subquery's RelPermissionInfos into the upper query. */
+	MergeRelPermissionInfos(&parse->relpermlist, subquery->relpermlist);
+
+	/* Update the combined rtable to reassign their perminfoindexes. */
+	ReassignRangeTablePermInfoIndexes(parse->rtable, parse->relpermlist);
+
 	/*
 	 * Pull up any FOR UPDATE/SHARE markers, too.  (OffsetVarNodes already
 	 * adjusted the marker rtindexes, so just concat the lists.)
@@ -1348,6 +1347,13 @@ pull_up_simple_union_all(PlannerInfo *root, Node *jtnode, RangeTblEntry *rte)
 	 * Append child RTEs to parent rtable.
 	 */
 	root->parse->rtable = list_concat(root->parse->rtable, rtable);
+
+	/* Add the child query's RelPermissionInfos into the parent query. */
+	MergeRelPermissionInfos(&root->parse->relpermlist, subquery->relpermlist);
+
+	/* Update the combined rtable to reassign their perminfoindexes. */
+	ReassignRangeTablePermInfoIndexes(root->parse->rtable,
+									  root->parse->relpermlist);
 
 	/*
 	 * Recursively scan the subquery's setOperations tree and add

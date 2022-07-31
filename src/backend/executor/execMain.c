@@ -74,7 +74,7 @@ ExecutorRun_hook_type ExecutorRun_hook = NULL;
 ExecutorFinish_hook_type ExecutorFinish_hook = NULL;
 ExecutorEnd_hook_type ExecutorEnd_hook = NULL;
 
-/* Hook for plugin to get control in ExecCheckRTPerms() */
+/* Hook for plugin to get control in ExecCheckPermissions() */
 ExecutorCheckPerms_hook_type ExecutorCheckPerms_hook = NULL;
 
 /* decls for local routines only used within this module */
@@ -90,8 +90,8 @@ static void ExecutePlan(EState *estate, PlanState *planstate,
 						ScanDirection direction,
 						DestReceiver *dest,
 						bool execute_once);
-static bool ExecCheckRTEPerms(RangeTblEntry *rte);
-static bool ExecCheckRTEPermsModified(Oid relOid, Oid userid,
+static bool ExecCheckOneRelPerms(RelPermissionInfo *perminfo);
+static bool ExecCheckPermissionsModified(Oid relOid, Oid userid,
 									  Bitmapset *modifiedCols,
 									  AclMode requiredPerms);
 static void ExecCheckXactReadOnly(PlannedStmt *plannedstmt);
@@ -554,8 +554,8 @@ ExecutorRewind(QueryDesc *queryDesc)
 
 
 /*
- * ExecCheckRTPerms
- *		Check access permissions for all relations listed in a range table.
+ * ExecCheckPermissions
+ *		Check access permissions of relations mentioned in a query
  *
  * Returns true if permissions are adequate.  Otherwise, throws an appropriate
  * error if ereport_on_violation is true, or simply returns false otherwise.
@@ -567,38 +567,39 @@ ExecutorRewind(QueryDesc *queryDesc)
  * See rewrite/rowsecurity.c.
  */
 bool
-ExecCheckRTPerms(List *rangeTable, bool ereport_on_violation)
+ExecCheckPermissions(List *relpermlist,
+				 bool ereport_on_violation)
 {
 	ListCell   *l;
 	bool		result = true;
 
-	foreach(l, rangeTable)
+	foreach(l, relpermlist)
 	{
-		RangeTblEntry *rte = (RangeTblEntry *) lfirst(l);
+		RelPermissionInfo *perminfo = (RelPermissionInfo *) lfirst(l);
 
-		result = ExecCheckRTEPerms(rte);
+		Assert(OidIsValid(perminfo->relid));
+		result = ExecCheckOneRelPerms(perminfo);
 		if (!result)
 		{
-			Assert(rte->rtekind == RTE_RELATION);
 			if (ereport_on_violation)
-				aclcheck_error(ACLCHECK_NO_PRIV, get_relkind_objtype(get_rel_relkind(rte->relid)),
-							   get_rel_name(rte->relid));
+				aclcheck_error(ACLCHECK_NO_PRIV, get_relkind_objtype(get_rel_relkind(perminfo->relid)),
+							   get_rel_name(perminfo->relid));
 			return false;
 		}
 	}
 
 	if (ExecutorCheckPerms_hook)
-		result = (*ExecutorCheckPerms_hook) (rangeTable,
+		result = (*ExecutorCheckPerms_hook) (relpermlist,
 											 ereport_on_violation);
 	return result;
 }
 
 /*
- * ExecCheckRTEPerms
- *		Check access permissions for a single RTE.
+ * ExecCheckOneRelPerms
+ *		Check access permissions for a single relation.
  */
 static bool
-ExecCheckRTEPerms(RangeTblEntry *rte)
+ExecCheckOneRelPerms(RelPermissionInfo *perminfo)
 {
 	AclMode		requiredPerms;
 	AclMode		relPerms;
@@ -606,32 +607,21 @@ ExecCheckRTEPerms(RangeTblEntry *rte)
 	Oid			relOid;
 	Oid			userid;
 
-	/*
-	 * Only plain-relation RTEs need to be checked here.  Function RTEs are
-	 * checked when the function is prepared for execution.  Join, subquery,
-	 * and special RTEs need no checks.
-	 */
-	if (rte->rtekind != RTE_RELATION)
-		return true;
+	requiredPerms = perminfo->requiredPerms;
+	Assert(requiredPerms != 0);
 
-	/*
-	 * No work if requiredPerms is empty.
-	 */
-	requiredPerms = rte->requiredPerms;
-	if (requiredPerms == 0)
-		return true;
-
-	relOid = rte->relid;
+	relOid = perminfo->relid;
+	Assert(OidIsValid(relOid));
 
 	/*
 	 * userid to check as: current user unless we have a setuid indication.
 	 *
 	 * Note: GetUserId() is presently fast enough that there's no harm in
-	 * calling it separately for each RTE.  If that stops being true, we could
-	 * call it once in ExecCheckRTPerms and pass the userid down from there.
-	 * But for now, no need for the extra clutter.
+	 * calling it separately for each relation.  If that stops being true, we
+	 * could call it once in ExecCheckPermissions and pass the userid down from
+	 * there.  But for now, no need for the extra clutter.
 	 */
-	userid = rte->checkAsUser ? rte->checkAsUser : GetUserId();
+	userid = perminfo->checkAsUser ? perminfo->checkAsUser : GetUserId();
 
 	/*
 	 * We must have *all* the requiredPerms bits, but some of the bits can be
@@ -665,14 +655,14 @@ ExecCheckRTEPerms(RangeTblEntry *rte)
 			 * example, SELECT COUNT(*) FROM table), allow the query if we
 			 * have SELECT on any column of the rel, as per SQL spec.
 			 */
-			if (bms_is_empty(rte->selectedCols))
+			if (bms_is_empty(perminfo->selectedCols))
 			{
 				if (pg_attribute_aclcheck_all(relOid, userid, ACL_SELECT,
 											  ACLMASK_ANY) != ACLCHECK_OK)
 					return false;
 			}
 
-			while ((col = bms_next_member(rte->selectedCols, col)) >= 0)
+			while ((col = bms_next_member(perminfo->selectedCols, col)) >= 0)
 			{
 				/* bit #s are offset by FirstLowInvalidHeapAttributeNumber */
 				AttrNumber	attno = col + FirstLowInvalidHeapAttributeNumber;
@@ -697,15 +687,15 @@ ExecCheckRTEPerms(RangeTblEntry *rte)
 		 * Basically the same for the mod columns, for both INSERT and UPDATE
 		 * privilege as specified by remainingPerms.
 		 */
-		if (remainingPerms & ACL_INSERT && !ExecCheckRTEPermsModified(relOid,
+		if (remainingPerms & ACL_INSERT && !ExecCheckPermissionsModified(relOid,
 																	  userid,
-																	  rte->insertedCols,
+																	  perminfo->insertedCols,
 																	  ACL_INSERT))
 			return false;
 
-		if (remainingPerms & ACL_UPDATE && !ExecCheckRTEPermsModified(relOid,
+		if (remainingPerms & ACL_UPDATE && !ExecCheckPermissionsModified(relOid,
 																	  userid,
-																	  rte->updatedCols,
+																	  perminfo->updatedCols,
 																	  ACL_UPDATE))
 			return false;
 	}
@@ -713,12 +703,12 @@ ExecCheckRTEPerms(RangeTblEntry *rte)
 }
 
 /*
- * ExecCheckRTEPermsModified
- *		Check INSERT or UPDATE access permissions for a single RTE (these
+ * ExecCheckPermissionsModified
+ *		Check INSERT or UPDATE access permissions for a single relation (these
  *		are processed uniformly).
  */
 static bool
-ExecCheckRTEPermsModified(Oid relOid, Oid userid, Bitmapset *modifiedCols,
+ExecCheckPermissionsModified(Oid relOid, Oid userid, Bitmapset *modifiedCols,
 						  AclMode requiredPerms)
 {
 	int			col = -1;
@@ -773,17 +763,14 @@ ExecCheckXactReadOnly(PlannedStmt *plannedstmt)
 	 * Fail if write permissions are requested in parallel mode for table
 	 * (temp or non-temp), otherwise fail for any non-temp table.
 	 */
-	foreach(l, plannedstmt->rtable)
+	foreach(l, plannedstmt->relpermlist)
 	{
-		RangeTblEntry *rte = (RangeTblEntry *) lfirst(l);
+		RelPermissionInfo *perminfo = (RelPermissionInfo *) lfirst(l);
 
-		if (rte->rtekind != RTE_RELATION)
+		if ((perminfo->requiredPerms & (~ACL_SELECT)) == 0)
 			continue;
 
-		if ((rte->requiredPerms & (~ACL_SELECT)) == 0)
-			continue;
-
-		if (isTempNamespace(get_rel_namespace(rte->relid)))
+		if (isTempNamespace(get_rel_namespace(perminfo->relid)))
 			continue;
 
 		PreventCommandIfReadOnly(CreateCommandName((Node *) plannedstmt));
@@ -815,9 +802,10 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 	int			i;
 
 	/*
-	 * Do permissions checks
+	 * Do permissions checks and save the list for later use.
 	 */
-	ExecCheckRTPerms(rangeTable, true);
+	ExecCheckPermissions(plannedstmt->relpermlist, true);
+	estate->es_relpermlist = plannedstmt->relpermlist;
 
 	/*
 	 * initialize the node's execution state
@@ -1858,7 +1846,7 @@ ExecPartitionCheckEmitError(ResultRelInfo *resultRelInfo,
 
 		old_tupdesc = RelationGetDescr(resultRelInfo->ri_RelationDesc);
 		/* a reverse map */
-		map = build_attrmap_by_name_if_req(old_tupdesc, tupdesc);
+		map = build_attrmap_by_name_if_req(old_tupdesc, tupdesc, false);
 
 		/*
 		 * Partition-specific slot's tupdesc can't be changed, so allocate a
@@ -1943,7 +1931,8 @@ ExecConstraints(ResultRelInfo *resultRelInfo,
 					tupdesc = RelationGetDescr(rootrel->ri_RelationDesc);
 					/* a reverse map */
 					map = build_attrmap_by_name_if_req(orig_tupdesc,
-													   tupdesc);
+													   tupdesc,
+													   false);
 
 					/*
 					 * Partition-specific slot's tupdesc can't be changed, so
@@ -1995,7 +1984,8 @@ ExecConstraints(ResultRelInfo *resultRelInfo,
 				tupdesc = RelationGetDescr(rootrel->ri_RelationDesc);
 				/* a reverse map */
 				map = build_attrmap_by_name_if_req(old_tupdesc,
-												   tupdesc);
+												   tupdesc,
+												   false);
 
 				/*
 				 * Partition-specific slot's tupdesc can't be changed, so
@@ -2102,7 +2092,8 @@ ExecWithCheckOptions(WCOKind kind, ResultRelInfo *resultRelInfo,
 						tupdesc = RelationGetDescr(rootrel->ri_RelationDesc);
 						/* a reverse map */
 						map = build_attrmap_by_name_if_req(old_tupdesc,
-														   tupdesc);
+														   tupdesc,
+														   false);
 
 						/*
 						 * Partition-specific slot's tupdesc can't be changed,

@@ -24,6 +24,7 @@
 #include "optimizer/planmain.h"
 #include "optimizer/planner.h"
 #include "optimizer/tlist.h"
+#include "parser/parse_relation.h"
 #include "tcop/utility.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
@@ -111,9 +112,7 @@ typedef struct
 #define fix_scan_list(root, lst, rtoffset, num_exec) \
 	((List *) fix_scan_expr(root, (Node *) (lst), rtoffset, num_exec))
 
-static void add_rtes_to_flat_rtable(PlannerInfo *root, bool recursing);
-static void flatten_unplanned_rtes(PlannerGlobal *glob, RangeTblEntry *rte);
-static bool flatten_rtes_walker(Node *node, PlannerGlobal *glob);
+static void add_rtes_to_flat_rtable(PlannerInfo *root);
 static void add_rte_to_flat_rtable(PlannerGlobal *glob, RangeTblEntry *rte);
 static Plan *set_plan_refs(PlannerInfo *root, Plan *plan, int rtoffset);
 static Plan *set_indexonlyscan_references(PlannerInfo *root,
@@ -268,7 +267,7 @@ set_plan_references(PlannerInfo *root, Plan *plan)
 	 * will have their rangetable indexes increased by rtoffset.  (Additional
 	 * RTEs, not referenced by the Plan tree, might get added after those.)
 	 */
-	add_rtes_to_flat_rtable(root, false);
+	add_rtes_to_flat_rtable(root);
 
 	/*
 	 * Adjust RT indexes of PlanRowMarks and add to final rowmarks list
@@ -354,10 +353,17 @@ set_plan_references(PlannerInfo *root, Plan *plan)
 /*
  * Extract RangeTblEntries from the plan's rangetable, and add to flat rtable
  *
- * This can recurse into subquery plans; "recursing" is true if so.
+ * Does the same for RelPermissionInfos.  This also hunts down subquery RTEs
+ * of the current plan level whose query was not pulled up into the parent
+ * query, nor turned into SubqueryScan nodes referenced in the plan tree. Such
+ * subqueries would not thus have had their RelPermissionInfos merged into
+ * root->parse->relpermlist, so we must force-add them to
+ * glob->finalrelpermlist.  Failing to do so would prevent the executor from
+ * performing expected permission checks for tables mentioned in such
+ * subqueries.
  */
 static void
-add_rtes_to_flat_rtable(PlannerInfo *root, bool recursing)
+add_rtes_to_flat_rtable(PlannerInfo *root)
 {
 	PlannerGlobal *glob = root->glob;
 	Index		rti;
@@ -365,33 +371,13 @@ add_rtes_to_flat_rtable(PlannerInfo *root, bool recursing)
 
 	/*
 	 * Add the query's own RTEs to the flattened rangetable.
-	 *
-	 * At top level, we must add all RTEs so that their indexes in the
-	 * flattened rangetable match up with their original indexes.  When
-	 * recursing, we only care about extracting relation RTEs.
-	 */
-	foreach(lc, root->parse->rtable)
-	{
-		RangeTblEntry *rte = (RangeTblEntry *) lfirst(lc);
-
-		if (!recursing || rte->rtekind == RTE_RELATION)
-			add_rte_to_flat_rtable(glob, rte);
-	}
-
-	/*
-	 * If there are any dead subqueries, they are not referenced in the Plan
-	 * tree, so we must add RTEs contained in them to the flattened rtable
-	 * separately.  (If we failed to do this, the executor would not perform
-	 * expected permission checks for tables mentioned in such subqueries.)
-	 *
-	 * Note: this pass over the rangetable can't be combined with the previous
-	 * one, because that would mess up the numbering of the live RTEs in the
-	 * flattened rangetable.
 	 */
 	rti = 1;
 	foreach(lc, root->parse->rtable)
 	{
 		RangeTblEntry *rte = (RangeTblEntry *) lfirst(lc);
+
+		add_rte_to_flat_rtable(glob, rte);
 
 		/*
 		 * We should ignore inheritance-parent RTEs: their contents have been
@@ -409,73 +395,29 @@ add_rtes_to_flat_rtable(PlannerInfo *root, bool recursing)
 				Assert(rel->relid == rti);	/* sanity check on array */
 
 				/*
-				 * The subquery might never have been planned at all, if it
+				 * A dead subquery is one that was not planned at all, if it
 				 * was excluded on the basis of self-contradictory constraints
-				 * in our query level.  In this case apply
-				 * flatten_unplanned_rtes.
-				 *
-				 * If it was planned but the result rel is dummy, we assume
-				 * that it has been omitted from our plan tree (see
-				 * set_subquery_pathlist), and recurse to pull up its RTEs.
-				 *
-				 * Otherwise, it should be represented by a SubqueryScan node
-				 * somewhere in our plan tree, and we'll pull up its RTEs when
-				 * we process that plan node.
-				 *
-				 * However, if we're recursing, then we should pull up RTEs
-				 * whether the subquery is dummy or not, because we've found
-				 * that some upper query level is treating this one as dummy,
-				 * and so we won't scan this level's plan tree at all.
+				 * in our query level, or one that was planned but the result
+				 * rel was dummy.
 				 */
-				if (rel->subroot == NULL)
-					flatten_unplanned_rtes(glob, rte);
-				else if (recursing ||
-						 IS_DUMMY_REL(fetch_upper_rel(rel->subroot,
-													  UPPERREL_FINAL, NULL)))
-					add_rtes_to_flat_rtable(rel->subroot, true);
+				if (rte->subquery && rte->subquery->relpermlist &&
+					(rel->subroot == NULL ||
+					 IS_DUMMY_REL(fetch_upper_rel(rel->subroot,
+												  UPPERREL_FINAL, NULL))))
+					MergeRelPermissionInfos(&glob->finalrelpermlist,
+											rte->subquery->relpermlist);
 			}
+
 		}
 		rti++;
 	}
-}
 
-/*
- * Extract RangeTblEntries from a subquery that was never planned at all
- */
-static void
-flatten_unplanned_rtes(PlannerGlobal *glob, RangeTblEntry *rte)
-{
-	/* Use query_tree_walker to find all RTEs in the parse tree */
-	(void) query_tree_walker(rte->subquery,
-							 flatten_rtes_walker,
-							 (void *) glob,
-							 QTW_EXAMINE_RTES_BEFORE);
-}
+	/* Now merge the main query's RelPermissionInfos into the global list. */
+	MergeRelPermissionInfos(&glob->finalrelpermlist, root->parse->relpermlist);
 
-static bool
-flatten_rtes_walker(Node *node, PlannerGlobal *glob)
-{
-	if (node == NULL)
-		return false;
-	if (IsA(node, RangeTblEntry))
-	{
-		RangeTblEntry *rte = (RangeTblEntry *) node;
-
-		/* As above, we need only save relation RTEs */
-		if (rte->rtekind == RTE_RELATION)
-			add_rte_to_flat_rtable(glob, rte);
-		return false;
-	}
-	if (IsA(node, Query))
-	{
-		/* Recurse into subselects */
-		return query_tree_walker((Query *) node,
-								 flatten_rtes_walker,
-								 (void *) glob,
-								 QTW_EXAMINE_RTES_BEFORE);
-	}
-	return expression_tree_walker(node, flatten_rtes_walker,
-								  (void *) glob);
+	/* Finally update the flat rtable to reassign their perminfoindexes. */
+	ReassignRangeTablePermInfoIndexes(glob->finalrtable,
+									  glob->finalrelpermlist);
 }
 
 /*
@@ -483,10 +425,9 @@ flatten_rtes_walker(Node *node, PlannerGlobal *glob)
  *
  * In the flat rangetable, we zero out substructure pointers that are not
  * needed by the executor; this reduces the storage space and copying cost
- * for cached plans.  We keep only the ctename, alias and eref Alias fields,
- * which are needed by EXPLAIN, and the selectedCols, insertedCols,
- * updatedCols, and extraUpdatedCols bitmaps, which are needed for
- * executor-startup permissions checking and for trigger event checking.
+ * for cached plans.  We keep only the ctename, alias, eref Alias fields,
+ * which are needed by EXPLAIN, and perminfoindex which is needed by the
+ * executor to check the relation's permissions.
  */
 static void
 add_rte_to_flat_rtable(PlannerGlobal *glob, RangeTblEntry *rte)

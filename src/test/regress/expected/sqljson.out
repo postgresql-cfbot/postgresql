@@ -1059,7 +1059,7 @@ SELECT JSON_OBJECTAGG(i: ('111' || i)::bytea FORMAT JSON WITH UNIQUE RETURNING t
 FROM generate_series(1,5) i;
 \sv json_objectagg_view
 CREATE OR REPLACE VIEW public.json_objectagg_view AS
- SELECT JSON_OBJECTAGG(i.i : ('111'::text || i.i)::bytea FORMAT JSON WITH UNIQUE KEYS RETURNING text) FILTER (WHERE i.i > 3) AS "json_objectagg"
+ SELECT JSON_OBJECTAGG(i : ('111'::text || i)::bytea FORMAT JSON WITH UNIQUE KEYS RETURNING text) FILTER (WHERE i > 3) AS "json_objectagg"
    FROM generate_series(1, 5) i(i)
 DROP VIEW json_objectagg_view;
 -- Test JSON_ARRAYAGG deparsing
@@ -1095,7 +1095,7 @@ SELECT JSON_ARRAYAGG(('111' || i)::bytea FORMAT JSON NULL ON NULL RETURNING text
 FROM generate_series(1,5) i;
 \sv json_arrayagg_view
 CREATE OR REPLACE VIEW public.json_arrayagg_view AS
- SELECT JSON_ARRAYAGG(('111'::text || i.i)::bytea FORMAT JSON NULL ON NULL RETURNING text) FILTER (WHERE i.i > 3) AS "json_arrayagg"
+ SELECT JSON_ARRAYAGG(('111'::text || i)::bytea FORMAT JSON NULL ON NULL RETURNING text) FILTER (WHERE i > 3) AS "json_arrayagg"
    FROM generate_series(1, 5) i(i)
 DROP VIEW json_arrayagg_view;
 -- Test JSON_ARRAY(subquery) deparsing
@@ -1313,7 +1313,7 @@ SELECT '1' IS JSON AS "any", ('1' || i) IS JSON SCALAR AS "scalar", '[]' IS NOT 
 \sv is_json_view
 CREATE OR REPLACE VIEW public.is_json_view AS
  SELECT '1'::text IS JSON AS "any",
-    ('1'::text || i.i) IS JSON SCALAR AS scalar,
+    ('1'::text || i) IS JSON SCALAR AS scalar,
     NOT '[]'::text IS JSON ARRAY AS "array",
     '{}'::text IS JSON OBJECT WITH UNIQUE KEYS AS object
    FROM generate_series(1, 3) i(i)

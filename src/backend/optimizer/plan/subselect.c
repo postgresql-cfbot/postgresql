@@ -1499,6 +1499,12 @@ convert_EXISTS_sublink_to_join(PlannerInfo *root, SubLink *sublink,
 	/* Now we can attach the modified subquery rtable to the parent */
 	parse->rtable = list_concat(parse->rtable, subselect->rtable);
 
+	/* Add subquery's RelPermissionInfos into the upper query. */
+	MergeRelPermissionInfos(&parse->relpermlist, subselect->relpermlist);
+
+	/* Update the combined rtable to reassign their perminfoindexes. */
+	ReassignRangeTablePermInfoIndexes(parse->rtable, parse->relpermlist);
+
 	/*
 	 * And finally, build the JoinExpr node.
 	 */

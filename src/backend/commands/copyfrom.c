@@ -657,6 +657,12 @@ CopyFrom(CopyFromState cstate)
 	resultRelInfo = target_resultRelInfo = makeNode(ResultRelInfo);
 	ExecInitResultRelation(estate, resultRelInfo, 1);
 
+	/*
+	 * Copy the relation permissions into estate as well, so that
+	 * ExecGetInsertedCols() et al will work correctly.
+	 */
+	estate->es_relpermlist = cstate->relpermlist;
+
 	/* Verify the named relation is a valid target for INSERT */
 	CheckValidResultRel(resultRelInfo, CMD_INSERT);
 
@@ -1383,7 +1389,10 @@ BeginCopyFrom(ParseState *pstate,
 
 	/* Assign range table, we'll need it in CopyFrom. */
 	if (pstate)
+	{
 		cstate->range_table = pstate->p_rtable;
+		cstate->relpermlist = pstate->p_relpermlist;
+	}
 
 	tupDesc = RelationGetDescr(cstate->rel);
 	num_phys_attrs = tupDesc->natts;

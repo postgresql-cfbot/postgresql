@@ -156,6 +156,7 @@
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "optimizer/optimizer.h"
+#include "parser/parse_relation.h"
 #include "pgstat.h"
 #include "postmaster/bgworker.h"
 #include "postmaster/interrupt.h"
@@ -490,6 +491,8 @@ create_edata_for_relation(LogicalRepRelMapEntry *rel)
 	rte->relkind = rel->localrel->rd_rel->relkind;
 	rte->rellockmode = AccessShareLock;
 	ExecInitRangeTable(estate, list_make1(rte));
+
+	AddRelPermissionInfo(&estate->es_relpermlist, rte);
 
 	edata->targetRelInfo = resultRelInfo = makeNode(ResultRelInfo);
 
@@ -1787,7 +1790,7 @@ apply_handle_update(StringInfo s)
 	LogicalRepTupleData newtup;
 	bool		has_oldtup;
 	TupleTableSlot *remoteslot;
-	RangeTblEntry *target_rte;
+	RelPermissionInfo *target_perminfo;
 	MemoryContext oldctx;
 
 	/*
@@ -1835,7 +1838,7 @@ apply_handle_update(StringInfo s)
 	 * information.  But it would for example exclude columns that only exist
 	 * on the subscriber, since we are not touching those.
 	 */
-	target_rte = list_nth(estate->es_range_table, 0);
+	target_perminfo = list_nth(estate->es_relpermlist, 0);
 	for (int i = 0; i < remoteslot->tts_tupleDescriptor->natts; i++)
 	{
 		Form_pg_attribute att = TupleDescAttr(remoteslot->tts_tupleDescriptor, i);
@@ -1845,14 +1848,14 @@ apply_handle_update(StringInfo s)
 		{
 			Assert(remoteattnum < newtup.ncols);
 			if (newtup.colstatus[remoteattnum] != LOGICALREP_COLUMN_UNCHANGED)
-				target_rte->updatedCols =
-					bms_add_member(target_rte->updatedCols,
+				target_perminfo->updatedCols =
+					bms_add_member(target_perminfo->updatedCols,
 								   i + 1 - FirstLowInvalidHeapAttributeNumber);
 		}
 	}
 
 	/* Also populate extraUpdatedCols, in case we have generated columns */
-	fill_extraUpdatedCols(target_rte, rel->localrel);
+	fill_extraUpdatedCols(target_perminfo, rel->localrel);
 
 	/* Build the search tuple. */
 	oldctx = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));

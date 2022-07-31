@@ -1508,6 +1508,9 @@
 { oid => '746', descr => 'session user name',
   proname => 'session_user', provolatile => 's', prorettype => 'name',
   proargtypes => '', prosrc => 'session_user' },
+{ oid => '9774', descr => 'session authenticated identity',
+  proname => 'pg_session_authn_id', provolatile => 's',
+  prorettype => 'text', proargtypes => '', prosrc => 'pg_session_authn_id' },
 
 { oid => '744',
   proname => 'array_eq', prorettype => 'bool',

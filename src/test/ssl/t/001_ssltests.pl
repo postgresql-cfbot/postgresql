@@ -555,6 +555,13 @@ $node->connect_ok(
 		qr/connection authenticated: identity="CN=ssltestuser-dn,OU=Testing,OU=Engineering,O=PGDG" method=cert/
 	],);
 
+# Sanity-check pg_session_authn_id() for long ID strings
+my $res = $node->safe_psql('postgres',
+	"SELECT pg_session_authn_id();",
+	connstr => "$dn_connstr user=ssltestuser sslcert=ssl/client-dn.crt " . sslkey('client-dn.key'),
+);
+is($res, "CN=ssltestuser-dn,OU=Testing,OU=Engineering,O=PGDG", "users with cert authentication have entire DN as authn_id");
+
 # same thing but with a regex
 $dn_connstr = "$common_connstr dbname=certdb_dn_re";
 

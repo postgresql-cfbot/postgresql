@@ -931,6 +931,78 @@ GetUserNameFromId(Oid roleid, bool noerr)
 	return result;
 }
 
+/* ------------------------------------------------------------------------
+ *				Parallel connection state
+ *
+ * ClientConnectionInfo contains pieces of information about the client that
+ * need to be synced to parallel workers when they initialize. Over time, this
+ * list will probably grow, and may subsume some of the "user state" variables
+ * above.
+ *-------------------------------------------------------------------------
+ */
+
+ClientConnectionInfo MyClientConnectionInfo;
+
+/*
+ * Calculate the space needed to serialize MyClientConnectionInfo.
+ */
+Size
+EstimateClientConnectionInfoSpace(void)
+{
+	Size		size = 1;
+
+	if (MyClientConnectionInfo.authn_id)
+		size = add_size(size, strlen(MyClientConnectionInfo.authn_id) + 1);
+
+	return size;
+}
+
+/*
+ * Serialize MyClientConnectionInfo for use by parallel workers.
+ */
+void
+SerializeClientConnectionInfo(Size maxsize, char *start_address)
+{
+	/*
+	 * First byte is an indication of whether or not authn_id has been set to
+	 * non-NULL, to differentiate that case from the empty string.
+	 */
+	Assert(maxsize > 0);
+	start_address[0] = MyClientConnectionInfo.authn_id ? 1 : 0;
+	start_address++;
+	maxsize--;
+
+	if (MyClientConnectionInfo.authn_id)
+	{
+		Size len;
+
+		len = strlcpy(start_address, MyClientConnectionInfo.authn_id, maxsize) + 1;
+		Assert(len <= maxsize);
+		maxsize -= len;
+		start_address += len;
+	}
+}
+
+/*
+ * Restore MyClientConnectionInfo from its serialized representation.
+ */
+void
+RestoreClientConnectionInfo(char *conninfo)
+{
+	if (conninfo[0] == 0)
+	{
+		MyClientConnectionInfo.authn_id = NULL;
+		conninfo++;
+	}
+	else
+	{
+		conninfo++;
+		MyClientConnectionInfo.authn_id = MemoryContextStrdup(TopMemoryContext,
+															  conninfo);
+		conninfo += strlen(conninfo) + 1;
+	}
+}
+
 
 /*-------------------------------------------------------------------------
  *				Interlock-file support

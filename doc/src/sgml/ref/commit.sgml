@@ -62,7 +62,15 @@ COMMIT [ WORK | TRANSACTION ] [ AND [ NO ] CHAIN ]
       linkend="sql-set-transaction"/>) as the just finished one.  Otherwise,
       no new transaction is started.
      </para>
-    </listitem>
+     <note>
+       <para>
+         If you have a client application waiting for a <literal>NOTIFY</literal>
+         event coming from this transaction, be aware that the notification will
+         only be sent when a <literal>COMMIT</literal> or a <literal>ROLLBACK</literal>
+         without <literal>AND CHAIN</literal> will be issued.
+       </para>
+     </note>
+   </listitem>
    </varlistentry>
   </variablelist>
  </refsect1>

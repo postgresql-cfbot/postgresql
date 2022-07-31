@@ -1642,6 +1642,9 @@ nodetag_to_string(NodeTag tag)
 		case T_PartitionRangeDatum:
 			return "PartitionRangeDatum";
 			break;
+		case T_SinglePartitionSpec:
+			return "SinglePartitionSpec";
+			break;
 		case T_PartitionCmd:
 			return "PartitionCmd";
 			break;

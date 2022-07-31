@@ -337,8 +337,19 @@ main(int argc, char **argv)
 	 *
 	 * If both clusters are already on the same timeline, there's nothing to
 	 * do.
+	 *
+	 * We must avoid assuming that a checkpoint has happened on the source or
+	 * we'll possibly conclude the timelines are the same when the source has
+	 * recently promoted.
 	 */
-	if (ControlFile_target.checkPointCopy.ThisTimeLineID ==
+	if (ControlFile_source.minRecoveryPointTLI != 0 &&
+			ControlFile_source.checkPointCopy.ThisTimeLineID !=
+			ControlFile_source.minRecoveryPointTLI)
+	{
+		pg_log_info("source cluster hasn't checkpointed since its last timeline switch");
+		exit(1);
+	}
+	else if (ControlFile_target.checkPointCopy.ThisTimeLineID ==
 		ControlFile_source.checkPointCopy.ThisTimeLineID)
 	{
 		pg_log_info("source and target cluster are on the same timeline");

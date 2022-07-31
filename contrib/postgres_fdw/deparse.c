@@ -2370,13 +2370,56 @@ deparseAnalyzeSizeSql(StringInfo buf, Relation rel)
 }
 
 /*
+ * Construct SELECT statement to acquire the number of rows of a relation.
+ *
+ * Note: we just return the remote server's reltuples value, which might
+ * be off a good deal, but it doesn't seem worth working harder.  See
+ * comments in postgresAcquireSampleRowsFunc.
+ */
+void
+deparseAnalyzeTuplesSql(StringInfo buf, Relation rel)
+{
+	StringInfoData relname;
+
+	/* We'll need the remote relation name as a literal. */
+	initStringInfo(&relname);
+	deparseRelation(&relname, rel);
+
+	appendStringInfoString(buf, "SELECT reltuples FROM pg_catalog.pg_class WHERE oid = ");
+	deparseStringLiteral(buf, relname.data);
+	appendStringInfoString(buf, "::pg_catalog.regclass");
+}
+
+/*
  * Construct SELECT statement to acquire sample rows of given relation.
  *
  * SELECT command is appended to buf, and list of columns retrieved
  * is returned to *retrieved_attrs.
+ *
+ * XXX We allow customizing the sampling method, but we only support methods
+ * we can decide based on server version. Allowing custom TSM modules (for
+ * example tsm_system_rows) might be useful, but it would require detecting
+ * which extensions are installed, to allow automatic fall-back. Moreover, the
+ * methods use different parameters (not sampling rate). So we don't do this
+ * for now, leaving it for future improvements.
+ *
+ * XXX Using remote random() to sample rows has advantages & disadvantages.
+ * The advantages are that this works on all PostgreSQL versions (unlike
+ * TABLESAMPLE), and that it does the sampling on the remote side (unlike
+ * the old approach, which transfers everything and then discards most data).
+ * We could also do "ORDER BY random() LIMIT x", which would always pick
+ * the expected number of rows, but it requires sorting so it's a bit more
+ * expensive.
+ *
+ * The disadvantage is that we still have to read all rows and evaluate the
+ * random(), while TABLESAMPLE skips most of the pages entirely.
+ *
+ * XXX What if we need only a subset of columns, e.g. ANALYZE t(a,b)?
  */
 void
-deparseAnalyzeSql(StringInfo buf, Relation rel, List **retrieved_attrs)
+deparseAnalyzeSql(StringInfo buf, Relation rel,
+				  PgFdwSamplingMethod sample_method, double sample_frac,
+				  List **retrieved_attrs)
 {
 	Oid			relid = RelationGetRelid(rel);
 	TupleDesc	tupdesc = RelationGetDescr(rel);
@@ -2424,10 +2467,35 @@ deparseAnalyzeSql(StringInfo buf, Relation rel, List **retrieved_attrs)
 		appendStringInfoString(buf, "NULL");
 
 	/*
-	 * Construct FROM clause
+	 * Construct FROM clause, and perhaps WHERE clause too, depending on the
+	 * selected sampling method.
 	 */
 	appendStringInfoString(buf, " FROM ");
 	deparseRelation(buf, rel);
+
+	switch (sample_method)
+	{
+		case ANALYZE_SAMPLE_OFF:
+			/* nothing to do here */
+			break;
+
+		case ANALYZE_SAMPLE_RANDOM:
+			appendStringInfo(buf, " WHERE pg_catalog.random() < %f", sample_frac);
+			break;
+
+		case ANALYZE_SAMPLE_SYSTEM:
+			appendStringInfo(buf, " TABLESAMPLE SYSTEM(%f)", (100.0 * sample_frac));
+			break;
+
+		case ANALYZE_SAMPLE_BERNOULLI:
+			appendStringInfo(buf, " TABLESAMPLE BERNOULLI(%f)", (100.0 * sample_frac));
+			break;
+
+		case ANALYZE_SAMPLE_AUTO:
+			/* should have been resolved into actual method */
+			elog(ERROR, "unexpected sampling method");
+			break;
+	}
 }
 
 /*

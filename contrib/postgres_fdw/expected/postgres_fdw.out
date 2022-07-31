@@ -9575,7 +9575,7 @@ DO $d$
     END;
 $d$;
 ERROR:  invalid option "password"
-HINT:  Valid options in this context are: service, passfile, channel_binding, connect_timeout, dbname, host, hostaddr, port, options, application_name, keepalives, keepalives_idle, keepalives_interval, keepalives_count, tcp_user_timeout, sslmode, sslcompression, sslcert, sslkey, sslrootcert, sslcrl, sslcrldir, sslsni, requirepeer, ssl_min_protocol_version, ssl_max_protocol_version, gssencmode, krbsrvname, gsslib, target_session_attrs, use_remote_estimate, fdw_startup_cost, fdw_tuple_cost, extensions, updatable, truncatable, fetch_size, batch_size, async_capable, parallel_commit, keep_connections
+HINT:  Valid options in this context are: service, passfile, channel_binding, connect_timeout, dbname, host, hostaddr, port, options, application_name, keepalives, keepalives_idle, keepalives_interval, keepalives_count, tcp_user_timeout, sslmode, sslcompression, sslcert, sslkey, sslrootcert, sslcrl, sslcrldir, sslsni, requirepeer, ssl_min_protocol_version, ssl_max_protocol_version, gssencmode, krbsrvname, gsslib, target_session_attrs, use_remote_estimate, fdw_startup_cost, fdw_tuple_cost, extensions, updatable, truncatable, fetch_size, batch_size, async_capable, parallel_commit, keep_connections, analyze_sampling
 CONTEXT:  SQL statement "ALTER SERVER loopback_nopw OPTIONS (ADD password 'dummypw')"
 PL/pgSQL function inline_code_block line 3 at EXECUTE
 -- If we add a password for our user mapping instead, we should get a different
@@ -11339,3 +11339,45 @@ SELECT * FROM prem2;
 
 ALTER SERVER loopback OPTIONS (DROP parallel_commit);
 ALTER SERVER loopback2 OPTIONS (DROP parallel_commit);
+-- ===================================================================
+-- test for ANALYZE
+-- ===================================================================
+CREATE TABLE analyze_rtable1 (id int primary key, a text, b bigint);
+CREATE TABLE analyze_rtable2 (id int primary key, a text, b bigint);
+CREATE TABLE analyze_ptable (id int, a text, b bigint) PARTITION BY HASH(id);
+CREATE FOREIGN TABLE analyze_ftable__p1 PARTITION OF analyze_ptable
+                                    FOR VALUES WITH (MODULUS 2, REMAINDER 0)
+       SERVER loopback OPTIONS (table_name 'analyze_rtable1');
+CREATE FOREIGN TABLE analyze_ftable__p2 PARTITION OF analyze_ptable
+                                    FOR VALUES WITH (MODULUS 2, REMAINDER 1)
+       SERVER loopback OPTIONS (table_name 'analyze_rtable2');
+INSERT INTO analyze_ptable (SELECT x FROM generate_series(1,5000) x);
+-- analyze the 'local' tables to update relpages/reltuples
+ANALYZE analyze_rtable1, analyze_rtable2;
+-- now analyze the remote tables directly - this expects to scan everything,
+-- so should not do any sampling
+ANALYZE analyze_ftable__p1;
+ANALYZE analyze_ftable__p2;
+-- now analyze the parent - this should scan everything too, because 30k
+-- sample requires everything to be scanned
+ANALYZE analyze_ptable;
+-- now lower the target to 10, which requires only 3k rows sample, so about
+-- 1500 rows from each partition, so sampling will kick in, by default with
+-- the 'bernoulli' tablesample method
+SET default_statistics_target = 10;
+ANALYZE analyze_ptable;
+-- now alter the method for remote server to 'system'
+ALTER SERVER loopback OPTIONS (analyze_sampling 'system');
+ANALYZE analyze_ptable;
+-- now alter the method for remote table to 'random', to not use tablesample
+-- but the 'legacy' sampling, and disable sampling for the other partition
+ALTER FOREIGN TABLE analyze_ftable__p1 OPTIONS (ADD analyze_sampling 'random');
+ALTER FOREIGN TABLE analyze_ftable__p2 OPTIONS (ADD analyze_sampling 'off');
+ANALYZE analyze_ptable;
+-- now add more data, so that each partition exceeds the statistics target
+INSERT INTO analyze_ptable (SELECT x FROM generate_series(5001, 10000) x);
+ANALYZE analyze_rtable1, analyze_rtable2;
+ANALYZE analyze_ptable;
+-- cleanup
+DROP FOREIGN TABLE analyze_ftable__p1, analyze_ftable__p2;
+DROP TABLE analyze_ptable, analyze_rtable1, analyze_rtable2;

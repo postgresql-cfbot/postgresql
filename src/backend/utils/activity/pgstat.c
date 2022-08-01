@@ -102,6 +102,7 @@
 #include "storage/lwlock.h"
 #include "storage/pg_shmem.h"
 #include "storage/shmem.h"
+#include "utils/catcache.h"
 #include "utils/guc.h"
 #include "utils/memutils.h"
 #include "utils/pgstat_internal.h"
@@ -1059,6 +1060,9 @@ pgstat_prep_pending_entry(PgStat_Kind kind, Oid dboid, Oid objoid, bool *created
 
 	if (unlikely(!pgStatPendingContext))
 	{
+		if (unlikely(!CacheMemoryContext))
+			CreateCacheMemoryContext();
+
 		pgStatPendingContext =
 			AllocSetContextCreate(CacheMemoryContext,
 								  "PgStat Pending",

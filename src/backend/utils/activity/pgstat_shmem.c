@@ -14,6 +14,7 @@
 
 #include "pgstat.h"
 #include "storage/shmem.h"
+#include "utils/catcache.h"
 #include "utils/memutils.h"
 #include "utils/pgstat_internal.h"
 
@@ -974,6 +975,9 @@ pgstat_reset_entries_of_kind(PgStat_Kind kind, TimestampTz ts)
 static void
 pgstat_setup_memcxt(void)
 {
+	if (unlikely(!CacheMemoryContext))
+		CreateCacheMemoryContext();
+
 	if (unlikely(!pgStatSharedRefContext))
 		pgStatSharedRefContext =
 			AllocSetContextCreate(CacheMemoryContext,

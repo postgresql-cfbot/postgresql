@@ -195,6 +195,15 @@
 #old_snapshot_threshold = -1		# 1min-60d; -1 disables; 0 is immediate
 					# (change requires restart)
 
+# - SLRU Buffers (change requires restart) -
+
+#xact_buffers = 0			# memory for pg_xact (0 = auto)
+#subtrans_buffers = 32			# memory for pg_subtrans
+#multixact_offsets_buffers = 8		# memory for pg_multixact/offsets
+#multixact_members_buffers = 16		# memory for pg_multixact/members
+#notify_buffers = 8			# memory for pg_notify
+#serial_buffers = 16			# memory for pg_serial
+#commit_ts_buffers = 0			# memory for pg_commit_ts (0 = auto)
 
 #------------------------------------------------------------------------------
 # WRITE-AHEAD LOG

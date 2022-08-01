@@ -134,7 +134,7 @@ typedef enum
 static SlruErrorCause slru_errcause;
 static int	slru_errno;
 
-
+static void SlruAdjustNSlots(int* nslots, int* banksize, int* bankoffset);
 static void SimpleLruZeroLSNs(SlruCtl ctl, int slotno);
 static void SimpleLruWaitIO(SlruCtl ctl, int slotno);
 static void SlruInternalWritePage(SlruCtl ctl, int slotno, SlruWriteAll fdata);
@@ -149,6 +149,30 @@ static bool SlruScanDirCbDeleteCutoff(SlruCtl ctl, char *filename,
 static void SlruInternalDeleteSegment(SlruCtl ctl, int segno);
 
 /*
+ * Pick bank size optimal for N-assiciative SLRU buffers.
+ * We expect bank number to be picked from lowest bits of requested pageno.
+ * Thus we want number of banks to be power of 2. This routine computes number
+ * of banks aiming to make each bank of size 8. So we can pack page number and
+ * statuses of each bank on one cacheline.
+ */
+static void SlruAdjustNSlots(int* nslots, int* banksize, int* bankoffset)
+{
+	int nbanks = 1;
+	*banksize = *nslots;
+	*bankoffset = 0;
+	while (*banksize > 15)
+	{
+		if ((*banksize & 1) != 0)
+			*banksize +=1;
+		*banksize /= 2;
+		nbanks *= 2;
+		*bankoffset += 1;
+	}
+	elog(DEBUG5, "nslots %d banksize %d nbanks %d ", *nslots, *banksize, nbanks);
+	*nslots = *banksize * nbanks;
+}
+
+/*
  * Initialization of shared memory
  */
 
@@ -156,6 +180,8 @@ Size
 SimpleLruShmemSize(int nslots, int nlsns)
 {
 	Size		sz;
+	int bankoffset, banksize;
+	SlruAdjustNSlots(&nslots, &banksize, &bankoffset);
 
 	/* we assume nslots isn't so large as to risk overflow */
 	sz = MAXALIGN(sizeof(SlruSharedData));
@@ -190,6 +216,8 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 {
 	SlruShared	shared;
 	bool		found;
+	int bankoffset, banksize;
+	SlruAdjustNSlots(&nslots, &banksize, &bankoffset);
 
 	shared = (SlruShared) ShmemInitStruct(name,
 										  SimpleLruShmemSize(nslots, nlsns),
@@ -209,6 +237,9 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 		shared->ControlLock = ctllock;
 
 		shared->num_slots = nslots;
+		shared->bank_mask =  (1 << bankoffset) - 1;
+		shared->bank_size = banksize;
+		
 		shared->lsn_groups_per_page = nlsns;
 
 		shared->cur_lru_count = 0;
@@ -496,12 +527,14 @@ SimpleLruReadPage_ReadOnly(SlruCtl ctl, int pageno, TransactionId xid)
 {
 	SlruShared	shared = ctl->shared;
 	int			slotno;
+	int			bankstart = (pageno & shared->bank_mask) * shared->bank_size;
+	int			bankend = bankstart + shared->bank_size;
 
 	/* Try to find the page while holding only shared lock */
 	LWLockAcquire(shared->ControlLock, LW_SHARED);
 
 	/* See if page is already in a buffer */
-	for (slotno = 0; slotno < shared->num_slots; slotno++)
+	for (slotno = bankstart; slotno < bankend; slotno++)
 	{
 		if (shared->page_number[slotno] == pageno &&
 			shared->page_status[slotno] != SLRU_PAGE_EMPTY &&
@@ -1030,7 +1063,9 @@ SlruSelectLRUPage(SlruCtl ctl, int pageno)
 		int			best_invalid_page_number = 0;	/* keep compiler quiet */
 
 		/* See if page already has a buffer assigned */
-		for (slotno = 0; slotno < shared->num_slots; slotno++)
+		int bankstart = (pageno & shared->bank_mask) * shared->bank_size;
+		int bankend = bankstart + shared->bank_size;
+		for (slotno = bankstart; slotno < bankend; slotno++)
 		{
 			if (shared->page_number[slotno] == pageno &&
 				shared->page_status[slotno] != SLRU_PAGE_EMPTY)
@@ -1065,7 +1100,7 @@ SlruSelectLRUPage(SlruCtl ctl, int pageno)
 		 * multiple pages with the same lru_count.
 		 */
 		cur_count = (shared->cur_lru_count)++;
-		for (slotno = 0; slotno < shared->num_slots; slotno++)
+		for (slotno = bankstart; slotno < bankend; slotno++)
 		{
 			int			this_delta;
 			int			this_page_number;

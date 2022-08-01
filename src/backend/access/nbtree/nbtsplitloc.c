@@ -692,7 +692,7 @@ _bt_afternewitemoff(FindSplitData *state, OffsetNumber maxoff,
 	{
 		itemid = PageGetItemId(state->origpage, maxoff);
 		tup = (IndexTuple) PageGetItem(state->origpage, itemid);
-		keepnatts = _bt_keep_natts_fast(state->rel, tup, state->newitem);
+		keepnatts = nbts_call(_bt_keep_natts_fast, state->rel, tup, state->newitem);
 
 		if (keepnatts > 1 && keepnatts <= nkeyatts)
 		{
@@ -723,7 +723,7 @@ _bt_afternewitemoff(FindSplitData *state, OffsetNumber maxoff,
 		!_bt_adjacenthtid(&tup->t_tid, &state->newitem->t_tid))
 		return false;
 	/* Check same conditions as rightmost item case, too */
-	keepnatts = _bt_keep_natts_fast(state->rel, tup, state->newitem);
+	keepnatts = nbts_call(_bt_keep_natts_fast, state->rel, tup, state->newitem);
 
 	if (keepnatts > 1 && keepnatts <= nkeyatts)
 	{
@@ -972,7 +972,7 @@ _bt_strategy(FindSplitData *state, SplitPoint *leftpage,
 	 * avoid appending a heap TID in new high key, we're done.  Finish split
 	 * with default strategy and initial split interval.
 	 */
-	perfectpenalty = _bt_keep_natts_fast(state->rel, leftmost, rightmost);
+	perfectpenalty = nbts_call(_bt_keep_natts_fast, state->rel, leftmost, rightmost);
 	if (perfectpenalty <= indnkeyatts)
 		return perfectpenalty;
 
@@ -993,7 +993,7 @@ _bt_strategy(FindSplitData *state, SplitPoint *leftpage,
 	 * If page is entirely full of duplicates, a single value strategy split
 	 * will be performed.
 	 */
-	perfectpenalty = _bt_keep_natts_fast(state->rel, leftmost, rightmost);
+	perfectpenalty = nbts_call(_bt_keep_natts_fast, state->rel, leftmost, rightmost);
 	if (perfectpenalty <= indnkeyatts)
 	{
 		*strategy = SPLIT_MANY_DUPLICATES;
@@ -1031,8 +1031,8 @@ _bt_strategy(FindSplitData *state, SplitPoint *leftpage,
 
 		itemid = PageGetItemId(state->origpage, P_HIKEY);
 		hikey = (IndexTuple) PageGetItem(state->origpage, itemid);
-		perfectpenalty = _bt_keep_natts_fast(state->rel, hikey,
-											 state->newitem);
+		perfectpenalty = nbts_call(_bt_keep_natts_fast, state->rel, hikey,
+								   state->newitem);
 		if (perfectpenalty <= indnkeyatts)
 			*strategy = SPLIT_SINGLE_VALUE;
 		else
@@ -1154,7 +1154,7 @@ _bt_split_penalty(FindSplitData *state, SplitPoint *split)
 	lastleft = _bt_split_lastleft(state, split);
 	firstright = _bt_split_firstright(state, split);
 
-	return _bt_keep_natts_fast(state->rel, lastleft, firstright);
+	return nbts_call(_bt_keep_natts_fast, state->rel, lastleft, firstright);
 }
 
 /*

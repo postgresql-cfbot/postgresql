@@ -901,6 +901,31 @@ large groups of duplicates, maximizing space utilization.  Note also that
 deduplication more efficient.  Deduplication can be performed infrequently,
 without merging together existing posting list tuples too often.
 
+
+Notes about dynamic prefix truncation
+-------------------------------------
+
+Because NBTrees have a sorted keyspace, when we have determined that some
+prefixing columns of tuples on both sides of the tuple that is being
+compared are equal to the scankey, then the current tuple must also share
+this prefix with the scankey. This allows us to skip comparing those columns,
+potentially saving cycles.
+
+We can only use this constraint if we have proven this information while we
+hold a pin on the page, so this is only useful on the page level: Concurrent
+page deletions and splits may have moved the keyspace of the page referenced
+by an inner page to the right. If we re-used high- and low-column-prefixes,
+we would not be able to detect a change of keyspace from e.g. (2,2) to (1,2),
+and subsequently return invalid results. This race condition can only be
+prevented by re-establishing the prefix-equal-columns for each page.
+
+The positive part of this, is that we already have results of the highest
+value of a page: a pages' highkey is compared to the scankey while we have
+a pin on the page in the _bt_moveright procedure. The _bt_binsrch procedure
+will use this result as a rightmost prefix compare, and for each step in the
+binary search (that does not compare less than the insert key) improve the
+equal-prefix bounds.
+
 Notes about deduplication
 -------------------------
 
@@ -1040,6 +1065,28 @@ new item even begins.  We'd end up having to handle posting list splits
 that need a page split anyway.  Besides, supporting variable "split points"
 while splitting posting lists won't actually improve overall space
 utilization.
+
+
+Notes about nbtree call specialization
+--------------------------------------
+
+Attribute iteration is a significant overhead for multi-column indexes.
+We can avoid it by specializing performance-sensitive search functions
+and calling those selectively.  Additionally, we update the entry points
+in the index AM to call the specialized functions, increasing the
+performance of those hot paths.  This performance benefit is at the cost
+of binary size, so this feature can be disabled by defining NBTS_DISABLED.
+
+Optimized code paths exist for the following cases, in order of preference:
+ - single-column indexes
+   NB: The code paths of this optimization do not support multiple key columns.
+ - multi-column indexes that could benefit from the attcacheoff optimization
+   NB: This is also used for the default case, and is slow for uncachable
+   attribute offsets.
+
+Future work will optimize for multi-column indexes that don't benefit
+from the attcacheoff optimization by improving on the O(n^2) nature of
+index_getattr through storing attribute offsets.
 
 Notes About Data Representation
 -------------------------------

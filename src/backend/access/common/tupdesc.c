@@ -919,3 +919,100 @@ BuildDescFromLists(List *names, List *types, List *typmods, List *collations)
 
 	return desc;
 }
+
+/*
+ * PopulateTupleDescCacheOffsets
+ *
+ * Populate the attcacheoff fields of a TupleDesc, returning the last
+ * attcacheoff with a valid value.
+ *
+ * Sets attcacheoff to -2 for uncacheable attributes (i.e. attributes after a
+ * variable length attributes).
+ */
+AttrNumber
+PopulateTupleDescCacheOffsets(TupleDesc desc)
+{
+	int			numberOfAttributes = desc->natts;
+	AttrNumber	i, j;
+
+	if (TupleDescAttr(desc, desc->natts - 1)->attcacheoff != -1)
+	{
+		/*
+		 * Already done the calculations, find the last attribute that has
+		 * cache offset.
+		 */
+		for (i = (AttrNumber) numberOfAttributes; i > 1; i--)
+		{
+			if (TupleDescAttr(desc, i - 1)->attcacheoff != -2)
+				return i;
+		}
+
+		return 1;
+	}
+
+	/*
+	 * First attribute always starts at offset zero.
+	 */
+	TupleDescAttr(desc, 0)->attcacheoff = 0;
+
+	i = 1;
+	/*
+	 * Someone might have set some offsets previously.
+	 * Skip all positive offsets to get to the first attribute without
+	 * attcacheoff.
+	 */
+	while (i < numberOfAttributes && TupleDescAttr(desc, i)->attcacheoff > 0)
+		i++;
+
+	/* Cache offset is undetermined. Start calculating offsets if possible */
+	if (i < numberOfAttributes &&
+		TupleDescAttr(desc, i)->attcacheoff == -1)
+	{
+		Form_pg_attribute att = TupleDescAttr(desc, i - 1);
+		Size off = att->attcacheoff;
+
+		if (att->attlen >= 0) {
+			off += att->attlen;
+
+			while (i < numberOfAttributes)
+			{
+				att = TupleDescAttr(desc, i);
+
+				if (att->attlen < 0)
+				{
+					if (off == att_align_nominal(off, att->attalign))
+						att->attcacheoff = off;
+					else
+						att->attcacheoff = -2;
+					i++;
+					break;
+				}
+
+				off = att_align_nominal(off, att->attalign);
+				att->attcacheoff = off;
+				off += att->attlen;
+				i++;
+			}
+		} else {
+			if (off == att_align_nominal(off, att->attalign))
+				att->attcacheoff = off;
+			else
+				att->attcacheoff = -2;
+			i++;
+		}
+	}
+
+	/*
+	 * No cacheable offsets left. Fill the rest with -2s, but return the latest
+	 * cached offset.
+	 */
+	j = i;
+
+	while (i < numberOfAttributes)
+	{
+		TupleDescAttr(desc, i)->attcacheoff = -2;
+		i++;
+	}
+
+	return j;
+}

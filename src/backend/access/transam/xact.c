@@ -1361,6 +1361,7 @@ RecordTransactionCommit(void)
 	else
 	{
 		bool		replorigin;
+		XLogRecPtr	commit_lsn;
 
 		/*
 		 * Are we using the replication origins feature?  Or, in other words,
@@ -1398,7 +1399,7 @@ RecordTransactionCommit(void)
 
 		SetCurrentTransactionStopTimestamp();
 
-		XactLogCommitRecord(xactStopTimestamp,
+		commit_lsn = XactLogCommitRecord(xactStopTimestamp,
 							nchildren, children, nrels, rels,
 							ndroppedstats, droppedstats,
 							nmsgs, invalMessages,
@@ -1427,6 +1428,7 @@ RecordTransactionCommit(void)
 		TransactionTreeSetCommitTsData(xid, nchildren, children,
 									   replorigin_session_origin_timestamp,
 									   replorigin_session_origin);
+		MyProc->lastCommitLSN = commit_lsn;
 	}
 
 	/*
@@ -5939,6 +5941,8 @@ xact_redo_commit(xl_xact_parsed_commit *parsed,
 	/* Set the transaction commit timestamp and metadata */
 	TransactionTreeSetCommitTsData(xid, parsed->nsubxacts, parsed->subxacts,
 								   commit_time, origin_id);
+
+	MyProc->lastCommitLSN = lsn;
 
 	if (standbyState == STANDBY_DISABLED)
 	{

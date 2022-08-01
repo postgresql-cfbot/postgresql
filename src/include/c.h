@@ -190,6 +190,10 @@
 #define pg_attribute_noreturn()
 #endif
 
+#if defined(_MSC_VER)
+#define pg_attribute_aligned(a) __declspec(align(a))
+#endif
+
 /*
  * Use "pg_attribute_always_inline" in place of "inline" for functions that
  * we wish to force inlining of, even when the compiler's heuristics would

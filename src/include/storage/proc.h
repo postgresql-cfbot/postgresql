@@ -295,6 +295,16 @@ struct PGPROC
 	PGPROC	   *lockGroupLeader;	/* lock group leader, if I'm a member */
 	dlist_head	lockGroupMembers;	/* list of members, if I'm a leader */
 	dlist_node	lockGroupLink;	/* my member link, if I'm a member */
+
+	/*
+	 * Last transaction metadata.
+	 */
+#ifndef pg_attribute_aligned
+	char	*pad[PG_CACHE_LINE_SIZE];
+#else
+	pg_attribute_aligned(PG_CACHE_LINE_SIZE)
+#endif
+	XLogRecPtr	lastCommitLSN;		/* cache of last committed LSN */
 };
 
 /* NOTE: "typedef struct PGPROC PGPROC" appears in storage/lock.h. */

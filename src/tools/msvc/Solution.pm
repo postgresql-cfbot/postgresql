@@ -358,6 +358,7 @@ sub GenerateFiles
 		HAVE_SHM_OPEN                            => undef,
 		HAVE_SOCKLEN_T                           => 1,
 		HAVE_SPINLOCKS                           => 1,
+		HAVE_SSL_CTX_SET_CERT_CB                 => undef,
 		HAVE_STDBOOL_H                           => 1,
 		HAVE_STDINT_H                            => 1,
 		HAVE_STDLIB_H                            => 1,
@@ -544,6 +545,13 @@ sub GenerateFiles
 		$define{USE_OPENSSL} = 1;
 
 		my ($digit1, $digit2, $digit3) = $self->GetOpenSSLVersion();
+
+		if (   ($digit1 >= '3' && $digit2 >= '0' && $digit3 >= '0')
+			|| ($digit1 >= '1' && $digit2 >= '1' && $digit3 >= '0')
+			|| ($digit1 >= '1' && $digit2 >= '0' && $digit3 >= '2'))
+		{
+			$define{HAVE_SSL_CTX_SET_CERT_CB} = 1;
+		}
 
 		# More symbols are needed with OpenSSL 1.1.0 and above.
 		if (   ($digit1 >= '3' && $digit2 >= '0' && $digit3 >= '0')

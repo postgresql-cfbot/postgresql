@@ -128,8 +128,10 @@ static int	ldapServiceLookup(const char *purl, PQconninfoOption *options,
 #define DefaultTargetSessionAttrs	"any"
 #ifdef USE_SSL
 #define DefaultSSLMode "prefer"
+#define DefaultSSLCertMode "allow"
 #else
 #define DefaultSSLMode	"disable"
+#define DefaultSSLCertMode "disable"
 #endif
 #ifdef ENABLE_GSS
 #include "fe-gssapi-common.h"
@@ -286,6 +288,10 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 		"SSL-Client-Key", "", 64,
 	offsetof(struct pg_conn, sslkey)},
 
+	{"sslcertmode", "PGSSLCERTMODE", NULL, NULL,
+		"SSL-Client-Cert-Mode", "", 8, /* sizeof("disable") == 8 */
+	offsetof(struct pg_conn, sslcertmode)},
+
 	{"sslpassword", NULL, NULL, NULL,
 		"SSL-Client-Key-Password", "*", 20,
 	offsetof(struct pg_conn, sslpassword)},
@@ -309,6 +315,10 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 	{"requirepeer", "PGREQUIREPEER", NULL, NULL,
 		"Require-Peer", "", 10,
 	offsetof(struct pg_conn, requirepeer)},
+
+	{"require_auth", "PGREQUIREAUTH", NULL, NULL,
+		"Require-Auth", "", 14, /* sizeof("scram-sha-256") == 14 */
+	offsetof(struct pg_conn, require_auth)},
 
 	{"ssl_min_protocol_version", "PGSSLMINPROTOCOLVERSION", "TLSv1.2", NULL,
 		"SSL-Minimum-Protocol-Version", "", 8,	/* sizeof("TLSv1.x") == 8 */
@@ -1248,6 +1258,166 @@ connectOptions2(PGconn *conn)
 	}
 
 	/*
+	 * parse and validate require_auth option
+	 */
+	if (conn->require_auth)
+	{
+		char	   *s = conn->require_auth;
+		bool		first, more;
+		bool		negated = false;
+
+		/*
+		 * By default, start from an empty set of allowed options and add to it.
+		 */
+		conn->auth_required = true;
+		conn->allowed_auth_methods = 0;
+
+		for (first = true, more = true; more; first = false)
+		{
+			char	   *method, *part;
+			uint32		bits;
+
+			part = parse_comma_separated_list(&s, &more);
+			if (part == NULL)
+				goto oom_error;
+
+			/*
+			 * Check for negation, e.g. '!password'. If one element is negated,
+			 * they all have to be.
+			 */
+			method = part;
+			if (*method == '!')
+			{
+				if (first)
+				{
+					/*
+					 * Switch to a permissive set of allowed options, and
+					 * subtract from it.
+					 */
+					conn->auth_required = false;
+					conn->allowed_auth_methods = -1;
+				}
+				else if (!negated)
+				{
+					conn->status = CONNECTION_BAD;
+					appendPQExpBuffer(&conn->errorMessage,
+									  libpq_gettext("negative require_auth method \"%s\" cannot be mixed with non-negative methods"),
+									  method);
+
+					free(part);
+					return false;
+				}
+
+				negated = true;
+				method++;
+			}
+			else if (negated)
+			{
+				conn->status = CONNECTION_BAD;
+				appendPQExpBuffer(&conn->errorMessage,
+								  libpq_gettext("require_auth method \"%s\" cannot be mixed with negative methods"),
+								  method);
+
+				free(part);
+				return false;
+			}
+
+			if (strcmp(method, "password") == 0)
+			{
+				bits = (1 << AUTH_REQ_PASSWORD);
+			}
+			else if (strcmp(method, "md5") == 0)
+			{
+				bits = (1 << AUTH_REQ_MD5);
+			}
+			else if (strcmp(method, "gss") == 0)
+			{
+				bits = (1 << AUTH_REQ_GSS);
+				bits |= (1 << AUTH_REQ_GSS_CONT);
+			}
+			else if (strcmp(method, "sspi") == 0)
+			{
+				bits = (1 << AUTH_REQ_SSPI);
+				bits |= (1 << AUTH_REQ_GSS_CONT);
+			}
+			else if (strcmp(method, "scram-sha-256") == 0)
+			{
+				/* This currently assumes that SCRAM is the only SASL method. */
+				bits = (1 << AUTH_REQ_SASL);
+				bits |= (1 << AUTH_REQ_SASL_CONT);
+				bits |= (1 << AUTH_REQ_SASL_FIN);
+			}
+			else if (strcmp(method, "none") == 0)
+			{
+				/*
+				 * Special case: let the user explicitly allow (or disallow)
+				 * connections where the server does not send an explicit
+				 * authentication challenge, such as "trust" and "cert" auth.
+				 */
+				if (negated) /* "!none" */
+				{
+					if (conn->auth_required)
+						goto duplicate;
+
+					conn->auth_required = true;
+				}
+				else /* "none" */
+				{
+					if (!conn->auth_required)
+						goto duplicate;
+
+					conn->auth_required = false;
+				}
+
+				free(part);
+				continue; /* avoid the bitmask manipulation below */
+			}
+			else
+			{
+				conn->status = CONNECTION_BAD;
+				appendPQExpBuffer(&conn->errorMessage,
+								  libpq_gettext("invalid require_auth method: \"%s\""),
+								  method);
+
+				free(part);
+				return false;
+			}
+
+			/* Update the bitmask. */
+			if (negated)
+			{
+				if ((conn->allowed_auth_methods & bits) == 0)
+					goto duplicate;
+
+				conn->allowed_auth_methods &= ~bits;
+			}
+			else
+			{
+				if ((conn->allowed_auth_methods & bits) == bits)
+					goto duplicate;
+
+				conn->allowed_auth_methods |= bits;
+			}
+
+			free(part);
+			continue;
+
+duplicate:
+			/*
+			 * A duplicated method probably indicates a typo in a setting where
+			 * typos are extremely risky.
+			 */
+			conn->status = CONNECTION_BAD;
+			appendPQExpBuffer(&conn->errorMessage,
+							  libpq_gettext("require_auth method \"%s\" is specified more than once"),
+							  part);
+
+			free(part);
+			return false;
+		}
+	}
+
+	/*
 	 * validate channel_binding option
 	 */
 	if (conn->channel_binding)
@@ -1355,6 +1525,55 @@ connectOptions2(PGconn *conn)
 		appendPQExpBufferStr(&conn->errorMessage,
 							 libpq_gettext("invalid SSL protocol version range\n"));
 		return false;
+	}
+
+	/*
+	 * validate sslcertmode option
+	 */
+	if (conn->sslcertmode)
+	{
+		if (strcmp(conn->sslcertmode, "disable") != 0 &&
+			strcmp(conn->sslcertmode, "allow") != 0 &&
+			strcmp(conn->sslcertmode, "require") != 0)
+		{
+			conn->status = CONNECTION_BAD;
+			appendPQExpBuffer(&conn->errorMessage,
+							  libpq_gettext("invalid %s value: \"%s\"\n"),
+							  "sslcertmode",
+							  conn->sslcertmode);
+			return false;
+		}
+#ifndef USE_SSL
+		if (strcmp(conn->sslcertmode, "require") == 0)
+		{
+			conn->status = CONNECTION_BAD;
+			appendPQExpBuffer(&conn->errorMessage,
+							  libpq_gettext("sslcertmode value \"%s\" invalid when SSL support is not compiled in\n"),
+							  conn->sslcertmode);
+			return false;
+		}
+#endif
+#ifndef HAVE_SSL_CTX_SET_CERT_CB
+		/*
+		 * Without a certificate callback, the current implementation can't
+		 * figure out if a certficate was actually requested, so "require" is
+		 * useless.
+		 */
+		if (strcmp(conn->sslcertmode, "require") == 0)
+		{
+			conn->status = CONNECTION_BAD;
+			appendPQExpBuffer(&conn->errorMessage,
+							  libpq_gettext("sslcertmode value \"%s\" is not supported (check OpenSSL version)\n"),
+							  conn->sslcertmode);
+			return false;
+		}
+#endif
+	}
+	else
+	{
+		conn->sslcertmode = strdup(DefaultSSLCertMode);
+		if (!conn->sslcertmode)
+			goto oom_error;
 	}
 
 	/*

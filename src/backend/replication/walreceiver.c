@@ -472,10 +472,9 @@ WalReceiverMain(void)
 						else if (len < 0)
 						{
 							ereport(LOG,
-									(errmsg("replication terminated by primary server"),
-									 errdetail("End of WAL reached on timeline %u at %X/%X.",
-											   startpointTLI,
-											   LSN_FORMAT_ARGS(LogstreamResult.Write))));
+									errmsg("replication terminated by primary server at %X/%X on timeline %u.",
+										   LSN_FORMAT_ARGS(LogstreamResult.Write),
+										   startpointTLI));
 							endofwal = true;
 							break;
 						}

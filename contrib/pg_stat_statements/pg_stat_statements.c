@@ -154,6 +154,18 @@ typedef struct pgssHashKey
 } pgssHashKey;
 
 /*
+ * This secondary hash table also maintains the location data
+ * of a queryid in the external file. By maintaining this separate mapping,
+ * we minimize the overhead of normalizing/storing multiple versions of
+ * the same query if the query is issued in different databases,
+ * by different users, or tracking level.
+ */
+typedef struct qtextHashKey
+{
+	uint64		queryid;		/* query identifier */
+} qtextHashKey;
+
+/*
  * The actual stats counters kept within pgssEntry.
  */
 typedef struct Counters
@@ -229,6 +241,21 @@ typedef struct pgssEntry
 } pgssEntry;
 
 /*
+ * Location of query in external file
+ *
+ * Note: A qtextEntry remains in sync with pgssHash, both hash will track
+ * the same queryid's. The routine responsible for keeping them in sync
+ * is qtext_hash_sync(), which is called only when an exclusive lock
+ * is held on pgss->lock.
+ */
+typedef struct qtextEntry
+{
+	qtextHashKey key;           /* hash key of entry - MUST BE FIRST */
+	Size        query_offset;   /* query text offset in external file */
+	int         query_len;      /* # of valid bytes in query string, or -1 */
+} qtextEntry;
+
+/*
  * Global shared state
  */
 typedef struct pgssSharedState
@@ -265,6 +292,7 @@ static ProcessUtility_hook_type prev_ProcessUtility = NULL;
 /* Links to shared memory state */
 static pgssSharedState *pgss = NULL;
 static HTAB *pgss_hash = NULL;
+static HTAB *qtext_hash = NULL;
 
 /*---- GUC variables ----*/
 
@@ -350,6 +378,7 @@ static Size pgss_memsize(void);
 static pgssEntry *entry_alloc(pgssHashKey *key, Size query_offset, int query_len,
 							  int encoding, bool sticky);
 static void entry_dealloc(void);
+static void qtext_hash_sync(void);
 static bool qtext_store(const char *query, int query_len,
 						Size *query_offset, int *gc_count);
 static char *qtext_load_file(Size *buffer_size);
@@ -514,6 +543,7 @@ pgss_shmem_startup(void)
 	/* reset in case this is a restart within the postmaster */
 	pgss = NULL;
 	pgss_hash = NULL;
+	qtext_hash = NULL;
 
 	/*
 	 * Create or attach to the shared memory state, including hash table
@@ -544,6 +574,13 @@ pgss_shmem_startup(void)
 							  pgss_max, pgss_max,
 							  &info,
 							  HASH_ELEM | HASH_BLOBS);
+
+	info.keysize = sizeof(qtextHashKey);
+	info.entrysize = sizeof(qtextEntry);
+	qtext_hash = ShmemInitHash("pg_stat_statements query text hash",
+							   pgss_max, pgss_max,
+							   &info,
+							   HASH_ELEM | HASH_BLOBS);
 
 	LWLockRelease(AddinShmemInitLock);
 
@@ -654,6 +691,13 @@ pgss_shmem_startup(void)
 		entry->counters = temp.counters;
 	}
 
+	/*
+	 * now that we have the pgss_hash entries,
+	 * let's sync up with the qtext_hash with
+	 * all of our queryid's.
+	 */
+	qtext_hash_sync();
+
 	/* Read global statistics for pg_stat_statements */
 	if (fread(&pgss->stats, sizeof(pgssGlobalStats), 1, file) != 1)
 		goto read_error;
@@ -733,7 +777,7 @@ pgss_shmem_shutdown(int code, Datum arg)
 		return;
 
 	/* Safety check ... shouldn't get here unless shmem is set up. */
-	if (!pgss || !pgss_hash)
+	if (!pgss || !pgss_hash || !qtext_hash)
 		return;
 
 	/* Don't dump if told not to. */
@@ -824,7 +868,7 @@ pgss_post_parse_analyze(ParseState *pstate, Query *query, JumbleState *jstate)
 		prev_post_parse_analyze_hook(pstate, query, jstate);
 
 	/* Safety check... */
-	if (!pgss || !pgss_hash || !pgss_enabled(exec_nested_level))
+	if (!pgss || !pgss_hash || !qtext_hash || !pgss_enabled(exec_nested_level))
 		return;
 
 	/*
@@ -1223,7 +1267,7 @@ pgss_store(const char *query, uint64 queryId,
 	Assert(query != NULL);
 
 	/* Safety check... */
-	if (!pgss || !pgss_hash)
+	if (!pgss || !pgss_hash || !qtext_hash)
 		return;
 
 	/*
@@ -1232,13 +1276,6 @@ pgss_store(const char *query, uint64 queryId,
 	 */
 	if (queryId == UINT64CONST(0))
 		return;
-
-	/*
-	 * Confine our attention to the relevant part of the string, if the query
-	 * is a portion of a multi-statement source string, and update query
-	 * location and length if needed.
-	 */
-	query = CleanQuerytext(query, &query_location, &query_len);
 
 	/* Set up key for hashtable search */
 
@@ -1258,56 +1295,106 @@ pgss_store(const char *query, uint64 queryId,
 	/* Create new entry, if not present */
 	if (!entry)
 	{
-		Size		query_offset;
+		Size		query_offset = 0;
 		int			gc_count;
 		bool		stored;
-		bool		do_gc;
+		bool		do_gc = false;
+		qtextEntry		*qentry;
 
 		/*
-		 * Create a new, normalized query string if caller asked.  We don't
-		 * need to hold the lock while doing this work.  (Note: in any case,
-		 * it's possible that someone else creates a duplicate hashtable entry
-		 * in the interval where we don't hold the lock below.  That case is
-		 * handled by entry_alloc.)
+		 * for our queryid, If we can find the offet and length in the
+		 * qtext_hash, we can allocate a new entry in pgss_hash using this
+		 * information.
 		 */
-		if (jstate)
+		qentry = hash_search(qtext_hash, &key.queryid, HASH_FIND, NULL);
+
+		if (!qentry)
+		{
+			/*
+			 * Confine our attention to the relevant part of the string, if the query
+			 * is a portion of a multi-statement source string, and update query
+			 * location and length if needed.
+			 *
+			 * Note: This must only be done if we plan on adding the query
+			 * text to the external query file.
+			 */
+			query = CleanQuerytext(query, &query_location, &query_len);
+
+			/*
+			 * Create a new, normalized query string if caller asked.  We don't
+			 * need to hold the lock while doing this work.  (Note: in any case,
+			 * it's possible that someone else creates a duplicate hashtable entry
+			 * in the interval where we don't hold the lock below.  That case is
+			 * handled by entry_alloc.)
+			 */
+			if (jstate)
+			{
+				LWLockRelease(pgss->lock);
+				norm_query = generate_normalized_query(jstate, query,
+													   query_location,
+													   &query_len);
+				LWLockAcquire(pgss->lock, LW_SHARED);
+			}
+
+			/* Append new query text to file with only shared lock held */
+			stored = qtext_store(norm_query ? norm_query : query, query_len,
+								 &query_offset, &gc_count);
+
+			/*
+			 * Determine whether we need to garbage collect external query texts
+			 * while the shared lock is still held.  This micro-optimization
+			 * avoids taking the time to decide this while holding exclusive lock.
+			 */
+			do_gc = need_gc_qtexts();
+
+			/* Need exclusive lock to make a new hashtable entry - promote */
+			LWLockRelease(pgss->lock);
+			LWLockAcquire(pgss->lock, LW_EXCLUSIVE);
+
+			{
+				/*
+				 * If we reach max entries in qtext_hash, we
+				 * can call entry_dealloc which will deallocate
+				 * pgss_hash entries and resync qtext_hash.
+				 * if we are maxed out on entries in qtext_hash,
+				 * we will also be maxed out in pgss_hash.
+				 * We are not likely to invoke entry_dealloc()
+				 * during entry_alloc() if we deallocate here.
+				 */
+				while (hash_get_num_entries(qtext_hash) >= pgss_max)
+					entry_dealloc();
+
+				qentry = (qtextEntry *) hash_search(qtext_hash, &key.queryid, HASH_ENTER, NULL);
+
+				if (qentry)
+				{
+					qentry->query_offset = query_offset;
+					qentry->query_len = query_len;
+				}
+			}
+
+			/*
+			 * A garbage collection may have occurred while we weren't holding the
+			 * lock.  In the unlikely event that this happens, the query text we
+			 * stored above will have been garbage collected, so write it again.
+			 * This should be infrequent enough that doing it while holding
+			 * exclusive lock isn't a performance problem.
+			 */
+			if (!stored || pgss->gc_count != gc_count)
+				stored = qtext_store(norm_query ? norm_query : query, query_len,
+									 &query_offset, NULL);
+
+			/* If we failed to write to the text file, give up */
+			if (!stored)
+				goto done;
+		} else
 		{
 			LWLockRelease(pgss->lock);
-			norm_query = generate_normalized_query(jstate, query,
-												   query_location,
-												   &query_len);
-			LWLockAcquire(pgss->lock, LW_SHARED);
+			LWLockAcquire(pgss->lock, LW_EXCLUSIVE);
+
+			query_offset = qentry->query_offset;
+			query_len = qentry->query_len;
 		}
-
-		/* Append new query text to file with only shared lock held */
-		stored = qtext_store(norm_query ? norm_query : query, query_len,
-							 &query_offset, &gc_count);
-
-		/*
-		 * Determine whether we need to garbage collect external query texts
-		 * while the shared lock is still held.  This micro-optimization
-		 * avoids taking the time to decide this while holding exclusive lock.
-		 */
-		do_gc = need_gc_qtexts();
-
-		/* Need exclusive lock to make a new hashtable entry - promote */
-		LWLockRelease(pgss->lock);
-		LWLockAcquire(pgss->lock, LW_EXCLUSIVE);
-
-		/*
-		 * A garbage collection may have occurred while we weren't holding the
-		 * lock.  In the unlikely event that this happens, the query text we
-		 * stored above will have been garbage collected, so write it again.
-		 * This should be infrequent enough that doing it while holding
-		 * exclusive lock isn't a performance problem.
-		 */
-		if (!stored || pgss->gc_count != gc_count)
-			stored = qtext_store(norm_query ? norm_query : query, query_len,
-								 &query_offset, NULL);
-
-		/* If we failed to write to the text file, give up */
-		if (!stored)
-			goto done;
 
 		/* OK to create a new hashtable entry */
 		entry = entry_alloc(&key, query_offset, query_len, encoding,
@@ -1547,7 +1634,7 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 	is_allowed_role = has_privs_of_role(userid, ROLE_PG_READ_ALL_STATS);
 
 	/* hash table must exist already */
-	if (!pgss || !pgss_hash)
+	if (!pgss || !pgss_hash || !qtext_hash)
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 errmsg("pg_stat_statements must be loaded via shared_preload_libraries")));
@@ -1855,7 +1942,7 @@ pg_stat_statements_info(PG_FUNCTION_ARGS)
 	Datum		values[PG_STAT_STATEMENTS_INFO_COLS] = {0};
 	bool		nulls[PG_STAT_STATEMENTS_INFO_COLS] = {0};
 
-	if (!pgss || !pgss_hash)
+	if (!pgss || !pgss_hash || !qtext_hash)
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 errmsg("pg_stat_statements must be loaded via shared_preload_libraries")));
@@ -1889,6 +1976,7 @@ pgss_memsize(void)
 
 	size = MAXALIGN(sizeof(pgssSharedState));
 	size = add_size(size, hash_estimate_size(pgss_max, sizeof(pgssEntry)));
+	size = add_size(size, hash_estimate_size(pgss_max, sizeof(qtextEntry)));
 
 	return size;
 }
@@ -2033,6 +2121,13 @@ entry_dealloc(void)
 		hash_search(pgss_hash, &entries[i]->key, HASH_REMOVE, NULL);
 	}
 
+	/*
+	 * Now that we removed entries from pgss_hash,
+	 * let's resync qtext_hash with the remaining
+	 * querys
+	 */
+	qtext_hash_sync();
+
 	pfree(entries);
 
 	/* Increment the number of times entries are deallocated */
@@ -2045,6 +2140,35 @@ entry_dealloc(void)
 	}
 }
 
+/*
+ * synchronize qtext_hash with pgss_hash
+ */
+static void
+qtext_hash_sync(void)
+{
+	HASH_SEQ_STATUS qhash_seq;
+	HASH_SEQ_STATUS hash_seq;
+	qtextEntry  *qentry;
+	pgssEntry *entry;
+	qtextHashKey qkey;
+
+	hash_seq_init(&qhash_seq, qtext_hash);
+	while ((qentry = hash_seq_search(&qhash_seq)) != NULL)
+	{
+		hash_search(qtext_hash, &qentry->key, HASH_REMOVE, NULL);
+	}
+
+	hash_seq_init(&hash_seq, pgss_hash);
+	while ((entry = hash_seq_search(&hash_seq)) != NULL)
+	{
+		qkey.queryid = entry->key.queryid;
+
+		qentry = hash_search(qtext_hash, &qkey, HASH_ENTER, NULL);
+
+		qentry->query_offset = entry->query_offset;
+		qentry->query_len = entry->query_len;
+	}
+}
 /*
  * Given a query string (not necessarily null-terminated), allocate a new
  * entry in the external query text file and store the string there.
@@ -2432,6 +2556,14 @@ gc_qtexts(void)
 	 */
 	record_gc_qtexts();
 
+	/*
+	 * Resync qtext_hash with pgss_hash
+	 *
+	 * We only do this after we remove all entries from pgss_hash since
+	 * we have a clean external query file.
+	 */
+	qtext_hash_sync();
+
 	return;
 
 gc_fail:
@@ -2497,7 +2629,7 @@ entry_reset(Oid userid, Oid dbid, uint64 queryid)
 	long		num_remove = 0;
 	pgssHashKey key;
 
-	if (!pgss || !pgss_hash)
+	if (!pgss || !pgss_hash || !qtext_hash)
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 errmsg("pg_stat_statements must be loaded via shared_preload_libraries")));
@@ -2552,6 +2684,12 @@ entry_reset(Oid userid, Oid dbid, uint64 queryid)
 			num_remove++;
 		}
 	}
+
+	/*
+	 * We have a clean external file, let's resync
+	 * qtext_hash with pgss_hash.
+	 */
+	qtext_hash_sync();
 
 	/* All entries are removed? */
 	if (num_entries != num_remove)

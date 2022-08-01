@@ -644,7 +644,10 @@ CREATE [ UNIQUE ] INDEX [ CONCURRENTLY ] [ [ IF NOT EXISTS ] <replaceable class=
    <para>
     If a problem arises while scanning the table, such as a deadlock or a
     uniqueness violation in a unique index, the <command>CREATE INDEX</command>
-    command will fail but leave behind an <quote>invalid</quote> index. This index
+    command will fail but leave behind an <quote>invalid</quote> index.
+    If this happens while creating index concurrently on a partitioned
+    table, the command can also leave behind <quote>valid</quote> or
+    <quote>invalid</quote> indexes on table partitions.  The invalid index
     will be ignored for querying purposes because it might be incomplete;
     however it will still consume update overhead. The <application>psql</application>
     <command>\d</command> command will report such an index as <literal>INVALID</literal>:
@@ -689,15 +692,6 @@ Indexes:
     that a regular <command>CREATE INDEX</command> command can be performed
     within a transaction block, but <command>CREATE INDEX CONCURRENTLY</command>
     cannot.
-   </para>
-
-   <para>
-    Concurrent builds for indexes on partitioned tables are currently not
-    supported.  However, you may concurrently build the index on each
-    partition individually and then finally create the partitioned index
-    non-concurrently in order to reduce the time where writes to the
-    partitioned table will be locked out.  In this case, building the
-    partitioned index is a metadata only operation.
    </para>
 
   </refsect2>

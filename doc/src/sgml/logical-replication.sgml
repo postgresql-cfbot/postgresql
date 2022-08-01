@@ -1384,6 +1384,17 @@ CONTEXT:  processing remote data for replication origin "pg_16395" during "INSER
   </para>
 
   <para>
+   Note that there are currently no privileges on publication, and that any
+   subscriber can access any publication. Thus if you're trying to hide some
+   information from particular subscribers (by using the
+   <literal>WHERE</literal> clause or the column list, or by not adding the
+   whole table to the publication), please be aware that other publications
+   can expose the same information. Publication privileges might be added
+   to <productname>PostgreSQL</productname> in the future to allow for
+   fine-grained access control.
+  </para>
+
+  <para>
    To create a subscription, the user must be a superuser.
   </para>
 

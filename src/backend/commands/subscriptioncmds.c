@@ -1794,25 +1794,70 @@ static List *
 fetch_table_list(WalReceiverConn *wrconn, List *publications)
 {
 	WalRcvExecResult *res;
-	StringInfoData cmd;
+	StringInfoData cmd,
+				pub_names;
 	TupleTableSlot *slot;
-	Oid			tableRow[3] = {TEXTOID, TEXTOID, NAMEARRAYOID};
+	Oid			tableRow[3] = {TEXTOID, TEXTOID, INT2VECTOROID};
 	List	   *tablelist = NIL;
-	bool		check_columnlist = (walrcv_server_version(wrconn) >= 150000);
+	int			server_version = walrcv_server_version(wrconn);
+	bool		check_columnlist = (server_version >= 150000);
+
+	initStringInfo(&pub_names);
+	get_publications_str(publications, &pub_names, true);
 
 	initStringInfo(&cmd);
-	appendStringInfoString(&cmd, "SELECT DISTINCT t.schemaname, t.tablename \n");
 
 	/* Get column lists for each relation if the publisher supports it */
-	if (check_columnlist)
-		appendStringInfoString(&cmd, ", t.attnames\n");
+	if (server_version >= 160000)
+		appendStringInfo(&cmd, "SELECT DISTINCT n.nspname, c.relname,\n"
+						 "              ( CASE WHEN (array_length(gpt.attrs, 1) = c.relnatts)\n"
+						 "                     THEN NULL ELSE gpt.attrs END\n"
+						 "              ) AS attnames\n"
+						 " FROM pg_class c\n"
+						 "   JOIN pg_namespace n ON n.oid = c.relnamespace\n"
+						 "   JOIN ( SELECT (pg_get_publication_tables(VARIADIC array_agg(pubname::text))).*\n"
+						 "          FROM pg_publication\n"
+						 "          WHERE pubname IN ( %s )) as gpt\n"
+						 "       ON gpt.relid = c.oid\n",
+						 pub_names.data);
+	else
+	{
+		/*
+		 * Get the list of tables from publisher, the partition table whose
+		 * ancestor is also in this list should be ignored, otherwise the
+		 * initial data in the partition table would be replicated twice.
+		 */
 
-	appendStringInfoString(&cmd, "FROM pg_catalog.pg_publication_tables t\n"
-						   " WHERE t.pubname IN (");
-	get_publications_str(publications, &cmd, true);
-	appendStringInfoChar(&cmd, ')');
+		appendStringInfoString(&cmd, "WITH pub_tabs AS(\n"
+							   " SELECT DISTINCT N.nspname, C.oid, C.relname, C.relispartition\n");
+
+		/* Get column lists for each relation if the publisher supports it */
+		if (check_columnlist)
+			appendStringInfoString(&cmd, ",( CASE WHEN (array_length(gpt.attrs, 1) = c.relnatts)\n"
+								   "              THEN NULL ELSE gpt.attrs END\n"
+								   "       ) AS attnames\n");
+
+		appendStringInfo(&cmd, " FROM pg_publication P,\n"
+						 "      LATERAL pg_get_publication_tables(P.pubname) GPT,\n"
+						 "      pg_class C JOIN pg_namespace N ON (N.oid = C.relnamespace)\n"
+						 "  WHERE C.oid = GPT.relid AND P.pubname IN ( %s )\n"
+						 ")\n"
+						 "SELECT DISTINCT pub_tabs.nspname, pub_tabs.relname\n",
+						 pub_names.data);
+
+		/* Get column lists for each relation if the publisher supports it */
+		if (check_columnlist)
+			appendStringInfoString(&cmd, ", pub_tabs.attnames\n");
+
+		appendStringInfoString(&cmd, "FROM pub_tabs\n"
+							   " WHERE (pub_tabs.relispartition IS FALSE\n"
+							   "  OR NOT EXISTS (SELECT 1 FROM pg_partition_ancestors(pub_tabs.oid) as pa\n"
+							   "                  WHERE pa.relid IN (SELECT pub_tabs.oid FROM pub_tabs)\n"
+							   "                   AND pa.relid != pub_tabs.oid))\n");
+	}
 
 	res = walrcv_exec(wrconn, cmd.data, check_columnlist ? 3 : 2, tableRow);
+	pfree(pub_names.data);
 	pfree(cmd.data);
 
 	if (res->status != WALRCV_OK_TUPLES)

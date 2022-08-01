@@ -1356,42 +1356,56 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
    </para>
 
    <para>
-    When a column is added with <literal>ADD COLUMN</literal> and a
-    non-volatile <literal>DEFAULT</literal> is specified, the default is
-    evaluated at the time of the statement and the result stored in the
-    table's metadata.  That value will be used for the column for all existing
-    rows.  If no <literal>DEFAULT</literal> is specified, NULL is used.  In
-    neither case is a rewrite of the table required.
+    The following alterations of the table require the entire table to be rewritten
+    and its indexes to be rebuilt. These operations will temporarily require disk
+    space for both the old and new tables along with all of their indexes. For a
+    large table those operations may take a significant amount of time.
    </para>
 
    <para>
-    Adding a column with a volatile <literal>DEFAULT</literal> or
-    changing the type of an existing column will require the entire table and
-    its indexes to be rewritten. As an exception, when changing the type of an
-    existing column, if the <literal>USING</literal> clause does not change
-    the column contents and the old type is either binary coercible to the new
-    type or an unconstrained domain over the new type, a table rewrite is not
-    needed. However, indexes must always be rebuilt unless the system can
+    Changing the type of an existing column will require the entire table and its
+    indexes to be rewritten. As an exception, if the <literal>USING</literal> clause
+    does not change the column contents and the old type is either binary coercible
+    to the new type or an unconstrained domain over the new type, a table rewrite is
+    not needed. However, indexes must always be rebuilt unless the system can
     verify that the new index would be logically equivalent to the existing
     one.  For example, if the collation for a column has been changed an index
     rebuild is always required because the new sort order might be different.
     However, in the absence of a collation change, a column can be changed
     from <type>text</type> to <type>varchar</type> (or vice versa) without
     rebuilding the indexes because these data types sort identically.
-    Table and/or index rebuilds may take a
-    significant amount of time for a large table; and will temporarily require
-    as much as double the disk space.
    </para>
 
    <para>
-    Adding a <literal>CHECK</literal> or <literal>NOT NULL</literal> constraint requires
-    scanning the table to verify that existing rows meet the constraint,
-    but does not require a table rewrite.
+    Adding a column with a volatile <literal>DEFAULT</literal> also requires the
+    entire table and its indexes to be rewritten. A non-volatile (or absent, in
+    which case <literal>NULL</literal> is used) <literal>DEFAULT</literal> is
+    evaluated at the time of the statement and the result is stored in the table's
+    metadata, thus avoiding the rewrite requirement.
    </para>
 
    <para>
-    Similarly, when attaching a new partition it may be scanned to verify that
-    existing rows meet the partition constraint.
+    The following alterations of the table require that it be scanned in its entirety
+    to ensure that no existing values are contrary to the new constraints placed on
+    the table. Constraints backed by indexes will scan the table as a side-effect of
+    populating the new index with data.
+   </para>
+
+   <para>
+    Adding either a CHECK constraint or a <literal>NOT NULL</literal> constraint on
+    an existing column requires scanning the table to verify that existing rows meet
+    the constraint.
+   </para>
+
+   <para>
+    Adding a foreign key constraint requires scanning the table to verify that all
+    existing values exist in the referenced table.
+   </para>
+
+   <para>
+    Attaching a new partition may require scanning the table to verify that existing
+    rows meet the partition constraint. See <xref linkend="sql-altertable-attach-partition"/>
+    for more details.
    </para>
 
    <para>

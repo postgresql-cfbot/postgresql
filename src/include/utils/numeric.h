@@ -73,7 +73,12 @@ extern char *numeric_out_sci(Numeric num, int scale);
 extern char *numeric_normalize(Numeric num);
 
 extern Numeric int64_to_numeric(int64 val);
+extern int64 numeric_to_int64(Numeric num);
+extern int64 numeric_to_int64_type(Numeric num, char *typeName);
 extern Numeric int64_div_fast_to_numeric(int64 val1, int log10val2);
+extern uint64 numeric_to_uint64_type(Numeric num, char *typeName);
+extern Numeric float8_to_numeric(float8 val);
+extern float8 numeric_to_float8(Numeric num);
 
 extern Numeric numeric_add_opt_error(Numeric num1, Numeric num2,
 									 bool *have_error);

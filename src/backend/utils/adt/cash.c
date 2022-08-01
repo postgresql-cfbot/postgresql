@@ -1069,7 +1069,10 @@ cash_numeric(PG_FUNCTION_ARGS)
 											Int32GetDatum(fpoint));
 
 		/* Now we can safely divide ... */
-		quotient = DirectFunctionCall2(numeric_div, result, numeric_scale);
+		quotient =
+			NumericGetDatum(numeric_div_opt_error(DatumGetNumeric(result),
+												  DatumGetNumeric(numeric_scale),
+												  NULL));
 
 		/* ... and forcibly round to exactly the intended number of digits */
 		result = DirectFunctionCall2(numeric_round,
@@ -1086,12 +1089,12 @@ cash_numeric(PG_FUNCTION_ARGS)
 Datum
 numeric_cash(PG_FUNCTION_ARGS)
 {
-	Datum		amount = PG_GETARG_DATUM(0);
+	Numeric		amount = PG_GETARG_NUMERIC(0);
 	Cash		result;
 	int			fpoint;
 	int64		scale;
 	int			i;
-	Datum		numeric_scale;
+	Numeric		numeric_scale;
 	struct lconv *lconvert = PGLC_localeconv();
 
 	/* see comments about frac_digits in cash_in() */
@@ -1105,11 +1108,11 @@ numeric_cash(PG_FUNCTION_ARGS)
 		scale *= 10;
 
 	/* multiply the input amount by scale factor */
-	numeric_scale = NumericGetDatum(int64_to_numeric(scale));
-	amount = DirectFunctionCall2(numeric_mul, amount, numeric_scale);
+	numeric_scale = int64_to_numeric(scale);
+	amount = numeric_mul_opt_error(amount, numeric_scale, NULL);
 
-	/* note that numeric_int8 will round to nearest integer for us */
-	result = DatumGetInt64(DirectFunctionCall1(numeric_int8, amount));
+	/* note that numeric_to_int64 will round to nearest integer for us */
+	result = numeric_to_int64_type(amount, "money");
 
 	PG_RETURN_CASH(result);
 }

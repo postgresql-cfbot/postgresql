@@ -174,17 +174,10 @@ gbt_numeric_penalty(PG_FUNCTION_ARGS)
 	ok = gbt_var_key_readable(org);
 	uk = gbt_var_key_readable((GBT_VARKEY *) DatumGetPointer(uni));
 
-	us = DatumGetNumeric(DirectFunctionCall2(numeric_sub,
-											 PointerGetDatum(uk.upper),
-											 PointerGetDatum(uk.lower)));
+	us = numeric_sub_opt_error((Numeric) uk.upper, (Numeric) uk.lower, NULL);
+	os = numeric_sub_opt_error((Numeric) ok.upper, (Numeric) ok.lower, NULL);
 
-	os = DatumGetNumeric(DirectFunctionCall2(numeric_sub,
-											 PointerGetDatum(ok.upper),
-											 PointerGetDatum(ok.lower)));
-
-	ds = DatumGetNumeric(DirectFunctionCall2(numeric_sub,
-											 NumericGetDatum(us),
-											 NumericGetDatum(os)));
+	ds = numeric_sub_opt_error(us, os, NULL);
 
 	if (numeric_is_nan(us))
 	{
@@ -202,9 +195,7 @@ gbt_numeric_penalty(PG_FUNCTION_ARGS)
 		if (DirectFunctionCall2(numeric_gt, NumericGetDatum(ds), NumericGetDatum(nul)))
 		{
 			*result += FLT_MIN;
-			os = DatumGetNumeric(DirectFunctionCall2(numeric_div,
-													 NumericGetDatum(ds),
-													 NumericGetDatum(us)));
+			os = numeric_div_opt_error(ds, us, NULL);
 			*result += (float4) DatumGetFloat8(DirectFunctionCall1(numeric_float8_no_overflow, NumericGetDatum(os)));
 		}
 	}

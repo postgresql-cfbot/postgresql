@@ -238,9 +238,7 @@ SV_to_JsonbValue(SV *in, JsonbParseState **jsonb_state, bool is_elem)
 							 errmsg("cannot convert NaN to jsonb")));
 
 				out.type = jbvNumeric;
-				out.val.numeric =
-					DatumGetNumeric(DirectFunctionCall1(float8_numeric,
-														Float8GetDatum(nval)));
+				out.val.numeric = float8_to_numeric(nval);
 			}
 			else if (SvPOK(in))
 			{

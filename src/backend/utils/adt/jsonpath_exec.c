@@ -1150,8 +1150,8 @@ executeItemOptUnwrapTarget(JsonPathExecContext *cxt, JsonPathItem *jsp,
 
 					jb = &jbv;
 					jb->type = jbvNumeric;
-					jb->val.numeric = DatumGetNumeric(DirectFunctionCall1(float8_numeric,
-																		  Float8GetDatum(val)));
+					jb->val.numeric = float8_to_numeric(val);
+
 					res = jperOk;
 				}
 

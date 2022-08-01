@@ -472,6 +472,7 @@ static Oid	AuthenticatedUserId = InvalidOid;
 static Oid	SessionUserId = InvalidOid;
 static Oid	OuterUserId = InvalidOid;
 static Oid	CurrentUserId = InvalidOid;
+static const char *SystemUser = NULL;
 
 /* We also have to remember the superuser state of some of these levels */
 static bool AuthenticatedUserIsSuperuser = false;
@@ -541,6 +542,16 @@ SetSessionUserId(Oid userid, bool is_superuser)
 	/* We force the effective user IDs to match, too */
 	OuterUserId = userid;
 	CurrentUserId = userid;
+}
+
+/*
+ * Return the system user representing the authenticated identity.
+ * It is defined in InitializeSystemUser() as auth_method:authn_id.
+ */
+const char *
+GetSystemUser(void)
+{
+	return SystemUser;
 }
 
 /*
@@ -813,6 +824,32 @@ InitializeSessionUserIdStandalone(void)
 	SetSessionUserId(BOOTSTRAP_SUPERUSERID, true);
 }
 
+/*
+ * Initialize the system user during normal backend startup.
+ */
+void
+InitializeSystemUser(const Port *port)
+{
+	/* call only once */
+	Assert(SystemUser == NULL);
+
+	if (port->authn_id)
+	{
+		/* Build sysuser as auth_method:authn_id */
+		char *system_user;
+		Size authname_len = strlen(hba_authname(port->hba->auth_method));
+		Size authn_id_len = strlen(port->authn_id);
+
+		system_user = palloc0(authname_len + authn_id_len + 2);
+		strcat(system_user, hba_authname(port->hba->auth_method));
+		strcat(system_user, ":");
+		strcat(system_user, port->authn_id);
+
+		/* Store SystemUser in long-lived storage */
+		SystemUser = MemoryContextStrdup(TopMemoryContext, system_user);
+		pfree(system_user);
+	}
+}
 
 /*
  * Change session auth ID while running
@@ -929,6 +966,53 @@ GetUserNameFromId(Oid roleid, bool noerr)
 		ReleaseSysCache(tuple);
 	}
 	return result;
+}
+
+/*
+ * Calculate the space needed to serialize SystemUser.
+ */
+Size
+EstimateSystemUserSpace(void)
+{
+	Size		size = 1;
+	const char	*sysuser = GetSystemUser();
+
+	if (sysuser)
+		size = add_size(size, strlen(sysuser) + 1);
+
+	return size;
+}
+
+/*
+ * Serialize SystemUser for use by parallel workers.
+ */
+void
+SerializeSystemUser(Size maxsize, char *start_address)
+{
+	const char 	*sysuser = GetSystemUser();
+
+	Assert(maxsize > 0);
+
+	if (sysuser)
+	{
+		Size len;
+		len = strlcpy(start_address, sysuser, maxsize) + 1;
+		Assert(len <= maxsize);
+		start_address += len;
+	}
+	start_address[0] = '\0';
+}
+
+/*
+ * Restore SystemUser from its serialized representation.
+ */
+void
+RestoreSystemUser(char *sysuser)
+{
+	if (sysuser[0] == '\0')
+		SystemUser = NULL;
+	else
+		SystemUser = MemoryContextStrdup(TopMemoryContext, sysuser);
 }
 
 

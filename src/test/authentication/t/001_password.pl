@@ -72,6 +72,13 @@ $node->safe_psql('postgres',
 $node->safe_psql('postgres',
 	"SET password_encryption='md5'; CREATE ROLE md5_role LOGIN PASSWORD 'pass';"
 );
+# Set up a table for SYSTEM_USER parallel worker testing.
+$node->safe_psql('postgres',
+    'CREATE TABLE nulls (n) AS SELECT NULL FROM generate_series(1, 200000);'
+);
+$node->safe_psql('postgres',
+    'GRANT SELECT ON nulls TO md5_role;'
+);
 $ENV{"PGPASSWORD"} = 'pass';
 
 # For "trust" method, all users should be able to connect. These users are not
@@ -81,6 +88,24 @@ test_role($node, 'scram_role', 'trust', 0,
 	log_unlike => [qr/connection authenticated:/]);
 test_role($node, 'md5_role', 'trust', 0,
 	log_unlike => [qr/connection authenticated:/]);
+
+# Test SYSTEM_USER is null when not authenticated.
+my $res =
+  $node->safe_psql('postgres', "SELECT SYSTEM_USER IS NULL;");
+is($res, 't', "users with trust authentication have NULL SYSTEM_USER");
+
+# Test SYSTEM_USER with parallel workers.
+$res = $node->safe_psql(
+    'postgres', '
+        SET min_parallel_table_scan_size TO 0;
+        SET parallel_setup_cost TO 0;
+        SET parallel_tuple_cost TO 0;
+        SET max_parallel_workers_per_gather TO 2;
+
+        SELECT bool_and(SYSTEM_USER IS NOT DISTINCT FROM n) FROM nulls;
+    ',
+    connstr => "user=md5_role");
+is($res, 't', "parallel workers return a null SYSTEM_USER when not authenticated");
 
 # For plain "password" method, all users should also be able to connect.
 reset_pg_hba($node, 'password');

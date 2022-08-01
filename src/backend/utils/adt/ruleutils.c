@@ -9348,6 +9348,9 @@ get_rule_expr(Node *node, deparse_context *context,
 					case SVFOP_SESSION_USER:
 						appendStringInfoString(buf, "SESSION_USER");
 						break;
+					case SVFOP_SYSTEM_USER:
+						appendStringInfoString(buf, "SYSTEM_USER");
+						break;
 					case SVFOP_CURRENT_CATALOG:
 						appendStringInfoString(buf, "CURRENT_CATALOG");
 						break;

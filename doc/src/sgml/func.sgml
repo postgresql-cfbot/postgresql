@@ -23666,6 +23666,23 @@ SELECT * FROM pg_ls_dir('.') WITH ORDINALITY AS t(ls,n);
       <row>
        <entry role="func_table_entry"><para role="func_signature">
         <indexterm>
+         <primary>system_user</primary>
+        </indexterm>
+        <function>system_user</function>
+        <returnvalue>name</returnvalue>
+       </para>
+       <para>
+        Returns the authentication method and the identity (if any) that the
+        user presented during the authentication cycle, before they were
+        assigned a database role. It is represented as 'auth_method:identity' or
+        is NULL if the user has not actually been authenticated (for example if
+        the <xref linkend="auth-trust"/> has been used).
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
          <primary>session_user</primary>
         </indexterm>
         <function>session_user</function>

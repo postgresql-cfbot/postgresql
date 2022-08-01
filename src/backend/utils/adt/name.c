@@ -257,7 +257,7 @@ namestrcmp(Name name, const char *str)
 
 
 /*
- * SQL-functions CURRENT_USER, SESSION_USER
+ * SQL-functions CURRENT_USER, SESSION_USER, SYSTEM_USER
  */
 Datum
 current_user(PG_FUNCTION_ARGS)
@@ -271,6 +271,16 @@ session_user(PG_FUNCTION_ARGS)
 	PG_RETURN_DATUM(DirectFunctionCall1(namein, CStringGetDatum(GetUserNameFromId(GetSessionUserId(), false))));
 }
 
+Datum
+system_user(PG_FUNCTION_ARGS)
+{
+	const char   *sysuser = GetSystemUser();
+
+	if (sysuser)
+		PG_RETURN_DATUM(DirectFunctionCall1(namein, CStringGetDatum(sysuser)));
+	else
+		PG_RETURN_NULL();
+}
 
 /*
  * SQL-functions CURRENT_SCHEMA, CURRENT_SCHEMAS

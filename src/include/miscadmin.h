@@ -356,6 +356,10 @@ extern void InitializeSessionUserIdStandalone(void);
 extern void SetSessionAuthorization(Oid userid, bool is_superuser);
 extern Oid	GetCurrentRoleId(void);
 extern void SetCurrentRoleId(Oid roleid, bool is_superuser);
+/* kluge to avoid including libpq/libpq-be.h here */
+struct Port;
+extern void InitializeSystemUser(const struct Port *port);
+extern const char* GetSystemUser(void);
 
 /* in utils/misc/superuser.c */
 extern bool superuser(void);	/* current user is superuser */
@@ -480,6 +484,10 @@ extern bool has_rolreplication(Oid roleid);
 
 typedef void (*shmem_request_hook_type) (void);
 extern PGDLLIMPORT shmem_request_hook_type shmem_request_hook;
+
+extern Size EstimateSystemUserSpace(void);
+extern void SerializeSystemUser(Size maxsize, char *start_address);
+extern void RestoreSystemUser(char *sysuser);
 
 /* in executor/nodeHash.c */
 extern size_t get_hash_memory_limit(void);

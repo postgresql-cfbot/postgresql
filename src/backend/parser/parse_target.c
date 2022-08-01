@@ -1916,6 +1916,9 @@ FigureColnameInternal(Node *node, char **name)
 				case SVFOP_SESSION_USER:
 					*name = "session_user";
 					return 2;
+				case SVFOP_SYSTEM_USER:
+					*name = "system_user";
+					return 2;
 				case SVFOP_CURRENT_CATALOG:
 					*name = "current_catalog";
 					return 2;

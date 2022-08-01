@@ -2545,6 +2545,11 @@ ExecEvalSQLValueFunction(ExprState *state, ExprEvalStep *op)
 			*op->resvalue = session_user(fcinfo);
 			*op->resnull = fcinfo->isnull;
 			break;
+		case SVFOP_SYSTEM_USER:
+			InitFunctionCallInfoData(*fcinfo, NULL, 0, InvalidOid, NULL, NULL);
+			*op->resvalue = system_user(fcinfo);
+			*op->resnull = fcinfo->isnull;
+			break;
 		case SVFOP_CURRENT_CATALOG:
 			InitFunctionCallInfoData(*fcinfo, NULL, 0, InvalidOid, NULL, NULL);
 			*op->resvalue = current_database(fcinfo);

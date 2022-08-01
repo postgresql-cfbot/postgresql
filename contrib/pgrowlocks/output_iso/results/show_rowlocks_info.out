@@ -1,0 +1,17 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1b s1u1 s2_rowlocks s1c s2_rowlocks
+step s1b: BEGIN;
+step s1u1: UPDATE t1 SET c1 = 2 WHERE c1 = 1;
+step s2_rowlocks: select locked_row, multi, modes from pgrowlocks('t1');
+locked_row|multi|modes            
+----------+-----+-----------------
+(0,1)     |f    |{"No Key Update"}
+(1 row)
+
+step s1c: COMMIT;
+step s2_rowlocks: select locked_row, multi, modes from pgrowlocks('t1');
+locked_row|multi|modes
+----------+-----+-----
+(0 rows)
+

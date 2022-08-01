@@ -9,6 +9,9 @@ EXTENSION = pgrowlocks
 DATA = pgrowlocks--1.2.sql pgrowlocks--1.1--1.2.sql pgrowlocks--1.0--1.1.sql
 PGFILEDESC = "pgrowlocks - display row locking information"
 
+REGRESS = pgrowlocks
+ISOLATION = show_rowlocks_info
+
 ifdef USE_PGXS
 PG_CONFIG = pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)

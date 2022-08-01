@@ -15,7 +15,11 @@
 
 #ifdef WIN32
 
+#define UMDF_USING_NTSTATUS
+
 #include "c.h"
+#include "port/win32ntdll.h"
+
 #include <windows.h>
 
 /*
@@ -107,12 +111,10 @@ fileinfo_to_stat(HANDLE hFile, struct stat *buf)
 }
 
 /*
- * Windows implementation of stat().
- *
- * This currently also implements lstat(), though perhaps that should change.
+ * Windows implementation of lstat().
  */
 int
-_pgstat64(const char *name, struct stat *buf)
+_pglstat64(const char *name, struct stat *buf)
 {
 	/*
 	 * Our open wrapper will report STATUS_DELETE_PENDING as ENOENT.  We
@@ -129,7 +131,76 @@ _pgstat64(const char *name, struct stat *buf)
 
 	ret = fileinfo_to_stat(hFile, buf);
 
+	/*
+	 * Unfortunately it's not possible for fileinfo_to_stat() to see a
+	 * FILE_ATTRIBUTE_REPARSE_POINT flag with just a handle, so at this point
+	 * junction points appear as directories.  Ask for the full attributes
+	 * while we still have the handle open.  Someone else can unlink the file
+	 * while we have it open, but they can't create another file with the same
+	 * name.
+	 */
+	if (ret == 0 && S_ISDIR(buf->st_mode))
+	{
+		DWORD		attr;
+
+		attr = GetFileAttributes(name);
+		if (attr == INVALID_FILE_ATTRIBUTES)
+		{
+			DWORD		err;
+
+			/* If it's been unlinked since we opened it, report as ENOENT. */
+			err = GetLastError();
+			if (err == ERROR_ACCESS_DENIED &&
+				pg_RtlGetLastNtStatus() == STATUS_DELETE_PENDING)
+				errno = ENOENT;
+			else
+				_dosmaperr(err);
+
+			ret = -1;
+		}
+		else if (attr & FILE_ATTRIBUTE_REPARSE_POINT)
+		{
+			buf->st_mode &= ~S_IFDIR;
+			buf->st_mode |= S_IFLNK;
+		}
+	}
+
 	CloseHandle(hFile);
+	return ret;
+}
+
+/*
+ * Windows implementation of stat().
+ */
+int
+_pgstat64(const char *name, struct stat *buf)
+{
+	int			ret;
+
+	ret = _pglstat64(name, buf);
+
+	/* Do we need to follow a symlink (junction point)? */
+	if (ret == 0 && S_ISLNK(buf->st_mode))
+	{
+		char		next[MAXPGPATH];
+
+		if (readlink(name, next, sizeof(next)) < 0)
+			return -1;
+
+		ret = _pglstat64(next, buf);
+		if (ret == 0 && S_ISLNK(buf->st_mode))
+		{
+			/*
+			 * We're only prepared to go one hop, because we only expect to
+			 * deal with the simple cases that we create.  The error for too
+			 * many symlinks is supposed to be ELOOP, but Windows hasn't got
+			 * it.
+			 */
+			errno = EIO;
+			return -1;
+		}
+	}
+
 	return ret;
 }
 

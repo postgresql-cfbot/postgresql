@@ -1081,6 +1081,8 @@ get_ext_ver_info(const char *versionname, List **evi_list)
 	foreach(lc, *evi_list)
 	{
 		evi = (ExtensionVersionInfo *) lfirst(lc);
+		if (strcmp(evi->name, "%") == 0)
+			return evi;
 		if (strcmp(evi->name, versionname) == 0)
 			return evi;
 	}

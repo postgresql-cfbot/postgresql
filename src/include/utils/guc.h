@@ -145,6 +145,8 @@ typedef struct ConfigVariable
 	struct ConfigVariable *next;
 } ConfigVariable;
 
+extern char **GetDirConfFiles(const char *includedir, const char *calling_file,
+							  int elevel, int *num_filenames, char **err_msg);
 extern bool ParseConfigFile(const char *config_file, bool strict,
 							const char *calling_file, int calling_lineno,
 							int depth, int elevel,

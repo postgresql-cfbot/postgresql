@@ -701,6 +701,122 @@ GUC_flex_fatal(const char *msg)
 }
 
 /*
+ * Returns the list of config files located in a directory, in alphabetical
+ * order.
+ *
+ * We don't check for recursion or too-deep nesting depth here, its up to the
+ * caller to take care of that.
+ */
+char **
+GetDirConfFiles(const char *includedir, const char *calling_file, int elevel,
+				int *num_filenames, char **err_msg)
+{
+	char	   *directory;
+	DIR		   *d;
+	struct dirent *de;
+	char	  **filenames;
+	int			size_filenames;
+
+	/*
+	 * Reject directory name that is all-blank (including empty), as that
+	 * leads to confusion --- we'd read the containing directory, typically
+	 * resulting in recursive inclusion of the same file(s).
+	 */
+	if (strspn(includedir, " \t\r\n") == strlen(includedir))
+	{
+		ereport(elevel,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("empty configuration directory name: \"%s\"",
+						includedir)));
+		*err_msg = "empty configuration directory name";
+		return NULL;
+	}
+
+	directory = AbsoluteConfigLocation(includedir, calling_file);
+	d = AllocateDir(directory);
+	if (d == NULL)
+	{
+		ereport(elevel,
+				(errcode_for_file_access(),
+				 errmsg("could not open configuration directory \"%s\": %m",
+						directory)));
+		*err_msg = psprintf("could not open directory \"%s\"", directory);
+		filenames = NULL;
+		goto cleanup;
+	}
+
+	/*
+	 * Read the directory and put the filenames in an array, so we can sort
+	 * them prior to caller processing the contents.
+	 */
+	size_filenames = 32;
+	filenames = (char **) palloc(size_filenames * sizeof(char *));
+	*num_filenames = 0;
+
+	while ((de = ReadDir(d, directory)) != NULL)
+	{
+		struct stat st;
+		char		filename[MAXPGPATH];
+
+		/*
+		 * Only parse files with names ending in ".conf".  Explicitly reject
+		 * files starting with ".".  This excludes things like "." and "..",
+		 * as well as typical hidden files, backup files, and editor debris.
+		 */
+		if (strlen(de->d_name) < 6)
+			continue;
+		if (de->d_name[0] == '.')
+			continue;
+		if (strcmp(de->d_name + strlen(de->d_name) - 5, ".conf") != 0)
+			continue;
+
+		join_path_components(filename, directory, de->d_name);
+		canonicalize_path(filename);
+		if (stat(filename, &st) == 0)
+		{
+			/* Ignore directories. */
+			if (S_ISDIR(st.st_mode))
+				continue;
+
+			/* Add file to array, increasing its size in blocks of 32 */
+			if (*num_filenames >= size_filenames)
+			{
+				size_filenames += 32;
+				filenames = (char **) repalloc(filenames,
+										size_filenames * sizeof(char *));
+			}
+			filenames[*num_filenames] = pstrdup(filename);
+			(*num_filenames)++;
+		}
+		else
+		{
+			/*
+			 * stat does not care about permissions, so the most likely reason
+			 * a file can't be accessed now is if it was removed between the
+			 * directory listing and now.
+			 */
+			ereport(elevel,
+					(errcode_for_file_access(),
+					 errmsg("could not stat file \"%s\": %m",
+							filename)));
+			*err_msg = psprintf("could not stat file \"%s\"", filename);
+			pfree(filenames);
+			filenames = NULL;
+			goto cleanup;
+		}
+	}
+
+	if (*num_filenames > 0)
+		qsort(filenames, *num_filenames, sizeof(char *), pg_qsort_strcmp);
+
+cleanup:
+	if (d)
+		FreeDir(d);
+	pfree(directory);
+	return filenames;
+}
+
+/*
  * Read and parse a single configuration file.  This function recurses
  * to handle "include" directives.
  *
@@ -961,138 +1077,32 @@ ParseConfigDirectory(const char *includedir,
 					 ConfigVariable **head_p,
 					 ConfigVariable **tail_p)
 {
-	char	   *directory;
-	DIR		   *d;
-	struct dirent *de;
+	char	   *err_msg;
 	char	  **filenames;
 	int			num_filenames;
-	int			size_filenames;
-	bool		status;
 
-	/*
-	 * Reject directory name that is all-blank (including empty), as that
-	 * leads to confusion --- we'd read the containing directory, typically
-	 * resulting in recursive inclusion of the same file(s).
-	 */
-	if (strspn(includedir, " \t\r\n") == strlen(includedir))
+	filenames = GetDirConfFiles(includedir, calling_file, elevel,
+							   &num_filenames, &err_msg);
+
+	if (!filenames)
 	{
-		ereport(elevel,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("empty configuration directory name: \"%s\"",
-						includedir)));
-		record_config_file_error("empty configuration directory name",
-								 calling_file, calling_lineno,
-								 head_p, tail_p);
+		record_config_file_error(err_msg, calling_file, calling_lineno, head_p,
+								 tail_p);
 		return false;
 	}
 
-	/*
-	 * We don't check for recursion or too-deep nesting depth here; the
-	 * subsequent calls to ParseConfigFile will take care of that.
-	 */
-
-	directory = AbsoluteConfigLocation(includedir, calling_file);
-	d = AllocateDir(directory);
-	if (d == NULL)
+	for (int i = 0; i < num_filenames; i++)
 	{
-		ereport(elevel,
-				(errcode_for_file_access(),
-				 errmsg("could not open configuration directory \"%s\": %m",
-						directory)));
-		record_config_file_error(psprintf("could not open directory \"%s\"",
-										  directory),
-								 calling_file, calling_lineno,
-								 head_p, tail_p);
-		status = false;
-		goto cleanup;
-	}
-
-	/*
-	 * Read the directory and put the filenames in an array, so we can sort
-	 * them prior to processing the contents.
-	 */
-	size_filenames = 32;
-	filenames = (char **) palloc(size_filenames * sizeof(char *));
-	num_filenames = 0;
-
-	while ((de = ReadDir(d, directory)) != NULL)
-	{
-		struct stat st;
-		char		filename[MAXPGPATH];
-
-		/*
-		 * Only parse files with names ending in ".conf".  Explicitly reject
-		 * files starting with ".".  This excludes things like "." and "..",
-		 * as well as typical hidden files, backup files, and editor debris.
-		 */
-		if (strlen(de->d_name) < 6)
-			continue;
-		if (de->d_name[0] == '.')
-			continue;
-		if (strcmp(de->d_name + strlen(de->d_name) - 5, ".conf") != 0)
-			continue;
-
-		join_path_components(filename, directory, de->d_name);
-		canonicalize_path(filename);
-		if (stat(filename, &st) == 0)
+		if (!ParseConfigFile(filenames[i], true,
+							 calling_file, calling_lineno,
+							 depth, elevel,
+							 head_p, tail_p))
 		{
-			if (!S_ISDIR(st.st_mode))
-			{
-				/* Add file to array, increasing its size in blocks of 32 */
-				if (num_filenames >= size_filenames)
-				{
-					size_filenames += 32;
-					filenames = (char **) repalloc(filenames,
-											size_filenames * sizeof(char *));
-				}
-				filenames[num_filenames] = pstrdup(filename);
-				num_filenames++;
-			}
-		}
-		else
-		{
-			/*
-			 * stat does not care about permissions, so the most likely reason
-			 * a file can't be accessed now is if it was removed between the
-			 * directory listing and now.
-			 */
-			ereport(elevel,
-					(errcode_for_file_access(),
-					 errmsg("could not stat file \"%s\": %m",
-							filename)));
-			record_config_file_error(psprintf("could not stat file \"%s\"",
-											  filename),
-									 calling_file, calling_lineno,
-									 head_p, tail_p);
-			status = false;
-			goto cleanup;
+			return false;
 		}
 	}
 
-	if (num_filenames > 0)
-	{
-		int			i;
-
-		qsort(filenames, num_filenames, sizeof(char *), pg_qsort_strcmp);
-		for (i = 0; i < num_filenames; i++)
-		{
-			if (!ParseConfigFile(filenames[i], true,
-								 calling_file, calling_lineno,
-								 depth, elevel,
-								 head_p, tail_p))
-			{
-				status = false;
-				goto cleanup;
-			}
-		}
-	}
-	status = true;
-
-cleanup:
-	if (d)
-		FreeDir(d);
-	pfree(directory);
-	return status;
+	return true;
 }
 
 /*

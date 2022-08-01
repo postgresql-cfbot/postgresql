@@ -179,7 +179,28 @@ ReplicationSlotShmemExit(int code, Datum arg)
 {
 	/* Make sure active replication slots are released */
 	if (MyReplicationSlot != NULL)
+	{
+		bool is_physical;
+		char slotname[NAMEDATALEN] = {0};
+
+		is_physical = SlotIsPhysical(MyReplicationSlot);
+		strcpy(slotname, NameStr(MyReplicationSlot->data.name));
+
 		ReplicationSlotRelease();
+
+		if (is_physical)
+		{
+			ereport(log_replication_commands ? LOG : DEBUG3,
+					(errmsg("released physical replication slot \"%s\"",
+							slotname)));
+		}
+		else
+		{
+			ereport(log_replication_commands ? LOG : DEBUG3,
+					(errmsg("released logical replication slot \"%s\"",
+							slotname)));
+		}
+	}
 
 	/* Also cleanup all the temporary slots. */
 	ReplicationSlotCleanup();

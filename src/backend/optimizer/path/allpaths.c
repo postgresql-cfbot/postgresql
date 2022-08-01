@@ -684,11 +684,14 @@ set_rel_consider_parallel(PlannerInfo *root, RelOptInfo *rel,
 			 * inconsistent results at the top-level.  (In some cases, where
 			 * the result is ordered, we could relax this restriction.  But it
 			 * doesn't currently seem worth expending extra effort to do so.)
+			 * LATERAL is an exception: LIMIT/OFFSET is safe to execute within
+			 * workers since the sub-select is executed per tuple
 			 */
 			{
 				Query	   *subquery = castNode(Query, rte->subquery);
 
-				if (limit_needed(subquery))
+				if (limit_needed(subquery) &&
+					(!rte->lateral || bms_is_empty(rel->lateral_relids)))
 					return;
 			}
 			break;

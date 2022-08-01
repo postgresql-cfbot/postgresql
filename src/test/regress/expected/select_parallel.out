@@ -1040,6 +1040,21 @@ explain (costs off)
                            Filter: (stringu1 ~~ '%AAAA'::text)
 (11 rows)
 
+-- ...unless it's LATERAL
+savepoint settings;
+set parallel_tuple_cost=0;
+explain (costs off) select t.unique1 from tenk1 t
+join lateral (select t.unique1 from tenk1 offset 0) l on true;
+                             QUERY PLAN                              
+---------------------------------------------------------------------
+ Gather
+   Workers Planned: 4
+   ->  Nested Loop
+         ->  Parallel Index Only Scan using tenk1_unique1 on tenk1 t
+         ->  Index Only Scan using tenk1_hundred on tenk1
+(5 rows)
+
+rollback to savepoint settings;
 -- to increase the parallel query test coverage
 SAVEPOINT settings;
 SET LOCAL force_parallel_mode = 1;

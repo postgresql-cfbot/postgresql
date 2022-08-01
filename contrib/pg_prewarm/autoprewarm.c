@@ -345,7 +345,7 @@ apw_load_buffers(void)
 	{
 		unsigned	forknum;
 
-		if (fscanf(file, "%u,%u,%u,%u,%u\n", &blkinfo[i].database,
+		if (fscanf(file, "%u,%u," INT64_FORMAT ",%u,%u\n", &blkinfo[i].database,
 				   &blkinfo[i].tablespace, &blkinfo[i].filenumber,
 				   &forknum, &blkinfo[i].blocknum) != 5)
 			ereport(ERROR,
@@ -630,10 +630,12 @@ apw_dump_now(bool is_bgworker, bool dump_unlogged)
 		if (buf_state & BM_TAG_VALID &&
 			((buf_state & BM_PERMANENT) || dump_unlogged))
 		{
-			block_info_array[num_blocks].database = bufHdr->tag.rlocator.dbOid;
-			block_info_array[num_blocks].tablespace = bufHdr->tag.rlocator.spcOid;
-			block_info_array[num_blocks].filenumber = bufHdr->tag.rlocator.relNumber;
-			block_info_array[num_blocks].forknum = bufHdr->tag.forkNum;
+			block_info_array[num_blocks].database = bufHdr->tag.dbOid;
+			block_info_array[num_blocks].tablespace = bufHdr->tag.spcOid;
+			block_info_array[num_blocks].filenumber =
+				BufTagGetRelNumber(&bufHdr->tag);
+			block_info_array[num_blocks].forknum =
+				BufTagGetForkNum(&bufHdr->tag);
 			block_info_array[num_blocks].blocknum = bufHdr->tag.blockNum;
 			++num_blocks;
 		}
@@ -667,7 +669,7 @@ apw_dump_now(bool is_bgworker, bool dump_unlogged)
 	{
 		CHECK_FOR_INTERRUPTS();
 
-		ret = fprintf(file, "%u,%u,%u,%u,%u\n",
+		ret = fprintf(file, "%u,%u," INT64_FORMAT ",%u,%u\n",
 					  block_info_array[i].database,
 					  block_info_array[i].tablespace,
 					  block_info_array[i].filenumber,

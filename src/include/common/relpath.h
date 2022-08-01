@@ -28,6 +28,7 @@
 
 /* Characters to allow for an OID in a relation path */
 #define OIDCHARS		10		/* max chars printed by %u */
+#define RELNUMBERCHARS	20		/* max chars printed by %llu */
 
 /*
  * Stuff for fork names.

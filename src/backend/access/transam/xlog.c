@@ -4543,6 +4543,7 @@ BootStrapXLOG(void)
 	checkPoint.nextXid =
 		FullTransactionIdFromEpochAndXid(0, FirstNormalTransactionId);
 	checkPoint.nextOid = FirstGenbkiObjectId;
+	checkPoint.nextRelFileNumber = FirstNormalRelFileNumber;
 	checkPoint.nextMulti = FirstMultiXactId;
 	checkPoint.nextMultiOffset = 0;
 	checkPoint.oldestXid = FirstNormalTransactionId;
@@ -4556,7 +4557,10 @@ BootStrapXLOG(void)
 
 	ShmemVariableCache->nextXid = checkPoint.nextXid;
 	ShmemVariableCache->nextOid = checkPoint.nextOid;
+	ShmemVariableCache->nextRelFileNumber = checkPoint.nextRelFileNumber;
 	ShmemVariableCache->oidCount = 0;
+	ShmemVariableCache->loggedRelFileNumber = checkPoint.nextRelFileNumber;
+	ShmemVariableCache->loggedRelFileNumberRecPtr = InvalidXLogRecPtr;
 	MultiXactSetNextMXact(checkPoint.nextMulti, checkPoint.nextMultiOffset);
 	AdvanceOldestClogXid(checkPoint.oldestXid);
 	SetTransactionIdLimit(checkPoint.oldestXid, checkPoint.oldestXidDB);
@@ -5023,7 +5027,9 @@ StartupXLOG(void)
 	/* initialize shared memory variables from the checkpoint record */
 	ShmemVariableCache->nextXid = checkPoint.nextXid;
 	ShmemVariableCache->nextOid = checkPoint.nextOid;
+	ShmemVariableCache->nextRelFileNumber = checkPoint.nextRelFileNumber;
 	ShmemVariableCache->oidCount = 0;
+	ShmemVariableCache->loggedRelFileNumber = checkPoint.nextRelFileNumber;
 	MultiXactSetNextMXact(checkPoint.nextMulti, checkPoint.nextMultiOffset);
 	AdvanceOldestClogXid(checkPoint.oldestXid);
 	SetTransactionIdLimit(checkPoint.oldestXid, checkPoint.oldestXidDB);
@@ -6483,6 +6489,14 @@ CreateCheckPoint(int flags)
 		checkPoint.nextOid += ShmemVariableCache->oidCount;
 	LWLockRelease(OidGenLock);
 
+	LWLockAcquire(RelFileNumberGenLock, LW_SHARED);
+	if (shutdown)
+		checkPoint.nextRelFileNumber = ShmemVariableCache->nextRelFileNumber;
+	else
+		checkPoint.nextRelFileNumber = ShmemVariableCache->loggedRelFileNumber;
+
+	LWLockRelease(RelFileNumberGenLock);
+
 	MultiXactGetCheckptMulti(shutdown,
 							 &checkPoint.nextMulti,
 							 &checkPoint.nextMultiOffset,
@@ -7361,6 +7375,35 @@ XLogPutNextOid(Oid nextOid)
 }
 
 /*
+ * Similar to the XLogPutNextOid but instead of writing NEXTOID log record it
+ * writes a NEXT_RELFILENUMBER log record.  If '*prevrecptr' is a valid
+ * XLogRecPtrthen flush the wal upto this record pointer otherwise flush upto
+ * currently logged record.  Also store the currently logged record pointer in
+ * the '*prevrecptr' if prevrecptr is not NULL.
+ */
+void
+LogNextRelFileNumber(RelFileNumber nextrelnumber, XLogRecPtr *prevrecptr)
+{
+	XLogRecPtr	recptr;
+
+	XLogBeginInsert();
+	XLogRegisterData((char *) (&nextrelnumber), sizeof(RelFileNumber));
+	recptr = XLogInsert(RM_XLOG_ID, XLOG_NEXT_RELFILENUMBER);
+
+	/*
+	 * If a valid prevrecptr is passed then flush that xlog record to disk
+	 * otherwise flush the newly logged record.
+	 */
+	if ((prevrecptr != NULL) && !XLogRecPtrIsInvalid(*prevrecptr))
+		XLogFlush(*prevrecptr);
+	else
+		XLogFlush(recptr);
+
+	if (prevrecptr != NULL)
+		*prevrecptr = recptr;
+}
+
+/*
  * Write an XLOG SWITCH record.
  *
  * Here we just blindly issue an XLogInsert request for the record.
@@ -7575,6 +7618,16 @@ xlog_redo(XLogReaderState *record)
 		ShmemVariableCache->oidCount = 0;
 		LWLockRelease(OidGenLock);
 	}
+	if (info == XLOG_NEXT_RELFILENUMBER)
+	{
+		RelFileNumber nextRelFileNumber;
+
+		memcpy(&nextRelFileNumber, XLogRecGetData(record), sizeof(RelFileNumber));
+		LWLockAcquire(RelFileNumberGenLock, LW_EXCLUSIVE);
+		ShmemVariableCache->nextRelFileNumber = nextRelFileNumber;
+		ShmemVariableCache->loggedRelFileNumber = nextRelFileNumber;
+		LWLockRelease(RelFileNumberGenLock);
+	}
 	else if (info == XLOG_CHECKPOINT_SHUTDOWN)
 	{
 		CheckPoint	checkPoint;
@@ -7589,6 +7642,10 @@ xlog_redo(XLogReaderState *record)
 		ShmemVariableCache->nextOid = checkPoint.nextOid;
 		ShmemVariableCache->oidCount = 0;
 		LWLockRelease(OidGenLock);
+		LWLockAcquire(RelFileNumberGenLock, LW_EXCLUSIVE);
+		ShmemVariableCache->nextRelFileNumber = checkPoint.nextRelFileNumber;
+		ShmemVariableCache->loggedRelFileNumber = checkPoint.nextRelFileNumber;
+		LWLockRelease(RelFileNumberGenLock);
 		MultiXactSetNextMXact(checkPoint.nextMulti,
 							  checkPoint.nextMultiOffset);
 

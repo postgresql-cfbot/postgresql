@@ -48,11 +48,17 @@ typedef PG_INT64_TYPE pg_int64;
 
 /*
  * RelFileNumber data type identifies the specific relation file name.
+ * RelFileNumber is unique within a cluster.
  */
-typedef Oid RelFileNumber;
-#define InvalidRelFileNumber		((RelFileNumber) InvalidOid)
+typedef pg_int64 RelFileNumber;
+
+#define InvalidRelFileNumber		((RelFileNumber) 0)
 #define RelFileNumberIsValid(relnumber) \
 				((bool) ((relnumber) != InvalidRelFileNumber))
+#define atorelnumber(x) ((RelFileNumber) strtoul((x), NULL, 10))
+
+/* Max value of the relfilnumber, relfilnumber is 56 bits wide. */
+#define MAX_RELFILENUMBER		INT64CONST(0x00FFFFFFFFFFFFFF)
 
 /*
  * Identifiers of error message fields.  Kept here to keep common

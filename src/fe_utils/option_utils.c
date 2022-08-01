@@ -82,3 +82,42 @@ option_parse_int(const char *optarg, const char *optname,
 		*result = val;
 	return true;
 }
+
+/*
+ * option_parse_relfilenumber
+ *
+ * Parse relfilenumber value for an option.  If the parsing is successful,
+ * returns; if parsing fails, returns false.
+ */
+bool
+option_parse_relfilenumber(const char *optarg, const char *optname)
+{
+	char	   *endptr;
+	int64		val;
+
+	errno = 0;
+	val = strtoi64(optarg, &endptr, 10);
+
+	/*
+	 * Skip any trailing whitespace; if anything but whitespace remains before
+	 * the terminating character, fail.
+	 */
+	while (*endptr != '\0' && isspace((unsigned char) *endptr))
+		endptr++;
+
+	if (*endptr != '\0')
+	{
+		pg_log_error("invalid value \"%s\" for option %s",
+					 optarg, optname);
+		return false;
+	}
+
+	if (val < 0 || val > MAX_RELFILENUMBER)
+	{
+		pg_log_error("%s must be in range " INT64_FORMAT ".." INT64_FORMAT,
+					 optname, (RelFileNumber) 0, MAX_RELFILENUMBER);
+		return false;
+	}
+
+	return true;
+}

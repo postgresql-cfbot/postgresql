@@ -1378,22 +1378,30 @@ PG_FUNCTION_INFO_V1(dblink_cancel_query);
 Datum
 dblink_cancel_query(PG_FUNCTION_ARGS)
 {
-	int			res;
 	PGconn	   *conn;
-	PGcancel   *cancel;
-	char		errbuf[256];
+	PGconn	   *cancelConn;
+	char	   *msg;
 
 	dblink_init();
 	conn = dblink_get_named_conn(text_to_cstring(PG_GETARG_TEXT_PP(0)));
-	cancel = PQgetCancel(conn);
+	cancelConn = PQrequestCancelStart(conn);
+	if (PQstatus(cancelConn) == CONNECTION_BAD)
+	{
+		msg = pchomp(PQerrorMessage(cancelConn));
+		PQfinish(cancelConn);
+		PG_RETURN_TEXT_P(cstring_to_text(msg));
+	}
 
-	res = PQcancel(cancel, errbuf, 256);
-	PQfreeCancel(cancel);
-
-	if (res == 1)
-		PG_RETURN_TEXT_P(cstring_to_text("OK"));
+	if (PQconnectComplete(cancelConn))
+	{
+		msg = "OK";
+	}
 	else
-		PG_RETURN_TEXT_P(cstring_to_text(errbuf));
+	{
+		msg = pchomp(PQerrorMessage(cancelConn));
+	}
+	PQfinish(cancelConn);
+	PG_RETURN_TEXT_P(cstring_to_text(msg));
 }
 
 

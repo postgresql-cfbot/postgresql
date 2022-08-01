@@ -1,1 +1,21 @@
 Test programs and libraries for libpq
+=====================================
+
+You can manually run a specific test by running:
+
+    ./libpq_pipeline <name of test>
+
+To add a new libpq test to this module you need to edit libpq_pipeline.c. There
+you should add the name of your new test to the "print_test_list" function.
+Then in main you should do something when this test name is passed to the
+program.
+
+If the order in which postgres protocol messages are sent is deterministic for
+your test. Then you can generate a trace of these messages using the following
+command:
+
+   ./libpq_pipeline mynewtest -t traces/mynewtest.trace
+
+Once you've done that you should make sure that when running "make check"
+the generated trace is compared to the expected trace. This is done by adding
+your test name to the $cmptrace definition in the t/001_libpq_pipeline.pl file

@@ -13,18 +13,23 @@
 
 #include <sys/stat.h>
 
+#include "access/genam.h"
 #include "access/htup_details.h"
 #include "access/relation.h"
+#include "access/table.h"
 #include "catalog/catalog.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_tablespace.h"
 #include "commands/dbcommands.h"
+#include "commands/defrem.h"
 #include "commands/tablespace.h"
 #include "miscadmin.h"
 #include "storage/fd.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
+#include "utils/fmgroids.h"
+#include "utils/lsyscache.h"
 #include "utils/numeric.h"
 #include "utils/rel.h"
 #include "utils/relfilenumbermap.h"
@@ -830,6 +835,131 @@ pg_size_bytes(PG_FUNCTION_ARGS)
 											   NumericGetDatum(num)));
 
 	PG_RETURN_INT64(result);
+}
+
+/*
+ * Return the sum of size of relations for which the given attribute of
+ * pg_class matches the specified OID value.
+ */
+static int64
+calculate_size_attvalue(int attnum, Oid attval)
+{
+	int64		totalsize = 0;
+	ScanKeyData 	skey;
+	Relation	pg_class;
+	SysScanDesc	scan;
+	HeapTuple	tuple;
+
+	ScanKeyInit(&skey, attnum,
+			BTEqualStrategyNumber, F_OIDEQ, attval);
+
+	pg_class = table_open(RelationRelationId, AccessShareLock);
+	scan = systable_beginscan(pg_class, InvalidOid, false, NULL, 1, &skey);
+	while (HeapTupleIsValid(tuple = systable_getnext(scan)))
+	{
+		Relation rel;
+		Form_pg_class classtuple = (Form_pg_class) GETSTRUCT(tuple);
+
+		rel = try_relation_open(classtuple->oid, AccessShareLock);
+		if (!rel)
+			continue;
+
+		for (ForkNumber forkNum = 0; forkNum <= MAX_FORKNUM; forkNum++)
+			totalsize += calculate_relation_size(&(rel->rd_locator), rel->rd_backend, forkNum);
+
+		relation_close(rel, AccessShareLock);
+	}
+
+	systable_endscan(scan);
+	table_close(pg_class, AccessShareLock);
+	return totalsize;
+}
+
+/* Compute the size of relations in a schema (namespace) */
+static int64
+calculate_namespace_size(Oid nspOid)
+{
+	/*
+	 * User must be a member of pg_read_all_stats or have CREATE privilege for
+	 * target namespace.
+	 */
+	if (!is_member_of_role(GetUserId(), ROLE_PG_READ_ALL_STATS))
+	{
+		AclResult aclresult;
+		aclresult = pg_namespace_aclcheck(nspOid, GetUserId(), ACL_CREATE);
+		if (aclresult != ACLCHECK_OK)
+			aclcheck_error(aclresult, OBJECT_SCHEMA,
+						   get_namespace_name(nspOid));
+	}
+
+	return calculate_size_attvalue(Anum_pg_class_relnamespace, nspOid);
+}
+
+Datum
+pg_namespace_size_oid(PG_FUNCTION_ARGS)
+{
+	int64		size;
+	Oid			nspOid = PG_GETARG_OID(0);
+
+	size = calculate_namespace_size(nspOid);
+
+	if (size < 0)
+		PG_RETURN_NULL();
+
+	PG_RETURN_INT64(size);
+}
+
+Datum
+pg_namespace_size_name(PG_FUNCTION_ARGS)
+{
+	int64		size;
+	Name		nspName = PG_GETARG_NAME(0);
+	Oid			nspOid = get_namespace_oid(NameStr(*nspName), false);
+
+	size = calculate_namespace_size(nspOid);
+
+	if (size < 0)
+		PG_RETURN_NULL();
+
+	PG_RETURN_INT64(size);
+}
+
+/* Compute the size of relations using the given access method */
+static int64
+calculate_am_size(Oid amOid)
+{
+	/* XXX acl_check? */
+
+	return calculate_size_attvalue(Anum_pg_class_relam, amOid);
+}
+
+Datum
+pg_am_size_oid(PG_FUNCTION_ARGS)
+{
+	int64		size;
+	Oid			amOid = PG_GETARG_OID(0);
+
+	size = calculate_am_size(amOid);
+
+	if (size < 0)
+		PG_RETURN_NULL();
+
+	PG_RETURN_INT64(size);
+}
+
+Datum
+pg_am_size_name(PG_FUNCTION_ARGS)
+{
+	int64		size;
+	Name		amName = PG_GETARG_NAME(0);
+	Oid			amOid = get_am_oid(NameStr(*amName), false);
+
+	size = calculate_am_size(amOid);
+
+	if (size < 0)
+		PG_RETURN_NULL();
+
+	PG_RETURN_INT64(size);
 }
 
 /*

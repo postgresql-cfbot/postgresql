@@ -10678,13 +10678,12 @@ SELECT * FROM local_tbl, async_pt WHERE local_tbl.a = async_pt.a AND local_tbl.c
  Nested Loop (actual rows=1 loops=1)
    ->  Seq Scan on local_tbl (actual rows=1 loops=1)
          Filter: (c = 'bar'::text)
-         Rows Removed by Filter: 1
    ->  Append (actual rows=1 loops=1)
          ->  Async Foreign Scan on async_p1 async_pt_1 (never executed)
          ->  Async Foreign Scan on async_p2 async_pt_2 (actual rows=1 loops=1)
          ->  Seq Scan on async_p3 async_pt_3 (never executed)
                Filter: (local_tbl.a = a)
-(9 rows)
+(8 rows)
 
 SELECT * FROM local_tbl, async_pt WHERE local_tbl.a = async_pt.a AND local_tbl.c = 'bar';
   a   |  b  |  c  |  a   |  b  |  c   
@@ -10966,8 +10965,7 @@ SELECT * FROM async_pt t1 WHERE t1.b === 505 LIMIT 1;
                Filter: (b === 505)
          ->  Seq Scan on async_p3 t1_3 (actual rows=1 loops=1)
                Filter: (b === 505)
-               Rows Removed by Filter: 101
-(9 rows)
+(8 rows)
 
 SELECT * FROM async_pt t1 WHERE t1.b === 505 LIMIT 1;
   a   |  b  |  c   

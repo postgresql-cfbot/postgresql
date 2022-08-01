@@ -169,7 +169,7 @@ where parted_tab.a = ss.a;
 select tableoid::regclass::text as relname, parted_tab.* from parted_tab order by 1,2;
 
 -- modifies partition key, but no rows will actually be updated
-explain update parted_tab set a = 2 where false;
+explain (costs on) update parted_tab set a = 2 where false;
 
 drop table parted_tab;
 

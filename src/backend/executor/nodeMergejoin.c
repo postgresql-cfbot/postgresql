@@ -806,6 +806,13 @@ ExecMergeJoin(PlanState *pstate)
 					}
 
 					/*
+					 * In a right-antijoin, we never return a matched tuple.
+					 * And we need to use current outer tuple for further scans
+					 */
+					if (node->js.jointype == JOIN_RIGHT_ANTI)
+						break;
+
+					/*
 					 * If we only need to join to the first matching inner
 					 * tuple, then consider returning this one, but after that
 					 * continue with next outer tuple.
@@ -1554,6 +1561,7 @@ ExecInitMergeJoin(MergeJoin *node, EState *estate, int eflags)
 				ExecInitNullTupleSlot(estate, innerDesc, &TTSOpsVirtual);
 			break;
 		case JOIN_RIGHT:
+		case JOIN_RIGHT_ANTI:
 			mergestate->mj_FillOuter = false;
 			mergestate->mj_FillInner = true;
 			mergestate->mj_NullOuterTupleSlot =

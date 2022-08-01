@@ -324,6 +324,8 @@ static void maybe_reread_subscription(void);
 
 static void DisableSubscriptionAndExit(void);
 
+static void apply_delay(TimestampTz ts);
+
 /* prototype needed because of stream_commit */
 static void apply_dispatch(StringInfo s);
 
@@ -804,6 +806,57 @@ slot_modify_data(TupleTableSlot *slot, TupleTableSlot *srcslot,
 }
 
 /*
+ * When min_apply_delay parameter is set on subscriber, we wait long enough to
+ * make sure a transaction is applied at least that interval behind the
+ * publisher.
+ *
+ * It applies the delay for the next transaction but before starting the
+ * transaction. The main reason for this design is to avoid a long-running
+ * transaction (which can cause some operational challenges) if the user sets a
+ * high value for the delay. This design is different from the physical
+ * replication (that applies the delay at commit time) mainly because write
+ * operations may allow some issues (such as bloat and locks) that can be
+ * minimized if it does not keep the transaction open for such a long time.
+ */
+static void
+apply_delay(TimestampTz ts)
+{
+	TimestampTz	delay_until = 0;
+
+	/* nothing to do if no delay set */
+	if (MySubscription->applydelay <= 0)
+		return;
+
+	/* set apply delay */
+	delay_until = TimestampTzPlusMilliseconds(TimestampTzGetDatum(ts),
+												MySubscription->applydelay);
+
+	while (true)
+	{
+		long		diffms;
+
+		diffms = TimestampDifferenceMilliseconds(GetCurrentTimestamp(), delay_until);
+
+		/*
+		 * Exit without arming the latch if it's already past time to apply
+		 * this transaction.
+		 */
+		if (diffms <= 0)
+			break;
+
+		elog(DEBUG2, "logical replication apply delay: %ld ms", diffms);
+
+		WaitLatch(MyLatch,
+				  WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+				  diffms,
+				  WAIT_EVENT_RECOVERY_APPLY_DELAY);
+		ResetLatch(MyLatch);
+
+		CHECK_FOR_INTERRUPTS();
+	}
+}
+
+/*
  * Handle BEGIN message.
  */
 static void
@@ -813,6 +866,9 @@ apply_handle_begin(StringInfo s)
 
 	logicalrep_read_begin(s, &begin_data);
 	set_apply_error_context_xact(begin_data.xid, begin_data.final_lsn);
+
+	/* Should we delay the current transaction? */
+	apply_delay(begin_data.committime);
 
 	remote_final_lsn = begin_data.final_lsn;
 
@@ -867,6 +923,9 @@ apply_handle_begin_prepare(StringInfo s)
 
 	logicalrep_read_begin_prepare(s, &begin_data);
 	set_apply_error_context_xact(begin_data.xid, begin_data.prepare_lsn);
+
+	/* Should we delay the current prepared transaction? */
+	apply_delay(begin_data.prepare_time);
 
 	remote_final_lsn = begin_data.prepare_lsn;
 
@@ -1089,6 +1148,19 @@ apply_handle_stream_prepare(StringInfo s)
 	set_apply_error_context_xact(prepare_data.xid, prepare_data.prepare_lsn);
 
 	elog(DEBUG1, "received prepare for streamed transaction %u", prepare_data.xid);
+
+	/*
+	 * Should we delay the current prepared transaction?
+	 *
+	 * Although the delay is applied in BEGIN PREPARE messages, streamed
+	 * prepared transactions apply the delay in a STREAM PREPARE message.
+	 * That's ok because no changes have been applied yet
+	 * (apply_spooled_messages() will do it).
+	 * The STREAM START message does not contain a prepare time (it will be
+	 * available when the in-progress prepared transaction finishes), hence, it
+	 * was not possible to apply a delay at that time.
+	 */
+	apply_delay(prepare_data.prepare_time);
 
 	/* Replay all the spooled operations. */
 	apply_spooled_messages(prepare_data.xid, prepare_data.prepare_lsn);
@@ -1480,6 +1552,19 @@ apply_handle_stream_commit(StringInfo s)
 	set_apply_error_context_xact(xid, commit_data.commit_lsn);
 
 	elog(DEBUG1, "received commit for streamed transaction %u", xid);
+
+	/*
+	 * Should we delay the current transaction?
+	 *
+	 * Although the delay is applied in BEGIN messages, streamed transactions
+	 * apply the delay in a STREAM COMMIT message. That's ok because no changes
+	 * have been applied yet (apply_spooled_messages() will do it).
+	 * The STREAM START message would be a natural choice for this delay but
+	 * there is no commit time yet (it will be available when the in-progress
+	 * transaction finishes), hence, it was not possible to apply a delay at
+	 * that time.
+	 */
+	apply_delay(commit_data.committime);
 
 	apply_spooled_messages(xid, commit_data.commit_lsn);
 

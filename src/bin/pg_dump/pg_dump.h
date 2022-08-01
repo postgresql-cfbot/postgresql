@@ -661,6 +661,7 @@ typedef struct _SubscriptionInfo
 	char	   *subdisableonerr;
 	char	   *suborigin;
 	char	   *subsynccommit;
+	int64		subapplydelay;
 	char	   *subpublications;
 } SubscriptionInfo;
 

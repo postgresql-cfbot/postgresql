@@ -6,6 +6,7 @@
 #include "btree_gist.h"
 #include "btree_utils_num.h"
 #include "common/int.h"
+#include "utils/sortsupport.h"
 
 typedef struct boolkey
 {
@@ -23,6 +24,16 @@ PG_FUNCTION_INFO_V1(gbt_bool_picksplit);
 PG_FUNCTION_INFO_V1(gbt_bool_consistent);
 PG_FUNCTION_INFO_V1(gbt_bool_penalty);
 PG_FUNCTION_INFO_V1(gbt_bool_same);
+PG_FUNCTION_INFO_V1(gbt_bool_sortsupport);
+
+static int
+bool_fast_cmp(Datum x, Datum y, SortSupport ssup)
+{
+	bool	arg1 = DatumGetBool(x);
+	bool	arg2 = DatumGetBool(y);
+
+	return arg1 - arg2;
+}
 
 static bool
 gbt_boolgt(const void *a, const void *b, FmgrInfo *flinfo)
@@ -166,4 +177,15 @@ gbt_bool_same(PG_FUNCTION_ARGS)
 
 	*result = gbt_num_same((void *) b1, (void *) b2, &tinfo, fcinfo->flinfo);
 	PG_RETURN_POINTER(result);
+}
+
+Datum
+gbt_bool_sortsupport(PG_FUNCTION_ARGS)
+{
+	SortSupport ssup = (SortSupport) PG_GETARG_POINTER(0);
+
+	ssup->comparator = bool_fast_cmp;
+	ssup->ssup_extra = NULL;
+
+	PG_RETURN_VOID();
 }

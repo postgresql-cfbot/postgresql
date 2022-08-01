@@ -18543,7 +18543,7 @@ FROM
         <indexterm>
          <primary>nextval</primary>
         </indexterm>
-        <function>nextval</function> ( <type>regclass</type> )
+        <function>nextval</function> ( <type>regclass</type> <optional>, <type>bigint</type> </optional> )
         <returnvalue>bigint</returnvalue>
        </para>
        <para>
@@ -18556,7 +18556,11 @@ FROM
         values beginning with 1.  Other behaviors can be obtained by using
         appropriate parameters in the <xref linkend="sql-createsequence"/>
         command.
-      </para>
+       </para>
+       <para>
+        To grab multiple values you can pass an integer to <function>nextval</function>.
+        It will allocate that many consecutive numbers from the sequence and return the last value.
+       </para>
        <para>
         This function requires <literal>USAGE</literal>
         or <literal>UPDATE</literal> privilege on the sequence.

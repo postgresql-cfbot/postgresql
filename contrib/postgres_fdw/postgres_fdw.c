@@ -2058,6 +2058,15 @@ postgresGetForeignModifyBatchSize(ResultRelInfo *resultRelInfo)
 		return 1;
 
 	/*
+	 * If the foreign table has no columns, disable batching as the INSERT
+	 * syntax doesn't allow batching multiple empty rows into a zero-column
+	 * table.  This isn't needed in case of INSERT, but is in case of COPY.
+	 * Note that in the latter case fmstate must be non-NULL.
+	 */
+	if (fmstate && list_length(fmstate->target_attrs) == 0)
+		return 1;
+
+	/*
 	 * Otherwise use the batch size specified for server/table. The number of
 	 * parameters in a batch is limited to 65535 (uint16), so make sure we
 	 * don't exceed this limit by using the maximum batch_size possible.

@@ -320,18 +320,44 @@ CopyMultiInsertBufferFlush(CopyMultiInsertInfo *miinfo,
 	cstate->line_buf_valid = false;
 	save_cur_lineno = cstate->cur_lineno;
 
-	/*
-	 * table_multi_insert may leak memory, so switch to short-lived memory
-	 * context before calling it.
-	 */
-	oldcontext = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
-	table_multi_insert(resultRelInfo->ri_RelationDesc,
-					   slots,
-					   nused,
-					   mycid,
-					   ti_options,
-					   buffer->bistate);
-	MemoryContextSwitchTo(oldcontext);
+	if (resultRelInfo->ri_RelationDesc->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
+	{
+		int sent = 0;
+
+		Assert(resultRelInfo->ri_BatchSize > 1 &&
+			   resultRelInfo->ri_FdwRoutine->ExecForeignBatchInsert != NULL &&
+			   resultRelInfo->ri_FdwRoutine->GetForeignModifyBatchSize != NULL);
+
+		/* Flush into foreign table or partition */
+		while (sent < nused)
+		{
+			int size = (resultRelInfo->ri_BatchSize < nused - sent) ?
+						resultRelInfo->ri_BatchSize : (nused - sent);
+			int inserted = size;
+
+			resultRelInfo->ri_FdwRoutine->ExecForeignBatchInsert(estate,
+																 resultRelInfo,
+																 &slots[sent],
+																 NULL,
+																 &inserted);
+			sent += size;
+		}
+	}
+	else
+	{
+		/*
+		 * table_multi_insert may leak memory, so switch to short-lived memory
+		 * context before calling it.
+		 */
+		oldcontext = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
+		table_multi_insert(resultRelInfo->ri_RelationDesc,
+						   slots,
+						   nused,
+						   mycid,
+						   ti_options,
+						   buffer->bistate);
+		MemoryContextSwitchTo(oldcontext);
+	}
 
 	for (i = 0; i < nused; i++)
 	{
@@ -342,6 +368,8 @@ CopyMultiInsertBufferFlush(CopyMultiInsertInfo *miinfo,
 		if (resultRelInfo->ri_NumIndices > 0)
 		{
 			List	   *recheckIndexes;
+
+			Assert(resultRelInfo->ri_RelationDesc->rd_rel->relkind != RELKIND_FOREIGN_TABLE);
 
 			cstate->cur_lineno = buffer->linenos[i];
 			recheckIndexes =
@@ -679,6 +707,23 @@ CopyFrom(CopyFromState cstate)
 		resultRelInfo->ri_FdwRoutine->BeginForeignInsert(mtstate,
 														 resultRelInfo);
 
+	/*
+	 * Also, if the named relation is a foreign table, determine if the FDW
+	 * supports batch insert and determine the batch size (a FDW may support
+	 * batching, but it may be disabled for the server/table).
+	 *
+	 * If the FDW does not support batching, we set the batch size to 1.
+	 */
+	if (resultRelInfo->ri_FdwRoutine != NULL &&
+		resultRelInfo->ri_FdwRoutine->GetForeignModifyBatchSize &&
+		resultRelInfo->ri_FdwRoutine->ExecForeignBatchInsert)
+		resultRelInfo->ri_BatchSize =
+			resultRelInfo->ri_FdwRoutine->GetForeignModifyBatchSize(resultRelInfo);
+	else
+		resultRelInfo->ri_BatchSize = 1;
+
+	Assert(resultRelInfo->ri_BatchSize >= 1);
+
 	/* Prepare to catch AFTER triggers. */
 	AfterTriggerBeginQuery();
 
@@ -725,6 +770,15 @@ CopyFrom(CopyFromState cstate)
 		 */
 		insertMethod = CIM_SINGLE;
 	}
+	else if (resultRelInfo->ri_FdwRoutine != NULL &&
+			 resultRelInfo->ri_BatchSize == 1)
+	{
+		/*
+		 * Can't support multi-inserts to foreign tables if the FDW does not
+		 * support batching.
+		 */
+		insertMethod = CIM_SINGLE;
+	}
 	else if (proute != NULL && resultRelInfo->ri_TrigDesc != NULL &&
 			 resultRelInfo->ri_TrigDesc->trig_insert_new_table)
 	{
@@ -737,14 +791,12 @@ CopyFrom(CopyFromState cstate)
 		 */
 		insertMethod = CIM_SINGLE;
 	}
-	else if (resultRelInfo->ri_FdwRoutine != NULL ||
-			 cstate->volatile_defexprs)
+	else if (cstate->volatile_defexprs)
 	{
 		/*
-		 * Can't support multi-inserts to foreign tables or if there are any
-		 * volatile default expressions in the table.  Similarly to the
-		 * trigger case above, such expressions may query the table we're
-		 * inserting into.
+		 * Can't support multi-inserts if there are any volatile default
+		 * expressions in the table.  Similarly to the trigger case above,
+		 * such expressions may query the table we're inserting into.
 		 *
 		 * Note: It does not matter if any partitions have any volatile
 		 * default expressions as we use the defaults from the target of the
@@ -910,12 +962,14 @@ CopyFrom(CopyFromState cstate)
 
 				/*
 				 * Disable multi-inserts when the partition has BEFORE/INSTEAD
-				 * OF triggers, or if the partition is a foreign partition.
+				 * OF triggers, or if the partition is a foreign partition
+				 * that can't use batching.
 				 */
 				leafpart_use_multi_insert = insertMethod == CIM_MULTI_CONDITIONAL &&
 					!has_before_insert_row_trig &&
 					!has_instead_insert_row_trig &&
-					resultRelInfo->ri_FdwRoutine == NULL;
+					(resultRelInfo->ri_FdwRoutine == NULL ||
+					 resultRelInfo->ri_BatchSize > 1);
 
 				/* Set the multi-insert buffer to use for this partition. */
 				if (leafpart_use_multi_insert)

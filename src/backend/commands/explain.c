@@ -13,6 +13,8 @@
  */
 #include "postgres.h"
 
+#include <math.h>
+
 #include "access/xact.h"
 #include "catalog/pg_type.h"
 #include "commands/createas.h"
@@ -53,6 +55,9 @@ explain_get_index_name_hook_type explain_get_index_name_hook = NULL;
 #define X_CLOSING 1
 #define X_CLOSE_IMMEDIATE 2
 #define X_NOWHITESPACE 4
+
+/* Check if float/double has any decimal number */
+#define HAS_DECIMAL(x) (floor(x) != x)
 
 static void ExplainOneQuery(Query *query, int cursorOptions,
 							IntoClause *into, ExplainState *es,
@@ -1643,16 +1648,29 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		double		total_ms = 1000.0 * planstate->instrument->total / nloops;
 		double		rows = planstate->instrument->ntuples / nloops;
 
+		/*
+		 * If the number of loops is greater than one, display the
+		 * actual rows up to two decimal places instead of rounding
+		 * off the value.
+		 */
 		if (es->format == EXPLAIN_FORMAT_TEXT)
 		{
 			if (es->timing)
+			{
+				appendStringInfo(es->str, " (actual time=%.3f..%.3f",
+								 startup_ms, total_ms);
 				appendStringInfo(es->str,
-								 " (actual time=%.3f..%.3f rows=%.0f loops=%.0f)",
-								 startup_ms, total_ms, rows, nloops);
-			else
-				appendStringInfo(es->str,
-								 " (actual rows=%.0f loops=%.0f)",
+								 (nloops == 1 || !HAS_DECIMAL(rows)) ?
+								 " rows=%.0f loops=%.0f)" : " rows=%.2f loops=%.0f)",
 								 rows, nloops);
+			}
+			else
+			{
+				appendStringInfo(es->str,
+								 (nloops == 1 || !HAS_DECIMAL(rows)) ?
+								 " (actual rows=%.0f loops=%.0f)" : " (actual rows=%.2f loops=%.0f)",
+								 rows, nloops);
+			}
 		}
 		else
 		{
@@ -1663,7 +1681,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 				ExplainPropertyFloat("Actual Total Time", "ms", total_ms,
 									 3, es);
 			}
-			ExplainPropertyFloat("Actual Rows", NULL, rows, 0, es);
+			ExplainPropertyFloat("Actual Rows", NULL, rows, (nloops == 1 || !HAS_DECIMAL(rows)) ? 0 : 2, es);
 			ExplainPropertyFloat("Actual Loops", NULL, nloops, 0, es);
 		}
 	}
@@ -1707,18 +1725,30 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			rows = instrument->ntuples / nloops;
 
 			ExplainOpenWorker(n, es);
+			/*
+			 * If the number of loops is greater than one, display the
+			 * actual rows up to two decimal places instead of rounding
+			 * off the value.
+			 */
 
 			if (es->format == EXPLAIN_FORMAT_TEXT)
 			{
 				ExplainIndentText(es);
 				if (es->timing)
+				{
+					appendStringInfo(es->str, "actual time=%.3f..%.3f",
+									 startup_ms, total_ms);
 					appendStringInfo(es->str,
-									 "actual time=%.3f..%.3f rows=%.0f loops=%.0f\n",
-									 startup_ms, total_ms, rows, nloops);
-				else
-					appendStringInfo(es->str,
-									 "actual rows=%.0f loops=%.0f\n",
+									 (nloops == 1 || !HAS_DECIMAL(rows)) ?
+									 " rows=%.0f loops=%.0f" : " rows=%.2f loops=%.0f",
 									 rows, nloops);
+				}
+				else
+				{
+					appendStringInfo(es->str, (nloops == 1 || !HAS_DECIMAL(rows)) ?
+									 "actual rows=%.0f loops=%.0f" : "actual rows=%.2f loops=%.0f",
+									 rows, nloops);
+				}
 			}
 			else
 			{
@@ -1729,7 +1759,8 @@ ExplainNode(PlanState *planstate, List *ancestors,
 					ExplainPropertyFloat("Actual Total Time", "ms",
 										 total_ms, 3, es);
 				}
-				ExplainPropertyFloat("Actual Rows", NULL, rows, 0, es);
+				ExplainPropertyFloat("Actual Rows", NULL, rows, 
+						(nloops == 1 || !HAS_DECIMAL(rows)) ? 0 : 2, es);
 				ExplainPropertyFloat("Actual Loops", NULL, nloops, 0, es);
 			}
 

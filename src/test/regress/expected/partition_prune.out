@@ -2635,14 +2635,14 @@ order by tbl1.col1, tprt.col1;
 insert into tbl1 values (1001), (1010), (1011);
 explain (analyze, costs off, summary off, timing off)
 select * from tbl1 inner join tprt on tbl1.col1 > tprt.col1;
-                                QUERY PLAN                                
---------------------------------------------------------------------------
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
  Nested Loop (actual rows=23 loops=1)
    ->  Seq Scan on tbl1 (actual rows=5 loops=1)
-   ->  Append (actual rows=5 loops=5)
+   ->  Append (actual rows=4.60 loops=5)
          ->  Index Scan using tprt1_idx on tprt_1 (actual rows=2 loops=5)
                Index Cond: (col1 < tbl1.col1)
-         ->  Index Scan using tprt2_idx on tprt_2 (actual rows=3 loops=4)
+         ->  Index Scan using tprt2_idx on tprt_2 (actual rows=2.75 loops=4)
                Index Cond: (col1 < tbl1.col1)
          ->  Index Scan using tprt3_idx on tprt_3 (actual rows=1 loops=2)
                Index Cond: (col1 < tbl1.col1)
@@ -2656,16 +2656,16 @@ select * from tbl1 inner join tprt on tbl1.col1 > tprt.col1;
 
 explain (analyze, costs off, summary off, timing off)
 select * from tbl1 inner join tprt on tbl1.col1 = tprt.col1;
-                                QUERY PLAN                                
---------------------------------------------------------------------------
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
  Nested Loop (actual rows=3 loops=1)
    ->  Seq Scan on tbl1 (actual rows=5 loops=1)
-   ->  Append (actual rows=1 loops=5)
+   ->  Append (actual rows=0.60 loops=5)
          ->  Index Scan using tprt1_idx on tprt_1 (never executed)
                Index Cond: (col1 = tbl1.col1)
          ->  Index Scan using tprt2_idx on tprt_2 (actual rows=1 loops=2)
                Index Cond: (col1 = tbl1.col1)
-         ->  Index Scan using tprt3_idx on tprt_3 (actual rows=0 loops=3)
+         ->  Index Scan using tprt3_idx on tprt_3 (actual rows=0.33 loops=3)
                Index Cond: (col1 = tbl1.col1)
          ->  Index Scan using tprt4_idx on tprt_4 (never executed)
                Index Cond: (col1 = tbl1.col1)

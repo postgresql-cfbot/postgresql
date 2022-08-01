@@ -37,75 +37,6 @@
 
 
 /*-----------------------
- * PartitionTupleRouting - Encapsulates all information required to
- * route a tuple inserted into a partitioned table to one of its leaf
- * partitions.
- *
- * partition_root
- *		The partitioned table that's the target of the command.
- *
- * partition_dispatch_info
- *		Array of 'max_dispatch' elements containing a pointer to a
- *		PartitionDispatch object for every partitioned table touched by tuple
- *		routing.  The entry for the target partitioned table is *always*
- *		present in the 0th element of this array.  See comment for
- *		PartitionDispatchData->indexes for details on how this array is
- *		indexed.
- *
- * nonleaf_partitions
- *		Array of 'max_dispatch' elements containing pointers to fake
- *		ResultRelInfo objects for nonleaf partitions, useful for checking
- *		the partition constraint.
- *
- * num_dispatch
- *		The current number of items stored in the 'partition_dispatch_info'
- *		array.  Also serves as the index of the next free array element for
- *		new PartitionDispatch objects that need to be stored.
- *
- * max_dispatch
- *		The current allocated size of the 'partition_dispatch_info' array.
- *
- * partitions
- *		Array of 'max_partitions' elements containing a pointer to a
- *		ResultRelInfo for every leaf partition touched by tuple routing.
- *		Some of these are pointers to ResultRelInfos which are borrowed out of
- *		the owning ModifyTableState node.  The remainder have been built
- *		especially for tuple routing.  See comment for
- *		PartitionDispatchData->indexes for details on how this array is
- *		indexed.
- *
- * is_borrowed_rel
- *		Array of 'max_partitions' booleans recording whether a given entry
- *		in 'partitions' is a ResultRelInfo pointer borrowed from the owning
- *		ModifyTableState node, rather than being built here.
- *
- * num_partitions
- *		The current number of items stored in the 'partitions' array.  Also
- *		serves as the index of the next free array element for new
- *		ResultRelInfo objects that need to be stored.
- *
- * max_partitions
- *		The current allocated size of the 'partitions' array.
- *
- * memcxt
- *		Memory context used to allocate subsidiary structs.
- *-----------------------
- */
-struct PartitionTupleRouting
-{
-	Relation	partition_root;
-	PartitionDispatch *partition_dispatch_info;
-	ResultRelInfo **nonleaf_partitions;
-	int			num_dispatch;
-	int			max_dispatch;
-	ResultRelInfo **partitions;
-	bool	   *is_borrowed_rel;
-	int			num_partitions;
-	int			max_partitions;
-	MemoryContext memcxt;
-};
-
-/*-----------------------
  * PartitionDispatch - information about one partitioned table in a partition
  * hierarchy required to route a tuple to any of its partitions.  A
  * PartitionDispatch is always encapsulated inside a PartitionTupleRouting
@@ -1024,8 +955,7 @@ ExecInitRoutingInfo(ModifyTableState *mtstate,
 	 *
 	 * If the FDW does not support batching, we set the batch size to 1.
 	 */
-	if (mtstate->operation == CMD_INSERT &&
-		partRelInfo->ri_FdwRoutine != NULL &&
+	if (partRelInfo->ri_FdwRoutine != NULL &&
 		partRelInfo->ri_FdwRoutine->GetForeignModifyBatchSize &&
 		partRelInfo->ri_FdwRoutine->ExecForeignBatchInsert)
 		partRelInfo->ri_BatchSize =

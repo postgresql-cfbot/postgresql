@@ -994,14 +994,14 @@ StandbyReleaseLockList(List *locks)
 		LOCKTAG		locktag;
 
 		elog(trace_recovery(DEBUG4),
-			 "releasing recovery lock: xid %u db %u rel %u",
-			 lock->xid, lock->dbOid, lock->relOid);
+			 "releasing recovery lock: xid %llu db %u rel %u",
+			 (unsigned long long) lock->xid, lock->dbOid, lock->relOid);
 		SET_LOCKTAG_RELATION(locktag, lock->dbOid, lock->relOid);
 		if (!LockRelease(&locktag, AccessExclusiveLock, true))
 		{
 			elog(LOG,
-				 "RecoveryLockLists contains entry for lock no longer recorded by lock manager: xid %u database %u relation %u",
-				 lock->xid, lock->dbOid, lock->relOid);
+				 "RecoveryLockLists contains entry for lock no longer recorded by lock manager: xid %llu database %u relation %u",
+				 (unsigned long long) lock->xid, lock->dbOid, lock->relOid);
 			Assert(false);
 		}
 	}
@@ -1305,20 +1305,20 @@ LogCurrentRunningXacts(RunningTransactions CurrRunningXacts)
 
 	if (CurrRunningXacts->subxid_overflow)
 		elog(trace_recovery(DEBUG2),
-			 "snapshot of %u running transactions overflowed (lsn %X/%X oldest xid %u latest complete %u next xid %u)",
+			 "snapshot of %u running transactions overflowed (lsn %X/%X oldest xid %llu latest complete %llu next xid %llu)",
 			 CurrRunningXacts->xcnt,
 			 LSN_FORMAT_ARGS(recptr),
-			 CurrRunningXacts->oldestRunningXid,
-			 CurrRunningXacts->latestCompletedXid,
-			 CurrRunningXacts->nextXid);
+			 (unsigned long long) CurrRunningXacts->oldestRunningXid,
+			 (unsigned long long) CurrRunningXacts->latestCompletedXid,
+			 (unsigned long long) CurrRunningXacts->nextXid);
 	else
 		elog(trace_recovery(DEBUG2),
-			 "snapshot of %u+%u running transaction ids (lsn %X/%X oldest xid %u latest complete %u next xid %u)",
+			 "snapshot of %u+%u running transaction ids (lsn %X/%X oldest xid %llu latest complete %llu next xid %llu)",
 			 CurrRunningXacts->xcnt, CurrRunningXacts->subxcnt,
 			 LSN_FORMAT_ARGS(recptr),
-			 CurrRunningXacts->oldestRunningXid,
-			 CurrRunningXacts->latestCompletedXid,
-			 CurrRunningXacts->nextXid);
+			 (unsigned long long) CurrRunningXacts->oldestRunningXid,
+			 (unsigned long long) CurrRunningXacts->latestCompletedXid,
+			 (unsigned long long) CurrRunningXacts->nextXid);
 
 	/*
 	 * Ensure running_xacts information is synced to disk not too far in the

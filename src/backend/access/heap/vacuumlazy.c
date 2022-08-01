@@ -705,21 +705,21 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 								 vacrel->missed_dead_pages);
 			diff = (int32) (ReadNextTransactionId() - OldestXmin);
 			appendStringInfo(&buf,
-							 _("removable cutoff: %u, which was %d XIDs old when operation ended\n"),
-							 OldestXmin, diff);
+							 _("removable cutoff: %llu, which was %d XIDs old when operation ended\n"),
+							 (unsigned long long) OldestXmin, diff);
 			if (frozenxid_updated)
 			{
 				diff = (int32) (vacrel->NewRelfrozenXid - vacrel->relfrozenxid);
 				appendStringInfo(&buf,
-								 _("new relfrozenxid: %u, which is %d XIDs ahead of previous value\n"),
-								 vacrel->NewRelfrozenXid, diff);
+								 _("new relfrozenxid: %llu, which is %d XIDs ahead of previous value\n"),
+								 (unsigned long long) vacrel->NewRelfrozenXid, diff);
 			}
 			if (minmulti_updated)
 			{
 				diff = (int32) (vacrel->NewRelminMxid - vacrel->relminmxid);
 				appendStringInfo(&buf,
-								 _("new relminmxid: %u, which is %d MXIDs ahead of previous value\n"),
-								 vacrel->NewRelminMxid, diff);
+								 _("new relminmxid: %llu, which is %d MXIDs ahead of previous value\n"),
+								 (unsigned long long) vacrel->NewRelminMxid, diff);
 			}
 			if (vacrel->do_index_vacuuming)
 			{

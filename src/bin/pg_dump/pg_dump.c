@@ -3115,9 +3115,10 @@ dumpDatabase(Archive *fout)
 	{
 		appendPQExpBufferStr(creaQry, "\n-- For binary upgrade, set datfrozenxid and datminmxid.\n");
 		appendPQExpBuffer(creaQry, "UPDATE pg_catalog.pg_database\n"
-						  "SET datfrozenxid = '%u', datminmxid = '%u'\n"
+						  "SET datfrozenxid = '%llu', datminmxid = '%llu'\n"
 						  "WHERE datname = ",
-						  frozenxid, minmxid);
+						  (unsigned long long) frozenxid,
+						  (unsigned long long) minmxid);
 		appendStringLiteralAH(creaQry, datname, fout);
 		appendPQExpBufferStr(creaQry, ";\n");
 	}
@@ -15593,9 +15594,10 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 		{
 			appendPQExpBufferStr(q, "\n-- For binary upgrade, set heap's relfrozenxid and relminmxid\n");
 			appendPQExpBuffer(q, "UPDATE pg_catalog.pg_class\n"
-							  "SET relfrozenxid = '%u', relminmxid = '%u'\n"
+							  "SET relfrozenxid = '%llu', relminmxid = '%llu'\n"
 							  "WHERE oid = ",
-							  tbinfo->frozenxid, tbinfo->minmxid);
+							  (unsigned long long) tbinfo->frozenxid,
+							  (unsigned long long) tbinfo->minmxid);
 			appendStringLiteralAH(q, qualrelname, fout);
 			appendPQExpBufferStr(q, "::pg_catalog.regclass;\n");
 
@@ -15607,10 +15609,11 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 				 */
 				appendPQExpBufferStr(q, "\n-- For binary upgrade, set toast's relfrozenxid and relminmxid\n");
 				appendPQExpBuffer(q, "UPDATE pg_catalog.pg_class\n"
-								  "SET relfrozenxid = '%u', relminmxid = '%u'\n"
+								  "SET relfrozenxid = '%llu', relminmxid = '%llu'\n"
 								  "WHERE oid = '%u';\n",
-								  tbinfo->toast_frozenxid,
-								  tbinfo->toast_minmxid, tbinfo->toast_oid);
+								  (unsigned long long) tbinfo->toast_frozenxid,
+								  (unsigned long long) tbinfo->toast_minmxid,
+								  tbinfo->toast_oid);
 			}
 		}
 

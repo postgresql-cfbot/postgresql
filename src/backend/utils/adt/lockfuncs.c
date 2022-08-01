@@ -79,7 +79,8 @@ VXIDGetDatum(BackendId bid, LocalTransactionId lxid)
 	 */
 	char		vxidstr[32];
 
-	snprintf(vxidstr, sizeof(vxidstr), "%d/%u", bid, lxid);
+	snprintf(vxidstr, sizeof(vxidstr), "%d/%llu", bid,
+			 (unsigned long long) lxid);
 
 	return CStringGetTextDatum(vxidstr);
 }

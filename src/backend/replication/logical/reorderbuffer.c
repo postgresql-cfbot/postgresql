@@ -2448,8 +2448,8 @@ ReorderBufferProcessTXN(ReorderBuffer *rb, ReorderBufferTXN *txn,
 
 		/* this is just a sanity check against bad output plugin behaviour */
 		if (GetCurrentTransactionIdIfAny() != InvalidTransactionId)
-			elog(ERROR, "output plugin used XID %u",
-				 GetCurrentTransactionId());
+			elog(ERROR, "output plugin used XID %llu",
+				 (unsigned long long) GetCurrentTransactionId());
 
 		/*
 		 * Remember the command ID and snapshot for the next set of changes in
@@ -2887,7 +2887,8 @@ ReorderBufferAbortOld(ReorderBuffer *rb, TransactionId oldestRunningXid)
 
 		if (TransactionIdPrecedes(txn->xid, oldestRunningXid))
 		{
-			elog(DEBUG2, "aborting old transaction %u", txn->xid);
+			elog(DEBUG2, "aborting old transaction %llu",
+				 (unsigned long long) txn->xid);
 
 			/* remove potential on-disk data, and deallocate this tx */
 			ReorderBufferCleanupTXN(rb, txn);
@@ -3529,8 +3530,8 @@ ReorderBufferSerializeTXN(ReorderBuffer *rb, ReorderBufferTXN *txn)
 	Size		spilled = 0;
 	Size		size = txn->size;
 
-	elog(DEBUG2, "spill %u changes in XID %u to disk",
-		 (uint32) txn->nentries_mem, txn->xid);
+	elog(DEBUG2, "spill %u changes in XID %llu to disk",
+		 (uint32) txn->nentries_mem, (unsigned long long) txn->xid);
 
 	/* do the same to all child TXs */
 	dlist_foreach(subtxn_i, &txn->subtxns)
@@ -3806,8 +3807,8 @@ ReorderBufferSerializeChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
 		errno = save_errno ? save_errno : ENOSPC;
 		ereport(ERROR,
 				(errcode_for_file_access(),
-				 errmsg("could not write to data file for XID %u: %m",
-						txn->xid)));
+				 errmsg("could not write to data file for XID %llu: %m",
+						(unsigned long long) txn->xid)));
 	}
 	pgstat_report_wait_end();
 
@@ -4449,9 +4450,9 @@ ReorderBufferSerializedPath(char *path, ReplicationSlot *slot, TransactionId xid
 
 	XLogSegNoOffsetToRecPtr(segno, 0, wal_segment_size, recptr);
 
-	snprintf(path, MAXPGPATH, "pg_replslot/%s/xid-%u-lsn-%X-%X.spill",
+	snprintf(path, MAXPGPATH, "pg_replslot/%s/xid-%llu-lsn-%X-%X.spill",
 			 NameStr(MyReplicationSlot->data.name),
-			 xid, LSN_FORMAT_ARGS(recptr));
+			 (unsigned long long) xid, LSN_FORMAT_ARGS(recptr));
 }
 
 /*
@@ -5080,8 +5081,8 @@ UpdateLogicalMappings(HTAB *tuplecid_data, Oid relid, Snapshot snapshot)
 	{
 		RewriteMappingFile *f = (RewriteMappingFile *) lfirst(file);
 
-		elog(DEBUG1, "applying mapping: \"%s\" in %u", f->fname,
-			 snapshot->subxip[0]);
+		elog(DEBUG1, "applying mapping: \"%s\" in %llu", f->fname,
+			 (unsigned long long) snapshot->subxip[0]);
 		ApplyLogicalMappingFile(tuplecid_data, relid, f->fname);
 		pfree(f);
 	}

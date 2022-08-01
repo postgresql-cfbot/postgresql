@@ -166,6 +166,7 @@ typedef struct CheckpointStatsData
 	int			ckpt_segs_added;	/* # of new xlog segments created */
 	int			ckpt_segs_removed;	/* # of xlog segments deleted */
 	int			ckpt_segs_recycled; /* # of xlog segments recycled */
+	int			ckpt_segs_processed; /* # of xlog segments processed */
 
 	int			ckpt_sync_rels; /* # of relations synced */
 	uint64		ckpt_longest_sync;	/* Longest sync for one relation */
@@ -173,6 +174,10 @@ typedef struct CheckpointStatsData
 									 * times, which is not necessarily the
 									 * same as the total elapsed time for the
 									 * entire sync phase. */
+
+	/* start and end timestamps of logical decoding file processing */
+	TimestampTz	l_dec_ops_start_t;
+	TimestampTz	l_dec_ops_end_t;
 } CheckpointStatsData;
 
 extern PGDLLIMPORT CheckpointStatsData CheckpointStats;

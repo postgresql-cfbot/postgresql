@@ -106,10 +106,11 @@ set max_parallel_workers_per_gather=4;
 select jsonb_pretty(
   explain_filter_to_json('explain (analyze, verbose, buffers, format json)
                          select * from tenk1 order by tenthous')
-  -- remove "Workers" node of the Seq Scan plan node
-  #- '{0,Plan,Plans,0,Plans,0,Workers}'
-  -- remove "Workers" node of the Sort plan node
-  #- '{0,Plan,Plans,0,Workers}'
+  -- remove "Workers Launched" node of the Seq Scan plan node
+  #- '{0,Plan,Plans,0,Workers Launched}'
+  -- remove "Sort Space" node of the Sort plan node
+  #- '{0,Plan,Plans,0,Average Sort Space Used}'
+  #- '{0,Plan,Plans,0,Peak Sort Space Used}'
   -- Also remove its sort-type fields, as those aren't 100% stable
   #- '{0,Plan,Plans,0,Sort Method}'
   #- '{0,Plan,Plans,0,Sort Space Type}'
@@ -128,3 +129,7 @@ select explain_filter('explain (verbose) select * from t1 where pg_temp.mysin(f1
 -- Test compute_query_id
 set compute_query_id = on;
 select explain_filter('explain (verbose) select * from int8_tbl i8');
+
+-- Test sort stats summary
+set force_parallel_mode=on;
+select explain_filter('explain (analyze, summary off, timing off, costs off, format json) select * from tenk1 order by unique1');

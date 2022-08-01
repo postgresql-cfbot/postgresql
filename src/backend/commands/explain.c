@@ -2791,40 +2791,41 @@ show_sort_info(SortState *sortstate, ExplainState *es)
 	if (sortstate->shared_info != NULL)
 	{
 		int			n;
+		const char *sortMethod;
+		const char *spaceType;
+		int64		peakSpaceUsed = 0;
+		int64		totalSpaceUsed = 0;
 
 		for (n = 0; n < sortstate->shared_info->num_workers; n++)
 		{
 			TuplesortInstrumentation *sinstrument;
-			const char *sortMethod;
-			const char *spaceType;
-			int64		spaceUsed;
 
 			sinstrument = &sortstate->shared_info->sinstrument[n];
 			if (sinstrument->sortMethod == SORT_TYPE_STILL_IN_PROGRESS)
 				continue;		/* ignore any unfilled slots */
 			sortMethod = tuplesort_method_name(sinstrument->sortMethod);
 			spaceType = tuplesort_space_type_name(sinstrument->spaceType);
-			spaceUsed = sinstrument->spaceUsed;
+			peakSpaceUsed = Max(peakSpaceUsed, sinstrument->spaceUsed);
+			totalSpaceUsed += sinstrument->spaceUsed;
+		}
 
-			if (es->workers_state)
-				ExplainOpenWorker(n, es);
+		int64 avgSpaceUsed = sortstate->shared_info->num_workers > 0 ?
+				totalSpaceUsed / sortstate->shared_info->num_workers : 0;
 
-			if (es->format == EXPLAIN_FORMAT_TEXT)
-			{
-				ExplainIndentText(es);
-				appendStringInfo(es->str,
-								 "Sort Method: %s  %s: " INT64_FORMAT "kB\n",
-								 sortMethod, spaceType, spaceUsed);
-			}
-			else
-			{
-				ExplainPropertyText("Sort Method", sortMethod, es);
-				ExplainPropertyInteger("Sort Space Used", "kB", spaceUsed, es);
-				ExplainPropertyText("Sort Space Type", spaceType, es);
-			}
+		ExplainPropertyInteger("Workers Launched", NULL, sortstate->shared_info->num_workers, es);
 
-			if (es->workers_state)
-				ExplainCloseWorker(n, es);
+		if (es->format == EXPLAIN_FORMAT_TEXT)
+		{
+			ExplainIndentText(es);
+			appendStringInfo(es->str, "Sort Method: %s  Average %s: " INT64_FORMAT "kB  Peak %s: " INT64_FORMAT "kB\n",
+							 sortMethod, spaceType, avgSpaceUsed, spaceType, peakSpaceUsed);
+		}
+		else
+		{
+			ExplainPropertyText("Sort Method", sortMethod, es);
+			ExplainPropertyInteger("Average Sort Space Used", "kB", avgSpaceUsed, es);
+			ExplainPropertyInteger("Peak Sort Space Used", "kB", peakSpaceUsed, es);
+			ExplainPropertyText("Sort Space Type", spaceType, es);
 		}
 	}
 }

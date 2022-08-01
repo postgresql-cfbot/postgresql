@@ -1,0 +1,47 @@
+--
+-- Compression dictionaries tests
+--
+-- Dictionary types currently can be used only with JSONB
+\set ON_ERROR_STOP 0
+CREATE TYPE textdict AS DICTIONARY OF TEXT ('abcdef', 'ghijkl');
+ERROR:  Dictionary types currently can be used only with JSONB
+\set ON_ERROR_STOP 1
+-- Simple happy path
+CREATE TYPE mydict AS DICTIONARY OF JSONB ('abcdef', 'ghijkl');
+SELECT dictentry FROM pg_dict ORDER BY dictentry;
+ dictentry 
+-----------
+ abcdef
+ ghijkl
+(2 rows)
+
+SELECT '{"abcdef":"ghijkl"}' :: mydict;
+        mydict        
+----------------------
+ {"abcdef": "ghijkl"}
+(1 row)
+
+SELECT '{"abcdef":"ghijkl"}' :: mydict :: jsonb;
+        jsonb         
+----------------------
+ {"abcdef": "ghijkl"}
+(1 row)
+
+SELECT '{"abcdef":"ghijkl"}' :: jsonb :: mydict;
+        mydict        
+----------------------
+ {"abcdef": "ghijkl"}
+(1 row)
+
+SELECT ('{"abcdef":"ghijkl"}' :: mydict) -> 'abcdef';
+ ?column? 
+----------
+ "ghijkl"
+(1 row)
+
+DROP TYPE mydict;
+SELECT dictentry FROM pg_dict ORDER BY dictentry;
+ dictentry 
+-----------
+(0 rows)
+

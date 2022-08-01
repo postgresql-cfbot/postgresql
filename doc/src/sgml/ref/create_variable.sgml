@@ -1,0 +1,214 @@
+<!--
+doc/src/sgml/ref/create_variable.sgml
+PostgreSQL documentation
+-->
+
+<refentry id="sql-createvariable">
+ <indexterm zone="sql-createvariable">
+  <primary>CREATE VARIABLE</primary>
+ </indexterm>
+
+ <indexterm>
+  <primary>session variable</primary>
+  <secondary>defining</secondary>
+ </indexterm>
+
+ <refmeta>
+  <refentrytitle>CREATE VARIABLE</refentrytitle>
+  <manvolnum>7</manvolnum>
+  <refmiscinfo>SQL - Language Statements</refmiscinfo>
+ </refmeta>
+
+ <refnamediv>
+  <refname>CREATE VARIABLE</refname>
+  <refpurpose>define a session variable</refpurpose>
+ </refnamediv>
+
+ <refsynopsisdiv>
+<synopsis>
+CREATE [ { TEMPORARY | TEMP } ] [ IMMUTABLE ] VARIABLE [ IF NOT EXISTS ] <replaceable class="parameter">name</replaceable> [ AS ] <replaceable class="parameter">data_type</replaceable> ] [ COLLATE <replaceable class="parameter">collation</replaceable> ]
+    [ NOT NULL ] [ DEFAULT <replaceable class="parameter">default_expr</replaceable> ] [ { ON COMMIT DROP | ON TRANSACTION END RESET } ]
+</synopsis>
+ </refsynopsisdiv>
+ <refsect1>
+  <title>Description</title>
+
+  <para>
+   The <command>CREATE VARIABLE</command> command creates a session variable.
+   Session variables, like relations, exist within a schema and their access is
+   controlled via <command>GRANT</command> and <command>REVOKE</command>
+   commands.
+  </para>
+
+  <para>
+   The value of a session variable is local to the current session. Retrieving
+   a session variable's value returns either a NULL or a default value, unless
+   its value is set to something else in the current session with a LET
+   command. The content of a session variable is not transactional. This is the
+   same as regular variables in PL languages.
+  </para>
+
+  <para>
+   Session variables are retrieved by the <command>SELECT</command> SQL
+   command.  Their value is set with the <command>LET</command> SQL command.
+   While session variables share properties with tables, their value cannot be
+   changed with an <command>UPDATE</command> command.
+  </para>
+
+  <note>
+   <para>
+    Inside a query or an expression, the session variable can be shadowed by
+    column or by routine's variable or routine argument. Such collisions of
+    identifiers can be resolved by using qualified identifiers. Session variables
+    can use schema name, columns can use table aliases, routine variables
+    can use block labels, and routine arguments can use the routine name.
+   </para>
+  </note>
+ </refsect1>
+
+ <refsect1>
+  <title>Parameters</title>
+
+  <variablelist>
+   <varlistentry>
+    <term><literal>IMMUTABLE</literal></term>
+    <listitem>
+     <para>
+      The assigned value of the session variable can not be changed.
+      Only if the session variable doesn't have a default value, a single
+      initialization is allowed using the <command>LET</command> command. Once
+      done, no further change is allowed until end of transaction
+      if the session variable was created with clause <literal>ON TRANSACTION
+      END RESET</literal>, or until reset of all session variables by
+      <command>DISCARD VARIABLES</command>, or until reset of all session
+      objects by command <command>DISCARD ALL</command>.
+     </para>
+
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>IF NOT EXISTS</literal></term>
+    <listitem>
+     <para>
+      Do not throw an error if the name already exists. A notice is issued in
+      this case.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">name</replaceable></term>
+    <listitem>
+     <para>
+      The name, optionally schema-qualified, of the session variable.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">data_type</replaceable></term>
+    <listitem>
+     <para>
+      The name, optionally schema-qualified, of the data type of the session
+      variable.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>COLLATE <replaceable>collation</replaceable></literal></term>
+    <listitem>
+     <para>
+      The <literal>COLLATE</literal> clause assigns a collation to the session
+      variable (which must be of a collatable data type).  If not specified,
+      the data type's default collation is used.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>NOT NULL</literal></term>
+    <listitem>
+     <para>
+      The <literal>NOT NULL</literal> clause forbids setting the session
+      variable to a null value. A session variable created as NOT NULL and
+      without an explicitly declared default value cannot be read until it is
+      initialized by a LET command. This requires the user to explicitly
+      initialize the session variable content before reading it, otherwise an
+      error will be thrown.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>DEFAULT <replaceable>default_expr</replaceable></literal></term>
+    <listitem>
+     <para>
+      The <literal>DEFAULT</literal> clause can be used to assign a default
+      value to a session variable. This expression is evaluated when the session
+      variable is first accessed for reading and had not yet been assigned a value.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>ON COMMIT DROP</literal>, <literal>ON TRANSACTION END RESET</literal></term>
+    <listitem>
+     <para>
+      The <literal>ON COMMIT DROP</literal> clause specifies the behaviour of a
+      temporary session variable at transaction commit. With this clause, the
+      session variable is dropped at commit time. The clause is only allowed
+      for temporary variables. The <literal>ON TRANSACTION END RESET</literal>
+      clause causes the session variable to be reset to its default value when
+      the transaction is committed or rolled back.
+     </para>
+    </listitem>
+   </varlistentry>
+
+  </variablelist>
+ </refsect1>
+
+ <refsect1>
+  <title>Notes</title>
+
+  <para>
+   Use the <command>DROP VARIABLE</command> command to remove a session
+   variable.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Examples</title>
+
+  <para>
+   Create an date session variable <literal>var1</literal>:
+<programlisting>
+CREATE VARIABLE var1 AS date;
+LET var1 = current_date;
+SELECT var1;
+</programlisting>
+  </para>
+
+ </refsect1>
+
+ <refsect1>
+  <title>Compatibility</title>
+
+  <para>
+   The <command>CREATE VARIABLE</command> command is a
+   <productname>PostgreSQL</productname> extension.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>See Also</title>
+
+  <simplelist type="inline">
+   <member><xref linkend="sql-altervariable"/></member>
+   <member><xref linkend="sql-dropvariable"/></member>
+   <member><xref linkend="sql-let"/></member>
+  </simplelist>
+ </refsect1>
+
+</refentry>

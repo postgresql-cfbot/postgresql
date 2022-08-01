@@ -492,6 +492,22 @@ ExplainOneUtility(Node *utilityStmt, IntoClause *into, ExplainState *es,
 		else
 			ExplainDummyGroup("Notify", NULL, es);
 	}
+	else if (IsA(utilityStmt, LetStmt))
+	{
+		LetStmt	   *letstmt = (LetStmt *) utilityStmt;
+		List	   *rewritten;
+
+		if (es->format == EXPLAIN_FORMAT_TEXT)
+			appendStringInfoString(es->str, "SET SESSION VARIABLE\n");
+		else
+			ExplainDummyGroup("Set Session Variable", NULL, es);
+
+		rewritten = QueryRewrite(castNode(Query, copyObject(letstmt->query)));
+		Assert(list_length(rewritten) == 1);
+		ExplainOneQuery(linitial_node(Query, rewritten),
+						CURSOR_OPT_PARALLEL_OK, NULL, es,
+						queryString, params, queryEnv);
+	}
 	else
 	{
 		if (es->format == EXPLAIN_FORMAT_TEXT)

@@ -1073,6 +1073,12 @@ llvm_compile_expr(ExprState *state)
 				LLVMBuildBr(b, opblocks[opno + 1]);
 				break;
 
+			case EEOP_PARAM_VARIABLE:
+				build_EvalXFunc(b, mod, "ExecEvalParamVariable",
+								v_state, op, v_econtext);
+				LLVMBuildBr(b, opblocks[opno + 1]);
+				break;
+
 			case EEOP_PARAM_CALLBACK:
 				{
 					LLVMTypeRef v_functype;

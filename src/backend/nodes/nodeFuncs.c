@@ -4097,6 +4097,16 @@ raw_expression_tree_walker(Node *node,
 					return true;
 			}
 			break;
+		case T_LetStmt:
+			{
+				LetStmt *stmt = (LetStmt *) node;
+
+				if (walker(stmt->target, context))
+					return true;
+				if (walker(stmt->query, context))
+					return true;
+			}
+			break;
 		case T_PLAssignStmt:
 			{
 				PLAssignStmt *stmt = (PLAssignStmt *) node;

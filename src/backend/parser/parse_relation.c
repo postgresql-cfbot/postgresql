@@ -3638,8 +3638,8 @@ errorMissingColumn(ParseState *pstate,
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_COLUMN),
 				 relname ?
-				 errmsg("column %s.%s does not exist", relname, colname) :
-				 errmsg("column \"%s\" does not exist", colname),
+				 errmsg("column or variable %s.%s does not exist", relname, colname) :
+				 errmsg("column or variable \"%s\" does not exist", colname),
 				 state->rfirst ? closestfirst ?
 				 errhint("Perhaps you meant to reference the column \"%s.%s\".",
 						 state->rfirst->eref->aliasname, closestfirst) :
@@ -3658,8 +3658,8 @@ errorMissingColumn(ParseState *pstate,
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_COLUMN),
 				 relname ?
-				 errmsg("column %s.%s does not exist", relname, colname) :
-				 errmsg("column \"%s\" does not exist", colname),
+				 errmsg("column or variable %s.%s does not exist", relname, colname) :
+				 errmsg("column or variable  \"%s\" does not exist", colname),
 				 errhint("Perhaps you meant to reference the column \"%s.%s\" or the column \"%s.%s\".",
 						 state->rfirst->eref->aliasname, closestfirst,
 						 state->rsecond->eref->aliasname, closestsecond),

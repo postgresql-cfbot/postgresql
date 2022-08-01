@@ -49,7 +49,7 @@ typedef struct PlannedStmt
 
 	NodeTag		type;
 
-	CmdType		commandType;	/* select|insert|update|delete|merge|utility */
+	CmdType		commandType;	/* select|let|insert|update|delete|merge|utility */
 
 	uint64		queryId;		/* query identifier (copied from Query) */
 
@@ -90,6 +90,8 @@ typedef struct PlannedStmt
 	List	   *paramExecTypes; /* type OIDs for PARAM_EXEC Params */
 
 	Node	   *utilityStmt;	/* non-null if this is utility stmt */
+
+	List	   *sessionVariables;	/* list of OIDs for PARAM_VARIABLE Params */
 
 	/* statement location in source string (copied from Query) */
 	int			stmt_location;	/* start location, or -1 if unknown */

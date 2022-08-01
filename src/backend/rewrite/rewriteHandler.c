@@ -25,6 +25,7 @@
 #include "access/table.h"
 #include "catalog/dependency.h"
 #include "catalog/pg_type.h"
+#include "catalog/pg_variable.h"
 #include "commands/trigger.h"
 #include "foreign/fdwapi.h"
 #include "miscadmin.h"
@@ -3671,6 +3672,39 @@ RewriteQuery(Query *parsetree, List *rewrite_events)
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("multi-statement DO INSTEAD rules are not supported for data-modifying statements in WITH")));
+		}
+	}
+
+	/*
+	 * Rewrite SetToDefault by default expression of Let statement.
+	 */
+	if (event == CMD_SELECT && OidIsValid(parsetree->resultVariable))
+	{
+		Oid			resultVariable = parsetree->resultVariable;
+
+		if (list_length(parsetree->targetList) == 1 &&
+			IsA(((TargetEntry *) linitial(parsetree->targetList))->expr, SetToDefault))
+		{
+			Variable		var;
+			TargetEntry	   *tle;
+			TargetEntry	   *newtle;
+			Expr		   *defexpr;
+
+			/* Read session variable metadata with defexpr */
+			initVariable(&var, resultVariable, false);
+
+			if (var.has_defexpr)
+				defexpr = (Expr *) var.defexpr;
+			else
+				defexpr = (Expr *) makeNullConst(var.typid, var.typmod, var.collation);
+
+			tle = (TargetEntry *) linitial(parsetree->targetList);
+			newtle = makeTargetEntry(defexpr,
+									  tle->resno,
+									  pstrdup(tle->resname),
+									  false);
+
+			parsetree->targetList = list_make1(newtle);
 		}
 	}
 

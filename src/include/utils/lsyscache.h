@@ -132,6 +132,7 @@ extern char get_func_prokind(Oid funcid);
 extern bool get_func_leakproof(Oid funcid);
 extern RegProcedure get_func_support(Oid funcid);
 extern Oid	get_relname_relid(const char *relname, Oid relnamespace);
+extern Oid	get_varname_varid(const char *varname, Oid varnamespace);
 extern char *get_rel_name(Oid relid);
 extern Oid	get_rel_namespace(Oid relid);
 extern Oid	get_rel_type_id(Oid relid);
@@ -198,6 +199,13 @@ extern Oid	get_index_column_opclass(Oid index_oid, int attno);
 extern bool get_index_isreplident(Oid index_oid);
 extern bool get_index_isvalid(Oid index_oid);
 extern bool get_index_isclustered(Oid index_oid);
+
+extern char *get_session_variable_name(Oid varid);
+extern Oid get_session_variable_namespace(Oid varid);
+extern void get_session_variable_type_typmod_collid(Oid varid,
+												   Oid *typid,
+												   int32 *typmod,
+												   Oid *collid);
 
 #define type_is_array(typid)  (get_element_type(typid) != InvalidOid)
 /* type_is_array_domain accepts both plain arrays and domains over arrays */

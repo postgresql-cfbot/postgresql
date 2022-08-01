@@ -504,6 +504,11 @@ do { \
 		CONVERT_PRIV('r', "SELECT");
 		CONVERT_PRIV('w', "UPDATE");
 	}
+	else if (strcmp(type, "VARIABLE") == 0)
+	{
+		CONVERT_PRIV('S', "READ");
+		CONVERT_PRIV('W', "WRITE");
+	}
 	else
 		abort();
 

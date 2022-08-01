@@ -198,7 +198,7 @@ static	void			check_raise_parameters(PLpgSQL_stmt_raise *stmt);
 %type <stmt>	stmt_return stmt_raise stmt_assert stmt_execsql
 %type <stmt>	stmt_dynexecute stmt_for stmt_perform stmt_call stmt_getdiag
 %type <stmt>	stmt_open stmt_fetch stmt_move stmt_close stmt_null
-%type <stmt>	stmt_commit stmt_rollback
+%type <stmt>	stmt_commit stmt_rollback stmt_let
 %type <stmt>	stmt_case stmt_foreach_a
 
 %type <list>	proc_exceptions
@@ -305,6 +305,7 @@ static	void			check_raise_parameters(PLpgSQL_stmt_raise *stmt);
 %token <keyword>	K_INTO
 %token <keyword>	K_IS
 %token <keyword>	K_LAST
+%token <keyword>	K_LET
 %token <keyword>	K_LOG
 %token <keyword>	K_LOOP
 %token <keyword>	K_MERGE
@@ -899,6 +900,8 @@ proc_stmt		: pl_block ';'
 						{ $$ = $1; }
 				| stmt_rollback
 						{ $$ = $1; }
+				| stmt_let
+						{ $$ = $1; }
 				;
 
 stmt_perform	: K_PERFORM
@@ -1012,6 +1015,29 @@ stmt_assign		: T_DATUM
 													   NULL, NULL);
 
 						$$ = (PLpgSQL_stmt *) new;
+					}
+				;
+
+stmt_let		: K_LET
+					{
+						PLpgSQL_stmt_let *new;
+						RawParseMode pmode;
+
+						pmode = RAW_PARSE_PLPGSQL_LET;
+
+						new = palloc0(sizeof(PLpgSQL_stmt_let));
+						new->cmd_type = PLPGSQL_STMT_LET;
+						new->lineno   = plpgsql_location_to_lineno(@1);
+						new->stmtid = ++plpgsql_curr_compile->nstatements;
+
+						/* Push back the head name to include it in the stmt */
+						plpgsql_push_back_token(K_LET);
+						new->expr = read_sql_construct(';', 0, 0, ";",
+													   pmode,
+													   false, true, true,
+													   NULL, NULL);
+
+						$$ = (PLpgSQL_stmt *)new;
 					}
 				;
 

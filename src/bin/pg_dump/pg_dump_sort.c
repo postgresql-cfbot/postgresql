@@ -75,6 +75,7 @@ enum dbObjectTypePriorities
 	PRIO_TABLE_ATTACH,
 	PRIO_DUMMY_TYPE,
 	PRIO_ATTRDEF,
+	PRIO_VARIABLE,
 	PRIO_BLOB,
 	PRIO_PRE_DATA_BOUNDARY,		/* boundary! */
 	PRIO_TABLE_DATA,
@@ -116,6 +117,7 @@ static const int dbObjectTypePriority[] =
 	PRIO_TABLE,					/* DO_TABLE */
 	PRIO_TABLE_ATTACH,			/* DO_TABLE_ATTACH */
 	PRIO_ATTRDEF,				/* DO_ATTRDEF */
+	PRIO_VARIABLE,				/* DO_VARIABLE */
 	PRIO_INDEX,					/* DO_INDEX */
 	PRIO_INDEX_ATTACH,			/* DO_INDEX_ATTACH */
 	PRIO_STATSEXT,				/* DO_STATSEXT */
@@ -1508,6 +1510,10 @@ describeDumpableObject(DumpableObject *obj, char *buf, int bufsize)
 					 "POST-DATA BOUNDARY  (ID %d)",
 					 obj->dumpId);
 			return;
+		case DO_VARIABLE:
+			snprintf(buf, bufsize,
+					 "VARIABLE %s  (ID %d OID %u)",
+					 obj->name, obj->dumpId, obj->catId.oid);
 	}
 	/* shouldn't get here */
 	snprintf(buf, bufsize,

@@ -108,6 +108,11 @@ GRANT <replaceable class="parameter">role_name</replaceable> [, ...] TO <replace
   | CURRENT_ROLE
   | CURRENT_USER
   | SESSION_USER
+
+GRANT { READ | WRITE | ALL [ PRIVILEGES ] }
+    ON VARIABLE <replaceable>variable_name</replaceable> [, ...]
+    TO <replaceable class="parameter">role_specification</replaceable> [, ...] [ WITH GRANT OPTION ]
+
 </synopsis>
  </refsynopsisdiv>
 
@@ -205,6 +210,24 @@ GRANT <replaceable class="parameter">role_name</replaceable> [, ...] TO <replace
      <listitem>
       <para>
        Alternative spelling for <literal>TEMPORARY</literal>.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><literal>READ</literal></term>
+     <listitem>
+      <para>
+       Allows reading of a session variable.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><literal>WRITE</literal></term>
+     <listitem>
+      <para>
+       Allows setting the value of a session variable.
       </para>
      </listitem>
     </varlistentry>

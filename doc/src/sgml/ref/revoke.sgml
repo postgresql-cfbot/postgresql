@@ -137,6 +137,12 @@ REVOKE [ ADMIN OPTION FOR ]
   | CURRENT_ROLE
   | CURRENT_USER
   | SESSION_USER
+
+REVOKE [ GRANT OPTION FOR ]
+    { { READ | WRITE } [, ...] | ALL [ PRIVILEGES ] }
+    ON VARIABLE <replaceable>variable_name</replaceable> [, ...]
+    FROM { [ GROUP ] <replaceable class="parameter">role_name</replaceable> | PUBLIC } [, ...]
+    [ CASCADE | RESTRICT ]
 </synopsis>
  </refsynopsisdiv>
 

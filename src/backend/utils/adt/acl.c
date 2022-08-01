@@ -314,6 +314,12 @@ aclparse(const char *s, AclItem *aip)
 			case ACL_ALTER_SYSTEM_CHR:
 				read = ACL_ALTER_SYSTEM;
 				break;
+			case ACL_READ_CHR:
+				read = ACL_READ;
+				break;
+			case ACL_WRITE_CHR:
+				read = ACL_WRITE;
+				break;
 			case 'R':			/* ignore old RULE privileges */
 				read = 0;
 				break;
@@ -806,6 +812,10 @@ acldefault(ObjectType objtype, Oid ownerId)
 			world_default = ACL_NO_RIGHTS;
 			owner_default = ACL_ALL_RIGHTS_PARAMETER_ACL;
 			break;
+		case OBJECT_VARIABLE:
+			world_default = ACL_NO_RIGHTS;
+			owner_default = ACL_ALL_RIGHTS_VARIABLE;
+			break;
 		default:
 			elog(ERROR, "unrecognized objtype: %d", (int) objtype);
 			world_default = ACL_NO_RIGHTS;	/* keep compiler quiet */
@@ -902,6 +912,9 @@ acldefault_sql(PG_FUNCTION_ARGS)
 			break;
 		case 'T':
 			objtype = OBJECT_TYPE;
+			break;
+		case 'V':
+			objtype = OBJECT_VARIABLE;
 			break;
 		default:
 			elog(ERROR, "unrecognized objtype abbreviation: %c", objtypec);
@@ -1588,6 +1601,8 @@ makeaclitem(PG_FUNCTION_ARGS)
 		{"CONNECT", ACL_CONNECT},
 		{"SET", ACL_SET},
 		{"ALTER SYSTEM", ACL_ALTER_SYSTEM},
+		{"READ", ACL_READ},
+		{"WRITE", ACL_WRITE},
 		{"RULE", 0},			/* ignore old RULE privileges */
 		{NULL, 0}
 	};
@@ -1604,7 +1619,6 @@ makeaclitem(PG_FUNCTION_ARGS)
 
 	PG_RETURN_ACLITEM_P(result);
 }
-
 
 /*
  * convert_any_priv_string: recognize privilege strings for has_foo_privilege
@@ -1696,6 +1710,10 @@ convert_aclright_to_string(int aclright)
 			return "SET";
 		case ACL_ALTER_SYSTEM:
 			return "ALTER SYSTEM";
+		case ACL_READ:
+			return "READ";
+		case ACL_WRITE:
+			return "WRITE";
 		default:
 			elog(ERROR, "unrecognized aclright: %d", aclright);
 			return NULL;

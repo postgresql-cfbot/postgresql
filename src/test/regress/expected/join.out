@@ -1646,7 +1646,7 @@ SELECT * FROM J1_TBL JOIN J2_TBL USING (i) AS x WHERE x.i = 1;  -- ok
 (1 row)
 
 SELECT * FROM J1_TBL JOIN J2_TBL USING (i) AS x WHERE x.t = 'one';  -- error
-ERROR:  column x.t does not exist
+ERROR:  column or variable x.t does not exist
 LINE 1: ...CT * FROM J1_TBL JOIN J2_TBL USING (i) AS x WHERE x.t = 'one...
                                                              ^
 SELECT * FROM (J1_TBL JOIN J2_TBL USING (i) AS x) AS xx WHERE x.i = 1;  -- error (XXX could use better hint)
@@ -2497,7 +2497,7 @@ select * from t1 left join t2 on (t1.a = t2.a);
 
 -- Test matching of column name with wrong alias
 select t1.x from t1 join t3 on (t1.a = t3.x);
-ERROR:  column t1.x does not exist
+ERROR:  column or variable t1.x does not exist
 LINE 1: select t1.x from t1 join t3 on (t1.a = t3.x);
                ^
 HINT:  Perhaps you meant to reference the column "t3.x".
@@ -4956,19 +4956,19 @@ select * from
 --
 select t1.uunique1 from
   tenk1 t1 join tenk2 t2 on t1.two = t2.two; -- error, prefer "t1" suggestion
-ERROR:  column t1.uunique1 does not exist
+ERROR:  column or variable t1.uunique1 does not exist
 LINE 1: select t1.uunique1 from
                ^
 HINT:  Perhaps you meant to reference the column "t1.unique1".
 select t2.uunique1 from
   tenk1 t1 join tenk2 t2 on t1.two = t2.two; -- error, prefer "t2" suggestion
-ERROR:  column t2.uunique1 does not exist
+ERROR:  column or variable t2.uunique1 does not exist
 LINE 1: select t2.uunique1 from
                ^
 HINT:  Perhaps you meant to reference the column "t2.unique1".
 select uunique1 from
   tenk1 t1 join tenk2 t2 on t1.two = t2.two; -- error, suggest both at once
-ERROR:  column "uunique1" does not exist
+ERROR:  column or variable  "uunique1" does not exist
 LINE 1: select uunique1 from
                ^
 HINT:  Perhaps you meant to reference the column "t1.unique1" or the column "t2.unique1".
@@ -4980,7 +4980,7 @@ select atts.relid::regclass, s.* from pg_stats s join
     a.attrelid::regclass::text join (select unnest(indkey) attnum,
     indexrelid from pg_index i) atts on atts.attnum = a.attnum where
     schemaname != 'pg_catalog';
-ERROR:  column atts.relid does not exist
+ERROR:  column or variable atts.relid does not exist
 LINE 1: select atts.relid::regclass, s.* from pg_stats s join
                ^
 --
@@ -6002,7 +6002,7 @@ lateral (select * from int8_tbl t1,
 
 -- test some error cases where LATERAL should have been used but wasn't
 select f1,g from int4_tbl a, (select f1 as g) ss;
-ERROR:  column "f1" does not exist
+ERROR:  column or variable "f1" does not exist
 LINE 1: select f1,g from int4_tbl a, (select f1 as g) ss;
                                              ^
 HINT:  There is a column named "f1" in table "a", but it cannot be referenced from this part of the query.
@@ -6012,7 +6012,7 @@ LINE 1: select f1,g from int4_tbl a, (select a.f1 as g) ss;
                                              ^
 HINT:  There is an entry for table "a", but it cannot be referenced from this part of the query.
 select f1,g from int4_tbl a cross join (select f1 as g) ss;
-ERROR:  column "f1" does not exist
+ERROR:  column or variable "f1" does not exist
 LINE 1: select f1,g from int4_tbl a cross join (select f1 as g) ss;
                                                        ^
 HINT:  There is a column named "f1" in table "a", but it cannot be referenced from this part of the query.
@@ -6047,7 +6047,7 @@ LINE 1: select 1 from tenk1 a, lateral (select max(a.unique1) from i...
 create temp table xx1 as select f1 as x1, -f1 as x2 from int4_tbl;
 -- error, can't do this:
 update xx1 set x2 = f1 from (select * from int4_tbl where f1 = x1) ss;
-ERROR:  column "x1" does not exist
+ERROR:  column or variable "x1" does not exist
 LINE 1: ... set x2 = f1 from (select * from int4_tbl where f1 = x1) ss;
                                                                 ^
 HINT:  There is a column named "x1" in table "xx1", but it cannot be referenced from this part of the query.
@@ -6067,7 +6067,7 @@ update xx1 set x2 = f1 from xx1, lateral (select * from int4_tbl where f1 = x1) 
 ERROR:  table name "xx1" specified more than once
 -- also errors:
 delete from xx1 using (select * from int4_tbl where f1 = x1) ss;
-ERROR:  column "x1" does not exist
+ERROR:  column or variable "x1" does not exist
 LINE 1: ...te from xx1 using (select * from int4_tbl where f1 = x1) ss;
                                                                 ^
 HINT:  There is a column named "x1" in table "xx1", but it cannot be referenced from this part of the query.

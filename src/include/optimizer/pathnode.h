@@ -21,6 +21,28 @@
 /*
  * prototypes for pathnode.c
  */
+typedef enum
+{
+	PATHS_EQUAL = 0,			/* paths compare (potentially fuzzily) equal */
+	PATHS_BETTER1 = 1,			/* path1 is better on interesting dimensions */
+	PATHS_BETTER2 = 2,			/* path2 is better on interesting dimensions */
+	PATHS_DIFFERENT = 3			/* no path is better on all dimensions */
+} PathComparison;
+
+/* mask of bits used to express the state of PathComparison */
+#define PATH_COMPARISON_MASK 3
+
+static inline PathComparison
+path_comparison_combine(PathComparison c1, PathComparison c2)
+{
+	/* safely combine path comparisons and keep them within expected range */
+	return (c1 | c2) & PATH_COMPARISON_MASK;
+}
+
+/* Hook for plugins to get control in add_paths_to_joinrel() */
+typedef PathComparison(*path_compare_hook_type) (Path *path1, Path *path2);
+extern PGDLLIMPORT path_compare_hook_type path_compare_hook;
+
 extern int	compare_path_costs(Path *path1, Path *path2,
 							   CostSelector criterion);
 extern int	compare_fractional_path_costs(Path *path1, Path *path2,

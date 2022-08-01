@@ -1,0 +1,159 @@
+<!--
+doc/src/sgml/ref/pgwalcleaner.sgml
+PostgreSQL documentation
+-->
+
+<refentry id="pgwalcleaner">
+ <indexterm zone="pgwalcleaner">
+  <primary>pg_walcleaner</primary>
+ </indexterm>
+
+ <refmeta>
+  <refentrytitle><application>pg_walcleaner</application></refentrytitle>
+  <manvolnum>1</manvolnum>
+  <refmiscinfo>Application</refmiscinfo>
+ </refmeta>
+
+ <refnamediv>
+  <refname>pg_walcleaner</refname>
+  <refpurpose>delete (optionally archive before deletion) unneeded <productname>PostgreSQL</productname> WAL files</refpurpose>
+ </refnamediv>
+
+ <refsynopsisdiv>
+  <cmdsynopsis>
+   <command>pg_walcleaner</command>
+   <arg rep="repeat"><replaceable>option</replaceable></arg>
+  </cmdsynopsis>
+ </refsynopsisdiv>
+
+ <refsect1>
+  <title>Description</title>
+
+ <para>
+  <application>pg_walcleaner</application> is a standalone program to delete
+  WAL files that are not needed by PostgreSQL server any more. It is designed
+  to be used on a PostgreSQL server that is crashed/down because of out of disk
+  space. It helps free up some disk space to bring back the server. It can also
+  optionally archive WAL files before deletion. It keeps checkpoint's REDO WAL
+  file and all the WAL files present after that. It also keeps the WAL files
+  required for all replication slots, if present. It also keeps the WAL files
+  that are yet to be archived by the PostgreSQL server i.e. the ones having
+  .ready files.
+ </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Options</title>
+
+   <para>
+    <application>pg_walcleaner</application> accepts the following command-line arguments:
+
+    <variablelist>
+
+     <varlistentry>
+      <term><option>-a <replaceable>archive_command</replaceable></option></term>
+      <term><option>--archive-command=<replaceable>archive_command</replaceable></option></term>
+      <listitem>
+       <para>
+        Archive WAL files before deletion using
+        <replaceable>archive_command</replaceable>. The command must be similar
+        to PostgreSQL server's <xref linkend="guc-archive-command"/>
+        configuration parameter. When specified, it archives the WAL file(s)
+        irrespective of whether the PostgreSQL server is yet to archive (.ready
+        files present) or has already archived (.done files present).
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-D <replaceable>data_directory</replaceable></option></term>
+      <term><option>--pgdata=<replaceable>data_directory</replaceable></option></term>
+      <listitem>
+       <para>
+        PostgreSQL's data directory. If not specified, the environment variable
+        PGDATA is used.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-d</option></term>
+      <term><option>--dry-run</option></term>
+      <listitem>
+       <para>
+        Print the names of the files that would have been removed on <filename>stdout</filename> (performs a dry run).
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-i</option></term>
+      <term><option>--ignore-replication-slots</option></term>
+      <listitem>
+       <para>
+        Ignores replication slots while calculating the cut off WAL file i.e.
+        oldest WAL file before which all the WAL files will be removed. In
+        other words, if specified, <application>pg_walcleaner</application>
+        doesn't keep WAL files required by all the replication slots.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-v</option></term>
+      <term><option>--verbose</option></term>
+      <listitem>
+       <para>
+        Print detailed information during processing.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-V</option></term>
+      <term><option>--version</option></term>
+      <listitem>
+       <para>
+        Print the <application>pg_walcleaner</application> version and exit.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>-?</option></term>
+      <term><option>--help</option></term>
+      <listitem>
+       <para>
+        Show help about <application>pg_walcleaner</application> command line
+        arguments, and exit.
+       </para>
+      </listitem>
+     </varlistentry>
+    </variablelist>
+   </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Environment</title>
+
+  <para>
+   The environment variable <envar>PG_COLOR</envar> specifies whether to use
+   color in diagnostic messages. Possible values are
+   <literal>always</literal>, <literal>auto</literal> and
+   <literal>never</literal>.
+  </para>
+ </refsect1>
+ 
+ 
+ <refsect1>
+  <title>Notes</title>
+
+  <para>
+   <application>pg_walcleaner</application> is designed to be used on a crashed
+   server to free up some disk space. If used on a running server, it might
+   interfere with checkpoint which also deletes the old WAL files. Hence it is
+   advised to use it carefully.
+  </para>
+ </refsect1>
+
+</refentry>

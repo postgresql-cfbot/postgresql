@@ -514,13 +514,16 @@ extern int no_such_variable
 
 /* These are for invocation of a specifically named function with a
  * directly-computed parameter list.  Note that neither arguments nor result
- * are allowed to be NULL.  Also, the function cannot be one that needs to
+ * are allowed to be C NULL.  Also, the function cannot be one that needs to
  * look at FmgrInfo, since there won't be any.
+ *
+ * Only the 2-operand version can call functions that may return SQL-null to
+ * deal with tristate comparison operators.
  */
 extern Datum DirectFunctionCall1Coll(PGFunction func, Oid collation,
 									 Datum arg1);
-extern Datum DirectFunctionCall2Coll(PGFunction func, Oid collation,
-									 Datum arg1, Datum arg2);
+extern Datum DirectFunctionCall2CollExt(PGFunction func, Oid collation,
+										Datum arg1, Datum arg2, bool *isnull);
 extern Datum DirectFunctionCall3Coll(PGFunction func, Oid collation,
 									 Datum arg1, Datum arg2,
 									 Datum arg3);
@@ -634,6 +637,14 @@ extern Datum OidFunctionCall9Coll(Oid functionId, Oid collation,
 								  Datum arg3, Datum arg4, Datum arg5,
 								  Datum arg6, Datum arg7, Datum arg8,
 								  Datum arg9);
+/*
+ * The two-operand version of these functions is able to deal with SQL-null
+ * returns. Addtional translation macros for compatibility to other versions.
+ */
+#define DirectFunctionCall2Ext(func, arg1, arg2, isnull)				\
+	DirectFunctionCall2CollExt(func, InvalidOid, arg1, arg2, isnull)
+#define DirectFunctionCall2Coll(func, coll, arg1, arg2)			\
+	DirectFunctionCall2CollExt(func, coll, arg1, arg2, NULL)
 
 /* These macros allow the collation argument to be omitted (with a default of
  * InvalidOid, ie, no collation).  They exist mostly for backwards
@@ -642,7 +653,7 @@ extern Datum OidFunctionCall9Coll(Oid functionId, Oid collation,
 #define DirectFunctionCall1(func, arg1) \
 	DirectFunctionCall1Coll(func, InvalidOid, arg1)
 #define DirectFunctionCall2(func, arg1, arg2) \
-	DirectFunctionCall2Coll(func, InvalidOid, arg1, arg2)
+	DirectFunctionCall2CollExt(func, InvalidOid, arg1, arg2, NULL)
 #define DirectFunctionCall3(func, arg1, arg2, arg3) \
 	DirectFunctionCall3Coll(func, InvalidOid, arg1, arg2, arg3)
 #define DirectFunctionCall4(func, arg1, arg2, arg3, arg4) \

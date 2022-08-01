@@ -11536,6 +11536,23 @@ CREATE TYPE rainbow AS ENUM ('red', 'orange', 'yellow', 'green', 'blue', 'purple
     </para>
    </note>
 
+   <caution>
+     <para>
+       NaN and Infinity make geometric functions and operators behave
+       inconsistently. Geometric operators or functions that return a boolean
+       return false for operands that contain NaNs. Number-returning functions
+       and operators return NaN in most cases but sometimes return a valid
+       value if no NaNs are met while actual calculation.  Object-returning ones
+       yield an object that contain NaNs depending to the operation.  Likewise
+       the objects containing Infinity can make geometric operators and
+       functions behave inconsistently. For example (point
+       '(Infinity,Infinity)' &lt;-&gt; line '{-1,0,5}') is Infinity but (point
+       '(Infinity,Infinity)' &lt;-&gt; line '{0,-1,5}') is NaN. It can never
+       be a value other than these, but you should consider it uncertain how
+       geometric operators behave for objects containing Infinity.
+     </para>
+   </caution>
+
    <table id="functions-geometry-func-table">
     <title>Geometric Functions</title>
     <tgroup cols="1">

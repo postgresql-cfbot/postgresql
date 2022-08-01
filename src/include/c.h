@@ -413,6 +413,13 @@ typedef unsigned char bool;
 #endif							/* not PG_USE_STDBOOL */
 #endif							/* not C++ */
 
+/* tri-state boolean, false/true are compatible with bool */
+typedef enum tsbool
+{
+	TS_NULL = -1,
+	TS_FALSE = false,
+	TS_TRUE = true
+} tsbool;
 
 /* ----------------------------------------------------------------
  *				Section 3:	standard system types

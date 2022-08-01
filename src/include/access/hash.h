@@ -380,7 +380,6 @@ extern IndexBulkDeleteResult *hashbulkdelete(IndexVacuumInfo *info,
 											 void *callback_state);
 extern IndexBulkDeleteResult *hashvacuumcleanup(IndexVacuumInfo *info,
 												IndexBulkDeleteResult *stats);
-extern bytea *hashoptions(Datum reloptions, bool validate);
 extern bool hashvalidate(Oid opclassoid);
 extern void hashadjustmembers(Oid opfamilyoid,
 							  Oid opclassoid,
@@ -472,6 +471,7 @@ extern BlockNumber _hash_get_newblock_from_oldbucket(Relation rel, Bucket old_bu
 extern Bucket _hash_get_newbucket_from_oldbucket(Relation rel, Bucket old_bucket,
 												 uint32 lowmask, uint32 maxbucket);
 extern void _hash_kill_items(IndexScanDesc scan);
+extern void *hashgetreloptspecset(void);
 
 /* hash.c */
 extern void hashbucketcleanup(Relation rel, Bucket cur_bucket,

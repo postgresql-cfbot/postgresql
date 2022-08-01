@@ -26,20 +26,14 @@ buildtree=`cd ${2:-'.'} && pwd`
 # If we did, it would interfere with installation of prebuilt docs from
 # the source tree, if a VPATH build is done from a distribution tarball.
 # See bug #5595.
-for item in `find "$sourcetree" -type d \( \( -name CVS -prune \) -o \( -name .git -prune \) -o -print \) | grep -v "$sourcetree/doc/src/sgml/\+"`; do
-    subdir=`expr "$item" : "$sourcetree\(.*\)"`
-    if test ! -d "$buildtree/$subdir"; then
-        mkdir -p "$buildtree/$subdir" || exit 1
-    fi
-done
+( cd "$sourcetree" && find . -type d \( \( -name CVS -prune \) -o \( -name .git -prune \) -o -print \) |grep -v "doc/src/sgml/\+" ) |
+	( cd "$buildtree" && xargs mkdir -p )
 
 for item in `find "$sourcetree" -name Makefile -print -o -name GNUmakefile -print | grep -v "$sourcetree/doc/src/sgml/images/"`; do
-    filename=`expr "$item" : "$sourcetree\(.*\)"`
-    if test ! -f "${item}.in"; then
-        if cmp "$item" "$buildtree/$filename" >/dev/null 2>&1; then : ; else
-            ln -fs "$item" "$buildtree/$filename" || exit 1
-        fi
-    fi
+    filename=${item#$sourcetree}
+    [ -e "$buildtree/$filename" ] && continue
+    cmp "$item" "$buildtree/$filename" >/dev/null 2>&1 ||
+        ln -fs "$item" "$buildtree/$filename"
 done
 
 exit 0

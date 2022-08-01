@@ -338,13 +338,29 @@ task:
     cores_script: src/tools/ci/cores_backtrace.sh macos "${HOME}/cores"
 
 
+WINDOWS_ENVIRONMENT_BASE: &WINDOWS_ENVIRONMENT_BASE
+    env:
+      # Half the allowed per-user CPU cores
+      CPUS: 4
+      # The default working dir is in a directory msbuild complains about
+      CIRRUS_WORKING_DIR: "c:/cirrus"
+
+      # Avoids port conflicts between concurrent tap test runs
+      PG_TEST_USE_UNIX_SOCKETS: 1
+
+    sysinfo_script: |
+      chcp
+      systeminfo
+      powershell -Command get-psdrive -psprovider filesystem
+      set
+
 task:
+  << : *WINDOWS_ENVIRONMENT_BASE
   name: Windows - Server 2019, VS 2019
 
-  env:
-    # Half the allowed per-user CPU cores
-    CPUS: 4
+  only_if: $CIRRUS_CHANGE_MESSAGE !=~ '.*\nci-os-only:.*' || $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-os-only:[^\n]*windows.*'
 
+  env:
     # Our windows infrastructure doesn't have test concurrency above the level
     # of a single vcregress test target. Due to that, it's useful to run prove
     # with multiple jobs. For the other tasks it isn't, because two sources
@@ -354,15 +370,11 @@ task:
     # likely can be improved upon further.
     PROVE_FLAGS: -j10 --timer
 
-    # The default cirrus working dir is in a directory msbuild complains about
-    CIRRUS_WORKING_DIR: "c:/cirrus"
     # Avoid re-installing over and over
     NO_TEMP_INSTALL: 1
     # git's tar doesn't deal with drive letters, see
     # https://postgr.es/m/b6782dc3-a7b0-ed56-175f-f8f54cb08d67%40dunslane.net
     TAR: "c:/windows/system32/tar.exe"
-    # Avoids port conflicts between concurrent tap test runs
-    PG_TEST_USE_UNIX_SOCKETS: 1
     PG_REGRESS_SOCK_DIR: "c:/cirrus/"
     # -m enables parallelism
     # verbosity:minimal + Summary reduce verbosity, while keeping a summary of
@@ -392,12 +404,6 @@ task:
     image: $CONTAINER_REPO/windows_ci_vs_2019:latest
     cpu: $CPUS
     memory: 4G
-
-  sysinfo_script: |
-    chcp
-    systeminfo
-    powershell -Command get-psdrive -psprovider filesystem
-    set
 
   setup_additional_packages_script: |
     REM choco install -y --no-progress ...
@@ -456,6 +462,61 @@ task:
       path: "crashlog-*.txt"
       type: text/plain
 
+task:
+  << : *WINDOWS_ENVIRONMENT_BASE
+  name: Windows - Server 2019, MinGW64
+  only_if: $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-os-only:[^\n]*mingw.*'
+
+  windows_container:
+    image: $CONTAINER_REPO/windows_ci_mingw64:latest
+    cpu: $CPUS
+    memory: 4G
+  env:
+    CCACHE_DIR: C:/msys64/ccache
+    BUILD_DIR: "%CIRRUS_WORKING_DIR%/build"
+
+  ccache_cache:
+    folder: ${CCACHE_DIR}
+
+  mingw_info_script:
+    - C:\msys64\usr\bin\dash.exe -lc "where gcc"
+    - C:\msys64\usr\bin\dash.exe -lc "gcc --version"
+    - C:\msys64\usr\bin\dash.exe -lc "where perl"
+    - C:\msys64\usr\bin\dash.exe -lc "perl --version"
+
+  setup_additional_packages_script: |
+    REM C:\msys64\usr\bin\pacman.exe -S --noconfirm busybox
+
+  configure_script:
+    - C:\msys64\usr\bin\dash.exe -lc "mkdir %BUILD_DIR% &&
+      cd %BUILD_DIR% && for i in 1 2; do
+      %CIRRUS_WORKING_DIR%/configure
+        --cache-file=${CCACHE_DIR}/configure.cache
+        --enable-cassert
+        --enable-debug
+        --enable-tap-tests
+        --with-icu
+        --with-libxml
+        --with-libxslt
+        --with-lz4
+        CC='ccache gcc'
+        CXX='ccache g++'
+        CFLAGS='-Og -ggdb -pipe'
+        CXXFLAGS='-Og -ggdb' && break;
+        rm -v ${CCACHE_DIR}/configure.cache;
+        done
+        "
+
+  build_script:
+    C:\msys64\usr\bin\dash.exe -lc "cd %BUILD_DIR% && make -s world-bin -j${CPUS}"
+
+  upload_caches: ccache
+
+  tests_script:
+    - set "NoDefaultCurrentDirectoryInExePath=0"
+    - C:\msys64\usr\bin\dash.exe -lc "cd %BUILD_DIR% && make -s ${CHECK} ${CHECKFLAGS} -j${CPUS} TMPDIR=%BUILD_DIR%/tmp_install"
+
+  on_failure: *on_failure
 
 task:
   name: CompilerWarnings

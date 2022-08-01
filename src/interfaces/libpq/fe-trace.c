@@ -458,7 +458,12 @@ pqTraceOutputt(FILE *f, const char *message, int *cursor, bool regress)
 	nfields = pqTraceOutputInt16(f, message, cursor);
 
 	for (int i = 0; i < nfields; i++)
+	{
 		pqTraceOutputInt32(f, message, cursor, regress);
+		pqTraceOutputInt32(f, message, cursor, regress);
+		pqTraceOutputInt16(f, message, cursor);
+		pqTraceOutputInt16(f, message, cursor);
+	}
 }
 
 /* RowDescription */
@@ -478,6 +483,8 @@ pqTraceOutputT(FILE *f, const char *message, int *cursor, bool regress)
 		pqTraceOutputInt32(f, message, cursor, regress);
 		pqTraceOutputInt16(f, message, cursor);
 		pqTraceOutputInt32(f, message, cursor, false);
+		pqTraceOutputInt16(f, message, cursor);
+		pqTraceOutputInt32(f, message, cursor, regress);
 		pqTraceOutputInt16(f, message, cursor);
 	}
 }

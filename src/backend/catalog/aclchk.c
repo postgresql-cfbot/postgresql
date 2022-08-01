@@ -3579,6 +3579,8 @@ aclcheck_error(AclResult aclerr, ObjectType objtype,
 					case OBJECT_AMPROC:
 					case OBJECT_ATTRIBUTE:
 					case OBJECT_CAST:
+					case OBJECT_CEK:
+					case OBJECT_CMK:
 					case OBJECT_DEFAULT:
 					case OBJECT_DEFACL:
 					case OBJECT_DOMCONSTRAINT:
@@ -3719,6 +3721,8 @@ aclcheck_error(AclResult aclerr, ObjectType objtype,
 					case OBJECT_AMPROC:
 					case OBJECT_ATTRIBUTE:
 					case OBJECT_CAST:
+					case OBJECT_CEK:
+					case OBJECT_CMK:
 					case OBJECT_DEFAULT:
 					case OBJECT_DEFACL:
 					case OBJECT_DOMCONSTRAINT:

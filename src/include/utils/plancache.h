@@ -101,6 +101,10 @@ typedef struct CachedPlanSource
 	CommandTag	commandTag;		/* 'nuff said */
 	Oid		   *param_types;	/* array of parameter type OIDs, or NULL */
 	int			num_params;		/* length of param_types array */
+	Oid		   *param_origtbls; /* array of underlying tables of parameters,
+								 * or NULL */
+	AttrNumber *param_origcols; /* array of underlying columns of parameters,
+								 * or NULL */
 	ParserSetupHook parserSetup;	/* alternative parameter spec method */
 	void	   *parserSetupArg;
 	int			cursor_options; /* cursor options used for planning */
@@ -199,6 +203,8 @@ extern void CompleteCachedPlan(CachedPlanSource *plansource,
 							   MemoryContext querytree_context,
 							   Oid *param_types,
 							   int num_params,
+							   Oid *param_origtbls,
+							   AttrNumber *param_origcols,
 							   ParserSetupHook parserSetup,
 							   void *parserSetupArg,
 							   int cursor_options,

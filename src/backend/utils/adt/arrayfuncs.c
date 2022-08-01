@@ -3386,6 +3386,7 @@ construct_array_builtin(Datum *elems, int nelems, Oid elmtype)
 			break;
 
 		case OIDOID:
+		case REGCLASSOID:
 		case REGTYPEOID:
 			elmlen = sizeof(Oid);
 			elmbyval = true;

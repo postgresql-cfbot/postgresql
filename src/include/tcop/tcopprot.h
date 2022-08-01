@@ -53,6 +53,8 @@ extern List *pg_analyze_and_rewrite_varparams(RawStmt *parsetree,
 											  const char *query_string,
 											  Oid **paramTypes,
 											  int *numParams,
+											  Oid **paramOrigTbls,
+											  AttrNumber **paramOrigCols,
 											  QueryEnvironment *queryEnv);
 extern List *pg_analyze_and_rewrite_withcb(RawStmt *parsetree,
 										   const char *query_string,

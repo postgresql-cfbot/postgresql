@@ -344,6 +344,10 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 		"Target-Session-Attrs", "", 15, /* sizeof("prefer-standby") = 15 */
 	offsetof(struct pg_conn, target_session_attrs)},
 
+	{"cmklookup", "PGCMKLOOKUP", "", NULL,
+		"CMK-Lookup", "", 64,
+	offsetof(struct pg_conn, cmklookup)},
+
 	/* Terminating entry --- MUST BE LAST */
 	{NULL, NULL, NULL, NULL,
 	NULL, NULL, 0}
@@ -4097,6 +4101,22 @@ freePGconn(PGconn *conn)
 	free(conn->krbsrvname);
 	free(conn->gsslib);
 	free(conn->connip);
+	free(conn->cmklookup);
+	for (int i = 0; i < conn->ncmks; i++)
+	{
+		free(conn->cmks[i].cmkname);
+		free(conn->cmks[i].cmkrealm);
+	}
+	free(conn->cmks);
+	for (int i = 0; i < conn->nceks; i++)
+	{
+		if (conn->ceks[i].cekdata)
+		{
+			explicit_bzero(conn->ceks[i].cekdata, conn->ceks[i].cekdatalen);
+			free(conn->ceks[i].cekdata);
+		}
+	}
+	free(conn->ceks);
 	/* Note that conn->Pfdebug is not ours to close or free */
 	free(conn->write_err_msg);
 	free(conn->inBuffer);

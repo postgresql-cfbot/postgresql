@@ -8107,6 +8107,7 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 	int			i_typstorage;
 	int			i_attidentity;
 	int			i_attgenerated;
+	int			i_attcekname;
 	int			i_attisdropped;
 	int			i_attlen;
 	int			i_attalign;
@@ -8216,17 +8217,24 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 
 	if (fout->remoteVersion >= 120000)
 		appendPQExpBufferStr(q,
-							 "a.attgenerated\n");
+							 "a.attgenerated,\n");
 	else
 		appendPQExpBufferStr(q,
-							 "'' AS attgenerated\n");
+							 "'' AS attgenerated,\n");
+
+	if (fout->remoteVersion >= 160000)
+		appendPQExpBufferStr(q,
+							 "(SELECT cekname FROM pg_colenckey cek WHERE cek.oid = a.attcek ) AS attcekname\n");
+	else
+		appendPQExpBufferStr(q,
+							 "NULL AS attcekname\n");
 
 	/* need left join to pg_type to not fail on dropped columns ... */
 	appendPQExpBuffer(q,
 					  "FROM unnest('%s'::pg_catalog.oid[]) AS src(tbloid)\n"
 					  "JOIN pg_catalog.pg_attribute a ON (src.tbloid = a.attrelid) "
 					  "LEFT JOIN pg_catalog.pg_type t "
-					  "ON (a.atttypid = t.oid)\n"
+					  "ON (CASE WHEN a.attrealtypid <> 0 THEN a.attrealtypid ELSE a.atttypid END = t.oid)\n"
 					  "WHERE a.attnum > 0::pg_catalog.int2\n"
 					  "ORDER BY a.attrelid, a.attnum",
 					  tbloids->data);
@@ -8245,6 +8253,7 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 	i_typstorage = PQfnumber(res, "typstorage");
 	i_attidentity = PQfnumber(res, "attidentity");
 	i_attgenerated = PQfnumber(res, "attgenerated");
+	i_attcekname = PQfnumber(res, "attcekname");
 	i_attisdropped = PQfnumber(res, "attisdropped");
 	i_attlen = PQfnumber(res, "attlen");
 	i_attalign = PQfnumber(res, "attalign");
@@ -8306,6 +8315,7 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 		tbinfo->typstorage = (char *) pg_malloc(numatts * sizeof(char));
 		tbinfo->attidentity = (char *) pg_malloc(numatts * sizeof(char));
 		tbinfo->attgenerated = (char *) pg_malloc(numatts * sizeof(char));
+		tbinfo->attcekname = (char **) pg_malloc(numatts * sizeof(char *));
 		tbinfo->attisdropped = (bool *) pg_malloc(numatts * sizeof(bool));
 		tbinfo->attlen = (int *) pg_malloc(numatts * sizeof(int));
 		tbinfo->attalign = (char *) pg_malloc(numatts * sizeof(char));
@@ -8334,6 +8344,10 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 			tbinfo->attidentity[j] = *(PQgetvalue(res, r, i_attidentity));
 			tbinfo->attgenerated[j] = *(PQgetvalue(res, r, i_attgenerated));
 			tbinfo->needs_override = tbinfo->needs_override || (tbinfo->attidentity[j] == ATTRIBUTE_IDENTITY_ALWAYS);
+			if (!PQgetisnull(res, r, i_attcekname))
+				tbinfo->attcekname[j] = pg_strdup(PQgetvalue(res, r, i_attcekname));
+			else
+				tbinfo->attcekname[j] = NULL;
 			tbinfo->attisdropped[j] = (PQgetvalue(res, r, i_attisdropped)[0] == 't');
 			tbinfo->attlen[j] = atoi(PQgetvalue(res, r, i_attlen));
 			tbinfo->attalign[j] = *(PQgetvalue(res, r, i_attalign));
@@ -15299,6 +15313,12 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 					{
 						appendPQExpBuffer(q, " %s",
 										  tbinfo->atttypnames[j]);
+					}
+
+					if (tbinfo->attcekname[j])
+					{
+						appendPQExpBuffer(q, " ENCRYPTED WITH (column_encryption_key = %s)",
+										  fmtId(tbinfo->attcekname[j]));
 					}
 
 					if (print_default)

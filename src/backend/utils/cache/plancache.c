@@ -340,6 +340,8 @@ CompleteCachedPlan(CachedPlanSource *plansource,
 				   MemoryContext querytree_context,
 				   Oid *param_types,
 				   int num_params,
+				   Oid *param_origtbls,
+				   AttrNumber *param_origcols,
 				   ParserSetupHook parserSetup,
 				   void *parserSetupArg,
 				   int cursor_options,
@@ -419,6 +421,14 @@ CompleteCachedPlan(CachedPlanSource *plansource,
 	{
 		plansource->param_types = (Oid *) palloc(num_params * sizeof(Oid));
 		memcpy(plansource->param_types, param_types, num_params * sizeof(Oid));
+
+		plansource->param_origtbls = (Oid *) palloc0(num_params * sizeof(Oid));
+		if (param_origtbls)
+			memcpy(plansource->param_origtbls, param_origtbls, num_params * sizeof(Oid));
+
+		plansource->param_origcols = (AttrNumber *) palloc0(num_params * sizeof(AttrNumber));
+		if (param_origcols)
+			memcpy(plansource->param_origcols, param_origcols, num_params * sizeof(AttrNumber));
 	}
 	else
 		plansource->param_types = NULL;

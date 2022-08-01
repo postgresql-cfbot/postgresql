@@ -50,7 +50,6 @@ static void InitQueryHashTable(void);
 static ParamListInfo EvaluateParams(ParseState *pstate,
 									PreparedStatement *pstmt, List *params,
 									EState *estate);
-static Datum build_regtype_array(Oid *param_types, int num_params);
 
 /*
  * Implements the 'PREPARE' utility statement.
@@ -62,6 +61,8 @@ PrepareQuery(ParseState *pstate, PrepareStmt *stmt,
 	RawStmt    *rawstmt;
 	CachedPlanSource *plansource;
 	Oid		   *argtypes = NULL;
+	Oid		   *argorigtbls = NULL;
+	AttrNumber *argorigcols = NULL;
 	int			nargs;
 	List	   *query_list;
 
@@ -108,6 +109,9 @@ PrepareQuery(ParseState *pstate, PrepareStmt *stmt,
 
 			argtypes[i++] = toid;
 		}
+
+		argorigtbls = (Oid *) palloc0(nargs * sizeof(Oid));
+		argorigcols = (AttrNumber *) palloc0(nargs * sizeof(AttrNumber));
 	}
 
 	/*
@@ -117,7 +121,9 @@ PrepareQuery(ParseState *pstate, PrepareStmt *stmt,
 	 * Rewrite the query. The result could be 0, 1, or many queries.
 	 */
 	query_list = pg_analyze_and_rewrite_varparams(rawstmt, pstate->p_sourcetext,
-												  &argtypes, &nargs, NULL);
+												  &argtypes, &nargs,
+												  &argorigtbls, &argorigcols,
+												  NULL);
 
 	/* Finish filling in the CachedPlanSource */
 	CompleteCachedPlan(plansource,
@@ -125,6 +131,8 @@ PrepareQuery(ParseState *pstate, PrepareStmt *stmt,
 					   NULL,
 					   argtypes,
 					   nargs,
+					   argorigtbls,
+					   argorigcols,
 					   NULL,
 					   NULL,
 					   CURSOR_OPT_PARALLEL_OK,	/* allow parallel mode */
@@ -683,34 +691,49 @@ pg_prepared_statement(PG_FUNCTION_ARGS)
 		hash_seq_init(&hash_seq, prepared_queries);
 		while ((prep_stmt = hash_seq_search(&hash_seq)) != NULL)
 		{
+			int			num_params = prep_stmt->plansource->num_params;
 			TupleDesc	result_desc;
-			Datum		values[8];
-			bool		nulls[8] = {0};
+			Datum	   *tmp_ary;
+			Datum		values[10];
+			bool		nulls[10] = {0};
 
 			result_desc = prep_stmt->plansource->resultDesc;
 
 			values[0] = CStringGetTextDatum(prep_stmt->stmt_name);
 			values[1] = CStringGetTextDatum(prep_stmt->plansource->query_string);
 			values[2] = TimestampTzGetDatum(prep_stmt->prepare_time);
-			values[3] = build_regtype_array(prep_stmt->plansource->param_types,
-											prep_stmt->plansource->num_params);
+
+			tmp_ary = (Datum *) palloc(num_params * sizeof(Datum));
+			for (int i = 0; i < num_params; i++)
+				tmp_ary[i] = ObjectIdGetDatum(prep_stmt->plansource->param_types[i]);
+			values[3] = PointerGetDatum(construct_array_builtin(tmp_ary, num_params, REGTYPEOID));
+
+			tmp_ary = (Datum *) palloc(num_params * sizeof(Datum));
+			for (int i = 0; i < num_params; i++)
+				tmp_ary[i] = ObjectIdGetDatum(prep_stmt->plansource->param_origtbls[i]);
+			values[4] = PointerGetDatum(construct_array_builtin(tmp_ary, num_params, REGCLASSOID));
+
+			tmp_ary = (Datum *) palloc(num_params * sizeof(Datum));
+			for (int i = 0; i < num_params; i++)
+				tmp_ary[i] = Int16GetDatum(prep_stmt->plansource->param_origcols[i]);
+			values[5] = PointerGetDatum(construct_array_builtin(tmp_ary, num_params, INT2OID));
+
 			if (result_desc)
 			{
-				Oid		   *result_types;
-
-				result_types = (Oid *) palloc(result_desc->natts * sizeof(Oid));
+				tmp_ary = (Datum *) palloc(result_desc->natts * sizeof(Datum));
 				for (int i = 0; i < result_desc->natts; i++)
-					result_types[i] = result_desc->attrs[i].atttypid;
-				values[4] = build_regtype_array(result_types, result_desc->natts);
+					tmp_ary[i] = ObjectIdGetDatum(result_desc->attrs[i].atttypid);
+				values[6] = PointerGetDatum(construct_array_builtin(tmp_ary, result_desc->natts, REGTYPEOID));
 			}
 			else
 			{
 				/* no result descriptor (for example, DML statement) */
-				nulls[4] = true;
+				nulls[6] = true;
 			}
-			values[5] = BoolGetDatum(prep_stmt->from_sql);
-			values[6] = Int64GetDatumFast(prep_stmt->plansource->num_generic_plans);
-			values[7] = Int64GetDatumFast(prep_stmt->plansource->num_custom_plans);
+
+			values[7] = BoolGetDatum(prep_stmt->from_sql);
+			values[8] = Int64GetDatumFast(prep_stmt->plansource->num_generic_plans);
+			values[9] = Int64GetDatumFast(prep_stmt->plansource->num_custom_plans);
 
 			tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc,
 								 values, nulls);
@@ -718,25 +741,4 @@ pg_prepared_statement(PG_FUNCTION_ARGS)
 	}
 
 	return (Datum) 0;
-}
-
-/*
- * This utility function takes a C array of Oids, and returns a Datum
- * pointing to a one-dimensional Postgres array of regtypes. An empty
- * array is returned as a zero-element array, not NULL.
- */
-static Datum
-build_regtype_array(Oid *param_types, int num_params)
-{
-	Datum	   *tmp_ary;
-	ArrayType  *result;
-	int			i;
-
-	tmp_ary = (Datum *) palloc(num_params * sizeof(Datum));
-
-	for (i = 0; i < num_params; i++)
-		tmp_ary[i] = ObjectIdGetDatum(param_types[i]);
-
-	result = construct_array_builtin(tmp_ary, num_params, REGTYPEOID);
-	return PointerGetDatum(result);
 }

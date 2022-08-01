@@ -30,6 +30,7 @@
 #include "commands/alter.h"
 #include "commands/async.h"
 #include "commands/cluster.h"
+#include "commands/colenccmds.h"
 #include "commands/collationcmds.h"
 #include "commands/comment.h"
 #include "commands/conversioncmds.h"
@@ -1441,6 +1442,14 @@ ProcessUtilitySlow(ParseState *pstate,
 															stmt->definition,
 															&secondaryObject);
 							break;
+						case OBJECT_CEK:
+							Assert(stmt->args == NIL);
+							address = CreateCEK(pstate, stmt);
+							break;
+						case OBJECT_CMK:
+							Assert(stmt->args == NIL);
+							address = CreateCMK(pstate, stmt);
+							break;
 						case OBJECT_COLLATION:
 							Assert(stmt->args == NIL);
 							address = DefineCollation(pstate,
@@ -2759,6 +2768,12 @@ CreateCommandTag(Node *parsetree)
 					break;
 				case OBJECT_COLLATION:
 					tag = CMDTAG_CREATE_COLLATION;
+					break;
+				case OBJECT_CEK:
+					tag = CMDTAG_CREATE_COLUMN_ENCRYPTION_KEY;
+					break;
+				case OBJECT_CMK:
+					tag = CMDTAG_CREATE_COLUMN_MASTER_KEY;
 					break;
 				case OBJECT_ACCESS_METHOD:
 					tag = CMDTAG_CREATE_ACCESS_METHOD;

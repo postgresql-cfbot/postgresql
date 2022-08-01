@@ -119,6 +119,23 @@ SELECT 1 AS x, 'Hello', 2 AS y, true AS "dirty\name"
 -- all on one line
 SELECT 3 AS x, 'Hello', 4 AS y, true AS "dirty\name" \gdesc \g
 
+
+-- \gencr
+-- (This just tests the parameter passing; there is no encryption here.)
+
+CREATE TABLE test_gencr (a int, b text);
+INSERT INTO test_gencr VALUES (1, 'one') \gencr
+SELECT * FROM test_gencr WHERE a = 1 \gencr
+
+INSERT INTO test_gencr VALUES ($1, $2) \gencr 2 'two'
+SELECT * FROM test_gencr WHERE a IN ($1, $2) \gencr 2 3
+
+-- test parse error
+SELECT * FROM test_gencr WHERE a = x \gencr
+-- test bind error
+SELECT * FROM test_gencr WHERE a = $1 \gencr
+
+
 -- \gexec
 
 create temporary table gexec_test(a int, b text, c date, d float);

@@ -195,6 +195,7 @@ slashUsage(unsigned short int pager)
 	HELP0("  \\g [(OPTIONS)] [FILE]  execute query (and send result to file or |pipe);\n"
 		  "                         \\g with no arguments is equivalent to a semicolon\n");
 	HELP0("  \\gdesc                 describe result of query, without executing it\n");
+	HELP0("  \\gencr [PARAM]...      execute query, with support for parameter encryption\n");
 	HELP0("  \\gexec                 execute query, then execute each value in its result\n");
 	HELP0("  \\gset [PREFIX]         execute query and store result in psql variables\n");
 	HELP0("  \\gx [(OPTIONS)] [FILE] as \\g, but forces expanded output mode\n");
@@ -412,6 +413,8 @@ helpVariables(unsigned short int pager)
 		  "    true if last query failed, else false\n");
 	HELP0("  FETCH_COUNT\n"
 		  "    the number of result rows to fetch and display at a time (0 = unlimited)\n");
+	HELP0("  HIDE_COLUMN_ENCRYPTION\n"
+		  "    if set, column encryption details are not displayed\n");
 	HELP0("  HIDE_TABLEAM\n"
 		  "    if set, table access methods are not displayed\n");
 	HELP0("  HIDE_TOAST_COMPRESSION\n"

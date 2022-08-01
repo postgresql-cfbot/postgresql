@@ -2303,6 +2303,8 @@ pg_get_object_address(PG_FUNCTION_ARGS)
 			objnode = (Node *) name;
 			break;
 		case OBJECT_ACCESS_METHOD:
+		case OBJECT_CEK:
+		case OBJECT_CMK:
 		case OBJECT_DATABASE:
 		case OBJECT_EVENT_TRIGGER:
 		case OBJECT_EXTENSION:

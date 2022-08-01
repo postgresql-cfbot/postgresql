@@ -237,6 +237,31 @@ SELECT 3 AS x, 'Hello', 4 AS y, true AS "dirty\name" \gdesc \g
  3 | Hello    | 4 | t
 (1 row)
 
+-- \gencr
+-- (This just tests the parameter passing; there is no encryption here.)
+CREATE TABLE test_gencr (a int, b text);
+INSERT INTO test_gencr VALUES (1, 'one') \gencr
+SELECT * FROM test_gencr WHERE a = 1 \gencr
+ a |  b  
+---+-----
+ 1 | one
+(1 row)
+
+INSERT INTO test_gencr VALUES ($1, $2) \gencr 2 'two'
+SELECT * FROM test_gencr WHERE a IN ($1, $2) \gencr 2 3
+ a |  b  
+---+-----
+ 2 | two
+(1 row)
+
+-- test parse error
+SELECT * FROM test_gencr WHERE a = x \gencr
+ERROR:  column "x" does not exist
+LINE 1: SELECT * FROM test_gencr WHERE a = x 
+                                           ^
+-- test bind error
+SELECT * FROM test_gencr WHERE a = $1 \gencr
+ERROR:  bind message supplies 0 parameters, but prepared statement "" requires 1
 -- \gexec
 create temporary table gexec_test(a int, b text, c date, d float);
 select format('create index on gexec_test(%I)', attname)

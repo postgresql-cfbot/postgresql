@@ -95,6 +95,10 @@ typedef struct _psqlSettings
 
 	char	   *gset_prefix;	/* one-shot prefix argument for \gset */
 	bool		gdesc_flag;		/* one-shot request to describe query result */
+	bool		gencr_flag;		/* one-shot request to send query with support
+								 * for parameter encryption */
+	int			num_params;		/* number of query parameters */
+	char	  **params;			/* query parameters */
 	bool		gexec_flag;		/* one-shot request to execute query result */
 	bool		crosstab_flag;	/* one-shot request to crosstab result */
 	char	   *ctv_args[4];	/* \crosstabview arguments */
@@ -134,6 +138,7 @@ typedef struct _psqlSettings
 	bool		quiet;
 	bool		singleline;
 	bool		singlestep;
+	bool		hide_column_encryption;
 	bool		hide_compression;
 	bool		hide_tableam;
 	int			fetch_count;

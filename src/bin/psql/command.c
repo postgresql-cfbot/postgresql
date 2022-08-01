@@ -98,6 +98,7 @@ static backslashResult process_command_g_options(char *first_option,
 												 bool active_branch,
 												 const char *cmd);
 static backslashResult exec_command_gdesc(PsqlScanState scan_state, bool active_branch);
+static backslashResult exec_command_gencr(PsqlScanState scan_state, bool active_branch);
 static backslashResult exec_command_getenv(PsqlScanState scan_state, bool active_branch,
 										   const char *cmd);
 static backslashResult exec_command_gexec(PsqlScanState scan_state, bool active_branch);
@@ -350,6 +351,8 @@ exec_command(const char *cmd,
 		status = exec_command_g(scan_state, active_branch, cmd);
 	else if (strcmp(cmd, "gdesc") == 0)
 		status = exec_command_gdesc(scan_state, active_branch);
+	else if (strcmp(cmd, "gencr") == 0)
+		status = exec_command_gencr(scan_state, active_branch);
 	else if (strcmp(cmd, "getenv") == 0)
 		status = exec_command_getenv(scan_state, active_branch, cmd);
 	else if (strcmp(cmd, "gexec") == 0)
@@ -1486,6 +1489,34 @@ exec_command_gdesc(PsqlScanState scan_state, bool active_branch)
 	if (active_branch)
 	{
 		pset.gdesc_flag = true;
+		status = PSQL_CMD_SEND;
+	}
+
+	return status;
+}
+
+/*
+ * \gencr -- send query, with support for parameter encryption
+ */
+static backslashResult
+exec_command_gencr(PsqlScanState scan_state, bool active_branch)
+{
+	backslashResult status = PSQL_CMD_SKIP_LINE;
+	char	   *ap;
+
+	pset.num_params = 0;
+	pset.params = NULL;
+	while ((ap = psql_scan_slash_option(scan_state,
+										OT_NORMAL, NULL, true)) != NULL)
+	{
+		pset.num_params++;
+		pset.params = pg_realloc(pset.params, pset.num_params * sizeof(char *));
+		pset.params[pset.num_params - 1] = ap;
+	}
+
+	if (active_branch)
+	{
+		pset.gencr_flag = true;
 		status = PSQL_CMD_SEND;
 	}
 

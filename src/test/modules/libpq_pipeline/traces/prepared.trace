@@ -2,8 +2,8 @@ F	68	Parse	 "select_one" "SELECT $1, '42', $1::numeric, interval '1 sec'" 1 NNNN
 F	16	Describe	 S "select_one"
 F	4	Sync
 B	4	ParseComplete
-B	10	ParameterDescription	 1 NNNN
-B	113	RowDescription	 4 "?column?" NNNN 0 NNNN 4 -1 0 "?column?" NNNN 0 NNNN 65535 -1 0 "numeric" NNNN 0 NNNN 65535 -1 0 "interval" NNNN 0 NNNN 16 -1 0
+B	18	ParameterDescription	 1 NNNN NNNN 0 0
+B	137	RowDescription	 4 "?column?" NNNN 0 NNNN 4 -1 0 NNNN 0 "?column?" NNNN 0 NNNN 65535 -1 0 NNNN 0 "numeric" NNNN 0 NNNN 65535 -1 0 NNNN 0 "interval" NNNN 0 NNNN 16 -1 0 NNNN 0
 B	5	ReadyForQuery	 I
 F	10	Query	 "BEGIN"
 B	10	CommandComplete	 "BEGIN"
@@ -13,6 +13,6 @@ B	19	CommandComplete	 "DECLARE CURSOR"
 B	5	ReadyForQuery	 T
 F	16	Describe	 P "cursor_one"
 F	4	Sync
-B	33	RowDescription	 1 "?column?" NNNN 0 NNNN 4 -1 0
+B	39	RowDescription	 1 "?column?" NNNN 0 NNNN 4 -1 0 NNNN 0
 B	5	ReadyForQuery	 T
 F	4	Terminate

@@ -111,6 +111,9 @@ union pgresult_data
 typedef struct pgresParamDesc
 {
 	Oid			typid;			/* type id */
+	Oid			cekid;
+	int			cekalg;
+	int			flags;
 } PGresParamDesc;
 
 /*
@@ -343,6 +346,26 @@ typedef struct pg_conn_host
 } pg_conn_host;
 
 /*
+ * Column encryption support data
+ */
+
+/* column master key */
+typedef struct pg_cmk
+{
+	Oid			cmkid;
+	char	   *cmkname;
+	char	   *cmkrealm;
+} PGCMK;
+
+/* column encryption key */
+typedef struct pg_cek
+{
+	Oid			cekid;
+	unsigned char *cekdata;		/* (decrypted) */
+	size_t		cekdatalen;
+} PGCEK;
+
+/*
  * PGconn stores all the state data associated with a single connection
  * to a backend.
  */
@@ -395,6 +418,7 @@ struct pg_conn
 	char	   *ssl_min_protocol_version;	/* minimum TLS protocol version */
 	char	   *ssl_max_protocol_version;	/* maximum TLS protocol version */
 	char	   *target_session_attrs;	/* desired session properties */
+	char	   *cmklookup;		/* CMK lookup specification */
 
 	/* Optional file to write trace info to */
 	FILE	   *Pfdebug;
@@ -476,6 +500,12 @@ struct pg_conn
 	PGVerbosity verbosity;		/* error/notice message verbosity */
 	PGContextVisibility show_context;	/* whether to show CONTEXT field */
 	PGlobjfuncs *lobjfuncs;		/* private state for large-object access fns */
+
+	/* Column encryption support data */
+	int			ncmks;
+	PGCMK	   *cmks;
+	int			nceks;
+	PGCEK	   *ceks;
 
 	/* Buffer for data received from backend and not yet processed */
 	char	   *inBuffer;		/* currently allocated buffer */
@@ -672,6 +702,10 @@ extern void pqSaveMessageField(PGresult *res, char code,
 							   const char *value);
 extern void pqSaveParameterStatus(PGconn *conn, const char *name,
 								  const char *value);
+extern int	pqSaveColumnMasterKey(PGconn *conn, int keyid, const char *keyname,
+								  const char *keyrealm);
+extern int	pqSaveColumnEncryptionKey(PGconn *conn, int keyid, int cmkid, int cmkalg,
+									  const unsigned char *value, int len);
 extern int	pqRowProcessor(PGconn *conn, const char **errmsgp);
 extern void pqCommandQueueAdvance(PGconn *conn);
 extern int	PQsendQueryContinue(PGconn *conn, const char *query);

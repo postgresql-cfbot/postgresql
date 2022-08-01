@@ -1532,7 +1532,7 @@ describeOneTableDetails(const char *schemaname,
 	bool		printTableInitialized = false;
 	int			i;
 	char	   *view_def = NULL;
-	char	   *headers[12];
+	char	   *headers[13];
 	PQExpBufferData title;
 	PQExpBufferData tmpbuf;
 	int			cols;
@@ -1548,6 +1548,7 @@ describeOneTableDetails(const char *schemaname,
 				fdwopts_col = -1,
 				attstorage_col = -1,
 				attcompression_col = -1,
+				attcekname_col = -1,
 				attstattarget_col = -1,
 				attdescr_col = -1;
 	int			numrows;
@@ -1846,7 +1847,7 @@ describeOneTableDetails(const char *schemaname,
 	cols = 0;
 	printfPQExpBuffer(&buf, "SELECT a.attname");
 	attname_col = cols++;
-	appendPQExpBufferStr(&buf, ",\n  pg_catalog.format_type(a.atttypid, a.atttypmod)");
+	appendPQExpBufferStr(&buf, ",\n  pg_catalog.format_type(CASE WHEN a.attrealtypid <> 0 THEN a.attrealtypid ELSE a.atttypid END, a.atttypmod)");
 	atttype_col = cols++;
 
 	if (show_column_details)
@@ -1860,7 +1861,7 @@ describeOneTableDetails(const char *schemaname,
 		attrdef_col = cols++;
 		attnotnull_col = cols++;
 		appendPQExpBufferStr(&buf, ",\n  (SELECT c.collname FROM pg_catalog.pg_collation c, pg_catalog.pg_type t\n"
-							 "   WHERE c.oid = a.attcollation AND t.oid = a.atttypid AND a.attcollation <> t.typcollation) AS attcollation");
+							 "   WHERE c.oid = a.attcollation AND t.oid = (CASE WHEN a.attrealtypid <> 0 THEN a.attrealtypid ELSE a.atttypid END) AND a.attcollation <> t.typcollation) AS attcollation");
 		attcoll_col = cols++;
 		if (pset.sversion >= 100000)
 			appendPQExpBufferStr(&buf, ",\n  a.attidentity");
@@ -1909,6 +1910,15 @@ describeOneTableDetails(const char *schemaname,
 		{
 			appendPQExpBufferStr(&buf, ",\n  a.attcompression AS attcompression");
 			attcompression_col = cols++;
+		}
+
+		/* encryption info */
+		if (pset.sversion >= 160000 &&
+			!pset.hide_column_encryption &&
+			(tableinfo.relkind == RELKIND_RELATION))
+		{
+			appendPQExpBufferStr(&buf, ",\n  (SELECT cekname FROM pg_colenckey cek WHERE cek.oid = a.attcek) AS attcekname");
+			attcekname_col = cols++;
 		}
 
 		/* stats target, if relevant to relkind */
@@ -2034,6 +2044,8 @@ describeOneTableDetails(const char *schemaname,
 		headers[cols++] = gettext_noop("Storage");
 	if (attcompression_col >= 0)
 		headers[cols++] = gettext_noop("Compression");
+	if (attcekname_col >= 0)
+		headers[cols++] = gettext_noop("Encryption");
 	if (attstattarget_col >= 0)
 		headers[cols++] = gettext_noop("Stats target");
 	if (attdescr_col >= 0)
@@ -2124,6 +2136,17 @@ describeOneTableDetails(const char *schemaname,
 									   (compression[0] == '\0' ? "" :
 										"???"))),
 							  false, false);
+		}
+
+		/* Column encryption */
+		if (attcekname_col >= 0)
+		{
+			if (!PQgetisnull(res, i, attcekname_col))
+				printTableAddCell(&cont, PQgetvalue(res, i, attcekname_col),
+								  false, false);
+			else
+				printTableAddCell(&cont, "",
+								  false, false);
 		}
 
 		/* Statistics target, if the relkind supports this feature */

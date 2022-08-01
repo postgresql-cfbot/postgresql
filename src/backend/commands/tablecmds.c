@@ -35,6 +35,7 @@
 #include "catalog/partition.h"
 #include "catalog/pg_am.h"
 #include "catalog/pg_attrdef.h"
+#include "catalog/pg_colenckey.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_depend.h"
@@ -933,6 +934,76 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 		if (colDef->compression)
 			attr->attcompression = GetAttributeCompression(attr->atttypid,
 														   colDef->compression);
+
+		if (colDef->encryption)
+		{
+			ListCell   *lc;
+			char	   *cek = NULL;
+			Oid			cekoid;
+			bool		encdet = false;
+			int			alg = PG_CEK_AEAD_AES_128_CBC_HMAC_SHA_256;
+
+			foreach(lc, colDef->encryption)
+			{
+				DefElem    *el = lfirst_node(DefElem, lc);
+
+				if (strcmp(el->defname, "column_encryption_key") == 0)
+					cek = strVal(linitial(castNode(TypeName, el->arg)->names));
+				else if (strcmp(el->defname, "encryption_type") == 0)
+				{
+					char	   *val = strVal(linitial(castNode(TypeName, el->arg)->names));
+
+					if (strcmp(val, "deterministic") == 0)
+						encdet = true;
+					else if (strcmp(val, "randomized") == 0)
+						encdet = false;
+					else
+						ereport(ERROR,
+								errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+								errmsg("unrecognized encryption type: %s", val));
+				}
+				else if (strcmp(el->defname, "algorithm") == 0)
+				{
+					char	   *val = strVal(el->arg);
+
+					if (strcmp(val, "AEAD_AES_128_CBC_HMAC_SHA_256") == 0)
+						alg = PG_CEK_AEAD_AES_128_CBC_HMAC_SHA_256;
+					else if (strcmp(val, "AEAD_AES_192_CBC_HMAC_SHA_384") == 0)
+						alg = PG_CEK_AEAD_AES_192_CBC_HMAC_SHA_384;
+					else if (strcmp(val, "AEAD_AES_256_CBC_HMAC_SHA_384") == 0)
+						alg = PG_CEK_AEAD_AES_256_CBC_HMAC_SHA_384;
+					else if (strcmp(val, "AEAD_AES_256_CBC_HMAC_SHA_512") == 0)
+						alg = PG_CEK_AEAD_AES_256_CBC_HMAC_SHA_512;
+					else
+						ereport(ERROR,
+								errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+								errmsg("unrecognized encryption algorithm: %s", val));
+				}
+				else
+					ereport(ERROR,
+							errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							errmsg("unrecognized column encryption parameter: %s", el->defname));
+			}
+
+			if (!cek)
+				ereport(ERROR,
+						errcode(ERRCODE_INVALID_COLUMN_DEFINITION),
+						errmsg("column encryption key must be specified"));
+
+			cekoid = GetSysCacheOid1(CEKNAME, Anum_pg_colenckey_oid, PointerGetDatum(cek));
+			if (!cekoid)
+				ereport(ERROR,
+						errcode(ERRCODE_UNDEFINED_OBJECT),
+						errmsg("column encryption key \"%s\" does not exist", cek));
+
+			attr->attcek = cekoid;
+			attr->attrealtypid = attr->atttypid;
+			if (encdet)
+				attr->atttypid = PG_ENCRYPTED_DETOID;
+			else
+				attr->atttypid = PG_ENCRYPTED_RNDOID;
+			attr->attencalg = alg;
+		}
 
 		if (colDef->storage_name)
 			attr->attstorage = GetAttributeStorage(attr->atttypid, colDef->storage_name);
@@ -6846,6 +6917,9 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	attribute.attgenerated = colDef->generated;
 	attribute.attisdropped = false;
 	attribute.attislocal = colDef->is_local;
+	attribute.attcek = 0; // TODO
+	attribute.attrealtypid = 0; // TODO
+	attribute.attencalg = 0; // TODO
 	attribute.attinhcount = colDef->inhcount;
 	attribute.attcollation = collOid;
 

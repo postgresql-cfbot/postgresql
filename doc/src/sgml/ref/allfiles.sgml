@@ -62,6 +62,8 @@ Complete list of usable sgml source files in this directory.
 <!ENTITY createAggregate    SYSTEM "create_aggregate.sgml">
 <!ENTITY createCast         SYSTEM "create_cast.sgml">
 <!ENTITY createCollation    SYSTEM "create_collation.sgml">
+<!ENTITY createColumnEncryptionKey SYSTEM "create_column_encryption_key.sgml">
+<!ENTITY createColumnMasterKey SYSTEM "create_column_master_key.sgml">
 <!ENTITY createConversion   SYSTEM "create_conversion.sgml">
 <!ENTITY createDatabase     SYSTEM "create_database.sgml">
 <!ENTITY createDomain       SYSTEM "create_domain.sgml">

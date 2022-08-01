@@ -46,6 +46,8 @@ printsimple_startup(DestReceiver *self, int operation, TupleDesc tupdesc)
 		pq_sendint16(&buf, attr->attlen);
 		pq_sendint32(&buf, attr->atttypmod);
 		pq_sendint16(&buf, 0);	/* format code */
+		pq_sendint32(&buf, 0);	/* CEK */
+		pq_sendint16(&buf, 0);	/* CEK alg */
 	}
 
 	pq_endmessage(&buf);

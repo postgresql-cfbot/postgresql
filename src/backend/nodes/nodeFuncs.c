@@ -4288,6 +4288,8 @@ raw_expression_tree_walker(Node *node,
 					return true;
 				if (walker(coldef->compression, context))
 					return true;
+				if (walker(coldef->encryption, context))
+					return true;
 				if (walker(coldef->raw_default, context))
 					return true;
 				if (walker(coldef->collClause, context))

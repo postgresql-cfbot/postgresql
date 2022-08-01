@@ -90,6 +90,8 @@
    &createAggregate;
    &createCast;
    &createCollation;
+   &createColumnEncryptionKey;
+   &createColumnMasterKey;
    &createConversion;
    &createDatabase;
    &createDomain;

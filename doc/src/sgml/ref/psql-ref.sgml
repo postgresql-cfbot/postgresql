@@ -2256,6 +2256,28 @@ Tue Oct 26 21:40:57 CEST 1999
 
 
       <varlistentry>
+       <term><literal>\gencr</literal> [ <replaceable class="parameter">parameter</replaceable> ] ... </term>
+
+       <listitem>
+        <para>
+         Sends the current query buffer to the server for execution, as with
+         <literal>\g</literal>, with the specified parameters passed for any
+         parameter placeholders (<literal>$1</literal> etc.).  This command
+         ensures that any parameters corresponding to encrypted columns are
+         sent to the server encrypted.
+        </para>
+
+        <para>
+         Example:
+<programlisting>
+INSERT INTO tbl1 VALUES ($1, $2) \gencr 'first value' 'second value'
+</programlisting>
+        </para>
+       </listitem>
+      </varlistentry>
+
+
+      <varlistentry>
         <term><literal>\getenv <replaceable class="parameter">psql_var</replaceable> <replaceable class="parameter">env_var</replaceable></literal></term>
 
         <listitem>
@@ -3974,6 +3996,17 @@ bar
          If this variable is set to <literal>true</literal>, a table's access
          method details are not displayed. This is mainly useful for
          regression tests.
+        </para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry>
+        <term><varname>HIDE_COLUMN_ENCRYPTION</varname></term>
+        <listitem>
+        <para>
+         If this variable is set to <literal>true</literal>, column encryption
+         details are not displayed. This is mainly useful for regression
+         tests.
         </para>
         </listitem>
       </varlistentry>

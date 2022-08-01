@@ -1,0 +1,37 @@
+\set HIDE_COLUMN_ENCRYPTION false
+CREATE COLUMN MASTER KEY cmk1 WITH (
+    realm = 'test'
+);
+CREATE COLUMN ENCRYPTION KEY cek1 WITH VALUES (
+    column_master_key = cmk1,
+    algorithm = 'RSAES_OAEP_SHA_1',
+    encrypted_value = '\xDEADBEEF'
+);
+CREATE TABLE tbl_fail (
+    a int,
+    b text,
+    c text ENCRYPTED WITH (column_encryption_key = notexist)
+);
+ERROR:  column encryption key "notexist" does not exist
+CREATE TABLE tbl_29f3 (
+    a int,
+    b text,
+    c text ENCRYPTED WITH (column_encryption_key = cek1)
+);
+\d tbl_29f3
+              Table "public.tbl_29f3"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           |          | 
+ b      | text    |           |          | 
+ c      | text    |           |          | 
+
+\d+ tbl_29f3
+                                        Table "public.tbl_29f3"
+ Column |  Type   | Collation | Nullable | Default | Storage  | Encryption | Stats target | Description 
+--------+---------+-----------+----------+---------+----------+------------+--------------+-------------
+ a      | integer |           |          |         | plain    |            |              | 
+ b      | text    |           |          |         | extended |            |              | 
+ c      | text    |           |          |         | extended | cek1       |              | 
+
+DROP TABLE tbl_29f3;  -- FIXME: needs pg_dump support for pg_upgrade tests

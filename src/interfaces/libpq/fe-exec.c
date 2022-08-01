@@ -24,6 +24,9 @@
 #include <unistd.h>
 #endif
 
+#include "catalog/pg_colenckey.h"
+#include "common/base64.h"
+#include "fe-encrypt.h"
 #include "libpq-fe.h"
 #include "libpq-int.h"
 #include "mb/pg_wchar.h"
@@ -72,7 +75,9 @@ static int	PQsendQueryGuts(PGconn *conn,
 							const char *const *paramValues,
 							const int *paramLengths,
 							const int *paramFormats,
-							int resultFormat);
+							const int *paramForceColumnEncryptions,
+							int resultFormat,
+							PGresult *paramDesc);
 static void parseInput(PGconn *conn);
 static PGresult *getCopyResult(PGconn *conn, ExecStatusType copytype);
 static bool PQexecStart(PGconn *conn);
@@ -1185,6 +1190,381 @@ pqSaveParameterStatus(PGconn *conn, const char *name, const char *value)
 	}
 }
 
+int
+pqSaveColumnMasterKey(PGconn *conn, int keyid, const char *keyname,
+					  const char *keyrealm)
+{
+	char	   *keyname_copy;
+	char	   *keyrealm_copy;
+	bool		found;
+
+	keyname_copy = strdup(keyname);
+	if (!keyname_copy)
+		return EOF;
+	keyrealm_copy = strdup(keyrealm);
+	if (!keyrealm_copy)
+	{
+		free(keyname_copy);
+		return EOF;
+	}
+
+	found = false;
+	for (int i = 0; i < conn->ncmks; i++)
+	{
+		struct pg_cmk *checkcmk = &conn->cmks[i];
+
+		/* replace existing? */
+		if (checkcmk->cmkid == keyid)
+		{
+			free(checkcmk->cmkname);
+			free(checkcmk->cmkrealm);
+			checkcmk->cmkname = keyname_copy;
+			checkcmk->cmkrealm = keyrealm_copy;
+			found = true;
+			break;
+		}
+	}
+
+	/* append new? */
+	if (!found)
+	{
+		int			newncmks;
+		struct pg_cmk *newcmks;
+		struct pg_cmk *newcmk;
+
+		newncmks = conn->ncmks + 1;
+		if (newncmks <= 0)
+			return EOF;
+		newcmks = realloc(conn->cmks, newncmks * sizeof(struct pg_cmk));
+		if (!newcmks)
+		{
+			free(keyname_copy);
+			free(keyrealm_copy);
+			return EOF;
+		}
+
+		newcmk = &newcmks[newncmks - 1];
+		newcmk->cmkid = keyid;
+		newcmk->cmkname = keyname_copy;
+		newcmk->cmkrealm = keyrealm_copy;
+
+		conn->ncmks = newncmks;
+		conn->cmks = newcmks;
+	}
+
+	return 0;
+}
+
+/*
+ * Replace placeholders in input string.  Return value malloc'ed.
+ */
+static char *
+replace_cmk_placeholders(const char *in, const char *cmkname, const char *cmkrealm, int cmkalg, const char *b64data)
+{
+	PQExpBufferData buf;
+
+	initPQExpBuffer(&buf);
+
+	for (const char *p = in; *p; p++)
+	{
+		if (p[0] == '%')
+		{
+			switch (p[1])
+			{
+				case 'a':
+					{
+						const char *s;
+
+						switch (cmkalg)
+						{
+							case PG_CMK_RSAES_OAEP_SHA_1:
+								s = "RSAES_OAEP_SHA_1";
+								break;
+							case PG_CMK_RSAES_OAEP_SHA_256:
+								s = "RSAES_OAEP_SHA_256";
+								break;
+							default:
+								s = "INVALID";
+						}
+						appendPQExpBufferStr(&buf, s);
+					}
+					p++;
+					break;
+				case 'b':
+					appendPQExpBufferStr(&buf, b64data);
+					p++;
+					break;
+				case 'k':
+					appendPQExpBufferStr(&buf, cmkname);
+					p++;
+					break;
+				case 'r':
+					appendPQExpBufferStr(&buf, cmkrealm);
+					p++;
+					break;
+				default:
+					appendPQExpBufferChar(&buf, p[0]);
+			}
+		}
+		else
+			appendPQExpBufferChar(&buf, p[0]);
+	}
+
+	return buf.data;
+}
+
+#ifndef USE_SSL
+/*
+ * Dummy implementation for non-SSL builds
+ */
+unsigned char *
+decrypt_cek_from_file(PGconn *conn, FILE *fp, int cmkalg,
+					  int fromlen, const unsigned char *from,
+					  int *tolen)
+{
+	appendPQExpBuffer(&conn->errorMessage,
+					  libpq_gettext("column encryption not supported by this build\n"));
+	return NULL;
+}
+#endif
+
+/*
+ * Decrypt a CEK using the given CMK.  The ciphertext is passed in
+ * "from" and "fromlen".  Return the decrypted value in a malloc'ed area, its
+ * length via "tolen".  Return NULL on error; add error messages directly to
+ * "conn".
+ */
+static unsigned char *
+decrypt_cek(PGconn *conn, const PGCMK *cmk, int cmkalg,
+			int fromlen, const unsigned char *from,
+			int *tolen)
+{
+	char	   *cmklookup;
+	bool		found = false;
+	unsigned char *result = NULL;
+
+	cmklookup = strdup(conn->cmklookup ? conn->cmklookup : "");
+
+	if (!cmklookup)
+	{
+		appendPQExpBuffer(&conn->errorMessage, libpq_gettext("out of memory\n"));
+		return NULL;
+	}
+
+	/*
+	 * Analyze semicolon-separated list
+	 */
+	for (char *s = strtok(cmklookup, ";"); s; s = strtok(NULL, ";"))
+	{
+		char	   *sep;
+
+		/* split found token at '=' */
+		sep = strchr(s, '=');
+		if (!sep)
+		{
+			appendPQExpBuffer(&conn->errorMessage,
+							  libpq_gettext("syntax error in CMK lookup specification, missing \"%c\": %s\n"), '=', s);
+			break;
+		}
+
+		/* matching realm? */
+		if (strncmp(s, "*", sep - s) == 0 || strncmp(s, cmk->cmkrealm, sep - s) == 0)
+		{
+			char	   *sep2;
+
+			found = true;
+
+			sep2 = strchr(sep, ':');
+			if (!sep2)
+			{
+				appendPQExpBuffer(&conn->errorMessage,
+								  libpq_gettext("syntax error in CMK lookup specification, missing \"%c\": %s\n"), ':', s);
+				goto fail;
+			}
+
+			if (strncmp(sep + 1, "file", sep2 - (sep + 1)) == 0)
+			{
+				char	   *cmkfilename;
+				FILE	   *fp;
+
+				cmkfilename = replace_cmk_placeholders(sep2 + 1, cmk->cmkname, cmk->cmkrealm, cmkalg, "INVALID");
+				fp = fopen(cmkfilename, "rb");
+				if (fp)
+				{
+					result = decrypt_cek_from_file(conn, fp, cmkalg, fromlen, from, tolen);
+					fclose(fp);
+				}
+				else
+				{
+					appendPQExpBuffer(&conn->errorMessage,
+									  libpq_gettext("could not open file \"%s\": %m\n"), cmkfilename);
+					free(cmkfilename);
+					goto fail;
+				}
+				free(cmkfilename);
+			}
+			else if (strncmp(sep + 1, "run", sep2 - (sep + 1)) == 0)
+			{
+				int			enclen;
+				char	   *enc;
+				char	   *command;
+				FILE	   *fp;
+				char		buf[4096];
+
+				enclen = pg_b64_enc_len(fromlen);
+				enc = malloc(enclen + 1);
+				if (!enc)
+				{
+					appendPQExpBuffer(&conn->errorMessage, libpq_gettext("out of memory\n"));
+					goto fail;
+				}
+				enclen = pg_b64_encode((const char *) from, fromlen, enc, enclen);
+				if (enclen < 0)
+				{
+					appendPQExpBuffer(&conn->errorMessage, libpq_gettext("base64 encoding failed\n"));
+					free(enc);
+					goto fail;
+				}
+				command = replace_cmk_placeholders(sep2 + 1, cmk->cmkname, cmk->cmkrealm, cmkalg, enc);
+				free(enc);
+				fp = popen(command, "r");
+				free(command);
+				if (!fp)
+				{
+					appendPQExpBuffer(&conn->errorMessage,
+									  libpq_gettext("could not run command \"%s\": %m\n"), command);
+					goto fail;
+				}
+				if (fgets(buf, sizeof(buf), fp))
+				{
+					int			linelen;
+					int			declen;
+					char	   *dec;
+
+					linelen = strlen(buf);
+					if (buf[linelen - 1] == '\n')
+					{
+						buf[linelen - 1] = '\0';
+						linelen--;
+					}
+					declen = pg_b64_dec_len(linelen);
+					dec = malloc(declen);
+					if (!dec)
+					{
+						appendPQExpBuffer(&conn->errorMessage, libpq_gettext("out of memory\n"));
+						goto fail;
+					}
+					declen = pg_b64_decode(buf, linelen, dec, declen);
+					if (declen < 0)
+					{
+						appendPQExpBuffer(&conn->errorMessage,
+										  libpq_gettext("base64 decoding failed\n"));
+						free(dec);
+						goto fail;
+					}
+					result = (unsigned char *) dec;
+					*tolen = declen;
+				}
+				else
+				{
+					appendPQExpBuffer(&conn->errorMessage,
+									  libpq_gettext("could not read from command: %m\n"));
+					pclose(fp);
+					goto fail;
+				}
+				pclose(fp);
+			}
+			else
+			{
+				appendPQExpBuffer(&conn->errorMessage,
+								  libpq_gettext("CMK lookup scheme \"%s\" not recognized\n"), sep + 1);
+				goto fail;
+			}
+		}
+	}
+
+	if (!found)
+	{
+		appendPQExpBuffer(&conn->errorMessage,
+						  libpq_gettext("no CMK lookup found for realm \"%s\"\n"), cmk->cmkrealm);
+	}
+
+fail:
+	free(cmklookup);
+	return result;
+}
+
+int
+pqSaveColumnEncryptionKey(PGconn *conn, int keyid, int cmkid, int cmkalg, const unsigned char *value, int len)
+{
+	PGCMK	   *cmk = NULL;
+	unsigned char *plainval = NULL;
+	int			plainvallen = 0;
+	bool		found;
+
+	for (int i = 0; i < conn->ncmks; i++)
+	{
+		if (conn->cmks[i].cmkid == cmkid)
+		{
+			cmk = &conn->cmks[i];
+			break;
+		}
+	}
+
+	if (!cmk)
+		return EOF;
+
+	plainval = decrypt_cek(conn, cmk, cmkalg, len, value, &plainvallen);
+	if (!plainval)
+		return EOF;
+
+	found = false;
+	for (int i = 0; i < conn->nceks; i++)
+	{
+		struct pg_cek *checkcek = &conn->ceks[i];
+
+		/* replace existing? */
+		if (checkcek->cekid == keyid)
+		{
+			free(checkcek->cekdata);
+			checkcek->cekdata = plainval;
+			checkcek->cekdatalen = plainvallen;
+			found = true;
+			break;
+		}
+	}
+
+	/* append new? */
+	if (!found)
+	{
+		int			newnceks;
+		struct pg_cek *newceks;
+		struct pg_cek *newcek;
+
+		newnceks = conn->nceks + 1;
+		if (newnceks <= 0)
+		{
+			free(plainval);
+			return EOF;
+		}
+		newceks = realloc(conn->ceks, newnceks * sizeof(struct pg_cek));
+		if (!newceks)
+		{
+			free(plainval);
+			return EOF;
+		}
+
+		newcek = &newceks[newnceks - 1];
+		newcek->cekid = keyid;
+		newcek->cekdata = plainval;
+		newcek->cekdatalen = plainvallen;
+
+		conn->nceks = newnceks;
+		conn->ceks = newceks;
+	}
+
+	return 0;
+}
 
 /*
  * pqRowProcessor
@@ -1250,9 +1630,58 @@ pqRowProcessor(PGconn *conn, const char **errmsgp)
 		}
 		else
 		{
-			bool		isbinary = (res->attDescs[i].format != 0);
+			bool		isbinary = ((res->attDescs[i].format & 0x0F) != 0);
 			char	   *val;
 
+			if (res->attDescs[i].cekid)
+			{
+#ifdef USE_SSL
+				PGCEK	   *cek = NULL;
+
+				for (int j = 0; j < conn->nceks; j++)
+				{
+					if (conn->ceks[j].cekid == res->attDescs[i].cekid)
+					{
+						cek = &conn->ceks[j];
+						break;
+					}
+				}
+				if (!cek)
+				{
+					*errmsgp = libpq_gettext("column encryption key not found");
+					goto fail;
+				}
+
+				if (isbinary)
+				{
+					val = (char *) decrypt_value(res, cek, res->attDescs[i].cekalg,
+												 (const unsigned char *) columns[i].value, clen, errmsgp);
+				}
+				else
+				{
+					unsigned char *buf;
+					unsigned char *enccolval;
+					size_t		enccolvallen;
+
+					buf = malloc(clen + 1);
+					memcpy(buf, columns[i].value, clen);
+					buf[clen] = '\0';
+					enccolval = PQunescapeBytea(buf, &enccolvallen);
+					val = (char *) decrypt_value(res, cek, res->attDescs[i].cekalg,
+												 enccolval, enccolvallen, errmsgp);
+					free(enccolval);
+					free(buf);
+				}
+
+				if (val == NULL)
+					goto fail;
+#else
+				*errmsgp = libpq_gettext("column encryption not supported by this build");
+				goto fail;
+#endif
+			}
+			else
+			{
 			val = (char *) pqResultAlloc(res, clen + 1, isbinary);
 			if (val == NULL)
 				goto fail;
@@ -1260,6 +1689,7 @@ pqRowProcessor(PGconn *conn, const char **errmsgp)
 			/* copy and zero-terminate the data (even if it's binary) */
 			memcpy(val, columns[i].value, clen);
 			val[clen] = '\0';
+			}
 
 			tup[i].len = clen;
 			tup[i].value = val;
@@ -1587,7 +2017,9 @@ PQsendQueryParams(PGconn *conn,
 						   paramValues,
 						   paramLengths,
 						   paramFormats,
-						   resultFormat);
+						   NULL,
+						   resultFormat,
+						   NULL);
 }
 
 /*
@@ -1706,6 +2138,20 @@ PQsendQueryPrepared(PGconn *conn,
 					const int *paramFormats,
 					int resultFormat)
 {
+	return PQsendQueryPrepared2(conn, stmtName, nParams, paramValues, paramLengths, paramFormats, NULL, resultFormat, NULL);
+}
+
+int
+PQsendQueryPrepared2(PGconn *conn,
+					 const char *stmtName,
+					 int nParams,
+					 const char *const *paramValues,
+					 const int *paramLengths,
+					 const int *paramFormats,
+					 const int *paramForceColumnEncryptions,
+					 int resultFormat,
+					 PGresult *paramDesc)
+{
 	if (!PQsendQueryStart(conn, true))
 		return 0;
 
@@ -1732,7 +2178,9 @@ PQsendQueryPrepared(PGconn *conn,
 						   paramValues,
 						   paramLengths,
 						   paramFormats,
-						   resultFormat);
+						   paramForceColumnEncryptions,
+						   resultFormat,
+						   paramDesc);
 }
 
 /*
@@ -1833,7 +2281,9 @@ PQsendQueryGuts(PGconn *conn,
 				const char *const *paramValues,
 				const int *paramLengths,
 				const int *paramFormats,
-				int resultFormat)
+				const int *paramForceColumnEncryptions,
+				int resultFormat,
+				PGresult *paramDesc)
 {
 	int			i;
 	PGcmdQueueEntry *entry;
@@ -1880,14 +2330,53 @@ PQsendQueryGuts(PGconn *conn,
 		pqPuts(stmtName, conn) < 0)
 		goto sendFailed;
 
+	/* Check force column encryption */
+	if (nParams > 0 && paramForceColumnEncryptions)
+	{
+		for (i = 0; i < nParams; i++)
+		{
+			if (paramForceColumnEncryptions[i])
+			{
+				if (!(paramDesc &&
+					  paramDesc->paramDescs &&
+					  paramDesc->paramDescs[i].cekid))
+				{
+					appendPQExpBufferStr(&conn->errorMessage,
+										 libpq_gettext("parameter with forced encryption is not to be encrypted\n"));
+					goto sendFailed;
+				}
+			}
+		}
+	}
+
 	/* Send parameter formats */
-	if (nParams > 0 && paramFormats)
+	if (nParams > 0 && (paramFormats || (paramDesc && paramDesc->paramDescs)))
 	{
 		if (pqPutInt(nParams, 2, conn) < 0)
 			goto sendFailed;
+
 		for (i = 0; i < nParams; i++)
 		{
-			if (pqPutInt(paramFormats[i], 2, conn) < 0)
+			int			format = paramFormats ? paramFormats[i] : 0;
+
+			if (paramDesc && paramDesc->paramDescs)
+			{
+				PGresParamDesc *pd = &paramDesc->paramDescs[i];
+
+				if (pd->cekid)
+				{
+					if (format != 0)
+					{
+						appendPQExpBufferStr(&conn->errorMessage,
+											 libpq_gettext("format must be text for encrypted parameter\n"));
+						goto sendFailed;
+					}
+					format = 1;
+					format |= 0x10;
+				}
+			}
+
+			if (pqPutInt(format, 2, conn) < 0)
 				goto sendFailed;
 		}
 	}
@@ -1906,6 +2395,7 @@ PQsendQueryGuts(PGconn *conn,
 		if (paramValues && paramValues[i])
 		{
 			int			nbytes;
+			const char *paramValue;
 
 			if (paramFormats && paramFormats[i] != 0)
 			{
@@ -1924,9 +2414,54 @@ PQsendQueryGuts(PGconn *conn,
 				/* text parameter, do not use paramLengths */
 				nbytes = strlen(paramValues[i]);
 			}
-			if (pqPutInt(nbytes, 4, conn) < 0 ||
-				pqPutnchar(paramValues[i], nbytes, conn) < 0)
+
+			paramValue = paramValues[i];
+
+			if (paramDesc && paramDesc->paramDescs && paramDesc->paramDescs[i].cekid)
+			{
+#ifdef USE_SSL
+				bool		enc_det = (paramDesc->paramDescs[i].flags & 0x01) != 0;
+				PGCEK	   *cek = NULL;
+				char	   *enc_paramValue;
+				int			enc_nbytes = nbytes;
+
+				for (int j = 0; j < conn->nceks; j++)
+				{
+					if (conn->ceks[j].cekid == paramDesc->paramDescs[i].cekid)
+					{
+						cek = &conn->ceks[j];
+						break;
+					}
+				}
+				if (!cek)
+				{
+					appendPQExpBuffer(&conn->errorMessage,
+									  libpq_gettext("column encryption key not found\n"));
+					goto sendFailed;
+				}
+
+				enc_paramValue = (char *) encrypt_value(conn, cek, paramDesc->paramDescs[i].cekalg,
+														(const unsigned char *) paramValue, &enc_nbytes, enc_det);
+				if (!enc_paramValue)
+					goto sendFailed;
+
+				if (pqPutInt(enc_nbytes, 4, conn) < 0 ||
+					pqPutnchar(enc_paramValue, enc_nbytes, conn) < 0)
+					goto sendFailed;
+
+				free(enc_paramValue);
+#else
+				appendPQExpBuffer(&conn->errorMessage,
+								  libpq_gettext("column encryption not supported by this build\n"));
 				goto sendFailed;
+#endif
+			}
+			else
+			{
+			if (pqPutInt(nbytes, 4, conn) < 0 ||
+				pqPutnchar(paramValue, nbytes, conn) < 0)
+				goto sendFailed;
+			}
 		}
 		else
 		{
@@ -2381,11 +2916,26 @@ PQexecPrepared(PGconn *conn,
 			   const int *paramFormats,
 			   int resultFormat)
 {
+	return PQexecPrepared2(conn, stmtName, nParams, paramValues, paramLengths, paramFormats, NULL, resultFormat, NULL);
+}
+
+PGresult *
+PQexecPrepared2(PGconn *conn,
+				const char *stmtName,
+				int nParams,
+				const char *const *paramValues,
+				const int *paramLengths,
+				const int *paramFormats,
+				const int *paramForceColumnEncryptions,
+				int resultFormat,
+				PGresult *paramDesc)
+{
 	if (!PQexecStart(conn))
 		return NULL;
-	if (!PQsendQueryPrepared(conn, stmtName,
-							 nParams, paramValues, paramLengths,
-							 paramFormats, resultFormat))
+	if (!PQsendQueryPrepared2(conn, stmtName,
+							  nParams, paramValues, paramLengths,
+							  paramFormats, paramForceColumnEncryptions,
+							  resultFormat, paramDesc))
 		return NULL;
 	return PQexecFinish(conn);
 }
@@ -3683,6 +4233,17 @@ PQfmod(const PGresult *res, int field_num)
 		return 0;
 }
 
+int
+PQfisencrypted(const PGresult *res, int field_num)
+{
+	if (!check_field_number(res, field_num))
+		return false;
+	if (res->attDescs)
+		return (res->attDescs[field_num].cekid != 0);
+	else
+		return false;
+}
+
 char *
 PQcmdStatus(PGresult *res)
 {
@@ -3866,6 +4427,17 @@ PQparamtype(const PGresult *res, int param_num)
 		return res->paramDescs[param_num].typid;
 	else
 		return InvalidOid;
+}
+
+int
+PQparamisencrypted(const PGresult *res, int param_num)
+{
+	if (!check_param_number(res, param_num))
+		return false;
+	if (res->paramDescs)
+		return (res->paramDescs[param_num].cekid != 0);
+	else
+		return false;
 }
 
 

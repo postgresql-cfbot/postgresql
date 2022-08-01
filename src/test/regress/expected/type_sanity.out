@@ -17,7 +17,7 @@ SELECT t1.oid, t1.typname
 FROM pg_type as t1
 WHERE t1.typnamespace = 0 OR
     (t1.typlen <= 0 AND t1.typlen != -1 AND t1.typlen != -2) OR
-    (t1.typtype not in ('b', 'c', 'd', 'e', 'm', 'p', 'r')) OR
+    (t1.typtype not in ('b', 'c', 'd', 'e', 'm', 'p', 'r', 'y')) OR
     NOT t1.typisdefined OR
     (t1.typalign not in ('c', 's', 'i', 'd')) OR
     (t1.typstorage not in ('p', 'x', 'e', 'm'));
@@ -75,7 +75,9 @@ ORDER BY t1.oid;
  4600 | pg_brin_bloom_summary
  4601 | pg_brin_minmax_multi_summary
  5017 | pg_mcv_list
-(6 rows)
+ 8243 | pg_encrypted_det
+ 8244 | pg_encrypted_rnd
+(8 rows)
 
 -- Make sure typarray points to a "true" array type of our own base
 SELECT t1.oid, t1.typname as basetype, t2.typname as arraytype,
@@ -210,7 +212,8 @@ ORDER BY 1;
  e       | enum_in
  m       | multirange_in
  r       | range_in
-(5 rows)
+ y       | byteain
+(6 rows)
 
 -- Check for bogus typoutput routines
 -- As of 8.0, this check finds refcursor, which is borrowing
@@ -255,7 +258,8 @@ ORDER BY 1;
  e       | enum_out
  m       | multirange_out
  r       | range_out
-(4 rows)
+ y       | byteaout
+(5 rows)
 
 -- Domains should have same typoutput as their base types
 SELECT t1.oid, t1.typname, t2.oid, t2.typname
@@ -335,7 +339,8 @@ ORDER BY 1;
  e       | enum_recv
  m       | multirange_recv
  r       | range_recv
-(5 rows)
+ y       | bytearecv
+(6 rows)
 
 -- Check for bogus typsend routines
 -- As of 7.4, this check finds refcursor, which is borrowing
@@ -380,7 +385,8 @@ ORDER BY 1;
  e       | enum_send
  m       | multirange_send
  r       | range_send
-(4 rows)
+ y       | byteasend
+(5 rows)
 
 -- Domains should have same typsend as their base types
 SELECT t1.oid, t1.typname, t2.oid, t2.typname
@@ -707,6 +713,8 @@ CREATE TABLE tab_core_types AS SELECT
   'txt'::text,
   true::bool,
   E'\\xDEADBEEF'::bytea,
+  E'\\xDEADBEEF'::pg_encrypted_rnd,
+  E'\\xDEADBEEF'::pg_encrypted_det,
   B'10001'::bit,
   B'10001'::varbit AS varbit,
   '12.34'::money,

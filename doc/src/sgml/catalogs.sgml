@@ -106,6 +106,21 @@
      </row>
 
      <row>
+      <entry><link linkend="catalog-pg-colenckey"><structname>pg_colenckey</structname></link></entry>
+      <entry>column encryption keys</entry>
+     </row>
+
+     <row>
+      <entry><link linkend="catalog-pg-colenckeydata"><structname>pg_colenckeydata</structname></link></entry>
+      <entry>column encryption key data</entry>
+     </row>
+
+     <row>
+      <entry><link linkend="catalog-pg-colmasterkey"><structname>pg_colmasterkey</structname></link></entry>
+      <entry>column master keys</entry>
+     </row>
+
+     <row>
       <entry><link linkend="catalog-pg-constraint"><structname>pg_constraint</structname></link></entry>
       <entry>check constraints, unique constraints, primary key constraints, foreign key constraints</entry>
      </row>
@@ -1362,6 +1377,40 @@
 
      <row>
       <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>attcek</structfield> <type>oid</type>
+       (references <link linkend="catalog-pg-colenckey"><structname>pg_colenckey</structname></link>.<structfield>oid</structfield>)
+      </para>
+      <para>
+       If the column is encrypted, a reference to the column encryption key, else 0.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>attrealtypid</structfield> <type>oid</type>
+       (references <link linkend="catalog-pg-type"><structname>pg_type</structname></link>.<structfield>oid</structfield>)
+      </para>
+      <para>
+       If the column is encrypted, then this column indicates the type of the
+       encrypted data that is reported to the client.  For encrypted columns,
+       the field <structfield>atttypid</structfield> is either
+       <type>pg_encrypted_det</type> or <type>pg_encrypted_rnd</type>.  If the
+       column is not encrypted, then 0.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>attencalg</structfield> <type>int16</type>
+      </para>
+      <para>
+       If the column is encrypted, the identifier of the encryption algorithm;
+       see <xref linkend="protocol-cek"/> for possible values.
+       </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
        <structfield>attinhcount</structfield> <type>int4</type>
       </para>
       <para>
@@ -2435,6 +2484,232 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
    since they could match the encodings of databases later cloned from
    <literal>template0</literal>.  This would currently have to be done manually.
   </para>
+ </sect1>
+
+ <sect1 id="catalog-pg-colenckey">
+  <title><structname>pg_colenckey</structname></title>
+
+  <indexterm zone="catalog-pg-colenckey">
+   <primary>pg_colenckey</primary>
+  </indexterm>
+
+  <para>
+   The catalog <structname>pg_colenckey</structname> contains information
+   about the column encryption keys in the database.  The actual key material
+   of the column encryption keys is in the catalog <link
+   linkend="catalog-pg-colenckeydata"><structname>pg_colenckeydata</structname></link>.
+  </para>
+
+  <table>
+   <title><structname>pg_colenckey</structname> Columns</title>
+   <tgroup cols="1">
+    <thead>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       Column Type
+      </para>
+      <para>
+       Description
+      </para></entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>oid</structfield> <type>oid</type>
+      </para>
+      <para>
+       Row identifier
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>cekname</structfield> <type>name</type>
+      </para>
+      <para>
+       Column encryption key name
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>cekowner</structfield> <type>oid</type>
+       (references <link linkend="catalog-pg-authid"><structname>pg_authid</structname></link>.<structfield>oid</structfield>)
+      </para>
+      <para>
+       Owner of the column encryption key
+      </para></entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
+ </sect1>
+
+ <sect1 id="catalog-pg-colenckeydata">
+  <title><structname>pg_colenckeydata</structname></title>
+
+  <indexterm zone="catalog-pg-colenckeydata">
+   <primary>pg_colenckeydata</primary>
+  </indexterm>
+
+  <para>
+   The catalog <structname>pg_colenckeydata</structname> contains the key
+   material of column encryption keys.  Each column encryption key object can
+   contain several versions of the key material, each encrypted with a
+   different column master key.  That allows the gradual rotation of the
+   column master keys.  Thus, <literal>(ckdcekid, ckdcmkid)</literal> is a
+   unique key of this table.
+  </para>
+
+  <para>
+   The key material of column encryption keys should never be decrypted inside
+   the database instance.  It is meant to be sent as-is to the client, where
+   it is decrypted using the associated column master key, and then used to
+   encrypt or decrypt column values.
+  </para>
+
+  <table>
+   <title><structname>pg_colenckeydata</structname> Columns</title>
+   <tgroup cols="1">
+    <thead>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       Column Type
+      </para>
+      <para>
+       Description
+      </para></entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>oid</structfield> <type>oid</type>
+      </para>
+      <para>
+       Row identifier
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>ckdcekid</structfield> <type>oid</type>
+       (references <link linkend="catalog-pg-colenckey"><structname>pg_colenckey</structname></link>.<structfield>oid</structfield>)
+      </para>
+      <para>
+       The column encryption key this entry belongs to
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>ckdcmkid</structfield> <type>oid</type>
+       (references <link linkend="catalog-pg-colmasterkey"><structname>pg_colmasterkey</structname></link>.<structfield>oid</structfield>)
+      </para>
+      <para>
+       The column master key that the key material is encrypted with
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>ckdcmkalg</structfield> <type>int16</type>
+      </para>
+      <para>
+       The encryption algorithm used for encrypting the key material; see
+       <xref linkend="protocol-cmk"/> for possible values.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>ckdencval</structfield> <type>bytea</type>
+      </para>
+      <para>
+       The key material of this column encryption key, encrypted using the
+       referenced column master key
+      </para></entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
+ </sect1>
+
+ <sect1 id="catalog-pg-colmasterkey">
+  <title><structname>pg_colmasterkey</structname></title>
+
+  <indexterm zone="catalog-pg-colmasterkey">
+   <primary>pg_colmasterkey</primary>
+  </indexterm>
+
+  <para>
+   The catalog <structname>pg_colmasterkey</structname> contains information
+   about column master keys.  The keys themselves are not stored in the
+   database.  The catalog entry only contains information that is used by
+   clients to locate the keys, for example in a file or in a key management
+   system.
+  </para>
+
+  <table>
+   <title><structname>pg_colmasterkey</structname> Columns</title>
+   <tgroup cols="1">
+    <thead>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       Column Type
+      </para>
+      <para>
+       Description
+      </para></entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>oid</structfield> <type>oid</type>
+      </para>
+      <para>
+       Row identifier
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>cmkname</structfield> <type>name</type>
+      </para>
+      <para>
+       Column master key name
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>cmkowner</structfield> <type>oid</type>
+       (references <link linkend="catalog-pg-authid"><structname>pg_authid</structname></link>.<structfield>oid</structfield>)
+      </para>
+      <para>
+       Owner of the column master key
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>cmkrealm</structfield> <type>text</type>
+      </para>
+      <para>
+       A <quote>realm</quote> associated with this column master key.  This is
+       a freely chosen string that is used by clients to determine how to look
+       up the key.  A typical configuration would put all CMKs that are looked
+       up in the same way into the same realm.
+      </para></entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
  </sect1>
 
  <sect1 id="catalog-pg-constraint">

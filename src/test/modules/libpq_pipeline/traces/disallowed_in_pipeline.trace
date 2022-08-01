@@ -1,5 +1,5 @@
 F	13	Query	 "SELECT 1"
-B	33	RowDescription	 1 "?column?" NNNN 0 NNNN 4 -1 0
+B	39	RowDescription	 1 "?column?" NNNN 0 NNNN 4 -1 0 NNNN 0
 B	11	DataRow	 1 1 '1'
 B	13	CommandComplete	 "SELECT 1"
 B	5	ReadyForQuery	 I

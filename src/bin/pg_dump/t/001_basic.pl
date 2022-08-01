@@ -121,6 +121,16 @@ command_fails_like(
 	'pg_restore: cannot specify both --single-transaction and multiple jobs');
 
 command_fails_like(
+	[ 'pg_dump', '--compress', 'garbage' ],
+	qr/\Qpg_dump: error: invalid compression method "garbage" (gzip, lz4, none)\E/,
+	'pg_dump: invalid --compress');
+
+command_fails_like(
+	[ 'pg_dump', '--compress', 'none:1' ],
+	qr/\Qpg_dump: error: invalid compression specification: compression algorithm "none" does not accept a compression level\E/,
+	'pg_dump: invalid compression specification: compression algorithm "none" does not accept a compression level');
+
+command_fails_like(
 	[ 'pg_dump', '-Z', '-1' ],
 	qr/\Qpg_dump: error: -Z\/--compress must be in range 0..9\E/,
 	'pg_dump: -Z/--compress must be in range');

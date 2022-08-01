@@ -87,7 +87,7 @@ my %pgdump_runs = (
 		compile_option => 'gzip',
 		dump_cmd       => [
 			'pg_dump',                              '--jobs=2',
-			'--format=directory',                   '--compress=1',
+			'--format=directory',                   '--compress=gzip:1',
 			"--file=$tempdir/compression_gzip_dir", 'postgres',
 		],
 		# Give coverage for manually compressed blob.toc files during
@@ -116,6 +116,67 @@ my %pgdump_runs = (
 			args    => [ '-d', "$tempdir/compression_gzip_plain.sql.gz", ],
 		},
 	},
+
+	# Do not use --no-sync to give test coverage for data sync.
+	compression_lz4_custom => {
+		test_key       => 'compression',
+		compile_option => 'lz4',
+		dump_cmd       => [
+			'pg_dump',      '--format=custom',
+			'--compress=1', "--file=$tempdir/compression_lz4_custom.dump",
+			'postgres',
+		],
+		restore_cmd => [
+			'pg_restore',
+			"--file=$tempdir/compression_lz4_custom.sql",
+			"$tempdir/compression_lz4_custom.dump",
+		],
+	},
+
+	# Do not use --no-sync to give test coverage for data sync.
+	compression_lz4_dir => {
+		test_key       => 'compression',
+		compile_option => 'lz4',
+		dump_cmd       => [
+			'pg_dump',                              '--jobs=2',
+			'--format=directory',                   '--compress=lz4:1',
+			"--file=$tempdir/compression_lz4_dir", 'postgres',
+		],
+		# Give coverage for manually compressed blob.toc files during
+		# restore.
+		compress_cmd => {
+			program => $ENV{'LZ4'},
+			args    => [
+				'-z', '-f', '--rm',
+				"$tempdir/compression_lz4_dir/blobs.toc",
+				"$tempdir/compression_lz4_dir/blobs.toc.lz4",
+			],
+		},
+		restore_cmd => [
+			'pg_restore', '--jobs=2',
+			"--file=$tempdir/compression_lz4_dir.sql",
+			"$tempdir/compression_lz4_dir",
+		],
+	},
+
+	compression_lz4_plain => {
+		test_key       => 'compression',
+		compile_option => 'lz4',
+		dump_cmd       => [
+			'pg_dump', '--format=plain', '--compress=lz4',
+			"--file=$tempdir/compression_lz4_plain.sql.lz4", 'postgres',
+		],
+		# Decompress the generated file to run through the tests.
+		compress_cmd => {
+			program => $ENV{'LZ4'},
+			args    => [
+				'-d', '-f',
+				"$tempdir/compression_lz4_plain.sql.lz4",
+				"$tempdir/compression_lz4_plain.sql",
+			],
+		},
+	},
+
 	clean => {
 		dump_cmd => [
 			'pg_dump',
@@ -4079,11 +4140,11 @@ foreach my $run (sort keys %pgdump_runs)
 	my $run_db   = 'postgres';
 
 	# Skip command-level tests for gzip if there is no support for it.
-	if (   defined($pgdump_runs{$run}->{compile_option})
-		&& $pgdump_runs{$run}->{compile_option} eq 'gzip'
-		&& !$supports_gzip)
+	if ($pgdump_runs{$run}->{compile_option} &&
+		($pgdump_runs{$run}->{compile_option} eq 'gzip' && !$supports_gzip) ||
+		($pgdump_runs{$run}->{compile_option} eq 'lz4' && !$supports_lz4))
 	{
-		note "$run: skipped due to no gzip support";
+		note "$run: skipped due to no $pgdump_runs{$run}->{compile_option} support";
 		next;
 	}
 

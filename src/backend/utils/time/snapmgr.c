@@ -1800,8 +1800,6 @@ TransactionIdLimitedForOldSnapshots(TransactionId recentXmin,
 	TransactionId xlimit = recentXmin;
 	TransactionId latest_xmin;
 	TimestampTz next_map_update_ts;
-	TransactionId threshold_timestamp;
-	TransactionId threshold_xid;
 
 	Assert(TransactionIdIsNormal(recentXmin));
 	Assert(OldSnapshotThresholdActive());
@@ -1839,6 +1837,9 @@ TransactionIdLimitedForOldSnapshots(TransactionId recentXmin,
 	}
 	else
 	{
+		TransactionId threshold_timestamp;
+		TransactionId threshold_xid;
+
 		ts = AlignTimestampToMinuteBoundary(ts)
 			- (old_snapshot_threshold * USECS_PER_MINUTE);
 
@@ -1901,8 +1902,6 @@ void
 MaintainOldSnapshotTimeMapping(TimestampTz whenTaken, TransactionId xmin)
 {
 	TimestampTz ts;
-	TransactionId latest_xmin;
-	TimestampTz update_ts;
 	bool		map_update_required = false;
 
 	/* Never call this function when old snapshot checking is disabled. */
@@ -1915,14 +1914,12 @@ MaintainOldSnapshotTimeMapping(TimestampTz whenTaken, TransactionId xmin)
 	 * a new value when we have crossed a bucket boundary.
 	 */
 	SpinLockAcquire(&oldSnapshotControl->mutex_latest_xmin);
-	latest_xmin = oldSnapshotControl->latest_xmin;
-	update_ts = oldSnapshotControl->next_map_update;
-	if (ts > update_ts)
+	if (ts > oldSnapshotControl->next_map_update)
 	{
 		oldSnapshotControl->next_map_update = ts;
 		map_update_required = true;
 	}
-	if (TransactionIdFollows(xmin, latest_xmin))
+	if (TransactionIdFollows(xmin, oldSnapshotControl->latest_xmin))
 		oldSnapshotControl->latest_xmin = xmin;
 	SpinLockRelease(&oldSnapshotControl->mutex_latest_xmin);
 
@@ -2284,8 +2281,6 @@ RestoreTransactionSnapshot(Snapshot snapshot, void *source_pgproc)
 bool
 XidInMVCCSnapshot(TransactionId xid, Snapshot snapshot)
 {
-	uint32		i;
-
 	/*
 	 * Make a quick range check to eliminate most XIDs without looking at the
 	 * xip arrays.  Note that this is OK even if we convert a subxact XID to
@@ -2307,6 +2302,8 @@ XidInMVCCSnapshot(TransactionId xid, Snapshot snapshot)
 	 */
 	if (!snapshot->takenDuringRecovery)
 	{
+		uint32		i;
+
 		/*
 		 * If the snapshot contains full subxact data, the fastest way to
 		 * check things is just to compare the given XID against both subxact

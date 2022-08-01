@@ -59,6 +59,7 @@ $node->safe_psql('postgres',
 	qq{SELECT pg_logical_emit_message(true, 'test 026', repeat('xyzxz', 123456))}
 );
 #$node->safe_psql('postgres', qq{create table foo ()});
+my $endlsn = $node->safe_psql('postgres', 'SELECT pg_current_wal_insert_lsn()');
 my $endfile = $node->safe_psql('postgres',
 	'SELECT pg_walfile_name(pg_current_wal_insert_lsn())');
 ok($initfile ne $endfile, "$initfile differs from $endfile");
@@ -68,9 +69,8 @@ ok($initfile ne $endfile, "$initfile differs from $endfile");
 # contents
 $node->stop('immediate');
 
-unlink $node->basedir . "/pgdata/pg_wal/$endfile"
-  or die "could not unlink " . $node->basedir . "/pgdata/pg_wal/$endfile: $!";
-
+system(sprintf("mv %s/pgdata/pg_wal/$endfile %s/archives/", $node->basedir, $node->basedir));
+ 
 # OK, create a standby at this spot.
 $node->backup_fs_cold('backup');
 my $node_standby = PostgreSQL::Test::Cluster->new('standby');
@@ -106,4 +106,17 @@ $node_standby->promote;
 $node->stop;
 $node_standby->stop;
 
+my $node_primary_2  = PostgreSQL::Test::Cluster->new('primary_2');
+$node_primary_2->init_from_backup($node, 'backup', has_restoring => 1, standby => 1);
+
+$node_primary_2->append_conf(
+	'postgresql.conf', qq(
+log_min_messages = debug1
+));
+$node_primary_2->start;
+$node_primary_2->poll_query_until('postgres',
+					  "SELECT '$endlsn'::pg_lsn <= pg_last_wal_replay_lsn()");
+$node_primary_2->promote;
+$node_primary_2->poll_query_until('postgres', 'SELECT NOT pg_is_in_recovery()');
+$node_primary_2->safe_psql('postgres', 'CREATE TABLE bar AS select generate_series(0, 99999) a');
 done_testing();

@@ -2220,7 +2220,7 @@ FATAL:  password authentication failed for user "andym"
 <programlisting>
 FATAL:  user "andym" does not exist
 </programlisting>
-    The indicated database user name was not found.
+    The indicated user name was not found.
    </para>
 
    <para>
@@ -2228,8 +2228,9 @@ FATAL:  user "andym" does not exist
 FATAL:  database "testdb" does not exist
 </programlisting>
     The database you are trying to connect to does not exist. Note that
-    if you do not specify a database name, it defaults to the database
-    user name, which might or might not be the right thing.
+    if the database name shown matches the user name you are connecting
+    as it is not by accident: the default database name is the
+    user name.
    </para>
 
    <tip>

@@ -24,6 +24,7 @@
 #include "nodes/extensible.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
+#include "optimizer/paths.h"
 #include "parser/analyze.h"
 #include "parser/parsetree.h"
 #include "rewrite/rewriteHandler.h"
@@ -153,7 +154,7 @@ static void ExplainIndentText(ExplainState *es);
 static void ExplainJSONLineEnding(ExplainState *es);
 static void ExplainYAMLLineStarting(ExplainState *es);
 static void escape_yaml(StringInfo buf, const char *str);
-
+static void ExplainPrintGeqoDetails(ExplainState *es, QueryDesc *queryDesc);
 
 
 /*
@@ -190,6 +191,8 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
 			es->wal = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "settings") == 0)
 			es->settings = defGetBoolean(opt);
+		else if (strcmp(opt->defname, "geqo") == 0)
+			es->geqo = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "timing") == 0)
 		{
 			timing_set = true;
@@ -620,6 +623,10 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 							   plannedstmt->queryId, es);
 	}
 
+	/* Print info about details option */
+	if (es->geqo)
+		ExplainPrintGeqoDetails(es, queryDesc);
+
 	/* Show buffer usage in planning */
 	if (bufusage)
 	{
@@ -740,6 +747,50 @@ ExplainPrintSettings(ExplainState *es)
 
 		ExplainPropertyText("Settings", str.data, es);
 	}
+}
+
+void
+ExplainPrintGeqoDetails(ExplainState *es, QueryDesc *queryDesc)
+{
+	if (!enable_geqo)
+		return;
+
+	if (es->format != EXPLAIN_FORMAT_TEXT)
+	{
+		ExplainOpenGroup("GeqoDetails", "GeqoDetails", true, es);
+
+		if (queryDesc->plannedstmt->geqoFlag)
+			ExplainPropertyText("GEQO", "used", es);
+		else
+			ExplainPropertyText("GEQO", "not used", es);
+		ExplainPropertyInteger("geqo_threshold", NULL, geqo_threshold, es);
+
+		ExplainPropertyInteger("Max join nodes", NULL,
+								queryDesc->plannedstmt->max_nodes_in_join_search, es);
+
+		ExplainCloseGroup("GeqoDetails", "GeqoDetails", true, es);
+	}
+	else
+	{
+		StringInfoData str;
+
+		initStringInfo(&str);
+
+		if (queryDesc->plannedstmt->geqoFlag)
+			appendStringInfo(&str, "GEQO: used");
+		else
+			appendStringInfo(&str, "GEQO: not used");
+
+		appendStringInfoString(&str, ", ");
+		appendStringInfo(&str, "geqo_threshold: %d", geqo_threshold);
+
+		appendStringInfoString(&str, ", ");
+		appendStringInfo(&str, "Max join nodes: %d",
+					queryDesc->plannedstmt->max_nodes_in_join_search);
+
+		ExplainPropertyText("GeqoDetails", str.data, es);
+	}
+
 }
 
 /*

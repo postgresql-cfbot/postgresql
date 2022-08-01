@@ -488,6 +488,10 @@ struct PlannerInfo
 
 	/* Does this query modify any partition key columns? */
 	bool		partColsUpdated;
+
+	/* Information about geqo */
+	bool		geqo_used;
+	int			max_joinnodes;
 };
 
 

@@ -3286,6 +3286,9 @@ make_rel_from_joinlist(PlannerInfo *root, List *joinlist)
 	if (levels_needed <= 0)
 		return NULL;			/* nothing to do? */
 
+	if (root->max_joinnodes < levels_needed)
+		root->max_joinnodes = levels_needed;
+
 	/*
 	 * Construct a list of rels corresponding to the child joinlist nodes.
 	 * This may contain both base rels and rels constructed according to
@@ -3339,7 +3342,12 @@ make_rel_from_joinlist(PlannerInfo *root, List *joinlist)
 		if (join_search_hook)
 			return (*join_search_hook) (root, levels_needed, initial_rels);
 		else if (enable_geqo && levels_needed >= geqo_threshold)
+		{
+			elog(DEBUG1, "the number of join nodes %d is larger than geqo_threshold %d",
+				levels_needed, geqo_threshold);
+			root->geqo_used = true;
 			return geqo(root, levels_needed, initial_rels);
+		}
 		else
 			return standard_join_search(root, levels_needed, initial_rels);
 	}

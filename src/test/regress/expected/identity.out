@@ -124,41 +124,55 @@ ERROR:  cannot insert a non-DEFAULT value into column "a"
 DETAIL:  Column "a" is an identity column defined as GENERATED ALWAYS.
 HINT:  Use OVERRIDING SYSTEM VALUE to override.
 INSERT INTO itest5 VALUES (DEFAULT, 'b'), (DEFAULT, 'c');  -- ok
+INSERT INTO itest5 SET a = 4, b = 'a'; -- error
+ERROR:  cannot insert a non-DEFAULT value into column "a"
+DETAIL:  Column "a" is an identity column defined as GENERATED ALWAYS.
+HINT:  Use OVERRIDING SYSTEM VALUE to override.
+INSERT INTO itest5 SET a = DEFAULT, b  = 'd'; -- ok
 INSERT INTO itest5 OVERRIDING SYSTEM VALUE VALUES (-1, 'aa');
 INSERT INTO itest5 OVERRIDING SYSTEM VALUE VALUES (-2, 'bb'), (-3, 'cc');
 INSERT INTO itest5 OVERRIDING SYSTEM VALUE VALUES (DEFAULT, 'dd'), (-4, 'ee');
 INSERT INTO itest5 OVERRIDING SYSTEM VALUE VALUES (-5, 'ff'), (DEFAULT, 'gg');
 INSERT INTO itest5 OVERRIDING SYSTEM VALUE VALUES (DEFAULT, 'hh'), (DEFAULT, 'ii');
+INSERT INTO itest5 OVERRIDING SYSTEM VALUE SET a = -6, b = 'jj';
+INSERT INTO itest5 OVERRIDING SYSTEM VALUE SET a = DEFAULT, b = 'kk';
 INSERT INTO itest5 OVERRIDING USER VALUE VALUES (-1, 'aaa');
 INSERT INTO itest5 OVERRIDING USER VALUE VALUES (-2, 'bbb'), (-3, 'ccc');
 INSERT INTO itest5 OVERRIDING USER VALUE VALUES (DEFAULT, 'ddd'), (-4, 'eee');
 INSERT INTO itest5 OVERRIDING USER VALUE VALUES (-5, 'fff'), (DEFAULT, 'ggg');
 INSERT INTO itest5 OVERRIDING USER VALUE VALUES (DEFAULT, 'hhh'), (DEFAULT, 'iii');
+INSERT INTO itest5 OVERRIDING USER VALUE SET a = -6, b = 'jjj';
+INSERT INTO itest5 OVERRIDING USER VALUE SET a = DEFAULT, b = 'kkk';
 SELECT * FROM itest5;
  a  |  b  
 ----+-----
   1 | a
   2 | b
   3 | c
+  4 | d
  -1 | aa
  -2 | bb
  -3 | cc
-  4 | dd
+  5 | dd
  -4 | ee
  -5 | ff
-  5 | gg
-  6 | hh
-  7 | ii
-  8 | aaa
-  9 | bbb
- 10 | ccc
- 11 | ddd
- 12 | eee
- 13 | fff
- 14 | ggg
- 15 | hhh
- 16 | iii
-(21 rows)
+  6 | gg
+  7 | hh
+  8 | ii
+ -6 | jj
+  9 | kk
+ 10 | aaa
+ 11 | bbb
+ 12 | ccc
+ 13 | ddd
+ 14 | eee
+ 15 | fff
+ 16 | ggg
+ 17 | hhh
+ 18 | iii
+ 19 | jjj
+ 20 | kkk
+(26 rows)
 
 DROP TABLE itest5;
 INSERT INTO itest3 VALUES (DEFAULT, 'a');

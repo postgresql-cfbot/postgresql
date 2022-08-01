@@ -1790,6 +1790,26 @@ SELECT * FROM y;
  10
 (10 rows)
 
+TRUNCATE TABLE y;
+WITH t AS (
+    SELECT generate_series(1, 10) AS a
+)
+INSERT INTO y SET a = t.a+20 FROM t;
+SELECT * FROM y;
+ a  
+----
+ 21
+ 22
+ 23
+ 24
+ 25
+ 26
+ 27
+ 28
+ 29
+ 30
+(10 rows)
+
 DROP TABLE y;
 --
 -- error cases

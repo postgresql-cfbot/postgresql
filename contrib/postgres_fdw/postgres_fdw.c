@@ -7410,11 +7410,11 @@ conversion_error_callback(void *arg)
 EquivalenceMember *
 find_em_for_rel(PlannerInfo *root, EquivalenceClass *ec, RelOptInfo *rel)
 {
-	ListCell   *lc;
+	int		i = -1;
 
-	foreach(lc, ec->ec_members)
+	while ((i = bms_next_member(ec->ec_member_indexes, i)) >= 0)
 	{
-		EquivalenceMember *em = (EquivalenceMember *) lfirst(lc);
+		EquivalenceMember *em = (EquivalenceMember *) list_nth(root->eq_members, i);
 
 		/*
 		 * Note we require !bms_is_empty, else we'd accept constant
@@ -7453,7 +7453,7 @@ find_em_for_rel_target(PlannerInfo *root, EquivalenceClass *ec,
 	{
 		Expr	   *expr = (Expr *) lfirst(lc1);
 		Index		sgref = get_pathtarget_sortgroupref(target, i);
-		ListCell   *lc2;
+		int			i;
 
 		/* Ignore non-sort expressions */
 		if (sgref == 0 ||
@@ -7469,9 +7469,10 @@ find_em_for_rel_target(PlannerInfo *root, EquivalenceClass *ec,
 			expr = ((RelabelType *) expr)->arg;
 
 		/* Locate an EquivalenceClass member matching this expr, if any */
-		foreach(lc2, ec->ec_members)
+		i = -1;
+		while ((i = bms_next_member(ec->ec_member_indexes, i)) >= 0)
 		{
-			EquivalenceMember *em = (EquivalenceMember *) lfirst(lc2);
+			EquivalenceMember *em = (EquivalenceMember *) list_nth(root->eq_members, i);
 			Expr	   *em_expr;
 
 			/* Don't match constants */

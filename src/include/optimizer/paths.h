@@ -136,7 +136,8 @@ extern EquivalenceClass *get_eclass_for_sort_expr(PlannerInfo *root,
 												  Index sortref,
 												  Relids rel,
 												  bool create_it);
-extern EquivalenceMember *find_ec_member_matching_expr(EquivalenceClass *ec,
+extern EquivalenceMember *find_ec_member_matching_expr(PlannerInfo *root,
+													   EquivalenceClass *ec,
 													   Expr *expr,
 													   Relids relids);
 extern EquivalenceMember *find_computable_ec_member(PlannerInfo *root,

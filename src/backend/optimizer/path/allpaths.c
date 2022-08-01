@@ -4538,7 +4538,7 @@ print_path(PlannerInfo *root, Path *path, int indent)
 		for (i = 0; i < indent; i++)
 			printf("\t");
 		printf("  pathkeys: ");
-		print_pathkeys(path->pathkeys, root->parse->rtable);
+		print_pathkeys(root, path->pathkeys, root->parse->rtable);
 	}
 
 	if (join)

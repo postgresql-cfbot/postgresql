@@ -300,6 +300,9 @@ struct PlannerInfo
 	/* list of active EquivalenceClasses */
 	List	   *eq_classes;
 
+	/* list of each EquivalenceMember */
+	List	   *eq_members;
+
 	/* set true once ECs are canonical */
 	bool		ec_merging_done;
 
@@ -874,6 +877,12 @@ typedef struct RelOptInfo
 	 * Indexes in PlannerInfo's eq_classes list of ECs that mention this rel
 	 */
 	Bitmapset  *eclass_indexes;
+
+	/*
+	 * Indexes in PlannerInfo's eq_members list of EMs that memtion this rel
+	 */
+	Bitmapset  *eclass_member_indexes;
+
 	PlannerInfo *subroot;		/* if subquery */
 	List	   *subplan_params; /* if subquery */
 	/* wanted number of parallel workers */
@@ -1262,7 +1271,7 @@ typedef struct EquivalenceClass
 
 	List	   *ec_opfamilies;	/* btree operator family OIDs */
 	Oid			ec_collation;	/* collation, if datatypes are collatable */
-	List	   *ec_members;		/* list of EquivalenceMembers */
+	Bitmapset  *ec_member_indexes; /* Indexes into PlannerInfo's eq_members */
 	List	   *ec_sources;		/* list of generating RestrictInfos */
 	List	   *ec_derives;		/* list of derived RestrictInfos */
 	Relids		ec_relids;		/* all relids appearing in ec_members, except

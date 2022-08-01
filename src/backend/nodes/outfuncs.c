@@ -430,7 +430,7 @@ _outEquivalenceClass(StringInfo str, const EquivalenceClass *node)
 
 	WRITE_NODE_FIELD(ec_opfamilies);
 	WRITE_OID_FIELD(ec_collation);
-	WRITE_NODE_FIELD(ec_members);
+	WRITE_BITMAPSET_FIELD(ec_member_indexes);
 	WRITE_NODE_FIELD(ec_sources);
 	WRITE_NODE_FIELD(ec_derives);
 	WRITE_BITMAPSET_FIELD(ec_relids);

@@ -1986,12 +1986,14 @@ compute_cpu_sort_cost(PlannerInfo *root, List *pathkeys, int nPresortedKeys,
 		double		nGroups,
 					correctedNGroups;
 		Cost		funcCost = 1.0;
+		int			first_em;
 
 		/*
 		 * We believe that equivalence members aren't very different, so, to
 		 * estimate cost we consider just the first member.
 		 */
-		em = (EquivalenceMember *) linitial(pathkey->pk_eclass->ec_members);
+		first_em = bms_next_member(pathkey->pk_eclass->ec_member_indexes, -1);
+		em = (EquivalenceMember *) list_nth(root->eq_members, first_em);
 
 		if (em->em_datatype != InvalidOid)
 		{
@@ -2326,8 +2328,9 @@ cost_incremental_sort(Path *path,
 	foreach(l, pathkeys)
 	{
 		PathKey    *key = (PathKey *) lfirst(l);
+		int			first_em = bms_next_member(key->pk_eclass->ec_member_indexes, -1);
 		EquivalenceMember *member = (EquivalenceMember *)
-		linitial(key->pk_eclass->ec_members);
+			list_nth(root->eq_members, first_em);
 
 		/*
 		 * Check if the expression contains Var with "varno 0" so that we

@@ -369,8 +369,13 @@ select jsonb_pretty(
                              "Actual Loops": 0,             +
                              "Startup Cost": 0.0,           +
                              "Async Capable": false,        +
+                             "Loop Max Rows": 0,            +
+                             "Loop Max Time": 0.0,          +
+                             "Loop Min Rows": 0,            +
+                             "Loop Min Time": 0.0,          +
                              "Relation Name": "tenk1",      +
                              "Parallel Aware": true,        +
+                             "Loop Total Rows": 0,          +
                              "Local Hit Blocks": 0,         +
                              "Temp Read Blocks": 0,         +
                              "Actual Total Time": 0.0,      +
@@ -415,7 +420,12 @@ select jsonb_pretty(
                      "Actual Loops": 0,                     +
                      "Startup Cost": 0.0,                   +
                      "Async Capable": false,                +
+                     "Loop Max Rows": 0,                    +
+                     "Loop Max Time": 0.0,                  +
+                     "Loop Min Rows": 0,                    +
+                     "Loop Min Time": 0.0,                  +
                      "Parallel Aware": false,               +
+                     "Loop Total Rows": 0,                  +
                      "Sort Space Used": 0,                  +
                      "Local Hit Blocks": 0,                 +
                      "Temp Read Blocks": 0,                 +

@@ -2720,6 +2720,10 @@ TryAgain:
  *
  * The pathname passed to AllocateDir must be passed to this routine too,
  * but it is only used for error reporting.
+ *
+ * If you need to discover the file type of an entry, consider using
+ * get_dirent_type() (instead of stat()/lstat()) to avoid extra system calls on
+ * many platforms.
  */
 struct dirent *
 ReadDir(DIR *dir, const char *dirname)
@@ -2735,6 +2739,10 @@ ReadDir(DIR *dir, const char *dirname)
  * If elevel < ERROR, returns NULL after any error.  With the normal coding
  * pattern, this will result in falling out of the loop immediately as
  * though the directory contained no (more) entries.
+ *
+ * If you need to discover the file type of an entry, consider using
+ * get_dirent_type() (instead of stat()/lstat()) to avoid extra system calls on
+ * many platforms.
  */
 struct dirent *
 ReadDirExtended(DIR *dir, const char *dirname, int elevel)
@@ -3171,17 +3179,11 @@ RemovePgTempFilesInDir(const char *tmpdirname, bool missing_ok, bool unlink_all)
 					PG_TEMP_FILE_PREFIX,
 					strlen(PG_TEMP_FILE_PREFIX)) == 0)
 		{
-			struct stat statbuf;
+			PGFileType	type = get_dirent_type(rm_path, temp_de, false, LOG);
 
-			if (lstat(rm_path, &statbuf) < 0)
-			{
-				ereport(LOG,
-						(errcode_for_file_access(),
-						 errmsg("could not stat file \"%s\": %m", rm_path)));
+			if (type == PGFILETYPE_ERROR)
 				continue;
-			}
-
-			if (S_ISDIR(statbuf.st_mode))
+			else if (type == PGFILETYPE_DIR)
 			{
 				/* recursively remove contents, then directory itself */
 				RemovePgTempFilesInDir(rm_path, false, true);

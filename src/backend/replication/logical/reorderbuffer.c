@@ -91,6 +91,7 @@
 #include "access/xact.h"
 #include "access/xlog_internal.h"
 #include "catalog/catalog.h"
+#include "common/file_utils.h"
 #include "lib/binaryheap.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -4407,17 +4408,12 @@ ReorderBufferCleanupSerializedTXNs(const char *slotname)
 {
 	DIR		   *spill_dir;
 	struct dirent *spill_de;
-	struct stat statbuf;
 	char		path[MAXPGPATH * 2 + 12];
 
 	sprintf(path, "pg_replslot/%s", slotname);
 
-	/* we're only handling directories here, skip if it's not ours */
-	if (lstat(path, &statbuf) == 0 && !S_ISDIR(statbuf.st_mode))
-		return;
-
 	spill_dir = AllocateDir(path);
-	while ((spill_de = ReadDirExtended(spill_dir, path, INFO)) != NULL)
+	while ((spill_de = ReadDir(spill_dir, path)) != NULL)
 	{
 		/* only look at names that can be ours */
 		if (strncmp(spill_de->d_name, "xid", 3) == 0)
@@ -4463,6 +4459,7 @@ StartupReorderBuffer(void)
 {
 	DIR		   *logical_dir;
 	struct dirent *logical_de;
+	char		path[MAXPGPATH * 2 + 12];
 
 	logical_dir = AllocateDir("pg_replslot");
 	while ((logical_de = ReadDir(logical_dir, "pg_replslot")) != NULL)
@@ -4473,6 +4470,11 @@ StartupReorderBuffer(void)
 
 		/* if it cannot be a slot, skip the directory */
 		if (!ReplicationSlotValidateName(logical_de->d_name, DEBUG2))
+			continue;
+
+		/* we're only handling directories here, skip if it's not ours */
+		sprintf(path, "pg_replslot/%s", logical_de->d_name);
+		if (get_dirent_type(path, logical_de, false, ERROR) != PGFILETYPE_DIR)
 			continue;
 
 		/*

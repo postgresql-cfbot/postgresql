@@ -41,6 +41,7 @@
 
 #include "access/transam.h"
 #include "access/xlog_internal.h"
+#include "common/file_utils.h"
 #include "common/string.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -1442,7 +1443,6 @@ StartupReplicationSlots(void)
 	replication_dir = AllocateDir("pg_replslot");
 	while ((replication_de = ReadDir(replication_dir, "pg_replslot")) != NULL)
 	{
-		struct stat statbuf;
 		char		path[MAXPGPATH + 12];
 
 		if (strcmp(replication_de->d_name, ".") == 0 ||
@@ -1452,7 +1452,7 @@ StartupReplicationSlots(void)
 		snprintf(path, sizeof(path), "pg_replslot/%s", replication_de->d_name);
 
 		/* we're only creating directories here, skip if it's not our's */
-		if (lstat(path, &statbuf) == 0 && !S_ISDIR(statbuf.st_mode))
+		if (get_dirent_type(path, replication_de, false, ERROR) != PGFILETYPE_DIR)
 			continue;
 
 		/* we crashed while a slot was being setup or deleted, clean up */

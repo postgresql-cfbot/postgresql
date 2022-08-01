@@ -210,7 +210,8 @@ static bool get_actual_variable_endpoint(Relation heapRel,
 										 MemoryContext outercontext,
 										 Datum *endpointDatum);
 static RelOptInfo *find_join_input_rel(PlannerInfo *root, Relids relids);
-
+static bool matching_restriction_variables(PlannerInfo *root, List *args,
+										   int varRelid);
 
 /*
  *		eqsel			- Selectivity of "=" for any data types.
@@ -254,6 +255,31 @@ eqsel_internal(PG_FUNCTION_ARGS, bool negate)
 			/* Use default selectivity (should we raise an error instead?) */
 			return 1.0 - DEFAULT_EQ_SEL;
 		}
+	}
+
+	/*
+	 * If it's (variable = variable) with the same variable on both sides, it's
+	 * a special case and we know it's not expected to filter anything, so we
+	 * estimate the selectivity as (1.0 - nullfrac), or 0.0 when it's negated.
+	 */
+	if (matching_restriction_variables(root, args, varRelid))
+	{
+		VariableStatData	vardata;
+		double				null_frac = 0.0;
+
+		examine_variable(root, linitial(args), varRelid, &vardata);
+
+		if (HeapTupleIsValid(vardata.statsTuple))
+		{
+			Form_pg_statistic	stats;
+
+			stats = (Form_pg_statistic) GETSTRUCT(vardata.statsTuple);
+			null_frac = stats->stanullfrac;
+		}
+
+		ReleaseVariableStats(vardata);
+
+		return (negate) ? 0.0 : (1.0 - null_frac);
 	}
 
 	/*
@@ -1407,6 +1433,22 @@ scalarineqsel_wrapper(PG_FUNCTION_ARGS, bool isgt, bool iseq)
 	Datum		constval;
 	Oid			consttype;
 	double		selec;
+
+	/*
+	 * Handle (variable < variable) and (variable <= variable) with the same
+	 * variable on both sides as a special case. The strict inequality should
+	 * not match any rows, hence selectivity is 0.0. The other case is about
+	 * the same as equality, so selectivity is 1.0.
+	 */
+	if (matching_restriction_variables(root, args, varRelid))
+	{
+		/* The case with equality matches all rows, so estimate it as 1.0. */
+		if (iseq)
+			PG_RETURN_FLOAT8(1.0);
+
+		/* Strict inequality matches nothing, so selectivity is 0.0. */
+		PG_RETURN_FLOAT8(0.0);
+	}
 
 	/*
 	 * If expression is not variable op something or something op variable,
@@ -4904,6 +4946,65 @@ get_restriction_variable(PlannerInfo *root, List *args, int varRelid,
 	ReleaseVariableStats(rdata);
 
 	return false;
+}
+
+/*
+ * matching_restriction_variable
+ *		Check if the two arguments of a restriction clause refer to the same
+ *		variable, i.e. if the condition is of the form (variable op variable).
+ *		We can deduce selectivity for such (in)equality clauses.
+ *
+ * Inputs:
+ *	root: the planner info
+ *	args: clause argument list
+ *	varRelid: see specs for restriction selectivity functions
+ *
+ * Returns true if the same variable is on both sides, otherwise false.
+ */
+static bool
+matching_restriction_variables(PlannerInfo *root, List *args, int varRelid)
+{
+	Node	   *left,
+			   *right;
+	Bitmapset  *varnos;
+
+	/* Fail if not a binary opclause (probably shouldn't happen) */
+	if (list_length(args) != 2)
+		return false;
+
+	left = (Node *) linitial(args);
+	right = (Node *) lsecond(args);
+
+	/* Look inside any binary-compatible relabeling */
+
+	if (IsA(left, RelabelType))
+		left = (Node *) ((RelabelType *) left)->arg;
+
+	if (IsA(right, RelabelType))
+		right = (Node *) ((RelabelType *) right)->arg;
+
+	/*
+	 * Check if it's safe to compare the two expressions. The expressions
+	 * must not contain any volatile expressions, and must belong to the
+	 * same relation.
+	 *
+	 * XXX We do a small trick - we validate just one expression, and then
+	 * check it's equal to the other side.
+	 */
+	if (contain_volatile_functions(left))
+		return false;
+
+	/* Check it belongs to a single relation. */
+	varnos = pull_varnos(root, left);
+
+	if (bms_num_members(varnos) != 1)
+		return false;
+
+	if ((varRelid != 0) && (!bms_is_member(varRelid, varnos)))
+		return false;
+
+	/* The two variables need to match */
+	return equal(left, right);
 }
 
 /*

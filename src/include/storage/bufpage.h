@@ -330,6 +330,20 @@ PageValidateSpecialPointer(Page page)
 }
 
 /*
+ * PageGetSpecialOpaque
+ *		Returns pointer to special space on a page, of the given type.
+ *		This removes the data dependency on the page header in builds
+ *		without asserts enabled.
+ */
+#define PageGetSpecialOpaque(page, OpaqueDataType) \
+( \
+	AssertMacro(PageGetPageSize(page) == BLCKSZ && \
+				PageGetSpecialSize(page) == MAXALIGN(sizeof(OpaqueDataType))), \
+	(OpaqueDataType *) ((char *) (page) + \
+						(BLCKSZ - MAXALIGN(sizeof(OpaqueDataType)))) \
+)
+
+/*
  * PageGetSpecialPointer
  *		Returns pointer to special space on a page.
  */

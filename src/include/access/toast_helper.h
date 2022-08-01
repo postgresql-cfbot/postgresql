@@ -14,6 +14,7 @@
 #ifndef TOAST_HELPER_H
 #define TOAST_HELPER_H
 
+#include "access/hio.h"
 #include "utils/rel.h"
 
 /*
@@ -107,7 +108,7 @@ extern int	toast_tuple_find_biggest_attribute(ToastTupleContext *ttc,
 											   bool check_main);
 extern void toast_tuple_try_compression(ToastTupleContext *ttc, int attribute);
 extern void toast_tuple_externalize(ToastTupleContext *ttc, int attribute,
-									int options);
+									int options, BulkInsertStateData *bistate);
 extern void toast_tuple_cleanup(ToastTupleContext *ttc);
 
 extern void toast_delete_external(Relation rel, Datum *values, bool *isnull,

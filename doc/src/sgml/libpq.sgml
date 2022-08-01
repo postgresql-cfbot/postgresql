@@ -8879,6 +8879,109 @@ int PQisthreadsafe();
   </para>
  </sect1>
 
+ <sect1 id="libpq-binary-format">
+  <title>Binary Format</title>
+  <para>
+    Various <application>libpq</application> functions support sending or
+    receiving data in binary format.  Data in binary format requires the
+    application to be handle any differences between the system and the network
+    byte order.
+  </para>
+
+  <para>
+    <xref linkend="libpq-example-3"/> demonstrates how to write a complete
+    program that uses <application>libpq</application> functions that request
+    data in binary foramt.  This example shows how to handle only a few data
+    types.  This section will detail the handling of as many of the data types
+    as possible.  See <xref linkend="datatype"/> for descriptions of each of the
+    built-in data types.
+  </para>
+
+  <sect2 id="libpq-binary-boolean">
+   <title><type>boolean</type></title>
+    <para>
+       A <type>boolean</type> is transmitted as single byte that, when cast to
+       an <literal>int</literal>, will be <literal>0</literal> for
+       <literal>false</literal> and <literal>1</literal> for
+       <literal>true</literal>.
+    </para>
+<programlisting>
+<![CDATA[
+int         value;
+
+ptr = PQgetvalue(res, row_number, column_number);
+value = (int) *ptr;
+printf("%d\n", value);
+]]>
+</programlisting>
+  </sect2>
+
+  <sect2 id="libpq-binary-real">
+   <title><type>real</type></title>
+    <para>
+      A <type>real</type> is composed of 4 bytes and needs to be handled
+      correctly for byte order.
+    </para>
+<programlisting>
+<![CDATA[
+union {
+    int     i;
+    float   f;
+}           value;
+
+ptr = PQgetvalue(res, row_number, column_number);
+val.i = ntohl(*((uint32_t *) ptr));
+printf("%f\n", value.f);
+]]>
+</programlisting>
+  </sect2>
+
+  <sect2 id="libpq-binary-timestamp-without-time-zone">
+   <title><type>timestamp without time zone</type></title>
+    <para>
+      A <type>timestamp without time zone</type> is a 64-bit data type
+      representing the number of microseconds since January 1, 2000.  It can be
+      converted into a broken-down time representation by converting the time
+      into seconds and saving the microseconds elsewhere.
+    </para>
+    <para>
+      Note that in C time is counted from January 1, 1970 so this discrepency
+      needs to be accounted for in addition to handling the network byte order.
+    </para>
+<programlisting>
+<![CDATA[
+#define POSTGRES_EPOCH_JDATE 2451545 /* == date2j(2000, 1, 1) */
+#define UNIX_EPOCH_JDATE 2440588 /* == date2j(1970, 1, 1) */
+#define SECS_PER_DAY 86400
+
+uint64_t    value;
+
+struct tm  *tm;
+time_t      timep;
+uint32_t    mantissa;
+
+ptr = PQgetvalue(res, column_number, row_number);
+/* Note ntohll() is not implemented on all platforms. */
+val = ntohll(*((uint64_t *) ptr));
+
+timep = val / (uint64_t) 1000000 +
+        (uint64_t) (POSTGRES_EPOCH_JDATE - UNIX_EPOCH_JDATE) *
+        (uint64_t) SECS_PER_DAY;
+mantissa = val - (uint64_t) (timep -
+        (POSTGRES_EPOCH_JDATE - UNIX_EPOCH_JDATE) * SECS_PER_DAY) *
+        (uint64_t) 1000000;
+
+/* Assume and print timestamps in GMT for simplicity. */
+tm = gmtime(&timep);
+
+printf("%04d-%02d-%02d %02d:%02d:%02d.%06d\n",
+        tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday, tm->tm_hour,
+        tm->tm_min, tm->tm_sec, mantissa);
+]]>
+</programlisting>
+  </sect2>
+
+ </sect1>
 
  <sect1 id="libpq-build">
   <title>Building <application>libpq</application> Programs</title>

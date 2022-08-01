@@ -242,6 +242,7 @@ static XLogSource readSource = XLOG_FROM_ANY;
  * walreceiver restart.  This is only valid in XLOG_FROM_STREAM state.
  */
 static XLogSource currentSource = XLOG_FROM_ANY;
+static XLogSource lastSource = XLOG_FROM_ANY;
 static bool lastSourceFailed = false;
 static bool pendingWalRcvRestart = false;
 
@@ -3117,6 +3118,7 @@ ReadRecord(XLogPrefetcher *xlogprefetcher, int emode,
 				 * so that we will check the archive next.
 				 */
 				lastSourceFailed = false;
+				lastSource = currentSource;
 				currentSource = XLOG_FROM_ANY;
 
 				continue;
@@ -3427,11 +3429,15 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 	 *-------
 	 */
 	if (!InArchiveRecovery)
+	{
+		lastSource = currentSource;
 		currentSource = XLOG_FROM_PG_WAL;
+	}
 	else if (currentSource == XLOG_FROM_ANY ||
 			 (!StandbyMode && currentSource == XLOG_FROM_STREAM))
 	{
 		lastSourceFailed = false;
+		lastSource = currentSource;
 		currentSource = XLOG_FROM_ARCHIVE;
 	}
 
@@ -3484,7 +3490,15 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					 * Move to XLOG_FROM_STREAM state, and set to start a
 					 * walreceiver if necessary.
 					 */
+					lastSource = currentSource;
 					currentSource = XLOG_FROM_STREAM;
+					/*
+					 * XXX: we might have to see if the WAL receiver is already
+					 * running before even we just go ahead and start it
+					 * relying only on startWalReceiver flag. The WAL receiver
+					 * could've come up by then, if yes, there can be multiple
+					 * WAL receivers???
+					 */
 					startWalReceiver = true;
 					break;
 
@@ -3527,6 +3541,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					{
 						if (rescanLatestTimeLine(replayTLI, replayLSN))
 						{
+							lastSource = currentSource;
 							currentSource = XLOG_FROM_ARCHIVE;
 							break;
 						}
@@ -3564,6 +3579,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 						HandleStartupProcInterrupts();
 					}
 					last_fail_time = now;
+					lastSource = currentSource;
 					currentSource = XLOG_FROM_ARCHIVE;
 					break;
 
@@ -3579,7 +3595,10 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 			 * from the archive first.
 			 */
 			if (InArchiveRecovery)
+			{
+				lastSource = currentSource;
 				currentSource = XLOG_FROM_ARCHIVE;
+			}
 		}
 
 		if (currentSource != oldSource)
@@ -3613,6 +3632,40 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 				/* Reset curFileTLI if random fetch. */
 				if (randAccess)
 					curFileTLI = 0;
+
+				/*
+				 * Try to stream WAL from primary after a specified amount of
+				 * time fetching from archive. This is because fetching WAL
+				 * from archive isn't always cheaper and the primary could have
+				 * come up meanwhile.
+				 */
+				if (StandbyMode && lastSource == XLOG_FROM_STREAM)
+				{
+					TimestampTz now;
+
+					now = GetCurrentTimestamp();
+
+					if (TimestampDifferenceExceeds(last_fail_time, now,
+												   wal_retrieve_retry_interval))
+					{
+						elog(DEBUG2,
+							 "switching WAL source from %s to %s after \"wal_retrieve_retry_interval\" %d milliseconds",
+							 xlogSourceNames[currentSource],
+							 xlogSourceNames[lastSource],
+							 wal_retrieve_retry_interval);
+
+						currentSource =	lastSource;
+						last_fail_time = 0;
+
+						/*
+						 * Treat this as a failure to read from current source,
+						 * even though it is actually not, so that the state
+						 * machine moves to read it from XLOG_FROM_STREAM.
+						 */
+						lastSourceFailed = true;
+						break;
+					}
+				}
 
 				/*
 				 * Try to restore the file from archive, or read an existing

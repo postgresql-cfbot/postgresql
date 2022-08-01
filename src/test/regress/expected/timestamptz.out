@@ -658,7 +658,7 @@ SELECT d1 - timestamp with time zone '1997-01-02' AS diff
  @ 1460 days 17 hours 32 mins 1 sec
 (56 rows)
 
-SELECT date_trunc( 'week', timestamp with time zone '2004-02-29 15:44:17.71393' ) AS week_trunc;
+SELECT date_trunc('week', timestamp with time zone '2004-02-29 15:44:17.71393' ) AS week_trunc;
           week_trunc          
 ------------------------------
  Mon Feb 23 00:00:00 2004 PST
@@ -682,11 +682,26 @@ SELECT date_trunc('day', timestamp with time zone '2001-02-16 20:38:40+00', 'VET
  Thu Feb 15 20:00:00 2001 PST
 (1 row)
 
+-- errors
+SELECT date_trunc('1 month 7 day'::interval, timestamp with time zone '2001-02-16 20:38:40+00', 'Europe/Warsaw') AS bad_interval1;
+ERROR:  interval has to be a divisor of a day, week or century.
+SELECT date_trunc('1 month 01:00:00'::interval, timestamp with time zone '2001-02-16 20:38:40+00', 'Europe/Warsaw') AS bad_interval2;
+ERROR:  interval has to be a divisor of a day, week or century.
+SELECT date_trunc('1 day 00:30:00'::interval, timestamp with time zone '2001-02-16 20:38:40+00', 'Europe/Warsaw') AS bad_interval3;
+ERROR:  interval has to be a divisor of a day, week or century.
+SELECT date_trunc('7 month'::interval, timestamp with time zone '2001-02-16 20:38:40+00', 'Europe/Warsaw') AS bad_interval4;
+ERROR:  interval has to be a divisor of a day, week or century.
+SELECT date_trunc('3 day'::interval, timestamp with time zone '2001-02-16 20:38:40+00', 'Europe/Warsaw') AS bad_interval5;
+ERROR:  interval has to be a divisor of a day, week or century.
+SELECT date_trunc('00:23:00'::interval, timestamp with time zone '2001-02-16 20:38:40+00', 'Europe/Warsaw') AS bad_interval6;
+ERROR:  interval has to be a divisor of a day, week or century.
 -- verify date_bin behaves the same as date_trunc for relevant intervals
 SELECT
   str,
   interval,
-  date_trunc(str, ts, 'Australia/Sydney') = date_bin(interval::interval, ts, timestamp with time zone '2001-01-01+11') AS equal
+  timezone,
+  date_trunc(str, ts, timezone) = date_bin(interval::interval, ts, timezone(timezone, '2001-01-01 00:00'::timestamp)) AS equal1,
+  date_trunc(str, ts, timezone) = date_trunc(interval::interval, ts, timezone) AS equal2
 FROM (
   VALUES
   ('day', '1 d'),
@@ -696,16 +711,33 @@ FROM (
   ('millisecond', '1 ms'),
   ('microsecond', '1 us')
 ) intervals (str, interval),
+(VALUES
+  ('Australia/Sydney'),
+  ('Europe/Warsaw'),
+  ('Europe/London')
+) timezone (timezone),
 (VALUES (timestamptz '2020-02-29 15:44:17.71393+00')) ts (ts);
-     str     | interval | equal 
--------------+----------+-------
- day         | 1 d      | t
- hour        | 1 h      | t
- minute      | 1 m      | t
- second      | 1 s      | t
- millisecond | 1 ms     | t
- microsecond | 1 us     | t
-(6 rows)
+     str     | interval |     timezone     | equal1 | equal2 
+-------------+----------+------------------+--------+--------
+ day         | 1 d      | Australia/Sydney | t      | t
+ day         | 1 d      | Europe/Warsaw    | t      | t
+ day         | 1 d      | Europe/London    | t      | t
+ hour        | 1 h      | Australia/Sydney | t      | t
+ hour        | 1 h      | Europe/Warsaw    | t      | t
+ hour        | 1 h      | Europe/London    | t      | t
+ minute      | 1 m      | Australia/Sydney | t      | t
+ minute      | 1 m      | Europe/Warsaw    | t      | t
+ minute      | 1 m      | Europe/London    | t      | t
+ second      | 1 s      | Australia/Sydney | t      | t
+ second      | 1 s      | Europe/Warsaw    | t      | t
+ second      | 1 s      | Europe/London    | t      | t
+ millisecond | 1 ms     | Australia/Sydney | t      | t
+ millisecond | 1 ms     | Europe/Warsaw    | t      | t
+ millisecond | 1 ms     | Europe/London    | t      | t
+ microsecond | 1 us     | Australia/Sydney | t      | t
+ microsecond | 1 us     | Europe/Warsaw    | t      | t
+ microsecond | 1 us     | Europe/London    | t      | t
+(18 rows)
 
 -- bin timestamps into arbitrary intervals
 SELECT
@@ -2363,7 +2395,7 @@ SELECT make_timestamptz(2014, 12, 10, 10, 10, 10, 'PST8PDT');
 
 RESET TimeZone;
 -- generate_series for timestamptz
-select * from generate_series('2020-01-01 00:00'::timestamptz,
+SELECT * FROM generate_series('2020-01-01 00:00'::timestamptz,
                               '2020-01-02 03:00'::timestamptz,
                               '1 hour'::interval);
        generate_series        
@@ -2418,10 +2450,49 @@ select generate_series('2022-01-01 00:00'::timestamptz,
 (10 rows)
 
 -- errors
-select * from generate_series('2020-01-01 00:00'::timestamptz,
+SELECT * FROM generate_series('2020-01-01 00:00'::timestamptz,
                               '2020-01-02 03:00'::timestamptz,
                               '0 hour'::interval);
 ERROR:  step size cannot equal zero
+-- Interval crossing time shift for Europe/Warsaw timezone (with DST)
+SET TimeZone to 'UTC';
+SELECT date_add('2021-10-31 00:00:00+02'::timestamptz,
+                '1 day'::interval,
+                'Europe/Warsaw');
+           date_add           
+------------------------------
+ Sun Oct 31 23:00:00 2021 UTC
+(1 row)
+
+SELECT date_add('2022-10-30 00:00:00+01'::timestamptz,
+                '1 day'::interval,
+                'Europe/London');
+           date_add           
+------------------------------
+ Mon Oct 31 00:00:00 2022 UTC
+(1 row)
+
+SELECT * FROM generate_series('2020-12-31 23:00:00+00'::timestamptz,
+                              '2021-12-31 23:00:00+00'::timestamptz,
+                              '1 month'::interval,
+                              'Europe/Warsaw');
+       generate_series        
+------------------------------
+ Thu Dec 31 23:00:00 2020 UTC
+ Sun Jan 31 23:00:00 2021 UTC
+ Sun Feb 28 23:00:00 2021 UTC
+ Wed Mar 31 22:00:00 2021 UTC
+ Fri Apr 30 22:00:00 2021 UTC
+ Mon May 31 22:00:00 2021 UTC
+ Wed Jun 30 22:00:00 2021 UTC
+ Sat Jul 31 22:00:00 2021 UTC
+ Tue Aug 31 22:00:00 2021 UTC
+ Thu Sep 30 22:00:00 2021 UTC
+ Sun Oct 31 23:00:00 2021 UTC
+ Tue Nov 30 23:00:00 2021 UTC
+ Fri Dec 31 23:00:00 2021 UTC
+(13 rows)
+
 --
 -- Test behavior with a dynamic (time-varying) timezone abbreviation.
 -- These tests rely on the knowledge that MSK (Europe/Moscow standard time)

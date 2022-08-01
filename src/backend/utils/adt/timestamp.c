@@ -69,6 +69,7 @@ typedef struct
 	TimestampTz finish;
 	Interval	step;
 	int			step_sign;
+	pg_tz		*attimezone;
 } generate_series_timestamptz_fctx;
 
 
@@ -545,6 +546,48 @@ parse_sane_timezone(struct pg_tm *tm, text *zone)
 	}
 
 	return tz;
+}
+
+static pg_tz *
+lookup_timezone(text *zone)
+{
+	char		tzname[TZ_STRLEN_MAX + 1];
+	char	   *lowzone;
+	int			type,
+				val;
+	pg_tz	   *tzp;
+	/*
+	 * Look up the requested timezone (see notes in timestamptz_zone()).
+	 */
+	text_to_cstring_buffer(zone, tzname, sizeof(tzname));
+
+	/* DecodeTimezoneAbbrev requires lowercase input */
+	lowzone = downcase_truncate_identifier(tzname,
+										   strlen(tzname),
+										   false);
+
+	type = DecodeTimezoneAbbrev(0, lowzone, &val, &tzp);
+
+	if (type == TZ || type == DTZ)
+	{
+		/* fixed-offset abbreviation, get a pg_tz descriptor for that */
+		tzp = pg_tzset_offset(-val);
+	}
+	else if (type == DYNTZ)
+	{
+		/* dynamic-offset abbreviation, use its referenced timezone */
+	}
+	else
+	{
+		/* try it as a full zone name */
+		tzp = pg_tzset(tzname);
+		if (!tzp)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("time zone \"%s\" not recognized", tzname)));
+	}
+
+	return tzp;
 }
 
 /*
@@ -2989,97 +3032,107 @@ timestamp_mi_interval(PG_FUNCTION_ARGS)
 }
 
 
-/* timestamptz_pl_interval()
- * Add an interval to a timestamp with time zone data type.
- * Note that interval has provisions for qualitative year/month
+/*
+ * Note that interval has provisions for qualitative year/month and day
  *	units, so try to do the right thing with them.
  * To add a month, increment the month, and use the same day of month.
  * Then, if the next month has fewer days, set the day of month
  *	to the last day of month.
+ * To add a day, increment the mday, and use the same time of day.
  * Lastly, add in the "quantitative time".
+ */
+static TimestampTz
+timestamptz_pl_interval_internal(TimestampTz timestamp, Interval *span, pg_tz *attimezone)
+{
+	int			tz;
+
+	/* Use session timezone if caller asks for default */
+	if (attimezone == NULL)
+		attimezone = session_timezone;
+	
+	if (span->month != 0)
+	{
+		struct pg_tm tt,
+				   *tm = &tt;
+		fsec_t		fsec;
+
+		if (timestamp2tm(timestamp, &tz, tm, &fsec, NULL, attimezone) != 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+					 errmsg("timestamp out of range")));
+
+		tm->tm_mon += span->month;
+		if (tm->tm_mon > MONTHS_PER_YEAR)
+		{
+			tm->tm_year += (tm->tm_mon - 1) / MONTHS_PER_YEAR;
+			tm->tm_mon = ((tm->tm_mon - 1) % MONTHS_PER_YEAR) + 1;
+		}
+		else if (tm->tm_mon < 1)
+		{
+			tm->tm_year += tm->tm_mon / MONTHS_PER_YEAR - 1;
+			tm->tm_mon = tm->tm_mon % MONTHS_PER_YEAR + MONTHS_PER_YEAR;
+		}
+
+		/* adjust for end of month boundary problems... */
+		if (tm->tm_mday > day_tab[isleap(tm->tm_year)][tm->tm_mon - 1])
+			tm->tm_mday = (day_tab[isleap(tm->tm_year)][tm->tm_mon - 1]);
+
+		tz = DetermineTimeZoneOffset(tm, attimezone);
+
+		if (tm2timestamp(tm, fsec, &tz, &timestamp) != 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+					 errmsg("timestamp out of range")));
+	}
+
+	if (span->day != 0)
+	{
+		struct pg_tm tt,
+				   *tm = &tt;
+		fsec_t		fsec;
+		int			julian;
+
+		if (timestamp2tm(timestamp, &tz, tm, &fsec, NULL, attimezone) != 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+					 errmsg("timestamp out of range")));
+
+		/* Add days by converting to and from Julian */
+		julian = date2j(tm->tm_year, tm->tm_mon, tm->tm_mday) + span->day;
+		j2date(julian, &tm->tm_year, &tm->tm_mon, &tm->tm_mday);
+
+		tz = DetermineTimeZoneOffset(tm, attimezone);
+
+		if (tm2timestamp(tm, fsec, &tz, &timestamp) != 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+					 errmsg("timestamp out of range")));
+	}
+
+	timestamp += span->time;
+
+	if (!IS_VALID_TIMESTAMP(timestamp))
+		ereport(ERROR,
+				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+				 errmsg("timestamp out of range")));
+
+	return timestamp;
+}
+
+
+/* timestamptz_pl_interval()
+ * Add an interval to a timestamp with time zone data type in session timezone.
  */
 Datum
 timestamptz_pl_interval(PG_FUNCTION_ARGS)
 {
 	TimestampTz timestamp = PG_GETARG_TIMESTAMPTZ(0);
 	Interval   *span = PG_GETARG_INTERVAL_P(1);
-	TimestampTz result;
-	int			tz;
 
 	if (TIMESTAMP_NOT_FINITE(timestamp))
-		result = timestamp;
-	else
-	{
-		if (span->month != 0)
-		{
-			struct pg_tm tt,
-					   *tm = &tt;
-			fsec_t		fsec;
+		PG_RETURN_TIMESTAMP(timestamp);
 
-			if (timestamp2tm(timestamp, &tz, tm, &fsec, NULL, NULL) != 0)
-				ereport(ERROR,
-						(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-						 errmsg("timestamp out of range")));
-
-			tm->tm_mon += span->month;
-			if (tm->tm_mon > MONTHS_PER_YEAR)
-			{
-				tm->tm_year += (tm->tm_mon - 1) / MONTHS_PER_YEAR;
-				tm->tm_mon = ((tm->tm_mon - 1) % MONTHS_PER_YEAR) + 1;
-			}
-			else if (tm->tm_mon < 1)
-			{
-				tm->tm_year += tm->tm_mon / MONTHS_PER_YEAR - 1;
-				tm->tm_mon = tm->tm_mon % MONTHS_PER_YEAR + MONTHS_PER_YEAR;
-			}
-
-			/* adjust for end of month boundary problems... */
-			if (tm->tm_mday > day_tab[isleap(tm->tm_year)][tm->tm_mon - 1])
-				tm->tm_mday = (day_tab[isleap(tm->tm_year)][tm->tm_mon - 1]);
-
-			tz = DetermineTimeZoneOffset(tm, session_timezone);
-
-			if (tm2timestamp(tm, fsec, &tz, &timestamp) != 0)
-				ereport(ERROR,
-						(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-						 errmsg("timestamp out of range")));
-		}
-
-		if (span->day != 0)
-		{
-			struct pg_tm tt,
-					   *tm = &tt;
-			fsec_t		fsec;
-			int			julian;
-
-			if (timestamp2tm(timestamp, &tz, tm, &fsec, NULL, NULL) != 0)
-				ereport(ERROR,
-						(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-						 errmsg("timestamp out of range")));
-
-			/* Add days by converting to and from Julian */
-			julian = date2j(tm->tm_year, tm->tm_mon, tm->tm_mday) + span->day;
-			j2date(julian, &tm->tm_year, &tm->tm_mon, &tm->tm_mday);
-
-			tz = DetermineTimeZoneOffset(tm, session_timezone);
-
-			if (tm2timestamp(tm, fsec, &tz, &timestamp) != 0)
-				ereport(ERROR,
-						(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-						 errmsg("timestamp out of range")));
-		}
-
-		timestamp += span->time;
-
-		if (!IS_VALID_TIMESTAMP(timestamp))
-			ereport(ERROR,
-					(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-					 errmsg("timestamp out of range")));
-
-		result = timestamp;
-	}
-
-	PG_RETURN_TIMESTAMP(result);
+	PG_RETURN_TIMESTAMP(timestamptz_pl_interval_internal(timestamp, span, NULL));
 }
 
 Datum
@@ -3096,6 +3149,27 @@ timestamptz_mi_interval(PG_FUNCTION_ARGS)
 	return DirectFunctionCall2(timestamptz_pl_interval,
 							   TimestampGetDatum(timestamp),
 							   PointerGetDatum(&tspan));
+}
+
+
+/* timestamptz_add_zone()
+ * Add an interval to a timestamp with time zone data type in specified timezone.
+ */
+Datum
+timestamptz_add_zone(PG_FUNCTION_ARGS)
+{
+	TimestampTz timestamp = PG_GETARG_TIMESTAMPTZ(0);
+	Interval   *span = PG_GETARG_INTERVAL_P(1);
+	text	   *zone;
+	pg_tz	   *attimezone;
+
+	if (TIMESTAMP_NOT_FINITE(timestamp))
+		PG_RETURN_TIMESTAMP(timestamp);
+
+	zone = PG_GETARG_TEXT_PP(2);
+	attimezone = lookup_timezone(zone);
+
+	PG_RETURN_TIMESTAMP(timestamptz_pl_interval_internal(timestamp, span, attimezone));
 }
 
 
@@ -4275,10 +4349,6 @@ timestamptz_trunc_zone(PG_FUNCTION_ARGS)
 	TimestampTz timestamp = PG_GETARG_TIMESTAMPTZ(1);
 	text	   *zone = PG_GETARG_TEXT_PP(2);
 	TimestampTz result;
-	char		tzname[TZ_STRLEN_MAX + 1];
-	char	   *lowzone;
-	int			type,
-				val;
 	pg_tz	   *tzp;
 
 	/*
@@ -4288,38 +4358,217 @@ timestamptz_trunc_zone(PG_FUNCTION_ARGS)
 	if (TIMESTAMP_NOT_FINITE(timestamp))
 		PG_RETURN_TIMESTAMP(timestamp);
 
-	/*
-	 * Look up the requested timezone (see notes in timestamptz_zone()).
-	 */
-	text_to_cstring_buffer(zone, tzname, sizeof(tzname));
-
-	/* DecodeTimezoneAbbrev requires lowercase input */
-	lowzone = downcase_truncate_identifier(tzname,
-										   strlen(tzname),
-										   false);
-
-	type = DecodeTimezoneAbbrev(0, lowzone, &val, &tzp);
-
-	if (type == TZ || type == DTZ)
-	{
-		/* fixed-offset abbreviation, get a pg_tz descriptor for that */
-		tzp = pg_tzset_offset(-val);
-	}
-	else if (type == DYNTZ)
-	{
-		/* dynamic-offset abbreviation, use its referenced timezone */
-	}
-	else
-	{
-		/* try it as a full zone name */
-		tzp = pg_tzset(tzname);
-		if (!tzp)
-			ereport(ERROR,
-					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					 errmsg("time zone \"%s\" not recognized", tzname)));
-	}
+	tzp = lookup_timezone(zone);
 
 	result = timestamptz_trunc_internal(units, timestamp, tzp);
+
+	PG_RETURN_TIMESTAMPTZ(result);
+}
+
+/*
+ * Common code for timestamptz_trunc_int() and timestamptz_trunc_int_zone().
+ *
+ * tzp identifies the zone to truncate with respect to.  We assume
+ * infinite timestamps have already been rejected.
+ */
+static TimestampTz
+timestamptz_trunc_int_internal(Interval *interval, TimestampTz timestamp, pg_tz *tzp)
+{
+	TimestampTz result;
+	int			tz;
+	int			interval_parts = 0;
+	bool		bad_interval = false;
+	bool		redotz = false;
+	fsec_t		fsec;
+	struct pg_tm tt,
+			   *tm = &tt;
+
+	if (interval->month != 0)
+	{
+		interval_parts++;
+		/* 1200 = hundred years */
+		if ((1200/interval->month) * interval->month != 1200)
+			bad_interval = true;
+	}
+	if (interval->day != 0)
+	{
+		interval_parts++;
+		if (interval->day != 1 && interval->day != 7)
+			bad_interval = true;
+	}
+	if (interval->time != 0)
+	{
+		interval_parts++;
+		if (interval->time > USECS_PER_SEC)
+		{
+			if ((interval->time % USECS_PER_SEC) != 0)
+				bad_interval = true;
+			if ((USECS_PER_DAY/interval->time) * interval->time != USECS_PER_DAY)
+				bad_interval = true;
+		}
+		else if (interval->time < USECS_PER_SEC && (USECS_PER_SEC/interval->time) * interval->time != USECS_PER_SEC)
+			bad_interval = true;
+	}
+	if (interval_parts != 1 || bad_interval)
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("interval has to be a divisor of a day, week or century.")));
+		return 0;
+	}
+
+	if (timestamp2tm(timestamp, &tz, tm, &fsec, NULL, tzp) != 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+				 errmsg("timestamp out of range")));
+
+	if (interval->month != 0)
+	{
+		int			months;
+		months = (tm->tm_year - 1) * 12 + tm->tm_mon - 1;
+		months -= months % interval->month;
+		tm->tm_year = (months / 12) + 1;
+		tm->tm_mon = (months % 12) + 1;
+		tm->tm_mday = 1;
+		tm->tm_hour = 0;
+		tm->tm_min = 0;
+		tm->tm_sec = 0;
+		fsec = 0;
+		redotz = true;
+	}
+	else if (interval->day == 7)
+	{
+		int			woy;
+		woy = date2isoweek(tm->tm_year, tm->tm_mon, tm->tm_mday);
+
+		/*
+		 * If it is week 52/53 and the month is January, then the
+		 * week must belong to the previous year. Also, some
+		 * December dates belong to the next year.
+		 */
+		if (woy >= 52 && tm->tm_mon == 1)
+			--tm->tm_year;
+		if (woy <= 1 && tm->tm_mon == MONTHS_PER_YEAR)
+			++tm->tm_year;
+		isoweek2date(woy, &(tm->tm_year), &(tm->tm_mon), &(tm->tm_mday));
+		tm->tm_hour = 0;
+		tm->tm_min = 0;
+		tm->tm_sec = 0;
+		fsec = 0;
+		redotz = true;
+	}
+	else if (interval->day == 1)
+	{
+		tm->tm_hour = 0;
+		tm->tm_min = 0;
+		tm->tm_sec = 0;
+		fsec = 0;
+		redotz = true;	/* for all cases > HOUR */
+	}
+	else if (interval->time > USECS_PER_SEC)
+	{
+		int			seconds;
+		seconds = tm->tm_hour * 3600 + tm->tm_min * 60 + tm->tm_sec;
+		seconds -= seconds % (interval->time / USECS_PER_SEC);
+		tm->tm_hour = seconds / 3600;
+		tm->tm_min = (seconds / 60) % 60;
+		tm->tm_sec = seconds % 60;
+		fsec = 0;
+		redotz = (interval->time > USECS_PER_HOUR);
+	}
+	else if (interval->time == USECS_PER_SEC)
+		fsec = 0;
+	else if (interval->time > 0)
+		fsec -= fsec % interval->time;
+
+	if (redotz)
+	{
+		int alt_tz = DetermineTimeZoneOffset(tm, tzp);
+		int seconds;
+
+		if (tm2timestamp(tm, fsec, &alt_tz, &result) != 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+					 errmsg("timestamp out of range")));
+
+		if (result <= timestamp)
+			return result;
+
+		/* If the beginning of the bucket is from the future, we have a DST case. We have to append "double meaning" hour to previous bucket. */
+		if (interval->time <= USECS_PER_HOUR)
+		{
+			/* This foul case is possible only for intervals greater than an hour and less than a day. */
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("timestamp dual meaning problem (DST case)")));
+			return result;
+		}
+
+		timestamp -= USECS_PER_HOUR;
+
+		if (timestamp2tm(timestamp, &tz, tm, &fsec, NULL, tzp) != 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+					 errmsg("timestamp out of range")));
+
+		seconds = tm->tm_hour * 3600 + tm->tm_min * 60 + tm->tm_sec;
+		seconds -= seconds % (interval->time / USECS_PER_SEC);
+		tm->tm_hour = seconds / 3600;
+		tm->tm_min = (seconds / 60) % 60;
+		tm->tm_sec = seconds % 60;
+		fsec = 0;
+
+		tz = DetermineTimeZoneOffset(tm, tzp);
+	}
+
+	if (tm2timestamp(tm, fsec, &tz, &result) != 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+				 errmsg("timestamp out of range")));
+
+	return result;
+}
+
+/* timestamptz_trunc_int()
+ * Truncate timestamptz to specified interval in session timezone.
+ */
+Datum
+timestamptz_trunc_int(PG_FUNCTION_ARGS)
+{
+	Interval   *interval = PG_GETARG_INTERVAL_P(0);
+	TimestampTz timestamp = PG_GETARG_TIMESTAMPTZ(1);
+	TimestampTz result;
+
+	if (TIMESTAMP_NOT_FINITE(timestamp))
+		PG_RETURN_TIMESTAMPTZ(timestamp);
+
+	result = timestamptz_trunc_int_internal(interval, timestamp, session_timezone);
+
+	PG_RETURN_TIMESTAMPTZ(result);
+}
+
+/* timestamptz_trunc_zone()
+ * Truncate timestamptz to specified interval in specified timezone.
+ */
+Datum
+timestamptz_trunc_int_zone(PG_FUNCTION_ARGS)
+{
+	Interval   *interval = PG_GETARG_INTERVAL_P(0);
+	TimestampTz timestamp = PG_GETARG_TIMESTAMPTZ(1);
+	text	   *zone = PG_GETARG_TEXT_PP(2);
+	TimestampTz result;
+	pg_tz	   *tzp;
+
+	/*
+	 * timestamptz_zone() doesn't look up the zone for infinite inputs, so we
+	 * don't do so here either.
+	 */
+	if (TIMESTAMP_NOT_FINITE(timestamp))
+		PG_RETURN_TIMESTAMP(timestamp);
+
+	tzp = lookup_timezone(zone);
+
+	result = timestamptz_trunc_int_internal(interval, timestamp, tzp);
 
 	PG_RETURN_TIMESTAMPTZ(result);
 }
@@ -5904,9 +6153,88 @@ generate_series_timestamptz(PG_FUNCTION_ARGS)
 		timestamp_cmp_internal(result, fctx->finish) >= 0)
 	{
 		/* increment current in preparation for next iteration */
-		fctx->current = DatumGetTimestampTz(DirectFunctionCall2(timestamptz_pl_interval,
-																TimestampTzGetDatum(fctx->current),
-																PointerGetDatum(&fctx->step)));
+		fctx->current = timestamptz_pl_interval_internal(fctx->current, &fctx->step, NULL);
+
+		/* do when there is more left to send */
+		SRF_RETURN_NEXT(funcctx, TimestampTzGetDatum(result));
+	}
+	else
+	{
+		/* do when there is no more left */
+		SRF_RETURN_DONE(funcctx);
+	}
+}
+
+/* generate_series_timestamptz_zone()
+ * Generate the set of timestamps from start to finish by step in specified timezone.
+ */
+Datum
+generate_series_timestamptz_zone(PG_FUNCTION_ARGS)
+{
+	FuncCallContext *funcctx;
+	generate_series_timestamptz_fctx *fctx;
+	TimestampTz result;
+
+	/* stuff done only on the first call of the function */
+	if (SRF_IS_FIRSTCALL())
+	{
+		TimestampTz start = PG_GETARG_TIMESTAMPTZ(0);
+		TimestampTz finish = PG_GETARG_TIMESTAMPTZ(1);
+		Interval   *step = PG_GETARG_INTERVAL_P(2);
+		MemoryContext oldcontext;
+		Interval	interval_zero;
+		text	   *zone;
+
+		/* create a function context for cross-call persistence */
+		funcctx = SRF_FIRSTCALL_INIT();
+
+		/*
+		 * switch to memory context appropriate for multiple function calls
+		 */
+		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
+
+		/* allocate memory for user context */
+		fctx = (generate_series_timestamptz_fctx *)
+			palloc(sizeof(generate_series_timestamptz_fctx));
+
+		/*
+		 * Use fctx to keep state from call to call. Seed current with the
+		 * original start value
+		 */
+		fctx->current = start;
+		fctx->finish = finish;
+		fctx->step = *step;
+
+		/* Determine sign of the interval */
+		MemSet(&interval_zero, 0, sizeof(Interval));
+		fctx->step_sign = interval_cmp_internal(&fctx->step, &interval_zero);
+
+		if (fctx->step_sign == 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("step size cannot equal zero")));
+
+		zone = PG_GETARG_TEXT_PP(3);
+		fctx->attimezone = lookup_timezone(zone);
+		funcctx->user_fctx = fctx;
+		MemoryContextSwitchTo(oldcontext);
+	}
+
+	/* stuff done on every call of the function */
+	funcctx = SRF_PERCALL_SETUP();
+
+	/*
+	 * get the saved state and use current as the result for this iteration
+	 */
+	fctx = funcctx->user_fctx;
+	result = fctx->current;
+
+	if (fctx->step_sign > 0 ?
+		timestamp_cmp_internal(result, fctx->finish) <= 0 :
+		timestamp_cmp_internal(result, fctx->finish) >= 0)
+	{
+		/* increment current in preparation for next iteration */
+		fctx->current = timestamptz_pl_interval_internal(fctx->current, &fctx->step, fctx->attimezone);
 
 		/* do when there is more left to send */
 		SRF_RETURN_NEXT(funcctx, TimestampTzGetDatum(result));

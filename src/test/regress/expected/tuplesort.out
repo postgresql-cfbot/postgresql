@@ -622,15 +622,17 @@ EXPLAIN (COSTS OFF) :qry;
          ->  GroupAggregate
                Group Key: a.col12
                Filter: (count(*) > 1)
-               ->  Merge Join
-                     Merge Cond: (a.col12 = b.col12)
-                     ->  Sort
-                           Sort Key: a.col12 DESC
-                           ->  Seq Scan on test_mark_restore a
-                     ->  Sort
-                           Sort Key: b.col12 DESC
-                           ->  Seq Scan on test_mark_restore b
-(14 rows)
+               ->  Sort
+                     Sort Key: a.col12 DESC, a.col1
+                     ->  Merge Join
+                           Merge Cond: (a.col12 = b.col12)
+                           ->  Sort
+                                 Sort Key: a.col12
+                                 ->  Seq Scan on test_mark_restore a
+                           ->  Sort
+                                 Sort Key: b.col12
+                                 ->  Seq Scan on test_mark_restore b
+(16 rows)
 
 :qry;
  col12 | count | count | count | count | count 
@@ -658,15 +660,17 @@ EXPLAIN (COSTS OFF) :qry;
          ->  GroupAggregate
                Group Key: a.col12
                Filter: (count(*) > 1)
-               ->  Merge Join
-                     Merge Cond: (a.col12 = b.col12)
-                     ->  Sort
-                           Sort Key: a.col12 DESC
-                           ->  Seq Scan on test_mark_restore a
-                     ->  Sort
-                           Sort Key: b.col12 DESC
-                           ->  Seq Scan on test_mark_restore b
-(14 rows)
+               ->  Sort
+                     Sort Key: a.col12 DESC, a.col1
+                     ->  Merge Join
+                           Merge Cond: (a.col12 = b.col12)
+                           ->  Sort
+                                 Sort Key: a.col12
+                                 ->  Seq Scan on test_mark_restore a
+                           ->  Sort
+                                 Sort Key: b.col12
+                                 ->  Seq Scan on test_mark_restore b
+(16 rows)
 
 :qry;
  col12 | count | count | count | count | count 

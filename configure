@@ -17103,12 +17103,6 @@ esac
 esac
 
   case " $LIBOBJS " in
-  *" win32setlocale.$ac_objext "* ) ;;
-  *) LIBOBJS="$LIBOBJS win32setlocale.$ac_objext"
- ;;
-esac
-
-  case " $LIBOBJS " in
   *" win32stat.$ac_objext "* ) ;;
   *) LIBOBJS="$LIBOBJS win32stat.$ac_objext"
  ;;

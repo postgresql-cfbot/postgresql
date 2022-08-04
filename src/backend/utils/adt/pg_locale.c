@@ -118,7 +118,7 @@ static HTAB *collation_cache = NULL;
 
 
 #if defined(WIN32) && defined(LC_MESSAGES)
-static char *IsoLocaleName(const char *);	/* MSVC specific */
+static char *PosixLocaleName(const char *);
 #endif
 
 #ifdef USE_ICU
@@ -204,10 +204,7 @@ pg_perm_setlocale(int category, const char *locale)
 		case LC_MESSAGES:
 			envvar = "LC_MESSAGES";
 #ifdef WIN32
-			result = IsoLocaleName(locale);
-			if (result == NULL)
-				result = (char *) locale;
-			elog(DEBUG3, "IsoLocaleName() executed; locale: \"%s\"", result);
+			locale = PosixLocaleName(locale);
 #endif							/* WIN32 */
 			break;
 #endif							/* LC_MESSAGES */
@@ -905,218 +902,35 @@ cache_locale_time(void)
 
 #if defined(WIN32) && defined(LC_MESSAGES)
 /*
- * Convert a Windows setlocale() argument to a Unix-style one.
+ * Convert a Windows BCP 47 locale name to a POSIX one.
  *
  * Regardless of platform, we install message catalogs under a Unix-style
  * LL[_CC][.ENCODING][@VARIANT] naming convention.  Only LC_MESSAGES settings
  * following that style will elicit localized interface strings.
  *
- * Before Visual Studio 2012 (msvcr110.dll), Windows setlocale() accepted "C"
- * (but not "c") and strings of the form <Language>[_<Country>][.<CodePage>],
- * case-insensitive.  setlocale() returns the fully-qualified form; for
- * example, setlocale("thaI") returns "Thai_Thailand.874".  Internally,
- * setlocale() and _create_locale() select a "locale identifier"[1] and store
- * it in an undocumented _locale_t field.  From that LCID, we can retrieve the
- * ISO 639 language and the ISO 3166 country.  Character encoding does not
- * matter, because the server and client encodings govern that.
- *
- * Windows Vista introduced the "locale name" concept[2], closely following
- * RFC 4646.  Locale identifiers are now deprecated.  Starting with Visual
- * Studio 2012, setlocale() accepts locale names in addition to the strings it
- * accepted historically.  It does not standardize them; setlocale("Th-tH")
- * returns "Th-tH".  setlocale(category, "") still returns a traditional
- * string.  Furthermore, msvcr110.dll changed the undocumented _locale_t
- * content to carry locale names instead of locale identifiers.
- *
- * Visual Studio 2015 should still be able to do the same as Visual Studio
- * 2012, but the declaration of locale_name is missing in _locale_t, causing
- * this code compilation to fail, hence this falls back instead on to
- * enumerating all system locales by using EnumSystemLocalesEx to find the
- * required locale name.  If the input argument is in Unix-style then we can
- * get ISO Locale name directly by using GetLocaleInfoEx() with LCType as
- * LOCALE_SNAME.
- *
- * MinGW headers declare _create_locale(), but msvcrt.dll lacks that symbol in
- * releases before Windows 8. IsoLocaleName() always fails in a MinGW-built
- * postgres.exe, so only Unix-style values of the lc_messages GUC can elicit
- * localized messages. In particular, every lc_messages setting that initdb
- * can select automatically will yield only C-locale messages. XXX This could
- * be fixed by running the fully-qualified locale name through a lookup table.
- *
- * This function returns a pointer to a static buffer bearing the converted
- * name or NULL if conversion fails.
- *
- * [1] https://docs.microsoft.com/en-us/windows/win32/intl/locale-identifiers
- * [2] https://docs.microsoft.com/en-us/windows/win32/intl/locale-names
- */
-
-/*
- * Callback function for EnumSystemLocalesEx() in get_iso_localename().
- *
- * This function enumerates all system locales, searching for one that matches
- * an input with the format: <Language>[_<Country>], e.g.
- * English[_United States]
- *
- * The input is a three wchar_t array as an LPARAM. The first element is the
- * locale_name we want to match, the second element is an allocated buffer
- * where the Unix-style locale is copied if a match is found, and the third
- * element is the search status, 1 if a match was found, 0 otherwise.
- */
-static BOOL CALLBACK
-search_locale_enum(LPWSTR pStr, DWORD dwFlags, LPARAM lparam)
-{
-	wchar_t		test_locale[LOCALE_NAME_MAX_LENGTH];
-	wchar_t   **argv;
-
-	(void) (dwFlags);
-
-	argv = (wchar_t **) lparam;
-	*argv[2] = (wchar_t) 0;
-
-	memset(test_locale, 0, sizeof(test_locale));
-
-	/* Get the name of the <Language> in English */
-	if (GetLocaleInfoEx(pStr, LOCALE_SENGLISHLANGUAGENAME,
-						test_locale, LOCALE_NAME_MAX_LENGTH))
-	{
-		/*
-		 * If the enumerated locale does not have a hyphen ("en") OR the
-		 * lc_message input does not have an underscore ("English"), we only
-		 * need to compare the <Language> tags.
-		 */
-		if (wcsrchr(pStr, '-') == NULL || wcsrchr(argv[0], '_') == NULL)
-		{
-			if (_wcsicmp(argv[0], test_locale) == 0)
-			{
-				wcscpy(argv[1], pStr);
-				*argv[2] = (wchar_t) 1;
-				return FALSE;
-			}
-		}
-
-		/*
-		 * We have to compare a full <Language>_<Country> tag, so we append
-		 * the underscore and name of the country/region in English, e.g.
-		 * "English_United States".
-		 */
-		else
-		{
-			size_t		len;
-
-			wcscat(test_locale, L"_");
-			len = wcslen(test_locale);
-			if (GetLocaleInfoEx(pStr, LOCALE_SENGLISHCOUNTRYNAME,
-								test_locale + len,
-								LOCALE_NAME_MAX_LENGTH - len))
-			{
-				if (_wcsicmp(argv[0], test_locale) == 0)
-				{
-					wcscpy(argv[1], pStr);
-					*argv[2] = (wchar_t) 1;
-					return FALSE;
-				}
-			}
-		}
-	}
-
-	return TRUE;
-}
-
-/*
- * This function converts a Windows locale name to an ISO formatted version
- * for Visual Studio 2015 or greater.
- *
- * Returns NULL, if no valid conversion was found.
+ * Historically, verbose, but unsystematic and unstable names like
+ * "Thai_Thailand.874" were supported, but now only BCP 47 input is expected.
+ * That means we just need to be able to convert "en-US" to "en_US".
  */
 static char *
-get_iso_localename(const char *winlocname)
+PosixLocaleName(const char *winlocname)
 {
-	wchar_t		wc_locale_name[LOCALE_NAME_MAX_LENGTH];
-	wchar_t		buffer[LOCALE_NAME_MAX_LENGTH];
-	static char iso_lc_messages[LOCALE_NAME_MAX_LENGTH];
-	char	   *period;
-	int			len;
-	int			ret_val;
-
-	/*
-	 * Valid locales have the following syntax:
-	 * <Language>[_<Country>[.<CodePage>]]
-	 *
-	 * GetLocaleInfoEx can only take locale name without code-page and for the
-	 * purpose of this API the code-page doesn't matter.
-	 */
-	period = strchr(winlocname, '.');
-	if (period != NULL)
-		len = period - winlocname;
-	else
-		len = pg_mbstrlen(winlocname);
-
-	memset(wc_locale_name, 0, sizeof(wc_locale_name));
-	memset(buffer, 0, sizeof(buffer));
-	MultiByteToWideChar(CP_ACP, 0, winlocname, len, wc_locale_name,
-						LOCALE_NAME_MAX_LENGTH);
-
-	/*
-	 * If the lc_messages is already a Unix-style string, we have a direct
-	 * match with LOCALE_SNAME, e.g. en-US, en_US.
-	 */
-	ret_val = GetLocaleInfoEx(wc_locale_name, LOCALE_SNAME, (LPWSTR) &buffer,
-							  LOCALE_NAME_MAX_LENGTH);
-	if (!ret_val)
-	{
-		/*
-		 * Search for a locale in the system that matches language and country
-		 * name.
-		 */
-		wchar_t    *argv[3];
-
-		argv[0] = wc_locale_name;
-		argv[1] = buffer;
-		argv[2] = (wchar_t *) &ret_val;
-		EnumSystemLocalesEx(search_locale_enum, LOCALE_WINDOWS, (LPARAM) argv,
-							NULL);
-	}
-
-	if (ret_val)
-	{
-		size_t		rc;
-		char	   *hyphen;
-
-		/* Locale names use only ASCII, any conversion locale suffices. */
-		rc = wchar2char(iso_lc_messages, buffer, sizeof(iso_lc_messages), NULL);
-		if (rc == -1 || rc == sizeof(iso_lc_messages))
-			return NULL;
-
-		/*
-		 * Simply replace the hyphen with an underscore.  See comments in
-		 * IsoLocaleName.
-		 */
-		hyphen = strchr(iso_lc_messages, '-');
-		if (hyphen)
-			*hyphen = '_';
-		return iso_lc_messages;
-	}
-
-	return NULL;
-}
-
-static char *
-IsoLocaleName(const char *winlocname)
-{
-#if defined(_MSC_VER)
-	static char iso_lc_messages[LOCALE_NAME_MAX_LENGTH];
+	char iso_lc_messages[LOCALE_NAME_MAX_LENGTH];
+	char *hyphen;
 
 	if (pg_strcasecmp("c", winlocname) == 0 ||
 		pg_strcasecmp("posix", winlocname) == 0)
 	{
 		strcpy(iso_lc_messages, "C");
-		return iso_lc_messages;
 	}
 	else
-		return get_iso_localename(winlocname);
-
-#endif							/* defined(_MSC_VER) */
-	return NULL;				/* Not supported on this version of msvc/mingw */
+	{
+		strlcpy(iso_lc_messages, winlocname, sizeof(iso_lc_messages));
+		hypen = strchr(iso_lc_messages, '-');
+		if (hyphen)
+			*hyphen = '_';
+	}
+	return pg_strcpy(iso_lc_messages);
 }
 #endif							/* WIN32 && LC_MESSAGES */
 
@@ -1680,25 +1494,25 @@ get_collation_actual_version(char collprovider, const char *collcollate)
 			ereport(ERROR,
 					(errmsg("could not load locale \"%s\"", collcollate)));
 #elif defined(WIN32)
-		/*
-		 * If we are targeting Windows Vista and above, we can ask for a name
-		 * given a collation name (earlier versions required a location code
-		 * that we don't have).
-		 */
 		NLSVERSIONINFOEX version = {sizeof(NLSVERSIONINFOEX)};
 		WCHAR		wide_collcollate[LOCALE_NAME_MAX_LENGTH];
+		char		copy_collcollate[LOCALE_NAME_MAX_LENGTH];
 
-		MultiByteToWideChar(CP_ACP, 0, collcollate, -1, wide_collcollate,
+		/* Trim off encoding, if there is one */
+		strlcpy(copy_collcollate, collcollate, sizeof(copy_collcollate));
+		for (char *p = copy_collcollate; *p; ++p)
+		{
+			if (*p == '.')
+			{
+				*p = 0;
+				break;
+			}
+		}
+		MultiByteToWideChar(CP_ACP, 0, copy_collcollate, -1, wide_collcollate,
 							LOCALE_NAME_MAX_LENGTH);
 		if (!GetNLSVersionEx(COMPARE_STRING, wide_collcollate, &version))
 		{
-			/*
-			 * GetNLSVersionEx() wants a language tag such as "en-US", not a
-			 * locale name like "English_United States.1252".  Until those
-			 * values can be prevented from entering the system, or 100%
-			 * reliably converted to the more useful tag format, tolerate the
-			 * resulting error and report that we have no version data.
-			 */
+			/* Old style locale names fail here, so ignore. */
 			if (GetLastError() == ERROR_INVALID_PARAMETER)
 				return NULL;
 

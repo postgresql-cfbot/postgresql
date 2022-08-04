@@ -445,15 +445,6 @@ extern int	_pgstat64(const char *name, struct stat *buf);
 #undef setlocale
 #endif
 
-/*
- * Define our own wrapper macro around setlocale() to work around bugs in
- * Windows' native setlocale() function.
- */
-extern char *pgwin32_setlocale(int category, const char *locale);
-
-#define setlocale(a,b) pgwin32_setlocale(a,b)
-
-
 /* In backend/port/win32/signal.c */
 extern PGDLLIMPORT volatile int pg_signal_queue;
 extern PGDLLIMPORT int pg_signal_mask;

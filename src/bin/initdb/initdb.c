@@ -59,6 +59,10 @@
 #include "sys/mman.h"
 #endif
 
+#ifdef WIN32
+#include <winnls.h>
+#endif
+
 #include "access/xlog_internal.h"
 #include "catalog/pg_authid_d.h"
 #include "catalog/pg_class_d.h" /* pgrminclude ignore */
@@ -2007,6 +2011,7 @@ locale_date_order(const char *locale)
 static void
 check_locale_name(int category, const char *locale, char **canonname)
 {
+	char	   *locale_copy;
 	char	   *save;
 	char	   *res;
 
@@ -2022,10 +2027,32 @@ check_locale_name(int category, const char *locale, char **canonname)
 
 	/* for setlocale() call */
 	if (!locale)
-		locale = "";
+	{
+#ifdef WIN32
+		wchar_t		wide_name[LOCALE_NAME_MAX_LENGTH];
+		char		name[LOCALE_NAME_MAX_LENGTH];
+
+		/* use Windows API to find the default in BCP47 format */
+		if (GetUserDefaultLocaleName(wide_name, LOCALE_NAME_MAX_LENGTH) == 0)
+			pg_fatal("failed to get default locale name: error code %lu",
+					 GetLastError());
+		if (WideCharToMultiByte(CP_ACP, 0, wide_name, -1, name,
+								LOCALE_NAME_MAX_LENGTH, NULL, NULL) == 0)
+			pg_fatal("failed to convert locale name: error code %lu",
+					 GetLastError());
+		/* default to UTF-8, no matter what the system default codepage is */
+		locale_copy = pg_malloc(strlen(name) + sizeof(".UTF-8") + 1);
+		sprintf(locale_copy, "%s.UTF-8", name);
+#else
+		/* use environment to find the default */
+		locale_copy = pg_strdup("");
+#endif
+	}
+	else
+		locale_copy = pg_strdup(locale);
 
 	/* set the locale with setlocale, to see if it accepts it. */
-	res = setlocale(category, locale);
+	res = setlocale(category, locale_copy);
 
 	/* save canonical name if requested. */
 	if (res && canonname)
@@ -2054,6 +2081,8 @@ check_locale_name(int category, const char *locale, char **canonname)
 			pg_fatal("invalid locale settings; check LANG and LC_* environment variables");
 		}
 	}
+
+	free(locale_copy);
 }
 
 /*

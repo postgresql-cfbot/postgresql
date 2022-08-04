@@ -1966,7 +1966,6 @@ if test "$PORTNAME" = "win32"; then
   AC_LIBOBJ(win32error)
   AC_LIBOBJ(win32ntdll)
   AC_LIBOBJ(win32security)
-  AC_LIBOBJ(win32setlocale)
   AC_LIBOBJ(win32stat)
   AC_DEFINE([HAVE_SYMLINK], 1,
             [Define to 1 if you have the `symlink' function.])

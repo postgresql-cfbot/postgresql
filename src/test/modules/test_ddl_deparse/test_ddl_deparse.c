@@ -114,9 +114,6 @@ get_altertable_subcmdinfo(PG_FUNCTION_ARGS)
 			case AT_AddColumn:
 				strtype = "ADD COLUMN";
 				break;
-			case AT_AddColumnRecurse:
-				strtype = "ADD COLUMN (and recurse)";
-				break;
 			case AT_AddColumnToView:
 				strtype = "ADD COLUMN TO VIEW";
 				break;
@@ -326,7 +323,10 @@ get_altertable_subcmdinfo(PG_FUNCTION_ARGS)
 				break;
 		}
 
-		values[0] = CStringGetTextDatum(strtype);
+		if (subcmd->recurse)
+			values[0] = CStringGetTextDatum(psprintf("%s (and recurse)", strtype));
+		else
+			values[0] = CStringGetTextDatum(strtype);
 		if (OidIsValid(sub->address.objectId))
 		{
 			char	   *objdesc;

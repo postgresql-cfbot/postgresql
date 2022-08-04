@@ -3355,7 +3355,6 @@ transformAlterTableStmt(Oid relid, AlterTableStmt *stmt,
 		switch (cmd->subtype)
 		{
 			case AT_AddColumn:
-			case AT_AddColumnRecurse:
 				{
 					ColumnDef  *def = castNode(ColumnDef, cmd->def);
 

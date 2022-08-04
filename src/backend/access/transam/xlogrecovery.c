@@ -3019,8 +3019,17 @@ ReadRecord(XLogPrefetcher *xlogprefetcher, int emode,
 	for (;;)
 	{
 		char	   *errormsg;
+		static int log = 2;
 
 		record = XLogPrefetcherReadRecord(xlogprefetcher, &errormsg);
+
+		if (!record)
+			log = 2;
+		else if (log > 0)
+			log--;
+
+		if (log)
+			elog(LOG, "### [%s] @%X/%X: abort=(%X/%X)%X/%X, miss=(%X/%X)%X/%X, SbyMode=%d, SbyModeReq=%d", record ? "S": (XLogRecPtrIsInvalid(xlogreader->abortedRecPtr) ? "F" : "A"), LSN_FORMAT_ARGS(xlogreader->EndRecPtr), LSN_FORMAT_ARGS(xlogreader->abortedRecPtr), LSN_FORMAT_ARGS(abortedRecPtr), LSN_FORMAT_ARGS(xlogreader->missingContrecPtr), LSN_FORMAT_ARGS(missingContrecPtr), StandbyMode, StandbyModeRequested); 
 		if (record == NULL)
 		{
 			/*

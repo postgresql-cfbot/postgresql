@@ -16,6 +16,7 @@
 
 #include "access/amapi.h"
 #include "access/itup.h"
+#include "access/itup_attiter.h"
 #include "access/sdir.h"
 #include "access/tableam.h"
 #include "access/xlogreader.h"
@@ -1115,15 +1116,94 @@ typedef struct BTOptions
 #define PROGRESS_BTREE_PHASE_PERFORMSORT_2				4
 #define PROGRESS_BTREE_PHASE_LEAF_LOAD					5
 
+
+/*
+ * Macros used in the nbtree specialization code.
+ */
+#define NBTS_TYPE_SINGLE_COLUMN single
+#define NBTS_TYPE_CACHED cached
+#define NBTS_TYPE_UNCACHED uncached
+#define NBTS_TYPE_DEFAULT default
+
+
+#define NBTS_MAKE_PREFIX(a) CppConcat(a,_)
+#define NBTS_MAKE_NAME_(a,b) CppConcat(a,b)
+#define NBTS_MAKE_NAME(a,b) NBTS_MAKE_NAME_(NBTS_MAKE_PREFIX(a),b)
+
+#define NBTS_ENABLED
+
+#ifdef NBTS_ENABLED
+
+/*
+ * Replace the functions in the rd_indam struct with a variant optimized for
+ * our key shape, if not already done.
+ *
+ * It only needs to be done once for every index relation loaded, so it's
+ * quite unlikely we need to do this and thus marked unlikely().
+ */
+#define nbt_opt_specialize(rel) \
+do { \
+	if (unlikely((rel)->rd_indam->aminsert == btinsert)) \
+		_bt_specialize(rel); \
+} while (false)
+
+/*
+ * Access a specialized nbtree function, based on the shape of the index key.
+ */
+
+#define NBT_SPECIALIZE_CALL(function, rel, ...) \
+( \
+	IndexRelationGetNumberOfKeyAttributes(rel) == 1 ? ( \
+		NBTS_MAKE_NAME(function, NBTS_TYPE_SINGLE_COLUMN)(__VA_ARGS__) \
+	) \
+	: \
+	( \
+		TupleDescAttr(RelationGetDescr(rel), \
+					  IndexRelationGetNumberOfKeyAttributes(rel) - 1)->attcacheoff > 0 ? ( \
+			NBTS_MAKE_NAME(function, NBTS_TYPE_CACHED)(__VA_ARGS__) \
+		) \
+		: \
+		( \
+			NBTS_MAKE_NAME(function, NBTS_TYPE_UNCACHED)(__VA_ARGS__) \
+		) \
+	) \
+)
+
+#define NBT_SPECIALIZE_NAME(name, rel) \
+( \
+	IndexRelationGetNumberOfKeyAttributes(rel) == 1 ? ( \
+		NBTS_MAKE_NAME(name, NBTS_TYPE_SINGLE_COLUMN) \
+	) \
+	: \
+	( \
+		TupleDescAttr(RelationGetDescr(rel), \
+					  IndexRelationGetNumberOfKeyAttributes(rel) - 1)->attcacheoff > 0 ? ( \
+			NBTS_MAKE_NAME(name, NBTS_TYPE_CACHED) \
+		) \
+		: \
+		( \
+			NBTS_MAKE_NAME(name, NBTS_TYPE_UNCACHED) \
+		) \
+	) \
+)
+
+#else /* not defined NBTS_ENABLED */
+
+#define nbt_opt_specialize(rel)
+#define NBT_SPECIALIZE_CALL(function, rel, ...) function(__VA_ARGS__)
+
+#endif /* NBTS_ENABLED */
+
+
+#define NBT_SPECIALIZE_FILE "access/nbtree_specialized.h"
+#include "nbtree_specialize.h"
+#undef NBT_SPECIALIZE_FILE
+
+
 /*
  * external entry points for btree, in nbtree.c
  */
 extern void btbuildempty(Relation index);
-extern bool btinsert(Relation rel, Datum *values, bool *isnull,
-					 ItemPointer ht_ctid, Relation heapRel,
-					 IndexUniqueCheck checkUnique,
-					 bool indexUnchanged,
-					 struct IndexInfo *indexInfo);
 extern IndexScanDesc btbeginscan(Relation rel, int nkeys, int norderbys);
 extern Size btestimateparallelscan(void);
 extern void btinitparallelscan(void *target);
@@ -1154,9 +1234,6 @@ extern void _bt_parallel_advance_array_keys(IndexScanDesc scan);
 /*
  * prototypes for functions in nbtdedup.c
  */
-extern void _bt_dedup_pass(Relation rel, Buffer buf, Relation heapRel,
-						   IndexTuple newitem, Size newitemsz,
-						   bool bottomupdedup);
 extern bool _bt_bottomupdel_pass(Relation rel, Buffer buf, Relation heapRel,
 								 Size newitemsz);
 extern void _bt_dedup_start_pending(BTDedupState state, IndexTuple base,
@@ -1172,9 +1249,6 @@ extern IndexTuple _bt_swap_posting(IndexTuple newitem, IndexTuple oposting,
 /*
  * prototypes for functions in nbtinsert.c
  */
-extern bool _bt_doinsert(Relation rel, IndexTuple itup,
-						 IndexUniqueCheck checkUnique, bool indexUnchanged,
-						 Relation heapRel);
 extern void _bt_finish_split(Relation rel, Buffer lbuf, BTStack stack);
 extern Buffer _bt_getstackbuf(Relation rel, BTStack stack, BlockNumber child);
 
@@ -1222,12 +1296,6 @@ extern void _bt_pendingfsm_finalize(Relation rel, BTVacState *vstate);
 /*
  * prototypes for functions in nbtsearch.c
  */
-extern BTStack _bt_search(Relation rel, BTScanInsert key, Buffer *bufP,
-						  int access, Snapshot snapshot);
-extern Buffer _bt_moveright(Relation rel, BTScanInsert key, Buffer buf,
-							bool forupdate, BTStack stack, int access, Snapshot snapshot);
-extern OffsetNumber _bt_binsrch_insert(Relation rel, BTInsertState insertstate);
-extern int32 _bt_compare(Relation rel, BTScanInsert key, Page page, OffsetNumber offnum);
 extern bool _bt_first(IndexScanDesc scan, ScanDirection dir);
 extern bool _bt_next(IndexScanDesc scan, ScanDirection dir);
 extern Buffer _bt_get_endpoint(Relation rel, uint32 level, bool rightmost,
@@ -1236,7 +1304,6 @@ extern Buffer _bt_get_endpoint(Relation rel, uint32 level, bool rightmost,
 /*
  * prototypes for functions in nbtutils.c
  */
-extern BTScanInsert _bt_mkscankey(Relation rel, IndexTuple itup);
 extern void _bt_freestack(BTStack stack);
 extern void _bt_preprocess_array_keys(IndexScanDesc scan);
 extern void _bt_start_array_keys(IndexScanDesc scan, ScanDirection dir);
@@ -1244,8 +1311,6 @@ extern bool _bt_advance_array_keys(IndexScanDesc scan, ScanDirection dir);
 extern void _bt_mark_array_keys(IndexScanDesc scan);
 extern void _bt_restore_array_keys(IndexScanDesc scan);
 extern void _bt_preprocess_keys(IndexScanDesc scan);
-extern bool _bt_checkkeys(IndexScanDesc scan, IndexTuple tuple,
-						  int tupnatts, ScanDirection dir, bool *continuescan);
 extern void _bt_killitems(IndexScanDesc scan);
 extern BTCycleId _bt_vacuum_cycleid(Relation rel);
 extern BTCycleId _bt_start_vacuum(Relation rel);
@@ -1258,10 +1323,6 @@ extern bool btproperty(Oid index_oid, int attno,
 					   IndexAMProperty prop, const char *propname,
 					   bool *res, bool *isnull);
 extern char *btbuildphasename(int64 phasenum);
-extern IndexTuple _bt_truncate(Relation rel, IndexTuple lastleft,
-							   IndexTuple firstright, BTScanInsert itup_key);
-extern int	_bt_keep_natts_fast(Relation rel, IndexTuple lastleft,
-								IndexTuple firstright);
 extern bool _bt_check_natts(Relation rel, bool heapkeyspace, Page page,
 							OffsetNumber offnum);
 extern void _bt_check_third_page(Relation rel, Relation heap,

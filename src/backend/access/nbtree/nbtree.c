@@ -87,6 +87,10 @@ static BTVacuumPosting btreevacuumposting(BTVacState *vstate,
 										  OffsetNumber updatedoffset,
 										  int *nremaining);
 
+#define NBT_SPECIALIZE_FILE "../../backend/access/nbtree/nbtree_spec.h"
+#include "access/nbtree_specialize.h"
+#undef NBT_SPECIALIZE_FILE
+
 
 /*
  * Btree handler function: return IndexAmRoutine with access method parameters
@@ -156,6 +160,8 @@ btbuildempty(Relation index)
 	metapage = (Page) palloc(BLCKSZ);
 	_bt_initmetapage(metapage, P_NONE, 0, _bt_allequalimage(index, false));
 
+	nbt_opt_specialize(index);
+
 	/*
 	 * Write the page and log it.  It might seem that an immediate sync would
 	 * be sufficient to guarantee that the file exists on disk, but recovery
@@ -175,33 +181,6 @@ btbuildempty(Relation index)
 	 * checkpoint may have moved the redo pointer past our xlog record.
 	 */
 	smgrimmedsync(RelationGetSmgr(index), INIT_FORKNUM);
-}
-
-/*
- *	btinsert() -- insert an index tuple into a btree.
- *
- *		Descend the tree recursively, find the appropriate location for our
- *		new tuple, and put it there.
- */
-bool
-btinsert(Relation rel, Datum *values, bool *isnull,
-		 ItemPointer ht_ctid, Relation heapRel,
-		 IndexUniqueCheck checkUnique,
-		 bool indexUnchanged,
-		 IndexInfo *indexInfo)
-{
-	bool		result;
-	IndexTuple	itup;
-
-	/* generate an index tuple */
-	itup = index_form_tuple(RelationGetDescr(rel), values, isnull);
-	itup->t_tid = *ht_ctid;
-
-	result = _bt_doinsert(rel, itup, checkUnique, indexUnchanged, heapRel);
-
-	pfree(itup);
-
-	return result;
 }
 
 /*
@@ -344,6 +323,8 @@ btbeginscan(Relation rel, int nkeys, int norderbys)
 {
 	IndexScanDesc scan;
 	BTScanOpaque so;
+
+	nbt_opt_specialize(rel);
 
 	/* no order by operators allowed */
 	Assert(norderbys == 0);
@@ -787,6 +768,7 @@ btbulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 {
 	Relation	rel = info->index;
 	BTCycleId	cycleid;
+	nbt_opt_specialize(info->index);
 
 	/* allocate stats if first time through, else re-use existing struct */
 	if (stats == NULL)
@@ -819,6 +801,8 @@ btvacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 	/* No-op in ANALYZE ONLY mode */
 	if (info->analyze_only)
 		return stats;
+
+	nbt_opt_specialize(info->index);
 
 	/*
 	 * If btbulkdelete was called, we need not do anything (we just maintain

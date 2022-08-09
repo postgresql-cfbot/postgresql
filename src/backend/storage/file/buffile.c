@@ -40,8 +40,32 @@
  * when the corresponding files need to be survived across the transaction and
  * need to be opened and closed multiple times.  Such files need to be created
  * as a member of a FileSet.
- *-------------------------------------------------------------------------
+ *
+ * The BufFileStream structure is used internally to implement the buffering
+ * of temporary files, but it can also be used for any file whose descriptor
+ * was opened by the fd.c API. Once the stream is initialized (e.g. using
+ * BufFileStreamInitFD()), functions like BufFileStreamWrite(),
+ * BufFileStreamRead() and BufFileStreamSeek() can be used to access the file
+ * data. Following are a few benefits to consider:
+ *
+ * 1. Less code is needed to access the file.
+ *
+ * 2.. Buffering reduces the number of I/O system calls.
+ *
+ * 3. The buffer size can be controlled by the user. (The larger the buffer,
+ * the fewer I/O system calls are needed, but the more data needs to be
+ * written to the buffer before the user recognizes that the file access
+ * failed.)
+ *
+ * 4. It should make features like Transparent Data Encryption less invasive.
+ *
+ *
+ * BufFileCopy() is a function to copy data from one descriptor to another
+ * one. It's located in this module because it also uses buffered I/O.
+ * -------------------------------------------------------------------------
  */
+
+#include <unistd.h>
 
 #include "postgres.h"
 
@@ -60,7 +84,8 @@
  * tablespaces when available.
  */
 #define MAX_PHYSICAL_FILESIZE	0x40000000
-#define BUFFILE_SEG_SIZE		(MAX_PHYSICAL_FILESIZE / BLCKSZ)
+/* The number of bufers (blocks) in a single segment file. */
+#define BUFFILE_SEG_SIZE(file)	(MAX_PHYSICAL_FILESIZE / ((file)->stream.bufsize))
 
 /*
  * This data structure represents a buffered file that consists of one or
@@ -69,12 +94,18 @@
  */
 struct BufFile
 {
+	/*
+	 * Our API (BufFileRead(), BufFileWrite(), etc.) uses this structure as an
+	 * argument to access the individual physical files. Thus the same API can
+	 * be used to access other files than those represented by BufFile.
+	 */
+	BufFileStream stream;
+
 	int			numFiles;		/* number of physical files in set */
 	/* all files except the last have length exactly MAX_PHYSICAL_FILESIZE */
 	File	   *files;			/* palloc'd array with numFiles entries */
 
 	bool		isInterXact;	/* keep open over transactions? */
-	bool		dirty;			/* does buffer need to be written? */
 	bool		readOnly;		/* has the file been set to read only? */
 
 	FileSet    *fileset;		/* space for fileset based segment files */
@@ -92,19 +123,24 @@ struct BufFile
 	 * Position as seen by user of BufFile is (curFile, curOffset + pos).
 	 */
 	int			curFile;		/* file index (0..n) part of current pos */
-	off_t		curOffset;		/* offset part of current pos */
-	int			pos;			/* next read/write position in buffer */
-	int			nbytes;			/* total # of valid bytes in buffer */
-	PGAlignedBlock buffer;
+
 };
 
 static BufFile *makeBufFileCommon(int nfiles);
 static BufFile *makeBufFile(File firstfile);
+static void BufFileStreamInitCommon(BufFileStream *stream, const char *name,
+									int bufsize, int elevel);
 static void extendBufFile(BufFile *file);
-static void BufFileLoadBuffer(BufFile *file);
-static void BufFileDumpBuffer(BufFile *file);
-static void BufFileFlush(BufFile *file);
-static File MakeNewFileSetSegment(BufFile *file, int segment);
+static void BufFileLoadBuffer(BufFileStream *stream, BufFile *file);
+static void BufFileStreamLoadBuffer(BufFileStream *stream);
+static void BufFileDumpBuffer(BufFileStream *stream, BufFile *file);
+static void BufFileStreamDumpBuffer(BufFileStream *stream);
+static size_t BufFileReadCommon(BufFileStream *stream,
+								BufFile *file, void *ptr, size_t size);
+static size_t BufFileWriteCommon(BufFileStream *stream,
+								 BufFile *file, void *ptr, size_t size);
+static void BufFileFlush(BufFileStream *stream, BufFile *file);
+static File MakeNewFileSetSegment(BufFile *buffile, int segment);
 
 /*
  * Create BufFile and perform the common initialization.
@@ -115,14 +151,12 @@ makeBufFileCommon(int nfiles)
 	BufFile    *file = (BufFile *) palloc(sizeof(BufFile));
 
 	file->numFiles = nfiles;
-	file->isInterXact = false;
-	file->dirty = false;
-	file->resowner = CurrentResourceOwner;
 	file->curFile = 0;
-	file->curOffset = 0L;
-	file->pos = 0;
-	file->nbytes = 0;
 
+	BufFileStreamInitCommon(&file->stream, NULL, BLCKSZ, ERROR);
+
+	file->isInterXact = false;
+	file->resowner = CurrentResourceOwner;
 	return file;
 }
 
@@ -142,6 +176,126 @@ makeBufFile(File firstfile)
 	file->name = NULL;
 
 	return file;
+}
+
+static void
+BufFileStreamInitCommon(BufFileStream *stream, const char *name, int bufsize,
+						int elevel)
+{
+	/*
+	 * If bufsize is not a whole multiple of MAX_PHYSICAL_FILESIZE,
+	 * BufFileTellBlock() and BufFileSeekBlock() wont' work.
+	 */
+	if (bufsize < BUFSIZE_MIN || bufsize > BUFSIZE_MAX ||
+		(MAX_PHYSICAL_FILESIZE % bufsize) != 0)
+		ereport(ERROR, (errmsg("%d is not a valid buffer size", bufsize)));
+	stream->bufsize = bufsize;
+
+	stream->curOffset = 0L;
+	stream->pos = 0;
+	stream->nbytes = 0;
+	stream->dirty = false;
+	stream->elevel = elevel;
+
+	if (name)
+		strlcpy(stream->file.name, name, MAXPGPATH);
+}
+
+/*
+ * Initialize the stream using a raw file descriptor "fd".
+ *
+ * If "transient" is true, OpenTransientFile() was used to obtain it, and thus
+ * CloseTransientFile() needs to be used to close it. Otherwise we can close
+ * the descriptor simply by close().
+ */
+void
+BufFileStreamInitFD(BufFileStream *stream, int fd, bool transient,
+					const char *name, uint32 wait_event_info, int bufsize,
+					int elevel)
+{
+	BufFileStreamInitCommon(stream, name, bufsize, elevel);
+	stream->file.kind = transient ? BFS_FILE_FD_TRANSIENT : BFS_FILE_FD;
+	stream->file.f.fd = fd;
+	stream->file.wait_event_info = wait_event_info;
+}
+
+/*
+ * Initialize the stream using a virtual file descriptor "vfd".
+ */
+void
+BufFileStreamInitVFD(BufFileStream *stream, File vfd, char *name,
+					 uint32 wait_event_info, int bufsize, int elevel)
+{
+	BufFileStreamInitCommon(stream, name, bufsize, elevel);
+	stream->file.kind = BFS_FILE_VFD;
+	stream->file.f.vfd = vfd;
+	stream->file.wait_event_info = wait_event_info;
+}
+
+/*
+ * Dump the stream's buffer and close the underlying file.
+ *
+ * If sync_event is non-zero, fsync the file before closing and pass this
+ * value to the stats collector. XXX Currently we don't support this for VFD -
+ * should we do?
+ *
+ * Returns the return value of the underlying close() system call.
+ *
+ * XXX Currently we always return 0 for BFS_FILE_VFD. (Closing of the virtual
+ * file descriptor does not necessarily imply closing of the kernel file
+ * descriptor.)
+ */
+int
+BufFileStreamClose(BufFileStream *stream, uint32 sync_event)
+{
+	int			res;
+
+	if (stream->dirty)
+	{
+		BufFileStreamDumpBuffer(stream);
+		if (stream->dirty)
+			/* Only reachable if stream->elevel < ERROR. */
+			return -1;
+	}
+
+	if (sync_event > 0)
+	{
+		Assert(stream->file.kind != BFS_FILE_VFD);
+
+		pgstat_report_wait_start(sync_event);
+		if (pg_fsync(stream->file.f.fd) != 0)
+			ereport(data_sync_elevel(stream->elevel),
+					(errcode_for_file_access(),
+					 errmsg("could not fsync file \"%s\": %m",
+							stream->file.name)));
+		/* If stream->elevel < ERROR, handle closing below. */
+		pgstat_report_wait_end();
+	}
+
+	if (stream->file.kind == BFS_FILE_VFD)
+	{
+		FileClose(stream->file.f.vfd);
+
+		/* See the header comment of the function. */
+		res = 0;
+
+		stream->file.f.vfd = -1;
+	}
+	else
+	{
+		if (stream->file.kind == BFS_FILE_FD_TRANSIENT)
+			res = CloseTransientFile(stream->file.f.fd);
+		else
+		{
+			Assert(stream->file.kind == BFS_FILE_FD);
+
+			res = close(stream->file.f.fd);
+		}
+
+		stream->file.f.fd = -1;
+	}
+
+	return res;
 }
 
 /*
@@ -394,7 +548,7 @@ BufFileExportFileSet(BufFile *file)
 	/* It's probably a bug if someone calls this twice. */
 	Assert(!file->readOnly);
 
-	BufFileFlush(file);
+	BufFileFlush(&file->stream, file);
 	file->readOnly = true;
 }
 
@@ -409,7 +563,7 @@ BufFileClose(BufFile *file)
 	int			i;
 
 	/* flush any unwritten data */
-	BufFileFlush(file);
+	BufFileFlush(&file->stream, file);
 	/* close and delete the underlying file(s) */
 	for (i = 0; i < file->numFiles; i++)
 		FileClose(file->files[i]);
@@ -426,7 +580,7 @@ BufFileClose(BufFile *file)
  * On exit, nbytes is number of bytes loaded.
  */
 static void
-BufFileLoadBuffer(BufFile *file)
+BufFileLoadBuffer(BufFileStream *stream, BufFile *file)
 {
 	File		thisfile;
 	instr_time	io_start;
@@ -435,11 +589,11 @@ BufFileLoadBuffer(BufFile *file)
 	/*
 	 * Advance to next component file if necessary and possible.
 	 */
-	if (file->curOffset >= MAX_PHYSICAL_FILESIZE &&
+	if (stream->curOffset >= MAX_PHYSICAL_FILESIZE &&
 		file->curFile + 1 < file->numFiles)
 	{
 		file->curFile++;
-		file->curOffset = 0L;
+		stream->curOffset = 0L;
 	}
 
 	thisfile = file->files[file->curFile];
@@ -450,18 +604,21 @@ BufFileLoadBuffer(BufFile *file)
 	/*
 	 * Read whatever we can get, up to a full bufferload.
 	 */
-	file->nbytes = FileRead(thisfile,
-							file->buffer.data,
-							sizeof(file->buffer),
-							file->curOffset,
-							WAIT_EVENT_BUFFILE_READ);
-	if (file->nbytes < 0)
+	stream->nbytes = FileRead(thisfile,
+							  stream->buffer.data,
+							  stream->bufsize,
+							  stream->curOffset,
+							  WAIT_EVENT_BUFFILE_READ);
+	if (stream->nbytes < 0)
 	{
-		file->nbytes = 0;
-		ereport(ERROR,
+		stream->nbytes = 0;
+		ereport(stream->elevel,
 				(errcode_for_file_access(),
 				 errmsg("could not read file \"%s\": %m",
 						FilePathName(thisfile))));
+
+		/* Only reachable if stream->elevel < ERROR. */
+		return;
 	}
 
 	if (track_io_timing)
@@ -473,8 +630,80 @@ BufFileLoadBuffer(BufFile *file)
 
 	/* we choose not to advance curOffset here */
 
-	if (file->nbytes > 0)
+	if (stream->nbytes > 0)
 		pgBufferUsage.temp_blks_read++;
+}
+
+/* Load buffer of a stream which is associated with a single physical file. */
+static void
+BufFileStreamLoadBuffer(BufFileStream *stream)
+{
+	char	   *buf = stream->buffer.data;
+	int			bytestoread = stream->bufsize;
+
+	if (stream->file.kind == BFS_FILE_VFD)
+	{
+		File		thisfile;
+
+		/*
+		 * Read whatever we can get, up to a full bufferload.
+		 */
+		thisfile = stream->file.f.vfd;
+		stream->nbytes = FileRead(thisfile,
+								  buf,
+								  bytestoread,
+								  stream->curOffset,
+								  stream->file.wait_event_info);
+		if (stream->nbytes < 0)
+		{
+			stream->nbytes = 0;
+			ereport(stream->elevel,
+					(errcode_for_file_access(),
+					 errmsg("could not read file \"%s\": %m",
+							stream->file.name)));
+
+			/* Only reachable if stream->elevel < ERROR. */
+			return;
+		}
+	}
+	else
+	{
+		int			thisfile;
+
+		thisfile = stream->file.f.fd;
+
+		do
+		{
+			errno = 0;
+
+			pgstat_report_wait_start(stream->file.wait_event_info);
+			stream->nbytes = pg_pread(thisfile, buf, bytestoread,
+									  stream->curOffset);
+			pgstat_report_wait_end();
+
+			if (stream->nbytes < 0)
+			{
+				stream->nbytes = 0;
+
+				if (errno == EINTR)
+					continue;
+
+				ereport(stream->elevel,
+						(errcode_for_file_access(),
+						 errmsg("could not read from file %s "
+								"at offset %zu, length %u: %m",
+								stream->file.name, stream->curOffset,
+								bytestoread)));
+
+				/* Only reachable if stream->elevel < ERROR. */
+				return;
+			}
+			/* we choose not to advance curOffset here */
+
+			/* Done. */
+			break;
+		} while (true);
+	}
 }
 
 /*
@@ -485,7 +714,7 @@ BufFileLoadBuffer(BufFile *file)
  * On exit, dirty is cleared if successful write, and curOffset is advanced.
  */
 static void
-BufFileDumpBuffer(BufFile *file)
+BufFileDumpBuffer(BufFileStream *stream, BufFile *file)
 {
 	int			wpos = 0;
 	int			bytestowrite;
@@ -495,7 +724,7 @@ BufFileDumpBuffer(BufFile *file)
 	 * Unlike BufFileLoadBuffer, we must dump the whole buffer even if it
 	 * crosses a component-file boundary; so we need a loop.
 	 */
-	while (wpos < file->nbytes)
+	while (wpos < stream->nbytes)
 	{
 		off_t		availbytes;
 		instr_time	io_start;
@@ -504,19 +733,19 @@ BufFileDumpBuffer(BufFile *file)
 		/*
 		 * Advance to next component file if necessary and possible.
 		 */
-		if (file->curOffset >= MAX_PHYSICAL_FILESIZE)
+		if (stream->curOffset >= MAX_PHYSICAL_FILESIZE)
 		{
 			while (file->curFile + 1 >= file->numFiles)
 				extendBufFile(file);
 			file->curFile++;
-			file->curOffset = 0L;
+			stream->curOffset = 0L;
 		}
 
 		/*
 		 * Determine how much we need to write into this file.
 		 */
-		bytestowrite = file->nbytes - wpos;
-		availbytes = MAX_PHYSICAL_FILESIZE - file->curOffset;
+		bytestowrite = stream->nbytes - wpos;
+		availbytes = MAX_PHYSICAL_FILESIZE - stream->curOffset;
 
 		if ((off_t) bytestowrite > availbytes)
 			bytestowrite = (int) availbytes;
@@ -527,15 +756,21 @@ BufFileDumpBuffer(BufFile *file)
 			INSTR_TIME_SET_CURRENT(io_start);
 
 		bytestowrite = FileWrite(thisfile,
-								 file->buffer.data + wpos,
+								 stream->buffer.data + wpos,
 								 bytestowrite,
-								 file->curOffset,
-								 WAIT_EVENT_BUFFILE_WRITE);
+								 stream->curOffset,
+								 WAIT_EVENT_BUFFILE_WRITE,
+								 stream->elevel);
 		if (bytestowrite <= 0)
-			ereport(ERROR,
+		{
+			ereport(stream->elevel,
 					(errcode_for_file_access(),
 					 errmsg("could not write to file \"%s\": %m",
 							FilePathName(thisfile))));
+
+			/* Only reachable if stream->elevel < ERROR. */
+			return;
+		}
 
 		if (track_io_timing)
 		{
@@ -544,12 +779,12 @@ BufFileDumpBuffer(BufFile *file)
 			INSTR_TIME_ADD(pgBufferUsage.temp_blk_write_time, io_time);
 		}
 
-		file->curOffset += bytestowrite;
+		stream->curOffset += bytestowrite;
 		wpos += bytestowrite;
 
 		pgBufferUsage.temp_blks_written++;
 	}
-	file->dirty = false;
+	stream->dirty = false;
 
 	/*
 	 * At this point, curOffset has been advanced to the end of the buffer,
@@ -557,19 +792,123 @@ BufFileDumpBuffer(BufFile *file)
 	 * logical file position, ie, original value + pos, in case that is less
 	 * (as could happen due to a small backwards seek in a dirty buffer!)
 	 */
-	file->curOffset -= (file->nbytes - file->pos);
-	if (file->curOffset < 0)	/* handle possible segment crossing */
+	stream->curOffset -= (stream->nbytes - stream->pos);
+	if (stream->curOffset < 0)	/* handle possible segment crossing */
 	{
 		file->curFile--;
 		Assert(file->curFile >= 0);
-		file->curOffset += MAX_PHYSICAL_FILESIZE;
+		stream->curOffset += MAX_PHYSICAL_FILESIZE;
 	}
 
 	/*
 	 * Now we can set the buffer empty without changing the logical position
 	 */
-	file->pos = 0;
-	file->nbytes = 0;
+	stream->pos = 0;
+	stream->nbytes = 0;
+}
+
+/* Dump buffer of a stream which is associated with a single physical file. */
+static void
+BufFileStreamDumpBuffer(BufFileStream *stream)
+{
+	int			bytestowrite;
+
+	/*
+	 * Determine how much we need to write into the file.
+	 */
+	bytestowrite = stream->nbytes;
+
+	if (stream->file.kind == BFS_FILE_VFD)
+	{
+		File		thisfile;
+
+		thisfile = stream->file.f.vfd;
+		bytestowrite = FileWrite(thisfile,
+								 stream->buffer.data,
+								 bytestowrite,
+								 stream->curOffset,
+								 stream->file.wait_event_info,
+								 stream->elevel);
+		if (bytestowrite <= 0)
+		{
+			ereport(stream->elevel,
+					(errcode_for_file_access(),
+					 errmsg("could not write to file \"%s\": %m",
+							stream->file.name)));
+
+			/* Only reachable if stream->elevel < ERROR. */
+			return;
+		}
+		stream->curOffset += bytestowrite;
+	}
+	else
+	{
+		int			thisfile;
+		char	   *buf;
+
+		thisfile = stream->file.f.fd;
+		buf = stream->buffer.data;
+
+		do
+		{
+			int			nwritten;
+
+			errno = 0;
+
+			pgstat_report_wait_start(stream->file.wait_event_info);
+			nwritten = pg_pwrite(thisfile, buf, bytestowrite,
+								 stream->curOffset);
+			pgstat_report_wait_end();
+
+			if (nwritten < 0 && errno == EINTR)
+				continue;
+
+			if (nwritten != bytestowrite)
+			{
+				/*
+				 * if pg_pwrite didn't set errno, assume problem is no disk
+				 * space
+				 */
+				if (errno == 0)
+					errno = ENOSPC;
+
+				/*
+				 * XXX Should we close the fd explicitly? Not sure, it should
+				 * happen automatically on ERROR.
+				 */
+				ereport(stream->elevel,
+						(errcode_for_file_access(),
+						 errmsg("could not write to file %s "
+								"at offset %zu, length %u: %m",
+								stream->file.name, stream->curOffset,
+								bytestowrite)));
+
+				/* Only reachable if stream->elevel < ERROR. */
+				return;
+			}
+			stream->curOffset += nwritten;
+
+			/* Done. */
+			break;
+		} while (true);
+	}
+
+	stream->dirty = false;
+
+	/*
+	 * Like in BufFileDumpBuffer(), make curOffset point to the original value
+	 * + pos. in case that is less (as could happen due to a small backwards
+	 * seek in a dirty buffer!)
+	 */
+	stream->curOffset -= (stream->nbytes - stream->pos);
+	/* Unlike BufFileDumpBuffer(), no segment crossing could happen here. */
+	Assert(stream->curOffset >= 0);
+
+	/*
+	 * Now we can set the buffer empty without changing the logical position
+	 */
+	stream->pos = 0;
+	stream->nbytes = 0;
 }
 
 /*
@@ -581,32 +920,60 @@ BufFileDumpBuffer(BufFile *file)
 size_t
 BufFileRead(BufFile *file, void *ptr, size_t size)
 {
+	return BufFileReadCommon(&file->stream, file, ptr, size);
+}
+
+/*
+ * BufFileStreamRead
+ *
+ * Read data from a stream.
+ *
+ * If stream->elevel >= ERROR, the returned value is >=0, or ERROR is thrown if
+ * the underlying read() system call returned -1.
+ */
+size_t
+BufFileStreamRead(BufFileStream *stream, void *ptr, size_t size)
+{
+	return BufFileReadCommon(stream, NULL, ptr, size);
+}
+
+static size_t
+BufFileReadCommon(BufFileStream *stream, BufFile *file, void *ptr,
+				  size_t size)
+{
 	size_t		nread = 0;
 	size_t		nthistime;
 
-	BufFileFlush(file);
+	BufFileFlush(stream, file);
+	if (stream->dirty)
+		/* Only reachable if stream->elevel < ERROR. */
+		return 0;
 
 	while (size > 0)
 	{
-		if (file->pos >= file->nbytes)
+		if (stream->pos >= stream->nbytes)
 		{
 			/* Try to load more data into buffer. */
-			file->curOffset += file->pos;
-			file->pos = 0;
-			file->nbytes = 0;
-			BufFileLoadBuffer(file);
-			if (file->nbytes <= 0)
+			stream->curOffset += stream->pos;
+			stream->pos = 0;
+			stream->nbytes = 0;
+			if (file)
+				BufFileLoadBuffer(stream, file);
+			else
+				BufFileStreamLoadBuffer(stream);
+
+			if (stream->nbytes <= 0)
 				break;			/* no more data available */
 		}
 
-		nthistime = file->nbytes - file->pos;
+		nthistime = stream->nbytes - stream->pos;
 		if (nthistime > size)
 			nthistime = size;
 		Assert(nthistime > 0);
 
-		memcpy(ptr, file->buffer.data + file->pos, nthistime);
+		memcpy(ptr, stream->buffer.data + stream->pos, nthistime);
 
-		file->pos += nthistime;
+		stream->pos += nthistime;
 		ptr = (void *) ((char *) ptr + nthistime);
 		size -= nthistime;
 		nread += nthistime;
@@ -624,40 +991,192 @@ BufFileRead(BufFile *file, void *ptr, size_t size)
 void
 BufFileWrite(BufFile *file, void *ptr, size_t size)
 {
-	size_t		nthistime;
+	BufFileWriteCommon(&file->stream, file, ptr, size);
+}
 
-	Assert(!file->readOnly);
+/*
+ * BufFileStreamWrite
+ *
+ * Write data to a stream.
+ */
+size_t
+BufFileStreamWrite(BufFileStream *stream, void *ptr, size_t size)
+{
+	return BufFileWriteCommon(stream, NULL, ptr, size);
+}
+
+static size_t
+BufFileWriteCommon(BufFileStream *stream, BufFile *file, void *ptr,
+				   size_t size)
+{
+	size_t		nthistime;
+	size_t		result = 0;
 
 	while (size > 0)
 	{
-		if (file->pos >= BLCKSZ)
+		if (stream->pos >= stream->bufsize)
 		{
 			/* Buffer full, dump it out */
-			if (file->dirty)
-				BufFileDumpBuffer(file);
+			if (stream->dirty)
+			{
+				if (file)
+				{
+					Assert(!file->readOnly);
+					BufFileDumpBuffer(stream, file);
+				}
+				else
+					BufFileStreamDumpBuffer(stream);
+
+				if (stream->dirty)
+					/* Only reachable if stream->elevel < ERROR. */
+					return result;
+			}
 			else
 			{
 				/* Hmm, went directly from reading to writing? */
-				file->curOffset += file->pos;
-				file->pos = 0;
-				file->nbytes = 0;
+				stream->curOffset += stream->pos;
+				stream->pos = 0;
+				stream->nbytes = 0;
 			}
 		}
 
-		nthistime = BLCKSZ - file->pos;
+		nthistime = stream->bufsize - stream->pos;
 		if (nthistime > size)
 			nthistime = size;
 		Assert(nthistime > 0);
 
-		memcpy(file->buffer.data + file->pos, ptr, nthistime);
+		memcpy(stream->buffer.data + stream->pos, ptr, nthistime);
 
-		file->dirty = true;
-		file->pos += nthistime;
-		if (file->nbytes < file->pos)
-			file->nbytes = file->pos;
+		stream->dirty = true;
+		stream->pos += nthistime;
+		if (stream->nbytes < stream->pos)
+			stream->nbytes = stream->pos;
 		ptr = (void *) ((char *) ptr + nthistime);
 		size -= nthistime;
+		result += nthistime;
 	}
+
+	return result;
+}
+
+/*
+ * Copy file contents of the file specified by 'src' to the file specified by
+ * 'dst' via a buffer whose size is 'bufsize'.
+ *
+ * If 'upto' is greater than zero, only copy this amount of data, otherwise
+ * copy the whole source file.
+ *
+ * Each time 'flush_distance' bytes has been written, the destination file is
+ * flushed. (Do not flush if this argument is zero.)
+ *
+ * If 'unlink_dst' is true, unlink the destination file on write failure.
+ *
+ * Returns the number of bytes copied.
+ */
+size_t
+BufFileCopyFD(BufFileCopyFDArg *dst, BufFileCopyFDArg *src, int bufsize,
+			  size_t upto, int flush_distance, bool unlink_dst)
+{
+	char	   *buffer;
+	off_t		offset;
+	int			nbytes;
+	off_t		flush_offset;
+	size_t		nread,
+				result = 0;
+
+	/* Use palloc to ensure we get a maxaligned buffer */
+	buffer = palloc(bufsize);
+
+	flush_offset = 0;
+	for (offset = 0;; offset += nbytes)
+	{
+		/* If we got a cancel signal during the copy of the file, quit */
+		CHECK_FOR_INTERRUPTS();
+
+		/*
+		 * We fsync the files later, but during the copy, flush them every so
+		 * often to avoid spamming the cache and hopefully get the kernel to
+		 * start writing them out before the fsync comes.
+		 */
+		if (flush_distance > 0 && offset - flush_offset >= flush_distance)
+		{
+			pg_flush_data(dst->fd, flush_offset, offset - flush_offset);
+			flush_offset = offset;
+		}
+
+		/* Determine how much data we want to read. */
+		if (upto > 0)
+		{
+			nread = upto - result;
+			if (nread == 0)
+				break;
+			if (nread > bufsize)
+				nread = bufsize;
+		}
+		else
+			nread = bufsize;
+
+		errno = 0;
+		pgstat_report_wait_start(src->wait_event_info);
+		nbytes = read(src->fd, buffer, nread);
+		pgstat_report_wait_end();
+		if (nbytes < 0 || errno != 0)
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not read file \"%s\": %m", src->path)));
+		if (nbytes == 0)
+			break;
+
+		BufFileWriteFD(dst, buffer, nbytes, unlink_dst);
+
+		result += nbytes;
+	}
+
+	if (flush_offset > 0 && offset > flush_offset)
+		pg_flush_data(dst->fd, flush_offset, offset - flush_offset);
+
+	pfree(buffer);
+
+	return result;
+}
+
+/*
+ * BufFileWriteFD() - subroutine for BufFileCopyFD(), whose callers need it
+ * sometimes to write additional data to the destination file.
+ *
+ * Writes 'nbytes' bytes of 'buffer' to the file specified by 'dst'.
+ */
+void
+BufFileWriteFD(BufFileCopyFDArg *dst, char *buffer, int nbytes,
+			   bool unlink_dst)
+{
+	errno = 0;
+	pgstat_report_wait_start(dst->wait_event_info);
+	if ((int) write(dst->fd, buffer, nbytes) != nbytes)
+	{
+		/* if write didn't set errno, assume problem is no disk space */
+		if (errno == 0)
+			errno = ENOSPC;
+
+		/*
+		 * If we fail to make the file (and if the caller requires so), delete
+		 * it to release disk.
+		 */
+		if (unlink_dst)
+		{
+			int			save_errno = errno;
+
+			unlink(dst->path);
+
+			errno = save_errno;
+		}
+
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not write to file \"%s\": %m",
+						dst->path)));
+	}
+	pgstat_report_wait_end();
 }
 
 /*
@@ -666,12 +1185,15 @@ BufFileWrite(BufFile *file, void *ptr, size_t size)
  * Like fflush(), except that I/O errors are reported with ereport().
  */
 static void
-BufFileFlush(BufFile *file)
+BufFileFlush(BufFileStream *stream, BufFile *file)
 {
-	if (file->dirty)
-		BufFileDumpBuffer(file);
+	if (!stream->dirty)
+		return;
 
-	Assert(!file->dirty);
+	if (file)
+		BufFileDumpBuffer(stream, file);
+	else
+		BufFileStreamDumpBuffer(stream);
 }
 
 /*
@@ -690,6 +1212,7 @@ BufFileSeek(BufFile *file, int fileno, off_t offset, int whence)
 {
 	int			newFile;
 	off_t		newOffset;
+	BufFileStream *stream = &file->stream;
 
 	switch (whence)
 	{
@@ -707,7 +1230,7 @@ BufFileSeek(BufFile *file, int fileno, off_t offset, int whence)
 			 * add, unless we have 64-bit off_t.
 			 */
 			newFile = file->curFile;
-			newOffset = (file->curOffset + file->pos) + offset;
+			newOffset = (stream->curOffset + stream->pos) + offset;
 			break;
 		case SEEK_END:
 
@@ -718,14 +1241,20 @@ BufFileSeek(BufFile *file, int fileno, off_t offset, int whence)
 			newFile = file->numFiles - 1;
 			newOffset = FileSize(file->files[file->numFiles - 1]);
 			if (newOffset < 0)
-				ereport(ERROR,
+			{
+				ereport(stream->elevel,
 						(errcode_for_file_access(),
 						 errmsg("could not determine size of temporary file \"%s\" from BufFile \"%s\": %m",
 								FilePathName(file->files[file->numFiles - 1]),
 								file->name)));
+
+				/* Only reachable if stream->elevel < ERROR. */
+				return EOF;
+			}
 			break;
 		default:
-			elog(ERROR, "invalid whence: %d", whence);
+			elog(stream->elevel, "invalid whence: %d", whence);
+			/* Only reachable if stream->elevel < ERROR. */
 			return EOF;
 	}
 	while (newOffset < 0)
@@ -735,8 +1264,8 @@ BufFileSeek(BufFile *file, int fileno, off_t offset, int whence)
 		newOffset += MAX_PHYSICAL_FILESIZE;
 	}
 	if (newFile == file->curFile &&
-		newOffset >= file->curOffset &&
-		newOffset <= file->curOffset + file->nbytes)
+		newOffset >= stream->curOffset &&
+		newOffset <= stream->curOffset + stream->nbytes)
 	{
 		/*
 		 * Seek is to a point within existing buffer; we can just adjust
@@ -744,11 +1273,11 @@ BufFileSeek(BufFile *file, int fileno, off_t offset, int whence)
 		 * whether reading or writing, but buffer remains dirty if we were
 		 * writing.
 		 */
-		file->pos = (int) (newOffset - file->curOffset);
+		stream->pos = (int) (newOffset - stream->curOffset);
 		return 0;
 	}
 	/* Otherwise, must reposition buffer, so flush any dirty data */
-	BufFileFlush(file);
+	BufFileFlush(stream, file);
 
 	/*
 	 * At this point and no sooner, check for seek past last segment. The
@@ -772,9 +1301,56 @@ BufFileSeek(BufFile *file, int fileno, off_t offset, int whence)
 		return EOF;
 	/* Seek is OK! */
 	file->curFile = newFile;
-	file->curOffset = newOffset;
-	file->pos = 0;
-	file->nbytes = 0;
+	stream->curOffset = newOffset;
+	stream->pos = 0;
+	stream->nbytes = 0;
+	return 0;
+}
+
+/*
+ * BufFileStreamSeek
+ *
+ * Like fseek(), but currently we only support whence==SEEK_CUR.
+ *
+ * Result is 0 if OK, EOF if not. Logical position is not moved if an
+ * impossible seek is attempted.
+ */
+int
+BufFileStreamSeek(BufFileStream *stream, off_t offset, int whence)
+{
+	off_t		newOffset;
+
+	/* This is currently the only value needed. */
+	Assert(whence == SEEK_CUR);
+
+	newOffset = (stream->curOffset + stream->pos) + offset;
+	if (newOffset < 0)
+		return -1;
+
+	if (newOffset >= stream->curOffset &&
+		newOffset <= stream->curOffset + stream->nbytes)
+	{
+		/*
+		 * Seek is to a point within existing buffer; we can just adjust
+		 * pos-within-buffer, without flushing buffer.  Note this is OK
+		 * whether reading or writing, but buffer remains dirty if we were
+		 * writing.
+		 */
+		stream->pos = (int) (newOffset - stream->curOffset);
+		return 0;
+	}
+	/* Otherwise, must reposition buffer, so flush any dirty data */
+	BufFileStreamDumpBuffer(stream);
+	if (stream->dirty)
+		/* Only reachable if stream->elevel < ERROR. */
+		return -1;
+
+	/*
+	 * Just set the position info, the buffer will be loaded on the next read.
+	 */
+	stream->curOffset = newOffset;
+	stream->pos = 0;
+	stream->nbytes = 0;
 	return 0;
 }
 
@@ -782,16 +1358,16 @@ void
 BufFileTell(BufFile *file, int *fileno, off_t *offset)
 {
 	*fileno = file->curFile;
-	*offset = file->curOffset + file->pos;
+	*offset = file->stream.curOffset + file->stream.pos;
 }
 
 /*
  * BufFileSeekBlock --- block-oriented seek
  *
- * Performs absolute seek to the start of the n'th BLCKSZ-sized block of
- * the file.  Note that users of this interface will fail if their files
- * exceed BLCKSZ * LONG_MAX bytes, but that is quite a lot; we don't work
- * with tables bigger than that, either...
+ * Performs absolute seek to the start of the n'th bufsize-sized block of the
+ * file.  Note that users of this interface will fail if their files exceed
+ * BLCKSZ * LONG_MAX bytes (where BLCKSZ is the maximum buffer size), but that
+ * is quite a lot; we don't work with tables bigger than that, either...
  *
  * Result is 0 if OK, EOF if not.  Logical position is not moved if an
  * impossible seek is attempted.
@@ -800,8 +1376,8 @@ int
 BufFileSeekBlock(BufFile *file, long blknum)
 {
 	return BufFileSeek(file,
-					   (int) (blknum / BUFFILE_SEG_SIZE),
-					   (off_t) (blknum % BUFFILE_SEG_SIZE) * BLCKSZ,
+					   (int) (blknum / BUFFILE_SEG_SIZE(file)),
+					   (off_t) (blknum % BUFFILE_SEG_SIZE(file)) * file->stream.bufsize,
 					   SEEK_SET);
 }
 
@@ -816,8 +1392,8 @@ BufFileTellBlock(BufFile *file)
 {
 	long		blknum;
 
-	blknum = (file->curOffset + file->pos) / BLCKSZ;
-	blknum += file->curFile * BUFFILE_SEG_SIZE;
+	blknum = (file->stream.curOffset + file->stream.pos) / file->stream.bufsize;
+	blknum += file->phys.curFile * BUFFILE_SEG_SIZE(file);
 	return blknum;
 }
 
@@ -867,17 +1443,24 @@ BufFileSize(BufFile *file)
  * Returns the block number within target where the contents of source
  * begins.  Caller should apply this as an offset when working off block
  * positions that are in terms of the original BufFile space.
+ *
+ * TODO Think more about possible implications of a different bufsize among
+ * the files. For now it seems to me o.k. as long as both passed the check in
+ * BufFileStreamInitCommon().
  */
 long
 BufFileAppend(BufFile *target, BufFile *source)
 {
-	long		startBlock = target->numFiles * BUFFILE_SEG_SIZE;
+#ifdef USE_ASSERT_CHECKING
+	BufFileStream *stream_source = &source->stream;
+#endif
+	long		startBlock = target->numFiles * BUFFILE_SEG_SIZE(target);
 	int			newNumFiles = target->numFiles + source->numFiles;
 	int			i;
 
 	Assert(target->fileset != NULL);
 	Assert(source->readOnly);
-	Assert(!source->dirty);
+	Assert(!stream_source->dirty);
 	Assert(source->fileset != NULL);
 
 	if (target->resowner != source->resowner)
@@ -899,9 +1482,10 @@ BufFileAppend(BufFile *target, BufFile *source)
 void
 BufFileTruncateFileSet(BufFile *file, int fileno, off_t offset)
 {
+	BufFileStream *stream = &file->stream;
 	int			numFiles = file->numFiles;
 	int			newFile = fileno;
-	off_t		newOffset = file->curOffset;
+	off_t		newOffset = stream->curOffset;
 	char		segment_name[MAXPGPATH];
 	int			i;
 
@@ -951,27 +1535,27 @@ BufFileTruncateFileSet(BufFile *file, int fileno, off_t offset)
 	 * pos within buffer.
 	 */
 	if (newFile == file->curFile &&
-		newOffset >= file->curOffset &&
-		newOffset <= file->curOffset + file->nbytes)
+		newOffset >= stream->curOffset &&
+		newOffset <= stream->curOffset + stream->nbytes)
 	{
 		/* No need to reset the current pos if the new pos is greater. */
-		if (newOffset <= file->curOffset + file->pos)
-			file->pos = (int) (newOffset - file->curOffset);
+		if (newOffset <= stream->curOffset + stream->pos)
+			stream->pos = (int) (newOffset - stream->curOffset);
 
 		/* Adjust the nbytes for the current buffer. */
-		file->nbytes = (int) (newOffset - file->curOffset);
+		stream->nbytes = (int) (newOffset - stream->curOffset);
 	}
 	else if (newFile == file->curFile &&
-			 newOffset < file->curOffset)
+			 newOffset < stream->curOffset)
 	{
 		/*
 		 * The truncate point is within the existing file but prior to the
 		 * current position, so we can forget the current buffer and reset the
 		 * current position.
 		 */
-		file->curOffset = newOffset;
-		file->pos = 0;
-		file->nbytes = 0;
+		stream->curOffset = newOffset;
+		stream->pos = 0;
+		stream->nbytes = 0;
 	}
 	else if (newFile < file->curFile)
 	{
@@ -980,9 +1564,9 @@ BufFileTruncateFileSet(BufFile *file, int fileno, off_t offset)
 		 * the current position accordingly.
 		 */
 		file->curFile = newFile;
-		file->curOffset = newOffset;
-		file->pos = 0;
-		file->nbytes = 0;
+		stream->curOffset = newOffset;
+		stream->pos = 0;
+		stream->nbytes = 0;
 	}
 	/* Nothing to do, if the truncate point is beyond current file. */
 }

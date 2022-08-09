@@ -76,6 +76,7 @@
 #include "pgstat.h"
 #include "rewrite/rewriteDefine.h"
 #include "rewrite/rowsecurity.h"
+#include "storage/buffile.h"
 #include "storage/lmgr.h"
 #include "storage/smgr.h"
 #include "utils/array.h"
@@ -288,7 +289,7 @@ static void AtEOSubXact_cleanup(Relation relation, bool isCommit,
 								SubTransactionId mySubid, SubTransactionId parentSubid);
 static bool load_relcache_init_file(bool shared);
 static void write_relcache_init_file(bool shared);
-static void write_item(const void *data, Size len, FILE *fp);
+static void write_item(BufFileStream *stream, const void *data, Size len);
 
 static void formrdesc(const char *relationName, Oid relationReltype,
 					  bool isshared, int natts, const FormData_pg_attribute *attrs);
@@ -5986,7 +5987,8 @@ errtableconstraint(Relation rel, const char *conname)
 static bool
 load_relcache_init_file(bool shared)
 {
-	FILE	   *fp;
+	int			fd;
+	BufFileStream stream;
 	char		initfilename[MAXPGPATH];
 	Relation   *rels;
 	int			relno,
@@ -6004,9 +6006,13 @@ load_relcache_init_file(bool shared)
 		snprintf(initfilename, sizeof(initfilename), "%s/%s",
 				 DatabasePath, RELCACHE_INIT_FILENAME);
 
-	fp = AllocateFile(initfilename, PG_BINARY_R);
-	if (fp == NULL)
+	fd = OpenTransientFile(initfilename, O_RDONLY | PG_BINARY);
+	if (fd < 0)
 		return false;
+
+	BufFileStreamInitFD(&stream, fd, true, initfilename,
+						WAIT_EVENT_RELCACHE_INIT_READ,
+						BLCKSZ, ERROR);
 
 	/*
 	 * Read the index relcache entries from the file.  Note we will not enter
@@ -6019,7 +6025,7 @@ load_relcache_init_file(bool shared)
 	nailed_rels = nailed_indexes = 0;
 
 	/* check for correct magic number (compatible version) */
-	if (fread(&magic, 1, sizeof(magic), fp) != sizeof(magic))
+	if (BufFileStreamRead(&stream, &magic, sizeof(magic)) != sizeof(magic))
 		goto read_failed;
 	if (magic != RELCACHE_INIT_FILEMAGIC)
 		goto read_failed;
@@ -6033,7 +6039,7 @@ load_relcache_init_file(bool shared)
 		bool		has_not_null;
 
 		/* first read the relation descriptor length */
-		nread = fread(&len, 1, sizeof(len), fp);
+		nread = BufFileStreamRead(&stream, &len, sizeof(len));
 		if (nread != sizeof(len))
 		{
 			if (nread == 0)
@@ -6055,15 +6061,15 @@ load_relcache_init_file(bool shared)
 		rel = rels[num_rels++] = (Relation) palloc(len);
 
 		/* then, read the Relation structure */
-		if (fread(rel, 1, len, fp) != len)
+		if (BufFileStreamRead(&stream, rel, len) != len)
 			goto read_failed;
 
 		/* next read the relation tuple form */
-		if (fread(&len, 1, sizeof(len), fp) != sizeof(len))
+		if (BufFileStreamRead(&stream, &len, sizeof(len)) != sizeof(len))
 			goto read_failed;
 
 		relform = (Form_pg_class) palloc(len);
-		if (fread(relform, 1, len, fp) != len)
+		if (BufFileStreamRead(&stream, relform, len) != len)
 			goto read_failed;
 
 		rel->rd_rel = relform;
@@ -6081,23 +6087,23 @@ load_relcache_init_file(bool shared)
 		{
 			Form_pg_attribute attr = TupleDescAttr(rel->rd_att, i);
 
-			if (fread(&len, 1, sizeof(len), fp) != sizeof(len))
+			if (BufFileStreamRead(&stream, &len, sizeof(len)) != sizeof(len))
 				goto read_failed;
 			if (len != ATTRIBUTE_FIXED_PART_SIZE)
 				goto read_failed;
-			if (fread(attr, 1, len, fp) != len)
+			if (BufFileStreamRead(&stream, attr, len) != len)
 				goto read_failed;
 
 			has_not_null |= attr->attnotnull;
 		}
 
 		/* next read the access method specific field */
-		if (fread(&len, 1, sizeof(len), fp) != sizeof(len))
+		if (BufFileStreamRead(&stream, &len, sizeof(len)) != sizeof(len))
 			goto read_failed;
 		if (len > 0)
 		{
 			rel->rd_options = palloc(len);
-			if (fread(rel->rd_options, 1, len, fp) != len)
+			if (BufFileStreamRead(&stream, rel->rd_options, len) != len)
 				goto read_failed;
 			if (len != VARSIZE(rel->rd_options))
 				goto read_failed;	/* sanity check */
@@ -6135,11 +6141,11 @@ load_relcache_init_file(bool shared)
 				nailed_indexes++;
 
 			/* next, read the pg_index tuple */
-			if (fread(&len, 1, sizeof(len), fp) != sizeof(len))
+			if (BufFileStreamRead(&stream, &len, sizeof(len)) != sizeof(len))
 				goto read_failed;
 
 			rel->rd_indextuple = (HeapTuple) palloc(len);
-			if (fread(rel->rd_indextuple, 1, len, fp) != len)
+			if (BufFileStreamRead(&stream, rel->rd_indextuple, len) != len)
 				goto read_failed;
 
 			/* Fix up internal pointers in the tuple -- see heap_copytuple */
@@ -6166,50 +6172,50 @@ load_relcache_init_file(bool shared)
 			InitIndexAmRoutine(rel);
 
 			/* next, read the vector of opfamily OIDs */
-			if (fread(&len, 1, sizeof(len), fp) != sizeof(len))
+			if (BufFileStreamRead(&stream, &len, sizeof(len)) != sizeof(len))
 				goto read_failed;
 
 			opfamily = (Oid *) MemoryContextAlloc(indexcxt, len);
-			if (fread(opfamily, 1, len, fp) != len)
+			if (BufFileStreamRead(&stream, opfamily, len) != len)
 				goto read_failed;
 
 			rel->rd_opfamily = opfamily;
 
 			/* next, read the vector of opcintype OIDs */
-			if (fread(&len, 1, sizeof(len), fp) != sizeof(len))
+			if (BufFileStreamRead(&stream, &len, sizeof(len)) != sizeof(len))
 				goto read_failed;
 
 			opcintype = (Oid *) MemoryContextAlloc(indexcxt, len);
-			if (fread(opcintype, 1, len, fp) != len)
+			if (BufFileStreamRead(&stream, opcintype, len) != len)
 				goto read_failed;
 
 			rel->rd_opcintype = opcintype;
 
 			/* next, read the vector of support procedure OIDs */
-			if (fread(&len, 1, sizeof(len), fp) != sizeof(len))
+			if (BufFileStreamRead(&stream, &len, sizeof(len)) != sizeof(len))
 				goto read_failed;
 			support = (RegProcedure *) MemoryContextAlloc(indexcxt, len);
-			if (fread(support, 1, len, fp) != len)
+			if (BufFileStreamRead(&stream, support, len) != len)
 				goto read_failed;
 
 			rel->rd_support = support;
 
 			/* next, read the vector of collation OIDs */
-			if (fread(&len, 1, sizeof(len), fp) != sizeof(len))
+			if (BufFileStreamRead(&stream, &len, sizeof(len)) != sizeof(len))
 				goto read_failed;
 
 			indcollation = (Oid *) MemoryContextAlloc(indexcxt, len);
-			if (fread(indcollation, 1, len, fp) != len)
+			if (BufFileStreamRead(&stream, indcollation, len) != len)
 				goto read_failed;
 
 			rel->rd_indcollation = indcollation;
 
 			/* finally, read the vector of indoption values */
-			if (fread(&len, 1, sizeof(len), fp) != sizeof(len))
+			if (BufFileStreamRead(&stream, &len, sizeof(len)) != sizeof(len))
 				goto read_failed;
 
 			indoption = (int16 *) MemoryContextAlloc(indexcxt, len);
-			if (fread(indoption, 1, len, fp) != len)
+			if (BufFileStreamRead(&stream, indoption, len) != len)
 				goto read_failed;
 
 			rel->rd_indoption = indoption;
@@ -6220,13 +6226,13 @@ load_relcache_init_file(bool shared)
 
 			for (i = 0; i < relform->relnatts; i++)
 			{
-				if (fread(&len, 1, sizeof(len), fp) != sizeof(len))
+				if (BufFileStreamRead(&stream, &len, sizeof(len)) != sizeof(len))
 					goto read_failed;
 
 				if (len > 0)
 				{
 					rel->rd_opcoptions[i] = (bytea *) MemoryContextAlloc(indexcxt, len);
-					if (fread(rel->rd_opcoptions[i], 1, len, fp) != len)
+					if (BufFileStreamRead(&stream, rel->rd_opcoptions[i], len) != len)
 						goto read_failed;
 				}
 			}
@@ -6375,7 +6381,7 @@ load_relcache_init_file(bool shared)
 	}
 
 	pfree(rels);
-	FreeFile(fp);
+	BufFileStreamClose(&stream, 0);
 
 	if (shared)
 		criticalSharedRelcachesBuilt = true;
@@ -6390,7 +6396,7 @@ load_relcache_init_file(bool shared)
 	 */
 read_failed:
 	pfree(rels);
-	FreeFile(fp);
+	BufFileStreamClose(&stream, 0);
 
 	return false;
 }
@@ -6402,7 +6408,8 @@ read_failed:
 static void
 write_relcache_init_file(bool shared)
 {
-	FILE	   *fp;
+	int			fd;
+	BufFileStream stream;
 	char		tempfilename[MAXPGPATH];
 	char		finalfilename[MAXPGPATH];
 	int			magic;
@@ -6439,8 +6446,8 @@ write_relcache_init_file(bool shared)
 
 	unlink(tempfilename);		/* in case it exists w/wrong permissions */
 
-	fp = AllocateFile(tempfilename, PG_BINARY_W);
-	if (fp == NULL)
+	fd = OpenTransientFile(tempfilename, O_CREAT | O_WRONLY | PG_BINARY);
+	if (fd < 0)
 	{
 		/*
 		 * We used to consider this a fatal error, but we might as well
@@ -6453,14 +6460,16 @@ write_relcache_init_file(bool shared)
 				 errdetail("Continuing anyway, but there's something wrong.")));
 		return;
 	}
+	BufFileStreamInitFD(&stream, fd, true, tempfilename,
+						WAIT_EVENT_RELCACHE_INIT_WRITE,
+						BLCKSZ, ERROR);
 
 	/*
 	 * Write a magic number to serve as a file version identifier.  We can
 	 * change the magic number whenever the relcache layout changes.
 	 */
 	magic = RELCACHE_INIT_FILEMAGIC;
-	if (fwrite(&magic, 1, sizeof(magic), fp) != sizeof(magic))
-		elog(FATAL, "could not write init file");
+	BufFileStreamWrite(&stream, &magic, sizeof(magic));
 
 	/*
 	 * Write all the appropriate reldescs (in no particular order).
@@ -6494,22 +6503,23 @@ write_relcache_init_file(bool shared)
 		}
 
 		/* first write the relcache entry proper */
-		write_item(rel, sizeof(RelationData), fp);
+		write_item(&stream, rel, sizeof(RelationData));
 
 		/* next write the relation tuple form */
-		write_item(relform, CLASS_TUPLE_SIZE, fp);
+		write_item(&stream, relform, CLASS_TUPLE_SIZE);
 
 		/* next, do all the attribute tuple form data entries */
 		for (i = 0; i < relform->relnatts; i++)
 		{
-			write_item(TupleDescAttr(rel->rd_att, i),
-					   ATTRIBUTE_FIXED_PART_SIZE, fp);
+			write_item(&stream,
+					   TupleDescAttr(rel->rd_att, i),
+					   ATTRIBUTE_FIXED_PART_SIZE);
 		}
 
 		/* next, do the access method specific field */
-		write_item(rel->rd_options,
-				   (rel->rd_options ? VARSIZE(rel->rd_options) : 0),
-				   fp);
+		write_item(&stream,
+				   rel->rd_options,
+				   (rel->rd_options ? VARSIZE(rel->rd_options) : 0));
 
 		/*
 		 * If it's an index, there's more to do. Note we explicitly ignore
@@ -6519,34 +6529,34 @@ write_relcache_init_file(bool shared)
 		{
 			/* write the pg_index tuple */
 			/* we assume this was created by heap_copytuple! */
-			write_item(rel->rd_indextuple,
-					   HEAPTUPLESIZE + rel->rd_indextuple->t_len,
-					   fp);
+			write_item(&stream,
+					   rel->rd_indextuple,
+					   HEAPTUPLESIZE + rel->rd_indextuple->t_len);
 
 			/* next, write the vector of opfamily OIDs */
-			write_item(rel->rd_opfamily,
-					   relform->relnatts * sizeof(Oid),
-					   fp);
+			write_item(&stream,
+					   rel->rd_opfamily,
+					   relform->relnatts * sizeof(Oid));
 
 			/* next, write the vector of opcintype OIDs */
-			write_item(rel->rd_opcintype,
-					   relform->relnatts * sizeof(Oid),
-					   fp);
+			write_item(&stream,
+					   rel->rd_opcintype,
+					   relform->relnatts * sizeof(Oid));
 
 			/* next, write the vector of support procedure OIDs */
-			write_item(rel->rd_support,
-					   relform->relnatts * (rel->rd_indam->amsupport * sizeof(RegProcedure)),
-					   fp);
+			write_item(&stream,
+					   rel->rd_support,
+					   relform->relnatts * (rel->rd_indam->amsupport * sizeof(RegProcedure)));
 
 			/* next, write the vector of collation OIDs */
-			write_item(rel->rd_indcollation,
-					   relform->relnatts * sizeof(Oid),
-					   fp);
+			write_item(&stream,
+					   rel->rd_indcollation,
+					   relform->relnatts * sizeof(Oid));
 
 			/* finally, write the vector of indoption values */
-			write_item(rel->rd_indoption,
-					   relform->relnatts * sizeof(int16),
-					   fp);
+			write_item(&stream,
+					   rel->rd_indoption,
+					   relform->relnatts * sizeof(int16));
 
 			Assert(rel->rd_opcoptions);
 
@@ -6555,12 +6565,13 @@ write_relcache_init_file(bool shared)
 			{
 				bytea	   *opt = rel->rd_opcoptions[i];
 
-				write_item(opt, opt ? VARSIZE(opt) : 0, fp);
+				write_item(&stream,
+						   opt, opt ? VARSIZE(opt) : 0);
 			}
 		}
 	}
 
-	if (FreeFile(fp))
+	if (BufFileStreamClose(&stream, 0))
 		elog(FATAL, "could not write init file");
 
 	/*
@@ -6608,12 +6619,11 @@ write_relcache_init_file(bool shared)
 
 /* write a chunk of data preceded by its length */
 static void
-write_item(const void *data, Size len, FILE *fp)
+write_item(BufFileStream *stream, const void *data, Size len)
 {
-	if (fwrite(&len, 1, sizeof(len), fp) != sizeof(len))
-		elog(FATAL, "could not write init file");
-	if (len > 0 && fwrite(data, 1, len, fp) != len)
-		elog(FATAL, "could not write init file");
+	BufFileStreamWrite(stream, &len, sizeof(len));
+	if (len > 0)
+		BufFileStreamWrite(stream, (void *) data, len);
 }
 
 /*

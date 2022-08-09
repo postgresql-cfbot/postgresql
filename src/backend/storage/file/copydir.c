@@ -24,6 +24,7 @@
 
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "storage/buffile.h"
 #include "storage/copydir.h"
 #include "storage/fd.h"
 
@@ -126,12 +127,8 @@ copydir(char *fromdir, char *todir, bool recurse)
 void
 copy_file(char *fromfile, char *tofile)
 {
-	char	   *buffer;
-	int			srcfd;
-	int			dstfd;
-	int			nbytes;
-	off_t		offset;
-	off_t		flush_offset;
+	BufFileCopyFDArg src,
+				dst;
 
 	/* Size of copy buffer (read and write requests) */
 #define COPY_BUF_SIZE (8 * BLCKSZ)
@@ -148,79 +145,37 @@ copy_file(char *fromfile, char *tofile)
 #define FLUSH_DISTANCE (1024 * 1024)
 #endif
 
-	/* Use palloc to ensure we get a maxaligned buffer */
-	buffer = palloc(COPY_BUF_SIZE);
-
 	/*
 	 * Open the files
 	 */
-	srcfd = OpenTransientFile(fromfile, O_RDONLY | PG_BINARY);
-	if (srcfd < 0)
+	src.path = fromfile;
+	src.fd = OpenTransientFile(fromfile, O_RDONLY | PG_BINARY);
+	if (src.fd < 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not open file \"%s\": %m", fromfile)));
+	src.wait_event_info = WAIT_EVENT_COPY_FILE_READ;
 
-	dstfd = OpenTransientFile(tofile, O_RDWR | O_CREAT | O_EXCL | PG_BINARY);
-	if (dstfd < 0)
+	dst.path = tofile;
+	dst.fd = OpenTransientFile(tofile, O_RDWR | O_CREAT | O_EXCL | PG_BINARY);
+	if (dst.fd < 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not create file \"%s\": %m", tofile)));
+	dst.wait_event_info = WAIT_EVENT_COPY_FILE_WRITE;
 
 	/*
 	 * Do the data copying.
 	 */
-	flush_offset = 0;
-	for (offset = 0;; offset += nbytes)
-	{
-		/* If we got a cancel signal during the copy of the file, quit */
-		CHECK_FOR_INTERRUPTS();
+	BufFileCopyFD(&dst, &src, COPY_BUF_SIZE, 0, FLUSH_DISTANCE, false);
 
-		/*
-		 * We fsync the files later, but during the copy, flush them every so
-		 * often to avoid spamming the cache and hopefully get the kernel to
-		 * start writing them out before the fsync comes.
-		 */
-		if (offset - flush_offset >= FLUSH_DISTANCE)
-		{
-			pg_flush_data(dstfd, flush_offset, offset - flush_offset);
-			flush_offset = offset;
-		}
-
-		pgstat_report_wait_start(WAIT_EVENT_COPY_FILE_READ);
-		nbytes = read(srcfd, buffer, COPY_BUF_SIZE);
-		pgstat_report_wait_end();
-		if (nbytes < 0)
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not read file \"%s\": %m", fromfile)));
-		if (nbytes == 0)
-			break;
-		errno = 0;
-		pgstat_report_wait_start(WAIT_EVENT_COPY_FILE_WRITE);
-		if ((int) write(dstfd, buffer, nbytes) != nbytes)
-		{
-			/* if write didn't set errno, assume problem is no disk space */
-			if (errno == 0)
-				errno = ENOSPC;
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not write to file \"%s\": %m", tofile)));
-		}
-		pgstat_report_wait_end();
-	}
-
-	if (offset > flush_offset)
-		pg_flush_data(dstfd, flush_offset, offset - flush_offset);
-
-	if (CloseTransientFile(dstfd) != 0)
+	if (CloseTransientFile(dst.fd) != 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not close file \"%s\": %m", tofile)));
 
-	if (CloseTransientFile(srcfd) != 0)
+	if (CloseTransientFile(src.fd) != 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not close file \"%s\": %m", fromfile)));
-
-	pfree(buffer);
 }

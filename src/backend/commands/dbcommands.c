@@ -54,6 +54,7 @@
 #include "pgstat.h"
 #include "postmaster/bgwriter.h"
 #include "replication/slot.h"
+#include "storage/buffile.h"
 #include "storage/copydir.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
@@ -464,6 +465,7 @@ static void
 CreateDirAndVersionFile(char *dbpath, Oid dbid, Oid tsid, bool isRedo)
 {
 	int			fd;
+	BufFileStream stream;
 	int			nbytes;
 	char		versionfile[MAXPGPATH];
 	char		buf[16];
@@ -524,22 +526,15 @@ CreateDirAndVersionFile(char *dbpath, Oid dbid, Oid tsid, bool isRedo)
 				(errcode_for_file_access(),
 				 errmsg("could not create file \"%s\": %m", versionfile)));
 
+	BufFileStreamInitFD(&stream, fd, true, versionfile,
+						WAIT_EVENT_VERSION_FILE_WRITE,
+						BLCKSZ, ERROR);
+
 	/* Write PG_MAJORVERSION in the PG_VERSION file. */
-	pgstat_report_wait_start(WAIT_EVENT_VERSION_FILE_WRITE);
-	errno = 0;
-	if ((int) write(fd, buf, nbytes) != nbytes)
-	{
-		/* If write didn't set errno, assume problem is no disk space. */
-		if (errno == 0)
-			errno = ENOSPC;
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not write to file \"%s\": %m", versionfile)));
-	}
-	pgstat_report_wait_end();
+	BufFileStreamWrite(&stream, buf, nbytes);
 
 	/* Close the version file. */
-	CloseTransientFile(fd);
+	BufFileStreamClose(&stream, 0);
 
 	/* Critical section done. */
 	if (!isRedo)

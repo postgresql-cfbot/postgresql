@@ -51,6 +51,7 @@
 #include "catalog/storage.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "storage/buffile.h"
 #include "storage/fd.h"
 #include "storage/lwlock.h"
 #include "utils/inval.h"
@@ -784,6 +785,7 @@ read_relmap_file(RelMapFile *map, char *dbpath, bool lock_held, int elevel)
 	char		mapfilename[MAXPGPATH];
 	pg_crc32c	crc;
 	int			fd;
+	BufFileStream stream;
 	int			r;
 
 	Assert(elevel >= ERROR);
@@ -817,23 +819,17 @@ read_relmap_file(RelMapFile *map, char *dbpath, bool lock_held, int elevel)
 						mapfilename)));
 
 	/* Now read the data. */
-	pgstat_report_wait_start(WAIT_EVENT_RELATION_MAP_READ);
-	r = read(fd, map, sizeof(RelMapFile));
+	BufFileStreamInitFD(&stream, fd, true, mapfilename,
+						WAIT_EVENT_RELATION_MAP_READ,
+						BLCKSZ, ERROR);
+	r = BufFileStreamRead(&stream, map, sizeof(RelMapFile));
 	if (r != sizeof(RelMapFile))
-	{
-		if (r < 0)
-			ereport(elevel,
-					(errcode_for_file_access(),
-					 errmsg("could not read file \"%s\": %m", mapfilename)));
-		else
-			ereport(elevel,
-					(errcode(ERRCODE_DATA_CORRUPTED),
-					 errmsg("could not read file \"%s\": read %d of %zu",
-							mapfilename, r, sizeof(RelMapFile))));
-	}
-	pgstat_report_wait_end();
+		ereport(elevel,
+				(errcode(ERRCODE_DATA_CORRUPTED),
+				 errmsg("could not read file \"%s\": read %d of %zu",
+						mapfilename, r, sizeof(RelMapFile))));
 
-	if (CloseTransientFile(fd) != 0)
+	if (BufFileStreamClose(&stream, 0) != 0)
 		ereport(elevel,
 				(errcode_for_file_access(),
 				 errmsg("could not close file \"%s\": %m",
@@ -888,6 +884,7 @@ write_relmap_file(RelMapFile *newmap, bool write_wal, bool send_sinval,
 				  bool preserve_files, Oid dbid, Oid tsid, const char *dbpath)
 {
 	int			fd;
+	BufFileStream stream;
 	char		mapfilename[MAXPGPATH];
 	char		maptempfilename[MAXPGPATH];
 
@@ -925,25 +922,18 @@ write_relmap_file(RelMapFile *newmap, bool write_wal, bool send_sinval,
 						maptempfilename)));
 
 	/* Write new data to the file. */
-	pgstat_report_wait_start(WAIT_EVENT_RELATION_MAP_WRITE);
-	if (write(fd, newmap, sizeof(RelMapFile)) != sizeof(RelMapFile))
-	{
-		/* if write didn't set errno, assume problem is no disk space */
-		if (errno == 0)
-			errno = ENOSPC;
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not write file \"%s\": %m",
-						maptempfilename)));
-	}
-	pgstat_report_wait_end();
+	BufFileStreamInitFD(&stream, fd, true, maptempfilename,
+						WAIT_EVENT_RELATION_MAP_WRITE,
+						BLCKSZ, ERROR);
+	BufFileStreamWrite(&stream, newmap, sizeof(RelMapFile));
 
 	/* And close the file. */
-	if (CloseTransientFile(fd) != 0)
+	if (BufFileStreamClose(&stream, 0) != 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not close file \"%s\": %m",
 						maptempfilename)));
+
 
 	if (write_wal)
 	{

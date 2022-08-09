@@ -630,6 +630,12 @@ pgstat_get_wait_io(WaitEventIO w)
 		case WAIT_EVENT_LOGICAL_REWRITE_WRITE:
 			event_name = "LogicalRewriteWrite";
 			break;
+		case WAIT_EVENT_PGSTAT_READ:
+			event_name = "PgStatRead";
+			break;
+		case WAIT_EVENT_PGSTAT_WRITE:
+			event_name = "PgStatWrite";
+			break;
 		case WAIT_EVENT_RELATION_MAP_READ:
 			event_name = "RelationMapRead";
 			break;
@@ -638,6 +644,12 @@ pgstat_get_wait_io(WaitEventIO w)
 			break;
 		case WAIT_EVENT_RELATION_MAP_WRITE:
 			event_name = "RelationMapWrite";
+			break;
+		case WAIT_EVENT_RELCACHE_INIT_READ:
+			event_name = "RelCacheInitRead";
+			break;
+		case WAIT_EVENT_RELCACHE_INIT_WRITE:
+			event_name = "RelCacheInitWrite";
 			break;
 		case WAIT_EVENT_REORDER_BUFFER_READ:
 			event_name = "ReorderBufferRead";

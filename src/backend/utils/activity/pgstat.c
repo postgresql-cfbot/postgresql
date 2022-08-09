@@ -97,6 +97,7 @@
 #include "lib/dshash.h"
 #include "pgstat.h"
 #include "port/atomics.h"
+#include "storage/buffile.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/lwlock.h"
@@ -1236,17 +1237,17 @@ pgstat_assert_is_up(void)
 
 /* helpers for pgstat_write_statsfile() */
 static void
-write_chunk(FILE *fpout, void *ptr, size_t len)
+write_chunk(BufFileStream *stream, void *ptr, size_t len, bool *failed)
 {
-	int			rc;
+	/* Do nothing if  any previous call failed. */
+	if (*failed)
+		return;
 
-	rc = fwrite(ptr, len, 1, fpout);
-
-	/* we'll check for errors with ferror once at the end */
-	(void) rc;
+	if (BufFileStreamWrite(stream, ptr, len) != len)
+		*failed = true;
 }
 
-#define write_chunk_s(fpout, ptr) write_chunk(fpout, ptr, sizeof(*ptr))
+#define write_chunk_s(stream, ptr, failed) write_chunk(stream, ptr, sizeof(*ptr), failed)
 
 /*
  * This function is called in the last process that is accessing the shared
@@ -1255,12 +1256,14 @@ write_chunk(FILE *fpout, void *ptr, size_t len)
 static void
 pgstat_write_statsfile(void)
 {
-	FILE	   *fpout;
+	int			fd;
+	BufFileStream stream;
 	int32		format_id;
 	const char *tmpfile = PGSTAT_STAT_PERMANENT_TMPFILE;
 	const char *statfile = PGSTAT_STAT_PERMANENT_FILENAME;
 	dshash_seq_status hstat;
 	PgStatShared_HashEntry *ps;
+	bool		failed = false;
 
 	pgstat_assert_is_up();
 
@@ -1272,8 +1275,8 @@ pgstat_write_statsfile(void)
 	/*
 	 * Open the statistics temp file to write out the current values.
 	 */
-	fpout = AllocateFile(tmpfile, PG_BINARY_W);
-	if (fpout == NULL)
+	fd = OpenTransientFile(tmpfile, O_CREAT | O_WRONLY | PG_BINARY);
+	if (fd < 0)
 	{
 		ereport(LOG,
 				(errcode_for_file_access(),
@@ -1281,12 +1284,14 @@ pgstat_write_statsfile(void)
 						tmpfile)));
 		return;
 	}
+	BufFileStreamInitFD(&stream, fd, true, tmpfile, WAIT_EVENT_PGSTAT_WRITE,
+						BLCKSZ, LOG);
 
 	/*
 	 * Write the file header --- currently just a format ID.
 	 */
 	format_id = PGSTAT_FILE_FORMAT_ID;
-	write_chunk_s(fpout, &format_id);
+	write_chunk_s(&stream, &format_id, &failed);
 
 	/*
 	 * XXX: The following could now be generalized to just iterate over
@@ -1298,31 +1303,31 @@ pgstat_write_statsfile(void)
 	 * Write archiver stats struct
 	 */
 	pgstat_build_snapshot_fixed(PGSTAT_KIND_ARCHIVER);
-	write_chunk_s(fpout, &pgStatLocal.snapshot.archiver);
+	write_chunk_s(&stream, &pgStatLocal.snapshot.archiver, &failed);
 
 	/*
 	 * Write bgwriter stats struct
 	 */
 	pgstat_build_snapshot_fixed(PGSTAT_KIND_BGWRITER);
-	write_chunk_s(fpout, &pgStatLocal.snapshot.bgwriter);
+	write_chunk_s(&stream, &pgStatLocal.snapshot.bgwriter, &failed);
 
 	/*
 	 * Write checkpointer stats struct
 	 */
 	pgstat_build_snapshot_fixed(PGSTAT_KIND_CHECKPOINTER);
-	write_chunk_s(fpout, &pgStatLocal.snapshot.checkpointer);
+	write_chunk_s(&stream, &pgStatLocal.snapshot.checkpointer, &failed);
 
 	/*
 	 * Write SLRU stats struct
 	 */
 	pgstat_build_snapshot_fixed(PGSTAT_KIND_SLRU);
-	write_chunk_s(fpout, &pgStatLocal.snapshot.slru);
+	write_chunk_s(&stream, &pgStatLocal.snapshot.slru, &failed);
 
 	/*
 	 * Write WAL stats struct
 	 */
 	pgstat_build_snapshot_fixed(PGSTAT_KIND_WAL);
-	write_chunk_s(fpout, &pgStatLocal.snapshot.wal);
+	write_chunk_s(&stream, &pgStatLocal.snapshot.wal, &failed);
 
 	/*
 	 * Walk through the stats entries
@@ -1350,8 +1355,8 @@ pgstat_write_statsfile(void)
 		if (!kind_info->to_serialized_name)
 		{
 			/* normal stats entry, identified by PgStat_HashKey */
-			fputc('S', fpout);
-			write_chunk_s(fpout, &ps->key);
+			BufFileStreamWrite(&stream, "S", 1);
+			write_chunk_s(&stream, &ps->key, &failed);
 		}
 		else
 		{
@@ -1360,35 +1365,34 @@ pgstat_write_statsfile(void)
 
 			kind_info->to_serialized_name(shstats, &name);
 
-			fputc('N', fpout);
-			write_chunk_s(fpout, &ps->key.kind);
-			write_chunk_s(fpout, &name);
+			BufFileStreamWrite(&stream, "N", 1);
+			write_chunk_s(&stream, &ps->key.kind, &failed);
+			write_chunk_s(&stream, &name, &failed);
 		}
 
 		/* Write except the header part of the entry */
-		write_chunk(fpout,
+		write_chunk(&stream,
 					pgstat_get_entry_data(ps->key.kind, shstats),
-					pgstat_get_entry_len(ps->key.kind));
+					pgstat_get_entry_len(ps->key.kind), &failed);
 	}
 	dshash_seq_term(&hstat);
 
 	/*
 	 * No more output to be done. Close the temp file and replace the old
-	 * pgstat.stat with it.  The ferror() check replaces testing for error
-	 * after each individual fputc or fwrite (in write_chunk()) above.
+	 * pgstat.stat with it.
 	 */
-	fputc('E', fpout);
+	BufFileStreamWrite(&stream, "E", 1);
 
-	if (ferror(fpout))
+	if (failed)
 	{
 		ereport(LOG,
 				(errcode_for_file_access(),
 				 errmsg("could not write temporary statistics file \"%s\": %m",
 						tmpfile)));
-		FreeFile(fpout);
+		BufFileStreamClose(&stream, 0);
 		unlink(tmpfile);
 	}
-	else if (FreeFile(fpout) < 0)
+	else if (BufFileStreamClose(&stream, 0) < 0)
 	{
 		ereport(LOG,
 				(errcode_for_file_access(),
@@ -1408,12 +1412,12 @@ pgstat_write_statsfile(void)
 
 /* helpers for pgstat_read_statsfile() */
 static bool
-read_chunk(FILE *fpin, void *ptr, size_t len)
+read_chunk(BufFileStream *stream, void *ptr, size_t len)
 {
-	return fread(ptr, 1, len, fpin) == len;
+	return BufFileStreamRead(stream, ptr, len) == len;
 }
 
-#define read_chunk_s(fpin, ptr) read_chunk(fpin, ptr, sizeof(*ptr))
+#define read_chunk_s(stream, ptr) read_chunk(stream, ptr, sizeof(*ptr))
 
 /*
  * Reads in existing statistics file into the shared stats hash.
@@ -1424,7 +1428,8 @@ read_chunk(FILE *fpin, void *ptr, size_t len)
 static void
 pgstat_read_statsfile(void)
 {
-	FILE	   *fpin;
+	int			fd;
+	BufFileStream stream;
 	int32		format_id;
 	bool		found;
 	const char *statfile = PGSTAT_STAT_PERMANENT_FILENAME;
@@ -1444,7 +1449,7 @@ pgstat_read_statsfile(void)
 	 * has not yet written the stats file for the first time.  Any other
 	 * failure condition is suspicious.
 	 */
-	if ((fpin = AllocateFile(statfile, PG_BINARY_R)) == NULL)
+	if ((fd = OpenTransientFile(statfile, O_RDONLY | PG_BINARY)) < 0)
 	{
 		if (errno != ENOENT)
 			ereport(LOG,
@@ -1454,11 +1459,13 @@ pgstat_read_statsfile(void)
 		pgstat_reset_after_failure();
 		return;
 	}
+	BufFileStreamInitFD(&stream, fd, true, statfile,
+						WAIT_EVENT_PGSTAT_READ, BLCKSZ, ERROR);
 
 	/*
 	 * Verify it's of the expected format.
 	 */
-	if (!read_chunk_s(fpin, &format_id) ||
+	if (!read_chunk_s(&stream, &format_id) ||
 		format_id != PGSTAT_FILE_FORMAT_ID)
 		goto error;
 
@@ -1471,31 +1478,31 @@ pgstat_read_statsfile(void)
 	/*
 	 * Read archiver stats struct
 	 */
-	if (!read_chunk_s(fpin, &shmem->archiver.stats))
+	if (!read_chunk_s(&stream, &shmem->archiver.stats))
 		goto error;
 
 	/*
 	 * Read bgwriter stats struct
 	 */
-	if (!read_chunk_s(fpin, &shmem->bgwriter.stats))
+	if (!read_chunk_s(&stream, &shmem->bgwriter.stats))
 		goto error;
 
 	/*
 	 * Read checkpointer stats struct
 	 */
-	if (!read_chunk_s(fpin, &shmem->checkpointer.stats))
+	if (!read_chunk_s(&stream, &shmem->checkpointer.stats))
 		goto error;
 
 	/*
 	 * Read SLRU stats struct
 	 */
-	if (!read_chunk_s(fpin, &shmem->slru.stats))
+	if (!read_chunk_s(&stream, &shmem->slru.stats))
 		goto error;
 
 	/*
 	 * Read WAL stats struct
 	 */
-	if (!read_chunk_s(fpin, &shmem->wal.stats))
+	if (!read_chunk_s(&stream, &shmem->wal.stats))
 		goto error;
 
 	/*
@@ -1504,7 +1511,9 @@ pgstat_read_statsfile(void)
 	 */
 	for (;;)
 	{
-		int			t = fgetc(fpin);
+		char		t;
+
+		BufFileStreamRead(&stream, &t, 1);
 
 		switch (t)
 		{
@@ -1520,7 +1529,7 @@ pgstat_read_statsfile(void)
 					if (t == 'S')
 					{
 						/* normal stats entry, identified by PgStat_HashKey */
-						if (!read_chunk_s(fpin, &key))
+						if (!read_chunk_s(&stream, &key))
 							goto error;
 
 						if (!pgstat_is_kind_valid(key.kind))
@@ -1533,9 +1542,9 @@ pgstat_read_statsfile(void)
 						PgStat_Kind kind;
 						NameData	name;
 
-						if (!read_chunk_s(fpin, &kind))
+						if (!read_chunk_s(&stream, &kind))
 							goto error;
-						if (!read_chunk_s(fpin, &name))
+						if (!read_chunk_s(&stream, &name))
 							goto error;
 						if (!pgstat_is_kind_valid(kind))
 							goto error;
@@ -1548,7 +1557,7 @@ pgstat_read_statsfile(void)
 						if (!kind_info->from_serialized_name(&name, &key))
 						{
 							/* skip over data for entry we don't care about */
-							if (fseek(fpin, pgstat_get_entry_len(kind), SEEK_CUR) != 0)
+							if (BufFileStreamSeek(&stream, pgstat_get_entry_len(kind), SEEK_CUR) != 0)
 								goto error;
 
 							continue;
@@ -1576,7 +1585,7 @@ pgstat_read_statsfile(void)
 					header = pgstat_init_entry(key.kind, p);
 					dshash_release_lock(pgStatLocal.shared_hash, p);
 
-					if (!read_chunk(fpin,
+					if (!read_chunk(&stream,
 									pgstat_get_entry_data(key.kind, header),
 									pgstat_get_entry_len(key.kind)))
 						goto error;
@@ -1585,7 +1594,7 @@ pgstat_read_statsfile(void)
 				}
 			case 'E':
 				/* check that 'E' actually signals end of file */
-				if (fgetc(fpin) != EOF)
+				if (BufFileStreamRead(&stream, &t, 1) != 0)
 					goto error;
 
 				goto done;
@@ -1596,7 +1605,7 @@ pgstat_read_statsfile(void)
 	}
 
 done:
-	FreeFile(fpin);
+	BufFileStreamClose(&stream, 0);
 
 	elog(DEBUG2, "removing permanent stats file \"%s\"", statfile);
 	unlink(statfile);

@@ -163,7 +163,8 @@ bbsink_server_archive_contents(bbsink *sink, size_t len)
 	int			nbytes;
 
 	nbytes = FileWrite(mysink->file, mysink->base.bbs_buffer, len,
-					   mysink->filepos, WAIT_EVENT_BASEBACKUP_WRITE);
+					   mysink->filepos, WAIT_EVENT_BASEBACKUP_WRITE,
+					   ERROR);
 
 	if (nbytes != len)
 	{
@@ -256,7 +257,8 @@ bbsink_server_manifest_contents(bbsink *sink, size_t len)
 	int			nbytes;
 
 	nbytes = FileWrite(mysink->file, mysink->base.bbs_buffer, len,
-					   mysink->filepos, WAIT_EVENT_BASEBACKUP_WRITE);
+					   mysink->filepos, WAIT_EVENT_BASEBACKUP_WRITE,
+					   ERROR);
 
 	if (nbytes != len)
 	{

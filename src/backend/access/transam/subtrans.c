@@ -177,6 +177,61 @@ SubTransGetTopmostTransaction(TransactionId xid)
 	return previousXid;
 }
 
+/*
+ * SubTransGetTopmostTransactionPrecedes
+ *
+ * Different form of SubTransGetTopmostTransaction() that minimizes the number
+ * of iterations required to get the parent or stop if it is earlier than cutoff.
+ */
+bool
+SubTransGetTopmostTransactionPrecedes(TransactionId *xid, TransactionId cutoff_xid, bool standby)
+{
+	TransactionId parentXid = *xid,
+				previousXid = *xid;
+
+	/* Can't ask about stuff that might not be around anymore */
+	Assert(TransactionIdFollowsOrEquals(cutoff_xid, TransactionXmin));
+	Assert(TransactionIdFollowsOrEquals(*xid, cutoff_xid));
+
+	while (TransactionIdIsValid(parentXid))
+	{
+		previousXid = parentXid;
+
+		/*
+		 * Stop as soon as we are earlier than the cutoff. This saves multiple
+		 * lookups against subtrans when we have a deeply nested subxid with
+		 * a later snapshot with an xmin much higher than TransactionXmin.
+		 */
+		if (TransactionIdPrecedes(parentXid, cutoff_xid))
+		{
+			*xid = previousXid;
+			return true;
+		}
+		parentXid = SubTransGetParent(parentXid);
+
+		/*
+		 * By convention the parent xid gets allocated first, so should always
+		 * precede the child xid. Anything else points to a corrupted data
+		 * structure that could lead to an infinite loop, so exit.
+		 */
+		if (!TransactionIdPrecedes(parentXid, previousXid))
+			elog(ERROR, "pg_subtrans contains invalid entry: xid %u points to parent xid %u",
+				 previousXid, parentXid);
+
+		/*
+		 * subxids always point directly at parent on standby, so we can avoid
+		 * multiple loops in that case.
+		 */
+		if (standby)
+			break;
+	}
+
+	Assert(TransactionIdIsValid(previousXid));
+
+	*xid = previousXid;
+
+	return false;
+}
 
 /*
  * Initialization of shared memory for SUBTRANS

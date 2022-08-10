@@ -2370,27 +2370,34 @@ GetSnapshotData(Snapshot snapshot)
 			 *
 			 * Again, our own XIDs are not included in the snapshot.
 			 */
-			if (!suboverflowed)
+			if (subxidStates[pgxactoff].overflowed)
+				suboverflowed = true;
+
+			/*
+			 * Include all subxids, whether or not we overflowed. This is
+			 * important because it can reduce the number of accesses to SUBTRANS
+			 * when we search snapshots, which is important for scalability,
+			 * especially in the presence of both overflowed and long running xacts.
+			 * This is true when fraction of subxids held in subxip is a large
+			 * fraction of the total subxids in use. In the case where one or more
+			 * transactions had more subxids in progress than the total size of
+			 * the cache this might not be true, but we consider that case to be
+			 * unlikely, even if it is possible.
+			 */
 			{
+				int			nsubxids = subxidStates[pgxactoff].count;
 
-				if (subxidStates[pgxactoff].overflowed)
-					suboverflowed = true;
-				else
+				if (nsubxids > 0)
 				{
-					int			nsubxids = subxidStates[pgxactoff].count;
+					int			pgprocno = pgprocnos[pgxactoff];
+					PGPROC	   *proc = &allProcs[pgprocno];
 
-					if (nsubxids > 0)
-					{
-						int			pgprocno = pgprocnos[pgxactoff];
-						PGPROC	   *proc = &allProcs[pgprocno];
+					pg_read_barrier();	/* pairs with GetNewTransactionId */
 
-						pg_read_barrier();	/* pairs with GetNewTransactionId */
-
-						memcpy(snapshot->subxip + subcount,
-							   (void *) proc->subxids.xids,
-							   nsubxids * sizeof(TransactionId));
-						subcount += nsubxids;
-					}
+					memcpy(snapshot->subxip + subcount,
+						   (void *) proc->subxids.xids,
+						   nsubxids * sizeof(TransactionId));
+					subcount += nsubxids;
 				}
 			}
 		}

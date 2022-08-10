@@ -638,13 +638,9 @@ CopySnapshot(Snapshot snapshot)
 		newsnap->xip = NULL;
 
 	/*
-	 * Setup subXID array. Don't bother to copy it if it had overflowed,
-	 * though, because it's not used anywhere in that case. Except if it's a
-	 * snapshot taken during recovery; all the top-level XIDs are in subxip as
-	 * well in that case, so we mustn't lose them.
+	 * Setup subXID array.
 	 */
-	if (snapshot->subxcnt > 0 &&
-		(!snapshot->suboverflowed || snapshot->takenDuringRecovery))
+	if (snapshot->subxcnt > 0)
 	{
 		newsnap->subxip = (TransactionId *) ((char *) newsnap + subxipoff);
 		memcpy(newsnap->subxip, snapshot->subxip,
@@ -1238,8 +1234,10 @@ ExportSnapshot(Snapshot snapshot)
 		snapshot->subxcnt + nchildren > GetMaxSnapshotSubxidCount())
 		appendStringInfoString(&buf, "sof:1\n");
 	else
-	{
 		appendStringInfoString(&buf, "sof:0\n");
+
+	/* then unconditionally, since we always include all subxids */
+	{
 		appendStringInfo(&buf, "sxcnt:%d\n", snapshot->subxcnt + nchildren);
 		for (i = 0; i < snapshot->subxcnt; i++)
 			appendStringInfo(&buf, "sxp:%u\n", snapshot->subxip[i]);
@@ -1490,7 +1488,7 @@ ImportSnapshot(const char *idstr)
 
 	snapshot.suboverflowed = parseIntFromText("sof:", &filebuf, path);
 
-	if (!snapshot.suboverflowed)
+	/* then unconditionally, since we always include all subxids */
 	{
 		snapshot.subxcnt = xcnt = parseIntFromText("sxcnt:", &filebuf, path);
 
@@ -1503,11 +1501,6 @@ ImportSnapshot(const char *idstr)
 		snapshot.subxip = (TransactionId *) palloc(xcnt * sizeof(TransactionId));
 		for (i = 0; i < xcnt; i++)
 			snapshot.subxip[i] = parseXidFromText("sxp:", &filebuf, path);
-	}
-	else
-	{
-		snapshot.subxcnt = 0;
-		snapshot.subxip = NULL;
 	}
 
 	snapshot.takenDuringRecovery = parseIntFromText("rec:", &filebuf, path);
@@ -2285,6 +2278,7 @@ bool
 XidInMVCCSnapshot(TransactionId xid, Snapshot snapshot)
 {
 	uint32		i;
+	bool		have_parent = false;
 
 	/*
 	 * Make a quick range check to eliminate most XIDs without looking at the
@@ -2302,92 +2296,136 @@ XidInMVCCSnapshot(TransactionId xid, Snapshot snapshot)
 		return true;
 
 	/*
+	 * This patch reorders the operations in XidMVCCSnapshot, so as to reduce
+	 * calls to SubTransGetParent to the absolute minimum needed. It also
+	 * introduces a number of optimizations based on detailed knowledge of
+	 * how KnonAssignedXids module works in procarray.c - the two are already
+	 * intimately connected, so no modularity violation here.
+	 * The previous code was neat, but not efficient for the overflow case.
+	 */
+retry_search:
+
+	/*
 	 * Snapshot information is stored slightly differently in snapshots taken
-	 * during recovery.
+	 * during recovery. xip is empty on standbys.
 	 */
 	if (!snapshot->takenDuringRecovery)
 	{
-		/*
-		 * If the snapshot contains full subxact data, the fastest way to
-		 * check things is just to compare the given XID against both subxact
-		 * XIDs and top-level XIDs.  If the snapshot overflowed, we have to
-		 * use pg_subtrans to convert a subxact XID to its parent XID, but
-		 * then we need only look at top-level XIDs not subxacts.
-		 */
-		if (!snapshot->suboverflowed)
-		{
-			/* we have full data, so search subxip */
-			int32		j;
-
-			for (j = 0; j < snapshot->subxcnt; j++)
-			{
-				if (TransactionIdEquals(xid, snapshot->subxip[j]))
-					return true;
-			}
-
-			/* not there, fall through to search xip[] */
-		}
-		else
-		{
-			/*
-			 * Snapshot overflowed, so convert xid to top-level.  This is safe
-			 * because we eliminated too-old XIDs above.
-			 */
-			xid = SubTransGetTopmostTransaction(xid);
-
-			/*
-			 * If xid was indeed a subxact, we might now have an xid < xmin,
-			 * so recheck to avoid an array scan.  No point in rechecking
-			 * xmax.
-			 */
-			if (TransactionIdPrecedes(xid, snapshot->xmin))
-				return false;
-		}
+		int32 j;
 
 		for (i = 0; i < snapshot->xcnt; i++)
 		{
 			if (TransactionIdEquals(xid, snapshot->xip[i]))
 				return true;
 		}
-	}
-	else
-	{
-		int32		j;
 
 		/*
-		 * In recovery we store all xids in the subxact array because it is by
-		 * far the bigger array, and we mostly don't know which xids are
-		 * top-level and which are subxacts. The xip array is empty.
-		 *
-		 * We start by searching subtrans, if we overflowed.
+		 * If we have the parent xid, then the xid is not in snapshot
 		 */
-		if (snapshot->suboverflowed)
-		{
-			/*
-			 * Snapshot overflowed, so convert xid to top-level.  This is safe
-			 * because we eliminated too-old XIDs above.
-			 */
-			xid = SubTransGetTopmostTransaction(xid);
-
-			/*
-			 * If xid was indeed a subxact, we might now have an xid < xmin,
-			 * so recheck to avoid an array scan.  No point in rechecking
-			 * xmax.
-			 */
-			if (TransactionIdPrecedes(xid, snapshot->xmin))
-				return false;
-		}
+		if (have_parent)
+			return false;
 
 		/*
-		 * We now have either a top-level xid higher than xmin or an
-		 * indeterminate xid. We don't know whether it's top level or subxact
-		 * but it doesn't matter. If it's present, the xid is visible.
+		 * subxcnt will be zero in some cases
 		 */
 		for (j = 0; j < snapshot->subxcnt; j++)
 		{
 			if (TransactionIdEquals(xid, snapshot->subxip[j]))
 				return true;
 		}
+	}
+	else
+	{
+		int	first;
+		int	last;
+		int	result_index = -1;
+
+#ifdef USE_ASSERT_CHECKING
+		if (snapshot->subxcnt > 1)
+		{
+			int32 j;
+
+			/*
+			 * Confirm invariant that subxip array is in sorted order.
+			 * Start at the 2nd element, j=1
+			 */
+			for (j = 1; j < snapshot->subxcnt; j++)
+			{
+				if (TransactionIdPrecedes(snapshot->subxip[j - 1], snapshot->subxip[j]))
+				{
+					elog(ERROR, "snapshot subxip array not in sorted order during recovery");
+					Assert(false);
+				}
+			}
+		}
+#endif
+
+		/*
+		 * KnownAssignedXids stores xids in sorted order, a property that is
+		 * relied upon for the removal of xids at commit. When we take a snapshot
+		 * the xids are also copied in sorted order, which means we can also use
+		 * binary search here to probe the xip array, rather than scan whole thing.
+		 *
+		 * Note that standby snapshots also contain full subxid information for
+		 * non-overflowed transactions, which increases the chances that we will
+		 * find our xid here, even if the snapshot as a whole has overflowed.
+		 * That sounds like standby snapshots are larger, but we filter out any
+		 * subxids greater than xmax, which we do not do in normal running.
+		 */
+		first = 0;
+		last = snapshot->subxcnt - 1;
+		while (first <= last)
+		{
+			int         mid_index;
+			TransactionId mid_xid;
+
+			mid_index = (first + last) / 2;
+			mid_xid = snapshot->subxip[mid_index];
+
+			if (xid == mid_xid)
+			{
+				result_index = mid_index;
+				break;
+			}
+			else if (TransactionIdPrecedes(xid, mid_xid))
+				last = mid_index - 1;
+			else
+				first = mid_index + 1;
+		}
+
+		if (result_index >= 0)
+			return true;			/* found in array */
+	}
+
+	if (!have_parent && snapshot->suboverflowed)
+	{
+		/*
+		 * If we haven't found xid yet, it might be because it is a subxid
+		 * that is not present because we overflowed, but it might also be
+		 * because the xid is not in the snapshot.
+		 *
+		 * It is important we do this step last because it is expensive,
+		 * and if everybody does this then SubTransSLRU glows white hot.
+		 *
+		 * Use SubTransGetTopmostTransactionPrecedes(), which has been
+		 * specially provided to help here. This does two things for us:
+		 *
+		 * 1. On standby, get the parent directly, since in a standby SUBTRANS
+		 * always stores the direct parent only. Doing this avoids
+		 * one lookup of subtrans, since SubTransGetTopmostTransaction()
+		 * always does at least 2 SUBTRANS lookups, the last lookup is
+		 * how the loop knows it has found the parent in normal running.
+		 *
+		 * 2. Stops the iteration to find the parent as soon as we find an
+		 * xid earlier than snapshot->xmin, so we do the minimum lookups.
+		 */
+		if (SubTransGetTopmostTransactionPrecedes(&xid,
+												  snapshot->xmin,
+												  snapshot->takenDuringRecovery))
+			return false;
+
+		have_parent = true;
+		goto retry_search; /* search arrays again, now we have parent */
 	}
 
 	return false;

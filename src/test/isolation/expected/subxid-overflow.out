@@ -1,0 +1,17 @@
+Parsed test spec with 2 sessions
+
+starting permutation: subxid xmax s2sel s1c
+step subxid: BEGIN; SELECT gen_subxids(100);
+gen_subxids
+-----------
+           
+(1 row)
+
+step xmax: BEGIN; INSERT INTO subxids VALUES (1); COMMIT;
+step s2sel: SELECT count(*) FROM subxids WHERE subx = 0;
+count
+-----
+    0
+(1 row)
+
+step s1c: COMMIT;

@@ -17,6 +17,7 @@
 extern void SubTransSetParent(TransactionId xid, TransactionId parent);
 extern TransactionId SubTransGetParent(TransactionId xid);
 extern TransactionId SubTransGetTopmostTransaction(TransactionId xid);
+extern bool SubTransGetTopmostTransactionPrecedes(TransactionId *xid, TransactionId cutoff_xid, bool standby);
 
 extern Size SUBTRANSShmemSize(void);
 extern void SUBTRANSShmemInit(void);

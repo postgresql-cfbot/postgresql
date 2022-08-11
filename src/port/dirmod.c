@@ -199,7 +199,11 @@ pgsymlink(const char *oldpath, const char *newpath)
 	if (dirhandle == INVALID_HANDLE_VALUE)
 		return -1;
 
-	/* make sure we have an unparsed native win32 path */
+	/*
+	 * We expect either an NT path or a "drive absolute" path like "C:\..."
+	 * that we convert to an NT path by bolting on a prefix and converting any
+	 * Unix-style path delimiters to NT-style.
+	 */
 	if (memcmp("\\??\\", oldpath, 4) != 0)
 		snprintf(nativeTarget, sizeof(nativeTarget), "\\??\\%s", oldpath);
 	else
@@ -351,10 +355,21 @@ pgreadlink(const char *path, char *buf, size_t size)
 	}
 
 	/*
-	 * If the path starts with "\??\", which it will do in most (all?) cases,
-	 * strip those out.
+	 * If the path starts with "\??\" followed by a "drive absolute" path
+	 * (known to Windows APIs as RtlPathTypeDriveAbsolute), then strip that
+	 * prefix.  This undoes some of the transformation performed by
+	 * pqsymlink(), to get back to a format that users are used to seeing.  We
+	 * don't know how to transform other path types that might be encountered
+	 * outside PGDATA, so we just return them directly.
 	 */
-	if (r > 4 && strncmp(buf, "\\??\\", 4) == 0)
+	if (r >= 7 &&
+		buf[0] == '\\' &&
+		buf[1] == '?' &&
+		buf[2] == '?' &&
+		buf[3] == '\\' &&
+		isalpha(buf[4]) &&
+		buf[5] == ':' &&
+		buf[6] == '\\')
 	{
 		memmove(buf, buf + 4, strlen(buf + 4) + 1);
 		r -= 4;

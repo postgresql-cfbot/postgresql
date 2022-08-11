@@ -184,15 +184,26 @@ _pglstat64(const char *name, struct stat *buf)
 int
 _pgstat64(const char *name, struct stat *buf)
 {
+	int			loops = 0;
 	int			ret;
 
 	ret = _pglstat64(name, buf);
 
 	/* Do we need to follow a symlink (junction point)? */
-	if (ret == 0 && S_ISLNK(buf->st_mode))
+	while (ret == 0 && S_ISLNK(buf->st_mode))
 	{
 		char		next[MAXPGPATH];
 		ssize_t		size;
+
+		if (++loops > 8)
+		{
+			/*
+			 * Give up. The error for too many symlinks is supposed to be
+			 * ELOOP, but Windows hasn't got it.
+			 */
+			errno = EIO;
+			return -1;
+		}
 
 		/*
 		 * _pglstat64() already called readlink() once to be able to fill in
@@ -219,17 +230,6 @@ _pgstat64(const char *name, struct stat *buf)
 		next[size] = 0;
 
 		ret = _pglstat64(next, buf);
-		if (ret == 0 && S_ISLNK(buf->st_mode))
-		{
-			/*
-			 * We're only prepared to go one hop, because we only expect to
-			 * deal with the simple cases that we create.  The error for too
-			 * many symlinks is supposed to be ELOOP, but Windows hasn't got
-			 * it.
-			 */
-			errno = EIO;
-			return -1;
-		}
 	}
 
 	return ret;

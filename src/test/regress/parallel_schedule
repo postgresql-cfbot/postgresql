@@ -72,6 +72,11 @@ ignore: random
 test: select_into select_distinct select_distinct_on select_implicit select_having subselect union case join aggregates transactions random portals arrays btree_index hash_index update delete namespace prepared_xacts
 
 # ----------
+# Aggregation pushdown tests
+# ----------
+test: agg_pushdown
+
+# ----------
 # Another group of parallel tests
 # ----------
 test: brin gin gist spgist privileges init_privs security_label collate matview lock replica_identity rowsecurity object_address tablesample groupingsets drop_operator password identity generated join_hash

@@ -1175,6 +1175,16 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
+		{"enable_agg_pushdown", PGC_USERSET, QUERY_TUNING_METHOD,
+			gettext_noop("Enables aggregate push-down."),
+			NULL,
+			GUC_EXPLAIN
+		},
+		&enable_agg_pushdown,
+		false,
+		NULL, NULL, NULL
+	},
+	{
 		{"enable_parallel_append", PGC_USERSET, QUERY_TUNING_METHOD,
 			gettext_noop("Enables the planner's use of parallel append plans."),
 			NULL,

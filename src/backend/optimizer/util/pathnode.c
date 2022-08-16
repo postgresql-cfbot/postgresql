@@ -2670,8 +2670,7 @@ create_projection_path(PlannerInfo *root,
 	pathnode->path.pathtype = T_Result;
 	pathnode->path.parent = rel;
 	pathnode->path.pathtarget = target;
-	/* For now, assume we are above any joins, so no parameterization */
-	pathnode->path.param_info = NULL;
+	pathnode->path.param_info = subpath->param_info;
 	pathnode->path.parallel_aware = false;
 	pathnode->path.parallel_safe = rel->consider_parallel &&
 		subpath->parallel_safe &&
@@ -3161,6 +3160,146 @@ create_agg_path(PlannerInfo *root,
 		target->cost.per_tuple * pathnode->path.rows;
 
 	return pathnode;
+}
+
+/*
+ * Apply AGG_SORTED aggregation path to subpath if it's suitably sorted.
+ *
+ * NULL is returned if sorting of subpath output is not suitable.
+ */
+AggPath *
+create_agg_sorted_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
+					   RelAggInfo *agg_info)
+{
+	Node	   *agg_exprs;
+	AggSplit	aggsplit;
+	AggClauseCosts agg_costs;
+	PathTarget *target;
+	double		dNumGroups;
+	ListCell   *lc1;
+	List	   *key_subset = NIL;
+	AggPath    *result = NULL;
+
+	aggsplit = AGGSPLIT_INITIAL_SERIAL;
+	agg_exprs = (Node *) agg_info->agg_exprs;
+	target = agg_info->target;
+
+	if (subpath->pathkeys == NIL)
+		return NULL;
+
+	if (!grouping_is_sortable(root->parse->groupClause))
+		return NULL;
+
+	/*
+	 * Find all query pathkeys that our relation does affect.
+	 */
+	foreach(lc1, root->group_pathkeys)
+	{
+		PathKey    *gkey = castNode(PathKey, lfirst(lc1));
+		ListCell   *lc2;
+
+		foreach(lc2, subpath->pathkeys)
+		{
+			PathKey    *skey = castNode(PathKey, lfirst(lc2));
+
+			if (skey == gkey)
+			{
+				key_subset = lappend(key_subset, gkey);
+				break;
+			}
+		}
+	}
+
+	if (key_subset == NIL)
+		return NULL;
+
+	/* Check if AGG_SORTED is useful for the whole query.  */
+	if (!pathkeys_contained_in(key_subset, subpath->pathkeys))
+		return NULL;
+
+	MemSet(&agg_costs, 0, sizeof(AggClauseCosts));
+	get_agg_clause_costs(root, aggsplit, &agg_costs);
+
+	Assert(agg_info->group_exprs != NIL);
+	dNumGroups = estimate_num_groups(root, agg_info->group_exprs,
+									 subpath->rows, NULL, NULL);
+
+	/*
+	 * qual is NIL because the HAVING clause cannot be evaluated until the
+	 * final value of the aggregate is known.
+	 */
+	result = create_agg_path(root, rel, subpath, target,
+							 AGG_SORTED, aggsplit,
+							 agg_info->group_clauses,
+							 NIL,
+							 &agg_costs,
+							 dNumGroups);
+
+	/* The agg path should require no fewer parameters than the plain one. */
+	result->path.param_info = subpath->param_info;
+
+	return result;
+}
+
+/*
+ * Apply AGG_HASHED aggregation to subpath.
+ */
+AggPath *
+create_agg_hashed_path(PlannerInfo *root, RelOptInfo *rel,
+					   Path *subpath, RelAggInfo *agg_info)
+{
+	bool		can_hash;
+	Node	   *agg_exprs;
+	AggSplit	aggsplit;
+	AggClauseCosts agg_costs;
+	PathTarget *target;
+	double		dNumGroups;
+	double		hashaggtablesize;
+	Query	   *parse = root->parse;
+	AggPath    *result = NULL;
+
+	/* Do not try to create hash table for each parameter value. */
+	Assert(subpath->param_info == NULL);
+
+	aggsplit = AGGSPLIT_INITIAL_SERIAL;
+	agg_exprs = (Node *) agg_info->agg_exprs;
+	target = agg_info->target;
+
+	MemSet(&agg_costs, 0, sizeof(AggClauseCosts));
+	get_agg_clause_costs(root, aggsplit, &agg_costs);
+
+	can_hash = (parse->groupClause != NIL &&
+				parse->groupingSets == NIL &&
+				root->numOrderedAggs == 0 &&
+				grouping_is_hashable(parse->groupClause));
+
+	if (can_hash)
+	{
+		Assert(agg_info->group_exprs != NIL);
+		dNumGroups = estimate_num_groups(root, agg_info->group_exprs,
+										 subpath->rows, NULL, NULL);
+
+		hashaggtablesize = estimate_hashagg_tablesize(root, subpath, &agg_costs,
+													  dNumGroups);
+
+		if (hashaggtablesize < work_mem * 1024L)
+		{
+			/*
+			 * qual is NIL because the HAVING clause cannot be evaluated until
+			 * the final value of the aggregate is known.
+			 */
+			result = create_agg_path(root, rel, subpath,
+									 target,
+									 AGG_HASHED,
+									 aggsplit,
+									 agg_info->group_clauses,
+									 NIL,
+									 &agg_costs,
+									 dNumGroups);
+		}
+	}
+
+	return result;
 }
 
 /*

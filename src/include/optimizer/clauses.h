@@ -53,6 +53,9 @@ extern void CommuteOpExpr(OpExpr *clause);
 extern Query *inline_set_returning_function(PlannerInfo *root,
 											RangeTblEntry *rte);
 
+extern GroupedVarInfo* translate_expression_to_rel(PlannerInfo* root,
+	GroupedVarInfo* gvi, Index relid);
+
 extern Bitmapset *pull_paramids(Expr *expr);
 
 #endif							/* CLAUSES_H */

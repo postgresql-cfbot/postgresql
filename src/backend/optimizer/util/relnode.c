@@ -793,11 +793,8 @@ build_child_join_rel(PlannerInfo *root, RelOptInfo *outer_rel,
 	AppendRelInfo **appinfos;
 	int			nappinfos;
 
-	/* Only joins between "other" relations land here. */
-	Assert(IS_OTHER_REL(outer_rel) && IS_OTHER_REL(inner_rel));
-
-	/* The parent joinrel should have consider_partitionwise_join set. */
-	Assert(parent_joinrel->consider_partitionwise_join);
+	/* Either of relations must be "other" relation at least. */
+	Assert(IS_OTHER_REL(outer_rel) || IS_OTHER_REL(inner_rel));
 
 	joinrel->reloptkind = RELOPT_OTHER_JOINREL;
 	joinrel->relids = bms_union(outer_rel->relids, inner_rel->relids);
@@ -855,8 +852,11 @@ build_child_join_rel(PlannerInfo *root, RelOptInfo *outer_rel,
 	joinrel->partexprs = NULL;
 	joinrel->nullable_partexprs = NULL;
 
-	joinrel->top_parent_relids = bms_union(outer_rel->top_parent_relids,
-										   inner_rel->top_parent_relids);
+	joinrel->top_parent_relids =
+		bms_union(IS_OTHER_REL(outer_rel) ?
+				  outer_rel->top_parent_relids : outer_rel->relids,
+				  IS_OTHER_REL(inner_rel) ?
+				  inner_rel->top_parent_relids : inner_rel->relids);
 
 	/* Compute information relevant to foreign relations. */
 	set_foreign_rel_properties(joinrel, outer_rel, inner_rel);
@@ -2051,9 +2051,8 @@ build_child_join_reltarget(PlannerInfo *root,
 {
 	/* Build the targetlist */
 	childrel->reltarget->exprs = (List *)
-		adjust_appendrel_attrs(root,
-							   (Node *) parentrel->reltarget->exprs,
-							   nappinfos, appinfos);
+		adjust_appendrel_attrs_multilevel(root, (Node *)parentrel->reltarget->exprs,
+										childrel->relids, parentrel->relids);
 
 	/* Set the cost and width fields */
 	childrel->reltarget->cost.startup = parentrel->reltarget->cost.startup;

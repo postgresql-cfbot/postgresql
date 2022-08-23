@@ -2678,9 +2678,10 @@ ClosePostmasterPorts(bool am_syslogger)
 
 
 /*
- * InitProcessGlobals -- set MyProcPid, MyStartTime[stamp], random seeds
+ * InitProcessGlobals -- set some global variables for this process
  *
- * Called early in the postmaster and every backend.
+ * This sets MyProcPid, MyStartTime[stamp], random seeds, and initializes
+ * MyClientConnectionInfo.  Called early in the postmaster and every backend.
  */
 void
 InitProcessGlobals(void)
@@ -2688,6 +2689,7 @@ InitProcessGlobals(void)
 	MyProcPid = getpid();
 	MyStartTimestamp = GetCurrentTimestamp();
 	MyStartTime = timestamptz_to_time_t(MyStartTimestamp);
+	memset(&MyClientConnectionInfo, 0, sizeof(MyClientConnectionInfo));
 
 	/*
 	 * Set a different global seed in every process.  We want something

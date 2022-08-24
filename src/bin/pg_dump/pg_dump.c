@@ -54,7 +54,9 @@
 #include "catalog/pg_subscription.h"
 #include "catalog/pg_trigger_d.h"
 #include "catalog/pg_type_d.h"
+#include "common/compression.h"
 #include "common/connect.h"
+#include "compress_io.h"
 #include "dumputils.h"
 #include "fe_utils/option_utils.h"
 #include "fe_utils/string_utils.h"
@@ -163,6 +165,8 @@ static void setup_connection(Archive *AH,
 							 const char *dumpencoding, const char *dumpsnapshot,
 							 char *use_role);
 static ArchiveFormat parseArchiveFormat(const char *format, ArchiveMode *mode);
+static bool parse_compression_option(const char *opt,
+									 pg_compress_specification *compress_spec);
 static void expand_schema_name_patterns(Archive *fout,
 										SimpleStringList *patterns,
 										SimpleOidList *oids,
@@ -339,8 +343,9 @@ main(int argc, char **argv)
 	const char *dumpsnapshot = NULL;
 	char	   *use_role = NULL;
 	int			numWorkers = 1;
-	int			compressLevel = -1;
 	int			plainText = 0;
+	pg_compress_specification compress_spec = {0};
+	bool		user_compression_defined = false;
 	ArchiveFormat archiveFormat = archUnknown;
 	ArchiveMode archiveMode;
 
@@ -560,10 +565,10 @@ main(int argc, char **argv)
 				dopt.aclsSkip = true;
 				break;
 
-			case 'Z':			/* Compression Level */
-				if (!option_parse_int(optarg, "-Z/--compress", 0, 9,
-									  &compressLevel))
+			case 'Z':			/* Compression */
+				if (!parse_compression_option(optarg, &compress_spec))
 					exit_nicely(1);
+				user_compression_defined = true;
 				break;
 
 			case 0:
@@ -686,22 +691,22 @@ main(int argc, char **argv)
 	if (archiveFormat == archNull)
 		plainText = 1;
 
-	/* Custom and directory formats are compressed by default, others not */
-	if (compressLevel == -1)
+	/*
+	 * Custom and directory formats are compressed by default (zlib), others
+	 * not
+	 */
+	if (user_compression_defined == false)
 	{
+		compress_spec.algorithm = PG_COMPRESSION_NONE;
+		compress_spec.level = INT_MIN;
 #ifdef HAVE_LIBZ
 		if (archiveFormat == archCustom || archiveFormat == archDirectory)
-			compressLevel = Z_DEFAULT_COMPRESSION;
-		else
+		{
+			compress_spec.algorithm = PG_COMPRESSION_GZIP;
+			compress_spec.level = Z_DEFAULT_COMPRESSION;
+		}
 #endif
-			compressLevel = 0;
 	}
-
-#ifndef HAVE_LIBZ
-	if (compressLevel != 0)
-		pg_log_warning("requested compression not available in this installation -- archive will be uncompressed");
-	compressLevel = 0;
-#endif
 
 	/*
 	 * If emitting an archive format, we always want to emit a DATABASE item,
@@ -715,8 +720,8 @@ main(int argc, char **argv)
 		pg_fatal("parallel backup only supported by the directory format");
 
 	/* Open the output file */
-	fout = CreateArchive(filename, archiveFormat, compressLevel, dosync,
-						 archiveMode, setupDumpWorker);
+	fout = CreateArchive(filename, archiveFormat, compress_spec,
+						 dosync, archiveMode, setupDumpWorker);
 
 	/* Make dump options accessible right away */
 	SetArchiveOptions(fout, &dopt, NULL);
@@ -947,10 +952,7 @@ main(int argc, char **argv)
 	ropt->sequence_data = dopt.sequence_data;
 	ropt->binary_upgrade = dopt.binary_upgrade;
 
-	if (compressLevel == -1)
-		ropt->compression = 0;
-	else
-		ropt->compression = compressLevel;
+	ropt->compress_spec = compress_spec;
 
 	ropt->suppressDumpWarnings = true;	/* We've already shown them */
 
@@ -997,7 +999,8 @@ help(const char *progname)
 	printf(_("  -j, --jobs=NUM               use this many parallel jobs to dump\n"));
 	printf(_("  -v, --verbose                verbose mode\n"));
 	printf(_("  -V, --version                output version information, then exit\n"));
-	printf(_("  -Z, --compress=0-9           compression level for compressed formats\n"));
+	printf(_("  -Z, --compress=METHOD[:LEVEL]\n"
+			 "                               compress as specified\n"));
 	printf(_("  --lock-wait-timeout=TIMEOUT  fail after waiting TIMEOUT for a table lock\n"));
 	printf(_("  --no-sync                    do not wait for changes to be written safely to disk\n"));
 	printf(_("  -?, --help                   show this help, then exit\n"));
@@ -1255,6 +1258,114 @@ get_synchronized_snapshot(Archive *fout)
 	PQclear(res);
 
 	return result;
+}
+
+/*
+ * Interprets a compression option of the format 'method[:LEVEL]' of legacy just
+ * '[LEVEL]'. In the later format, gzip is implied. The parsed method and level
+ * are returned in pg_compress_specification. In case of error, the function
+ * returns false.
+ */
+static bool
+parse_compression_option(const char *opt,
+						 pg_compress_specification *compress_spec)
+{
+	char	   *method;
+	const char *sep;
+	int			methodlen;
+	bool		supports_compression = true;
+	bool		res = true;
+
+	/* set defaults */
+	compress_spec->algorithm = PG_COMPRESSION_NONE;
+	compress_spec->level = INT_MIN;
+
+	/* find the separator if exists */
+	sep = strchr(opt, ':');
+
+	/*
+	 * If there is no separator, then it is either a legacy format, or only
+	 * the method has been passed.
+	 */
+	if (!sep)
+	{
+		if (strspn(opt, "-0123456789") == strlen(opt))
+		{
+			res = option_parse_int(opt, "-Z/--compress", 0, 9,
+								   &(compress_spec->level));
+			compress_spec->algorithm = (compress_spec->level > 0) ?
+				PG_COMPRESSION_GZIP :
+				PG_COMPRESSION_NONE;
+		}
+		else
+		{
+			method = pg_strdup(opt);
+			res = parse_compress_algorithm(method,
+										   &compress_spec->algorithm);
+			if (!res)
+				pg_log_error("invalid compression method \"%s\" (gzip, lz4, none)",
+							 method);
+
+			pg_free(method);
+		}
+	}
+	else
+	{
+		/* otherwise, it should be method:LEVEL */
+		methodlen = sep - opt + 1;
+		method = pg_malloc0(methodlen);
+		snprintf(method, methodlen, "%.*s", methodlen - 1, opt);
+
+		res = parse_compress_algorithm(method, &compress_spec->algorithm);
+		if (res)
+		{
+			char	   *error_detail = NULL;
+			char	   *detail;
+
+			sep++;
+			detail = pg_strdup(sep);
+			parse_compress_specification(compress_spec->algorithm,
+										 detail,
+										 compress_spec);
+			error_detail = validate_compress_specification(compress_spec);
+			if (error_detail != NULL)
+			{
+				pg_log_error("invalid compression specification: %s", error_detail);
+				res = false;
+			}
+
+			pg_free(detail);
+		}
+
+		pg_free(method);
+	}
+
+	/* there is no need to check further when an error is already detected */
+	if (!res)
+		return false;
+
+	/* verify that the requested compression is supported */
+	if (compress_spec->algorithm != PG_COMPRESSION_NONE &&
+		compress_spec->algorithm != PG_COMPRESSION_LZ4 &&
+		compress_spec->algorithm != PG_COMPRESSION_GZIP)
+		supports_compression = false;
+
+#ifndef HAVE_LIBZ
+	if (compress_spec->algorithm == PG_COMPRESSION_GZIP)
+		supports_compression = false;
+#endif
+#ifndef USE_LZ4
+	if (compression_spec->algorithm == PG_COMPRESSION_LZ4)
+		supports_compression = false;
+#endif
+
+	if (!supports_compression)
+	{
+		pg_log_warning("requested compression not available in this installation -- archive will be uncompressed");
+		compress_spec->algorithm = PG_COMPRESSION_NONE;
+	}
+
+	return true;
 }
 
 static ArchiveFormat

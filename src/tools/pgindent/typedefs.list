@@ -57,6 +57,7 @@ AlenState
 Alias
 AllocBlock
 AllocChunk
+AllocFreelistLink
 AllocPointer
 AllocSet
 AllocSetContext
@@ -1522,12 +1523,14 @@ MemoizeKey
 MemoizePath
 MemoizeState
 MemoizeTuple
+MemoryChunk
 MemoryContext
 MemoryContextCallback
 MemoryContextCallbackFunction
 MemoryContextCounters
 MemoryContextData
 MemoryContextMethods
+MemoryContextMethodID
 MemoryStatsPrintFunc
 MergeAction
 MergeActionState

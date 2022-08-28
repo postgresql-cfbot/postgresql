@@ -264,8 +264,7 @@ stop_postmaster(void)
 		int			r;
 
 		/* On Windows, system() seems not to force fflush, so... */
-		fflush(stdout);
-		fflush(stderr);
+		fflush(NULL);
 
 		snprintf(buf, sizeof(buf),
 				 "\"%s%spg_ctl\" stop -D \"%s/data\" -s",
@@ -1063,13 +1062,9 @@ spawn_process(const char *cmdline)
 	pid_t		pid;
 
 	/*
-	 * Must flush I/O buffers before fork.  Ideally we'd use fflush(NULL) here
-	 * ... does anyone still care about systems where that doesn't work?
+	 * Must flush I/O buffers before fork.
 	 */
-	fflush(stdout);
-	fflush(stderr);
-	if (logfile)
-		fflush(logfile);
+	fflush(NULL);
 
 #ifdef EXEC_BACKEND
 	pg_disable_aslr();

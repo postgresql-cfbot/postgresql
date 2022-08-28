@@ -448,8 +448,7 @@ start_postmaster(void)
 	pgpid_t		pm_pid;
 
 	/* Flush stdio channels just before fork, to avoid double-output problems */
-	fflush(stdout);
-	fflush(stderr);
+	fflush(NULL);
 
 #ifdef EXEC_BACKEND
 	pg_disable_aslr();

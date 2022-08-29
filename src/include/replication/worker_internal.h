@@ -30,6 +30,27 @@ typedef struct LogicalRepWorker
 	/* Indicates if this slot is used or free. */
 	bool		in_use;
 
+	/* 
+	 * Indicates if worker is running for the first time
+	 * or in reuse
+	 */
+	bool		is_first_run;
+
+	/* 
+	 * Indicates if the sync worker created a replication slot
+	 * or it reuses an existing one created by another worker.
+	 */
+	bool		created_slot;
+
+	/* 
+	 * Unique identifier for replication slot to be 
+	 * created by tablesnync workers, if needed.
+	 */
+	int64 	 	rep_slot_id;
+
+	/* Replication slot name used by the worker. */
+	char		*slot_name;
+
 	/* Increased every time the slot is taken by new worker. */
 	uint16		generation;
 
@@ -51,6 +72,11 @@ typedef struct LogicalRepWorker
 	XLogRecPtr	relstate_lsn;
 	slock_t		relmutex;
 
+	/* 
+	 * Used to indicate whether sync worker will be reused for another relation
+	 */
+	bool		move_to_next_rel;
+	
 	/*
 	 * Used to create the changes and subxact files for the streaming
 	 * transactions.  Upon the arrival of the first streaming transaction, the
@@ -85,7 +111,7 @@ extern LogicalRepWorker *logicalrep_worker_find(Oid subid, Oid relid,
 												bool only_running);
 extern List *logicalrep_workers_find(Oid subid, bool only_running);
 extern void logicalrep_worker_launch(Oid dbid, Oid subid, const char *subname,
-									 Oid userid, Oid relid);
+									 Oid userid, Oid relid, int64 slotid);
 extern void logicalrep_worker_stop(Oid subid, Oid relid);
 extern void logicalrep_worker_wakeup(Oid subid, Oid relid);
 extern void logicalrep_worker_wakeup_ptr(LogicalRepWorker *worker);

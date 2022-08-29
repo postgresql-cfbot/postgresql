@@ -44,6 +44,8 @@ CATALOG(pg_subscription_rel,6102,SubscriptionRelRelationId)
 											 * used for synchronization
 											 * coordination, or NULL if not
 											 * valid */
+	text		srrelslotname BKI_FORCE_NULL;	/* name of the replication slot for relatio in subscription */
+
 #endif
 } FormData_pg_subscription_rel;
 
@@ -81,11 +83,17 @@ typedef struct SubscriptionRelState
 } SubscriptionRelState;
 
 extern void AddSubscriptionRelState(Oid subid, Oid relid, char state,
-									XLogRecPtr sublsn);
+									XLogRecPtr sublsn, char *relslotname);
 extern void UpdateSubscriptionRelState(Oid subid, Oid relid, char state,
 									   XLogRecPtr sublsn);
 extern char GetSubscriptionRelState(Oid subid, Oid relid, XLogRecPtr *sublsn);
 extern void RemoveSubscriptionRel(Oid subid, Oid relid);
+
+extern void UpdateSubscriptionRelReplicationSlot(Oid subid, Oid relid, char *relslotname);
+extern void GetSubscriptionRelReplicationSlot(Oid subid, Oid relid, char *slotname);
+
+extern void UpdateSubscriptionRelStateAndSlot(Oid subid, Oid relid, char state,
+									XLogRecPtr sublsn, char *relslotname);
 
 extern bool HasSubscriptionRelations(Oid subid);
 extern List *GetSubscriptionRelations(Oid subid, bool not_ready);

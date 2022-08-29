@@ -263,7 +263,7 @@ logicalrep_workers_find(Oid subid, bool only_running)
  */
 void
 logicalrep_worker_launch(Oid dbid, Oid subid, const char *subname, Oid userid,
-						 Oid relid)
+						 Oid relid, int64 slotid)
 {
 	BackgroundWorker bgw;
 	BackgroundWorkerHandle *bgw_handle;
@@ -370,7 +370,11 @@ retry:
 	/* Prepare the worker slot. */
 	worker->launch_time = now;
 	worker->in_use = true;
+	worker->is_first_run = true;
 	worker->generation++;
+	worker->created_slot = false;
+	worker->rep_slot_id = slotid;
+	worker->slot_name = (char *) palloc(NAMEDATALEN);
 	worker->proc = NULL;
 	worker->dbid = dbid;
 	worker->userid = userid;
@@ -378,6 +382,7 @@ retry:
 	worker->relid = relid;
 	worker->relstate = SUBREL_STATE_UNKNOWN;
 	worker->relstate_lsn = InvalidXLogRecPtr;
+	worker->move_to_next_rel = false;
 	worker->stream_fileset = NULL;
 	worker->last_lsn = InvalidXLogRecPtr;
 	TIMESTAMP_NOBEGIN(worker->last_send_time);
@@ -868,7 +873,7 @@ ApplyLauncherMain(Datum main_arg)
 					wait_time = wal_retrieve_retry_interval;
 
 					logicalrep_worker_launch(sub->dbid, sub->oid, sub->name,
-											 sub->owner, InvalidOid);
+											 sub->owner, InvalidOid, 0);
 				}
 			}
 

@@ -35,7 +35,7 @@ PostgreSQL documentation
 [ WITH [ RECURSIVE ] <replaceable class="parameter">with_query</replaceable> [, ...] ]
 SELECT [ ALL | DISTINCT [ ON ( <replaceable class="parameter">expression</replaceable> [, ...] ) ] ]
     [ * | <replaceable class="parameter">expression</replaceable> [ [ AS ] <replaceable class="parameter">output_name</replaceable> ] [, ...] ]
-    [ FROM <replaceable class="parameter">from_item</replaceable> [, ...] ]
+    [ FROM { <replaceable class="parameter">from_item</replaceable> | <replaceable class="parameter">join_expression</replaceable> } [, ...] ]
     [ WHERE <replaceable class="parameter">condition</replaceable> ]
     [ GROUP BY [ ALL | DISTINCT ] <replaceable class="parameter">grouping_element</replaceable> [, ...] ]
     [ HAVING <replaceable class="parameter">condition</replaceable> ]
@@ -46,6 +46,14 @@ SELECT [ ALL | DISTINCT [ ON ( <replaceable class="parameter">expression</replac
     [ OFFSET <replaceable class="parameter">start</replaceable> [ ROW | ROWS ] ]
     [ FETCH { FIRST | NEXT } [ <replaceable class="parameter">count</replaceable> ] { ROW | ROWS } { ONLY | WITH TIES } ]
     [ FOR { UPDATE | NO KEY UPDATE | SHARE | KEY SHARE } [ OF <replaceable class="parameter">table_name</replaceable> [, ...] ] [ NOWAIT | SKIP LOCKED ] [...] ]
+
+<phrase>where <replaceable class="parameter">join_expression</replaceable> recursively joins two from_items:</phrase>
+
+    { <replaceable class="parameter">from_item</replaceable> | <replaceable class="parameter">join_expression</replaceable> }
+        {  [ NATURAL ] <replaceable class="parameter">join_type</replaceable> <replaceable class="parameter">from_item</replaceable>
+        |  <replaceable class="parameter">join_type</replaceable> <replaceable class="parameter">from_item</replaceable> ON <replaceable class="parameter">join_condition</replaceable>
+        |  <replaceable class="parameter">join_type</replaceable> <replaceable class="parameter">from_item</replaceable> USING ( <replaceable class="parameter">join_column</replaceable> [, ...] )
+        }
 
 <phrase>where <replaceable class="parameter">from_item</replaceable> can be one of:</phrase>
 
@@ -59,7 +67,6 @@ SELECT [ ALL | DISTINCT [ ON ( <replaceable class="parameter">expression</replac
     [ LATERAL ] <replaceable class="parameter">function_name</replaceable> ( [ <replaceable class="parameter">argument</replaceable> [, ...] ] ) AS ( <replaceable class="parameter">column_definition</replaceable> [, ...] )
     [ LATERAL ] ROWS FROM( <replaceable class="parameter">function_name</replaceable> ( [ <replaceable class="parameter">argument</replaceable> [, ...] ] ) [ AS ( <replaceable class="parameter">column_definition</replaceable> [, ...] ) ] [, ...] )
                 [ WITH ORDINALITY ] [ [ AS ] <replaceable class="parameter">alias</replaceable> [ ( <replaceable class="parameter">column_alias</replaceable> [, ...] ) ] ]
-    <replaceable class="parameter">from_item</replaceable> [ NATURAL ] <replaceable class="parameter">join_type</replaceable> <replaceable class="parameter">from_item</replaceable> [ ON <replaceable class="parameter">join_condition</replaceable> | USING ( <replaceable class="parameter">join_column</replaceable> [, ...] ) [ AS <replaceable class="parameter">join_using_alias</replaceable> ] ]
 
 <phrase>and <replaceable class="parameter">grouping_element</replaceable> can be one of:</phrase>
 
@@ -108,6 +115,9 @@ TABLE [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ * ]
       virtual table.)  If more than one element is specified in the
       <literal>FROM</literal> list, they are cross-joined together.
       (See <xref linkend="sql-from"/> below.)
+      A <replaceable class="parameter">join_expression</replaceable>
+      element provides a single virtual table, called a Join Tree,
+      resulting from the joining of all its sub-elements
      </para>
     </listitem>
 
@@ -390,8 +400,18 @@ TABLE [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ * ]
    </para>
 
    <para>
-    The <literal>FROM</literal> clause can contain the following
-    elements:
+    The <replaceable class="parameter">join_expression</replaceable>
+    syntax provides an explicit way to join together exactly two sources.
+    However, this has a recursive nature, the first source can itself be
+    a <replaceable class="parameter">join_expression</replaceable>.
+    The first pair is combined using the join conditions and the resulting
+    virtual relation is then joined to the third source, and so on.
+    he columns of this virtual relation retain their source table identity.
+   </para>
+
+   <para>
+    The <literal>FROM</literal> clause can contain the following from_item
+    source table elements:
 
     <variablelist>
      <varlistentry>
@@ -583,6 +603,64 @@ TABLE [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ * ]
      </varlistentry>
 
      <varlistentry>
+      <term><literal>LATERAL</literal></term>
+      <listitem>
+       <para>
+        The <literal>LATERAL</literal> key word can precede a
+        sub-<command>SELECT</command> <literal>FROM</literal> item.  This allows the
+        sub-<command>SELECT</command> to refer to columns of <literal>FROM</literal>
+        items that appear before it in the <literal>FROM</literal> list.  (Without
+        <literal>LATERAL</literal>, each sub-<command>SELECT</command> is
+        evaluated independently and so cannot cross-reference any other
+        <literal>FROM</literal> item.)
+       </para>
+
+       <para><literal>LATERAL</literal> can also precede a function-call
+        <literal>FROM</literal> item, but in this case it is a noise word, because
+        the function expression can refer to earlier <literal>FROM</literal> items
+        in any case.
+       </para>
+
+       <para>
+        A <literal>LATERAL</literal> item can appear at top level in the
+        <literal>FROM</literal> list, or within a <literal>JOIN</literal> tree.  In the
+        latter case it can also refer to any items that are on the left-hand
+        side of a <literal>JOIN</literal> that it is on the right-hand side of.
+       </para>
+
+       <para>
+        When a <literal>FROM</literal> item contains <literal>LATERAL</literal>
+        cross-references, evaluation proceeds as follows: for each row of the
+        <literal>FROM</literal> item providing the cross-referenced column(s), or
+        set of rows of multiple <literal>FROM</literal> items providing the
+        columns, the <literal>LATERAL</literal> item is evaluated using that
+        row or row set's values of the columns.  The resulting row(s) are
+        joined as usual with the rows they were computed from.  This is
+        repeated for each row or set of rows from the column source table(s).
+       </para>
+
+       <para>
+        The column source table(s) must be <literal>INNER</literal> or
+        <literal>LEFT</literal> joined to the <literal>LATERAL</literal> item, else
+        there would not be a well-defined set of rows from which to compute
+        each set of rows for the <literal>LATERAL</literal> item.  Thus,
+        although a construct such as <literal><replaceable>X</replaceable> RIGHT JOIN
+        LATERAL <replaceable>Y</replaceable></literal> is syntactically valid, it is
+        not actually allowed for <replaceable>Y</replaceable> to reference
+        <replaceable>X</replaceable>.
+       </para>
+      </listitem>
+     </varlistentry>
+    </variablelist>
+    </para>
+
+    <para>
+     The following elements can only appear within a
+     <replaceable class="parameter">join_expression</replaceable>
+     and provide the instructions on how to combine the two sources together:
+
+    <variablelist>
+     <varlistentry>
       <term><replaceable class="parameter">join_type</replaceable></term>
       <listitem>
        <para>
@@ -710,56 +788,6 @@ TABLE [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ * ]
         tables that have matching names.  If there are no common
         column names, <literal>NATURAL</literal> is equivalent
         to <literal>ON TRUE</literal>.
-       </para>
-      </listitem>
-     </varlistentry>
-
-     <varlistentry>
-      <term><literal>LATERAL</literal></term>
-      <listitem>
-       <para>
-        The <literal>LATERAL</literal> key word can precede a
-        sub-<command>SELECT</command> <literal>FROM</literal> item.  This allows the
-        sub-<command>SELECT</command> to refer to columns of <literal>FROM</literal>
-        items that appear before it in the <literal>FROM</literal> list.  (Without
-        <literal>LATERAL</literal>, each sub-<command>SELECT</command> is
-        evaluated independently and so cannot cross-reference any other
-        <literal>FROM</literal> item.)
-       </para>
-
-       <para><literal>LATERAL</literal> can also precede a function-call
-        <literal>FROM</literal> item, but in this case it is a noise word, because
-        the function expression can refer to earlier <literal>FROM</literal> items
-        in any case.
-       </para>
-
-       <para>
-        A <literal>LATERAL</literal> item can appear at top level in the
-        <literal>FROM</literal> list, or within a <literal>JOIN</literal> tree.  In the
-        latter case it can also refer to any items that are on the left-hand
-        side of a <literal>JOIN</literal> that it is on the right-hand side of.
-       </para>
-
-       <para>
-        When a <literal>FROM</literal> item contains <literal>LATERAL</literal>
-        cross-references, evaluation proceeds as follows: for each row of the
-        <literal>FROM</literal> item providing the cross-referenced column(s), or
-        set of rows of multiple <literal>FROM</literal> items providing the
-        columns, the <literal>LATERAL</literal> item is evaluated using that
-        row or row set's values of the columns.  The resulting row(s) are
-        joined as usual with the rows they were computed from.  This is
-        repeated for each row or set of rows from the column source table(s).
-       </para>
-
-       <para>
-        The column source table(s) must be <literal>INNER</literal> or
-        <literal>LEFT</literal> joined to the <literal>LATERAL</literal> item, else
-        there would not be a well-defined set of rows from which to compute
-        each set of rows for the <literal>LATERAL</literal> item.  Thus,
-        although a construct such as <literal><replaceable>X</replaceable> RIGHT JOIN
-        LATERAL <replaceable>Y</replaceable></literal> is syntactically valid, it is
-        not actually allowed for <replaceable>Y</replaceable> to reference
-        <replaceable>X</replaceable>.
        </para>
       </listitem>
      </varlistentry>

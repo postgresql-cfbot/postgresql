@@ -1941,6 +1941,13 @@ get_database_list(void)
 
 	CommitTransactionCommand();
 
+	/*
+	 * CommitTransactionCommand returns with CurrentMemoryContext set
+	 * to TopMemoryContext. Switch back to the context that we entered
+	 * with.
+	 */
+	MemoryContextSwitchTo(resultcxt);
+
 	return dblist;
 }
 

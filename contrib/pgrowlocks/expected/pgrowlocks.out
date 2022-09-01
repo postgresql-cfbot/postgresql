@@ -1,0 +1,613 @@
+unused step name: s2_tuplock1
+unused step name: s2_tuplock2
+unused step name: s2_tuplock3
+unused step name: s2_tuplock4
+Parsed test spec with 2 sessions
+
+starting permutation: s1_begin s1_lcksvpt s1_tuplock1 s2_rowlocks s1_commit
+step s1_begin: BEGIN;
+step s1_lcksvpt: SELECT * FROM multixact_conflict FOR KEY SHARE; SAVEPOINT foo;
+a
+-
+1
+(1 row)
+
+step s1_tuplock1: SELECT * FROM multixact_conflict FOR KEY SHARE;
+a
+-
+1
+(1 row)
+
+step s2_rowlocks: select locked_row, multi, modes from pgrowlocks('multixact_conflict');
+locked_row|multi|modes            
+----------+-----+-----------------
+(0,1)     |f    |{"For Key Share"}
+(1 row)
+
+step s1_commit: COMMIT;
+
+starting permutation: s1_begin s1_lcksvpt s1_tuplock1 s2_rowlocks s1_commit
+step s1_begin: BEGIN;
+step s1_lcksvpt: SELECT * FROM multixact_conflict FOR KEY SHARE; SAVEPOINT foo;
+a
+-
+1
+(1 row)
+
+step s1_tuplock1: SELECT * FROM multixact_conflict FOR KEY SHARE;
+a
+-
+1
+(1 row)
+
+step s2_rowlocks: select locked_row, multi, modes from pgrowlocks('multixact_conflict');
+locked_row|multi|modes            
+----------+-----+-----------------
+(0,1)     |f    |{"For Key Share"}
+(1 row)
+
+step s1_commit: COMMIT;
+
+starting permutation: s1_begin s1_lcksvpt s1_tuplock1 s2_rowlocks s1_commit
+step s1_begin: BEGIN;
+step s1_lcksvpt: SELECT * FROM multixact_conflict FOR KEY SHARE; SAVEPOINT foo;
+a
+-
+1
+(1 row)
+
+step s1_tuplock1: SELECT * FROM multixact_conflict FOR KEY SHARE;
+a
+-
+1
+(1 row)
+
+step s2_rowlocks: select locked_row, multi, modes from pgrowlocks('multixact_conflict');
+locked_row|multi|modes            
+----------+-----+-----------------
+(0,1)     |f    |{"For Key Share"}
+(1 row)
+
+step s1_commit: COMMIT;
+
+starting permutation: s1_begin s1_lcksvpt s1_tuplock1 s2_rowlocks s1_commit
+step s1_begin: BEGIN;
+step s1_lcksvpt: SELECT * FROM multixact_conflict FOR KEY SHARE; SAVEPOINT foo;
+a
+-
+1
+(1 row)
+
+step s1_tuplock1: SELECT * FROM multixact_conflict FOR KEY SHARE;
+a
+-
+1
+(1 row)
+
+step s2_rowlocks: select locked_row, multi, modes from pgrowlocks('multixact_conflict');
+locked_row|multi|modes            
+----------+-----+-----------------
+(0,1)     |f    |{"For Key Share"}
+(1 row)
+
+step s1_commit: COMMIT;
+
+starting permutation: s1_begin s1_lcksvpt s1_tuplock2 s2_rowlocks s1_commit
+step s1_begin: BEGIN;
+step s1_lcksvpt: SELECT * FROM multixact_conflict FOR KEY SHARE; SAVEPOINT foo;
+a
+-
+1
+(1 row)
+
+step s1_tuplock2: SELECT * FROM multixact_conflict FOR SHARE;
+a
+-
+1
+(1 row)
+
+step s2_rowlocks: select locked_row, multi, modes from pgrowlocks('multixact_conflict');
+locked_row|multi|modes              
+----------+-----+-------------------
+(0,1)     |t    |{"Key Share",Share}
+(1 row)
+
+step s1_commit: COMMIT;
+
+starting permutation: s1_begin s1_lcksvpt s1_tuplock2 s2_rowlocks s1_commit
+step s1_begin: BEGIN;
+step s1_lcksvpt: SELECT * FROM multixact_conflict FOR KEY SHARE; SAVEPOINT foo;
+a
+-
+1
+(1 row)
+
+step s1_tuplock2: SELECT * FROM multixact_conflict FOR SHARE;
+a
+-
+1
+(1 row)
+
+step s2_rowlocks: select locked_row, multi, modes from pgrowlocks('multixact_conflict');
+locked_row|multi|modes              
+----------+-----+-------------------
+(0,1)     |t    |{"Key Share",Share}
+(1 row)
+
+step s1_commit: COMMIT;
+
+starting permutation: s1_begin s1_lcksvpt s1_tuplock2 s2_rowlocks s1_commit
+step s1_begin: BEGIN;
+step s1_lcksvpt: SELECT * FROM multixact_conflict FOR KEY SHARE; SAVEPOINT foo;
+a
+-
+1
+(1 row)
+
+step s1_tuplock2: SELECT * FROM multixact_conflict FOR SHARE;
+a
+-
+1
+(1 row)
+
+step s2_rowlocks: select locked_row, multi, modes from pgrowlocks('multixact_conflict');
+locked_row|multi|modes              
+----------+-----+-------------------
+(0,1)     |t    |{"Key Share",Share}
+(1 row)
+
+step s1_commit: COMMIT;
+
+starting permutation: s1_begin s1_lcksvpt s1_tuplock2 s2_rowlocks s1_commit
+step s1_begin: BEGIN;
+step s1_lcksvpt: SELECT * FROM multixact_conflict FOR KEY SHARE; SAVEPOINT foo;
+a
+-
+1
+(1 row)
+
+step s1_tuplock2: SELECT * FROM multixact_conflict FOR SHARE;
+a
+-
+1
+(1 row)
+
+step s2_rowlocks: select locked_row, multi, modes from pgrowlocks('multixact_conflict');
+locked_row|multi|modes              
+----------+-----+-------------------
+(0,1)     |t    |{"Key Share",Share}
+(1 row)
+
+step s1_commit: COMMIT;
+
+starting permutation: s1_begin s1_lcksvpt s1_tuplock3 s2_rowlocks s1_commit
+step s1_begin: BEGIN;
+step s1_lcksvpt: SELECT * FROM multixact_conflict FOR KEY SHARE; SAVEPOINT foo;
+a
+-
+1
+(1 row)
+
+step s1_tuplock3: SELECT * FROM multixact_conflict FOR NO KEY UPDATE;
+a
+-
+1
+(1 row)
+
+step s2_rowlocks: select locked_row, multi, modes from pgrowlocks('multixact_conflict');
+locked_row|multi|modes                            
+----------+-----+---------------------------------
+(0,1)     |t    |{"Key Share","For No Key Update"}
+(1 row)
+
+step s1_commit: COMMIT;
+
+starting permutation: s1_begin s1_lcksvpt s1_tuplock3 s2_rowlocks s1_commit
+step s1_begin: BEGIN;
+step s1_lcksvpt: SELECT * FROM multixact_conflict FOR KEY SHARE; SAVEPOINT foo;
+a
+-
+1
+(1 row)
+
+step s1_tuplock3: SELECT * FROM multixact_conflict FOR NO KEY UPDATE;
+a
+-
+1
+(1 row)
+
+step s2_rowlocks: select locked_row, multi, modes from pgrowlocks('multixact_conflict');
+locked_row|multi|modes                            
+----------+-----+---------------------------------
+(0,1)     |t    |{"Key Share","For No Key Update"}
+(1 row)
+
+step s1_commit: COMMIT;
+
+starting permutation: s1_begin s1_lcksvpt s1_tuplock3 s2_rowlocks s1_commit
+step s1_begin: BEGIN;
+step s1_lcksvpt: SELECT * FROM multixact_conflict FOR KEY SHARE; SAVEPOINT foo;
+a
+-
+1
+(1 row)
+
+step s1_tuplock3: SELECT * FROM multixact_conflict FOR NO KEY UPDATE;
+a
+-
+1
+(1 row)
+
+step s2_rowlocks: select locked_row, multi, modes from pgrowlocks('multixact_conflict');
+locked_row|multi|modes                            
+----------+-----+---------------------------------
+(0,1)     |t    |{"Key Share","For No Key Update"}
+(1 row)
+
+step s1_commit: COMMIT;
+
+starting permutation: s1_begin s1_lcksvpt s1_tuplock3 s2_rowlocks s1_commit
+step s1_begin: BEGIN;
+step s1_lcksvpt: SELECT * FROM multixact_conflict FOR KEY SHARE; SAVEPOINT foo;
+a
+-
+1
+(1 row)
+
+step s1_tuplock3: SELECT * FROM multixact_conflict FOR NO KEY UPDATE;
+a
+-
+1
+(1 row)
+
+step s2_rowlocks: select locked_row, multi, modes from pgrowlocks('multixact_conflict');
+locked_row|multi|modes                            
+----------+-----+---------------------------------
+(0,1)     |t    |{"Key Share","For No Key Update"}
+(1 row)
+
+step s1_commit: COMMIT;
+
+starting permutation: s1_begin s1_lcksvpt s1_tuplock4 s2_rowlocks s1_commit
+step s1_begin: BEGIN;
+step s1_lcksvpt: SELECT * FROM multixact_conflict FOR KEY SHARE; SAVEPOINT foo;
+a
+-
+1
+(1 row)
+
+step s1_tuplock4: SELECT * FROM multixact_conflict FOR UPDATE;
+a
+-
+1
+(1 row)
+
+step s2_rowlocks: select locked_row, multi, modes from pgrowlocks('multixact_conflict');
+locked_row|multi|modes                     
+----------+-----+--------------------------
+(0,1)     |t    |{"Key Share","For Update"}
+(1 row)
+
+step s1_commit: COMMIT;
+
+starting permutation: s1_begin s1_lcksvpt s1_tuplock4 s2_rowlocks s1_commit
+step s1_begin: BEGIN;
+step s1_lcksvpt: SELECT * FROM multixact_conflict FOR KEY SHARE; SAVEPOINT foo;
+a
+-
+1
+(1 row)
+
+step s1_tuplock4: SELECT * FROM multixact_conflict FOR UPDATE;
+a
+-
+1
+(1 row)
+
+step s2_rowlocks: select locked_row, multi, modes from pgrowlocks('multixact_conflict');
+locked_row|multi|modes                     
+----------+-----+--------------------------
+(0,1)     |t    |{"Key Share","For Update"}
+(1 row)
+
+step s1_commit: COMMIT;
+
+starting permutation: s1_begin s1_lcksvpt s1_tuplock4 s2_rowlocks s1_commit
+step s1_begin: BEGIN;
+step s1_lcksvpt: SELECT * FROM multixact_conflict FOR KEY SHARE; SAVEPOINT foo;
+a
+-
+1
+(1 row)
+
+step s1_tuplock4: SELECT * FROM multixact_conflict FOR UPDATE;
+a
+-
+1
+(1 row)
+
+step s2_rowlocks: select locked_row, multi, modes from pgrowlocks('multixact_conflict');
+locked_row|multi|modes                     
+----------+-----+--------------------------
+(0,1)     |t    |{"Key Share","For Update"}
+(1 row)
+
+step s1_commit: COMMIT;
+
+starting permutation: s1_begin s1_lcksvpt s1_tuplock4 s2_rowlocks s1_commit
+step s1_begin: BEGIN;
+step s1_lcksvpt: SELECT * FROM multixact_conflict FOR KEY SHARE; SAVEPOINT foo;
+a
+-
+1
+(1 row)
+
+step s1_tuplock4: SELECT * FROM multixact_conflict FOR UPDATE;
+a
+-
+1
+(1 row)
+
+step s2_rowlocks: select locked_row, multi, modes from pgrowlocks('multixact_conflict');
+locked_row|multi|modes                     
+----------+-----+--------------------------
+(0,1)     |t    |{"Key Share","For Update"}
+(1 row)
+
+step s1_commit: COMMIT;
+
+starting permutation: s1_begin s1_tuplock1 s2_rowlocks s1_commit
+step s1_begin: BEGIN;
+step s1_tuplock1: SELECT * FROM multixact_conflict FOR KEY SHARE;
+a
+-
+1
+(1 row)
+
+step s2_rowlocks: select locked_row, multi, modes from pgrowlocks('multixact_conflict');
+locked_row|multi|modes            
+----------+-----+-----------------
+(0,1)     |f    |{"For Key Share"}
+(1 row)
+
+step s1_commit: COMMIT;
+
+starting permutation: s1_begin s1_tuplock1 s2_rowlocks s1_commit
+step s1_begin: BEGIN;
+step s1_tuplock1: SELECT * FROM multixact_conflict FOR KEY SHARE;
+a
+-
+1
+(1 row)
+
+step s2_rowlocks: select locked_row, multi, modes from pgrowlocks('multixact_conflict');
+locked_row|multi|modes            
+----------+-----+-----------------
+(0,1)     |f    |{"For Key Share"}
+(1 row)
+
+step s1_commit: COMMIT;
+
+starting permutation: s1_begin s1_tuplock1 s2_rowlocks s1_commit
+step s1_begin: BEGIN;
+step s1_tuplock1: SELECT * FROM multixact_conflict FOR KEY SHARE;
+a
+-
+1
+(1 row)
+
+step s2_rowlocks: select locked_row, multi, modes from pgrowlocks('multixact_conflict');
+locked_row|multi|modes            
+----------+-----+-----------------
+(0,1)     |f    |{"For Key Share"}
+(1 row)
+
+step s1_commit: COMMIT;
+
+starting permutation: s1_begin s1_tuplock1 s2_rowlocks s1_commit
+step s1_begin: BEGIN;
+step s1_tuplock1: SELECT * FROM multixact_conflict FOR KEY SHARE;
+a
+-
+1
+(1 row)
+
+step s2_rowlocks: select locked_row, multi, modes from pgrowlocks('multixact_conflict');
+locked_row|multi|modes            
+----------+-----+-----------------
+(0,1)     |f    |{"For Key Share"}
+(1 row)
+
+step s1_commit: COMMIT;
+
+starting permutation: s1_begin s1_tuplock2 s2_rowlocks s1_commit
+step s1_begin: BEGIN;
+step s1_tuplock2: SELECT * FROM multixact_conflict FOR SHARE;
+a
+-
+1
+(1 row)
+
+step s2_rowlocks: select locked_row, multi, modes from pgrowlocks('multixact_conflict');
+locked_row|multi|modes        
+----------+-----+-------------
+(0,1)     |f    |{"For Share"}
+(1 row)
+
+step s1_commit: COMMIT;
+
+starting permutation: s1_begin s1_tuplock2 s2_rowlocks s1_commit
+step s1_begin: BEGIN;
+step s1_tuplock2: SELECT * FROM multixact_conflict FOR SHARE;
+a
+-
+1
+(1 row)
+
+step s2_rowlocks: select locked_row, multi, modes from pgrowlocks('multixact_conflict');
+locked_row|multi|modes        
+----------+-----+-------------
+(0,1)     |f    |{"For Share"}
+(1 row)
+
+step s1_commit: COMMIT;
+
+starting permutation: s1_begin s1_tuplock2 s2_rowlocks s1_commit
+step s1_begin: BEGIN;
+step s1_tuplock2: SELECT * FROM multixact_conflict FOR SHARE;
+a
+-
+1
+(1 row)
+
+step s2_rowlocks: select locked_row, multi, modes from pgrowlocks('multixact_conflict');
+locked_row|multi|modes        
+----------+-----+-------------
+(0,1)     |f    |{"For Share"}
+(1 row)
+
+step s1_commit: COMMIT;
+
+starting permutation: s1_begin s1_tuplock2 s2_rowlocks s1_commit
+step s1_begin: BEGIN;
+step s1_tuplock2: SELECT * FROM multixact_conflict FOR SHARE;
+a
+-
+1
+(1 row)
+
+step s2_rowlocks: select locked_row, multi, modes from pgrowlocks('multixact_conflict');
+locked_row|multi|modes        
+----------+-----+-------------
+(0,1)     |f    |{"For Share"}
+(1 row)
+
+step s1_commit: COMMIT;
+
+starting permutation: s1_begin s1_tuplock3 s2_rowlocks s1_commit
+step s1_begin: BEGIN;
+step s1_tuplock3: SELECT * FROM multixact_conflict FOR NO KEY UPDATE;
+a
+-
+1
+(1 row)
+
+step s2_rowlocks: select locked_row, multi, modes from pgrowlocks('multixact_conflict');
+locked_row|multi|modes                
+----------+-----+---------------------
+(0,1)     |f    |{"For No Key Update"}
+(1 row)
+
+step s1_commit: COMMIT;
+
+starting permutation: s1_begin s1_tuplock3 s2_rowlocks s1_commit
+step s1_begin: BEGIN;
+step s1_tuplock3: SELECT * FROM multixact_conflict FOR NO KEY UPDATE;
+a
+-
+1
+(1 row)
+
+step s2_rowlocks: select locked_row, multi, modes from pgrowlocks('multixact_conflict');
+locked_row|multi|modes                
+----------+-----+---------------------
+(0,1)     |f    |{"For No Key Update"}
+(1 row)
+
+step s1_commit: COMMIT;
+
+starting permutation: s1_begin s1_tuplock3 s2_rowlocks s1_commit
+step s1_begin: BEGIN;
+step s1_tuplock3: SELECT * FROM multixact_conflict FOR NO KEY UPDATE;
+a
+-
+1
+(1 row)
+
+step s2_rowlocks: select locked_row, multi, modes from pgrowlocks('multixact_conflict');
+locked_row|multi|modes                
+----------+-----+---------------------
+(0,1)     |f    |{"For No Key Update"}
+(1 row)
+
+step s1_commit: COMMIT;
+
+starting permutation: s1_begin s1_tuplock3 s2_rowlocks s1_commit
+step s1_begin: BEGIN;
+step s1_tuplock3: SELECT * FROM multixact_conflict FOR NO KEY UPDATE;
+a
+-
+1
+(1 row)
+
+step s2_rowlocks: select locked_row, multi, modes from pgrowlocks('multixact_conflict');
+locked_row|multi|modes                
+----------+-----+---------------------
+(0,1)     |f    |{"For No Key Update"}
+(1 row)
+
+step s1_commit: COMMIT;
+
+starting permutation: s1_begin s1_tuplock4 s2_rowlocks s1_commit
+step s1_begin: BEGIN;
+step s1_tuplock4: SELECT * FROM multixact_conflict FOR UPDATE;
+a
+-
+1
+(1 row)
+
+step s2_rowlocks: select locked_row, multi, modes from pgrowlocks('multixact_conflict');
+locked_row|multi|modes         
+----------+-----+--------------
+(0,1)     |f    |{"For Update"}
+(1 row)
+
+step s1_commit: COMMIT;
+
+starting permutation: s1_begin s1_tuplock4 s2_rowlocks s1_commit
+step s1_begin: BEGIN;
+step s1_tuplock4: SELECT * FROM multixact_conflict FOR UPDATE;
+a
+-
+1
+(1 row)
+
+step s2_rowlocks: select locked_row, multi, modes from pgrowlocks('multixact_conflict');
+locked_row|multi|modes         
+----------+-----+--------------
+(0,1)     |f    |{"For Update"}
+(1 row)
+
+step s1_commit: COMMIT;
+
+starting permutation: s1_begin s1_tuplock4 s2_rowlocks s1_commit
+step s1_begin: BEGIN;
+step s1_tuplock4: SELECT * FROM multixact_conflict FOR UPDATE;
+a
+-
+1
+(1 row)
+
+step s2_rowlocks: select locked_row, multi, modes from pgrowlocks('multixact_conflict');
+locked_row|multi|modes         
+----------+-----+--------------
+(0,1)     |f    |{"For Update"}
+(1 row)
+
+step s1_commit: COMMIT;
+
+starting permutation: s1_begin s1_tuplock4 s2_rowlocks s1_commit
+step s1_begin: BEGIN;
+step s1_tuplock4: SELECT * FROM multixact_conflict FOR UPDATE;
+a
+-
+1
+(1 row)
+
+step s2_rowlocks: select locked_row, multi, modes from pgrowlocks('multixact_conflict');
+locked_row|multi|modes         
+----------+-----+--------------
+(0,1)     |f    |{"For Update"}
+(1 row)
+
+step s1_commit: COMMIT;

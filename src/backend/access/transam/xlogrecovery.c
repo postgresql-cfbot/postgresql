@@ -3828,14 +3828,17 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					XLogPrefetcherComputeStats(xlogprefetcher);
 
 					/*
-					 * Wait for more WAL to arrive. Time out after 5 seconds
-					 * to react to a trigger file promptly and to check if the
-					 * WAL receiver is still active.
+					 * Wait for more WAL to arrive, when we will be woken
+					 * immediately by the WAL receiver.  Hibernate, but time out
+					 * to react to a trigger file.  Direct use of trigger file
+					 * is now deprecated and the promote_trigger_file will be
+					 * removed in a later release.
 					 */
 					(void) WaitLatch(&XLogRecoveryCtl->recoveryWakeupLatch,
 									 WL_LATCH_SET | WL_TIMEOUT |
 									 WL_EXIT_ON_PM_DEATH,
-									 5000L, WAIT_EVENT_RECOVERY_WAL_STREAM);
+									 60000L,
+									 WAIT_EVENT_RECOVERY_WAL_STREAM);
 					ResetLatch(&XLogRecoveryCtl->recoveryWakeupLatch);
 					break;
 				}

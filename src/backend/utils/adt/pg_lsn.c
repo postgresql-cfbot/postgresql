@@ -22,6 +22,8 @@
 #define MAXPG_LSNLEN			17
 #define MAXPG_LSNCOMPONENT	8
 
+static inline XLogRecPtr numeric_to_pg_lsn(Numeric num);
+
 /*----------------------------------------------------------
  * Formatting and conversion routines.
  *---------------------------------------------------------*/
@@ -58,6 +60,20 @@ pg_lsn_in_internal(const char *str, bool *have_error)
 	result = ((uint64) id << 32) | off;
 
 	return result;
+}
+
+static inline XLogRecPtr
+numeric_to_pg_lsn(Numeric num)
+{
+	return (XLogRecPtr) numeric_to_uint64_type(num, "pg_lsn");
+}
+
+Datum
+numeric_pg_lsn(PG_FUNCTION_ARGS)
+{
+	Numeric		num = PG_GETARG_NUMERIC(0);
+
+	PG_RETURN_LSN(numeric_to_pg_lsn(num));
 }
 
 Datum
@@ -254,7 +270,7 @@ pg_lsn_pli(PG_FUNCTION_ARGS)
 	XLogRecPtr	lsn = PG_GETARG_LSN(0);
 	Numeric		nbytes = PG_GETARG_NUMERIC(1);
 	Datum		num;
-	Datum		res;
+	Numeric		res;
 	char		buf[32];
 
 	if (numeric_is_nan(nbytes))
@@ -270,12 +286,10 @@ pg_lsn_pli(PG_FUNCTION_ARGS)
 							  Int32GetDatum(-1));
 
 	/* Add two numerics */
-	res = DirectFunctionCall2(numeric_add,
-							  NumericGetDatum(num),
-							  NumericGetDatum(nbytes));
+	res = numeric_add_opt_error(DatumGetNumeric(num), nbytes, NULL);
 
 	/* Convert to pg_lsn */
-	return DirectFunctionCall1(numeric_pg_lsn, res);
+	PG_RETURN_LSN(numeric_to_pg_lsn(res));
 }
 
 /*
@@ -288,7 +302,7 @@ pg_lsn_mii(PG_FUNCTION_ARGS)
 	XLogRecPtr	lsn = PG_GETARG_LSN(0);
 	Numeric		nbytes = PG_GETARG_NUMERIC(1);
 	Datum		num;
-	Datum		res;
+	Numeric		res;
 	char		buf[32];
 
 	if (numeric_is_nan(nbytes))
@@ -304,10 +318,8 @@ pg_lsn_mii(PG_FUNCTION_ARGS)
 							  Int32GetDatum(-1));
 
 	/* Subtract two numerics */
-	res = DirectFunctionCall2(numeric_sub,
-							  NumericGetDatum(num),
-							  NumericGetDatum(nbytes));
+	res = numeric_sub_opt_error(DatumGetNumeric(num), nbytes, NULL);
 
 	/* Convert to pg_lsn */
-	return DirectFunctionCall1(numeric_pg_lsn, res);
+	PG_RETURN_LSN(numeric_to_pg_lsn(res));
 }

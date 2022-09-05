@@ -6175,9 +6175,9 @@ numeric_to_number(PG_FUNCTION_ARGS)
 		x = DatumGetNumeric(DirectFunctionCall2(numeric_power,
 												NumericGetDatum(a),
 												NumericGetDatum(b)));
-		result = DirectFunctionCall2(numeric_mul,
-									 result,
-									 NumericGetDatum(x));
+		result = NumericGetDatum(numeric_mul_opt_error(DatumGetNumeric(result),
+													   x,
+													   NULL));
 	}
 
 	pfree(numstr);
@@ -6214,9 +6214,7 @@ numeric_to_char(PG_FUNCTION_ARGS)
 		x = DatumGetNumeric(DirectFunctionCall2(numeric_round,
 												NumericGetDatum(value),
 												Int32GetDatum(0)));
-		numstr =
-			int_to_roman(DatumGetInt32(DirectFunctionCall1(numeric_int4,
-														   NumericGetDatum(x))));
+		numstr = int_to_roman(numeric_int4_opt_error(x, NULL));
 	}
 	else if (IS_EEEE(&Num))
 	{
@@ -6265,9 +6263,8 @@ numeric_to_char(PG_FUNCTION_ARGS)
 			x = DatumGetNumeric(DirectFunctionCall2(numeric_power,
 													NumericGetDatum(a),
 													NumericGetDatum(b)));
-			val = DatumGetNumeric(DirectFunctionCall2(numeric_mul,
-													  NumericGetDatum(value),
-													  NumericGetDatum(x)));
+			val = numeric_mul_opt_error(value, x, NULL);
+
 			Num.pre += Num.multi;
 		}
 

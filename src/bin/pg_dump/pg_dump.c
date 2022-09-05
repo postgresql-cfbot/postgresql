@@ -2845,14 +2845,14 @@ dumpDatabase(Archive *fout)
 					  "datacl, acldefault('d', datdba) AS acldefault, "
 					  "datistemplate, datconnlimit, ");
 	if (fout->remoteVersion >= 90300)
-		appendPQExpBuffer(dbQry, "datminmxid, ");
+		appendPQExpBufferStr(dbQry, "datminmxid, ");
 	else
-		appendPQExpBuffer(dbQry, "0 AS datminmxid, ");
+		appendPQExpBufferStr(dbQry, "0 AS datminmxid, ");
 	if (fout->remoteVersion >= 150000)
-		appendPQExpBuffer(dbQry, "datlocprovider, daticulocale, datcollversion, ");
+		appendPQExpBufferStr(dbQry, "datlocprovider, daticulocale, datcollversion, ");
 	else
-		appendPQExpBuffer(dbQry, "'c' AS datlocprovider, NULL AS daticulocale, NULL AS datcollversion, ");
-	appendPQExpBuffer(dbQry,
+		appendPQExpBufferStr(dbQry, "'c' AS datlocprovider, NULL AS daticulocale, NULL AS datcollversion, ");
+	appendPQExpBufferStr(dbQry,
 					  "(SELECT spcname FROM pg_tablespace t WHERE t.oid = dattablespace) AS tablespace, "
 					  "shobj_description(oid, 'pg_database') AS description "
 					  "FROM pg_database "
@@ -3685,9 +3685,9 @@ getPolicies(Archive *fout, TableInfo tblinfo[], int numTables)
 	printfPQExpBuffer(query,
 					  "SELECT pol.oid, pol.tableoid, pol.polrelid, pol.polname, pol.polcmd, ");
 	if (fout->remoteVersion >= 100000)
-		appendPQExpBuffer(query, "pol.polpermissive, ");
+		appendPQExpBufferStr(query, "pol.polpermissive, ");
 	else
-		appendPQExpBuffer(query, "'t' as polpermissive, ");
+		appendPQExpBufferStr(query, "'t' as polpermissive, ");
 	appendPQExpBuffer(query,
 					  "CASE WHEN pol.polroles = '{0}' THEN NULL ELSE "
 					  "   pg_catalog.array_to_string(ARRAY(SELECT pg_catalog.quote_ident(rolname) from pg_catalog.pg_roles WHERE oid = ANY(pol.polroles)), ', ') END AS polroles, "
@@ -4045,7 +4045,7 @@ dumpPublication(Archive *fout, const PublicationInfo *pubinfo)
 		first = false;
 	}
 
-	appendPQExpBufferStr(query, "'");
+	appendPQExpBufferChar(query, '\'');
 
 	if (pubinfo->pubviaroot)
 		appendPQExpBufferStr(query, ", publish_via_partition_root = true");
@@ -5477,7 +5477,7 @@ getCollations(Archive *fout, int *numCollations)
 	 * system-defined collations at dump-out time.
 	 */
 
-	appendPQExpBuffer(query, "SELECT tableoid, oid, collname, "
+	appendPQExpBufferStr(query, "SELECT tableoid, oid, collname, "
 					  "collnamespace, "
 					  "collowner "
 					  "FROM pg_collation");
@@ -5545,7 +5545,7 @@ getConversions(Archive *fout, int *numConversions)
 	 * system-defined conversions at dump-out time.
 	 */
 
-	appendPQExpBuffer(query, "SELECT tableoid, oid, conname, "
+	appendPQExpBufferStr(query, "SELECT tableoid, oid, conname, "
 					  "connamespace, "
 					  "conowner "
 					  "FROM pg_conversion");
@@ -5682,7 +5682,7 @@ getOpclasses(Archive *fout, int *numOpclasses)
 	 * system-defined opclasses at dump-out time.
 	 */
 
-	appendPQExpBuffer(query, "SELECT tableoid, oid, opcname, "
+	appendPQExpBufferStr(query, "SELECT tableoid, oid, opcname, "
 					  "opcnamespace, "
 					  "opcowner "
 					  "FROM pg_opclass");
@@ -5750,7 +5750,7 @@ getOpfamilies(Archive *fout, int *numOpfamilies)
 	 * system-defined opfamilies at dump-out time.
 	 */
 
-	appendPQExpBuffer(query, "SELECT tableoid, oid, opfname, "
+	appendPQExpBufferStr(query, "SELECT tableoid, oid, opfname, "
 					  "opfnamespace, "
 					  "opfowner "
 					  "FROM pg_opfamily");
@@ -5856,7 +5856,7 @@ getAggregates(Archive *fout, int *numAggs)
 	}
 	else
 	{
-		appendPQExpBuffer(query, "SELECT tableoid, oid, proname AS aggname, "
+		appendPQExpBufferStr(query, "SELECT tableoid, oid, proname AS aggname, "
 						  "pronamespace AS aggnamespace, "
 						  "pronargs, proargtypes, "
 						  "proowner, "
@@ -6205,7 +6205,7 @@ getTables(Archive *fout, int *numTables)
 	 * wrong answers if any concurrent DDL is happening.
 	 */
 
-	appendPQExpBuffer(query,
+	appendPQExpBufferStr(query,
 					  "SELECT c.tableoid, c.oid, c.relname, "
 					  "c.relnamespace, c.relkind, c.reltype, "
 					  "c.relowner, "
@@ -6732,7 +6732,7 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 	}
 	appendPQExpBufferChar(tbloids, '}');
 
-	appendPQExpBuffer(query,
+	appendPQExpBufferStr(query,
 					  "SELECT t.tableoid, t.oid, i.indrelid, "
 					  "t.relname AS indexname, "
 					  "pg_catalog.pg_get_indexdef(i.indexrelid) AS indexdef, "
@@ -6747,14 +6747,14 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 
 
 	if (fout->remoteVersion >= 90400)
-		appendPQExpBuffer(query,
+		appendPQExpBufferStr(query,
 						  "i.indisreplident, ");
 	else
-		appendPQExpBuffer(query,
+		appendPQExpBufferStr(query,
 						  "false AS indisreplident, ");
 
 	if (fout->remoteVersion >= 110000)
-		appendPQExpBuffer(query,
+		appendPQExpBufferStr(query,
 						  "inh.inhparent AS parentidx, "
 						  "i.indnkeyatts AS indnkeyatts, "
 						  "i.indnatts AS indnatts, "
@@ -6767,7 +6767,7 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 						  "  WHERE attrelid = i.indexrelid AND "
 						  "    attstattarget >= 0) AS indstatvals, ");
 	else
-		appendPQExpBuffer(query,
+		appendPQExpBufferStr(query,
 						  "0 AS parentidx, "
 						  "i.indnatts AS indnkeyatts, "
 						  "i.indnatts AS indnatts, "
@@ -6775,10 +6775,10 @@ getIndexes(Archive *fout, TableInfo tblinfo[], int numTables)
 						  "'' AS indstatvals, ");
 
 	if (fout->remoteVersion >= 150000)
-		appendPQExpBuffer(query,
+		appendPQExpBufferStr(query,
 						  "i.indnullsnotdistinct ");
 	else
-		appendPQExpBuffer(query,
+		appendPQExpBufferStr(query,
 						  "false AS indnullsnotdistinct ");
 
 	/*
@@ -7002,11 +7002,11 @@ getExtendedStatistics(Archive *fout)
 	query = createPQExpBuffer();
 
 	if (fout->remoteVersion < 130000)
-		appendPQExpBuffer(query, "SELECT tableoid, oid, stxname, "
+		appendPQExpBufferStr(query, "SELECT tableoid, oid, stxname, "
 						  "stxnamespace, stxowner, (-1) AS stxstattarget "
 						  "FROM pg_catalog.pg_statistic_ext");
 	else
-		appendPQExpBuffer(query, "SELECT tableoid, oid, stxname, "
+		appendPQExpBufferStr(query, "SELECT tableoid, oid, stxname, "
 						  "stxnamespace, stxowner, stxstattarget "
 						  "FROM pg_catalog.pg_statistic_ext");
 
@@ -7729,7 +7729,7 @@ getEventTriggers(Archive *fout, int *numEventTriggers)
 
 	query = createPQExpBuffer();
 
-	appendPQExpBuffer(query,
+	appendPQExpBufferStr(query,
 					  "SELECT e.tableoid, e.oid, evtname, evtenabled, "
 					  "evtevent, evtowner, "
 					  "array_to_string(array("
@@ -7809,7 +7809,7 @@ getProcLangs(Archive *fout, int *numProcLangs)
 	int			i_acldefault;
 	int			i_lanowner;
 
-	appendPQExpBuffer(query, "SELECT tableoid, oid, "
+	appendPQExpBufferStr(query, "SELECT tableoid, oid, "
 					  "lanname, lanpltrusted, lanplcallfoid, "
 					  "laninline, lanvalidator, "
 					  "lanacl, "
@@ -8768,7 +8768,7 @@ getTSDictionaries(Archive *fout, int *numTSDicts)
 
 	query = createPQExpBuffer();
 
-	appendPQExpBuffer(query, "SELECT tableoid, oid, dictname, "
+	appendPQExpBufferStr(query, "SELECT tableoid, oid, dictname, "
 					  "dictnamespace, dictowner, "
 					  "dicttemplate, dictinitoption "
 					  "FROM pg_ts_dict");
@@ -8904,7 +8904,7 @@ getTSConfigurations(Archive *fout, int *numTSConfigs)
 
 	query = createPQExpBuffer();
 
-	appendPQExpBuffer(query, "SELECT tableoid, oid, cfgname, "
+	appendPQExpBufferStr(query, "SELECT tableoid, oid, cfgname, "
 					  "cfgnamespace, cfgowner, cfgparser "
 					  "FROM pg_ts_config");
 
@@ -8972,7 +8972,7 @@ getForeignDataWrappers(Archive *fout, int *numForeignDataWrappers)
 
 	query = createPQExpBuffer();
 
-	appendPQExpBuffer(query, "SELECT tableoid, oid, fdwname, "
+	appendPQExpBufferStr(query, "SELECT tableoid, oid, fdwname, "
 					  "fdwowner, "
 					  "fdwhandler::pg_catalog.regproc, "
 					  "fdwvalidator::pg_catalog.regproc, "
@@ -9063,7 +9063,7 @@ getForeignServers(Archive *fout, int *numForeignServers)
 
 	query = createPQExpBuffer();
 
-	appendPQExpBuffer(query, "SELECT tableoid, oid, srvname, "
+	appendPQExpBufferStr(query, "SELECT tableoid, oid, srvname, "
 					  "srvowner, "
 					  "srvfdw, srvtype, srvversion, srvacl, "
 					  "acldefault('S', srvowner) AS acldefault, "
@@ -9167,7 +9167,7 @@ getDefaultACLs(Archive *fout, int *numDefaultACLs)
 	 * for the case of 'S' (DEFACLOBJ_SEQUENCE) which must be converted to
 	 * 's'.
 	 */
-	appendPQExpBuffer(query,
+	appendPQExpBufferStr(query,
 					  "SELECT oid, tableoid, "
 					  "defaclrole, "
 					  "defaclnamespace, "
@@ -15491,7 +15491,7 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 					appendStringLiteralAH(q, qualrelname, fout);
 					appendPQExpBufferStr(q, "::pg_catalog.regclass,");
 					appendStringLiteralAH(q, tbinfo->attnames[j], fout);
-					appendPQExpBufferStr(q, ",");
+					appendPQExpBufferChar(q, ',');
 					appendStringLiteralAH(q, tbinfo->attmissingval[j], fout);
 					appendPQExpBufferStr(q, ");\n\n");
 				}
@@ -16361,11 +16361,11 @@ dumpConstraint(Archive *fout, const ConstraintInfo *coninfo)
 		}
 		else
 		{
-			appendPQExpBuffer(q, "%s",
-							  coninfo->contype == 'p' ? "PRIMARY KEY" : "UNIQUE");
+			appendPQExpBufferStr(q,
+								 coninfo->contype == 'p' ? "PRIMARY KEY" : "UNIQUE");
 			if (indxinfo->indnullsnotdistinct)
-				appendPQExpBuffer(q, " NULLS NOT DISTINCT");
-			appendPQExpBuffer(q, " (");
+				appendPQExpBufferStr(q, " NULLS NOT DISTINCT");
+			appendPQExpBufferStr(q, " (");
 			for (k = 0; k < indxinfo->indnkeyattrs; k++)
 			{
 				int			indkey = (int) indxinfo->indkeys[k];

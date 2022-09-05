@@ -1704,7 +1704,7 @@ array_dims(PG_FUNCTION_ARGS)
 		p += strlen(p);
 	}
 
-	PG_RETURN_TEXT_P(cstring_to_text(buf));
+	PG_RETURN_TEXT_P(cstring_to_text_with_len(buf, p - buf));
 }
 
 /*

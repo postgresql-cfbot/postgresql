@@ -3512,8 +3512,7 @@ printVerboseErrorMessages(CState *st, pg_time_usec_t *now, bool is_retry)
 		resetPQExpBuffer(buf);
 
 	printfPQExpBuffer(buf, "client %d ", st->id);
-	appendPQExpBuffer(buf, "%s",
-					  (is_retry ?
+	appendPQExpBufferStr(buf, (is_retry ?
 					   "repeats the transaction after the error" :
 					   "ends the failed transaction"));
 	appendPQExpBuffer(buf, " (try %u", st->tries);

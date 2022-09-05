@@ -347,7 +347,7 @@ filter_list_to_array(List *filterlist)
 		result = pstrdup(value);
 		for (p = result; *p; p++)
 			*p = pg_ascii_toupper((unsigned char) *p);
-		data[i++] = PointerGetDatum(cstring_to_text(result));
+		data[i++] = PointerGetDatum(cstring_to_text_with_len(result, p - result));
 		pfree(result);
 	}
 

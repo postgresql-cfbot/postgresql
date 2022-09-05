@@ -2148,7 +2148,7 @@ describeOneTableDetails(const char *schemaname,
 						  "SELECT inhparent::pg_catalog.regclass,\n"
 						  "  pg_catalog.pg_get_expr(c.relpartbound, c.oid),\n  ");
 
-		appendPQExpBuffer(&buf,
+		appendPQExpBufferStr(&buf,
 						  pset.sversion >= 140000 ? "inhdetachpending" :
 						  "false as inhdetachpending");
 
@@ -2311,7 +2311,7 @@ describeOneTableDetails(const char *schemaname,
 				printfPQExpBuffer(&tmpbuf, _("unique"));
 				if (strcmp(indnullsnotdistinct, "t") == 0)
 					appendPQExpBufferStr(&tmpbuf, _(" nulls not distinct"));
-				appendPQExpBuffer(&tmpbuf, _(", "));
+				appendPQExpBufferStr(&tmpbuf, _(", "));
 			}
 			else
 				resetPQExpBuffer(&tmpbuf);

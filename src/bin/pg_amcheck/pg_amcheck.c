@@ -1509,7 +1509,7 @@ append_db_pattern_cte(PQExpBuffer buf, const PatternInfoArray *pia,
 			have_values = true;
 			appendPQExpBuffer(buf, "%s\n(%d, ", comma, pattern_id);
 			appendStringLiteralConn(buf, info->db_regex, conn);
-			appendPQExpBufferStr(buf, ")");
+			appendPQExpBufferChar(buf, ')');
 			comma = ",";
 		}
 	}
@@ -1765,7 +1765,7 @@ append_rel_pattern_raw_cte(PQExpBuffer buf, const PatternInfoArray *pia,
 			appendPQExpBufferStr(buf, ", true::BOOLEAN");
 		else
 			appendPQExpBufferStr(buf, ", false::BOOLEAN");
-		appendPQExpBufferStr(buf, ")");
+		appendPQExpBufferChar(buf, ')');
 		comma = ",";
 	}
 

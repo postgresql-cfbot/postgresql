@@ -7,6 +7,7 @@
 
 #include "catalog/pg_type.h"
 #include "lib/qunique.h"
+#include "miscadmin.h"
 #include "trgm.h"
 #include "tsearch/ts_locale.h"
 #include "utils/lsyscache.h"
@@ -441,14 +442,15 @@ comp_ptrgm(const void *v1, const void *v2)
 
 /*
  * Iterative search function which calculates maximum similarity with word in
- * the string. But maximum similarity is calculated only if check_only == false.
+ * the string. Maximum similarity is only calculated only if the flag
+ * WORD_SIMILARITY_CHECK_ONLY isn't set.
  *
  * trg2indexes: array which stores indexes of the array "found".
  * found: array which stores true of false values.
  * ulen1: count of unique trigrams of array "trg1".
  * len2: length of array "trg2" and array "trg2indexes".
  * len: length of the array "found".
- * lags: set of boolean flags parameterizing similarity calculation.
+ * flags: set of boolean flags parameterizing similarity calculation.
  * bounds: whether each trigram is left/right bound of word.
  *
  * Returns word similarity.
@@ -494,6 +496,8 @@ iterate_word_similarity(int *trg2indexes,
 	{
 		/* Get index of next trigram */
 		int			trgindex = trg2indexes[i];
+
+		CHECK_FOR_INTERRUPTS();
 
 		/* Update last position of this trigram */
 		if (lower >= 0 || found[trgindex])

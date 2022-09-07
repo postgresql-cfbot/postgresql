@@ -1555,6 +1555,8 @@ lazy_scan_prune(LVRelState *vacrel,
 	int			nnewlpdead;
 	int			nfrozen;
 	TransactionId NewRelfrozenXid;
+	TransactionId PageFreezeLimit = vacrel->FreezeLimit;
+	bool		max_freeze_page = false;
 	MultiXactId NewRelminMxid;
 	OffsetNumber deadoffsets[MaxHeapTuplesPerPage];
 	xl_heap_freeze_tuple frozen[MaxHeapTuplesPerPage];
@@ -1573,7 +1575,8 @@ retry:
 	/* Initialize (or reset) page-level state */
 	NewRelfrozenXid = vacrel->NewRelfrozenXid;
 	NewRelminMxid = vacrel->NewRelminMxid;
-	tuples_deleted = 0;
+	if (!max_freeze_page)
+		tuples_deleted = 0;
 	lpdead_items = 0;
 	live_tuples = 0;
 	recently_dead_tuples = 0;
@@ -1585,9 +1588,11 @@ retry:
 	 * final value can be thought of as the number of tuples that have been
 	 * deleted from the table.  It should not be confused with lpdead_items;
 	 * lpdead_items's final value can be thought of as the number of tuples
-	 * that were deleted from indexes.
+	 * that were deleted from indexes.  No need to re-prune if we decide to
+	 * re-scan page for aggressive freezing.
 	 */
-	tuples_deleted = heap_page_prune(rel, buf, vacrel->vistest,
+	if (!max_freeze_page)
+		tuples_deleted = heap_page_prune(rel, buf, vacrel->vistest,
 									 InvalidTransactionId, 0, &nnewlpdead,
 									 &vacrel->offnum);
 
@@ -1777,13 +1782,27 @@ retry:
 		if (heap_prepare_freeze_tuple(tuple.t_data,
 									  vacrel->relfrozenxid,
 									  vacrel->relminmxid,
-									  vacrel->FreezeLimit,
+									  PageFreezeLimit,
 									  vacrel->MultiXactCutoff,
 									  &frozen[nfrozen], &tuple_totally_frozen,
 									  &NewRelfrozenXid, &NewRelminMxid))
 		{
 			/* Will execute freeze below */
 			frozen[nfrozen++].offset = offnum;
+
+			/*
+			 * If we find one tuple to freeze, we may as well freeze
+			 * the whole page aggressively, since we will be dirtying
+			 * the page anyway and the amount we freeze is just a
+			 * heuristic and unrelated to correctness.
+			 */
+			if (!max_freeze_page)
+			{
+				Assert(TransactionIdPrecedesOrEquals(vacrel->FreezeLimit, vacrel->OldestXmin));
+				PageFreezeLimit = vacrel->OldestXmin;
+				max_freeze_page = true;
+				goto retry;
+			}
 		}
 
 		/*
@@ -1841,7 +1860,7 @@ retry:
 		{
 			XLogRecPtr	recptr;
 
-			recptr = log_heap_freeze(vacrel->rel, buf, vacrel->FreezeLimit,
+			recptr = log_heap_freeze(vacrel->rel, buf, PageFreezeLimit,
 									 frozen, nfrozen);
 			PageSetLSN(page, recptr);
 		}

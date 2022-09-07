@@ -927,6 +927,8 @@ text_substring(Datum str, int32 start, int32 length, bool length_not_specified)
 		int32		slice_start;
 		int32		slice_size;
 		int32		slice_strlen;
+		int32		copy_bytes;
+		int32		max_copy_bytes;
 		text	   *slice;
 		int32		E1;
 		int32		i;
@@ -1004,8 +1006,9 @@ text_substring(Datum str, int32 start, int32 length, bool length_not_specified)
 		}
 
 		/* Now we can get the actual length of the slice in MB characters */
+		max_copy_bytes = VARSIZE_ANY_EXHDR(slice);
 		slice_strlen = pg_mbstrlen_with_len(VARDATA_ANY(slice),
-											VARSIZE_ANY_EXHDR(slice));
+											max_copy_bytes);
 
 		/*
 		 * Check that the start position wasn't > slice_strlen. If so, SQL99
@@ -1032,7 +1035,11 @@ text_substring(Datum str, int32 start, int32 length, bool length_not_specified)
 		 */
 		p = VARDATA_ANY(slice);
 		for (i = 0; i < S1 - 1; i++)
-			p += pg_mblen(p);
+		{
+			int t = pg_mblen(p);
+			p += t;
+			max_copy_bytes -= t;
+		}
 
 		/* hang onto a pointer to our start position */
 		s = p;
@@ -1044,9 +1051,13 @@ text_substring(Datum str, int32 start, int32 length, bool length_not_specified)
 		for (i = S1; i < E1; i++)
 			p += pg_mblen(p);
 
-		ret = (text *) palloc(VARHDRSZ + (p - s));
-		SET_VARSIZE(ret, VARHDRSZ + (p - s));
-		memcpy(VARDATA(ret), s, (p - s));
+		copy_bytes = p - s;
+		if(copy_bytes > max_copy_bytes)
+			copy_bytes = max_copy_bytes;
+
+		ret = (text *) palloc(VARHDRSZ + copy_bytes);
+		SET_VARSIZE(ret, VARHDRSZ + copy_bytes);
+		memcpy(VARDATA(ret), s, copy_bytes);
 
 		if (slice != (text *) DatumGetPointer(str))
 			pfree(slice);

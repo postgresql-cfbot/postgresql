@@ -3275,7 +3275,15 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
 
   <para>
    This view does not display <link linkend="runtime-config-custom">customized options</link>
-   until the extension module that defines them has been loaded.
+   until the extension module that defines them has been loaded by the backend
+   process executing the query (e.g., via
+   <xref linkend="guc-shared-preload-libraries"/>, the
+   <link linkend="sql-load"><command>LOAD</command></link> command, or a call
+   to a <link linkend="xfunc-c">user-defined C function</link>).  For example,
+   since the <xref linkend="guc-archive-library"/> is only loaded by the
+   archiver process, this view will not display any customized options defined
+   by <link linkend="archive-modules">archive modules</link> unless special
+   action is taken to load them into the backend process executing the query.
   </para>
 
   <para>

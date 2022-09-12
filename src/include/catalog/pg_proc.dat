@@ -11820,4 +11820,17 @@
   prorettype => 'bytea', proargtypes => 'pg_brin_minmax_multi_summary',
   prosrc => 'brin_minmax_multi_summary_send' },
 
+{ oid => '8000', descr => 'set stop event',
+  proname => 'pg_stopevent_set', prorettype => 'void', proargtypes => 'text jsonpath',
+  prosrc => 'pg_stopevent_set', provolatile => 'v' },
+
+{ oid => '8001', descr => 'reset stop event',
+  proname => 'pg_stopevent_reset', prorettype => 'void', proargtypes => 'text',
+  prosrc => 'pg_stopevent_reset', provolatile => 'v' },
+
+{ oid => '8002', descr => 'view stop events',
+  proname => 'pg_stopevents', prorows => '10', proretset => 't',
+  provolatile => 'v', prorettype => 'record', proargtypes => '',
+  proallargtypes => '{text,jsonpath,_int4}', proargmodes => '{o,o,o}',
+  proargnames => '{event_name,condition,waiters}', prosrc => 'pg_stopevents' },
 ]

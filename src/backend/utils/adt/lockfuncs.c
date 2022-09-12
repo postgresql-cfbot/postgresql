@@ -18,6 +18,7 @@
 #include "funcapi.h"
 #include "miscadmin.h"
 #include "storage/predicate_internals.h"
+#include "storage/stopevent.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
 
@@ -648,6 +649,9 @@ pg_isolation_test_session_is_blocked(PG_FUNCTION_ARGS)
 	 * buffer and check if the number of safe snapshot blockers is non-zero.
 	 */
 	if (GetSafeSnapshotBlockingPids(blocked_pid, &dummy, 1) > 0)
+		PG_RETURN_BOOL(true);
+
+	if (pid_is_waiting_for_stopevent(blocked_pid))
 		PG_RETURN_BOOL(true);
 
 	PG_RETURN_BOOL(false);

@@ -739,6 +739,9 @@
 /* Define to 1 to use Intel SSE 4.2 CRC instructions with a runtime check. */
 #undef USE_SSE42_CRC32C_WITH_RUNTIME_CHECK
 
+/* Define to 1 to build with stop events. (--enable-stop-events) */
+#undef USE_STOP_EVENTS
+
 /* Define to build with systemd support. (--with-systemd) */
 #undef USE_SYSTEMD
 

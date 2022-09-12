@@ -699,6 +699,7 @@ with_gnu_ld
 LD
 LDFLAGS_SL
 LDFLAGS_EX
+enable_stop_events
 ZSTD_LIBS
 ZSTD_CFLAGS
 with_zstd
@@ -875,6 +876,7 @@ with_system_tzdata
 with_zlib
 with_lz4
 with_zstd
+enable_stop_events
 with_gnu_ld
 with_ssl
 with_openssl
@@ -1541,6 +1543,7 @@ Optional Features:
   --enable-depend         turn on automatic dependency tracking
   --enable-cassert        enable assertion checks (for debugging)
   --disable-thread-safety disable thread-safety in client libraries
+  --enable-stop-events    enable stop events (for debugging)
   --disable-largefile     omit support for large files
 
 Optional Packages:
@@ -9353,6 +9356,37 @@ fi
     esac
   done
 fi
+
+#
+# Stop events
+#
+
+
+# Check whether --enable-stop-events was given.
+if test "${enable_stop_events+set}" = set; then :
+  enableval=$enable_stop_events;
+  case $enableval in
+    yes)
+
+$as_echo "#define USE_STOP_EVENTS 1" >>confdefs.h
+
+      ;;
+    no)
+      :
+      ;;
+    *)
+      as_fn_error $? "no argument expected for --enable-stop-events option" "$LINENO" 5
+      ;;
+  esac
+
+else
+  enable_stop_events=no
+
+fi
+
+
+
+
 #
 # Assignments
 #

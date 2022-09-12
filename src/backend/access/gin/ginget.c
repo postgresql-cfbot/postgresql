@@ -19,7 +19,9 @@
 #include "common/pg_prng.h"
 #include "miscadmin.h"
 #include "storage/predicate.h"
+#include "storage/stopevent.h"
 #include "utils/datum.h"
+#include "utils/jsonb.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
 
@@ -643,6 +645,29 @@ startScan(IndexScanDesc scan)
 		startScanKey(ginstate, so, so->keys + i);
 }
 
+#ifdef USE_STOP_EVENTS
+static Jsonb *
+EntryFindPostingLeafPageStopEventParams(Relation index,
+										OffsetNumber attnum,
+										BlockNumber rootBlockNum)
+{
+	MemoryContext oldCxt;
+	JsonbParseState *state = NULL;
+	Jsonb	   *res;
+
+	stopevents_make_cxt();
+	oldCxt = MemoryContextSwitchTo(stopevents_cxt);
+	pushJsonbValue(&state, WJB_BEGIN_OBJECT, NULL);
+	relation_stopevent_params(&state, index);
+	jsonb_push_int8_key(&state, "attnum", attnum);
+	jsonb_push_int8_key(&state, "rootBlockNum", rootBlockNum);
+	res = JsonbValueToJsonb(pushJsonbValue(&state, WJB_END_OBJECT, NULL));
+	MemoryContextSwitchTo(oldCxt);
+
+	return res;
+}
+#endif
+
 /*
  * Load the next batch of item pointers from a posting tree.
  *
@@ -696,6 +721,11 @@ entryLoadMoreItems(GinState *ginstate, GinScanEntry entry,
 						   OffsetNumberNext(GinItemPointerGetOffsetNumber(&advancePast)));
 		}
 		entry->btree.fullScan = false;
+
+		STOPEVENT(EntryFindPostingLeafPageStopEvent,
+				  EntryFindPostingLeafPageStopEventParams(ginstate->index,
+														  entry->attnum,
+														  entry->btree.rootBlkno));
 		stack = ginFindLeafPage(&entry->btree, true, false, snapshot);
 
 		/* we don't need the stack, just the buffer. */

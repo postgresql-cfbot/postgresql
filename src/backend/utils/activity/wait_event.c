@@ -448,6 +448,9 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 		case WAIT_EVENT_SAFE_SNAPSHOT:
 			event_name = "SafeSnapshot";
 			break;
+		case WAIT_EVENT_STOPEVENT:
+			event_name = "StopEvent";
+			break;
 		case WAIT_EVENT_SYNC_REP:
 			event_name = "SyncRep";
 			break;

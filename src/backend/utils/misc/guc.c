@@ -94,6 +94,7 @@
 #include "storage/predicate.h"
 #include "storage/proc.h"
 #include "storage/standby.h"
+#include "storage/stopevent.h"
 #include "tcop/tcopprot.h"
 #include "tsearch/ts_cache.h"
 #include "utils/acl.h"
@@ -2177,6 +2178,28 @@ static struct config_bool ConfigureNamesBool[] =
 			gettext_noop("Sets whether a WAL receiver should create a temporary replication slot if no permanent slot is configured."),
 		},
 		&wal_receiver_create_temp_slot,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"enable_stopevents", PGC_SUSET, DEVELOPER_OPTIONS,
+			gettext_noop("Sets whether stop events are enabled."),
+			NULL,
+			GUC_NOT_IN_SAMPLE
+		},
+		&enable_stopevents,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"trace_stopevents", PGC_SUSET, DEVELOPER_OPTIONS,
+			gettext_noop("Sets whether trace stop events to the log."),
+			NULL,
+			GUC_NOT_IN_SAMPLE
+		},
+		&trace_stopevents,
 		false,
 		NULL, NULL, NULL
 	},

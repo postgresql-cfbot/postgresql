@@ -1111,6 +1111,15 @@ if test "$with_zstd" = yes; then
     esac
   done
 fi
+
+#
+# Stop events
+#
+PGAC_ARG_BOOL(enable, stop-events, no, [enable stop events (for debugging)],
+              [AC_DEFINE([USE_STOP_EVENTS], 1,
+                         [Define to 1 to build with stop events. (--enable-stop-events)])])
+AC_SUBST(enable_stop_events)
+
 #
 # Assignments
 #

@@ -51,6 +51,7 @@
 #include "storage/proc.h"
 #include "storage/smgr.h"
 #include "storage/standby.h"
+#include "storage/stopevent.h"
 #include "utils/memdebug.h"
 #include "utils/ps_status.h"
 #include "utils/rel.h"
@@ -1629,6 +1630,29 @@ MarkBufferDirty(Buffer buffer)
 	}
 }
 
+#ifdef USE_STOP_EVENTS
+static Jsonb *
+ReleaseAndReadBufferStopEventParams(Relation relation,
+									BlockNumber oldBlockNum,
+									BlockNumber newBlockNum)
+{
+	MemoryContext oldCxt;
+	JsonbParseState *state = NULL;
+	Jsonb	   *res;
+
+	stopevents_make_cxt();
+	oldCxt = MemoryContextSwitchTo(stopevents_cxt);
+	pushJsonbValue(&state, WJB_BEGIN_OBJECT, NULL);
+	relation_stopevent_params(&state, relation);
+	jsonb_push_int8_key(&state, "oldBlockNum", oldBlockNum);
+	jsonb_push_int8_key(&state, "newBlockNum", newBlockNum);
+	res = JsonbValueToJsonb(pushJsonbValue(&state, WJB_END_OBJECT, NULL));
+	MemoryContextSwitchTo(oldCxt);
+
+	return res;
+}
+#endif
+
 /*
  * ReleaseAndReadBuffer -- combine ReleaseBuffer() and ReadBuffer()
  *
@@ -1649,9 +1673,11 @@ ReleaseAndReadBuffer(Buffer buffer,
 {
 	ForkNumber	forkNum = MAIN_FORKNUM;
 	BufferDesc *bufHdr;
+	BlockNumber oldBlockNum = InvalidBlockNumber;
 
 	if (BufferIsValid(buffer))
 	{
+		oldBlockNum = BufferGetBlockNumber(buffer);
 		Assert(BufferIsPinned(buffer));
 		if (BufferIsLocal(buffer))
 		{
@@ -1674,6 +1700,9 @@ ReleaseAndReadBuffer(Buffer buffer,
 			UnpinBuffer(bufHdr, true);
 		}
 	}
+
+	STOPEVENT(ReleaseAndReadBufferStopEvent,
+			  ReleaseAndReadBufferStopEventParams(relation, oldBlockNum, blockNum));
 
 	return ReadBuffer(relation, blockNum);
 }

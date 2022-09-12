@@ -1,3 +1,5 @@
 /lwlocknames.c
 /lwlocknames.h
 /s_lock_test
+/stopeventnames.c
+/stopeventnames.h

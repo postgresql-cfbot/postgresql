@@ -22,7 +22,9 @@ OBJS = \
 	predicate.o \
 	proc.o \
 	s_lock.o \
-	spin.o
+	spin.o \
+	stopevent.o \
+	stopeventnames.o
 
 include $(top_srcdir)/src/backend/common.mk
 
@@ -41,6 +43,12 @@ lwlocknames.c: lwlocknames.h
 
 lwlocknames.h: $(top_srcdir)/src/backend/storage/lmgr/lwlocknames.txt generate-lwlocknames.pl
 	$(PERL) $(srcdir)/generate-lwlocknames.pl $<
+
+stopeventnames.c: stopeventnames.h
+	touch $@
+
+stopeventnames.h: $(top_srcdir)/src/backend/storage/lmgr/stopeventnames.txt generate-stopeventnames.pl
+	$(PERL) $(srcdir)/generate-stopeventnames.pl $<
 
 check: s_lock_test
 	./s_lock_test

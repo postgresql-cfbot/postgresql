@@ -1,0 +1,26 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s2s1 s1s s2s2 s2v s2s3
+step s2s1: select pg_stopevent_set('EntryFindPostingLeafPage',
+									  '$.datname == "isolation_regression" && $.relname == "tmp_idx"');
+pg_stopevent_set
+
+               
+step s1s: select * from tmp where ar @> array[1,2]; <waiting ...>
+step s2s2: select pg_stopevent_set('ReleaseAndReadBuffer',
+									  '$.datname == "isolation_regression" && $.relname == "tmp_idx"');
+			  select pg_stopevent_reset('EntryFindPostingLeafPage');
+pg_stopevent_set
+
+               
+pg_stopevent_reset
+
+               
+step s2v: vacuum tmp;
+step s2s3: select pg_stopevent_reset('ReleaseAndReadBuffer');
+pg_stopevent_reset
+
+               
+step s1s: <... completed>
+ar             
+

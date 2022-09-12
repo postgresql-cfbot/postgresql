@@ -126,6 +126,9 @@ parser/gram.h: parser/gram.y
 storage/lmgr/lwlocknames.h: storage/lmgr/generate-lwlocknames.pl storage/lmgr/lwlocknames.txt
 	$(MAKE) -C storage/lmgr lwlocknames.h lwlocknames.c
 
+storage/lmgr/stopeventnames.h: storage/lmgr/generate-stopeventnames.pl storage/lmgr/stopeventnames.txt
+	$(MAKE) -C storage/lmgr stopeventnames.h stopeventnames.c
+
 # run this unconditionally to avoid needing to know its dependencies here:
 submake-catalog-headers:
 	$(MAKE) -C catalog distprep generated-header-symlinks
@@ -153,7 +156,7 @@ submake-utils-headers:
 
 .PHONY: generated-headers
 
-generated-headers: $(top_builddir)/src/include/parser/gram.h $(top_builddir)/src/include/storage/lwlocknames.h submake-catalog-headers submake-nodes-headers submake-utils-headers
+generated-headers: $(top_builddir)/src/include/parser/gram.h $(top_builddir)/src/include/storage/lwlocknames.h $(top_builddir)/src/include/storage/stopeventnames.h submake-catalog-headers submake-nodes-headers submake-utils-headers
 
 $(top_builddir)/src/include/parser/gram.h: parser/gram.h
 	prereqdir=`cd '$(dir $<)' >/dev/null && pwd` && \
@@ -161,6 +164,11 @@ $(top_builddir)/src/include/parser/gram.h: parser/gram.h
 	  $(LN_S) "$$prereqdir/$(notdir $<)" .
 
 $(top_builddir)/src/include/storage/lwlocknames.h: storage/lmgr/lwlocknames.h
+	prereqdir=`cd '$(dir $<)' >/dev/null && pwd` && \
+	  cd '$(dir $@)' && rm -f $(notdir $@) && \
+	  $(LN_S) "$$prereqdir/$(notdir $<)" .
+
+$(top_builddir)/src/include/storage/stopeventnames.h: storage/lmgr/stopeventnames.h
 	prereqdir=`cd '$(dir $<)' >/dev/null && pwd` && \
 	  cd '$(dir $@)' && rm -f $(notdir $@) && \
 	  $(LN_S) "$$prereqdir/$(notdir $<)" .

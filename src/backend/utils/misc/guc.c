@@ -144,6 +144,7 @@ extern char *temp_tablespaces;
 extern bool ignore_checksum_failure;
 extern bool ignore_invalid_pages;
 extern bool synchronize_seqscans;
+extern Oid  *binary_format_oids;
 
 #ifdef TRACE_SYNCSCAN
 extern bool trace_syncscan;
@@ -243,6 +244,8 @@ static bool check_recovery_target_lsn(char **newval, void **extra, GucSource sou
 static void assign_recovery_target_lsn(const char *newval, void *extra);
 static bool check_primary_slot_name(char **newval, void **extra, GucSource source);
 static bool check_default_with_oids(bool *newval, void **extra, GucSource source);
+static bool check_format_binary(char **newval, void **extra, GucSource source);
+static void assign_format_binary(const char*newval, void *extra);
 
 /*
  * Track whether there were any deferred checks for custom resource managers
@@ -4294,6 +4297,17 @@ static struct config_string ConfigureNamesString[] =
 		&local_preload_libraries_string,
 		"",
 		NULL, NULL, NULL
+	},
+	{
+		{"format_binary", PGC_USERSET, CLIENT_CONN_STATEMENT,
+			gettext_noop("Sets the type Oid's to be returned in binary format"),
+			gettext_noop("Set by the client to indicate which types are to be "
+						 "returned in binary format. "),
+			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+		},
+		&format_binary,
+		"",
+		check_format_binary, assign_format_binary, NULL
 	},
 
 	{
@@ -13333,3 +13347,80 @@ check_default_with_oids(bool *newval, void **extra, GucSource source)
 
 	return true;
 }
+
+static bool
+check_format_binary( char **newval, void **extra, GucSource source)
+{
+	// sanity check
+	if (*newval == NULL)
+		return false;
+	
+	if (strcmp(*newval,"") == 0)
+		return true;
+
+	char *tmp = palloc(strlen(*newval));
+	strcpy(tmp, *newval);
+	char *token = strtok(tmp, ",");
+
+	while(token != NULL)
+	{
+		Oid candidate = atooid(token);
+		if (candidate > OID_MAX) 
+			GUC_check_errdetail("OID out of range found in %s, %s", *newval, token);
+
+		// atooid will return 0 aka InvalidOid if it can't convert the string or 0 
+		// if it's really 0	
+		if (candidate == InvalidOid)
+		{	
+			if (errno == EINVAL)
+				GUC_check_errdetail("%s has invalid characters at %s",
+					*newval, token);
+			else
+				GUC_check_errdetail("InvalidOid (0) found in %s", *newval);
+			return false;
+		}
+		else
+			token = strtok(NULL, ",");
+	}
+	return true;
+}
+
+static void
+assign_format_binary(const char *newval, void *extra)
+{
+	// check for errors or nothing to do
+	if (newval == NULL || strcmp(newval, "") == 0)
+		return;
+
+	char *tmp = palloc(strlen(newval));
+	strcpy(tmp, newval);
+
+	/* Must save OID list in permanent storage. */
+	MemoryContext oldcxt = MemoryContextSwitchTo(TopMemoryContext);
+
+	// unlikely to have more than 16
+	int length = 16;
+	// +1 for the InvalidOid marker at the end
+	Oid *tmpOids = palloc(sizeof(Oid)*(length+1));
+	int i = 0;
+	
+	char *token = strtok(tmp, ",");
+
+	while(token != NULL)
+	{
+		tmpOids[i++] = atooid(token);
+		if (i > length)
+		{
+			length += 16;
+			tmpOids = repalloc(tmpOids, sizeof(Oid)*(length+1));
+		}
+		token = strtok(NULL, ",");
+	}
+	tmpOids[i] = InvalidOid;
+	binary_format_oids = tmpOids;
+	MemoryContextSwitchTo(oldcxt);
+
+}
+
+#include "guc-file.c"
+

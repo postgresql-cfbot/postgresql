@@ -58,6 +58,8 @@ static uint64 DoPortalRunFetch(Portal portal,
 							   long count,
 							   DestReceiver *dest);
 static void DoPortalRewind(Portal portal);
+static int findOid( Oid *binary_oids, Oid oid);
+extern Oid  *binary_format_oids;
 
 
 /*
@@ -644,18 +646,56 @@ PortalSetResultFormat(Portal portal, int nFormats, int16 *formats)
 	}
 	else if (nFormats > 0)
 	{
-		/* single format specified, use for all columns */
-		int16		format1 = formats[0];
+		// The client has requested binary formats for some types
+		if ( binary_format_oids != NULL )
+		{
+			Oid targetOid;
 
-		for (i = 0; i < natts; i++)
-			portal->formats[i] = format1;
+			for (i = 0; i < natts; i++){
+				targetOid = portal->tupDesc->attrs[i].atttypid;
+				portal->formats[i] = findOid(binary_format_oids, targetOid);
+			}
+		}
+		else
+		{
+			/* single format specified, use for all columns */
+			int16		format1 = formats[0];
+
+			for (i = 0; i < natts; i++)
+				portal->formats[i] = format1;
+		}
 	}
 	else
 	{
-		/* use default format for all columns */
-		for (i = 0; i < natts; i++)
-			portal->formats[i] = 0;
+		if ( binary_format_oids != NULL )
+		{
+			Oid targetOid;
+
+			for (i = 0; i < natts; i++){
+				targetOid = portal->tupDesc->attrs[i].atttypid;
+				portal->formats[i] = findOid(binary_format_oids, targetOid);
+			}
+		}
+		else {
+			/* use default format for all columns */
+			for (i = 0; i < natts; i++)
+				portal->formats[i] = 0;
+		}
 	}
+}
+
+/*
+* Linear search through the array of oids.
+* I don't expect this to ever be a large array
+*/
+static int findOid( Oid *binary_oids, Oid oid)
+{
+	Oid *tmp = binary_oids;
+	while (tmp && *tmp != InvalidOid)
+	{
+		if (*tmp++ == oid) return 1;
+	}
+	return 0;
 }
 
 /*

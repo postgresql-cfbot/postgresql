@@ -18,6 +18,8 @@ END
 $$;
 INSERT INTO schema4.counted VALUES ('total', 0), ('delta', 1);
 SELECT pg_reload_conf();
+-- reconnect to avoid unstable test result due to asynchronous signal
+\c
 -- wait until the worker has processed the tuple we just inserted
 DO $$
 DECLARE

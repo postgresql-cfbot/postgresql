@@ -29,6 +29,15 @@ typedef struct EventTriggerData
 	CommandTag	tag;
 } EventTriggerData;
 
+typedef enum ignore_event_trigger_events
+{
+	IGNORE_EVENT_TRIGGER_NONE,
+	IGNORE_EVENT_TRIGGER_ALL,
+	IGNORE_EVENT_TRIGGER_LOGIN
+} IgnoreEventTriggersEvents;
+
+extern int ignore_event_trigger;
+
 #define AT_REWRITE_ALTER_PERSISTENCE	0x01
 #define AT_REWRITE_DEFAULT_VAL			0x02
 #define AT_REWRITE_COLUMN_REWRITE		0x04
@@ -54,6 +63,7 @@ extern void EventTriggerDDLCommandStart(Node *parsetree);
 extern void EventTriggerDDLCommandEnd(Node *parsetree);
 extern void EventTriggerSQLDrop(Node *parsetree);
 extern void EventTriggerTableRewrite(Node *parsetree, Oid tableOid, int reason);
+extern void EventTriggerOnLogin(void);
 
 extern bool EventTriggerBeginCompleteQuery(void);
 extern void EventTriggerEndCompleteQuery(void);

@@ -49,6 +49,7 @@
 #include "catalog/pg_parameter_acl.h"
 #include "catalog/storage.h"
 #include "commands/async.h"
+#include "commands/event_trigger.h"
 #include "commands/prepare.h"
 #include "commands/tablespace.h"
 #include "commands/trigger.h"
@@ -590,6 +591,13 @@ static const struct config_enum_entry wal_compression_options[] = {
 	{"no", WAL_COMPRESSION_NONE, true},
 	{"1", WAL_COMPRESSION_PGLZ, true},
 	{"0", WAL_COMPRESSION_NONE, true},
+	{NULL, 0, false}
+};
+
+static const struct config_enum_entry ignore_event_trigger_options[] = {
+	{"none", IGNORE_EVENT_TRIGGER_NONE, false},
+	{"all", IGNORE_EVENT_TRIGGER_ALL, false},
+	{"login", IGNORE_EVENT_TRIGGER_LOGIN, false},
 	{NULL, 0, false}
 };
 
@@ -4963,6 +4971,16 @@ static struct config_enum ConfigureNamesEnum[] =
 		},
 		&wal_compression,
 		WAL_COMPRESSION_NONE, wal_compression_options,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"ignore_event_trigger", PGC_SUSET, CLIENT_CONN_STATEMENT,
+			gettext_noop("Disable event triggers during the session."),
+			NULL
+		},
+		&ignore_event_trigger,
+		IGNORE_EVENT_TRIGGER_NONE, ignore_event_trigger_options,
 		NULL, NULL, NULL
 	},
 

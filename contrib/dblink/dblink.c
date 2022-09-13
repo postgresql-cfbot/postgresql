@@ -1976,7 +1976,7 @@ PG_FUNCTION_INFO_V1(dblink_fdw_validator);
 Datum
 dblink_fdw_validator(PG_FUNCTION_ARGS)
 {
-	List	   *options_list = untransformRelOptions(PG_GETARG_DATUM(0));
+	List	   *options_list = optionsTextArrayToDefList(PG_GETARG_DATUM(0));
 	Oid			context = PG_GETARG_OID(1);
 	ListCell   *cell;
 

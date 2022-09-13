@@ -17,7 +17,7 @@
 
 #include "access/gist_private.h"
 #include "access/htup_details.h"
-#include "access/reloptions.h"
+#include "access/options.h"
 #include "catalog/pg_opclass.h"
 #include "common/pg_prng.h"
 #include "storage/indexfsm.h"
@@ -917,20 +917,6 @@ gistPageRecyclable(Page page)
 	return false;
 }
 
-bytea *
-gistoptions(Datum reloptions, bool validate)
-{
-	static const relopt_parse_elt tab[] = {
-		{"fillfactor", RELOPT_TYPE_INT, offsetof(GiSTOptions, fillfactor)},
-		{"buffering", RELOPT_TYPE_ENUM, offsetof(GiSTOptions, buffering_mode)}
-	};
-
-	return (bytea *) build_reloptions(reloptions, validate,
-									  RELOPT_KIND_GIST,
-									  sizeof(GiSTOptions),
-									  tab, lengthof(tab));
-}
-
 /*
  *	gistproperty() -- Check boolean properties of indexes.
  *
@@ -1064,4 +1050,40 @@ gistGetFakeLSN(Relation rel)
 		Assert(rel->rd_rel->relpersistence == RELPERSISTENCE_UNLOGGED);
 		return GetFakeLSNForUnloggedRel();
 	}
+}
+
+/* values from GistOptBufferingMode */
+static opt_enum_elt_def gistBufferingOptValues[] =
+{
+	{"auto", GIST_OPTION_BUFFERING_AUTO},
+	{"on", GIST_OPTION_BUFFERING_ON},
+	{"off", GIST_OPTION_BUFFERING_OFF},
+	{(const char *) NULL}		/* list terminator */
+};
+
+static options_spec_set *gist_relopt_specset = NULL;
+
+void *
+gistgetreloptspecset(void)
+{
+	if (gist_relopt_specset)
+		return gist_relopt_specset;
+
+	gist_relopt_specset = allocateOptionsSpecSet(NULL,
+												 sizeof(GiSTOptions), false, 2);
+
+	optionsSpecSetAddInt(gist_relopt_specset, "fillfactor",
+						 "Packs gist index pages only to this percentage",
+						 NoLock,	/* No ALTER, no lock */
+						 offsetof(GiSTOptions, fillfactor), NULL,
+						 GIST_DEFAULT_FILLFACTOR, GIST_MIN_FILLFACTOR, 100);
+
+	optionsSpecSetAddEnum(gist_relopt_specset, "buffering",
+						  "Enables buffering build for this GiST index",
+						  NoLock,	/* No ALTER, no lock */
+						  offsetof(GiSTOptions, buffering_mode), NULL,
+						  gistBufferingOptValues,
+						  GIST_OPTION_BUFFERING_AUTO,
+						  gettext_noop("Valid values are \"on\", \"off\", and \"auto\"."));
+	return gist_relopt_specset;
 }

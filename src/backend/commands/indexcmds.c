@@ -19,6 +19,7 @@
 #include "access/heapam.h"
 #include "access/htup_details.h"
 #include "access/reloptions.h"
+#include "access/options.h"
 #include "access/sysattr.h"
 #include "access/tableam.h"
 #include "access/xact.h"
@@ -546,7 +547,7 @@ DefineIndex(Oid relationId,
 	Form_pg_am	accessMethodForm;
 	IndexAmRoutine *amRoutine;
 	bool		amcanorder;
-	amoptions_function amoptions;
+	amreloptspecset_function amreloptspecsetfn;
 	bool		partitioned;
 	bool		safe_index;
 	Datum		reloptions;
@@ -861,7 +862,7 @@ DefineIndex(Oid relationId,
 						accessMethodName)));
 
 	amcanorder = amRoutine->amcanorder;
-	amoptions = amRoutine->amoptions;
+	amreloptspecsetfn = amRoutine->amreloptspecset;
 
 	pfree(amRoutine);
 	ReleaseSysCache(tuple);
@@ -875,10 +876,18 @@ DefineIndex(Oid relationId,
 	/*
 	 * Parse AM-specific options, convert to text array form, validate.
 	 */
-	reloptions = transformRelOptions((Datum) 0, stmt->options,
-									 NULL, NULL, false, false);
 
-	(void) index_reloptions(amoptions, reloptions, true);
+	if (stmt->options && !amreloptspecsetfn)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("access method %s does not support options",
+						accessMethodName)));
+
+	if (amreloptspecsetfn)
+		reloptions = optionDefListToTextArray(amreloptspecsetfn(),
+											  stmt->options);
+	else
+		reloptions = (Datum) 0;
 
 	/*
 	 * Prepare arguments for index_create, primarily an IndexInfo structure.
@@ -2115,8 +2124,7 @@ ComputeIndexAttrs(IndexInfo *indexInfo,
 					palloc0_array(Datum, indexInfo->ii_NumIndexAttrs);
 
 			indexInfo->ii_OpclassOptions[attn] =
-				transformRelOptions((Datum) 0, attribute->opclassopts,
-									NULL, NULL, false, false);
+				optionsDefListToTextArray(attribute->opclassopts);
 		}
 
 		attn++;

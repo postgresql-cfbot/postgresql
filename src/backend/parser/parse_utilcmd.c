@@ -1767,7 +1767,7 @@ generateClonedIndexStmt(RangeVar *heapRel, Relation source_idx,
 		/* Add the operator class name, if non-default */
 		iparam->opclass = get_opclass(indclass->values[keyno], keycoltype);
 		iparam->opclassopts =
-			untransformRelOptions(get_attoptions(source_relid, keyno + 1));
+			optionsTextArrayToDefList(get_attoptions(source_relid, keyno + 1));
 
 		iparam->ordering = SORTBY_DEFAULT;
 		iparam->nulls_ordering = SORTBY_NULLS_DEFAULT;
@@ -1831,7 +1831,7 @@ generateClonedIndexStmt(RangeVar *heapRel, Relation source_idx,
 	datum = SysCacheGetAttr(RELOID, ht_idxrel,
 							Anum_pg_class_reloptions, &isnull);
 	if (!isnull)
-		index->options = untransformRelOptions(datum);
+		index->options = optionsTextArrayToDefList(datum);
 
 	/* If it's a partial index, decompile and append the predicate */
 	datum = SysCacheGetAttr(INDEXRELID, ht_idx,

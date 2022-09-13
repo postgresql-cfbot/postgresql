@@ -69,9 +69,10 @@ WHERE locktype = 'relation'
   AND relation = 'test_prepared1'::regclass;
     relation     | locktype |        mode         
 -----------------+----------+---------------------
+ test_prepared_1 | relation | AccessShareLock
  test_prepared_1 | relation | RowExclusiveLock
  test_prepared_1 | relation | AccessExclusiveLock
-(2 rows)
+(3 rows)
 
 -- The insert should show the newly altered column but not the DDL.
 SELECT data FROM pg_logical_slot_get_changes('regression_slot', NULL, NULL, 'include-xids', '0', 'skip-empty-xacts', '1');

@@ -79,7 +79,7 @@ GetForeignDataWrapperExtended(Oid fdwid, bits16 flags)
 	if (isnull)
 		fdw->options = NIL;
 	else
-		fdw->options = untransformRelOptions(datum);
+		fdw->options = optionsTextArrayToDefList(datum);
 
 	ReleaseSysCache(tp);
 
@@ -166,7 +166,7 @@ GetForeignServerExtended(Oid serverid, bits16 flags)
 	if (isnull)
 		server->options = NIL;
 	else
-		server->options = untransformRelOptions(datum);
+		server->options = optionsTextArrayToDefList(datum);
 
 	ReleaseSysCache(tp);
 
@@ -234,7 +234,7 @@ GetUserMapping(Oid userid, Oid serverid)
 	if (isnull)
 		um->options = NIL;
 	else
-		um->options = untransformRelOptions(datum);
+		um->options = optionsTextArrayToDefList(datum);
 
 	ReleaseSysCache(tp);
 
@@ -271,7 +271,7 @@ GetForeignTable(Oid relid)
 	if (isnull)
 		ft->options = NIL;
 	else
-		ft->options = untransformRelOptions(datum);
+		ft->options = optionsTextArrayToDefList(datum);
 
 	ReleaseSysCache(tp);
 
@@ -304,7 +304,7 @@ GetForeignColumnOptions(Oid relid, AttrNumber attnum)
 	if (isnull)
 		options = NIL;
 	else
-		options = untransformRelOptions(datum);
+		options = optionsTextArrayToDefList(datum);
 
 	ReleaseSysCache(tp);
 
@@ -512,7 +512,7 @@ pg_options_to_table(PG_FUNCTION_ARGS)
 	List	   *options;
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
 
-	options = untransformRelOptions(array);
+	options = optionsTextArrayToDefList(array);
 	rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
 
 	/* prepare the result set */
@@ -609,7 +609,7 @@ is_conninfo_option(const char *option, Oid context)
 Datum
 postgresql_fdw_validator(PG_FUNCTION_ARGS)
 {
-	List	   *options_list = untransformRelOptions(PG_GETARG_DATUM(0));
+	List	   *options_list = optionsTextArrayToDefList(PG_GETARG_DATUM(0));
 	Oid			catalog = PG_GETARG_OID(1);
 
 	ListCell   *cell;

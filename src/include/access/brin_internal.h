@@ -14,6 +14,7 @@
 #include "access/amapi.h"
 #include "storage/bufpage.h"
 #include "utils/typcache.h"
+#include "access/options.h"
 
 
 /*
@@ -108,6 +109,7 @@ extern IndexBulkDeleteResult *brinbulkdelete(IndexVacuumInfo *info,
 extern IndexBulkDeleteResult *brinvacuumcleanup(IndexVacuumInfo *info,
 												IndexBulkDeleteResult *stats);
 extern bytea *brinoptions(Datum reloptions, bool validate);
+extern void *bringetreloptspecset(void);
 
 /* brin_validate.c */
 extern bool brinvalidate(Oid opclassoid);

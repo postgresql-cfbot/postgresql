@@ -32,9 +32,11 @@
 #endif
 #include <unistd.h>
 
+#include "access/clog.h"
 #include "access/commit_ts.h"
 #include "access/gin.h"
 #include "access/rmgr.h"
+#include "access/slru.h"
 #include "access/tableam.h"
 #include "access/toast_compression.h"
 #include "access/transam.h"
@@ -2422,6 +2424,16 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&shared_memory_size_in_huge_pages,
 		-1, -1, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"slru_buffers_size_scale", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("SLRU buffers size scale of power 2"),
+			NULL
+		},
+		&slru_buffers_size_scale,
+		2, 0, 7,
 		NULL, NULL, NULL
 	},
 

@@ -1968,6 +1968,37 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
+    <varlistentry id="guc-slru-buffers-size-scale" xreflabel="slru_buffers_size_scale">
+     <term><varname>slru_buffers_size_scale</varname> (<type>integer</type>)
+     <indexterm>
+      <primary><varname>slru_buffers_size_scale</varname> configuration parameter</primary>
+     </indexterm>
+     </term>
+     <listitem>
+      <para>
+       Specifies power 2 scale for all SLRU shared memory buffers sizes. Buffers sizes depends on
+       both <literal>guc_slru_buffers_size_scale</literal> and <literal>shared_buffers</literal> params.
+      </para>
+      <para>
+       This affects on buffers in the list below (see also <xref linkend="pgdata-contents-table"/>):
+        <itemizedlist>
+         <listitem><para><literal>NUM_MULTIXACTOFFSET_BUFFERS = Min(32 &lt;&lt; slru_buffers_size_scale, shared_buffers/256)</literal></para></listitem>
+         <listitem><para><literal>NUM_MULTIXACTMEMBER_BUFFERS = Min(64 &lt;&lt; slru_buffers_size_scale, shared_buffers/256)</literal></para></listitem>
+         <listitem><para><literal>NUM_SUBTRANS_BUFFERS = Min(64 &lt;&lt; slru_buffers_size_scale, shared_buffers/256)</literal></para></listitem>
+         <listitem><para><literal>NUM_NOTIFY_BUFFERS = Min(32 &lt;&lt; slru_buffers_size_scale, shared_buffers/256)</literal></para></listitem>
+         <listitem><para><literal>NUM_SERIAL_BUFFERS = Min(32 &lt;&lt; slru_buffers_size_scale, shared_buffers/256)</literal></para></listitem>
+         <listitem><para><literal>NUM_CLOG_BUFFERS = Min(128 &lt;&lt; slru_buffers_size_scale, shared_buffers/256)</literal></para></listitem>
+         <listitem><para><literal>NUM_COMMIT_TS_BUFFERS = Min(128 &lt;&lt; slru_buffers_size_scale, shared_buffers/256)</literal></para></listitem>
+        </itemizedlist>
+      </para>
+      <para>
+       Value is in <literal>0..7</literal> bounds.
+       The default value is <literal>2</literal>.
+       This parameter can only be set at server start.
+      </para>
+     </listitem>
+    </varlistentry>
+
      <varlistentry id="guc-max-stack-depth" xreflabel="max_stack_depth">
       <term><varname>max_stack_depth</varname> (<type>integer</type>)
       <indexterm>

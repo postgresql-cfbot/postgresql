@@ -12,7 +12,7 @@
 #define SUBTRANS_H
 
 /* Number of SLRU buffers to use for subtrans */
-#define NUM_SUBTRANS_BUFFERS	32
+#define NUM_SUBTRANS_BUFFERS	(32 << slru_buffers_size_scale)
 
 extern void SubTransSetParent(TransactionId xid, TransactionId parent);
 extern TransactionId SubTransGetParent(TransactionId xid);

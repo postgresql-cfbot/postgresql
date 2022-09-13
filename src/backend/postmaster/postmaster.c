@@ -244,6 +244,11 @@ char	   *bonjour_name;
 bool		restart_after_crash = true;
 bool		remove_temp_files_after_crash = true;
 
+/*
+ * Time between progress updates for long-running postmaster operations.
+ */
+int			log_postmaster_progress_interval = 10000;	/* 10 sec */
+
 /* PIDs of special child processes; 0 when not running */
 static pid_t StartupPID = 0,
 			BgWriterPID = 0,
@@ -650,7 +655,6 @@ PostmasterMain(int argc, char *argv[])
 	pqsignal_pm(SIGINT, pmdie); /* send SIGTERM and shut down */
 	pqsignal_pm(SIGQUIT, pmdie);	/* send SIGQUIT and die */
 	pqsignal_pm(SIGTERM, pmdie);	/* wait for children and shut down */
-	pqsignal_pm(SIGALRM, SIG_IGN);	/* ignored */
 	pqsignal_pm(SIGPIPE, SIG_IGN);	/* ignored */
 	pqsignal_pm(SIGUSR1, sigusr1_handler);	/* message from child process */
 	pqsignal_pm(SIGUSR2, dummy_handler);	/* unused, reserve for children */
@@ -684,6 +688,11 @@ PostmasterMain(int argc, char *argv[])
 #ifdef SIGXFSZ
 	pqsignal_pm(SIGXFSZ, SIG_IGN);	/* ignored */
 #endif
+
+	InitializeTimeouts();	/* establishes SIGALRM handler */
+
+	RegisterTimeout(PROGRESS_REPORT_TIMEOUT,
+					progress_report_timeout_handler);
 
 	/*
 	 * Options setup
@@ -1115,6 +1124,9 @@ PostmasterMain(int argc, char *argv[])
 #ifdef EXEC_BACKEND
 	/* Write out nondefault GUC settings for child processes to use */
 	write_nondefault_variables(PGC_POSTMASTER);
+
+	/* Prepare to report progress of the temporary files removal phase */
+	begin_progress_report_phase(log_postmaster_progress_interval);
 
 	/*
 	 * Clean out the temp directory used to transmit parameters to child

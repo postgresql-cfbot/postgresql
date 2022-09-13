@@ -95,11 +95,13 @@
 #include "pgstat.h"
 #include "port/pg_iovec.h"
 #include "portability/mem.h"
+#include "postmaster/postmaster.h"
 #include "postmaster/startup.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "utils/guc.h"
 #include "utils/resowner_private.h"
+#include "utils/timeout.h"
 
 /* Define PG_FLUSH_DATA_WORKS if we have an implementation for pg_flush_data */
 #if defined(HAVE_SYNC_FILE_RANGE)
@@ -3079,6 +3081,12 @@ RemovePgTempFiles(void)
 	struct dirent *spc_de;
 
 	/*
+	 * Prepare to report progress of the temporary and temporary relation files
+	 * removal phase.
+	 */
+	begin_progress_report_phase(log_postmaster_progress_interval);
+
+	/*
 	 * First process temp files in pg_default ($PGDATA/base)
 	 */
 	snprintf(temp_path, sizeof(temp_path), "base/%s", PG_TEMP_FILES_DIR);
@@ -3150,6 +3158,9 @@ RemovePgTempFilesInDir(const char *tmpdirname, bool missing_ok, bool unlink_all)
 
 		snprintf(rm_path, sizeof(rm_path), "%s/%s",
 				 tmpdirname, temp_de->d_name);
+
+		ereport_progress("removing temporary files under pgsql_tmp directory, elapsed time: %ld.%02d s, current file: %s",
+						 rm_path);
 
 		if (unlink_all ||
 			strncmp(temp_de->d_name,
@@ -3235,6 +3246,9 @@ RemovePgTempRelationFilesInDbspace(const char *dbspacedirname)
 		snprintf(rm_path, sizeof(rm_path), "%s/%s",
 				 dbspacedirname, de->d_name);
 
+		ereport_progress("removing temporary relation files under pg_tblspc directory, elapsed time: %ld.%02d s, current file: %s",
+						 rm_path);
+
 		if (unlink(rm_path) < 0)
 			ereport(LOG,
 					(errcode_for_file_access(),
@@ -3300,8 +3314,8 @@ do_syncfs(const char *path)
 {
 	int			fd;
 
-	ereport_startup_progress("syncing data directory (syncfs), elapsed time: %ld.%02d s, current path: %s",
-							 path);
+	ereport_progress("syncing data directory (syncfs), elapsed time: %ld.%02d s, current path: %s",
+					 path);
 
 	fd = OpenTransientFile(path, O_RDONLY);
 	if (fd < 0)
@@ -3383,7 +3397,7 @@ SyncDataDirectory(void)
 		 */
 
 		/* Prepare to report progress syncing the data directory via syncfs. */
-		begin_startup_progress_phase();
+		begin_progress_report_phase(log_startup_progress_interval);
 
 		/* Sync the top level pgdata directory. */
 		do_syncfs(".");
@@ -3409,7 +3423,7 @@ SyncDataDirectory(void)
 
 #ifdef PG_FLUSH_DATA_WORKS
 	/* Prepare to report progress of the pre-fsync phase. */
-	begin_startup_progress_phase();
+	begin_progress_report_phase(log_startup_progress_interval);
 
 	/*
 	 * If possible, hint to the kernel that we're soon going to fsync the data
@@ -3423,7 +3437,7 @@ SyncDataDirectory(void)
 #endif
 
 	/* Prepare to report progress syncing the data directory via fsync. */
-	begin_startup_progress_phase();
+	begin_progress_report_phase(log_startup_progress_interval);
 
 	/*
 	 * Now we do the fsync()s in the same order.
@@ -3527,8 +3541,8 @@ pre_sync_fname(const char *fname, bool isdir, int elevel)
 	if (isdir)
 		return;
 
-	ereport_startup_progress("syncing data directory (pre-fsync), elapsed time: %ld.%02d s, current path: %s",
-							 fname);
+	ereport_progress("syncing data directory (pre-fsync), elapsed time: %ld.%02d s, current path: %s",
+					 fname);
 
 	fd = OpenTransientFile(fname, O_RDONLY | PG_BINARY);
 
@@ -3559,8 +3573,8 @@ pre_sync_fname(const char *fname, bool isdir, int elevel)
 static void
 datadir_fsync_fname(const char *fname, bool isdir, int elevel)
 {
-	ereport_startup_progress("syncing data directory (fsync), elapsed time: %ld.%02d s, current path: %s",
-							 fname);
+	ereport_progress("syncing data directory (fsync), elapsed time: %ld.%02d s, current path: %s",
+					 fname);
 
 	/*
 	 * We want to silently ignoring errors about unreadable files.  Pass that

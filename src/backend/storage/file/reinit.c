@@ -67,7 +67,7 @@ ResetUnloggedRelations(int op)
 	oldctx = MemoryContextSwitchTo(tmpctx);
 
 	/* Prepare to report progress resetting unlogged relations. */
-	begin_startup_progress_phase();
+	begin_progress_report_phase(log_startup_progress_interval);
 
 	/*
 	 * First process unlogged files in pg_default ($PGDATA/base)
@@ -142,11 +142,11 @@ ResetUnloggedRelationsInTablespaceDir(const char *tsdirname, int op)
 				 tsdirname, de->d_name);
 
 		if (op & UNLOGGED_RELATION_INIT)
-			ereport_startup_progress("resetting unlogged relations (init), elapsed time: %ld.%02d s, current path: %s",
-									 dbspace_path);
+			ereport_progress("resetting unlogged relations (init), elapsed time: %ld.%02d s, current path: %s",
+							 dbspace_path);
 		else if (op & UNLOGGED_RELATION_CLEANUP)
-			ereport_startup_progress("resetting unlogged relations (cleanup), elapsed time: %ld.%02d s, current path: %s",
-									 dbspace_path);
+			ereport_progress("resetting unlogged relations (cleanup), elapsed time: %ld.%02d s, current path: %s",
+							 dbspace_path);
 
 		ResetUnloggedRelationsInDbspaceDir(dbspace_path, op);
 	}

@@ -3661,6 +3661,18 @@ static struct config_int ConfigureNamesInt[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"log_postmaster_progress_interval", PGC_SIGHUP, LOGGING_WHEN,
+			gettext_noop("Time between progress updates for "
+						 "long-running postmaster operations."),
+			gettext_noop("0 turns this feature off."),
+			GUC_UNIT_MS,
+		},
+		&log_postmaster_progress_interval,
+		10000, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, 0, 0, 0, NULL, NULL, NULL

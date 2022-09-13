@@ -82,6 +82,7 @@
 #include "utils/guc.h"
 #include "utils/memutils.h"
 #include "utils/ps_status.h"
+#include "utils/timeout.h"
 
 
 /* In this module, access gettext() via err_gettext() */
@@ -170,6 +171,16 @@ static char formatted_log_time[FORMATTED_TS_LEN];
 		} \
 	} while (0)
 
+/*
+ * Time at which the most recent server operation started.
+ */
+static TimestampTz progress_report_phase_start_time;
+
+/*
+ * Indicates whether the progress interval mentioned by the user is elapsed or
+ * not. TRUE if timeout occurred, FALSE otherwise.
+ */
+static volatile sig_atomic_t progress_report_timer_expired = false;
 
 static const char *err_gettext(const char *str) pg_attribute_format_arg(1);
 static pg_noinline void set_backtrace(ErrorData *edata, int num_skip);
@@ -3433,4 +3444,62 @@ trace_recovery(int trace_level)
 		return LOG;
 
 	return trace_level;
+}
+
+/*
+ * Set a flag indicating that it's time to log a progress report.
+ */
+void
+progress_report_timeout_handler(void)
+{
+	progress_report_timer_expired = true;
+}
+
+/*
+ * Set the start timestamp of the current operation and enable the timeout.
+ */
+void
+begin_progress_report_phase(int progress_report_interval)
+{
+	TimestampTz fin_time;
+
+	/* Feature is disabled. */
+	if (progress_report_interval == 0)
+		return;
+
+	disable_timeout(PROGRESS_REPORT_TIMEOUT, false);
+	progress_report_timer_expired = false;
+	progress_report_phase_start_time = GetCurrentTimestamp();
+	fin_time = TimestampTzPlusMilliseconds(progress_report_phase_start_time,
+										   progress_report_interval);
+	enable_timeout_every(PROGRESS_REPORT_TIMEOUT, fin_time,
+						 progress_report_interval);
+}
+
+/*
+ * Report whether progress report timeout has occurred. Reset the timer flag if
+ * it did, set the elapsed time to the out parameters and return true,
+ * otherwise return false.
+ */
+bool
+has_progress_report_timeout_expired(long *secs, int *usecs)
+{
+	long		seconds;
+	int			useconds;
+	TimestampTz now;
+
+	/* No timeout has occurred. */
+	if (!progress_report_timer_expired)
+		return false;
+
+	/* Calculate the elapsed time. */
+	now = GetCurrentTimestamp();
+	TimestampDifference(progress_report_phase_start_time,
+						now, &seconds, &useconds);
+
+	*secs = seconds;
+	*usecs = useconds;
+	progress_report_timer_expired = false;
+
+	return true;
 }

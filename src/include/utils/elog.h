@@ -471,4 +471,23 @@ extern void set_syslog_parameters(const char *ident, int facility);
  */
 extern void write_stderr(const char *fmt,...) pg_attribute_printf(1, 2);
 
+/*
+ * Log the progress report message if a timer has expired.
+ *
+ * For a process to use this function, it must initialize timeouts, register
+ * for the timeout PROGRESS_REPORT_TIMEOUT and call begin_progress_report_phase
+ * function with a time for progress report interval.
+ */
+#define ereport_progress(msg, ...) \
+	do { \
+		long    secs; \
+		int     usecs; \
+		if (has_progress_report_timeout_expired(&secs, &usecs)) \
+			ereport(LOG, errmsg(msg, secs, (usecs / 10000),  __VA_ARGS__ )); \
+	} while(0)
+
+extern void begin_progress_report_phase(int progress_report_interval);
+extern void progress_report_timeout_handler(void);
+extern bool has_progress_report_timeout_expired(long *secs, int *usecs);
+
 #endif							/* ELOG_H */

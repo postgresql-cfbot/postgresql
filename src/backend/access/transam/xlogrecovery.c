@@ -1643,7 +1643,7 @@ PerformWalRecovery(void)
 
 		/* Prepare to report progress of the redo phase. */
 		if (!StandbyMode)
-			begin_startup_progress_phase();
+			begin_progress_report_phase(log_startup_progress_interval);
 
 		/*
 		 * main redo apply loop
@@ -1651,8 +1651,8 @@ PerformWalRecovery(void)
 		do
 		{
 			if (!StandbyMode)
-				ereport_startup_progress("redo in progress, elapsed time: %ld.%02d s, current LSN: %X/%X",
-										 LSN_FORMAT_ARGS(xlogreader->ReadRecPtr));
+				ereport_progress("redo in progress, elapsed time: %ld.%02d s, current LSN: %X/%X",
+								 LSN_FORMAT_ARGS(xlogreader->ReadRecPtr));
 
 #ifdef WAL_DEBUG
 			if (XLOG_DEBUG ||

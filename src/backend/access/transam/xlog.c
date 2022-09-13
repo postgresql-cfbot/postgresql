@@ -4975,8 +4975,8 @@ StartupXLOG(void)
 
 	/* Set up timeout handler needed to report startup progress. */
 	if (!IsBootstrapProcessingMode())
-		RegisterTimeout(STARTUP_PROGRESS_TIMEOUT,
-						startup_progress_timeout_handler);
+		RegisterTimeout(PROGRESS_REPORT_TIMEOUT,
+						progress_report_timeout_handler);
 
 	/*----------
 	 * If we previously crashed, perform a couple of actions:

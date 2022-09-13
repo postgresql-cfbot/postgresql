@@ -16,6 +16,7 @@
 
 #include <sys/time.h>
 
+#include "libpq/pqsignal.h"
 #include "miscadmin.h"
 #include "storage/proc.h"
 #include "utils/timeout.h"
@@ -375,8 +376,11 @@ handle_sig_alarm(SIGNAL_ARGS)
 	/*
 	 * SIGALRM is always cause for waking anything waiting on the process
 	 * latch.
+	 *
+	 * Postmaster has no latch associated with it.
 	 */
-	SetLatch(MyLatch);
+	if (MyLatch)
+		SetLatch(MyLatch);
 
 	/*
 	 * Always reset signal_pending, even if !alarm_enabled, since indeed no
@@ -494,7 +498,10 @@ InitializeTimeouts(void)
 	all_timeouts_initialized = true;
 
 	/* Now establish the signal handler */
-	pqsignal(SIGALRM, handle_sig_alarm);
+	if (MyProcPid == PostmasterPid)
+		pqsignal_pm(SIGALRM, handle_sig_alarm);
+	else
+		pqsignal(SIGALRM, handle_sig_alarm);
 }
 
 /*

@@ -1348,11 +1348,11 @@ WHEN MATCHED THEN
          Merge Cond: (t.a = s.a)
          ->  Sort (actual rows=50 loops=1)
                Sort Key: t.a
-               Sort Method: quicksort  Memory: xxx
+               Sort Method: quicksort
                ->  Seq Scan on ex_mtarget t (actual rows=50 loops=1)
          ->  Sort (actual rows=100 loops=1)
                Sort Key: s.a
-               Sort Method: quicksort  Memory: xxx
+               Sort Method: quicksort
                ->  Seq Scan on ex_msource s (actual rows=100 loops=1)
 (12 rows)
 
@@ -1369,11 +1369,11 @@ WHEN MATCHED AND t.a < 10 THEN
          Merge Cond: (t.a = s.a)
          ->  Sort (actual rows=50 loops=1)
                Sort Key: t.a
-               Sort Method: quicksort  Memory: xxx
+               Sort Method: quicksort
                ->  Seq Scan on ex_mtarget t (actual rows=50 loops=1)
          ->  Sort (actual rows=100 loops=1)
                Sort Key: s.a
-               Sort Method: quicksort  Memory: xxx
+               Sort Method: quicksort
                ->  Seq Scan on ex_msource s (actual rows=100 loops=1)
 (12 rows)
 
@@ -1392,11 +1392,11 @@ WHEN MATCHED AND t.a >= 10 AND t.a <= 20 THEN
          Merge Cond: (t.a = s.a)
          ->  Sort (actual rows=50 loops=1)
                Sort Key: t.a
-               Sort Method: quicksort  Memory: xxx
+               Sort Method: quicksort
                ->  Seq Scan on ex_mtarget t (actual rows=50 loops=1)
          ->  Sort (actual rows=100 loops=1)
                Sort Key: s.a
-               Sort Method: quicksort  Memory: xxx
+               Sort Method: quicksort
                ->  Seq Scan on ex_msource s (actual rows=100 loops=1)
 (12 rows)
 
@@ -1413,11 +1413,11 @@ WHEN NOT MATCHED AND s.a < 10 THEN
          Merge Cond: (s.a = t.a)
          ->  Sort (actual rows=100 loops=1)
                Sort Key: s.a
-               Sort Method: quicksort  Memory: xxx
+               Sort Method: quicksort
                ->  Seq Scan on ex_msource s (actual rows=100 loops=1)
          ->  Sort (actual rows=45 loops=1)
                Sort Key: t.a
-               Sort Method: quicksort  Memory: xxx
+               Sort Method: quicksort
                ->  Seq Scan on ex_mtarget t (actual rows=45 loops=1)
 (12 rows)
 
@@ -1438,11 +1438,11 @@ WHEN NOT MATCHED AND s.a < 20 THEN
          Merge Cond: (s.a = t.a)
          ->  Sort (actual rows=100 loops=1)
                Sort Key: s.a
-               Sort Method: quicksort  Memory: xxx
+               Sort Method: quicksort
                ->  Seq Scan on ex_msource s (actual rows=100 loops=1)
          ->  Sort (actual rows=49 loops=1)
                Sort Key: t.a
-               Sort Method: quicksort  Memory: xxx
+               Sort Method: quicksort
                ->  Seq Scan on ex_mtarget t (actual rows=49 loops=1)
 (12 rows)
 
@@ -1458,11 +1458,10 @@ WHEN MATCHED AND t.a < 10 THEN
          Hash Cond: (s.a = t.a)
          ->  Seq Scan on ex_msource s (actual rows=1 loops=1)
          ->  Hash (actual rows=0 loops=1)
-               Buckets: xxx  Batches: xxx  Memory Usage: xxx
+               Buckets: xxx  Batches: xxx
                ->  Seq Scan on ex_mtarget t (actual rows=0 loops=1)
                      Filter: (a < '-1000'::integer)
-                     Rows Removed by Filter: 54
-(9 rows)
+(8 rows)
 
 DROP TABLE ex_msource, ex_mtarget;
 DROP FUNCTION explain_merge(text);

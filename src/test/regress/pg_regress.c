@@ -625,7 +625,7 @@ initialize_environment(void)
 	 * user's ability to set other variables through that.
 	 */
 	{
-		const char *my_pgoptions = "-c intervalstyle=postgres_verbose";
+		const char *my_pgoptions = "-c intervalstyle=postgres_verbose -c explain_regress=on";
 		const char *old_pgoptions = getenv("PGOPTIONS");
 		char	   *new_pgoptions;
 
@@ -2288,6 +2288,7 @@ regression_main(int argc, char *argv[],
 		fputs("log_lock_waits = on\n", pg_conf);
 		fputs("log_temp_files = 128kB\n", pg_conf);
 		fputs("max_prepared_transactions = 2\n", pg_conf);
+		// fputs("explain_regress = yes\n", pg_conf);
 
 		for (sl = temp_configs; sl != NULL; sl = sl->next)
 		{

@@ -16,7 +16,7 @@ declare
     first_row bool := true;
 begin
     for ln in
-        execute format('explain analyze %s', $1)
+        execute format('explain (analyze, costs on) %s', $1)
     loop
         if first_row then
             first_row := false;

@@ -29,7 +29,7 @@ static int	auto_explain_log_min_duration = -1; /* msec or -1 */
 static int	auto_explain_log_parameter_max_length = -1; /* bytes or -1 */
 static bool auto_explain_log_analyze = false;
 static bool auto_explain_log_verbose = false;
-static bool auto_explain_log_buffers = false;
+static bool auto_explain_log_buffers = true;
 static bool auto_explain_log_wal = false;
 static bool auto_explain_log_triggers = false;
 static bool auto_explain_log_timing = true;
@@ -154,7 +154,7 @@ _PG_init(void)
 							 "Log buffers usage.",
 							 NULL,
 							 &auto_explain_log_buffers,
-							 false,
+							 true,
 							 PGC_SUSET,
 							 0,
 							 NULL,

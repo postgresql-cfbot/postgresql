@@ -1398,7 +1398,7 @@ FinishWalRecovery(void)
 	 * over these records and subsequent ones if it's still alive when we
 	 * start writing WAL.
 	 */
-	XLogShutdownWalRcv();
+	ShutdownWalRcv();
 
 	/*
 	 * We are now done reading the xlog from stream. Turn off streaming
@@ -1406,7 +1406,7 @@ FinishWalRecovery(void)
 	 * recovery, e.g., timeline history file) from archive or pg_wal.
 	 *
 	 * Note that standby mode must be turned off after killing WAL receiver,
-	 * i.e., calling XLogShutdownWalRcv().
+	 * i.e., calling ShutdownWalRcv().
 	 */
 	Assert(!WalRcvStreaming());
 	StandbyMode = false;
@@ -3488,7 +3488,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					 */
 					if (StandbyMode && CheckForStandbyTrigger())
 					{
-						XLogShutdownWalRcv();
+						ShutdownWalRcv();
 						return XLREAD_FAIL;
 					}
 
@@ -3536,7 +3536,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					 * WAL that we restore from archive.
 					 */
 					if (WalRcvStreaming())
-						XLogShutdownWalRcv();
+						ShutdownWalRcv();
 
 					/*
 					 * Before we sleep, re-scan for possible new timelines if
@@ -3602,9 +3602,18 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 		}
 
 		if (currentSource != oldSource)
+		{
+			/*
+			 * WAL segment installation conflicts with archive recovery, hence
+			 * make sure it is turned off before fetching WAL from archive.
+			 */
+			if (currentSource == XLOG_FROM_ARCHIVE)
+				UpdateInstallXLogFileSegmentActive(true);
+
 			elog(DEBUG2, "switched WAL source from %s to %s after %s",
 				 xlogSourceNames[oldSource], xlogSourceNames[currentSource],
 				 lastSourceFailed ? "failure" : "success");
+		}
 
 		/*
 		 * We've now handled possible failure. Try to read from the chosen
@@ -3666,7 +3675,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					 */
 					if (pendingWalRcvRestart && !startWalReceiver)
 					{
-						XLogShutdownWalRcv();
+						ShutdownWalRcv();
 
 						/*
 						 * Re-scan for possible new timelines if we were
@@ -3716,7 +3725,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 									 tli, curFileTLI);
 						}
 						curFileTLI = tli;
-						SetInstallXLogFileSegmentActive();
+						UpdateInstallXLogFileSegmentActive(false);
 						RequestXLogStreaming(tli, ptr, PrimaryConnInfo,
 											 PrimarySlotName,
 											 wal_receiver_create_temp_slot);

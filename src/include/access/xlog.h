@@ -253,9 +253,8 @@ extern void RemoveNonParentXlogFiles(XLogRecPtr switchpoint, TimeLineID newTLI);
 extern bool XLogCheckpointNeeded(XLogSegNo new_segno);
 extern void SwitchIntoArchiveRecovery(XLogRecPtr EndRecPtr, TimeLineID replayTLI);
 extern void ReachedEndOfBackup(XLogRecPtr EndRecPtr, TimeLineID tli);
-extern void SetInstallXLogFileSegmentActive(void);
+extern void UpdateInstallXLogFileSegmentActive(bool reset);
 extern bool IsInstallXLogFileSegmentActive(void);
-extern void XLogShutdownWalRcv(void);
 
 /*
  * Routines to start, stop, and get status of a base backup.

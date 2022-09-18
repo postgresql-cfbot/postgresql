@@ -9,6 +9,7 @@
 
 #include "postgres_fe.h"
 
+#include "access/transam.h"
 #include "catalog/pg_class_d.h"
 #include "fe_utils/string_utils.h"
 #include "pg_upgrade.h"
@@ -242,19 +243,21 @@ old_9_6_check_for_unknown_data_type_usage(ClusterInfo *cluster)
 }
 
 /*
- * old_9_6_invalidate_hash_indexes()
- *	9.6 -> 10
- *	Hash index binary format has changed from 9.6->10.0
+ * invalidate_indexes()
+ *	Invalidates all indexes satisfying given predicate.
  */
-void
-old_9_6_invalidate_hash_indexes(ClusterInfo *cluster, bool check_mode)
+static void
+invalidate_indexes(ClusterInfo *cluster, bool check_mode,
+				   const char *name, const char *pred)
 {
 	int			dbnum;
 	FILE	   *script = NULL;
 	bool		found = false;
-	char	   *output_path = "reindex_hash.sql";
+	char		output_path[MAXPGPATH];
 
-	prep_status("Checking for hash indexes");
+	snprintf(output_path, sizeof(output_path), "reindex_%s.sql", name);
+
+	prep_status("Checking for %s indexes", name);
 
 	for (dbnum = 0; dbnum < cluster->dbarr.ndbs; dbnum++)
 	{
@@ -267,9 +270,16 @@ old_9_6_invalidate_hash_indexes(ClusterInfo *cluster, bool check_mode)
 		DbInfo	   *active_db = &cluster->dbarr.dbs[dbnum];
 		PGconn	   *conn = connectToServer(cluster, active_db->db_name);
 
-		/* find hash indexes */
-		res = executeQueryOrDie(conn,
-								"SELECT n.nspname, c.relname "
+
+		/*
+		 * Find indexes satisfying predicate.
+		 *
+		 * System indexes (with oids < FirstNormalObjectId) are excluded from
+		 * the search as they are recreated in the new cluster during initdb.
+		 */
+		res = executeQueryOrDie(
+								conn,
+								"SELECT n.nspname, c.relname, i.indexrelid "
 								"FROM	pg_catalog.pg_class c, "
 								"		pg_catalog.pg_index i, "
 								"		pg_catalog.pg_am a, "
@@ -277,8 +287,11 @@ old_9_6_invalidate_hash_indexes(ClusterInfo *cluster, bool check_mode)
 								"WHERE	i.indexrelid = c.oid AND "
 								"		c.relam = a.oid AND "
 								"		c.relnamespace = n.oid AND "
-								"		a.amname = 'hash'"
-			);
+								"		i.indexrelid >= '%u'::pg_catalog.oid AND "
+								"		%s "
+								"ORDER BY i.indexrelid ASC",
+								FirstNormalObjectId,
+								pred);
 
 		ntups = PQntuples(res);
 		i_nspname = PQfnumber(res, "nspname");
@@ -311,8 +324,14 @@ old_9_6_invalidate_hash_indexes(ClusterInfo *cluster, bool check_mode)
 
 		if (!check_mode && db_used)
 		{
-			/* mark hash indexes as invalid */
-			PQclear(executeQueryOrDie(conn,
+			/*
+			 * Mark indexes satisfying predicate as invalid.
+			 *
+			 * System indexes (with oids < FirstNormalObjectId) are excluded
+			 * from the search (see above).
+			 */
+			PQclear(executeQueryOrDie(
+									  conn,
 									  "UPDATE pg_catalog.pg_index i "
 									  "SET	indisvalid = false "
 									  "FROM	pg_catalog.pg_class c, "
@@ -321,7 +340,10 @@ old_9_6_invalidate_hash_indexes(ClusterInfo *cluster, bool check_mode)
 									  "WHERE	i.indexrelid = c.oid AND "
 									  "		c.relam = a.oid AND "
 									  "		c.relnamespace = n.oid AND "
-									  "		a.amname = 'hash'"));
+									  "		i.indexrelid >= '%u'::pg_catalog.oid AND "
+									  "		%s",
+									  FirstNormalObjectId,
+									  pred));
 		}
 
 		PQfinish(conn);
@@ -335,22 +357,35 @@ old_9_6_invalidate_hash_indexes(ClusterInfo *cluster, bool check_mode)
 		report_status(PG_WARNING, "warning");
 		if (check_mode)
 			pg_log(PG_WARNING, "\n"
-				   "Your installation contains hash indexes.  These indexes have different\n"
+				   "Your installation contains %s indexes.  These indexes have different\n"
 				   "internal formats between your old and new clusters, so they must be\n"
 				   "reindexed with the REINDEX command.  After upgrading, you will be given\n"
-				   "REINDEX instructions.");
+				   "REINDEX instructions.",
+				   name);
 		else
 			pg_log(PG_WARNING, "\n"
-				   "Your installation contains hash indexes.  These indexes have different\n"
+				   "Your installation contains %s indexes.  These indexes have different\n"
 				   "internal formats between your old and new clusters, so they must be\n"
 				   "reindexed with the REINDEX command.  The file\n"
 				   "    %s\n"
 				   "when executed by psql by the database superuser will recreate all invalid\n"
 				   "indexes; until then, none of these indexes will be used.",
+				   name,
 				   output_path);
 	}
 	else
 		check_ok();
+}
+
+/*
+ * old_9_6_invalidate_hash_indexes()
+ *	9.6 -> 10
+ *	Hash index binary format has changed from 9.6->10.0
+ */
+void
+old_9_6_invalidate_hash_indexes(ClusterInfo *cluster, bool check_mode)
+{
+	invalidate_indexes(cluster, check_mode, "hash", "a.amname = 'hash'");
 }
 
 /*
@@ -458,4 +493,37 @@ report_extension_updates(ClusterInfo *cluster)
 	}
 	else
 		check_ok();
+}
+
+/*
+ * invalidate_spgist_indexes()
+ *	32bit -> 64bit
+ *	SP-GIST contains xids.
+ */
+void
+invalidate_spgist_indexes(ClusterInfo *cluster, bool check_mode)
+{
+	invalidate_indexes(cluster, check_mode, "spgist", "a.amname = 'spgist'");
+}
+
+/*
+ * invalidate_gin_indexes()
+ *	32bit -> 64bit
+ *	Gin indexes contains xids in deleted pages.
+ */
+void
+invalidate_gin_indexes(ClusterInfo *cluster, bool check_mode)
+{
+	invalidate_indexes(cluster, check_mode, "gin", "a.amname = 'gin'");
+}
+
+/*
+ * invalidate_external_indexes()
+ *	Generate script to REINDEX non standard external indexes (like RUM etc)
+ */
+void
+invalidate_external_indexes(ClusterInfo *cluster, bool check_mode)
+{
+	invalidate_indexes(cluster, check_mode, "external",
+					   "NOT a.amname IN ('btree', 'hash', 'gist', 'gin', 'spgist', 'brin')");
 }

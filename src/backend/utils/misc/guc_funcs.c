@@ -1045,3 +1045,68 @@ show_all_file_settings(PG_FUNCTION_ARGS)
 
 	return (Datum) 0;
 }
+
+/*
+ * Try to parse value as an 64-bit integer.  The accepted format is
+ * decimal number.
+ *
+ * If the string parses okay, return true, else false.
+ * If okay and result is not NULL, return the value in *result.
+ * If not okay and hintmsg is not NULL, *hintmsg is set to a suitable
+ *	HINT message, or NULL if no hint provided.
+ */
+bool
+parse_int64(const char *value, int64 *result, int flags, const char **hintmsg)
+{
+	int64		val;
+	char	   *endptr;
+
+	/* To suppress compiler warnings, always set output params */
+	if (result)
+		*result = 0;
+	if (hintmsg)
+		*hintmsg = NULL;
+
+	/* We assume here that int64 is at least as wide as long */
+	errno = 0;
+	val = strtoi64(value, &endptr, 0);
+
+	if (endptr == value)
+		return false;			/* no HINT for integer syntax error */
+
+	if (errno == ERANGE)
+	{
+		if (hintmsg)
+			*hintmsg = gettext_noop("Value exceeds 64-bit integer range.");
+		return false;
+	}
+
+	/*
+	 * got double format and/or units. For now we attempts parse it as double
+	 * and throw error on 53bit overflow
+	 */
+	if (*endptr != '\0')
+	{
+		double		dval;
+		bool		ok;
+
+		ok = parse_real(value, &dval, flags, hintmsg);
+		if (!ok)
+			return false;
+
+		dval = rint(val);
+
+		if (fabs(dval) >= (double) ((uint64) 1 << 53))
+		{
+			*hintmsg = gettext_noop("Int64 value with units should be positive number < 2^53");
+			return false;
+		}
+
+		val = (int64) dval;
+	}
+
+
+	if (result)
+		*result = val;
+	return true;
+}

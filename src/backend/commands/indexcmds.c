@@ -1656,7 +1656,7 @@ DefineIndex(Oid relationId,
 		set_indexsafe_procflags();
 
 	/* We should now definitely not be advertising any xmin. */
-	Assert(MyProc->xmin == InvalidTransactionId);
+	Assert(pg_atomic_read_u64(&MyProc->xmin) == InvalidTransactionId);
 
 	/*
 	 * The index is now valid in the sense that it contains all currently
@@ -4339,8 +4339,8 @@ set_indexsafe_procflags(void)
 	 * This should only be called before installing xid or xmin in MyProc;
 	 * otherwise, concurrent processes could see an Xmin that moves backwards.
 	 */
-	Assert(MyProc->xid == InvalidTransactionId &&
-		   MyProc->xmin == InvalidTransactionId);
+	Assert(pg_atomic_read_u64(&MyProc->xid) == InvalidTransactionId &&
+		   pg_atomic_read_u64(&MyProc->xmin) == InvalidTransactionId);
 
 	LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
 	MyProc->statusFlags |= PROC_IN_SAFE_IC;

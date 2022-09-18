@@ -16,7 +16,8 @@
 #include "pg_upgrade.h"
 
 static void transfer_single_new_db(FileNameMap *maps, int size, char *old_tablespace);
-static void transfer_relfile(FileNameMap *map, const char *suffix, bool vm_must_add_frozenbit);
+static void transfer_relfile(FileNameMap *map, const char *suffix,
+							 bool vm_must_add_frozenbit, bool update_version);
 
 
 /*
@@ -136,6 +137,7 @@ transfer_single_new_db(FileNameMap *maps, int size, char *old_tablespace)
 {
 	int			mapnum;
 	bool		vm_must_add_frozenbit = false;
+	bool		update_version = false;
 
 	/*
 	 * Do we need to rewrite visibilitymap?
@@ -144,19 +146,28 @@ transfer_single_new_db(FileNameMap *maps, int size, char *old_tablespace)
 		new_cluster.controldata.cat_ver >= VISIBILITY_MAP_FROZEN_BIT_CAT_VER)
 		vm_must_add_frozenbit = true;
 
+	/*
+	 * Need to update FSM and VM pages version to avoid lazy conversion.
+	 */
+	if (old_cluster.controldata.cat_ver < new_cluster.controldata.cat_ver)
+		update_version = true;
+
 	for (mapnum = 0; mapnum < size; mapnum++)
 	{
 		if (old_tablespace == NULL ||
 			strcmp(maps[mapnum].old_tablespace, old_tablespace) == 0)
 		{
 			/* transfer primary file */
-			transfer_relfile(&maps[mapnum], "", vm_must_add_frozenbit);
+			transfer_relfile(&maps[mapnum], "", vm_must_add_frozenbit,
+							 update_version);
 
 			/*
 			 * Copy/link any fsm and vm files, if they exist
 			 */
-			transfer_relfile(&maps[mapnum], "_fsm", vm_must_add_frozenbit);
-			transfer_relfile(&maps[mapnum], "_vm", vm_must_add_frozenbit);
+			transfer_relfile(&maps[mapnum], "_fsm", vm_must_add_frozenbit,
+							 update_version);
+			transfer_relfile(&maps[mapnum], "_vm", vm_must_add_frozenbit,
+							 update_version);
 		}
 	}
 }
@@ -170,7 +181,8 @@ transfer_single_new_db(FileNameMap *maps, int size, char *old_tablespace)
  * mode.
  */
 static void
-transfer_relfile(FileNameMap *map, const char *type_suffix, bool vm_must_add_frozenbit)
+transfer_relfile(FileNameMap *map, const char *type_suffix,
+				 bool vm_must_add_frozenbit, bool update_version)
 {
 	char		old_file[MAXPGPATH];
 	char		new_file[MAXPGPATH];
@@ -235,7 +247,17 @@ transfer_relfile(FileNameMap *map, const char *type_suffix, bool vm_must_add_fro
 			/* Need to rewrite visibility map format */
 			pg_log(PG_VERBOSE, "rewriting \"%s\" to \"%s\"",
 				   old_file, new_file);
-			rewriteVisibilityMap(old_file, new_file, map->nspname, map->relname);
+			rewriteVisibilityMap(old_file, new_file, map->nspname,
+								 map->relname, update_version);
+		}
+		else if ((update_version && strcmp(type_suffix, "_vm") == 0) ||
+				 (update_version && strcmp(type_suffix, "_fsm") == 0))
+		{
+			/* Need to update pages version */
+			pg_log(PG_VERBOSE, "rewriting \"%s\" to \"%s\"",
+				   old_file, new_file);
+			updateSegmentPagesVersion(old_file, new_file, map->nspname,
+									  map->relname);
 		}
 		else
 			switch (user_opts.transfer_mode)

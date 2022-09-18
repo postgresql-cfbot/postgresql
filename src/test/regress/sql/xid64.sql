@@ -1,0 +1,84 @@
+---
+--- Unit test for xid64 functions
+---
+
+-- directory paths and dlsuffix are passed to us in environment variables
+\getenv libdir PG_LIBDIR
+\getenv dlsuffix PG_DLSUFFIX
+
+\set regresslib :libdir '/regress' :dlsuffix
+
+CREATE FUNCTION xid64_test_1(rel regclass) RETURNS VOID
+    AS :'regresslib', 'xid64_test_1' LANGUAGE C STRICT;
+CREATE FUNCTION xid64_test_2(rel regclass) RETURNS VOID
+    AS :'regresslib', 'xid64_test_2' LANGUAGE C STRICT;
+CREATE FUNCTION xid64_test_double_xmax(rel regclass) RETURNS VOID
+    AS :'regresslib', 'xid64_test_double_xmax' LANGUAGE C STRICT;
+
+---
+--- Check page consistency after conversion
+---
+CREATE UNLOGGED TABLE test_xid64_table(a int);
+ALTER TABLE test_xid64_table SET (autovacuum_enabled = false);
+INSERT INTO test_xid64_table(a) SELECT a FROM generate_series(1, 1000) AS a;
+SELECT xid64_test_1('test_xid64_table');
+DROP TABLE test_xid64_table;
+
+---
+--- Check tuples consistency after conversion
+---
+CREATE UNLOGGED TABLE test_xid64_table(s serial, i int, t text);
+ALTER TABLE test_xid64_table SET (autovacuum_enabled = false);
+
+DO $$
+BEGIN
+  FOR j IN 1..20 LOOP
+    INSERT INTO test_xid64_table(i, t) VALUES (random()::int, md5(random()::text));
+    COMMIT;
+  END LOOP;
+END $$;
+
+DO $$
+BEGIN
+  FOR j IN 1..10 LOOP
+    DELETE FROM test_xid64_table WHERE ctid IN (SELECT ctid FROM test_xid64_table TABLESAMPLE BERNOULLI (5));
+    COMMIT;
+  END LOOP;
+END $$;
+
+SELECT xid64_test_2('test_xid64_table');
+DROP TABLE test_xid64_table;
+
+---
+--- Check tuples consistency after conversion to double xmax (on full page)
+---
+CREATE UNLOGGED TABLE test_xid64_table(i int);
+
+DO $$
+BEGIN
+  FOR j IN 1..40 LOOP
+    INSERT INTO test_xid64_table SELECT i FROM generate_series(1, 100) AS i;
+    COMMIT;
+  END LOOP;
+END $$;
+
+SELECT xid64_test_2('test_xid64_table');
+DROP TABLE test_xid64_table;
+
+CREATE UNLOGGED TABLE test_xid64_table(i text);
+INSERT INTO test_xid64_table(i) VALUES ('NNBABCDSDFGHJKLP');
+
+DO $$
+BEGIN
+  FOR j IN 1..40 LOOP
+    INSERT INTO test_xid64_table(i) SELECT 'A' FROM generate_series(1, 100) AS i;
+    COMMIT;
+  END LOOP;
+END $$;
+
+SELECT xid64_test_double_xmax('test_xid64_table');
+DROP TABLE test_xid64_table;
+
+DROP FUNCTION xid64_test_1(rel regclass);
+DROP FUNCTION xid64_test_2(rel regclass);
+DROP FUNCTION xid64_test_double_xmax(rel regclass);

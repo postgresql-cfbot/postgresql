@@ -271,7 +271,7 @@ _outList(StringInfo str, const List *node)
 		else if (IsA(node, OidList))
 			appendStringInfo(str, " %u", lfirst_oid(lc));
 		else if (IsA(node, XidList))
-			appendStringInfo(str, " %u", lfirst_xid(lc));
+			appendStringInfo(str, " %llu", (unsigned long long) lfirst_xid(lc));
 		else
 			elog(ERROR, "unrecognized list node type: %d",
 				 (int) node->type);
@@ -787,7 +787,6 @@ _outConstraint(StringInfo str, const Constraint *node)
 			break;
 	}
 }
-
 
 /*
  * outNode -

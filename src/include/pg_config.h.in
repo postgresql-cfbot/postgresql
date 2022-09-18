@@ -775,6 +775,9 @@
 # endif
 #endif
 
+/* Postgres Pro use 64bit xids */
+#undef XID_IS_64BIT
+
 /* Size of a WAL file block. This need have no particular relation to BLCKSZ.
    XLOG_BLCKSZ must be a power of 2, and if your system supports O_DIRECT I/O,
    XLOG_BLCKSZ must be a multiple of the alignment requirement for direct-I/O

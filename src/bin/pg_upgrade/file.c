@@ -174,7 +174,8 @@ linkFile(const char *src, const char *dst,
  */
 void
 rewriteVisibilityMap(const char *fromfile, const char *tofile,
-					 const char *schemaName, const char *relName)
+					 const char *schemaName, const char *relName,
+					 bool update_version)
 {
 	int			src_fd;
 	int			dst_fd;
@@ -290,6 +291,11 @@ rewriteVisibilityMap(const char *fromfile, const char *tofile,
 			if (old_lastpart && empty)
 				break;
 
+			if (update_version)
+				PageSetPageSizeAndVersion((Page) new_vmbuf.data,
+										  PageGetPageSize((Page) new_vmbuf.data),
+										  PG_PAGE_LAYOUT_VERSION);
+
 			/* Set new checksum for visibility map page, if enabled */
 			if (new_cluster.controldata.data_checksum_version != 0)
 				((PageHeader) new_vmbuf.data)->pd_checksum =
@@ -309,6 +315,97 @@ rewriteVisibilityMap(const char *fromfile, const char *tofile,
 			old_break += rewriteVmBytesPerPage;
 			new_blkno++;
 		}
+	}
+
+	/* Clean up */
+	close(dst_fd);
+	close(src_fd);
+}
+
+/*
+ * updateSegmentVersion()
+ *
+ * Transform a segment file, copying from src to dst.
+ * schemaName/relName are relation's SQL name (used for error messages only).
+ *
+ * Read segment pages one by one and set version to PG_PAGE_LAYOUT_VERSION.
+ *
+ * Although FSM and MV formats does not change while switch to 64-bit XIDs, we
+ * must upgrade pages version in order to avoid lazy conversion on first read.
+ */
+void
+updateSegmentPagesVersion(const char *fromfile, const char *tofile,
+						  const char *schemaName, const char *relName)
+{
+	int				src_fd;
+	int				dst_fd;
+	struct stat		statbuf;
+	ssize_t			src_filesize;
+	ssize_t			totalBytesRead;
+	ssize_t			bytesRead;
+	BlockNumber		blkno;
+	PGAlignedBlock	buf;
+
+	if ((src_fd = open(fromfile, O_RDONLY | PG_BINARY, 0)) < 0)
+		pg_fatal("error while copying relation \"%s.%s\": could not open file \"%s\": %s",
+				 schemaName, relName, fromfile, strerror(errno));
+
+	if (fstat(src_fd, &statbuf) != 0)
+		pg_fatal("error while copying relation \"%s.%s\": could not stat file \"%s\": %s",
+				 schemaName, relName, fromfile, strerror(errno));
+
+	if ((dst_fd = open(tofile, O_RDWR | O_CREAT | O_EXCL | PG_BINARY,
+					   pg_file_create_mode)) < 0)
+		pg_fatal("error while copying relation \"%s.%s\": could not create file \"%s\": %s",
+				 schemaName, relName, tofile, strerror(errno));
+
+	/* Save old file size */
+	src_filesize = statbuf.st_size;
+	totalBytesRead = 0;
+	blkno = 0;
+
+	while (totalBytesRead < src_filesize)
+	{
+		errno = 0;
+		if ((bytesRead = read(src_fd, buf.data, BLCKSZ)) != BLCKSZ)
+		{
+			if (bytesRead < 0)
+				pg_fatal("error while copying relation \"%s.%s\": could not read file \"%s\": %s",
+						 schemaName, relName, fromfile, strerror(errno));
+			else
+				pg_fatal("error while copying relation \"%s.%s\": partial page found in file \"%s\"",
+						 schemaName, relName, fromfile);
+		}
+
+		totalBytesRead += BLCKSZ;
+		PageSetPageSizeAndVersion((Page) buf.data,
+								  PageGetPageSize((Page) buf.data),
+								  PG_PAGE_LAYOUT_VERSION);
+
+		/* Set new checksum for page, if enabled */
+		if (new_cluster.controldata.data_checksum_version != 0)
+			((PageHeader) buf.data)->pd_checksum =
+				pg_checksum_page(buf.data, blkno);
+
+		/*
+		 * We dealing here only with FSM and VM pages.
+		 */
+		if (((PageHeader) buf.data)->pd_lower != SizeOfPageHeaderData ||
+			((PageHeader) buf.data)->pd_upper != BLCKSZ)
+				pg_fatal("error while copying relation \"%s.%s\": unknown page format found in file \"%s\"",
+						 schemaName, relName, fromfile);
+
+		errno = 0;
+		if (write(dst_fd, buf.data, BLCKSZ) != BLCKSZ)
+		{
+			/* if write didn't set errno, assume problem is no disk space */
+			if (errno == 0)
+				errno = ENOSPC;
+			pg_fatal("error while copying relation \"%s.%s\": could not write file \"%s\": %s",
+					 schemaName, relName, tofile, strerror(errno));
+		}
+
+		blkno++;
 	}
 
 	/* Clean up */

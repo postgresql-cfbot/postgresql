@@ -402,7 +402,6 @@ IsAbortedTransactionBlockState(void)
 	return false;
 }
 
-
 /*
  *	GetTopTransactionId
  *
@@ -1738,8 +1737,8 @@ RecordTransactionAbort(bool isSubXact)
 	 * Check that we haven't aborted halfway through RecordTransactionCommit.
 	 */
 	if (TransactionIdDidCommit(xid))
-		elog(PANIC, "cannot abort transaction %u, it was already committed",
-			 xid);
+		elog(PANIC, "cannot abort transaction %llu, it was already committed",
+			 (unsigned long long) xid);
 
 	/* Fetch the data we need for the abort record */
 	nrels = smgrGetPendingDeletes(false, &rels);
@@ -5461,22 +5460,24 @@ ShowTransactionStateRec(const char *str, TransactionState s)
 	{
 		int			i;
 
-		appendStringInfo(&buf, ", children: %u", s->childXids[0]);
+		appendStringInfo(&buf, ", children: %llu",
+						 (unsigned long long) s->childXids[0]);
 		for (i = 1; i < s->nChildXids; i++)
-			appendStringInfo(&buf, " %u", s->childXids[i]);
+			appendStringInfo(&buf, " %llu",
+							 (unsigned long long) s->childXids[i]);
 	}
 
 	if (s->parent)
 		ShowTransactionStateRec(str, s->parent);
 
 	ereport(DEBUG5,
-			(errmsg_internal("%s(%d) name: %s; blockState: %s; state: %s, xid/subid/cid: %u/%u/%u%s%s",
+			(errmsg_internal("%s(%d) name: %s; blockState: %s; state: %s, xid/subid/cid: %llu/%llu/%u%s%s",
 							 str, s->nestingLevel,
 							 PointerIsValid(s->name) ? s->name : "unnamed",
 							 BlockStateAsString(s->blockState),
 							 TransStateAsString(s->state),
-							 (unsigned int) XidFromFullTransactionId(s->fullTransactionId),
-							 (unsigned int) s->subTransactionId,
+							 (unsigned long long) XidFromFullTransactionId(s->fullTransactionId),
+							 (unsigned long long) s->subTransactionId,
 							 (unsigned int) currentCommandId,
 							 currentCommandIdUsed ? " (used)" : "",
 							 buf.data)));
@@ -5661,6 +5662,17 @@ XactLogCommitRecord(TimestampTz commit_time,
 		xl_subxacts.nsubxacts = nsubxacts;
 	}
 
+	if (TransactionIdIsValid(twophase_xid))
+	{
+		xl_xinfo.xinfo |= XACT_XINFO_HAS_TWOPHASE;
+		xl_twophase.xid_lo = (uint32) (twophase_xid & 0xFFFFFFFF);
+		xl_twophase.xid_hi = (uint32) (twophase_xid >> 32);
+		Assert(twophase_gid != NULL);
+
+		if (XLogLogicalInfoActive())
+			xl_xinfo.xinfo |= XACT_XINFO_HAS_GID;
+	}
+
 	if (nrels > 0)
 	{
 		xl_xinfo.xinfo |= XACT_XINFO_HAS_RELFILELOCATORS;
@@ -5678,16 +5690,6 @@ XactLogCommitRecord(TimestampTz commit_time,
 	{
 		xl_xinfo.xinfo |= XACT_XINFO_HAS_INVALS;
 		xl_invals.nmsgs = nmsgs;
-	}
-
-	if (TransactionIdIsValid(twophase_xid))
-	{
-		xl_xinfo.xinfo |= XACT_XINFO_HAS_TWOPHASE;
-		xl_twophase.xid = twophase_xid;
-		Assert(twophase_gid != NULL);
-
-		if (XLogLogicalInfoActive())
-			xl_xinfo.xinfo |= XACT_XINFO_HAS_GID;
 	}
 
 	/* dump transaction origin information */
@@ -5810,6 +5812,17 @@ XactLogAbortRecord(TimestampTz abort_time,
 		xl_subxacts.nsubxacts = nsubxacts;
 	}
 
+	if (TransactionIdIsValid(twophase_xid))
+	{
+		xl_xinfo.xinfo |= XACT_XINFO_HAS_TWOPHASE;
+		xl_twophase.xid_lo = (uint32) (twophase_xid & 0xFFFFFFFF);
+		xl_twophase.xid_hi = (uint32) (twophase_xid >> 32);
+		Assert(twophase_gid != NULL);
+
+		if (XLogLogicalInfoActive())
+			xl_xinfo.xinfo |= XACT_XINFO_HAS_GID;
+	}
+
 	if (nrels > 0)
 	{
 		xl_xinfo.xinfo |= XACT_XINFO_HAS_RELFILELOCATORS;
@@ -5826,7 +5839,8 @@ XactLogAbortRecord(TimestampTz abort_time,
 	if (TransactionIdIsValid(twophase_xid))
 	{
 		xl_xinfo.xinfo |= XACT_XINFO_HAS_TWOPHASE;
-		xl_twophase.xid = twophase_xid;
+		xl_twophase.xid_lo = (uint32) (twophase_xid & 0xFFFFFFFF);
+		xl_twophase.xid_hi = (uint32) (twophase_xid >> 32);
 		Assert(twophase_gid != NULL);
 
 		if (XLogLogicalInfoActive())

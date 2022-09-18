@@ -205,7 +205,7 @@ InitProcGlobal(void)
 	 * how hotly they are accessed.
 	 */
 	ProcGlobal->xids =
-		(TransactionId *) ShmemAlloc(TotalProcs * sizeof(*ProcGlobal->xids));
+		(pg_atomic_uint64 *) ShmemAlloc(TotalProcs * sizeof(*ProcGlobal->xids));
 	MemSet(ProcGlobal->xids, 0, TotalProcs * sizeof(*ProcGlobal->xids));
 	ProcGlobal->subxidStates = (XidCacheStatus *) ShmemAlloc(TotalProcs * sizeof(*ProcGlobal->subxidStates));
 	MemSet(ProcGlobal->subxidStates, 0, TotalProcs * sizeof(*ProcGlobal->subxidStates));
@@ -214,6 +214,7 @@ InitProcGlobal(void)
 
 	for (i = 0; i < TotalProcs; i++)
 	{
+		pg_atomic_init_u64(&ProcGlobal->xids[i], 0);
 		/* Common initialization for all PGPROCs, regardless of type. */
 
 		/*
@@ -383,8 +384,8 @@ InitProcess(void)
 	MyProc->lxid = InvalidLocalTransactionId;
 	MyProc->fpVXIDLock = false;
 	MyProc->fpLocalTransactionId = InvalidLocalTransactionId;
-	MyProc->xid = InvalidTransactionId;
-	MyProc->xmin = InvalidTransactionId;
+	pg_atomic_init_u64(&MyProc->xid, InvalidTransactionId);
+	pg_atomic_init_u64(&MyProc->xmin, InvalidTransactionId);
 	MyProc->pid = MyProcPid;
 	/* backendId, databaseId and roleId will be filled in later */
 	MyProc->backendId = InvalidBackendId;
@@ -570,8 +571,8 @@ InitAuxiliaryProcess(void)
 	MyProc->lxid = InvalidLocalTransactionId;
 	MyProc->fpVXIDLock = false;
 	MyProc->fpLocalTransactionId = InvalidLocalTransactionId;
-	MyProc->xid = InvalidTransactionId;
-	MyProc->xmin = InvalidTransactionId;
+	pg_atomic_init_u64(&MyProc->xid, InvalidTransactionId);
+	pg_atomic_init_u64(&MyProc->xmin, InvalidTransactionId);
 	MyProc->backendId = InvalidBackendId;
 	MyProc->databaseId = InvalidOid;
 	MyProc->roleId = InvalidOid;

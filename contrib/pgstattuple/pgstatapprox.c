@@ -19,6 +19,7 @@
 #include "access/transam.h"
 #include "access/visibilitymap.h"
 #include "access/xact.h"
+#include "catalog/catalog.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_am_d.h"
 #include "commands/vacuum.h"
@@ -153,6 +154,7 @@ statapprox_heap(Relation rel, output_type *stat)
 			tuple.t_data = (HeapTupleHeader) PageGetItem(page, itemid);
 			tuple.t_len = ItemIdGetLength(itemid);
 			tuple.t_tableOid = RelationGetRelid(rel);
+			HeapTupleCopyBaseFromPage(&tuple, page, IsToastRelation(rel));
 
 			/*
 			 * We follow VACUUM's lead in counting INSERT_IN_PROGRESS tuples

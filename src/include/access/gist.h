@@ -223,7 +223,7 @@ GistPageGetDeleteXid(Page page)
 		return ((GISTDeletedPageContents *) PageGetContents(page))->deleteXid;
 	}
 	else
-		return FullTransactionIdFromEpochAndXid(0, FirstNormalTransactionId);
+		return FullTransactionIdFromXid(FirstNormalTransactionId);
 }
 
 /*

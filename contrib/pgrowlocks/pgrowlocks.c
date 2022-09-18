@@ -130,7 +130,7 @@ pgrowlocks(PG_FUNCTION_ARGS)
 		htsu = HeapTupleSatisfiesUpdate(tuple,
 										GetCurrentCommandId(false),
 										hscan->rs_cbuf);
-		xmax = HeapTupleHeaderGetRawXmax(tuple->t_data);
+		xmax = HeapTupleGetRawXmax(tuple);
 		infomask = tuple->t_data->t_infomask;
 
 		/*
@@ -142,7 +142,8 @@ pgrowlocks(PG_FUNCTION_ARGS)
 															 PointerGetDatum(&tuple->t_self));
 
 			values[Atnum_xmax] = palloc(NCHARS * sizeof(char));
-			snprintf(values[Atnum_xmax], NCHARS, "%u", xmax);
+			snprintf(values[Atnum_xmax], NCHARS, "%llu",
+					 (unsigned long long) xmax);
 			if (infomask & HEAP_XMAX_IS_MULTI)
 			{
 				MultiXactMember *members;
@@ -183,7 +184,8 @@ pgrowlocks(PG_FUNCTION_ARGS)
 							strcat(values[Atnum_modes], ",");
 							strcat(values[Atnum_pids], ",");
 						}
-						snprintf(buf, NCHARS, "%u", members[j].xid);
+						snprintf(buf, NCHARS, "%llu",
+								 (unsigned long long) members[j].xid);
 						strcat(values[Atnum_xids], buf);
 						switch (members[j].status)
 						{
@@ -224,7 +226,8 @@ pgrowlocks(PG_FUNCTION_ARGS)
 				values[Atnum_ismulti] = pstrdup("false");
 
 				values[Atnum_xids] = palloc(NCHARS * sizeof(char));
-				snprintf(values[Atnum_xids], NCHARS, "{%u}", xmax);
+				snprintf(values[Atnum_xids], NCHARS, "{%llu}",
+						 (unsigned long long) xmax);
 
 				values[Atnum_modes] = palloc(NCHARS);
 				if (infomask & HEAP_XMAX_LOCK_ONLY)

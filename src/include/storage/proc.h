@@ -17,6 +17,7 @@
 #include "access/clog.h"
 #include "access/xlogdefs.h"
 #include "lib/ilist.h"
+#include "port/atomics.h"
 #include "storage/latch.h"
 #include "storage/lock.h"
 #include "storage/pg_sema.h"
@@ -176,12 +177,12 @@ struct PGPROC
 	Latch		procLatch;		/* generic latch for process */
 
 
-	TransactionId xid;			/* id of top-level transaction currently being
+	pg_atomic_uint64 xid;		/* id of top-level transaction currently being
 								 * executed by this proc, if running and XID
 								 * is assigned; else InvalidTransactionId.
 								 * mirrored in ProcGlobal->xids[pgxactoff] */
 
-	TransactionId xmin;			/* minimal running XID as it was when we were
+	pg_atomic_uint64 xmin;			/* minimal running XID as it was when we were
 								 * starting our xact, excluding LAZY VACUUM:
 								 * vacuum must not remove tuples deleted by
 								 * xid >= xmin ! */
@@ -277,7 +278,7 @@ struct PGPROC
 	TransactionId clogGroupMemberXid;	/* transaction id of clog group member */
 	XidStatus	clogGroupMemberXidStatus;	/* transaction status of clog
 											 * group member */
-	int			clogGroupMemberPage;	/* clog page corresponding to
+	int64		clogGroupMemberPage;	/* clog page corresponding to
 										 * transaction id of clog group member */
 	XLogRecPtr	clogGroupMemberLsn; /* WAL location of commit record for clog
 									 * group member */
@@ -364,7 +365,7 @@ typedef struct PROC_HDR
 	PGPROC	   *allProcs;
 
 	/* Array mirroring PGPROC.xid for each PGPROC currently in the procarray */
-	TransactionId *xids;
+	pg_atomic_uint64 *xids;
 
 	/*
 	 * Array mirroring PGPROC.subxidStatus for each PGPROC currently in the

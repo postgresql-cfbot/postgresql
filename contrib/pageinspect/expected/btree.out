@@ -94,8 +94,8 @@ SELECT bt_page_items('aaa'::bytea);
 ERROR:  invalid page size
 -- invalid special area size
 CREATE INDEX test1_a_brin ON test1 USING brin(a);
-SELECT bt_page_items(get_raw_page('test1', 0));
-ERROR:  input page is not a valid btree page
+-- XXX: false positive in 64xids due to equal sizes of BTPageOpaque and HeapPageSpecialData
+-- SELECT bt_page_items(get_raw_page('test1', 0));
 SELECT bt_page_items(get_raw_page('test1_a_brin', 0));
 ERROR:  input page is not a valid btree page
 \set VERBOSITY default

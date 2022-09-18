@@ -62,8 +62,10 @@ typedef uint16 BTCycleId;
 typedef struct BTPageOpaqueData
 {
 	BlockNumber btpo_prev;		/* left sibling, or P_NONE if leftmost */
+	/* ... or next transaction ID (lower part) */
 	BlockNumber btpo_next;		/* right sibling, or P_NONE if rightmost */
 	uint32		btpo_level;		/* tree level --- zero for leaf pages */
+	/* ... or next transaction ID (lower part) */
 	uint16		btpo_flags;		/* flag bits, see below */
 	BTCycleId	btpo_cycleid;	/* vacuum cycle ID of latest split */
 } BTPageOpaqueData;
@@ -92,6 +94,14 @@ typedef BTPageOpaqueData *BTPageOpaque;
  */
 #define MAX_BT_CYCLE_ID		0xFF7F
 
+/* Macros for access xact */
+#define BTP_GET_XACT(opaque) (((uint64) ((BTPageOpaque) opaque)->btpo_prev << 32) | \
+							   (uint64) ((BTPageOpaque) opaque)->btpo_level)
+#define BTP_SET_XACT(opaque, xact) \
+do { \
+	((BTPageOpaque) opaque)->btpo_prev = (uint32) (xact >> 32); \
+	((BTPageOpaque) opaque)->btpo_level = (uint32) xact; \
+} while (0)
 
 /*
  * The Meta page is always the first page in the btree index.

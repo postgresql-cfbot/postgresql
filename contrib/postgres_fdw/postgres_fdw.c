@@ -4814,8 +4814,8 @@ apply_returning_filter(PgFdwDirectModifyState *dmstate,
 		 * Note: no need to care about tableoid here because it will be
 		 * initialized in ExecProcessReturning().
 		 */
-		HeapTupleHeaderSetXmin(resultTup->t_data, InvalidTransactionId);
-		HeapTupleHeaderSetXmax(resultTup->t_data, InvalidTransactionId);
+		HeapTupleSetXmin(resultTup, InvalidTransactionId);
+		HeapTupleSetXmax(resultTup, InvalidTransactionId);
 		HeapTupleHeaderSetCmin(resultTup->t_data, InvalidTransactionId);
 	}
 
@@ -7328,6 +7328,7 @@ make_tuple_from_result_row(PGresult *res,
 	 */
 	if (ctid)
 		tuple->t_self = tuple->t_data->t_ctid = *ctid;
+	HeapTupleSetZeroBase(tuple);
 
 	/*
 	 * Stomp on the xmin, xmax, and cmin fields from the tuple created by
@@ -7337,8 +7338,8 @@ make_tuple_from_result_row(PGresult *res,
 	 * assumption.  If we don't do this then, for example, the tuple length
 	 * ends up in the xmin field, which isn't what we want.
 	 */
-	HeapTupleHeaderSetXmax(tuple->t_data, InvalidTransactionId);
-	HeapTupleHeaderSetXmin(tuple->t_data, InvalidTransactionId);
+	HeapTupleSetXmax(tuple, InvalidTransactionId);
+	HeapTupleSetXmin(tuple, InvalidTransactionId);
 	HeapTupleHeaderSetCmin(tuple->t_data, InvalidTransactionId);
 
 	/* Clean up */

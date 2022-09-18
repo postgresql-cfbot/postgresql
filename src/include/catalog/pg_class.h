@@ -123,7 +123,7 @@ CATALOG(pg_class,1259,RelationRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(83,Relat
 	Oid			relrewrite BKI_DEFAULT(0) BKI_LOOKUP_OPT(pg_class);
 
 	/* all Xids < this are frozen in this rel */
-	TransactionId relfrozenxid BKI_DEFAULT(3);	/* FirstNormalTransactionId */
+	TransactionId relfrozenxid BKI_DEFAULT(RECENTXMIN);	/* FirstNormalTransactionId */
 
 	/* all multixacts in this rel are >= this; it is really a MultiXactId */
 	TransactionId relminmxid BKI_DEFAULT(1);	/* FirstMultiXactId */

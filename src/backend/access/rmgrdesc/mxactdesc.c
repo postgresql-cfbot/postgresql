@@ -19,7 +19,7 @@
 static void
 out_member(StringInfo buf, MultiXactMember *member)
 {
-	appendStringInfo(buf, "%u ", member->xid);
+	appendStringInfo(buf, "%llu ", (unsigned long long) member->xid);
 	switch (member->status)
 	{
 		case MultiXactStatusForKeyShare:
@@ -55,18 +55,19 @@ multixact_desc(StringInfo buf, XLogReaderState *record)
 	if (info == XLOG_MULTIXACT_ZERO_OFF_PAGE ||
 		info == XLOG_MULTIXACT_ZERO_MEM_PAGE)
 	{
-		int			pageno;
+		int64		pageno;
 
-		memcpy(&pageno, rec, sizeof(int));
-		appendStringInfo(buf, "%d", pageno);
+		memcpy(&pageno, rec, sizeof(pageno));
+		appendStringInfo(buf, "%lld", (long long) pageno);
 	}
 	else if (info == XLOG_MULTIXACT_CREATE_ID)
 	{
 		xl_multixact_create *xlrec = (xl_multixact_create *) rec;
 		int			i;
 
-		appendStringInfo(buf, "%u offset %u nmembers %d: ", xlrec->mid,
-						 xlrec->moff, xlrec->nmembers);
+		appendStringInfo(buf, "%llu offset %llu nmembers %d: ",
+						 (unsigned long long) xlrec->mid,
+						 (unsigned long long) xlrec->moff, xlrec->nmembers);
 		for (i = 0; i < xlrec->nmembers; i++)
 			out_member(buf, &xlrec->members[i]);
 	}
@@ -74,9 +75,11 @@ multixact_desc(StringInfo buf, XLogReaderState *record)
 	{
 		xl_multixact_truncate *xlrec = (xl_multixact_truncate *) rec;
 
-		appendStringInfo(buf, "offsets [%u, %u), members [%u, %u)",
-						 xlrec->startTruncOff, xlrec->endTruncOff,
-						 xlrec->startTruncMemb, xlrec->endTruncMemb);
+		appendStringInfo(buf, "offsets [%llu, %llu), members [%llu, %llu)",
+						 (unsigned long long) xlrec->startTruncOff,
+						 (unsigned long long) xlrec->endTruncOff,
+						 (unsigned long long) xlrec->startTruncMemb,
+						 (unsigned long long) xlrec->endTruncMemb);
 	}
 }
 

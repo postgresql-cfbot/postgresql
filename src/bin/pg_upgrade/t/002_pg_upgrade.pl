@@ -60,7 +60,7 @@ my $oldnode =
 # To increase coverage of non-standard segment size and group access without
 # increasing test runtime, run these tests with a custom setting.
 # --allow-group-access and --wal-segsize have been added in v11.
-$oldnode->init(extra => [ '--wal-segsize', '1', '--allow-group-access' ]);
+$oldnode->init(extra => [ '--wal-segsize', '1', '--allow-group-access', '-x', '21000000000' ]);
 $oldnode->start;
 
 # The default location of the source code is the root of this directory.
@@ -145,9 +145,17 @@ if (defined($ENV{oldinstall}))
 		'ran adapt script');
 }
 
+$oldnode->safe_psql('regression',
+	"CREATE TABLE t1 (id SERIAL NOT NULL PRIMARY KEY, plt text, pln NUMERIC(8, 4));
+	 INSERT INTO t1 (plt, pln) SELECT md5(random()::text), random() * 9999 FROM generate_series(1, 1000);");
+my $relfrozenxid = $oldnode->safe_psql('regression',
+	"SELECT relfrozenxid FROM pg_class WHERE relname = 't1';");
+my $relminmxid = $oldnode->safe_psql('regression',
+	"SELECT relminmxid FROM pg_class WHERE relname = 't1';");
+
 # Initialize a new node for the upgrade.
 my $newnode = PostgreSQL::Test::Cluster->new('new_node');
-$newnode->init(extra => [ '--wal-segsize', '1', '--allow-group-access' ]);
+$newnode->init(extra => [ '--wal-segsize', '1', '--allow-group-access', '-x', '21000000000' ]);
 my $newbindir = $newnode->config_data('--bindir');
 my $oldbindir = $oldnode->config_data('--bindir');
 
@@ -262,6 +270,16 @@ ok( !-d $newnode->data_dir . "/pg_upgrade_output.d",
 	"pg_upgrade_output.d/ removed after pg_upgrade success");
 
 $newnode->start;
+
+my $relfrozenxid_new = $newnode->safe_psql('regression',
+	"SELECT relfrozenxid FROM pg_class WHERE relname = 't1';");
+
+is($relfrozenxid_new, $relfrozenxid, 'old and new relfrozenxid match after pg_upgrade');
+
+my $relminmxid_new = $newnode->safe_psql('regression',
+	"SELECT relminmxid FROM pg_class WHERE relname = 't1';");
+
+is($relminmxid_new, $relminmxid, 'old and new relminmxid match after pg_upgrade');
 
 # Check if there are any logs coming from pg_upgrade, that would only be
 # retained on failure.

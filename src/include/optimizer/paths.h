@@ -136,7 +136,8 @@ extern EquivalenceClass *get_eclass_for_sort_expr(PlannerInfo *root,
 												  Index sortref,
 												  Relids rel,
 												  bool create_it);
-extern EquivalenceMember *find_ec_member_matching_expr(EquivalenceClass *ec,
+extern EquivalenceMember *find_ec_member_matching_expr(PlannerInfo *root,
+													   EquivalenceClass *ec,
 													   Expr *expr,
 													   Relids relids);
 extern EquivalenceMember *find_computable_ec_member(PlannerInfo *root,
@@ -161,7 +162,8 @@ extern bool exprs_known_equal(PlannerInfo *root, Node *item1, Node *item2);
 extern EquivalenceClass *match_eclasses_to_foreign_key_col(PlannerInfo *root,
 														   ForeignKeyOptInfo *fkinfo,
 														   int colno);
-extern RestrictInfo *find_derived_clause_for_ec_member(EquivalenceClass *ec,
+extern RestrictInfo *find_derived_clause_for_ec_member(PlannerInfo *root,
+													   EquivalenceClass *ec,
 													   EquivalenceMember *em);
 extern void add_child_rel_equivalences(PlannerInfo *root,
 									   AppendRelInfo *appinfo,
@@ -187,6 +189,40 @@ extern bool eclass_useful_for_merging(PlannerInfo *root,
 extern bool is_redundant_derived_clause(RestrictInfo *rinfo, List *clauselist);
 extern bool is_redundant_with_indexclauses(RestrictInfo *rinfo,
 										   List *indexclauses);
+/*
+ * TODO: Callers of the following function must not modify the returned value
+ * because they are cached. I think we should mark them 'const Bitmapset *'.
+ * Currently, I have not do that because we have to change the declarations of
+ * 'macthing_ems', where we store the returned Bitmapset.
+ */
+extern Bitmapset *get_ecmember_indexes(PlannerInfo *root,
+										   EquivalenceClass *ec,
+										   Relids relids,
+										   bool with_children,
+										   bool with_norel_members,
+										   ECIndexCache *cache);
+extern Bitmapset *get_ecmember_indexes_strict(PlannerInfo *root,
+											  EquivalenceClass *ec,
+											  Relids relids,
+											  bool with_children,
+											  bool with_norel_members,
+											  ECIndexCache *cache);
+extern Bitmapset *get_ec_source_indexes(PlannerInfo *root,
+										EquivalenceClass *ec,
+										Relids relids,
+										ECIndexCache *cache);
+extern Bitmapset *get_ec_source_indexes_strict(PlannerInfo *root,
+											   EquivalenceClass *ec,
+											   Relids relids,
+											   ECIndexCache *cache);
+extern Bitmapset *get_ec_derive_indexes(PlannerInfo *root,
+										EquivalenceClass *ec,
+										Relids relids,
+										ECIndexCache *cache);
+extern Bitmapset *get_ec_derive_indexes_strict(PlannerInfo *root,
+										EquivalenceClass *ec,
+										Relids relids,
+										ECIndexCache *cache);
 
 /*
  * pathkeys.c

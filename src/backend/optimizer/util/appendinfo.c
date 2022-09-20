@@ -454,6 +454,9 @@ adjust_appendrel_attrs_mutator(Node *node,
 		newinfo->outer_selec = -1;
 		newinfo->left_em = NULL;
 		newinfo->right_em = NULL;
+		InitECIndexCache(&newinfo->left_ec_index_cache);
+		InitECIndexCache(&newinfo->right_ec_index_cache);
+		InitECIndexCache(&newinfo->clause_ec_index_cache);
 		newinfo->scansel_cache = NIL;
 		newinfo->left_bucketsize = -1;
 		newinfo->right_bucketsize = -1;

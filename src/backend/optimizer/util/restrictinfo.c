@@ -206,6 +206,9 @@ make_restrictinfo_internal(PlannerInfo *root,
 	restrictinfo->right_ec = NULL;
 	restrictinfo->left_em = NULL;
 	restrictinfo->right_em = NULL;
+	InitECIndexCache(&restrictinfo->left_ec_index_cache);
+	InitECIndexCache(&restrictinfo->right_ec_index_cache);
+	InitECIndexCache(&restrictinfo->clause_ec_index_cache);
 	restrictinfo->scansel_cache = NIL;
 
 	restrictinfo->outer_is_left = false;
@@ -360,6 +363,9 @@ commute_restrictinfo(RestrictInfo *rinfo, Oid comm_op)
 	result->right_ec = rinfo->left_ec;
 	result->left_em = rinfo->right_em;
 	result->right_em = rinfo->left_em;
+	InitECIndexCache(&result->left_ec_index_cache);
+	InitECIndexCache(&result->right_ec_index_cache);
+	InitECIndexCache(&result->clause_ec_index_cache);
 	result->scansel_cache = NIL;	/* not worth updating this */
 	if (rinfo->hashjoinoperator == clause->opno)
 		result->hashjoinoperator = comm_op;

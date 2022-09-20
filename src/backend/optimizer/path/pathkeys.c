@@ -1439,9 +1439,13 @@ convert_subquery_pathkeys(PlannerInfo *root, RelOptInfo *rel,
 				/* We can represent this sub_pathkey */
 				EquivalenceMember *sub_member;
 				EquivalenceClass *outer_ec;
+				int		first_em;
 
-				Assert(list_length(sub_eclass->ec_members) == 1);
-				sub_member = (EquivalenceMember *) linitial(sub_eclass->ec_members);
+				Assert(bms_membership(sub_eclass->ec_member_indexes) == BMS_SINGLETON);
+				first_em = bms_next_member(sub_eclass->ec_member_indexes, -1);
+				sub_member = list_nth_node(EquivalenceMember,
+										   rel->subroot->eq_members,
+										   first_em);
 
 				/*
 				 * Note: it might look funny to be setting sortref = 0 for a
@@ -1496,18 +1500,19 @@ convert_subquery_pathkeys(PlannerInfo *root, RelOptInfo *rel,
 			 * outer query.
 			 */
 			int			best_score = -1;
-			ListCell   *j;
+			int			j = -1;
 
-			foreach(j, sub_eclass->ec_members)
+			while ((j = bms_next_member(sub_eclass->ec_nonchild_indexes, j)) >= 0)
 			{
-				EquivalenceMember *sub_member = (EquivalenceMember *) lfirst(j);
+				EquivalenceMember *sub_member = list_nth_node(EquivalenceMember,
+															  rel->subroot->eq_members,
+															  j);
 				Expr	   *sub_expr = sub_member->em_expr;
 				Oid			sub_expr_type = sub_member->em_datatype;
 				Oid			sub_expr_coll = sub_eclass->ec_collation;
 				ListCell   *k;
 
-				if (sub_member->em_is_child)
-					continue;	/* ignore children here */
+				Assert(!sub_member->em_is_child);
 
 				foreach(k, subquery_tlist)
 				{
@@ -1559,7 +1564,7 @@ convert_subquery_pathkeys(PlannerInfo *root, RelOptInfo *rel,
 													  sub_pathkey->pk_strategy,
 													  sub_pathkey->pk_nulls_first);
 					/* score = # of equivalence peers */
-					score = list_length(outer_ec->ec_members) - 1;
+					score = bms_num_members(outer_ec->ec_member_indexes) - 1;
 					/* +1 if it matches the proper query_pathkeys item */
 					if (retvallen < outer_query_keys &&
 						list_nth(root->query_pathkeys, retvallen) == outer_pk)
@@ -1970,8 +1975,9 @@ select_outer_pathkeys_for_merge(PlannerInfo *root,
 	{
 		RestrictInfo *rinfo = (RestrictInfo *) lfirst(lc);
 		EquivalenceClass *oeclass;
-		int			score;
-		ListCell   *lc2;
+		Bitmapset		 *matching_ems;
+		Bitmapset		 *interesting_ems;
+		Bitmapset		 *other_parent_ems;
 
 		/* get the outer eclass */
 		update_mergeclause_eclasses(root, rinfo);
@@ -1991,19 +1997,15 @@ select_outer_pathkeys_for_merge(PlannerInfo *root,
 			continue;
 
 		/* compute score */
-		score = 0;
-		foreach(lc2, oeclass->ec_members)
-		{
-			EquivalenceMember *em = (EquivalenceMember *) lfirst(lc2);
+		matching_ems = get_ecmember_indexes(root, oeclass, joinrel->relids,
+											false, false,
+											&joinrel->ec_index_cache);
+		other_parent_ems = bms_difference(oeclass->ec_nonchild_indexes, oeclass->ec_norel_indexes);
+		interesting_ems = bms_difference(other_parent_ems, matching_ems);
 
-			/* Potential future join partner? */
-			if (!em->em_is_const && !em->em_is_child &&
-				!bms_overlap(em->em_relids, joinrel->relids))
-				score++;
-		}
-
+		/* record results */
 		ecs[necs] = oeclass;
-		scores[necs] = score;
+		scores[necs] = bms_num_members(interesting_ems);
 		necs++;
 	}
 

@@ -423,16 +423,17 @@ print_expr(const Node *expr, const List *rtable)
  *	  pathkeys list of PathKeys
  */
 void
-print_pathkeys(const List *pathkeys, const List *rtable)
+print_pathkeys(const PlannerInfo *root, const List *pathkeys,
+			   const List *rtable)
 {
-	const ListCell *i;
+	const ListCell *lc;
 
 	printf("(");
-	foreach(i, pathkeys)
+	foreach(lc, pathkeys)
 	{
-		PathKey    *pathkey = (PathKey *) lfirst(i);
+		PathKey    *pathkey = (PathKey *) lfirst(lc);
 		EquivalenceClass *eclass;
-		ListCell   *k;
+		int			i;
 		bool		first = true;
 
 		eclass = pathkey->pk_eclass;
@@ -441,9 +442,11 @@ print_pathkeys(const List *pathkeys, const List *rtable)
 			eclass = eclass->ec_merged;
 
 		printf("(");
-		foreach(k, eclass->ec_members)
+		i = -1;
+		while ((i = bms_next_member(eclass->ec_member_indexes, i)) >= 0)
 		{
-			EquivalenceMember *mem = (EquivalenceMember *) lfirst(k);
+			EquivalenceMember *mem = list_nth_node(EquivalenceMember,
+												   root->eq_members, i);
 
 			if (first)
 				first = false;
@@ -452,7 +455,7 @@ print_pathkeys(const List *pathkeys, const List *rtable)
 			print_expr((Node *) mem->em_expr, rtable);
 		}
 		printf(")");
-		if (lnext(pathkeys, i))
+		if (lnext(pathkeys, lc))
 			printf(", ");
 	}
 	printf(")\n");

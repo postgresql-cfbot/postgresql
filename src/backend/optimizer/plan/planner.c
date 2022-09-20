@@ -619,6 +619,9 @@ subquery_planner(PlannerGlobal *glob, Query *parse,
 	root->cte_plan_ids = NIL;
 	root->multiexpr_params = NIL;
 	root->eq_classes = NIL;
+	root->eq_members = NIL;
+	root->eq_sources = NIL;
+	root->eq_derives = NIL;
 	root->ec_merging_done = false;
 	root->all_result_relids =
 		parse->resultRelation ? bms_make_singleton(parse->resultRelation) : NULL;

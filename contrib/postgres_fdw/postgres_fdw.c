@@ -7461,19 +7461,24 @@ conversion_error_callback(void *arg)
 EquivalenceMember *
 find_em_for_rel(PlannerInfo *root, EquivalenceClass *ec, RelOptInfo *rel)
 {
-	ListCell   *lc;
+	Bitmapset *matching_ems;
+	int		i = -1;
 
-	foreach(lc, ec->ec_members)
+	matching_ems = get_ecmember_indexes(root, ec, rel->relids, true, false,
+										&rel->ec_index_cache);
+
+	while ((i = bms_next_member(matching_ems, i)) >= 0)
 	{
-		EquivalenceMember *em = (EquivalenceMember *) lfirst(lc);
+		EquivalenceMember *em = list_nth_node(EquivalenceMember, root->eq_members, i);
 
 		/*
 		 * Note we require !bms_is_empty, else we'd accept constant
 		 * expressions which are not suitable for the purpose.
 		 */
-		if (bms_is_subset(em->em_relids, rel->relids) &&
-			!bms_is_empty(em->em_relids) &&
-			is_foreign_expr(root, rel, em->em_expr))
+		Assert(bms_is_subset(em->em_relids, rel->relids));
+		Assert(!bms_is_empty(em->em_relids));
+
+		if (is_foreign_expr(root, rel, em->em_expr))
 			return em;
 	}
 
@@ -7504,7 +7509,9 @@ find_em_for_rel_target(PlannerInfo *root, EquivalenceClass *ec,
 	{
 		Expr	   *expr = (Expr *) lfirst(lc1);
 		Index		sgref = get_pathtarget_sortgroupref(target, i);
-		ListCell   *lc2;
+		Bitmapset  *matching_ems;
+		Relids		expr_relids;
+		int			j;
 
 		/* Ignore non-sort expressions */
 		if (sgref == 0 ||
@@ -7519,19 +7526,22 @@ find_em_for_rel_target(PlannerInfo *root, EquivalenceClass *ec,
 		while (expr && IsA(expr, RelabelType))
 			expr = ((RelabelType *) expr)->arg;
 
+		expr_relids = pull_varnos(root, (Node *) expr);
+		matching_ems = get_ecmember_indexes_strict(root, ec, expr_relids,
+												   false, false, NULL);
 		/* Locate an EquivalenceClass member matching this expr, if any */
-		foreach(lc2, ec->ec_members)
+		j = -1;
+		while ((j = bms_next_member(matching_ems, j)) >= 0)
 		{
-			EquivalenceMember *em = (EquivalenceMember *) lfirst(lc2);
+			EquivalenceMember *em = list_nth_node(EquivalenceMember,
+												  root->eq_members, j);
 			Expr	   *em_expr;
 
-			/* Don't match constants */
-			if (em->em_is_const)
-				continue;
+			/* don't expect constants */
+			Assert(!em->em_is_const);
 
-			/* Ignore child members */
-			if (em->em_is_child)
-				continue;
+			/* don't expect child members */
+			Assert(!em->em_is_child);
 
 			/* Match if same expression (after stripping relabel) */
 			em_expr = em->em_expr;
@@ -7545,8 +7555,8 @@ find_em_for_rel_target(PlannerInfo *root, EquivalenceClass *ec,
 			if (is_foreign_expr(root, rel, em->em_expr))
 				return em;
 		}
-
 		i++;
+		bms_free(expr_relids);
 	}
 
 	return NULL;

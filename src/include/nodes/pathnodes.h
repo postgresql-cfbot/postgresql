@@ -300,6 +300,15 @@ struct PlannerInfo
 	/* list of active EquivalenceClasses */
 	List	   *eq_classes;
 
+	/* list of each EquivalenceMember */
+	List	   *eq_members;
+
+	/* list of source RestrictInfos used to build EquivalenceClasses */
+	List	   *eq_sources;
+
+	/* list of RestrictInfos derived from EquivalenceClasses */
+	List	   *eq_derives;
+
 	/* set true once ECs are canonical */
 	bool		ec_merging_done;
 
@@ -546,6 +555,49 @@ typedef struct PartitionSchemeData
 }			PartitionSchemeData;
 
 typedef struct PartitionSchemeData *PartitionScheme;
+
+/*
+ * ECIndexCache
+ *
+ * Storage where we cache the result of get_ecmember_indexes and other similar
+ * functions. See comments above the function for details.
+ *
+ * TODO: Is this good place of this struct?
+ */
+
+#define GET_EC_INDEX_CACHE_ARRAY_INDEX(with_children, with_norel_members) \
+	((with_children) << 1 | (with_norel_members))
+
+struct EquivalenceClass;
+
+typedef struct ECIndexCache
+{
+	struct EquivalenceClass *ec;
+	Bitmapset  *ecmember_indexes[4];
+	Bitmapset  *ecmember_indexes_strict[4];
+	Bitmapset  *ec_source_indexes;
+	Bitmapset  *ec_source_indexes_strict;
+	Bitmapset  *ec_derive_indexes;
+	Bitmapset  *ec_derive_indexes_strict;
+} ECIndexCache;
+
+static inline void InitECIndexCache(ECIndexCache *cache)
+{
+	/* TODO */
+	cache->ec = NULL;
+	cache->ecmember_indexes[0] = NULL;
+	cache->ecmember_indexes[1] = NULL;
+	cache->ecmember_indexes[2] = NULL;
+	cache->ecmember_indexes[3] = NULL;
+	cache->ecmember_indexes_strict[0] = NULL;
+	cache->ecmember_indexes_strict[1] = NULL;
+	cache->ecmember_indexes_strict[2] = NULL;
+	cache->ecmember_indexes_strict[3] = NULL;
+	cache->ec_source_indexes = NULL;
+	cache->ec_source_indexes_strict = NULL;
+	cache->ec_derive_indexes = NULL;
+	cache->ec_derive_indexes_strict = NULL;
+}
 
 /*----------
  * RelOptInfo
@@ -889,6 +941,30 @@ typedef struct RelOptInfo
 	 * Indexes in PlannerInfo's eq_classes list of ECs that mention this rel
 	 */
 	Bitmapset  *eclass_indexes;
+
+	/*
+	 * Indexes in PlannerInfo's eq_members list of EMs that mention this rel
+	 */
+	Bitmapset  *eclass_member_indexes;
+
+	/*
+	 * Indexes in PlannerInfo's eq_sources list for RestrictInfos that mention
+	 * this relation.
+	 */
+	Bitmapset  *eclass_source_indexes;
+
+	/*
+	 * Indexes in PlannerInfo's eq_derives list for RestrictInfos that mention
+	 * this relation.
+	 */
+	Bitmapset  *eclass_derive_indexes;
+
+	/*
+	 * ECIndexCache corresponding to this rel's relids.
+	 * TODO: The following usage of pg_node_attr is wrong.
+	 */
+	ECIndexCache	ec_index_cache pg_node_attr(equal_ignore, read_write_ignore);
+
 	PlannerInfo *subroot;		/* if subquery */
 	List	   *subplan_params; /* if subquery */
 	/* wanted number of parallel workers */
@@ -1285,9 +1361,17 @@ typedef struct EquivalenceClass
 
 	List	   *ec_opfamilies;	/* btree operator family OIDs */
 	Oid			ec_collation;	/* collation, if datatypes are collatable */
-	List	   *ec_members;		/* list of EquivalenceMembers */
-	List	   *ec_sources;		/* list of generating RestrictInfos */
-	List	   *ec_derives;		/* list of derived RestrictInfos */
+	Bitmapset  *ec_member_indexes; /* Indexes into all PlannerInfos eq_members
+									* for this EquivalenceClass */
+	Bitmapset  *ec_nonchild_indexes; /* Indexes into PlannerInfo's eq_members
+									  * with em_is_child == false */
+	Bitmapset  *ec_norel_indexes; /* Indexes into PlannerInfo's eq_members for
+								   * members where pull_varno on the em_expr
+								   * is an empty set */
+	Bitmapset  *ec_source_indexes; /* indexes into PlannerInfo's eq_sources
+									* list of generating RestrictInfos */
+	Bitmapset  *ec_derive_indexes; /* indexes into PlannerInfo's eq_derives
+									* list of derived RestrictInfos */
 	Relids		ec_relids;		/* all relids appearing in ec_members, except
 								 * for child members (see below) */
 	bool		ec_has_const;	/* any pseudoconstants in ec_members? */
@@ -2521,6 +2605,15 @@ typedef struct RestrictInfo
 	EquivalenceMember *left_em pg_node_attr(equal_ignore);
 	/* EquivalenceMember for righthand */
 	EquivalenceMember *right_em pg_node_attr(equal_ignore);
+
+	/*
+	 * ECIndexCaches corresponding to this rinfo's left_relids, right_relids,
+	 * and clause_relids.
+	 * TODO: The following usage of pg_node_attr is wrong.
+	 */
+	ECIndexCache left_ec_index_cache pg_node_attr(equal_ignore, read_write_ignore);
+	ECIndexCache right_ec_index_cache pg_node_attr(equal_ignore, read_write_ignore);
+	ECIndexCache clause_ec_index_cache pg_node_attr(equal_ignore, read_write_ignore);
 
 	/*
 	 * List of MergeScanSelCache structs.  Those aren't Nodes, so hard to

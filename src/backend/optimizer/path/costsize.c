@@ -1986,12 +1986,14 @@ compute_cpu_sort_cost(PlannerInfo *root, List *pathkeys, int nPresortedKeys,
 		double		nGroups,
 					correctedNGroups;
 		Cost		funcCost = 1.0;
+		int			first_em;
 
 		/*
 		 * We believe that equivalence members aren't very different, so, to
 		 * estimate cost we consider just the first member.
 		 */
-		em = (EquivalenceMember *) linitial(pathkey->pk_eclass->ec_members);
+		first_em = bms_next_member(pathkey->pk_eclass->ec_member_indexes, -1);
+		em = list_nth_node(EquivalenceMember, root->eq_members, first_em);
 
 		if (em->em_datatype != InvalidOid)
 		{
@@ -2326,8 +2328,10 @@ cost_incremental_sort(Path *path,
 	foreach(l, pathkeys)
 	{
 		PathKey    *key = (PathKey *) lfirst(l);
-		EquivalenceMember *member = (EquivalenceMember *)
-		linitial(key->pk_eclass->ec_members);
+		int			first_em = bms_next_member(key->pk_eclass->ec_member_indexes, -1);
+		EquivalenceMember *member = list_nth_node(EquivalenceMember,
+												  root->eq_members,
+												  first_em);
 
 		/*
 		 * Check if the expression contains Var with "varno 0" so that we
@@ -5820,7 +5824,8 @@ get_foreign_key_join_selectivity(PlannerInfo *root,
 				if (ec && ec->ec_has_const)
 				{
 					EquivalenceMember *em = fkinfo->fk_eclass_member[i];
-					RestrictInfo *rinfo = find_derived_clause_for_ec_member(ec,
+					RestrictInfo *rinfo = find_derived_clause_for_ec_member(root,
+																			ec,
 																			em);
 
 					if (rinfo)

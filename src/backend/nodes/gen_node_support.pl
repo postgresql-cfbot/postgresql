@@ -168,6 +168,9 @@ my %manual_nodetag_number;
 # EquivalenceClasses are never moved, so just shallow-copy the pointer
 push @scalar_types, qw(EquivalenceClass* EquivalenceMember*);
 
+# TODO: This is probably wrong
+push @scalar_types, qw(ECIndexCache);
+
 # This is a struct, so we can copy it by assignment.  Equal support is
 # currently not required.
 push @scalar_types, qw(QualCost);

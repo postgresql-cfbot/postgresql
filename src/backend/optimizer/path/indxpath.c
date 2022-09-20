@@ -185,8 +185,8 @@ static IndexClause *expand_indexqual_rowcompare(PlannerInfo *root,
 												IndexOptInfo *index,
 												Oid expr_op,
 												bool var_on_left);
-static void match_pathkeys_to_index(IndexOptInfo *index, List *pathkeys,
-									List **orderby_clauses_p,
+static void match_pathkeys_to_index(PlannerInfo *root, IndexOptInfo *index,
+									List *pathkeys, List **orderby_clauses_p,
 									List **clause_columns_p);
 static Expr *match_clause_to_ordering_op(IndexOptInfo *index,
 										 int indexcol, Expr *clause, Oid pk_opfamily);
@@ -998,7 +998,7 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 	else if (index->amcanorderbyop && pathkeys_possibly_useful)
 	{
 		/* see if we can generate ordering operators for query_pathkeys */
-		match_pathkeys_to_index(index, root->query_pathkeys,
+		match_pathkeys_to_index(root, index, root->query_pathkeys,
 								&orderbyclauses,
 								&orderbyclausecols);
 		if (orderbyclauses)
@@ -3090,8 +3090,8 @@ expand_indexqual_rowcompare(PlannerInfo *root,
  * one-to-one with the requested pathkeys.
  */
 static void
-match_pathkeys_to_index(IndexOptInfo *index, List *pathkeys,
-						List **orderby_clauses_p,
+match_pathkeys_to_index(PlannerInfo *root, IndexOptInfo *index,
+						List *pathkeys, List **orderby_clauses_p,
 						List **clause_columns_p)
 {
 	List	   *orderby_clauses = NIL;
@@ -3108,8 +3108,9 @@ match_pathkeys_to_index(IndexOptInfo *index, List *pathkeys,
 	foreach(lc1, pathkeys)
 	{
 		PathKey    *pathkey = (PathKey *) lfirst(lc1);
+		Bitmapset  *matching_ems;
 		bool		found = false;
-		ListCell   *lc2;
+		int			i;
 
 		/*
 		 * Note: for any failure to match, we just return NIL immediately.
@@ -3133,9 +3134,14 @@ match_pathkeys_to_index(IndexOptInfo *index, List *pathkeys,
 		 * be considered to match more than one pathkey list, which is OK
 		 * here.  See also get_eclass_for_sort_expr.)
 		 */
-		foreach(lc2, pathkey->pk_eclass->ec_members)
+		matching_ems = bms_intersect(pathkey->pk_eclass->ec_member_indexes,
+									 index->rel->eclass_member_indexes);
+
+		i = -1;
+		while ((i = bms_next_member(matching_ems, i)) >= 0)
 		{
-			EquivalenceMember *member = (EquivalenceMember *) lfirst(lc2);
+			EquivalenceMember *member = list_nth_node(EquivalenceMember,
+													  root->eq_members, i);
 			int			indexcol;
 
 			/* No possibility of match if it references other relations */

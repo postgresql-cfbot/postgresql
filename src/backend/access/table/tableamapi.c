@@ -79,6 +79,13 @@ GetTableAmRoutine(Oid amhandler)
 	Assert(routine->tuple_complete_speculative != NULL);
 
 	Assert(routine->multi_insert != NULL);
+
+	Assert(routine->tuple_insert_begin != NULL);
+	Assert(routine->tuple_insert_v2 != NULL);
+	Assert(routine->multi_insert_v2 != NULL);
+	Assert(routine->multi_insert_flush != NULL);
+	Assert(routine->tuple_insert_end != NULL);
+
 	Assert(routine->tuple_delete != NULL);
 	Assert(routine->tuple_update != NULL);
 	Assert(routine->tuple_lock != NULL);

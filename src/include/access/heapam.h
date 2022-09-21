@@ -36,10 +36,25 @@
 #define HEAP_INSERT_NO_LOGICAL	TABLE_INSERT_NO_LOGICAL
 #define HEAP_INSERT_SPECULATIVE 0x0010
 
-typedef struct BulkInsertStateData *BulkInsertState;
 struct TupleTableSlot;
 
 #define MaxLockTupleMode	LockTupleExclusive
+
+/*
+ * No more than this many tuples per single multi insert batch
+ *
+ * Caution: Don't make this too big, as we could end up with this many tuples
+ * stored in multi insert buffer. Increasing this can cause quadratic growth in
+ * memory requirements during copies into partitioned tables with a large
+ * number of partitions.
+ */
+#define MAX_BUFFERED_TUPLES		1000
+
+/*
+ * Flush multi insert buffers if there are >= this many bytes, as counted by
+ * the size of the tuples buffered.
+ */
+#define MAX_BUFFERED_BYTES		65535
 
 /*
  * Descriptor for heap table scans.
@@ -99,6 +114,25 @@ typedef enum
 	HEAPTUPLE_DELETE_IN_PROGRESS	/* deleting xact is still in progress */
 } HTSV_Result;
 
+/* Holds multi insert state for heap access method.*/
+typedef struct HeapMultiInsertState
+{
+	/* Switch to short-lived memory context before flushing. */
+	MemoryContext       context;
+	/* Maximum number of slots that can be buffered. */
+	int32               max_slots;
+	/*
+	 * Maximum size (in bytes) of all the tuples that a single batch of
+	 * buffered slots can hold.
+	 */
+	int64               max_size;
+	/*
+	 * Total tuple size (in bytes) of the slots that are currently buffered.
+	 * Flush the buffered slots when cur_size >= max_size.
+	 */
+	int64               cur_size;
+} HeapMultiInsertState;
+
 /* ----------------
  *		function prototypes for heap access method
  *
@@ -140,15 +174,20 @@ extern bool heap_hot_search_buffer(ItemPointer tid, Relation relation,
 
 extern void heap_get_latest_tid(TableScanDesc sscan, ItemPointer tid);
 
-extern BulkInsertState GetBulkInsertState(void);
-extern void FreeBulkInsertState(BulkInsertState);
-extern void ReleaseBulkInsertStatePin(BulkInsertState bistate);
-
 extern void heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 						int options, BulkInsertState bistate);
 extern void heap_multi_insert(Relation relation, struct TupleTableSlot **slots,
 							  int ntuples, CommandId cid, int options,
 							  BulkInsertState bistate);
+
+extern TableInsertState* heap_insert_begin(Relation rel, CommandId cid,
+										   int options, bool is_multi);
+extern void heap_insert_v2(TableInsertState *state, TupleTableSlot *slot);
+extern void heap_multi_insert_v2(TableInsertState *state,
+								 TupleTableSlot *slot);
+extern void heap_multi_insert_flush(TableInsertState *state);
+extern void heap_insert_end(TableInsertState *state);
+
 extern TM_Result heap_delete(Relation relation, ItemPointer tid,
 							 CommandId cid, Snapshot crosscheck, bool wait,
 							 struct TM_FailureData *tmfd, bool changingPart);

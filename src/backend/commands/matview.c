@@ -52,10 +52,7 @@ typedef struct
 	DestReceiver pub;			/* publicly-known function pointers */
 	Oid			transientoid;	/* OID of new heap into which to store */
 	/* These fields are filled by transientrel_startup: */
-	Relation	transientrel;	/* relation to write to */
-	CommandId	output_cid;		/* cmin to insert in output tuples */
-	int			ti_options;		/* table_tuple_insert performance options */
-	BulkInsertState bistate;	/* bulk insert state */
+	TableInsertState *istate;	/* insert state */
 } DR_transientrel;
 
 static int	matview_maintenance_depth = 0;
@@ -460,10 +457,11 @@ transientrel_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 	/*
 	 * Fill private fields of myState for use by later routines
 	 */
-	myState->transientrel = transientrel;
-	myState->output_cid = GetCurrentCommandId(true);
-	myState->ti_options = TABLE_INSERT_SKIP_FSM | TABLE_INSERT_FROZEN;
-	myState->bistate = GetBulkInsertState();
+	myState->istate = table_insert_begin(transientrel,
+										 GetCurrentCommandId(true),
+										 TABLE_INSERT_SKIP_FSM | TABLE_INSERT_FROZEN,
+										 true,
+										 true);
 
 	/*
 	 * Valid smgr_targblock implies something already wrote to the relation.
@@ -488,12 +486,7 @@ transientrel_receive(TupleTableSlot *slot, DestReceiver *self)
 	 * cheap either. This also doesn't allow accessing per-AM data (say a
 	 * tuple's xmin), but since we don't do that here...
 	 */
-
-	table_tuple_insert(myState->transientrel,
-					   slot,
-					   myState->output_cid,
-					   myState->ti_options,
-					   myState->bistate);
+	table_multi_insert_v2(myState->istate, slot);
 
 	/* We know this is a newly created relation, so there are no indexes */
 
@@ -507,14 +500,20 @@ static void
 transientrel_shutdown(DestReceiver *self)
 {
 	DR_transientrel *myState = (DR_transientrel *) self;
+	int ti_options;
+	Relation transientrel;
 
-	FreeBulkInsertState(myState->bistate);
+	ti_options = myState->istate->options;
+	transientrel = myState->istate->rel;
 
-	table_finish_bulk_insert(myState->transientrel, myState->ti_options);
+	table_multi_insert_flush(myState->istate);
+
+	table_insert_end(myState->istate);
+
+	table_finish_bulk_insert(transientrel, ti_options);
 
 	/* close transientrel, but keep lock until commit */
-	table_close(myState->transientrel, NoLock);
-	myState->transientrel = NULL;
+	table_close(transientrel, NoLock);
 }
 
 /*

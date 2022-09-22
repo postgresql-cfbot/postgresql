@@ -89,20 +89,33 @@ SELECT pubname, puballtables FROM pg_publication WHERE pubname = 'testpub_forall
 \d+ testpub_tbl2
 \dRp+ testpub_foralltables
 
+SET client_min_messages = 'ERROR';
+CREATE PUBLICATION testpub_foralltables_excepttable FOR ALL TABLES EXCEPT TABLE testpub_tbl1, testpub_tbl2;
+-- specify EXCEPT without TABLE
+CREATE PUBLICATION testpub_foralltables_excepttable1 FOR ALL TABLES EXCEPT testpub_tbl1;
+RESET client_min_messages;
+
+\dRp+ testpub_foralltables_excepttable
+\dRp+ testpub_foralltables_excepttable1
+
 DROP TABLE testpub_tbl2;
-DROP PUBLICATION testpub_foralltables, testpub_fortable, testpub_forschema;
+DROP PUBLICATION testpub_foralltables, testpub_fortable, testpub_forschema, testpub_foralltables_excepttable, testpub_foralltables_excepttable1;
 
 CREATE TABLE testpub_tbl3 (a int);
 CREATE TABLE testpub_tbl3a (b text) INHERITS (testpub_tbl3);
 SET client_min_messages = 'ERROR';
 CREATE PUBLICATION testpub3 FOR TABLE testpub_tbl3;
 CREATE PUBLICATION testpub4 FOR TABLE ONLY testpub_tbl3;
+CREATE PUBLICATION testpub5 FOR ALL TABLES EXCEPT TABLE testpub_tbl3;
+CREATE PUBLICATION testpub6 FOR ALL TABLES EXCEPT TABLE ONLY testpub_tbl3;
 RESET client_min_messages;
 \dRp+ testpub3
 \dRp+ testpub4
+\dRp+ testpub5
+\dRp+ testpub6
 
 DROP TABLE testpub_tbl3, testpub_tbl3a;
-DROP PUBLICATION testpub3, testpub4;
+DROP PUBLICATION testpub3, testpub4, testpub5, testpub6;
 
 -- Tests for partitioned tables
 SET client_min_messages = 'ERROR';
@@ -1058,6 +1071,84 @@ DROP PUBLICATION pub;
 DROP TABLE sch1.tbl1;
 DROP SCHEMA sch1 cascade;
 DROP SCHEMA sch2 cascade;
+
+-- Tests for ALTER PUBLICATION ... RESET
+CREATE SCHEMA pub_sch1;
+CREATE TABLE pub_sch1.tbl1 (a int);
+CREATE TABLE pub_sch1.tbl2 (a int);
+SET client_min_messages = 'ERROR';
+CREATE PUBLICATION testpub_reset FOR ALL TABLES;
+RESET client_min_messages;
+
+-- Can't add EXCEPT TABLE to 'FOR ALL TABLES' publication
+ALTER PUBLICATION testpub_reset ADD ALL TABLES EXCEPT TABLE pub_sch1.tbl1;
+
+-- Verify that 'ALL TABLES' flag is reset
+\dRp+ testpub_reset
+ALTER PUBLICATION testpub_reset RESET;
+\dRp+ testpub_reset
+
+-- Should work now after resetting the publication
+ALTER PUBLICATION testpub_reset ADD ALL TABLES EXCEPT TABLE pub_sch1.tbl1, pub_sch1.tbl2;
+\dRp+ testpub_reset
+
+ALTER PUBLICATION testpub_reset RESET;
+
+ALTER PUBLICATION testpub_reset ADD TABLE pub_sch1.tbl1;
+
+-- Can't add EXCEPT TABLE to 'FOR TABLE' publication
+ALTER PUBLICATION testpub_reset ADD ALL TABLES EXCEPT TABLE pub_sch1.tbl1;
+
+-- Verify that tables associated with the publication are dropped after RESET
+\dRp+ testpub_reset
+ALTER PUBLICATION testpub_reset RESET;
+\dRp+ testpub_reset
+
+ALTER PUBLICATION testpub_reset ADD ALL TABLES IN SCHEMA public;
+
+-- Can't add EXCEPT TABLE to 'FOR ALL TABLES IN SCHEMA' publication
+ALTER PUBLICATION testpub_reset ADD ALL TABLES EXCEPT TABLE pub_sch1.tbl1;
+
+-- Verify that schemas associated with the publication are dropped after RESET
+\dRp+ testpub_reset
+ALTER PUBLICATION testpub_reset RESET;
+\dRp+ testpub_reset
+
+ALTER PUBLICATION testpub_reset SET (PUBLISH = '');
+
+-- Can't add EXCEPT TABLE when the 'PUBLISH' parameter does not have default
+-- value
+ALTER PUBLICATION testpub_reset ADD ALL TABLES EXCEPT TABLE pub_sch1.tbl1;
+
+-- Verify that 'PUBLISH' parameter is reset
+\dRp+ testpub_reset
+ALTER PUBLICATION testpub_reset RESET;
+\dRp+ testpub_reset
+
+ALTER PUBLICATION testpub_reset SET (PUBLISH_VIA_PARTITION_ROOT = 'true');
+
+-- Can't add EXCEPT TABLE when 'PUBLISH_VIA_PARTITION_ROOT' parameter does not
+-- have default value
+ALTER PUBLICATION testpub_reset ADD ALL TABLES EXCEPT TABLE pub_sch1.tbl1;
+
+-- Verify that 'PUBLISH_VIA_PARTITION_ROOT' parameter is reset
+\dRp+ testpub_reset
+ALTER PUBLICATION testpub_reset RESET;
+\dRp+ testpub_reset
+
+-- Verify that only superuser can reset a publication
+ALTER PUBLICATION testpub_reset OWNER TO regress_publication_user2;
+SET ROLE regress_publication_user2;
+ALTER PUBLICATION testpub_reset RESET; -- fail - must be superuser
+
+-- Verify that only superuser can ADD ALL TABLES
+ALTER PUBLICATION testpub_reset ADD ALL TABLES;
+SET ROLE regress_publication_user;
+
+DROP PUBLICATION testpub_reset;
+DROP TABLE pub_sch1.tbl1;
+DROP TABLE pub_sch1.tbl2;
+DROP SCHEMA pub_sch1;
 
 RESET SESSION AUTHORIZATION;
 DROP ROLE regress_publication_user, regress_publication_user2;

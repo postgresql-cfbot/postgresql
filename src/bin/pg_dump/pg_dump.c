@@ -127,6 +127,8 @@ static SimpleOidList foreign_servers_include_oids = {NULL, NULL};
 static SimpleStringList extension_include_patterns = {NULL, NULL};
 static SimpleOidList extension_include_oids = {NULL, NULL};
 
+static SimplePtrList exceptinfo = {NULL, NULL};
+
 static const CatalogId nilCatalogId = {0, 0};
 
 /* override for standard extra_float_digits setting */
@@ -4009,7 +4011,33 @@ dumpPublication(Archive *fout, const PublicationInfo *pubinfo)
 					  qpubname);
 
 	if (pubinfo->puballtables)
+	{
+		SimplePtrListCell *cell;
+		bool		first = true;
+
 		appendPQExpBufferStr(query, " FOR ALL TABLES");
+
+		/* Include exception tables if the publication has except tables */
+		for (cell = exceptinfo.head; cell; cell = cell->next)
+		{
+			PublicationRelInfo *pubrinfo = (PublicationRelInfo *) cell->ptr;
+			TableInfo  *tbinfo;
+
+			if (pubinfo == pubrinfo->publication)
+			{
+				tbinfo = pubrinfo->pubtable;
+
+				if (first)
+				{
+					appendPQExpBufferStr(query, " EXCEPT TABLE");
+					first = false;
+				}
+				else
+					appendPQExpBufferStr(query, ",");
+				appendPQExpBuffer(query, " ONLY %s", fmtQualifiedDumpable(tbinfo));
+			}
+		}
+	}
 
 	appendPQExpBufferStr(query, " WITH (publish = '");
 	if (pubinfo->pubinsert)
@@ -4180,6 +4208,7 @@ getPublicationTables(Archive *fout, TableInfo tblinfo[], int numTables)
 	int			i_prrelid;
 	int			i_prrelqual;
 	int			i_prattrs;
+	int			i_prexcept;
 	int			i,
 				j,
 				ntups;
@@ -4191,8 +4220,17 @@ getPublicationTables(Archive *fout, TableInfo tblinfo[], int numTables)
 
 	/* Collect all publication membership info. */
 	if (fout->remoteVersion >= 150000)
+	{
 		appendPQExpBufferStr(query,
-							 "SELECT tableoid, oid, prpubid, prrelid, "
+							 "SELECT tableoid, oid, prpubid, prrelid,\n");
+
+		/* FIXME: 150000 should be changed to 160000 later for PG16. */
+		if (fout->remoteVersion >= 150000)
+			appendPQExpBufferStr(query, " prexcept,\n");
+		else
+			appendPQExpBufferStr(query, " false AS prexcept,\n");
+
+		appendPQExpBufferStr(query,
 							 "pg_catalog.pg_get_expr(prqual, prrelid) AS prrelqual, "
 							 "(CASE\n"
 							 "  WHEN pr.prattrs IS NOT NULL THEN\n"
@@ -4203,6 +4241,7 @@ getPublicationTables(Archive *fout, TableInfo tblinfo[], int numTables)
 							 "      WHERE attrelid = pr.prrelid AND attnum = prattrs[s])\n"
 							 "  ELSE NULL END) prattrs "
 							 "FROM pg_catalog.pg_publication_rel pr");
+	}
 	else
 		appendPQExpBufferStr(query,
 							 "SELECT tableoid, oid, prpubid, prrelid, "
@@ -4218,6 +4257,7 @@ getPublicationTables(Archive *fout, TableInfo tblinfo[], int numTables)
 	i_prrelid = PQfnumber(res, "prrelid");
 	i_prrelqual = PQfnumber(res, "prrelqual");
 	i_prattrs = PQfnumber(res, "prattrs");
+	i_prexcept = PQfnumber(res, "prexcept");
 
 	/* this allocation may be more than we need */
 	pubrinfo = pg_malloc(ntups * sizeof(PublicationRelInfo));
@@ -4229,6 +4269,7 @@ getPublicationTables(Archive *fout, TableInfo tblinfo[], int numTables)
 		Oid			prrelid = atooid(PQgetvalue(res, i, i_prrelid));
 		PublicationInfo *pubinfo;
 		TableInfo  *tbinfo;
+		char	   *prexcept = pg_strdup(PQgetvalue(res, i, i_prexcept));
 
 		/*
 		 * Ignore any entries for which we aren't interested in either the
@@ -4249,7 +4290,11 @@ getPublicationTables(Archive *fout, TableInfo tblinfo[], int numTables)
 			continue;
 
 		/* OK, make a DumpableObject for this relationship */
-		pubrinfo[j].dobj.objType = DO_PUBLICATION_REL;
+		if (strcmp(prexcept, "f") == 0)
+			pubrinfo[j].dobj.objType = DO_PUBLICATION_REL;
+		else
+			pubrinfo[j].dobj.objType = DO_PUBLICATION_EXCEPT_REL;
+
 		pubrinfo[j].dobj.catId.tableoid =
 			atooid(PQgetvalue(res, i, i_tableoid));
 		pubrinfo[j].dobj.catId.oid = atooid(PQgetvalue(res, i, i_oid));
@@ -4287,6 +4332,9 @@ getPublicationTables(Archive *fout, TableInfo tblinfo[], int numTables)
 
 		/* Decide whether we want to dump it */
 		selectDumpablePublicationObject(&(pubrinfo[j].dobj), fout);
+
+		if (strcmp(prexcept, "t") == 0)
+			simple_ptr_list_append(&exceptinfo, &pubrinfo[j]);
 
 		j++;
 	}
@@ -9974,6 +10022,9 @@ dumpDumpableObject(Archive *fout, DumpableObject *dobj)
 			break;
 		case DO_PUBLICATION:
 			dumpPublication(fout, (const PublicationInfo *) dobj);
+			break;
+		case DO_PUBLICATION_EXCEPT_REL:
+			/* will be dumped in dumpPublication */
 			break;
 		case DO_PUBLICATION_REL:
 			dumpPublicationTable(fout, (const PublicationRelInfo *) dobj);
@@ -17933,6 +17984,7 @@ addBoundaryDependencies(DumpableObject **dobjs, int numObjs,
 			case DO_DEFAULT_ACL:
 			case DO_POLICY:
 			case DO_PUBLICATION:
+			case DO_PUBLICATION_EXCEPT_REL:
 			case DO_PUBLICATION_REL:
 			case DO_PUBLICATION_TABLE_IN_SCHEMA:
 			case DO_SUBSCRIPTION:

@@ -90,6 +90,7 @@ enum dbObjectTypePriorities
 	PRIO_FK_CONSTRAINT,
 	PRIO_POLICY,
 	PRIO_PUBLICATION,
+	PRIO_PUBLICATION_EXCEPT_REL,
 	PRIO_PUBLICATION_REL,
 	PRIO_PUBLICATION_TABLE_IN_SCHEMA,
 	PRIO_SUBSCRIPTION,
@@ -144,6 +145,7 @@ static const int dbObjectTypePriority[] =
 	PRIO_REFRESH_MATVIEW,		/* DO_REFRESH_MATVIEW */
 	PRIO_POLICY,				/* DO_POLICY */
 	PRIO_PUBLICATION,			/* DO_PUBLICATION */
+	PRIO_PUBLICATION_EXCEPT_REL,	/* DO_PUBLICATION_EXCEPT_REL */
 	PRIO_PUBLICATION_REL,		/* DO_PUBLICATION_REL */
 	PRIO_PUBLICATION_TABLE_IN_SCHEMA,	/* DO_PUBLICATION_TABLE_IN_SCHEMA */
 	PRIO_SUBSCRIPTION			/* DO_SUBSCRIPTION */
@@ -1481,6 +1483,11 @@ describeDumpableObject(DumpableObject *obj, char *buf, int bufsize)
 		case DO_PUBLICATION:
 			snprintf(buf, bufsize,
 					 "PUBLICATION (ID %d OID %u)",
+					 obj->dumpId, obj->catId.oid);
+			return;
+		case DO_PUBLICATION_EXCEPT_REL:
+			snprintf(buf, bufsize,
+					 "PUBLICATION EXCEPT TABLE (ID %d OID %u)",
 					 obj->dumpId, obj->catId.oid);
 			return;
 		case DO_PUBLICATION_REL:

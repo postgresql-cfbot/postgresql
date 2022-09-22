@@ -295,6 +295,8 @@ typedef struct
 	transferMode transfer_mode; /* copy files or link them? */
 	int			jobs;			/* number of processes/threads to use */
 	char	   *socketdir;		/* directory to use for Unix sockets */
+	char	   *pg_dump_opts;	/* options to pass to pg_dump */
+	char	   *pg_restore_opts;	/* options to pass to pg_dump */
 } UserOpts;
 
 typedef struct

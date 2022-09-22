@@ -60,6 +60,7 @@ main(int argc, char **argv)
 	int			c;
 	int			exit_code;
 	int			numWorkers = 1;
+	int			blobBatchSize = 0;
 	Archive    *AH;
 	char	   *inputFileSpec;
 	static int	disable_triggers = 0;
@@ -123,6 +124,7 @@ main(int argc, char **argv)
 		{"no-publications", no_argument, &no_publications, 1},
 		{"no-security-labels", no_argument, &no_security_labels, 1},
 		{"no-subscriptions", no_argument, &no_subscriptions, 1},
+		{"restore-blob-batch-size", required_argument, NULL, 4},
 
 		{NULL, 0, NULL, 0}
 	};
@@ -286,6 +288,10 @@ main(int argc, char **argv)
 				set_dump_section(optarg, &(opts->dumpSections));
 				break;
 
+			case 4:				/* # of blobs to restore per transaction */
+				blobBatchSize = atoi(optarg);
+				break;
+
 			default:
 				/* getopt_long already emitted a complaint */
 				pg_log_error_hint("Try \"%s --help\" for more information.", progname);
@@ -405,6 +411,7 @@ main(int argc, char **argv)
 		SortTocFromFile(AH);
 
 	AH->numWorkers = numWorkers;
+	AH->blobBatchSize = blobBatchSize;
 
 	if (opts->tocSummary)
 		PrintTOCSummary(AH);
@@ -478,6 +485,8 @@ usage(const char *progname)
 	printf(_("  --use-set-session-authorization\n"
 			 "                               use SET SESSION AUTHORIZATION commands instead of\n"
 			 "                               ALTER OWNER commands to set ownership\n"));
+	printf(_("  --restore-blob-batch-size=NUM\n"
+			 "                               attempt to restore NUM large objects per transaction\n"));
 
 	printf(_("\nConnection options:\n"));
 	printf(_("  -h, --host=HOSTNAME      database server host or socket directory\n"));

@@ -196,11 +196,20 @@ static inline void dumpComment(Archive *fout, const char *type,
 							   const char *name, const char *namespace,
 							   const char *owner, CatalogId catalogId,
 							   int subid, DumpId dumpId);
+static bool dumpCommentQuery(Archive *fout, PQExpBuffer query, PQExpBuffer tag,
+							 const char *type, const char *name,
+							 const char *namespace, const char *owner,
+							 CatalogId catalogId, int subid, DumpId dumpId,
+							 const char *initdb_comment);
 static int	findComments(Oid classoid, Oid objoid, CommentItem **items);
 static void collectComments(Archive *fout);
 static void dumpSecLabel(Archive *fout, const char *type, const char *name,
 						 const char *namespace, const char *owner,
 						 CatalogId catalogId, int subid, DumpId dumpId);
+static bool dumpSecLabelQuery(Archive *fout, PQExpBuffer query, PQExpBuffer tag,
+							  const char *type, const char *name,
+							  const char *namespace, const char *owner,
+							  CatalogId catalogId, int subid, DumpId dumpId);
 static int	findSecLabels(Oid classoid, Oid objoid, SecLabelItem **items);
 static void collectSecLabels(Archive *fout);
 static void dumpDumpableObject(Archive *fout, DumpableObject *dobj);
@@ -256,6 +265,12 @@ static DumpId dumpACL(Archive *fout, DumpId objDumpId, DumpId altDumpId,
 					  const char *type, const char *name, const char *subname,
 					  const char *nspname, const char *owner,
 					  const DumpableAcl *dacl);
+static bool dumpACLQuery(Archive *fout, PQExpBuffer query, PQExpBuffer tag,
+						 DumpId objDumpId, DumpId altDumpId,
+						 const char *type, const char *name,
+						 const char *subname,
+						 const char *nspname, const char *owner,
+						 const DumpableAcl *dacl);
 
 static void getDependencies(Archive *fout);
 static void BuildArchiveDependencies(Archive *fout);
@@ -3477,10 +3492,42 @@ dumpBlob(Archive *fout, const BlobInfo *binfo)
 {
 	PQExpBuffer cquery = createPQExpBuffer();
 	PQExpBuffer dquery = createPQExpBuffer();
+	PQExpBuffer tag    = createPQExpBuffer();
+	teSection	section = SECTION_PRE_DATA;
 
 	appendPQExpBuffer(cquery,
 					  "SELECT pg_catalog.lo_create('%s');\n",
 					  binfo->dobj.name);
+
+	/*
+	 * In binary upgrade mode we put all the queries to restore
+	 * one large object into a single TOC entry and emit it as
+	 * SECTION_DATA so that they can be restored in parallel.
+	 */
+	if (fout->dopt->binary_upgrade)
+	{
+		section = SECTION_DATA;
+
+		/* Dump comment if any */
+		if (binfo->dobj.dump & DUMP_COMPONENT_COMMENT)
+			dumpCommentQuery(fout, cquery, tag, "LARGE OBJECT",
+							 binfo->dobj.name, NULL, binfo->rolname,
+							 binfo->dobj.catId, 0, binfo->dobj.dumpId, NULL);
+
+		/* Dump security label if any */
+		if (binfo->dobj.dump & DUMP_COMPONENT_SECLABEL)
+			dumpSecLabelQuery(fout, cquery, tag, "LARGE OBJECT",
+							  binfo->dobj.name,
+							  NULL, binfo->rolname,
+							  binfo->dobj.catId, 0, binfo->dobj.dumpId);
+
+		/* Dump ACL if any */
+		if (binfo->dobj.dump & DUMP_COMPONENT_ACL)
+			dumpACLQuery(fout, cquery, tag,
+						 binfo->dobj.dumpId, InvalidDumpId, "LARGE OBJECT",
+						 binfo->dobj.name, NULL,
+						 NULL, binfo->rolname, &binfo->dacl);
+	}
 
 	appendPQExpBuffer(dquery,
 					  "SELECT pg_catalog.lo_unlink('%s');\n",
@@ -3491,27 +3538,30 @@ dumpBlob(Archive *fout, const BlobInfo *binfo)
 					 ARCHIVE_OPTS(.tag = binfo->dobj.name,
 								  .owner = binfo->rolname,
 								  .description = "BLOB",
-								  .section = SECTION_PRE_DATA,
+								  .section = section,
 								  .createStmt = cquery->data,
 								  .dropStmt = dquery->data));
 
-	/* Dump comment if any */
-	if (binfo->dobj.dump & DUMP_COMPONENT_COMMENT)
-		dumpComment(fout, "LARGE OBJECT", binfo->dobj.name,
-					NULL, binfo->rolname,
-					binfo->dobj.catId, 0, binfo->dobj.dumpId);
+	if (!fout->dopt->binary_upgrade)
+	{
+		/* Dump comment if any */
+		if (binfo->dobj.dump & DUMP_COMPONENT_COMMENT)
+			dumpComment(fout, "LARGE OBJECT", binfo->dobj.name,
+						NULL, binfo->rolname,
+						binfo->dobj.catId, 0, binfo->dobj.dumpId);
 
-	/* Dump security label if any */
-	if (binfo->dobj.dump & DUMP_COMPONENT_SECLABEL)
-		dumpSecLabel(fout, "LARGE OBJECT", binfo->dobj.name,
-					 NULL, binfo->rolname,
-					 binfo->dobj.catId, 0, binfo->dobj.dumpId);
+		/* Dump security label if any */
+		if (binfo->dobj.dump & DUMP_COMPONENT_SECLABEL)
+			dumpSecLabel(fout, "LARGE OBJECT", binfo->dobj.name,
+						 NULL, binfo->rolname,
+						 binfo->dobj.catId, 0, binfo->dobj.dumpId);
 
-	/* Dump ACL if any */
-	if (binfo->dobj.dump & DUMP_COMPONENT_ACL)
-		dumpACL(fout, binfo->dobj.dumpId, InvalidDumpId, "LARGE OBJECT",
-				binfo->dobj.name, NULL,
-				NULL, binfo->rolname, &binfo->dacl);
+		/* Dump ACL if any */
+		if (binfo->dobj.dump & DUMP_COMPONENT_ACL)
+			dumpACL(fout, binfo->dobj.dumpId, InvalidDumpId, "LARGE OBJECT",
+					binfo->dobj.name, NULL,
+					NULL, binfo->rolname, &binfo->dacl);
+	}
 
 	destroyPQExpBuffer(cquery);
 	destroyPQExpBuffer(dquery);
@@ -9443,25 +9493,57 @@ dumpCommentExtended(Archive *fout, const char *type,
 					int subid, DumpId dumpId,
 					const char *initdb_comment)
 {
+	PQExpBuffer query = createPQExpBuffer();
+	PQExpBuffer tag = createPQExpBuffer();
+
+	if (dumpCommentQuery(fout, query, tag, type, name, namespace, owner,
+						 catalogId, subid, dumpId, initdb_comment))
+	{
+		/*
+		 * We mark comments as SECTION_NONE because they really belong in the
+		 * same section as their parent, whether that is pre-data or
+		 * post-data.
+		 */
+		ArchiveEntry(fout, nilCatalogId, createDumpId(),
+					 ARCHIVE_OPTS(.tag = tag->data,
+								  .namespace = namespace,
+								  .owner = owner,
+								  .description = "COMMENT",
+								  .section = SECTION_NONE,
+								  .createStmt = query->data,
+								  .deps = &dumpId,
+								  .nDeps = 1));
+	}
+	destroyPQExpBuffer(query);
+	destroyPQExpBuffer(tag);
+}
+
+static bool
+dumpCommentQuery(Archive *fout, PQExpBuffer query, PQExpBuffer tag,
+				 const char *type, const char *name,
+				 const char *namespace, const char *owner,
+				 CatalogId catalogId, int subid, DumpId dumpId,
+				 const char *initdb_comment)
+{
 	DumpOptions *dopt = fout->dopt;
 	CommentItem *comments;
 	int			ncomments;
 
 	/* do nothing, if --no-comments is supplied */
 	if (dopt->no_comments)
-		return;
+		return false;
 
 	/* Comments are schema not data ... except blob comments are data */
 	if (strcmp(type, "LARGE OBJECT") != 0)
 	{
 		if (dopt->dataOnly)
-			return;
+			return false;
 	}
 	else
 	{
 		/* We do dump blob comments in binary-upgrade mode */
 		if (dopt->schemaOnly && !dopt->binary_upgrade)
-			return;
+			return false;
 	}
 
 	/* Search for comments associated with catalogId, using table */
@@ -9499,9 +9581,6 @@ dumpCommentExtended(Archive *fout, const char *type,
 	/* If a comment exists, build COMMENT ON statement */
 	if (ncomments > 0)
 	{
-		PQExpBuffer query = createPQExpBuffer();
-		PQExpBuffer tag = createPQExpBuffer();
-
 		appendPQExpBuffer(query, "COMMENT ON %s ", type);
 		if (namespace && *namespace)
 			appendPQExpBuffer(query, "%s.", fmtId(namespace));
@@ -9511,24 +9590,10 @@ dumpCommentExtended(Archive *fout, const char *type,
 
 		appendPQExpBuffer(tag, "%s %s", type, name);
 
-		/*
-		 * We mark comments as SECTION_NONE because they really belong in the
-		 * same section as their parent, whether that is pre-data or
-		 * post-data.
-		 */
-		ArchiveEntry(fout, nilCatalogId, createDumpId(),
-					 ARCHIVE_OPTS(.tag = tag->data,
-								  .namespace = namespace,
-								  .owner = owner,
-								  .description = "COMMENT",
-								  .section = SECTION_NONE,
-								  .createStmt = query->data,
-								  .deps = &dumpId,
-								  .nDeps = 1));
-
-		destroyPQExpBuffer(query);
-		destroyPQExpBuffer(tag);
+		return true;
 	}
+
+	return false;
 }
 
 /*
@@ -14423,23 +14488,65 @@ dumpACL(Archive *fout, DumpId objDumpId, DumpId altDumpId,
 		const DumpableAcl *dacl)
 {
 	DumpId		aclDumpId = InvalidDumpId;
+	PQExpBuffer query = createPQExpBuffer();
+	PQExpBuffer tag = createPQExpBuffer();
+
+	if (dumpACLQuery(fout, query, tag, objDumpId, altDumpId,
+					 type, name, subname, nspname, owner, dacl))
+	{
+		DumpId		aclDeps[2];
+		int			nDeps = 0;
+
+		if (subname)
+			appendPQExpBuffer(tag, "COLUMN %s.%s", name, subname);
+		else
+			appendPQExpBuffer(tag, "%s %s", type, name);
+
+		aclDeps[nDeps++] = objDumpId;
+		if (altDumpId != InvalidDumpId)
+			aclDeps[nDeps++] = altDumpId;
+
+		aclDumpId = createDumpId();
+
+		ArchiveEntry(fout, nilCatalogId, aclDumpId,
+					 ARCHIVE_OPTS(.tag = tag->data,
+								  .namespace = nspname,
+								  .owner = owner,
+								  .description = "ACL",
+								  .section = SECTION_NONE,
+								  .createStmt = query->data,
+								  .deps = aclDeps,
+								  .nDeps = nDeps));
+
+	}
+
+	destroyPQExpBuffer(query);
+	destroyPQExpBuffer(tag);
+
+	return aclDumpId;
+}
+
+static bool
+dumpACLQuery(Archive *fout, PQExpBuffer query, PQExpBuffer tag,
+			 DumpId objDumpId, DumpId altDumpId,
+			 const char *type, const char *name, const char *subname,
+			 const char *nspname, const char *owner,
+			 const DumpableAcl *dacl)
+{
 	DumpOptions *dopt = fout->dopt;
 	const char *acls = dacl->acl;
 	const char *acldefault = dacl->acldefault;
 	char		privtype = dacl->privtype;
 	const char *initprivs = dacl->initprivs;
 	const char *baseacls;
-	PQExpBuffer sql;
 
 	/* Do nothing if ACL dump is not enabled */
 	if (dopt->aclsSkip)
-		return InvalidDumpId;
+		return false;
 
 	/* --data-only skips ACLs *except* BLOB ACLs */
 	if (dopt->dataOnly && strcmp(type, "LARGE OBJECT") != 0)
-		return InvalidDumpId;
-
-	sql = createPQExpBuffer();
+		return false;
 
 	/*
 	 * In binary upgrade mode, we don't run an extension's script but instead
@@ -14457,13 +14564,13 @@ dumpACL(Archive *fout, DumpId objDumpId, DumpId altDumpId,
 	if (dopt->binary_upgrade && privtype == 'e' &&
 		initprivs && *initprivs != '\0')
 	{
-		appendPQExpBufferStr(sql, "SELECT pg_catalog.binary_upgrade_set_record_init_privs(true);\n");
+		appendPQExpBufferStr(query, "SELECT pg_catalog.binary_upgrade_set_record_init_privs(true);\n");
 		if (!buildACLCommands(name, subname, nspname, type,
 							  initprivs, acldefault, owner,
-							  "", fout->remoteVersion, sql))
+							  "", fout->remoteVersion, query))
 			pg_fatal("could not parse initial ACL list (%s) or default (%s) for object \"%s\" (%s)",
 					 initprivs, acldefault, name, type);
-		appendPQExpBufferStr(sql, "SELECT pg_catalog.binary_upgrade_set_record_init_privs(false);\n");
+		appendPQExpBufferStr(query, "SELECT pg_catalog.binary_upgrade_set_record_init_privs(false);\n");
 	}
 
 	/*
@@ -14485,43 +14592,19 @@ dumpACL(Archive *fout, DumpId objDumpId, DumpId altDumpId,
 
 	if (!buildACLCommands(name, subname, nspname, type,
 						  acls, baseacls, owner,
-						  "", fout->remoteVersion, sql))
+						  "", fout->remoteVersion, query))
 		pg_fatal("could not parse ACL list (%s) or default (%s) for object \"%s\" (%s)",
 				 acls, baseacls, name, type);
 
-	if (sql->len > 0)
+	if (query->len > 0 && tag != NULL)
 	{
-		PQExpBuffer tag = createPQExpBuffer();
-		DumpId		aclDeps[2];
-		int			nDeps = 0;
-
 		if (subname)
 			appendPQExpBuffer(tag, "COLUMN %s.%s", name, subname);
 		else
 			appendPQExpBuffer(tag, "%s %s", type, name);
-
-		aclDeps[nDeps++] = objDumpId;
-		if (altDumpId != InvalidDumpId)
-			aclDeps[nDeps++] = altDumpId;
-
-		aclDumpId = createDumpId();
-
-		ArchiveEntry(fout, nilCatalogId, aclDumpId,
-					 ARCHIVE_OPTS(.tag = tag->data,
-								  .namespace = nspname,
-								  .owner = owner,
-								  .description = "ACL",
-								  .section = SECTION_NONE,
-								  .createStmt = sql->data,
-								  .deps = aclDeps,
-								  .nDeps = nDeps));
-
-		destroyPQExpBuffer(tag);
 	}
 
-	destroyPQExpBuffer(sql);
-
-	return aclDumpId;
+	return true;
 }
 
 /*
@@ -14547,33 +14630,57 @@ dumpSecLabel(Archive *fout, const char *type, const char *name,
 			 const char *namespace, const char *owner,
 			 CatalogId catalogId, int subid, DumpId dumpId)
 {
+	PQExpBuffer query = createPQExpBuffer();
+	PQExpBuffer tag = createPQExpBuffer();
+
+	if (dumpSecLabelQuery(fout, query, tag, type, name,
+						  namespace, owner, catalogId, subid, dumpId))
+	{
+		ArchiveEntry(fout, nilCatalogId, createDumpId(),
+					 ARCHIVE_OPTS(.tag = tag->data,
+								  .namespace = namespace,
+								  .owner = owner,
+								  .description = "SECURITY LABEL",
+								  .section = SECTION_NONE,
+								  .createStmt = query->data,
+								  .deps = &dumpId,
+								  .nDeps = 1));
+	}
+
+	destroyPQExpBuffer(query);
+	destroyPQExpBuffer(tag);
+}
+
+static bool
+dumpSecLabelQuery(Archive *fout, PQExpBuffer query, PQExpBuffer tag,
+				  const char *type, const char *name,
+				  const char *namespace, const char *owner,
+				  CatalogId catalogId, int subid, DumpId dumpId)
+{
 	DumpOptions *dopt = fout->dopt;
 	SecLabelItem *labels;
 	int			nlabels;
 	int			i;
-	PQExpBuffer query;
 
 	/* do nothing, if --no-security-labels is supplied */
 	if (dopt->no_security_labels)
-		return;
+		return false;
 
 	/* Security labels are schema not data ... except blob labels are data */
 	if (strcmp(type, "LARGE OBJECT") != 0)
 	{
 		if (dopt->dataOnly)
-			return;
+			return false;
 	}
 	else
 	{
 		/* We do dump blob security labels in binary-upgrade mode */
 		if (dopt->schemaOnly && !dopt->binary_upgrade)
-			return;
+			return false;
 	}
 
 	/* Search for security labels associated with catalogId, using table */
 	nlabels = findSecLabels(catalogId.tableoid, catalogId.oid, &labels);
-
-	query = createPQExpBuffer();
 
 	for (i = 0; i < nlabels; i++)
 	{
@@ -14595,22 +14702,11 @@ dumpSecLabel(Archive *fout, const char *type, const char *name,
 
 	if (query->len > 0)
 	{
-		PQExpBuffer tag = createPQExpBuffer();
-
 		appendPQExpBuffer(tag, "%s %s", type, name);
-		ArchiveEntry(fout, nilCatalogId, createDumpId(),
-					 ARCHIVE_OPTS(.tag = tag->data,
-								  .namespace = namespace,
-								  .owner = owner,
-								  .description = "SECURITY LABEL",
-								  .section = SECTION_NONE,
-								  .createStmt = query->data,
-								  .deps = &dumpId,
-								  .nDeps = 1));
-		destroyPQExpBuffer(tag);
+		return true;
 	}
 
-	destroyPQExpBuffer(query);
+	return false;
 }
 
 /*

@@ -53,8 +53,11 @@ generate_old_dump(void)
 
 		parallel_exec_prog(log_file_name, NULL,
 						   "\"%s/pg_dump\" %s --schema-only --quote-all-identifiers "
+						   "%s "
 						   "--binary-upgrade --format=custom %s --file=\"%s/%s\" %s",
 						   new_cluster.bindir, cluster_conn_opts(&old_cluster),
+						   user_opts.pg_dump_opts ?
+								user_opts.pg_dump_opts : "",
 						   log_opts.verbose ? "--verbose" : "",
 						   log_opts.dumpdir,
 						   sql_file_name, escaped_connstr.data);

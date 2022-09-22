@@ -68,6 +68,7 @@ typedef struct _parallelReadyList
 	bool		sorted;			/* are valid entries currently sorted? */
 } ParallelReadyList;
 
+static int		blobBatchCount = 0;
 
 static ArchiveHandle *_allocAH(const char *FileSpec, const ArchiveFormat fmt,
 							   const int compression, bool dosync, ArchiveMode mode,
@@ -266,6 +267,8 @@ CloseArchive(Archive *AHX)
 	int			res = 0;
 	ArchiveHandle *AH = (ArchiveHandle *) AHX;
 
+	CommitBlobTransaction(AHX);
+
 	AH->ClosePtr(AH);
 
 	/* Close the output */
@@ -277,6 +280,23 @@ CloseArchive(Archive *AHX)
 
 	if (res != 0)
 		pg_fatal("could not close output file: %m");
+}
+
+/* Public */
+void
+CommitBlobTransaction(Archive *AHX)
+{
+	ArchiveHandle *AH = (ArchiveHandle *) AHX;
+
+	if (blobBatchCount > 0)
+	{
+		ahprintf(AH, "--\n");
+		ahprintf(AH, "-- End BLOB restore batch\n");
+		ahprintf(AH, "--\n");
+		ahprintf(AH, "COMMIT;\n\n");
+
+		blobBatchCount = 0;
+	}
 }
 
 /* Public */
@@ -3488,6 +3508,57 @@ static void
 _printTocEntry(ArchiveHandle *AH, TocEntry *te, bool isData)
 {
 	RestoreOptions *ropt = AH->public.ropt;
+
+	/* We restore BLOBs in batches to reduce XID consumption */
+	if (strcmp(te->desc, "BLOB") == 0 && AH->public.blobBatchSize > 0)
+	{
+		if (blobBatchCount > 0)
+		{
+			/* We are inside a BLOB restore transaction */
+			if (blobBatchCount >= AH->public.blobBatchSize)
+			{
+				/*
+				 * We did reach the batch size with the previous BLOB.
+				 * Commit and start a new batch.
+				 */
+				ahprintf(AH, "--\n");
+				ahprintf(AH, "-- BLOB batch size reached\n");
+				ahprintf(AH, "--\n");
+				ahprintf(AH, "COMMIT;\n");
+				ahprintf(AH, "BEGIN;\n\n");
+
+				blobBatchCount = 1;
+			}
+			else
+			{
+				/* This one still fits into the current batch */
+				blobBatchCount++;
+			}
+		}
+		else
+		{
+			/* Not inside a transaction, start a new batch */
+			ahprintf(AH, "--\n");
+			ahprintf(AH, "-- Start BLOB restore batch\n");
+			ahprintf(AH, "--\n");
+			ahprintf(AH, "BEGIN;\n\n");
+
+			blobBatchCount = 1;
+		}
+	}
+	else
+	{
+		/* Not a BLOB. If we have a BLOB batch open, close it. */
+		if (blobBatchCount > 0)
+		{
+			ahprintf(AH, "--\n");
+			ahprintf(AH, "-- End BLOB restore batch\n");
+			ahprintf(AH, "--\n");
+			ahprintf(AH, "COMMIT;\n\n");
+
+			blobBatchCount = 0;
+		}
+	}
 
 	/* Select owner, schema, tablespace and default AM as necessary */
 	_becomeOwner(AH, te);

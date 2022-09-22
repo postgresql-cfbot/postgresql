@@ -457,10 +457,13 @@ create_new_objects(void)
 				  true,
 				  true,
 				  "\"%s/pg_restore\" %s %s --exit-on-error --verbose "
+				  "%s "
 				  "--dbname postgres \"%s/%s\"",
 				  new_cluster.bindir,
 				  cluster_conn_opts(&new_cluster),
 				  create_opts,
+				  user_opts.pg_restore_opts ?
+						user_opts.pg_restore_opts : "",
 				  log_opts.dumpdir,
 				  sql_file_name);
 
@@ -495,10 +498,13 @@ create_new_objects(void)
 		parallel_exec_prog(log_file_name,
 						   NULL,
 						   "\"%s/pg_restore\" %s %s --exit-on-error --verbose "
+						   "%s "
 						   "--dbname template1 \"%s/%s\"",
 						   new_cluster.bindir,
 						   cluster_conn_opts(&new_cluster),
 						   create_opts,
+						   user_opts.pg_restore_opts ?
+								user_opts.pg_restore_opts : "",
 						   log_opts.dumpdir,
 						   sql_file_name);
 	}

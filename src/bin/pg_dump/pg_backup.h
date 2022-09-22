@@ -220,6 +220,8 @@ typedef struct Archive
 	int			numWorkers;		/* number of parallel processes */
 	char	   *sync_snapshot_id;	/* sync snapshot id for parallel operation */
 
+	int			blobBatchSize;	/* # of blobs to restore per transaction */
+
 	/* info needed for string escaping */
 	int			encoding;		/* libpq code for client_encoding */
 	bool		std_strings;	/* standard_conforming_strings */
@@ -290,6 +292,7 @@ extern void WriteData(Archive *AH, const void *data, size_t dLen);
 extern int	StartBlob(Archive *AH, Oid oid);
 extern int	EndBlob(Archive *AH, Oid oid);
 
+extern void	CommitBlobTransaction(Archive *AH);
 extern void CloseArchive(Archive *AH);
 
 extern void SetArchiveOptions(Archive *AH, DumpOptions *dopt, RestoreOptions *ropt);

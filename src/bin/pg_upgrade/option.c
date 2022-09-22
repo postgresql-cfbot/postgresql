@@ -56,6 +56,8 @@ parseCommandLine(int argc, char *argv[])
 		{"socketdir", required_argument, NULL, 's'},
 		{"verbose", no_argument, NULL, 'v'},
 		{"clone", no_argument, NULL, 1},
+		{"dump-options", required_argument, NULL, 2},
+		{"restore-options", required_argument, NULL, 3},
 
 		{NULL, 0, NULL, 0}
 	};
@@ -194,6 +196,34 @@ parseCommandLine(int argc, char *argv[])
 				user_opts.transfer_mode = TRANSFER_MODE_CLONE;
 				break;
 
+			case 2:
+				/* append option? */
+				if (!user_opts.pg_dump_opts)
+					user_opts.pg_dump_opts = pg_strdup(optarg);
+				else
+				{
+					char	   *old_opts = user_opts.pg_dump_opts;
+
+					user_opts.pg_dump_opts = psprintf("%s %s",
+													  old_opts, optarg);
+					free(old_opts);
+				}
+				break;
+
+			case 3:
+				/* append option? */
+				if (!user_opts.pg_restore_opts)
+					user_opts.pg_restore_opts = pg_strdup(optarg);
+				else
+				{
+					char	   *old_opts = user_opts.pg_restore_opts;
+
+					user_opts.pg_restore_opts = psprintf("%s %s",
+														 old_opts, optarg);
+					free(old_opts);
+				}
+				break;
+
 			default:
 				fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
 						os_info.progname);
@@ -283,6 +313,8 @@ usage(void)
 	printf(_("  -v, --verbose                 enable verbose internal logging\n"));
 	printf(_("  -V, --version                 display version information, then exit\n"));
 	printf(_("  --clone                       clone instead of copying files to new cluster\n"));
+	printf(_("  --dump-options=OPTIONS        options to pass to pg_dump\n"));
+	printf(_("  --restore-options=OPTIONS     options to pass to pg_restore\n"));
 	printf(_("  -?, --help                    show this help, then exit\n"));
 	printf(_("\n"
 			 "Before running pg_upgrade you must:\n"

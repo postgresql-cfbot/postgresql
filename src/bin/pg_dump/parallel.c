@@ -859,6 +859,11 @@ RunWorker(ArchiveHandle *AH, ParallelSlot *slot)
 	WaitForCommands(AH, pipefd);
 
 	/*
+	 * Close an eventually open BLOB batch transaction.
+	 */
+	CommitBlobTransaction((Archive *)AH);
+
+	/*
 	 * Disconnect from database and clean up.
 	 */
 	set_cancel_slot_archive(slot, NULL);

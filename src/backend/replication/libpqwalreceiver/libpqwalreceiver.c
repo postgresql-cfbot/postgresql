@@ -34,6 +34,9 @@
 #include "utils/pg_lsn.h"
 #include "utils/tuplestore.h"
 
+#undef ENABLE_THREAD_SAFETY
+#include "libpq-int.h"
+
 PG_MODULE_MAGIC;
 
 struct WalReceiverConn
@@ -699,10 +702,13 @@ libpqrcv_PQgetResult(PGconn *streamConn)
 	 * Collect data until PQgetResult is ready to get the result without
 	 * blocking.
 	 */
+elog(LOG, "libpqrcv_PQgetResult: streamConn->asyncStatus: %d && streamConn->status: %d", streamConn->asyncStatus, streamConn->status);
+
 	while (PQisBusy(streamConn))
 	{
 		int			rc;
 
+elog(LOG, "libpqrcv_PQgetResult loop before WaitLatchOrSocket");
 		/*
 		 * We don't need to break down the sleep into smaller increments,
 		 * since we'll get interrupted by signals and can handle any
@@ -714,6 +720,7 @@ libpqrcv_PQgetResult(PGconn *streamConn)
 							   PQsocket(streamConn),
 							   0,
 							   WAIT_EVENT_LIBPQWALRECEIVER_RECEIVE);
+elog(LOG, "libpqrcv_PQgetResult loop after WaitLatchOrSocket: %d");
 
 		/* Interrupted? */
 		if (rc & WL_LATCH_SET)
@@ -772,6 +779,7 @@ libpqrcv_receive(WalReceiverConn *conn, char **buffer,
 
 	/* Try to receive a CopyData message */
 	rawlen = PQgetCopyData(conn->streamConn, &conn->recvBuf, 1);
+elog(LOG, "libpqrcv_receive: PQgetCopyData returned %d", rawlen);
 	if (rawlen == 0)
 	{
 		/* Try consuming some data. */
@@ -783,6 +791,7 @@ libpqrcv_receive(WalReceiverConn *conn, char **buffer,
 
 		/* Now that we've consumed some input, try again */
 		rawlen = PQgetCopyData(conn->streamConn, &conn->recvBuf, 1);
+elog(LOG, "libpqrcv_receive: PQgetCopyData 2 returned %d", rawlen);
 		if (rawlen == 0)
 		{
 			/* Tell caller to try again when our socket is ready. */
@@ -792,15 +801,20 @@ libpqrcv_receive(WalReceiverConn *conn, char **buffer,
 	}
 	if (rawlen == -1)			/* end-of-streaming or error */
 	{
+elog(LOG, "libpqrcv_receive: end-of-streaming or error: %d", rawlen);
+
 		PGresult   *res;
 
 		res = libpqrcv_PQgetResult(conn->streamConn);
+elog(LOG, "libpqrcv_receive libpqrcv_PQgetResult returned %d, %d", res, PQresultStatus(res));
 		if (PQresultStatus(res) == PGRES_COMMAND_OK)
 		{
+elog(LOG, "libpqrcv_receive libpqrcv_PQgetResult PGRES_COMMAND_OK");
 			PQclear(res);
 
 			/* Verify that there are no more results. */
 			res = libpqrcv_PQgetResult(conn->streamConn);
+elog(LOG, "libpqrcv_receive libpqrcv_PQgetResult 2 returned %p", res);
 			if (res != NULL)
 			{
 				PQclear(res);
@@ -810,6 +824,7 @@ libpqrcv_receive(WalReceiverConn *conn, char **buffer,
 				 * we'd seen an error, or PGRES_COPY_IN) don't report an error
 				 * here, but let callers deal with it.
 				 */
+elog(LOG, "libpqrcv_receive PQstatus(conn->streamConn) returned %d", PQstatus(conn->streamConn));
 				if (PQstatus(conn->streamConn) == CONNECTION_BAD)
 					return -1;
 

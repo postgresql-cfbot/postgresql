@@ -139,11 +139,33 @@ SELECT slot_name FROM pg_stat_replication_slots;
 
 COMMIT;
 DROP TABLE stats_test;
+-- Count the number of slots
+select count(1) as nb_slots from pg_stat_replication_slots \gset
+-- We want pg_stat_have_stats() to return true at least one time for the slots id range
+select count(1) > 0 from generate_series(0, :nb_slots - 1) as n where pg_stat_have_stats('replslot', 0, n);
+ ?column? 
+----------
+ t
+(1 row)
+
+-- Record the replication_slots id(s) for which pg_stat_have_stats() returns true
+select array(select n from generate_series(0, :nb_slots - 1) as n where pg_stat_have_stats('replslot', 0, n) order by n asc) as true_ids \gset
+\set true_ids '''' :true_ids ''''
+-- Drop the 3 slots
 SELECT pg_drop_replication_slot('regression_slot_stats1'),
     pg_drop_replication_slot('regression_slot_stats2'),
     pg_drop_replication_slot('regression_slot_stats3');
  pg_drop_replication_slot | pg_drop_replication_slot | pg_drop_replication_slot 
 --------------------------+--------------------------+--------------------------
                           |                          | 
+(1 row)
+
+-- We want the ones that were true to be false after dropping the slots
+select array(select n from generate_series(0, :nb_slots - 1) as n where not pg_stat_have_stats('replslot', 0, n) order by n asc) as false_ids \gset
+\set false_ids '''' :false_ids ''''
+select :true_ids = :false_ids;
+ ?column? 
+----------
+ t
 (1 row)
 

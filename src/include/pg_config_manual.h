@@ -334,7 +334,7 @@
  * outfuncs.c/readfuncs.c, to facilitate catching errors and omissions in
  * those modules.
  */
-/* #define WRITE_READ_PARSE_PLAN_TREES */
+#define WRITE_READ_PARSE_PLAN_TREES
 
 /*
  * Define this to force all raw parse trees for DML statements to be scanned

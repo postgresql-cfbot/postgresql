@@ -718,7 +718,7 @@
 					# share/timezonesets/.
 #extra_float_digits = 1			# min -15, max 3; any value >0 actually
 					# selects precise output mode
-#client_encoding = sql_ascii		# actually, defaults to database
+#client_encoding = SQL_ASCII		# actually, defaults to database
 					# encoding
 
 # These settings are initialized by initdb, but they can be changed.

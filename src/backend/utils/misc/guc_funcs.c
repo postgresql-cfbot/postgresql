@@ -539,7 +539,7 @@ ShowAllGUCConfig(DestReceiver *dest)
 Datum
 pg_settings_get_flags(PG_FUNCTION_ARGS)
 {
-#define MAX_GUC_FLAGS	5
+#define MAX_GUC_FLAGS	6
 	char	   *varname = TextDatumGetCString(PG_GETARG_DATUM(0));
 	struct config_generic *record;
 	int			cnt = 0;
@@ -552,6 +552,8 @@ pg_settings_get_flags(PG_FUNCTION_ARGS)
 	if (record == NULL)
 		PG_RETURN_NULL();
 
+	if (record->flags & GUC_DYNAMIC_DEFAULT)
+		flags[cnt++] = CStringGetTextDatum("DYNAMIC_DEFAULT");
 	if (record->flags & GUC_EXPLAIN)
 		flags[cnt++] = CStringGetTextDatum("EXPLAIN");
 	if (record->flags & GUC_NO_RESET_ALL)

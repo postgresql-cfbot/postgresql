@@ -24341,6 +24341,14 @@ SELECT collation for ('foo' COLLATE "de_DE");
      <row><entry>Flag</entry><entry>Description</entry></row>
     </thead>
     <tbody>
+
+     <row>
+      <entry><literal>DYNAMIC_DEFAULT</literal></entry>
+      <entry>Parameters with this flag have default values which vary by
+      platform, or compile-time options, or are set dynamically during initdb.
+      </entry>
+     </row>
+
      <row>
       <entry><literal>EXPLAIN</literal></entry>
       <entry>Parameters with this flag are included in

@@ -1188,7 +1188,7 @@ struct config_bool ConfigureNamesBool[] =
 		{"debug_assertions", PGC_INTERNAL, PRESET_OPTIONS,
 			gettext_noop("Shows whether the running server has assertion checks enabled."),
 			NULL,
-			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE | GUC_DYNAMIC_DEFAULT
 		},
 		&assert_enabled,
 #ifdef USE_ASSERT_CHECKING
@@ -1364,7 +1364,8 @@ struct config_bool ConfigureNamesBool[] =
 	{
 		{"update_process_title", PGC_SUSET, PROCESS_TITLE,
 			gettext_noop("Updates the process title to show the active SQL command."),
-			gettext_noop("Enables updating of the process title every time a new SQL command is received by the server.")
+			gettext_noop("Enables updating of the process title every time a new SQL command is received by the server."),
+			GUC_DYNAMIC_DEFAULT
 		},
 		&update_process_title,
 #ifdef WIN32
@@ -2113,7 +2114,8 @@ struct config_int ConfigureNamesInt[] =
 	{
 		{"max_connections", PGC_POSTMASTER, CONN_AUTH_SETTINGS,
 			gettext_noop("Sets the maximum number of concurrent connections."),
-			NULL
+			NULL,
+			GUC_DYNAMIC_DEFAULT
 		},
 		&MaxConnections,
 		100, 1, MAX_BACKENDS,
@@ -2150,7 +2152,7 @@ struct config_int ConfigureNamesInt[] =
 		{"shared_buffers", PGC_POSTMASTER, RESOURCES_MEM,
 			gettext_noop("Sets the number of shared memory buffers used by the server."),
 			NULL,
-			GUC_UNIT_BLOCKS
+			GUC_UNIT_BLOCKS | GUC_DYNAMIC_DEFAULT
 		},
 		&NBuffers,
 		16384, 16, INT_MAX / 2,
@@ -2664,7 +2666,7 @@ struct config_int ConfigureNamesInt[] =
 		{"checkpoint_flush_after", PGC_SIGHUP, WAL_CHECKPOINTS,
 			gettext_noop("Number of pages after which previously performed writes are flushed to disk."),
 			NULL,
-			GUC_UNIT_BLOCKS
+			GUC_UNIT_BLOCKS | GUC_DYNAMIC_DEFAULT
 		},
 		&checkpoint_flush_after,
 		DEFAULT_CHECKPOINT_FLUSH_AFTER, 0, WRITEBACK_MAX_PENDING_FLUSHES,
@@ -2882,7 +2884,7 @@ struct config_int ConfigureNamesInt[] =
 		{"bgwriter_flush_after", PGC_SIGHUP, RESOURCES_BGWRITER,
 			gettext_noop("Number of pages after which previously performed writes are flushed to disk."),
 			NULL,
-			GUC_UNIT_BLOCKS
+			GUC_UNIT_BLOCKS | GUC_DYNAMIC_DEFAULT
 		},
 		&bgwriter_flush_after,
 		DEFAULT_BGWRITER_FLUSH_AFTER, 0, WRITEBACK_MAX_PENDING_FLUSHES,
@@ -2895,7 +2897,7 @@ struct config_int ConfigureNamesInt[] =
 			RESOURCES_ASYNCHRONOUS,
 			gettext_noop("Number of simultaneous requests that can be handled efficiently by the disk subsystem."),
 			NULL,
-			GUC_EXPLAIN
+			GUC_EXPLAIN | GUC_DYNAMIC_DEFAULT
 		},
 		&effective_io_concurrency,
 #ifdef USE_PREFETCH
@@ -2913,7 +2915,7 @@ struct config_int ConfigureNamesInt[] =
 			RESOURCES_ASYNCHRONOUS,
 			gettext_noop("A variant of effective_io_concurrency that is used for maintenance work."),
 			NULL,
-			GUC_EXPLAIN
+			GUC_EXPLAIN | GUC_DYNAMIC_DEFAULT
 		},
 		&maintenance_io_concurrency,
 #ifdef USE_PREFETCH
@@ -2930,7 +2932,7 @@ struct config_int ConfigureNamesInt[] =
 		{"backend_flush_after", PGC_USERSET, RESOURCES_ASYNCHRONOUS,
 			gettext_noop("Number of pages after which previously performed writes are flushed to disk."),
 			NULL,
-			GUC_UNIT_BLOCKS
+			GUC_UNIT_BLOCKS | GUC_DYNAMIC_DEFAULT
 		},
 		&backend_flush_after,
 		DEFAULT_BACKEND_FLUSH_AFTER, 0, WRITEBACK_MAX_PENDING_FLUSHES,
@@ -3373,7 +3375,7 @@ struct config_int ConfigureNamesInt[] =
 		{"debug_discard_caches", PGC_SUSET, DEVELOPER_OPTIONS,
 			gettext_noop("Aggressively flush system caches for debugging purposes."),
 			NULL,
-			GUC_NOT_IN_SAMPLE
+			GUC_NOT_IN_SAMPLE | GUC_DYNAMIC_DEFAULT
 		},
 		&debug_discard_caches,
 #ifdef DISCARD_CACHES_ENABLED
@@ -4200,7 +4202,7 @@ struct config_string ConfigureNamesString[] =
 		{"unix_socket_directories", PGC_POSTMASTER, CONN_AUTH_SETTINGS,
 			gettext_noop("Sets the directories where Unix-domain sockets will be created."),
 			NULL,
-			GUC_LIST_INPUT | GUC_LIST_QUOTE | GUC_SUPERUSER_ONLY
+			GUC_LIST_INPUT | GUC_LIST_QUOTE | GUC_SUPERUSER_ONLY | GUC_DYNAMIC_DEFAULT
 		},
 		&Unix_socket_directories,
 		DEFAULT_PGSOCKET_DIR,
@@ -4281,7 +4283,7 @@ struct config_string ConfigureNamesString[] =
 		{"ssl_library", PGC_INTERNAL, PRESET_OPTIONS,
 			gettext_noop("Shows the name of the SSL library."),
 			NULL,
-			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE | GUC_DYNAMIC_DEFAULT
 		},
 		&ssl_library,
 #ifdef USE_SSL
@@ -4367,7 +4369,7 @@ struct config_string ConfigureNamesString[] =
 		{"ssl_ciphers", PGC_SIGHUP, CONN_AUTH_SSL,
 			gettext_noop("Sets the list of allowed SSL ciphers."),
 			NULL,
-			GUC_SUPERUSER_ONLY
+			GUC_SUPERUSER_ONLY | GUC_DYNAMIC_DEFAULT
 		},
 		&SSLCipherSuites,
 #ifdef USE_OPENSSL
@@ -4382,7 +4384,7 @@ struct config_string ConfigureNamesString[] =
 		{"ssl_ecdh_curve", PGC_SIGHUP, CONN_AUTH_SSL,
 			gettext_noop("Sets the curve to use for ECDH."),
 			NULL,
-			GUC_SUPERUSER_ONLY
+			GUC_SUPERUSER_ONLY | GUC_DYNAMIC_DEFAULT
 		},
 		&SSLECDHCurve,
 #ifdef USE_SSL
@@ -4620,7 +4622,8 @@ struct config_enum ConfigureNamesEnum[] =
 	{
 		{"syslog_facility", PGC_SIGHUP, LOGGING_WHERE,
 			gettext_noop("Sets the syslog \"facility\" to be used when syslog enabled."),
-			NULL
+			NULL,
+			GUC_DYNAMIC_DEFAULT
 		},
 		&syslog_facility,
 #ifdef HAVE_SYSLOG
@@ -4733,7 +4736,8 @@ struct config_enum ConfigureNamesEnum[] =
 	{
 		{"dynamic_shared_memory_type", PGC_POSTMASTER, RESOURCES_MEM,
 			gettext_noop("Selects the dynamic shared memory implementation used."),
-			NULL
+			NULL,
+			GUC_DYNAMIC_DEFAULT
 		},
 		&dynamic_shared_memory_type,
 		DEFAULT_DYNAMIC_SHARED_MEMORY_TYPE, dynamic_shared_memory_options,
@@ -4753,7 +4757,8 @@ struct config_enum ConfigureNamesEnum[] =
 	{
 		{"wal_sync_method", PGC_SIGHUP, WAL_SETTINGS,
 			gettext_noop("Selects the method used for forcing WAL updates to disk."),
-			NULL
+			NULL,
+			GUC_DYNAMIC_DEFAULT
 		},
 		&sync_method,
 		DEFAULT_SYNC_METHOD, sync_method_options,

@@ -238,6 +238,8 @@ typedef enum
  */
 #define GUC_RUNTIME_COMPUTED  0x200000
 
+#define GUC_DYNAMIC_DEFAULT		  0x400000	/* default value is dynamic */
+
 #define GUC_UNIT				(GUC_UNIT_MEMORY | GUC_UNIT_TIME)
 
 

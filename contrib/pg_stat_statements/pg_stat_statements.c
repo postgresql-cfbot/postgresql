@@ -105,7 +105,14 @@ static const uint32 PGSS_PG_MAJOR_VERSION = PG_VERSION_NUM / 100;
  */
 #define PGSS_HANDLED_UTILITY(n)		(!IsA(n, ExecuteStmt) && \
 									!IsA(n, PrepareStmt) && \
-									!IsA(n, DeallocateStmt))
+									!IsA(n, DeallocateStmt) && \
+									!IsA(n, FetchStmt) && \
+									!IsA(n, ClosePortalStmt))
+
+/*
+ * Check if a statement is a DECLARE CURSOR STATEMENT
+ */
+#define PGSS_IS_CURSOR(n) (IsA(n, DeclareCursorStmt))
 
 /*
  * Extension version number, for supporting older extension versions' objects
@@ -831,8 +838,12 @@ pgss_post_parse_analyze(ParseState *pstate, Query *query, JumbleState *jstate)
 	 * Clear queryId for prepared statements related utility, as those will
 	 * inherit from the underlying statement's one (except DEALLOCATE which is
 	 * entirely untracked).
+	 *
+	 * Note that we do not want to clear the queryId of a DECLARE CURSOR utlity
+	 * statement, since we will rely on this queryId to track the underlying
+	 * cursor statement when a FETCH is called on the cursor.
 	 */
-	if (query->utilityStmt)
+	if (query->utilityStmt && !PGSS_IS_CURSOR(query->utilityStmt))
 	{
 		if (pgss_track_utility && !PGSS_HANDLED_UTILITY(query->utilityStmt))
 			query->queryId = UINT64CONST(0);
@@ -992,23 +1003,59 @@ pgss_ExecutorStart(QueryDesc *queryDesc, int eflags)
 }
 
 /*
- * ExecutorRun hook: all we need do is track nesting depth
+ * ExecutorRun hook: For all cases except a cursor statement,
+ * we want to track the nested depth.
+ * For cursor statements, we do not want to track the statement
+ * as a nested query, since we are not tracking the FETCH calls
+ * at all.
  */
 static void
 pgss_ExecutorRun(QueryDesc *queryDesc, ScanDirection direction, uint64 count,
 				 bool execute_once)
 {
-	exec_nested_level++;
+	if (!queryDesc->is_cursor_statement)
+		exec_nested_level++;
+
+	if(queryDesc->plannedstmt->queryId != UINT64CONST(0) &&
+	   !queryDesc->totaltime && queryDesc->is_cursor_statement)
+	{
+		MemoryContext oldcxt;
+
+		oldcxt = MemoryContextSwitchTo(queryDesc->estate->es_query_cxt);
+		queryDesc->totaltime = InstrAlloc(1, INSTRUMENT_ALL, false);
+		MemoryContextSwitchTo(oldcxt);
+	}
+
 	PG_TRY();
 	{
 		if (prev_ExecutorRun)
 			prev_ExecutorRun(queryDesc, direction, count, execute_once);
 		else
 			standard_ExecutorRun(queryDesc, direction, count, execute_once);
+
+		if(queryDesc->is_cursor_statement && queryDesc->totaltime)
+		{
+			InstrEndLoop(queryDesc->totaltime);
+
+			pgss_store(queryDesc->sourceText,
+					   queryDesc->plannedstmt->queryId,
+					   queryDesc->plannedstmt->stmt_location,
+					   queryDesc->plannedstmt->stmt_len,
+					   PGSS_EXEC,
+					   queryDesc->totaltime->total * 1000.0,	/* convert to msec */
+					   queryDesc->estate->es_processed,
+					   &queryDesc->totaltime->bufusage,
+					   &queryDesc->totaltime->walusage,
+					   queryDesc->estate->es_jit ? &queryDesc->estate->es_jit->instr : NULL,
+					   NULL);
+
+			queryDesc->totaltime = NULL;
+		}
 	}
 	PG_FINALLY();
 	{
-		exec_nested_level--;
+		if (!queryDesc->is_cursor_statement)
+			exec_nested_level--;
 	}
 	PG_END_TRY();
 }
@@ -1086,7 +1133,7 @@ pgss_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 	/*
 	 * Force utility statements to get queryId zero.  We do this even in cases
 	 * where the statement contains an optimizable statement for which a
-	 * queryId could be derived (such as EXPLAIN or DECLARE CURSOR).  For such
+	 * queryId could be derived (such as EXPLAIN).  For such
 	 * cases, runtime control will first go through ProcessUtility and then
 	 * the executor, and we don't want the executor hooks to do anything,
 	 * since we are already measuring the statement's costs at the utility
@@ -1097,10 +1144,14 @@ pgss_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 	 * that user configured another extension to handle utility statements
 	 * only.
 	 */
-	if (pgss_enabled(exec_nested_level) && pgss_track_utility)
+	if (pgss_enabled(exec_nested_level) && pgss_track_utility &&
+		!PGSS_IS_CURSOR(pstmt->utilityStmt))
 		pstmt->queryId = UINT64CONST(0);
 
 	/*
+	 * Notes for PREPARED statements and CURSORS:
+	 *
+	 * PREPARED:
 	 * If it's an EXECUTE statement, we don't track it and don't increment the
 	 * nesting level.  This allows the cycles to be charged to the underlying
 	 * PREPARE instead (by the Executor hooks), which is much more useful.
@@ -1113,9 +1164,18 @@ pgss_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 	 * cases where planning time is not included at all.
 	 *
 	 * Likewise, we don't track execution of DEALLOCATE.
+	 *
+	 * CURSORS:
+	 * As the case with PREPARE and EXECUTE, we track a cursors underlying
+	 * statement when a FETCH is called or when track_planning is enabled.
+	 * The FETCH and CLOSE of a cursor are not tracked at all.
+	 *
+	 * Note that tracking does not differentiate between different FETCH
+	 * options from the same cursor, they all get lumped together.
 	 */
 	if (pgss_track_utility && pgss_enabled(exec_nested_level) &&
-		PGSS_HANDLED_UTILITY(parsetree))
+		PGSS_HANDLED_UTILITY(parsetree) &&
+		!PGSS_IS_CURSOR(pstmt->utilityStmt))
 	{
 		instr_time	start;
 		instr_time	duration;

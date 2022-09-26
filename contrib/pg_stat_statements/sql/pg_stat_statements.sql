@@ -267,7 +267,7 @@ COPY pgss_ctas (a, b) FROM STDIN;
 CREATE MATERIALIZED VIEW pgss_matv AS SELECT * FROM pgss_ctas;
 REFRESH MATERIALIZED VIEW pgss_matv;
 BEGIN;
-DECLARE pgss_cursor CURSOR FOR SELECT * FROM pgss_matv;
+DECLARE pgss_cursor CURSOR FOR SELECT * FROM pgss_matv WHERE a BETWEEN 1 AND 13;
 FETCH NEXT pgss_cursor;
 FETCH FORWARD 5 pgss_cursor;
 FETCH FORWARD ALL pgss_cursor;

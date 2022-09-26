@@ -570,7 +570,7 @@ COPY pgss_ctas (a, b) FROM STDIN;
 CREATE MATERIALIZED VIEW pgss_matv AS SELECT * FROM pgss_ctas;
 REFRESH MATERIALIZED VIEW pgss_matv;
 BEGIN;
-DECLARE pgss_cursor CURSOR FOR SELECT * FROM pgss_matv;
+DECLARE pgss_cursor CURSOR FOR SELECT * FROM pgss_matv WHERE a BETWEEN 1 AND 13;
 FETCH NEXT pgss_cursor;
  a |  b   
 ---+------
@@ -608,15 +608,12 @@ SELECT query, plans, calls, rows FROM pg_stat_statements ORDER BY query COLLATE 
  COPY pgss_ctas (a, b) FROM STDIN                                                    |     0 |     1 |    3
  CREATE MATERIALIZED VIEW pgss_matv AS SELECT * FROM pgss_ctas                       |     0 |     1 |   13
  CREATE TABLE pgss_ctas AS SELECT a, 'ctas' b FROM generate_series(1, 10) a          |     0 |     1 |   10
- DECLARE pgss_cursor CURSOR FOR SELECT * FROM pgss_matv                              |     0 |     1 |    0
- FETCH FORWARD 5 pgss_cursor                                                         |     0 |     1 |    5
- FETCH FORWARD ALL pgss_cursor                                                       |     0 |     1 |    7
- FETCH NEXT pgss_cursor                                                              |     0 |     1 |    1
+ DECLARE pgss_cursor CURSOR FOR SELECT * FROM pgss_matv WHERE a BETWEEN $1 AND $2    |     1 |     3 |   13
  REFRESH MATERIALIZED VIEW pgss_matv                                                 |     0 |     1 |   13
  SELECT generate_series(1, 10) c INTO pgss_select_into                               |     0 |     1 |   10
  SELECT pg_stat_statements_reset()                                                   |     0 |     1 |    1
  SELECT query, plans, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C" |     1 |     0 |    0
-(13 rows)
+(10 rows)
 
 --
 -- Track user activity and reset them

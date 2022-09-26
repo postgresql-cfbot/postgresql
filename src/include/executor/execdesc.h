@@ -53,6 +53,9 @@ typedef struct QueryDesc
 
 	/* This is always set NULL by the core system, but plugins can change it */
 	struct Instrumentation *totaltime;	/* total time spent in ExecutorRun */
+
+	/* True is this queryDesc is a Cursors statement */
+	bool   is_cursor_statement;
 } QueryDesc;
 
 /* in pquery.c */

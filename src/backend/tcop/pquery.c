@@ -95,6 +95,8 @@ CreateQueryDesc(PlannedStmt *plannedstmt,
 	/* not yet executed */
 	qd->already_executed = false;
 
+	qd->is_cursor_statement = false;
+
 	return qd;
 }
 

@@ -693,8 +693,21 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 			 * Portal (cursor) manipulation
 			 */
 		case T_DeclareCursorStmt:
-			PerformCursorOpen(pstate, (DeclareCursorStmt *) parsetree, params,
-							  isTopLevel);
+			{
+				/*
+				 * Set the cursor statement to the queryId
+				 * jumbled for the Declare Cursor Statement.
+				 */
+				DeclareCursorStmt *cstmt = (DeclareCursorStmt *) parsetree;
+				Query *query = (Query *) cstmt->query;
+
+				query->queryId = pstmt->queryId;
+				query->stmt_len = pstmt->stmt_len;
+				query->stmt_location = pstmt->stmt_location;
+
+				PerformCursorOpen(pstate, (DeclareCursorStmt *) parsetree, params,
+								  isTopLevel);
+			}
 			break;
 
 		case T_ClosePortalStmt:

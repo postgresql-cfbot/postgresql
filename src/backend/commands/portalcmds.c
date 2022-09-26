@@ -145,6 +145,14 @@ PerformCursorOpen(ParseState *pstate, DeclareCursorStmt *cstmt, ParamListInfo pa
 	 */
 	PortalStart(portal, params, 0, GetActiveSnapshot());
 
+	/*
+	 * Now, set the queryId in the portals queryDesc
+	 */
+	portal->queryDesc->plannedstmt->queryId = query->queryId;
+	portal->queryDesc->plannedstmt->stmt_len = query->stmt_len;
+	portal->queryDesc->plannedstmt->stmt_location = query->stmt_location;
+	portal->queryDesc->is_cursor_statement = true;
+
 	Assert(portal->strategy == PORTAL_ONE_SELECT);
 
 	/*

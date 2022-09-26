@@ -301,6 +301,14 @@ ExecutorRun(QueryDesc *queryDesc,
 			ScanDirection direction, uint64 count,
 			bool execute_once)
 {
+	/*
+	 * To report the queryId of the query being worked on by a FETCH
+	 * command, this can only be done during ExecuteRun.
+	 * As in the case with ExecuteStart, it's harmless to report the
+	 * query_id multiple times.
+	 */
+	pgstat_report_query_id(queryDesc->plannedstmt->queryId, false);
+
 	if (ExecutorRun_hook)
 		(*ExecutorRun_hook) (queryDesc, direction, count, execute_once);
 	else

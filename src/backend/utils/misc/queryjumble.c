@@ -105,7 +105,15 @@ JumbleQuery(Query *query, const char *querytext)
 
 	Assert(IsQueryIdEnabled());
 
-	if (query->utilityStmt)
+	/*
+	 * With the expection of Declare Cursor statements, all utility
+	 * statements are jumbled purely on textual comparison via
+	 * comppute_utility_query_id.
+	 *
+	 * All other statements are Jumbled on selected fields
+	 * from the Query parse tree via JumbleQueryInternal.
+	 */
+	if (query->utilityStmt && !IsA(query->utilityStmt, DeclareCursorStmt))
 	{
 		query->queryId = compute_utility_query_id(querytext,
 												  query->stmt_location,
@@ -241,28 +249,43 @@ static void
 JumbleQueryInternal(JumbleState *jstate, Query *query)
 {
 	Assert(IsA(query, Query));
-	Assert(query->utilityStmt == NULL);
+	Assert(query->utilityStmt == NULL || IsA(query->utilityStmt, DeclareCursorStmt));
 
-	APP_JUMB(query->commandType);
-	/* resultRelation is usually predictable from commandType */
-	JumbleExpr(jstate, (Node *) query->cteList);
-	JumbleRangeTable(jstate, query->rtable);
-	JumbleExpr(jstate, (Node *) query->jointree);
-	JumbleExpr(jstate, (Node *) query->targetList);
-	JumbleExpr(jstate, (Node *) query->onConflict);
-	JumbleExpr(jstate, (Node *) query->returningList);
-	JumbleExpr(jstate, (Node *) query->groupClause);
-	APP_JUMB(query->groupDistinct);
-	JumbleExpr(jstate, (Node *) query->groupingSets);
-	JumbleExpr(jstate, query->havingQual);
-	JumbleExpr(jstate, (Node *) query->windowClause);
-	JumbleExpr(jstate, (Node *) query->distinctClause);
-	JumbleExpr(jstate, (Node *) query->sortClause);
-	JumbleExpr(jstate, query->limitOffset);
-	JumbleExpr(jstate, query->limitCount);
-	APP_JUMB(query->limitOption);
-	JumbleRowMarks(jstate, query->rowMarks);
-	JumbleExpr(jstate, query->setOperations);
+	/*
+	 * For a Declare Cursor statement, we only jumble the query portion of the
+	 * statement. We also jumble the type of the node to differentiate between
+	 * similar queries called from a Declare cursor vs standalone.
+	 */
+	if (query->utilityStmt)
+	{
+		DeclareCursorStmt *dcs = (DeclareCursorStmt *) query->utilityStmt;
+		APP_JUMB(dcs->type);
+		JumbleQueryInternal(jstate, (Query *) dcs->query);
+	}
+	else
+	{
+		APP_JUMB(query->commandType);
+		/* resultRelation is usually predictable from commandType */
+		JumbleExpr(jstate, (Node *) query->cteList);
+
+		JumbleRangeTable(jstate, query->rtable);
+		JumbleExpr(jstate, (Node *) query->jointree);
+		JumbleExpr(jstate, (Node *) query->targetList);
+		JumbleExpr(jstate, (Node *) query->onConflict);
+		JumbleExpr(jstate, (Node *) query->returningList);
+		JumbleExpr(jstate, (Node *) query->groupClause);
+		APP_JUMB(query->groupDistinct);
+		JumbleExpr(jstate, (Node *) query->groupingSets);
+		JumbleExpr(jstate, query->havingQual);
+		JumbleExpr(jstate, (Node *) query->windowClause);
+		JumbleExpr(jstate, (Node *) query->distinctClause);
+		JumbleExpr(jstate, (Node *) query->sortClause);
+		JumbleExpr(jstate, query->limitOffset);
+		JumbleExpr(jstate, query->limitCount);
+		APP_JUMB(query->limitOption);
+		JumbleRowMarks(jstate, query->rowMarks);
+		JumbleExpr(jstate, query->setOperations);
+	}
 }
 
 /*

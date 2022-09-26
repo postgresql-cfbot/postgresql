@@ -272,7 +272,7 @@ FROM pg_stat_statements ORDER BY query COLLATE "C";
  wal_records > $2 as wal_records_generated,               +|       |      |                     |                       | 
  wal_records >= rows as wal_records_ge_rows               +|       |      |                     |                       | 
  FROM pg_stat_statements ORDER BY query COLLATE "C"        |       |      |                     |                       | 
- SET pg_stat_statements.track_utility = FALSE              |     1 |    0 | f                   | f                     | t
+ SET pg_stat_statements.track_utility = $1                 |     1 |    0 | f                   | f                     | t
  UPDATE pgss_test SET b = $1 WHERE a > $2                  |     1 |    3 | t                   | t                     | t
 (7 rows)
 
@@ -423,6 +423,111 @@ SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
  SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C" |     0 |    0
 (6 rows)
 
+-- PL/pgSQL procedure and pg_stat_statements.track = top
+CREATE PROCEDURE MINUS_TWO(i INTEGER) AS $$
+DECLARE
+  r INTEGER;
+BEGIN
+  SELECT (i - 1 - 1.0)::INTEGER INTO r;
+END; $$ LANGUAGE plpgsql;
+CREATE PROCEDURE SUM_TWO(i INTEGER, j INTEGER) AS $$
+DECLARE
+  r INTEGER;
+BEGIN
+  SELECT (j + j)::INTEGER INTO r;
+END; $$ LANGUAGE plpgsql;
+SET pg_stat_statements.track = 'top';
+SET pg_stat_statements.track_utility = FALSE;
+SELECT pg_stat_statements_reset();
+ pg_stat_statements_reset 
+--------------------------
+ 
+(1 row)
+
+CALL MINUS_TWO(3);
+CALL MINUS_TWO(7);
+CALL SUM_TWO(3, 8);
+CALL SUM_TWO(7, 5);
+SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
+                                    query                                     | calls | rows 
+------------------------------------------------------------------------------+-------+------
+ CALL MINUS_TWO($1)                                                           |     2 |    0
+ CALL SUM_TWO($1, $2)                                                         |     2 |    0
+ SELECT pg_stat_statements_reset()                                            |     1 |    1
+ SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C" |     0 |    0
+(4 rows)
+
+--
+-- pg_stat_statements.track = all
+--
+SET pg_stat_statements.track = 'all';
+SELECT pg_stat_statements_reset();
+ pg_stat_statements_reset 
+--------------------------
+ 
+(1 row)
+
+-- PL/pgSQL procedure and pg_stat_statements.track = all
+-- we drop and recreate the procedures to avoid any caching funnies
+DROP PROCEDURE MINUS_TWO(INTEGER);
+DROP PROCEDURE SUM_TWO(INTEGER, INTEGER);
+CREATE PROCEDURE MINUS_TWO(i INTEGER) AS $$
+DECLARE
+  r INTEGER;
+BEGIN
+  SELECT (i - 1 - 1.0)::INTEGER INTO r;
+END; $$ LANGUAGE plpgsql;
+CREATE PROCEDURE SUM_TWO(i INTEGER, j INTEGER) AS $$
+DECLARE
+  r INTEGER;
+BEGIN
+  SELECT (j + j)::INTEGER INTO r;
+END; $$ LANGUAGE plpgsql;
+CALL MINUS_TWO(3);
+CALL MINUS_TWO(7);
+CALL SUM_TWO(3, 8);
+CALL SUM_TWO(7, 5);
+SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
+                                    query                                     | calls | rows 
+------------------------------------------------------------------------------+-------+------
+ CALL MINUS_TWO($1)                                                           |     2 |    0
+ CALL SUM_TWO($1, $2)                                                         |     2 |    0
+ SELECT (i - $2 - $3)::INTEGER                                                |     2 |    2
+ SELECT (j + j)::INTEGER                                                      |     2 |    2
+ SELECT pg_stat_statements_reset()                                            |     1 |    1
+ SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C" |     0 |    0
+(6 rows)
+
+SET pg_stat_statements.track_utility = TRUE;
+-- SET
+SELECT pg_stat_statements_reset();
+ pg_stat_statements_reset 
+--------------------------
+ 
+(1 row)
+
+set enable_seqscan=false;
+set enable_seqscan=true;
+set seq_page_cost=2.0;
+set seq_page_cost=1.0;
+set enable_seqscan to default;
+set seq_page_cost to default;
+reset seq_page_cost;
+reset enable_seqscan;
+SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
+                                    query                                     | calls | rows 
+------------------------------------------------------------------------------+-------+------
+ SELECT pg_stat_statements_reset()                                            |     1 |    1
+ SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C" |     0 |    0
+ reset enable_seqscan                                                         |     1 |    0
+ reset seq_page_cost                                                          |     1 |    0
+ set enable_seqscan to default                                                |     1 |    0
+ set enable_seqscan=$1                                                        |     2 |    0
+ set seq_page_cost to default                                                 |     1 |    0
+ set seq_page_cost=$1                                                         |     2 |    0
+(8 rows)
+
+SET pg_stat_statements.track_utility = FALSE;
 --
 -- queries with locking clauses
 --
@@ -553,11 +658,49 @@ SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
  SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C" |     0 |    0
 (9 rows)
 
+-- 2PC
+SELECT pg_stat_statements_reset();
+ pg_stat_statements_reset 
+--------------------------
+ 
+(1 row)
+
+create table test_tx (a int);
+begin;
+prepare transaction 'tx1';
+insert into test_tx values (1);
+commit prepared 'tx1';
+begin;
+prepare transaction 'tx2';
+insert into test_tx values (2);
+commit prepared 'tx2';
+begin;
+prepare transaction 'tx3';
+insert into test_tx values (3);
+rollback prepared 'tx3';
+begin;
+prepare transaction 'tx4';
+insert into test_tx values (4);
+rollback prepared 'tx4';
+SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
+                                    query                                     | calls | rows 
+------------------------------------------------------------------------------+-------+------
+ SELECT pg_stat_statements_reset()                                            |     1 |    1
+ SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C" |     0 |    0
+ begin                                                                        |     4 |    0
+ commit prepared $1                                                           |     2 |    0
+ create table test_tx (a int)                                                 |     1 |    0
+ insert into test_tx values ($1)                                              |     4 |    4
+ prepare transaction $1                                                       |     4 |    0
+ rollback prepared $1                                                         |     2 |    0
+(8 rows)
+
 --
 -- Track the total number of rows retrieved or affected by the utility
 -- commands of COPY, FETCH, CREATE TABLE AS, CREATE MATERIALIZED VIEW,
 -- REFRESH MATERIALIZED VIEW and SELECT INTO
 --
+SET pg_stat_statements.track_utility = TRUE;
 SELECT pg_stat_statements_reset();
  pg_stat_statements_reset 
 --------------------------

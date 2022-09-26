@@ -487,13 +487,15 @@
 
   <para>
    Plannable queries (that is, <command>SELECT</command>, <command>INSERT</command>,
-   <command>UPDATE</command>, and <command>DELETE</command>) are combined into a single
-   <structname>pg_stat_statements</structname> entry whenever they have identical query
-   structures according to an internal hash calculation.  Typically, two
-   queries will be considered the same for this purpose if they are
-   semantically equivalent except for the values of literal constants
-   appearing in the query.  Utility commands (that is, all other commands)
-   are compared strictly on the basis of their textual query strings, however.
+   <command>UPDATE</command>, and <command>DELETE</command>) as well as
+   <command>CALL</command>, <command>SET</command>, <command>PREPARE TRANSACTION</command>,
+   <command>COMMIT PREPARED</command> and <command>ROLLBACK PREPARED</command>
+   are combined into a single <structname>pg_stat_statements</structname> entry
+   whenever they have identical query structures according to an internal hash calculation.
+   Typically, two queries will be considered the same for this purpose if they are
+   semantically equivalent except for the values of literal constants appearing
+   in the command. All other commands are compared strictly on the basis
+   of their textual query strings, however.
   </para>
 
   <note>
@@ -781,9 +783,9 @@
     <listitem>
      <para>
       <varname>pg_stat_statements.track_utility</varname> controls whether
-      utility commands are tracked by the module.  Utility commands are
+      utility commands are tracked by the module. Tracked utility commands are
       all those other than <command>SELECT</command>, <command>INSERT</command>,
-      <command>UPDATE</command> and <command>DELETE</command>.
+      <command>UPDATE</command>, <command>DELETE</command> and <command>CALL</command>.
       The default value is <literal>on</literal>.
       Only superusers can change this setting.
      </para>

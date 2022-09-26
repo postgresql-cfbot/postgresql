@@ -3281,6 +3281,7 @@ typedef struct TransactionStmt
 	char	   *savepoint_name; /* for savepoint commands */
 	char	   *gid;			/* for two-phase-commit related commands */
 	bool		chain;			/* AND CHAIN option */
+	int			gid_location;	/* gid location */
 } TransactionStmt;
 
 /* ----------------------

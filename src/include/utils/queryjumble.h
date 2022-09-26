@@ -85,4 +85,24 @@ IsQueryIdEnabled(void)
 	return query_id_enabled;
 }
 
+/*
+ * Jumble those utility statements
+ */
+static inline bool
+IsJumbleUtilityAllowed(Node *n)
+{
+	if (IsA(n, CallStmt) || IsA(n, VariableSetStmt))
+		return true;
+	else if (IsA(n, TransactionStmt))
+	{
+		TransactionStmt *stmt = (TransactionStmt *) n;
+
+		return (stmt->kind == TRANS_STMT_PREPARE ||
+				stmt->kind == TRANS_STMT_COMMIT_PREPARED ||
+				stmt->kind == TRANS_STMT_ROLLBACK_PREPARED);
+	}
+	else
+		return false;
+}
+
 #endif							/* QUERYJUMBLE_H */

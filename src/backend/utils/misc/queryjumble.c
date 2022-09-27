@@ -258,6 +258,7 @@ JumbleQueryInternal(JumbleState *jstate, Query *query)
 	JumbleExpr(jstate, (Node *) query->windowClause);
 	JumbleExpr(jstate, (Node *) query->distinctClause);
 	JumbleExpr(jstate, (Node *) query->sortClause);
+	JumbleExpr(jstate, (Node *) query->mergeActionList);
 	JumbleExpr(jstate, query->limitOffset);
 	JumbleExpr(jstate, query->limitCount);
 	APP_JUMB(query->limitOption);
@@ -736,6 +737,16 @@ JumbleExpr(JumbleState *jstate, Node *node)
 				APP_JUMB(conf->constraint);
 				APP_JUMB(conf->exclRelIndex);
 				JumbleExpr(jstate, (Node *) conf->exclRelTlist);
+			}
+			break;
+		case T_MergeAction:
+			{
+				MergeAction *mergeaction = (MergeAction *) node;
+
+				APP_JUMB(mergeaction->matched);
+				APP_JUMB(mergeaction->commandType);
+				JumbleExpr(jstate, mergeaction->qual);
+				JumbleExpr(jstate, (Node *) mergeaction->targetList);
 			}
 			break;
 		case T_List:

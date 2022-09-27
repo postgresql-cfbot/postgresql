@@ -311,6 +311,143 @@ select count(*) from tenk1 where (two, four) not in
  10000
 (1 row)
 
+-- test parallel plans for queries containing correlated subplans
+-- where the subplan only needs params available from the current
+-- worker's scan.
+explain (costs off, verbose) select
+  (select t.unique1 from tenk1 where tenk1.unique1 = t.unique1)
+  from tenk1 t, generate_series(1, 10);
+                                 QUERY PLAN                                 
+----------------------------------------------------------------------------
+ Gather
+   Output: (SubPlan 1)
+   Workers Planned: 4
+   ->  Nested Loop
+         Output: t.unique1
+         ->  Parallel Index Only Scan using tenk1_unique1 on public.tenk1 t
+               Output: t.unique1
+         ->  Function Scan on pg_catalog.generate_series
+               Output: generate_series.generate_series
+               Function Call: generate_series(1, 10)
+   SubPlan 1
+     ->  Index Only Scan using tenk1_unique1 on public.tenk1
+           Output: t.unique1
+           Index Cond: (tenk1.unique1 = t.unique1)
+(14 rows)
+
+explain (costs off, verbose) select
+  (select t.unique1 from tenk1 where tenk1.unique1 = t.unique1)
+  from tenk1 t;
+                              QUERY PLAN                              
+----------------------------------------------------------------------
+ Gather
+   Output: (SubPlan 1)
+   Workers Planned: 4
+   ->  Parallel Index Only Scan using tenk1_unique1 on public.tenk1 t
+         Output: t.unique1
+   SubPlan 1
+     ->  Index Only Scan using tenk1_unique1 on public.tenk1
+           Output: t.unique1
+           Index Cond: (tenk1.unique1 = t.unique1)
+(9 rows)
+
+explain (costs off, verbose) select
+  (select t.unique1 from tenk1 where tenk1.unique1 = t.unique1)
+  from tenk1 t
+  limit 1;
+                            QUERY PLAN                             
+-------------------------------------------------------------------
+ Limit
+   Output: ((SubPlan 1))
+   ->  Seq Scan on public.tenk1 t
+         Output: (SubPlan 1)
+         SubPlan 1
+           ->  Index Only Scan using tenk1_unique1 on public.tenk1
+                 Output: t.unique1
+                 Index Cond: (tenk1.unique1 = t.unique1)
+(8 rows)
+
+explain (costs off, verbose) select t.unique1
+  from tenk1 t
+  where t.unique1 = (select t.unique1 from tenk1 where tenk1.unique1 = t.unique1);
+                         QUERY PLAN                          
+-------------------------------------------------------------
+ Seq Scan on public.tenk1 t
+   Output: t.unique1
+   Filter: (t.unique1 = (SubPlan 1))
+   SubPlan 1
+     ->  Index Only Scan using tenk1_unique1 on public.tenk1
+           Output: t.unique1
+           Index Cond: (tenk1.unique1 = t.unique1)
+(7 rows)
+
+explain (costs off, verbose) select *
+  from tenk1 t
+  order by (select t.unique1 from tenk1 where tenk1.unique1 = t.unique1);
+                                                                                             QUERY PLAN                                                                                             
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Sort
+   Output: t.unique1, t.unique2, t.two, t.four, t.ten, t.twenty, t.hundred, t.thousand, t.twothousand, t.fivethous, t.tenthous, t.odd, t.even, t.stringu1, t.stringu2, t.string4, ((SubPlan 1))
+   Sort Key: ((SubPlan 1))
+   ->  Gather
+         Output: t.unique1, t.unique2, t.two, t.four, t.ten, t.twenty, t.hundred, t.thousand, t.twothousand, t.fivethous, t.tenthous, t.odd, t.even, t.stringu1, t.stringu2, t.string4, (SubPlan 1)
+         Workers Planned: 4
+         ->  Parallel Seq Scan on public.tenk1 t
+               Output: t.unique1, t.unique2, t.two, t.four, t.ten, t.twenty, t.hundred, t.thousand, t.twothousand, t.fivethous, t.tenthous, t.odd, t.even, t.stringu1, t.stringu2, t.string4
+         SubPlan 1
+           ->  Index Only Scan using tenk1_unique1 on public.tenk1
+                 Output: t.unique1
+                 Index Cond: (tenk1.unique1 = t.unique1)
+(12 rows)
+
+-- test subplan in join/lateral join
+explain (costs off, verbose, timing off) select t.unique1, l.*
+  from tenk1 t
+  join lateral (
+    select (select t.unique1 from tenk1 where tenk1.unique1 = t.unique1 offset 0)
+  ) l on true;
+                              QUERY PLAN                              
+----------------------------------------------------------------------
+ Gather
+   Output: t.unique1, (SubPlan 1)
+   Workers Planned: 4
+   ->  Parallel Index Only Scan using tenk1_unique1 on public.tenk1 t
+         Output: t.unique1
+   SubPlan 1
+     ->  Index Only Scan using tenk1_unique1 on public.tenk1
+           Output: t.unique1
+           Index Cond: (tenk1.unique1 = t.unique1)
+(9 rows)
+
+-- can't put a gather at the top of a subplan that takes a param
+-- (use a join in the subplan for the harder case)
+explain (costs off, verbose) select * from tenk1 t where t.two in (
+  select t.two
+  from tenk1
+  join tenk1 t3 on t3.stringu1 = tenk1.stringu1
+  where tenk1.four = t.four
+);
+                                                                                                                          QUERY PLAN                                                                                                                           
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Seq Scan on public.tenk1 t
+   Output: t.unique1, t.unique2, t.two, t.four, t.ten, t.twenty, t.hundred, t.thousand, t.twothousand, t.fivethous, t.tenthous, t.odd, t.even, t.stringu1, t.stringu2, t.string4
+   Filter: (SubPlan 1)
+   SubPlan 1
+     ->  Hash Join
+           Output: t.two
+           Hash Cond: (tenk1.stringu1 = t3.stringu1)
+           ->  Seq Scan on public.tenk1
+                 Output: tenk1.unique1, tenk1.unique2, tenk1.two, tenk1.four, tenk1.ten, tenk1.twenty, tenk1.hundred, tenk1.thousand, tenk1.twothousand, tenk1.fivethous, tenk1.tenthous, tenk1.odd, tenk1.even, tenk1.stringu1, tenk1.stringu2, tenk1.string4
+                 Filter: (tenk1.four = t.four)
+           ->  Hash
+                 Output: t3.stringu1
+                 ->  Gather
+                       Output: t3.stringu1
+                       Workers Planned: 4
+                       ->  Parallel Seq Scan on public.tenk1 t3
+                             Output: t3.stringu1
+(17 rows)
+
 -- this is not parallel-safe due to use of random() within SubLink's testexpr:
 explain (costs off)
 	select * from tenk1 where (unique1 + random())::integer not in

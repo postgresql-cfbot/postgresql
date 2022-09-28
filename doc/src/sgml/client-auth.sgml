@@ -235,8 +235,9 @@ hostnogssenc  <replaceable>database</replaceable>  <replaceable>user</replaceabl
        logical replication connections do specify it.
        Otherwise, this is the name of
        a specific <productname>PostgreSQL</productname> database.
-       Multiple database names can be supplied by separating them with
-       commas.  A separate file containing database names can be specified by
+       Multiple database names and/or regular expressions preceded by <literal>/</literal>
+       can be supplied by separating them with commas.
+       A separate file containing database names can be specified by
        preceding the file name with <literal>@</literal>.
       </para>
      </listitem>
@@ -249,7 +250,8 @@ hostnogssenc  <replaceable>database</replaceable>  <replaceable>user</replaceabl
        Specifies which database user name(s) this record
        matches. The value <literal>all</literal> specifies that it
        matches all users.  Otherwise, this is either the name of a specific
-       database user, or a group name preceded by <literal>+</literal>.
+       database user, a regular expression preceded by <literal>/</literal>
+       or a group name preceded by <literal>+</literal>.
        (Recall that there is no real distinction between users and groups
        in <productname>PostgreSQL</productname>; a <literal>+</literal> mark really means
        <quote>match any of the roles that are directly or indirectly members
@@ -258,7 +260,8 @@ hostnogssenc  <replaceable>database</replaceable>  <replaceable>user</replaceabl
        considered to be a member of a role if they are explicitly a member
        of the role, directly or indirectly, and not just by virtue of
        being a superuser.
-       Multiple user names can be supplied by separating them with commas.
+       Multiple user names and/or regular expressions preceded by <literal>/</literal>
+       can be supplied by separating them with commas.
        A separate file containing user names can be specified by preceding the
        file name with <literal>@</literal>.
       </para>
@@ -270,8 +273,9 @@ hostnogssenc  <replaceable>database</replaceable>  <replaceable>user</replaceabl
      <listitem>
       <para>
        Specifies the client machine address(es) that this record
-       matches.  This field can contain either a host name, an IP
-       address range, or one of the special key words mentioned below.
+       matches.  This field can contain either a host name, a regular expression
+       preceded by <literal>/</literal> representing host names, an IP address range,
+       or one of the special key words mentioned below.
       </para>
 
       <para>
@@ -785,16 +789,18 @@ host    all             all             192.168.12.10/32        gss
 # TYPE  DATABASE        USER            ADDRESS                 METHOD
 host    all             all             192.168.0.0/16          ident map=omicron
 
-# If these are the only three lines for local connections, they will
+# If these are the only four lines for local connections, they will
 # allow local users to connect only to their own databases (databases
-# with the same name as their database user name) except for administrators
-# and members of role "support", who can connect to all databases.  The file
-# $PGDATA/admins contains a list of names of administrators.  Passwords
+# with the same name as their database user name) except for administrators,
+# users finishing with "helpdesk" and members of role "support",
+# who can connect to all databases.
+# The file$PGDATA/admins contains a list of names of administrators.  Passwords
 # are required in all cases.
 #
 # TYPE  DATABASE        USER            ADDRESS                 METHOD
 local   sameuser        all                                     md5
 local   all             @admins                                 md5
+local   all             /^.*helpdesk$                           md5
 local   all             +support                                md5
 
 # The last two lines above can be combined into a single line:

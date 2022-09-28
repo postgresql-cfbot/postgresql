@@ -120,6 +120,9 @@ typedef struct HbaLine
 	char	   *radiusidentifiers_s;
 	List	   *radiusports;
 	char	   *radiusports_s;
+	List	   *roles_re;
+	List	   *databases_re;
+	regex_t	   hostname_re;
 } HbaLine;
 
 typedef struct IdentLine

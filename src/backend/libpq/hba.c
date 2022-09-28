@@ -117,6 +117,9 @@ static List *tokenize_inc_file(List *tokens, const char *outer_filename,
 							   const char *inc_filename, int elevel, char **err_msg);
 static bool parse_hba_auth_opt(char *name, char *val, HbaLine *hbaline,
 							   int elevel, char **err_msg);
+static bool token_regcomp(regex_t *re, char *string, char *filename,
+						  int line_num, char **err_msg, int elevel);
+static bool token_regexec(const char *match, regex_t *re);
 
 
 /*
@@ -574,13 +577,15 @@ is_member(Oid userid, const char *role)
 }
 
 /*
- * Check AuthToken list for a match to role, allowing group names.
+ * Check AuthToken list for a match to role.
+ * We are allowing group names and regular expressions.
  */
 static bool
-check_role(const char *role, Oid roleid, List *tokens)
+check_role(const char *role, Oid roleid, List *tokens, List *tokens_re)
 {
 	ListCell   *cell;
 	AuthToken  *tok;
+	int			re_num = 0;
 
 	foreach(cell, tokens)
 	{
@@ -589,6 +594,23 @@ check_role(const char *role, Oid roleid, List *tokens)
 		{
 			if (is_member(roleid, tok->string + 1))
 				return true;
+		}
+		else if (!tok->quoted && tok->string[0] == '/')
+		{
+			/*
+			 * When tok->string starts with a slash, treat it as a regular
+			 * expression.
+			 */
+			ListCell   *cell_re;
+			regex_t    *re;
+
+			cell_re = list_nth_cell(tokens_re, re_num);
+			re = lfirst(cell_re);
+
+			if (token_regexec(role, re))
+				return true;
+
+			re_num++;
 		}
 		else if (token_matches(tok, role) ||
 				 token_is_keyword(tok, "all"))
@@ -601,10 +623,11 @@ check_role(const char *role, Oid roleid, List *tokens)
  * Check to see if db/role combination matches AuthToken list.
  */
 static bool
-check_db(const char *dbname, const char *role, Oid roleid, List *tokens)
+check_db(const char *dbname, const char *role, Oid roleid, List *tokens, List *tokens_re)
 {
 	ListCell   *cell;
 	AuthToken  *tok;
+	int			re_num = 0;
 
 	foreach(cell, tokens)
 	{
@@ -633,6 +656,23 @@ check_db(const char *dbname, const char *role, Oid roleid, List *tokens)
 		}
 		else if (token_is_keyword(tok, "replication"))
 			continue;			/* never match this if not walsender */
+		else if (!tok->quoted && tok->string[0] == '/')
+		{
+			/*
+			 * When tok->string starts with a slash, treat it as a regular
+			 * expression.
+			 */
+			ListCell   *cell_re;
+			regex_t    *re;
+
+			cell_re = list_nth_cell(tokens_re, re_num);
+			re = lfirst(cell_re);
+
+			if (token_regexec(dbname, re))
+				return true;
+
+			re_num++;
+		}
 		else if (token_matches(tok, dbname))
 			return true;
 	}
@@ -681,7 +721,7 @@ hostname_match(const char *pattern, const char *actual_hostname)
  * Check to see if a connecting IP matches a given host name.
  */
 static bool
-check_hostname(hbaPort *port, const char *hostname)
+check_hostname(hbaPort *port, const char *hostname, regex_t re)
 {
 	struct addrinfo *gai_result,
 			   *gai;
@@ -712,8 +752,17 @@ check_hostname(hbaPort *port, const char *hostname)
 		port->remote_hostname = pstrdup(remote_hostname);
 	}
 
+	if (hostname[0] == '/')
+	{
+		/*
+		 * When hostname starts with a slash, treat it as a regular
+		 * expression.
+		 */
+		if (!token_regexec(port->remote_hostname, &re))
+			return false;
+	}
 	/* Now see if remote host name matches this pg_hba line */
-	if (!hostname_match(hostname, port->remote_hostname))
+	else if (!hostname_match(hostname, port->remote_hostname))
 		return false;
 
 	/* If we already verified the forward lookup, we're done */
@@ -939,13 +988,13 @@ parse_hba_line(TokenizedAuthLine *tok_line, int elevel)
 	struct addrinfo *gai_result;
 	struct addrinfo hints;
 	int			ret;
-	char	   *cidr_slash;
 	char	   *unsupauth;
 	ListCell   *field;
 	List	   *tokens;
 	ListCell   *tokencell;
 	AuthToken  *token;
 	HbaLine    *parsedline;
+	char       *cidr_slash = NULL; /* keep compiler quiet */
 
 	parsedline = palloc0(sizeof(HbaLine));
 	parsedline->linenumber = line_num;
@@ -1049,9 +1098,27 @@ parse_hba_line(TokenizedAuthLine *tok_line, int elevel)
 		return NULL;
 	}
 	parsedline->databases = NIL;
+	parsedline->databases_re = NIL;
 	tokens = lfirst(field);
 	foreach(tokencell, tokens)
 	{
+		AuthToken  *tok = lfirst(tokencell);
+
+		if (!tok->quoted && tok->string[0] == '/')
+		{
+			/*
+			 * When tok->string starts with a slash, treat it as a regular
+			 * expression. Pre-compile it.
+			 */
+			regex_t    *re;
+
+			re = (regex_t *) palloc(sizeof(regex_t));
+			if (token_regcomp(re, tok->string + 1, HbaFileName, line_num,
+							  err_msg, elevel))
+				parsedline->databases_re = lappend(parsedline->databases_re, re);
+			else
+				return NULL;
+		}
 		parsedline->databases = lappend(parsedline->databases,
 										copy_auth_token(lfirst(tokencell)));
 	}
@@ -1069,9 +1136,27 @@ parse_hba_line(TokenizedAuthLine *tok_line, int elevel)
 		return NULL;
 	}
 	parsedline->roles = NIL;
+	parsedline->roles_re = NIL;
 	tokens = lfirst(field);
 	foreach(tokencell, tokens)
 	{
+		AuthToken  *tok = lfirst(tokencell);
+
+		if (!tok->quoted && tok->string[0] == '/')
+		{
+			/*
+			 * When tok->string starts with a slash, treat it as a regular
+			 * expression. Pre-compile it.
+			 */
+			regex_t    *re;
+
+			re = (regex_t *) palloc(sizeof(regex_t));
+			if (token_regcomp(re, tok->string + 1, HbaFileName, line_num,
+							  err_msg, elevel))
+				parsedline->roles_re = lappend(parsedline->roles_re, re);
+			else
+				return NULL;
+		}
 		parsedline->roles = lappend(parsedline->roles,
 									copy_auth_token(lfirst(tokencell)));
 	}
@@ -1120,6 +1205,8 @@ parse_hba_line(TokenizedAuthLine *tok_line, int elevel)
 		}
 		else
 		{
+			bool is_regexp = token->string[0] == '/' ? true : false;
+
 			/* IP and netmask are specified */
 			parsedline->ip_cmp_method = ipCmpMask;
 
@@ -1127,9 +1214,12 @@ parse_hba_line(TokenizedAuthLine *tok_line, int elevel)
 			str = pstrdup(token->string);
 
 			/* Check if it has a CIDR suffix and if so isolate it */
-			cidr_slash = strchr(str, '/');
-			if (cidr_slash)
-				*cidr_slash = '\0';
+			if (!is_regexp)
+			{
+				cidr_slash = strchr(str, '/');
+				if (cidr_slash)
+					*cidr_slash = '\0';
+			}
 
 			/* Get the IP address either way */
 			hints.ai_flags = AI_NUMERICHOST;
@@ -1168,7 +1258,7 @@ parse_hba_line(TokenizedAuthLine *tok_line, int elevel)
 			pg_freeaddrinfo_all(hints.ai_family, gai_result);
 
 			/* Get the netmask */
-			if (cidr_slash)
+			if (cidr_slash && !is_regexp)
 			{
 				if (parsedline->hostname)
 				{
@@ -1199,7 +1289,7 @@ parse_hba_line(TokenizedAuthLine *tok_line, int elevel)
 				parsedline->masklen = parsedline->addrlen;
 				pfree(str);
 			}
-			else if (!parsedline->hostname)
+			else if (!parsedline->hostname && !is_regexp)
 			{
 				/* Read the mask field. */
 				pfree(str);
@@ -1260,6 +1350,18 @@ parse_hba_line(TokenizedAuthLine *tok_line, int elevel)
 					*err_msg = "IP address and mask do not match";
 					return NULL;
 				}
+			}
+			else if (is_regexp)
+			{
+				/*
+				 * When token->string starts with a slash, treat it as a
+				 * regular expression. Pre-compile it.
+				 */
+				if (!token_regcomp(&parsedline->hostname_re,
+								   token->string + 1, HbaFileName,
+								   line_num, err_msg, elevel))
+					return NULL;
+				parsedline->hostname = str;
 			}
 		}
 	}							/* != ctLocal */
@@ -2135,7 +2237,8 @@ check_hba(hbaPort *port)
 					if (hba->hostname)
 					{
 						if (!check_hostname(port,
-											hba->hostname))
+											hba->hostname, hba->hostname_re))
+
 							continue;
 					}
 					else
@@ -2162,10 +2265,10 @@ check_hba(hbaPort *port)
 
 		/* Check database and role */
 		if (!check_db(port->database_name, port->user_name, roleid,
-					  hba->databases))
+					  hba->databases, hba->databases_re))
 			continue;
 
-		if (!check_role(port->user_name, roleid, hba->roles))
+		if (!check_role(port->user_name, roleid, hba->roles, hba->roles_re))
 			continue;
 
 		/* Found a record that matched! */
@@ -2342,34 +2445,9 @@ parse_ident_line(TokenizedAuthLine *tok_line, int elevel)
 		 * When system username starts with a slash, treat it as a regular
 		 * expression. Pre-compile it.
 		 */
-		int			r;
-		pg_wchar   *wstr;
-		int			wlen;
-
-		wstr = palloc((strlen(parsedline->ident_user + 1) + 1) * sizeof(pg_wchar));
-		wlen = pg_mb2wchar_with_len(parsedline->ident_user + 1,
-									wstr, strlen(parsedline->ident_user + 1));
-
-		r = pg_regcomp(&parsedline->re, wstr, wlen, REG_ADVANCED, C_COLLATION_OID);
-		if (r)
-		{
-			char		errstr[100];
-
-			pg_regerror(r, &parsedline->re, errstr, sizeof(errstr));
-			ereport(elevel,
-					(errcode(ERRCODE_INVALID_REGULAR_EXPRESSION),
-					 errmsg("invalid regular expression \"%s\": %s",
-							parsedline->ident_user + 1, errstr),
-					 errcontext("line %d of configuration file \"%s\"",
-							line_num, IdentFileName)));
-
-			*err_msg = psprintf("invalid regular expression \"%s\": %s",
-								parsedline->ident_user + 1, errstr);
-
-			pfree(wstr);
+		if (!token_regcomp(&parsedline->re, parsedline->ident_user + 1,
+						   IdentFileName, line_num, err_msg, elevel))
 			return NULL;
-		}
-		pfree(wstr);
 	}
 
 	return parsedline;
@@ -2705,4 +2783,69 @@ hba_authname(UserAuth auth_method)
 					 "UserAuthName[] must match the UserAuth enum");
 
 	return UserAuthName[auth_method];
+}
+
+/*
+ * Compile the regular expression "re" and return whether it compiles
+ * successfully or not.
+ *
+ * If not, the last 4 parameters are used to add extra details while reporting
+ * the error.
+ */
+static bool
+token_regcomp(regex_t *re, char *string, char *filename, int line_num,
+			  char **err_msg, int elevel)
+{
+	int			r;
+	pg_wchar   *wstr;
+	int			wlen;
+
+	wstr = palloc((strlen(string) + 1) * sizeof(pg_wchar));
+	wlen = pg_mb2wchar_with_len(string,
+								wstr, strlen(string));
+
+	r = pg_regcomp(re, wstr, wlen, REG_ADVANCED, C_COLLATION_OID);
+	if (r)
+	{
+		char		errstr[100];
+
+		pg_regerror(r, re, errstr, sizeof(errstr));
+		ereport(elevel,
+				(errcode(ERRCODE_INVALID_REGULAR_EXPRESSION),
+				 errmsg("invalid regular expression \"%s\": %s",
+						string, errstr),
+				 errcontext("line %d of configuration file \"%s\"",
+							line_num, filename)));
+
+		*err_msg = psprintf("invalid regular expression \"%s\": %s",
+							string, errstr);
+
+		pfree(wstr);
+		return false;
+	}
+
+	pfree(wstr);
+	return true;
+}
+
+/*
+ * Return whether "match" is matching the regular expression "re" or not.
+ */
+static bool
+token_regexec(const char *match, regex_t *re)
+{
+	pg_wchar   *wmatchstr;
+	int			wmatchlen;
+
+	wmatchstr = palloc((strlen(match) + 1) * sizeof(pg_wchar));
+	wmatchlen = pg_mb2wchar_with_len(match, wmatchstr, strlen(match));
+
+	if (pg_regexec(re, wmatchstr, wmatchlen, 0, NULL, 0, NULL, 0) == REG_OKAY)
+	{
+		pfree(wmatchstr);
+		return true;
+	}
+
+	pfree(wmatchstr);
+	return false;
 }

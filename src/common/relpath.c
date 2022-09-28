@@ -139,9 +139,15 @@ GetDatabasePath(Oid dbOid, Oid spcOid)
  */
 char *
 GetRelationPath(Oid dbOid, Oid spcOid, RelFileNumber relNumber,
-				int backendId, ForkNumber forkNumber)
+				int backendId, ForkNumber forkNumber, char mark)
 {
 	char	   *path;
+	char		markstr[4];
+
+	if (mark == 0)
+		markstr[0] = 0;
+	else
+		snprintf(markstr, sizeof(markstr), ".%c", mark);
 
 	if (spcOid == GLOBALTABLESPACE_OID)
 	{
@@ -149,10 +155,10 @@ GetRelationPath(Oid dbOid, Oid spcOid, RelFileNumber relNumber,
 		Assert(dbOid == 0);
 		Assert(backendId == InvalidBackendId);
 		if (forkNumber != MAIN_FORKNUM)
-			path = psprintf("global/" UINT64_FORMAT "_%s",
-							relNumber, forkNames[forkNumber]);
+			path = psprintf("global/" UINT64_FORMAT "_%s%s",
+							relNumber, forkNames[forkNumber], markstr);
 		else
-			path = psprintf("global/" UINT64_FORMAT, relNumber);
+			path = psprintf("global/" UINT64_FORMAT "%s", relNumber, markstr);
 	}
 	else if (spcOid == DEFAULTTABLESPACE_OID)
 	{
@@ -160,22 +166,22 @@ GetRelationPath(Oid dbOid, Oid spcOid, RelFileNumber relNumber,
 		if (backendId == InvalidBackendId)
 		{
 			if (forkNumber != MAIN_FORKNUM)
-				path = psprintf("base/%u/" UINT64_FORMAT "_%s",
+				path = psprintf("base/%u/" UINT64_FORMAT "_%s%s",
 								dbOid, relNumber,
-								forkNames[forkNumber]);
+								forkNames[forkNumber], markstr);
 			else
-				path = psprintf("base/%u/" UINT64_FORMAT,
-								dbOid, relNumber);
+				path = psprintf("base/%u/" UINT64_FORMAT "%s",
+								dbOid, relNumber, markstr);
 		}
 		else
 		{
 			if (forkNumber != MAIN_FORKNUM)
-				path = psprintf("base/%u/t%d_" UINT64_FORMAT "_%s",
+				path = psprintf("base/%u/t%d_" UINT64_FORMAT "_%s%s",
 								dbOid, backendId, relNumber,
-								forkNames[forkNumber]);
+								forkNames[forkNumber], markstr);
 			else
-				path = psprintf("base/%u/t%d_" UINT64_FORMAT,
-								dbOid, backendId, relNumber);
+				path = psprintf("base/%u/t%d_" UINT64_FORMAT "%s",
+								dbOid, backendId, relNumber, markstr);
 		}
 	}
 	else
@@ -184,27 +190,28 @@ GetRelationPath(Oid dbOid, Oid spcOid, RelFileNumber relNumber,
 		if (backendId == InvalidBackendId)
 		{
 			if (forkNumber != MAIN_FORKNUM)
-				path = psprintf("pg_tblspc/%u/%s/%u/" UINT64_FORMAT "_%s",
+				path = psprintf("pg_tblspc/%u/%s/%u/" UINT64_FORMAT "_%s%s",
 								spcOid, TABLESPACE_VERSION_DIRECTORY,
 								dbOid, relNumber,
-								forkNames[forkNumber]);
+								forkNames[forkNumber], markstr);
 			else
-				path = psprintf("pg_tblspc/%u/%s/%u/" UINT64_FORMAT,
+				path = psprintf("pg_tblspc/%u/%s/%u/" UINT64_FORMAT "%s",
 								spcOid, TABLESPACE_VERSION_DIRECTORY,
-								dbOid, relNumber);
+								dbOid, relNumber, markstr);
 		}
 		else
 		{
 			if (forkNumber != MAIN_FORKNUM)
-				path = psprintf("pg_tblspc/%u/%s/%u/t%d_" UINT64_FORMAT "_%s",
+				path = psprintf("pg_tblspc/%u/%s/%u/t%d_" UINT64_FORMAT "_%s%s",
 								spcOid, TABLESPACE_VERSION_DIRECTORY,
 								dbOid, backendId, relNumber,
-								forkNames[forkNumber]);
+								forkNames[forkNumber], markstr);
 			else
-				path = psprintf("pg_tblspc/%u/%s/%u/t%d_" UINT64_FORMAT,
+				path = psprintf("pg_tblspc/%u/%s/%u/t%d_" UINT64_FORMAT "%s",
 								spcOid, TABLESPACE_VERSION_DIRECTORY,
-								dbOid, backendId, relNumber);
+								dbOid, backendId, relNumber, markstr);
 		}
 	}
+
 	return path;
 }

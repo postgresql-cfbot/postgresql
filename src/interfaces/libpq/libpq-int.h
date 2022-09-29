@@ -887,6 +887,8 @@ extern char *libpq_ngettext(const char *msgid, const char *msgid_plural, unsigne
  */
 #undef _
 
+extern void libpq_append_error(PGconn *conn, const char *fmt, ...) pg_attribute_printf(2, 3);
+
 /*
  * These macros are needed to let error-handling code be portable between
  * Unix and Windows.  (ugh)

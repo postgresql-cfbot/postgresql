@@ -1278,3 +1278,18 @@ libpq_ngettext(const char *msgid, const char *msgid_plural, unsigned long n)
 }
 
 #endif							/* ENABLE_NLS */
+
+void
+libpq_append_error(PGconn *conn, const char *fmt, ...)
+{
+	va_list		args;
+
+	Assert(fmt[strlen(fmt) - 1] != '\n');
+
+	va_start(args, fmt);
+
+	appendPQExpBufferVA(&conn->errorMessage, libpq_gettext(fmt), args);
+	appendPQExpBufferChar(&conn->errorMessage, '\n');
+
+	va_end(args);
+}

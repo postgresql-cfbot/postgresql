@@ -157,6 +157,8 @@ extern void printfPQExpBuffer(PQExpBuffer str, const char *fmt,...) pg_attribute
  */
 extern void appendPQExpBuffer(PQExpBuffer str, const char *fmt,...) pg_attribute_printf(2, 3);
 
+extern void appendPQExpBufferVA(PQExpBuffer str, const char *fmt, va_list args) pg_attribute_printf(2, 0);
+
 /*------------------------
  * appendPQExpBufferStr
  * Append the given string to a PQExpBuffer, allocating more space

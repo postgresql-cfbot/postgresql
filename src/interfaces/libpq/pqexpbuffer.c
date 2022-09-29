@@ -40,7 +40,7 @@ static const char oom_buffer[1] = "";
 /* Need a char * for unconstify() compatibility */
 static const char *oom_buffer_ptr = oom_buffer;
 
-static bool appendPQExpBufferVA(PQExpBuffer str, const char *fmt, va_list args) pg_attribute_printf(2, 0);
+static bool appendPQExpBufferVA_internal(PQExpBuffer str, const char *fmt, va_list args) pg_attribute_printf(2, 0);
 
 
 /*
@@ -250,7 +250,7 @@ printfPQExpBuffer(PQExpBuffer str, const char *fmt,...)
 	{
 		errno = save_errno;
 		va_start(args, fmt);
-		done = appendPQExpBufferVA(str, fmt, args);
+		done = appendPQExpBufferVA_internal(str, fmt, args);
 		va_end(args);
 	} while (!done);
 }
@@ -278,13 +278,30 @@ appendPQExpBuffer(PQExpBuffer str, const char *fmt,...)
 	{
 		errno = save_errno;
 		va_start(args, fmt);
-		done = appendPQExpBufferVA(str, fmt, args);
+		done = appendPQExpBufferVA_internal(str, fmt, args);
 		va_end(args);
 	} while (!done);
 }
 
+void
+appendPQExpBufferVA(PQExpBuffer str, const char *fmt, va_list args)
+{
+	int			save_errno = errno;
+	bool		done;
+
+	if (PQExpBufferBroken(str))
+		return;					/* already failed */
+
+	/* Loop in case we have to retry after enlarging the buffer. */
+	do
+	{
+		errno = save_errno;
+		done = appendPQExpBufferVA_internal(str, fmt, args);
+	} while (!done);
+}
+
 /*
- * appendPQExpBufferVA
+ * appendPQExpBufferVA_internal
  * Shared guts of printfPQExpBuffer/appendPQExpBuffer.
  * Attempt to format data and append it to str.  Returns true if done
  * (either successful or hard failure), false if need to retry.
@@ -293,7 +310,7 @@ appendPQExpBuffer(PQExpBuffer str, const char *fmt,...)
  * when looping, in case the fmt contains "%m".
  */
 static bool
-appendPQExpBufferVA(PQExpBuffer str, const char *fmt, va_list args)
+appendPQExpBufferVA_internal(PQExpBuffer str, const char *fmt, va_list args)
 {
 	size_t		avail;
 	size_t		needed;

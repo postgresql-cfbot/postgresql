@@ -181,12 +181,10 @@ heap_page_items(PG_FUNCTION_ARGS)
 		Datum		result;
 		ItemId		id;
 		Datum		values[14];
-		bool		nulls[14];
+		bool		nulls[14] = {0};
 		uint16		lp_offset;
 		uint16		lp_flags;
 		uint16		lp_len;
-
-		memset(nulls, 0, sizeof(nulls));
 
 		/* Extract information from the line pointer */
 

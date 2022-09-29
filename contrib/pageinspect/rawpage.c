@@ -252,7 +252,7 @@ page_header(PG_FUNCTION_ARGS)
 	Datum		result;
 	HeapTuple	tuple;
 	Datum		values[9];
-	bool		nulls[9];
+	bool		nulls[9] = {0};
 
 	Page		page;
 	PageHeader	pageheader;
@@ -317,8 +317,6 @@ page_header(PG_FUNCTION_ARGS)
 	values[8] = TransactionIdGetDatum(pageheader->pd_prune_xid);
 
 	/* Build and return the tuple. */
-
-	memset(nulls, 0, sizeof(nulls));
 
 	tuple = heap_form_tuple(tupdesc, values, nulls);
 	result = HeapTupleGetDatum(tuple);

@@ -311,7 +311,7 @@ bt_page_print_tuples(struct user_args *uargs)
 	bool		rightmost = uargs->rightmost;
 	bool		ispivottuple;
 	Datum		values[9];
-	bool		nulls[9];
+	bool		nulls[9] = {0};
 	HeapTuple	tuple;
 	ItemId		id;
 	IndexTuple	itup;
@@ -331,7 +331,6 @@ bt_page_print_tuples(struct user_args *uargs)
 	itup = (IndexTuple) PageGetItem(page, id);
 
 	j = 0;
-	memset(nulls, 0, sizeof(nulls));
 	values[j++] = DatumGetInt16(offset);
 	values[j++] = ItemPointerGetDatum(&itup->t_tid);
 	values[j++] = Int32GetDatum((int) IndexTupleSize(itup));

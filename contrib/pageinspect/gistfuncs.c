@@ -43,7 +43,7 @@ gist_page_opaque_info(PG_FUNCTION_ARGS)
 	GISTPageOpaque opaq;
 	HeapTuple	resultTuple;
 	Datum		values[4];
-	bool		nulls[4];
+	bool		nulls[4] = {0};
 	Datum		flags[16];
 	int			nflags = 0;
 	uint16		flagbits;
@@ -98,8 +98,6 @@ gist_page_opaque_info(PG_FUNCTION_ARGS)
 		/* any flags we don't recognize are printed in hex */
 		flags[nflags++] = DirectFunctionCall1(to_hex32, Int32GetDatum(flagbits));
 	}
-
-	memset(nulls, 0, sizeof(nulls));
 
 	values[0] = LSNGetDatum(PageGetLSN(page));
 	values[1] = LSNGetDatum(GistPageGetNSN(page));
@@ -163,7 +161,7 @@ gist_page_items_bytea(PG_FUNCTION_ARGS)
 		 offset++)
 	{
 		Datum		values[5];
-		bool		nulls[5];
+		bool		nulls[5] = {0};
 		ItemId		id;
 		IndexTuple	itup;
 		bytea	   *tuple_bytea;
@@ -176,8 +174,6 @@ gist_page_items_bytea(PG_FUNCTION_ARGS)
 
 		itup = (IndexTuple) PageGetItem(page, id);
 		tuple_len = IndexTupleSize(itup);
-
-		memset(nulls, 0, sizeof(nulls));
 
 		values[0] = DatumGetInt16(offset);
 		values[1] = ItemPointerGetDatum(&itup->t_tid);
@@ -241,7 +237,7 @@ gist_page_items(PG_FUNCTION_ARGS)
 		 offset++)
 	{
 		Datum		values[5];
-		bool		nulls[5];
+		bool		nulls[5] = {0};
 		ItemId		id;
 		IndexTuple	itup;
 		Datum		itup_values[INDEX_MAX_KEYS];
@@ -257,8 +253,6 @@ gist_page_items(PG_FUNCTION_ARGS)
 
 		index_deform_tuple(itup, RelationGetDescr(indexRel),
 						   itup_values, itup_isnull);
-
-		memset(nulls, 0, sizeof(nulls));
 
 		values[0] = DatumGetInt16(offset);
 		values[1] = ItemPointerGetDatum(&itup->t_tid);

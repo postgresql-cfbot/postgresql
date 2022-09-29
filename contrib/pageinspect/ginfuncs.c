@@ -40,7 +40,7 @@ gin_metapage_info(PG_FUNCTION_ARGS)
 	GinMetaPageData *metadata;
 	HeapTuple	resultTuple;
 	Datum		values[10];
-	bool		nulls[10];
+	bool		nulls[10] = {0};
 
 	if (!superuser())
 		ereport(ERROR,
@@ -75,8 +75,6 @@ gin_metapage_info(PG_FUNCTION_ARGS)
 
 	metadata = GinPageGetMeta(page);
 
-	memset(nulls, 0, sizeof(nulls));
-
 	values[0] = Int64GetDatum(metadata->head);
 	values[1] = Int64GetDatum(metadata->tail);
 	values[2] = Int32GetDatum(metadata->tailFreeSize);
@@ -107,7 +105,7 @@ gin_page_opaque_info(PG_FUNCTION_ARGS)
 	GinPageOpaque opaq;
 	HeapTuple	resultTuple;
 	Datum		values[3];
-	bool		nulls[3];
+	bool		nulls[3] = {0};
 	Datum		flags[16];
 	int			nflags = 0;
 	uint16		flagbits;
@@ -161,8 +159,6 @@ gin_page_opaque_info(PG_FUNCTION_ARGS)
 		/* any flags we don't recognize are printed in hex */
 		flags[nflags++] = DirectFunctionCall1(to_hex32, Int32GetDatum(flagbits));
 	}
-
-	memset(nulls, 0, sizeof(nulls));
 
 	values[0] = Int64GetDatum(opaq->rightlink);
 	values[1] = Int32GetDatum(opaq->maxoff);
@@ -255,13 +251,11 @@ gin_leafpage_items(PG_FUNCTION_ARGS)
 		HeapTuple	resultTuple;
 		Datum		result;
 		Datum		values[3];
-		bool		nulls[3];
+		bool		nulls[3] = {0};
 		int			ndecoded,
 					i;
 		ItemPointer tids;
 		Datum	   *tids_datum;
-
-		memset(nulls, 0, sizeof(nulls));
 
 		values[0] = ItemPointerGetDatum(&cur->first);
 		values[1] = UInt16GetDatum(cur->nbytes);

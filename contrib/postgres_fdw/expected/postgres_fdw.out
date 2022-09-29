@@ -9011,6 +9011,8 @@ IMPORT FOREIGN SCHEMA import_source FROM SERVER loopback INTO import_dest1;
 --------+-------------------+-----------+----------+---------+--------------------
  c1     | integer           |           |          |         | (column_name 'c1')
  c2     | character varying |           | not null |         | (column_name 'c2')
+Check constraints:
+    "t1_c2_not_null" CHECK (c2 IS NOT NULL)
 Server: loopback
 FDW options: (schema_name 'import_source', table_name 't1')
 
@@ -9084,6 +9086,8 @@ IMPORT FOREIGN SCHEMA import_source FROM SERVER loopback INTO import_dest2
 --------+-------------------+-----------+----------+---------+--------------------
  c1     | integer           |           |          |         | (column_name 'c1')
  c2     | character varying |           | not null |         | (column_name 'c2')
+Check constraints:
+    "t1_c2_not_null" CHECK (c2 IS NOT NULL)
 Server: loopback
 FDW options: (schema_name 'import_source', table_name 't1')
 

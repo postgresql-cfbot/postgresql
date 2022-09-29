@@ -8176,7 +8176,6 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 						 "a.attstattarget,\n"
 						 "a.attstorage,\n"
 						 "t.typstorage,\n"
-						 "a.attnotnull,\n"
 						 "a.atthasdef,\n"
 						 "a.attisdropped,\n"
 						 "a.attlen,\n"
@@ -8192,6 +8191,17 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 						 "FROM pg_catalog.pg_options_to_table(attfdwoptions) "
 						 "ORDER BY option_name"
 						 "), E',\n    ') AS attfdwoptions,\n");
+
+	/*
+	 * Versions 16 and up have pg_constraint rows for NOT NULL constraints, so
+	 * we don't need to handle them separately here.
+	 */
+	if (fout->remoteVersion < 160000)
+		appendPQExpBufferStr(q,
+							 "a.attnotnull,\n");
+	else
+		appendPQExpBufferStr(q,
+							 "false as attnotnull,\n");
 
 	if (fout->remoteVersion >= 140000)
 		appendPQExpBufferStr(q,
@@ -10867,7 +10877,12 @@ dumpDomain(Archive *fout, const TypeInfo *tyinfo)
 		appendPQExpBufferStr(query,
 							 "PREPARE dumpDomain(pg_catalog.oid) AS\n");
 
-		appendPQExpBufferStr(query, "SELECT t.typnotnull, "
+		appendPQExpBufferStr(query, "SELECT ");
+		if (fout->remoteVersion >= 160000)
+			appendPQExpBufferStr(query, "false as typnotnull, ");
+		else
+			appendPQExpBufferStr(query, "t.typnotnull, ");
+		appendPQExpBufferStr(query,
 							 "pg_catalog.format_type(t.typbasetype, t.typtypmod) AS typdefn, "
 							 "pg_catalog.pg_get_expr(t.typdefaultbin, 'pg_catalog.pg_type'::pg_catalog.regclass) AS typdefaultbin, "
 							 "t.typdefault, "

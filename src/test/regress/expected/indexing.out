@@ -1065,16 +1065,18 @@ create table idxpart3 (b int not null, a int not null);
 alter table idxpart attach partition idxpart3 for values from (20, 20) to (30, 30);
 select conname, contype, conrelid::regclass, conindid::regclass, conkey
   from pg_constraint where conrelid::regclass::text like 'idxpart%'
-  order by conname;
-    conname     | contype | conrelid  |    conindid    | conkey 
-----------------+---------+-----------+----------------+--------
- idxpart1_pkey  | p       | idxpart1  | idxpart1_pkey  | {1,2}
- idxpart21_pkey | p       | idxpart21 | idxpart21_pkey | {1,2}
- idxpart22_pkey | p       | idxpart22 | idxpart22_pkey | {1,2}
- idxpart2_pkey  | p       | idxpart2  | idxpart2_pkey  | {1,2}
- idxpart3_pkey  | p       | idxpart3  | idxpart3_pkey  | {2,1}
- idxpart_pkey   | p       | idxpart   | idxpart_pkey   | {1,2}
-(6 rows)
+  order by conrelid::regclass::text, conname;
+       conname       | contype | conrelid  |    conindid    | conkey 
+---------------------+---------+-----------+----------------+--------
+ idxpart_pkey        | p       | idxpart   | idxpart_pkey   | {1,2}
+ idxpart1_pkey       | p       | idxpart1  | idxpart1_pkey  | {1,2}
+ idxpart2_pkey       | p       | idxpart2  | idxpart2_pkey  | {1,2}
+ idxpart21_pkey      | p       | idxpart21 | idxpart21_pkey | {1,2}
+ idxpart22_pkey      | p       | idxpart22 | idxpart22_pkey | {1,2}
+ idxpart3_a_not_null | c       | idxpart3  | -              | {2}
+ idxpart3_b_not_null | c       | idxpart3  | -              | {1}
+ idxpart3_pkey       | p       | idxpart3  | idxpart3_pkey  | {2,1}
+(8 rows)
 
 drop table idxpart;
 -- Verify that multi-layer partitioning honors the requirement that all

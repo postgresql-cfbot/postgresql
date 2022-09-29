@@ -101,6 +101,7 @@ static ObjectAddress AddNewRelationType(const char *typeName,
 										Oid new_array_type);
 static void RelationRemoveInheritance(Oid relid);
 static Oid	StoreRelCheck(Relation rel, const char *ccname, Node *expr,
+						  Oid parent_oid,
 						  bool is_validated, bool is_local, int inhcount,
 						  bool is_no_inherit, bool is_internal);
 static void StoreConstraints(Relation rel, List *cooked_constraints,
@@ -2061,7 +2062,7 @@ SetAttrMissing(Oid relid, char *attname, char *value)
  * The OID of the new constraint is returned.
  */
 static Oid
-StoreRelCheck(Relation rel, const char *ccname, Node *expr,
+StoreRelCheck(Relation rel, const char *ccname, Node *expr, Oid parent_oid,
 			  bool is_validated, bool is_local, int inhcount,
 			  bool is_no_inherit, bool is_internal)
 {
@@ -2129,7 +2130,7 @@ StoreRelCheck(Relation rel, const char *ccname, Node *expr,
 							  false,	/* Is Deferrable */
 							  false,	/* Is Deferred */
 							  is_validated,
-							  InvalidOid,	/* no parent constraint */
+							  parent_oid,
 							  RelationGetRelid(rel),	/* relation */
 							  attNos,	/* attrs in the constraint */
 							  keycount, /* # key attrs in the constraint */
@@ -2198,7 +2199,7 @@ StoreConstraints(Relation rel, List *cooked_constraints, bool is_internal)
 				break;
 			case CONSTR_CHECK:
 				con->conoid =
-					StoreRelCheck(rel, con->name, con->expr,
+					StoreRelCheck(rel, con->name, con->expr, con->parent_oid,
 								  !con->skip_validation, con->is_local,
 								  con->inhcount, con->is_no_inherit,
 								  is_internal);
@@ -2403,6 +2404,7 @@ AddRelationNewConstraints(Relation rel,
 			 * (We omit the duplicate constraint from the result, which is
 			 * what ATAddCheckConstraint wants.)
 			 */
+			/* XXX need to handle this case? */
 			if (MergeWithExistingConstraint(rel, ccname, expr,
 											allow_merge, is_local,
 											cdef->initially_valid,
@@ -2452,8 +2454,9 @@ AddRelationNewConstraints(Relation rel,
 		 * OK, store it.
 		 */
 		constrOid =
-			StoreRelCheck(rel, ccname, expr, cdef->initially_valid, is_local,
-						  is_local ? 0 : 1, cdef->is_no_inherit, is_internal);
+			StoreRelCheck(rel, ccname, expr, cdef->parent_oid, cdef->initially_valid,
+						  is_local, is_local ? 0 : 1, cdef->is_no_inherit,
+						  is_internal);
 
 		numchecks++;
 
@@ -2461,6 +2464,7 @@ AddRelationNewConstraints(Relation rel,
 		cooked->contype = CONSTR_CHECK;
 		cooked->conoid = constrOid;
 		cooked->name = ccname;
+		cooked->parent_oid = cdef->parent_oid;
 		cooked->attnum = 0;
 		cooked->expr = expr;
 		cooked->skip_validation = cdef->skip_validation;

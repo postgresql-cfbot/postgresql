@@ -129,5 +129,7 @@ CREATE TABLE persons3 OF person_type (
  name   | text    |           | not null | ''::text
 Indexes:
     "persons3_pkey" PRIMARY KEY, btree (id)
+Check constraints:
+    "persons3_name_not_null" CHECK (name IS NOT NULL)
 Typed table of type: person_type
 

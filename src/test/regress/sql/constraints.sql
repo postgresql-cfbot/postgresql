@@ -556,6 +556,39 @@ ALTER TABLE deferred_excl ADD EXCLUDE (f1 WITH =);
 
 DROP TABLE deferred_excl;
 
+-- verify CHECK constraints created for NOT NULL clauses
+CREATE TABLE notnull_tbl1 (a INTEGER NOT NULL);
+\d notnull_tbl1
+-- DROP NOT NULL gets rid of both the attnotnull flag and the constraint itself
+ALTER TABLE notnull_tbl1 ALTER a DROP NOT NULL;
+\d notnull_tbl1
+-- SET NOT NULL puts both back
+ALTER TABLE notnull_tbl1 ALTER a SET NOT NULL;
+\d notnull_tbl1
+-- The simple syntax must not create redundant constraint
+ALTER TABLE notnull_tbl1 ALTER a SET NOT NULL;
+\d notnull_tbl1
+-- but this should create a second one
+ALTER TABLE notnull_tbl1 ADD check (a IS NOT NULL);
+\d notnull_tbl1
+-- Dropping the first one keeps attnotnull intact
+ALTER TABLE notnull_tbl1 DROP CONSTRAINT notnull_tbl1_a_not_null;
+\d notnull_tbl1
+-- but removing the second constraint resets the flag
+ALTER TABLE notnull_tbl1 DROP CONSTRAINT notnull_tbl1_a_not_null1;
+\d notnull_tbl1
+DROP TABLE notnull_tbl1;
+
+CREATE TABLE notnull_tbl2 (a INTEGER PRIMARY KEY);
+ALTER TABLE notnull_tbl2 ALTER a DROP NOT NULL;
+
+CREATE TABLE notnull_tbl3 (a INTEGER NOT NULL, CHECK (a IS NOT NULL));
+ALTER TABLE notnull_tbl3 ALTER A DROP NOT NULL;
+ALTER TABLE notnull_tbl3 ADD b int, ADD CONSTRAINT pk PRIMARY KEY (a, b);
+\d notnull_tbl3
+ALTER TABLE notnull_tbl3 DROP CONSTRAINT pk;
+\d notnull_tbl3
+
 -- Comments
 -- Setup a low-level role to enforce non-superuser checks.
 CREATE ROLE regress_constraint_comments;

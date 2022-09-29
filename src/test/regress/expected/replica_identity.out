@@ -92,6 +92,10 @@ Indexes:
     "test_replica_identity_partial" UNIQUE, btree (keya, keyb) WHERE keyb <> '3'::text
     "test_replica_identity_unique_defer" UNIQUE CONSTRAINT, btree (keya, keyb) DEFERRABLE
     "test_replica_identity_unique_nondefer" UNIQUE CONSTRAINT, btree (keya, keyb)
+Check constraints:
+    "test_replica_identity_id_not_null" CHECK (id IS NOT NULL)
+    "test_replica_identity_keya_not_null" CHECK (keya IS NOT NULL)
+    "test_replica_identity_keyb_not_null" CHECK (keyb IS NOT NULL)
 
 -- succeed, nondeferrable unique constraint over nonnullable cols
 ALTER TABLE test_replica_identity REPLICA IDENTITY USING INDEX test_replica_identity_unique_nondefer;
@@ -122,6 +126,10 @@ Indexes:
     "test_replica_identity_partial" UNIQUE, btree (keya, keyb) WHERE keyb <> '3'::text
     "test_replica_identity_unique_defer" UNIQUE CONSTRAINT, btree (keya, keyb) DEFERRABLE
     "test_replica_identity_unique_nondefer" UNIQUE CONSTRAINT, btree (keya, keyb)
+Check constraints:
+    "test_replica_identity_id_not_null" CHECK (id IS NOT NULL)
+    "test_replica_identity_keya_not_null" CHECK (keya IS NOT NULL)
+    "test_replica_identity_keyb_not_null" CHECK (keyb IS NOT NULL)
 
 SELECT count(*) FROM pg_index WHERE indrelid = 'test_replica_identity'::regclass AND indisreplident;
  count 
@@ -170,6 +178,10 @@ Indexes:
     "test_replica_identity_partial" UNIQUE, btree (keya, keyb) WHERE keyb <> '3'::text
     "test_replica_identity_unique_defer" UNIQUE CONSTRAINT, btree (keya, keyb) DEFERRABLE
     "test_replica_identity_unique_nondefer" UNIQUE CONSTRAINT, btree (keya, keyb)
+Check constraints:
+    "test_replica_identity_id_not_null" CHECK (id IS NOT NULL)
+    "test_replica_identity_keya_not_null" CHECK (keya IS NOT NULL)
+    "test_replica_identity_keyb_not_null" CHECK (keyb IS NOT NULL)
 Replica Identity: FULL
 
 ALTER TABLE test_replica_identity REPLICA IDENTITY NOTHING;
@@ -192,6 +204,8 @@ ALTER TABLE test_replica_identity2 REPLICA IDENTITY USING INDEX test_replica_ide
  id     | integer |           | not null | 
 Indexes:
     "test_replica_identity2_id_key" UNIQUE CONSTRAINT, btree (id) REPLICA IDENTITY
+Check constraints:
+    "test_replica_identity2_id_not_null" CHECK (id IS NOT NULL)
 
 ALTER TABLE test_replica_identity2 ALTER COLUMN id TYPE bigint;
 \d test_replica_identity2
@@ -201,6 +215,8 @@ ALTER TABLE test_replica_identity2 ALTER COLUMN id TYPE bigint;
  id     | bigint |           | not null | 
 Indexes:
     "test_replica_identity2_id_key" UNIQUE CONSTRAINT, btree (id) REPLICA IDENTITY
+Check constraints:
+    "test_replica_identity2_id_not_null" CHECK (id IS NOT NULL)
 
 -- straight index variant
 CREATE TABLE test_replica_identity3 (id int NOT NULL);
@@ -213,6 +229,8 @@ ALTER TABLE test_replica_identity3 REPLICA IDENTITY USING INDEX test_replica_ide
  id     | integer |           | not null | 
 Indexes:
     "test_replica_identity3_id_key" UNIQUE, btree (id) REPLICA IDENTITY
+Check constraints:
+    "test_replica_identity3_id_not_null" CHECK (id IS NOT NULL)
 
 ALTER TABLE test_replica_identity3 ALTER COLUMN id TYPE bigint;
 \d test_replica_identity3
@@ -222,12 +240,25 @@ ALTER TABLE test_replica_identity3 ALTER COLUMN id TYPE bigint;
  id     | bigint |           | not null | 
 Indexes:
     "test_replica_identity3_id_key" UNIQUE, btree (id) REPLICA IDENTITY
+Check constraints:
+    "test_replica_identity3_id_not_null" CHECK (id IS NOT NULL)
 
 -- ALTER TABLE DROP NOT NULL is not allowed for columns part of an index
 -- used as replica identity.
 ALTER TABLE test_replica_identity3 ALTER COLUMN id DROP NOT NULL;
 ERROR:  column "id" is in index used as replica identity
+-- Dropping the primary key is not allowed if that would leave the replica
+-- identity as nullable
+CREATE TABLE test_replica_identity4 (a int not null, b int, c int,
+	PRIMARY KEY (b, c));
+CREATE UNIQUE INDEX test_replica_identity4_a_b_key ON test_replica_identity4 (a, b);
+ALTER TABLE test_replica_identity4 REPLICA IDENTITY USING INDEX test_replica_identity4_a_b_key;
+ALTER TABLE test_replica_identity4 DROP CONSTRAINT test_replica_identity4_pkey;
+ERROR:  column "b" is in index used as replica identity
+ALTER TABLE test_replica_identity4 ALTER b SET NOT NULL;
+ALTER TABLE test_replica_identity4 DROP CONSTRAINT test_replica_identity4_pkey;
 DROP TABLE test_replica_identity;
 DROP TABLE test_replica_identity2;
 DROP TABLE test_replica_identity3;
+DROP TABLE test_replica_identity4;
 DROP TABLE test_replica_identity_othertable;

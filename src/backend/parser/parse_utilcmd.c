@@ -39,6 +39,7 @@
 #include "catalog/pg_operator.h"
 #include "catalog/pg_statistic_ext.h"
 #include "catalog/pg_type.h"
+#include "commands/constraint.h"
 #include "commands/comment.h"
 #include "commands/defrem.h"
 #include "commands/sequence.h"
@@ -83,6 +84,9 @@ typedef struct
 	List	   *ckconstraints;	/* CHECK constraints */
 	List	   *fkconstraints;	/* FOREIGN KEY constraints */
 	List	   *ixconstraints;	/* index-creating constraints */
+	List	   *notnulls_check;	/* list of columns to get an additional CHECK
+								 * (IS NOT NULL) constraint */
+	List	   *notnulls_nock;	/* list of columns implicitly NOT NULL */
 	List	   *likeclauses;	/* LIKE clauses that need post-processing */
 	List	   *extstats;		/* cloned extended statistics */
 	List	   *blist;			/* "before list" of things to do before
@@ -244,6 +248,8 @@ transformCreateStmt(CreateStmt *stmt, const char *queryString)
 	cxt.ckconstraints = NIL;
 	cxt.fkconstraints = NIL;
 	cxt.ixconstraints = NIL;
+	cxt.notnulls_check = NIL;
+	cxt.notnulls_nock = NIL;
 	cxt.likeclauses = NIL;
 	cxt.extstats = NIL;
 	cxt.blist = NIL;
@@ -348,6 +354,8 @@ transformCreateStmt(CreateStmt *stmt, const char *queryString)
 	 */
 	stmt->tableElts = cxt.columns;
 	stmt->constraints = cxt.ckconstraints;
+	stmt->notnull_check = cxt.notnulls_check;
+	stmt->notnull_bare = cxt.notnulls_nock;
 
 	result = lappend(cxt.blist, stmt);
 	result = list_concat(result, cxt.alist);
@@ -530,8 +538,8 @@ static void
 transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 {
 	bool		is_serial;
-	bool		saw_nullable;
 	bool		saw_default;
+	bool		saw_nullable;
 	bool		saw_identity;
 	bool		saw_generated;
 	ListCell   *clist;
@@ -595,6 +603,7 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 		TypeCast   *castnode;
 		FuncCall   *funccallnode;
 		Constraint *constraint;
+		ConstraintNotNull *notnull;
 
 		generateSerialExtraStmts(cxt, column,
 								 column->typeName->typeOid, NIL,
@@ -631,10 +640,11 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 		constraint->cooked_expr = NULL;
 		column->constraints = lappend(column->constraints, constraint);
 
-		constraint = makeNode(Constraint);
-		constraint->contype = CONSTR_NOTNULL;
-		constraint->location = -1;
-		column->constraints = lappend(column->constraints, constraint);
+		/* have a NOT NULL constraint added later */
+		notnull = makeNode(ConstraintNotNull);
+		notnull->conname = NULL;
+		notnull->column = column->colname;
+		cxt->notnulls_check = lappend(cxt->notnulls_check, notnull);
 	}
 
 	/* Process column constraints, if any... */
@@ -648,6 +658,7 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 	foreach(clist, column->constraints)
 	{
 		Constraint *constraint = lfirst_node(Constraint, clist);
+		char	   *colname;
 
 		switch (constraint->contype)
 		{
@@ -664,6 +675,11 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 				break;
 
 			case CONSTR_NOTNULL:
+				/*
+				 * For NOT NULL declarations, we need to mark the column as
+				 * not nullable, and set things up to have a CHECK constraint
+				 * created.
+				 */
 				if (saw_nullable && !column->is_not_null)
 					ereport(ERROR,
 							(errcode(ERRCODE_SYNTAX_ERROR),
@@ -671,8 +687,24 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 									column->colname, cxt->relation->relname),
 							 parser_errposition(cxt->pstate,
 												constraint->location)));
-				column->is_not_null = true;
-				saw_nullable = true;
+
+				/*
+				 * If this is the first time we see this column being marked
+				 * not null, keep track to later add a CHECK constraint.
+				 */
+				if (!column->is_not_null)
+				{
+					ConstraintNotNull    *notnull;
+
+					column->is_not_null = true;
+
+					notnull = makeNode(ConstraintNotNull);
+					notnull->conname = constraint->conname;
+					notnull->column = column->colname;
+
+					cxt->notnulls_check = lappend(cxt->notnulls_check, notnull);
+				}
+
 				break;
 
 			case CONSTR_DEFAULT:
@@ -722,7 +754,6 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 					column->identity = constraint->generated_when;
 					saw_identity = true;
 
-					/* An identity column is implicitly NOT NULL */
 					if (saw_nullable && !column->is_not_null)
 						ereport(ERROR,
 								(errcode(ERRCODE_SYNTAX_ERROR),
@@ -730,7 +761,18 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 										column->colname, cxt->relation->relname),
 								 parser_errposition(cxt->pstate,
 													constraint->location)));
-					column->is_not_null = true;
+					if (!column->is_not_null)
+					{
+						ConstraintNotNull	*notnull;
+
+						column->is_not_null = true;
+
+						notnull = makeNode(ConstraintNotNull);
+						notnull->conname = NULL;
+						notnull->column = column->colname;
+						cxt->notnulls_check = lappend(cxt->notnulls_check,
+													  notnull);
+					}
 					saw_nullable = true;
 					break;
 				}
@@ -760,6 +802,40 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 
 			case CONSTR_CHECK:
 				cxt->ckconstraints = lappend(cxt->ckconstraints, constraint);
+
+				/*
+				 * If there is a CHECK (foo IS NOT NULL) constraint
+				 * declaration, we check the column name used in the
+				 * constraint.  If it's the same name as the column being
+				 * defined, check there's no IS NULL already, and set
+				 * saw_isnotnull in the column definition to conflict with any
+				 * future one.  In any case, save the column name so that it
+				 * gets an attnotnull marker.  We only need to do this for
+				 * constraint that aren't NOT VALID, however.
+				 */
+				if (constraint->initially_valid)
+				{
+					colname = tryExtractNotNullFromNode((Node *) constraint, NULL);
+					if (colname != NULL)
+					{
+						cxt->notnulls_nock = lappend(cxt->notnulls_nock,
+													 makeString(pstrdup(colname)));
+
+						if (strcmp(colname, column->colname) == 0)
+						{
+							if (saw_nullable && !column->is_not_null)
+								ereport(errcode(ERRCODE_SYNTAX_ERROR),
+										errmsg("conflicting NULL/NOT NULL declarations for column \"%s\" of table \"%s\"",
+											   column->colname, cxt->relation->relname),
+										parser_errposition(cxt->pstate,
+														   constraint->location));
+
+							column->is_not_null = true;
+							saw_nullable = true;
+						}
+					}
+				}
+
 				break;
 
 			case CONSTR_PRIMARY:
@@ -875,6 +951,8 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 static void
 transformTableConstraint(CreateStmtContext *cxt, Constraint *constraint)
 {
+	char   *colname;
+
 	switch (constraint->contype)
 	{
 		case CONSTR_PRIMARY:
@@ -915,6 +993,13 @@ transformTableConstraint(CreateStmtContext *cxt, Constraint *constraint)
 
 		case CONSTR_CHECK:
 			cxt->ckconstraints = lappend(cxt->ckconstraints, constraint);
+			if (constraint->initially_valid)
+			{
+				colname = tryExtractNotNullFromNode((Node *) constraint, cxt->rel);
+				if (colname != NULL)
+					cxt->notnulls_nock = lappend(cxt->notnulls_nock,
+												 makeString(pstrdup(colname)));
+			}
 			break;
 
 		case CONSTR_FOREIGN:
@@ -964,6 +1049,7 @@ transformTableLikeClause(CreateStmtContext *cxt, TableLikeClause *table_like_cla
 	AclResult	aclresult;
 	char	   *comment;
 	ParseCallbackState pcbstate;
+	bool		process_notnull_constraints;
 
 	setup_parser_errposition_callback(&pcbstate, cxt->pstate,
 									  table_like_clause->relation->location);
@@ -1045,6 +1131,8 @@ transformTableLikeClause(CreateStmtContext *cxt, TableLikeClause *table_like_cla
 		def->inhcount = 0;
 		def->is_local = true;
 		def->is_not_null = attribute->attnotnull;
+		if (attribute->attnotnull)
+			process_notnull_constraints = true;
 		def->is_from_type = false;
 		def->storage = 0;
 		def->raw_default = NULL;
@@ -1126,14 +1214,19 @@ transformTableLikeClause(CreateStmtContext *cxt, TableLikeClause *table_like_cla
 	 * we don't yet know what column numbers the copied columns will have in
 	 * the finished table.  If any of those options are specified, add the
 	 * LIKE clause to cxt->likeclauses so that expandTableLikeClause will be
-	 * called after we do know that.  Also, remember the relation OID so that
+	 * called after we do know that; in addition, do that if there are any NOT
+	 * NULL constraints, because those must be propagated even if not
+	 * explicitly requested.
+	 *
+	 * In order for this to work, we remember the relation OID so that
 	 * expandTableLikeClause is certain to open the same table.
 	 */
-	if (table_like_clause->options &
+	if ((table_like_clause->options &
 		(CREATE_TABLE_LIKE_DEFAULTS |
 		 CREATE_TABLE_LIKE_GENERATED |
 		 CREATE_TABLE_LIKE_CONSTRAINTS |
-		 CREATE_TABLE_LIKE_INDEXES))
+		 CREATE_TABLE_LIKE_INDEXES)) ||
+		process_notnull_constraints)
 	{
 		table_like_clause->relationOid = RelationGetRelid(relation);
 		cxt->likeclauses = lappend(cxt->likeclauses, table_like_clause);
@@ -1312,8 +1405,7 @@ expandTableLikeClause(RangeVar *heapRel, TableLikeClause *table_like_clause)
 	 * Copy CHECK constraints if requested, being careful to adjust attribute
 	 * numbers so they match the child.
 	 */
-	if ((table_like_clause->options & CREATE_TABLE_LIKE_CONSTRAINTS) &&
-		constr != NULL)
+	if (constr != NULL)
 	{
 		int			ccnum;
 
@@ -1322,15 +1414,18 @@ expandTableLikeClause(RangeVar *heapRel, TableLikeClause *table_like_clause)
 			char	   *ccname = constr->check[ccnum].ccname;
 			char	   *ccbin = constr->check[ccnum].ccbin;
 			bool		ccnoinherit = constr->check[ccnum].ccnoinherit;
-			Node	   *ccbin_node;
+			Node	   *ccnode_parent;
+			Node	   *ccnode_newrel;
 			bool		found_whole_row;
+			char	   *colname;
 			Constraint *n;
 			AlterTableCmd *atsubcmd;
 
-			ccbin_node = map_variable_attnos(stringToNode(ccbin),
-											 1, 0,
-											 attmap,
-											 InvalidOid, &found_whole_row);
+			ccnode_parent = stringToNode(ccbin);
+			ccnode_newrel = map_variable_attnos(ccnode_parent,
+												1, 0,
+												attmap,
+												InvalidOid, &found_whole_row);
 
 			/*
 			 * We reject whole-row variables because the whole point of LIKE
@@ -1346,13 +1441,23 @@ expandTableLikeClause(RangeVar *heapRel, TableLikeClause *table_like_clause)
 								   ccname,
 								   RelationGetRelationName(relation))));
 
+			/*
+			 * NOT NULL constraints must be copied regardless of whether
+			 * INCLUDING CONSTRAINTS was given, per the SQL standard; if that
+			 * option was not given, skip other constraints.
+			 */
+			colname = tryExtractNotNullFromNode(ccnode_parent, relation);
+			if (!(table_like_clause->options & CREATE_TABLE_LIKE_CONSTRAINTS) &&
+				!colname)
+				continue;
+
 			n = makeNode(Constraint);
 			n->contype = CONSTR_CHECK;
 			n->conname = pstrdup(ccname);
 			n->location = -1;
 			n->is_no_inherit = ccnoinherit;
 			n->raw_expr = NULL;
-			n->cooked_expr = nodeToString(ccbin_node);
+			n->cooked_expr = nodeToString(ccnode_newrel);
 
 			/* We can skip validation, since the new table should be empty. */
 			n->skip_validation = true;
@@ -2069,10 +2174,12 @@ transformIndexConstraints(CreateStmtContext *cxt)
 	ListCell   *lc;
 
 	/*
-	 * Run through the constraints that need to generate an index. For PRIMARY
-	 * KEY, mark each column as NOT NULL and create an index. For UNIQUE or
-	 * EXCLUDE, create an index as for PRIMARY KEY, but do not insist on NOT
-	 * NULL.
+	 * Run through the constraints that need to generate an index, and do so.
+	 *
+	 * For PRIMARY KEY, in addition we set each column's attnotnull flag true.
+	 * We do not create a separate CHECK (IS NOT NULL) constraint, as that
+	 * would be redundant: the PRIMARY KEY constraint ktself fulfills that
+	 * role.  Other constraint types don't need any NOT NULL markings.
 	 */
 	foreach(lc, cxt->ixconstraints)
 	{
@@ -2146,9 +2253,7 @@ transformIndexConstraints(CreateStmtContext *cxt)
 	}
 
 	/*
-	 * Now append all the IndexStmts to cxt->alist.  If we generated an ALTER
-	 * TABLE SET NOT NULL statement to support a primary key, it's already in
-	 * cxt->alist.
+	 * Now append all the IndexStmts to cxt->alist.
 	 */
 	cxt->alist = list_concat(cxt->alist, finalindexlist);
 }
@@ -2156,18 +2261,15 @@ transformIndexConstraints(CreateStmtContext *cxt)
 /*
  * transformIndexConstraint
  *		Transform one UNIQUE, PRIMARY KEY, or EXCLUDE constraint for
- *		transformIndexConstraints.
+ *		transformIndexConstraints. We return an IndexStmt.
  *
- * We return an IndexStmt.  For a PRIMARY KEY constraint, we additionally
- * produce NOT NULL constraints, either by marking ColumnDefs in cxt->columns
- * as is_not_null or by adding an ALTER TABLE SET NOT NULL command to
- * cxt->alist.
+ * For a PRIMARY KEY constraint, we additionally force the columns to be
+ * marked as NOT NULL, without producing a CHECK (IS NOT NULL) constraint.
  */
 static IndexStmt *
 transformIndexConstraint(Constraint *constraint, CreateStmtContext *cxt)
 {
 	IndexStmt  *index;
-	List	   *notnullcmds = NIL;
 	ListCell   *lc;
 
 	index = makeNode(IndexStmt);
@@ -2449,14 +2551,14 @@ transformIndexConstraint(Constraint *constraint, CreateStmtContext *cxt)
 				 * column is defined in the new table.  For PRIMARY KEY, we
 				 * can apply the NOT NULL constraint cheaply here ... unless
 				 * the column is marked is_from_type, in which case marking it
-				 * here would be ineffective (see MergeAttributes).
+				 * here would be ineffective (see MergeAttributes).  Note that
+				 * this isn't effective in ALTER TABLE either, unless the
+				 * column is being added in the same command.
 				 */
 				if (constraint->contype == CONSTR_PRIMARY &&
 					!column->is_from_type)
-				{
-					column->is_not_null = true;
-					forced_not_null = true;
-				}
+					cxt->notnulls_nock = lappend(cxt->notnulls_nock,
+												 makeString(pstrdup(key)));
 			}
 			else if (SystemAttributeByName(key) != NULL)
 			{
@@ -2560,17 +2662,13 @@ transformIndexConstraint(Constraint *constraint, CreateStmtContext *cxt)
 			index->indexParams = lappend(index->indexParams, iparam);
 
 			/*
-			 * For a primary-key column, also create an item for ALTER TABLE
-			 * SET NOT NULL if we couldn't ensure it via is_not_null above.
+			 * For a primary-key column, also have it be marked attnotnull
+			 * later without creating a CHECK constraint for it (the
+			 * PRIMARY KEY fulfills that role already).
 			 */
 			if (constraint->contype == CONSTR_PRIMARY && !forced_not_null)
-			{
-				AlterTableCmd *notnullcmd = makeNode(AlterTableCmd);
-
-				notnullcmd->subtype = AT_SetNotNull;
-				notnullcmd->name = pstrdup(key);
-				notnullcmds = lappend(notnullcmds, notnullcmd);
-			}
+				cxt->notnulls_nock = lappend(cxt->notnulls_nock,
+											 makeString(pstrdup(key)));
 		}
 	}
 
@@ -2670,22 +2768,6 @@ transformIndexConstraint(Constraint *constraint, CreateStmtContext *cxt)
 		iparam->opclass = NIL;
 		iparam->opclassopts = NIL;
 		index->indexIncludingParams = lappend(index->indexIncludingParams, iparam);
-	}
-
-	/*
-	 * If we found anything that requires run-time SET NOT NULL, build a full
-	 * ALTER TABLE command for that and add it to cxt->alist.
-	 */
-	if (notnullcmds)
-	{
-		AlterTableStmt *alterstmt = makeNode(AlterTableStmt);
-
-		alterstmt->relation = copyObject(cxt->relation);
-		alterstmt->cmds = notnullcmds;
-		alterstmt->objtype = OBJECT_TABLE;
-		alterstmt->missing_ok = false;
-
-		cxt->alist = lappend(cxt->alist, alterstmt);
 	}
 
 	return index;
@@ -3345,6 +3427,8 @@ transformAlterTableStmt(Oid relid, AlterTableStmt *stmt,
 	cxt.ckconstraints = NIL;
 	cxt.fkconstraints = NIL;
 	cxt.ixconstraints = NIL;
+	cxt.notnulls_check = NIL;
+	cxt.notnulls_nock = NIL;
 	cxt.likeclauses = NIL;
 	cxt.extstats = NIL;
 	cxt.blist = NIL;
@@ -3565,6 +3649,27 @@ transformAlterTableStmt(Oid relid, AlterTableStmt *stmt,
 	}
 
 	/*
+	 * Add CHECK constraints to match NOT NULL declarations from various
+	 * sources.
+	 *
+	 * Cannot do it at this point: may not know is_row yet.
+	 */
+	foreach(l, cxt.notnulls_check)
+	{
+		ConstraintNotNull *notnull = lfirst(l);
+		Constraint *newconstr;
+		bool		is_row = false; /* FIXME */
+
+		newconstr = makeCheckNotNullConstraint(RelationGetNamespace(rel),
+											   notnull->conname,
+											   RelationGetRelationName(rel),
+											   notnull->column,
+											   is_row,
+											   InvalidOid);
+		cxt.ckconstraints = lappend(cxt.ckconstraints, newconstr);
+	}
+
+	/*
 	 * Transfer anything we already have in cxt.alist into save_alist, to keep
 	 * it separate from the output of transformIndexConstraints.
 	 */
@@ -3575,6 +3680,15 @@ transformAlterTableStmt(Oid relid, AlterTableStmt *stmt,
 	transformIndexConstraints(&cxt);
 	transformFKConstraints(&cxt, skipValidation, true);
 	transformCheckConstraints(&cxt, false);
+
+	/* have attnotnull set for columns that need it */
+	foreach(l, cxt.notnulls_nock)
+	{
+		newcmd = makeNode(AlterTableCmd);
+		newcmd->subtype = AT_SetAttNotNull;
+		newcmd->name = strVal(lfirst(l));
+		newcmds = lappend(newcmds, newcmd);
+	}
 
 	/*
 	 * Push any index-creation commands into the ALTER, so that they can be

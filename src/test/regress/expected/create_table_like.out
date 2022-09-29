@@ -73,6 +73,8 @@ CREATE TABLE test_like_id_1 (a bigint GENERATED ALWAYS AS IDENTITY, b text);
 --------+--------+-----------+----------+------------------------------
  a      | bigint |           | not null | generated always as identity
  b      | text   |           |          | 
+Check constraints:
+    "test_like_id_1_a_not_null" CHECK (a IS NOT NULL)
 
 INSERT INTO test_like_id_1 (b) VALUES ('b1');
 SELECT * FROM test_like_id_1;
@@ -88,6 +90,8 @@ CREATE TABLE test_like_id_2 (LIKE test_like_id_1);
 --------+--------+-----------+----------+---------
  a      | bigint |           | not null | 
  b      | text   |           |          | 
+Check constraints:
+    "test_like_id_1_a_not_null" CHECK (a IS NOT NULL)
 
 INSERT INTO test_like_id_2 (b) VALUES ('b2');
 ERROR:  null value in column "a" of relation "test_like_id_2" violates not-null constraint
@@ -104,6 +108,8 @@ CREATE TABLE test_like_id_3 (LIKE test_like_id_1 INCLUDING IDENTITY);
 --------+--------+-----------+----------+------------------------------
  a      | bigint |           | not null | generated always as identity
  b      | text   |           |          | 
+Check constraints:
+    "test_like_id_1_a_not_null" CHECK (a IS NOT NULL)
 
 INSERT INTO test_like_id_3 (b) VALUES ('b3');
 SELECT * FROM test_like_id_3;  -- identity was copied and applied
@@ -355,6 +361,7 @@ NOTICE:  merging constraint "ctlt1_a_check" with inherited definition
  b      | text |           |          |         | extended |              | B
 Check constraints:
     "ctlt1_a_check" CHECK (length(a) > 2)
+    "ctlt1_inh_a_not_null" CHECK (a IS NOT NULL)
 Inherits: ctlt1
 
 SELECT description FROM pg_description, pg_constraint c WHERE classoid = 'pg_constraint'::regclass AND objoid = c.oid AND c.conrelid = 'ctlt1_inh'::regclass;
@@ -373,6 +380,7 @@ NOTICE:  merging multiple inherited definitions of column "a"
  b      | text |           |          |         | extended |              | 
  c      | text |           |          |         | external |              | 
 Check constraints:
+    "ctlt13_inh_a_not_null" CHECK (a IS NOT NULL)
     "ctlt1_a_check" CHECK (length(a) > 2)
     "ctlt3_a_check" CHECK (length(a) < 5)
     "ctlt3_c_check" CHECK (length(c) < 7)
@@ -391,6 +399,7 @@ NOTICE:  merging column "a" with inherited definition
 Indexes:
     "ctlt13_like_expr_idx" btree ((a || c))
 Check constraints:
+    "ctlt13_like_a_not_null" CHECK (a IS NOT NULL)
     "ctlt1_a_check" CHECK (length(a) > 2)
     "ctlt3_a_check" CHECK (length(a) < 5)
     "ctlt3_c_check" CHECK (length(c) < 7)

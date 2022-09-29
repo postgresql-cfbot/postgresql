@@ -123,6 +123,8 @@ CREATE POLICY p1r ON document AS RESTRICTIVE TO regress_rls_dave
  dtitle  | text    |           |          | 
 Indexes:
     "document_pkey" PRIMARY KEY, btree (did)
+Check constraints:
+    "document_dlevel_not_null" CHECK (dlevel IS NOT NULL)
 Foreign-key constraints:
     "document_cid_fkey" FOREIGN KEY (cid) REFERENCES category(cid)
 Policies:
@@ -947,6 +949,8 @@ CREATE POLICY pp1r ON part_document AS RESTRICTIVE TO regress_rls_dave
  dauthor | name    |           |          |         | plain    |              | 
  dtitle  | text    |           |          |         | extended |              | 
 Partition key: RANGE (cid)
+Check constraints:
+    "part_document_dlevel_not_null" CHECK (dlevel IS NOT NULL)
 Policies:
     POLICY "pp1"
       USING ((dlevel <= ( SELECT uaccount.seclv

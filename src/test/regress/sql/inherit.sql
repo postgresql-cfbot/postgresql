@@ -279,8 +279,8 @@ select pc.relname, pgc.conname, pgc.contype, pgc.conislocal, pgc.coninhcount, pg
 insert into ac (aa) values (NULL);
 insert into bc (aa) values (NULL);
 
-alter table bc drop constraint ac_aa_check;  -- fail, disallowed
-alter table ac drop constraint ac_aa_check;
+alter table bc drop constraint ac_aa_not_null;  -- fail, disallowed
+alter table ac drop constraint ac_aa_not_null;
 select pc.relname, pgc.conname, pgc.contype, pgc.conislocal, pgc.coninhcount, pg_get_expr(pgc.conbin, pc.oid) as consrc from pg_class as pc inner join pg_constraint as pgc on (pgc.conrelid = pc.oid) where pc.relname in ('ac', 'bc') order by 1,2;
 
 alter table ac add constraint ac_check check (aa is not null);
@@ -640,6 +640,169 @@ insert into cnullchild values(null);
 select * from cnullparent;
 select * from cnullparent where f1 = 2;
 drop table cnullparent cascade;
+
+--
+-- Test inheritance of NOT NULL constraints
+--
+create table pp1 (f1 int);
+create table cc1 (f2 text, f3 int) inherits (pp1);
+\d cc1
+create table cc2(f4 float) inherits(pp1,cc1);
+\d cc2
+
+-- named NOT NULL constraint
+alter table cc1 add column a2 int constraint nn not null;
+\d cc1
+\d cc2
+alter table pp1 alter column f1 set not null;
+\d pp1
+\d cc1
+\d cc2
+
+-- have a look at pg_constraint
+select conrelid::regclass, conname, contype, coninhcount, conislocal
+ from pg_constraint where contype = 'c' and
+ conrelid in ('pp1'::regclass, 'cc1'::regclass, 'cc2'::regclass)
+ order by 2, 1;
+
+-- remove constraint from cc2; one is gone, the other stays
+alter table cc2 alter column a2 drop not null;
+
+-- remove constraint cc1, should succeed
+alter table cc1 alter column a2 drop not null;
+
+-- have a look at pg_constraint
+select conrelid::regclass, conname, contype, coninhcount, conislocal
+ from pg_constraint where contype = 'c' and
+ conrelid in ('pp1'::regclass, 'cc1'::regclass, 'cc2'::regclass)
+ order by 2, 1;
+
+-- same for cc2
+alter table cc2 alter column f1 drop not null;
+
+-- remove from cc1, should fail again
+alter table cc1 alter column f1 drop not null;
+
+-- remove from pp1, should succeed
+alter table pp1 alter column f1 drop not null;
+
+-- have a look at pg_constraint
+select conrelid::regclass, conname, contype, coninhcount, conislocal
+ from pg_constraint where contype = 'c' and
+ conrelid in ('pp1'::regclass, 'cc1'::regclass, 'cc2'::regclass)
+ order by 2, 1;
+
+drop table pp1 cascade;
+\d cc1
+\d cc2
+
+--
+-- test inherit/deinherit
+--
+create table parent(f1 int);
+create table child1(f1 int not null);
+create table child2(f1 int);
+
+-- child1 should have not null constraint
+alter table child1 inherit parent;
+
+-- should fail, missing NOT NULL constraint
+alter table child2 inherit child1;
+
+alter table child2 alter column f1 set not null;
+alter table child2 inherit child1;
+
+-- add NOT NULL constraint recursively
+alter table parent alter column f1 set not null;
+
+\d parent
+\d child1
+\d child2
+
+select conrelid::regclass, conname, contype, coninhcount, conislocal
+ from pg_constraint where contype = 'c' and
+ conrelid in ('parent'::regclass, 'child1'::regclass, 'child2'::regclass)
+ order by 2, 1;
+
+--
+-- test deinherit procedure
+--
+
+-- deinherit child1
+alter table child1 no inherit parent;
+\d parent
+\d child1
+\d child2
+select conrelid::regclass, conname, contype, coninhcount, conislocal
+ from pg_constraint where contype = 'c' and
+ conrelid in ('parent'::regclass, 'child1'::regclass, 'child2'::regclass)
+ order by 2, 1;
+
+-- test inhcount of child2, should fail
+alter table child2 alter f1 drop not null;
+
+-- should succeed
+
+drop table parent;
+drop table child1 cascade;
+
+--
+-- test multi inheritance tree
+--
+create table parent(f1 int not null);
+create table c1() inherits(parent);
+create table c2() inherits(parent);
+create table d1() inherits(c1, c2);
+
+-- show constraint info
+select conrelid::regclass, conname, contype, coninhcount, conislocal
+ from pg_constraint where contype = 'c' and
+ conrelid in ('parent'::regclass, 'c1'::regclass, 'c2'::regclass, 'd1'::regclass)
+ order by 2, 1;
+
+drop table parent cascade;
+
+-- test child table with inherited columns and
+-- with explicitely specified not null constraints
+create table parent_1(f1 int);
+create table parent_2(f2 text);
+create table child(f1 int not null, f2 text not null) inherits(parent_1, parent_2);
+
+-- show constraint info
+select conrelid::regclass, conname, contype, coninhcount, conislocal
+ from pg_constraint where contype = 'c' and
+ conrelid in ('parent_1'::regclass, 'parent_2'::regclass, 'child'::regclass)
+ order by 2, 1;
+
+-- also drops child table
+drop table parent_1 cascade;
+drop table parent_2;
+
+-- test multi layer inheritance tree
+create table p1(f1 int not null);
+create table p2(f1 int not null);
+create table p3(f2 int);
+create table p4(f1 int not null, f3 text not null);
+
+create table c() inherits(p1, p2, p3, p4);
+
+-- constraint on f1 should have three parents
+select conrelid::regclass, conname, contype, coninhcount, conislocal
+ from pg_constraint where contype = 'c' and
+ conrelid in ('p1'::regclass, 'p2'::regclass, 'p3'::regclass, 'p4'::regclass, 'c'::regclass)
+ order by 2, 1;
+
+create table d(a int not null, f1 int) inherits(p3, c);
+
+select conrelid::regclass, conname, contype, coninhcount, conislocal
+ from pg_constraint where contype = 'c' and
+ conrelid in ('p1'::regclass, 'p2'::regclass, 'p3'::regclass, 'p4'::regclass, 'c'::regclass, 'd'::regclass)
+ order by 2, 1;
+
+drop table p1 cascade;
+drop table p2;
+drop table p3;
+drop table p4;
 
 --
 -- Check use of temporary tables with inheritance trees

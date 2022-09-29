@@ -21,6 +21,8 @@ CREATE TABLE collate_test1 (
 --------+---------+-----------+----------+---------
  a      | integer |           |          | 
  b      | text    | C         | not null | 
+Check constraints:
+    "collate_test1_b_not_null" CHECK (b IS NOT NULL)
 
 CREATE TABLE collate_test_fail (
     a int COLLATE "C",
@@ -38,6 +40,8 @@ CREATE TABLE collate_test_like (
 --------+---------+-----------+----------+---------
  a      | integer |           |          | 
  b      | text    | C         | not null | 
+Check constraints:
+    "collate_test1_b_not_null" CHECK (b IS NOT NULL)
 
 CREATE TABLE collate_test2 (
     a int,

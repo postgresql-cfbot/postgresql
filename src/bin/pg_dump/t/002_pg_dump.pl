@@ -2642,11 +2642,12 @@ my %tests = (
 					   ) WITH (autovacuum_enabled = false, fillfactor=80);',
 		regexp => qr/^
 			\QCREATE TABLE dump_test.test_table (\E\n
-			\s+\Qcol1 integer NOT NULL,\E\n
+			\s+\Qcol1 integer,\E\n
 			\s+\Qcol2 text,\E\n
 			\s+\Qcol3 text,\E\n
 			\s+\Qcol4 text,\E\n
-			\s+\QCONSTRAINT test_table_col1_check CHECK ((col1 <= 1000))\E\n
+			\s+\QCONSTRAINT test_table_col1_check CHECK ((col1 <= 1000)),\E\n
+			\s+\QCONSTRAINT test_table_col1_not_null CHECK ((col1 IS NOT NULL))\E\n
 			\Q)\E\n
 			\QWITH (autovacuum_enabled='false', fillfactor='80');\E\n/xm,
 		like => {
@@ -2668,7 +2669,7 @@ my %tests = (
 					   );',
 		regexp => qr/^
 			\QCREATE TABLE dump_test.fk_reference_test_table (\E
-			\n\s+\Qcol1 integer NOT NULL\E
+			\n\s+\Qcol1 integer\E
 			\n\);
 			/xm,
 		like =>
@@ -2726,10 +2727,12 @@ my %tests = (
 			\Q-- Name: measurement;\E.*\n
 			\Q--\E\n\n
 			\QCREATE TABLE dump_test.measurement (\E\n
-			\s+\Qcity_id integer NOT NULL,\E\n
-			\s+\Qlogdate date NOT NULL,\E\n
+			\s+\Qcity_id integer,\E\n
+			\s+\Qlogdate date,\E\n
 			\s+\Qpeaktemp integer,\E\n
 			\s+\Qunitsales integer,\E\n
+			\s+\QCONSTRAINT measurement_city_id_not_null CHECK ((city_id IS NOT NULL)),\E\n
+			\s+\QCONSTRAINT measurement_logdate_not_null CHECK ((logdate IS NOT NULL)),\E\n
 			\s+\QCONSTRAINT measurement_peaktemp_check CHECK ((peaktemp >= '-460'::integer))\E\n
 			\)\n
 			\QPARTITION BY RANGE (logdate);\E\n
@@ -2752,10 +2755,12 @@ my %tests = (
 						FOR VALUES FROM (\'2006-02-01\') TO (\'2006-03-01\');',
 		regexp => qr/^
 			\QCREATE TABLE dump_test_second_schema.measurement_y2006m2 (\E\n
-			\s+\Qcity_id integer DEFAULT nextval('dump_test.measurement_city_id_seq'::regclass) NOT NULL,\E\n
-			\s+\Qlogdate date NOT NULL,\E\n
+			\s+\Qcity_id integer DEFAULT nextval('dump_test.measurement_city_id_seq'::regclass),\E\n
+			\s+\Qlogdate date,\E\n
 			\s+\Qpeaktemp integer,\E\n
 			\s+\Qunitsales integer DEFAULT 0,\E\n
+			\s+\QCONSTRAINT measurement_city_id_not_null CHECK ((city_id IS NOT NULL)),\E\n
+			\s+\QCONSTRAINT measurement_logdate_not_null CHECK ((logdate IS NOT NULL)),\E\n
 			\s+\QCONSTRAINT measurement_peaktemp_check CHECK ((peaktemp >= '-460'::integer)),\E\n
 			\s+\QCONSTRAINT measurement_y2006m2_unitsales_check CHECK ((unitsales >= 0))\E\n
 			\);\n
@@ -2954,8 +2959,9 @@ my %tests = (
 					   );',
 		regexp => qr/^
 			\QCREATE TABLE dump_test.test_table_identity (\E\n
-			\s+\Qcol1 integer NOT NULL,\E\n
-			\s+\Qcol2 text\E\n
+			\s+\Qcol1 integer,\E\n
+			\s+\Qcol2 text,\E\n
+			\s+\QCONSTRAINT test_table_identity_col1_not_null CHECK ((col1 IS NOT NULL))\E\n
 			\);
 			.*
 			\QALTER TABLE dump_test.test_table_identity ALTER COLUMN col1 ADD GENERATED ALWAYS AS IDENTITY (\E\n
@@ -2980,7 +2986,7 @@ my %tests = (
 					   );',
 		regexp => qr/^
 			\QCREATE TABLE dump_test.test_table_generated (\E\n
-			\s+\Qcol1 integer NOT NULL,\E\n
+			\s+\Qcol1 integer,\E\n
 			\s+\Qcol2 integer GENERATED ALWAYS AS ((col1 * 2)) STORED\E\n
 			\);
 			/xms,
@@ -2995,6 +3001,7 @@ my %tests = (
 						 INHERITS (dump_test.test_table_generated);',
 		regexp => qr/^
 			\QCREATE TABLE dump_test.test_table_generated_child1 (\E\n
+			\s+\QCONSTRAINT test_table_generated_child1_col1_not_null CHECK ((col1 IS NOT NULL))\E\n
 			\)\n
 			\QINHERITS (dump_test.test_table_generated);\E\n
 			/xms,
@@ -3023,7 +3030,8 @@ my %tests = (
 		regexp => qr/^
 			\QCREATE TABLE dump_test.test_table_generated_child2 (\E\n
 			\s+\Qcol1 integer,\E\n
-			\s+\Qcol2 integer\E\n
+			\s+\Qcol2 integer,\E\n
+			\s+\QCONSTRAINT test_table_generated_child2_col1_not_null CHECK ((col1 IS NOT NULL))\E\n
 			\)\n
 			\QINHERITS (dump_test.test_table_generated);\E\n
 			/xms,
@@ -3065,8 +3073,9 @@ my %tests = (
 						 );',
 		regexp => qr/^
 		\QCREATE TABLE dump_test.test_inheritance_parent (\E\n
-		\s+\Qcol1 integer NOT NULL,\E\n
+		\s+\Qcol1 integer,\E\n
 		\s+\Qcol2 integer,\E\n
+		\s+\QCONSTRAINT test_inheritance_parent_col1_not_null CHECK ((col1 IS NOT NULL)),\E\n
 		\s+\QCONSTRAINT test_inheritance_parent_col2_check CHECK ((col2 >= 42))\E\n
 		\Q);\E\n
 		/xm,
@@ -3084,7 +3093,8 @@ my %tests = (
 		regexp => qr/^
 		\QCREATE TABLE dump_test.test_inheritance_child (\E\n
 		\s+\Qcol1 integer,\E\n
-		\s+\QCONSTRAINT test_inheritance_child CHECK ((col2 >= 142857))\E\n
+		\s+\QCONSTRAINT test_inheritance_child CHECK ((col2 >= 142857)),\E\n
+		\s+\QCONSTRAINT test_inheritance_child_col1_not_null CHECK ((col1 IS NOT NULL))\E\n
 		\)\n
 		\QINHERITS (dump_test.test_inheritance_parent);\E\n
 		/xm,

@@ -98,7 +98,18 @@ ALTER TABLE test_replica_identity3 ALTER COLUMN id TYPE bigint;
 -- used as replica identity.
 ALTER TABLE test_replica_identity3 ALTER COLUMN id DROP NOT NULL;
 
+-- Dropping the primary key is not allowed if that would leave the replica
+-- identity as nullable
+CREATE TABLE test_replica_identity4 (a int not null, b int, c int,
+	PRIMARY KEY (b, c));
+CREATE UNIQUE INDEX test_replica_identity4_a_b_key ON test_replica_identity4 (a, b);
+ALTER TABLE test_replica_identity4 REPLICA IDENTITY USING INDEX test_replica_identity4_a_b_key;
+ALTER TABLE test_replica_identity4 DROP CONSTRAINT test_replica_identity4_pkey;
+ALTER TABLE test_replica_identity4 ALTER b SET NOT NULL;
+ALTER TABLE test_replica_identity4 DROP CONSTRAINT test_replica_identity4_pkey;
+
 DROP TABLE test_replica_identity;
 DROP TABLE test_replica_identity2;
 DROP TABLE test_replica_identity3;
+DROP TABLE test_replica_identity4;
 DROP TABLE test_replica_identity_othertable;

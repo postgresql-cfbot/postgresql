@@ -1119,9 +1119,13 @@ ERROR:  relation "non_existent" does not exist
 create table atacc1 (test int not null);
 alter table atacc1 add constraint "atacc1_pkey" primary key (test);
 alter table atacc1 alter column test drop not null;
-ERROR:  column "test" is in a primary key
 alter table atacc1 drop constraint "atacc1_pkey";
-alter table atacc1 alter column test drop not null;
+\d atacc1
+               Table "public.atacc1"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ test   | integer |           |          | 
+
 insert into atacc1 values (null);
 alter table atacc1 alter test set not null;
 ERROR:  column "test" of relation "atacc1" contains null values
@@ -3235,7 +3239,7 @@ CREATE TABLE test_drop_constr_child () INHERITS (test_drop_constr_parent);
 ALTER TABLE ONLY test_drop_constr_parent DROP CONSTRAINT "test_drop_constr_parent_c_check";
 -- should fail
 INSERT INTO test_drop_constr_child (c) VALUES (NULL);
-ERROR:  new row for relation "test_drop_constr_child" violates check constraint "test_drop_constr_parent_c_check"
+ERROR:  null value in column "c" of relation "test_drop_constr_child" violates not-null constraint
 DETAIL:  Failing row contains (null).
 DROP TABLE test_drop_constr_parent CASCADE;
 NOTICE:  drop cascades to table test_drop_constr_child
@@ -3677,6 +3681,7 @@ Indexes:
     "test_add_column_pkey" PRIMARY KEY, btree (c3)
 Check constraints:
     "test_add_column_c5_check" CHECK (c5 > 8)
+    "test_add_column_c5_not_null" CHECK (c5 IS NOT NULL)
 Foreign-key constraints:
     "test_add_column_c4_fkey" FOREIGN KEY (c4) REFERENCES test_add_column(c3)
 Referenced by:
@@ -3698,6 +3703,7 @@ Indexes:
     "test_add_column_pkey" PRIMARY KEY, btree (c3)
 Check constraints:
     "test_add_column_c5_check" CHECK (c5 > 8)
+    "test_add_column_c5_not_null" CHECK (c5 IS NOT NULL)
 Foreign-key constraints:
     "test_add_column_c4_fkey" FOREIGN KEY (c4) REFERENCES test_add_column(c3)
 Referenced by:

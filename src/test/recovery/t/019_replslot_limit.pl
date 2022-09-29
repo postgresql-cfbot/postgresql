@@ -184,10 +184,8 @@ $node_primary->safe_psql('postgres', "CHECKPOINT;");
 my $invalidated = 0;
 for (my $i = 0; $i < 10000; $i++)
 {
-	if (find_in_log(
-			$node_primary,
-			"invalidating slot \"rep1\" because its restart_lsn [0-9A-F/]+ exceeds max_slot_wal_keep_size",
-			$logstart))
+	if (find_in_log($node_primary,
+					'invalidating replication slot "rep1"', $logstart))
 	{
 		$invalidated = 1;
 		last;
@@ -405,9 +403,8 @@ $node_primary3->poll_query_until('postgres',
 $max_attempts = $PostgreSQL::Test::Utils::timeout_default;
 while ($max_attempts-- >= 0)
 {
-	if (find_in_log(
-			$node_primary3,
-			'invalidating slot "rep3" because its restart_lsn', $logstart))
+	if (find_in_log($node_primary3,
+					'invalidating replication slot "rep3"', $logstart))
 	{
 		ok(1, "slot invalidation logged");
 		last;

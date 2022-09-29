@@ -299,4 +299,62 @@ is( $node_subscriber->safe_psql(
 $node_publisher->stop('fast');
 $node_subscriber->stop('fast');
 
+# The bug was that we assumed that there is always an active Portal when
+# handling an error occurring inside the function body of a CREATE FUNCTION.
+# Since the logical replication workers (both apply workers and tablesync
+# workers) do not have an active Portal, it crashes.
+$node_publisher = PostgreSQL::Test::Cluster->new('publisher4');
+$node_publisher->init(allows_streaming => 'logical');
+$node_publisher->start;
+
+$node_subscriber = PostgreSQL::Test::Cluster->new('subscriber4');
+$node_subscriber->init(allows_streaming => 'logical');
+$node_subscriber->start;
+
+$node_publisher->safe_psql(
+	'postgres', qq{
+	CREATE TABLE test_tab(a int);
+	CREATE PUBLICATION test_pub FOR TABLE test_tab;
+	});
+
+$node_subscriber->safe_psql('postgres', "CREATE TABLE test_tab(a int)");
+
+# Create the trigger function on the table that raises an error while
+# executing the CREATE FUNCTION.
+$node_subscriber->safe_psql(
+    'postgres', qq{
+CREATE FUNCTION test_trig_func() RETURNS trigger AS
+\$\$
+BEGIN
+    EXECUTE E'CREATE FUNCTION public.errfunc() RETURNS void AS
+		\$body\$
+		SELECT FROM nonexist_table;
+		\$body\$ LANGUAGE sql';
+    RETURN new;
+END;
+\$\$ LANGUAGE plpgsql;
+CREATE TRIGGER test_trig AFTER INSERT ON test_tab FOR EACH ROW EXECUTE PROCEDURE test_trig_func();
+ALTER TABLE test_tab ENABLE REPLICA TRIGGER test_trig;
+    });
+
+# Create the subscription with disable_on_error so that the logical replication
+# stops after the error.
+$publisher_connstr = $node_publisher->connstr . ' dbname=postgres';
+$node_subscriber->safe_psql(
+    'postgres',
+    "CREATE SUBSCRIPTION test_sub CONNECTION '$publisher_connstr' PUBLICATION test_pub WITH (disable_on_error = 'true')");
+
+# Wait for initial table sync to finish
+$node_subscriber->wait_for_subscription_sync($node_publisher, 'test_sub');
+
+# The insertion leads to the "relation does not exist" error on the subscriber.
+$node_publisher->safe_psql('postgres', "INSERT INTO test_tab VALUES (1)");
+
+$node_subscriber->poll_query_until(
+    'postgres',
+    "SELECT subenabled IS FALSE FROM pg_subscription WHERE subname = 'test_sub'");
+
+$node_publisher->stop('fast');
+$node_subscriber->stop('fast');
+
 done_testing();

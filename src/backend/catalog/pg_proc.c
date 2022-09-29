@@ -1016,7 +1016,7 @@ bool
 function_parse_error_transpose(const char *prosrc)
 {
 	int			origerrposition;
-	int			newerrposition;
+	int			newerrposition = 0;
 	const char *queryText;
 
 	/*
@@ -1034,12 +1034,15 @@ function_parse_error_transpose(const char *prosrc)
 			return false;
 	}
 
-	/* We can get the original query text from the active portal (hack...) */
-	Assert(ActivePortal && ActivePortal->status == PORTAL_ACTIVE);
-	queryText = ActivePortal->sourceText;
+	if (ActivePortal)
+	{
+		/* We can get the original query text from the active portal (hack...) */
+		Assert(ActivePortal->status == PORTAL_ACTIVE);
+		queryText = ActivePortal->sourceText;
 
-	/* Try to locate the prosrc in the original text */
-	newerrposition = match_prosrc_to_query(prosrc, queryText, origerrposition);
+		/* Try to locate the prosrc in the original text */
+		newerrposition = match_prosrc_to_query(prosrc, queryText, origerrposition);
+	}
 
 	if (newerrposition > 0)
 	{

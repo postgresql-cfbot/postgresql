@@ -3411,6 +3411,8 @@ _getObjectDescription(PQExpBuffer buf, TocEntry *te)
 
 	/* objects that don't require special decoration */
 	if (strcmp(type, "COLLATION") == 0 ||
+		strcmp(type, "COLUMN ENCRYPTION KEY") == 0 ||
+		strcmp(type, "COLUMN MASTER KEY") == 0 ||
 		strcmp(type, "CONVERSION") == 0 ||
 		strcmp(type, "DOMAIN") == 0 ||
 		strcmp(type, "TABLE") == 0 ||
@@ -3588,6 +3590,8 @@ _printTocEntry(ArchiveHandle *AH, TocEntry *te, bool isData)
 		if (strcmp(te->desc, "AGGREGATE") == 0 ||
 			strcmp(te->desc, "BLOB") == 0 ||
 			strcmp(te->desc, "COLLATION") == 0 ||
+			strcmp(te->desc, "COLUMN ENCRYPTION KEY") == 0 ||
+			strcmp(te->desc, "COLUMN MASTER KEY") == 0 ||
 			strcmp(te->desc, "CONVERSION") == 0 ||
 			strcmp(te->desc, "DATABASE") == 0 ||
 			strcmp(te->desc, "DOMAIN") == 0 ||

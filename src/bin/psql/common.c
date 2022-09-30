@@ -1285,6 +1285,14 @@ sendquery_cleanup:
 	/* reset \gdesc trigger */
 	pset.gdesc_flag = false;
 
+	/* reset \gencr trigger */
+	pset.gencr_flag = false;
+	for (int i = 0; i < pset.num_params; i++)
+		pg_free(pset.params[i]);
+	pg_free(pset.params);
+	pset.params = NULL;
+	pset.num_params = 0;
+
 	/* reset \gexec trigger */
 	pset.gexec_flag = false;
 
@@ -1449,7 +1457,36 @@ ExecQueryAndProcessResults(const char *query, double *elapsed_msec, bool *svpt_g
 	if (timing)
 		INSTR_TIME_SET_CURRENT(before);
 
-	success = PQsendQuery(pset.db, query);
+	if (pset.gencr_flag)
+	{
+		PGresult   *res1,
+				   *res2;
+
+		res1 = PQprepare(pset.db, "", query, pset.num_params, NULL);
+		if (PQresultStatus(res1) != PGRES_COMMAND_OK)
+		{
+			pg_log_info("%s", PQerrorMessage(pset.db));
+			ClearOrSaveResult(res1);
+			return -1;
+		}
+		PQclear(res1);
+
+		res2 = PQdescribePrepared(pset.db, "");
+		if (PQresultStatus(res2) != PGRES_COMMAND_OK)
+		{
+			pg_log_info("%s", PQerrorMessage(pset.db));
+			ClearOrSaveResult(res2);
+			return -1;
+		}
+
+		success = PQsendQueryPrepared2(pset.db, "", pset.num_params, (const char *const *) pset.params, NULL, NULL, NULL, 0, res2);
+
+		PQclear(res2);
+	}
+	else
+	{
+		success = PQsendQuery(pset.db, query);
+	}
 
 	if (!success)
 	{

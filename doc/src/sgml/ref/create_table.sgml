@@ -22,7 +22,7 @@ PostgreSQL documentation
  <refsynopsisdiv>
 <synopsis>
 CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXISTS ] <replaceable class="parameter">table_name</replaceable> ( [
-  { <replaceable class="parameter">column_name</replaceable> <replaceable class="parameter">data_type</replaceable> [ STORAGE { PLAIN | EXTERNAL | EXTENDED | MAIN } ] [ COMPRESSION <replaceable>compression_method</replaceable> ] [ COLLATE <replaceable>collation</replaceable> ] [ <replaceable class="parameter">column_constraint</replaceable> [ ... ] ]
+  { <replaceable class="parameter">column_name</replaceable> <replaceable class="parameter">data_type</replaceable> [ ENCRYPTED WITH ( <replaceable>encryption_options</replaceable> ) ] [ STORAGE { PLAIN | EXTERNAL | EXTENDED | MAIN } ] [ COMPRESSION <replaceable>compression_method</replaceable> ] [ COLLATE <replaceable>collation</replaceable> ] [ <replaceable class="parameter">column_constraint</replaceable> [ ... ] ]
     | <replaceable>table_constraint</replaceable>
     | LIKE <replaceable>source_table</replaceable> [ <replaceable>like_option</replaceable> ... ] }
     [, ... ]
@@ -345,6 +345,46 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       behavior, which is to consult the
       <xref linkend="guc-default-toast-compression"/> setting at the time of
       data insertion to determine the method to use.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>ENCRYPTED WITH ( <replaceable>encryption_options</replaceable> )</literal></term>
+    <listitem>
+     <para>
+      Enables transparent column encryption for the column.
+      <replaceable>encryption_options</replaceable> are comma-separated
+      <literal>key=value</literal> specifications.  The following options are
+      available:
+      <variablelist>
+       <varlistentry>
+        <term><literal>column_encryption_key</literal></term>
+        <listitem>
+         <para>
+          Specifies the name of the column encryption key to use.  Specifying
+          this is mandatory.
+         </para>
+        </listitem>
+       </varlistentry>
+       <varlistentry>
+        <term><literal>encryption_type</literal></term>
+        <listitem>
+         <para>
+          <literal>randomized</literal> (the default) or <literal>deterministic</literal>
+         </para>
+        </listitem>
+       </varlistentry>
+       <varlistentry>
+        <term><literal>algorithm</literal></term>
+        <listitem>
+         <para>
+          The encryption algorithm to use.  The default is
+          <literal>AEAD_AES_128_CBC_HMAC_SHA_256</literal>.
+         </para>
+        </listitem>
+       </varlistentry>
+      </variablelist>
      </para>
     </listitem>
    </varlistentry>

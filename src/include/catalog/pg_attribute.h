@@ -164,6 +164,15 @@ CATALOG(pg_attribute,1249,AttributeRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(75,
 	 */
 	bool		attislocal BKI_DEFAULT(t);
 
+	/* column encryption key */
+	Oid			attcek BKI_DEFAULT(0) BKI_LOOKUP_OPT(pg_colenckey);
+
+	/* real type if encrypted */
+	Oid			attrealtypid BKI_DEFAULT(0) BKI_LOOKUP_OPT(pg_type);
+
+	/* encryption algorithm (PG_CEK_* values) */
+	int16		attencalg BKI_DEFAULT(0);
+
 	/* Number of times inherited from direct parent relation(s) */
 	int32		attinhcount BKI_DEFAULT(0);
 

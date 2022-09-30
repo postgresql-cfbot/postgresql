@@ -280,7 +280,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 }
 
 %type <node>	stmt toplevel_stmt schema_stmt routine_body_stmt
-		AlterEventTrigStmt AlterCollationStmt
+		AlterEventTrigStmt AlterCollationStmt AlterColumnEncryptionKeyStmt
 		AlterDatabaseStmt AlterDatabaseSetStmt AlterDomainStmt AlterEnumStmt
 		AlterFdwStmt AlterForeignServerStmt AlterGroupStmt
 		AlterObjectDependsStmt AlterObjectSchemaStmt AlterOwnerStmt
@@ -420,6 +420,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 %type <list>	parse_toplevel stmtmulti routine_body_stmt_list
 				OptTableElementList TableElementList OptInherit definition
+				list_of_definitions
 				OptTypedTableElementList TypedTableElementList
 				reloptions opt_reloptions
 				OptWith opt_definition func_args func_args_list
@@ -593,6 +594,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <node>	TableConstraint TableLikeClause
 %type <ival>	TableLikeOptionList TableLikeOption
 %type <str>		column_compression opt_column_compression column_storage opt_column_storage
+%type <list>	opt_column_encryption
 %type <list>	ColQualList
 %type <node>	ColConstraint ColConstraintElem ConstraintAttr
 %type <ival>	key_match
@@ -691,8 +693,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	DETACH DICTIONARY DISABLE_P DISCARD DISTINCT DO DOCUMENT_P DOMAIN_P
 	DOUBLE_P DROP
 
-	EACH ELSE ENABLE_P ENCODING ENCRYPTED END_P ENUM_P ESCAPE EVENT EXCEPT
-	EXCLUDE EXCLUDING EXCLUSIVE EXECUTE EXISTS EXPLAIN EXPRESSION
+	EACH ELSE ENABLE_P ENCODING ENCRYPTION ENCRYPTED END_P ENUM_P ESCAPE
+	EVENT EXCEPT EXCLUDE EXCLUDING EXCLUSIVE EXECUTE EXISTS EXPLAIN EXPRESSION
 	EXTENSION EXTERNAL EXTRACT
 
 	FALSE_P FAMILY FETCH FILTER FINALIZE FIRST_P FLOAT_P FOLLOWING FOR
@@ -715,7 +717,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	LEADING LEAKPROOF LEAST LEFT LEVEL LIKE LIMIT LISTEN LOAD LOCAL
 	LOCALTIME LOCALTIMESTAMP LOCATION LOCK_P LOCKED LOGGED
 
-	MAPPING MATCH MATCHED MATERIALIZED MAXVALUE MERGE METHOD
+	MAPPING MASTER MATCH MATCHED MATERIALIZED MAXVALUE MERGE METHOD
 	MINUTE_P MINVALUE MODE MONTH_P MOVE
 
 	NAME_P NAMES NATIONAL NATURAL NCHAR NEW NEXT NFC NFD NFKC NFKD NO NONE
@@ -943,6 +945,7 @@ toplevel_stmt:
 stmt:
 			AlterEventTrigStmt
 			| AlterCollationStmt
+			| AlterColumnEncryptionKeyStmt
 			| AlterDatabaseStmt
 			| AlterDatabaseSetStmt
 			| AlterDefaultPrivilegesStmt
@@ -3681,14 +3684,15 @@ TypedTableElement:
 			| TableConstraint					{ $$ = $1; }
 		;
 
-columnDef:	ColId Typename opt_column_storage opt_column_compression create_generic_options ColQualList
+columnDef:	ColId Typename opt_column_encryption opt_column_storage opt_column_compression create_generic_options ColQualList
 				{
 					ColumnDef *n = makeNode(ColumnDef);
 
 					n->colname = $1;
 					n->typeName = $2;
-					n->storage_name = $3;
-					n->compression = $4;
+					n->encryption = $3;
+					n->storage_name = $4;
+					n->compression = $5;
 					n->inhcount = 0;
 					n->is_local = true;
 					n->is_not_null = false;
@@ -3697,8 +3701,8 @@ columnDef:	ColId Typename opt_column_storage opt_column_compression create_gener
 					n->raw_default = NULL;
 					n->cooked_default = NULL;
 					n->collOid = InvalidOid;
-					n->fdwoptions = $5;
-					SplitColQualList($6, &n->constraints, &n->collClause,
+					n->fdwoptions = $6;
+					SplitColQualList($7, &n->constraints, &n->collClause,
 									 yyscanner);
 					n->location = @1;
 					$$ = (Node *) n;
@@ -3752,6 +3756,11 @@ column_compression:
 
 opt_column_compression:
 			column_compression						{ $$ = $1; }
+			| /*EMPTY*/								{ $$ = NULL; }
+		;
+
+opt_column_encryption:
+			ENCRYPTED WITH '(' def_list ')'			{ $$ = $4; }
 			| /*EMPTY*/								{ $$ = NULL; }
 		;
 
@@ -6250,6 +6259,24 @@ DefineStmt:
 					n->if_not_exists = true;
 					$$ = (Node *) n;
 				}
+			| CREATE COLUMN ENCRYPTION KEY any_name WITH VALUES list_of_definitions
+				{
+					DefineStmt *n = makeNode(DefineStmt);
+
+					n->kind = OBJECT_CEK;
+					n->defnames = $5;
+					n->definition = $8;
+					$$ = (Node *) n;
+				}
+			| CREATE COLUMN MASTER KEY any_name WITH definition
+				{
+					DefineStmt *n = makeNode(DefineStmt);
+
+					n->kind = OBJECT_CMK;
+					n->defnames = $5;
+					n->definition = $7;
+					$$ = (Node *) n;
+				}
 		;
 
 definition: '(' def_list ')'						{ $$ = $2; }
@@ -6267,6 +6294,10 @@ def_elem:	ColLabel '=' def_arg
 				{
 					$$ = makeDefElem($1, NULL, @1);
 				}
+		;
+
+list_of_definitions: definition						{ $$ = list_make1($1); }
+			| list_of_definitions ',' definition	{ $$ = lappend($1, $3); }
 		;
 
 /* Note: any simple identifier will be returned as a type name! */
@@ -6804,6 +6835,8 @@ object_type_name:
 
 drop_type_name:
 			ACCESS METHOD							{ $$ = OBJECT_ACCESS_METHOD; }
+			| COLUMN ENCRYPTION KEY					{ $$ = OBJECT_CEK; }
+			| COLUMN MASTER KEY						{ $$ = OBJECT_CMK; }
 			| EVENT TRIGGER							{ $$ = OBJECT_EVENT_TRIGGER; }
 			| EXTENSION								{ $$ = OBJECT_EXTENSION; }
 			| FOREIGN DATA_P WRAPPER				{ $$ = OBJECT_FDW; }
@@ -9120,6 +9153,26 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					n->missing_ok = false;
 					$$ = (Node *) n;
 				}
+			| ALTER COLUMN ENCRYPTION KEY name RENAME TO name
+				{
+					RenameStmt *n = makeNode(RenameStmt);
+
+					n->renameType = OBJECT_CEK;
+					n->object = (Node *) makeString($5);
+					n->newname = $8;
+					n->missing_ok = false;
+					$$ = (Node *) n;
+				}
+			| ALTER COLUMN MASTER KEY name RENAME TO name
+				{
+					RenameStmt *n = makeNode(RenameStmt);
+
+					n->renameType = OBJECT_CMK;
+					n->object = (Node *) makeString($5);
+					n->newname = $8;
+					n->missing_ok = false;
+					$$ = (Node *) n;
+				}
 			| ALTER CONVERSION_P any_name RENAME TO name
 				{
 					RenameStmt *n = makeNode(RenameStmt);
@@ -10126,6 +10179,24 @@ AlterOwnerStmt: ALTER AGGREGATE aggregate_with_argtypes OWNER TO RoleSpec
 					n->objectType = OBJECT_COLLATION;
 					n->object = (Node *) $3;
 					n->newowner = $6;
+					$$ = (Node *) n;
+				}
+			| ALTER COLUMN ENCRYPTION KEY name OWNER TO RoleSpec
+				{
+					AlterOwnerStmt *n = makeNode(AlterOwnerStmt);
+
+					n->objectType = OBJECT_CEK;
+					n->object = (Node *) makeString($5);
+					n->newowner = $8;
+					$$ = (Node *) n;
+				}
+			| ALTER COLUMN MASTER KEY name OWNER TO RoleSpec
+				{
+					AlterOwnerStmt *n = makeNode(AlterOwnerStmt);
+
+					n->objectType = OBJECT_CMK;
+					n->object = (Node *) makeString($5);
+					n->newowner = $8;
 					$$ = (Node *) n;
 				}
 			| ALTER CONVERSION_P any_name OWNER TO RoleSpec
@@ -11279,6 +11350,34 @@ AlterCollationStmt: ALTER COLLATION any_name REFRESH VERSION_P
 					AlterCollationStmt *n = makeNode(AlterCollationStmt);
 
 					n->collname = $3;
+					$$ = (Node *) n;
+				}
+		;
+
+
+/*****************************************************************************
+ *
+ *		ALTER COLUMN ENCRYPTION KEY
+ *
+ *****************************************************************************/
+
+AlterColumnEncryptionKeyStmt:
+			ALTER COLUMN ENCRYPTION KEY name ADD_P VALUE_P definition
+				{
+					AlterColumnEncryptionKeyStmt *n = makeNode(AlterColumnEncryptionKeyStmt);
+
+					n->cekname = $5;
+					n->isDrop = false;
+					n->definition = $8;
+					$$ = (Node *) n;
+				}
+			| ALTER COLUMN ENCRYPTION KEY name DROP VALUE_P definition
+				{
+					AlterColumnEncryptionKeyStmt *n = makeNode(AlterColumnEncryptionKeyStmt);
+
+					n->cekname = $5;
+					n->isDrop = true;
+					n->definition = $8;
 					$$ = (Node *) n;
 				}
 		;
@@ -16726,6 +16825,7 @@ unreserved_keyword:
 			| ENABLE_P
 			| ENCODING
 			| ENCRYPTED
+			| ENCRYPTION
 			| ENUM_P
 			| ESCAPE
 			| EVENT
@@ -16789,6 +16889,7 @@ unreserved_keyword:
 			| LOCKED
 			| LOGGED
 			| MAPPING
+			| MASTER
 			| MATCH
 			| MATCHED
 			| MATERIALIZED
@@ -17272,6 +17373,7 @@ bare_label_keyword:
 			| ENABLE_P
 			| ENCODING
 			| ENCRYPTED
+			| ENCRYPTION
 			| END_P
 			| ENUM_P
 			| ESCAPE
@@ -17360,6 +17462,7 @@ bare_label_keyword:
 			| LOCKED
 			| LOGGED
 			| MAPPING
+			| MASTER
 			| MATCH
 			| MATCHED
 			| MATERIALIZED

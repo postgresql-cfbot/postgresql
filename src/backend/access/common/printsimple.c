@@ -20,7 +20,9 @@
 
 #include "access/printsimple.h"
 #include "catalog/pg_type.h"
+#include "libpq/libpq-be.h"
 #include "libpq/pqformat.h"
+#include "miscadmin.h"
 #include "utils/builtins.h"
 
 /*
@@ -46,6 +48,11 @@ printsimple_startup(DestReceiver *self, int operation, TupleDesc tupdesc)
 		pq_sendint16(&buf, attr->attlen);
 		pq_sendint32(&buf, attr->atttypmod);
 		pq_sendint16(&buf, 0);	/* format code */
+		if (MyProcPort->column_encryption_enabled)
+		{
+			pq_sendint32(&buf, 0);	/* CEK */
+			pq_sendint16(&buf, 0);	/* CEK alg */
+		}
 	}
 
 	pq_endmessage(&buf);

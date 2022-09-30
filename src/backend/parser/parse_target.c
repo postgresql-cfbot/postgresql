@@ -594,6 +594,12 @@ transformAssignedExpr(ParseState *pstate,
 					 parser_errposition(pstate, exprLocation(orig_expr))));
 	}
 
+	if (IsA(expr, Param))
+	{
+		if (pstate->p_param_assign_orig_hook)
+			pstate->p_param_assign_orig_hook(pstate, castNode(Param, expr), RelationGetRelid(pstate->p_target_relation), attrno);
+	}
+
 	pstate->p_expr_kind = sv_expr_kind;
 
 	return expr;

@@ -692,4 +692,16 @@
   typreceive => 'brin_minmax_multi_summary_recv',
   typsend => 'brin_minmax_multi_summary_send', typalign => 'i',
   typstorage => 'x', typcollation => 'default' },
+
+{ oid => '8243', descr => 'encrypted column (deterministic)',
+  typname => 'pg_encrypted_det', typlen => '-1', typbyval => 'f', typtype => 'b',
+  typcategory => 'Y', typinput => 'byteain', typoutput => 'byteaout',
+  typreceive => 'bytearecv', typsend => 'byteasend', typalign => 'i',
+  typstorage => 'e' },
+{ oid => '8244', descr => 'encrypted column (randomized)',
+  typname => 'pg_encrypted_rnd', typlen => '-1', typbyval => 'f', typtype => 'b',
+  typcategory => 'Y', typinput => 'byteain', typoutput => 'byteaout',
+  typreceive => 'bytearecv', typsend => 'byteasend', typalign => 'i',
+  typstorage => 'e' },
+
 ]

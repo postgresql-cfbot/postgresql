@@ -40,6 +40,8 @@ CREATE SERVER "integer" FOREIGN DATA WRAPPER addr_fdw;
 CREATE USER MAPPING FOR regress_addr_user SERVER "integer";
 ALTER DEFAULT PRIVILEGES FOR ROLE regress_addr_user IN SCHEMA public GRANT ALL ON TABLES TO regress_addr_user;
 ALTER DEFAULT PRIVILEGES FOR ROLE regress_addr_user REVOKE DELETE ON TABLES FROM regress_addr_user;
+CREATE COLUMN MASTER KEY addr_cmk WITH (realm = '');
+CREATE COLUMN ENCRYPTION KEY addr_cek WITH VALUES (column_master_key = addr_cmk, encrypted_value = '');
 -- this transform would be quite unsafe to leave lying around,
 -- except that the SQL language pays no attention to transforms:
 CREATE TRANSFORM FOR int LANGUAGE SQL (
@@ -98,7 +100,8 @@ BEGIN
 		('text search template'), ('text search configuration'),
 		('policy'), ('user mapping'), ('default acl'), ('transform'),
 		('operator of access method'), ('function of access method'),
-		('publication namespace'), ('publication relation')
+		('publication namespace'), ('publication relation'),
+		('column encryption key'), ('column encryption key data'), ('column master key')
 	LOOP
 		FOR names IN VALUES ('{eins}'), ('{addr_nsp, zwei}'), ('{eins, zwei, drei}')
 		LOOP
@@ -143,6 +146,10 @@ SELECT pg_get_object_address('publication', '{one}', '{}');
 SELECT pg_get_object_address('publication', '{one,two}', '{}');
 SELECT pg_get_object_address('subscription', '{one}', '{}');
 SELECT pg_get_object_address('subscription', '{one,two}', '{}');
+SELECT pg_get_object_address('column encryption key', '{one}', '{}');
+SELECT pg_get_object_address('column encryption key', '{one,two}', '{}');
+SELECT pg_get_object_address('column master key', '{one}', '{}');
+SELECT pg_get_object_address('column master key', '{one,two}', '{}');
 
 -- test successful cases
 WITH objects (type, name, args) AS (VALUES
@@ -166,6 +173,9 @@ WITH objects (type, name, args) AS (VALUES
 				('type', '{addr_nsp.genenum}', '{}'),
 				('cast', '{int8}', '{int4}'),
 				('collation', '{default}', '{}'),
+				('column encryption key', '{addr_cek}', '{}'),
+				('column encryption key data', '{addr_cek}', '{addr_cmk}'),
+				('column master key', '{addr_cmk}', '{}'),
 				('table constraint', '{addr_nsp, gentable, a_chk}', '{}'),
 				('domain constraint', '{addr_nsp.gendomain}', '{domconstr}'),
 				('conversion', '{pg_catalog, koi8_r_to_mic}', '{}'),
@@ -219,6 +229,8 @@ DROP FOREIGN DATA WRAPPER addr_fdw CASCADE;
 DROP PUBLICATION addr_pub;
 DROP PUBLICATION addr_pub_schema;
 DROP SUBSCRIPTION regress_addr_sub;
+DROP COLUMN ENCRYPTION KEY addr_cek;
+DROP COLUMN MASTER KEY addr_cmk;
 
 DROP SCHEMA addr_nsp CASCADE;
 
@@ -243,6 +255,9 @@ WITH objects (classid, objid, objsubid) AS (VALUES
     ('pg_type'::regclass, 0, 0), -- no type
     ('pg_cast'::regclass, 0, 0), -- no cast
     ('pg_collation'::regclass, 0, 0), -- no collation
+    ('pg_colenckey'::regclass, 0, 0), -- no column encryption key
+    ('pg_colenckeydata'::regclass, 0, 0), -- no column encryption key data
+    ('pg_colmasterkey'::regclass, 0, 0), -- no column master key
     ('pg_constraint'::regclass, 0, 0), -- no constraint
     ('pg_conversion'::regclass, 0, 0), -- no conversion
     ('pg_attrdef'::regclass, 0, 0), -- no default attribute
@@ -273,6 +288,7 @@ WITH objects (classid, objid, objsubid) AS (VALUES
     ('pg_event_trigger'::regclass, 0, 0), -- no event trigger
     ('pg_policy'::regclass, 0, 0), -- no policy
     ('pg_publication'::regclass, 0, 0), -- no publication
+    ('pg_publication_namespace'::regclass, 0, 0), -- no publication namespace
     ('pg_publication_rel'::regclass, 0, 0), -- no publication relation
     ('pg_subscription'::regclass, 0, 0), -- no subscription
     ('pg_transform'::regclass, 0, 0) -- no transformation

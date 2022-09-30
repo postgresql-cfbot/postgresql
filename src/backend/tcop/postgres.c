@@ -72,6 +72,7 @@
 #include "utils/memutils.h"
 #include "utils/ps_status.h"
 #include "utils/snapmgr.h"
+#include "utils/syscache.h"
 #include "utils/timeout.h"
 #include "utils/timestamp.h"
 
@@ -678,6 +679,8 @@ pg_analyze_and_rewrite_varparams(RawStmt *parsetree,
 								 const char *query_string,
 								 Oid **paramTypes,
 								 int *numParams,
+								 Oid **paramOrigTbls,
+								 AttrNumber **paramOrigCols,
 								 QueryEnvironment *queryEnv)
 {
 	Query	   *query;
@@ -692,7 +695,7 @@ pg_analyze_and_rewrite_varparams(RawStmt *parsetree,
 		ResetUsage();
 
 	query = parse_analyze_varparams(parsetree, query_string, paramTypes, numParams,
-									queryEnv);
+									paramOrigTbls, paramOrigCols, queryEnv);
 
 	/*
 	 * Check all parameter types got determined.
@@ -1366,6 +1369,8 @@ exec_parse_message(const char *query_string,	/* string to execute */
 	bool		is_named;
 	bool		save_log_statement_stats = log_statement_stats;
 	char		msec_str[32];
+	Oid		   *paramOrigTbls = palloc_array(Oid, numParams);
+	AttrNumber *paramOrigCols = palloc_array(AttrNumber, numParams);
 
 	/*
 	 * Report query to various monitoring facilities.
@@ -1486,6 +1491,8 @@ exec_parse_message(const char *query_string,	/* string to execute */
 														  query_string,
 														  &paramTypes,
 														  &numParams,
+														  &paramOrigTbls,
+														  &paramOrigCols,
 														  NULL);
 
 		/* Done with the snapshot used for parsing */
@@ -1516,6 +1523,8 @@ exec_parse_message(const char *query_string,	/* string to execute */
 					   unnamed_stmt_context,
 					   paramTypes,
 					   numParams,
+					   paramOrigTbls,
+					   paramOrigCols,
 					   NULL,
 					   NULL,
 					   CURSOR_OPT_PARALLEL_OK,	/* allow parallel mode */
@@ -1812,6 +1821,16 @@ exec_bind_message(StringInfo input_message)
 				pformat = pformats[0];
 			else
 				pformat = 0;	/* default = text */
+
+			if (type_is_encrypted(ptype))
+			{
+				if (pformat & 0xF0)
+					pformat &= ~0xF0;
+				else
+					ereport(ERROR,
+							(errcode(ERRCODE_PROTOCOL_VIOLATION),
+							 errmsg("parameter corresponds to an encrypted column, but the parameter value was not encrypted")));
+			}
 
 			if (pformat == 0)	/* text mode */
 			{
@@ -2603,8 +2622,44 @@ exec_describe_statement_message(const char *stmt_name)
 	for (int i = 0; i < psrc->num_params; i++)
 	{
 		Oid			ptype = psrc->param_types[i];
+		Oid			pcekid = InvalidOid;
+		int			pcekalg = 0;
+		int16		pflags = 0;
+
+		if (MyProcPort->column_encryption_enabled && type_is_encrypted(ptype))
+		{
+			Oid			porigtbl = psrc->param_origtbls[i];
+			AttrNumber	porigcol = psrc->param_origcols[i];
+			HeapTuple	tp;
+			Form_pg_attribute orig_att;
+
+			if (porigtbl == InvalidOid || porigcol <= 0)
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("parameter %d corresponds to an encrypted column, but an underlying table and column could not be determined", i)));
+
+			tp = SearchSysCache2(ATTNUM, ObjectIdGetDatum(porigtbl), Int16GetDatum(porigcol));
+			if (!HeapTupleIsValid(tp))
+				elog(ERROR, "cache lookup failed for attribute %d of relation %u", porigcol, porigtbl);
+			orig_att = (Form_pg_attribute) GETSTRUCT(tp);
+			ptype = orig_att->attrealtypid;
+			pcekid = orig_att->attcek;
+			pcekalg = orig_att->attencalg;
+			ReleaseSysCache(tp);
+
+			if (psrc->param_types[i] == PG_ENCRYPTED_DETOID)
+				pflags |= 0x01;
+
+			MaybeSendColumnEncryptionKeyMessage(pcekid);
+		}
 
 		pq_sendint32(&row_description_buf, (int) ptype);
+		if (MyProcPort->column_encryption_enabled)
+		{
+			pq_sendint32(&row_description_buf, (int) pcekid);
+			pq_sendint16(&row_description_buf, pcekalg);
+			pq_sendint16(&row_description_buf, pflags);
+		}
 	}
 	pq_endmessage_reuse(&row_description_buf);
 

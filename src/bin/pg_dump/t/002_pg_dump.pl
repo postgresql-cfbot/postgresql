@@ -593,6 +593,18 @@ my %tests = (
 		unlike    => { %dump_test_schema_runs, no_owner => 1, },
 	},
 
+	'ALTER COLUMN ENCRYPTION KEY cek1 OWNER TO' => {
+		regexp => qr/^ALTER COLUMN ENCRYPTION KEY cek1 OWNER TO .+;/m,
+		like   => { %full_runs, section_pre_data => 1, },
+		unlike => { no_owner => 1, },
+	},
+
+	'ALTER COLUMN MASTER KEY cmk1 OWNER TO' => {
+		regexp => qr/^ALTER COLUMN MASTER KEY cmk1 OWNER TO .+;/m,
+		like   => { %full_runs, section_pre_data => 1, },
+		unlike => { no_owner => 1, },
+	},
+
 	'ALTER FOREIGN DATA WRAPPER dummy OWNER TO' => {
 		regexp => qr/^ALTER FOREIGN DATA WRAPPER dummy OWNER TO .+;/m,
 		like   => { %full_runs, section_pre_data => 1, },
@@ -1193,6 +1205,24 @@ my %tests = (
 		like      => { %full_runs, section_pre_data => 1, },
 	},
 
+	'COMMENT ON COLUMN ENCRYPTION KEY cek1' => {
+		create_order => 55,
+		create_sql   => 'COMMENT ON COLUMN ENCRYPTION KEY cek1
+					   IS \'comment on column encryption key\';',
+		regexp =>
+		  qr/^COMMENT ON COLUMN ENCRYPTION KEY cek1 IS 'comment on column encryption key';/m,
+		like => { %full_runs, section_pre_data => 1, },
+	},
+
+	'COMMENT ON COLUMN MASTER KEY cmk1' => {
+		create_order => 55,
+		create_sql   => 'COMMENT ON COLUMN MASTER KEY cmk1
+					   IS \'comment on column master key\';',
+		regexp =>
+		  qr/^COMMENT ON COLUMN MASTER KEY cmk1 IS 'comment on column master key';/m,
+		like => { %full_runs, section_pre_data => 1, },
+	},
+
 	'COMMENT ON LARGE OBJECT ...' => {
 		create_order => 65,
 		create_sql   => 'DO $$
@@ -1608,6 +1638,24 @@ my %tests = (
 		  'CREATE CAST (timestamptz AS interval) WITH FUNCTION age(timestamptz) AS ASSIGNMENT;',
 		regexp =>
 		  qr/CREATE CAST \(timestamp with time zone AS interval\) WITH FUNCTION pg_catalog\.age\(timestamp with time zone\) AS ASSIGNMENT;/m,
+		like => { %full_runs, section_pre_data => 1, },
+	},
+
+	'CREATE COLUMN ENCRYPTION KEY cek1' => {
+		create_order => 51,
+		create_sql   => "CREATE COLUMN ENCRYPTION KEY cek1 WITH VALUES (column_master_key = cmk1, encrypted_value = '\\xDEADBEEF');",
+		regexp       => qr/^
+			\QCREATE COLUMN ENCRYPTION KEY cek1 WITH VALUES (column_master_key = cmk1, algorithm = 'RSAES_OAEP_SHA_1', encrypted_value = \E
+			/xm,
+		like => { %full_runs, section_pre_data => 1, },
+	},
+
+	'CREATE COLUMN MASTER KEY cmk1' => {
+		create_order => 50,
+		create_sql   => "CREATE COLUMN MASTER KEY cmk1 WITH (realm = 'myrealm');",
+		regexp       => qr/^
+			\QCREATE COLUMN MASTER KEY cmk1 WITH (realm = 'myrealm');\E
+			/xm,
 		like => { %full_runs, section_pre_data => 1, },
 	},
 
@@ -3984,8 +4032,12 @@ foreach my $test (
 			next;
 		}
 
-		# Add terminating semicolon
-		$create_sql{$test_db} .= $tests{$test}->{create_sql} . ";";
+		# Normalize command ending: strip all line endings, add
+		# semicolon if missing, add two newlines.
+		my $create_sql = $tests{$test}->{create_sql};
+		chomp $create_sql;
+		$create_sql .= ';' unless substr($create_sql, -1) eq ';';
+		$create_sql{$test_db} .= $create_sql . "\n\n";
 	}
 }
 

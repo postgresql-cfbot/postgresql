@@ -341,6 +341,14 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 		"Target-Session-Attrs", "", 15, /* sizeof("prefer-standby") = 15 */
 	offsetof(struct pg_conn, target_session_attrs)},
 
+	{"cmklookup", "PGCMKLOOKUP", "", NULL,
+		"CMK-Lookup", "", 64,
+	offsetof(struct pg_conn, cmklookup)},
+
+	{"column_encryption", "PGCOLUMNENCRYPTION", "0", NULL,
+		"Column-Encryption", "", 1,
+	offsetof(struct pg_conn, column_encryption_setting)},
+
 	/* Terminating entry --- MUST BE LAST */
 	{NULL, NULL, NULL, NULL,
 	NULL, NULL, 0}
@@ -2454,6 +2462,7 @@ keep_going:						/* We will come back to here until there is
 #ifdef ENABLE_GSS
 		conn->try_gss = (conn->gssencmode[0] != 'd');	/* "disable" */
 #endif
+		conn->column_encryption_enabled = (conn->column_encryption_setting[0] == '1');
 
 		reset_connection_state_machine = false;
 		need_new_connection = true;
@@ -3249,7 +3258,7 @@ keep_going:						/* We will come back to here until there is
 				 * request or an error here.  Anything else probably means
 				 * it's not Postgres on the other end at all.
 				 */
-				if (!(beresp == 'R' || beresp == 'E'))
+				if (!(beresp == 'R' || beresp == 'E' || beresp == 'v'))
 				{
 					appendPQExpBuffer(&conn->errorMessage,
 									  libpq_gettext("expected authentication request from server, but received %c\n"),
@@ -3403,6 +3412,17 @@ keep_going:						/* We will come back to here until there is
 					}
 #endif
 
+					goto error_return;
+				}
+				else if (beresp == 'v')
+				{
+					if (pqGetNegotiateProtocolVersion3(conn))
+					{
+						/* We'll come back when there is more data */
+						return PGRES_POLLING_READING;
+					}
+					/* OK, we read the message; mark data consumed */
+					conn->inStart = conn->inCursor;
 					goto error_return;
 				}
 
@@ -4080,6 +4100,22 @@ freePGconn(PGconn *conn)
 	free(conn->krbsrvname);
 	free(conn->gsslib);
 	free(conn->connip);
+	free(conn->cmklookup);
+	for (int i = 0; i < conn->ncmks; i++)
+	{
+		free(conn->cmks[i].cmkname);
+		free(conn->cmks[i].cmkrealm);
+	}
+	free(conn->cmks);
+	for (int i = 0; i < conn->nceks; i++)
+	{
+		if (conn->ceks[i].cekdata)
+		{
+			explicit_bzero(conn->ceks[i].cekdata, conn->ceks[i].cekdatalen);
+			free(conn->ceks[i].cekdata);
+		}
+	}
+	free(conn->ceks);
 	/* Note that conn->Pfdebug is not ours to close or free */
 	free(conn->write_err_msg);
 	free(conn->inBuffer);

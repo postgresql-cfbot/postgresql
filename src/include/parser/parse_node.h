@@ -93,6 +93,7 @@ typedef Node *(*ParseParamRefHook) (ParseState *pstate, ParamRef *pref);
 typedef Node *(*CoerceParamHook) (ParseState *pstate, Param *param,
 								  Oid targetTypeId, int32 targetTypeMod,
 								  int location);
+typedef void (*ParamAssignOrigHook) (ParseState *pstate, Param *param, Oid origtbl, AttrNumber origcol);
 
 
 /*
@@ -222,6 +223,7 @@ struct ParseState
 	PostParseColumnRefHook p_post_columnref_hook;
 	ParseParamRefHook p_paramref_hook;
 	CoerceParamHook p_coerce_param_hook;
+	ParamAssignOrigHook p_param_assign_orig_hook;
 	void	   *p_ref_hook_state;	/* common passthrough link for above */
 };
 

@@ -1,0 +1,112 @@
+<!--
+doc/src/sgml/ref/drop_column_encryption_key.sgml
+PostgreSQL documentation
+-->
+
+<refentry id="sql-drop-column-encryption-key">
+ <indexterm zone="sql-drop-column-encryption-key">
+  <primary>DROP COLUMN ENCRYPTION KEY</primary>
+ </indexterm>
+
+ <refmeta>
+  <refentrytitle>DROP COLUMN ENCRYPTION KEY</refentrytitle>
+  <manvolnum>7</manvolnum>
+  <refmiscinfo>SQL - Language Statements</refmiscinfo>
+ </refmeta>
+
+ <refnamediv>
+  <refname>DROP COLUMN ENCRYPTION KEY</refname>
+  <refpurpose>remove a column encryption key</refpurpose>
+ </refnamediv>
+
+ <refsynopsisdiv>
+<synopsis>
+DROP COLUMN ENCRYPTION KEY [ IF EXISTS ] <replaceable>name</replaceable> [ CASCADE | RESTRICT ]
+</synopsis>
+ </refsynopsisdiv>
+
+ <refsect1>
+  <title>Description</title>
+
+  <para>
+   <command>DROP COLUMN ENCRYPTION KEY</command> removes a previously defined
+   column encryption key.  To be able to drop a column encryption key, you
+   must be its owner.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Parameters</title>
+
+   <variablelist>
+    <varlistentry>
+     <term><literal>IF EXISTS</literal></term>
+     <listitem>
+      <para>
+       Do not throw an error if the column encryption key does not exist.
+       A notice is issued in this case.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><replaceable>name</replaceable></term>
+
+     <listitem>
+      <para>
+       The name of the column encryption key.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><literal>CASCADE</literal></term>
+     <listitem>
+      <para>
+       Automatically drop objects that depend on the column encryption key,
+       and in turn all objects that depend on those objects
+       (see <xref linkend="ddl-depend"/>).
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><literal>RESTRICT</literal></term>
+     <listitem>
+      <para>
+       Refuse to drop the column encryption key if any objects depend on it.  This
+       is the default.
+      </para>
+     </listitem>
+    </varlistentry>
+   </variablelist>
+ </refsect1>
+
+ <refsect1>
+  <title>Examples</title>
+
+  <para>
+<programlisting>
+DROP COLUMN ENCRYPTION KEY cek1;
+</programlisting></para>
+ </refsect1>
+
+ <refsect1>
+  <title>Compatibility</title>
+
+  <para>
+   There is no <command>DROP COLUMN ENCRYPTION KEY</command> statement in
+   the SQL standard.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>See Also</title>
+
+    <simplelist type="inline">
+   <member><xref linkend="sql-alter-column-encryption-key"/></member>
+   <member><xref linkend="sql-create-column-encryption-key"/></member>
+  </simplelist>
+ </refsect1>
+
+</refentry>

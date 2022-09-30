@@ -687,6 +687,7 @@ typedef struct ColumnDef
 	char	   *colname;		/* name of column */
 	TypeName   *typeName;		/* type of column */
 	char	   *compression;	/* compression method for column */
+	List	   *encryption;		/* encryption info for column */
 	int			inhcount;		/* number of times column is inherited */
 	bool		is_local;		/* column has local (non-inherited) def'n */
 	bool		is_not_null;	/* NOT NULL constraint specified? */
@@ -1865,6 +1866,9 @@ typedef enum ObjectType
 	OBJECT_CAST,
 	OBJECT_COLUMN,
 	OBJECT_COLLATION,
+	OBJECT_CEK,
+	OBJECT_CEKDATA,
+	OBJECT_CMK,
 	OBJECT_CONVERSION,
 	OBJECT_DATABASE,
 	OBJECT_DEFAULT,
@@ -2055,6 +2059,19 @@ typedef struct AlterCollationStmt
 	NodeTag		type;
 	List	   *collname;
 } AlterCollationStmt;
+
+
+/* ----------------------
+ * Alter Column Encryption Key
+ * ----------------------
+ */
+typedef struct AlterColumnEncryptionKeyStmt
+{
+	NodeTag		type;
+	char	   *cekname;
+	bool		isDrop;			/* ADD or DROP the items? */
+	List	   *definition;
+} AlterColumnEncryptionKeyStmt;
 
 
 /* ----------------------

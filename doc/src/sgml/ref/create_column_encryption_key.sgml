@@ -1,0 +1,163 @@
+<!--
+doc/src/sgml/ref/create_column_encryption_key.sgml
+PostgreSQL documentation
+-->
+
+<refentry id="sql-create-column-encryption-key">
+ <indexterm zone="sql-create-column-encryption-key">
+  <primary>CREATE COLUMN ENCRYPTION KEY</primary>
+ </indexterm>
+
+ <refmeta>
+  <refentrytitle>CREATE COLUMN ENCRYPTION KEY</refentrytitle>
+  <manvolnum>7</manvolnum>
+  <refmiscinfo>SQL - Language Statements</refmiscinfo>
+ </refmeta>
+
+ <refnamediv>
+  <refname>CREATE COLUMN ENCRYPTION KEY</refname>
+  <refpurpose>define a new column encryption key</refpurpose>
+ </refnamediv>
+
+ <refsynopsisdiv>
+<synopsis>
+CREATE COLUMN ENCRYPTION KEY <replaceable>name</replaceable> WITH VALUES (
+    COLUMN_MASTER_KEY = <replaceable>cmk</replaceable>,
+    [ ALGORITHM = <replaceable>algorithm</replaceable>, ]
+    ENCRYPTED_VALUE = <replaceable>encval</replaceable>
+)
+[ , ... ]
+</synopsis>
+ </refsynopsisdiv>
+
+ <refsect1>
+  <title>Description</title>
+
+  <para>
+   <command>CREATE COLUMN ENCRYPTION KEY</command> defines a new column
+   encryption key.  A column encryption key is used for client-side encryption
+   of table columns that have been defined as encrypted.  The key material of
+   a column encryption key is stored in the database's system catalogs,
+   encrypted (wrapped) by a column master key (which in turn is only
+   accessible to the client, not the database server).
+  </para>
+
+  <para>
+   A column encryption key can be associated with more than one column master
+   key.  To specify that, specify more than one parenthesized definition (see
+   also the examples).
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Parameters</title>
+
+  <variablelist>
+   <varlistentry>
+    <term><replaceable>name</replaceable></term>
+
+    <listitem>
+     <para>
+      The name of the new column encryption key.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable>cmk</replaceable></term>
+
+    <listitem>
+     <para>
+      The name of the column master key that was used to encrypt this column
+      encryption key.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable>algorithm</replaceable></term>
+
+    <listitem>
+     <para>
+      The encryption algorithm that was used to encrypt the key material of
+      this column encryption key.  Supported algorithms are:
+      <itemizedlist>
+       <listitem>
+        <para><literal>RSAES_OAEP_SHA_1</literal> (default)</para>
+       </listitem>
+       <listitem>
+        <para><literal>RSAES_OAEP_SHA_256</literal> (default)</para>
+       </listitem>
+      </itemizedlist>
+     </para>
+
+     <para>
+      This is informational only.  The specified value is provided to the
+      client, which may use it for decrypting the column encryption key on the
+      client side.  But a client is also free to ignore this information and
+      figure out how to arrange the decryption in some other way.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable>encval</replaceable></term>
+
+    <listitem>
+     <para>
+      The key material of this column encryption key, encrypted with the
+      specified column master key using the specified algorithm.  The value
+      must be a <type>bytea</type>-compatible literal.
+     </para>
+    </listitem>
+   </varlistentry>
+  </variablelist>
+ </refsect1>
+
+ <refsect1>
+  <title>Examples</title>
+
+  <para>
+<programlisting>
+CREATE COLUMN ENCRYPTION KEY cek1 WITH VALUES (
+    COLUMN_MASTER_KEY = cmk1,
+    ENCRYPTED_VALUE = '\x01020204...'
+);
+</programlisting>
+  </para>
+
+  <para>
+   To specify more than one associated column master key:
+<programlisting>
+CREATE COLUMN ENCRYPTION KEY cek1 WITH VALUES (
+    COLUMN_MASTER_KEY = cmk1,
+    ENCRYPTED_VALUE = '\x01020204...'
+),
+(
+    COLUMN_MASTER_KEY = cmk2,
+    ENCRYPTED_VALUE = '\xF1F2F2F4...'
+);
+</programlisting>
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Compatibility</title>
+
+  <para>
+   There is no <command>CREATE COLUMN ENCRYPTION KEY</command> statement in
+   the SQL standard.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>See Also</title>
+
+  <simplelist type="inline">
+   <member><xref linkend="sql-alter-column-encryption-key"/></member>
+   <member><xref linkend="sql-drop-column-encryption-key"/></member>
+   <member><xref linkend="sql-create-column-master-key"/></member>
+  </simplelist>
+ </refsect1>
+
+</refentry>

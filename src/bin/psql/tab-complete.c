@@ -1169,6 +1169,16 @@ static const VersionedQuery Query_for_list_of_subscriptions[] = {
 	{0, NULL}
 };
 
+static const VersionedQuery Query_for_list_of_ceks[] = {
+	{160000, "SELECT cekname FROM pg_catalog.pg_colenckey WHERE cekname LIKE '%s'"},
+	{0, NULL}
+};
+
+static const VersionedQuery Query_for_list_of_cmks[] = {
+	{160000, "SELECT cmkname FROM pg_catalog.pg_colmasterkey WHERE cmkname LIKE '%s'"},
+	{0, NULL}
+};
+
 /*
  * This is a list of all "things" in Pgsql, which can show up after CREATE or
  * DROP; and there is also a query to get a list of them.
@@ -1202,6 +1212,8 @@ static const pgsql_thing_t words_after_create[] = {
 	{"CAST", NULL, NULL, NULL}, /* Casts have complex structures for names, so
 								 * skip it */
 	{"COLLATION", NULL, NULL, &Query_for_list_of_collations},
+	{"COLUMN ENCRYPTION KEY", NULL, NULL, NULL},
+	{"COLUMN MASTER KEY KEY", NULL, NULL, NULL},
 
 	/*
 	 * CREATE CONSTRAINT TRIGGER is not supported here because it is designed
@@ -1692,7 +1704,7 @@ psql_completion(const char *text, int start, int end)
 		"\\echo", "\\edit", "\\ef", "\\elif", "\\else", "\\encoding",
 		"\\endif", "\\errverbose", "\\ev",
 		"\\f",
-		"\\g", "\\gdesc", "\\getenv", "\\gexec", "\\gset", "\\gx",
+		"\\g", "\\gdesc", "\\gencr", "\\getenv", "\\gexec", "\\gset", "\\gx",
 		"\\help", "\\html",
 		"\\if", "\\include", "\\include_relative", "\\ir",
 		"\\list", "\\lo_import", "\\lo_export", "\\lo_list", "\\lo_unlink",
@@ -1899,6 +1911,22 @@ psql_completion(const char *text, int start, int end)
 	/* ALTER COLLATION <name> */
 	else if (Matches("ALTER", "COLLATION", MatchAny))
 		COMPLETE_WITH("OWNER TO", "REFRESH VERSION", "RENAME TO", "SET SCHEMA");
+
+	/* ALTER/DROP COLUMN ENCRYPTION KEY */
+	else if (Matches("ALTER|DROP", "COLUMN", "ENCRYPTION", "KEY"))
+		COMPLETE_WITH_VERSIONED_QUERY(Query_for_list_of_ceks);
+
+	/* ALTER COLUMN ENCRYPTION KEY */
+	else if (Matches("ALTER", "COLUMN", "ENCRYPTION", "KEY", MatchAny))
+		COMPLETE_WITH("ADD VALUE (", "DROP VALUE (", "OWNER TO", "RENAME TO");
+
+	/* ALTER/DROP COLUMN MASTER KEY */
+	else if (Matches("ALTER|DROP", "COLUMN", "MASTER", "KEY"))
+		COMPLETE_WITH_VERSIONED_QUERY(Query_for_list_of_cmks);
+
+	/* ALTER COLUMN MASTER KEY */
+	else if (Matches("ALTER", "COLUMN", "MASTER", "KEY", MatchAny))
+		COMPLETE_WITH("OWNER TO", "RENAME TO");
 
 	/* ALTER CONVERSION <name> */
 	else if (Matches("ALTER", "CONVERSION", MatchAny))
@@ -2794,6 +2822,26 @@ psql_completion(const char *text, int start, int end)
 			COMPLETE_WITH("true", "false");
 	}
 
+	/* CREATE/ALTER/DROP COLUMN ... KEY */
+	else if (Matches("CREATE|ALTER|DROP", "COLUMN"))
+		COMPLETE_WITH("ENCRYPTION", "MASTER");
+	else if (Matches("CREATE|ALTER|DROP", "COLUMN", "ENCRYPTION|MASTER"))
+		COMPLETE_WITH("KEY");
+
+	/* CREATE COLUMN ENCRYPTION KEY */
+	else if (Matches("CREATE", "COLUMN", "ENCRYPTION", "KEY", MatchAny))
+		COMPLETE_WITH("WITH");
+	else if (Matches("CREATE", "COLUMN", "ENCRYPTION", "KEY", MatchAny, "WITH"))
+		COMPLETE_WITH("VALUES");
+	else if (Matches("CREATE", "COLUMN", "ENCRYPTION", "KEY", MatchAny, "WITH", "VALUES"))
+		COMPLETE_WITH("(");
+
+	/* CREATE COLUMN MASTER KEY */
+	else if (Matches("CREATE", "COLUMN", "MASTER", "KEY", MatchAny))
+		COMPLETE_WITH("WITH");
+	else if (Matches("CREATE", "COLUMN", "MASTER", "KEY", MatchAny, "WITH"))
+		COMPLETE_WITH("(");
+
 	/* CREATE DATABASE */
 	else if (Matches("CREATE", "DATABASE", MatchAny))
 		COMPLETE_WITH("OWNER", "TEMPLATE", "ENCODING", "TABLESPACE",
@@ -3517,6 +3565,7 @@ psql_completion(const char *text, int start, int end)
 			 Matches("DROP", "ACCESS", "METHOD", MatchAny) ||
 			 (Matches("DROP", "AGGREGATE|FUNCTION|PROCEDURE|ROUTINE", MatchAny, MatchAny) &&
 			  ends_with(prev_wd, ')')) ||
+			 Matches("DROP", "COLUMN", "ENCRYPTION|MASTER", "KEY", MatchAny) ||
 			 Matches("DROP", "EVENT", "TRIGGER", MatchAny) ||
 			 Matches("DROP", "FOREIGN", "DATA", "WRAPPER", MatchAny) ||
 			 Matches("DROP", "FOREIGN", "TABLE", MatchAny) ||

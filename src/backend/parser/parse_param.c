@@ -49,6 +49,8 @@ typedef struct VarParamState
 {
 	Oid		  **paramTypes;		/* array of parameter type OIDs */
 	int		   *numParams;		/* number of array entries */
+	Oid		  **paramOrigTbls;	/* underlying tables (0 if none) */
+	AttrNumber **paramOrigCols; /* underlying columns (0 if none) */
 } VarParamState;
 
 static Node *fixed_paramref_hook(ParseState *pstate, ParamRef *pref);
@@ -56,6 +58,7 @@ static Node *variable_paramref_hook(ParseState *pstate, ParamRef *pref);
 static Node *variable_coerce_param_hook(ParseState *pstate, Param *param,
 										Oid targetTypeId, int32 targetTypeMod,
 										int location);
+static void variable_param_assign_orig_hook(ParseState *pstate, Param *param, Oid origtbl, AttrNumber origcol);
 static bool check_parameter_resolution_walker(Node *node, ParseState *pstate);
 static bool query_contains_extern_params_walker(Node *node, void *context);
 
@@ -81,15 +84,19 @@ setup_parse_fixed_parameters(ParseState *pstate,
  */
 void
 setup_parse_variable_parameters(ParseState *pstate,
-								Oid **paramTypes, int *numParams)
+								Oid **paramTypes, int *numParams,
+								Oid **paramOrigTbls, AttrNumber **paramOrigCols)
 {
 	VarParamState *parstate = palloc(sizeof(VarParamState));
 
 	parstate->paramTypes = paramTypes;
 	parstate->numParams = numParams;
+	parstate->paramOrigTbls = paramOrigTbls;
+	parstate->paramOrigCols = paramOrigCols;
 	pstate->p_ref_hook_state = (void *) parstate;
 	pstate->p_paramref_hook = variable_paramref_hook;
 	pstate->p_coerce_param_hook = variable_coerce_param_hook;
+	pstate->p_param_assign_orig_hook = variable_param_assign_orig_hook;
 }
 
 /*
@@ -145,14 +152,36 @@ variable_paramref_hook(ParseState *pstate, ParamRef *pref)
 	{
 		/* Need to enlarge param array */
 		if (*parstate->paramTypes)
-			*parstate->paramTypes = (Oid *) repalloc(*parstate->paramTypes,
-													 paramno * sizeof(Oid));
+		{
+			*parstate->paramTypes = repalloc_array(*parstate->paramTypes,
+												   Oid, paramno);
+			if (parstate->paramOrigTbls)
+				*parstate->paramOrigTbls = repalloc_array(*parstate->paramOrigTbls,
+														  Oid, paramno);
+			if (parstate->paramOrigCols)
+				*parstate->paramOrigCols = repalloc_array(*parstate->paramOrigCols,
+														  AttrNumber, paramno);
+		}
 		else
-			*parstate->paramTypes = (Oid *) palloc(paramno * sizeof(Oid));
+		{
+			*parstate->paramTypes = palloc_array(Oid, paramno);
+			if (parstate->paramOrigTbls)
+				*parstate->paramOrigTbls = palloc_array(Oid, paramno);
+			if (parstate->paramOrigCols)
+				*parstate->paramOrigCols = palloc_array(AttrNumber, paramno);
+		}
 		/* Zero out the previously-unreferenced slots */
 		MemSet(*parstate->paramTypes + *parstate->numParams,
 			   0,
 			   (paramno - *parstate->numParams) * sizeof(Oid));
+		if (parstate->paramOrigTbls)
+			MemSet(*parstate->paramOrigTbls + *parstate->numParams,
+				   0,
+				   (paramno - *parstate->numParams) * sizeof(Oid));
+		if (parstate->paramOrigCols)
+			MemSet(*parstate->paramOrigCols + *parstate->numParams,
+				   0,
+				   (paramno - *parstate->numParams) * sizeof(AttrNumber));
 		*parstate->numParams = paramno;
 	}
 
@@ -258,6 +287,18 @@ variable_coerce_param_hook(ParseState *pstate, Param *param,
 
 	/* Else signal to proceed with normal coercion */
 	return NULL;
+}
+
+static void
+variable_param_assign_orig_hook(ParseState *pstate, Param *param, Oid origtbl, AttrNumber origcol)
+{
+	VarParamState *parstate = (VarParamState *) pstate->p_ref_hook_state;
+	int			paramno = param->paramid;
+
+	if (parstate->paramOrigTbls)
+		(*parstate->paramOrigTbls)[paramno - 1] = origtbl;
+	if (parstate->paramOrigCols)
+		(*parstate->paramOrigCols)[paramno - 1] = origcol;
 }
 
 /*

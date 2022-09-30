@@ -1,0 +1,117 @@
+<!--
+doc/src/sgml/ref/alter_column_master_key.sgml
+PostgreSQL documentation
+-->
+
+<refentry id="sql-alter-column-master-key">
+ <indexterm zone="sql-alter-column-master-key">
+  <primary>ALTER COLUMN MASTER KEY</primary>
+ </indexterm>
+
+ <refmeta>
+  <refentrytitle>ALTER COLUMN MASTER KEY</refentrytitle>
+  <manvolnum>7</manvolnum>
+  <refmiscinfo>SQL - Language Statements</refmiscinfo>
+ </refmeta>
+
+ <refnamediv>
+  <refname>ALTER COLUMN MASTER KEY</refname>
+  <refpurpose>change the definition of a column master key</refpurpose>
+ </refnamediv>
+
+ <refsynopsisdiv>
+<synopsis>
+ALTER COLUMN MASTER KEY <replaceable>name</replaceable> RENAME TO <replaceable>new_name</replaceable>
+ALTER COLUMN MASTER KEY <replaceable>name</replaceable> OWNER TO { <replaceable>new_owner</replaceable> | CURRENT_ROLE | CURRENT_USER | SESSION_USER }
+</synopsis>
+ </refsynopsisdiv>
+
+ <refsect1>
+  <title>Description</title>
+
+  <para>
+   <command>ALTER COLUMN MASTER KEY</command> changes the definition of a
+   column master key.
+  </para>
+
+  <para>
+   You must own the column master key to use <command>ALTER COLUMN MASTER
+   KEY</command>.  To alter the owner, you must also be a direct or indirect
+   member of the new owning role, and that role must have
+   <literal>CREATE</literal> privilege on the column master key's database.
+   (These restrictions enforce that altering the owner doesn't do anything you
+   couldn't do by dropping and recreating the column master key.  However, a
+   superuser can alter ownership of any column master key anyway.)
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Parameters</title>
+
+  <variablelist>
+   <varlistentry>
+    <term><replaceable class="parameter">name</replaceable></term>
+    <listitem>
+     <para>
+      The name (optionally schema-qualified) of an existing column master key.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">new_name</replaceable></term>
+    <listitem>
+     <para>
+      The new name of the column master key.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">new_owner</replaceable></term>
+    <listitem>
+     <para>
+      The new owner of the column master key.
+     </para>
+    </listitem>
+   </varlistentry>
+  </variablelist>
+ </refsect1>
+
+ <refsect1>
+  <title>Examples</title>
+
+  <para>
+   To rename the column master key <literal>cmk1</literal> to
+   <literal>cmk2</literal>:
+<programlisting>
+ALTER COLUMN MASTER KEY cmk1 RENAME TO cmk2;
+</programlisting>
+  </para>
+
+  <para>
+   To change the owner of the column master key <literal>cmk1</literal> to
+   <literal>joe</literal>:
+<programlisting>
+ALTER COLUMN MASTER KEY cmk1 OWNER TO joe;
+</programlisting></para>
+ </refsect1>
+
+ <refsect1>
+  <title>Compatibility</title>
+
+  <para>
+   There is no <command>ALTER COLUMN MASTER KEY</command> statement in the
+   SQL standard.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>See Also</title>
+
+  <simplelist type="inline">
+   <member><xref linkend="sql-create-column-master-key"/></member>
+   <member><xref linkend="sql-drop-column-master-key"/></member>
+  </simplelist>
+ </refsect1>
+</refentry>

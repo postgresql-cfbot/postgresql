@@ -29,7 +29,10 @@
 #include "catalog/pg_auth_members.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_cast.h"
+#include "catalog/pg_colenckey.h"
+#include "catalog/pg_colenckeydata.h"
 #include "catalog/pg_collation.h"
+#include "catalog/pg_colmasterkey.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_conversion.h"
 #include "catalog/pg_database.h"
@@ -267,6 +270,43 @@ static const struct cachedesc cacheinfo[] = {
 		},
 		256
 	},
+	{
+		ColumnEncKeyDataRelationId, /* CEKDATACEKCMK */
+		ColumnEncKeyCekidCmkidIndexId,
+		2,
+		{
+			Anum_pg_colenckeydata_ckdcekid,
+			Anum_pg_colenckeydata_ckdcmkid,
+		},
+		8
+	},
+	{
+		ColumnEncKeyDataRelationId, /* CEKDATAOID */
+		ColumnEncKeyDataOidIndexId,
+		1,
+		{
+			Anum_pg_colenckeydata_oid,
+		},
+		8
+	},
+	{
+		ColumnEncKeyRelationId, /* CEKNAME */
+		ColumnEncKeyNameIndexId,
+		1,
+		{
+			Anum_pg_colenckey_cekname,
+		},
+		8
+	},
+	{
+		ColumnEncKeyRelationId, /* CEKOID */
+		ColumnEncKeyOidIndexId,
+		1,
+		{
+			Anum_pg_colenckey_oid,
+		},
+		8
+	},
 	{OperatorClassRelationId,	/* CLAAMNAMENSP */
 		OpclassAmNameNspIndexId,
 		3,
@@ -286,6 +326,24 @@ static const struct cachedesc cacheinfo[] = {
 			0,
 			0,
 			0
+		},
+		8
+	},
+	{
+		ColumnMasterKeyRelationId, /* CMKNAME */
+		ColumnMasterKeyNameIndexId,
+		1,
+		{
+			Anum_pg_colmasterkey_cmkname,
+		},
+		8
+	},
+	{
+		ColumnMasterKeyRelationId,	/* CMKOID */
+		ColumnMasterKeyOidIndexId,
+		1,
+		{
+			Anum_pg_colmasterkey_oid,
 		},
 		8
 	},

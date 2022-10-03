@@ -669,42 +669,13 @@ PrintQueryTuples(const PGresult *result, const printQueryOpt *opt, FILE *printQu
 {
 	bool		ok = true;
 
-	/* write output to \g argument, if any */
-	if (pset.gfname)
+	FILE	   *fout = printQueryFout ? printQueryFout : pset.queryFout;
+
+	printQuery(result, opt ? opt : &pset.popt, fout, false, pset.logfile);
+	if (ferror(fout))
 	{
-		FILE	   *fout;
-		bool		is_pipe;
-
-		if (!openQueryOutputFile(pset.gfname, &fout, &is_pipe))
-			return false;
-		if (is_pipe)
-			disable_sigpipe_trap();
-
-		printQuery(result, &pset.popt, fout, false, pset.logfile);
-		if (ferror(fout))
-		{
-			pg_log_error("could not print result table: %m");
-			ok = false;
-		}
-
-		if (is_pipe)
-		{
-			pclose(fout);
-			restore_sigpipe_trap();
-		}
-		else
-			fclose(fout);
-	}
-	else
-	{
-		FILE	   *fout = printQueryFout ? printQueryFout : pset.queryFout;
-
-		printQuery(result, opt ? opt : &pset.popt, fout, false, pset.logfile);
-		if (ferror(fout))
-		{
-			pg_log_error("could not print result table: %m");
-			ok = false;
-		}
+		pg_log_error("could not print result table: %m");
+		ok = false;
 	}
 
 	return ok;
@@ -861,10 +832,9 @@ loop_exit:
  * want if the status line doesn't get taken as part of the COPY data.
  */
 static bool
-HandleCopyResult(PGresult **resultp)
+HandleCopyResult(PGresult **resultp, FILE *copystream)
 {
 	bool		success;
-	FILE	   *copystream;
 	PGresult   *copy_result;
 	ExecStatusType result_status = PQresultStatus(*resultp);
 
@@ -875,33 +845,6 @@ HandleCopyResult(PGresult **resultp)
 
 	if (result_status == PGRES_COPY_OUT)
 	{
-		bool		need_close = false;
-		bool		is_pipe = false;
-
-		if (pset.copyStream)
-		{
-			/* invoked by \copy */
-			copystream = pset.copyStream;
-		}
-		else if (pset.gfname)
-		{
-			/* invoked by \g */
-			if (openQueryOutputFile(pset.gfname,
-									&copystream, &is_pipe))
-			{
-				need_close = true;
-				if (is_pipe)
-					disable_sigpipe_trap();
-			}
-			else
-				copystream = NULL;	/* discard COPY data entirely */
-		}
-		else
-		{
-			/* fall back to the generic query output stream */
-			copystream = pset.queryFout;
-		}
-
 		success = handleCopyOut(pset.db,
 								copystream,
 								&copy_result)
@@ -917,24 +860,11 @@ HandleCopyResult(PGresult **resultp)
 			PQclear(copy_result);
 			copy_result = NULL;
 		}
-
-		if (need_close)
-		{
-			/* close \g argument file/pipe */
-			if (is_pipe)
-			{
-				pclose(copystream);
-				restore_sigpipe_trap();
-			}
-			else
-			{
-				fclose(copystream);
-			}
-		}
 	}
 	else
 	{
 		/* COPY IN */
+		/* Ignore the copystream argument passed to the function */
 		copystream = pset.copyStream ? pset.copyStream : pset.cur_cmd_source;
 		success = handleCopyIn(pset.db,
 							   copystream,
@@ -1421,10 +1351,9 @@ DescribeQuery(const char *query, double *elapsed_msec)
  *
  * Sends query and cycles through PGresult objects.
  *
- * When not under \watch and if our command string contained a COPY FROM STDIN
- * or COPY TO STDOUT, the PGresult associated with these commands must be
- * processed by providing an input or output stream.  In that event, we'll
- * marshal data for the COPY.
+ * If our command string contained a COPY FROM STDIN or COPY TO STDOUT, the
+ * PGresult associated with these commands must be processed by providing an
+ * input or output stream.  In that event, we'll marshal data for the COPY.
  *
  * For other commands, the results are processed normally, depending on their
  * status.
@@ -1445,6 +1374,8 @@ ExecQueryAndProcessResults(const char *query, double *elapsed_msec, bool *svpt_g
 	instr_time	before,
 				after;
 	PGresult   *result;
+	bool		is_pipe = false;
+	FILE		*results_fout = NULL;
 
 	if (timing)
 		INSTR_TIME_SET_CURRENT(before);
@@ -1555,14 +1486,42 @@ ExecQueryAndProcessResults(const char *query, double *elapsed_msec, bool *svpt_g
 		if (result_status == PGRES_COPY_IN ||
 			result_status == PGRES_COPY_OUT)
 		{
+			FILE *copy_stream = NULL;
+
 			if (is_watch)
 			{
-				ClearOrSaveAllResults();
-				pg_log_error("\\watch cannot be used with COPY");
-				return -1;
+				copy_stream = printQueryFout ? printQueryFout : pset.queryFout;
+			}
+			else if (pset.copyStream) /* invoked by \copy */
+			{
+				copy_stream = pset.copyStream;
+			}
+			else if (pset.gfname)
+			{
+				if (results_fout==NULL)
+				{
+					if (openQueryOutputFile(pset.gfname, &results_fout, &is_pipe))
+					{
+						if (is_pipe)
+							disable_sigpipe_trap();
+						copy_stream = results_fout;
+					}
+					else
+						success = false;
+				}
+				else
+					copy_stream = results_fout;
+			}
+			else
+			{
+				/* fall back to the generic query output stream */
+				copy_stream = pset.queryFout;
 			}
 
-			success &= HandleCopyResult(&result);
+			/* Even if the output stream could not be opened, call
+			   HandleCopyResult() with a NULL output stream to collect the
+			   COPY data. */
+			success &= HandleCopyResult(&result, copy_stream);
 		}
 
 		/*
@@ -1594,7 +1553,24 @@ ExecQueryAndProcessResults(const char *query, double *elapsed_msec, bool *svpt_g
 
 		/* this may or may not print something depending on settings */
 		if (result != NULL)
-			success &= PrintQueryResult(result, last, false, opt, printQueryFout);
+		{
+			/* if results need to be printed into the file specified by
+			   \g, open it */
+			if (PQresultStatus(result) == PGRES_TUPLES_OK &&
+				pset.gfname && results_fout==NULL)
+			{
+				if (openQueryOutputFile(pset.gfname, &results_fout, &is_pipe))
+				{
+					if (is_pipe)
+						disable_sigpipe_trap();
+					printQueryFout = results_fout;
+				}
+				else
+					success = false;
+			}
+			if (success)
+				success &= PrintQueryResult(result, last, false, opt, printQueryFout);
+		}
 
 		/* set variables on last result if all went well */
 		if (!is_watch && last && success)
@@ -1608,6 +1584,17 @@ ExecQueryAndProcessResults(const char *query, double *elapsed_msec, bool *svpt_g
 			ClearOrSaveAllResults();
 			break;
 		}
+	}
+
+	if (results_fout)
+	{
+		if (is_pipe)
+		{
+			pclose(results_fout);
+			restore_sigpipe_trap();
+		}
+		else
+			fclose(results_fout);
 	}
 
 	/* may need this to recover from conn loss during COPY */

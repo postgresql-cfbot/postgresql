@@ -296,7 +296,7 @@ WALDumpOpenSegment(XLogReaderState *state, XLogSegNo nextSegNo,
 				   TimeLineID *tli_p)
 {
 	TimeLineID	tli = *tli_p;
-	char		fname[MAXPGPATH];
+	char		fname[MAXFNAMELEN];
 	int			tries;
 
 	XLogFileName(fname, tli, nextSegNo, state->segcxt.ws_segsize);
@@ -367,7 +367,7 @@ WALDumpReadPage(XLogReaderState *state, XLogRecPtr targetPagePtr, int reqLen,
 				 &errinfo))
 	{
 		WALOpenSegment *seg = &errinfo.wre_seg;
-		char		fname[MAXPGPATH];
+		char		fname[MAXFNAMELEN];
 
 		XLogFileName(fname, seg->ws_tli, seg->ws_segno,
 					 state->segcxt.ws_segsize);

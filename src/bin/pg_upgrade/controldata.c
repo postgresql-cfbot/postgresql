@@ -549,8 +549,8 @@ get_control_data(ClusterInfo *cluster, bool live_check)
 	{
 		if (got_tli && got_log_id && got_log_seg)
 		{
-			snprintf(cluster->controldata.nextxlogfile, 25, "%08X%08X%08X",
-					 tli, logid, segno);
+			XLogFileNameById(cluster->controldata.nextxlogfile, tli, logid,
+							 segno);
 			got_nextxlogfile = true;
 		}
 	}

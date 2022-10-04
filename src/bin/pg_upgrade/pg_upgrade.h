@@ -10,6 +10,7 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 
+#include "access/xlog_internal.h"
 #include "common/relpath.h"
 #include "libpq-fe.h"
 
@@ -198,7 +199,7 @@ typedef struct
 {
 	uint32		ctrl_ver;
 	uint32		cat_ver;
-	char		nextxlogfile[25];
+	char		nextxlogfile[MAXFNAMELEN];
 	uint32		chkpnt_nxtxid;
 	uint32		chkpnt_nxtepoch;
 	uint32		chkpnt_nxtoid;

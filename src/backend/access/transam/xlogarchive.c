@@ -57,7 +57,7 @@ RestoreArchivedFile(char *path, const char *xlogfname,
 {
 	char		xlogpath[MAXPGPATH];
 	char	   *xlogRestoreCmd;
-	char		lastRestartPointFname[MAXPGPATH];
+	char		lastRestartPointFname[MAXFNAMELEN];
 	int			rc;
 	struct stat stat_buf;
 	XLogSegNo	restartSegNo;
@@ -292,7 +292,7 @@ ExecuteRecoveryCommand(const char *command, const char *commandName,
 					   bool failOnSignal, uint32 wait_event_info)
 {
 	char		xlogRecoveryCmd[MAXPGPATH];
-	char		lastRestartPointFname[MAXPGPATH];
+	char		lastRestartPointFname[MAXFNAMELEN];
 	char	   *dp;
 	char	   *endp;
 	const char *sp;

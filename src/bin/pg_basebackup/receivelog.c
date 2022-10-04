@@ -93,7 +93,7 @@ open_walfile(StreamCtl *stream, XLogRecPtr startpoint)
 	char	   *fn;
 	ssize_t		size;
 	XLogSegNo	segno;
-	char		walfile_name[MAXPGPATH];
+	char		walfile_name[MAXFNAMELEN];
 
 	XLByteToSeg(startpoint, segno, WalSegSz);
 	XLogFileName(walfile_name, stream->timeline, segno, WalSegSz);

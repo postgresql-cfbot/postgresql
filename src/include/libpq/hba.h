@@ -79,6 +79,7 @@ typedef enum ClientCertName
 
 typedef struct HbaLine
 {
+	char	   *sourcefile;
 	int			linenumber;
 	char	   *rawline;
 	ConnType	conntype;
@@ -155,6 +156,7 @@ typedef struct AuthToken
 typedef struct TokenizedAuthLine
 {
 	List	   *fields;			/* List of lists of AuthTokens */
+	char	   *file_name;		/* File name */
 	int			line_num;		/* Line number */
 	char	   *raw_line;		/* Raw line text */
 	char	   *err_msg;		/* Error message if any */
@@ -174,6 +176,7 @@ extern HbaLine *parse_hba_line(TokenizedAuthLine *tok_line, int elevel);
 extern IdentLine *parse_ident_line(TokenizedAuthLine *tok_line, int elevel);
 extern bool pg_isblank(const char c);
 extern MemoryContext tokenize_auth_file(const char *filename, FILE *file,
-										List **tok_lines, int elevel);
+										List **tok_lines, int depth,
+										int elevel);
 
 #endif							/* HBA_H */

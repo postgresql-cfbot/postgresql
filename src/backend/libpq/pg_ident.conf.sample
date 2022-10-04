@@ -7,11 +7,22 @@
 #
 # This file controls PostgreSQL user name mapping.  It maps external
 # user names to their corresponding PostgreSQL user names.  Records
-# are of the form:
+# are one of these forms:
 #
-# MAPNAME  SYSTEM-USERNAME  PG-USERNAME
+# include           FILE
+# include_if_exists FILE
+# include_dir       DIRECTORY
+# MAPNAME           SYSTEM-USERNAME  PG-USERNAME
 #
 # (The uppercase quantities must be replaced by actual values.)
+#
+# If the first field is "include", "include_if_exists" or "include_dir", it's
+# not a mapping record but a directive to include records from respectively
+# another file, another file if it exists or all the files in the given
+# directory ending in '.conf'.  FILE is the file name to include, and
+# DIR is the directory name containing the file(s) to include. FILE and
+# DIRECTORY can be specified with a relative or absolute path, and can be
+# double quoted if they contains spaces.
 #
 # MAPNAME is the (otherwise freely chosen) map name that was used in
 # pg_hba.conf.  SYSTEM-USERNAME is the detected user name of the

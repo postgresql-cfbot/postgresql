@@ -157,6 +157,8 @@ typedef struct PlannerGlobal
 
 	/* partition descriptors */
 	PartitionDirectory partition_directory pg_node_attr(read_write_ignore);
+
+	List	   *sessionVariables;	/* list of used session variables */
 } PlannerGlobal;
 
 /* macro for fetching the Plan associated with a SubPlan node */
@@ -458,6 +460,9 @@ struct PlannerInfo
 	bool		placeholdersFrozen;
 	/* true if planning a recursive WITH item */
 	bool		hasRecursion;
+
+	/* true if session variables were used */
+	bool		hasSessionVariables;
 
 	/*
 	 * Information about aggregates. Filled by preprocess_aggrefs().

@@ -16,6 +16,7 @@
 #include "postgres.h"
 
 #include "catalog/pg_type.h"
+#include "catalog/pg_variable.h"
 #include "commands/dbcommands.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
@@ -36,11 +37,12 @@
 #include "utils/date.h"
 #include "utils/lsyscache.h"
 #include "utils/timestamp.h"
+#include "utils/typcache.h"
 #include "utils/xml.h"
 
 /* GUC parameters */
 bool		Transform_null_equals = false;
-
+bool		session_variables_ambiguity_warning = false;
 
 static Node *transformExprRecurse(ParseState *pstate, Node *expr);
 static Node *transformParamRef(ParseState *pstate, ParamRef *pref);
@@ -82,6 +84,9 @@ static Expr *make_distinct_op(ParseState *pstate, List *opname,
 							  Node *ltree, Node *rtree, int location);
 static Node *make_nulltest_from_distinct(ParseState *pstate,
 										 A_Expr *distincta, Node *arg);
+static Node *makeParamSessionVariable(ParseState *pstate,
+									  Oid varid, Oid typid, int32 typmod, Oid collid,
+									  char *attrname, int location);
 
 
 /*
@@ -431,6 +436,32 @@ transformIndirection(ParseState *pstate, A_Indirection *ind)
 }
 
 /*
+ * Returns true, when expression of kind allows using of
+ * session variables.
+ */
+bool
+expr_kind_allows_session_variables(ParseExprKind p_expr_kind)
+{
+	switch (p_expr_kind)
+	{
+		case EXPR_KIND_JOIN_USING:
+		case EXPR_KIND_CHECK_CONSTRAINT:
+		case EXPR_KIND_DOMAIN_CHECK:
+		case EXPR_KIND_INDEX_EXPRESSION:
+		case EXPR_KIND_INDEX_PREDICATE:
+		case EXPR_KIND_COLUMN_DEFAULT:
+		case EXPR_KIND_TRIGGER_WHEN:
+		case EXPR_KIND_PARTITION_BOUND:
+		case EXPR_KIND_PARTITION_EXPRESSION:
+		case EXPR_KIND_GENERATED_COLUMN:
+			return false;
+
+		default:
+			return true;
+	}
+}
+
+/*
  * Transform a ColumnRef.
  *
  * If you find yourself changing this code, see also ExpandColumnRefStar.
@@ -505,6 +536,9 @@ transformColumnRef(ParseState *pstate, ColumnRef *cref)
 		case EXPR_KIND_COPY_WHERE:
 		case EXPR_KIND_GENERATED_COLUMN:
 		case EXPR_KIND_CYCLE_MARK:
+		case EXPR_KIND_VARIABLE_DEFAULT:
+		case EXPR_KIND_LET_TARGET:
+
 			/* okay */
 			break;
 
@@ -777,6 +811,148 @@ transformColumnRef(ParseState *pstate, ColumnRef *cref)
 	}
 
 	/*
+	 * There are contexts where session's variables are not allowed. The
+	 * question is if we want to identify session's variables in these
+	 * contexts? The code can be more simple, when we don't do it, but then we
+	 * cannot to raise maybe useful message like "you cannot to use session
+	 * variables here". On second hand, in this case the warnings about
+	 * session's variable shadowing can be messy.
+	 */
+	if (expr_kind_allows_session_variables(pstate->p_expr_kind))
+	{
+		Oid			varid = InvalidOid;
+		Oid			typid;
+		Oid			collid;
+		int32		typmod;
+		char	   *attrname = NULL;
+		bool		not_unique;
+
+		/*
+		 * Session variables are shadowed by columns, routine's variables or
+		 * routine's arguments ever. We don't want to use session variable
+		 * when it is not exactly shadowed, but RTE is valid like:
+		 *
+		 * CREATE TYPE T AS (c int); CREATE VARIABLE foo AS T; CREATE TABLE
+		 * foo(a int, b int);
+		 *
+		 * SELECT foo.a, foo.b, foo.c FROM foo;
+		 *
+		 * This case can be messy and then we disallow it. When we know, so
+		 * possible variable will be shadowed, we try to identify variable
+		 * only when session_variables_ambiguity_warning is requested.
+		 */
+		if (node ||
+			(!node && relname && crerr == CRERR_NO_COLUMN))
+		{
+			/*
+			 * In this path we just try (if it is wanted) detect if session
+			 * variable is shadowed.
+			 */
+			if (session_variables_ambiguity_warning)
+			{
+				varid = IdentifyVariable(cref->fields, &attrname, &not_unique);
+
+				/*
+				 * Some cases with ambiguous references can be solved without
+				 * raising a warning. When there is a collision between column
+				 * name (or label) and some session variable name, and when we
+				 * know attribute name, then we can ignore the collision when:
+				 *
+				 * a) variable is of scalar type (then indirection cannot be
+				 * applied on this session variable.
+				 *
+				 * b) when related variable has no field with the given
+				 * attrname, then indirection cannot be applied on this
+				 * session variable.
+				 */
+				if (OidIsValid(varid) && attrname && node)
+				{
+					get_session_variable_type_typmod_collid(varid,
+															&typid, &typmod,
+															&collid);
+
+					if (type_is_rowtype(typid))
+					{
+						TupleDesc	tupdesc;
+						bool		found = false;
+						int			i;
+
+						/* slow part, I hope it will not be to often */
+						tupdesc = lookup_rowtype_tupdesc(typid, typmod);
+						for (i = 0; i < tupdesc->natts; i++)
+						{
+							if (namestrcmp(&(TupleDescAttr(tupdesc, i)->attname), attrname) == 0 &&
+								!TupleDescAttr(tupdesc, i)->attisdropped)
+							{
+								found = true;
+								break;
+							}
+						}
+
+						ReleaseTupleDesc(tupdesc);
+
+						/* There is no composite variable with this field. */
+						if (!found)
+							varid = InvalidOid;
+					}
+					else
+						/* There is no composite variable with this name. */
+						varid = InvalidOid;
+				}
+
+				/*
+				 * Raise warning when session variable reference is still
+				 * visible.
+				 */
+				if (OidIsValid(varid))
+				{
+					if (node)
+						ereport(WARNING,
+								(errcode(ERRCODE_AMBIGUOUS_COLUMN),
+								 errmsg("session variable \"%s\" is shadowed",
+										NameListToString(cref->fields)),
+								 errdetail("Session variables can be shadowed by columns, routine's variables and routine's arguments with the same name."),
+								 parser_errposition(pstate, cref->location)));
+					else
+						/* session variable is shadowed by RTE */
+						ereport(WARNING,
+								(errcode(ERRCODE_AMBIGUOUS_COLUMN),
+								 errmsg("session variable \"%s.%s\" is shadowed",
+										get_namespace_name(get_session_variable_namespace(varid)),
+										get_session_variable_name(varid)),
+								 errdetail("Session variables can be shadowed by tables or table's aliases with the same name."),
+								 parser_errposition(pstate, cref->location)));
+				}
+			}
+		}
+		else
+		{
+			varid = IdentifyVariable(cref->fields, &attrname, &not_unique);
+
+			if (OidIsValid(varid))
+			{
+				Oid			typid;
+				int32		typmod;
+				Oid			collid;
+
+				if (not_unique)
+					ereport(ERROR,
+							(errcode(ERRCODE_AMBIGUOUS_PARAMETER),
+							 errmsg("session variable reference \"%s\" is ambiguous",
+									NameListToString(cref->fields)),
+							 parser_errposition(pstate, cref->location)));
+
+				get_session_variable_type_typmod_collid(varid, &typid, &typmod,
+														&collid);
+
+				node = makeParamSessionVariable(pstate,
+												varid, typid, typmod, collid,
+												attrname, cref->location);
+			}
+		}
+	}
+
+	/*
 	 * Throw error if no translation found.
 	 */
 	if (node == NULL)
@@ -808,6 +984,64 @@ transformColumnRef(ParseState *pstate, ColumnRef *cref)
 	}
 
 	return node;
+}
+
+/*
+ * Generate param variable for reference to session variable
+ */
+static Node *
+makeParamSessionVariable(ParseState *pstate,
+						 Oid varid, Oid typid, int32 typmod, Oid collid,
+						 char *attrname, int location)
+{
+	Param	   *param;
+
+	param = makeNode(Param);
+
+	param->paramkind = PARAM_VARIABLE;
+	param->paramvarid = varid;
+	param->paramtype = typid;
+	param->paramtypmod = typmod;
+	param->paramcollid = collid;
+
+	pstate->p_hasSessionVariables = true;
+
+	if (attrname != NULL)
+	{
+		TupleDesc	tupdesc;
+		int			i;
+
+		tupdesc = lookup_rowtype_tupdesc(typid, typmod);
+
+		for (i = 0; i < tupdesc->natts; i++)
+		{
+			Form_pg_attribute att = TupleDescAttr(tupdesc, i);
+
+			if (strcmp(attrname, NameStr(att->attname)) == 0 &&
+				!att->attisdropped)
+			{
+				/* Success, so generate a FieldSelect expression */
+				FieldSelect *fselect = makeNode(FieldSelect);
+
+				fselect->arg = (Expr *) param;
+				fselect->fieldnum = i + 1;
+				fselect->resulttype = att->atttypid;
+				fselect->resulttypmod = att->atttypmod;
+				/* save attribute's collation for parse_collate.c */
+				fselect->resultcollid = att->attcollation;
+
+				ReleaseTupleDesc(tupdesc);
+				return (Node *) fselect;
+			}
+		}
+
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_COLUMN),
+				 errmsg("could not identify column \"%s\" in variable", attrname),
+				 parser_errposition(pstate, location)));
+	}
+
+	return (Node *) param;
 }
 
 static Node *
@@ -1718,6 +1952,7 @@ transformSubLink(ParseState *pstate, SubLink *sublink)
 		case EXPR_KIND_VALUES:
 		case EXPR_KIND_VALUES_SINGLE:
 		case EXPR_KIND_CYCLE_MARK:
+		case EXPR_KIND_LET_TARGET:
 			/* okay */
 			break;
 		case EXPR_KIND_CHECK_CONSTRAINT:
@@ -1726,6 +1961,7 @@ transformSubLink(ParseState *pstate, SubLink *sublink)
 			break;
 		case EXPR_KIND_COLUMN_DEFAULT:
 		case EXPR_KIND_FUNCTION_DEFAULT:
+		case EXPR_KIND_VARIABLE_DEFAULT:
 			err = _("cannot use subquery in DEFAULT expression");
 			break;
 		case EXPR_KIND_INDEX_EXPRESSION:
@@ -3066,6 +3302,7 @@ ParseExprKindName(ParseExprKind exprKind)
 			return "CHECK";
 		case EXPR_KIND_COLUMN_DEFAULT:
 		case EXPR_KIND_FUNCTION_DEFAULT:
+		case EXPR_KIND_VARIABLE_DEFAULT:
 			return "DEFAULT";
 		case EXPR_KIND_INDEX_EXPRESSION:
 			return "index expression";
@@ -3091,6 +3328,8 @@ ParseExprKindName(ParseExprKind exprKind)
 			return "GENERATED AS";
 		case EXPR_KIND_CYCLE_MARK:
 			return "CYCLE";
+		case EXPR_KIND_LET_TARGET:
+			return "LET";
 
 			/*
 			 * There is intentionally no default: case here, so that the

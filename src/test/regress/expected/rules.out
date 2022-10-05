@@ -1191,7 +1191,7 @@ drop rule rules_foorule on rules_foo;
 -- this should fail because f1 is not exposed for unqualified reference:
 create rule rules_foorule as on insert to rules_foo where f1 < 100
 do instead insert into rules_foo2 values (f1);
-ERROR:  column "f1" does not exist
+ERROR:  column or variable "f1" does not exist
 LINE 2: do instead insert into rules_foo2 values (f1);
                                                   ^
 HINT:  There is a column named "f1" in table "old", but it cannot be referenced from this part of the query.
@@ -2710,7 +2710,7 @@ select * from rules_fooview;
 (1 row)
 
 select xmin, * from rules_fooview;  -- fail, views don't have such a column
-ERROR:  column "xmin" does not exist
+ERROR:  column or variable "xmin" does not exist
 LINE 1: select xmin, * from rules_fooview;
                ^
 select reltoastrelid, relkind, relfrozenxid

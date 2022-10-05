@@ -108,6 +108,15 @@ GRANT <replaceable class="parameter">role_name</replaceable> [, ...] TO <replace
   | CURRENT_ROLE
   | CURRENT_USER
   | SESSION_USER
+
+GRANT { SELECT | UPDATE | ALL [ PRIVILEGES ] }
+    ON VARIABLE <replaceable>variable_name</replaceable> [, ...]
+       | ALL VARIABLES IN SCHEMA <replaceable class="parameter">schema_name</replaceable> [, ...] }
+    TO <replaceable class="parameter">role_specification</replaceable> [, ...] [ WITH GRANT OPTION ]
+    [ GRANTED BY <replaceable class="parameter">role_specification</replaceable> ]
+
+    TO <replaceable class="parameter">role_specification</replaceable> [, ...] [ WITH GRANT OPTION ]
+
 </synopsis>
  </refsynopsisdiv>
 

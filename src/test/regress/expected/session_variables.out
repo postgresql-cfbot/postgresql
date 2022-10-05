@@ -1,0 +1,1309 @@
+CREATE SCHEMA svartest;
+SET search_path = svartest;
+CREATE VARIABLE var1 AS integer;
+CREATE TEMP VARIABLE var2 AS text;
+DROP VARIABLE var1, var2;
+-- functional interface
+CREATE VARIABLE var1 AS numeric;
+CREATE ROLE var_test_role;
+GRANT USAGE ON SCHEMA svartest TO var_test_role;
+SET ROLE TO var_test_role;
+-- should fail
+SELECT var1;
+ERROR:  permission denied for session variable var1
+SET ROLE TO DEFAULT;
+GRANT SELECT ON VARIABLE var1 TO var_test_role;
+SET ROLE TO var_test_role;
+-- should fail
+LET var1 = 10;
+ERROR:  permission denied for session variable var1
+-- should work
+SELECT var1;
+ var1 
+------
+     
+(1 row)
+
+SET ROLE TO DEFAULT;
+GRANT UPDATE ON VARIABLE var1 TO var_test_role;
+SET ROLE TO var_test_role;
+-- should work
+LET var1 = 333;
+SET ROLE TO DEFAULT;
+REVOKE ALL ON VARIABLE var1 FROM var_test_role;
+CREATE OR REPLACE FUNCTION secure_var()
+RETURNS int AS $$
+  SELECT svartest.var1::int;
+$$ LANGUAGE sql SECURITY DEFINER;
+SELECT secure_var();
+ secure_var 
+------------
+        333
+(1 row)
+
+SET ROLE TO var_test_role;
+-- should fail
+SELECT svartest.var1;
+ERROR:  permission denied for session variable var1
+-- should work;
+SELECT secure_var();
+ secure_var 
+------------
+        333
+(1 row)
+
+SET ROLE TO DEFAULT;
+EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM generate_series(1,100) g(v) WHERE v = var1;
+                  QUERY PLAN                   
+-----------------------------------------------
+ Function Scan on pg_catalog.generate_series g
+   Output: v
+   Function Call: generate_series(1, 100)
+   Filter: ((g.v)::numeric = var1)
+(4 rows)
+
+CREATE VIEW schema_var_view AS SELECT var1;
+SELECT * FROM schema_var_view;
+ var1 
+------
+  333
+(1 row)
+
+\c -
+SET search_path = svartest;
+-- should work still, but var will be empty
+SELECT * FROM schema_var_view;
+ var1 
+------
+     
+(1 row)
+
+LET var1 = pi();
+SELECT var1;
+       var1       
+------------------
+ 3.14159265358979
+(1 row)
+
+-- we can see execution plan of LET statement
+EXPLAIN (VERBOSE, COSTS OFF) LET var1 = pi();
+         QUERY PLAN         
+----------------------------
+ SET SESSION VARIABLE
+ Result
+   Output: 3.14159265358979
+(3 rows)
+
+SELECT var1;
+       var1       
+------------------
+ 3.14159265358979
+(1 row)
+
+CREATE VARIABLE var3 AS int;
+CREATE OR REPLACE FUNCTION inc(int)
+RETURNS int AS $$
+BEGIN
+  LET svartest.var3 = COALESCE(svartest.var3 + $1, $1);
+  RETURN var3;
+END;
+$$ LANGUAGE plpgsql;
+SELECT inc(1);
+ inc 
+-----
+   1
+(1 row)
+
+SELECT inc(1);
+ inc 
+-----
+   2
+(1 row)
+
+SELECT inc(1);
+ inc 
+-----
+   3
+(1 row)
+
+SELECT inc(1) FROM generate_series(1,10);
+ inc 
+-----
+   4
+   5
+   6
+   7
+   8
+   9
+  10
+  11
+  12
+  13
+(10 rows)
+
+SET ROLE TO var_test_role;
+-- should fail
+LET var3 = 0;
+ERROR:  permission denied for session variable var3
+SET ROLE TO DEFAULT;
+DROP VIEW schema_var_view;
+DROP VARIABLE var1 CASCADE;
+DROP VARIABLE var3 CASCADE;
+-- composite variables
+CREATE TYPE sv_xyz AS (x int, y int, z numeric(10,2));
+CREATE VARIABLE v1 AS sv_xyz;
+CREATE VARIABLE v2 AS sv_xyz;
+\d v1
+\d v2
+LET v1 = (1,2,3.14);
+LET v2 = (10,20,3.14*10);
+-- should work too - there are prepared casts
+LET v1 = (1,2,3.14);
+SELECT v1;
+     v1     
+------------
+ (1,2,3.14)
+(1 row)
+
+SELECT v2;
+      v2       
+---------------
+ (10,20,31.40)
+(1 row)
+
+SELECT (v1).*;
+ x | y |  z   
+---+---+------
+ 1 | 2 | 3.14
+(1 row)
+
+SELECT (v2).*;
+ x  | y  |   z   
+----+----+-------
+ 10 | 20 | 31.40
+(1 row)
+
+SELECT v1.x + v1.z;
+ ?column? 
+----------
+     4.14
+(1 row)
+
+SELECT v2.x + v2.z;
+ ?column? 
+----------
+    41.40
+(1 row)
+
+-- access to composite fields should be safe too
+-- should fail
+SET ROLE TO var_test_role;
+SELECT v2.x;
+ERROR:  permission denied for session variable v2
+SET ROLE TO DEFAULT;
+DROP VARIABLE v1;
+DROP VARIABLE v2;
+REVOKE USAGE ON SCHEMA svartest FROM var_test_role;
+DROP ROLE var_test_role;
+-- scalar variables should not be in conflict with qualified column
+CREATE VARIABLE varx AS text;
+SELECT varx.relname FROM pg_class varx WHERE varx.relname = 'pg_class';
+ relname  
+----------
+ pg_class
+(1 row)
+
+-- should fail
+SELECT varx.xxx;
+ERROR:  type text is not composite
+-- variables can be updated under RO transaction
+BEGIN;
+SET TRANSACTION READ ONLY;
+LET varx = 'hello';
+COMMIT;
+SELECT varx;
+ varx  
+-------
+ hello
+(1 row)
+
+DROP VARIABLE varx;
+CREATE TYPE t1 AS (a int, b numeric, c text);
+CREATE VARIABLE v1 AS t1;
+LET v1 = (1, pi(), 'hello');
+SELECT v1;
+             v1             
+----------------------------
+ (1,3.14159265358979,hello)
+(1 row)
+
+LET v1.b = 10.2222;
+SELECT v1;
+        v1         
+-------------------
+ (1,10.2222,hello)
+(1 row)
+
+-- should fail
+LET v1.x = 10;
+ERROR:  cannot assign to field "x" of column or variable "v1" because there is no such column in data type t1
+LINE 1: LET v1.x = 10;
+            ^
+DROP VARIABLE v1;
+DROP TYPE t1;
+-- arrays are supported
+CREATE VARIABLE va1 AS numeric[];
+LET va1 = ARRAY[1.1,2.1];
+LET va1[1] = 10.1;
+SELECT va1;
+    va1     
+------------
+ {10.1,2.1}
+(1 row)
+
+CREATE TYPE ta2 AS (a numeric, b numeric[]);
+CREATE VARIABLE va2 AS ta2;
+LET va2 = (10.1, ARRAY[0.0, 0.0]);
+LET va2.a = 10.2;
+SELECT va2;
+        va2         
+--------------------
+ (10.2,"{0.0,0.0}")
+(1 row)
+
+LET va2.b[1] = 10.3;
+SELECT va2;
+         va2         
+---------------------
+ (10.2,"{10.3,0.0}")
+(1 row)
+
+DROP VARIABLE va1;
+DROP VARIABLE va2;
+DROP TYPE ta2;
+-- default values
+CREATE VARIABLE v1 AS numeric DEFAULT pi();
+LET v1 = v1 * 2;
+SELECT v1;
+        v1        
+------------------
+ 6.28318530717958
+(1 row)
+
+CREATE TYPE t2 AS (a numeric, b text);
+CREATE VARIABLE v2 AS t2 DEFAULT (NULL, 'Hello');
+LET svartest.v2.a = pi();
+SELECT v2;
+            v2            
+--------------------------
+ (3.14159265358979,Hello)
+(1 row)
+
+-- should fail due dependency
+DROP TYPE t2;
+ERROR:  cannot drop type t2 because other objects depend on it
+DETAIL:  session variable v2 depends on type t2
+HINT:  Use DROP ... CASCADE to drop the dependent objects too.
+-- should be ok
+DROP VARIABLE v1;
+DROP VARIABLE v2;
+-- tests of alters
+CREATE SCHEMA var_schema1;
+CREATE SCHEMA var_schema2;
+CREATE VARIABLE var_schema1.var1 AS integer;
+LET var_schema1.var1 = 1000;
+SELECT var_schema1.var1;
+ var1 
+------
+ 1000
+(1 row)
+
+ALTER VARIABLE var_schema1.var1 SET SCHEMA var_schema2;
+SELECT var_schema2.var1;
+ var1 
+------
+ 1000
+(1 row)
+
+CREATE ROLE var_test_role;
+ALTER VARIABLE var_schema2.var1 OWNER TO var_test_role;
+SET ROLE TO var_test_role;
+-- should fail, no access to schema var_schema2.var
+SELECT var_schema2.var1;
+ERROR:  permission denied for schema var_schema2
+DROP VARIABLE var_schema2.var1;
+ERROR:  permission denied for schema var_schema2
+SET ROLE TO DEFAULT;
+ALTER VARIABLE var_schema2.var1 SET SCHEMA public;
+SET ROLE TO var_test_role;
+SELECT public.var1;
+ var1 
+------
+ 1000
+(1 row)
+
+ALTER VARIABLE public.var1 RENAME TO var1_renamed;
+SELECT public.var1_renamed;
+ var1_renamed 
+--------------
+         1000
+(1 row)
+
+DROP VARIABLE public.var1_renamed;
+SET ROLE TO DEFAULt;
+-- default rights test
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON VARIABLES TO var_test_role;
+CREATE VARIABLE public.var2 AS int;
+SET ROLE TO var_test_role;
+-- should be ok
+LET public.var2 = 100;
+SELECT public.var2;
+ var2 
+------
+  100
+(1 row)
+
+SET ROLE TO DEFAULt;
+DROP VARIABLE public.var2;
+DROP OWNED BY var_test_role;
+DROP ROLE var_test_role;
+CREATE VARIABLE xx AS text DEFAULT 'hello';
+SELECT xx, upper(xx);
+  xx   | upper 
+-------+-------
+ hello | HELLO
+(1 row)
+
+LET xx = 'Hi';
+SELECT xx;
+ xx 
+----
+ Hi
+(1 row)
+
+DROP VARIABLE xx;
+-- ON TRANSACTION END RESET tests
+CREATE VARIABLE t1 AS int DEFAULT -1 ON TRANSACTION END RESET;
+BEGIN;
+  SELECT t1;
+ t1 
+----
+ -1
+(1 row)
+
+  LET t1 = 100;
+  SELECT t1;
+ t1  
+-----
+ 100
+(1 row)
+
+COMMIT;
+SELECT t1;
+ t1 
+----
+ -1
+(1 row)
+
+BEGIN;
+  SELECT t1;
+ t1 
+----
+ -1
+(1 row)
+
+  LET t1 = 100;
+  SELECT t1;
+ t1  
+-----
+ 100
+(1 row)
+
+ROLLBACK;
+SELECT t1;
+ t1 
+----
+ -1
+(1 row)
+
+DROP VARIABLE t1;
+CREATE VARIABLE v1 AS int DEFAULT 0;
+CREATE VARIABLE v2 AS text DEFAULT 'none';
+LET v1 = 100;
+LET v2 = 'Hello';
+SELECT v1, v2;
+ v1  |  v2   
+-----+-------
+ 100 | Hello
+(1 row)
+
+LET v1 = DEFAULT;
+LET v2 = DEFAULT;
+SELECT v1, v2;
+ v1 |  v2  
+----+------
+  0 | none
+(1 row)
+
+DROP VARIABLE v1;
+DROP VARIABLE v2;
+-- ON COMMIT DROP tests
+-- should be 0 always
+SELECT count(*) FROM pg_variable;
+ count 
+-------
+     0
+(1 row)
+
+CREATE TEMP VARIABLE g AS int ON COMMIT DROP;
+SELECT count(*) FROM pg_variable;
+ count 
+-------
+     0
+(1 row)
+
+BEGIN;
+  CREATE TEMP VARIABLE g AS int ON COMMIT DROP;
+COMMIT;
+SELECT count(*) FROM pg_variable;
+ count 
+-------
+     0
+(1 row)
+
+BEGIN;
+  CREATE TEMP VARIABLE g AS int ON COMMIT DROP;
+ROLLBACK;
+SELECT count(*) FROM pg_variable;
+ count 
+-------
+     0
+(1 row)
+
+BEGIN;
+  CREATE TEMP VARIABLE g AS int ON COMMIT DROP;
+  LET g = 1;
+  DISCARD VARIABLES;
+COMMIT;
+SELECT count(*) FROM pg_variable;
+ count 
+-------
+     0
+(1 row)
+
+BEGIN;
+  CREATE TEMP VARIABLE g AS int ON COMMIT DROP;
+  LET g = 1;
+  DISCARD VARIABLES;
+ROLLBACK;
+SELECT count(*) FROM pg_variable;
+ count 
+-------
+     0
+(1 row)
+
+-- Encourage use of parallel plans
+SET parallel_setup_cost = 0;
+SET parallel_tuple_cost = 0;
+SET min_parallel_table_scan_size = 0;
+SET max_parallel_workers_per_gather = 2;
+-- test on query with workers
+CREATE TABLE svar_test(a int);
+INSERT INTO svar_test SELECT * FROM generate_series(1,1000);
+ANALYZE svar_test;
+CREATE VARIABLE zero int;
+LET zero = 0;
+-- parallel workers should be used
+EXPLAIN (costs off) SELECT count(*) FROM svar_test WHERE a%10 = zero;
+                 QUERY PLAN                 
+--------------------------------------------
+ Aggregate
+   ->  Gather
+         Workers Planned: 2
+         ->  Parallel Seq Scan on svar_test
+               Filter: ((a % 10) = zero)
+(5 rows)
+
+-- result should be 100
+SELECT count(*) FROM svar_test WHERE a%10 = zero;
+ count 
+-------
+   100
+(1 row)
+
+LET zero = (SELECT count(*) FROM svar_test);
+-- result should be 1000
+SELECT zero;
+ zero 
+------
+ 1000
+(1 row)
+
+-- parallel workers should be used
+EXPLAIN (costs off) LET zero = (SELECT count(*) FROM svar_test);
+                        QUERY PLAN                        
+----------------------------------------------------------
+ SET SESSION VARIABLE
+ Result
+   InitPlan 1 (returns $1)
+     ->  Finalize Aggregate
+           ->  Gather
+                 Workers Planned: 2
+                 ->  Partial Aggregate
+                       ->  Parallel Seq Scan on svar_test
+(8 rows)
+
+-- test for dependency on relation
+CREATE VARIABLE v_table AS svar_test;
+ALTER TABLE svar_test ALTER COLUMN a TYPE text;
+ERROR:  cannot alter table "svar_test" because session variable "svartest.v_table" uses it
+DROP VARIABLE v_table;
+DROP TABLE svar_test;
+DROP VARIABLE zero;
+RESET parallel_setup_cost;
+RESET parallel_tuple_cost;
+RESET min_parallel_table_scan_size;
+RESET max_parallel_workers_per_gather;
+-- use variables in prepared statements
+CREATE VARIABLE v AS numeric;
+LET v = 3.14;
+-- use variables in views
+CREATE VIEW vv AS SELECT COALESCE(v, 0) + 1000 AS result;
+SELECT * FROM vv;
+ result  
+---------
+ 1003.14
+(1 row)
+
+-- start a new session
+\c
+SET search_path to svartest;
+SELECT * FROM vv;
+ result 
+--------
+   1000
+(1 row)
+
+LET v = 3.14;
+SELECT * FROM vv;
+ result  
+---------
+ 1003.14
+(1 row)
+
+-- should fail, dependency
+DROP VARIABLE v;
+ERROR:  cannot drop session variable v because other objects depend on it
+DETAIL:  view vv depends on session variable v
+HINT:  Use DROP ... CASCADE to drop the dependent objects too.
+-- should be ok
+DROP VARIABLE v CASCADE;
+NOTICE:  drop cascades to view vv
+-- other features
+CREATE VARIABLE dt AS integer DEFAULT 0;
+LET dt = 100;
+SELECT dt;
+ dt  
+-----
+ 100
+(1 row)
+
+DISCARD VARIABLES;
+SELECT dt;
+ dt 
+----
+  0
+(1 row)
+
+DROP VARIABLE dt;
+-- NOT NULL
+CREATE VARIABLE v1 AS int NOT NULL;
+CREATE VARIABLE v2 AS int NOT NULL DEFAULT NULL;
+-- should fail
+SELECT v1;
+ERROR:  null value is not allowed for NOT NULL session variable "svartest.v1"
+DETAIL:  The session variable was not initialized yet.
+SELECT v2;
+ERROR:  null value is not allowed for NOT NULL session variable "svartest.v2"
+LET v1 = NULL;
+ERROR:  null value is not allowed for NOT NULL session variable "svartest.v1"
+LET v2 = NULL;
+ERROR:  null value is not allowed for NOT NULL session variable "svartest.v2"
+LET v1 = DEFAULT;
+ERROR:  null value is not allowed for NOT NULL session variable "svartest.v1"
+LET v2 = DEFAULT;
+ERROR:  null value is not allowed for NOT NULL session variable "svartest.v2"
+-- should be ok
+LET v1 = 100;
+LET v2 = 1000;
+SELECT v1, v2;
+ v1  |  v2  
+-----+------
+ 100 | 1000
+(1 row)
+
+DROP VARIABLE v1;
+DROP VARIABLE v2;
+CREATE VARIABLE tv AS int;
+CREATE VARIABLE IF NOT EXISTS tv AS int;
+NOTICE:  session variable "tv" already exists, skipping
+DROP VARIABLE tv;
+CREATE IMMUTABLE VARIABLE iv AS int DEFAULT 100;
+SELECT iv;
+ iv  
+-----
+ 100
+(1 row)
+
+-- should fail;
+LET iv = 10000;
+ERROR:  session variable "svartest.iv" is declared IMMUTABLE
+DROP VARIABLE iv;
+-- different order
+CREATE IMMUTABLE VARIABLE iv AS int DEFAULT 100;
+-- should to fail
+LET iv = 10000;
+ERROR:  session variable "svartest.iv" is declared IMMUTABLE
+-- should be ok
+SELECT iv;
+ iv  
+-----
+ 100
+(1 row)
+
+DROP VARIABLE iv;
+CREATE IMMUTABLE VARIABLE iv AS int;
+-- should be ok
+LET iv = NULL;
+-- should fail
+LET iv = NULL;
+ERROR:  session variable "svartest.iv" is declared IMMUTABLE
+DROP VARIABLE iv;
+-- create variable inside plpgsql block
+DO $$
+BEGIN
+  CREATE VARIABLE do_test_svar AS date DEFAULT '2000-01-01';
+END;
+$$;
+SELECT do_test_svar;
+ do_test_svar 
+--------------
+ 01-01-2000
+(1 row)
+
+DROP VARIABLE do_test_svar;
+-- should fail
+CREATE IMMUTABLE VARIABLE xx AS int NOT NULL;
+ERROR:  IMMUTABLE NOT NULL variable requires default expression
+-- REASSIGN OWNED test
+CREATE ROLE var_test_role1;
+CREATE ROLE var_test_role2;
+CREATE VARIABLE xxx_var AS int;
+ALTER VARIABLE xxx_var OWNER TO var_test_role1;
+REASSIGN OWNED BY var_test_role1 to var_test_role2;
+SELECT varowner::regrole FROM pg_variable WHERE varname = 'xxx_var';
+    varowner    
+----------------
+ var_test_role2
+(1 row)
+
+DROP OWNED BY var_test_role1;
+DROP ROLE var_test_role1;
+SELECT count(*) FROM pg_variable WHERE varname = 'xxx_var';
+ count 
+-------
+     1
+(1 row)
+
+DROP OWNED BY var_test_role2;
+DROP ROLE var_test_role2;
+SELECT count(*) FROM pg_variable WHERE varname = 'xxx_var';
+ count 
+-------
+     0
+(1 row)
+
+-- creating, dropping temporary variable
+BEGIN;
+CREATE TEMP VARIABLE tempvar AS INT ON COMMIT DROP;
+LET tempvar = 100;
+SAVEPOINT s1;
+DROP VARIABLE tempvar;
+ROLLBACK TO s1;
+SELECT tempvar;
+ tempvar 
+---------
+     100
+(1 row)
+
+COMMIT;
+-- should to fail
+LET tempvar = 100;
+ERROR:  session variable "tempvar" doesn't exist
+LINE 1: LET tempvar = 100;
+            ^
+BEGIN;
+SAVEPOINT s1;
+CREATE TEMP VARIABLE tempvar AS INT ON COMMIT DROP;
+LET tempvar = 100;
+ROLLBACK TO s1;
+COMMIT;
+-- should to fail
+LET tempvar = 100;
+ERROR:  session variable "tempvar" doesn't exist
+LINE 1: LET tempvar = 100;
+            ^
+CREATE VARIABLE var1 AS int;
+LET var1 = 100;
+BEGIN;
+DROP VARIABLE var1;
+ROLLBACK;
+SELECT var1;
+ var1 
+------
+  100
+(1 row)
+
+DROP VARIABLE var1;
+CREATE VARIABLE var1 AS int DEFAULT 100;
+COMMENT ON VARIABLE var1 IS 'some variable comment';
+SELECT pg_catalog.obj_description(oid, 'pg_variable') FROM pg_variable WHERE varname = 'var1';
+    obj_description    
+-----------------------
+ some variable comment
+(1 row)
+
+DROP VARIABLE var1;
+CREATE TABLE xxtab(avar int);
+CREATE TYPE xxtype AS (avar int);
+CREATE VARIABLE xxtab AS xxtype;
+INSERT INTO xxtab VALUES(10);
+-- it is ambiguous, but columns are preferred
+-- variable is shadowed
+SELECT xxtab.avar FROM xxtab;
+ avar 
+------
+   10
+(1 row)
+
+SET session_variables_ambiguity_warning TO on;
+SELECT xxtab.avar FROM xxtab;
+WARNING:  session variable "xxtab.avar" is shadowed
+LINE 1: SELECT xxtab.avar FROM xxtab;
+               ^
+DETAIL:  Session variables can be shadowed by columns, routine's variables and routine's arguments with the same name.
+ avar 
+------
+   10
+(1 row)
+
+SET search_path = svartest;
+CREATE VARIABLE testvar as int;
+-- plpgsql variables are preferred against session variables
+DO $$
+<<myblock>>
+DECLARE testvar int;
+BEGIN
+  -- should be ok without warning
+  LET testvar = 100;
+  -- should be ok without warning
+  testvar := 1000;
+  -- should be ok without warning
+  RAISE NOTICE 'session variable is %', svartest.testvar;
+  -- should be ok without warning
+  RAISE NOTICE 'plpgsql variable is %', myblock.testvar;
+  -- should to print plpgsql variable with warning
+  RAISE NOTICE 'variable is %', testvar;
+END;
+$$;
+WARNING:  session variable "testvar" is shadowed
+LINE 1: testvar := 1000
+        ^
+DETAIL:  Session variables can be shadowed by columns, routine's variables and routine's arguments with the same name.
+QUERY:  testvar := 1000
+NOTICE:  session variable is 100
+NOTICE:  plpgsql variable is 1000
+WARNING:  session variable "testvar" is shadowed
+LINE 1: testvar
+        ^
+DETAIL:  Session variables can be shadowed by columns, routine's variables and routine's arguments with the same name.
+QUERY:  testvar
+NOTICE:  variable is 1000
+DROP VARIABLE testvar;
+SET session_variables_ambiguity_warning TO default;
+-- should be ok
+SELECT avar FROM xxtab;
+ avar 
+------
+   10
+(1 row)
+
+CREATE VARIABLE public.avar AS int;
+-- should be ok, see the table
+SELECT avar FROM xxtab;
+ avar 
+------
+   10
+(1 row)
+
+-- should be ok
+SELECT public.avar FROM xxtab;
+ avar 
+------
+     
+(1 row)
+
+DROP VARIABLE xxtab;
+SELECT xxtab.avar FROM xxtab;
+ avar 
+------
+   10
+(1 row)
+
+DROP VARIABLE public.avar;
+DROP TYPE xxtype;
+DROP TABLE xxtab;
+-- test of plan cache invalidation
+CREATE VARIABLE xx AS int;
+SET plan_cache_mode = force_generic_plan;
+PREPARE pp AS SELECT xx;
+EXECUTE pp;
+ xx 
+----
+   
+(1 row)
+
+DROP VARIABLE xx;
+CREATE VARIABLE xx AS int;
+-- should to work
+EXECUTE pp;
+ xx 
+----
+   
+(1 row)
+
+DROP VARIABLE xx;
+DEALLOCATE pp;
+SET plan_cache_mode = DEFAULT;
+CREATE ROLE var_test_role;
+CREATE SCHEMA vartest;
+GRANT USAGE ON SCHEMA vartest TO var_test_role;
+CREATE VARIABLE vartest.x AS int;
+CREATE VARIABLE vartest.y AS int;
+LET vartest.x = 100;
+LET vartest.y = 101;
+GRANT SELECT ON ALL VARIABLES IN SCHEMA vartest TO var_test_role;
+SET ROLE TO var_test_role;
+SELECT vartest.x, vartest.y;
+  x  |  y  
+-----+-----
+ 100 | 101
+(1 row)
+
+SET ROLE TO DEFAULT;
+REVOKE SELECT ON ALL VARIABLES IN SCHEMA vartest FROM var_test_role;
+SET ROLE TO var_test_role;
+-- should to fail
+SELECT vartest.x;
+ERROR:  permission denied for session variable x
+SELECT vartest.y;
+ERROR:  permission denied for session variable y
+SET ROLE TO DEFAULT;
+DROP VARIABLE vartest.x, vartest.y;
+DROP SCHEMA vartest;
+DROP ROLE var_test_role;
+-- test cached plan
+CREATE VARIABLE v1 AS text;
+CREATE VARIABLE v2 AS int;
+CREATE VARIABLE v3 AS int;
+LET v1 = 'test';
+LET v2 = 10;
+LET v3 = 5;
+PREPARE q1 AS SELECT v1 || i FROM generate_series(1, v2) g(i) WHERE i IN (v2, v3);
+SET plan_cache_mode to force_generic_plan;
+EXECUTE q1;
+ ?column? 
+----------
+ test5
+ test10
+(2 rows)
+
+EXPLAIN EXECUTE q1;
+                              QUERY PLAN                               
+-----------------------------------------------------------------------
+ Function Scan on generate_series g  (cost=0.00..0.14 rows=2 width=32)
+   Filter: (i = ANY (ARRAY[v2, v3]))
+(2 rows)
+
+-- dependecy check
+DROP VARIABLE v3;
+-- recreate v3 again
+CREATE VARIABLE v3 AS int DEFAULT 6;
+-- should to work, the plan should be recreated
+EXECUTE q1;
+ ?column? 
+----------
+ test6
+ test10
+(2 rows)
+
+DEALLOCATE q1;
+-- fill v1 by long text
+LET v1 = repeat(' ', 10000);
+PREPARE q1 AS SELECT length(v1);
+EXECUTE q1;
+ length 
+--------
+  10000
+(1 row)
+
+LET v1 = repeat(' ', 5000);
+EXECUTE q1;
+ length 
+--------
+   5000
+(1 row)
+
+DEALLOCATE q1;
+SET plan_cache_mode to default;
+DROP VARIABLE v1, v2, v3;
+CREATE ROLE var_test_role;
+CREATE VARIABLE public.v1 AS int DEFAULT 0;
+-- check acl when variable is acessed by simple eval expr method
+CREATE OR REPLACE FUNCTION public.fx_var(int)
+RETURNS int AS $$
+DECLARE xx int;
+BEGIN
+  xx := public.v1 + $1;
+  RETURN xx;
+END;
+$$ LANGUAGE plpgsql;
+-- should be ok
+SELECT public.fx_var(0);
+ fx_var 
+--------
+      0
+(1 row)
+
+SET ROLE TO var_test_role;
+-- should to fail
+SELECT public.fx_var(0);
+ERROR:  permission denied for session variable v1
+CONTEXT:  PL/pgSQL function public.fx_var(integer) line 4 at assignment
+SET ROLE TO default;
+GRANT SELECT ON VARIABLE public.v1 TO var_test_role;
+SET ROLE TO var_test_role;
+-- should be ok
+SELECT public.fx_var(0);
+ fx_var 
+--------
+      0
+(1 row)
+
+SET ROLE TO default;
+REVOKE SELECT ON VARIABLE public.v1 FROM var_test_role;
+SET ROLE TO var_test_role;
+-- should be fail
+SELECT public.fx_var(0);
+ERROR:  permission denied for session variable v1
+CONTEXT:  PL/pgSQL function public.fx_var(integer) line 4 at assignment
+SET ROLE TO DEFAULT;
+DROP FUNCTION public.fx_var(int);
+DROP VARIABLE public.v1;
+DROP ROLE var_test_role;
+CREATE TYPE public.svar_test_type AS (a int, b int, c numeric);
+CREATE VARIABLE public.svar AS public.svar_test_type;
+LET public.svar = ROW(10,20,30);
+SELECT public.svar;
+    svar    
+------------
+ (10,20,30)
+(1 row)
+
+ALTER TYPE public.svar_test_type DROP ATTRIBUTE c;
+-- should be ok
+SELECT public.svar;
+  svar   
+---------
+ (10,20)
+(1 row)
+
+ALTER TYPE public.svar_test_type ADD ATTRIBUTE c int;
+-- should be ok
+SELECT public.svar;
+   svar   
+----------
+ (10,20,)
+(1 row)
+
+LET public.svar = ROW(10,20,30);
+-- should be ok again for new value
+SELECT public.svar;
+    svar    
+------------
+ (10,20,30)
+(1 row)
+
+DROP VARIABLE public.svar;
+DROP TYPE public.svar_test_type;
+CREATE VARIABLE public.svar AS int;
+select oid as varid from pg_variable where varname = 'svar' and varnamespace = 'public'::regnamespace \gset
+SELECT schema, name, removed FROM pg_debug_show_used_session_variables();
+ schema | name | removed 
+--------+------+---------
+(0 rows)
+
+LET public.svar = 100;
+SELECT schema, name, removed FROM pg_debug_show_used_session_variables();
+ schema | name | removed 
+--------+------+---------
+ public | svar | f
+(1 row)
+
+BEGIN;
+DROP VARIABLE public.svar;
+-- value should be in memory
+SELECT schema, removed FROM pg_debug_show_used_session_variables();
+ schema | removed 
+--------+---------
+        | t
+(1 row)
+
+ROLLBACK;
+-- value should be in memory
+SELECT schema, name, removed FROM pg_debug_show_used_session_variables() f WHERE f.varid = :varid;
+ schema | name | removed 
+--------+------+---------
+ public | svar | f
+(1 row)
+
+SELECT public.svar;
+ svar 
+------
+  100
+(1 row)
+
+BEGIN;
+DROP VARIABLE public.svar;
+-- value should be in memory
+SELECT schema, name = :varid::text AS ok, removed FROM pg_debug_show_used_session_variables() f WHERE f.varid = :varid;;
+ schema | ok | removed 
+--------+----+---------
+        | t  | t
+(1 row)
+
+COMMIT;
+-- the memory should be clean;
+SELECT schema, name, removed FROM pg_debug_show_used_session_variables() WHERE f.varid = :varid;
+ERROR:  missing FROM-clause entry for table "f"
+LINE 1: ...FROM pg_debug_show_used_session_variables() WHERE f.varid = ...
+                                                             ^
+BEGIN;
+CREATE VARIABLE public.svar AS int;
+select oid as varid from pg_variable where varname = 'svar' and varnamespace = 'public'::regnamespace \gset
+LET public.svar = 100;
+ROLLBACK;
+-- the memory should be clean;
+SELECT schema, name, removed FROM pg_debug_show_used_session_variables() f WHERE f.varid = :varid;
+ schema | name | removed 
+--------+------+---------
+(0 rows)
+
+\unset varid
+CREATE VARIABLE public.svar AS int;
+LET public.svar = 100;
+-- repeated aborted transaction
+BEGIN; DROP VARIABLE public.svar; ROLLBACK;
+BEGIN; DROP VARIABLE public.svar; ROLLBACK;
+BEGIN; DROP VARIABLE public.svar; ROLLBACK;
+-- the value should be still available
+SELECT public.svar;
+ svar 
+------
+  100
+(1 row)
+
+DROP VARIABLE public.svar;
+CREATE TYPE public.svar_test_type AS (a int, b int);
+CREATE VARIABLE public.svar AS public.svar_test_type;
+SELECT public.svar;
+ svar 
+------
+ 
+(1 row)
+
+ALTER TYPE public.svar_test_type ADD ATTRIBUTE c int;
+SELECT public.svar;
+ svar 
+------
+ 
+(1 row)
+
+ALTER TYPE public.svar_test_type DROP ATTRIBUTE b;
+SELECT public.svar;
+ svar 
+------
+ 
+(1 row)
+
+DROP VARIABLE public.svar;
+DROP TYPE public.svar_test_type;
+CREATE TYPE public.svar_test_type AS (a int, b int);
+CREATE VARIABLE public.svar AS public.svar_test_type;
+CREATE VARIABLE public.svar2 AS public.svar_test_type;
+LET public.svar = (10, 20);
+ALTER TYPE public.svar_test_type ADD ATTRIBUTE c int;
+SELECT public.svar;
+   svar   
+----------
+ (10,20,)
+(1 row)
+
+LET public.svar2 = (10, 20, 30);
+ALTER TYPE public.svar_test_type DROP ATTRIBUTE b;
+SELECT public.svar;
+ svar  
+-------
+ (10,)
+(1 row)
+
+SELECT public.svar2;
+  svar2  
+---------
+ (10,30)
+(1 row)
+
+DROP VARIABLE public.svar;
+DROP VARIABLE public.svar2;
+DROP TYPE public.svar_test_type;
+-- The composite type cannot be changed when it is used
+CREATE TYPE public.svar_type AS (a int, b int);
+CREATE VARIABLE public.svar AS public.svar_type;
+-- should to fail
+ALTER TYPE public.svar_type ALTER ATTRIBUTE b TYPE numeric;
+ERROR:  cannot alter type "svar_type" because session variable "public.svar" uses it
+DROP VARIABLE public.svar;
+CREATE TYPE public.svar_type2 AS (a int, b int, c public.svar_type);
+CREATE VARIABLE public.svar AS public.svar_type2;
+-- should to fail
+ALTER TYPE public.svar_type ALTER ATTRIBUTE b TYPE numeric;
+ERROR:  cannot alter type "svar_type" because session variable "public.svar" uses it
+DROP VARIABLE public.svar;
+DROP TYPE public.svar_type2;
+DROP TYPE public.svar_type;
+-- The variable can be shadowed by table or by alias
+CREATE TYPE public.svar_type AS (a int, b int, c int);
+CREATE VARIABLE public.svar AS public.svar_type;
+CREATE TABLE public.svar (a int, b int);
+INSERT INTO public.svar VALUES(10, 20);
+LET public.svar = (100, 200, 300);
+-- should be ok
+-- show table
+SELECT * FROM public.svar;
+ a  | b  
+----+----
+ 10 | 20
+(1 row)
+
+SELECT svar.a FROM public.svar;
+ a  
+----
+ 10
+(1 row)
+
+SELECT svar.* FROM public.svar;
+ a  | b  
+----+----
+ 10 | 20
+(1 row)
+
+-- show variable
+SELECT public.svar;
+     svar      
+---------------
+ (100,200,300)
+(1 row)
+
+SELECT public.svar.c;
+  c  
+-----
+ 300
+(1 row)
+
+SELECT (public.svar).*;
+  a  |  b  |  c  
+-----+-----+-----
+ 100 | 200 | 300
+(1 row)
+
+-- the variable is shadowed, raise error
+SELECT public.svar.c FROM public.svar;
+ERROR:  column svar.c does not exist
+LINE 1: SELECT public.svar.c FROM public.svar;
+               ^
+-- can be fixed by alias
+SELECT public.svar.c FROM public.svar x;
+  c  
+-----
+ 300
+(1 row)
+
+-- again with warnings
+SET session_variables_ambiguity_warning TO on;
+SELECT * FROM public.svar;
+ a  | b  
+----+----
+ 10 | 20
+(1 row)
+
+SELECT svar.a FROM public.svar;
+ a  
+----
+ 10
+(1 row)
+
+SELECT svar.* FROM public.svar;
+ a  | b  
+----+----
+ 10 | 20
+(1 row)
+
+-- show variable
+SELECT public.svar;
+     svar      
+---------------
+ (100,200,300)
+(1 row)
+
+SELECT public.svar.c;
+  c  
+-----
+ 300
+(1 row)
+
+SELECT (public.svar).*;
+  a  |  b  |  c  
+-----+-----+-----
+ 100 | 200 | 300
+(1 row)
+
+-- the variable is shadowed, raise error
+SELECT public.svar.c FROM public.svar;
+WARNING:  session variable "public.svar" is shadowed
+LINE 1: SELECT public.svar.c FROM public.svar;
+               ^
+DETAIL:  Session variables can be shadowed by tables or table's aliases with the same name.
+ERROR:  column svar.c does not exist
+LINE 1: SELECT public.svar.c FROM public.svar;
+               ^
+-- can be fixed by alias
+SELECT public.svar.c FROM public.svar x;
+  c  
+-----
+ 300
+(1 row)
+
+SET session_variables_ambiguity_warning TO DEFAULT;
+DROP VARIABLE public.svar;
+DROP TABLE public.svar;
+DROP TYPE public.svar_type;

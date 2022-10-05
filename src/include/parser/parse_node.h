@@ -81,6 +81,8 @@ typedef enum ParseExprKind
 	EXPR_KIND_COPY_WHERE,		/* WHERE condition in COPY FROM */
 	EXPR_KIND_GENERATED_COLUMN, /* generation expression for a column */
 	EXPR_KIND_CYCLE_MARK,		/* cycle mark value */
+	EXPR_KIND_VARIABLE_DEFAULT,	/* default value for session variable */
+	EXPR_KIND_LET_TARGET		/* LET assignment (should be same like UPDATE) */
 } ParseExprKind;
 
 
@@ -211,6 +213,7 @@ struct ParseState
 	bool		p_hasTargetSRFs;
 	bool		p_hasSubLinks;
 	bool		p_hasModifyingCTE;
+	bool		p_hasSessionVariables;
 
 	Node	   *p_last_srf;		/* most recent set-returning func/op found */
 

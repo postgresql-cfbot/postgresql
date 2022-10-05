@@ -25,8 +25,11 @@
 #include "postgres.h"
 
 #include "access/sysattr.h"
+#include "catalog/namespace.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
+#include "catalog/pg_variable.h"
+#include "commands/session_variable.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
@@ -51,6 +54,7 @@
 #include "utils/builtins.h"
 #include "utils/guc.h"
 #include "utils/queryjumble.h"
+#include "utils/lsyscache.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
 
@@ -84,6 +88,8 @@ static Query *transformCreateTableAsStmt(ParseState *pstate,
 										 CreateTableAsStmt *stmt);
 static Query *transformCallStmt(ParseState *pstate,
 								CallStmt *stmt);
+static Query *transformLetStmt(ParseState *pstate,
+							   LetStmt *stmt);
 static void transformLockingClause(ParseState *pstate, Query *qry,
 								   LockingClause *lc, bool pushedDown);
 #ifdef RAW_EXPRESSION_COVERAGE_TEST
@@ -327,6 +333,7 @@ transformStmt(ParseState *pstate, Node *parseTree)
 		case T_UpdateStmt:
 		case T_DeleteStmt:
 		case T_MergeStmt:
+		case T_LetStmt:
 			(void) test_raw_expression_coverage(parseTree, NULL);
 			break;
 		default:
@@ -400,6 +407,11 @@ transformStmt(ParseState *pstate, Node *parseTree)
 									   (CallStmt *) parseTree);
 			break;
 
+		case T_LetStmt:
+			result = transformLetStmt(pstate,
+									  (LetStmt *) parseTree);
+			break;
+
 		default:
 
 			/*
@@ -442,6 +454,7 @@ analyze_requires_snapshot(RawStmt *parseTree)
 		case T_MergeStmt:
 		case T_SelectStmt:
 		case T_PLAssignStmt:
+		case T_LetStmt:
 			result = true;
 			break;
 
@@ -524,6 +537,8 @@ transformDeleteStmt(ParseState *pstate, DeleteStmt *stmt)
 	qry->hasWindowFuncs = pstate->p_hasWindowFuncs;
 	qry->hasTargetSRFs = pstate->p_hasTargetSRFs;
 	qry->hasAggs = pstate->p_hasAggs;
+
+	qry->hasSessionVariables = pstate->p_hasSessionVariables;
 
 	assign_query_collations(pstate, qry);
 
@@ -942,6 +957,7 @@ transformInsertStmt(ParseState *pstate, InsertStmt *stmt)
 
 	qry->hasTargetSRFs = pstate->p_hasTargetSRFs;
 	qry->hasSubLinks = pstate->p_hasSubLinks;
+	qry->hasSessionVariables = pstate->p_hasSessionVariables;
 
 	assign_query_collations(pstate, qry);
 
@@ -1404,6 +1420,8 @@ transformSelectStmt(ParseState *pstate, SelectStmt *stmt)
 							   (LockingClause *) lfirst(l), false);
 	}
 
+	qry->hasSessionVariables = pstate->p_hasSessionVariables;
+
 	assign_query_collations(pstate, qry);
 
 	/* this must be done after collations, for reliable comparison of exprs */
@@ -1622,10 +1640,279 @@ transformValuesClause(ParseState *pstate, SelectStmt *stmt)
 	qry->jointree = makeFromExpr(pstate->p_joinlist, NULL);
 
 	qry->hasSubLinks = pstate->p_hasSubLinks;
+	qry->hasSessionVariables = pstate->p_hasSessionVariables;
 
 	assign_query_collations(pstate, qry);
 
 	return qry;
+}
+
+/*
+ * transformLetStmt -
+ *	  transform an Let Statement
+ */
+static Query *
+transformLetStmt(ParseState *pstate, LetStmt *stmt)
+{
+	Query	   *query;
+	Query	   *result;
+	List	   *exprList = NIL;
+	List	   *exprListCoer = NIL;
+	List	   *indirection = NIL;
+	ListCell   *lc;
+	Query	   *selectQuery;
+	int			i = 0;
+	Oid			varid;
+	char	   *attrname = NULL;
+	bool		not_unique;
+	bool		is_rowtype;
+	Oid			typid;
+	int32		typmod;
+	Oid			collid;
+	AclResult	aclresult;
+	List	   *names = NULL;
+	int			indirection_start;
+
+	/* There can't be any outer WITH to worry about */
+	Assert(pstate->p_ctenamespace == NIL);
+
+	names = NamesFromList(stmt->target);
+
+	varid = IdentifyVariable(names, &attrname, &not_unique);
+	if (not_unique)
+		ereport(ERROR,
+				(errcode(ERRCODE_AMBIGUOUS_PARAMETER),
+				 errmsg("target \"%s\" of LET command is ambiguous",
+						NameListToString(names)),
+				 parser_errposition(pstate, stmt->location)));
+
+	if (!OidIsValid(varid))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("session variable \"%s\" doesn't exist",
+						NameListToString(names)),
+				 parser_errposition(pstate, stmt->location)));
+
+	indirection_start = list_length(names) - (attrname ? 1 : 0);
+	indirection = list_copy_tail(stmt->target, indirection_start);
+
+	get_session_variable_type_typmod_collid(varid, &typid, &typmod, &collid);
+
+	is_rowtype = type_is_rowtype(typid);
+
+	if (attrname && !is_rowtype)
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("type \"%s\" of target session variable \"%s.%s\" is not a composite type",
+						format_type_be(typid),
+						get_namespace_name(get_session_variable_namespace(varid)),
+						get_session_variable_name(varid)),
+				 parser_errposition(pstate, stmt->location)));
+
+	if (stmt->set_default && attrname != NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("only session variable (without attribute specification) can be set to default"),
+				 parser_errposition(pstate, stmt->location)));
+
+	aclresult = pg_variable_aclcheck(varid, GetUserId(), ACL_UPDATE);
+	if (aclresult != ACLCHECK_OK)
+		aclcheck_error(aclresult, OBJECT_VARIABLE, NameListToString(names));
+
+	pstate->p_expr_kind = EXPR_KIND_LET_TARGET;
+
+	/*
+	 * The LET statements suppports two syntaxes: LET var = expr and LET var =
+	 * DEFAULT. In first case, the expression is of SelectStmt node and it is
+	 * transformated to query (SELECT) by usual way. Second syntax should be
+	 * transformed differently. It is more cleaner do this transformation here
+	 * (like special case), because we don't need to enhance SelectStmt about
+	 * fields necessary for this transformation somwehere in SelectStmt
+	 * transformation. Isn't to necessary to uglify the SelectStmt
+	 * transformation. This is special case of LET statement, not SelectStmt.
+	 */
+	if (stmt->set_default)
+	{
+		selectQuery = makeNode(Query);
+		selectQuery->commandType = CMD_SELECT;
+
+		/*
+		 * ResTarget(SetToDefault) -> TargetEntry(expr(SetToDefault)) The
+		 * SetToDefault is replaced by defexpr by rewriter in RewriteQuery
+		 * function.
+		 */
+		selectQuery->targetList = transformTargetList(pstate,
+													  ((SelectStmt *) stmt->query)->targetList,
+													  EXPR_KIND_LET_TARGET);
+	}
+	else
+		selectQuery = transformStmt(pstate, stmt->query);
+
+	/* The grammar should have produced a SELECT */
+	if (!IsA(selectQuery, Query) ||
+		selectQuery->commandType != CMD_SELECT)
+		elog(ERROR, "unexpected non-SELECT command in LET command");
+
+	/*----------
+	 * Generate an expression list for the LET that selects all the
+	 * non-resjunk columns from the subquery.
+	 *----------
+	 */
+	exprList = NIL;
+	foreach(lc, selectQuery->targetList)
+	{
+		TargetEntry *tle = (TargetEntry *) lfirst(lc);
+
+		if (tle->resjunk)
+			continue;
+
+		exprList = lappend(exprList, tle->expr);
+	}
+
+	/* don't allow multicolumn result */
+	if (list_length(exprList) != 1)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("expression is not scalar value"),
+				 parser_errposition(pstate,
+									exprLocation((Node *) exprList))));
+
+	exprListCoer = NIL;
+
+	foreach(lc, exprList)
+	{
+		Expr	   *expr = (Expr *) lfirst(lc);
+		Expr	   *coerced_expr;
+		Param	   *param;
+		Oid			exprtypid;
+
+		if (IsA(expr, SetToDefault))
+		{
+			SetToDefault *def = (SetToDefault *) expr;
+
+			def->typeId = typid;
+			def->typeMod = typmod;
+			def->collation = collid;
+		}
+		else if (IsA(expr, Const) && ((Const *) expr)->constisnull)
+		{
+			/* use known type for NULL value */
+			expr = (Expr *) makeNullConst(typid, typmod, collid);
+		}
+
+		/* now we can read type of expression */
+		exprtypid = exprType((Node *) expr);
+
+		param = makeNode(Param);
+		param->paramkind = PARAM_VARIABLE;
+		param->paramvarid = varid;
+		param->paramtype = typid;
+		param->paramtypmod = typmod;
+
+		if (indirection != NULL)
+		{
+			bool		targetIsArray;
+			char	   *targetName;
+
+			targetName = get_session_variable_name(varid);
+			targetIsArray = OidIsValid(get_element_type(typid));
+
+			pstate->p_hasSessionVariables = true;
+
+			coerced_expr = (Expr *)
+				transformAssignmentIndirection(pstate,
+											   (Node *) param,
+											   targetName,
+											   targetIsArray,
+											   typid,
+											   typmod,
+											   InvalidOid,
+											   indirection,
+											   list_head(indirection),
+											   (Node *) expr,
+											   COERCION_PLPGSQL,
+											   stmt->location);
+		}
+		else
+			coerced_expr = (Expr *)
+				coerce_to_target_type(pstate,
+									  (Node *) expr,
+									  exprtypid,
+									  typid, typmod,
+									  COERCION_ASSIGNMENT,
+									  COERCE_IMPLICIT_CAST,
+									  stmt->location);
+
+		if (coerced_expr == NULL)
+			ereport(ERROR,
+					(errcode(ERRCODE_DATATYPE_MISMATCH),
+					 errmsg("variable \"%s.%s\" is of type %s,"
+							" but expression is of type %s",
+							get_namespace_name(get_session_variable_namespace(varid)),
+							get_session_variable_name(varid),
+							format_type_be(typid),
+							format_type_be(exprtypid)),
+					 errhint("You will need to rewrite or cast the expression."),
+					 parser_errposition(pstate, exprLocation((Node *) expr))));
+
+		exprListCoer = lappend(exprListCoer, coerced_expr);
+	}
+
+	/*
+	 * Generate query's target list using the computed list of expressions.
+	 */
+	query = makeNode(Query);
+	query->commandType = CMD_SELECT;
+
+	foreach(lc, exprListCoer)
+	{
+		Expr	   *expr = (Expr *) lfirst(lc);
+		TargetEntry *tle;
+
+		tle = makeTargetEntry(expr,
+							  i + 1,
+							  FigureColname((Node *) expr),
+							  false);
+		query->targetList = lappend(query->targetList, tle);
+	}
+
+	/* done building the range table and jointree */
+	query->rtable = pstate->p_rtable;
+	query->jointree = makeFromExpr(pstate->p_joinlist, NULL);
+
+	query->hasTargetSRFs = pstate->p_hasTargetSRFs;
+	query->hasSubLinks = pstate->p_hasSubLinks;
+	query->hasSessionVariables = pstate->p_hasSessionVariables;
+
+	/* This is top query */
+	query->canSetTag = true;
+
+	/*
+	 * Save target session variable id. This value is used multiple times: by
+	 * query rewriter (for getting related defexpr), by planner (for acquiring
+	 * AccessShareLock on target variable), and by executor (we need to know
+	 * target variable id).
+	 */
+	query->resultVariable = varid;
+
+	assign_query_collations(pstate, query);
+
+	stmt->query = (Node *) query;
+
+	/*
+	 * When statement is executed as a PlpgSQL LET statement, then we should
+	 * return the query because we don't want to use a utilityStmt wrapper
+	 * node.
+	 */
+	if (stmt->plpgsql_mode)
+		return query;
+
+	/* represent the command as a utility Query */
+	result = makeNode(Query);
+	result->commandType = CMD_UTILITY;
+	result->utilityStmt = (Node *) stmt;
+
+	return result;
 }
 
 /*
@@ -1877,6 +2164,8 @@ transformSetOperationStmt(ParseState *pstate, SelectStmt *stmt)
 		transformLockingClause(pstate, qry,
 							   (LockingClause *) lfirst(l), false);
 	}
+
+	qry->hasSessionVariables = pstate->p_hasSessionVariables;
 
 	assign_query_collations(pstate, qry);
 
@@ -2409,6 +2698,7 @@ transformUpdateStmt(ParseState *pstate, UpdateStmt *stmt)
 
 	qry->hasTargetSRFs = pstate->p_hasTargetSRFs;
 	qry->hasSubLinks = pstate->p_hasSubLinks;
+	qry->hasSessionVariables = pstate->p_hasSessionVariables;
 
 	assign_query_collations(pstate, qry);
 

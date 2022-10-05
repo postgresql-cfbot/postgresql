@@ -10232,6 +10232,21 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-session-variables-ambiguity-warning" xreflabel="session_variables_ambiguity_warning">
+      <term><varname>session_variables_ambiguity_warning</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>session_variables_ambiguity_warning</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        When on, a warning is raised when any identifier in a query could be
+        used as both a column identifier, routine variable or a session
+        variable identifier.  The default is <literal>off</literal>.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-standard-conforming-strings" xreflabel="standard_conforming_strings">
       <term><varname>standard_conforming_strings</varname> (<type>boolean</type>)
       <indexterm><primary>strings</primary><secondary>standard conforming</secondary></indexterm>

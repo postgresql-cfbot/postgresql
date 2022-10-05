@@ -806,6 +806,10 @@ acldefault(ObjectType objtype, Oid ownerId)
 			world_default = ACL_NO_RIGHTS;
 			owner_default = ACL_ALL_RIGHTS_PARAMETER_ACL;
 			break;
+		case OBJECT_VARIABLE:
+			world_default = ACL_NO_RIGHTS;
+			owner_default = ACL_ALL_RIGHTS_VARIABLE;
+			break;
 		default:
 			elog(ERROR, "unrecognized objtype: %d", (int) objtype);
 			world_default = ACL_NO_RIGHTS;	/* keep compiler quiet */
@@ -902,6 +906,9 @@ acldefault_sql(PG_FUNCTION_ARGS)
 			break;
 		case 'T':
 			objtype = OBJECT_TYPE;
+			break;
+		case 'V':
+			objtype = OBJECT_VARIABLE;
 			break;
 		default:
 			elog(ERROR, "unrecognized objtype abbreviation: %c", objtypec);
@@ -1604,7 +1611,6 @@ makeaclitem(PG_FUNCTION_ARGS)
 
 	PG_RETURN_ACLITEM_P(result);
 }
-
 
 /*
  * convert_any_priv_string: recognize privilege strings for has_foo_privilege

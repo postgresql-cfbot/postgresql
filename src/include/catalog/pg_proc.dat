@@ -6277,6 +6277,9 @@
   proname => 'pg_collation_is_visible', procost => '10', provolatile => 's',
   prorettype => 'bool', proargtypes => 'oid',
   prosrc => 'pg_collation_is_visible' },
+{ oid => '9221', descr => 'is session variable visible in search path?',
+  proname => 'pg_variable_is_visible', procost => '10', provolatile => 's',
+  prorettype => 'bool', proargtypes => 'oid', prosrc => 'pg_variable_is_visible' },
 
 { oid => '2854', descr => 'get OID of current session\'s temp schema, if any',
   proname => 'pg_my_temp_schema', provolatile => 's', proparallel => 'r',
@@ -11823,4 +11826,11 @@
   prorettype => 'bytea', proargtypes => 'pg_brin_minmax_multi_summary',
   prosrc => 'brin_minmax_multi_summary_send' },
 
+{ oid => '8488', descr => 'debug list of used session variables',
+  proname => 'pg_debug_show_used_session_variables', prorows => '1000', proretset => 't',
+  provolatile => 's', prorettype => 'record', proargtypes => '',
+  proallargtypes => '{oid,text,text,oid,text,bool,bool,bool,bool}',
+  proargmodes => '{o,o,o,o,o,o,o,o,o}',
+  proargnames => '{varid,schema,name,typid,typname,removed,has_value,can_select,can_update}',
+  prosrc => 'pg_debug_show_used_session_variables' },
 ]

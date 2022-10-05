@@ -168,6 +168,7 @@ typedef struct ArrayType Acl;
 #define ACL_ALL_RIGHTS_SCHEMA		(ACL_USAGE|ACL_CREATE)
 #define ACL_ALL_RIGHTS_TABLESPACE	(ACL_CREATE)
 #define ACL_ALL_RIGHTS_TYPE			(ACL_USAGE)
+#define ACL_ALL_RIGHTS_VARIABLE		(ACL_SELECT|ACL_UPDATE)
 
 /* operation codes for pg_*_aclmask */
 typedef enum
@@ -267,7 +268,8 @@ extern AclMode pg_foreign_server_aclmask(Oid srv_oid, Oid roleid,
 										 AclMode mask, AclMaskHow how);
 extern AclMode pg_type_aclmask(Oid type_oid, Oid roleid,
 							   AclMode mask, AclMaskHow how);
-
+extern AclMode pg_variable_aclmask(Oid var_oid, Oid roleid,
+								   AclMode mask, AclMaskHow how);
 extern AclResult pg_attribute_aclcheck(Oid table_oid, AttrNumber attnum,
 									   Oid roleid, AclMode mode);
 extern AclResult pg_attribute_aclcheck_ext(Oid table_oid, AttrNumber attnum,
@@ -292,6 +294,7 @@ extern AclResult pg_tablespace_aclcheck(Oid spc_oid, Oid roleid, AclMode mode);
 extern AclResult pg_foreign_data_wrapper_aclcheck(Oid fdw_oid, Oid roleid, AclMode mode);
 extern AclResult pg_foreign_server_aclcheck(Oid srv_oid, Oid roleid, AclMode mode);
 extern AclResult pg_type_aclcheck(Oid type_oid, Oid roleid, AclMode mode);
+extern AclResult pg_variable_aclcheck(Oid var_oid, Oid roleid, AclMode mode);
 
 extern void aclcheck_error(AclResult aclerr, ObjectType objtype,
 						   const char *objectname);
@@ -328,6 +331,7 @@ extern bool pg_extension_ownercheck(Oid ext_oid, Oid roleid);
 extern bool pg_publication_ownercheck(Oid pub_oid, Oid roleid);
 extern bool pg_subscription_ownercheck(Oid sub_oid, Oid roleid);
 extern bool pg_statistics_object_ownercheck(Oid stat_oid, Oid roleid);
+extern bool pg_variable_ownercheck(Oid stat_oid, Oid roleid);
 extern bool has_createrole_privilege(Oid roleid);
 extern bool has_bypassrls_privilege(Oid roleid);
 

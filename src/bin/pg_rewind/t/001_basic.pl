@@ -172,6 +172,71 @@ in primary, before promotion
 ),
 		'drop');
 
+	if ($test_mode eq 'archive')
+	{
+		goto SKIP;
+	}
+
+	# Read logs produced by pg_rewind
+	my $log_file_name =
+		"$PostgreSQL::Test::Utils::log_path/regress_log_001_basic";
+	my $pg_rewind_logs = do {
+		local $/ = undef;
+		open(my $log_file, '<', $log_file_name) || die "could not open $log_file_name: $!";
+		<$log_file>;
+	};
+
+	# This WAL segment file is common between both source and target,
+	# originating before WAL timeline divergence. pg_rewind should not copy
+	# and overwrite this target file with the source's copy.
+	like(
+		$pg_rewind_logs,
+		qr/pg_rewind: WAL file entry "000000010000000000000002" not copied to target/,
+		'common segment file skipped from copying');
+	unlike(
+		$pg_rewind_logs,
+		qr/pg_rewind: pg_wal\/000000010000000000000002 \(COPY\)/,
+		'common segment file not copied');
+	if ($test_mode eq 'remote')
+	{
+		unlike(
+			$pg_rewind_logs,
+			qr/pg_rewind: received chunk for file "pg_wal\/000000010000000000000002"/,
+			'common segment file copy not received by remote target');
+	}
+
+	# These WAL segment files occur just before and after the divergence to the
+	# new timeline. (Both of these WAL files are internally represented by
+	# segment 3.) pg_rewind should copy and overwrite these target files with
+	# the source's copies.
+	like(
+		$pg_rewind_logs,
+		qr/pg_rewind: WAL file entry "000000010000000000000003" is copied to target/,
+		'diverged segment file included in copying to target');
+	like(
+		$pg_rewind_logs,
+		qr/pg_rewind: pg_wal\/000000010000000000000003 \(COPY\)/,
+		'diverged segment file copied');
+	if ($test_mode eq 'remote')
+	{
+		like(
+			$pg_rewind_logs,
+			qr/pg_rewind: received chunk for file "pg_wal\/000000010000000000000003"/,
+			'diverged segment file copy received by remote target');
+	}
+
+	like(
+		$pg_rewind_logs,
+		qr/pg_rewind: pg_wal\/000000020000000000000003 \(COPY\)/,
+		'diverged segment file included in copying to target');
+	if ($test_mode eq 'remote')
+	{
+		like(
+			$pg_rewind_logs,
+			qr/pg_rewind: received chunk for file "pg_wal\/000000020000000000000003"/,
+			'diverged segment file copy received by remote target');
+	}
+
 	# Permissions on PGDATA should be default
   SKIP:
 	{

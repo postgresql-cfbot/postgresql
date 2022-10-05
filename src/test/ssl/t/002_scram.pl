@@ -109,6 +109,21 @@ $node->connect_fails(
 	  qr/channel binding required but not supported by server's authentication request/
 );
 
+# Tests for channel_binding_type
+$node->connect_fails(
+	"$common_connstr user=ssltestuser channel_binding=require channel_binding_type=invalid_value",
+	"SCRAM with SSL and channel_binding_type=invalid_value",
+	expected_stderr => qr/invalid channel_binding_type value: "invalid_value"/);
+if ($supports_tls_server_end_point)
+{
+	$node->connect_ok(
+		"$common_connstr user=ssltestuser channel_binding=require channel_binding_type=tls-server-end-point",
+		"SCRAM with SSL and channel_binding_type=tls-server-end-point");
+}
+$node->connect_ok(
+	"$common_connstr user=ssltestuser channel_binding=require channel_binding_type=tls-exporter",
+	"SCRAM with SSL and channel_binding_type=tls-exporter");
+
 # Now test with auth method 'cert' by connecting to 'certdb'. Should fail,
 # because channel binding is not performed.  Note that ssl/client.key may
 # be used in a different test, so the name of this temporary client key

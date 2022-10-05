@@ -400,7 +400,7 @@ build_client_first_message(fe_scram_state *state)
 	if (strcmp(state->sasl_mechanism, SCRAM_SHA_256_PLUS_NAME) == 0)
 	{
 		Assert(conn->ssl_in_use);
-		appendPQExpBufferStr(&buf, "p=tls-server-end-point");
+		appendPQExpBuffer(&buf, "p=%s", conn->channel_binding_type);
 	}
 #ifdef HAVE_PGTLS_GET_PEER_CERTIFICATE_HASH
 	else if (conn->channel_binding[0] != 'd' && /* disable */
@@ -484,10 +484,38 @@ build_client_final_message(fe_scram_state *state)
 		size_t		cbind_input_len;
 		int			encoded_cbind_len;
 
-		/* Fetch hash data of server's SSL certificate */
-		cbind_data =
-			pgtls_get_peer_certificate_hash(state->conn,
-											&cbind_data_len);
+		if (strcmp(state->conn->channel_binding_type, "tls-exporter") == 0)
+		{
+			/*------
+			 * From the spec:
+			 *
+			 * The [tls-exporter] EKM is obtained using the keying material
+			 * exporters for TLS as defined in [RFC5705] and [RFC8446] section
+			 * 7.5 by supplying the following inputs:
+			 *
+			 * Label:  The ASCII string "EXPORTER-Channel-Binding" with no
+			 *         terminating NUL.
+			 *
+			 * Context value:  Zero-length string.
+			 *
+			 * Length:  32 bytes.
+			 *------
+			 */
+			cbind_data_len = 32;
+			cbind_data = (char *)
+				pgtls_export_keying_material(state->conn,
+											 "EXPORTER-Channel-Binding",
+											 (unsigned char *) "", 0,
+											 cbind_data_len);
+		}
+		else /* tls-server-end-point */
+		{
+			/* Fetch hash data of server's SSL certificate */
+			cbind_data =
+				pgtls_get_peer_certificate_hash(state->conn,
+												&cbind_data_len);
+		}
+
 		if (cbind_data == NULL)
 		{
 			/* error message is already set on error */
@@ -498,7 +526,7 @@ build_client_final_message(fe_scram_state *state)
 		appendPQExpBufferStr(&buf, "c=");
 
 		/* p=type,, */
-		cbind_header_len = strlen("p=tls-server-end-point,,");
+		cbind_header_len = strlen(state->conn->channel_binding_type) + 4;
 		cbind_input_len = cbind_header_len + cbind_data_len;
 		cbind_input = malloc(cbind_input_len);
 		if (!cbind_input)
@@ -506,8 +534,9 @@ build_client_final_message(fe_scram_state *state)
 			free(cbind_data);
 			goto oom_error;
 		}
-		memcpy(cbind_input, "p=tls-server-end-point,,", cbind_header_len);
-		memcpy(cbind_input + cbind_header_len, cbind_data, cbind_data_len);
+		snprintf(cbind_input, cbind_input_len, "p=%s,,",
+				 state->conn->channel_binding_type);
+		memcpy(cbind_input + cbind_header_len , cbind_data, cbind_data_len);
 
 		encoded_cbind_len = pg_b64_enc_len(cbind_input_len);
 		if (!enlargePQExpBuffer(&buf, encoded_cbind_len))

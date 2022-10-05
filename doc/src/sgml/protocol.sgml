@@ -1752,7 +1752,8 @@ SELCT 1/0;<!-- this typo is intentional -->
     <firstterm>Channel binding</firstterm> is supported in PostgreSQL builds with
     SSL support. The SASL mechanism name for SCRAM with channel binding is
     <literal>SCRAM-SHA-256-PLUS</literal>.  The channel binding type used by
-    PostgreSQL is <literal>tls-server-end-point</literal>.
+    PostgreSQL are <literal>tls-server-end-point</literal> and
+    <literal>tls-exporter</literal>.
    </para>
 
    <para>

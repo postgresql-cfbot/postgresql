@@ -148,6 +148,7 @@ typedef struct
 
 	/* Fields of the first message from client */
 	char		cbind_flag;
+	char	   *channel_binding_type;
 	char	   *client_first_message_bare;
 	char	   *client_username;
 	char	   *client_nonce;
@@ -876,7 +877,6 @@ static void
 read_client_first_message(scram_state *state, const char *input)
 {
 	char	   *p = pstrdup(input);
-	char	   *channel_binding_type;
 
 
 	/*------
@@ -1009,17 +1009,17 @@ read_client_first_message(scram_state *state, const char *input)
 						 errmsg("malformed SCRAM message"),
 						 errdetail("The client selected SCRAM-SHA-256 without channel binding, but the SCRAM message includes channel binding data.")));
 
-			channel_binding_type = read_attr_value(&p, 'p');
+			state->channel_binding_type = read_attr_value(&p, 'p');
 
 			/*
-			 * The only channel binding type we support is
-			 * tls-server-end-point.
+			 * We support tls-server-end-point and tls-exporter.
 			 */
-			if (strcmp(channel_binding_type, "tls-server-end-point") != 0)
+			if (strcmp(state->channel_binding_type, "tls-server-end-point") != 0
+				&& strcmp(state->channel_binding_type, "tls-exporter") != 0)
 				ereport(ERROR,
 						(errcode(ERRCODE_PROTOCOL_VIOLATION),
 						 errmsg("unsupported SCRAM channel-binding type \"%s\"",
-								sanitize_str(channel_binding_type))));
+								sanitize_str(state->channel_binding_type))));
 			break;
 		default:
 			ereport(ERROR,
@@ -1286,18 +1286,46 @@ read_client_final_message(scram_state *state, const char *input)
 
 		Assert(state->cbind_flag == 'p');
 
-		/* Fetch hash data of server's SSL certificate */
-		cbind_data = be_tls_get_certificate_hash(state->port,
-												 &cbind_data_len);
+		if (strcmp(state->channel_binding_type, "tls-exporter") == 0)
+		{
+			/*------
+			 * From the specification (RFC 9266):
+			 *
+			 * The [tls-exporter] EKM is obtained using the keying material
+			 * exporters for TLS as defined in [RFC5705] and [RFC8446]
+			 * section 7.5 by supplying the following inputs:
+			 *
+			 * Label:  The ASCII string "EXPORTER-Channel-Binding" with no
+			 *         terminating NUL.
+			 *
+			 * Context value:  Zero-length string.
+			 *
+			 * Length:  32 bytes.
+			 *------
+			 */
+			cbind_data_len = 32;
+			cbind_data = (char *)
+				be_tls_export_keying_material(state->port,
+											  "EXPORTER-Channel-Binding",
+											  (unsigned char *) "", 0,
+											  cbind_data_len);
+		}
+		else /* tls-server-end-point */
+		{
+			/* Fetch hash data of server's SSL certificate */
+			cbind_data = be_tls_get_certificate_hash(state->port,
+													 &cbind_data_len);
+		}
 
 		/* should not happen */
 		if (cbind_data == NULL || cbind_data_len == 0)
 			elog(ERROR, "could not get server certificate hash");
 
-		cbind_header_len = strlen("p=tls-server-end-point,,");	/* p=type,, */
+		cbind_header_len = strlen(state->channel_binding_type) + 4;	/* p=type,, */
 		cbind_input_len = cbind_header_len + cbind_data_len;
 		cbind_input = palloc(cbind_input_len);
-		snprintf(cbind_input, cbind_input_len, "p=tls-server-end-point,,");
+		snprintf(cbind_input, cbind_input_len, "p=%s,,",
+				 state->channel_binding_type);
 		memcpy(cbind_input + cbind_header_len, cbind_data, cbind_data_len);
 
 		b64_message_len = pg_b64_enc_len(cbind_input_len);

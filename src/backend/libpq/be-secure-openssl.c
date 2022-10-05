@@ -1429,6 +1429,24 @@ be_tls_get_peer_serial(Port *port, char *ptr, size_t len)
 		ptr[0] = '\0';
 }
 
+unsigned char *
+be_tls_export_keying_material(Port *port, const char *label,
+							  const unsigned char *ctx, size_t ctxlen,
+							  size_t outlen)
+{
+	int				rc;
+	unsigned char  *out = palloc(outlen);
+
+	rc = SSL_export_keying_material(port->ssl, out, outlen,
+									label, strlen(label),
+									ctx, ctxlen,
+									1 /* use the context */);
+	if (rc < 1)
+		elog(ERROR, "could not export keying material");
+
+	return out;
+}
+
 #ifdef HAVE_X509_GET_SIGNATURE_NID
 char *
 be_tls_get_certificate_hash(Port *port, size_t *len)

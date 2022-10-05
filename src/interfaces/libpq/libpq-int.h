@@ -373,6 +373,8 @@ struct pg_conn
 	char	   *pgpassfile;		/* path to a file containing password(s) */
 	char	   *channel_binding;	/* channel binding mode
 									 * (require,prefer,disable) */
+	char	   *channel_binding_type;	/* from the IANA Channel-Binding Types
+										 * registry */
 	char	   *keepalives;		/* use TCP keepalives? */
 	char	   *keepalives_idle;	/* time between TCP keepalives */
 	char	   *keepalives_interval;	/* time between TCP keepalive
@@ -794,6 +796,18 @@ extern bool pgtls_read_pending(PGconn *conn);
  * to determine whether to continue/retry after error.
  */
 extern ssize_t pgtls_write(PGconn *conn, const void *ptr, size_t len);
+
+/*
+ * Export keying material, for SCRAM channel binding type tls-exporter.
+ *
+ * NULL is sent back to the caller in the evenf of an error, with an
+ * error message for the caller to consume.
+ */
+extern unsigned char *pgtls_export_keying_material(PGconn *conn,
+												   const char *label,
+												   const unsigned char *ctx,
+												   size_t ctxlen,
+												   size_t outlen);
 
 /*
  * Get the hash of the server certificate, for SCRAM channel binding type

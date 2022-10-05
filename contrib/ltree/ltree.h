@@ -12,10 +12,10 @@
 
 /*
  * We want the maximum length of a label to be encoding-independent, so
- * set it somewhat arbitrarily at 255 characters (not bytes), while using
+ * set it somewhat arbitrarily at 511 characters (not bytes), while using
  * uint16 fields to hold the byte length.
  */
-#define LTREE_LABEL_MAX_CHARS 255
+#define LTREE_LABEL_MAX_CHARS 511
 
 /*
  * LOWER_NODE used to be defined in the Makefile via the compile flags.
@@ -126,7 +126,12 @@ typedef struct
 
 #define LQUERY_HASNOT		0x01
 
-#define ISALNUM(x)	( t_isalpha(x) || t_isdigit(x)	|| ( pg_mblen(x) == 1 && t_iseq((x), '_') ) )
+#define ISDASH(x)	(( pg_mblen(x) == 1 && \
+						(t_iseq((x), '-') || \
+						 t_iseq((x), '_'))))
+#define ISALNUM(x)	( t_isalpha(x) || t_isdigit(x))
+
+#define ISVALID(x) ( ISALNUM(x) || ISDASH(x) )
 
 /* full text query */
 

@@ -74,7 +74,7 @@ parse_ltree(const char *buf)
 		switch (state)
 		{
 			case LTPRS_WAITNAME:
-				if (ISALNUM(ptr))
+				if (ISVALID(ptr))
 				{
 					lptr->start = ptr;
 					lptr->wlen = 0;
@@ -91,7 +91,7 @@ parse_ltree(const char *buf)
 					lptr++;
 					state = LTPRS_WAITNAME;
 				}
-				else if (!ISALNUM(ptr))
+				else if (!ISVALID(ptr))
 					UNCHAR;
 				break;
 			default:
@@ -310,7 +310,7 @@ parse_lquery(const char *buf)
 		switch (state)
 		{
 			case LQPRS_WAITLEVEL:
-				if (ISALNUM(ptr))
+				if (ISVALID(ptr))
 				{
 					GETVAR(curqlevel) = lptr = (nodeitem *) palloc0(sizeof(nodeitem) * (numOR + 1));
 					lptr->start = ptr;
@@ -333,7 +333,7 @@ parse_lquery(const char *buf)
 					UNCHAR;
 				break;
 			case LQPRS_WAITVAR:
-				if (ISALNUM(ptr))
+				if (ISVALID(ptr))
 				{
 					lptr++;
 					lptr->start = ptr;
@@ -376,7 +376,7 @@ parse_lquery(const char *buf)
 					state = LQPRS_WAITLEVEL;
 					curqlevel = NEXTLEV(curqlevel);
 				}
-				else if (ISALNUM(ptr))
+				else if (ISVALID(ptr))
 				{
 					/* disallow more chars after a flag */
 					if (lptr->flag)

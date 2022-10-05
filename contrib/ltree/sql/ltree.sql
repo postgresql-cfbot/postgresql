@@ -8,6 +8,7 @@ WHERE opc.oid >= 16384 AND NOT amvalidate(opc.oid);
 SELECT ''::ltree;
 SELECT '1'::ltree;
 SELECT '1.2'::ltree;
+SELECT '1.2.-3'::ltree;
 SELECT '1.2._3'::ltree;
 
 -- empty labels not allowed
@@ -15,8 +16,8 @@ SELECT '.2.3'::ltree;
 SELECT '1..3'::ltree;
 SELECT '1.2.'::ltree;
 
-SELECT repeat('x', 255)::ltree;
-SELECT repeat('x', 256)::ltree;
+SELECT repeat('x', 511)::ltree;
+SELECT repeat('x', 512)::ltree;
 
 SELECT ltree2text('1.2.3.34.sdf');
 SELECT text2ltree('1.2.3.34.sdf');
@@ -111,10 +112,10 @@ SELECT '1.!.3'::lquery;
 SELECT '1.2.!'::lquery;
 SELECT '1.2.3|@.4'::lquery;
 
-SELECT (repeat('x', 255) || '*@@*')::lquery;
-SELECT (repeat('x', 256) || '*@@*')::lquery;
-SELECT ('!' || repeat('x', 255))::lquery;
-SELECT ('!' || repeat('x', 256))::lquery;
+SELECT (repeat('x', 511) || '*@@*')::lquery;
+SELECT (repeat('x', 512) || '*@@*')::lquery;
+SELECT ('!' || repeat('x', 511))::lquery;
+SELECT ('!' || repeat('x', 512))::lquery;
 
 SELECT nlevel('1.2.3.4');
 SELECT nlevel(('1' || repeat('.1', 65534))::ltree);
@@ -233,6 +234,8 @@ SELECT 'QWER_GY'::ltree ~ 'q_t%@*';
 --ltxtquery
 SELECT '!tree & aWdf@*'::ltxtquery;
 SELECT 'tree & aw_qw%*'::ltxtquery;
+SELECT 'tree & aw-qw%*'::ltxtquery;
+
 SELECT 'ltree.awdfg'::ltree @ '!tree & aWdf@*'::ltxtquery;
 SELECT 'tree.awdfg'::ltree @ '!tree & aWdf@*'::ltxtquery;
 SELECT 'tree.awdfg'::ltree @ '!tree | aWdf@*'::ltxtquery;

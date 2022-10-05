@@ -76,7 +76,7 @@ gettoken_query(QPRS_STATE *state, int32 *val, int32 *lenval, char **strval, uint
 					(state->buf)++;
 					return OPEN;
 				}
-				else if (ISALNUM(state->buf))
+				else if (ISVALID(state->buf))
 				{
 					state->state = INOPERAND;
 					*strval = state->buf;
@@ -89,7 +89,7 @@ gettoken_query(QPRS_STATE *state, int32 *val, int32 *lenval, char **strval, uint
 							 errmsg("operand syntax error")));
 				break;
 			case INOPERAND:
-				if (ISALNUM(state->buf))
+				if (ISVALID(state->buf))
 				{
 					if (*flag)
 						ereport(ERROR,

@@ -547,16 +547,16 @@ vacuum(List *relations, VacuumParams *params,
 }
 
 /*
- * Check if a given relation can be safely vacuumed or analyzed.  If the
- * user is not the relation owner, issue a WARNING log message and return
- * false to let the caller decide what to do with this relation.  This
- * routine is used to decide if a relation can be processed for VACUUM or
- * ANALYZE.
+ * Check if the current user has privileges to vacuum or analyze the relation.
+ * If not, issue a WARNING log message and return false to let the caller
+ * decide what to do with this relation.  This routine is used to decide if a
+ * relation can be processed for VACUUM or ANALYZE.
  */
 bool
 vacuum_is_relation_owner(Oid relid, Form_pg_class reltuple, bits32 options)
 {
 	char	   *relname;
+	AclMode		mode = 0;
 
 	Assert((options & (VACOPT_VACUUM | VACOPT_ANALYZE)) != 0);
 
@@ -566,31 +566,28 @@ vacuum_is_relation_owner(Oid relid, Form_pg_class reltuple, bits32 options)
 	 * We allow the user to vacuum or analyze a table if he is superuser, the
 	 * table owner, or the database owner (but in the latter case, only if
 	 * it's not a shared relation).  pg_class_ownercheck includes the
-	 * superuser case.
+	 * superuser case.  The user might also have been granted privileges to
+	 * vacuum or analyze the table.
 	 *
 	 * Note we choose to treat permissions failure as a WARNING and keep
 	 * trying to vacuum or analyze the rest of the DB --- is this appropriate?
 	 */
+	if (options & VACOPT_VACUUM)
+		mode |= ACL_VACUUM;
+	if (options & VACOPT_ANALYZE)
+		mode |= ACL_ANALYZE;
 	if (pg_class_ownercheck(relid, GetUserId()) ||
-		(pg_database_ownercheck(MyDatabaseId, GetUserId()) && !reltuple->relisshared))
+		(pg_database_ownercheck(MyDatabaseId, GetUserId()) && !reltuple->relisshared) ||
+		pg_class_aclcheck(relid, GetUserId(), mode) == ACLCHECK_OK)
 		return true;
 
 	relname = NameStr(reltuple->relname);
 
 	if ((options & VACOPT_VACUUM) != 0)
 	{
-		if (reltuple->relisshared)
-			ereport(WARNING,
-					(errmsg("skipping \"%s\" --- only superuser can vacuum it",
-							relname)));
-		else if (reltuple->relnamespace == PG_CATALOG_NAMESPACE)
-			ereport(WARNING,
-					(errmsg("skipping \"%s\" --- only superuser or database owner can vacuum it",
-							relname)));
-		else
-			ereport(WARNING,
-					(errmsg("skipping \"%s\" --- only table or database owner can vacuum it",
-							relname)));
+		ereport(WARNING,
+				(errmsg("permission denied to vacuum \"%s\", skipping it",
+						relname)));
 
 		/*
 		 * For VACUUM ANALYZE, both logs could show up, but just generate
@@ -601,20 +598,9 @@ vacuum_is_relation_owner(Oid relid, Form_pg_class reltuple, bits32 options)
 	}
 
 	if ((options & VACOPT_ANALYZE) != 0)
-	{
-		if (reltuple->relisshared)
-			ereport(WARNING,
-					(errmsg("skipping \"%s\" --- only superuser can analyze it",
-							relname)));
-		else if (reltuple->relnamespace == PG_CATALOG_NAMESPACE)
-			ereport(WARNING,
-					(errmsg("skipping \"%s\" --- only superuser or database owner can analyze it",
-							relname)));
-		else
-			ereport(WARNING,
-					(errmsg("skipping \"%s\" --- only table or database owner can analyze it",
-							relname)));
-	}
+		ereport(WARNING,
+				(errmsg("permission denied to analyze \"%s\", skipping it",
+						relname)));
 
 	return false;
 }
@@ -1914,12 +1900,12 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params)
 	 */
 	if (!vacuum_is_relation_owner(RelationGetRelid(rel),
 								  rel->rd_rel,
-								  params->options & VACOPT_VACUUM))
+								  VACOPT_VACUUM))
 	{
 		relation_close(rel, lmode);
 		PopActiveSnapshot();
 		CommitTransactionCommand();
-		return false;
+		return true;	/* user may have the ANALYZE privilege */
 	}
 
 	/*

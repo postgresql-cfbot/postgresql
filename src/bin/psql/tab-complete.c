@@ -3748,7 +3748,7 @@ psql_completion(const char *text, int start, int end)
 		if (HeadMatches("ALTER", "DEFAULT", "PRIVILEGES"))
 			COMPLETE_WITH("SELECT", "INSERT", "UPDATE",
 						  "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER",
-						  "EXECUTE", "USAGE", "ALL");
+						  "EXECUTE", "USAGE", "VACUUM", "ANALYZE", "ALL");
 		else
 			COMPLETE_WITH_QUERY_PLUS(Query_for_list_of_roles,
 									 "GRANT",
@@ -3766,6 +3766,8 @@ psql_completion(const char *text, int start, int end)
 									 "USAGE",
 									 "SET",
 									 "ALTER SYSTEM",
+									 "VACUUM",
+									 "ANALYZE",
 									 "ALL");
 	}
 

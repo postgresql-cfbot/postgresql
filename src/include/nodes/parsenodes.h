@@ -73,12 +73,12 @@ typedef enum SetQuantifier
 
 /*
  * Grantable rights are encoded so that we can OR them together in a bitmask.
- * The present representation of AclItem limits us to 16 distinct rights,
- * even though AclMode is defined as uint32.  See utils/acl.h.
+ * The present representation of AclItem limits us to 32 distinct rights,
+ * even though AclMode is defined as uint64.  See utils/acl.h.
  *
  * Caution: changing these codes breaks stored ACLs, hence forces initdb.
  */
-typedef uint32 AclMode;			/* a bitmask of privilege bits */
+typedef uint64 AclMode;			/* a bitmask of privilege bits */
 
 #define ACL_INSERT		(1<<0)	/* for relations */
 #define ACL_SELECT		(1<<1)
@@ -95,7 +95,9 @@ typedef uint32 AclMode;			/* a bitmask of privilege bits */
 #define ACL_CONNECT		(1<<11) /* for databases */
 #define ACL_SET			(1<<12) /* for configuration parameters */
 #define ACL_ALTER_SYSTEM (1<<13)	/* for configuration parameters */
-#define N_ACL_RIGHTS	14		/* 1 plus the last 1<<x */
+#define ACL_VACUUM		(1<<14)	/* for relations */
+#define ACL_ANALYZE		(1<<15)	/* for relations */
+#define N_ACL_RIGHTS	16		/* 1 plus the last 1<<x */
 #define ACL_NO_RIGHTS	0
 /* Currently, SELECT ... FOR [KEY] UPDATE/SHARE requires UPDATE privileges */
 #define ACL_SELECT_FOR_UPDATE	ACL_UPDATE

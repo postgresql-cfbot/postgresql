@@ -59,33 +59,33 @@ typedef struct AclItem
 } AclItem;
 
 /*
- * The upper 16 bits of the ai_privs field of an AclItem are the grant option
- * bits, and the lower 16 bits are the actual privileges.  We use "rights"
+ * The upper 32 bits of the ai_privs field of an AclItem are the grant option
+ * bits, and the lower 32 bits are the actual privileges.  We use "rights"
  * to mean the combined grant option and privilege bits fields.
  */
-#define ACLITEM_GET_PRIVS(item)    ((item).ai_privs & 0xFFFF)
-#define ACLITEM_GET_GOPTIONS(item) (((item).ai_privs >> 16) & 0xFFFF)
+#define ACLITEM_GET_PRIVS(item)    ((item).ai_privs & 0xFFFFFFFF)
+#define ACLITEM_GET_GOPTIONS(item) (((item).ai_privs >> 32) & 0xFFFFFFFF)
 #define ACLITEM_GET_RIGHTS(item)   ((item).ai_privs)
 
-#define ACL_GRANT_OPTION_FOR(privs) (((AclMode) (privs) & 0xFFFF) << 16)
-#define ACL_OPTION_TO_PRIVS(privs)	(((AclMode) (privs) >> 16) & 0xFFFF)
+#define ACL_GRANT_OPTION_FOR(privs) (((AclMode) (privs) & 0xFFFFFFFF) << 32)
+#define ACL_OPTION_TO_PRIVS(privs)	(((AclMode) (privs) >> 32) & 0xFFFFFFFF)
 
 #define ACLITEM_SET_PRIVS(item,privs) \
-  ((item).ai_privs = ((item).ai_privs & ~((AclMode) 0xFFFF)) | \
-					 ((AclMode) (privs) & 0xFFFF))
+  ((item).ai_privs = ((item).ai_privs & ~((AclMode) 0xFFFFFFFF)) | \
+					 ((AclMode) (privs) & 0xFFFFFFFF))
 #define ACLITEM_SET_GOPTIONS(item,goptions) \
-  ((item).ai_privs = ((item).ai_privs & ~(((AclMode) 0xFFFF) << 16)) | \
-					 (((AclMode) (goptions) & 0xFFFF) << 16))
+  ((item).ai_privs = ((item).ai_privs & ~(((AclMode) 0xFFFFFFFF) << 32)) | \
+					 (((AclMode) (goptions) & 0xFFFFFFFF) << 32))
 #define ACLITEM_SET_RIGHTS(item,rights) \
   ((item).ai_privs = (AclMode) (rights))
 
 #define ACLITEM_SET_PRIVS_GOPTIONS(item,privs,goptions) \
-  ((item).ai_privs = ((AclMode) (privs) & 0xFFFF) | \
-					 (((AclMode) (goptions) & 0xFFFF) << 16))
+  ((item).ai_privs = ((AclMode) (privs) & 0xFFFFFFFF) | \
+					 (((AclMode) (goptions) & 0xFFFFFFFF) << 32))
 
 
-#define ACLITEM_ALL_PRIV_BITS		((AclMode) 0xFFFF)
-#define ACLITEM_ALL_GOPTION_BITS	((AclMode) 0xFFFF << 16)
+#define ACLITEM_ALL_PRIV_BITS		((AclMode) 0xFFFFFFFF)
+#define ACLITEM_ALL_GOPTION_BITS	((AclMode) 0xFFFFFFFF << 32)
 
 /*
  * Definitions for convenient access to Acl (array of AclItem).
@@ -148,15 +148,17 @@ typedef struct ArrayType Acl;
 #define ACL_CONNECT_CHR			'c'
 #define ACL_SET_CHR				's'
 #define ACL_ALTER_SYSTEM_CHR	'A'
+#define ACL_VACUUM_CHR			'v'
+#define ACL_ANALYZE_CHR			'z'
 
 /* string holding all privilege code chars, in order by bitmask position */
-#define ACL_ALL_RIGHTS_STR	"arwdDxtXUCTcsA"
+#define ACL_ALL_RIGHTS_STR	"arwdDxtXUCTcsAvz"
 
 /*
  * Bitmasks defining "all rights" for each supported object type
  */
 #define ACL_ALL_RIGHTS_COLUMN		(ACL_INSERT|ACL_SELECT|ACL_UPDATE|ACL_REFERENCES)
-#define ACL_ALL_RIGHTS_RELATION		(ACL_INSERT|ACL_SELECT|ACL_UPDATE|ACL_DELETE|ACL_TRUNCATE|ACL_REFERENCES|ACL_TRIGGER)
+#define ACL_ALL_RIGHTS_RELATION		(ACL_INSERT|ACL_SELECT|ACL_UPDATE|ACL_DELETE|ACL_TRUNCATE|ACL_REFERENCES|ACL_TRIGGER|ACL_VACUUM|ACL_ANALYZE)
 #define ACL_ALL_RIGHTS_SEQUENCE		(ACL_USAGE|ACL_SELECT|ACL_UPDATE)
 #define ACL_ALL_RIGHTS_DATABASE		(ACL_CREATE|ACL_CREATE_TEMP|ACL_CONNECT)
 #define ACL_ALL_RIGHTS_FDW			(ACL_USAGE)

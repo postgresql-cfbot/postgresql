@@ -32,6 +32,7 @@
 #include "storage/pmsignal.h"
 #include "storage/procsignal.h"
 #include "storage/standby.h"
+#include "tcop/tcopprot.h"
 #include "utils/guc.h"
 #include "utils/memutils.h"
 #include "utils/timeout.h"
@@ -219,6 +220,8 @@ StartupProcExit(int code, Datum arg)
 	/* Shutdown the recovery environment */
 	if (standbyState != STANDBY_DISABLED)
 		ShutdownRecoveryTransactionEnvironment();
+
+	ShowUsage("STARTUP PROCESS STATISTICS");
 }
 
 
@@ -229,6 +232,8 @@ StartupProcExit(int code, Datum arg)
 void
 StartupProcessMain(void)
 {
+	ResetUsage();
+
 	/* Arrange to clean up at startup process exit */
 	on_shmem_exit(StartupProcExit, 0);
 

@@ -1,0 +1,16 @@
+create extension bench_radix_tree;
+
+\o seq_search.data
+begin;
+select * from bench_seq_search(0, 1000000);
+commit;
+
+\o shuffle_search.data
+begin;
+select * from bench_shuffle_search(0, 1000000);
+commit;
+
+\o random_load.data
+begin;
+select * from bench_load_random_int(10000000);
+commit;

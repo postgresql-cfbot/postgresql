@@ -18,6 +18,8 @@
 #ifndef SIMD_H
 #define SIMD_H
 
+#include "port/pg_bitutils.h"
+
 #if (defined(__x86_64__) || defined(_M_AMD64))
 /*
  * SSE2 instructions are part of the spec for the 64-bit x86 ISA. We assume
@@ -88,14 +90,9 @@ static inline Vector32 vector32_or(const Vector32 v1, const Vector32 v2);
 static inline Vector8 vector8_ssub(const Vector8 v1, const Vector8 v2);
 #endif
 
-/*
- * comparisons between vectors
- *
- * Note: These return a vector rather than boolean, which is why we don't
- * have non-SIMD implementations.
- */
-#ifndef USE_NO_SIMD
+/* comparisons between vectors */
 static inline Vector8 vector8_eq(const Vector8 v1, const Vector8 v2);
+#ifndef USE_NO_SIMD
 static inline Vector32 vector32_eq(const Vector32 v1, const Vector32 v2);
 #endif
 
@@ -278,6 +275,140 @@ vector8_is_highbit_set(const Vector8 v)
 }
 
 /*
+ * Return the bitmak of the high-bit of each element.
+ */
+static inline uint32
+vector8_highbit_mask(const Vector8 v)
+{
+#ifdef USE_SSE2
+	return (uint32) _mm_movemask_epi8(v);
+#elif defined(USE_NEON)
+	static const uint8 mask[16] = {
+        1 << 0, 1 << 1, 1 << 2, 1 << 3,
+        1 << 4, 1 << 5, 1 << 6, 1 << 7,
+        1 << 0, 1 << 1, 1 << 2, 1 << 3,
+        1 << 4, 1 << 5, 1 << 6, 1 << 7,
+      };
+
+    uint8x16_t masked = vandq_u8(vld1q_u8(mask), (uint8x16_t) vshrq_n_s8(v, 7));
+    uint8x16_t maskedhi = vextq_u8(masked, masked, 8);
+
+    return (uint32) vaddvq_u16((uint16x8_t) vzip1q_u8(masked, maskedhi));
+#else
+	uint32 mask = 0;
+
+	for (Size i = 0; i < sizeof(Vector8); i++)
+		mask |= (((const uint8 *) &v)[i] >> 7) << i;
+
+	return mask;
+#endif
+}
+
+/*
+ * Compare the given vectors and return the vector of minimum elements.
+ */
+static inline Vector8
+vector8_min(const Vector8 v1, const Vector8 v2)
+{
+#ifdef USE_SSE2
+	return _mm_min_epu8(v1, v2);
+#elif defined(USE_NEON)
+	return vminq_u8(v1, v2);
+#else /* USE_NO_SIMD */
+	Vector8 r = 0;
+	uint8 *rp = (uint8 *) &r;
+
+	for (Size i = 0; i < sizeof(Vector8); i++)
+		rp[i] = Min(((const uint8 *) &v1)[i], ((const uint8 *) &v2)[i]);
+
+	return r;
+#endif
+}
+
+/*
+ * Return the index of the element in the vector that equal to the given
+ * scalar. Otherwise, return -1.
+ */
+static inline int
+vector8_search_eq(const Vector8 v, const uint8 c)
+{
+	Vector8 keys = vector8_broadcast(c);
+	Vector8	cmp;
+	uint32	mask;
+	int		result;
+
+#ifdef USE_ASSERT_CHECKING
+	int		assert_result = -1;
+
+	for (Size i = 0; i < sizeof(Vector8); i++)
+	{
+		if (((const uint8 *) &v)[i] == c)
+		{
+			assert_result = i;
+			break;
+		}
+	}
+#endif							/* USE_ASSERT_CHECKING */
+
+	cmp = vector8_eq(keys, v);
+	mask = vector8_highbit_mask(cmp);
+
+	if (mask)
+		result = pg_rightmost_one_pos32(mask);
+	else
+		result = -1;
+
+	Assert(assert_result == result);
+	return result;
+}
+
+/*
+ * Return the index of the first element in the vector that is greater than
+ * or eual to the given scalar. Return sizeof(Vector8) if there is no such
+ * element.
+ *
+ * Note that this function assumes the elements in the vector are sorted.
+ */
+static inline int
+vector8_search_ge(const Vector8 v, const uint8 c)
+{
+	Vector8 keys = vector8_broadcast(c);
+	Vector8 min;
+	Vector8	cmp;
+	uint32	mask;
+	int		result;
+
+#ifdef USE_ASSERT_CHECKING
+	int		assert_result = -1;
+	Size	i;
+
+	for (i = 0; i < sizeof(Vector8); i++)
+	{
+		if (((const uint8 *) &v)[i] >= c)
+			break;
+	}
+	assert_result = i;
+#endif							/* USE_ASSERT_CHECKING */
+
+	/*
+	 * There is a bit more complicated than vector8_search_eq(), because
+	 * until recently no unsigned uint8 compasion instruction existed.
+	 * Therefore, we need to use vector8_min() to effectively get <= elements.
+	 */
+	min = vector8_min(v, keys);
+	cmp = vector8_eq(keys, min);
+	mask = vector8_highbit_mask(cmp);
+
+	if (mask)
+		result = pg_rightmost_one_pos32(mask);
+	else
+		result = sizeof(Vector8);
+
+	Assert(assert_result == result);
+	return result;
+}
+
+/*
  * Exactly like vector8_is_highbit_set except for the input type, so it
  * looks at each byte separately.
  *
@@ -348,7 +479,6 @@ vector8_ssub(const Vector8 v1, const Vector8 v2)
  * Return a vector with all bits set in each lane where the the corresponding
  * lanes in the inputs are equal.
  */
-#ifndef USE_NO_SIMD
 static inline Vector8
 vector8_eq(const Vector8 v1, const Vector8 v2)
 {
@@ -356,9 +486,16 @@ vector8_eq(const Vector8 v1, const Vector8 v2)
 	return _mm_cmpeq_epi8(v1, v2);
 #elif defined(USE_NEON)
 	return vceqq_u8(v1, v2);
+#else /* USE_NO_SIMD */
+	Vector8 r = 0;
+	uint8 *rp = (uint8 *) &r;
+
+	for (Size i = 0; i < sizeof(Vector8); i++)
+		rp[i] = (((const uint8 *) &v1)[i] == ((const uint8 *) &v2)[i]) ? 0xFF : 0;
+
+	return r;
 #endif
 }
-#endif							/* ! USE_NO_SIMD */
 
 #ifndef USE_NO_SIMD
 static inline Vector32

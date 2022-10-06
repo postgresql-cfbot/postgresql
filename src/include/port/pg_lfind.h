@@ -81,6 +81,77 @@ pg_lfind8_le(uint8 key, uint8 *base, uint32 nelem)
 }
 
 /*
+ * pg_lsearch8
+ *
+ * Return the index of the element in 'base' that equals to 'key', otherwise return
+ * -1.
+ */
+static inline int
+pg_lsearch8(uint8 key, uint8 *base, uint32 nelem)
+{
+	uint32		i;
+
+	/* round down to multiple of vector length */
+	uint32		tail_idx = nelem & ~(sizeof(Vector8) - 1);
+	Vector8		chunk;
+
+	for (i = 0; i < tail_idx; i += sizeof(Vector8))
+	{
+		int idx;
+
+		vector8_load(&chunk, &base[i]);
+		if ((idx = vector8_search_eq(chunk, key)) != -1)
+			return i + idx;
+	}
+
+	/* Process the remaining elements one at a time. */
+	for (; i < nelem; i++)
+	{
+		if (key == base[i])
+			return i;
+	}
+
+	return -1;
+}
+
+
+/*
+ * pg_lsearch8_ge
+ *
+ * Return the index of the first element in 'base' that is greater than or equal to
+ * 'key'. Return nelem if there is no such element.
+ *
+ * Note that this function assumes the elements in 'base' are sorted.
+ */
+static inline int
+pg_lsearch8_ge(uint8 key, uint8 *base, uint32 nelem)
+{
+	uint32		i;
+
+	/* round down to multiple of vector length */
+	uint32		tail_idx = nelem & ~(sizeof(Vector8) - 1);
+	Vector8		chunk;
+
+	for (i = 0; i < tail_idx; i += sizeof(Vector8))
+	{
+		int idx;
+
+		vector8_load(&chunk, &base[i]);
+		if ((idx = vector8_search_ge(chunk, key)) != sizeof(Vector8))
+			return i + idx;
+	}
+
+	/* Process the remaining elements one at a time. */
+	for (; i < nelem; i++)
+	{
+		if (base[i] >= key)
+			break;
+	}
+
+	return i;
+}
+
+/*
  * pg_lfind32
  *
  * Return true if there is an element in 'base' that equals 'key', otherwise

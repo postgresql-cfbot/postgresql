@@ -503,6 +503,7 @@ vacuumRedirectAndPlaceholder(Relation index, Buffer buffer)
 	spgxlogVacuumRedirect xlrec;
 	GlobalVisState *vistest;
 
+	xlrec.onCatalogTable = IndexIsAccessibleInLogicalDecoding(index);
 	xlrec.nToPlaceholder = 0;
 	xlrec.newestRedirectXid = InvalidTransactionId;
 

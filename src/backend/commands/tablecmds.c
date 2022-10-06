@@ -14136,6 +14136,10 @@ ATPrepSetTableSpace(AlteredTableInfo *tab, Relation rel, const char *tablespacen
 
 /*
  * Set, reset, or replace reloptions.
+ *
+ * The catalog_table_val value has to match the user_catalog_table value
+ * defined in boolRelOpts[] in reloptions.c. It's indeed used as the default
+ * value to be propagated to the indexes in case of reset.
  */
 static void
 ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
@@ -14151,6 +14155,10 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 	Datum		repl_val[Natts_pg_class];
 	bool		repl_null[Natts_pg_class];
 	bool		repl_repl[Natts_pg_class];
+	ListCell   *cell;
+	List	   *rel_options;
+	bool		catalog_table_val = false;
+	bool		catalog_table = false;
 	static char *validnsps[] = HEAP_RELOPT_NAMESPACES;
 
 	if (defList == NIL && operation != AT_ReplaceRelOptions)
@@ -14245,6 +14253,20 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 		}
 	}
 
+	/* If user_catalog_table is part of the new options, record its new value */
+	rel_options = untransformRelOptions(newOptions);
+
+	foreach(cell, rel_options)
+	{
+		DefElem    *defel = (DefElem *) lfirst(cell);
+
+		if (strcmp(defel->defname, "user_catalog_table") == 0)
+		{
+			catalog_table = true;
+			catalog_table_val = defGetBoolean(defel);
+		}
+	}
+
 	/*
 	 * All we need do here is update the pg_class row; the new options will be
 	 * propagated into relcaches during post-commit cache inval.
@@ -14270,6 +14292,41 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 	heap_freetuple(newtuple);
 
 	ReleaseSysCache(tuple);
+
+	/* Update the indexes if there is a need to */
+	if (catalog_table || operation == AT_ResetRelOptions)
+	{
+		Relation	pg_index;
+		HeapTuple	pg_index_tuple;
+		Form_pg_index pg_index_form;
+		ListCell   *index;
+
+		pg_index = table_open(IndexRelationId, RowExclusiveLock);
+
+		foreach(index, RelationGetIndexList(rel))
+		{
+			Oid			thisIndexOid = lfirst_oid(index);
+
+			pg_index_tuple = SearchSysCacheCopy1(INDEXRELID,
+												 ObjectIdGetDatum(thisIndexOid));
+			if (!HeapTupleIsValid(pg_index_tuple))
+				elog(ERROR, "cache lookup failed for index %u", thisIndexOid);
+			pg_index_form = (Form_pg_index) GETSTRUCT(pg_index_tuple);
+
+			/* Modify the index only if user_catalog_table differ */
+			if (catalog_table_val != pg_index_form->indisusercatalog)
+			{
+				pg_index_form->indisusercatalog = catalog_table_val;
+				CatalogTupleUpdate(pg_index, &pg_index_tuple->t_self, pg_index_tuple);
+				InvokeObjectPostAlterHookArg(IndexRelationId, thisIndexOid, 0,
+											 InvalidOid, true);
+			}
+
+			heap_freetuple(pg_index_tuple);
+		}
+
+		table_close(pg_index, RowExclusiveLock);
+	}
 
 	/* repeat the whole exercise for the toast table, if there's one */
 	if (OidIsValid(rel->rd_rel->reltoastrelid))

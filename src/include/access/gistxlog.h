@@ -49,6 +49,7 @@ typedef struct gistxlogPageUpdate
  */
 typedef struct gistxlogDelete
 {
+	bool		onCatalogTable;
 	TransactionId latestRemovedXid;
 	uint16		ntodelete;		/* number of deleted offsets */
 
@@ -97,6 +98,7 @@ typedef struct gistxlogPageDelete
  */
 typedef struct gistxlogPageReuse
 {
+	bool		onCatalogTable;
 	RelFileLocator locator;
 	BlockNumber block;
 	FullTransactionId latestRemovedFullXid;

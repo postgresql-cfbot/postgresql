@@ -120,7 +120,8 @@ static relopt_bool boolRelOpts[] =
 			RELOPT_KIND_HEAP,
 			AccessExclusiveLock
 		},
-		false
+		false					/* Change catalog_table_val in
+								 * ATExecSetRelOptions accordingly */
 	},
 	{
 		{

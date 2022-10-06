@@ -421,6 +421,7 @@ heap_page_prune(Relation relation, Buffer buffer,
 			xlrec.latestRemovedXid = prstate.latestRemovedXid;
 			xlrec.nredirected = prstate.nredirected;
 			xlrec.ndead = prstate.ndead;
+			xlrec.onCatalogTable = RelationIsAccessibleInLogicalDecoding(relation);
 
 			XLogBeginInsert();
 			XLogRegisterData((char *) &xlrec, SizeOfHeapPrune);

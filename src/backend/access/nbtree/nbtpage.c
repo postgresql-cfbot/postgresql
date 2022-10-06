@@ -836,6 +836,7 @@ _bt_log_reuse_page(Relation rel, BlockNumber blkno, FullTransactionId safexid)
 	 */
 
 	/* XLOG stuff */
+	xlrec_reuse.onCatalogTable = IndexIsAccessibleInLogicalDecoding(rel);
 	xlrec_reuse.locator = rel->rd_locator;
 	xlrec_reuse.block = blkno;
 	xlrec_reuse.latestRemovedFullXid = safexid;
@@ -1357,6 +1358,8 @@ _bt_delitems_delete(Relation rel, Buffer buf, TransactionId latestRemovedXid,
 		XLogRecPtr	recptr;
 		xl_btree_delete xlrec_delete;
 
+		xlrec_delete.onCatalogTable =
+			IndexIsAccessibleInLogicalDecoding(rel);
 		xlrec_delete.latestRemovedXid = latestRemovedXid;
 		xlrec_delete.ndeleted = ndeletable;
 		xlrec_delete.nupdated = nupdatable;

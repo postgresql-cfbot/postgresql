@@ -86,6 +86,7 @@ typedef struct ExtensionControlFile
 	bool		relocatable;	/* is ALTER EXTENSION SET SCHEMA supported? */
 	bool		superuser;		/* must be superuser to install? */
 	bool		trusted;		/* allow becoming superuser on the fly? */
+	bool		wildcard_upgrades;  /* allow using wildcards in upgrade scripts */
 	int			encoding;		/* encoding of the script file, or -1 */
 	List	   *requires;		/* names of prerequisite extensions */
 } ExtensionControlFile;
@@ -128,6 +129,7 @@ static void ApplyExtensionUpdates(Oid extensionOid,
 								  bool cascade,
 								  bool is_create);
 static char *read_whole_file(const char *filename, int *length);
+static bool file_exists(const char *name);
 
 
 /*
@@ -579,6 +581,14 @@ parse_extension_control_file(ExtensionControlFile *control,
 						 errmsg("parameter \"%s\" requires a Boolean value",
 								item->name)));
 		}
+		else if (strcmp(item->name, "wildcard_upgrades") == 0)
+		{
+			if (!parse_bool(item->value, &control->wildcard_upgrades))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("parameter \"%s\" requires a Boolean value",
+								item->name)));
+		}
 		else if (strcmp(item->name, "encoding") == 0)
 		{
 			control->encoding = pg_valid_server_encoding(item->value);
@@ -636,6 +646,7 @@ read_extension_control_file(const char *extname)
 	control->relocatable = false;
 	control->superuser = true;
 	control->trusted = false;
+	control->wildcard_upgrades = false;
 	control->encoding = -1;
 
 	/*
@@ -890,7 +901,15 @@ execute_extension_script(Oid extensionOid, ExtensionControlFile *control,
 	if (from_version == NULL)
 		elog(DEBUG1, "executing extension script for \"%s\" version '%s'", control->name, version);
 	else
+	{
+		if ( control->wildcard_upgrades && ! file_exists(filename) )
+		{
+			elog(DEBUG1, "extension upgrade script \"%s\" does not exist, will try wildcard", filename);
+			/* if filename does not exist, try wildcard */
+			filename = get_extension_script_filename(control, "%", version);
+		}
 		elog(DEBUG1, "executing extension script for \"%s\" update from version '%s' to '%s'", control->name, from_version, version);
+	}
 
 	/*
 	 * If installing a trusted extension on behalf of a non-superuser, become
@@ -1215,13 +1234,23 @@ identify_update_path(ExtensionControlFile *control,
 	/* Find shortest path */
 	result = find_update_path(evi_list, evi_start, evi_target, false, false);
 
-	if (result == NIL)
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("extension \"%s\" has no update path from version \"%s\" to version \"%s\"",
-						control->name, oldVersion, newVersion)));
+	if (result != NIL)
+		return result;
 
-	return result;
+	/* Find wildcard path, if allowed by control file */
+	if ( control->wildcard_upgrades )
+	{
+		evi_start = get_ext_ver_info("%", &evi_list);
+		result = find_update_path(evi_list, evi_start, evi_target, false, false);
+
+		if (result != NIL)
+			return result;
+	}
+
+	ereport(ERROR,
+			(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+			 errmsg("extension \"%s\" has no update path from version \"%s\" to version \"%s\"",
+					control->name, oldVersion, newVersion)));
 }
 
 /*
@@ -3391,4 +3420,21 @@ read_whole_file(const char *filename, int *length)
 
 	buf[*length] = '\0';
 	return buf;
+}
+
+static bool
+file_exists(const char *name)
+{
+	struct stat st;
+
+	AssertArg(name != NULL);
+
+	if (stat(name, &st) == 0)
+		return !S_ISDIR(st.st_mode);
+	else if (!(errno == ENOENT || errno == ENOTDIR || errno == EACCES))
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not access file \"%s\": %m", name)));
+
+	return false;
 }

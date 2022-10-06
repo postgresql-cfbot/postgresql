@@ -121,6 +121,14 @@ NOTIFY <replaceable class="parameter">channel</replaceable> [ , <replaceable cla
    are the same, the notification event is one's own work bouncing
    back, and can be ignored.
   </para>
+     <note>
+       <para>
+         If you have a client application waiting for a <literal>NOTIFY</literal>
+         event coming from this transaction, be aware that the notification will
+         only be sent after a <literal>COMMIT</literal> or a <literal>ROLLBACK</literal>
+         without <literal>AND CHAIN</literal> happens.
+       </para>
+     </note>
  </refsect1>
 
  <refsect1>

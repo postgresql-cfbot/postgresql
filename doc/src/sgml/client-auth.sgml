@@ -221,12 +221,12 @@ hostnogssenc  <replaceable>database</replaceable>  <replaceable>user</replaceabl
        The value <literal>sameuser</literal> specifies that the record
        matches if the requested database has the same name as the
        requested user.  The value <literal>samerole</literal> specifies that
-       the requested user must be a member of the role with the same
+       the requested user must have privileges of the role with the same
        name as the requested database.  (<literal>samegroup</literal> is an
        obsolete but still accepted spelling of <literal>samerole</literal>.)
-       Superusers are not considered to be members of a role for the
-       purposes of <literal>samerole</literal> unless they are explicitly
-       members of the role, directly or indirectly, and not just by
+       Superusers are not considered to have privileges of a role for the
+       purposes of <literal>samerole</literal> unless they explicitly have
+       privileges of the role, directly or indirectly, and not just by
        virtue of being a superuser.
        The value <literal>replication</literal> specifies that the record
        matches if a physical replication connection is requested, however, it
@@ -252,10 +252,10 @@ hostnogssenc  <replaceable>database</replaceable>  <replaceable>user</replaceabl
        database user, or a group name preceded by <literal>+</literal>.
        (Recall that there is no real distinction between users and groups
        in <productname>PostgreSQL</productname>; a <literal>+</literal> mark really means
-       <quote>match any of the roles that are directly or indirectly members
+       <quote>match any of the roles that directly or indirectly have privileges
        of this role</quote>, while a name without a <literal>+</literal> mark matches
        only that specific role.) For this purpose, a superuser is only
-       considered to be a member of a role if they are explicitly a member
+       considered to have privileges of a role if they explicitly have privileges
        of the role, directly or indirectly, and not just by virtue of
        being a superuser.
        Multiple user names can be supplied by separating them with commas.
@@ -788,9 +788,9 @@ host    all             all             192.168.0.0/16          ident map=omicro
 # If these are the only three lines for local connections, they will
 # allow local users to connect only to their own databases (databases
 # with the same name as their database user name) except for administrators
-# and members of role "support", who can connect to all databases.  The file
-# $PGDATA/admins contains a list of names of administrators.  Passwords
-# are required in all cases.
+# and roles with privileges of role "support", who can connect to all
+# databases.  The file $PGDATA/admins contains a list of names of
+# administrators.  Passwords are required in all cases.
 #
 # TYPE  DATABASE        USER            ADDRESS                 METHOD
 local   sameuser        all                                     md5

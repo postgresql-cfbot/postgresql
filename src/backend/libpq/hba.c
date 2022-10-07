@@ -547,13 +547,13 @@ tokenize_auth_file(const char *filename, FILE *file, List **tok_lines,
 
 
 /*
- * Does user belong to role?
+ * Does user have privileges of role?
  *
  * userid is the OID of the role given as the attempted login identifier.
- * We check to see if it is a member of the specified role name.
+ * We check to see if it has privileges of the specified role name.
  */
 static bool
-is_member(Oid userid, const char *role)
+has_privs(Oid userid, const char *role)
 {
 	Oid			roleid;
 
@@ -566,11 +566,12 @@ is_member(Oid userid, const char *role)
 		return false;			/* if target role not exist, say "no" */
 
 	/*
-	 * See if user is directly or indirectly a member of role. For this
-	 * purpose, a superuser is not considered to be automatically a member of
-	 * the role, so group auth only applies to explicit membership.
+	 * See if user directly or indirectly has privileges of role. For this
+	 * purpose, a superuser is not considered to automatically have
+	 * privileges of the role, so group auth only applies to explicit
+	 * privileges.
 	 */
-	return is_member_of_role_nosuper(userid, roleid);
+	return has_privs_of_role_nosuper(userid, roleid);
 }
 
 /*
@@ -587,7 +588,7 @@ check_role(const char *role, Oid roleid, List *tokens)
 		tok = lfirst(cell);
 		if (!tok->quoted && tok->string[0] == '+')
 		{
-			if (is_member(roleid, tok->string + 1))
+			if (has_privs(roleid, tok->string + 1))
 				return true;
 		}
 		else if (token_matches(tok, role) ||
@@ -628,7 +629,7 @@ check_db(const char *dbname, const char *role, Oid roleid, List *tokens)
 		else if (token_is_keyword(tok, "samegroup") ||
 				 token_is_keyword(tok, "samerole"))
 		{
-			if (is_member(roleid, dbname))
+			if (has_privs(roleid, dbname))
 				return true;
 		}
 		else if (token_is_keyword(tok, "replication"))

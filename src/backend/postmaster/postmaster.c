@@ -563,6 +563,8 @@ int			postmaster_alive_fds[2] = {-1, -1};
 HANDLE		PostmasterHandle;
 #endif
 
+FailedConnection_hook_type FailedConnection_hook = NULL;
+
 /*
  * Postmaster main entry point
  */
@@ -4441,7 +4443,13 @@ BackendInitialize(Port *port)
 	 * already did any appropriate error reporting.
 	 */
 	if (status != STATUS_OK)
+	{
+#ifndef EXEC_BACKEND
+		if (FailedConnection_hook)
+			(*FailedConnection_hook) (FCET_BAD_STARTUP_PACKET, port);
+#endif
 		proc_exit(0);
+	}
 
 	/*
 	 * Now that we have the user and database name, we can set the process
@@ -5301,6 +5309,10 @@ dummy_handler(SIGNAL_ARGS)
 static void
 StartupPacketTimeoutHandler(void)
 {
+#ifndef EXEC_BACKEND
+	if (FailedConnection_hook)
+		(*FailedConnection_hook) (FCET_STARTUP_PACKET_TIMEOUT, MyProcPort);
+#endif
 	_exit(1);
 }
 

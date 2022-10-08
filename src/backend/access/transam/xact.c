@@ -871,9 +871,10 @@ GetCurrentStatementStartTimestamp(void)
 TimestampTz
 GetCurrentTransactionStopTimestamp(void)
 {
-	if (xactStopTimestamp != 0)
-		return xactStopTimestamp;
-	return GetCurrentTimestamp();
+	if (xactStopTimestamp == 0)
+		xactStopTimestamp = GetCurrentTimestamp();
+
+	return xactStopTimestamp;
 }
 
 /*
@@ -889,15 +890,6 @@ SetCurrentStatementStartTimestamp(void)
 		stmtStartTimestamp = GetCurrentTimestamp();
 	else
 		Assert(stmtStartTimestamp != 0);
-}
-
-/*
- *	SetCurrentTransactionStopTimestamp
- */
-static inline void
-SetCurrentTransactionStopTimestamp(void)
-{
-	xactStopTimestamp = GetCurrentTimestamp();
 }
 
 /*
@@ -1396,9 +1388,7 @@ RecordTransactionCommit(void)
 		START_CRIT_SECTION();
 		MyProc->delayChkptFlags |= DELAY_CHKPT_START;
 
-		SetCurrentTransactionStopTimestamp();
-
-		XactLogCommitRecord(xactStopTimestamp,
+		XactLogCommitRecord(GetCurrentTransactionStopTimestamp(),
 							nchildren, children, nrels, rels,
 							ndroppedstats, droppedstats,
 							nmsgs, invalMessages,
@@ -1422,7 +1412,7 @@ RecordTransactionCommit(void)
 		 */
 
 		if (!replorigin || replorigin_session_origin_timestamp == 0)
-			replorigin_session_origin_timestamp = xactStopTimestamp;
+			replorigin_session_origin_timestamp = GetCurrentTransactionStopTimestamp();
 
 		TransactionTreeSetCommitTsData(xid, nchildren, children,
 									   replorigin_session_origin_timestamp,
@@ -1754,8 +1744,7 @@ RecordTransactionAbort(bool isSubXact)
 		xact_time = GetCurrentTimestamp();
 	else
 	{
-		SetCurrentTransactionStopTimestamp();
-		xact_time = xactStopTimestamp;
+		xact_time = GetCurrentTransactionStopTimestamp();
 	}
 
 	XactLogAbortRecord(xact_time,

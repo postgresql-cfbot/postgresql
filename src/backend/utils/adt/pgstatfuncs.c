@@ -53,6 +53,25 @@ pg_stat_get_numscans(PG_FUNCTION_ARGS)
 
 
 Datum
+pg_stat_get_lastscan(PG_FUNCTION_ARGS)
+{
+	Oid			relid = PG_GETARG_OID(0);
+	TimestampTz	result;
+	PgStat_StatTabEntry *tabentry;
+
+	if ((tabentry = pgstat_fetch_stat_tabentry(relid)) == NULL)
+		result = 0;
+	else
+		result = tabentry->lastscan;
+
+	if (result == 0)
+		PG_RETURN_NULL();
+	else
+		PG_RETURN_TIMESTAMPTZ(result);
+}
+
+
+Datum
 pg_stat_get_tuples_returned(PG_FUNCTION_ARGS)
 {
 	Oid			relid = PG_GETARG_OID(0);

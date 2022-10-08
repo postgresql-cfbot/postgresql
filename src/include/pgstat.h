@@ -242,7 +242,7 @@ typedef struct PgStat_TableXactStatus
  * ------------------------------------------------------------
  */
 
-#define PGSTAT_FILE_FORMAT_ID	0x01A5BCA7
+#define PGSTAT_FILE_FORMAT_ID	0x01A5BCA8
 
 typedef struct PgStat_ArchiverStats
 {
@@ -355,6 +355,7 @@ typedef struct PgStat_StatSubEntry
 typedef struct PgStat_StatTabEntry
 {
 	PgStat_Counter numscans;
+	TimestampTz lastscan;
 
 	PgStat_Counter tuples_returned;
 	PgStat_Counter tuples_fetched;

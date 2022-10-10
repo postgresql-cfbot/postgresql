@@ -169,6 +169,9 @@ typedef struct PgBackendStatus
 
 	/* query identifier, optionally computed using post_parse_analyze_hook */
 	uint64		st_query_id;
+
+	/* Current memory allocated to this backend */
+	uint64		backend_mem_allocated;
 } PgBackendStatus;
 
 
@@ -313,7 +316,9 @@ extern const char *pgstat_get_backend_current_activity(int pid, bool checkUser);
 extern const char *pgstat_get_crashed_backend_activity(int pid, char *buffer,
 													   int buflen);
 extern uint64 pgstat_get_my_query_id(void);
-
+extern void pgstat_report_backend_mem_allocated_increase(uint64 allocation);
+extern void pgstat_report_backend_mem_allocated_decrease(uint64 deallocation);
+extern uint64 pgstat_get_all_backend_memory_allocated(void);
 
 /* ----------
  * Support functions for the SQL-callable functions to

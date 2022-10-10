@@ -37,6 +37,7 @@
 
 #include "lib/ilist.h"
 #include "port/pg_bitutils.h"
+#include "utils/backend_status.h"
 #include "utils/memdebug.h"
 #include "utils/memutils.h"
 #include "utils/memutils_memorychunk.h"
@@ -258,6 +259,7 @@ GenerationContextCreate(MemoryContext parent,
 						name);
 
 	((MemoryContext) set)->mem_allocated = firstBlockSize;
+	pgstat_report_backend_mem_allocated_increase(firstBlockSize);
 
 	return (MemoryContext) set;
 }
@@ -274,6 +276,7 @@ GenerationReset(MemoryContext context)
 {
 	GenerationContext *set = (GenerationContext *) context;
 	dlist_mutable_iter miter;
+	uint64	deallocation = 0;
 
 	AssertArg(GenerationIsValid(set));
 
@@ -296,8 +299,13 @@ GenerationReset(MemoryContext context)
 		if (block == set->keeper)
 			GenerationBlockMarkEmpty(block);
 		else
+		{
+			deallocation += block->blksize;
 			GenerationBlockFree(set, block);
+		}
 	}
+
+	pgstat_report_backend_mem_allocated_decrease(deallocation);
 
 	/* set it so new allocations to make use of the keeper block */
 	set->block = set->keeper;
@@ -319,6 +327,9 @@ GenerationDelete(MemoryContext context)
 {
 	/* Reset to release all releasable GenerationBlocks */
 	GenerationReset(context);
+
+	pgstat_report_backend_mem_allocated_decrease(context->mem_allocated);
+
 	/* And free the context header and keeper block */
 	free(context);
 }
@@ -363,6 +374,7 @@ GenerationAlloc(MemoryContext context, Size size)
 			return NULL;
 
 		context->mem_allocated += blksize;
+		pgstat_report_backend_mem_allocated_increase(blksize);
 
 		/* block with a single (used) chunk */
 		block->context = set;
@@ -466,6 +478,7 @@ GenerationAlloc(MemoryContext context, Size size)
 				return NULL;
 
 			context->mem_allocated += blksize;
+			pgstat_report_backend_mem_allocated_increase(blksize);
 
 			/* initialize the new block */
 			GenerationBlockInit(set, block, blksize);
@@ -699,6 +712,8 @@ GenerationFree(void *pointer)
 	dlist_delete(&block->node);
 
 	set->header.mem_allocated -= block->blksize;
+	pgstat_report_backend_mem_allocated_decrease(block->blksize);
+
 	free(block);
 }
 

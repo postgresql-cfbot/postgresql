@@ -540,7 +540,7 @@ pg_stat_get_progress_info(PG_FUNCTION_ARGS)
 Datum
 pg_stat_get_activity(PG_FUNCTION_ARGS)
 {
-#define PG_STAT_GET_ACTIVITY_COLS	30
+#define PG_STAT_GET_ACTIVITY_COLS	31
 	int			num_backends = pgstat_fetch_stat_numbackends();
 	int			curr_backend;
 	int			pid = PG_ARGISNULL(0) ? -1 : PG_GETARG_INT32(0);
@@ -595,6 +595,8 @@ pg_stat_get_activity(PG_FUNCTION_ARGS)
 			values[16] = TransactionIdGetDatum(local_beentry->backend_xmin);
 		else
 			nulls[16] = true;
+
+		values[30] = UInt64GetDatum(beentry->backend_mem_allocated);
 
 		/* Values only available to role member or pg_read_all_stats */
 		if (HAS_PGSTAT_PERMISSIONS(beentry->st_userid))

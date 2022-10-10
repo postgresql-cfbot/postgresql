@@ -947,6 +947,18 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
      </para></entry>
     </row>
 
+    <row>
+     <entry role="catalog_table_entry"><para role="column_definition">
+      <structfield>backend_mem_allocated</structfield> <type>bigint</type>
+     </para>
+     <para>
+      The byte count of memory allocated to this backend. Dynamic shared memory
+      allocations are included only in the value displayed for the backend that
+      created them, they are not included in the value for backends that are
+      attached to them to avoid double counting.
+     </para></entry>
+    </row>
+
      <row>
       <entry role="catalog_table_entry"><para role="column_definition">
        <structfield>query</structfield> <type>text</type>

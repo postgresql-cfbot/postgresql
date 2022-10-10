@@ -112,6 +112,21 @@ typedef struct SlabBlock
 	(((char *) chunk - SlabBlockStart(block)) / slab->fullChunkSize)
 
 /*
+ * SlabIsValid
+ *		True iff set is valid slab allocation set.
+ */
+#define SlabIsValid(set) \
+	(PointerIsValid(set) && IsA(set, SlabContext))
+
+/*
+ * SlabBlockIsValid
+ *		True iff block is valid block of slab allocation set.
+ */
+#define SlabBlockIsValid(block) \
+	(PointerIsValid(block) && SlabIsValid((block)->slab))
+
+
+/*
  * SlabContextCreate
  *		Create a new Slab context.
  *
@@ -236,10 +251,10 @@ SlabContextCreate(MemoryContext parent,
 void
 SlabReset(MemoryContext context)
 {
+	SlabContext *slab = (SlabContext *) context;
 	int			i;
-	SlabContext *slab = castNode(SlabContext, context);
 
-	Assert(slab);
+	AssertArg(SlabIsValid(slab));
 
 #ifdef MEMORY_CONTEXT_CHECKING
 	/* Check for corruption and leaks before freeing */
@@ -293,12 +308,12 @@ SlabDelete(MemoryContext context)
 void *
 SlabAlloc(MemoryContext context, Size size)
 {
-	SlabContext *slab = castNode(SlabContext, context);
+	SlabContext *slab = (SlabContext *) context;
 	SlabBlock  *block;
 	MemoryChunk *chunk;
 	int			idx;
 
-	Assert(slab);
+	AssertArg(SlabIsValid(slab));
 
 	Assert((slab->minFreeChunks >= 0) &&
 		   (slab->minFreeChunks < slab->chunksPerBlock));
@@ -450,10 +465,18 @@ SlabAlloc(MemoryContext context, Size size)
 void
 SlabFree(void *pointer)
 {
-	int			idx;
 	MemoryChunk *chunk = PointerGetMemoryChunk(pointer);
 	SlabBlock  *block = MemoryChunkGetBlock(chunk);
-	SlabContext *slab = block->slab;
+	SlabContext *slab;
+	int			idx;
+
+	/*
+	 * Try to verify that we have a sane block pointer: the block header
+	 * should reference a slab context.
+	 */
+	if (!SlabBlockIsValid(block))
+		elog(ERROR, "could not find block containing chunk %p", chunk);
+	slab = block->slab;
 
 #ifdef MEMORY_CONTEXT_CHECKING
 	/* Test for someone scribbling on unused space in chunk */
@@ -540,9 +563,16 @@ SlabRealloc(void *pointer, Size size)
 {
 	MemoryChunk *chunk = PointerGetMemoryChunk(pointer);
 	SlabBlock  *block = MemoryChunkGetBlock(chunk);
-	SlabContext *slab = block->slab;
+	SlabContext *slab;
 
-	Assert(slab);
+	/*
+	 * Try to verify that we have a sane block pointer: the block header
+	 * should reference a slab context.
+	 */
+	if (!SlabBlockIsValid(block))
+		elog(ERROR, "could not find block containing chunk %p", chunk);
+	slab = block->slab;
+
 	/* can't do actual realloc with slab, but let's try to be gentle */
 	if (size == slab->chunkSize)
 		return pointer;
@@ -560,11 +590,9 @@ SlabGetChunkContext(void *pointer)
 {
 	MemoryChunk *chunk = PointerGetMemoryChunk(pointer);
 	SlabBlock  *block = MemoryChunkGetBlock(chunk);
-	SlabContext *slab = block->slab;
 
-	Assert(slab != NULL);
-
-	return &slab->header;
+	AssertArg(SlabBlockIsValid(block));
+	return &block->slab->header;
 }
 
 /*
@@ -577,9 +605,10 @@ SlabGetChunkSpace(void *pointer)
 {
 	MemoryChunk *chunk = PointerGetMemoryChunk(pointer);
 	SlabBlock  *block = MemoryChunkGetBlock(chunk);
-	SlabContext *slab = block->slab;
+	SlabContext *slab;
 
-	Assert(slab);
+	AssertArg(SlabBlockIsValid(block));
+	slab = block->slab;
 
 	return slab->fullChunkSize;
 }
@@ -591,9 +620,9 @@ SlabGetChunkSpace(void *pointer)
 bool
 SlabIsEmpty(MemoryContext context)
 {
-	SlabContext *slab = castNode(SlabContext, context);
+	SlabContext *slab = (SlabContext *) context;
 
-	Assert(slab);
+	AssertArg(SlabIsValid(slab));
 
 	return (slab->nblocks == 0);
 }
@@ -613,12 +642,14 @@ SlabStats(MemoryContext context,
 		  MemoryContextCounters *totals,
 		  bool print_to_stderr)
 {
-	SlabContext *slab = castNode(SlabContext, context);
+	SlabContext *slab = (SlabContext *) context;
 	Size		nblocks = 0;
 	Size		freechunks = 0;
 	Size		totalspace;
 	Size		freespace = 0;
 	int			i;
+
+	AssertArg(SlabIsValid(slab));
 
 	/* Include context header in totalspace */
 	totalspace = slab->headerSize;
@@ -672,11 +703,11 @@ SlabStats(MemoryContext context,
 void
 SlabCheck(MemoryContext context)
 {
+	SlabContext *slab = (SlabContext *) context;
 	int			i;
-	SlabContext *slab = castNode(SlabContext, context);
 	const char *name = slab->header.name;
 
-	Assert(slab);
+	AssertArg(SlabIsValid(slab));
 	Assert(slab->chunksPerBlock > 0);
 
 	/* walk all the freelists */

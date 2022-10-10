@@ -169,6 +169,9 @@ typedef struct PgBackendStatus
 
 	/* query identifier, optionally computed using post_parse_analyze_hook */
 	uint64		st_query_id;
+
+	/* Current memory allocated to this backend */
+	uint64		backend_mem_allocated;
 } PgBackendStatus;
 
 
@@ -275,6 +278,7 @@ typedef struct LocalPgBackendStatus
  */
 extern PGDLLIMPORT bool pgstat_track_activities;
 extern PGDLLIMPORT int pgstat_track_activity_query_size;
+extern PGDLLIMPORT int max_total_bkend_mem;
 
 
 /* ----------
@@ -313,7 +317,9 @@ extern const char *pgstat_get_backend_current_activity(int pid, bool checkUser);
 extern const char *pgstat_get_crashed_backend_activity(int pid, char *buffer,
 													   int buflen);
 extern uint64 pgstat_get_my_query_id(void);
-
+extern void pgstat_report_backend_mem_allocated_increase(uint64 allocation);
+extern void pgstat_report_backend_mem_allocated_decrease(uint64 deallocation);
+extern uint64 pgstat_get_all_backend_memory_allocated(void);
 
 /* ----------
  * Support functions for the SQL-callable functions to
@@ -324,6 +330,7 @@ extern int	pgstat_fetch_stat_numbackends(void);
 extern PgBackendStatus *pgstat_fetch_stat_beentry(BackendId beid);
 extern LocalPgBackendStatus *pgstat_fetch_stat_local_beentry(int beid);
 extern char *pgstat_clip_activity(const char *raw_activity);
+extern bool exceeds_max_total_bkend_mem(uint64 allocation_request);
 
 
 #endif							/* BACKEND_STATUS_H */

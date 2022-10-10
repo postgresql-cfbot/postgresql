@@ -174,6 +174,10 @@ typedef struct CheckpointStatsData
 									 * times, which is not necessarily the
 									 * same as the total elapsed time for the
 									 * entire sync phase. */
+
+	/* start and end timestamps of logical decoding file processing */
+	TimestampTz	l_dec_ops_start_t;
+	TimestampTz	l_dec_ops_end_t;
 } CheckpointStatsData;
 
 extern PGDLLIMPORT CheckpointStatsData CheckpointStats;

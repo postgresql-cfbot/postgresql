@@ -6272,7 +6272,8 @@ LogCheckpointEnd(bool restartpoint)
 				sync_msecs,
 				total_msecs,
 				longest_msecs,
-				average_msecs;
+				average_msecs,
+				l_dec_ops_msecs;
 	uint64		average_sync_time;
 
 	CheckpointStats.ckpt_end_t = GetCurrentTimestamp();
@@ -6309,6 +6310,9 @@ LogCheckpointEnd(bool restartpoint)
 			CheckpointStats.ckpt_sync_rels;
 	average_msecs = (long) ((average_sync_time + 999) / 1000);
 
+	l_dec_ops_msecs = TimestampDifferenceMilliseconds(CheckpointStats.l_dec_ops_start_t,
+													  CheckpointStats.l_dec_ops_end_t);
+
 	/*
 	 * ControlFileLock is not required to see ControlFile->checkPoint and
 	 * ->checkPointCopy here as we are the only updator of those variables at
@@ -6321,7 +6325,8 @@ LogCheckpointEnd(bool restartpoint)
 						"write=%ld.%03d s, sync=%ld.%03d s, total=%ld.%03d s; "
 						"sync files=%d, longest=%ld.%03d s, average=%ld.%03d s; "
 						"distance=%d kB, estimate=%d kB; "
-						"lsn=%X/%X, redo lsn=%X/%X",
+						"lsn=%X/%X, redo lsn=%X/%X; "
+						"logical decoding processing=%ld.%03d s",
 						CheckpointStats.ckpt_bufs_written,
 						(double) CheckpointStats.ckpt_bufs_written * 100 / NBuffers,
 						CheckpointStats.ckpt_segs_added,
@@ -6336,7 +6341,8 @@ LogCheckpointEnd(bool restartpoint)
 						(int) (PrevCheckPointDistance / 1024.0),
 						(int) (CheckPointDistanceEstimate / 1024.0),
 						LSN_FORMAT_ARGS(ControlFile->checkPoint),
-						LSN_FORMAT_ARGS(ControlFile->checkPointCopy.redo))));
+						LSN_FORMAT_ARGS(ControlFile->checkPointCopy.redo),
+						l_dec_ops_msecs / 1000, (int) (l_dec_ops_msecs % 1000))));
 	else
 		ereport(LOG,
 				(errmsg("checkpoint complete: wrote %d buffers (%.1f%%); "
@@ -6344,7 +6350,8 @@ LogCheckpointEnd(bool restartpoint)
 						"write=%ld.%03d s, sync=%ld.%03d s, total=%ld.%03d s; "
 						"sync files=%d, longest=%ld.%03d s, average=%ld.%03d s; "
 						"distance=%d kB, estimate=%d kB; "
-						"lsn=%X/%X, redo lsn=%X/%X",
+						"lsn=%X/%X, redo lsn=%X/%X; "
+						"logical decoding processing=%ld.%03d s",
 						CheckpointStats.ckpt_bufs_written,
 						(double) CheckpointStats.ckpt_bufs_written * 100 / NBuffers,
 						CheckpointStats.ckpt_segs_added,
@@ -6359,7 +6366,8 @@ LogCheckpointEnd(bool restartpoint)
 						(int) (PrevCheckPointDistance / 1024.0),
 						(int) (CheckPointDistanceEstimate / 1024.0),
 						LSN_FORMAT_ARGS(ControlFile->checkPoint),
-						LSN_FORMAT_ARGS(ControlFile->checkPointCopy.redo))));
+						LSN_FORMAT_ARGS(ControlFile->checkPointCopy.redo),
+						l_dec_ops_msecs / 1000, (int) (l_dec_ops_msecs % 1000))));
 }
 
 /*
@@ -7028,9 +7036,13 @@ CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 {
 	CheckPointRelationMap();
 	CheckPointReplicationSlots();
+
+	/* Capture logical decoding processing time */
+	CheckpointStats.l_dec_ops_start_t = GetCurrentTimestamp();
 	CheckPointSnapBuild();
 	CheckPointLogicalRewriteHeap();
 	CheckPointReplicationOrigin();
+	CheckpointStats.l_dec_ops_end_t = GetCurrentTimestamp();
 
 	/* Write out all dirty data in SLRUs and the main buffer pool */
 	TRACE_POSTGRESQL_BUFFER_CHECKPOINT_START(flags);

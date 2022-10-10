@@ -2977,6 +2977,17 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
        with security-sensitive fields obfuscated.
       </para></entry>
      </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>last_conn_error</structfield> <type>text</type>
+      </para>
+      <para>
+       Contains last failed connection error message of this WAL receiver while
+       connecting to primary. Contains NULL, if no failed connection attempts
+       at all.
+      </para></entry>
+     </row>
     </tbody>
    </tgroup>
   </table>

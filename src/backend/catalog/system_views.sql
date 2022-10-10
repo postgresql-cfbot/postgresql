@@ -923,7 +923,8 @@ CREATE VIEW pg_stat_wal_receiver AS
             s.slot_name,
             s.sender_host,
             s.sender_port,
-            s.conninfo
+            s.conninfo,
+            s.last_conn_error
     FROM pg_stat_get_wal_receiver() s
     WHERE s.pid IS NOT NULL;
 

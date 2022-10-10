@@ -287,9 +287,22 @@ WalReceiverMain(void)
 							cluster_name[0] ? cluster_name : "walreceiver",
 							&err);
 	if (!wrconn)
+	{
+		/*
+		 * Place the error message into WAL receiver shared memory so that it
+		 * is easily accessible by the users via WAL receiver stats function.
+		 *
+		 * Can the error message ever be more than MAXCONNERRORLENGTH bytes?
+		 * Most of the common error messages that libpq emits aren't of that
+		 * huge, but if there's any such error message crossing
+		 * MAXCONNERRORLENGTH bytes, it's okay to truncate and store.
+		 */
+		strlcpy(WalRcv->last_conn_error, err, MAXCONNERRORLENGTH);
+
 		ereport(ERROR,
 				(errcode(ERRCODE_CONNECTION_FAILURE),
 				 errmsg("could not connect to the primary server: %s", err)));
+	}
 
 	/*
 	 * Save user-visible connection string.  This clobbers the original
@@ -1358,6 +1371,7 @@ pg_stat_get_wal_receiver(PG_FUNCTION_ARGS)
 	int			sender_port = 0;
 	char		slotname[NAMEDATALEN];
 	char		conninfo[MAXCONNINFO];
+	char		last_conn_error[MAXCONNERRORLENGTH];
 
 	/* Take a lock to ensure value consistency */
 	SpinLockAcquire(&WalRcv->mutex);
@@ -1376,6 +1390,7 @@ pg_stat_get_wal_receiver(PG_FUNCTION_ARGS)
 	strlcpy(sender_host, (char *) WalRcv->sender_host, sizeof(sender_host));
 	sender_port = WalRcv->sender_port;
 	strlcpy(conninfo, (char *) WalRcv->conninfo, sizeof(conninfo));
+	strlcpy(last_conn_error, (char *) WalRcv->last_conn_error, sizeof(last_conn_error));
 	SpinLockRelease(&WalRcv->mutex);
 
 	/*
@@ -1462,6 +1477,10 @@ pg_stat_get_wal_receiver(PG_FUNCTION_ARGS)
 			nulls[14] = true;
 		else
 			values[14] = CStringGetTextDatum(conninfo);
+		if (*last_conn_error == '\0')
+			nulls[15] = true;
+		else
+			values[15] = CStringGetTextDatum(last_conn_error);
 	}
 
 	/* Returns the record as Datum */

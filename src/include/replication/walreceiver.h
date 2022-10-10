@@ -38,6 +38,11 @@ extern PGDLLIMPORT bool hot_standby_feedback;
  */
 #define MAXCONNINFO		1024
 
+/*
+ * MAXCONNERRORLENGTH: maximum size of a connection error.
+ */
+#define MAXCONNERRORLENGTH	1024
+
 /* Can we allow the standby to accept replication connection from another standby? */
 #define AllowCascadeReplication() (EnableHotStandby && max_wal_senders > 0)
 
@@ -160,6 +165,13 @@ typedef struct
 	 * store semantics, so use sig_atomic_t.
 	 */
 	sig_atomic_t force_reply;	/* used as a bool */
+
+	/*
+	 * WAL receiver connection attempt to primary may fail at times. Contains
+	 * NULL if no failed connection attempts at all, otherwise contains error
+	 * message (truncated to MAXCONNERRORLENGTH) of last failed attempt.
+	 */
+	char	last_conn_error[MAXCONNERRORLENGTH];
 } WalRcvData;
 
 extern PGDLLIMPORT WalRcvData *WalRcv;

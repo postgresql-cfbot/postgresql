@@ -875,6 +875,44 @@ SKIP:
 	rmtree("$tempdir/backup_gzip3");
 }
 
+# Check ZSTD compression if available.
+SKIP:
+{
+	skip "postgres was not built with ZSTD support", 3
+	  if (!check_pg_config("#define USE_ZSTD 1"));
+
+	$node->command_ok(
+		[
+			@pg_basebackup_defs,    '-D',
+			"$tempdir/backup_zstd", '--compress',
+			'server-zstd',          '--compress',
+			'client-zstd',          '--wal-method',
+            'none',                 '--format',
+            't'
+		],
+		'pg_basebackup with --compress=ZSTD');
+
+	# Verify that the stored files are generated with their expected
+	# names.
+	my @zstd_files = glob "$tempdir/backup_zstd/*.tar.zst";
+	is(scalar(@zstd_files), 1,
+		"file created with --compress=zstd (base.tar.zstd)"
+	);
+
+	# Check the integrity of the files generated.
+	my $zstd = $ENV{ZSTD};
+
+	skip "program zstd is not found in your system", 1
+	  if (!defined $zstd
+		|| $zstd eq '');
+
+	my $zstd_is_valid =
+	  system_log($zstd, '--test', @zstd_files);
+
+	is($zstd_is_valid, 0, "zstd verified the integrity of compressed data");
+	rmtree("$tempdir/backup_zstd");
+}
+
 # Test background stream process terminating before the basebackup has
 # finished, the main process should exit gracefully with an error message on
 # stderr. To reduce the risk of timing related issues we invoke the base

@@ -179,17 +179,17 @@ typedef struct
 /*
  * Bit layouts for varlena headers on big-endian machines:
  *
- * 00xxxxxx 4-byte length word, aligned, uncompressed data (up to 1G)
- * 01xxxxxx 4-byte length word, aligned, *compressed* data (up to 1G)
- * 10000000 1-byte length word, unaligned, TOAST pointer
- * 1xxxxxxx 1-byte length word, unaligned, uncompressed data (up to 126b)
+ * 0b00xxxxxx 4-byte length word (aligned), uncompressed data (up to 1G)
+ * 0b01xxxxxx 4-byte length word (aligned), *compressed* data (up to 1G)
+ * 0b10000000 1-byte length word (unaligned), type tag, TOAST pointer
+ * 0b1xxxxxxx 1-byte length word (unaligned), uncompressed data (up to 126b)
  *
  * Bit layouts for varlena headers on little-endian machines:
  *
- * xxxxxx00 4-byte length word, aligned, uncompressed data (up to 1G)
- * xxxxxx10 4-byte length word, aligned, *compressed* data (up to 1G)
- * 00000001 1-byte length word, unaligned, TOAST pointer
- * xxxxxxx1 1-byte length word, unaligned, uncompressed data (up to 126b)
+ * 0bxxxxxx00 4-byte length word (aligned), uncompressed data (up to 1G)
+ * 0bxxxxxx10 4-byte length word (aligned), *compressed* data (up to 1G)
+ * 0b00000001 1-byte length word (unaligned), type tag, TOAST pointer
+ * 0bxxxxxxx1 1-byte length word (unaligned), uncompressed data (up to 126b)
  *
  * The "xxx" bits are the length field (which includes itself in all cases).
  * In the big-endian case we mask to extract the length, in the little-endian
@@ -198,8 +198,8 @@ typedef struct
  * this lets us disambiguate alignment padding bytes from the start of an
  * unaligned datum.  (We now *require* pad bytes to be filled with zero!)
  *
- * In TOAST pointers the va_tag field (see varattrib_1b_e) is used to discern
- * the specific type and length of the pointer datum.
+ * For the TOAST pointers the type tag (see varattrib_1b_e.va_tag field) is
+ * used to discern the specific type and length of the pointer datum.
  */
 
 /*

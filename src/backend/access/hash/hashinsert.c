@@ -34,7 +34,7 @@ static void _hash_vacuum_one_page(Relation rel, Relation hrel,
  *		and hashinsert.  By here, itup is completely filled in.
  */
 void
-_hash_doinsert(Relation rel, IndexTuple itup, Relation heapRel)
+_hash_doinsert(Relation rel, IndexTuple itup, Relation heapRel, HashInsertState istate)
 {
 	Buffer		buf = InvalidBuffer;
 	Buffer		bucket_buf;
@@ -198,7 +198,7 @@ restart_insert:
 	START_CRIT_SECTION();
 
 	/* found page with enough space, so add the item here */
-	itup_off = _hash_pgaddtup(rel, buf, itemsz, itup);
+	itup_off = _hash_pgaddtup(rel, buf, itemsz, itup, istate->sorted);
 	MarkBufferDirty(buf);
 
 	/* metapage operations */
@@ -266,7 +266,7 @@ restart_insert:
  * page are sorted by hashkey value.
  */
 OffsetNumber
-_hash_pgaddtup(Relation rel, Buffer buf, Size itemsize, IndexTuple itup)
+_hash_pgaddtup(Relation rel, Buffer buf, Size itemsize, IndexTuple itup, bool sorted)
 {
 	OffsetNumber itup_off;
 	Page		page;
@@ -275,9 +275,18 @@ _hash_pgaddtup(Relation rel, Buffer buf, Size itemsize, IndexTuple itup)
 	_hash_checkpage(rel, buf, LH_BUCKET_PAGE | LH_OVERFLOW_PAGE);
 	page = BufferGetPage(buf);
 
-	/* Find where to insert the tuple (preserving page's hashkey ordering) */
-	hashkey = _hash_get_indextuple_hashkey(itup);
-	itup_off = _hash_binsearch(page, hashkey);
+	/*
+	 * Find where to insert the tuple (preserving page's hashkey ordering).
+	 * If the input is already sorted by hashkey, then we can avoid the
+	 * binary search and just add it to the end of the page.
+	 */
+	if (sorted)
+		itup_off = PageGetMaxOffsetNumber(page) + 1;
+	else
+	{
+		hashkey = _hash_get_indextuple_hashkey(itup);
+		itup_off = _hash_binsearch(page, hashkey);
+	}
 
 	if (PageAddItem(page, (Item) itup, itemsize, itup_off, false, false)
 		== InvalidOffsetNumber)

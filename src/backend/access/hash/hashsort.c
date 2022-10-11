@@ -50,6 +50,8 @@ struct HSpool
 	uint32		high_mask;
 	uint32		low_mask;
 	uint32		max_buckets;
+
+	HashInsertState istate;
 };
 
 
@@ -57,7 +59,7 @@ struct HSpool
  * create and initialize a spool structure
  */
 HSpool *
-_h_spoolinit(Relation heap, Relation index, uint32 num_buckets)
+_h_spoolinit(Relation heap, Relation index, uint32 num_buckets, HashInsertState istate)
 {
 	HSpool	   *hspool = (HSpool *) palloc0(sizeof(HSpool));
 
@@ -88,6 +90,8 @@ _h_spoolinit(Relation heap, Relation index, uint32 num_buckets)
 												   maintenance_work_mem,
 												   NULL,
 												   TUPLESORT_NONE);
+
+	hspool->istate = istate;
 
 	return hspool;
 }
@@ -145,7 +149,7 @@ _h_indexbuild(HSpool *hspool, Relation heapRel)
 		Assert(hashkey >= lasthashkey);
 #endif
 
-		_hash_doinsert(hspool->index, itup, heapRel);
+		_hash_doinsert(hspool->index, itup, heapRel, hspool->istate);
 
 		pgstat_progress_update_param(PROGRESS_CREATEIDX_TUPLES_DONE,
 									 ++tups_done);

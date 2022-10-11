@@ -39,6 +39,7 @@ typedef struct
 	HSpool	   *spool;			/* NULL if not using spooling */
 	double		indtuples;		/* # tuples accepted into index */
 	Relation	heapRel;		/* heap relation descriptor */
+	HashInsertState istate;		/* insert state */
 } HashBuildState;
 
 static void hashbuildCallback(Relation index,
@@ -118,6 +119,7 @@ hashbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 	uint32		num_buckets;
 	long		sort_threshold;
 	HashBuildState buildstate;
+	HashInsertStateData insertstate;
 
 	/*
 	 * We expect to be called exactly once for any index relation. If that's
@@ -157,10 +159,15 @@ hashbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 	else
 		sort_threshold = Min(sort_threshold, NLocBuffer);
 
+	insertstate.sorted = false;
 	if (num_buckets >= (uint32) sort_threshold)
-		buildstate.spool = _h_spoolinit(heap, index, num_buckets);
+	{
+		insertstate.sorted = true;
+		buildstate.spool = _h_spoolinit(heap, index, num_buckets, (HashInsertState) &insertstate);
+	}
 	else
 		buildstate.spool = NULL;
+	buildstate.istate = (HashInsertState) &insertstate;
 
 	/* prepare to build the index */
 	buildstate.indtuples = 0;
@@ -212,6 +219,7 @@ hashbuildCallback(Relation index,
 				  void *state)
 {
 	HashBuildState *buildstate = (HashBuildState *) state;
+	HashInsertState istate = buildstate->istate;
 	Datum		index_values[1];
 	bool		index_isnull[1];
 	IndexTuple	itup;
@@ -231,7 +239,7 @@ hashbuildCallback(Relation index,
 		itup = index_form_tuple(RelationGetDescr(index),
 								index_values, index_isnull);
 		itup->t_tid = *tid;
-		_hash_doinsert(index, itup, buildstate->heapRel);
+		_hash_doinsert(index, itup, buildstate->heapRel, istate);
 		pfree(itup);
 	}
 
@@ -254,6 +262,7 @@ hashinsert(Relation rel, Datum *values, bool *isnull,
 	Datum		index_values[1];
 	bool		index_isnull[1];
 	IndexTuple	itup;
+	HashInsertStateData istate;
 
 	/* convert data to a hash key; on failure, do not insert anything */
 	if (!_hash_convert_tuple(rel,
@@ -265,7 +274,9 @@ hashinsert(Relation rel, Datum *values, bool *isnull,
 	itup = index_form_tuple(RelationGetDescr(rel), index_values, index_isnull);
 	itup->t_tid = *ht_ctid;
 
-	_hash_doinsert(rel, itup, heapRel);
+	istate.sorted = false;
+
+	_hash_doinsert(rel, itup, heapRel, (HashInsertState) &istate);
 
 	pfree(itup);
 

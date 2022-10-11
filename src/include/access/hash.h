@@ -357,6 +357,12 @@ typedef struct HashOptions
 #define HASHOPTIONS_PROC		3
 #define HASHNProcs				3
 
+typedef struct HashInsertStateData
+{
+	bool sorted;
+} HashInsertStateData;
+
+typedef HashInsertStateData *HashInsertState;
 
 /* public routines */
 
@@ -390,9 +396,9 @@ extern void hashadjustmembers(Oid opfamilyoid,
 /* private routines */
 
 /* hashinsert.c */
-extern void _hash_doinsert(Relation rel, IndexTuple itup, Relation heapRel);
+extern void _hash_doinsert(Relation rel, IndexTuple itup, Relation heapRel, HashInsertState istate);
 extern OffsetNumber _hash_pgaddtup(Relation rel, Buffer buf,
-								   Size itemsize, IndexTuple itup);
+								   Size itemsize, IndexTuple itup, bool sorted);
 extern void _hash_pgaddmultitup(Relation rel, Buffer buf, IndexTuple *itups,
 								OffsetNumber *itup_offsets, uint16 nitups);
 
@@ -446,7 +452,8 @@ extern bool _hash_first(IndexScanDesc scan, ScanDirection dir);
 /* hashsort.c */
 typedef struct HSpool HSpool;	/* opaque struct in hashsort.c */
 
-extern HSpool *_h_spoolinit(Relation heap, Relation index, uint32 num_buckets);
+extern HSpool *_h_spoolinit(Relation heap, Relation index, uint32 num_buckets,
+							HashInsertState istate);
 extern void _h_spooldestroy(HSpool *hspool);
 extern void _h_spool(HSpool *hspool, ItemPointer self,
 					 Datum *values, bool *isnull);

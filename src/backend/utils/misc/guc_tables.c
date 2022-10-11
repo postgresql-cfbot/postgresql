@@ -2486,6 +2486,18 @@ struct config_int ConfigureNamesInt[] =
 		0, 0, 1000000,			/* see ComputeXidHorizons */
 		NULL, NULL, NULL
 	},
+
+	{
+		{"synchronous_replication_naptime_before_cancel", PGC_SIGHUP, REPLICATION_PRIMARY,
+			gettext_noop("Sets the amount of time to wait for synchronous replictaion before cancelling."),
+			gettext_noop("A value of -1 or 0 disables this feature."),
+			GUC_UNIT_MS
+		},
+		&SyncRepNapTimeBeforeCancel,
+		0, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
 	{
 		{"vacuum_failsafe_age", PGC_USERSET, CLIENT_CONN_STATEMENT,
 			gettext_noop("Age at which VACUUM should trigger failsafe to avoid a wraparound outage."),

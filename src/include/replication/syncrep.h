@@ -80,6 +80,9 @@ extern PGDLLIMPORT char *syncrep_parse_error_msg;
 /* user-settable parameters for synchronous replication */
 extern PGDLLIMPORT char *SyncRepStandbyNames;
 
+/* user-settable nap time for synchronous replictaion before cancelling */
+extern PGDLLIMPORT int SyncRepNapTimeBeforeCancel;
+
 /* called by user backend */
 extern void SyncRepWaitForLSN(XLogRecPtr lsn, bool commit);
 

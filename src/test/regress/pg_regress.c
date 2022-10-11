@@ -19,6 +19,7 @@
 #include "postgres_fe.h"
 
 #include <ctype.h>
+#include <math.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -93,6 +94,7 @@ static char *dlpath = PKGLIBDIR;
 static char *user = NULL;
 static _stringlist *extraroles = NULL;
 static char *config_auth_datadir = NULL;
+static bool has_status = false;
 
 /* internal variables */
 static const char *progname;
@@ -116,11 +118,15 @@ static int	fail_ignore_count = 0;
 static bool directory_exists(const char *dir);
 static void make_directory(const char *dir);
 
-static void header(const char *fmt,...) pg_attribute_printf(1, 2);
+static void test_status_ok(const char *testname, double runtime, bool parallel);
+static void test_status_failed(const char *testname, bool ignore, char *tags, double runtime, bool parallel);
+static void bail(const char *fmt,...);
+
 static void status(const char *fmt,...) pg_attribute_printf(1, 2);
 static StringInfo psql_start_command(void);
 static void psql_add_command(StringInfo buf, const char *query,...) pg_attribute_printf(2, 3);
 static void psql_end_command(StringInfo buf, const char *database);
+static void status_end(void);
 
 /*
  * allow core files if possible.
@@ -134,9 +140,7 @@ unlimit_core_size(void)
 	getrlimit(RLIMIT_CORE, &lim);
 	if (lim.rlim_max == 0)
 	{
-		fprintf(stderr,
-				_("%s: could not set core size: disallowed by hard limit\n"),
-				progname);
+		pg_log_error(_("could not set core size: disallowed by hard limit"));
 		return;
 	}
 	else if (lim.rlim_max == RLIM_INFINITY || lim.rlim_cur < lim.rlim_max)
@@ -202,20 +206,87 @@ split_to_stringlist(const char *s, const char *delim, _stringlist **listhead)
 }
 
 /*
- * Print a progress banner on stdout.
+ * Bailing out is for unrecoverable errors which prevents further testing to
+ * occur and after which the test run should be aborted.
  */
 static void
-header(const char *fmt,...)
+bail(const char *fmt,...)
 {
-	char		tmp[64];
+	char		tmp[256];
 	va_list		ap;
 
 	va_start(ap, fmt);
 	vsnprintf(tmp, sizeof(tmp), fmt, ap);
 	va_end(ap);
 
-	fprintf(stdout, "============== %-38s ==============\n", tmp);
-	fflush(stdout);
+	status("\nBail out! %s", tmp);
+
+	status_end();
+	exit(2);
+}
+
+/*
+ * Testnumbers are padded to 5 characters to ensure that a base 10 increase
+ * doesn't alter testname alignment (assuming at most 9999 tests). Testnames
+ * are indented 8 spaces in case they run as part of a parallel group. The
+ * position for the runtime is then calculated based on the horizontal space
+ * consumed by testname and testnumber.
+ */
+static void
+test_status_ok(const char *testname, double runtime, bool parallel)
+{
+	int		testnumber;
+	int 	indent;
+
+	success_count++;
+
+	testnumber = fail_count + fail_ignore_count + success_count;
+	/* Calculate an offset to align runtimes vertically */
+	indent = 36 - (parallel ? 8 : 0) - floor(log10(testnumber) + 1);
+
+	/* There is no NLS translation here as "ok" is a protocol message */
+	status("ok %-5i     %s%-*s %8.0f ms",
+		   testnumber, (parallel ? "        " : ""), indent,
+		   testname,
+		   runtime);
+}
+
+/*
+ * For indentation rules, see test_status_ok.
+ */
+static void
+test_status_failed(const char *testname, bool ignore, char *tags, double runtime, bool parallel)
+{
+	int		testnumber;
+	int		indent;
+
+	if (ignore)
+		fail_ignore_count++;
+	else
+		fail_count++;
+
+	testnumber = fail_count + fail_ignore_count + success_count;
+	/* Calculate an offset to align runtimes vertically */
+	indent = 36 - (parallel ? 8 : 0) - floor(log10(testnumber) + 1);
+
+	/* There is no NLS translation here as "(not) ok" are protocol messages */
+	if (ignore)
+	{
+		status("ok %-5i     %s%-*s %8.0f ms # SKIP (ignored)",
+			   testnumber, (parallel ? "        " : ""), indent,
+			   testname,
+			   runtime);
+	}
+	else
+	{
+		status("not ok %-5i %s%-*s %8.0f ms",
+			   testnumber, (parallel ? "        " : ""), indent,
+			   testname,
+			   runtime);
+	}
+
+	if (tags && strlen(tags) > 0)
+		status("\n# tags: %s", tags);
 }
 
 /*
@@ -226,6 +297,7 @@ status(const char *fmt,...)
 {
 	va_list		ap;
 
+	has_status = true;
 	va_start(ap, fmt);
 	vfprintf(stdout, fmt, ap);
 	fflush(stdout);
@@ -245,6 +317,10 @@ status(const char *fmt,...)
 static void
 status_end(void)
 {
+	if (!has_status)
+		return;
+
+	has_status = false;
 	fprintf(stdout, "\n");
 	fflush(stdout);
 	if (logfile)
@@ -272,8 +348,9 @@ stop_postmaster(void)
 		r = system(buf);
 		if (r != 0)
 		{
-			fprintf(stderr, _("\n%s: could not stop postmaster: exit code was %d\n"),
-					progname, r);
+			/* Not using the normal bail() as we want _exit */
+			status("\nBail out! ");
+			status(_("could not stop postmaster: exit code was %d"), r);
 			_exit(2);			/* not exit(), that could be recursive */
 		}
 
@@ -332,9 +409,8 @@ make_temp_sockdir(void)
 	temp_sockdir = mkdtemp(template);
 	if (temp_sockdir == NULL)
 	{
-		fprintf(stderr, _("%s: could not create directory \"%s\": %s\n"),
-				progname, template, strerror(errno));
-		exit(2);
+		bail(_("could not create directory \"%s\": %s"),
+			 template, strerror(errno));
 	}
 
 	/* Stage file names for remove_temp().  Unsafe in a signal handler. */
@@ -456,9 +532,8 @@ load_resultmap(void)
 		/* OK if it doesn't exist, else complain */
 		if (errno == ENOENT)
 			return;
-		fprintf(stderr, _("%s: could not open file \"%s\" for reading: %s\n"),
-				progname, buf, strerror(errno));
-		exit(2);
+		bail(_("could not open file \"%s\" for reading: %s"),
+			 buf, strerror(errno));
 	}
 
 	while (fgets(buf, sizeof(buf), f))
@@ -477,26 +552,20 @@ load_resultmap(void)
 		file_type = strchr(buf, ':');
 		if (!file_type)
 		{
-			fprintf(stderr, _("incorrectly formatted resultmap entry: %s\n"),
-					buf);
-			exit(2);
+			bail(_("incorrectly formatted resultmap entry: %s"), buf);
 		}
 		*file_type++ = '\0';
 
 		platform = strchr(file_type, ':');
 		if (!platform)
 		{
-			fprintf(stderr, _("incorrectly formatted resultmap entry: %s\n"),
-					buf);
-			exit(2);
+			bail(_("incorrectly formatted resultmap entry: %s"), buf);
 		}
 		*platform++ = '\0';
 		expected = strchr(platform, '=');
 		if (!expected)
 		{
-			fprintf(stderr, _("incorrectly formatted resultmap entry: %s\n"),
-					buf);
-			exit(2);
+			bail(_("incorrectly formatted resultmap entry: %s"), buf);
 		}
 		*expected++ = '\0';
 
@@ -742,13 +811,13 @@ initialize_environment(void)
 		}
 
 		if (pghost && pgport)
-			printf(_("(using postmaster on %s, port %s)\n"), pghost, pgport);
+			status(_("# (using postmaster on %s, port %s)\n"), pghost, pgport);
 		if (pghost && !pgport)
-			printf(_("(using postmaster on %s, default port)\n"), pghost);
+			status(_("# (using postmaster on %s, default port)\n"), pghost);
 		if (!pghost && pgport)
-			printf(_("(using postmaster on Unix socket, port %s)\n"), pgport);
+			status(_("# (using postmaster on Unix socket, port %s)\n"), pgport);
 		if (!pghost && !pgport)
-			printf(_("(using postmaster on Unix socket, default port)\n"));
+			status(_("# (using postmaster on Unix socket, default port)\n"));
 	}
 
 	load_resultmap();
@@ -797,34 +866,30 @@ current_windows_user(const char **acct, const char **dom)
 
 	if (!OpenProcessToken(GetCurrentProcess(), TOKEN_READ, &token))
 	{
-		fprintf(stderr,
-				_("%s: could not open process token: error code %lu\n"),
-				progname, GetLastError());
+		pg_log_error("could not open process token: error code %lu",
+					 GetLastError());
 		exit(2);
 	}
 
 	if (!GetTokenInformation(token, TokenUser, NULL, 0, &retlen) && GetLastError() != 122)
 	{
-		fprintf(stderr,
-				_("%s: could not get token information buffer size: error code %lu\n"),
-				progname, GetLastError());
+		pg_log_error("could not get token information buffer size: error code %lu",
+					 GetLastError());
 		exit(2);
 	}
 	tokenuser = pg_malloc(retlen);
 	if (!GetTokenInformation(token, TokenUser, tokenuser, retlen, &retlen))
 	{
-		fprintf(stderr,
-				_("%s: could not get token information: error code %lu\n"),
-				progname, GetLastError());
+		pg_log_error("could not get token information: error code %lu",
+					 GetLastError());
 		exit(2);
 	}
 
 	if (!LookupAccountSid(NULL, tokenuser->User.Sid, accountname, &accountnamesize,
 						  domainname, &domainnamesize, &accountnameuse))
 	{
-		fprintf(stderr,
-				_("%s: could not look up account SID: error code %lu\n"),
-				progname, GetLastError());
+		pg_log_error("could not look up account SID: error code %lu",
+					 GetLastError());
 		exit(2);
 	}
 
@@ -974,7 +1039,7 @@ psql_start_command(void)
 	StringInfo	buf = makeStringInfo();
 
 	appendStringInfo(buf,
-					 "\"%s%spsql\" -X",
+					 "\"%s%spsql\" -X -q",
 					 bindir ? bindir : "",
 					 bindir ? "/" : "");
 	return buf;
@@ -1030,8 +1095,7 @@ psql_end_command(StringInfo buf, const char *database)
 	if (system(buf->data) != 0)
 	{
 		/* psql probably already reported the error */
-		fprintf(stderr, _("command failed: %s\n"), buf->data);
-		exit(2);
+		bail(_("command failed: %s"), buf->data);
 	}
 
 	/* Clean up */
@@ -1072,9 +1136,7 @@ spawn_process(const char *cmdline)
 	pid = fork();
 	if (pid == -1)
 	{
-		fprintf(stderr, _("%s: could not fork: %s\n"),
-				progname, strerror(errno));
-		exit(2);
+		bail(_("could not fork: %s"), strerror(errno));
 	}
 	if (pid == 0)
 	{
@@ -1089,8 +1151,9 @@ spawn_process(const char *cmdline)
 
 		cmdline2 = psprintf("exec %s", cmdline);
 		execl(shellprog, shellprog, "-c", cmdline2, (char *) NULL);
-		fprintf(stderr, _("%s: could not exec \"%s\": %s\n"),
-				progname, shellprog, strerror(errno));
+		/* Not using the normal bail() here as we want _exit */
+		status("\nBail out! ");
+		status(_("could not exec \"%s\": %s"), shellprog, strerror(errno));
 		_exit(1);				/* not exit() here... */
 	}
 	/* in parent */
@@ -1129,8 +1192,8 @@ file_size(const char *file)
 
 	if (!f)
 	{
-		fprintf(stderr, _("%s: could not open file \"%s\" for reading: %s\n"),
-				progname, file, strerror(errno));
+		pg_log_error(_("# could not open file \"%s\" for reading: %s"),
+					 file, strerror(errno));
 		return -1;
 	}
 	fseek(f, 0, SEEK_END);
@@ -1151,8 +1214,8 @@ file_line_count(const char *file)
 
 	if (!f)
 	{
-		fprintf(stderr, _("%s: could not open file \"%s\" for reading: %s\n"),
-				progname, file, strerror(errno));
+		pg_log_error(_("# could not open file \"%s\" for reading: %s"),
+				file, strerror(errno));
 		return -1;
 	}
 	while ((c = fgetc(f)) != EOF)
@@ -1193,9 +1256,8 @@ make_directory(const char *dir)
 {
 	if (mkdir(dir, S_IRWXU | S_IRWXG | S_IRWXO) < 0)
 	{
-		fprintf(stderr, _("%s: could not create directory \"%s\": %s\n"),
-				progname, dir, strerror(errno));
-		exit(2);
+		bail(_("could not create directory \"%s\": %s"),
+			 dir, strerror(errno));
 	}
 }
 
@@ -1245,8 +1307,7 @@ run_diff(const char *cmd, const char *filename)
 	r = system(cmd);
 	if (!WIFEXITED(r) || WEXITSTATUS(r) > 1)
 	{
-		fprintf(stderr, _("diff command failed with status %d: %s\n"), r, cmd);
-		exit(2);
+		bail(_("diff command failed with status %d: %s"), r, cmd);
 	}
 #ifdef WIN32
 
@@ -1256,8 +1317,7 @@ run_diff(const char *cmd, const char *filename)
 	 */
 	if (WEXITSTATUS(r) == 1 && file_size(filename) <= 0)
 	{
-		fprintf(stderr, _("diff command not found: %s\n"), cmd);
-		exit(2);
+		bail(_("diff command not found: %s"), cmd);
 	}
 #endif
 
@@ -1328,9 +1388,8 @@ results_differ(const char *testname, const char *resultsfile, const char *defaul
 		alt_expectfile = get_alternative_expectfile(expectfile, i);
 		if (!alt_expectfile)
 		{
-			fprintf(stderr, _("Unable to check secondary comparison files: %s\n"),
-					strerror(errno));
-			exit(2);
+			bail(_("Unable to check secondary comparison files: %s"),
+				 strerror(errno));
 		}
 
 		if (!file_exists(alt_expectfile))
@@ -1445,9 +1504,8 @@ wait_for_tests(PID_TYPE * pids, int *statuses, instr_time *stoptimes,
 
 		if (p == INVALID_PID)
 		{
-			fprintf(stderr, _("failed to wait for subprocesses: %s\n"),
-					strerror(errno));
-			exit(2);
+			bail(_("failed to wait for subprocesses: %s"),
+				 strerror(errno));
 		}
 #else
 		DWORD		exit_status;
@@ -1456,9 +1514,8 @@ wait_for_tests(PID_TYPE * pids, int *statuses, instr_time *stoptimes,
 		r = WaitForMultipleObjects(tests_left, active_pids, FALSE, INFINITE);
 		if (r < WAIT_OBJECT_0 || r >= WAIT_OBJECT_0 + tests_left)
 		{
-			fprintf(stderr, _("failed to wait for subprocesses: error code %lu\n"),
-					GetLastError());
-			exit(2);
+			bail(_("failed to wait for subprocesses: error code %lu"),
+				 GetLastError());
 		}
 		p = active_pids[r - WAIT_OBJECT_0];
 		/* compact the active_pids array */
@@ -1496,20 +1553,20 @@ static void
 log_child_failure(int exitstatus)
 {
 	if (WIFEXITED(exitstatus))
-		status(_(" (test process exited with exit code %d)"),
+		status(_("# (test process exited with exit code %d)"),
 			   WEXITSTATUS(exitstatus));
 	else if (WIFSIGNALED(exitstatus))
 	{
 #if defined(WIN32)
-		status(_(" (test process was terminated by exception 0x%X)"),
+		status(_("# (test process was terminated by exception 0x%X)"),
 			   WTERMSIG(exitstatus));
 #else
-		status(_(" (test process was terminated by signal %d: %s)"),
+		status(_("# (test process was terminated by signal %d: %s)"),
 			   WTERMSIG(exitstatus), pg_strsignal(WTERMSIG(exitstatus)));
 #endif
 	}
 	else
-		status(_(" (test process exited with unrecognized status %d)"),
+		status(_("# (test process exited with unrecognized status %d)"),
 			   exitstatus);
 }
 
@@ -1533,18 +1590,20 @@ run_schedule(const char *schedule, test_start_function startfunc,
 	char		scbuf[1024];
 	FILE	   *scf;
 	int			line_num = 0;
+	StringInfoData tagbuf;
 
 	memset(tests, 0, sizeof(tests));
 	memset(resultfiles, 0, sizeof(resultfiles));
 	memset(expectfiles, 0, sizeof(expectfiles));
 	memset(tags, 0, sizeof(tags));
 
+	initStringInfo(&tagbuf);
+
 	scf = fopen(schedule, "r");
 	if (!scf)
 	{
-		fprintf(stderr, _("%s: could not open file \"%s\" for reading: %s\n"),
-				progname, schedule, strerror(errno));
-		exit(2);
+		bail(_("could not open file \"%s\" for reading: %s"),
+			 schedule, strerror(errno));
 	}
 
 	while (fgets(scbuf, sizeof(scbuf), scf))
@@ -1582,9 +1641,8 @@ run_schedule(const char *schedule, test_start_function startfunc,
 		}
 		else
 		{
-			fprintf(stderr, _("syntax error in schedule file \"%s\" line %d: %s\n"),
-					schedule, line_num, scbuf);
-			exit(2);
+			bail(_("syntax error in schedule file \"%s\" line %d: %s\n"),
+				 schedule, line_num, scbuf);
 		}
 
 		num_tests = 0;
@@ -1600,9 +1658,8 @@ run_schedule(const char *schedule, test_start_function startfunc,
 
 					if (num_tests >= MAX_PARALLEL_TESTS)
 					{
-						fprintf(stderr, _("too many parallel tests (more than %d) in schedule file \"%s\" line %d: %s\n"),
-								MAX_PARALLEL_TESTS, schedule, line_num, scbuf);
-						exit(2);
+						bail(_("too many parallel tests (more than %d) in schedule file \"%s\" line %d: %s\n"),
+							 MAX_PARALLEL_TESTS, schedule, line_num, scbuf);
 					}
 					sav = *c;
 					*c = '\0';
@@ -1624,14 +1681,12 @@ run_schedule(const char *schedule, test_start_function startfunc,
 
 		if (num_tests == 0)
 		{
-			fprintf(stderr, _("syntax error in schedule file \"%s\" line %d: %s\n"),
-					schedule, line_num, scbuf);
-			exit(2);
+			bail(_("syntax error in schedule file \"%s\" line %d: %s\n"),
+				 schedule, line_num, scbuf);
 		}
 
 		if (num_tests == 1)
 		{
-			status(_("test %-28s ... "), tests[0]);
 			pids[0] = (startfunc) (tests[0], &resultfiles[0], &expectfiles[0], &tags[0]);
 			INSTR_TIME_SET_CURRENT(starttimes[0]);
 			wait_for_tests(pids, statuses, stoptimes, NULL, 1);
@@ -1639,16 +1694,15 @@ run_schedule(const char *schedule, test_start_function startfunc,
 		}
 		else if (max_concurrent_tests > 0 && max_concurrent_tests < num_tests)
 		{
-			fprintf(stderr, _("too many parallel tests (more than %d) in schedule file \"%s\" line %d: %s\n"),
-					max_concurrent_tests, schedule, line_num, scbuf);
-			exit(2);
+			bail(_("too many parallel tests (more than %d) in schedule file \"%s\" line %d: %s\n"),
+				 max_concurrent_tests, schedule, line_num, scbuf);
 		}
 		else if (max_connections > 0 && max_connections < num_tests)
 		{
 			int			oldest = 0;
 
-			status(_("parallel group (%d tests, in groups of %d): "),
-				   num_tests, max_connections);
+			status(_("# parallel group (%d tests, in groups of %d): "),
+					  num_tests, max_connections);
 			for (i = 0; i < num_tests; i++)
 			{
 				if (i - oldest >= max_connections)
@@ -1668,7 +1722,7 @@ run_schedule(const char *schedule, test_start_function startfunc,
 		}
 		else
 		{
-			status(_("parallel group (%d tests): "), num_tests);
+			status(_("# parallel group (%d tests): "), num_tests);
 			for (i = 0; i < num_tests; i++)
 			{
 				pids[i] = (startfunc) (tests[i], &resultfiles[i], &expectfiles[i], &tags[i]);
@@ -1686,8 +1740,9 @@ run_schedule(const char *schedule, test_start_function startfunc,
 					   *tl;
 			bool		differ = false;
 
-			if (num_tests > 1)
-				status(_("     %-28s ... "), tests[i]);
+			resetStringInfo(&tagbuf);
+
+			INSTR_TIME_SUBTRACT(stoptimes[i], starttimes[i]);
 
 			/*
 			 * Advance over all three lists simultaneously.
@@ -1708,7 +1763,7 @@ run_schedule(const char *schedule, test_start_function startfunc,
 				newdiff = results_differ(tests[i], rl->str, el->str);
 				if (newdiff && tl)
 				{
-					printf("%s ", tl->str);
+					appendStringInfo(&tagbuf, "%s ", tl->str);
 				}
 				differ |= newdiff;
 			}
@@ -1726,28 +1781,14 @@ run_schedule(const char *schedule, test_start_function startfunc,
 						break;
 					}
 				}
-				if (ignore)
-				{
-					status(_("failed (ignored)"));
-					fail_ignore_count++;
-				}
-				else
-				{
-					status(_("FAILED"));
-					fail_count++;
-				}
+
+				test_status_failed(tests[i], ignore, tagbuf.data, INSTR_TIME_GET_MILLISEC(stoptimes[i]), (num_tests > 1));
 			}
 			else
-			{
-				status(_("ok    "));	/* align with FAILED */
-				success_count++;
-			}
+				test_status_ok(tests[i], INSTR_TIME_GET_MILLISEC(stoptimes[i]), (num_tests > 1));
 
 			if (statuses[i] != 0)
 				log_child_failure(statuses[i]);
-
-			INSTR_TIME_SUBTRACT(stoptimes[i], starttimes[i]);
-			status(_(" %8.0f ms"), INSTR_TIME_GET_MILLISEC(stoptimes[i]));
 
 			status_end();
 		}
@@ -1762,6 +1803,7 @@ run_schedule(const char *schedule, test_start_function startfunc,
 		}
 	}
 
+	pg_free(tagbuf.data);
 	free_stringlist(&ignorelist);
 
 	fclose(scf);
@@ -1785,11 +1827,12 @@ run_single_test(const char *test, test_start_function startfunc,
 			   *el,
 			   *tl;
 	bool		differ = false;
+	StringInfoData tagbuf;
 
-	status(_("test %-28s ... "), test);
 	pid = (startfunc) (test, &resultfiles, &expectfiles, &tags);
 	INSTR_TIME_SET_CURRENT(starttime);
 	wait_for_tests(&pid, &exit_status, &stoptime, NULL, 1);
+	initStringInfo(&tagbuf);
 
 	/*
 	 * Advance over all three lists simultaneously.
@@ -1810,27 +1853,22 @@ run_single_test(const char *test, test_start_function startfunc,
 		newdiff = results_differ(test, rl->str, el->str);
 		if (newdiff && tl)
 		{
-			printf("%s ", tl->str);
+			appendStringInfo(&tagbuf, "%s ", tl->str);
 		}
 		differ |= newdiff;
 	}
 
+	INSTR_TIME_SUBTRACT(stoptime, starttime);
+
 	if (differ)
-	{
-		status(_("FAILED"));
-		fail_count++;
-	}
+		test_status_failed(test, false, tagbuf.data, INSTR_TIME_GET_MILLISEC(stoptime), false);
 	else
-	{
-		status(_("ok    "));	/* align with FAILED */
-		success_count++;
-	}
+		test_status_ok(test, INSTR_TIME_GET_MILLISEC(stoptime), false);
 
 	if (exit_status != 0)
 		log_child_failure(exit_status);
 
-	INSTR_TIME_SUBTRACT(stoptime, starttime);
-	status(_(" %8.0f ms"), INSTR_TIME_GET_MILLISEC(stoptime));
+	pg_free(tagbuf.data);
 
 	status_end();
 }
@@ -1854,9 +1892,8 @@ open_result_files(void)
 	logfile = fopen(logfilename, "w");
 	if (!logfile)
 	{
-		fprintf(stderr, _("%s: could not open file \"%s\" for writing: %s\n"),
-				progname, logfilename, strerror(errno));
-		exit(2);
+		bail(_("%s: could not open file \"%s\" for writing: %s"),
+			 progname, logfilename, strerror(errno));
 	}
 
 	/* create the diffs file as empty */
@@ -1865,9 +1902,8 @@ open_result_files(void)
 	difffile = fopen(difffilename, "w");
 	if (!difffile)
 	{
-		fprintf(stderr, _("%s: could not open file \"%s\" for writing: %s\n"),
-				progname, difffilename, strerror(errno));
-		exit(2);
+		bail(_("%s: could not open file \"%s\" for writing: %s"),
+			 progname, difffilename, strerror(errno));
 	}
 	/* we don't keep the diffs file open continuously */
 	fclose(difffile);
@@ -1883,7 +1919,6 @@ drop_database_if_exists(const char *dbname)
 {
 	StringInfo	buf = psql_start_command();
 
-	header(_("dropping database \"%s\""), dbname);
 	/* Set warning level so we don't see chatter about nonexistent DB */
 	psql_add_command(buf, "SET client_min_messages = warning");
 	psql_add_command(buf, "DROP DATABASE IF EXISTS \"%s\"", dbname);
@@ -1900,7 +1935,6 @@ create_database(const char *dbname)
 	 * We use template0 so that any installation-local cruft in template1 will
 	 * not mess up the tests.
 	 */
-	header(_("creating database \"%s\""), dbname);
 	if (encoding)
 		psql_add_command(buf, "CREATE DATABASE \"%s\" TEMPLATE=template0 ENCODING='%s'%s", dbname, encoding,
 						 (nolocale) ? " LC_COLLATE='C' LC_CTYPE='C'" : "");
@@ -1922,10 +1956,7 @@ create_database(const char *dbname)
 	 * this will work whether or not the extension is preinstalled.
 	 */
 	for (sl = loadextension; sl != NULL; sl = sl->next)
-	{
-		header(_("installing %s"), sl->str);
 		psql_command(dbname, "CREATE EXTENSION IF NOT EXISTS \"%s\"", sl->str);
-	}
 }
 
 static void
@@ -1933,7 +1964,6 @@ drop_role_if_exists(const char *rolename)
 {
 	StringInfo	buf = psql_start_command();
 
-	header(_("dropping role \"%s\""), rolename);
 	/* Set warning level so we don't see chatter about nonexistent role */
 	psql_add_command(buf, "SET client_min_messages = warning");
 	psql_add_command(buf, "DROP ROLE IF EXISTS \"%s\"", rolename);
@@ -1945,7 +1975,6 @@ create_role(const char *rolename, const _stringlist *granted_dbs)
 {
 	StringInfo	buf = psql_start_command();
 
-	header(_("creating role \"%s\""), rolename);
 	psql_add_command(buf, "CREATE ROLE \"%s\" WITH LOGIN", rolename);
 	for (; granted_dbs != NULL; granted_dbs = granted_dbs->next)
 	{
@@ -2167,7 +2196,7 @@ regression_main(int argc, char *argv[],
 				break;
 			default:
 				/* getopt_long already emitted a complaint */
-				fprintf(stderr, _("\nTry \"%s -h\" for more information.\n"),
+				pg_log_error_hint("Try \"%s --help\" for more information.",
 						progname);
 				exit(2);
 		}
@@ -2230,16 +2259,12 @@ regression_main(int argc, char *argv[],
 
 		if (directory_exists(temp_instance))
 		{
-			header(_("removing existing temp instance"));
 			if (!rmtree(temp_instance, true))
 			{
-				fprintf(stderr, _("\n%s: could not remove temp instance \"%s\"\n"),
-						progname, temp_instance);
-				exit(2);
+				bail(_("%s: could not remove temp instance \"%s\""),
+							 progname, temp_instance);
 			}
 		}
-
-		header(_("creating temporary instance"));
 
 		/* make the temp instance top directory */
 		make_directory(temp_instance);
@@ -2250,7 +2275,6 @@ regression_main(int argc, char *argv[],
 			make_directory(buf);
 
 		/* initdb */
-		header(_("initializing database system"));
 		snprintf(buf, sizeof(buf),
 				 "\"%s%sinitdb\" -D \"%s/data\" --no-clean --no-sync%s%s > \"%s/log/initdb.log\" 2>&1",
 				 bindir ? bindir : "",
@@ -2262,8 +2286,8 @@ regression_main(int argc, char *argv[],
 		fflush(NULL);
 		if (system(buf))
 		{
-			fprintf(stderr, _("\n%s: initdb failed\nExamine %s/log/initdb.log for the reason.\nCommand was: %s\n"), progname, outputdir, buf);
-			exit(2);
+			bail(_("%s: initdb failed\nExamine %s/log/initdb.log for the reason.\nCommand was: %s"),
+				 progname, outputdir, buf);
 		}
 
 		/*
@@ -2278,8 +2302,8 @@ regression_main(int argc, char *argv[],
 		pg_conf = fopen(buf, "a");
 		if (pg_conf == NULL)
 		{
-			fprintf(stderr, _("\n%s: could not open \"%s\" for adding extra config: %s\n"), progname, buf, strerror(errno));
-			exit(2);
+			bail( _("%s: could not open \"%s\" for adding extra config: %s"),
+				 progname, buf, strerror(errno));
 		}
 		fputs("\n# Configuration added by pg_regress\n\n", pg_conf);
 		fputs("log_autovacuum_min_duration = 0\n", pg_conf);
@@ -2298,8 +2322,8 @@ regression_main(int argc, char *argv[],
 			extra_conf = fopen(temp_config, "r");
 			if (extra_conf == NULL)
 			{
-				fprintf(stderr, _("\n%s: could not open \"%s\" to read extra config: %s\n"), progname, temp_config, strerror(errno));
-				exit(2);
+				bail(_("%s: could not open \"%s\" to read extra config: %s"),
+					 progname, temp_config, strerror(errno));
 			}
 			while (fgets(line_buf, sizeof(line_buf), extra_conf) != NULL)
 				fputs(line_buf, pg_conf);
@@ -2338,14 +2362,14 @@ regression_main(int argc, char *argv[],
 
 				if (port_specified_by_user || i == 15)
 				{
-					fprintf(stderr, _("port %d apparently in use\n"), port);
+					status(_("# port %d apparently in use\n"), port);
 					if (!port_specified_by_user)
-						fprintf(stderr, _("%s: could not determine an available port\n"), progname);
-					fprintf(stderr, _("Specify an unused port using the --port option or shut down any conflicting PostgreSQL servers.\n"));
-					exit(2);
+						status(_("# could not determine an available port\n"));
+					bail(_("Specify an unused port using the --port option or shut down any conflicting PostgreSQL servers."));
 				}
 
-				fprintf(stderr, _("port %d apparently in use, trying %d\n"), port, port + 1);
+				status(_("# port %d apparently in use, trying %d\n"),
+						port, port + 1);
 				port++;
 				sprintf(s, "%d", port);
 				setenv("PGPORT", s, 1);
@@ -2357,7 +2381,6 @@ regression_main(int argc, char *argv[],
 		/*
 		 * Start the temp postmaster
 		 */
-		header(_("starting postmaster"));
 		snprintf(buf, sizeof(buf),
 				 "\"%s%spostgres\" -D \"%s/data\" -F%s "
 				 "-c \"listen_addresses=%s\" -k \"%s\" "
@@ -2369,11 +2392,7 @@ regression_main(int argc, char *argv[],
 				 outputdir);
 		postmaster_pid = spawn_process(buf);
 		if (postmaster_pid == INVALID_PID)
-		{
-			fprintf(stderr, _("\n%s: could not spawn postmaster: %s\n"),
-					progname, strerror(errno));
-			exit(2);
-		}
+			bail(_("could not spawn postmaster: %s\n"), strerror(errno));
 
 		/*
 		 * Wait till postmaster is able to accept connections; normally this
@@ -2408,16 +2427,16 @@ regression_main(int argc, char *argv[],
 			if (WaitForSingleObject(postmaster_pid, 0) == WAIT_OBJECT_0)
 #endif
 			{
-				fprintf(stderr, _("\n%s: postmaster failed\nExamine %s/log/postmaster.log for the reason\n"), progname, outputdir);
-				exit(2);
+				bail(_("postmaster failed\nExamine %s/log/postmaster.log for the reason\n"),
+					 outputdir);
 			}
 
 			pg_usleep(1000000L);
 		}
 		if (i >= wait_seconds)
 		{
-			fprintf(stderr, _("\n%s: postmaster did not respond within %d seconds\nExamine %s/log/postmaster.log for the reason\n"),
-					progname, wait_seconds, outputdir);
+			status(_("# postmaster did not respond within %d seconds\nExamine %s/log/postmaster.log for the reason\n"),
+					wait_seconds, outputdir);
 
 			/*
 			 * If we get here, the postmaster is probably wedged somewhere in
@@ -2426,17 +2445,14 @@ regression_main(int argc, char *argv[],
 			 * attempts.
 			 */
 #ifndef WIN32
-			if (kill(postmaster_pid, SIGKILL) != 0 &&
-				errno != ESRCH)
-				fprintf(stderr, _("\n%s: could not kill failed postmaster: %s\n"),
-						progname, strerror(errno));
+			if (kill(postmaster_pid, SIGKILL) != 0 && errno != ESRCH)
+				bail(_("could not kill failed postmaster: %s"), strerror(errno));
 #else
 			if (TerminateProcess(postmaster_pid, 255) == 0)
-				fprintf(stderr, _("\n%s: could not kill failed postmaster: error code %lu\n"),
-						progname, GetLastError());
+				bail(_("could not kill failed postmaster: error code %lu"),
+					 GetLastError());
 #endif
-
-			exit(2);
+			bail(_("postmaster failed"));
 		}
 
 		postmaster_running = true;
@@ -2447,7 +2463,7 @@ regression_main(int argc, char *argv[],
 #else
 #define ULONGPID(x) (unsigned long) (x)
 #endif
-		printf(_("running on port %d with PID %lu\n"),
+		status(_("# running on port %d with PID %lu\n"),
 			   port, ULONGPID(postmaster_pid));
 	}
 	else
@@ -2479,8 +2495,6 @@ regression_main(int argc, char *argv[],
 	/*
 	 * Ready to run the tests
 	 */
-	header(_("running regression test queries"));
-
 	for (sl = schedulelist; sl != NULL; sl = sl->next)
 	{
 		run_schedule(sl->str, startfunc, postfunc);
@@ -2496,7 +2510,6 @@ regression_main(int argc, char *argv[],
 	 */
 	if (temp_instance)
 	{
-		header(_("shutting down postmaster"));
 		stop_postmaster();
 	}
 
@@ -2507,61 +2520,66 @@ regression_main(int argc, char *argv[],
 	 */
 	if (temp_instance && fail_count == 0 && fail_ignore_count == 0)
 	{
-		header(_("removing temporary instance"));
 		if (!rmtree(temp_instance, true))
-			fprintf(stderr, _("\n%s: could not remove temp instance \"%s\"\n"),
-					progname, temp_instance);
+			pg_log_error("could not remove temp instance \"%s\"",
+						 temp_instance);
 	}
 
-	fclose(logfile);
+	/*
+	 * Emit a TAP compliant Plan
+	 */
+	status("1..%i\n", (fail_count + fail_ignore_count + success_count));
 
 	/*
 	 * Emit nice-looking summary message
 	 */
 	if (fail_count == 0 && fail_ignore_count == 0)
-		snprintf(buf, sizeof(buf),
-				 _(" All %d tests passed. "),
-				 success_count);
-	else if (fail_count == 0)	/* fail_count=0, fail_ignore_count>0 */
-		snprintf(buf, sizeof(buf),
-				 _(" %d of %d tests passed, %d failed test(s) ignored. "),
-				 success_count,
-				 success_count + fail_ignore_count,
-				 fail_ignore_count);
-	else if (fail_ignore_count == 0)	/* fail_count>0 && fail_ignore_count=0 */
-		snprintf(buf, sizeof(buf),
-				 _(" %d of %d tests failed. "),
-				 fail_count,
-				 success_count + fail_count);
+		status(_("# All %d tests passed."), success_count);
+	/* fail_count=0, fail_ignore_count>0 */
+	else if (fail_count == 0)
+		status(_("# %d of %d tests passed, %d failed test(s) ignored."),
+			   success_count,
+			   success_count + fail_ignore_count,
+			   fail_ignore_count);
+	/* fail_count>0 && fail_ignore_count=0 */
+	else if (fail_ignore_count == 0)
+		status(_("# %d of %d tests failed."),
+			   fail_count,
+			   success_count + fail_count);
+	/* fail_count>0 && fail_ignore_count>0 */
 	else
-		/* fail_count>0 && fail_ignore_count>0 */
-		snprintf(buf, sizeof(buf),
-				 _(" %d of %d tests failed, %d of these failures ignored. "),
-				 fail_count + fail_ignore_count,
-				 success_count + fail_count + fail_ignore_count,
-				 fail_ignore_count);
+		status(_("# %d of %d tests failed, %d of these failures ignored."),
+			   fail_count + fail_ignore_count,
+			   success_count + fail_count + fail_ignore_count,
+			   fail_ignore_count);
 
-	putchar('\n');
-	for (i = strlen(buf); i > 0; i--)
-		putchar('=');
-	printf("\n%s\n", buf);
-	for (i = strlen(buf); i > 0; i--)
-		putchar('=');
-	putchar('\n');
-	putchar('\n');
-
+	/*
+	 * In order for this information (or any error information) to be shown
+	 * when running pg_regress test suites under prove it needs to be emitted
+	 * stderr instead of stdout.
+	 */
 	if (file_size(difffilename) > 0)
 	{
-		printf(_("The differences that caused some tests to fail can be viewed in the\n"
-				 "file \"%s\".  A copy of the test summary that you see\n"
-				 "above is saved in the file \"%s\".\n\n"),
+		status(_("\n# The differences that caused some tests to fail can be viewed in the\n"
+				  "# file \"%s\".  A copy of the test summary that you see\n"
+				  "# above is saved in the file \"%s\".\n\n"),
 			   difffilename, logfilename);
 	}
 	else
 	{
 		unlink(difffilename);
 		unlink(logfilename);
+
+		free(difffilename);
+		difffilename = NULL;
+		free(logfilename);
+		logfilename = NULL;
 	}
+
+	status_end();
+
+	fclose(logfile);
+	logfile = NULL;
 
 	if (fail_count != 0)
 		exit(1);

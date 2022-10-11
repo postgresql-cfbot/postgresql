@@ -4613,18 +4613,21 @@ KnownAssignedXidsCompress(bool force)
 	{
 		/*
 		 * If we can choose how much to compress, use a heuristic to avoid
-		 * compressing too often or not often enough.
+		 * compressing too often or not often enough. "Compress" here means
+		 * simply moving the values to the beginning of the array, so is
+		 * not as complex or costly as typical data compression algorithms.
 		 *
-		 * Heuristic is if we have a large enough current spread and less than
-		 * 50% of the elements are currently in use, then compress. This
-		 * should ensure we compress fairly infrequently. We could compress
-		 * less often though the virtual array would spread out more and
-		 * snapshots would become more expensive.
+		 * We would like to put an upper bound on the size of the current
+		 * spread, S, to reduce the number of cachelines that need to be read,
+		 * which is essential to avoid limiting scalability for readers.
+		 * Apply the heuristic that if less than 50% of the elements in current
+		 * spread are in use, then compress. We will likely stray higher than
+		 * this because of the additional heuristic applied in
+		 * KnownAssignedXidsRemoveTree(), but benchmarks show this is ok.
 		 */
 		int			nelements = head - tail;
 
-		if (nelements < 4 * PROCARRAY_MAXPROCS ||
-			nelements < 2 * pArray->numKnownAssignedXids)
+		if (nelements < 2 * pArray->numKnownAssignedXids)
 			return;
 	}
 
@@ -4904,7 +4907,8 @@ KnownAssignedXidsRemove(TransactionId xid)
 
 /*
  * KnownAssignedXidsRemoveTree
- *		Remove xid (if it's not InvalidTransactionId) and all the subxids.
+ *		Remove xid (if it's not InvalidTransactionId) and all the subxids,
+ *		typically run when applying transaction end records.
  *
  * Caller must hold ProcArrayLock in exclusive mode.
  */
@@ -4920,8 +4924,25 @@ KnownAssignedXidsRemoveTree(TransactionId xid, int nsubxids,
 	for (i = 0; i < nsubxids; i++)
 		KnownAssignedXidsRemove(subxids[i]);
 
-	/* Opportunistically compress the array */
-	KnownAssignedXidsCompress(false);
+	/*
+	 * Opportunistically consider whether to compress the array.
+	 *
+	 * Performance results showed that we were doing this too often when
+	 * we considered only the size of the array, so reduce the frequency
+	 * by applying an additional heuristic filter based simply on the
+	 * modulus of the xid itself, to reduce this to every few attempts.
+	 *
+	 * Extensive benchmarking has shown that a frequency of every 64 xids
+	 * works well in large multi-core servers. We might expect this to
+	 * vary somewhat depending upon workload but we have not enough
+	 * information about that to be flexible about that here.
+	 *
+	 * XXX consider running compression in a background worker.
+	 */
+#define KAX_COMPRESS_FREQUENCY	64
+	if (TransactionIdIsValid(xid) &&
+		((int) xid) % KAX_COMPRESS_FREQUENCY == 0)
+		KnownAssignedXidsCompress(false);
 }
 
 /*

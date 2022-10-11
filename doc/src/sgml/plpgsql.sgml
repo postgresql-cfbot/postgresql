@@ -2997,6 +2997,16 @@ GET STACKED DIAGNOSTICS <replaceable>variable</replaceable> { = | := } <replacea
          <entry>the name of the schema related to exception</entry>
         </row>
         <row>
+         <entry><literal>PG_SQL_TEXT</literal></entry>
+         <entry><type>text</type></entry>
+         <entry>invalid sql statement, if any</entry>
+        </row>
+        <row>
+         <entry><literal>PG_ERROR_LOCATION</literal></entry>
+         <entry><type>text</type></entry>
+         <entry>invalid dynamic sql statement's text cursor position, if any</entry>
+        </row>
+        <row>
          <entry><literal>PG_EXCEPTION_DETAIL</literal></entry>
          <entry><type>text</type></entry>
          <entry>the text of the exception's detail message, if any</entry>

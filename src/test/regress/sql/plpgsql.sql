@@ -4711,3 +4711,64 @@ BEGIN
   GET DIAGNOSTICS x = ROW_COUNT;
   RETURN;
 END; $$ LANGUAGE plpgsql;
+
+--
+-- PG_SQL_TEXT, PG_ERROR_LOCATION
+-- should return sql and text cursor position, if the dynamic sql is syntactically incorrect
+--
+DO
+$$
+DECLARE
+    v_sql TEXT:='SELECT 1 JOIN SELECT 2';
+    v_err_sql_stmt TEXT;
+    v_err_sql_pos INT;
+BEGIN
+    EXECUTE v_sql;
+EXCEPTION
+WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_err_sql_stmt = PG_SQL_TEXT,
+    v_err_sql_pos = PG_ERROR_LOCATION;
+    RAISE NOTICE 'exception sql %', v_err_sql_stmt;
+    RAISE NOTICE 'exception sql position %', v_err_sql_pos;
+END;
+$$;
+
+--
+-- PG_SQL_TEXT, PG_ERROR_LOCATION
+-- should return sql and an empty cursor position, if the dynamic sql is valid and throw the exception
+--
+DO
+$$
+DECLARE
+    v_err_sql_pos INT;
+    v_err_sql_stmt TEXT;
+BEGIN
+    EXECUTE 'SELECT 1/0';
+EXCEPTION
+WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_err_sql_stmt = PG_SQL_TEXT,
+    v_err_sql_pos = PG_ERROR_LOCATION;
+    RAISE NOTICE 'exception sql %', v_err_sql_stmt;
+    RAISE NOTICE 'exception sql position %', v_err_sql_pos;
+END;
+$$;
+
+--
+-- PG_SQL_TEXT, PG_ERROR_LOCATION
+-- should return sql and an empty cursor position, if the sql is a valid and throw the exception
+--
+DO
+$$
+DECLARE
+    v_err_sql_pos INT;
+    v_err_sql_stmt TEXT;
+BEGIN
+    PERFORM 1/0;
+EXCEPTION
+WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_err_sql_stmt = PG_SQL_TEXT,
+    v_err_sql_pos = PG_ERROR_LOCATION;
+    RAISE NOTICE 'exception sql %', v_err_sql_stmt;
+    RAISE NOTICE 'exception sql position %', v_err_sql_pos;
+END;
+$$;

@@ -61,6 +61,7 @@
 #include "sys/mman.h"
 #endif
 
+#include "access/transam.h"
 #include "access/xlog_internal.h"
 #include "catalog/pg_authid_d.h"
 #include "catalog/pg_class_d.h" /* pgrminclude ignore */
@@ -2762,6 +2763,14 @@ initialize_data_directory(void)
 
 	make_postgres(cmdfd);
 
+	PG_CMD_CLOSE;
+
+	/* Set FirstNormal OID */
+	snprintf(cmd, sizeof(cmd),
+			 "\"%s/pg_resetwal\" -o %u %s",
+			 bin_path, FirstNormalObjectId, pg_data);
+
+	PG_CMD_OPEN;
 	PG_CMD_CLOSE;
 
 	check_ok();

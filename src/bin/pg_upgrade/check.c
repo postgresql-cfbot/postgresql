@@ -9,6 +9,7 @@
 
 #include "postgres_fe.h"
 
+#include "access/transam.h"
 #include "catalog/pg_authid_d.h"
 #include "catalog/pg_collation.h"
 #include "fe_utils/string_utils.h"
@@ -433,6 +434,10 @@ static void
 check_new_cluster_is_empty(void)
 {
 	int			dbnum;
+
+	if (new_cluster.controldata.chkpnt_nxtoid != FirstNormalObjectId)
+		pg_fatal("New cluster is not pristine: OIDs have been assigned since initdb (%u != %u)\n",
+			new_cluster.controldata.chkpnt_nxtoid, FirstNormalObjectId);
 
 	for (dbnum = 0; dbnum < new_cluster.dbarr.ndbs; dbnum++)
 	{

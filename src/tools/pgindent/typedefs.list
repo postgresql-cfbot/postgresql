@@ -2515,6 +2515,7 @@ SimpleStats
 SimpleStringList
 SimpleStringListCell
 SingleBoundSortItem
+SinglePartitionSpec
 Size
 SkipPages
 SlabBlock

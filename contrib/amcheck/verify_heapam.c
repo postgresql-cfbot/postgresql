@@ -663,6 +663,25 @@ check_tuple_header(HeapCheckContext *ctx)
 		 */
 	}
 
+	if ((ctx->tuphdr->t_infomask & HEAP_XMAX_COMMITTED) &&
+		(ctx->tuphdr->t_infomask & HEAP_XMAX_LOCK_ONLY))
+	{
+		report_corruption(ctx,
+						  pstrdup("locked-only should not be marked committed"));
+
+		/* As above, do not skip further checks. */
+	}
+
+	/* also check for pre-v9.3 lock-only bit pattern */
+	if ((ctx->tuphdr->t_infomask & HEAP_XMAX_COMMITTED) &&
+		HEAP_XMAX_IS_LOCKED_ONLY(ctx->tuphdr->t_infomask))
+	{
+		report_corruption(ctx,
+						  pstrdup("tuple with HEAP_XMAX_EXCL_LOCK set and HEAP_XMAX_IS_MULTI unset should not be marked committed"));
+
+		/* As above, do not skip further checks. */
+	}
+
 	if (infomask & HEAP_HASNULL)
 		expected_hoff = MAXALIGN(SizeofHeapTupleHeader + BITMAPLEN(ctx->natts));
 	else

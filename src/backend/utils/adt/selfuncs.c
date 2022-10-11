@@ -7387,6 +7387,7 @@ gincostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 				qual_arg_cost,
 				spc_random_page_cost,
 				outer_scans;
+	Cost		descentCost;
 	Relation	indexRel;
 	GinStatsData ginStats;
 	ListCell   *lc;
@@ -7590,7 +7591,7 @@ gincostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 	 * searches in entry tree, including search of first entry in partial
 	 * match algorithm
 	 */
-	entryPagesFetched += ceil(counts.searchEntries * rint(pow(numEntryPages, 0.15)));
+	entryPagesFetched += ceil(counts.searchEntries * ceil(pow(numEntryPages, 0.15)));
 
 	/*
 	 * Add an estimate of entry pages read by partial match algorithm. It's a
@@ -7610,6 +7611,33 @@ gincostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 	 * estimate it as proportion.
 	 */
 	dataPagesFetched = ceil(numDataPages * partialScale);
+
+	*indexStartupCost = 0;
+	*indexTotalCost = 0;
+
+	/*
+	 * Add a CPU-cost component to represent the costs of initial entry btree
+	 * descent.  We don't charge any I/O cost for touching upper btree levels,
+	 * since they tend to stay in cache, but we still have to do about log2(N)
+	 * comparisons to descend a btree of N leaf tuples.  We charge one
+	 * cpu_operator_cost per comparison.
+	 *
+	 * If there are ScalarArrayOpExprs, charge this once per SA scan.  The
+	 * ones after the first one are not startup cost so far as the overall
+	 * plan is concerned, so add them only to "total" cost.
+	 */
+	if (numEntries > 1)			/* avoid computing log(0) */
+	{
+		descentCost = ceil(log(numEntries) / log(2.0)) * cpu_operator_cost;
+		*indexStartupCost += descentCost * counts.searchEntries;
+		*indexTotalCost += counts.arrayScans * descentCost * counts.searchEntries;
+	}
+
+	/*
+	 * Add a cpu cost per page fetched. This is not amortized over a loop.
+	 */
+	*indexStartupCost += entryPagesFetched * 50.0 * cpu_operator_cost;
+	*indexTotalCost += entryPagesFetched * counts.arrayScans * 50.0 * cpu_operator_cost;
 
 	/*
 	 * Calculate cache effects if more than one scan due to nestloops or array
@@ -7634,7 +7662,7 @@ gincostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 	 * Here we use random page cost because logically-close pages could be far
 	 * apart on disk.
 	 */
-	*indexStartupCost = (entryPagesFetched + dataPagesFetched) * spc_random_page_cost;
+	*indexStartupCost += (entryPagesFetched + dataPagesFetched) * spc_random_page_cost;
 
 	/*
 	 * Now compute the number of data pages fetched during the scan.
@@ -7673,7 +7701,7 @@ gincostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 	}
 
 	/* And apply random_page_cost as the cost per page */
-	*indexTotalCost = *indexStartupCost +
+	*indexTotalCost += *indexStartupCost +
 		dataPagesFetched * spc_random_page_cost;
 
 	/*

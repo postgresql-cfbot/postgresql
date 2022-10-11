@@ -72,6 +72,7 @@ static const struct FileFdwOption valid_options[] = {
 	{"quote", ForeignTableRelationId},
 	{"escape", ForeignTableRelationId},
 	{"null", ForeignTableRelationId},
+	{"default", ForeignTableRelationId},
 	{"encoding", ForeignTableRelationId},
 	{"force_not_null", AttributeRelationId},
 	{"force_null", AttributeRelationId},
@@ -712,6 +713,9 @@ static TupleTableSlot *
 fileIterateForeignScan(ForeignScanState *node)
 {
 	FileFdwExecutionState *festate = (FileFdwExecutionState *) node->fdw_state;
+	EState	    *estate = CreateExecutorState();
+	ExprContext *econtext;
+	MemoryContext oldcontext;
 	TupleTableSlot *slot = node->ss.ss_ScanTupleSlot;
 	bool		found;
 	ErrorContextCallback errcallback;
@@ -728,14 +732,23 @@ fileIterateForeignScan(ForeignScanState *node)
 	 * ExecStoreVirtualTuple.  If we don't find another row in the file, we
 	 * just skip the last step, leaving the slot empty as required.
 	 *
-	 * We can pass ExprContext = NULL because we read all columns from the
-	 * file, so no need to evaluate default expressions.
+	 * We pass ExprContext because of the possibility of usage of DEFAULT
+	 * option in COPY FROM, so we may need to evaluate default expressions.
 	 */
 	ExecClearTuple(slot);
-	found = NextCopyFrom(festate->cstate, NULL,
+	econtext = GetPerTupleExprContext(estate);
+	/*
+	 * Switch to per-tuple context before calling NextCopyFrom, which does
+	 * evaluate default expressions etc. and requires per-tuple context.
+	 */
+	oldcontext = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
+	found = NextCopyFrom(festate->cstate, econtext,
 						 slot->tts_values, slot->tts_isnull);
 	if (found)
 		ExecStoreVirtualTuple(slot);
+
+	/* Switch back to original memory context */
+	MemoryContextSwitchTo(oldcontext);
 
 	/* Remove error callback. */
 	error_context_stack = errcallback.previous;

@@ -87,11 +87,11 @@ typedef struct CopyFromStateData
 	 */
 	MemoryContext copycontext;	/* per-copy execution context */
 
-	AttrNumber	num_defaults;
+	AttrNumber	num_defaults;	/* count of att that are missing and have default value */
 	FmgrInfo   *in_functions;	/* array of input functions for each attrs */
 	Oid		   *typioparams;	/* array of element types for in_functions */
-	int		   *defmap;			/* array of default att numbers */
-	ExprState **defexprs;		/* array of default att expressions */
+	int		   *defmap;			/* array of default att numbers related to missing att */
+	ExprState **defexprs;		/* array of default att expressions for all att */
 	bool		volatile_defexprs;	/* is any of defexprs volatile? */
 	List	   *range_table;
 	ExprState  *qualexpr;

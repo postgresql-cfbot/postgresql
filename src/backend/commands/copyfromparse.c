@@ -151,8 +151,8 @@ static const char BinarySignature[11] = "PGCOPY\n\377\r\n\0";
 /* non-export function prototypes */
 static bool CopyReadLine(CopyFromState cstate);
 static bool CopyReadLineText(CopyFromState cstate);
-static int	CopyReadAttributesText(CopyFromState cstate);
-static int	CopyReadAttributesCSV(CopyFromState cstate);
+static int	CopyReadAttributesText(CopyFromState cstate, bool *defaults);
+static int	CopyReadAttributesCSV(CopyFromState cstate, bool *defaults);
 static Datum CopyReadBinaryAttribute(CopyFromState cstate, FmgrInfo *flinfo,
 									 Oid typioparam, int32 typmod,
 									 bool *isnull);
@@ -751,7 +751,7 @@ CopyReadBinaryData(CopyFromState cstate, char *dest, int nbytes)
  * NOTE: force_not_null option are not applied to the returned fields.
  */
 bool
-NextCopyFromRawFields(CopyFromState cstate, char ***fields, int *nfields)
+NextCopyFromRawFields(CopyFromState cstate, char ***fields, int *nfields, bool *defaults)
 {
 	int			fldct;
 	bool		done;
@@ -775,9 +775,9 @@ NextCopyFromRawFields(CopyFromState cstate, char ***fields, int *nfields)
 			int			fldnum;
 
 			if (cstate->opts.csv_mode)
-				fldct = CopyReadAttributesCSV(cstate);
+				fldct = CopyReadAttributesCSV(cstate, defaults);
 			else
-				fldct = CopyReadAttributesText(cstate);
+				fldct = CopyReadAttributesText(cstate, defaults);
 
 			if (fldct != list_length(cstate->attnumlist))
 				ereport(ERROR,
@@ -830,9 +830,9 @@ NextCopyFromRawFields(CopyFromState cstate, char ***fields, int *nfields)
 
 	/* Parse the line into de-escaped field values */
 	if (cstate->opts.csv_mode)
-		fldct = CopyReadAttributesCSV(cstate);
+		fldct = CopyReadAttributesCSV(cstate, defaults);
 	else
-		fldct = CopyReadAttributesText(cstate);
+		fldct = CopyReadAttributesText(cstate, defaults);
 
 	*fields = cstate->raw_fields;
 	*nfields = fldct;
@@ -842,9 +842,10 @@ NextCopyFromRawFields(CopyFromState cstate, char ***fields, int *nfields)
 /*
  * Read next tuple from file for COPY FROM. Return false if no more tuples.
  *
- * 'econtext' is used to evaluate default expression for each column not
- * read from the file. It can be NULL when no default values are used, i.e.
- * when all columns are read from the file.
+ * 'econtext' is used to evaluate default expression for each column that is
+ * either not read from the file or is using the DEFAULT option of COPY FROM.
+ * It can be NULL when no default values are used, i.e. when all columns are
+ * read from the file, and DEFAULT option is unset.
  *
  * 'values' and 'nulls' arrays must be the same length as columns of the
  * relation passed to BeginCopyFrom. This function fills the arrays.
@@ -862,6 +863,7 @@ NextCopyFrom(CopyFromState cstate, ExprContext *econtext,
 	int			i;
 	int		   *defmap = cstate->defmap;
 	ExprState **defexprs = cstate->defexprs;
+	bool	   *defaults;
 
 	tupDesc = RelationGetDescr(cstate->rel);
 	num_phys_attrs = tupDesc->natts;
@@ -870,6 +872,7 @@ NextCopyFrom(CopyFromState cstate, ExprContext *econtext,
 	/* Initialize all values for row to NULL */
 	MemSet(values, 0, num_phys_attrs * sizeof(Datum));
 	MemSet(nulls, true, num_phys_attrs * sizeof(bool));
+	defaults = (bool *) palloc0(num_phys_attrs * sizeof(bool));
 
 	if (!cstate->opts.binary)
 	{
@@ -880,7 +883,7 @@ NextCopyFrom(CopyFromState cstate, ExprContext *econtext,
 		char	   *string;
 
 		/* read raw fields in the next line */
-		if (!NextCopyFromRawFields(cstate, &field_strings, &fldct))
+		if (!NextCopyFromRawFields(cstate, &field_strings, &fldct, defaults))
 			return false;
 
 		/* check for overflowing fields */
@@ -938,12 +941,27 @@ NextCopyFrom(CopyFromState cstate, ExprContext *econtext,
 
 			cstate->cur_attname = NameStr(att->attname);
 			cstate->cur_attval = string;
-			values[m] = InputFunctionCall(&in_functions[m],
-										  string,
-										  typioparams[m],
-										  att->atttypmod);
+
 			if (string != NULL)
 				nulls[m] = false;
+
+			if (defaults[m])
+			{
+				/*
+				 * The caller must supply econtext and have switched into the
+				 * per-tuple memory context in it.
+				 */
+				Assert(econtext != NULL);
+				Assert(CurrentMemoryContext == econtext->ecxt_per_tuple_memory);
+
+				values[m] = ExecEvalExpr(defexprs[m], econtext, &nulls[m]);
+			}
+			else
+				values[m] = InputFunctionCall(&in_functions[m],
+											  string,
+											  typioparams[m],
+											  att->atttypmod);
+
 			cstate->cur_attname = NULL;
 			cstate->cur_attval = NULL;
 		}
@@ -1019,9 +1037,11 @@ NextCopyFrom(CopyFromState cstate, ExprContext *econtext,
 		Assert(econtext != NULL);
 		Assert(CurrentMemoryContext == econtext->ecxt_per_tuple_memory);
 
-		values[defmap[i]] = ExecEvalExpr(defexprs[i], econtext,
+		values[defmap[i]] = ExecEvalExpr(defexprs[defmap[i]], econtext,
 										 &nulls[defmap[i]]);
 	}
+
+	pfree(defaults);
 
 	return true;
 }
@@ -1475,7 +1495,7 @@ GetDecimalFromHex(char hex)
  * The return value is the number of fields actually read.
  */
 static int
-CopyReadAttributesText(CopyFromState cstate)
+CopyReadAttributesText(CopyFromState cstate, bool *defaults)
 {
 	char		delimc = cstate->opts.delim[0];
 	int			fieldno;
@@ -1663,6 +1683,31 @@ CopyReadAttributesText(CopyFromState cstate)
 		if (input_len == cstate->opts.null_print_len &&
 			strncmp(start_ptr, cstate->opts.null_print, input_len) == 0)
 			cstate->raw_fields[fieldno] = NULL;
+		/* Check whether raw input matched default marker */
+		else if (cstate->opts.default_print &&
+				 input_len == cstate->opts.default_print_len &&
+				 strncmp(start_ptr, cstate->opts.default_print, input_len) == 0)
+		{
+			/* fieldno is 0-indexed and attnum is 1-indexed */
+			int m = list_nth_int(cstate->attnumlist, fieldno) - 1;
+
+			if (cstate->defexprs[m] != NULL)
+			{
+				/* defaults contain entries for all physical attributes */
+				defaults[m] = true;
+			}
+			else
+			{
+				TupleDesc         tupDesc = RelationGetDescr(cstate->rel);
+				Form_pg_attribute att = TupleDescAttr(tupDesc, m);
+
+				ereport(ERROR,
+						(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
+						 errmsg("unexpected DEFAULT in COPY data"),
+						 errdetail("Column \"%s\" has no DEFAULT value.",
+						 NameStr(att->attname))));
+			}
+		}
 		else
 		{
 			/*
@@ -1703,7 +1748,7 @@ CopyReadAttributesText(CopyFromState cstate)
  * "standard" (i.e. common) CSV usage.
  */
 static int
-CopyReadAttributesCSV(CopyFromState cstate)
+CopyReadAttributesCSV(CopyFromState cstate, bool *defaults)
 {
 	char		delimc = cstate->opts.delim[0];
 	char		quotec = cstate->opts.quote[0];
@@ -1852,6 +1897,31 @@ endfield:
 		if (!saw_quote && input_len == cstate->opts.null_print_len &&
 			strncmp(start_ptr, cstate->opts.null_print, input_len) == 0)
 			cstate->raw_fields[fieldno] = NULL;
+		/* Check whether raw input matched default marker */
+		else if (cstate->opts.default_print &&
+				 input_len == cstate->opts.default_print_len &&
+				 strncmp(start_ptr, cstate->opts.default_print, input_len) == 0)
+		{
+			/* fieldno is 0-index and attnum is 1-index */
+			int m = list_nth_int(cstate->attnumlist, fieldno) - 1;
+
+			if (cstate->defexprs[m] != NULL)
+			{
+				/* defaults contain entries for all physical attributes */
+				defaults[m] = true;
+			}
+			else
+			{
+				TupleDesc         tupDesc = RelationGetDescr(cstate->rel);
+				Form_pg_attribute att = TupleDescAttr(tupDesc, m);
+
+				ereport(ERROR,
+						(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
+						 errmsg("unexpected DEFAULT in COPY data"),
+						 errdetail("Column \"%s\" has no DEFAULT value.",
+						 NameStr(att->attname))));
+			}
+		}
 
 		fieldno++;
 		/* Done if we hit EOL instead of a delim */

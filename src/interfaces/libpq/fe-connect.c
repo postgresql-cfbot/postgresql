@@ -376,6 +376,7 @@ static PGPing internal_ping(PGconn *conn);
 static PGconn *makeEmptyPGconn(void);
 static void pqFreeCommandQueue(PGcmdQueueEntry *queue);
 static bool fillPGconn(PGconn *conn, PQconninfoOption *connOptions);
+static bool copyPGconn(PGconn *srcConn, PGconn *dstConn);
 static void freePGconn(PGconn *conn);
 static void closePGconn(PGconn *conn);
 static void release_conn_addrinfo(PGconn *conn);
@@ -599,8 +600,17 @@ pqDropServerData(PGconn *conn)
 	conn->write_failed = false;
 	free(conn->write_err_msg);
 	conn->write_err_msg = NULL;
-	conn->be_pid = 0;
-	conn->be_key = 0;
+
+	/*
+	 * Cancel connections should save their be_pid and be_key across
+	 * PQresetStart invocations. Otherwise they don't know the secret token of
+	 * the connection they are supposed to cancel anymore.
+	 */
+	if (!conn->cancelRequest)
+	{
+		conn->be_pid = 0;
+		conn->be_key = 0;
+	}
 }
 
 
@@ -729,6 +739,68 @@ PQping(const char *conninfo)
 	PQfinish(conn);
 
 	return ret;
+}
+
+/*
+ *		PQcancelConnectStart
+ *
+ * Asynchronously cancel a request on the given connection. This requires
+ * polling the returned PGconn to actually complete the cancellation of the
+ * request.
+ */
+PGconn *
+PQrequestCancelStart(PGconn *conn)
+{
+	PGconn	   *cancelConn = makeEmptyPGconn();
+
+	if (cancelConn == NULL)
+		return NULL;
+
+	/* Check we have an open connection */
+	if (!conn)
+	{
+		appendPQExpBufferStr(&cancelConn->errorMessage, libpq_gettext("passed connection was NULL\n"));
+		return cancelConn;
+	}
+
+	if (conn->sock == PGINVALID_SOCKET)
+	{
+		appendPQExpBufferStr(&cancelConn->errorMessage, libpq_gettext("passed connection is not open\n"));
+		return cancelConn;
+	}
+
+	/*
+	 * Indicate that this connection is used to send a cancellation
+	 */
+	cancelConn->cancelRequest = true;
+
+	if (!copyPGconn(conn, cancelConn))
+		return (PGconn *) cancelConn;
+
+	/*
+	 * Compute derived options
+	 */
+	if (!connectOptions2(cancelConn))
+		return cancelConn;
+
+	/*
+	 * Copy cancelation token data from the original connnection
+	 */
+	cancelConn->be_pid = conn->be_pid;
+	cancelConn->be_key = conn->be_key;
+
+	/*
+	 * Cancel requests should not iterate over all possible hosts. The request
+	 * needs to be sent to the exact host and address that the original
+	 * connection used.
+	 */
+	memcpy(&cancelConn->raddr, &conn->raddr, sizeof(SockAddr));
+	cancelConn->whichhost = conn->whichhost;
+	conn->try_next_host = false;
+	conn->try_next_addr = false;
+
+	cancelConn->status = CONNECTION_STARTING;
+	return cancelConn;
 }
 
 /*
@@ -904,6 +976,46 @@ fillPGconn(PGconn *conn, PQconninfoOption *connOptions)
 		}
 	}
 
+	return true;
+}
+
+/*
+ * Copy over option values from srcConn to dstConn
+ *
+ * Don't put anything cute here --- intelligence should be in
+ * connectOptions2 ...
+ *
+ * Returns true on success. On failure, returns false and sets error message of
+ * dstConn.
+ */
+static bool
+copyPGconn(PGconn *srcConn, PGconn *dstConn)
+{
+	const internalPQconninfoOption *option;
+
+	/* copy over connection options */
+	for (option = PQconninfoOptions; option->keyword; option++)
+	{
+		if (option->connofs >= 0)
+		{
+			const char **tmp = (const char **) ((char *) srcConn + option->connofs);
+
+			if (*tmp)
+			{
+				char	  **dstConnmember = (char **) ((char *) dstConn + option->connofs);
+
+				if (*dstConnmember)
+					free(*dstConnmember);
+				*dstConnmember = strdup(*tmp);
+				if (*dstConnmember == NULL)
+				{
+					appendPQExpBufferStr(&dstConn->errorMessage,
+										 libpq_gettext("out of memory\n"));
+					return false;
+				}
+			}
+		}
+	}
 	return true;
 }
 
@@ -2055,10 +2167,17 @@ connectDBStart(PGconn *conn)
 	 * Set up to try to connect to the first host.  (Setting whichhost = -1 is
 	 * a bit of a cheat, but PQconnectPoll will advance it to 0 before
 	 * anything else looks at it.)
+	 *
+	 * Cancel requests are special though, they should only try one host,
+	 * which is determined in PQcancelConnectStart. So leave these settings
+	 * alone for cancel requests.
 	 */
-	conn->whichhost = -1;
-	conn->try_next_addr = false;
-	conn->try_next_host = true;
+	if (!conn->cancelRequest)
+	{
+		conn->whichhost = -1;
+		conn->try_next_host = true;
+		conn->try_next_addr = false;
+	}
 	conn->status = CONNECTION_NEEDED;
 
 	/* Also reset the target_server_type state if needed */
@@ -2106,6 +2225,15 @@ connectDBComplete(PGconn *conn)
 
 	if (conn == NULL || conn->status == CONNECTION_BAD)
 		return 0;
+
+	if (conn->status == CONNECTION_STARTING)
+	{
+		if (!connectDBStart(conn))
+		{
+			conn->status = CONNECTION_BAD;
+			return 0;
+		}
+	}
 
 	/*
 	 * Set up a time limit, if connect_timeout isn't zero.
@@ -2247,12 +2375,14 @@ PQconnectPoll(PGconn *conn)
 	switch (conn->status)
 	{
 			/*
-			 * We really shouldn't have been polled in these two cases, but we
-			 * can handle it.
+			 * We really shouldn't have been polled in these three cases, but
+			 * we can handle it.
 			 */
 		case CONNECTION_BAD:
 			return PGRES_POLLING_FAILED;
 		case CONNECTION_OK:
+			return PGRES_POLLING_OK;
+		case CONNECTION_CANCEL_FINISHED:
 			return PGRES_POLLING_OK;
 
 			/* These are reading states */
@@ -2265,6 +2395,34 @@ PQconnectPoll(PGconn *conn)
 				/* Load waiting data */
 				int			n = pqReadData(conn);
 
+#ifndef WIN32
+				if (n == -2 && conn->cancelRequest)
+#else
+
+				/*
+				 * Windows is a bit special in its EOF behaviour for TCP.
+				 * Sometimes it will error with an ECONNRESET when there is a
+				 * clean connection closure. See these threads for details:
+				 * https://www.postgresql.org/message-id/flat/90b34057-4176-7bb0-0dbb-9822a5f6425b%40greiz-reinsdorf.de
+				 *
+				 * https://www.postgresql.org/message-id/flat/CA%2BhUKG%2BOeoETZQ%3DQw5Ub5h3tmwQhBmDA%3DnuNO3KG%3DzWfUypFAw%40mail.gmail.com
+				 *
+				 * PQcancel ignores such errors and reports success for the
+				 * cancellation anyway, so even if this is not always correct
+				 * we do the same here.
+				 */
+				if (n < 0 && conn->cancelRequest)
+#endif
+				{
+					/*
+					 * This is the expected end state for cancel connections.
+					 * They are closed once the cancel is processed by the
+					 * server.
+					 */
+					conn->status = CONNECTION_CANCEL_FINISHED;
+					resetPQExpBuffer(&conn->errorMessage);
+					return PGRES_POLLING_OK;
+				}
 				if (n < 0)
 					goto error_return;
 				if (n == 0)
@@ -2274,6 +2432,7 @@ PQconnectPoll(PGconn *conn)
 			}
 
 			/* These are writing states, so we just proceed. */
+		case CONNECTION_STARTING:
 		case CONNECTION_STARTED:
 		case CONNECTION_MADE:
 			break;
@@ -2298,6 +2457,14 @@ keep_going:						/* We will come back to here until there is
 	/* Time to advance to next address, or next host if no more addresses? */
 	if (conn->try_next_addr)
 	{
+		/*
+		 * Cancel requests never have more addresses to try. They should only
+		 * try a single one.
+		 */
+		if (conn->cancelRequest)
+		{
+			goto error_return;
+		}
 		if (conn->addr_cur && conn->addr_cur->ai_next)
 		{
 			conn->addr_cur = conn->addr_cur->ai_next;
@@ -2316,6 +2483,15 @@ keep_going:						/* We will come back to here until there is
 		int			thisport;
 		int			ret;
 		char		portstr[MAXPGPATH];
+
+		/*
+		 * Cancel requests never have more hosts to try. They should only try
+		 * a single one.
+		 */
+		if (conn->cancelRequest)
+		{
+			goto error_return;
+		}
 
 		if (conn->whichhost + 1 < conn->nconnhost)
 			conn->whichhost++;
@@ -2498,19 +2674,27 @@ keep_going:						/* We will come back to here until there is
 					char		host_addr[NI_MAXHOST];
 
 					/*
-					 * Advance to next possible host, if we've tried all of
-					 * the addresses for the current host.
+					 * Cancel requests don't use addr_cur at all. They have
+					 * their raddr field already filled in during
+					 * initialization in PQcancelConnectStart.
 					 */
-					if (addr_cur == NULL)
+					if (!conn->cancelRequest)
 					{
-						conn->try_next_host = true;
-						goto keep_going;
-					}
+						/*
+						 * Advance to next possible host, if we've tried all
+						 * of the addresses for the current host.
+						 */
+						if (addr_cur == NULL)
+						{
+							conn->try_next_host = true;
+							goto keep_going;
+						}
 
-					/* Remember current address for possible use later */
-					memcpy(&conn->raddr.addr, addr_cur->ai_addr,
-						   addr_cur->ai_addrlen);
-					conn->raddr.salen = addr_cur->ai_addrlen;
+						/* Remember current address for possible use later */
+						memcpy(&conn->raddr.addr, addr_cur->ai_addr,
+							   addr_cur->ai_addrlen);
+						conn->raddr.salen = addr_cur->ai_addrlen;
+					}
 
 					/*
 					 * Set connip, too.  Note we purposely ignore strdup
@@ -2526,7 +2710,7 @@ keep_going:						/* We will come back to here until there is
 						conn->connip = strdup(host_addr);
 
 					/* Try to create the socket */
-					conn->sock = socket(addr_cur->ai_family, SOCK_STREAM, 0);
+					conn->sock = socket(conn->raddr.addr.ss_family, SOCK_STREAM, 0);
 					if (conn->sock == PGINVALID_SOCKET)
 					{
 						int			errorno = SOCK_ERRNO;
@@ -2536,12 +2720,18 @@ keep_going:						/* We will come back to here until there is
 						 * addresses to try; this reduces useless chatter in
 						 * cases where the address list includes both IPv4 and
 						 * IPv6 but kernel only accepts one family.
+						 *
+						 * Cancel requests never have more addresses to try.
+						 * They should only try a single one.
 						 */
-						if (addr_cur->ai_next != NULL ||
-							conn->whichhost + 1 < conn->nconnhost)
+						if (!conn->cancelRequest)
 						{
-							conn->try_next_addr = true;
-							goto keep_going;
+							if (addr_cur->ai_next != NULL ||
+								conn->whichhost + 1 < conn->nconnhost)
+							{
+								conn->try_next_addr = true;
+								goto keep_going;
+							}
 						}
 						emitHostIdentityInfo(conn, host_addr);
 						appendPQExpBuffer(&conn->errorMessage,
@@ -2564,7 +2754,7 @@ keep_going:						/* We will come back to here until there is
 					 * TCP sockets, nonblock mode, close-on-exec.  Try the
 					 * next address if any of this fails.
 					 */
-					if (addr_cur->ai_family != AF_UNIX)
+					if (conn->raddr.addr.ss_family != AF_UNIX)
 					{
 						if (!connectNoDelay(conn))
 						{
@@ -2593,7 +2783,7 @@ keep_going:						/* We will come back to here until there is
 					}
 #endif							/* F_SETFD */
 
-					if (addr_cur->ai_family != AF_UNIX)
+					if (conn->raddr.addr.ss_family != AF_UNIX)
 					{
 #ifndef WIN32
 						int			on = 1;
@@ -2687,8 +2877,9 @@ keep_going:						/* We will come back to here until there is
 					 * Start/make connection.  This should not block, since we
 					 * are in nonblock mode.  If it does, well, too bad.
 					 */
-					if (connect(conn->sock, addr_cur->ai_addr,
-								addr_cur->ai_addrlen) < 0)
+					if (connect(conn->sock,
+								(struct sockaddr *) &conn->raddr.addr,
+								conn->raddr.salen) < 0)
 					{
 						if (SOCK_ERRNO == EINPROGRESS ||
 #ifdef WIN32
@@ -2725,6 +2916,16 @@ keep_going:						/* We will come back to here until there is
 					conn->try_next_addr = true;
 					goto keep_going;
 				}
+			}
+
+		case CONNECTION_STARTING:
+			{
+				if (!connectDBStart(conn))
+				{
+					goto error_return;
+				}
+				conn->status = CONNECTION_STARTED;
+				return PGRES_POLLING_WRITING;
 			}
 
 		case CONNECTION_STARTED:
@@ -2934,6 +3135,25 @@ keep_going:						/* We will come back to here until there is
 					return PGRES_POLLING_READING;
 				}
 #endif							/* USE_SSL */
+
+				if (conn->cancelRequest)
+				{
+					CancelRequestPacket cancelpacket;
+
+					packetlen = sizeof(cancelpacket);
+					cancelpacket.cancelRequestCode = (MsgType) pg_hton32(CANCEL_REQUEST_CODE);
+					cancelpacket.backendPID = pg_hton32(conn->be_pid);
+					cancelpacket.cancelAuthCode = pg_hton32(conn->be_key);
+					if (pqPacketSend(conn, 0, &cancelpacket, packetlen) != STATUS_OK)
+					{
+						appendPQExpBuffer(&conn->errorMessage,
+										  libpq_gettext("could not send cancel packet: %s\n"),
+										  SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
+						goto error_return;
+					}
+					conn->status = CONNECTION_AWAITING_RESPONSE;
+					return PGRES_POLLING_READING;
+				}
 
 				/*
 				 * Build the startup packet.
@@ -4114,6 +4334,11 @@ release_conn_addrinfo(PGconn *conn)
 static void
 sendTerminateConn(PGconn *conn)
 {
+	if (conn->cancelRequest)
+	{
+		return;
+	}
+
 	/*
 	 * Note that the protocol doesn't allow us to send Terminate messages
 	 * during the startup phase.
@@ -4230,6 +4455,12 @@ PQresetStart(PGconn *conn)
 	if (conn)
 	{
 		closePGconn(conn);
+
+		if (conn->cancelRequest)
+		{
+			conn->status = CONNECTION_STARTING;
+			return 1;
+		}
 
 		return connectDBStart(conn);
 	}
@@ -4582,6 +4813,22 @@ cancel_errReturn:
 	return false;
 }
 
+/*
+ * PQconnectComplete: takes a non blocking cancel connection and completes it
+ * in a blocking manner.
+ *
+ * Returns 1 if able to connect successfully and 0 if not.
+ *
+ * This can useful if you only care about the thread safety of
+ * PQrequestCancelStart and not about its non blocking functionality.
+ */
+int
+PQconnectComplete(PGconn *cancelConn)
+{
+	connectDBComplete(cancelConn);
+	return cancelConn->status != CONNECTION_BAD;
+}
+
 
 /*
  * PQrequestCancel: old, not thread-safe function for requesting query cancel
@@ -4598,45 +4845,31 @@ cancel_errReturn:
 int
 PQrequestCancel(PGconn *conn)
 {
-	int			r;
-	PGcancel   *cancel;
+	PGconn	   *cancelConn = NULL;
 
-	/* Check we have an open connection */
-	if (!conn)
-		return false;
-
-	if (conn->sock == PGINVALID_SOCKET)
+	cancelConn = PQrequestCancelStart(conn);
+	if (!cancelConn)
 	{
-		strlcpy(conn->errorMessage.data,
-				"PQrequestCancel() -- connection is not open\n",
-				conn->errorMessage.maxlen);
-		conn->errorMessage.len = strlen(conn->errorMessage.data);
-		conn->errorReported = 0;
-
+		appendPQExpBufferStr(&conn->errorMessage, libpq_gettext("out of memory\n"));
 		return false;
 	}
 
-	cancel = PQgetCancel(conn);
-	if (cancel)
+	if (cancelConn->status == CONNECTION_BAD)
 	{
-		r = PQcancel(cancel, conn->errorMessage.data,
-					 conn->errorMessage.maxlen);
-		PQfreeCancel(cancel);
-	}
-	else
-	{
-		strlcpy(conn->errorMessage.data, "out of memory",
-				conn->errorMessage.maxlen);
-		r = false;
+		appendPQExpBufferStr(&conn->errorMessage, PQerrorMessage(cancelConn));
+		freePGconn(cancelConn);
+		return false;
 	}
 
-	if (!r)
+	if (!PQconnectComplete(cancelConn))
 	{
-		conn->errorMessage.len = strlen(conn->errorMessage.data);
-		conn->errorReported = 0;
+		appendPQExpBufferStr(&conn->errorMessage, PQerrorMessage(cancelConn));
+		freePGconn(cancelConn);
+		return false;
 	}
 
-	return r;
+	freePGconn(cancelConn);
+	return true;
 }
 
 

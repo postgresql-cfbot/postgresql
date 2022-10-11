@@ -253,7 +253,7 @@ rloop:
 			appendPQExpBufferStr(&conn->errorMessage,
 								 libpq_gettext("SSL connection has been closed unexpectedly\n"));
 			result_errno = ECONNRESET;
-			n = -1;
+			n = -2;
 			break;
 		default:
 			appendPQExpBuffer(&conn->errorMessage,

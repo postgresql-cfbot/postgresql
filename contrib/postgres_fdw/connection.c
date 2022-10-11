@@ -1264,35 +1264,98 @@ pgfdw_reset_xact_state(ConnCacheEntry *entry, bool toplevel)
 static bool
 pgfdw_cancel_query(PGconn *conn)
 {
-	PGcancel   *cancel;
-	char		errbuf[256];
 	PGresult   *result = NULL;
-	TimestampTz endtime;
-	bool		timed_out;
 
 	/*
 	 * If it takes too long to cancel the query and discard the result, assume
 	 * the connection is dead.
 	 */
-	endtime = TimestampTzPlusMilliseconds(GetCurrentTimestamp(), 30000);
+	TimestampTz endtime = TimestampTzPlusMilliseconds(GetCurrentTimestamp(), 30000);
+	bool		timed_out = false;
+	bool		failed = false;
+	PGconn	   *cancel_conn = PQrequestCancelStart(conn);
 
-	/*
-	 * Issue cancel request.  Unfortunately, there's no good way to limit the
-	 * amount of time that we might block inside PQgetCancel().
-	 */
-	if ((cancel = PQgetCancel(conn)))
+
+	if (PQstatus(cancel_conn) == CONNECTION_BAD)
 	{
-		if (!PQcancel(cancel, errbuf, sizeof(errbuf)))
+		ereport(WARNING,
+				(errcode(ERRCODE_CONNECTION_FAILURE),
+				 errmsg("could not send cancel request: %s",
+						pchomp(PQerrorMessage(cancel_conn)))));
+		return false;
+	}
+
+	/* In what follows, do not leak any PGconn on an error. */
+	PG_TRY();
+	{
+		while (true)
+		{
+			TimestampTz now = GetCurrentTimestamp();
+			long		cur_timeout;
+			PostgresPollingStatusType pollres = PQconnectPoll(cancel_conn);
+			int			waitEvents = WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH;
+
+			if (pollres == PGRES_POLLING_OK)
+			{
+				break;
+			}
+
+			/* If timeout has expired, give up, else get sleep time. */
+			cur_timeout = TimestampDifferenceMilliseconds(now, endtime);
+			if (cur_timeout <= 0)
+			{
+				timed_out = true;
+				failed = true;
+				goto exit;
+			}
+
+			switch (pollres)
+			{
+				case PGRES_POLLING_READING:
+					waitEvents |= WL_SOCKET_READABLE;
+					break;
+				case PGRES_POLLING_WRITING:
+					waitEvents |= WL_SOCKET_WRITEABLE;
+					break;
+				default:
+					failed = true;
+					goto exit;
+			}
+
+			/* Sleep until there's something to do */
+			WaitLatchOrSocket(MyLatch, waitEvents, PQsocket(cancel_conn),
+							  cur_timeout, PG_WAIT_EXTENSION);
+			ResetLatch(MyLatch);
+
+			CHECK_FOR_INTERRUPTS();
+		}
+exit:	;
+	}
+	PG_CATCH();
+	{
+		PQfinish(cancel_conn);
+		PG_RE_THROW();
+	}
+	PG_END_TRY();
+
+	if (failed)
+	{
+		if (timed_out)
+		{
+			ereport(WARNING,
+					(errmsg("could not cancel request due to timeout")));
+		}
+		else
 		{
 			ereport(WARNING,
 					(errcode(ERRCODE_CONNECTION_FAILURE),
 					 errmsg("could not send cancel request: %s",
-							errbuf)));
-			PQfreeCancel(cancel);
-			return false;
+							pchomp(PQerrorMessage(cancel_conn)))));
 		}
-		PQfreeCancel(cancel);
+		PQfinish(cancel_conn);
+		return failed;
 	}
+	PQfinish(cancel_conn);
 
 	/* Get and discard the result of the query. */
 	if (pgfdw_get_cleanup_result(conn, endtime, &result, &timed_out))

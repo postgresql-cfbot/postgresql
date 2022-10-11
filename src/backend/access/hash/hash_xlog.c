@@ -1052,9 +1052,9 @@ hash_xlog_vacuum_one_page(XLogReaderState *record)
 void
 hash_redo(XLogReaderState *record)
 {
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		rminfo = XLogRecGetRmInfo(record);
 
-	switch (info)
+	switch (rminfo)
 	{
 		case XLOG_HASH_INIT_META_PAGE:
 			hash_xlog_init_meta_page(record);
@@ -1096,7 +1096,7 @@ hash_redo(XLogReaderState *record)
 			hash_xlog_vacuum_one_page(record);
 			break;
 		default:
-			elog(PANIC, "hash_redo: unknown op code %u", info);
+			elog(PANIC, "hash_redo: unknown op code %u", rminfo);
 	}
 }
 

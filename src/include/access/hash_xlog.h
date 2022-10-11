@@ -261,7 +261,7 @@ typedef struct xl_hash_vacuum_one_page
 
 extern void hash_redo(XLogReaderState *record);
 extern void hash_desc(StringInfo buf, XLogReaderState *record);
-extern const char *hash_identify(uint8 info);
+extern const char *hash_identify(uint8 rminfo);
 extern void hash_mask(char *pagedata, BlockNumber blkno);
 
 #endif							/* HASH_XLOG_H */

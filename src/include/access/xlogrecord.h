@@ -45,7 +45,8 @@ typedef struct XLogRecord
 	XLogRecPtr	xl_prev;		/* ptr to previous record in log */
 	uint8		xl_info;		/* flag bits, see below */
 	RmgrId		xl_rmid;		/* resource manager for this record */
-	/* 2 bytes of padding here, initialize to zero */
+	uint8		xl_rminfo;		/* flag bits for rmgr use */
+	/* 1 byte of padding here, initialize to zero */
 	pg_crc32c	xl_crc;			/* CRC for this record */
 
 	/* XLogRecordBlockHeaders and XLogRecordDataHeader follow, no padding */
@@ -53,14 +54,6 @@ typedef struct XLogRecord
 } XLogRecord;
 
 #define SizeOfXLogRecord	(offsetof(XLogRecord, xl_crc) + sizeof(pg_crc32c))
-
-/*
- * The high 4 bits in xl_info may be used freely by rmgr. The
- * XLR_SPECIAL_REL_UPDATE and XLR_CHECK_CONSISTENCY bits can be passed by
- * XLogInsert caller. The rest are set internally by XLogInsert.
- */
-#define XLR_INFO_MASK			0x0F
-#define XLR_RMGR_INFO_MASK		0xF0
 
 /*
  * If a WAL record modifies any relation files, in ways not covered by the

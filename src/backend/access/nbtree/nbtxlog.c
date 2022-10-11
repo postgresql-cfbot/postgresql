@@ -1012,11 +1012,11 @@ btree_xlog_reuse_page(XLogReaderState *record)
 void
 btree_redo(XLogReaderState *record)
 {
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		rminfo = XLogRecGetRmInfo(record);
 	MemoryContext oldCtx;
 
 	oldCtx = MemoryContextSwitchTo(opCtx);
-	switch (info)
+	switch (rminfo)
 	{
 		case XLOG_BTREE_INSERT_LEAF:
 			btree_xlog_insert(true, false, false, record);
@@ -1046,11 +1046,11 @@ btree_redo(XLogReaderState *record)
 			btree_xlog_delete(record);
 			break;
 		case XLOG_BTREE_MARK_PAGE_HALFDEAD:
-			btree_xlog_mark_page_halfdead(info, record);
+			btree_xlog_mark_page_halfdead(rminfo, record);
 			break;
 		case XLOG_BTREE_UNLINK_PAGE:
 		case XLOG_BTREE_UNLINK_PAGE_META:
-			btree_xlog_unlink_page(info, record);
+			btree_xlog_unlink_page(rminfo, record);
 			break;
 		case XLOG_BTREE_NEWROOT:
 			btree_xlog_newroot(record);
@@ -1062,7 +1062,7 @@ btree_redo(XLogReaderState *record)
 			_bt_restore_meta(record, 0);
 			break;
 		default:
-			elog(PANIC, "btree_redo: unknown op code %u", info);
+			elog(PANIC, "btree_redo: unknown op code %u", rminfo);
 	}
 	MemoryContextSwitchTo(oldCtx);
 	MemoryContextReset(opCtx);

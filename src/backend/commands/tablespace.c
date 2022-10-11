@@ -1516,19 +1516,19 @@ get_tablespace_name(Oid spc_oid)
 void
 tblspc_redo(XLogReaderState *record)
 {
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		rminfo = XLogRecGetRmInfo(record);
 
 	/* Backup blocks are not used in tblspc records */
 	Assert(!XLogRecHasAnyBlockRefs(record));
 
-	if (info == XLOG_TBLSPC_CREATE)
+	if (rminfo == XLOG_TBLSPC_CREATE)
 	{
 		xl_tblspc_create_rec *xlrec = (xl_tblspc_create_rec *) XLogRecGetData(record);
 		char	   *location = xlrec->ts_path;
 
 		create_tablespace_directories(location, xlrec->ts_id);
 	}
-	else if (info == XLOG_TBLSPC_DROP)
+	else if (rminfo == XLOG_TBLSPC_DROP)
 	{
 		xl_tblspc_drop_rec *xlrec = (xl_tblspc_drop_rec *) XLogRecGetData(record);
 
@@ -1571,5 +1571,5 @@ tblspc_redo(XLogReaderState *record)
 		}
 	}
 	else
-		elog(PANIC, "tblspc_redo: unknown op code %u", info);
+		elog(PANIC, "tblspc_redo: unknown op code %u", rminfo);
 }

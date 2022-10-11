@@ -1145,7 +1145,7 @@ StandbyReleaseOldLocks(TransactionId oldxid)
 void
 standby_redo(XLogReaderState *record)
 {
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		rminfo = XLogRecGetRmInfo(record);
 
 	/* Backup blocks are not used in standby records */
 	Assert(!XLogRecHasAnyBlockRefs(record));
@@ -1154,7 +1154,7 @@ standby_redo(XLogReaderState *record)
 	if (standbyState == STANDBY_DISABLED)
 		return;
 
-	if (info == XLOG_STANDBY_LOCK)
+	if (rminfo == XLOG_STANDBY_LOCK)
 	{
 		xl_standby_locks *xlrec = (xl_standby_locks *) XLogRecGetData(record);
 		int			i;
@@ -1164,7 +1164,7 @@ standby_redo(XLogReaderState *record)
 											  xlrec->locks[i].dbOid,
 											  xlrec->locks[i].relOid);
 	}
-	else if (info == XLOG_RUNNING_XACTS)
+	else if (rminfo == XLOG_RUNNING_XACTS)
 	{
 		xl_running_xacts *xlrec = (xl_running_xacts *) XLogRecGetData(record);
 		RunningTransactionsData running;
@@ -1179,7 +1179,7 @@ standby_redo(XLogReaderState *record)
 
 		ProcArrayApplyRecoveryInfo(&running);
 	}
-	else if (info == XLOG_INVALIDATIONS)
+	else if (rminfo == XLOG_INVALIDATIONS)
 	{
 		xl_invalidations *xlrec = (xl_invalidations *) XLogRecGetData(record);
 
@@ -1190,7 +1190,7 @@ standby_redo(XLogReaderState *record)
 											 xlrec->tsId);
 	}
 	else
-		elog(PANIC, "standby_redo: unknown op code %u", info);
+		elog(PANIC, "standby_redo: unknown op code %u", rminfo);
 }
 
 /*

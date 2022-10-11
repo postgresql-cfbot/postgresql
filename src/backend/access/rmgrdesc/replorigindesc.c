@@ -19,9 +19,9 @@ void
 replorigin_desc(StringInfo buf, XLogReaderState *record)
 {
 	char	   *rec = XLogRecGetData(record);
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		rminfo = XLogRecGetRmInfo(record);
 
-	switch (info)
+	switch (rminfo)
 	{
 		case XLOG_REPLORIGIN_SET:
 			{
@@ -48,9 +48,9 @@ replorigin_desc(StringInfo buf, XLogReaderState *record)
 }
 
 const char *
-replorigin_identify(uint8 info)
+replorigin_identify(uint8 rminfo)
 {
-	switch (info)
+	switch (rminfo)
 	{
 		case XLOG_REPLORIGIN_SET:
 			return "SET";

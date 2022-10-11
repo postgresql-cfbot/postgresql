@@ -21,15 +21,15 @@ void
 tblspc_desc(StringInfo buf, XLogReaderState *record)
 {
 	char	   *rec = XLogRecGetData(record);
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		rminfo = XLogRecGetRmInfo(record);
 
-	if (info == XLOG_TBLSPC_CREATE)
+	if (rminfo == XLOG_TBLSPC_CREATE)
 	{
 		xl_tblspc_create_rec *xlrec = (xl_tblspc_create_rec *) rec;
 
 		appendStringInfo(buf, "%u \"%s\"", xlrec->ts_id, xlrec->ts_path);
 	}
-	else if (info == XLOG_TBLSPC_DROP)
+	else if (rminfo == XLOG_TBLSPC_DROP)
 	{
 		xl_tblspc_drop_rec *xlrec = (xl_tblspc_drop_rec *) rec;
 
@@ -38,11 +38,11 @@ tblspc_desc(StringInfo buf, XLogReaderState *record)
 }
 
 const char *
-tblspc_identify(uint8 info)
+tblspc_identify(uint8 rminfo)
 {
 	const char *id = NULL;
 
-	switch (info & ~XLR_INFO_MASK)
+	switch (rminfo)
 	{
 		case XLOG_TBLSPC_CREATE:
 			id = "CREATE";

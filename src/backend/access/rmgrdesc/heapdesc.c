@@ -35,17 +35,17 @@ void
 heap_desc(StringInfo buf, XLogReaderState *record)
 {
 	char	   *rec = XLogRecGetData(record);
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		rminfo = XLogRecGetRmInfo(record);
 
-	info &= XLOG_HEAP_OPMASK;
-	if (info == XLOG_HEAP_INSERT)
+	rminfo &= XLOG_HEAP_OPMASK;
+	if (rminfo == XLOG_HEAP_INSERT)
 	{
 		xl_heap_insert *xlrec = (xl_heap_insert *) rec;
 
 		appendStringInfo(buf, "off %u flags 0x%02X", xlrec->offnum,
 						 xlrec->flags);
 	}
-	else if (info == XLOG_HEAP_DELETE)
+	else if (rminfo == XLOG_HEAP_DELETE)
 	{
 		xl_heap_delete *xlrec = (xl_heap_delete *) rec;
 
@@ -54,7 +54,7 @@ heap_desc(StringInfo buf, XLogReaderState *record)
 						 xlrec->flags);
 		out_infobits(buf, xlrec->infobits_set);
 	}
-	else if (info == XLOG_HEAP_UPDATE)
+	else if (rminfo == XLOG_HEAP_UPDATE)
 	{
 		xl_heap_update *xlrec = (xl_heap_update *) rec;
 
@@ -67,7 +67,7 @@ heap_desc(StringInfo buf, XLogReaderState *record)
 						 xlrec->new_offnum,
 						 xlrec->new_xmax);
 	}
-	else if (info == XLOG_HEAP_HOT_UPDATE)
+	else if (rminfo == XLOG_HEAP_HOT_UPDATE)
 	{
 		xl_heap_update *xlrec = (xl_heap_update *) rec;
 
@@ -80,7 +80,7 @@ heap_desc(StringInfo buf, XLogReaderState *record)
 						 xlrec->new_offnum,
 						 xlrec->new_xmax);
 	}
-	else if (info == XLOG_HEAP_TRUNCATE)
+	else if (rminfo == XLOG_HEAP_TRUNCATE)
 	{
 		xl_heap_truncate *xlrec = (xl_heap_truncate *) rec;
 		int			i;
@@ -93,13 +93,13 @@ heap_desc(StringInfo buf, XLogReaderState *record)
 		for (i = 0; i < xlrec->nrelids; i++)
 			appendStringInfo(buf, " %u", xlrec->relids[i]);
 	}
-	else if (info == XLOG_HEAP_CONFIRM)
+	else if (rminfo == XLOG_HEAP_CONFIRM)
 	{
 		xl_heap_confirm *xlrec = (xl_heap_confirm *) rec;
 
 		appendStringInfo(buf, "off %u", xlrec->offnum);
 	}
-	else if (info == XLOG_HEAP_LOCK)
+	else if (rminfo == XLOG_HEAP_LOCK)
 	{
 		xl_heap_lock *xlrec = (xl_heap_lock *) rec;
 
@@ -107,7 +107,7 @@ heap_desc(StringInfo buf, XLogReaderState *record)
 						 xlrec->offnum, xlrec->locking_xid, xlrec->flags);
 		out_infobits(buf, xlrec->infobits_set);
 	}
-	else if (info == XLOG_HEAP_INPLACE)
+	else if (rminfo == XLOG_HEAP_INPLACE)
 	{
 		xl_heap_inplace *xlrec = (xl_heap_inplace *) rec;
 
@@ -118,10 +118,10 @@ void
 heap2_desc(StringInfo buf, XLogReaderState *record)
 {
 	char	   *rec = XLogRecGetData(record);
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		rminfo = XLogRecGetRmInfo(record);
 
-	info &= XLOG_HEAP_OPMASK;
-	if (info == XLOG_HEAP2_PRUNE)
+	rminfo &= XLOG_HEAP_OPMASK;
+	if (rminfo == XLOG_HEAP2_PRUNE)
 	{
 		xl_heap_prune *xlrec = (xl_heap_prune *) rec;
 
@@ -130,34 +130,34 @@ heap2_desc(StringInfo buf, XLogReaderState *record)
 						 xlrec->nredirected,
 						 xlrec->ndead);
 	}
-	else if (info == XLOG_HEAP2_VACUUM)
+	else if (rminfo == XLOG_HEAP2_VACUUM)
 	{
 		xl_heap_vacuum *xlrec = (xl_heap_vacuum *) rec;
 
 		appendStringInfo(buf, "nunused %u", xlrec->nunused);
 	}
-	else if (info == XLOG_HEAP2_FREEZE_PAGE)
+	else if (rminfo == XLOG_HEAP2_FREEZE_PAGE)
 	{
 		xl_heap_freeze_page *xlrec = (xl_heap_freeze_page *) rec;
 
 		appendStringInfo(buf, "cutoff xid %u ntuples %u",
 						 xlrec->cutoff_xid, xlrec->ntuples);
 	}
-	else if (info == XLOG_HEAP2_VISIBLE)
+	else if (rminfo == XLOG_HEAP2_VISIBLE)
 	{
 		xl_heap_visible *xlrec = (xl_heap_visible *) rec;
 
 		appendStringInfo(buf, "cutoff xid %u flags 0x%02X",
 						 xlrec->cutoff_xid, xlrec->flags);
 	}
-	else if (info == XLOG_HEAP2_MULTI_INSERT)
+	else if (rminfo == XLOG_HEAP2_MULTI_INSERT)
 	{
 		xl_heap_multi_insert *xlrec = (xl_heap_multi_insert *) rec;
 
 		appendStringInfo(buf, "%d tuples flags 0x%02X", xlrec->ntuples,
 						 xlrec->flags);
 	}
-	else if (info == XLOG_HEAP2_LOCK_UPDATED)
+	else if (rminfo == XLOG_HEAP2_LOCK_UPDATED)
 	{
 		xl_heap_lock_updated *xlrec = (xl_heap_lock_updated *) rec;
 
@@ -165,7 +165,7 @@ heap2_desc(StringInfo buf, XLogReaderState *record)
 						 xlrec->offnum, xlrec->xmax, xlrec->flags);
 		out_infobits(buf, xlrec->infobits_set);
 	}
-	else if (info == XLOG_HEAP2_NEW_CID)
+	else if (rminfo == XLOG_HEAP2_NEW_CID)
 	{
 		xl_heap_new_cid *xlrec = (xl_heap_new_cid *) rec;
 
@@ -181,11 +181,11 @@ heap2_desc(StringInfo buf, XLogReaderState *record)
 }
 
 const char *
-heap_identify(uint8 info)
+heap_identify(uint8 rminfo)
 {
 	const char *id = NULL;
 
-	switch (info & ~XLR_INFO_MASK)
+	switch (rminfo)
 	{
 		case XLOG_HEAP_INSERT:
 			id = "INSERT";
@@ -226,11 +226,11 @@ heap_identify(uint8 info)
 }
 
 const char *
-heap2_identify(uint8 info)
+heap2_identify(uint8 rminfo)
 {
 	const char *id = NULL;
 
-	switch (info & ~XLR_INFO_MASK)
+	switch (rminfo)
 	{
 		case XLOG_HEAP2_PRUNE:
 			id = "PRUNE";

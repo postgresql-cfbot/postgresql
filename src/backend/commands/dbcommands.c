@@ -624,8 +624,9 @@ CreateDatabaseUsingFileCopy(Oid src_dboid, Oid dst_dboid, Oid src_tsid,
 			XLogRegisterData((char *) &xlrec,
 							 sizeof(xl_dbase_create_file_copy_rec));
 
-			(void) XLogInsert(RM_DBASE_ID,
-							  XLOG_DBASE_CREATE_FILE_COPY | XLR_SPECIAL_REL_UPDATE);
+			(void) XLogInsertExtended(RM_DBASE_ID,
+									  XLR_SPECIAL_REL_UPDATE,
+									  XLOG_DBASE_CREATE_FILE_COPY);
 		}
 		pfree(srcpath);
 		pfree(dstpath);
@@ -2021,8 +2022,9 @@ movedb(const char *dbname, const char *tblspcname)
 			XLogRegisterData((char *) &xlrec,
 							 sizeof(xl_dbase_create_file_copy_rec));
 
-			(void) XLogInsert(RM_DBASE_ID,
-							  XLOG_DBASE_CREATE_FILE_COPY | XLR_SPECIAL_REL_UPDATE);
+			(void) XLogInsertExtended(RM_DBASE_ID,
+									  XLR_SPECIAL_REL_UPDATE,
+									  XLOG_DBASE_CREATE_FILE_COPY);
 		}
 
 		/*
@@ -2115,8 +2117,9 @@ movedb(const char *dbname, const char *tblspcname)
 		XLogRegisterData((char *) &xlrec, sizeof(xl_dbase_drop_rec));
 		XLogRegisterData((char *) &src_tblspcoid, sizeof(Oid));
 
-		(void) XLogInsert(RM_DBASE_ID,
-						  XLOG_DBASE_DROP | XLR_SPECIAL_REL_UPDATE);
+		(void) XLogInsertExtended(RM_DBASE_ID,
+								  XLR_SPECIAL_REL_UPDATE,
+								  XLOG_DBASE_DROP);
 	}
 
 	/* Now it's safe to release the database lock */
@@ -2834,8 +2837,9 @@ remove_dbtablespaces(Oid db_id)
 		XLogRegisterData((char *) &xlrec, MinSizeOfDbaseDropRec);
 		XLogRegisterData((char *) tablespace_ids, ntblspc * sizeof(Oid));
 
-		(void) XLogInsert(RM_DBASE_ID,
-						  XLOG_DBASE_DROP | XLR_SPECIAL_REL_UPDATE);
+		(void) XLogInsertExtended(RM_DBASE_ID,
+								  XLR_SPECIAL_REL_UPDATE,
+								  XLOG_DBASE_DROP);
 	}
 
 	list_free(ltblspc);
@@ -3040,12 +3044,12 @@ recovery_create_dbdir(char *path, bool only_tblspc)
 void
 dbase_redo(XLogReaderState *record)
 {
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		rminfo = XLogRecGetRmInfo(record);
 
 	/* Backup blocks are not used in dbase records */
 	Assert(!XLogRecHasAnyBlockRefs(record));
 
-	if (info == XLOG_DBASE_CREATE_FILE_COPY)
+	if (rminfo == XLOG_DBASE_CREATE_FILE_COPY)
 	{
 		xl_dbase_create_file_copy_rec *xlrec =
 		(xl_dbase_create_file_copy_rec *) XLogRecGetData(record);
@@ -3117,7 +3121,7 @@ dbase_redo(XLogReaderState *record)
 		pfree(src_path);
 		pfree(dst_path);
 	}
-	else if (info == XLOG_DBASE_CREATE_WAL_LOG)
+	else if (rminfo == XLOG_DBASE_CREATE_WAL_LOG)
 	{
 		xl_dbase_create_wal_log_rec *xlrec =
 		(xl_dbase_create_wal_log_rec *) XLogRecGetData(record);
@@ -3136,7 +3140,7 @@ dbase_redo(XLogReaderState *record)
 								true);
 		pfree(dbpath);
 	}
-	else if (info == XLOG_DBASE_DROP)
+	else if (rminfo == XLOG_DBASE_DROP)
 	{
 		xl_dbase_drop_rec *xlrec = (xl_dbase_drop_rec *) XLogRecGetData(record);
 		char	   *dst_path;
@@ -3198,5 +3202,5 @@ dbase_redo(XLogReaderState *record)
 		}
 	}
 	else
-		elog(PANIC, "dbase_redo: unknown op code %u", info);
+		elog(PANIC, "dbase_redo: unknown op code %u", rminfo);
 }

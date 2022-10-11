@@ -20,9 +20,9 @@ void
 hash_desc(StringInfo buf, XLogReaderState *record)
 {
 	char	   *rec = XLogRecGetData(record);
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		rminfo = XLogRecGetRmInfo(record);
 
-	switch (info)
+	switch (rminfo)
 	{
 		case XLOG_HASH_INIT_META_PAGE:
 			{
@@ -122,11 +122,11 @@ hash_desc(StringInfo buf, XLogReaderState *record)
 }
 
 const char *
-hash_identify(uint8 info)
+hash_identify(uint8 rminfo)
 {
 	const char *id = NULL;
 
-	switch (info & ~XLR_INFO_MASK)
+	switch (rminfo)
 	{
 		case XLOG_HASH_INIT_META_PAGE:
 			id = "INIT_META_PAGE";

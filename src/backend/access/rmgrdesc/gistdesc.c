@@ -60,9 +60,9 @@ void
 gist_desc(StringInfo buf, XLogReaderState *record)
 {
 	char	   *rec = XLogRecGetData(record);
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		rminfo = XLogRecGetRmInfo(record);
 
-	switch (info)
+	switch (rminfo)
 	{
 		case XLOG_GIST_PAGE_UPDATE:
 			out_gistxlogPageUpdate(buf, (gistxlogPageUpdate *) rec);
@@ -86,11 +86,11 @@ gist_desc(StringInfo buf, XLogReaderState *record)
 }
 
 const char *
-gist_identify(uint8 info)
+gist_identify(uint8 rminfo)
 {
 	const char *id = NULL;
 
-	switch (info & ~XLR_INFO_MASK)
+	switch (rminfo)
 	{
 		case XLOG_GIST_PAGE_UPDATE:
 			id = "PAGE_UPDATE";

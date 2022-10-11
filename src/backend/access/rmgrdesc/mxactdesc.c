@@ -50,17 +50,17 @@ void
 multixact_desc(StringInfo buf, XLogReaderState *record)
 {
 	char	   *rec = XLogRecGetData(record);
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		rminfo = XLogRecGetRmInfo(record);
 
-	if (info == XLOG_MULTIXACT_ZERO_OFF_PAGE ||
-		info == XLOG_MULTIXACT_ZERO_MEM_PAGE)
+	if (rminfo == XLOG_MULTIXACT_ZERO_OFF_PAGE ||
+		rminfo == XLOG_MULTIXACT_ZERO_MEM_PAGE)
 	{
 		int			pageno;
 
 		memcpy(&pageno, rec, sizeof(int));
 		appendStringInfo(buf, "%d", pageno);
 	}
-	else if (info == XLOG_MULTIXACT_CREATE_ID)
+	else if (rminfo == XLOG_MULTIXACT_CREATE_ID)
 	{
 		xl_multixact_create *xlrec = (xl_multixact_create *) rec;
 		int			i;
@@ -70,7 +70,7 @@ multixact_desc(StringInfo buf, XLogReaderState *record)
 		for (i = 0; i < xlrec->nmembers; i++)
 			out_member(buf, &xlrec->members[i]);
 	}
-	else if (info == XLOG_MULTIXACT_TRUNCATE_ID)
+	else if (rminfo == XLOG_MULTIXACT_TRUNCATE_ID)
 	{
 		xl_multixact_truncate *xlrec = (xl_multixact_truncate *) rec;
 
@@ -81,11 +81,11 @@ multixact_desc(StringInfo buf, XLogReaderState *record)
 }
 
 const char *
-multixact_identify(uint8 info)
+multixact_identify(uint8 rminfo)
 {
 	const char *id = NULL;
 
-	switch (info & ~XLR_INFO_MASK)
+	switch (rminfo)
 	{
 		case XLOG_MULTIXACT_ZERO_OFF_PAGE:
 			id = "ZERO_OFF_PAGE";

@@ -20,9 +20,9 @@ void
 btree_desc(StringInfo buf, XLogReaderState *record)
 {
 	char	   *rec = XLogRecGetData(record);
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		rminfo = XLogRecGetRmInfo(record);
 
-	switch (info)
+	switch (rminfo)
 	{
 		case XLOG_BTREE_INSERT_LEAF:
 		case XLOG_BTREE_INSERT_UPPER:
@@ -121,11 +121,11 @@ btree_desc(StringInfo buf, XLogReaderState *record)
 }
 
 const char *
-btree_identify(uint8 info)
+btree_identify(uint8 rminfo)
 {
 	const char *id = NULL;
 
-	switch (info & ~XLR_INFO_MASK)
+	switch (rminfo)
 	{
 		case XLOG_BTREE_INSERT_LEAF:
 			id = "INSERT_LEAF";

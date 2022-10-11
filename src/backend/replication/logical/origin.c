@@ -822,9 +822,9 @@ StartupReplicationOrigin(void)
 void
 replorigin_redo(XLogReaderState *record)
 {
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		rminfo = XLogRecGetRmInfo(record);
 
-	switch (info)
+	switch (rminfo)
 	{
 		case XLOG_REPLORIGIN_SET:
 			{
@@ -861,7 +861,7 @@ replorigin_redo(XLogReaderState *record)
 				break;
 			}
 		default:
-			elog(PANIC, "replorigin_redo: unknown op code %u", info);
+			elog(PANIC, "replorigin_redo: unknown op code %u", rminfo);
 	}
 }
 

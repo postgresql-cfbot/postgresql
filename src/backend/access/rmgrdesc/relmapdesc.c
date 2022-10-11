@@ -20,9 +20,9 @@ void
 relmap_desc(StringInfo buf, XLogReaderState *record)
 {
 	char	   *rec = XLogRecGetData(record);
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		rminfo = XLogRecGetRmInfo(record);
 
-	if (info == XLOG_RELMAP_UPDATE)
+	if (rminfo == XLOG_RELMAP_UPDATE)
 	{
 		xl_relmap_update *xlrec = (xl_relmap_update *) rec;
 
@@ -32,11 +32,11 @@ relmap_desc(StringInfo buf, XLogReaderState *record)
 }
 
 const char *
-relmap_identify(uint8 info)
+relmap_identify(uint8 rminfo)
 {
 	const char *id = NULL;
 
-	switch (info & ~XLR_INFO_MASK)
+	switch (rminfo)
 	{
 		case XLOG_RELMAP_UPDATE:
 			id = "UPDATE";

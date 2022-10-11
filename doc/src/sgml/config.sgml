@@ -2797,8 +2797,15 @@ include_dir 'conf.d'
         for point-in-time recovery and standby servers.
        </para>
        <para>
+        In <literal>remote</literal> level, the same information is logged as
+        with <literal>replica</literal> level, plus some information that is
+        needed to utilize a transfered snapshot from the primary to a replica
+        node. Using a level of <literal>remote</literal> will increase the WAL
+        volume a bit, but by far not as much as <literal>logical</literal>.
+       </para>
+       <para>
         In <literal>logical</literal> level, the same information is logged as
-        with <literal>replica</literal>, plus information needed to
+        with <literal>remote</literal>, plus information needed to
         extract logical change sets from the WAL. Using a level of
         <literal>logical</literal> will increase the WAL volume, particularly if many
         tables are configured for <literal>REPLICA IDENTITY FULL</literal> and

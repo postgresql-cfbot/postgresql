@@ -16,7 +16,7 @@
 #include "access/rmgr.h"
 #include "access/xlogreader.h"
 
-#define MAX_XLINFO_TYPES 16
+#define MAX_XLINFO_TYPES UINT8_MAX
 
 typedef struct XLogRecStats
 {

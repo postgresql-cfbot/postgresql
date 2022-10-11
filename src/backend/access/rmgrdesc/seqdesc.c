@@ -21,21 +21,21 @@ void
 seq_desc(StringInfo buf, XLogReaderState *record)
 {
 	char	   *rec = XLogRecGetData(record);
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		rminfo = XLogRecGetRmInfo(record);
 	xl_seq_rec *xlrec = (xl_seq_rec *) rec;
 
-	if (info == XLOG_SEQ_LOG)
+	if (rminfo == XLOG_SEQ_LOG)
 		appendStringInfo(buf, "rel %u/%u/%u",
 						 xlrec->locator.spcOid, xlrec->locator.dbOid,
 						 xlrec->locator.relNumber);
 }
 
 const char *
-seq_identify(uint8 info)
+seq_identify(uint8 rminfo)
 {
 	const char *id = NULL;
 
-	switch (info & ~XLR_INFO_MASK)
+	switch (rminfo)
 	{
 		case XLOG_SEQ_LOG:
 			id = "LOG";

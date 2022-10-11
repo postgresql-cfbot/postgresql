@@ -68,6 +68,6 @@ extern void RestoreRelationMap(char *startAddress);
 
 extern void relmap_redo(XLogReaderState *record);
 extern void relmap_desc(StringInfo buf, XLogReaderState *record);
-extern const char *relmap_identify(uint8 info);
+extern const char *relmap_identify(uint8 rminfo);
 
 #endif							/* RELMAPPER_H */

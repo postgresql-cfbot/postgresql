@@ -742,9 +742,9 @@ XLogInsertRecord(XLogRecData *rdata,
 	pg_crc32c	rdata_crc;
 	bool		inserted;
 	XLogRecord *rechdr = (XLogRecord *) rdata->data;
-	uint8		info = rechdr->xl_info & ~XLR_INFO_MASK;
+	uint8		rminfo = rechdr->xl_rminfo;
 	bool		isLogSwitch = (rechdr->xl_rmid == RM_XLOG_ID &&
-							   info == XLOG_SWITCH);
+							   rminfo == XLOG_SWITCH);
 	XLogRecPtr	StartPos;
 	XLogRecPtr	EndPos;
 	bool		prevDoPageWrites = doPageWrites;
@@ -7728,17 +7728,17 @@ UpdateFullPageWrites(void)
 void
 xlog_redo(XLogReaderState *record)
 {
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		rminfo = XLogRecGetRmInfo(record);
 	XLogRecPtr	lsn = record->EndRecPtr;
 
 	/*
 	 * In XLOG rmgr, backup blocks are only used by XLOG_FPI and
 	 * XLOG_FPI_FOR_HINT records.
 	 */
-	Assert(info == XLOG_FPI || info == XLOG_FPI_FOR_HINT ||
+	Assert(rminfo == XLOG_FPI || rminfo == XLOG_FPI_FOR_HINT ||
 		   !XLogRecHasAnyBlockRefs(record));
 
-	if (info == XLOG_NEXTOID)
+	if (rminfo == XLOG_NEXTOID)
 	{
 		Oid			nextOid;
 
@@ -7755,7 +7755,7 @@ xlog_redo(XLogReaderState *record)
 		ShmemVariableCache->oidCount = 0;
 		LWLockRelease(OidGenLock);
 	}
-	else if (info == XLOG_CHECKPOINT_SHUTDOWN)
+	else if (rminfo == XLOG_CHECKPOINT_SHUTDOWN)
 	{
 		CheckPoint	checkPoint;
 		TimeLineID	replayTLI;
@@ -7852,7 +7852,7 @@ xlog_redo(XLogReaderState *record)
 
 		RecoveryRestartPoint(&checkPoint, record);
 	}
-	else if (info == XLOG_CHECKPOINT_ONLINE)
+	else if (rminfo == XLOG_CHECKPOINT_ONLINE)
 	{
 		CheckPoint	checkPoint;
 		TimeLineID	replayTLI;
@@ -7910,11 +7910,11 @@ xlog_redo(XLogReaderState *record)
 
 		RecoveryRestartPoint(&checkPoint, record);
 	}
-	else if (info == XLOG_OVERWRITE_CONTRECORD)
+	else if (rminfo == XLOG_OVERWRITE_CONTRECORD)
 	{
 		/* nothing to do here, handled in xlogrecovery_redo() */
 	}
-	else if (info == XLOG_END_OF_RECOVERY)
+	else if (rminfo == XLOG_END_OF_RECOVERY)
 	{
 		xl_end_of_recovery xlrec;
 		TimeLineID	replayTLI;
@@ -7937,19 +7937,19 @@ xlog_redo(XLogReaderState *record)
 					(errmsg("unexpected timeline ID %u (should be %u) in end-of-recovery record",
 							xlrec.ThisTimeLineID, replayTLI)));
 	}
-	else if (info == XLOG_NOOP)
+	else if (rminfo == XLOG_NOOP)
 	{
 		/* nothing to do here */
 	}
-	else if (info == XLOG_SWITCH)
+	else if (rminfo == XLOG_SWITCH)
 	{
 		/* nothing to do here */
 	}
-	else if (info == XLOG_RESTORE_POINT)
+	else if (rminfo == XLOG_RESTORE_POINT)
 	{
 		/* nothing to do here, handled in xlogrecovery.c */
 	}
-	else if (info == XLOG_FPI || info == XLOG_FPI_FOR_HINT)
+	else if (rminfo == XLOG_FPI || rminfo == XLOG_FPI_FOR_HINT)
 	{
 		/*
 		 * XLOG_FPI records contain nothing else but one or more block
@@ -7973,7 +7973,7 @@ xlog_redo(XLogReaderState *record)
 
 			if (!XLogRecHasBlockImage(record, block_id))
 			{
-				if (info == XLOG_FPI)
+				if (rminfo == XLOG_FPI)
 					elog(ERROR, "XLOG_FPI record did not contain a full-page image");
 				continue;
 			}
@@ -7983,11 +7983,11 @@ xlog_redo(XLogReaderState *record)
 			UnlockReleaseBuffer(buffer);
 		}
 	}
-	else if (info == XLOG_BACKUP_END)
+	else if (rminfo == XLOG_BACKUP_END)
 	{
 		/* nothing to do here, handled in xlogrecovery_redo() */
 	}
-	else if (info == XLOG_PARAMETER_CHANGE)
+	else if (rminfo == XLOG_PARAMETER_CHANGE)
 	{
 		xl_parameter_change xlrec;
 
@@ -8035,7 +8035,7 @@ xlog_redo(XLogReaderState *record)
 		/* Check to see if any parameter change gives a problem on recovery */
 		CheckRequiredParameterValues();
 	}
-	else if (info == XLOG_FPW_CHANGE)
+	else if (rminfo == XLOG_FPW_CHANGE)
 	{
 		bool		fpw;
 

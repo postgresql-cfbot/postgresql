@@ -26,6 +26,7 @@
 #define MaxMultiXactId		((MultiXactId) 0xFFFFFFFF)
 
 #define MultiXactIdIsValid(multi) ((multi) != InvalidMultiXactId)
+#define MultiXactIdIsNormal(multi) ((multi) >= FirstMultiXactId)
 
 #define MaxMultiXactOffset	((MultiXactOffset) 0xFFFFFFFF)
 
@@ -158,7 +159,7 @@ extern void multixact_twophase_postabort(TransactionId xid, uint16 info,
 
 extern void multixact_redo(XLogReaderState *record);
 extern void multixact_desc(StringInfo buf, XLogReaderState *record);
-extern const char *multixact_identify(uint8 info);
+extern const char *multixact_identify(uint8 rminfo);
 extern char *mxid_to_string(MultiXactId multi, int nmembers,
 							MultiXactMember *members);
 

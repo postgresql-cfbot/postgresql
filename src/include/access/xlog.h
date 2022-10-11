@@ -69,6 +69,7 @@ typedef enum WalLevel
 {
 	WAL_LEVEL_MINIMAL = 0,
 	WAL_LEVEL_REPLICA,
+	WAL_LEVEL_REMOTE,
 	WAL_LEVEL_LOGICAL
 } WalLevel;
 
@@ -211,7 +212,7 @@ extern void XLogSetReplicationSlotMinimumLSN(XLogRecPtr lsn);
 
 extern void xlog_redo(XLogReaderState *record);
 extern void xlog_desc(StringInfo buf, XLogReaderState *record);
-extern const char *xlog_identify(uint8 info);
+extern const char *xlog_identify(uint8 rminfo);
 
 extern void issue_xlog_fsync(int fd, XLogSegNo segno, TimeLineID tli);
 

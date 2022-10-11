@@ -365,7 +365,7 @@ static bool MultiXactOffsetWouldWrap(MultiXactOffset boundary,
 									 MultiXactOffset start, uint32 distance);
 static bool SetOffsetVacuumLimit(bool is_startup);
 static bool find_multixact_start(MultiXactId multi, MultiXactOffset *result);
-static void WriteMZeroPageXlogRec(int pageno, uint8 info);
+static void WriteMZeroPageXlogRec(int pageno, uint8 rminfo);
 static void WriteMTruncateXlogRec(Oid oldestMultiDB,
 								  MultiXactId startTruncOff,
 								  MultiXactId endTruncOff,
@@ -650,7 +650,7 @@ MultiXactIdSetOldestMember(void)
 		 * must be sure to store a valid value in our array entry.
 		 */
 		nextMXact = MultiXactState->nextMXact;
-		if (nextMXact < FirstMultiXactId)
+		if (!MultiXactIdIsNormal(nextMXact))
 			nextMXact = FirstMultiXactId;
 
 		OldestMemberMXactId[MyBackendId] = nextMXact;
@@ -694,7 +694,7 @@ MultiXactIdSetOldestVisible(void)
 		 * must be sure to store a valid value in our array entry.
 		 */
 		oldestMXact = MultiXactState->nextMXact;
-		if (oldestMXact < FirstMultiXactId)
+		if (!MultiXactIdIsNormal(oldestMXact))
 			oldestMXact = FirstMultiXactId;
 
 		for (i = 1; i <= MaxOldestSlot; i++)
@@ -729,7 +729,7 @@ ReadNextMultiXactId(void)
 	mxid = MultiXactState->nextMXact;
 	LWLockRelease(MultiXactGenLock);
 
-	if (mxid < FirstMultiXactId)
+	if (!MultiXactIdIsNormal(mxid))
 		mxid = FirstMultiXactId;
 
 	return mxid;
@@ -747,9 +747,9 @@ ReadMultiXactIdRange(MultiXactId *oldest, MultiXactId *next)
 	*next = MultiXactState->nextMXact;
 	LWLockRelease(MultiXactGenLock);
 
-	if (*oldest < FirstMultiXactId)
+	if (!MultiXactIdIsNormal(*oldest))
 		*oldest = FirstMultiXactId;
-	if (*next < FirstMultiXactId)
+	if (!MultiXactIdIsNormal(*next))
 		*next = FirstMultiXactId;
 }
 
@@ -967,7 +967,7 @@ GetNewMultiXactId(int nmembers, MultiXactOffset *offset)
 	LWLockAcquire(MultiXactGenLock, LW_EXCLUSIVE);
 
 	/* Handle wraparound of the nextMXact counter */
-	if (MultiXactState->nextMXact < FirstMultiXactId)
+	if (!MultiXactIdIsNormal(MultiXactState->nextMXact))
 		MultiXactState->nextMXact = FirstMultiXactId;
 
 	/* Assign the MXID */
@@ -1067,7 +1067,7 @@ GetNewMultiXactId(int nmembers, MultiXactOffset *offset)
 		/* Re-acquire lock and start over */
 		LWLockAcquire(MultiXactGenLock, LW_EXCLUSIVE);
 		result = MultiXactState->nextMXact;
-		if (result < FirstMultiXactId)
+		if (!MultiXactIdIsNormal(result))
 			result = FirstMultiXactId;
 	}
 
@@ -1368,7 +1368,7 @@ retry:
 		MultiXactOffset nextMXOffset;
 
 		/* handle wraparound if needed */
-		if (tmpMXact < FirstMultiXactId)
+		if (!MultiXactIdIsNormal(tmpMXact))
 			tmpMXact = FirstMultiXactId;
 
 		prev_pageno = pageno;
@@ -2229,7 +2229,7 @@ SetMultiXactIdLimit(MultiXactId oldest_datminmxid, Oid oldest_datoid,
 	 * wrap.  Limits for that are set in SetOffsetVacuumLimit, not here.
 	 */
 	multiWrapLimit = oldest_datminmxid + (MaxMultiXactId >> 1);
-	if (multiWrapLimit < FirstMultiXactId)
+	if (!MultiXactIdIsNormal(multiWrapLimit))
 		multiWrapLimit += FirstMultiXactId;
 
 	/*
@@ -2237,7 +2237,7 @@ SetMultiXactIdLimit(MultiXactId oldest_datminmxid, Oid oldest_datoid,
 	 * multi of data loss.  See SetTransactionIdLimit.
 	 */
 	multiStopLimit = multiWrapLimit - 3000000;
-	if (multiStopLimit < FirstMultiXactId)
+	if (!MultiXactIdIsNormal(multiStopLimit))
 		multiStopLimit -= FirstMultiXactId;
 
 	/*
@@ -2251,7 +2251,7 @@ SetMultiXactIdLimit(MultiXactId oldest_datminmxid, Oid oldest_datoid,
 	 * not get in this kind of trouble in the first place.)
 	 */
 	multiWarnLimit = multiWrapLimit - 40000000;
-	if (multiWarnLimit < FirstMultiXactId)
+	if (!MultiXactIdIsNormal(multiWarnLimit))
 		multiWarnLimit -= FirstMultiXactId;
 
 	/*
@@ -2263,7 +2263,7 @@ SetMultiXactIdLimit(MultiXactId oldest_datminmxid, Oid oldest_datoid,
 	 * its value.  See SetTransactionIdLimit.
 	 */
 	multiVacLimit = oldest_datminmxid + autovacuum_multixact_freeze_max_age;
-	if (multiVacLimit < FirstMultiXactId)
+	if (!MultiXactIdIsNormal(multiVacLimit))
 		multiVacLimit += FirstMultiXactId;
 
 	/* Grab lock for just long enough to set the new limit values */
@@ -2520,7 +2520,7 @@ GetOldestMultiXactId(void)
 	 * must be sure to use a valid value in our calculation.
 	 */
 	nextMXact = MultiXactState->nextMXact;
-	if (nextMXact < FirstMultiXactId)
+	if (!MultiXactIdIsNormal(nextMXact))
 		nextMXact = FirstMultiXactId;
 
 	oldestMXact = nextMXact;
@@ -3000,7 +3000,7 @@ TruncateMultiXact(MultiXactId newOldestMulti, Oid newOldestMultiDB)
 	trunc.earliestExistingPage = -1;
 	SlruScanDirectory(MultiXactOffsetCtl, SlruScanDirCbFindEarliest, &trunc);
 	earliest = trunc.earliestExistingPage * MULTIXACT_OFFSETS_PER_PAGE;
-	if (earliest < FirstMultiXactId)
+	if (!MultiXactIdIsNormal(earliest))
 		earliest = FirstMultiXactId;
 
 	/* If there's nothing to remove, we can bail out early. */
@@ -3193,11 +3193,11 @@ MultiXactOffsetPrecedes(MultiXactOffset offset1, MultiXactOffset offset2)
  * OFFSETs page (info shows which)
  */
 static void
-WriteMZeroPageXlogRec(int pageno, uint8 info)
+WriteMZeroPageXlogRec(int pageno, uint8 rminfo)
 {
 	XLogBeginInsert();
 	XLogRegisterData((char *) (&pageno), sizeof(int));
-	(void) XLogInsert(RM_MULTIXACT_ID, info);
+	(void) XLogInsert(RM_MULTIXACT_ID, rminfo);
 }
 
 /*
@@ -3234,12 +3234,12 @@ WriteMTruncateXlogRec(Oid oldestMultiDB,
 void
 multixact_redo(XLogReaderState *record)
 {
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		rminfo = XLogRecGetRmInfo(record);
 
 	/* Backup blocks are not used in multixact records */
 	Assert(!XLogRecHasAnyBlockRefs(record));
 
-	if (info == XLOG_MULTIXACT_ZERO_OFF_PAGE)
+	if (rminfo == XLOG_MULTIXACT_ZERO_OFF_PAGE)
 	{
 		int			pageno;
 		int			slotno;
@@ -3254,7 +3254,7 @@ multixact_redo(XLogReaderState *record)
 
 		LWLockRelease(MultiXactOffsetSLRULock);
 	}
-	else if (info == XLOG_MULTIXACT_ZERO_MEM_PAGE)
+	else if (rminfo == XLOG_MULTIXACT_ZERO_MEM_PAGE)
 	{
 		int			pageno;
 		int			slotno;
@@ -3269,7 +3269,7 @@ multixact_redo(XLogReaderState *record)
 
 		LWLockRelease(MultiXactMemberSLRULock);
 	}
-	else if (info == XLOG_MULTIXACT_CREATE_ID)
+	else if (rminfo == XLOG_MULTIXACT_CREATE_ID)
 	{
 		xl_multixact_create *xlrec =
 		(xl_multixact_create *) XLogRecGetData(record);
@@ -3298,7 +3298,7 @@ multixact_redo(XLogReaderState *record)
 
 		AdvanceNextFullTransactionIdPastXid(max_xid);
 	}
-	else if (info == XLOG_MULTIXACT_TRUNCATE_ID)
+	else if (rminfo == XLOG_MULTIXACT_TRUNCATE_ID)
 	{
 		xl_multixact_truncate xlrec;
 		int			pageno;
@@ -3339,7 +3339,7 @@ multixact_redo(XLogReaderState *record)
 		LWLockRelease(MultiXactTruncationLock);
 	}
 	else
-		elog(PANIC, "multixact_redo: unknown op code %u", info);
+		elog(PANIC, "multixact_redo: unknown op code %u", rminfo);
 }
 
 Datum
@@ -3355,7 +3355,7 @@ pg_get_multixact_members(PG_FUNCTION_ARGS)
 	mxact	   *multi;
 	FuncCallContext *funccxt;
 
-	if (mxid < FirstMultiXactId)
+	if (!MultiXactIdIsValid(mxid))
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("invalid MultiXactId: %u", mxid)));

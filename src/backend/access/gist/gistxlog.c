@@ -402,7 +402,7 @@ gistRedoPageReuse(XLogReaderState *record)
 void
 gist_redo(XLogReaderState *record)
 {
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		rminfo = XLogRecGetRmInfo(record);
 	MemoryContext oldCxt;
 
 	/*
@@ -412,7 +412,7 @@ gist_redo(XLogReaderState *record)
 	 */
 
 	oldCxt = MemoryContextSwitchTo(opCtx);
-	switch (info)
+	switch (rminfo)
 	{
 		case XLOG_GIST_PAGE_UPDATE:
 			gistRedoPageUpdateRecord(record);
@@ -433,7 +433,7 @@ gist_redo(XLogReaderState *record)
 			/* nop. See gistGetFakeLSN(). */
 			break;
 		default:
-			elog(PANIC, "gist_redo: unknown op code %u", info);
+			elog(PANIC, "gist_redo: unknown op code %u", rminfo);
 	}
 
 	MemoryContextSwitchTo(oldCxt);

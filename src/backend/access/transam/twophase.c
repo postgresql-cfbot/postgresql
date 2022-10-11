@@ -1429,7 +1429,7 @@ XlogReadTwoPhaseData(XLogRecPtr lsn, char **buf, int *len)
 	}
 
 	if (XLogRecGetRmid(xlogreader) != RM_XACT_ID ||
-		(XLogRecGetInfo(xlogreader) & XLOG_XACT_OPMASK) != XLOG_XACT_PREPARE)
+		(XLogRecGetRmInfo(xlogreader) & XLOG_XACT_OPMASK) != XLOG_XACT_PREPARE)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("expected two-phase state data is not present in WAL at %X/%X",

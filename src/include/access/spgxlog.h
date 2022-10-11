@@ -249,7 +249,7 @@ typedef struct spgxlogVacuumRedirect
 
 extern void spg_redo(XLogReaderState *record);
 extern void spg_desc(StringInfo buf, XLogReaderState *record);
-extern const char *spg_identify(uint8 info);
+extern const char *spg_identify(uint8 rminfo);
 extern void spg_xlog_startup(void);
 extern void spg_xlog_cleanup(void);
 extern void spg_mask(char *pagedata, BlockNumber blkno);

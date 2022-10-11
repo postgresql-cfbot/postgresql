@@ -50,7 +50,7 @@ generic_desc(StringInfo buf, XLogReaderState *record)
  * inside generic xlog records.
  */
 const char *
-generic_identify(uint8 info)
+generic_identify(uint8 rminfo)
 {
 	return "Generic";
 }

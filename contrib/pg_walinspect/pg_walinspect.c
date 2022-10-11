@@ -188,10 +188,10 @@ GetWALRecordInfo(XLogReaderState *record, Datum *values,
 	int			i = 0;
 
 	desc = GetRmgr(XLogRecGetRmid(record));
-	id = desc.rm_identify(XLogRecGetInfo(record));
+	id = desc.rm_identify(XLogRecGetRmInfo(record));
 
 	if (id == NULL)
-		id = psprintf("UNKNOWN (%x)", XLogRecGetInfo(record) & ~XLR_INFO_MASK);
+		id = psprintf("UNKNOWN (%x)", XLogRecGetRmInfo(record));
 
 	initStringInfo(&rec_desc);
 	desc.rm_desc(&rec_desc, record);

@@ -614,7 +614,7 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 		if (record != NULL)
 		{
 			memcpy(&checkPoint, XLogRecGetData(xlogreader), sizeof(CheckPoint));
-			wasShutdown = ((record->xl_info & ~XLR_INFO_MASK) == XLOG_CHECKPOINT_SHUTDOWN);
+			wasShutdown = (record->xl_rminfo == XLOG_CHECKPOINT_SHUTDOWN);
 			ereport(DEBUG1,
 					(errmsg_internal("checkpoint record is at %X/%X",
 									 LSN_FORMAT_ARGS(CheckPointLoc))));
@@ -768,7 +768,7 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 					(errmsg("could not locate a valid checkpoint record")));
 		}
 		memcpy(&checkPoint, XLogRecGetData(xlogreader), sizeof(CheckPoint));
-		wasShutdown = ((record->xl_info & ~XLR_INFO_MASK) == XLOG_CHECKPOINT_SHUTDOWN);
+		wasShutdown = (record->xl_rminfo == XLOG_CHECKPOINT_SHUTDOWN);
 	}
 
 	/*
@@ -1839,9 +1839,9 @@ ApplyWalRecord(XLogReaderState *xlogreader, XLogRecord *record, TimeLineID *repl
 	{
 		TimeLineID	newReplayTLI = *replayTLI;
 		TimeLineID	prevReplayTLI = *replayTLI;
-		uint8		info = record->xl_info & ~XLR_INFO_MASK;
+		uint8		rminfo = record->xl_rminfo;
 
-		if (info == XLOG_CHECKPOINT_SHUTDOWN)
+		if (rminfo == XLOG_CHECKPOINT_SHUTDOWN)
 		{
 			CheckPoint	checkPoint;
 
@@ -1849,7 +1849,7 @@ ApplyWalRecord(XLogReaderState *xlogreader, XLogRecord *record, TimeLineID *repl
 			newReplayTLI = checkPoint.ThisTimeLineID;
 			prevReplayTLI = checkPoint.PrevTimeLineID;
 		}
-		else if (info == XLOG_END_OF_RECOVERY)
+		else if (rminfo == XLOG_END_OF_RECOVERY)
 		{
 			xl_end_of_recovery xlrec;
 
@@ -1958,12 +1958,12 @@ ApplyWalRecord(XLogReaderState *xlogreader, XLogRecord *record, TimeLineID *repl
 static void
 xlogrecovery_redo(XLogReaderState *record, TimeLineID replayTLI)
 {
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		rminfo = XLogRecGetRmInfo(record);
 	XLogRecPtr	lsn = record->EndRecPtr;
 
 	Assert(XLogRecGetRmid(record) == RM_XLOG_ID);
 
-	if (info == XLOG_OVERWRITE_CONTRECORD)
+	if (rminfo == XLOG_OVERWRITE_CONTRECORD)
 	{
 		/* Verify the payload of a XLOG_OVERWRITE_CONTRECORD record. */
 		xl_overwrite_contrecord xlrec;
@@ -1986,7 +1986,7 @@ xlogrecovery_redo(XLogReaderState *record, TimeLineID replayTLI)
 		/* Verifying the record should only happen once */
 		record->overwrittenRecPtr = InvalidXLogRecPtr;
 	}
-	else if (info == XLOG_BACKUP_END)
+	else if (rminfo == XLOG_BACKUP_END)
 	{
 		XLogRecPtr	startpoint;
 
@@ -2176,15 +2176,15 @@ void
 xlog_outdesc(StringInfo buf, XLogReaderState *record)
 {
 	RmgrData	rmgr = GetRmgr(XLogRecGetRmid(record));
-	uint8		info = XLogRecGetInfo(record);
+	uint8		rminfo = XLogRecGetRmInfo(record);
 	const char *id;
 
 	appendStringInfoString(buf, rmgr.rm_name);
 	appendStringInfoChar(buf, '/');
 
-	id = rmgr.rm_identify(info);
+	id = rmgr.rm_identify(rminfo);
 	if (id == NULL)
-		appendStringInfo(buf, "UNKNOWN (%X): ", info & ~XLR_INFO_MASK);
+		appendStringInfo(buf, "UNKNOWN (%X): ", rminfo);
 	else
 		appendStringInfo(buf, "%s: ", id);
 
@@ -2304,11 +2304,11 @@ checkTimeLineSwitch(XLogRecPtr lsn, TimeLineID newTLI, TimeLineID prevTLI,
 static bool
 getRecordTimestamp(XLogReaderState *record, TimestampTz *recordXtime)
 {
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
-	uint8		xact_info = info & XLOG_XACT_OPMASK;
+	uint8		rminfo = XLogRecGetRmInfo(record);
+	uint8		xact_info = rminfo & XLOG_XACT_OPMASK;
 	uint8		rmid = XLogRecGetRmid(record);
 
-	if (rmid == RM_XLOG_ID && info == XLOG_RESTORE_POINT)
+	if (rmid == RM_XLOG_ID && rminfo == XLOG_RESTORE_POINT)
 	{
 		*recordXtime = ((xl_restore_point *) XLogRecGetData(record))->rp_time;
 		return true;
@@ -2498,7 +2498,7 @@ recoveryStopsBefore(XLogReaderState *record)
 	if (XLogRecGetRmid(record) != RM_XACT_ID)
 		return false;
 
-	xact_info = XLogRecGetInfo(record) & XLOG_XACT_OPMASK;
+	xact_info = XLogRecGetRmInfo(record) & XLOG_XACT_OPMASK;
 
 	if (xact_info == XLOG_XACT_COMMIT)
 	{
@@ -2511,7 +2511,7 @@ recoveryStopsBefore(XLogReaderState *record)
 		xl_xact_parsed_commit parsed;
 
 		isCommit = true;
-		ParseCommitRecord(XLogRecGetInfo(record),
+		ParseCommitRecord(XLogRecGetRmInfo(record),
 						  xlrec,
 						  &parsed);
 		recordXid = parsed.twophase_xid;
@@ -2527,7 +2527,7 @@ recoveryStopsBefore(XLogReaderState *record)
 		xl_xact_parsed_abort parsed;
 
 		isCommit = false;
-		ParseAbortRecord(XLogRecGetInfo(record),
+		ParseAbortRecord(XLogRecGetRmInfo(record),
 						 xlrec,
 						 &parsed);
 		recordXid = parsed.twophase_xid;
@@ -2599,7 +2599,7 @@ recoveryStopsBefore(XLogReaderState *record)
 static bool
 recoveryStopsAfter(XLogReaderState *record)
 {
-	uint8		info;
+	uint8		rminfo;
 	uint8		xact_info;
 	uint8		rmid;
 	TimestampTz recordXtime;
@@ -2611,7 +2611,7 @@ recoveryStopsAfter(XLogReaderState *record)
 	if (!ArchiveRecoveryRequested)
 		return false;
 
-	info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	rminfo = XLogRecGetRmInfo(record);
 	rmid = XLogRecGetRmid(record);
 
 	/*
@@ -2619,7 +2619,7 @@ recoveryStopsAfter(XLogReaderState *record)
 	 * the first one.
 	 */
 	if (recoveryTarget == RECOVERY_TARGET_NAME &&
-		rmid == RM_XLOG_ID && info == XLOG_RESTORE_POINT)
+		rmid == RM_XLOG_ID && rminfo == XLOG_RESTORE_POINT)
 	{
 		xl_restore_point *recordRestorePointData;
 
@@ -2660,7 +2660,7 @@ recoveryStopsAfter(XLogReaderState *record)
 	if (rmid != RM_XACT_ID)
 		return false;
 
-	xact_info = info & XLOG_XACT_OPMASK;
+	xact_info = rminfo & XLOG_XACT_OPMASK;
 
 	if (xact_info == XLOG_XACT_COMMIT ||
 		xact_info == XLOG_XACT_COMMIT_PREPARED ||
@@ -2689,7 +2689,7 @@ recoveryStopsAfter(XLogReaderState *record)
 			xl_xact_abort *xlrec = (xl_xact_abort *) XLogRecGetData(record);
 			xl_xact_parsed_abort parsed;
 
-			ParseAbortRecord(XLogRecGetInfo(record),
+			ParseAbortRecord(XLogRecGetRmInfo(record),
 							 xlrec,
 							 &parsed);
 			recordXid = parsed.twophase_xid;
@@ -2883,7 +2883,7 @@ recoveryApplyDelay(XLogReaderState *record)
 	if (XLogRecGetRmid(record) != RM_XACT_ID)
 		return false;
 
-	xact_info = XLogRecGetInfo(record) & XLOG_XACT_OPMASK;
+	xact_info = XLogRecGetRmInfo(record) & XLOG_XACT_OPMASK;
 
 	if (xact_info != XLOG_XACT_COMMIT &&
 		xact_info != XLOG_XACT_COMMIT_PREPARED)
@@ -3917,7 +3917,7 @@ ReadCheckpointRecord(XLogPrefetcher *xlogprefetcher, XLogRecPtr RecPtr,
 					 TimeLineID replayTLI)
 {
 	XLogRecord *record;
-	uint8		info;
+	uint8		rminfo;
 
 	Assert(xlogreader != NULL);
 
@@ -3943,9 +3943,9 @@ ReadCheckpointRecord(XLogPrefetcher *xlogprefetcher, XLogRecPtr RecPtr,
 				(errmsg("invalid resource manager ID in checkpoint record")));
 		return NULL;
 	}
-	info = record->xl_info & ~XLR_INFO_MASK;
-	if (info != XLOG_CHECKPOINT_SHUTDOWN &&
-		info != XLOG_CHECKPOINT_ONLINE)
+	rminfo = record->xl_rminfo;
+	if (rminfo != XLOG_CHECKPOINT_SHUTDOWN &&
+		rminfo != XLOG_CHECKPOINT_ONLINE)
 	{
 		ereport(LOG,
 				(errmsg("invalid xl_info in checkpoint record")));

@@ -984,12 +984,12 @@ WriteTruncateXlogRec(int pageno, TransactionId oldestXid)
 void
 commit_ts_redo(XLogReaderState *record)
 {
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		rminfo = XLogRecGetRmInfo(record);
 
 	/* Backup blocks are not used in commit_ts records */
 	Assert(!XLogRecHasAnyBlockRefs(record));
 
-	if (info == COMMIT_TS_ZEROPAGE)
+	if (rminfo == COMMIT_TS_ZEROPAGE)
 	{
 		int			pageno;
 		int			slotno;
@@ -1004,7 +1004,7 @@ commit_ts_redo(XLogReaderState *record)
 
 		LWLockRelease(CommitTsSLRULock);
 	}
-	else if (info == COMMIT_TS_TRUNCATE)
+	else if (rminfo == COMMIT_TS_TRUNCATE)
 	{
 		xl_commit_ts_truncate *trunc = (xl_commit_ts_truncate *) XLogRecGetData(record);
 
@@ -1019,7 +1019,7 @@ commit_ts_redo(XLogReaderState *record)
 		SimpleLruTruncate(CommitTsCtl, trunc->pageno);
 	}
 	else
-		elog(PANIC, "commit_ts_redo: unknown op code %u", info);
+		elog(PANIC, "commit_ts_redo: unknown op code %u", rminfo);
 }
 
 /*

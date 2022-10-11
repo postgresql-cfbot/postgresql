@@ -29,6 +29,7 @@ const struct config_enum_entry wal_level_options[] = {
 	{"replica", WAL_LEVEL_REPLICA, false},
 	{"archive", WAL_LEVEL_REPLICA, true},	/* deprecated */
 	{"hot_standby", WAL_LEVEL_REPLICA, true},	/* deprecated */
+	{"remote", WAL_LEVEL_REMOTE, false},
 	{"logical", WAL_LEVEL_LOGICAL, false},
 	{NULL, 0, false}
 };
@@ -37,10 +38,10 @@ void
 xlog_desc(StringInfo buf, XLogReaderState *record)
 {
 	char	   *rec = XLogRecGetData(record);
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		rminfo = XLogRecGetRmInfo(record);
 
-	if (info == XLOG_CHECKPOINT_SHUTDOWN ||
-		info == XLOG_CHECKPOINT_ONLINE)
+	if (rminfo == XLOG_CHECKPOINT_SHUTDOWN ||
+		rminfo == XLOG_CHECKPOINT_ONLINE)
 	{
 		CheckPoint *checkpoint = (CheckPoint *) rec;
 
@@ -65,33 +66,33 @@ xlog_desc(StringInfo buf, XLogReaderState *record)
 						 checkpoint->oldestCommitTsXid,
 						 checkpoint->newestCommitTsXid,
 						 checkpoint->oldestActiveXid,
-						 (info == XLOG_CHECKPOINT_SHUTDOWN) ? "shutdown" : "online");
+						 (rminfo == XLOG_CHECKPOINT_SHUTDOWN) ? "shutdown" : "online");
 	}
-	else if (info == XLOG_NEXTOID)
+	else if (rminfo == XLOG_NEXTOID)
 	{
 		Oid			nextOid;
 
 		memcpy(&nextOid, rec, sizeof(Oid));
 		appendStringInfo(buf, "%u", nextOid);
 	}
-	else if (info == XLOG_RESTORE_POINT)
+	else if (rminfo == XLOG_RESTORE_POINT)
 	{
 		xl_restore_point *xlrec = (xl_restore_point *) rec;
 
 		appendStringInfoString(buf, xlrec->rp_name);
 	}
-	else if (info == XLOG_FPI || info == XLOG_FPI_FOR_HINT)
+	else if (rminfo == XLOG_FPI || rminfo == XLOG_FPI_FOR_HINT)
 	{
 		/* no further information to print */
 	}
-	else if (info == XLOG_BACKUP_END)
+	else if (rminfo == XLOG_BACKUP_END)
 	{
 		XLogRecPtr	startpoint;
 
 		memcpy(&startpoint, rec, sizeof(XLogRecPtr));
 		appendStringInfo(buf, "%X/%X", LSN_FORMAT_ARGS(startpoint));
 	}
-	else if (info == XLOG_PARAMETER_CHANGE)
+	else if (rminfo == XLOG_PARAMETER_CHANGE)
 	{
 		xl_parameter_change xlrec;
 		const char *wal_level_str;
@@ -123,14 +124,14 @@ xlog_desc(StringInfo buf, XLogReaderState *record)
 						 xlrec.wal_log_hints ? "on" : "off",
 						 xlrec.track_commit_timestamp ? "on" : "off");
 	}
-	else if (info == XLOG_FPW_CHANGE)
+	else if (rminfo == XLOG_FPW_CHANGE)
 	{
 		bool		fpw;
 
 		memcpy(&fpw, rec, sizeof(bool));
 		appendStringInfoString(buf, fpw ? "true" : "false");
 	}
-	else if (info == XLOG_END_OF_RECOVERY)
+	else if (rminfo == XLOG_END_OF_RECOVERY)
 	{
 		xl_end_of_recovery xlrec;
 
@@ -139,7 +140,7 @@ xlog_desc(StringInfo buf, XLogReaderState *record)
 						 xlrec.ThisTimeLineID, xlrec.PrevTimeLineID,
 						 timestamptz_to_str(xlrec.end_time));
 	}
-	else if (info == XLOG_OVERWRITE_CONTRECORD)
+	else if (rminfo == XLOG_OVERWRITE_CONTRECORD)
 	{
 		xl_overwrite_contrecord xlrec;
 
@@ -151,11 +152,11 @@ xlog_desc(StringInfo buf, XLogReaderState *record)
 }
 
 const char *
-xlog_identify(uint8 info)
+xlog_identify(uint8 rminfo)
 {
 	const char *id = NULL;
 
-	switch (info & ~XLR_INFO_MASK)
+	switch (rminfo)
 	{
 		case XLOG_CHECKPOINT_SHUTDOWN:
 			id = "CHECKPOINT_SHUTDOWN";

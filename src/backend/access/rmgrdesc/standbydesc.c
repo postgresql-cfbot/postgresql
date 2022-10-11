@@ -40,9 +40,9 @@ void
 standby_desc(StringInfo buf, XLogReaderState *record)
 {
 	char	   *rec = XLogRecGetData(record);
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		rminfo = XLogRecGetRmInfo(record);
 
-	if (info == XLOG_STANDBY_LOCK)
+	if (rminfo == XLOG_STANDBY_LOCK)
 	{
 		xl_standby_locks *xlrec = (xl_standby_locks *) rec;
 		int			i;
@@ -52,13 +52,13 @@ standby_desc(StringInfo buf, XLogReaderState *record)
 							 xlrec->locks[i].xid, xlrec->locks[i].dbOid,
 							 xlrec->locks[i].relOid);
 	}
-	else if (info == XLOG_RUNNING_XACTS)
+	else if (rminfo == XLOG_RUNNING_XACTS)
 	{
 		xl_running_xacts *xlrec = (xl_running_xacts *) rec;
 
 		standby_desc_running_xacts(buf, xlrec);
 	}
-	else if (info == XLOG_INVALIDATIONS)
+	else if (rminfo == XLOG_INVALIDATIONS)
 	{
 		xl_invalidations *xlrec = (xl_invalidations *) rec;
 
@@ -69,11 +69,11 @@ standby_desc(StringInfo buf, XLogReaderState *record)
 }
 
 const char *
-standby_identify(uint8 info)
+standby_identify(uint8 rminfo)
 {
 	const char *id = NULL;
 
-	switch (info & ~XLR_INFO_MASK)
+	switch (rminfo)
 	{
 		case XLOG_STANDBY_LOCK:
 			id = "LOCK";

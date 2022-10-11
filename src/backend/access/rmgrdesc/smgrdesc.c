@@ -21,9 +21,9 @@ void
 smgr_desc(StringInfo buf, XLogReaderState *record)
 {
 	char	   *rec = XLogRecGetData(record);
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		rminfo = XLogRecGetRmInfo(record);
 
-	if (info == XLOG_SMGR_CREATE)
+	if (rminfo == XLOG_SMGR_CREATE)
 	{
 		xl_smgr_create *xlrec = (xl_smgr_create *) rec;
 		char	   *path = relpathperm(xlrec->rlocator, xlrec->forkNum);
@@ -31,7 +31,7 @@ smgr_desc(StringInfo buf, XLogReaderState *record)
 		appendStringInfoString(buf, path);
 		pfree(path);
 	}
-	else if (info == XLOG_SMGR_TRUNCATE)
+	else if (rminfo == XLOG_SMGR_TRUNCATE)
 	{
 		xl_smgr_truncate *xlrec = (xl_smgr_truncate *) rec;
 		char	   *path = relpathperm(xlrec->rlocator, MAIN_FORKNUM);
@@ -43,11 +43,11 @@ smgr_desc(StringInfo buf, XLogReaderState *record)
 }
 
 const char *
-smgr_identify(uint8 info)
+smgr_identify(uint8 rminfo)
 {
 	const char *id = NULL;
 
-	switch (info & ~XLR_INFO_MASK)
+	switch (rminfo)
 	{
 		case XLOG_SMGR_CREATE:
 			id = "CREATE";

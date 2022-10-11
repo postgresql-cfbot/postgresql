@@ -350,6 +350,6 @@ extern void btree_mask(char *pagedata, BlockNumber blkno);
  * prototypes for functions in nbtdesc.c
  */
 extern void btree_desc(StringInfo buf, XLogReaderState *record);
-extern const char *btree_identify(uint8 info);
+extern const char *btree_identify(uint8 rminfo);
 
 #endif							/* NBTXLOG_H */

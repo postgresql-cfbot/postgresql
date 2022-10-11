@@ -22,9 +22,9 @@ void
 dbase_desc(StringInfo buf, XLogReaderState *record)
 {
 	char	   *rec = XLogRecGetData(record);
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		rminfo = XLogRecGetRmInfo(record);
 
-	if (info == XLOG_DBASE_CREATE_FILE_COPY)
+	if (rminfo == XLOG_DBASE_CREATE_FILE_COPY)
 	{
 		xl_dbase_create_file_copy_rec *xlrec =
 		(xl_dbase_create_file_copy_rec *) rec;
@@ -33,7 +33,7 @@ dbase_desc(StringInfo buf, XLogReaderState *record)
 						 xlrec->src_tablespace_id, xlrec->src_db_id,
 						 xlrec->tablespace_id, xlrec->db_id);
 	}
-	else if (info == XLOG_DBASE_CREATE_WAL_LOG)
+	else if (rminfo == XLOG_DBASE_CREATE_WAL_LOG)
 	{
 		xl_dbase_create_wal_log_rec *xlrec =
 		(xl_dbase_create_wal_log_rec *) rec;
@@ -41,7 +41,7 @@ dbase_desc(StringInfo buf, XLogReaderState *record)
 		appendStringInfo(buf, "create dir %u/%u",
 						 xlrec->tablespace_id, xlrec->db_id);
 	}
-	else if (info == XLOG_DBASE_DROP)
+	else if (rminfo == XLOG_DBASE_DROP)
 	{
 		xl_dbase_drop_rec *xlrec = (xl_dbase_drop_rec *) rec;
 		int			i;
@@ -54,11 +54,11 @@ dbase_desc(StringInfo buf, XLogReaderState *record)
 }
 
 const char *
-dbase_identify(uint8 info)
+dbase_identify(uint8 rminfo)
 {
 	const char *id = NULL;
 
-	switch (info & ~XLR_INFO_MASK)
+	switch (rminfo)
 	{
 		case XLOG_DBASE_CREATE_FILE_COPY:
 			id = "CREATE_FILE_COPY";

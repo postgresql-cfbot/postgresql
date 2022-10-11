@@ -1195,7 +1195,7 @@ do_start_worker(void)
 	/* Also determine the oldest datminmxid we will consider. */
 	recentMulti = ReadNextMultiXactId();
 	multiForceLimit = recentMulti - MultiXactMemberFreezeThreshold();
-	if (multiForceLimit < FirstMultiXactId)
+	if (!MultiXactIdIsNormal(multiForceLimit))
 		multiForceLimit -= FirstMultiXactId;
 
 	/*
@@ -3056,7 +3056,7 @@ relation_needs_vacanalyze(Oid relid,
 	if (!force_vacuum)
 	{
 		multiForceLimit = recentMulti - multixact_freeze_max_age;
-		if (multiForceLimit < FirstMultiXactId)
+		if (!MultiXactIdIsNormal(multiForceLimit))
 			multiForceLimit -= FirstMultiXactId;
 		force_vacuum = MultiXactIdIsValid(classForm->relminmxid) &&
 			MultiXactIdPrecedes(classForm->relminmxid, multiForceLimit);

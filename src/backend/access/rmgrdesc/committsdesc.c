@@ -22,16 +22,16 @@ void
 commit_ts_desc(StringInfo buf, XLogReaderState *record)
 {
 	char	   *rec = XLogRecGetData(record);
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		rminfo = XLogRecGetRmInfo(record);
 
-	if (info == COMMIT_TS_ZEROPAGE)
+	if (rminfo == COMMIT_TS_ZEROPAGE)
 	{
 		int			pageno;
 
 		memcpy(&pageno, rec, sizeof(int));
 		appendStringInfo(buf, "%d", pageno);
 	}
-	else if (info == COMMIT_TS_TRUNCATE)
+	else if (rminfo == COMMIT_TS_TRUNCATE)
 	{
 		xl_commit_ts_truncate *trunc = (xl_commit_ts_truncate *) rec;
 
@@ -41,9 +41,9 @@ commit_ts_desc(StringInfo buf, XLogReaderState *record)
 }
 
 const char *
-commit_ts_identify(uint8 info)
+commit_ts_identify(uint8 rminfo)
 {
-	switch (info)
+	switch (rminfo)
 	{
 		case COMMIT_TS_ZEROPAGE:
 			return "ZEROPAGE";

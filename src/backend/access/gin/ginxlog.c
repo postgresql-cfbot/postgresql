@@ -725,7 +725,7 @@ ginRedoDeleteListPages(XLogReaderState *record)
 void
 gin_redo(XLogReaderState *record)
 {
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		rminfo = XLogRecGetRmInfo(record);
 	MemoryContext oldCtx;
 
 	/*
@@ -735,7 +735,7 @@ gin_redo(XLogReaderState *record)
 	 */
 
 	oldCtx = MemoryContextSwitchTo(opCtx);
-	switch (info)
+	switch (rminfo)
 	{
 		case XLOG_GIN_CREATE_PTREE:
 			ginRedoCreatePTree(record);
@@ -765,7 +765,7 @@ gin_redo(XLogReaderState *record)
 			ginRedoDeleteListPages(record);
 			break;
 		default:
-			elog(PANIC, "gin_redo: unknown op code %u", info);
+			elog(PANIC, "gin_redo: unknown op code %u", rminfo);
 	}
 	MemoryContextSwitchTo(oldCtx);
 	MemoryContextReset(opCtx);

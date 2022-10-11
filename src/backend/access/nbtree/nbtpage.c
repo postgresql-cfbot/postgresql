@@ -2634,7 +2634,7 @@ _bt_unlink_halfdead_page(Relation rel, Buffer leafbuf, BlockNumber scanblkno,
 	{
 		xl_btree_unlink_page xlrec;
 		xl_btree_metadata xlmeta;
-		uint8		xlinfo;
+		uint8		xlrminfo;
 		XLogRecPtr	recptr;
 
 		XLogBeginInsert();
@@ -2673,12 +2673,12 @@ _bt_unlink_halfdead_page(Relation rel, Buffer leafbuf, BlockNumber scanblkno,
 			xlmeta.allequalimage = metad->btm_allequalimage;
 
 			XLogRegisterBufData(4, (char *) &xlmeta, sizeof(xl_btree_metadata));
-			xlinfo = XLOG_BTREE_UNLINK_PAGE_META;
+			xlrminfo = XLOG_BTREE_UNLINK_PAGE_META;
 		}
 		else
-			xlinfo = XLOG_BTREE_UNLINK_PAGE;
+			xlrminfo = XLOG_BTREE_UNLINK_PAGE;
 
-		recptr = XLogInsert(RM_BTREE_ID, xlinfo);
+		recptr = XLogInsert(RM_BTREE_ID, xlrminfo);
 
 		if (BufferIsValid(metabuf))
 		{

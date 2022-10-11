@@ -435,7 +435,7 @@ main(int argc, char *argv[])
 		ControlFile.checkPointCopy.nextMulti = set_mxid;
 
 		ControlFile.checkPointCopy.oldestMulti = set_oldestmxid;
-		if (ControlFile.checkPointCopy.oldestMulti < FirstMultiXactId)
+		if (!MultiXactIdIsNormal(ControlFile.checkPointCopy.oldestMulti))
 			ControlFile.checkPointCopy.oldestMulti += FirstMultiXactId;
 		ControlFile.checkPointCopy.oldestMultiDB = InvalidOid;
 	}

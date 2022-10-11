@@ -1845,7 +1845,7 @@ void
 seq_redo(XLogReaderState *record)
 {
 	XLogRecPtr	lsn = record->EndRecPtr;
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		rminfo = XLogRecGetRmInfo(record);
 	Buffer		buffer;
 	Page		page;
 	Page		localpage;
@@ -1854,8 +1854,8 @@ seq_redo(XLogReaderState *record)
 	xl_seq_rec *xlrec = (xl_seq_rec *) XLogRecGetData(record);
 	sequence_magic *sm;
 
-	if (info != XLOG_SEQ_LOG)
-		elog(PANIC, "seq_redo: unknown op code %u", info);
+	if (rminfo != XLOG_SEQ_LOG)
+		elog(PANIC, "seq_redo: unknown op code %u", rminfo);
 
 	buffer = XLogInitBufferForRedo(record, 0);
 	page = (Page) BufferGetPage(buffer);

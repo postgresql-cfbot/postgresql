@@ -194,7 +194,7 @@ log_smgrcreate(const RelFileLocator *rlocator, ForkNumber forkNum)
 
 	XLogBeginInsert();
 	XLogRegisterData((char *) &xlrec, sizeof(xlrec));
-	XLogInsert(RM_SMGR_ID, XLOG_SMGR_CREATE | XLR_SPECIAL_REL_UPDATE);
+	XLogInsertExtended(RM_SMGR_ID, XLR_SPECIAL_REL_UPDATE, XLOG_SMGR_CREATE);
 }
 
 /*
@@ -375,8 +375,9 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 		XLogBeginInsert();
 		XLogRegisterData((char *) &xlrec, sizeof(xlrec));
 
-		lsn = XLogInsert(RM_SMGR_ID,
-						 XLOG_SMGR_TRUNCATE | XLR_SPECIAL_REL_UPDATE);
+		lsn = XLogInsertExtended(RM_SMGR_ID,
+								 XLR_SPECIAL_REL_UPDATE,
+								 XLOG_SMGR_TRUNCATE);
 
 		/*
 		 * Flush, because otherwise the truncation of the main relation might
@@ -958,12 +959,12 @@ void
 smgr_redo(XLogReaderState *record)
 {
 	XLogRecPtr	lsn = record->EndRecPtr;
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		rminfo = XLogRecGetRmInfo(record);
 
 	/* Backup blocks are not used in smgr records */
 	Assert(!XLogRecHasAnyBlockRefs(record));
 
-	if (info == XLOG_SMGR_CREATE)
+	if (rminfo == XLOG_SMGR_CREATE)
 	{
 		xl_smgr_create *xlrec = (xl_smgr_create *) XLogRecGetData(record);
 		SMgrRelation reln;
@@ -971,7 +972,7 @@ smgr_redo(XLogReaderState *record)
 		reln = smgropen(xlrec->rlocator, InvalidBackendId);
 		smgrcreate(reln, xlrec->forkNum, true);
 	}
-	else if (info == XLOG_SMGR_TRUNCATE)
+	else if (rminfo == XLOG_SMGR_TRUNCATE)
 	{
 		xl_smgr_truncate *xlrec = (xl_smgr_truncate *) XLogRecGetData(record);
 		SMgrRelation reln;
@@ -1060,5 +1061,5 @@ smgr_redo(XLogReaderState *record)
 		FreeFakeRelcacheEntry(rel);
 	}
 	else
-		elog(PANIC, "smgr_redo: unknown op code %u", info);
+		elog(PANIC, "smgr_redo: unknown op code %u", rminfo);
 }

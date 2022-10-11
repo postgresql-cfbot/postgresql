@@ -986,12 +986,12 @@ WriteTruncateXlogRec(int pageno, TransactionId oldestXact, Oid oldestXactDb)
 void
 clog_redo(XLogReaderState *record)
 {
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		rminfo = XLogRecGetRmInfo(record);
 
 	/* Backup blocks are not used in clog records */
 	Assert(!XLogRecHasAnyBlockRefs(record));
 
-	if (info == CLOG_ZEROPAGE)
+	if (rminfo == CLOG_ZEROPAGE)
 	{
 		int			pageno;
 		int			slotno;
@@ -1006,7 +1006,7 @@ clog_redo(XLogReaderState *record)
 
 		LWLockRelease(XactSLRULock);
 	}
-	else if (info == CLOG_TRUNCATE)
+	else if (rminfo == CLOG_TRUNCATE)
 	{
 		xl_clog_truncate xlrec;
 
@@ -1017,7 +1017,7 @@ clog_redo(XLogReaderState *record)
 		SimpleLruTruncate(XactCtl, xlrec.pageno);
 	}
 	else
-		elog(PANIC, "clog_redo: unknown op code %u", info);
+		elog(PANIC, "clog_redo: unknown op code %u", rminfo);
 }
 
 /*

@@ -1084,12 +1084,12 @@ perform_relmap_update(bool shared, const RelMapFile *updates)
 void
 relmap_redo(XLogReaderState *record)
 {
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		rminfo = XLogRecGetRmInfo(record);
 
 	/* Backup blocks are not used in relmap records */
 	Assert(!XLogRecHasAnyBlockRefs(record));
 
-	if (info == XLOG_RELMAP_UPDATE)
+	if (rminfo == XLOG_RELMAP_UPDATE)
 	{
 		xl_relmap_update *xlrec = (xl_relmap_update *) XLogRecGetData(record);
 		RelMapFile	newmap;
@@ -1126,5 +1126,5 @@ relmap_redo(XLogReaderState *record)
 		pfree(dbpath);
 	}
 	else
-		elog(PANIC, "relmap_redo: unknown op code %u", info);
+		elog(PANIC, "relmap_redo: unknown op code %u", rminfo);
 }

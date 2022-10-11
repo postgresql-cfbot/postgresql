@@ -45,6 +45,17 @@
  */
 #define XLOG_HEAP_INIT_PAGE		0x80
 /*
+ * When we INSERT/DELETE/UPDATE/LOCK tuples, we might need the CID of that
+ * operation. The value is included in the front of the main xlog data
+ * if this bit is set.
+ * Valid for HEAP_INSERT, HEAP_DELETE, HEAP_UPDATE, HEAP_HOT_UPDATE,
+ * and HEAP2_MULTI_INSERT
+ * 
+ * Usually only emitted when wal_level >= WAL_LEVEL_REMOTE
+ */
+#define XLOG_HEAP_WITH_CID		0x01
+
+/*
  * We ran out of opcodes, so heapam.c now has a second RmgrId.  These opcodes
  * are associated with RM_HEAP2_ID, but are not logically different from
  * the ones above associated with RM_HEAP_ID.  XLOG_HEAP_OPMASK applies to
@@ -394,11 +405,11 @@ extern void HeapTupleHeaderAdvanceLatestRemovedXid(HeapTupleHeader tuple,
 
 extern void heap_redo(XLogReaderState *record);
 extern void heap_desc(StringInfo buf, XLogReaderState *record);
-extern const char *heap_identify(uint8 info);
+extern const char *heap_identify(uint8 rminfo);
 extern void heap_mask(char *pagedata, BlockNumber blkno);
 extern void heap2_redo(XLogReaderState *record);
 extern void heap2_desc(StringInfo buf, XLogReaderState *record);
-extern const char *heap2_identify(uint8 info);
+extern const char *heap2_identify(uint8 rminfo);
 extern void heap_xlog_logical_rewrite(XLogReaderState *r);
 
 extern XLogRecPtr log_heap_freeze(Relation reln, Buffer buffer,

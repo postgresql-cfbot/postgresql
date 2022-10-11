@@ -938,11 +938,11 @@ spgRedoVacuumRedirect(XLogReaderState *record)
 void
 spg_redo(XLogReaderState *record)
 {
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		rminfo = XLogRecGetRmInfo(record);
 	MemoryContext oldCxt;
 
 	oldCxt = MemoryContextSwitchTo(opCtx);
-	switch (info)
+	switch (rminfo)
 	{
 		case XLOG_SPGIST_ADD_LEAF:
 			spgRedoAddLeaf(record);
@@ -969,7 +969,7 @@ spg_redo(XLogReaderState *record)
 			spgRedoVacuumRedirect(record);
 			break;
 		default:
-			elog(PANIC, "spg_redo: unknown op code %u", info);
+			elog(PANIC, "spg_redo: unknown op code %u", rminfo);
 	}
 
 	MemoryContextSwitchTo(oldCxt);

@@ -1308,7 +1308,7 @@ _bt_insertonpg(Relation rel,
 		{
 			xl_btree_insert xlrec;
 			xl_btree_metadata xlmeta;
-			uint8		xlinfo;
+			uint8		xlrminfo;
 			XLogRecPtr	recptr;
 			uint16		upostingoff;
 
@@ -1320,7 +1320,7 @@ _bt_insertonpg(Relation rel,
 			if (isleaf && postingoff == 0)
 			{
 				/* Simple leaf insert */
-				xlinfo = XLOG_BTREE_INSERT_LEAF;
+				xlrminfo = XLOG_BTREE_INSERT_LEAF;
 			}
 			else if (postingoff != 0)
 			{
@@ -1329,18 +1329,18 @@ _bt_insertonpg(Relation rel,
 				 * postingoff field before newitem/orignewitem.
 				 */
 				Assert(isleaf);
-				xlinfo = XLOG_BTREE_INSERT_POST;
+				xlrminfo = XLOG_BTREE_INSERT_POST;
 			}
 			else
 			{
 				/* Internal page insert, which finishes a split on cbuf */
-				xlinfo = XLOG_BTREE_INSERT_UPPER;
+				xlrminfo = XLOG_BTREE_INSERT_UPPER;
 				XLogRegisterBuffer(1, cbuf, REGBUF_STANDARD);
 
 				if (BufferIsValid(metabuf))
 				{
 					/* Actually, it's an internal page insert + meta update */
-					xlinfo = XLOG_BTREE_INSERT_META;
+					xlrminfo = XLOG_BTREE_INSERT_META;
 
 					Assert(metad->btm_version >= BTREE_NOVAC_VERSION);
 					xlmeta.version = metad->btm_version;
@@ -1381,7 +1381,7 @@ _bt_insertonpg(Relation rel,
 									IndexTupleSize(origitup));
 			}
 
-			recptr = XLogInsert(RM_BTREE_ID, xlinfo);
+			recptr = XLogInsert(RM_BTREE_ID, xlrminfo);
 
 			if (BufferIsValid(metabuf))
 				PageSetLSN(metapg, recptr);
@@ -1962,7 +1962,7 @@ _bt_split(Relation rel, BTScanInsert itup_key, Buffer buf, Buffer cbuf,
 	if (RelationNeedsWAL(rel))
 	{
 		xl_btree_split xlrec;
-		uint8		xlinfo;
+		uint8		xlrminfo;
 		XLogRecPtr	recptr;
 
 		xlrec.level = ropaque->btpo_level;
@@ -2045,8 +2045,8 @@ _bt_split(Relation rel, BTScanInsert itup_key, Buffer buf, Buffer cbuf,
 							(char *) rightpage + ((PageHeader) rightpage)->pd_upper,
 							((PageHeader) rightpage)->pd_special - ((PageHeader) rightpage)->pd_upper);
 
-		xlinfo = newitemonleft ? XLOG_BTREE_SPLIT_L : XLOG_BTREE_SPLIT_R;
-		recptr = XLogInsert(RM_BTREE_ID, xlinfo);
+		xlrminfo = newitemonleft ? XLOG_BTREE_SPLIT_L : XLOG_BTREE_SPLIT_R;
+		recptr = XLogInsert(RM_BTREE_ID, xlrminfo);
 
 		PageSetLSN(origpage, recptr);
 		PageSetLSN(rightpage, recptr);

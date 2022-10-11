@@ -21,16 +21,16 @@ void
 clog_desc(StringInfo buf, XLogReaderState *record)
 {
 	char	   *rec = XLogRecGetData(record);
-	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+	uint8		rminfo = XLogRecGetRmInfo(record);
 
-	if (info == CLOG_ZEROPAGE)
+	if (rminfo == CLOG_ZEROPAGE)
 	{
 		int			pageno;
 
 		memcpy(&pageno, rec, sizeof(int));
 		appendStringInfo(buf, "page %d", pageno);
 	}
-	else if (info == CLOG_TRUNCATE)
+	else if (rminfo == CLOG_TRUNCATE)
 	{
 		xl_clog_truncate xlrec;
 
@@ -41,11 +41,11 @@ clog_desc(StringInfo buf, XLogReaderState *record)
 }
 
 const char *
-clog_identify(uint8 info)
+clog_identify(uint8 rminfo)
 {
 	const char *id = NULL;
 
-	switch (info & ~XLR_INFO_MASK)
+	switch (rminfo)
 	{
 		case CLOG_ZEROPAGE:
 			id = "ZEROPAGE";

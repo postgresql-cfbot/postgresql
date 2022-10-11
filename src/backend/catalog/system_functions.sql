@@ -713,6 +713,8 @@ REVOKE EXECUTE ON FUNCTION pg_ls_logicalmapdir() FROM PUBLIC;
 
 REVOKE EXECUTE ON FUNCTION pg_ls_replslotdir(text) FROM PUBLIC;
 
+REVOKE EXECUTE ON FUNCTION pg_log_query_plan(integer) FROM PUBLIC;
+
 --
 -- We also set up some things as accessible to standard roles.
 --

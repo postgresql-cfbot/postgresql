@@ -1,12 +1,16 @@
 CREATE EXTENSION pgstattuple;
-
 --
 -- It's difficult to come up with platform-independent test cases for
 -- the pgstattuple functions, but the results for empty tables and
 -- indexes should be that.
 --
 
-create table test (a int primary key, b int[]);
+create table test (a int primary key, b int[], p point) with (autovacuum_enabled = off);
+
+insert into test(a, b, p)
+select a, array(select generate_series as num from generate_series(1, 10)), point(a*10, a*10) from generate_series(1, 10000) a;
+-- make dead tuples
+delete from test where a between 1 and 5000;
 
 select * from pgstattuple('test');
 select * from pgstattuple('test'::text);
@@ -14,6 +18,9 @@ select * from pgstattuple('test'::name);
 select * from pgstattuple('test'::regclass);
 select pgstattuple(oid) from pg_class where relname = 'test';
 select pgstattuple(relname) from pg_class where relname = 'test';
+select * from pgstattuple_approx('test');
+select * from pgstattuple_approx('test'::text);
+select * from pgstattuple_approx('test'::regclass);
 
 select version, tree_level,
     index_size / current_setting('block_size')::int as index_size,
@@ -51,6 +58,22 @@ select * from pgstatginindex('test_ginidx');
 create index test_hashidx on test using hash (b);
 
 select * from pgstathashindex('test_hashidx');
+
+-- check that (btree, hash, gist) index with pgstattuple should work
+create index test_btreeidx on test using btree (a);
+create index test_gistidx on test using gist (p);
+
+select * from pgstattuple('test_btreeidx');
+select * from pgstattuple('test_hashidx');
+select * from pgstattuple('test_gistidx');
+
+-- check that these index type error with (gin, spgist, brin, etc)
+create index test_spgistidx on test using spgist (p);
+create index test_brinidx on test using brin (a);
+
+select * from pgstattuple('test_ginidx');
+select * from pgstattuple('test_spgistidx');
+select * from pgstattuple('test_brinidx');
 
 -- these should error with the wrong type
 select pgstatginindex('test_pkey');

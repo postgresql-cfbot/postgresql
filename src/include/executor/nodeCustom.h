@@ -39,4 +39,11 @@ extern void ExecCustomScanInitializeWorker(CustomScanState *node,
 										   ParallelWorkerContext *pwcxt);
 extern void ExecShutdownCustomScan(CustomScanState *node);
 
+/*
+ * Asynchronous execution support
+ */
+extern void ExecAsyncCustomScanRequest(AsyncRequest *areq);
+extern void ExecAsyncCustomScanConfigureWait(AsyncRequest *areq);
+extern void ExecAsyncCustomScanNotify(AsyncRequest *areq);
+
 #endif							/* NODECUSTOM_H */

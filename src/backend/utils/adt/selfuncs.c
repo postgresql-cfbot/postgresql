@@ -6402,18 +6402,22 @@ genericcostestimate(PlannerInfo *root,
 	 * Check for ScalarArrayOpExpr index quals, and estimate the number of
 	 * index scans that will be performed.
 	 */
-	num_sa_scans = 1;
-	foreach(l, indexQuals)
-	{
-		RestrictInfo *rinfo = (RestrictInfo *) lfirst(l);
-
-		if (IsA(rinfo->clause, ScalarArrayOpExpr))
+	if (costs->num_sa_scans>0)
+		num_sa_scans=costs->num_sa_scans;
+    else {
+		num_sa_scans = 1;
+		foreach(l, indexQuals)
 		{
-			ScalarArrayOpExpr *saop = (ScalarArrayOpExpr *) rinfo->clause;
-			int			alength = estimate_array_length(lsecond(saop->args));
-
-			if (alength > 1)
-				num_sa_scans *= alength;
+			RestrictInfo *rinfo = (RestrictInfo *) lfirst(l);
+	
+			if (IsA(rinfo->clause, ScalarArrayOpExpr))
+			{
+				ScalarArrayOpExpr *saop = (ScalarArrayOpExpr *) rinfo->clause;
+				int			alength = estimate_array_length(lsecond(saop->args));
+	
+				if (alength > 1)
+					num_sa_scans *= alength;
+			}
 		}
 	}
 
@@ -6769,6 +6773,7 @@ btcostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 	 * Now do generic index cost estimation.
 	 */
 	costs.numIndexTuples = numIndexTuples;
+	costs.num_sa_scans = num_sa_scans;
 
 	genericcostestimate(root, path, loop_count, &costs);
 

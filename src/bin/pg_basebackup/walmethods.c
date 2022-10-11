@@ -118,7 +118,11 @@ dir_open_for_write(WalWriteMethod *wwmethod, const char *pathname,
 				   const char *temp_suffix, size_t pad_to_size)
 {
 	DirectoryMethodData *dir_data = (DirectoryMethodData *) wwmethod;
-	char		tmppath[MAXPGPATH];
+	char	targetpath[MAXPGPATH];
+	char	tmpfilename[MAXPGPATH];
+	char 	tmpsuffixpath[MAXPGPATH];
+	bool	shouldcreatetempfile = false;
+	int			flags;
 	char	   *filename;
 	int			fd;
 	DirectoryMethodFile *f;
@@ -134,8 +138,9 @@ dir_open_for_write(WalWriteMethod *wwmethod, const char *pathname,
 	clear_error(wwmethod);
 
 	filename = dir_get_file_name(wwmethod, pathname, temp_suffix);
-	snprintf(tmppath, sizeof(tmppath), "%s/%s",
+	snprintf(targetpath, sizeof(targetpath), "%s/%s",
 			 dir_data->basedir, filename);
+	snprintf(tmpfilename, MAXPGPATH, "%s.tmp", filename);
 	pg_free(filename);
 
 	/*
@@ -143,12 +148,57 @@ dir_open_for_write(WalWriteMethod *wwmethod, const char *pathname,
 	 * the file descriptor is important for dir_sync() method as gzflush()
 	 * does not do any system calls to fsync() to make changes permanent on
 	 * disk.
+	 *
+	 * Create a temporary file for padding and no compression cases to ensure
+	 * a fully initialized file is created.
 	 */
-	fd = open(tmppath, O_WRONLY | O_CREAT | PG_BINARY, pg_file_create_mode);
+	if (pad_to_size > 0 &&
+		wwmethod->compression_algorithm == PG_COMPRESSION_NONE)
+	{
+		shouldcreatetempfile = true;
+		flags = O_WRONLY | PG_BINARY;
+	}
+	else
+	{
+		shouldcreatetempfile = false;
+		flags = O_WRONLY | O_CREAT | PG_BINARY;
+	}
+
+	fd = open(targetpath, flags, pg_file_create_mode);
 	if (fd < 0)
 	{
-		wwmethod->lasterrno = errno;
-		return NULL;
+		if (errno == ENOENT && shouldcreatetempfile)
+		{
+			/*
+			 * Actual file doesn't exist. Now, create a temporary file pad it
+			 * and rename to the target file. The temporary file may exist from
+			 * the last failed attempt (failed during partial padding or
+			 * renaming or some other). If it exists, let's play safe and
+			 * delete it before creating a new one.
+			 */
+			snprintf(tmpsuffixpath, MAXPGPATH, "%s.tmp", targetpath);
+
+			if (dir_existsfile(wwmethod, tmpfilename))
+			{
+				if (unlink(tmpsuffixpath) != 0)
+				{
+					wwmethod->lasterrno = errno;
+					return NULL;
+				}
+			}
+
+			fd = open(tmpsuffixpath, flags | O_CREAT, pg_file_create_mode);
+			if (fd < 0)
+			{
+				wwmethod->lasterrno = errno;
+				return NULL;
+			}
+		}
+		else
+		{
+			wwmethod->lasterrno = errno;
+			return NULL;
+		}
 	}
 
 #ifdef HAVE_LIBZ
@@ -244,16 +294,46 @@ dir_open_for_write(WalWriteMethod *wwmethod, const char *pathname,
 		}
 	}
 
+	/* Rename the temporary file to target file */
+	if (shouldcreatetempfile)
+	{
+		int rc;
+
+		if (wwmethod->sync)
+			rc = durable_rename(tmpsuffixpath, targetpath);
+		else
+			rc = rename(tmpsuffixpath, targetpath);
+
+		if (rc != 0)
+		{
+			wwmethod->lasterrno = errno;
+			close(fd);
+
+			/*
+			 * Removing the temporary file may as well fail here, but we are
+			 * not concerned about it right now as we are already returning an
+			 * error while renaming. However, the leftover temporary file gets
+			 * deleted during the next padding cycle.
+			 */
+			unlink(tmpsuffixpath);
+
+			return NULL;
+		}
+	}
+
 	/*
 	 * fsync WAL file and containing directory, to ensure the file is
 	 * persistently created and zeroed (if padded). That's particularly
 	 * important when using synchronous mode, where the file is modified and
 	 * fsynced in-place, without a directory fsync.
+	 *
+	 * For padding/temporary file case, durable_rename would have already
+	 * fsynced file and containing directory.
 	 */
-	if (wwmethod->sync)
+	if (!shouldcreatetempfile && wwmethod->sync)
 	{
-		if (fsync_fname(tmppath, false) != 0 ||
-			fsync_parent_path(tmppath) != 0)
+		if (fsync_fname(targetpath, false) != 0 ||
+			fsync_parent_path(targetpath) != 0)
 		{
 			wwmethod->lasterrno = errno;
 #ifdef HAVE_LIBZ
@@ -294,7 +374,7 @@ dir_open_for_write(WalWriteMethod *wwmethod, const char *pathname,
 	f->base.currpos = 0;
 	f->base.pathname = pg_strdup(pathname);
 	f->fd = fd;
-	f->fullpath = pg_strdup(tmppath);
+	f->fullpath = pg_strdup(targetpath);
 	if (temp_suffix)
 		f->temp_suffix = pg_strdup(temp_suffix);
 

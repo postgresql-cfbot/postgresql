@@ -237,6 +237,28 @@ is_xlogfilename(const char *filename, bool *ispartial,
 		return true;
 	}
 
+	/*
+	 * File looks like a temporary partial uncompressed WAL file that was
+	 * leftover during pre-padding phase from a previous crash, delete it now
+	 * as we don't need it.
+	 */
+	if (fname_len == XLOG_FNAME_LEN + strlen(".partial.tmp") &&
+		strcmp(filename + XLOG_FNAME_LEN, ".partial.tmp") == 0)
+	{
+		/* 12 is length of string ".partial.tmp" */
+		char	path[MAXPGPATH + XLOG_FNAME_LEN + 12];
+
+		snprintf(path, sizeof(path), "%s/%s", basedir, filename);
+
+		if (unlink(path) < 0)
+			pg_log_error("could not remove file \"%s\"", path);
+
+		if (verbose)
+			pg_log_info("removed file \"%s\"", path);
+
+		return false;
+	}
+
 	/* File does not look like something we know */
 	return false;
 }

@@ -2735,12 +2735,15 @@ remove_useless_groupby_columns(PlannerInfo *root)
 
 			/*
 			 * New list must include non-Vars, outer Vars, and anything not
-			 * marked as surplus.
+			 * marked as surplus.  In addition, keep anything that appears in
+			 * the ORDER BY clause, because otherwise we may falsely make it
+			 * look like the GROUP BY and ORDER BY clauses are incompatible.
 			 */
 			if (!IsA(var, Var) ||
 				var->varlevelsup > 0 ||
 				!bms_is_member(var->varattno - FirstLowInvalidHeapAttributeNumber,
-							   surplusvars[var->varno]))
+							   surplusvars[var->varno]) ||
+				list_member(parse->sortClause, sgc))
 				new_groupby = lappend(new_groupby, sgc);
 		}
 

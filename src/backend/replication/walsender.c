@@ -322,7 +322,24 @@ WalSndErrorCleanup(void)
 		wal_segment_close(xlogreader);
 
 	if (MyReplicationSlot != NULL)
+	{
+		bool is_physical;
+		char slotname[NAMEDATALEN] = {0};
+
+		is_physical = SlotIsPhysical(MyReplicationSlot);
+		strcpy(slotname, NameStr(MyReplicationSlot->data.name));
+
 		ReplicationSlotRelease();
+
+		if (is_physical)
+			ereport(log_replication_commands ? LOG : DEBUG3,
+					(errmsg("released physical replication slot \"%s\"",
+							slotname)));
+		else
+			ereport(log_replication_commands ? LOG : DEBUG3,
+					(errmsg("released logical replication slot \"%s\"",
+							slotname)));
+	}
 
 	ReplicationSlotCleanup();
 
@@ -703,6 +720,10 @@ StartReplication(StartReplicationCmd *cmd)
 					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 					 errmsg("cannot use a logical replication slot for physical replication")));
 
+		ereport(log_replication_commands ? LOG : DEBUG3,
+				(errmsg("acquired physical replication slot \"%s\"",
+						cmd->slotname)));
+
 		/*
 		 * We don't need to verify the slot's restart_lsn here; instead we
 		 * rely on the caller requesting the starting point to use.  If the
@@ -843,7 +864,13 @@ StartReplication(StartReplicationCmd *cmd)
 	}
 
 	if (cmd->slotname)
+	{
 		ReplicationSlotRelease();
+
+		ereport(log_replication_commands ? LOG : DEBUG3,
+				(errmsg("released physical replication slot \"%s\"",
+						cmd->slotname)));
+	}
 
 	/*
 	 * Copy is finished now. Send a single-row result set indicating the next
@@ -1255,6 +1282,10 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 						cmd->slotname),
 				 errdetail("This slot has been invalidated because it exceeded the maximum reserved size.")));
 
+	ereport(log_replication_commands ? LOG : DEBUG3,
+			(errmsg("acquired logical replication slot \"%s\"",
+					cmd->slotname)));
+
 	/*
 	 * Force a disconnect, so that the decoding code doesn't need to care
 	 * about an eventual switch from running in recovery, to running in a
@@ -1316,6 +1347,10 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 
 	FreeDecodingContext(logical_decoding_ctx);
 	ReplicationSlotRelease();
+
+	ereport(log_replication_commands ? LOG : DEBUG3,
+			(errmsg("released logical replication slot \"%s\"",
+					cmd->slotname)));
 
 	replication_active = false;
 	if (got_STOPPING)

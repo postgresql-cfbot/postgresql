@@ -208,6 +208,8 @@ insert into d values('test','one','two','three');
 alter table a alter column aa type integer using bit_length(aa);
 select * from d;
 
+DROP TABLE a CASCADE;
+
 -- The above verified that we can change the type of a multiply-inherited
 -- column; but we should reject that if any definition was inherited from
 -- an unrelated parent.

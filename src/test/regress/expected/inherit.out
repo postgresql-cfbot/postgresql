@@ -721,6 +721,12 @@ select * from d;
  32 | one | two | three
 (1 row)
 
+DROP TABLE a CASCADE;
+NOTICE:  drop cascades to 4 other objects
+DETAIL:  drop cascades to table b
+drop cascades to table c
+drop cascades to table d
+drop cascades to table z
 -- The above verified that we can change the type of a multiply-inherited
 -- column; but we should reject that if any definition was inherited from
 -- an unrelated parent.

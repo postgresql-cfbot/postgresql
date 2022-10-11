@@ -2968,9 +2968,11 @@ RelationGetNumberOfBlocksInFork(Relation relation, ForkNumber forkNum)
 		return smgrnblocks(RelationGetSmgr(relation), forkNum);
 	}
 	else
-		Assert(false);
+	{
+		Assert(relation->rd_rel->relkind == RELKIND_PARTITIONED_INDEX);
+	}
 
-	return 0;					/* keep compiler quiet */
+	return 0;
 }
 
 /*

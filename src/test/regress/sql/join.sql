@@ -1579,7 +1579,8 @@ reset enable_hashjoin;
 reset enable_nestloop;
 
 --
--- test join removal
+-- test join removal for plain tables
+-- we have almost the smare tests for partitioned tables below
 --
 
 begin;
@@ -1645,6 +1646,72 @@ select i8.* from int8_tbl i8 left join (select f1 from int4_tbl group by f1) i4
 explain (costs off)
 select 1 from (select a.id FROM a left join b on a.b_id = b.id) q,
 			  lateral generate_series(1, q.id) gs(i) where q.id = gs.i;
+
+rollback;
+
+--
+-- test join removal for partitioned tables
+-- this is analog to the non partitioned case above
+--
+
+begin;
+
+CREATE TABLE a (id int PRIMARY KEY, b_id int) partition by range(id);
+CREATE TABLE a_m partition of a for values from (0) to (10) partition by range(id);
+CREATE TABLE a_c partition of a_m for values from (0) to (10);
+CREATE TABLE b (id int PRIMARY KEY, c_id int) partition by range(id);
+CREATE TABLE b_m partition of b for values from (0) to (10) partition by range(id);
+CREATE TABLE b_c partition of b_m for values from (0) to (10);
+CREATE TABLE c (id int PRIMARY KEY) partition by range(id);
+CREATE TABLE c_m partition of c for values from (0) to (10) partition by range(id);
+CREATE TABLE c_c partition of c_m for values from (0) to (10);
+CREATE TABLE d (a int, b int) partition by range(a);
+CREATE TABLE d_c partition of d for values from (0) to (10);
+INSERT INTO a VALUES (0, 0), (1, NULL);
+INSERT INTO b VALUES (0, 0), (1, NULL);
+INSERT INTO c VALUES (0), (1);
+INSERT INTO d VALUES (1,3), (2,2), (3,1);
+
+-- all three cases should be optimizable into a simple seqscan
+explain (costs off) SELECT a.* FROM a LEFT JOIN b ON a.b_id = b.id;
+explain (costs off) SELECT b.* FROM b LEFT JOIN c ON b.c_id = c.id;
+explain (costs off)
+  SELECT a.* FROM a LEFT JOIN (b left join c on b.c_id = c.id)
+  ON (a.b_id = b.id);
+
+-- check optimization of outer join within another special join
+explain (costs off)
+select id from a where id in (
+	select b.id from b left join c on b.id = c.id
+);
+
+-- check that join removal works for a left join when joining a subquery
+-- that is guaranteed to be unique by its GROUP BY clause
+explain (costs off)
+select d.* from d left join (select * from b group by b.id, b.c_id) s
+  on d.a = s.id and d.b = s.c_id;
+
+-- similarly, but keying off a DISTINCT clause
+explain (costs off)
+select d.* from d left join (select distinct * from b) s
+  on d.a = s.id and d.b = s.c_id;
+
+-- join removal is not possible when the GROUP BY contains a column that is
+-- not in the join condition.  See above for further notes about this.
+explain (costs off)
+select d.* from d left join (select * from b group by b.id, b.c_id) s
+  on d.a = s.id;
+
+-- similarly, but keying off a DISTINCT clause
+explain (costs off)
+select d.* from d left join (select distinct * from b) s
+  on d.a = s.id;
+
+-- check join removal works when uniqueness of the join condition is enforced
+-- by a UNION
+explain (costs off)
+select d.* from d left join (select id from a union select id from b) s
+  on d.a = s.id;
 
 rollback;
 

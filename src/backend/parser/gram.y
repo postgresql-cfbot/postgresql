@@ -3757,6 +3757,7 @@ opt_column_compression:
 
 column_storage:
 			STORAGE ColId							{ $$ = $2; }
+			| STORAGE DEFAULT						{ $$ = pstrdup("default"); }
 		;
 
 opt_column_storage:

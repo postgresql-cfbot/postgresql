@@ -163,6 +163,16 @@ command_ok(
 	[ 'pg_checksums', '-D', $pgdata ],
 	"verifies checksums as default action");
 
+# Checksums are verified if --progress arguments are specified
+command_ok(
+	[ 'pg_checksums', '--progress', '-D', $pgdata ],
+	"verifies checksums as default action with --progress option");
+
+# Checksums are verified if --verbose arguments are specified
+command_ok(
+	[ 'pg_checksums', '--verbose', '-D', $pgdata ],
+	"verifies checksums as default action with --verbose option");
+
 # Specific relation files cannot be requested when action is --disable
 # or --enable.
 command_fails(

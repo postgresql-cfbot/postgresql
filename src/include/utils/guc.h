@@ -395,6 +395,7 @@ extern int	GetNumConfigOptions(void);
 extern void ProcessGUCArray(ArrayType *array,
 							GucContext context, GucSource source, GucAction action);
 extern ArrayType *GUCArrayAdd(ArrayType *array, const char *name, const char *value);
+extern char * GUCArrayLookup(ArrayType *array, const char *search_name);
 extern ArrayType *GUCArrayDelete(ArrayType *array, const char *name);
 extern ArrayType *GUCArrayReset(ArrayType *array);
 

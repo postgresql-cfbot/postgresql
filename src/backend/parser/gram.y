@@ -702,7 +702,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 	HANDLER HAVING HEADER_P HOLD HOUR_P
 
-	IDENTITY_P IF_P ILIKE IMMEDIATE IMMUTABLE IMPLICIT_P IMPORT_P IN_P INCLUDE
+	IDENTITY_P IF_P IGNORE_ERRORS ILIKE IMMEDIATE IMMUTABLE IMPLICIT_P IMPORT_P IN_P INCLUDE
 	INCLUDING INCREMENT INDEX INDEXES INHERIT INHERITS INITIALLY INLINE_P
 	INNER_P INOUT INPUT_P INSENSITIVE INSERT INSTEAD INT_P INTEGER
 	INTERSECT INTERVAL INTO INVOKER IS ISNULL ISOLATION
@@ -3358,6 +3358,10 @@ copy_opt_item:
 			| FREEZE
 				{
 					$$ = makeDefElem("freeze", (Node *) makeBoolean(true), @1);
+				}
+			| IGNORE_ERRORS
+				{
+					$$ = makeDefElem("ignore_errors", (Node *)makeBoolean(true), @1);
 				}
 			| DELIMITER opt_as Sconst
 				{
@@ -16756,6 +16760,7 @@ unreserved_keyword:
 			| HOUR_P
 			| IDENTITY_P
 			| IF_P
+			| IGNORE_ERRORS
 			| IMMEDIATE
 			| IMMUTABLE
 			| IMPLICIT_P
@@ -17310,6 +17315,7 @@ bare_label_keyword:
 			| HOLD
 			| IDENTITY_P
 			| IF_P
+			| IGNORE_ERRORS
 			| ILIKE
 			| IMMEDIATE
 			| IMMUTABLE

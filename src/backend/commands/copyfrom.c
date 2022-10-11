@@ -106,6 +106,9 @@ static char *limit_printout_length(const char *str);
 
 static void ClosePipeFromProgram(CopyFromState cstate);
 
+static bool FillReplayBuffer(CopyFromState cstate, ExprContext *econtext,
+							 TupleTableSlot *myslot);
+
 /*
  * error context callback for COPY FROM
  *
@@ -522,6 +525,177 @@ CopyMultiInsertInfoStore(CopyMultiInsertInfo *miinfo, ResultRelInfo *rri,
 }
 
 /*
+ * Fills replay_buffer for safe copying, enables by IGNORE_ERRORS option.
+ */
+bool
+FillReplayBuffer(CopyFromState cstate, ExprContext *econtext, TupleTableSlot *myslot)
+{
+	SafeCopyFromState  *sfcstate = cstate->sfcstate;
+	bool 				valid_row = true;
+
+	if (!sfcstate->replay_is_active)
+	{
+		BeginInternalSubTransaction(NULL);
+		CurrentResourceOwner = sfcstate->oldowner;
+
+		while (sfcstate->saved_tuples < REPLAY_BUFFER_SIZE)
+		{
+			bool tuple_is_valid = false;
+
+			PG_TRY();
+			{
+				MemoryContext cxt = MemoryContextSwitchTo(econtext->ecxt_per_tuple_memory);
+
+				valid_row = NextCopyFrom(cstate, econtext, myslot->tts_values, myslot->tts_isnull);
+
+				if (valid_row)
+					tuple_is_valid = true;
+
+				CurrentMemoryContext = cxt;
+			}
+			PG_CATCH();
+			{
+				MemoryContext ecxt = MemoryContextSwitchTo(sfcstate->oldcontext);
+				ErrorData *errdata = CopyErrorData();
+
+				Assert(IsSubTransaction());
+				RollbackAndReleaseCurrentSubTransaction();
+				CurrentResourceOwner = sfcstate->oldowner;
+
+				switch (errdata->sqlerrcode)
+				{
+					/* Ignore data exceptions */
+					case ERRCODE_CHARACTER_NOT_IN_REPERTOIRE:
+					case ERRCODE_DATA_EXCEPTION:
+					case ERRCODE_ARRAY_ELEMENT_ERROR:
+					case ERRCODE_DATETIME_VALUE_OUT_OF_RANGE:
+					case ERRCODE_INTERVAL_FIELD_OVERFLOW:
+					case ERRCODE_INVALID_CHARACTER_VALUE_FOR_CAST:
+					case ERRCODE_INVALID_DATETIME_FORMAT:
+					case ERRCODE_INVALID_ESCAPE_CHARACTER:
+					case ERRCODE_INVALID_ESCAPE_SEQUENCE:
+					case ERRCODE_NONSTANDARD_USE_OF_ESCAPE_CHARACTER:
+					case ERRCODE_INVALID_PARAMETER_VALUE:
+					case ERRCODE_INVALID_TABLESAMPLE_ARGUMENT:
+					case ERRCODE_INVALID_TIME_ZONE_DISPLACEMENT_VALUE:
+					case ERRCODE_NULL_VALUE_NOT_ALLOWED:
+					case ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE:
+					case ERRCODE_SEQUENCE_GENERATOR_LIMIT_EXCEEDED:
+					case ERRCODE_STRING_DATA_LENGTH_MISMATCH:
+					case ERRCODE_STRING_DATA_RIGHT_TRUNCATION:
+					case ERRCODE_INVALID_TEXT_REPRESENTATION:
+					case ERRCODE_INVALID_BINARY_REPRESENTATION:
+					case ERRCODE_BAD_COPY_FILE_FORMAT:
+					case ERRCODE_UNTRANSLATABLE_CHARACTER:
+					case ERRCODE_DUPLICATE_JSON_OBJECT_KEY_VALUE:
+					case ERRCODE_INVALID_ARGUMENT_FOR_SQL_JSON_DATETIME_FUNCTION:
+					case ERRCODE_INVALID_JSON_TEXT:
+					case ERRCODE_INVALID_SQL_JSON_SUBSCRIPT:
+					case ERRCODE_MORE_THAN_ONE_SQL_JSON_ITEM:
+					case ERRCODE_NO_SQL_JSON_ITEM:
+					case ERRCODE_NON_NUMERIC_SQL_JSON_ITEM:
+					case ERRCODE_NON_UNIQUE_KEYS_IN_A_JSON_OBJECT:
+					case ERRCODE_SINGLETON_SQL_JSON_ITEM_REQUIRED:
+					case ERRCODE_SQL_JSON_ARRAY_NOT_FOUND:
+					case ERRCODE_SQL_JSON_MEMBER_NOT_FOUND:
+					case ERRCODE_SQL_JSON_NUMBER_NOT_FOUND:
+					case ERRCODE_SQL_JSON_OBJECT_NOT_FOUND:
+					case ERRCODE_TOO_MANY_JSON_ARRAY_ELEMENTS:
+					case ERRCODE_TOO_MANY_JSON_OBJECT_MEMBERS:
+					case ERRCODE_SQL_JSON_SCALAR_REQUIRED:
+					case ERRCODE_SQL_JSON_ITEM_CANNOT_BE_CAST_TO_TARGET_TYPE:
+						/* If the error can be processed, begin a new subtransaction */
+						BeginInternalSubTransaction(NULL);
+						CurrentResourceOwner = sfcstate->oldowner;
+
+						sfcstate->errors++;
+						if (sfcstate->errors <= 100)
+							ereport(WARNING,
+									(errcode(errdata->sqlerrcode),
+									errmsg("%s", errdata->context)));
+						break;
+					default:
+						PG_RE_THROW();
+						break;
+				}
+
+				FlushErrorState();
+				FreeErrorData(errdata);
+				errdata = NULL;
+
+				MemoryContextSwitchTo(ecxt);
+			}
+			PG_END_TRY();
+
+			if (tuple_is_valid)
+			{
+				/* Filling replay_buffer in Replay_context */
+				MemoryContext cxt = MemoryContextSwitchTo(sfcstate->replay_cxt);
+				HeapTuple saved_tuple;
+
+				saved_tuple = heap_form_tuple(RelationGetDescr(cstate->rel), myslot->tts_values, myslot->tts_isnull);
+				sfcstate->replay_buffer[sfcstate->saved_tuples++] = saved_tuple;
+
+				MemoryContextSwitchTo(cxt);
+			}
+
+			MemoryContextSwitchTo(econtext->ecxt_per_tuple_memory);
+			ExecClearTuple(myslot);
+
+			if (!valid_row)
+				break;
+		}
+
+		ReleaseCurrentSubTransaction();
+		CurrentResourceOwner = sfcstate->oldowner;
+
+		/* End of file or buffer was filled, prepare to replay remaining tuples from buffer */
+		sfcstate->replay_is_active = true;
+	}
+
+	if (sfcstate->replay_is_active)
+	{
+		if (sfcstate->replayed_tuples < sfcstate->saved_tuples)
+		{
+			/* Replaying the tuple */
+			MemoryContext cxt = MemoryContextSwitchTo(sfcstate->replay_cxt);
+
+			heap_deform_tuple(sfcstate->replay_buffer[sfcstate->replayed_tuples++], RelationGetDescr(cstate->rel),
+							  myslot->tts_values, myslot->tts_isnull);
+			MemoryContextSwitchTo(cxt);
+		}
+		else
+		{
+			/* All tuples from buffer were replayed, clean it up */
+			MemoryContextReset(sfcstate->replay_cxt);
+			sfcstate->saved_tuples = sfcstate->replayed_tuples = 0;
+
+			sfcstate->replay_buffer = MemoryContextAlloc(cstate->sfcstate->replay_cxt,
+														 REPLAY_BUFFER_SIZE * sizeof(HeapTuple));
+			sfcstate->replay_is_active = false;
+
+			if (!valid_row)
+			{
+				/* All tuples were replayed */
+				if (sfcstate->errors == 0)
+					ereport(NOTICE,
+							errmsg("%d errors", sfcstate->errors));
+				else if (sfcstate->errors == 1)
+					ereport(WARNING,
+							errmsg("%d error", sfcstate->errors));
+				else
+					ereport(WARNING,
+							errmsg("%d errors", sfcstate->errors));
+
+				return false;
+			}
+		}
+	}
+
+	return true;
+}
+
+/*
  * Copy FROM file to relation.
  */
 uint64
@@ -855,9 +1029,19 @@ CopyFrom(CopyFromState cstate)
 
 		ExecClearTuple(myslot);
 
-		/* Directly store the values/nulls array in the slot */
-		if (!NextCopyFrom(cstate, econtext, myslot->tts_values, myslot->tts_isnull))
-			break;
+		if (cstate->sfcstate)
+		{
+			/* If option IGNORE_ERRORS is enabled, COPY skips rows with errors */
+			if (!FillReplayBuffer(cstate, econtext, myslot))
+				break;
+
+			if (!cstate->sfcstate->replay_is_active)
+				continue;
+		}
+		else
+			/* Directly store the values/nulls array in the slot */
+			if (!NextCopyFrom(cstate, econtext, myslot->tts_values, myslot->tts_isnull))
+				break;
 
 		ExecStoreVirtualTuple(myslot);
 
@@ -1548,6 +1732,25 @@ BeginCopyFrom(ParseState *pstate,
 
 		cstate->max_fields = attr_count;
 		cstate->raw_fields = (char **) palloc(attr_count * sizeof(char *));
+	}
+
+	/* Initialize safeCopyFromState for IGNORE_ERRORS option */
+	if (cstate->opts.ignore_errors)
+	{
+		cstate->sfcstate = palloc(sizeof(SafeCopyFromState));
+
+		cstate->sfcstate->replay_cxt = AllocSetContextCreate(oldcontext,
+									   "Replay_context",
+									   ALLOCSET_DEFAULT_SIZES);
+		cstate->sfcstate->replay_buffer = MemoryContextAlloc(cstate->sfcstate->replay_cxt,
+										  REPLAY_BUFFER_SIZE * sizeof(HeapTuple));
+		cstate->sfcstate->saved_tuples = 0;
+		cstate->sfcstate->replayed_tuples = 0;
+		cstate->sfcstate->errors = 0;
+		cstate->sfcstate->replay_is_active = false;
+
+		cstate->sfcstate->oldowner = CurrentResourceOwner;
+		cstate->sfcstate->oldcontext = cstate->copycontext;
 	}
 
 	MemoryContextSwitchTo(oldcontext);

@@ -399,6 +399,9 @@ verify_heapam(PG_FUNCTION_ARGS)
 	for (ctx.blkno = first_block; ctx.blkno <= last_block; ctx.blkno++)
 	{
 		OffsetNumber maxoff;
+		OffsetNumber predecessor[MaxOffsetNumber] = {0};
+		OffsetNumber successor[MaxOffsetNumber] = {0};
+		bool		lp_valid[MaxOffsetNumber] = {false};
 
 		CHECK_FOR_INTERRUPTS();
 
@@ -433,6 +436,8 @@ verify_heapam(PG_FUNCTION_ARGS)
 		for (ctx.offnum = FirstOffsetNumber; ctx.offnum <= maxoff;
 			 ctx.offnum = OffsetNumberNext(ctx.offnum))
 		{
+			OffsetNumber nextoffnum;
+
 			ctx.itemid = PageGetItemId(ctx.page, ctx.offnum);
 
 			/* Skip over unused/dead line pointers */
@@ -469,6 +474,13 @@ verify_heapam(PG_FUNCTION_ARGS)
 					report_corruption(&ctx,
 									  psprintf("line pointer redirection to unused item at offset %u",
 											   (unsigned) rdoffnum));
+
+				/*
+				 * make entry in successor array, redirected tuple will be
+				 * validated at the time when we loop over successor array
+				 */
+				successor[ctx.offnum] = rdoffnum;
+				lp_valid[ctx.offnum] = true;
 				continue;
 			}
 
@@ -504,9 +516,197 @@ verify_heapam(PG_FUNCTION_ARGS)
 			/* It should be safe to examine the tuple's header, at least */
 			ctx.tuphdr = (HeapTupleHeader) PageGetItem(ctx.page, ctx.itemid);
 			ctx.natts = HeapTupleHeaderGetNatts(ctx.tuphdr);
+			lp_valid[ctx.offnum] = true;
 
 			/* Ok, ready to check this next tuple */
 			check_tuple(&ctx);
+
+			/*
+			 * Add the data to the successor array if next updated tuple is in
+			 * the same page. It will be used later to generate the
+			 * predecessor array.
+			 *
+			 * We need to access the tuple's header to populate the
+			 * predecessor array. However the tuple is not necessarily sanity
+			 * checked yet so delaying construction of predecessor array until
+			 * all tuples are sanity checked.
+			 */
+			nextoffnum = ItemPointerGetOffsetNumber(&(ctx.tuphdr)->t_ctid);
+			if (ItemPointerGetBlockNumber(&(ctx.tuphdr)->t_ctid) == ctx.blkno &&
+				nextoffnum != ctx.offnum)
+			{
+				successor[ctx.offnum] = nextoffnum;
+			}
+		}
+
+		/*
+		 * Loop over offset and populate predecessor array from all entries
+		 * that are present in successor array.
+		 */
+		ctx.attnum = -1;
+		for (ctx.offnum = FirstOffsetNumber; ctx.offnum <= maxoff;
+			 ctx.offnum = OffsetNumberNext(ctx.offnum))
+		{
+			ItemId		curr_lp;
+			ItemId		next_lp;
+			HeapTupleHeader curr_htup;
+			HeapTupleHeader next_htup;
+			TransactionId curr_xmax;
+			TransactionId next_xmin;
+
+			OffsetNumber nextoffnum = successor[ctx.offnum];
+
+			curr_lp = PageGetItemId(ctx.page, ctx.offnum);
+			if (nextoffnum == 0 || !lp_valid[ctx.offnum] || !lp_valid[nextoffnum])
+			{
+				/*
+				 * This is either the last updated tuple in the chain or a
+				 * corruption raised for this tuple.
+				 */
+				continue;
+			}
+			if (ItemIdIsRedirected(curr_lp))
+			{
+				next_lp = PageGetItemId(ctx.page, nextoffnum);
+				if (ItemIdIsRedirected(next_lp))
+				{
+					report_corruption(&ctx,
+									  psprintf("redirected line pointer pointing to another redirected line pointer at offset %u",
+											   (unsigned) nextoffnum));
+					continue;
+				}
+				next_htup = (HeapTupleHeader) PageGetItem(ctx.page, next_lp);
+				if (!HeapTupleHeaderIsHeapOnly(next_htup))
+				{
+					report_corruption(&ctx,
+									  psprintf("redirected tuple at line pointer offset %u is not heap only tuple",
+											   (unsigned) nextoffnum));
+				}
+				if ((next_htup->t_infomask & HEAP_UPDATED) == 0)
+				{
+					report_corruption(&ctx,
+									  psprintf("redirected tuple at line pointer offset %u is not heap updated tuple",
+											   (unsigned) nextoffnum));
+				}
+				continue;
+			}
+
+			/*
+			 * Add a line pointer offset to the predecessor array if xmax is
+			 * matching with xmin of next tuple (reaching via its t_ctid).
+			 * Prior to PostgreSQL 9.4, we actually changed the xmin to
+			 * FrozenTransactionId so we must add offset to predecessor
+			 * array(irrespective of xmax-xmin matching) if updated tuple xmin
+			 * is frozen, so that we can later do validation related to frozen
+			 * xmin. Raise corruption if we have two tuples having the same
+			 * predecessor.
+			 *
+			 * We add the offset to the predecessor array irrespective of the
+			 * transaction (t_xmin) status. We will do validation related to
+			 * the transaction status (and also all other validations) when we
+			 * loop over the predecessor array.
+			 */
+			curr_htup = (HeapTupleHeader) PageGetItem(ctx.page, curr_lp);
+			curr_xmax = HeapTupleHeaderGetUpdateXid(curr_htup);
+
+			next_lp = PageGetItemId(ctx.page, nextoffnum);
+			next_htup = (HeapTupleHeader) PageGetItem(ctx.page, next_lp);
+			next_xmin = HeapTupleHeaderGetXmin(next_htup);
+			if (TransactionIdIsValid(curr_xmax) &&
+				(TransactionIdEquals(curr_xmax, next_xmin) ||
+				 next_xmin == FrozenTransactionId))
+			{
+				if (predecessor[nextoffnum] != 0)
+				{
+					report_corruption(&ctx,
+									  psprintf("updated version at offset %u is also the updated version of tuple at offset %u",
+											   (unsigned) nextoffnum, (unsigned) predecessor[nextoffnum]));
+					continue;
+				}
+				predecessor[nextoffnum] = ctx.offnum;
+			}
+			/* Non matching xmax with xmin is not a corruption */
+
+		}
+
+		/* Loop over offsets and validate the data in the predecessor array. */
+		for (OffsetNumber currentoffnum = FirstOffsetNumber; currentoffnum <= maxoff;
+			 currentoffnum = OffsetNumberNext(currentoffnum))
+		{
+			HeapTupleHeader pred_htup;
+			HeapTupleHeader curr_htup;
+			TransactionId pred_xmin;
+			TransactionId curr_xmin;
+			ItemId		pred_lp;
+			ItemId		curr_lp;
+
+			ctx.offnum = predecessor[currentoffnum];
+			ctx.attnum = -1;
+
+			if (ctx.offnum == 0)
+			{
+				/*
+				 * Either the root of the chain or an xmin-aborted tuple from
+				 * an abandoned portion of the HOT chain.
+				 */
+				continue;
+			}
+
+			curr_lp = PageGetItemId(ctx.page, currentoffnum);
+			curr_htup = (HeapTupleHeader) PageGetItem(ctx.page, curr_lp);
+			curr_xmin = HeapTupleHeaderGetXmin(curr_htup);
+
+			ctx.itemid = pred_lp = PageGetItemId(ctx.page, ctx.offnum);
+			pred_htup = (HeapTupleHeader) PageGetItem(ctx.page, pred_lp);
+			pred_xmin = HeapTupleHeaderGetXmin(pred_htup);
+
+			/*
+			 * If the predecessor's xmin is aborted or in progress, the
+			 * current tuples xmin should be aborted or in progress
+			 * respectively. Also both xmin's must be equal.
+			 */
+			if (!TransactionIdEquals(pred_xmin, curr_xmin) &&
+				!TransactionIdDidCommit(pred_xmin))
+			{
+				report_corruption(&ctx,
+								  psprintf("tuple with uncommitted xmin %u was updated to produce a tuple at offset %u with differing xmin %u",
+										   (unsigned) pred_xmin, (unsigned) currentoffnum, (unsigned) curr_xmin));
+			}
+
+			/*
+			 * If the predecessor's xmin is not frozen, then current tuple's
+			 * shouldn't be either.
+			 */
+			if (pred_xmin != FrozenTransactionId && curr_xmin == FrozenTransactionId)
+			{
+				report_corruption(&ctx,
+								  psprintf("unfrozen tuple was updated to produce a tuple at offset %u which is frozen",
+										   (unsigned) currentoffnum));
+			}
+
+			/*
+			 * If the current tuple is HOT then it's predecessor's tuple must
+			 * be HEAP_HOT_UPDATED.
+			 */
+			if (!HeapTupleHeaderIsHotUpdated(pred_htup) &&
+				HeapTupleHeaderIsHeapOnly(curr_htup))
+			{
+				report_corruption(&ctx,
+								  psprintf("non-heap-only update produced a heap-only tuple at offset %u",
+										   (unsigned) currentoffnum));
+			}
+
+			/*
+			 * If the current tuple is not HOT then its predecessor's tuple
+			 * must not be HEAP_HOT_UPDATED.
+			 */
+			if (HeapTupleHeaderIsHotUpdated(pred_htup) &&
+				!HeapTupleHeaderIsHeapOnly(curr_htup))
+			{
+				report_corruption(&ctx,
+								  psprintf("heap-only update produced a non-heap only tuple at offset %u",
+										   (unsigned) currentoffnum));
+			}
 		}
 
 		/* clean up */
@@ -638,6 +838,7 @@ check_tuple_header(HeapCheckContext *ctx)
 {
 	HeapTupleHeader tuphdr = ctx->tuphdr;
 	uint16		infomask = tuphdr->t_infomask;
+	TransactionId curr_xmax = HeapTupleHeaderGetUpdateXid(tuphdr);
 	bool		result = true;
 	unsigned	expected_hoff;
 
@@ -649,6 +850,12 @@ check_tuple_header(HeapCheckContext *ctx)
 		result = false;
 	}
 
+	if (!TransactionIdIsValid(curr_xmax) && HeapTupleHeaderIsHotUpdated(tuphdr))
+	{
+		report_corruption(ctx,
+						  psprintf("tuple has been HOT updated, but xmax is 0"));
+		result = false;
+	}
 	if ((ctx->tuphdr->t_infomask & HEAP_XMAX_COMMITTED) &&
 		(ctx->tuphdr->t_infomask & HEAP_XMAX_IS_MULTI))
 	{

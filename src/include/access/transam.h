@@ -301,6 +301,9 @@ extern void AssertTransactionIdInAllowableRange(TransactionId xid);
 #define AssertTransactionIdInAllowableRange(xid) ((void)true)
 #endif
 
+/* in transam/clog.c */
+extern bool TransactionIdsAreOnSameXactPage(TransactionId topxid, TransactionId subxid);
+
 /*
  * Some frontend programs include this header.  For compilers that emit static
  * inline functions even when they're unused, that leads to unsatisfied

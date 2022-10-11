@@ -263,6 +263,13 @@ static ProcArrayStruct *procArray;
 static PGPROC *allProcs;
 
 /*
+ * Remember the last call to TransactionIdIsInProgress() to avoid need to call
+ * SubTransGetTopMostTransaction() when the subxid is present in the procarray.
+ */
+static TransactionId LastCallXidIsInProgressSubXid = InvalidTransactionId;
+static TransactionId LastCallXidIsInProgressParentXid = InvalidTransactionId;
+
+/*
  * Cache to reduce overhead of repeated calls to TransactionIdIsInProgress()
  */
 static TransactionId cachedXidIsNotInProgress = InvalidTransactionId;
@@ -1310,14 +1317,14 @@ ProcArrayApplyXidAssignment(TransactionId topxid,
 
 	/*
 	 * Notice that we update pg_subtrans with the top-level xid, rather than
-	 * the parent xid. This is a difference between normal processing and
-	 * recovery, yet is still correct in all cases. The reason is that
+	 * the parent xid, which is correct in all cases. The reason is that
 	 * subtransaction commit is not marked in clog until commit processing, so
 	 * all aborted subtransactions have already been clearly marked in clog.
 	 * As a result we are able to refer directly to the top-level
 	 * transaction's state rather than skipping through all the intermediate
 	 * states in the subtransaction tree. This should be the first time we
-	 * have attempted to SubTransSetParent().
+	 * have attempted to SubTransSetParent() for this xid in recovery.
+	 * XXX this may be optimized later, but we don't have good test coverage.
 	 */
 	for (i = 0; i < nsubxids; i++)
 		SubTransSetParent(subxids[i], topxid);
@@ -1441,6 +1448,8 @@ TransactionIdIsInProgress(TransactionId xid)
 	other_xids = ProcGlobal->xids;
 	other_subxidstates = ProcGlobal->subxidStates;
 
+	LastCallXidIsInProgressSubXid = LastCallXidIsInProgressParentXid = InvalidTransactionId;
+
 	LWLockAcquire(ProcArrayLock, LW_SHARED);
 
 	/*
@@ -1509,6 +1518,15 @@ TransactionIdIsInProgress(TransactionId xid)
 			{
 				LWLockRelease(ProcArrayLock);
 				xc_by_child_xid_inc();
+
+				/*
+				 * Remember the parent xid, for use during XactLockTableWait().
+				 * We do this because it is cheaper than looking up pg_subtrans,
+				 * and also allows us to reduce calls to subtrans.
+				 */
+				LastCallXidIsInProgressSubXid = xid;
+				LastCallXidIsInProgressParentXid = pxid;
+
 				return true;
 			}
 		}
@@ -1589,10 +1607,36 @@ TransactionIdIsInProgress(TransactionId xid)
 	Assert(TransactionIdIsValid(topxid));
 	if (!TransactionIdEquals(topxid, xid) &&
 		pg_lfind32(topxid, xids, nxids))
+	{
+		LastCallXidIsInProgressSubXid = xid;
+		LastCallXidIsInProgressParentXid = topxid;
 		return true;
+	}
 
 	cachedXidIsNotInProgress = xid;
 	return false;
+}
+
+/*
+ * Allow the topmost xid to be accessed from the last call to
+ * TransactionIdIsInProgress(). Specifically designed for use in
+ * XactLockTableWait().
+ */
+bool
+GetTopmostTransactionIdFromProcArray(TransactionId xid, TransactionId *pxid)
+{
+	bool found = false;
+
+	Assert(TransactionIdIsNormal(xid));
+
+	if (LastCallXidIsInProgressSubXid == xid)
+	{
+		Assert(TransactionIdIsNormal(LastCallXidIsInProgressParentXid));
+		*pxid = LastCallXidIsInProgressParentXid;
+		found = true;
+	}
+
+	return found;
 }
 
 /*
@@ -2366,27 +2410,34 @@ GetSnapshotData(Snapshot snapshot)
 			 *
 			 * Again, our own XIDs are not included in the snapshot.
 			 */
-			if (!suboverflowed)
+			if (subxidStates[pgxactoff].overflowed)
+				suboverflowed = true;
+
+			/*
+			 * Include all subxids, whether or not we overflowed. This is
+			 * important because it can reduce the number of accesses to SUBTRANS
+			 * when we search snapshots, which is important for scalability,
+			 * especially in the presence of both overflowed and long running xacts.
+			 * This is true when fraction of subxids held in subxip is a large
+			 * fraction of the total subxids in use. In the case where one or more
+			 * transactions had more subxids in progress than the total size of
+			 * the cache this might not be true, but we consider that case to be
+			 * unlikely, even if it is possible.
+			 */
 			{
+				int			nsubxids = subxidStates[pgxactoff].count;
 
-				if (subxidStates[pgxactoff].overflowed)
-					suboverflowed = true;
-				else
+				if (nsubxids > 0)
 				{
-					int			nsubxids = subxidStates[pgxactoff].count;
+					int			pgprocno = pgprocnos[pgxactoff];
+					PGPROC	   *proc = &allProcs[pgprocno];
 
-					if (nsubxids > 0)
-					{
-						int			pgprocno = pgprocnos[pgxactoff];
-						PGPROC	   *proc = &allProcs[pgprocno];
+					pg_read_barrier();	/* pairs with GetNewTransactionId */
 
-						pg_read_barrier();	/* pairs with GetNewTransactionId */
-
-						memcpy(snapshot->subxip + subcount,
-							   (void *) proc->subxids.xids,
-							   nsubxids * sizeof(TransactionId));
-						subcount += nsubxids;
-					}
+					memcpy(snapshot->subxip + subcount,
+						   (void *) proc->subxids.xids,
+						   nsubxids * sizeof(TransactionId));
+					subcount += nsubxids;
 				}
 			}
 		}

@@ -694,6 +694,8 @@ XactLockTableWait(TransactionId xid, Relation rel, ItemPointer ctid,
 
 	for (;;)
 	{
+		TransactionId pxid = InvalidTransactionId;
+
 		Assert(TransactionIdIsValid(xid));
 		Assert(!TransactionIdEquals(xid, GetTopTransactionIdIfAny()));
 
@@ -703,6 +705,13 @@ XactLockTableWait(TransactionId xid, Relation rel, ItemPointer ctid,
 
 		LockRelease(&tag, ShareLock, false);
 
+		/*
+		 * If a transaction has no lock, it might be a top-level transaction,
+		 * in which case the procarray will show it as not in progress.
+		 *
+		 * If a transaction is a subtransaction, then it could have committed
+		 * or aborted, yet the top-level transaction may still be in progress.
+		 */
 		if (!TransactionIdIsInProgress(xid))
 			break;
 
@@ -724,7 +733,27 @@ XactLockTableWait(TransactionId xid, Relation rel, ItemPointer ctid,
 		if (!first)
 			pg_usleep(1000L);
 		first = false;
-		xid = SubTransGetTopmostTransaction(xid);
+
+		/*
+		 * In most cases, we can get the parent xid from our prior call to
+		 * TransactionIdIsInProgress(), except in hot standby. If not, we have
+		 * to ask subtrans for the parent.
+		 */
+		if (GetTopmostTransactionIdFromProcArray(xid, &pxid))
+		{
+			/* TESTED-BY src/test/isolation/specs/subx-overflow.spec test3 */
+			Assert(TransactionIdIsValid(pxid));
+			xid = pxid;
+		}
+		else
+		{
+			/*
+			 * We can get here if RecoveryInProgress() during the last call to
+			 * TransactionIdIsInProgress(), but we don't Assert that here since
+			 * that would create a race window against the end of recovery.
+			 */
+			xid = SubTransGetTopmostTransaction(xid);
+		}
 	}
 
 	if (oper != XLTW_None)
@@ -745,6 +774,8 @@ ConditionalXactLockTableWait(TransactionId xid)
 
 	for (;;)
 	{
+		TransactionId pxid = InvalidTransactionId;
+
 		Assert(TransactionIdIsValid(xid));
 		Assert(!TransactionIdEquals(xid, GetTopTransactionIdIfAny()));
 
@@ -762,7 +793,15 @@ ConditionalXactLockTableWait(TransactionId xid)
 		if (!first)
 			pg_usleep(1000L);
 		first = false;
-		xid = SubTransGetTopmostTransaction(xid);
+
+		/* See XactLockTableWait about this case */
+		if (GetTopmostTransactionIdFromProcArray(xid, &pxid))
+		{
+			Assert(TransactionIdIsValid(pxid));
+			xid = pxid;
+		}
+		else
+			xid = SubTransGetTopmostTransaction(xid);
 	}
 
 	return true;

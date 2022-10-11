@@ -639,13 +639,9 @@ CopySnapshot(Snapshot snapshot)
 		newsnap->xip = NULL;
 
 	/*
-	 * Setup subXID array. Don't bother to copy it if it had overflowed,
-	 * though, because it's not used anywhere in that case. Except if it's a
-	 * snapshot taken during recovery; all the top-level XIDs are in subxip as
-	 * well in that case, so we mustn't lose them.
+	 * Setup subXID array.
 	 */
-	if (snapshot->subxcnt > 0 &&
-		(!snapshot->suboverflowed || snapshot->takenDuringRecovery))
+	if (snapshot->subxcnt > 0)
 	{
 		newsnap->subxip = (TransactionId *) ((char *) newsnap + subxipoff);
 		memcpy(newsnap->subxip, snapshot->subxip,
@@ -1240,8 +1236,10 @@ ExportSnapshot(Snapshot snapshot)
 		snapshot->subxcnt + nchildren > GetMaxSnapshotSubxidCount())
 		appendStringInfoString(&buf, "sof:1\n");
 	else
-	{
 		appendStringInfoString(&buf, "sof:0\n");
+
+	/* then unconditionally, since we always include all subxids */
+	{
 		appendStringInfo(&buf, "sxcnt:%d\n", snapshot->subxcnt + nchildren);
 		for (i = 0; i < snapshot->subxcnt; i++)
 			appendStringInfo(&buf, "sxp:%u\n", snapshot->subxip[i]);
@@ -1492,7 +1490,7 @@ ImportSnapshot(const char *idstr)
 
 	snapshot.suboverflowed = parseIntFromText("sof:", &filebuf, path);
 
-	if (!snapshot.suboverflowed)
+	/* then unconditionally, since we always include all subxids */
 	{
 		snapshot.subxcnt = xcnt = parseIntFromText("sxcnt:", &filebuf, path);
 
@@ -1505,11 +1503,6 @@ ImportSnapshot(const char *idstr)
 		snapshot.subxip = (TransactionId *) palloc(xcnt * sizeof(TransactionId));
 		for (i = 0; i < xcnt; i++)
 			snapshot.subxip[i] = parseXidFromText("sxp:", &filebuf, path);
-	}
-	else
-	{
-		snapshot.subxcnt = 0;
-		snapshot.subxip = NULL;
 	}
 
 	snapshot.takenDuringRecovery = parseIntFromText("rec:", &filebuf, path);
@@ -2286,6 +2279,8 @@ RestoreTransactionSnapshot(Snapshot snapshot, void *source_pgproc)
 bool
 XidInMVCCSnapshot(TransactionId xid, Snapshot snapshot)
 {
+	bool		have_parent = false;
+
 	/*
 	 * Make a quick range check to eliminate most XIDs without looking at the
 	 * xip arrays.  Note that this is OK even if we convert a subxact XID to
@@ -2302,79 +2297,75 @@ XidInMVCCSnapshot(TransactionId xid, Snapshot snapshot)
 		return true;
 
 	/*
+	 * This patch reorders the operations in XidMVCCSnapshot, so as to reduce
+	 * calls to SubTransGetParent to the absolute minimum needed.
+	 * The previous code was neat, but not efficient for the overflow case.
+	 */
+retry_search:
+
+	/*
 	 * Snapshot information is stored slightly differently in snapshots taken
-	 * during recovery.
+	 * during recovery. xip is empty on standbys.
 	 */
 	if (!snapshot->takenDuringRecovery)
 	{
-		/*
-		 * If the snapshot contains full subxact data, the fastest way to
-		 * check things is just to compare the given XID against both subxact
-		 * XIDs and top-level XIDs.  If the snapshot overflowed, we have to
-		 * use pg_subtrans to convert a subxact XID to its parent XID, but
-		 * then we need only look at top-level XIDs not subxacts.
-		 */
-		if (!snapshot->suboverflowed)
-		{
-			/* we have full data, so search subxip */
-			if (pg_lfind32(xid, snapshot->subxip, snapshot->subxcnt))
-				return true;
-
-			/* not there, fall through to search xip[] */
-		}
-		else
-		{
-			/*
-			 * Snapshot overflowed, so convert xid to top-level.  This is safe
-			 * because we eliminated too-old XIDs above.
-			 */
-			xid = SubTransGetTopmostTransaction(xid);
-
-			/*
-			 * If xid was indeed a subxact, we might now have an xid < xmin,
-			 * so recheck to avoid an array scan.  No point in rechecking
-			 * xmax.
-			 */
-			if (TransactionIdPrecedes(xid, snapshot->xmin))
-				return false;
-		}
-
 		if (pg_lfind32(xid, snapshot->xip, snapshot->xcnt))
 			return true;
+
+		/*
+		 * If we have the parent xid, then the xid is not in snapshot
+		 */
+		if (have_parent)
+			return false;
 	}
-	else
+
+	/*
+	 * Now search subxip, which contains first 64 subxids of each topxid.
+	 */
+	if (pg_lfind32(xid, snapshot->subxip, snapshot->subxcnt))
+		return true;
+
+	if (!have_parent && snapshot->suboverflowed)
 	{
+		TransactionId pxid;
+
+		/* TESTED-BY src/test/isolation/specs/subx-overflow.spec test1 and test2 */
+
 		/*
-		 * In recovery we store all xids in the subxact array because it is by
-		 * far the bigger array, and we mostly don't know which xids are
-		 * top-level and which are subxacts. The xip array is empty.
+		 * If we haven't found xid yet, it might be because it is a subxid
+		 * that is not present because we overflowed, but it might also be
+		 * because the xid is not in the snapshot.
 		 *
-		 * We start by searching subtrans, if we overflowed.
+		 * It is important we do this step last because it is expensive,
+		 * and if everybody does this then SubTransSLRU glows white hot.
 		 */
-		if (snapshot->suboverflowed)
-		{
-			/*
-			 * Snapshot overflowed, so convert xid to top-level.  This is safe
-			 * because we eliminated too-old XIDs above.
-			 */
-			xid = SubTransGetTopmostTransaction(xid);
-
-			/*
-			 * If xid was indeed a subxact, we might now have an xid < xmin,
-			 * so recheck to avoid an array scan.  No point in rechecking
-			 * xmax.
-			 */
-			if (TransactionIdPrecedes(xid, snapshot->xmin))
-				return false;
-		}
 
 		/*
-		 * We now have either a top-level xid higher than xmin or an
-		 * indeterminate xid. We don't know whether it's top level or subxact
-		 * but it doesn't matter. If it's present, the xid is visible.
+		 * Snapshot overflowed, so convert xid to top-level.  This is safe
+		 * because we eliminated too-old XIDs above. Every overflowed subxid
+		 * will always have a parent recorded during AssignTransactionId()
+		 * so this should always return a valid TransactionId, if a subxact.
 		 */
-		if (pg_lfind32(xid, snapshot->subxip, snapshot->subxcnt))
-			return true;
+		pxid = SubTransGetTopmostTransaction(xid);
+
+		/*
+		 * If xid was indeed a subxact, we might now have an xid < xmin,
+		 * so recheck to avoid an array scan.  No point in rechecking
+		 * xmax. If it wasn't a subxact, pxid will be invalid, so this test
+		 * will do the right thing also.
+		 */
+		if (TransactionIdPrecedes(pxid, snapshot->xmin))
+			return false;
+
+		/*
+		 * Check whether xid was a subxact. If we now have a parent xid, loop.
+		 */
+		if (TransactionIdPrecedes(pxid, xid))
+		{
+			xid = pxid;
+			have_parent = true;
+			goto retry_search; /* search arrays again, now we have parent */
+		}
 	}
 
 	return false;

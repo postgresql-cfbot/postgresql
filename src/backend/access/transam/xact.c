@@ -693,8 +693,53 @@ AssignTransactionId(TransactionState s)
 		XactTopFullTransactionId = s->fullTransactionId;
 
 	if (isSubXact)
-		SubTransSetParent(XidFromFullTransactionId(s->fullTransactionId),
-						  XidFromFullTransactionId(s->parent->fullTransactionId));
+	{
+		TransactionId subxid = XidFromFullTransactionId(s->fullTransactionId);
+		TransactionId topxid = GetTopTransactionId();
+
+		/*
+		 * Subtrans entries are only required in specific circumstances:
+		 *
+		 * 1. When there's no room in PG_PROC, as mentioned above.
+		 *    During XactLockTableWait() we sometimes need to know the topxid.
+		 *    If there is room in PG_PROC we can get a subxid's topxid direct
+		 *    from the procarray if the topxid is still running, using
+		 *    GetTopmostTransactionIdFromProcArray(). So we only ever need to
+		 *    call SubTransGetTopmostTransaction() if that xact overflowed;
+		 *    since that is our current transaction, we know whether or not to
+		 *    log the xid for future use.
+		 *    This occurs only when large number of subxids are requested by
+		 *    app user.
+		 *
+		 * 2. When IsolationIsSerializable() we sometimes need to access topxid.
+		 *    This occurs only when SERIALIZABLE is requested by app user.
+		 *
+		 * 3. When TransactionIdSetTreeStatus() will use status SUB_COMMITTED,
+		 *    which then requires us to consult subtrans to find parent, which
+		 *    is needed to avoid race condition. In this case we ask Clog/Xact
+		 *    module if TransactionIdsAreOnSameXactPage(). Since we start a new
+		 *    clog page every 32000 xids, this is usually <<1% of subxids,
+		 *    depending upon how far apart the subxacts assign subxids.
+		 */
+		if (MyProc->subxidStatus.overflowed ||
+			IsolationIsSerializable() ||
+			!TransactionIdsAreOnSameXactPage(topxid, subxid))
+		{
+			/*
+			 * Insert entries into subtrans for this xid, noting that the entry
+			 * points directly to the topxid, not the immediate parent. This is
+			 * done for two reasons:
+			 * (1) so it is faster in a long chain of subxids, because the
+			 * algorithm is then O(1), no matter how many subxids are assigned.
+			 * (2) so that we don't need to set subxids for unregistered parents.
+			 * Previously when we set the parent to be the immediate parent,
+			 * we then had to set the parent in all cases to maintain the chain
+			 * of values to reach the topxid. If all subxids point to topxid,
+			 * then they are independent of each other and we can skip some.
+			 */
+			SubTransSetParent(subxid, topxid);
+		}
+	}
 
 	/*
 	 * If it's a top-level transaction, the predicate locking system needs to

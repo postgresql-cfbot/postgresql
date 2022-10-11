@@ -137,14 +137,8 @@ SubTransGetParent(TransactionId xid)
 /*
  * SubTransGetTopmostTransaction
  *
- * Returns the topmost transaction of the given transaction id.
- *
- * Because we cannot look back further than TransactionXmin, it is possible
- * that this function will lie and return an intermediate subtransaction ID
- * instead of the true topmost parent ID.  This is OK, because in practice
- * we only care about detecting whether the topmost parent is still running
- * or is part of a current snapshot's list of still-running transactions.
- * Therefore, any XID before TransactionXmin is as good as any other.
+ * Returns the topmost transaction of the given transaction id, if one has
+ * been recorded in pg_subtrans.
  */
 TransactionId
 SubTransGetTopmostTransaction(TransactionId xid)
@@ -176,7 +170,6 @@ SubTransGetTopmostTransaction(TransactionId xid)
 
 	return previousXid;
 }
-
 
 /*
  * Initialization of shared memory for SUBTRANS

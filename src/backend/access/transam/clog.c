@@ -107,7 +107,18 @@ static bool TransactionGroupUpdateXidStatus(TransactionId xid,
 static void TransactionIdSetPageStatusInternal(TransactionId xid, int nsubxids,
 											   TransactionId *subxids, XidStatus status,
 											   XLogRecPtr lsn, int pageno);
+/*
+ * Run locally by a backend to establish whether or not it needs to call
+ * SubTransSetParent for subxid.
+ */
+bool
+TransactionIdsAreOnSameXactPage(TransactionId topxid, TransactionId subxid)
+{
+	int	toppageno = TransactionIdToPage(topxid);
+	int	subpageno = TransactionIdToPage(subxid);
 
+	return (toppageno == subpageno);
+}
 
 /*
  * TransactionIdSetTreeStatus
@@ -133,7 +144,7 @@ static void TransactionIdSetPageStatusInternal(TransactionId xid, int nsubxids,
  * only once, and the status will be set to committed directly.  Otherwise
  * we must
  *	 1. set sub-committed all subxids that are not on the same page as the
- *		main xid
+ *		main xid (see TransactionIdsAreOnSameXactPage())
  *	 2. atomically set committed the main xid and the subxids on the same page
  *	 3. go over the first bunch again and set them committed
  * Note that as far as concurrent checkers are concerned, main transaction

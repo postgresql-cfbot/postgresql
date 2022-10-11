@@ -614,7 +614,7 @@ nextval(PG_FUNCTION_ARGS)
 	 */
 	relid = RangeVarGetRelid(sequence, NoLock, false);
 
-	PG_RETURN_INT64(nextval_internal(relid, true));
+	PG_RETURN_INT64(nextval_internal(relid, true, 1));
 }
 
 Datum
@@ -622,11 +622,20 @@ nextval_oid(PG_FUNCTION_ARGS)
 {
 	Oid			relid = PG_GETARG_OID(0);
 
-	PG_RETURN_INT64(nextval_internal(relid, true));
+	PG_RETURN_INT64(nextval_internal(relid, true, 1));
+}
+
+Datum
+nextval_oid_num(PG_FUNCTION_ARGS)
+{
+	Oid			relid = PG_GETARG_OID(0);
+	int64		num = PG_GETARG_INT64(1);
+
+	PG_RETURN_INT64(nextval_internal(relid, true, num));
 }
 
 int64
-nextval_internal(Oid relid, bool check_permissions)
+nextval_internal(Oid relid, bool check_permissions, int64 request)
 {
 	SeqTable	elm;
 	Relation	seqrel;
@@ -648,6 +657,17 @@ nextval_internal(Oid relid, bool check_permissions)
 				rescnt = 0;
 	bool		cycle;
 	bool		logit = false;
+
+	if (request < 1)
+	{
+		char		buf[100];
+
+		snprintf(buf, sizeof(buf), INT64_FORMAT, request);
+		ereport(ERROR,
+				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+				 errmsg("nextval: can't request %s values from a sequence",
+						buf)));
+	}
 
 	/* open and lock sequence */
 	init_sequence(relid, &elm, &seqrel);
@@ -671,11 +691,10 @@ nextval_internal(Oid relid, bool check_permissions)
 	 */
 	PreventCommandIfParallelMode("nextval()");
 
-	if (elm->last != elm->cached)	/* some numbers were cached */
+	if (elm->increment != 0 && (elm->cached - elm->last) / elm->increment >= request)	/* enough numbers were cached */
 	{
 		Assert(elm->last_valid);
-		Assert(elm->increment != 0);
-		elm->last += elm->increment;
+		elm->last += elm->increment * request;
 		relation_close(seqrel, NoLock);
 		last_used_seq = elm;
 		return elm->last;
@@ -696,8 +715,17 @@ nextval_internal(Oid relid, bool check_permissions)
 	seq = read_seq_tuple(seqrel, &buf, &seqdatatuple);
 	page = BufferGetPage(buf);
 
+	if (elm->cached != elm->last && elm->cached == seq->last_value) {
+		/*
+		 * There are some numbers in the cache, and we can grab the numbers directly following those.
+		 * We can fetch fewer new numbers and claim the numbers from the cache.
+		 */
+		request -= elm->cached - elm->last;
+	}
+
 	elm->increment = incby;
 	last = next = result = seq->last_value;
+	cache += request-1;
 	fetch = cache;
 	log = seq->log_cnt;
 
@@ -747,7 +775,7 @@ nextval_internal(Oid relid, bool check_permissions)
 			if ((maxv >= 0 && next > maxv - incby) ||
 				(maxv < 0 && next + incby > maxv))
 			{
-				if (rescnt > 0)
+				if (rescnt >= request)
 					break;		/* stop fetching */
 				if (!cycle)
 					ereport(ERROR,
@@ -766,7 +794,7 @@ nextval_internal(Oid relid, bool check_permissions)
 			if ((minv < 0 && next < minv - incby) ||
 				(minv >= 0 && next + incby < minv))
 			{
-				if (rescnt > 0)
+				if (rescnt >= request)
 					break;		/* stop fetching */
 				if (!cycle)
 					ereport(ERROR,
@@ -785,7 +813,7 @@ nextval_internal(Oid relid, bool check_permissions)
 			log--;
 			rescnt++;
 			last = next;
-			if (rescnt == 1)	/* if it's first result - */
+			if (rescnt == request)	/* if this is the Nth result when we're requesting N numbers - */
 				result = next;	/* it's what to return */
 		}
 	}

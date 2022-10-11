@@ -10,6 +10,7 @@ SUBDIRS = \
 		  delay_execution \
 		  dummy_index_am \
 		  dummy_seclabel \
+		  heap \
 		  libpq_pipeline \
 		  plsample \
 		  snapshot_too_old \

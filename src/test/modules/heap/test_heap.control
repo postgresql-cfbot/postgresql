@@ -1,0 +1,4 @@
+comment = 'Test code for heap'
+default_version = '1.0'
+module_pathname = '$libdir/test_heap'
+relocatable = true

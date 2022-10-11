@@ -108,7 +108,8 @@ typedef struct GinMetaPageData
 /*
  * Macros for accessing a GIN index page's opaque data
  */
-#define GinPageGetOpaque(page) ( (GinPageOpaque) PageGetSpecialPointer(page) )
+#define GinPageGetOpaque(page) \
+	((GinPageOpaque) PageGetSpecialOpaque(page, GinPageOpaqueData))
 
 #define GinPageIsLeaf(page)    ( (GinPageGetOpaque(page)->flags & GIN_LEAF) != 0 )
 #define GinPageSetLeaf(page)   ( GinPageGetOpaque(page)->flags |= GIN_LEAF )

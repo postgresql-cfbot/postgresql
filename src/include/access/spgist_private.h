@@ -75,7 +75,8 @@ typedef SpGistPageOpaqueData *SpGistPageOpaque;
 #define SPGIST_LEAF			(1<<2)
 #define SPGIST_NULLS		(1<<3)
 
-#define SpGistPageGetOpaque(page) ((SpGistPageOpaque) PageGetSpecialPointer(page))
+#define SpGistPageGetOpaque(page) \
+	((SpGistPageOpaque) PageGetSpecialOpaque(page, SpGistPageOpaqueData))
 #define SpGistPageIsMeta(page) (SpGistPageGetOpaque(page)->flags & SPGIST_META)
 #define SpGistPageIsDeleted(page) (SpGistPageGetOpaque(page)->flags & SPGIST_DELETED)
 #define SpGistPageIsLeaf(page) (SpGistPageGetOpaque(page)->flags & SPGIST_LEAF)

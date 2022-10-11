@@ -5170,7 +5170,8 @@ l5:
 				 * TransactionIdIsInProgress() should have returned false.  We
 				 * assume it's no longer locked in this case.
 				 */
-				elog(WARNING, "LOCK_ONLY found for Xid in progress %u", xmax);
+				elog(WARNING, "LOCK_ONLY found for Xid in progress %llu",
+					 (unsigned long long) xmax);
 				old_infomask |= HEAP_XMAX_INVALID;
 				old_infomask &= ~HEAP_XMAX_LOCK_ONLY;
 				goto l5;
@@ -6153,8 +6154,9 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
 	else if (MultiXactIdPrecedes(multi, relminmxid))
 		ereport(ERROR,
 				(errcode(ERRCODE_DATA_CORRUPTED),
-				 errmsg_internal("found multixact %u from before relminmxid %u",
-								 multi, relminmxid)));
+				 errmsg_internal("found multixact %llu from before relminmxid %llu",
+								 (unsigned long long) multi,
+								 (unsigned long long) relminmxid)));
 	else if (MultiXactIdPrecedes(multi, cutoff_multi))
 	{
 		/*
@@ -6167,8 +6169,9 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
 								 HEAP_XMAX_IS_LOCKED_ONLY(t_infomask)))
 			ereport(ERROR,
 					(errcode(ERRCODE_DATA_CORRUPTED),
-					 errmsg_internal("multixact %u from before cutoff %u found to be still running",
-									 multi, cutoff_multi)));
+					 errmsg_internal("multixact %llu from before cutoff %llu found to be still running",
+									 (unsigned long long) multi,
+									 (unsigned long long) cutoff_multi)));
 
 		if (HEAP_XMAX_IS_LOCKED_ONLY(t_infomask))
 		{
@@ -6186,8 +6189,9 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
 			if (TransactionIdPrecedes(xid, relfrozenxid))
 				ereport(ERROR,
 						(errcode(ERRCODE_DATA_CORRUPTED),
-						 errmsg_internal("found update xid %u from before relfrozenxid %u",
-										 xid, relfrozenxid)));
+						 errmsg_internal("found update xid %llu from before relfrozenxid %llu",
+										 (unsigned long long) xid,
+										 (unsigned long long) relfrozenxid)));
 
 			/*
 			 * If the xid is older than the cutoff, it has to have aborted,
@@ -6198,7 +6202,8 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
 				if (TransactionIdDidCommit(xid))
 					ereport(ERROR,
 							(errcode(ERRCODE_DATA_CORRUPTED),
-							 errmsg_internal("cannot freeze committed update xid %u", xid)));
+							 errmsg_internal("cannot freeze committed update xid %llu",
+											 (unsigned long long) xid)));
 				*flags |= FRM_INVALIDATE_XMAX;
 				xid = InvalidTransactionId;
 			}
@@ -6289,8 +6294,9 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
 			if (TransactionIdPrecedes(txid, relfrozenxid))
 				ereport(ERROR,
 						(errcode(ERRCODE_DATA_CORRUPTED),
-						 errmsg_internal("found update xid %u from before relfrozenxid %u",
-										 txid, relfrozenxid)));
+						 errmsg_internal("found update xid %llu from before relfrozenxid %llu",
+										 (unsigned long long) txid,
+										 (unsigned long long) relfrozenxid)));
 
 			/*
 			 * It's an update; should we keep it?  If the transaction is known
@@ -6339,8 +6345,9 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
 				TransactionIdPrecedes(update_xid, cutoff_xid))
 				ereport(ERROR,
 						(errcode(ERRCODE_DATA_CORRUPTED),
-						 errmsg_internal("found update xid %u from before xid cutoff %u",
-										 update_xid, cutoff_xid)));
+						 errmsg_internal("found update xid %llu from before xid cutoff %llu",
+										 (unsigned long long) update_xid,
+										 (unsigned long long) cutoff_xid)));
 
 			/*
 			 * We determined that this is an Xid corresponding to an update
@@ -6504,8 +6511,9 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
 		if (TransactionIdPrecedes(xid, relfrozenxid))
 			ereport(ERROR,
 					(errcode(ERRCODE_DATA_CORRUPTED),
-					 errmsg_internal("found xmin %u from before relfrozenxid %u",
-									 xid, relfrozenxid)));
+					 errmsg_internal("found xmin %llu from before relfrozenxid %llu",
+									 (unsigned long long) xid,
+									 (unsigned long long) relfrozenxid)));
 
 		xmin_frozen = TransactionIdPrecedes(xid, cutoff_xid);
 		if (xmin_frozen)
@@ -6513,8 +6521,9 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
 			if (!TransactionIdDidCommit(xid))
 				ereport(ERROR,
 						(errcode(ERRCODE_DATA_CORRUPTED),
-						 errmsg_internal("uncommitted xmin %u from before xid cutoff %u needs to be frozen",
-										 xid, cutoff_xid)));
+						 errmsg_internal("uncommitted xmin %llu from before xid cutoff %llu needs to be frozen",
+										 (unsigned long long) xid,
+										 (unsigned long long) cutoff_xid)));
 
 			frz->t_infomask |= HEAP_XMIN_FROZEN;
 			changed = true;
@@ -6641,8 +6650,9 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
 		if (TransactionIdPrecedes(xid, relfrozenxid))
 			ereport(ERROR,
 					(errcode(ERRCODE_DATA_CORRUPTED),
-					 errmsg_internal("found xmax %u from before relfrozenxid %u",
-									 xid, relfrozenxid)));
+					 errmsg_internal("found xmax %llu from before relfrozenxid %llu",
+									 (unsigned long long) xid,
+									 (unsigned long long) relfrozenxid)));
 
 		if (TransactionIdPrecedes(xid, cutoff_xid))
 		{
@@ -6656,8 +6666,8 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
 				TransactionIdDidCommit(xid))
 				ereport(ERROR,
 						(errcode(ERRCODE_DATA_CORRUPTED),
-						 errmsg_internal("cannot freeze committed xmax %u",
-										 xid)));
+						 errmsg_internal("cannot freeze committed xmax %llu",
+										 (unsigned long long) xid)));
 			freeze_xmax = true;
 			/* No need for relfrozenxid_out handling, since we'll freeze xmax */
 		}
@@ -6678,8 +6688,8 @@ heap_prepare_freeze_tuple(HeapTupleHeader tuple,
 	else
 		ereport(ERROR,
 				(errcode(ERRCODE_DATA_CORRUPTED),
-				 errmsg_internal("found xmax %u (infomask 0x%04x) not frozen, not multi, not normal",
-								 xid, tuple->t_infomask)));
+				 errmsg_internal("found xmax %llu (infomask 0x%04x) not frozen, not multi, not normal",
+								 (unsigned long long) xid, tuple->t_infomask)));
 
 	if (freeze_xmax)
 	{

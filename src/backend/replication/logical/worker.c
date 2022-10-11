@@ -332,6 +332,8 @@ static void apply_handle_commit_internal(LogicalRepCommitData *commit_data);
 static void apply_handle_insert_internal(ApplyExecutionData *edata,
 										 ResultRelInfo *relinfo,
 										 TupleTableSlot *remoteslot);
+static Oid	get_usable_indexoid(ApplyExecutionData *edata,
+									 ResultRelInfo *relinfo);
 static void apply_handle_update_internal(ApplyExecutionData *edata,
 										 ResultRelInfo *relinfo,
 										 TupleTableSlot *remoteslot,
@@ -341,6 +343,7 @@ static void apply_handle_delete_internal(ApplyExecutionData *edata,
 										 TupleTableSlot *remoteslot);
 static bool FindReplTupleInLocalRel(EState *estate, Relation localrel,
 									LogicalRepRelation *remoterel,
+									Oid localidxoid,
 									TupleTableSlot *remoteslot,
 									TupleTableSlot **localslot);
 static void apply_handle_tuple_routing(ApplyExecutionData *edata,
@@ -1612,24 +1615,6 @@ apply_handle_type(StringInfo s)
 }
 
 /*
- * Get replica identity index or if it is not defined a primary key.
- *
- * If neither is defined, returns InvalidOid
- */
-static Oid
-GetRelationIdentityOrPK(Relation rel)
-{
-	Oid			idxoid;
-
-	idxoid = RelationGetReplicaIndex(rel);
-
-	if (!OidIsValid(idxoid))
-		idxoid = RelationGetPrimaryKeyIndex(rel);
-
-	return idxoid;
-}
-
-/*
  * Check that we (the subscription owner) have sufficient privileges on the
  * target relation to perform the given operation.
  */
@@ -1774,11 +1759,8 @@ check_relation_updatable(LogicalRepRelMapEntry *rel)
 	if (rel->updatable)
 		return;
 
-	/*
-	 * We are in error mode so it's fine this is somewhat slow. It's better to
-	 * give user correct error.
-	 */
-	if (OidIsValid(GetRelationIdentityOrPK(rel->localrel)))
+	/* Give user more precise error if possible. */
+	if (OidIsValid(rel->usableIndexOid))
 	{
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
@@ -1921,12 +1903,14 @@ apply_handle_update_internal(ApplyExecutionData *edata,
 	TupleTableSlot *localslot;
 	bool		found;
 	MemoryContext oldctx;
+	Oid			usableIndexOid = get_usable_indexoid(edata, relinfo);
 
 	EvalPlanQualInit(&epqstate, estate, NULL, NIL, -1);
 	ExecOpenIndices(relinfo, false);
 
 	found = FindReplTupleInLocalRel(estate, localrel,
 									&relmapentry->remoterel,
+									usableIndexOid,
 									remoteslot, &localslot);
 	ExecClearTuple(remoteslot);
 
@@ -2059,11 +2043,12 @@ apply_handle_delete_internal(ApplyExecutionData *edata,
 	EPQState	epqstate;
 	TupleTableSlot *localslot;
 	bool		found;
+	Oid			usableIndexOid = get_usable_indexoid(edata, relinfo);
 
 	EvalPlanQualInit(&epqstate, estate, NULL, NIL, -1);
 	ExecOpenIndices(relinfo, false);
 
-	found = FindReplTupleInLocalRel(estate, localrel, remoterel,
+	found = FindReplTupleInLocalRel(estate, localrel, remoterel, usableIndexOid,
 									remoteslot, &localslot);
 
 	/* If found delete it. */
@@ -2095,19 +2080,51 @@ apply_handle_delete_internal(ApplyExecutionData *edata,
 }
 
 /*
+ * Decide whether we can pick an index for the relinfo (e.g., the relation)
+ * we're actually deleting/updating from. If it is a child partition of
+ * edata->targetRelInfo, find the index on the partition.
+ *
+ * Note that if the corresponding relmapentry has invalid usableIndexOid,
+ * the function returns InvalidOid.
+ */
+static Oid
+get_usable_indexoid(ApplyExecutionData *edata, ResultRelInfo *relinfo)
+{
+	ResultRelInfo *targetResultRelInfo = edata->targetRelInfo;
+	LogicalRepRelMapEntry *relmapentry = edata->targetRel;
+
+	char		targetrelkind = targetResultRelInfo->ri_RelationDesc->rd_rel->relkind;
+
+	if (targetrelkind == RELKIND_PARTITIONED_TABLE)
+	{
+		/* Target is a partitioned table, so find relmapentry of the partition */
+		TupleConversionMap *map = relinfo->ri_RootToPartitionMap;
+		AttrMap    *attrmap = map ? map->attrMap : NULL;
+
+		LogicalRepPartMapEntry *part_entry =
+		logicalrep_partition_open(relmapentry, relinfo->ri_RelationDesc,
+								  attrmap);
+
+		relmapentry = &part_entry->relmapentry;
+	}
+
+	return relmapentry->usableIndexOid;
+}
+
+/*
  * Try to find a tuple received from the publication side (in 'remoteslot') in
  * the corresponding local relation using either replica identity index,
- * primary key or if needed, sequential scan.
+ * primary key, index or if needed, sequential scan.
  *
  * Local tuple, if found, is returned in '*localslot'.
  */
 static bool
 FindReplTupleInLocalRel(EState *estate, Relation localrel,
 						LogicalRepRelation *remoterel,
+						Oid localidxoid,
 						TupleTableSlot *remoteslot,
 						TupleTableSlot **localslot)
 {
-	Oid			idxoid;
 	bool		found;
 
 	/*
@@ -2118,12 +2135,11 @@ FindReplTupleInLocalRel(EState *estate, Relation localrel,
 
 	*localslot = table_slot_create(localrel, &estate->es_tupleTable);
 
-	idxoid = GetRelationIdentityOrPK(localrel);
-	Assert(OidIsValid(idxoid) ||
+	Assert(OidIsValid(localidxoid) ||
 		   (remoterel->replident == REPLICA_IDENTITY_FULL));
 
-	if (OidIsValid(idxoid))
-		found = RelationFindReplTupleByIndex(localrel, idxoid,
+	if (OidIsValid(localidxoid))
+		found = RelationFindReplTupleByIndex(localrel, localidxoid,
 											 LockTupleExclusive,
 											 remoteslot, *localslot);
 	else
@@ -2153,7 +2169,7 @@ apply_handle_tuple_routing(ApplyExecutionData *edata,
 	TupleTableSlot *remoteslot_part;
 	TupleConversionMap *map;
 	MemoryContext oldctx;
-	LogicalRepRelMapEntry *part_entry = NULL;
+	LogicalRepPartMapEntry *part_entry = NULL;
 	AttrMap    *attrmap = NULL;
 
 	/* ModifyTableState is needed for ExecFindPartition(). */
@@ -2203,7 +2219,7 @@ apply_handle_tuple_routing(ApplyExecutionData *edata,
 	{
 		part_entry = logicalrep_partition_open(relmapentry, partrel,
 											   attrmap);
-		check_relation_updatable(part_entry);
+		check_relation_updatable(&part_entry->relmapentry);
 	}
 
 	switch (operation)
@@ -2227,13 +2243,15 @@ apply_handle_tuple_routing(ApplyExecutionData *edata,
 			 * suitable partition.
 			 */
 			{
+				LogicalRepRelMapEntry *partrelmapentry = &part_entry->relmapentry;
 				TupleTableSlot *localslot;
 				ResultRelInfo *partrelinfo_new;
 				bool		found;
 
 				/* Get the matching local tuple from the partition. */
 				found = FindReplTupleInLocalRel(estate, partrel,
-												&part_entry->remoterel,
+												&partrelmapentry->remoterel,
+												partrelmapentry->usableIndexOid,
 												remoteslot_part, &localslot);
 				if (!found)
 				{
@@ -2255,7 +2273,7 @@ apply_handle_tuple_routing(ApplyExecutionData *edata,
 				 * remoteslot_part.
 				 */
 				oldctx = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
-				slot_modify_data(remoteslot_part, localslot, part_entry,
+				slot_modify_data(remoteslot_part, localslot, partrelmapentry,
 								 newtup);
 				MemoryContextSwitchTo(oldctx);
 

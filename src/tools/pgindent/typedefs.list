@@ -1610,6 +1610,9 @@ OSInfo
 OSSLCipher
 OSSLDigest
 OVERLAPPED
+ObjElem
+ObjTree
+ObjType
 ObjectAccessDrop
 ObjectAccessNamespaceSearch
 ObjectAccessPostAlter
@@ -3177,6 +3180,7 @@ compare_context
 config_var_value
 contain_aggs_of_level_context
 convert_testexpr_context
+convSpecifier
 copy_data_dest_cb
 copy_data_source_cb
 core_YYSTYPE

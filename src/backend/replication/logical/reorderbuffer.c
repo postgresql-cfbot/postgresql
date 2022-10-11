@@ -94,6 +94,7 @@
 #include "lib/binaryheap.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "replication/ddlmessage.h"
 #include "replication/logical.h"
 #include "replication/reorderbuffer.h"
 #include "replication/slot.h"
@@ -515,6 +516,14 @@ ReorderBufferReturnChange(ReorderBuffer *rb, ReorderBufferChange *change,
 				pfree(change->data.msg.message);
 			change->data.msg.message = NULL;
 			break;
+		case REORDER_BUFFER_CHANGE_DDLMESSAGE:
+			if (change->data.ddlmsg.prefix != NULL)
+				pfree(change->data.ddlmsg.prefix);
+			change->data.ddlmsg.prefix = NULL;
+			if (change->data.ddlmsg.message != NULL)
+				pfree(change->data.ddlmsg.message);
+			change->data.ddlmsg.message = NULL;
+			break;
 		case REORDER_BUFFER_CHANGE_INVALIDATION:
 			if (change->data.inval.invalidations)
 				pfree(change->data.inval.invalidations);
@@ -867,6 +876,36 @@ ReorderBufferQueueMessage(ReorderBuffer *rb, TransactionId xid,
 		}
 		PG_END_TRY();
 	}
+}
+
+/*
+ * A transactional DDL message is queued to be processed upon commit.
+ */
+void
+ReorderBufferQueueDDLMessage(ReorderBuffer *rb, TransactionId xid,
+							 XLogRecPtr lsn, const char *prefix,
+							 Size message_size, const char *message,
+							 Oid relid, DeparsedCommandType cmdtype)
+{
+	MemoryContext oldcontext;
+	ReorderBufferChange *change;
+
+	Assert(xid != InvalidTransactionId);
+
+	oldcontext = MemoryContextSwitchTo(rb->context);
+
+	change = ReorderBufferGetChange(rb);
+	change->action = REORDER_BUFFER_CHANGE_DDLMESSAGE;
+	change->data.ddlmsg.prefix = pstrdup(prefix);
+	change->data.ddlmsg.relid = relid;
+	change->data.ddlmsg.cmdtype = cmdtype;
+	change->data.ddlmsg.message_size = message_size;
+	change->data.ddlmsg.message = palloc(message_size);
+	memcpy(change->data.ddlmsg.message, message, message_size);
+
+	ReorderBufferQueueChange(rb, xid, lsn, change, false);
+
+	MemoryContextSwitchTo(oldcontext);
 }
 
 /*
@@ -1969,6 +2008,29 @@ ReorderBufferApplyMessage(ReorderBuffer *rb, ReorderBufferTXN *txn,
 }
 
 /*
+ * Helper function for ReorderBufferProcessTXN for applying the DDL message.
+ */
+static inline void
+ReorderBufferApplyDDLMessage(ReorderBuffer *rb, ReorderBufferTXN *txn,
+							 ReorderBufferChange *change, bool streaming)
+{
+	if (streaming)
+		rb->stream_ddlmessage(rb, txn, change->lsn,
+							  change->data.ddlmsg.prefix,
+							  change->data.ddlmsg.relid,
+							  change->data.ddlmsg.cmdtype,
+							  change->data.ddlmsg.message_size,
+							  change->data.ddlmsg.message);
+	else
+		rb->ddlmessage(rb, txn, change->lsn,
+					   change->data.ddlmsg.prefix,
+					   change->data.ddlmsg.relid,
+					   change->data.ddlmsg.cmdtype,
+					   change->data.ddlmsg.message_size,
+					   change->data.ddlmsg.message);
+}
+
+/*
  * Function to store the command id and snapshot at the end of the current
  * stream so that we can reuse the same while sending the next stream.
  */
@@ -2346,6 +2408,10 @@ ReorderBufferProcessTXN(ReorderBuffer *rb, ReorderBufferTXN *txn,
 
 				case REORDER_BUFFER_CHANGE_MESSAGE:
 					ReorderBufferApplyMessage(rb, txn, change, streaming);
+					break;
+
+				case REORDER_BUFFER_CHANGE_DDLMESSAGE:
+					ReorderBufferApplyDDLMessage(rb, txn, change, streaming);
 					break;
 
 				case REORDER_BUFFER_CHANGE_INVALIDATION:
@@ -3773,6 +3839,40 @@ ReorderBufferSerializeChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
 
 				break;
 			}
+		case REORDER_BUFFER_CHANGE_DDLMESSAGE:
+			{
+				char	   *data;
+				Size		prefix_size = strlen(change->data.ddlmsg.prefix) + 1;
+
+				sz += prefix_size + change->data.ddlmsg.message_size +
+					sizeof(Size) + sizeof(Oid) + sizeof(int) + sizeof(Size);
+				ReorderBufferSerializeReserve(rb, sz);
+
+				data = ((char *) rb->outbuf) + sizeof(ReorderBufferDiskChange);
+
+				/* might have been reallocated above */
+				ondisk = (ReorderBufferDiskChange *) rb->outbuf;
+
+				/* write the prefix, relid and cmdtype including the size */
+				memcpy(data, &prefix_size, sizeof(Size));
+				data += sizeof(Size);
+				memcpy(data, &change->data.ddlmsg.relid, sizeof(Oid));
+				data += sizeof(Oid);
+				memcpy(data, &change->data.ddlmsg.cmdtype, sizeof(int));
+				data += sizeof(int);
+				memcpy(data, change->data.ddlmsg.prefix,
+					   prefix_size);
+				data += prefix_size;
+
+				/* write the message including the size */
+				memcpy(data, &change->data.ddlmsg.message_size, sizeof(Size));
+				data += sizeof(Size);
+				memcpy(data, change->data.ddlmsg.message,
+					   change->data.ddlmsg.message_size);
+				data += change->data.ddlmsg.message_size;
+
+				break;
+			}
 		case REORDER_BUFFER_CHANGE_INVALIDATION:
 			{
 				char	   *data;
@@ -4087,6 +4187,15 @@ ReorderBufferChangeSize(ReorderBufferChange *change)
 
 				break;
 			}
+		case REORDER_BUFFER_CHANGE_DDLMESSAGE:
+			{
+				Size		prefix_size = strlen(change->data.ddlmsg.prefix) + 1;
+
+				sz += prefix_size + change->data.ddlmsg.message_size +
+					sizeof(Size) + sizeof(Size) + sizeof(Oid) + sizeof(int);
+
+				break;
+			}
 		case REORDER_BUFFER_CHANGE_INVALIDATION:
 			{
 				sz += sizeof(SharedInvalidationMessage) *
@@ -4349,6 +4458,33 @@ ReorderBufferRestoreChange(ReorderBuffer *rb, ReorderBufferTXN *txn,
 															 prefix_size);
 				memcpy(change->data.msg.prefix, data, prefix_size);
 				Assert(change->data.msg.prefix[prefix_size - 1] == '\0');
+				data += prefix_size;
+
+				/* read the message */
+				memcpy(&change->data.msg.message_size, data, sizeof(Size));
+				data += sizeof(Size);
+				change->data.msg.message = MemoryContextAlloc(rb->context,
+															  change->data.msg.message_size);
+				memcpy(change->data.msg.message, data,
+					   change->data.msg.message_size);
+				data += change->data.msg.message_size;
+
+				break;
+			}
+		case REORDER_BUFFER_CHANGE_DDLMESSAGE:
+			{
+				Size		prefix_size;
+
+				/* read prefix */
+				memcpy(&prefix_size, data, sizeof(Size));
+				data += sizeof(Size);
+				memcpy(&change->data.ddlmsg.relid, data, sizeof(Oid));
+				data += sizeof(Oid);
+				memcpy(&change->data.ddlmsg.cmdtype, data, sizeof(int));
+				data += sizeof(int);
+				change->data.ddlmsg.prefix = MemoryContextAlloc(rb->context, prefix_size);
+				memcpy(change->data.ddlmsg.prefix, data, prefix_size);
+				Assert(change->data.ddlmsg.prefix[prefix_size - 1] == '\0');
 				data += prefix_size;
 
 				/* read the message */

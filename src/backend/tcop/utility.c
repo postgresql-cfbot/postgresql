@@ -1446,7 +1446,8 @@ ProcessUtilitySlow(ParseState *pstate,
 							address = DefineCollation(pstate,
 													  stmt->defnames,
 													  stmt->definition,
-													  stmt->if_not_exists);
+													  stmt->if_not_exists,
+													  &secondaryObject);
 							break;
 						default:
 							elog(ERROR, "unrecognized define stmt type: %d",
@@ -1665,8 +1666,10 @@ ProcessUtilitySlow(ParseState *pstate,
 				break;
 
 			case T_CreateTableAsStmt:
+				EventTriggerTableInitWriteStart(parsetree);
 				address = ExecCreateTableAs(pstate, (CreateTableAsStmt *) parsetree,
 											params, queryEnv, qc);
+				EventTriggerTableInitWriteEnd();
 				break;
 
 			case T_RefreshMatViewStmt:

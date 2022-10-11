@@ -490,7 +490,7 @@ SELECT (pg_identify_object(addr1.classid, addr1.objid, addr1.objsubid)).*,
  policy                    |            |                   | genpol on addr_nsp.gentable                                          | t
  statistics object         | addr_nsp   | gentable_stat     | addr_nsp.gentable_stat                                               | t
  collation                 | pg_catalog | "default"         | pg_catalog."default"                                                 | t
- transform                 |            |                   | for integer on language sql                                          | t
+ transform                 |            |                   | for integer language sql                                             | t
  text search dictionary    | addr_nsp   | addr_ts_dict      | addr_nsp.addr_ts_dict                                                | t
  text search parser        | addr_nsp   | addr_ts_prs       | addr_nsp.addr_ts_prs                                                 | t
  text search configuration | addr_nsp   | addr_ts_conf      | addr_nsp.addr_ts_conf                                                | t

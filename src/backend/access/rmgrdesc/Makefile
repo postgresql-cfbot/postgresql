@@ -19,6 +19,7 @@ OBJS = \
 	hashdesc.o \
 	heapdesc.o \
 	logicalmsgdesc.o \
+	logicalddlmsgdesc.o \
 	mxactdesc.o \
 	nbtdesc.o \
 	relmapdesc.o \

@@ -385,7 +385,11 @@ ExecuteGrantStmt(GrantStmt *stmt)
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("grantor must be current user")));
+
+		istmt.grantor_uid = grantor;
 	}
+	else
+		istmt.grantor_uid = InvalidOid;
 
 	/*
 	 * Turn the regular GrantStmt into the InternalGrant form.

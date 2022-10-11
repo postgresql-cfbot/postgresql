@@ -5253,7 +5253,7 @@ ATExecCmd(List **wqueue, AlteredTableInfo *tab,
 	 * Report the subcommand to interested event triggers.
 	 */
 	if (cmd)
-		EventTriggerCollectAlterTableSubcmd((Node *) cmd, address);
+		EventTriggerCollectAlterTableSubcmd((Node *) cmd, address, tab->rewrite);
 
 	/*
 	 * Bump the command counter to ensure the next subcommand in the sequence

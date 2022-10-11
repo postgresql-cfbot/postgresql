@@ -25,6 +25,7 @@ typedef struct PGOutputData
 	uint32		protocol_version;
 	List	   *publication_names;
 	List	   *publications;
+	List	   *deleted_relids;
 	bool		binary;
 	bool		streaming;
 	bool		messages;

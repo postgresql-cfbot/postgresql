@@ -6109,6 +6109,18 @@ DefineStmt:
 					n->definition = $5;
 					$$ = (Node *) n;
 				}
+			| CREATE OR REPLACE OPERATOR any_operator definition
+				{
+					DefineStmt *n = makeNode(DefineStmt);
+
+					n->kind = OBJECT_OPERATOR;
+					n->oldstyle = false;
+					n->replace = true;
+					n->defnames = $5;
+					n->args = NIL;
+					n->definition = $6;
+					$$ = (Node *) n;
+				}
 			| CREATE OPERATOR any_operator definition
 				{
 					DefineStmt *n = makeNode(DefineStmt);

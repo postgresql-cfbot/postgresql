@@ -223,3 +223,104 @@ CREATE OPERATOR ===
 	"Hashes",
 	"Merges"
 );
+
+--
+-- CREATE OR REPLACE OPERATOR
+--
+
+CREATE OR REPLACE FUNCTION fn_op7(int, int)
+RETURNS boolean AS $$
+	SELECT $1 = $2;
+$$ LANGUAGE sql IMMUTABLE;
+
+CREATE OPERATOR === (
+	LEFTARG = int,
+    RIGHTARG = int,
+    FUNCTION = fn_op7
+);
+
+-- Should work. Duplicate operator definition.
+BEGIN TRANSACTION;
+CREATE OR REPLACE OPERATOR === (
+	LEFTARG = int,
+    RIGHTARG = int,
+    FUNCTION = fn_op7
+);
+ROLLBACK;
+
+-- Should work. Change restriction selectivity estimator function.
+BEGIN TRANSACTION;
+CREATE OR REPLACE OPERATOR === (
+	LEFTARG = int,
+    RIGHTARG = int,
+    FUNCTION = fn_op7,
+	RESTRICT = eqsel
+);
+ROLLBACK;
+
+-- Should work. Change join selectivity estimator function.
+BEGIN TRANSACTION;
+CREATE OR REPLACE OPERATOR === (
+	LEFTARG = int,
+    RIGHTARG = int,
+    FUNCTION = fn_op7,
+	JOIN = eqjoinsel
+);
+ROLLBACK;
+
+-- Should fail. Underlying function can not be changed.
+BEGIN TRANSACTION;
+CREATE FUNCTION fn_op8(int, int)
+RETURNS boolean AS $$
+	SELECT $1 = $2;
+$$ LANGUAGE sql IMMUTABLE;
+CREATE OR REPLACE OPERATOR === (
+	LEFTARG = int,
+    RIGHTARG = int,
+    FUNCTION = fn_op8
+);
+ROLLBACK;
+
+-- Should fail. Commutator can not be changed.
+BEGIN TRANSACTION;
+CREATE OR REPLACE OPERATOR === (
+	LEFTARG = int,
+    RIGHTARG = int,
+    FUNCTION = fn_op7,
+	COMMUTATOR = ===
+);
+ROLLBACK;
+
+-- Should fail. Negator can not be changed.
+BEGIN TRANSACTION;
+CREATE OR REPLACE OPERATOR === (
+	LEFTARG = int,
+    RIGHTARG = int,
+    FUNCTION = fn_op7,
+	NEGATOR = !===
+);
+ROLLBACK;
+
+-- Should fail. Hash join support param can not be changed.
+BEGIN TRANSACTION;
+CREATE OR REPLACE OPERATOR === (
+	LEFTARG = int,
+    RIGHTARG = int,
+    FUNCTION = fn_op7,
+	HASHES
+);
+ROLLBACK;
+
+-- Should fail. Merge join support param can not be changed.
+BEGIN TRANSACTION;
+CREATE OR REPLACE OPERATOR === (
+	LEFTARG = int,
+    RIGHTARG = int,
+    FUNCTION = fn_op7,
+	MERGES
+);
+ROLLBACK;
+
+-- Clearing
+DROP OPERATOR === (int, int);
+DROP FUNCTION fn_op7;

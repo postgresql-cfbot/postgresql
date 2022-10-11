@@ -4562,6 +4562,16 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
        daemon
       </para></entry>
      </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>last_vacuum_index_scans</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of splitted index scans performed during the the last vacuum
+       on this table
+      </para></entry>
+     </row>
     </tbody>
    </tgroup>
   </table>

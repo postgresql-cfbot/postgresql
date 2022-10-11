@@ -208,8 +208,8 @@ pgstat_drop_relation(Relation rel)
  * Report that the table was just vacuumed.
  */
 void
-pgstat_report_vacuum(Oid tableoid, bool shared,
-					 PgStat_Counter livetuples, PgStat_Counter deadtuples)
+pgstat_report_vacuum(Oid tableoid, bool shared, PgStat_Counter livetuples,
+					 PgStat_Counter deadtuples, PgStat_Counter num_index_scans)
 {
 	PgStat_EntryRef *entry_ref;
 	PgStatShared_Relation *shtabentry;
@@ -232,6 +232,7 @@ pgstat_report_vacuum(Oid tableoid, bool shared,
 
 	tabentry->n_live_tuples = livetuples;
 	tabentry->n_dead_tuples = deadtuples;
+	tabentry->n_index_scans = num_index_scans;
 
 	/*
 	 * It is quite possible that a non-aggressive VACUUM ended up skipping

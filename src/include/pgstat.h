@@ -365,6 +365,7 @@ typedef struct PgStat_StatTabEntry
 
 	PgStat_Counter n_live_tuples;
 	PgStat_Counter n_dead_tuples;
+	PgStat_Counter n_index_scans;
 	PgStat_Counter changes_since_analyze;
 	PgStat_Counter inserts_since_vacuum;
 
@@ -505,7 +506,9 @@ extern void pgstat_assoc_relation(Relation rel);
 extern void pgstat_unlink_relation(Relation rel);
 
 extern void pgstat_report_vacuum(Oid tableoid, bool shared,
-								 PgStat_Counter livetuples, PgStat_Counter deadtuples);
+								 PgStat_Counter livetuples,
+								 PgStat_Counter deadtuples,
+								 PgStat_Counter num_index_scans);
 extern void pgstat_report_analyze(Relation rel,
 								  PgStat_Counter livetuples, PgStat_Counter deadtuples,
 								  bool resetcounter);

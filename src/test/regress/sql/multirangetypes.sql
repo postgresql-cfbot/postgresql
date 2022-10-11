@@ -854,3 +854,160 @@ create function mr_inoutparam_fail(inout i anyelement, out r anymultirange)
 --should fail
 create function mr_table_fail(i anyelement) returns table(i anyelement, r anymultirange)
   as $$ select $1, '[1,10]' $$ language sql;
+
+-- test multirange join operators
+create table test_multirange_join_1(mr1 int4multirange);
+create table test_multirange_join_2(mr2 int4multirange);
+create table test_range_join(ir int4range);
+create table test_elem_join(elem int4);
+
+insert into test_multirange_join_1 select int4multirange(int4range(g, g+10),int4range(g+20, g+30),int4range(g+40, g+50)) from generate_series(1,200) g;
+insert into test_multirange_join_1 select '{}'::int4multirange from generate_series(1,50) g;
+insert into test_multirange_join_1 select int4multirange(int4range(g, g+10000)) from generate_series(1,100) g;
+insert into test_multirange_join_1 select int4multirange(int4range(NULL, g*10, '(]'), int4range(g*10, g*20, '(]')) from generate_series(1,10) g;
+insert into test_multirange_join_1 select int4multirange(int4range(g*10, g*20, '(]'), int4range(g*20, NULL, '[)')) from generate_series(1,10) g;
+
+insert into test_multirange_join_2 select int4multirange(int4range(g, g+10),int4range(g+20, g+30),int4range(g+40, g+50)) from generate_series(1,20) g;
+insert into test_multirange_join_2 select '{}'::int4multirange from generate_series(1,5) g;
+insert into test_multirange_join_2 select int4multirange(int4range(g, g+10000)) from generate_series(1,10) g;
+insert into test_multirange_join_2 select int4multirange(int4range(NULL, g*10, '(]'), int4range(g*10, g*20, '(]')) from generate_series(1,10) g;
+insert into test_multirange_join_2 select int4multirange(int4range(g*10, g*20, '(]'), int4range(g*20, NULL, '[)')) from generate_series(1,10) g;
+
+insert into test_range_join select int4range(g, g+10) from generate_series(1,20) g;
+insert into test_range_join select int4range(g, g+10000) from generate_series(1,10) g;
+insert into test_range_join select int4range(NULL,g*10,'(]') from generate_series(1,10) g;
+insert into test_range_join select int4range(g*10,NULL,'[)') from generate_series(1,10) g;
+insert into test_range_join select int4range(g, g+10) from generate_series(1,20) g;
+insert into test_range_join select 'empty'::int4range from generate_series(1,20) g;
+insert into test_range_join select NULL from generate_series(1,5) g;
+
+insert into test_elem_join select g from generate_series(1,20) g;
+insert into test_elem_join select g+10000 from generate_series(1,10) g;
+insert into test_elem_join select g*10 from generate_series(1,10) g;
+insert into test_elem_join select g from generate_series(1,20) g;
+insert into test_elem_join select NULL from generate_series(1,5) g;
+
+analyze test_multirange_join_1;
+analyze test_multirange_join_2;
+analyze test_range_join;
+analyze test_elem_join;
+
+create function check_estimated_rows(text) returns table (estimated int, actual int)
+language plpgsql as
+$$
+declare
+    ln text;
+    tmp text[];
+    first_row bool := true;
+begin
+    for ln in
+        execute format('explain analyze %s', $1)
+    loop
+        if first_row then
+            first_row := false;
+            tmp := regexp_match(ln, 'rows=(\d*) .* rows=(\d*)');
+            return query select tmp[1]::int, tmp[2]::int;
+        end if;
+    end loop;
+end;
+$$;
+
+SELECT * FROM check_estimated_rows('
+select * from test_multirange_join_1, test_multirange_join_2 where mr1 = mr2');
+
+SELECT * FROM check_estimated_rows('
+select * from test_multirange_join_1, test_multirange_join_2 where mr1 < mr2');
+
+SELECT * FROM check_estimated_rows('
+select * from test_multirange_join_1, test_multirange_join_2 where mr1 <= mr2');
+
+SELECT * FROM check_estimated_rows('
+select * from test_multirange_join_1, test_multirange_join_2 where mr1 > mr2');
+
+SELECT * FROM check_estimated_rows('
+select * from test_multirange_join_1, test_multirange_join_2 where mr1 >= mr2');
+
+SELECT * FROM check_estimated_rows('
+select * from test_multirange_join_1, test_multirange_join_2 where mr1 && mr2');
+
+SELECT * FROM check_estimated_rows('
+select * from test_multirange_join_1, test_range_join where mr1 && ir');
+
+SELECT * FROM check_estimated_rows('
+select * from test_range_join, test_multirange_join_2 where ir && mr2');
+
+SELECT * FROM check_estimated_rows('
+select * from test_multirange_join_1, test_multirange_join_2 where mr1 <@ mr2');
+
+SELECT * FROM check_estimated_rows('
+select * from test_multirange_join_1, test_range_join where mr1 <@ ir');
+
+SELECT * FROM check_estimated_rows('
+select * from test_range_join, test_multirange_join_2 where ir <@ mr2');
+
+SELECT * FROM check_estimated_rows('
+select * from test_multirange_join_1, test_multirange_join_2 where mr1 @> mr2');
+
+SELECT * FROM check_estimated_rows('
+select * from test_multirange_join_1, test_range_join where mr1 @> ir');
+
+SELECT * FROM check_estimated_rows('
+select * from test_range_join, test_multirange_join_2 where ir @> mr2');
+
+SELECT * FROM check_estimated_rows('
+select * from test_multirange_join_1, test_multirange_join_2 where mr1 << mr2');
+
+SELECT * FROM check_estimated_rows('
+select * from test_multirange_join_1, test_range_join where mr1 << ir');
+
+SELECT * FROM check_estimated_rows('
+select * from test_range_join, test_multirange_join_2 where ir << mr2');
+
+SELECT * FROM check_estimated_rows('
+select * from test_multirange_join_1, test_multirange_join_2 where mr1 >> mr2');
+
+SELECT * FROM check_estimated_rows('
+select * from test_multirange_join_1, test_range_join where mr1 >> ir');
+
+SELECT * FROM check_estimated_rows('
+select * from test_range_join, test_multirange_join_2 where ir >> mr2');
+
+SELECT * FROM check_estimated_rows('
+select * from test_multirange_join_1, test_multirange_join_2 where mr1 &< mr2');
+
+SELECT * FROM check_estimated_rows('
+select * from test_multirange_join_1, test_range_join where mr1 &< ir');
+
+SELECT * FROM check_estimated_rows('
+select * from test_range_join, test_multirange_join_2 where ir &< mr2');
+
+SELECT * FROM check_estimated_rows('
+select * from test_multirange_join_1, test_multirange_join_2 where mr1 &> mr2');
+
+SELECT * FROM check_estimated_rows('
+select * from test_multirange_join_1, test_range_join where mr1 &> ir');
+
+SELECT * FROM check_estimated_rows('
+select * from test_range_join, test_multirange_join_2 where ir &> mr2');
+
+SELECT * FROM check_estimated_rows('
+select * from test_multirange_join_1, test_multirange_join_2 where mr1 -|- mr2');
+
+SELECT * FROM check_estimated_rows('
+select * from test_multirange_join_1, test_range_join where mr1 -|- ir');
+
+SELECT * FROM check_estimated_rows('
+select * from test_range_join, test_multirange_join_2 where ir -|- mr2');
+
+SELECT * FROM check_estimated_rows('
+select * from test_elem_join, test_multirange_join_1 where elem <@ mr1');
+
+SELECT * FROM check_estimated_rows('
+select * from test_multirange_join_1, test_elem_join where mr1 @> elem');
+
+drop function check_estimated_rows;
+
+drop table test_multirange_join_1;
+drop table test_multirange_join_2;
+drop table test_range_join;
+drop table test_elem_join;

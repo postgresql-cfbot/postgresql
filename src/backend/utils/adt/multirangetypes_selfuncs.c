@@ -1335,3 +1335,511 @@ calc_hist_selectivity_contains(TypeCacheEntry *typcache,
 
 	return sum_frac;
 }
+
+/*
+ * This function is a copy of the function with the same name in
+ * rangetypes_selfuncs.c, with the only difference that the types are
+ * multiranges
+ *
+ */
+static double
+calc_hist_join_selectivity(TypeCacheEntry *typcache,
+						   const RangeBound *hist1, int nhist1,
+						   const RangeBound *hist2, int nhist2)
+{
+	int			i,
+				j;
+	double		selectivity,
+				cur_sel1,
+				cur_sel2,
+				prev_sel1,
+				prev_sel2;
+	RangeBound	cur_sync;
+
+	/*
+	 * Histograms will never be empty. In fact, a histogram will never have
+	 * less than 2 values (1 bin)
+	 */
+	Assert(nhist1 > 1);
+	Assert(nhist2 > 1);
+
+	/* Fast-forwards i and j to start of iteration */
+	for (i = 0; range_cmp_bound_values(typcache, &hist1[i], &hist2[0]) < 0; i++);
+	for (j = 0; range_cmp_bound_values(typcache, &hist2[j], &hist1[0]) < 0; j++);
+
+	if (range_cmp_bound_values(typcache, &hist1[i], &hist2[j]) < 0)
+		cur_sync = hist1[i++];
+	else if (range_cmp_bound_values(typcache, &hist1[i], &hist2[j]) > 0)
+		cur_sync = hist2[j++];
+	else
+	{
+		/* If equal, skip one */
+		cur_sync = hist1[i];
+		i++;
+		j++;
+	}
+	prev_sel1 = calc_hist_selectivity_scalar(typcache, &cur_sync,
+											 hist1, nhist1, false);
+	prev_sel2 = calc_hist_selectivity_scalar(typcache, &cur_sync,
+											 hist2, nhist2, false);
+
+	/*
+	 * Do the estimation on overlapping region
+	 */
+	selectivity = 0.0;
+	while (i < nhist1 && j < nhist2)
+	{
+		if (range_cmp_bound_values(typcache, &hist1[i], &hist2[j]) < 0)
+			cur_sync = hist1[i++];
+		else if (range_cmp_bound_values(typcache, &hist1[i], &hist2[j]) > 0)
+			cur_sync = hist2[j++];
+		else
+		{
+			/* If equal, skip one */
+			cur_sync = hist1[i];
+			i++;
+			j++;
+		}
+		cur_sel1 = calc_hist_selectivity_scalar(typcache, &cur_sync,
+												hist1, nhist1, false);
+		cur_sel2 = calc_hist_selectivity_scalar(typcache, &cur_sync,
+												hist2, nhist2, false);
+
+		selectivity += (prev_sel1 + cur_sel1) * (cur_sel2 - prev_sel2);
+
+		/* Prepare for the next iteration */
+		prev_sel1 = cur_sel1;
+		prev_sel2 = cur_sel2;
+	}
+
+	/* Include remainder of hist2 if any */
+	if (j < nhist2)
+		selectivity += 1 - prev_sel2;
+
+	return selectivity / 2;
+}
+
+/*
+ * multirangejoinsel -- join cardinality for multirange operators
+ */
+Datum
+multirangejoinsel(PG_FUNCTION_ARGS)
+{
+	PlannerInfo *root = (PlannerInfo *) PG_GETARG_POINTER(0);
+	Oid			operator = PG_GETARG_OID(1);
+	List	   *args = (List *) PG_GETARG_POINTER(2);
+	SpecialJoinInfo *sjinfo = (SpecialJoinInfo *) PG_GETARG_POINTER(4);
+	VariableStatData vardata1,
+				vardata2;
+	AttStatsSlot hist1,
+				hist2,
+				sslot;
+	bool		reversed;
+	Selectivity selec;
+	TypeCacheEntry *typcache = NULL,
+			   *rng_typcache = NULL;
+	Form_pg_statistic stats1,
+				stats2;
+	double		empty_frac1,
+				empty_frac2,
+				null_frac1,
+				null_frac2;
+	int			nhist1,
+				nhist2;
+	RangeBound *hist1_lower,
+			   *hist1_upper,
+			   *hist2_lower,
+			   *hist2_upper;
+	bool		empty;
+	int			i;
+
+	get_join_variables(root, args, sjinfo, &vardata1, &vardata2, &reversed);
+
+	selec = default_multirange_selectivity(operator);
+
+	/* get multirange type cache */
+	if (type_is_multirange(vardata1.vartype))
+		typcache = multirange_get_typcache(fcinfo, vardata1.vartype);
+	else if (type_is_multirange(vardata2.vartype))
+		typcache = multirange_get_typcache(fcinfo, vardata2.vartype);
+
+	if (HeapTupleIsValid(vardata1.statsTuple) &&
+		get_attstatsslot(&hist1, vardata1.statsTuple,
+						 STATISTIC_KIND_BOUNDS_HISTOGRAM, InvalidOid,
+						 ATTSTATSSLOT_VALUES) &&
+		HeapTupleIsValid(vardata2.statsTuple) &&
+		get_attstatsslot(&hist2, vardata2.statsTuple,
+						 STATISTIC_KIND_BOUNDS_HISTOGRAM, InvalidOid,
+						 ATTSTATSSLOT_VALUES) &&
+		typcache)
+	{
+
+		/* Initialize underlying range type cache */
+		rng_typcache = typcache->rngtype;
+
+		/*
+		 * First look up the fraction of NULLs and empty ranges from
+		 * pg_statistic.
+		 */
+		stats1 = (Form_pg_statistic) GETSTRUCT(vardata1.statsTuple);
+		stats2 = (Form_pg_statistic) GETSTRUCT(vardata2.statsTuple);
+
+		null_frac1 = stats1->stanullfrac;
+		null_frac2 = stats2->stanullfrac;
+
+		/* Try to get fraction of empty ranges for the first variable */
+		if (get_attstatsslot(&sslot, vardata1.statsTuple,
+							 STATISTIC_KIND_RANGE_LENGTH_HISTOGRAM,
+							 InvalidOid,
+							 ATTSTATSSLOT_NUMBERS))
+		{
+			if (sslot.nnumbers != 1)	/* shouldn't happen */
+				elog(ERROR, "invalid empty fraction statistic");
+			empty_frac1 = sslot.numbers[0];
+			free_attstatsslot(&sslot);
+		}
+		else
+		{
+			/* No empty fraction statistic. Assume no empty ranges. */
+			empty_frac1 = 0.0;
+		}
+
+		/* Try to get fraction of empty ranges for the second variable */
+		if (get_attstatsslot(&sslot, vardata2.statsTuple,
+							 STATISTIC_KIND_RANGE_LENGTH_HISTOGRAM,
+							 InvalidOid,
+							 ATTSTATSSLOT_NUMBERS))
+		{
+			if (sslot.nnumbers != 1)	/* shouldn't happen */
+				elog(ERROR, "invalid empty fraction statistic");
+			empty_frac2 = sslot.numbers[0];
+			free_attstatsslot(&sslot);
+		}
+		else
+		{
+			/* No empty fraction statistic. Assume no empty ranges. */
+			empty_frac2 = 0.0;
+		}
+
+		/*
+		 * Convert histograms of ranges into histograms of their lower and
+		 * upper bounds for the first variable.
+		 */
+		nhist1 = hist1.nvalues;
+		hist1_lower = (RangeBound *) palloc(sizeof(RangeBound) * nhist1);
+		hist1_upper = (RangeBound *) palloc(sizeof(RangeBound) * nhist1);
+		for (i = 0; i < nhist1; i++)
+		{
+			range_deserialize(rng_typcache, DatumGetRangeTypeP(hist1.values[i]),
+							  &hist1_lower[i], &hist1_upper[i], &empty);
+			/* The histogram should not contain any empty ranges */
+			if (empty)
+				elog(ERROR, "bounds histogram contains an empty range");
+		}
+
+		/*
+		 * Convert histograms of ranges into histograms of their lower and
+		 * upper bounds for the second variable.
+		 */
+		nhist2 = hist2.nvalues;
+		hist2_lower = (RangeBound *) palloc(sizeof(RangeBound) * nhist2);
+		hist2_upper = (RangeBound *) palloc(sizeof(RangeBound) * nhist2);
+		for (i = 0; i < nhist2; i++)
+		{
+			range_deserialize(rng_typcache, DatumGetRangeTypeP(hist2.values[i]),
+							  &hist2_lower[i], &hist2_upper[i], &empty);
+			/* The histogram should not contain any empty ranges */
+			if (empty)
+				elog(ERROR, "bounds histogram contains an empty range");
+		}
+
+		switch (operator)
+		{
+			case OID_MULTIRANGE_OVERLAPS_MULTIRANGE_OP:
+			case OID_MULTIRANGE_OVERLAPS_RANGE_OP:
+			case OID_RANGE_OVERLAPS_MULTIRANGE_OP:
+
+				/*
+				 * Selectivity of A && B = Selectivity of NOT( A << B || A >>
+				 * B ) = 1 - Selectivity of (A.upper < B.lower) - Selectivity
+				 * of (B.upper < A.lower)
+				 */
+				selec = 1;
+				selec -= calc_hist_join_selectivity(rng_typcache,
+													hist1_upper, nhist1,
+													hist2_lower, nhist2);
+				selec -= calc_hist_join_selectivity(rng_typcache,
+													hist2_upper, nhist2,
+													hist1_lower, nhist1);
+				break;
+
+			case OID_MULTIRANGE_LESS_EQUAL_OP:
+
+				/*
+				 * A <= B
+				 *
+				 * Start by comparing lower bounds and if they are equal
+				 * compare upper bounds
+				 *
+				 * Negation of OID_RANGE_GREATER_OP.
+				 *
+				 * Overestimate by comparing only the lower bounds. Higher
+				 * accuracy would require us to subtract P(lower1 = lower2) *
+				 * P(upper1 > upper2)
+				 */
+				selec = 1 - calc_hist_join_selectivity(rng_typcache,
+													   hist2_lower, nhist2,
+													   hist1_lower, nhist1);
+				break;
+
+			case OID_MULTIRANGE_LESS_OP:
+
+				/*
+				 * A < B
+				 *
+				 * Start by comparing lower bounds and if they are equal
+				 * compare upper bounds
+				 *
+				 * Underestimate by comparing only the lower bounds. Higher
+				 * accuracy would require us to add P(lower1 = lower2) *
+				 * P(upper1 < upper2)
+				 */
+				selec = calc_hist_join_selectivity(rng_typcache,
+												   hist1_lower, nhist1,
+												   hist2_lower, nhist2);
+				break;
+
+			case OID_MULTIRANGE_GREATER_EQUAL_OP:
+
+				/*
+				 * A >= B
+				 *
+				 * Start by comparing lower bounds and if they are equal
+				 * compare upper bounds
+				 *
+				 * Negation of OID_RANGE_LESS_OP.
+				 *
+				 * Overestimate by comparing only the lower bounds. Higher
+				 * accuracy would require us to add P(lower1 = lower2) *
+				 * P(upper1 < upper2)
+				 */
+				selec = 1 - calc_hist_join_selectivity(rng_typcache,
+													   hist1_lower, nhist1,
+													   hist2_lower, nhist2);
+				break;
+
+			case OID_MULTIRANGE_GREATER_OP:
+
+				/*
+				 * A > B == B < A
+				 *
+				 * Start by comparing lower bounds and if they are equal
+				 * compare upper bounds
+				 *
+				 * Underestimate by comparing only the lower bounds. Higher
+				 * accuracy would require us to add P(lower1 = lower2) *
+				 * P(upper1 > upper2)
+				 */
+				selec = calc_hist_join_selectivity(rng_typcache,
+												   hist2_lower, nhist2,
+												   hist1_lower, nhist1);
+				break;
+
+			case OID_MULTIRANGE_LEFT_MULTIRANGE_OP:
+			case OID_MULTIRANGE_LEFT_RANGE_OP:
+			case OID_RANGE_LEFT_MULTIRANGE_OP:
+				/* var1 << var2 when upper(var1) < lower(var2) */
+				selec = calc_hist_join_selectivity(rng_typcache,
+												   hist1_upper, nhist1,
+												   hist2_lower, nhist2);
+				break;
+
+			case OID_MULTIRANGE_RIGHT_MULTIRANGE_OP:
+			case OID_MULTIRANGE_RIGHT_RANGE_OP:
+			case OID_RANGE_RIGHT_MULTIRANGE_OP:
+				/* var1 >> var2 when upper(var2) < lower(var1) */
+				selec = calc_hist_join_selectivity(rng_typcache,
+												   hist2_upper, nhist2,
+												   hist1_lower, nhist1);
+				break;
+
+			case OID_MULTIRANGE_OVERLAPS_LEFT_MULTIRANGE_OP:
+			case OID_MULTIRANGE_OVERLAPS_LEFT_RANGE_OP:
+			case OID_RANGE_OVERLAPS_LEFT_MULTIRANGE_OP:
+				/* var1 &< var2 when upper(var1) < upper(var2) */
+				selec = calc_hist_join_selectivity(rng_typcache,
+												   hist1_upper, nhist1,
+												   hist2_upper, nhist2);
+				break;
+
+			case OID_MULTIRANGE_OVERLAPS_RIGHT_MULTIRANGE_OP:
+			case OID_MULTIRANGE_OVERLAPS_RIGHT_RANGE_OP:
+			case OID_RANGE_OVERLAPS_RIGHT_MULTIRANGE_OP:
+				/* var1 &> var2 when lower(var2) < lower(var1) */
+				selec = calc_hist_join_selectivity(rng_typcache,
+												   hist2_lower, nhist2,
+												   hist1_lower, nhist1);
+				break;
+
+			case OID_MULTIRANGE_MULTIRANGE_CONTAINED_OP:
+			case OID_MULTIRANGE_RANGE_CONTAINED_OP:
+			case OID_RANGE_MULTIRANGE_CONTAINED_OP:
+
+				/*
+				 * var1 <@ var2 is equivalent to lower(var2) <= lower(var1)
+				 * and upper(var1) <= upper(var2)
+				 *
+				 * After negating both sides we get not( lower(var1) <
+				 * lower(var2) ) and not( upper(var2) < upper(var1) ),
+				 * respectively. Assuming independence, multiply both
+				 * selectivities.
+				 */
+				selec = 1 - calc_hist_join_selectivity(rng_typcache,
+													   hist1_lower, nhist1,
+													   hist2_lower, nhist2);
+				selec *= 1 - calc_hist_join_selectivity(rng_typcache,
+														hist2_upper, nhist2,
+														hist1_upper, nhist1);
+				break;
+
+			case OID_MULTIRANGE_CONTAINS_MULTIRANGE_OP:
+			case OID_MULTIRANGE_CONTAINS_RANGE_OP:
+			case OID_RANGE_CONTAINS_MULTIRANGE_OP:
+
+				/*
+				 * var1 @> var2 is equivalent to lower(var1) <= lower(var2)
+				 * and upper(var2) <= upper(var1)
+				 *
+				 * After negating both sides we get not( lower(var2) <
+				 * lower(var1) ) and not( upper(var1) < upper(var2) ),
+				 * respectively. Assuming independence, multiply both
+				 * selectivities.
+				 */
+				selec = 1 - calc_hist_join_selectivity(rng_typcache,
+													   hist2_lower, nhist2,
+													   hist1_lower, nhist1);
+				selec *= 1 - calc_hist_join_selectivity(rng_typcache,
+														hist1_upper, nhist1,
+														hist2_upper, nhist2);
+				break;
+
+			case OID_MULTIRANGE_ADJACENT_MULTIRANGE_OP:
+			case OID_MULTIRANGE_ADJACENT_RANGE_OP:
+			case OID_RANGE_ADJACENT_MULTIRANGE_OP:
+
+				/*
+				 * just punt for now, estimation would require equality
+				 * selectivity for bounds
+				 */
+			case OID_MULTIRANGE_CONTAINS_ELEM_OP:
+			case OID_MULTIRANGE_ELEM_CONTAINED_OP:
+
+				/*
+				 * just punt for now, estimation would require extraction of
+				 * histograms for the anyelement
+				 */
+			default:
+				break;
+		}
+
+
+		/* the calculated selectivity only applies to non-empty (multi)ranges */
+		selec *= (1 - empty_frac1) * (1 - empty_frac2);
+
+		/*
+		 * Depending on the operator, empty (multi)ranges might match
+		 * different fractions of the result.
+		 */
+		switch (operator)
+		{
+			case OID_MULTIRANGE_LESS_OP:
+
+				/*
+				 * empty (multi)range < non-empty (multi)range
+				 */
+				selec += empty_frac1 * (1 - empty_frac2);
+				break;
+
+			case OID_MULTIRANGE_GREATER_OP:
+
+				/*
+				 * non-empty (multi)range > empty (multi)range
+				 */
+				selec += (1 - empty_frac1) * empty_frac2;
+				break;
+
+			case OID_MULTIRANGE_MULTIRANGE_CONTAINED_OP:
+			case OID_MULTIRANGE_RANGE_CONTAINED_OP:
+			case OID_RANGE_MULTIRANGE_CONTAINED_OP:
+
+				/*
+				 * empty (multi)range <@ any (multi)range
+				 */
+			case OID_MULTIRANGE_LESS_EQUAL_OP:
+
+				/*
+				 * empty (multi)range <= any (multi)range
+				 */
+				selec += empty_frac1;
+				break;
+
+			case OID_MULTIRANGE_CONTAINS_MULTIRANGE_OP:
+			case OID_MULTIRANGE_CONTAINS_RANGE_OP:
+			case OID_RANGE_CONTAINS_MULTIRANGE_OP:
+
+				/*
+				 * any (multi)range @> empty (multi)range
+				 */
+			case OID_MULTIRANGE_GREATER_EQUAL_OP:
+
+				/*
+				 * any (multi)range >= empty (multi)range
+				 */
+				selec += empty_frac2;
+				break;
+
+			case OID_MULTIRANGE_CONTAINS_ELEM_OP:
+			case OID_MULTIRANGE_ELEM_CONTAINED_OP:
+			case OID_MULTIRANGE_OVERLAPS_MULTIRANGE_OP:
+			case OID_MULTIRANGE_OVERLAPS_RANGE_OP:
+			case OID_RANGE_OVERLAPS_MULTIRANGE_OP:
+			case OID_MULTIRANGE_OVERLAPS_LEFT_MULTIRANGE_OP:
+			case OID_MULTIRANGE_OVERLAPS_LEFT_RANGE_OP:
+			case OID_RANGE_OVERLAPS_LEFT_MULTIRANGE_OP:
+			case OID_MULTIRANGE_OVERLAPS_RIGHT_MULTIRANGE_OP:
+			case OID_MULTIRANGE_OVERLAPS_RIGHT_RANGE_OP:
+			case OID_RANGE_OVERLAPS_RIGHT_MULTIRANGE_OP:
+			case OID_MULTIRANGE_LEFT_MULTIRANGE_OP:
+			case OID_MULTIRANGE_LEFT_RANGE_OP:
+			case OID_RANGE_LEFT_MULTIRANGE_OP:
+			case OID_MULTIRANGE_RIGHT_MULTIRANGE_OP:
+			case OID_MULTIRANGE_RIGHT_RANGE_OP:
+			case OID_RANGE_RIGHT_MULTIRANGE_OP:
+			case OID_MULTIRANGE_ADJACENT_MULTIRANGE_OP:
+			case OID_MULTIRANGE_ADJACENT_RANGE_OP:
+			case OID_RANGE_ADJACENT_MULTIRANGE_OP:
+			default:
+
+				/*
+				 * these operators always return false when an empty
+				 * (multi)range is involved
+				 */
+				break;
+
+		}
+
+		/* all range operators are strict */
+		selec *= (1 - null_frac1) * (1 - null_frac2);
+
+		free_attstatsslot(&hist1);
+		free_attstatsslot(&hist2);
+	}
+
+	ReleaseVariableStats(vardata1);
+	ReleaseVariableStats(vardata2);
+
+	CLAMP_PROBABILITY(selec);
+
+	PG_RETURN_FLOAT8((float8) selec);
+
+}

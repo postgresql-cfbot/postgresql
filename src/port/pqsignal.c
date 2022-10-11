@@ -12,15 +12,10 @@
  *	  src/port/pqsignal.c
  *
  *	We now assume that all Unix-oid systems have POSIX sigaction(2)
- *	with support for restartable signals (SA_RESTART).  We used to also
- *	support BSD-style signal(2), but there really shouldn't be anything
- *	out there anymore that doesn't have the POSIX API.
+ *	with support for restartable signals (SA_RESTART).
  *
- *	Windows, of course, is resolutely in a class by itself.  In the backend,
- *	we don't use this file at all; src/backend/port/win32/signal.c provides
- *	pqsignal() for the backend environment.  Frontend programs can use
- *	this version of pqsignal() if they wish, but beware that this does
- *	not provide restartable signals on Windows.
+ *	Frontend programs can use this version of pqsignal() if they wish, but
+ *	beware that this does not provide restartable signals on Windows.
  *
  * ------------------------------------------------------------------------
  */
@@ -29,7 +24,9 @@
 
 #include <signal.h>
 
-#if !defined(WIN32) || defined(FRONTEND)
+#ifndef FRONTEND
+#include "libpq/pqsignal.h"
+#endif
 
 /*
  * Set up a signal handler, with SA_RESTART, for signal "signo"
@@ -39,7 +36,7 @@
 pqsigfunc
 pqsignal(int signo, pqsigfunc func)
 {
-#ifndef WIN32
+#if !(defined(WIN32) && defined(FRONTEND))
 	struct sigaction act,
 				oact;
 
@@ -53,9 +50,8 @@ pqsignal(int signo, pqsigfunc func)
 	if (sigaction(signo, &act, &oact) < 0)
 		return SIG_ERR;
 	return oact.sa_handler;
-#else							/* WIN32 */
+#else
+	/* Forward to Windows native signal system. */
 	return signal(signo, func);
 #endif
 }
-
-#endif							/* !defined(WIN32) || defined(FRONTEND) */

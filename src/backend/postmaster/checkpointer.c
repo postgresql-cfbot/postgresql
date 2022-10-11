@@ -1116,6 +1116,19 @@ ForwardSyncRequest(const FileTag *ftag, SyncRequestType type)
 		if (!AmBackgroundWriterProcess())
 			CheckpointerShmem->num_backend_fsync++;
 		LWLockRelease(CheckpointerCommLock);
+
+		/*
+		 * We have no way of knowing if the current IOContext is
+		 * IOCONTEXT_SHARED or IOCONTEXT_[BULKREAD, BULKWRITE, VACUUM] at this
+		 * point, so count the fsync as being in the IOCONTEXT_SHARED
+		 * IOContext. This is probably okay, because the number of backend
+		 * fsyncs doesn't say anything about the efficacy of the
+		 * BufferAccessStrategy. And counting both fsyncs done in
+		 * IOCONTEXT_SHARED and IOCONTEXT_[BULKREAD, BULKWRITE, VACUUM] under
+		 * IOCONTEXT_SHARED is likely clearer when investigating the number of
+		 * backend fsyncs.
+		 */
+		pgstat_count_io_op(IOOP_FSYNC, IOCONTEXT_SHARED);
 		return false;
 	}
 

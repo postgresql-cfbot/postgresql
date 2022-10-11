@@ -449,6 +449,15 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
      </row>
 
      <row>
+      <entry><structname>pg_stat_io</structname><indexterm><primary>pg_stat_io</primary></indexterm></entry>
+      <entry>A row for each IO Context for each backend type showing
+      statistics about backend IO operations. See
+       <link linkend="monitoring-pg-stat-io-view">
+       <structname>pg_stat_io</structname></link> for details.
+     </entry>
+     </row>
+
+     <row>
       <entry><structname>pg_stat_wal</structname><indexterm><primary>pg_stat_wal</primary></indexterm></entry>
       <entry>One row only, showing statistics about WAL activity. See
        <link linkend="monitoring-pg-stat-wal-view">
@@ -3600,13 +3609,12 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
        <structfield>stats_reset</structfield> <type>timestamp with time zone</type>
       </para>
       <para>
-       Time at which these statistics were last reset
+       Time at which these statistics were last reset.
       </para></entry>
      </row>
     </tbody>
    </tgroup>
   </table>
-
   <para>
     Normally, WAL files are archived in order, oldest to newest, but that is
     not guaranteed, and does not hold under special circumstances like when
@@ -3615,7 +3623,210 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
     <structfield>last_archived_wal</structfield> have also been successfully
     archived.
   </para>
+ </sect2>
 
+ <sect2 id="monitoring-pg-stat-io-view">
+  <title><structname>pg_stat_io</structname></title>
+
+  <indexterm>
+   <primary>pg_stat_io</primary>
+  </indexterm>
+
+  <para>
+   The <structname>pg_stat_io</structname> view has a row for each backend type
+   and IO context containing global data for the cluster on IO operations done
+   by that backend type in that IO context. Currently, only a subset of IO
+   operations are tracked here. WAL IO, IO on temporary files, and some forms
+   of IO outside of shared buffers (such as when building indexes or moving a
+   table from one tablespace to another) could be added in the future.
+  </para>
+
+  <table id="pg-stat-io-view" xreflabel="pg_stat_io">
+   <title><structname>pg_stat_io</structname> View</title>
+   <tgroup cols="1">
+    <thead>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       Column Type
+      </para>
+      <para>
+       Description
+      </para></entry>
+     </row>
+    </thead>
+    <tbody>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>backend_type</structfield> <type>text</type>
+      </para>
+      <para>
+       Type of backend (e.g. background worker, autovacuum worker).
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>io_context</structfield> <type>text</type>
+      </para>
+      <para>
+       IO Context used. This refers to the context or location of an IO
+       operation.
+       <literal>shared</literal> refers to shared buffers, the primary
+       buffer pool for relation data.
+       <literal>local</literal> refers to
+       process-local memory used for temporary tables.
+       <literal>vacuum</literal> refers to memory reserved for use during
+       vacuumming and analyzing.
+       <literal>bulkread</literal>
+       refers to memory reserved for use during bulk read operations.
+       <literal>bulkwrite</literal>
+       refers to memory reserved for use during bulk write operations.
+       The autovacuum daemon, explicit <command>VACUUM</command>, explicit
+       <command>ANALYZE</command>, many bulk reads, and many bulk writes use a
+       fixed amount of memory, acquiring the equivalent number of shared
+       buffers and reusing them circularly to avoid occupying an undue portion
+       of the main shared buffer pool.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>read</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Reads by this <varname>backend_type</varname> into
+       memory or buffers in this <varname>io_context</varname>.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>written</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Writes of data in this <varname>io_context</varname> written out by this
+       <varname>backend_type</varname>.
+       Note that the values of <varname>written</varname> for
+       <varname>backend_type</varname> <literal>background writer</literal> and
+       <varname>backend_type</varname> <literal>checkpointer</literal> are
+       equivalent to the values of <varname>buffers_clean</varname> and
+       <varname>buffers_checkpoint</varname>, respectively, in <link
+       linkend="monitoring-pg-stat-bgwriter-view">
+       <structname>pg_stat_bgwriter</structname></link>.
+       Also, the sum of <varname>written</varname> and
+       <varname>extended</varname> in this view for
+       <varname>backend_type</varname>s <literal>client backend</literal>,
+       <literal>autovacuum worker</literal>, <literal>background
+       worker</literal>, and <literal>walsender</literal> in
+       <varname>io_context</varname>s <literal>shared</literal>,
+       <literal>bulkread</literal>, <literal>bulkwrite</literal>, and
+       <literal>vacuum</literal> is equivalent to
+       <varname>buffers_backend</varname> in
+       <structname>pg_stat_bgwriter</structname>.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>extended</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Extends of relations done by this <varname>backend_type</varname> in
+       order to write data in this <varname>io_context</varname>.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>unit</structfield> <type>text</type>
+      </para>
+      <para>
+      The unit of IO read, written, or extended. Currently
+      <varname>block_size</varname> is the only possible value. Reads, writes,
+      and extends of relation data are done in <varname>block_size</varname>
+      units. Future values could include <varname>wal_block_size</varname>,
+      once WAL IO is tracked in this view, and <quote>bytes</quote>, once
+      non-block-oriented IO such as temporary file IO is tracked here.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>clocksweeps</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of clocksweeps done by this <varname>backend_type</varname> in
+       order to acquire a buffer in this <varname>io_context</varname>. A
+       <literal>clocksweep</literal> in the <literal>bulkread</literal>,
+       <literal>bulkwrite</literal>, or <literal>vacuum</literal>
+       <varname>io_context</varname>s is counted when a backend adds a shared
+       buffer to the fixed-size ring used to avoid consuming excessive shared
+       buffers. If the backend has pinned all of the buffers in the ring, it
+       may add a replacement shared buffer to the ring. This will also be
+       counted as a <literal>clocksweep</literal>.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>reused</structfield> <type>bigint</type>
+      </para>
+      <para>
+       The number of times a buffer was reused as part of an operation in the
+       <literal>bulkread</literal>, <literal>bulkwrite</literal>, and
+       <literal>vacuum</literal> <varname>io_context</varname>s.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>hit</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Relevant only for block-based IO of data accessed in the course of
+       satisfying queries, <varname>hit</varname> is the number of number of
+       accesses of blocks already located in a
+       <productname>PostgreSQL</productname> buffer in this specified
+       <varname>io_context</varname> by this <varname>backend_type</varname>.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>files_synced</structfield> <type>bigint</type>
+      </para>
+       <para>
+       Number of files fsynced by this <varname>backend_type</varname> for the
+       purpose of persisting data dirtied in this
+       <varname>io_context</varname>. <literal>fsyncs</literal> are done at
+       segment boundaries so <varname>unit</varname> does not apply to the
+       <varname>files_synced</varname> column. <literal>fsyncs</literal> done
+       by backends in order to persist data written in
+       <varname>io_context</varname> <literal>vacuum</literal>,
+       <varname>io_context</varname> <literal>bulkread</literal>, or
+       <varname>io_context</varname> <literal>bulkwrite</literal> are counted
+       as an <varname>io_context</varname> <literal>shared</literal>
+       <literal>fsync</literal>. Note that the sum of
+       <varname>files_synced</varname> for all <varname>io_context</varname>
+       <literal>shared</literal> for all <varname>backend_type</varname>s
+       except <literal>checkpointer</literal> is equivalent to
+       <varname>buffers_backend_fsync</varname> in <link
+       linkend="monitoring-pg-stat-bgwriter-view">
+       <structname>pg_stat_bgwriter</structname></link>.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>stats_reset</structfield> <type>timestamp with time zone</type>
+      </para>
+      <para>
+       Time at which these statistics were last reset.
+      </para></entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
  </sect2>
 
  <sect2 id="monitoring-pg-stat-bgwriter-view">
@@ -5360,6 +5571,8 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
         the <structname>pg_stat_bgwriter</structname>
         view, <literal>archiver</literal> to reset all the counters shown in
         the <structname>pg_stat_archiver</structname> view,
+        <literal>io</literal> to reset all the counters shown in the
+        <structname>pg_stat_io</structname> view,
         <literal>wal</literal> to reset all the counters shown in the
         <structname>pg_stat_wal</structname> view or
         <literal>recovery_prefetch</literal> to reset all the counters shown

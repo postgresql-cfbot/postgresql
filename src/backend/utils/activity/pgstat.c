@@ -359,6 +359,15 @@ static const PgStat_KindInfo pgstat_kind_infos[PGSTAT_NUM_KINDS] = {
 		.snapshot_cb = pgstat_checkpointer_snapshot_cb,
 	},
 
+	[PGSTAT_KIND_IOOPS] = {
+		.name = "io_ops",
+
+		.fixed_amount = true,
+
+		.reset_all_cb = pgstat_io_ops_reset_all_cb,
+		.snapshot_cb = pgstat_io_ops_snapshot_cb,
+	},
+
 	[PGSTAT_KIND_SLRU] = {
 		.name = "slru",
 
@@ -582,6 +591,7 @@ pgstat_report_stat(bool force)
 
 	/* Don't expend a clock check if nothing to do */
 	if (dlist_is_empty(&pgStatPending) &&
+		!have_ioopstats &&
 		!have_slrustats &&
 		!pgstat_have_pending_wal())
 	{
@@ -627,6 +637,9 @@ pgstat_report_stat(bool force)
 
 	/* flush database / relation / function / ... stats */
 	partial_flush |= pgstat_flush_pending_entries(nowait);
+
+	/* flush IO Operations stats */
+	partial_flush |= pgstat_flush_io_ops(nowait);
 
 	/* flush wal stats */
 	partial_flush |= pgstat_flush_wal(nowait);
@@ -1322,6 +1335,14 @@ pgstat_write_statsfile(void)
 	write_chunk_s(fpout, &pgStatLocal.snapshot.checkpointer);
 
 	/*
+	 * Write IO Operations stats struct
+	 */
+	pgstat_build_snapshot_fixed(PGSTAT_KIND_IOOPS);
+	write_chunk_s(fpout, &pgStatLocal.snapshot.io_ops.stat_reset_timestamp);
+	for (int i = 0; i < BACKEND_NUM_TYPES; i++)
+		write_chunk_s(fpout, &pgStatLocal.snapshot.io_ops.stats[i]);
+
+	/*
 	 * Write SLRU stats struct
 	 */
 	pgstat_build_snapshot_fixed(PGSTAT_KIND_SLRU);
@@ -1494,6 +1515,20 @@ pgstat_read_statsfile(void)
 	 */
 	if (!read_chunk_s(fpin, &shmem->checkpointer.stats))
 		goto error;
+
+	/*
+	 * Read IO Operations stats struct
+	 */
+	if (!read_chunk_s(fpin, &shmem->io_ops.stat_reset_timestamp))
+		goto error;
+
+	for (int bktype = 0; bktype < BACKEND_NUM_TYPES; bktype++)
+	{
+		pgstat_backend_io_stats_assert_well_formed(shmem->io_ops.stats[bktype].data,
+												   (BackendType) bktype);
+		if (!read_chunk_s(fpin, &shmem->io_ops.stats[bktype].data))
+			goto error;
+	}
 
 	/*
 	 * Read SLRU stats struct

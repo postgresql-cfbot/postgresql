@@ -918,4 +918,268 @@ SELECT pg_stat_get_subscription_stats(NULL);
  
 (1 row)
 
+-- Test that the following operations are tracked in pg_stat_io:
+-- - clocksweeps of shared buffers
+-- - reads of target blocks into shared buffers
+-- - shared buffer cache hits when target blocks reside in shared buffers
+-- - writes of shared buffers
+-- - extends of relations using shared buffers
+-- - fsyncs done to ensure the durability of data dirtying shared buffers
+SELECT sum(clocksweeps) AS io_sum_shared_clocksweeps_before FROM pg_stat_io WHERE io_context = 'shared' \gset
+SELECT sum(hit) AS io_sum_shared_hits_before FROM pg_stat_io WHERE io_context = 'shared' \gset
+SELECT sum(read) AS io_sum_shared_reads_before FROM pg_stat_io WHERE io_context = 'shared' \gset
+SELECT sum(written) AS io_sum_shared_writes_before FROM pg_stat_io WHERE io_context = 'shared' \gset
+SELECT sum(extended) AS io_sum_shared_extends_before FROM pg_stat_io WHERE io_context = 'shared' \gset
+SELECT sum(files_synced) AS io_sum_shared_fsyncs_before FROM pg_stat_io WHERE io_context = 'shared' \gset
+-- Create a regular table and insert some data to generate IOCONTEXT_SHARED
+-- clocksweeps and extends.
+CREATE TABLE test_io_shared(a int);
+INSERT INTO test_io_shared SELECT i FROM generate_series(1,100)i;
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+-- After a checkpoint, there should be some additional IOCONTEXT_SHARED writes
+-- and fsyncs.
+-- The second checkpoint ensures that stats from the first checkpoint have been
+-- reported and protects against any potential races amongst the table
+-- creation, a possible timing-triggered checkpoint, and the explicit
+-- checkpoint in the test.
+CHECKPOINT;
+CHECKPOINT;
+SELECT sum(clocksweeps) AS io_sum_shared_clocksweeps_after FROM pg_stat_io WHERE io_context = 'shared' \gset
+SELECT sum(written) AS io_sum_shared_writes_after FROM pg_stat_io WHERE io_context = 'shared' \gset
+SELECT sum(extended) AS io_sum_shared_extends_after FROM pg_stat_io WHERE io_context = 'shared' \gset
+SELECT sum(files_synced) AS io_sum_shared_fsyncs_after FROM pg_stat_io WHERE io_context = 'shared' \gset
+SELECT :io_sum_shared_clocksweeps_after > :io_sum_shared_clocksweeps_before;
+ ?column? 
+----------
+ t
+(1 row)
+
+SELECT :io_sum_shared_writes_after > :io_sum_shared_writes_before;
+ ?column? 
+----------
+ t
+(1 row)
+
+SELECT :io_sum_shared_extends_after > :io_sum_shared_extends_before;
+ ?column? 
+----------
+ t
+(1 row)
+
+SELECT current_setting('fsync') = 'off' OR :io_sum_shared_fsyncs_after > :io_sum_shared_fsyncs_before;
+ ?column? 
+----------
+ t
+(1 row)
+
+-- Change the tablespace so that the table is rewritten directly, then SELECT
+-- from it to cause it to be read back into shared buffers.
+SET allow_in_place_tablespaces = true;
+CREATE TABLESPACE test_io_shared_stats_tblspc LOCATION '';
+ALTER TABLE test_io_shared SET TABLESPACE test_io_shared_stats_tblspc;
+SELECT COUNT(*) FROM test_io_shared;
+ count 
+-------
+   100
+(1 row)
+
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+SELECT sum(read) AS io_sum_shared_reads_after FROM pg_stat_io WHERE io_context = 'shared' \gset
+SELECT :io_sum_shared_reads_after > :io_sum_shared_reads_before;
+ ?column? 
+----------
+ t
+(1 row)
+
+-- Select from the table again once it is in shared buffers. There should be
+-- some hits recorded in pg_stat_io.
+SELECT sum(hit) AS io_sum_shared_hits_after FROM pg_stat_io WHERE io_context = 'shared' \gset
+SELECT :io_sum_shared_hits_after > :io_sum_shared_hits_before;
+ ?column? 
+----------
+ t
+(1 row)
+
+DROP TABLE test_io_shared;
+DROP TABLESPACE test_io_shared_stats_tblspc;
+-- Test that clocksweeps of local buffers, reads of temporary table blocks
+-- into local buffers, temporary table block cache hits in local buffers,
+-- writes of local buffers, and extends of temporary tables are tracked in
+-- pg_stat_io.
+-- Set temp_buffers to a low value so that we can trigger writes with fewer
+-- inserted tuples. Do so in a new session in case temporary tables have been
+-- accessed by previous tests in this session.
+\c
+SET temp_buffers TO '1MB';
+CREATE TEMPORARY TABLE test_io_local(a int, b TEXT);
+SELECT sum(clocksweeps) AS io_sum_local_clocksweeps_before FROM pg_stat_io WHERE io_context = 'local' \gset
+SELECT sum(hit) AS io_sum_local_hits_before FROM pg_stat_io WHERE io_context = 'local' \gset
+SELECT sum(read) AS io_sum_local_reads_before FROM pg_stat_io WHERE io_context = 'local' \gset
+SELECT sum(written) AS io_sum_local_writes_before FROM pg_stat_io WHERE io_context = 'local' \gset
+SELECT sum(extended) AS io_sum_local_extends_before FROM pg_stat_io WHERE io_context = 'local' \gset
+-- Insert enough values that we need to reuse and write out dirty local
+-- buffers.
+INSERT INTO test_io_local SELECT generate_series(1, 8000) as id, repeat('a', 100);
+-- Read in evicted buffers.
+SELECT COUNT(*) FROM test_io_local;
+ count 
+-------
+  8000
+(1 row)
+
+-- Query tuples in local buffers to ensure new local buffer cache hits.
+SELECT COUNT(*) FROM test_io_local;
+ count 
+-------
+  8000
+(1 row)
+
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+SELECT sum(clocksweeps) AS io_sum_local_clocksweeps_after FROM pg_stat_io WHERE io_context = 'local' \gset
+SELECT sum(hit) AS io_sum_local_hits_after FROM pg_stat_io WHERE io_context = 'local' \gset
+SELECT sum(read) AS io_sum_local_reads_after FROM pg_stat_io WHERE io_context = 'local' \gset
+SELECT sum(written) AS io_sum_local_writes_after FROM pg_stat_io WHERE io_context = 'local' \gset
+SELECT sum(extended) AS io_sum_local_extends_after FROM pg_stat_io WHERE io_context = 'local' \gset
+SELECT :io_sum_local_clocksweeps_after > :io_sum_local_clocksweeps_before;
+ ?column? 
+----------
+ t
+(1 row)
+
+SELECT :io_sum_local_reads_after > :io_sum_local_reads_before;
+ ?column? 
+----------
+ t
+(1 row)
+
+SELECT :io_sum_local_hits_after > :io_sum_local_hits_before;
+ ?column? 
+----------
+ t
+(1 row)
+
+SELECT :io_sum_local_writes_after > :io_sum_local_writes_before;
+ ?column? 
+----------
+ t
+(1 row)
+
+SELECT :io_sum_local_extends_after > :io_sum_local_extends_before;
+ ?column? 
+----------
+ t
+(1 row)
+
+RESET temp_buffers;
+-- Test that reuse of strategy buffers and reads of blocks into these reused
+-- buffers while VACUUMing are tracked in pg_stat_io.
+-- Set wal_skip_threshold smaller than the expected size of
+-- test_io_vac_strategy so that, even if wal_level is minimal, VACUUM FULL will
+-- fsync the newly rewritten test_io_vac_strategy instead of writing it to WAL.
+-- Writing it to WAL will result in the newly written relation pages being in
+-- shared buffers -- preventing us from testing BAS_VACUUM BufferAccessStrategy
+-- clocksweeps and reads.
+SET wal_skip_threshold = '1 kB';
+SELECT sum(clocksweeps) AS io_sum_vac_strategy_clocksweeps_before FROM pg_stat_io WHERE io_context = 'vacuum' \gset
+SELECT sum(reused) AS io_sum_vac_strategy_reuses_before FROM pg_stat_io WHERE io_context = 'vacuum' \gset
+SELECT sum(read) AS io_sum_vac_strategy_reads_before FROM pg_stat_io WHERE io_context = 'vacuum' \gset
+CREATE TABLE test_io_vac_strategy(a int, b int) WITH (autovacuum_enabled = 'false');
+INSERT INTO test_io_vac_strategy SELECT i, i from generate_series(1, 8000)i;
+-- Ensure that the next VACUUM will need to perform IO by rewriting the table
+-- first with VACUUM (FULL).
+VACUUM (FULL) test_io_vac_strategy;
+VACUUM (PARALLEL 0) test_io_vac_strategy;
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+SELECT sum(clocksweeps) AS io_sum_vac_strategy_clocksweeps_after FROM pg_stat_io WHERE io_context = 'vacuum' \gset
+SELECT sum(reused) AS io_sum_vac_strategy_reuses_after FROM pg_stat_io WHERE io_context = 'vacuum' \gset
+SELECT sum(read) AS io_sum_vac_strategy_reads_after FROM pg_stat_io WHERE io_context = 'vacuum' \gset
+SELECT :io_sum_vac_strategy_clocksweeps_after > :io_sum_vac_strategy_clocksweeps_before;
+ ?column? 
+----------
+ t
+(1 row)
+
+SELECT :io_sum_vac_strategy_reads_after > :io_sum_vac_strategy_reads_before;
+ ?column? 
+----------
+ t
+(1 row)
+
+SELECT :io_sum_vac_strategy_reuses_after > :io_sum_vac_strategy_reuses_before;
+ ?column? 
+----------
+ t
+(1 row)
+
+RESET wal_skip_threshold;
+-- Test that extends done by a CTAS, which uses a BAS_BULKWRITE
+-- BufferAccessStrategy, are tracked in pg_stat_io.
+SELECT sum(extended) AS io_sum_bulkwrite_strategy_extends_before FROM pg_stat_io WHERE io_context = 'bulkwrite' \gset
+CREATE TABLE test_io_bulkwrite_strategy AS SELECT i FROM generate_series(1,100)i;
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+SELECT sum(extended) AS io_sum_bulkwrite_strategy_extends_after FROM pg_stat_io WHERE io_context = 'bulkwrite' \gset
+SELECT :io_sum_bulkwrite_strategy_extends_after > :io_sum_bulkwrite_strategy_extends_before;
+ ?column? 
+----------
+ t
+(1 row)
+
+-- Test that reads of blocks into reused strategy buffers during database
+-- creation, which uses a BAS_BULKREAD BufferAccessStrategy, are tracked in
+-- pg_stat_io.
+SELECT sum(read) AS io_sum_bulkread_strategy_reads_before FROM pg_stat_io WHERE io_context = 'bulkread' \gset
+CREATE DATABASE test_io_bulkread_strategy_db;
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+SELECT sum(read) AS io_sum_bulkread_strategy_reads_after FROM pg_stat_io WHERE io_context = 'bulkread' \gset
+SELECT :io_sum_bulkread_strategy_reads_after > :io_sum_bulkread_strategy_reads_before;
+ ?column? 
+----------
+ t
+(1 row)
+
+-- Test IO stats reset
+SELECT sum(clocksweeps) + sum(reused) + sum(extended) + sum(files_synced) + sum(read) + sum(written) AS io_stats_pre_reset FROM pg_stat_io \gset
+SELECT pg_stat_reset_shared('io');
+ pg_stat_reset_shared 
+----------------------
+ 
+(1 row)
+
+SELECT sum(clocksweeps) + sum(reused) + sum(extended) + sum(files_synced) + sum(read) + sum(written) AS io_stats_post_reset FROM pg_stat_io \gset
+SELECT :io_stats_post_reset < :io_stats_pre_reset;
+ ?column? 
+----------
+ t
+(1 row)
+
 -- End of Stats Test

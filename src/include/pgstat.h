@@ -14,6 +14,7 @@
 #include "datatype/timestamp.h"
 #include "portability/instr_time.h"
 #include "postmaster/pgarch.h"	/* for MAX_XFN_CHARS */
+#include "storage/buf.h"
 #include "utils/backend_progress.h" /* for backward compatibility */
 #include "utils/backend_status.h"	/* for backward compatibility */
 #include "utils/relcache.h"
@@ -48,6 +49,7 @@ typedef enum PgStat_Kind
 	PGSTAT_KIND_ARCHIVER,
 	PGSTAT_KIND_BGWRITER,
 	PGSTAT_KIND_CHECKPOINTER,
+	PGSTAT_KIND_IOOPS,
 	PGSTAT_KIND_SLRU,
 	PGSTAT_KIND_WAL,
 } PgStat_Kind;
@@ -276,6 +278,56 @@ typedef struct PgStat_CheckpointerStats
 	PgStat_Counter buf_fsync_backend;
 } PgStat_CheckpointerStats;
 
+/*
+ * Types related to counting IO Operations for various IO Contexts
+ */
+
+typedef enum IOOp
+{
+	IOOP_CLOCKSWEEP = 0,
+	IOOP_EXTEND,
+	IOOP_FSYNC,
+	IOOP_HIT,
+	IOOP_READ,
+	IOOP_REUSE,
+	IOOP_WRITE,
+} IOOp;
+
+#define IOOP_NUM_TYPES (IOOP_WRITE + 1)
+
+typedef enum IOContext
+{
+	IOCONTEXT_BULKREAD = 0,
+	IOCONTEXT_BULKWRITE,
+	IOCONTEXT_LOCAL,
+	IOCONTEXT_SHARED,
+	IOCONTEXT_VACUUM,
+} IOContext;
+
+#define IOCONTEXT_NUM_TYPES (IOCONTEXT_VACUUM + 1)
+
+typedef struct PgStat_IOOpCounters
+{
+	PgStat_Counter clocksweeps;
+	PgStat_Counter extends;
+	PgStat_Counter fsyncs;
+	PgStat_Counter hits;
+	PgStat_Counter reads;
+	PgStat_Counter reuses;
+	PgStat_Counter writes;
+} PgStat_IOOpCounters;
+
+typedef struct PgStat_IOContextOps
+{
+	PgStat_IOOpCounters data[IOCONTEXT_NUM_TYPES];
+} PgStat_IOContextOps;
+
+typedef struct PgStat_BackendIOContextOps
+{
+	TimestampTz stat_reset_timestamp;
+	PgStat_IOContextOps stats[BACKEND_NUM_TYPES];
+} PgStat_BackendIOContextOps;
+
 typedef struct PgStat_StatDBEntry
 {
 	PgStat_Counter n_xact_commit;
@@ -450,6 +502,101 @@ extern PgStat_BgWriterStats *pgstat_fetch_stat_bgwriter(void);
 
 extern void pgstat_report_checkpointer(void);
 extern PgStat_CheckpointerStats *pgstat_fetch_stat_checkpointer(void);
+
+
+/*
+ * Functions in pgstat_io_ops.c
+ */
+
+extern void pgstat_count_io_op(IOOp io_op, IOContext io_context);
+extern PgStat_BackendIOContextOps *pgstat_fetch_backend_io_context_ops(void);
+extern const char *pgstat_io_context_desc(IOContext io_context);
+extern const char *pgstat_io_op_desc(IOOp io_op);
+
+/* Validation functions in pgstat_io_ops.c */
+extern bool pgstat_io_op_stats_collected(BackendType bktype);
+extern bool pgstat_bktype_io_context_valid(BackendType bktype, IOContext io_context);
+extern bool pgstat_io_op_valid(BackendType bktype, IOContext io_context, IOOp io_op);
+extern bool pgstat_expect_io_op(BackendType bktype, IOContext io_context, IOOp io_op);
+
+/* IO stats translation function in freelist.c */
+extern IOContext IOContextForStrategy(BufferAccessStrategy bas);
+/*
+ * Functions to assert that invalid IO Operation counters are zero.
+ */
+static inline void
+pgstat_io_context_ops_assert_zero(PgStat_IOOpCounters *counters)
+{
+	Assert(counters->clocksweeps == 0 && counters->extends == 0 &&
+		   counters->fsyncs == 0 && counters->reads == 0 &&
+		   counters->writes == 0);
+}
+
+static inline void
+pgstat_io_op_assert_zero(PgStat_IOOpCounters *counters, IOOp io_op)
+{
+	switch (io_op)
+	{
+		case IOOP_CLOCKSWEEP:
+			Assert(counters->clocksweeps == 0);
+			return;
+		case IOOP_EXTEND:
+			Assert(counters->extends == 0);
+			return;
+		case IOOP_FSYNC:
+			Assert(counters->fsyncs == 0);
+			return;
+		case IOOP_HIT:
+			Assert(counters->hits == 0);
+			return;
+		case IOOP_READ:
+			Assert(counters->reads == 0);
+			return;
+		case IOOP_REUSE:
+			Assert(counters->reuses == 0);
+			return;
+		case IOOP_WRITE:
+			Assert(counters->writes == 0);
+			return;
+	}
+
+	/* Should not reach here */
+	Assert(false);
+}
+
+/*
+ * Assert that stats have not been counted for any combination of IOContext and
+ * IOOp which are not valid for the passed-in BackendType. The passed-in array
+ * of PgStat_IOOpCounters must contain stats from the BackendType specified by
+ * the second parameter. Caller is responsible for any locking if the passed-in
+ * array of PgStat_IOOpCounters is a member of PgStatShared_IOContextOps.
+ */
+static inline void
+pgstat_backend_io_stats_assert_well_formed(PgStat_IOOpCounters
+										   backend_io_context_ops[IOCONTEXT_NUM_TYPES], BackendType bktype)
+{
+	bool		expect_backend_stats = true;
+
+	if (!pgstat_io_op_stats_collected(bktype))
+		expect_backend_stats = false;
+
+	for (int io_context = 0; io_context < IOCONTEXT_NUM_TYPES; io_context++)
+	{
+		if (!expect_backend_stats ||
+			!pgstat_bktype_io_context_valid(bktype, (IOContext) io_context))
+		{
+			pgstat_io_context_ops_assert_zero(&backend_io_context_ops[io_context]);
+			continue;
+		}
+
+		for (int io_op = 0; io_op < IOOP_NUM_TYPES; io_op++)
+		{
+			if (!pgstat_io_op_valid(bktype, (IOContext) io_context, (IOOp) io_op))
+				pgstat_io_op_assert_zero(&backend_io_context_ops[io_context],
+						(IOOp) io_op);
+		}
+	}
+}
 
 
 /*

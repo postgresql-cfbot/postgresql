@@ -18,6 +18,7 @@
 #include "libpq-fe.h"
 #include "nodes/execnodes.h"
 #include "nodes/pathnodes.h"
+#include "utils/timeout.h"
 #include "utils/relcache.h"
 
 /*
@@ -151,6 +152,7 @@ extern PGresult *pgfdw_exec_query(PGconn *conn, const char *query,
 								  PgFdwConnState *state);
 extern void pgfdw_report_error(int elevel, PGresult *res, PGconn *conn,
 							   bool clear, const char *sql);
+extern TimeoutId pgfdw_health_check_timeout;
 
 /* in option.c */
 extern int	ExtractConnectionOptions(List *defelems,
@@ -160,6 +162,7 @@ extern List *ExtractExtensionList(const char *extensionsString,
 								  bool warnOnMissing);
 extern char *process_pgfdw_appname(const char *appname);
 extern char *pgfdw_application_name;
+extern int	pgfdw_health_check_interval;
 
 /* in deparse.c */
 extern void classifyConditions(PlannerInfo *root,

@@ -82,4 +82,23 @@ extern List *GetForeignColumnOptions(Oid relid, AttrNumber attnum);
 extern Oid	get_foreign_data_wrapper_oid(const char *fdwname, bool missing_ok);
 extern Oid	get_foreign_server_oid(const char *servername, bool missing_ok);
 
+
+/* Functions and variables for fdw checking */
+typedef void (*CheckingRemoteServersCallback) (void *arg);
+
+typedef struct CheckingRemoteServersCallbackItem CheckingRemoteServersCallbackItem;
+
+struct CheckingRemoteServersCallbackItem
+{
+	CheckingRemoteServersCallbackItem	*next;
+	CheckingRemoteServersCallback		callback;
+	void								*arg;
+};
+
+extern void RegisterCheckingRemoteServersCallback(CheckingRemoteServersCallback callback,
+												  void *arg);
+extern void UnRegisterCheckingRemoteServersCallback(CheckingRemoteServersCallback callback,
+													void *arg);
+extern void CallCheckingRemoteServersCallbacks(void);
+
 #endif							/* FOREIGN_H */

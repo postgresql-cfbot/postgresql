@@ -2136,4 +2136,79 @@ GetForeignServerByName(const char *name, bool missing_ok);
 
   </sect1>
 
+   <sect1 id="fdw-health-check">
+    <title>Health check of Foreign servers</title>
+
+    <para>
+     Additionally, the FDW author can implement a function to check health of
+     foreign servers. PostgreSQL has a mechanism to call callback functions
+     registered by FDW, and they will be done when flags are set. To enable the
+     feature, FDW authors must  1) implement health check function, 2) register
+     the implemented function as health check callback function, and
+     3) set flags in arbitrary ways.
+    </para>
+
+    <sect2 id="fdw-health-check-implement">
+     <title>Implement health check function</title>
+
+     <para>
+      The health check function must be defined as following datatype.
+<programlisting>
+typedef void (*CheckingRemoteServersCallback) (void *arg);
+</programlisting>
+     </para>
+
+     <para>
+      When FDW finds disconnections to foreign servers, the function must set
+      an error message and send SIGINT signal to its backend process. To fill
+      and check the message following APIs can be used, which are declared in
+      <filename>tcop/tcopprot.h</filename>.
+
+<programlisting>
+extern bool TrySetQueryCancelMessage(char *message);
+extern bool HasQueryCancelMessage(void);
+</programlisting>
+
+      Note that the message will be duplicated to the transactional memory
+      context. The message does not have to be allocated memory by FDW author.
+     </para>
+
+    </sect2>
+
+    <sect2 id="fdw-health-check-callback">
+     <title>Register a callback</title>
+
+     <para>
+      Authors needs to register the callback function via following API.
+
+<programlisting>
+void
+RegisterCheckingRemoteServersCallback(CheckingRemoteServersCallback callback,
+                                      void *arg)
+</programlisting>
+     </para>
+
+    </sect2>
+
+    <sect2 id="fdw-health-check-timeout">
+     <title>Set flags in arbitrary ways</title>
+
+     <para>
+      Finally, authors must implement a mechanism to fire the health check
+      callbacks. It can be done by setting flags <literal>CheckingRemoteServersTimeoutPending</literal>
+      and <literal>InterruptPending</literal> to true. They are declared in <filename>miscadmin.h</filename>.
+
+<programlisting>
+volatile sig_atomic_t InterruptPending = false;
+volatile sig_atomic_t CheckingRemoteServersTimeoutPending = false;
+</programlisting>
+
+      Typically, the timeout mechanism can be used to set these flags. The
+      detailed description and usage are written in <filename>src/backend/utils/misc/timeout.c</filename>.
+     </para>
+
+    </sect2>
+
+   </sect1>
+
  </chapter>

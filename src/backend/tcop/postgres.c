@@ -35,6 +35,7 @@
 #include "commands/async.h"
 #include "commands/prepare.h"
 #include "common/pg_prng.h"
+#include "foreign/foreign.h"
 #include "jit/jit.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
@@ -165,6 +166,9 @@ static ProcSignalReason RecoveryConflictReason;
 /* reused buffer to pass to SendRowDescriptionMessage() */
 static MemoryContext row_description_context = NULL;
 static StringInfoData row_description_buf;
+
+/* Message string for canceling qurery caused by extensions */
+static char		*QueryCancelMessage = NULL;
 
 /* ----------------------------------------------------------------
  *		decls for routines only used in this file
@@ -3226,6 +3230,13 @@ ProcessInterrupts(void)
 				 errmsg("connection to client lost")));
 	}
 
+	if (CheckingRemoteServersTimeoutPending)
+	{
+		CheckingRemoteServersTimeoutPending = false;
+
+		CallCheckingRemoteServersCallbacks();
+	}
+
 	/*
 	 * If a recovery conflict happens while we are waiting for input from the
 	 * client, the client is presumably just sitting idle in a transaction,
@@ -3330,7 +3341,20 @@ ProcessInterrupts(void)
 			LockErrorCleanup();
 			ereport(ERROR,
 					(errcode(ERRCODE_QUERY_CANCELED),
+					 QueryCancelMessage ?
+					 errmsg("%s", QueryCancelMessage) :
 					 errmsg("canceling statement due to user request")));
+		}
+
+		/*
+		 * If a cancel request from FDW is ignored, we expect that it raise SIGINT and
+		 * fill QueryCancelMessage again. But some FDWs may skip its health check if
+		 * we already have a cancel message. To avoid that we clean up it.
+		 */
+		if (QueryCancelMessage != NULL)
+		{
+			pfree(QueryCancelMessage);
+			QueryCancelMessage = NULL;
 		}
 	}
 
@@ -4266,6 +4290,9 @@ PostgresMain(const char *dbname, const char *username)
 		/* Report the error to the client and/or server log */
 		EmitErrorReport();
 
+		/* Make sure QueryCancelMessage is reset. */
+		QueryCancelMessage = NULL;
+
 		/*
 		 * Make sure debug_query_string gets reset before we possibly clobber
 		 * the storage it points at.
@@ -5023,4 +5050,27 @@ disable_statement_timeout(void)
 {
 	if (get_timeout_active(STATEMENT_TIMEOUT))
 		disable_timeout(STATEMENT_TIMEOUT, false);
+}
+
+bool
+TrySetQueryCancelMessage(char *message)
+{
+	if (!HasQueryCancelMessage())
+	{
+		MemoryContext old;
+
+		old = MemoryContextSwitchTo(CurTransactionContext);
+		QueryCancelMessage = pstrdup(message);
+		MemoryContextSwitchTo(old);
+
+		return true;
+	}
+
+	return false;
+}
+
+bool
+HasQueryCancelMessage(void)
+{
+	return QueryCancelMessage != NULL;
 }

@@ -20,6 +20,7 @@
 #include "commands/extension.h"
 #include "libpq/libpq-be.h"
 #include "postgres_fdw.h"
+#include "storage/latch.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
 #include "utils/varlena.h"
@@ -50,6 +51,7 @@ static PQconninfoOption *libpq_options;
  * GUC parameters
  */
 char	   *pgfdw_application_name = NULL;
+int			pgfdw_health_check_interval;
 
 /*
  * Helper functions
@@ -57,6 +59,13 @@ char	   *pgfdw_application_name = NULL;
 static void InitPgFdwOptions(void);
 static bool is_valid_option(const char *keyword, Oid context);
 static bool is_libpq_option(const char *keyword);
+
+/*
+ * GUC hooks
+ */
+static bool check_pgfdw_health_check_interval(int *newval, void **extra,
+											  GucSource source);
+static void assign_pgfdw_health_check_interval(int newval, void *extra);
 
 #include "miscadmin.h"
 
@@ -519,6 +528,47 @@ process_pgfdw_appname(const char *appname)
 }
 
 /*
+ * Check hook for pgfdw_health_check_interval
+ */
+static bool
+check_pgfdw_health_check_interval(int *newval, void **extra, GucSource source)
+{
+	if (!WaitEventSetCanReportClosed() && *newval != 0)
+	{
+		GUC_check_errdetail("postgres_fdw.health_check_interval must be set to 0 on this platform");
+		return false;
+	}
+	return true;
+}
+
+/*
+ * Assign hook for pgfdw_health_check_interval
+ */
+static void
+assign_pgfdw_health_check_interval(int newval, void *extra)
+{
+	/* Quick return if timeout is not registered yet. */
+	if (pgfdw_health_check_timeout == MAX_TIMEOUTS)
+		return;
+
+	if (get_timeout_active(pgfdw_health_check_timeout))
+	{
+		if (newval == 0)
+			disable_timeout(pgfdw_health_check_timeout, false);
+
+		/*
+		 * we don't have to do anything because
+		 * new value will be used in pgfdw_connection_check().
+		 */
+		return;
+	}
+
+	/* Start timeout if wants to */
+	if (newval > 0)
+		enable_timeout_after(pgfdw_health_check_timeout, newval);
+}
+
+/*
  * Module load callback
  */
 void
@@ -542,6 +592,19 @@ _PG_init(void)
 							   NULL,
 							   NULL,
 							   NULL);
+
+	DefineCustomIntVariable("postgres_fdw.health_check_interval",
+							"Sets the time interval between checks of remote servers.",
+							NULL,
+							&pgfdw_health_check_interval,
+							0,
+							0,
+							INT_MAX,
+							PGC_USERSET,
+							GUC_UNIT_MS,
+							check_pgfdw_health_check_interval,
+							assign_pgfdw_health_check_interval,
+							NULL);
 
 	MarkGUCPrefixReserved("postgres_fdw");
 }

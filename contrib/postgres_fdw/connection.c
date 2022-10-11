@@ -23,12 +23,14 @@
 #include "postgres_fdw.h"
 #include "storage/fd.h"
 #include "storage/latch.h"
+#include "tcop/tcopprot.h"
 #include "utils/builtins.h"
 #include "utils/datetime.h"
 #include "utils/hsearch.h"
 #include "utils/inval.h"
 #include "utils/memutils.h"
 #include "utils/syscache.h"
+#include "utils/timeout.h"
 
 /*
  * Connection cache hash table entry
@@ -63,6 +65,7 @@ typedef struct ConnCacheEntry
 	bool		keep_connections;	/* setting value of keep_connections
 									 * server option */
 	Oid			serverid;		/* foreign server OID used to get server name */
+	char	   *servername;		/* foreign server name used to report ERROR */
 	uint32		server_hashvalue;	/* hash value of foreign server OID */
 	uint32		mapping_hashvalue;	/* hash value of user mapping OID */
 	PgFdwConnState state;		/* extra per-connection state */
@@ -79,6 +82,9 @@ static unsigned int prep_stmt_number = 0;
 
 /* tracks whether any work is needed in callback functions */
 static bool xact_got_connection = false;
+
+/* Timeout identifier for health check  */
+TimeoutId pgfdw_health_check_timeout = MAX_TIMEOUTS;
 
 /*
  * SQL functions
@@ -117,6 +123,11 @@ static void pgfdw_finish_pre_subcommit_cleanup(List *pending_entries,
 static bool UserMappingPasswordRequired(UserMapping *user);
 static bool disconnect_cached_connections(Oid serverid);
 
+/* Functions for checking remote servers */
+static void pgfdw_connection_check(void *arg);
+static bool pgfdw_connection_check_internal(PGconn *conn);
+static void pgfdw_checking_remote_servers_timeout_handler(void);
+
 /*
  * Get a PGconn which can be used to execute queries on the remote PostgreSQL
  * server with the user's authorization.  A new connection is established
@@ -138,6 +149,8 @@ GetConnection(UserMapping *user, bool will_prep_stmt, PgFdwConnState **state)
 	ConnCacheEntry *entry;
 	ConnCacheKey key;
 	MemoryContext ccxt = CurrentMemoryContext;
+	MemoryContext old;
+	ForeignServer *server = GetForeignServer(user->serverid);
 
 	/* First time through, initialize connection cache hashtable */
 	if (ConnectionHash == NULL)
@@ -160,6 +173,13 @@ GetConnection(UserMapping *user, bool will_prep_stmt, PgFdwConnState **state)
 									  pgfdw_inval_callback, (Datum) 0);
 		CacheRegisterSyscacheCallback(USERMAPPINGOID,
 									  pgfdw_inval_callback, (Datum) 0);
+		CacheRegisterSyscacheCallback(FOREIGNSERVERNAME,
+									  pgfdw_inval_callback, (Datum) 0);
+
+		/* Register a timeout and a callback for checking remote servers */
+		pgfdw_health_check_timeout = RegisterTimeout(USER_TIMEOUT,
+													 pgfdw_checking_remote_servers_timeout_handler);
+		RegisterCheckingRemoteServersCallback(pgfdw_connection_check, NULL);
 	}
 
 	/* Set flag that we did GetConnection during the current transaction */
@@ -175,10 +195,11 @@ GetConnection(UserMapping *user, bool will_prep_stmt, PgFdwConnState **state)
 	if (!found)
 	{
 		/*
-		 * We need only clear "conn" here; remaining fields will be filled
-		 * later when "conn" is set.
+		 * We need clear "conn" and "servername" here; remaining fields will be filled
+		 * later when they are set.
 		 */
 		entry->conn = NULL;
+		entry->servername = NULL;
 	}
 
 	/* Reject further use of connections which failed abort cleanup. */
@@ -202,6 +223,16 @@ GetConnection(UserMapping *user, bool will_prep_stmt, PgFdwConnState **state)
 	 */
 	if (entry->conn == NULL)
 		make_new_connection(entry, user);
+
+	/*
+	 * If cache entry doesn't have a name, duplicate it to the TopMemoryContext
+	 */
+	if (entry->servername == NULL)
+	{
+		old = MemoryContextSwitchTo(TopMemoryContext);
+		entry->servername = pstrdup(server->servername);
+		MemoryContextSwitchTo(old);
+	}
 
 	/*
 	 * We check the health of the cached connection here when using it.  In
@@ -282,6 +313,12 @@ GetConnection(UserMapping *user, bool will_prep_stmt, PgFdwConnState **state)
 	/* If caller needs access to the per-connection state, return it. */
 	if (state)
 		*state = &entry->state;
+
+	/* Start health-check timer if needed */
+	if (pgfdw_health_check_interval > 0 &&
+		!get_timeout_active(pgfdw_health_check_timeout))
+		enable_timeout_after(pgfdw_health_check_timeout,
+							 pgfdw_health_check_interval);
 
 	return entry->conn;
 }
@@ -531,6 +568,12 @@ disconnect_pg_server(ConnCacheEntry *entry)
 		PQfinish(entry->conn);
 		entry->conn = NULL;
 		ReleaseExternalFD();
+	}
+
+	if (entry->servername != NULL)
+	{
+		pfree(entry->servername);
+		entry->servername = NULL;
 	}
 }
 
@@ -1040,6 +1083,9 @@ pgfdw_xact_callback(XactEvent event, void *arg)
 	 */
 	xact_got_connection = false;
 
+	/* Stop timer because checking is no more needed. */
+	disable_timeout(pgfdw_health_check_timeout, false);
+
 	/* Also reset cursor numbering for next transaction */
 	cursor_number = 0;
 }
@@ -1148,7 +1194,7 @@ pgfdw_inval_callback(Datum arg, int cacheid, uint32 hashvalue)
 	HASH_SEQ_STATUS scan;
 	ConnCacheEntry *entry;
 
-	Assert(cacheid == FOREIGNSERVEROID || cacheid == USERMAPPINGOID);
+	Assert(cacheid == FOREIGNSERVEROID || cacheid == USERMAPPINGOID || cacheid == FOREIGNSERVERNAME);
 
 	/* ConnectionHash must exist already, if we're registered */
 	hash_seq_init(&scan, ConnectionHash);
@@ -1178,6 +1224,21 @@ pgfdw_inval_callback(Datum arg, int cacheid, uint32 hashvalue)
 			}
 			else
 				entry->invalidated = true;
+		}
+
+		/* If ALTER SERVER RENAME is executed, the entry must be also modified. */
+		if (cacheid == FOREIGNSERVERNAME &&
+			entry->server_hashvalue == hashvalue)
+		{
+			ForeignServer *server = GetForeignServer(entry->serverid);
+			MemoryContext old;
+
+			if (entry->servername != NULL)
+				pfree(entry->servername);
+
+			old = MemoryContextSwitchTo(TopMemoryContext);
+			entry->servername = pstrdup(server->servername);
+			MemoryContextSwitchTo(old);
 		}
 	}
 }
@@ -1861,4 +1922,107 @@ disconnect_cached_connections(Oid serverid)
 	}
 
 	return result;
+}
+
+/*
+ * Signal handler for triggering health check
+ */
+static void
+pgfdw_checking_remote_servers_timeout_handler(void)
+{
+	CheckingRemoteServersTimeoutPending = true;
+	InterruptPending = true;
+	SetLatch(MyLatch);
+}
+
+/*
+ * Function for checking remote servers.
+ *
+ * This function searches the hash table from the beginning
+ * and performs a health-check on each entry.
+ *
+ * Raise SIGINT if someone might be down, otherwise do nothing.
+ */
+static void
+pgfdw_connection_check(void *arg)
+{
+	HASH_SEQ_STATUS scan;
+	ConnCacheEntry *entry;
+
+	Assert(ConnectionHash);
+
+	/*
+	 * checking will be done by waiting WL_SOCKET_CLOSED event,
+	 * so exit immediately if it cannot be used in this system.
+	 */
+	if (!WaitEventSetCanReportClosed())
+		return;
+
+	/* Quick exit if QueryCancelMessage has already set. */
+	if (HasQueryCancelMessage())
+		return;
+
+	hash_seq_init(&scan, ConnectionHash);
+	while ((entry = (ConnCacheEntry *) hash_seq_search(&scan)))
+	{
+		if (entry->conn == NULL || entry->xact_depth == 0)
+			continue;
+		if (!pgfdw_connection_check_internal(entry->conn))
+		{
+			/*
+			 * Foreign server might be down, so raise SIGINT.
+			 * Note that error message is passed to QueryCancelMessage
+			 * for reporting error in ProcessInterrupts().
+			 */
+			char msg[31 + MAXDATELEN];
+			snprintf(msg, sizeof(msg), "Foreign Server %s might be down.", entry->servername);
+			TrySetQueryCancelMessage(msg);
+
+			disconnect_pg_server(entry);
+			hash_seq_term(&scan);
+
+			kill(MyProcPid, SIGINT);
+			break;
+		}
+	}
+
+	/* re-schedule timer if needed. */
+	if (pgfdw_health_check_interval > 0)
+		enable_timeout_after(pgfdw_health_check_timeout,
+							 pgfdw_health_check_interval);
+
+	return;
+}
+
+/*
+ * Helper function for pgfdw_connection_check
+ */
+static bool
+pgfdw_connection_check_internal(PGconn *conn)
+{
+	WaitEventSet *eventset;
+	WaitEvent events;
+
+	Assert(WaitEventSetCanReportClosed());
+
+	/* Raise an ERROR if invalid socket has come */
+	if (conn == NULL ||
+		PQsocket(conn) == PGINVALID_SOCKET)
+		elog(ERROR, "Invalid connection has been arrived");
+
+	eventset = CreateWaitEventSet(TopMemoryContext, 1);
+
+	(void) AddWaitEventToSet(eventset, WL_SOCKET_CLOSED, PQsocket(conn), NULL, NULL);
+
+	WaitEventSetWait(eventset, 0, &events, 1, 0);
+
+	/* return false is if the socket seems to be closed. */
+	if (events.events & WL_SOCKET_CLOSED)
+	{
+		FreeWaitEventSet(eventset);
+		return false;
+	}
+
+	FreeWaitEventSet(eventset);
+	return true;
 }

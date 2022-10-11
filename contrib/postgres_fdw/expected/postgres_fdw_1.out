@@ -11481,6 +11481,8 @@ SELECT 1 FROM postgres_fdw_disconnect_all();
 ALTER SERVER loopback OPTIONS (SET application_name 'healthcheck');
 -- Set GUC for checking the health of remote servers
 SET postgres_fdw.health_check_interval TO '1s';
+ERROR:  invalid value for parameter "postgres_fdw.health_check_interval": 1000
+DETAIL:  postgres_fdw.health_check_interval must be set to 0 on this platform
 BEGIN;
 SELECT 1 FROM ft1 LIMIT 1;
  ?column? 
@@ -11499,7 +11501,15 @@ SELECT pg_terminate_backend(pid, 180000) FROM pg_stat_activity
 
 -- While sleeping the process down will be detected.
 SELECT pg_sleep(3);
-ERROR:  Foreign Server loopback might be down.
+ pg_sleep 
+----------
+ 
+(1 row)
+
 COMMIT;
+ERROR:  server closed the connection unexpectedly
+	This probably means the server terminated abnormally
+	before or while processing the request.
+CONTEXT:  remote SQL command: COMMIT TRANSACTION
 -- Clean up
 RESET debug_discard_caches;

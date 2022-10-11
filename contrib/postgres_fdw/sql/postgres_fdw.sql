@@ -3682,3 +3682,30 @@ SELECT * FROM prem2;
 
 ALTER SERVER loopback OPTIONS (DROP parallel_commit);
 ALTER SERVER loopback2 OPTIONS (DROP parallel_commit);
+
+-- ===================================================================
+-- test for health-check feature
+-- ===================================================================
+
+-- Disable debug_discard_caches in order to manage remote connections
+SET debug_discard_caches TO '0';
+
+-- Disconnect once and set application_name to an arbitrary value
+SELECT 1 FROM postgres_fdw_disconnect_all();
+ALTER SERVER loopback OPTIONS (SET application_name 'healthcheck');
+
+-- Set GUC for checking the health of remote servers
+SET postgres_fdw.health_check_interval TO '1s';
+
+BEGIN;
+SELECT 1 FROM ft1 LIMIT 1;
+-- Terminate the remote backend process
+-- FIXME: this should be skipped in some platforms
+SELECT pg_terminate_backend(pid, 180000) FROM pg_stat_activity
+       WHERE application_name = 'healthcheck';
+-- While sleeping the process down will be detected.
+SELECT pg_sleep(3);
+COMMIT;
+
+-- Clean up
+RESET debug_discard_caches;

@@ -28,7 +28,9 @@
 #include "utils/rel.h"
 #include "utils/syscache.h"
 #include "utils/varlena.h"
+#include "utils/timeout.h"
 
+static CheckingRemoteServersCallbackItem *remote_check_callbacks = NULL;
 
 /*
  * GetForeignDataWrapper -	look up the foreign-data wrapper by OID.
@@ -809,4 +811,59 @@ GetExistingLocalJoinPath(RelOptInfo *joinrel)
 		return (Path *) joinpath;
 	}
 	return NULL;
+}
+
+
+/*
+ * Register callbacks for checking remote servers.
+ *
+ * This function is intended for use by FDW extensions.
+ */
+void
+RegisterCheckingRemoteServersCallback(CheckingRemoteServersCallback callback,
+									  void *arg)
+{
+	CheckingRemoteServersCallbackItem *item;
+
+	item = (CheckingRemoteServersCallbackItem *)
+			MemoryContextAlloc(TopMemoryContext,
+			sizeof(CheckingRemoteServersCallbackItem));
+	item->callback = callback;
+	item->arg = arg;
+	item->next = remote_check_callbacks;
+	remote_check_callbacks = item;
+}
+
+void
+UnRegisterCheckingRemoteServersCallback(CheckingRemoteServersCallback callback,
+										void *arg)
+{
+	CheckingRemoteServersCallbackItem *item;
+	CheckingRemoteServersCallbackItem *prev;
+
+	prev = NULL;
+	for (item = remote_check_callbacks; item; prev = item, item = item->next)
+	{
+			if (item->callback == callback && item->arg == arg)
+			{
+					if (prev)
+							prev->next = item->next;
+					else
+							remote_check_callbacks = item->next;
+					pfree(item);
+					break;
+			}
+	}
+}
+
+/*
+ * Call callbacks for checking remote servers.
+ */
+void
+CallCheckingRemoteServersCallbacks(void)
+{
+	CheckingRemoteServersCallbackItem *item;
+
+	for (item = remote_check_callbacks; item; item = item->next)
+		item->callback(item->arg);
 }

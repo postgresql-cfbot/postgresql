@@ -414,6 +414,13 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
        See <xref linkend='copy-progress-reporting'/>.
       </entry>
      </row>
+
+     <row>
+      <entry><structname>pg_stat_progress_checkpoint</structname><indexterm><primary>pg_stat_progress_checkpoint</primary></indexterm></entry>
+      <entry>One row only, showing the progress of the checkpoint.
+       See <xref linkend='checkpoint-progress-reporting'/>.
+      </entry>
+     </row>
     </tbody>
    </tgroup>
   </table>
@@ -5743,7 +5750,7 @@ FROM pg_stat_get_backend_idset() AS backendid;
    which support progress reporting are <command>ANALYZE</command>,
    <command>CLUSTER</command>,
    <command>CREATE INDEX</command>, <command>VACUUM</command>,
-   <command>COPY</command>,
+   <command>COPY</command>, <command>CHECKPOINT</command>
    and <xref linkend="protocol-replication-base-backup"/> (i.e., replication
    command that <xref linkend="app-pgbasebackup"/> issues to take
    a base backup).
@@ -7029,6 +7036,402 @@ FROM pg_stat_get_backend_idset() AS backendid;
     </tbody>
    </tgroup>
   </table>
+ </sect2>
+
+ <sect2 id="checkpoint-progress-reporting">
+  <title>Checkpoint Progress Reporting</title>
+
+  <indexterm>
+   <primary>pg_stat_progress_checkpoint</primary>
+  </indexterm>
+
+  <para>
+   Whenever the checkpoint operation is running, the
+   <structname>pg_stat_progress_checkpoint</structname> view will contain a
+   single row indicating the progress of the checkpoint. The tables below
+   describe the information that will be reported and provide information about
+   how to interpret it.
+  </para>
+
+  <table id="pg-stat-progress-checkpoint-view" xreflabel="pg_stat_progress_checkpoint">
+   <title><structname>pg_stat_progress_checkpoint</structname> View</title>
+   <tgroup cols="1">
+    <thead>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       Column Type
+      </para>
+      <para>
+       Description
+      </para></entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>pid</structfield> <type>integer</type>
+      </para>
+      <para>
+       Process ID of the checkpointer process.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>type</structfield> <type>text</type>
+      </para>
+      <para>
+       Type of the checkpoint. See <xref linkend="checkpoint-types"/>.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>flags</structfield> <type>text</type>
+      </para>
+      <para>
+       Flags of the checkpoint. See <xref linkend="checkpoint-flags"/>.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>start_lsn</structfield> <type>text</type>
+      </para>
+      <para>
+       The checkpoint start location.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>start_time</structfield> <type>timestamp with time zone</type>
+      </para>
+      <para>
+       Start time of the checkpoint.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>phase</structfield> <type>text</type>
+      </para>
+      <para>
+       Current processing phase. See <xref linkend="checkpoint-phases"/>.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>buffers_total</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Total number of buffers to be written. This is estimated and reported
+       as of the beginning of buffer write operation.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>buffers_processed</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of buffers processed. This counter increases when the targeted
+       buffer is processed. This number will eventually become equal to
+       <literal>buffers_total</literal> when the checkpoint is
+       complete.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>buffers_written</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of buffers written. This counter only advances when the targeted
+       buffers is written. Note that some of the buffers are processed but may
+       not required to be written. So this count will always be  less than or
+       equal to  <literal>buffers_total</literal>.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>files_total</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Total number of files to be synced. This is estimated and reported as of
+       the beginning of sync operation.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>files_synced</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of files synced. This counter advances when the targeted file is
+       synced. This number will eventually become equal to
+       <literal>files_total</literal>  when the checkpoint is complete.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>new_requests</structfield> <type>text</type>
+      </para>
+      <para>
+       True if any of the backend is requested for a checkpoint while the
+       current checkpoint is in progress, False otherwise.
+      </para></entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
+
+  <table id="checkpoint-types">
+   <title>Checkpoint Types</title>
+   <tgroup cols="2">
+    <colspec colname="col1" colwidth="1*"/>
+    <colspec colname="col2" colwidth="2*"/>
+    <thead>
+     <row>
+      <entry>Types</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+    <tbody>
+     <row>
+      <entry><literal>checkpoint</literal></entry>
+      <entry>
+       The current operation is checkpoint.
+      </entry>
+     </row>
+     <row>
+      <entry><literal>restartpoint</literal></entry>
+      <entry>
+       The current operation is restartpoint.
+      </entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
+
+  <table id="checkpoint-flags">
+   <title>Checkpoint Flags</title>
+   <tgroup cols="2">
+    <colspec colname="col1" colwidth="1*"/>
+    <colspec colname="col2" colwidth="2*"/>
+    <thead>
+     <row>
+      <entry>Flags</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+    <tbody>
+     <row>
+      <entry><literal>shutdown</literal></entry>
+      <entry>
+       The checkpoint is for shutdown.
+      </entry>
+     </row>
+     <row>
+      <entry><literal>end-of-recovery</literal></entry>
+      <entry>
+       The checkpoint is for end-of-recovery.
+      </entry>
+     </row>
+     <row>
+      <entry><literal>immediate</literal></entry>
+      <entry>
+       The checkpoint happens without delays.
+      </entry>
+     </row>
+     <row>
+      <entry><literal>force</literal></entry>
+      <entry>
+       The checkpoint is started because some operation (for which the
+       checkpoint is necessary) forced a checkpoint.
+      </entry>
+     </row>
+     <row>
+      <entry><literal>flush all</literal></entry>
+      <entry>
+       The checkpoint flushes all pages, including those belonging to unlogged
+       tables.
+      </entry>
+     </row>
+     <row>
+      <entry><literal>wait</literal></entry>
+      <entry>
+       The operations which requested the checkpoint waits for completion
+       before returning.
+      </entry>
+     </row>
+      <row>
+      <entry><literal>requested</literal></entry>
+      <entry>
+       The checkpoint request has been made.
+      </entry>
+     </row>
+     <row>
+      <entry><literal>wal</literal></entry>
+      <entry>
+       The checkpoint is started because <literal>max_wal_size</literal> is
+       reached.
+      </entry>
+     </row>
+     <row>
+      <entry><literal>time</literal></entry>
+      <entry>
+       The checkpoint is started because <literal>checkpoint_timeout</literal>
+       expired.
+      </entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
+
+  <table id="checkpoint-phases">
+   <title>Checkpoint Phases</title>
+   <tgroup cols="2">
+    <colspec colname="col1" colwidth="1*"/>
+    <colspec colname="col2" colwidth="2*"/>
+    <thead>
+     <row>
+      <entry>Phase</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+    <tbody>
+     <row>
+      <entry><literal>initializing</literal></entry>
+      <entry>
+       The checkpointer process is preparing to begin the checkpoint operation.
+       This phase is expected to be very brief.
+      </entry>
+     </row>
+     <row>
+      <entry><literal>getting virtual transaction IDs</literal></entry>
+      <entry>
+       The checkpointer process is getting the virtual transaction IDs that
+       are delaying the checkpoint.
+      </entry>
+     </row>
+     <row>
+      <entry><literal>checkpointing replication slots</literal></entry>
+      <entry>
+       The checkpointer process is currently flushing all the replication slots
+       to disk.
+      </entry>
+     </row>
+     <row>
+      <entry><literal>checkpointing logical replication snapshot files</literal></entry>
+      <entry>
+       The checkpointer process is currently removing all the serialized
+       snapshot files that are not required anymore.
+      </entry>
+     </row>
+     <row>
+      <entry><literal>checkpointing logical rewrite mapping files</literal></entry>
+      <entry>
+       The checkpointer process is currently removing unwanted or flushing
+       required logical rewrite mapping files.
+      </entry>
+     </row>
+     <row>
+      <entry><literal>checkpointing replication origin</literal></entry>
+      <entry>
+       The checkpointer process is currently performing a checkpoint of each
+       replication origin's progress with respect to the replayed remote LSN.
+      </entry>
+     </row>
+     <row>
+      <entry><literal>checkpointing commit log pages</literal></entry>
+      <entry>
+       The checkpointer process is currently writing commit log pages to disk.
+      </entry>
+     </row>
+     <row>
+      <entry><literal>checkpointing commit time stamp pages</literal></entry>
+      <entry>
+       The checkpointer process is currently writing commit time stamp pages to
+       disk.
+      </entry>
+     </row>
+     <row>
+      <entry><literal>checkpointing subtransaction pages</literal></entry>
+      <entry>
+       The checkpointer process is currently writing subtransaction pages to disk.
+      </entry>
+     </row>
+     <row>
+      <entry><literal>checkpointing multixact pages</literal></entry>
+      <entry>
+       The checkpointer process is currently writing multixact pages to disk.
+      </entry>
+     </row>
+     <row>
+      <entry><literal>checkpointing predicate lock pages</literal></entry>
+      <entry>
+       The checkpointer process is currently writing predicate lock pages to disk.
+      </entry>
+     </row>
+     <row>
+      <entry><literal>checkpointing buffers</literal></entry>
+      <entry>
+       The checkpointer process is currently writing buffers to disk.
+      </entry>
+     </row>
+     <row>
+      <entry><literal>processing file sync requests</literal></entry>
+      <entry>
+       The checkpointer process is currently processing file sync requests.
+      </entry>
+     </row>
+     <row>
+      <entry><literal>performing two phase checkpoint</literal></entry>
+      <entry>
+       The checkpointer process is currently performing two phase checkpoint.
+      </entry>
+     </row>
+     <row>
+      <entry><literal>performing post checkpoint cleanup</literal></entry>
+      <entry>
+       The checkpointer process is currently performing post checkpoint cleanup.
+       It removes any lingering files that can be safely removed.
+      </entry>
+     </row>
+     <row>
+      <entry><literal>invalidating replication slots</literal></entry>
+      <entry>
+       The checkpointer process is currently invalidating replication slots.
+      </entry>
+     </row>
+     <row>
+      <entry><literal>recycling old WAL files</literal></entry>
+      <entry>
+       The checkpointer process is currently recycling old WAL files.
+      </entry>
+     </row>
+     <row>
+      <entry><literal>truncating subtransactions</literal></entry>
+      <entry>
+       The checkpointer process is currently removing the subtransaction
+       segments.
+      </entry>
+     </row>
+     <row>
+      <entry><literal>finalizing</literal></entry>
+      <entry>
+       The checkpointer process is finalizing the checkpoint operation.
+      </entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
+
  </sect2>
 
  </sect1>

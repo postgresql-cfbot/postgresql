@@ -23,6 +23,7 @@
 #include "access/multixact.h"
 #include "access/xlog.h"
 #include "access/xlogutils.h"
+#include "commands/progress.h"
 #include "commands/tablespace.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -368,6 +369,9 @@ ProcessSyncRequests(void)
 	/* Now scan the hashtable for fsync requests to process */
 	absorb_counter = FSYNCS_PER_ABSORB;
 	hash_seq_init(&hstat, pendingOps);
+	pgstat_progress_update_param(PROGRESS_CHECKPOINT_FILES_TOTAL,
+								 hash_get_num_entries(pendingOps));
+
 	while ((entry = (PendingFsyncEntry *) hash_seq_search(&hstat)) != NULL)
 	{
 		int			failures;
@@ -431,6 +435,8 @@ ProcessSyncRequests(void)
 						longest = elapsed;
 					total_elapsed += elapsed;
 					processed++;
+					pgstat_progress_update_param(PROGRESS_CHECKPOINT_FILES_SYNCED,
+												 processed);
 
 					if (log_checkpoints)
 						elog(DEBUG1, "checkpoint sync: number=%d file=%s time=%.3f ms",

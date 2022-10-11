@@ -36,6 +36,7 @@
 #include "parser/parse_coerce.h"
 #include "parser/parse_type.h"
 #include "pgstat.h"
+#include "replication/logicalworker.h"
 #include "rewrite/rewriteHandler.h"
 #include "tcop/pquery.h"
 #include "tcop/tcopprot.h"
@@ -1034,12 +1035,20 @@ function_parse_error_transpose(const char *prosrc)
 			return false;
 	}
 
-	/* We can get the original query text from the active portal (hack...) */
-	Assert(ActivePortal && ActivePortal->status == PORTAL_ACTIVE);
-	queryText = ActivePortal->sourceText;
+	/*
+	 * In the logical replication worker there is no way to restore original
+	 * query text from the logical replication message. There is only 'zipped'
+	 * query equivalent to the original text.
+	 */
+	if (!IsLogicalWorker())
+	{
+		/* We can get the original query text from the active portal (hack...) */
+		Assert(ActivePortal && ActivePortal->status == PORTAL_ACTIVE);
+		queryText = ActivePortal->sourceText;
 
-	/* Try to locate the prosrc in the original text */
-	newerrposition = match_prosrc_to_query(prosrc, queryText, origerrposition);
+		/* Try to locate the prosrc in the original text */
+		newerrposition = match_prosrc_to_query(prosrc, queryText, origerrposition);
+	}
 
 	if (newerrposition > 0)
 	{

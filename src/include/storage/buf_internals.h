@@ -382,6 +382,20 @@ typedef struct CkptSortItem
 
 extern PGDLLIMPORT CkptSortItem *CkptBufferIds;
 
+/* hook for plugins to get control when reading in a page */
+typedef bool (*bufmgr_read_hook_type) (SMgrRelation smgr, ForkNumber forknum,
+									   BlockNumber blocknum, char *buffer);
+extern PGDLLIMPORT bufmgr_read_hook_type bufmgr_read_hook;
+
+/* hook for plugins to get control when writing a page */
+typedef void (*bufmgr_write_hook_type) (SMgrRelation smgr, BufferDesc *buf,
+										char *buffer, bool for_eviction);
+extern PGDLLIMPORT bufmgr_write_hook_type bufmgr_write_hook;
+
+/* hook for plugins to get control when invalidating a page */
+typedef void (*bufmgr_invalidate_hook_type) (BufferDesc *buf);
+extern PGDLLIMPORT bufmgr_invalidate_hook_type bufmgr_invalidate_hook;
+
 /*
  * Internal buffer management routines
  */

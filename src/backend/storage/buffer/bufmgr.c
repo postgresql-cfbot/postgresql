@@ -166,6 +166,15 @@ static bool IsForInput;
 /* local state for LockBufferForCleanup */
 static BufferDesc *PinCountWaitBuf = NULL;
 
+/* hook for plugins to get control when reading in a page */
+bufmgr_read_hook_type bufmgr_read_hook = NULL;
+
+/* hook for plugins to get control when writing a page */
+bufmgr_write_hook_type bufmgr_write_hook = NULL;
+
+/* hook for plugins to get control when invalidating a page */
+bufmgr_invalidate_hook_type bufmgr_invalidate_hook = NULL;
+
 /*
  * Backend-Private refcount management:
  *
@@ -482,7 +491,7 @@ static BufferDesc *BufferAlloc(SMgrRelation smgr,
 							   BlockNumber blockNum,
 							   BufferAccessStrategy strategy,
 							   bool *foundPtr);
-static void FlushBuffer(BufferDesc *buf, SMgrRelation reln);
+static void FlushBuffer(BufferDesc *buf, SMgrRelation reln, bool for_eviction);
 static void FindAndDropRelationBuffers(RelFileLocator rlocator,
 									   ForkNumber forkNum,
 									   BlockNumber nForkBlock,
@@ -1018,7 +1027,9 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 			if (track_io_timing)
 				INSTR_TIME_SET_CURRENT(io_start);
 
-			smgrread(smgr, forkNum, blockNum, (char *) bufBlock);
+			if (!bufmgr_read_hook ||
+				!(*bufmgr_read_hook) (smgr, forkNum, blockNum, (char *) bufBlock))
+				smgrread(smgr, forkNum, blockNum, (char *) bufBlock);
 
 			if (track_io_timing)
 			{
@@ -1269,7 +1280,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 														  smgr->smgr_rlocator.locator.dbOid,
 														  smgr->smgr_rlocator.locator.relNumber);
 
-				FlushBuffer(buf, NULL);
+				FlushBuffer(buf, NULL, true);
 				LWLockRelease(BufferDescriptorGetContentLock(buf));
 
 				ScheduleBufferTagForWriteback(&BackendWritebackContext,
@@ -1543,6 +1554,9 @@ retry:
 		WaitIO(buf);
 		goto retry;
 	}
+
+	if (bufmgr_invalidate_hook)
+		(*bufmgr_invalidate_hook) (buf);
 
 	/*
 	 * Clear out the buffer's tag and flags.  We must do this to ensure that
@@ -2570,7 +2584,7 @@ SyncOneBuffer(int buf_id, bool skip_recently_used, WritebackContext *wb_context)
 	PinBuffer_Locked(bufHdr);
 	LWLockAcquire(BufferDescriptorGetContentLock(bufHdr), LW_SHARED);
 
-	FlushBuffer(bufHdr, NULL);
+	FlushBuffer(bufHdr, NULL, false);
 
 	LWLockRelease(BufferDescriptorGetContentLock(bufHdr));
 
@@ -2820,7 +2834,7 @@ BufferGetTag(Buffer buffer, RelFileLocator *rlocator, ForkNumber *forknum,
  * as the second parameter.  If not, pass NULL.
  */
 static void
-FlushBuffer(BufferDesc *buf, SMgrRelation reln)
+FlushBuffer(BufferDesc *buf, SMgrRelation reln, bool for_eviction)
 {
 	XLogRecPtr	recptr;
 	ErrorContextCallback errcallback;
@@ -2899,6 +2913,9 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 	 * copy the page to private storage if we do checksumming.
 	 */
 	bufToWrite = PageSetChecksumCopy((Page) bufBlock, buf->tag.blockNum);
+
+	if (bufmgr_write_hook)
+		(*bufmgr_write_hook) (reln, buf, bufToWrite, for_eviction);
 
 	if (track_io_timing)
 		INSTR_TIME_SET_CURRENT(io_start);
@@ -3586,7 +3603,7 @@ FlushRelationBuffers(Relation rel)
 		{
 			PinBuffer_Locked(bufHdr);
 			LWLockAcquire(BufferDescriptorGetContentLock(bufHdr), LW_SHARED);
-			FlushBuffer(bufHdr, RelationGetSmgr(rel));
+			FlushBuffer(bufHdr, RelationGetSmgr(rel), false);
 			LWLockRelease(BufferDescriptorGetContentLock(bufHdr));
 			UnpinBuffer(bufHdr);
 		}
@@ -3684,7 +3701,7 @@ FlushRelationsAllBuffers(SMgrRelation *smgrs, int nrels)
 		{
 			PinBuffer_Locked(bufHdr);
 			LWLockAcquire(BufferDescriptorGetContentLock(bufHdr), LW_SHARED);
-			FlushBuffer(bufHdr, srelent->srel);
+			FlushBuffer(bufHdr, srelent->srel, false);
 			LWLockRelease(BufferDescriptorGetContentLock(bufHdr));
 			UnpinBuffer(bufHdr);
 		}
@@ -3894,7 +3911,7 @@ FlushDatabaseBuffers(Oid dbid)
 		{
 			PinBuffer_Locked(bufHdr);
 			LWLockAcquire(BufferDescriptorGetContentLock(bufHdr), LW_SHARED);
-			FlushBuffer(bufHdr, NULL);
+			FlushBuffer(bufHdr, NULL, false);
 			LWLockRelease(BufferDescriptorGetContentLock(bufHdr));
 			UnpinBuffer(bufHdr);
 		}
@@ -3921,7 +3938,7 @@ FlushOneBuffer(Buffer buffer)
 
 	Assert(LWLockHeldByMe(BufferDescriptorGetContentLock(bufHdr)));
 
-	FlushBuffer(bufHdr, NULL);
+	FlushBuffer(bufHdr, NULL, false);
 }
 
 /*

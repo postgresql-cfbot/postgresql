@@ -88,6 +88,18 @@ as t(id int4, doc int4);
   1 |   1
 (1 row)
 
+select * from xml_valid('xpath_test');
+ xml_valid 
+-----------
+ t
+(1 row)
+
+select xml_encode_special_chars('<doc><int>1</int></doc>');
+            xml_encode_special_chars             
+-------------------------------------------------
+ &lt;doc&gt;&lt;int&gt;1&lt;/int&gt;&lt;/doc&gt;
+(1 row)
+
 create table articles (article_id integer, article_xml xml, date_entered date);
 insert into articles (article_id, article_xml, date_entered)
 values (2, '<article><author>test</author><pages>37</pages></article>', now());
@@ -139,6 +151,30 @@ values
 Value</attribute></attributes>');
 create index idx_xpath on t1 ( xpath_string
 ('/attributes/attribute[@name="attr_1"]/text()', xml_data::text));
+select xpath_number('/attributes/attribute[@name="attr_1"]/', xml_data::text) from t1;
+ xpath_number 
+--------------
+             
+(1 row)
+
+select xpath_bool('/attributes/attribute[@name="attr_1"]/', xml_data::text) from t1;
+ xpath_bool 
+------------
+ f
+(1 row)
+
+select xpath_nodeset('/attributes/attribute[@name="attr_1"]/', xml_data::text) from t1;
+ xpath_nodeset 
+---------------
+ 
+(1 row)
+
+select xpath_list('/attributes/attribute[@name="attr_1"]/', xml_data::text) from t1;
+ xpath_list 
+------------
+ 
+(1 row)
+
 SELECT xslt_process('<employee><name>cim</name><age>30</age><pay>400</pay></employee>'::text, $$<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="1.0">
   <xsl:output method="xml" omit-xml-declaration="yes" indent="yes"/>
   <xsl:strip-space elements="*"/>

@@ -1916,25 +1916,84 @@ static List *
 fetch_table_list(WalReceiverConn *wrconn, List *publications)
 {
 	WalRcvExecResult *res;
-	StringInfoData cmd;
+	StringInfoData cmd,
+				pub_names;
 	TupleTableSlot *slot;
 	Oid			tableRow[3] = {TEXTOID, TEXTOID, NAMEARRAYOID};
 	List	   *tablelist = NIL;
-	bool		check_columnlist = (walrcv_server_version(wrconn) >= 150000);
+	int			server_version = walrcv_server_version(wrconn);
+	bool		check_columnlist = (server_version >= 150000);
+
+	initStringInfo(&pub_names);
+	get_publications_str(publications, &pub_names, true);
 
 	initStringInfo(&cmd);
-	appendStringInfoString(&cmd, "SELECT DISTINCT t.schemaname, t.tablename \n");
 
-	/* Get column lists for each relation if the publisher supports it */
-	if (check_columnlist)
-		appendStringInfoString(&cmd, ", t.attnames\n");
+	/*
+	 * Get namespace, relname and column list (if supported) of the tables
+	 * belonging to the specified publications.
+	 *
+	 * Get the list of tables from the publisher. The partition table whose
+	 * ancestor is also in this list will be ignored, otherwise the initial
+	 * data in the partition table would be replicated twice.
+	 *
+	 * From version 16, the parameter of the function
+	 * pg_get_publication_tables can be an array of publications. The
+	 * partition table whose ancestor is also published in this publication
+	 * array will be filtered out in this function.
+	 */
+	if (server_version >= 160000)
+	{
+		appendStringInfo(&cmd, "SELECT DISTINCT N.nspname, C.relname,\n"
+						 "              ( SELECT array_agg(a.attname ORDER BY a.attnum)\n"
+						 "                FROM pg_attribute a\n"
+						 "                WHERE a.attrelid = GPT.relid AND a.attnum > 0 AND\n"
+						 "                      NOT a.attisdropped AND\n"
+						 "                      (a.attnum = ANY(GPT.attrs) OR GPT.attrs IS NULL)\n"
+						 "              ) AS attnames\n"
+						 " FROM pg_class C\n"
+						 "   JOIN pg_namespace N ON N.oid = C.relnamespace\n"
+						 "   JOIN ( SELECT (pg_get_publication_tables(VARIADIC array_agg(pubname::text))).*\n"
+						 "          FROM pg_publication\n"
+						 "          WHERE pubname IN ( %s )) as GPT\n"
+						 "       ON GPT.relid = C.oid\n",
+						 pub_names.data);
+	}
+	else
+	{
+		appendStringInfoString(&cmd, "WITH pub_tabs AS(\n"
+							   " SELECT DISTINCT N.nspname, C.oid, C.relname, C.relispartition\n");
 
-	appendStringInfoString(&cmd, "FROM pg_catalog.pg_publication_tables t\n"
-						   " WHERE t.pubname IN (");
-	get_publications_str(publications, &cmd, true);
-	appendStringInfoChar(&cmd, ')');
+		/* Get column lists for each relation if the publisher supports it */
+		if (check_columnlist)
+			appendStringInfoString(&cmd, ", ( SELECT array_agg(a.attname ORDER BY a.attnum)\n"
+								   "          FROM pg_attribute a\n"
+								   "          WHERE a.attrelid = GPT.relid AND a.attnum > 0 AND\n"
+								   "                NOT a.attisdropped AND\n"
+								   "                (a.attnum = ANY(GPT.attrs) OR GPT.attrs IS NULL)\n"
+								   "        ) AS attnames\n");
+
+		appendStringInfo(&cmd, " FROM pg_publication P,\n"
+						 "      LATERAL pg_get_publication_tables(P.pubname) GPT,\n"
+						 "      pg_class C JOIN pg_namespace N ON (N.oid = C.relnamespace)\n"
+						 "  WHERE C.oid = GPT.relid AND P.pubname IN ( %s )\n"
+						 ")\n"
+						 "SELECT DISTINCT pub_tabs.nspname, pub_tabs.relname\n",
+						 pub_names.data);
+
+		/* Get column lists for each relation if the publisher supports it */
+		if (check_columnlist)
+			appendStringInfoString(&cmd, ", pub_tabs.attnames\n");
+
+		appendStringInfoString(&cmd, "FROM pub_tabs\n"
+							   " WHERE (pub_tabs.relispartition IS FALSE\n"
+							   "  OR NOT EXISTS (SELECT 1 FROM pg_partition_ancestors(pub_tabs.oid) as PA\n"
+							   "                  WHERE PA.relid IN (SELECT pub_tabs.oid FROM pub_tabs)\n"
+							   "                   AND PA.relid != pub_tabs.oid))\n");
+	}
 
 	res = walrcv_exec(wrconn, cmd.data, check_columnlist ? 3 : 2, tableRow);
+	pfree(pub_names.data);
 	pfree(cmd.data);
 
 	if (res->status != WALRCV_OK_TUPLES)

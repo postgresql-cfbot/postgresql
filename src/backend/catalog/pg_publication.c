@@ -1026,22 +1026,35 @@ GetPublicationByName(const char *pubname, bool missing_ok)
 }
 
 /*
- * Returns information of tables in a publication.
+ * Get information of the tables in the given publication array.
+ *
+ * Returns the oid, column list, row filter for each table.
  */
 Datum
 pg_get_publication_tables(PG_FUNCTION_ARGS)
 {
 #define NUM_PUBLICATION_TABLES_ELEM	3
+	typedef struct
+	{
+		Oid			relid;		/* OID of published table */
+		Oid			pubid;		/* OID of publication that publishes this
+								 * table. */
+	}			published_rel;
 	FuncCallContext *funcctx;
-	char	   *pubname = text_to_cstring(PG_GETARG_TEXT_PP(0));
-	Publication *publication;
-	List	   *tables;
+	List	   *tables = NIL,
+			   *table_infos = NIL;
 
 	/* stuff done only on the first call of the function */
 	if (SRF_IS_FIRSTCALL())
 	{
 		TupleDesc	tupdesc;
 		MemoryContext oldcontext;
+		ArrayType  *arr;
+		Datum	   *elems;
+		int			nelems,
+					i;
+		bool		viaroot = false;
+		ListCell   *lc;
 
 		/* create a function context for cross-call persistence */
 		funcctx = SRF_FIRSTCALL_INIT();
@@ -1049,42 +1062,94 @@ pg_get_publication_tables(PG_FUNCTION_ARGS)
 		/* switch to memory context appropriate for multiple function calls */
 		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
 
-		publication = GetPublicationByName(pubname, false);
-
 		/*
-		 * Publications support partitioned tables, although all changes are
-		 * replicated using leaf partition identity and schema, so we only
-		 * need those.
+		 * Deconstruct the parameter into elements where each element is a
+		 * publication name.
 		 */
-		if (publication->alltables)
-		{
-			tables = GetAllTablesPublicationRelations(publication->pubviaroot);
-		}
-		else
-		{
-			List	   *relids,
-					   *schemarelids;
+		arr = PG_GETARG_ARRAYTYPE_P(0);
+		deconstruct_array(arr, TEXTOID, -1, false, TYPALIGN_INT,
+						  &elems, NULL, &nelems);
 
-			relids = GetPublicationRelations(publication->oid,
-											 publication->pubviaroot ?
-											 PUBLICATION_PART_ROOT :
-											 PUBLICATION_PART_LEAF);
-			schemarelids = GetAllSchemaPublicationRelations(publication->oid,
-															publication->pubviaroot ?
-															PUBLICATION_PART_ROOT :
-															PUBLICATION_PART_LEAF);
-			tables = list_concat_unique_oid(relids, schemarelids);
+		/* Get Oids of tables from each publication. */
+		for (i = 0; i < nelems; i++)
+		{
+			Publication *pub_elem;
+			List	   *pub_elem_tables = NIL;
+
+			pub_elem = GetPublicationByName(TextDatumGetCString(elems[i]), false);
 
 			/*
-			 * If the publication publishes partition changes via their
-			 * respective root partitioned tables, we must exclude partitions
-			 * in favor of including the root partitioned tables. Otherwise,
-			 * the function could return both the child and parent tables
-			 * which could cause data of the child table to be
-			 * double-published on the subscriber side.
+			 * Publications support partitioned tables. If
+			 * publish_via_partition_root is false, all changes are replicated
+			 * using leaf partition identity and schema, so we only need
+			 * those. Otherwise, If publish_via_partition_root is true, get
+			 * the partitioned table itself.
 			 */
-			if (publication->pubviaroot)
-				tables = filter_partitions(tables);
+			if (pub_elem->alltables)
+				pub_elem_tables = GetAllTablesPublicationRelations(pub_elem->pubviaroot);
+			else
+			{
+				List	   *relids,
+						   *schemarelids;
+
+				relids = GetPublicationRelations(pub_elem->oid,
+												 pub_elem->pubviaroot ?
+												 PUBLICATION_PART_ROOT :
+												 PUBLICATION_PART_LEAF);
+				schemarelids = GetAllSchemaPublicationRelations(pub_elem->oid,
+																pub_elem->pubviaroot ?
+																PUBLICATION_PART_ROOT :
+																PUBLICATION_PART_LEAF);
+				pub_elem_tables = list_concat(relids, schemarelids);
+			}
+
+			/*
+			 * Record the published table and the corresponding publication so
+			 * that we can get row filters and column list later.
+			 */
+			foreach(lc, pub_elem_tables)
+			{
+				published_rel *table_info = (published_rel *) malloc(sizeof(published_rel));
+
+				table_info->relid = lfirst_oid(lc);
+				table_info->pubid = pub_elem->oid;
+				table_infos = lappend(table_infos, table_info);
+			}
+
+			tables = list_concat(tables, pub_elem_tables);
+
+			/* At least one publication is using publish_via_partition_root. */
+			if (pub_elem->pubviaroot)
+				viaroot = true;
+		}
+
+		pfree(elems);
+
+		/* Now sort and de-duplicate the tables list */
+		list_sort(tables, list_oid_cmp);
+		list_deduplicate_oid(tables);
+
+		/*
+		 * If the publication publishes partition changes via their respective
+		 * root partitioned tables, we must exclude partitions in favor of
+		 * including the root partitioned tables. Otherwise, the function
+		 * could return both the child and parent tables which could cause
+		 * data of the child table to be double-published on the subscriber
+		 * side.
+		 */
+		if (viaroot)
+			tables = filter_partitions(tables);
+
+		/*
+		 * For tables that have been filtered out, delete the corresponding
+		 * table information in the table_infos list.
+		 */
+		foreach(lc, table_infos)
+		{
+			published_rel *table_info = (published_rel *) lfirst(lc);
+
+			if (!list_member_oid(tables, table_info->relid))
+				table_infos = foreach_delete_current(table_infos, lc);
 		}
 
 		/* Construct a tuple descriptor for the result rows. */
@@ -1097,20 +1162,22 @@ pg_get_publication_tables(PG_FUNCTION_ARGS)
 						   PG_NODE_TREEOID, -1, 0);
 
 		funcctx->tuple_desc = BlessTupleDesc(tupdesc);
-		funcctx->user_fctx = (void *) tables;
+		funcctx->user_fctx = (void *) table_infos;
 
 		MemoryContextSwitchTo(oldcontext);
 	}
 
 	/* stuff done on every call of the function */
 	funcctx = SRF_PERCALL_SETUP();
-	tables = (List *) funcctx->user_fctx;
+	table_infos = (List *) funcctx->user_fctx;
 
-	if (funcctx->call_cntr < list_length(tables))
+	if (funcctx->call_cntr < list_length(table_infos))
 	{
 		HeapTuple	pubtuple = NULL;
 		HeapTuple	rettuple;
-		Oid			relid = list_nth_oid(tables, funcctx->call_cntr);
+		Publication *pub;
+		published_rel *table_info = (published_rel *) list_nth(table_infos, funcctx->call_cntr);
+		Oid			relid = table_info->relid;
 		Oid			schemaid = get_rel_namespace(relid);
 		Datum		values[NUM_PUBLICATION_TABLES_ELEM] = {0};
 		bool		nulls[NUM_PUBLICATION_TABLES_ELEM] = {0};
@@ -1119,7 +1186,7 @@ pg_get_publication_tables(PG_FUNCTION_ARGS)
 		 * Form tuple with appropriate data.
 		 */
 
-		publication = GetPublicationByName(pubname, false);
+		pub = GetPublication(table_info->pubid);
 
 		values[0] = ObjectIdGetDatum(relid);
 
@@ -1127,13 +1194,13 @@ pg_get_publication_tables(PG_FUNCTION_ARGS)
 		 * We don't consider row filters or column lists for FOR ALL TABLES or
 		 * FOR TABLES IN SCHEMA publications.
 		 */
-		if (!publication->alltables &&
+		if (!pub->alltables &&
 			!SearchSysCacheExists2(PUBLICATIONNAMESPACEMAP,
 								   ObjectIdGetDatum(schemaid),
-								   ObjectIdGetDatum(publication->oid)))
+								   ObjectIdGetDatum(pub->oid)))
 			pubtuple = SearchSysCacheCopy2(PUBLICATIONRELMAP,
 										   ObjectIdGetDatum(relid),
-										   ObjectIdGetDatum(publication->oid));
+										   ObjectIdGetDatum(pub->oid));
 
 		if (HeapTupleIsValid(pubtuple))
 		{

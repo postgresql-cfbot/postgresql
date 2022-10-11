@@ -386,6 +386,10 @@ $node_publisher->safe_psql('postgres',
 	"INSERT INTO tab_rowfilter_child(a, b) VALUES(0,'0'),(30,'30'),(40,'40')"
 );
 
+# insert data into partitioned table.
+$node_publisher->safe_psql('postgres',
+	"INSERT INTO tab_rowfilter_viaroot_part(a) VALUES(13), (17)");
+
 $node_subscriber->safe_psql('postgres',
 	"CREATE SUBSCRIPTION tap_sub CONNECTION '$publisher_connstr application_name=$appname' PUBLICATION tap_pub_1, tap_pub_2, tap_pub_3, tap_pub_4a, tap_pub_4b, tap_pub_5a, tap_pub_5b, tap_pub_toast, tap_pub_inherits, tap_pub_viaroot_2, tap_pub_viaroot_1"
 );
@@ -707,13 +711,18 @@ is($result, qq(t|1), 'check replicated rows to tab_rowfilter_toast');
 # the row filter for the top-level ancestor:
 #
 # tab_rowfilter_viaroot_part filter is: (a > 15)
+# - INSERT (13)        NO, 13 < 15
 # - INSERT (14)        NO, 14 < 15
 # - INSERT (15)        NO, 15 = 15
 # - INSERT (16)        YES, 16 > 15
+# - INSERT (17)        YES, 17 > 15
 $result =
   $node_subscriber->safe_psql('postgres',
-	"SELECT a FROM tab_rowfilter_viaroot_part");
-is($result, qq(16), 'check replicated rows to tab_rowfilter_viaroot_part');
+	"SELECT a FROM tab_rowfilter_viaroot_part ORDER BY 1");
+is($result, qq(16
+17),
+	'check replicated rows to tab_rowfilter_viaroot_part'
+);
 
 # Check there is no data in tab_rowfilter_viaroot_part_1 because rows are
 # replicated via the top most parent table tab_rowfilter_viaroot_part

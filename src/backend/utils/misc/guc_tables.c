@@ -968,6 +968,16 @@ struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
+		{"enable_self_join_removal", PGC_USERSET, QUERY_TUNING_METHOD,
+			gettext_noop("Enable removal of unique self-joins."),
+			NULL,
+			GUC_EXPLAIN | GUC_NOT_IN_SAMPLE
+		},
+		&enable_self_join_removal,
+		true,
+		NULL, NULL, NULL
+	},
+	{
 		{"geqo", PGC_USERSET, QUERY_TUNING_GEQO,
 			gettext_noop("Enables genetic query optimization."),
 			gettext_noop("This algorithm attempts to do planning without "
@@ -1990,6 +2000,18 @@ struct config_int ConfigureNamesInt[] =
 		},
 		&join_collapse_limit,
 		8, 1, INT_MAX,
+		NULL, NULL, NULL
+	},
+	{
+		{"self_join_search_limit", PGC_USERSET, QUERY_TUNING_OTHER,
+			gettext_noop("Max size of a group of plain tables where planner "
+						 "will lookup for self joins."),
+			gettext_noop("If a number of tables in FROM-list is exceeded this "
+						 "limit, the planner will ignore tables beyond it."),
+			GUC_EXPLAIN | GUC_NOT_IN_SAMPLE
+		},
+		&self_join_search_limit,
+		32, 1, INT_MAX,
 		NULL, NULL, NULL
 	},
 	{

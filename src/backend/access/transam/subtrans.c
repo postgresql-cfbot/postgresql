@@ -31,6 +31,7 @@
 #include "access/slru.h"
 #include "access/subtrans.h"
 #include "access/transam.h"
+#include "miscadmin.h"
 #include "pg_trace.h"
 #include "utils/snapmgr.h"
 
@@ -190,10 +191,13 @@ SUBTRANSShmemSize(void)
 void
 SUBTRANSShmemInit(void)
 {
+	bool found;
 	SubTransCtl->PagePrecedes = SubTransPagePrecedes;
 	SimpleLruInit(SubTransCtl, "Subtrans", NUM_SUBTRANS_BUFFERS, 0,
 				  SubtransSLRULock, "pg_subtrans",
-				  LWTRANCHE_SUBTRANS_BUFFER, SYNC_HANDLER_NONE);
+				  LWTRANCHE_SUBTRANS_BUFFER, SYNC_HANDLER_NONE,
+				  &found);
+	Assert(found == IsUnderPostmaster);
 	SlruPagePrecedesUnitTests(SubTransCtl, SUBTRANS_XACTS_PER_PAGE);
 }
 

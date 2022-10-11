@@ -21,6 +21,7 @@
 
 #include "access/detoast.h"
 #include "access/htup_details.h"
+#include "access/slru.h"
 #include "access/transam.h"
 #include "access/xact.h"
 #include "catalog/namespace.h"
@@ -38,6 +39,7 @@
 #include "optimizer/plancat.h"
 #include "parser/parse_coerce.h"
 #include "port/atomics.h"
+#include "storage/fd.h"
 #include "storage/spin.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
@@ -1256,4 +1258,204 @@ get_columns_length(PG_FUNCTION_ARGS)
 	}
 
 	PG_RETURN_INT32(column_offset);
+}
+
+/*
+ * Unit tests for slru.c
+ */
+
+#define NUM_TEST_BUFFERS		16
+
+int			test_tranche_id = -1;
+LWLock		TestSLRULock;
+#define TestSLRULock (&TestSLRULock)
+
+static SlruCtlData TestSlruCtlData;
+#define TestSlruCtl			(&TestSlruCtlData)
+
+static bool
+test_slru_page_precedes_logically(int page1, int page2)
+{
+	return page1 < page2;
+}
+
+static bool
+test_slru_scan_cb(SlruCtl ctl, char *filename, int segpage, void *data)
+{
+	/*
+	 * Since the scan order is not guaranteed, we don't display these values.
+	 * What actually interests us is the number of times the callback will be
+	 * executed.
+	 */
+	(void) filename;
+	(void) segpage;
+
+	elog(NOTICE, "test_slru_scan_cb() called, (char*))data = %s", (char *) data);
+	return false;				/* keep going */
+}
+
+PG_FUNCTION_INFO_V1(test_slru);
+Datum
+test_slru(PG_FUNCTION_ARGS)
+{
+	bool		found;
+	int			slotno,
+				i;
+	FileTag		ftag;
+	char		path[MAXPGPATH];
+	int			test_pageno = 12345;
+	char		test_data[] = "Test data";
+	const char	slru_dir_name[] = "pg_test_slru";
+
+	elog(NOTICE, "Creating TestSLRULock");
+
+	test_tranche_id = LWLockNewTrancheId();
+	LWLockRegisterTranche(test_tranche_id, "test_slru_tranche");
+	LWLockInitialize(TestSLRULock, test_tranche_id);
+
+	elog(NOTICE, "Creating directory '%s', if not exists",
+		 slru_dir_name);
+	(void) MakePGDirectory(slru_dir_name);
+
+	elog(NOTICE, "Creating SLRU, if not exists");
+
+	TestSlruCtl->PagePrecedes = test_slru_page_precedes_logically;
+	SimpleLruInit(TestSlruCtl, "Test",
+				  NUM_TEST_BUFFERS, 0, TestSLRULock, slru_dir_name,
+				  test_tranche_id, SYNC_HANDLER_NONE, &found);
+
+	elog(NOTICE, "Calling SimpleLruZeroPage()");
+
+	LWLockAcquire(TestSLRULock, LW_EXCLUSIVE);
+	slotno = SimpleLruZeroPage(TestSlruCtl, test_pageno);
+
+	TestSlruCtl->shared->page_dirty[slotno] = true;
+	TestSlruCtl->shared->page_status[slotno] = SLRU_PAGE_VALID;
+	strcpy(TestSlruCtl->shared->page_buffer[slotno], test_data);
+
+	elog(NOTICE, "Success, shared->page_number[slotno] = %d",
+		 TestSlruCtl->shared->page_number[slotno]);
+
+	found = SimpleLruDoesPhysicalPageExist(TestSlruCtl, test_pageno);
+	elog(NOTICE, "SimpleLruDoesPhysicalPageExist() returned %d. "
+		 "Now writing the page.", found);
+
+	SimpleLruWritePage(TestSlruCtl, slotno);
+	LWLockRelease(TestSLRULock);
+
+	found = SimpleLruDoesPhysicalPageExist(TestSlruCtl, test_pageno);
+	elog(NOTICE, "SimpleLruDoesPhysicalPageExist() returned %d", found);
+
+	elog(NOTICE, "Writing %d more pages...", NUM_TEST_BUFFERS * 3);
+	for (i = 1; i <= NUM_TEST_BUFFERS * 3; i++)
+	{
+		LWLockAcquire(TestSLRULock, LW_EXCLUSIVE);
+		slotno = SimpleLruZeroPage(TestSlruCtl, test_pageno + i);
+
+		TestSlruCtl->shared->page_dirty[slotno] = true;
+		TestSlruCtl->shared->page_status[slotno] = SLRU_PAGE_VALID;
+		strcpy(TestSlruCtl->shared->page_buffer[slotno], test_data);
+		LWLockRelease(TestSLRULock);
+	}
+
+	elog(NOTICE, "Reading page %d (in buffer) for read and write",
+		 test_pageno + NUM_TEST_BUFFERS * 2);
+	LWLockAcquire(TestSLRULock, LW_EXCLUSIVE);
+	slotno = SimpleLruReadPage(TestSlruCtl, test_pageno + NUM_TEST_BUFFERS * 2,
+							   true /* write_ok */ , InvalidTransactionId);
+	LWLockRelease(TestSLRULock);
+
+	/*
+	 * Same for SimpleLruReadPage_ReadOnly. Note that the control lock should
+	 * NOT be held at entry, but will be held at exit.
+	 */
+	elog(NOTICE, "Reading page %d (in buffer) for read-only",
+		 test_pageno + NUM_TEST_BUFFERS * 2);
+	slotno = SimpleLruReadPage_ReadOnly(TestSlruCtl,
+										test_pageno + NUM_TEST_BUFFERS * 2, InvalidTransactionId);
+	LWLockRelease(TestSLRULock);
+
+	elog(NOTICE, "Reading page %d (not in buffer) for read and write",
+		 test_pageno);
+	LWLockAcquire(TestSLRULock, LW_EXCLUSIVE);
+	slotno = SimpleLruReadPage(TestSlruCtl, test_pageno,
+							   true /* write_ok */ , InvalidTransactionId);
+	LWLockRelease(TestSLRULock);
+
+	/*
+	 * Same for SimpleLruReadPage_ReadOnly. Note that the control lock should
+	 * NOT be held at entry, but will be held at exit.
+	 */
+	elog(NOTICE, "Reading page %d (not in buffer) for read-only",
+		 test_pageno + 1);
+	slotno = SimpleLruReadPage_ReadOnly(TestSlruCtl,
+										test_pageno + 1, InvalidTransactionId);
+	LWLockRelease(TestSLRULock);
+
+	elog(NOTICE, "Calling SimpleLruWriteAll()");
+	SimpleLruWriteAll(TestSlruCtl, true);
+
+	ftag.segno = (test_pageno + NUM_TEST_BUFFERS * 3) / SLRU_PAGES_PER_SEGMENT;
+	elog(NOTICE, "Calling SlruSyncFileTag() for segment %d", ftag.segno);
+	SlruSyncFileTag(TestSlruCtl, &ftag, path);
+	elog(NOTICE, "Done, path = %s", path);
+
+	/* Test SlruDeleteSegment() and SlruScanDirectory() */
+
+	/* check precondition */
+	elog(NOTICE, "Calling SlruScanDirectory()");
+	SlruScanDirectory(TestSlruCtl, test_slru_scan_cb, (void *) test_data);
+
+	/* delete the segment */
+	elog(NOTICE, "Deleting segment %d", ftag.segno);
+	SlruDeleteSegment(TestSlruCtl, ftag.segno);
+
+	/* check postcondition */
+	elog(NOTICE, "Calling SlruScanDirectory()");
+	SlruScanDirectory(TestSlruCtl, test_slru_scan_cb, (void *) test_data);
+	found = SimpleLruDoesPhysicalPageExist(TestSlruCtl,
+										   (test_pageno + NUM_TEST_BUFFERS * 3));
+	elog(NOTICE, "SimpleLruDoesPhysicalPageExist() returned %d", found);
+
+	/* Test SimpleLruTruncate() */
+
+	/* check precondition */
+	found = SimpleLruDoesPhysicalPageExist(TestSlruCtl,
+										   test_pageno + NUM_TEST_BUFFERS * 2);
+	elog(NOTICE, "SimpleLruDoesPhysicalPageExist() returned %d for page %d",
+		 found, test_pageno + NUM_TEST_BUFFERS * 2);
+
+	found = SimpleLruDoesPhysicalPageExist(TestSlruCtl, test_pageno);
+	elog(NOTICE, "SimpleLruDoesPhysicalPageExist() returned %d for page %d",
+		 found, test_pageno);
+
+	/* do the call */
+	elog(NOTICE, "Truncating pages prior to %d",
+		 test_pageno + NUM_TEST_BUFFERS * 2);
+	SimpleLruTruncate(TestSlruCtl, test_pageno + NUM_TEST_BUFFERS * 2);
+
+	/* check postcondition */
+	found = SimpleLruDoesPhysicalPageExist(TestSlruCtl,
+										   test_pageno + NUM_TEST_BUFFERS * 2);
+	elog(NOTICE, "SimpleLruDoesPhysicalPageExist() returned %d for page %d",
+		 found, test_pageno + NUM_TEST_BUFFERS * 2);
+
+	found = SimpleLruDoesPhysicalPageExist(TestSlruCtl, test_pageno);
+	elog(NOTICE, "SimpleLruDoesPhysicalPageExist() returned %d for page %d",
+		 found, test_pageno);
+
+	/* this is to cover SlruScanDirCbDeleteAll() with tests as well */
+	elog(NOTICE, "Cleaning up.");
+	SlruScanDirectory(TestSlruCtl, SlruScanDirCbDeleteAll, NULL);
+
+	found = SimpleLruDoesPhysicalPageExist(TestSlruCtl,
+										   test_pageno + NUM_TEST_BUFFERS * 2);
+	elog(NOTICE, "SimpleLruDoesPhysicalPageExist() returned %d for page %d",
+		 found, test_pageno + NUM_TEST_BUFFERS * 2);
+
+	found = SimpleLruDoesPhysicalPageExist(TestSlruCtl, test_pageno);
+	elog(NOTICE, "SimpleLruDoesPhysicalPageExist() returned %d for page %d",
+		 found, test_pageno);
+
+	PG_RETURN_VOID();
 }

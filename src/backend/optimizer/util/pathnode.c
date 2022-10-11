@@ -207,6 +207,20 @@ compare_path_costs_fuzzily(Path *path1, Path *path2, double fuzz_factor)
 		/* ... but path2 fuzzily worse on startup, so path1 wins */
 		return COSTS_BETTER1;
 	}
+	if (IsA(path1, IndexPath) && IsA(path2, IndexPath))
+	{
+		/*
+		 * Couldn't differ value of the paths. Last chance - if these paths
+		 * are index paths - use the path with the lower selectivity value.
+		 */
+		if (((IndexPath *) path1)->indexselectivity <
+			((IndexPath *) path2)->indexselectivity)
+			return COSTS_BETTER1;
+
+		if (((IndexPath *) path1)->indexselectivity >
+			((IndexPath *) path2)->indexselectivity)
+			return COSTS_BETTER2;
+	}
 	/* fuzzily the same on both costs */
 	return COSTS_EQUAL;
 

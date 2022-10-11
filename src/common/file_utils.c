@@ -28,6 +28,7 @@
 #ifdef FRONTEND
 #include "common/logging.h"
 #endif
+#include "port/pg_iovec.h"
 
 #ifdef FRONTEND
 
@@ -459,4 +460,144 @@ get_dirent_type(const char *path,
 	}
 
 	return result;
+}
+
+/*
+ * A convenience wrapper for pg_pwritev() that retries on partial write.  If an
+ * error is returned, it is unspecified how much has been written.
+ */
+ssize_t
+pg_pwritev_with_retry(int fd, const struct iovec *iov, int iovcnt, off_t offset)
+{
+	struct iovec iov_copy[PG_IOV_MAX];
+	ssize_t		sum = 0;
+	ssize_t		part;
+
+	/* We'd better have space to make a copy, in case we need to retry. */
+	if (iovcnt > PG_IOV_MAX)
+	{
+		errno = EINVAL;
+		return -1;
+	}
+
+	for (;;)
+	{
+		/* Write as much as we can. */
+		part = pg_pwritev(fd, iov, iovcnt, offset);
+		if (part < 0)
+			return -1;
+
+#ifdef SIMULATE_SHORT_WRITE
+		part = Min(part, 4096);
+#endif
+
+		/* Count our progress. */
+		sum += part;
+		offset += part;
+
+		/* Step over iovecs that are done. */
+		while (iovcnt > 0 && iov->iov_len <= part)
+		{
+			part -= iov->iov_len;
+			++iov;
+			--iovcnt;
+		}
+
+		/* Are they all done? */
+		if (iovcnt == 0)
+		{
+			/* We don't expect the kernel to write more than requested. */
+			Assert(part == 0);
+			break;
+		}
+
+		/*
+		 * Move whatever's left to the front of our mutable copy and adjust
+		 * the leading iovec.
+		 */
+		Assert(iovcnt > 0);
+		memmove(iov_copy, iov, sizeof(*iov) * iovcnt);
+		Assert(iov->iov_len > part);
+		iov_copy[0].iov_base = (char *) iov_copy[0].iov_base + part;
+		iov_copy[0].iov_len -= part;
+		iov = iov_copy;
+	}
+
+	return sum;
+}
+
+/*
+ * Function to zero-fill a file with given size. On failure, a negative value
+ * is returned and errno is set appropriately so that the caller can use it
+ * accordingly.
+ */
+ssize_t
+pg_pwritev_zeros(int fd, size_t size)
+{
+	PGAlignedXLogBlock	zbuffer;
+	struct iovec	iov[PG_IOV_MAX];
+	int		blocks;
+	size_t	block_sz;
+	size_t	remaining_size = 0;
+	int		i;
+	ssize_t	written;
+	ssize_t	total_written = 0;
+
+	/*
+	 * XXX: Writing more than one block of size XLOG_BLCKSZ bytes via
+	 * PGAlignedXLogBlock structure per vector buffer might improve write
+	 * performance on some platforms. However, tests (on some platforms, not
+	 * all) show not much improvements with varying block sizes. Hence we stick
+	 * to one block in PGAlignedXLogBlock structure for now.
+	 */
+	block_sz = sizeof(zbuffer.data);
+
+	memset(zbuffer.data, 0, block_sz);
+
+	/* Prepare to write out a lot of copies of our zero buffer at once. */
+	for (i = 0; i < lengthof(iov); ++i)
+	{
+		iov[i].iov_base = zbuffer.data;
+		iov[i].iov_len = block_sz;
+	}
+
+	/* Loop, writing as many blocks as we can for each system call. */
+	blocks = size / block_sz;
+	remaining_size = size % block_sz;
+	for (i = 0; i < blocks;)
+	{
+		int		iovcnt = Min(blocks - i, lengthof(iov));
+		off_t	offset = i * block_sz;
+
+		written = pg_pwritev_with_retry(fd, iov, iovcnt, offset);
+
+		if (written < 0)
+			return written;
+
+		i += iovcnt;
+		total_written += written;
+	}
+
+	/* Now, write the remaining size, if any, of the file with zeros. */
+	if (remaining_size > 0)
+	{
+		/* We'll never write more than one block here */
+		int		iovcnt = 1;
+
+		/* Jump on to the end of previously written blocks */
+		off_t	offset = i * block_sz;
+
+		iov[0].iov_len = remaining_size;
+
+		written = pg_pwritev_with_retry(fd, iov, iovcnt, offset);
+
+		if (written < 0)
+			return written;
+
+		total_written += written;
+	}
+
+	Assert(total_written == size);
+
+	return total_written;
 }

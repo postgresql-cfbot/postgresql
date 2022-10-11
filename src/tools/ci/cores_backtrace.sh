@@ -1,5 +1,8 @@
 #! /bin/sh
 
+#set -e
+set -x
+
 if [ $# -ne 2 ]; then
     echo "cores_backtrace.sh <os> <directory>"
     exit 1
@@ -8,9 +11,21 @@ fi
 os=$1
 directory=$2
 
+findargs=''
 case $os in
     freebsd|linux|macos)
-    ;;
+        ;;
+    cygwin)
+        # XXX Evidently I don't know how to write two arguments here without pathname expansion later, other than eval.
+        #findargs='-name "*.stackdump"'
+        for corefile in $(find "$directory" -type f -name "*.stackdump") ; do
+            binary=`basename "$corefile" .stackdump`
+            echo;echo;
+            echo "dumping ${corefile} for ${binary}"
+            awk '/^0/{print $2}' $corefile |addr2line -f -i -e ./src/backend/postgres.exe
+        done
+        exit 0
+        ;;
     *)
         echo "unsupported operating system ${os}"
         exit 1
@@ -18,7 +33,7 @@ case $os in
 esac
 
 first=1
-for corefile in $(find "$directory" -type f) ; do
+for corefile in $(find "$directory" -type f $findargs) ; do
     if [ "$first" -eq 1 ]; then
         first=0
     else
@@ -28,6 +43,13 @@ for corefile in $(find "$directory" -type f) ; do
 
     if [ "$os" = 'macos' ]; then
         lldb -c $corefile --batch -o 'thread backtrace all' -o 'quit'
+    elif [ "$os" = 'cygwin' ]; then
+        # https://cirrus-ci.com/task/4964259674193920
+        #binary=${corefile%.stackdump}
+        #binary=${corefile#*/}
+        binary=`basename "$corefile" .stackdump`
+        echo "dumping ${corefile} for ${binary}"
+        awk '/^0/{print $2}' $corefile |addr2line -f -i -e ./src/backend/postgres.exe
     else
         auxv=$(gdb --quiet --core ${corefile} --batch -ex 'info auxv' 2>/dev/null)
         if [ $? -ne 0 ]; then
@@ -48,3 +70,5 @@ for corefile in $(find "$directory" -type f) ; do
         gdb --batch --quiet -ex "thread apply all bt full" -ex "quit" "$binary" "$corefile" 2>/dev/null
     fi
 done
+
+exit 0

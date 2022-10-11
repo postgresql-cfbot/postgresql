@@ -35,6 +35,7 @@ on_failure_ac: &on_failure_ac
       - "**/*.log"
       - "**/*.diffs"
       - "**/regress_log_*"
+      - "**/*.stackdump"
     type: text/plain
 
 on_failure_meson: &on_failure_meson
@@ -463,6 +464,72 @@ task:
       path: "crashlog-*.txt"
       type: text/plain
 
+
+task:
+  name: Windows - Cygwin
+  #XXX only_if: $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-os-only:[^\n]*cygwin.*'
+  timeout_in: 90m
+
+  env:
+    CPUS: 4
+    BUILD_JOBS: 4
+    TEST_JOBS: 1
+    CCACHE_DIR: /tmp/ccache
+    CONFIGURE_FLAGS: --enable-debug --enable-tap-tests --with-ldap --with-ssl=openssl --with-libxml --enable-cassert
+    # --with-gssapi
+    CONFIGURE_CACHE: /tmp/ccache/configure.cache
+    PG_TEST_USE_UNIX_SOCKETS: 1
+    CCACHE_LOGFILE: ccache.log
+    EXTRA_REGRESS_OPTS: --max-connections=1
+    PG_TEST_EXTRA: ldap ssl # disable kerberos
+
+  windows_container:
+    image: cirrusci/windowsservercore:2019
+    os_version: 2019
+    cpu: $CPUS
+    memory: 4G
+
+  setup_additional_packages_script: |
+    choco install -y --no-progress cygwin
+    C:\tools\cygwin\cygwinsetup.exe -q -P cygrunsrv,make,gcc-core,ccache,binutils,libtool,pkg-config,flex,bison,zlib-devel,libxml2-devel,libxslt-devel,libssl-devel,openldap-devel,libreadline-devel,perl,perl-IPC-Run
+    REM libkrb5-devel,krb5-server
+    C:\tools\cygwin\bin\bash.exe --login -c "cygserver-config -y"
+    C:\tools\cygwin\bin\bash.exe --login -c "echo 'kern.ipc.semmni 1024' >> /etc/cygserver.conf"
+    C:\tools\cygwin\bin\bash.exe --login -c "echo 'kern.ipc.semmns 1024' >> /etc/cygserver.conf"
+    C:\tools\cygwin\bin\bash.exe --login -c "net start cygserver"
+
+  sysinfo_script: |
+    chcp
+    systeminfo
+    powershell -Command get-psdrive -psprovider filesystem
+    set
+    C:\tools\cygwin\bin\bash.exe --login -c "id; uname -a; ulimit -a -H; ulimit -a -S; export"
+
+  ccache_cache:
+    folder: C:\tools\cygwin\tmp\ccache
+
+  configure_script:
+    # Try to configure with the cache file, and retry without if it fails, in case the flags changed.
+    - C:\tools\cygwin\bin\bash.exe --login -c "cd '%cd%' && for i in 1 2; do ./configure --cache-file=${CONFIGURE_CACHE} ${CONFIGURE_FLAGS} CC='ccache gcc' CFLAGS='-Og -ggdb' && break; rm -v ${CONFIGURE_CACHE}; done"
+
+  build_script:
+    #- C:\tools\cygwin\bin\bash.exe --login -c "ccache --max-size ${CCACHE_MAXSIZE}"
+    - C:\tools\cygwin\bin\bash.exe --login -c "ccache --zero-stats"
+    - C:\tools\cygwin\bin\bash.exe --login -c "cd '%cd%' && make -s -j ${BUILD_JOBS} world-bin"
+    - C:\tools\cygwin\bin\bash.exe --login -c "ccache --show-stats"
+
+  upload_caches: ccache
+
+  test_world_script:
+    #- C:\tools\cygwin\bin\bash.exe --login -c "cd '%cd%' && timeout 44m make -s -j ${TEST_JOBS} check ${CHECKFLAGS} -C src/test/subscription"
+    #- C:\tools\cygwin\bin\bash.exe --login -c "cd '%cd%' && timeout 44m make -s -j ${TEST_JOBS} check ${CHECKFLAGS} -C src/test/recovery"
+    #- C:\tools\cygwin\bin\bash.exe --login -c "cd '%cd%' && timeout 44m make -s check ${CHECKFLAGS} -C src/bin -j 2"
+    - C:\tools\cygwin\bin\bash.exe --login -c "cd '%cd%' && timeout 77m make -s -j ${TEST_JOBS} ${CHECK} PROVE_FLAGS='-j2 --timer' ${CHECKFLAGS}"
+
+  on_failure:
+    <<: *on_failure
+    cores_script:
+      - C:\tools\cygwin\bin\bash.exe --login -c "cd '%cd%' && src/tools/ci/cores_backtrace.sh cygwin ."
 
 task:
   name: CompilerWarnings

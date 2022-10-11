@@ -1052,7 +1052,7 @@ sub enable_restoring
 	# the path contains spaces.
 	$path =~ s{\\}{\\\\}g if ($PostgreSQL::Test::Utils::windows_os);
 	my $copy_command =
-	  $PostgreSQL::Test::Utils::windows_os
+	  $PostgreSQL::Test::Utils::windows_os && !$PostgreSQL::Test::Utils::is_cygwin
 	  ? qq{copy "$path\\\\%f" "%p"}
 	  : qq{cp "$path/%f" "%p"};
 
@@ -1122,7 +1122,7 @@ sub enable_archiving
 	# the path contains spaces.
 	$path =~ s{\\}{\\\\}g if ($PostgreSQL::Test::Utils::windows_os);
 	my $copy_command =
-	  $PostgreSQL::Test::Utils::windows_os
+	  $PostgreSQL::Test::Utils::windows_os && !$PostgreSQL::Test::Utils::is_cygwin
 	  ? qq{copy "%p" "$path\\\\%f"}
 	  : qq{cp "%p" "$path/%f"};
 

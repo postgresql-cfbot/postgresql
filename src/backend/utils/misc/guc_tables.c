@@ -3066,6 +3066,18 @@ struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"streaming_replication_retry_interval", PGC_SIGHUP, REPLICATION_STANDBY,
+			gettext_noop("Sets the time after which standby attempts to switch WAL "
+						 "source from archive to streaming replication."),
+			gettext_noop("0 turns this feature off."),
+			GUC_UNIT_MS
+		},
+		&streaming_replication_retry_interval,
+		300000, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"wal_segment_size", PGC_INTERNAL, PRESET_OPTIONS,
 			gettext_noop("Shows the size of write ahead log segments."),
 			NULL,

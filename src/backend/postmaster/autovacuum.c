@@ -330,12 +330,14 @@ static autovac_table *table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 static void recheck_relation_needs_vacanalyze(Oid relid, AutoVacOpts *avopts,
 											  Form_pg_class classForm,
 											  int effective_multixact_freeze_max_age,
-											  bool *dovacuum, bool *doanalyze, bool *wraparound);
+											  bool *dovacuum, bool *doanalyze,
+											  bool *wraparound, bool *inserts);
 static void relation_needs_vacanalyze(Oid relid, AutoVacOpts *relopts,
 									  Form_pg_class classForm,
 									  PgStat_StatTabEntry *tabentry,
 									  int effective_multixact_freeze_max_age,
-									  bool *dovacuum, bool *doanalyze, bool *wraparound);
+									  bool *dovacuum, bool *doanalyze,
+									  bool *wraparound, bool *inserts);
 
 static void autovacuum_do_vac_analyze(autovac_table *tab,
 									  BufferAccessStrategy bstrategy);
@@ -2067,6 +2069,7 @@ do_autovacuum(void)
 		bool		dovacuum;
 		bool		doanalyze;
 		bool		wraparound;
+		bool		inserts;
 
 		if (classForm->relkind != RELKIND_RELATION &&
 			classForm->relkind != RELKIND_MATVIEW)
@@ -2107,7 +2110,8 @@ do_autovacuum(void)
 		/* Check if it needs vacuum or analyze */
 		relation_needs_vacanalyze(relid, relopts, classForm, tabentry,
 								  effective_multixact_freeze_max_age,
-								  &dovacuum, &doanalyze, &wraparound);
+								  &dovacuum, &doanalyze,
+								  &wraparound, &inserts);
 
 		/* Relations that need work are added to table_oids */
 		if (dovacuum || doanalyze)
@@ -2160,6 +2164,7 @@ do_autovacuum(void)
 		bool		dovacuum;
 		bool		doanalyze;
 		bool		wraparound;
+		bool		inserts;
 
 		/*
 		 * We cannot safely process other backends' temp tables, so skip 'em.
@@ -2190,7 +2195,8 @@ do_autovacuum(void)
 
 		relation_needs_vacanalyze(relid, relopts, classForm, tabentry,
 								  effective_multixact_freeze_max_age,
-								  &dovacuum, &doanalyze, &wraparound);
+								  &dovacuum, &doanalyze,
+								  &wraparound, &inserts);
 
 		/* ignore analyze for toast tables */
 		if (dovacuum)
@@ -2765,7 +2771,8 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 	bool		dovacuum;
 	bool		doanalyze;
 	autovac_table *tab = NULL;
-	bool		wraparound;
+	bool		wraparound,
+				inserts;
 	AutoVacOpts *avopts;
 
 	/* fetch the relation's relcache entry */
@@ -2792,7 +2799,8 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 
 	recheck_relation_needs_vacanalyze(relid, avopts, classForm,
 									  effective_multixact_freeze_max_age,
-									  &dovacuum, &doanalyze, &wraparound);
+									  &dovacuum, &doanalyze,
+									  &wraparound, &inserts);
 
 	/* OK, it needs something done */
 	if (doanalyze || dovacuum)
@@ -2873,6 +2881,7 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 		tab->at_params.multixact_freeze_min_age = multixact_freeze_min_age;
 		tab->at_params.multixact_freeze_table_age = multixact_freeze_table_age;
 		tab->at_params.is_wraparound = wraparound;
+		tab->at_params.is_insert = inserts;
 		tab->at_params.log_min_duration = log_min_duration;
 		tab->at_vacuum_cost_limit = vac_cost_limit;
 		tab->at_vacuum_cost_delay = vac_cost_delay;
@@ -2908,7 +2917,8 @@ recheck_relation_needs_vacanalyze(Oid relid,
 								  int effective_multixact_freeze_max_age,
 								  bool *dovacuum,
 								  bool *doanalyze,
-								  bool *wraparound)
+								  bool *wraparound,
+								  bool *inserts)
 {
 	PgStat_StatTabEntry *tabentry;
 
@@ -2918,7 +2928,8 @@ recheck_relation_needs_vacanalyze(Oid relid,
 
 	relation_needs_vacanalyze(relid, avopts, classForm, tabentry,
 							  effective_multixact_freeze_max_age,
-							  dovacuum, doanalyze, wraparound);
+							  dovacuum, doanalyze,
+							  wraparound, inserts);
 
 	/* ignore ANALYZE for toast tables */
 	if (classForm->relkind == RELKIND_TOASTVALUE)
@@ -2971,7 +2982,8 @@ relation_needs_vacanalyze(Oid relid,
  /* output params below */
 						  bool *dovacuum,
 						  bool *doanalyze,
-						  bool *wraparound)
+						  bool *wraparound,
+						  bool *inserts)
 {
 	bool		force_vacuum;
 	bool		av_enabled;
@@ -3062,6 +3074,7 @@ relation_needs_vacanalyze(Oid relid,
 			MultiXactIdPrecedes(classForm->relminmxid, multiForceLimit);
 	}
 	*wraparound = force_vacuum;
+	*inserts = false;			/* for now */
 
 	/* User disabled it in pg_class.reloptions?  (But ignore if at risk) */
 	if (!av_enabled && !force_vacuum)
@@ -3108,8 +3121,9 @@ relation_needs_vacanalyze(Oid relid,
 				 vactuples, vacthresh, anltuples, anlthresh);
 
 		/* Determine if this table needs vacuum or analyze. */
-		*dovacuum = force_vacuum || (vactuples > vacthresh) ||
-			(vac_ins_base_thresh >= 0 && instuples > vacinsthresh);
+		*inserts = !force_vacuum && vac_ins_base_thresh >= 0 &&
+			instuples > vacinsthresh;
+		*dovacuum = force_vacuum || (vactuples > vacthresh) || *inserts;
 		*doanalyze = (anltuples > anlthresh);
 	}
 	else

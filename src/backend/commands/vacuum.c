@@ -263,8 +263,9 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 		params.multixact_freeze_table_age = -1;
 	}
 
-	/* user-invoked vacuum is never "for wraparound" */
+	/* user-invoked vacuum is never "for wraparound" or "for inserts" */
 	params.is_wraparound = false;
+	params.is_insert = false;
 
 	/* user-invoked vacuum uses VACOPT_VERBOSE instead of log_min_duration */
 	params.log_min_duration = -1;

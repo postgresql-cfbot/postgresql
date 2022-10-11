@@ -1152,6 +1152,7 @@ read_backup_label(XLogRecPtr *checkPointLoc, TimeLineID *backupLabelTLI,
 				  bool *backupEndRequired, bool *backupFromStandby)
 {
 	char		startxlogfilename[MAXFNAMELEN];
+	char		stopxlogfilename[MAXFNAMELEN];
 	TimeLineID	tli_from_walseg,
 				tli_from_file;
 	FILE	   *lfp;
@@ -1186,7 +1187,10 @@ read_backup_label(XLogRecPtr *checkPointLoc, TimeLineID *backupLabelTLI,
 	/*
 	 * Read and parse the START WAL LOCATION and CHECKPOINT lines (this code
 	 * is pretty crude, but we are not expecting any variability in the file
-	 * format).
+	 * format). Also allow STOP WAL LOCATION to be in the file. This line does
+	 * not appear in backup_label, but it is written to the corresponding
+	 * .backup file and allows users to rename or copy that file to
+	 * backup_label without further editing.
 	 */
 	if (fscanf(lfp, "START WAL LOCATION: %X/%X (file %08X%16s)%c",
 			   &hi, &lo, &tli_from_walseg, startxlogfilename, &ch) != 5 || ch != '\n')
@@ -1195,6 +1199,11 @@ read_backup_label(XLogRecPtr *checkPointLoc, TimeLineID *backupLabelTLI,
 				 errmsg("invalid data in file \"%s\"", BACKUP_LABEL_FILE)));
 	RedoStartLSN = ((uint64) hi) << 32 | lo;
 	RedoStartTLI = tli_from_walseg;
+	if (fscanf(lfp, "STOP WAL LOCATION: %X/%X (file %*08X%16s)%c",
+				&hi, &lo, stopxlogfilename, &ch) == 4)
+		ereport(DEBUG1,
+				(errmsg_internal("stop wal location %X/%X in file \"%s\"",
+								 hi, lo, BACKUP_LABEL_FILE)));
 	if (fscanf(lfp, "CHECKPOINT LOCATION: %X/%X%c",
 			   &hi, &lo, &ch) != 3 || ch != '\n')
 		ereport(FATAL,

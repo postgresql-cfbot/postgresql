@@ -22,3 +22,15 @@ SELECT test_lfind32();
  
 (1 row)
 
+SELECT test_lfind8_idx();
+ test_lfind8_idx 
+-----------------
+ 
+(1 row)
+
+SELECT test_lfind8_ge_idx();
+ test_lfind8_ge_idx 
+--------------------
+ 
+(1 row)
+

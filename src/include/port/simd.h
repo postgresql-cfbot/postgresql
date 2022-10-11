@@ -60,6 +60,15 @@ typedef uint32x4_t Vector32;
 typedef uint64 Vector8;
 #endif
 
+/*
+ * Some of the functions with SIMD implementations use bitwise operations
+ * available in pg_bitutils.h.  There are currently no non-SIMD implementations
+ * that require these bitwise operations.
+ */
+#ifndef USE_NO_SIMD
+#include "port/pg_bitutils.h"
+#endif
+
 /* load/store operations */
 static inline void vector8_load(Vector8 *v, const uint8 *s);
 #ifndef USE_NO_SIMD
@@ -79,6 +88,8 @@ static inline bool vector8_has_le(const Vector8 v, const uint8 c);
 static inline bool vector8_is_highbit_set(const Vector8 v);
 #ifndef USE_NO_SIMD
 static inline bool vector32_is_highbit_set(const Vector32 v);
+static inline int vector8_find(const Vector8 v, const uint8 c);
+static inline int vector8_find_ge(const Vector8 v, const uint8 c);
 #endif
 
 /* arithmetic operations */
@@ -296,6 +307,95 @@ vector32_is_highbit_set(const Vector32 v)
 #else
 	return vector8_is_highbit_set(v);
 #endif
+}
+#endif							/* ! USE_NO_SIMD */
+
+/*
+ * Return index of the first element in the vector that is equal to the given
+ * scalar.  Return -1 if there is no such element.
+ */
+#ifndef USE_NO_SIMD
+static inline int
+vector8_find(const Vector8 v, const uint8 c)
+{
+	Vector8		cmp;
+	int			result = -1;
+#if defined(USE_SSE2)
+	uint32		mask;
+#elif defined(USE_NEON)
+	uint64		mask;
+#endif
+
+	/* pre-compute the result for assert checking */
+#ifdef USE_ASSERT_CHECKING
+	int			assert_result = -1;
+
+	for (Size i = 0; i < sizeof(Vector8); i++)
+	{
+		if (((const uint8 *) &v)[i] == c)
+		{
+			assert_result = i;
+			break;
+		}
+	}
+#endif							/* USE_ASSERT_CHECKING */
+
+	cmp = vector8_eq(v, vector8_broadcast(c));
+
+#if defined(USE_SSE2)
+	mask = _mm_movemask_epi8(cmp);
+	if (mask)
+		result = pg_rightmost_one_pos32(mask);
+#elif defined(USE_NEON)
+	/*
+	 * Adapted from
+	 * https://community.arm.com/arm-community-blogs/b/infrastructure-solutions-blog/posts/porting-x86-vector-bitmask-optimizations-to-arm-neon
+	 */
+	mask = vget_lane_u64((uint64x1_t) vshrn_n_u16((uint16x8_t) cmp, 4), 0);
+	if (mask)
+		result = pg_rightmost_one_pos64(mask) >> 2;
+#endif
+
+	Assert(assert_result == result);
+	return result;
+}
+#endif							/* ! USE_NO_SIMD */
+
+/*
+ * Return index of the first element in the vector that is greater than or
+ * equal to the given scalar.  Return -1 is there is no such element.
+ */
+#ifndef USE_NO_SIMD
+static inline int
+vector8_find_ge(const Vector8 v, const uint8 c)
+{
+	Vector8		sub;
+	int			result;
+
+	/* pre-compute the result for assert checking */
+#ifdef USE_ASSERT_CHECKING
+	int			assert_result = -1;
+
+	for (Size i = 0; i < sizeof(Vector8); i++)
+	{
+		if (((const uint8 *) &v)[i] >= c)
+		{
+			assert_result = i;
+			break;
+		}
+	}
+#endif                          /* USE_ASSERT_CHECKING */
+
+	/*
+	 * Use saturating subtraction to find bytes >= c, which will present as
+	 * NUL bytes.  This approach is a workaround for the lack of unsigned
+	 * comparison instructions on some architectures.
+	 */
+	sub = vector8_ssub(vector8_broadcast(c), v);
+	result = vector8_find(sub, 0);
+
+	Assert(assert_result == result);
+	return result;
 }
 #endif							/* ! USE_NO_SIMD */
 

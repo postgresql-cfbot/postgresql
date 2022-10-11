@@ -49,6 +49,42 @@ pg_lfind8(uint8 key, uint8 *base, uint32 nelem)
 }
 
 /*
+ * pg_lfind8_idx
+ *
+ * Return index of the first element in 'base' that equals 'key'.  Return -1 if
+ * there is no such element.
+ */
+static inline int
+pg_lfind8_idx(uint8 key, uint8 *base, int nelem)
+{
+	int			i = 0;
+
+#ifndef USE_NO_SIMD
+	/* round down to multiple of vector length */
+	int			tail_idx = nelem & ~(sizeof(Vector8) - 1);
+	Vector8		chunk;
+
+	for (; i < tail_idx; i += sizeof(Vector8))
+	{
+		int			idx;
+
+		vector8_load(&chunk, &base[i]);
+		if ((idx = vector8_find(chunk, key)) != -1)
+			return i + idx;
+	}
+#endif
+
+	/* Process the remaining elements one at a time. */
+	for (; i < nelem; i++)
+	{
+		if (key == base[i])
+			return i;
+	}
+
+	return -1;
+}
+
+/*
  * pg_lfind8_le
  *
  * Return true if there is an element in 'base' that is less than or equal to
@@ -78,6 +114,42 @@ pg_lfind8_le(uint8 key, uint8 *base, uint32 nelem)
 	}
 
 	return false;
+}
+
+/*
+ * pg_lfind8_ge_idx
+ *
+ * Return index of the first element in 'base' that is greater than or equal to
+ * 'key'.  Return -1 if there is no such element.
+ */
+static inline int
+pg_lfind8_ge_idx(uint8 key, uint8 *base, int nelem)
+{
+	int			i = 0;
+
+#ifndef USE_NO_SIMD
+	/* round down to multiple of vector length */
+	int			tail_idx = nelem & ~(sizeof(Vector8) - 1);
+	Vector8		chunk;
+
+	for (; i < tail_idx; i += sizeof(Vector8))
+	{
+		int			idx;
+
+		vector8_load(&chunk, &base[i]);
+		if ((idx = vector8_find_ge(chunk, key)) != -1)
+			return i + idx;
+	}
+#endif
+
+	/* Process the remaining elements one at a time. */
+	for (; i < nelem; i++)
+	{
+		if (base[i] >= key)
+			return i;
+	}
+
+	return -1;
 }
 
 /*

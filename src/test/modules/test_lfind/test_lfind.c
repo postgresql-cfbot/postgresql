@@ -115,11 +115,90 @@ test_lfind8_le(PG_FUNCTION_ARGS)
 	PG_RETURN_VOID();
 }
 
+/* workhorse for test_lfind8_idx */
+static void
+test_lfind8_idx_internal(uint8 key)
+{
+	uint8		charbuf[LEN_WITH_TAIL(Vector8)];
+	const int	len_no_tail = LEN_NO_TAIL(Vector8);
+	const int	len_with_tail = LEN_WITH_TAIL(Vector8);
+	int			keypos;
+
+	memset(charbuf, 0xFF, len_with_tail);
+	/* search tail to test one-byte-at-a-time path */
+	keypos = len_with_tail - 1;
+	charbuf[keypos] = key;
+	if (key > 0x00 && (pg_lfind8_idx(key - 1, charbuf, len_with_tail) != -1))
+		elog(ERROR, "pg_lfind8_idx() found nonexistent element '0x%x'", key - 1);
+	if (key < 0xFF && (pg_lfind8_idx(key, charbuf, len_with_tail) != keypos))
+		elog(ERROR, "pg_lfind8_idx() did not find existing element '0x%x'", key);
+	if (key < 0xFE && (pg_lfind8_idx(key + 1, charbuf, len_with_tail) != -1))
+		elog(ERROR, "pg_lfind8_idx() found nonexistent element '0x%x'", key + 1);
+
+	memset(charbuf, 0xFF, len_with_tail);
+	/* search with vector operations */
+	keypos = len_no_tail - 1;
+	charbuf[keypos] = key;
+	if (key > 0x00 && (pg_lfind8_idx(key - 1, charbuf, len_no_tail) != -1))
+		elog(ERROR, "pg_lfind8_idx() found nonexistent element '0x%x'", key - 1);
+	if (key < 0xFF && (pg_lfind8_idx(key, charbuf, len_no_tail) != keypos))
+		elog(ERROR, "pg_lfind8_idx() did not find existing element '0x%x'", key);
+	if (key < 0xFE && (pg_lfind8_idx(key + 1, charbuf, len_no_tail) != -1))
+		elog(ERROR, "pg_lfind8_idx() found nonexistent element '0x%x'", key + 1);
+}
+
+PG_FUNCTION_INFO_V1(test_lfind8_idx);
+Datum
+test_lfind8_idx(PG_FUNCTION_ARGS)
+{
+	test_lfind8_idx_internal(0);
+	test_lfind8_idx_internal(1);
+	test_lfind8_idx_internal(0x7F);
+	test_lfind8_idx_internal(0x80);
+	test_lfind8_idx_internal(0x81);
+	test_lfind8_idx_internal(0xFD);
+	test_lfind8_idx_internal(0xFE);
+	test_lfind8_idx_internal(0xFF);
+
+	PG_RETURN_VOID();
+}
+
+PG_FUNCTION_INFO_V1(test_lfind8_ge_idx);
+Datum
+test_lfind8_ge_idx(PG_FUNCTION_ARGS)
+{
+#define TEST_ARRAY_SIZE 135
+	uint8		test_array[TEST_ARRAY_SIZE] = {0};
+
+	test_array[8] = 1;
+	test_array[64] = 3;
+	test_array[TEST_ARRAY_SIZE - 1] = 5;
+
+	if (pg_lfind8_ge_idx(1, test_array, 4) != -1)
+		elog(ERROR, "pg_lfind8_ge_idx found nonexistent element");
+	if (pg_lfind8_ge_idx(1, test_array, TEST_ARRAY_SIZE) != 8)
+		elog(ERROR, "pg_lfind8_ge_idx did not find existing element");
+
+	if (pg_lfind8_ge_idx(2, test_array, 32) != -1)
+		elog(ERROR, "pg_lfind8_ge_idx found nonexistent element");
+	if (pg_lfind8_ge_idx(2, test_array, TEST_ARRAY_SIZE) != 64)
+		elog(ERROR, "pg_lfind8_ge_idx did not find existing element");
+
+	if (pg_lfind8_ge_idx(4, test_array, 96) != -1)
+		elog(ERROR, "pg_lfind8_ge_idx found nonexistent element");
+	if (pg_lfind8_ge_idx(4, test_array, TEST_ARRAY_SIZE) != TEST_ARRAY_SIZE - 1)
+		elog(ERROR, "pg_lfind8_ge_idx did not find existing element");
+
+	if (pg_lfind8_ge_idx(6, test_array, TEST_ARRAY_SIZE) != -1)
+		elog(ERROR, "pg_lfind8_ge_idx found nonexistent element");
+
+	PG_RETURN_VOID();
+}
+
 PG_FUNCTION_INFO_V1(test_lfind32);
 Datum
 test_lfind32(PG_FUNCTION_ARGS)
 {
-#define TEST_ARRAY_SIZE 135
 	uint32		test_array[TEST_ARRAY_SIZE] = {0};
 
 	test_array[8] = 1;

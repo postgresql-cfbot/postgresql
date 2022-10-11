@@ -90,6 +90,9 @@ typedef enum RecoveryState
 } RecoveryState;
 
 extern PGDLLIMPORT int wal_level;
+extern PGDLLIMPORT TransactionId start_xid;
+extern PGDLLIMPORT MultiXactId start_mxid;
+extern PGDLLIMPORT MultiXactOffset start_mxoff;
 
 /* Is WAL archiving enabled (always or only while server is running normally)? */
 #define XLogArchivingActive() \

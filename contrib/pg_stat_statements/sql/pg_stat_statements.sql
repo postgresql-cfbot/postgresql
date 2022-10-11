@@ -464,4 +464,29 @@ SELECT (
 
 SELECT COUNT(*) FROM pg_stat_statements WHERE query LIKE '%SELECT GROUPING%';
 
+-- encourage use of parallel plans
+SET parallel_setup_cost=0;
+SET parallel_tuple_cost=0;
+SET min_parallel_table_scan_size=0;
+SET max_parallel_workers_per_gather=4;
+
+SELECT pg_stat_statements_reset();
+CREATE TABLE pgss_test as select generate_series(1, 1000) i;
+
+SELECT COUNT(1) from pgss_test WHERE i % 2 = 0;
+SELECT paral_planned_exec = 1, paral_planned_not_exec = 0 from pg_stat_statements WHERE query LIKE '%COUNT%';
+
+SELECT pg_stat_statements_reset();
+SET max_parallel_workers = 0;
+
+SELECT COUNT(1) from pgss_test WHERE i % 2 = 0;
+SELECT paral_planned_exec = 0, paral_planned_not_exec = 1 from pg_stat_statements WHERE query LIKE '%COUNT%';
+
+DROP TABLE pgss_test;
+
+RESET parallel_setup_cost;
+RESET parallel_tuple_cost;
+RESET min_parallel_table_scan_size;
+RESET max_parallel_workers_per_gather;
+
 DROP EXTENSION pg_stat_statements;

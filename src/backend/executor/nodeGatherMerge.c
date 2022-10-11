@@ -228,6 +228,13 @@ ExecGatherMerge(PlanState *pstate)
 			/* We save # workers launched for the benefit of EXPLAIN */
 			node->nworkers_launched = pcxt->nworkers_launched;
 
+			/*
+			 * We save that the plan used parallelism if at least one
+			 * of the nodes was able to launch a worker.
+			 */
+			if(pcxt->nworkers_launched > 0)
+				estate->es_parallel_mode_exec = true;
+
 			/* Set up tuple queue readers to read the results. */
 			if (pcxt->nworkers_launched > 0)
 			{

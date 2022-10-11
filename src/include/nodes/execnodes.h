@@ -676,6 +676,7 @@ typedef struct EState
 	struct EPQState *es_epq_active;
 
 	bool		es_use_parallel_mode;	/* can we use parallel workers? */
+	bool		es_parallel_mode_exec;	/* was executed in parallel */
 
 	/* The per-query shared memory area to use for parallel execution. */
 	struct dsa_area *es_query_dsa;

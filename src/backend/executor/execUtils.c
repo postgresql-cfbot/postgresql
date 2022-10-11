@@ -155,6 +155,7 @@ CreateExecutorState(void)
 	estate->es_sourceText = NULL;
 
 	estate->es_use_parallel_mode = false;
+	estate->es_parallel_mode_exec = false;
 
 	estate->es_jit_flags = 0;
 	estate->es_jit = NULL;

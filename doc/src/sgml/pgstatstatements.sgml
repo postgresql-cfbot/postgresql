@@ -473,6 +473,26 @@
        Total time spent by the statement on emitting code, in milliseconds
       </para></entry>
      </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>paral_planned_exec</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of times that the statement was executed using parallelism.
+       See <xref linkend="pgstatstatements-paral-counter-limitations"/>
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>paral_planned_not_exec</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of times the statement was planned to use parallelism but
+       was not executed using parallelism. See <xref linkend="pgstatstatements-paral-counter-limitations"/>
+      </para></entry>
+     </row>
     </tbody>
    </tgroup>
   </table>
@@ -959,6 +979,20 @@ rows            | 0
 hit_percent     |
 
 </screen>
+ </sect2>
+
+ <sect2>
+  <title>Limitations</title>
+  <para>
+   <itemizedlist>
+    <listitem id="pgstatstatements-paral-counter-limitations" xreflabel="Parallel counters limitations">
+     <para>
+      <literal>paral_planned_exec</literal> and <literal>paral_planned_not_exec</literal> do not
+      include statistics from utility statements such as CREATE INDEX or VACUUM.
+     </para>
+    </listitem>
+   </itemizedlist>
+  </para>
  </sect2>
 
  <sect2>

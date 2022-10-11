@@ -176,7 +176,6 @@ static char formatted_log_time[FORMATTED_TS_LEN];
 
 
 static const char *err_gettext(const char *str) pg_attribute_format_arg(1);
-static pg_noinline void set_backtrace(ErrorData *edata, int num_skip);
 static void set_errdata_field(MemoryContextData *cxt, char **ptr, const char *str);
 static void write_console(const char *line, int len);
 static const char *process_log_prefix_padding(const char *p, int *ppadding);
@@ -550,7 +549,7 @@ errfinish(const char *filename, int lineno, const char *funcname)
 		edata->funcname &&
 		backtrace_functions &&
 		matches_backtrace_functions(edata->funcname))
-		set_backtrace(edata, 2);
+		edata->backtrace = set_backtrace(2);
 
 	/*
 	 * Call any context callback functions.  Errors occurring in callback
@@ -934,7 +933,7 @@ errbacktrace(void)
 	CHECK_STACK_DEPTH();
 	oldcontext = MemoryContextSwitchTo(edata->assoc_context);
 
-	set_backtrace(edata, 1);
+	edata->backtrace = set_backtrace(1);
 
 	MemoryContextSwitchTo(oldcontext);
 	recursion_depth--;
@@ -943,13 +942,13 @@ errbacktrace(void)
 }
 
 /*
- * Compute backtrace data and add it to the supplied ErrorData.  num_skip
- * specifies how many inner frames to skip.  Use this to avoid showing the
- * internal backtrace support functions in the backtrace.  This requires that
- * this and related functions are not inlined.
+ * Compute backtrace data and return it.  num_skip specifies how many inner
+ * frames to skip.  Use this to avoid showing the internal backtrace support
+ * functions in the backtrace.  This requires that this and related functions
+ * are not inlined.
  */
-static void
-set_backtrace(ErrorData *edata, int num_skip)
+char *
+set_backtrace(int num_skip)
 {
 	StringInfoData errtrace;
 
@@ -964,7 +963,7 @@ set_backtrace(ErrorData *edata, int num_skip)
 		nframes = backtrace(buf, lengthof(buf));
 		strfrms = backtrace_symbols(buf, nframes);
 		if (strfrms == NULL)
-			return;
+			return NULL;
 
 		for (int i = num_skip; i < nframes; i++)
 			appendStringInfo(&errtrace, "\n%s", strfrms[i]);
@@ -975,7 +974,7 @@ set_backtrace(ErrorData *edata, int num_skip)
 						   "backtrace generation is not supported by this installation");
 #endif
 
-	edata->backtrace = errtrace.data;
+	return errtrace.data;
 }
 
 /*

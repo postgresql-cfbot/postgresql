@@ -428,6 +428,9 @@ task:
     # 0x8001 is SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX
     CIRRUS_WINDOWS_ERROR_MODE: 0x8001
 
+    # Enable locale testing by importing system locales
+    ENCODING: "WIN1252"
+
   only_if: $CIRRUS_CHANGE_MESSAGE !=~ '.*\nci-os-only:.*' || $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-os-only:[^\n]*windows.*'
 
   windows_container:

@@ -190,17 +190,27 @@ SELECT d1 FROM TIMESTAMPTZ_TBL
 SELECT d1 - timestamp with time zone '1997-01-02' AS diff
    FROM TIMESTAMPTZ_TBL WHERE d1 BETWEEN '1902-01-01' AND '2038-01-01';
 
-SELECT date_trunc( 'week', timestamp with time zone '2004-02-29 15:44:17.71393' ) AS week_trunc;
+SELECT date_trunc('week', timestamp with time zone '2004-02-29 15:44:17.71393' ) AS week_trunc;
 
 SELECT date_trunc('day', timestamp with time zone '2001-02-16 20:38:40+00', 'Australia/Sydney') as sydney_trunc;  -- zone name
 SELECT date_trunc('day', timestamp with time zone '2001-02-16 20:38:40+00', 'GMT') as gmt_trunc;  -- fixed-offset abbreviation
 SELECT date_trunc('day', timestamp with time zone '2001-02-16 20:38:40+00', 'VET') as vet_trunc;  -- variable-offset abbreviation
 
+-- errors
+SELECT date_trunc('1 month 7 day'::interval, timestamp with time zone '2001-02-16 20:38:40+00', 'Europe/Warsaw') AS bad_interval1;
+SELECT date_trunc('1 month 01:00:00'::interval, timestamp with time zone '2001-02-16 20:38:40+00', 'Europe/Warsaw') AS bad_interval2;
+SELECT date_trunc('1 day 00:30:00'::interval, timestamp with time zone '2001-02-16 20:38:40+00', 'Europe/Warsaw') AS bad_interval3;
+SELECT date_trunc('7 month'::interval, timestamp with time zone '2001-02-16 20:38:40+00', 'Europe/Warsaw') AS bad_interval4;
+SELECT date_trunc('3 day'::interval, timestamp with time zone '2001-02-16 20:38:40+00', 'Europe/Warsaw') AS bad_interval5;
+SELECT date_trunc('00:23:00'::interval, timestamp with time zone '2001-02-16 20:38:40+00', 'Europe/Warsaw') AS bad_interval6;
+
 -- verify date_bin behaves the same as date_trunc for relevant intervals
 SELECT
   str,
   interval,
-  date_trunc(str, ts, 'Australia/Sydney') = date_bin(interval::interval, ts, timestamp with time zone '2001-01-01+11') AS equal
+  timezone,
+  date_trunc(str, ts, timezone) = date_bin(interval::interval, ts, timezone(timezone, '2001-01-01 00:00'::timestamp)) AS equal1,
+  date_trunc(str, ts, timezone) = date_trunc(interval::interval, ts, timezone) AS equal2
 FROM (
   VALUES
   ('day', '1 d'),
@@ -210,6 +220,11 @@ FROM (
   ('millisecond', '1 ms'),
   ('microsecond', '1 us')
 ) intervals (str, interval),
+(VALUES
+  ('Australia/Sydney'),
+  ('Europe/Warsaw'),
+  ('Europe/London')
+) timezone (timezone),
 (VALUES (timestamptz '2020-02-29 15:44:17.71393+00')) ts (ts);
 
 -- bin timestamps into arbitrary intervals
@@ -433,7 +448,7 @@ SELECT make_timestamptz(2014, 12, 10, 10, 10, 10, 'PST8PDT');
 RESET TimeZone;
 
 -- generate_series for timestamptz
-select * from generate_series('2020-01-01 00:00'::timestamptz,
+SELECT * FROM generate_series('2020-01-01 00:00'::timestamptz,
                               '2020-01-02 03:00'::timestamptz,
                               '1 hour'::interval);
 -- the LIMIT should allow this to terminate in a reasonable amount of time
@@ -442,10 +457,23 @@ select generate_series('2022-01-01 00:00'::timestamptz,
                        'infinity'::timestamptz,
                        '1 month'::interval) limit 10;
 -- errors
-select * from generate_series('2020-01-01 00:00'::timestamptz,
+SELECT * FROM generate_series('2020-01-01 00:00'::timestamptz,
                               '2020-01-02 03:00'::timestamptz,
                               '0 hour'::interval);
 
+-- Interval crossing time shift for Europe/Warsaw timezone (with DST)
+SET TimeZone to 'UTC';
+
+SELECT date_add('2021-10-31 00:00:00+02'::timestamptz,
+                '1 day'::interval,
+                'Europe/Warsaw');
+SELECT date_add('2022-10-30 00:00:00+01'::timestamptz,
+                '1 day'::interval,
+                'Europe/London');
+SELECT * FROM generate_series('2020-12-31 23:00:00+00'::timestamptz,
+                              '2021-12-31 23:00:00+00'::timestamptz,
+                              '1 month'::interval,
+                              'Europe/Warsaw');
 --
 -- Test behavior with a dynamic (time-varying) timezone abbreviation.
 -- These tests rely on the knowledge that MSK (Europe/Moscow standard time)

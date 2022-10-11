@@ -81,6 +81,8 @@ static void expandTupleDesc(TupleDesc tupdesc, Alias *eref,
 							int location, bool include_dropped,
 							List **colnames, List **colvars);
 static int	specialAttNum(const char *attname);
+static bool rte_visible_if_lateral(ParseState *pstate, RangeTblEntry *rte);
+static bool rte_visible_if_qualified(ParseState *pstate, RangeTblEntry *rte);
 static bool isQueryUsingTempRelation_walker(Node *node, void *context);
 
 
@@ -3603,17 +3605,27 @@ errorMissingRTE(ParseState *pstate, RangeVar *relation)
 			badAlias = rte->eref->aliasname;
 	}
 
-	if (rte)
+	/* If it looks like the user forgot to use an alias, hint about that */
+	if (badAlias)
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_TABLE),
 				 errmsg("invalid reference to FROM-clause entry for table \"%s\"",
 						relation->relname),
-				 (badAlias ?
-				  errhint("Perhaps you meant to reference the table alias \"%s\".",
-						  badAlias) :
-				  errhint("There is an entry for table \"%s\", but it cannot be referenced from this part of the query.",
-						  rte->eref->aliasname)),
+				 errhint("Perhaps you meant to reference the table alias \"%s\".",
+						 badAlias),
 				 parser_errposition(pstate, relation->location)));
+	/* Hint about case where we found an (inaccessible) exact match */
+	else if (rte)
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_TABLE),
+				 errmsg("invalid reference to FROM-clause entry for table \"%s\"",
+						relation->relname),
+				 errdetail("There is an entry for table \"%s\", but it cannot be referenced from this part of the query.",
+						   rte->eref->aliasname),
+				 rte_visible_if_lateral(pstate, rte) ?
+				 errhint("To reference that table, you must mark this subquery with LATERAL.") : 0,
+				 parser_errposition(pstate, relation->location)));
+	/* Else, we have nothing to offer but the bald statement of error */
 	else
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_TABLE),
@@ -3638,9 +3650,6 @@ errorMissingColumn(ParseState *pstate,
 	/*
 	 * Search the entire rtable looking for possible matches.  If we find one,
 	 * emit a hint about it.
-	 *
-	 * TODO: improve this code (and also errorMissingRTE) to mention using
-	 * LATERAL if appropriate.
 	 */
 	state = searchRangeTableForCol(pstate, relname, colname, location);
 
@@ -3659,21 +3668,38 @@ errorMissingColumn(ParseState *pstate,
 
 	if (!state->rsecond)
 	{
-		/*
-		 * Handle case where there is zero or one column suggestions to hint,
-		 * including exact matches referenced but not visible.
-		 */
-		ereport(ERROR,
-				(errcode(ERRCODE_UNDEFINED_COLUMN),
-				 relname ?
-				 errmsg("column %s.%s does not exist", relname, colname) :
-				 errmsg("column \"%s\" does not exist", colname),
-				 state->rfirst ? closestfirst ?
-				 errhint("Perhaps you meant to reference the column \"%s.%s\".",
-						 state->rfirst->eref->aliasname, closestfirst) :
-				 errhint("There is a column named \"%s\" in table \"%s\", but it cannot be referenced from this part of the query.",
-						 colname, state->rfirst->eref->aliasname) : 0,
-				 parser_errposition(pstate, location)));
+		/* If we found no match at all, we have little to report */
+		if (!state->rfirst)
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_COLUMN),
+					 relname ?
+					 errmsg("column %s.%s does not exist", relname, colname) :
+					 errmsg("column \"%s\" does not exist", colname),
+					 parser_errposition(pstate, location)));
+		/* Handle case where we have a single alternative spelling to offer */
+		else if (closestfirst)
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_COLUMN),
+					 relname ?
+					 errmsg("column %s.%s does not exist", relname, colname) :
+					 errmsg("column \"%s\" does not exist", colname),
+					 errhint("Perhaps you meant to reference the column \"%s.%s\".",
+							 state->rfirst->eref->aliasname, closestfirst),
+					 parser_errposition(pstate, location)));
+		/* We found an exact match but it's inaccessible for some reason */
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_COLUMN),
+					 relname ?
+					 errmsg("column %s.%s does not exist", relname, colname) :
+					 errmsg("column \"%s\" does not exist", colname),
+					 errdetail("There is a column named \"%s\" in table \"%s\", but it cannot be referenced from this part of the query.",
+							   colname, state->rfirst->eref->aliasname),
+					 rte_visible_if_lateral(pstate, state->rfirst) ?
+					 errhint("To reference that column, you must mark this subquery with LATERAL.") :
+					 (!relname && rte_visible_if_qualified(pstate, state->rfirst)) ?
+					 errhint("To reference that column, you must use a table-qualified name.") : 0,
+					 parser_errposition(pstate, location)));
 	}
 	else
 	{
@@ -3693,6 +3719,71 @@ errorMissingColumn(ParseState *pstate,
 						 state->rsecond->eref->aliasname, closestsecond),
 				 parser_errposition(pstate, location)));
 	}
+}
+
+/*
+ * Find ParseNamespaceItem for RTE, if it's visible at all.
+ * We assume an RTE couldn't appear more than once in the namespace lists.
+ */
+static ParseNamespaceItem *
+findNSItemForRTE(ParseState *pstate, RangeTblEntry *rte)
+{
+	while (pstate != NULL)
+	{
+		ListCell   *l;
+
+		foreach(l, pstate->p_namespace)
+		{
+			ParseNamespaceItem *nsitem = (ParseNamespaceItem *) lfirst(l);
+
+			if (nsitem->p_rte == rte)
+				return nsitem;
+		}
+		pstate = pstate->parentParseState;
+	}
+	return NULL;
+}
+
+/*
+ * Would this RTE be visible, if only the user had written LATERAL?
+ *
+ * This is a helper for deciding whether to issue a HINT about LATERAL.
+ * As such, it doesn't need to be 100% accurate; the HINT could be useful
+ * even if it's not quite right.  Hence, we don't delve into fine points
+ * about whether a found nsitem has the appropriate one of p_rel_visible or
+ * p_cols_visible set.
+ */
+static bool
+rte_visible_if_lateral(ParseState *pstate, RangeTblEntry *rte)
+{
+	ParseNamespaceItem *nsitem;
+
+	/* If LATERAL *is* active, we're clearly barking up the wrong tree */
+	if (pstate->p_lateral_active)
+		return false;
+	nsitem = findNSItemForRTE(pstate, rte);
+	if (nsitem)
+	{
+		/* Found it, report whether it's LATERAL-only */
+		return nsitem->p_lateral_only && nsitem->p_lateral_ok;
+	}
+	return false;
+}
+
+/*
+ * Would columns in this RTE be visible if qualified?
+ */
+static bool
+rte_visible_if_qualified(ParseState *pstate, RangeTblEntry *rte)
+{
+	ParseNamespaceItem *nsitem = findNSItemForRTE(pstate, rte);
+
+	if (nsitem)
+	{
+		/* Found it, report whether it's relation-only */
+		return nsitem->p_rel_visible && !nsitem->p_cols_visible;
+	}
+	return false;
 }
 
 

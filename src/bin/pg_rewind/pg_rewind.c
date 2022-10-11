@@ -405,13 +405,13 @@ main(int argc, char **argv)
 		exit(0);
 	}
 
+	/* Initialize the hash table to track the status of each file */
+	filehash_init();
+
 	findLastCheckpoint(datadir_target, divergerec, lastcommontliIndex,
 					   &chkptrec, &chkpttli, &chkptredo, restore_command);
 	pg_log_info("rewinding from last common checkpoint at %X/%X on timeline %u",
 				LSN_FORMAT_ARGS(chkptrec), chkpttli);
-
-	/* Initialize the hash table to track the status of each file */
-	filehash_init();
 
 	/*
 	 * Collect information about all files in the both data directories.

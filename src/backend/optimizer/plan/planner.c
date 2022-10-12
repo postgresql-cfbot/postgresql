@@ -519,7 +519,10 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 	result->dependsOnRole = glob->dependsOnRole;
 	result->parallelModeNeeded = glob->parallelModeNeeded;
 	result->planTree = top_plan;
+	result->partPruneInfos = glob->partPruneInfos;
+	result->containsInitialPruning = glob->containsInitialPruning;
 	result->rtable = glob->finalrtable;
+	result->minLockRelids = glob->minLockRelids;
 	result->resultRelations = glob->resultRelations;
 	result->appendRelations = glob->appendRelations;
 	result->subplans = glob->subplans;

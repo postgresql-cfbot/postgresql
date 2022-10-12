@@ -35,7 +35,7 @@
 Portal		ActivePortal = NULL;
 
 
-static void ProcessQuery(PlannedStmt *plan,
+static void ProcessQuery(PlannedStmt *plan, PartitionPruneResult *part_prune_result,
 						 const char *sourceText,
 						 ParamListInfo params,
 						 QueryEnvironment *queryEnv,
@@ -65,6 +65,7 @@ static void DoPortalRewind(Portal portal);
  */
 QueryDesc *
 CreateQueryDesc(PlannedStmt *plannedstmt,
+				PartitionPruneResult *part_prune_result,
 				const char *sourceText,
 				Snapshot snapshot,
 				Snapshot crosscheck_snapshot,
@@ -77,6 +78,8 @@ CreateQueryDesc(PlannedStmt *plannedstmt,
 
 	qd->operation = plannedstmt->commandType;	/* operation */
 	qd->plannedstmt = plannedstmt;	/* plan */
+	qd->part_prune_result = part_prune_result;	/* ExecutorDoInitialPruning()
+												 * output for plan */
 	qd->sourceText = sourceText;	/* query text */
 	qd->snapshot = RegisterSnapshot(snapshot);	/* snapshot */
 	/* RI check snapshot */
@@ -122,6 +125,7 @@ FreeQueryDesc(QueryDesc *qdesc)
  *		PORTAL_ONE_RETURNING, or PORTAL_ONE_MOD_WITH portal
  *
  *	plan: the plan tree for the query
+ *	part_prune_result: ExecutorDoInitialPruning() output for the plan tree
  *	sourceText: the source text of the query
  *	params: any parameters needed
  *	dest: where to send results
@@ -134,6 +138,7 @@ FreeQueryDesc(QueryDesc *qdesc)
  */
 static void
 ProcessQuery(PlannedStmt *plan,
+			 PartitionPruneResult *part_prune_result,
 			 const char *sourceText,
 			 ParamListInfo params,
 			 QueryEnvironment *queryEnv,
@@ -145,7 +150,7 @@ ProcessQuery(PlannedStmt *plan,
 	/*
 	 * Create the QueryDesc object
 	 */
-	queryDesc = CreateQueryDesc(plan, sourceText,
+	queryDesc = CreateQueryDesc(plan, part_prune_result, sourceText,
 								GetActiveSnapshot(), InvalidSnapshot,
 								dest, params, queryEnv, 0);
 
@@ -491,8 +496,13 @@ PortalStart(Portal portal, ParamListInfo params,
 				/*
 				 * Create QueryDesc in portal's context; for the moment, set
 				 * the destination to DestNone.
+				 *
+				 * There is no PartitionPruneResult unless the PlannedStmt is
+				 * from a CachedPlan.
 				 */
 				queryDesc = CreateQueryDesc(linitial_node(PlannedStmt, portal->stmts),
+											portal->part_prune_results == NIL ? NULL :
+											linitial(portal->part_prune_results),
 											portal->sourceText,
 											GetActiveSnapshot(),
 											InvalidSnapshot,
@@ -1225,6 +1235,8 @@ PortalRunMulti(Portal portal,
 
 		if (pstmt->utilityStmt == NULL)
 		{
+			PartitionPruneResult *part_prune_result = NULL;
+
 			/*
 			 * process a plannable query.
 			 */
@@ -1271,10 +1283,18 @@ PortalRunMulti(Portal portal,
 			else
 				UpdateActiveSnapshotCommandId();
 
+			/*
+			 * Determine if there's a corresponding PartitionPruneResult for
+			 * this PlannedStmt.
+			 */
+			if (portal->part_prune_results != NIL)
+				part_prune_result = list_nth(portal->part_prune_results,
+											 foreach_current_index(stmtlist_item));
+
 			if (pstmt->canSetTag)
 			{
 				/* statement can set tag string */
-				ProcessQuery(pstmt,
+				ProcessQuery(pstmt, part_prune_result,
 							 portal->sourceText,
 							 portal->portalParams,
 							 portal->queryEnv,
@@ -1283,7 +1303,7 @@ PortalRunMulti(Portal portal,
 			else
 			{
 				/* stmt added by rewrite cannot set tag */
-				ProcessQuery(pstmt,
+				ProcessQuery(pstmt, part_prune_result,
 							 portal->sourceText,
 							 portal->portalParams,
 							 portal->queryEnv,

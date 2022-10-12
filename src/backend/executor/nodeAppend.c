@@ -134,7 +134,7 @@ ExecInitAppend(Append *node, EState *estate, int eflags)
 	appendstate->as_begun = false;
 
 	/* If run-time partition pruning is enabled, then set that up now */
-	if (node->part_prune_info != NULL)
+	if (node->part_prune_index >= 0)
 	{
 		PartitionPruneState *prunestate;
 
@@ -145,7 +145,7 @@ ExecInitAppend(Append *node, EState *estate, int eflags)
 		 */
 		prunestate = ExecInitPartitionPruning(&appendstate->ps,
 											  list_length(node->appendplans),
-											  node->part_prune_info,
+											  node->part_prune_index,
 											  &validsubplans);
 		appendstate->as_prune_state = prunestate;
 		nplans = bms_num_members(validsubplans);
@@ -155,7 +155,8 @@ ExecInitAppend(Append *node, EState *estate, int eflags)
 		 * subplan, we can fill as_valid_subplans immediately, preventing
 		 * later calls to ExecFindMatchingSubPlans.
 		 */
-		if (!prunestate->do_exec_prune && nplans > 0)
+		if (appendstate->as_prune_state == NULL ||
+			(!appendstate->as_prune_state->do_exec_prune && nplans > 0))
 			appendstate->as_valid_subplans = bms_add_range(NULL, 0, nplans - 1);
 	}
 	else
@@ -577,7 +578,7 @@ choose_next_subplan_locally(AppendState *node)
 		}
 		else if (node->as_valid_subplans == NULL)
 			node->as_valid_subplans =
-				ExecFindMatchingSubPlans(node->as_prune_state, false);
+				ExecFindMatchingSubPlans(node->as_prune_state, false, NULL);
 
 		whichplan = -1;
 	}
@@ -642,7 +643,7 @@ choose_next_subplan_for_leader(AppendState *node)
 		if (node->as_valid_subplans == NULL)
 		{
 			node->as_valid_subplans =
-				ExecFindMatchingSubPlans(node->as_prune_state, false);
+				ExecFindMatchingSubPlans(node->as_prune_state, false, NULL);
 
 			/*
 			 * Mark each invalid plan as finished to allow the loop below to
@@ -717,7 +718,7 @@ choose_next_subplan_for_worker(AppendState *node)
 	else if (node->as_valid_subplans == NULL)
 	{
 		node->as_valid_subplans =
-			ExecFindMatchingSubPlans(node->as_prune_state, false);
+			ExecFindMatchingSubPlans(node->as_prune_state, false, NULL);
 		mark_invalid_subplans_as_finished(node);
 	}
 
@@ -868,7 +869,7 @@ ExecAppendAsyncBegin(AppendState *node)
 	if (node->as_valid_subplans == NULL)
 	{
 		node->as_valid_subplans =
-			ExecFindMatchingSubPlans(node->as_prune_state, false);
+			ExecFindMatchingSubPlans(node->as_prune_state, false, NULL);
 
 		classify_matching_subplans(node);
 	}

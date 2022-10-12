@@ -82,7 +82,7 @@ ExecInitMergeAppend(MergeAppend *node, EState *estate, int eflags)
 	mergestate->ps.ExecProcNode = ExecMergeAppend;
 
 	/* If run-time partition pruning is enabled, then set that up now */
-	if (node->part_prune_info != NULL)
+	if (node->part_prune_index >= 0)
 	{
 		PartitionPruneState *prunestate;
 
@@ -93,7 +93,7 @@ ExecInitMergeAppend(MergeAppend *node, EState *estate, int eflags)
 		 */
 		prunestate = ExecInitPartitionPruning(&mergestate->ps,
 											  list_length(node->mergeplans),
-											  node->part_prune_info,
+											  node->part_prune_index,
 											  &validsubplans);
 		mergestate->ms_prune_state = prunestate;
 		nplans = bms_num_members(validsubplans);
@@ -103,7 +103,8 @@ ExecInitMergeAppend(MergeAppend *node, EState *estate, int eflags)
 		 * subplan, we can fill ms_valid_subplans immediately, preventing
 		 * later calls to ExecFindMatchingSubPlans.
 		 */
-		if (!prunestate->do_exec_prune && nplans > 0)
+		if (mergestate->ms_prune_state == NULL ||
+			(!mergestate->ms_prune_state->do_exec_prune && nplans > 0))
 			mergestate->ms_valid_subplans = bms_add_range(NULL, 0, nplans - 1);
 	}
 	else
@@ -218,7 +219,7 @@ ExecMergeAppend(PlanState *pstate)
 		 */
 		if (node->ms_valid_subplans == NULL)
 			node->ms_valid_subplans =
-				ExecFindMatchingSubPlans(node->ms_prune_state, false);
+				ExecFindMatchingSubPlans(node->ms_prune_state, false, NULL);
 
 		/*
 		 * First time through: pull the first tuple from each valid subplan,

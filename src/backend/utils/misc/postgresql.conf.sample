@@ -625,7 +625,7 @@
 #log_parser_stats = off
 #log_planner_stats = off
 #log_executor_stats = off
-
+#const_merge_threshold = 0
 
 #------------------------------------------------------------------------------
 # AUTOVACUUM

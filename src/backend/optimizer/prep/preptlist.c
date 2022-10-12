@@ -43,6 +43,7 @@
 #include "optimizer/prep.h"
 #include "optimizer/tlist.h"
 #include "parser/parse_coerce.h"
+#include "parser/parse_relation.h"
 #include "parser/parsetree.h"
 #include "utils/rel.h"
 
@@ -105,6 +106,17 @@ preprocess_targetlist(PlannerInfo *root)
 		tlist = expand_insert_targetlist(tlist, target_relation);
 	else if (command_type == CMD_UPDATE)
 		root->update_colnos = extract_update_targetlist_colnos(tlist);
+
+	/* Also populate extraUpdatedCols (for generated columns) */
+	if (command_type == CMD_UPDATE)
+	{
+		RTEPermissionInfo *target_perminfo =
+			GetRTEPermissionInfo(parse->rtepermlist, target_rte);
+
+		root->extraUpdatedCols =
+			get_extraUpdatedCols(target_perminfo->updatedCols,
+								 target_relation);
+	}
 
 	/*
 	 * For non-inherited UPDATE/DELETE/MERGE, register any junk column(s)
@@ -337,6 +349,41 @@ extract_update_targetlist_colnos(List *tlist)
 	return update_colnos;
 }
 
+/*
+ * Return the indexes of any generated columns that depend on any columns
+ * mentioned in target_perminfo->updatedCols.
+ */
+Bitmapset *
+get_extraUpdatedCols(Bitmapset *updatedCols, Relation target_relation)
+{
+	TupleDesc	tupdesc = RelationGetDescr(target_relation);
+	TupleConstr *constr = tupdesc->constr;
+	Bitmapset *extraUpdatedCols = NULL;
+
+	if (constr && constr->has_generated_stored)
+	{
+		for (int i = 0; i < constr->num_defval; i++)
+		{
+			AttrDefault *defval = &constr->defval[i];
+			Node	   *expr;
+			Bitmapset  *attrs_used = NULL;
+
+			/* skip if not generated column */
+			if (!TupleDescAttr(tupdesc, defval->adnum - 1)->attgenerated)
+				continue;
+
+			/* identify columns this generated column depends on */
+			expr = stringToNode(defval->adbin);
+			pull_varattnos(expr, 1, &attrs_used);
+
+			if (bms_overlap(updatedCols, attrs_used))
+				extraUpdatedCols = bms_add_member(extraUpdatedCols,
+												  defval->adnum - FirstLowInvalidHeapAttributeNumber);
+		}
+	}
+
+	return extraUpdatedCols;
+}
 
 /*****************************************************************************
  *

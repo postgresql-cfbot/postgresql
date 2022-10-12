@@ -355,6 +355,9 @@ set_plan_references(PlannerInfo *root, Plan *plan)
  * Extract RangeTblEntries from the plan's rangetable, and add to flat rtable
  *
  * This can recurse into subquery plans; "recursing" is true if so.
+ *
+ * This also seems like a good place to add the query's RTEPermissionInfos to
+ * the flat rtepermlist.
  */
 static void
 add_rtes_to_flat_rtable(PlannerInfo *root, bool recursing)
@@ -370,13 +373,28 @@ add_rtes_to_flat_rtable(PlannerInfo *root, bool recursing)
 	 * flattened rangetable match up with their original indexes.  When
 	 * recursing, we only care about extracting relation RTEs.
 	 */
+	rti = 1;
 	foreach(lc, root->parse->rtable)
 	{
 		RangeTblEntry *rte = (RangeTblEntry *) lfirst(lc);
 
 		if (!recursing || rte->rtekind == RTE_RELATION)
+		{
+			/*
+			 * Update perminfoindex, if any, to reflect the correponding
+			 * RTEPermissionInfo's position in the flattened list.
+			 */
+			if (rte->perminfoindex > 0)
+				rte->perminfoindex += list_length(glob->finalrtepermlist);
+
 			add_rte_to_flat_rtable(glob, rte);
+		}
+
+		rti++;
 	}
+
+	glob->finalrtepermlist = list_concat(glob->finalrtepermlist,
+										 root->parse->rtepermlist);
 
 	/*
 	 * If there are any dead subqueries, they are not referenced in the Plan
@@ -450,6 +468,15 @@ flatten_unplanned_rtes(PlannerGlobal *glob, RangeTblEntry *rte)
 							 flatten_rtes_walker,
 							 (void *) glob,
 							 QTW_EXAMINE_RTES_BEFORE);
+
+	/*
+	 * Now add the subquery's RTEPermissionInfos too.  flatten_rtes_walker()
+	 * should already have updated the perminfoindex in the RTEs in the
+	 * subquery to reflect the corresponding RTEPermissionInfos' position in
+	 * finalrtepermlist.
+	 */
+	glob->finalrtepermlist = list_concat(glob->finalrtepermlist,
+										 rte->subquery->rtepermlist);
 }
 
 static bool
@@ -463,7 +490,15 @@ flatten_rtes_walker(Node *node, PlannerGlobal *glob)
 
 		/* As above, we need only save relation RTEs */
 		if (rte->rtekind == RTE_RELATION)
+		{
+			/*
+			 * The correponding RTEPermissionInfo will get added to
+			 * finalrtepermlist, so adjust perminfoindex accordingly.
+			 */
+			Assert(rte->perminfoindex > 0);
+			rte->perminfoindex += list_length(glob->finalrtepermlist);
 			add_rte_to_flat_rtable(glob, rte);
+		}
 		return false;
 	}
 	if (IsA(node, Query))
@@ -483,10 +518,10 @@ flatten_rtes_walker(Node *node, PlannerGlobal *glob)
  *
  * In the flat rangetable, we zero out substructure pointers that are not
  * needed by the executor; this reduces the storage space and copying cost
- * for cached plans.  We keep only the ctename, alias and eref Alias fields,
- * which are needed by EXPLAIN, and the selectedCols, insertedCols,
- * updatedCols, and extraUpdatedCols bitmaps, which are needed for
- * executor-startup permissions checking and for trigger event checking.
+ * for cached plans.  We keep only the ctename, alias, eref Alias fields,
+ * which are needed by EXPLAIN, and perminfoindex which is needed by the
+ * executor to fetch the RTE's RTEPermissionInfo for executor-startup
+ * permission checking.
  */
 static void
 add_rte_to_flat_rtable(PlannerGlobal *glob, RangeTblEntry *rte)

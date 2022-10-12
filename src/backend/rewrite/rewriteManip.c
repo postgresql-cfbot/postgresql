@@ -1531,3 +1531,28 @@ ReplaceVarsFromTargetList(Node *node,
 								 (void *) &context,
 								 outer_hasSubLinks);
 }
+
+/*
+ * ConcatRTEPermissionInfoLists
+ * 		Add RTEPermissionInfos found in src_rtepermlist into *dest_rtepermlist
+ *
+ * Also updates perminfoindex of the RTEs in src_rtable to point to the
+ * "source" perminfos after they have been added into *dest_rtepermlist.
+ */
+void
+ConcatRTEPermissionInfoLists(List **dest_rtepermlist, List *src_rtepermlist,
+							 List *src_rtable)
+{
+	ListCell   *l;
+	int			offset = list_length(*dest_rtepermlist);
+
+	*dest_rtepermlist = list_concat(*dest_rtepermlist, src_rtepermlist);
+
+	foreach(l, src_rtable)
+	{
+		RangeTblEntry  *rte = (RangeTblEntry *) lfirst(l);
+
+		if (rte->perminfoindex > 0)
+			rte->perminfoindex += offset;
+	}
+}

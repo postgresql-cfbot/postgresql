@@ -57,7 +57,8 @@ node_headers = \
 	nodes/replnodes.h \
 	nodes/supportnodes.h \
 	nodes/value.h \
-	utils/rel.h
+	utils/rel.h \
+	nodes/bitmapset.h
 
 # see also catalog/Makefile for an explanation of these make rules
 

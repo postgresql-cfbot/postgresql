@@ -57,6 +57,7 @@
 #include "miscadmin.h"
 #include "nodes/nodeFuncs.h"
 #include "parser/parsetree.h"
+#include "parser/parse_relation.h"
 #include "partitioning/partdesc.h"
 #include "storage/lmgr.h"
 #include "utils/builtins.h"
@@ -1251,33 +1252,64 @@ ExecGetChildToRootMap(ResultRelInfo *resultRelInfo)
 	return resultRelInfo->ri_ChildToRootMap;
 }
 
-/* Return a bitmap representing columns being inserted */
-Bitmapset *
-ExecGetInsertedCols(ResultRelInfo *relinfo, EState *estate)
+/*
+ * Return the map needed to convert "root" table column bitmapsets to the
+ * rowtype of an individual child table.  Note that a NULL result is valid and
+ * means that no conversion is needed.
+ */
+AttrMap *
+ExecGetRootToChildMap(ResultRelInfo *resultRelInfo,
+					  EState *estate)
 {
-	/*
-	 * The columns are stored in the range table entry.  If this ResultRelInfo
-	 * represents a partition routing target, and doesn't have an entry of its
-	 * own in the range table, fetch the parent's RTE and map the columns to
-	 * the order they are in the partition.
-	 */
-	if (relinfo->ri_RangeTableIndex != 0)
+	/* If we didn't already do so, compute the map for this child. */
+	if (!resultRelInfo->ri_RootToChildMapValid)
 	{
-		RangeTblEntry *rte = exec_rt_fetch(relinfo->ri_RangeTableIndex, estate);
+		ResultRelInfo *rootRelInfo = resultRelInfo->ri_RootResultRelInfo;
+		MemoryContext oldcontext = MemoryContextSwitchTo(estate->es_query_cxt);
 
-		return rte->insertedCols;
-	}
-	else if (relinfo->ri_RootResultRelInfo)
-	{
-		ResultRelInfo *rootRelInfo = relinfo->ri_RootResultRelInfo;
-		RangeTblEntry *rte = exec_rt_fetch(rootRelInfo->ri_RangeTableIndex, estate);
+		if (rootRelInfo)
+		{
+			/*
+			 * Passing 'true' below means any columns present in the child
+			 * table but not in the root parent, something that's allowed with
+			 * traditional inheritance, are ignored.
+			 */
+			resultRelInfo->ri_RootToChildMap =
+				build_attrmap_by_name_if_req(RelationGetDescr(rootRelInfo->ri_RelationDesc),
+											 RelationGetDescr(resultRelInfo->ri_RelationDesc),
+											 true);
+		}
+		else					/* this isn't a child result rel */
+			resultRelInfo->ri_RootToChildMap = NULL;
 
-		if (relinfo->ri_RootToPartitionMap != NULL)
-			return execute_attr_map_cols(relinfo->ri_RootToPartitionMap->attrMap,
-										 rte->insertedCols);
-		else
-			return rte->insertedCols;
+		resultRelInfo->ri_RootToChildMapValid = true;
+
+		MemoryContextSwitchTo(oldcontext);
 	}
+
+	return resultRelInfo->ri_RootToChildMap;
+}
+
+/*
+ * GetResultRTEPermissionInfo
+ *		Helper routine for ExecGet*Cols() routines below
+ *
+ * The column bitmapsets are stored in RTEPermissionInfos.  For inheritance
+ * child result relations (a partition routing target of an INSERT or a child
+ * UPDATE target), use the root parent's RTE to fetch the RTEPermissionInfo
+ * because that's the only one that actually points to any.
+ */
+static inline RTEPermissionInfo *
+GetResultRTEPermissionInfo(ResultRelInfo *relinfo, EState *estate)
+{
+	Index		rti;
+	RangeTblEntry *rte;
+	RTEPermissionInfo *perminfo = NULL;
+
+	if (relinfo->ri_RootResultRelInfo)
+		rti = relinfo->ri_RootResultRelInfo->ri_RangeTableIndex;
+	else if (relinfo->ri_RangeTableIndex != 0)
+		rti = relinfo->ri_RangeTableIndex;
 	else
 	{
 		/*
@@ -1286,57 +1318,77 @@ ExecGetInsertedCols(ResultRelInfo *relinfo, EState *estate)
 		 * firing triggers and the relation is not being inserted into.  (See
 		 * ExecGetTriggerResultRel.)
 		 */
-		return NULL;
+		rti = 0;
 	}
+
+	if (rti > 0)
+	{
+		rte = exec_rt_fetch(rti, estate);
+		perminfo = GetRTEPermissionInfo(estate->es_rtepermlist, rte);
+	}
+
+	return perminfo;
+}
+
+/* Return a bitmap representing columns being inserted */
+Bitmapset *
+ExecGetInsertedCols(ResultRelInfo *relinfo, EState *estate)
+{
+	RTEPermissionInfo *perminfo = GetResultRTEPermissionInfo(relinfo, estate);
+
+	if (perminfo == NULL)
+		return NULL;
+
+	/* Map the columns to child's attribute numbers if needed. */
+	if (relinfo->ri_RootResultRelInfo)
+	{
+		AttrMap *map = ExecGetRootToChildMap(relinfo, estate);
+
+		if (map)
+			return execute_attr_map_cols(map, perminfo->insertedCols);
+	}
+
+	return perminfo->insertedCols;
 }
 
 /* Return a bitmap representing columns being updated */
 Bitmapset *
 ExecGetUpdatedCols(ResultRelInfo *relinfo, EState *estate)
 {
-	/* see ExecGetInsertedCols() */
-	if (relinfo->ri_RangeTableIndex != 0)
-	{
-		RangeTblEntry *rte = exec_rt_fetch(relinfo->ri_RangeTableIndex, estate);
+	RTEPermissionInfo *perminfo = GetResultRTEPermissionInfo(relinfo, estate);
 
-		return rte->updatedCols;
-	}
-	else if (relinfo->ri_RootResultRelInfo)
-	{
-		ResultRelInfo *rootRelInfo = relinfo->ri_RootResultRelInfo;
-		RangeTblEntry *rte = exec_rt_fetch(rootRelInfo->ri_RangeTableIndex, estate);
-
-		if (relinfo->ri_RootToPartitionMap != NULL)
-			return execute_attr_map_cols(relinfo->ri_RootToPartitionMap->attrMap,
-										 rte->updatedCols);
-		else
-			return rte->updatedCols;
-	}
-	else
+	if (perminfo == NULL)
 		return NULL;
+
+	/* Map the columns to child's attribute numbers if needed. */
+	if (relinfo->ri_RootResultRelInfo)
+	{
+		AttrMap *map = ExecGetRootToChildMap(relinfo, estate);
+
+		if (map)
+			return execute_attr_map_cols(map, perminfo->updatedCols);
+	}
+
+	return perminfo->updatedCols;
 }
 
 /* Return a bitmap representing generated columns being updated */
 Bitmapset *
 ExecGetExtraUpdatedCols(ResultRelInfo *relinfo, EState *estate)
 {
-	/* see ExecGetInsertedCols() */
 	if (relinfo->ri_RangeTableIndex != 0)
 	{
-		RangeTblEntry *rte = exec_rt_fetch(relinfo->ri_RangeTableIndex, estate);
-
-		return rte->extraUpdatedCols;
+		return relinfo->ri_extraUpdatedCols;
 	}
 	else if (relinfo->ri_RootResultRelInfo)
 	{
 		ResultRelInfo *rootRelInfo = relinfo->ri_RootResultRelInfo;
-		RangeTblEntry *rte = exec_rt_fetch(rootRelInfo->ri_RangeTableIndex, estate);
 
 		if (relinfo->ri_RootToPartitionMap != NULL)
 			return execute_attr_map_cols(relinfo->ri_RootToPartitionMap->attrMap,
-										 rte->extraUpdatedCols);
+										 rootRelInfo->ri_extraUpdatedCols);
 		else
-			return rte->extraUpdatedCols;
+			return rootRelInfo->ri_extraUpdatedCols;
 	}
 	else
 		return NULL;

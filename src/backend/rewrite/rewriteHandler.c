@@ -353,6 +353,7 @@ rewriteRuleAction(Query *parsetree,
 	Query	   *sub_action;
 	Query	  **sub_action_ptr;
 	acquireLocksOnSubLinks_context context;
+	List	   *query_rtable;
 
 	context.for_execute = true;
 
@@ -395,32 +396,35 @@ rewriteRuleAction(Query *parsetree,
 	 * Generate expanded rtable consisting of main parsetree's rtable plus
 	 * rule action's rtable; this becomes the complete rtable for the rule
 	 * action.  Some of the entries may be unused after we finish rewriting,
-	 * but we leave them all in place for two reasons:
+	 * but we leave them all in place to avoid having to adjust the query's
+	 * varnos.  RT entries that are not referenced in the completed jointree
+	 * will be ignored by the planner, so they do not affect query semantics.
 	 *
-	 * We'd have a much harder job to adjust the query's varnos if we
-	 * selectively removed RT entries.
+	 * Also merge RTEPermissionInfo lists to ensure that all permissions are
+	 * checked correctly.
 	 *
 	 * If the rule is INSTEAD, then the original query won't be executed at
-	 * all, and so its rtable must be preserved so that the executor will do
-	 * the correct permissions checks on it.
+	 * all, and so its permissions list must be preserved so that the
+	 * executor will do the correct permissions checks on the relations
+	 * referenced in it.  This allows us to check that the caller has, say,
+	 * insert-permission on a view, when the view is not semantically
+	 * referenced at all in the resulting query.
 	 *
-	 * RT entries that are not referenced in the completed jointree will be
-	 * ignored by the planner, so they do not affect query semantics.  But any
-	 * permissions checks specified in them will be applied during executor
-	 * startup (see ExecCheckRTEPerms()).  This allows us to check that the
-	 * caller has, say, insert-permission on a view, when the view is not
-	 * semantically referenced at all in the resulting query.
+	 * When a rule is not INSTEAD, the permissions checks done using the
+	 * copied entries will be redundant with those done during execution of
+	 * the original query, but we don't bother to treat that case differently.
 	 *
-	 * When a rule is not INSTEAD, the permissions checks done on its copied
-	 * RT entries will be redundant with those done during execution of the
-	 * original query, but we don't bother to treat that case differently.
-	 *
-	 * NOTE: because planner will destructively alter rtable, we must ensure
-	 * that rule action's rtable is separate and shares no substructure with
-	 * the main rtable.  Hence do a deep copy here.
+	 * NOTE: because planner will destructively alter rtable and rtepermlist,
+	 * we must ensure that rule action's lists are separate and shares no
+	 * substructure with the main query's lists.  Hence do a deep copy here
+	 * for both.  Copy rtable before calling ConcatRTEPermissionInfoLists(),
+	 * because perminfoindex of those RTEs will be updated there.
 	 */
-	sub_action->rtable = list_concat(copyObject(parsetree->rtable),
-									 sub_action->rtable);
+	sub_action->rtepermlist = copyObject(sub_action->rtepermlist);
+	query_rtable = copyObject(parsetree->rtable);
+	ConcatRTEPermissionInfoLists(&sub_action->rtepermlist,
+								 parsetree->rtepermlist, query_rtable);
+	sub_action->rtable = list_concat(query_rtable, sub_action->rtable);
 
 	/*
 	 * There could have been some SubLinks in parsetree's rtable, in which
@@ -1623,43 +1627,6 @@ rewriteValuesRTEToNulls(Query *parsetree, RangeTblEntry *rte)
 
 
 /*
- * Record in target_rte->extraUpdatedCols the indexes of any generated columns
- * that depend on any columns mentioned in target_rte->updatedCols.
- */
-void
-fill_extraUpdatedCols(RangeTblEntry *target_rte, Relation target_relation)
-{
-	TupleDesc	tupdesc = RelationGetDescr(target_relation);
-	TupleConstr *constr = tupdesc->constr;
-
-	target_rte->extraUpdatedCols = NULL;
-
-	if (constr && constr->has_generated_stored)
-	{
-		for (int i = 0; i < constr->num_defval; i++)
-		{
-			AttrDefault *defval = &constr->defval[i];
-			Node	   *expr;
-			Bitmapset  *attrs_used = NULL;
-
-			/* skip if not generated column */
-			if (!TupleDescAttr(tupdesc, defval->adnum - 1)->attgenerated)
-				continue;
-
-			/* identify columns this generated column depends on */
-			expr = stringToNode(defval->adbin);
-			pull_varattnos(expr, 1, &attrs_used);
-
-			if (bms_overlap(target_rte->updatedCols, attrs_used))
-				target_rte->extraUpdatedCols =
-					bms_add_member(target_rte->extraUpdatedCols,
-								   defval->adnum - FirstLowInvalidHeapAttributeNumber);
-		}
-	}
-}
-
-
-/*
  * matchLocks -
  *	  match the list of locks and returns the matching rules
  */
@@ -1742,7 +1709,7 @@ ApplyRetrieveRule(Query *parsetree,
 {
 	Query	   *rule_action;
 	RangeTblEntry *rte,
-			   *subrte;
+				  *subquery_rte;
 	RowMarkClause *rc;
 
 	if (list_length(rule->actions) != 1)
@@ -1782,18 +1749,6 @@ ApplyRetrieveRule(Query *parsetree,
 			newrte = copyObject(rte);
 			parsetree->rtable = lappend(parsetree->rtable, newrte);
 			parsetree->resultRelation = list_length(parsetree->rtable);
-
-			/*
-			 * There's no need to do permissions checks twice, so wipe out the
-			 * permissions info for the original RTE (we prefer to keep the
-			 * bits set on the result RTE).
-			 */
-			rte->requiredPerms = 0;
-			rte->checkAsUser = InvalidOid;
-			rte->selectedCols = NULL;
-			rte->insertedCols = NULL;
-			rte->updatedCols = NULL;
-			rte->extraUpdatedCols = NULL;
 
 			/*
 			 * For the most part, Vars referencing the view should remain as
@@ -1858,12 +1813,6 @@ ApplyRetrieveRule(Query *parsetree,
 
 	/*
 	 * Recursively expand any view references inside the view.
-	 *
-	 * Note: this must happen after markQueryForLocking.  That way, any UPDATE
-	 * permission bits needed for sub-views are initially applied to their
-	 * RTE_RELATION RTEs by markQueryForLocking, and then transferred to their
-	 * OLD rangetable entries by the action below (in a recursive call of this
-	 * routine).
 	 */
 	rule_action = fireRIRrules(rule_action, activeRIRs);
 
@@ -1872,36 +1821,26 @@ ApplyRetrieveRule(Query *parsetree,
 	 * original RTE to a subquery RTE.
 	 */
 	rte = rt_fetch(rt_index, parsetree->rtable);
-
-	rte->rtekind = RTE_SUBQUERY;
-	rte->subquery = rule_action;
-	rte->security_barrier = RelationIsSecurityView(relation);
-	/* Clear fields that should not be set in a subquery RTE */
-	rte->relid = InvalidOid;
-	rte->relkind = 0;
-	rte->rellockmode = 0;
-	rte->tablesample = NULL;
-	rte->inh = false;			/* must not be set for a subquery */
+	subquery_rte = rte;
 
 	/*
-	 * We move the view's permission check data down to its rangetable. The
-	 * checks will actually be done against the OLD entry therein.
+	 * Before converting the RTE to become a SUBQUERY, store a copy for the
+	 * executor to be able to lock the view relation and for the planner to be
+	 * able to record the view relation OID in PlannedStmt.relationOids.
 	 */
-	subrte = rt_fetch(PRS2_OLD_VARNO, rule_action->rtable);
-	Assert(subrte->relid == relation->rd_id);
-	subrte->requiredPerms = rte->requiredPerms;
-	subrte->checkAsUser = rte->checkAsUser;
-	subrte->selectedCols = rte->selectedCols;
-	subrte->insertedCols = rte->insertedCols;
-	subrte->updatedCols = rte->updatedCols;
-	subrte->extraUpdatedCols = rte->extraUpdatedCols;
+	rte = copyObject(rte);
+	parsetree->rtable = lappend(parsetree->rtable, rte);
 
-	rte->requiredPerms = 0;		/* no permission check on subquery itself */
-	rte->checkAsUser = InvalidOid;
-	rte->selectedCols = NULL;
-	rte->insertedCols = NULL;
-	rte->updatedCols = NULL;
-	rte->extraUpdatedCols = NULL;
+	subquery_rte->rtekind = RTE_SUBQUERY;
+	subquery_rte->subquery = rule_action;
+	subquery_rte->security_barrier = RelationIsSecurityView(relation);
+	/* Clear fields that should not be set in a subquery RTE */
+	subquery_rte->relid = InvalidOid;
+	subquery_rte->relkind = 0;
+	subquery_rte->rellockmode = 0;
+	subquery_rte->tablesample = NULL;
+	subquery_rte->perminfoindex = 0;
+	subquery_rte->inh = false;			/* must not be set for a subquery */
 
 	return parsetree;
 }
@@ -1913,9 +1852,6 @@ ApplyRetrieveRule(Query *parsetree,
  * aggregate.  We leave it to the planner to detect that.
  *
  * NB: this must agree with the parser's transformLockingClause() routine.
- * However, unlike the parser we have to be careful not to mark a view's
- * OLD and NEW rels for updating.  The best way to handle that seems to be
- * to scan the jointree to determine which rels are used.
  */
 static void
 markQueryForLocking(Query *qry, Node *jtnode,
@@ -1931,8 +1867,12 @@ markQueryForLocking(Query *qry, Node *jtnode,
 
 		if (rte->rtekind == RTE_RELATION)
 		{
+			RTEPermissionInfo *perminfo;
+
 			applyLockingClause(qry, rti, strength, waitPolicy, pushedDown);
-			rte->requiredPerms |= ACL_SELECT_FOR_UPDATE;
+
+			perminfo = GetRTEPermissionInfo(qry->rtepermlist, rte);
+			perminfo->requiredPerms |= ACL_SELECT_FOR_UPDATE;
 		}
 		else if (rte->rtekind == RTE_SUBQUERY)
 		{
@@ -3073,6 +3013,9 @@ rewriteTargetView(Query *parsetree, Relation view)
 	RangeTblEntry *base_rte;
 	RangeTblEntry *view_rte;
 	RangeTblEntry *new_rte;
+	RTEPermissionInfo *view_perminfo;
+	RTEPermissionInfo *base_perminfo;
+	RTEPermissionInfo *new_perminfo;
 	Relation	base_rel;
 	List	   *view_targetlist;
 	ListCell   *lc;
@@ -3209,6 +3152,7 @@ rewriteTargetView(Query *parsetree, Relation view)
 	base_rt_index = rtr->rtindex;
 	base_rte = rt_fetch(base_rt_index, viewquery->rtable);
 	Assert(base_rte->rtekind == RTE_RELATION);
+	base_perminfo = GetRTEPermissionInfo(viewquery->rtepermlist, base_rte);
 
 	/*
 	 * Up to now, the base relation hasn't been touched at all in our query.
@@ -3280,57 +3224,59 @@ rewriteTargetView(Query *parsetree, Relation view)
 				   0);
 
 	/*
-	 * If the view has "security_invoker" set, mark the new target RTE for the
-	 * permissions checks that we want to enforce against the query caller.
-	 * Otherwise we want to enforce them against the view owner.
+	 * If the view has "security_invoker" set, mark the new target relation
+	 * for the permissions checks that we want to enforce against the query
+	 * caller. Otherwise we want to enforce them against the view owner.
 	 *
 	 * At the relation level, require the same INSERT/UPDATE/DELETE
 	 * permissions that the query caller needs against the view.  We drop the
-	 * ACL_SELECT bit that is presumably in new_rte->requiredPerms initially.
+	 * ACL_SELECT bit that is presumably in new_perminfo->requiredPerms
+	 * initially.
 	 *
-	 * Note: the original view RTE remains in the query's rangetable list.
-	 * Although it will be unused in the query plan, we need it there so that
-	 * the executor still performs appropriate permissions checks for the
-	 * query caller's use of the view.
+	 * Note: the original view's RTEPermissionInfo remains in the query's
+	 * permissions list so that the executor still performs appropriate
+	 * permissions checks for the query caller's use of the view.
 	 */
+	view_perminfo = GetRTEPermissionInfo(parsetree->rtepermlist, view_rte);
+	new_rte->perminfoindex = 0;
+	new_perminfo = AddRTEPermissionInfo(&parsetree->rtepermlist, new_rte);
 	if (RelationHasSecurityInvoker(view))
-		new_rte->checkAsUser = InvalidOid;
+		new_perminfo->checkAsUser = InvalidOid;
 	else
-		new_rte->checkAsUser = view->rd_rel->relowner;
-
-	new_rte->requiredPerms = view_rte->requiredPerms;
+		new_perminfo->checkAsUser = view->rd_rel->relowner;
+	new_perminfo->requiredPerms = view_perminfo->requiredPerms;
 
 	/*
 	 * Now for the per-column permissions bits.
 	 *
-	 * Initially, new_rte contains selectedCols permission check bits for all
-	 * base-rel columns referenced by the view, but since the view is a SELECT
-	 * query its insertedCols/updatedCols is empty.  We set insertedCols and
-	 * updatedCols to include all the columns the outer query is trying to
-	 * modify, adjusting the column numbers as needed.  But we leave
-	 * selectedCols as-is, so the view owner must have read permission for all
-	 * columns used in the view definition, even if some of them are not read
-	 * by the outer query.  We could try to limit selectedCols to only columns
-	 * used in the transformed query, but that does not correspond to what
-	 * happens in ordinary SELECT usage of a view: all referenced columns must
-	 * have read permission, even if optimization finds that some of them can
-	 * be discarded during query transformation.  The flattening we're doing
-	 * here is an optional optimization, too.  (If you are unpersuaded and
-	 * want to change this, note that applying adjust_view_column_set to
-	 * view_rte->selectedCols is clearly *not* the right answer, since that
-	 * neglects base-rel columns used in the view's WHERE quals.)
+	 * Set new_perminfo->selectedCols to include permission check bits for
+	 * all base-rel columns referenced by the view and insertedCols/updatedCols
+	 * to include all the columns the outer query is trying to modify, adjusting
+	 * the column numbers as needed.  We leave selectedCols as-is, so the view
+	 * owner must have read permission for all columns used in the view
+	 * definition, even if some of them are not read by the outer query.  We
+	 * could try to limit selectedCols to only columns used in the transformed
+	 * query, but that does not correspond to what happens in ordinary SELECT
+	 * usage of a view: all referenced columns must have read permission, even
+	 * if optimization finds that some of them can be discarded during query
+	 * transformation.  The flattening we're doing here is an optional
+	 * optimization, too.  (If you are unpersuaded and want to change this,
+	 * note that applying adjust_view_column_set to view_perminfo->selectedCols
+	 * is clearly *not* the right answer, since that neglects base-rel columns
+	 * used in the view's WHERE quals.)
 	 *
 	 * This step needs the modified view targetlist, so we have to do things
 	 * in this order.
 	 */
-	Assert(bms_is_empty(new_rte->insertedCols) &&
-		   bms_is_empty(new_rte->updatedCols));
+	new_perminfo->selectedCols = base_perminfo->selectedCols;
+	Assert(bms_is_empty(new_perminfo->insertedCols) &&
+		   bms_is_empty(new_perminfo->updatedCols));
 
-	new_rte->insertedCols = adjust_view_column_set(view_rte->insertedCols,
-												   view_targetlist);
+	new_perminfo->insertedCols =
+		adjust_view_column_set(view_perminfo->insertedCols, view_targetlist);
 
-	new_rte->updatedCols = adjust_view_column_set(view_rte->updatedCols,
-												  view_targetlist);
+	new_perminfo->updatedCols =
+		adjust_view_column_set(view_perminfo->updatedCols, view_targetlist);
 
 	/*
 	 * Move any security barrier quals from the view RTE onto the new target
@@ -3434,7 +3380,7 @@ rewriteTargetView(Query *parsetree, Relation view)
 		 * from the view, hence we need a new column alias list).  This should
 		 * match transformOnConflictClause.  In particular, note that the
 		 * relkind is set to composite to signal that we're not dealing with
-		 * an actual relation, and no permissions checks are wanted.
+		 * an actual relation.
 		 */
 		old_exclRelIndex = parsetree->onConflict->exclRelIndex;
 
@@ -3445,8 +3391,6 @@ rewriteTargetView(Query *parsetree, Relation view)
 													   false, false);
 		new_exclRte = new_exclNSItem->p_rte;
 		new_exclRte->relkind = RELKIND_COMPOSITE_TYPE;
-		new_exclRte->requiredPerms = 0;
-		/* other permissions fields in new_exclRte are already empty */
 
 		parsetree->rtable = lappend(parsetree->rtable, new_exclRte);
 		new_exclRelIndex = parsetree->onConflict->exclRelIndex =
@@ -3815,9 +3759,6 @@ RewriteQuery(Query *parsetree, List *rewrite_events)
 									parsetree->override,
 									rt_entry_relation,
 									NULL, 0, NULL);
-
-			/* Also populate extraUpdatedCols (for generated columns) */
-			fill_extraUpdatedCols(rt_entry, rt_entry_relation);
 		}
 		else if (event == CMD_MERGE)
 		{

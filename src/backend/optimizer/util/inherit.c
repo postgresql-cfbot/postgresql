@@ -30,6 +30,7 @@
 #include "optimizer/prep.h"
 #include "optimizer/restrictinfo.h"
 #include "parser/parsetree.h"
+#include "parser/parse_relation.h"
 #include "partitioning/partdesc.h"
 #include "partitioning/partprune.h"
 #include "utils/rel.h"
@@ -38,6 +39,8 @@
 static void expand_partitioned_rtentry(PlannerInfo *root, RelOptInfo *relinfo,
 									   RangeTblEntry *parentrte,
 									   Index parentRTindex, Relation parentrel,
+									   Bitmapset *parent_updatedCols,
+									   Bitmapset *parent_extraUpdatedCols,
 									   PlanRowMark *top_parentrc, LOCKMODE lockmode);
 static void expand_single_inheritance_child(PlannerInfo *root,
 											RangeTblEntry *parentrte,
@@ -131,6 +134,9 @@ expand_inherited_rtentry(PlannerInfo *root, RelOptInfo *rel,
 	/* Scan the inheritance set and expand it */
 	if (oldrelation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 	{
+		RTEPermissionInfo *root_perminfo =
+			GetRTEPermissionInfo(root->parse->rtepermlist, rte);
+
 		/*
 		 * Partitioned table, so set up for partitioning.
 		 */
@@ -141,7 +147,10 @@ expand_inherited_rtentry(PlannerInfo *root, RelOptInfo *rel,
 		 * extract the partition key columns of all the partitioned tables.
 		 */
 		expand_partitioned_rtentry(root, rel, rte, rti,
-								   oldrelation, oldrc, lockmode);
+								   oldrelation,
+								   root_perminfo->updatedCols,
+								   root->extraUpdatedCols,
+								   oldrc, lockmode);
 	}
 	else
 	{
@@ -305,6 +314,8 @@ static void
 expand_partitioned_rtentry(PlannerInfo *root, RelOptInfo *relinfo,
 						   RangeTblEntry *parentrte,
 						   Index parentRTindex, Relation parentrel,
+						   Bitmapset *parent_updatedCols,
+						   Bitmapset *parent_extraUpdatedCols,
 						   PlanRowMark *top_parentrc, LOCKMODE lockmode)
 {
 	PartitionDesc partdesc;
@@ -324,19 +335,18 @@ expand_partitioned_rtentry(PlannerInfo *root, RelOptInfo *relinfo,
 
 	/*
 	 * Note down whether any partition key cols are being updated. Though it's
-	 * the root partitioned table's updatedCols we are interested in, we
-	 * instead use parentrte to get the updatedCols. This is convenient
-	 * because parentrte already has the root partrel's updatedCols translated
-	 * to match the attribute ordering of parentrel.
+	 * the root partitioned table's updatedCols we are interested in,
+	 * parent_updatedCols provided by the caller contains the root partrel's
+	 * updatedCols translated to match the attribute ordering of parentrel.
 	 */
 	if (!root->partColsUpdated)
 		root->partColsUpdated =
-			has_partition_attrs(parentrel, parentrte->updatedCols, NULL);
+			has_partition_attrs(parentrel, parent_updatedCols, NULL);
 
 	/*
 	 * There shouldn't be any generated columns in the partition key.
 	 */
-	Assert(!has_partition_attrs(parentrel, parentrte->extraUpdatedCols, NULL));
+	Assert(!has_partition_attrs(parentrel, parent_extraUpdatedCols, NULL));
 
 	/* Nothing further to do here if there are no partitions. */
 	if (partdesc->nparts == 0)
@@ -402,9 +412,23 @@ expand_partitioned_rtentry(PlannerInfo *root, RelOptInfo *relinfo,
 
 		/* If this child is itself partitioned, recurse */
 		if (childrel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+		{
+			AppendRelInfo *appinfo = root->append_rel_array[childRTindex];
+			Bitmapset *child_updatedCols;
+			Bitmapset *child_extraUpdatedCols;
+
+			child_updatedCols = translate_col_privs(parent_updatedCols,
+													appinfo->translated_vars);
+			child_extraUpdatedCols = translate_col_privs(parent_extraUpdatedCols,
+														 appinfo->translated_vars);
+
 			expand_partitioned_rtentry(root, childrelinfo,
 									   childrte, childRTindex,
-									   childrel, top_parentrc, lockmode);
+									   childrel,
+									   child_updatedCols,
+									   child_extraUpdatedCols,
+									   top_parentrc, lockmode);
+		}
 
 		/* Close child relation, but keep locks */
 		table_close(childrel, NoLock);
@@ -439,7 +463,6 @@ expand_single_inheritance_child(PlannerInfo *root, RangeTblEntry *parentrte,
 								Index *childRTindex_p)
 {
 	Query	   *parse = root->parse;
-	Oid			parentOID = RelationGetRelid(parentrel);
 	Oid			childOID = RelationGetRelid(childrel);
 	RangeTblEntry *childrte;
 	Index		childRTindex;
@@ -451,17 +474,15 @@ expand_single_inheritance_child(PlannerInfo *root, RangeTblEntry *parentrte,
 	/*
 	 * Build an RTE for the child, and attach to query's rangetable list. We
 	 * copy most scalar fields of the parent's RTE, but replace relation OID,
-	 * relkind, and inh for the child.  Also, set requiredPerms to zero since
-	 * all required permissions checks are done on the original RTE. Likewise,
-	 * set the child's securityQuals to empty, because we only want to apply
-	 * the parent's RLS conditions regardless of what RLS properties
-	 * individual children may have.  (This is an intentional choice to make
-	 * inherited RLS work like regular permissions checks.) The parent
-	 * securityQuals will be propagated to children along with other base
-	 * restriction clauses, so we don't need to do it here.  Other
-	 * infrastructure of the parent RTE has to be translated to match the
-	 * child table's column ordering, which we do below, so a "flat" copy is
-	 * sufficient to start with.
+	 * relkind, and inh for the child.  Set the child's securityQuals to
+	 * empty, because we only want to apply the parent's RLS conditions
+	 * regardless of what RLS properties individual children may have.
+	 * (This is an intentional choice to make inherited RLS work like regular
+	 * permissions checks.) The parent securityQuals will be propagated to
+	 * children along with other base restriction clauses, so we don't need
+	 * to do it here.  Other infrastructure of the parent RTE has to be
+	 * translated to match the child table's column ordering, which we do
+	 * below, so a "flat" copy is sufficient to start with.
 	 */
 	childrte = makeNode(RangeTblEntry);
 	memcpy(childrte, parentrte, sizeof(RangeTblEntry));
@@ -471,12 +492,11 @@ expand_single_inheritance_child(PlannerInfo *root, RangeTblEntry *parentrte,
 	/* A partitioned child will need to be expanded further. */
 	if (childrte->relkind == RELKIND_PARTITIONED_TABLE)
 	{
-		Assert(childOID != parentOID);
+		Assert(childOID != RelationGetRelid(parentrel));
 		childrte->inh = true;
 	}
 	else
 		childrte->inh = false;
-	childrte->requiredPerms = 0;
 	childrte->securityQuals = NIL;
 
 	/* Link not-yet-fully-filled child RTE into data structures */
@@ -538,34 +558,6 @@ expand_single_inheritance_child(PlannerInfo *root, RangeTblEntry *parentrte,
 	 */
 	childrte->alias = childrte->eref = makeAlias(parentrte->eref->aliasname,
 												 child_colnames);
-
-	/*
-	 * Translate the column permissions bitmaps to the child's attnums (we
-	 * have to build the translated_vars list before we can do this).  But if
-	 * this is the parent table, we can just duplicate the parent's bitmaps.
-	 *
-	 * Note: we need to do this even though the executor won't run any
-	 * permissions checks on the child RTE.  The insertedCols/updatedCols
-	 * bitmaps may be examined for trigger-firing purposes.
-	 */
-	if (childOID != parentOID)
-	{
-		childrte->selectedCols = translate_col_privs(parentrte->selectedCols,
-													 appinfo->translated_vars);
-		childrte->insertedCols = translate_col_privs(parentrte->insertedCols,
-													 appinfo->translated_vars);
-		childrte->updatedCols = translate_col_privs(parentrte->updatedCols,
-													appinfo->translated_vars);
-		childrte->extraUpdatedCols = translate_col_privs(parentrte->extraUpdatedCols,
-														 appinfo->translated_vars);
-	}
-	else
-	{
-		childrte->selectedCols = bms_copy(parentrte->selectedCols);
-		childrte->insertedCols = bms_copy(parentrte->insertedCols);
-		childrte->updatedCols = bms_copy(parentrte->updatedCols);
-		childrte->extraUpdatedCols = bms_copy(parentrte->extraUpdatedCols);
-	}
 
 	/*
 	 * Store the RTE and appinfo in the respective PlannerInfo arrays, which
@@ -865,4 +857,96 @@ apply_child_basequals(PlannerInfo *root, RelOptInfo *parentrel,
 	childrel->baserestrict_min_security = cq_min_security;
 
 	return true;
+}
+
+/*
+ * translate_col_privs_multilevel
+ * 		Recursively translates the column numbers contained in
+ * 		'top_parent_cols' to the columns numbers of a descendent relation
+ * 		given by 'relid'
+ */
+Bitmapset *
+translate_col_privs_multilevel(PlannerInfo *root, RelOptInfo *rel,
+							   RelOptInfo *top_parent_rel,
+							   Bitmapset *top_parent_cols)
+{
+	Bitmapset *result;
+	AppendRelInfo *appinfo;
+
+	if (top_parent_cols == NULL)
+		return NULL;
+
+	/* Recurse if immediate parent is not the top parent. */
+	if (rel->parent != top_parent_rel)
+	{
+		if (rel->parent)
+			result = translate_col_privs_multilevel(root, rel->parent,
+													top_parent_rel,
+													top_parent_cols);
+		else
+			elog(ERROR, "rel with relid %u is not a child rel", rel->relid);
+	}
+
+	Assert(root->append_rel_array != NULL);
+	appinfo = root->append_rel_array[rel->relid];
+	Assert(appinfo != NULL);
+
+	result = translate_col_privs(top_parent_cols, appinfo->translated_vars);
+
+	return result;
+}
+
+/*
+ * GetRelAllUpdatedCols
+ * 		Returns the set of columns of a given "simple" relation that are updated
+ * 		by this query
+ */
+Bitmapset *
+GetRelAllUpdatedCols(PlannerInfo *root, RelOptInfo *rel)
+{
+	Index	use_relid;
+	RangeTblEntry *rte;
+	RTEPermissionInfo *perminfo;
+	Bitmapset *updatedCols,
+			  *extraUpdatedCols;
+
+	Assert(root->parse->commandType == CMD_UPDATE);
+
+	if (!IS_SIMPLE_REL(rel))
+		return NULL;
+
+	/*
+	 * We need to get the updatedCols bitmapset from the relation's
+	 * RTEPermissionInfo.
+	 *
+	 * If it's a simple "base" rel, can just fetch its RTEPermissionInfo that
+	 * must always be present; this cannot get called on non-RELATION RTEs.
+	 *
+	 * For "other" rels, must look up the root parent relation mentioned in the
+	 * query, because only that one gets assigned a RTEPermissionInfo, and
+	 * translate the columns found therein to match the given relation.
+	 */
+	use_relid = rel->top_parent_relids == NULL ? rel->relid :
+		bms_singleton_member(rel->top_parent_relids);
+	Assert(use_relid == root->parse->resultRelation);
+	rte =  planner_rt_fetch(use_relid, root);
+	Assert(rte->perminfoindex > 0);
+	perminfo = GetRTEPermissionInfo(root->parse->rtepermlist, rte);
+
+	if (use_relid != rel->relid)
+	{
+		RelOptInfo *top_parent_rel = find_base_rel(root, use_relid);
+
+		updatedCols = translate_col_privs_multilevel(root, rel, top_parent_rel,
+													 perminfo->updatedCols);
+		extraUpdatedCols = translate_col_privs_multilevel(root, rel, top_parent_rel,
+														  root->extraUpdatedCols);
+	}
+	else
+	{
+		updatedCols = perminfo->updatedCols;
+		extraUpdatedCols = root->extraUpdatedCols;
+	}
+
+	return bms_union(updatedCols, extraUpdatedCols);
 }

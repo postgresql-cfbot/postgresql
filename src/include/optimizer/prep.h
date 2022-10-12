@@ -16,6 +16,7 @@
 
 #include "nodes/pathnodes.h"
 #include "nodes/plannodes.h"
+#include "utils/relcache.h"
 
 
 /*
@@ -38,6 +39,9 @@ extern Relids get_relids_for_join(Query *query, int joinrelid);
 extern void preprocess_targetlist(PlannerInfo *root);
 
 extern List *extract_update_targetlist_colnos(List *tlist);
+
+extern Bitmapset *get_extraUpdatedCols(Bitmapset *updatedCols,
+									   Relation target_relation);
 
 extern PlanRowMark *get_plan_rowmark(List *rowmarks, Index rtindex);
 

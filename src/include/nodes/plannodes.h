@@ -72,6 +72,10 @@ typedef struct PlannedStmt
 
 	List	   *rtable;			/* list of RangeTblEntry nodes */
 
+	List	   *rtepermlist;	/* list of RTEPermissionInfo nodes for
+								 * the rtable entries having
+								 * perminfoindex > 0 */
+
 	/* rtable indexes of target relations for INSERT/UPDATE/DELETE */
 	List	   *resultRelations;	/* integer list of RT indexes, or NIL */
 
@@ -233,6 +237,7 @@ typedef struct ModifyTable
 	bool		partColsUpdated;	/* some part key in hierarchy updated? */
 	List	   *resultRelations;	/* integer list of RT indexes */
 	List	   *updateColnosLists;	/* per-target-table update_colnos lists */
+	List	   *extraUpdatedColsBitmaps; /* per-target-table extraUpdatedCols bitmaps */
 	List	   *withCheckOptionLists;	/* per-target-table WCO lists */
 	List	   *returningLists; /* per-target-table RETURNING tlists */
 	List	   *fdwPrivLists;	/* per-target-table FDW private data lists */
@@ -703,6 +708,7 @@ typedef struct ForeignScan
 	Scan		scan;
 	CmdType		operation;		/* SELECT/INSERT/UPDATE/DELETE */
 	Index		resultRelation; /* direct modification target's RT index */
+	Oid			checkAsUser;	/* user to perform the scan as */
 	Oid			fs_server;		/* OID of foreign server */
 	List	   *fdw_exprs;		/* expressions that FDW may evaluate */
 	List	   *fdw_private;	/* private data for FDW */

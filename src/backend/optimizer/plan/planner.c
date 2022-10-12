@@ -57,6 +57,7 @@
 #include "optimizer/tlist.h"
 #include "parser/analyze.h"
 #include "parser/parse_agg.h"
+#include "parser/parse_relation.h"
 #include "parser/parsetree.h"
 #include "partitioning/partdesc.h"
 #include "rewrite/rewriteManip.h"
@@ -306,6 +307,7 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 	glob->subroots = NIL;
 	glob->rewindPlanIDs = NULL;
 	glob->finalrtable = NIL;
+	glob->finalrtepermlist = NIL;
 	glob->finalrowmarks = NIL;
 	glob->resultRelations = NIL;
 	glob->appendRelations = NIL;
@@ -493,6 +495,7 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 
 	/* final cleanup of the plan */
 	Assert(glob->finalrtable == NIL);
+	Assert(glob->finalrtepermlist == NIL);
 	Assert(glob->finalrowmarks == NIL);
 	Assert(glob->resultRelations == NIL);
 	Assert(glob->appendRelations == NIL);
@@ -520,6 +523,7 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 	result->parallelModeNeeded = glob->parallelModeNeeded;
 	result->planTree = top_plan;
 	result->rtable = glob->finalrtable;
+	result->rtepermlist = glob->finalrtepermlist;
 	result->resultRelations = glob->resultRelations;
 	result->appendRelations = glob->appendRelations;
 	result->subplans = glob->subplans;
@@ -1742,6 +1746,7 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 			Index		rootRelation;
 			List	   *resultRelations = NIL;
 			List	   *updateColnosLists = NIL;
+			List	   *extraUpdatedColsBitmaps = NIL;
 			List	   *withCheckOptionLists = NIL;
 			List	   *returningLists = NIL;
 			List	   *mergeActionLists = NIL;
@@ -1775,15 +1780,35 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 					if (parse->commandType == CMD_UPDATE)
 					{
 						List	   *update_colnos = root->update_colnos;
+						Bitmapset  *extraUpdatedCols = root->extraUpdatedCols;
 
 						if (this_result_rel != top_result_rel)
+						{
 							update_colnos =
 								adjust_inherited_attnums_multilevel(root,
 																	update_colnos,
 																	this_result_rel->relid,
 																	top_result_rel->relid);
+							extraUpdatedCols =
+								translate_col_privs_multilevel(root, this_result_rel,
+															   top_result_rel,
+															   extraUpdatedCols);
+						}
 						updateColnosLists = lappend(updateColnosLists,
 													update_colnos);
+						/*
+						 * Make extraUpdatedCols bitmap look as a proper Node
+						 * before adding into the List so that Node
+						 * copy/write/read handle it correctly.
+						 *
+						 * XXX should be using makeNode(Bitmapset) somewhere?
+						 */
+						if (extraUpdatedCols)
+						{
+							extraUpdatedCols->type = T_Bitmapset;
+							extraUpdatedColsBitmaps = lappend(extraUpdatedColsBitmaps,
+															  extraUpdatedCols);
+						}
 					}
 					if (parse->withCheckOptions)
 					{
@@ -1865,7 +1890,15 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 					 */
 					resultRelations = list_make1_int(parse->resultRelation);
 					if (parse->commandType == CMD_UPDATE)
+					{
 						updateColnosLists = list_make1(root->update_colnos);
+						/* See the comment in the inherited UPDATE block. */
+						if (root->extraUpdatedCols)
+						{
+							root->extraUpdatedCols->type = T_Bitmapset;
+							extraUpdatedColsBitmaps = list_make1(root->extraUpdatedCols);
+						}
+					}
 					if (parse->withCheckOptions)
 						withCheckOptionLists = list_make1(parse->withCheckOptions);
 					if (parse->returningList)
@@ -1879,7 +1912,15 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 				/* Single-relation INSERT/UPDATE/DELETE. */
 				resultRelations = list_make1_int(parse->resultRelation);
 				if (parse->commandType == CMD_UPDATE)
+				{
 					updateColnosLists = list_make1(root->update_colnos);
+					/* See the comment in the inherited UPDATE block. */
+					if (root->extraUpdatedCols)
+					{
+						root->extraUpdatedCols->type = T_Bitmapset;
+						extraUpdatedColsBitmaps = list_make1(root->extraUpdatedCols);
+					}
+				}
 				if (parse->withCheckOptions)
 					withCheckOptionLists = list_make1(parse->withCheckOptions);
 				if (parse->returningList)
@@ -1918,6 +1959,7 @@ grouping_planner(PlannerInfo *root, double tuple_fraction)
 										root->partColsUpdated,
 										resultRelations,
 										updateColnosLists,
+										extraUpdatedColsBitmaps,
 										withCheckOptionLists,
 										returningLists,
 										rowMarks,
@@ -6210,6 +6252,7 @@ plan_cluster_use_sort(Oid tableOid, Oid indexOid)
 	rte->inh = false;
 	rte->inFromCl = true;
 	query->rtable = list_make1(rte);
+	AddRTEPermissionInfo(&query->rtepermlist, rte);
 
 	/* Set up RTE/RelOptInfo arrays */
 	setup_simple_rel_arrays(root);
@@ -6337,6 +6380,7 @@ plan_create_index_workers(Oid tableOid, Oid indexOid)
 	rte->inh = true;
 	rte->inFromCl = true;
 	query->rtable = list_make1(rte);
+	AddRTEPermissionInfo(&query->rtepermlist, rte);
 
 	/* Set up RTE/RelOptInfo arrays */
 	setup_simple_rel_arrays(root);

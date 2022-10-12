@@ -23,5 +23,9 @@ extern void expand_inherited_rtentry(PlannerInfo *root, RelOptInfo *rel,
 extern bool apply_child_basequals(PlannerInfo *root, RelOptInfo *parentrel,
 								  RelOptInfo *childrel, RangeTblEntry *childRTE,
 								  AppendRelInfo *appinfo);
+extern Bitmapset *GetRelAllUpdatedCols(PlannerInfo *root, RelOptInfo *rel);
+extern Bitmapset *translate_col_privs_multilevel(PlannerInfo *root, RelOptInfo *rel,
+							   RelOptInfo *top_parent_rel,
+							   Bitmapset *top_parent_cols);
 
 #endif							/* INHERIT_H */

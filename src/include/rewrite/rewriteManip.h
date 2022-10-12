@@ -83,5 +83,7 @@ extern Node *ReplaceVarsFromTargetList(Node *node,
 									   ReplaceVarsNoMatchOption nomatch_option,
 									   int nomatch_varno,
 									   bool *outer_hasSubLinks);
+extern void ConcatRTEPermissionInfoLists(List **dest_rtepermlist, List *src_rtepermlist,
+							 List *src_rtable);
 
 #endif							/* REWRITEMANIP_H */

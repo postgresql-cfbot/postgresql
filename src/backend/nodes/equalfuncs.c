@@ -210,6 +210,12 @@ _equalList(const List *a, const List *b)
 	return true;
 }
 
+/* Custom equal routine for Node bitmapsets */
+static bool
+_equalBitmapset(const Bitmapset *a, const Bitmapset *b)
+{
+	return bms_equal(a, b);
+}
 
 /*
  * equal

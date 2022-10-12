@@ -113,6 +113,9 @@ typedef struct PlannerGlobal
 	/* "flat" rangetable for executor */
 	List	   *finalrtable;
 
+	/* "flat" list of RTEPermissionInfos */
+	List	   *finalrtepermlist;
+
 	/* "flat" list of PlanRowMarks */
 	List	   *finalrowmarks;
 
@@ -418,6 +421,8 @@ struct PlannerInfo
 	 * resnos in processed_tlist to identify the UPDATE target columns.
 	 */
 	List	   *update_colnos;
+
+	Bitmapset  *extraUpdatedCols;
 
 	/*
 	 * Fields filled during create_plan() for use in setrefs.c
@@ -2247,6 +2252,7 @@ typedef struct ModifyTablePath
 	bool		partColsUpdated;	/* some part key in hierarchy updated? */
 	List	   *resultRelations;	/* integer list of RT indexes */
 	List	   *updateColnosLists;	/* per-target-table update_colnos lists */
+	List	   *extraUpdatedColsBitmaps; /* per-target-table extraUpdatedCols bitmaps */
 	List	   *withCheckOptionLists;	/* per-target-table WCO lists */
 	List	   *returningLists; /* per-target-table RETURNING tlists */
 	List	   *rowMarks;		/* PlanRowMarks (non-locking only) */

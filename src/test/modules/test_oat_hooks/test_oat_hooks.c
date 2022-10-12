@@ -46,7 +46,7 @@ static bool REGRESS_suset_variable2 = false;
 /* Saved hook values */
 static object_access_hook_type next_object_access_hook = NULL;
 static object_access_hook_type_str next_object_access_hook_str = NULL;
-static ExecutorCheckPerms_hook_type next_exec_check_perms_hook = NULL;
+static ExecutorCheckPermissions_hook_type next_exec_check_perms_hook = NULL;
 static ProcessUtility_hook_type next_ProcessUtility_hook = NULL;
 
 /* Test Object Access Type Hook hooks */
@@ -55,7 +55,7 @@ static void REGRESS_object_access_hook_str(ObjectAccessType access,
 										   int subId, void *arg);
 static void REGRESS_object_access_hook(ObjectAccessType access, Oid classId,
 									   Oid objectId, int subId, void *arg);
-static bool REGRESS_exec_check_perms(List *rangeTabls, bool do_abort);
+static bool REGRESS_exec_check_perms(List *rangeTabls, List *rtepermlist, bool do_abort);
 static void REGRESS_utility_command(PlannedStmt *pstmt,
 									const char *queryString, bool readOnlyTree,
 									ProcessUtilityContext context,
@@ -219,8 +219,8 @@ _PG_init(void)
 	object_access_hook_str = REGRESS_object_access_hook_str;
 
 	/* DML permission check */
-	next_exec_check_perms_hook = ExecutorCheckPerms_hook;
-	ExecutorCheckPerms_hook = REGRESS_exec_check_perms;
+	next_exec_check_perms_hook = ExecutorCheckPermissions_hook;
+	ExecutorCheckPermissions_hook = REGRESS_exec_check_perms;
 
 	/* ProcessUtility hook */
 	next_ProcessUtility_hook = ProcessUtility_hook;
@@ -345,7 +345,7 @@ REGRESS_object_access_hook(ObjectAccessType access, Oid classId, Oid objectId, i
 }
 
 static bool
-REGRESS_exec_check_perms(List *rangeTabls, bool do_abort)
+REGRESS_exec_check_perms(List *rangeTabls, List *rtepermlist, bool do_abort)
 {
 	bool		am_super = superuser_arg(GetUserId());
 	bool		allow = true;
@@ -361,7 +361,7 @@ REGRESS_exec_check_perms(List *rangeTabls, bool do_abort)
 
 	/* Forward to next hook in the chain */
 	if (next_exec_check_perms_hook &&
-		!(*next_exec_check_perms_hook) (rangeTabls, do_abort))
+		!(*next_exec_check_perms_hook) (rangeTabls, rtepermlist, do_abort))
 		allow = false;
 
 	if (allow)

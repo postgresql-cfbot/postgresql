@@ -3643,6 +3643,8 @@ create_lockrows_path(PlannerInfo *root, RelOptInfo *rel,
  * 'resultRelations' is an integer list of actual RT indexes of target rel(s)
  * 'updateColnosLists' is a list of UPDATE target column number lists
  *		(one sublist per rel); or NIL if not an UPDATE
+ * 'extraUpdatedColsBitmaps' is a list of generated column attribute number
+ *		bitmapsets (one bitmapset per rel); or NIL if not an UPDATE
  * 'withCheckOptionLists' is a list of WCO lists (one per rel)
  * 'returningLists' is a list of RETURNING tlists (one per rel)
  * 'rowMarks' is a list of PlanRowMarks (non-locking only)
@@ -3658,6 +3660,7 @@ create_modifytable_path(PlannerInfo *root, RelOptInfo *rel,
 						bool partColsUpdated,
 						List *resultRelations,
 						List *updateColnosLists,
+						List *extraUpdatedColsBitmaps,
 						List *withCheckOptionLists, List *returningLists,
 						List *rowMarks, OnConflictExpr *onconflict,
 						List *mergeActionLists, int epqParam)
@@ -3722,6 +3725,7 @@ create_modifytable_path(PlannerInfo *root, RelOptInfo *rel,
 	pathnode->partColsUpdated = partColsUpdated;
 	pathnode->resultRelations = resultRelations;
 	pathnode->updateColnosLists = updateColnosLists;
+	pathnode->extraUpdatedColsBitmaps = extraUpdatedColsBitmaps;
 	pathnode->withCheckOptionLists = withCheckOptionLists;
 	pathnode->returningLists = returningLists;
 	pathnode->rowMarks = rowMarks;

@@ -31,6 +31,7 @@
 #include "optimizer/appendinfo.h"
 #include "optimizer/clauses.h"
 #include "optimizer/cost.h"
+#include "optimizer/inherit.h"
 #include "optimizer/optimizer.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
@@ -39,6 +40,7 @@
 #include "optimizer/restrictinfo.h"
 #include "optimizer/tlist.h"
 #include "parser/parsetree.h"
+#include "parser/parse_relation.h"
 #include "postgres_fdw.h"
 #include "storage/latch.h"
 #include "utils/builtins.h"
@@ -459,7 +461,8 @@ static PgFdwModifyState *create_foreign_modify(EState *estate,
 											   List *target_attrs,
 											   int values_end,
 											   bool has_returning,
-											   List *retrieved_attrs);
+											   List *retrieved_attrs,
+											   Oid userid);
 static TupleTableSlot **execute_foreign_modify(EState *estate,
 											   ResultRelInfo *resultRelInfo,
 											   CmdType operation,
@@ -624,7 +627,6 @@ postgresGetForeignRelSize(PlannerInfo *root,
 {
 	PgFdwRelationInfo *fpinfo;
 	ListCell   *lc;
-	RangeTblEntry *rte = planner_rt_fetch(baserel->relid, root);
 
 	/*
 	 * We use PgFdwRelationInfo to pass various information to subsequent
@@ -658,12 +660,12 @@ postgresGetForeignRelSize(PlannerInfo *root,
 	/*
 	 * If the table or the server is configured to use remote estimates,
 	 * identify which user to do remote access as during planning.  This
-	 * should match what ExecCheckRTEPerms() does.  If we fail due to lack of
-	 * permissions, the query would have failed at runtime anyway.
+	 * should match what ExecCheckPermissions() does.  If we fail due to
+	 * lack of permissions, the query would have failed at runtime anyway.
 	 */
 	if (fpinfo->use_remote_estimate)
 	{
-		Oid			userid = rte->checkAsUser ? rte->checkAsUser : GetUserId();
+		Oid			userid = baserel->userid ? baserel->userid : GetUserId();
 
 		fpinfo->user = GetUserMapping(userid, fpinfo->server->serverid);
 	}
@@ -1510,16 +1512,15 @@ postgresBeginForeignScan(ForeignScanState *node, int eflags)
 
 	/*
 	 * Identify which user to do the remote access as.  This should match what
-	 * ExecCheckRTEPerms() does.  In case of a join or aggregate, use the
-	 * lowest-numbered member RTE as a representative; we would get the same
-	 * result from any.
+	 * ExecCheckPermissions() does.
 	 */
+	userid = fsplan->checkAsUser ? fsplan->checkAsUser : GetUserId();
+
 	if (fsplan->scan.scanrelid > 0)
 		rtindex = fsplan->scan.scanrelid;
 	else
 		rtindex = bms_next_member(fsplan->fs_relids, -1);
 	rte = exec_rt_fetch(rtindex, estate);
-	userid = rte->checkAsUser ? rte->checkAsUser : GetUserId();
 
 	/* Get info about foreign table. */
 	table = GetForeignTable(rte->relid);
@@ -1811,7 +1812,8 @@ postgresPlanForeignModify(PlannerInfo *root,
 	else if (operation == CMD_UPDATE)
 	{
 		int			col;
-		Bitmapset  *allUpdatedCols = bms_union(rte->updatedCols, rte->extraUpdatedCols);
+		RelOptInfo *rel = find_base_rel(root, resultRelation);
+		Bitmapset  *allUpdatedCols = GetRelAllUpdatedCols(root, rel);
 
 		col = -1;
 		while ((col = bms_next_member(allUpdatedCols, col)) >= 0)
@@ -1891,6 +1893,36 @@ postgresPlanForeignModify(PlannerInfo *root,
 }
 
 /*
+ * GetResultRelCheckAsUser
+ *		Returns the user to modify passed-in foreign table result relation as
+ *
+ * The user is chosen by looking up the relation's or, if a child table, its
+ * root parent's RTEPermissionInfo.
+ */
+static Oid
+GetResultRelCheckAsUser(ResultRelInfo *relInfo, EState *estate)
+{
+	Index		rti;
+	RangeTblEntry *rte;
+	RTEPermissionInfo *perminfo;
+
+	/*
+	 * For inheritance child relations, must use the root parent's RTE to
+	 * fetch the permissions entry because that's the only one that actually
+	 * points to any.
+	 */
+	if (relInfo->ri_RootResultRelInfo)
+		rti = relInfo->ri_RootResultRelInfo->ri_RangeTableIndex;
+	else
+		rti = relInfo->ri_RangeTableIndex;
+
+	rte = exec_rt_fetch(rti, estate);
+	perminfo = GetRTEPermissionInfo(estate->es_rtepermlist, rte);
+
+	return perminfo->checkAsUser ? perminfo->checkAsUser : GetUserId();
+}
+
+/*
  * postgresBeginForeignModify
  *		Begin an insert/update/delete operation on a foreign table
  */
@@ -1901,6 +1933,7 @@ postgresBeginForeignModify(ModifyTableState *mtstate,
 						   int subplan_index,
 						   int eflags)
 {
+	EState	   *estate = mtstate->ps.state;
 	PgFdwModifyState *fmstate;
 	char	   *query;
 	List	   *target_attrs;
@@ -1908,6 +1941,7 @@ postgresBeginForeignModify(ModifyTableState *mtstate,
 	int			values_end_len;
 	List	   *retrieved_attrs;
 	RangeTblEntry *rte;
+	Oid			userid;
 
 	/*
 	 * Do nothing in EXPLAIN (no ANALYZE) case.  resultRelInfo->ri_FdwState
@@ -1931,6 +1965,7 @@ postgresBeginForeignModify(ModifyTableState *mtstate,
 	/* Find RTE. */
 	rte = exec_rt_fetch(resultRelInfo->ri_RangeTableIndex,
 						mtstate->ps.state);
+	userid = GetResultRelCheckAsUser(resultRelInfo, estate);
 
 	/* Construct an execution state. */
 	fmstate = create_foreign_modify(mtstate->ps.state,
@@ -1942,7 +1977,8 @@ postgresBeginForeignModify(ModifyTableState *mtstate,
 									target_attrs,
 									values_end_len,
 									has_returning,
-									retrieved_attrs);
+									retrieved_attrs,
+									userid);
 
 	resultRelInfo->ri_FdwState = fmstate;
 }
@@ -2145,6 +2181,7 @@ postgresBeginForeignInsert(ModifyTableState *mtstate,
 	List	   *targetAttrs = NIL;
 	List	   *retrieved_attrs = NIL;
 	bool		doNothing = false;
+	Oid			userid;
 
 	/*
 	 * If the foreign table we are about to insert routed rows into is also an
@@ -2222,6 +2259,8 @@ postgresBeginForeignInsert(ModifyTableState *mtstate,
 		rte = exec_rt_fetch(resultRelation, estate);
 	}
 
+	userid = GetResultRelCheckAsUser(resultRelInfo, estate);
+
 	/* Construct the SQL command string. */
 	deparseInsertSql(&sql, rte, resultRelation, rel, targetAttrs, doNothing,
 					 resultRelInfo->ri_WithCheckOptions,
@@ -2238,7 +2277,8 @@ postgresBeginForeignInsert(ModifyTableState *mtstate,
 									targetAttrs,
 									values_end_len,
 									retrieved_attrs != NIL,
-									retrieved_attrs);
+									retrieved_attrs,
+									userid);
 
 	/*
 	 * If the given resultRelInfo already has PgFdwModifyState set, it means
@@ -2624,7 +2664,6 @@ postgresBeginDirectModify(ForeignScanState *node, int eflags)
 	EState	   *estate = node->ss.ps.state;
 	PgFdwDirectModifyState *dmstate;
 	Index		rtindex;
-	RangeTblEntry *rte;
 	Oid			userid;
 	ForeignTable *table;
 	UserMapping *user;
@@ -2644,13 +2683,12 @@ postgresBeginDirectModify(ForeignScanState *node, int eflags)
 
 	/*
 	 * Identify which user to do the remote access as.  This should match what
-	 * ExecCheckRTEPerms() does.
+	 * ExecCheckPermissions() does.
 	 */
-	rtindex = node->resultRelInfo->ri_RangeTableIndex;
-	rte = exec_rt_fetch(rtindex, estate);
-	userid = rte->checkAsUser ? rte->checkAsUser : GetUserId();
+	userid = fsplan->checkAsUser ? fsplan->checkAsUser : GetUserId();
 
 	/* Get info about foreign table. */
+	rtindex = node->resultRelInfo->ri_RangeTableIndex;
 	if (fsplan->scan.scanrelid == 0)
 		dmstate->rel = ExecOpenScanRelation(estate, rtindex, eflags);
 	else
@@ -3953,12 +3991,12 @@ create_foreign_modify(EState *estate,
 					  List *target_attrs,
 					  int values_end,
 					  bool has_returning,
-					  List *retrieved_attrs)
+					  List *retrieved_attrs,
+					  Oid userid)
 {
 	PgFdwModifyState *fmstate;
 	Relation	rel = resultRelInfo->ri_RelationDesc;
 	TupleDesc	tupdesc = RelationGetDescr(rel);
-	Oid			userid;
 	ForeignTable *table;
 	UserMapping *user;
 	AttrNumber	n_params;
@@ -3969,12 +4007,6 @@ create_foreign_modify(EState *estate,
 	/* Begin constructing PgFdwModifyState. */
 	fmstate = (PgFdwModifyState *) palloc0(sizeof(PgFdwModifyState));
 	fmstate->rel = rel;
-
-	/*
-	 * Identify which user to do the remote access as.  This should match what
-	 * ExecCheckRTEPerms() does.
-	 */
-	userid = rte->checkAsUser ? rte->checkAsUser : GetUserId();
 
 	/* Get info about foreign table. */
 	table = GetForeignTable(RelationGetRelid(rel));

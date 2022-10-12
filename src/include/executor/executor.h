@@ -80,9 +80,9 @@ extern PGDLLIMPORT ExecutorFinish_hook_type ExecutorFinish_hook;
 typedef void (*ExecutorEnd_hook_type) (QueryDesc *queryDesc);
 extern PGDLLIMPORT ExecutorEnd_hook_type ExecutorEnd_hook;
 
-/* Hook for plugins to get control in ExecCheckRTPerms() */
-typedef bool (*ExecutorCheckPerms_hook_type) (List *, bool);
-extern PGDLLIMPORT ExecutorCheckPerms_hook_type ExecutorCheckPerms_hook;
+/* Hook for plugins to get control in ExecCheckPermissions() */
+typedef bool (*ExecutorCheckPermissions_hook_type) (List *, List *, bool);
+extern PGDLLIMPORT ExecutorCheckPermissions_hook_type ExecutorCheckPermissions_hook;
 
 
 /*
@@ -196,7 +196,8 @@ extern void standard_ExecutorFinish(QueryDesc *queryDesc);
 extern void ExecutorEnd(QueryDesc *queryDesc);
 extern void standard_ExecutorEnd(QueryDesc *queryDesc);
 extern void ExecutorRewind(QueryDesc *queryDesc);
-extern bool ExecCheckRTPerms(List *rangeTable, bool ereport_on_violation);
+extern bool ExecCheckPermissions(List *rangeTable,
+				 List *rtepermlist, bool ereport_on_violation);
 extern void CheckValidResultRel(ResultRelInfo *resultRelInfo, CmdType operation);
 extern void InitResultRelInfo(ResultRelInfo *resultRelInfo,
 							  Relation resultRelationDesc,
@@ -600,6 +601,8 @@ extern TupleTableSlot *ExecGetTriggerOldSlot(EState *estate, ResultRelInfo *relI
 extern TupleTableSlot *ExecGetTriggerNewSlot(EState *estate, ResultRelInfo *relInfo);
 extern TupleTableSlot *ExecGetReturningSlot(EState *estate, ResultRelInfo *relInfo);
 extern TupleConversionMap *ExecGetChildToRootMap(ResultRelInfo *resultRelInfo);
+extern AttrMap *ExecGetRootToChildMap(ResultRelInfo *resultRelInfo,
+					  EState *estate);
 
 extern Bitmapset *ExecGetInsertedCols(ResultRelInfo *relinfo, EState *estate);
 extern Bitmapset *ExecGetUpdatedCols(ResultRelInfo *relinfo, EState *estate);

@@ -1496,6 +1496,13 @@ convert_EXISTS_sublink_to_join(PlannerInfo *root, SubLink *sublink,
 	if (!bms_is_subset(upper_varnos, available_rels))
 		return NULL;
 
+	/*
+	 * Add subquery's RTEPermissionInfos into the upper query.  This also
+	 * updates the subquery's RTEs' perminfoindex.
+	 */
+	ConcatRTEPermissionInfoLists(&parse->rtepermlist, subselect->rtepermlist,
+								 subselect->rtable);
+
 	/* Now we can attach the modified subquery rtable to the parent */
 	parse->rtable = list_concat(parse->rtable, subselect->rtable);
 

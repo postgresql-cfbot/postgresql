@@ -176,13 +176,6 @@ transform_MERGE_to_join(Query *parse)
 	joinrte->lateral = false;
 	joinrte->inh = false;
 	joinrte->inFromCl = true;
-	joinrte->requiredPerms = 0;
-	joinrte->checkAsUser = InvalidOid;
-	joinrte->selectedCols = NULL;
-	joinrte->insertedCols = NULL;
-	joinrte->updatedCols = NULL;
-	joinrte->extraUpdatedCols = NULL;
-	joinrte->securityQuals = NIL;
 
 	/*
 	 * Add completed RTE to pstate's range table list, so that we know its
@@ -1206,6 +1199,13 @@ pull_up_simple_subquery(PlannerInfo *root, Node *jtnode, RangeTblEntry *rte,
 	}
 
 	/*
+	 * Add subquery's RTEPermissionInfos into the upper query.  This also
+	 * updates the subquery's RTEs' perminfoindex.
+	 */
+	ConcatRTEPermissionInfoLists(&parse->rtepermlist, subquery->rtepermlist,
+								 subquery->rtable);
+
+	/*
 	 * Now append the adjusted rtable entries to upper query. (We hold off
 	 * until after fixing the upper rtable entries; no point in running that
 	 * code on the subquery ones too.)
@@ -1345,6 +1345,12 @@ pull_up_simple_union_all(PlannerInfo *root, Node *jtnode, RangeTblEntry *rte)
 		}
 	}
 
+	/*
+	 * Add subquery's RTEPermissionInfos into the upper query.  This also
+	 * updates the subquery's RTEs' perminfoindex.
+	 */
+	ConcatRTEPermissionInfoLists(&root->parse->rtepermlist,
+								 subquery->rtepermlist, rtable);
 	/*
 	 * Append child RTEs to parent rtable.
 	 */

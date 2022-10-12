@@ -3971,6 +3971,10 @@ ExecInitModifyTable(ModifyTable *node, EState *estate, int eflags)
 	{
 		resultRelInfo = &mtstate->resultRelInfo[i];
 
+		if (node->extraUpdatedColsBitmaps)
+			resultRelInfo->ri_extraUpdatedCols =
+				list_nth(node->extraUpdatedColsBitmaps, i);
+
 		/* Let FDWs init themselves for foreign-table result rels */
 		if (!resultRelInfo->ri_usesFdwDirectModify &&
 			resultRelInfo->ri_FdwRoutine != NULL &&

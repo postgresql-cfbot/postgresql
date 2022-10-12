@@ -241,6 +241,14 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 		"Fallback-Application-Name", "", 64,
 	offsetof(struct pg_conn, fbappname)},
 
+	{"load_balance_hosts", NULL, NULL, NULL,
+		"Load-Balance", "", 1,	/* should be just '0' or '1' */
+	offsetof(struct pg_conn, loadbalance)},
+
+	{"random_seed", NULL, NULL, NULL,
+		"Random-Seed", "", 10,	/* strlen(INT32_MAX) == 10 */
+	offsetof(struct pg_conn, randomseed)},
+
 	{"keepalives", NULL, NULL, NULL,
 		"TCP-Keepalives", "", 1,	/* should be just '0' or '1' */
 	offsetof(struct pg_conn, keepalives)},
@@ -379,6 +387,7 @@ static bool fillPGconn(PGconn *conn, PQconninfoOption *connOptions);
 static void freePGconn(PGconn *conn);
 static void closePGconn(PGconn *conn);
 static void release_conn_addrinfo(PGconn *conn);
+static bool store_conn_addrinfo(PGconn *conn, struct addrinfo *addrlist);
 static void sendTerminateConn(PGconn *conn);
 static PQconninfoOption *conninfo_init(PQExpBuffer errorMessage);
 static PQconninfoOption *parse_connection_string(const char *connstr,
@@ -424,6 +433,9 @@ static void pgpassfileWarning(PGconn *conn);
 static void default_threadlock(int acquire);
 static bool sslVerifyProtocolVersion(const char *version);
 static bool sslVerifyProtocolRange(const char *min, const char *max);
+static int	loadBalance(PGconn *conn);
+static bool parse_int_param(const char *value, int *result, PGconn *conn,
+							const char *context);
 
 
 /* global variable because fe-auth.c needs to access it */
@@ -1009,6 +1021,46 @@ parse_comma_separated_list(char **startptr, bool *more)
 }
 
 /*
+ * Initializes the prng_state field of the connection. We want something
+ * unpredictable, so if possible, use high-quality random bits for the
+ * seed. Otherwise, fall back to a seed based on timestamp and PID.
+ */
+static bool
+libpq_prng_init(PGconn *conn)
+{
+	if (unlikely(conn->randomseed))
+	{
+		int			rseed;
+
+		if (!parse_int_param(conn->randomseed, &rseed, conn, "random_seed"))
+		{
+			return false;
+		};
+		pg_prng_seed(&conn->prng_state, rseed);
+	}
+	else if (unlikely(!pg_prng_strong_seed(&conn->prng_state)))
+	{
+		uint64		rseed;
+		time_t		now = time(NULL);
+
+		/*
+		 * Since PIDs and timestamps tend to change more frequently in their
+		 * least significant bits, shift the timestamp left to allow a larger
+		 * total number of seeds in a given time period.  Since that would
+		 * leave only 20 bits of the timestamp that cycle every ~1 second,
+		 * also mix in some higher bits.
+		 */
+		rseed = ((uint64) getpid()) ^
+			((uint64) now << 12) ^
+			((uint64) now >> 20);
+
+		pg_prng_seed(&conn->prng_state, rseed);
+	}
+	return true;
+}
+
+
+/*
  *		connectOptions2
  *
  * Compute derived connection options after absorbing all user-supplied info.
@@ -1020,6 +1072,7 @@ static bool
 connectOptions2(PGconn *conn)
 {
 	int			i;
+	int			loadbalancehosts = loadBalance(conn);
 
 	/*
 	 * Allocate memory for details about each host to which we might possibly
@@ -1166,6 +1219,36 @@ connectOptions2(PGconn *conn)
 			return false;
 		}
 	}
+
+	if (loadbalancehosts < 0)
+	{
+		appendPQExpBufferStr(&conn->errorMessage,
+							 libpq_gettext("loadbalance parameter must be an integer\n"));
+		return false;
+	}
+
+	if (loadbalancehosts)
+	{
+		if (!libpq_prng_init(conn))
+		{
+			return false;
+		}
+
+		/*
+		 * Shuffle connhost with a Durstenfeld/Knuth version of the
+		 * Fisher-Yates shuffle. Source:
+		 * https://en.wikipedia.org/wiki/Fisher%E2%80%93Yates_shuffle#The_modern_algorithm
+		 */
+		for (i = conn->nconnhost - 1; i > 0; i--)
+		{
+			int			j = pg_prng_uint64_range(&conn->prng_state, 0, i);
+			pg_conn_host temp = conn->connhost[j];
+
+			conn->connhost[j] = conn->connhost[i];
+			conn->connhost[i] = temp;
+		}
+	}
+
 
 	/*
 	 * If user name was not given, fetch it.  (Most likely, the fetch will
@@ -1746,6 +1829,27 @@ connectFailureMessage(PGconn *conn, int errorno)
 }
 
 /*
+ * Should we load balance across hosts? Returns 1 if yes, 0 if no, and -1 if
+ * conn->loadbalance is set to a value which is not parseable as an integer.
+ */
+static int
+loadBalance(PGconn *conn)
+{
+	char	   *ep;
+	int			val;
+
+	if (conn->loadbalance == NULL)
+	{
+		return 0;
+	}
+	val = strtol(conn->loadbalance, &ep, 10);
+	if (*ep)
+		return -1;
+	return val != 0 ? 1 : 0;
+}
+
+
+/*
  * Should we use keepalives?  Returns 1 if yes, 0 if no, and -1 if
  * conn->keepalives is set to a value which is not parseable as an
  * integer.
@@ -2102,7 +2206,7 @@ connectDBComplete(PGconn *conn)
 	time_t		finish_time = ((time_t) -1);
 	int			timeout = 0;
 	int			last_whichhost = -2;	/* certainly different from whichhost */
-	struct addrinfo *last_addr_cur = NULL;
+	int			last_whichaddr = -2;	/* certainly different from whichaddr */
 
 	if (conn == NULL || conn->status == CONNECTION_BAD)
 		return 0;
@@ -2146,11 +2250,11 @@ connectDBComplete(PGconn *conn)
 		if (flag != PGRES_POLLING_OK &&
 			timeout > 0 &&
 			(conn->whichhost != last_whichhost ||
-			 conn->addr_cur != last_addr_cur))
+			 conn->whichaddr != last_whichaddr))
 		{
 			finish_time = time(NULL) + timeout;
 			last_whichhost = conn->whichhost;
-			last_addr_cur = conn->addr_cur;
+			last_whichaddr = conn->whichaddr;
 		}
 
 		/*
@@ -2298,9 +2402,9 @@ keep_going:						/* We will come back to here until there is
 	/* Time to advance to next address, or next host if no more addresses? */
 	if (conn->try_next_addr)
 	{
-		if (conn->addr_cur && conn->addr_cur->ai_next)
+		if (conn->whichaddr < conn->naddr)
 		{
-			conn->addr_cur = conn->addr_cur->ai_next;
+			conn->whichaddr++;
 			reset_connection_state_machine = true;
 		}
 		else
@@ -2313,6 +2417,7 @@ keep_going:						/* We will come back to here until there is
 	{
 		pg_conn_host *ch;
 		struct addrinfo hint;
+		struct addrinfo *addrlist;
 		int			thisport;
 		int			ret;
 		char		portstr[MAXPGPATH];
@@ -2353,7 +2458,7 @@ keep_going:						/* We will come back to here until there is
 		/* Initialize hint structure */
 		MemSet(&hint, 0, sizeof(hint));
 		hint.ai_socktype = SOCK_STREAM;
-		conn->addrlist_family = hint.ai_family = AF_UNSPEC;
+		hint.ai_family = AF_UNSPEC;
 
 		/* Figure out the port number we're going to use. */
 		if (ch->port == NULL || ch->port[0] == '\0')
@@ -2378,8 +2483,8 @@ keep_going:						/* We will come back to here until there is
 		{
 			case CHT_HOST_NAME:
 				ret = pg_getaddrinfo_all(ch->host, portstr, &hint,
-										 &conn->addrlist);
-				if (ret || !conn->addrlist)
+										 &addrlist);
+				if (ret || !addrlist)
 				{
 					appendPQExpBuffer(&conn->errorMessage,
 									  libpq_gettext("could not translate host name \"%s\" to address: %s\n"),
@@ -2391,8 +2496,8 @@ keep_going:						/* We will come back to here until there is
 			case CHT_HOST_ADDRESS:
 				hint.ai_flags = AI_NUMERICHOST;
 				ret = pg_getaddrinfo_all(ch->hostaddr, portstr, &hint,
-										 &conn->addrlist);
-				if (ret || !conn->addrlist)
+										 &addrlist);
+				if (ret || !addrlist)
 				{
 					appendPQExpBuffer(&conn->errorMessage,
 									  libpq_gettext("could not parse network address \"%s\": %s\n"),
@@ -2402,7 +2507,7 @@ keep_going:						/* We will come back to here until there is
 				break;
 
 			case CHT_UNIX_SOCKET:
-				conn->addrlist_family = hint.ai_family = AF_UNIX;
+				hint.ai_family = AF_UNIX;
 				UNIXSOCK_PATH(portstr, thisport, ch->host);
 				if (strlen(portstr) >= UNIXSOCK_PATH_BUFLEN)
 				{
@@ -2418,8 +2523,8 @@ keep_going:						/* We will come back to here until there is
 				 * name as a Unix-domain socket path.
 				 */
 				ret = pg_getaddrinfo_all(NULL, portstr, &hint,
-										 &conn->addrlist);
-				if (ret || !conn->addrlist)
+										 &addrlist);
+				if (ret || !addrlist)
 				{
 					appendPQExpBuffer(&conn->errorMessage,
 									  libpq_gettext("could not translate Unix-domain socket path \"%s\" to address: %s\n"),
@@ -2429,8 +2534,15 @@ keep_going:						/* We will come back to here until there is
 				break;
 		}
 
-		/* OK, scan this addrlist for a working server address */
-		conn->addr_cur = conn->addrlist;
+		if (!store_conn_addrinfo(conn, addrlist))
+		{
+			pg_freeaddrinfo_all(hint.ai_family, addrlist);
+			appendPQExpBufferStr(&conn->errorMessage,
+								 libpq_gettext("out of memory\n"));
+			goto error_return;
+		}
+		pg_freeaddrinfo_all(hint.ai_family, addrlist);
+
 		reset_connection_state_machine = true;
 		conn->try_next_host = false;
 	}
@@ -2487,30 +2599,29 @@ keep_going:						/* We will come back to here until there is
 			{
 				/*
 				 * Try to initiate a connection to one of the addresses
-				 * returned by pg_getaddrinfo_all().  conn->addr_cur is the
+				 * returned by pg_getaddrinfo_all().  conn->whichaddr is the
 				 * next one to try.
 				 *
 				 * The extra level of braces here is historical.  It's not
 				 * worth reindenting this whole switch case to remove 'em.
 				 */
 				{
-					struct addrinfo *addr_cur = conn->addr_cur;
 					char		host_addr[NI_MAXHOST];
+					AddrInfo   *addr_cur;
 
 					/*
 					 * Advance to next possible host, if we've tried all of
 					 * the addresses for the current host.
 					 */
-					if (addr_cur == NULL)
+					if (conn->whichaddr == conn->naddr)
 					{
 						conn->try_next_host = true;
 						goto keep_going;
 					}
+					addr_cur = &conn->addr[conn->whichaddr];
 
 					/* Remember current address for possible use later */
-					memcpy(&conn->raddr.addr, addr_cur->ai_addr,
-						   addr_cur->ai_addrlen);
-					conn->raddr.salen = addr_cur->ai_addrlen;
+					memcpy(&conn->raddr, &addr_cur->addr, sizeof(SockAddr));
 
 					/*
 					 * Set connip, too.  Note we purposely ignore strdup
@@ -2526,7 +2637,7 @@ keep_going:						/* We will come back to here until there is
 						conn->connip = strdup(host_addr);
 
 					/* Try to create the socket */
-					conn->sock = socket(addr_cur->ai_family, SOCK_STREAM, 0);
+					conn->sock = socket(addr_cur->family, SOCK_STREAM, 0);
 					if (conn->sock == PGINVALID_SOCKET)
 					{
 						int			errorno = SOCK_ERRNO;
@@ -2537,7 +2648,7 @@ keep_going:						/* We will come back to here until there is
 						 * cases where the address list includes both IPv4 and
 						 * IPv6 but kernel only accepts one family.
 						 */
-						if (addr_cur->ai_next != NULL ||
+						if (conn->whichaddr < conn->naddr ||
 							conn->whichhost + 1 < conn->nconnhost)
 						{
 							conn->try_next_addr = true;
@@ -2564,7 +2675,7 @@ keep_going:						/* We will come back to here until there is
 					 * TCP sockets, nonblock mode, close-on-exec.  Try the
 					 * next address if any of this fails.
 					 */
-					if (addr_cur->ai_family != AF_UNIX)
+					if (addr_cur->family != AF_UNIX)
 					{
 						if (!connectNoDelay(conn))
 						{
@@ -2593,7 +2704,7 @@ keep_going:						/* We will come back to here until there is
 					}
 #endif							/* F_SETFD */
 
-					if (addr_cur->ai_family != AF_UNIX)
+					if (addr_cur->family != AF_UNIX)
 					{
 #ifndef WIN32
 						int			on = 1;
@@ -2687,8 +2798,8 @@ keep_going:						/* We will come back to here until there is
 					 * Start/make connection.  This should not block, since we
 					 * are in nonblock mode.  If it does, well, too bad.
 					 */
-					if (connect(conn->sock, addr_cur->ai_addr,
-								addr_cur->ai_addrlen) < 0)
+					if (connect(conn->sock, (struct sockaddr *) &addr_cur->addr.addr,
+								addr_cur->addr.salen) < 0)
 					{
 						if (SOCK_ERRNO == EINPROGRESS ||
 #ifdef WIN32
@@ -4056,6 +4167,8 @@ freePGconn(PGconn *conn)
 	}
 	free(conn->pgpassfile);
 	free(conn->channel_binding);
+	free(conn->loadbalance);
+	free(conn->randomseed);
 	free(conn->keepalives);
 	free(conn->keepalives_idle);
 	free(conn->keepalives_interval);
@@ -4092,6 +4205,63 @@ freePGconn(PGconn *conn)
 	free(conn);
 }
 
+
+/*
+ * Copies over the AddrInfos from addrlist to the PGconn.
+ */
+static bool
+store_conn_addrinfo(PGconn *conn, struct addrinfo *addrlist)
+{
+	struct addrinfo *ai = addrlist;
+
+	conn->whichaddr = 0;
+
+	conn->naddr = 0;
+	while (ai)
+	{
+		ai = ai->ai_next;
+		conn->naddr++;
+	}
+
+	conn->addr = calloc(conn->naddr, sizeof(AddrInfo));
+	if (conn->addr == NULL)
+	{
+		return false;
+	}
+
+	ai = addrlist;
+	for (int i = 0; i < conn->naddr; i++)
+	{
+		conn->addr[i].family = ai->ai_family;
+
+		memcpy(&conn->addr[i].addr.addr, ai->ai_addr,
+			   ai->ai_addrlen);
+		conn->addr[i].addr.salen = ai->ai_addrlen;
+		ai = ai->ai_next;
+	}
+
+	if (loadBalance(conn))
+	{
+		/*
+		 * Shuffle addr with a Durstenfeld/Knuth version of the Fisher-Yates
+		 * shuffle. Source:
+		 * https://en.wikipedia.org/wiki/Fisher%E2%80%93Yates_shuffle#The_modern_algorithm
+		 *
+		 * We don't need to initialize conn->prng_state here, because that
+		 * already happened in connectOptions2.
+		 */
+		for (int i = conn->naddr - 1; i > 0; i--)
+		{
+			int			j = pg_prng_uint64_range(&conn->prng_state, 0, i);
+			AddrInfo	temp = conn->addr[j];
+
+			conn->addr[j] = conn->addr[i];
+			conn->addr[i] = temp;
+		}
+	}
+	return true;
+}
+
 /*
  * release_conn_addrinfo
  *	 - Free any addrinfo list in the PGconn.
@@ -4099,11 +4269,10 @@ freePGconn(PGconn *conn)
 static void
 release_conn_addrinfo(PGconn *conn)
 {
-	if (conn->addrlist)
+	if (conn->addr)
 	{
-		pg_freeaddrinfo_all(conn->addrlist_family, conn->addrlist);
-		conn->addrlist = NULL;
-		conn->addr_cur = NULL;	/* for safety */
+		free(conn->addr);
+		conn->addr = NULL;
 	}
 }
 

@@ -1316,6 +1316,54 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
       </listitem>
      </varlistentry>
 
+     <varlistentry id="libpq-load-balance-hosts" xreflabel="load_balance_hosts">
+      <term><literal>load_balance_hosts</literal></term>
+      <listitem>
+       <para>
+        Controls whether the client load balances connections across hosts and
+        adresses. The default value is 0, meaning off, this means that hosts are
+        tried in order they are provided and addresses are tried in the order
+        they are received from DNS or a hosts file. If this value is set to 1,
+        meaning on, the hosts and addresses that they resolve to are tried in
+        random order. Subsequent queries once connected will still be sent to
+        the same server. Setting this to 1, is mostly useful when opening
+        multiple connections at the same time, possibly from different machines.
+        This way connections can be load balanced across multiple Postgres
+        servers.
+       </para>
+       <para>
+        When providing multiple hosts, these hosts are resolved in random order.
+        Then if that host resolves to multiple addresses, these addresses are
+        connected to in random order. Only once all addresses for a single host
+        have been tried, the addresses for the next random host will be
+        resolved. This behaviour can lead to non-uniform address selection in
+        certain cases. Such as when not all hosts resolve to the same number of
+        addresses, or when multiple hosts resolve to the same address. So if you
+        want uniform load balancing, this is something to keep in mind. However,
+        non-uniform load balancing also has usecases, e.g. providing the
+        hostname of a larger server multiple times in the host string so it gets
+        more requests.
+       </para>
+       <para>
+        When using this setting it's recommended to also configure a reasonable
+        value for <xref linkend="libpq-connect-connect-timeout"/>. Because then,
+        if one of the nodes that are used for load balancing is not responding,
+        a new node will be tried.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="libpq-random-seed" xreflabel="random_seed">
+      <term><literal>random_seed</literal></term>
+      <listitem>
+       <para>
+        Sets the random seed that is used by <xref linkend="libpq-load-balance-hosts"/>
+        to randomize the host order. This option is mostly useful when running
+        tests that require a stable random order.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="libpq-keepalives" xreflabel="keepalives">
       <term><literal>keepalives</literal></term>
       <listitem>

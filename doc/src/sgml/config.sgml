@@ -8210,7 +8210,7 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
         Note that even when this parameter is disabled, the system
         will launch autovacuum processes if necessary to
         prevent transaction ID wraparound.  See <xref
-        linkend="vacuum-for-wraparound"/> for more information.
+        linkend="vacuum-xid-space"/> for more information.
        </para>
       </listitem>
      </varlistentry>
@@ -8399,7 +8399,7 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
         This parameter can only be set at server start, but the setting
         can be reduced for individual tables by
         changing table storage parameters.
-        For more information see <xref linkend="vacuum-for-wraparound"/>.
+        For more information see <xref linkend="vacuum-xid-space"/>.
        </para>
       </listitem>
      </varlistentry>
@@ -9123,19 +9123,45 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
       </term>
       <listitem>
        <para>
-        <command>VACUUM</command> performs an aggressive scan if the table's
-        <structname>pg_class</structname>.<structfield>relfrozenxid</structfield> field has reached
-        the age specified by this setting.  An aggressive scan differs from
-        a regular <command>VACUUM</command> in that it visits every page that might
-        contain unfrozen XIDs or MXIDs, not just those that might contain dead
-        tuples.  The default is 150 million transactions.  Although users can
-        set this value anywhere from zero to two billion, <command>VACUUM</command>
-        will silently limit the effective value to 95% of
-        <xref linkend="guc-autovacuum-freeze-max-age"/>, so that a
-        periodic manual <command>VACUUM</command> has a chance to run before an
-        anti-wraparound autovacuum is launched for the table. For more
-        information see
-        <xref linkend="vacuum-for-wraparound"/>.
+        <command>VACUUM</command> performs antiwraparound vacuuming if the
+        table's <structname>pg_class</structname>.<structfield>relfrozenxid</structfield>
+        field has reached the age specified by this setting.
+        Antiwraparound vacuuming differs from regular vacuuming in
+        that it will reliably advance
+        <structfield>relfrozenxid</structfield> to a recent value,
+        even when <command>VACUUM</command> wouldn't usually deemed it
+        necessary.  The default is -1.  If -1 is specified, the value
+        of <xref linkend="guc-autovacuum-freeze-max-age"/> is used.
+        Although users can set this value anywhere from zero to two
+        billion, <command>VACUUM</command> will silently limit the
+        effective value to <xref
+         linkend="guc-autovacuum-freeze-max-age"/>. For more
+        information see <xref linkend="vacuum-xid-space"/>.
+       </para>
+       <note>
+        <para>
+         The meaning of this parameter, and its default value, changed
+         in <productname>PostgreSQL</productname> 16.  Freezing and
+         advancing
+         <structname>pg_class</structname>.<structfield>relfrozenxid</structfield>
+         now take place more proactively, in every
+         <command>VACUUM</command> operation.
+        </para>
+       </note>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-vacuum-freeze-strategy-threshold" xreflabel="vacuum_freeze_strategy_threshold">
+      <term><varname>vacuum_freeze_strategy_threshold</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>vacuum_freeze_strategy_threshold</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies the cutoff size (in pages) that <command>VACUUM</command>
+        should use to decide whether to its eager freezing strategy.
+        The default is 4 gigabytes (<literal>4GB</literal>).
        </para>
       </listitem>
      </varlistentry>
@@ -9148,16 +9174,18 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
       </term>
       <listitem>
        <para>
-        Specifies the cutoff age (in transactions) that <command>VACUUM</command>
-        should use to decide whether to freeze row versions
-        while scanning a table.
+        Specifies the cutoff age (in transactions) that
+        <command>VACUUM</command> should use to decide whether to
+        trigger freezing of pages that have an older XID.  When VACUUM
+        uses its eager freezing strategy, freezing a page can also be
+        triggered when the page contains only all-visible tuples.
         The default is 50 million transactions.  Although
         users can set this value anywhere from zero to one billion,
         <command>VACUUM</command> will silently limit the effective value to half
         the value of <xref linkend="guc-autovacuum-freeze-max-age"/>, so
-        that there is not an unreasonably short time between forced
+        that there is not an unreasonably short time between forced antiwraparound
         autovacuums.  For more information see <xref
-        linkend="vacuum-for-wraparound"/>.
+        linkend="vacuum-xid-space"/>.
        </para>
       </listitem>
      </varlistentry>
@@ -9203,19 +9231,28 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
       </term>
       <listitem>
        <para>
-        <command>VACUUM</command> performs an aggressive scan if the table's
-        <structname>pg_class</structname>.<structfield>relminmxid</structfield> field has reached
-        the age specified by this setting.  An aggressive scan differs from
-        a regular <command>VACUUM</command> in that it visits every page that might
-        contain unfrozen XIDs or MXIDs, not just those that might contain dead
-        tuples.  The default is 150 million multixacts.
-        Although users can set this value anywhere from zero to two billion,
-        <command>VACUUM</command> will silently limit the effective value to 95% of
-        <xref linkend="guc-autovacuum-multixact-freeze-max-age"/>, so that a
-        periodic manual <command>VACUUM</command> has a chance to run before an
-        anti-wraparound is launched for the table.
-        For more information see <xref linkend="vacuum-for-multixact-wraparound"/>.
+        <command>VACUUM</command> performs antiwraparound vacuuming if
+        the table's <structname>pg_class</structname>.<structfield>relminmxid</structfield>
+        field has reached the multixact age specified by this setting.
+        Antiwraparound vacuuming differs from regular vacuuming in
+        that it will reliably advance
+        <structfield>relminmxid</structfield> to a recent value, even
+        when <command>VACUUM</command> wouldn't usually deemed it
+        necessary.  The default is -1.  If -1 is specified, the value
+        of <xref linkend="guc-autovacuum-multixact-freeze-max-age"/>
+        is used.  For more information see <xref
+         linkend="vacuum-xid-space"/>.
        </para>
+       <note>
+        <para>
+         The meaning of this parameter, and its default value, changed
+         in <productname>PostgreSQL</productname> 16.  Freezing and
+         advancing
+         <structname>pg_class</structname>.<structfield>relminmxid</structfield>
+         now take place more proactively, in every
+         <command>VACUUM</command> operation.
+        </para>
+       </note>
       </listitem>
      </varlistentry>
 
@@ -9227,14 +9264,14 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
       </term>
       <listitem>
        <para>
-        Specifies the cutoff age (in multixacts) that <command>VACUUM</command>
-        should use to decide whether to replace multixact IDs with a newer
-        transaction ID or multixact ID while scanning a table.  The default
-        is 5 million multixacts.
+        Specifies the cutoff age (in multixacts) that
+        <command>VACUUM</command> should use to decide whether to
+        trigger freezing of pages with an older multixact ID.  The
+        default is 5 million multixacts.
         Although users can set this value anywhere from zero to one billion,
         <command>VACUUM</command> will silently limit the effective value to half
         the value of <xref linkend="guc-autovacuum-multixact-freeze-max-age"/>,
-        so that there is not an unreasonably short time between forced
+        so that there is not an unreasonably short time between forced antiwraparound
         autovacuums.
         For more information see <xref linkend="vacuum-for-multixact-wraparound"/>.
        </para>

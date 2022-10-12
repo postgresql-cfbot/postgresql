@@ -324,7 +324,7 @@ postgres=# select * from pg_logical_slot_get_changes('regression_slot', NULL, NU
       because neither required WAL nor required rows from the system catalogs
       can be removed by <command>VACUUM</command> as long as they are required by a replication
       slot.  In extreme cases this could cause the database to shut down to prevent
-      transaction ID wraparound (see <xref linkend="vacuum-for-wraparound"/>).
+      transaction ID wraparound (see <xref linkend="vacuum-xid-space"/>).
       So if a slot is no longer required it should be dropped.
      </para>
     </caution>

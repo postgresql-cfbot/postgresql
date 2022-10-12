@@ -400,18 +400,8 @@
    </para>
   </sect2>
 
-  <sect2 id="vacuum-for-wraparound">
-   <title>Preventing Transaction ID Wraparound Failures</title>
-
-   <indexterm zone="vacuum-for-wraparound">
-    <primary>transaction ID</primary>
-    <secondary>wraparound</secondary>
-   </indexterm>
-
-    <indexterm>
-     <primary>wraparound</primary>
-     <secondary>of transaction IDs</secondary>
-    </indexterm>
+  <sect2 id="vacuum-xid-space">
+   <title>Managing the 32-bit Transaction ID address space</title>
 
    <para>
     <productname>PostgreSQL</productname>'s
@@ -419,165 +409,23 @@
     depend on being able to compare transaction ID (<acronym>XID</acronym>)
     numbers: a row version with an insertion XID greater than the current
     transaction's XID is <quote>in the future</quote> and should not be visible
-    to the current transaction.  But since transaction IDs have limited size
-    (32 bits) a cluster that runs for a long time (more
-    than 4 billion transactions) would suffer <firstterm>transaction ID
-    wraparound</firstterm>: the XID counter wraps around to zero, and all of a sudden
-    transactions that were in the past appear to be in the future &mdash; which
-    means their output become invisible.  In short, catastrophic data loss.
-    (Actually the data is still there, but that's cold comfort if you cannot
-    get at it.)  To avoid this, it is necessary to vacuum every table
-    in every database at least once every two billion transactions.
+    to the current transaction.  But since the on-disk representation
+    of transaction IDs is only 32-bits, the system is incapable of
+    representing <emphasis>distances</emphasis> between any two XIDs
+    that exceed about 2 billion transaction IDs.
    </para>
 
    <para>
-    The reason that periodic vacuuming solves the problem is that
-    <command>VACUUM</command> will mark rows as <emphasis>frozen</emphasis>, indicating that
-    they were inserted by a transaction that committed sufficiently far in
-    the past that the effects of the inserting transaction are certain to be
-    visible to all current and future transactions.
-    Normal XIDs are
-    compared using modulo-2<superscript>32</superscript> arithmetic. This means
-    that for every normal XID, there are two billion XIDs that are
-    <quote>older</quote> and two billion that are <quote>newer</quote>; another
-    way to say it is that the normal XID space is circular with no
-    endpoint. Therefore, once a row version has been created with a particular
-    normal XID, the row version will appear to be <quote>in the past</quote> for
-    the next two billion transactions, no matter which normal XID we are
-    talking about. If the row version still exists after more than two billion
-    transactions, it will suddenly appear to be in the future. To
-    prevent this, <productname>PostgreSQL</productname> reserves a special XID,
-    <literal>FrozenTransactionId</literal>, which does not follow the normal XID
-    comparison rules and is always considered older
-    than every normal XID.
-    Frozen row versions are treated as if the inserting XID were
-    <literal>FrozenTransactionId</literal>, so that they will appear to be
-    <quote>in the past</quote> to all normal transactions regardless of wraparound
-    issues, and so such row versions will be valid until deleted, no matter
-    how long that is.
-   </para>
-
-   <note>
-    <para>
-     In <productname>PostgreSQL</productname> versions before 9.4, freezing was
-     implemented by actually replacing a row's insertion XID
-     with <literal>FrozenTransactionId</literal>, which was visible in the
-     row's <structname>xmin</structname> system column.  Newer versions just set a flag
-     bit, preserving the row's original <structname>xmin</structname> for possible
-     forensic use.  However, rows with <structname>xmin</structname> equal
-     to <literal>FrozenTransactionId</literal> (2) may still be found
-     in databases <application>pg_upgrade</application>'d from pre-9.4 versions.
-    </para>
-    <para>
-     Also, system catalogs may contain rows with <structname>xmin</structname> equal
-     to <literal>BootstrapTransactionId</literal> (1), indicating that they were
-     inserted during the first phase of <application>initdb</application>.
-     Like <literal>FrozenTransactionId</literal>, this special XID is treated as
-     older than every normal XID.
-    </para>
-   </note>
-
-   <para>
-    <xref linkend="guc-vacuum-freeze-min-age"/>
-    controls how old an XID value has to be before rows bearing that XID will be
-    frozen.  Increasing this setting may avoid unnecessary work if the
-    rows that would otherwise be frozen will soon be modified again,
-    but decreasing this setting increases
-    the number of transactions that can elapse before the table must be
-    vacuumed again.
-   </para>
-
-   <para>
-    <command>VACUUM</command> uses the <link linkend="storage-vm">visibility map</link>
-    to determine which pages of a table must be scanned.  Normally, it
-    will skip pages that don't have any dead row versions even if those pages
-    might still have row versions with old XID values.  Therefore, normal
-    <command>VACUUM</command>s won't always freeze every old row version in the table.
-    When that happens, <command>VACUUM</command> will eventually need to perform an
-    <firstterm>aggressive vacuum</firstterm>, which will freeze all eligible unfrozen
-    XID and MXID values, including those from all-visible but not all-frozen pages.
-    In practice most tables require periodic aggressive vacuuming.
-    <xref linkend="guc-vacuum-freeze-table-age"/>
-    controls when <command>VACUUM</command> does that: all-visible but not all-frozen
-    pages are scanned if the number of transactions that have passed since the
-    last such scan is greater than <varname>vacuum_freeze_table_age</varname> minus
-    <varname>vacuum_freeze_min_age</varname>. Setting
-    <varname>vacuum_freeze_table_age</varname> to 0 forces <command>VACUUM</command> to
-    always use its aggressive strategy.
-   </para>
-
-   <para>
-    The maximum time that a table can go unvacuumed is two billion
-    transactions minus the <varname>vacuum_freeze_min_age</varname> value at
-    the time of the last aggressive vacuum. If it were to go
-    unvacuumed for longer than
-    that, data loss could result.  To ensure that this does not happen,
-    autovacuum is invoked on any table that might contain unfrozen rows with
-    XIDs older than the age specified by the configuration parameter <xref
-    linkend="guc-autovacuum-freeze-max-age"/>.  (This will happen even if
-    autovacuum is disabled.)
-   </para>
-
-   <para>
-    This implies that if a table is not otherwise vacuumed,
-    autovacuum will be invoked on it approximately once every
-    <varname>autovacuum_freeze_max_age</varname> minus
-    <varname>vacuum_freeze_min_age</varname> transactions.
-    For tables that are regularly vacuumed for space reclamation purposes,
-    this is of little importance.  However, for static tables
-    (including tables that receive inserts, but no updates or deletes),
-    there is no need to vacuum for space reclamation, so it can
-    be useful to try to maximize the interval between forced autovacuums
-    on very large static tables.  Obviously one can do this either by
-    increasing <varname>autovacuum_freeze_max_age</varname> or decreasing
-    <varname>vacuum_freeze_min_age</varname>.
-   </para>
-
-   <para>
-    The effective maximum for <varname>vacuum_freeze_table_age</varname> is 0.95 *
-    <varname>autovacuum_freeze_max_age</varname>; a setting higher than that will be
-    capped to the maximum. A value higher than
-    <varname>autovacuum_freeze_max_age</varname> wouldn't make sense because an
-    anti-wraparound autovacuum would be triggered at that point anyway, and
-    the 0.95 multiplier leaves some breathing room to run a manual
-    <command>VACUUM</command> before that happens.  As a rule of thumb,
-    <command>vacuum_freeze_table_age</command> should be set to a value somewhat
-    below <varname>autovacuum_freeze_max_age</varname>, leaving enough gap so that
-    a regularly scheduled <command>VACUUM</command> or an autovacuum triggered by
-    normal delete and update activity is run in that window.  Setting it too
-    close could lead to anti-wraparound autovacuums, even though the table
-    was recently vacuumed to reclaim space, whereas lower values lead to more
-    frequent aggressive vacuuming.
-   </para>
-
-   <para>
-    The sole disadvantage of increasing <varname>autovacuum_freeze_max_age</varname>
-    (and <varname>vacuum_freeze_table_age</varname> along with it) is that
-    the <filename>pg_xact</filename> and <filename>pg_commit_ts</filename>
-    subdirectories of the database cluster will take more space, because it
-    must store the commit status and (if <varname>track_commit_timestamp</varname> is
-    enabled) timestamp of all transactions back to
-    the <varname>autovacuum_freeze_max_age</varname> horizon.  The commit status uses
-    two bits per transaction, so if
-    <varname>autovacuum_freeze_max_age</varname> is set to its maximum allowed value
-    of two billion, <filename>pg_xact</filename> can be expected to grow to about half
-    a gigabyte and <filename>pg_commit_ts</filename> to about 20GB.  If this
-    is trivial compared to your total database size,
-    setting <varname>autovacuum_freeze_max_age</varname> to its maximum allowed value
-    is recommended.  Otherwise, set it depending on what you are willing to
-    allow for <filename>pg_xact</filename> and <filename>pg_commit_ts</filename> storage.
-    (The default, 200 million transactions, translates to about 50MB
-    of <filename>pg_xact</filename> storage and about 2GB of <filename>pg_commit_ts</filename>
-    storage.)
-   </para>
-
-   <para>
-    One disadvantage of decreasing <varname>vacuum_freeze_min_age</varname> is that
-    it might cause <command>VACUUM</command> to do useless work: freezing a row
-    version is a waste of time if the row is modified
-    soon thereafter (causing it to acquire a new XID).  So the setting should
-    be large enough that rows are not frozen until they are unlikely to change
-    any more.
+    One of the purposes of periodic vacuuming is to manage the
+    Transaction Id address space.  <command>VACUUM</command> will mark
+    rows as <emphasis>frozen</emphasis>, indicating that they were
+    inserted by a transaction that committed sufficiently far in the
+    past that the effects of the inserting transaction are certain to
+    be visible to all current and future transactions.  There is, in
+    effect, an infinite distance between a frozen transaction ID and
+    any unfrozen transaction ID.  This allows the on-disk
+    representation of transaction IDs to recycle the 32-bit address
+    space efficiently.
    </para>
 
    <para>
@@ -587,15 +435,15 @@
     <structname>pg_database</structname>.  In particular,
     the <structfield>relfrozenxid</structfield> column of a table's
     <structname>pg_class</structname> row contains the oldest remaining unfrozen
-    XID at the end of the most recent <command>VACUUM</command> that successfully
-    advanced <structfield>relfrozenxid</structfield> (typically the most recent
-    aggressive VACUUM).  Similarly, the
+    XID at the end of the most recent <command>VACUUM</command>.  All
+    rows inserted by transactions older than this cutoff XID are
+    guaranteed to have been frozen.  Similarly, the
     <structfield>datfrozenxid</structfield> column of a database's
-    <structname>pg_database</structname> row is a lower bound on the unfrozen XIDs
-    appearing in that database &mdash; it is just the minimum of the
-    per-table <structfield>relfrozenxid</structfield> values within the database.
-    A convenient way to
-    examine this information is to execute queries such as:
+    <structname>pg_database</structname> row is a lower bound on the
+    unfrozen XIDs appearing in that database &mdash; it is just the
+    minimum of the per-table <structfield>relfrozenxid</structfield>
+    values within the database.  A convenient way to examine this
+    information is to execute queries such as:
 
 <programlisting>
 SELECT c.oid::regclass as table_name,
@@ -611,87 +459,11 @@ SELECT datname, age(datfrozenxid) FROM pg_database;
     cutoff XID to the current transaction's XID.
    </para>
 
-   <tip>
-    <para>
-     When the <command>VACUUM</command> command's <literal>VERBOSE</literal>
-     parameter is specified, <command>VACUUM</command> prints various
-     statistics about the table.  This includes information about how
-     <structfield>relfrozenxid</structfield> and
-     <structfield>relminmxid</structfield> advanced.  The same details appear
-     in the server log when autovacuum logging (controlled by <xref
-      linkend="guc-log-autovacuum-min-duration"/>) reports on a
-     <command>VACUUM</command> operation executed by autovacuum.
-    </para>
-   </tip>
-
-   <para>
-    <command>VACUUM</command> normally only scans pages that have been modified
-    since the last vacuum, but <structfield>relfrozenxid</structfield> can only be
-    advanced when every page of the table
-    that might contain unfrozen XIDs is scanned.  This happens when
-    <structfield>relfrozenxid</structfield> is more than
-    <varname>vacuum_freeze_table_age</varname> transactions old, when
-    <command>VACUUM</command>'s <literal>FREEZE</literal> option is used, or when all
-    pages that are not already all-frozen happen to
-    require vacuuming to remove dead row versions. When <command>VACUUM</command>
-    scans every page in the table that is not already all-frozen, it should
-    set <literal>age(relfrozenxid)</literal> to a value just a little more than the
-    <varname>vacuum_freeze_min_age</varname> setting
-    that was used (more by the number of transactions started since the
-    <command>VACUUM</command> started).  <command>VACUUM</command>
-    will set <structfield>relfrozenxid</structfield> to the oldest XID
-    that remains in the table, so it's possible that the final value
-    will be much more recent than strictly required.
-    If no <structfield>relfrozenxid</structfield>-advancing
-    <command>VACUUM</command> is issued on the table until
-    <varname>autovacuum_freeze_max_age</varname> is reached, an autovacuum will soon
-    be forced for the table.
-   </para>
-
-   <para>
-    If for some reason autovacuum fails to clear old XIDs from a table, the
-    system will begin to emit warning messages like this when the database's
-    oldest XIDs reach forty million transactions from the wraparound point:
-
-<programlisting>
-WARNING:  database "mydb" must be vacuumed within 39985967 transactions
-HINT:  To avoid a database shutdown, execute a database-wide VACUUM in that database.
-</programlisting>
-
-    (A manual <command>VACUUM</command> should fix the problem, as suggested by the
-    hint; but note that the <command>VACUUM</command> must be performed by a
-    superuser, else it will fail to process system catalogs and thus not
-    be able to advance the database's <structfield>datfrozenxid</structfield>.)
-    If these warnings are
-    ignored, the system will shut down and refuse to start any new
-    transactions once there are fewer than three million transactions left
-    until wraparound:
-
-<programlisting>
-ERROR:  database is not accepting commands to avoid wraparound data loss in database "mydb"
-HINT:  Stop the postmaster and vacuum that database in single-user mode.
-</programlisting>
-
-    The three-million-transaction safety margin exists to let the
-    administrator recover without data loss, by manually executing the
-    required <command>VACUUM</command> commands.  However, since the system will not
-    execute commands once it has gone into the safety shutdown mode,
-    the only way to do this is to stop the server and start the server in single-user
-    mode to execute <command>VACUUM</command>.  The shutdown mode is not enforced
-    in single-user mode.  See the <xref linkend="app-postgres"/> reference
-    page for details about using single-user mode.
-   </para>
-
    <sect3 id="vacuum-for-multixact-wraparound">
-    <title>Multixacts and Wraparound</title>
+    <title>Managing the 32-bit MultiXactId address space</title>
 
     <indexterm>
      <primary>MultiXactId</primary>
-    </indexterm>
-
-    <indexterm>
-     <primary>wraparound</primary>
-     <secondary>of multixact IDs</secondary>
     </indexterm>
 
     <para>
@@ -704,49 +476,137 @@ HINT:  Stop the postmaster and vacuum that database in single-user mode.
      particular multixact ID is stored separately in
      the <filename>pg_multixact</filename> subdirectory, and only the multixact ID
      appears in the <structfield>xmax</structfield> field in the tuple header.
-     Like transaction IDs, multixact IDs are implemented as a
-     32-bit counter and corresponding storage, all of which requires
-     careful aging management, storage cleanup, and wraparound handling.
-     There is a separate storage area which holds the list of members in
-     each multixact, which also uses a 32-bit counter and which must also
-     be managed.
+     Like transaction IDs, multixact IDs are implemented as a 32-bit
+     counter and corresponding storage.
+    </para>
+    <para>
+     A separate <structfield>relminmxid</structfield> field can be
+     advanced any time <structfield>relfrozenxid</structfield> is
+     advanced.  <command>VACUUM</command> manages the MultiXactId
+     address space by implementing rules that are analogous to the
+     approach taken with Transaction IDs.  Many of the XID-based
+     settings that influence <command>VACUUM</command>'s behavior have
+     direct MultiXactId analogs. A convenient way to examine
+     information about the MultiXactId address space is to execute
+     queries such as:
+    </para>
+<programlisting>
+SELECT c.oid::regclass as table_name,
+       mxid_age(c.relminmxid)
+FROM pg_class c
+WHERE c.relkind IN ('r', 'm');
+
+SELECT datname, mxid_age(datminmxid) FROM pg_database;
+</programlisting>
+   </sect3>
+
+   <sect3 id="controlling-freezing">
+    <title>Controlling freezing</title>
+   <para>
+    As a general rule, the more tuples that <command>VACUUM</command>
+    freezes, the more recently <command>VACUUM</command> can set the
+    table's <structfield>relfrozenxid</structfield> and
+    <structfield>relminmxid</structfield> fields to afterwards.
+    <xref linkend="guc-vacuum-freeze-min-age"/> and <xref
+     linkend="guc-vacuum-multixact-freeze-min-age"/> control how old
+    an XID or MultiXactId value has to be before the row will be
+    frozen (absent any other factor that triggers freezing).
+    This is only enforced in smaller tables that use the lazy freezing
+    strategy (controlled by
+    <xref linkend="guc-vacuum-freeze-strategy-threshold"/>).
+    Increasing these settings may avoid unnecessary work, but that
+    isn't generally recommended.
+   </para>
+
+   <tip>
+    <para>
+     When the <command>VACUUM</command> command's <literal>VERBOSE</literal>
+     parameter is specified, <command>VACUUM</command> prints various
+     statistics about the table.  This includes information about how
+     <structfield>relfrozenxid</structfield> and
+     <structfield>relminmxid</structfield> advanced.  The same details appear
+     in the server log when autovacuum logging (controlled by <xref
+      linkend="guc-log-autovacuum-min-duration"/>) reports on a
+     <command>VACUUM</command> operation executed by autovacuum.
+    </para>
+   </tip>
+   </sect3>
+
+   <sect3 id="anti-wraparound">
+    <title>Anti-wraparound VACUUM</title>
+
+    <indexterm>
+     <primary>wraparound</primary>
+     <secondary>of transaction IDs</secondary>
+    </indexterm>
+
+    <indexterm>
+     <primary>wraparound</primary>
+     <secondary>of multixact IDs</secondary>
+    </indexterm>
+
+    <para>
+     <structfield>relfrozenxid</structfield> and
+     <structfield>relminmxid</structfield> can only be advanced when
+     <command>VACUUM</command> actually runs.  Even then,
+     <command>VACUUM</command> must scan every page of the table that
+     might contain unfrozen XIDs.  <command>VACUUM</command> usually
+     advances <structfield>relfrozenxid</structfield> on a best-effort
+     basis, weighing costs against benefits.  This approach spreads
+     out the burden of freezing over time, across multiple
+     <command>VACUUM</command> operations.  However, if no
+     <structfield>relfrozenxid</structfield>-advancing
+     <command>VACUUM</command> is issued on the table before
+     <varname>autovacuum_freeze_max_age</varname> is reached, an
+     anti-wraparound autovacuum will soon be forced for the table.
+     This will reliably set <structfield>relfrozenxid</structfield>
+     and <structfield>relminmxid</structfield> to a relatively recent
+     values.
     </para>
 
     <para>
-     Whenever <command>VACUUM</command> scans any part of a table, it will replace
-     any multixact ID it encounters which is older than
-     <xref linkend="guc-vacuum-multixact-freeze-min-age"/>
-     by a different value, which can be the zero value, a single
-     transaction ID, or a newer multixact ID.  For each table,
-     <structname>pg_class</structname>.<structfield>relminmxid</structfield> stores the oldest
-     possible multixact ID still appearing in any tuple of that table.
-     If this value is older than
-     <xref linkend="guc-vacuum-multixact-freeze-table-age"/>, an aggressive
-     vacuum is forced.  As discussed in the previous section, an aggressive
-     vacuum means that only those pages which are known to be all-frozen will
-     be skipped.  <function>mxid_age()</function> can be used on
-     <structname>pg_class</structname>.<structfield>relminmxid</structfield> to find its age.
+     An anti-wraparound autovacuum will also be triggered for any
+     table whose multixact-age is greater than <xref
+      linkend="guc-autovacuum-multixact-freeze-max-age"/>.  However,
+     if the storage occupied by multixacts members exceeds 2GB,
+     anti-wraparound vacuum might occur more often than this.
     </para>
 
     <para>
-     Aggressive <command>VACUUM</command>s, regardless of what causes
-     them, are <emphasis>guaranteed</emphasis> to be able to advance
-     the table's <structfield>relminmxid</structfield>.
-     Eventually, as all tables in all databases are scanned and their
-     oldest multixact values are advanced, on-disk storage for older
-     multixacts can be removed.
-    </para>
+     If for some reason autovacuum fails to clear old XIDs from a table, the
+     system will begin to emit warning messages like this when the database's
+     oldest XIDs reach forty million transactions from the wraparound point:
 
-    <para>
-     As a safety device, an aggressive vacuum scan will
-     occur for any table whose multixact-age is greater than <xref
-     linkend="guc-autovacuum-multixact-freeze-max-age"/>.  Also, if the
-     storage occupied by multixacts members exceeds 2GB, aggressive vacuum
-     scans will occur more often for all tables, starting with those that
-     have the oldest multixact-age.  Both of these kinds of aggressive
-     scans will occur even if autovacuum is nominally disabled.
+     <programlisting>
+      WARNING:  database "mydb" must be vacuumed within 39985967 transactions
+      HINT:  To avoid a database shutdown, execute a database-wide VACUUM in that database.
+     </programlisting>
+
+     (A manual <command>VACUUM</command> should fix the problem, as suggested by the
+     hint; but note that the <command>VACUUM</command> must be performed by a
+     superuser, else it will fail to process system catalogs and thus not
+     be able to advance the database's <structfield>datfrozenxid</structfield>.)
+     If these warnings are
+     ignored, the system will shut down and refuse to start any new
+     transactions once there are fewer than three million transactions left
+     until wraparound:
+
+     <programlisting>
+      ERROR:  database is not accepting commands to avoid wraparound data loss in database "mydb"
+      HINT:  Stop the postmaster and vacuum that database in single-user mode.
+     </programlisting>
+
+     The three-million-transaction safety margin exists to let the
+     administrator recover without data loss, by manually executing the
+     required <command>VACUUM</command> commands.  However, since the system will not
+     execute commands once it has gone into the safety shutdown mode,
+     the only way to do this is to stop the server and start the server in single-user
+     mode to execute <command>VACUUM</command>.  The shutdown mode is not enforced
+     in single-user mode.  See the <xref linkend="app-postgres"/> reference
+     page for details about using single-user mode.
     </para>
    </sect3>
+
   </sect2>
 
   <sect2 id="autovacuum">
@@ -832,22 +692,13 @@ vacuum insert threshold = vacuum base insert threshold + vacuum insert scale fac
     and vacuum insert scale factor is
     <xref linkend="guc-autovacuum-vacuum-insert-scale-factor"/>.
     Such vacuums may allow portions of the table to be marked as
-    <firstterm>all visible</firstterm> and also allow tuples to be frozen, which
-    can reduce the work required in subsequent vacuums.
-    For tables which receive <command>INSERT</command> operations but no or
-    almost no <command>UPDATE</command>/<command>DELETE</command> operations,
-    it may be beneficial to lower the table's
-    <xref linkend="reloption-autovacuum-freeze-min-age"/> as this may allow
-    tuples to be frozen by earlier vacuums.  The number of obsolete tuples and
+    <firstterm>all visible</firstterm> and also allow tuples to be frozen.
+    The number of obsolete tuples and
     the number of inserted tuples are obtained from the cumulative statistics system;
     it is a semi-accurate count updated by each <command>UPDATE</command>,
     <command>DELETE</command> and <command>INSERT</command> operation.  (It is
     only semi-accurate because some information might be lost under heavy
-    load.)  If the <structfield>relfrozenxid</structfield> value of the table
-    is more than <varname>vacuum_freeze_table_age</varname> transactions old,
-    an aggressive vacuum is performed to freeze old tuples and advance
-    <structfield>relfrozenxid</structfield>; otherwise, only pages that have been modified
-    since the last vacuum are scanned.
+    load.)
    </para>
 
    <para>

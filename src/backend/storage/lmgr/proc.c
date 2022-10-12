@@ -1384,7 +1384,7 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable)
 			 * wraparound.
 			 */
 			if ((statusFlags & PROC_IS_AUTOVACUUM) &&
-				!(statusFlags & PROC_VACUUM_FOR_WRAPAROUND))
+				!(statusFlags & PROC_AUTOVACUUM_FOR_WRAPAROUND))
 			{
 				int			pid = autovac->pid;
 

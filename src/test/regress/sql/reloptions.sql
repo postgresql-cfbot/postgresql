@@ -61,7 +61,7 @@ CREATE TEMP TABLE reloptions_test(i INT NOT NULL, j text)
 	autovacuum_enabled=false);
 SELECT reloptions FROM pg_class WHERE oid = 'reloptions_test'::regclass;
 INSERT INTO reloptions_test VALUES (1, NULL), (NULL, NULL);
--- Do an aggressive vacuum to prevent page-skipping.
+-- Do an antiwraparound vacuum to prevent page-skipping.
 VACUUM (FREEZE, DISABLE_PAGE_SKIPPING) reloptions_test;
 SELECT pg_relation_size('reloptions_test') > 0;
 
@@ -72,7 +72,7 @@ SELECT reloptions FROM pg_class WHERE oid =
 ALTER TABLE reloptions_test RESET (vacuum_truncate);
 SELECT reloptions FROM pg_class WHERE oid = 'reloptions_test'::regclass;
 INSERT INTO reloptions_test VALUES (1, NULL), (NULL, NULL);
--- Do an aggressive vacuum to prevent page-skipping.
+-- Do an antiwraparound vacuum to prevent page-skipping.
 VACUUM (FREEZE, DISABLE_PAGE_SKIPPING) reloptions_test;
 SELECT pg_relation_size('reloptions_test') = 0;
 

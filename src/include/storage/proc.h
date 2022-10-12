@@ -59,7 +59,7 @@ struct XidCache
 										 * CONCURRENTLY or REINDEX
 										 * CONCURRENTLY on non-expressional,
 										 * non-partial index */
-#define		PROC_VACUUM_FOR_WRAPAROUND	0x08	/* set by autovac only */
+#define		PROC_AUTOVACUUM_FOR_WRAPAROUND	0x08	/* affects cancellation */
 #define		PROC_IN_LOGICAL_DECODING	0x10	/* currently doing logical
 												 * decoding outside xact */
 #define		PROC_AFFECTS_ALL_HORIZONS	0x20	/* this proc's xmin must be
@@ -68,7 +68,7 @@ struct XidCache
 
 /* flags reset at EOXact */
 #define		PROC_VACUUM_STATE_MASK \
-	(PROC_IN_VACUUM | PROC_IN_SAFE_IC | PROC_VACUUM_FOR_WRAPAROUND)
+	(PROC_IN_VACUUM | PROC_IN_SAFE_IC | PROC_AUTOVACUUM_FOR_WRAPAROUND)
 
 /*
  * Xmin-related flags. Make sure any flags that affect how the process' Xmin

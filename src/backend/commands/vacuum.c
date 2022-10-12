@@ -67,6 +67,7 @@ int			vacuum_freeze_min_age;
 int			vacuum_freeze_table_age;
 int			vacuum_multixact_freeze_min_age;
 int			vacuum_multixact_freeze_table_age;
+int			vacuum_freeze_strategy_threshold;
 int			vacuum_failsafe_age;
 int			vacuum_multixact_failsafe_age;
 
@@ -263,8 +264,11 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 		params.multixact_freeze_table_age = -1;
 	}
 
-	/* user-invoked vacuum is never "for wraparound" */
-	params.is_wraparound = false;
+	/* Determine freezing strategy later on using GUC or reloption */
+	params.freeze_strategy_threshold = -1;
+
+	/* user-invoked vacuum isn't an autovacuum */
+	params.is_antiwrap_autovac = false;
 
 	/* user-invoked vacuum uses VACOPT_VERBOSE instead of log_min_duration */
 	params.log_min_duration = -1;
@@ -939,14 +943,20 @@ get_all_vacuum_rels(int options)
  * - oldestMxact is the Mxid below which MultiXacts are definitely not
  *   seen as visible by any running transaction.
  * - freezeLimit is the Xid below which all Xids are definitely replaced by
- *   FrozenTransactionId during aggressive vacuums.
+ *   FrozenTransactionId during antiwraparound vacuums.
  * - multiXactCutoff is the value below which all MultiXactIds are definitely
- *   removed from Xmax during aggressive vacuums.
+ *   removed from Xmax during antiwraparound vacuums.
  *
  * Return value indicates if vacuumlazy.c caller should make its VACUUM
- * operation aggressive.  An aggressive VACUUM must advance relfrozenxid up to
- * FreezeLimit (at a minimum), and relminmxid up to multiXactCutoff (at a
- * minimum).
+ * operation antiwraparound.  An antiwraparound VACUUM is required to advance
+ * relfrozenxid up to FreezeLimit (at a minimum), and relminmxid up to
+ * multiXactCutoff (at a minimum).  Otherwise VACUUM advances relfrozenxid on
+ * a best-effort basis.
+ *
+ * Sets *antiwrapfrac to give caller a sense of how close we came to requiring
+ * an antiwraparound VACUUM in terms of XID/MXID space consumed.  This is set
+ * to a value between 0.0 and 1.0, where 1.0 represents the point that an
+ * antiwraparound VACUUM will be (or has already) been forced.
  *
  * oldestXmin and oldestMxact are the most recent values that can ever be
  * passed to vac_update_relstats() as frozenxid and minmulti arguments by our
@@ -962,15 +972,20 @@ vacuum_set_xid_limits(Relation rel,
 					  TransactionId *oldestXmin,
 					  MultiXactId *oldestMxact,
 					  TransactionId *freezeLimit,
-					  MultiXactId *multiXactCutoff)
+					  MultiXactId *multiXactCutoff,
+					  double *antiwrapfrac)
 {
 	TransactionId nextXID,
 				safeOldestXmin,
-				aggressiveXIDCutoff;
+				antiwrapXIDCutoff;
 	MultiXactId nextMXID,
 				safeOldestMxact,
-				aggressiveMXIDCutoff;
-	int			effective_multixact_freeze_max_age;
+				antiwrapMXIDCutoff;
+	double		XIDFrac,
+				MXIDFrac;
+	int			effective_multixact_freeze_max_age,
+				relfrozenxid_age,
+				relminmxid_age;
 
 	/*
 	 * Acquire oldestXmin.
@@ -1061,8 +1076,8 @@ vacuum_set_xid_limits(Relation rel,
 		*multiXactCutoff = *oldestMxact;
 
 	/*
-	 * Done setting output parameters; check if oldestXmin or oldestMxact are
-	 * held back to an unsafe degree in passing
+	 * Done setting cutoff output parameters; check if oldestXmin or
+	 * oldestMxact are held back to an unsafe degree in passing
 	 */
 	safeOldestXmin = nextXID - autovacuum_freeze_max_age;
 	if (!TransactionIdIsNormal(safeOldestXmin))
@@ -1081,48 +1096,59 @@ vacuum_set_xid_limits(Relation rel,
 				 errhint("Close open transactions soon to avoid wraparound problems.\n"
 						 "You might also need to commit or roll back old prepared transactions, or drop stale replication slots.")));
 
+	*antiwrapfrac = 1.0;		/* Initialize */
+
 	/*
-	 * Finally, figure out if caller needs to do an aggressive VACUUM or not.
+	 * Finally, figure out if caller needs to do an antiwraparound VACUUM now.
 	 *
 	 * Determine the table freeze age to use: as specified by the caller, or
-	 * the value of the vacuum_freeze_table_age GUC, but in any case not more
-	 * than autovacuum_freeze_max_age * 0.95, so that if you have e.g nightly
-	 * VACUUM schedule, the nightly VACUUM gets a chance to freeze XIDs before
-	 * anti-wraparound autovacuum is launched.
+	 * the value of the vacuum_freeze_table_age GUC.  The GUC's default value
+	 * of -1 is interpreted as "just use autovacuum_freeze_max_age value".
+	 * Also clamp using autovacuum_freeze_max_age.
 	 */
 	if (freeze_table_age < 0)
 		freeze_table_age = vacuum_freeze_table_age;
-	freeze_table_age = Min(freeze_table_age, autovacuum_freeze_max_age * 0.95);
+	if (freeze_table_age < 0 || freeze_table_age > autovacuum_freeze_max_age)
+		freeze_table_age = autovacuum_freeze_max_age;
 	Assert(freeze_table_age >= 0);
-	aggressiveXIDCutoff = nextXID - freeze_table_age;
-	if (!TransactionIdIsNormal(aggressiveXIDCutoff))
-		aggressiveXIDCutoff = FirstNormalTransactionId;
+	antiwrapXIDCutoff = nextXID - freeze_table_age;
+	if (!TransactionIdIsNormal(antiwrapXIDCutoff))
+		antiwrapXIDCutoff = FirstNormalTransactionId;
 	if (TransactionIdPrecedesOrEquals(rel->rd_rel->relfrozenxid,
-									  aggressiveXIDCutoff))
+									  antiwrapXIDCutoff))
 		return true;
 
 	/*
 	 * Similar to the above, determine the table freeze age to use for
 	 * multixacts: as specified by the caller, or the value of the
-	 * vacuum_multixact_freeze_table_age GUC, but in any case not more than
-	 * effective_multixact_freeze_max_age * 0.95, so that if you have e.g.
-	 * nightly VACUUM schedule, the nightly VACUUM gets a chance to freeze
-	 * multixacts before anti-wraparound autovacuum is launched.
+	 * vacuum_multixact_freeze_table_age GUC.   The GUC's default value of -1
+	 * is interpreted as "just use effective_multixact_freeze_max_age value".
+	 * Also clamp using effective_multixact_freeze_max_age.
 	 */
 	if (multixact_freeze_table_age < 0)
 		multixact_freeze_table_age = vacuum_multixact_freeze_table_age;
-	multixact_freeze_table_age =
-		Min(multixact_freeze_table_age,
-			effective_multixact_freeze_max_age * 0.95);
+	if (multixact_freeze_table_age < 0 ||
+		multixact_freeze_table_age > effective_multixact_freeze_max_age)
+		multixact_freeze_table_age = effective_multixact_freeze_max_age;
 	Assert(multixact_freeze_table_age >= 0);
-	aggressiveMXIDCutoff = nextMXID - multixact_freeze_table_age;
-	if (aggressiveMXIDCutoff < FirstMultiXactId)
-		aggressiveMXIDCutoff = FirstMultiXactId;
+	antiwrapMXIDCutoff = nextMXID - multixact_freeze_table_age;
+	if (antiwrapMXIDCutoff < FirstMultiXactId)
+		antiwrapMXIDCutoff = FirstMultiXactId;
 	if (MultiXactIdPrecedesOrEquals(rel->rd_rel->relminmxid,
-									aggressiveMXIDCutoff))
+									antiwrapMXIDCutoff))
 		return true;
 
-	/* Non-aggressive VACUUM */
+	/*
+	 * Regular VACUUM for vacuumlazy.c caller.  Need to work out how close we
+	 * came to needing an antiwraparound VACUUM.
+	 */
+	relfrozenxid_age = Max(nextXID - rel->rd_rel->relfrozenxid, 1);
+	relminmxid_age = Max(nextMXID - rel->rd_rel->relminmxid, 1);
+	XIDFrac = (double) relfrozenxid_age / (double) freeze_table_age;
+	MXIDFrac = (double) relminmxid_age / (double) multixact_freeze_table_age;
+
+	*antiwrapfrac = Max(XIDFrac, MXIDFrac);
+
 	return false;
 }
 
@@ -1865,8 +1891,8 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params)
 		 */
 		LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
 		MyProc->statusFlags |= PROC_IN_VACUUM;
-		if (params->is_wraparound)
-			MyProc->statusFlags |= PROC_VACUUM_FOR_WRAPAROUND;
+		if (params->is_antiwrap_autovac)
+			MyProc->statusFlags |= PROC_AUTOVACUUM_FOR_WRAPAROUND;
 		ProcGlobal->statusFlags[MyProc->pgxactoff] = MyProc->statusFlags;
 		LWLockRelease(ProcArrayLock);
 	}

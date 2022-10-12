@@ -180,7 +180,8 @@ PostgreSQL documentation
       <term><option>--freeze</option></term>
       <listitem>
        <para>
-        Aggressively <quote>freeze</quote> tuples.
+        Eagerly <quote>freeze</quote> tuples and force antiwraparound
+        mode.
        </para>
       </listitem>
      </varlistentry>
@@ -259,7 +260,7 @@ PostgreSQL documentation
         transaction ID age of at least
         <replaceable class="parameter">xid_age</replaceable>.  This setting
         is useful for prioritizing tables to process to prevent transaction
-        ID wraparound (see <xref linkend="vacuum-for-wraparound"/>).
+        ID wraparound (see <xref linkend="vacuum-xid-space"/>).
        </para>
        <para>
         For the purposes of this option, the transaction ID age of a relation

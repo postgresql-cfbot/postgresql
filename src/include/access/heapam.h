@@ -167,8 +167,8 @@ extern void heap_inplace_update(Relation relation, HeapTuple tuple);
 extern bool heap_freeze_tuple(HeapTupleHeader tuple,
 							  TransactionId relfrozenxid, TransactionId relminmxid,
 							  TransactionId cutoff_xid, TransactionId cutoff_multi);
-extern bool heap_tuple_would_freeze(HeapTupleHeader tuple, TransactionId cutoff_xid,
-									MultiXactId cutoff_multi,
+extern bool heap_tuple_would_freeze(HeapTupleHeader tuple,
+									TransactionId limit_xid, MultiXactId limit_multi,
 									TransactionId *relfrozenxid_out,
 									MultiXactId *relminmxid_out);
 extern bool heap_tuple_needs_eventual_freeze(HeapTupleHeader tuple);

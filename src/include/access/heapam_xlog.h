@@ -331,6 +331,42 @@ typedef struct xl_heap_freeze_tuple
 } xl_heap_freeze_tuple;
 
 /*
+ * State used by VACUUM to track what the oldest extant XID/MXID will become
+ * when determing whether and how to freeze a page's heap tuples via calls to
+ * heap_prepare_freeze_tuple.
+ *
+ * The relfrozenxid_out and relminmxid_out fields are the current target
+ * relfrozenxid and relminmxid for VACUUM caller's heap rel.  Any and all
+ * unfrozen XIDs or MXIDs that remain in caller's rel after VACUUM finishes
+ * _must_ have values >= the final relfrozenxid/relminmxid values in pg_class.
+ * This includes XIDs that remain as MultiXact members from any tuple's xmax.
+ * Each heap_prepare_freeze_tuple call pushes back relfrozenxid_out and/or
+ * relminmxid_out as needed to avoid unsafe values in rel's authoritative
+ * pg_class tuple.
+ *
+ * Alternative "no freeze" variants of relfrozenxid_nofreeze_out and
+ * relminmxid_nofreeze_out must also be maintained.  If vacuumlazy.c caller
+ * opts to not execute freeze plans produced by heap_prepare_freeze_tuple for
+ * its own reasons, then new relfrozenxid and relminmxid values must reflect
+ * that that choice was made.  (This is only safe when 'freeze' is still unset
+ * after the final last heap_prepare_freeze_tuple call for the page.)
+ */
+typedef struct page_frozenxid_tracker
+{
+	/* Is heap_prepare_freeze_tuple caller required to freeze page? */
+	bool		freeze;
+
+	/* Values used when page is to be frozen based on freeze plans */
+	TransactionId relfrozenxid_out;
+	MultiXactId relminmxid_out;
+
+	/* Used by caller that opts not to freeze a '!freeze' page */
+	TransactionId relfrozenxid_nofreeze_out;
+	MultiXactId relminmxid_nofreeze_out;
+
+} page_frozenxid_tracker;
+
+/*
  * This is what we need to know about a block being frozen during vacuum
  *
  * Backup block 0's data contains an array of xl_heap_freeze_tuple structs,
@@ -409,10 +445,11 @@ extern bool heap_prepare_freeze_tuple(HeapTupleHeader tuple,
 									  TransactionId relminmxid,
 									  TransactionId cutoff_xid,
 									  TransactionId cutoff_multi,
+									  TransactionId limit_xid,
+									  MultiXactId limit_multi,
 									  xl_heap_freeze_tuple *frz,
 									  bool *totally_frozen,
-									  TransactionId *relfrozenxid_out,
-									  MultiXactId *relminmxid_out);
+									  page_frozenxid_tracker *xtrack);
 extern void heap_execute_freeze_tuple(HeapTupleHeader tuple,
 									  xl_heap_freeze_tuple *frz);
 extern XLogRecPtr log_heap_visible(RelFileLocator rlocator, Buffer heap_buffer,

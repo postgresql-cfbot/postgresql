@@ -20,6 +20,7 @@
 #include "pgstat.h"
 #include "postmaster/auxprocess.h"
 #include "postmaster/bgwriter.h"
+#include "postmaster/custodian.h"
 #include "postmaster/startup.h"
 #include "postmaster/walwriter.h"
 #include "replication/walreceiver.h"
@@ -73,6 +74,9 @@ AuxiliaryProcessMain(AuxProcType auxtype)
 			break;
 		case CheckpointerProcess:
 			MyBackendType = B_CHECKPOINTER;
+			break;
+		case CustodianProcess:
+			MyBackendType = B_CUSTODIAN;
 			break;
 		case WalWriterProcess:
 			MyBackendType = B_WAL_WRITER;
@@ -151,6 +155,10 @@ AuxiliaryProcessMain(AuxProcType auxtype)
 
 		case CheckpointerProcess:
 			CheckpointerMain();
+			proc_exit(1);
+
+		case CustodianProcess:
+			CustodianMain();
 			proc_exit(1);
 
 		case WalWriterProcess:

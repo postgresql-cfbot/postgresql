@@ -4,6 +4,7 @@ backend_sources += files(
   'bgworker.c',
   'bgwriter.c',
   'checkpointer.c',
+  'custodian.c',
   'fork_process.c',
   'interrupt.c',
   'pgarch.c',

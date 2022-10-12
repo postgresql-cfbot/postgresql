@@ -4481,7 +4481,7 @@ getSubscriptions(Archive *fout)
 	if (fout->remoteVersion >= 140000)
 		appendPQExpBufferStr(query, " s.substream,\n");
 	else
-		appendPQExpBufferStr(query, " false AS substream,\n");
+		appendPQExpBufferStr(query, " 'f' AS substream,\n");
 
 	if (fout->remoteVersion >= 150000)
 		appendPQExpBufferStr(query,
@@ -4508,8 +4508,9 @@ getSubscriptions(Archive *fout)
 	ntups = PQntuples(res);
 
 	/*
-	 * Get subscription fields. We don't include subskiplsn in the dump as
-	 * after restoring the dump this value may no longer be relevant.
+	 * Get subscription fields. We don't include subskiplsn and subretry in
+	 * the dump as after restoring the dump this value may no longer be
+	 * relevant.
 	 */
 	i_tableoid = PQfnumber(res, "tableoid");
 	i_oid = PQfnumber(res, "oid");
@@ -4618,8 +4619,10 @@ dumpSubscription(Archive *fout, const SubscriptionInfo *subinfo)
 	if (strcmp(subinfo->subbinary, "t") == 0)
 		appendPQExpBufferStr(query, ", binary = true");
 
-	if (strcmp(subinfo->substream, "f") != 0)
+	if (strcmp(subinfo->substream, "t") == 0)
 		appendPQExpBufferStr(query, ", streaming = on");
+	else if (strcmp(subinfo->substream, "p") == 0)
+		appendPQExpBufferStr(query, ", streaming = parallel");
 
 	if (strcmp(subinfo->subtwophasestate, two_phase_disabled) != 0)
 		appendPQExpBufferStr(query, ", two_phase = on");

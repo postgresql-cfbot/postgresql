@@ -54,6 +54,7 @@
 
 int			max_logical_replication_workers = 4;
 int			max_sync_workers_per_subscription = 2;
+int			max_parallel_apply_workers_per_subscription = 2;
 
 LogicalRepWorker *MyLogicalRepWorker = NULL;
 
@@ -151,8 +152,10 @@ get_subscription_list(void)
  *
  * This is only needed for cleaning up the shared memory in case the worker
  * fails to attach.
+ *
+ * Return whether the attach was successful.
  */
-static void
+static bool
 WaitForReplicationWorkerAttach(LogicalRepWorker *worker,
 							   uint16 generation,
 							   BackgroundWorkerHandle *handle)
@@ -168,11 +171,11 @@ WaitForReplicationWorkerAttach(LogicalRepWorker *worker,
 
 		LWLockAcquire(LogicalRepWorkerLock, LW_SHARED);
 
-		/* Worker either died or has started; no need to do anything. */
+		/* Worker either died or has started. Return false if died. */
 		if (!worker->in_use || worker->proc)
 		{
 			LWLockRelease(LogicalRepWorkerLock);
-			return;
+			return worker->in_use;
 		}
 
 		LWLockRelease(LogicalRepWorkerLock);
@@ -187,7 +190,7 @@ WaitForReplicationWorkerAttach(LogicalRepWorker *worker,
 			if (generation == worker->generation)
 				logicalrep_worker_cleanup(worker);
 			LWLockRelease(LogicalRepWorkerLock);
-			return;
+			return false;
 		}
 
 		/*
@@ -209,6 +212,8 @@ WaitForReplicationWorkerAttach(LogicalRepWorker *worker,
 /*
  * Walks the workers array and searches for one that matches given
  * subscription id and relid.
+ *
+ * We are only interested in the leader apply worker or table sync worker.
  */
 LogicalRepWorker *
 logicalrep_worker_find(Oid subid, Oid relid, bool only_running)
@@ -222,6 +227,10 @@ logicalrep_worker_find(Oid subid, Oid relid, bool only_running)
 	for (i = 0; i < max_logical_replication_workers; i++)
 	{
 		LogicalRepWorker *w = &LogicalRepCtx->workers[i];
+
+		/* Skip parallel apply workers. */
+		if (isParallelApplyWorker(w))
+			continue;
 
 		if (w->in_use && w->subid == subid && w->relid == relid &&
 			(!only_running || w->proc))
@@ -259,11 +268,13 @@ logicalrep_workers_find(Oid subid, bool only_running)
 }
 
 /*
- * Start new apply background worker, if possible.
+ * Start new background worker, if possible.
+ *
+ * Returns true on success, false on failure.
  */
-void
+bool
 logicalrep_worker_launch(Oid dbid, Oid subid, const char *subname, Oid userid,
-						 Oid relid)
+						 Oid relid, dsm_handle subworker_dsm)
 {
 	BackgroundWorker bgw;
 	BackgroundWorkerHandle *bgw_handle;
@@ -272,7 +283,12 @@ logicalrep_worker_launch(Oid dbid, Oid subid, const char *subname, Oid userid,
 	int			slot = 0;
 	LogicalRepWorker *worker = NULL;
 	int			nsyncworkers;
+	int			nparallelapplyworkers;
 	TimestampTz now;
+	bool		is_parallel_apply_worker = (subworker_dsm != DSM_HANDLE_INVALID);
+
+	/* Sanity check - tablesync worker cannot be a subworker */
+	Assert(!(is_parallel_apply_worker && OidIsValid(relid)));
 
 	ereport(DEBUG1,
 			(errmsg_internal("starting logical replication worker for subscription \"%s\"",
@@ -350,7 +366,26 @@ retry:
 	if (OidIsValid(relid) && nsyncworkers >= max_sync_workers_per_subscription)
 	{
 		LWLockRelease(LogicalRepWorkerLock);
-		return;
+		return false;
+	}
+
+	nparallelapplyworkers = logicalrep_parallel_apply_worker_count(subid);
+
+	/*
+	 * Return false if the number of parallel apply workers reached the limit
+	 * per subscription.
+	 */
+	if (is_parallel_apply_worker &&
+		nparallelapplyworkers >= max_parallel_apply_workers_per_subscription)
+	{
+		LWLockRelease(LogicalRepWorkerLock);
+
+		ereport(LOG,
+				(errcode(ERRCODE_CONFIGURATION_LIMIT_EXCEEDED),
+				 errmsg("out of parallel apply workers"),
+				 errhint("You might need to increase max_parallel_apply_workers_per_subscription.")));
+
+		return false;
 	}
 
 	/*
@@ -364,7 +399,7 @@ retry:
 				(errcode(ERRCODE_CONFIGURATION_LIMIT_EXCEEDED),
 				 errmsg("out of logical replication worker slots"),
 				 errhint("You might need to increase max_logical_replication_workers.")));
-		return;
+		return false;
 	}
 
 	/* Prepare the worker slot. */
@@ -379,6 +414,8 @@ retry:
 	worker->relstate = SUBREL_STATE_UNKNOWN;
 	worker->relstate_lsn = InvalidXLogRecPtr;
 	worker->stream_fileset = NULL;
+	worker->apply_leader_pid = is_parallel_apply_worker ? MyProcPid : InvalidPid;
+	worker->parallel_apply = is_parallel_apply_worker;
 	worker->last_lsn = InvalidXLogRecPtr;
 	TIMESTAMP_NOBEGIN(worker->last_send_time);
 	TIMESTAMP_NOBEGIN(worker->last_recv_time);
@@ -396,18 +433,33 @@ retry:
 		BGWORKER_BACKEND_DATABASE_CONNECTION;
 	bgw.bgw_start_time = BgWorkerStart_RecoveryFinished;
 	snprintf(bgw.bgw_library_name, BGW_MAXLEN, "postgres");
-	snprintf(bgw.bgw_function_name, BGW_MAXLEN, "ApplyWorkerMain");
+
+	if (is_parallel_apply_worker)
+		snprintf(bgw.bgw_function_name, BGW_MAXLEN, "ParallelApplyWorkerMain");
+	else
+		snprintf(bgw.bgw_function_name, BGW_MAXLEN, "ApplyWorkerMain");
+
 	if (OidIsValid(relid))
 		snprintf(bgw.bgw_name, BGW_MAXLEN,
 				 "logical replication worker for subscription %u sync %u", subid, relid);
+	else if (is_parallel_apply_worker)
+		snprintf(bgw.bgw_name, BGW_MAXLEN,
+				 "logical replication parallel apply worker for subscription %u", subid);
 	else
 		snprintf(bgw.bgw_name, BGW_MAXLEN,
 				 "logical replication worker for subscription %u", subid);
-	snprintf(bgw.bgw_type, BGW_MAXLEN, "logical replication worker");
+
+	if (is_parallel_apply_worker)
+		snprintf(bgw.bgw_type, BGW_MAXLEN, "logical replication parallel worker");
+	else
+		snprintf(bgw.bgw_type, BGW_MAXLEN, "logical replication worker");
 
 	bgw.bgw_restart_time = BGW_NEVER_RESTART;
 	bgw.bgw_notify_pid = MyProcPid;
 	bgw.bgw_main_arg = Int32GetDatum(slot);
+
+	if (is_parallel_apply_worker)
+		memcpy(bgw.bgw_extra, &subworker_dsm, sizeof(dsm_handle));
 
 	if (!RegisterDynamicBackgroundWorker(&bgw, &bgw_handle))
 	{
@@ -421,33 +473,22 @@ retry:
 				(errcode(ERRCODE_CONFIGURATION_LIMIT_EXCEEDED),
 				 errmsg("out of background worker slots"),
 				 errhint("You might need to increase max_worker_processes.")));
-		return;
+		return false;
 	}
 
 	/* Now wait until it attaches. */
-	WaitForReplicationWorkerAttach(worker, generation, bgw_handle);
+	return WaitForReplicationWorkerAttach(worker, generation, bgw_handle);
 }
 
 /*
- * Stop the logical replication worker for subid/relid, if any, and wait until
- * it detaches from the slot.
+ * Internal function to stop the worker and wait for it to die.
  */
-void
-logicalrep_worker_stop(Oid subid, Oid relid)
+static void
+logicalrep_worker_stop_internal(LogicalRepWorker *worker)
 {
-	LogicalRepWorker *worker;
 	uint16		generation;
 
-	LWLockAcquire(LogicalRepWorkerLock, LW_SHARED);
-
-	worker = logicalrep_worker_find(subid, relid, false);
-
-	/* No worker, nothing to do. */
-	if (!worker)
-	{
-		LWLockRelease(LogicalRepWorkerLock);
-		return;
-	}
+	Assert(LWLockHeldByMeInMode(LogicalRepWorkerLock, LW_SHARED));
 
 	/*
 	 * Remember which generation was our worker so we can check if what we see
@@ -485,10 +526,7 @@ logicalrep_worker_stop(Oid subid, Oid relid)
 		 * different, meaning that a different worker has taken the slot.
 		 */
 		if (!worker->in_use || worker->generation != generation)
-		{
-			LWLockRelease(LogicalRepWorkerLock);
 			return;
-		}
 
 		/* Worker has assigned proc, so it has started. */
 		if (worker->proc)
@@ -522,6 +560,50 @@ logicalrep_worker_stop(Oid subid, Oid relid)
 
 		LWLockAcquire(LogicalRepWorkerLock, LW_SHARED);
 	}
+}
+
+/*
+ * Stop the logical replication worker for subid/relid, if any, and wait until
+ * it detaches from the slot.
+ */
+void
+logicalrep_worker_stop(Oid subid, Oid relid)
+{
+	LogicalRepWorker *worker;
+
+	LWLockAcquire(LogicalRepWorkerLock, LW_SHARED);
+
+	worker = logicalrep_worker_find(subid, relid, false);
+
+	if (worker)
+	{
+		Assert(!isParallelApplyWorker(worker));
+		logicalrep_worker_stop_internal(worker);
+	}
+
+	LWLockRelease(LogicalRepWorkerLock);
+}
+
+/*
+ * Stop the logical replication worker corresponding to the input slot number,
+ * and wait until it detaches from the slot.
+ */
+void
+logicalrep_worker_stop_by_slot(int slot_no, uint16 generation)
+{
+	LogicalRepWorker *worker;
+
+	Assert(slot_no >=0 && slot_no < max_logical_replication_workers);
+
+	LWLockAcquire(LogicalRepWorkerLock, LW_SHARED);
+
+	worker = &LogicalRepCtx->workers[slot_no];
+
+	/*
+	 * Only stop the worker if the generation matches and the worker is alive.
+	 */
+	if (worker->generation == generation && worker->proc)
+		logicalrep_worker_stop_internal(worker);
 
 	LWLockRelease(LogicalRepWorkerLock);
 }
@@ -594,11 +676,32 @@ logicalrep_worker_attach(int slot)
 }
 
 /*
- * Detach the worker (cleans up the worker info).
+ * Stop the parallel apply workers if any, and detach the leader apply worker
+ * (cleans up the worker info).
  */
 static void
 logicalrep_worker_detach(void)
 {
+	/* Stop the parallel apply workers. */
+	if (am_leader_apply_worker())
+	{
+		List	   *workers;
+		ListCell   *lc;
+
+		LWLockAcquire(LogicalRepWorkerLock, LW_SHARED);
+
+		workers = logicalrep_workers_find(MyLogicalRepWorker->subid, true);
+		foreach(lc, workers)
+		{
+			LogicalRepWorker *w = (LogicalRepWorker *) lfirst(lc);
+
+			if (isParallelApplyWorker(w))
+				logicalrep_worker_stop_internal(w);
+		}
+
+		LWLockRelease(LogicalRepWorkerLock);
+	}
+
 	/* Block concurrent access. */
 	LWLockAcquire(LogicalRepWorkerLock, LW_EXCLUSIVE);
 
@@ -621,6 +724,8 @@ logicalrep_worker_cleanup(LogicalRepWorker *worker)
 	worker->userid = InvalidOid;
 	worker->subid = InvalidOid;
 	worker->relid = InvalidOid;
+	worker->apply_leader_pid = InvalidPid;
+	worker->parallel_apply = false;
 }
 
 /*
@@ -673,6 +778,33 @@ logicalrep_sync_worker_count(Oid subid)
 		LogicalRepWorker *w = &LogicalRepCtx->workers[i];
 
 		if (w->subid == subid && OidIsValid(w->relid))
+			res++;
+	}
+
+	return res;
+}
+
+/*
+ * Count the number of registered (but not necessarily running) parallel apply
+ * workers for a subscription.
+ */
+int
+logicalrep_parallel_apply_worker_count(Oid subid)
+{
+	int			i;
+	int			res = 0;
+
+	Assert(LWLockHeldByMe(LogicalRepWorkerLock));
+
+	/*
+	 * Scan all attached parallel apply workers, only counting those which
+	 * have the given subscription id.
+	 */
+	for (i = 0; i < max_logical_replication_workers; i++)
+	{
+		LogicalRepWorker *w = &LogicalRepCtx->workers[i];
+
+		if (w->subid == subid && isParallelApplyWorker(w))
 			res++;
 	}
 
@@ -868,7 +1000,7 @@ ApplyLauncherMain(Datum main_arg)
 					wait_time = wal_retrieve_retry_interval;
 
 					logicalrep_worker_launch(sub->dbid, sub->oid, sub->name,
-											 sub->owner, InvalidOid);
+											 sub->owner, InvalidOid, DSM_HANDLE_INVALID);
 				}
 			}
 
@@ -925,7 +1057,7 @@ IsLogicalLauncher(void)
 Datum
 pg_stat_get_subscription(PG_FUNCTION_ARGS)
 {
-#define PG_STAT_GET_SUBSCRIPTION_COLS	8
+#define PG_STAT_GET_SUBSCRIPTION_COLS	9
 	Oid			subid = PG_ARGISNULL(0) ? InvalidOid : PG_GETARG_OID(0);
 	int			i;
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
@@ -959,26 +1091,32 @@ pg_stat_get_subscription(PG_FUNCTION_ARGS)
 		else
 			nulls[1] = true;
 		values[2] = Int32GetDatum(worker_pid);
-		if (XLogRecPtrIsInvalid(worker.last_lsn))
+
+		if (worker.apply_leader_pid == InvalidPid)
 			nulls[3] = true;
 		else
-			values[3] = LSNGetDatum(worker.last_lsn);
-		if (worker.last_send_time == 0)
+			values[3] = Int32GetDatum(worker.apply_leader_pid);
+
+		if (XLogRecPtrIsInvalid(worker.last_lsn))
 			nulls[4] = true;
 		else
-			values[4] = TimestampTzGetDatum(worker.last_send_time);
-		if (worker.last_recv_time == 0)
+			values[4] = LSNGetDatum(worker.last_lsn);
+		if (worker.last_send_time == 0)
 			nulls[5] = true;
 		else
-			values[5] = TimestampTzGetDatum(worker.last_recv_time);
-		if (XLogRecPtrIsInvalid(worker.reply_lsn))
+			values[5] = TimestampTzGetDatum(worker.last_send_time);
+		if (worker.last_recv_time == 0)
 			nulls[6] = true;
 		else
-			values[6] = LSNGetDatum(worker.reply_lsn);
-		if (worker.reply_time == 0)
+			values[6] = TimestampTzGetDatum(worker.last_recv_time);
+		if (XLogRecPtrIsInvalid(worker.reply_lsn))
 			nulls[7] = true;
 		else
-			values[7] = TimestampTzGetDatum(worker.reply_time);
+			values[7] = LSNGetDatum(worker.reply_lsn);
+		if (worker.reply_time == 0)
+			nulls[8] = true;
+		else
+			values[8] = TimestampTzGetDatum(worker.reply_time);
 
 		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc,
 							 values, nulls);

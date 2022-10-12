@@ -1711,6 +1711,7 @@ RecordTransactionAbort(bool isSubXact)
 	int			nchildren;
 	TransactionId *children;
 	TimestampTz xact_time;
+	bool		replorigin;
 
 	/*
 	 * If we haven't been assigned an XID, nobody will care whether we aborted
@@ -1741,6 +1742,13 @@ RecordTransactionAbort(bool isSubXact)
 		elog(PANIC, "cannot abort transaction %u, it was already committed",
 			 xid);
 
+	/*
+	 * Are we using the replication origins feature?  Or, in other words, are
+	 * we replaying remote actions?
+	 */
+	replorigin = (replorigin_session_origin != InvalidRepOriginId &&
+				  replorigin_session_origin != DoNotReplicateId);
+
 	/* Fetch the data we need for the abort record */
 	nrels = smgrGetPendingDeletes(false, &rels);
 	nchildren = xactGetCommittedChildren(&children);
@@ -1764,6 +1772,11 @@ RecordTransactionAbort(bool isSubXact)
 					   ndroppedstats, droppedstats,
 					   MyXactFlags, InvalidTransactionId,
 					   NULL);
+
+	if (replorigin)
+		/* Move LSNs forward for this replication origin */
+		replorigin_session_advance(replorigin_session_origin_lsn,
+								   XactLastRecEnd);
 
 	/*
 	 * Report the latest async abort LSN, so that the WAL writer knows to

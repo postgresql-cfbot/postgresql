@@ -36,6 +36,7 @@
 #include <math.h>
 
 #include "catalog/namespace.h"
+#include "catalog/pg_subscription.h"
 #include "commands/defrem.h"
 #include "nodes/makefuncs.h"
 #include "parser/parse_type.h"
@@ -343,6 +344,63 @@ defGetStringList(DefElem *def)
 	}
 
 	return (List *) def->arg;
+}
+
+/*
+ * Extract the streaming mode value from a DefElem.  This is like
+ * defGetBoolean() but also accepts the special value of "parallel".
+ */
+char
+defGetStreamingMode(DefElem *def)
+{
+	/*
+	 * If no parameter value given, assume "true" is meant.
+	 */
+	if (def->arg == NULL)
+		return SUBSTREAM_ON;
+
+	/*
+	 * Allow 0, 1, "false", "true", "off", "on" or "parallel".
+	 */
+	switch (nodeTag(def->arg))
+	{
+		case T_Integer:
+			switch (intVal(def->arg))
+			{
+				case 0:
+					return SUBSTREAM_OFF;
+				case 1:
+					return SUBSTREAM_ON;
+				default:
+					/* otherwise, error out below */
+					break;
+			}
+			break;
+		default:
+			{
+				char	   *sval = defGetString(def);
+
+				/*
+				 * The set of strings accepted here should match up with the
+				 * grammar's opt_boolean_or_string production.
+				 */
+				if (pg_strcasecmp(sval, "false") == 0 ||
+					pg_strcasecmp(sval, "off") == 0)
+					return SUBSTREAM_OFF;
+				if (pg_strcasecmp(sval, "true") == 0 ||
+					pg_strcasecmp(sval, "on") == 0)
+					return SUBSTREAM_ON;
+				if (pg_strcasecmp(sval, "parallel") == 0)
+					return SUBSTREAM_PARALLEL;
+			}
+			break;
+	}
+
+	ereport(ERROR,
+			(errcode(ERRCODE_SYNTAX_ERROR),
+			 errmsg("%s requires a Boolean value or \"parallel\"",
+					def->defname)));
+	return SUBSTREAM_OFF;		/* keep compiler quiet */
 }
 
 /*

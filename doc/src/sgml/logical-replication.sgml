@@ -1340,6 +1340,15 @@ CONTEXT:  processing remote data for replication origin "pg_16395" during "INSER
    might not violate any constraint.  This can easily make the subscriber
    inconsistent.
   </para>
+
+  <para>
+   When the streaming mode is <literal>parallel</literal>, the finish LSN of
+   failed transactions may not be logged. In that case, the failed transaction
+   will be retried in <literal>streaming = on</literal> mode. If it fails
+   again, the finish LSN of the failed transaction will be written to the
+   server log. For the usage of finish LSN, please refer to
+   <link linkend="sql-altersubscription"><command>ALTER SUBSCRIPTION ... SKIP</command></link>.
+  </para>
  </sect1>
 
  <sect1 id="logical-replication-restrictions">
@@ -1521,7 +1530,8 @@ CONTEXT:  processing remote data for replication origin "pg_16395" during "INSER
    subscription.  A disabled subscription or a crashed subscription will have
    zero rows in this view.  If the initial data synchronization of any
    table is in progress, there will be additional workers for the tables
-   being synchronized.
+   being synchronized. Moreover, if the streaming transaction is applied in
+   parallel, there will be additional workers.
   </para>
  </sect1>
 
@@ -1616,8 +1626,12 @@ CONTEXT:  processing remote data for replication origin "pg_16395" during "INSER
    to the subscriber, plus some reserve for table synchronization.
    <varname>max_logical_replication_workers</varname> must be set to at least
    the number of subscriptions, again plus some reserve for the table
-   synchronization.  Additionally the <varname>max_worker_processes</varname>
-   may need to be adjusted to accommodate for replication workers, at least
+   synchronization. If the subscription parameter <literal>streaming</literal>
+   is set to <literal>parallel</literal>,
+   <literal>max_logical_replication_workers</literal> should be increased
+   according to the desired number of parallel apply workers.  Additionally the
+   <varname>max_worker_processes</varname> may need to be adjusted to
+   accommodate for replication workers, at least
    (<varname>max_logical_replication_workers</varname>
    + <literal>1</literal>).  Note that some extensions and parallel queries
    also take worker slots from <varname>max_worker_processes</varname>.

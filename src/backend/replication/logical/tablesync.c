@@ -609,7 +609,8 @@ process_syncing_tables_for_apply(XLogRecPtr current_lsn)
 												 MySubscription->oid,
 												 MySubscription->name,
 												 MyLogicalRepWorker->userid,
-												 rstate->relid);
+												 rstate->relid,
+												 DSM_HANDLE_INVALID);
 						hentry->last_start_time = now;
 					}
 				}
@@ -630,6 +631,13 @@ process_syncing_tables_for_apply(XLogRecPtr current_lsn)
 void
 process_syncing_tables(XLogRecPtr current_lsn)
 {
+	/*
+	 * Skip for parallel apply workers. See parallel_apply_can_start() for
+	 * details.
+	 */
+	if (am_parallel_apply_worker())
+		return;
+
 	if (am_tablesync_worker())
 		process_syncing_tables_for_sync(current_lsn);
 	else
@@ -917,6 +925,7 @@ fetch_remote_table_info(char *nspname, char *relname,
 	lrel->attnames = palloc0(MaxTupleAttributeNumber * sizeof(char *));
 	lrel->atttyps = palloc0(MaxTupleAttributeNumber * sizeof(Oid));
 	lrel->attkeys = NULL;
+	lrel->attunique = NULL;
 
 	/*
 	 * Store the columns as a list of names.  Ignore those that are not

@@ -15,6 +15,17 @@
 #include "access/attmap.h"
 #include "replication/logicalproto.h"
 
+/*
+ *	States to determine if changes on one relation can be applied using a
+ *	parallel apply worker.
+ */
+typedef enum ParallelApplySafety
+{
+	PARALLEL_APPLY_SAFETY_UNKNOWN,
+	PARALLEL_APPLY_SAFE,
+	PARALLEL_APPLY_UNSAFE
+} ParallelApplySafety;
+
 typedef struct LogicalRepRelMapEntry
 {
 	LogicalRepRelation remoterel;	/* key is remoterel.remoteid */
@@ -31,6 +42,8 @@ typedef struct LogicalRepRelMapEntry
 	Relation	localrel;		/* relcache entry (NULL when closed) */
 	AttrMap    *attrmap;		/* map of local attributes to remote ones */
 	bool		updatable;		/* Can apply updates/deletes? */
+	ParallelApplySafety parallel_apply_safety;	/* Can apply changes in a
+												 * parallel apply worker? */
 
 	/* Sync state. */
 	char		state;
@@ -46,5 +59,7 @@ extern LogicalRepRelMapEntry *logicalrep_partition_open(LogicalRepRelMapEntry *r
 														Relation partrel, AttrMap *map);
 extern void logicalrep_rel_close(LogicalRepRelMapEntry *rel,
 								 LOCKMODE lockmode);
+
+extern void logicalrep_rel_mark_parallel_apply(LogicalRepRelMapEntry *entry);
 
 #endif							/* LOGICALRELATION_H */

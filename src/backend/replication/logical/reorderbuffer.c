@@ -2839,7 +2839,8 @@ ReorderBufferFinishPrepared(ReorderBuffer *rb, TransactionId xid,
  * disk.
  */
 void
-ReorderBufferAbort(ReorderBuffer *rb, TransactionId xid, XLogRecPtr lsn)
+ReorderBufferAbort(ReorderBuffer *rb, TransactionId xid, XLogRecPtr lsn,
+				   TimestampTz abort_time)
 {
 	ReorderBufferTXN *txn;
 
@@ -2849,6 +2850,8 @@ ReorderBufferAbort(ReorderBuffer *rb, TransactionId xid, XLogRecPtr lsn)
 	/* unknown, nothing to remove */
 	if (txn == NULL)
 		return;
+
+	txn->xact_time.abort_time = abort_time;
 
 	/* For streamed transactions notify the remote node about the abort. */
 	if (rbtxn_is_streamed(txn))
@@ -2924,7 +2927,8 @@ ReorderBufferAbortOld(ReorderBuffer *rb, TransactionId oldestRunningXid)
  * to this xid might re-create the transaction incompletely.
  */
 void
-ReorderBufferForget(ReorderBuffer *rb, TransactionId xid, XLogRecPtr lsn)
+ReorderBufferForget(ReorderBuffer *rb, TransactionId xid, XLogRecPtr lsn,
+					TimestampTz abort_time)
 {
 	ReorderBufferTXN *txn;
 
@@ -2934,6 +2938,8 @@ ReorderBufferForget(ReorderBuffer *rb, TransactionId xid, XLogRecPtr lsn)
 	/* unknown, nothing to forget */
 	if (txn == NULL)
 		return;
+
+	txn->xact_time.abort_time = abort_time;
 
 	/* For streamed transactions notify the remote node about the abort. */
 	if (rbtxn_is_streamed(txn))

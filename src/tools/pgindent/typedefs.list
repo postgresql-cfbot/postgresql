@@ -1472,6 +1472,7 @@ LogicalRepRelId
 LogicalRepRelMapEntry
 LogicalRepRelation
 LogicalRepRollbackPreparedTxnData
+LogicalRepStreamAbortData
 LogicalRepTupleData
 LogicalRepTyp
 LogicalRepWorker
@@ -1663,6 +1664,9 @@ OverrideStackEntry
 OverridingKind
 PACE_HEADER
 PACL
+ParallelApplyWorkerEntry
+ParallelApplyWorkerInfo
+ParallelApplyWorkerShared
 PATH
 PBOOL
 PCtxtHandle
@@ -1875,6 +1879,7 @@ PageXLogRecPtr
 PagetableEntry
 Pairs
 ParallelAppendState
+ParallelApplySafety
 ParallelBitmapHeapState
 ParallelBlockTableScanDesc
 ParallelBlockTableScanWorker
@@ -2784,6 +2789,7 @@ TransactionStmtKind
 TransformInfo
 TransformJsonStringValuesState
 TransitionCaptureState
+TransApplyAction
 TrgmArc
 TrgmArcInfo
 TrgmBound

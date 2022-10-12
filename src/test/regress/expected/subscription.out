@@ -251,9 +251,9 @@ ALTER SUBSCRIPTION regress_testsub SET (slot_name = NONE);
 (1 row)
 
 DROP SUBSCRIPTION regress_testsub;
--- fail - streaming must be boolean
+-- fail - streaming must be boolean or 'parallel'
 CREATE SUBSCRIPTION regress_testsub CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub WITH (connect = false, streaming = foo);
-ERROR:  streaming requires a Boolean value
+ERROR:  streaming requires a Boolean value or "parallel"
 -- now it works
 CREATE SUBSCRIPTION regress_testsub CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub WITH (connect = false, streaming = true);
 WARNING:  tables were not subscribed, you will have to run ALTER SUBSCRIPTION ... REFRESH PUBLICATION to subscribe the tables
@@ -262,6 +262,14 @@ WARNING:  tables were not subscribed, you will have to run ALTER SUBSCRIPTION ..
       Name       |           Owner           | Enabled | Publication | Binary | Streaming | Two-phase commit | Disable on error | Origin | Synchronous commit |          Conninfo           | Skip LSN 
 -----------------+---------------------------+---------+-------------+--------+-----------+------------------+------------------+--------+--------------------+-----------------------------+----------
  regress_testsub | regress_subscription_user | f       | {testpub}   | f      | t         | d                | f                | any    | off                | dbname=regress_doesnotexist | 0/0
+(1 row)
+
+ALTER SUBSCRIPTION regress_testsub SET (streaming = parallel);
+\dRs+
+                                                                                         List of subscriptions
+      Name       |           Owner           | Enabled | Publication | Binary | Streaming | Two-phase commit | Disable on error | Origin | Synchronous commit |          Conninfo           | Skip LSN 
+-----------------+---------------------------+---------+-------------+--------+-----------+------------------+------------------+--------+--------------------+-----------------------------+----------
+ regress_testsub | regress_subscription_user | f       | {testpub}   | f      | p         | d                | f                | any    | off                | dbname=regress_doesnotexist | 0/0
 (1 row)
 
 ALTER SUBSCRIPTION regress_testsub SET (streaming = false);

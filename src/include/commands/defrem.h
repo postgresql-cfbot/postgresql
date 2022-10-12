@@ -154,6 +154,7 @@ extern List *defGetQualifiedName(DefElem *def);
 extern TypeName *defGetTypeName(DefElem *def);
 extern int	defGetTypeLength(DefElem *def);
 extern List *defGetStringList(DefElem *def);
+extern char defGetStreamingMode(DefElem *def);
 extern void errorConflictingDefElem(DefElem *defel, ParseState *pstate) pg_attribute_noreturn();
 
 #endif							/* DEFREM_H */

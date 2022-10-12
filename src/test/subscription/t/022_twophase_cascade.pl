@@ -11,6 +11,185 @@ use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
 use Test::More;
 
+# Encapsulate all the common test steps which are related to "streaming" parameter
+# so the same code can be run both for the streaming=on and streaming=parallel
+# cases.
+sub test_streaming
+{
+	my ($node_A, $node_B, $node_C, $appname_B, $appname_C, $streaming_mode) =
+	  @_;
+
+	my $oldpid_B = $node_A->safe_psql(
+		'postgres', "
+		SELECT pid FROM pg_stat_replication
+		WHERE application_name = '$appname_B' AND state = 'streaming';");
+	my $oldpid_C = $node_B->safe_psql(
+		'postgres', "
+		SELECT pid FROM pg_stat_replication
+		WHERE application_name = '$appname_C' AND state = 'streaming';");
+
+	# Setup logical replication streaming mode
+
+	$node_B->safe_psql(
+		'postgres', "
+		ALTER SUBSCRIPTION tap_sub_B
+		SET (streaming = $streaming_mode);");
+	$node_C->safe_psql(
+		'postgres', "
+		ALTER SUBSCRIPTION tap_sub_C
+		SET (streaming = $streaming_mode)");
+
+	# Wait for subscribers to finish initialization
+
+	$node_A->poll_query_until(
+		'postgres', "
+		SELECT pid != $oldpid_B FROM pg_stat_replication
+		WHERE application_name = '$appname_B' AND state = 'streaming';"
+	) or die "Timed out while waiting for apply to restart";
+	$node_B->poll_query_until(
+		'postgres', "
+		SELECT pid != $oldpid_C FROM pg_stat_replication
+		WHERE application_name = '$appname_C' AND state = 'streaming';"
+	) or die "Timed out while waiting for apply to restart";
+
+	###############################
+	# Test 2PC PREPARE / COMMIT PREPARED.
+	# 1. Data is streamed as a 2PC transaction.
+	# 2. Then do commit prepared.
+	#
+	# Expect all data is replicated on subscriber(s) after the commit.
+	###############################
+
+	# Insert, update and delete enough rows to exceed the 64kB limit.
+	# Then 2PC PREPARE
+	$node_A->safe_psql(
+		'postgres', q{
+		BEGIN;
+		INSERT INTO test_tab SELECT i, md5(i::text) FROM generate_series(3, 5000) s(i);
+		UPDATE test_tab SET b = md5(b) WHERE mod(a,2) = 0;
+		DELETE FROM test_tab WHERE mod(a,3) = 0;
+		PREPARE TRANSACTION 'test_prepared_tab';});
+
+	$node_A->wait_for_catchup($appname_B);
+	$node_B->wait_for_catchup($appname_C);
+
+	# check the transaction state is prepared on subscriber(s)
+	my $result =
+	  $node_B->safe_psql('postgres',
+		"SELECT count(*) FROM pg_prepared_xacts;");
+	is($result, qq(1), 'transaction is prepared on subscriber B');
+	$result =
+	  $node_C->safe_psql('postgres',
+		"SELECT count(*) FROM pg_prepared_xacts;");
+	is($result, qq(1), 'transaction is prepared on subscriber C');
+
+	# 2PC COMMIT
+	$node_A->safe_psql('postgres', "COMMIT PREPARED 'test_prepared_tab';");
+
+	$node_A->wait_for_catchup($appname_B);
+	$node_B->wait_for_catchup($appname_C);
+
+	# check that transaction was committed on subscriber(s)
+	$result = $node_B->safe_psql('postgres',
+		"SELECT count(*), count(c), count(d = 999) FROM test_tab");
+	is($result, qq(3334|3334|3334),
+		'Rows inserted by 2PC have committed on subscriber B, and extra columns have local defaults'
+	);
+	$result = $node_C->safe_psql('postgres',
+		"SELECT count(*), count(c), count(d = 999) FROM test_tab");
+	is($result, qq(3334|3334|3334),
+		'Rows inserted by 2PC have committed on subscriber C, and extra columns have local defaults'
+	);
+
+	# check the transaction state is ended on subscriber(s)
+	$result =
+	  $node_B->safe_psql('postgres',
+		"SELECT count(*) FROM pg_prepared_xacts;");
+	is($result, qq(0), 'transaction is committed on subscriber B');
+	$result =
+	  $node_C->safe_psql('postgres',
+		"SELECT count(*) FROM pg_prepared_xacts;");
+	is($result, qq(0), 'transaction is committed on subscriber C');
+
+	###############################
+	# Test 2PC PREPARE with a nested ROLLBACK TO SAVEPOINT.
+	# 0. Cleanup from previous test leaving only 2 rows.
+	# 1. Insert one more row.
+	# 2. Record a SAVEPOINT.
+	# 3. Data is streamed using 2PC.
+	# 4. Do rollback to SAVEPOINT prior to the streamed inserts.
+	# 5. Then COMMIT PREPARED.
+	#
+	# Expect data after the SAVEPOINT is aborted leaving only 3 rows (= 2 original + 1 from step 1).
+	###############################
+
+	# First, delete the data except for 2 rows (delete will be replicated)
+	$node_A->safe_psql('postgres', "DELETE FROM test_tab WHERE a > 2;");
+
+	# 2PC PREPARE with a nested ROLLBACK TO SAVEPOINT
+	$node_A->safe_psql(
+		'postgres', "
+		BEGIN;
+		INSERT INTO test_tab VALUES (9999, 'foobar');
+		SAVEPOINT sp_inner;
+		INSERT INTO test_tab SELECT i, md5(i::text) FROM generate_series(3, 5000) s(i);
+		UPDATE test_tab SET b = md5(b) WHERE mod(a,2) = 0;
+		DELETE FROM test_tab WHERE mod(a,3) = 0;
+		ROLLBACK TO SAVEPOINT sp_inner;
+		PREPARE TRANSACTION 'outer';
+		");
+
+	$node_A->wait_for_catchup($appname_B);
+	$node_B->wait_for_catchup($appname_C);
+
+	# check the transaction state prepared on subscriber(s)
+	$result =
+	  $node_B->safe_psql('postgres',
+		"SELECT count(*) FROM pg_prepared_xacts;");
+	is($result, qq(1), 'transaction is prepared on subscriber B');
+	$result =
+	  $node_C->safe_psql('postgres',
+		"SELECT count(*) FROM pg_prepared_xacts;");
+	is($result, qq(1), 'transaction is prepared on subscriber C');
+
+	# 2PC COMMIT
+	$node_A->safe_psql('postgres', "COMMIT PREPARED 'outer';");
+
+	$node_A->wait_for_catchup($appname_B);
+	$node_B->wait_for_catchup($appname_C);
+
+	# check the transaction state is ended on subscriber
+	$result =
+	  $node_B->safe_psql('postgres',
+		"SELECT count(*) FROM pg_prepared_xacts;");
+	is($result, qq(0), 'transaction is ended on subscriber B');
+	$result =
+	  $node_C->safe_psql('postgres',
+		"SELECT count(*) FROM pg_prepared_xacts;");
+	is($result, qq(0), 'transaction is ended on subscriber C');
+
+	# check inserts are visible at subscriber(s).
+	# All the streamed data (prior to the SAVEPOINT) should be rolled back.
+	# (9999, 'foobar') should be committed.
+	$result = $node_B->safe_psql('postgres',
+		"SELECT count(*) FROM test_tab where b = 'foobar';");
+	is($result, qq(1), 'Rows committed are present on subscriber B');
+	$result =
+	  $node_B->safe_psql('postgres', "SELECT count(*) FROM test_tab;");
+	is($result, qq(3), 'Rows committed are present on subscriber B');
+	$result = $node_C->safe_psql('postgres',
+		"SELECT count(*) FROM test_tab where b = 'foobar';");
+	is($result, qq(1), 'Rows committed are present on subscriber C');
+	$result =
+	  $node_C->safe_psql('postgres', "SELECT count(*) FROM test_tab;");
+	is($result, qq(3), 'Rows committed are present on subscriber C');
+
+	# Cleanup the test data
+	$node_A->safe_psql('postgres', "DELETE FROM test_tab WHERE a > 2;");
+	$node_A->wait_for_catchup($appname_B);
+	$node_B->wait_for_catchup($appname_C);
+}
+
 ###############################
 # Setup a cascade of pub/sub nodes.
 # node_A -> node_B -> node_C
@@ -260,160 +439,23 @@ is($result, qq(21), 'Rows committed are present on subscriber C');
 # 2PC + STREAMING TESTS
 # ---------------------
 
-my $oldpid_B = $node_A->safe_psql(
-	'postgres', "
-	SELECT pid FROM pg_stat_replication
-	WHERE application_name = '$appname_B' AND state = 'streaming';");
-my $oldpid_C = $node_B->safe_psql(
-	'postgres', "
-	SELECT pid FROM pg_stat_replication
-	WHERE application_name = '$appname_C' AND state = 'streaming';");
+################################
+# Test using streaming mode 'on'
+################################
+test_streaming($node_A, $node_B, $node_C, $appname_B, $appname_C, 'on');
 
-# Setup logical replication (streaming = on)
+######################################
+# Test using streaming mode 'parallel'
+######################################
 
-$node_B->safe_psql(
-	'postgres', "
-	ALTER SUBSCRIPTION tap_sub_B
-	SET (streaming = on);");
-$node_C->safe_psql(
-	'postgres', "
-	ALTER SUBSCRIPTION tap_sub_C
-	SET (streaming = on)");
+# "streaming = parallel" does not support non-immutable functions, so change
+# the function in the default expression of column "c".
+$node_B->safe_psql('postgres',
+	"ALTER TABLE test_tab ALTER COLUMN c SET DEFAULT to_timestamp(0);");
+$node_C->safe_psql('postgres',
+	"ALTER TABLE test_tab ALTER COLUMN c SET DEFAULT to_timestamp(0);");
 
-# Wait for subscribers to finish initialization
-
-$node_A->poll_query_until(
-	'postgres', "
-	SELECT pid != $oldpid_B FROM pg_stat_replication
-	WHERE application_name = '$appname_B' AND state = 'streaming';"
-) or die "Timed out while waiting for apply to restart";
-$node_B->poll_query_until(
-	'postgres', "
-	SELECT pid != $oldpid_C FROM pg_stat_replication
-	WHERE application_name = '$appname_C' AND state = 'streaming';"
-) or die "Timed out while waiting for apply to restart";
-
-###############################
-# Test 2PC PREPARE / COMMIT PREPARED.
-# 1. Data is streamed as a 2PC transaction.
-# 2. Then do commit prepared.
-#
-# Expect all data is replicated on subscriber(s) after the commit.
-###############################
-
-# Insert, update and delete enough rows to exceed the 64kB limit.
-# Then 2PC PREPARE
-$node_A->safe_psql(
-	'postgres', q{
-	BEGIN;
-	INSERT INTO test_tab SELECT i, md5(i::text) FROM generate_series(3, 5000) s(i);
-	UPDATE test_tab SET b = md5(b) WHERE mod(a,2) = 0;
-	DELETE FROM test_tab WHERE mod(a,3) = 0;
-	PREPARE TRANSACTION 'test_prepared_tab';});
-
-$node_A->wait_for_catchup($appname_B);
-$node_B->wait_for_catchup($appname_C);
-
-# check the transaction state is prepared on subscriber(s)
-$result =
-  $node_B->safe_psql('postgres', "SELECT count(*) FROM pg_prepared_xacts;");
-is($result, qq(1), 'transaction is prepared on subscriber B');
-$result =
-  $node_C->safe_psql('postgres', "SELECT count(*) FROM pg_prepared_xacts;");
-is($result, qq(1), 'transaction is prepared on subscriber C');
-
-# 2PC COMMIT
-$node_A->safe_psql('postgres', "COMMIT PREPARED 'test_prepared_tab';");
-
-$node_A->wait_for_catchup($appname_B);
-$node_B->wait_for_catchup($appname_C);
-
-# check that transaction was committed on subscriber(s)
-$result = $node_B->safe_psql('postgres',
-	"SELECT count(*), count(c), count(d = 999) FROM test_tab");
-is($result, qq(3334|3334|3334),
-	'Rows inserted by 2PC have committed on subscriber B, and extra columns have local defaults'
-);
-$result = $node_C->safe_psql('postgres',
-	"SELECT count(*), count(c), count(d = 999) FROM test_tab");
-is($result, qq(3334|3334|3334),
-	'Rows inserted by 2PC have committed on subscriber C, and extra columns have local defaults'
-);
-
-# check the transaction state is ended on subscriber(s)
-$result =
-  $node_B->safe_psql('postgres', "SELECT count(*) FROM pg_prepared_xacts;");
-is($result, qq(0), 'transaction is committed on subscriber B');
-$result =
-  $node_C->safe_psql('postgres', "SELECT count(*) FROM pg_prepared_xacts;");
-is($result, qq(0), 'transaction is committed on subscriber C');
-
-###############################
-# Test 2PC PREPARE with a nested ROLLBACK TO SAVEPOINT.
-# 0. Cleanup from previous test leaving only 2 rows.
-# 1. Insert one more row.
-# 2. Record a SAVEPOINT.
-# 3. Data is streamed using 2PC.
-# 4. Do rollback to SAVEPOINT prior to the streamed inserts.
-# 5. Then COMMIT PREPARED.
-#
-# Expect data after the SAVEPOINT is aborted leaving only 3 rows (= 2 original + 1 from step 1).
-###############################
-
-# First, delete the data except for 2 rows (delete will be replicated)
-$node_A->safe_psql('postgres', "DELETE FROM test_tab WHERE a > 2;");
-
-# 2PC PREPARE with a nested ROLLBACK TO SAVEPOINT
-$node_A->safe_psql(
-	'postgres', "
-	BEGIN;
-	INSERT INTO test_tab VALUES (9999, 'foobar');
-	SAVEPOINT sp_inner;
-	INSERT INTO test_tab SELECT i, md5(i::text) FROM generate_series(3, 5000) s(i);
-	UPDATE test_tab SET b = md5(b) WHERE mod(a,2) = 0;
-	DELETE FROM test_tab WHERE mod(a,3) = 0;
-	ROLLBACK TO SAVEPOINT sp_inner;
-	PREPARE TRANSACTION 'outer';
-	");
-
-$node_A->wait_for_catchup($appname_B);
-$node_B->wait_for_catchup($appname_C);
-
-# check the transaction state prepared on subscriber(s)
-$result =
-  $node_B->safe_psql('postgres', "SELECT count(*) FROM pg_prepared_xacts;");
-is($result, qq(1), 'transaction is prepared on subscriber B');
-$result =
-  $node_C->safe_psql('postgres', "SELECT count(*) FROM pg_prepared_xacts;");
-is($result, qq(1), 'transaction is prepared on subscriber C');
-
-# 2PC COMMIT
-$node_A->safe_psql('postgres', "COMMIT PREPARED 'outer';");
-
-$node_A->wait_for_catchup($appname_B);
-$node_B->wait_for_catchup($appname_C);
-
-# check the transaction state is ended on subscriber
-$result =
-  $node_B->safe_psql('postgres', "SELECT count(*) FROM pg_prepared_xacts;");
-is($result, qq(0), 'transaction is ended on subscriber B');
-$result =
-  $node_C->safe_psql('postgres', "SELECT count(*) FROM pg_prepared_xacts;");
-is($result, qq(0), 'transaction is ended on subscriber C');
-
-# check inserts are visible at subscriber(s).
-# All the streamed data (prior to the SAVEPOINT) should be rolled back.
-# (9999, 'foobar') should be committed.
-$result = $node_B->safe_psql('postgres',
-	"SELECT count(*) FROM test_tab where b = 'foobar';");
-is($result, qq(1), 'Rows committed are present on subscriber B');
-$result = $node_B->safe_psql('postgres', "SELECT count(*) FROM test_tab;");
-is($result, qq(3), 'Rows committed are present on subscriber B');
-$result = $node_C->safe_psql('postgres',
-	"SELECT count(*) FROM test_tab where b = 'foobar';");
-is($result, qq(1), 'Rows committed are present on subscriber C');
-$result = $node_C->safe_psql('postgres', "SELECT count(*) FROM test_tab;");
-is($result, qq(3), 'Rows committed are present on subscriber C');
+test_streaming($node_A, $node_B, $node_C, $appname_B, $appname_C, 'parallel');
 
 ###############################
 # check all the cleanup

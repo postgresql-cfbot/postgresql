@@ -1962,6 +1962,23 @@ begin
     end loop;
 end;
 $$;
+create function explain_verbose_parallel_append(text) returns setof text
+language plpgsql as
+$$
+declare
+    ln text;
+begin
+    for ln in
+        execute format('explain (analyze, verbose, costs off, summary off, timing off) %s',
+            $1)
+    loop
+        ln := regexp_replace(ln, 'actual rows=\d+ loops=\d+', 'actual rows=N loops=N');
+        ln := regexp_replace(ln, 'Loop Min Rows: \d+  Max Rows: \d+  Total Rows: \d+',
+                                 'Loop Min Rows: N  Max Rows: N  Total Rows: N');
+        return next ln;
+    end loop;
+end;
+$$;
 prepare ab_q4 (int, int) as
 select avg(a) from ab where a between $1 and $2 and b < 4;
 -- Encourage use of parallel plans
@@ -2218,7 +2235,29 @@ select explain_parallel_append('select avg(ab.a) from ab inner join lprt_a a on 
                                  Index Cond: (a = a.a)
 (28 rows)
 
+-- Tests for extra statistics
+set parallel_leader_participation = off;
+create table lprt_b (b int not null);
+insert into lprt_b select generate_series(1,20);
+select explain_verbose_parallel_append('select * from lprt_a join lprt_b on a != b');
+                explain_verbose_parallel_append                
+---------------------------------------------------------------
+ Nested Loop (actual rows=N loops=N)
+   Output: lprt_a.a, lprt_b.b
+   Join Filter: (lprt_a.a <> lprt_b.b)
+   Rows Removed by Join Filter: 4
+   ->  Seq Scan on public.lprt_b (actual rows=N loops=N)
+         Output: lprt_b.b
+   ->  Materialize (actual rows=N loops=N)
+         Loop Min Rows: N  Max Rows: N  Total Rows: N
+         Output: lprt_a.a
+         ->  Seq Scan on public.lprt_a (actual rows=N loops=N)
+               Output: lprt_a.a
+(11 rows)
+
+drop table lprt_b;
 delete from lprt_a where a = 1;
+reset parallel_leader_participation;
 select explain_parallel_append('select avg(ab.a) from ab inner join lprt_a a on ab.a = a.a where a.a in(1, 0, 0)');
                                      explain_parallel_append                                     
 -------------------------------------------------------------------------------------------------
@@ -2714,6 +2753,72 @@ order by tbl1.col1, tprt.col1;
   505 |  505
  1001 | 1001
 (3 rows)
+
+-- Tests for extra statistics
+explain (analyze, verbose, costs off, summary off, timing off)
+select * from tbl1 inner join tprt on tbl1.col1 > tprt.col1;
+                                   QUERY PLAN                                    
+---------------------------------------------------------------------------------
+ Nested Loop (actual rows=23 loops=1)
+   Output: tbl1.col1, tprt.col1
+   ->  Seq Scan on public.tbl1 (actual rows=5 loops=1)
+         Output: tbl1.col1
+   ->  Append (actual rows=5 loops=5)
+         Loop Min Rows: 2  Max Rows: 6  Total Rows: 23
+         ->  Index Scan using tprt1_idx on public.tprt_1 (actual rows=2 loops=5)
+               Loop Min Rows: 2  Max Rows: 2  Total Rows: 10
+               Output: tprt_1.col1
+               Index Cond: (tprt_1.col1 < tbl1.col1)
+         ->  Index Scan using tprt2_idx on public.tprt_2 (actual rows=3 loops=4)
+               Loop Min Rows: 2  Max Rows: 3  Total Rows: 11
+               Output: tprt_2.col1
+               Index Cond: (tprt_2.col1 < tbl1.col1)
+         ->  Index Scan using tprt3_idx on public.tprt_3 (actual rows=1 loops=2)
+               Loop Min Rows: 1  Max Rows: 1  Total Rows: 2
+               Output: tprt_3.col1
+               Index Cond: (tprt_3.col1 < tbl1.col1)
+         ->  Index Scan using tprt4_idx on public.tprt_4 (never executed)
+               Output: tprt_4.col1
+               Index Cond: (tprt_4.col1 < tbl1.col1)
+         ->  Index Scan using tprt5_idx on public.tprt_5 (never executed)
+               Output: tprt_5.col1
+               Index Cond: (tprt_5.col1 < tbl1.col1)
+         ->  Index Scan using tprt6_idx on public.tprt_6 (never executed)
+               Output: tprt_6.col1
+               Index Cond: (tprt_6.col1 < tbl1.col1)
+(27 rows)
+
+explain (analyze, verbose, costs off, summary off, timing off)
+select * from tbl1 inner join tprt on tbl1.col1 = tprt.col1;
+                                   QUERY PLAN                                    
+---------------------------------------------------------------------------------
+ Nested Loop (actual rows=3 loops=1)
+   Output: tbl1.col1, tprt.col1
+   ->  Seq Scan on public.tbl1 (actual rows=5 loops=1)
+         Output: tbl1.col1
+   ->  Append (actual rows=1 loops=5)
+         Loop Min Rows: 0  Max Rows: 1  Total Rows: 3
+         ->  Index Scan using tprt1_idx on public.tprt_1 (never executed)
+               Output: tprt_1.col1
+               Index Cond: (tprt_1.col1 = tbl1.col1)
+         ->  Index Scan using tprt2_idx on public.tprt_2 (actual rows=1 loops=2)
+               Loop Min Rows: 1  Max Rows: 1  Total Rows: 2
+               Output: tprt_2.col1
+               Index Cond: (tprt_2.col1 = tbl1.col1)
+         ->  Index Scan using tprt3_idx on public.tprt_3 (actual rows=0 loops=3)
+               Loop Min Rows: 0  Max Rows: 1  Total Rows: 1
+               Output: tprt_3.col1
+               Index Cond: (tprt_3.col1 = tbl1.col1)
+         ->  Index Scan using tprt4_idx on public.tprt_4 (never executed)
+               Output: tprt_4.col1
+               Index Cond: (tprt_4.col1 = tbl1.col1)
+         ->  Index Scan using tprt5_idx on public.tprt_5 (never executed)
+               Output: tprt_5.col1
+               Index Cond: (tprt_5.col1 = tbl1.col1)
+         ->  Index Scan using tprt6_idx on public.tprt_6 (never executed)
+               Output: tprt_6.col1
+               Index Cond: (tprt_6.col1 = tbl1.col1)
+(26 rows)
 
 -- Last partition
 delete from tbl1;

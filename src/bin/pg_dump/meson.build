@@ -1,6 +1,7 @@
 pg_dump_common_sources = files(
   'compress_io.c',
   'dumputils.c',
+  'filter.c',
   'parallel.c',
   'pg_backup_archiver.c',
   'pg_backup_custom.c',
@@ -86,6 +87,7 @@ tests += {
       't/001_basic.pl',
       't/002_pg_dump.pl',
       't/003_pg_dump_with_server.pl',
+      't/004_pg_dump_filterfile.pl',
       't/010_dump_connstr.pl',
     ],
   },

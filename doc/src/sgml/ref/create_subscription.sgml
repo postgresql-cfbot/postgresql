@@ -183,14 +183,18 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
         <term><literal>binary</literal> (<type>boolean</type>)</term>
         <listitem>
          <para>
-          Specifies whether the subscription will request the publisher to
-          send the data in binary format (as opposed to text).
+          Specifies whether the subscription will copy the initial data to
+          synchronize relations in binary format and also request the publisher
+          to send the data in binary format (as opposed to text).
           The default is <literal>false</literal>.
           Even when this option is enabled, only data types having
           binary send and receive functions will be transferred in binary.
          </para>
 
          <para>
+          Since logical replication uses <command>COPY</command> command,
+          it inherits restrictions of <command>COPY</command> command for
+          binary format (See <xref linkend="sql-copy"/>).
           When doing cross-version replication, it could be that the
           publisher has a binary send function for some data type, but the
           subscriber lacks a binary receive function for that type.  In

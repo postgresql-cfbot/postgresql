@@ -29,6 +29,7 @@
 #include "optimizer/paths.h"
 #include "optimizer/planmain.h"
 #include "optimizer/restrictinfo.h"
+#include "rewrite/rewriteManip.h"
 #include "utils/lsyscache.h"
 
 
@@ -64,7 +65,7 @@ static bool reconsider_outer_join_clause(PlannerInfo *root,
 										 RestrictInfo *rinfo,
 										 bool outer_on_left);
 static bool reconsider_full_join_clause(PlannerInfo *root,
-										RestrictInfo *rinfo);
+										FullJoinClauseInfo *fjinfo);
 static Bitmapset *get_eclass_indexes_for_relids(PlannerInfo *root,
 												Relids relids);
 static Bitmapset *get_common_eclass_indexes(PlannerInfo *root, Relids relids1,
@@ -757,6 +758,9 @@ get_eclass_for_sort_expr(PlannerInfo *root,
 		{
 			RelOptInfo *rel = root->simple_rel_array[i];
 
+			if (rel == NULL)
+				continue;		/* must be an outer join */
+
 			Assert(rel->reloptkind == RELOPT_BASEREL ||
 				   rel->reloptkind == RELOPT_DEADREL);
 
@@ -925,7 +929,36 @@ is_exprlist_member(Expr *node, List *exprs)
 		if (expr && IsA(expr, TargetEntry))
 			expr = ((TargetEntry *) expr)->expr;
 
-		if (equal(node, expr))
+		/*
+		 * For Vars and PlaceHolderVars, match using the same rules as
+		 * setrefs.c will, in particular ignoring nullingrels.  XXX when that
+		 * gets tightened up, this should too.
+		 */
+		if (IsA(node, Var))
+		{
+			if (expr && IsA(expr, Var))
+			{
+				Var		   *v1 = (Var *) node;
+				Var		   *v2 = (Var *) expr;
+
+				if (v1->varno == v2->varno &&
+					v1->varattno == v2->varattno &&
+					v1->varlevelsup == v2->varlevelsup)
+					return true;
+			}
+		}
+		else if (IsA(node, PlaceHolderVar))
+		{
+			if (expr && IsA(expr, PlaceHolderVar))
+			{
+				PlaceHolderVar *v1 = (PlaceHolderVar *) node;
+				PlaceHolderVar *v2 = (PlaceHolderVar *) expr;
+
+				if (v1->phid == v2->phid)
+					return true;
+			}
+		}
+		else if (equal(node, expr))
 			return true;
 	}
 	return false;
@@ -1112,6 +1145,9 @@ generate_base_implied_equalities(PlannerInfo *root)
 		while ((i = bms_next_member(ec->ec_relids, i)) > 0)
 		{
 			RelOptInfo *rel = root->simple_rel_array[i];
+
+			if (rel == NULL)
+				continue;		/* must be an outer join */
 
 			Assert(rel->reloptkind == RELOPT_BASEREL);
 
@@ -2003,10 +2039,12 @@ reconsider_outer_join_clauses(PlannerInfo *root)
 		/* Process the FULL JOIN clauses */
 		foreach(cell, root->full_join_clauses)
 		{
-			RestrictInfo *rinfo = (RestrictInfo *) lfirst(cell);
+			FullJoinClauseInfo *fjinfo = (FullJoinClauseInfo *) lfirst(cell);
 
-			if (reconsider_full_join_clause(root, rinfo))
+			if (reconsider_full_join_clause(root, fjinfo))
 			{
+				RestrictInfo *rinfo = fjinfo->rinfo;
+
 				found = true;
 				/* remove it from the list */
 				root->full_join_clauses =
@@ -2035,9 +2073,9 @@ reconsider_outer_join_clauses(PlannerInfo *root)
 	}
 	foreach(cell, root->full_join_clauses)
 	{
-		RestrictInfo *rinfo = (RestrictInfo *) lfirst(cell);
+		FullJoinClauseInfo *fjinfo = (FullJoinClauseInfo *) lfirst(cell);
 
-		distribute_restrictinfo_to_rels(root, rinfo);
+		distribute_restrictinfo_to_rels(root, fjinfo->rinfo);
 	}
 }
 
@@ -2173,8 +2211,11 @@ reconsider_outer_join_clause(PlannerInfo *root, RestrictInfo *rinfo,
  * Returns true if we were able to propagate a constant through the clause.
  */
 static bool
-reconsider_full_join_clause(PlannerInfo *root, RestrictInfo *rinfo)
+reconsider_full_join_clause(PlannerInfo *root, FullJoinClauseInfo *fjinfo)
 {
+	RestrictInfo *rinfo = fjinfo->rinfo;
+	SpecialJoinInfo *sjinfo = fjinfo->sjinfo;
+	Relids		fjrelids = bms_make_singleton(sjinfo->ojrelid);
 	Expr	   *leftvar;
 	Expr	   *rightvar;
 	Oid			opno,
@@ -2255,6 +2296,18 @@ reconsider_full_join_clause(PlannerInfo *root, RestrictInfo *rinfo)
 					continue;
 				cfirst = (Node *) linitial(cexpr->args);
 				csecond = (Node *) lsecond(cexpr->args);
+
+				/*
+				 * The COALESCE arguments will be marked as possibly nulled by
+				 * the full join, while we wish to generate clauses that apply
+				 * to the join's inputs.  So we must strip the join from the
+				 * nullingrels fields of cfirst/csecond before comparing them
+				 * to leftvar/rightvar.  (Perhaps with a less hokey
+				 * representation for FULL JOIN USING output columns, this
+				 * wouldn't be needed?)
+				 */
+				cfirst = remove_nulling_relids(cfirst, fjrelids, NULL);
+				csecond = remove_nulling_relids(csecond, fjrelids, NULL);
 
 				if (equal(leftvar, cfirst) && equal(rightvar, csecond))
 				{
@@ -3192,6 +3245,8 @@ get_eclass_indexes_for_relids(PlannerInfo *root, Relids relids)
 	{
 		RelOptInfo *rel = root->simple_rel_array[i];
 
+		if (rel == NULL)
+			continue;			/* must be an outer join */
 		ec_indexes = bms_add_members(ec_indexes, rel->eclass_indexes);
 	}
 	return ec_indexes;

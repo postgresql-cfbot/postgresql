@@ -63,6 +63,10 @@ extern bool contain_windowfuncs(Node *node);
 extern int	locate_windowfunc(Node *node);
 extern bool checkExprHasSubLink(Node *node);
 
+extern Bitmapset *get_nulling_relids(Node *node);
+extern Node *remove_nulling_relids(Node *node, Bitmapset *removable_relids,
+								   Bitmapset *except_relids);
+
 extern Node *replace_rte_variables(Node *node,
 								   int target_varno, int sublevels_up,
 								   replace_rte_variables_callback callback,

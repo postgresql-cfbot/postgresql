@@ -1307,7 +1307,7 @@ create_append_path(PlannerInfo *root,
 	 * Apply query-wide LIMIT if known and path is for sole base relation.
 	 * (Handling this at this low level is a bit klugy.)
 	 */
-	if (root != NULL && bms_equal(rel->relids, root->all_baserels))
+	if (root != NULL && bms_equal(rel->relids, root->all_query_rels))
 		pathnode->limit_tuples = root->limit_tuples;
 	else
 		pathnode->limit_tuples = -1.0;
@@ -1436,7 +1436,7 @@ create_merge_append_path(PlannerInfo *root,
 	 * Apply query-wide LIMIT if known and path is for sole base relation.
 	 * (Handling this at this low level is a bit klugy.)
 	 */
-	if (bms_equal(rel->relids, root->all_baserels))
+	if (bms_equal(rel->relids, root->all_query_rels))
 		pathnode->limit_tuples = root->limit_tuples;
 	else
 		pathnode->limit_tuples = -1.0;

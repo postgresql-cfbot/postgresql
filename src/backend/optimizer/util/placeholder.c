@@ -32,8 +32,14 @@ static void find_placeholders_in_expr(PlannerInfo *root, Node *expr);
  * make_placeholder_expr
  *		Make a PlaceHolderVar for the given expression.
  *
- * phrels is the syntactic location (as a set of baserels) to attribute
+ * phrels is the syntactic location (as a set of relids) to attribute
  * to the expression.
+ *
+ * The caller is responsible for adjusting phlevelsup and phnullingrels
+ * as needed.  Because we do not know here which query level the PHV
+ * will be associated with, it's important that this function touches
+ * only root->glob; messing with other parts of PlannerInfo would be
+ * likely to do the wrong thing.
  */
 PlaceHolderVar *
 make_placeholder_expr(PlannerInfo *root, Expr *expr, Relids phrels)
@@ -42,8 +48,9 @@ make_placeholder_expr(PlannerInfo *root, Expr *expr, Relids phrels)
 
 	phv->phexpr = expr;
 	phv->phrels = phrels;
+	phv->phnullingrels = NULL;	/* caller may change this later */
 	phv->phid = ++(root->glob->lastPHId);
-	phv->phlevelsup = 0;
+	phv->phlevelsup = 0;		/* caller may change this later */
 
 	return phv;
 }
@@ -91,6 +98,15 @@ find_placeholder_info(PlannerInfo *root, PlaceHolderVar *phv)
 
 	phinfo->phid = phv->phid;
 	phinfo->ph_var = copyObject(phv);
+
+	/*
+	 * By convention, phinfo->ph_var->phnullingrels is always empty, since the
+	 * PlaceHolderInfo represents the initially-calculated state of the
+	 * PlaceHolderVar.  PlaceHolderVars appearing in the query tree might have
+	 * varying values of phnullingrels, reflecting outer joins applied above
+	 * the calculation level.
+	 */
+	phinfo->ph_var->phnullingrels = NULL;
 
 	/*
 	 * Any referenced rels that are outside the PHV's syntactic scope are
@@ -344,6 +360,8 @@ update_placeholder_eval_levels(PlannerInfo *root, SpecialJoinInfo *new_sjinfo)
 												  sjinfo->min_lefthand);
 						eval_at = bms_add_members(eval_at,
 												  sjinfo->min_righthand);
+						if (sjinfo->ojrelid)
+							eval_at = bms_add_member(eval_at, sjinfo->ojrelid);
 						/* we'll need another iteration */
 						found_some = true;
 					}
@@ -418,6 +436,14 @@ add_placeholders_to_base_rels(PlannerInfo *root)
 		{
 			RelOptInfo *rel = find_base_rel(root, varno);
 
+			/*
+			 * As in add_vars_to_targetlist(), a value computed at scan level
+			 * has not yet been nulled by any outer join, so its phnullingrels
+			 * should be empty.
+			 */
+			Assert(phinfo->ph_var->phnullingrels == NULL);
+
+			/* Copying the PHV might be unnecessary here, but be safe */
 			rel->reltarget->exprs = lappend(rel->reltarget->exprs,
 											copyObject(phinfo->ph_var));
 			/* reltarget's cost and width fields will be updated later */
@@ -440,7 +466,8 @@ add_placeholders_to_base_rels(PlannerInfo *root)
  */
 void
 add_placeholders_to_joinrel(PlannerInfo *root, RelOptInfo *joinrel,
-							RelOptInfo *outer_rel, RelOptInfo *inner_rel)
+							RelOptInfo *outer_rel, RelOptInfo *inner_rel,
+							SpecialJoinInfo *sjinfo)
 {
 	Relids		relids = joinrel->relids;
 	ListCell   *lc;
@@ -471,8 +498,16 @@ add_placeholders_to_joinrel(PlannerInfo *root, RelOptInfo *joinrel,
 				if (!bms_is_subset(phinfo->ph_eval_at, outer_rel->relids) &&
 					!bms_is_subset(phinfo->ph_eval_at, inner_rel->relids))
 				{
-					PlaceHolderVar *phv = phinfo->ph_var;
+					/* Copying might be unnecessary here, but be safe */
+					PlaceHolderVar *phv = copyObject(phinfo->ph_var);
 					QualCost	cost;
+
+					/*
+					 * It'll start out not nulled by anything.  Joins above
+					 * this one might add to its phnullingrels later, in much
+					 * the same way as for Vars.
+					 */
+					Assert(phv->phnullingrels == NULL);
 
 					joinrel->reltarget->exprs = lappend(joinrel->reltarget->exprs,
 														phv);

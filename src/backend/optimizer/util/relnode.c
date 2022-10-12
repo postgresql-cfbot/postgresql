@@ -39,7 +39,7 @@ typedef struct JoinHashEntry
 } JoinHashEntry;
 
 static void build_joinrel_tlist(PlannerInfo *root, RelOptInfo *joinrel,
-								RelOptInfo *input_rel);
+								RelOptInfo *input_rel, int ojrelid);
 static List *build_joinrel_restrictlist(PlannerInfo *root,
 										RelOptInfo *joinrel,
 										RelOptInfo *outer_rel,
@@ -58,7 +58,8 @@ static void set_foreign_rel_properties(RelOptInfo *joinrel,
 static void add_join_rel(PlannerInfo *root, RelOptInfo *joinrel);
 static void build_joinrel_partition_info(RelOptInfo *joinrel,
 										 RelOptInfo *outer_rel, RelOptInfo *inner_rel,
-										 List *restrictlist, JoinType jointype);
+										 SpecialJoinInfo *sjinfo,
+										 List *restrictlist);
 static bool have_partkey_equi_join(RelOptInfo *joinrel,
 								   RelOptInfo *rel1, RelOptInfo *rel2,
 								   JoinType jointype, List *restrictlist);
@@ -66,7 +67,8 @@ static int	match_expr_to_partition_keys(Expr *expr, RelOptInfo *rel,
 										 bool strict_op);
 static void set_joinrel_partition_key_exprs(RelOptInfo *joinrel,
 											RelOptInfo *outer_rel, RelOptInfo *inner_rel,
-											JoinType jointype);
+											SpecialJoinInfo *sjinfo);
+static Node *add_nullingrel_to(Node *node, int relid);
 static void build_child_join_reltarget(PlannerInfo *root,
 									   RelOptInfo *parentrel,
 									   RelOptInfo *childrel,
@@ -367,7 +369,7 @@ build_simple_rel(PlannerInfo *root, int relid, RelOptInfo *parent)
 
 /*
  * find_base_rel
- *	  Find a base or other relation entry, which must already exist.
+ *	  Find a base or otherrel relation entry, which must already exist.
  */
 RelOptInfo *
 find_base_rel(PlannerInfo *root, int relid)
@@ -381,6 +383,44 @@ find_base_rel(PlannerInfo *root, int relid)
 		rel = root->simple_rel_array[relid];
 		if (rel)
 			return rel;
+	}
+
+	elog(ERROR, "no relation entry for relid %d", relid);
+
+	return NULL;				/* keep compiler quiet */
+}
+
+/*
+ * find_base_rel_ignore_join
+ *	  Find a base or otherrel relation entry, which must already exist.
+ *
+ * Unlike find_base_rel, if relid references an outer join then this
+ * will return NULL rather than raising an error.  This is convenient
+ * for callers that must deal with relid sets including both base and
+ * outer joins.
+ */
+RelOptInfo *
+find_base_rel_ignore_join(PlannerInfo *root, int relid)
+{
+	Assert(relid > 0);
+
+	if (relid < root->simple_rel_array_size)
+	{
+		RelOptInfo *rel;
+		RangeTblEntry *rte;
+
+		rel = root->simple_rel_array[relid];
+		if (rel)
+			return rel;
+
+		/*
+		 * We could just return NULL here, but for debugging purposes it seems
+		 * best to actually verify that the relid is an outer join and not
+		 * something weird.
+		 */
+		rte = root->simple_rte_array[relid];
+		if (rte && rte->rtekind == RTE_JOIN && rte->jointype != JOIN_INNER)
+			return NULL;
 	}
 
 	elog(ERROR, "no relation entry for relid %d", relid);
@@ -687,9 +727,11 @@ build_join_rel(PlannerInfo *root,
 	 * and inner rels we first try to build it from.  But the contents should
 	 * be the same regardless.
 	 */
-	build_joinrel_tlist(root, joinrel, outer_rel);
-	build_joinrel_tlist(root, joinrel, inner_rel);
-	add_placeholders_to_joinrel(root, joinrel, outer_rel, inner_rel);
+	build_joinrel_tlist(root, joinrel, outer_rel,
+						(sjinfo->jointype == JOIN_FULL) ? sjinfo->ojrelid : 0);
+	build_joinrel_tlist(root, joinrel, inner_rel,
+						(sjinfo->jointype != JOIN_INNER) ? sjinfo->ojrelid : 0);
+	add_placeholders_to_joinrel(root, joinrel, outer_rel, inner_rel, sjinfo);
 
 	/*
 	 * add_placeholders_to_joinrel also took care of adding the ph_lateral
@@ -721,8 +763,8 @@ build_join_rel(PlannerInfo *root,
 	joinrel->has_eclass_joins = has_relevant_eclass_joinclause(root, joinrel);
 
 	/* Store the partition information. */
-	build_joinrel_partition_info(joinrel, outer_rel, inner_rel, restrictlist,
-								 sjinfo->jointype);
+	build_joinrel_partition_info(joinrel, outer_rel, inner_rel, sjinfo,
+								 restrictlist);
 
 	/*
 	 * Set estimates of the joinrel's size.
@@ -778,16 +820,14 @@ build_join_rel(PlannerInfo *root,
  * 'parent_joinrel' is the RelOptInfo representing the join between parent
  *		relations. Some of the members of new RelOptInfo are produced by
  *		translating corresponding members of this RelOptInfo
- * 'sjinfo': child-join context info
  * 'restrictlist': list of RestrictInfo nodes that apply to this particular
  *		pair of joinable relations
- * 'jointype' is the join type (inner, left, full, etc)
+ * 'sjinfo': child join's join-type details
  */
 RelOptInfo *
 build_child_join_rel(PlannerInfo *root, RelOptInfo *outer_rel,
 					 RelOptInfo *inner_rel, RelOptInfo *parent_joinrel,
-					 List *restrictlist, SpecialJoinInfo *sjinfo,
-					 JoinType jointype)
+					 List *restrictlist, SpecialJoinInfo *sjinfo)
 {
 	RelOptInfo *joinrel = makeNode(RelOptInfo);
 	AppendRelInfo **appinfos;
@@ -801,6 +841,8 @@ build_child_join_rel(PlannerInfo *root, RelOptInfo *outer_rel,
 
 	joinrel->reloptkind = RELOPT_OTHER_JOINREL;
 	joinrel->relids = bms_union(outer_rel->relids, inner_rel->relids);
+	if (sjinfo->ojrelid != 0)
+		joinrel->relids = bms_add_member(joinrel->relids, sjinfo->ojrelid);
 	joinrel->rows = 0;
 	/* cheap startup cost is interesting iff not all tuples to be retrieved */
 	joinrel->consider_startup = (root->tuple_fraction > 0);
@@ -887,8 +929,8 @@ build_child_join_rel(PlannerInfo *root, RelOptInfo *outer_rel,
 	joinrel->has_eclass_joins = parent_joinrel->has_eclass_joins;
 
 	/* Is the join between partitions itself partitioned? */
-	build_joinrel_partition_info(joinrel, outer_rel, inner_rel, restrictlist,
-								 jointype);
+	build_joinrel_partition_info(joinrel, outer_rel, inner_rel, sjinfo,
+								 restrictlist);
 
 	/* Child joinrel is parallel safe if parent is parallel safe. */
 	joinrel->consider_parallel = parent_joinrel->consider_parallel;
@@ -968,12 +1010,15 @@ min_join_parameterization(PlannerInfo *root,
  * Vars from the specified input rel's tlist to the join rel's tlist.
  * Likewise for any PlaceHolderVars emitted by the input rel.
  *
+ * If the join can null Vars from this input relation, pass its RT index
+ * (if any) as ojrelid; if not, pass zero.
+ *
  * We also compute the expected width of the join's output, making use
  * of data that was cached at the baserel level by set_rel_width().
  */
 static void
 build_joinrel_tlist(PlannerInfo *root, RelOptInfo *joinrel,
-					RelOptInfo *input_rel)
+					RelOptInfo *input_rel, int ojrelid)
 {
 	Relids		relids = joinrel->relids;
 	ListCell   *vars;
@@ -993,7 +1038,17 @@ build_joinrel_tlist(PlannerInfo *root, RelOptInfo *joinrel,
 			/* Is it still needed above this joinrel? */
 			if (bms_nonempty_difference(phinfo->ph_needed, relids))
 			{
-				/* Yup, add it to the output */
+				/*
+				 * Yup, add it to the output.  If this join potentially nulls
+				 * this input, we have to update the PHV's phnullingrels,
+				 * which means making a copy.
+				 */
+				if (ojrelid != 0)
+				{
+					phv = copyObject(phv);
+					phv->phnullingrels = bms_add_member(phv->phnullingrels, ojrelid);
+				}
+
 				joinrel->reltarget->exprs = lappend(joinrel->reltarget->exprs,
 													phv);
 				/* Bubbling up the precomputed result has cost zero */
@@ -1017,9 +1072,7 @@ build_joinrel_tlist(PlannerInfo *root, RelOptInfo *joinrel,
 			RowIdentityVarInfo *ridinfo = (RowIdentityVarInfo *)
 			list_nth(root->row_identity_vars, var->varattno - 1);
 
-			joinrel->reltarget->exprs = lappend(joinrel->reltarget->exprs,
-												var);
-			/* Vars have cost zero, so no need to adjust reltarget->cost */
+			/* Update reltarget width estimate from RowIdentityVarInfo */
 			joinrel->reltarget->width += ridinfo->rowidwidth;
 		}
 		else
@@ -1032,15 +1085,28 @@ build_joinrel_tlist(PlannerInfo *root, RelOptInfo *joinrel,
 
 			/* Is it still needed above this joinrel? */
 			ndx = var->varattno - baserel->min_attr;
-			if (bms_nonempty_difference(baserel->attr_needed[ndx], relids))
-			{
-				/* Yup, add it to the output */
-				joinrel->reltarget->exprs = lappend(joinrel->reltarget->exprs,
-													var);
-				/* Vars have cost zero, so no need to adjust reltarget->cost */
-				joinrel->reltarget->width += baserel->attr_widths[ndx];
-			}
+			if (!bms_nonempty_difference(baserel->attr_needed[ndx], relids))
+				continue;		/* nope, skip it */
+
+			/* Update reltarget width estimate from baserel's attr_widths */
+			joinrel->reltarget->width += baserel->attr_widths[ndx];
 		}
+
+		/*
+		 * Add the Var to the output.  If this join potentially nulls this
+		 * input, we have to update the Var's varnullingrels, which means
+		 * making a copy.
+		 */
+		if (ojrelid != 0)
+		{
+			var = copyObject(var);
+			var->varnullingrels = bms_add_member(var->varnullingrels, ojrelid);
+		}
+
+		joinrel->reltarget->exprs = lappend(joinrel->reltarget->exprs,
+											var);
+
+		/* Vars have cost zero, so no need to adjust reltarget->cost */
 	}
 }
 
@@ -1059,7 +1125,7 @@ build_joinrel_tlist(PlannerInfo *root, RelOptInfo *joinrel,
  *	  is not handled in the sub-relations, so it depends on which
  *	  sub-relations are considered.
  *
- *	  If a join clause from an input relation refers to base rels still not
+ *	  If a join clause from an input relation refers to base+OJ rels still not
  *	  present in the joinrel, then it is still a join clause for the joinrel;
  *	  we put it into the joininfo list for the joinrel.  Otherwise,
  *	  the clause is now a restrict clause for the joined relation, and we
@@ -1660,8 +1726,8 @@ find_param_path_info(RelOptInfo *rel, Relids required_outer)
  */
 static void
 build_joinrel_partition_info(RelOptInfo *joinrel, RelOptInfo *outer_rel,
-							 RelOptInfo *inner_rel, List *restrictlist,
-							 JoinType jointype)
+							 RelOptInfo *inner_rel, SpecialJoinInfo *sjinfo,
+							 List *restrictlist)
 {
 	PartitionScheme part_scheme;
 
@@ -1688,7 +1754,7 @@ build_joinrel_partition_info(RelOptInfo *joinrel, RelOptInfo *outer_rel,
 		!inner_rel->consider_partitionwise_join ||
 		outer_rel->part_scheme != inner_rel->part_scheme ||
 		!have_partkey_equi_join(joinrel, outer_rel, inner_rel,
-								jointype, restrictlist))
+								sjinfo->jointype, restrictlist))
 	{
 		Assert(!IS_PARTITIONED_REL(joinrel));
 		return;
@@ -1712,7 +1778,7 @@ build_joinrel_partition_info(RelOptInfo *joinrel, RelOptInfo *outer_rel,
 	 * child-join relations of the join relation in try_partitionwise_join().
 	 */
 	joinrel->part_scheme = part_scheme;
-	set_joinrel_partition_key_exprs(joinrel, outer_rel, inner_rel, jointype);
+	set_joinrel_partition_key_exprs(joinrel, outer_rel, inner_rel, sjinfo);
 
 	/*
 	 * Set the consider_partitionwise_join flag.
@@ -1892,6 +1958,23 @@ match_expr_to_partition_keys(Expr *expr, RelOptInfo *rel, bool strict_op)
 		{
 			if (equal(lfirst(lc), expr))
 				return cnt;
+
+			/*
+			 * XXX For the moment, also allow a match if we have Vars that
+			 * match except for varnullingrels.  This may be indicative of a
+			 * bug, although given the restriction to strict join operators,
+			 * it could be okay.
+			 */
+			if (IsA(expr, Var) && IsA(lfirst(lc), Var))
+			{
+				Var		   *v1 = (Var *) expr;
+				Var		   *v2 = (Var *) lfirst(lc);
+
+				if (v1->varno == v2->varno &&
+					v1->varattno == v2->varattno &&
+					v1->varlevelsup == v2->varlevelsup)
+					return cnt;
+			}
 		}
 	}
 
@@ -1905,7 +1988,7 @@ match_expr_to_partition_keys(Expr *expr, RelOptInfo *rel, bool strict_op)
 static void
 set_joinrel_partition_key_exprs(RelOptInfo *joinrel,
 								RelOptInfo *outer_rel, RelOptInfo *inner_rel,
-								JoinType jointype)
+								SpecialJoinInfo *sjinfo)
 {
 	PartitionScheme part_scheme = joinrel->part_scheme;
 	int			partnatts = part_scheme->partnatts;
@@ -1931,7 +2014,7 @@ set_joinrel_partition_key_exprs(RelOptInfo *joinrel,
 		List	   *nullable_partexpr = NIL;
 		ListCell   *lc;
 
-		switch (jointype)
+		switch (sjinfo->jointype)
 		{
 				/*
 				 * A join relation resulting from an INNER join may be
@@ -2007,18 +2090,37 @@ set_joinrel_partition_key_exprs(RelOptInfo *joinrel,
 				 * partitionwise nesting of any outer join.)  We assume no
 				 * type coercions are needed to make the coalesce expressions,
 				 * since columns of different types won't have gotten
-				 * classified as the same PartitionScheme.
+				 * classified as the same PartitionScheme.  However, we do
+				 * have to worry about marking the COALESCE inputs as nullable
+				 * by the full join, else these won't match the real thing.
 				 */
 				foreach(lc, list_concat_copy(outer_expr, outer_null_expr))
 				{
 					Node	   *larg = (Node *) lfirst(lc);
 					ListCell   *lc2;
 
+					/* Insert nullingrel, or skip it if we can't */
+					larg = add_nullingrel_to(larg, sjinfo->ojrelid);
+					if (larg == NULL)
+						continue;
+
 					foreach(lc2, list_concat_copy(inner_expr, inner_null_expr))
 					{
 						Node	   *rarg = (Node *) lfirst(lc2);
-						CoalesceExpr *c = makeNode(CoalesceExpr);
+						CoalesceExpr *c;
 
+						/* Forget it if coercions would be needed */
+						if (exprType(larg) != exprType(rarg) ||
+							exprCollation(larg) != exprCollation(rarg))
+							continue;
+
+						/* Insert nullingrel, or skip it if we can't */
+						rarg = add_nullingrel_to(rarg, sjinfo->ojrelid);
+						if (rarg == NULL)
+							continue;
+
+						/* Now we can build a valid merged join variable */
+						c = makeNode(CoalesceExpr);
 						c->coalescetype = exprType(larg);
 						c->coalescecollid = exprCollation(larg);
 						c->args = list_make2(larg, rarg);
@@ -2029,12 +2131,61 @@ set_joinrel_partition_key_exprs(RelOptInfo *joinrel,
 				break;
 
 			default:
-				elog(ERROR, "unrecognized join type: %d", (int) jointype);
+				elog(ERROR, "unrecognized join type: %d",
+					 (int) sjinfo->jointype);
 		}
 
 		joinrel->partexprs[cnt] = partexpr;
 		joinrel->nullable_partexprs[cnt] = nullable_partexpr;
 	}
+}
+
+/*
+ * Attempt to add relid to nullingrels of a FULL JOIN USING variable.
+ * Returns the modified expression if successful, or NULL if we failed.
+ *
+ * We currently don't support any cases where type coercion is involved,
+ * so only plain Vars and COALESCE nodes need be handled.  However, we
+ * do need to support nested COALESCEs, so recursion is required.
+ */
+static Node *
+add_nullingrel_to(Node *node, int relid)
+{
+	if (IsA(node, Var))
+	{
+		/* Copy so we can modify it... */
+		Var		   *var = (Var *) copyObject(node);
+
+		/* ... and insert the correct nullingrel marker */
+		var->varnullingrels = bms_add_member(var->varnullingrels,
+											 relid);
+		return (Node *) var;
+	}
+	if (IsA(node, CoalesceExpr))
+	{
+		CoalesceExpr *cexpr = (CoalesceExpr *) node;
+		CoalesceExpr *newcexpr;
+		List	   *newargs = NIL;
+		ListCell   *lc;
+
+		/* Try to modify each argument ... */
+		foreach(lc, cexpr->args)
+		{
+			Node	   *newarg = add_nullingrel_to((Node *) lfirst(lc), relid);
+
+			if (newarg == NULL)
+				return NULL;
+			newargs = lappend(newargs, newarg);
+		}
+		/* Success, so make the result node */
+		newcexpr = makeNode(CoalesceExpr);
+		newcexpr->coalescetype = cexpr->coalescetype;
+		newcexpr->coalescecollid = cexpr->coalescecollid;
+		newcexpr->args = newargs;
+		newcexpr->location = cexpr->location;
+		return (Node *) newcexpr;
+	}
+	return NULL;
 }
 
 /*

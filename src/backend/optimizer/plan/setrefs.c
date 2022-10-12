@@ -151,6 +151,9 @@ static Var *search_indexed_tlist_for_var(Var *var,
 										 indexed_tlist *itlist,
 										 int newvarno,
 										 int rtoffset);
+static Var *search_indexed_tlist_for_phv(PlaceHolderVar *phv,
+										 indexed_tlist *itlist,
+										 int newvarno);
 static Var *search_indexed_tlist_for_non_var(Expr *node,
 											 indexed_tlist *itlist,
 											 int newvarno);
@@ -1530,6 +1533,7 @@ set_foreignscan_references(PlannerInfo *root,
 	}
 
 	fscan->fs_relids = offset_relid_set(fscan->fs_relids, rtoffset);
+	fscan->fs_base_relids = offset_relid_set(fscan->fs_base_relids, rtoffset);
 
 	/* Adjust resultRelation if it's valid */
 	if (fscan->resultRelation > 0)
@@ -2115,6 +2119,7 @@ fix_scan_expr_mutator(Node *node, fix_scan_expr_context *context)
 		/* At scan level, we should always just evaluate the contained expr */
 		PlaceHolderVar *phv = (PlaceHolderVar *) node;
 
+		Assert(phv->phnullingrels == NULL);
 		return fix_scan_expr_mutator((Node *) phv->phexpr, context);
 	}
 	if (IsA(node, AlternativeSubPlan))
@@ -2235,33 +2240,12 @@ set_join_references(PlannerInfo *root, Join *join, int rtoffset)
 	/*
 	 * Now we need to fix up the targetlist and qpqual, which are logically
 	 * above the join.  This means they should not re-use any input expression
-	 * that was computed in the nullable side of an outer join.  Vars and
-	 * PlaceHolderVars are fine, so we can implement this restriction just by
-	 * clearing has_non_vars in the indexed_tlist structs.
+	 * that was computed in the nullable side of an outer join.
 	 *
-	 * XXX This is a grotty workaround for the fact that we don't clearly
-	 * distinguish between a Var appearing below an outer join and the "same"
-	 * Var appearing above it.  If we did, we'd not need to hack the matching
-	 * rules this way.
+	 * XXX we will probably need to pass some flag down to indicate that this
+	 * context applies, so that search_indexed_tlist_for_var() and siblings
+	 * can correctly check for varnullingrels matches.
 	 */
-	switch (join->jointype)
-	{
-		case JOIN_LEFT:
-		case JOIN_SEMI:
-		case JOIN_ANTI:
-			inner_itlist->has_non_vars = false;
-			break;
-		case JOIN_RIGHT:
-			outer_itlist->has_non_vars = false;
-			break;
-		case JOIN_FULL:
-			outer_itlist->has_non_vars = false;
-			inner_itlist->has_non_vars = false;
-			break;
-		default:
-			break;
-	}
-
 	join->plan.targetlist = fix_join_expr(root,
 										  join->plan.targetlist,
 										  outer_itlist,
@@ -2550,7 +2534,7 @@ set_dummy_tlist_references(Plan *plan, int rtoffset)
  * tlist_member() searches.
  *
  * The result of this function is an indexed_tlist struct to pass to
- * search_indexed_tlist_for_var() or search_indexed_tlist_for_non_var().
+ * search_indexed_tlist_for_var() and siblings.
  * When done, the indexed_tlist may be freed with a single pfree().
  */
 static indexed_tlist *
@@ -2672,6 +2656,8 @@ search_indexed_tlist_for_var(Var *var, indexed_tlist *itlist,
 			/* Found a match */
 			Var		   *newvar = copyVar(var);
 
+			/* XXX we oughta check varnullingrels match here ... */
+
 			newvar->varno = newvarno;
 			newvar->varattno = vinfo->resno;
 			if (newvar->varnosyn > 0)
@@ -2684,15 +2670,55 @@ search_indexed_tlist_for_var(Var *var, indexed_tlist *itlist,
 }
 
 /*
- * search_indexed_tlist_for_non_var --- find a non-Var in an indexed tlist
+ * search_indexed_tlist_for_phv --- find a PlaceHolderVar in an indexed tlist
  *
  * If a match is found, return a Var constructed to reference the tlist item.
  * If no match, return NULL.
  *
- * NOTE: it is a waste of time to call this unless itlist->has_ph_vars or
- * itlist->has_non_vars.  Furthermore, set_join_references() relies on being
- * able to prevent matching of non-Vars by clearing itlist->has_non_vars,
- * so there's a correctness reason not to call it unless that's set.
+ * NOTE: it is a waste of time to call this unless itlist->has_ph_vars.
+ */
+static Var *
+search_indexed_tlist_for_phv(PlaceHolderVar *phv,
+							 indexed_tlist *itlist, int newvarno)
+{
+	ListCell   *lc;
+
+	foreach(lc, itlist->tlist)
+	{
+		TargetEntry *tle = (TargetEntry *) lfirst(lc);
+
+		if (tle->expr && IsA(tle->expr, PlaceHolderVar))
+		{
+			PlaceHolderVar *subphv = (PlaceHolderVar *) tle->expr;
+			Var		   *newvar;
+
+			/*
+			 * Analogously to search_indexed_tlist_for_var, we match on phid
+			 * only.  We don't use equal(), partially for speed but mostly
+			 * because phnullingrels might not be exactly equal.
+			 *
+			 * XXX we really oughta verify phnullingrels.
+			 */
+			if (phv->phid != subphv->phid)
+				continue;
+
+			/* Found a matching subplan output expression */
+			newvar = makeVarFromTargetEntry(newvarno, tle);
+			newvar->varnosyn = 0;	/* wasn't ever a plain Var */
+			newvar->varattnosyn = 0;
+			return newvar;
+		}
+	}
+	return NULL;				/* no match */
+}
+
+/*
+ * search_indexed_tlist_for_non_var --- find a non-Var/PHV in an indexed tlist
+ *
+ * If a match is found, return a Var constructed to reference the tlist item.
+ * If no match, return NULL.
+ *
+ * NOTE: it is a waste of time to call this unless itlist->has_non_vars.
  */
 static Var *
 search_indexed_tlist_for_non_var(Expr *node,
@@ -2877,22 +2903,23 @@ fix_join_expr_mutator(Node *node, fix_join_expr_context *context)
 		/* See if the PlaceHolderVar has bubbled up from a lower plan node */
 		if (context->outer_itlist && context->outer_itlist->has_ph_vars)
 		{
-			newvar = search_indexed_tlist_for_non_var((Expr *) phv,
-													  context->outer_itlist,
-													  OUTER_VAR);
+			newvar = search_indexed_tlist_for_phv(phv,
+												  context->outer_itlist,
+												  OUTER_VAR);
 			if (newvar)
 				return (Node *) newvar;
 		}
 		if (context->inner_itlist && context->inner_itlist->has_ph_vars)
 		{
-			newvar = search_indexed_tlist_for_non_var((Expr *) phv,
-													  context->inner_itlist,
-													  INNER_VAR);
+			newvar = search_indexed_tlist_for_phv(phv,
+												  context->inner_itlist,
+												  INNER_VAR);
 			if (newvar)
 				return (Node *) newvar;
 		}
 
 		/* If not supplied by input plans, evaluate the contained expr */
+		/* XXX assert something about phnullingrels */
 		return fix_join_expr_mutator((Node *) phv->phexpr, context);
 	}
 	/* Try matching more complex expressions too, if tlists have any */
@@ -3001,13 +3028,14 @@ fix_upper_expr_mutator(Node *node, fix_upper_expr_context *context)
 		/* See if the PlaceHolderVar has bubbled up from a lower plan node */
 		if (context->subplan_itlist->has_ph_vars)
 		{
-			newvar = search_indexed_tlist_for_non_var((Expr *) phv,
-													  context->subplan_itlist,
-													  context->newvarno);
+			newvar = search_indexed_tlist_for_phv(phv,
+												  context->subplan_itlist,
+												  context->newvarno);
 			if (newvar)
 				return (Node *) newvar;
 		}
 		/* If not supplied by input plan, evaluate the contained expr */
+		/* XXX assert something about phnullingrels */
 		return fix_upper_expr_mutator((Node *) phv->phexpr, context);
 	}
 	/* Try matching more complex expressions too, if tlist has any */

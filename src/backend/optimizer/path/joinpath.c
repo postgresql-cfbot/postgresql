@@ -250,7 +250,7 @@ add_paths_to_joinrel(PlannerInfo *root,
 		if (bms_overlap(joinrelids, sjinfo2->min_righthand) &&
 			!bms_overlap(joinrelids, sjinfo2->min_lefthand))
 			extra.param_source_rels = bms_join(extra.param_source_rels,
-											   bms_difference(root->all_baserels,
+											   bms_difference(root->all_query_rels,
 															  sjinfo2->min_righthand));
 
 		/* full joins constrain both sides symmetrically */
@@ -258,7 +258,7 @@ add_paths_to_joinrel(PlannerInfo *root,
 			bms_overlap(joinrelids, sjinfo2->min_lefthand) &&
 			!bms_overlap(joinrelids, sjinfo2->min_righthand))
 			extra.param_source_rels = bms_join(extra.param_source_rels,
-											   bms_difference(root->all_baserels,
+											   bms_difference(root->all_query_rels,
 															  sjinfo2->min_lefthand));
 	}
 

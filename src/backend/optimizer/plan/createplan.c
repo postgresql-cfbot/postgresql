@@ -29,6 +29,7 @@
 #include "optimizer/cost.h"
 #include "optimizer/optimizer.h"
 #include "optimizer/paramassign.h"
+#include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
 #include "optimizer/placeholder.h"
 #include "optimizer/plancat.h"
@@ -4105,6 +4106,8 @@ create_foreignscan_plan(PlannerInfo *root, ForeignPath *best_path,
 	Index		scan_relid = rel->relid;
 	Oid			rel_oid = InvalidOid;
 	Plan	   *outer_plan = NULL;
+	Relids		fs_base_relids;
+	int			rtindex;
 
 	Assert(rel->fdwroutine != NULL);
 
@@ -4153,13 +4156,27 @@ create_foreignscan_plan(PlannerInfo *root, ForeignPath *best_path,
 
 	/*
 	 * Likewise, copy the relids that are represented by this foreign scan. An
-	 * upper rel doesn't have relids set, but it covers all the base relations
-	 * participating in the underlying scan, so use root's all_baserels.
+	 * upper rel doesn't have relids set, but it covers all the relations
+	 * participating in the underlying scan/join, so use root->all_query_rels.
 	 */
 	if (rel->reloptkind == RELOPT_UPPER_REL)
-		scan_plan->fs_relids = root->all_baserels;
+		scan_plan->fs_relids = root->all_query_rels;
 	else
 		scan_plan->fs_relids = best_path->path.parent->relids;
+
+	/*
+	 * Join relid sets include relevant outer joins, but FDWs may need to know
+	 * which are the included base rels.  That's a bit tedious to get without
+	 * access to the plan-time data structures, so compute it here.
+	 */
+	fs_base_relids = NULL;
+	rtindex = -1;
+	while ((rtindex = bms_next_member(scan_plan->fs_relids, rtindex)) >= 0)
+	{
+		if (find_base_rel_ignore_join(root, rtindex) != NULL)
+			fs_base_relids = bms_add_member(fs_base_relids, rtindex);
+	}
+	scan_plan->fs_base_relids = fs_base_relids;
 
 	/*
 	 * If this is a foreign join, and to make it valid to push down we had to
@@ -5800,8 +5817,9 @@ make_foreignscan(List *qptlist,
 	node->fdw_private = fdw_private;
 	node->fdw_scan_tlist = fdw_scan_tlist;
 	node->fdw_recheck_quals = fdw_recheck_quals;
-	/* fs_relids will be filled in by create_foreignscan_plan */
+	/* fs_relids, fs_base_relids will be filled by create_foreignscan_plan */
 	node->fs_relids = NULL;
+	node->fs_base_relids = NULL;
 	/* fsSystemCol will be filled in by create_foreignscan_plan */
 	node->fsSystemCol = false;
 

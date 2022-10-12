@@ -338,7 +338,9 @@ consider_new_or_clause(PlannerInfo *root, RelOptInfo *rel,
 		sjinfo.syn_lefthand = sjinfo.min_lefthand;
 		sjinfo.syn_righthand = sjinfo.min_righthand;
 		sjinfo.jointype = JOIN_INNER;
+		sjinfo.ojrelid = 0;
 		/* we don't bother trying to make the remaining fields valid */
+		sjinfo.strict_relids = NULL;
 		sjinfo.lhs_strict = false;
 		sjinfo.delay_upper_joins = false;
 		sjinfo.semi_can_btree = false;

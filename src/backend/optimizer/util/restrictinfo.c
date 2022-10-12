@@ -116,6 +116,7 @@ make_restrictinfo_internal(PlannerInfo *root,
 						   Relids nullable_relids)
 {
 	RestrictInfo *restrictinfo = makeNode(RestrictInfo);
+	Relids		baserels;
 
 	restrictinfo->clause = clause;
 	restrictinfo->orclause = orclause;
@@ -186,6 +187,20 @@ make_restrictinfo_internal(PlannerInfo *root,
 		restrictinfo->required_relids = required_relids;
 	else
 		restrictinfo->required_relids = restrictinfo->clause_relids;
+
+	/*
+	 * Count the number of base rels appearing in clause_relids.  To do this,
+	 * we just delete rels mentioned in root->outer_join_rels and count the
+	 * survivors.  Because we are called during deconstruct_jointree which is
+	 * the same tree walk that populates outer_join_rels, this is a little bit
+	 * unsafe-looking; but it should be fine because the recursion in
+	 * deconstruct_jointree should already have visited any outer join that
+	 * could be mentioned in this clause.
+	 */
+	baserels = bms_difference(restrictinfo->clause_relids,
+							  root->outer_join_rels);
+	restrictinfo->num_base_rels = bms_num_members(baserels);
+	bms_free(baserels);
 
 	/*
 	 * Fill in all the cacheable fields with "not yet set" markers. None of

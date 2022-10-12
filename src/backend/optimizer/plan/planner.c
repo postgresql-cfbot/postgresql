@@ -900,7 +900,7 @@ subquery_planner(PlannerGlobal *glob, Query *parse,
 			 */
 			if (rte->lateral && root->hasJoinRTEs)
 				rte->subquery = (Query *)
-					flatten_join_alias_vars(root->parse,
+					flatten_join_alias_vars(root, root->parse,
 											(Node *) rte->subquery);
 		}
 		else if (rte->rtekind == RTE_FUNCTION)
@@ -1101,7 +1101,7 @@ preprocess_expression(PlannerInfo *root, Node *expr, int kind)
 		  kind == EXPRKIND_VALUES ||
 		  kind == EXPRKIND_TABLESAMPLE ||
 		  kind == EXPRKIND_TABLEFUNC))
-		expr = flatten_join_alias_vars(root->parse, expr);
+		expr = flatten_join_alias_vars(root, root->parse, expr);
 
 	/*
 	 * Simplify constant expressions.  For function RTEs, this was already
@@ -2223,7 +2223,7 @@ preprocess_rowmarks(PlannerInfo *root)
 	 * make a bitmapset of all base rels and then remove the items we don't
 	 * need or have FOR [KEY] UPDATE/SHARE marks for.
 	 */
-	rels = get_relids_in_jointree((Node *) parse->jointree, false);
+	rels = get_relids_in_jointree((Node *) parse->jointree, false, false);
 	if (parse->resultRelation)
 		rels = bms_del_member(rels, parse->resultRelation);
 

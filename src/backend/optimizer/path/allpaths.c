@@ -180,6 +180,9 @@ make_one_rel(PlannerInfo *root, List *joinlist)
 		root->all_baserels = bms_add_member(root->all_baserels, brel->relid);
 	}
 
+	/* Now we can form the value of all_query_rels, too */
+	root->all_query_rels = bms_union(root->all_baserels, root->outer_join_rels);
+
 	/* Mark base rels as to whether we care about fast-start plans */
 	set_base_rel_consider_startup(root);
 
@@ -231,9 +234,9 @@ make_one_rel(PlannerInfo *root, List *joinlist)
 	rel = make_rel_from_joinlist(root, joinlist);
 
 	/*
-	 * The result should join all and only the query's base rels.
+	 * The result should join all and only the query's base + outer-join rels.
 	 */
-	Assert(bms_equal(rel->relids, root->all_baserels));
+	Assert(bms_equal(rel->relids, root->all_query_rels));
 
 	return rel;
 }
@@ -558,7 +561,7 @@ set_rel_pathlist(PlannerInfo *root, RelOptInfo *rel,
 	 * the final scan/join targetlist is available (see grouping_planner).
 	 */
 	if (rel->reloptkind == RELOPT_BASEREL &&
-		!bms_equal(rel->relids, root->all_baserels))
+		!bms_equal(rel->relids, root->all_query_rels))
 		generate_useful_gather_paths(root, rel, false);
 
 	/* Now find the cheapest of the paths for this rel */
@@ -879,7 +882,7 @@ set_tablesample_rel_pathlist(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *
 	 * to support an uncommon usage of second-rate sampling methods.  Instead,
 	 * if there is a risk that the query might perform an unsafe join, just
 	 * wrap the SampleScan in a Materialize node.  We can check for joins by
-	 * counting the membership of all_baserels (note that this correctly
+	 * counting the membership of all_query_rels (note that this correctly
 	 * counts inheritance trees as single rels).  If we're inside a subquery,
 	 * we can't easily check whether a join might occur in the outer query, so
 	 * just assume one is possible.
@@ -888,7 +891,7 @@ set_tablesample_rel_pathlist(PlannerInfo *root, RelOptInfo *rel, RangeTblEntry *
 	 * so check repeatable_across_scans last, even though that's a bit odd.
 	 */
 	if ((root->query_level > 1 ||
-		 bms_membership(root->all_baserels) != BMS_SINGLETON) &&
+		 bms_membership(root->all_query_rels) != BMS_SINGLETON) &&
 		!(GetTsmRoutine(rte->tablesample->tsmhandler)->repeatable_across_scans))
 	{
 		path = (Path *) create_material_path(rel, path);
@@ -3435,7 +3438,7 @@ standard_join_search(PlannerInfo *root, int levels_needed, List *initial_rels)
 			 * partial paths.  We'll do the same for the topmost scan/join rel
 			 * once we know the final targetlist (see grouping_planner).
 			 */
-			if (!bms_equal(rel->relids, root->all_baserels))
+			if (!bms_equal(rel->relids, root->all_query_rels))
 				generate_useful_gather_paths(root, rel, false);
 
 			/* Find and save the cheapest paths for this rel */

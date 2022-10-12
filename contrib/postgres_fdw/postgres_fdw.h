@@ -118,7 +118,8 @@ typedef struct PgFdwRelationInfo
 										 * subquery? */
 	Relids		lower_subquery_rels;	/* all relids appearing in lower
 										 * subqueries */
-
+	Relids		unknown_subquery_rels;	/* relids, which can't be referred to
+										 * from upper relations */
 	/*
 	 * Index of the relation.  It is used to create an alias to a subquery
 	 * representing the relation.

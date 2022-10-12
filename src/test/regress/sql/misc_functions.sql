@@ -223,3 +223,11 @@ SELECT * FROM tenk1 a JOIN my_gen_series(1,1000) g ON a.unique1 = g;
 
 EXPLAIN (COSTS OFF)
 SELECT * FROM tenk1 a JOIN my_gen_series(1,10) g ON a.unique1 = g;
+
+--
+-- Test functions for control data
+--
+SELECT FROM pg_control_checkpoint();
+SELECT FROM pg_control_init();
+SELECT FROM pg_control_recovery();
+SELECT FROM pg_control_system();

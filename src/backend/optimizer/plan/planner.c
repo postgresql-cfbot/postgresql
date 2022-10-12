@@ -533,6 +533,15 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 	result->stmt_location = parse->stmt_location;
 	result->stmt_len = parse->stmt_len;
 
+	result->geqoFlag = false;
+	result->max_nodes_in_join_search = 0;
+	if (enable_geqo)
+	{
+		result->geqoFlag = root->geqo_used;
+		result->max_nodes_in_join_search = root->max_joinnodes;
+	}
+
+
 	result->jitFlags = PGJIT_NONE;
 	if (jit_enabled && jit_above_cost >= 0 &&
 		top_plan->total_cost > jit_above_cost)
@@ -643,6 +652,8 @@ subquery_planner(PlannerGlobal *glob, Query *parse,
 		root->wt_param_id = -1;
 	root->non_recursive_path = NULL;
 	root->partColsUpdated = false;
+	root->geqo_used = false;
+	root->max_joinnodes = 0;
 
 	/*
 	 * If there is a WITH list, process each WITH query and either convert it

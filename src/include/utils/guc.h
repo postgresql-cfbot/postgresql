@@ -390,7 +390,6 @@ extern int	set_config_option_ext(const char *name, const char *value,
 extern void AlterSystemSetConfigFile(AlterSystemStmt *altersysstmt);
 extern char *GetConfigOptionByName(const char *name, const char **varname,
 								   bool missing_ok);
-extern int	GetNumConfigOptions(void);
 
 extern void ProcessGUCArray(ArrayType *array,
 							GucContext context, GucSource source, GucAction action);
@@ -401,6 +400,7 @@ extern ArrayType *GUCArrayReset(ArrayType *array);
 extern void *guc_malloc(int elevel, size_t size);
 extern pg_nodiscard void *guc_realloc(int elevel, void *old, size_t size);
 extern char *guc_strdup(int elevel, const char *src);
+extern void guc_free(void *ptr);
 
 #ifdef EXEC_BACKEND
 extern void write_nondefault_variables(GucContext context);

@@ -9,6 +9,7 @@ use warnings;
 use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
 use Test::More;
+use Time::HiRes qw(usleep);
 
 my $primary = PostgreSQL::Test::Cluster->new('primary');
 $primary->init(
@@ -233,5 +234,23 @@ ok( -f "$standby2_data/$segment_path_1_done"
 	  && -f "$standby2_data/$segment_path_2_done",
 	".done files created after archive success with archive_mode=always on standby"
 );
+
+# Check that the archiver process calls the shell archive module's shutdown
+# callback.
+$standby2->append_conf('postgresql.conf', "log_min_messages = debug1");
+$standby2->reload;
+
+$standby2->stop();
+
+# wait for postgres to terminate
+foreach my $i (0 .. 10 * $PostgreSQL::Test::Utils::timeout_default)
+{
+	last if !-f $standby2->data_dir . '/postmaster.pid';
+	usleep(100_000);
+}
+
+my $logfile = slurp_file($standby2->logfile());
+ok($logfile =~ qr/archiver process shutting down/,
+	'check shutdown callback of shell archive module');
 
 done_testing();

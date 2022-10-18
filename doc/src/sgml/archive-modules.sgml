@@ -121,9 +121,10 @@ typedef bool (*ArchiveFileCB) (const char *file, const char *path);
   <sect2 id="archive-module-shutdown">
    <title>Shutdown Callback</title>
    <para>
-    The <function>shutdown_cb</function> callback is called when the archiver
-    process exits (e.g., after an error) or the value of
-    <xref linkend="guc-archive-library"/> changes.  If no
+    The <function>shutdown_cb</function> callback is called before the server
+    begins to shut down low-level subsystems such as shared memory upon the
+    archiver process exit (e.g., after an error or the value of
+    <xref linkend="guc-archive-library"/> changes).  If no
     <function>shutdown_cb</function> is defined, no special action is taken in
     these situations.
 

@@ -144,7 +144,7 @@ static void pgarch_die(int code, Datum arg);
 static void HandlePgArchInterrupts(void);
 static int	ready_file_comparator(Datum a, Datum b, void *arg);
 static void LoadArchiveLibrary(void);
-static void call_archive_module_shutdown_callback(int code, Datum arg);
+static void pgarch_before_shmem_exit(int code, Datum arg);
 
 /* Report shared memory space needed by PgArchShmemInit */
 Size
@@ -232,6 +232,8 @@ PgArchiverMain(void)
 	/* We shouldn't be launched unnecessarily. */
 	Assert(XLogArchivingActive());
 
+	before_shmem_exit(pgarch_before_shmem_exit, 0);
+
 	/* Arrange to clean up at archiver exit */
 	on_shmem_exit(pgarch_die, 0);
 
@@ -252,13 +254,7 @@ PgArchiverMain(void)
 	/* Load the archive_library. */
 	LoadArchiveLibrary();
 
-	PG_ENSURE_ERROR_CLEANUP(call_archive_module_shutdown_callback, 0);
-	{
-		pgarch_MainLoop();
-	}
-	PG_END_ENSURE_ERROR_CLEANUP(call_archive_module_shutdown_callback, 0);
-
-	call_archive_module_shutdown_callback(0, 0);
+	pgarch_MainLoop();
 
 	proc_exit(0);
 }
@@ -804,12 +800,6 @@ HandlePgArchInterrupts(void)
 		if (archiveLibChanged)
 		{
 			/*
-			 * Call the currently loaded archive module's shutdown callback,
-			 * if one is defined.
-			 */
-			call_archive_module_shutdown_callback(0, 0);
-
-			/*
 			 * Ideally, we would simply unload the previous archive module and
 			 * load the new one, but there is presently no mechanism for
 			 * unloading a library (see the comment above
@@ -861,12 +851,12 @@ LoadArchiveLibrary(void)
 }
 
 /*
- * call_archive_module_shutdown_callback
+ * Before shared memory exit callback for WAL archiver process.
  *
- * Calls the loaded archive module's shutdown callback, if one is defined.
+ * It calls the loaded archive module's shutdown callback, if one is defined.
  */
 static void
-call_archive_module_shutdown_callback(int code, Datum arg)
+pgarch_before_shmem_exit(int code, Datum arg)
 {
 	if (ArchiveContext.shutdown_cb != NULL)
 		ArchiveContext.shutdown_cb();

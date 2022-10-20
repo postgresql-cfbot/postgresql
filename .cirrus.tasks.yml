@@ -799,18 +799,36 @@ task:
   # XXX: Only do this if there have been changes in doc/ since last build
   always:
     docs_build_script: |
-      time ./configure \
+      mkdir build-autoconf
+      cd build-autoconf
+      time ../configure \
         --cache gcc.cache \
         CC="ccache gcc" CXX="ccache g++" CLANG="ccache clang-16"
+        --without-icu \
       make -s -j${BUILD_JOBS} clean
       time make -s -j${BUILD_JOBS} -C doc
-      cp -r doc new-docs
+      cp -r doc ../new-docs
 
       # Re-build HTML docs from the base commit.
-      git checkout "$BASE_COMMIT" -- doc
+      git checkout "$BASE_COMMIT" -- ../doc
       make -s -C doc clean
       time make -s -C doc html
-      cp -r doc old-docs
+      cp -r doc ../old-docs
+
+    # Exercise HTML and other docs:
+    ninja_docs_build_script: |
+      make maintainer-clean # XXX not needed once compiler-warnings is switched meson
+      mkdir build-ninja
+      cd build-ninja
+      time meson setup
+      time ninja docs
+      cp -r doc ../new-docs
+
+      # Re-build HTML docs from the base commit.
+      git checkout "$BASE_COMMIT" -- ../doc
+      ninja clean
+      time ninja doc/src/sgml/html
+      cp -r doc ../old-docs
 
     copy_changed_docs_script:
       - src/tools/ci/copy-changed-docs "old-docs" "new-docs" "html_docs"

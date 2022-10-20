@@ -11,7 +11,8 @@ branch=$CIRRUS_BRANCH
 skippages="bookindex.html"
 
 mkdir "$outdir"
-cp "$new"/src/sgml/html/*.css "$new"/src/sgml/html/*.svg "$outdir"
+cp doc/src/sgml/*.css "$outdir"
+cp doc/src/sgml/images/*.svg "$outdir"
 
 # The index is useful to allow a static link (not specific to a cirrus run) to the artifacts for the most-recent, successful CI run for a branch
 branchurl=https://api.cirrus-ci.com/v1/artifact/github/$CIRRUS_REPO_FULL_NAME/$CIRRUS_TASK_NAME/html_docs/html_docs/00-index.html?branch=$branch

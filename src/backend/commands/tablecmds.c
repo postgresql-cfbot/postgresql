@@ -9352,7 +9352,7 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 			 * Upon a change to the cast from the FK column to its pfeqop
 			 * operand, revalidate the constraint.  For this evaluation, a
 			 * binary coercion cast is equivalent to no cast at all.  While
-			 * type implementors should design implicit casts with an eye
+			 * type implementers should design implicit casts with an eye
 			 * toward consistency of operations like equality, we cannot
 			 * assume here that they have done so.
 			 *

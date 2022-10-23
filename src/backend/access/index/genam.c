@@ -46,7 +46,7 @@
  *		We don't know how the various AMs do locking, however, so we don't
  *		do anything about that here.
  *
- *		The intent is that an AM implementor will define a beginscan routine
+ *		The intent is that an AM implementer will define a beginscan routine
  *		that calls RelationGetIndexScan, to fill in the scan, and then does
  *		whatever kind of locking he wants.
  *

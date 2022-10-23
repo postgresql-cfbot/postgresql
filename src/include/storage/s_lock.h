@@ -28,7 +28,7 @@
  *	void SPIN_DELAY(void)
  *		Delay operation to occur inside spinlock wait loop.
  *
- *	Note to implementors: there are default implementations for all these
+ *	Note to implementers: there are default implementations for all these
  *	macros at the bottom of the file.  Check if your platform can use
  *	these or needs to override them.
  *

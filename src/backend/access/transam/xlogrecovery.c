@@ -1645,17 +1645,15 @@ PerformWalRecovery(void)
 						LSN_FORMAT_ARGS(xlogreader->ReadRecPtr))));
 
 		/* Prepare to report progress of the redo phase. */
-		if (!StandbyMode)
-			begin_startup_progress_phase();
+		begin_startup_progress_phase();
 
 		/*
 		 * main redo apply loop
 		 */
 		do
 		{
-			if (!StandbyMode)
-				ereport_startup_progress("redo in progress, elapsed time: %ld.%02d s, current LSN: %X/%X",
-										 LSN_FORMAT_ARGS(xlogreader->ReadRecPtr));
+			ereport_startup_progress("redo in progress, elapsed time: %ld.%02d s, current LSN: %X/%X, Timeline ID: %u, WAL file source: %s",
+									 LSN_FORMAT_ARGS(xlogreader->ReadRecPtr), replayTLI, xlogSourceNames[currentSource]);
 
 #ifdef WAL_DEBUG
 			if (XLOG_DEBUG ||

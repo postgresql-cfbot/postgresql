@@ -223,3 +223,47 @@ SELECT * FROM tenk1 a JOIN my_gen_series(1,1000) g ON a.unique1 = g;
 
 EXPLAIN (COSTS OFF)
 SELECT * FROM tenk1 a JOIN my_gen_series(1,10) g ON a.unique1 = g;
+
+--
+-- Test functions for control data
+--
+\x
+SELECT checkpoint_lsn > '0/0'::pg_lsn AS checkpoint_lsn,
+    redo_lsn > '0/0'::pg_lsn AS redo_lsn,
+    redo_wal_file IS NOT NULL AS redo_wal_file,
+    timeline_id > 0 AS timeline_id,
+    prev_timeline_id > 0 AS prev_timeline_id,
+    next_xid IS NOT NULL AS next_xid,
+    next_oid > 0 AS next_oid,
+    next_multixact_id != '0'::xid AS next_multixact_id,
+    next_multi_offset IS NOT NULL AS next_multi_offset,
+    oldest_xid != '0'::xid AS oldest_xid,
+    oldest_xid_dbid > 0 AS oldest_xid_dbid,
+    oldest_active_xid != '0'::xid AS oldest_active_xid,
+    oldest_multi_xid != '0'::xid AS oldest_multi_xid,
+    oldest_multi_dbid > 0 AS oldest_multi_dbid,
+    oldest_commit_ts_xid IS NOT NULL AS oldest_commit_ts_xid,
+    newest_commit_ts_xid IS NOT NULL AS newest_commit_ts_xid
+  FROM pg_control_checkpoint();
+SELECT max_data_alignment > 0 AS max_data_alignment,
+    database_block_size > 0 AS database_block_size,
+    blocks_per_segment > 0 AS blocks_per_segment,
+    wal_block_size > 0 AS wal_block_size,
+    max_identifier_length > 0 AS max_identifier_length,
+    max_index_columns > 0 AS max_index_columns,
+    max_toast_chunk_size > 0 AS max_toast_chunk_size,
+    large_object_chunk_size > 0 AS large_object_chunk_size,
+    float8_pass_by_value IS NOT NULL AS float8_pass_by_value,
+    data_page_checksum_version >= 0 AS data_page_checksum_version
+  FROM pg_control_init();
+SELECT min_recovery_end_lsn >= '0/0'::pg_lsn AS min_recovery_end_lsn,
+    min_recovery_end_timeline >= 0 AS min_recovery_end_timeline,
+    backup_start_lsn >= '0/0'::pg_lsn AS backup_start_lsn,
+    backup_end_lsn >= '0/0'::pg_lsn AS backup_end_lsn,
+    end_of_backup_record_required IS NOT NULL AS end_of_backup_record_required
+  FROM pg_control_recovery();
+SELECT pg_control_version > 0 AS pg_control_version,
+    catalog_version_no > 0 AS catalog_version_no,
+    system_identifier >= 0 AS system_identifier,
+    pg_control_last_modified <= now() AS pg_control_last_modified
+  FROM pg_control_system();

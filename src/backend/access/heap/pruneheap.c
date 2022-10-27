@@ -597,7 +597,8 @@ heap_prune_chain(Buffer buffer, OffsetNumber rootoffnum, PruneState *prstate)
 	HeapTupleHeader htup;
 	OffsetNumber latestdead = InvalidOffsetNumber,
 				maxoff = PageGetMaxOffsetNumber(dp),
-				offnum;
+				offnum,
+				priorOffnum;
 	OffsetNumber chainitems[MaxHeapTuplesPerPage];
 	int			nchain = 0,
 				i;
@@ -654,7 +655,8 @@ heap_prune_chain(Buffer buffer, OffsetNumber rootoffnum, PruneState *prstate)
 	{
 		ItemId		lp;
 		bool		tupdead,
-					recent_dead;
+					recent_dead,
+					never_visible;
 
 		/* Sanity check (pure paranoia) */
 		if (offnum < FirstOffsetNumber)
@@ -718,7 +720,7 @@ heap_prune_chain(Buffer buffer, OffsetNumber rootoffnum, PruneState *prstate)
 		/*
 		 * Check tuple's visibility status.
 		 */
-		tupdead = recent_dead = false;
+		tupdead = recent_dead = never_visible = false;
 
 		switch ((HTSV_Result) prstate->htsv[offnum])
 		{
@@ -727,16 +729,32 @@ heap_prune_chain(Buffer buffer, OffsetNumber rootoffnum, PruneState *prstate)
 				break;
 
 			case HEAPTUPLE_RECENTLY_DEAD:
+			{
+				TransactionId prune_xmin = HeapTupleHeaderGetXmin(htup);
+				TransactionId prune_xmax = HeapTupleHeaderGetUpdateXid(htup);
 				recent_dead = true;
+
+				/*
+				 * Row versions that are both inserted and updated by the same
+				 * transaction will never be visible outside of the transaction
+				 * and might be removable, even though only recently dead.
+				 * This check can be performed very cheaply with data at hand.
+				 *
+				 * It would also be correct to check for rows inserted in one
+				 * subtransaction, then later inserted in a later subtransaction
+				 * within one top-level transaction, but we'd need to hit subtrans
+				 * with lots of requests, so it will be very slow.
+				 */
+				if (TransactionIdEquals(prune_xmin, prune_xmax))
+					never_visible = true;
 
 				/*
 				 * This tuple may soon become DEAD.  Update the hint field so
 				 * that the page is reconsidered for pruning in future.
 				 */
-				heap_prune_record_prunable(prstate,
-										   HeapTupleHeaderGetUpdateXid(htup));
+				heap_prune_record_prunable(prstate,prune_xmax);
 				break;
-
+			}
 			case HEAPTUPLE_DELETE_IN_PROGRESS:
 
 				/*
@@ -769,8 +787,19 @@ heap_prune_chain(Buffer buffer, OffsetNumber rootoffnum, PruneState *prstate)
 		 * but we can't advance past anything else.  We have to make sure that
 		 * we don't miss any DEAD tuples, since DEAD tuples that still have
 		 * tuple storage after pruning will confuse VACUUM.
+		 *
+		 * There are some useful edge cases where we can remove tuples, even
+		 * when they are only recently dead:
+		 * - We can remove never_visible tuples at the start of the chain.
+		 * - If the last member of the chain was latestdead then we can also
+		 * remove never_visible tuples immediately afterwards, since doing
+		 * so will not break the chain. Doing this can greatly increase the
+		 * effectiveness of pruning when an application performs an INSERT
+		 * then an UPDATEs the row in the same transaction, or when an app
+		 * performs multiple UPDATEs of the same row in the same transaction.
 		 */
-		if (tupdead)
+		if (tupdead ||
+			(never_visible && latestdead == priorOffnum))
 		{
 			latestdead = offnum;
 			HeapTupleHeaderAdvanceLatestRemovedXid(htup,
@@ -794,6 +823,7 @@ heap_prune_chain(Buffer buffer, OffsetNumber rootoffnum, PruneState *prstate)
 		 */
 		Assert(ItemPointerGetBlockNumber(&htup->t_ctid) ==
 			   BufferGetBlockNumber(buffer));
+		priorOffnum = offnum;
 		offnum = ItemPointerGetOffsetNumber(&htup->t_ctid);
 		priorXmax = HeapTupleHeaderGetUpdateXid(htup);
 	}

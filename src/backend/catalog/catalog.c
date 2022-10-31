@@ -29,6 +29,7 @@
 #include "catalog/namespace.h"
 #include "catalog/pg_auth_members.h"
 #include "catalog/pg_authid.h"
+#include "catalog/pg_collation.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_db_role_setting.h"
 #include "catalog/pg_largeobject.h"
@@ -353,6 +354,17 @@ IsPinnedObject(Oid classId, Oid objectId)
 	 * mutual backups (as long as you've not modified template1, anyway).
 	 */
 	if (classId == DatabaseRelationId)
+		return false;
+
+	/*
+	 * The default collation is never pinned. While logically the default
+	 * collation should not change, the collation provider may change in
+	 * subtle ways when upgraded. Recording the dependencies on the default
+	 * collation makes it easier to understand what objects might be affected
+	 * when that happens.
+	 */
+	if (classId == CollationRelationId &&
+		objectId == DEFAULT_COLLATION_OID)
 		return false;
 
 	/*

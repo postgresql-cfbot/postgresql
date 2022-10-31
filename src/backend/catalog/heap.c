@@ -832,9 +832,7 @@ AddNewAttributeTuples(Oid new_rel_oid,
 						 tupdesc->attrs[i].atttypid);
 		recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
 
-		/* The default collation is pinned, so don't bother recording it */
-		if (OidIsValid(tupdesc->attrs[i].attcollation) &&
-			tupdesc->attrs[i].attcollation != DEFAULT_COLLATION_OID)
+		if (OidIsValid(tupdesc->attrs[i].attcollation))
 		{
 			ObjectAddressSet(referenced, CollationRelationId,
 							 tupdesc->attrs[i].attcollation);
@@ -3367,9 +3365,7 @@ StorePartitionKey(Relation rel,
 		ObjectAddressSet(referenced, OperatorClassRelationId, partopclass[i]);
 		add_exact_object_address(&referenced, addrs);
 
-		/* The default collation is pinned, so don't bother recording it */
-		if (OidIsValid(partcollation[i]) &&
-			partcollation[i] != DEFAULT_COLLATION_OID)
+		if (OidIsValid(partcollation[i]))
 		{
 			ObjectAddressSet(referenced, CollationRelationId, partcollation[i]);
 			add_exact_object_address(&referenced, addrs);

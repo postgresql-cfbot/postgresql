@@ -1142,11 +1142,9 @@ index_create(Relation heapRelation,
 
 		/* Store dependency on collations */
 
-		/* The default collation is pinned, so don't bother recording it */
 		for (i = 0; i < indexInfo->ii_NumIndexKeyAttrs; i++)
 		{
-			if (OidIsValid(collationObjectId[i]) &&
-				collationObjectId[i] != DEFAULT_COLLATION_OID)
+			if (OidIsValid(collationObjectId[i]))
 			{
 				ObjectAddressSet(referenced, CollationRelationId,
 								 collationObjectId[i]);

@@ -680,11 +680,9 @@ GenerateTypeDependencies(HeapTuple typeTuple,
 	}
 
 	/*
-	 * Normal dependency from a domain to its collation.  We know the default
-	 * collation is pinned, so don't bother recording it.
+	 * Normal dependency from a domain to its collation.
 	 */
-	if (OidIsValid(typeForm->typcollation) &&
-		typeForm->typcollation != DEFAULT_COLLATION_OID)
+	if (OidIsValid(typeForm->typcollation))
 	{
 		ObjectAddressSet(referenced, CollationRelationId, typeForm->typcollation);
 		add_exact_object_address(&referenced, addrs_normal);

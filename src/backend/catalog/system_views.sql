@@ -1313,3 +1313,51 @@ CREATE VIEW pg_stat_subscription_stats AS
         ss.stats_reset
     FROM pg_subscription as s,
          pg_stat_get_subscription_stats(s.oid) as ss;
+
+CREATE VIEW pg_collation_versions AS
+    SELECT
+        collname AS collation_name,
+	CASE collprovider
+	    WHEN 'd' THEN 'default'
+	    WHEN 'c' THEN 'libc'
+	    WHEN 'i' THEN 'icu'
+	    END AS provider,
+	CASE WHEN oid = 'default'::regcollation THEN
+	       (SELECT datcollversion FROM pg_database
+	        WHERE datname = current_database())
+	     ELSE collversion
+	     END AS version,
+	pg_collation_actual_version(oid) AS actual_version
+    FROM pg_collation;
+
+CREATE OR REPLACE VIEW pg_collation_dependencies AS
+  WITH RECURSIVE
+  collation_dependencies(classid, objid, objsubid, refcollid) AS (
+    select d.classid, d.objid, d.objsubid,
+           refobjid::regcollation as refcollid
+      from pg_depend d
+      where refclassid='pg_collation'::regclass
+    union
+    select d.classid, d.objid, d.objsubid, cd.refcollid
+      from pg_depend d, collation_dependencies cd
+      where cd.classid = d.refclassid
+        and cd.objid = d.refobjid
+        and cd.objsubid = d.refobjsubid
+  )
+  SELECT cd.classid, cd.objid, cd.objsubid, cd.refcollid,
+         pg_describe_object(cd.classid, cd.objid, cd.objsubid) as description
+    FROM collation_dependencies cd
+    WHERE
+      -- ignore system objects
+      cd.objid >= 16384
+      AND CASE WHEN cd.classid = 'pg_class'::regclass THEN
+                   -- ignore TOAST tables
+                   (SELECT relkind <> 't' FROM pg_class c WHERE cd.objid = c.oid)
+	       WHEN cd.classid = 'pg_trigger'::regclass THEN
+	           -- ignore array types
+	           (SELECT NOT tgisinternal FROM pg_trigger tg WHERE cd.objid = tg.oid)
+	       WHEN cd.classid = 'pg_type'::regclass THEN
+	           -- ignore array types
+	           (SELECT typelem = 0 FROM pg_type t WHERE cd.objid = t.oid)
+	       ELSE TRUE
+	       END;

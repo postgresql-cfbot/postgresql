@@ -1312,6 +1312,56 @@ pg_backend_memory_contexts| SELECT pg_get_backend_memory_contexts.name,
     pg_get_backend_memory_contexts.free_chunks,
     pg_get_backend_memory_contexts.used_bytes
    FROM pg_get_backend_memory_contexts() pg_get_backend_memory_contexts(name, ident, parent, level, total_bytes, total_nblocks, free_bytes, free_chunks, used_bytes);
+pg_collation_dependencies| WITH RECURSIVE collation_dependencies(classid, objid, objsubid, refcollid) AS (
+         SELECT d.classid,
+            d.objid,
+            d.objsubid,
+            (d.refobjid)::regcollation AS refcollid
+           FROM pg_depend d
+          WHERE (d.refclassid = ('pg_collation'::regclass)::oid)
+        UNION
+         SELECT d.classid,
+            d.objid,
+            d.objsubid,
+            cd_1.refcollid
+           FROM pg_depend d,
+            collation_dependencies cd_1
+          WHERE ((cd_1.classid = d.refclassid) AND (cd_1.objid = d.refobjid) AND (cd_1.objsubid = d.refobjsubid))
+        )
+ SELECT cd.classid,
+    cd.objid,
+    cd.objsubid,
+    cd.refcollid,
+    pg_describe_object(cd.classid, cd.objid, cd.objsubid) AS description
+   FROM collation_dependencies cd
+  WHERE ((cd.objid >= (16384)::oid) AND
+        CASE
+            WHEN (cd.classid = ('pg_class'::regclass)::oid) THEN ( SELECT (c.relkind <> 't'::"char")
+               FROM pg_class c
+              WHERE (cd.objid = c.oid))
+            WHEN (cd.classid = ('pg_trigger'::regclass)::oid) THEN ( SELECT (NOT tg.tgisinternal)
+               FROM pg_trigger tg
+              WHERE (cd.objid = tg.oid))
+            WHEN (cd.classid = ('pg_type'::regclass)::oid) THEN ( SELECT (t.typelem = (0)::oid)
+               FROM pg_type t
+              WHERE (cd.objid = t.oid))
+            ELSE true
+        END);
+pg_collation_versions| SELECT pg_collation.collname AS collation_name,
+        CASE pg_collation.collprovider
+            WHEN 'd'::"char" THEN 'default'::text
+            WHEN 'c'::"char" THEN 'libc'::text
+            WHEN 'i'::"char" THEN 'icu'::text
+            ELSE NULL::text
+        END AS provider,
+        CASE
+            WHEN (pg_collation.oid = ('"default"'::regcollation)::oid) THEN ( SELECT pg_database.datcollversion
+               FROM pg_database
+              WHERE (pg_database.datname = current_database()))
+            ELSE pg_collation.collversion
+        END AS version,
+    pg_collation_actual_version(pg_collation.oid) AS actual_version
+   FROM pg_collation;
 pg_config| SELECT pg_config.name,
     pg_config.setting
    FROM pg_config() pg_config(name, setting);

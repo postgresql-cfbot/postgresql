@@ -7175,8 +7175,7 @@ add_column_collation_dependency(Oid relid, int32 attnum, Oid collid)
 	ObjectAddress myself,
 				referenced;
 
-	/* We know the default collation is pinned, so don't bother recording it */
-	if (OidIsValid(collid) && collid != DEFAULT_COLLATION_OID)
+	if (OidIsValid(collid))
 	{
 		myself.classId = RelationRelationId;
 		myself.objectId = relid;

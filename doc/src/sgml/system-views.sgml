@@ -549,6 +549,172 @@
   </para>
  </sect1>
 
+ <sect1 id="view-pg-collation-dependencies">
+  <title><structname>pg_collation_dependencies</structname></title>
+
+  <indexterm zone="view-pg-collation-dependencies">
+   <primary>pg_collation_dependencies</primary>
+  </indexterm>
+
+  <para>
+   The view <structname>pg_collation_dependencies</structname> shows the
+   dependencies (including transitive dependencies) of collations. It is
+   intended to be used to understand the potential impact of a change to a
+   collation due, for example, to a change in the collation provider library.
+  </para>
+
+  <para>
+   By default, the <structname>pg_collation_dependencies</structname> view can
+   be read only by superusers.
+  </para>
+
+  <table>
+   <title><structname>pg_collation_dependencies</structname> Columns</title>
+   <tgroup cols="1">
+    <thead>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       Column Type
+      </para>
+      <para>
+       Description
+      </para></entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>classid</structfield> <type>oid</type>
+       (references <link linkend="catalog-pg-class"><structname>pg_class</structname></link>.<structfield>oid</structfield>)
+      </para>
+      <para>
+       The OID of the system catalog the dependent object is in
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>objid</structfield> <type>oid</type>
+       (references any OID column)
+      </para>
+      <para>
+       The OID of the specific dependent object
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>objsubid</structfield> <type>int4</type>
+      </para>
+      <para>
+       For a table column, this is the column number (the
+       <structfield>objid</structfield> and <structfield>classid</structfield> refer to the
+       table itself).  For all other object types, this column is
+       zero.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>refcollid</structfield> <type>regcollation</type>
+      </para>
+      <para>
+       The collation on which the object depends.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>description</structfield> <type>text</type>
+      </para>
+      <para>
+       The description of the dependent object.
+      </para></entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
+
+ </sect1>
+
+ <sect1 id="view-pg-collation-versions">
+  <title><structname>pg_collation_versions</structname></title>
+
+  <indexterm zone="view-pg-collation-versions">
+   <primary>pg_collation_dependencies</primary>
+  </indexterm>
+
+  <para>
+   The view <structname>pg_collation_versions</structname> shows the current
+   version as well as the actual version (obtained from the collation
+   provider) for each collation. It is intended to detect changes in the
+   collation provider library.
+  </para>
+
+  <para>
+   By default, the <structname>pg_collation_versions</structname> view can be
+   read only by superusers.
+  </para>
+
+  <table>
+   <title><structname>pg_collation_versions</structname> Columns</title>
+   <tgroup cols="1">
+    <thead>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       Column Type
+      </para>
+      <para>
+       Description
+      </para></entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>collation_name</structfield> <type>name</type>
+      </para>
+      <para>
+       The collation name
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>provider</structfield> <type>text</type>
+      </para>
+      <para>
+       The collation provider (<literal>default</literal>,
+       <literal>libc</literal>, or <literal>icu</literal>).  </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>version</structfield> <type>text</type>
+      </para>
+      <para>
+       The version string in the catalog, i.e. the version at the time the
+       collation or database was created, or the version last refreshed.
+       </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>version</structfield> <type>text</type>
+      </para>
+      <para>
+       The current version string obtained from the collation provider library
+       for the collation's locale name.
+      </para></entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
+
+ </sect1>
+
  <sect1 id="view-pg-config">
   <title><structname>pg_config</structname></title>
 

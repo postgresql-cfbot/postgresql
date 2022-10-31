@@ -1805,11 +1805,9 @@ find_expr_references_walker(Node *node,
 		/*
 		 * We must also depend on the constant's collation: it could be
 		 * different from the datatype's, if a CollateExpr was const-folded to
-		 * a simple constant.  However we can save work in the most common
-		 * case where the collation is "default", since we know that's pinned.
+		 * a simple constant.
 		 */
-		if (OidIsValid(con->constcollid) &&
-			con->constcollid != DEFAULT_COLLATION_OID)
+		if (OidIsValid(con->constcollid))
 			add_object_address(OCLASS_COLLATION, con->constcollid, 0,
 							   context->addrs);
 
@@ -1905,8 +1903,7 @@ find_expr_references_walker(Node *node,
 		add_object_address(OCLASS_TYPE, param->paramtype, 0,
 						   context->addrs);
 		/* and its collation, just as for Consts */
-		if (OidIsValid(param->paramcollid) &&
-			param->paramcollid != DEFAULT_COLLATION_OID)
+		if (OidIsValid(param->paramcollid))
 			add_object_address(OCLASS_COLLATION, param->paramcollid, 0,
 							   context->addrs);
 	}
@@ -2009,8 +2006,7 @@ find_expr_references_walker(Node *node,
 			add_object_address(OCLASS_TYPE, fselect->resulttype, 0,
 							   context->addrs);
 		/* the collation might not be referenced anywhere else, either */
-		if (OidIsValid(fselect->resultcollid) &&
-			fselect->resultcollid != DEFAULT_COLLATION_OID)
+		if (OidIsValid(fselect->resultcollid))
 			add_object_address(OCLASS_COLLATION, fselect->resultcollid, 0,
 							   context->addrs);
 	}
@@ -2040,8 +2036,7 @@ find_expr_references_walker(Node *node,
 		add_object_address(OCLASS_TYPE, relab->resulttype, 0,
 						   context->addrs);
 		/* the collation might not be referenced anywhere else, either */
-		if (OidIsValid(relab->resultcollid) &&
-			relab->resultcollid != DEFAULT_COLLATION_OID)
+		if (OidIsValid(relab->resultcollid))
 			add_object_address(OCLASS_COLLATION, relab->resultcollid, 0,
 							   context->addrs);
 	}
@@ -2053,8 +2048,7 @@ find_expr_references_walker(Node *node,
 		add_object_address(OCLASS_TYPE, iocoerce->resulttype, 0,
 						   context->addrs);
 		/* the collation might not be referenced anywhere else, either */
-		if (OidIsValid(iocoerce->resultcollid) &&
-			iocoerce->resultcollid != DEFAULT_COLLATION_OID)
+		if (OidIsValid(iocoerce->resultcollid))
 			add_object_address(OCLASS_COLLATION, iocoerce->resultcollid, 0,
 							   context->addrs);
 	}
@@ -2066,8 +2060,7 @@ find_expr_references_walker(Node *node,
 		add_object_address(OCLASS_TYPE, acoerce->resulttype, 0,
 						   context->addrs);
 		/* the collation might not be referenced anywhere else, either */
-		if (OidIsValid(acoerce->resultcollid) &&
-			acoerce->resultcollid != DEFAULT_COLLATION_OID)
+		if (OidIsValid(acoerce->resultcollid))
 			add_object_address(OCLASS_COLLATION, acoerce->resultcollid, 0,
 							   context->addrs);
 		/* fall through to examine arguments */
@@ -2155,8 +2148,7 @@ find_expr_references_walker(Node *node,
 		if (OidIsValid(wc->endInRangeFunc))
 			add_object_address(OCLASS_PROC, wc->endInRangeFunc, 0,
 							   context->addrs);
-		if (OidIsValid(wc->inRangeColl) &&
-			wc->inRangeColl != DEFAULT_COLLATION_OID)
+		if (OidIsValid(wc->inRangeColl))
 			add_object_address(OCLASS_COLLATION, wc->inRangeColl, 0,
 							   context->addrs);
 		/* fall through to examine substructure */
@@ -2316,7 +2308,7 @@ find_expr_references_walker(Node *node,
 		{
 			Oid			collid = lfirst_oid(ct);
 
-			if (OidIsValid(collid) && collid != DEFAULT_COLLATION_OID)
+			if (OidIsValid(collid))
 				add_object_address(OCLASS_COLLATION, collid, 0,
 								   context->addrs);
 		}
@@ -2338,7 +2330,7 @@ find_expr_references_walker(Node *node,
 		{
 			Oid			collid = lfirst_oid(ct);
 
-			if (OidIsValid(collid) && collid != DEFAULT_COLLATION_OID)
+			if (OidIsValid(collid))
 				add_object_address(OCLASS_COLLATION, collid, 0,
 								   context->addrs);
 		}

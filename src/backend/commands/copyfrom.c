@@ -1377,6 +1377,11 @@ BeginCopyFrom(ParseState *pstate,
 
 	/* Extract options from the statement node tree */
 	ProcessCopyOptions(pstate, &cstate->opts, true /* is_from */ , options);
+	/* force_null, force_notnull avaliable only in CSV mode */
+	Assert((cstate->opts.force_null != NIL || cstate->opts.force_notnull != NIL) ? cstate->opts.csv_mode : true);
+	/* force_quote can't be used in COPY FROM */
+	Assert(cstate->opts.force_quote == NIL);
+	Assert(!cstate->opts.force_quote_all);
 
 	/* Process the target relation */
 	cstate->rel = rel;

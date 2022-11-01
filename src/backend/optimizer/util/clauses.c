@@ -105,7 +105,8 @@ static bool contain_context_dependent_node(Node *clause);
 static bool contain_context_dependent_node_walker(Node *node, int *flags);
 static bool contain_leaked_vars_walker(Node *node, void *context);
 static Relids find_nonnullable_rels_walker(Node *node, bool top_level);
-static List *find_nonnullable_vars_walker(Node *node, bool top_level);
+static void find_nonnullable_vars_walker(Node *node, VarAttnoSet *attnos,
+										 bool top_level);
 static bool is_strict_saop(ScalarArrayOpExpr *expr, bool falseOK);
 static bool convert_saop_to_hashed_saop_walker(Node *node, void *context);
 static Node *eval_const_expressions_mutator(Node *node,
@@ -1308,6 +1309,85 @@ contain_leaked_vars_walker(Node *node, void *context)
 								  context);
 }
 
+
+/*
+ * make_empty_varattnoset
+ *		Create an empty VarAttnoSet structure for use with following routines.
+ *
+ * The maximum varno we expect to deal with is rangetable_length.
+ */
+VarAttnoSet *
+make_empty_varattnoset(int rangetable_length)
+{
+	VarAttnoSet *result;
+
+	/* palloc0 is sufficient to initialize all the bitmapsets to empty */
+	result = (VarAttnoSet *)
+		palloc0(offsetof(VarAttnoSet, varattnos) +
+				(rangetable_length + 1) * sizeof(Bitmapset *));
+	result->max_varno = rangetable_length;
+	return result;
+}
+
+/*
+ * varattnoset_add_members
+ *		Add all members of set b to set a.
+ *
+ * This is like bms_add_members, but for sets of bitmapsets.
+ * For convenience, we allow b (but not a) to be a NULL pointer.
+ */
+void
+varattnoset_add_members(VarAttnoSet *a, const VarAttnoSet *b)
+{
+	if (b != NULL)
+	{
+		/* We don't really expect the max_varnos to differ, but allow b < a */
+		Assert(b->max_varno <= a->max_varno);
+		for (int i = 1; i <= b->max_varno; i++)
+			a->varattnos[i] = bms_add_members(a->varattnos[i],
+											  b->varattnos[i]);
+	}
+}
+
+/*
+ * varattnoset_int_members
+ *		Reduce set a to its intersection with set b.
+ *
+ * This is like bms_int_members, but for sets of bitmapsets.
+ */
+static void
+varattnoset_int_members(VarAttnoSet *a, const VarAttnoSet *b)
+{
+	/* We don't really expect the max_varnos to differ, but allow a < b */
+	Assert(a->max_varno <= b->max_varno);
+	for (int i = 1; i <= a->max_varno; i++)
+		a->varattnos[i] = bms_int_members(a->varattnos[i],
+										  b->varattnos[i]);
+}
+
+/*
+ * varattnoset_intersect_relids
+ *		Identify the relations having common members in a and b.
+ *
+ * For convenience, we allow NULL inputs.
+ */
+Relids
+varattnoset_intersect_relids(const VarAttnoSet *a, const VarAttnoSet *b)
+{
+	Relids		result = NULL;
+
+	if (a == NULL || b == NULL)
+		return NULL;
+	Assert(a->max_varno == b->max_varno);
+	for (int i = 1; i <= a->max_varno; i++)
+	{
+		if (bms_overlap(a->varattnos[i], b->varattnos[i]))
+			result = bms_add_member(result, i);
+	}
+	return result;
+}
+
+
 /*
  * find_nonnullable_rels
  *		Determine which base rels are forced nonnullable by given clause.
@@ -1541,10 +1621,12 @@ find_nonnullable_rels_walker(Node *node, bool top_level)
  * find_nonnullable_vars
  *		Determine which Vars are forced nonnullable by given clause.
  *
- * Returns a list of all level-zero Vars that are referenced in the clause in
+ * Builds a set of all level-zero Vars that are referenced in the clause in
  * such a way that the clause cannot possibly return TRUE if any of these Vars
  * is NULL.  (It is OK to err on the side of conservatism; hence the analysis
  * here is simplistic.)
+ *
+ * Attnos of the identified Vars are added to a caller-supplied VarAttnoSet.
  *
  * The semantics here are subtly different from contain_nonstrict_functions:
  * that function is concerned with NULL results from arbitrary expressions,
@@ -1552,9 +1634,6 @@ find_nonnullable_rels_walker(Node *node, bool top_level)
  * see if NULL inputs will provably cause a FALSE-or-NULL result.  We expect
  * the expression to have been AND/OR flattened and converted to implicit-AND
  * format.
- *
- * The result is a palloc'd List, but we have not copied the member Var nodes.
- * Also, we don't bother trying to eliminate duplicate entries.
  *
  * top_level is true while scanning top-level AND/OR structure; here, showing
  * the result is either FALSE or NULL is good enough.  top_level is false when
@@ -1564,26 +1643,30 @@ find_nonnullable_rels_walker(Node *node, bool top_level)
  * We don't use expression_tree_walker here because we don't want to descend
  * through very many kinds of nodes; only the ones we can be sure are strict.
  */
-List *
-find_nonnullable_vars(Node *clause)
+void
+find_nonnullable_vars(Node *clause, VarAttnoSet *attnos)
 {
-	return find_nonnullable_vars_walker(clause, true);
+	return find_nonnullable_vars_walker(clause, attnos, true);
 }
 
-static List *
-find_nonnullable_vars_walker(Node *node, bool top_level)
+static void
+find_nonnullable_vars_walker(Node *node, VarAttnoSet *attnos, bool top_level)
 {
-	List	   *result = NIL;
 	ListCell   *l;
 
 	if (node == NULL)
-		return NIL;
+		return;
 	if (IsA(node, Var))
 	{
 		Var		   *var = (Var *) node;
 
 		if (var->varlevelsup == 0)
-			result = list_make1(var);
+		{
+			Assert(var->varno > 0 && var->varno <= attnos->max_varno);
+			attnos->varattnos[var->varno] =
+				bms_add_member(attnos->varattnos[var->varno],
+							   var->varattno - FirstLowInvalidHeapAttributeNumber);
+		}
 	}
 	else if (IsA(node, List))
 	{
@@ -1598,9 +1681,7 @@ find_nonnullable_vars_walker(Node *node, bool top_level)
 		 */
 		foreach(l, (List *) node)
 		{
-			result = list_concat(result,
-								 find_nonnullable_vars_walker(lfirst(l),
-															  top_level));
+			find_nonnullable_vars_walker(lfirst(l), attnos, top_level);
 		}
 	}
 	else if (IsA(node, FuncExpr))
@@ -1608,7 +1689,7 @@ find_nonnullable_vars_walker(Node *node, bool top_level)
 		FuncExpr   *expr = (FuncExpr *) node;
 
 		if (func_strict(expr->funcid))
-			result = find_nonnullable_vars_walker((Node *) expr->args, false);
+			find_nonnullable_vars_walker((Node *) expr->args, attnos, false);
 	}
 	else if (IsA(node, OpExpr))
 	{
@@ -1616,14 +1697,14 @@ find_nonnullable_vars_walker(Node *node, bool top_level)
 
 		set_opfuncid(expr);
 		if (func_strict(expr->opfuncid))
-			result = find_nonnullable_vars_walker((Node *) expr->args, false);
+			find_nonnullable_vars_walker((Node *) expr->args, attnos, false);
 	}
 	else if (IsA(node, ScalarArrayOpExpr))
 	{
 		ScalarArrayOpExpr *expr = (ScalarArrayOpExpr *) node;
 
 		if (is_strict_saop(expr, true))
-			result = find_nonnullable_vars_walker((Node *) expr->args, false);
+			find_nonnullable_vars_walker((Node *) expr->args, attnos, false);
 	}
 	else if (IsA(node, BoolExpr))
 	{
@@ -1632,11 +1713,16 @@ find_nonnullable_vars_walker(Node *node, bool top_level)
 		switch (expr->boolop)
 		{
 			case AND_EXPR:
-				/* At top level we can just recurse (to the List case) */
+
+				/*
+				 * At top level we can just recurse (to the List case), since
+				 * the result should be the union of what we can prove in each
+				 * arm.
+				 */
 				if (top_level)
 				{
-					result = find_nonnullable_vars_walker((Node *) expr->args,
-														  top_level);
+					find_nonnullable_vars_walker((Node *) expr->args, attnos,
+												 top_level);
 					break;
 				}
 
@@ -1654,30 +1740,36 @@ find_nonnullable_vars_walker(Node *node, bool top_level)
 				 * OR is strict if all of its arms are, so we can take the
 				 * intersection of the sets of nonnullable vars for each arm.
 				 * This works for both values of top_level.
+				 *
+				 * The pfree's below miss cleaning up individual bitmapsets in
+				 * each VarAttnoSet.  Doesn't seem worth working harder.
 				 */
-				foreach(l, expr->args)
 				{
-					List	   *subresult;
+					VarAttnoSet *int_attnos = NULL;
 
-					subresult = find_nonnullable_vars_walker(lfirst(l),
-															 top_level);
-					if (result == NIL)	/* first subresult? */
-						result = subresult;
-					else
-						result = list_intersection(result, subresult);
+					foreach(l, expr->args)
+					{
+						VarAttnoSet *sub_attnos;
 
-					/*
-					 * If the intersection is empty, we can stop looking. This
-					 * also justifies the test for first-subresult above.
-					 */
-					if (result == NIL)
-						break;
+						sub_attnos = make_empty_varattnoset(attnos->max_varno);
+						find_nonnullable_vars_walker(lfirst(l), sub_attnos,
+													 top_level);
+						if (int_attnos == NULL) /* first subresult? */
+							int_attnos = sub_attnos;
+						else
+						{
+							varattnoset_int_members(int_attnos, sub_attnos);
+							pfree(sub_attnos);
+						}
+					}
+					varattnoset_add_members(attnos, int_attnos);
+					pfree(int_attnos);
 				}
 				break;
 			case NOT_EXPR:
 				/* NOT will return null if its arg is null */
-				result = find_nonnullable_vars_walker((Node *) expr->args,
-													  false);
+				find_nonnullable_vars_walker((Node *) expr->args, attnos,
+											 false);
 				break;
 			default:
 				elog(ERROR, "unrecognized boolop: %d", (int) expr->boolop);
@@ -1688,34 +1780,34 @@ find_nonnullable_vars_walker(Node *node, bool top_level)
 	{
 		RelabelType *expr = (RelabelType *) node;
 
-		result = find_nonnullable_vars_walker((Node *) expr->arg, top_level);
+		find_nonnullable_vars_walker((Node *) expr->arg, attnos, top_level);
 	}
 	else if (IsA(node, CoerceViaIO))
 	{
 		/* not clear this is useful, but it can't hurt */
 		CoerceViaIO *expr = (CoerceViaIO *) node;
 
-		result = find_nonnullable_vars_walker((Node *) expr->arg, false);
+		find_nonnullable_vars_walker((Node *) expr->arg, attnos, false);
 	}
 	else if (IsA(node, ArrayCoerceExpr))
 	{
 		/* ArrayCoerceExpr is strict at the array level; ignore elemexpr */
 		ArrayCoerceExpr *expr = (ArrayCoerceExpr *) node;
 
-		result = find_nonnullable_vars_walker((Node *) expr->arg, top_level);
+		find_nonnullable_vars_walker((Node *) expr->arg, attnos, top_level);
 	}
 	else if (IsA(node, ConvertRowtypeExpr))
 	{
 		/* not clear this is useful, but it can't hurt */
 		ConvertRowtypeExpr *expr = (ConvertRowtypeExpr *) node;
 
-		result = find_nonnullable_vars_walker((Node *) expr->arg, top_level);
+		find_nonnullable_vars_walker((Node *) expr->arg, attnos, top_level);
 	}
 	else if (IsA(node, CollateExpr))
 	{
 		CollateExpr *expr = (CollateExpr *) node;
 
-		result = find_nonnullable_vars_walker((Node *) expr->arg, top_level);
+		find_nonnullable_vars_walker((Node *) expr->arg, attnos, top_level);
 	}
 	else if (IsA(node, NullTest))
 	{
@@ -1723,7 +1815,7 @@ find_nonnullable_vars_walker(Node *node, bool top_level)
 		NullTest   *expr = (NullTest *) node;
 
 		if (top_level && expr->nulltesttype == IS_NOT_NULL && !expr->argisrow)
-			result = find_nonnullable_vars_walker((Node *) expr->arg, false);
+			find_nonnullable_vars_walker((Node *) expr->arg, attnos, false);
 	}
 	else if (IsA(node, BooleanTest))
 	{
@@ -1734,15 +1826,14 @@ find_nonnullable_vars_walker(Node *node, bool top_level)
 			(expr->booltesttype == IS_TRUE ||
 			 expr->booltesttype == IS_FALSE ||
 			 expr->booltesttype == IS_NOT_UNKNOWN))
-			result = find_nonnullable_vars_walker((Node *) expr->arg, false);
+			find_nonnullable_vars_walker((Node *) expr->arg, attnos, false);
 	}
 	else if (IsA(node, PlaceHolderVar))
 	{
 		PlaceHolderVar *phv = (PlaceHolderVar *) node;
 
-		result = find_nonnullable_vars_walker((Node *) phv->phexpr, top_level);
+		find_nonnullable_vars_walker((Node *) phv->phexpr, attnos, top_level);
 	}
-	return result;
 }
 
 /*
@@ -1754,23 +1845,25 @@ find_nonnullable_vars_walker(Node *node, bool top_level)
  * side of conservatism; hence the analysis here is simplistic.  In fact,
  * we only detect simple "var IS NULL" tests at the top level.)
  *
- * The result is a palloc'd List, but we have not copied the member Var nodes.
- * Also, we don't bother trying to eliminate duplicate entries.
+ * As with find_nonnullable_vars, we add the varattnos of the identified Vars
+ * to a caller-provided VarAttnoSet.
  */
-List *
-find_forced_null_vars(Node *node)
+void
+find_forced_null_vars(Node *node, VarAttnoSet *attnos)
 {
-	List	   *result = NIL;
 	Var		   *var;
 	ListCell   *l;
 
 	if (node == NULL)
-		return NIL;
+		return;
 	/* Check single-clause cases using subroutine */
 	var = find_forced_null_var(node);
 	if (var)
 	{
-		result = list_make1(var);
+		Assert(var->varno > 0 && var->varno <= attnos->max_varno);
+		attnos->varattnos[var->varno] =
+			bms_add_member(attnos->varattnos[var->varno],
+						   var->varattno - FirstLowInvalidHeapAttributeNumber);
 	}
 	/* Otherwise, handle AND-conditions */
 	else if (IsA(node, List))
@@ -1781,8 +1874,7 @@ find_forced_null_vars(Node *node)
 		 */
 		foreach(l, (List *) node)
 		{
-			result = list_concat(result,
-								 find_forced_null_vars(lfirst(l)));
+			find_forced_null_vars((Node *) lfirst(l), attnos);
 		}
 	}
 	else if (IsA(node, BoolExpr))
@@ -1797,10 +1889,9 @@ find_forced_null_vars(Node *node)
 		if (expr->boolop == AND_EXPR)
 		{
 			/* At top level we can just recurse (to the List case) */
-			result = find_forced_null_vars((Node *) expr->args);
+			find_forced_null_vars((Node *) expr->args, attnos);
 		}
 	}
-	return result;
 }
 
 /*
@@ -1967,14 +2058,16 @@ is_pseudo_constant_clause_relids(Node *clause, Relids relids)
  * NumRelids
  *		(formerly clause_relids)
  *
- * Returns the number of different relations referenced in 'clause'.
+ * Returns the number of different base relations referenced in 'clause'.
  */
 int
 NumRelids(PlannerInfo *root, Node *clause)
 {
+	int			result;
 	Relids		varnos = pull_varnos(root, clause);
-	int			result = bms_num_members(varnos);
 
+	varnos = bms_del_members(varnos, root->outer_join_rels);
+	result = bms_num_members(varnos);
 	bms_free(varnos);
 	return result;
 }

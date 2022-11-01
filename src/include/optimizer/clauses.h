@@ -23,6 +23,14 @@ typedef struct
 	List	  **windowFuncs;	/* lists of WindowFuncs for each winref */
 } WindowFuncLists;
 
+/* Data structure to represent all level-zero Vars meeting some condition */
+typedef struct
+{
+	int			max_varno;		/* maximum index in varattnos[] */
+	/* Attnos in these sets are offset by FirstLowInvalidHeapAttributeNumber */
+	Bitmapset  *varattnos[FLEXIBLE_ARRAY_MEMBER];
+} VarAttnoSet;
+
 extern bool contain_agg_clause(Node *clause);
 
 extern bool contain_window_function(Node *clause);
@@ -38,9 +46,14 @@ extern bool contain_nonstrict_functions(Node *clause);
 extern bool contain_exec_param(Node *clause, List *param_ids);
 extern bool contain_leaked_vars(Node *clause);
 
+extern VarAttnoSet *make_empty_varattnoset(int rangetable_length);
+extern void varattnoset_add_members(VarAttnoSet *a, const VarAttnoSet *b);
+extern Relids varattnoset_intersect_relids(const VarAttnoSet *a,
+										   const VarAttnoSet *b);
+
 extern Relids find_nonnullable_rels(Node *clause);
-extern List *find_nonnullable_vars(Node *clause);
-extern List *find_forced_null_vars(Node *node);
+extern void find_nonnullable_vars(Node *clause, VarAttnoSet *attnos);
+extern void find_forced_null_vars(Node *node, VarAttnoSet *attnos);
 extern Var *find_forced_null_var(Node *node);
 
 extern bool is_pseudo_constant_clause(Node *clause);

@@ -115,6 +115,13 @@ typedef Node *(*CoerceParamHook) (ParseState *pstate, Param *param,
  * This is one-for-one with p_rtable, but contains NULLs for non-join
  * RTEs, and may be shorter than p_rtable if the last RTE(s) aren't joins.
  *
+ * p_nullingrels: list of Bitmapsets associated with p_rtable entries, each
+ * containing the set of outer-join RTE indexes that can null that relation
+ * at the current point in the parse tree.  This is one-for-one with p_rtable,
+ * but may be shorter than p_rtable, in which case the missing entries are
+ * implicitly empty (NULL).  That rule allows us to save work when the query
+ * contains no outer joins.
+ *
  * p_joinlist: list of join items (RangeTblRef and JoinExpr nodes) that
  * will become the fromlist of the query's top-level FromExpr node.
  *
@@ -182,6 +189,7 @@ struct ParseState
 	const char *p_sourcetext;	/* source text, or NULL if not available */
 	List	   *p_rtable;		/* range table so far */
 	List	   *p_joinexprs;	/* JoinExprs for RTE_JOIN p_rtable entries */
+	List	   *p_nullingrels;	/* Bitmapsets showing nulling outer joins */
 	List	   *p_joinlist;		/* join items so far (will become FromExpr
 								 * node's fromlist) */
 	List	   *p_namespace;	/* currently-referenceable RTEs (List of

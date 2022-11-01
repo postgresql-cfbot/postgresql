@@ -670,6 +670,7 @@ transformInsertStmt(ParseState *pstate, InsertStmt *stmt)
 		 */
 		sub_pstate->p_rtable = sub_rtable;
 		sub_pstate->p_joinexprs = NIL;	/* sub_rtable has no joins */
+		sub_pstate->p_nullingrels = NIL;
 		sub_pstate->p_namespace = sub_namespace;
 		sub_pstate->p_resolve_unknowns = false;
 
@@ -851,7 +852,7 @@ transformInsertStmt(ParseState *pstate, InsertStmt *stmt)
 		/*
 		 * Generate list of Vars referencing the RTE
 		 */
-		exprList = expandNSItemVars(nsitem, 0, -1, NULL);
+		exprList = expandNSItemVars(pstate, nsitem, 0, -1, NULL);
 
 		/*
 		 * Re-apply any indirection on the target column specs to the Vars

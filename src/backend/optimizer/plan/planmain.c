@@ -158,13 +158,15 @@ query_planner(PlannerInfo *root,
 
 	/*
 	 * Construct RelOptInfo nodes for all base relations used in the query.
-	 * Appendrel member relations ("other rels") will be added later.
+	 * Appendrel member relations ("other rels") will be added later.  We also
+	 * construct a bitmapset of all the baserel relids.
 	 *
 	 * Note: the reason we find the baserels by searching the jointree, rather
 	 * than scanning the rangetable, is that the rangetable may contain RTEs
 	 * for rels not actively part of the query, for example views.  We don't
 	 * want to make RelOptInfos for them.
 	 */
+	root->all_baserels = NULL;
 	add_base_rels_to_query(root, (Node *) parse->jointree);
 
 	/*

@@ -2177,6 +2177,15 @@ apply_handle_tuple_routing(ApplyExecutionData *edata,
 	partrel = partrelinfo->ri_RelationDesc;
 
 	/*
+	 * Check for supported relkind.  We need this since partitions might be of
+	 * unsupported relkinds; and the set of partitions can change, so checking
+	 * at CREATE/ALTER SUBSCRIPTION would be insufficient.
+	 */
+	CheckSubscriptionRelkind(partrel->rd_rel->relkind,
+							 get_namespace_name(RelationGetNamespace(partrel)),
+							 RelationGetRelationName(partrel));
+
+	/*
 	 * To perform any of the operations below, the tuple must match the
 	 * partition's rowtype. Convert if needed or just copy, using a dedicated
 	 * slot to store the tuple in any case.

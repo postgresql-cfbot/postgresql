@@ -2366,3 +2366,31 @@ where exists (select 1 from j3
       and t1.unique1 < 1;
 
 drop table j3;
+
+--
+-- test check of SubPlan clause for nonnullable rels/Vars when reducing outer joins
+--
+
+begin;
+
+create temp table a (i int, j int);
+create temp table b (i int, j int);
+create temp table c (i int, j int);
+
+insert into a values (1,1), (2,2), (3,3);
+insert into b values (2,2), (3,3), (4,4);
+insert into c values (3,3), (4,4), (5,5);
+
+analyze a;
+analyze b;
+analyze c;
+
+explain (costs off)
+select * from a left join b on a.i = b.i where b.i = ANY (select i from c where c.j = b.j);
+select * from a left join b on a.i = b.i where b.i = ANY (select i from c where c.j = b.j);
+
+explain (costs off)
+select * from a left join b on b.i = ANY (select i from c where c.j = a.j) where b.i is null;
+select * from a left join b on b.i = ANY (select i from c where c.j = a.j) where b.i is null;
+
+rollback;

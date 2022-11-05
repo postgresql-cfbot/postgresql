@@ -6720,3 +6720,59 @@ where exists (select 1 from j3
 (13 rows)
 
 drop table j3;
+--
+-- test check of SubPlan clause for nonnullable rels/Vars when reducing outer joins
+--
+begin;
+create temp table a (i int, j int);
+create temp table b (i int, j int);
+create temp table c (i int, j int);
+insert into a values (1,1), (2,2), (3,3);
+insert into b values (2,2), (3,3), (4,4);
+insert into c values (3,3), (4,4), (5,5);
+analyze a;
+analyze b;
+analyze c;
+explain (costs off)
+select * from a left join b on a.i = b.i where b.i = ANY (select i from c where c.j = b.j);
+            QUERY PLAN             
+-----------------------------------
+ Hash Join
+   Hash Cond: (b.i = a.i)
+   ->  Seq Scan on b
+         Filter: (SubPlan 1)
+         SubPlan 1
+           ->  Seq Scan on c
+                 Filter: (j = b.j)
+   ->  Hash
+         ->  Seq Scan on a
+(9 rows)
+
+select * from a left join b on a.i = b.i where b.i = ANY (select i from c where c.j = b.j);
+ i | j | i | j 
+---+---+---+---
+ 3 | 3 | 3 | 3
+(1 row)
+
+explain (costs off)
+select * from a left join b on b.i = ANY (select i from c where c.j = a.j) where b.i is null;
+         QUERY PLAN          
+-----------------------------
+ Nested Loop Anti Join
+   Join Filter: (SubPlan 1)
+   ->  Seq Scan on a
+   ->  Materialize
+         ->  Seq Scan on b
+   SubPlan 1
+     ->  Seq Scan on c
+           Filter: (j = a.j)
+(8 rows)
+
+select * from a left join b on b.i = ANY (select i from c where c.j = a.j) where b.i is null;
+ i | j | i | j 
+---+---+---+---
+ 1 | 1 |   |  
+ 2 | 2 |   |  
+(2 rows)
+
+rollback;

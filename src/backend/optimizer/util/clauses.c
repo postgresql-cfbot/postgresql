@@ -1534,6 +1534,29 @@ find_nonnullable_rels_walker(Node *node, bool top_level)
 			bms_membership(phv->phrels) == BMS_SINGLETON)
 			result = bms_add_members(result, phv->phrels);
 	}
+	else if (IsA(node, SubPlan))
+	{
+		/* descend through testexpr for ALL/ANY/ROWCOMPARE */
+		SubPlan *splan = (SubPlan *) node;
+
+		/*
+		 * For ALL_SUBLINK, if the subplan produces zero rows, the result is
+		 * always TRUE.  So ALL_SUBLINK is not strict.
+		 *
+		 * For ANY_SUBLINK, if the subplan produces zero rows, the result is
+		 * always FALSE.  If the subplan produces more than one rows, the
+		 * per-row results are combined using OR semantics.  So ANY_SUBLINK can
+		 * be strict only at top level.
+		 *
+		 * For ROWCOMPARE_SUBLINK, if the subplan produces zero rows, the
+		 * result is always NULL.  Otherwise, the subplan is only allowed to
+		 * produce one row, and the result for ROWCOMPARE_SUBLINK is the same
+		 * as its testexpr's.
+		 */
+		if ((top_level && splan->subLinkType == ANY_SUBLINK) ||
+			splan->subLinkType == ROWCOMPARE_SUBLINK)
+			result = find_nonnullable_rels_walker(splan->testexpr, top_level);
+	}
 	return result;
 }
 
@@ -1741,6 +1764,29 @@ find_nonnullable_vars_walker(Node *node, bool top_level)
 		PlaceHolderVar *phv = (PlaceHolderVar *) node;
 
 		result = find_nonnullable_vars_walker((Node *) phv->phexpr, top_level);
+	}
+	else if (IsA(node, SubPlan))
+	{
+		/* descend through testexpr for ALL/ANY/ROWCOMPARE */
+		SubPlan *splan = (SubPlan *) node;
+
+		/*
+		 * For ALL_SUBLINK, if the subplan produces zero rows, the result is
+		 * always TRUE.  So ALL_SUBLINK is not strict.
+		 *
+		 * For ANY_SUBLINK, if the subplan produces zero rows, the result is
+		 * always FALSE.  If the subplan produces more than one rows, the
+		 * per-row results are combined using OR semantics.  So ANY_SUBLINK can
+		 * be strict only at top level.
+		 *
+		 * For ROWCOMPARE_SUBLINK, if the subplan produces zero rows, the
+		 * result is always NULL.  Otherwise, the subplan is only allowed to
+		 * produce one row, and the result for ROWCOMPARE_SUBLINK is the same
+		 * as its testexpr's.
+		 */
+		if ((top_level && splan->subLinkType == ANY_SUBLINK) ||
+			splan->subLinkType == ROWCOMPARE_SUBLINK)
+			result = find_nonnullable_vars_walker(splan->testexpr, top_level);
 	}
 	return result;
 }

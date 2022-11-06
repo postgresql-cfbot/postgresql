@@ -83,7 +83,7 @@ pg_GSS_load_servicename(PGconn *conn)
 {
 	OM_uint32	maj_stat,
 				min_stat;
-	int			maxlen;
+	Size		maxlen;
 	gss_buffer_desc temp_gbuf;
 	char	   *host;
 

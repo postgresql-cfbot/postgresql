@@ -1206,7 +1206,7 @@ static char *
 get_alternative_expectfile(const char *expectfile, int i)
 {
 	char	   *last_dot;
-	int			ssize = strlen(expectfile) + 2 + 1;
+	Size		ssize = strlen(expectfile) + 2 + 1;
 	char	   *tmp;
 	char	   *s;
 

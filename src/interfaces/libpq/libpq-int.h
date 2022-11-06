@@ -648,7 +648,7 @@ extern char *const pgresStatus[];
 extern void pqDropConnection(PGconn *conn, bool flushInput);
 extern int	pqPacketSend(PGconn *conn, char pack_type,
 						 const void *buf, size_t buf_len);
-extern bool pqGetHomeDirectory(char *buf, int bufsize);
+extern bool pqGetHomeDirectory(char *buf, size_t bufsize);
 
 #ifdef ENABLE_THREAD_SAFETY
 extern pgthreadlock_t pg_g_threadlock;

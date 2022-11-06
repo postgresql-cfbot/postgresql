@@ -349,7 +349,7 @@ static void apply_handle_tuple_routing(ApplyExecutionData *edata,
 									   CmdType operation);
 
 /* Compute GID for two_phase transactions */
-static void TwoPhaseTransactionGid(Oid subid, TransactionId xid, char *gid, int szgid);
+static void TwoPhaseTransactionGid(Oid subid, TransactionId xid, char *gid, Size szgid);
 
 /* Common streaming function to apply all the spooled messages */
 static void apply_spooled_messages(TransactionId xid, XLogRecPtr lsn);
@@ -3518,7 +3518,7 @@ cleanup_subxact_info()
  * Return the GID in the supplied buffer.
  */
 static void
-TwoPhaseTransactionGid(Oid subid, TransactionId xid, char *gid, int szgid)
+TwoPhaseTransactionGid(Oid subid, TransactionId xid, char *gid, Size szgid)
 {
 	Assert(subid != InvalidRepOriginId);
 

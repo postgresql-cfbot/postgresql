@@ -1533,7 +1533,7 @@ ecpg_build_params(struct statement *stmt)
 			if (stmt->command[position] == '?')
 			{
 				/* yes, replace with new style */
-				int			buffersize = sizeof(int) * CHAR_BIT * 10 / 3;	/* a rough guess of the
+				size_t		buffersize = sizeof(int) * CHAR_BIT * 10 / 3;	/* a rough guess of the
 																			 * size we need */
 
 				if (!(tobeinserted = (char *) ecpg_alloc(buffersize, stmt->lineno)))

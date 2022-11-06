@@ -1106,7 +1106,7 @@ ParallelBackupEnd(ArchiveHandle *AH, ParallelState *pstate)
  */
 static void
 buildWorkerCommand(ArchiveHandle *AH, TocEntry *te, T_Action act,
-				   char *buf, int buflen)
+				   char *buf, Size buflen)
 {
 	if (act == ACT_DUMP)
 		snprintf(buf, buflen, "DUMP %d", te->dumpId);
@@ -1154,7 +1154,7 @@ parseWorkerCommand(ArchiveHandle *AH, TocEntry **te, T_Action *act,
  */
 static void
 buildWorkerResponse(ArchiveHandle *AH, TocEntry *te, T_Action act, int status,
-					char *buf, int buflen)
+					char *buf, Size buflen)
 {
 	snprintf(buf, buflen, "OK %d %d %d",
 			 te->dumpId,

@@ -173,7 +173,7 @@ static int	findLoop(DumpableObject *obj,
 static void repairDependencyLoop(DumpableObject **loop,
 								 int nLoop);
 static void describeDumpableObject(DumpableObject *obj,
-								   char *buf, int bufsize);
+								   char *buf, Size bufsize);
 
 
 /*
@@ -1268,7 +1268,7 @@ repairDependencyLoop(DumpableObject **loop,
  * This should probably go somewhere else...
  */
 static void
-describeDumpableObject(DumpableObject *obj, char *buf, int bufsize)
+describeDumpableObject(DumpableObject *obj, char *buf, Size bufsize)
 {
 	switch (obj->objType)
 	{

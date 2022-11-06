@@ -120,7 +120,7 @@ replace_variables(char **text, int lineno)
 		else
 		{
 			/* a rough guess of the size we need: */
-			int			buffersize = sizeof(int) * CHAR_BIT * 10 / 3;
+			size_t		buffersize = sizeof(int) * CHAR_BIT * 10 / 3;
 			int			len;
 			char	   *buffer,
 					   *newcopy;

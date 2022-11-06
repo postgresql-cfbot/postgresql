@@ -42,7 +42,7 @@ static int	getaddrinfo_unix(const char *path,
 
 static int	getnameinfo_unix(const struct sockaddr_un *sa, int salen,
 							 char *node, int nodelen,
-							 char *service, int servicelen,
+							 char *service, Size servicelen,
 							 int flags);
 
 
@@ -227,7 +227,7 @@ getaddrinfo_unix(const char *path, const struct addrinfo *hintsp,
 static int
 getnameinfo_unix(const struct sockaddr_un *sa, int salen,
 				 char *node, int nodelen,
-				 char *service, int servicelen,
+				 char *service, Size servicelen,
 				 int flags)
 {
 	int			ret;

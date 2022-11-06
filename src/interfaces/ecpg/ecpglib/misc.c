@@ -267,7 +267,7 @@ ecpg_log(const char *format,...)
 	va_list		ap;
 	struct sqlca_t *sqlca = ECPGget_sqlca();
 	const char *intl_format;
-	int			bufsize;
+	size_t		bufsize;
 	char	   *fmt;
 
 	if (!simple_debug)

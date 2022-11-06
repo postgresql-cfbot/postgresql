@@ -1592,7 +1592,7 @@ jsonb_agg_transfn(PG_FUNCTION_ARGS)
 					/* copy string values in the aggregate context */
 					char	   *buf = palloc(v.val.string.len + 1);
 
-					snprintf(buf, v.val.string.len + 1, "%s", v.val.string.val);
+					snprintf(buf, (Size) (v.val.string.len + 1), "%s", v.val.string.val);
 					v.val.string.val = buf;
 				}
 				else if (v.type == jbvNumeric)
@@ -1763,7 +1763,7 @@ jsonb_object_agg_transfn(PG_FUNCTION_ARGS)
 					/* copy string values in the aggregate context */
 					char	   *buf = palloc(v.val.string.len + 1);
 
-					snprintf(buf, v.val.string.len + 1, "%s", v.val.string.val);
+					snprintf(buf, (Size) (v.val.string.len + 1), "%s", v.val.string.val);
 					v.val.string.val = buf;
 				}
 				else
@@ -1822,7 +1822,7 @@ jsonb_object_agg_transfn(PG_FUNCTION_ARGS)
 					/* copy string values in the aggregate context */
 					char	   *buf = palloc(v.val.string.len + 1);
 
-					snprintf(buf, v.val.string.len + 1, "%s", v.val.string.val);
+					snprintf(buf, (Size) (v.val.string.len + 1), "%s", v.val.string.val);
 					v.val.string.val = buf;
 				}
 				else if (v.type == jbvNumeric)

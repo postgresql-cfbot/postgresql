@@ -7313,7 +7313,7 @@ sslVerifyProtocolRange(const char *min, const char *max)
  * there (which it isn't).
  */
 bool
-pqGetHomeDirectory(char *buf, int bufsize)
+pqGetHomeDirectory(char *buf, size_t bufsize)
 {
 #ifndef WIN32
 	const char *home;

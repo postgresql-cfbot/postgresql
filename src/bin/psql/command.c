@@ -5008,7 +5008,7 @@ do_watch(PQExpBuffer query_buf, double sleep)
 	char	   *title;
 	const char *pagerprog = NULL;
 	FILE	   *pagerpipe = NULL;
-	int			title_len;
+	Size		title_len;
 	int			res = 0;
 #ifndef WIN32
 	sigset_t	sigalrm_sigchld_sigint;

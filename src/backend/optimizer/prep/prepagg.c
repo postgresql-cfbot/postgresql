@@ -265,6 +265,7 @@ preprocess_aggref(Aggref *aggref, PlannerInfo *root)
 										aggserialfn, aggdeserialfn,
 										initValue, initValueIsNull,
 										same_input_transnos);
+		list_free(same_input_transnos);
 		if (transno == -1)
 		{
 			AggTransInfo *transinfo = makeNode(AggTransInfo);

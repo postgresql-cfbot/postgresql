@@ -220,22 +220,24 @@ dir_open_for_write(WalWriteMethod *wwmethod, const char *pathname,
 	/* Do pre-padding on non-compressed files */
 	if (pad_to_size && wwmethod->compression_algorithm == PG_COMPRESSION_NONE)
 	{
-		PGAlignedXLogBlock zerobuf;
-		int			bytes;
+		ssize_t rc;
 
-		memset(zerobuf.data, 0, XLOG_BLCKSZ);
-		for (bytes = 0; bytes < pad_to_size; bytes += XLOG_BLCKSZ)
+		rc = pg_pwrite_zeros(fd, pad_to_size);
+
+		if (rc < 0)
 		{
-			errno = 0;
-			if (write(fd, zerobuf.data, XLOG_BLCKSZ) != XLOG_BLCKSZ)
-			{
-				/* If write didn't set errno, assume problem is no disk space */
-				wwmethod->lasterrno = errno ? errno : ENOSPC;
-				close(fd);
-				return NULL;
-			}
+			wwmethod->lasterrno = errno;
+			close(fd);
+			return NULL;
 		}
 
+		/*
+		 * pg_pwrite() (called via pg_pwrite_zeros()) might move the file
+		 * position on some platforms (see win32pwrite.c). We want to
+		 * explicitly reset the file position in a platform-independent manner
+		 * for extensibility even though it costs an extra system call on the
+		 * platforms where the file position is guaranteed to not change.
+		 */
 		if (lseek(fd, 0, SEEK_SET) != 0)
 		{
 			wwmethod->lasterrno = errno;

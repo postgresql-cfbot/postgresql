@@ -104,6 +104,8 @@ create_ctas_internal(List *attrList, IntoClause *into)
 	create->inhRelations = NIL;
 	create->ofTypename = NULL;
 	create->constraints = NIL;
+	create->notnull_check = NIL;
+	create->notnull_bare = NIL;
 	create->options = into->options;
 	create->oncommit = into->onCommit;
 	create->tablespacename = into->tableSpaceName;

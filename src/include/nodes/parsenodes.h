@@ -1957,6 +1957,7 @@ typedef enum AlterTableType
 	AT_CookedColumnDefault,		/* add a pre-cooked column default */
 	AT_DropNotNull,				/* alter column drop not null */
 	AT_SetNotNull,				/* alter column set not null */
+	AT_SetAttNotNull,			/* set not null, without CHECK constraint */
 	AT_DropExpression,			/* alter column drop expression */
 	AT_CheckNotNull,			/* check column is already marked not null */
 	AT_SetStatistics,			/* alter column set statistics */
@@ -2245,10 +2246,11 @@ typedef struct VariableShowStmt
  *		Create Table Statement
  *
  * NOTE: in the raw gram.y output, ColumnDef and Constraint nodes are
- * intermixed in tableElts, and constraints is NIL.  After parse analysis,
- * tableElts contains just ColumnDefs, and constraints contains just
- * Constraint nodes (in fact, only CONSTR_CHECK nodes, in the present
- * implementation).
+ * intermixed in tableElts, and constraints and notnullcols are NIL.  After
+ * parse analysis, tableElts contains just ColumnDefs, notnullcols has been
+ * filled with not-nullable column names from various sources, and constraints
+ * contains just Constraint nodes (in fact, only CONSTR_CHECK nodes, in the
+ * present implementation).
  * ----------------------
  */
 
@@ -2263,6 +2265,11 @@ typedef struct CreateStmt
 	PartitionSpec *partspec;	/* PARTITION BY clause */
 	TypeName   *ofTypename;		/* OF typename */
 	List	   *constraints;	/* constraints (list of Constraint nodes) */
+	List	   *notnull_check;	/* list of column names for which to add a
+								 * CHECK (IS NOT NULL) constraint for */
+	List	   *notnull_bare;	/* list of column names for which to set the
+								 * attnotnull flag without a CHECK
+								 * constraint */
 	List	   *options;		/* options from WITH clause */
 	OnCommitAction oncommit;	/* what do we do at COMMIT? */
 	char	   *tablespacename; /* table space to use, or NULL */
@@ -2344,6 +2351,7 @@ typedef struct Constraint
 	bool		deferrable;		/* DEFERRABLE? */
 	bool		initdeferred;	/* INITIALLY DEFERRED? */
 	int			location;		/* token location, or -1 if unknown */
+	Oid			parent_oid;		/* OID of parent constraint, if any */
 
 	/* Fields used for constraints with expressions (CHECK and DEFAULT): */
 	bool		is_no_inherit;	/* is constraint non-inheritable? */
@@ -2387,6 +2395,14 @@ typedef struct Constraint
 	bool		skip_validation;	/* skip validation of existing rows? */
 	bool		initially_valid;	/* mark the new constraint as valid? */
 } Constraint;
+
+typedef struct ConstraintNotNull
+{
+	NodeTag		type;
+
+	char	   *conname;		/* Constraint name, or NULL if unnamed */
+	char	   *column;			/* column on which it applies */
+} ConstraintNotNull;
 
 /* ----------------------
  *		Create/Drop Table Space Statements

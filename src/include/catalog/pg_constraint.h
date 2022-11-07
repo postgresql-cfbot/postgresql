@@ -237,15 +237,20 @@ extern Oid	CreateConstraintEntry(const char *constraintName,
 								  bool conNoInherit,
 								  bool is_internal);
 
-extern void RemoveConstraintById(Oid conId);
-extern void RenameConstraintById(Oid conId, const char *newname);
-
 extern bool ConstraintNameIsUsed(ConstraintCategory conCat, Oid objId,
 								 const char *conname);
 extern bool ConstraintNameExists(const char *conname, Oid namespaceid);
 extern char *ChooseConstraintName(const char *name1, const char *name2,
 								  const char *label, Oid namespaceid,
 								  List *others);
+
+extern HeapTuple findNotNullConstraintAttnum(Relation rel, AttrNumber attnum,
+											 bool *report_multiple);
+extern HeapTuple findNotNullConstraint(Relation rel, const char *colname,
+									   bool *report_multiple);
+
+extern void RemoveConstraintById(Oid conId);
+extern void RenameConstraintById(Oid conId, const char *newname);
 
 extern void AlterConstraintNamespaces(Oid ownerId, Oid oldNspId,
 									  Oid newNspId, bool isType, ObjectAddresses *objsMoved);

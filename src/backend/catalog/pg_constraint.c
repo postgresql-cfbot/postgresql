@@ -26,6 +26,7 @@
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_operator.h"
 #include "catalog/pg_type.h"
+#include "commands/constraint.h"
 #include "commands/defrem.h"
 #include "commands/tablecmds.h"
 #include "utils/array.h"
@@ -560,6 +561,124 @@ ChooseConstraintName(const char *name1, const char *name2,
 	table_close(conDesc, AccessShareLock);
 
 	return conname;
+}
+
+/*
+ * Find and return the pg_constraint tuple that implements a validated
+ * NOT NULL constraint for the given column of the given relation.
+ *
+ * If there's more than one such constraint and *multiple is not NULL,
+ * we set that true.
+ *
+ * XXX This would be much easier if we had pg_attribute.notnullconstr with the
+ * OID of the constraint that implements the NOT NULL constraint for that
+ * column.  I'm not sure it's worth the catalog bloat and de-normalization,
+ * however.
+ */
+HeapTuple
+findNotNullConstraintAttnum(Relation rel, AttrNumber attnum, bool *multiple)
+{
+	Relation	pg_constraint;
+	HeapTuple	conTup,
+				retval = NULL;
+	SysScanDesc	scan;
+	ScanKeyData	key;
+
+	if (multiple)
+		*multiple = false;
+
+	pg_constraint = table_open(ConstraintRelationId, AccessShareLock);
+	ScanKeyInit(&key,
+				Anum_pg_constraint_conrelid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(RelationGetRelid(rel)));
+	scan = systable_beginscan(pg_constraint, ConstraintRelidTypidNameIndexId,
+							  true, NULL, 1, &key);
+
+	while (HeapTupleIsValid(conTup = systable_getnext(scan)))
+	{
+		Form_pg_constraint con = (Form_pg_constraint) GETSTRUCT(conTup);
+		AttrNumber	conkey;
+		AttrNumber	check_attnum;
+		ArrayType  *arr;
+		Datum		adatum;
+		bool		isnull;
+
+		/*
+		 * We're looking for a CHECK constraint that's marked validated, with
+		 * the column we're looking for as the sole element in conkey, and
+		 * from whose expression our NOT NULL extractor returns a column name.
+		 * (We verify only in an assertion that that column is in fact the one
+		 * we want, because that seems a redundant check.)
+		 */
+		if (con->contype != CONSTRAINT_CHECK)
+			continue;
+
+		if (!con->convalidated)
+			continue;
+
+		adatum = SysCacheGetAttr(CONSTROID, conTup,
+								 Anum_pg_constraint_conkey, &isnull);
+		if (isnull)
+			continue;
+		arr = DatumGetArrayTypeP(adatum);
+		if (ARR_NDIM(arr) != 1 ||
+			ARR_HASNULL(arr) ||
+			ARR_ELEMTYPE(arr) != INT2OID)
+			elog(ERROR, "conkey is not a 1-D smallint array");
+		if (ARR_DIMS(arr)[0] != 1)
+			goto nope;
+
+		memcpy(&conkey, ARR_DATA_PTR(arr), sizeof(int16));
+		if (conkey != attnum)
+			goto nope;
+
+		check_attnum = tryExtractNotNullFromCatalog(conTup);
+		if (check_attnum == InvalidAttrNumber)
+			goto nope;
+
+		/*
+		 * Surely tryExtractNotNullFromCatalog won't give us a mismatching
+		 * constraint.
+		 */
+		Assert(check_attnum == attnum);
+
+		/* Found it */
+		if (retval != NULL)
+		{
+			Assert(multiple);
+			*multiple = true;
+			break;
+		}
+
+		retval = heap_copytuple(conTup);
+		if (multiple == NULL)
+			break;
+
+nope:
+		pfree(arr);
+		continue;
+	}
+
+	systable_endscan(scan);
+	table_close(pg_constraint, AccessShareLock);
+
+	return retval;
+}
+
+/*
+ * Find and return the pg_constraint tuple that implements a validated
+ * NOT NULL constraint for the given column of the given relation.
+ *
+ * If there's more than one such constraint and *multiple is not NULL,
+ * we set that true.
+ */
+HeapTuple
+findNotNullConstraint(Relation rel, const char *colname, bool *multiple)
+{
+	AttrNumber	attnum = get_attnum(RelationGetRelid(rel), colname);
+
+	return findNotNullConstraintAttnum(rel, attnum, multiple);
 }
 
 /*

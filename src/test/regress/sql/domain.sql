@@ -408,6 +408,13 @@ update domnotnull set col1 = null;
 
 drop domain dnotnulltest cascade;
 
+create domain dnotnulltest integer constraint dnn not null;
+
+select conname, contype, contypid::regtype from pg_constraint c
+	where contypid = 'dnotnulltest'::regtype;
+
+drop domain dnotnulltest;
+
 -- Test ALTER DOMAIN .. DEFAULT ..
 create table domdeftest (col1 ddef1);
 

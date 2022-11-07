@@ -852,7 +852,7 @@ create table atacc1 (test int not null);
 alter table atacc1 add constraint "atacc1_pkey" primary key (test);
 alter table atacc1 alter column test drop not null;
 alter table atacc1 drop constraint "atacc1_pkey";
-alter table atacc1 alter column test drop not null;
+\d atacc1
 insert into atacc1 values (null);
 alter table atacc1 alter test set not null;
 delete from atacc1;

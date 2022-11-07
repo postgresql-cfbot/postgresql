@@ -37,6 +37,7 @@ typedef struct CookedConstraint
 	ConstrType	contype;		/* CONSTR_DEFAULT or CONSTR_CHECK */
 	Oid			conoid;			/* constr OID if created, otherwise Invalid */
 	char	   *name;			/* name, or NULL if none */
+	Oid			parent_oid;		/* constr OID of parent, if any */
 	AttrNumber	attnum;			/* which attr (only for DEFAULT) */
 	Node	   *expr;			/* transformed default or check expr */
 	bool		skip_validation;	/* skip validation? (only for CHECK) */

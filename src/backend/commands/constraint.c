@@ -17,11 +17,15 @@
 #include "access/heapam.h"
 #include "access/tableam.h"
 #include "catalog/index.h"
+#include "catalog/pg_constraint.h"
+#include "commands/constraint.h"
 #include "commands/trigger.h"
 #include "executor/executor.h"
+#include "nodes/makefuncs.h"
 #include "utils/builtins.h"
 #include "utils/rel.h"
 #include "utils/snapmgr.h"
+#include "utils/syscache.h"
 
 
 /*
@@ -202,4 +206,193 @@ unique_key_recheck(PG_FUNCTION_ARGS)
 	index_close(indexRel, RowExclusiveLock);
 
 	return PointerGetDatum(NULL);
+}
+
+/*
+ * Create and return a Constraint node representing a "col IS NOT NULL"
+ * expression using a ColumnRef within, for the given relation and column.
+ *
+ * If the constraint name is not provided, a standard one is generated.
+ * XXX provide a list of constraint names already reserved so we can ignore
+ * those.
+ *
+ * Note: this is a "raw" node that must undergo transformation.
+ */
+Constraint *
+makeCheckNotNullConstraint(Oid nspid, char *constraint_name,
+						   const char *relname, const char *colname,
+						   bool is_row, Oid parent_oid)
+{
+	Constraint *check;
+	ColumnRef  *colref;
+	Node	   *nullexpr;
+
+	colref = (ColumnRef *) makeNode(ColumnRef);
+	colref->fields = list_make1(makeString(pstrdup(colname)));
+
+	if (is_row)
+	{
+		A_Expr     *expr;
+		A_Const	   *constnull;
+
+		constnull = makeNode(A_Const);
+		constnull->isnull = true;
+
+		expr = makeSimpleA_Expr(AEXPR_DISTINCT, "=",
+								(Node *) colref, (Node *) constnull, -1);
+		nullexpr = (Node *) expr;
+	}
+	else
+	{
+		NullTest   *nulltest;
+
+		nulltest = makeNode(NullTest);
+		nulltest->argisrow = is_row;
+		nulltest->nulltesttype = IS_NOT_NULL;
+		nulltest->arg = (Expr *) colref;
+
+		nullexpr = (Node *) nulltest;
+	}
+
+	check = makeNode(Constraint);
+	check->contype = CONSTR_CHECK;
+	check->location = -1;
+	check->conname = constraint_name ? constraint_name :
+		ChooseConstraintName(relname, colname, "not_null", nspid, NIL);
+	check->parent_oid = parent_oid;
+	check->deferrable = false;
+	check->initdeferred = false;
+
+	check->is_no_inherit = false;
+	check->raw_expr = nullexpr;
+	check->cooked_expr = NULL;
+
+	check->skip_validation = false;
+	check->initially_valid = true;
+
+	return check;
+}
+
+/*
+ * Given the Node representation for a CHECK (col IS NOT NULL) constraint,
+ * return the column name that it is for.  If it doesn't represent a constraint
+ * of that shape, NULL is returned. 'rel' is the relation that the constraint is
+ * for.
+ */
+char *
+tryExtractNotNullFromNode(Node *node, Relation rel)
+{
+	if (node == NULL)
+		return NULL;
+
+	/* Whatever we got, we can look inside a Constraint node */
+	if (IsA(node, Constraint))
+	{
+		Constraint	*constraint = (Constraint *) node;
+
+		if (constraint->cooked_expr != NULL)
+			return tryExtractNotNullFromNode(stringToNode(constraint->cooked_expr), rel);
+		else
+			return tryExtractNotNullFromNode(constraint->raw_expr, rel);
+	}
+
+	if (IsA(node, NullTest))
+	{
+		NullTest *nulltest = (NullTest *) node;
+
+		if (nulltest->nulltesttype == IS_NOT_NULL &&
+			IsA(nulltest->arg, ColumnRef))
+		{
+			ColumnRef *colref = (ColumnRef *) nulltest->arg;
+
+			if (list_length(colref->fields) == 1)
+				return strVal(linitial(colref->fields));
+		}
+	}
+
+	/*
+	 * if no rel is passed, we can only check this much
+	 */
+	if (rel == NULL)
+		return NULL;
+
+	if (IsA(node, NullTest))
+	{
+		NullTest *nulltest = (NullTest *) node;
+
+		if (nulltest->nulltesttype == IS_NOT_NULL)
+		{
+			if (IsA(nulltest->arg, Var))
+			{
+				Var    *var = (Var *) nulltest->arg;
+
+				return NameStr(TupleDescAttr(RelationGetDescr(rel),
+											 var->varattno - 1)->attname);
+			}
+		}
+	}
+
+	/*
+	 * XXX Need to check a few more possible wordings of NOT NULL:
+	 *
+	 * - foo IS DISTINCT FROM NULL
+	 * - NOT (foo IS NULL)
+	 */
+
+	return NULL;
+}
+
+/*
+ * Given a pg_constraint tuple for a CHECK constraint, see if it is a
+ * CHECK (IS NOT NULL) constraint, and return the column number it is for if
+ * so.  Otherwise return InvalidAttrNumber.
+ */
+AttrNumber
+tryExtractNotNullFromCatalog(HeapTuple constrTup)
+{
+	Form_pg_constraint conForm = (Form_pg_constraint) GETSTRUCT(constrTup);
+	AttrNumber colnum = InvalidAttrNumber;
+	Datum   val;
+	bool    isnull;
+	char   *conbin;
+	Node   *node;
+
+	/* only tuples for CHECK constraints should be given */
+	Assert(conForm->contype == CONSTRAINT_CHECK);
+
+	val = SysCacheGetAttr(CONSTROID, constrTup, Anum_pg_constraint_conbin,
+						  &isnull);
+	if (isnull)
+		elog(ERROR, "null conbin for constraint %u", conForm->oid);
+
+	conbin = TextDatumGetCString(val);
+	node = (Node *) stringToNode(conbin);
+
+	/* We expect a NullTest with an single Var within. */
+	if (IsA(node, NullTest))
+	{
+		NullTest *nulltest = (NullTest *) node;
+
+		if (nulltest->nulltesttype == IS_NOT_NULL)
+		{
+			if (IsA(nulltest->arg, Var))
+			{
+				Var    *var = (Var *) nulltest->arg;
+
+				colnum = var->varattno;
+			}
+		}
+	}
+
+	/*
+	 * XXX Need to check a few more possible wordings of NOT NULL:
+	 *
+	 * - foo IS DISTINCT FROM NULL
+	 * - NOT (foo IS NULL)
+	 */
+
+	pfree(conbin);
+	pfree(node);
+
+	return colnum;
 }

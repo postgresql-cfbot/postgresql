@@ -252,6 +252,8 @@ SELECT * FROM gtest1_1;
 --------+---------+-----------+----------+------------------------------------
  a      | integer |           | not null | 
  b      | integer |           |          | generated always as (a * 2) stored
+Check constraints:
+    "gtest1_1_a_not_null" CHECK (a IS NOT NULL)
 Inherits: gtest1
 
 INSERT INTO gtest1_1 VALUES (4);

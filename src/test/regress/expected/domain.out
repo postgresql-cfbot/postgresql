@@ -688,6 +688,15 @@ drop domain dnotnulltest cascade;
 NOTICE:  drop cascades to 2 other objects
 DETAIL:  drop cascades to column col2 of table domnotnull
 drop cascades to column col1 of table domnotnull
+create domain dnotnulltest integer constraint dnn not null;
+select conname, contype, contypid::regtype from pg_constraint c
+	where contypid = 'dnotnulltest'::regtype;
+ conname | contype |   contypid   
+---------+---------+--------------
+ dnn     | c       | dnotnulltest
+(1 row)
+
+drop domain dnotnulltest;
 -- Test ALTER DOMAIN .. DEFAULT ..
 create table domdeftest (col1 ddef1);
 insert into domdeftest default values;

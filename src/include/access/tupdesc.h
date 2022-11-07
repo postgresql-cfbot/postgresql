@@ -27,6 +27,7 @@ typedef struct AttrDefault
 
 typedef struct ConstrCheck
 {
+	Oid			ccoid;			/* pg_constraint OID */
 	char	   *ccname;
 	char	   *ccbin;			/* nodeToString representation of expr */
 	bool		ccvalid;

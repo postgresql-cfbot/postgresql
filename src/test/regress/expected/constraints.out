@@ -754,6 +754,105 @@ ALTER TABLE deferred_excl ADD EXCLUDE (f1 WITH =);
 ERROR:  could not create exclusion constraint "deferred_excl_f1_excl"
 DETAIL:  Key (f1)=(3) conflicts with key (f1)=(3).
 DROP TABLE deferred_excl;
+-- verify CHECK constraints created for NOT NULL clauses
+CREATE TABLE notnull_tbl1 (a INTEGER NOT NULL);
+\d notnull_tbl1
+            Table "public.notnull_tbl1"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           | not null | 
+Check constraints:
+    "notnull_tbl1_a_not_null" CHECK (a IS NOT NULL)
+
+-- DROP NOT NULL gets rid of both the attnotnull flag and the constraint itself
+ALTER TABLE notnull_tbl1 ALTER a DROP NOT NULL;
+\d notnull_tbl1
+            Table "public.notnull_tbl1"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           |          | 
+
+-- SET NOT NULL puts both back
+ALTER TABLE notnull_tbl1 ALTER a SET NOT NULL;
+\d notnull_tbl1
+            Table "public.notnull_tbl1"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           | not null | 
+Check constraints:
+    "notnull_tbl1_a_not_null" CHECK (a IS NOT NULL)
+
+-- The simple syntax must not create redundant constraint
+ALTER TABLE notnull_tbl1 ALTER a SET NOT NULL;
+\d notnull_tbl1
+            Table "public.notnull_tbl1"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           | not null | 
+Check constraints:
+    "notnull_tbl1_a_not_null" CHECK (a IS NOT NULL)
+
+-- but this should create a second one
+ALTER TABLE notnull_tbl1 ADD check (a IS NOT NULL);
+\d notnull_tbl1
+            Table "public.notnull_tbl1"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           | not null | 
+Check constraints:
+    "notnull_tbl1_a_not_null" CHECK (a IS NOT NULL)
+    "notnull_tbl1_a_not_null1" CHECK (a IS NOT NULL)
+
+-- Dropping the first one keeps attnotnull intact
+ALTER TABLE notnull_tbl1 DROP CONSTRAINT notnull_tbl1_a_not_null;
+\d notnull_tbl1
+            Table "public.notnull_tbl1"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           | not null | 
+Check constraints:
+    "notnull_tbl1_a_not_null1" CHECK (a IS NOT NULL)
+
+-- but removing the second constraint resets the flag
+ALTER TABLE notnull_tbl1 DROP CONSTRAINT notnull_tbl1_a_not_null1;
+\d notnull_tbl1
+            Table "public.notnull_tbl1"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           |          | 
+
+DROP TABLE notnull_tbl1;
+CREATE TABLE notnull_tbl2 (a INTEGER PRIMARY KEY);
+ALTER TABLE notnull_tbl2 ALTER a DROP NOT NULL;
+ERROR:  column "a" is in a primary key
+CREATE TABLE notnull_tbl3 (a INTEGER NOT NULL, CHECK (a IS NOT NULL));
+ALTER TABLE notnull_tbl3 ALTER A DROP NOT NULL;
+ERROR:  cannot DROP NOT NULL when multiple possible constraints exist
+HINT:  Consider specifying which constraint to drop with ALTER TABLE .. DROP CONSTRAINT.
+ALTER TABLE notnull_tbl3 ADD b int, ADD CONSTRAINT pk PRIMARY KEY (a, b);
+\d notnull_tbl3
+            Table "public.notnull_tbl3"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           | not null | 
+ b      | integer |           | not null | 
+Indexes:
+    "pk" PRIMARY KEY, btree (a, b)
+Check constraints:
+    "notnull_tbl3_a_check" CHECK (a IS NOT NULL)
+    "notnull_tbl3_a_not_null" CHECK (a IS NOT NULL)
+
+ALTER TABLE notnull_tbl3 DROP CONSTRAINT pk;
+\d notnull_tbl3
+            Table "public.notnull_tbl3"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           | not null | 
+ b      | integer |           |          | 
+Check constraints:
+    "notnull_tbl3_a_check" CHECK (a IS NOT NULL)
+    "notnull_tbl3_a_not_null" CHECK (a IS NOT NULL)
+
 -- Comments
 -- Setup a low-level role to enforce non-superuser checks.
 CREATE ROLE regress_constraint_comments;

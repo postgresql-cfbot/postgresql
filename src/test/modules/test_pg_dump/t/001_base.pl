@@ -289,8 +289,9 @@ my %tests = (
 		  'ALTER EXTENSION test_pg_dump ADD TABLE regress_pg_dump_table_added;',
 		regexp => qr/^
 			\QCREATE TABLE public.regress_pg_dump_table_added (\E
-			\n\s+\Qcol1 integer NOT NULL,\E
-			\n\s+\Qcol2 integer\E
+			\n\s+\Qcol1 integer,\E
+			\n\s+\Qcol2 integer,\E
+			\n\s+\QCONSTRAINT regress_pg_dump_table_added_col1_not_null CHECK ((col1 IS NOT NULL))\E
 			\n\);\n/xm,
 		like => { binary_upgrade => 1, },
 	},
@@ -375,8 +376,9 @@ my %tests = (
 		  'CREATE TABLE regress_pg_dump_table_added (col1 int not null, col2 int);',
 		regexp => qr/^
 			\QCREATE TABLE public.regress_pg_dump_table_added (\E
-			\n\s+\Qcol1 integer NOT NULL,\E
-			\n\s+\Qcol2 integer\E
+			\n\s+\Qcol1 integer,\E
+			\n\s+\Qcol2 integer,\E
+			\n\s+\QCONSTRAINT regress_pg_dump_table_added_col1_not_null CHECK ((col1 IS NOT NULL))\E
 			\n\);\n/xm,
 		like => { binary_upgrade => 1, },
 	},
@@ -411,8 +413,9 @@ my %tests = (
 	'CREATE TABLE regress_pg_dump_table' => {
 		regexp => qr/^
 			\QCREATE TABLE public.regress_pg_dump_table (\E
-			\n\s+\Qcol1 integer NOT NULL,\E
+			\n\s+\Qcol1 integer,\E
 			\n\s+\Qcol2 integer,\E
+			\n\s+\QCONSTRAINT regress_pg_dump_table_col1_not_null CHECK ((col1 IS NOT NULL)),\E
 			\n\s+\QCONSTRAINT regress_pg_dump_table_col2_check CHECK ((col2 > 0))\E
 			\n\);\n/xm,
 		like => { binary_upgrade => 1, },

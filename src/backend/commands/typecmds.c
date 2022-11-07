@@ -52,6 +52,7 @@
 #include "catalog/pg_proc.h"
 #include "catalog/pg_range.h"
 #include "catalog/pg_type.h"
+#include "commands/constraint.h"
 #include "commands/defrem.h"
 #include "commands/tablecmds.h"
 #include "commands/typecmds.h"
@@ -1099,6 +1100,7 @@ DefineDomain(CreateDomainStmt *stmt)
 	foreach(listptr, schema)
 	{
 		Constraint *constr = lfirst(listptr);
+		Constraint *newck;
 
 		/* it must be a Constraint, per check above */
 
@@ -1108,6 +1110,18 @@ DefineDomain(CreateDomainStmt *stmt)
 				domainAddConstraint(address.objectId, domainNamespace,
 									basetypeoid, basetypeMod,
 									constr, domainName, NULL);
+				break;
+
+			case CONSTR_NOTNULL:
+				newck = makeCheckNotNullConstraint(domainNamespace,
+												   constr->conname,
+												   domainName,
+												   "value",
+												   false,
+												   InvalidOid);
+				domainAddConstraint(address.objectId, domainNamespace,
+									basetypeoid, basetypeMod,
+									newck, domainName, NULL);
 				break;
 
 				/* Other constraint types were fully processed above */

@@ -522,7 +522,7 @@ create table idxpart3 (b int not null, a int not null);
 alter table idxpart attach partition idxpart3 for values from (20, 20) to (30, 30);
 select conname, contype, conrelid::regclass, conindid::regclass, conkey
   from pg_constraint where conrelid::regclass::text like 'idxpart%'
-  order by conname;
+  order by conrelid::regclass::text, conname;
 drop table idxpart;
 
 -- Verify that multi-layer partitioning honors the requirement that all

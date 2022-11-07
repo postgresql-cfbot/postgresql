@@ -255,8 +255,8 @@ begin
   x := null;  -- fail
 end$$;
 NOTICE:  x = (1,2)
-ERROR:  domain var_record_nn does not allow null values
-CONTEXT:  PL/pgSQL function inline_code_block line 6 at assignment
+ERROR:  value for domain var_record_nn violates check constraint "var_record_nn_value_not_null"
+CONTEXT:  PL/pgSQL function inline_code_block line 5 at assignment
 do $$
 declare x var_record_colnn;  -- fail
 begin

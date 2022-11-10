@@ -1530,7 +1530,7 @@ alter table recur1 alter column f2 type recur2; -- fails
 create table test_storage (a text, c text storage plain);
 alter table test_storage alter a set storage plain;
 alter table test_storage add b int default 0; -- rewrite table to remove its TOAST table
-alter table test_storage alter a set storage extended; -- re-add TOAST table
+alter table test_storage alter a set storage default; -- re-add TOAST table
 
 select reltoastrelid <> 0 as has_toast_table
 from pg_class

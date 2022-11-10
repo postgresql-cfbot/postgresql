@@ -19303,7 +19303,9 @@ GetAttributeStorage(Oid atttypid, const char *storagemode)
 {
 	char		cstorage = 0;
 
-	if (pg_strcasecmp(storagemode, "plain") == 0)
+	if (pg_strcasecmp(storagemode, "default") == 0)
+		cstorage = get_typstorage(atttypid);
+	else if (pg_strcasecmp(storagemode, "plain") == 0)
 		cstorage = TYPSTORAGE_PLAIN;
 	else if (pg_strcasecmp(storagemode, "external") == 0)
 		cstorage = TYPSTORAGE_EXTERNAL;

@@ -1566,7 +1566,7 @@ lazy_scan_prune(LVRelState *vacrel,
 	TransactionId NewRelfrozenXid;
 	MultiXactId NewRelminMxid;
 	OffsetNumber deadoffsets[MaxHeapTuplesPerPage];
-	xl_heap_freeze_tuple frozen[MaxHeapTuplesPerPage];
+	HeapFreezeTuple frozen[MaxHeapTuplesPerPage];
 
 	Assert(BufferGetBlockNumber(buf) == blkno);
 
@@ -1825,40 +1825,8 @@ retry:
 
 		vacrel->frozen_pages++;
 
-		/*
-		 * At least one tuple with storage needs to be frozen -- execute that
-		 * now.
-		 *
-		 * If we need to freeze any tuples we'll mark the buffer dirty, and
-		 * write a WAL record recording the changes.  We must log the changes
-		 * to be crash-safe against future truncation of CLOG.
-		 */
-		START_CRIT_SECTION();
-
-		MarkBufferDirty(buf);
-
-		/* execute collected freezes */
-		for (int i = 0; i < tuples_frozen; i++)
-		{
-			HeapTupleHeader htup;
-
-			itemid = PageGetItemId(page, frozen[i].offset);
-			htup = (HeapTupleHeader) PageGetItem(page, itemid);
-
-			heap_execute_freeze_tuple(htup, &frozen[i]);
-		}
-
-		/* Now WAL-log freezing if necessary */
-		if (RelationNeedsWAL(vacrel->rel))
-		{
-			XLogRecPtr	recptr;
-
-			recptr = log_heap_freeze(vacrel->rel, buf, vacrel->FreezeLimit,
-									 frozen, tuples_frozen);
-			PageSetLSN(page, recptr);
-		}
-
-		END_CRIT_SECTION();
+		heap_freeze_prepared_tuples(vacrel->rel, buf, vacrel->FreezeLimit,
+									frozen, tuples_frozen);
 	}
 
 	/*

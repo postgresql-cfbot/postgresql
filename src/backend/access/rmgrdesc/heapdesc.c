@@ -140,15 +140,15 @@ heap2_desc(StringInfo buf, XLogReaderState *record)
 	{
 		xl_heap_freeze_page *xlrec = (xl_heap_freeze_page *) rec;
 
-		appendStringInfo(buf, "cutoff xid %u ntuples %u",
-						 xlrec->cutoff_xid, xlrec->ntuples);
+		appendStringInfo(buf, "latestRemovedXid %u nplans %u",
+						 xlrec->latestRemovedXid, xlrec->nplans);
 	}
 	else if (info == XLOG_HEAP2_VISIBLE)
 	{
 		xl_heap_visible *xlrec = (xl_heap_visible *) rec;
 
-		appendStringInfo(buf, "cutoff xid %u flags 0x%02X",
-						 xlrec->cutoff_xid, xlrec->flags);
+		appendStringInfo(buf, "latestRemovedXid %u flags 0x%02X",
+						 xlrec->latestRemovedXid, xlrec->flags);
 	}
 	else if (info == XLOG_HEAP2_MULTI_INSERT)
 	{

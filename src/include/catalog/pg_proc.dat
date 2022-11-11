@@ -2432,11 +2432,19 @@
   proargtypes => 'text timestamptz', prosrc => 'timestamptz_trunc' },
 { oid => '1284',
   descr => 'truncate timestamp with time zone to specified units in specified time zone',
-  proname => 'date_trunc', provolatile => 's', prorettype => 'timestamptz',
+  proname => 'date_trunc', prorettype => 'timestamptz',
   proargtypes => 'text timestamptz text', prosrc => 'timestamptz_trunc_zone' },
 { oid => '1218', descr => 'truncate interval to specified units',
   proname => 'date_trunc', prorettype => 'interval',
   proargtypes => 'text interval', prosrc => 'interval_trunc' },
+{ oid => '8802',
+  descr => 'truncate timestamp with time zone to specified interval',
+  proname => 'date_trunc', provolatile => 's', prorettype => 'timestamptz',
+  proargtypes => 'interval timestamptz', prosrc => 'timestamptz_trunc_int' },
+{ oid => '8803',
+  descr => 'truncate timestamp with time zone to specified interval in specified time zone',
+  proname => 'date_trunc', prorettype => 'timestamptz',
+  proargtypes => 'interval timestamptz text', prosrc => 'timestamptz_trunc_int_zone' },
 
 { oid => '1219', descr => 'increment',
   proname => 'int8inc', prorettype => 'int8', proargtypes => 'int8',
@@ -8153,6 +8161,16 @@
   provolatile => 's', prorettype => 'timestamptz',
   proargtypes => 'timestamptz timestamptz interval',
   prosrc => 'generate_series_timestamptz' },
+{ oid => '8801', descr => 'non-persistent series generator',
+  proname => 'generate_series', prorows => '1000', proretset => 't',
+  prorettype => 'timestamptz',
+  proargtypes => 'timestamptz timestamptz interval text',
+  prosrc => 'generate_series_timestamptz_zone' },
+{ oid => '8800',
+  descr => 'add interval to timestamp with time zone in specified time zone',
+  proname => 'date_add',
+  prorettype => 'timestamptz', proargtypes => 'timestamptz interval text',
+  prosrc => 'timestamptz_add_zone' },
 
 # boolean aggregates
 { oid => '2515', descr => 'aggregate transition function',
@@ -11827,5 +11845,4 @@
   proname => 'brin_minmax_multi_summary_send', provolatile => 's',
   prorettype => 'bytea', proargtypes => 'pg_brin_minmax_multi_summary',
   prosrc => 'brin_minmax_multi_summary_send' },
-
 ]

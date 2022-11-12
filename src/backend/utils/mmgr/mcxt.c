@@ -1396,6 +1396,24 @@ repalloc_extended(void *pointer, Size size, int flags)
 }
 
 /*
+ * repalloc0
+ *		Adjust the size of a previously allocated chunk and zero out the added
+ *		space.
+ */
+void *
+repalloc0(void *pointer, Size oldsize, Size size)
+{
+	void	   *ret;
+
+	/* catch wrong argument order */
+	Assert(size >= oldsize);
+
+	ret = repalloc(pointer, size);
+	memset((char *) ret + oldsize, 0, (size - oldsize));
+	return ret;
+}
+
+/*
  * MemoryContextAllocHuge
  *		Allocate (possibly-expansive) space within the specified context.
  *

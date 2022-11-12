@@ -1,0 +1,169 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1alter s2alter s1commit
+step s1alter: ALTER SUBSCRIPTION sub1 DISABLE;
+step s2alter: ALTER SUBSCRIPTION sub1 DISABLE; <waiting ...>
+step s1commit: COMMIT;
+step s2alter: <... completed>
+
+starting permutation: s1owner s2alter s1commit
+step s1owner: ALTER SUBSCRIPTION sub1 OWNER TO testsuperuser;
+step s2alter: ALTER SUBSCRIPTION sub1 DISABLE; <waiting ...>
+step s1commit: COMMIT;
+step s2alter: <... completed>
+
+starting permutation: s1drop s2alter s1commit
+step s1drop: DROP SUBSCRIPTION sub1;
+step s2alter: ALTER SUBSCRIPTION sub1 DISABLE; <waiting ...>
+step s1commit: COMMIT;
+step s2alter: <... completed>
+ERROR:  subscription "sub1" does not exist
+
+starting permutation: s1rename s2alter s1commit
+step s1rename: ALTER SUBSCRIPTION sub1 RENAME TO sub2;
+step s2alter: ALTER SUBSCRIPTION sub1 DISABLE; <waiting ...>
+step s1commit: COMMIT;
+step s2alter: <... completed>
+ERROR:  subscription "sub1" does not exist
+
+starting permutation: s1drop s1recreate s2alter s1commit
+step s1drop: DROP SUBSCRIPTION sub1;
+s1: WARNING:  tables were not subscribed, you will have to run ALTER SUBSCRIPTION ... REFRESH PUBLICATION to subscribe the tables
+step s1recreate: CREATE SUBSCRIPTION sub1 CONNECTION 'dbname=postgres' PUBLICATION pub1 WITH(connect=false, create_slot=false, slot_name = NONE);
+step s2alter: ALTER SUBSCRIPTION sub1 DISABLE; <waiting ...>
+step s1commit: COMMIT;
+step s2alter: <... completed>
+
+starting permutation: s1rename s1recreate s2alter s1commit
+step s1rename: ALTER SUBSCRIPTION sub1 RENAME TO sub2;
+s1: WARNING:  tables were not subscribed, you will have to run ALTER SUBSCRIPTION ... REFRESH PUBLICATION to subscribe the tables
+step s1recreate: CREATE SUBSCRIPTION sub1 CONNECTION 'dbname=postgres' PUBLICATION pub1 WITH(connect=false, create_slot=false, slot_name = NONE);
+step s2alter: ALTER SUBSCRIPTION sub1 DISABLE; <waiting ...>
+step s1commit: COMMIT;
+step s2alter: <... completed>
+
+starting permutation: s1alter s2drop s1commit
+step s1alter: ALTER SUBSCRIPTION sub1 DISABLE;
+step s2drop: DROP SUBSCRIPTION sub1; <waiting ...>
+step s1commit: COMMIT;
+step s2drop: <... completed>
+
+starting permutation: s1owner s2drop s1commit
+step s1owner: ALTER SUBSCRIPTION sub1 OWNER TO testsuperuser;
+step s2drop: DROP SUBSCRIPTION sub1; <waiting ...>
+step s1commit: COMMIT;
+step s2drop: <... completed>
+
+starting permutation: s1drop s2drop s1commit
+step s1drop: DROP SUBSCRIPTION sub1;
+step s2drop: DROP SUBSCRIPTION sub1; <waiting ...>
+step s1commit: COMMIT;
+step s2drop: <... completed>
+ERROR:  subscription "sub1" does not exist
+
+starting permutation: s1rename s2drop s1commit
+step s1rename: ALTER SUBSCRIPTION sub1 RENAME TO sub2;
+step s2drop: DROP SUBSCRIPTION sub1; <waiting ...>
+step s1commit: COMMIT;
+step s2drop: <... completed>
+ERROR:  subscription "sub1" does not exist
+
+starting permutation: s1drop s1recreate s2drop s1commit
+step s1drop: DROP SUBSCRIPTION sub1;
+s1: WARNING:  tables were not subscribed, you will have to run ALTER SUBSCRIPTION ... REFRESH PUBLICATION to subscribe the tables
+step s1recreate: CREATE SUBSCRIPTION sub1 CONNECTION 'dbname=postgres' PUBLICATION pub1 WITH(connect=false, create_slot=false, slot_name = NONE);
+step s2drop: DROP SUBSCRIPTION sub1; <waiting ...>
+step s1commit: COMMIT;
+step s2drop: <... completed>
+
+starting permutation: s1rename s1recreate s2drop s1commit
+step s1rename: ALTER SUBSCRIPTION sub1 RENAME TO sub2;
+s1: WARNING:  tables were not subscribed, you will have to run ALTER SUBSCRIPTION ... REFRESH PUBLICATION to subscribe the tables
+step s1recreate: CREATE SUBSCRIPTION sub1 CONNECTION 'dbname=postgres' PUBLICATION pub1 WITH(connect=false, create_slot=false, slot_name = NONE);
+step s2drop: DROP SUBSCRIPTION sub1; <waiting ...>
+step s1commit: COMMIT;
+step s2drop: <... completed>
+
+starting permutation: s1alter s2rename s1commit
+step s1alter: ALTER SUBSCRIPTION sub1 DISABLE;
+step s2rename: ALTER SUBSCRIPTION sub1 RENAME TO sub3; <waiting ...>
+step s1commit: COMMIT;
+step s2rename: <... completed>
+
+starting permutation: s1owner s2rename s1commit
+step s1owner: ALTER SUBSCRIPTION sub1 OWNER TO testsuperuser;
+step s2rename: ALTER SUBSCRIPTION sub1 RENAME TO sub3; <waiting ...>
+step s1commit: COMMIT;
+step s2rename: <... completed>
+
+starting permutation: s1drop s2rename s1commit
+step s1drop: DROP SUBSCRIPTION sub1;
+step s2rename: ALTER SUBSCRIPTION sub1 RENAME TO sub3; <waiting ...>
+step s1commit: COMMIT;
+step s2rename: <... completed>
+ERROR:  subscription "sub1" does not exist
+
+starting permutation: s1rename s2rename s1commit
+step s1rename: ALTER SUBSCRIPTION sub1 RENAME TO sub2;
+step s2rename: ALTER SUBSCRIPTION sub1 RENAME TO sub3; <waiting ...>
+step s1commit: COMMIT;
+step s2rename: <... completed>
+ERROR:  subscription "sub1" does not exist
+
+starting permutation: s1drop s1recreate s2rename s1commit
+step s1drop: DROP SUBSCRIPTION sub1;
+s1: WARNING:  tables were not subscribed, you will have to run ALTER SUBSCRIPTION ... REFRESH PUBLICATION to subscribe the tables
+step s1recreate: CREATE SUBSCRIPTION sub1 CONNECTION 'dbname=postgres' PUBLICATION pub1 WITH(connect=false, create_slot=false, slot_name = NONE);
+step s2rename: ALTER SUBSCRIPTION sub1 RENAME TO sub3; <waiting ...>
+step s1commit: COMMIT;
+step s2rename: <... completed>
+
+starting permutation: s1rename s1recreate s2rename s1commit
+step s1rename: ALTER SUBSCRIPTION sub1 RENAME TO sub2;
+s1: WARNING:  tables were not subscribed, you will have to run ALTER SUBSCRIPTION ... REFRESH PUBLICATION to subscribe the tables
+step s1recreate: CREATE SUBSCRIPTION sub1 CONNECTION 'dbname=postgres' PUBLICATION pub1 WITH(connect=false, create_slot=false, slot_name = NONE);
+step s2rename: ALTER SUBSCRIPTION sub1 RENAME TO sub3; <waiting ...>
+step s1commit: COMMIT;
+step s2rename: <... completed>
+
+starting permutation: s1alter s2owner s1commit
+step s1alter: ALTER SUBSCRIPTION sub1 DISABLE;
+step s2owner: ALTER SUBSCRIPTION sub1 OWNER TO testsuperuser; <waiting ...>
+step s1commit: COMMIT;
+step s2owner: <... completed>
+
+starting permutation: s1owner s2owner s1commit
+step s1owner: ALTER SUBSCRIPTION sub1 OWNER TO testsuperuser;
+step s2owner: ALTER SUBSCRIPTION sub1 OWNER TO testsuperuser; <waiting ...>
+step s1commit: COMMIT;
+step s2owner: <... completed>
+
+starting permutation: s1drop s2owner s1commit
+step s1drop: DROP SUBSCRIPTION sub1;
+step s2owner: ALTER SUBSCRIPTION sub1 OWNER TO testsuperuser; <waiting ...>
+step s1commit: COMMIT;
+step s2owner: <... completed>
+ERROR:  subscription "sub1" does not exist
+
+starting permutation: s1rename s2owner s1commit
+step s1rename: ALTER SUBSCRIPTION sub1 RENAME TO sub2;
+step s2owner: ALTER SUBSCRIPTION sub1 OWNER TO testsuperuser; <waiting ...>
+step s1commit: COMMIT;
+step s2owner: <... completed>
+ERROR:  subscription "sub1" does not exist
+
+starting permutation: s1drop s1recreate s2owner s1commit
+step s1drop: DROP SUBSCRIPTION sub1;
+s1: WARNING:  tables were not subscribed, you will have to run ALTER SUBSCRIPTION ... REFRESH PUBLICATION to subscribe the tables
+step s1recreate: CREATE SUBSCRIPTION sub1 CONNECTION 'dbname=postgres' PUBLICATION pub1 WITH(connect=false, create_slot=false, slot_name = NONE);
+step s2owner: ALTER SUBSCRIPTION sub1 OWNER TO testsuperuser; <waiting ...>
+step s1commit: COMMIT;
+step s2owner: <... completed>
+
+starting permutation: s1rename s1recreate s2owner s1commit
+step s1rename: ALTER SUBSCRIPTION sub1 RENAME TO sub2;
+s1: WARNING:  tables were not subscribed, you will have to run ALTER SUBSCRIPTION ... REFRESH PUBLICATION to subscribe the tables
+step s1recreate: CREATE SUBSCRIPTION sub1 CONNECTION 'dbname=postgres' PUBLICATION pub1 WITH(connect=false, create_slot=false, slot_name = NONE);
+step s2owner: ALTER SUBSCRIPTION sub1 OWNER TO testsuperuser; <waiting ...>
+step s1commit: COMMIT;
+step s2owner: <... completed>

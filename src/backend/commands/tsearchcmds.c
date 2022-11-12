@@ -408,7 +408,7 @@ DefineTSDictionary(List *names, List *parameters)
 	namespaceoid = QualifiedNameGetCreationNamespace(names, &dictname);
 
 	/* Check we have creation rights in target namespace */
-	aclresult = pg_namespace_aclcheck(namespaceoid, GetUserId(), ACL_CREATE);
+	aclresult = object_aclcheck(NamespaceRelationId, namespaceoid, GetUserId(), ACL_CREATE);
 	if (aclresult != ACLCHECK_OK)
 		aclcheck_error(aclresult, OBJECT_SCHEMA,
 					   get_namespace_name(namespaceoid));
@@ -510,7 +510,7 @@ AlterTSDictionary(AlterTSDictionaryStmt *stmt)
 			 dictId);
 
 	/* must be owner */
-	if (!pg_ts_dict_ownercheck(dictId, GetUserId()))
+	if (!object_ownercheck(TSDictionaryRelationId, dictId, GetUserId()))
 		aclcheck_error(ACLCHECK_NOT_OWNER, OBJECT_TSDICTIONARY,
 					   NameListToString(stmt->dictname));
 
@@ -911,7 +911,7 @@ DefineTSConfiguration(List *names, List *parameters, ObjectAddress *copied)
 	namespaceoid = QualifiedNameGetCreationNamespace(names, &cfgname);
 
 	/* Check we have creation rights in target namespace */
-	aclresult = pg_namespace_aclcheck(namespaceoid, GetUserId(), ACL_CREATE);
+	aclresult = object_aclcheck(NamespaceRelationId, namespaceoid, GetUserId(), ACL_CREATE);
 	if (aclresult != ACLCHECK_OK)
 		aclcheck_error(aclresult, OBJECT_SCHEMA,
 					   get_namespace_name(namespaceoid));
@@ -1124,7 +1124,7 @@ AlterTSConfiguration(AlterTSConfigurationStmt *stmt)
 	cfgId = ((Form_pg_ts_config) GETSTRUCT(tup))->oid;
 
 	/* must be owner */
-	if (!pg_ts_config_ownercheck(cfgId, GetUserId()))
+	if (!object_ownercheck(TSConfigRelationId, cfgId, GetUserId()))
 		aclcheck_error(ACLCHECK_NOT_OWNER, OBJECT_TSCONFIGURATION,
 					   NameListToString(stmt->cfgname));
 

@@ -4143,7 +4143,12 @@ bar
         <para>
         By default, command processing continues after an error.  When this
         variable is set to <literal>on</literal>, processing will instead stop
-        immediately.  In interactive mode,
+        immediately upon an error in SQL query. When this variable is set to
+        <literal>shell</literal>, a nonzero exit status of a shell command,
+        which indicates failure, is interpreted as an error that stops the processing.
+        When this variable is set to <literal>all</literal>, errors from both
+        SQL queries and shell commands can stop the processing.
+        In interactive mode,
         <application>psql</application> will return to the command prompt;
         otherwise, <application>psql</application> will exit, returning
         error code 3 to distinguish this case from fatal error

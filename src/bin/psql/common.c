@@ -94,6 +94,7 @@ setQFout(const char *fname)
 {
 	FILE	   *fout;
 	bool		is_pipe;
+	bool		status = true;
 
 	/* First make sure we can open the new output file/pipe */
 	if (!openQueryOutputFile(fname, &fout, &is_pipe))
@@ -103,7 +104,24 @@ setQFout(const char *fname)
 	if (pset.queryFout && pset.queryFout != stdout && pset.queryFout != stderr)
 	{
 		if (pset.queryFoutPipe)
-			pclose(pset.queryFout);
+		{
+			int pclose_rc = pclose(pset.queryFout);
+			if (pclose_rc != 0)
+			{
+				if (pclose_rc < 0)
+					pg_log_error("could not close pipe to external command: %m");
+				else
+				{
+					char *reason = wait_result_to_str(pclose_rc);
+
+					pg_log_error("command failure: %s",
+								 reason ? reason : "");
+					free(reason);
+				}
+				if ((pset.on_error_stop == PSQL_ERROR_STOP_SHELL || pset.on_error_stop == PSQL_ERROR_STOP_ALL))
+					status = false;
+			}
+		}
 		else
 			fclose(pset.queryFout);
 	}
@@ -115,7 +133,7 @@ setQFout(const char *fname)
 	set_sigpipe_trap_state(is_pipe);
 	restore_sigpipe_trap();
 
-	return true;
+	return status;
 }
 
 
@@ -1373,7 +1391,7 @@ DescribeQuery(const char *query, double *elapsed_msec)
  * For other commands, the results are processed normally, depending on their
  * status.
  *
- * Returns 1 on complete success, 0 on interrupt and -1 or errors.  Possible
+ * Returns 1 on complete success, 0 on interrupt and -1 on errors.  Possible
  * failure modes include purely client-side problems; check the transaction
  * status for the server-side opinion.
  *
@@ -1635,7 +1653,22 @@ ExecQueryAndProcessResults(const char *query,
 	{
 		if (gfile_is_pipe)
 		{
-			pclose(gfile_fout);
+			int pclose_rc = pclose(gfile_fout);
+			if (pclose_rc != 0)
+			{
+				if (pclose_rc < 0)
+					pg_log_error("could not close pipe to external command: %m");
+				else
+				{
+					char *reason = wait_result_to_str(pclose_rc);
+
+					pg_log_error("%s: %s", pset.gfname + 1,
+								 reason ? reason : "");
+					free(reason);
+				}
+				if (pset.on_error_stop == PSQL_ERROR_STOP_SHELL || pset.on_error_stop == PSQL_ERROR_STOP_ALL)
+					success = false;
+			}
 			restore_sigpipe_trap();
 		}
 		else
@@ -1851,7 +1884,22 @@ ExecQueryUsingCursor(const char *query, double *elapsed_msec)
 		/* close \g argument file/pipe */
 		if (is_pipe)
 		{
-			pclose(fout);
+			int pclose_rc = pclose(fout);
+			if (pclose_rc != 0)
+			{
+				if (pclose_rc < 0)
+					pg_log_error("could not close pipe to external command: %m");
+				else
+				{
+					char *reason = wait_result_to_str(pclose_rc);
+
+					pg_log_error("%s: %s", pset.gfname + 1,
+								 reason ? reason : "");
+					free(reason);
+				}
+				if (pset.on_error_stop == PSQL_ERROR_STOP_SHELL || pset.on_error_stop == PSQL_ERROR_STOP_ALL)
+					OK = false;
+			}
 			restore_sigpipe_trap();
 		}
 		else

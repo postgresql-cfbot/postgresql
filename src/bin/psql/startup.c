@@ -878,12 +878,6 @@ autocommit_hook(const char *newval)
 }
 
 static bool
-on_error_stop_hook(const char *newval)
-{
-	return ParseVariableBool(newval, "ON_ERROR_STOP", &pset.on_error_stop);
-}
-
-static bool
 quiet_hook(const char *newval)
 {
 	return ParseVariableBool(newval, "QUIET", &pset.quiet);
@@ -1030,6 +1024,29 @@ on_error_rollback_hook(const char *newval)
 		else
 		{
 			PsqlVarEnumError("ON_ERROR_ROLLBACK", newval, "on, off, interactive");
+			return false;
+		}
+	}
+	return true;
+}
+
+static bool
+on_error_stop_hook(const char *newval)
+{
+	Assert(newval != NULL);		/* else substitute hook messed up */
+	if (pg_strcasecmp(newval, "shell") == 0)
+		pset.on_error_stop = PSQL_ERROR_STOP_SHELL;
+	else if (pg_strcasecmp(newval, "all") == 0)
+		pset.on_error_stop = PSQL_ERROR_STOP_ALL;
+	else
+	{
+		bool		on_off;
+
+		if (ParseVariableBool(newval, NULL, &on_off))
+			pset.on_error_stop = on_off ? PSQL_ERROR_STOP_ON : PSQL_ERROR_STOP_OFF;
+		else
+		{
+			PsqlVarEnumError("ON_ERROR_STOP", newval, "on, off, shell, all");
 			return false;
 		}
 	}

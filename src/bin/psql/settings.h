@@ -56,6 +56,14 @@ typedef enum
 
 typedef enum
 {
+	PSQL_ERROR_STOP_OFF,
+	PSQL_ERROR_STOP_ON,
+	PSQL_ERROR_STOP_SHELL,
+	PSQL_ERROR_STOP_ALL
+} PSQL_ERROR_STOP;
+
+typedef enum
+{
 	PSQL_COMP_CASE_PRESERVE_UPPER,
 	PSQL_COMP_CASE_PRESERVE_LOWER,
 	PSQL_COMP_CASE_UPPER,
@@ -130,7 +138,6 @@ typedef struct _psqlSettings
 	 * functions.
 	 */
 	bool		autocommit;
-	bool		on_error_stop;
 	bool		quiet;
 	bool		singleline;
 	bool		singlestep;
@@ -142,6 +149,7 @@ typedef struct _psqlSettings
 	PSQL_ECHO	echo;
 	PSQL_ECHO_HIDDEN echo_hidden;
 	PSQL_ERROR_ROLLBACK on_error_rollback;
+	PSQL_ERROR_STOP		on_error_stop;
 	PSQL_COMP_CASE comp_case;
 	HistControl histcontrol;
 	const char *prompt1;

@@ -55,6 +55,10 @@ static int	backtick_start_offset;
 #define LEXRES_OK			1	/* OK completion of backslash argument */
 
 
+/* command execution in evaluate_backtick() results in error*/
+#define CMD_ERR				-1
+
+
 static void evaluate_backtick(PsqlScanState state);
 
 #define ECHO psqlscan_emit(cur_state, yytext, yyleng)
@@ -800,10 +804,23 @@ evaluate_backtick(PsqlScanState state)
 		} while (!feof(fd));
 	}
 
-	if (fd && pclose(fd) == -1)
+	if (fd)
 	{
-		pg_log_error("%s: %m", cmd);
-		error = true;
+		int pclose_rc = pclose(fd);
+		if (pclose_rc != 0)
+		{
+			if (pclose_rc < 0)
+				pg_log_error("%s: %m", cmd);
+			else
+			{
+				char	   *reason = wait_result_to_str(pclose_rc);
+
+				pg_log_error("%s: %s", cmd,
+								reason ? reason : "");
+				free(reason);
+			}
+			error = true;
+		}
 	}
 
 	if (PQExpBufferDataBroken(cmd_output))
@@ -825,6 +842,12 @@ evaluate_backtick(PsqlScanState state)
 			cmd_output.len--;
 		appendBinaryPQExpBuffer(output_buf, cmd_output.data, cmd_output.len);
 	}
+	/* If error, set len to a value greater than or equal
+	 * to maxlen to indicate error in command execution.
+	 * This can help with ON_ERROR_STOP.
+	 */
+	else
+		output_buf->len = CMD_ERR;
 
 	termPQExpBuffer(&cmd_output);
 }

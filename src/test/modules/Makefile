@@ -30,6 +30,7 @@ SUBDIRS = \
 		  test_regex \
 		  test_rls_hooks \
 		  test_shm_mq \
+		  test_slru \
 		  unsafe_tests \
 		  worker_spi
 

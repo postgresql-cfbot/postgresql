@@ -207,7 +207,7 @@ gtsvector_compress(PG_FUNCTION_ARGS)
 		}
 
 		/* make signature, if array is too long */
-		if (VARSIZE(res) > TOAST_INDEX_TARGET)
+		if (VARSIZE(res) > TOAST_INDEX_TARGET())
 		{
 			SignTSVector *ressign = gtsvector_alloc(SIGNKEY, siglen, NULL);
 

@@ -606,7 +606,7 @@ vm_readbuf(Relation rel, BlockNumber blkno, bool extend)
 	{
 		LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
 		if (PageIsNew(BufferGetPage(buf)))
-			PageInit(BufferGetPage(buf), BLCKSZ, 0);
+			PageInit(BufferGetPage(buf), BLCKSZ, 0, cluster_page_features);
 		LockBuffer(buf, BUFFER_LOCK_UNLOCK);
 	}
 	return buf;
@@ -623,7 +623,7 @@ vm_extend(Relation rel, BlockNumber vm_nblocks)
 	PGAlignedBlock pg;
 	SMgrRelation reln;
 
-	PageInit((Page) pg.data, BLCKSZ, 0);
+	PageInit((Page) pg.data, BLCKSZ, 0, cluster_page_features);
 
 	/*
 	 * We use the relation extension lock to lock out other backends trying to

@@ -118,7 +118,7 @@ index_form_tuple_context(TupleDesc tupleDescriptor,
 		 * try to compress it in-line.
 		 */
 		if (!VARATT_IS_EXTENDED(DatumGetPointer(untoasted_values[i])) &&
-			VARSIZE(DatumGetPointer(untoasted_values[i])) > TOAST_INDEX_TARGET &&
+			VARSIZE(DatumGetPointer(untoasted_values[i])) > TOAST_INDEX_TARGET() &&
 			(att->attstorage == TYPSTORAGE_EXTENDED ||
 			 att->attstorage == TYPSTORAGE_MAIN))
 		{

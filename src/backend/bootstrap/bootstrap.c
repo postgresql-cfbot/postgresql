@@ -46,7 +46,7 @@
 #include "utils/relmapper.h"
 
 uint32		bootstrap_data_checksum_version = 0;	/* No checksum */
-
+PageFeatureSet bootstrap_page_features = 0;			/* No special features */
 
 static void CheckerModeMain(void);
 static void bootstrap_signals(void);
@@ -221,7 +221,7 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 	argv++;
 	argc--;
 
-	while ((flag = getopt(argc, argv, "B:c:d:D:Fkr:X:-:")) != -1)
+	while ((flag = getopt(argc, argv, "B:c:d:D:e:Fkr:X:-:")) != -1)
 	{
 		switch (flag)
 		{
@@ -242,6 +242,19 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 					SetConfigOption("client_min_messages", debugstr,
 									PGC_POSTMASTER, PGC_S_ARGV);
 					pfree(debugstr);
+				}
+				break;
+			case 'e':
+				{
+					/* enable specific features */
+					PageFeatureSet features_tmp;
+
+					features_tmp = PageFeatureSetAddFeatureByName(bootstrap_page_features, optarg);
+					if (features_tmp == bootstrap_page_features)
+						ereport(ERROR,
+								(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+								 errmsg("Unrecognized page feature requested: \"%s\"", optarg)));
+					bootstrap_page_features = features_tmp;
 				}
 				break;
 			case 'F':
@@ -298,6 +311,8 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 				break;
 		}
 	}
+
+	ClusterPageFeatureInit(bootstrap_page_features);
 
 	if (argc != optind)
 	{

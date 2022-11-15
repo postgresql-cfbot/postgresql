@@ -61,11 +61,11 @@
 #define TOAST_TUPLE_TARGET_MAIN MaximumBytesPerTuple(TOAST_TUPLES_PER_PAGE_MAIN)
 
 /*
- * If an index value is larger than TOAST_INDEX_TARGET, we will try to
+ * If an index value is larger than TOAST_INDEX_TARGET(), we will try to
  * compress it (we can't move it out-of-line, however).  Note that this
  * number is per-datum, not per-tuple, for simplicity in index_form_tuple().
  */
-#define TOAST_INDEX_TARGET		(MaxHeapTupleSize / 16)
+#define TOAST_INDEX_TARGET()		(MaxHeapTupleSize() / 16)
 
 /*
  * When we store an oversize datum externally, we divide it into chunks

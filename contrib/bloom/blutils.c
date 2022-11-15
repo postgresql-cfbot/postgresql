@@ -408,7 +408,7 @@ BloomInitPage(Page page, uint16 flags)
 {
 	BloomPageOpaque opaque;
 
-	PageInit(page, BLCKSZ, sizeof(BloomPageOpaqueData));
+	PageInit(page, BLCKSZ, sizeof(BloomPageOpaqueData)), cluster_page_features);
 
 	opaque = BloomPageGetOpaque(page);
 	opaque->flags = flags;

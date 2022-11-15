@@ -535,7 +535,7 @@ dataBeginPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 		 * a single byte, and we can use all the free space on the old page as
 		 * well as the new page. For simplicity, ignore segment overhead etc.
 		 */
-		maxitems = Min(maxitems, freespace + GinDataPageMaxDataSize);
+		maxitems = Min(maxitems, freespace + GinDataPageMaxDataSize());
 	}
 	else
 	{
@@ -550,7 +550,7 @@ dataBeginPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 		int			nnewsegments;
 
 		nnewsegments = freespace / GinPostingListSegmentMaxSize;
-		nnewsegments += GinDataPageMaxDataSize / GinPostingListSegmentMaxSize;
+		nnewsegments += GinDataPageMaxDataSize() / GinPostingListSegmentMaxSize;
 		maxitems = Min(maxitems, nnewsegments * MinTuplesPerSegment);
 	}
 
@@ -665,8 +665,8 @@ dataBeginPlaceToPageLeaf(GinBtree btree, Buffer buf, GinBtreeStack *stack,
 				leaf->lastleft = dlist_prev_node(&leaf->segments, leaf->lastleft);
 			}
 		}
-		Assert(leaf->lsize <= GinDataPageMaxDataSize);
-		Assert(leaf->rsize <= GinDataPageMaxDataSize);
+		Assert(leaf->lsize <= GinDataPageMaxDataSize());
+		Assert(leaf->rsize <= GinDataPageMaxDataSize());
 
 		/*
 		 * Fetch the max item in the left page's last segment; it becomes the
@@ -755,7 +755,7 @@ ginVacuumPostingTreeLeaf(Relation indexrel, Buffer buffer, GinVacuumState *gvs)
 		if (seginfo->seg)
 			oldsegsize = SizeOfGinPostingList(seginfo->seg);
 		else
-			oldsegsize = GinDataPageMaxDataSize;
+			oldsegsize = GinDataPageMaxDataSize();
 
 		cleaned = ginVacuumItemPointers(gvs,
 										seginfo->items,
@@ -1015,7 +1015,7 @@ dataPlaceToPageLeafRecompress(Buffer buf, disassembledLeaf *leaf)
 		}
 	}
 
-	Assert(newsize <= GinDataPageMaxDataSize);
+	Assert(newsize <= GinDataPageMaxDataSize());
 	GinDataPageSetDataSize(page, newsize);
 }
 
@@ -1684,7 +1684,7 @@ leafRepackItems(disassembledLeaf *leaf, ItemPointer remaining)
 		 * copying to the page. Did we exceed the size that fits on one page?
 		 */
 		segsize = SizeOfGinPostingList(seginfo->seg);
-		if (pgused + segsize > GinDataPageMaxDataSize)
+		if (pgused + segsize > GinDataPageMaxDataSize())
 		{
 			if (!needsplit)
 			{
@@ -1724,8 +1724,8 @@ leafRepackItems(disassembledLeaf *leaf, ItemPointer remaining)
 	else
 		leaf->rsize = pgused;
 
-	Assert(leaf->lsize <= GinDataPageMaxDataSize);
-	Assert(leaf->rsize <= GinDataPageMaxDataSize);
+	Assert(leaf->lsize <= GinDataPageMaxDataSize());
+	Assert(leaf->rsize <= GinDataPageMaxDataSize());
 
 	/*
 	 * Make a palloc'd copy of every segment after the first modified one,
@@ -1801,7 +1801,7 @@ createPostingTree(Relation index, ItemPointerData *items, uint32 nitems,
 										 GinPostingListSegmentMaxSize,
 										 &npacked);
 		segsize = SizeOfGinPostingList(segment);
-		if (rootsize + segsize > GinDataPageMaxDataSize)
+		if (rootsize + segsize > GinDataPageMaxDataSize())
 			break;
 
 		memcpy(ptr, segment, segsize);

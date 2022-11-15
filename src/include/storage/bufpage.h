@@ -18,6 +18,14 @@
 #include "storage/block.h"
 #include "storage/item.h"
 #include "storage/off.h"
+#include "common/pagefeat.h"
+
+extern int reserved_page_size;
+
+#define SizeOfPageReservedSpace() reserved_page_size
+
+/* strict upper bound on the amount of space occupied we have reserved on
+ * pages in this cluster */
 
 /*
  * A postgres disk page is an abstraction layered on top of a postgres
@@ -36,10 +44,10 @@
  * |			 v pd_upper							  |
  * +-------------+------------------------------------+
  * |			 | tupleN ...                         |
- * +-------------+------------------+-----------------+
- * |	   ... tuple3 tuple2 tuple1 | "special space" |
- * +--------------------------------+-----------------+
- *									^ pd_special
+ * +-------------+-----+------------+-----------------+
+ * | ... tuple2 tuple1 | "special space" | "reserved" |
+ * +-------------------+------------+-----------------+
+ *					   ^ pd_special      ^ reserved_page_space
  *
  * a page is full when nothing can be added between pd_lower and
  * pd_upper.
@@ -73,6 +81,8 @@
  * stored as the page trailer.  an access method should always
  * initialize its pages with PageInit and then set its own opaque
  * fields.
+ *
+ * XXX - update more comments here about reserved_page_space
  */
 
 typedef Pointer Page;
@@ -185,8 +195,8 @@ typedef PageHeaderData *PageHeader;
 #define PD_PAGE_FULL		0x0002	/* not enough free space for new tuple? */
 #define PD_ALL_VISIBLE		0x0004	/* all tuples on page are visible to
 									 * everyone */
-
-#define PD_VALID_FLAG_BITS	0x0007	/* OR of all valid pd_flags bits */
+#define PD_EXTENDED_FEATS	0x0008	/* this page uses extended page features */
+#define PD_VALID_FLAG_BITS	0x000F	/* OR of all valid pd_flags bits */
 
 /*
  * Page layout version number 0 is for pre-7.3 Postgres releases.
@@ -302,6 +312,26 @@ PageSetPageSizeAndVersion(Page page, Size size, uint8 version)
 	((PageHeader) page)->pd_pagesize_version = size | version;
 }
 
+
+/*
+ * Return any extended page features set on the page.
+ */
+static inline PageFeatureSet PageGetPageFeatures(Page page)
+{
+	return ((PageHeader) page)->pd_flags & PD_EXTENDED_FEATS \
+		? (PageFeatureSet)(((PGAlignedBlock*)page)->data[BLCKSZ - 1])
+		: 0;
+}
+
+/*
+ * Return the size of space allocated for page features.
+ */
+static inline Size
+PageGetFeatureSize(Page page)
+{
+	return PageFeatureSetCalculateSize(PageGetPageFeatures(page));
+}
+
 /* ----------------
  *		page special data functions
  * ----------------
@@ -313,7 +343,7 @@ PageSetPageSizeAndVersion(Page page, Size size, uint8 version)
 static inline uint16
 PageGetSpecialSize(Page page)
 {
-	return (PageGetPageSize(page) - ((PageHeader) page)->pd_special);
+	return (PageGetPageSize(page) - ((PageHeader) page)->pd_special - PageGetFeatureSize(page));
 }
 
 /*
@@ -325,7 +355,7 @@ static inline void
 PageValidateSpecialPointer(Page page)
 {
 	Assert(page);
-	Assert(((PageHeader) page)->pd_special <= BLCKSZ);
+	Assert((((PageHeader) page)->pd_special + reserved_page_size) <= BLCKSZ);
 	Assert(((PageHeader) page)->pd_special >= SizeOfPageHeaderData);
 }
 
@@ -485,7 +515,7 @@ do { \
 StaticAssertDecl(BLCKSZ == ((BLCKSZ / sizeof(size_t)) * sizeof(size_t)),
 				 "BLCKSZ has to be a multiple of sizeof(size_t)");
 
-extern void PageInit(Page page, Size pageSize, Size specialSize);
+extern void PageInit(Page page, Size pageSize, Size specialSize, PageFeatureSet features);
 extern bool PageIsVerifiedExtended(Page page, BlockNumber blkno, int flags);
 extern OffsetNumber PageAddItemExtended(Page page, Item item, Size size,
 										OffsetNumber offsetNumber, int flags);

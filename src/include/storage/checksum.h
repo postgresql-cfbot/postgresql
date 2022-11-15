@@ -20,5 +20,10 @@
  * 4-byte boundary.
  */
 extern uint16 pg_checksum_page(char *page, BlockNumber blkno);
+extern uint32 pg_checksum32_page(char *page, BlockNumber blkno, char*offset);
+extern uint64 pg_checksum64_page(char *page, BlockNumber blkno, uint64*offset);
+extern uint64 pg_checksum56_page(char *page, BlockNumber blkno, uint64*offset);
+extern void pg_set_checksum56_page(char *page, uint64 checksum, uint64 *cksumloc);
+extern uint64 pg_get_checksum56_page(char *page, uint64 *cksumloc);
 
 #endif							/* CHECKSUM_H */

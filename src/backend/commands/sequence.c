@@ -382,7 +382,7 @@ fill_seq_fork_with_data(Relation rel, HeapTuple tuple, ForkNumber forkNum)
 
 	page = BufferGetPage(buf);
 
-	PageInit(page, BufferGetPageSize(buf), sizeof(sequence_magic));
+	PageInit(page, BufferGetPageSize(buf), sizeof(sequence_magic), cluster_page_features);
 	sm = (sequence_magic *) PageGetSpecialPointer(page);
 	sm->magic = SEQ_MAGIC;
 
@@ -1871,7 +1871,7 @@ seq_redo(XLogReaderState *record)
 	 */
 	localpage = (Page) palloc(BufferGetPageSize(buffer));
 
-	PageInit(localpage, BufferGetPageSize(buffer), sizeof(sequence_magic));
+	PageInit(localpage, BufferGetPageSize(buffer), sizeof(sequence_magic), cluster_page_features);
 	sm = (sequence_magic *) PageGetSpecialPointer(localpage);
 	sm->magic = SEQ_MAGIC;
 

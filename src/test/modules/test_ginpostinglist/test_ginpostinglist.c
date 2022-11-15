@@ -88,9 +88,9 @@ Datum
 test_ginpostinglist(PG_FUNCTION_ARGS)
 {
 	test_itemptr_pair(0, 2, 14);
-	test_itemptr_pair(0, MaxHeapTuplesPerPage, 14);
-	test_itemptr_pair(MaxBlockNumber, MaxHeapTuplesPerPage, 14);
-	test_itemptr_pair(MaxBlockNumber, MaxHeapTuplesPerPage, 16);
+	test_itemptr_pair(0, MaxHeapTuplesPerPage(), 14);
+	test_itemptr_pair(MaxBlockNumber, MaxHeapTuplesPerPage(), 14);
+	test_itemptr_pair(MaxBlockNumber, MaxHeapTuplesPerPage(), 16);
 
 	PG_RETURN_VOID();
 }

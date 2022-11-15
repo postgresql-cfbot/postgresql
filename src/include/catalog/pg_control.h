@@ -19,7 +19,7 @@
 #include "access/xlogdefs.h"
 #include "pgtime.h"				/* for pg_time_t */
 #include "port/pg_crc32c.h"
-
+#include "common/pagefeat.h"
 
 /* Version identifier for this pg_control format */
 #define PG_CONTROL_VERSION	1300
@@ -218,6 +218,9 @@ typedef struct ControlFileData
 
 	/* Are data pages protected by checksums? Zero if no checksum version */
 	uint32		data_checksum_version;
+
+	/* What extended page features are we using? */
+	PageFeatureSet page_features;
 
 	/*
 	 * Random nonce, used in authentication requests that need to proceed

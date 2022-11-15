@@ -475,7 +475,7 @@ brin_doinsert(Relation idxrel, BlockNumber pagesPerRange,
 void
 brin_page_init(Page page, uint16 type)
 {
-	PageInit(page, BLCKSZ, sizeof(BrinSpecialSpace));
+	PageInit(page, BLCKSZ, sizeof(BrinSpecialSpace), cluster_page_features);
 
 	BrinPageType(page) = type;
 }

@@ -2816,8 +2816,8 @@ _bt_simpledel_pass(Relation rel, Buffer buffer, Relation heapRel,
 	delstate.bottomup = false;
 	delstate.bottomupfreespace = 0;
 	delstate.ndeltids = 0;
-	delstate.deltids = palloc(MaxTIDsPerBTreePage * sizeof(TM_IndexDelete));
-	delstate.status = palloc(MaxTIDsPerBTreePage * sizeof(TM_IndexStatus));
+	delstate.deltids = palloc(MaxTIDsPerBTreePage() * sizeof(TM_IndexDelete));
+	delstate.status = palloc(MaxTIDsPerBTreePage() * sizeof(TM_IndexStatus));
 
 	for (offnum = minoff;
 		 offnum <= maxoff;

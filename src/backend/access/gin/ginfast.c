@@ -38,8 +38,8 @@
 /* GUC parameter */
 int			gin_pending_list_limit = 0;
 
-#define GIN_PAGE_FREESIZE \
-	( BLCKSZ - MAXALIGN(SizeOfPageHeaderData) - MAXALIGN(sizeof(GinPageOpaqueData)) )
+#define GIN_PAGE_FREESIZE() \
+	( BLCKSZ - MAXALIGN(SizeOfPageHeaderData) - MAXALIGN(sizeof(GinPageOpaqueData)) - SizeOfPageReservedSpace() )
 
 typedef struct KeyArray
 {
@@ -183,7 +183,7 @@ makeSublist(Relation index, IndexTuple *tuples, int32 ntuples,
 
 		tupsize = MAXALIGN(IndexTupleSize(tuples[i])) + sizeof(ItemIdData);
 
-		if (size + tupsize > GinListPageSize)
+		if (size + tupsize > GinListPageSize())
 		{
 			/* won't fit, force a new page and reprocess */
 			i--;
@@ -249,7 +249,7 @@ ginHeapTupleFastInsert(GinState *ginstate, GinTupleCollector *collector)
 	 */
 	CheckForSerializableConflictIn(index, NULL, GIN_METAPAGE_BLKNO);
 
-	if (collector->sumsize + collector->ntuples * sizeof(ItemIdData) > GinListPageSize)
+	if (collector->sumsize + collector->ntuples * sizeof(ItemIdData) > GinListPageSize())
 	{
 		/*
 		 * Total size is greater than one page => make sublist
@@ -450,7 +450,7 @@ ginHeapTupleFastInsert(GinState *ginstate, GinTupleCollector *collector)
 	 * ginInsertCleanup() should not be called inside our CRIT_SECTION.
 	 */
 	cleanupSize = GinGetPendingListCleanupSize(index);
-	if (metadata->nPendingPages * GIN_PAGE_FREESIZE > cleanupSize * 1024L)
+	if (metadata->nPendingPages * GIN_PAGE_FREESIZE() > cleanupSize * 1024L)
 		needCleanup = true;
 
 	UnlockReleaseBuffer(metabuffer);

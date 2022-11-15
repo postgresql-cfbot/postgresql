@@ -77,6 +77,7 @@
 #include "getopt_long.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
+#include "storage/bufpage.h" /* MaxSizeOfPageReservedSpace */
 
 
 /* Ideally this would be in a .h file, but it hardly seems worth the trouble */
@@ -149,6 +150,8 @@ static bool do_sync = true;
 static bool sync_only = false;
 static bool show_setting = false;
 static bool data_checksums = false;
+static bool extended_checksums = false;
+static bool wasted_space = true;
 static char *xlog_dir = NULL;
 static char *str_wal_segment_size_mb = NULL;
 static int	wal_segment_size_mb;
@@ -1321,10 +1324,12 @@ bootstrap_template1(void)
 	unsetenv("PGCLIENTENCODING");
 
 	snprintf(cmd, sizeof(cmd),
-			 "\"%s\" --boot -X %d %s %s %s %s",
+			 "\"%s\" --boot -X %d %s %s %s %s %s %s",
 			 backend_exec,
 			 wal_segment_size_mb * (1024 * 1024),
 			 data_checksums ? "-k" : "",
+			 extended_checksums ? "-e extended_checksums" : "",
+			 wasted_space ? "-e wasted_space" : "",
 			 boot_options, extra_options,
 			 debug ? "-d 5" : "");
 
@@ -2147,6 +2152,7 @@ usage(const char *progname)
 	printf(_("  -g, --allow-group-access  allow group read/execute on data directory\n"));
 	printf(_("      --icu-locale=LOCALE   set ICU locale ID for new databases\n"));
 	printf(_("  -k, --data-checksums      use data page checksums\n"));
+	printf(_("  -K, --extended-checksums  use extended data page checksums\n"));
 	printf(_("      --locale=LOCALE       set default locale for new databases\n"));
 	printf(_("      --lc-collate=, --lc-ctype=, --lc-messages=LOCALE\n"
 			 "      --lc-monetary=, --lc-numeric=, --lc-time=LOCALE\n"
@@ -2802,6 +2808,8 @@ main(int argc, char *argv[])
 		{"waldir", required_argument, NULL, 'X'},
 		{"wal-segsize", required_argument, NULL, 12},
 		{"data-checksums", no_argument, NULL, 'k'},
+		{"extended-checksums", no_argument, NULL, 'K'},
+		{"waste-space", no_argument, NULL, 'w'},
 		{"allow-group-access", no_argument, NULL, 'g'},
 		{"discard-caches", no_argument, NULL, 14},
 		{"locale-provider", required_argument, NULL, 15},
@@ -2847,7 +2855,7 @@ main(int argc, char *argv[])
 
 	/* process command-line options */
 
-	while ((c = getopt_long(argc, argv, "A:dD:E:gkL:nNsST:U:WX:", long_options, &option_index)) != -1)
+	while ((c = getopt_long(argc, argv, "A:dD:E:gkKL:nNsST:U:WwX:", long_options, &option_index)) != -1)
 	{
 		switch (c)
 		{
@@ -2899,6 +2907,9 @@ main(int argc, char *argv[])
 			case 'k':
 				data_checksums = true;
 				break;
+			case 'K':
+				extended_checksums = true;
+				break;
 			case 'L':
 				share_path = pg_strdup(optarg);
 				break;
@@ -2934,6 +2945,9 @@ main(int argc, char *argv[])
 				break;
 			case 'T':
 				default_text_search_config = pg_strdup(optarg);
+				break;
+			case 'w':
+				wasted_space = true;
 				break;
 			case 'X':
 				xlog_dir = pg_strdup(optarg);
@@ -3014,6 +3028,9 @@ main(int argc, char *argv[])
 	if (pwprompt && pwfilename)
 		pg_fatal("password prompt and password file cannot be specified together");
 
+	if (data_checksums && extended_checksums)
+		pg_fatal("data checksums and extended data checksums cannot be specified together");
+
 	check_authmethod_unspecified(&authmethodlocal);
 	check_authmethod_unspecified(&authmethodhost);
 
@@ -3067,7 +3084,9 @@ main(int argc, char *argv[])
 
 	printf("\n");
 
-	if (data_checksums)
+	if (extended_checksums)
+		printf(_("Extended data page checksums are enabled.\n"));
+	else if (data_checksums)
 		printf(_("Data page checksums are enabled.\n"));
 	else
 		printf(_("Data page checksums are disabled.\n"));

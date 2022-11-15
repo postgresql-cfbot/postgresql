@@ -33,7 +33,11 @@ wait_result_to_str(int exitstatus)
 {
 	char		str[512];
 
-	if (WIFEXITED(exitstatus))
+	if (exitstatus == -1)
+	{
+		snprintf(str, sizeof(str), "%m");
+	}
+	else if (WIFEXITED(exitstatus))
 	{
 		/*
 		 * Give more specific error message for some common exit codes that

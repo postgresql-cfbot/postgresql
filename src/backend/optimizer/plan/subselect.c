@@ -1271,6 +1271,7 @@ convert_ANY_sublink_to_join(PlannerInfo *root, SubLink *sublink,
 	JoinExpr   *result;
 	Query	   *parse = root->parse;
 	Query	   *subselect = (Query *) sublink->subselect;
+	bool		has_level_1_vars;
 	Relids		upper_varnos;
 	int			rtindex;
 	ParseNamespaceItem *nsitem;
@@ -1283,11 +1284,10 @@ convert_ANY_sublink_to_join(PlannerInfo *root, SubLink *sublink,
 	Assert(sublink->subLinkType == ANY_SUBLINK);
 
 	/*
-	 * The sub-select must not refer to any Vars of the parent query. (Vars of
-	 * higher levels should be okay, though.)
+	 * If the sub-select refers to any Vars of the parent query, we have to
+	 * treat it as LATERAL.  (Vars of higher levels don't matter here.)
 	 */
-	if (contain_vars_of_level((Node *) subselect, 1))
-		return NULL;
+	has_level_1_vars = contain_vars_of_level((Node *) subselect, 1);
 
 	/*
 	 * The test expression must contain some Vars of the parent query, else
@@ -1324,7 +1324,7 @@ convert_ANY_sublink_to_join(PlannerInfo *root, SubLink *sublink,
 	nsitem = addRangeTableEntryForSubquery(pstate,
 										   subselect,
 										   makeAlias("ANY_subquery", NIL),
-										   false,
+										   has_level_1_vars,
 										   false);
 	rte = nsitem->p_rte;
 	parse->rtable = lappend(parse->rtable, rte);

@@ -80,6 +80,28 @@ typedef enum UpperRelationKind
 	/* NB: UPPERREL_FINAL must be last enum entry; it's used to size arrays */
 } UpperRelationKind;
 
+/*
+ * Hashed list to store relation specific info and to retrieve it by relids.
+ *
+ * For small problems we just scan the list to do lookups, but when there are
+ * many relations we build a hash table for faster lookups. The hash table is
+ * present and valid when rel_hash is not NULL.  Note that we still maintain
+ * the list even when using the hash table for lookups; this simplifies life
+ * for GEQO.
+ *
+ * XXX I wonder why we actually need a separate node, merely wrapping fields
+ * that already existed ...
+ */
+typedef struct RelInfoList
+{
+	pg_node_attr(no_copy_equal, no_read)
+
+	NodeTag		type;
+
+	List	   *items;
+	struct HTAB *hash pg_node_attr(read_write_ignore);
+} RelInfoList;
+
 /*----------
  * PlannerGlobal
  *		Global information for planning/optimization
@@ -260,15 +282,9 @@ struct PlannerInfo
 
 	/*
 	 * join_rel_list is a list of all join-relation RelOptInfos we have
-	 * considered in this planning run.  For small problems we just scan the
-	 * list to do lookups, but when there are many join relations we build a
-	 * hash table for faster lookups.  The hash table is present and valid
-	 * when join_rel_hash is not NULL.  Note that we still maintain the list
-	 * even when using the hash table for lookups; this simplifies life for
-	 * GEQO.
+	 * considered in this planning run.
 	 */
-	List	   *join_rel_list;
-	struct HTAB *join_rel_hash pg_node_attr(read_write_ignore);
+	struct RelInfoList *join_rel_list;	/* list of join-relation RelOptInfos */
 
 	/*
 	 * When doing a dynamic-programming-style join search, join_rel_level[k]
@@ -357,6 +373,9 @@ struct PlannerInfo
 	/* list of PlaceHolderInfos */
 	List	   *placeholder_list;
 
+	/* List of GroupedVarInfos. */
+	List	   *grouped_var_list;
+
 	/* array of PlaceHolderInfos indexed by phid */
 	struct PlaceHolderInfo **placeholder_array pg_node_attr(read_write_ignore, array_size(placeholder_array_size));
 	/* allocated size of array */
@@ -395,7 +414,13 @@ struct PlannerInfo
 	 * Upper-rel RelOptInfos. Use fetch_upper_rel() to get any particular
 	 * upper rel.
 	 */
-	List	   *upper_rels[UPPERREL_FINAL + 1] pg_node_attr(read_write_ignore);
+	RelInfoList	   upper_rels[UPPERREL_FINAL + 1] pg_node_attr(read_write_ignore);;
+
+	/*
+	 * list of grouped relation RelAggInfos. One instance of RelAggInfo per
+	 * item of the upper_rels[UPPERREL_PARTIAL_GROUP_AGG] list.
+	 */
+	struct RelInfoList *agg_info_list;
 
 	/* Result tlists chosen by grouping_planner for upper-stage processing */
 	struct PathTarget *upper_targets[UPPERREL_FINAL + 1] pg_node_attr(read_write_ignore);
@@ -410,6 +435,12 @@ struct PlannerInfo
 	 * after that.)
 	 */
 	List	   *processed_tlist;
+
+	/*
+	 * The maximum ressortgroupref among target entries in processed_list.
+	 * Useful when adding extra grouping expressions for partial aggregation.
+	 */
+	int			max_sortgroupref;
 
 	/*
 	 * For UPDATE, this list contains the target table's attribute numbers to
@@ -1009,6 +1040,62 @@ typedef struct RelOptInfo
 #define REL_HAS_ALL_PART_PROPS(rel)	\
 	((rel)->part_scheme && (rel)->boundinfo && (rel)->nparts > 0 && \
 	 (rel)->part_rels && (rel)->partexprs && (rel)->nullable_partexprs)
+
+/*
+ * RelAggInfo
+ *		Information needed to create grouped paths for base rels and joins.
+ *
+ * "relids" is the set of base-relation identifiers, just like with
+ * RelOptInfo.
+ *
+ * "target" will be used as pathtarget if partial aggregation is applied to
+ * base relation or join. The same target will also --- if the relation is a
+ * join --- be used to joinin grouped path to a non-grouped one.  This target
+ * can contain plain-Var grouping expressions and Aggref nodes.
+ *
+ * Note: There's a convention that Aggref expressions are supposed to follow
+ * the other expressions of the target. Iterations of ->exprs may rely on this
+ * arrangement.
+ *
+ * "agg_input" contains Vars used either as grouping expressions or aggregate
+ * arguments. Paths providing the aggregation plan with input data should use
+ * this target. The only difference from reltarget of the non-grouped relation
+ * is that some items can have sortgroupref initialized.
+ *
+ * "input_rows" is the estimated number of input rows for AggPath. It's
+ * actually just a workspace for users of the structure, i.e. not initialized
+ * when instance of the structure is created.
+ *
+ * "group_clauses" and "group_exprs" are lists of SortGroupClause and the
+ * corresponding grouping expressions respectively.
+ *
+ * "agg_exprs" is a list of Aggref nodes for the aggregation of the relation's
+ * paths.
+ *
+ * "rel_grouped" is the relation containing the partially aggregated paths.
+ */
+typedef struct RelAggInfo
+{
+	pg_node_attr(no_copy_equal, no_read)
+
+	NodeTag		type;
+
+	Relids		relids;			/* Base rels contained in this grouped rel. */
+
+	struct PathTarget *target;	/* Target for grouped paths. */
+
+	struct PathTarget *agg_input;	/* pathtarget of paths that generate input
+									 * for aggregation paths. */
+
+	double		input_rows;
+
+	List	   *group_clauses;
+	List	   *group_exprs;
+
+	List	   *agg_exprs;		/* Aggref expressions. */
+
+	RelOptInfo *rel_grouped;	/* Grouped relation. */
+} RelAggInfo;
 
 /*
  * IndexOptInfo
@@ -2872,6 +2959,29 @@ typedef struct PlaceHolderInfo
 	/* estimated attribute width */
 	int32		ph_width;
 } PlaceHolderInfo;
+
+/*
+ * GroupedVarInfo exists for each expression that can be used as an aggregate
+ * or grouping expression evaluated below a join.
+ *
+ * TODO Rename, perhaps to GroupedTargetEntry? (Also rename the variables of
+ * this type.)
+ */
+typedef struct GroupedVarInfo
+{
+	pg_node_attr(no_copy_equal, no_read)
+
+	NodeTag		type;
+
+	Expr	   *gvexpr;			/* the represented expression. */
+	Aggref	   *agg_partial;	/* if gvexpr is aggregate, agg_partial is the
+								 * corresponding partial aggregate */
+	Index		sortgroupref;	/* If gvexpr is a grouping expression, this is
+								 * the tleSortGroupRef of the corresponding
+								 * SortGroupClause. */
+	Relids		gv_eval_at;		/* lowest level we can evaluate the expression
+								 * at or NULL if it can happen anywhere. */
+} GroupedVarInfo;
 
 /*
  * This struct describes one potentially index-optimizable MIN/MAX aggregate

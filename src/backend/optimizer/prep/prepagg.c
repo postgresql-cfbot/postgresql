@@ -64,6 +64,10 @@ static int	find_compatible_trans(PlannerInfo *root, Aggref *newagg,
 								  Datum initValue, bool initValueIsNull,
 								  List *transnos);
 static Datum GetAggInitVal(Datum textInitVal, Oid transtype);
+static void get_agg_clause_costs_trans(PlannerInfo *root, AggSplit aggsplit,
+									   AggTransInfo *transinfo, AggClauseCosts *costs);
+static void get_agg_clause_costs_agginfo(PlannerInfo *root, AggSplit aggsplit,
+										 AggInfo *agginfo, AggClauseCosts *costs);
 
 /* -----------------
  * Resolve the transition type of all Aggrefs, and determine which Aggrefs
@@ -546,132 +550,176 @@ get_agg_clause_costs(PlannerInfo *root, AggSplit aggsplit, AggClauseCosts *costs
 	{
 		AggTransInfo *transinfo = lfirst_node(AggTransInfo, lc);
 
-		/*
-		 * Add the appropriate component function execution costs to
-		 * appropriate totals.
-		 */
-		if (DO_AGGSPLIT_COMBINE(aggsplit))
-		{
-			/* charge for combining previously aggregated states */
-			add_function_cost(root, transinfo->combinefn_oid, NULL,
-							  &costs->transCost);
-		}
-		else
-			add_function_cost(root, transinfo->transfn_oid, NULL,
-							  &costs->transCost);
-		if (DO_AGGSPLIT_DESERIALIZE(aggsplit) &&
-			OidIsValid(transinfo->deserialfn_oid))
-			add_function_cost(root, transinfo->deserialfn_oid, NULL,
-							  &costs->transCost);
-		if (DO_AGGSPLIT_SERIALIZE(aggsplit) &&
-			OidIsValid(transinfo->serialfn_oid))
-			add_function_cost(root, transinfo->serialfn_oid, NULL,
-							  &costs->finalCost);
-
-		/*
-		 * These costs are incurred only by the initial aggregate node, so we
-		 * mustn't include them again at upper levels.
-		 */
-		if (!DO_AGGSPLIT_COMBINE(aggsplit))
-		{
-			/* add the input expressions' cost to per-input-row costs */
-			QualCost	argcosts;
-
-			cost_qual_eval_node(&argcosts, (Node *) transinfo->args, root);
-			costs->transCost.startup += argcosts.startup;
-			costs->transCost.per_tuple += argcosts.per_tuple;
-
-			/*
-			 * Add any filter's cost to per-input-row costs.
-			 *
-			 * XXX Ideally we should reduce input expression costs according
-			 * to filter selectivity, but it's not clear it's worth the
-			 * trouble.
-			 */
-			if (transinfo->aggfilter)
-			{
-				cost_qual_eval_node(&argcosts, (Node *) transinfo->aggfilter,
-									root);
-				costs->transCost.startup += argcosts.startup;
-				costs->transCost.per_tuple += argcosts.per_tuple;
-			}
-		}
-
-		/*
-		 * If the transition type is pass-by-value then it doesn't add
-		 * anything to the required size of the hashtable.  If it is
-		 * pass-by-reference then we have to add the estimated size of the
-		 * value itself, plus palloc overhead.
-		 */
-		if (!transinfo->transtypeByVal)
-		{
-			int32		avgwidth;
-
-			/* Use average width if aggregate definition gave one */
-			if (transinfo->aggtransspace > 0)
-				avgwidth = transinfo->aggtransspace;
-			else if (transinfo->transfn_oid == F_ARRAY_APPEND)
-			{
-				/*
-				 * If the transition function is array_append(), it'll use an
-				 * expanded array as transvalue, which will occupy at least
-				 * ALLOCSET_SMALL_INITSIZE and possibly more.  Use that as the
-				 * estimate for lack of a better idea.
-				 */
-				avgwidth = ALLOCSET_SMALL_INITSIZE;
-			}
-			else
-			{
-				avgwidth = get_typavgwidth(transinfo->aggtranstype, transinfo->aggtranstypmod);
-			}
-
-			avgwidth = MAXALIGN(avgwidth);
-			costs->transitionSpace += avgwidth + 2 * sizeof(void *);
-		}
-		else if (transinfo->aggtranstype == INTERNALOID)
-		{
-			/*
-			 * INTERNAL transition type is a special case: although INTERNAL
-			 * is pass-by-value, it's almost certainly being used as a pointer
-			 * to some large data structure.  The aggregate definition can
-			 * provide an estimate of the size.  If it doesn't, then we assume
-			 * ALLOCSET_DEFAULT_INITSIZE, which is a good guess if the data is
-			 * being kept in a private memory context, as is done by
-			 * array_agg() for instance.
-			 */
-			if (transinfo->aggtransspace > 0)
-				costs->transitionSpace += transinfo->aggtransspace;
-			else
-				costs->transitionSpace += ALLOCSET_DEFAULT_INITSIZE;
-		}
+		get_agg_clause_costs_trans(root, aggsplit, transinfo, costs);
 	}
 
 	foreach(lc, root->agginfos)
 	{
-		AggInfo    *agginfo = lfirst_node(AggInfo, lc);
-		Aggref	   *aggref = linitial_node(Aggref, agginfo->aggrefs);
+		AggInfo    *agginfo = (AggInfo *) lfirst(lc);
+
+		get_agg_clause_costs_agginfo(root, aggsplit, agginfo, costs);
+
+	}
+}
+
+/*
+ * Like get_agg_clause_costs(), but only consider aggregates passed in the
+ * 'aggrefs' list.
+ */
+void
+get_agg_clause_costs_some(PlannerInfo *root, AggSplit aggsplit, List *aggrefs,
+						  AggClauseCosts *costs)
+{
+	ListCell	*lc;
+
+	foreach(lc, aggrefs)
+	{
+		Aggref	*aggref	= lfirst_node(Aggref, lc);
+		AggTransInfo *aggtrans = (AggTransInfo *) list_nth(root->aggtransinfos,
+														   aggref->aggtransno);
+		AggInfo    *agginfo = list_nth(root->agginfos, aggref->aggno);
+
+
+		get_agg_clause_costs_trans(root, aggsplit, aggtrans, costs);
+		get_agg_clause_costs_agginfo(root, aggsplit, agginfo, costs);
+	}
+}
+
+/*
+ * Sub-routine of get_agg_clause_costs(), to process a single AggTransInfo.
+ */
+static void
+get_agg_clause_costs_trans(PlannerInfo *root, AggSplit aggsplit,
+						   AggTransInfo *transinfo, AggClauseCosts *costs)
+{
+	/*
+	 * Add the appropriate component function execution costs to appropriate
+	 * totals.
+	 */
+	if (DO_AGGSPLIT_COMBINE(aggsplit))
+	{
+		/* charge for combining previously aggregated states */
+		add_function_cost(root, transinfo->combinefn_oid, NULL,
+						  &costs->transCost);
+	}
+	else
+		add_function_cost(root, transinfo->transfn_oid, NULL,
+						  &costs->transCost);
+	if (DO_AGGSPLIT_DESERIALIZE(aggsplit) &&
+		OidIsValid(transinfo->deserialfn_oid))
+		add_function_cost(root, transinfo->deserialfn_oid, NULL,
+						  &costs->transCost);
+	if (DO_AGGSPLIT_SERIALIZE(aggsplit) &&
+		OidIsValid(transinfo->serialfn_oid))
+		add_function_cost(root, transinfo->serialfn_oid, NULL,
+						  &costs->finalCost);
+
+	/*
+	 * These costs are incurred only by the initial aggregate node, so we
+	 * mustn't include them again at upper levels.
+	 */
+	if (!DO_AGGSPLIT_COMBINE(aggsplit))
+	{
+		/* add the input expressions' cost to per-input-row costs */
+		QualCost	argcosts;
+
+		cost_qual_eval_node(&argcosts, (Node *) transinfo->args, root);
+		costs->transCost.startup += argcosts.startup;
+		costs->transCost.per_tuple += argcosts.per_tuple;
 
 		/*
-		 * Add the appropriate component function execution costs to
-		 * appropriate totals.
+		 * Add any filter's cost to per-input-row costs.
+		 *
+		 * XXX Ideally we should reduce input expression costs according to
+		 * filter selectivity, but it's not clear it's worth the trouble.
 		 */
-		if (!DO_AGGSPLIT_SKIPFINAL(aggsplit) &&
-			OidIsValid(agginfo->finalfn_oid))
-			add_function_cost(root, agginfo->finalfn_oid, NULL,
-							  &costs->finalCost);
-
-		/*
-		 * If there are direct arguments, treat their evaluation cost like the
-		 * cost of the finalfn.
-		 */
-		if (aggref->aggdirectargs)
+		if (transinfo->aggfilter)
 		{
-			QualCost	argcosts;
-
-			cost_qual_eval_node(&argcosts, (Node *) aggref->aggdirectargs,
+			cost_qual_eval_node(&argcosts, (Node *) transinfo->aggfilter,
 								root);
-			costs->finalCost.startup += argcosts.startup;
-			costs->finalCost.per_tuple += argcosts.per_tuple;
+			costs->transCost.startup += argcosts.startup;
+			costs->transCost.per_tuple += argcosts.per_tuple;
 		}
+	}
+
+	/*
+	 * If the transition type is pass-by-value then it doesn't add anything to
+	 * the required size of the hashtable.  If it is pass-by-reference then we
+	 * have to add the estimated size of the value itself, plus palloc
+	 * overhead.
+	 */
+	if (!transinfo->transtypeByVal)
+	{
+		int32		avgwidth;
+
+		/* Use average width if aggregate definition gave one */
+		if (transinfo->aggtransspace > 0)
+			avgwidth = transinfo->aggtransspace;
+		else if (transinfo->transfn_oid == F_ARRAY_APPEND)
+		{
+			/*
+			 * If the transition function is array_append(), it'll use an
+			 * expanded array as transvalue, which will occupy at least
+			 * ALLOCSET_SMALL_INITSIZE and possibly more.  Use that as the
+			 * estimate for lack of a better idea.
+			 */
+			avgwidth = ALLOCSET_SMALL_INITSIZE;
+		}
+		else
+		{
+			avgwidth = get_typavgwidth(transinfo->aggtranstype, transinfo->aggtranstypmod);
+		}
+
+		avgwidth = MAXALIGN(avgwidth);
+		costs->transitionSpace += avgwidth + 2 * sizeof(void *);
+	}
+	else if (transinfo->aggtranstype == INTERNALOID)
+	{
+		/*
+		 * INTERNAL transition type is a special case: although INTERNAL is
+		 * pass-by-value, it's almost certainly being used as a pointer to
+		 * some large data structure.  The aggregate definition can provide an
+		 * estimate of the size.  If it doesn't, then we assume
+		 * ALLOCSET_DEFAULT_INITSIZE, which is a good guess if the data is
+		 * being kept in a private memory context, as is done by array_agg()
+		 * for instance.
+		 */
+		if (transinfo->aggtransspace > 0)
+			costs->transitionSpace += transinfo->aggtransspace;
+		else
+			costs->transitionSpace += ALLOCSET_DEFAULT_INITSIZE;
+	}
+}
+
+/*
+ * Sub-routine of get_agg_clause_costs(), to process a single AggInfo.
+ */
+static void
+get_agg_clause_costs_agginfo(PlannerInfo *root, AggSplit aggsplit,
+							 AggInfo *agginfo, AggClauseCosts *costs)
+{
+	Aggref	   *aggref = linitial_node(Aggref, agginfo->aggrefs);
+
+	/*
+	 * Add the appropriate component function execution costs to appropriate
+	 * totals.
+	 */
+	if (!DO_AGGSPLIT_SKIPFINAL(aggsplit) &&
+		OidIsValid(agginfo->finalfn_oid))
+		add_function_cost(root, agginfo->finalfn_oid, NULL,
+						  &costs->finalCost);
+
+	/*
+	 * If there are direct arguments, treat their evaluation cost like the
+	 * cost of the finalfn.
+	 */
+	if (aggref->aggdirectargs)
+	{
+		QualCost	argcosts;
+
+		cost_qual_eval_node(&argcosts, (Node *) aggref->aggdirectargs,
+							root);
+		costs->finalCost.startup += argcosts.startup;
+		costs->finalCost.per_tuple += argcosts.per_tuple;
 	}
 }

@@ -17,6 +17,9 @@ SUBDIRS = perl regress isolation modules authentication recovery subscription
 ifeq ($(with_icu),yes)
 SUBDIRS += icu
 endif
+ifeq ($(with_openssl),yes)
+SUBDIRS += crypto
+endif
 ifeq ($(with_gssapi),yes)
 SUBDIRS += kerberos
 endif

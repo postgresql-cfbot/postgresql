@@ -40,6 +40,7 @@
 #include "commands/trigger.h"
 #include "commands/user.h"
 #include "commands/vacuum.h"
+#include "crypto/kmgr.h"
 #include "jit/jit.h"
 #include "libpq/auth.h"
 #include "libpq/libpq.h"
@@ -579,6 +580,7 @@ static char *recovery_target_string;
 static char *recovery_target_xid_string;
 static char *recovery_target_name_string;
 static char *recovery_target_lsn_string;
+static char *file_encryption_method_str;
 
 /* should be static, but commands/variable.c needs to get at this */
 char	   *role_string;
@@ -701,6 +703,8 @@ const char *const config_group_names[] =
 	gettext_noop("Statistics / Monitoring"),
 	/* STATS_CUMULATIVE */
 	gettext_noop("Statistics / Cumulative Query and Index Statistics"),
+	/* ENCRYPTION */
+	gettext_noop("Encryption"),
 	/* AUTOVACUUM */
 	gettext_noop("Autovacuum"),
 	/* CLIENT_CONN_STATEMENT */
@@ -4399,6 +4403,27 @@ struct config_string ConfigureNamesString[] =
 			GUC_SUPERUSER_ONLY
 		},
 		&ssl_passphrase_command,
+		"",
+		NULL, NULL, NULL
+	},
+
+	{
+		{"cluster_key_command", PGC_SIGHUP, ENCRYPTION,
+			gettext_noop("Command to obtain cluster key for cluster file encryption."),
+			NULL
+		},
+		&cluster_key_command,
+		"",
+		NULL, NULL, NULL
+	},
+
+	{
+		{"file_encryption_method", PGC_INTERNAL, PRESET_OPTIONS,
+		 gettext_noop("Shows the cluster file encryption method."),
+		 NULL,
+		 GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+ 		},
+		&file_encryption_method_str,
 		"",
 		NULL, NULL, NULL
 	},

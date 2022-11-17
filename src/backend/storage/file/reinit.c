@@ -312,7 +312,7 @@ ResetUnloggedRelationsInDbspaceDir(const char *dbspacedirname, int op)
 
 			/* OK, we're ready to perform the actual copy. */
 			elog(DEBUG2, "copying %s to %s", srcpath, dstpath);
-			copy_file(srcpath, dstpath);
+			copy_file(srcpath, dstpath, true);
 		}
 
 		FreeDir(dbspace_dir);

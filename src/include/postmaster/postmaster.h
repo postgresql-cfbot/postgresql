@@ -31,6 +31,8 @@ extern PGDLLIMPORT char *bonjour_name;
 extern PGDLLIMPORT bool restart_after_crash;
 extern PGDLLIMPORT bool remove_temp_files_after_crash;
 
+extern int	terminal_fd;
+
 #ifdef WIN32
 extern PGDLLIMPORT HANDLE PostmasterHandle;
 #else

@@ -35,6 +35,8 @@
 #include "commands/async.h"
 #include "commands/prepare.h"
 #include "common/pg_prng.h"
+#include "crypto/bufenc.h"
+#include "crypto/kmgr.h"
 #include "jit/jit.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
@@ -3718,7 +3720,7 @@ process_postgres_switches(int argc, char *argv[], GucContext ctx,
 	 * postmaster/postmaster.c (the option sets should not conflict) and with
 	 * the common help() function in main/main.c.
 	 */
-	while ((flag = getopt(argc, argv, "B:bc:C:D:d:EeFf:h:ijk:lN:nOPp:r:S:sTt:v:W:-:")) != -1)
+	while ((flag = getopt(argc, argv, "B:bc:C:D:d:EeFf:h:ijk:lN:nOPp:r:R:S:sTt:v:W:-:")) != -1)
 	{
 		switch (flag)
 		{
@@ -3808,6 +3810,19 @@ process_postgres_switches(int argc, char *argv[], GucContext ctx,
 				/* send output (stdout and stderr) to the given file */
 				if (secure)
 					strlcpy(OutputFileName, optarg, MAXPGPATH);
+				break;
+
+			case 'R':
+				terminal_fd = atoi(optarg);
+				if (terminal_fd == -1)
+				{
+					/*
+					 * Allow file descriptor closing to be bypassed via -1.
+					 * We just duplicate sterr.  This is useful for
+					 * single-user mode.
+					 */
+					terminal_fd = dup(2);
+				}
 				break;
 
 			case 'S':
@@ -4054,6 +4069,19 @@ PostgresMain(const char *dbname, const char *username)
 	Assert(username != NULL);
 
 	SetProcessingMode(InitProcessing);
+
+	/*
+	 * Initialize kmgr for cluster encryption. Since kmgr needs to attach to
+	 * shared memory the initialization must be called after BaseInit().
+	 */
+	if (!IsUnderPostmaster)
+	{
+		InitializeKmgr();
+		InitializeBufferEncryption();
+
+		if (terminal_fd != -1)
+			close(terminal_fd);
+	}
 
 	/*
 	 * Set up signal handlers.  (InitPostmasterChild or InitStandaloneProcess

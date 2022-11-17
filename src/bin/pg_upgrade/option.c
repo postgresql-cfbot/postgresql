@@ -52,6 +52,7 @@ parseCommandLine(int argc, char *argv[])
 		{"check", no_argument, NULL, 'c'},
 		{"link", no_argument, NULL, 'k'},
 		{"retain", no_argument, NULL, 'r'},
+		{"authprompt", no_argument, NULL, 'R'},
 		{"jobs", required_argument, NULL, 'j'},
 		{"socketdir", required_argument, NULL, 's'},
 		{"verbose", no_argument, NULL, 'v'},
@@ -99,7 +100,7 @@ parseCommandLine(int argc, char *argv[])
 	if (os_user_effective_id == 0)
 		pg_fatal("%s: cannot be run as root", os_info.progname);
 
-	while ((option = getopt_long(argc, argv, "d:D:b:B:cj:kNo:O:p:P:rs:U:v",
+	while ((option = getopt_long(argc, argv, "d:D:b:B:cj:kNo:O:p:P:rRs:U:v",
 								 long_options, &optindex)) != -1)
 	{
 		switch (option)
@@ -174,6 +175,10 @@ parseCommandLine(int argc, char *argv[])
 
 			case 'r':
 				log_opts.retain = true;
+				break;
+
+			case 'R':
+				user_opts.pass_terminal_fd = true;
 				break;
 
 			case 's':

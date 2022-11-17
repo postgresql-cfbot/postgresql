@@ -477,6 +477,16 @@ value. The page is not recycled, until that XID is no longer visible to
 anyone. That's much more conservative than necessary, but let's keep it
 simple.
 
+GiST and Encryption
+-------------------
+
+GiST uses LSNs and NSNs for concurrency.  This means that unlogged and
+temporary relations also need LSNs.  GiST has a mechanism to assign LSNs
+to such relations, but sometimes uses fixed LSNs and or calls
+gistGetFakeLSN(), which can cause duplicate LSNs to be used.  Therefore,
+when encryption is enabled and fake LSNs are needed, the GiST code calls
+LSNForEncryption().  See src/backend/crypto/README for more details.
+
 
 Authors:
 	Teodor Sigaev	<teodor@sigaev.ru>

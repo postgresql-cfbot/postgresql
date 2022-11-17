@@ -98,6 +98,8 @@
 #include "common/ip.h"
 #include "common/pg_prng.h"
 #include "common/string.h"
+#include "crypto/bufenc.h"
+#include "crypto/kmgr.h"
 #include "lib/ilist.h"
 #include "libpq/auth.h"
 #include "libpq/libpq.h"
@@ -231,6 +233,7 @@ static int	SendStop = false;
 
 /* still more option variables */
 bool		EnableSSL = false;
+int			terminal_fd = -1;
 
 int			PreAuthDelay = 0;
 int			AuthenticationTimeout = 60;
@@ -697,7 +700,7 @@ PostmasterMain(int argc, char *argv[])
 	 * tcop/postgres.c (the option sets should not conflict) and with the
 	 * common help() function in main/main.c.
 	 */
-	while ((opt = getopt(argc, argv, "B:bc:C:D:d:EeFf:h:ijk:lN:nOPp:r:S:sTt:W:-:")) != -1)
+	while ((opt = getopt(argc, argv, "B:bc:C:D:d:EeFf:h:ijk:lN:nOPp:r:R:S:sTt:W:-:")) != -1)
 	{
 		switch (opt)
 		{
@@ -786,6 +789,10 @@ PostmasterMain(int argc, char *argv[])
 
 			case 'r':
 				/* only used by single-user backend */
+				break;
+
+			case 'R':
+				terminal_fd = atoi(optarg);
 				break;
 
 			case 'S':
@@ -1346,6 +1353,12 @@ PostmasterMain(int argc, char *argv[])
 		list_free_deep(elemlist);
 		pfree(rawstring);
 	}
+
+	InitializeKmgr();
+	InitializeBufferEncryption();
+
+	if (terminal_fd != -1)
+		close(terminal_fd);
 
 	/*
 	 * check that we have some socket to listen on

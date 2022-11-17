@@ -486,8 +486,9 @@ RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
 
 		smgrread(src, forkNum, blkno, buf.data);
 
-		if (!PageIsVerifiedExtended(page, blkno,
-									PIV_LOG_WARNING | PIV_REPORT_STAT))
+		if (!PageIsVerifiedExtended(page, forkNum,
+									relpersistence == RELPERSISTENCE_PERMANENT,
+									blkno, PIV_LOG_WARNING | PIV_REPORT_STAT))
 		{
 			/*
 			 * For paranoia's sake, capture the file path before invoking the
@@ -514,6 +515,8 @@ RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
 		if (use_wal)
 			log_newpage(&dst->smgr_rlocator.locator, forkNum, blkno, page, false);
 
+		PageEncryptInplace(page, forkNum,
+						   relpersistence == RELPERSISTENCE_PERMANENT, blkno);
 		PageSetChecksumInplace(page, blkno);
 
 		/*

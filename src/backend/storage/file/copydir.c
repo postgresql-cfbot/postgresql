@@ -21,11 +21,14 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#include "crypto/bufenc.h"
 #include "common/file_utils.h"
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "storage/copydir.h"
 #include "storage/fd.h"
+
+extern XLogRecPtr LSNForEncryption(bool use_wal_lsn);
 
 /*
  * copydir: copy a directory
@@ -71,7 +74,7 @@ copydir(char *fromdir, char *todir, bool recurse)
 				copydir(fromfile, tofile, true);
 		}
 		else if (xlde_type == PGFILETYPE_REG)
-			copy_file(fromfile, tofile);
+			copy_file(fromfile, tofile, false);
 	}
 	FreeDir(xldir);
 
@@ -114,7 +117,7 @@ copydir(char *fromdir, char *todir, bool recurse)
  * copy one file
  */
 void
-copy_file(char *fromfile, char *tofile)
+copy_file(char *fromfile, char *tofile, bool encrypt_init_file)
 {
 	char	   *buffer;
 	int			srcfd;
@@ -122,9 +125,8 @@ copy_file(char *fromfile, char *tofile)
 	int			nbytes;
 	off_t		offset;
 	off_t		flush_offset;
-
 	/* Size of copy buffer (read and write requests) */
-#define COPY_BUF_SIZE (8 * BLCKSZ)
+	int			copy_buf_size = (encrypt_init_file) ? BLCKSZ : 8 * BLCKSZ;
 
 	/*
 	 * Size of data flush requests.  It seems beneficial on most platforms to
@@ -139,7 +141,7 @@ copy_file(char *fromfile, char *tofile)
 #endif
 
 	/* Use palloc to ensure we get a maxaligned buffer */
-	buffer = palloc(COPY_BUF_SIZE);
+	buffer = palloc(copy_buf_size);
 
 	/*
 	 * Open the files
@@ -177,7 +179,7 @@ copy_file(char *fromfile, char *tofile)
 		}
 
 		pgstat_report_wait_start(WAIT_EVENT_COPY_FILE_READ);
-		nbytes = read(srcfd, buffer, COPY_BUF_SIZE);
+		nbytes = read(srcfd, buffer, copy_buf_size);
 		pgstat_report_wait_end();
 		if (nbytes < 0)
 			ereport(ERROR,
@@ -185,6 +187,20 @@ copy_file(char *fromfile, char *tofile)
 					 errmsg("could not read file \"%s\": %m", fromfile)));
 		if (nbytes == 0)
 			break;
+		/*
+		 * When we copy an init fork page to be part of an empty unlogged
+		 * relation, its real LSN must be replaced with a fake one, and the
+		 * page encrypted.
+		 */
+		if (encrypt_init_file)
+		{
+			Page page = (Page) buffer;
+
+			Assert(nbytes == BLCKSZ);
+			PageSetLSN(page, LSNForEncryption(false));
+			PageEncryptInplace(page, MAIN_FORKNUM, false, offset / BLCKSZ);
+		}
+
 		errno = 0;
 		pgstat_report_wait_start(WAIT_EVENT_COPY_FILE_WRITE);
 		if ((int) write(dstfd, buffer, nbytes) != nbytes)

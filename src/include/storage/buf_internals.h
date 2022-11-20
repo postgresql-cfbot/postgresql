@@ -390,6 +390,9 @@ extern void WritebackContextInit(WritebackContext *context, int *max_pending);
 extern void IssuePendingWritebacks(WritebackContext *context);
 extern void ScheduleBufferTagForWriteback(WritebackContext *context, BufferTag *tag);
 
+extern void PrintBuffer(Buffer buffer, const char *msg);
+extern void PrintBufferDesc(BufferDesc *buf_hdr, const char *msg);
+
 /* freelist.c */
 extern BufferDesc *StrategyGetBuffer(BufferAccessStrategy strategy,
 									 uint32 *buf_state);
@@ -413,11 +416,18 @@ extern int	BufTableInsert(BufferTag *tagPtr, uint32 hashcode, int buf_id);
 extern void BufTableDelete(BufferTag *tagPtr, uint32 hashcode);
 
 /* localbuf.c */
+extern bool PinLocalBuffer(BufferDesc *buf_hdr, bool adjust_usagecount);
+extern void UnpinLocalBuffer(Buffer buffer);
 extern PrefetchBufferResult PrefetchLocalBuffer(SMgrRelation smgr,
 												ForkNumber forkNum,
 												BlockNumber blockNum);
 extern BufferDesc *LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum,
 									BlockNumber blockNum, bool *foundPtr);
+extern BlockNumber BulkExtendLocalRelationBuffered(SMgrRelation smgr,
+												   ForkNumber fork,
+												   ReadBufferMode mode,
+												   uint32 *num_pages,
+												   Buffer *buffers);
 extern void MarkLocalBufferDirty(Buffer buffer);
 extern void DropRelationLocalBuffers(RelFileLocator rlocator,
 									 ForkNumber forkNum,

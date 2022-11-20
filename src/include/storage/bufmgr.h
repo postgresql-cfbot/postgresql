@@ -129,8 +129,22 @@ extern void ReleaseBuffer(Buffer buffer);
 extern void UnlockReleaseBuffer(Buffer buffer);
 extern void MarkBufferDirty(Buffer buffer);
 extern void IncrBufferRefCount(Buffer buffer);
+extern void BufferCheckOneLocalPin(Buffer buffer);
 extern Buffer ReleaseAndReadBuffer(Buffer buffer, Relation relation,
 								   BlockNumber blockNum);
+extern Buffer ExtendRelationBuffered(Relation reln, struct SMgrRelationData *smgr,
+									 bool skip_extension_lock,
+									 char relpersistence,
+									 ForkNumber forkNum, ReadBufferMode mode,
+									 BufferAccessStrategy strategy);
+extern BlockNumber BulkExtendRelationBuffered(Relation rel, struct SMgrRelationData *smgr,
+											  bool skip_extension_lock,
+											  char relpersistence,
+											  ForkNumber fork, ReadBufferMode mode,
+											  BufferAccessStrategy strategy,
+											  uint32 *num_pages,
+											  uint32 num_locked_pages,
+											  Buffer *buffers);
 
 extern void InitBufferPoolAccess(void);
 extern void AtEOXact_Buffers(bool isCommit);
@@ -175,7 +189,7 @@ extern bool ConditionalLockBufferForCleanup(Buffer buffer);
 extern bool IsBufferCleanupOK(Buffer buffer);
 extern bool HoldingBufferPinThatDelaysRecovery(void);
 
-extern void AbortBufferIO(void);
+extern void AbortBufferIO(Buffer buffer);
 
 extern void BufmgrCommit(void);
 extern bool BgBufferSync(struct WritebackContext *wb_context);

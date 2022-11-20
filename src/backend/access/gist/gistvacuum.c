@@ -203,6 +203,9 @@ gistvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	 * we must already have processed any tuples due to be moved into such a
 	 * page.
 	 *
+	 * FIXME: Now that new pages are locked with RBM_ZERO_AND_LOCK, I don't
+	 * think this issue still exists?
+	 *
 	 * We can skip locking for new or temp relations, however, since no one
 	 * else could be accessing them.
 	 */

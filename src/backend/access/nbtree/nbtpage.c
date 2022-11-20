@@ -881,7 +881,6 @@ _bt_getbuf(Relation rel, BlockNumber blkno, int access)
 	}
 	else
 	{
-		bool		needLock;
 		Page		page;
 
 		Assert(access == BT_WRITE);
@@ -962,31 +961,18 @@ _bt_getbuf(Relation rel, BlockNumber blkno, int access)
 		}
 
 		/*
-		 * Extend the relation by one page.
-		 *
-		 * We have to use a lock to ensure no one else is extending the rel at
-		 * the same time, else we will both try to initialize the same new
-		 * page.  We can skip locking for new or temp relations, however,
-		 * since no one else could be accessing them.
+		 * Extend the relation by one page. Need to use RBM_ZERO_AND_LOCK or
+		 * we risk a race condition against btvacuumscan --- see comments
+		 * therein. This forces us to repeat the valgrind request that
+		 * _bt_lockbuf() otherwise would make, as we can't use _bt_lockbuf()
+		 * without introducing a race.
 		 */
-		needLock = !RELATION_IS_LOCAL(rel);
-
-		if (needLock)
-			LockRelationForExtension(rel, ExclusiveLock);
-
-		buf = ReadBuffer(rel, P_NEW);
-
-		/* Acquire buffer lock on new page */
-		_bt_lockbuf(rel, buf, BT_WRITE);
-
-		/*
-		 * Release the file-extension lock; it's now OK for someone else to
-		 * extend the relation some more.  Note that we cannot release this
-		 * lock before we have buffer lock on the new page, or we risk a race
-		 * condition against btvacuumscan --- see comments therein.
-		 */
-		if (needLock)
-			UnlockRelationForExtension(rel, ExclusiveLock);
+		buf = ExtendRelationBuffered(rel, NULL, false,
+									 rel->rd_rel->relpersistence,
+									 MAIN_FORKNUM, RBM_ZERO_AND_LOCK,
+									 NULL);
+		if (!RelationUsesLocalBuffers(rel))
+			VALGRIND_MAKE_MEM_DEFINED(BufferGetPage(buf), BLCKSZ);
 
 		/* Initialize the new page before returning it */
 		page = BufferGetPage(buf);

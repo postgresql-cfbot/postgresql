@@ -7344,7 +7344,7 @@ FROM pg_stat_get_backend_idset() AS backendid;
     </row>
     <row>
      <entry><literal>buffer-read-start</literal></entry>
-     <entry><literal>(ForkNumber, BlockNumber, Oid, Oid, Oid, int, bool)</literal></entry>
+     <entry><literal>(ForkNumber, BlockNumber, Oid, Oid, Oid, int)</literal></entry>
      <entry>Probe that fires when a buffer read is started.
       arg0 and arg1 contain the fork and block numbers of the page (but
       arg1 will be -1 if this is a relation extension request).
@@ -7352,12 +7352,11 @@ FROM pg_stat_get_backend_idset() AS backendid;
       identifying the relation.
       arg5 is the ID of the backend which created the temporary relation for a
       local buffer, or <symbol>InvalidBackendId</symbol> (-1) for a shared buffer.
-      arg6 is true for a relation extension request, false for normal
-      read.</entry>
+      </entry>
     </row>
     <row>
      <entry><literal>buffer-read-done</literal></entry>
-     <entry><literal>(ForkNumber, BlockNumber, Oid, Oid, Oid, int, bool, bool)</literal></entry>
+     <entry><literal>(ForkNumber, BlockNumber, Oid, Oid, Oid, int, bool)</literal></entry>
      <entry>Probe that fires when a buffer read is complete.
       arg0 and arg1 contain the fork and block numbers of the page (if this
       is a relation extension request, arg1 now contains the block number
@@ -7366,9 +7365,7 @@ FROM pg_stat_get_backend_idset() AS backendid;
       identifying the relation.
       arg5 is the ID of the backend which created the temporary relation for a
       local buffer, or <symbol>InvalidBackendId</symbol> (-1) for a shared buffer.
-      arg6 is true for a relation extension request, false for normal
-      read.
-      arg7 is true if the buffer was found in the pool, false if not.</entry>
+      arg6 is true if the buffer was found in the pool, false if not.</entry>
     </row>
     <row>
      <entry><literal>buffer-flush-start</literal></entry>

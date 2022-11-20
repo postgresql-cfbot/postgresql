@@ -538,7 +538,6 @@ revmap_physical_extend(BrinRevmap *revmap)
 	BlockNumber mapBlk;
 	BlockNumber nblocks;
 	Relation	irel = revmap->rm_irel;
-	bool		needLock = !RELATION_IS_LOCAL(irel);
 
 	/*
 	 * Lock the metapage. This locks out concurrent extensions of the revmap,
@@ -570,10 +569,10 @@ revmap_physical_extend(BrinRevmap *revmap)
 	}
 	else
 	{
-		if (needLock)
-			LockRelationForExtension(irel, ExclusiveLock);
-
-		buf = ReadBuffer(irel, P_NEW);
+		buf = ExtendRelationBuffered(irel, NULL, false,
+									 irel->rd_rel->relpersistence,
+									 MAIN_FORKNUM, RBM_ZERO_AND_LOCK,
+									 NULL);
 		if (BufferGetBlockNumber(buf) != mapBlk)
 		{
 			/*
@@ -582,17 +581,11 @@ revmap_physical_extend(BrinRevmap *revmap)
 			 * up and have caller start over.  We will have to evacuate that
 			 * page from under whoever is using it.
 			 */
-			if (needLock)
-				UnlockRelationForExtension(irel, ExclusiveLock);
 			LockBuffer(revmap->rm_metaBuf, BUFFER_LOCK_UNLOCK);
-			ReleaseBuffer(buf);
+			UnlockReleaseBuffer(buf);
 			return;
 		}
-		LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
 		page = BufferGetPage(buf);
-
-		if (needLock)
-			UnlockRelationForExtension(irel, ExclusiveLock);
 	}
 
 	/* Check that it's a regular block (or an empty page) */

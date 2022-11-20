@@ -982,6 +982,9 @@ LWLockWakeup(LWLock *lock)
 			wokeup_somebody = true;
 		}
 
+		/* signal that the process isn't on the wait list anymore */
+		waiter->lwWaiting = 2;
+
 		/*
 		 * Once we've woken up an exclusive lock, there's no point in waking
 		 * up anybody else.
@@ -1039,7 +1042,7 @@ LWLockWakeup(LWLock *lock)
 		 * another lock.
 		 */
 		pg_write_barrier();
-		waiter->lwWaiting = false;
+		waiter->lwWaiting = 0;
 		PGSemaphoreUnlock(waiter->sem);
 	}
 }
@@ -1068,7 +1071,7 @@ LWLockQueueSelf(LWLock *lock, LWLockMode mode)
 	/* setting the flag is protected by the spinlock */
 	pg_atomic_fetch_or_u32(&lock->state, LW_FLAG_HAS_WAITERS);
 
-	MyProc->lwWaiting = true;
+	MyProc->lwWaiting = 1;
 	MyProc->lwWaitMode = mode;
 
 	/* LW_WAIT_UNTIL_FREE waiters are always at the front of the queue */
@@ -1096,7 +1099,6 @@ static void
 LWLockDequeueSelf(LWLock *lock)
 {
 	bool		found = false;
-	proclist_mutable_iter iter;
 
 #ifdef LWLOCK_STATS
 	lwlock_stats *lwstats;
@@ -1109,17 +1111,14 @@ LWLockDequeueSelf(LWLock *lock)
 	LWLockWaitListLock(lock);
 
 	/*
-	 * Can't just remove ourselves from the list, but we need to iterate over
-	 * all entries as somebody else could have dequeued us.
+	 * Remove ourselves from the waitlist, unless we've already been
+	 * removed. The removal happens with the wait list lock held, so there's
+	 * no race in this check.
 	 */
-	proclist_foreach_modify(iter, &lock->waiters, lwWaitLink)
+	if (MyProc->lwWaiting == 1)
 	{
-		if (iter.cur == MyProc->pgprocno)
-		{
-			found = true;
-			proclist_delete(&lock->waiters, iter.cur, lwWaitLink);
-			break;
-		}
+		proclist_delete(&lock->waiters, MyProc->pgprocno, lwWaitLink);
+		found = true;
 	}
 
 	if (proclist_is_empty(&lock->waiters) &&
@@ -1133,7 +1132,7 @@ LWLockDequeueSelf(LWLock *lock)
 
 	/* clear waiting state again, nice for debugging */
 	if (found)
-		MyProc->lwWaiting = false;
+		MyProc->lwWaiting = 0;
 	else
 	{
 		int			extraWaits = 0;
@@ -1767,6 +1766,8 @@ LWLockUpdateVar(LWLock *lock, uint64 *valptr, uint64 val)
 
 		proclist_delete(&lock->waiters, iter.cur, lwWaitLink);
 		proclist_push_tail(&wakeup, iter.cur, lwWaitLink);
+
+		waiter->lwWaiting = 2;
 	}
 
 	/* We are done updating shared state of the lock itself. */
@@ -1782,7 +1783,7 @@ LWLockUpdateVar(LWLock *lock, uint64 *valptr, uint64 val)
 		proclist_delete(&wakeup, iter.cur, lwWaitLink);
 		/* check comment in LWLockWakeup() about this barrier */
 		pg_write_barrier();
-		waiter->lwWaiting = false;
+		waiter->lwWaiting = 0;
 		PGSemaphoreUnlock(waiter->sem);
 	}
 }

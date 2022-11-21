@@ -3773,7 +3773,7 @@ psql_completion(const char *text, int start, int end)
  */
 	/* Complete GRANT/REVOKE with a list of roles and privileges */
 	else if (TailMatches("GRANT|REVOKE") ||
-			 TailMatches("REVOKE", "ADMIN|GRANT|INHERIT", "OPTION", "FOR"))
+			 TailMatches("REVOKE", "ADMIN|GRANT|INHERIT|SET", "OPTION", "FOR"))
 	{
 		/*
 		 * With ALTER DEFAULT PRIVILEGES, restrict completion to grantable
@@ -3791,10 +3791,11 @@ psql_completion(const char *text, int start, int end)
 									 Privilege_options_of_grant_and_revoke,
 									 "GRANT OPTION FOR",
 									 "ADMIN OPTION FOR",
-									 "INHERIT OPTION FOR");
+									 "INHERIT OPTION FOR",
+									 "SET OPTION FOR");
 		else if (TailMatches("REVOKE", "GRANT", "OPTION", "FOR"))
 			COMPLETE_WITH(Privilege_options_of_grant_and_revoke);
-		else if (TailMatches("REVOKE", "ADMIN|INHERIT", "OPTION", "FOR"))
+		else if (TailMatches("REVOKE", "ADMIN|INHERIT|SET", "OPTION", "FOR"))
 			COMPLETE_WITH_QUERY(Query_for_list_of_roles);
 	}
 
@@ -3802,10 +3803,12 @@ psql_completion(const char *text, int start, int end)
 			 TailMatches("REVOKE", "GRANT", "OPTION", "FOR", "ALTER"))
 		COMPLETE_WITH("SYSTEM");
 
-	else if (TailMatches("GRANT|REVOKE", "SET") ||
-			 TailMatches("REVOKE", "GRANT", "OPTION", "FOR", "SET") ||
+	else if (TailMatches("REVOKE", "SET"))
+		COMPLETE_WITH("ON PARAMETER", "OPTION FOR");
+	else if (TailMatches("GRANT", "SET") ||
 			 TailMatches("GRANT|REVOKE", "ALTER", "SYSTEM") ||
-			 TailMatches("REVOKE", "GRANT", "OPTION", "FOR", "ALTER", "SYSTEM"))
+			 TailMatches("REVOKE", "GRANT", "OPTION", "FOR", "ALTER", "SYSTEM") ||
+			 TailMatches("REVOKE", "GRANT", "OPTION", "FOR", "SET"))
 		COMPLETE_WITH("ON PARAMETER");
 
 	else if (TailMatches("GRANT|REVOKE", MatchAny, "ON", "PARAMETER") ||
@@ -3941,14 +3944,16 @@ psql_completion(const char *text, int start, int end)
 	else if (HeadMatches("GRANT") && TailMatches("TO", MatchAny))
 		COMPLETE_WITH("WITH ADMIN",
 					  "WITH INHERIT",
+					  "WITH SET",
 					  "WITH GRANT OPTION",
 					  "GRANTED BY");
 	else if (HeadMatches("GRANT") && TailMatches("TO", MatchAny, "WITH"))
 		COMPLETE_WITH("ADMIN",
 					  "INHERIT",
+					  "SET",
 					  "GRANT OPTION");
 	else if (HeadMatches("GRANT") &&
-			 (TailMatches("TO", MatchAny, "WITH", "ADMIN|INHERIT")))
+			 (TailMatches("TO", MatchAny, "WITH", "ADMIN|INHERIT|SET")))
 		COMPLETE_WITH("OPTION", "TRUE", "FALSE");
 	else if (HeadMatches("GRANT") && TailMatches("TO", MatchAny, "WITH", MatchAny, "OPTION"))
 		COMPLETE_WITH("GRANTED BY");

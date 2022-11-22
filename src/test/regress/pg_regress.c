@@ -2288,6 +2288,7 @@ regression_main(int argc, char *argv[],
 		fputs("log_lock_waits = on\n", pg_conf);
 		fputs("log_temp_files = 128kB\n", pg_conf);
 		fputs("max_prepared_transactions = 2\n", pg_conf);
+		fputs("explain_regress = on\n", pg_conf);
 
 		for (sl = temp_configs; sl != NULL; sl = sl->next)
 		{

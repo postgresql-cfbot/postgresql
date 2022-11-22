@@ -221,23 +221,10 @@ explain (analyze, timing off, summary off, costs off)
 alter table tenk2 reset (parallel_workers);
 
 reset work_mem;
-create function explain_parallel_sort_stats() returns setof text
-language plpgsql as
-$$
-declare ln text;
-begin
-    for ln in
-        explain (analyze, timing off, summary off, costs off)
-          select * from
+explain (analyze)
+select * from
           (select ten from tenk1 where ten < 100 order by ten) ss
-          right join (values (1),(2),(3)) v(x) on true
-    loop
-        ln := regexp_replace(ln, 'Memory: \S*',  'Memory: xxx');
-        return next ln;
-    end loop;
-end;
-$$;
-select * from explain_parallel_sort_stats();
+          right join (values (1),(2),(3)) v(x) on true;
 
 reset enable_indexscan;
 reset enable_hashjoin;
@@ -245,7 +232,6 @@ reset enable_mergejoin;
 reset enable_material;
 reset effective_io_concurrency;
 drop table bmscantest;
-drop function explain_parallel_sort_stats();
 
 -- test parallel merge join path.
 set enable_hashjoin to off;

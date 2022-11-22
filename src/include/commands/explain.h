@@ -46,6 +46,7 @@ typedef struct ExplainState
 	bool		timing;			/* print detailed node timing */
 	bool		summary;		/* print total planning and execution timing */
 	bool		settings;		/* print modified settings */
+	bool		machine;		/* print memory/disk and other machine-specific output */
 	ExplainFormat format;		/* output format */
 	/* state for output formatting --- not reset for each new plan tree */
 	int			indent;			/* current indentation level */
@@ -60,6 +61,8 @@ typedef struct ExplainState
 	/* state related to the current plan node */
 	ExplainWorkersState *workers_state; /* needed if parallel plan */
 } ExplainState;
+
+extern PGDLLIMPORT bool explain_regress;
 
 /* Hook for plugins to get control in ExplainOneQuery() */
 typedef void (*ExplainOneQuery_hook_type) (Query *query,

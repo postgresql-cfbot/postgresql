@@ -122,7 +122,7 @@ LOAD 'auto_explain';
       equivalent to the <literal>BUFFERS</literal> option of <command>EXPLAIN</command>.
       This parameter has no effect
       unless <varname>auto_explain.log_analyze</varname> is enabled.
-      This parameter is off by default.
+      This parameter is on by default.
       Only superusers can change this setting.
      </para>
     </listitem>

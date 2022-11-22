@@ -36,6 +36,7 @@
 #include "catalog/namespace.h"
 #include "catalog/storage.h"
 #include "commands/async.h"
+#include "commands/explain.h"
 #include "commands/tablespace.h"
 #include "commands/trigger.h"
 #include "commands/user.h"
@@ -981,6 +982,18 @@ struct config_bool ConfigureNamesBool[] =
 		true,
 		NULL, NULL, NULL
 	},
+
+	{
+		{"explain_regress", PGC_USERSET, DEVELOPER_OPTIONS,
+			gettext_noop("Change defaults of EXPLAIN to avoid unstable output."),
+			NULL,
+			GUC_NOT_IN_SAMPLE | GUC_EXPLAIN
+		},
+		&explain_regress,
+		false,
+		NULL, NULL, NULL
+	},
+
 	{
 		{"geqo", PGC_USERSET, QUERY_TUNING_GEQO,
 			gettext_noop("Enables genetic query optimization."),

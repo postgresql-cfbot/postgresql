@@ -312,3 +312,18 @@ Objects in extension "test_ext_cine"
  table ext_cine_tab3
 (9 rows)
 
+CREATE EXTENSION test_ext_wildcard1;
+SELECT ext_wildcard1_version();
+ ext_wildcard1_version 
+-----------------------
+ 1.0
+(1 row)
+
+ALTER EXTENSION test_ext_wildcard1 UPDATE TO '2.0';
+SELECT ext_wildcard1_version();
+ ext_wildcard1_version 
+-----------------------
+ 2.0
+(1 row)
+
+DROP EXTENSION test_ext_wildcard1;

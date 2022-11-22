@@ -29,6 +29,9 @@ install_data(
   'test_ext_evttrig--1.0--2.0.sql',
   'test_ext_evttrig--1.0.sql',
   'test_ext_evttrig.control',
+  'test_ext_wildcard1--1.0.sql',
+  'test_ext_wildcard1--%--2.0.sql',
+  'test_ext_wildcard1.control',
   kwargs: contrib_data_args,
 )
 

@@ -129,6 +129,7 @@ static void ApplyExtensionUpdates(Oid extensionOid,
 								  bool cascade,
 								  bool is_create);
 static char *read_whole_file(const char *filename, int *length);
+static bool file_exists(const char *name);
 
 
 /*
@@ -891,7 +892,14 @@ execute_extension_script(Oid extensionOid, ExtensionControlFile *control,
 	if (from_version == NULL)
 		elog(DEBUG1, "executing extension script for \"%s\" version '%s'", control->name, version);
 	else
+	{
+		if ( ! file_exists(filename) )
+		{
+			/* if filename does not exist, try wildcard */
+			filename = get_extension_script_filename(control, "%", version);
+		}
 		elog(DEBUG1, "executing extension script for \"%s\" update from version '%s' to '%s'", control->name, from_version, version);
+	}
 
 	/*
 	 * If installing a trusted extension on behalf of a non-superuser, become
@@ -1215,14 +1223,19 @@ identify_update_path(ExtensionControlFile *control,
 
 	/* Find shortest path */
 	result = find_update_path(evi_list, evi_start, evi_target, false, false);
+	if (result != NIL)
+		return result;
 
-	if (result == NIL)
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("extension \"%s\" has no update path from version \"%s\" to version \"%s\"",
-						control->name, oldVersion, newVersion)));
+	/* Find wildcard path, if no explicit path was found */
+	evi_start = get_ext_ver_info("%", &evi_list);
+	result = find_update_path(evi_list, evi_start, evi_target, false, false);
+	if (result != NIL)
+		return result;
 
-	return result;
+	ereport(ERROR,
+			(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+			 errmsg("extension \"%s\" has no update path from version \"%s\" to version \"%s\"",
+					control->name, oldVersion, newVersion)));
 }
 
 /*
@@ -3392,4 +3405,21 @@ read_whole_file(const char *filename, int *length)
 
 	buf[*length] = '\0';
 	return buf;
+}
+
+static bool
+file_exists(const char *name)
+{
+	struct stat st;
+
+	Assert(name != NULL);
+
+	if (stat(name, &st) == 0)
+		return !S_ISDIR(st.st_mode);
+	else if (!(errno == ENOENT || errno == ENOTDIR || errno == EACCES))
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not access file \"%s\": %m", name)));
+
+	return false;
 }

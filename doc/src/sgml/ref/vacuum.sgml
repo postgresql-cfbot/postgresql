@@ -251,6 +251,23 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
    </varlistentry>
 
    <varlistentry>
+    <term><literal>BACKGROUND</literal></term>
+    <listitem>
+     <para>
+      Specifies that <command>VACUUM</command> will make a request to
+      Autovacuum to process the task in the background. When this option is
+      specified the command returns immediately, without waiting for the
+      task to complete and without notification of success or failure.
+      Execution of the task by autovacuum will take place at a future time
+      and is not prioritized over its other planned actions. There is no
+      current limit on the number of background tasks that can be queued,
+      but the command will throw an ERROR if the task queue is full.
+      This option may only be specified with a single persistent table.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><literal>TRUNCATE</literal></term>
     <listitem>
      <para>
@@ -366,7 +383,8 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
    </para>
 
    <para>
-    <command>VACUUM</command> cannot be executed inside a transaction block.
+    <command>VACUUM</command> cannot be executed inside a transaction block,
+    except when the <option>BACKGROUND</option> option is specified.
    </para>
 
    <para>

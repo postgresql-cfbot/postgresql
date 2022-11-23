@@ -22,7 +22,8 @@
  */
 typedef enum
 {
-	AVW_BRINSummarizeRange
+	AVW_BRINSummarizeRange,
+	AVW_BackgroundVacuum
 } AutoVacuumWorkItemType;
 
 
@@ -74,7 +75,7 @@ extern void AutovacuumLauncherIAm(void);
 #endif
 
 extern bool AutoVacuumRequestWork(AutoVacuumWorkItemType type,
-								  Oid relationId, BlockNumber blkno);
+								  Oid relationId, BlockNumber blkno, bits32 options);
 
 /* shared memory stuff */
 extern Size AutoVacuumShmemSize(void);

@@ -208,7 +208,8 @@ brininsert(Relation idxRel, Datum *values, bool *nulls,
 
 				recorded = AutoVacuumRequestWork(AVW_BRINSummarizeRange,
 												 RelationGetRelid(idxRel),
-												 lastPageRange);
+												 lastPageRange,
+												 0);
 				if (!recorded)
 					ereport(LOG,
 							(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),

@@ -114,6 +114,7 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 	bool		full = false;
 	bool		disable_page_skipping = false;
 	bool		process_toast = true;
+	bool		background = false;
 	ListCell   *lc;
 
 	/* index_cleanup and truncate values unspecified for now */
@@ -148,6 +149,8 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 			full = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "disable_page_skipping") == 0)
 			disable_page_skipping = defGetBoolean(opt);
+		else if (strcmp(opt->defname, "background") == 0)
+			background = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "index_cleanup") == 0)
 		{
 			/* Interpret no string as the default, which is 'auto' */
@@ -244,6 +247,23 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 		}
 	}
 
+	if (background && (params.options & VACOPT_VERBOSE))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("VACUUM (BACKGROUND) cannot be verbose")));
+
+	if (background && (params.options & VACOPT_SKIP_LOCKED))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("VACUUM (BACKGROUND) cannot SKIP_LOCKED")));
+
+	if (background &&
+		(vacstmt->rels == NIL ||
+		list_length(vacstmt->rels) != 1))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("VACUUM (BACKGROUND) only allowed on a single table")));
+
 	/*
 	 * All freeze ages are zero if the FREEZE option is given; otherwise pass
 	 * them as -1 which means to use the default values.
@@ -268,6 +288,86 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 
 	/* user-invoked vacuum uses VACOPT_VERBOSE instead of log_min_duration */
 	params.log_min_duration = -1;
+
+	/*
+	 * If we are requested to run vacuum in the background, request work
+	 * from Autovacuum. Make sure this is a table that AV can see
+	 * and check permissions now also.
+	 *
+	 * Note also that "background" is not a VACOPT item, since we don't need
+	 * vacuum() to know about that, and we wouldn't want autovacuum to itself
+	 * try to queue something into the background for execution.
+	 *
+	 * XXX note this does not yet handle partitioned tables correctly;
+	 * these just fail silently in vacuum_rel() at present.
+	 */
+	if (background)
+	{
+		foreach(lc, vacstmt->rels)
+		{
+			VacuumRelation *vrel = lfirst_node(VacuumRelation, lc);
+
+			/*
+			 * We need a lock to allow us to check permissions and to see
+			 * if the relation is persistent. We can't easily handle SKIP LOCKED here.
+			 * We release the lock almost immediately to avoid lock upgrade hazard
+			 * and to ensure we don't interfere with AV.
+			 */
+			Relation rel = relation_openrv(vrel->relation, AccessShareLock);
+
+			if (RelationUsesLocalBuffers(rel))
+			{
+				relation_close(rel, AccessShareLock);
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("BACKGROUND option not supported on temporary tables")));
+			}
+			else
+			{
+				bool requested;
+
+				/*
+				 * Check permissions, using identical check to vacuum_rel().
+				 *
+				 * Check if relation needs to be skipped based on ownership.  This check
+				 * happens also when building the relation list to vacuum for a manual
+				 * operation, and needs to be done additionally here as VACUUM could
+				 * happen across multiple transactions where relation ownership could have
+				 * changed in-between.  Make sure to only generate logs for VACUUM in this
+				 * case.
+				 */
+				if (!vacuum_is_relation_owner(RelationGetRelid(rel),
+											  rel->rd_rel,
+											  params.options & VACOPT_VACUUM))
+				{
+					relation_close(rel, AccessShareLock);
+					return;
+				}
+
+				/*
+				 * Request an autovacuum worker does the work for us,
+				 * and skip the actual execution in the current backend.
+				 * Note that we do not wait for the AV worker to complete
+				 * the task, nor do we check whether it succeeded or not.
+				 */
+				requested = AutoVacuumRequestWork(AVW_BackgroundVacuum,
+													RelationGetRelid(rel),
+													InvalidBlockNumber,
+													params.options);
+				if (requested)
+					ereport(NOTICE,
+							(errmsg("autovacuum of \"%s\" has been requested, using the options specified",
+									RelationGetRelationName(rel))));
+				else
+					ereport(ERROR,
+							(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+							 errmsg("task queue full; background autovacuum of \"%s\" was not recorded",
+									RelationGetRelationName(rel))));
+				relation_close(rel, AccessShareLock);
+				return;
+			}
+		}
+	}
 
 	/* Now go through the common routine */
 	vacuum(vacstmt->rels, &params, NULL, isTopLevel);

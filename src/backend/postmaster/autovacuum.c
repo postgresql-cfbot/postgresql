@@ -258,6 +258,7 @@ typedef struct AutoVacuumWorkItem
 	Oid			avw_database;
 	Oid			avw_relation;
 	BlockNumber avw_blockNumber;
+	bits32      avw_vac_options;
 } AutoVacuumWorkItem;
 
 #define NUM_WORKITEMS	256
@@ -618,6 +619,12 @@ AutoVacLauncherMain(int argc, char *argv[])
 	}
 
 	AutoVacuumShmem->av_launcherpid = MyProcPid;
+
+	/*
+	 * Advertise our latch that backends can use to wake us up while we're
+	 * sleeping.
+	 */
+	ProcGlobal->autovacuumLatch = &MyProc->procLatch;
 
 	/*
 	 * Create the initial database list.  The invariant we want this list to
@@ -2663,6 +2670,66 @@ perform_work_item(AutoVacuumWorkItem *workitem)
 									ObjectIdGetDatum(workitem->avw_relation),
 									Int64GetDatum((int64) workitem->avw_blockNumber));
 				break;
+			case AVW_BackgroundVacuum:
+				{
+					BufferAccessStrategy	bstrategy;
+					autovac_table			tab;
+
+					tab.at_relid = workitem->avw_relation;
+					tab.at_sharedrel = false;
+
+					tab.at_params.index_cleanup = VACOPTVALUE_ENABLED;
+					tab.at_params.truncate = VACOPTVALUE_DISABLED;
+
+					/* Set options */
+					tab.at_params.options = workitem->avw_vac_options;
+
+					/*
+					 * All freeze ages are zero if the FREEZE option is given; otherwise pass
+					 * them as -1 which means to use the default values.
+					*/
+					if (tab.at_params.options & VACOPT_FREEZE)
+					{
+						tab.at_params.freeze_min_age = 0;
+						tab.at_params.freeze_table_age = 0;
+						tab.at_params.multixact_freeze_min_age = 0;
+						tab.at_params.multixact_freeze_table_age = 0;
+					}
+					else
+					{
+						tab.at_params.freeze_min_age = -1;
+						tab.at_params.freeze_table_age = -1;
+						tab.at_params.multixact_freeze_min_age = -1;
+						tab.at_params.multixact_freeze_table_age = -1;
+					}
+
+					/* user-invoked vacuum is never "for wraparound" */
+					tab.at_params.is_wraparound = false;
+
+					/* use default values */
+					tab.at_params.log_min_duration = 0;
+					tab.at_params.nworkers = 0;
+
+					/* Deliberately avoid using autovacuum parameters, since this is for user */
+					tab.at_vacuum_cost_delay = VacuumCostDelay;
+					tab.at_vacuum_cost_limit = VacuumCostLimit;
+					tab.at_dobalance = false;
+
+					/* Set names in case of error */
+					tab.at_relname = pstrdup(get_rel_name(tab.at_relid));
+					tab.at_nspname = pstrdup(get_namespace_name(get_rel_namespace(tab.at_relid)));
+					tab.at_datname = pstrdup(get_database_name(MyDatabaseId));
+
+					/*
+					 * Create a buffer access strategy object for VACUUM to use.  We want to
+					 * use the same one across all the vacuum operations we perform, since the
+					 * point is for VACUUM not to blow out the shared cache.
+					 */
+					bstrategy = GetAccessStrategy(BAS_VACUUM);
+
+					autovacuum_do_vac_analyze(&tab, bstrategy);
+				}
+				break;
 			default:
 				elog(WARNING, "unrecognized work item found: type %d",
 					 workitem->avw_type);
@@ -3210,6 +3277,11 @@ autovac_report_workitem(AutoVacuumWorkItem *workitem,
 			snprintf(activity, MAX_AUTOVAC_ACTIV_LEN,
 					 "autovacuum: BRIN summarize");
 			break;
+
+		case AVW_BackgroundVacuum:
+			snprintf(activity, MAX_AUTOVAC_ACTIV_LEN,
+					 "autovacuum: user vacuum");
+			break;
 	}
 
 	/*
@@ -3250,7 +3322,7 @@ AutoVacuumingActive(void)
  */
 bool
 AutoVacuumRequestWork(AutoVacuumWorkItemType type, Oid relationId,
-					  BlockNumber blkno)
+					  BlockNumber blkno, bits32 options)
 {
 	int			i;
 	bool		result = false;
@@ -3273,6 +3345,7 @@ AutoVacuumRequestWork(AutoVacuumWorkItemType type, Oid relationId,
 		workitem->avw_database = MyDatabaseId;
 		workitem->avw_relation = relationId;
 		workitem->avw_blockNumber = blkno;
+		workitem->avw_vac_options = options;
 		result = true;
 
 		/* done */
@@ -3280,6 +3353,14 @@ AutoVacuumRequestWork(AutoVacuumWorkItemType type, Oid relationId,
 	}
 
 	LWLockRelease(AutovacuumLock);
+
+	/*
+	 * You might think we would issue a SetLatch here to wake up the
+	 * Autovacuum, but the current mechanism uses specifically timed
+	 * requests, so that would require significant rethinking.
+	 * We just need to be patient that AV will get to our task
+	 * eventually.
+	 */
 
 	return result;
 }

@@ -237,6 +237,12 @@ ALTER TABLE vactst ALTER COLUMN t SET STORAGE EXTERNAL;
 VACUUM (PROCESS_TOAST FALSE) vactst;
 VACUUM (PROCESS_TOAST FALSE, FULL) vactst;
 
+-- Single table inside transaction block
+VACUUM (BACKGROUND) vactst;
+BEGIN;
+VACUUM (BACKGROUND) vactst;
+COMMIT;
+
 DROP TABLE vaccluster;
 DROP TABLE vactst;
 DROP TABLE vacparted;

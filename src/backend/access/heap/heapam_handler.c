@@ -572,7 +572,7 @@ heapam_relation_set_new_filelocator(Relation rel,
 									TransactionId *freezeXid,
 									MultiXactId *minmulti)
 {
-	SMgrRelation srel;
+	SMgrFileHandle sfile;
 
 	/*
 	 * Initialize to the minimum XID that could put tuples in the table. We
@@ -591,7 +591,7 @@ heapam_relation_set_new_filelocator(Relation rel,
 	 */
 	*minmulti = GetOldestMultiXactId();
 
-	srel = RelationCreateStorage(*newrlocator, persistence, true);
+	sfile = RelationCreateStorage(*newrlocator, persistence, true);
 
 	/*
 	 * If required, set up an init fork for an unlogged table so that it can
@@ -604,15 +604,18 @@ heapam_relation_set_new_filelocator(Relation rel,
 	 */
 	if (persistence == RELPERSISTENCE_UNLOGGED)
 	{
+		SMgrFileHandle sfile_init;
+
 		Assert(rel->rd_rel->relkind == RELKIND_RELATION ||
 			   rel->rd_rel->relkind == RELKIND_MATVIEW ||
 			   rel->rd_rel->relkind == RELKIND_TOASTVALUE);
-		smgrcreate(srel, INIT_FORKNUM, false);
+		sfile_init = smgropen(*newrlocator, InvalidBackendId, INIT_FORKNUM);
+		smgrcreate(sfile_init, false);
 		log_smgrcreate(newrlocator, INIT_FORKNUM);
-		smgrimmedsync(srel, INIT_FORKNUM);
+		smgrimmedsync(sfile);
 	}
 
-	smgrclose(srel);
+	smgrclose(sfile);
 }
 
 static void
@@ -624,9 +627,7 @@ heapam_relation_nontransactional_truncate(Relation rel)
 static void
 heapam_relation_copy_data(Relation rel, const RelFileLocator *newrlocator)
 {
-	SMgrRelation dstrel;
-
-	dstrel = smgropen(*newrlocator, rel->rd_backend);
+	SMgrFileHandle dstmain;
 
 	/*
 	 * Since we copy the file directly without looking at the shared buffers,
@@ -646,16 +647,21 @@ heapam_relation_copy_data(Relation rel, const RelFileLocator *newrlocator)
 	RelationCreateStorage(*newrlocator, rel->rd_rel->relpersistence, true);
 
 	/* copy main fork */
-	RelationCopyStorage(RelationGetSmgr(rel), dstrel, MAIN_FORKNUM,
+	dstmain = smgropen(*newrlocator, rel->rd_backend, MAIN_FORKNUM);
+	RelationCopyStorage(RelationGetSmgr(rel, MAIN_FORKNUM), dstmain,
 						rel->rd_rel->relpersistence);
 
 	/* copy those extra forks that exist */
 	for (ForkNumber forkNum = MAIN_FORKNUM + 1;
 		 forkNum <= MAX_FORKNUM; forkNum++)
 	{
-		if (smgrexists(RelationGetSmgr(rel), forkNum))
+		SMgrFileHandle src_fork = RelationGetSmgr(rel, forkNum);
+
+		if (smgrexists(src_fork))
 		{
-			smgrcreate(dstrel, forkNum, false);
+			SMgrFileHandle dst_fork = smgropen(*newrlocator, rel->rd_backend, forkNum);
+
+			smgrcreate(dst_fork, false);
 
 			/*
 			 * WAL log creation if the relation is persistent, or this is the
@@ -665,7 +671,7 @@ heapam_relation_copy_data(Relation rel, const RelFileLocator *newrlocator)
 				(rel->rd_rel->relpersistence == RELPERSISTENCE_UNLOGGED &&
 				 forkNum == INIT_FORKNUM))
 				log_smgrcreate(newrlocator, forkNum);
-			RelationCopyStorage(RelationGetSmgr(rel), dstrel, forkNum,
+			RelationCopyStorage(RelationGetSmgr(rel, forkNum), dst_fork,
 								rel->rd_rel->relpersistence);
 		}
 	}
@@ -673,7 +679,7 @@ heapam_relation_copy_data(Relation rel, const RelFileLocator *newrlocator)
 
 	/* drop old relation, and close new one */
 	RelationDropStorage(rel);
-	smgrclose(dstrel);
+	smgrclose(dstmain);
 }
 
 static void

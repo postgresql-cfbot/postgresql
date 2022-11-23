@@ -151,9 +151,20 @@ static void MemoryContextStatsPrint(MemoryContext context, void *passthru,
  * You should not do memory allocations within a critical section, because
  * an out-of-memory error will be escalated to a PANIC. To enforce that
  * rule, the allocation functions Assert that.
+ *
+ * FIXME: bypass this for the critical section in RecordTransactionCommit()
+ * for now. It does a lot of things that can allocate:
+ * - calls TransactionIdCommitTree, which pins buffers, which requires
+ *   space in the ResourceOwner for the pin (ResourceOwnerEnlargeBuffers())
+ * - same for TransactionTreeSetCommitTsData() call.
+ * - reading a page can require flushing other pages, which in turn
+ *   can call CompactCheckpointerRequestQueue(), which allocates
+ * - reading a page calls smgropen(), which allocates the SMgrFile entry
+ *   if it's not open already
  */
 #define AssertNotInCriticalSection(context) \
-	Assert(CritSectionCount == 0 || (context)->allowInCritSection)
+	Assert(CritSectionCount == 0 || (context)->allowInCritSection || \
+		   (MyProc != NULL && (MyProc->delayChkptFlags & DELAY_CHKPT_START != 0)))
 
 /*
  * Call the given function in the MemoryContextMethods for the memory context

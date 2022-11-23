@@ -477,7 +477,7 @@ XLogReadBufferExtended(RelFileLocator rlocator, ForkNumber forknum,
 {
 	BlockNumber lastblock;
 	Buffer		buffer;
-	SMgrRelation smgr;
+	SMgrFileHandle sfile;
 
 	Assert(blkno != P_NEW);
 
@@ -491,7 +491,7 @@ XLogReadBufferExtended(RelFileLocator rlocator, ForkNumber forknum,
 	}
 
 	/* Open the relation at smgr level */
-	smgr = smgropen(rlocator, InvalidBackendId);
+	sfile = smgropen(rlocator, InvalidBackendId, forknum);
 
 	/*
 	 * Create the target file if it doesn't already exist.  This lets us cope
@@ -501,9 +501,9 @@ XLogReadBufferExtended(RelFileLocator rlocator, ForkNumber forknum,
 	 * filesystem loses an inode during a crash.  Better to write the data
 	 * until we are actually told to delete the file.)
 	 */
-	smgrcreate(smgr, forknum, true);
+	smgrcreate(sfile, true);
 
-	lastblock = smgrnblocks(smgr, forknum);
+	lastblock = smgrnblocks(sfile);
 
 	if (blkno < lastblock)
 	{
@@ -631,7 +631,7 @@ CreateFakeRelcacheEntry(RelFileLocator rlocator)
 	rel->rd_lockInfo.lockRelId.dbId = rlocator.dbOid;
 	rel->rd_lockInfo.lockRelId.relId = rlocator.relNumber;
 
-	rel->rd_smgr = NULL;
+	MemSet(rel->rd_smgr, 0, sizeof(rel->rd_smgr));
 
 	return rel;
 }
@@ -643,8 +643,11 @@ void
 FreeFakeRelcacheEntry(Relation fakerel)
 {
 	/* make sure the fakerel is not referenced by the SmgrRelation anymore */
-	if (fakerel->rd_smgr != NULL)
-		smgrclearowner(&fakerel->rd_smgr, fakerel->rd_smgr);
+	for (int i = 0; i <= MAX_FORKNUM; i++)
+	{
+		if (fakerel->rd_smgr[i] != NULL)
+			smgrclearowner(&fakerel->rd_smgr[i], fakerel->rd_smgr[i]);
+	}
 	pfree(fakerel);
 }
 

@@ -3029,9 +3029,9 @@ index_build(Relation heapRelation,
 	 * relfilenumber won't change, and nothing needs to be done here.
 	 */
 	if (indexRelation->rd_rel->relpersistence == RELPERSISTENCE_UNLOGGED &&
-		!smgrexists(RelationGetSmgr(indexRelation), INIT_FORKNUM))
+		!smgrexists(RelationGetSmgr(indexRelation, INIT_FORKNUM)))
 	{
-		smgrcreate(RelationGetSmgr(indexRelation), INIT_FORKNUM, false);
+		smgrcreate(RelationGetSmgr(indexRelation, INIT_FORKNUM), false);
 		indexRelation->rd_indam->ambuildempty(indexRelation);
 	}
 

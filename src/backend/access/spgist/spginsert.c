@@ -155,7 +155,10 @@ spgbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 void
 spgbuildempty(Relation index)
 {
+	SMgrFileHandle sfile;
 	Page		page;
+
+	sfile = RelationGetSmgr(index, INIT_FORKNUM);
 
 	/* Construct metapage. */
 	page = (Page) palloc(BLCKSZ);
@@ -169,27 +172,27 @@ spgbuildempty(Relation index)
 	 * replayed.
 	 */
 	PageSetChecksumInplace(page, SPGIST_METAPAGE_BLKNO);
-	smgrwrite(RelationGetSmgr(index), INIT_FORKNUM, SPGIST_METAPAGE_BLKNO,
+	smgrwrite(sfile, SPGIST_METAPAGE_BLKNO,
 			  (char *) page, true);
-	log_newpage(&(RelationGetSmgr(index))->smgr_rlocator.locator, INIT_FORKNUM,
+	log_newpage(&index->rd_locator, INIT_FORKNUM,
 				SPGIST_METAPAGE_BLKNO, page, true);
 
 	/* Likewise for the root page. */
 	SpGistInitPage(page, SPGIST_LEAF);
 
 	PageSetChecksumInplace(page, SPGIST_ROOT_BLKNO);
-	smgrwrite(RelationGetSmgr(index), INIT_FORKNUM, SPGIST_ROOT_BLKNO,
+	smgrwrite(sfile, SPGIST_ROOT_BLKNO,
 			  (char *) page, true);
-	log_newpage(&(RelationGetSmgr(index))->smgr_rlocator.locator, INIT_FORKNUM,
+	log_newpage(&index->rd_locator, INIT_FORKNUM,
 				SPGIST_ROOT_BLKNO, page, true);
 
 	/* Likewise for the null-tuples root page. */
 	SpGistInitPage(page, SPGIST_LEAF | SPGIST_NULLS);
 
 	PageSetChecksumInplace(page, SPGIST_NULL_BLKNO);
-	smgrwrite(RelationGetSmgr(index), INIT_FORKNUM, SPGIST_NULL_BLKNO,
+	smgrwrite(sfile, SPGIST_NULL_BLKNO,
 			  (char *) page, true);
-	log_newpage(&(RelationGetSmgr(index))->smgr_rlocator.locator, INIT_FORKNUM,
+	log_newpage(&index->rd_locator, INIT_FORKNUM,
 				SPGIST_NULL_BLKNO, page, true);
 
 	/*
@@ -197,7 +200,7 @@ spgbuildempty(Relation index)
 	 * writes did not go through shared buffers and therefore a concurrent
 	 * checkpoint may have moved the redo pointer past our xlog record.
 	 */
-	smgrimmedsync(RelationGetSmgr(index), INIT_FORKNUM);
+	smgrimmedsync(sfile);
 }
 
 /*

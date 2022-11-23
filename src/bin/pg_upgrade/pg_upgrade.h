@@ -7,6 +7,7 @@
 
 #include <unistd.h>
 #include <assert.h>
+#include <dirent.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 
@@ -113,7 +114,16 @@ extern char *output_files[];
  * version to this value.  pg_upgrade behavior depends on whether old and new
  * server versions are both newer than this, or only the new one is.
  */
-#define MULTIXACT_FORMATCHANGE_CAT_VER 201301231
+
+/*
+ * page header format change
+ */
+#define MULTIXACT_FORMATCHANGE_CAT_VER 202209141
+
+/* 
+ * page header format change 
+ */
+#define CLOG_FORMATCHANGE_CAT_VER 202210141
 
 /*
  * large object chunk size added to pg_controldata,
@@ -122,7 +132,7 @@ extern char *output_files[];
 #define LARGE_OBJECT_SIZE_PG_CONTROL_VER 942
 
 /*
- * change in JSONB format during 9.4 beta
+ * addition of page header 
  */
 #define JSONB_FORMAT_CHANGE_CAT_VER 201409291
 
@@ -378,6 +388,9 @@ void		rewriteVisibilityMap(const char *fromfile, const char *tofile,
 void		check_file_clone(void);
 void		check_hard_link(void);
 
+
+int 	copy_to_new_format(const char *old_subdir, const char *new_subdir, int element_size);
+
 /* fopen_priv() is no longer different from fopen() */
 #define fopen_priv(path, mode)	fopen(path, mode)
 
@@ -385,6 +398,8 @@ void		check_hard_link(void);
 
 void		get_loadable_libraries(void);
 void		check_loadable_libraries(void);
+void 		cleanup_dirents(struct dirent ** all_dirents, int total_read_files);
+struct dirent** 	get_sorted_hex_files(char * dr, int * size);
 
 /* info.c */
 

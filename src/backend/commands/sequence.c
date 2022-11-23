@@ -353,14 +353,14 @@ fill_seq_with_data(Relation rel, HeapTuple tuple)
 
 	if (rel->rd_rel->relpersistence == RELPERSISTENCE_UNLOGGED)
 	{
-		SMgrRelation srel;
+		SMgrFileHandle sfile;
 
-		srel = smgropen(rel->rd_locator, InvalidBackendId);
-		smgrcreate(srel, INIT_FORKNUM, false);
+		sfile = smgropen(rel->rd_locator, InvalidBackendId, INIT_FORKNUM);
+		smgrcreate(sfile, false);
 		log_smgrcreate(&rel->rd_locator, INIT_FORKNUM);
 		fill_seq_fork_with_data(rel, tuple, INIT_FORKNUM);
 		FlushRelationBuffers(rel);
-		smgrclose(srel);
+		smgrclose(sfile);
 	}
 }
 

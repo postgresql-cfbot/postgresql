@@ -259,7 +259,7 @@ ScanSourceDatabasePgClass(Oid tbid, Oid dbid, char *srcpath)
 	List	   *rlocatorlist = NIL;
 	LockRelId	relid;
 	Snapshot	snapshot;
-	SMgrRelation	smgr;
+	SMgrFileHandle sfile;
 	BufferAccessStrategy bstrategy;
 
 	/* Get pg_class relfilenumber. */
@@ -276,9 +276,9 @@ ScanSourceDatabasePgClass(Oid tbid, Oid dbid, char *srcpath)
 	rlocator.dbOid = dbid;
 	rlocator.relNumber = relfilenumber;
 
-	smgr = smgropen(rlocator, InvalidBackendId);
-	nblocks = smgrnblocks(smgr, MAIN_FORKNUM);
-	smgrclose(smgr);
+	sfile = smgropen(rlocator, InvalidBackendId, MAIN_FORKNUM);
+	nblocks = smgrnblocks(sfile);
+	smgrclose(sfile);
 
 	/* Use a buffer access strategy since this is a bulk read operation. */
 	bstrategy = GetAccessStrategy(BAS_BULKREAD);

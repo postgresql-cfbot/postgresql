@@ -59,6 +59,27 @@ PageInit(Page page, Size pageSize, Size specialSize)
 	/* p->pd_prune_xid = InvalidTransactionId;		done by above MemSet */
 }
 
+void
+PageInitSLRU(Page page, Size pageSize, Size specialSize)
+{
+	PageHeader	p = (PageHeader) page;
+
+	specialSize = MAXALIGN(specialSize);
+
+	Assert(pageSize == BLCKSZ);
+	Assert(pageSize > specialSize + SizeOfPageHeaderData);
+
+	/* Make sure all fields of page are zero, as well as unused space */
+	MemSet(p, 0, pageSize);
+
+	p->pd_flags = 0;
+	p->pd_lower = SizeOfPageHeaderData;
+	p->pd_upper = pageSize - specialSize;
+	p->pd_special = pageSize - specialSize;
+	PageSetPageSizeAndVersion(page, pageSize, PG_METAPAGE_LAYOUT_VERSION);
+	/* p->pd_prune_xid = InvalidTransactionId;		done by above MemSet */
+}
+
 
 /*
  * PageIsVerifiedExtended
@@ -103,7 +124,7 @@ PageIsVerifiedExtended(Page page, BlockNumber blkno, int flags)
 		if (DataChecksumsEnabled())
 		{
 			checksum = pg_checksum_page((char *) page, blkno);
-
+			
 			if (checksum != p->pd_checksum)
 				checksum_failure = true;
 		}

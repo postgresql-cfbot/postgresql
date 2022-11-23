@@ -63,6 +63,9 @@ typedef enum ForkNumber
 
 #define FORKNAMECHARS	4		/* max chars for a fork name */
 
+/* Pseudo tablespace ID used for SLRUs. */
+#define SLRU_SPC_OID 9
+
 extern PGDLLIMPORT const char *const forkNames[];
 
 extern ForkNumber forkname_to_number(const char *forkName);
@@ -73,25 +76,25 @@ extern int	forkname_chars(const char *str, ForkNumber *fork);
  */
 extern char *GetDatabasePath(Oid dbOid, Oid spcOid);
 
-extern char *GetRelationPath(Oid dbOid, Oid spcOid, RelFileNumber relNumber,
+extern char *GetSMgrFilePath(Oid dbOid, Oid spcOid, RelFileNumber relNumber,
 							 int backendId, ForkNumber forkNumber);
 
 /*
  * Wrapper macros for GetRelationPath.  Beware of multiple
- * evaluation of the RelFileLocator or RelFileLocatorBackend argument!
+ * evaluation of the RelFileLocator or SMgrFileLocator argument!
  */
 
 /* First argument is a RelFileLocator */
 #define relpathbackend(rlocator, backend, forknum) \
-	GetRelationPath((rlocator).dbOid, (rlocator).spcOid, (rlocator).relNumber, \
+	GetSMgrFilePath((rlocator).dbOid, (rlocator).spcOid, (rlocator).relNumber, \
 					backend, forknum)
 
 /* First argument is a RelFileLocator */
 #define relpathperm(rlocator, forknum) \
 	relpathbackend(rlocator, InvalidBackendId, forknum)
 
-/* First argument is a RelFileLocatorBackend */
-#define relpath(rlocator, forknum) \
-	relpathbackend((rlocator).locator, (rlocator).backend, forknum)
+/* First argument is a SMgrFileLocator */
+#define smgrfilepath(slocator) \
+	GetSMgrFilePath((slocator).locator.dbOid, (slocator).locator.spcOid, (slocator).locator.relNumber, (slocator).backend, (slocator).forknum)
 
 #endif							/* RELPATH_H */

@@ -42,8 +42,11 @@ typedef enum
 	RBM_ZERO_AND_CLEANUP_LOCK,	/* Like RBM_ZERO_AND_LOCK, but locks the page
 								 * in "cleanup" mode */
 	RBM_ZERO_ON_ERROR,			/* Read, but return an all-zeros page on error */
-	RBM_NORMAL_NO_LOG			/* Don't log page as invalid during WAL
+	RBM_NORMAL_NO_LOG,			/* Don't log page as invalid during WAL
 								 * replay; otherwise same as RBM_NORMAL */
+
+	RBM_TRIM				/*Read for TRIM functions in CLOG / MultiXact. 
+						  Don't validate checksum  or zero. */	
 } ReadBufferMode;
 
 /*
@@ -59,7 +62,7 @@ typedef struct PrefetchBufferResult
 struct WritebackContext;
 
 /* forward declared, to avoid including smgr.h here */
-struct SMgrRelationData;
+struct SMgrFileData;
 
 /* in globals.c ... this duplicates miscadmin.h */
 extern PGDLLIMPORT int NBuffers;
@@ -110,8 +113,7 @@ extern PGDLLIMPORT int32 *LocalRefCount;
 /*
  * prototypes for functions in bufmgr.c
  */
-extern PrefetchBufferResult PrefetchSharedBuffer(struct SMgrRelationData *smgr_reln,
-												 ForkNumber forkNum,
+extern PrefetchBufferResult PrefetchSharedBuffer(struct SMgrFileData *smgr_file,
 												 BlockNumber blockNum);
 extern PrefetchBufferResult PrefetchBuffer(Relation reln, ForkNumber forkNum,
 										   BlockNumber blockNum);
@@ -125,13 +127,19 @@ extern Buffer ReadBufferWithoutRelcache(RelFileLocator rlocator,
 										ForkNumber forkNum, BlockNumber blockNum,
 										ReadBufferMode mode, BufferAccessStrategy strategy,
 										bool permanent);
+extern Buffer ReadBufferWithoutRelcacheWithHit(RelFileLocator rlocator,
+										ForkNumber forkNum, BlockNumber blockNum,
+										ReadBufferMode mode, BufferAccessStrategy strategy,
+											   bool permanent, bool *hit);
 extern void ReleaseBuffer(Buffer buffer);
 extern void UnlockReleaseBuffer(Buffer buffer);
 extern void MarkBufferDirty(Buffer buffer);
 extern void IncrBufferRefCount(Buffer buffer);
 extern Buffer ReleaseAndReadBuffer(Buffer buffer, Relation relation,
 								   BlockNumber blockNum);
-
+extern bool BufferProbe(RelFileLocator rlocator, ForkNumber forkNum,
+						BlockNumber blockNum);
+ 
 extern void InitBufferPoolAccess(void);
 extern void AtEOXact_Buffers(bool isCommit);
 extern void PrintBufferLeakWarning(Buffer buffer);
@@ -139,18 +147,26 @@ extern void CheckPointBuffers(int flags);
 extern BlockNumber BufferGetBlockNumber(Buffer buffer);
 extern BlockNumber RelationGetNumberOfBlocksInFork(Relation relation,
 												   ForkNumber forkNum);
-extern void FlushOneBuffer(Buffer buffer);
-extern void FlushRelationBuffers(Relation rel);
-extern void FlushRelationsAllBuffers(struct SMgrRelationData **smgrs, int nrels);
 extern void CreateAndCopyRelationData(RelFileLocator src_rlocator,
 									  RelFileLocator dst_rlocator,
 									  bool permanent);
+
+extern void FlushOneBuffer(Buffer buffer);
+extern void FlushRelationBuffers(Relation rel);
+extern void FlushRelationsAllBuffers(RelFileLocator *locators, int nlocators);
 extern void FlushDatabaseBuffers(Oid dbid);
-extern void DropRelationBuffers(struct SMgrRelationData *smgr_reln,
+
+extern void DropRelationBuffers(RelFileLocator rlocator, BackendId backend,
 								ForkNumber *forkNum,
 								int nforks, BlockNumber *firstDelBlock);
-extern void DropRelationsAllBuffers(struct SMgrRelationData **smgr_reln,
-									int nlocators);
+
+typedef struct RelFileLocatorBackend
+{
+	RelFileLocator locator;
+	BackendId	backend;
+} RelFileLocatorBackend;
+
+extern void DropRelationsAllBuffers(RelFileLocatorBackend *locators, int nlocators);
 extern void DropDatabaseBuffers(Oid dbid);
 
 #define RelationGetNumberOfBlocks(reln) \

@@ -419,7 +419,7 @@ AllocateRelationDesc(Form_pg_class relp)
 	relation = (Relation) palloc0(sizeof(RelationData));
 
 	/* make sure relation is marked as having no open file yet */
-	relation->rd_smgr = NULL;
+	MemSet(relation->rd_smgr, 0, sizeof(relation->rd_smgr));
 
 	/*
 	 * Copy the relation tuple form
@@ -1248,7 +1248,7 @@ retry:
 	RelationInitPhysicalAddr(relation);
 
 	/* make sure relation is marked as having no open file yet */
-	relation->rd_smgr = NULL;
+	MemSet(relation->rd_smgr, 0, sizeof(relation->rd_smgr));
 
 	/*
 	 * now we can free the memory allocated for pg_class_tuple
@@ -1877,7 +1877,7 @@ formrdesc(const char *relationName, Oid relationReltype,
 	relation = (Relation) palloc0(sizeof(RelationData));
 
 	/* make sure relation is marked as having no open file yet */
-	relation->rd_smgr = NULL;
+	MemSet(relation->rd_smgr, 0, sizeof(relation->rd_smgr));
 
 	/*
 	 * initialize reference count: 1 because it is nailed in cache
@@ -2694,7 +2694,8 @@ RelationClearRelation(Relation relation, bool rebuild)
 		}
 
 		/* rd_smgr must not be swapped, due to back-links from smgr level */
-		SWAPFIELD(SMgrRelation, rd_smgr);
+		for (int i = 0; i <= MAX_FORKNUM; i++)
+			SWAPFIELD(SMgrFileHandle, rd_smgr[i]);
 		/* rd_refcnt must be preserved */
 		SWAPFIELD(int, rd_refcnt);
 		/* isnailed shouldn't change */
@@ -3525,7 +3526,7 @@ RelationBuildLocalRelation(const char *relname,
 	rel = (Relation) palloc0(sizeof(RelationData));
 
 	/* make sure relation is marked as having no open file yet */
-	rel->rd_smgr = NULL;
+	MemSet(rel->rd_smgr, 0, sizeof(rel->rd_smgr));
 
 	/* mark it nailed if appropriate */
 	rel->rd_isnailed = nailit;
@@ -3757,7 +3758,6 @@ RelationSetNewRelfilenumber(Relation relation, char persistence)
 	 */
 	if (IsBinaryUpgrade)
 	{
-		SMgrRelation	srel;
 
 		/*
 		 * During a binary upgrade, we use this code path to ensure that
@@ -3774,9 +3774,14 @@ RelationSetNewRelfilenumber(Relation relation, char persistence)
 		 * fails at this stage, the new cluster will need to be recreated
 		 * anyway.
 		 */
-		srel = smgropen(relation->rd_locator, relation->rd_backend);
-		smgrdounlinkall(&srel, 1, false);
-		smgrclose(srel);
+		ForkNumber forks[MAX_FORKNUM + 1];
+		for (int i = 0; i <= MAX_FORKNUM; i ++) 
+		{
+			smgropen(relation->rd_locator, relation->rd_backend, i);
+			forks[i] = i;
+		}
+		
+		smgrunlink_multi(relation->rd_locator, relation->rd_backend, forks, MAX_FORKNUM + 1, false);
 	}
 	else
 	{
@@ -3804,7 +3809,7 @@ RelationSetNewRelfilenumber(Relation relation, char persistence)
 	else if (RELKIND_HAS_STORAGE(relation->rd_rel->relkind))
 	{
 		/* handle these directly, at least for now */
-		SMgrRelation srel;
+		SMgrFileHandle srel;
 
 		srel = RelationCreateStorage(newrlocator, persistence, true);
 		smgrclose(srel);
@@ -6291,7 +6296,7 @@ load_relcache_init_file(bool shared)
 		/*
 		 * Reset transient-state fields in the relcache entry
 		 */
-		rel->rd_smgr = NULL;
+		MemSet(rel->rd_smgr, 0, sizeof(rel->rd_smgr));
 		if (rel->rd_isnailed)
 			rel->rd_refcnt = 1;
 		else

@@ -57,10 +57,17 @@
 #include "utils/resowner_private.h"
 #include "utils/timestamp.h"
 
+/*
+ * XXX Ideally we'd switch to standard pages for SLRU data, but in the
+ * meantime we need some way to identify buffers that hold raw data (no
+ * invasive LSN, no checksums).
+ */
 
 /* Note: these two macros only work on shared buffers, not local ones! */
 #define BufHdrGetBlock(bufHdr)	((Block) (BufferBlocks + ((Size) (bufHdr)->buf_id) * BLCKSZ))
-#define BufferGetLSN(bufHdr)	(PageGetLSN(BufHdrGetBlock(bufHdr)))
+
+#define BufferGetLSN(bufHdr) \
+		PageGetLSN(BufHdrGetBlock(bufHdr))
 
 /* Note: this macro only works on local buffers, not shared ones! */
 #define LocalBufHdrGetBlock(bufHdr) \
@@ -116,19 +123,6 @@ typedef struct CkptTsStatus
 	/* current offset in CkptBufferIds for this tablespace */
 	int			index;
 } CkptTsStatus;
-
-/*
- * Type for array used to sort SMgrRelations
- *
- * FlushRelationsAllBuffers shares the same comparator function with
- * DropRelationsAllBuffers. Pointer to this struct and RelFileLocator must be
- * compatible.
- */
-typedef struct SMgrSortArray
-{
-	RelFileLocator rlocator;	/* This must be the first member */
-	SMgrRelation srel;
-} SMgrSortArray;
 
 /* GUC variables */
 bool		zero_damaged_pages = false;
@@ -459,8 +453,8 @@ ForgetPrivateRefCountEntry(PrivateRefCountEntry *ref)
 )
 
 
-static Buffer ReadBuffer_common(SMgrRelation smgr, char relpersistence,
-								ForkNumber forkNum, BlockNumber blockNum,
+static Buffer ReadBuffer_common(SMgrFileHandle sfile, char relpersistence,
+								BlockNumber blockNum,
 								ReadBufferMode mode, BufferAccessStrategy strategy,
 								bool *hit);
 static bool PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy);
@@ -476,20 +470,19 @@ static void TerminateBufferIO(BufferDesc *buf, bool clear_dirty,
 							  uint32 set_flag_bits);
 static void shared_buffer_write_error_callback(void *arg);
 static void local_buffer_write_error_callback(void *arg);
-static BufferDesc *BufferAlloc(SMgrRelation smgr,
+static BufferDesc *BufferAlloc(SMgrFileHandle smgr,
 							   char relpersistence,
-							   ForkNumber forkNum,
 							   BlockNumber blockNum,
 							   BufferAccessStrategy strategy,
 							   bool *foundPtr);
-static void FlushBuffer(BufferDesc *buf, SMgrRelation reln);
+static void FlushBuffer(BufferDesc *buf, SMgrFileHandle sfile);
 static void FindAndDropRelationBuffers(RelFileLocator rlocator,
-									   ForkNumber forkNum,
+									   ForkNumber forknum,
 									   BlockNumber nForkBlock,
 									   BlockNumber firstDelBlock);
 static void RelationCopyStorageUsingBuffer(RelFileLocator srclocator,
 										   RelFileLocator dstlocator,
-										   ForkNumber forkNum, bool permanent);
+										   ForkNumber forknum, bool permanent);
 static void AtProcExit_Buffers(int code, Datum arg);
 static void CheckForBufferLeaks(void);
 static int	rlocator_comparator(const void *p1, const void *p2);
@@ -502,9 +495,7 @@ static int	ts_ckpt_progress_comparator(Datum a, Datum b, void *arg);
  * Implementation of PrefetchBuffer() for shared buffers.
  */
 PrefetchBufferResult
-PrefetchSharedBuffer(SMgrRelation smgr_reln,
-					 ForkNumber forkNum,
-					 BlockNumber blockNum)
+PrefetchSharedBuffer(SMgrFileHandle sfile, BlockNumber blockNum)
 {
 	PrefetchBufferResult result = {InvalidBuffer, false};
 	BufferTag	newTag;			/* identity of requested block */
@@ -515,8 +506,8 @@ PrefetchSharedBuffer(SMgrRelation smgr_reln,
 	Assert(BlockNumberIsValid(blockNum));
 
 	/* create a tag so we can lookup the buffer */
-	InitBufferTag(&newTag, &smgr_reln->smgr_rlocator.locator,
-				   forkNum, blockNum);
+	InitBufferTag(&newTag, &sfile->smgr_locator.locator,
+				   sfile->smgr_locator.forknum, blockNum);
 
 	/* determine its hash code and partition lock ID */
 	newHash = BufTableHashCode(&newTag);
@@ -535,7 +526,7 @@ PrefetchSharedBuffer(SMgrRelation smgr_reln,
 		 * Try to initiate an asynchronous read.  This returns false in
 		 * recovery if the relation file doesn't exist.
 		 */
-		if (smgrprefetch(smgr_reln, forkNum, blockNum))
+		if (smgrprefetch(sfile, blockNum))
 			result.initiated_io = true;
 #endif							/* USE_PREFETCH */
 	}
@@ -589,7 +580,7 @@ PrefetchSharedBuffer(SMgrRelation smgr_reln,
  * recovery, an error is raised).
  */
 PrefetchBufferResult
-PrefetchBuffer(Relation reln, ForkNumber forkNum, BlockNumber blockNum)
+PrefetchBuffer(Relation reln, ForkNumber forknum, BlockNumber blockNum)
 {
 	Assert(RelationIsValid(reln));
 	Assert(BlockNumberIsValid(blockNum));
@@ -603,12 +594,12 @@ PrefetchBuffer(Relation reln, ForkNumber forkNum, BlockNumber blockNum)
 					 errmsg("cannot access temporary tables of other sessions")));
 
 		/* pass it off to localbuf.c */
-		return PrefetchLocalBuffer(RelationGetSmgr(reln), forkNum, blockNum);
+		return PrefetchLocalBuffer(RelationGetSmgr(reln, forknum), blockNum);
 	}
 	else
 	{
 		/* pass it to the shared buffer version */
-		return PrefetchSharedBuffer(RelationGetSmgr(reln), forkNum, blockNum);
+		return PrefetchSharedBuffer(RelationGetSmgr(reln, forknum), blockNum);
 	}
 }
 
@@ -620,7 +611,7 @@ PrefetchBuffer(Relation reln, ForkNumber forkNum, BlockNumber blockNum)
  * tag.  In that case, the buffer is pinned and the usage count is bumped.
  */
 bool
-ReadRecentBuffer(RelFileLocator rlocator, ForkNumber forkNum, BlockNumber blockNum,
+ReadRecentBuffer(RelFileLocator rlocator, ForkNumber forknum, BlockNumber blockNum,
 				 Buffer recent_buffer)
 {
 	BufferDesc *bufHdr;
@@ -632,7 +623,7 @@ ReadRecentBuffer(RelFileLocator rlocator, ForkNumber forkNum, BlockNumber blockN
 
 	ResourceOwnerEnlargeBuffers(CurrentResourceOwner);
 	ReservePrivateRefCountEntry();
-	InitBufferTag(&tag, &rlocator, forkNum, blockNum);
+	InitBufferTag(&tag, &rlocator, forknum, blockNum);
 
 	if (BufferIsLocal(recent_buffer))
 	{
@@ -756,7 +747,7 @@ ReadBuffer(Relation reln, BlockNumber blockNum)
  * See buffer/README for details.
  */
 Buffer
-ReadBufferExtended(Relation reln, ForkNumber forkNum, BlockNumber blockNum,
+ReadBufferExtended(Relation reln, ForkNumber forknum, BlockNumber blockNum,
 				   ReadBufferMode mode, BufferAccessStrategy strategy)
 {
 	bool		hit;
@@ -777,8 +768,9 @@ ReadBufferExtended(Relation reln, ForkNumber forkNum, BlockNumber blockNum,
 	 * miss.
 	 */
 	pgstat_count_buffer_read(reln);
-	buf = ReadBuffer_common(RelationGetSmgr(reln), reln->rd_rel->relpersistence,
-							forkNum, blockNum, mode, strategy, &hit);
+	buf = ReadBuffer_common(RelationGetSmgr(reln, forknum),
+							reln->rd_rel->relpersistence,
+							blockNum, mode, strategy, &hit);
 	if (hit)
 		pgstat_count_buffer_hit(reln);
 	return buf;
@@ -796,17 +788,29 @@ ReadBufferExtended(Relation reln, ForkNumber forkNum, BlockNumber blockNum,
  * BackendId).
  */
 Buffer
-ReadBufferWithoutRelcache(RelFileLocator rlocator, ForkNumber forkNum,
+ReadBufferWithoutRelcache(RelFileLocator rlocator, ForkNumber forknum,
 						  BlockNumber blockNum, ReadBufferMode mode,
 						  BufferAccessStrategy strategy, bool permanent)
 {
 	bool		hit;
 
-	SMgrRelation smgr = smgropen(rlocator, InvalidBackendId);
+	SMgrFileHandle sfile = smgropen(rlocator, InvalidBackendId, forknum);
 
-	return ReadBuffer_common(smgr, permanent ? RELPERSISTENCE_PERMANENT :
-							 RELPERSISTENCE_UNLOGGED, forkNum, blockNum,
+	return ReadBuffer_common(sfile, permanent ? RELPERSISTENCE_PERMANENT :
+							 RELPERSISTENCE_UNLOGGED, blockNum,
 							 mode, strategy, &hit);
+}
+
+Buffer
+ReadBufferWithoutRelcacheWithHit(RelFileLocator rlocator, ForkNumber forknum,
+								 BlockNumber blockNum, ReadBufferMode mode,
+								 BufferAccessStrategy strategy, bool permanent, bool *hit)
+{
+	SMgrFileHandle sfile = smgropen(rlocator, InvalidBackendId, forknum);
+
+	return ReadBuffer_common(sfile, permanent ? RELPERSISTENCE_PERMANENT :
+							 RELPERSISTENCE_UNLOGGED, blockNum,
+							 mode, strategy, hit);
 }
 
 
@@ -816,7 +820,7 @@ ReadBufferWithoutRelcache(RelFileLocator rlocator, ForkNumber forkNum,
  * *hit is set to true if the request was satisfied from shared buffer cache.
  */
 static Buffer
-ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
+ReadBuffer_common(SMgrFileHandle sfile, char relpersistence,
 				  BlockNumber blockNum, ReadBufferMode mode,
 				  BufferAccessStrategy strategy, bool *hit)
 {
@@ -824,7 +828,7 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	Block		bufBlock;
 	bool		found;
 	bool		isExtend;
-	bool		isLocalBuf = SmgrIsTemp(smgr);
+	bool		isLocalBuf = SmgrIsTemp(sfile);
 
 	*hit = false;
 
@@ -833,29 +837,30 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 
 	isExtend = (blockNum == P_NEW);
 
-	TRACE_POSTGRESQL_BUFFER_READ_START(forkNum, blockNum,
-									   smgr->smgr_rlocator.locator.spcOid,
-									   smgr->smgr_rlocator.locator.dbOid,
-									   smgr->smgr_rlocator.locator.relNumber,
-									   smgr->smgr_rlocator.backend,
+	TRACE_POSTGRESQL_BUFFER_READ_START(smgr->smgr_locator.forknum,
+									   blockNum,
+									   smgr->smgr_locator.locator.spcOid,
+									   smgr->smgr_locator.locator.dbOid,
+									   smgr->smgr_locator.locator.relNumber,
+									   smgr->smgr_locator.backend,
 									   isExtend);
 
 	/* Substitute proper block number if caller asked for P_NEW */
 	if (isExtend)
 	{
-		blockNum = smgrnblocks(smgr, forkNum);
+		blockNum = smgrnblocks(sfile);
 		/* Fail if relation is already at maximum possible length */
 		if (blockNum == P_NEW)
 			ereport(ERROR,
 					(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
 					 errmsg("cannot extend relation %s beyond %u blocks",
-							relpath(smgr->smgr_rlocator, forkNum),
+							smgrfilepath(sfile->smgr_locator),
 							P_NEW)));
 	}
 
 	if (isLocalBuf)
 	{
-		bufHdr = LocalBufferAlloc(smgr, forkNum, blockNum, &found);
+		bufHdr = LocalBufferAlloc(sfile, blockNum, &found);
 		if (found)
 			pgBufferUsage.local_blks_hit++;
 		else if (isExtend)
@@ -870,7 +875,7 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		 * lookup the buffer.  IO_IN_PROGRESS is set if the requested block is
 		 * not currently in memory.
 		 */
-		bufHdr = BufferAlloc(smgr, relpersistence, forkNum, blockNum,
+		bufHdr = BufferAlloc(sfile, relpersistence, blockNum,
 							 strategy, &found);
 		if (found)
 			pgBufferUsage.shared_blks_hit++;
@@ -895,11 +900,12 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 			if (VacuumCostActive)
 				VacuumCostBalance += VacuumCostPageHit;
 
-			TRACE_POSTGRESQL_BUFFER_READ_DONE(forkNum, blockNum,
-											  smgr->smgr_rlocator.locator.spcOid,
-											  smgr->smgr_rlocator.locator.dbOid,
-											  smgr->smgr_rlocator.locator.relNumber,
-											  smgr->smgr_rlocator.backend,
+			TRACE_POSTGRESQL_BUFFER_READ_DONE(sfile->smgr_forknum,
+											  blockNum,
+											  sfile->smgr_rlocator.locator.spcOid,
+											  sfile->smgr_rlocator.locator.dbOid,
+											  sfile->smgr_rlocator.locator.relNumber,
+											  sfile->smgr_rlocator.backend,
 											  isExtend,
 											  found);
 
@@ -936,7 +942,7 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		if (!PageIsNew((Page) bufBlock))
 			ereport(ERROR,
 					(errmsg("unexpected data beyond EOF in block %u of relation %s",
-							blockNum, relpath(smgr->smgr_rlocator, forkNum)),
+							blockNum, smgrfilepath(sfile->smgr_locator)),
 					 errhint("This has been seen to occur with buggy kernels; consider updating your system.")));
 
 		/*
@@ -993,7 +999,7 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		/* new buffers are zero-filled */
 		MemSet((char *) bufBlock, 0, BLCKSZ);
 		/* don't set checksum for all-zero page */
-		smgrextend(smgr, forkNum, blockNum, (char *) bufBlock, false);
+		smgrextend(sfile, blockNum, (char *) bufBlock, false);
 
 		/*
 		 * NB: we're *not* doing a ScheduleBufferTagForWriteback here;
@@ -1018,7 +1024,7 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 			if (track_io_timing)
 				INSTR_TIME_SET_CURRENT(io_start);
 
-			smgrread(smgr, forkNum, blockNum, (char *) bufBlock);
+			smgrread(sfile, blockNum, (char *) bufBlock);
 
 			if (track_io_timing)
 			{
@@ -1029,8 +1035,8 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 			}
 
 			/* check for garbage data */
-			if (!PageIsVerifiedExtended((Page) bufBlock, blockNum,
-										PIV_LOG_WARNING | PIV_REPORT_STAT))
+			if ((!PageIsVerifiedExtended((Page) bufBlock, blockNum,
+										PIV_LOG_WARNING | PIV_REPORT_STAT)) && !(mode == RBM_TRIM))
 			{
 				if (mode == RBM_ZERO_ON_ERROR || zero_damaged_pages)
 				{
@@ -1038,7 +1044,7 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 							(errcode(ERRCODE_DATA_CORRUPTED),
 							 errmsg("invalid page in block %u of relation %s; zeroing out page",
 									blockNum,
-									relpath(smgr->smgr_rlocator, forkNum))));
+									smgrfilepath(sfile->smgr_locator))));
 					MemSet((char *) bufBlock, 0, BLCKSZ);
 				}
 				else
@@ -1046,7 +1052,7 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 							(errcode(ERRCODE_DATA_CORRUPTED),
 							 errmsg("invalid page in block %u of relation %s",
 									blockNum,
-									relpath(smgr->smgr_rlocator, forkNum))));
+									smgrfilepath(sfile->smgr_locator))));
 			}
 		}
 	}
@@ -1085,11 +1091,12 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	if (VacuumCostActive)
 		VacuumCostBalance += VacuumCostPageMiss;
 
-	TRACE_POSTGRESQL_BUFFER_READ_DONE(forkNum, blockNum,
-									  smgr->smgr_rlocator.locator.spcOid,
-									  smgr->smgr_rlocator.locator.dbOid,
-									  smgr->smgr_rlocator.locator.relNumber,
-									  smgr->smgr_rlocator.backend,
+	TRACE_POSTGRESQL_BUFFER_READ_DONE(sfile->smgr_locator.forknum,
+									  blockNum,
+									  sfile->smgr_locator.locator.spcOid,
+									  sfile->smgr_locator.locator.dbOid,
+									  sfile->smgr_locator.locator.relNumber,
+									  sfile->smgr_locator.backend,
 									  isExtend,
 									  found);
 
@@ -1116,7 +1123,7 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
  * No locks are held either at entry or exit.
  */
 static BufferDesc *
-BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
+BufferAlloc(SMgrFileHandle sfile, char relpersistence,
 			BlockNumber blockNum,
 			BufferAccessStrategy strategy,
 			bool *foundPtr)
@@ -1134,7 +1141,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	uint32		buf_state;
 
 	/* create a tag so we can lookup the buffer */
-	InitBufferTag(&newTag, &smgr->smgr_rlocator.locator, forkNum, blockNum);
+	InitBufferTag(&newTag, &sfile->smgr_locator.locator, sfile->smgr_locator.forknum, blockNum);
 
 	/* determine its hash code and partition lock ID */
 	newHash = BufTableHashCode(&newTag);
@@ -1264,10 +1271,11 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 				}
 
 				/* OK, do the I/O */
-				TRACE_POSTGRESQL_BUFFER_WRITE_DIRTY_START(forkNum, blockNum,
-														  smgr->smgr_rlocator.locator.spcOid,
-														  smgr->smgr_rlocator.locator.dbOid,
-														  smgr->smgr_rlocator.locator.relNumber);
+				TRACE_POSTGRESQL_BUFFER_WRITE_DIRTY_START(sfile->smgr_locator.forknum,
+														  blockNum,
+														  sfile->smgr_locator.locator.spcOid,
+														  sfile->smgr_locator.locator.dbOid,
+														  sfile->smgr_locator.locator.relNumber);
 
 				FlushBuffer(buf, NULL);
 				LWLockRelease(BufferDescriptorGetContentLock(buf));
@@ -1275,10 +1283,11 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 				ScheduleBufferTagForWriteback(&BackendWritebackContext,
 											  &buf->tag);
 
-				TRACE_POSTGRESQL_BUFFER_WRITE_DIRTY_DONE(forkNum, blockNum,
-														 smgr->smgr_rlocator.locator.spcOid,
-														 smgr->smgr_rlocator.locator.dbOid,
-														 smgr->smgr_rlocator.locator.relNumber);
+				TRACE_POSTGRESQL_BUFFER_WRITE_DIRTY_DONE(sfile->smgr_locator.forknum,
+														 blockNum,
+														 sfile->smgr_locator.locator.spcOid,
+														 sfile->smgr_locator.locator.dbOid,
+														 sfile->smgr_locator.locator.relNumber);
 			}
 			else
 			{
@@ -1434,7 +1443,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	buf_state &= ~(BM_VALID | BM_DIRTY | BM_JUST_DIRTIED |
 				   BM_CHECKPOINT_NEEDED | BM_IO_ERROR | BM_PERMANENT |
 				   BUF_USAGECOUNT_MASK);
-	if (relpersistence == RELPERSISTENCE_PERMANENT || forkNum == INIT_FORKNUM)
+	if (relpersistence == RELPERSISTENCE_PERMANENT || sfile->smgr_locator.forknum == INIT_FORKNUM)
 		buf_state |= BM_TAG_VALID | BM_PERMANENT | BUF_USAGECOUNT_ONE;
 	else
 		buf_state |= BM_TAG_VALID | BUF_USAGECOUNT_ONE;
@@ -1647,7 +1656,7 @@ ReleaseAndReadBuffer(Buffer buffer,
 					 Relation relation,
 					 BlockNumber blockNum)
 {
-	ForkNumber	forkNum = MAIN_FORKNUM;
+	ForkNumber	forknum = MAIN_FORKNUM;
 	BufferDesc *bufHdr;
 
 	if (BufferIsValid(buffer))
@@ -1658,7 +1667,7 @@ ReleaseAndReadBuffer(Buffer buffer,
 			bufHdr = GetLocalBufferDescriptor(-buffer - 1);
 			if (bufHdr->tag.blockNum == blockNum &&
 				BufTagMatchesRelFileLocator(&bufHdr->tag, &relation->rd_locator) &&
-				BufTagGetForkNum(&bufHdr->tag) == forkNum)
+				BufTagGetForkNum(&bufHdr->tag) == forknum)
 				return buffer;
 			ResourceOwnerForgetBuffer(CurrentResourceOwner, buffer);
 			LocalRefCount[-buffer - 1]--;
@@ -1669,7 +1678,7 @@ ReleaseAndReadBuffer(Buffer buffer,
 			/* we have pin, so it's ok to examine tag without spinlock */
 			if (bufHdr->tag.blockNum == blockNum &&
 				BufTagMatchesRelFileLocator(&bufHdr->tag, &relation->rd_locator) &&
-				BufTagGetForkNum(&bufHdr->tag) == forkNum)
+				BufTagGetForkNum(&bufHdr->tag) == forknum)
 				return buffer;
 			UnpinBuffer(bufHdr);
 		}
@@ -2820,7 +2829,7 @@ BufferGetTag(Buffer buffer, RelFileLocator *rlocator, ForkNumber *forknum,
  * as the second parameter.  If not, pass NULL.
  */
 static void
-FlushBuffer(BufferDesc *buf, SMgrRelation reln)
+FlushBuffer(BufferDesc *buf, SMgrFileHandle sfile)
 {
 	XLogRecPtr	recptr;
 	ErrorContextCallback errcallback;
@@ -2845,14 +2854,14 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 	error_context_stack = &errcallback;
 
 	/* Find smgr relation for buffer */
-	if (reln == NULL)
-		reln = smgropen(BufTagGetRelFileLocator(&buf->tag), InvalidBackendId);
+	if (sfile == NULL)
+		sfile = smgropen(BufTagGetRelFileLocator(&buf->tag), InvalidBackendId, BufTagGetForkNum(&buf->tag));
 
-	TRACE_POSTGRESQL_BUFFER_FLUSH_START(BufTagGetForkNum(&buf->tag),
+	TRACE_POSTGRESQL_BUFFER_FLUSH_START(sfile->smgr_locator.forknum,
 										buf->tag.blockNum,
-										reln->smgr_rlocator.locator.spcOid,
-										reln->smgr_rlocator.locator.dbOid,
-										reln->smgr_rlocator.locator.relNumber);
+										sfile->smgr_locator.locator.spcOid,
+										sfile->smgr_locator.locator.dbOid,
+										sfile->smgr_locator.locator.relNumber);
 
 	buf_state = LockBufHdr(buf);
 
@@ -2906,8 +2915,7 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 	/*
 	 * bufToWrite is either the shared buffer or a copy, as appropriate.
 	 */
-	smgrwrite(reln,
-			  BufTagGetForkNum(&buf->tag),
+	smgrwrite(sfile,
 			  buf->tag.blockNum,
 			  bufToWrite,
 			  false);
@@ -2928,11 +2936,11 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 	 */
 	TerminateBufferIO(buf, true, 0);
 
-	TRACE_POSTGRESQL_BUFFER_FLUSH_DONE(BufTagGetForkNum(&buf->tag),
+	TRACE_POSTGRESQL_BUFFER_FLUSH_DONE(sfile->smgr_locator.forknum,
 									   buf->tag.blockNum,
-									   reln->smgr_rlocator.locator.spcOid,
-									   reln->smgr_rlocator.locator.dbOid,
-									   reln->smgr_rlocator.locator.relNumber);
+									   sfile->smgr_locator.locator.spcOid,
+									   sfile->smgr_locator.locator.dbOid,
+									   sfile->smgr_locator.locator.relNumber);
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
@@ -2947,7 +2955,7 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
  * it might not be.
  */
 BlockNumber
-RelationGetNumberOfBlocksInFork(Relation relation, ForkNumber forkNum)
+RelationGetNumberOfBlocksInFork(Relation relation, ForkNumber forknum)
 {
 	if (RELKIND_HAS_TABLE_AM(relation->rd_rel->relkind))
 	{
@@ -2959,13 +2967,13 @@ RelationGetNumberOfBlocksInFork(Relation relation, ForkNumber forkNum)
 		 */
 		uint64		szbytes;
 
-		szbytes = table_relation_size(relation, forkNum);
+		szbytes = table_relation_size(relation, forknum);
 
 		return (szbytes + (BLCKSZ - 1)) / BLCKSZ;
 	}
 	else if (RELKIND_HAS_STORAGE(relation->rd_rel->relkind))
 	{
-		return smgrnblocks(RelationGetSmgr(relation), forkNum);
+		return smgrnblocks(RelationGetSmgr(relation, forknum));
 	}
 	else
 		Assert(false);
@@ -3028,6 +3036,7 @@ BufferGetLSNAtomic(Buffer buffer)
 
 	buf_state = LockBufHdr(bufHdr);
 	lsn = PageGetLSN(page);
+	
 	UnlockBufHdr(bufHdr, buf_state);
 
 	return lsn;
@@ -3055,26 +3064,20 @@ BufferGetLSNAtomic(Buffer buffer)
  * --------------------------------------------------------------------
  */
 void
-DropRelationBuffers(SMgrRelation smgr_reln, ForkNumber *forkNum,
+DropRelationBuffers(RelFileLocator rlocator, BackendId backend, ForkNumber *forknum,
 					int nforks, BlockNumber *firstDelBlock)
 {
 	int			i;
 	int			j;
-	RelFileLocatorBackend rlocator;
 	BlockNumber nForkBlock[MAX_FORKNUM];
 	uint64		nBlocksToInvalidate = 0;
 
-	rlocator = smgr_reln->smgr_rlocator;
-
 	/* If it's a local relation, it's localbuf.c's problem. */
-	if (RelFileLocatorBackendIsTemp(rlocator))
+	if (backend == MyBackendId)
 	{
-		if (rlocator.backend == MyBackendId)
-		{
-			for (j = 0; j < nforks; j++)
-				DropRelationLocalBuffers(rlocator.locator, forkNum[j],
-										 firstDelBlock[j]);
-		}
+		for (j = 0; j < nforks; j++)
+			DropRelationLocalBuffers(rlocator, forknum[j],
+									 firstDelBlock[j]);
 		return;
 	}
 
@@ -3103,7 +3106,10 @@ DropRelationBuffers(SMgrRelation smgr_reln, ForkNumber *forkNum,
 	for (i = 0; i < nforks; i++)
 	{
 		/* Get the number of blocks for a relation's fork */
-		nForkBlock[i] = smgrnblocks_cached(smgr_reln, forkNum[i]);
+		SMgrFileHandle sfile;
+
+		sfile = smgropen(rlocator, backend, forknum[i]);
+		nForkBlock[i] = smgrnblocks_cached(sfile);
 
 		if (nForkBlock[i] == InvalidBlockNumber)
 		{
@@ -3123,7 +3129,7 @@ DropRelationBuffers(SMgrRelation smgr_reln, ForkNumber *forkNum,
 		nBlocksToInvalidate < BUF_DROP_FULL_SCAN_THRESHOLD)
 	{
 		for (j = 0; j < nforks; j++)
-			FindAndDropRelationBuffers(rlocator.locator, forkNum[j],
+			FindAndDropRelationBuffers(rlocator, forknum[j],
 									   nForkBlock[j], firstDelBlock[j]);
 		return;
 	}
@@ -3146,18 +3152,18 @@ DropRelationBuffers(SMgrRelation smgr_reln, ForkNumber *forkNum,
 		 * false positives are safe because we'll recheck after getting the
 		 * buffer lock.
 		 *
-		 * We could check forkNum and blockNum as well as the rlocator, but
+		 * We could check forknum and blockNum as well as the rlocator, but
 		 * the incremental win from doing so seems small.
 		 */
-		if (!BufTagMatchesRelFileLocator(&bufHdr->tag, &rlocator.locator))
+		if (!BufTagMatchesRelFileLocator(&bufHdr->tag, &rlocator))
 			continue;
 
 		buf_state = LockBufHdr(bufHdr);
 
 		for (j = 0; j < nforks; j++)
 		{
-			if (BufTagMatchesRelFileLocator(&bufHdr->tag, &rlocator.locator) &&
-				BufTagGetForkNum(&bufHdr->tag) == forkNum[j] &&
+			if (BufTagMatchesRelFileLocator(&bufHdr->tag, &rlocator) &&
+				BufTagGetForkNum(&bufHdr->tag) == forknum[j] &&
 				bufHdr->tag.blockNum >= firstDelBlock[j])
 			{
 				InvalidateBuffer(bufHdr);	/* releases spinlock */
@@ -3178,11 +3184,10 @@ DropRelationBuffers(SMgrRelation smgr_reln, ForkNumber *forkNum,
  *		--------------------------------------------------------------------
  */
 void
-DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
+DropRelationsAllBuffers(RelFileLocatorBackend *rlocators, int nlocators)
 {
 	int			i;
 	int			n = 0;
-	SMgrRelation *rels;
 	BlockNumber (*block)[MAX_FORKNUM + 1];
 	uint64		nBlocksToInvalidate = 0;
 	RelFileLocator *locators;
@@ -3192,18 +3197,18 @@ DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
 	if (nlocators == 0)
 		return;
 
-	rels = palloc(sizeof(SMgrRelation) * nlocators);	/* non-local relations */
+	locators = palloc(sizeof(RelFileLocator) * nlocators);	/* non-local relations */
 
 	/* If it's a local relation, it's localbuf.c's problem. */
 	for (i = 0; i < nlocators; i++)
 	{
-		if (RelFileLocatorBackendIsTemp(smgr_reln[i]->smgr_rlocator))
+		if (rlocators[i].backend != InvalidBackendId)
 		{
-			if (smgr_reln[i]->smgr_rlocator.backend == MyBackendId)
-				DropRelationAllLocalBuffers(smgr_reln[i]->smgr_rlocator.locator);
+			if (rlocators[i].backend == MyBackendId)
+				DropRelationAllLocalBuffers(rlocators[i].locator);
 		}
 		else
-			rels[n++] = smgr_reln[i];
+			locators[n++] = rlocators[i].locator;
 	}
 
 	/*
@@ -3212,7 +3217,7 @@ DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
 	 */
 	if (n == 0)
 	{
-		pfree(rels);
+		pfree(locators);
 		return;
 	}
 
@@ -3232,12 +3237,13 @@ DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
 		for (int j = 0; j <= MAX_FORKNUM; j++)
 		{
 			/* Get the number of blocks for a relation's fork. */
-			block[i][j] = smgrnblocks_cached(rels[i], j);
+			SMgrFileHandle sfile = smgropen(locators[i], InvalidBackendId, j);
+			block[i][j] = smgrnblocks_cached(sfile);
 
 			/* We need to only consider the relation forks that exists. */
 			if (block[i][j] == InvalidBlockNumber)
 			{
-				if (!smgrexists(rels[i], j))
+				if (!smgrexists(sfile))
 					continue;
 				cached = false;
 				break;
@@ -3263,20 +3269,17 @@ DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
 					continue;
 
 				/* drop all the buffers for a particular relation fork */
-				FindAndDropRelationBuffers(rels[i]->smgr_rlocator.locator,
+				FindAndDropRelationBuffers(locators[i],
 										   j, block[i][j], 0);
 			}
 		}
 
 		pfree(block);
-		pfree(rels);
+		pfree(locators);
 		return;
 	}
 
 	pfree(block);
-	locators = palloc(sizeof(RelFileLocator) * n);	/* non-local relations */
-	for (i = 0; i < n; i++)
-		locators[i] = rels[i]->smgr_rlocator.locator;
 
 	/*
 	 * For low number of relations to drop just use a simple walk through, to
@@ -3336,7 +3339,6 @@ DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
 	}
 
 	pfree(locators);
-	pfree(rels);
 }
 
 /* ---------------------------------------------------------------------
@@ -3349,7 +3351,7 @@ DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
  * --------------------------------------------------------------------
  */
 static void
-FindAndDropRelationBuffers(RelFileLocator rlocator, ForkNumber forkNum,
+FindAndDropRelationBuffers(RelFileLocator rlocator, ForkNumber forknum,
 						   BlockNumber nForkBlock,
 						   BlockNumber firstDelBlock)
 {
@@ -3365,7 +3367,7 @@ FindAndDropRelationBuffers(RelFileLocator rlocator, ForkNumber forkNum,
 		uint32		buf_state;
 
 		/* create a tag so we can lookup the buffer */
-		InitBufferTag(&bufTag, &rlocator, forkNum, curBlock);
+		InitBufferTag(&bufTag, &rlocator, forknum, curBlock);
 
 		/* determine its hash code and partition lock ID */
 		bufHash = BufTableHashCode(&bufTag);
@@ -3390,7 +3392,7 @@ FindAndDropRelationBuffers(RelFileLocator rlocator, ForkNumber forkNum,
 		buf_state = LockBufHdr(bufHdr);
 
 		if (BufTagMatchesRelFileLocator(&bufHdr->tag, &rlocator) &&
-			BufTagGetForkNum(&bufHdr->tag) == forkNum &&
+			BufTagGetForkNum(&bufHdr->tag) == forknum &&
 			bufHdr->tag.blockNum >= firstDelBlock)
 			InvalidateBuffer(bufHdr);	/* releases spinlock */
 		else
@@ -3545,8 +3547,7 @@ FlushRelationBuffers(Relation rel)
 
 				PageSetChecksumInplace(localpage, bufHdr->tag.blockNum);
 
-				smgrwrite(RelationGetSmgr(rel),
-						  BufTagGetForkNum(&bufHdr->tag),
+				smgrwrite(RelationGetSmgr(rel, BufTagGetForkNum(&bufHdr->tag)),
 						  bufHdr->tag.blockNum,
 						  localpage,
 						  false);
@@ -3586,7 +3587,7 @@ FlushRelationBuffers(Relation rel)
 		{
 			PinBuffer_Locked(bufHdr);
 			LWLockAcquire(BufferDescriptorGetContentLock(bufHdr), LW_SHARED);
-			FlushBuffer(bufHdr, RelationGetSmgr(rel));
+			FlushBuffer(bufHdr, RelationGetSmgr(rel, bufHdr->tag.forkNum));
 			LWLockRelease(BufferDescriptorGetContentLock(bufHdr));
 			UnpinBuffer(bufHdr);
 		}
@@ -3605,25 +3606,20 @@ FlushRelationBuffers(Relation rel)
  * --------------------------------------------------------------------
  */
 void
-FlushRelationsAllBuffers(SMgrRelation *smgrs, int nrels)
+FlushRelationsAllBuffers(RelFileLocator *rels, int nrels)
 {
 	int			i;
-	SMgrSortArray *srels;
+	RelFileLocator *locators = NULL;
 	bool		use_bsearch;
 
 	if (nrels == 0)
 		return;
 
 	/* fill-in array for qsort */
-	srels = palloc(sizeof(SMgrSortArray) * nrels);
+	locators = palloc(sizeof(RelFileLocator) * nrels);
 
 	for (i = 0; i < nrels; i++)
-	{
-		Assert(!RelFileLocatorBackendIsTemp(smgrs[i]->smgr_rlocator));
-
-		srels[i].rlocator = smgrs[i]->smgr_rlocator.locator;
-		srels[i].srel = smgrs[i];
-	}
+		locators[i] = rels[i];
 
 	/*
 	 * Save the bsearch overhead for low number of relations to sync. See
@@ -3631,16 +3627,16 @@ FlushRelationsAllBuffers(SMgrRelation *smgrs, int nrels)
 	 */
 	use_bsearch = nrels > RELS_BSEARCH_THRESHOLD;
 
-	/* sort the list of SMgrRelations if necessary */
+	/* sort the list of locators if necessary */
 	if (use_bsearch)
-		pg_qsort(srels, nrels, sizeof(SMgrSortArray), rlocator_comparator);
+		pg_qsort(locators, nrels, sizeof(RelFileLocator), rlocator_comparator);
 
 	/* Make sure we can handle the pin inside the loop */
 	ResourceOwnerEnlargeBuffers(CurrentResourceOwner);
 
 	for (i = 0; i < NBuffers; i++)
 	{
-		SMgrSortArray *srelent = NULL;
+		RelFileLocator *found = NULL;
 		BufferDesc *bufHdr = GetBufferDescriptor(i);
 		uint32		buf_state;
 
@@ -3655,9 +3651,9 @@ FlushRelationsAllBuffers(SMgrRelation *smgrs, int nrels)
 
 			for (j = 0; j < nrels; j++)
 			{
-				if (BufTagMatchesRelFileLocator(&bufHdr->tag, &srels[j].rlocator))
+				if (BufTagMatchesRelFileLocator(&bufHdr->tag, &locators[j]))
 				{
-					srelent = &srels[j];
+					found = &locators[j];
 					break;
 				}
 			}
@@ -3667,24 +3663,26 @@ FlushRelationsAllBuffers(SMgrRelation *smgrs, int nrels)
 			RelFileLocator rlocator;
 
 			rlocator = BufTagGetRelFileLocator(&bufHdr->tag);
-			srelent = bsearch((const void *) &(rlocator),
-							  srels, nrels, sizeof(SMgrSortArray),
+			found = bsearch((const void *) &(rlocator),
+							  locators, nrels, sizeof(RelFileLocator),
 							  rlocator_comparator);
 		}
 
 		/* buffer doesn't belong to any of the given relfilelocators; skip it */
-		if (srelent == NULL)
+		if (found == NULL)
 			continue;
+
+		/* FIXME: cache SMgrFileHandles for the rels, and pass to FlushBuffer */
 
 		ReservePrivateRefCountEntry();
 
 		buf_state = LockBufHdr(bufHdr);
-		if (BufTagMatchesRelFileLocator(&bufHdr->tag, &srelent->rlocator) &&
+		if (BufTagMatchesRelFileLocator(&bufHdr->tag, found) &&
 			(buf_state & (BM_VALID | BM_DIRTY)) == (BM_VALID | BM_DIRTY))
 		{
 			PinBuffer_Locked(bufHdr);
 			LWLockAcquire(BufferDescriptorGetContentLock(bufHdr), LW_SHARED);
-			FlushBuffer(bufHdr, srelent->srel);
+			FlushBuffer(bufHdr, NULL);
 			LWLockRelease(BufferDescriptorGetContentLock(bufHdr));
 			UnpinBuffer(bufHdr);
 		}
@@ -3692,7 +3690,7 @@ FlushRelationsAllBuffers(SMgrRelation *smgrs, int nrels)
 			UnlockBufHdr(bufHdr, buf_state);
 	}
 
-	pfree(srels);
+	pfree(locators);
 }
 
 /* ---------------------------------------------------------------------
@@ -3708,7 +3706,7 @@ FlushRelationsAllBuffers(SMgrRelation *smgrs, int nrels)
 static void
 RelationCopyStorageUsingBuffer(RelFileLocator srclocator,
 							   RelFileLocator dstlocator,
-							   ForkNumber forkNum, bool permanent)
+							   ForkNumber forknum, bool permanent)
 {
 	Buffer		srcBuf;
 	Buffer		dstBuf;
@@ -3726,11 +3724,11 @@ RelationCopyStorageUsingBuffer(RelFileLocator srclocator,
 	 * can skip it when copying any fork of an unlogged relation other than
 	 * the init fork.
 	 */
-	use_wal = XLogIsNeeded() && (permanent || forkNum == INIT_FORKNUM);
+	use_wal = XLogIsNeeded() && (permanent || forknum == INIT_FORKNUM);
 
 	/* Get number of blocks in the source relation. */
-	nblocks = smgrnblocks(smgropen(srclocator, InvalidBackendId),
-						  forkNum);
+	nblocks = smgrnblocks(smgropen(srclocator, InvalidBackendId, forknum));
+						  
 
 	/* Nothing to copy; just return. */
 	if (nblocks == 0)
@@ -3741,7 +3739,7 @@ RelationCopyStorageUsingBuffer(RelFileLocator srclocator,
 	 * relation before starting to copy block by block.
 	 */
 	memset(buf.data, 0, BLCKSZ);
-	smgrextend(smgropen(dstlocator, InvalidBackendId), forkNum, nblocks - 1,
+	smgrextend(smgropen(dstlocator, InvalidBackendId, forknum), nblocks - 1,
 			   buf.data, true);
 
 	/* This is a bulk operation, so use buffer access strategies. */
@@ -3754,14 +3752,14 @@ RelationCopyStorageUsingBuffer(RelFileLocator srclocator,
 		CHECK_FOR_INTERRUPTS();
 
 		/* Read block from source relation. */
-		srcBuf = ReadBufferWithoutRelcache(srclocator, forkNum, blkno,
+		srcBuf = ReadBufferWithoutRelcache(srclocator, forknum, blkno,
 										   RBM_NORMAL, bstrategy_src,
 										   permanent);
 		LockBuffer(srcBuf, BUFFER_LOCK_SHARE);
 		srcPage = BufferGetPage(srcBuf);
 
 		/* Use P_NEW to extend the destination relation. */
-		dstBuf = ReadBufferWithoutRelcache(dstlocator, forkNum, blkno,
+		dstBuf = ReadBufferWithoutRelcache(dstlocator, forknum, blkno,
 										   RBM_NORMAL, bstrategy_dst,
 										   permanent);
 		LockBuffer(dstBuf, BUFFER_LOCK_EXCLUSIVE);
@@ -3799,7 +3797,6 @@ void
 CreateAndCopyRelationData(RelFileLocator src_rlocator,
 						  RelFileLocator dst_rlocator, bool permanent)
 {
-	RelFileLocatorBackend rlocator;
 	char		relpersistence;
 
 	/* Set the relpersistence. */
@@ -3819,34 +3816,30 @@ CreateAndCopyRelationData(RelFileLocator src_rlocator,
 								   permanent);
 
 	/* copy those extra forks that exist */
-	for (ForkNumber forkNum = MAIN_FORKNUM + 1;
-		 forkNum <= MAX_FORKNUM; forkNum++)
+	for (ForkNumber forknum = MAIN_FORKNUM + 1;
+		 forknum <= MAX_FORKNUM; forknum++)
 	{
-		if (smgrexists(smgropen(src_rlocator, InvalidBackendId), forkNum))
+		if (smgrexists(smgropen(src_rlocator, InvalidBackendId, forknum)))
 		{
-			smgrcreate(smgropen(dst_rlocator, InvalidBackendId), forkNum, false);
+			smgrcreate(smgropen(dst_rlocator, InvalidBackendId, forknum), false);
 
 			/*
 			 * WAL log creation if the relation is persistent, or this is the
 			 * init fork of an unlogged relation.
 			 */
-			if (permanent || forkNum == INIT_FORKNUM)
-				log_smgrcreate(&dst_rlocator, forkNum);
+			if (permanent || forknum == INIT_FORKNUM)
+				log_smgrcreate(&dst_rlocator, forknum);
 
 			/* Copy a fork's data, block by block. */
-			RelationCopyStorageUsingBuffer(src_rlocator, dst_rlocator, forkNum,
+			RelationCopyStorageUsingBuffer(src_rlocator, dst_rlocator, forknum,
 										   permanent);
 		}
 	}
 
-	/* close source and destination smgr if exists. */
-	rlocator.backend = InvalidBackendId;
 
-	rlocator.locator = src_rlocator;
-	smgrcloserellocator(rlocator);
+	smgrcloserellocator(src_rlocator, InvalidBackendId);
 
-	rlocator.locator = dst_rlocator;
-	smgrcloserellocator(rlocator);
+	smgrcloserellocator(dst_rlocator, InvalidBackendId);
 }
 
 /* ---------------------------------------------------------------------
@@ -4967,7 +4960,7 @@ IssuePendingWritebacks(WritebackContext *context)
 	{
 		PendingWriteback *cur;
 		PendingWriteback *next;
-		SMgrRelation reln;
+		SMgrFileHandle sfile;
 		int			ahead;
 		BufferTag	tag;
 		RelFileLocator currlocator;
@@ -5007,8 +5000,8 @@ IssuePendingWritebacks(WritebackContext *context)
 		i += ahead;
 
 		/* and finally tell the kernel to write the data to storage */
-		reln = smgropen(currlocator, InvalidBackendId);
-		smgrwriteback(reln, BufTagGetForkNum(&tag), tag.blockNum, nblocks);
+		sfile = smgropen(currlocator, InvalidBackendId, BufTagGetForkNum(&tag));
+		smgrwriteback(sfile, tag.blockNum, nblocks);
 	}
 
 	context->nr_pending = 0;
@@ -5029,4 +5022,30 @@ TestForOldSnapshot_impl(Snapshot snapshot, Relation relation)
 		ereport(ERROR,
 				(errcode(ERRCODE_SNAPSHOT_TOO_OLD),
 				 errmsg("snapshot too old")));
+}
+
+/*
+ * Check if a buffer tag is currently mapped.
+ *
+ * XXX Dubious semantics; needed only for multixact's handling for
+ * inconsistent states.
+ */
+bool
+BufferProbe(RelFileLocator rlocator, ForkNumber forknum, BlockNumber blockNum)
+{
+	BufferTag	tag;
+	uint32		hash;
+	LWLock	   *partitionLock;
+	int			buf_id;
+
+	InitBufferTag(&tag, &rlocator, forknum, blockNum);
+
+	hash = BufTableHashCode(&tag);
+	partitionLock = BufMappingPartitionLock(hash);
+
+	LWLockAcquire(partitionLock, LW_SHARED);
+	buf_id = BufTableLookup(&tag, hash);
+	LWLockRelease(partitionLock);
+
+	return buf_id >= 0;
 }

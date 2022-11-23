@@ -38,26 +38,34 @@
 
 #include "postgres_fe.h"
 
+#include <dirent.h>
 #include <time.h>
+#include <unistd.h>
 
 #ifdef HAVE_LANGINFO_H
 #include <langinfo.h>
 #endif
 
+#include "access/slrudefs.h"
 #include "catalog/pg_class_d.h"
 #include "common/file_perm.h"
 #include "common/logging.h"
 #include "common/restricted_token.h"
 #include "fe_utils/string_utils.h"
 #include "pg_upgrade.h"
+#include "storage/bufpage.h"
 
 static void prepare_new_cluster(void);
 static void prepare_new_globals(void);
 static void create_new_objects(void);
 static void copy_xact_xlog_xid(void);
-static void set_frozenxids(bool minmxid_only);
+static void set_frozenxids(bool minmxid_only);;
 static void make_outputdirs(char *pgdata);
 static void setup(char *argv0, bool *live_check);
+
+
+#define MAXBUFSIZE (BLCKSZ - SizeOfPageHeaderData)
+#define SLRU_PAGES_PER_SEGMENT 32
 
 ClusterInfo old_cluster,
 			new_cluster;
@@ -573,11 +581,36 @@ copy_xact_xlog_xid(void)
 	 * Copy old commit logs to new data dir. pg_clog has been renamed to
 	 * pg_xact in post-10 clusters.
 	 */
-	copy_subdir_files(GET_MAJOR_VERSION(old_cluster.major_version) <= 906 ?
-					  "pg_clog" : "pg_xact",
-					  GET_MAJOR_VERSION(new_cluster.major_version) <= 906 ?
-					  "pg_clog" : "pg_xact");
+	 
+	if (old_cluster.controldata.cat_ver <= CLOG_FORMATCHANGE_CAT_VER &&
+		new_cluster.controldata.cat_ver >= CLOG_FORMATCHANGE_CAT_VER)
+	{
+			int ret;
+			ret = copy_to_new_format(GET_MAJOR_VERSION(old_cluster.major_version) <= 906 ?
+			"pg_clog" : "pg_xact", 
+			"pg_xact", 1);
+			
+			if (ret < 0)
+			{
+				pg_fatal("could not reformat clog files");
+			}
+	}
 
+	if (old_cluster.controldata.cat_ver >= CLOG_FORMATCHANGE_CAT_VER &&
+		new_cluster.controldata.cat_ver >= CLOG_FORMATCHANGE_CAT_VER)
+	{
+		copy_subdir_files("pg_xact", "pg_xact");
+	}
+
+	if (old_cluster.controldata.cat_ver <= CLOG_FORMATCHANGE_CAT_VER &&
+		new_cluster.controldata.cat_ver <= CLOG_FORMATCHANGE_CAT_VER)
+	{
+		copy_subdir_files(GET_MAJOR_VERSION(old_cluster.major_version) <= 906 ?
+					"pg_clog" : "pg_xact",
+					GET_MAJOR_VERSION(new_cluster.major_version) <= 906 ?
+					"pg_clog" : "pg_xact");
+	}
+	
 	prep_status("Setting oldest XID for new cluster");
 	exec_prog(UTILITY_LOG_FILE, NULL, true, true,
 			  "\"%s/pg_resetwal\" -f -u %u \"%s\"",
@@ -633,23 +666,44 @@ copy_xact_xlog_xid(void)
 	}
 	else if (new_cluster.controldata.cat_ver >= MULTIXACT_FORMATCHANGE_CAT_VER)
 	{
+		copy_to_new_format("pg_multixact/offsets", "pg_multixact/offsets", MULTIXACT_MEMBER_ENTRY_SIZE);
+		copy_to_new_format("pg_multixact/members", "pg_multixact/members", MULTIXACT_OFFSET_ENTRY_SIZE);	 
+
+
+		prep_status("Setting next multixact ID and offset for new cluster");
+
 		/*
+		 * we preserve all files and contents, so we must preserve both "next"
+		 * counters here and the oldest multi present on system.
+		 */
+		exec_prog(UTILITY_LOG_FILE, NULL, true, true,
+				  "\"%s/pg_resetwal\" -O %u -m %u,%u \"%s\"",
+				  new_cluster.bindir,
+				  old_cluster.controldata.chkpnt_nxtmxoff,
+				  old_cluster.controldata.chkpnt_nxtmulti,
+				  old_cluster.controldata.chkpnt_oldstMulti,
+				  new_cluster.pgdata);
+		check_ok();
+
+	}
+	/*else if (new_cluster.controldata.cat_ver >= MULTIXACT_FORMATCHANGE_CAT_VER)
+	{
+		*
 		 * Remove offsets/0000 file created by initdb that no longer matches
 		 * the new multi-xid value.  "members" starts at zero so no need to
 		 * remove it.
-		 */
+		 *
 		remove_new_subdir("pg_multixact/offsets", false);
 
 		prep_status("Setting oldest multixact ID in new cluster");
-
-		/*
+ 		*
 		 * We don't preserve files in this case, but it's important that the
 		 * oldest multi is set to the latest value used by the old system, so
 		 * that multixact.c returns the empty set for multis that might be
 		 * present on disk.  We set next multi to the value following that; it
 		 * might end up wrapped around (i.e. 0) if the old cluster had
 		 * next=MaxMultiXactId, but multixact.c can cope with that just fine.
-		 */
+		 *
 		exec_prog(UTILITY_LOG_FILE, NULL, true, true,
 				  "\"%s/pg_resetwal\" -m %u,%u \"%s\"",
 				  new_cluster.bindir,
@@ -657,7 +711,8 @@ copy_xact_xlog_xid(void)
 				  old_cluster.controldata.chkpnt_nxtmulti,
 				  new_cluster.pgdata);
 		check_ok();
-	}
+		
+	}*/
 
 	/* now reset the wal archives in the new cluster */
 	prep_status("Resetting WAL archives");
@@ -668,7 +723,6 @@ copy_xact_xlog_xid(void)
 			  new_cluster.pgdata);
 	check_ok();
 }
-
 
 /*
  *	set_frozenxids()

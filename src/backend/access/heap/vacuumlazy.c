@@ -658,7 +658,7 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 				 * Aggressiveness already reported earlier, in dedicated
 				 * VACUUM VERBOSE ereport
 				 */
-				Assert(!params->is_wraparound);
+				Assert(!params->is_wraparound && !params->is_insert);
 				msgfmt = _("finished vacuuming \"%s.%s.%s\": index scans: %d\n");
 			}
 			else if (params->is_wraparound)
@@ -669,13 +669,23 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 				 * implies aggressive.  Produce distinct output for the corner
 				 * case all the same, just in case.
 				 */
+				Assert(!params->is_insert);
 				if (aggressive)
 					msgfmt = _("automatic aggressive vacuum to prevent wraparound of table \"%s.%s.%s\": index scans: %d\n");
 				else
 					msgfmt = _("automatic vacuum to prevent wraparound of table \"%s.%s.%s\": index scans: %d\n");
 			}
+			else if (params->is_insert)
+			{
+				/* Inserted tuples crossed autovacuum.c's threshold */
+				if (aggressive)
+					msgfmt = _("automatic aggressive vacuum for inserted tuples of table \"%s.%s.%s\": index scans: %d\n");
+				else
+					msgfmt = _("automatic vacuum for inserted tuples of table \"%s.%s.%s\": index scans: %d\n");
+			}
 			else
 			{
+				/* Dead tuples crossed autovacuum.c's threshold */
 				if (aggressive)
 					msgfmt = _("automatic aggressive vacuum of table \"%s.%s.%s\": index scans: %d\n");
 				else

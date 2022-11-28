@@ -14,6 +14,7 @@
 #include "access/htup_details.h"
 #include "access/visibilitymap.h"
 #include "access/xloginsert.h"
+#include "catalog/catalog.h"
 #include "catalog/pg_type.h"
 #include "catalog/storage_xlog.h"
 #include "funcapi.h"
@@ -652,6 +653,8 @@ collect_corrupt_items(Oid relid, bool all_visible, bool all_frozen)
 			tuple.t_data = (HeapTupleHeader) PageGetItem(page, itemid);
 			tuple.t_len = ItemIdGetLength(itemid);
 			tuple.t_tableOid = relid;
+			HeapTupleCopyXidsFromPage(buffer, &tuple, page,
+									  IsToastRelation(rel));
 
 			/*
 			 * If we're checking whether the page is all-visible, we expect
@@ -695,7 +698,7 @@ collect_corrupt_items(Oid relid, bool all_visible, bool all_frozen)
 			 */
 			if (check_frozen)
 			{
-				if (heap_tuple_needs_eventual_freeze(tuple.t_data))
+				if (heap_tuple_needs_eventual_freeze(&tuple))
 					record_corrupt_item(items, &tuple.t_self);
 			}
 		}
@@ -758,7 +761,7 @@ tuple_all_visible(HeapTuple tup, TransactionId OldestXmin, Buffer buffer)
 	 * be set here.  So just check the xmin.
 	 */
 
-	xmin = HeapTupleHeaderGetXmin(tup->t_data);
+	xmin = HeapTupleGetXmin(tup);
 	if (!TransactionIdPrecedes(xmin, OldestXmin))
 		return false;			/* xmin not old enough for all to see */
 

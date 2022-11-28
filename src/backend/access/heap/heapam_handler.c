@@ -413,7 +413,7 @@ tuple_lock_retry:
 					 * changes in an existing tuple, except to invalid or
 					 * frozen, and neither of those can match priorXmax.)
 					 */
-					if (!TransactionIdEquals(HeapTupleHeaderGetXmin(tuple->t_data),
+					if (!TransactionIdEquals(HeapTupleGetXmin(tuple),
 											 priorXmax))
 					{
 						ReleaseBuffer(buffer);
@@ -424,8 +424,8 @@ tuple_lock_retry:
 					if (TransactionIdIsValid(SnapshotDirty.xmin))
 						ereport(ERROR,
 								(errcode(ERRCODE_DATA_CORRUPTED),
-								 errmsg_internal("t_xmin %u is uncommitted in tuple (%u,%u) to be updated in table \"%s\"",
-												 SnapshotDirty.xmin,
+								 errmsg_internal("t_xmin %llu is uncommitted in tuple (%u,%u) to be updated in table \"%s\"",
+												 (unsigned long long) SnapshotDirty.xmin,
 												 ItemPointerGetBlockNumber(&tuple->t_self),
 												 ItemPointerGetOffsetNumber(&tuple->t_self),
 												 RelationGetRelationName(relation))));
@@ -473,7 +473,7 @@ tuple_lock_retry:
 					 * variable instead of doing HeapTupleHeaderGetXmin again.
 					 */
 					if (TransactionIdIsCurrentTransactionId(priorXmax) &&
-						HeapTupleHeaderGetCmin(tuple->t_data) >= cid)
+						HeapTupleGetCmin(tuple) >= cid)
 					{
 						tmfd->xmax = priorXmax;
 
@@ -481,7 +481,7 @@ tuple_lock_retry:
 						 * Cmin is the problematic value, so store that. See
 						 * above.
 						 */
-						tmfd->cmax = HeapTupleHeaderGetCmin(tuple->t_data);
+						tmfd->cmax = HeapTupleGetCmin(tuple);
 						ReleaseBuffer(buffer);
 						return TM_SelfModified;
 					}
@@ -507,7 +507,7 @@ tuple_lock_retry:
 				/*
 				 * As above, if xmin isn't what we're expecting, do nothing.
 				 */
-				if (!TransactionIdEquals(HeapTupleHeaderGetXmin(tuple->t_data),
+				if (!TransactionIdEquals(HeapTupleGetXmin(tuple),
 										 priorXmax))
 				{
 					ReleaseBuffer(buffer);
@@ -538,7 +538,7 @@ tuple_lock_retry:
 				/* updated, so look at the updated row */
 				*tid = tuple->t_data->t_ctid;
 				/* updated row should have xmin matching this xmax */
-				priorXmax = HeapTupleHeaderGetUpdateXid(tuple->t_data);
+				priorXmax = HeapTupleGetUpdateXidAny(tuple);
 				ReleaseBuffer(buffer);
 				/* loop back to fetch next in chain */
 			}
@@ -858,7 +858,7 @@ heapam_relation_copy_for_cluster(Relation OldHeap, Relation NewHeap,
 				 * case we had better copy it.
 				 */
 				if (!is_system_catalog &&
-					!TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetXmin(tuple->t_data)))
+					!TransactionIdIsCurrentTransactionId(HeapTupleGetXmin(tuple)))
 					elog(WARNING, "concurrent insert in progress within table \"%s\"",
 						 RelationGetRelationName(OldHeap));
 				/* treat as live */
@@ -870,7 +870,7 @@ heapam_relation_copy_for_cluster(Relation OldHeap, Relation NewHeap,
 				 * Similar situation to INSERT_IN_PROGRESS case.
 				 */
 				if (!is_system_catalog &&
-					!TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetUpdateXid(tuple->t_data)))
+					!TransactionIdIsCurrentTransactionId(HeapTupleGetUpdateXidAny(tuple)))
 					elog(WARNING, "concurrent delete in progress within table \"%s\"",
 						 RelationGetRelationName(OldHeap));
 				/* treat as recently dead */
@@ -1055,6 +1055,8 @@ heapam_scan_analyze_next_tuple(TableScanDesc scan, TransactionId OldestXmin,
 		targtuple->t_tableOid = RelationGetRelid(scan->rs_rd);
 		targtuple->t_data = (HeapTupleHeader) PageGetItem(targpage, itemid);
 		targtuple->t_len = ItemIdGetLength(itemid);
+		HeapTupleCopyXidsFromPage(hscan->rs_cbuf, targtuple, targpage,
+								  IsToastRelation(scan->rs_rd));
 
 		switch (HeapTupleSatisfiesVacuum(targtuple, OldestXmin,
 										 hscan->rs_cbuf))
@@ -1090,7 +1092,7 @@ heapam_scan_analyze_next_tuple(TableScanDesc scan, TransactionId OldestXmin,
 				 * numbers we report to the cumulative stats system to make
 				 * this come out right.)
 				 */
-				if (TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetXmin(targtuple->t_data)))
+				if (TransactionIdIsCurrentTransactionId(HeapTupleGetXmin(targtuple)))
 				{
 					sample_it = true;
 					*liverows += 1;
@@ -1121,7 +1123,7 @@ heapam_scan_analyze_next_tuple(TableScanDesc scan, TransactionId OldestXmin,
 				 * but not the post-image.  We also get sane results if the
 				 * concurrent transaction never commits.
 				 */
-				if (TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetUpdateXid(targtuple->t_data)))
+				if (TransactionIdIsCurrentTransactionId(HeapTupleGetUpdateXidAny(targtuple)))
 					*deadrows += 1;
 				else
 				{
@@ -1370,7 +1372,8 @@ heapam_index_build_range_scan(Relation heapRelation,
 			Page		page = BufferGetPage(hscan->rs_cbuf);
 
 			LockBuffer(hscan->rs_cbuf, BUFFER_LOCK_SHARE);
-			heap_get_root_tuples(page, root_offsets);
+			heap_get_root_tuples(heapRelation, hscan->rs_cbuf, page,
+								 root_offsets);
 			LockBuffer(hscan->rs_cbuf, BUFFER_LOCK_UNLOCK);
 
 			root_blkno = hscan->rs_cblock;
@@ -1463,7 +1466,7 @@ heapam_index_build_range_scan(Relation heapRelation,
 					 * before commit there.  Give a warning if neither case
 					 * applies.
 					 */
-					xwait = HeapTupleHeaderGetXmin(heapTuple->t_data);
+					xwait = HeapTupleGetXmin(heapTuple);
 					if (!TransactionIdIsCurrentTransactionId(xwait))
 					{
 						if (!is_system_catalog)
@@ -1522,7 +1525,7 @@ heapam_index_build_range_scan(Relation heapRelation,
 						break;
 					}
 
-					xwait = HeapTupleHeaderGetUpdateXid(heapTuple->t_data);
+					xwait = HeapTupleGetUpdateXidAny(heapTuple);
 					if (!TransactionIdIsCurrentTransactionId(xwait))
 					{
 						if (!is_system_catalog)
@@ -1667,7 +1670,8 @@ heapam_index_build_range_scan(Relation heapRelation,
 				Page		page = BufferGetPage(hscan->rs_cbuf);
 
 				LockBuffer(hscan->rs_cbuf, BUFFER_LOCK_SHARE);
-				heap_get_root_tuples(page, root_offsets);
+				heap_get_root_tuples(heapRelation, hscan->rs_cbuf, page,
+									 root_offsets);
 				LockBuffer(hscan->rs_cbuf, BUFFER_LOCK_UNLOCK);
 			}
 
@@ -1833,7 +1837,8 @@ heapam_index_validate_scan(Relation heapRelation,
 			Page		page = BufferGetPage(hscan->rs_cbuf);
 
 			LockBuffer(hscan->rs_cbuf, BUFFER_LOCK_SHARE);
-			heap_get_root_tuples(page, root_offsets);
+			heap_get_root_tuples(heapRelation, hscan->rs_cbuf, page,
+								 root_offsets);
 			LockBuffer(hscan->rs_cbuf, BUFFER_LOCK_UNLOCK);
 
 			memset(in_index, 0, sizeof(in_index));
@@ -2171,7 +2176,12 @@ heapam_scan_bitmap_next_block(TableScanDesc scan,
 			ItemPointerSet(&tid, block, offnum);
 			if (heap_hot_search_buffer(&tid, scan->rs_rd, buffer, snapshot,
 									   &heapTuple, NULL, true))
-				hscan->rs_vistuples[ntup++] = ItemPointerGetOffsetNumber(&tid);
+			{
+				hscan->rs_vistuples[ntup] = ItemPointerGetOffsetNumber(&tid);
+				hscan->rs_xmin[ntup] = heapTuple.t_xmin;
+				hscan->rs_xmax[ntup] = heapTuple.t_xmax;
+				++ntup;
+			}
 		}
 	}
 	else
@@ -2196,13 +2206,18 @@ heapam_scan_bitmap_next_block(TableScanDesc scan,
 			loctup.t_data = (HeapTupleHeader) PageGetItem(page, lp);
 			loctup.t_len = ItemIdGetLength(lp);
 			loctup.t_tableOid = scan->rs_rd->rd_id;
+			HeapTupleCopyXidsFromPage(hscan->rs_cbuf, &loctup, page,
+									  IsToastRelation(scan->rs_rd));
 			ItemPointerSet(&loctup.t_self, block, offnum);
 			valid = HeapTupleSatisfiesVisibility(&loctup, snapshot, buffer);
 			if (valid)
 			{
-				hscan->rs_vistuples[ntup++] = offnum;
+				hscan->rs_vistuples[ntup] = offnum;
+				hscan->rs_xmin[ntup] = loctup.t_xmin;
+				hscan->rs_xmax[ntup] = loctup.t_xmax;
+				++ntup;
 				PredicateLockTID(scan->rs_rd, &loctup.t_self, snapshot,
-								 HeapTupleHeaderGetXmin(loctup.t_data));
+								 HeapTupleGetXmin(&loctup));
 			}
 			HeapCheckForSerializableConflictOut(valid, scan->rs_rd, &loctup,
 												buffer, snapshot);
@@ -2215,6 +2230,13 @@ heapam_scan_bitmap_next_block(TableScanDesc scan,
 	hscan->rs_ntuples = ntup;
 
 	return ntup > 0;
+}
+
+static inline void
+HeapTupleSetInvalid(HeapTuple tuple)
+{
+	tuple->t_xmin = InvalidTransactionId;
+	tuple->t_xmax = InvalidTransactionId;
 }
 
 static bool
@@ -2241,6 +2263,8 @@ heapam_scan_bitmap_next_tuple(TableScanDesc scan,
 	hscan->rs_ctup.t_data = (HeapTupleHeader) PageGetItem(page, lp);
 	hscan->rs_ctup.t_len = ItemIdGetLength(lp);
 	hscan->rs_ctup.t_tableOid = scan->rs_rd->rd_id;
+	hscan->rs_ctup.t_xmin = hscan->rs_xmin[hscan->rs_cindex];
+	hscan->rs_ctup.t_xmax = hscan->rs_xmax[hscan->rs_cindex];
 	ItemPointerSet(&hscan->rs_ctup.t_self, hscan->rs_cblock, targoffset);
 
 	pgstat_count_heap_fetch(scan->rs_rd);
@@ -2381,8 +2405,14 @@ heapam_scan_sample_next_tuple(TableScanDesc scan, SampleScanState *scanstate,
 
 			tuple->t_data = (HeapTupleHeader) PageGetItem(page, itemid);
 			tuple->t_len = ItemIdGetLength(itemid);
-			ItemPointerSet(&(tuple->t_self), blockno, tupoffset);
 
+			if (pagemode)
+				HeapTupleSetInvalid(tuple);
+			else
+				HeapTupleCopyXidsFromPage(hscan->rs_cbuf, tuple, page,
+										  IsToastRelation(scan->rs_rd));
+
+			ItemPointerSet(&(tuple->t_self), blockno, tupoffset);
 
 			if (all_visible)
 				visible = true;

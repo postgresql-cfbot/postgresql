@@ -20,10 +20,19 @@
 /*
  * Find the maximum size of a tuple if there are to be N tuples per page.
  */
+#if MAXIMUM_ALIGNOF == 8
 #define MaximumBytesPerTuple(tuplesPerPage) \
 	MAXALIGN_DOWN((BLCKSZ - \
-				   MAXALIGN(SizeOfPageHeaderData + (tuplesPerPage) * sizeof(ItemIdData))) \
+				   MAXALIGN(SizeOfPageHeaderData + (tuplesPerPage) * sizeof(ItemIdData)) - MAXALIGN(sizeof(HeapPageSpecialData))) \
 				  / (tuplesPerPage))
+#elif MAXIMUM_ALIGNOF == 4
+#define MaximumBytesPerTuple(tuplesPerPage) \
+	MAXALIGN_DOWN((BLCKSZ - \
+				   MAXALIGN(SizeOfPageHeaderData + (tuplesPerPage) * sizeof(ItemIdData)) - MAXALIGN(sizeof(ToastPageSpecialData))) \
+				  / (tuplesPerPage))
+#else
+#error "unknown arch bitness"
+#endif
 
 /*
  * These symbols control toaster activation.  If a tuple is larger than

@@ -8,9 +8,9 @@ select '010'::xid,
 	   '42'::xid8,
 	   '0xffffffffffffffff'::xid8,
 	   '-1'::xid8;
- xid | xid |    xid     |    xid     | xid8 | xid8 |         xid8         |         xid8         
------+-----+------------+------------+------+------+----------------------+----------------------
-   8 |  42 | 4294967295 | 4294967295 |    8 |   42 | 18446744073709551615 | 18446744073709551615
+ xid | xid |    xid     |         xid          | xid8 | xid8 |         xid8         |         xid8         
+-----+-----+------------+----------------------+------+------+----------------------+----------------------
+   8 |  42 | 4294967295 | 18446744073709551615 |    8 |   42 | 18446744073709551615 | 18446744073709551615
 (1 row)
 
 -- garbage values are not yet rejected (perhaps they should be)
@@ -381,9 +381,11 @@ SELECT pg_snapshot '1:9223372036854775807:3';
 (1 row)
 
 SELECT pg_snapshot '1:9223372036854775808:3';
-ERROR:  invalid input syntax for type pg_snapshot: "1:9223372036854775808:3"
-LINE 1: SELECT pg_snapshot '1:9223372036854775808:3';
-                           ^
+       pg_snapshot       
+-------------------------
+ 1:9223372036854775808:3
+(1 row)
+
 -- test pg_current_xact_id_if_assigned
 BEGIN;
 SELECT pg_current_xact_id_if_assigned() IS NULL;

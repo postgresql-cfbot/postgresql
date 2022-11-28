@@ -41,18 +41,17 @@
 typedef struct XLogRecord
 {
 	uint32		xl_tot_len;		/* total len of entire record */
+	pg_crc32c	xl_crc;			/* CRC for this record */
 	TransactionId xl_xid;		/* xact id */
 	XLogRecPtr	xl_prev;		/* ptr to previous record in log */
 	uint8		xl_info;		/* flag bits, see below */
 	RmgrId		xl_rmid;		/* resource manager for this record */
-	/* 2 bytes of padding here, initialize to zero */
-	pg_crc32c	xl_crc;			/* CRC for this record */
 
 	/* XLogRecordBlockHeaders and XLogRecordDataHeader follow, no padding */
 
 } XLogRecord;
 
-#define SizeOfXLogRecord	(offsetof(XLogRecord, xl_crc) + sizeof(pg_crc32c))
+#define SizeOfXLogRecord	(offsetof(XLogRecord, xl_rmid) + sizeof(RmgrId))
 
 /*
  * The high 4 bits in xl_info may be used freely by rmgr. The

@@ -197,7 +197,7 @@ WHERE p1.oid != p2.oid AND
 ORDER BY 1, 2;
          proargtypes         |       proargtypes        
 -----------------------------+--------------------------
- integer                     | xid
+ bigint                      | xid
  timestamp without time zone | timestamp with time zone
  bit                         | bit varying
  txid_snapshot               | pg_snapshot
@@ -705,7 +705,7 @@ int8(oid)
 tideq(tid,tid)
 timestamptz_cmp(timestamp with time zone,timestamp with time zone)
 interval_cmp(interval,interval)
-xideqint4(xid,integer)
+xideqint8(xid,bigint)
 timetz_eq(time with time zone,time with time zone)
 timetz_ne(time with time zone,time with time zone)
 timetz_lt(time with time zone,time with time zone)
@@ -819,7 +819,7 @@ pg_lsn_gt(pg_lsn,pg_lsn)
 pg_lsn_ne(pg_lsn,pg_lsn)
 pg_lsn_cmp(pg_lsn,pg_lsn)
 xidneq(xid,xid)
-xidneqint4(xid,integer)
+xidneqint8(xid,bigint)
 sha224(bytea)
 sha256(bytea)
 sha384(bytea)

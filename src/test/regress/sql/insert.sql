@@ -55,7 +55,7 @@ INSERT INTO large_tuple_test (select 3, NULL);
 
 -- now this tuple won't fit on the second page, but the insert should
 -- still succeed by extending the relation
-INSERT INTO large_tuple_test (select 4, repeat('a', 8126));
+INSERT INTO large_tuple_test (select 4, repeat('a', 8112));
 
 DROP TABLE large_tuple_test;
 
@@ -597,3 +597,18 @@ alter table returningwrtest2 drop c;
 alter table returningwrtest attach partition returningwrtest2 for values in (2);
 insert into returningwrtest values (2, 'foo') returning returningwrtest;
 drop table returningwrtest;
+
+-- Check for MaxHeapTupleSize
+create table maxheaptuplesize_test(value text);
+alter table maxheaptuplesize_test alter column value set storage external;
+insert into maxheaptuplesize_test values (repeat('x', 8104));
+insert into maxheaptuplesize_test values (repeat('x', 8112));
+insert into maxheaptuplesize_test values (repeat('x', 8120));
+insert into maxheaptuplesize_test values (repeat('x', 8128));
+insert into maxheaptuplesize_test values (repeat('x', 8136));
+insert into maxheaptuplesize_test values (repeat('x', 8144));
+insert into maxheaptuplesize_test values (repeat('x', 8152));
+insert into maxheaptuplesize_test values (repeat('x', 8160));
+insert into maxheaptuplesize_test values (repeat('x', 8168));
+insert into maxheaptuplesize_test values (repeat('x', 8176));
+drop table maxheaptuplesize_test;

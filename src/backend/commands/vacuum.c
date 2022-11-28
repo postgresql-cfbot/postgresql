@@ -63,13 +63,12 @@
 /*
  * GUC parameters
  */
-int			vacuum_freeze_min_age;
-int			vacuum_freeze_table_age;
-int			vacuum_multixact_freeze_min_age;
-int			vacuum_multixact_freeze_table_age;
-int			vacuum_failsafe_age;
-int			vacuum_multixact_failsafe_age;
-
+int64		vacuum_freeze_min_age;
+int64		vacuum_freeze_table_age;
+int64		vacuum_multixact_freeze_min_age;
+int64		vacuum_multixact_freeze_table_age;
+int64		vacuum_failsafe_age;
+int64		vacuum_multixact_failsafe_age;
 
 /* A few variables that don't seem worth passing around as parameters */
 static MemoryContext vac_context = NULL;
@@ -938,7 +937,7 @@ vacuum_set_xid_limits(Relation rel, const VacuumParams *params,
 					  TransactionId *OldestXmin, MultiXactId *OldestMxact,
 					  TransactionId *FreezeLimit, MultiXactId *MultiXactCutoff)
 {
-	int			freeze_min_age,
+	int64		freeze_min_age,
 				multixact_freeze_min_age,
 				freeze_table_age,
 				multixact_freeze_table_age,
@@ -1022,7 +1021,7 @@ vacuum_set_xid_limits(Relation rel, const VacuumParams *params,
 	 * normally autovacuum_multixact_freeze_max_age, but may be less if we are
 	 * short of multixact member space.
 	 */
-	effective_multixact_freeze_max_age = MultiXactMemberFreezeThreshold();
+	effective_multixact_freeze_max_age = autovacuum_multixact_freeze_max_age;
 
 	/*
 	 * Determine the minimum multixact freeze age to use: as specified by
@@ -1049,8 +1048,9 @@ vacuum_set_xid_limits(Relation rel, const VacuumParams *params,
 	 * held back to an unsafe degree in passing
 	 */
 	safeOldestXmin = nextXID - autovacuum_freeze_max_age;
-	if (!TransactionIdIsNormal(safeOldestXmin))
+	if (nextXID > FirstNormalTransactionId + autovacuum_freeze_max_age)
 		safeOldestXmin = FirstNormalTransactionId;
+
 	safeOldestMxact = nextMXID - effective_multixact_freeze_max_age;
 	if (safeOldestMxact < FirstMultiXactId)
 		safeOldestMxact = FirstMultiXactId;
@@ -1362,6 +1362,9 @@ vac_update_relstats(Relation relation,
 	futurexid = false;
 	if (frozenxid_updated)
 		*frozenxid_updated = false;
+
+	Assert(TransactionIdPrecedesOrEquals(frozenxid, ReadNextTransactionId()));
+
 	if (TransactionIdIsNormal(frozenxid) && oldfrozenxid != frozenxid)
 	{
 		bool		update = false;
@@ -1385,6 +1388,9 @@ vac_update_relstats(Relation relation,
 	futuremxid = false;
 	if (minmulti_updated)
 		*minmulti_updated = false;
+
+	Assert(MultiXactIdPrecedesOrEquals(minmulti, ReadNextMultiXactId()));
+
 	if (MultiXactIdIsValid(minmulti) && oldminmulti != minmulti)
 	{
 		bool		update = false;
@@ -1412,14 +1418,16 @@ vac_update_relstats(Relation relation,
 	if (futurexid)
 		ereport(WARNING,
 				(errcode(ERRCODE_DATA_CORRUPTED),
-				 errmsg_internal("overwrote invalid relfrozenxid value %u with new value %u for table \"%s\"",
-								 oldfrozenxid, frozenxid,
+				 errmsg_internal("overwrote invalid relfrozenxid value %llu with new value %llu for table \"%s\"",
+								 (unsigned long long) oldfrozenxid,
+								 (unsigned long long) frozenxid,
 								 RelationGetRelationName(relation))));
 	if (futuremxid)
 		ereport(WARNING,
 				(errcode(ERRCODE_DATA_CORRUPTED),
-				 errmsg_internal("overwrote invalid relminmxid value %u with new value %u for table \"%s\"",
-								 oldminmulti, minmulti,
+				 errmsg_internal("overwrote invalid relminmxid value %llu with new value %llu for table \"%s\"",
+								 (unsigned long long) oldminmulti,
+								 (unsigned long long) minmulti,
 								 RelationGetRelationName(relation))));
 }
 

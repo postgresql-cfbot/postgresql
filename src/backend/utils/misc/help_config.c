@@ -33,6 +33,7 @@ typedef union
 	struct config_bool _bool;
 	struct config_real real;
 	struct config_int integer;
+	struct config_int64 integer8;
 	struct config_string string;
 	struct config_enum _enum;
 } mixedStruct;
@@ -106,7 +107,12 @@ printMixedStruct(mixedStruct *structToPrint)
 				   structToPrint->integer.min,
 				   structToPrint->integer.max);
 			break;
-
+		case PGC_INT64:
+			printf("INT64\t%lld\t%lld\t%lld\t",
+				   (long long) structToPrint->integer8.reset_val,
+				   (long long) structToPrint->integer8.min,
+				   (long long) structToPrint->integer8.max);
+			break;
 		case PGC_REAL:
 			printf("REAL\t%g\t%g\t%g\t",
 				   structToPrint->real.reset_val,

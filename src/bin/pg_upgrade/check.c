@@ -34,6 +34,8 @@ static void check_for_pg_role_prefix(ClusterInfo *cluster);
 static void check_for_new_tablespace_dir(ClusterInfo *new_cluster);
 static void check_for_user_defined_encoding_conversions(ClusterInfo *cluster);
 static char *get_canonical_locale_name(int category, const char *locale);
+static void check_for_32bit_xid_usage(ClusterInfo *cluster);
+static bool is_xid_wraparound(ClusterInfo *cluster);
 
 
 /*
@@ -83,7 +85,7 @@ output_check_banner(bool live_check)
 
 
 void
-check_and_dump_old_cluster(bool live_check)
+check_and_dump_old_cluster(bool live_check, bool *is_wraparound)
 {
 	/* -- OLD -- */
 
@@ -176,12 +178,25 @@ check_and_dump_old_cluster(bool live_check)
 	if (GET_MAJOR_VERSION(old_cluster.major_version) <= 903)
 		old_9_3_check_for_line_data_type_usage(&old_cluster);
 
+	/* Prepare for 64bit xid */
+	if (old_cluster.controldata.cat_ver < XID_FORMATCHANGE_CAT_VER)
+	{
+		/* Check if 32-bit xid type is used in tables */
+		check_for_32bit_xid_usage(&old_cluster);
+		/* Check indexes to be upgraded */
+		invalidate_spgist_indexes(&old_cluster, true);
+		invalidate_gin_indexes(&old_cluster, true);
+		invalidate_external_indexes(&old_cluster, true);
+	}
+
 	/*
 	 * While not a check option, we do this now because this is the only time
 	 * the old server is running.
 	 */
 	if (!user_opts.check)
 		generate_old_dump();
+
+	*is_wraparound = is_xid_wraparound(&old_cluster);
 
 	if (!live_check)
 		stop_postmaster(false);
@@ -251,6 +266,17 @@ issue_warnings_and_set_wal_level(void)
 	/* Reindex hash indexes for old < 10.0 */
 	if (GET_MAJOR_VERSION(old_cluster.major_version) <= 906)
 		old_9_6_invalidate_hash_indexes(&new_cluster, false);
+
+	/* Raindex for 64bit xid */
+	if (old_cluster.controldata.cat_ver < XID_FORMATCHANGE_CAT_VER)
+	{
+		/* Check if 32-bit xid type is used in tables */
+		check_for_32bit_xid_usage(&old_cluster);
+		/* Check indexes to be upgraded */
+		invalidate_spgist_indexes(&old_cluster, true);
+		invalidate_gin_indexes(&old_cluster, true);
+		invalidate_external_indexes(&old_cluster, true);
+	}
 
 	report_extension_updates(&new_cluster);
 
@@ -1536,4 +1562,125 @@ get_canonical_locale_name(int category, const char *locale)
 	pg_free(save);
 
 	return res;
+}
+
+/*
+ * check_for_32bit_xid_usage()
+ *
+ *	Postgres Pro Enterprise changes xid storage format to 64-bit.  Check if
+ *	xid type is used in tables.
+ */
+static void
+check_for_32bit_xid_usage(ClusterInfo *cluster)
+{
+	int			dbnum;
+	FILE	   *script = NULL;
+	bool		found = false;
+	char		output_path[MAXPGPATH];
+
+	prep_status("Checking for incompatible \"xid\" data type");
+
+	snprintf(output_path, sizeof(output_path), "tables_using_xid.txt");
+
+	for (dbnum = 0; dbnum < cluster->dbarr.ndbs; dbnum++)
+	{
+		PGresult   *res;
+		bool		db_used = false;
+		int			ntups;
+		int			rowno;
+		int			i_nspname,
+					i_relname,
+					i_attname;
+		DbInfo	   *active_db = &cluster->dbarr.dbs[dbnum];
+		PGconn	   *conn = connectToServer(cluster, active_db->db_name);
+
+		/*
+		 * While several relkinds don't store any data, e.g. views, they can
+		 * be used to define data types of other columns, so we check all
+		 * relkinds.
+		 */
+		res = executeQueryOrDie(conn,
+								"SELECT n.nspname, c.relname, a.attname "
+								"FROM	pg_catalog.pg_class c, "
+								"		pg_catalog.pg_namespace n, "
+								"		pg_catalog.pg_attribute a "
+								"WHERE	c.oid = a.attrelid AND "
+								"		a.attnum >= 1 AND "
+								"		a.atttypid = 'pg_catalog.xid'::pg_catalog.regtype AND "
+								"		c.relnamespace = n.oid AND "
+		/* exclude possible orphaned temp tables */
+								"		n.nspname !~ '^pg_temp_' AND "
+								"		n.nspname NOT IN ('pg_catalog', 'information_schema')");
+
+		ntups = PQntuples(res);
+		i_nspname = PQfnumber(res, "nspname");
+		i_relname = PQfnumber(res, "relname");
+		i_attname = PQfnumber(res, "attname");
+		for (rowno = 0; rowno < ntups; rowno++)
+		{
+			found = true;
+			if (script == NULL && (script = fopen_priv(output_path, "w")) == NULL)
+				pg_fatal("could not open file \"%s\": %s\n",
+						 output_path, strerror(errno));
+			if (!db_used)
+			{
+				fprintf(script, "Database: %s\n", active_db->db_name);
+				db_used = true;
+			}
+			fprintf(script, "  %s.%s.%s\n",
+					PQgetvalue(res, rowno, i_nspname),
+					PQgetvalue(res, rowno, i_relname),
+					PQgetvalue(res, rowno, i_attname));
+		}
+
+		PQclear(res);
+
+		PQfinish(conn);
+	}
+
+	if (script)
+		fclose(script);
+
+	if (found)
+	{
+		pg_log(PG_REPORT, "fatal\n");
+		pg_fatal("Your installation contains the \"xid\" data type in user tables.\n"
+				 "The internal format of \"xid\" changed in Postgres Pro Enterprise so this cluster\n"
+				 "cannot currently be upgraded.  Note that even dropped attributes cause a problem.\n"
+				 "You can remove the problem tables and restart the upgrade.\n"
+				 "A list of the problem columns is in the file:\n"
+				 "    %s\n\n", output_path);
+	}
+	else
+		check_ok();
+}
+
+/*
+ * is_xid_wraparound()
+ *
+ * Return true if 32-xid cluster had wraparound.
+ */
+static bool
+is_xid_wraparound(ClusterInfo *cluster)
+{
+	PGconn	   *conn;
+	PGresult   *res;
+	bool		is_wraparound;
+
+	conn = connectToServer(cluster, "template1");
+
+	/*
+	 * txid_current is extended with an "epoch" counter, so to check
+	 * wraparound in old 32-xid cluster we cut epoch by casting to int4.
+	 */
+	res = executeQueryOrDie(conn,
+							"SELECT 1 "
+							"FROM   pg_catalog.pg_database, txid_current() tx "
+							"WHERE  (tx %% 4294967295)::bigint <= datfrozenxid::text::bigint "
+							"LIMIT  1");
+	is_wraparound = PQntuples(res) ? true : false;
+	PQclear(res);
+	PQfinish(conn);
+
+	return is_wraparound;
 }

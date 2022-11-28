@@ -368,12 +368,18 @@ help(const char *progname)
 	printf(_("  -E                 echo statement before execution\n"));
 	printf(_("  -j                 do not use newline as interactive query delimiter\n"));
 	printf(_("  -r FILENAME        send stdout and stderr to given file\n"));
+	printf(_("  -m START_MXID      set initial database cluster multixact id\n"));
+	printf(_("  -o START_MXOFF     set initial database cluster multixact offset\n"));
+	printf(_("  -x START_XID       set initial database cluster xid\n"));
 
 	printf(_("\nOptions for bootstrapping mode:\n"));
 	printf(_("  --boot             selects bootstrapping mode (must be first argument)\n"));
 	printf(_("  --check            selects check mode (must be first argument)\n"));
 	printf(_("  DBNAME             database name (mandatory argument in bootstrapping mode)\n"));
 	printf(_("  -r FILENAME        send stdout and stderr to given file\n"));
+	printf(_("  -m START_MXID      set initial database cluster multixact id\n"));
+	printf(_("  -o START_MXOFF     set initial database cluster multixact offset\n"));
+	printf(_("  -x START_XID       set initial database cluster xid\n"));
 
 	printf(_("\nPlease read the documentation for the complete list of run-time\n"
 			 "configuration settings and how to set them on the command line or in\n"

@@ -428,6 +428,9 @@ typedef struct NullableDatum
 
 #define SIZEOF_DATUM SIZEOF_VOID_P
 
+static uint64 DatumGetUInt64(Datum X);
+static Datum UInt64GetDatum(uint64 X);
+
 /*
  * DatumGetBool
  *		Returns boolean value of a datum.
@@ -609,7 +612,7 @@ ObjectIdGetDatum(Oid X)
 static inline TransactionId
 DatumGetTransactionId(Datum X)
 {
-	return (TransactionId) X;
+	return DatumGetUInt64(X);
 }
 
 /*
@@ -619,7 +622,7 @@ DatumGetTransactionId(Datum X)
 static inline Datum
 TransactionIdGetDatum(TransactionId X)
 {
-	return (Datum) X;
+	return UInt64GetDatum(X);
 }
 
 /*
@@ -629,7 +632,7 @@ TransactionIdGetDatum(TransactionId X)
 static inline Datum
 MultiXactIdGetDatum(MultiXactId X)
 {
-	return (Datum) X;
+	return UInt64GetDatum(X);
 }
 
 /*

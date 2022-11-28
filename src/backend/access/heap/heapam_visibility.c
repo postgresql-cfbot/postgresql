@@ -217,7 +217,7 @@ HeapTupleSatisfiesSelf(HeapTuple htup, Snapshot snapshot, Buffer buffer)
 				}
 			}
 		}
-		else if (TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetRawXmin(tuple)))
+		else if (TransactionIdIsCurrentTransactionId(HeapTupleGetRawXmin(htup)))
 		{
 			if (tuple->t_infomask & HEAP_XMAX_INVALID)	/* xid invalid */
 				return true;
@@ -229,7 +229,7 @@ HeapTupleSatisfiesSelf(HeapTuple htup, Snapshot snapshot, Buffer buffer)
 			{
 				TransactionId xmax;
 
-				xmax = HeapTupleGetUpdateXid(tuple);
+				xmax = HeapTupleGetUpdateXid(htup);
 
 				/* not LOCKED_ONLY, so it has to have an xmax */
 				Assert(TransactionIdIsValid(xmax));
@@ -241,7 +241,7 @@ HeapTupleSatisfiesSelf(HeapTuple htup, Snapshot snapshot, Buffer buffer)
 					return false;
 			}
 
-			if (!TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetRawXmax(tuple)))
+			if (!TransactionIdIsCurrentTransactionId(HeapTupleGetRawXmax(htup)))
 			{
 				/* deleting subtransaction must have aborted */
 				SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
@@ -251,11 +251,11 @@ HeapTupleSatisfiesSelf(HeapTuple htup, Snapshot snapshot, Buffer buffer)
 
 			return false;
 		}
-		else if (TransactionIdIsInProgress(HeapTupleHeaderGetRawXmin(tuple)))
+		else if (TransactionIdIsInProgress(HeapTupleGetRawXmin(htup)))
 			return false;
-		else if (TransactionIdDidCommit(HeapTupleHeaderGetRawXmin(tuple)))
+		else if (TransactionIdDidCommit(HeapTupleGetRawXmin(htup)))
 			SetHintBits(tuple, buffer, HEAP_XMIN_COMMITTED,
-						HeapTupleHeaderGetRawXmin(tuple));
+						HeapTupleGetRawXmin(htup));
 		else
 		{
 			/* it must have aborted or crashed */
@@ -284,7 +284,7 @@ HeapTupleSatisfiesSelf(HeapTuple htup, Snapshot snapshot, Buffer buffer)
 		if (HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_infomask))
 			return true;
 
-		xmax = HeapTupleGetUpdateXid(tuple);
+		xmax = HeapTupleGetUpdateXid(htup);
 
 		/* not LOCKED_ONLY, so it has to have an xmax */
 		Assert(TransactionIdIsValid(xmax));
@@ -299,17 +299,17 @@ HeapTupleSatisfiesSelf(HeapTuple htup, Snapshot snapshot, Buffer buffer)
 		return true;
 	}
 
-	if (TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetRawXmax(tuple)))
+	if (TransactionIdIsCurrentTransactionId(HeapTupleGetRawXmax(htup)))
 	{
 		if (HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_infomask))
 			return true;
 		return false;
 	}
 
-	if (TransactionIdIsInProgress(HeapTupleHeaderGetRawXmax(tuple)))
+	if (TransactionIdIsInProgress(HeapTupleGetRawXmax(htup)))
 		return true;
 
-	if (!TransactionIdDidCommit(HeapTupleHeaderGetRawXmax(tuple)))
+	if (!TransactionIdDidCommit(HeapTupleGetRawXmax(htup)))
 	{
 		/* it must have aborted or crashed */
 		SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
@@ -327,7 +327,7 @@ HeapTupleSatisfiesSelf(HeapTuple htup, Snapshot snapshot, Buffer buffer)
 	}
 
 	SetHintBits(tuple, buffer, HEAP_XMAX_COMMITTED,
-				HeapTupleHeaderGetRawXmax(tuple));
+				HeapTupleGetRawXmax(htup));
 	return false;
 }
 
@@ -416,7 +416,7 @@ HeapTupleSatisfiesToast(HeapTuple htup, Snapshot snapshot,
 		 * is canceled by super-deleting the tuple.  This also applies to
 		 * TOAST tuples created during speculative insertion.
 		 */
-		else if (!TransactionIdIsValid(HeapTupleHeaderGetXmin(tuple)))
+		else if (!TransactionIdIsValid(HeapTupleGetXmin(htup)))
 			return false;
 	}
 
@@ -506,9 +506,9 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
 				}
 			}
 		}
-		else if (TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetRawXmin(tuple)))
+		else if (TransactionIdIsCurrentTransactionId(HeapTupleGetRawXmin(htup)))
 		{
-			if (HeapTupleHeaderGetCmin(tuple) >= curcid)
+			if (HeapTupleGetCmin(htup) >= curcid)
 				return TM_Invisible;	/* inserted after scan started */
 
 			if (tuple->t_infomask & HEAP_XMAX_INVALID)	/* xid invalid */
@@ -518,7 +518,7 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
 			{
 				TransactionId xmax;
 
-				xmax = HeapTupleHeaderGetRawXmax(tuple);
+				xmax = HeapTupleGetRawXmax(htup);
 
 				/*
 				 * Careful here: even though this tuple was created by our own
@@ -549,7 +549,7 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
 			{
 				TransactionId xmax;
 
-				xmax = HeapTupleGetUpdateXid(tuple);
+				xmax = HeapTupleGetUpdateXid(htup);
 
 				/* not LOCKED_ONLY, so it has to have an xmax */
 				Assert(TransactionIdIsValid(xmax));
@@ -557,21 +557,21 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
 				/* deleting subtransaction must have aborted */
 				if (!TransactionIdIsCurrentTransactionId(xmax))
 				{
-					if (MultiXactIdIsRunning(HeapTupleHeaderGetRawXmax(tuple),
+					if (MultiXactIdIsRunning(HeapTupleGetRawXmax(htup),
 											 false))
 						return TM_BeingModified;
 					return TM_Ok;
 				}
 				else
 				{
-					if (HeapTupleHeaderGetCmax(tuple) >= curcid)
+					if (HeapTupleGetCmax(htup) >= curcid)
 						return TM_SelfModified; /* updated after scan started */
 					else
 						return TM_Invisible;	/* updated before scan started */
 				}
 			}
 
-			if (!TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetRawXmax(tuple)))
+			if (!TransactionIdIsCurrentTransactionId(HeapTupleGetRawXmax(htup)))
 			{
 				/* deleting subtransaction must have aborted */
 				SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
@@ -579,16 +579,16 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
 				return TM_Ok;
 			}
 
-			if (HeapTupleHeaderGetCmax(tuple) >= curcid)
+			if (HeapTupleGetCmax(htup) >= curcid)
 				return TM_SelfModified; /* updated after scan started */
 			else
 				return TM_Invisible;	/* updated before scan started */
 		}
-		else if (TransactionIdIsInProgress(HeapTupleHeaderGetRawXmin(tuple)))
+		else if (TransactionIdIsInProgress(HeapTupleGetRawXmin(htup)))
 			return TM_Invisible;
-		else if (TransactionIdDidCommit(HeapTupleHeaderGetRawXmin(tuple)))
+		else if (TransactionIdDidCommit(HeapTupleGetRawXmin(htup)))
 			SetHintBits(tuple, buffer, HEAP_XMIN_COMMITTED,
-						HeapTupleHeaderGetRawXmin(tuple));
+						HeapTupleGetRawXmin(htup));
 		else
 		{
 			/* it must have aborted or crashed */
@@ -622,17 +622,17 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
 
 		if (HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_infomask))
 		{
-			if (MultiXactIdIsRunning(HeapTupleHeaderGetRawXmax(tuple), true))
+			if (MultiXactIdIsRunning(HeapTupleGetRawXmax(htup), true))
 				return TM_BeingModified;
 
 			SetHintBits(tuple, buffer, HEAP_XMAX_INVALID, InvalidTransactionId);
 			return TM_Ok;
 		}
 
-		xmax = HeapTupleGetUpdateXid(tuple);
+		xmax = HeapTupleGetUpdateXid(htup);
 		if (!TransactionIdIsValid(xmax))
 		{
-			if (MultiXactIdIsRunning(HeapTupleHeaderGetRawXmax(tuple), false))
+			if (MultiXactIdIsRunning(HeapTupleGetRawXmax(htup), false))
 				return TM_BeingModified;
 		}
 
@@ -641,13 +641,13 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
 
 		if (TransactionIdIsCurrentTransactionId(xmax))
 		{
-			if (HeapTupleHeaderGetCmax(tuple) >= curcid)
+			if (HeapTupleGetCmax(htup) >= curcid)
 				return TM_SelfModified; /* updated after scan started */
 			else
 				return TM_Invisible;	/* updated before scan started */
 		}
 
-		if (MultiXactIdIsRunning(HeapTupleHeaderGetRawXmax(tuple), false))
+		if (MultiXactIdIsRunning(HeapTupleGetRawXmax(htup), false))
 			return TM_BeingModified;
 
 		if (TransactionIdDidCommit(xmax))
@@ -663,7 +663,7 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
 		 * what about the other members?
 		 */
 
-		if (!MultiXactIdIsRunning(HeapTupleHeaderGetRawXmax(tuple), false))
+		if (!MultiXactIdIsRunning(HeapTupleGetRawXmax(htup), false))
 		{
 			/*
 			 * There's no member, even just a locker, alive anymore, so we can
@@ -680,20 +680,20 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
 		}
 	}
 
-	if (TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetRawXmax(tuple)))
+	if (TransactionIdIsCurrentTransactionId(HeapTupleGetRawXmax(htup)))
 	{
 		if (HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_infomask))
 			return TM_BeingModified;
-		if (HeapTupleHeaderGetCmax(tuple) >= curcid)
+		if (HeapTupleGetCmax(htup) >= curcid)
 			return TM_SelfModified; /* updated after scan started */
 		else
 			return TM_Invisible;	/* updated before scan started */
 	}
 
-	if (TransactionIdIsInProgress(HeapTupleHeaderGetRawXmax(tuple)))
+	if (TransactionIdIsInProgress(HeapTupleGetRawXmax(htup)))
 		return TM_BeingModified;
 
-	if (!TransactionIdDidCommit(HeapTupleHeaderGetRawXmax(tuple)))
+	if (!TransactionIdDidCommit(HeapTupleGetRawXmax(htup)))
 	{
 		/* it must have aborted or crashed */
 		SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
@@ -711,7 +711,7 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
 	}
 
 	SetHintBits(tuple, buffer, HEAP_XMAX_COMMITTED,
-				HeapTupleHeaderGetRawXmax(tuple));
+				HeapTupleGetRawXmax(htup));
 	if (!ItemPointerEquals(&htup->t_self, &tuple->t_ctid))
 		return TM_Updated;		/* updated by other */
 	else
@@ -794,7 +794,7 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
 				}
 			}
 		}
-		else if (TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetRawXmin(tuple)))
+		else if (TransactionIdIsCurrentTransactionId(HeapTupleGetRawXmin(htup)))
 		{
 			if (tuple->t_infomask & HEAP_XMAX_INVALID)	/* xid invalid */
 				return true;
@@ -806,7 +806,7 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
 			{
 				TransactionId xmax;
 
-				xmax = HeapTupleGetUpdateXid(tuple);
+				xmax = HeapTupleGetUpdateXid(htup);
 
 				/* not LOCKED_ONLY, so it has to have an xmax */
 				Assert(TransactionIdIsValid(xmax));
@@ -818,7 +818,7 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
 					return false;
 			}
 
-			if (!TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetRawXmax(tuple)))
+			if (!TransactionIdIsCurrentTransactionId(HeapTupleGetRawXmax(htup)))
 			{
 				/* deleting subtransaction must have aborted */
 				SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
@@ -828,7 +828,7 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
 
 			return false;
 		}
-		else if (TransactionIdIsInProgress(HeapTupleHeaderGetRawXmin(tuple)))
+		else if (TransactionIdIsInProgress(HeapTupleGetRawXmin(htup)))
 		{
 			/*
 			 * Return the speculative token to caller.  Caller can worry about
@@ -844,13 +844,13 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
 				Assert(snapshot->speculativeToken != 0);
 			}
 
-			snapshot->xmin = HeapTupleHeaderGetRawXmin(tuple);
+			snapshot->xmin = HeapTupleGetRawXmin(htup);
 			/* XXX shouldn't we fall through to look at xmax? */
 			return true;		/* in insertion by other */
 		}
-		else if (TransactionIdDidCommit(HeapTupleHeaderGetRawXmin(tuple)))
+		else if (TransactionIdDidCommit(HeapTupleGetRawXmin(htup)))
 			SetHintBits(tuple, buffer, HEAP_XMIN_COMMITTED,
-						HeapTupleHeaderGetRawXmin(tuple));
+						HeapTupleGetRawXmin(htup));
 		else
 		{
 			/* it must have aborted or crashed */
@@ -879,7 +879,7 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
 		if (HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_infomask))
 			return true;
 
-		xmax = HeapTupleGetUpdateXid(tuple);
+		xmax = HeapTupleGetUpdateXid(htup);
 
 		/* not LOCKED_ONLY, so it has to have an xmax */
 		Assert(TransactionIdIsValid(xmax));
@@ -897,21 +897,21 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
 		return true;
 	}
 
-	if (TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetRawXmax(tuple)))
+	if (TransactionIdIsCurrentTransactionId(HeapTupleGetRawXmax(htup)))
 	{
 		if (HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_infomask))
 			return true;
 		return false;
 	}
 
-	if (TransactionIdIsInProgress(HeapTupleHeaderGetRawXmax(tuple)))
+	if (TransactionIdIsInProgress(HeapTupleGetRawXmax(htup)))
 	{
 		if (!HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_infomask))
-			snapshot->xmax = HeapTupleHeaderGetRawXmax(tuple);
+			snapshot->xmax = HeapTupleGetRawXmax(htup);
 		return true;
 	}
 
-	if (!TransactionIdDidCommit(HeapTupleHeaderGetRawXmax(tuple)))
+	if (!TransactionIdDidCommit(HeapTupleGetRawXmax(htup)))
 	{
 		/* it must have aborted or crashed */
 		SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
@@ -929,7 +929,7 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
 	}
 
 	SetHintBits(tuple, buffer, HEAP_XMAX_COMMITTED,
-				HeapTupleHeaderGetRawXmax(tuple));
+				HeapTupleGetRawXmax(htup));
 	return false;				/* updated by other */
 }
 
@@ -1008,9 +1008,9 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
 				}
 			}
 		}
-		else if (TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetRawXmin(tuple)))
+		else if (TransactionIdIsCurrentTransactionId(HeapTupleGetRawXmin(htup)))
 		{
-			if (HeapTupleHeaderGetCmin(tuple) >= snapshot->curcid)
+			if (HeapTupleGetCmin(htup) >= snapshot->curcid)
 				return false;	/* inserted after scan started */
 
 			if (tuple->t_infomask & HEAP_XMAX_INVALID)	/* xid invalid */
@@ -1023,7 +1023,7 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
 			{
 				TransactionId xmax;
 
-				xmax = HeapTupleGetUpdateXid(tuple);
+				xmax = HeapTupleGetUpdateXid(htup);
 
 				/* not LOCKED_ONLY, so it has to have an xmax */
 				Assert(TransactionIdIsValid(xmax));
@@ -1031,13 +1031,13 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
 				/* updating subtransaction must have aborted */
 				if (!TransactionIdIsCurrentTransactionId(xmax))
 					return true;
-				else if (HeapTupleHeaderGetCmax(tuple) >= snapshot->curcid)
+				else if (HeapTupleGetCmax(htup) >= snapshot->curcid)
 					return true;	/* updated after scan started */
 				else
 					return false;	/* updated before scan started */
 			}
 
-			if (!TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetRawXmax(tuple)))
+			if (!TransactionIdIsCurrentTransactionId(HeapTupleGetRawXmax(htup)))
 			{
 				/* deleting subtransaction must have aborted */
 				SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
@@ -1045,16 +1045,16 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
 				return true;
 			}
 
-			if (HeapTupleHeaderGetCmax(tuple) >= snapshot->curcid)
+			if (HeapTupleGetCmax(htup) >= snapshot->curcid)
 				return true;	/* deleted after scan started */
 			else
 				return false;	/* deleted before scan started */
 		}
-		else if (XidInMVCCSnapshot(HeapTupleHeaderGetRawXmin(tuple), snapshot))
+		else if (XidInMVCCSnapshot(HeapTupleGetRawXmin(htup), snapshot))
 			return false;
-		else if (TransactionIdDidCommit(HeapTupleHeaderGetRawXmin(tuple)))
+		else if (TransactionIdDidCommit(HeapTupleGetRawXmin(htup)))
 			SetHintBits(tuple, buffer, HEAP_XMIN_COMMITTED,
-						HeapTupleHeaderGetRawXmin(tuple));
+						HeapTupleGetRawXmin(htup));
 		else
 		{
 			/* it must have aborted or crashed */
@@ -1067,7 +1067,7 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
 	{
 		/* xmin is committed, but maybe not according to our snapshot */
 		if (!HeapTupleHeaderXminFrozen(tuple) &&
-			XidInMVCCSnapshot(HeapTupleHeaderGetRawXmin(tuple), snapshot))
+			XidInMVCCSnapshot(HeapTupleGetRawXmin(htup), snapshot))
 			return false;		/* treat as still in progress */
 	}
 
@@ -1086,14 +1086,14 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
 		/* already checked above */
 		Assert(!HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_infomask));
 
-		xmax = HeapTupleGetUpdateXid(tuple);
+		xmax = HeapTupleGetUpdateXid(htup);
 
 		/* not LOCKED_ONLY, so it has to have an xmax */
 		Assert(TransactionIdIsValid(xmax));
 
 		if (TransactionIdIsCurrentTransactionId(xmax))
 		{
-			if (HeapTupleHeaderGetCmax(tuple) >= snapshot->curcid)
+			if (HeapTupleGetCmax(htup) >= snapshot->curcid)
 				return true;	/* deleted after scan started */
 			else
 				return false;	/* deleted before scan started */
@@ -1108,18 +1108,18 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
 
 	if (!(tuple->t_infomask & HEAP_XMAX_COMMITTED))
 	{
-		if (TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetRawXmax(tuple)))
+		if (TransactionIdIsCurrentTransactionId(HeapTupleGetRawXmax(htup)))
 		{
-			if (HeapTupleHeaderGetCmax(tuple) >= snapshot->curcid)
+			if (HeapTupleGetCmax(htup) >= snapshot->curcid)
 				return true;	/* deleted after scan started */
 			else
 				return false;	/* deleted before scan started */
 		}
 
-		if (XidInMVCCSnapshot(HeapTupleHeaderGetRawXmax(tuple), snapshot))
+		if (XidInMVCCSnapshot(HeapTupleGetRawXmax(htup), snapshot))
 			return true;
 
-		if (!TransactionIdDidCommit(HeapTupleHeaderGetRawXmax(tuple)))
+		if (!TransactionIdDidCommit(HeapTupleGetRawXmax(htup)))
 		{
 			/* it must have aborted or crashed */
 			SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
@@ -1129,12 +1129,12 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
 
 		/* xmax transaction committed */
 		SetHintBits(tuple, buffer, HEAP_XMAX_COMMITTED,
-					HeapTupleHeaderGetRawXmax(tuple));
+					HeapTupleGetRawXmax(htup));
 	}
 	else
 	{
 		/* xmax is committed, but maybe not according to our snapshot */
-		if (XidInMVCCSnapshot(HeapTupleHeaderGetRawXmax(tuple), snapshot))
+		if (XidInMVCCSnapshot(HeapTupleGetRawXmax(htup), snapshot))
 			return true;		/* treat as still in progress */
 	}
 
@@ -1249,21 +1249,21 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
 				return HEAPTUPLE_DEAD;
 			}
 		}
-		else if (TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetRawXmin(tuple)))
+		else if (TransactionIdIsCurrentTransactionId(HeapTupleGetRawXmin(htup)))
 		{
 			if (tuple->t_infomask & HEAP_XMAX_INVALID)	/* xid invalid */
 				return HEAPTUPLE_INSERT_IN_PROGRESS;
 			/* only locked? run infomask-only check first, for performance */
 			if (HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_infomask) ||
-				HeapTupleHeaderIsOnlyLocked(tuple))
+				HeapTupleIsOnlyLocked(htup))
 				return HEAPTUPLE_INSERT_IN_PROGRESS;
 			/* inserted and then deleted by same xact */
-			if (TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetUpdateXid(tuple)))
+			if (TransactionIdIsCurrentTransactionId(HeapTupleGetUpdateXidAny(htup)))
 				return HEAPTUPLE_DELETE_IN_PROGRESS;
 			/* deleting subtransaction must have aborted */
 			return HEAPTUPLE_INSERT_IN_PROGRESS;
 		}
-		else if (TransactionIdIsInProgress(HeapTupleHeaderGetRawXmin(tuple)))
+		else if (TransactionIdIsInProgress(HeapTupleGetRawXmin(htup)))
 		{
 			/*
 			 * It'd be possible to discern between INSERT/DELETE in progress
@@ -1275,9 +1275,9 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
 			 */
 			return HEAPTUPLE_INSERT_IN_PROGRESS;
 		}
-		else if (TransactionIdDidCommit(HeapTupleHeaderGetRawXmin(tuple)))
+		else if (TransactionIdDidCommit(HeapTupleGetRawXmin(htup)))
 			SetHintBits(tuple, buffer, HEAP_XMIN_COMMITTED,
-						HeapTupleHeaderGetRawXmin(tuple));
+						HeapTupleGetRawXmin(htup));
 		else
 		{
 			/*
@@ -1319,14 +1319,14 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
 				 * possibly be running; otherwise have to check.
 				 */
 				if (!HEAP_LOCKED_UPGRADED(tuple->t_infomask) &&
-					MultiXactIdIsRunning(HeapTupleHeaderGetRawXmax(tuple),
+					MultiXactIdIsRunning(HeapTupleGetRawXmax(htup),
 										 true))
 					return HEAPTUPLE_LIVE;
 				SetHintBits(tuple, buffer, HEAP_XMAX_INVALID, InvalidTransactionId);
 			}
 			else
 			{
-				if (TransactionIdIsInProgress(HeapTupleHeaderGetRawXmax(tuple)))
+				if (TransactionIdIsInProgress(HeapTupleGetRawXmax(htup)))
 					return HEAPTUPLE_LIVE;
 				SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
 							InvalidTransactionId);
@@ -1344,7 +1344,7 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
 
 	if (tuple->t_infomask & HEAP_XMAX_IS_MULTI)
 	{
-		TransactionId xmax = HeapTupleGetUpdateXid(tuple);
+		TransactionId xmax = HeapTupleGetUpdateXid(htup);
 
 		/* already checked above */
 		Assert(!HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_infomask));
@@ -1367,7 +1367,7 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
 			*dead_after = xmax;
 			return HEAPTUPLE_RECENTLY_DEAD;
 		}
-		else if (!MultiXactIdIsRunning(HeapTupleHeaderGetRawXmax(tuple), false))
+		else if (!MultiXactIdIsRunning(HeapTupleGetRawXmax(htup), false))
 		{
 			/*
 			 * Not in Progress, Not Committed, so either Aborted or crashed.
@@ -1381,11 +1381,11 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
 
 	if (!(tuple->t_infomask & HEAP_XMAX_COMMITTED))
 	{
-		if (TransactionIdIsInProgress(HeapTupleHeaderGetRawXmax(tuple)))
+		if (TransactionIdIsInProgress(HeapTupleGetRawXmax(htup)))
 			return HEAPTUPLE_DELETE_IN_PROGRESS;
-		else if (TransactionIdDidCommit(HeapTupleHeaderGetRawXmax(tuple)))
+		else if (TransactionIdDidCommit(HeapTupleGetRawXmax(htup)))
 			SetHintBits(tuple, buffer, HEAP_XMAX_COMMITTED,
-						HeapTupleHeaderGetRawXmax(tuple));
+						HeapTupleGetRawXmax(htup));
 		else
 		{
 			/*
@@ -1407,7 +1407,7 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
 	 * Deleter committed, allow caller to check if it was recent enough that
 	 * some open transactions could still see the tuple.
 	 */
-	*dead_after = HeapTupleHeaderGetRawXmax(tuple);
+	*dead_after = HeapTupleGetRawXmax(htup);
 	return HEAPTUPLE_RECENTLY_DEAD;
 }
 
@@ -1503,7 +1503,7 @@ HeapTupleIsSurelyDead(HeapTuple htup, GlobalVisState *vistest)
 
 	/* Deleter committed, so tuple is dead if the XID is old enough. */
 	return GlobalVisTestIsRemovableXid(vistest,
-									   HeapTupleHeaderGetRawXmax(tuple));
+									   HeapTupleGetRawXmax(htup));
 }
 
 /*
@@ -1516,8 +1516,9 @@ HeapTupleIsSurelyDead(HeapTuple htup, GlobalVisState *vistest)
  * at the top of this file.
  */
 bool
-HeapTupleHeaderIsOnlyLocked(HeapTupleHeader tuple)
+HeapTupleIsOnlyLocked(HeapTuple htup)
 {
+	HeapTupleHeader tuple = htup->t_data;
 	TransactionId xmax;
 
 	/* if there's no valid Xmax, then there's obviously no update either */
@@ -1528,7 +1529,7 @@ HeapTupleHeaderIsOnlyLocked(HeapTupleHeader tuple)
 		return true;
 
 	/* invalid xmax means no update */
-	if (!TransactionIdIsValid(HeapTupleHeaderGetRawXmax(tuple)))
+	if (!TransactionIdIsValid(HeapTupleGetRawXmax(htup)))
 		return true;
 
 	/*
@@ -1539,7 +1540,7 @@ HeapTupleHeaderIsOnlyLocked(HeapTupleHeader tuple)
 		return false;
 
 	/* ... but if it's a multi, then perhaps the updating Xid aborted. */
-	xmax = HeapTupleGetUpdateXid(tuple);
+	xmax = HeapTupleGetUpdateXid(htup);
 
 	/* not LOCKED_ONLY, so it has to have an xmax */
 	Assert(TransactionIdIsValid(xmax));
@@ -1587,8 +1588,8 @@ HeapTupleSatisfiesHistoricMVCC(HeapTuple htup, Snapshot snapshot,
 							   Buffer buffer)
 {
 	HeapTupleHeader tuple = htup->t_data;
-	TransactionId xmin = HeapTupleHeaderGetXmin(tuple);
-	TransactionId xmax = HeapTupleHeaderGetRawXmax(tuple);
+	TransactionId xmin = HeapTupleGetXmin(htup);
+	TransactionId xmax = HeapTupleGetRawXmax(htup);
 
 	Assert(ItemPointerIsValid(&htup->t_self));
 	Assert(htup->t_tableOid != InvalidOid);
@@ -1688,7 +1689,7 @@ HeapTupleSatisfiesHistoricMVCC(HeapTuple htup, Snapshot snapshot,
 	 */
 	else if (tuple->t_infomask & HEAP_XMAX_IS_MULTI)
 	{
-		xmax = HeapTupleGetUpdateXid(tuple);
+		xmax = HeapTupleGetUpdateXid(htup);
 	}
 
 	/* check if it's one of our txids, toplevel is also in there */

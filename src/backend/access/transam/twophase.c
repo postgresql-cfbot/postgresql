@@ -476,8 +476,8 @@ MarkAsPreparingGuts(GlobalTransaction gxact, TransactionId xid, const char *gid,
 		proc->lxid = xid;
 		proc->backendId = InvalidBackendId;
 	}
-	proc->xid = xid;
-	Assert(proc->xmin == InvalidTransactionId);
+	pg_atomic_write_u64(&proc->xid, xid);
+	Assert(pg_atomic_read_u64(&proc->xmin) == InvalidTransactionId);
 	proc->delayChkptFlags = 0;
 	proc->statusFlags = 0;
 	proc->pid = 0;
@@ -792,7 +792,7 @@ pg_prepared_xact(PG_FUNCTION_ARGS)
 		 * Form tuple with appropriate data.
 		 */
 
-		values[0] = TransactionIdGetDatum(proc->xid);
+		values[0] = TransactionIdGetDatum(pg_atomic_read_u64(&proc->xid));
 		values[1] = CStringGetTextDatum(gxact->gid);
 		values[2] = TimestampTzGetDatum(gxact->prepared_at);
 		values[3] = ObjectIdGetDatum(gxact->owner);
@@ -850,7 +850,8 @@ TwoPhaseGetGXact(TransactionId xid, bool lock_held)
 		LWLockRelease(TwoPhaseStateLock);
 
 	if (result == NULL)			/* should not happen */
-		elog(ERROR, "failed to find GlobalTransaction for xid %u", xid);
+		elog(ERROR, "failed to find GlobalTransaction for xid %llu",
+			 (unsigned long long) xid);
 
 	cached_xid = xid;
 	cached_gxact = result;
@@ -942,7 +943,7 @@ TwoPhaseGetDummyProc(TransactionId xid, bool lock_held)
 /************************************************************************/
 
 #define TwoPhaseFilePath(path, xid) \
-	snprintf(path, MAXPGPATH, TWOPHASE_DIR "/%08X", xid)
+	snprintf(path, MAXPGPATH, TWOPHASE_DIR "/%016llX", (unsigned long long) xid)
 
 /*
  * 2PC state file format:
@@ -1881,13 +1882,13 @@ restoreTwoPhaseData(void)
 	cldir = AllocateDir(TWOPHASE_DIR);
 	while ((clde = ReadDir(cldir, TWOPHASE_DIR)) != NULL)
 	{
-		if (strlen(clde->d_name) == 8 &&
-			strspn(clde->d_name, "0123456789ABCDEF") == 8)
+		if (strlen(clde->d_name) == 16 &&
+			strspn(clde->d_name, "0123456789ABCDEF") == 16)
 		{
 			TransactionId xid;
 			char	   *buf;
 
-			xid = (TransactionId) strtoul(clde->d_name, NULL, 16);
+			xid = (TransactionId) strtou64(clde->d_name, NULL, 16);
 
 			buf = ProcessTwoPhaseBuffer(xid, InvalidXLogRecPtr,
 										true, false, false);
@@ -2089,7 +2090,8 @@ RecoverPreparedTransactions(void)
 			continue;
 
 		ereport(LOG,
-				(errmsg("recovering prepared transaction %u from shared memory", xid)));
+				(errmsg("recovering prepared transaction %llu from shared memory",
+						(unsigned long long) xid)));
 
 		hdr = (TwoPhaseFileHeader *) buf;
 		Assert(TransactionIdEquals(hdr->xid, xid));
@@ -2182,15 +2184,15 @@ ProcessTwoPhaseBuffer(TransactionId xid,
 		if (fromdisk)
 		{
 			ereport(WARNING,
-					(errmsg("removing stale two-phase state file for transaction %u",
-							xid)));
+					(errmsg("removing stale two-phase state file for transaction %llu",
+							(unsigned long long) xid)));
 			RemoveTwoPhaseFile(xid, true);
 		}
 		else
 		{
 			ereport(WARNING,
-					(errmsg("removing stale two-phase state from memory for transaction %u",
-							xid)));
+					(errmsg("removing stale two-phase state from memory for transaction %llu",
+							(unsigned long long) xid)));
 			PrepareRedoRemove(xid, true);
 		}
 		return NULL;
@@ -2202,15 +2204,15 @@ ProcessTwoPhaseBuffer(TransactionId xid,
 		if (fromdisk)
 		{
 			ereport(WARNING,
-					(errmsg("removing future two-phase state file for transaction %u",
-							xid)));
+					(errmsg("removing future two-phase state file for transaction %llu",
+							(unsigned long long) xid)));
 			RemoveTwoPhaseFile(xid, true);
 		}
 		else
 		{
 			ereport(WARNING,
-					(errmsg("removing future two-phase state from memory for transaction %u",
-							xid)));
+					(errmsg("removing future two-phase state from memory for transaction %llu",
+							(unsigned long long) xid)));
 			PrepareRedoRemove(xid, true);
 		}
 		return NULL;
@@ -2218,7 +2220,6 @@ ProcessTwoPhaseBuffer(TransactionId xid,
 
 	if (fromdisk)
 	{
-		/* Read and validate file */
 		buf = ReadTwoPhaseFile(xid, false);
 	}
 	else
@@ -2234,13 +2235,13 @@ ProcessTwoPhaseBuffer(TransactionId xid,
 		if (fromdisk)
 			ereport(ERROR,
 					(errcode(ERRCODE_DATA_CORRUPTED),
-					 errmsg("corrupted two-phase state file for transaction %u",
-							xid)));
+					 errmsg("corrupted two-phase state file for transaction %llu",
+							(unsigned long long) xid)));
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_DATA_CORRUPTED),
-					 errmsg("corrupted two-phase state in memory for transaction %u",
-							xid)));
+					 errmsg("corrupted two-phase state in memory for transaction %llu",
+							(unsigned long long) xid)));
 	}
 
 	/*
@@ -2401,8 +2402,8 @@ RecordTransactionAbortPrepared(TransactionId xid,
 	 * RecordTransactionCommitPrepared ...
 	 */
 	if (TransactionIdDidCommit(xid))
-		elog(PANIC, "cannot abort transaction %u, it was already committed",
-			 xid);
+		elog(PANIC, "cannot abort transaction %llu, it was already committed",
+			 (unsigned long long) xid);
 
 	START_CRIT_SECTION();
 
@@ -2509,7 +2510,8 @@ PrepareRedoAdd(char *buf, XLogRecPtr start_lsn,
 						   false /* backward */ , false /* WAL */ );
 	}
 
-	elog(DEBUG2, "added 2PC data in shared memory for transaction %u", gxact->xid);
+	elog(DEBUG2, "added 2PC data in shared memory for transaction %llu",
+		 (unsigned long long) gxact->xid);
 }
 
 /*
@@ -2552,7 +2554,8 @@ PrepareRedoRemove(TransactionId xid, bool giveWarning)
 	/*
 	 * And now we can clean up any files we may have left.
 	 */
-	elog(DEBUG2, "removing 2PC data for transaction %u", xid);
+	elog(DEBUG2, "removing 2PC data for transaction %llu",
+		 (unsigned long long) xid);
 	if (gxact->ondisk)
 		RemoveTwoPhaseFile(xid, giveWarning);
 	RemoveGXact(gxact);

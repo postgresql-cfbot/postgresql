@@ -140,6 +140,7 @@ _bt_findsplitloc(Relation rel,
 				olddataitemstoleft,
 				perfectpenalty,
 				leaffillfactor;
+	int			maxTupleEnd PG_USED_FOR_ASSERTS_ONLY;
 	FindSplitData state;
 	FindSplitStrat strategy;
 	ItemId		itemid;
@@ -153,6 +154,7 @@ _bt_findsplitloc(Relation rel,
 
 	opaque = BTPageGetOpaque(origpage);
 	maxoff = PageGetMaxOffsetNumber(origpage);
+	maxTupleEnd = ItemIdGetTupleEnd(PageGetItemId(origpage, P_HIKEY));
 
 	/* Total free space available on a btree page, after fixed overhead */
 	leftspace = rightspace =
@@ -214,6 +216,18 @@ _bt_findsplitloc(Relation rel,
 		itemid = PageGetItemId(origpage, offnum);
 		itemsz = MAXALIGN(ItemIdGetLength(itemid)) + sizeof(ItemIdData);
 
+#ifdef USE_ASSERT_CHECKING
+
+		/*
+		 * Ending of rightmost tuple on a page can be shifted relative to left
+		 * boundary of BTPageOpaqueData due to conversion from EE96, which
+		 * used different BTPageOpaqueData layout. It is only checked in the
+		 * assert below.
+		 */
+		if (maxTupleEnd < ItemIdGetTupleEnd(itemid))
+			maxTupleEnd = ItemIdGetTupleEnd(itemid);
+#endif
+
 		/*
 		 * When item offset number is not newitemoff, neither side of the
 		 * split can be newitem.  Record a split after the previous data item
@@ -248,7 +262,7 @@ _bt_findsplitloc(Relation rel,
 	 * (Though only when it's possible that newitem will end up alone on new
 	 * right page.)
 	 */
-	Assert(olddataitemstoleft == olddataitemstotal);
+	Assert(olddataitemstoleft + ((PageHeader) origpage)->pd_special - maxTupleEnd == olddataitemstotal);
 	if (newitemoff > maxoff)
 		_bt_recsplitloc(&state, newitemoff, false, olddataitemstotal, 0);
 

@@ -546,6 +546,7 @@ _bt_getroot(Relation rel, int access)
 			rootblkno = rootopaque->btpo_next;
 		}
 
+		/* Note: can't check btpo_level on deleted pages */
 		if (rootopaque->btpo_level != rootlevel)
 			elog(ERROR, "root page %u of index \"%s\" has level %u, expected %u",
 				 rootblkno, RelationGetRelationName(rel),
@@ -649,6 +650,7 @@ _bt_gettrueroot(Relation rel)
 		rootblkno = rootopaque->btpo_next;
 	}
 
+	/* Note: can't check btpo_level on deleted pages */
 	if (rootopaque->btpo_level != rootlevel)
 		elog(ERROR, "root page %u of index \"%s\" has level %u, expected %u",
 			 rootblkno, RelationGetRelationName(rel),

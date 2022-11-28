@@ -307,6 +307,7 @@ heap_toast_insert_or_update(Relation rel, HeapTuple newtup, HeapTuple oldtup,
 		result_tuple->t_len = new_tuple_len;
 		result_tuple->t_self = newtup->t_self;
 		result_tuple->t_tableOid = newtup->t_tableOid;
+		HeapTupleCopyXids(result_tuple, newtup);
 		new_data = (HeapTupleHeader) ((char *) result_tuple + HEAPTUPLESIZE);
 		result_tuple->t_data = new_data;
 
@@ -395,6 +396,7 @@ toast_flatten_tuple(HeapTuple tup, TupleDesc tupleDesc)
 	 */
 	new_tuple->t_self = tup->t_self;
 	new_tuple->t_tableOid = tup->t_tableOid;
+	HeapTupleCopyXids(new_tuple, tup);
 
 	new_tuple->t_data->t_choice = tup->t_data->t_choice;
 	new_tuple->t_data->t_ctid = tup->t_data->t_ctid;
@@ -467,6 +469,7 @@ toast_flatten_tuple_to_datum(HeapTupleHeader tup,
 	ItemPointerSetInvalid(&(tmptup.t_self));
 	tmptup.t_tableOid = InvalidOid;
 	tmptup.t_data = tup;
+	HeapTupleSetZeroXids(&tmptup);
 
 	/*
 	 * Break down the tuple into fields.

@@ -146,7 +146,7 @@ find_inheritance_children_extended(Oid parentrelId, bool omit_detached,
 				TransactionId xmin;
 				Snapshot	snap;
 
-				xmin = HeapTupleHeaderGetXmin(inheritsTuple->t_data);
+				xmin = HeapTupleGetXmin(inheritsTuple);
 				snap = GetActiveSnapshot();
 
 				if (!XidInMVCCSnapshot(xmin, snap))

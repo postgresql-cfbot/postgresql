@@ -59,6 +59,8 @@
 #define XLOG_HEAP2_LOCK_UPDATED 0x60
 #define XLOG_HEAP2_NEW_CID		0x70
 
+#define XLOG_HEAP3_BASE_SHIFT	0x00
+
 /*
  * xl_heap_insert/xl_heap_multi_insert flag values, 8 bits are available.
  */
@@ -98,6 +100,7 @@
 #define XLH_DELETE_CONTAINS_OLD_KEY				(1<<2)
 #define XLH_DELETE_IS_SUPER						(1<<3)
 #define XLH_DELETE_IS_PARTITION_MOVE			(1<<4)
+#define XLH_DELETE_PAGE_ON_TOAST_RELATION		(1<<5)
 
 /* convenience macro for checking whether any form of old tuple was logged */
 #define XLH_DELETE_CONTAINS_OLD						\
@@ -240,15 +243,19 @@ typedef struct xl_heap_update
  *
  * Acquires a full cleanup lock.
  */
+#define XLH_PRUNE_ON_TOAST_RELATION		0x01
+#define XLH_PRUNE_REPAIR_FRAGMENTATION	0x02
+
 typedef struct xl_heap_prune
 {
 	TransactionId snapshotConflictHorizon;
 	uint16		nredirected;
 	uint16		ndead;
+	uint8		flags;
 	/* OFFSET NUMBERS are in the block reference 0 */
 } xl_heap_prune;
 
-#define SizeOfHeapPrune (offsetof(xl_heap_prune, ndead) + sizeof(uint16))
+#define SizeOfHeapPrune (offsetof(xl_heap_prune, flags) + sizeof(uint8))
 
 /*
  * The vacuum page record is similar to the prune record, but can only mark
@@ -340,16 +347,19 @@ typedef struct xl_heap_freeze_plan
  * Each such page offset number array corresponds to a single freeze plan
  * (REDO routine freezes corresponding heap tuples using freeze plan).
  */
+#define XLH_FREEZE_PAGE_ON_TOAST_RELATION		0x01
+
 typedef struct xl_heap_freeze_page
 {
 	TransactionId snapshotConflictHorizon;
 	uint16		nplans;
+	uint8		flags;
 
 	/* FREEZE PLANS FOLLOW */
 	/* OFFSET NUMBER ARRAY FOLLOWS */
 } xl_heap_freeze_page;
 
-#define SizeOfHeapFreezePage (offsetof(xl_heap_freeze_page, nplans) + sizeof(uint16))
+#define SizeOfHeapFreezePage (offsetof(xl_heap_freeze_page, flags) + sizeof(uint8))
 
 /*
  * This is what we need to know about setting a visibility map bit
@@ -396,7 +406,19 @@ typedef struct xl_heap_rewrite_mapping
 	XLogRecPtr	start_lsn;		/* Insert LSN at begin of rewrite */
 } xl_heap_rewrite_mapping;
 
-extern void HeapTupleHeaderAdvanceConflictHorizon(HeapTupleHeader tuple,
+#define XLH_BASE_SHIFT_ON_TOAST_RELATION	0x01
+
+/* shift the base of xids on heap page */
+typedef struct xl_heap_base_shift
+{
+	int64		delta;			/* delta value to shift the base */
+	bool		multi;			/* true to shift multixact base */
+	uint8		flags;
+}			xl_heap_base_shift;
+
+#define SizeOfHeapBaseShift (offsetof(xl_heap_base_shift, flags) + sizeof(uint8))
+
+extern void HeapTupleHeaderAdvanceConflictHorizon(HeapTuple tuple,
 												  TransactionId *snapshotConflictHorizon);
 
 extern void heap_redo(XLogReaderState *record);
@@ -406,6 +428,9 @@ extern void heap_mask(char *pagedata, BlockNumber blkno);
 extern void heap2_redo(XLogReaderState *record);
 extern void heap2_desc(StringInfo buf, XLogReaderState *record);
 extern const char *heap2_identify(uint8 info);
+extern void heap3_redo(XLogReaderState *record);
+extern void heap3_desc(StringInfo buf, XLogReaderState *record);
+extern const char *heap3_identify(uint8 info);
 extern void heap_xlog_logical_rewrite(XLogReaderState *r);
 
 extern XLogRecPtr log_heap_visible(RelFileLocator rlocator, Buffer heap_buffer,

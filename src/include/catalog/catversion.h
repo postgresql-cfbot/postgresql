@@ -57,6 +57,7 @@
  */
 
 /*							yyyymmddN */
-#define CATALOG_VERSION_NO	202211241
+/* XXX: should de changed to actual version on commit */
+#define CATALOG_VERSION_NO	999999999
 
 #endif

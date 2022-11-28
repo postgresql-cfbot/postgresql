@@ -640,10 +640,10 @@ heap_getsysattr(HeapTuple tup, int attnum, TupleDesc tupleDesc, bool *isnull)
 			result = PointerGetDatum(&(tup->t_self));
 			break;
 		case MinTransactionIdAttributeNumber:
-			result = TransactionIdGetDatum(HeapTupleHeaderGetRawXmin(tup->t_data));
+			result = TransactionIdGetDatum(HeapTupleGetRawXmin(tup));
 			break;
 		case MaxTransactionIdAttributeNumber:
-			result = TransactionIdGetDatum(HeapTupleHeaderGetRawXmax(tup->t_data));
+			result = TransactionIdGetDatum(HeapTupleGetRawXmax(tup));
 			break;
 		case MinCommandIdAttributeNumber:
 		case MaxCommandIdAttributeNumber:
@@ -688,6 +688,7 @@ heap_copytuple(HeapTuple tuple)
 	newTuple->t_len = tuple->t_len;
 	newTuple->t_self = tuple->t_self;
 	newTuple->t_tableOid = tuple->t_tableOid;
+	HeapTupleCopyXids(newTuple, tuple);
 	newTuple->t_data = (HeapTupleHeader) ((char *) newTuple + HEAPTUPLESIZE);
 	memcpy((char *) newTuple->t_data, (char *) tuple->t_data, tuple->t_len);
 	return newTuple;
@@ -714,6 +715,7 @@ heap_copytuple_with_tuple(HeapTuple src, HeapTuple dest)
 	dest->t_len = src->t_len;
 	dest->t_self = src->t_self;
 	dest->t_tableOid = src->t_tableOid;
+	HeapTupleCopyXids(dest, src);
 	dest->t_data = (HeapTupleHeader) palloc(src->t_len);
 	memcpy((char *) dest->t_data, (char *) src->t_data, src->t_len);
 }
@@ -1077,6 +1079,7 @@ heap_form_tuple(TupleDesc tupleDescriptor,
 	tuple->t_len = len;
 	ItemPointerSetInvalid(&(tuple->t_self));
 	tuple->t_tableOid = InvalidOid;
+	HeapTupleSetZeroXids(tuple);
 
 	HeapTupleHeaderSetDatumLength(td, len);
 	HeapTupleHeaderSetTypeId(td, tupleDescriptor->tdtypeid);
@@ -1161,6 +1164,7 @@ heap_modify_tuple(HeapTuple tuple,
 	newTuple->t_data->t_ctid = tuple->t_data->t_ctid;
 	newTuple->t_self = tuple->t_self;
 	newTuple->t_tableOid = tuple->t_tableOid;
+	HeapTupleCopyXids(newTuple, tuple);
 
 	return newTuple;
 }
@@ -1224,6 +1228,7 @@ heap_modify_tuple_by_cols(HeapTuple tuple,
 	newTuple->t_data->t_ctid = tuple->t_data->t_ctid;
 	newTuple->t_self = tuple->t_self;
 	newTuple->t_tableOid = tuple->t_tableOid;
+	HeapTupleCopyXids(newTuple, tuple);
 
 	return newTuple;
 }
@@ -1464,6 +1469,7 @@ heap_tuple_from_minimal_tuple(MinimalTuple mtup)
 	result->t_len = len;
 	ItemPointerSetInvalid(&(result->t_self));
 	result->t_tableOid = InvalidOid;
+	HeapTupleSetZeroXids(result);
 	result->t_data = (HeapTupleHeader) ((char *) result + HEAPTUPLESIZE);
 	memcpy((char *) result->t_data + MINIMAL_TUPLE_OFFSET, mtup, mtup->t_len);
 	memset(result->t_data, 0, offsetof(HeapTupleHeaderData, t_infomask2));

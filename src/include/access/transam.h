@@ -17,6 +17,10 @@
 #include "access/xlogdefs.h"
 
 
+#ifndef FRONTEND
+#include "utils/elog.h"
+#endif
+
 /* ----------------
  *		Special transaction ID values
  *
@@ -28,11 +32,12 @@
  * Note: if you need to change it, you must change pg_class.h as well.
  * ----------------
  */
-#define InvalidTransactionId		((TransactionId) 0)
-#define BootstrapTransactionId		((TransactionId) 1)
-#define FrozenTransactionId			((TransactionId) 2)
-#define FirstNormalTransactionId	((TransactionId) 3)
-#define MaxTransactionId			((TransactionId) 0xFFFFFFFF)
+#define InvalidTransactionId		UINT64CONST(0)
+#define BootstrapTransactionId		UINT64CONST(1)
+#define FrozenTransactionId			UINT64CONST(2)
+#define FirstNormalTransactionId	UINT64CONST(3)
+#define MaxTransactionId			UINT64CONST(0xFFFFFFFFFFFFFFFF)
+#define MaxShortTransactionId		((TransactionId) 0x7FFFFFFF)
 
 /* ----------------
  *		transaction ID manipulation macros
@@ -44,17 +49,48 @@
 #define TransactionIdStore(xid, dest)	(*(dest) = (xid))
 #define StoreInvalidTransactionId(dest) (*(dest) = InvalidTransactionId)
 
-#define EpochFromFullTransactionId(x)	((uint32) ((x).value >> 32))
-#define XidFromFullTransactionId(x)		((uint32) (x).value)
-#define U64FromFullTransactionId(x)		((x).value)
+/*
+ * Convert short xid from/to full xid.  Assertion should fail if we full xid
+ * doesn't fit to xid base.
+ */
+static inline TransactionId
+ShortTransactionIdToNormal(TransactionId base, ShortTransactionId xid)
+{
+	if (!TransactionIdIsNormal(xid))
+		return (TransactionId) xid;
+
+#ifndef FRONTEND
+	/* xid + base should not overflow TransactionId */
+	Assert(xid + base >= base);
+#endif
+
+	return (TransactionId) (xid + base);
+}
+
+static inline ShortTransactionId
+NormalTransactionIdToShort(TransactionId base, TransactionId xid)
+{
+	if (!TransactionIdIsNormal(xid))
+		return (ShortTransactionId) (xid);
+
+#ifndef FRONTEND
+	/* xid should fit ShortTransactionId */
+	Assert(xid >= base + FirstNormalTransactionId &&
+		   xid <= base + MaxShortTransactionId);
+#endif
+
+	return (ShortTransactionId) (xid - base);
+}
+
+#define XidFromFullTransactionId(x)		((x).value)
 #define FullTransactionIdEquals(a, b)	((a).value == (b).value)
 #define FullTransactionIdPrecedes(a, b)	((a).value < (b).value)
 #define FullTransactionIdPrecedesOrEquals(a, b) ((a).value <= (b).value)
 #define FullTransactionIdFollows(a, b) ((a).value > (b).value)
 #define FullTransactionIdFollowsOrEquals(a, b) ((a).value >= (b).value)
 #define FullTransactionIdIsValid(x)		TransactionIdIsValid(XidFromFullTransactionId(x))
-#define InvalidFullTransactionId		FullTransactionIdFromEpochAndXid(0, InvalidTransactionId)
-#define FirstNormalFullTransactionId	FullTransactionIdFromEpochAndXid(0, FirstNormalTransactionId)
+#define InvalidFullTransactionId		FullTransactionIdFromXid(InvalidTransactionId)
+#define FirstNormalFullTransactionId	FullTransactionIdFromXid(FirstNormalTransactionId)
 #define FullTransactionIdIsNormal(x)	FullTransactionIdFollowsOrEquals(x, FirstNormalFullTransactionId)
 
 /*
@@ -68,21 +104,11 @@ typedef struct FullTransactionId
 } FullTransactionId;
 
 static inline FullTransactionId
-FullTransactionIdFromEpochAndXid(uint32 epoch, TransactionId xid)
+FullTransactionIdFromXid(TransactionId xid)
 {
 	FullTransactionId result;
 
-	result.value = ((uint64) epoch) << 32 | xid;
-
-	return result;
-}
-
-static inline FullTransactionId
-FullTransactionIdFromU64(uint64 value)
-{
-	FullTransactionId result;
-
-	result.value = value;
+	result.value = xid;
 
 	return result;
 }
@@ -91,8 +117,7 @@ FullTransactionIdFromU64(uint64 value)
 #define TransactionIdAdvance(dest)	\
 	do { \
 		(dest)++; \
-		if ((dest) < FirstNormalTransactionId) \
-			(dest) = FirstNormalTransactionId; \
+		Assert(TransactionIdIsNormal(dest)); \
 	} while(0)
 
 /*
@@ -140,18 +165,19 @@ FullTransactionIdAdvance(FullTransactionId *dest)
 /* back up a transaction ID variable, handling wraparound correctly */
 #define TransactionIdRetreat(dest)	\
 	do { \
+		Assert(TransactionIdIsNormal(dest)); \
 		(dest)--; \
-	} while ((dest) < FirstNormalTransactionId)
+	} while(0)
 
 /* compare two XIDs already known to be normal; this is a macro for speed */
 #define NormalTransactionIdPrecedes(id1, id2) \
 	(AssertMacro(TransactionIdIsNormal(id1) && TransactionIdIsNormal(id2)), \
-	(int32) ((id1) - (id2)) < 0)
+	(int64) ((id1) - (id2)) < 0)
 
 /* compare two XIDs already known to be normal; this is a macro for speed */
 #define NormalTransactionIdFollows(id1, id2) \
 	(AssertMacro(TransactionIdIsNormal(id1) && TransactionIdIsNormal(id2)), \
-	(int32) ((id1) - (id2)) > 0)
+	(int64) ((id1) - (id2)) > 0)
 
 /* ----------
  *		Object ID (OID) zero is InvalidOid.
@@ -201,10 +227,6 @@ FullTransactionIdAdvance(FullTransactionId *dest)
  * OID and XID assignment state.  For largely historical reasons, there is
  * just one struct with different fields that are protected by different
  * LWLocks.
- *
- * Note: xidWrapLimit and oldestXidDB are not "active" values, but are
- * used just to generate useful messages when xidWarnLimit or xidStopLimit
- * are exceeded.
  */
 typedef struct VariableCacheData
 {
@@ -221,9 +243,6 @@ typedef struct VariableCacheData
 
 	TransactionId oldestXid;	/* cluster-wide minimum datfrozenxid */
 	TransactionId xidVacLimit;	/* start forcing autovacuums here */
-	TransactionId xidWarnLimit; /* start complaining here */
-	TransactionId xidStopLimit; /* refuse to advance nextXid beyond here */
-	TransactionId xidWrapLimit; /* where the world ends */
 	Oid			oldestXidDB;	/* database with minimum datfrozenxid */
 
 	/*
@@ -276,10 +295,6 @@ extern bool TransactionIdDidAbort(TransactionId transactionId);
 extern void TransactionIdCommitTree(TransactionId xid, int nxids, TransactionId *xids);
 extern void TransactionIdAsyncCommitTree(TransactionId xid, int nxids, TransactionId *xids, XLogRecPtr lsn);
 extern void TransactionIdAbortTree(TransactionId xid, int nxids, TransactionId *xids);
-extern bool TransactionIdPrecedes(TransactionId id1, TransactionId id2);
-extern bool TransactionIdPrecedesOrEquals(TransactionId id1, TransactionId id2);
-extern bool TransactionIdFollows(TransactionId id1, TransactionId id2);
-extern bool TransactionIdFollowsOrEquals(TransactionId id1, TransactionId id2);
 extern TransactionId TransactionIdLatest(TransactionId mainxid,
 										 int nxids, const TransactionId *xids);
 extern XLogRecPtr TransactionIdGetCommitLSN(TransactionId xid);
@@ -319,7 +334,7 @@ ReadNextTransactionId(void)
 
 /* return transaction ID backed up by amount, handling wraparound correctly */
 static inline TransactionId
-TransactionIdRetreatedBy(TransactionId xid, uint32 amount)
+TransactionIdRetreatedBy(TransactionId xid, uint64 amount)
 {
 	xid -= amount;
 

@@ -118,10 +118,10 @@ spg_desc(StringInfo buf, XLogReaderState *record)
 			{
 				spgxlogVacuumRedirect *xlrec = (spgxlogVacuumRedirect *) rec;
 
-				appendStringInfo(buf, "ntoplaceholder: %u, firstplaceholder: %u, snapshotConflictHorizon: %u",
+				appendStringInfo(buf, "ntoplaceholder: %u, firstplaceholder: %u, snapshotConflictHorizon: %llu",
 								 xlrec->nToPlaceholder,
 								 xlrec->firstPlaceholder,
-								 xlrec->snapshotConflictHorizon);
+								 (unsigned long long) xlrec->snapshotConflictHorizon);
 			}
 			break;
 	}

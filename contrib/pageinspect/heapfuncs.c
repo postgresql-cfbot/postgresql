@@ -163,7 +163,7 @@ heap_page_items(PG_FUNCTION_ARGS)
 		inter_call_data->tupd = tupdesc;
 
 		inter_call_data->offset = FirstOffsetNumber;
-		inter_call_data->page = VARDATA(raw_page);
+		inter_call_data->page = get_page_from_raw(raw_page);
 
 		fctx->max_calls = PageGetMaxOffsetNumber(inter_call_data->page);
 		fctx->user_fctx = inter_call_data;
@@ -211,6 +211,7 @@ heap_page_items(PG_FUNCTION_ARGS)
 			lp_offset == MAXALIGN(lp_offset) &&
 			lp_offset + lp_len <= raw_page_size)
 		{
+			HeapTupleData tup;
 			HeapTupleHeader tuphdr;
 			bytea	   *tuple_data_bytea;
 			int			tuple_data_len;
@@ -218,9 +219,11 @@ heap_page_items(PG_FUNCTION_ARGS)
 			/* Extract information from the tuple header */
 
 			tuphdr = (HeapTupleHeader) PageGetItem(page, id);
+			tup.t_data = tuphdr;
+			HeapTupleCopyXidsFromPage(InvalidBuffer, &tup, page, false);
 
-			values[4] = UInt32GetDatum(HeapTupleHeaderGetRawXmin(tuphdr));
-			values[5] = UInt32GetDatum(HeapTupleHeaderGetRawXmax(tuphdr));
+			values[4] = TransactionIdGetDatum(HeapTupleGetXmin(&tup));
+			values[5] = TransactionIdGetDatum(HeapTupleGetRawXmax(&tup));
 			/* shared with xvac */
 			values[6] = UInt32GetDatum(HeapTupleHeaderGetRawCommandId(tuphdr));
 			values[7] = PointerGetDatum(&tuphdr->t_ctid);

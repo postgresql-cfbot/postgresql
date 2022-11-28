@@ -14,10 +14,13 @@
 #ifndef BUFPAGE_H
 #define BUFPAGE_H
 
+#include "access/transam.h"
 #include "access/xlogdefs.h"
 #include "storage/block.h"
 #include "storage/item.h"
 #include "storage/off.h"
+#include "postgres.h"
+#include "utils/rel.h"
 
 /*
  * A postgres disk page is an abstraction layered on top of a postgres
@@ -163,11 +166,40 @@ typedef struct PageHeaderData
 	LocationIndex pd_upper;		/* offset to end of free space */
 	LocationIndex pd_special;	/* offset to start of special space */
 	uint16		pd_pagesize_version;
-	TransactionId pd_prune_xid; /* oldest prunable XID, or zero if none */
+	ShortTransactionId pd_prune_xid;	/* oldest prunable XID, or zero if
+										 * none */
 	ItemIdData	pd_linp[FLEXIBLE_ARRAY_MEMBER]; /* line pointer array */
 } PageHeaderData;
 
 typedef PageHeaderData *PageHeader;
+
+
+/*
+ * HeapPageSpecialData -- data that stored at the end of each heap page.
+ *
+ *		pd_xid_base - base value for transaction IDs on page
+ *		pd_multi_base - base value for multixact IDs on page
+ *
+ * pd_xid_base and pd_multi_base are base values for calculation of transaction
+ * identifiers from t_xmin and t_xmax in each heap tuple header on the page.
+ */
+typedef struct HeapPageSpecialData
+{
+	TransactionId pd_xid_base;	/* base value for transaction IDs on page */
+	TransactionId pd_multi_base;	/* base value for multixact IDs on page */
+}			HeapPageSpecialData;
+
+typedef HeapPageSpecialData *HeapPageSpecial;
+
+typedef struct ToastPageSpecialData
+{
+	TransactionId pd_xid_base;	/* base value for transaction IDs on page */
+}			ToastPageSpecialData;
+
+typedef ToastPageSpecialData *ToastPageSpecial;
+
+extern PGDLLIMPORT HeapPageSpecial heapDoubleXmaxSpecial;
+extern PGDLLIMPORT ToastPageSpecial toastDoubleXmaxSpecial;
 
 /*
  * pd_flags contains the following flag bits.  Undefined bits are initialized
@@ -200,7 +232,7 @@ typedef PageHeaderData *PageHeader;
  * As of Release 9.3, the checksum version must also be considered when
  * handling pages.
  */
-#define PG_PAGE_LAYOUT_VERSION		4
+#define PG_PAGE_LAYOUT_VERSION		5
 #define PG_DATA_CHECKSUM_VERSION	1
 
 /* ----------------------------------------------------------------
@@ -440,18 +472,177 @@ PageClearAllVisible(Page page)
 }
 
 /*
- * These two require "access/transam.h", so left as macros.
+ * Check if page is in "double xmax" format.
  */
-#define PageSetPrunable(page, xid) \
-do { \
-	Assert(TransactionIdIsNormal(xid)); \
-	if (!TransactionIdIsValid(((PageHeader) (page))->pd_prune_xid) || \
-		TransactionIdPrecedes(xid, ((PageHeader) (page))->pd_prune_xid)) \
-		((PageHeader) (page))->pd_prune_xid = (xid); \
-} while (0)
-#define PageClearPrunable(page) \
-	(((PageHeader) (page))->pd_prune_xid = InvalidTransactionId)
+static inline bool
+HeapPageIsDoubleXmax(Page page)
+{
+	return ((PageHeader) (page))->pd_special == BLCKSZ;
+}
 
+/*
+ * Get pointer to HeapPageSpecialData.
+ *
+ * Can be used for non-consistent reads from non-locked pages.
+ *
+ * Return doubleXmaxSpecial when pd_special == BLCKSZ (i.e. "double xmax"
+ * format).
+ */
+static inline HeapPageSpecial
+HeapPageGetSpecialNoAssert(Page page)
+{
+	if (HeapPageIsDoubleXmax(page))
+		return heapDoubleXmaxSpecial;
+
+	return (HeapPageSpecial) ((char *) page +
+							  ((PageHeader) page)->pd_special);
+}
+
+/*
+ * Get pointer to ToastPageSpecialData.
+ *
+ * Can be used for non-consistent reads from non-locked pages.
+ *
+ * Return doubleXmaxSpecial when pd_special == BLCKSZ (i.e. "double xmax"
+ * format).
+ */
+static inline ToastPageSpecial
+ToastPageGetSpecialNoAssert(Page page)
+{
+	if (HeapPageIsDoubleXmax(page))
+		return toastDoubleXmaxSpecial;
+
+	return (ToastPageSpecial) ((char *) page +
+							   ((PageHeader) page)->pd_special);
+}
+
+/*
+ * Wrapper for HeapPageGetSpecialNoAssert for general use.
+ */
+static inline HeapPageSpecial
+HeapPageGetSpecial(Page page)
+{
+	if (HeapPageIsDoubleXmax(page))
+		return heapDoubleXmaxSpecial;
+
+	Assert(((PageHeader) page)->pd_special ==
+		   BLCKSZ - MAXALIGN(sizeof(HeapPageSpecialData)));
+
+	return (HeapPageSpecial) ((char *) page +
+							  ((PageHeader) page)->pd_special);
+}
+
+/*
+ * Wrapper for ToastPageGetSpecialNoAssert for general use.
+ */
+static inline ToastPageSpecial
+ToastPageGetSpecial(Page page)
+{
+	if (HeapPageIsDoubleXmax(page))
+		return toastDoubleXmaxSpecial;
+
+	Assert(((PageHeader) page)->pd_special ==
+		   BLCKSZ - MAXALIGN(sizeof(ToastPageSpecialData)));
+
+	return (ToastPageSpecial) ((char *) page +
+							   ((PageHeader) page)->pd_special);
+}
+
+/*
+ * Set pd_prune_xid.
+ */
+static inline void
+HeapPageSetPruneXid(Page page, TransactionId xid, bool is_toast)
+{
+	TransactionId	base;
+
+	if (HeapPageIsDoubleXmax(page))
+		return;
+
+	if (!TransactionIdIsNormal(xid))
+	{
+		((PageHeader) (page))->pd_prune_xid = xid;
+		return;
+	}
+
+	base = is_toast ? ToastPageGetSpecial(page)->pd_xid_base :
+					  HeapPageGetSpecial(page)->pd_xid_base;
+
+	((PageHeader) (page))->pd_prune_xid = NormalTransactionIdToShort(base, xid);
+	Assert(((PageHeader) (page))->pd_prune_xid <= MaxShortTransactionId);
+}
+
+static inline void
+ToastPageSetPruneXid(Page page, TransactionId xid)
+{
+	if (HeapPageIsDoubleXmax(page))
+		return;
+
+	if (!TransactionIdIsNormal(xid))
+	{
+		((PageHeader) (page))->pd_prune_xid = xid;
+		return;
+	}
+
+	((PageHeader) (page))->pd_prune_xid =
+		NormalTransactionIdToShort(ToastPageGetSpecial(page)->pd_xid_base, (xid));
+
+	Assert(((PageHeader) (page))->pd_prune_xid <= MaxShortTransactionId);
+}
+
+/*
+ * Get pd_prune_xid from locked page.
+ */
+static inline TransactionId
+HeapPageGetPruneXid(Page page, bool is_toast)
+{
+	TransactionId	base;
+
+	if (HeapPageIsDoubleXmax(page))
+		return ((PageHeader) (page))->pd_prune_xid;
+
+	base = is_toast ? ToastPageGetSpecial(page)->pd_xid_base :
+					  HeapPageGetSpecial(page)->pd_xid_base;
+
+	return ShortTransactionIdToNormal(base,
+									  ((PageHeader) (page))->pd_prune_xid);
+}
+
+static inline void
+PageSetPrunable(Page page, TransactionId xid, bool is_toast)
+{
+	TransactionId	prune_xid;
+
+	Assert(TransactionIdIsNormal(xid));
+
+	if (HeapPageIsDoubleXmax(page))
+		return;
+
+	prune_xid = HeapPageGetPruneXid(page, is_toast);
+	if ((!TransactionIdIsValid(prune_xid) ||
+		TransactionIdPrecedes(xid, prune_xid)))
+	{
+		HeapPageSetPruneXid(page, xid, is_toast);
+	}
+}
+
+/*
+ * Get pd_prune_xid from non-locked page.  May return invalid value, but doen't
+ * causes assert failures.
+ */
+static inline TransactionId
+HeapPageGetPruneXidNoAssert(Page page, bool is_toast)
+{
+	TransactionId	base;
+
+	if (HeapPageIsDoubleXmax(page))
+		return ((PageHeader) (page))->pd_prune_xid;
+
+	base = is_toast ? ToastPageGetSpecialNoAssert(page)->pd_xid_base :
+					  HeapPageGetSpecialNoAssert(page)->pd_xid_base;
+	return ShortTransactionIdToNormal(base,
+									  ((PageHeader) (page))->pd_prune_xid);
+}
 
 /* ----------------------------------------------------------------
  *		extern declarations
@@ -485,6 +676,21 @@ do { \
 StaticAssertDecl(BLCKSZ == ((BLCKSZ / sizeof(size_t)) * sizeof(size_t)),
 				 "BLCKSZ has to be a multiple of sizeof(size_t)");
 
+/*
+ * Tuple defrag support for PageRepairFragmentation and PageIndexMultiDelete
+ */
+typedef struct ItemIdCompactData
+{
+	uint16		offsetindex;	/* linp array index */
+	int16		itemoff;		/* page offset of item data */
+	uint16		alignedlen;		/* MAXALIGN(item data len) */
+} ItemIdCompactData;
+
+typedef ItemIdCompactData *ItemIdCompact;
+typedef RelationData *Relation;
+
+extern int	itemoffcompare(const void *item1, const void *item2);
+
 extern void PageInit(Page page, Size pageSize, Size specialSize);
 extern bool PageIsVerifiedExtended(Page page, BlockNumber blkno, int flags);
 extern OffsetNumber PageAddItemExtended(Page page, Item item, Size size,
@@ -493,7 +699,7 @@ extern Page PageGetTempPage(Page page);
 extern Page PageGetTempPageCopy(Page page);
 extern Page PageGetTempPageCopySpecial(Page page);
 extern void PageRestoreTempPage(Page tempPage, Page oldPage);
-extern void PageRepairFragmentation(Page page);
+extern void PageRepairFragmentation(Page page, bool is_toast);
 extern void PageTruncateLinePointerArray(Page page);
 extern Size PageGetFreeSpace(Page page);
 extern Size PageGetFreeSpaceForMultipleTuples(Page page, int ntups);

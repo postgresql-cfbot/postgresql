@@ -5,6 +5,7 @@ subdir('authentication')
 subdir('recovery')
 subdir('subscription')
 subdir('modules')
+subdir('xid-64')
 
 if ssl.found()
   subdir('ssl')

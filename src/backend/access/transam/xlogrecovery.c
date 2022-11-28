@@ -95,7 +95,6 @@ int			recovery_min_apply_delay = 0;
 /* options formerly taken from recovery.conf for XLOG streaming */
 char	   *PrimaryConnInfo = NULL;
 char	   *PrimarySlotName = NULL;
-char	   *PromoteTriggerFile = NULL;
 bool		wal_receiver_create_temp_slot = false;
 
 /*
@@ -3840,14 +3839,14 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					XLogPrefetcherComputeStats(xlogprefetcher);
 
 					/*
-					 * Wait for more WAL to arrive. Time out after 5 seconds
-					 * to react to a trigger file promptly and to check if the
-					 * WAL receiver is still active.
+					 * Wait for more WAL to arrive, when we will be woken
+					 * immediately by the WAL receiver. Use of trigger file
+					 * via promote_trigger_file is now fully removed.
 					 */
 					(void) WaitLatch(&XLogRecoveryCtl->recoveryWakeupLatch,
-									 WL_LATCH_SET | WL_TIMEOUT |
-									 WL_EXIT_ON_PM_DEATH,
-									 5000L, WAIT_EVENT_RECOVERY_WAL_STREAM);
+									 WL_LATCH_SET | WL_EXIT_ON_PM_DEATH,
+									 -1L,
+									 WAIT_EVENT_RECOVERY_WAL_STREAM);
 					ResetLatch(&XLogRecoveryCtl->recoveryWakeupLatch);
 					break;
 				}
@@ -4300,8 +4299,6 @@ SetPromoteIsTriggered(void)
 static bool
 CheckForStandbyTrigger(void)
 {
-	struct stat stat_buf;
-
 	if (LocalPromoteIsTriggered)
 		return true;
 
@@ -4313,23 +4310,6 @@ CheckForStandbyTrigger(void)
 		SetPromoteIsTriggered();
 		return true;
 	}
-
-	if (PromoteTriggerFile == NULL || strcmp(PromoteTriggerFile, "") == 0)
-		return false;
-
-	if (stat(PromoteTriggerFile, &stat_buf) == 0)
-	{
-		ereport(LOG,
-				(errmsg("promote trigger file found: %s", PromoteTriggerFile)));
-		unlink(PromoteTriggerFile);
-		SetPromoteIsTriggered();
-		return true;
-	}
-	else if (errno != ENOENT)
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not stat promote trigger file \"%s\": %m",
-						PromoteTriggerFile)));
 
 	return false;
 }

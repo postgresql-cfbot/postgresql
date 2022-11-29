@@ -298,6 +298,12 @@ extern void be_tls_get_peer_subject_name(Port *port, char *ptr, size_t len);
 extern void be_tls_get_peer_issuer_name(Port *port, char *ptr, size_t len);
 extern void be_tls_get_peer_serial(Port *port, char *ptr, size_t len);
 
+extern unsigned char *be_tls_export_keying_material(Port *port,
+													const char *label,
+													const unsigned char *ctx,
+													size_t ctxlen,
+													size_t outlen);
+
 /*
  * Get the server certificate hash for SCRAM channel binding type
  * tls-server-end-point.

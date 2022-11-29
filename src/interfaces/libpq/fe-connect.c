@@ -122,6 +122,7 @@ static int	ldapServiceLookup(const char *purl, PQconninfoOption *options,
 #else
 #define DefaultChannelBinding	"disable"
 #endif
+#define DefaultChannelBindingType	"tls-server-end-point"
 #define DefaultTargetSessionAttrs	"any"
 #ifdef USE_SSL
 #define DefaultSSLMode "prefer"
@@ -204,6 +205,10 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 	{"channel_binding", "PGCHANNELBINDING", DefaultChannelBinding, NULL,
 		"Channel-Binding", "", 8,	/* sizeof("require") == 8 */
 	offsetof(struct pg_conn, channel_binding)},
+
+	{"channel_binding_type", "PGCHANNELBINDINGTYPE", NULL, NULL,
+		"Channel-Binding-Type", "", 20,	/* sizeof("tls-server-end-point") == 20 */
+	offsetof(struct pg_conn, channel_binding_type)},
 
 	{"connect_timeout", "PGCONNECT_TIMEOUT", NULL, NULL,
 		"Connect-timeout", "", 10,	/* strlen(INT32_MAX) == 10 */
@@ -1256,6 +1261,28 @@ connectOptions2(PGconn *conn)
 	{
 		conn->channel_binding = strdup(DefaultChannelBinding);
 		if (!conn->channel_binding)
+			goto oom_error;
+	}
+
+	/*
+	 * validate channel_binding_type option
+	 */
+	if (conn->channel_binding_type)
+	{
+		if (strcmp(conn->channel_binding_type, "tls-server-end-point") != 0
+			&& strcmp(conn->channel_binding_type, "tls-exporter") != 0)
+		{
+			conn->status = CONNECTION_BAD;
+			appendPQExpBuffer(&conn->errorMessage,
+							  libpq_gettext("invalid %s value: \"%s\"\n"),
+							  "channel_binding_type", conn->channel_binding_type);
+			return false;
+		}
+	}
+	else
+	{
+		conn->channel_binding_type = strdup(DefaultChannelBindingType);
+		if (!conn->channel_binding_type)
 			goto oom_error;
 	}
 

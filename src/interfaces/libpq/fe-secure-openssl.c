@@ -364,6 +364,36 @@ pgtls_write(PGconn *conn, const void *ptr, size_t len)
 	return n;
 }
 
+unsigned char *
+pgtls_export_keying_material(PGconn *conn, const char *label,
+							 const unsigned char *ctx, size_t ctxlen,
+							 size_t outlen)
+{
+	int				rc;
+	unsigned char  *out = malloc(outlen);
+
+	if (out == NULL)
+	{
+		appendPQExpBufferStr(&conn->errorMessage,
+							 libpq_gettext("out of memory\n"));
+		return NULL;
+	}
+
+	rc = SSL_export_keying_material(conn->ssl, out, outlen,
+									label, strlen(label),
+									ctx, ctxlen,
+									1 /* use the context */);
+	if (rc < 1)
+	{
+		appendPQExpBufferStr(&conn->errorMessage,
+							 libpq_gettext("could not export keying material\n"));
+		free(out);
+		return NULL;
+	}
+
+	return out;
+}
+
 #ifdef HAVE_X509_GET_SIGNATURE_NID
 char *
 pgtls_get_peer_certificate_hash(PGconn *conn, size_t *len)

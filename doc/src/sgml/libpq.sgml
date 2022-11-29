@@ -1242,6 +1242,24 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
       </listitem>
      </varlistentry>
 
+
+     <varlistentry id="libpq-connect-channel-binding-type" xreflabel="channel_binding_type">
+      <term><literal>channel_binding_type</literal></term>
+      <listitem>
+      <para>
+        This option controls the type of channel binding used by the client
+        when <literal>channel_binding</literal> is enabled. Supported
+        values are <literal>tls-server-end-point</literal>
+        (<ulink url="https://tools.ietf.org/html/rfc5929">RFC 5929</ulink>)
+        and <literal>tls-exporter</literal>
+        (<ulink url="https://tools.ietf.org/html/rfc9266">RFC 9266</ulink>
+        channel binding for <literal>TLSv1.3</literal> that has the advantage
+        to prevent man-in-the-middle attacks when the attacker has the
+        server's private key).
+      </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="libpq-connect-connect-timeout" xreflabel="connect_timeout">
       <term><literal>connect_timeout</literal></term>
       <listitem>
@@ -7760,6 +7778,16 @@ myEventProc(PGEventId evtId, void *evtInfo, void *passThrough)
       allow non-root users to see process environment variables via
       <application>ps</application>; instead consider using a password file
       (see <xref linkend="libpq-pgpass"/>).
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      <indexterm>
+       <primary><envar>PGCHANNELBINDINGTYPE</envar></primary>
+      </indexterm>
+      <envar>PGCHANNELBINDINGTYPE</envar> behaves the same as the <xref
+      linkend="libpq-connect-channel-binding-type"/> connection parameter.
      </para>
     </listitem>
 

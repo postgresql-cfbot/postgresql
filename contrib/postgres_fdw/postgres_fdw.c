@@ -1511,13 +1511,13 @@ postgresBeginForeignScan(ForeignScanState *node, int eflags)
 	/*
 	 * Identify which user to do the remote access as.  This should match what
 	 * ExecCheckRTEPerms() does.  In case of a join or aggregate, use the
-	 * lowest-numbered member RTE as a representative; we would get the same
-	 * result from any.
+	 * lowest-numbered member base RTE as a representative; we would get the
+	 * same result from any.
 	 */
 	if (fsplan->scan.scanrelid > 0)
 		rtindex = fsplan->scan.scanrelid;
 	else
-		rtindex = bms_next_member(fsplan->fs_relids, -1);
+		rtindex = bms_next_member(fsplan->fs_base_relids, -1);
 	rte = exec_rt_fetch(rtindex, estate);
 	userid = rte->checkAsUser ? rte->checkAsUser : GetUserId();
 
@@ -2414,7 +2414,7 @@ find_modifytable_subplan(PlannerInfo *root,
 	{
 		ForeignScan *fscan = (ForeignScan *) subplan;
 
-		if (bms_is_member(rtindex, fscan->fs_relids))
+		if (bms_is_member(rtindex, fscan->fs_base_relids))
 			return fscan;
 	}
 
@@ -2840,8 +2840,8 @@ postgresExplainForeignScan(ForeignScanState *node, ExplainState *es)
 		 * that setrefs.c won't update the string when flattening the
 		 * rangetable.  To find out what rtoffset was applied, identify the
 		 * minimum RT index appearing in the string and compare it to the
-		 * minimum member of plan->fs_relids.  (We expect all the relids in
-		 * the join will have been offset by the same amount; the Asserts
+		 * minimum member of plan->fs_base_relids.  (We expect all the relids
+		 * in the join will have been offset by the same amount; the Asserts
 		 * below should catch it if that ever changes.)
 		 */
 		minrti = INT_MAX;
@@ -2858,7 +2858,7 @@ postgresExplainForeignScan(ForeignScanState *node, ExplainState *es)
 			else
 				ptr++;
 		}
-		rtoffset = bms_next_member(plan->fs_relids, -1) - minrti;
+		rtoffset = bms_next_member(plan->fs_base_relids, -1) - minrti;
 
 		/* Now we can translate the string */
 		relations = makeStringInfo();
@@ -2873,7 +2873,7 @@ postgresExplainForeignScan(ForeignScanState *node, ExplainState *es)
 				char	   *refname;
 
 				rti += rtoffset;
-				Assert(bms_is_member(rti, plan->fs_relids));
+				Assert(bms_is_member(rti, plan->fs_base_relids));
 				rte = rt_fetch(rti, es->rtable);
 				Assert(rte->rtekind == RTE_RELATION);
 				/* This logic should agree with explain.c's ExplainTargetRel */
@@ -6313,7 +6313,6 @@ foreign_grouping_ok(PlannerInfo *root, RelOptInfo *grouped_rel,
 									  false,
 									  root->qual_security_level,
 									  grouped_rel->relids,
-									  NULL,
 									  NULL);
 			if (is_foreign_expr(root, grouped_rel, expr))
 				fpinfo->remote_conds = lappend(fpinfo->remote_conds, rinfo);

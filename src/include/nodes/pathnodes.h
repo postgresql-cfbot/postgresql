@@ -243,20 +243,25 @@ struct PlannerInfo
 	struct AppendRelInfo **append_rel_array pg_node_attr(read_write_ignore);
 
 	/*
-	 * all_baserels is a Relids set of all base relids (but not "other"
-	 * relids) in the query; that is, the Relids identifier of the final join
-	 * we need to form.  This is computed in make_one_rel, just before we
-	 * start making Paths.
+	 * all_baserels is a Relids set of all base relids (but not joins or
+	 * "other" relids) in the query.  This is computed in
+	 * add_base_rels_to_query.
 	 */
 	Relids		all_baserels;
 
 	/*
-	 * nullable_baserels is a Relids set of base relids that are nullable by
-	 * some outer join in the jointree; these are rels that are potentially
-	 * nullable below the WHERE clause, SELECT targetlist, etc.  This is
-	 * computed in deconstruct_jointree.
+	 * outer_join_rels is a Relids set of all outer-join relids in the query.
+	 * This is computed in deconstruct_jointree.
 	 */
-	Relids		nullable_baserels;
+	Relids		outer_join_rels;
+
+	/*
+	 * all_query_rels is a Relids set of all base relids and outer join relids
+	 * (but not "other" relids) in the query.  This is the Relids identifier
+	 * of the final join we need to form.  This is computed in
+	 * deconstruct_jointree.
+	 */
+	Relids		all_query_rels;
 
 	/*
 	 * join_rel_list is a list of all join-relation RelOptInfos we have
@@ -319,12 +324,15 @@ struct PlannerInfo
 	List	   *right_join_clauses;
 
 	/*
-	 * list of RestrictInfos for mergejoinable full join clauses
+	 * list of FullJoinClauseInfos for mergejoinable full join clauses
 	 */
 	List	   *full_join_clauses;
 
 	/* list of SpecialJoinInfos */
 	List	   *join_info_list;
+
+	/* counter for assigning RestrictInfo serial numbers */
+	int			last_rinfo_serial;
 
 	/*
 	 * all_result_relids is empty for SELECT, otherwise it contains at least
@@ -555,9 +563,10 @@ typedef struct PartitionSchemeData *PartitionScheme;
  * or the output of a sub-SELECT or function that appears in the range table.
  * In either case it is uniquely identified by an RT index.  A "joinrel"
  * is the joining of two or more base rels.  A joinrel is identified by
- * the set of RT indexes for its component baserels.  We create RelOptInfo
- * nodes for each baserel and joinrel, and store them in the PlannerInfo's
- * simple_rel_array and join_rel_list respectively.
+ * the set of RT indexes for its component baserels, along with RT indexes
+ * for any outer joins it has computed.  We create RelOptInfo nodes for each
+ * baserel and joinrel, and store them in the PlannerInfo's simple_rel_array
+ * and join_rel_list respectively.
  *
  * Note that there is only one joinrel for any given set of component
  * baserels, no matter what order we assemble them in; so an unordered
@@ -596,8 +605,10 @@ typedef struct PartitionSchemeData *PartitionScheme;
  * Parts of this data structure are specific to various scan and join
  * mechanisms.  It didn't seem worth creating new node types for them.
  *
- *		relids - Set of base-relation identifiers; it is a base relation
- *				if there is just one, a join relation if more than one
+ *		relids - Set of relation identifiers (RT indexes).  This is a base
+ *				 relation if there is just one, a join relation if more;
+ *				 in the join case, RT indexes of any outer joins formed
+ *				 at or below this join are included along with baserels
  *		rows - estimated number of tuples in the relation after restriction
  *			   clauses have been applied (ie, output rows of a plan for it)
  *		consider_startup - true if there is any value in keeping plain paths for
@@ -636,9 +647,12 @@ typedef struct PartitionSchemeData *PartitionScheme;
  *		min_attr, max_attr - range of valid AttrNumbers for rel
  *		attr_needed - array of bitmapsets indicating the highest joinrel
  *				in which each attribute is needed; if bit 0 is set then
- *				the attribute is needed as part of final targetlist
+ *				the attribute is needed as part of final targetlist.
+ *				By convention, attr_needed includes only baserels not
+ *				outer-join relids.
  *		attr_widths - cache space for per-attribute width estimates;
  *					  zero means not computed yet
+ *		nulling_relids - relids of outer joins that can null this rel
  *		lateral_vars - lateral cross-references of rel, if any (list of
  *					   Vars and PlaceHolderVars)
  *		lateral_referencers - relids of rels that reference this one laterally
@@ -809,7 +823,7 @@ typedef struct RelOptInfo
 	RelOptKind	reloptkind;
 
 	/*
-	 * all relations included in this RelOptInfo; set of base relids
+	 * all relations included in this RelOptInfo; set of base + OJ relids
 	 * (rangetable indexes)
 	 */
 	Relids		relids;
@@ -872,9 +886,11 @@ typedef struct RelOptInfo
 	Relids	   *attr_needed pg_node_attr(read_write_ignore);
 	/* array indexed [min_attr .. max_attr] */
 	int32	   *attr_widths pg_node_attr(read_write_ignore);
+	/* relids of outer joins that can null this baserel */
+	Relids		nulling_relids;
 	/* LATERAL Vars and PHVs referenced by rel */
 	List	   *lateral_vars;
-	/* rels that reference me laterally */
+	/* rels that reference this baserel laterally */
 	Relids		lateral_referencers;
 	/* list of IndexOptInfo */
 	List	   *indexlist;
@@ -884,10 +900,7 @@ typedef struct RelOptInfo
 	BlockNumber pages;
 	Cardinality tuples;
 	double		allvisfrac;
-
-	/*
-	 * Indexes in PlannerInfo's eq_classes list of ECs that mention this rel
-	 */
+	/* indexes in PlannerInfo's eq_classes list of ECs that mention this rel */
 	Bitmapset  *eclass_indexes;
 	PlannerInfo *subroot;		/* if subquery */
 	List	   *subplan_params; /* if subquery */
@@ -1335,10 +1348,11 @@ typedef struct EquivalenceMember
 
 	Expr	   *em_expr;		/* the expression represented */
 	Relids		em_relids;		/* all relids appearing in em_expr */
-	Relids		em_nullable_relids; /* nullable by lower outer joins */
 	bool		em_is_const;	/* expression is pseudoconstant? */
 	bool		em_is_child;	/* derived version for a child relation? */
 	Oid			em_datatype;	/* the "nominal type" used by the opfamily */
+	/* if em_is_child is true, this links to corresponding EM for top parent */
+	struct EquivalenceMember *em_parent pg_node_attr(read_write_ignore);
 } EquivalenceMember;
 
 /*
@@ -1444,7 +1458,13 @@ typedef struct PathTarget
  * Note: ppi_clauses is only used in ParamPathInfos for base relation paths;
  * in join cases it's NIL because the set of relevant clauses varies depending
  * on how the join is formed.  The relevant clauses will appear in each
- * parameterized join path's joinrestrictinfo list, instead.
+ * parameterized join path's joinrestrictinfo list, instead.  ParamPathInfos
+ * for append relations don't bother with this, either.
+ *
+ * ppi_serials is the set of rinfo_serial numbers for quals that are enforced
+ * by this path.  As with ppi_clauses, it's only maintained for baserels.
+ * (We could construct it on-the-fly from ppi_clauses, but it seems better
+ * to materialize a copy.)
  */
 typedef struct ParamPathInfo
 {
@@ -1455,6 +1475,7 @@ typedef struct ParamPathInfo
 	Relids		ppi_req_outer;	/* rels supplying parameters used by path */
 	Cardinality ppi_rows;		/* estimated number of result tuples */
 	List	   *ppi_clauses;	/* join clauses available from outer rels */
+	Bitmapset  *ppi_serials;	/* set of rinfo_serial for enforced quals */
 } ParamPathInfo;
 
 
@@ -2279,17 +2300,17 @@ typedef struct LimitPath
  * If a restriction clause references a single base relation, it will appear
  * in the baserestrictinfo list of the RelOptInfo for that base rel.
  *
- * If a restriction clause references more than one base rel, it will
+ * If a restriction clause references more than one base+OJ relation, it will
  * appear in the joininfo list of every RelOptInfo that describes a strict
- * subset of the base rels mentioned in the clause.  The joininfo lists are
+ * subset of the relations mentioned in the clause.  The joininfo lists are
  * used to drive join tree building by selecting plausible join candidates.
  * The clause cannot actually be applied until we have built a join rel
- * containing all the base rels it references, however.
+ * containing all the relations it references, however.
  *
- * When we construct a join rel that includes all the base rels referenced
+ * When we construct a join rel that includes all the relations referenced
  * in a multi-relation restriction clause, we place that clause into the
  * joinrestrictinfo lists of paths for the join rel, if neither left nor
- * right sub-path includes all base rels referenced in the clause.  The clause
+ * right sub-path includes all relations referenced in the clause.  The clause
  * will be applied at that join level, and will not propagate any further up
  * the join tree.  (Note: the "predicate migration" code was once intended to
  * push restriction clauses up and down the plan tree based on evaluation
@@ -2310,12 +2331,15 @@ typedef struct LimitPath
  * or join to enforce that all members of each EquivalenceClass are in fact
  * equal in all rows emitted by the scan or join.
  *
- * When dealing with outer joins we have to be very careful about pushing qual
- * clauses up and down the tree.  An outer join's own JOIN/ON conditions must
- * be evaluated exactly at that join node, unless they are "degenerate"
- * conditions that reference only Vars from the nullable side of the join.
- * Quals appearing in WHERE or in a JOIN above the outer join cannot be pushed
- * down below the outer join, if they reference any nullable Vars.
+ * The clause_relids field lists the base plus outer-join RT indexes that
+ * actually appear in the clause.  required_relids lists the minimum set of
+ * relids needed to evaluate the clause; while this is often equal to
+ * clause_relids, it can be more.  We will add relids to required_relids when
+ * we need to force an outer join ON clause to be evaluated exactly at the
+ * level of the outer join, which is true except when it is a "degenerate"
+ * condition that references only Vars from the nullable side of the join.
+ *
+ * XXX rewrite or remove me:
  * RestrictInfo nodes contain a flag to indicate whether a qual has been
  * pushed down to a lower level than its original syntactic placement in the
  * join tree would suggest.  If an outer join prevents us from pushing a qual
@@ -2349,9 +2373,7 @@ typedef struct LimitPath
  * in parameterized scans, since pushing it into the join's outer side would
  * lead to wrong answers.)
  *
- * There is also a nullable_relids field, which is the set of rels the clause
- * references that can be forced null by some outer join below the clause.
- *
+ * XXX this comment needs work, if we don't remove it completely:
  * outerjoin_delayed = true is subtly different from nullable_relids != NULL:
  * a clause might reference some nullable rels and yet not be
  * outerjoin_delayed because it also references all the other rels of the
@@ -2400,6 +2422,12 @@ typedef struct LimitPath
  * or merge or hash join clause, so it's of no interest to large parts of
  * the planner.
  *
+ * When we generate multiple versions of a clause so as to have versions
+ * that will work after commuting some left joins per outer join identity 3,
+ * we mark the one with the fewest nullingrels bits with has_clone = true,
+ * and the rest with is_clone = true.  This allows proper filtering of
+ * these redundant clauses, so that we apply only one version of them.
+ *
  * When join clauses are generated from EquivalenceClasses, there may be
  * several equally valid ways to enforce join equivalence, of which we need
  * apply only one.  We mark clauses of this kind by setting parent_ec to
@@ -2434,16 +2462,23 @@ typedef struct RestrictInfo
 	/* see comment above */
 	bool		pseudoconstant pg_node_attr(equal_ignore);
 
+	/* see comment above */
+	bool		has_clone;
+	bool		is_clone;
+
 	/* true if known to contain no leaked Vars */
 	bool		leakproof pg_node_attr(equal_ignore);
 
-	/* to indicate if clause contains any volatile functions. */
+	/* indicates if clause contains any volatile functions */
 	VolatileFunctionStatus has_volatile pg_node_attr(equal_ignore);
 
 	/* see comment above */
 	Index		security_level;
 
-	/* The set of relids (varnos) actually referenced in the clause: */
+	/* number of base rels in clause_relids */
+	int			num_base_rels pg_node_attr(equal_ignore);
+
+	/* The relids (varnos+varnullingrels) actually referenced in the clause: */
 	Relids		clause_relids pg_node_attr(equal_ignore);
 
 	/* The set of relids required to evaluate the clause: */
@@ -2451,9 +2486,6 @@ typedef struct RestrictInfo
 
 	/* If an outer-join clause, the outer-side relations, else NULL: */
 	Relids		outer_relids;
-
-	/* The relids used in the clause that are nullable by lower outer joins: */
-	Relids		nullable_relids;
 
 	/*
 	 * Relids in the left/right side of the clause.  These fields are set for
@@ -2468,6 +2500,25 @@ typedef struct RestrictInfo
 	 */
 	Expr	   *orclause pg_node_attr(equal_ignore);
 
+	/*----------
+	 * Serial number of this RestrictInfo.  This is unique within the current
+	 * PlannerInfo context, with a few critical exceptions:
+	 * 1. When we generate multiple clones of the same qual condition to
+	 * cope with outer join identity 3, all the clones get the same serial
+	 * number.  This reflects that we only want to apply one of them in any
+	 * given plan.
+	 * 2. If we manufacture a commuted version of a qual to use as an index
+	 * condition, it copies the original's rinfo_serial, since it is in
+	 * practice the same condition.
+	 * 3. RestrictInfos made for a child relation copy their parent's
+	 * rinfo_serial.  Likewise, when an EquivalenceClass makes a derived
+	 * equality clause for a child relation, it copies the rinfo_serial of
+	 * the matching equality clause for the parent.  This allows detection
+	 * of redundant pushed-down equality clauses.
+	 *----------
+	 */
+	int			rinfo_serial;
+
 	/*
 	 * Generating EquivalenceClass.  This field is NULL unless clause is
 	 * potentially redundant.
@@ -2481,10 +2532,7 @@ typedef struct RestrictInfo
 	/* eval cost of clause; -1 if not yet set */
 	QualCost	eval_cost pg_node_attr(equal_ignore);
 
-	/*
-	 * selectivity for "normal" (JOIN_INNER) semantics; -1 if not yet set; >1
-	 * means a redundant clause
-	 */
+	/* selectivity for "normal" (JOIN_INNER) semantics; -1 if not yet set */
 	Selectivity norm_selec pg_node_attr(equal_ignore);
 	/* selectivity for outer join semantics; -1 if not yet set */
 	Selectivity outer_selec pg_node_attr(equal_ignore);
@@ -2545,6 +2593,7 @@ typedef struct RestrictInfo
 } RestrictInfo;
 
 /*
+ * XXX this will need work:
  * This macro embodies the correct way to test whether a RestrictInfo is
  * "pushed down" to a given outer join, that is, should be treated as a filter
  * clause rather than a join clause at that outer join.  This is certainly so
@@ -2584,9 +2633,14 @@ typedef struct MergeScanSelCache
  * of a plan tree.  This is used during planning to represent the contained
  * expression.  At the end of the planning process it is replaced by either
  * the contained expression or a Var referring to a lower-level evaluation of
- * the contained expression.  Typically the evaluation occurs below an outer
+ * the contained expression.  Generally the evaluation occurs below an outer
  * join, and Var references above the outer join might thereby yield NULL
  * instead of the expression value.
+ *
+ * phrels and phlevelsup correspond to the varno/varlevelsup fields of a
+ * plain Var, except that phrels has to be a relid set since the evaluation
+ * level of a PlaceHolderVar might be a join rather than a base relation.
+ * Likewise, phnullingrels corresponds to varnullingrels.
  *
  * Although the planner treats this as an expression node type, it is not
  * recognized by the parser or executor, so we declare it here rather than
@@ -2600,8 +2654,10 @@ typedef struct MergeScanSelCache
  * PHV.  Another way in which it can happen is that initplan sublinks
  * could get replaced by differently-numbered Params when sublink folding
  * is done.  (The end result of such a situation would be some
- * unreferenced initplans, which is annoying but not really a problem.) On
- * the same reasoning, there is no need to examine phrels.
+ * unreferenced initplans, which is annoying but not really a problem.)
+ * On the same reasoning, there is no need to examine phrels.  But we do
+ * need to compare phnullingrels, as that represents effects that are
+ * external to the original value of the PHV.
  */
 
 typedef struct PlaceHolderVar
@@ -2611,8 +2667,11 @@ typedef struct PlaceHolderVar
 	/* the represented expression */
 	Expr	   *phexpr pg_node_attr(equal_ignore);
 
-	/* base relids syntactically within expr src */
+	/* base+OJ relids syntactically within expr src */
 	Relids		phrels pg_node_attr(equal_ignore);
+
+	/* RT indexes of outer joins that can null PHV's value */
+	Relids		phnullingrels;
 
 	/* ID for PHV (unique within planner run) */
 	Index		phid;
@@ -2637,7 +2696,7 @@ typedef struct PlaceHolderVar
  * We make SpecialJoinInfos for FULL JOINs even though there is no flexibility
  * of planning for them, because this simplifies make_join_rel()'s API.
  *
- * min_lefthand and min_righthand are the sets of base relids that must be
+ * min_lefthand and min_righthand are the sets of base+OJ relids that must be
  * available on each side when performing the special join.  lhs_strict is
  * true if the special join's condition cannot succeed when the LHS variables
  * are all NULL (this means that an outer join can commute with upper-level
@@ -2647,7 +2706,7 @@ typedef struct PlaceHolderVar
  * It is not valid for either min_lefthand or min_righthand to be empty sets;
  * if they were, this would break the logic that enforces join order.
  *
- * syn_lefthand and syn_righthand are the sets of base relids that are
+ * syn_lefthand and syn_righthand are the sets of base+OJ relids that are
  * syntactically below this special join.  (These are needed to help compute
  * min_lefthand and min_righthand for higher joins.)
  *
@@ -2669,6 +2728,37 @@ typedef struct PlaceHolderVar
  * the inputs to make it a LEFT JOIN.  So the allowed values of jointype
  * in a join_info_list member are only LEFT, FULL, SEMI, or ANTI.
  *
+ * ojrelid is the RT index of the join RTE representing this outer join,
+ * if there is one.  It is zero when jointype is INNER or SEMI, and can be
+ * zero for jointype ANTI (if the join was transformed from a SEMI join).
+ * One use for this field is that when constructing the output targetlist of a
+ * join relation that implements this OJ, we add ojrelid to the varnullingrels
+ * and phnullingrels fields of nullable (RHS) output columns, so that the
+ * output Vars and PlaceHolderVars correctly reflect the nulling that has
+ * potentially happened to them.
+ *
+ * commute_above_l is filled with the relids of syntactically-higher outer
+ * joins that have been found to commute with this one per outer join identity
+ * 3 (see optimizer/README), when this join is in the LHS of the upper join
+ * (so, this is the lower join in the first form of the identity).
+ *
+ * commute_above_r is filled with the relids of syntactically-higher outer
+ * joins that have been found to commute with this one per outer join identity
+ * 3, when this join is in the RHS of the upper join (so, this is the lower
+ * join in the second form of the identity).
+ *
+ * commute_below is filled with the relids of syntactically-lower outer joins
+ * that have been found to commute with this one per outer join identity 3.
+ * (We need not record which side they are on, since that can be determined
+ * by seeing whether the lower join's relid appears in syn_lefthand or
+ * syn_righthand.)
+ *
+ * oj_joinclause is used during deconstruct_jointree() to hold the JOIN/ON
+ * quals of a possibly-commutable outer join until the end of the jointree
+ * walk (at which time we'll know whether any other outer joins actually
+ * commute with it, and can decorate the quals properly).  These quals do not
+ * have RestrictInfos yet.
+ *
  * For purposes of join selectivity estimation, we create transient
  * SpecialJoinInfo structures for regular inner joins; so it is possible
  * to have jointype == JOIN_INNER in such a structure, even though this is
@@ -2688,11 +2778,16 @@ struct SpecialJoinInfo
 	pg_node_attr(no_read)
 
 	NodeTag		type;
-	Relids		min_lefthand;	/* base relids in minimum LHS for join */
-	Relids		min_righthand;	/* base relids in minimum RHS for join */
-	Relids		syn_lefthand;	/* base relids syntactically within LHS */
-	Relids		syn_righthand;	/* base relids syntactically within RHS */
+	Relids		min_lefthand;	/* base+OJ relids in minimum LHS for join */
+	Relids		min_righthand;	/* base+OJ relids in minimum RHS for join */
+	Relids		syn_lefthand;	/* base+OJ relids syntactically within LHS */
+	Relids		syn_righthand;	/* base+OJ relids syntactically within RHS */
 	JoinType	jointype;		/* always INNER, LEFT, FULL, SEMI, or ANTI */
+	Index		ojrelid;		/* outer join's RT index; 0 if none */
+	Relids		commute_above_l;	/* commuting OJs above this one, if LHS */
+	Relids		commute_above_r;	/* commuting OJs above this one, if RHS */
+	Relids		commute_below;	/* commuting OJs below this one */
+	List	   *oj_joinclause;	/* outer join quals not yet distributed */
 	bool		lhs_strict;		/* joinclause is strict for some LHS rel */
 	bool		delay_upper_joins;	/* can't commute with upper RHS */
 	/* Remaining fields are set only for JOIN_SEMI jointype: */
@@ -2701,6 +2796,21 @@ struct SpecialJoinInfo
 	List	   *semi_operators; /* OIDs of equality join operators */
 	List	   *semi_rhs_exprs; /* righthand-side expressions of these ops */
 };
+
+/*
+ * FULL JOIN clause info.
+ *
+ * We set aside every FULL JOIN ON clause that looks mergejoinable, and
+ * process it specially at the end of qual distribution.
+ */
+typedef struct FullJoinClauseInfo
+{
+	pg_node_attr(no_copy_equal, no_read)
+
+	NodeTag		type;
+	RestrictInfo *rinfo;		/* a mergejoinable FULL JOIN clause */
+	SpecialJoinInfo *sjinfo;	/* the FULL JOIN's SpecialJoinInfo */
+} FullJoinClauseInfo;
 
 /*
  * Append-relation info.

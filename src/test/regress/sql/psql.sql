@@ -1380,6 +1380,72 @@ SELECT 1 AS one \; SELECT warn('1.5') \; SELECT 2 AS two ;
 DROP FUNCTION warn(TEXT);
 
 --
+-- \g file
+--
+\getenv abs_builddir PG_ABS_BUILDDIR
+\set outfile1 :abs_builddir '/results/psql-output1'
+
+-- this table is used to load back the output data from files
+CREATE TEMPORARY TABLE reload_output(
+ lineno int not null generated always as identity,
+ line text
+);
+
+SELECT 1 AS a \g :outfile1
+COPY reload_output(line) FROM :'outfile1';
+
+SELECT 2 AS b\; SELECT 3 AS c\; SELECT 4 AS d \g :outfile1
+COPY reload_output(line) FROM :'outfile1';
+
+COPY (select 'foo') to stdout \; COPY (select 'bar') to stdout \g :outfile1
+COPY reload_output(line) FROM :'outfile1';
+
+SELECT line FROM reload_output ORDER BY lineno;
+TRUNCATE TABLE reload_output;
+
+--
+-- \o file
+--
+\set outfile2 :abs_builddir '/results/psql-output2'
+
+\o :outfile2
+select max(unique1) from onek;
+SELECT 1 AS a\; SELECT 2 AS b\; SELECT 3 AS c;
+
+-- COPY TO file
+-- the data goes into :outfile1 and the command status into :outfile2
+\set QUIET false
+COPY (select unique1 from onek order by unique1 limit 10) TO :'outfile1';
+-- DML command status
+UPDATE onek SET unique1=unique1 WHERE false;
+\set QUIET true
+\o
+
+COPY reload_output(line) FROM :'outfile1';
+SELECT line FROM reload_output ORDER BY lineno;
+TRUNCATE TABLE reload_output;
+
+COPY reload_output(line) FROM :'outfile2';
+SELECT line FROM reload_output ORDER BY lineno;
+TRUNCATE TABLE reload_output;
+
+\o :outfile2
+-- multiple COPY TO stdout
+-- the data go into :outfile2 and the status is not output
+COPY (select 'foo1') to stdout \; COPY (select 'bar1') to stdout;
+-- combine \o and \g file with multiple COPY queries
+COPY (select 'foo2') to stdout \; COPY (select 'bar2') to stdout \g :outfile1
+\o
+
+COPY reload_output(line) FROM :'outfile1';
+SELECT line FROM reload_output ORDER BY lineno;
+TRUNCATE TABLE reload_output;
+
+COPY reload_output(line) FROM :'outfile2';
+SELECT line FROM reload_output ORDER BY lineno;
+TRUNCATE TABLE reload_output;
+
+--
 -- AUTOCOMMIT and combined queries
 --
 \set AUTOCOMMIT off

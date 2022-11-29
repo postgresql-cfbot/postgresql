@@ -325,4 +325,24 @@ is($row_count, '10',
 	'client-side error commits transaction, no ON_ERROR_STOP and multiple -c switches'
 );
 
+# Test \g output piped into a program
+my $g_file = "$tempdir/g_file_1.out";
+# on Windows, findstr "^" with any text on stdin will copy it to stdout
+my $pipe_cmd = $windows_os ? "findstr \"^\" > \"$g_file\"" : "cat > \"$g_file\"";
+
+psql_like($node, "SELECT 'one' \\g | $pipe_cmd", qr//, "one command \\g");
+my $c1 = slurp_file($g_file);
+like($c1, qr/one/);
+
+psql_like($node, "SELECT 'two' \\; SELECT 'three' \\g | $pipe_cmd", qr//, "two commands \\g");
+my $c2 = slurp_file($g_file);
+like($c2, qr/two.*three/s);
+
+
+psql_like($node, "\\set SHOW_ALL_RESULTS 0\nSELECT 'four' \\; SELECT 'five' \\g | $pipe_cmd", qr//,
+  "two commands \\g with only last result");
+my $c3 = slurp_file($g_file);
+like($c3, qr/five/);
+unlike($c3, qr/four/);
+
 done_testing();

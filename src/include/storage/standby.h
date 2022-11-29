@@ -45,6 +45,7 @@ extern void StandbyLockTimeoutHandler(void);
 extern void LogRecoveryConflict(ProcSignalReason reason, TimestampTz wait_start,
 								TimestampTz now, VirtualTransactionId *wait_list,
 								bool still_waiting);
+extern void StartupProcessIdleMaintenance(void);
 
 /*
  * Standby Rmgr (RM_STANDBY_ID)

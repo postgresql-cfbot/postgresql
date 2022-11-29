@@ -274,6 +274,10 @@ static TransactionId *KnownAssignedXids;
 static bool *KnownAssignedXidsValid;
 static TransactionId latestObservedXid = InvalidTransactionId;
 
+/* Counters for KnownAssignedXids compression heuristic */
+static int transactionEndsCounter;
+static TimestampTz lastCompressTs;
+
 /*
  * If we're in STANDBY_SNAPSHOT_PENDING state, standbySnapshotPendingXmin is
  * the highest xid that might still be running that we don't have in
@@ -335,8 +339,16 @@ static void DisplayXidCache(void);
 #define xc_slow_answer_inc()		((void) 0)
 #endif							/* XIDCACHE_DEBUG */
 
+typedef enum KnownAssignedXidsCompressReason
+{
+	NO_SPACE,
+	RECOVERY_INFO,
+	TRANSACTION_END,
+	STARTUP_PROCESS_IDLE,
+} KnownAssignedXidsCompressReason;
+
 /* Primitives for KnownAssignedXids array handling for standby */
-static void KnownAssignedXidsCompress(bool force);
+static void KnownAssignedXidsCompress(KnownAssignedXidsCompressReason reason);
 static void KnownAssignedXidsAdd(TransactionId from_xid, TransactionId to_xid,
 								 bool exclusive_lock);
 static bool KnownAssignedXidsSearch(TransactionId xid, bool remove);
@@ -451,6 +463,8 @@ CreateSharedProcArray(void)
 			ShmemInitStruct("KnownAssignedXidsValid",
 							mul_size(sizeof(bool), TOTAL_MAX_CACHED_SUBXIDS),
 							&found);
+		transactionEndsCounter = 0;
+		lastCompressTs = GetCurrentTimestamp();
 	}
 }
 
@@ -4594,47 +4608,91 @@ ExpireOldKnownAssignedTransactionIds(TransactionId xid)
  * currently valid XIDs in the array.
  */
 
+void
+StartupProcessIdleMaintenance(void)
+{
+	LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
+	KnownAssignedXidsCompress(STARTUP_PROCESS_IDLE);
+	LWLockRelease(ProcArrayLock);
+}
+
+#define KAX_COMPRESS_FREQUENCY 64
+#define KAX_COMPRESS_IDLE_INTERVAL 1000
 
 /*
  * Compress KnownAssignedXids by shifting valid data down to the start of the
  * array, removing any gaps.
  *
- * A compression step is forced if "force" is true, otherwise we do it
+ * A compression step is forced if "reason" is NO_SPACE, otherwise we do it
  * only if a heuristic indicates it's a good time to do it.
  *
  * Caller must hold ProcArrayLock in exclusive mode.
  */
 static void
-KnownAssignedXidsCompress(bool force)
-{
+KnownAssignedXidsCompress(KnownAssignedXidsCompressReason reason) {
 	ProcArrayStruct *pArray = procArray;
 	int			head,
 				tail;
 	int			compress_index;
-	int			i;
+	int			i,
+				nelements;
 
 	/* no spinlock required since we hold ProcArrayLock exclusively */
 	head = pArray->headKnownAssignedXids;
 	tail = pArray->tailKnownAssignedXids;
 
-	if (!force)
+	nelements = head - tail;
+	/*
+	 * If we can choose how much to compress, use a heuristic to avoid
+	 * compressing too often or not often enough. "Compress" here means
+	 * simply moving the values to the beginning of the array, so is
+	 * not as complex or costly as typical data compression algorithms.
+	 */
+
+	/* Skip the compression for the case without invalid elements. */
+	if (nelements == pArray->numKnownAssignedXids)
 	{
 		/*
-		 * If we can choose how much to compress, use a heuristic to avoid
-		 * compressing too often or not often enough.
-		 *
-		 * Heuristic is if we have a large enough current spread and less than
-		 * 50% of the elements are currently in use, then compress. This
-		 * should ensure we compress fairly infrequently. We could compress
-		 * less often though the virtual array would spread out more and
-		 * snapshots would become more expensive.
+		 * We may compress an array even without any gaps because it required
+		 * to move the xids to the start of the array to free some space.
 		 */
-		int			nelements = head - tail;
-
-		if (nelements < 4 * PROCARRAY_MAXPROCS ||
-			nelements < 2 * pArray->numKnownAssignedXids)
+		if (reason != NO_SPACE)
 			return;
 	}
+
+	if (reason == TRANSACTION_END) {
+		/*
+		 * Avoid processing compression each commit to accumulate some
+		 * enough work to do. Frequency determined by benchmarks.
+		*/
+		if ((transactionEndsCounter++) % KAX_COMPRESS_FREQUENCY != 0)
+			return;
+		/*
+		 * Heuristic is if less than 50% of the elements are currently in
+		 * use, then compress. This ensures time to take a snapshot is
+		 * bounded at S=2N, using the same notation from earlier comments,
+		 * which is essential to avoid limiting scalability with high N.
+		 * Previously, we prevented compression until S=4M, ensuring that
+		 * snapshot speed would be slow and scale poorly with many CPUs.
+		 *
+		 * As noted earlier, compression is O(S), so now O(2N), while frequency
+		 * of compression is now O(1/N) so that as N varies, the algorithm
+		 * balances nicely the frequency and cost of compression.
+		 */
+		if (nelements < 2 * pArray->numKnownAssignedXids)
+			return;
+
+	} else if (reason == STARTUP_PROCESS_IDLE) {
+		/**
+		 * Compress XID array while no WAL available. But not too often to
+		 * avoid ProcArray lock contention with readers.
+		 */
+		TimestampTz compress_after = TimestampTzPlusMilliseconds(lastCompressTs,
+													KAX_COMPRESS_IDLE_INTERVAL);
+		if (GetCurrentTimestamp() < compress_after)
+			return;
+
+	} else Assert(reason == NO_SPACE || reason == RECOVERY_INFO);
 
 	/*
 	 * We compress the array by reading the valid values from tail to head,
@@ -4650,9 +4708,11 @@ KnownAssignedXidsCompress(bool force)
 			compress_index++;
 		}
 	}
+	Assert(compress_index == pArray->numKnownAssignedXids);
 
 	pArray->tailKnownAssignedXids = 0;
 	pArray->headKnownAssignedXids = compress_index;
+	lastCompressTs = GetCurrentTimestamp();
 }
 
 /*
@@ -4728,7 +4788,7 @@ KnownAssignedXidsAdd(TransactionId from_xid, TransactionId to_xid,
 		if (!exclusive_lock)
 			LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
 
-		KnownAssignedXidsCompress(true);
+		KnownAssignedXidsCompress(NO_SPACE);
 
 		head = pArray->headKnownAssignedXids;
 		/* note: we no longer care about the tail pointer */
@@ -4929,7 +4989,7 @@ KnownAssignedXidsRemoveTree(TransactionId xid, int nsubxids,
 		KnownAssignedXidsRemove(subxids[i]);
 
 	/* Opportunistically compress the array */
-	KnownAssignedXidsCompress(false);
+	KnownAssignedXidsCompress(TRANSACTION_END);
 }
 
 /*
@@ -5003,8 +5063,7 @@ KnownAssignedXidsRemovePreceding(TransactionId removeXid)
 		pArray->tailKnownAssignedXids = i;
 	}
 
-	/* Opportunistically compress the array */
-	KnownAssignedXidsCompress(false);
+	KnownAssignedXidsCompress(RECOVERY_INFO);
 }
 
 /*

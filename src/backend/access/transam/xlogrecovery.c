@@ -3832,6 +3832,9 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 						streaming_reply_sent = true;
 					}
 
+					/* Do any background tasks that might benefit us later */
+					StartupProcessIdleMaintenance();
+
 					/* Update pg_stat_recovery_prefetch before sleeping. */
 					XLogPrefetcherComputeStats(xlogprefetcher);
 

@@ -164,7 +164,8 @@ typedef struct GISTENTRY
 	bool		leafkey;
 } GISTENTRY;
 
-#define GistPageGetOpaque(page) ( (GISTPageOpaque) PageGetSpecialPointer(page) )
+#define GistPageGetOpaque(page) \
+	((GISTPageOpaque) PageGetSpecialOpaque(page, GISTPageOpaqueData))
 
 #define GistPageIsLeaf(page)	( GistPageGetOpaque(page)->flags & F_LEAF)
 #define GIST_LEAF(entry) (GistPageIsLeaf((entry)->page))

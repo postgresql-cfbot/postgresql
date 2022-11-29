@@ -70,7 +70,8 @@ typedef struct BTPageOpaqueData
 
 typedef BTPageOpaqueData *BTPageOpaque;
 
-#define BTPageGetOpaque(page) ((BTPageOpaque) PageGetSpecialPointer(page))
+#define BTPageGetOpaque(page) \
+	((BTPageOpaque) PageGetSpecialOpaque(page, BTPageOpaqueData))
 
 /* Bits defined in btpo_flags */
 #define BTP_LEAF		(1 << 0)	/* leaf page, i.e. not internal page */

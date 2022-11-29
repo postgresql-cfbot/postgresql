@@ -2237,8 +2237,9 @@ pg_get_constraintdef_worker(Oid constraintId, bool fullCommand,
 
 				/* add foreign relation name */
 				appendStringInfo(&buf, ") REFERENCES %s(",
-								 generate_relation_name(conForm->confrelid,
-														NIL));
+								 (prettyFlags & PRETTYFLAG_SCHEMA) ?
+								 generate_relation_name(conForm->confrelid, NIL) :
+								 generate_qualified_relation_name(conForm->confrelid));
 
 				/* Fetch and build referenced-column list */
 				val = SysCacheGetAttr(CONSTROID, tup,

@@ -775,10 +775,10 @@ CREATE TABLE FKTABLE (
   FOREIGN KEY (tid, fk_id_del_set_default) REFERENCES PKTABLE ON DELETE SET DEFAULT (fk_id_del_set_default)
 );
 SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'fktable'::regclass::oid ORDER BY oid;
-                                                pg_get_constraintdef                                                
---------------------------------------------------------------------------------------------------------------------
- FOREIGN KEY (tid, fk_id_del_set_null) REFERENCES pktable(tid, id) ON DELETE SET NULL (fk_id_del_set_null)
- FOREIGN KEY (tid, fk_id_del_set_default) REFERENCES pktable(tid, id) ON DELETE SET DEFAULT (fk_id_del_set_default)
+                                                   pg_get_constraintdef                                                    
+---------------------------------------------------------------------------------------------------------------------------
+ FOREIGN KEY (tid, fk_id_del_set_null) REFERENCES public.pktable(tid, id) ON DELETE SET NULL (fk_id_del_set_null)
+ FOREIGN KEY (tid, fk_id_del_set_default) REFERENCES public.pktable(tid, id) ON DELETE SET DEFAULT (fk_id_del_set_default)
 (2 rows)
 
 INSERT INTO PKTABLE VALUES (1, 0), (1, 1), (1, 2);

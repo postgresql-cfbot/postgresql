@@ -223,6 +223,81 @@ SELECT PLUS_ONE(1);
 
 SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
 
+-- PL/pgSQL procedure and pg_stat_statements.track = top
+CREATE PROCEDURE MINUS_TWO(i INTEGER) AS $$
+DECLARE
+  r INTEGER;
+BEGIN
+  SELECT (i - 1 - 1.0)::INTEGER INTO r;
+END; $$ LANGUAGE plpgsql;
+
+CREATE PROCEDURE SUM_TWO(i INTEGER, j INTEGER) AS $$
+DECLARE
+  r INTEGER;
+BEGIN
+  SELECT (j + j)::INTEGER INTO r;
+END; $$ LANGUAGE plpgsql;
+
+SET pg_stat_statements.track = 'top';
+SET pg_stat_statements.track_utility = FALSE;
+SELECT pg_stat_statements_reset();
+CALL MINUS_TWO(3);
+CALL MINUS_TWO(7);
+CALL SUM_TWO(3, 8);
+CALL SUM_TWO(7, 5);
+
+SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+--
+-- pg_stat_statements.track = all
+--
+SET pg_stat_statements.track = 'all';
+SELECT pg_stat_statements_reset();
+
+-- PL/pgSQL procedure and pg_stat_statements.track = all
+-- we drop and recreate the procedures to avoid any caching funnies
+
+DROP PROCEDURE MINUS_TWO(INTEGER);
+DROP PROCEDURE SUM_TWO(INTEGER, INTEGER);
+
+CREATE PROCEDURE MINUS_TWO(i INTEGER) AS $$
+DECLARE
+  r INTEGER;
+BEGIN
+  SELECT (i - 1 - 1.0)::INTEGER INTO r;
+END; $$ LANGUAGE plpgsql;
+
+CREATE PROCEDURE SUM_TWO(i INTEGER, j INTEGER) AS $$
+DECLARE
+  r INTEGER;
+BEGIN
+  SELECT (j + j)::INTEGER INTO r;
+END; $$ LANGUAGE plpgsql;
+
+CALL MINUS_TWO(3);
+CALL MINUS_TWO(7);
+CALL SUM_TWO(3, 8);
+CALL SUM_TWO(7, 5);
+
+SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+SET pg_stat_statements.track_utility = TRUE;
+
+-- SET
+SELECT pg_stat_statements_reset();
+set enable_seqscan=false;
+set enable_seqscan=true;
+set seq_page_cost=2.0;
+set seq_page_cost=1.0;
+set enable_seqscan to default;
+set seq_page_cost to default;
+reset seq_page_cost;
+reset enable_seqscan;
+
+SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+SET pg_stat_statements.track_utility = FALSE;
+
 --
 -- queries with locking clauses
 --
@@ -272,11 +347,38 @@ DROP FUNCTION PLUS_TWO(INTEGER);
 
 SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
 
+-- 2PC
+SELECT pg_stat_statements_reset();
+
+create table test_tx (a int);
+begin;
+prepare transaction 'tx1';
+insert into test_tx values (1);
+commit prepared 'tx1';
+
+begin;
+prepare transaction 'tx2';
+insert into test_tx values (2);
+commit prepared 'tx2';
+
+begin;
+prepare transaction 'tx3';
+insert into test_tx values (3);
+rollback prepared 'tx3';
+
+begin;
+prepare transaction 'tx4';
+insert into test_tx values (4);
+rollback prepared 'tx4';
+
+SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
+
 --
 -- Track the total number of rows retrieved or affected by the utility
 -- commands of COPY, FETCH, CREATE TABLE AS, CREATE MATERIALIZED VIEW,
 -- REFRESH MATERIALIZED VIEW and SELECT INTO
 --
+SET pg_stat_statements.track_utility = TRUE;
 SELECT pg_stat_statements_reset();
 
 CREATE TABLE pgss_ctas AS SELECT a, 'ctas' b FROM generate_series(1, 10) a;

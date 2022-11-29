@@ -105,7 +105,7 @@ JumbleQuery(Query *query, const char *querytext)
 
 	Assert(IsQueryIdEnabled());
 
-	if (query->utilityStmt)
+	if (query->utilityStmt && !IsJumbleUtilityAllowed(query->utilityStmt))
 	{
 		query->queryId = compute_utility_query_id(querytext,
 												  query->stmt_location,
@@ -241,10 +241,11 @@ static void
 JumbleQueryInternal(JumbleState *jstate, Query *query)
 {
 	Assert(IsA(query, Query));
-	Assert(query->utilityStmt == NULL);
+	Assert(query->utilityStmt == NULL || IsJumbleUtilityAllowed(query->utilityStmt));
 
 	APP_JUMB(query->commandType);
 	/* resultRelation is usually predictable from commandType */
+	JumbleExpr(jstate, (Node *) query->utilityStmt);
 	JumbleExpr(jstate, (Node *) query->cteList);
 	JumbleRangeTable(jstate, query->rtable);
 	JumbleExpr(jstate, (Node *) query->jointree);
@@ -383,6 +384,47 @@ JumbleExpr(JumbleState *jstate, Node *node)
 				APP_JUMB(var->varno);
 				APP_JUMB(var->varattno);
 				APP_JUMB(var->varlevelsup);
+			}
+			break;
+		case T_CallStmt:
+			{
+				CallStmt   *stmt = (CallStmt *) node;
+				FuncExpr   *expr = stmt->funcexpr;
+
+				APP_JUMB(expr->funcid);
+				JumbleExpr(jstate, (Node *) expr->args);
+			}
+			break;
+		case T_VariableSetStmt:
+			{
+				VariableSetStmt *stmt = (VariableSetStmt *) node;
+
+				/* stmt->name is NULL for RESET ALL */
+				if (stmt->name)
+				{
+					APP_JUMB(stmt->kind);
+					APP_JUMB_STRING(stmt->name);
+					JumbleExpr(jstate, (Node *) stmt->args);
+				}
+			}
+			break;
+		case T_A_Const:
+			{
+				int			loc = ((const A_Const *) node)->location;
+
+				RecordConstLocation(jstate, loc);
+			}
+			break;
+		case T_TransactionStmt:
+			{
+				TransactionStmt *stmt = (TransactionStmt *) node;
+
+				Assert(stmt->kind == TRANS_STMT_PREPARE ||
+					   stmt->kind == TRANS_STMT_COMMIT_PREPARED ||
+					   stmt->kind == TRANS_STMT_ROLLBACK_PREPARED);
+
+				APP_JUMB(stmt->kind);
+				RecordConstLocation(jstate, stmt->gid_location);
 			}
 			break;
 		case T_Const:

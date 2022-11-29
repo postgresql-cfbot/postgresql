@@ -106,6 +106,11 @@ static const uint32 PGSS_PG_MAJOR_VERSION = PG_VERSION_NUM / 100;
 #define PGSS_HANDLED_UTILITY(n)		(!IsA(n, ExecuteStmt) && \
 									!IsA(n, PrepareStmt) && \
 									!IsA(n, DeallocateStmt))
+/*
+ * Force track those utility statements
+ * whatever the value of pgss_track_utility is.
+ */
+#define FORCE_TRACK_UTILITY(n)	(IsA(n, CallStmt))
 
 /*
  * Extension version number, for supporting older extension versions' objects
@@ -833,9 +838,10 @@ pgss_post_parse_analyze(ParseState *pstate, Query *query, JumbleState *jstate)
 	 * inherit from the underlying statement's one (except DEALLOCATE which is
 	 * entirely untracked).
 	 */
-	if (query->utilityStmt)
+	if (query->utilityStmt && !jstate)
 	{
-		if (pgss_track_utility && !PGSS_HANDLED_UTILITY(query->utilityStmt))
+		if ((pgss_track_utility || FORCE_TRACK_UTILITY(query->utilityStmt)) &&
+			!PGSS_HANDLED_UTILITY(query->utilityStmt))
 			query->queryId = UINT64CONST(0);
 		return;
 	}
@@ -1100,7 +1106,8 @@ pgss_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 	 * that user configured another extension to handle utility statements
 	 * only.
 	 */
-	if (pgss_enabled(exec_nested_level) && pgss_track_utility)
+	if (pgss_enabled(exec_nested_level) &&
+		(pgss_track_utility || FORCE_TRACK_UTILITY(parsetree)))
 		pstmt->queryId = UINT64CONST(0);
 
 	/*
@@ -1117,7 +1124,8 @@ pgss_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 	 *
 	 * Likewise, we don't track execution of DEALLOCATE.
 	 */
-	if (pgss_track_utility && pgss_enabled(exec_nested_level) &&
+	if ((pgss_track_utility || FORCE_TRACK_UTILITY(parsetree)) &&
+		pgss_enabled(exec_nested_level) &&
 		PGSS_HANDLED_UTILITY(parsetree))
 	{
 		instr_time	start;

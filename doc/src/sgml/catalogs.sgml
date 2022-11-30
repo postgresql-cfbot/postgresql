@@ -6333,6 +6333,15 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
        publication instead of its own.
       </para></entry>
      </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>pubacl</structfield> <type>aclitem[]</type>
+      </para>
+      <para>
+       Access privileges; see <xref linkend="ddl-priv"/> for details
+      </para></entry>
+     </row>
     </tbody>
    </tgroup>
   </table>

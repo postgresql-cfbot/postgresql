@@ -7172,6 +7172,9 @@
 { oid => '2273', descr => 'current user privilege on schema by schema oid',
   proname => 'has_schema_privilege', provolatile => 's', prorettype => 'bool',
   proargtypes => 'oid text', prosrc => 'has_schema_privilege_id' },
+{ oid => '9800', descr => 'current user privilege on publication by publication oid',
+  proname => 'has_publication_privilege', provolatile => 's', prorettype => 'bool',
+  proargtypes => 'oid text', prosrc => 'has_publication_privilege_id' },
 
 { oid => '2390',
   descr => 'user privilege on tablespace by username, tablespace name',

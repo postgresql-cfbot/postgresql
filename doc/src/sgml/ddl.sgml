@@ -1937,6 +1937,13 @@ REVOKE ALL ON accounts FROM PUBLIC;
        a completely secure way to prevent object access.
       </para>
       <para>
+       For publications, allows logical replication via particular
+       publication. The user specified in
+       the <link linkend="sql-createsubscription"><command>CREATE
+       SUBSCRIPTION</command></link> command must have this privilege on all
+       publications listed in that command.
+      </para>
+      <para>
        For sequences, allows use of the
        <function>currval</function> and <function>nextval</function> functions.
       </para>
@@ -2135,6 +2142,7 @@ REVOKE ALL ON accounts FROM PUBLIC;
        <literal>FOREIGN DATA WRAPPER</literal>,
        <literal>FOREIGN SERVER</literal>,
        <literal>LANGUAGE</literal>,
+       <literal>PUBLICATION</literal>,
        <literal>SCHEMA</literal>,
        <literal>SEQUENCE</literal>,
        <literal>TYPE</literal>
@@ -2235,6 +2243,12 @@ REVOKE ALL ON accounts FROM PUBLIC;
       <entry><literal>sA</literal></entry>
       <entry>none</entry>
       <entry><literal>\dconfig+</literal></entry>
+     </row>
+     <row>
+      <entry><literal>PUBLICATION</literal></entry>
+      <entry><literal>U</literal></entry>
+      <entry>U</entry>
+      <entry><literal>\dRp+</literal></entry>
      </row>
      <row>
       <entry><literal>SCHEMA</literal></entry>

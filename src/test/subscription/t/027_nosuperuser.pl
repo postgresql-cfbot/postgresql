@@ -7,8 +7,10 @@ use warnings;
 use PostgreSQL::Test::Cluster;
 use Test::More;
 
-my ($node_publisher, $node_subscriber, $publisher_connstr, $result, $offset);
+my ($node_publisher, $node_subscriber, $publisher_connstr, $result, $offset,
+	$offset_pub);
 $offset = 0;
+$offset_pub = 0;
 
 sub publish_insert
 {
@@ -103,7 +105,8 @@ $node_publisher->init(allows_streaming => 'logical');
 $node_subscriber->init;
 $node_publisher->start;
 $node_subscriber->start;
-$publisher_connstr = $node_publisher->connstr . ' dbname=postgres';
+# Non-super user, so that we can test publication privileges.
+$publisher_connstr = $node_publisher->connstr . ' dbname=postgres user=regress_alice';
 my %remainder_a = (
 	publisher  => 0,
 	subscriber => 1);
@@ -141,6 +144,8 @@ for my $node ($node_publisher, $node_subscriber)
 }
 $node_publisher->safe_psql(
 	'postgres', qq(
+ALTER ROLE regress_alice REPLICATION;
+
 SET SESSION AUTHORIZATION regress_alice;
 
 CREATE PUBLICATION alice
@@ -314,6 +319,48 @@ publish_update("alice.unpartitioned", 15 => 25);
 publish_delete("alice.unpartitioned", 17);
 expect_replication("alice.unpartitioned", 2, 23, 25,
 	"nosuperuser nobypassrls table owner can replicate delete into unpartitioned despite rls"
+);
+
+# Test publication permissions.
+#
+# First, make sure that the user specified in the subscription is not able to
+# access the data, then do some changes. (By deleting everything we make the
+# following checks simpler.)
+$node_publisher->safe_psql(
+	'postgres', qq(
+REVOKE USAGE ON PUBLICATION alice FROM PUBLIC;
+REVOKE USAGE ON PUBLICATION alice FROM regress_alice;
+
+DELETE FROM alice.unpartitioned;
+));
+# Missing permission should cause error.
+expect_failure("alice.unpartitioned", 2, 23, 25,
+			   qr/ERROR: ( [A-Z0-9]+:)? permission denied for publication alice/msi, 0);
+# Check that the missing privilege makes table synchronization fail too.
+$node_subscriber->safe_psql(
+	'postgres', qq(
+SET SESSION AUTHORIZATION regress_admin;
+DROP SUBSCRIPTION admin_sub;
+TRUNCATE TABLE alice.unpartitioned;
+CREATE SUBSCRIPTION admin_sub CONNECTION '$publisher_connstr' PUBLICATION alice;
+));
+# Note that expect_failure() does not wait for the end of the synchronization,
+# so if there was any data on publisher side and if it found its way to the
+# subscriber, the function might still see an empty table. So we only rely on
+# the function to check the error message.
+expect_failure("alice.unpartitioned", 0, '', '',
+			   qr/ERROR: ( [A-Z0-9]+:)? permission denied for publication alice/msi, 0);
+# Restore the privilege on the publication.
+$node_publisher->safe_psql(
+	'postgres', qq(
+GRANT USAGE ON PUBLICATION alice TO regress_alice;
+));
+# Wait for synchronization to complete.
+$node_subscriber->wait_for_subscription_sync;
+# The replication should work again now.
+publish_insert("alice.unpartitioned", 1);
+expect_replication("alice.unpartitioned", 1, 1, 1,
+   "unpartitioned is replicated as soon as regress_alic has permissions on alice publication"
 );
 
 done_testing();

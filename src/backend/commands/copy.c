@@ -539,6 +539,24 @@ ProcessCopyOptions(ParseState *pstate,
 								defel->defname),
 						 parser_errposition(pstate, defel->location)));
 		}
+		else if (strcmp(defel->defname, "publication_names") == 0)
+		{
+			/*
+			 * Undocumented, not-accessible-from-SQL option: only retrieve
+			 * data published via the listed publications.
+			 */
+			if (opts_out->publications)
+				errorConflictingDefElem(defel, pstate);
+			opts_out->publications = true;
+			if (defel->arg == NULL || IsA(defel->arg, List))
+				opts_out->publication_names = castNode(List, defel->arg);
+			else
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("argument to option \"%s\" must be a list of publication names",
+								defel->defname),
+						 parser_errposition(pstate, defel->location)));
+		}
 		else if (strcmp(defel->defname, "encoding") == 0)
 		{
 			if (opts_out->file_encoding >= 0)
@@ -701,6 +719,11 @@ ProcessCopyOptions(ParseState *pstate,
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("CSV quote character must not appear in the NULL specification")));
+
+	if (opts_out->publication_names && is_from)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("COPY publication names only available using COPY TO")));
 }
 
 /*

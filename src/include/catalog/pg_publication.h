@@ -54,6 +54,12 @@ CATALOG(pg_publication,6104,PublicationRelationId)
 
 	/* true if partition changes are published using root schema */
 	bool		pubviaroot;
+
+#ifdef CATALOG_VARLEN			/* variable-length fields start here */
+	/* NOTE: These fields are not present in a relcache entry's rd_rel field. */
+	/* access permissions */
+	aclitem		pubacl[1] BKI_DEFAULT(_null_);
+#endif
 } FormData_pg_publication;
 
 /* ----------------

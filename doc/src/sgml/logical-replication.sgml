@@ -898,26 +898,26 @@ CREATE PUBLICATION
     <command>psql</command> can be used to show the row filter expressions (if
     defined) for each publication.
 <programlisting>
-test_pub=# \dRp+
+  test_pub=# \dRp+
                                Publication p1
-  Owner   | All tables | Inserts | Updates | Deletes | Truncates | Via root
-----------+------------+---------+---------+---------+-----------+----------
- postgres | f          | t       | t       | t       | t         | f
+  Owner   | All tables | Inserts | Updates | Deletes | Truncates | Via root | Access privileges
+----------+------------+---------+---------+---------+-----------+------------------------------
+ postgres | f          | t       | t       | t       | t         | f        |
 Tables:
     "public.t1" WHERE ((a > 5) AND (c = 'NSW'::text))
 
                                Publication p2
-  Owner   | All tables | Inserts | Updates | Deletes | Truncates | Via root
-----------+------------+---------+---------+---------+-----------+----------
- postgres | f          | t       | t       | t       | t         | f
+  Owner   | All tables | Inserts | Updates | Deletes | Truncates | Via root | Access privileges
+----------+------------+---------+---------+---------+-----------+------------------------------
+ postgres | f          | t       | t       | t       | t         | f        |
 Tables:
     "public.t1"
     "public.t2" WHERE (e = 99)
 
                                Publication p3
-  Owner   | All tables | Inserts | Updates | Deletes | Truncates | Via root
-----------+------------+---------+---------+---------+-----------+----------
- postgres | f          | t       | t       | t       | t         | f
+  Owner   | All tables | Inserts | Updates | Deletes | Truncates | Via root | Access privileges
+----------+------------+---------+---------+---------+-----------+------------------------------
+ postgres | f          | t       | t       | t       | t         | f        |
 Tables:
     "public.t2" WHERE (d = 10)
     "public.t3" WHERE (g = 10)
@@ -1356,9 +1356,9 @@ CREATE PUBLICATION
 <programlisting>
 test_pub=# \dRp+
                                Publication p1
-  Owner   | All tables | Inserts | Updates | Deletes | Truncates | Via root
-----------+------------+---------+---------+---------+-----------+----------
- postgres | f          | t       | t       | t       | t         | f
+  Owner   | All tables | Inserts | Updates | Deletes | Truncates | Via root | Access privileges
+----------+------------+---------+---------+---------+-----------+------------------------------
+ postgres | f          | t       | t       | t       | t         | f        |
 Tables:
     "public.t1" (id, a, b, d)
 </programlisting></para>
@@ -1710,12 +1710,6 @@ CONTEXT:  processing remote data for replication origin "pg_16395" during "INSER
   </para>
 
   <para>
-   In order to be able to copy the initial table data, the role used for the
-   replication connection must have the <literal>SELECT</literal> privilege on
-   a published table (or be a superuser).
-  </para>
-
-  <para>
    To create a publication, the user must have the <literal>CREATE</literal>
    privilege in the database.
   </para>
@@ -1728,15 +1722,23 @@ CONTEXT:  processing remote data for replication origin "pg_16395" during "INSER
   </para>
 
   <para>
-   There are currently no privileges on publications.  Any subscription (that
-   is able to connect) can access any publication.  Thus, if you intend to
-   hide some information from particular subscribers, such as by using row
-   filters or column lists, or by not adding the whole table to the
-   publication, be aware that other publications in the same database could
-   expose the same information.  Publication privileges might be added to
-   <productname>PostgreSQL</productname> in the future to allow for
-   finer-grained access control.
+   To replicate data, the role used for the replication connection must have
+   the <literal>USAGE</literal> privilege on the publication.
   </para>
+
+  <note>
+   <para>
+    If a subscriber is not aware of the <literal>USAGE</literal> privilege on
+    publications (because its <productname>PostgreSQL</productname> version is
+    not recent enough) and if a table is listed in multiple publications, the
+    initial synchronization can fail even if the subscriber does have
+    sufficient privileges on his publications. The problem is that the old
+    subscribers are not able to tell which particular publications they are
+    interested in, so the publisher has to check the <literal>USAGE</literal>
+    privilege on all publications for given table. However, some of those
+    publications might only be accessible by other subscriptions.
+   </para>
+  </note>
 
   <para>
    To create a subscription, the user must be a superuser.
@@ -1745,11 +1747,6 @@ CONTEXT:  processing remote data for replication origin "pg_16395" during "INSER
   <para>
    The subscription apply process will run in the local database with the
    privileges of the subscription owner.
-  </para>
-
-  <para>
-   On the publisher, privileges are only checked once at the start of a
-   replication connection and are not re-checked as each change record is read.
   </para>
 
   <para>

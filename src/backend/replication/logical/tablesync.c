@@ -731,6 +731,30 @@ copy_read_data(void *outbuf, int minread, int maxread)
 
 
 /*
+ * Return a comma-separated list of publications associated with the current
+ * subscriptions.
+ */
+static char *
+get_publication_names(void)
+{
+	StringInfoData buf;
+	ListCell   *lc;
+	char	*result;
+
+	initStringInfo(&buf);
+	foreach(lc, MySubscription->publications)
+	{
+		if (foreach_current_index(lc) > 0)
+			appendStringInfoString(&buf, ", ");
+		appendStringInfoString(&buf, quote_literal_cstr(strVal(lfirst(lc))));
+	}
+	result = pstrdup(buf.data);
+	pfree(buf.data);
+
+	return result;
+}
+
+/*
  * Get information about remote relation in similar fashion the RELATION
  * message provides during replication. This function also returns the relation
  * qualifications to be used in the COPY command.
@@ -747,7 +771,6 @@ fetch_remote_table_info(char *nspname, char *relname,
 	Oid			qualRow[] = {TEXTOID};
 	bool		isnull;
 	int			natt;
-	ListCell   *lc;
 	Bitmapset  *included_cols = NULL;
 
 	lrel->nspname = nspname;
@@ -789,7 +812,6 @@ fetch_remote_table_info(char *nspname, char *relname,
 	ExecDropSingleTupleTableSlot(slot);
 	walrcv_clear_result(res);
 
-
 	/*
 	 * Get column lists for each relation.
 	 *
@@ -801,14 +823,7 @@ fetch_remote_table_info(char *nspname, char *relname,
 		WalRcvExecResult *pubres;
 		TupleTableSlot *tslot;
 		Oid			attrsRow[] = {INT2VECTOROID};
-		StringInfoData pub_names;
-		initStringInfo(&pub_names);
-		foreach(lc, MySubscription->publications)
-		{
-			if (foreach_current_index(lc) > 0)
-				appendStringInfoString(&pub_names, ", ");
-			appendStringInfoString(&pub_names, quote_literal_cstr(strVal(lfirst(lc))));
-		}
+		char	*pub_names = get_publication_names();
 
 		/*
 		 * Fetch info about column lists for the relation (from all the
@@ -825,7 +840,7 @@ fetch_remote_table_info(char *nspname, char *relname,
 						 " WHERE gpt.relid = %u AND c.oid = gpt.relid"
 						 "   AND p.pubname IN ( %s )",
 						 lrel->remoteid,
-						 pub_names.data);
+						 pub_names);
 
 		pubres = walrcv_exec(LogRepWorkerWalRcvConn, cmd.data,
 							 lengthof(attrsRow), attrsRow);
@@ -880,8 +895,7 @@ fetch_remote_table_info(char *nspname, char *relname,
 		ExecDropSingleTupleTableSlot(tslot);
 
 		walrcv_clear_result(pubres);
-
-		pfree(pub_names.data);
+		pfree(pub_names);
 	}
 
 	/*
@@ -962,6 +976,16 @@ fetch_remote_table_info(char *nspname, char *relname,
 
 	walrcv_clear_result(res);
 
+	if (walrcv_server_version(LogRepWorkerWalRcvConn) >= 160000)
+	{
+		/*
+		 * If the publication ACL is implemented, the publisher is responsible
+		 * for checking. All we need to do is to pass the publication
+		 * names. The publisher should only return the data matching these
+		 * publications and only check the ACLs of these.
+		 */
+		lrel->pubnames = get_publication_names();
+	}
 	/*
 	 * Get relation's row filter expressions. DISTINCT avoids the same
 	 * expression of a table in multiple publications from being included
@@ -981,21 +1005,9 @@ fetch_remote_table_info(char *nspname, char *relname,
 	 * 3) one of the subscribed publications is declared as TABLES IN SCHEMA
 	 * that includes this relation
 	 */
-	if (walrcv_server_version(LogRepWorkerWalRcvConn) >= 150000)
+	else if (walrcv_server_version(LogRepWorkerWalRcvConn) >= 150000)
 	{
-		StringInfoData pub_names;
-
-		/* Build the pubname list. */
-		initStringInfo(&pub_names);
-		foreach(lc, MySubscription->publications)
-		{
-			char	   *pubname = strVal(lfirst(lc));
-
-			if (foreach_current_index(lc) > 0)
-				appendStringInfoString(&pub_names, ", ");
-
-			appendStringInfoString(&pub_names, quote_literal_cstr(pubname));
-		}
+		char	*pub_names = get_publication_names();
 
 		/* Check for row filters. */
 		resetStringInfo(&cmd);
@@ -1006,7 +1018,7 @@ fetch_remote_table_info(char *nspname, char *relname,
 						 " WHERE gpt.relid = %u"
 						 "   AND p.pubname IN ( %s )",
 						 lrel->remoteid,
-						 pub_names.data);
+						 pub_names);
 
 		res = walrcv_exec(LogRepWorkerWalRcvConn, cmd.data, 1, qualRow);
 
@@ -1045,6 +1057,7 @@ fetch_remote_table_info(char *nspname, char *relname,
 		ExecDropSingleTupleTableSlot(slot);
 
 		walrcv_clear_result(res);
+		pfree(pub_names);
 	}
 
 	pfree(cmd.data);
@@ -1081,8 +1094,12 @@ copy_table(Relation rel)
 	/* Start copy on the publisher. */
 	initStringInfo(&cmd);
 
-	/* Regular table with no row filter */
-	if (lrel.relkind == RELKIND_RELATION && qual == NIL)
+	/*
+	 * Regular table with no row filter. However if pubnames should be used,
+	 * we need a query.
+	 */
+	if (lrel.relkind == RELKIND_RELATION && qual == NIL &&
+		lrel.pubnames == NULL)
 	{
 		appendStringInfo(&cmd, "COPY %s (",
 						 quote_qualified_identifier(lrel.nspname, lrel.relname));
@@ -1133,6 +1150,13 @@ copy_table(Relation rel)
 			ListCell   *lc;
 			char	   *q = strVal(linitial(qual));
 
+			/*
+			 * fetch_remote_table_info() should only return qual for older
+			 * publisher version. Publishers of more recent postgres versions
+			 * do construct the filter themselves.
+			 */
+			Assert(walrcv_server_version(LogRepWorkerWalRcvConn) < 160000);
+
 			appendStringInfo(&cmd, " WHERE %s", q);
 			for_each_from(lc, qual, 1)
 			{
@@ -1142,8 +1166,23 @@ copy_table(Relation rel)
 			list_free_deep(qual);
 		}
 
-		appendStringInfoString(&cmd, ") TO STDOUT");
+		appendStringInfoString(&cmd, ") TO STDOUT ");
+
+		if (walrcv_server_version(LogRepWorkerWalRcvConn) >= 160000)
+		{
+			Assert(qual == NIL);
+			Assert(lrel.pubnames);
+
+			/*
+			 * Tell the publisher which publications we are interested
+			 * in. Publishers of the later versions do need this information
+			 * to construct the query filter and to check publication
+			 * privileges.
+			 */
+			appendStringInfo(&cmd, "(PUBLICATION_NAMES (%s)) ", lrel.pubnames);
+		}
 	}
+
 	res = walrcv_exec(LogRepWorkerWalRcvConn, cmd.data, 0, NULL);
 	pfree(cmd.data);
 	if (res->status != WALRCV_OK_COPY_OUT)

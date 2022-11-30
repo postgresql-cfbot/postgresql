@@ -29,6 +29,7 @@
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_parameter_acl.h"
 #include "catalog/pg_proc.h"
+#include "catalog/pg_publication.h"
 #include "catalog/pg_tablespace.h"
 #include "catalog/pg_type.h"
 #include "commands/dbcommands.h"
@@ -118,6 +119,7 @@ static AclMode convert_tablespace_priv_string(text *priv_type_text);
 static Oid	convert_type_name(text *typename);
 static AclMode convert_type_priv_string(text *priv_type_text);
 static AclMode convert_parameter_priv_string(text *priv_text);
+static AclMode convert_publication_priv_string(text *priv_type_text);
 static AclMode convert_role_priv_string(text *priv_type_text);
 static AclResult pg_role_aclcheck(Oid role_oid, Oid roleid, AclMode mode);
 
@@ -819,6 +821,10 @@ acldefault(ObjectType objtype, Oid ownerId)
 			world_default = ACL_NO_RIGHTS;
 			owner_default = ACL_ALL_RIGHTS_PARAMETER_ACL;
 			break;
+		case OBJECT_PUBLICATION:
+			world_default = ACL_USAGE;
+			owner_default = ACL_ALL_RIGHTS_PUBLICATION;
+			break;
 		default:
 			elog(ERROR, "unrecognized object type: %d", (int) objtype);
 			world_default = ACL_NO_RIGHTS;	/* keep compiler quiet */
@@ -903,6 +909,9 @@ acldefault_sql(PG_FUNCTION_ARGS)
 			break;
 		case 'p':
 			objtype = OBJECT_PARAMETER_ACL;
+			break;
+		case 'P':
+			objtype = OBJECT_PUBLICATION;
 			break;
 		case 't':
 			objtype = OBJECT_TABLESPACE;
@@ -4536,6 +4545,48 @@ convert_parameter_priv_string(text *priv_text)
 	};
 
 	return convert_any_priv_string(priv_text, parameter_priv_map);
+}
+
+/*
+ * has_publication_privilege_id
+ *		Check user privileges on a publication given
+ *		publication oid and text priv name.
+ *		current_user is assumed
+ */
+Datum
+has_publication_privilege_id(PG_FUNCTION_ARGS)
+{
+	Oid			puboid = PG_GETARG_OID(0);
+	text	   *priv_type_text = PG_GETARG_TEXT_PP(1);
+	Oid			roleid;
+	AclMode		mode;
+	AclResult	aclresult;
+
+	roleid = GetUserId();
+	mode = convert_publication_priv_string(priv_type_text);
+
+	if (!SearchSysCacheExists1(PUBLICATIONOID, ObjectIdGetDatum(puboid)))
+		PG_RETURN_NULL();
+
+	aclresult = object_aclcheck(PublicationRelationId, puboid, roleid, mode);
+
+	PG_RETURN_BOOL(aclresult == ACLCHECK_OK);
+}
+
+/*
+ * convert_publication_priv_string
+ *		Convert text string to AclMode value.
+ */
+static AclMode
+convert_publication_priv_string(text *priv_type_text)
+{
+	static const priv_map type_priv_map[] = {
+		{"USAGE", ACL_USAGE},
+		{"USAGE WITH GRANT OPTION", ACL_GRANT_OPTION_FOR(ACL_USAGE)},
+		{NULL, 0}
+	};
+
+	return convert_any_priv_string(priv_type_text, type_priv_map);
 }
 
 /*

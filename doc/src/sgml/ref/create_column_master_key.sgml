@@ -1,0 +1,106 @@
+<!--
+doc/src/sgml/ref/create_column_master_key.sgml
+PostgreSQL documentation
+-->
+
+<refentry id="sql-create-column-master-key">
+ <indexterm zone="sql-create-column-master-key">
+  <primary>CREATE COLUMN MASTER KEY</primary>
+ </indexterm>
+
+ <refmeta>
+  <refentrytitle>CREATE COLUMN MASTER KEY</refentrytitle>
+  <manvolnum>7</manvolnum>
+  <refmiscinfo>SQL - Language Statements</refmiscinfo>
+ </refmeta>
+
+ <refnamediv>
+  <refname>CREATE COLUMN MASTER KEY</refname>
+  <refpurpose>define a new column master key</refpurpose>
+ </refnamediv>
+
+ <refsynopsisdiv>
+<synopsis>
+CREATE COLUMN MASTER KEY <replaceable>name</replaceable> WITH (
+    [ REALM = <replaceable>realm</replaceable> ]
+)
+</synopsis>
+ </refsynopsisdiv>
+
+ <refsect1>
+  <title>Description</title>
+
+  <para>
+   <command>CREATE COLUMN MASTER KEY</command> defines a new column master
+   key.  A column master key is used to encrypt column encryption keys, which
+   are the keys that actually encrypt the column data.  The key material of
+   the column master key is not stored in the database.  The definition of a
+   column master key records information that will allow a client to locate
+   the key material, for example in a file or in a key management system.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Parameters</title>
+
+  <variablelist>
+   <varlistentry>
+    <term><replaceable>name</replaceable></term>
+
+    <listitem>
+     <para>
+      The name of the new column master key.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable>realm</replaceable></term>
+
+    <listitem>
+     <para>
+      This is an optional string that can be used to organize column master
+      keys into groups for lookup by clients.  The intent is that all column
+      master keys that are stored in the same system (file system location,
+      key management system, etc.) should be in the same realm.  A client
+      would then be configured to look up all keys in a given realm in a
+      certain way.  See the documentation of the respective client library for
+      further usage instructions.
+     </para>
+
+     <para>
+      The default is the empty string.
+     </para>
+    </listitem>
+   </varlistentry>
+  </variablelist>
+ </refsect1>
+
+ <refsect1>
+  <title>Examples</title>
+
+<programlisting>
+CREATE COLUMN MASTER KEY cmk1 (realm = 'myrealm');
+</programlisting>
+ </refsect1>
+
+ <refsect1>
+  <title>Compatibility</title>
+
+  <para>
+   There is no <command>CREATE COLUMN MASTER KEY</command> statement in
+   the SQL standard.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>See Also</title>
+
+  <simplelist type="inline">
+   <member><xref linkend="sql-alter-column-master-key"/></member>
+   <member><xref linkend="sql-drop-column-master-key"/></member>
+   <member><xref linkend="sql-create-column-encryption-key"/></member>
+  </simplelist>
+ </refsect1>
+
+</refentry>

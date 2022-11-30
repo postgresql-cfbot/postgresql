@@ -815,7 +815,11 @@ exec_command_d(PsqlScanState scan_state, bool active_branch, const char *cmd)
 				success = describeTablespaces(pattern, show_verbose);
 				break;
 			case 'c':
-				if (strncmp(cmd, "dconfig", 7) == 0)
+				if (strncmp(cmd, "dcek", 4) == 0)
+					success = listCEKs(pattern, show_verbose);
+				else if (strncmp(cmd, "dcmk", 4) == 0)
+					success = listCMKs(pattern, show_verbose);
+				else if (strncmp(cmd, "dconfig", 7) == 0)
 					success = describeConfigurationParameters(pattern,
 															  show_verbose,
 															  show_system);

@@ -54,6 +54,7 @@ endif
 
 ifeq ($(with_ssl),openssl)
 OBJS += \
+	fe-encrypt-openssl.o \
 	fe-secure-openssl.o
 endif
 

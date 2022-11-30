@@ -75,7 +75,9 @@ ORDER BY t1.oid;
  4600 | pg_brin_bloom_summary
  4601 | pg_brin_minmax_multi_summary
  5017 | pg_mcv_list
-(6 rows)
+ 8243 | pg_encrypted_det
+ 8244 | pg_encrypted_rnd
+(8 rows)
 
 -- Make sure typarray points to a "true" array type of our own base
 SELECT t1.oid, t1.typname as basetype, t2.typname as arraytype,
@@ -171,10 +173,12 @@ WHERE t1.typinput = p1.oid AND t1.typtype in ('b', 'p') AND NOT
     (t1.typelem != 0 AND t1.typlen < 0) AND NOT
     (p1.prorettype = t1.oid AND NOT p1.proretset)
 ORDER BY 1;
- oid  |  typname  | oid | proname 
-------+-----------+-----+---------
- 1790 | refcursor |  46 | textin
-(1 row)
+ oid  |     typname      | oid  | proname 
+------+------------------+------+---------
+ 1790 | refcursor        |   46 | textin
+ 8243 | pg_encrypted_det | 1244 | byteain
+ 8244 | pg_encrypted_rnd | 1244 | byteain
+(3 rows)
 
 -- Varlena array types will point to array_in
 -- Exception as of 8.1: int2vector and oidvector have their own I/O routines
@@ -223,10 +227,12 @@ WHERE t1.typoutput = p1.oid AND t1.typtype in ('b', 'p') AND NOT
       (p1.oid = 'array_out'::regproc AND
        t1.typelem != 0 AND t1.typlen = -1)))
 ORDER BY 1;
- oid  |  typname  | oid | proname 
-------+-----------+-----+---------
- 1790 | refcursor |  47 | textout
-(1 row)
+ oid  |     typname      | oid | proname  
+------+------------------+-----+----------
+ 1790 | refcursor        |  47 | textout
+ 8243 | pg_encrypted_det |  31 | byteaout
+ 8244 | pg_encrypted_rnd |  31 | byteaout
+(3 rows)
 
 SELECT t1.oid, t1.typname, p1.oid, p1.proname
 FROM pg_type AS t1, pg_proc AS p1
@@ -287,10 +293,12 @@ WHERE t1.typreceive = p1.oid AND t1.typtype in ('b', 'p') AND NOT
     (t1.typelem != 0 AND t1.typlen < 0) AND NOT
     (p1.prorettype = t1.oid AND NOT p1.proretset)
 ORDER BY 1;
- oid  |  typname  | oid  | proname  
-------+-----------+------+----------
- 1790 | refcursor | 2414 | textrecv
-(1 row)
+ oid  |     typname      | oid  |  proname  
+------+------------------+------+-----------
+ 1790 | refcursor        | 2414 | textrecv
+ 8243 | pg_encrypted_det | 2412 | bytearecv
+ 8244 | pg_encrypted_rnd | 2412 | bytearecv
+(3 rows)
 
 -- Varlena array types will point to array_recv
 -- Exception as of 8.1: int2vector and oidvector have their own I/O routines
@@ -348,10 +356,12 @@ WHERE t1.typsend = p1.oid AND t1.typtype in ('b', 'p') AND NOT
       (p1.oid = 'array_send'::regproc AND
        t1.typelem != 0 AND t1.typlen = -1)))
 ORDER BY 1;
- oid  |  typname  | oid  | proname  
-------+-----------+------+----------
- 1790 | refcursor | 2415 | textsend
-(1 row)
+ oid  |     typname      | oid  |  proname  
+------+------------------+------+-----------
+ 1790 | refcursor        | 2415 | textsend
+ 8243 | pg_encrypted_det | 2413 | byteasend
+ 8244 | pg_encrypted_rnd | 2413 | byteasend
+(3 rows)
 
 SELECT t1.oid, t1.typname, p1.oid, p1.proname
 FROM pg_type AS t1, pg_proc AS p1
@@ -707,6 +717,8 @@ CREATE TABLE tab_core_types AS SELECT
   'txt'::text,
   true::bool,
   E'\\xDEADBEEF'::bytea,
+  E'\\xDEADBEEF'::pg_encrypted_rnd,
+  E'\\xDEADBEEF'::pg_encrypted_det,
   B'10001'::bit,
   B'10001'::varbit AS varbit,
   '12.34'::money,

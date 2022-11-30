@@ -201,6 +201,12 @@ getSchemaData(Archive *fout, int *numTablesPtr)
 	pg_log_info("reading user-defined collations");
 	(void) getCollations(fout, &numCollations);
 
+	pg_log_info("reading column master keys");
+	getColumnMasterKeys(fout);
+
+	pg_log_info("reading column encryption keys");
+	getColumnEncryptionKeys(fout);
+
 	pg_log_info("reading user-defined conversions");
 	getConversions(fout, &numConversions);
 

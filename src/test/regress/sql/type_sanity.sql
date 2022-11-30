@@ -529,6 +529,8 @@ CREATE TABLE tab_core_types AS SELECT
   'txt'::text,
   true::bool,
   E'\\xDEADBEEF'::bytea,
+  E'\\xDEADBEEF'::pg_encrypted_rnd,
+  E'\\xDEADBEEF'::pg_encrypted_det,
   B'10001'::bit,
   B'10001'::varbit AS varbit,
   '12.34'::money,

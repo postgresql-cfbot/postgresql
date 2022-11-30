@@ -459,6 +459,12 @@ equalTupleDescs(TupleDesc tupdesc1, TupleDesc tupdesc2)
 			return false;
 		if (attr1->attislocal != attr2->attislocal)
 			return false;
+		if (attr1->attcek != attr2->attcek)
+			return false;
+		if (attr1->attrealtypid != attr2->attrealtypid)
+			return false;
+		if (attr1->attencalg != attr2->attencalg)
+			return false;
 		if (attr1->attinhcount != attr2->attinhcount)
 			return false;
 		if (attr1->attcollation != attr2->attcollation)
@@ -629,6 +635,9 @@ TupleDescInitEntry(TupleDesc desc,
 	att->attgenerated = '\0';
 	att->attisdropped = false;
 	att->attislocal = true;
+	att->attcek = 0;
+	att->attrealtypid = 0;
+	att->attencalg = 0;
 	att->attinhcount = 0;
 	/* variable-length fields are not present in tupledescs */
 
@@ -690,6 +699,9 @@ TupleDescInitBuiltinEntry(TupleDesc desc,
 	att->attgenerated = '\0';
 	att->attisdropped = false;
 	att->attislocal = true;
+	att->attcek = 0;
+	att->attrealtypid = 0;
+	att->attencalg = 0;
 	att->attinhcount = 0;
 	/* variable-length fields are not present in tupledescs */
 

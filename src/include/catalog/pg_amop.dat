@@ -1028,6 +1028,11 @@
   amoprighttype => 'bytea', amopstrategy => '1', amopopr => '=(bytea,bytea)',
   amopmethod => 'hash' },
 
+# pg_encrypted_det_ops
+{ amopfamily => 'hash/pg_encrypted_det_ops', amoplefttype => 'pg_encrypted_det',
+  amoprighttype => 'pg_encrypted_det', amopstrategy => '1', amopopr => '=(pg_encrypted_det,pg_encrypted_det)',
+  amopmethod => 'hash' },
+
 # xid_ops
 { amopfamily => 'hash/xid_ops', amoplefttype => 'xid', amoprighttype => 'xid',
   amopstrategy => '1', amopopr => '=(xid,xid)', amopmethod => 'hash' },

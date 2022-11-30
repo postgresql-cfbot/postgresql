@@ -34,3 +34,5 @@ executable('libpq_testclient',
     'install': false,
   }
 )
+
+# TODO: libpq_test_encrypt

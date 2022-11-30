@@ -36,7 +36,9 @@
 
 #include "access/xact.h"
 #include "catalog/namespace.h"
+#include "libpq/libpq-be.h"
 #include "mb/pg_wchar.h"
+#include "miscadmin.h"
 #include "utils/builtins.h"
 #include "utils/memutils.h"
 #include "utils/syscache.h"
@@ -128,6 +130,12 @@ PrepareClientEncoding(int encoding)
 		current_server_encoding == PG_SQL_ASCII ||
 		encoding == PG_SQL_ASCII)
 		return 0;
+
+	/*
+	 * Cannot do conversion when column encryption is enabled.
+	 */
+	if (MyProcPort->column_encryption_enabled)
+		return -1;
 
 	if (IsTransactionState())
 	{
@@ -237,6 +245,12 @@ SetClientEncoding(int encoding)
 	}
 
 	/*
+	 * Cannot do conversion when column encryption is enabled.
+	 */
+	if (MyProcPort->column_encryption_enabled)
+		return -1;
+
+	/*
 	 * Search the cache for the entry previously prepared by
 	 * PrepareClientEncoding; if there isn't one, we lose.  While at it,
 	 * release any duplicate entries so that repeated Prepare/Set cycles don't
@@ -296,7 +310,9 @@ InitializeClientEncoding(void)
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("conversion between %s and %s is not supported",
 						pg_enc2name_tbl[pending_client_encoding].name,
-						GetDatabaseEncodingName())));
+						GetDatabaseEncodingName()),
+				 (MyProcPort->column_encryption_enabled) ?
+				 errdetail("Encoding conversion is not possible when column encryption is enabled.") : 0));
 	}
 
 	/*

@@ -340,6 +340,8 @@ CompleteCachedPlan(CachedPlanSource *plansource,
 				   MemoryContext querytree_context,
 				   Oid *param_types,
 				   int num_params,
+				   Oid *param_origtbls,
+				   AttrNumber *param_origcols,
 				   ParserSetupHook parserSetup,
 				   void *parserSetupArg,
 				   int cursor_options,
@@ -417,8 +419,16 @@ CompleteCachedPlan(CachedPlanSource *plansource,
 
 	if (num_params > 0)
 	{
-		plansource->param_types = (Oid *) palloc(num_params * sizeof(Oid));
+		plansource->param_types = palloc_array(Oid, num_params);
 		memcpy(plansource->param_types, param_types, num_params * sizeof(Oid));
+
+		plansource->param_origtbls = palloc0_array(Oid, num_params);
+		if (param_origtbls)
+			memcpy(plansource->param_origtbls, param_origtbls, num_params * sizeof(Oid));
+
+		plansource->param_origcols = palloc0_array(AttrNumber, num_params);
+		if (param_origcols)
+			memcpy(plansource->param_origcols, param_origcols, num_params * sizeof(AttrNumber));
 	}
 	else
 		plansource->param_types = NULL;
@@ -1535,13 +1545,22 @@ CopyCachedPlan(CachedPlanSource *plansource)
 	newsource->commandTag = plansource->commandTag;
 	if (plansource->num_params > 0)
 	{
-		newsource->param_types = (Oid *)
-			palloc(plansource->num_params * sizeof(Oid));
+		newsource->param_types = palloc_array(Oid, plansource->num_params);
 		memcpy(newsource->param_types, plansource->param_types,
 			   plansource->num_params * sizeof(Oid));
+		if (plansource->param_origtbls)
+		{
+			newsource->param_origtbls = palloc_array(Oid, plansource->num_params);
+			memcpy(newsource->param_origtbls, plansource->param_origtbls,
+				   plansource->num_params * sizeof(Oid));
+		}
+		if (plansource->param_origcols)
+		{
+			newsource->param_origcols = palloc_array(AttrNumber, plansource->num_params);
+			memcpy(newsource->param_origcols, plansource->param_origcols,
+				   plansource->num_params * sizeof(AttrNumber));
+		}
 	}
-	else
-		newsource->param_types = NULL;
 	newsource->num_params = plansource->num_params;
 	newsource->parserSetup = plansource->parserSetup;
 	newsource->parserSetupArg = plansource->parserSetupArg;
@@ -1549,8 +1568,6 @@ CopyCachedPlan(CachedPlanSource *plansource)
 	newsource->fixed_result = plansource->fixed_result;
 	if (plansource->resultDesc)
 		newsource->resultDesc = CreateTupleDescCopy(plansource->resultDesc);
-	else
-		newsource->resultDesc = NULL;
 	newsource->context = source_context;
 
 	querytree_context = AllocSetContextCreate(source_context,

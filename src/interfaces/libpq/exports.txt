@@ -186,3 +186,7 @@ PQpipelineStatus          183
 PQsetTraceFlags           184
 PQmblenBounded            185
 PQsendFlushRequest        186
+PQexecPreparedDescribed   187
+PQsendQueryPreparedDescribed 188
+PQfisencrypted            189
+PQparamisencrypted        190

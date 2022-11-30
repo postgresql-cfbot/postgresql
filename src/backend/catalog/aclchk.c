@@ -33,7 +33,9 @@
 #include "catalog/pg_authid.h"
 #include "catalog/pg_cast.h"
 #include "catalog/pg_class.h"
+#include "catalog/pg_colenckey.h"
 #include "catalog/pg_collation.h"
+#include "catalog/pg_colmasterkey.h"
 #include "catalog/pg_conversion.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_default_acl.h"
@@ -3604,6 +3606,9 @@ aclcheck_error(AclResult aclerr, ObjectType objtype,
 					case OBJECT_AMPROC:
 					case OBJECT_ATTRIBUTE:
 					case OBJECT_CAST:
+					case OBJECT_CEK:
+					case OBJECT_CEKDATA:
+					case OBJECT_CMK:
 					case OBJECT_DEFAULT:
 					case OBJECT_DEFACL:
 					case OBJECT_DOMCONSTRAINT:
@@ -3633,6 +3638,12 @@ aclcheck_error(AclResult aclerr, ObjectType objtype,
 				{
 					case OBJECT_AGGREGATE:
 						msg = gettext_noop("must be owner of aggregate %s");
+						break;
+					case OBJECT_CEK:
+						msg = gettext_noop("must be owner of column encryption key %s");
+						break;
+					case OBJECT_CMK:
+						msg = gettext_noop("must be owner of column master key %s");
 						break;
 					case OBJECT_COLLATION:
 						msg = gettext_noop("must be owner of collation %s");
@@ -3744,6 +3755,7 @@ aclcheck_error(AclResult aclerr, ObjectType objtype,
 					case OBJECT_AMPROC:
 					case OBJECT_ATTRIBUTE:
 					case OBJECT_CAST:
+					case OBJECT_CEKDATA:
 					case OBJECT_DEFAULT:
 					case OBJECT_DEFACL:
 					case OBJECT_DOMCONSTRAINT:

@@ -47,6 +47,7 @@
 #include "catalog/pg_authid_d.h"
 #include "catalog/pg_cast_d.h"
 #include "catalog/pg_class_d.h"
+#include "catalog/pg_colenckey.h"
 #include "catalog/pg_default_acl_d.h"
 #include "catalog/pg_largeobject_d.h"
 #include "catalog/pg_largeobject_metadata_d.h"
@@ -226,6 +227,8 @@ static void dumpAccessMethod(Archive *fout, const AccessMethodInfo *aminfo);
 static void dumpOpclass(Archive *fout, const OpclassInfo *opcinfo);
 static void dumpOpfamily(Archive *fout, const OpfamilyInfo *opfinfo);
 static void dumpCollation(Archive *fout, const CollInfo *collinfo);
+static void dumpColumnEncryptionKey(Archive *fout, const CekInfo *cekinfo);
+static void dumpColumnMasterKey(Archive *fout, const CmkInfo *cekinfo);
 static void dumpConversion(Archive *fout, const ConvInfo *convinfo);
 static void dumpRule(Archive *fout, const RuleInfo *rinfo);
 static void dumpAgg(Archive *fout, const AggInfo *agginfo);
@@ -385,6 +388,7 @@ main(int argc, char **argv)
 		{"attribute-inserts", no_argument, &dopt.column_inserts, 1},
 		{"binary-upgrade", no_argument, &dopt.binary_upgrade, 1},
 		{"column-inserts", no_argument, &dopt.column_inserts, 1},
+		{"decrypt-encrypted-columns", no_argument, &dopt.cparams.column_encryption, 1},
 		{"disable-dollar-quoting", no_argument, &dopt.disable_dollar_quoting, 1},
 		{"disable-triggers", no_argument, &dopt.disable_triggers, 1},
 		{"enable-row-security", no_argument, &dopt.enable_row_security, 1},
@@ -677,6 +681,9 @@ main(int argc, char **argv)
 	 * --inserts are already implied above if --column-inserts or
 	 * --rows-per-insert were specified.
 	 */
+	if (dopt.cparams.column_encryption && dopt.dump_inserts == 0)
+		pg_fatal("option --decrypt_encrypted_columns requires option --inserts, --rows-per-insert, or --column-inserts");
+
 	if (dopt.do_nothing && dopt.dump_inserts == 0)
 		pg_fatal("option --on-conflict-do-nothing requires option --inserts, --rows-per-insert, or --column-inserts");
 
@@ -1022,6 +1029,7 @@ help(const char *progname)
 	printf(_("  -x, --no-privileges          do not dump privileges (grant/revoke)\n"));
 	printf(_("  --binary-upgrade             for use by upgrade utilities only\n"));
 	printf(_("  --column-inserts             dump data as INSERT commands with column names\n"));
+	printf(_("  --decrypt-encrypted-columns  decrypt encrypted columns in the output\n"));
 	printf(_("  --disable-dollar-quoting     disable dollar quoting, use SQL standard quoting\n"));
 	printf(_("  --disable-triggers           disable triggers during data-only restore\n"));
 	printf(_("  --enable-row-security        enable row security (dump only content user has\n"
@@ -5519,6 +5527,138 @@ getCollations(Archive *fout, int *numCollations)
 }
 
 /*
+ * getColumnEncryptionKeys
+ *	  get information about column encryption keys
+ */
+void
+getColumnEncryptionKeys(Archive *fout)
+{
+	PQExpBuffer query;
+	PGresult   *res;
+	int			ntups;
+	CekInfo	   *cekinfo;
+	int			i_tableoid;
+	int			i_oid;
+	int			i_cekname;
+	int			i_cekowner;
+
+	if (fout->remoteVersion < 160000)
+		return;
+
+	query = createPQExpBuffer();
+
+	appendPQExpBuffer(query,
+					  "SELECT cek.tableoid, cek.oid, cek.cekname,\n"
+					  " cek.cekowner\n"
+					  "FROM pg_colenckey cek");
+
+	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
+
+	ntups = PQntuples(res);
+
+	i_tableoid = PQfnumber(res, "tableoid");
+	i_oid = PQfnumber(res, "oid");
+	i_cekname = PQfnumber(res, "cekname");
+	i_cekowner = PQfnumber(res, "cekowner");
+
+	cekinfo = pg_malloc(ntups * sizeof(CekInfo));
+
+	for (int i = 0; i < ntups; i++)
+	{
+		PGresult	   *res2;
+		int				ntups2;
+
+		cekinfo[i].dobj.objType = DO_CEK;
+		cekinfo[i].dobj.catId.tableoid = atooid(PQgetvalue(res, i, i_tableoid));
+		cekinfo[i].dobj.catId.oid = atooid(PQgetvalue(res, i, i_oid));
+		AssignDumpId(&cekinfo[i].dobj);
+		cekinfo[i].dobj.name = pg_strdup(PQgetvalue(res, i, i_cekname));
+		cekinfo[i].rolname = getRoleName(PQgetvalue(res, i, i_cekowner));
+
+		resetPQExpBuffer(query);
+		appendPQExpBuffer(query,
+						  "SELECT (SELECT cmkname FROM pg_catalog.pg_colmasterkey WHERE pg_colmasterkey.oid = ckdcmkid) AS cekcmkname,\n"
+						  " ckdcmkalg, ckdencval\n"
+						  "FROM pg_catalog.pg_colenckeydata\n"
+						  "WHERE ckdcekid = %u", cekinfo[i].dobj.catId.oid);
+		res2 = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
+		ntups2 = PQntuples(res2);
+		cekinfo[i].numdata = ntups2;
+		cekinfo[i].cekcmknames = pg_malloc(sizeof(char *) * ntups2);
+		cekinfo[i].cekcmkalgs = pg_malloc(sizeof(int) * ntups2);
+		cekinfo[i].cekencvals = pg_malloc(sizeof(char *) * ntups2);
+		for (int j = 0; j < ntups2; j++)
+		{
+			cekinfo[i].cekcmknames[j] = pg_strdup(PQgetvalue(res2, j, PQfnumber(res2, "cekcmkname")));
+			cekinfo[i].cekcmkalgs[j] = atoi(PQgetvalue(res2, j, PQfnumber(res2, "ckdcmkalg")));
+			cekinfo[i].cekencvals[j] = pg_strdup(PQgetvalue(res2, j, PQfnumber(res2, "ckdencval")));
+		}
+		PQclear(res2);
+
+		selectDumpableObject(&(cekinfo[i].dobj), fout);
+	}
+	PQclear(res);
+
+	destroyPQExpBuffer(query);
+}
+
+/*
+ * getColumnMasterKeys
+ *	  get information about column master keys
+ */
+void
+getColumnMasterKeys(Archive *fout)
+{
+	PQExpBuffer query;
+	PGresult   *res;
+	int			ntups;
+	CmkInfo	   *cmkinfo;
+	int			i_tableoid;
+	int			i_oid;
+	int			i_cmkname;
+	int			i_cmkowner;
+	int			i_cmkrealm;
+
+	if (fout->remoteVersion < 160000)
+		return;
+
+	query = createPQExpBuffer();
+
+	appendPQExpBuffer(query,
+					  "SELECT cmk.tableoid, cmk.oid, cmk.cmkname,\n"
+					  " cmk.cmkowner, cmk.cmkrealm\n"
+					  "FROM pg_colmasterkey cmk");
+
+	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
+
+	ntups = PQntuples(res);
+
+	i_tableoid = PQfnumber(res, "tableoid");
+	i_oid = PQfnumber(res, "oid");
+	i_cmkname = PQfnumber(res, "cmkname");
+	i_cmkowner = PQfnumber(res, "cmkowner");
+	i_cmkrealm = PQfnumber(res, "cmkrealm");
+
+	cmkinfo = pg_malloc(ntups * sizeof(CmkInfo));
+
+	for (int i = 0; i < ntups; i++)
+	{
+		cmkinfo[i].dobj.objType = DO_CMK;
+		cmkinfo[i].dobj.catId.tableoid = atooid(PQgetvalue(res, i, i_tableoid));
+		cmkinfo[i].dobj.catId.oid = atooid(PQgetvalue(res, i, i_oid));
+		AssignDumpId(&cmkinfo[i].dobj);
+		cmkinfo[i].dobj.name = pg_strdup(PQgetvalue(res, i, i_cmkname));
+		cmkinfo[i].rolname = getRoleName(PQgetvalue(res, i, i_cmkowner));
+		cmkinfo[i].cmkrealm = pg_strdup(PQgetvalue(res, i, i_cmkrealm));
+
+		selectDumpableObject(&(cmkinfo[i].dobj), fout);
+	}
+	PQclear(res);
+
+	destroyPQExpBuffer(query);
+}
+
+/*
  * getConversions:
  *	  read all conversions in the system catalogs and return them in the
  * ConvInfo* structure
@@ -8108,6 +8248,9 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 	int			i_typstorage;
 	int			i_attidentity;
 	int			i_attgenerated;
+	int			i_attcekname;
+	int			i_attencalg;
+	int			i_attencdet;
 	int			i_attisdropped;
 	int			i_attlen;
 	int			i_attalign;
@@ -8217,17 +8360,29 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 
 	if (fout->remoteVersion >= 120000)
 		appendPQExpBufferStr(q,
-							 "a.attgenerated\n");
+							 "a.attgenerated,\n");
 	else
 		appendPQExpBufferStr(q,
-							 "'' AS attgenerated\n");
+							 "'' AS attgenerated,\n");
+
+	if (fout->remoteVersion >= 160000)
+		appendPQExpBuffer(q,
+						  "(SELECT cekname FROM pg_colenckey cek WHERE cek.oid = a.attcek) AS attcekname,\n"
+						  "CASE atttypid WHEN %u THEN true WHEN %u THEN false END AS attencdet,\n"
+						  "attencalg\n",
+						  PG_ENCRYPTED_DETOID, PG_ENCRYPTED_RNDOID);
+	else
+		appendPQExpBufferStr(q,
+							 "NULL AS attcekname,\n"
+							 "NULL AS attencdet,\n"
+							 "NULL AS attencalg\n");
 
 	/* need left join to pg_type to not fail on dropped columns ... */
 	appendPQExpBuffer(q,
 					  "FROM unnest('%s'::pg_catalog.oid[]) AS src(tbloid)\n"
 					  "JOIN pg_catalog.pg_attribute a ON (src.tbloid = a.attrelid) "
 					  "LEFT JOIN pg_catalog.pg_type t "
-					  "ON (a.atttypid = t.oid)\n"
+					  "ON (CASE WHEN a.attrealtypid <> 0 THEN a.attrealtypid ELSE a.atttypid END = t.oid)\n"
 					  "WHERE a.attnum > 0::pg_catalog.int2\n"
 					  "ORDER BY a.attrelid, a.attnum",
 					  tbloids->data);
@@ -8246,6 +8401,9 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 	i_typstorage = PQfnumber(res, "typstorage");
 	i_attidentity = PQfnumber(res, "attidentity");
 	i_attgenerated = PQfnumber(res, "attgenerated");
+	i_attcekname = PQfnumber(res, "attcekname");
+	i_attencdet = PQfnumber(res, "attencdet");
+	i_attencalg = PQfnumber(res, "attencalg");
 	i_attisdropped = PQfnumber(res, "attisdropped");
 	i_attlen = PQfnumber(res, "attlen");
 	i_attalign = PQfnumber(res, "attalign");
@@ -8307,6 +8465,9 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 		tbinfo->typstorage = (char *) pg_malloc(numatts * sizeof(char));
 		tbinfo->attidentity = (char *) pg_malloc(numatts * sizeof(char));
 		tbinfo->attgenerated = (char *) pg_malloc(numatts * sizeof(char));
+		tbinfo->attcekname = (char **) pg_malloc(numatts * sizeof(char *));
+		tbinfo->attencdet = (bool *) pg_malloc(numatts * sizeof(bool));
+		tbinfo->attencalg = (int *) pg_malloc(numatts * sizeof(int));
 		tbinfo->attisdropped = (bool *) pg_malloc(numatts * sizeof(bool));
 		tbinfo->attlen = (int *) pg_malloc(numatts * sizeof(int));
 		tbinfo->attalign = (char *) pg_malloc(numatts * sizeof(char));
@@ -8335,6 +8496,18 @@ getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables)
 			tbinfo->attidentity[j] = *(PQgetvalue(res, r, i_attidentity));
 			tbinfo->attgenerated[j] = *(PQgetvalue(res, r, i_attgenerated));
 			tbinfo->needs_override = tbinfo->needs_override || (tbinfo->attidentity[j] == ATTRIBUTE_IDENTITY_ALWAYS);
+			if (!PQgetisnull(res, r, i_attcekname))
+				tbinfo->attcekname[j] = pg_strdup(PQgetvalue(res, r, i_attcekname));
+			else
+				tbinfo->attcekname[j] = NULL;
+			if (!PQgetisnull(res, r, i_attencdet))
+				tbinfo->attencdet[j] = (PQgetvalue(res, r, i_attencdet)[0] == 't');
+			else
+				tbinfo->attencdet[j] = 0;
+			if (!PQgetisnull(res, r, i_attencalg))
+				tbinfo->attencalg[j] = atoi(PQgetvalue(res, r, i_attencalg));
+			else
+				tbinfo->attencalg[j] = 0;
 			tbinfo->attisdropped[j] = (PQgetvalue(res, r, i_attisdropped)[0] == 't');
 			tbinfo->attlen[j] = atoi(PQgetvalue(res, r, i_attlen));
 			tbinfo->attalign[j] = *(PQgetvalue(res, r, i_attalign));
@@ -9858,6 +10031,12 @@ dumpDumpableObject(Archive *fout, DumpableObject *dobj)
 			break;
 		case DO_OPFAMILY:
 			dumpOpfamily(fout, (const OpfamilyInfo *) dobj);
+			break;
+		case DO_CEK:
+			dumpColumnEncryptionKey(fout, (const CekInfo *) dobj);
+			break;
+		case DO_CMK:
+			dumpColumnMasterKey(fout, (const CmkInfo *) dobj);
 			break;
 		case DO_COLLATION:
 			dumpCollation(fout, (const CollInfo *) dobj);
@@ -13252,6 +13431,153 @@ dumpCollation(Archive *fout, const CollInfo *collinfo)
 	free(qcollname);
 }
 
+static const char *
+get_encalg_name(int num)
+{
+	switch (num)
+	{
+		case PG_CMK_RSAES_OAEP_SHA_1:
+			return "RSAES_OAEP_SHA_1";
+		case PG_CMK_RSAES_OAEP_SHA_256:
+			return "RSAES_OAEP_SHA_256";
+
+		case PG_CEK_AEAD_AES_128_CBC_HMAC_SHA_256:
+			return "AEAD_AES_128_CBC_HMAC_SHA_256";
+		case PG_CEK_AEAD_AES_192_CBC_HMAC_SHA_384:
+			return "AEAD_AES_192_CBC_HMAC_SHA_384";
+		case PG_CEK_AEAD_AES_256_CBC_HMAC_SHA_384:
+			return "AEAD_AES_256_CBC_HMAC_SHA_384";
+		case PG_CEK_AEAD_AES_256_CBC_HMAC_SHA_512:
+			return "AEAD_AES_256_CBC_HMAC_SHA_512";
+
+		default:
+			return NULL;
+	}
+}
+
+/*
+ * dumpColumnEncryptionKey
+ *	  dump the definition of the given column encryption key
+ */
+static void
+dumpColumnEncryptionKey(Archive *fout, const CekInfo *cekinfo)
+{
+	DumpOptions *dopt = fout->dopt;
+	PQExpBuffer delq;
+	PQExpBuffer query;
+	char	   *qcekname;
+
+	/* Do nothing in data-only dump */
+	if (dopt->dataOnly)
+		return;
+
+	delq = createPQExpBuffer();
+	query = createPQExpBuffer();
+
+	qcekname = pg_strdup(fmtId(cekinfo->dobj.name));
+
+	appendPQExpBuffer(delq, "DROP COLUMN ENCRYPTION KEY %s;\n",
+					  qcekname);
+
+	appendPQExpBuffer(query, "CREATE COLUMN ENCRYPTION KEY %s WITH VALUES ",
+					  qcekname);
+
+	for (int i = 0; i < cekinfo->numdata; i++)
+	{
+		appendPQExpBuffer(query, "(");
+
+		appendPQExpBuffer(query, "column_master_key = %s, ", fmtId(cekinfo->cekcmknames[i]));
+		appendPQExpBuffer(query, "algorithm = '%s', ", get_encalg_name(cekinfo->cekcmkalgs[i]));
+		appendPQExpBuffer(query, "encrypted_value = ");
+		appendStringLiteralAH(query, cekinfo->cekencvals[i], fout);
+
+		appendPQExpBuffer(query, ")");
+		if (i < cekinfo->numdata - 1)
+		appendPQExpBuffer(query, ", ");
+	}
+
+	appendPQExpBufferStr(query, ";\n");
+
+	if (cekinfo->dobj.dump & DUMP_COMPONENT_DEFINITION)
+		ArchiveEntry(fout, cekinfo->dobj.catId, cekinfo->dobj.dumpId,
+					 ARCHIVE_OPTS(.tag = cekinfo->dobj.name,
+								  .owner = cekinfo->rolname,
+								  .description = "COLUMN ENCRYPTION KEY",
+								  .section = SECTION_PRE_DATA,
+								  .createStmt = query->data,
+								  .dropStmt = delq->data));
+
+	if (cekinfo->dobj.dump & DUMP_COMPONENT_COMMENT)
+		dumpComment(fout, "COLUMN ENCRYPTION KEY", qcekname,
+					NULL, cekinfo->rolname,
+					cekinfo->dobj.catId, 0, cekinfo->dobj.dumpId);
+
+	if (cekinfo->dobj.dump & DUMP_COMPONENT_SECLABEL)
+		dumpSecLabel(fout, "COLUMN ENCRYPTION KEY", qcekname,
+					 NULL, cekinfo->rolname,
+					 cekinfo->dobj.catId, 0, cekinfo->dobj.dumpId);
+
+	destroyPQExpBuffer(delq);
+	destroyPQExpBuffer(query);
+	free(qcekname);
+}
+
+/*
+ * dumpColumnMasterKey
+ *	  dump the definition of the given column master key
+ */
+static void
+dumpColumnMasterKey(Archive *fout, const CmkInfo *cmkinfo)
+{
+	DumpOptions *dopt = fout->dopt;
+	PQExpBuffer delq;
+	PQExpBuffer query;
+	char	   *qcmkname;
+
+	/* Do nothing in data-only dump */
+	if (dopt->dataOnly)
+		return;
+
+	delq = createPQExpBuffer();
+	query = createPQExpBuffer();
+
+	qcmkname = pg_strdup(fmtId(cmkinfo->dobj.name));
+
+	appendPQExpBuffer(delq, "DROP COLUMN MASTER KEY %s;\n",
+					  qcmkname);
+
+	appendPQExpBuffer(query, "CREATE COLUMN MASTER KEY %s WITH (",
+					  qcmkname);
+
+	appendPQExpBuffer(query, "realm = ");
+	appendStringLiteralAH(query, cmkinfo->cmkrealm, fout);
+
+	appendPQExpBufferStr(query, ");\n");
+
+	if (cmkinfo->dobj.dump & DUMP_COMPONENT_DEFINITION)
+		ArchiveEntry(fout, cmkinfo->dobj.catId, cmkinfo->dobj.dumpId,
+					 ARCHIVE_OPTS(.tag = cmkinfo->dobj.name,
+								  .owner = cmkinfo->rolname,
+								  .description = "COLUMN MASTER KEY",
+								  .section = SECTION_PRE_DATA,
+								  .createStmt = query->data,
+								  .dropStmt = delq->data));
+
+	if (cmkinfo->dobj.dump & DUMP_COMPONENT_COMMENT)
+		dumpComment(fout, "COLUMN MASTER KEY", qcmkname,
+					NULL, cmkinfo->rolname,
+					cmkinfo->dobj.catId, 0, cmkinfo->dobj.dumpId);
+
+	if (cmkinfo->dobj.dump & DUMP_COMPONENT_SECLABEL)
+		dumpSecLabel(fout, "COLUMN MASTER KEY", qcmkname,
+					 NULL, cmkinfo->rolname,
+					 cmkinfo->dobj.catId, 0, cmkinfo->dobj.dumpId);
+
+	destroyPQExpBuffer(delq);
+	destroyPQExpBuffer(query);
+	free(qcmkname);
+}
+
 /*
  * dumpConversion
  *	  write out a single conversion definition
@@ -15333,6 +15659,22 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 					{
 						appendPQExpBuffer(q, " %s",
 										  tbinfo->atttypnames[j]);
+					}
+
+					if (tbinfo->attcekname[j])
+					{
+						appendPQExpBuffer(q, " ENCRYPTED WITH (column_encryption_key = %s, ",
+										  fmtId(tbinfo->attcekname[j]));
+						/*
+						 * To reduce output size, we don't print the default
+						 * of encryption_type, but we do print the default of
+						 * algorithm, since we might want to change to a new
+						 * default algorithm sometime in the future.
+						 */
+						if (tbinfo->attencdet[j])
+							appendPQExpBuffer(q, "encryption_type = deterministic, ");
+						appendPQExpBuffer(q, "algorithm = '%s')",
+										  get_encalg_name(tbinfo->attencalg[j]));
 					}
 
 					if (print_default)
@@ -17899,6 +18241,8 @@ addBoundaryDependencies(DumpableObject **dobjs, int numObjs,
 			case DO_ACCESS_METHOD:
 			case DO_OPCLASS:
 			case DO_OPFAMILY:
+			case DO_CEK:
+			case DO_CMK:
 			case DO_COLLATION:
 			case DO_CONVERSION:
 			case DO_TABLE:

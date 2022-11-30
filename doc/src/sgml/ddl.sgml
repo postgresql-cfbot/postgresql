@@ -1211,6 +1211,378 @@ CREATE TABLE circles (
   </sect2>
  </sect1>
 
+ <sect1 id="ddl-column-encryption">
+  <title>Transparent Column Encryption</title>
+
+  <para>
+   With <firstterm>transparent column encryption</firstterm>, columns can be
+   stored encrypted in the database.  The encryption and decryption happens on
+   the client, so that the plaintext value is never seen in the database
+   instance or on the server hosting the database.  The drawback is that most
+   operations, such as function calls or sorting, are not possible on
+   encrypted values.
+  </para>
+
+  <sect2>
+   <title>Using Transparent Column Encryption</title>
+
+  <para>
+   Tranparent column encryption uses two levels of cryptographic keys.  The
+   actual column value is encrypted using a symmetric algorithm, such as AES,
+   using a <firstterm>column encryption key</firstterm>
+   (<acronym>CEK</acronym>).  The column encryption key is in turn encrypted
+   using an asymmetric algorithm, such as RSA, using a <firstterm>column
+   master key</firstterm> (<acronym>CMK</acronym>).  The encrypted CEK is
+   stored in the database system.  The CMK is not stored in the database
+   system; it is stored on the client or somewhere where the client can access
+   it, such as in a local file or in a key management system.  The database
+   system only records where the CMK is stored and provides this information
+   to the client.  When rows containing encrypted columns are sent to the
+   client, the server first sends any necessary CMK information, followed by
+   any required CEK.  The client then looks up the CMK and uses that to
+   decrypt the CEK.  Then it decrypts incoming row data using the CEK and
+   provides the decrypted row data to the application.
+  </para>
+
+  <para>
+   Here is an example declaring a column as encrypted:
+<programlisting>
+CREATE TABLE customers (
+    id int PRIMARY KEY,
+    name text NOT NULL,
+    ...
+    creditcard_num text <emphasis>ENCRYPTED WITH (column_encryption_key = cek1)</emphasis>
+);
+</programlisting>
+  </para>
+
+  <para>
+   Column encryption supports <firstterm>randomized</firstterm>
+   (also known as <firstterm>probabilistic</firstterm>) and
+   <firstterm>deterministic</firstterm> encryption.  The above example uses
+   randomized encryption, which is the default.  Randomized encryption uses a
+   random initialization vector for each encryption, so that even if the
+   plaintext of two rows is equal, the encrypted values will be different.
+   This prevents someone with direct access to the database server to make
+   computations such as distinct counts on the encrypted values.
+   Deterministic encryption uses a fixed initialization vector.  This reduces
+   security, but it allows equality searches on encrypted values.  The
+   following example declares a column with deterministic encryption:
+<programlisting>
+CREATE TABLE employees (
+    id int PRIMARY KEY,
+    name text NOT NULL,
+    ...
+    ssn text ENCRYPTED WITH (
+        column_encryption_key = cek1, <emphasis>encryption_type = deterministic</emphasis>)
+);
+</programlisting>
+  </para>
+
+  <para>
+   Null values are not encrypted by transparent column encryption; null values
+   sent by the client are visible as null values in the database.  If the fact
+   that a value is null needs to be hidden from the server, this information
+   needs to be encoded into a nonnull value in the client somehow.
+  </para>
+  </sect2>
+
+  <sect2>
+   <title>Reading and Writing Encrypted Columns</title>
+
+   <para>
+    Reading and writing encrypted columns is meant to be handled automatically
+    by the client library/driver and should be mostly transparent to the
+    application code, if certain prerequisites are fulfilled:
+
+    <itemizedlist>
+     <listitem>
+      <para>
+       The client library needs to support transparent column encryption.  Not
+       all client libraries do.  Furthermore, the client library might require
+       that transparent column encryption is explicitly enabled at connection
+       time.  See the documentation of the client library for details.
+      </para>
+     </listitem>
+
+     <listitem>
+      <para>
+       Column master keys and column encryption keys have been set up, and the
+       client library has been configured to be able to look up column master
+       keys from the key store or key management system.
+      </para>
+     </listitem>
+    </itemizedlist>
+   </para>
+
+   <para>
+    Reading from encrypted columns will then work automatically.  For example,
+    using the above example,
+<programlisting>
+SELECT ssn FROM employees WHERE id = 5;
+</programlisting>
+    will return the unencrypted value for the <literal>ssn</literal> column in
+    any rows found.
+   </para>
+
+   <para>
+    Writing to encrypted columns requires that the extended query protocol
+    (protocol-level prepared statements) be used, so that the values to be
+    encrypted are supplied separately from the SQL command.  For example,
+    using, say, psql or libpq, the following would not work:
+<programlisting>
+-- WRONG!
+INSERT INTO ssn (id, name, ssn) VALUES (1, 'Someone', '12345');
+</programlisting>
+    This will leak the unencrypted value <literal>12345</literal> to the
+    server, thus defeating the point of column encryption.
+    Note that using server-side prepared statements using the SQL commands
+    <command>PREPARE</command> and <command>EXECUTE</command> is equally
+    incorrect, since that would also leak the parameters provided to
+    <command>EXECUTE</command> to the server.
+   </para>
+
+   <para>
+    This shows a correct invocation in libpq (without error checking):
+<programlisting>
+PGresult   *res;
+const char *values[] = {"1", "Someone", "12345"};
+
+res = PQexecParams(conn, "INSERT INTO ssn (id, name, ssn) VALUES ($1, $2, $3)", 3, NULL, values, NULL, NULL, 0);
+
+/* print result in res */
+</programlisting>
+    Higher-level client libraries might use the protocol-level prepared
+    statements automatically and thus won't require any code changes.
+   </para>
+
+   <para>
+    <application>psql</application> provides the command
+    <literal>\bind</literal> to run statements with parameters like this:
+<programlisting>
+INSERT INTO ssn (id, name, ssn) VALUES ($1, $2, $3) \bind '1' 'Someone', '12345' \g
+</programlisting>
+   </para>
+  </sect2>
+
+  <sect2>
+   <title>Setting up Transparent Column Encryption</title>
+
+  <para>
+   The steps to set up transparent column encryption for a database are:
+
+   <orderedlist>
+    <listitem>
+     <para>
+      Create the key material for the CMK, for example, using a cryptographic
+      library or toolkit, or a key management system.  Secure access to the
+      key as appropriate, using access control, passwords, etc.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Register the CMK in the database using the SQL command <xref linkend="sql-create-column-master-key"/>.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Create the (unencrypted) key material for the CEK in a temporary
+      location.  (It will be encrypted in the next step.  Depending on the
+      available tools, it might be possible and sensible to combine these two
+      steps.)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Encrypt the created CEK key material using the CMK (created earlier).
+      (The unencrypted version of the CEK key material can now be disposed
+      of.)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Register the CEK in the database using the SQL command <xref
+      linkend="sql-create-column-encryption-key"/>.  This command
+      <quote>uploads</quote> the encrypted CEK key material created in the
+      previous step to the database server.  The local copy of the CEK key
+      material can then be removed.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Create encrypted columns using the created CEK.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Configure the client library/driver to be able to look up the CMK
+      created earlier.
+     </para>
+    </listitem>
+   </orderedlist>
+
+   Once this is done, values can be written to and read from the encrypted
+   columns in a transparent way.
+  </para>
+
+  <para>
+   Note that these steps should not be run on the database server, but on some
+   client machine.  Neither the CMK nor the unencrypted CEK should ever appear
+   on the database server host.
+  </para>
+
+  <para>
+   The specific details of this setup depend on the desired CMK storage
+   mechanism/key management system as well as the client libraries to be used.
+   The following example uses the <command>openssl</command> command-line tool
+   to set up the keys.
+
+   <orderedlist>
+    <listitem>
+     <para>
+      Create the key material for the CMK and write it to a file:
+<programlisting>
+openssl genpkey -algorithm rsa -out cmk1.pem
+</programlisting>
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Register the CMK in the database:
+<programlisting>
+psql ... -c "CREATE COLUMN MASTER KEY cmk1 WITH (realm = '')"
+</programlisting>
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Create the unencrypted CEK key material in a file:
+<programlisting>
+openssl rand -out cek1.bin 32
+</programlisting>
+      (See <xref linkend="protocol-cek-table"/> for required key lengths.)
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Encrypt the created CEK key material:
+<programlisting>
+openssl pkeyutl -encrypt -inkey cmk1.pem -pkeyopt rsa_padding_mode:oaep -in cek1.bin -out cek1.bin.enc
+rm cek1.bin
+</programlisting>
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Register the CEK in the database:
+<programlisting>
+# convert file contents to hex encoding; this is just one possible way
+cekenchex=$(perl -0ne 'print unpack "H*"' cek1.bin.enc)
+psql ... -c "CREATE COLUMN ENCRYPTION KEY cek1 WITH VALUES (column_master_key = cmk1, encrypted_value = '\\x${cekenchex}')"
+rm cek1.bin.enc
+</programlisting>
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Create encrypted columns as shown in the examples above.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      Configure the libpq for CMK lookup (see also <xref linkend="libpq-connect-cmklookup"/>):
+<programlisting>
+PGCMKLOOKUP="*=file:$PWD/%k.pem"
+export PGCMKLOOKUP
+</programlisting>
+     </para>
+
+     <para>
+      Additionally, libpq requires that the connection parameter <xref
+      linkend="libpq-connect-column-encryption"/> be set in order to activate
+      the transparent column encryption functionality.  This should be done in
+      the connection parameters of the application, but an environment
+      variable (<envar>PGCOLUMNENCRYPTION</envar>) is also available.
+     </para>
+    </listitem>
+   </orderedlist>
+  </para>
+  </sect2>
+
+  <sect2>
+   <title>Guidance on Using Transparent Column Encryption</title>
+
+   <para>
+    This section contains some information on when it is or is not appropriate
+    to use transparent column encryption, and what precautions need to be
+    taken to maintain its security.
+   </para>
+
+   <para>
+    In general, column encryption is never a replacement for additional
+    security and encryption techniques such as transmission encryption
+    (SSL/TLS), storage encryption, strong access control, and password
+    security.  Column encryption only targets specific use cases and should be
+    used in conjunction with additional security measures.
+   </para>
+
+   <para>
+    A typical use case for column encryption is to encrypt specific values
+    with additional security requirements, for example credit card numbers.
+    This would allow you to store that security-sensitive data together with
+    the rest of your data (thus getting various benefits, such as referential
+    integrity, consistent backups), while giving access to that data only to
+    specific clients and preventing accidental leakage on the server side
+    (server logs, file system backups, etc.).
+   </para>
+
+   <para>
+    Column encryption cannot hide the existence or absence of data, it can
+    only disguise the particular data that is known to exist.  For example,
+    storing a cleartext person name and an encrypted credit card number
+    indicates that the person has a credit card.  That might not reveal too
+    much if the database is for an online store and there is other data nearby
+    that shows that the person has recently made purchases.  But in another
+    example, storing a cleartext person name and an encrypted diagnosis in a
+    medical database probably indicates that the person has a medical issue.
+    Depending on the circumstances, that might not by itself be sufficient
+    security.
+   </para>
+
+   <para>
+    Encryption cannot completely hide the length of values.  The encryption
+    methods will pad values to multiples of the underlying cipher's block size
+    (usually 16 bytes), so some length differences will be unified this way.
+    There is no concern if all values are of the same length (e.g., credit
+    card numbers).  But if there are signficant length differences between
+    valid values and that length information is security-sensitive, then
+    application-specific workarounds such as padding would need to be applied.
+    How to do that securely is beyond the scope of this manual.
+   </para>
+
+   <note>
+    <para>
+     Storing data such credit card data, medical data, and so on is usually
+     subject to government or industry regulations.  This section is not meant
+     to provide complete instructions on how to do this correctly.  Please
+     seek additional advice when engaging in such projects.
+    </para>
+   </note>
+  </sect2>
+ </sect1>
+
  <sect1 id="ddl-system-columns">
   <title>System Columns</title>
 

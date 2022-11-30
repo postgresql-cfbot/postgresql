@@ -63,6 +63,9 @@ catalog_headers = [
   'pg_publication_rel.h',
   'pg_subscription.h',
   'pg_subscription_rel.h',
+  'pg_colmasterkey.h',
+  'pg_colenckey.h',
+  'pg_colenckeydata.h',
 ]
 
 bki_data = [

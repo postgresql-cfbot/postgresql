@@ -35,6 +35,7 @@
 #include "catalog/partition.h"
 #include "catalog/pg_am.h"
 #include "catalog/pg_attrdef.h"
+#include "catalog/pg_colenckey.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_depend.h"
@@ -637,6 +638,7 @@ static List *GetParentedForeignKeyRefs(Relation partition);
 static void ATDetachCheckNoForeignKeyRefs(Relation partition);
 static char GetAttributeCompression(Oid atttypid, char *compression);
 static char GetAttributeStorage(Oid atttypid, const char *storagemode);
+static void GetColumnEncryption(const List *coldefencryption, Form_pg_attribute attr);
 
 
 /* ----------------------------------------------------------------
@@ -935,6 +937,9 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 		if (colDef->compression)
 			attr->attcompression = GetAttributeCompression(attr->atttypid,
 														   colDef->compression);
+
+		if (colDef->encryption)
+			GetColumnEncryption(colDef->encryption, attr);
 
 		if (colDef->storage_name)
 			attr->attstorage = GetAttributeStorage(attr->atttypid, colDef->storage_name);
@@ -6871,6 +6876,14 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	attribute.attislocal = colDef->is_local;
 	attribute.attinhcount = colDef->inhcount;
 	attribute.attcollation = collOid;
+	if (colDef->encryption)
+		GetColumnEncryption(colDef->encryption, &attribute);
+	else
+	{
+		attribute.attcek = 0;
+		attribute.attrealtypid = 0;
+		attribute.attencalg = 0;
+	}
 
 	ReleaseSysCache(typeTuple);
 
@@ -12702,6 +12715,9 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 			case OCLASS_TYPE:
 			case OCLASS_CAST:
 			case OCLASS_COLLATION:
+			case OCLASS_CEK:
+			case OCLASS_CEKDATA:
+			case OCLASS_CMK:
 			case OCLASS_CONVERSION:
 			case OCLASS_LANGUAGE:
 			case OCLASS_LARGEOBJECT:
@@ -19338,4 +19354,84 @@ GetAttributeStorage(Oid atttypid, const char *storagemode)
 						format_type_be(atttypid))));
 
 	return cstorage;
+}
+
+/*
+ * resolve column encryption specification
+ */
+static void
+GetColumnEncryption(const List *coldefencryption, Form_pg_attribute attr)
+{
+	ListCell   *lc;
+	char	   *cek = NULL;
+	Oid			cekoid;
+	bool		encdet = false;
+	int			alg = PG_CEK_AEAD_AES_128_CBC_HMAC_SHA_256;
+
+	foreach(lc, coldefencryption)
+	{
+		DefElem    *el = lfirst_node(DefElem, lc);
+
+		if (strcmp(el->defname, "column_encryption_key") == 0)
+			cek = strVal(linitial(castNode(TypeName, el->arg)->names));
+		else if (strcmp(el->defname, "encryption_type") == 0)
+		{
+			char	   *val = strVal(linitial(castNode(TypeName, el->arg)->names));
+
+			if (strcmp(val, "deterministic") == 0)
+				encdet = true;
+			else if (strcmp(val, "randomized") == 0)
+				encdet = false;
+			else
+				ereport(ERROR,
+						errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						errmsg("unrecognized encryption type: %s", val));
+		}
+		else if (strcmp(el->defname, "algorithm") == 0)
+		{
+			char	   *val = strVal(el->arg);
+
+			if (strcmp(val, "AEAD_AES_128_CBC_HMAC_SHA_256") == 0)
+				alg = PG_CEK_AEAD_AES_128_CBC_HMAC_SHA_256;
+			else if (strcmp(val, "AEAD_AES_192_CBC_HMAC_SHA_384") == 0)
+				alg = PG_CEK_AEAD_AES_192_CBC_HMAC_SHA_384;
+			else if (strcmp(val, "AEAD_AES_256_CBC_HMAC_SHA_384") == 0)
+				alg = PG_CEK_AEAD_AES_256_CBC_HMAC_SHA_384;
+			else if (strcmp(val, "AEAD_AES_256_CBC_HMAC_SHA_512") == 0)
+				alg = PG_CEK_AEAD_AES_256_CBC_HMAC_SHA_512;
+			else
+				ereport(ERROR,
+						errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						errmsg("unrecognized encryption algorithm: %s", val));
+		}
+		else
+			ereport(ERROR,
+					errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					errmsg("unrecognized column encryption parameter: %s", el->defname));
+	}
+
+	if (!cek)
+		ereport(ERROR,
+				errcode(ERRCODE_INVALID_COLUMN_DEFINITION),
+				errmsg("column encryption key must be specified"));
+
+	cekoid = GetSysCacheOid1(CEKNAME, Anum_pg_colenckey_oid, PointerGetDatum(cek));
+	if (!cekoid)
+		ereport(ERROR,
+				errcode(ERRCODE_UNDEFINED_OBJECT),
+				errmsg("column encryption key \"%s\" does not exist", cek));
+
+	attr->attcek = cekoid;
+	attr->attrealtypid = attr->atttypid;
+	attr->attencalg = alg;
+
+	/* override physical type */
+	if (encdet)
+		attr->atttypid = PG_ENCRYPTED_DETOID;
+	else
+		attr->atttypid = PG_ENCRYPTED_RNDOID;
+	get_typlenbyvalalign(attr->atttypid,
+						 &attr->attlen, &attr->attbyval, &attr->attalign);
+	attr->attstorage = get_typstorage(attr->atttypid);
+	attr->attcollation = InvalidOid;
 }

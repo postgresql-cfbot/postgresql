@@ -27,6 +27,7 @@ endif
 
 if ssl.found()
   libpq_sources += files('fe-secure-common.c')
+  libpq_sources += files('fe-encrypt-openssl.c')
   libpq_sources += files('fe-secure-openssl.c')
 endif
 

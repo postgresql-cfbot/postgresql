@@ -692,6 +692,37 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><option>--decrypt-encrypted-columns</option></term>
+      <listitem>
+       <para>
+        This option causes the values of all encrypted columns to be decrypted
+        and written to the output in plaintext.  By default, the values of
+        encrypted columns are written to the dump in ciphertext (that is, they
+        are not decrypted).
+       </para>
+
+       <para>
+        This option requires that <option>--inserts</option>,
+        <option>--column-inserts</option> or
+        <option>--rows-per-insert</option> is also specified.
+        (<command>COPY</command> does not support column decryption.)
+       </para>
+
+       <para>
+        For routine backups, the default behavior is appropriate and most
+        efficient.  This option is suitable if the data is meant to be
+        inspected or exported for other purposes.  Note that a dump created
+        with this option cannot be restored into a database with column
+        encryption.
+       </para>
+       <!--
+           XXX: The latter would require another pg_dump option to put out
+           INSERT ... \bind ... \g commands.
+       -->
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>--disable-dollar-quoting</option></term>
       <listitem>
        <para>

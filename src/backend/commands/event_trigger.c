@@ -951,6 +951,9 @@ EventTriggerSupportsObjectType(ObjectType obtype)
 		case OBJECT_AMPROC:
 		case OBJECT_ATTRIBUTE:
 		case OBJECT_CAST:
+		case OBJECT_CEK:
+		case OBJECT_CEKDATA:
+		case OBJECT_CMK:
 		case OBJECT_COLUMN:
 		case OBJECT_COLLATION:
 		case OBJECT_CONVERSION:
@@ -1027,6 +1030,9 @@ EventTriggerSupportsObjectClass(ObjectClass objclass)
 		case OCLASS_TYPE:
 		case OCLASS_CAST:
 		case OCLASS_COLLATION:
+		case OCLASS_CEK:
+		case OCLASS_CEKDATA:
+		case OCLASS_CMK:
 		case OCLASS_CONSTRAINT:
 		case OCLASS_CONVERSION:
 		case OCLASS_DEFAULT:
@@ -2056,6 +2062,9 @@ stringify_grant_objtype(ObjectType objtype)
 		case OBJECT_AMPROC:
 		case OBJECT_ATTRIBUTE:
 		case OBJECT_CAST:
+		case OBJECT_CEK:
+		case OBJECT_CEKDATA:
+		case OBJECT_CMK:
 		case OBJECT_COLLATION:
 		case OBJECT_CONVERSION:
 		case OBJECT_DEFAULT:
@@ -2139,6 +2148,9 @@ stringify_adefprivs_objtype(ObjectType objtype)
 		case OBJECT_AMPROC:
 		case OBJECT_ATTRIBUTE:
 		case OBJECT_CAST:
+		case OBJECT_CEK:
+		case OBJECT_CEKDATA:
+		case OBJECT_CMK:
 		case OBJECT_COLLATION:
 		case OBJECT_CONVERSION:
 		case OBJECT_DEFAULT:

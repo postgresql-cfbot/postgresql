@@ -69,6 +69,8 @@ enum dbObjectTypePriorities
 	PRIO_TSTEMPLATE,
 	PRIO_TSDICT,
 	PRIO_TSCONFIG,
+	PRIO_CMK,
+	PRIO_CEK,
 	PRIO_FDW,
 	PRIO_FOREIGN_SERVER,
 	PRIO_TABLE,
@@ -111,6 +113,8 @@ static const int dbObjectTypePriority[] =
 	PRIO_ACCESS_METHOD,			/* DO_ACCESS_METHOD */
 	PRIO_OPFAMILY,				/* DO_OPCLASS */
 	PRIO_OPFAMILY,				/* DO_OPFAMILY */
+	PRIO_CEK,					/* DO_CEK */
+	PRIO_CMK,					/* DO_CMK */
 	PRIO_COLLATION,				/* DO_COLLATION */
 	PRIO_CONVERSION,			/* DO_CONVERSION */
 	PRIO_TABLE,					/* DO_TABLE */
@@ -1321,6 +1325,16 @@ describeDumpableObject(DumpableObject *obj, char *buf, int bufsize)
 			snprintf(buf, bufsize,
 					 "OPERATOR FAMILY %s  (ID %d OID %u)",
 					 obj->name, obj->dumpId, obj->catId.oid);
+			return;
+		case DO_CEK:
+			snprintf(buf, bufsize,
+					 "COLUMN ENCRYPTION KEY (ID %d OID %u)",
+					 obj->dumpId, obj->catId.oid);
+			return;
+		case DO_CMK:
+			snprintf(buf, bufsize,
+					 "COLUMN MASTER KEY (ID %d OID %u)",
+					 obj->dumpId, obj->catId.oid);
 			return;
 		case DO_COLLATION:
 			snprintf(buf, bufsize,

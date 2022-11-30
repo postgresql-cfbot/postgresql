@@ -163,6 +163,7 @@ extern bool type_is_rowtype(Oid typid);
 extern bool type_is_enum(Oid typid);
 extern bool type_is_range(Oid typid);
 extern bool type_is_multirange(Oid typid);
+extern bool type_is_encrypted(Oid typid);
 extern void get_type_category_preferred(Oid typid,
 										char *typcategory,
 										bool *typispreferred);
@@ -202,6 +203,11 @@ extern Oid	get_publication_oid(const char *pubname, bool missing_ok);
 extern char *get_publication_name(Oid pubid, bool missing_ok);
 extern Oid	get_subscription_oid(const char *subname, bool missing_ok);
 extern char *get_subscription_name(Oid subid, bool missing_ok);
+extern Oid	get_cek_oid(const char *cekname, bool missing_ok);
+extern char *get_cek_name(Oid cekid, bool missing_ok);
+extern Oid	get_cekdata_oid(Oid cekid, Oid cmkid, bool missing_ok);
+extern Oid	get_cmk_oid(const char *cmkname, bool missing_ok);
+extern char *get_cmk_name(Oid cmkid, bool missing_ok);
 
 #define type_is_array(typid)  (get_element_type(typid) != InvalidOid)
 /* type_is_array_domain accepts both plain arrays and domains over arrays */

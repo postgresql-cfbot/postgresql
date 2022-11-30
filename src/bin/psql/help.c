@@ -252,6 +252,8 @@ slashUsage(unsigned short int pager)
 	HELP0("  \\dAp[+] [AMPTRN [OPFPTRN]]   list support functions of operator families\n");
 	HELP0("  \\db[+]  [PATTERN]      list tablespaces\n");
 	HELP0("  \\dc[S+] [PATTERN]      list conversions\n");
+	HELP0("  \\dcek[+] [PATTERN]     list column encryption keys\n");
+	HELP0("  \\dcmk[+] [PATTERN]     list column master keys\n");
 	HELP0("  \\dconfig[+] [PATTERN]  list configuration parameters\n");
 	HELP0("  \\dC[+]  [PATTERN]      list casts\n");
 	HELP0("  \\dd[S]  [PATTERN]      show object descriptions not displayed elsewhere\n");
@@ -413,6 +415,8 @@ helpVariables(unsigned short int pager)
 		  "    true if last query failed, else false\n");
 	HELP0("  FETCH_COUNT\n"
 		  "    the number of result rows to fetch and display at a time (0 = unlimited)\n");
+	HELP0("  HIDE_COLUMN_ENCRYPTION\n"
+		  "    if set, column encryption details are not displayed\n");
 	HELP0("  HIDE_TABLEAM\n"
 		  "    if set, table access methods are not displayed\n");
 	HELP0("  HIDE_TOAST_COMPRESSION\n"

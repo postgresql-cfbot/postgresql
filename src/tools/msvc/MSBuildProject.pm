@@ -310,10 +310,18 @@ sub WriteItemDefinitionGroup
 	  : ($self->{type} eq "dll" ? 'DynamicLibrary' : 'StaticLibrary');
 	my $libs = $self->GetAdditionalLinkerDependencies($cfgname, ';');
 
-	my $targetmachine =
-	  $self->{platform} eq 'Win32' ? 'MachineX86' : 'MachineX64';
-	my $arch =
-	  $self->{platform} eq 'Win32' ? 'x86' : 'x86_64';
+	my $targetmachine;
+	my $arch;
+	if ($self->{platform} eq 'Win32') {
+		$targetmachine = 'MachineX86';
+		$arch = 'x86';
+	} elsif ($self->{platform} eq 'ARM64'){
+		$targetmachine = 'MachineARM64';
+		$arch = 'arm64';
+	} else {
+		$targetmachine = 'MachineX64';
+		$arch = 'x86_64';
+	}
 
 	my $includes = join ';', @{ $self->{includes} }, "";
 

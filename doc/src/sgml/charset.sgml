@@ -1047,6 +1047,50 @@ CREATE COLLATION ignore_accents (provider = icu, locale = 'und-u-ks-level1-kc-tr
     </tip>
    </sect3>
   </sect2>
+  <sect2 id="collation-versions">
+   <title>Collation Versions</title>
+
+   <para>
+    Collations are sensitive to the specific collation version, which is
+    obtained from the collation provider library at the time the collation is
+    created (and only updated with <xref linkend="sql-altercollation"/>). If
+    the collation provider library is updated on the system (e.g. due to an
+    operating system upgrade), it may provide a different collation version;
+    but the version recorded in <productname>PostgreSQL</productname> will
+    remain unchanged.
+   </para>
+   <para>
+    New collation versions are generally desirable, as they reflect changes in
+    natural language over time. But these ordering changes can also cause
+    problems, such as the inconsistency of an indexes, which often depend on a
+    stable ordering. If <productname>PostgreSQL</productname> is unable to
+    find a collation in the collation provider that matches the recorded
+    version exactly, it will emit a <literal>WARNING</literal> (configurable
+    with <xref linkend="guc-collation-version-mismatch-error"/>).
+   </para>
+   <sect3 id="multiple-icu-libraries">
+    <title>Multiple ICU collation provider libraries</title>
+    <para>
+     When using the <literal>icu</literal> collation provider,
+     <productname>PostgreSQL</productname> can load multiple ICU collation
+     provider libraries, making it possible to find an exact match for the
+     collation version even if the operating system's ICU library has been
+     upgraded and provides a new collation version.
+    </para>
+    <para>
+     To use additional ICU collation provider libraries, set <xref
+     linkend="guc-icu-library-path"/> to the directory where the ICU libraries
+     are installed, and use <xref linkend="guc-icu-library-versions"/> to
+     control how those libraries are searched.
+    </para>
+    <note>
+     <para>
+      The <literal>libc</literal> collation provider does not allow specifying
+      multiple libraries.
+     </para>
+    </note>
+   </sect3>
+  </sect2>
  </sect1>
 
  <sect1 id="multibyte">

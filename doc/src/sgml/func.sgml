@@ -27190,6 +27190,39 @@ postgres=# SELECT * FROM pg_walfile_name_offset((pg_backup_stop()).lsn);
         Use of this function is restricted to superusers.
        </para></entry>
       </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>pg_icu_library_versions</primary>
+        </indexterm>
+        <function>pg_icu_library_versions</function> ()
+        <returnvalue>setof record</returnvalue>
+        ( <parameter>icu_version</parameter> <type>text</type>,
+        <parameter>unicode_version</parameter> <type>text</type>,
+        <parameter>cldr_version</parameter> <type>text</type>) )
+       </para>
+       <para>
+        Returns information from each available ICU library.
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>pg_icu_collation_versions</primary>
+        </indexterm>
+        <function>pg_icu_collation_versions</function> ( <parameter>locale</parameter> <type>text</type> )
+        <returnvalue>setof record</returnvalue>
+        (<parameter>icu_version</parameter> <type>text</type>,
+        <parameter>uca_version</parameter> <type>text</type>,
+        <parameter>collator_version</parameter> <type>text</type> )
+       </para>
+       <para>
+        Returns the collation version of the given locale from each available
+        ICU library.
+       </para></entry>
+      </row>
      </tbody>
     </tgroup>
    </table>

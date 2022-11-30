@@ -10272,6 +10272,107 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
      </variablelist>
     </sect2>
 
+    <sect2 id="runtime-config-compatible-collation">
+     <title>Collation Version Compatibility</title>
+     <variablelist>
+     <varlistentry id="guc-collation-version-mismatch-error">
+      <term><varname>collation_version_mismatch_error</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>collation_version_mismatch_error</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        If <productname>PostgreSQL</productname> detects mismatched collation
+        versions, and this variable is set to <literal>true</literal>, an
+        error will be raised. If this variable is set to
+        <literal>false</literal>, a warning will be raised instead. The
+        default is <literal>false</literal>.
+       </para>
+       <para>
+        See <xref linkend="collation-versions"/> for more information.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-icu-library-path">
+      <term><varname>icu_library_path</varname> (<type>string</type>)
+      <indexterm>
+       <primary><varname>icu_library_path</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Set to the directory where additional ICU libraries are installed, to
+        be searched for matching collation versions.
+       </para>
+       <para>
+        See <xref linkend="multiple-icu-libraries"/> for more information.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-icu-library-versions">
+      <term><varname>icu_library_versions</varname> (<type>string</type>)
+      <indexterm>
+       <primary><varname>icu_library_versions</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        When searching for a matching collation version, search the ICU
+        libraries with the version numbers specified in this setting,
+        separated by commas. By default, only the built-in ICU library is
+        searched.
+       </para>
+       <para>
+        Library version numbers can be specified as either
+        <literal>major_version</literal> or
+        <literal>major_version.minor_version</literal>. By default, the
+        built-in ICU library is used.
+       </para>
+       <para>
+        If this variable is set to <literal>*</literal>,
+        <productname>PostgreSQL</productname> will attempt to load any ICU
+        library in <literal>icu_library_path</literal> with a compatible major
+        version.
+       </para>
+       <para>
+        See <xref linkend="multiple-icu-libraries"/> for more information.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-default-icu-library-version">
+      <term><varname>default_icu_library_version</varname> (<type>string</type>)
+      <indexterm>
+       <primary><varname>default_icu_library_version</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        If <productname>PostgreSQL</productname> detects mismatched collation
+        versions, use the collation provided by the ICU library with this
+        version number.
+       </para>
+       <para>
+        Library version numbers can be specified as either
+        <literal>major_version</literal> or
+        <literal>major_version.minor_version</literal>. By default, the
+        built-in ICU library is used.
+       </para>
+       <para>
+        Has no effect if <literal>collation_version_mismatch_error</literal>
+        is set to <literal>true</literal>.
+       </para>
+       <para>
+        See <xref linkend="multiple-icu-libraries"/> for more information.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     </variablelist>
+    </sect2>
     <sect2 id="runtime-config-compatible-clients">
      <title>Platform and Client Compatibility</title>
      <variablelist>

@@ -212,7 +212,7 @@ static	void			check_raise_parameters(PLpgSQL_stmt_raise *stmt);
 %type <datum>	getdiag_target
 %type <ival>	getdiag_item
 
-%type <ival>	opt_scrollable
+%type <ival>	opt_scrollable opt_with_return
 %type <fetch>	opt_fetch_direction
 
 %type <ival>	opt_transaction_chain
@@ -352,6 +352,8 @@ static	void			check_raise_parameters(PLpgSQL_stmt_raise *stmt);
 %token <keyword>	K_WARNING
 %token <keyword>	K_WHEN
 %token <keyword>	K_WHILE
+%token <keyword>	K_WITH
+%token <keyword>	K_WITHOUT
 
 %%
 
@@ -529,7 +531,7 @@ decl_statement	: decl_varname decl_const decl_datatype decl_collate decl_notnull
 						plpgsql_ns_additem($4->itemtype,
 										   $4->itemno, $1.name);
 					}
-				| decl_varname opt_scrollable K_CURSOR
+				| decl_varname opt_scrollable K_CURSOR opt_with_return
 					{ plpgsql_ns_push($1.name, PLPGSQL_LABEL_OTHER); }
 				  decl_cursor_args decl_is_for decl_cursor_query
 					{
@@ -573,12 +575,12 @@ decl_statement	: decl_varname decl_const decl_datatype decl_collate decl_notnull
 						curname_def->parseMode = RAW_PARSE_PLPGSQL_EXPR;
 						new->default_val = curname_def;
 
-						new->cursor_explicit_expr = $7;
-						if ($5 == NULL)
+						new->cursor_explicit_expr = $8;
+						if ($6 == NULL)
 							new->cursor_explicit_argrow = -1;
 						else
-							new->cursor_explicit_argrow = $5->dno;
-						new->cursor_options = CURSOR_OPT_FAST_PLAN | $2;
+							new->cursor_explicit_argrow = $6->dno;
+						new->cursor_options = CURSOR_OPT_FAST_PLAN | $2 | $4;
 					}
 				;
 
@@ -593,6 +595,20 @@ opt_scrollable :
 				| K_SCROLL
 					{
 						$$ = CURSOR_OPT_SCROLL;
+					}
+				;
+
+opt_with_return :
+					{
+						$$ = 0;
+					}
+				| K_WITH K_RETURN
+					{
+						$$ = CURSOR_OPT_RETURN;
+					}
+				| K_WITHOUT K_RETURN
+					{
+						$$ = 0;
 					}
 				;
 
@@ -2003,6 +2019,10 @@ stmt_execsql	: K_IMPORT
 					{
 						$$ = make_execsql_stmt(K_MERGE, @1);
 					}
+				| K_WITH
+					{
+						$$ = make_execsql_stmt(K_WITH, @1);
+					}
 				| T_WORD
 					{
 						int			tok;
@@ -2123,6 +2143,30 @@ stmt_open		: K_OPEN cursor_variable
 							{
 								new->cursor_options |= CURSOR_OPT_SCROLL;
 								tok = yylex();
+							}
+
+							/* same for opt_with_return */
+							if (tok_is_keyword(tok, &yylval,
+											   K_WITH, "with"))
+							{
+								tok = yylex();
+								if (tok_is_keyword(tok, &yylval,
+												   K_RETURN, "return"))
+								{
+									new->cursor_options |= CURSOR_OPT_RETURN;
+									tok = yylex();
+								}
+							}
+							else if (tok_is_keyword(tok, &yylval,
+											   K_WITHOUT, "without"))
+							{
+								tok = yylex();
+								if (tok_is_keyword(tok, &yylval,
+												   K_RETURN, "return"))
+								{
+									new->cursor_options |= 0;
+									tok = yylex();
+								}
 							}
 
 							if (tok != K_FOR)
@@ -2579,6 +2623,8 @@ unreserved_keyword	:
 				| K_USE_VARIABLE
 				| K_VARIABLE_CONFLICT
 				| K_WARNING
+				| K_WITH
+				| K_WITHOUT
 				;
 
 %%

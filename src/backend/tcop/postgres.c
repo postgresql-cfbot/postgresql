@@ -33,6 +33,7 @@
 #include "access/xact.h"
 #include "catalog/pg_type.h"
 #include "commands/async.h"
+#include "commands/defrem.h"
 #include "commands/prepare.h"
 #include "common/pg_prng.h"
 #include "jit/jit.h"
@@ -1072,6 +1073,7 @@ exec_simple_query(const char *query_string)
 		Portal		portal;
 		DestReceiver *receiver;
 		int16		format;
+		ListCell   *lc;
 
 		pgstat_report_query_id(0, true);
 
@@ -1233,7 +1235,7 @@ exec_simple_query(const char *query_string)
 		MemoryContextSwitchTo(oldcontext);
 
 		/*
-		 * Run the portal to completion, and then drop it (and the receiver).
+		 * Run the portal to completion, and then drop it.
 		 */
 		(void) PortalRun(portal,
 						 FETCH_ALL,
@@ -1243,9 +1245,33 @@ exec_simple_query(const char *query_string)
 						 receiver,
 						 &qc);
 
-		receiver->rDestroy(receiver);
-
 		PortalDrop(portal, false);
+
+		/*
+		 * Run portals for dynamic result sets.
+		 */
+		foreach (lc, GetReturnableCursors())
+		{
+			Portal		dynportal = lfirst(lc);
+
+			if (dest == DestRemote)
+				SetRemoteDestReceiverParams(receiver, dynportal);
+
+			PortalRun(dynportal,
+					  FETCH_ALL,
+					  true,
+					  true,
+					  receiver,
+					  receiver,
+					  NULL);
+
+			PortalDrop(dynportal, false);
+		}
+
+		/*
+		 * Drop the receiver.
+		 */
+		receiver->rDestroy(receiver);
 
 		if (lnext(parsetree_list, parsetree_item) == NULL)
 		{
@@ -2058,6 +2084,7 @@ exec_execute_message(const char *portal_name, long max_rows)
 	const char *sourceText;
 	const char *prepStmtName;
 	ParamListInfo portalParams;
+	ListCell   *lc;
 	bool		save_log_statement_stats = log_statement_stats;
 	bool		is_xact_command;
 	bool		execute_is_fetch;
@@ -2193,6 +2220,34 @@ exec_execute_message(const char *portal_name, long max_rows)
 						  receiver,
 						  receiver,
 						  &qc);
+
+	/*
+	 * Run portals for dynamic result sets.
+	 */
+	foreach (lc, GetReturnableCursors())
+	{
+		Portal dyn_portal = lfirst(lc);
+
+		if (dest == DestRemoteExecute)
+			SetRemoteDestReceiverParams(receiver, dyn_portal);
+
+		PortalSetResultFormat(dyn_portal, 1, &portal->dynamic_format);
+
+		SendRowDescriptionMessage(&row_description_buf,
+								  dyn_portal->tupDesc,
+								  FetchPortalTargetList(dyn_portal),
+								  dyn_portal->formats);
+
+		PortalRun(dyn_portal,
+				  FETCH_ALL,
+				  true,
+				  true,
+				  receiver,
+				  receiver,
+				  NULL);
+
+		PortalDrop(dyn_portal, false);
+	}
 
 	receiver->rDestroy(receiver);
 

@@ -6033,6 +6033,16 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
 
      <row>
       <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>prodynres</structfield> <type>int4</type>
+      </para>
+      <para>
+       For procedures, this records the maximum number of dynamic result sets
+       the procedure may create.  Otherwise zero.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
        <structfield>pronargs</structfield> <type>int2</type>
       </para>
       <para>

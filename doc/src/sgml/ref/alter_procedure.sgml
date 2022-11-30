@@ -34,6 +34,7 @@ ALTER PROCEDURE <replaceable>name</replaceable> [ ( [ [ <replaceable class="para
 
 <phrase>where <replaceable class="parameter">action</replaceable> is one of:</phrase>
 
+    DYNAMIC RESULT SETS <replaceable class="parameter">dynamic_result_sets</replaceable>
     [ EXTERNAL ] SECURITY INVOKER | [ EXTERNAL ] SECURITY DEFINER
     SET <replaceable class="parameter">configuration_parameter</replaceable> { TO | = } { <replaceable class="parameter">value</replaceable> | DEFAULT }
     SET <replaceable class="parameter">configuration_parameter</replaceable> FROM CURRENT
@@ -153,6 +154,17 @@ ALTER PROCEDURE <replaceable>name</replaceable> [ ( [ [ <replaceable class="para
       extension is dropped, even if cascade is not specified.
       A procedure can depend upon multiple extensions, and will be dropped when
       any one of those extensions is dropped.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>DYNAMIC RESULT SETS <replaceable class="parameter">dynamic_result_sets</replaceable></literal></term>
+
+    <listitem>
+     <para>
+      Changes the dynamic result sets setting of the procedure.  See <xref
+      linkend="sql-createprocedure"/> for more information.
      </para>
     </listitem>
    </varlistentry>

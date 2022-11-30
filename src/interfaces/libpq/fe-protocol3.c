@@ -320,10 +320,8 @@ pqParseInput3(PGconn *conn)
 					{
 						/*
 						 * A new 'T' message is treated as the start of
-						 * another PGresult.  (It is not clear that this is
-						 * really possible with the current backend.) We stop
-						 * parsing until the application accepts the current
-						 * result.
+						 * another PGresult.  We stop parsing until the
+						 * application accepts the current result.
 						 */
 						conn->asyncStatus = PGASYNC_READY;
 						return;

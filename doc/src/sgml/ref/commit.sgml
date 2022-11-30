@@ -62,6 +62,9 @@ COMMIT [ WORK | TRANSACTION ] [ AND [ NO ] CHAIN ]
       linkend="sql-set-transaction"/>) as the just finished one.  Otherwise,
       no new transaction is started.
      </para>
+     <para>
+      The SQL Standard describes this as a chained transaction.
+     </para>
     </listitem>
    </varlistentry>
   </variablelist>

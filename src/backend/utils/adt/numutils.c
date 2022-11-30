@@ -85,6 +85,17 @@ decimalLength64(const uint64 v)
 	return t + (v >= PowersOfTen[t]);
 }
 
+static const int8 hexlookup[128] = {
+	-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+	-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+	-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+	0, 1, 2, 3, 4, 5, 6, 7, 8, 9, -1, -1, -1, -1, -1, -1,
+	-1, 10, 11, 12, 13, 14, 15, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+	-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+	-1, 10, 11, 12, 13, 14, 15, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+	-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+};
+
 /*
  * Convert input string to a signed 16 bit integer.
  *
@@ -120,13 +131,56 @@ pg_strtoint16(const char *s)
 		goto invalid_syntax;
 
 	/* process digits */
-	while (*ptr && isdigit((unsigned char) *ptr))
+	if (ptr[0] == '0' && (ptr[1] == 'x' || ptr[1] == 'X'))
 	{
-		int8		digit = (*ptr++ - '0');
+		ptr += 2;
+		while (*ptr && isxdigit((unsigned char) *ptr))
+		{
+			int8		digit = hexlookup[(unsigned char) *ptr];
 
-		if (unlikely(pg_mul_s16_overflow(tmp, 10, &tmp)) ||
-			unlikely(pg_sub_s16_overflow(tmp, digit, &tmp)))
-			goto out_of_range;
+			if (unlikely(pg_mul_s16_overflow(tmp, 16, &tmp)) ||
+				unlikely(pg_sub_s16_overflow(tmp, digit, &tmp)))
+				goto out_of_range;
+
+			ptr++;
+		}
+	}
+	else if (ptr[0] == '0' && (ptr[1] == 'o' || ptr[1] == 'O'))
+	{
+		ptr += 2;
+
+		while (*ptr && (*ptr >= '0' && *ptr <= '7'))
+		{
+			int8		digit = (*ptr++ - '0');
+
+			if (unlikely(pg_mul_s16_overflow(tmp, 8, &tmp)) ||
+				unlikely(pg_sub_s16_overflow(tmp, digit, &tmp)))
+				goto out_of_range;
+		}
+	}
+	else if (ptr[0] == '0' && (ptr[1] == 'b' || ptr[1] == 'B'))
+	{
+		ptr += 2;
+
+		while (*ptr && (*ptr >= '0' && *ptr <= '1'))
+		{
+			int8		digit = (*ptr++ - '0');
+
+			if (unlikely(pg_mul_s16_overflow(tmp, 2, &tmp)) ||
+				unlikely(pg_sub_s16_overflow(tmp, digit, &tmp)))
+				goto out_of_range;
+		}
+	}
+	else
+	{
+		while (*ptr && isdigit((unsigned char) *ptr))
+		{
+			int8		digit = (*ptr++ - '0');
+
+			if (unlikely(pg_mul_s16_overflow(tmp, 10, &tmp)) ||
+				unlikely(pg_sub_s16_overflow(tmp, digit, &tmp)))
+				goto out_of_range;
+		}
 	}
 
 	/* allow trailing whitespace, but not other trailing chars */
@@ -196,13 +250,56 @@ pg_strtoint32(const char *s)
 		goto invalid_syntax;
 
 	/* process digits */
-	while (*ptr && isdigit((unsigned char) *ptr))
+	if (ptr[0] == '0' && (ptr[1] == 'x' || ptr[1] == 'X'))
 	{
-		int8		digit = (*ptr++ - '0');
+		ptr += 2;
+		while (*ptr && isxdigit((unsigned char) *ptr))
+		{
+			int8		digit = hexlookup[(unsigned char) *ptr];
 
-		if (unlikely(pg_mul_s32_overflow(tmp, 10, &tmp)) ||
-			unlikely(pg_sub_s32_overflow(tmp, digit, &tmp)))
-			goto out_of_range;
+			if (unlikely(pg_mul_s32_overflow(tmp, 16, &tmp)) ||
+				unlikely(pg_sub_s32_overflow(tmp, digit, &tmp)))
+				goto out_of_range;
+
+			ptr++;
+		}
+	}
+	else if (ptr[0] == '0' && (ptr[1] == 'o' || ptr[1] == 'O'))
+	{
+		ptr += 2;
+
+		while (*ptr && (*ptr >= '0' && *ptr <= '7'))
+		{
+			int8		digit = (*ptr++ - '0');
+
+			if (unlikely(pg_mul_s32_overflow(tmp, 8, &tmp)) ||
+				unlikely(pg_sub_s32_overflow(tmp, digit, &tmp)))
+				goto out_of_range;
+		}
+	}
+	else if (ptr[0] == '0' && (ptr[1] == 'b' || ptr[1] == 'B'))
+	{
+		ptr += 2;
+
+		while (*ptr && (*ptr >= '0' && *ptr <= '1'))
+		{
+			int8		digit = (*ptr++ - '0');
+
+			if (unlikely(pg_mul_s32_overflow(tmp, 2, &tmp)) ||
+				unlikely(pg_sub_s32_overflow(tmp, digit, &tmp)))
+				goto out_of_range;
+		}
+	}
+	else
+	{
+		while (*ptr && isdigit((unsigned char) *ptr))
+		{
+			int8		digit = (*ptr++ - '0');
+
+			if (unlikely(pg_mul_s32_overflow(tmp, 10, &tmp)) ||
+				unlikely(pg_sub_s32_overflow(tmp, digit, &tmp)))
+				goto out_of_range;
+		}
 	}
 
 	/* allow trailing whitespace, but not other trailing chars */
@@ -280,13 +377,56 @@ pg_strtoint64(const char *s)
 		goto invalid_syntax;
 
 	/* process digits */
-	while (*ptr && isdigit((unsigned char) *ptr))
+	if (ptr[0] == '0' && (ptr[1] == 'x' || ptr[1] == 'X'))
 	{
-		int8		digit = (*ptr++ - '0');
+		ptr += 2;
+		while (*ptr && isxdigit((unsigned char) *ptr))
+		{
+			int8		digit = hexlookup[(unsigned char) *ptr];
 
-		if (unlikely(pg_mul_s64_overflow(tmp, 10, &tmp)) ||
-			unlikely(pg_sub_s64_overflow(tmp, digit, &tmp)))
-			goto out_of_range;
+			if (unlikely(pg_mul_s64_overflow(tmp, 16, &tmp)) ||
+				unlikely(pg_sub_s64_overflow(tmp, digit, &tmp)))
+				goto out_of_range;
+
+			ptr++;
+		}
+	}
+	else if (ptr[0] == '0' && (ptr[1] == 'o' || ptr[1] == 'O'))
+	{
+		ptr += 2;
+
+		while (*ptr && (*ptr >= '0' && *ptr <= '7'))
+		{
+			int8		digit = (*ptr++ - '0');
+
+			if (unlikely(pg_mul_s64_overflow(tmp, 8, &tmp)) ||
+				unlikely(pg_sub_s64_overflow(tmp, digit, &tmp)))
+				goto out_of_range;
+		}
+	}
+	else if (ptr[0] == '0' && (ptr[1] == 'b' || ptr[1] == 'B'))
+	{
+		ptr += 2;
+
+		while (*ptr && (*ptr >= '0' && *ptr <= '1'))
+		{
+			int8		digit = (*ptr++ - '0');
+
+			if (unlikely(pg_mul_s64_overflow(tmp, 2, &tmp)) ||
+				unlikely(pg_sub_s64_overflow(tmp, digit, &tmp)))
+				goto out_of_range;
+		}
+	}
+	else
+	{
+		while (*ptr && isdigit((unsigned char) *ptr))
+		{
+			int8		digit = (*ptr++ - '0');
+
+			if (unlikely(pg_mul_s64_overflow(tmp, 10, &tmp)) ||
+				unlikely(pg_sub_s64_overflow(tmp, digit, &tmp)))
+				goto out_of_range;
+		}
 	}
 
 	/* allow trailing whitespace, but not other trailing chars */

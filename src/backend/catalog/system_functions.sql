@@ -620,6 +620,12 @@ CREATE OR REPLACE FUNCTION
  STABLE PARALLEL SAFE
  AS 'sql_localtimestamp';
 
+-- defaults for building a "scram-sha-256" secret
+CREATE OR REPLACE FUNCTION
+  scram_build_secret_sha256(text, bytea DEFAULT NULL, int DEFAULT NULL)
+RETURNS text
+LANGUAGE INTERNAL
+VOLATILE AS 'scram_build_secret_sha256';
 --
 -- The default permissions for functions mean that anyone can execute them.
 -- A number of functions shouldn't be executable by just anyone, but rather

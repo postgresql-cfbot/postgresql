@@ -456,10 +456,15 @@ scram_exchange(void *opaq, const char *input, int inputlen,
 /*
  * Construct a SCRAM secret, for storing in pg_authid.rolpassword.
  *
+ * "salt_str" can be NULL. If it is, this function will generate a random salt.
+ *
+ * If "iterations" is 0 or less, this function will set it to the default value.
+ *
  * The result is palloc'd, so caller is responsible for freeing it.
  */
 char *
-pg_be_scram_build_secret(const char *password)
+pg_be_scram_build_secret(const char *password, char *salt_str, int salt_str_len,
+				   int iterations)
 {
 	char	   *prep_password;
 	pg_saslprep_rc rc;
@@ -476,14 +481,22 @@ pg_be_scram_build_secret(const char *password)
 	if (rc == SASLPREP_SUCCESS)
 		password = (const char *) prep_password;
 
-	/* Generate random salt */
-	if (!pg_strong_random(saltbuf, SCRAM_DEFAULT_SALT_LEN))
-		ereport(ERROR,
-				(errcode(ERRCODE_INTERNAL_ERROR),
-				 errmsg("could not generate random salt")));
+	/* If salt_str is NULL, generate random salt */
+	if (salt_str == NULL)
+	{
+		if (!pg_strong_random(saltbuf, SCRAM_DEFAULT_SALT_LEN))
+			ereport(ERROR,
+					(errcode(ERRCODE_INTERNAL_ERROR),
+					 errmsg("could not generate random salt")));
 
-	result = scram_build_secret(saltbuf, SCRAM_DEFAULT_SALT_LEN,
-								SCRAM_DEFAULT_ITERATIONS, password,
+		salt_str = saltbuf;
+		salt_str_len = SCRAM_DEFAULT_SALT_LEN;
+	}
+
+	if (iterations <= 0)
+		iterations = SCRAM_DEFAULT_ITERATIONS;
+
+	result = scram_build_secret(salt_str, salt_str_len, iterations, password,
 								&errstr);
 
 	if (prep_password)

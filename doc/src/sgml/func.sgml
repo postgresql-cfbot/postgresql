@@ -3488,6 +3488,48 @@ repeat('Pg', 4) <returnvalue>PgPgPgPg</returnvalue>
       <row>
        <entry role="func_table_entry"><para role="func_signature">
         <indexterm>
+         <primary>scram_build_secret_sha256</primary>
+        </indexterm>
+        <function>scram_build_secret_sha256</function> ( <parameter>password</parameter> <type>text</type>
+        [, <parameter>salt</parameter> <type>bytea</type>
+        [, <parameter>iterations</parameter> <type>integer</type> ] ])
+        <returnvalue>text</returnvalue>
+       </para>
+       <para>
+        Using the value provided in <parameter>password</parameter>, builds a
+        SCRAM secret equilvaent to what is stored in
+        <link linkend="catalog-pg-authid"><structname>pg_authid</structname></link>.<structfield>rolpassword</structfield>
+        and used with <link linkend="sasl-scram-sha-256"><literal>scram-sha-256</literal></link>
+        authentication. If not provided or set to <literal>NULL</literal>,
+        <parameter>salt</parameter> is randomly generated and
+        <parameter>iterations</parameter> defaults to <literal>4096</literal>.
+       </para>
+       <para>
+        <literal>SELECT scram_build_secret_sha256('secret password', decode('MTIzNDU2Nzg5MGFiY2RlZg==', 'base64'));</literal>
+        <returnvalue></returnvalue>
+<programlisting>
+  SCRAM-SHA-256$4096:MTIzNDU2Nzg5MGFiY2RlZg==$D5BmucT796UQKargx2k3fdqjDYR7cH/L0viKKhGo6kA=:M33+iHFOESP8C3DKLDb2k5QAhkNVWEbp/YUIFd2CxN4=
+</programlisting>
+       </para>
+       <para>
+        <literal>SELECT scram_build_secret_sha256('secret password', '\xabba5432');</literal>
+        <returnvalue></returnvalue>
+<programlisting>
+  SCRAM-SHA-256$4096:q7pUMg==$05Nb9QHwHkMA0CRcYaEfwtgZ+3kStIefz8fLMjTEtio=:P126h1ycyP938E69yxktEfhoAILbiwL/UMsMk3Efb6o=
+</programlisting>
+       </para>
+       <para>
+        <literal>SELECT scram_build_secret_sha256('secret password', decode('MTIzNDU2Nzg5MGFiY2RlZg==', 'base64'), 10000);</literal>
+        <returnvalue></returnvalue>
+<programlisting>
+  SCRAM-SHA-256$10000:MTIzNDU2Nzg5MGFiY2RlZg==$9NkDu1TFpx3L30zMgHUqjRNSq3GRZRrdWU4TuGOnT3Q=:svuIH9L6HH8loyKWguT64XXoOLCrr4FkVViPd2JVR4M=
+</programlisting>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
          <primary>split_part</primary>
         </indexterm>
         <function>split_part</function> ( <parameter>string</parameter> <type>text</type>,

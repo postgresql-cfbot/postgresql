@@ -1531,3 +1531,37 @@ ReplaceVarsFromTargetList(Node *node,
 								 (void *) &context,
 								 outer_hasSubLinks);
 }
+
+/*
+ * CombineRangeTables
+ * 		Adds the RTEs of 'rtable2' into 'rtable1'
+ *
+ * This also adds the RTEPermissionInfos of 'rtepermlist2' (belonging to the
+ * RTEs in 'rtable2') into *rtepermlist1 and also updates perminfoindex of the
+ * RTEs in 'rtable2' to now point to the perminfos' indexes in *rtepermlist1.
+ *
+ * Note that this changes both 'rtable1' and 'rtepermlist1' destructively, so
+ * the caller should have better passed safe-to-modify copies.
+ */
+List *
+CombineRangeTables(List *rtable1, List *rtable2,
+				   List *rtepermlist2, List **rtepermlist1)
+{
+	ListCell   *l;
+	int			offset = list_length(*rtepermlist1);
+
+	if (offset > 0)
+	{
+		foreach(l, rtable2)
+		{
+			RangeTblEntry *rte = lfirst_node(RangeTblEntry, l);
+
+			if (rte->perminfoindex > 0)
+				rte->perminfoindex += offset;
+		}
+	}
+
+	*rtepermlist1 = list_concat(*rtepermlist1, rtepermlist2);
+
+	return list_concat(rtable1, rtable2);
+}

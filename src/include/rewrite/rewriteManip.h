@@ -83,5 +83,8 @@ extern Node *ReplaceVarsFromTargetList(Node *node,
 									   ReplaceVarsNoMatchOption nomatch_option,
 									   int nomatch_varno,
 									   bool *outer_hasSubLinks);
+extern List *CombineRangeTables(List *rtable1, List *rtable2,
+								List *rtepermlist2,
+								List **rtepermlist1);
 
 #endif							/* REWRITEMANIP_H */

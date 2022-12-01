@@ -57,6 +57,7 @@
 #include "miscadmin.h"
 #include "nodes/nodeFuncs.h"
 #include "parser/parsetree.h"
+#include "parser/parse_relation.h"
 #include "partitioning/partdesc.h"
 #include "storage/lmgr.h"
 #include "utils/builtins.h"
@@ -67,6 +68,7 @@
 
 static bool tlist_matches_tupdesc(PlanState *ps, List *tlist, int varno, TupleDesc tupdesc);
 static void ShutdownExprContext(ExprContext *econtext, bool isCommit);
+static inline RTEPermissionInfo *GetResultRTEPermissionInfo(ResultRelInfo *relinfo, EState *estate);
 
 
 /* ----------------------------------------------------------------
@@ -1252,76 +1254,91 @@ ExecGetChildToRootMap(ResultRelInfo *resultRelInfo)
 	return resultRelInfo->ri_ChildToRootMap;
 }
 
+/*
+ * Return the map needed to convert "root" table column bitmapsets to the
+ * rowtype of an individual child table.  A NULL result is valid and means
+ * that no conversion is needed.
+ */
+AttrMap *
+ExecGetRootToChildMap(ResultRelInfo *resultRelInfo,
+					  EState *estate)
+{
+	/* If we didn't already do so, compute the map for this child. */
+	if (!resultRelInfo->ri_RootToChildMapValid)
+	{
+		ResultRelInfo *rootRelInfo = resultRelInfo->ri_RootResultRelInfo;
+		MemoryContext oldcontext = MemoryContextSwitchTo(estate->es_query_cxt);
+
+		if (rootRelInfo)
+		{
+			/*
+			 * Passing 'true' below means any columns present in the child
+			 * table but not in the root parent are to be ignored; note that
+			 * such a case is possible with traditional inheritance but never
+			 * with partitioning.
+			 */
+			resultRelInfo->ri_RootToChildMap =
+				build_attrmap_by_name_if_req(RelationGetDescr(rootRelInfo->ri_RelationDesc),
+											 RelationGetDescr(resultRelInfo->ri_RelationDesc),
+											 true);
+		}
+		else					/* this isn't a child result rel */
+			resultRelInfo->ri_RootToChildMap = NULL;
+
+		resultRelInfo->ri_RootToChildMapValid = true;
+
+		MemoryContextSwitchTo(oldcontext);
+	}
+
+	return resultRelInfo->ri_RootToChildMap;
+}
+
 /* Return a bitmap representing columns being inserted */
 Bitmapset *
 ExecGetInsertedCols(ResultRelInfo *relinfo, EState *estate)
 {
-	/*
-	 * The columns are stored in the range table entry.  If this ResultRelInfo
-	 * represents a partition routing target, and doesn't have an entry of its
-	 * own in the range table, fetch the parent's RTE and map the columns to
-	 * the order they are in the partition.
-	 */
-	if (relinfo->ri_RangeTableIndex != 0)
-	{
-		RangeTblEntry *rte = exec_rt_fetch(relinfo->ri_RangeTableIndex, estate);
+	RTEPermissionInfo *perminfo = GetResultRTEPermissionInfo(relinfo, estate);
 
-		return rte->insertedCols;
-	}
-	else if (relinfo->ri_RootResultRelInfo)
-	{
-		ResultRelInfo *rootRelInfo = relinfo->ri_RootResultRelInfo;
-		RangeTblEntry *rte = exec_rt_fetch(rootRelInfo->ri_RangeTableIndex, estate);
-
-		if (relinfo->ri_RootToPartitionMap != NULL)
-			return execute_attr_map_cols(relinfo->ri_RootToPartitionMap->attrMap,
-										 rte->insertedCols);
-		else
-			return rte->insertedCols;
-	}
-	else
-	{
-		/*
-		 * The relation isn't in the range table and it isn't a partition
-		 * routing target.  This ResultRelInfo must've been created only for
-		 * firing triggers and the relation is not being inserted into.  (See
-		 * ExecGetTriggerResultRel.)
-		 */
+	if (perminfo == NULL)
 		return NULL;
+
+	/* Map the columns to child's attribute numbers if needed. */
+	if (relinfo->ri_RootResultRelInfo)
+	{
+		AttrMap    *map = ExecGetRootToChildMap(relinfo, estate);
+
+		if (map)
+			return execute_attr_map_cols(map, perminfo->insertedCols);
 	}
+
+	return perminfo->insertedCols;
 }
 
 /* Return a bitmap representing columns being updated */
 Bitmapset *
 ExecGetUpdatedCols(ResultRelInfo *relinfo, EState *estate)
 {
-	/* see ExecGetInsertedCols() */
-	if (relinfo->ri_RangeTableIndex != 0)
-	{
-		RangeTblEntry *rte = exec_rt_fetch(relinfo->ri_RangeTableIndex, estate);
+	RTEPermissionInfo *perminfo = GetResultRTEPermissionInfo(relinfo, estate);
 
-		return rte->updatedCols;
-	}
-	else if (relinfo->ri_RootResultRelInfo)
-	{
-		ResultRelInfo *rootRelInfo = relinfo->ri_RootResultRelInfo;
-		RangeTblEntry *rte = exec_rt_fetch(rootRelInfo->ri_RangeTableIndex, estate);
-
-		if (relinfo->ri_RootToPartitionMap != NULL)
-			return execute_attr_map_cols(relinfo->ri_RootToPartitionMap->attrMap,
-										 rte->updatedCols);
-		else
-			return rte->updatedCols;
-	}
-	else
+	if (perminfo == NULL)
 		return NULL;
+
+	/* Map the columns to child's attribute numbers if needed. */
+	if (relinfo->ri_RootResultRelInfo)
+	{
+		AttrMap    *map = ExecGetRootToChildMap(relinfo, estate);
+
+		if (map)
+			return execute_attr_map_cols(map, perminfo->updatedCols);
+	}
+
+	return perminfo->updatedCols;
 }
 
 /* Return a bitmap representing generated columns being updated */
 Bitmapset *
 ExecGetExtraUpdatedCols(ResultRelInfo *relinfo, EState *estate)
 {
-	/* see ExecGetInsertedCols() */
 	if (relinfo->ri_RangeTableIndex != 0)
 	{
 		RangeTblEntry *rte = exec_rt_fetch(relinfo->ri_RangeTableIndex, estate);
@@ -1349,4 +1366,76 @@ ExecGetAllUpdatedCols(ResultRelInfo *relinfo, EState *estate)
 {
 	return bms_union(ExecGetUpdatedCols(relinfo, estate),
 					 ExecGetExtraUpdatedCols(relinfo, estate));
+}
+
+/*
+ * GetResultRTEPermissionInfo
+ *		Helper routine for ExecGet*Cols() routines
+ *
+ * The column bitmapsets are stored in RTEPermissionInfos.  For inheritance
+ * child result relations (a partition routing target of an INSERT or a child
+ * UPDATE target), use the root parent's RTE to fetch the RTEPermissionInfo
+ * because that's the only one that actually points to any.
+ */
+static inline RTEPermissionInfo *
+GetResultRTEPermissionInfo(ResultRelInfo *relinfo, EState *estate)
+{
+	Index		rti;
+	RangeTblEntry *rte;
+	RTEPermissionInfo *perminfo = NULL;
+
+	if (relinfo->ri_RootResultRelInfo)
+		rti = relinfo->ri_RootResultRelInfo->ri_RangeTableIndex;
+	else if (relinfo->ri_RangeTableIndex != 0)
+		rti = relinfo->ri_RangeTableIndex;
+	else
+	{
+		/*
+		 * The relation isn't in the range table and it isn't a partition
+		 * routing target.  This ResultRelInfo must've been created only for
+		 * firing triggers and the relation is not being inserted into.  (See
+		 * ExecGetTriggerResultRel.)
+		 */
+		rti = 0;
+	}
+
+	if (rti > 0)
+	{
+		rte = exec_rt_fetch(rti, estate);
+		perminfo = ExecGetRTEPermissionInfo(rte, estate);
+	}
+
+	return perminfo;
+}
+
+/*
+ * ExecGetRTEPermissionInfo
+ *		Returns the RTEPermissionInfo contained in estate->es_rtepermlist
+ *		pointed to by the RTE
+ */
+RTEPermissionInfo *
+ExecGetRTEPermissionInfo(RangeTblEntry *rte, EState *estate)
+{
+	Assert(estate->es_rtepermlist != NIL);
+	return GetRTEPermissionInfo(estate->es_rtepermlist, rte);
+}
+
+/*
+ * GetResultRelCheckAsUser
+ *		Returns the user to modify passed-in result relation as
+ *
+ * The user is chosen by looking up the relation's or, if a child table, its
+ * root parent's RTEPermissionInfo.
+ */
+Oid
+ExecGetResultRelCheckAsUser(ResultRelInfo *relInfo, EState *estate)
+{
+	RTEPermissionInfo *perminfo = GetResultRTEPermissionInfo(relInfo, estate);
+
+	/* XXX - maybe ok to return GetUserId() in this case? */
+	if (perminfo == NULL)
+		elog(ERROR, "no RTEPermissionInfo found for result relation with OID %u",
+			 RelationGetRelid(relInfo->ri_RelationDesc));
+
+	return perminfo->checkAsUser ? perminfo->checkAsUser : GetUserId();
 }

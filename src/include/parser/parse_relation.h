@@ -120,5 +120,9 @@ extern const NameData *attnumAttName(Relation rd, int attid);
 extern Oid	attnumTypeId(Relation rd, int attid);
 extern Oid	attnumCollationId(Relation rd, int attid);
 extern bool isQueryUsingTempRelation(Query *query);
+extern RTEPermissionInfo *AddRTEPermissionInfo(List **rtepermlist,
+											   RangeTblEntry *rte);
+extern RTEPermissionInfo *GetRTEPermissionInfo(List *rtepermlist,
+											   RangeTblEntry *rte);
 
 #endif							/* PARSE_RELATION_H */

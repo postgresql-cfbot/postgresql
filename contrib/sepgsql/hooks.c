@@ -35,7 +35,7 @@ PG_MODULE_MAGIC;
  * Saved hook entries (if stacked)
  */
 static object_access_hook_type next_object_access_hook = NULL;
-static ExecutorCheckPerms_hook_type next_exec_check_perms_hook = NULL;
+static ExecutorCheckPermissions_hook_type next_exec_check_perms_hook = NULL;
 static ProcessUtility_hook_type next_ProcessUtility_hook = NULL;
 
 /*
@@ -287,17 +287,17 @@ sepgsql_object_access(ObjectAccessType access,
  * Entrypoint of DML permissions
  */
 static bool
-sepgsql_exec_check_perms(List *rangeTabls, bool abort)
+sepgsql_exec_check_perms(List *rangeTbls, List *rtepermlist, bool abort)
 {
 	/*
 	 * If security provider is stacking and one of them replied 'false' at
 	 * least, we don't need to check any more.
 	 */
 	if (next_exec_check_perms_hook &&
-		!(*next_exec_check_perms_hook) (rangeTabls, abort))
+		!(*next_exec_check_perms_hook) (rangeTbls, rtepermlist, abort))
 		return false;
 
-	if (!sepgsql_dml_privileges(rangeTabls, abort))
+	if (!sepgsql_dml_privileges(rangeTbls, rtepermlist, abort))
 		return false;
 
 	return true;
@@ -471,8 +471,8 @@ _PG_init(void)
 	object_access_hook = sepgsql_object_access;
 
 	/* DML permission check */
-	next_exec_check_perms_hook = ExecutorCheckPerms_hook;
-	ExecutorCheckPerms_hook = sepgsql_exec_check_perms;
+	next_exec_check_perms_hook = ExecutorCheckPermissions_hook;
+	ExecutorCheckPermissions_hook = sepgsql_exec_check_perms;
 
 	/* ProcessUtility hook */
 	next_ProcessUtility_hook = ProcessUtility_hook;

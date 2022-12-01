@@ -776,11 +776,19 @@ ReadBufferExtended(Relation reln, ForkNumber forkNum, BlockNumber blockNum,
 	 * Read the buffer, and update pgstat counters to reflect a cache hit or
 	 * miss.
 	 */
-	pgstat_count_buffer_read(reln);
+	if (reln->rd_rel->relkind == RELKIND_INDEX)
+		pgstat_count_index_buffer_read(reln);
+	else
+		pgstat_count_table_buffer_read(reln);
 	buf = ReadBuffer_common(RelationGetSmgr(reln), reln->rd_rel->relpersistence,
 							forkNum, blockNum, mode, strategy, &hit);
 	if (hit)
-		pgstat_count_buffer_hit(reln);
+	{
+		if (reln->rd_rel->relkind == RELKIND_INDEX)
+			pgstat_count_index_buffer_hit(reln);
+		else
+			pgstat_count_table_buffer_hit(reln);
+	}
 	return buf;
 }
 

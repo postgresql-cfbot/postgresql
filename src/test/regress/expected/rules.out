@@ -1767,10 +1767,10 @@ pg_stat_all_indexes| SELECT c.oid AS relid,
     n.nspname AS schemaname,
     c.relname,
     i.relname AS indexrelname,
-    pg_stat_get_numscans(i.oid) AS idx_scan,
-    pg_stat_get_lastscan(i.oid) AS last_idx_scan,
-    pg_stat_get_tuples_returned(i.oid) AS idx_tup_read,
-    pg_stat_get_tuples_fetched(i.oid) AS idx_tup_fetch
+    pg_stat_get_index_numscans(i.oid) AS idx_scan,
+    pg_stat_get_index_lastscan(i.oid) AS last_idx_scan,
+    pg_stat_get_index_tuples_returned(i.oid) AS idx_tup_read,
+    pg_stat_get_index_tuples_fetched(i.oid) AS idx_tup_fetch
    FROM (((pg_class c
      JOIN pg_index x ON ((c.oid = x.indrelid)))
      JOIN pg_class i ON ((i.oid = x.indexrelid)))
@@ -1779,12 +1779,12 @@ pg_stat_all_indexes| SELECT c.oid AS relid,
 pg_stat_all_tables| SELECT c.oid AS relid,
     n.nspname AS schemaname,
     c.relname,
-    pg_stat_get_numscans(c.oid) AS seq_scan,
-    pg_stat_get_lastscan(c.oid) AS last_seq_scan,
-    pg_stat_get_tuples_returned(c.oid) AS seq_tup_read,
-    (sum(pg_stat_get_numscans(i.indexrelid)))::bigint AS idx_scan,
-    max(pg_stat_get_lastscan(i.indexrelid)) AS last_idx_scan,
-    ((sum(pg_stat_get_tuples_fetched(i.indexrelid)))::bigint + pg_stat_get_tuples_fetched(c.oid)) AS idx_tup_fetch,
+    pg_stat_get_table_numscans(c.oid) AS seq_scan,
+    pg_stat_get_table_lastscan(c.oid) AS last_seq_scan,
+    pg_stat_get_table_tuples_returned(c.oid) AS seq_tup_read,
+    (sum(pg_stat_get_index_numscans(i.indexrelid)))::bigint AS idx_scan,
+    max(pg_stat_get_index_lastscan(i.indexrelid)) AS last_idx_scan,
+    ((sum(pg_stat_get_index_tuples_fetched(i.indexrelid)))::bigint + pg_stat_get_table_tuples_fetched(c.oid)) AS idx_tup_fetch,
     pg_stat_get_tuples_inserted(c.oid) AS n_tup_ins,
     pg_stat_get_tuples_updated(c.oid) AS n_tup_upd,
     pg_stat_get_tuples_deleted(c.oid) AS n_tup_del,
@@ -2224,9 +2224,9 @@ pg_stat_wal_receiver| SELECT s.pid,
 pg_stat_xact_all_tables| SELECT c.oid AS relid,
     n.nspname AS schemaname,
     c.relname,
-    pg_stat_get_xact_numscans(c.oid) AS seq_scan,
+    pg_stat_get_table_xact_numscans(c.oid) AS seq_scan,
     pg_stat_get_xact_tuples_returned(c.oid) AS seq_tup_read,
-    (sum(pg_stat_get_xact_numscans(i.indexrelid)))::bigint AS idx_scan,
+    (sum(pg_stat_get_index_xact_numscans(i.indexrelid)))::bigint AS idx_scan,
     ((sum(pg_stat_get_xact_tuples_fetched(i.indexrelid)))::bigint + pg_stat_get_xact_tuples_fetched(c.oid)) AS idx_tup_fetch,
     pg_stat_get_xact_tuples_inserted(c.oid) AS n_tup_ins,
     pg_stat_get_xact_tuples_updated(c.oid) AS n_tup_upd,
@@ -2277,8 +2277,8 @@ pg_statio_all_indexes| SELECT c.oid AS relid,
     n.nspname AS schemaname,
     c.relname,
     i.relname AS indexrelname,
-    (pg_stat_get_blocks_fetched(i.oid) - pg_stat_get_blocks_hit(i.oid)) AS idx_blks_read,
-    pg_stat_get_blocks_hit(i.oid) AS idx_blks_hit
+    (pg_stat_get_index_blocks_fetched(i.oid) - pg_stat_get_index_blocks_hit(i.oid)) AS idx_blks_read,
+    pg_stat_get_index_blocks_hit(i.oid) AS idx_blks_hit
    FROM (((pg_class c
      JOIN pg_index x ON ((c.oid = x.indrelid)))
      JOIN pg_class i ON ((i.oid = x.indexrelid)))
@@ -2287,31 +2287,31 @@ pg_statio_all_indexes| SELECT c.oid AS relid,
 pg_statio_all_sequences| SELECT c.oid AS relid,
     n.nspname AS schemaname,
     c.relname,
-    (pg_stat_get_blocks_fetched(c.oid) - pg_stat_get_blocks_hit(c.oid)) AS blks_read,
-    pg_stat_get_blocks_hit(c.oid) AS blks_hit
+    (pg_stat_get_index_blocks_fetched(c.oid) - pg_stat_get_table_blocks_hit(c.oid)) AS blks_read,
+    pg_stat_get_table_blocks_hit(c.oid) AS blks_hit
    FROM (pg_class c
      LEFT JOIN pg_namespace n ON ((n.oid = c.relnamespace)))
   WHERE (c.relkind = 'S'::"char");
 pg_statio_all_tables| SELECT c.oid AS relid,
     n.nspname AS schemaname,
     c.relname,
-    (pg_stat_get_blocks_fetched(c.oid) - pg_stat_get_blocks_hit(c.oid)) AS heap_blks_read,
-    pg_stat_get_blocks_hit(c.oid) AS heap_blks_hit,
+    (pg_stat_get_table_blocks_fetched(c.oid) - pg_stat_get_table_blocks_hit(c.oid)) AS heap_blks_read,
+    pg_stat_get_table_blocks_hit(c.oid) AS heap_blks_hit,
     i.idx_blks_read,
     i.idx_blks_hit,
-    (pg_stat_get_blocks_fetched(t.oid) - pg_stat_get_blocks_hit(t.oid)) AS toast_blks_read,
-    pg_stat_get_blocks_hit(t.oid) AS toast_blks_hit,
+    (pg_stat_get_table_blocks_fetched(t.oid) - pg_stat_get_table_blocks_hit(t.oid)) AS toast_blks_read,
+    pg_stat_get_table_blocks_hit(t.oid) AS toast_blks_hit,
     x.idx_blks_read AS tidx_blks_read,
     x.idx_blks_hit AS tidx_blks_hit
    FROM ((((pg_class c
      LEFT JOIN pg_class t ON ((c.reltoastrelid = t.oid)))
      LEFT JOIN pg_namespace n ON ((n.oid = c.relnamespace)))
-     LEFT JOIN LATERAL ( SELECT (sum((pg_stat_get_blocks_fetched(pg_index.indexrelid) - pg_stat_get_blocks_hit(pg_index.indexrelid))))::bigint AS idx_blks_read,
-            (sum(pg_stat_get_blocks_hit(pg_index.indexrelid)))::bigint AS idx_blks_hit
+     LEFT JOIN LATERAL ( SELECT (sum((pg_stat_get_index_blocks_fetched(pg_index.indexrelid) - pg_stat_get_index_blocks_hit(pg_index.indexrelid))))::bigint AS idx_blks_read,
+            (sum(pg_stat_get_index_blocks_hit(pg_index.indexrelid)))::bigint AS idx_blks_hit
            FROM pg_index
           WHERE (pg_index.indrelid = c.oid)) i ON (true))
-     LEFT JOIN LATERAL ( SELECT (sum((pg_stat_get_blocks_fetched(pg_index.indexrelid) - pg_stat_get_blocks_hit(pg_index.indexrelid))))::bigint AS idx_blks_read,
-            (sum(pg_stat_get_blocks_hit(pg_index.indexrelid)))::bigint AS idx_blks_hit
+     LEFT JOIN LATERAL ( SELECT (sum((pg_stat_get_index_blocks_fetched(pg_index.indexrelid) - pg_stat_get_index_blocks_hit(pg_index.indexrelid))))::bigint AS idx_blks_read,
+            (sum(pg_stat_get_index_blocks_hit(pg_index.indexrelid)))::bigint AS idx_blks_hit
            FROM pg_index
           WHERE (pg_index.indrelid = t.oid)) x ON (true))
   WHERE (c.relkind = ANY (ARRAY['r'::"char", 't'::"char", 'm'::"char"]));

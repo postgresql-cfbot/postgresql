@@ -43,8 +43,8 @@ my $sect = "initial";
 is(have_stats('database', $dboid, 0), 't', "$sect: db stats do exist");
 is(have_stats('function', $dboid, $funcoid),
 	't', "$sect: function stats do exist");
-is(have_stats('relation', $dboid, $tableoid),
-	't', "$sect: relation stats do exist");
+is(have_stats('table', $dboid, $tableoid),
+	't', "$sect: table stats do exist");
 
 # regular shutdown
 $node->stop();
@@ -67,8 +67,8 @@ $sect = "copy";
 is(have_stats('database', $dboid, 0), 't', "$sect: db stats do exist");
 is(have_stats('function', $dboid, $funcoid),
 	't', "$sect: function stats do exist");
-is(have_stats('relation', $dboid, $tableoid),
-	't', "$sect: relation stats do exist");
+is(have_stats('table', $dboid, $tableoid),
+	't', "$sect: table stats do exist");
 
 $node->stop('immediate');
 
@@ -84,8 +84,8 @@ $sect = "post immediate";
 is(have_stats('database', $dboid, 0), 'f', "$sect: db stats do not exist");
 is(have_stats('function', $dboid, $funcoid),
 	'f', "$sect: function stats do exist");
-is(have_stats('relation', $dboid, $tableoid),
-	'f', "$sect: relation stats do not exist");
+is(have_stats('table', $dboid, $tableoid),
+	'f', "$sect: table stats do not exist");
 
 # get rid of backup statsfile
 unlink $statsfile or die "cannot unlink $statsfile $!";
@@ -98,8 +98,8 @@ $sect = "post immediate, new";
 is(have_stats('database', $dboid, 0), 't', "$sect: db stats do exist");
 is(have_stats('function', $dboid, $funcoid),
 	't', "$sect: function stats do exist");
-is(have_stats('relation', $dboid, $tableoid),
-	't', "$sect: relation stats do exist");
+is(have_stats('table', $dboid, $tableoid),
+	't', "$sect: table stats do exist");
 
 # regular shutdown
 $node->stop();
@@ -117,8 +117,7 @@ $sect = "invalid_overwrite";
 is(have_stats('database', $dboid, 0), 'f', "$sect: db stats do not exist");
 is(have_stats('function', $dboid, $funcoid),
 	'f', "$sect: function stats do not exist");
-is(have_stats('relation', $dboid, $tableoid),
-	'f', "$sect: relation stats do not exist");
+is(have_stats('table', $dboid, $tableoid), 'f', "$sect: table do not exist");
 
 
 ## check invalid stats file starting with valid contents, but followed by
@@ -133,8 +132,8 @@ $sect = "invalid_append";
 is(have_stats('database', $dboid, 0), 'f', "$sect: db stats do not exist");
 is(have_stats('function', $dboid, $funcoid),
 	'f', "$sect: function stats do not exist");
-is(have_stats('relation', $dboid, $tableoid),
-	'f', "$sect: relation stats do not exist");
+is(have_stats('table', $dboid, $tableoid),
+	'f', "$sect: table stats do not exist");
 
 
 ## checks related to stats persistency around restarts and resets

@@ -93,8 +93,8 @@ step s1_table_drop { DROP TABLE test_stat_tab; }
 
 step s1_table_stats {
     SELECT
-        pg_stat_get_numscans(tso.oid) AS seq_scan,
-        pg_stat_get_tuples_returned(tso.oid) AS seq_tup_read,
+        pg_stat_get_table_numscans(tso.oid) AS seq_scan,
+        pg_stat_get_table_tuples_returned(tso.oid) AS seq_tup_read,
         pg_stat_get_tuples_inserted(tso.oid) AS n_tup_ins,
         pg_stat_get_tuples_updated(tso.oid) AS n_tup_upd,
         pg_stat_get_tuples_deleted(tso.oid) AS n_tup_del,

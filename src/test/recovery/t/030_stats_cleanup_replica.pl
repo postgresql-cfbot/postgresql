@@ -185,7 +185,7 @@ sub test_standby_func_tab_stats_status
 	my %stats;
 
 	$stats{rel} = $node_standby->safe_psql($connect_db,
-		"SELECT pg_stat_have_stats('relation', $dboid, $tableoid)");
+		"SELECT pg_stat_have_stats('table', $dboid, $tableoid)");
 	$stats{func} = $node_standby->safe_psql($connect_db,
 		"SELECT pg_stat_have_stats('function', $dboid, $funcoid)");
 

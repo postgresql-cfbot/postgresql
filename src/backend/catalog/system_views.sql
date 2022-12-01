@@ -655,13 +655,13 @@ CREATE VIEW pg_stat_all_tables AS
             C.oid AS relid,
             N.nspname AS schemaname,
             C.relname AS relname,
-            pg_stat_get_numscans(C.oid) AS seq_scan,
-            pg_stat_get_lastscan(C.oid) AS last_seq_scan,
-            pg_stat_get_tuples_returned(C.oid) AS seq_tup_read,
-            sum(pg_stat_get_numscans(I.indexrelid))::bigint AS idx_scan,
-            max(pg_stat_get_lastscan(I.indexrelid)) AS last_idx_scan,
-            sum(pg_stat_get_tuples_fetched(I.indexrelid))::bigint +
-            pg_stat_get_tuples_fetched(C.oid) AS idx_tup_fetch,
+            pg_stat_get_table_numscans(C.oid) AS seq_scan,
+            pg_stat_get_table_lastscan(C.oid) AS last_seq_scan,
+            pg_stat_get_table_tuples_returned(C.oid) AS seq_tup_read,
+            sum(pg_stat_get_index_numscans(I.indexrelid))::bigint AS idx_scan,
+            max(pg_stat_get_index_lastscan(I.indexrelid)) AS last_idx_scan,
+            sum(pg_stat_get_index_tuples_fetched(I.indexrelid))::bigint +
+            pg_stat_get_table_tuples_fetched(C.oid) AS idx_tup_fetch,
             pg_stat_get_tuples_inserted(C.oid) AS n_tup_ins,
             pg_stat_get_tuples_updated(C.oid) AS n_tup_upd,
             pg_stat_get_tuples_deleted(C.oid) AS n_tup_del,
@@ -689,9 +689,9 @@ CREATE VIEW pg_stat_xact_all_tables AS
             C.oid AS relid,
             N.nspname AS schemaname,
             C.relname AS relname,
-            pg_stat_get_xact_numscans(C.oid) AS seq_scan,
+            pg_stat_get_table_xact_numscans(C.oid) AS seq_scan,
             pg_stat_get_xact_tuples_returned(C.oid) AS seq_tup_read,
-            sum(pg_stat_get_xact_numscans(I.indexrelid))::bigint AS idx_scan,
+            sum(pg_stat_get_index_xact_numscans(I.indexrelid))::bigint AS idx_scan,
             sum(pg_stat_get_xact_tuples_fetched(I.indexrelid))::bigint +
             pg_stat_get_xact_tuples_fetched(C.oid) AS idx_tup_fetch,
             pg_stat_get_xact_tuples_inserted(C.oid) AS n_tup_ins,
@@ -729,31 +729,31 @@ CREATE VIEW pg_statio_all_tables AS
             C.oid AS relid,
             N.nspname AS schemaname,
             C.relname AS relname,
-            pg_stat_get_blocks_fetched(C.oid) -
-                    pg_stat_get_blocks_hit(C.oid) AS heap_blks_read,
-            pg_stat_get_blocks_hit(C.oid) AS heap_blks_hit,
+            pg_stat_get_table_blocks_fetched(C.oid) -
+                    pg_stat_get_table_blocks_hit(C.oid) AS heap_blks_read,
+            pg_stat_get_table_blocks_hit(C.oid) AS heap_blks_hit,
             I.idx_blks_read AS idx_blks_read,
             I.idx_blks_hit AS idx_blks_hit,
-            pg_stat_get_blocks_fetched(T.oid) -
-                    pg_stat_get_blocks_hit(T.oid) AS toast_blks_read,
-            pg_stat_get_blocks_hit(T.oid) AS toast_blks_hit,
+            pg_stat_get_table_blocks_fetched(T.oid) -
+                    pg_stat_get_table_blocks_hit(T.oid) AS toast_blks_read,
+            pg_stat_get_table_blocks_hit(T.oid) AS toast_blks_hit,
             X.idx_blks_read AS tidx_blks_read,
             X.idx_blks_hit AS tidx_blks_hit
     FROM pg_class C LEFT JOIN
             pg_class T ON C.reltoastrelid = T.oid
             LEFT JOIN pg_namespace N ON (N.oid = C.relnamespace)
             LEFT JOIN LATERAL (
-              SELECT sum(pg_stat_get_blocks_fetched(indexrelid) -
-                         pg_stat_get_blocks_hit(indexrelid))::bigint
+              SELECT sum(pg_stat_get_index_blocks_fetched(indexrelid) -
+                         pg_stat_get_index_blocks_hit(indexrelid))::bigint
                      AS idx_blks_read,
-                     sum(pg_stat_get_blocks_hit(indexrelid))::bigint
+                     sum(pg_stat_get_index_blocks_hit(indexrelid))::bigint
                      AS idx_blks_hit
               FROM pg_index WHERE indrelid = C.oid ) I ON true
             LEFT JOIN LATERAL (
-              SELECT sum(pg_stat_get_blocks_fetched(indexrelid) -
-                         pg_stat_get_blocks_hit(indexrelid))::bigint
+              SELECT sum(pg_stat_get_index_blocks_fetched(indexrelid) -
+                         pg_stat_get_index_blocks_hit(indexrelid))::bigint
                      AS idx_blks_read,
-                     sum(pg_stat_get_blocks_hit(indexrelid))::bigint
+                     sum(pg_stat_get_index_blocks_hit(indexrelid))::bigint
                      AS idx_blks_hit
               FROM pg_index WHERE indrelid = T.oid ) X ON true
     WHERE C.relkind IN ('r', 't', 'm');
@@ -775,10 +775,10 @@ CREATE VIEW pg_stat_all_indexes AS
             N.nspname AS schemaname,
             C.relname AS relname,
             I.relname AS indexrelname,
-            pg_stat_get_numscans(I.oid) AS idx_scan,
-            pg_stat_get_lastscan(I.oid) AS last_idx_scan,
-            pg_stat_get_tuples_returned(I.oid) AS idx_tup_read,
-            pg_stat_get_tuples_fetched(I.oid) AS idx_tup_fetch
+            pg_stat_get_index_numscans(I.oid) AS idx_scan,
+            pg_stat_get_index_lastscan(I.oid) AS last_idx_scan,
+            pg_stat_get_index_tuples_returned(I.oid) AS idx_tup_read,
+            pg_stat_get_index_tuples_fetched(I.oid) AS idx_tup_fetch
     FROM pg_class C JOIN
             pg_index X ON C.oid = X.indrelid JOIN
             pg_class I ON I.oid = X.indexrelid
@@ -802,9 +802,9 @@ CREATE VIEW pg_statio_all_indexes AS
             N.nspname AS schemaname,
             C.relname AS relname,
             I.relname AS indexrelname,
-            pg_stat_get_blocks_fetched(I.oid) -
-                    pg_stat_get_blocks_hit(I.oid) AS idx_blks_read,
-            pg_stat_get_blocks_hit(I.oid) AS idx_blks_hit
+            pg_stat_get_index_blocks_fetched(I.oid) -
+                    pg_stat_get_index_blocks_hit(I.oid) AS idx_blks_read,
+            pg_stat_get_index_blocks_hit(I.oid) AS idx_blks_hit
     FROM pg_class C JOIN
             pg_index X ON C.oid = X.indrelid JOIN
             pg_class I ON I.oid = X.indexrelid
@@ -826,9 +826,9 @@ CREATE VIEW pg_statio_all_sequences AS
             C.oid AS relid,
             N.nspname AS schemaname,
             C.relname AS relname,
-            pg_stat_get_blocks_fetched(C.oid) -
-                    pg_stat_get_blocks_hit(C.oid) AS blks_read,
-            pg_stat_get_blocks_hit(C.oid) AS blks_hit
+            pg_stat_get_index_blocks_fetched(C.oid) -
+                    pg_stat_get_table_blocks_hit(C.oid) AS blks_read,
+            pg_stat_get_table_blocks_hit(C.oid) AS blks_hit
     FROM pg_class C
             LEFT JOIN pg_namespace N ON (N.oid = C.relnamespace)
     WHERE C.relkind = 'S';

@@ -2411,7 +2411,10 @@ RelationDestroyRelation(Relation relation, bool remember_tupdesc)
 	RelationCloseSmgr(relation);
 
 	/* break mutual link with stats entry */
-	pgstat_unlink_relation(relation);
+	if (relation->rd_rel->relkind == RELKIND_INDEX)
+		pgstat_unlink_index(relation);
+	else
+		pgstat_unlink_table(relation);
 
 	/*
 	 * Free all the subsidiary data structures of the relcache entry, then the
@@ -2720,8 +2723,9 @@ RelationClearRelation(Relation relation, bool rebuild)
 			SWAPFIELD(RowSecurityDesc *, rd_rsdesc);
 		/* toast OID override must be preserved */
 		SWAPFIELD(Oid, rd_toastoid);
-		/* pgstat_info / enabled must be preserved */
-		SWAPFIELD(struct PgStat_TableStatus *, pgstat_info);
+		/* pgstattab_info / pgstatind_info / enabled must be preserved */
+		SWAPFIELD(struct PgStat_TableStatus *, pgstattab_info);
+		SWAPFIELD(struct PgStat_IndexStatus *, pgstatind_info);
 		SWAPFIELD(bool, pgstat_enabled);
 		/* preserve old partition key if we have one */
 		if (keep_partkey)
@@ -6314,7 +6318,8 @@ load_relcache_init_file(bool shared)
 		rel->rd_firstRelfilelocatorSubid = InvalidSubTransactionId;
 		rel->rd_droppedSubid = InvalidSubTransactionId;
 		rel->rd_amcache = NULL;
-		rel->pgstat_info = NULL;
+		rel->pgstattab_info = NULL;
+		rel->pgstatind_info = NULL;
 
 		/*
 		 * Recompute lock and physical addressing info.  This is needed in

@@ -36,24 +36,34 @@
 
 #define HAS_PGSTAT_PERMISSIONS(role)	 (has_privs_of_role(GetUserId(), ROLE_PG_READ_ALL_STATS) || has_privs_of_role(GetUserId(), role))
 
+#define PGSTAT_FETCH_STAT_ENTRY(entry, stat_name) ((entry == NULL) ? 0 : (int64) (entry->stat_name))
+
 Datum
-pg_stat_get_numscans(PG_FUNCTION_ARGS)
+pg_stat_get_index_numscans(PG_FUNCTION_ARGS)
 {
 	Oid			relid = PG_GETARG_OID(0);
 	int64		result;
-	PgStat_StatTabEntry *tabentry;
+	PgStat_StatIndEntry *indentry = pgstat_fetch_stat_indentry(relid);
 
-	if ((tabentry = pgstat_fetch_stat_tabentry(relid)) == NULL)
-		result = 0;
-	else
-		result = (int64) (tabentry->numscans);
+	result = PGSTAT_FETCH_STAT_ENTRY(indentry, numscans);
 
 	PG_RETURN_INT64(result);
 }
 
+Datum
+pg_stat_get_table_numscans(PG_FUNCTION_ARGS)
+{
+	Oid         relid = PG_GETARG_OID(0);
+	int64       result;
+	PgStat_StatTabEntry *tabentry = pgstat_fetch_stat_tabentry(relid);
+
+	result = PGSTAT_FETCH_STAT_ENTRY(tabentry, numscans);
+
+	PG_RETURN_INT64(result);
+}
 
 Datum
-pg_stat_get_lastscan(PG_FUNCTION_ARGS)
+pg_stat_get_table_lastscan(PG_FUNCTION_ARGS)
 {
 	Oid			relid = PG_GETARG_OID(0);
 	TimestampTz result;
@@ -70,50 +80,80 @@ pg_stat_get_lastscan(PG_FUNCTION_ARGS)
 		PG_RETURN_TIMESTAMPTZ(result);
 }
 
+Datum
+pg_stat_get_index_lastscan(PG_FUNCTION_ARGS)
+{
+	Oid			relid = PG_GETARG_OID(0);
+	TimestampTz result;
+	PgStat_StatIndEntry *indentry;
+
+	if ((indentry = pgstat_fetch_stat_indentry(relid)) == NULL)
+		result = 0;
+	else
+		result = indentry->lastscan;
+
+	if (result == 0)
+		PG_RETURN_NULL();
+	else
+		PG_RETURN_TIMESTAMPTZ(result);
+}
 
 Datum
-pg_stat_get_tuples_returned(PG_FUNCTION_ARGS)
+pg_stat_get_table_tuples_returned(PG_FUNCTION_ARGS)
 {
 	Oid			relid = PG_GETARG_OID(0);
 	int64		result;
-	PgStat_StatTabEntry *tabentry;
+	PgStat_StatTabEntry *tabentry = pgstat_fetch_stat_tabentry(relid);
 
-	if ((tabentry = pgstat_fetch_stat_tabentry(relid)) == NULL)
-		result = 0;
-	else
-		result = (int64) (tabentry->tuples_returned);
+	result = PGSTAT_FETCH_STAT_ENTRY(tabentry, tuples_returned);
 
 	PG_RETURN_INT64(result);
 }
 
-
 Datum
-pg_stat_get_tuples_fetched(PG_FUNCTION_ARGS)
+pg_stat_get_index_tuples_returned(PG_FUNCTION_ARGS)
 {
-	Oid			relid = PG_GETARG_OID(0);
-	int64		result;
-	PgStat_StatTabEntry *tabentry;
+	Oid         relid = PG_GETARG_OID(0);
+	int64       result;
+	PgStat_StatIndEntry *indentry = pgstat_fetch_stat_indentry(relid);
 
-	if ((tabentry = pgstat_fetch_stat_tabentry(relid)) == NULL)
-		result = 0;
-	else
-		result = (int64) (tabentry->tuples_fetched);
+	result = PGSTAT_FETCH_STAT_ENTRY(indentry, tuples_returned);
 
 	PG_RETURN_INT64(result);
 }
 
+Datum
+pg_stat_get_table_tuples_fetched(PG_FUNCTION_ARGS)
+{
+	Oid			relid = PG_GETARG_OID(0);
+	int64		result;
+	PgStat_StatTabEntry *tabentry = pgstat_fetch_stat_tabentry(relid);
+
+	result = PGSTAT_FETCH_STAT_ENTRY(tabentry, tuples_fetched);
+
+	PG_RETURN_INT64(result);
+}
+
+Datum
+pg_stat_get_index_tuples_fetched(PG_FUNCTION_ARGS)
+{
+	Oid         relid = PG_GETARG_OID(0);
+	int64       result;
+	PgStat_StatIndEntry *indentry = pgstat_fetch_stat_indentry(relid);
+
+	result = PGSTAT_FETCH_STAT_ENTRY(indentry, tuples_fetched);
+
+	PG_RETURN_INT64(result);
+}
 
 Datum
 pg_stat_get_tuples_inserted(PG_FUNCTION_ARGS)
 {
 	Oid			relid = PG_GETARG_OID(0);
 	int64		result;
-	PgStat_StatTabEntry *tabentry;
+	PgStat_StatTabEntry *tabentry = pgstat_fetch_stat_tabentry(relid);
 
-	if ((tabentry = pgstat_fetch_stat_tabentry(relid)) == NULL)
-		result = 0;
-	else
-		result = (int64) (tabentry->tuples_inserted);
+	result = PGSTAT_FETCH_STAT_ENTRY(tabentry, tuples_inserted);
 
 	PG_RETURN_INT64(result);
 }
@@ -124,12 +164,9 @@ pg_stat_get_tuples_updated(PG_FUNCTION_ARGS)
 {
 	Oid			relid = PG_GETARG_OID(0);
 	int64		result;
-	PgStat_StatTabEntry *tabentry;
+	PgStat_StatTabEntry *tabentry = pgstat_fetch_stat_tabentry(relid);
 
-	if ((tabentry = pgstat_fetch_stat_tabentry(relid)) == NULL)
-		result = 0;
-	else
-		result = (int64) (tabentry->tuples_updated);
+	result = PGSTAT_FETCH_STAT_ENTRY(tabentry, tuples_updated);
 
 	PG_RETURN_INT64(result);
 }
@@ -140,12 +177,9 @@ pg_stat_get_tuples_deleted(PG_FUNCTION_ARGS)
 {
 	Oid			relid = PG_GETARG_OID(0);
 	int64		result;
-	PgStat_StatTabEntry *tabentry;
+	PgStat_StatTabEntry *tabentry = pgstat_fetch_stat_tabentry(relid);
 
-	if ((tabentry = pgstat_fetch_stat_tabentry(relid)) == NULL)
-		result = 0;
-	else
-		result = (int64) (tabentry->tuples_deleted);
+	result = PGSTAT_FETCH_STAT_ENTRY(tabentry, tuples_deleted);
 
 	PG_RETURN_INT64(result);
 }
@@ -156,12 +190,9 @@ pg_stat_get_tuples_hot_updated(PG_FUNCTION_ARGS)
 {
 	Oid			relid = PG_GETARG_OID(0);
 	int64		result;
-	PgStat_StatTabEntry *tabentry;
+	PgStat_StatTabEntry *tabentry = pgstat_fetch_stat_tabentry(relid);
 
-	if ((tabentry = pgstat_fetch_stat_tabentry(relid)) == NULL)
-		result = 0;
-	else
-		result = (int64) (tabentry->tuples_hot_updated);
+	result = PGSTAT_FETCH_STAT_ENTRY(tabentry, tuples_hot_updated);
 
 	PG_RETURN_INT64(result);
 }
@@ -172,12 +203,9 @@ pg_stat_get_live_tuples(PG_FUNCTION_ARGS)
 {
 	Oid			relid = PG_GETARG_OID(0);
 	int64		result;
-	PgStat_StatTabEntry *tabentry;
+	PgStat_StatTabEntry *tabentry = pgstat_fetch_stat_tabentry(relid);
 
-	if ((tabentry = pgstat_fetch_stat_tabentry(relid)) == NULL)
-		result = 0;
-	else
-		result = (int64) (tabentry->n_live_tuples);
+	result = PGSTAT_FETCH_STAT_ENTRY(tabentry, n_live_tuples);
 
 	PG_RETURN_INT64(result);
 }
@@ -188,12 +216,9 @@ pg_stat_get_dead_tuples(PG_FUNCTION_ARGS)
 {
 	Oid			relid = PG_GETARG_OID(0);
 	int64		result;
-	PgStat_StatTabEntry *tabentry;
+	PgStat_StatTabEntry *tabentry = pgstat_fetch_stat_tabentry(relid);
 
-	if ((tabentry = pgstat_fetch_stat_tabentry(relid)) == NULL)
-		result = 0;
-	else
-		result = (int64) (tabentry->n_dead_tuples);
+	result = PGSTAT_FETCH_STAT_ENTRY(tabentry, n_dead_tuples);
 
 	PG_RETURN_INT64(result);
 }
@@ -204,12 +229,9 @@ pg_stat_get_mod_since_analyze(PG_FUNCTION_ARGS)
 {
 	Oid			relid = PG_GETARG_OID(0);
 	int64		result;
-	PgStat_StatTabEntry *tabentry;
+	PgStat_StatTabEntry *tabentry = pgstat_fetch_stat_tabentry(relid);
 
-	if ((tabentry = pgstat_fetch_stat_tabentry(relid)) == NULL)
-		result = 0;
-	else
-		result = (int64) (tabentry->changes_since_analyze);
+	result = PGSTAT_FETCH_STAT_ENTRY(tabentry, changes_since_analyze);
 
 	PG_RETURN_INT64(result);
 }
@@ -220,44 +242,58 @@ pg_stat_get_ins_since_vacuum(PG_FUNCTION_ARGS)
 {
 	Oid			relid = PG_GETARG_OID(0);
 	int64		result;
-	PgStat_StatTabEntry *tabentry;
+	PgStat_StatTabEntry *tabentry = pgstat_fetch_stat_tabentry(relid);
 
-	if ((tabentry = pgstat_fetch_stat_tabentry(relid)) == NULL)
-		result = 0;
-	else
-		result = (int64) (tabentry->inserts_since_vacuum);
+	result = PGSTAT_FETCH_STAT_ENTRY(tabentry, inserts_since_vacuum);
 
 	PG_RETURN_INT64(result);
 }
 
 
 Datum
-pg_stat_get_blocks_fetched(PG_FUNCTION_ARGS)
+pg_stat_get_table_blocks_fetched(PG_FUNCTION_ARGS)
 {
 	Oid			relid = PG_GETARG_OID(0);
 	int64		result;
-	PgStat_StatTabEntry *tabentry;
+	PgStat_StatTabEntry *tabentry = pgstat_fetch_stat_tabentry(relid);
 
-	if ((tabentry = pgstat_fetch_stat_tabentry(relid)) == NULL)
-		result = 0;
-	else
-		result = (int64) (tabentry->blocks_fetched);
+	result = PGSTAT_FETCH_STAT_ENTRY(tabentry, blocks_fetched);
 
 	PG_RETURN_INT64(result);
 }
 
-
 Datum
-pg_stat_get_blocks_hit(PG_FUNCTION_ARGS)
+pg_stat_get_index_blocks_fetched(PG_FUNCTION_ARGS)
 {
 	Oid			relid = PG_GETARG_OID(0);
 	int64		result;
-	PgStat_StatTabEntry *tabentry;
+	PgStat_StatIndEntry *indentry = pgstat_fetch_stat_indentry(relid);
 
-	if ((tabentry = pgstat_fetch_stat_tabentry(relid)) == NULL)
-		result = 0;
-	else
-		result = (int64) (tabentry->blocks_hit);
+	result = PGSTAT_FETCH_STAT_ENTRY(indentry, blocks_fetched);
+
+	PG_RETURN_INT64(result);
+}
+
+Datum
+pg_stat_get_table_blocks_hit(PG_FUNCTION_ARGS)
+{
+	Oid			relid = PG_GETARG_OID(0);
+	int64		result;
+	PgStat_StatTabEntry *tabentry = pgstat_fetch_stat_tabentry(relid);
+
+	result = PGSTAT_FETCH_STAT_ENTRY(tabentry, blocks_hit);
+
+	PG_RETURN_INT64(result);
+}
+
+Datum
+pg_stat_get_index_blocks_hit(PG_FUNCTION_ARGS)
+{
+	Oid			relid = PG_GETARG_OID(0);
+	int64		result;
+	PgStat_StatIndEntry *indentry = pgstat_fetch_stat_indentry(relid);
+
+	result = PGSTAT_FETCH_STAT_ENTRY(indentry, blocks_hit);
 
 	PG_RETURN_INT64(result);
 }
@@ -339,12 +375,9 @@ pg_stat_get_vacuum_count(PG_FUNCTION_ARGS)
 {
 	Oid			relid = PG_GETARG_OID(0);
 	int64		result;
-	PgStat_StatTabEntry *tabentry;
+	PgStat_StatTabEntry *tabentry = pgstat_fetch_stat_tabentry(relid);
 
-	if ((tabentry = pgstat_fetch_stat_tabentry(relid)) == NULL)
-		result = 0;
-	else
-		result = (int64) (tabentry->vacuum_count);
+	result = PGSTAT_FETCH_STAT_ENTRY(tabentry, vacuum_count);
 
 	PG_RETURN_INT64(result);
 }
@@ -354,12 +387,9 @@ pg_stat_get_autovacuum_count(PG_FUNCTION_ARGS)
 {
 	Oid			relid = PG_GETARG_OID(0);
 	int64		result;
-	PgStat_StatTabEntry *tabentry;
+	PgStat_StatTabEntry *tabentry = pgstat_fetch_stat_tabentry(relid);
 
-	if ((tabentry = pgstat_fetch_stat_tabentry(relid)) == NULL)
-		result = 0;
-	else
-		result = (int64) (tabentry->autovac_vacuum_count);
+	result = PGSTAT_FETCH_STAT_ENTRY(tabentry, autovac_vacuum_count);
 
 	PG_RETURN_INT64(result);
 }
@@ -369,12 +399,9 @@ pg_stat_get_analyze_count(PG_FUNCTION_ARGS)
 {
 	Oid			relid = PG_GETARG_OID(0);
 	int64		result;
-	PgStat_StatTabEntry *tabentry;
+	PgStat_StatTabEntry *tabentry = pgstat_fetch_stat_tabentry(relid);
 
-	if ((tabentry = pgstat_fetch_stat_tabentry(relid)) == NULL)
-		result = 0;
-	else
-		result = (int64) (tabentry->analyze_count);
+	result = PGSTAT_FETCH_STAT_ENTRY(tabentry, analyze_count);
 
 	PG_RETURN_INT64(result);
 }
@@ -384,12 +411,9 @@ pg_stat_get_autoanalyze_count(PG_FUNCTION_ARGS)
 {
 	Oid			relid = PG_GETARG_OID(0);
 	int64		result;
-	PgStat_StatTabEntry *tabentry;
+	PgStat_StatTabEntry *tabentry = pgstat_fetch_stat_tabentry(relid);
 
-	if ((tabentry = pgstat_fetch_stat_tabentry(relid)) == NULL)
-		result = 0;
-	else
-		result = (int64) (tabentry->autovac_analyze_count);
+	result = PGSTAT_FETCH_STAT_ENTRY(tabentry, autovac_analyze_count);
 
 	PG_RETURN_INT64(result);
 }
@@ -1843,7 +1867,7 @@ pg_stat_get_slru(PG_FUNCTION_ARGS)
 }
 
 Datum
-pg_stat_get_xact_numscans(PG_FUNCTION_ARGS)
+pg_stat_get_table_xact_numscans(PG_FUNCTION_ARGS)
 {
 	Oid			relid = PG_GETARG_OID(0);
 	int64		result;
@@ -1858,16 +1882,31 @@ pg_stat_get_xact_numscans(PG_FUNCTION_ARGS)
 }
 
 Datum
+pg_stat_get_index_xact_numscans(PG_FUNCTION_ARGS)
+{
+	Oid			relid = PG_GETARG_OID(0);
+	int64		result;
+	PgStat_IndexStatus *indentry;
+
+	if ((indentry = find_indstat_entry(relid)) == NULL)
+		result = 0;
+	else
+		result = (int64) (indentry->i_counts.i_numscans);
+
+	PG_RETURN_INT64(result);
+}
+
+Datum
 pg_stat_get_xact_tuples_returned(PG_FUNCTION_ARGS)
 {
 	Oid			relid = PG_GETARG_OID(0);
 	int64		result;
-	PgStat_TableStatus *tabentry;
+	PgStat_IndexStatus *indentry;
 
-	if ((tabentry = find_tabstat_entry(relid)) == NULL)
+	if ((indentry = find_indstat_entry(relid)) == NULL)
 		result = 0;
 	else
-		result = (int64) (tabentry->t_counts.t_tuples_returned);
+		result = (int64) (indentry->i_counts.i_tuples_returned);
 
 	PG_RETURN_INT64(result);
 }
@@ -1877,12 +1916,12 @@ pg_stat_get_xact_tuples_fetched(PG_FUNCTION_ARGS)
 {
 	Oid			relid = PG_GETARG_OID(0);
 	int64		result;
-	PgStat_TableStatus *tabentry;
+	PgStat_IndexStatus *indentry;
 
-	if ((tabentry = find_tabstat_entry(relid)) == NULL)
+	if ((indentry = find_indstat_entry(relid)) == NULL)
 		result = 0;
 	else
-		result = (int64) (tabentry->t_counts.t_tuples_fetched);
+		result = (int64) (indentry->i_counts.i_tuples_fetched);
 
 	PG_RETURN_INT64(result);
 }
@@ -1970,12 +2009,12 @@ pg_stat_get_xact_blocks_fetched(PG_FUNCTION_ARGS)
 {
 	Oid			relid = PG_GETARG_OID(0);
 	int64		result;
-	PgStat_TableStatus *tabentry;
+	PgStat_IndexStatus *indentry;
 
-	if ((tabentry = find_tabstat_entry(relid)) == NULL)
+	if ((indentry = find_indstat_entry(relid)) == NULL)
 		result = 0;
 	else
-		result = (int64) (tabentry->t_counts.t_blocks_fetched);
+		result = (int64) (indentry->i_counts.i_blocks_fetched);
 
 	PG_RETURN_INT64(result);
 }
@@ -1985,12 +2024,12 @@ pg_stat_get_xact_blocks_hit(PG_FUNCTION_ARGS)
 {
 	Oid			relid = PG_GETARG_OID(0);
 	int64		result;
-	PgStat_TableStatus *tabentry;
+	PgStat_IndexStatus *indentry;
 
-	if ((tabentry = find_tabstat_entry(relid)) == NULL)
+	if ((indentry = find_indstat_entry(relid)) == NULL)
 		result = 0;
 	else
-		result = (int64) (tabentry->t_counts.t_blocks_hit);
+		result = (int64) (indentry->i_counts.i_blocks_hit);
 
 	PG_RETURN_INT64(result);
 }
@@ -2109,7 +2148,8 @@ pg_stat_reset_single_table_counters(PG_FUNCTION_ARGS)
 {
 	Oid			taboid = PG_GETARG_OID(0);
 
-	pgstat_reset(PGSTAT_KIND_RELATION, MyDatabaseId, taboid);
+	pgstat_reset(PGSTAT_KIND_TABLE, MyDatabaseId, taboid);
+	pgstat_reset(PGSTAT_KIND_INDEX, MyDatabaseId, taboid);
 
 	PG_RETURN_VOID();
 }

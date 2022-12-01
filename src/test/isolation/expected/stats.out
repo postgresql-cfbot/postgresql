@@ -2166,8 +2166,8 @@ pg_stat_force_next_flush
 
 step s1_table_stats: 
     SELECT
-        pg_stat_get_numscans(tso.oid) AS seq_scan,
-        pg_stat_get_tuples_returned(tso.oid) AS seq_tup_read,
+        pg_stat_get_table_numscans(tso.oid) AS seq_scan,
+        pg_stat_get_table_tuples_returned(tso.oid) AS seq_tup_read,
         pg_stat_get_tuples_inserted(tso.oid) AS n_tup_ins,
         pg_stat_get_tuples_updated(tso.oid) AS n_tup_upd,
         pg_stat_get_tuples_deleted(tso.oid) AS n_tup_del,
@@ -2210,8 +2210,8 @@ step s2_table_update_k1: UPDATE test_stat_tab SET value = value + 1 WHERE key = 
 step s1_table_drop: DROP TABLE test_stat_tab;
 step s1_table_stats: 
     SELECT
-        pg_stat_get_numscans(tso.oid) AS seq_scan,
-        pg_stat_get_tuples_returned(tso.oid) AS seq_tup_read,
+        pg_stat_get_table_numscans(tso.oid) AS seq_scan,
+        pg_stat_get_table_tuples_returned(tso.oid) AS seq_tup_read,
         pg_stat_get_tuples_inserted(tso.oid) AS n_tup_ins,
         pg_stat_get_tuples_updated(tso.oid) AS n_tup_upd,
         pg_stat_get_tuples_deleted(tso.oid) AS n_tup_del,
@@ -2236,8 +2236,8 @@ pg_stat_force_next_flush
 step s1_track_counts_off: SET track_counts = off;
 step s1_table_stats: 
     SELECT
-        pg_stat_get_numscans(tso.oid) AS seq_scan,
-        pg_stat_get_tuples_returned(tso.oid) AS seq_tup_read,
+        pg_stat_get_table_numscans(tso.oid) AS seq_scan,
+        pg_stat_get_table_tuples_returned(tso.oid) AS seq_tup_read,
         pg_stat_get_tuples_inserted(tso.oid) AS n_tup_ins,
         pg_stat_get_tuples_updated(tso.oid) AS n_tup_upd,
         pg_stat_get_tuples_deleted(tso.oid) AS n_tup_del,
@@ -2275,8 +2275,8 @@ pg_stat_force_next_flush
 
 step s1_table_stats: 
     SELECT
-        pg_stat_get_numscans(tso.oid) AS seq_scan,
-        pg_stat_get_tuples_returned(tso.oid) AS seq_tup_read,
+        pg_stat_get_table_numscans(tso.oid) AS seq_scan,
+        pg_stat_get_table_tuples_returned(tso.oid) AS seq_tup_read,
         pg_stat_get_tuples_inserted(tso.oid) AS n_tup_ins,
         pg_stat_get_tuples_updated(tso.oid) AS n_tup_upd,
         pg_stat_get_tuples_deleted(tso.oid) AS n_tup_del,
@@ -2314,8 +2314,8 @@ pg_stat_force_next_flush
 step s1_track_counts_off: SET track_counts = off;
 step s1_table_stats: 
     SELECT
-        pg_stat_get_numscans(tso.oid) AS seq_scan,
-        pg_stat_get_tuples_returned(tso.oid) AS seq_tup_read,
+        pg_stat_get_table_numscans(tso.oid) AS seq_scan,
+        pg_stat_get_table_tuples_returned(tso.oid) AS seq_tup_read,
         pg_stat_get_tuples_inserted(tso.oid) AS n_tup_ins,
         pg_stat_get_tuples_updated(tso.oid) AS n_tup_upd,
         pg_stat_get_tuples_deleted(tso.oid) AS n_tup_del,
@@ -2369,8 +2369,8 @@ pg_stat_force_next_flush
 
 step s1_table_stats: 
     SELECT
-        pg_stat_get_numscans(tso.oid) AS seq_scan,
-        pg_stat_get_tuples_returned(tso.oid) AS seq_tup_read,
+        pg_stat_get_table_numscans(tso.oid) AS seq_scan,
+        pg_stat_get_table_tuples_returned(tso.oid) AS seq_tup_read,
         pg_stat_get_tuples_inserted(tso.oid) AS n_tup_ins,
         pg_stat_get_tuples_updated(tso.oid) AS n_tup_upd,
         pg_stat_get_tuples_deleted(tso.oid) AS n_tup_del,
@@ -2401,8 +2401,8 @@ pg_stat_force_next_flush
 
 step s1_table_stats: 
     SELECT
-        pg_stat_get_numscans(tso.oid) AS seq_scan,
-        pg_stat_get_tuples_returned(tso.oid) AS seq_tup_read,
+        pg_stat_get_table_numscans(tso.oid) AS seq_scan,
+        pg_stat_get_table_tuples_returned(tso.oid) AS seq_tup_read,
         pg_stat_get_tuples_inserted(tso.oid) AS n_tup_ins,
         pg_stat_get_tuples_updated(tso.oid) AS n_tup_upd,
         pg_stat_get_tuples_deleted(tso.oid) AS n_tup_del,
@@ -2463,8 +2463,8 @@ pg_stat_force_next_flush
 
 step s1_table_stats: 
     SELECT
-        pg_stat_get_numscans(tso.oid) AS seq_scan,
-        pg_stat_get_tuples_returned(tso.oid) AS seq_tup_read,
+        pg_stat_get_table_numscans(tso.oid) AS seq_scan,
+        pg_stat_get_table_tuples_returned(tso.oid) AS seq_tup_read,
         pg_stat_get_tuples_inserted(tso.oid) AS n_tup_ins,
         pg_stat_get_tuples_updated(tso.oid) AS n_tup_upd,
         pg_stat_get_tuples_deleted(tso.oid) AS n_tup_del,
@@ -2495,8 +2495,8 @@ pg_stat_force_next_flush
 
 step s1_table_stats: 
     SELECT
-        pg_stat_get_numscans(tso.oid) AS seq_scan,
-        pg_stat_get_tuples_returned(tso.oid) AS seq_tup_read,
+        pg_stat_get_table_numscans(tso.oid) AS seq_scan,
+        pg_stat_get_table_tuples_returned(tso.oid) AS seq_tup_read,
         pg_stat_get_tuples_inserted(tso.oid) AS n_tup_ins,
         pg_stat_get_tuples_updated(tso.oid) AS n_tup_upd,
         pg_stat_get_tuples_deleted(tso.oid) AS n_tup_del,
@@ -2558,8 +2558,8 @@ pg_stat_force_next_flush
 
 step s1_table_stats: 
     SELECT
-        pg_stat_get_numscans(tso.oid) AS seq_scan,
-        pg_stat_get_tuples_returned(tso.oid) AS seq_tup_read,
+        pg_stat_get_table_numscans(tso.oid) AS seq_scan,
+        pg_stat_get_table_tuples_returned(tso.oid) AS seq_tup_read,
         pg_stat_get_tuples_inserted(tso.oid) AS n_tup_ins,
         pg_stat_get_tuples_updated(tso.oid) AS n_tup_upd,
         pg_stat_get_tuples_deleted(tso.oid) AS n_tup_del,
@@ -2627,8 +2627,8 @@ pg_stat_force_next_flush
 
 step s1_table_stats: 
     SELECT
-        pg_stat_get_numscans(tso.oid) AS seq_scan,
-        pg_stat_get_tuples_returned(tso.oid) AS seq_tup_read,
+        pg_stat_get_table_numscans(tso.oid) AS seq_scan,
+        pg_stat_get_table_tuples_returned(tso.oid) AS seq_tup_read,
         pg_stat_get_tuples_inserted(tso.oid) AS n_tup_ins,
         pg_stat_get_tuples_updated(tso.oid) AS n_tup_upd,
         pg_stat_get_tuples_deleted(tso.oid) AS n_tup_del,
@@ -2688,8 +2688,8 @@ pg_stat_force_next_flush
 
 step s1_table_stats: 
     SELECT
-        pg_stat_get_numscans(tso.oid) AS seq_scan,
-        pg_stat_get_tuples_returned(tso.oid) AS seq_tup_read,
+        pg_stat_get_table_numscans(tso.oid) AS seq_scan,
+        pg_stat_get_table_tuples_returned(tso.oid) AS seq_tup_read,
         pg_stat_get_tuples_inserted(tso.oid) AS n_tup_ins,
         pg_stat_get_tuples_updated(tso.oid) AS n_tup_upd,
         pg_stat_get_tuples_deleted(tso.oid) AS n_tup_del,
@@ -2755,8 +2755,8 @@ pg_stat_force_next_flush
 
 step s1_table_stats: 
     SELECT
-        pg_stat_get_numscans(tso.oid) AS seq_scan,
-        pg_stat_get_tuples_returned(tso.oid) AS seq_tup_read,
+        pg_stat_get_table_numscans(tso.oid) AS seq_scan,
+        pg_stat_get_table_tuples_returned(tso.oid) AS seq_tup_read,
         pg_stat_get_tuples_inserted(tso.oid) AS n_tup_ins,
         pg_stat_get_tuples_updated(tso.oid) AS n_tup_upd,
         pg_stat_get_tuples_deleted(tso.oid) AS n_tup_del,
@@ -2795,8 +2795,8 @@ pg_stat_force_next_flush
 
 step s1_table_stats: 
     SELECT
-        pg_stat_get_numscans(tso.oid) AS seq_scan,
-        pg_stat_get_tuples_returned(tso.oid) AS seq_tup_read,
+        pg_stat_get_table_numscans(tso.oid) AS seq_scan,
+        pg_stat_get_table_tuples_returned(tso.oid) AS seq_tup_read,
         pg_stat_get_tuples_inserted(tso.oid) AS n_tup_ins,
         pg_stat_get_tuples_updated(tso.oid) AS n_tup_upd,
         pg_stat_get_tuples_deleted(tso.oid) AS n_tup_del,
@@ -2841,8 +2841,8 @@ pg_stat_force_next_flush
 
 step s1_table_stats: 
     SELECT
-        pg_stat_get_numscans(tso.oid) AS seq_scan,
-        pg_stat_get_tuples_returned(tso.oid) AS seq_tup_read,
+        pg_stat_get_table_numscans(tso.oid) AS seq_scan,
+        pg_stat_get_table_tuples_returned(tso.oid) AS seq_tup_read,
         pg_stat_get_tuples_inserted(tso.oid) AS n_tup_ins,
         pg_stat_get_tuples_updated(tso.oid) AS n_tup_upd,
         pg_stat_get_tuples_deleted(tso.oid) AS n_tup_del,
@@ -2881,8 +2881,8 @@ pg_stat_force_next_flush
 
 step s1_table_stats: 
     SELECT
-        pg_stat_get_numscans(tso.oid) AS seq_scan,
-        pg_stat_get_tuples_returned(tso.oid) AS seq_tup_read,
+        pg_stat_get_table_numscans(tso.oid) AS seq_scan,
+        pg_stat_get_table_tuples_returned(tso.oid) AS seq_tup_read,
         pg_stat_get_tuples_inserted(tso.oid) AS n_tup_ins,
         pg_stat_get_tuples_updated(tso.oid) AS n_tup_upd,
         pg_stat_get_tuples_deleted(tso.oid) AS n_tup_del,
@@ -2927,8 +2927,8 @@ pg_stat_force_next_flush
 
 step s1_table_stats: 
     SELECT
-        pg_stat_get_numscans(tso.oid) AS seq_scan,
-        pg_stat_get_tuples_returned(tso.oid) AS seq_tup_read,
+        pg_stat_get_table_numscans(tso.oid) AS seq_scan,
+        pg_stat_get_table_tuples_returned(tso.oid) AS seq_tup_read,
         pg_stat_get_tuples_inserted(tso.oid) AS n_tup_ins,
         pg_stat_get_tuples_updated(tso.oid) AS n_tup_upd,
         pg_stat_get_tuples_deleted(tso.oid) AS n_tup_del,
@@ -2968,8 +2968,8 @@ pg_stat_force_next_flush
 
 step s1_table_stats: 
     SELECT
-        pg_stat_get_numscans(tso.oid) AS seq_scan,
-        pg_stat_get_tuples_returned(tso.oid) AS seq_tup_read,
+        pg_stat_get_table_numscans(tso.oid) AS seq_scan,
+        pg_stat_get_table_tuples_returned(tso.oid) AS seq_tup_read,
         pg_stat_get_tuples_inserted(tso.oid) AS n_tup_ins,
         pg_stat_get_tuples_updated(tso.oid) AS n_tup_upd,
         pg_stat_get_tuples_deleted(tso.oid) AS n_tup_del,
@@ -3015,8 +3015,8 @@ pg_stat_force_next_flush
 
 step s1_table_stats: 
     SELECT
-        pg_stat_get_numscans(tso.oid) AS seq_scan,
-        pg_stat_get_tuples_returned(tso.oid) AS seq_tup_read,
+        pg_stat_get_table_numscans(tso.oid) AS seq_scan,
+        pg_stat_get_table_tuples_returned(tso.oid) AS seq_tup_read,
         pg_stat_get_tuples_inserted(tso.oid) AS n_tup_ins,
         pg_stat_get_tuples_updated(tso.oid) AS n_tup_upd,
         pg_stat_get_tuples_deleted(tso.oid) AS n_tup_del,

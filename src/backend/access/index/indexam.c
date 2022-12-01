@@ -582,7 +582,7 @@ index_fetch_heap(IndexScanDesc scan, TupleTableSlot *slot)
 									&scan->xs_heap_continue, &all_dead);
 
 	if (found)
-		pgstat_count_heap_fetch(scan->indexRelation);
+		pgstat_count_index_fetch(scan->indexRelation);
 
 	/*
 	 * If we scanned a whole HOT chain and found only dead tuples, tell index

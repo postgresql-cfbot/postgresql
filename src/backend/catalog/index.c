@@ -123,7 +123,8 @@ static void UpdateIndexRelation(Oid indexoid, Oid heapoid,
 								bool isexclusion,
 								bool immediate,
 								bool isvalid,
-								bool isready);
+								bool isready,
+								bool is_user_catalog);
 static void index_update_stats(Relation rel,
 							   bool hasindex,
 							   double reltuples);
@@ -545,7 +546,8 @@ UpdateIndexRelation(Oid indexoid,
 					bool isexclusion,
 					bool immediate,
 					bool isvalid,
-					bool isready)
+					bool isready,
+					bool is_user_catalog)
 {
 	int2vector *indkey;
 	oidvector  *indcollation;
@@ -622,6 +624,7 @@ UpdateIndexRelation(Oid indexoid,
 	values[Anum_pg_index_indcheckxmin - 1] = BoolGetDatum(false);
 	values[Anum_pg_index_indisready - 1] = BoolGetDatum(isready);
 	values[Anum_pg_index_indislive - 1] = BoolGetDatum(true);
+	values[Anum_pg_index_indisusercatalog - 1] = BoolGetDatum(is_user_catalog);
 	values[Anum_pg_index_indisreplident - 1] = BoolGetDatum(false);
 	values[Anum_pg_index_indkey - 1] = PointerGetDatum(indkey);
 	values[Anum_pg_index_indcollation - 1] = PointerGetDatum(indcollation);
@@ -735,6 +738,7 @@ index_create(Relation heapRelation,
 	TransactionId relfrozenxid;
 	MultiXactId relminmxid;
 	bool		create_storage = !RelFileNumberIsValid(relFileNumber);
+	bool		isusercatalog = false;
 
 	/* constraint flags can only be set when a constraint is requested */
 	Assert((constr_flags == 0) ||
@@ -1014,13 +1018,17 @@ index_create(Relation heapRelation,
 	 *	  (Or, could define a rule to maintain the predicate) --Nels, Feb '92
 	 * ----------------
 	 */
+	if (heapRelation->rd_options)
+		isusercatalog = ((StdRdOptions *) (heapRelation)->rd_options)->user_catalog_table;
+
 	UpdateIndexRelation(indexRelationId, heapRelationId, parentIndexRelid,
 						indexInfo,
 						collationObjectId, classObjectId, coloptions,
 						isprimary, is_exclusion,
 						(constr_flags & INDEX_CONSTR_CREATE_DEFERRABLE) == 0,
 						!concurrent && !invalid,
-						!concurrent);
+						!concurrent,
+						isusercatalog);
 
 	/*
 	 * Register relcache invalidation on the indexes' heap relation, to

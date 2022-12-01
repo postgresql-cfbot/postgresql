@@ -43,6 +43,8 @@ CATALOG(pg_index,2610,IndexRelationId) BKI_SCHEMA_MACRO
 	bool		indcheckxmin;	/* must we wait for xmin to be old? */
 	bool		indisready;		/* is this index ready for inserts? */
 	bool		indislive;		/* is this index alive at all? */
+	bool		indisusercatalog;	/* is this index linked to a user catalog
+									 * relation? */
 	bool		indisreplident; /* is this index the identity for replication? */
 
 	/* variable-length fields start here, but we allow direct access to indkey */

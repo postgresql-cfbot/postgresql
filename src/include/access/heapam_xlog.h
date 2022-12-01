@@ -242,6 +242,7 @@ typedef struct xl_heap_update
  */
 typedef struct xl_heap_prune
 {
+	bool        onCatalogTable;
 	TransactionId snapshotConflictHorizon;
 	uint16		nredirected;
 	uint16		ndead;
@@ -342,6 +343,7 @@ typedef struct xl_heap_freeze_plan
  */
 typedef struct xl_heap_freeze_page
 {
+	bool        onCatalogTable;
 	TransactionId snapshotConflictHorizon;
 	uint16		nplans;
 
@@ -359,6 +361,7 @@ typedef struct xl_heap_freeze_page
  */
 typedef struct xl_heap_visible
 {
+	bool        onCatalogTable;
 	TransactionId snapshotConflictHorizon;
 	uint8		flags;
 } xl_heap_visible;
@@ -408,7 +411,7 @@ extern void heap2_desc(StringInfo buf, XLogReaderState *record);
 extern const char *heap2_identify(uint8 info);
 extern void heap_xlog_logical_rewrite(XLogReaderState *r);
 
-extern XLogRecPtr log_heap_visible(RelFileLocator rlocator, Buffer heap_buffer,
+extern XLogRecPtr log_heap_visible(Relation rel, Buffer heap_buffer,
 								   Buffer vm_buffer,
 								   TransactionId snapshotConflictHorizon,
 								   uint8 vmflags);

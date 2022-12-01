@@ -120,7 +120,7 @@ static relopt_bool boolRelOpts[] =
 			RELOPT_KIND_HEAP,
 			AccessExclusiveLock
 		},
-		false
+		HEAP_DEFAULT_USER_CATALOG_TABLE
 	},
 	{
 		{

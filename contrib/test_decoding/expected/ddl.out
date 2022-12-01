@@ -483,6 +483,7 @@ CREATE TABLE replication_metadata (
 )
 WITH (user_catalog_table = true)
 ;
+CREATE INDEX replication_metadata_idx1 on replication_metadata(relation);
 \d+ replication_metadata
                                                  Table "public.replication_metadata"
   Column  |  Type   | Collation | Nullable |                     Default                      | Storage  | Stats target | Description 
@@ -492,7 +493,14 @@ WITH (user_catalog_table = true)
  options  | text[]  |           |          |                                                  | extended |              | 
 Indexes:
     "replication_metadata_pkey" PRIMARY KEY, btree (id)
+    "replication_metadata_idx1" btree (relation)
 Options: user_catalog_table=true
+
+SELECT bool_and(indisusercatalog) from pg_index where indrelid = 'replication_metadata'::regclass;
+ bool_and 
+----------
+ t
+(1 row)
 
 INSERT INTO replication_metadata(relation, options)
 VALUES ('foo', ARRAY['a', 'b']);
@@ -506,6 +514,13 @@ ALTER TABLE replication_metadata RESET (user_catalog_table);
  options  | text[]  |           |          |                                                  | extended |              | 
 Indexes:
     "replication_metadata_pkey" PRIMARY KEY, btree (id)
+    "replication_metadata_idx1" btree (relation)
+
+SELECT bool_or(indisusercatalog) from pg_index where indrelid = 'replication_metadata'::regclass;
+ bool_or 
+---------
+ f
+(1 row)
 
 INSERT INTO replication_metadata(relation, options)
 VALUES ('bar', ARRAY['a', 'b']);
@@ -519,7 +534,14 @@ ALTER TABLE replication_metadata SET (user_catalog_table = true);
  options  | text[]  |           |          |                                                  | extended |              | 
 Indexes:
     "replication_metadata_pkey" PRIMARY KEY, btree (id)
+    "replication_metadata_idx1" btree (relation)
 Options: user_catalog_table=true
+
+SELECT bool_and(indisusercatalog) from pg_index where indrelid = 'replication_metadata'::regclass;
+ bool_and 
+----------
+ t
+(1 row)
 
 INSERT INTO replication_metadata(relation, options)
 VALUES ('blub', NULL);
@@ -538,7 +560,14 @@ ALTER TABLE replication_metadata SET (user_catalog_table = false);
  rewritemeornot | integer |           |          |                                                  | plain    |              | 
 Indexes:
     "replication_metadata_pkey" PRIMARY KEY, btree (id)
+    "replication_metadata_idx1" btree (relation)
 Options: user_catalog_table=false
+
+SELECT bool_or(indisusercatalog) from pg_index where indrelid = 'replication_metadata'::regclass;
+ bool_or 
+---------
+ f
+(1 row)
 
 INSERT INTO replication_metadata(relation, options)
 VALUES ('zaphod', NULL);

@@ -608,6 +608,7 @@ gistXLogPageReuse(Relation rel, BlockNumber blkno, FullTransactionId deleteXid)
 	 */
 
 	/* XLOG stuff */
+	xlrec_reuse.onCatalogTable = IndexIsAccessibleInLogicalDecoding(rel);
 	xlrec_reuse.locator = rel->rd_locator;
 	xlrec_reuse.block = blkno;
 	xlrec_reuse.snapshotConflictHorizon = deleteXid;

@@ -6831,6 +6831,7 @@ heap_freeze_execute_prepared(Relation rel, Buffer buffer,
 		snapshotConflictHorizon = FreezeLimit;
 		TransactionIdRetreat(snapshotConflictHorizon);
 
+		xlrec.onCatalogTable = RelationIsAccessibleInLogicalDecoding(rel);
 		xlrec.snapshotConflictHorizon = snapshotConflictHorizon;
 		xlrec.nplans = nplans;
 
@@ -8248,7 +8249,7 @@ bottomup_sort_and_shrink(TM_IndexDeleteOp *delstate)
  * update the heap page's LSN.
  */
 XLogRecPtr
-log_heap_visible(RelFileLocator rlocator, Buffer heap_buffer, Buffer vm_buffer,
+log_heap_visible(Relation rel, Buffer heap_buffer, Buffer vm_buffer,
 				 TransactionId snapshotConflictHorizon, uint8 vmflags)
 {
 	xl_heap_visible xlrec;
@@ -8258,6 +8259,7 @@ log_heap_visible(RelFileLocator rlocator, Buffer heap_buffer, Buffer vm_buffer,
 	Assert(BufferIsValid(heap_buffer));
 	Assert(BufferIsValid(vm_buffer));
 
+	xlrec.onCatalogTable = RelationIsAccessibleInLogicalDecoding(rel);
 	xlrec.snapshotConflictHorizon = snapshotConflictHorizon;
 	xlrec.flags = vmflags;
 	XLogBeginInsert();

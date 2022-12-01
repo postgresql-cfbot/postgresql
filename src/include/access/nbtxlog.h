@@ -185,6 +185,7 @@ typedef struct xl_btree_dedup
  */
 typedef struct xl_btree_reuse_page
 {
+	bool        onCatalogTable;
 	RelFileLocator locator;
 	BlockNumber block;
 	FullTransactionId snapshotConflictHorizon;
@@ -232,6 +233,7 @@ typedef struct xl_btree_vacuum
 
 typedef struct xl_btree_delete
 {
+	bool        onCatalogTable;
 	TransactionId snapshotConflictHorizon;
 	uint16		ndeleted;
 	uint16		nupdated;

@@ -276,19 +276,25 @@ CREATE TABLE replication_metadata (
 )
 WITH (user_catalog_table = true)
 ;
+
+CREATE INDEX replication_metadata_idx1 on replication_metadata(relation);
+
 \d+ replication_metadata
+SELECT bool_and(indisusercatalog) from pg_index where indrelid = 'replication_metadata'::regclass;
 
 INSERT INTO replication_metadata(relation, options)
 VALUES ('foo', ARRAY['a', 'b']);
 
 ALTER TABLE replication_metadata RESET (user_catalog_table);
 \d+ replication_metadata
+SELECT bool_or(indisusercatalog) from pg_index where indrelid = 'replication_metadata'::regclass;
 
 INSERT INTO replication_metadata(relation, options)
 VALUES ('bar', ARRAY['a', 'b']);
 
 ALTER TABLE replication_metadata SET (user_catalog_table = true);
 \d+ replication_metadata
+SELECT bool_and(indisusercatalog) from pg_index where indrelid = 'replication_metadata'::regclass;
 
 INSERT INTO replication_metadata(relation, options)
 VALUES ('blub', NULL);
@@ -299,6 +305,7 @@ ALTER TABLE replication_metadata ALTER COLUMN rewritemeornot TYPE text;
 
 ALTER TABLE replication_metadata SET (user_catalog_table = false);
 \d+ replication_metadata
+SELECT bool_or(indisusercatalog) from pg_index where indrelid = 'replication_metadata'::regclass;
 
 INSERT INTO replication_metadata(relation, options)
 VALUES ('zaphod', NULL);

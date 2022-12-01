@@ -5126,6 +5126,16 @@ l5:
 		MultiXactStatus status;
 		MultiXactStatus new_status;
 
+		/*
+		 * Currently we don't allow XMAX_LOCK_ONLY and XMAX_COMMITTED to both be
+		 * set in a tuple header, so cross-check.
+		 *
+		 * Note that this also checks for the special locked-only bit pattern
+		 * that may be present on servers that were pg_upgraded from pre-v9.3
+		 * versions.
+		 */
+		Assert(!HEAP_XMAX_IS_LOCKED_ONLY(old_infomask));
+
 		if (old_infomask2 & HEAP_KEYS_UPDATED)
 			status = MultiXactStatusUpdate;
 		else

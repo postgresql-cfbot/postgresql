@@ -7342,7 +7342,8 @@ CreateRestartPoint(int flags)
  *   above.
  *
  * * WALAVAIL_REMOVED means it has been removed. A replication stream on
- *   a slot with this LSN cannot continue after a restart.
+ *   a slot with this LSN cannot continue. Note that the affected processes
+ *   have been terminated by checkpointer, too.
  *
  * * WALAVAIL_INVALID_LSN means the slot hasn't been set to reserve WAL.
  */

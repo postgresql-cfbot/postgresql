@@ -738,6 +738,9 @@ pgstat_get_wait_io(WaitEventIO w)
 		case WAIT_EVENT_WAL_READ:
 			event_name = "WALRead";
 			break;
+		case WAIT_EVENT_WAL_PREFETCH:
+			event_name = "WALPrefetch";
+			break;
 		case WAIT_EVENT_WAL_SYNC:
 			event_name = "WALSync";
 			break;

@@ -1131,9 +1131,6 @@ LDFLAGS="$LDFLAGS $LIBDIRS"
 AC_ARG_VAR(LDFLAGS_EX, [extra linker flags for linking executables only])
 AC_ARG_VAR(LDFLAGS_SL, [extra linker flags for linking shared libraries only])
 
-PGAC_PROG_LD
-AC_SUBST(LD)
-AC_SUBST(with_gnu_ld)
 PGAC_CHECK_STRIP
 AC_CHECK_TOOL(AR, ar, ar)
 if test "$PORTNAME" = "win32"; then
@@ -2091,12 +2088,11 @@ fi
 #
 # First check if the _mm_crc32_u8 and _mm_crc32_u64 intrinsics can be used
 # with the default compiler flags. If not, check if adding the -msse4.2
-# flag helps. CFLAGS_SSE42 is set to -msse4.2 if that's required.
+# flag helps. CFLAGS_CRC is set to -msse4.2 if that's required.
 PGAC_SSE42_CRC32_INTRINSICS([])
 if test x"$pgac_sse42_crc32_intrinsics" != x"yes"; then
   PGAC_SSE42_CRC32_INTRINSICS([-msse4.2])
 fi
-AC_SUBST(CFLAGS_SSE42)
 
 # Are we targeting a processor that supports SSE 4.2? gcc, clang and icc all
 # define __SSE4_2__ in that case.
@@ -2110,12 +2106,13 @@ AC_COMPILE_IFELSE([AC_LANG_PROGRAM([], [
 #
 # First check if __crc32c* intrinsics can be used with the default compiler
 # flags. If not, check if adding -march=armv8-a+crc flag helps.
-# CFLAGS_ARMV8_CRC32C is set if the extra flag is required.
+# CFLAGS_CRC is set if the extra flag is required.
 PGAC_ARMV8_CRC32C_INTRINSICS([])
 if test x"$pgac_armv8_crc32c_intrinsics" != x"yes"; then
   PGAC_ARMV8_CRC32C_INTRINSICS([-march=armv8-a+crc])
 fi
-AC_SUBST(CFLAGS_ARMV8_CRC32C)
+
+AC_SUBST(CFLAGS_CRC)
 
 # Select CRC-32C implementation.
 #
@@ -2144,7 +2141,7 @@ if test x"$USE_SLICING_BY_8_CRC32C" = x"" && test x"$USE_SSE42_CRC32C" = x"" && 
       USE_SSE42_CRC32C_WITH_RUNTIME_CHECK=1
     else
       # Use ARM CRC Extension if available.
-      if test x"$pgac_armv8_crc32c_intrinsics" = x"yes" && test x"$CFLAGS_ARMV8_CRC32C" = x""; then
+      if test x"$pgac_armv8_crc32c_intrinsics" = x"yes" && test x"$CFLAGS_CRC" = x""; then
         USE_ARMV8_CRC32C=1
       else
         # ARM CRC Extension, with runtime check?
@@ -2372,6 +2369,12 @@ elif test "$PORTNAME" = "openbsd"; then
 else
   PGAC_PROG_CC_LDFLAGS_OPT([-Wl,--as-needed], $link_test_func)
 fi
+
+# For linkers that understand --export-dynamic, add that to the LDFLAGS_EX_BE
+# (backend specific ldflags). One some platforms this will always fail (e.g.,
+# windows), but on others it depends on the choice of linker (e.g., solaris).
+PGAC_PROG_CC_LD_VARFLAGS_OPT(LDFLAGS_EX_BE, [-Wl,--export-dynamic], $link_test_func)
+AC_SUBST(LDFLAGS_EX_BE)
 
 # Create compiler version string
 if test x"$GCC" = x"yes" ; then

@@ -55,6 +55,8 @@ ifeq ($(with_systemd),yes)
 LIBS += -lsystemd
 endif
 
+override LDFLAGS := $(LDFLAGS) $(LDFLAGS_EX) $(LDFLAGS_EX_BE)
+
 ##########################################################################
 
 all: submake-libpgport submake-catalog-headers submake-utils-headers postgres $(POSTGRES_IMP)
@@ -64,7 +66,7 @@ ifneq ($(PORTNAME), win32)
 ifneq ($(PORTNAME), aix)
 
 postgres: $(OBJS)
-	$(CC) $(CFLAGS) $(call expand_subsys,$^) $(LDFLAGS) $(LDFLAGS_EX) $(export_dynamic) $(LIBS) -o $@
+	$(CC) $(CFLAGS) $(call expand_subsys,$^) $(LDFLAGS) $(LIBS) -o $@
 
 endif
 endif
@@ -73,7 +75,7 @@ endif
 ifeq ($(PORTNAME), cygwin)
 
 postgres: $(OBJS)
-	$(CC) $(CFLAGS) $(call expand_subsys,$^) $(LDFLAGS) $(LDFLAGS_EX) $(export_dynamic) -Wl,--stack,$(WIN32_STACK_RLIMIT) -Wl,--export-all-symbols -Wl,--out-implib=libpostgres.a $(LIBS) -o $@
+	$(CC) $(CFLAGS) $(call expand_subsys,$^) $(LDFLAGS) -Wl,--stack,$(WIN32_STACK_RLIMIT) -Wl,--export-all-symbols -Wl,--out-implib=libpostgres.a $(LIBS) -o $@
 
 # libpostgres.a is actually built in the preceding rule, but we need this to
 # ensure it's newer than postgres; see notes in src/backend/parser/Makefile
@@ -86,7 +88,7 @@ ifeq ($(PORTNAME), win32)
 LIBS += -lsecur32
 
 postgres: $(OBJS) $(WIN32RES)
-	$(CC) $(CFLAGS) $(call expand_subsys,$(OBJS)) $(WIN32RES) $(LDFLAGS) $(LDFLAGS_EX) -Wl,--stack=$(WIN32_STACK_RLIMIT) -Wl,--export-all-symbols -Wl,--out-implib=libpostgres.a $(LIBS) -o $@$(X)
+	$(CC) $(CFLAGS) $(call expand_subsys,$(OBJS)) $(WIN32RES) $(LDFLAGS) -Wl,--stack=$(WIN32_STACK_RLIMIT) -Wl,--export-all-symbols -Wl,--out-implib=libpostgres.a $(LIBS) -o $@$(X)
 
 # libpostgres.a is actually built in the preceding rule, but we need this to
 # ensure it's newer than postgres; see notes in src/backend/parser/Makefile
@@ -98,10 +100,16 @@ endif # win32
 ifeq ($(PORTNAME), aix)
 
 postgres: $(POSTGRES_IMP)
-	$(CC) $(CFLAGS) $(call expand_subsys,$(OBJS)) $(LDFLAGS) $(LDFLAGS_EX) -Wl,-bE:$(top_builddir)/src/backend/$(POSTGRES_IMP) $(LIBS) -Wl,-brtllib -o $@
+	$(CC) $(CFLAGS) $(call expand_subsys,$(OBJS)) $(LDFLAGS) -Wl,-bE:$(top_builddir)/src/backend/$(POSTGRES_IMP) $(LIBS) -Wl,-brtllib -o $@
 
+# Linking to a single .o with -r is a lot faster than building a .a or passing
+# all objects to MKLDEXPORT.
+#
+# It looks alluring to use $(CC) -r instead of ld -r, but that doesn't
+# trivially work with gcc, due to gcc specific static libraries linked in with
+# -r.
 $(POSTGRES_IMP): $(OBJS)
-	$(LD) $(LDREL) $(LDOUT) SUBSYS.o $(call expand_subsys,$^)
+	ld -r -o SUBSYS.o $(call expand_subsys,$^)
 	$(MKLDEXPORT) SUBSYS.o . > $@
 	@rm -f SUBSYS.o
 
@@ -314,4 +322,4 @@ maintainer-clean: distclean
 # are up to date.  It saves the time of doing all the submakes.
 .PHONY: quick
 quick: $(OBJS)
-	$(CC) $(CFLAGS) $(call expand_subsys,$^) $(LDFLAGS) $(LDFLAGS_EX) $(export_dynamic) $(LIBS) -o postgres
+	$(CC) $(CFLAGS) $(call expand_subsys,$^) $(LDFLAGS) $(LIBS) -o postgres

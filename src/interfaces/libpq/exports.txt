@@ -186,3 +186,11 @@ PQpipelineStatus          183
 PQsetTraceFlags           184
 PQmblenBounded            185
 PQsendFlushRequest        186
+PQcancelSend              187
+PQcancelConn              188
+PQcancelPoll              189
+PQcancelStatus            190
+PQcancelSocket            191
+PQcancelErrorMessage      192
+PQcancelReset             193
+PQcancelFinish            194

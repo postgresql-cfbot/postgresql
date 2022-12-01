@@ -199,6 +199,12 @@ pqsecure_close(PGconn *conn)
  * On failure, this function is responsible for appending a suitable message
  * to conn->errorMessage.  The caller must still inspect errno, but only
  * to determine whether to continue/retry after error.
+ *
+ * Returns -1 in case of failures, except in the case of where a failure means
+ * that there was a clean connection closure, in those cases -2 is returned.
+ * Currently only the TLS implementation of pqsecure_read ever returns -2. For
+ * the other implementations a clean connection closure is detected in
+ * pqReadData instead.
  */
 ssize_t
 pqsecure_read(PGconn *conn, void *ptr, size_t len)
@@ -255,14 +261,14 @@ pqsecure_raw_read(PGconn *conn, void *ptr, size_t len)
 			case EPIPE:
 			case ECONNRESET:
 				libpq_append_conn_error(conn, "server closed the connection unexpectedly\n"
-								   "\tThis probably means the server terminated abnormally\n"
-								   "\tbefore or while processing the request.");
+										"\tThis probably means the server terminated abnormally\n"
+										"\tbefore or while processing the request.");
 				break;
 
 			default:
 				libpq_append_conn_error(conn, "could not receive data from server: %s",
-								  SOCK_STRERROR(result_errno,
-												sebuf, sizeof(sebuf)));
+										SOCK_STRERROR(result_errno,
+													  sebuf, sizeof(sebuf)));
 				break;
 		}
 	}

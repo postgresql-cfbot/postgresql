@@ -78,7 +78,9 @@ typedef enum
 	CONNECTION_CONSUME,			/* Consuming any extra messages. */
 	CONNECTION_GSS_STARTUP,		/* Negotiating GSSAPI. */
 	CONNECTION_CHECK_TARGET,	/* Checking target server properties. */
-	CONNECTION_CHECK_STANDBY	/* Checking if server is in standby mode. */
+	CONNECTION_CHECK_STANDBY,	/* Checking if server is in standby mode. */
+	CONNECTION_STARTING			/* Waiting for connection attempt to be
+								 * started.  */
 } ConnStatusType;
 
 typedef enum
@@ -164,6 +166,11 @@ typedef enum
  * The contents of this struct are not supposed to be known to applications.
  */
 typedef struct pg_conn PGconn;
+
+/* PGcancelConn encapsulates a cancel connection to the backend.
+ * The contents of this struct are not supposed to be known to applications.
+ */
+typedef struct pg_cancel_conn PGcancelConn;
 
 /* PGresult encapsulates the result of a query (or more precisely, of a single
  * SQL command --- a query string given to PQsendQuery can contain multiple
@@ -321,16 +328,28 @@ extern PostgresPollingStatusType PQresetPoll(PGconn *conn);
 /* Synchronous (blocking) */
 extern void PQreset(PGconn *conn);
 
+/* issue a cancel request */
+extern PGcancelConn * PQcancelSend(PGconn *conn);
+/* non-blocking version of PQrequestSend */
+extern PGcancelConn * PQcancelConn(PGconn *conn);
+extern PostgresPollingStatusType PQcancelPoll(PGcancelConn * cancelConn);
+extern ConnStatusType PQcancelStatus(const PGcancelConn * cancelConn);
+extern int	PQcancelSocket(const PGcancelConn * cancelConn);
+extern char *PQcancelErrorMessage(const PGcancelConn * cancelConn);
+extern void PQcancelReset(PGcancelConn * cancelConn);
+extern void PQcancelFinish(PGcancelConn * cancelConn);
+
+
 /* request a cancel structure */
 extern PGcancel *PQgetCancel(PGconn *conn);
 
 /* free a cancel structure */
 extern void PQfreeCancel(PGcancel *cancel);
 
-/* issue a cancel request */
+/* a less secure version of PQcancelSend, but one which is signal-safe */
 extern int	PQcancel(PGcancel *cancel, char *errbuf, int errbufsize);
 
-/* backwards compatible version of PQcancel; not thread-safe */
+/* deprecated version of PQcancel; not thread-safe */
 extern int	PQrequestCancel(PGconn *conn);
 
 /* Accessor functions for PGconn objects */

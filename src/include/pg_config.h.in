@@ -99,6 +99,10 @@
    don't. */
 #undef HAVE_DECL_F_FULLFSYNC
 
+/* Define to 1 if you have the declaration of `LIBRESSL_VERSION_NUMBER', and
+   to 0 if you don't. */
+#undef HAVE_DECL_LIBRESSL_VERSION_NUMBER
+
 /* Define to 1 if you have the declaration of
    `LLVMCreateGDBRegistrationListener', and to 0 if you don't. */
 #undef HAVE_DECL_LLVMCREATEGDBREGISTRATIONLISTENER

@@ -1022,8 +1022,30 @@ initialize_SSL(PGconn *conn)
 	else
 		fnbuf[0] = '\0';
 
-	if (fnbuf[0] != '\0' &&
-		stat(fnbuf, &buf) == 0)
+	if (strcmp(fnbuf, "system") == 0)
+	{
+		/*
+		 * The "system" sentinel value indicates that we should load whatever
+		 * root certificates are installed for use by OpenSSL; these locations
+		 * differ by platform. Note that the default system locations may be
+		 * further overridden by the SSL_CERT_DIR and SSL_CERT_FILE environment
+		 * variables.
+		 */
+		if (SSL_CTX_set_default_verify_paths(SSL_context) != 1)
+		{
+			char	   *err = SSLerrmessage(ERR_get_error());
+
+			appendPQExpBuffer(&conn->errorMessage,
+							  libpq_gettext("could not load system root certificate paths: %s\n"),
+							  err);
+			SSLerrfree(err);
+			SSL_CTX_free(SSL_context);
+			return -1;
+		}
+		have_rootcert = true;
+	}
+	else if (fnbuf[0] != '\0' &&
+			 stat(fnbuf, &buf) == 0)
 	{
 		X509_STORE *cvstore;
 

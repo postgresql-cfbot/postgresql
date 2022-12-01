@@ -240,6 +240,7 @@ bool		send_abort_for_kill = false;
 static pid_t StartupPID = 0,
 			BgWriterPID = 0,
 			CheckpointerPID = 0,
+			CustodianPID = 0,
 			WalWriterPID = 0,
 			WalReceiverPID = 0,
 			AutoVacPID = 0,
@@ -537,6 +538,7 @@ static void ShmemBackendArrayRemove(Backend *bn);
 #define StartArchiver()			StartChildProcess(ArchiverProcess)
 #define StartBackgroundWriter() StartChildProcess(BgWriterProcess)
 #define StartCheckpointer()		StartChildProcess(CheckpointerProcess)
+#define StartCustodian()		StartChildProcess(CustodianProcess)
 #define StartWalWriter()		StartChildProcess(WalWriterProcess)
 #define StartWalReceiver()		StartChildProcess(WalReceiverProcess)
 
@@ -1808,13 +1810,16 @@ ServerLoop(void)
 		/*
 		 * If no background writer process is running, and we are not in a
 		 * state that prevents it, start one.  It doesn't matter if this
-		 * fails, we'll just try again later.  Likewise for the checkpointer.
+		 * fails, we'll just try again later.  Likewise for the checkpointer
+		 * and custodian.
 		 */
 		if (pmState == PM_RUN || pmState == PM_RECOVERY ||
 			pmState == PM_HOT_STANDBY || pmState == PM_STARTUP)
 		{
 			if (CheckpointerPID == 0)
 				CheckpointerPID = StartCheckpointer();
+			if (CustodianPID == 0)
+				CustodianPID = StartCustodian();
 			if (BgWriterPID == 0)
 				BgWriterPID = StartBackgroundWriter();
 		}
@@ -2728,6 +2733,8 @@ SIGHUP_handler(SIGNAL_ARGS)
 			signal_child(BgWriterPID, SIGHUP);
 		if (CheckpointerPID != 0)
 			signal_child(CheckpointerPID, SIGHUP);
+		if (CustodianPID != 0)
+			signal_child(CustodianPID, SIGHUP);
 		if (WalWriterPID != 0)
 			signal_child(WalWriterPID, SIGHUP);
 		if (WalReceiverPID != 0)
@@ -3025,6 +3032,8 @@ reaper(SIGNAL_ARGS)
 			 */
 			if (CheckpointerPID == 0)
 				CheckpointerPID = StartCheckpointer();
+			if (CustodianPID == 0)
+				CustodianPID = StartCustodian();
 			if (BgWriterPID == 0)
 				BgWriterPID = StartBackgroundWriter();
 			if (WalWriterPID == 0)
@@ -3115,6 +3124,20 @@ reaper(SIGNAL_ARGS)
 								 _("checkpointer process"));
 			}
 
+			continue;
+		}
+
+		/*
+		 * Was it the custodian?  Normal exit can be ignored; we'll start a
+		 * new one at the next iteration of the postmaster's main loop, if
+		 * necessary.  Any other exit condition is treated as a crash.
+		 */
+		if (pid == CustodianPID)
+		{
+			CustodianPID = 0;
+			if (!EXIT_STATUS_0(exitstatus))
+				HandleChildCrash(pid, exitstatus,
+								 _("custodian process"));
 			continue;
 		}
 
@@ -3532,6 +3555,12 @@ HandleChildCrash(int pid, int exitstatus, const char *procname)
 	else if (CheckpointerPID != 0 && take_action)
 		sigquit_child(CheckpointerPID);
 
+	/* Take care of the custodian too */
+	if (pid == CustodianPID)
+		CustodianPID = 0;
+	else if (CustodianPID != 0 && take_action)
+		sigquit_child(CustodianPID);
+
 	/* Take care of the walwriter too */
 	if (pid == WalWriterPID)
 		WalWriterPID = 0;
@@ -3685,6 +3714,9 @@ PostmasterStateMachine(void)
 		/* and the bgwriter too */
 		if (BgWriterPID != 0)
 			signal_child(BgWriterPID, SIGTERM);
+		/* and the custodian too */
+		if (CustodianPID != 0)
+			signal_child(CustodianPID, SIGTERM);
 		/* and the walwriter too */
 		if (WalWriterPID != 0)
 			signal_child(WalWriterPID, SIGTERM);
@@ -3722,6 +3754,7 @@ PostmasterStateMachine(void)
 			BgWriterPID == 0 &&
 			(CheckpointerPID == 0 ||
 			 (!FatalError && Shutdown < ImmediateShutdown)) &&
+			CustodianPID == 0 &&
 			WalWriterPID == 0 &&
 			AutoVacPID == 0)
 		{
@@ -3815,6 +3848,7 @@ PostmasterStateMachine(void)
 			Assert(WalReceiverPID == 0);
 			Assert(BgWriterPID == 0);
 			Assert(CheckpointerPID == 0);
+			Assert(CustodianPID == 0);
 			Assert(WalWriterPID == 0);
 			Assert(AutoVacPID == 0);
 			/* syslogger is not considered here */
@@ -4027,6 +4061,8 @@ TerminateChildren(int signal)
 		signal_child(BgWriterPID, signal);
 	if (CheckpointerPID != 0)
 		signal_child(CheckpointerPID, signal);
+	if (CustodianPID != 0)
+		signal_child(CustodianPID, signal);
 	if (WalWriterPID != 0)
 		signal_child(WalWriterPID, signal);
 	if (WalReceiverPID != 0)

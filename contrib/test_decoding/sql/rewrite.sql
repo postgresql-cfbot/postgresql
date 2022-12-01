@@ -105,3 +105,34 @@ DROP TABLE IF EXISTS replication_example;
 DROP FUNCTION iamalongfunction();
 DROP FUNCTION exec(text);
 DROP ROLE regress_justforcomments;
+
+-- make sure custodian cleans up files
+CHECKPOINT;
+DO $$
+DECLARE
+    snaps_removed bool;
+    loops int := 0;
+BEGIN
+    LOOP
+        snaps_removed := count(*) = 0 FROM pg_ls_logicalsnapdir();
+        IF snaps_removed OR loops > 120 * 100 THEN EXIT; END IF;
+        PERFORM pg_sleep(0.01);
+        loops := loops + 1;
+    END LOOP;
+END
+$$;
+SELECT count(*) = 0 FROM pg_ls_logicalsnapdir();
+DO $$
+DECLARE
+	mappings_removed bool;
+	loops int := 0;
+BEGIN
+	LOOP
+		mappings_removed := count(*) = 0 FROM pg_ls_logicalmapdir();
+		IF mappings_removed OR loops > 120 * 100 THEN EXIT; END IF;
+		PERFORM pg_sleep(0.01);
+		loops := loops + 1;
+	END LOOP;
+END
+$$;
+SELECT count(*) = 0 FROM pg_ls_logicalmapdir();

@@ -207,6 +207,14 @@ XLogFromFileName(const char *fname, TimeLineID *tli, XLogSegNo *logSegNo, int wa
 }
 
 static inline void
+XLogIdFromFileName(const char *fname, TimeLineID *tli, XLogSegNo *logSegNo,
+				   uint32 *log, uint32 *seg, int wal_segsz_bytes)
+{
+	sscanf(fname, "%08X%08X%08X", tli, log, seg);
+	*logSegNo = (uint64) (*log) * XLogSegmentsPerXLogId(wal_segsz_bytes) + *seg;
+}
+
+static inline void
 XLogFilePath(char *path, TimeLineID tli, XLogSegNo logSegNo, int wal_segsz_bytes)
 {
 	snprintf(path, MAXPGPATH, XLOGDIR "/%08X%08X%08X", tli,

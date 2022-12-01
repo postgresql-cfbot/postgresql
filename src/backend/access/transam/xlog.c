@@ -2214,6 +2214,7 @@ XLogWrite(XLogwrtRqst WriteRqst, TimeLineID tli, bool flexible)
 				{
 					char		xlogfname[MAXFNAMELEN];
 					int			save_errno;
+					XLogRecPtr	lsn;
 
 					if (errno == EINTR)
 						continue;
@@ -2222,11 +2223,14 @@ XLogWrite(XLogwrtRqst WriteRqst, TimeLineID tli, bool flexible)
 					XLogFileName(xlogfname, tli, openLogSegNo,
 								 wal_segment_size);
 					errno = save_errno;
+					XLogSegNoOffsetToRecPtr(openLogSegNo, startoffset,
+											wal_segment_size, lsn);
 					ereport(PANIC,
 							(errcode_for_file_access(),
 							 errmsg("could not write to log file %s "
-									"at offset %u, length %zu: %m",
-									xlogfname, startoffset, nleft)));
+									"at offset %u, LSN %X/%X, length %zu: %m",
+									xlogfname, startoffset,
+									LSN_FORMAT_ARGS(lsn), nleft)));
 				}
 				nleft -= written;
 				from += written;

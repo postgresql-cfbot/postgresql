@@ -229,3 +229,15 @@ SELECT count(*) > 0 AS ok FROM pg_control_checkpoint();
 SELECT count(*) > 0 AS ok FROM pg_control_init();
 SELECT count(*) > 0 AS ok FROM pg_control_recovery();
 SELECT count(*) > 0 AS ok FROM pg_control_system();
+
+-- pg_walfile_name_offset
+SELECT * FROM pg_walfile_name_offset('1/F');
+
+-- pg_walfile_offset_lsn
+SELECT * FROM pg_walfile_offset_lsn('invalid', 15);
+SELECT * FROM pg_walfile_offset_lsn('0000000100000000FFFFFFFF', 15);
+SELECT * FROM pg_walfile_offset_lsn('000000010000000000000000', 15);
+SELECT * FROM pg_walfile_offset_lsn('000000000000000100000000', 15);
+SELECT * FROM pg_walfile_offset_lsn('000000010000000100000000', -1);
+SELECT * FROM pg_walfile_offset_lsn('000000010000000100000000', 2000000000);
+SELECT * FROM pg_walfile_offset_lsn('000000010000000100000000', 15);

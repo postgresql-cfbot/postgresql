@@ -25893,6 +25893,22 @@ LOG:  Grand total: 1651920 bytes in 201 blocks; 622360 free (88 chunks); 1029560
       <row>
        <entry role="func_table_entry"><para role="func_signature">
         <indexterm>
+         <primary>pg_walfile_offset_lsn</primary>
+        </indexterm>
+        <function>pg_walfile_offset_lsn</function> ( <parameter>file_name</parameter> <type>text</type>, <parameter>file_offset</parameter> <type>integer</type> )
+        <returnvalue>record</returnvalue>
+        ( <parameter>lsn</parameter> <type>pg_lsn</type>,
+        <parameter>timeline_id</parameter> <type>integer</type> )
+       </para>
+       <para>
+        Computes write-ahead log location and timline ID from a given WAL file
+        name and byte offset within that file.
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
          <primary>pg_switch_wal</primary>
         </indexterm>
         <function>pg_switch_wal</function> ()

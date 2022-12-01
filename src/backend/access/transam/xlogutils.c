@@ -1051,15 +1051,17 @@ WALReadRaiseError(WALReadError *errinfo)
 		errno = errinfo->wre_errno;
 		ereport(ERROR,
 				(errcode_for_file_access(),
-				 errmsg("could not read from WAL segment %s, offset %d: %m",
-						fname, errinfo->wre_off)));
+				 errmsg("could not read from WAL segment %s, LSN %X/%X, offset %d: %m",
+						fname, LSN_FORMAT_ARGS(errinfo->wre_lsn),
+						errinfo->wre_off)));
 	}
 	else if (errinfo->wre_read == 0)
 	{
 		ereport(ERROR,
 				(errcode(ERRCODE_DATA_CORRUPTED),
-				 errmsg("could not read from WAL segment %s, offset %d: read %d of %d",
-						fname, errinfo->wre_off, errinfo->wre_read,
+				 errmsg("could not read from WAL segment %s, LSN %X/%X, offset %d: read %d of %d",
+						fname, LSN_FORMAT_ARGS(errinfo->wre_lsn),
+						errinfo->wre_off, errinfo->wre_read,
 						errinfo->wre_req)));
 	}
 }

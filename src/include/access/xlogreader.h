@@ -386,6 +386,7 @@ typedef struct WALReadError
 	int			wre_off;		/* Offset we tried to read from. */
 	int			wre_req;		/* Bytes requested to be read. */
 	int			wre_read;		/* Bytes read by the last read(). */
+	XLogRecPtr	wre_lsn;		/* WAL LSN being read. */
 	WALOpenSegment wre_seg;		/* Segment we tried to read from. */
 } WALReadError;
 

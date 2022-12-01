@@ -619,3 +619,29 @@ SELECT count(*) > 0 AS ok FROM pg_control_system();
  t
 (1 row)
 
+-- pg_walfile_name_offset
+SELECT * FROM pg_walfile_name_offset('1/F');
+        file_name         | file_offset 
+--------------------------+-------------
+ 000000010000000100000000 |          15
+(1 row)
+
+-- pg_walfile_offset_lsn
+SELECT * FROM pg_walfile_offset_lsn('invalid', 15);
+ERROR:  invalid WAL file name "invalid"
+SELECT * FROM pg_walfile_offset_lsn('0000000100000000FFFFFFFF', 15);
+ERROR:  invalid WAL file name "0000000100000000FFFFFFFF"
+SELECT * FROM pg_walfile_offset_lsn('000000010000000000000000', 15);
+ERROR:  invalid WAL file name "000000010000000000000000"
+SELECT * FROM pg_walfile_offset_lsn('000000000000000100000000', 15);
+ERROR:  invalid WAL file name "000000000000000100000000"
+SELECT * FROM pg_walfile_offset_lsn('000000010000000100000000', -1);
+ERROR:  offset must not be negative or greater than or equal to WAL segment size
+SELECT * FROM pg_walfile_offset_lsn('000000010000000100000000', 2000000000);
+ERROR:  offset must not be negative or greater than or equal to WAL segment size
+SELECT * FROM pg_walfile_offset_lsn('000000010000000100000000', 15);
+ lsn | timeline_id 
+-----+-------------
+ 1/F |           1
+(1 row)
+

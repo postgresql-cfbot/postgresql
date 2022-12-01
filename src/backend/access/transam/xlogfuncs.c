@@ -340,6 +340,68 @@ pg_last_wal_replay_lsn(PG_FUNCTION_ARGS)
 }
 
 /*
+ * Compute an LSN and timline ID given a WAL file name and decimal byte offset.
+ */
+Datum
+pg_walfile_offset_lsn(PG_FUNCTION_ARGS)
+{
+	char	   *fname = text_to_cstring(PG_GETARG_TEXT_PP(0));
+	int			offset = PG_GETARG_INT32(1);
+	TimeLineID	tli;
+	XLogSegNo	segno;
+	XLogRecPtr	lsn;
+	uint32		log;
+	uint32		seg;
+	Datum		values[2] = {0};
+	bool		isnull[2] = {0};
+	TupleDesc	resultTupleDesc;
+	HeapTuple	resultHeapTuple;
+	Datum		result;
+
+	if (!IsXLogFileName(fname))
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("invalid WAL file name \"%s\"", fname)));
+
+	XLogIdFromFileName(fname, &tli, &segno, &log, &seg, wal_segment_size);
+
+	if (seg >= XLogSegmentsPerXLogId(wal_segment_size) ||
+		(log == 0 && seg == 0) ||
+		segno == 0 ||
+		tli == 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("invalid WAL file name \"%s\"", fname)));
+
+	if (offset < 0 || offset >= wal_segment_size)
+		ereport(ERROR,
+				(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+				 errmsg("offset must not be negative or greater than or equal to WAL segment size")));
+
+	/*
+	 * Construct a tuple descriptor for the result row.  This must match this
+	 * function's pg_proc entry!
+	 */
+	resultTupleDesc = CreateTemplateTupleDesc(2);
+	TupleDescInitEntry(resultTupleDesc, (AttrNumber) 1, "lsn",
+					   PG_LSNOID, -1, 0);
+	TupleDescInitEntry(resultTupleDesc, (AttrNumber) 2, "timeline_id",
+					   INT4OID, -1, 0);
+
+	resultTupleDesc = BlessTupleDesc(resultTupleDesc);
+
+	XLogSegNoOffsetToRecPtr(segno, offset, wal_segment_size, lsn);
+
+	values[0] = LSNGetDatum(lsn);
+	values[1] = UInt32GetDatum(tli);
+
+	resultHeapTuple = heap_form_tuple(resultTupleDesc, values, isnull);
+	result = HeapTupleGetDatum(resultHeapTuple);
+
+	PG_RETURN_DATUM(result);
+}
+
+/*
  * Compute an xlog file name and decimal byte offset given a WAL location,
  * such as is returned by pg_backup_stop() or pg_switch_wal().
  *

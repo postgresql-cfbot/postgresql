@@ -28,7 +28,7 @@ typedef struct
 static void local_traverse_files(rewind_source *source,
 								 process_file_callback_t callback);
 static char *local_fetch_file(rewind_source *source, const char *path,
-							  size_t *filesize);
+							  size_t *filesize, bool noerror);
 static void local_queue_fetch_file(rewind_source *source, const char *path,
 								   size_t len);
 static void local_queue_fetch_range(rewind_source *source, const char *path,
@@ -63,9 +63,11 @@ local_traverse_files(rewind_source *source, process_file_callback_t callback)
 }
 
 static char *
-local_fetch_file(rewind_source *source, const char *path, size_t *filesize)
+local_fetch_file(rewind_source *source, const char *path, size_t *filesize,
+	bool noerror)
 {
-	return slurpFile(((local_source *) source)->datadir, path, filesize);
+	return slurpFile(((local_source *) source)->datadir, path, filesize,
+					 noerror);
 }
 
 /*

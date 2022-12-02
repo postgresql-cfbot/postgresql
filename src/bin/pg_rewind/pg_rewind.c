@@ -43,6 +43,8 @@ static void createBackupLabel(XLogRecPtr startpoint, TimeLineID starttli,
 
 static void digestControlFile(ControlFileData *ControlFile,
 							  const char *content, size_t size);
+static TimeLineHistoryEntry *getTimelineHistory(ControlFileData *controlFile,
+												int *nentries);
 static void getRestoreCommand(const char *argv0);
 static void sanityChecks(void);
 static void findCommonAncestorTimeline(XLogRecPtr *recptr, int *tliIndex);
@@ -70,8 +72,12 @@ bool		do_sync = true;
 bool		restore_wal = false;
 
 /* Target history */
-TimeLineHistoryEntry *targetHistory;
+TimeLineHistoryEntry *targetHistory = NULL;
 int			targetNentries;
+
+/* Source history */
+TimeLineHistoryEntry *sourceHistory = NULL;
+int			sourceNentries;
 
 /* Progress counters */
 uint64		fetch_size;
@@ -141,6 +147,7 @@ main(int argc, char **argv)
 	bool		rewind_needed;
 	bool		writerecoveryconf = false;
 	filemap_t  *filemap;
+	TimeLineID	source_tli;
 
 	pg_logging_init(argv[0]);
 	set_pglocale_pgservice(argv[0], PG_TEXTDOMAIN("pg_rewind"));
@@ -311,7 +318,7 @@ main(int argc, char **argv)
 	 * need to make sure by themselves that the target cluster is in a clean
 	 * state.
 	 */
-	buffer = slurpFile(datadir_target, "global/pg_control", &size);
+	buffer = slurpFile(datadir_target, "global/pg_control", &size, false);
 	digestControlFile(&ControlFile_target, buffer, size);
 	pg_free(buffer);
 
@@ -321,16 +328,35 @@ main(int argc, char **argv)
 	{
 		ensureCleanShutdown(argv[0]);
 
-		buffer = slurpFile(datadir_target, "global/pg_control", &size);
+		buffer = slurpFile(datadir_target, "global/pg_control", &size, false);
 		digestControlFile(&ControlFile_target, buffer, size);
 		pg_free(buffer);
 	}
 
-	buffer = source->fetch_file(source, "global/pg_control", &size);
+	buffer = source->fetch_file(source, "global/pg_control", &size, false);
 	digestControlFile(&ControlFile_source, buffer, size);
 	pg_free(buffer);
 
 	sanityChecks();
+
+	/* Retrieve timelines for both source and target */
+	sourceHistory =	getTimelineHistory(&ControlFile_source, &sourceNentries);
+	targetHistory =	getTimelineHistory(&ControlFile_target, &targetNentries);
+
+	/*
+	 * If the source just has been promoted but the end-of-recovery checkpoint
+	 * has not completed, the soruce control file has a bit older content for
+	 * identifying the source's timeline.  Instead, look into timeline history,
+	 * which is always refreshed up-to-date.
+	 */
+	source_tli = ControlFile_source.checkPointCopy.ThisTimeLineID;
+
+	if (sourceHistory[sourceNentries - 1].tli > source_tli)
+	{
+		pg_log_info("source's actual timeline ID (%d) is newer than control file (%d)",
+					sourceHistory[sourceNentries - 1].tli, source_tli);
+		source_tli = sourceHistory[sourceNentries - 1].tli;
+	}
 
 	/*
 	 * Find the common ancestor timeline between the clusters.
@@ -338,8 +364,7 @@ main(int argc, char **argv)
 	 * If both clusters are already on the same timeline, there's nothing to
 	 * do.
 	 */
-	if (ControlFile_target.checkPointCopy.ThisTimeLineID ==
-		ControlFile_source.checkPointCopy.ThisTimeLineID)
+	if (ControlFile_target.checkPointCopy.ThisTimeLineID == source_tli)
 	{
 		pg_log_info("source and target cluster are on the same timeline");
 		rewind_needed = false;
@@ -581,7 +606,7 @@ perform_rewind(filemap_t *filemap, rewind_source *source,
 	 * Fetch the control file from the source last. This ensures that the
 	 * minRecoveryPoint is up-to-date.
 	 */
-	buffer = source->fetch_file(source, "global/pg_control", &size);
+	buffer = source->fetch_file(source, "global/pg_control", &size, false);
 	digestControlFile(&ControlFile_source_after, buffer, size);
 	pg_free(buffer);
 
@@ -654,7 +679,22 @@ perform_rewind(filemap_t *filemap, rewind_source *source,
 				pg_fatal("source system was in unexpected state at end of rewind");
 
 			endrec = source->get_current_wal_insert_lsn(source);
-			endtli = ControlFile_source_after.checkPointCopy.ThisTimeLineID;
+
+			/*
+			 * Find the timeline ID corresponding to endrec on the source.
+			 *
+			 * In most cases we can use the TLI in the source control file, but
+			 * that is not the case after promotion until end-of-recovery
+			 * checkpoint completes, where the control file is a bit old for
+			 * this purpose.  It should be the latest timeline in the source's
+			 * history file.
+			 */
+			if (!((sourceHistory[sourceNentries - 1].begin == 0 ||
+				   sourceHistory[sourceNentries - 1].begin <= endrec) &&
+				  sourceHistory[sourceNentries - 1].end == 0))
+				pg_fatal("source server's current insert LSN was not on the latest timeline in history file");
+
+			endtli = sourceHistory[sourceNentries - 1].tli;
 		}
 	}
 	else
@@ -796,45 +836,82 @@ MinXLogRecPtr(XLogRecPtr a, XLogRecPtr b)
 }
 
 /*
- * Retrieve timeline history for given control file which should behold
- * either source or target.
+ * Retrieve the latest timeline history for given control file which should
+ * behold either source or target.
+ *
+ * This works on the assumption that the timeline IDs of existing history files
+ * are contiguous up to the latest history file. This is true for
+ * recently-promoted servers.  See findNewestTimeLine() for this assumption.
  */
 static TimeLineHistoryEntry *
 getTimelineHistory(ControlFileData *controlFile, int *nentries)
 {
-	TimeLineHistoryEntry *history;
+	TimeLineHistoryEntry *history = NULL;
 	TimeLineID	tli;
+	TimeLineID	probe_tli;
 
 	tli = controlFile->checkPointCopy.ThisTimeLineID;
+
+	Assert(tli > 0);
+
+	/* Probe history files */
+	for (probe_tli = tli ;; probe_tli++)
+	{
+		char		path[MAXPGPATH];
+		char	   *histfile;
+		TimeLineHistoryEntry *tmphistory;
+		int			nent;
+		int			i;
+
+		if (probe_tli < 2)
+			continue;
+
+		TLHistoryFilePath(path, probe_tli);
+
+		/* Get history file from appropriate source */
+		if (controlFile == &ControlFile_source)
+			histfile = source->fetch_file(source, path, NULL, true);
+		else if (controlFile == &ControlFile_target)
+			histfile = slurpFile(datadir_target, path, NULL, true);
+		else
+			pg_fatal("invalid control file");
+
+		/* no such history file, exit */
+		if (!histfile)
+			break;
+
+		/* preserve the history if we're part of it */
+		tmphistory = rewind_parseTimeLineHistory(histfile, probe_tli, &nent);
+		pg_free(histfile);
+
+		for (i = 0 ; i < nent ; i++)
+		{
+			if (tmphistory[i].tli == tli)
+			{
+				if (history)
+					pg_free(history);
+
+				history = tmphistory;
+				*nentries = nent;
+				break;
+			}
+		}
+		if (tmphistory != history)
+			pg_free(tmphistory);
+	}
 
 	/*
 	 * Timeline 1 does not have a history file, so there is no need to check
 	 * and fake an entry with infinite start and end positions.
 	 */
-	if (tli == 1)
+	if (!history)
 	{
+		Assert (tli == 1);
+
 		history = (TimeLineHistoryEntry *) pg_malloc(sizeof(TimeLineHistoryEntry));
 		history->tli = tli;
 		history->begin = history->end = InvalidXLogRecPtr;
 		*nentries = 1;
-	}
-	else
-	{
-		char		path[MAXPGPATH];
-		char	   *histfile;
-
-		TLHistoryFilePath(path, tli);
-
-		/* Get history file from appropriate source */
-		if (controlFile == &ControlFile_source)
-			histfile = source->fetch_file(source, path, NULL);
-		else if (controlFile == &ControlFile_target)
-			histfile = slurpFile(datadir_target, path, NULL);
-		else
-			pg_fatal("invalid control file");
-
-		history = rewind_parseTimeLineHistory(histfile, tli, nentries);
-		pg_free(histfile);
 	}
 
 	if (debug)
@@ -879,14 +956,8 @@ getTimelineHistory(ControlFileData *controlFile, int *nentries)
 static void
 findCommonAncestorTimeline(XLogRecPtr *recptr, int *tliIndex)
 {
-	TimeLineHistoryEntry *sourceHistory;
-	int			sourceNentries;
 	int			i,
 				n;
-
-	/* Retrieve timelines for both source and target */
-	sourceHistory = getTimelineHistory(&ControlFile_source, &sourceNentries);
-	targetHistory = getTimelineHistory(&ControlFile_target, &targetNentries);
 
 	/*
 	 * Trace the history forward, until we hit the timeline diverge. It may
@@ -910,7 +981,6 @@ findCommonAncestorTimeline(XLogRecPtr *recptr, int *tliIndex)
 		*recptr = MinXLogRecPtr(sourceHistory[i].end, targetHistory[i].end);
 		*tliIndex = i;
 
-		pg_free(sourceHistory);
 		return;
 	}
 	else

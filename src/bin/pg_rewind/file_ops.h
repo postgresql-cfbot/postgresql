@@ -21,7 +21,8 @@ extern void create_target(file_entry_t *entry);
 extern void remove_target(file_entry_t *entry);
 extern void sync_target_dir(void);
 
-extern char *slurpFile(const char *datadir, const char *path, size_t *filesize);
+extern char *slurpFile(const char *datadir, const char *path, size_t *filesize,
+       bool noerror);
 
 typedef void (*process_file_callback_t) (const char *path, file_type_t type, size_t size, const char *link_target);
 extern void traverse_datadir(const char *datadir, process_file_callback_t callback);

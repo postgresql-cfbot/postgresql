@@ -309,9 +309,11 @@ sync_target_dir(void)
  * buffer is actually *filesize + 1. That's handy when reading a text file.
  * This function can be used to read binary files as well, you can just
  * ignore the zero-terminator in that case.
+ *
+ * If noerror is true, returns NULL when the file is not found.
  */
 char *
-slurpFile(const char *datadir, const char *path, size_t *filesize)
+slurpFile(const char *datadir, const char *path, size_t *filesize, bool noerror)
 {
 	int			fd;
 	char	   *buffer;
@@ -323,8 +325,13 @@ slurpFile(const char *datadir, const char *path, size_t *filesize)
 	snprintf(fullpath, sizeof(fullpath), "%s/%s", datadir, path);
 
 	if ((fd = open(fullpath, O_RDONLY | PG_BINARY, 0)) == -1)
+	{
+		if (noerror && errno == ENOENT)
+			return NULL;
+
 		pg_fatal("could not open file \"%s\" for reading: %m",
 				 fullpath);
+	}
 
 	if (fstat(fd, &statbuf) < 0)
 		pg_fatal("could not open file \"%s\" for reading: %m",

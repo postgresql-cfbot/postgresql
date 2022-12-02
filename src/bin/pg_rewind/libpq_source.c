@@ -68,7 +68,7 @@ static void libpq_queue_fetch_range(rewind_source *source, const char *path,
 									off_t off, size_t len);
 static void libpq_finish_fetch(rewind_source *source);
 static char *libpq_fetch_file(rewind_source *source, const char *path,
-							  size_t *filesize);
+							  size_t *filesize, bool noerror);
 static XLogRecPtr libpq_get_current_wal_insert_lsn(rewind_source *source);
 static void libpq_destroy(rewind_source *source);
 
@@ -620,9 +620,12 @@ appendArrayEscapedString(StringInfo buf, const char *str)
 
 /*
  * Fetch a single file as a malloc'd buffer.
+ *
+ * If noerror is true, returns NULL if pg_read_binary_file() failed.
  */
 static char *
-libpq_fetch_file(rewind_source *source, const char *path, size_t *filesize)
+libpq_fetch_file(rewind_source *source, const char *path, size_t *filesize,
+				 bool noerror)
 {
 	PGconn	   *conn = ((libpq_source *) source)->conn;
 	PGresult   *res;
@@ -631,6 +634,34 @@ libpq_fetch_file(rewind_source *source, const char *path, size_t *filesize)
 	const char *paramValues[1];
 
 	paramValues[0] = path;
+
+	/*
+	 * check the existence of the file. We do this before executing
+	 * pg_read_binary_file so that server doesn't emit an error
+	 */
+	if (noerror)
+	{
+		res = PQexecParams(conn, "SELECT pg_stat_file($1, true)",
+						   1, NULL, paramValues, NULL, NULL, 1);
+
+		if (PQresultStatus(res) != PGRES_TUPLES_OK)
+		{
+			pg_fatal("could not stat remote file \"%s\": %s",
+					 path, PQresultErrorMessage(res));
+		}
+
+		/* sanity check the result set */
+		if (PQntuples(res) != 1)
+			pg_fatal("unexpected result set while stating remote file \"%s\"",
+					 path);
+
+		/* Return NULL if the file was not found */
+		if (PQgetisnull(res, 0, 0))
+			return NULL;
+
+		PQclear(res);
+	}
+
 	res = PQexecParams(conn, "SELECT pg_read_binary_file($1)",
 					   1, NULL, paramValues, NULL, NULL, 1);
 

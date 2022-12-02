@@ -54,7 +54,7 @@ static shmem_startup_hook_type prev_shmem_startup_hook = NULL;
 const char	test_tranche_name[] = "test_slru_tranche";
 
 static bool
-test_slru_scan_cb(SlruCtl ctl, char *filename, int segpage, void *data)
+test_slru_scan_cb(SlruCtl ctl, char *filename, int64 segpage, void *data)
 {
 	elog(NOTICE, "Calling test_slru_scan_cb()");
 	return SlruScanDirCbDeleteAll(ctl, filename, segpage, data);
@@ -155,8 +155,8 @@ test_slru_page_sync(PG_FUNCTION_ARGS)
 	ftag.segno = pageno / SLRU_PAGES_PER_SEGMENT;
 	SlruSyncFileTag(TestSlruCtl, &ftag, path);
 
-	elog(NOTICE, "Called SlruSyncFileTag() for segment %d on path %s",
-		 ftag.segno, path);
+	elog(NOTICE, "Called SlruSyncFileTag() for segment %llu on path %s",
+		 (unsigned long long) ftag.segno, path);
 
 	PG_RETURN_VOID();
 }
@@ -170,7 +170,8 @@ test_slru_page_delete(PG_FUNCTION_ARGS)
 	ftag.segno = pageno / SLRU_PAGES_PER_SEGMENT;
 	SlruDeleteSegment(TestSlruCtl, ftag.segno);
 
-	elog(NOTICE, "Called SlruDeleteSegment() for segment %d", ftag.segno);
+	elog(NOTICE, "Called SlruDeleteSegment() for segment %llu",
+		(unsigned long long) ftag.segno);
 
 	PG_RETURN_VOID();
 }
@@ -208,7 +209,7 @@ test_slru_shmem_request(void)
 }
 
 static bool
-test_slru_page_precedes_logically(int page1, int page2)
+test_slru_page_precedes_logically(int64 page1, int64 page2)
 {
 	return page1 < page2;
 }

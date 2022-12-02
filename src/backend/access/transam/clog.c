@@ -90,7 +90,7 @@ static SlruCtlData XactCtlData;
 
 
 static int	ZeroCLOGPage(int pageno, bool writeXlog);
-static bool CLOGPagePrecedes(int page1, int page2);
+static bool CLOGPagePrecedes(int64 page1, int64 page2);
 static void WriteZeroPageXlogRec(int pageno);
 static void WriteTruncateXlogRec(int pageno, TransactionId oldestXact,
 								 Oid oldestXactDb);
@@ -930,7 +930,7 @@ TruncateCLOG(TransactionId oldestXact, Oid oldestxid_datoid)
  * don't optimize that edge case.
  */
 static bool
-CLOGPagePrecedes(int page1, int page2)
+CLOGPagePrecedes(int64 page1, int64 page2)
 {
 	TransactionId xid1;
 	TransactionId xid2;

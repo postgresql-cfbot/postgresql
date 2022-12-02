@@ -64,7 +64,7 @@ static SlruCtlData SubTransCtlData;
 
 
 static int	ZeroSUBTRANSPage(int pageno);
-static bool SubTransPagePrecedes(int page1, int page2);
+static bool SubTransPagePrecedes(int64 page1, int64 page2);
 
 
 /*
@@ -168,8 +168,9 @@ SubTransGetTopmostTransaction(TransactionId xid)
 		 * structure that could lead to an infinite loop, so exit.
 		 */
 		if (!TransactionIdPrecedes(parentXid, previousXid))
-			elog(ERROR, "pg_subtrans contains invalid entry: xid %u points to parent xid %u",
-				 previousXid, parentXid);
+			elog(ERROR, "pg_subtrans contains invalid entry: xid %llu points to parent xid %llu",
+				 (unsigned long long) previousXid,
+				 (unsigned long long) parentXid);
 	}
 
 	Assert(TransactionIdIsValid(previousXid));
@@ -359,7 +360,7 @@ TruncateSUBTRANS(TransactionId oldestXact)
  * Analogous to CLOGPagePrecedes().
  */
 static bool
-SubTransPagePrecedes(int page1, int page2)
+SubTransPagePrecedes(int64 page1, int64 page2)
 {
 	TransactionId xid1;
 	TransactionId xid2;

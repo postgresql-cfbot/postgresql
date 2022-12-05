@@ -815,65 +815,155 @@ rmtree("$tempdir/backup_corrupt4");
 $node->safe_psql('postgres', "DROP TABLE corrupt1;");
 $node->safe_psql('postgres', "DROP TABLE corrupt2;");
 
-note "Testing pg_basebackup with compression methods";
+# Verify available compression methods and options
 
-# Check ZLIB compression if available.
-SKIP:
-{
-	skip "postgres was not built with ZLIB support", 7
-	  if (!check_pg_config("#define HAVE_LIBZ 1"));
+my @compression_methods = (
+    # ZLIB
+    {
+        'compression_method' => 'ZLIB',
+        'enabled'            => check_pg_config('#define HAVE_LIBZ 1'),
+        'executable'         => $ENV{GZIP_PROGRAM},
+        'expected_files'     => ['base.tar.gz', 'pg_wal.tar.gz'],
+        'backup_flags' => [
+            ['--compress', '1'],
+            ['--gzip'],
+            ['--compress', 'gzip:1'],
+        ],
+    },
+    # ZSTD
+    {
+        'compression_method' => 'ZSTD',
+        'enabled'            => check_pg_config('#define USE_ZSTD 1'),
+        'expected_files'     => ['base.tar.zst'],
+        'executable'         => $ENV{ZSTD},
+        'backup_flags' => [
+            ['--compress', 'zstd'],
+            ['--compress', 'server-zstd'],
+            ['--compress', 'server-zstd:1'],
+            ['--compress', 'server-zstd:level=2'],
+            ['--compress', 'client-zstd'],
+            ['--compress', 'client-zstd:1'],
+            ['--compress', 'client-zstd:level=2'],
+            # These might fail if the available zstd does not support multiple workers
+            ['--compress', 'server-zstd:workers=2'],
+            ['--compress', 'server-zstd:workers=2,level=2'],
+            ['--compress', 'client-zstd:workers=2'],
+            ['--compress', 'client-zstd:workers=2,level=2'],
+        ],
+        'possibly_unsupported' => qr/could not set compression worker count to \d*: Unsupported parameter/
+    },
+    # LZ4
+    {
+        'compression_method' => 'LZ4',
+        'enabled'            => check_pg_config('#define USE_LZ4 1'),
+        'expected_files'     => ['base.tar.lz4'],
+        'executable'         => $ENV{LZ4},
+        'backup_flags' => [
+            ['--compress', 'lz4'],
+            ['--compress', 'server-lz4'],
+            ['--compress', 'server-lz4:1'],
+            ['--compress', 'server-lz4:level=2'],
+            ['--compress', 'client-lz4'],
+            ['--compress', 'client-lz4:1'],
+            ['--compress', 'client-lz4:level=2'],
+        ],
+    },
+);
 
-	$node->command_ok(
-		[
-			@pg_basebackup_defs,    '-D',
-			"$tempdir/backup_gzip", '--compress',
-			'1',                    '--format',
-			't'
-		],
-		'pg_basebackup with --compress');
-	$node->command_ok(
-		[
-			@pg_basebackup_defs,     '-D',
-			"$tempdir/backup_gzip2", '--gzip',
-			'--format',              't'
-		],
-		'pg_basebackup with --gzip');
-	$node->command_ok(
-		[
-			@pg_basebackup_defs,     '-D',
-			"$tempdir/backup_gzip3", '--compress',
-			'gzip:1',                '--format',
-			't'
-		],
-		'pg_basebackup with --compress=gzip:1');
+foreach my $method_test ( @compression_methods ) {
+    my $method = $method_test->{'compression_method'};
 
-	# Verify that the stored files are generated with their expected
-	# names.
-	my @zlib_files = glob "$tempdir/backup_gzip/*.tar.gz";
-	is(scalar(@zlib_files), 2,
-		"two files created with --compress=NUM (base.tar.gz and pg_wal.tar.gz)"
-	);
-	my @zlib_files2 = glob "$tempdir/backup_gzip2/*.tar.gz";
-	is(scalar(@zlib_files2), 2,
-		"two files created with --gzip (base.tar.gz and pg_wal.tar.gz)");
-	my @zlib_files3 = glob "$tempdir/backup_gzip3/*.tar.gz";
-	is(scalar(@zlib_files3), 2,
-		"two files created with --compress=gzip:NUM (base.tar.gz and pg_wal.tar.gz)"
-	);
+    note "Testing pg_basebackup with compression method $method";
 
-	# Check the integrity of the files generated.
-	my $gzip = $ENV{GZIP_PROGRAM};
-	skip "program gzip is not found in your system", 1
-	  if (!defined $gzip
-		|| $gzip eq '');
+  SKIP:
+    {
+        my $method_tests = (scalar @{$method_test->{'backup_flags'}} * 2) + 1;
 
-	my $gzip_is_valid =
-	  system_log($gzip, '--test', @zlib_files, @zlib_files2, @zlib_files3);
-	is($gzip_is_valid, 0, "gzip verified the integrity of compressed data");
-	rmtree("$tempdir/backup_gzip");
-	rmtree("$tempdir/backup_gzip2");
-	rmtree("$tempdir/backup_gzip3");
+        skip "postgres was not built with $method support", $method_tests,
+            if (!$method_test->{'enabled'});
+
+        my $i = 1;
+        my @directories = ();
+        my @files = ();
+
+        foreach my $backup_flags (@{$method_test->{'backup_flags'}}) {
+            my $description = join(' ', @{$backup_flags});
+
+            my $directory = sprintf(
+                q[%s/backup_%s_%i],
+                $tempdir,
+                $method,
+                $i,
+            );
+
+            # Verify pg_basebackup can be executed with the provided options
+            my $backup_stdout = '';
+            my $backup_stderr = '';
+            my $backup_result = $node->run_log(
+                [
+                    @pg_basebackup_defs,
+                    '-D', $directory,
+                    '--format', 't',
+                    @{$backup_flags},
+                ],
+                '>', \$backup_stdout,
+                '2>', \$backup_stderr,
+            );
+
+            if (!$backup_result
+                    && $method_test->{'possibly_unsupported'}
+                    && $backup_stderr =~ /$method_test->{'possibly_unsupported'}/) {
+
+                skip "compression with this option not supported by the installed $method version",
+                    (scalar @{$method_test->{'backup_flags'}} - $i) + 1;
+            }
+            else {
+                ok(
+                    $backup_result,
+                    qq[pg_basebackup with $description],
+                );
+
+                # Verify that the expected files are generated
+                my @found_files = ();
+
+                foreach my $file (@{$method_test->{'expected_files'}}) {
+                    my $filepath = qq[$directory/$file];
+                    push @found_files, $filepath if -e $filepath;
+                }
+
+                is(
+                    scalar(@{$method_test->{'expected_files'}}),
+                    scalar(@found_files),
+                    sprintf(
+                        q[%i files created with %s],
+                        scalar(@found_files),
+                        $description,
+                    ),
+                );
+
+                push @directories, $directory;
+                push @files, @found_files;
+                $i++;
+            }
+        }
+
+        # Check the integrity of the generated file(s)
+        my $executable = $method_test->{'executable'};
+
+        skip "$method executable not found '$ENV{LZ4}'", 1
+            if (!defined $executable || $executable eq '');
+
+        my $validated = system_log($executable, '--test', @files);
+
+        is($validated, 0, "integrity of compressed data verified");
+
+        # Remove generated directories
+        foreach my $directory (@directories) {
+            rmtree($directory);
+        }
+    }
 }
+
 
 # Test background stream process terminating before the basebackup has
 # finished, the main process should exit gracefully with an error message on

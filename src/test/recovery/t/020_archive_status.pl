@@ -26,7 +26,7 @@ my $primary_data = $primary->data_dir;
 # a portable solution, use an archive command based on a command known to
 # work but will fail: copy with an incorrect original path.
 my $incorrect_command =
-  $PostgreSQL::Test::Utils::windows_os
+  $PostgreSQL::Test::Utils::windows_os && !$PostgreSQL::Test::Utils::is_cygwin
   ? qq{copy "%p_does_not_exist" "%f_does_not_exist"}
   : qq{cp "%p_does_not_exist" "%f_does_not_exist"};
 $primary->safe_psql(

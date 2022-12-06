@@ -88,10 +88,11 @@ our @EXPORT = qw(
 
   $windows_os
   $is_msys2
+  $is_cygwin
   $use_unix_sockets
 );
 
-our ($windows_os, $is_msys2, $use_unix_sockets, $timeout_default,
+our ($windows_os, $is_msys2, $is_cygwin, $use_unix_sockets, $timeout_default,
 	$tmp_check, $log_path, $test_logfile);
 
 BEGIN
@@ -140,12 +141,17 @@ BEGIN
 	$ENV{PGAPPNAME} = basename($0);
 
 	# Must be set early
-	$windows_os = $Config{osname} eq 'MSWin32' || $Config{osname} eq 'msys';
+	$windows_os = $Config{osname} eq 'MSWin32' || $Config{osname} eq 'msys' ||
+	  $Config{osname} eq 'cygwin';
+
 	# Check if this environment is MSYS2.
 	$is_msys2 =
 	     $windows_os
 	  && -x '/usr/bin/uname'
 	  && `uname -or` =~ /^[2-9].*Msys/;
+
+	# Check if this environment is Cygwin
+	$is_cygwin = $Config{osname} eq 'cygwin';
 
 	if ($windows_os)
 	{
@@ -707,7 +713,7 @@ sub dir_symlink
 {
 	my $oldname = shift;
 	my $newname = shift;
-	if ($windows_os)
+	if ($windows_os && !$is_cygwin)
 	{
 		$oldname =~ s,/,\\,g;
 		$newname =~ s,/,\\,g;

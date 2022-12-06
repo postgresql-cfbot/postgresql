@@ -135,6 +135,7 @@ CreateExecutorState(void)
 	estate->es_param_exec_vals = NULL;
 
 	estate->es_queryEnv = NULL;
+	estate->es_part_prune_results = NIL;
 
 	estate->es_query_cxt = qcontext;
 

@@ -619,6 +619,7 @@ typedef struct EState
 										 * ExecRowMarks, or NULL if none */
 	PlannedStmt *es_plannedstmt;	/* link to top of plan tree */
 	List		*es_part_prune_infos;	/* PlannedStmt.partPruneInfos */
+	List		*es_part_prune_results; /* QueryDesc.part_prune_results */
 	const char *es_sourceText;	/* Source text from QueryDesc */
 
 	JunkFilter *es_junkFilter;	/* top-level junk filter, if any */

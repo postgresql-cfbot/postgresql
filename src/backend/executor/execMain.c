@@ -49,6 +49,7 @@
 #include "commands/matview.h"
 #include "commands/trigger.h"
 #include "executor/execdebug.h"
+#include "executor/execPartition.h"
 #include "executor/nodeSubplan.h"
 #include "foreign/fdwapi.h"
 #include "jit/jit.h"
@@ -104,6 +105,58 @@ static void EvalPlanQualStart(EPQState *epqstate, Plan *planTree);
 
 /* end of local decls */
 
+/* ----------------------------------------------------------------
+ *		ExecutorDoInitialPruning
+ *
+ *		For each plan tree node that has been assigned a PartitionPruneInfo,
+ *		this performs initial partition pruning using the information contained
+ *		therein to determine the set of child subplans that satisfy the initial
+ *		pruning steps, to be returned as a bitmapset of their indexes in the
+ *		node's list of child subplans (for example, an Append's appendplans).
+ *
+ * Return value is a List of PartitionPruneResult nodes, one for each
+ * PartitionPruneInfo found in plannedstmt->containsInitialPruning, each
+ * containing a bitmapset of the indexes of unpruned child subplans.
+ * A bitmapset of the RT indexes of the leaf partitions scanned by those
+ * subplans is returned in *scan_leafpart_rtis, which is shared across all
+ * of those PartitionPruneResults.
+ *
+ * The executor must see the exactly same set of subplans as valid for
+ * execution when doing ExecInitNode() on the plan nodes whose
+ * PartitionPruneInfos are processed here.  So, it must get the set from the
+ * aforementioned PartitionPruneResult, instead of computing it all over
+ * again by redoing the initial pruning.  It's the caller's job to pass the
+ * PartitionPruneResult to the executor.
+ *
+ * Note: Partitioned tables mentioned in PartitionedRelPruneInfo nodes that
+ * drive the pruning will be locked before doing the pruning.
+ * ----------------------------------------------------------------
+ */
+List *
+ExecutorDoInitialPruning(PlannedStmt *plannedstmt, ParamListInfo params,
+						 Bitmapset **scan_leafpart_rtis)
+{
+	List	 *part_prune_results = NIL;
+	ListCell *lc;
+
+	/* Only get here if there is any pruning to do. */
+	Assert(plannedstmt->containsInitialPruning);
+
+	foreach(lc, plannedstmt->partPruneInfos)
+	{
+		PartitionPruneInfo *pruneinfo = lfirst_node(PartitionPruneInfo, lc);
+		PartitionPruneResult *pruneresult = makeNode(PartitionPruneResult);
+
+		pruneresult->root_parent_relids =
+			bms_copy(pruneinfo->root_parent_relids);
+		pruneresult->valid_subplan_offs =
+			ExecPartitionDoInitialPruning(plannedstmt, params, pruneinfo,
+										  scan_leafpart_rtis);
+		part_prune_results = lappend(part_prune_results, pruneresult);
+	}
+
+	return part_prune_results;
+}
 
 /* ----------------------------------------------------------------
  *		ExecutorStart
@@ -806,6 +859,7 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 {
 	CmdType		operation = queryDesc->operation;
 	PlannedStmt *plannedstmt = queryDesc->plannedstmt;
+	List	   *part_prune_results = queryDesc->part_prune_results;
 	Plan	   *plan = plannedstmt->planTree;
 	List	   *rangeTable = plannedstmt->rtable;
 	EState	   *estate = queryDesc->estate;
@@ -826,6 +880,7 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 
 	estate->es_plannedstmt = plannedstmt;
 	estate->es_part_prune_infos = plannedstmt->partPruneInfos;
+	estate->es_part_prune_results = part_prune_results;
 
 	/*
 	 * Next, build the ExecRowMark array from the PlanRowMark(s), if any.

@@ -304,6 +304,25 @@ PortalDefineQuery(Portal portal,
 }
 
 /*
+ * PortalStorePartitionPruneResults
+ *		Copy the given List of Lists of PartitionPruneResults into the
+ *		portal's context
+ *
+ * This allows the caller to ensure that the list exists as long as the portal
+ * does.
+ */
+void
+PortalStorePartitionPruneResults(Portal portal, List *part_prune_results_list)
+{
+	MemoryContext	oldcxt;
+
+	Assert(PortalIsValid(portal));
+	oldcxt = MemoryContextSwitchTo(portal->portalContext);
+	portal->part_prune_results_list = copyObject(part_prune_results_list);
+	MemoryContextSwitchTo(oldcxt);
+}
+
+/*
  * PortalReleaseCachedPlan
  *		Release a portal's reference to its cached plan, if any.
  */

@@ -73,7 +73,16 @@ typedef struct PlannedStmt
 	List	   *partPruneInfos; /* List of PartitionPruneInfo contained in the
 								 * plan */
 
+	bool		containsInitialPruning;	/* Do any of those PartitionPruneInfos
+										 * have initial pruning steps in them?
+										 */
+
 	List	   *rtable;			/* list of RangeTblEntry nodes */
+
+	Bitmapset  *minLockRelids;	/* Indexes of all range table entries minus
+								 * indexes of range table entries of the leaf
+								 * partitions scanned by prunable subplans;
+								 * see AcquireExecutorLocks() */
 
 	/* rtable indexes of target relations for INSERT/UPDATE/DELETE/MERGE */
 	List	   *resultRelations;	/* integer list of RT indexes, or NIL */
@@ -1414,6 +1423,13 @@ typedef struct PlanRowMark
  * prune_infos			List of Lists containing PartitionedRelPruneInfo nodes,
  *						one sublist per run-time-prunable partition hierarchy
  *						appearing in the parent plan node's subplans.
+ *
+ * needs_init_pruning	Does any of the PartitionedRelPruneInfos in
+ *						prune_infos have its initial_pruning_steps set?
+ *
+ * needs_exec_pruning	Does any of the PartitionedRelPruneInfos in
+ *						prune_infos have its exec_pruning_steps set?
+ *
  * other_subplans		Indexes of any subplans that are not accounted for
  *						by any of the PartitionedRelPruneInfo nodes in
  *						"prune_infos".  These subplans must not be pruned.
@@ -1425,6 +1441,8 @@ typedef struct PartitionPruneInfo
 	NodeTag		type;
 	Bitmapset  *root_parent_relids;
 	List	   *prune_infos;
+	bool		needs_init_pruning;
+	bool		needs_exec_pruning;
 	Bitmapset  *other_subplans;
 } PartitionPruneInfo;
 
@@ -1468,6 +1486,9 @@ typedef struct PartitionedRelPruneInfo
 
 	/* relation OID by partition index, or 0 */
 	Oid		   *relid_map pg_node_attr(array_size(nparts));
+
+	/* Range table index by partition index, or 0. */
+	Index	   *rti_map pg_node_attr(array_size(nparts));
 
 	/*
 	 * initial_pruning_steps shows how to prune during executor startup (i.e.,
@@ -1553,6 +1574,38 @@ typedef struct PartitionPruneStepCombine
 	List	   *source_stepids;
 } PartitionPruneStepCombine;
 
+/*----------------
+ * PartitionPruneResult
+ *
+ * The result of performing ExecPartitionDoInitialPruning() on a given
+ * PartitionPruneInfo.
+ *
+ * root_parent_relids is same as PartitionPruneInfo.root_parent_relids.  It's
+ * there for cross-checking in ExecInitPartitionPruning() that the
+ * PartitionPruneResult and the PartitionPruneInfo at a given index in
+ * EState.es_part_prune_results and EState.es_part_prune_infos, respectively,
+ * belong to the same parent plan node.
+ *
+ * valid_subplans_offs contains the indexes of subplans remaining after
+ * performing initial pruning by calling ExecFindMatchingSubPlans() on the
+ * PartitionPruneInfo.
+ *
+ * This is used to store the result of initial partition pruning that is
+ * peformed before the execution has started.  A module that needs to do so
+ * should call ExecutorDoInitialPruning() on a given PlannedStmt, which
+ * returns a List of PartitionPruneResult containing an entry for each
+ * PartitionPruneInfo present in PlannedStmt.part_prune_infos.  The module
+ * should then pass that list, along with the PlannedStmt, to the executor,
+ * so that it can reuse the result of initial partition pruning when
+ * initializing the subplans for execution.
+ */
+typedef struct PartitionPruneResult
+{
+	NodeTag		type;
+
+	Bitmapset	   *root_parent_relids;
+	Bitmapset	   *valid_subplan_offs;
+} PartitionPruneResult;
 
 /*
  * Plan invalidation info

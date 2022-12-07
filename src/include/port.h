@@ -273,6 +273,7 @@ extern int	pclose_check(FILE *stream);
 /*
  *	Win32 doesn't have reliable rename/unlink during concurrent access.
  */
+extern PGDLLEXPORT int pgwin32_dirmod_loops;
 extern int	pgrename(const char *from, const char *to);
 extern int	pgunlink(const char *path);
 
@@ -311,6 +312,7 @@ extern bool rmtree(const char *path, bool rmtopdir);
  * passing of other special options.
  */
 #define		O_DIRECT	0x80000000
+extern PGDLLEXPORT int pgwin32_open_handle_loops;
 extern HANDLE pgwin32_open_handle(const char *, int, bool);
 extern int	pgwin32_open(const char *, int,...);
 extern FILE *pgwin32_fopen(const char *, const char *);

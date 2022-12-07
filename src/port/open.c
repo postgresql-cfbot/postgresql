@@ -25,6 +25,9 @@
 #include <assert.h>
 #include <sys/stat.h>
 
+/* This is exported only to support testing. */
+int pgwin32_open_handle_loops = 300;
+
 static int
 openFlagsToCreateFileFlags(int openFlags)
 {
@@ -118,7 +121,7 @@ pgwin32_open_handle(const char *fileName, int fileFlags, bool backup_semantics)
 						 errhint("You might have antivirus, backup, or similar software interfering with the database system.")));
 #endif
 
-			if (loops < 300)
+			if (loops < pgwin32_open_handle_loops)
 			{
 				pg_usleep(100000);
 				loops++;

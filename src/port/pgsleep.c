@@ -53,7 +53,7 @@ pg_usleep(long microsec)
 		delay.tv_usec = microsec % 1000000L;
 		(void) select(0, NULL, NULL, NULL, &delay);
 #else
-		SleepEx((microsec < 500 ? 1 : (microsec + 500) / 1000), FALSE);
+		SleepEx((microsec < 500 ? 1 : (microsec + 500) / 1000), TRUE);
 #endif
 	}
 }

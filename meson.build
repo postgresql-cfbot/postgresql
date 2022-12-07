@@ -2577,6 +2577,10 @@ default_bin_args = default_target_args + {
   'install_rpath': ':'.join(bin_install_rpaths),
 }
 
+test_bin_args = default_target_args + {
+  'install': false,
+}
+
 
 
 # Helper for exporting a limited number of symbols
@@ -2790,6 +2794,7 @@ subdir('src')
 subdir('contrib')
 
 subdir('src/test')
+subdir('src/port/t')
 subdir('src/interfaces/libpq/test')
 subdir('src/interfaces/ecpg/test')
 
@@ -2936,7 +2941,14 @@ foreach test_dir : tests
     endif
 
     t = test_dir[kind]
+    env = test_env
 
+    # Add environment vars from the test specification
+    foreach name, value : t.get('env', {})
+      env.set(name, value)
+    endforeach
+
+    # pg_regress style tests
     if kind in ['regress', 'isolation', 'ecpg']
       if kind == 'regress'
         runner = pg_regress
@@ -2970,7 +2982,6 @@ foreach test_dir : tests
         test_command += t.get('sql', [])
       endif
 
-      env = test_env
       env.prepend('PATH', temp_install_bindir, test_dir['bd'])
 
       test_kwargs = {
@@ -2991,6 +3002,8 @@ foreach test_dir : tests
       )
 
       testport += 1
+
+    # perl tap tests
     elif kind == 'tap'
       if not tap_tests_enabled
         continue
@@ -3004,12 +3017,7 @@ foreach test_dir : tests
 
       # Add temporary install, the build directory for non-installed binaries and
       # also test/ for non-installed test binaries built separately.
-      env = test_env
       env.prepend('PATH', temp_install_bindir, test_dir['bd'], test_dir['bd'] / 'test')
-
-      foreach name, value : t.get('env', {})
-        env.set(name, value)
-      endforeach
 
       test_kwargs = {
         'protocol': 'tap',
@@ -3036,6 +3044,30 @@ foreach test_dir : tests
             '--testname', onetap_p,
             '--', test_command,
             test_dir['sd'] / onetap,
+          ],
+        )
+      endforeach
+
+    # tap tests using C executables
+    elif kind == 'exec_tap'
+      # Don't have a dependency on perl tap test infrastructure, so we can
+      # test even when not tap_test_enabled.
+      test_kwargs = {
+        'protocol': 'tap',
+        'suite': [test_dir['name']],
+        'timeout': 1000,
+        'env': env,
+      } + t.get('test_kwargs', {})
+
+      foreach onetap : t['tests']
+        test_name = onetap.name()
+        test(test_dir['name'] / test_name,
+          python,
+          kwargs: test_kwargs,
+          depends: test_deps + t.get('deps', []) + [onetap],
+          args: testwrap_base + [
+            '--testname', test_name,
+            '--', onetap.full_path(),
           ],
         )
       endforeach

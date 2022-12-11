@@ -209,6 +209,12 @@ typedef struct ReorderBufferDiskChange
 int			logical_decoding_work_mem;
 static const Size max_changes_in_memory = 4096; /* XXX for restore only */
 
+/*
+ * Wheather to send the change to output plugin immediately in streaming mode.
+ * When it is off, wait until logical_decoding_work_mem is exceeded.
+ */
+bool		force_stream_mode;
+
 /* ---------------------------------------
  * primary reorderbuffer support routines
  * ---------------------------------------
@@ -2870,7 +2876,8 @@ ReorderBufferFinishPrepared(ReorderBuffer *rb, TransactionId xid,
  * disk.
  */
 void
-ReorderBufferAbort(ReorderBuffer *rb, TransactionId xid, XLogRecPtr lsn)
+ReorderBufferAbort(ReorderBuffer *rb, TransactionId xid, XLogRecPtr lsn,
+				   TimestampTz abort_time)
 {
 	ReorderBufferTXN *txn;
 
@@ -2880,6 +2887,8 @@ ReorderBufferAbort(ReorderBuffer *rb, TransactionId xid, XLogRecPtr lsn)
 	/* unknown, nothing to remove */
 	if (txn == NULL)
 		return;
+
+	txn->xact_time.abort_time = abort_time;
 
 	/* For streamed transactions notify the remote node about the abort. */
 	if (rbtxn_is_streamed(txn))
@@ -3552,20 +3561,29 @@ ReorderBufferCheckMemoryLimit(ReorderBuffer *rb)
 {
 	ReorderBufferTXN *txn;
 
-	/* bail out if we haven't exceeded the memory limit */
-	if (rb->size < logical_decoding_work_mem * 1024L)
+	/*
+	 * Stream the changes immediately if force_stream_mode is on and the output
+	 * plugin supports streaming. Otherwise wait until size exceeds
+	 * logical_decoding_work_mem.
+	 */
+	bool force_stream = (force_stream_mode && ReorderBufferCanStream(rb));
+
+	/* bail out if force_stream is false and we haven't exceeded the memory limit */
+	if (!force_stream && rb->size < logical_decoding_work_mem * 1024L)
 		return;
 
 	/*
-	 * Loop until we reach under the memory limit.  One might think that just
-	 * by evicting the largest (sub)transaction we will come under the memory
-	 * limit based on assumption that the selected transaction is at least as
-	 * large as the most recent change (which caused us to go over the memory
-	 * limit). However, that is not true because a user can reduce the
+	 * If force_stream is true, loop until there's no change. Otherwise, loop
+	 * until we reach under the memory limit. One might think that just by
+	 * evicting the largest (sub)transaction we will come under the memory limit
+	 * based on assumption that the selected transaction is at least as large as
+	 * the most recent change (which caused us to go over the memory limit).
+	 * However, that is not true because a user can reduce the
 	 * logical_decoding_work_mem to a smaller value before the most recent
 	 * change.
 	 */
-	while (rb->size >= logical_decoding_work_mem * 1024L)
+	while ((!force_stream && rb->size >= logical_decoding_work_mem * 1024L) ||
+		   (force_stream && rb->size > 0))
 	{
 		/*
 		 * Pick the largest transaction (or subtransaction) and evict it from

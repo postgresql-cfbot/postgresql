@@ -37,10 +37,11 @@ const char *const LockTagTypeNames[] = {
 	"spectoken",
 	"object",
 	"userlock",
-	"advisory"
+	"advisory",
+	"applytransaction"
 };
 
-StaticAssertDecl(lengthof(LockTagTypeNames) == (LOCKTAG_ADVISORY + 1),
+StaticAssertDecl(lengthof(LockTagTypeNames) == (LOCKTAG_LAST_TYPE + 1),
 				 "array length mismatch");
 
 /* This must match enum PredicateLockTargetType (predicate_internals.h) */

@@ -61,6 +61,7 @@
 #include "replication/logicallauncher.h"
 #include "replication/slot.h"
 #include "replication/syncrep.h"
+#include "replication/worker_internal.h"
 #include "storage/bufmgr.h"
 #include "storage/large_object.h"
 #include "storage/pg_shmem.h"
@@ -1244,6 +1245,16 @@ struct config_bool ConfigureNamesBool[] =
 			GUC_NOT_IN_SAMPLE
 		},
 		&send_abort_for_kill,
+		false,
+		NULL, NULL, NULL
+	},
+	{
+		{"force_stream_mode", PGC_USERSET, DEVELOPER_OPTIONS,
+			gettext_noop("Force sending the changes to output plugin immediately if streaming is supported, without waiting till logical_decoding_work_mem."),
+			NULL,
+			GUC_NOT_IN_SAMPLE
+		},
+		&force_stream_mode,
 		false,
 		NULL, NULL, NULL
 	},
@@ -2978,6 +2989,31 @@ struct config_int ConfigureNamesInt[] =
 		},
 		&max_sync_workers_per_subscription,
 		2, 0, MAX_BACKENDS,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"max_parallel_apply_workers_per_subscription",
+			PGC_SIGHUP,
+			REPLICATION_SUBSCRIBERS,
+			gettext_noop("Maximum number of parallel apply workers per subscription."),
+			NULL,
+		},
+		&max_parallel_apply_workers_per_subscription,
+		2, 0, MAX_PARALLEL_WORKER_LIMIT,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"stream_serialize_threshold", PGC_SIGHUP, DEVELOPER_OPTIONS,
+			gettext_noop("Forces the leader apply worker to serialize messages "
+						 "to files after sending specified amount of streaming "
+						 "chunks in streaming parallel mode."),
+			gettext_noop("A value of -1 disables this feature."),
+			GUC_NOT_IN_SAMPLE
+		},
+		&stream_serialize_threshold,
+		-1, -1, INT_MAX,
 		NULL, NULL, NULL
 	},
 

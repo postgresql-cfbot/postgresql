@@ -949,6 +949,7 @@ CREATE VIEW pg_stat_subscription AS
             su.oid AS subid,
             su.subname,
             st.pid,
+            st.apply_leader_pid,
             st.relid,
             st.received_lsn,
             st.last_msg_send_time,
@@ -1301,7 +1302,7 @@ REVOKE ALL ON pg_replication_origin_status FROM public;
 REVOKE ALL ON pg_subscription FROM public;
 GRANT SELECT (oid, subdbid, subskiplsn, subname, subowner, subenabled,
               subbinary, substream, subtwophasestate, subdisableonerr,
-              subslotname, subsynccommit, subpublications, suborigin)
+              subretry, subslotname, subsynccommit, subpublications, suborigin)
     ON pg_subscription TO public;
 
 CREATE VIEW pg_stat_subscription_stats AS

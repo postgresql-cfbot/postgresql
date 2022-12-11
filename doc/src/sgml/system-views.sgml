@@ -1379,8 +1379,9 @@
        <literal>virtualxid</literal>,
        <literal>spectoken</literal>,
        <literal>object</literal>,
-       <literal>userlock</literal>, or
-       <literal>advisory</literal>.
+       <literal>userlock</literal>,
+       <literal>advisory</literal>, or
+       <literal>applytransaction</literal>.
        (See also <xref linkend="wait-event-lock-table"/>.)
       </para></entry>
      </row>

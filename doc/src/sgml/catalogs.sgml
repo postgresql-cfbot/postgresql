@@ -7913,11 +7913,16 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
 
      <row>
       <entry role="catalog_table_entry"><para role="column_definition">
-       <structfield>substream</structfield> <type>bool</type>
+       <structfield>substream</structfield> <type>char</type>
       </para>
       <para>
-       If true, the subscription will allow streaming of in-progress
-       transactions
+       Controls how to handle the streaming of in-progress transactions:
+       <literal>f</literal> = disallow streaming of in-progress transactions,
+       <literal>t</literal> = spill the changes of in-progress transactions to
+       disk and apply at once after the transaction is committed on the
+       publisher,
+       <literal>p</literal> = apply changes directly using a parallel apply
+       worker if available (same as 't' if no worker is available)
       </para></entry>
      </row>
 
@@ -7940,6 +7945,16 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
       <para>
        If true, the subscription will be disabled if one of its workers
        detects an error
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>subretry</structfield> <type>bool</type>
+      </para>
+      <para>
+       True if previous change failed to be applied while there were any
+       active parallel apply workers, necessitating a retry.
       </para></entry>
      </row>
 

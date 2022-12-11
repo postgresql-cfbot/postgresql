@@ -8,6 +8,138 @@ use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
 use Test::More;
 
+# Check the log that the streamed transaction was completed successfully
+# reported by parallel apply worker.
+sub check_parallel_log
+{
+	my ($node_subscriber, $offset, $is_parallel, $type) = @_;
+
+	if ($is_parallel)
+	{
+		$node_subscriber->wait_for_log(
+			qr/DEBUG: ( [A-Z0-9]+:)? finished processing the STREAM $type command/,
+			$offset);
+	}
+}
+
+# Encapsulate all the common test steps which are related to "streaming"
+# parameter so the same code can be run both for the streaming=on and
+# streaming=parallel cases.
+sub test_streaming
+{
+	my ($node_publisher, $node_subscriber, $appname, $is_parallel) = @_;
+
+	my $offset = 0;
+
+	# a small (non-streamed) transaction with DDL and DML
+	$node_publisher->safe_psql(
+		'postgres', q{
+	BEGIN;
+	INSERT INTO test_tab VALUES (3, md5(3::text));
+	ALTER TABLE test_tab ADD COLUMN c INT;
+	SAVEPOINT s1;
+	INSERT INTO test_tab VALUES (4, md5(4::text), -4);
+	COMMIT;
+	});
+
+	# If "streaming" parameter is specified as "parallel", we need to check
+	# that streamed transaction was applied using a parallel apply worker.
+	# We have to look for the DEBUG1 log messages about that, so bump up the
+	# log verbosity.
+	if ($is_parallel)
+	{
+		$node_subscriber->append_conf('postgresql.conf',
+			"log_min_messages = debug1");
+		$node_subscriber->reload;
+	}
+
+	# Check the subscriber log from now on.
+	$offset = -s $node_subscriber->logfile;
+
+	# large (streamed) transaction with DDL and DML
+	$node_publisher->safe_psql(
+		'postgres', q{
+	BEGIN;
+	INSERT INTO test_tab SELECT i, md5(i::text), -i FROM generate_series(5, 1000) s(i);
+	ALTER TABLE test_tab ADD COLUMN d INT;
+	SAVEPOINT s1;
+	INSERT INTO test_tab SELECT i, md5(i::text), -i, 2*i FROM generate_series(1001, 2000) s(i);
+	COMMIT;
+	});
+
+	# a small (non-streamed) transaction with DDL and DML
+	$node_publisher->safe_psql(
+		'postgres', q{
+	BEGIN;
+	INSERT INTO test_tab VALUES (2001, md5(2001::text), -2001, 2*2001);
+	ALTER TABLE test_tab ADD COLUMN e INT;
+	SAVEPOINT s1;
+	INSERT INTO test_tab VALUES (2002, md5(2002::text), -2002, 2*2002, -3*2002);
+	COMMIT;
+	});
+
+	$node_publisher->wait_for_catchup($appname);
+
+	check_parallel_log($node_subscriber, $offset, $is_parallel, 'COMMIT');
+
+	my $result =
+	  $node_subscriber->safe_psql('postgres',
+		"SELECT count(*), count(c), count(d), count(e) FROM test_tab");
+	is($result, qq(2002|1999|1002|1),
+		'check data was copied to subscriber in streaming mode and extra columns contain local defaults'
+	);
+
+	# Check the subscriber log from now on.
+	$offset = -s $node_subscriber->logfile;
+
+	# A large (streamed) transaction with DDL and DML. One of the DDL is performed
+	# after DML to ensure that we invalidate the schema sent for test_tab so that
+	# the next transaction has to send the schema again.
+	$node_publisher->safe_psql(
+		'postgres', q{
+	BEGIN;
+	INSERT INTO test_tab SELECT i, md5(i::text), -i, 2*i, -3*i FROM generate_series(2003,5000) s(i);
+	ALTER TABLE test_tab ADD COLUMN f INT;
+	COMMIT;
+	});
+
+	# A small transaction that won't get streamed. This is just to ensure that we
+	# send the schema again to reflect the last column added in the previous test.
+	$node_publisher->safe_psql(
+		'postgres', q{
+	BEGIN;
+	INSERT INTO test_tab SELECT i, md5(i::text), -i, 2*i, -3*i, 4*i FROM generate_series(5001,5005) s(i);
+	COMMIT;
+	});
+
+	$node_publisher->wait_for_catchup($appname);
+
+	check_parallel_log($node_subscriber, $offset, $is_parallel, 'COMMIT');
+
+	$result = $node_subscriber->safe_psql('postgres',
+		"SELECT count(*), count(c), count(d), count(e), count(f) FROM test_tab"
+	);
+	is($result, qq(5005|5002|4005|3004|5),
+		'check data was copied to subscriber for both streaming and non-streaming transactions'
+	);
+
+	# Cleanup the test data
+	$node_publisher->safe_psql(
+		'postgres', q{
+	DELETE FROM test_tab WHERE (a > 2);
+	ALTER TABLE test_tab DROP COLUMN c, DROP COLUMN d, DROP COLUMN e, DROP COLUMN f;
+	});
+	$node_publisher->wait_for_catchup($appname);
+
+	# Reset the log verbosity.
+	if ($is_parallel)
+	{
+		$node_subscriber->append_conf('postgresql.conf',
+			"log_min_messages = warning");
+		$node_subscriber->reload;
+	}
+}
+
 # Create publisher node
 my $node_publisher = PostgreSQL::Test::Cluster->new('publisher');
 $node_publisher->init(allows_streaming => 'logical');
@@ -37,6 +169,10 @@ $node_publisher->safe_psql('postgres',
 	"CREATE PUBLICATION tap_pub FOR TABLE test_tab");
 
 my $appname = 'tap_sub';
+
+################################
+# Test using streaming mode 'on'
+################################
 $node_subscriber->safe_psql('postgres',
 	"CREATE SUBSCRIPTION tap_sub CONNECTION '$publisher_connstr application_name=$appname' PUBLICATION tap_pub WITH (streaming = on)"
 );
@@ -49,76 +185,25 @@ my $result =
 	"SELECT count(*), count(c), count(d = 999) FROM test_tab");
 is($result, qq(2|0|0), 'check initial data was copied to subscriber');
 
-# a small (non-streamed) transaction with DDL and DML
-$node_publisher->safe_psql(
-	'postgres', q{
-BEGIN;
-INSERT INTO test_tab VALUES (3, md5(3::text));
-ALTER TABLE test_tab ADD COLUMN c INT;
-SAVEPOINT s1;
-INSERT INTO test_tab VALUES (4, md5(4::text), -4);
-COMMIT;
-});
+test_streaming($node_publisher, $node_subscriber, $appname, 0);
 
-# large (streamed) transaction with DDL and DML
-$node_publisher->safe_psql(
-	'postgres', q{
-BEGIN;
-INSERT INTO test_tab SELECT i, md5(i::text), -i FROM generate_series(5, 1000) s(i);
-ALTER TABLE test_tab ADD COLUMN d INT;
-SAVEPOINT s1;
-INSERT INTO test_tab SELECT i, md5(i::text), -i, 2*i FROM generate_series(1001, 2000) s(i);
-COMMIT;
-});
-
-# a small (non-streamed) transaction with DDL and DML
-$node_publisher->safe_psql(
-	'postgres', q{
-BEGIN;
-INSERT INTO test_tab VALUES (2001, md5(2001::text), -2001, 2*2001);
-ALTER TABLE test_tab ADD COLUMN e INT;
-SAVEPOINT s1;
-INSERT INTO test_tab VALUES (2002, md5(2002::text), -2002, 2*2002, -3*2002);
-COMMIT;
-});
-
-$node_publisher->wait_for_catchup($appname);
-
-$result =
-  $node_subscriber->safe_psql('postgres',
-	"SELECT count(*), count(c), count(d), count(e) FROM test_tab");
-is($result, qq(2002|1999|1002|1),
-	'check data was copied to subscriber in streaming mode and extra columns contain local defaults'
+######################################
+# Test using streaming mode 'parallel'
+######################################
+my $oldpid = $node_publisher->safe_psql('postgres',
+	"SELECT pid FROM pg_stat_replication WHERE application_name = '$appname' AND state = 'streaming';"
 );
 
-# A large (streamed) transaction with DDL and DML. One of the DDL is performed
-# after DML to ensure that we invalidate the schema sent for test_tab so that
-# the next transaction has to send the schema again.
-$node_publisher->safe_psql(
-	'postgres', q{
-BEGIN;
-INSERT INTO test_tab SELECT i, md5(i::text), -i, 2*i, -3*i FROM generate_series(2003,5000) s(i);
-ALTER TABLE test_tab ADD COLUMN f INT;
-COMMIT;
-});
+$node_subscriber->safe_psql('postgres',
+	"ALTER SUBSCRIPTION tap_sub SET(streaming = parallel)");
 
-# A small transaction that won't get streamed. This is just to ensure that we
-# send the schema again to reflect the last column added in the previous test.
-$node_publisher->safe_psql(
-	'postgres', q{
-BEGIN;
-INSERT INTO test_tab SELECT i, md5(i::text), -i, 2*i, -3*i, 4*i FROM generate_series(5001,5005) s(i);
-COMMIT;
-});
+$node_publisher->poll_query_until('postgres',
+	"SELECT pid != $oldpid FROM pg_stat_replication WHERE application_name = '$appname' AND state = 'streaming';"
+  )
+  or die
+  "Timed out while waiting for apply to restart after changing SUBSCRIPTION";
 
-$node_publisher->wait_for_catchup($appname);
-
-$result =
-  $node_subscriber->safe_psql('postgres',
-	"SELECT count(*), count(c), count(d), count(e), count(f) FROM test_tab");
-is($result, qq(5005|5002|4005|3004|5),
-	'check data was copied to subscriber for both streaming and non-streaming transactions'
-);
+test_streaming($node_publisher, $node_subscriber, $appname, 1);
 
 $node_subscriber->stop;
 $node_publisher->stop;

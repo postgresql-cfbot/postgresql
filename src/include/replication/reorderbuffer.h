@@ -18,6 +18,7 @@
 #include "utils/timestamp.h"
 
 extern PGDLLIMPORT int logical_decoding_work_mem;
+extern PGDLLIMPORT bool force_stream_mode;
 
 /* an individual tuple, stored in one chunk of memory */
 typedef struct ReorderBufferTupleBuf
@@ -308,6 +309,7 @@ typedef struct ReorderBufferTXN
 	{
 		TimestampTz commit_time;
 		TimestampTz prepare_time;
+		TimestampTz abort_time;
 	}			xact_time;
 
 	/*
@@ -670,7 +672,8 @@ extern void ReorderBufferAssignChild(ReorderBuffer *rb, TransactionId xid,
 extern void ReorderBufferCommitChild(ReorderBuffer *rb, TransactionId xid,
 									 TransactionId subxid, XLogRecPtr commit_lsn,
 									 XLogRecPtr end_lsn);
-extern void ReorderBufferAbort(ReorderBuffer *rb, TransactionId xid, XLogRecPtr lsn);
+extern void ReorderBufferAbort(ReorderBuffer *rb, TransactionId xid, XLogRecPtr lsn,
+							   TimestampTz abort_time);
 extern void ReorderBufferAbortOld(ReorderBuffer *rb, TransactionId oldestRunningXid);
 extern void ReorderBufferForget(ReorderBuffer *rb, TransactionId xid, XLogRecPtr lsn);
 extern void ReorderBufferInvalidate(ReorderBuffer *rb, TransactionId xid, XLogRecPtr lsn);

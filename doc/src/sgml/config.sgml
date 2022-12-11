@@ -4934,7 +4934,8 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
       <listitem>
        <para>
         Specifies maximum number of logical replication workers. This includes
-        both apply workers and table synchronization workers.
+        leader apply workers, parallel apply workers, and table synchronization
+        workers.
        </para>
        <para>
         Logical replication workers are taken from the pool defined by
@@ -4964,6 +4965,31 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
        </para>
        <para>
         The synchronization workers are taken from the pool defined by
+        <varname>max_logical_replication_workers</varname>.
+       </para>
+       <para>
+        The default value is 2. This parameter can only be set in the
+        <filename>postgresql.conf</filename> file or on the server command
+        line.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-max-parallel-apply-workers-per-subscription" xreflabel="max_parallel_apply_workers_per_subscription">
+      <term><varname>max_parallel_apply_workers_per_subscription</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>max_parallel_apply_workers_per_subscription</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Maximum number of parallel apply workers per subscription. This
+        parameter controls the amount of parallelism for streaming of
+        in-progress transactions with subscription parameter
+        <literal>streaming = parallel</literal>.
+       </para>
+       <para>
+        The parallel apply workers are taken from the pool defined by
         <varname>max_logical_replication_workers</varname>.
        </para>
        <para>
@@ -11536,6 +11562,54 @@ LOG:  CleanUpLock: deleting: lock(0xb7acd844) id(24688,24696,0,0,0,1)
         This parameter can only be set in
         the <filename>postgresql.conf</filename> file or on the server
         command line.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-force-stream-mode" xreflabel="force_stream_mode">
+      <term><varname>force_stream_mode</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>force_stream_mode</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies wheather to force sending the changes to output plugin
+        immediately in streaming mode. If set to <literal>off</literal> (the
+        default), send until <varname>logical_decoding_work_mem</varname> is
+        exceeded.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-stream-serialize-threshold" xreflabel="stream_serialize_threshold">
+      <term><varname>stream_serialize_threshold</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>stream_serialize_threshold</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Forces the leader apply worker to serialize messages to files after
+        sending specified amount of streaming chunks to the parallel apply
+        worker. Setting this to zero serialize all messages. A value of
+        <literal>-1</literal> (the default) disables this feature. This is
+        intended to test serialization to files with
+        <literal>streaming = parallel</literal>.
+       </para>
+
+       <para>
+        When logical replication subscription <literal>streaming</literal>
+        parameter is set to <literal>parallel</literal>, the leader apply worker
+        sends messages to parallel workers with a timeout. By default, the
+        leader apply worker will serialize the remaining messages to files if
+        the timeout is exceeded. If this option is set to any value other than
+        <literal>-1</literal>, serialize to files even without timeout.
+       </para>
+
+       <para>
+        This parameter can only be set in the <filename>postgresql.conf</filename>
+        file or on the server command line.
        </para>
       </listitem>
      </varlistentry>

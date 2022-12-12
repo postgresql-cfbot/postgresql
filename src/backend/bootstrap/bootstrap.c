@@ -221,7 +221,7 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 	argv++;
 	argc--;
 
-	while ((flag = getopt(argc, argv, "B:c:d:D:Fkr:X:-:")) != -1)
+	while ((flag = getopt(argc, argv, "B:c:d:D:Fkm:o:r:X:x:-:")) != -1)
 	{
 		switch (flag)
 		{
@@ -250,6 +250,42 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 			case 'k':
 				bootstrap_data_checksum_version = PG_DATA_CHECKSUM_VERSION;
 				break;
+			case 'm':
+				{
+					unsigned long	value;
+					char		   *endptr;
+
+					errno = 0;
+					value = strtoul(optarg, &endptr, 0);
+					start_mxid = value;
+
+					if (endptr == optarg || *endptr != '\0' || errno != 0 ||
+						value != start_mxid) /* overflow */
+					{
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("invalid initial database cluster multixact id")));
+					}
+				}
+				break;
+			case 'o':
+				{
+					unsigned long	value;
+					char		   *endptr;
+
+					errno = 0;
+					value = strtoul(optarg, &endptr, 0);
+					start_mxoff = value;
+
+					if (endptr == optarg || *endptr != '\0' || errno != 0 ||
+						value != start_mxoff) /* overflow */
+					{
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("invalid initial database cluster multixact offset")));
+					}
+				}
+				break;
 			case 'r':
 				strlcpy(OutputFileName, optarg, MAXPGPATH);
 				break;
@@ -263,6 +299,24 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 								 errmsg("-X requires a power of two value between 1 MB and 1 GB")));
 					SetConfigOption("wal_segment_size", optarg, PGC_INTERNAL,
 									PGC_S_DYNAMIC_DEFAULT);
+				}
+				break;
+			case 'x':
+				{
+					unsigned long	value;
+					char		   *endptr;
+
+					errno = 0;
+					value = strtoul(optarg, &endptr, 0);
+					start_xid = value;
+
+					if (endptr == optarg || *endptr != '\0' || errno != 0 ||
+						value != start_xid) /* overflow */
+					{
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("invalid initial database cluster xid value")));
+					}
 				}
 				break;
 			case 'c':

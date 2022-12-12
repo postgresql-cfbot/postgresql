@@ -3718,7 +3718,7 @@ process_postgres_switches(int argc, char *argv[], GucContext ctx,
 	 * postmaster/postmaster.c (the option sets should not conflict) and with
 	 * the common help() function in main/main.c.
 	 */
-	while ((flag = getopt(argc, argv, "B:bc:C:D:d:EeFf:h:ijk:lN:nOPp:r:S:sTt:v:W:-:")) != -1)
+	while ((flag = getopt(argc, argv, "B:bc:C:D:d:EeFf:h:ijk:lm:N:nOo:Pp:r:S:sTt:v:W:x:-:")) != -1)
 	{
 		switch (flag)
 		{
@@ -3784,6 +3784,25 @@ process_postgres_switches(int argc, char *argv[], GucContext ctx,
 				SetConfigOption("ssl", "true", ctx, gucsource);
 				break;
 
+			case 'm':
+				{
+					unsigned long	value;
+					char		   *endptr;
+
+					errno = 0;
+					value = strtoul(optarg, &endptr, 0);
+					start_mxid = value;
+
+					if (endptr == optarg || *endptr != '\0' || errno != 0 ||
+						value != start_mxid) /* overflow */
+					{
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("invalid initial database cluster multixact id")));
+					}
+				}
+				break;
+
 			case 'N':
 				SetConfigOption("max_connections", optarg, ctx, gucsource);
 				break;
@@ -3794,6 +3813,25 @@ process_postgres_switches(int argc, char *argv[], GucContext ctx,
 
 			case 'O':
 				SetConfigOption("allow_system_table_mods", "true", ctx, gucsource);
+				break;
+
+			case 'o':
+				{
+					unsigned long	value;
+					char		   *endptr;
+
+					errno = 0;
+					value = strtoul(optarg, &endptr, 0);
+					start_mxoff = value;
+
+					if (endptr == optarg || *endptr != '\0' || errno != 0 ||
+						value != start_mxoff) /* overflow */
+					{
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("invalid initial database cluster multixact offset")));
+					}
+				}
 				break;
 
 			case 'P':
@@ -3848,6 +3886,25 @@ process_postgres_switches(int argc, char *argv[], GucContext ctx,
 
 			case 'W':
 				SetConfigOption("post_auth_delay", optarg, ctx, gucsource);
+				break;
+
+			case 'x':
+				{
+					unsigned long	value;
+					char		   *endptr;
+
+					errno = 0;
+					value = strtoul(optarg, &endptr, 0);
+					start_xid = value;
+
+					if (endptr == optarg || *endptr != '\0' || errno != 0 ||
+						value != start_xid) /* overflow */
+					{
+						ereport(ERROR,
+								(errcode(ERRCODE_SYNTAX_ERROR),
+								 errmsg("invalid initial database cluster xid")));
+					}
+				}
 				break;
 
 			case 'c':

@@ -78,7 +78,6 @@
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 
-
 /* Ideally this would be in a .h file, but it hardly seems worth the trouble */
 extern const char *select_default_timezone(const char *share_path);
 
@@ -152,6 +151,9 @@ static bool data_checksums = false;
 static char *xlog_dir = NULL;
 static char *str_wal_segment_size_mb = NULL;
 static int	wal_segment_size_mb;
+static TransactionId start_xid = 0;
+static MultiXactId start_mxid = 0;
+static MultiXactOffset start_mxoff = 0;
 
 
 /* internal vars */
@@ -1302,6 +1304,11 @@ bootstrap_template1(void)
 	bki_lines = replace_token(bki_lines, "POSTGRES",
 							  escape_quotes_bki(username));
 
+	/* relfrozenxid must not be less than FirstNormalTransactionId */
+	sprintf(buf, "%u", Max(start_xid, 3));
+	bki_lines = replace_token(bki_lines, "RECENTXMIN",
+							  buf);
+
 	bki_lines = replace_token(bki_lines, "ENCODING",
 							  encodingid_to_string(encodingid));
 
@@ -1321,10 +1328,13 @@ bootstrap_template1(void)
 	unsetenv("PGCLIENTENCODING");
 
 	snprintf(cmd, sizeof(cmd),
-			 "\"%s\" --boot -X %d %s %s %s %s",
+			 "\"%s\" --boot -X %d %s %s %u %s %u %s %u %s %s %s",
 			 backend_exec,
 			 wal_segment_size_mb * (1024 * 1024),
 			 data_checksums ? "-k" : "",
+			 "-m", start_mxid,
+			 "-o", start_mxoff,
+			 "-x", start_xid,
 			 boot_options, extra_options,
 			 debug ? "-d 5" : "");
 
@@ -2127,11 +2137,16 @@ usage(const char *progname)
 	printf(_("  -d, --debug               generate lots of debugging output\n"));
 	printf(_("      --discard-caches      set debug_discard_caches=1\n"));
 	printf(_("  -L DIRECTORY              where to find the input files\n"));
+	printf(_("  -m, --multixact-id=START_MXID\n"
+			 "                            set initial database cluster multixact id\n"));
 	printf(_("  -n, --no-clean            do not clean up after errors\n"));
 	printf(_("  -N, --no-sync             do not wait for changes to be written safely to disk\n"));
 	printf(_("      --no-instructions     do not print instructions for next steps\n"));
+	printf(_("  -o, --multixact-offset=START_MXOFF\n"
+			 "                            set initial database cluster multixact offset\n"));
 	printf(_("  -s, --show                show internal settings\n"));
 	printf(_("  -S, --sync-only           only sync database files to disk, then exit\n"));
+	printf(_("  -x, --xid=START_XID       set initial database cluster xid\n"));
 	printf(_("\nOther options:\n"));
 	printf(_("  -V, --version             output version information, then exit\n"));
 	printf(_("  -?, --help                show this help, then exit\n"));
@@ -2668,6 +2683,15 @@ initialize_data_directory(void)
 	/* Now create all the text config files */
 	setup_config();
 
+	if (start_mxid != 0)
+		printf(_("selecting initial multixact id ... %u\n"), start_mxid);
+
+	if (start_mxoff != 0)
+		printf(_("selecting initial multixact offset ... %u\n"), start_mxoff);
+
+	if (start_xid != 0)
+		printf(_("selecting initial xid ... %u\n"), start_xid);
+
 	/* Bootstrap template1 */
 	bootstrap_template1();
 
@@ -2684,8 +2708,11 @@ initialize_data_directory(void)
 	fflush(stdout);
 
 	snprintf(cmd, sizeof(cmd),
-			 "\"%s\" %s %s template1 >%s",
+			 "\"%s\" %s %s %s %u %s %u %s %u template1 >%s",
 			 backend_exec, backend_options, extra_options,
+			 "-m", start_mxid,
+			 "-o", start_mxoff,
+			 "-x", start_xid,
 			 DEVNULL);
 
 	PG_CMD_OPEN;
@@ -2767,6 +2794,9 @@ main(int argc, char *argv[])
 		{"discard-caches", no_argument, NULL, 14},
 		{"locale-provider", required_argument, NULL, 15},
 		{"icu-locale", required_argument, NULL, 16},
+		{"xid", required_argument, NULL, 'x'},
+		{"multixact-id", required_argument, NULL, 'm'},
+		{"multixact-offset", required_argument, NULL, 'o'},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -2808,7 +2838,7 @@ main(int argc, char *argv[])
 
 	/* process command-line options */
 
-	while ((c = getopt_long(argc, argv, "A:dD:E:gkL:nNsST:U:WX:", long_options, &option_index)) != -1)
+	while ((c = getopt_long(argc, argv, "A:dD:E:gkL:m:nNo:sST:U:Wx:X:", long_options, &option_index)) != -1)
 	{
 		switch (c)
 		{
@@ -2847,12 +2877,55 @@ main(int argc, char *argv[])
 				debug = true;
 				printf(_("Running in debug mode.\n"));
 				break;
+			case 'm':
+				{
+					unsigned long	value;
+					char		   *endptr;
+
+					errno = 0;
+					value = strtoul(optarg, &endptr, 0);
+					start_mxid = value;
+
+					if (endptr == optarg || *endptr != '\0' || errno != 0 ||
+						value != start_mxid) /* overflow */
+					{
+						pg_log_error("invalid initial database cluster multixact id");
+						exit(1);
+					}
+					else if (start_mxid < 1) /* FirstMultiXactId */
+					{
+						/*
+						 * We avoid mxid to be silently set to
+						 * FirstMultiXactId, though it does not harm.
+						 */
+						pg_log_error("multixact id should be greater than 0");
+						exit(1);
+					}
+				}
+				break;
 			case 'n':
 				noclean = true;
 				printf(_("Running in no-clean mode.  Mistakes will not be cleaned up.\n"));
 				break;
 			case 'N':
 				do_sync = false;
+				break;
+			case 'o':
+				{
+					unsigned long	value;
+					char		   *endptr;
+
+					errno = 0;
+					value = strtoul(optarg, &endptr, 0);
+					start_mxoff = value;
+
+					if (endptr == optarg || *endptr != '\0' || errno != 0 ||
+						value != start_mxoff) /* overflow */
+					{
+						pg_log_error("invalid initial database cluster multixact offset");
+						exit(1);
+					}
+				}
 				break;
 			case 'S':
 				sync_only = true;
@@ -2923,6 +2996,32 @@ main(int argc, char *argv[])
 				break;
 			case 16:
 				icu_locale = pg_strdup(optarg);
+				break;
+			case 'x':
+				{
+					unsigned long	value;
+					char		   *endptr;
+
+					errno = 0;
+					value = strtoul(optarg, &endptr, 0);
+					start_xid = value;
+
+					if (endptr == optarg || *endptr != '\0' || errno != 0 ||
+						value != start_xid) /* overflow */
+					{
+						pg_log_error("invalid value for initial database cluster xid");
+						exit(1);
+					}
+					else if (start_xid < 3) /* FirstNormalTransactionId */
+					{
+						/*
+						 * We avoid xid to be silently set to
+						 * FirstNormalTransactionId, though it does not harm.
+						 */
+						pg_log_error("xid should be greater than 2");
+						exit(1);
+					}
+				}
 				break;
 			default:
 				/* getopt_long already emitted a complaint */

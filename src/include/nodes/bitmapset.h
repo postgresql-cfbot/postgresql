@@ -38,13 +38,11 @@ struct List;
 
 #define BITS_PER_BITMAPWORD 64
 typedef uint64 bitmapword;		/* must be an unsigned type */
-typedef int64 signedbitmapword; /* must be the matching signed type */
 
 #else
 
 #define BITS_PER_BITMAPWORD 32
 typedef uint32 bitmapword;		/* must be an unsigned type */
-typedef int32 signedbitmapword; /* must be the matching signed type */
 
 #endif
 
@@ -75,6 +73,20 @@ typedef enum
 	BMS_MULTIPLE				/* >1 member */
 } BMS_Membership;
 
+/* Select appropriate bit-twiddling functions for bitmap word size */
+#if BITS_PER_BITMAPWORD == 32
+#define bmw_rightmost_one(w)		pg_rightmost_one32(w)
+#define bmw_leftmost_one_pos(w)		pg_leftmost_one_pos32(w)
+#define bmw_rightmost_one_pos(w)	pg_rightmost_one_pos32(w)
+#define bmw_popcount(w)				pg_popcount32(w)
+#elif BITS_PER_BITMAPWORD == 64
+#define bmw_rightmost_one(w)		pg_rightmost_one64(w)
+#define bmw_leftmost_one_pos(w)		pg_leftmost_one_pos64(w)
+#define bmw_rightmost_one_pos(w)	pg_rightmost_one_pos64(w)
+#define bmw_popcount(w)				pg_popcount64(w)
+#else
+#error "invalid BITS_PER_BITMAPWORD"
+#endif
 
 /*
  * function prototypes in nodes/bitmapset.c

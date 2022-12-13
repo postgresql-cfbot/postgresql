@@ -17,6 +17,37 @@ extern PGDLLIMPORT const uint8 pg_leftmost_one_pos[256];
 extern PGDLLIMPORT const uint8 pg_rightmost_one_pos[256];
 extern PGDLLIMPORT const uint8 pg_number_of_ones[256];
 
+/*----------
+ * This is a well-known cute trick for isolating the rightmost one-bit
+ * in a word.  It assumes two's complement arithmetic.  Consider any
+ * nonzero value, and focus attention on the rightmost one.  The value is
+ * then something like
+ *				xxxxxx10000
+ * where x's are unspecified bits.  The two's complement negative is formed
+ * by inverting all the bits and adding one.  Inversion gives
+ *				yyyyyy01111
+ * where each y is the inverse of the corresponding x.  Incrementing gives
+ *				yyyyyy10000
+ * and then ANDing with the original value gives
+ *				00000010000
+ * This works for all cases except original value = zero, where of course
+ * we get zero.
+ *----------
+ */
+static inline uint32
+pg_rightmost_one32(uint32 word)
+{
+	int32 result = (int32) word & -((int32) word);
+	return (uint32) result;
+}
+
+static inline uint64
+pg_rightmost_one64(uint64 word)
+{
+	int64 result = (int64) word & -((int64) word);
+	return (uint64) result;
+}
+
 /*
  * pg_leftmost_one_pos32
  *		Returns the position of the most significant set bit in "word",

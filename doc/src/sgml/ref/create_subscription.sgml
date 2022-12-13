@@ -333,7 +333,47 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
          </para>
         </listitem>
        </varlistentry>
-      </variablelist></para>
+
+       <varlistentry>
+        <term><literal>min_apply_delay</literal> (<type>integer</type>)</term>
+        <listitem>
+         <para>
+          By default, the subscriber applies changes as soon as possible. As
+          with the physical replication feature
+          (<xref linkend="guc-recovery-min-apply-delay"/>), it can be useful to
+          have a time-delayed logical replica. This parameter lets the user to
+          delay the application of changes by a specified amount of time. If this
+          value is specified without units, it is taken as milliseconds. The
+          default is zero(no delay).
+         </para>
+         <para>
+          The delay occurs only on WAL records for transaction begins and after
+          the initial table synchronization. It is possible that the
+          replication delay between publisher and subscriber exceeds the value
+          of this parameter, in which case no delay is added. Note that the
+          delay is calculated between the WAL time stamp as written on
+          publisher and the current time on the subscriber. Time spent in logical
+          decoding and in transfering the transaction may reduce the actual wait
+          time. If the system clocks on publisher and subscriber are not
+          synchronized, this may lead to apply changes earlier than expected,
+          but this is not a major issue because this parameter is typically much
+          larger than the time deviations between servers. Note that if this
+          parameter is set to a long delay, the replication will stop if the
+          replication slot falls behind the current LSN by more than
+          <link linkend="guc-max-slot-wal-keep-size"><literal>max_slot_wal_keep_size</literal></link>.
+         </para>
+         <warning>
+           <para>
+            Delaying the replication can mean there is a much longer time between making
+            a change on the publisher, and that change being committed on the subscriber.
+            This can have a big impact on synchronous replication.
+            See <xref linkend="guc-synchronous-commit"/>.
+           </para>
+         </warning>
+        </listitem>
+       </varlistentry>
+      </variablelist>
+     </para>
 
     </listitem>
    </varlistentry>
@@ -455,6 +495,18 @@ CREATE SUBSCRIPTION mysub
          CONNECTION 'host=192.168.1.50 port=5432 user=foo dbname=foodb'
         PUBLICATION insert_only
                WITH (enabled = false);
+</programlisting></para>
+
+  <para>
+   Create a subscription to a remote server that replicates tables in
+   the <literal>mypub</literal> publication and starts replicating immediately
+   on commit. Pre-existing data is not copied. The application of changes is
+   delayed by 4 hours.
+<programlisting>
+CREATE SUBSCRIPTION mysub
+         CONNECTION 'host=192.168.1.50 port=5432 user=foo dbname=foodb'
+        PUBLICATION mypub
+               WITH (copy_data = false, min_apply_delay = '4h');
 </programlisting></para>
  </refsect1>
 

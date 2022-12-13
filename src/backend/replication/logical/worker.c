@@ -254,6 +254,8 @@ WalReceiverConn *LogRepWorkerWalRcvConn = NULL;
 Subscription *MySubscription = NULL;
 static bool MySubscriptionValid = false;
 
+static List *on_commit_wakeup_workers_subids = NIL;
+
 bool		in_remote_transaction = false;
 static XLogRecPtr remote_final_lsn = InvalidXLogRecPtr;
 
@@ -325,6 +327,8 @@ static void store_flush_position(XLogRecPtr remote_lsn);
 static void maybe_reread_subscription(void);
 
 static void DisableSubscriptionAndExit(void);
+
+static void maybe_delay_apply(TimestampTz ts);
 
 /* prototype needed because of stream_commit */
 static void apply_dispatch(StringInfo s);
@@ -832,6 +836,72 @@ slot_modify_data(TupleTableSlot *slot, TupleTableSlot *srcslot,
 }
 
 /*
+ * When min_apply_delay parameter is set on the subscriber, we wait long enough
+ * to make sure a transaction is applied at least that interval behind the
+ * publisher.
+ *
+ * While the physical replication applies the delay at commit time, this
+ * feature applies the delay for the next transaction but before starting the
+ * transaction. This is mainly because keeping a transaction that conducted
+ * write operations open for a long time results in some issues such as bloat
+ * and locks.
+ *
+ * The min_apply_delay parameter will take effect only after all tables are in
+ * READY state.
+ */
+static void
+maybe_delay_apply(TimestampTz ts)
+{
+	/* Nothing to do if no delay set */
+	if (MySubscription->minapplydelay <= 0)
+		return;
+
+	/*
+	 * The min_apply_delay parameter is ignored until all tablesync workers
+	 * have reached READY state. If we allow the delay during the catchup
+	 * phase, once we reach the limit of tablesync workers, it will impose a
+	 * delay for each subsequent worker. It means it will take a long time to
+	 * finish the initial table synchronization.
+	 */
+	if (!AllTablesyncsReady())
+		return;
+
+	while (true)
+	{
+		long		diffms;
+
+		CHECK_FOR_INTERRUPTS();
+
+		/*
+		 * Before calculating the time duration, reload the catalog if needed.
+		 */
+		if (!in_remote_transaction && !in_streamed_transaction)
+		{
+			AcceptInvalidationMessages();
+			maybe_reread_subscription();
+		}
+
+		diffms = TimestampDifferenceMilliseconds(GetCurrentTimestamp(),
+												 TimestampTzPlusMilliseconds(ts, MySubscription->minapplydelay));
+
+		/*
+		 * Exit without arming the latch if it's already past time to apply
+		 * this transaction.
+		 */
+		if (diffms <= 0)
+			break;
+
+		elog(DEBUG2, "logical replication apply delay: %ld ms", diffms);
+
+		WaitLatch(MyLatch,
+				  WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+				  diffms,
+				  WAIT_EVENT_RECOVERY_APPLY_DELAY);
+		ResetLatch(MyLatch);
+	}
+}
+
+/*
  * Handle BEGIN message.
  */
 static void
@@ -841,6 +911,9 @@ apply_handle_begin(StringInfo s)
 
 	logicalrep_read_begin(s, &begin_data);
 	set_apply_error_context_xact(begin_data.xid, begin_data.final_lsn);
+
+	/* Should we delay the current transaction? */
+	maybe_delay_apply(begin_data.committime);
 
 	remote_final_lsn = begin_data.final_lsn;
 
@@ -895,6 +968,9 @@ apply_handle_begin_prepare(StringInfo s)
 
 	logicalrep_read_begin_prepare(s, &begin_data);
 	set_apply_error_context_xact(begin_data.xid, begin_data.prepare_lsn);
+
+	/* Should we delay the current prepared transaction? */
+	maybe_delay_apply(begin_data.prepare_time);
 
 	remote_final_lsn = begin_data.prepare_lsn;
 
@@ -1117,6 +1193,19 @@ apply_handle_stream_prepare(StringInfo s)
 	set_apply_error_context_xact(prepare_data.xid, prepare_data.prepare_lsn);
 
 	elog(DEBUG1, "received prepare for streamed transaction %u", prepare_data.xid);
+
+	/*
+	 * Should we delay the current prepared transaction?
+	 *
+	 * Although the delay is applied in BEGIN PREPARE messages, streamed
+	 * prepared transactions apply the delay in a STREAM PREPARE message.
+	 * That's ok because no changes have been applied yet
+	 * (apply_spooled_messages() will do it). The STREAM START message does
+	 * not contain a prepare time (it will be available when the in-progress
+	 * prepared transaction finishes), hence, it was not possible to apply a
+	 * delay at that time.
+	 */
+	maybe_delay_apply(prepare_data.prepare_time);
 
 	/* Replay all the spooled operations. */
 	apply_spooled_messages(prepare_data.xid, prepare_data.prepare_lsn);
@@ -1508,6 +1597,19 @@ apply_handle_stream_commit(StringInfo s)
 	set_apply_error_context_xact(xid, commit_data.commit_lsn);
 
 	elog(DEBUG1, "received commit for streamed transaction %u", xid);
+
+	/*
+	 * Should we delay the current transaction?
+	 *
+	 * Although the delay is applied in BEGIN messages, streamed transactions
+	 * apply the delay in a STREAM COMMIT message. That's ok because no
+	 * changes have been applied yet (apply_spooled_messages() will do it).
+	 * The STREAM START message would be a natural choice for this delay but
+	 * there is no commit time yet (it will be available when the in-progress
+	 * transaction finishes), hence, it was not possible to apply a delay at
+	 * that time.
+	 */
+	maybe_delay_apply(commit_data.committime);
 
 	apply_spooled_messages(xid, commit_data.commit_lsn);
 
@@ -4096,4 +4198,48 @@ reset_apply_error_context_info(void)
 	apply_error_callback_arg.rel = NULL;
 	apply_error_callback_arg.remote_attnum = -1;
 	set_apply_error_context_xact(InvalidTransactionId, InvalidXLogRecPtr);
+}
+
+/*
+ * Wakeup the stored subscriptions' workers on commit if requested.
+ */
+void
+AtEOXact_LogicalRepWorkers(bool isCommit)
+{
+	if (isCommit && on_commit_wakeup_workers_subids != NIL)
+	{
+		ListCell   *subid;
+
+		LWLockAcquire(LogicalRepWorkerLock, LW_SHARED);
+		foreach(subid, on_commit_wakeup_workers_subids)
+		{
+			List	   *workers;
+			ListCell   *worker;
+
+			workers = logicalrep_workers_find(lfirst_oid(subid), true);
+			foreach(worker, workers)
+				logicalrep_worker_wakeup_ptr((LogicalRepWorker *) lfirst(worker));
+		}
+		LWLockRelease(LogicalRepWorkerLock);
+	}
+
+	on_commit_wakeup_workers_subids = NIL;
+}
+
+/*
+ * Request wakeup of the workers for the given subscription ID on commit of the
+ * transaction.
+ *
+ * This is used to ensure that the workers process assorted changes as soon as
+ * possible.
+ */
+void
+LogicalRepWorkersWakeupAtCommit(Oid subid)
+{
+	MemoryContext oldcxt;
+
+	oldcxt = MemoryContextSwitchTo(TopTransactionContext);
+	on_commit_wakeup_workers_subids = list_append_unique_oid(on_commit_wakeup_workers_subids,
+															 subid);
+	MemoryContextSwitchTo(oldcxt);
 }

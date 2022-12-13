@@ -34,6 +34,7 @@
 #include "nodes/makefuncs.h"
 #include "pgstat.h"
 #include "replication/logicallauncher.h"
+#include "replication/logicalworker.h"
 #include "replication/origin.h"
 #include "replication/slot.h"
 #include "replication/walreceiver.h"
@@ -47,6 +48,7 @@
 #include "utils/memutils.h"
 #include "utils/pg_lsn.h"
 #include "utils/syscache.h"
+#include "utils/timestamp.h"
 
 /*
  * Options that can be specified by the user in CREATE/ALTER SUBSCRIPTION
@@ -65,6 +67,7 @@
 #define SUBOPT_DISABLE_ON_ERR		0x00000400
 #define SUBOPT_LSN					0x00000800
 #define SUBOPT_ORIGIN				0x00001000
+#define SUBOPT_MIN_APPLY_DELAY		0x00002000
 
 /* check if the 'val' has 'bits' set */
 #define IsSet(val, bits)  (((val) & (bits)) == (bits))
@@ -89,6 +92,7 @@ typedef struct SubOpts
 	bool		disableonerr;
 	char	   *origin;
 	XLogRecPtr	lsn;
+	int64		min_apply_delay;
 } SubOpts;
 
 static List *fetch_table_list(WalReceiverConn *wrconn, List *publications);
@@ -145,6 +149,8 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 		opts->disableonerr = false;
 	if (IsSet(supported_opts, SUBOPT_ORIGIN))
 		opts->origin = pstrdup(LOGICALREP_ORIGIN_ANY);
+	if (IsSet(supported_opts, SUBOPT_MIN_APPLY_DELAY))
+		opts->min_apply_delay = 0;
 
 	/* Parse options */
 	foreach(lc, stmt_options)
@@ -322,6 +328,43 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 
 			opts->specified_opts |= SUBOPT_LSN;
 			opts->lsn = lsn;
+		}
+		else if (IsSet(supported_opts, SUBOPT_MIN_APPLY_DELAY) &&
+				 strcmp(defel->defname, "min_apply_delay") == 0)
+		{
+			char	   *val,
+					   *tmp;
+			Interval   *interval;
+			int64		ms;
+
+			if (IsSet(opts->specified_opts, SUBOPT_MIN_APPLY_DELAY))
+				errorConflictingDefElem(defel, pstate);
+
+			opts->specified_opts |= SUBOPT_MIN_APPLY_DELAY;
+			tmp = defGetString(defel);
+
+			/*
+			 * If no unit was specified, then explicitly add 'ms' otherwise
+			 * the interval_in function would assume 'seconds'.
+			 */
+			if (strspn(tmp, "0123456789") == strlen(tmp))
+				val = psprintf("%sms", tmp);
+			else
+				val = tmp;
+
+			interval = DatumGetIntervalP(DirectFunctionCall3(interval_in,
+															 CStringGetDatum(val),
+															 ObjectIdGetDatum(InvalidOid),
+															 Int32GetDatum(-1)));
+
+			ms = interval2ms(interval);
+			if (ms < 0 || ms > INT_MAX)
+				ereport(ERROR,
+						errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+						errmsg("%lld ms is outside the valid range for parameter \"%s\"",
+							   (long long) ms, "min_apply_delay"));
+
+			opts->min_apply_delay = ms;
 		}
 		else
 			ereport(ERROR,
@@ -559,7 +602,8 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 					  SUBOPT_SLOT_NAME | SUBOPT_COPY_DATA |
 					  SUBOPT_SYNCHRONOUS_COMMIT | SUBOPT_BINARY |
 					  SUBOPT_STREAMING | SUBOPT_TWOPHASE_COMMIT |
-					  SUBOPT_DISABLE_ON_ERR | SUBOPT_ORIGIN);
+					  SUBOPT_DISABLE_ON_ERR | SUBOPT_ORIGIN |
+					  SUBOPT_MIN_APPLY_DELAY);
 	parse_subscription_options(pstate, stmt->options, supported_opts, &opts);
 
 	/*
@@ -624,6 +668,7 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	values[Anum_pg_subscription_oid - 1] = ObjectIdGetDatum(subid);
 	values[Anum_pg_subscription_subdbid - 1] = ObjectIdGetDatum(MyDatabaseId);
 	values[Anum_pg_subscription_subskiplsn - 1] = LSNGetDatum(InvalidXLogRecPtr);
+	values[Anum_pg_subscription_subminapplydelay - 1] = Int64GetDatum(opts.min_apply_delay);
 	values[Anum_pg_subscription_subname - 1] =
 		DirectFunctionCall1(namein, CStringGetDatum(stmt->subname));
 	values[Anum_pg_subscription_subowner - 1] = ObjectIdGetDatum(owner);
@@ -1053,7 +1098,7 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 				supported_opts = (SUBOPT_SLOT_NAME |
 								  SUBOPT_SYNCHRONOUS_COMMIT | SUBOPT_BINARY |
 								  SUBOPT_STREAMING | SUBOPT_DISABLE_ON_ERR |
-								  SUBOPT_ORIGIN);
+								  SUBOPT_ORIGIN | SUBOPT_MIN_APPLY_DELAY);
 
 				parse_subscription_options(pstate, stmt->options,
 										   supported_opts, &opts);
@@ -1108,6 +1153,13 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 						= BoolGetDatum(opts.disableonerr);
 					replaces[Anum_pg_subscription_subdisableonerr - 1]
 						= true;
+				}
+
+				if (IsSet(opts.specified_opts, SUBOPT_MIN_APPLY_DELAY))
+				{
+					values[Anum_pg_subscription_subminapplydelay - 1] =
+						Int64GetDatum(opts.min_apply_delay);
+					replaces[Anum_pg_subscription_subminapplydelay - 1] = true;
 				}
 
 				if (IsSet(opts.specified_opts, SUBOPT_ORIGIN))
@@ -1361,6 +1413,9 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 	ObjectAddressSet(myself, SubscriptionRelationId, subid);
 
 	InvokeObjectPostAlterHook(SubscriptionRelationId, subid, 0);
+
+	/* Wake up the logical replication workers to handle this change quickly. */
+	LogicalRepWorkersWakeupAtCommit(subid);
 
 	return myself;
 }

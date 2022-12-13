@@ -105,6 +105,7 @@
 #include "pgstat.h"
 #include "replication/logicallauncher.h"
 #include "replication/logicalrelation.h"
+#include "replication/logicalworker.h"
 #include "replication/walreceiver.h"
 #include "replication/worker_internal.h"
 #include "replication/slot.h"
@@ -619,6 +620,15 @@ process_syncing_tables_for_apply(XLogRecPtr current_lsn)
 
 	if (started_tx)
 	{
+		/*
+		 * If we are ready to enable two_phase mode, wake up the logical
+		 * replication workers to handle this change quickly.
+		 */
+		CommandCounterIncrement();
+		if (MySubscription->twophasestate == LOGICALREP_TWOPHASE_STATE_PENDING &&
+			AllTablesyncsReady())
+			LogicalRepWorkersWakeupAtCommit(MyLogicalRepWorker->subid);
+
 		CommitTransactionCommand();
 		pgstat_report_stat(true);
 	}

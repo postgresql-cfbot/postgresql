@@ -247,6 +247,13 @@
    target table.
   </para>
 
+  <para>
+   The subscriber replication can be instructed to lag behind the publisher
+   side changes by specifying the <literal>min_apply_delay</literal>
+   subscription parameter. See <xref linkend="sql-createsubscription"/> for
+   details.
+  </para>
+
   <sect2 id="logical-replication-subscription-slot">
    <title>Replication Slot Management</title>
 

@@ -52,7 +52,8 @@ typedef struct
  * CREATE COLLATION
  */
 ObjectAddress
-DefineCollation(ParseState *pstate, List *names, List *parameters, bool if_not_exists)
+DefineCollation(ParseState *pstate, List *names, List *parameters,
+				 bool if_not_exists, ObjectAddress *from_existing_collid)
 {
 	char	   *collName;
 	Oid			collNamespace;
@@ -138,6 +139,13 @@ DefineCollation(ParseState *pstate, List *names, List *parameters, bool if_not_e
 		tp = SearchSysCache1(COLLOID, ObjectIdGetDatum(collid));
 		if (!HeapTupleIsValid(tp))
 			elog(ERROR, "cache lookup failed for collation %u", collid);
+
+		/*
+		 * Make from existing collationid available to callers for statement such as
+		 * CREATE COLLATION any_name FROM any_name
+		 */
+		if (from_existing_collid && OidIsValid(collid))
+			ObjectAddressSet(*from_existing_collid, CollationRelationId, collid);
 
 		collprovider = ((Form_pg_collation) GETSTRUCT(tp))->collprovider;
 		collisdeterministic = ((Form_pg_collation) GETSTRUCT(tp))->collisdeterministic;

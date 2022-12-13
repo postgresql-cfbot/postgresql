@@ -99,6 +99,8 @@ extern Query *UtilityContainsQuery(Node *parsetree);
 
 extern CommandTag CreateCommandTag(Node *parsetree);
 
+extern const char *stringify_objtype(ObjectType objtype, bool isgrant);
+
 static inline const char *
 CreateCommandName(Node *parsetree)
 {

@@ -1397,6 +1397,7 @@ expandTableLikeClause(RangeVar *heapRel, TableLikeClause *table_like_clause)
 		atcmd->cmds = atsubcmds;
 		atcmd->objtype = OBJECT_TABLE;
 		atcmd->missing_ok = false;
+		atcmd->table_like = true;
 		result = lcons(atcmd, result);
 	}
 

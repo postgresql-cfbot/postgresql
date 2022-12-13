@@ -1,0 +1,6 @@
+---
+--- CREATE_EXTENSION
+---
+CREATE EXTENSION pg_stat_statements;
+NOTICE:  deparsed json: {"fmt": "CREATE EXTENSION %{if_not_exists}s %{name}I %{options: }s", "name": "pg_stat_statements", "options": [{"fmt": "SCHEMA %{schema}I", "type": "schema", "schema": "public"}], "if_not_exists": ""}
+NOTICE:  re-formed command: CREATE EXTENSION  pg_stat_statements SCHEMA public

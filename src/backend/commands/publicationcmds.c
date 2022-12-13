@@ -38,10 +38,12 @@
 #include "commands/publicationcmds.h"
 #include "funcapi.h"
 #include "miscadmin.h"
+#include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
 #include "parser/parse_clause.h"
 #include "parser/parse_collate.h"
 #include "parser/parse_relation.h"
+#include "parser/parser.h"
 #include "storage/lmgr.h"
 #include "utils/acl.h"
 #include "utils/array.h"
@@ -97,6 +99,7 @@ parse_publication_options(ParseState *pstate,
 	pubactions->pubupdate = true;
 	pubactions->pubdelete = true;
 	pubactions->pubtruncate = true;
+	pubactions->pubddl = false;
 	*publish_via_partition_root = false;
 
 	/* Parse options */
@@ -144,6 +147,8 @@ parse_publication_options(ParseState *pstate,
 					pubactions->pubdelete = true;
 				else if (strcmp(publish_opt, "truncate") == 0)
 					pubactions->pubtruncate = true;
+				else if (strcmp(publish_opt, "ddl") == 0)
+					pubactions->pubddl = true;
 				else
 					ereport(ERROR,
 							(errcode(ERRCODE_SYNTAX_ERROR),
@@ -729,6 +734,53 @@ CheckPubRelationColumnList(char *pubname, List *tables,
 }
 
 /*
+ * Create event trigger which is used for DDL replication.
+ */
+static void
+CreateDDLReplicaEventTrigger(char *eventname, CommandTag *commands,
+							 int ncommands, ObjectAddress pubaddress,
+							 Oid puboid)
+{
+	int			i;
+	List	   *tags = NIL;
+	Oid			trigger_id;
+	ObjectAddress referenced;
+	CreateEventTrigStmt *ddl_trigger;
+	char		trigger_name[NAMEDATALEN];
+	char		trigger_func_name[NAMEDATALEN];
+	static const char *trigger_name_prefix = "pg_deparse_trig_%s_%u";
+	static const char *trigger_func_prefix = "publication_deparse_%s";
+
+	ddl_trigger = makeNode(CreateEventTrigStmt);
+
+	snprintf(trigger_name, sizeof(trigger_name), trigger_name_prefix,
+			 eventname, puboid);
+	snprintf(trigger_func_name, sizeof(trigger_func_name), trigger_func_prefix,
+			 eventname);
+
+	ddl_trigger->trigname = pstrdup(trigger_name);
+	ddl_trigger->eventname = eventname;
+	ddl_trigger->funcname = SystemFuncName(trigger_func_name);
+
+	for (i = 0; i < ncommands; i++)
+	{
+		String	   *tag = makeString(pstrdup(GetCommandTagName(commands[i])));
+
+		tags = lappend(tags, tag);
+	}
+
+	ddl_trigger->whenclause = list_make1(makeDefElem("tag", (Node *) tags, -1));
+
+	trigger_id = CreateEventTrigger(ddl_trigger);
+
+	/*
+	 * Register the event triggers as internally dependent on the publication.
+	 */
+	ObjectAddressSet(referenced, EventTriggerRelationId, trigger_id);
+	recordDependencyOn(&referenced, &pubaddress, DEPENDENCY_INTERNAL);
+}
+
+/*
  * Create new publication.
  */
 ObjectAddress
@@ -798,6 +850,8 @@ CreatePublication(ParseState *pstate, CreatePublicationStmt *stmt)
 		BoolGetDatum(pubactions.pubdelete);
 	values[Anum_pg_publication_pubtruncate - 1] =
 		BoolGetDatum(pubactions.pubtruncate);
+	values[Anum_pg_publication_pubddl - 1] =
+		BoolGetDatum(pubactions.pubddl);
 	values[Anum_pg_publication_pubviaroot - 1] =
 		BoolGetDatum(publish_via_partition_root);
 
@@ -856,6 +910,135 @@ CreatePublication(ParseState *pstate, CreatePublicationStmt *stmt)
 			LockSchemaList(schemaidlist);
 			PublicationAddSchemas(puboid, schemaidlist, true, NULL);
 		}
+	}
+
+	/*
+	 * Create an event trigger to allow logging of DDL statements.
+	 *
+	 */
+	if (pubactions.pubddl)
+	{
+		CommandTag	start_commands[] = {CMDTAG_DROP_TABLE};
+		CommandTag	rewrite_commands[] = {CMDTAG_ALTER_TABLE};
+
+		static CommandTag	end_commands[] = {
+			CMDTAG_ALTER_CAST,
+			CMDTAG_ALTER_COLLATION,
+			CMDTAG_ALTER_CONVERSION,
+			CMDTAG_ALTER_DEFAULT_PRIVILEGES,
+			CMDTAG_ALTER_DOMAIN,
+			CMDTAG_ALTER_EXTENSION,
+			CMDTAG_ALTER_FOREIGN_DATA_WRAPPER,
+			CMDTAG_ALTER_FUNCTION,
+			CMDTAG_ALTER_INDEX,
+			CMDTAG_ALTER_INDEX,
+			CMDTAG_ALTER_LANGUAGE,
+			CMDTAG_ALTER_MATERIALIZED_VIEW,
+			CMDTAG_ALTER_OPERATOR,
+			CMDTAG_ALTER_OPERATOR_CLASS,
+			CMDTAG_ALTER_OPERATOR_FAMILY,
+			CMDTAG_ALTER_POLICY,
+			CMDTAG_ALTER_PROCEDURE,
+			CMDTAG_ALTER_ROUTINE,
+			CMDTAG_ALTER_RULE,
+			CMDTAG_ALTER_SCHEMA,
+			CMDTAG_ALTER_SEQUENCE,
+			CMDTAG_ALTER_SERVER,
+			CMDTAG_ALTER_STATISTICS,
+			CMDTAG_ALTER_TABLE,
+			CMDTAG_ALTER_TEXT_SEARCH_CONFIGURATION,
+			CMDTAG_ALTER_TEXT_SEARCH_DICTIONARY,
+			CMDTAG_ALTER_TRIGGER,
+			CMDTAG_ALTER_TYPE,
+			CMDTAG_ALTER_USER_MAPPING,
+			CMDTAG_ALTER_VIEW,
+			CMDTAG_COMMENT,
+			CMDTAG_CREATE_ACCESS_METHOD,
+			CMDTAG_CREATE_CAST,
+			CMDTAG_CREATE_COLLATION,
+			CMDTAG_CREATE_CONVERSION,
+			CMDTAG_CREATE_DOMAIN,
+			CMDTAG_CREATE_EXTENSION,
+			CMDTAG_CREATE_FOREIGN_DATA_WRAPPER,
+			CMDTAG_CREATE_FUNCTION,
+			CMDTAG_CREATE_INDEX,
+			CMDTAG_CREATE_LANGUAGE,
+			CMDTAG_CREATE_MATERIALIZED_VIEW,
+			CMDTAG_CREATE_OPERATOR,
+			CMDTAG_CREATE_OPERATOR_CLASS,
+			CMDTAG_CREATE_OPERATOR_FAMILY,
+			CMDTAG_CREATE_POLICY,
+			CMDTAG_CREATE_PROCEDURE,
+			CMDTAG_CREATE_RULE,
+			CMDTAG_CREATE_SCHEMA,
+			CMDTAG_CREATE_SEQUENCE,
+			CMDTAG_CREATE_SERVER,
+			CMDTAG_CREATE_STATISTICS,
+			CMDTAG_CREATE_TABLE,
+			CMDTAG_CREATE_TEXT_SEARCH_CONFIGURATION,
+			CMDTAG_CREATE_TEXT_SEARCH_DICTIONARY,
+			CMDTAG_CREATE_TEXT_SEARCH_PARSER,
+			CMDTAG_CREATE_TEXT_SEARCH_TEMPLATE,
+			CMDTAG_CREATE_TRANSFORM,
+			CMDTAG_CREATE_TRIGGER,
+			CMDTAG_CREATE_TYPE,
+			CMDTAG_CREATE_USER_MAPPING,
+			CMDTAG_CREATE_VIEW,
+			CMDTAG_DROP_ACCESS_METHOD,
+			CMDTAG_DROP_CAST,
+			CMDTAG_DROP_COLLATION,
+			CMDTAG_DROP_CONVERSION,
+			CMDTAG_DROP_DOMAIN,
+			CMDTAG_DROP_EXTENSION,
+			CMDTAG_DROP_FOREIGN_DATA_WRAPPER,
+			CMDTAG_DROP_FUNCTION,
+			CMDTAG_DROP_INDEX,
+			CMDTAG_DROP_LANGUAGE,
+			CMDTAG_DROP_MATERIALIZED_VIEW,
+			CMDTAG_DROP_OPERATOR,
+			CMDTAG_DROP_OPERATOR_CLASS,
+			CMDTAG_DROP_OPERATOR_FAMILY,
+			CMDTAG_DROP_POLICY,
+			CMDTAG_DROP_PROCEDURE,
+			CMDTAG_DROP_ROUTINE,
+			CMDTAG_DROP_RULE,
+			CMDTAG_DROP_SCHEMA,
+			CMDTAG_DROP_SEQUENCE,
+			CMDTAG_DROP_SERVER,
+			CMDTAG_DROP_STATISTICS,
+			CMDTAG_DROP_TABLE,
+			CMDTAG_DROP_TEXT_SEARCH_CONFIGURATION,
+			CMDTAG_DROP_TEXT_SEARCH_DICTIONARY,
+			CMDTAG_DROP_TEXT_SEARCH_PARSER,
+			CMDTAG_DROP_TEXT_SEARCH_TEMPLATE,
+			CMDTAG_DROP_TRANSFORM,
+			CMDTAG_DROP_TYPE,
+			CMDTAG_DROP_VIEW,
+			CMDTAG_GRANT,
+			CMDTAG_REFRESH_MATERIALIZED_VIEW,
+			CMDTAG_REVOKE,
+	};
+
+	CommandTag	init_commands[] = {
+		CMDTAG_CREATE_TABLE_AS,
+		CMDTAG_SELECT_INTO
+	};
+
+		/* Create the ddl_command_end event trigger */
+		CreateDDLReplicaEventTrigger("ddl_command_end", end_commands,
+									 lengthof(end_commands), myself, puboid);
+
+		/* Create the ddl_command_start event trigger */
+		CreateDDLReplicaEventTrigger("ddl_command_start", start_commands,
+									 lengthof(start_commands), myself, puboid);
+
+		/* Create the table_rewrite event trigger */
+		CreateDDLReplicaEventTrigger("table_rewrite", rewrite_commands,
+									 lengthof(rewrite_commands), myself, puboid);
+
+		/* Create the table_init_write event trigger */
+		CreateDDLReplicaEventTrigger("table_init_write", init_commands,
+									 lengthof(init_commands), myself, puboid);
 	}
 
 	table_close(rel, RowExclusiveLock);
@@ -996,6 +1179,9 @@ AlterPublicationOptions(ParseState *pstate, AlterPublicationStmt *stmt,
 
 		values[Anum_pg_publication_pubtruncate - 1] = BoolGetDatum(pubactions.pubtruncate);
 		replaces[Anum_pg_publication_pubtruncate - 1] = true;
+
+		values[Anum_pg_publication_pubddl - 1] = BoolGetDatum(pubactions.pubddl);
+		replaces[Anum_pg_publication_pubddl - 1] = true;
 	}
 
 	if (publish_via_partition_root_given)

@@ -1974,6 +1974,7 @@ typedef struct AlterTableStmt
 	List	   *cmds;			/* list of subcommands */
 	ObjectType	objtype;		/* type of object */
 	bool		missing_ok;		/* skip error if table missing */
+	bool        table_like;		/* internally generated for TableLikeClause */
 } AlterTableStmt;
 
 typedef enum AlterTableType

@@ -1,4 +1,5 @@
 backend_sources += files(
+  'ddlmessage.c',
   'decode.c',
   'launcher.c',
   'logical.c',

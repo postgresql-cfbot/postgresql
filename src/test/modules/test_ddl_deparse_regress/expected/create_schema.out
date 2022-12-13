@@ -1,0 +1,22 @@
+--
+-- CREATE_SCHEMA
+--
+CREATE SCHEMA foo;
+NOTICE:  deparsed json: {"fmt": "CREATE SCHEMA %{if_not_exists}s %{name}s %{authorization}s", "name": "foo", "authorization": {"fmt": "AUTHORIZATION %{authorization_role}I", "present": false, "authorization_role": null}, "if_not_exists": ""}
+NOTICE:  re-formed command: CREATE SCHEMA  foo 
+CREATE SCHEMA IF NOT EXISTS bar;
+NOTICE:  deparsed json: {"fmt": "CREATE SCHEMA %{if_not_exists}s %{name}s %{authorization}s", "name": "bar", "authorization": {"fmt": "AUTHORIZATION %{authorization_role}I", "present": false, "authorization_role": null}, "if_not_exists": "IF NOT EXISTS"}
+NOTICE:  re-formed command: CREATE SCHEMA IF NOT EXISTS bar 
+CREATE SCHEMA baz;
+NOTICE:  deparsed json: {"fmt": "CREATE SCHEMA %{if_not_exists}s %{name}s %{authorization}s", "name": "baz", "authorization": {"fmt": "AUTHORIZATION %{authorization_role}I", "present": false, "authorization_role": null}, "if_not_exists": ""}
+NOTICE:  re-formed command: CREATE SCHEMA  baz 
+-- Will not be created, and will not be handled by the
+-- event trigger
+CREATE SCHEMA IF NOT EXISTS baz;
+NOTICE:  schema "baz" already exists, skipping
+CREATE SCHEMA element_test
+  CREATE TABLE foo (id int)
+NOTICE:  deparsed json: {"fmt": "CREATE SCHEMA %{if_not_exists}s %{name}s %{authorization}s", "name": "element_test", "authorization": {"fmt": "AUTHORIZATION %{authorization_role}I", "present": false, "authorization_role": null}, "if_not_exists": ""}
+NOTICE:  re-formed command: CREATE SCHEMA  element_test 
+NOTICE:  deparsed json: {"fmt": "CREATE %{persistence}s TABLE %{if_not_exists}s %{identity}D (%{table_elements:, }s) %{inherits}s %{tablespace}s %{on_commit}s %{partition_by}s %{access_method}s %{with_clause}s", "identity": {"objname": "foo", "schemaname": "element_test"}, "inherits": {"fmt": "INHERITS (%{parents:, }D)", "parents": null, "present": false}, "on_commit": {"fmt": "ON COMMIT %{on_commit_value}s", "present": false, "on_commit_value": null}, "tablespace": {"fmt": "TABLESPACE %{tablespace}I", "present": false, "tablespace": null}, "persistence": "", "with_clause": {"fmt": "WITH", "present": false}, "partition_by": {"fmt": "PARTITION BY %{definition}s", "present": false, "definition": null}, "access_method": {"fmt": "USING %{access_method}I", "present": false, "access_method": null}, "if_not_exists": "", "table_elements": [{"fmt": "%{name}I %{coltype}T STORAGE %{colstorage}s %{compression}s %{collation}s %{not_null}s %{default}s %{generated_column}s", "name": "id", "type": "column", "coltype": {"typmod": "", "typarray": false, "typename": "int4", "schemaname": "pg_catalog"}, "default": {"fmt": "DEFAULT", "present": false}, "not_null": "", "collation": {"fmt": "COLLATE", "present": false}, "colstorage": "plain", "compression": {"fmt": "COMPRESSION %{compression_method}I", "present": false, "compression_method": null}, "generated_column": {"fmt": "GENERATED ALWAYS AS", "present": false}}]}
+NOTICE:  re-formed command: CREATE  TABLE  element_test.foo (id pg_catalog.int4 STORAGE plain     )      

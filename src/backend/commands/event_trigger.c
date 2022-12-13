@@ -37,8 +37,11 @@
 #include "miscadmin.h"
 #include "parser/parse_func.h"
 #include "pgstat.h"
+#include "replication/ddlmessage.h"
+#include "replication/message.h"
 #include "tcop/deparse_utility.h"
 #include "tcop/utility.h"
+#include "tcop/ddl_deparse.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/evtcache.h"
@@ -130,7 +133,8 @@ CreateEventTrigger(CreateEventTrigStmt *stmt)
 	if (strcmp(stmt->eventname, "ddl_command_start") != 0 &&
 		strcmp(stmt->eventname, "ddl_command_end") != 0 &&
 		strcmp(stmt->eventname, "sql_drop") != 0 &&
-		strcmp(stmt->eventname, "table_rewrite") != 0)
+		strcmp(stmt->eventname, "table_rewrite") != 0 &&
+		strcmp(stmt->eventname, "table_init_write") != 0)
 		ereport(ERROR,
 				(errcode(ERRCODE_SYNTAX_ERROR),
 				 errmsg("unrecognized event name \"%s\"",
@@ -156,7 +160,8 @@ CreateEventTrigger(CreateEventTrigStmt *stmt)
 	/* Validate tag list, if any. */
 	if ((strcmp(stmt->eventname, "ddl_command_start") == 0 ||
 		 strcmp(stmt->eventname, "ddl_command_end") == 0 ||
-		 strcmp(stmt->eventname, "sql_drop") == 0)
+		 strcmp(stmt->eventname, "sql_drop") == 0 ||
+		 strcmp(stmt->eventname, "table_init_write") == 0)
 		&& tags != NULL)
 		validate_ddl_tags("tag", tags);
 	else if (strcmp(stmt->eventname, "table_rewrite") == 0
@@ -582,7 +587,8 @@ EventTriggerCommonSetup(Node *parsetree,
 		dbgtag = CreateCommandTag(parsetree);
 		if (event == EVT_DDLCommandStart ||
 			event == EVT_DDLCommandEnd ||
-			event == EVT_SQLDrop)
+			event == EVT_SQLDrop ||
+			event == EVT_TableInitWrite)
 		{
 			if (!command_tag_event_trigger_ok(dbgtag))
 				elog(ERROR, "unexpected command tag \"%s\"", GetCommandTagName(dbgtag));
@@ -854,6 +860,183 @@ EventTriggerTableRewrite(Node *parsetree, Oid tableOid, int reason)
 		currentEventTriggerState->table_rewrite_reason = 0;
 	}
 	PG_END_TRY();
+
+	/* Cleanup. */
+	list_free(runlist);
+
+	/*
+	 * Make sure anything the event triggers did will be visible to the main
+	 * command.
+	 */
+	CommandCounterIncrement();
+}
+
+
+/*
+ * EventTriggerTableInitWriteStart
+ *     Prepare to receive data on an CREATE TABLE AS/SELET INTO command about
+ *     to be executed.
+ */
+void
+EventTriggerTableInitWriteStart(Node *parsetree)
+{
+	MemoryContext oldcxt;
+	CollectedCommand *command;
+	CreateTableAsStmt *stmt = (CreateTableAsStmt *)parsetree;
+
+	/* ignore if event trigger context not set, or collection disabled */
+	if (!currentEventTriggerState ||
+		currentEventTriggerState->commandCollectionInhibited)
+		return;
+
+	oldcxt = MemoryContextSwitchTo(currentEventTriggerState->cxt);
+
+	command = palloc(sizeof(CollectedCommand));
+
+	command->type = (stmt->objtype == OBJECT_TABLE) ? SCT_CreateTableAs : SCT_Simple;
+	command->in_extension = creating_extension;
+	command->d.ctas.address = InvalidObjectAddress;
+	command->d.ctas.real_create = NULL;
+	command->parsetree = copyObject(parsetree);
+
+	command->parent = currentEventTriggerState->currentCommand;
+	currentEventTriggerState->currentCommand = command;
+
+	MemoryContextSwitchTo(oldcxt);
+}
+
+/*
+ * EventTriggerTableInitWriteEnd
+ *		Finish up saving an CREATE TABLE AS/SELECT INTO command.
+ *
+ * FIXME this API isn't considering the possibility that an xact/subxact is
+ * aborted partway through.  Probably it's best to add an
+ * AtEOSubXact_EventTriggers() to fix this.
+ */
+void
+EventTriggerTableInitWriteEnd(ObjectAddress address)
+{
+	CollectedCommand *parent;
+	CreateTableAsStmt *stmt;
+
+	/* ignore if event trigger context not set, or collection disabled */
+	if (!currentEventTriggerState ||
+		currentEventTriggerState->commandCollectionInhibited)
+		return;
+
+	stmt =  (CreateTableAsStmt *)currentEventTriggerState->currentCommand->parsetree;
+
+	if (stmt->objtype == OBJECT_TABLE)
+	{
+		parent = currentEventTriggerState->currentCommand->parent;
+
+		pfree(currentEventTriggerState->currentCommand);
+
+		currentEventTriggerState->currentCommand = parent;
+	}
+	else
+	{
+		MemoryContext oldcxt;
+
+		oldcxt = MemoryContextSwitchTo(currentEventTriggerState->cxt);
+
+		currentEventTriggerState->currentCommand->d.simple.address = address;
+		currentEventTriggerState->commandList =
+			lappend(currentEventTriggerState->commandList,
+					currentEventTriggerState->currentCommand);
+
+		MemoryContextSwitchTo(oldcxt);
+	}
+}
+
+/*
+ * publication_deparse_table_init_write
+ *
+ * Deparse the ddl table create command and log it.
+ */
+Datum
+publication_deparse_table_init_write(PG_FUNCTION_ARGS)
+{
+	char		relpersist;
+	CollectedCommand *cmd;
+	char	   *json_string;
+
+	if (!CALLED_AS_EVENT_TRIGGER(fcinfo))
+		elog(ERROR, "not fired by event trigger manager");
+
+	cmd = currentEventTriggerState->currentCommand;
+	Assert(cmd);
+
+	relpersist = get_rel_persistence(cmd->d.simple.address.objectId);
+
+	/*
+	 * Do not generate wal log for commands whose target table is a temporary
+	 * table.
+	 *
+	 * We will generate wal logs for unlogged tables so that unlogged tables
+	 * can also be created and altered on the subscriber side. This makes it
+	 * possible to directly replay the SET LOGGED command and the incoming
+	 * rewrite message without creating a new table.
+	 */
+	if (relpersist == RELPERSISTENCE_TEMP)
+		return PointerGetDatum(NULL);
+
+	/* Deparse the DDL command and WAL log it to allow decoding of the same. */
+	json_string = deparse_utility_command(cmd, false);
+
+	if (json_string != NULL)
+		LogLogicalDDLMessage("deparse", cmd->d.simple.address.objectId, DCT_SimpleCmd,
+							 json_string, strlen(json_string) + 1);
+
+	return PointerGetDatum(NULL);
+}
+
+/*
+ * Fire table_init_rewrite triggers.
+ */
+void
+EventTriggerTableInitWrite(Node *real_create, ObjectAddress address)
+{
+	List	   *runlist;
+	EventTriggerData trigdata;
+	CollectedCommand *command;
+
+	/*
+	 * See EventTriggerDDLCommandStart for a discussion about why event
+	 * triggers are disabled in single user mode.
+	 */
+	if (!IsUnderPostmaster)
+		return;
+
+	/*
+	 * Also do nothing if our state isn't set up, which it won't be if there
+	 * weren't any relevant event triggers at the start of the current DDL
+	 * command.  This test might therefore seem optional, but it's
+	 * *necessary*, because EventTriggerCommonSetup might find triggers that
+	 * didn't exist at the time the command started.
+	 */
+	if (!currentEventTriggerState)
+		return;
+
+	/* Do nothing if no command was collected. */
+	if (!currentEventTriggerState->currentCommand)
+		return;
+
+	command = currentEventTriggerState->currentCommand;
+
+	runlist = EventTriggerCommonSetup(command->parsetree,
+									  EVT_TableInitWrite,
+									  "table_init_write",
+									  &trigdata);
+	if (runlist == NIL)
+		return;
+
+	/* Set the real CreateTable statment and object address */
+	command->d.ctas.real_create = real_create;
+	command->d.ctas.address = address;
+
+	/* Run the triggers. */
+	EventTriggerInvoke(runlist, &trigdata);
 
 	/* Cleanup. */
 	list_free(runlist);
@@ -1146,7 +1329,8 @@ trackDroppedObjectsNeeded(void)
 	 */
 	return (EventCacheLookup(EVT_SQLDrop) != NIL) ||
 		(EventCacheLookup(EVT_TableRewrite) != NIL) ||
-		(EventCacheLookup(EVT_DDLCommandEnd) != NIL);
+		(EventCacheLookup(EVT_DDLCommandEnd) != NIL) ||
+		(EventCacheLookup(EVT_TableInitWrite) != NIL);
 }
 
 /*
@@ -1537,6 +1721,7 @@ EventTriggerAlterTableStart(Node *parsetree)
 
 	command->d.alterTable.classId = RelationRelationId;
 	command->d.alterTable.objectId = InvalidOid;
+	command->d.alterTable.rewrite = false;
 	command->d.alterTable.subcmds = NIL;
 	command->parsetree = copyObject(parsetree);
 
@@ -1570,7 +1755,7 @@ EventTriggerAlterTableRelid(Oid objectId)
  * internally, so that's all that this code needs to handle at the moment.
  */
 void
-EventTriggerCollectAlterTableSubcmd(Node *subcmd, ObjectAddress address)
+EventTriggerCollectAlterTableSubcmd(Node *subcmd, ObjectAddress address, bool rewrite)
 {
 	MemoryContext oldcxt;
 	CollectedATSubcmd *newsub;
@@ -1590,8 +1775,136 @@ EventTriggerCollectAlterTableSubcmd(Node *subcmd, ObjectAddress address)
 	newsub->address = address;
 	newsub->parsetree = copyObject(subcmd);
 
+	currentEventTriggerState->currentCommand->d.alterTable.rewrite |= rewrite;
 	currentEventTriggerState->currentCommand->d.alterTable.subcmds =
 		lappend(currentEventTriggerState->currentCommand->d.alterTable.subcmds, newsub);
+
+	MemoryContextSwitchTo(oldcxt);
+}
+
+/*
+ * EventTriggerAlterTypeStart
+ *		Save data about a single part of an ALTER TYPE.
+ *
+ * ALTER TABLE can have multiple subcommands which might include DROP COLUMN
+ * command and ALTER TYPE referring the drop column in USING expression.
+ * As the dropped column cannot be accessed after the execution of DROP COLUMN,
+ * a special trigger is required to handle this case before the drop column is
+ * executed.
+ */
+void
+EventTriggerAlterTypeStart(AlterTableCmd *subcmd, Relation rel)
+{
+	MemoryContext oldcxt;
+	CollectedATSubcmd *newsub;
+	ColumnDef  *def;
+	Relation	attrelation;
+	HeapTuple	heapTup;
+	Form_pg_attribute attTup;
+	AttrNumber	attnum;
+	ObjectAddress address;
+
+	/* ignore if event trigger context not set, or collection disabled */
+	if (!currentEventTriggerState ||
+		currentEventTriggerState->commandCollectionInhibited)
+		return;
+
+	Assert(IsA(subcmd, AlterTableCmd));
+	Assert(subcmd->subtype == AT_AlterColumnType);
+	Assert(currentEventTriggerState->currentCommand != NULL);
+	Assert(OidIsValid(currentEventTriggerState->currentCommand->d.alterTable.objectId));
+
+	def = (ColumnDef *) subcmd->def;
+	Assert(IsA(def, ColumnDef));
+
+	oldcxt = MemoryContextSwitchTo(currentEventTriggerState->cxt);
+
+	newsub = palloc(sizeof(CollectedATSubcmd));
+	newsub->parsetree = (Node *)copyObject(subcmd);
+
+	attrelation = table_open(AttributeRelationId, RowExclusiveLock);
+
+	/* Look up the target column */
+	heapTup = SearchSysCacheCopyAttName(RelationGetRelid(rel), subcmd->name);
+	if (!HeapTupleIsValid(heapTup)) /* shouldn't happen */
+		ereport(ERROR,
+				errcode(ERRCODE_UNDEFINED_COLUMN),
+				errmsg("column \"%s\" of relation \"%s\" does not exist",
+					   subcmd->name, RelationGetRelationName(rel)));
+	attTup = (Form_pg_attribute) GETSTRUCT(heapTup);
+	attnum = attTup->attnum;
+
+	ObjectAddressSubSet(address, RelationRelationId,
+						RelationGetRelid(rel), attnum);
+	heap_freetuple(heapTup);
+	table_close(attrelation, RowExclusiveLock);
+	newsub->address = address;
+
+	if (def->raw_default)
+	{
+		char	   *defexpr;
+
+		defexpr = nodeToString(def->cooked_default);
+		newsub->usingexpr = TextDatumGetCString(DirectFunctionCall2(pg_get_expr,
+																	CStringGetTextDatum(defexpr),
+																	RelationGetRelid(rel)));
+	}
+	else
+		newsub->usingexpr = NULL;
+
+	currentEventTriggerState->currentCommand->d.alterTable.subcmds =
+		lappend(currentEventTriggerState->currentCommand->d.alterTable.subcmds, newsub);
+
+	MemoryContextSwitchTo(oldcxt);
+}
+
+/*
+ * EventTriggerAlterTypeEnd
+ *		Finish up saving an ALTER TYPE command, and add it to command list.
+ */
+void
+EventTriggerAlterTypeEnd(Node *subcmd, ObjectAddress address, bool rewrite)
+{
+	MemoryContext oldcxt;
+	CollectedATSubcmd *newsub;
+	ListCell   *cell;
+	CollectedCommand *cmd;
+	AlterTableCmd *altsubcmd = (AlterTableCmd *)subcmd;
+
+	/* ignore if event trigger context not set, or collection disabled */
+	if (!currentEventTriggerState ||
+		currentEventTriggerState->commandCollectionInhibited)
+		return;
+
+	cmd = currentEventTriggerState->currentCommand;
+
+	Assert(IsA(subcmd, AlterTableCmd));
+	Assert(cmd != NULL);
+	Assert(OidIsValid(cmd->d.alterTable.objectId));
+
+	foreach(cell, cmd->d.alterTable.subcmds)
+	{
+		CollectedATSubcmd *sub = (CollectedATSubcmd *) lfirst(cell);
+		AlterTableCmd *collcmd = (AlterTableCmd *) sub->parsetree;
+
+		if (collcmd->subtype == altsubcmd->subtype &&
+			address.classId == sub->address.classId &&
+			address.objectId == sub->address.objectId &&
+			address.objectSubId == sub->address.objectSubId)
+		{
+			cmd->d.alterTable.rewrite |= rewrite;
+			return;
+		}
+	}
+
+	oldcxt = MemoryContextSwitchTo(currentEventTriggerState->cxt);
+
+	newsub = palloc(sizeof(CollectedATSubcmd));
+	newsub->address = address;
+	newsub->parsetree = copyObject(subcmd);
+
+	cmd->d.alterTable.rewrite |= rewrite;
+	cmd->d.alterTable.subcmds = lappend(cmd->d.alterTable.subcmds, newsub);
 
 	MemoryContextSwitchTo(oldcxt);
 }
@@ -1863,6 +2176,7 @@ pg_event_trigger_ddl_commands(PG_FUNCTION_ARGS)
 			case SCT_AlterOpFamily:
 			case SCT_CreateOpClass:
 			case SCT_AlterTSConfig:
+			case SCT_CreateTableAs:
 				{
 					char	   *identity;
 					char	   *type;
@@ -1880,6 +2194,8 @@ pg_event_trigger_ddl_commands(PG_FUNCTION_ARGS)
 						addr = cmd->d.createopc.address;
 					else if (cmd->type == SCT_AlterTSConfig)
 						addr = cmd->d.atscfg.address;
+					else if (cmd->type == SCT_AlterTSConfig)
+						addr = cmd->d.ctas.address;
 
 					/*
 					 * If an object was dropped in the same command we may end
@@ -2174,4 +2490,281 @@ stringify_adefprivs_objtype(ObjectType objtype)
 	}
 
 	return "???";				/* keep compiler quiet */
+}
+
+/*
+ * Deparse the ddl command and log it prior to
+ * execution. Currently only used for DROP TABLE command
+ * so that catalog can be accessed before being deleted.
+ * This is to check if the table is part of the publication
+ * or not.
+ */
+Datum
+publication_deparse_ddl_command_start(PG_FUNCTION_ARGS)
+{
+	EventTriggerData *trigdata;
+	char	   *command = psprintf("Drop table command start");
+	DropStmt   *stmt;
+	ListCell   *cell1;
+
+	if (!CALLED_AS_EVENT_TRIGGER(fcinfo))
+		elog(ERROR, "not fired by event trigger manager");
+
+	trigdata = (EventTriggerData *) fcinfo->context;
+	stmt = (DropStmt *) trigdata->parsetree;
+
+	/* Extract the relid from the parse tree */
+	foreach(cell1, stmt->objects)
+	{
+		char		relpersist;
+		Node	   *object = lfirst(cell1);
+		ObjectAddress address;
+		Relation	relation = NULL;
+
+		address = get_object_address(stmt->removeType,
+									 object,
+									 &relation,
+									 AccessExclusiveLock,
+									 true);
+
+		/* Object does not exist, nothing to do */
+		if (!relation)
+			continue;
+
+		relpersist = get_rel_persistence(address.objectId);
+
+		/*
+		 * Do not generate wal log for commands whose target table is a
+		 * temporary table.
+		 *
+		 * We will generate wal logs for unlogged tables so that unlogged
+		 * tables can also be created and altered on the subscriber side. This
+		 * makes it possible to directly replay the SET LOGGED command and the
+		 * incoming rewrite message without creating a new table.
+		 */
+		if (relpersist != RELPERSISTENCE_TEMP)
+			LogLogicalDDLMessage("deparse", address.objectId, DCT_TableDropStart,
+								 command, strlen(command) + 1);
+
+		if (relation)
+			table_close(relation, NoLock);
+	}
+	return PointerGetDatum(NULL);
+}
+
+/*
+ * publication_deparse_table_rewrite
+ *
+ * Deparse the ddl table rewrite command and log it.
+ */
+Datum
+publication_deparse_table_rewrite(PG_FUNCTION_ARGS)
+{
+	char		relpersist;
+	CollectedCommand *cmd;
+	char	   *json_string;
+
+	if (!CALLED_AS_EVENT_TRIGGER(fcinfo))
+		elog(ERROR, "not fired by event trigger manager");
+
+	cmd = currentEventTriggerState->currentCommand;
+
+	Assert(cmd && cmd->d.alterTable.rewrite);
+
+	relpersist = get_rel_persistence(cmd->d.alterTable.objectId);
+
+	/*
+	 * Do not generate wal log for commands whose target table is a temporary
+	 * table.
+	 *
+	 * We will generate wal logs for unlogged tables so that unlogged tables
+	 * can also be created and altered on the subscriber side. This makes it
+	 * possible to directly replay the SET LOGGED command and the incoming
+	 * rewrite message without creating a new table.
+	 */
+	if (relpersist != RELPERSISTENCE_TEMP)
+	{
+		/* Deparse the DDL command and WAL log it to allow decoding of the same. */
+		json_string = deparse_utility_command(cmd, false);
+
+		if (json_string != NULL)
+			LogLogicalDDLMessage("deparse", cmd->d.alterTable.objectId, DCT_TableAlter,
+								 json_string, strlen(json_string) + 1);
+	}
+
+	return PointerGetDatum(NULL);
+}
+
+/*
+ * Deparse the ddl command and log it. This function
+ * is called after the execution of the command but before the
+ * transaction commits.
+ */
+Datum
+publication_deparse_ddl_command_end(PG_FUNCTION_ARGS)
+{
+	ListCell   *lc;
+	slist_iter	iter;
+	DeparsedCommandType type;
+	Oid			relid;
+
+	if (!CALLED_AS_EVENT_TRIGGER(fcinfo))
+		elog(ERROR, "not fired by event trigger manager");
+
+	foreach(lc, currentEventTriggerState->commandList)
+	{
+		char		relpersist = RELPERSISTENCE_PERMANENT;
+		CollectedCommand *cmd = lfirst(lc);
+		char	   *json_string;
+
+		/* Rewrite DDL has been handled in table_rewrite trigger */
+		if (cmd->d.alterTable.rewrite)
+		{
+			RenameStmt *renameStmt = (RenameStmt *) cmd->parsetree;
+
+			if (renameStmt && renameStmt->relationType != OBJECT_TYPE &&
+				renameStmt->relationType != OBJECT_TABLE)
+				continue;
+		}
+
+		if (cmd->type == SCT_Simple &&
+			!OidIsValid(cmd->d.simple.address.objectId))
+			continue;
+
+		if (cmd->type == SCT_AlterTable)
+		{
+			relid = cmd->d.alterTable.objectId;
+			type = DCT_TableAlter;
+		}
+		else
+		{
+			/* Only SCT_Simple for now */
+			relid = cmd->d.simple.address.objectId;
+			type = DCT_SimpleCmd;
+		}
+
+		if (get_rel_relkind(relid))
+			relpersist = get_rel_persistence(relid);
+
+		/*
+		 * Do not generate wal log for commands whose target table is a
+		 * temporary table.
+		 *
+		 * We will generate wal logs for unlogged tables so that unlogged
+		 * tables can also be created and altered on the subscriber side. This
+		 * makes it possible to directly replay the SET LOGGED command and the
+		 * incoming rewrite message without creating a new table.
+		 */
+		if (relpersist != RELPERSISTENCE_TEMP)
+		{
+			/*
+			 * Deparse the DDL command and WAL log it to allow decoding of the
+			 * same.
+			 */
+			json_string = deparse_utility_command(cmd, false);
+
+			if (json_string != NULL)
+				LogLogicalDDLMessage("deparse", relid, type, json_string,
+									 strlen(json_string) + 1);
+		}
+	}
+
+	slist_foreach(iter, &(currentEventTriggerState->SQLDropList))
+	{
+		volatile SQLDropObject *obj;
+		DropStmt   *stmt;
+		EventTriggerData *trigdata;
+		char	   *command;
+		DeparsedCommandType cmdtype;
+		const char *tmptype;
+
+		trigdata = (EventTriggerData *) fcinfo->context;
+		stmt = (DropStmt *) trigdata->parsetree;
+
+		obj = slist_container(SQLDropObject, next, iter.cur);
+
+		if (strcmp(obj->objecttype, "table") == 0)
+			cmdtype = DCT_TableDropEnd;
+		else if (strcmp(obj->objecttype, "sequence") == 0 ||
+				 strcmp(obj->objecttype, "schema") == 0 ||
+				 strcmp(obj->objecttype, "index") == 0 ||
+				 strcmp(obj->objecttype, "function") == 0 ||
+				 strcmp(obj->objecttype, "procedure") == 0 ||
+				 strcmp(obj->objecttype, "operator") == 0 ||
+				 strcmp(obj->objecttype, "operator class") == 0 ||
+				 strcmp(obj->objecttype, "operator family") == 0 ||
+				 strcmp(obj->objecttype, "cast") == 0 ||
+				 strcmp(obj->objecttype, "type") == 0 ||
+				 strcmp(obj->objecttype, "domain") == 0 ||
+				 strcmp(obj->objecttype, "trigger") == 0 ||
+				 strcmp(obj->objecttype, "conversion") == 0 ||
+				 strcmp(obj->objecttype, "policy") == 0 ||
+				 strcmp(obj->objecttype, "rule") == 0 ||
+				 strcmp(obj->objecttype, "extension") == 0 ||
+				 strcmp(obj->objecttype, "foreign-data wrapper") == 0 ||
+				 strcmp(obj->objecttype, "text search configuration") == 0 ||
+				 strcmp(obj->objecttype, "text search dictionary") == 0 ||
+				 strcmp(obj->objecttype, "text search parser") == 0 ||
+				 strcmp(obj->objecttype, "text search template") == 0 ||
+				 strcmp(obj->objecttype, "transform") == 0 ||
+				 strcmp(obj->objecttype, "server") == 0 ||
+				 strcmp(obj->objecttype, "collation") == 0 ||
+				 strcmp(obj->objecttype, "user mapping") == 0 ||
+				 strcmp(obj->objecttype, "language") == 0 ||
+				 strcmp(obj->objecttype, "view") == 0 ||
+				 strcmp(obj->objecttype, "materialized view") == 0 ||
+				 strcmp(obj->objecttype, "statistics object") == 0 ||
+				 strcmp(obj->objecttype, "access method") == 0 ||
+				 strcmp(obj->objecttype, "routine") == 0)
+			cmdtype = DCT_ObjectDrop;
+		else
+			continue;
+
+		/* Change foreign-data wrapper to foreign data wrapper */
+		if (strncmp(obj->objecttype, "foreign-data wrapper", 20) == 0)
+		{
+			tmptype = pstrdup("foreign data wrapper");
+			command = deparse_drop_command(obj->objidentity, tmptype,
+										   stmt->behavior);
+		}
+
+		/* Change statistics object to statistics */
+		else if (strncmp(obj->objecttype, "statistics object",
+						 strlen("statistics object")) == 0)
+		{
+			tmptype = pstrdup("statistics");
+			command = deparse_drop_command(obj->objidentity, tmptype,
+										   stmt->behavior);
+		}
+
+		/*
+		 * Object identity needs to be modified to make the drop work
+		 *
+		 * FROM: <role> on server <servername> TO  : for <role> server
+		 * <servername>
+		 *
+		 */
+		else if (strncmp(obj->objecttype, "user mapping", 12) == 0)
+		{
+			char	   *on_server;
+
+			tmptype = palloc(strlen(obj->objidentity) + 2);
+			on_server = strstr(obj->objidentity, "on server");
+
+			sprintf((char *) tmptype, "for ");
+			strncat((char *) tmptype, obj->objidentity, on_server - obj->objidentity);
+			strcat((char *) tmptype, on_server + 3);
+			command = deparse_drop_command(tmptype, obj->objecttype,
+										   stmt->behavior);
+		}
+		else
+			command = deparse_drop_command(obj->objidentity, obj->objecttype,
+										   stmt->behavior);
+
+		if (command)
+			LogLogicalDDLMessage("deparse", obj->address.objectId, cmdtype,
+								 command, strlen(command) + 1);
+	}
+
+	return PointerGetDatum(NULL);
 }

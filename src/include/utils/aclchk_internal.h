@@ -39,6 +39,7 @@ typedef struct
 	List	   *grantees;
 	bool		grant_option;
 	DropBehavior behavior;
+	Oid			grantor_uid;
 } InternalGrant;
 
 

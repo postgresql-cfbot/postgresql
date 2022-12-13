@@ -17,6 +17,10 @@
 #include "lib/ilist.h"
 #include "storage/block.h"
 #include "storage/relfilelocator.h"
+#include "utils/guc.h"
+
+/* GUCs */
+extern PGDLLIMPORT bool io_data_direct;
 
 /*
  * smgr.c maintains a table of SMgrRelation objects, which are essentially
@@ -107,5 +111,6 @@ extern void smgrtruncate(SMgrRelation reln, ForkNumber *forknum,
 extern void smgrimmedsync(SMgrRelation reln, ForkNumber forknum);
 extern void AtEOXact_SMgr(void);
 extern bool ProcessBarrierSmgrRelease(void);
+extern bool check_io_data_direct(bool *newval, void **extra, GucSource source);
 
 #endif							/* SMGR_H */

@@ -535,7 +535,7 @@ PrefetchSharedBuffer(SMgrRelation smgr_reln,
 		 * Try to initiate an asynchronous read.  This returns false in
 		 * recovery if the relation file doesn't exist.
 		 */
-		if (smgrprefetch(smgr_reln, forkNum, blockNum))
+		if (!io_data_direct && smgrprefetch(smgr_reln, forkNum, blockNum))
 			result.initiated_io = true;
 #endif							/* USE_PREFETCH */
 	}
@@ -582,11 +582,11 @@ PrefetchSharedBuffer(SMgrRelation smgr_reln,
  * the kernel and therefore didn't really initiate I/O, and no way to know when
  * the I/O completes other than using synchronous ReadBuffer().
  *
- * 3.  Otherwise, the buffer wasn't already cached by PostgreSQL, and either
+ * 3.  Otherwise, the buffer wasn't already cached by PostgreSQL, and
  * USE_PREFETCH is not defined (this build doesn't support prefetching due to
- * lack of a kernel facility), or the underlying relation file wasn't found and
- * we are in recovery.  (If the relation file wasn't found and we are not in
- * recovery, an error is raised).
+ * lack of a kernel facility), io_data_direct is enabled, or the underlying
+ * relation file wasn't found and we are in recovery.  (If the relation file
+ * wasn't found and we are not in recovery, an error is raised).
  */
 PrefetchBufferResult
 PrefetchBuffer(Relation reln, ForkNumber forkNum, BlockNumber blockNum)
@@ -4907,6 +4907,9 @@ void
 ScheduleBufferTagForWriteback(WritebackContext *context, BufferTag *tag)
 {
 	PendingWriteback *pending;
+
+	if (io_data_direct)
+		return;
 
 	/*
 	 * Add buffer to the pending writeback array, unless writeback control is

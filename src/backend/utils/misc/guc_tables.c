@@ -1951,6 +1951,39 @@ struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"io_data_direct", PGC_SUSET, DEVELOPER_OPTIONS,
+			gettext_noop("Access data files with direct I/O."),
+			NULL,
+			GUC_NOT_IN_SAMPLE
+		},
+		&io_data_direct,
+		false,
+		check_io_data_direct, NULL, NULL
+	},
+
+	{
+		{"io_wal_direct", PGC_SUSET, DEVELOPER_OPTIONS,
+			gettext_noop("Write WAL files with direct I/O."),
+			NULL,
+			GUC_NOT_IN_SAMPLE
+		},
+		&io_wal_direct,
+		false,
+		check_io_wal_direct, NULL, NULL
+	},
+
+	{
+		{"io_wal_init_direct", PGC_SUSET, DEVELOPER_OPTIONS,
+			gettext_noop("Initialize WAL files with direct I/O."),
+			NULL,
+			GUC_NOT_IN_SAMPLE
+		},
+		&io_wal_init_direct,
+		false,
+		check_io_wal_direct, NULL, NULL
+	},
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, false, NULL, NULL, NULL

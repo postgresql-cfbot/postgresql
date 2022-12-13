@@ -36,6 +36,9 @@ static void BogusFree(void *pointer);
 static void *BogusRealloc(void *pointer, Size size);
 static MemoryContext BogusGetChunkContext(void *pointer);
 static Size BogusGetChunkSpace(void *pointer);
+static void AlignedAllocFree(void *pointer);
+static MemoryContext AlignedAllocGetChunkContext(void *pointer);
+
 
 /*****************************************************************************
  *	  GLOBAL MEMORY															 *
@@ -84,6 +87,10 @@ static const MemoryContextMethods mcxt_methods[] = {
 	[MCTX_SLAB_ID].check = SlabCheck,
 #endif
 
+	/* in here */
+	[MCTX_ALIGNED_REDIRECT_ID].get_chunk_context = AlignedAllocGetChunkContext,
+	[MCTX_ALIGNED_REDIRECT_ID].free_p = AlignedAllocFree,
+
 	/*
 	 * Unused (as yet) IDs should have dummy entries here.  This allows us to
 	 * fail cleanly if a bogus pointer is passed to pfree or the like.  It
@@ -110,11 +117,6 @@ static const MemoryContextMethods mcxt_methods[] = {
 	[MCTX_UNUSED4_ID].realloc = BogusRealloc,
 	[MCTX_UNUSED4_ID].get_chunk_context = BogusGetChunkContext,
 	[MCTX_UNUSED4_ID].get_chunk_space = BogusGetChunkSpace,
-
-	[MCTX_UNUSED5_ID].free_p = BogusFree,
-	[MCTX_UNUSED5_ID].realloc = BogusRealloc,
-	[MCTX_UNUSED5_ID].get_chunk_context = BogusGetChunkContext,
-	[MCTX_UNUSED5_ID].get_chunk_space = BogusGetChunkSpace,
 };
 
 /*
@@ -1306,11 +1308,16 @@ void
 pfree(void *pointer)
 {
 #ifdef USE_VALGRIND
+	MemoryContextMethodID method = GetMemoryChunkMethodID(pointer);
 	MemoryContext context = GetMemoryChunkContext(pointer);
 #endif
 
 	MCXT_METHOD(pointer, free_p) (pointer);
-	VALGRIND_MEMPOOL_FREE(context, pointer);
+
+#ifdef USE_VALGRIND
+	if (method != MCTX_ALIGNED_REDIRECT_ID)
+		VALGRIND_MEMPOOL_FREE(context, pointer);
+#endif
 }
 
 /*
@@ -1516,4 +1523,84 @@ pchomp(const char *in)
 	while (n > 0 && in[n - 1] == '\n')
 		n--;
 	return pnstrdup(in, n);
+}
+
+/*
+ * pointer to fake memory context + pointer to actual allocation
+ */
+#define ALIGNED_ALLOC_CHUNK_SIZE (sizeof(uintptr_t) + sizeof(uintptr_t))
+
+#include "utils/memutils_memorychunk.h"
+
+static void
+AlignedAllocFree(void *pointer)
+{
+	MemoryChunk *chunk = PointerGetMemoryChunk(pointer);
+	void *unaligned;
+
+	Assert(!MemoryChunkIsExternal(chunk));
+
+	unaligned = MemoryChunkGetBlock(chunk);
+
+	pfree(unaligned);
+}
+
+MemoryContext
+AlignedAllocGetChunkContext(void *pointer)
+{
+	MemoryChunk *chunk = PointerGetMemoryChunk(pointer);
+
+	Assert(!MemoryChunkIsExternal(chunk));
+
+	return GetMemoryChunkContext(MemoryChunkGetBlock(chunk));
+}
+
+void *
+MemoryContextAllocAligned(MemoryContext context,
+						  Size size, Size alignto, int flags)
+{
+	Size		alloc_size;
+	void	   *unaligned;
+	void	   *aligned;
+
+	/* wouldn't make much sense to waste that much space */
+	Assert(alignto < (128 * 1024 * 1024));
+
+	if (alignto < MAXIMUM_ALIGNOF)
+		return palloc_extended(size, flags);
+
+	/* allocate enough space for alignment padding */
+	alloc_size = size + alignto + sizeof(MemoryChunk);
+
+	unaligned = MemoryContextAllocExtended(context, alloc_size, flags);
+
+	aligned = (char *) unaligned + sizeof(MemoryChunk);
+	aligned = (void *) (TYPEALIGN(alignto, aligned) - sizeof(MemoryChunk));
+
+	MemoryChunkSetHdrMask(aligned, unaligned, 0, MCTX_ALIGNED_REDIRECT_ID);
+
+	/* XXX: should we adjust valgrind state here? */
+
+	Assert((char *) TYPEALIGN(alignto, MemoryChunkGetPointer(aligned)) == MemoryChunkGetPointer(aligned));
+
+	return MemoryChunkGetPointer(aligned);
+}
+
+void *
+MemoryContextAllocIOAligned(MemoryContext context, Size size, int flags)
+{
+	// FIXME: don't hardcode page size
+	return MemoryContextAllocAligned(context, size, 4096, flags);
+}
+
+void *
+palloc_aligned(Size size, Size alignto, int flags)
+{
+	return MemoryContextAllocAligned(CurrentMemoryContext, size, alignto, flags);
+}
+
+void *
+palloc_io_aligned(Size size, int flags)
+{
+	return MemoryContextAllocIOAligned(CurrentMemoryContext, size, flags);
 }

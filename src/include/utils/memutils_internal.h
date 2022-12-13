@@ -92,8 +92,8 @@ typedef enum MemoryContextMethodID
 	MCTX_ASET_ID,
 	MCTX_GENERATION_ID,
 	MCTX_SLAB_ID,
-	MCTX_UNUSED4_ID,			/* available */
-	MCTX_UNUSED5_ID				/* 111 occurs in wipe_mem'd memory */
+	MCTX_ALIGNED_REDIRECT_ID,
+	MCTX_UNUSED4_ID				/* 111 occurs in wipe_mem'd memory */
 } MemoryContextMethodID;
 
 /*

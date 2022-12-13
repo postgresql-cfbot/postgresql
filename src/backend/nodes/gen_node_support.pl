@@ -147,7 +147,7 @@ my @abstract_types = qw(Node);
 # they otherwise don't participate in node support.
 my @extra_tags = qw(
   IntList OidList XidList
-  AllocSetContext GenerationContext SlabContext
+  AllocSetContext GenerationContext SlabContext AlignedAllocRedirectContext
   TIDBitmap
   WindowObjectData
 );

@@ -142,6 +142,21 @@ static MdfdVec *_mdfd_getseg(SMgrRelation reln, ForkNumber forknum,
 static BlockNumber _mdnblocks(SMgrRelation reln, ForkNumber forknum,
 							  MdfdVec *seg);
 
+static inline int
+_mdfd_open_flags(ForkNumber forkNum)
+{
+	int		flags = O_RDWR | PG_BINARY;
+
+	/*
+	 * XXX: not clear if direct IO ever is interesting for other forks?  The
+	 * FSM fork currently often ends up very fragmented when using direct IO,
+	 * for example.
+	 */
+	if (io_data_direct /* && forkNum == MAIN_FORKNUM */)
+		flags |= PG_O_DIRECT;
+
+	return flags;
+}
 
 /*
  *	mdinit() -- Initialize private state for magnetic disk storage manager.
@@ -205,14 +220,14 @@ mdcreate(SMgrRelation reln, ForkNumber forknum, bool isRedo)
 
 	path = relpath(reln->smgr_rlocator, forknum);
 
-	fd = PathNameOpenFile(path, O_RDWR | O_CREAT | O_EXCL | PG_BINARY);
+	fd = PathNameOpenFile(path, _mdfd_open_flags(forknum) | O_CREAT | O_EXCL);
 
 	if (fd < 0)
 	{
 		int			save_errno = errno;
 
 		if (isRedo)
-			fd = PathNameOpenFile(path, O_RDWR | PG_BINARY);
+			fd = PathNameOpenFile(path, _mdfd_open_flags(forknum));
 		if (fd < 0)
 		{
 			/* be sure to report the error reported by create, not open */
@@ -453,6 +468,10 @@ mdextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	int			nbytes;
 	MdfdVec    *v;
 
+#if PG_O_DIRECT != 0
+	AssertPointerAlignment(buffer, PG_IO_ALIGN_SIZE);
+#endif
+
 	/* This assert is too expensive to have on normally ... */
 #ifdef CHECK_WRITE_VS_EXTEND
 	Assert(blocknum >= mdnblocks(reln, forknum));
@@ -523,7 +542,7 @@ mdopenfork(SMgrRelation reln, ForkNumber forknum, int behavior)
 
 	path = relpath(reln->smgr_rlocator, forknum);
 
-	fd = PathNameOpenFile(path, O_RDWR | PG_BINARY);
+	fd = PathNameOpenFile(path, _mdfd_open_flags(forknum));
 
 	if (fd < 0)
 	{
@@ -594,6 +613,8 @@ mdprefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
 	off_t		seekpos;
 	MdfdVec    *v;
 
+	Assert(!io_data_direct);
+
 	v = _mdfd_getseg(reln, forknum, blocknum, false,
 					 InRecovery ? EXTENSION_RETURN_NULL : EXTENSION_FAIL);
 	if (v == NULL)
@@ -619,6 +640,8 @@ void
 mdwriteback(SMgrRelation reln, ForkNumber forknum,
 			BlockNumber blocknum, BlockNumber nblocks)
 {
+	Assert(!io_data_direct);
+
 	/*
 	 * Issue flush requests in as few requests as possible; have to split at
 	 * segment boundaries though, since those are actually separate files.
@@ -674,6 +697,10 @@ mdread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	off_t		seekpos;
 	int			nbytes;
 	MdfdVec    *v;
+
+#if PG_O_DIRECT != 0
+	AssertPointerAlignment(buffer, PG_IO_ALIGN_SIZE);
+#endif
 
 	TRACE_POSTGRESQL_SMGR_MD_READ_START(forknum, blocknum,
 										reln->smgr_rlocator.locator.spcOid,
@@ -739,6 +766,10 @@ mdwrite(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	off_t		seekpos;
 	int			nbytes;
 	MdfdVec    *v;
+
+#if PG_O_DIRECT != 0
+	AssertPointerAlignment(buffer, PG_IO_ALIGN_SIZE);
+#endif
 
 	/* This assert is too expensive to have on normally ... */
 #ifdef CHECK_WRITE_VS_EXTEND
@@ -1188,7 +1219,7 @@ _mdfd_openseg(SMgrRelation reln, ForkNumber forknum, BlockNumber segno,
 	fullpath = _mdfd_segpath(reln, forknum, segno);
 
 	/* open the file */
-	fd = PathNameOpenFile(fullpath, O_RDWR | PG_BINARY | oflags);
+	fd = PathNameOpenFile(fullpath, _mdfd_open_flags(forknum) | oflags);
 
 	pfree(fullpath);
 
@@ -1294,7 +1325,7 @@ _mdfd_getseg(SMgrRelation reln, ForkNumber forknum, BlockNumber blkno,
 			 */
 			if (nblocks < ((BlockNumber) RELSEG_SIZE))
 			{
-				char	   *zerobuf = palloc0(BLCKSZ);
+				char	   *zerobuf = palloc_io_aligned(BLCKSZ, MCXT_ALLOC_ZERO);
 
 				mdextend(reln, forknum,
 						 nextsegno * ((BlockNumber) RELSEG_SIZE) - 1,
@@ -1397,7 +1428,7 @@ mdsyncfiletag(const FileTag *ftag, char *path)
 		strlcpy(path, p, MAXPGPATH);
 		pfree(p);
 
-		file = PathNameOpenFile(path, O_RDWR | PG_BINARY);
+		file = PathNameOpenFile(path, _mdfd_open_flags(ftag->forknum));
 		if (file < 0)
 			return -1;
 		need_to_close = true;

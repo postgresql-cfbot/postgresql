@@ -228,6 +228,14 @@
 #define PG_CACHE_LINE_SIZE		128
 
 /*
+ * Assumed memory alignment requirement for direct I/O.  The real requirement
+ * may be based on sectors or pages.  The default is the typical modern sector
+ * size and virtual memory page size, which is enough for currently known
+ * systems.
+ */
+#define PG_IO_ALIGN_SIZE		4096
+
+/*
  *------------------------------------------------------------------------
  * The following symbols are for enabling debugging code, not for
  * controlling user-visible features or resource limits.

@@ -20,12 +20,16 @@
 #include "access/xlogutils.h"
 #include "lib/ilist.h"
 #include "storage/bufmgr.h"
+#include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/md.h"
 #include "storage/smgr.h"
 #include "utils/hsearch.h"
 #include "utils/inval.h"
 
+
+/* GUCs */
+bool		io_data_direct = false;
 
 /*
  * This struct of function pointers defines the API between smgr.c and
@@ -733,5 +737,21 @@ bool
 ProcessBarrierSmgrRelease(void)
 {
 	smgrreleaseall();
+	return true;
+}
+
+/*
+ * Check if this build allows smgr implementations to enable direct I/O.
+ */
+bool
+check_io_data_direct(bool *newval, void **extra, GucSource source)
+{
+#if PG_O_DIRECT == 0
+	if (*newval)
+	{
+		GUC_check_errdetail("io_data_direct is not supported on this platform.");
+		return false;
+	}
+#endif
 	return true;
 }

@@ -2021,6 +2021,11 @@ FileWriteback(File file, off_t offset, off_t nbytes, uint32 wait_event_info)
 	if (nbytes <= 0)
 		return;
 
+#ifdef PG_O_DIRECT
+	if (VfdCache[file].fileFlags & PG_O_DIRECT)
+		return;
+#endif
+
 	returnCode = FileAccess(file);
 	if (returnCode < 0)
 		return;

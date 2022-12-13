@@ -51,6 +51,8 @@ extern PGDLLIMPORT char *wal_consistency_checking_string;
 extern PGDLLIMPORT bool log_checkpoints;
 extern PGDLLIMPORT bool track_wal_io_timing;
 extern PGDLLIMPORT int wal_decode_buffer_size;
+extern PGDLLIMPORT bool io_wal_direct;
+extern PGDLLIMPORT bool io_wal_init_direct;
 
 extern PGDLLIMPORT int CheckPointSegments;
 

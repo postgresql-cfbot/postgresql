@@ -1139,6 +1139,24 @@ pg_stat_get_bgwriter_requested_checkpoints(PG_FUNCTION_ARGS)
 }
 
 Datum
+pg_stat_get_bgwriter_timed_restartpoints(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_INT64(pgstat_fetch_stat_checkpointer()->timed_restartpoints);
+}
+
+Datum
+pg_stat_get_bgwriter_requested_restartpoints(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_INT64(pgstat_fetch_stat_checkpointer()->requested_restartpoints);
+}
+
+Datum
+pg_stat_get_bgwriter_performed_restartpoints(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_INT64(pgstat_fetch_stat_checkpointer()->performed_restartpoints);
+}
+
+Datum
 pg_stat_get_bgwriter_buf_written_checkpoints(PG_FUNCTION_ARGS)
 {
 	PG_RETURN_INT64(pgstat_fetch_stat_checkpointer()->buf_written_checkpoints);

@@ -8935,3 +8935,20 @@ SetWalWriterSleeping(bool sleeping)
 	XLogCtl->WalWriterSleeping = sleeping;
 	SpinLockRelease(&XLogCtl->info_lck);
 }
+
+/*
+ * Check if a new checkpoint WAL record has been received since the
+ * last restartpoint. So it is possible to create a new one.
+ */
+bool RestartPointAvailable(void)
+{
+	bool result = false;
+
+	SpinLockAcquire(&XLogCtl->info_lck);
+	if (!XLogRecPtrIsInvalid(XLogCtl->lastCheckPointRecPtr)
+		&& XLogCtl->lastCheckPoint.redo > XLogCtl->RedoRecPtr)
+				result = true;
+	SpinLockRelease(&XLogCtl->info_lck);
+
+	return result;
+}

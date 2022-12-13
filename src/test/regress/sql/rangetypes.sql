@@ -616,3 +616,105 @@ create function inoutparam_fail(inout i anyelement, out r anyrange)
 --should fail
 create function table_fail(i anyelement) returns table(i anyelement, r anyrange)
   as $$ select $1, '[1,10]' $$ language sql;
+
+-- test range join operators
+create table test_range_join_1(ir1 int4range);
+create table test_range_join_2(ir2 int4range);
+create table test_elem_join(elem int4);
+
+insert into test_range_join_1 select int4range(g, g+10) from generate_series(1,200) g;
+insert into test_range_join_1 select int4range(g, g+10000) from generate_series(1,100) g;
+insert into test_range_join_1 select int4range(NULL,g*10,'(]') from generate_series(1,10) g;
+insert into test_range_join_1 select int4range(g*10,NULL,'[)') from generate_series(1,10) g;
+insert into test_range_join_1 select int4range(g, g+10) from generate_series(1,200) g;
+insert into test_range_join_1 select 'empty'::int4range from generate_series(1,20) g;
+insert into test_range_join_1 select NULL from generate_series(1,50) g;
+
+insert into test_range_join_2 select int4range(g+10, g+20) from generate_series(1,20) g;
+insert into test_range_join_2 select int4range(g+5000, g+15000) from generate_series(1,10) g;
+insert into test_range_join_2 select int4range(NULL,g*5,'(]') from generate_series(1,10) g;
+insert into test_range_join_2 select int4range(g*5,NULL,'[)') from generate_series(1,10) g;
+insert into test_range_join_2 select int4range(g, g+10) from generate_series(1,20) g;
+insert into test_range_join_2 select 'empty'::int4range from generate_series(1,5) g;
+insert into test_range_join_2 select NULL from generate_series(1,5) g;
+
+insert into test_elem_join select g from generate_series(1,20) g;
+insert into test_elem_join select g+10000 from generate_series(1,10) g;
+insert into test_elem_join select g*10 from generate_series(1,10) g;
+insert into test_elem_join select g from generate_series(1,20) g;
+insert into test_elem_join select NULL from generate_series(1,5) g;
+
+analyze test_range_join_1;
+analyze test_range_join_2;
+analyze test_elem_join;
+
+create function check_estimated_rows(text) returns table (estimated int, actual int)
+language plpgsql as
+$$
+declare
+    ln text;
+    tmp text[];
+    first_row bool := true;
+begin
+    for ln in
+        execute format('explain analyze %s', $1)
+    loop
+        if first_row then
+            first_row := false;
+            tmp := regexp_match(ln, 'rows=(\d*) .* rows=(\d*)');
+            return query select tmp[1]::int, tmp[2]::int;
+        end if;
+    end loop;
+end;
+$$;
+
+SELECT * FROM check_estimated_rows('
+select * from test_range_join_1, test_range_join_2 where ir1 = ir2');
+
+SELECT * FROM check_estimated_rows('
+select * from test_range_join_1, test_range_join_2 where ir1 < ir2');
+
+SELECT * FROM check_estimated_rows('
+select * from test_range_join_1, test_range_join_2 where ir1 <= ir2');
+
+SELECT * FROM check_estimated_rows('
+select * from test_range_join_1, test_range_join_2 where ir1 > ir2');
+
+SELECT * FROM check_estimated_rows('
+select * from test_range_join_1, test_range_join_2 where ir1 >= ir2');
+
+SELECT * FROM check_estimated_rows('
+select * from test_range_join_1, test_range_join_2 where ir1 && ir2');
+
+SELECT * FROM check_estimated_rows('
+select * from test_range_join_1, test_range_join_2 where ir1 <@ ir2');
+
+SELECT * FROM check_estimated_rows('
+select * from test_range_join_1, test_range_join_2 where ir1 @> ir2');
+
+SELECT * FROM check_estimated_rows('
+select * from test_range_join_1, test_range_join_2 where ir1 << ir2');
+
+SELECT * FROM check_estimated_rows('
+select * from test_range_join_1, test_range_join_2 where ir1 >> ir2');
+
+SELECT * FROM check_estimated_rows('
+select * from test_range_join_1, test_range_join_2 where ir1 &< ir2');
+
+SELECT * FROM check_estimated_rows('
+select * from test_range_join_1, test_range_join_2 where ir1 &> ir2');
+
+SELECT * FROM check_estimated_rows('
+select * from test_range_join_1, test_range_join_2 where ir1 -|- ir2');
+
+SELECT * FROM check_estimated_rows('
+select * from test_elem_join, test_range_join_1 where elem <@ ir1');
+
+SELECT * FROM check_estimated_rows('
+select * from test_range_join_1, test_elem_join where ir1 @> elem');
+
+drop function check_estimated_rows;
+
+drop table test_range_join_1;
+drop table test_range_join_2;
+drop table test_elem_join;

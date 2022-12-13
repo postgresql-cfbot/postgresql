@@ -882,6 +882,7 @@ ExplainPrintJIT(ExplainState *es, int jit_flags, JitInstrumentation *ji)
 
 	/* calculate total time */
 	INSTR_TIME_SET_ZERO(total_time);
+	/* don't add deform_counter, it's included into generation_counter */
 	INSTR_TIME_ADD(total_time, ji->generation_counter);
 	INSTR_TIME_ADD(total_time, ji->inlining_counter);
 	INSTR_TIME_ADD(total_time, ji->optimization_counter);
@@ -909,8 +910,9 @@ ExplainPrintJIT(ExplainState *es, int jit_flags, JitInstrumentation *ji)
 		{
 			ExplainIndentText(es);
 			appendStringInfo(es->str,
-							 "Timing: %s %.3f ms, %s %.3f ms, %s %.3f ms, %s %.3f ms, %s %.3f ms\n",
+							 "Timing: %s %.3f ms, %s %.3f ms, %s %.3f ms, %s %.3f ms, %s %.3f ms, %s %.3f ms\n",
 							 "Generation", 1000.0 * INSTR_TIME_GET_DOUBLE(ji->generation_counter),
+							 "Deforming", 1000.0 * INSTR_TIME_GET_DOUBLE(ji->deform_counter),
 							 "Inlining", 1000.0 * INSTR_TIME_GET_DOUBLE(ji->inlining_counter),
 							 "Optimization", 1000.0 * INSTR_TIME_GET_DOUBLE(ji->optimization_counter),
 							 "Emission", 1000.0 * INSTR_TIME_GET_DOUBLE(ji->emission_counter),
@@ -936,6 +938,9 @@ ExplainPrintJIT(ExplainState *es, int jit_flags, JitInstrumentation *ji)
 
 			ExplainPropertyFloat("Generation", "ms",
 								 1000.0 * INSTR_TIME_GET_DOUBLE(ji->generation_counter),
+								 3, es);
+			ExplainPropertyFloat("Deforming", "ms",
+								 1000.0 * INSTR_TIME_GET_DOUBLE(ji->deform_counter),
 								 3, es);
 			ExplainPropertyFloat("Inlining", "ms",
 								 1000.0 * INSTR_TIME_GET_DOUBLE(ji->inlining_counter),

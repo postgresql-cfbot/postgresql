@@ -2613,6 +2613,38 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
      </listitem>
     </varlistentry>
 
+    <varlistentry id="protocol-replication-replication-slot-snapshot">
+     <term><literal>REPLICATION_SLOT_SNAPSHOT</literal> <replaceable class="parameter">slot_name</replaceable> [ ( <replaceable class="parameter">option</replaceable> [, ...] ) ]
+      <indexterm><primary>REPLICATION_SLOT_SNAPSHOT</primary></indexterm>
+     </term>
+     <listitem>
+      <para>
+       Creates a snapshot including all the changes from the replication slot until
+       the point at which the replication slot becomes consistent. Then the snapshot
+       is used in the currenct transaction. This command is currently only supported
+       for logical replication.
+       slots.
+      </para>
+
+      <para>
+       In response to this command, the server will return a one-row result set,
+       containing the following field:
+       <variablelist>
+        <varlistentry>
+         <term><literal>consistent_point</literal> (<type>text</type>)</term>
+         <listitem>
+          <para>
+           The WAL location at which the slot became consistent.  This is the
+           earliest location from which streaming can start on this replication
+           slot.
+          </para>
+         </listitem>
+        </varlistentry>
+       </variablelist>
+      </para>
+     </listitem>
+    </varlistentry>
+
     <varlistentry id="protocol-replication-base-backup" xreflabel="BASE_BACKUP">
      <term><literal>BASE_BACKUP</literal> [ ( <replaceable class="parameter">option</replaceable> [, ...] ) ]
       <indexterm><primary>BASE_BACKUP</primary></indexterm>

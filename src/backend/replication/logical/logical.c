@@ -461,6 +461,10 @@ CreateInitDecodingContext(const char *plugin,
  * fast_forward
  *		bypass the generation of logical changes.
  *
+ * need_full_snapshot
+ * 		if true, create a snapshot able to read all tables,
+ * 		otherwise do not create any snapshot.
+ *
  * xl_routine
  *		XLogReaderRoutine used by underlying xlogreader
  *
@@ -479,6 +483,7 @@ LogicalDecodingContext *
 CreateDecodingContext(XLogRecPtr start_lsn,
 					  List *output_plugin_options,
 					  bool fast_forward,
+					  bool need_full_snapshot,
 					  XLogReaderRoutine *xl_routine,
 					  LogicalOutputPluginWriterPrepareWrite prepare_write,
 					  LogicalOutputPluginWriterWrite do_write,
@@ -487,6 +492,7 @@ CreateDecodingContext(XLogRecPtr start_lsn,
 	LogicalDecodingContext *ctx;
 	ReplicationSlot *slot;
 	MemoryContext old_context;
+	TransactionId xmin_horizon = InvalidTransactionId;
 
 	/* shorter lines... */
 	slot = MyReplicationSlot;
@@ -533,8 +539,33 @@ CreateDecodingContext(XLogRecPtr start_lsn,
 		start_lsn = slot->data.confirmed_flush;
 	}
 
+
+	/*
+	 * We need to determine a safe xmin horizon to start decoding from if we
+	 * want to create a snapshot too. Otherwise we would end up with a
+	 * snapshot that cannot be imported since xmin value from the snapshot may
+	 * be less than the oldest safe xmin. To avoid this call
+	 * GetOldestSafeDecodingTransactionId() to return a safe xmin value, which
+	 * can be used while exporting/importing the snapshot.
+	 *
+	 * So we have to acquire the ProcArrayLock to prevent computation of new
+	 * xmin horizons by other backends, get the safe decoding xid, and inform
+	 * the slot machinery about the new limit. Once that's done the
+	 * ProcArrayLock can be released as the slot machinery now is protecting
+	 * against vacuum.
+	 */
+	if (need_full_snapshot)
+	{
+		LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
+
+		xmin_horizon = GetOldestSafeDecodingTransactionId(!need_full_snapshot);
+		ReplicationSlotsComputeRequiredXmin(true);
+
+		LWLockRelease(ProcArrayLock);
+	}
+
 	ctx = StartupDecodingContext(output_plugin_options,
-								 start_lsn, InvalidTransactionId, false,
+								 start_lsn, xmin_horizon, need_full_snapshot,
 								 fast_forward, xl_routine, prepare_write,
 								 do_write, update_progress);
 

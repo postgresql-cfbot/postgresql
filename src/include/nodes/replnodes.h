@@ -108,4 +108,15 @@ typedef struct TimeLineHistoryCmd
 	TimeLineID	timeline;
 } TimeLineHistoryCmd;
 
+/* ----------------------
+ *		REPLICATION_SLOT_SNAPSHOT command
+ * ----------------------
+ */
+typedef struct ReplicationSlotSnapshotCmd
+{
+	NodeTag		type;
+	char	   *slotname;
+	List	   *options;
+} ReplicationSlotSnapshotCmd;
+
 #endif							/* REPLNODES_H */

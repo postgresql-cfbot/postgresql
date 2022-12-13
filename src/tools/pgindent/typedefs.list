@@ -2315,6 +2315,7 @@ ReplicationSlotCtlData
 ReplicationSlotOnDisk
 ReplicationSlotPersistency
 ReplicationSlotPersistentData
+ReplicationSlotSnapshotCmd
 ReplicationState
 ReplicationStateCtl
 ReplicationStateOnDisk

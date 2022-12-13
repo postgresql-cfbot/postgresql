@@ -229,6 +229,11 @@ llvm_release_context(JitContext *context)
 LLVMModuleRef
 llvm_mutable_module(LLVMJitContext *context)
 {
+#ifdef __riscv
+	const char* abiname;
+	const char* target_abi = "target-abi";
+	LLVMMetadataRef abi_metadata;
+#endif
 	llvm_assert_in_fatal_section();
 
 	/*
@@ -241,6 +246,40 @@ llvm_mutable_module(LLVMJitContext *context)
 		context->module = LLVMModuleCreateWithName("pg");
 		LLVMSetTarget(context->module, llvm_triple);
 		LLVMSetDataLayout(context->module, llvm_layout);
+#ifdef __riscv
+#if __riscv_xlen == 64
+#ifdef __riscv_float_abi_double
+		abiname = "lp64d";
+#elif defined(__riscv_float_abi_single)
+		abiname = "lp64f";
+#else
+		abiname = "lp64";
+#endif
+#elif __riscv_xlen == 32
+#ifdef __riscv_float_abi_double
+		abiname = "ilp32d";
+#elif defined(__riscv_float_abi_single)
+		abiname = "ilp32f";
+#else
+		abiname = "ilp32";
+#endif
+#else
+		elog(ERROR, "unsupported riscv xlen %d", __riscv_xlen);
+#endif
+		/*
+		 * set this manually to avoid llvm defaulting to soft float and
+		 * resulting in linker error: `can't link double-float modules
+		 * with soft-float modules`
+		 * we could set this for TargetMachine via MCOptions, but there
+		 * is no C API for it
+		 * ref: https://github.com/llvm/llvm-project/blob/afa520ab34803c82587ea6759bfd352579f741b4/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp#L90
+		 */
+		abi_metadata = LLVMMDStringInContext2(
+			LLVMGetModuleContext(context->module),
+			abiname, strlen(abiname));
+		LLVMAddModuleFlag(context->module, LLVMModuleFlagBehaviorOverride,
+			target_abi, strlen(target_abi), abi_metadata);
+#endif
 	}
 
 	return context->module;
@@ -786,6 +825,8 @@ llvm_session_initialize(void)
 	char	   *error = NULL;
 	char	   *cpu = NULL;
 	char	   *features = NULL;
+	LLVMRelocMode reloc=LLVMRelocDefault;
+	LLVMCodeModel codemodel=LLVMCodeModelJITDefault;
 	LLVMTargetMachineRef opt0_tm;
 	LLVMTargetMachineRef opt3_tm;
 
@@ -830,16 +871,21 @@ llvm_session_initialize(void)
 	elog(DEBUG2, "LLVMJIT detected CPU \"%s\", with features \"%s\"",
 		 cpu, features);
 
+#ifdef __riscv
+	reloc=LLVMRelocPIC;
+	codemodel=LLVMCodeModelMedium;
+#endif
+
 	opt0_tm =
 		LLVMCreateTargetMachine(llvm_targetref, llvm_triple, cpu, features,
 								LLVMCodeGenLevelNone,
-								LLVMRelocDefault,
-								LLVMCodeModelJITDefault);
+								reloc,
+								codemodel);
 	opt3_tm =
 		LLVMCreateTargetMachine(llvm_targetref, llvm_triple, cpu, features,
 								LLVMCodeGenLevelAggressive,
-								LLVMRelocDefault,
-								LLVMCodeModelJITDefault);
+								reloc,
+								codemodel);
 
 	LLVMDisposeMessage(cpu);
 	cpu = NULL;
@@ -1174,6 +1220,10 @@ llvm_log_jit_error(void *ctx, LLVMErrorRef error)
 static LLVMOrcObjectLayerRef
 llvm_create_object_layer(void *Ctx, LLVMOrcExecutionSessionRef ES, const char *Triple)
 {
+#if defined(USE_JITLINK)
+	LLVMOrcObjectLayerRef objlayer =
+	LLVMOrcCreateJitlinkObjectLinkingLayer(ES);
+#else
 	LLVMOrcObjectLayerRef objlayer =
 	LLVMOrcCreateRTDyldObjectLinkingLayerWithSectionMemoryManager(ES);
 
@@ -1193,6 +1243,7 @@ llvm_create_object_layer(void *Ctx, LLVMOrcExecutionSessionRef ES, const char *T
 
 		LLVMOrcRTDyldObjectLinkingLayerRegisterJITEventListener(objlayer, l);
 	}
+#endif
 #endif
 
 	return objlayer;

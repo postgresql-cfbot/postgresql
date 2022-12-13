@@ -18,6 +18,7 @@ backend_sources += files(
   'pg_conversion.c',
   'pg_db_role_setting.c',
   'pg_depend.c',
+  'pg_dict.c',
   'pg_enum.c',
   'pg_inherits.c',
   'pg_largeobject.c',

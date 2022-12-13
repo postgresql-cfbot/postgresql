@@ -3138,6 +3138,47 @@ get_attavgwidth(Oid relid, AttrNumber attnum)
 	return 0;
 }
 
+
+/*
+ * get_attstaindexam
+ *
+ *	  Given the table and attribute number of a column, get the index AM
+ *	  statistics.  Return NULL if no data available.
+ *
+ * Currently this is only consulted for individual tables, not for inheritance
+ * trees, so we don't need an "inh" parameter.
+ */
+bytea *
+get_attindexam(Oid relid, AttrNumber attnum)
+{
+	HeapTuple	tp;
+
+	tp = SearchSysCache3(STATRELATTINH,
+						 ObjectIdGetDatum(relid),
+						 Int16GetDatum(attnum),
+						 BoolGetDatum(false));
+	if (HeapTupleIsValid(tp))
+	{
+		Datum	val;
+		bytea  *retval = NULL;
+		bool	isnull;
+
+		val = SysCacheGetAttr(STATRELATTINH, tp,
+							  Anum_pg_statistic_staindexam,
+							  &isnull);
+
+		if (!isnull)
+			retval = (bytea *) PG_DETOAST_DATUM(val);
+
+		// staindexam = ((Form_pg_statistic) GETSTRUCT(tp))->staindexam;
+		ReleaseSysCache(tp);
+
+		return retval;
+	}
+
+	return NULL;
+}
+
 /*
  * get_attstatsslot
  *

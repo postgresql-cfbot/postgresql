@@ -7780,6 +7780,7 @@ brincostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 	Relation	indexRel;
 	ListCell   *l;
 	VariableStatData vardata;
+	double		averageOverlaps;
 
 	Assert(rte->rtekind == RTE_RELATION);
 
@@ -7827,6 +7828,7 @@ brincostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 	 * correlation statistics, we will keep it as 0.
 	 */
 	*indexCorrelation = 0;
+	averageOverlaps = 0.0;
 
 	foreach(l, path->indexclauses)
 	{
@@ -7836,6 +7838,36 @@ brincostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 		/* attempt to lookup stats in relation for this index column */
 		if (attnum != 0)
 		{
+			/*
+			 * If AM-specific statistics are enabled, try looking up the stats
+			 * for the index key. We only have this for minmax opclasses, so
+			 * we just cast it like that. But other BRIN opclasses might need
+			 * other stats so either we need to abstract this somehow, or maybe
+			 * just collect a sufficiently generic stats for all BRIN indexes.
+			 *
+			 * XXX Make this non-minmax specific.
+			 */
+			if (enable_indexam_stats)
+			{
+				BrinMinmaxStats  *amstats
+					= (BrinMinmaxStats *) get_attindexam(index->indexoid, attnum);
+
+				if (amstats)
+				{
+					elog(WARNING, "found AM stats: attnum %d n_ranges %ld n_summarized %ld n_all_nulls %ld n_has_nulls %ld avg_overlaps %f",
+						 attnum, amstats->n_ranges, amstats->n_summarized,
+						 amstats->n_all_nulls, amstats->n_has_nulls,
+						 amstats->avg_overlaps);
+
+					/*
+					 * The only thing we use at the moment is the average number
+					 * of overlaps for a single range. Use the other stuff too.
+					 */
+					averageOverlaps = Max(averageOverlaps,
+										  1.0 + amstats->avg_overlaps);
+				}
+			}
+
 			/* Simple variable -- look to stats for the underlying table */
 			if (get_relation_stats_hook &&
 				(*get_relation_stats_hook) (root, rte, attnum, &vardata))
@@ -7917,6 +7949,14 @@ brincostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 											 JOIN_INNER, NULL);
 
 	/*
+	 * XXX Can we combine qualSelectivity with the average number of matching
+	 * ranges per value? qualSelectivity estimates how many tuples ar we
+	 * going to match, and average number of matches says how many ranges
+	 * will each of those match on average. We don't know how many will
+	 * be duplicate, but it gives us a worst-case estimate, at least.
+	 */
+
+	/*
 	 * Now calculate the minimum possible ranges we could match with if all of
 	 * the rows were in the perfect order in the table's heap.
 	 */
@@ -7931,6 +7971,25 @@ brincostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 		estimatedRanges = indexRanges;
 	else
 		estimatedRanges = Min(minimalRanges / *indexCorrelation, indexRanges);
+
+	elog(WARNING, "before index AM stats: cestimatedRanges = %f", estimatedRanges);
+
+	/*
+	 * If we found some AM stats, look at average number of overlapping ranges,
+	 * and apply that to the currently estimated ranges.
+	 *
+	 * XXX We pretty much combine this with correlation info (because it was
+	 * already applied in the estimatedRanges formula above), which might be
+	 * overly pessimistic. The overlaps stats seems somewhat redundant with
+	 * the correlation, so maybe we should do just one? The AM stats seems
+	 * like a more reliable information, because the correlation is not very
+	 * sensitive to outliers, for example. So maybe let's prefer that, and
+	 * only use the correlation as fallback when AM stats are not available?
+	 */
+	if (averageOverlaps > 0.0)
+		estimatedRanges = Min(estimatedRanges * averageOverlaps, indexRanges);
+
+	elog(WARNING, "after index AM stats: cestimatedRanges = %f", estimatedRanges);
 
 	/* we expect to visit this portion of the table */
 	selec = estimatedRanges / indexRanges;

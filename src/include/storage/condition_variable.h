@@ -22,12 +22,12 @@
 #ifndef CONDITION_VARIABLE_H
 #define CONDITION_VARIABLE_H
 
+#include "storage/lwlock.h"
 #include "storage/proclist_types.h"
-#include "storage/spin.h"
 
 typedef struct
 {
-	slock_t		mutex;			/* spinlock protecting the wakeup list */
+	LWLock		mutex;			/* lock protecting the wakeup list */
 	proclist_head wakeup;		/* list of wake-able processes */
 } ConditionVariable;
 

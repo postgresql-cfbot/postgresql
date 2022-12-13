@@ -158,7 +158,7 @@ SimpleLruShmemSize(int nslots, int nlsns)
 	Size		sz;
 
 	/* we assume nslots isn't so large as to risk overflow */
-	sz = MAXALIGN(sizeof(SlruSharedData));
+	sz = TYPEALIGN(8, sizeof(SlruSharedData));
 	sz += MAXALIGN(nslots * sizeof(char *));	/* page_buffer[] */
 	sz += MAXALIGN(nslots * sizeof(SlruPageStatus));	/* page_status[] */
 	sz += MAXALIGN(nslots * sizeof(bool));	/* page_dirty[] */
@@ -232,7 +232,7 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 		offset += MAXALIGN(nslots * sizeof(int));
 
 		/* Initialize LWLocks */
-		shared->buffer_locks = (LWLockPadded *) (ptr + offset);
+		shared->buffer_locks = (LWLockPadded *) (TYPEALIGN(8, (ptr + offset)));
 		offset += MAXALIGN(nslots * sizeof(LWLockPadded));
 
 		if (nlsns > 0)

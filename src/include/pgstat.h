@@ -469,10 +469,6 @@ extern void pgstat_report_connect(Oid dboid);
 	(pgStatBlockReadTime += (n))
 #define pgstat_count_buffer_write_time(n)							\
 	(pgStatBlockWriteTime += (n))
-#define pgstat_count_conn_active_time(n)							\
-	(pgStatActiveTime += (n))
-#define pgstat_count_conn_txn_idle_time(n)							\
-	(pgStatTransactionIdleTime += (n))
 
 extern PgStat_StatDBEntry *pgstat_fetch_stat_dbentry(Oid dboid);
 
@@ -673,12 +669,6 @@ extern PGDLLIMPORT PgStat_CheckpointerStats PendingCheckpointerStats;
 extern PGDLLIMPORT PgStat_Counter pgStatBlockReadTime;
 extern PGDLLIMPORT PgStat_Counter pgStatBlockWriteTime;
 
-/*
- * Updated by pgstat_count_conn_*_time macros, called by
- * pgstat_report_activity().
- */
-extern PGDLLIMPORT PgStat_Counter pgStatActiveTime;
-extern PGDLLIMPORT PgStat_Counter pgStatTransactionIdleTime;
 
 /* updated by the traffic cop and in errfinish() */
 extern PGDLLIMPORT SessionEndType pgStatSessionEndCause;

@@ -207,6 +207,8 @@ struct ParseState
 										 * with FOR UPDATE/FOR SHARE */
 	bool		p_resolve_unknowns; /* resolve unknown-type SELECT outputs as
 									 * type text */
+	bool		p_generic_explain;	/* accept undefined parameter
+									 * placeholders */
 
 	QueryEnvironment *p_queryEnv;	/* curr env, incl refs to enclosing env */
 

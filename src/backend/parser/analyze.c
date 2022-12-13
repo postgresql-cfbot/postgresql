@@ -27,6 +27,7 @@
 #include "access/sysattr.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
+#include "commands/defrem.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
@@ -2904,6 +2905,18 @@ static Query *
 transformExplainStmt(ParseState *pstate, ExplainStmt *stmt)
 {
 	Query	   *result;
+	ListCell   *lc;
+	bool		generic_plan;
+
+	foreach(lc, stmt->options)
+	{
+		DefElem    *opt = (DefElem *) lfirst(lc);
+
+		if (strcmp(opt->defname, "generic_plan") == 0)
+			generic_plan = defGetBoolean(opt);
+		/* don't "break", as we want the last value */
+	}
+	pstate->p_generic_explain = generic_plan;
 
 	/* transform contained query, allowing SELECT INTO */
 	stmt->query = (Node *) transformOptionalSelectInto(pstate, stmt->query);

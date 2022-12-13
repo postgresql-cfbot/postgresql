@@ -369,6 +369,21 @@ coerce_type(ParseState *pstate, Node *node,
 
 		return result;
 	}
+	/*
+	 * If we are to generate a generic plan for EXPLAIN, simply let the
+	 * parameter be of the desired type.
+	 */
+	if (IsA(node, Param) &&
+		pstate != NULL && pstate->p_generic_explain)
+	{
+		Param *param = (Param *) node;
+
+		param->paramtype = targetTypeId;
+		param->paramtypmod = targetTypeMod;
+		param->location = location;
+
+		return node;
+	}
 	if (IsA(node, Param) &&
 		pstate != NULL && pstate->p_coerce_param_hook != NULL)
 	{

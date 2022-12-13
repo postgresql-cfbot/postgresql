@@ -128,3 +128,8 @@ select explain_filter('explain (verbose) select * from t1 where pg_temp.mysin(f1
 -- Test compute_query_id
 set compute_query_id = on;
 select explain_filter('explain (verbose) select * from int8_tbl i8');
+
+-- Test EXPLAIN (GENERIC_PLAN)
+select explain_filter('explain (generic_plan) select unique1 from tenk1 where thousand = $1');
+-- should fail
+select explain_filter('explain (analyze, generic_plan) select unique1 from tenk1 where thousand = $1');

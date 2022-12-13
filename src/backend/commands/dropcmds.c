@@ -481,6 +481,11 @@ does_not_exist_skipping(ObjectType objtype, Node *object)
 			msg = gettext_noop("publication \"%s\" does not exist, skipping");
 			name = strVal(object);
 			break;
+		case OBJECT_VARIABLE:
+			msg = gettext_noop("session variable \"%s\" does not exist, skipping");
+			name = NameListToString(castNode(List, object));
+			break;
+		default:
 
 		case OBJECT_COLUMN:
 		case OBJECT_DATABASE:

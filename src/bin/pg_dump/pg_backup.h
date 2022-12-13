@@ -132,12 +132,14 @@ typedef struct _restoreOptions
 	int			selFunction;
 	int			selTrigger;
 	int			selTable;
+	int			selVariable;
 	SimpleStringList indexNames;
 	SimpleStringList functionNames;
 	SimpleStringList schemaNames;
 	SimpleStringList schemaExcludeNames;
 	SimpleStringList triggerNames;
 	SimpleStringList tableNames;
+	SimpleStringList variableNames;
 
 	int			useDB;
 	ConnParams	cparams;		/* parameters to use if useDB */

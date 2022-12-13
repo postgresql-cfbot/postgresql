@@ -139,6 +139,7 @@ typedef struct Query
 	int			resultRelation; /* rtable index of target relation for
 								 * INSERT/UPDATE/DELETE/MERGE; 0 for SELECT */
 
+	Oid			resultVariable; /* target variable of LET statement */
 	bool		hasAggs;		/* has aggregates in tlist or havingQual */
 	bool		hasWindowFuncs; /* has window functions in tlist */
 	bool		hasTargetSRFs;	/* has set-returning functions in tlist */
@@ -148,6 +149,7 @@ typedef struct Query
 	bool		hasModifyingCTE;	/* has INSERT/UPDATE/DELETE in WITH */
 	bool		hasForUpdate;	/* FOR [KEY] UPDATE/SHARE was specified */
 	bool		hasRowSecurity; /* rewriter has applied some RLS policy */
+	bool		hasSessionVariables;	/* uses session variables */
 
 	bool		isReturn;		/* is a RETURN statement */
 
@@ -1728,6 +1730,21 @@ typedef struct MergeStmt
 } MergeStmt;
 
 /* ----------------------
+ *		Let Statement
+ * ----------------------
+ */
+typedef struct LetStmt
+{
+	NodeTag		type;
+	List	   *target;			/* target variable */
+	Node	   *query;			/* source expression */
+	bool		set_default;	/* true, when set to DEFAULt is wanted */
+	bool		plpgsql_mode;	/* true, when command will be executed
+								 * (parsed) by plpgsql runtime */
+	int			location;
+} LetStmt;
+
+/* ----------------------
  *		Select Statement
  *
  * A "simple" SELECT is represented in the output of gram.y by a single
@@ -1937,6 +1954,7 @@ typedef enum ObjectType
 	OBJECT_TSTEMPLATE,
 	OBJECT_TYPE,
 	OBJECT_USER_MAPPING,
+	OBJECT_VARIABLE,
 	OBJECT_VIEW
 } ObjectType;
 
@@ -3060,6 +3078,25 @@ typedef struct AlterStatsStmt
 	bool		missing_ok;		/* skip error if statistics object is missing */
 } AlterStatsStmt;
 
+
+/* ----------------------
+ *		{Create|Alter} VARIABLE Statement
+ * ----------------------
+ */
+typedef struct CreateSessionVarStmt
+{
+	NodeTag		type;
+	RangeVar   *variable;		/* the variable to create */
+	TypeName   *typeName;		/* the type of variable */
+	CollateClause *collClause;
+	Node	   *defexpr;		/* default expression */
+	char		eoxaction;		/* on commit action */
+	bool		if_not_exists;	/* do nothing if it already exists */
+	bool		is_not_null;	/* Disallow nulls */
+	bool		is_immutable;	/* Don't allow changes */
+} CreateSessionVarStmt;
+
+
 /* ----------------------
  *		Create Function Statement
  * ----------------------
@@ -3557,7 +3594,8 @@ typedef enum DiscardMode
 	DISCARD_ALL,
 	DISCARD_PLANS,
 	DISCARD_SEQUENCES,
-	DISCARD_TEMP
+	DISCARD_TEMP,
+	DISCARD_VARIABLES
 } DiscardMode;
 
 typedef struct DiscardStmt

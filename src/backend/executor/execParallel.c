@@ -12,8 +12,9 @@
  * workers and ensuring that their state generally matches that of the
  * leader; see src/backend/access/transam/README.parallel for details.
  * However, we must save and restore relevant executor state, such as
- * any ParamListInfo associated with the query, buffer/WAL usage info, and
- * the actual plan to be passed down to the worker.
+ * any ParamListInfo associated with the query, buffer/WAL usage info,
+ * session variables buffer, and the actual plan to be passed down to
+ * the worker.
  *
  * IDENTIFICATION
  *	  src/backend/executor/execParallel.c
@@ -66,6 +67,7 @@
 #define PARALLEL_KEY_QUERY_TEXT		UINT64CONST(0xE000000000000008)
 #define PARALLEL_KEY_JIT_INSTRUMENTATION UINT64CONST(0xE000000000000009)
 #define PARALLEL_KEY_WAL_USAGE			UINT64CONST(0xE00000000000000A)
+#define PARALLEL_KEY_SESSION_VARIABLES	UINT64CONST(0xE00000000000000B)
 
 #define PARALLEL_TUPLE_QUEUE_SIZE		65536
 
@@ -139,6 +141,12 @@ static bool ExecParallelRetrieveInstrumentation(PlanState *planstate,
 
 /* Helper function that runs in the parallel worker. */
 static DestReceiver *ExecParallelGetReceiver(dsm_segment *seg, shm_toc *toc);
+
+/* Helper functions that can pass values of session variables */
+static Size EstimateSessionVariables(EState *estate);
+static void SerializeSessionVariables(EState *estate, char **start_address);
+static SessionVariableValue *RestoreSessionVariables(char **start_address,
+													 int *num_session_variables);
 
 /*
  * Create a serialized representation of the plan to be sent to each worker.
@@ -599,6 +607,7 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 	char	   *pstmt_data;
 	char	   *pstmt_space;
 	char	   *paramlistinfo_space;
+	char	   *session_variables_space;
 	BufferUsage *bufusage_space;
 	WalUsage   *walusage_space;
 	SharedExecutorInstrumentation *instrumentation = NULL;
@@ -608,6 +617,7 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 	int			instrumentation_len = 0;
 	int			jit_instrumentation_len = 0;
 	int			instrument_offset = 0;
+	int			session_variables_len = 0;
 	Size		dsa_minsize = dsa_minimum_size();
 	char	   *query_string;
 	int			query_len;
@@ -661,6 +671,11 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 	/* Estimate space for serialized ParamListInfo. */
 	paramlistinfo_len = EstimateParamListSpace(estate->es_param_list_info);
 	shm_toc_estimate_chunk(&pcxt->estimator, paramlistinfo_len);
+	shm_toc_estimate_keys(&pcxt->estimator, 1);
+
+	/* Estimate space for serialized session variables. */
+	session_variables_len = EstimateSessionVariables(estate);
+	shm_toc_estimate_chunk(&pcxt->estimator, session_variables_len);
 	shm_toc_estimate_keys(&pcxt->estimator, 1);
 
 	/*
@@ -756,6 +771,11 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 	paramlistinfo_space = shm_toc_allocate(pcxt->toc, paramlistinfo_len);
 	shm_toc_insert(pcxt->toc, PARALLEL_KEY_PARAMLISTINFO, paramlistinfo_space);
 	SerializeParamList(estate->es_param_list_info, &paramlistinfo_space);
+
+	/* Store serialized session variables. */
+	session_variables_space = shm_toc_allocate(pcxt->toc, session_variables_len);
+	shm_toc_insert(pcxt->toc, PARALLEL_KEY_SESSION_VARIABLES, session_variables_space);
+	SerializeSessionVariables(estate, &session_variables_space);
 
 	/* Allocate space for each worker's BufferUsage; no need to initialize. */
 	bufusage_space = shm_toc_allocate(pcxt->toc,
@@ -1404,6 +1424,7 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 	SharedJitInstrumentation *jit_instrumentation;
 	int			instrument_options = 0;
 	void	   *area_space;
+	char	   *sessionvariable_space;
 	dsa_area   *area;
 	ParallelWorkerContext pwcxt;
 
@@ -1428,6 +1449,14 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 	/* Attach to the dynamic shared memory area. */
 	area_space = shm_toc_lookup(toc, PARALLEL_KEY_DSA, false);
 	area = dsa_attach_in_place(area_space, seg);
+
+	/* Reconstruct session variables. */
+	sessionvariable_space = shm_toc_lookup(toc,
+										   PARALLEL_KEY_SESSION_VARIABLES,
+										   false);
+	queryDesc->session_variables =
+		RestoreSessionVariables(&sessionvariable_space,
+								&queryDesc->num_session_variables);
 
 	/* Start up the executor */
 	queryDesc->plannedstmt->jitFlags = fpes->jit_flags;
@@ -1496,4 +1525,118 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 	dsa_detach(area);
 	FreeQueryDesc(queryDesc);
 	receiver->rDestroy(receiver);
+}
+
+/*
+ * Estimate the amount of space required to serialize a session variable.
+ */
+static Size
+EstimateSessionVariables(EState *estate)
+{
+	int			i;
+	Size		sz = sizeof(int);
+
+	if (estate->es_session_variables == NULL)
+		return sz;
+
+	for (i = 0; i < estate->es_num_session_variables; i++)
+	{
+		SessionVariableValue *svarval;
+		Oid			typeOid;
+		int16		typLen;
+		bool		typByVal;
+
+		svarval = &estate->es_session_variables[i];
+
+		typeOid = svarval->typid;
+
+		sz = add_size(sz, sizeof(Oid)); /* space for type OID */
+
+		/* space for datum/isnull */
+		Assert(OidIsValid(typeOid));
+		get_typlenbyval(typeOid, &typLen, &typByVal);
+
+		sz = add_size(sz,
+					  datumEstimateSpace(svarval->value, svarval->isnull, typByVal, typLen));
+	}
+
+	return sz;
+}
+
+/*
+ * Serialize a session variables buffer into caller-provided storage.
+ *
+ * We write the number of parameters first, as a 4-byte integer, and then
+ * write details for each parameter in turn.  The details for each parameter
+ * consist of a 4-byte type OID, and then the datum as serialized by
+ * datumSerialize().  The caller is responsible for ensuring that there is
+ * enough storage to store the number of bytes that will be written; use
+ * EstimateSessionVariables to find out how many will be needed.
+ * *start_address is updated to point to the byte immediately following those
+ * written.
+ *
+ * RestoreSessionVariables can be used to recreate a session variable buffer
+ * based on the serialized representation;
+ */
+static void
+SerializeSessionVariables(EState *estate, char **start_address)
+{
+	int			nparams;
+	int			i;
+
+	/* Write number of parameters. */
+	nparams = estate->es_num_session_variables;
+	memcpy(*start_address, &nparams, sizeof(int));
+	*start_address += sizeof(int);
+
+	/* Write each parameter in turn. */
+	for (i = 0; i < nparams; i++)
+	{
+		SessionVariableValue *svarval;
+		Oid			typeOid;
+		int16		typLen;
+		bool		typByVal;
+
+		svarval = &estate->es_session_variables[i];
+		typeOid = svarval->typid;
+
+		/* Write type OID. */
+		memcpy(*start_address, &typeOid, sizeof(Oid));
+		*start_address += sizeof(Oid);
+
+		Assert(OidIsValid(typeOid));
+		get_typlenbyval(typeOid, &typLen, &typByVal);
+
+		datumSerialize(svarval->value, svarval->isnull, typByVal, typLen,
+					   start_address);
+	}
+}
+
+static SessionVariableValue *
+RestoreSessionVariables(char **start_address, int *num_session_variables)
+{
+	SessionVariableValue *session_variables;
+	int			i;
+	int			nparams;
+
+	memcpy(&nparams, *start_address, sizeof(int));
+	*start_address += sizeof(int);
+
+	*num_session_variables = nparams;
+	session_variables = (SessionVariableValue *)
+		palloc(nparams * sizeof(SessionVariableValue));
+
+	for (i = 0; i < nparams; i++)
+	{
+		SessionVariableValue *svarval = &session_variables[i];
+
+		/* Read type OID. */
+		memcpy(&svarval->typid, *start_address, sizeof(Oid));
+		*start_address += sizeof(Oid);
+
+		/* Read datum/isnull. */
+		svarval->value = datumRestore(start_address, &svarval->isnull);
+	}
+
+	return session_variables;
 }

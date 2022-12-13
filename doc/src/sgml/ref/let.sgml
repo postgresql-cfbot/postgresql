@@ -1,0 +1,109 @@
+<!--
+doc/src/sgml/ref/let.sgml
+PostgreSQL documentation
+-->
+
+<refentry id="sql-let">
+ <indexterm zone="sql-let">
+  <primary>LET</primary>
+ </indexterm>
+
+ <indexterm>
+  <primary>session variable</primary>
+  <secondary>changing</secondary>
+ </indexterm>
+
+ <refmeta>
+  <refentrytitle>LET</refentrytitle>
+  <manvolnum>7</manvolnum>
+  <refmiscinfo>SQL - Language Statements</refmiscinfo>
+ </refmeta>
+
+ <refnamediv>
+  <refname>LET</refname>
+  <refpurpose>change a session variable's value</refpurpose>
+ </refnamediv>
+
+ <refsynopsisdiv>
+<synopsis>
+LET <replaceable class="parameter">session_variable</replaceable> = <replaceable class="parameter">sql_expression</replaceable>
+LET <replaceable class="parameter">session_variable</replaceable> = DEFAULT
+</synopsis>
+ </refsynopsisdiv>
+
+ <refsect1>
+  <title>Description</title>
+
+  <para>
+   The <command>LET</command> command assigns a value to the specified session
+   variable.
+  </para>
+
+ </refsect1>
+
+ <refsect1>
+  <title>Parameters</title>
+
+  <variablelist>
+   <varlistentry>
+    <term><literal>session_variable</literal></term>
+    <listitem>
+     <para>
+      The name of the session variable.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>sql_expression</literal></term>
+    <listitem>
+     <para>
+      An SQL expression (can be subquery in parenthesis). The result must
+      be of castable to the same data type as the session variable (in
+      implicit or assignment context).
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>DEFAULT</literal></term>
+    <listitem>
+     <para>
+      Reset the session variable to its default value, if that is defined.
+      If no explicit default value has been declared, the session variable
+      is set to NULL.
+     </para>
+    </listitem>
+   </varlistentry>
+  </variablelist>
+
+  <para>
+   Example:
+<programlisting>
+CREATE VARIABLE myvar AS integer;
+LET myvar = 10;
+LET myvar = (SELECT sum(val) FROM tab);
+LET myvar = DEFAULT;
+</programlisting>
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Compatibility</title>
+
+  <para>
+   The <command>LET</command> is a <productname>PostgreSQL</productname>
+   extension.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>See Also</title>
+
+  <simplelist type="inline">
+   <member><xref linkend="sql-altervariable"/></member>
+   <member><xref linkend="sql-createvariable"/></member>
+   <member><xref linkend="sql-dropvariable"/></member>
+  </simplelist>
+ </refsect1>
+</refentry>

@@ -1,0 +1,112 @@
+Parsed test spec with 4 sessions
+
+starting permutation: let val drop val
+step let: LET myvar = 'test';
+step val: SELECT myvar;
+myvar
+-----
+test 
+(1 row)
+
+step drop: DROP VARIABLE myvar;
+step val: SELECT myvar;
+ERROR:  column or variable "myvar" does not exist
+
+starting permutation: let val s1 drop val sr1
+step let: LET myvar = 'test';
+step val: SELECT myvar;
+myvar
+-----
+test 
+(1 row)
+
+step s1: BEGIN;
+step drop: DROP VARIABLE myvar;
+step val: SELECT myvar;
+ERROR:  column or variable "myvar" does not exist
+step sr1: ROLLBACK;
+
+starting permutation: let val dbg drop create dbg val
+step let: LET myvar = 'test';
+step val: SELECT myvar;
+myvar
+-----
+test 
+(1 row)
+
+step dbg: SELECT schema, name, removed FROM pg_session_variables();
+schema|name |removed
+------+-----+-------
+public|myvar|f      
+(1 row)
+
+step drop: DROP VARIABLE myvar;
+step create: CREATE VARIABLE myvar AS text;
+step dbg: SELECT schema, name, removed FROM pg_session_variables();
+schema|name|removed
+------+----+-------
+(0 rows)
+
+step val: SELECT myvar;
+myvar
+-----
+     
+(1 row)
+
+
+starting permutation: let val s1 dbg drop create dbg val sr1
+step let: LET myvar = 'test';
+step val: SELECT myvar;
+myvar
+-----
+test 
+(1 row)
+
+step s1: BEGIN;
+step dbg: SELECT schema, name, removed FROM pg_session_variables();
+schema|name |removed
+------+-----+-------
+public|myvar|f      
+(1 row)
+
+step drop: DROP VARIABLE myvar;
+step create: CREATE VARIABLE myvar AS text;
+step dbg: SELECT schema, name, removed FROM pg_session_variables();
+schema|name |removed
+------+-----+-------
+public|myvar|f      
+(1 row)
+
+step val: SELECT myvar;
+myvar
+-----
+     
+(1 row)
+
+step sr1: ROLLBACK;
+
+starting permutation: create3 let3 s3 o_c_d o_eox_r create4 let4 drop4 drop3 inval3 discard sc3 clean state
+step create3: CREATE VARIABLE myvar3 AS text;
+step let3: LET myvar3 = 'test';
+step s3: BEGIN;
+step o_c_d: CREATE TEMP VARIABLE myvar_o_c_d AS text ON COMMIT DROP;
+step o_eox_r: CREATE VARIABLE myvar_o_eox_r AS text ON TRANSACTION END RESET; LET myvar_o_eox_r = 'test';
+step create4: CREATE VARIABLE myvar4 AS text;
+step let4: LET myvar4 = 'test';
+step drop4: DROP VARIABLE myvar4;
+step drop3: DROP VARIABLE myvar3;
+step inval3: SELECT COUNT(*) >= 0 FROM pg_foreign_table;
+?column?
+--------
+t       
+(1 row)
+
+step discard: DISCARD VARIABLES;
+step sc3: COMMIT;
+step clean: DROP VARIABLE myvar_o_eox_r;
+step state: SELECT varname FROM pg_variable;
+varname
+-------
+myvar  
+(1 row)
+

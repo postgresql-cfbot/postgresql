@@ -190,7 +190,9 @@ static List *set_returning_clause_references(PlannerInfo *root,
 static List *set_windowagg_runcondition_references(PlannerInfo *root,
 												   List *runcondition,
 												   Plan *plan);
-
+static bool pull_up_has_session_variables_walker(Node *node,
+												 PlannerInfo *root);
+static void record_plan_variable_dependency(PlannerInfo *root, Oid varid);
 
 /*****************************************************************************
  *
@@ -1287,6 +1289,50 @@ set_plan_refs(PlannerInfo *root, Plan *plan, int rtoffset)
 }
 
 /*
+ * Search usage of session variables in subqueries
+ */
+void
+pull_up_has_session_variables(PlannerInfo *root)
+{
+	Query	   *query = root->parse;
+
+	if (query->hasSessionVariables)
+	{
+		root->hasSessionVariables = true;
+	}
+	else
+	{
+		(void) query_tree_walker(query,
+								 pull_up_has_session_variables_walker,
+								 (void *) root, 0);
+	}
+}
+
+static bool
+pull_up_has_session_variables_walker(Node *node, PlannerInfo *root)
+{
+	if (node == NULL)
+		return false;
+	if (IsA(node, Query))
+	{
+		Query	   *query = (Query *) node;
+
+		if (query->hasSessionVariables)
+		{
+			root->hasSessionVariables = true;
+			return false;
+		}
+
+		/* Recurse into subselects */
+		return query_tree_walker((Query *) node,
+								 pull_up_has_session_variables_walker,
+								 (void *) root, 0);
+	}
+	return expression_tree_walker(node, pull_up_has_session_variables_walker,
+								  (void *) root);
+}
+
+/*
  * set_indexonlyscan_references
  *		Do set_plan_references processing on an IndexOnlyScan
  *
@@ -1881,8 +1927,9 @@ copyVar(Var *var)
  * This is code that is common to all variants of expression-fixing.
  * We must look up operator opcode info for OpExpr and related nodes,
  * add OIDs from regclass Const nodes into root->glob->relationOids, and
- * add PlanInvalItems for user-defined functions into root->glob->invalItems.
- * We also fill in column index lists for GROUPING() expressions.
+ * add PlanInvalItems for user-defined functions and session variables into
+ * root->glob->invalItems.  We also fill in column index lists for GROUPING()
+ * expressions.
  *
  * We assume it's okay to update opcode info in-place.  So this could possibly
  * scribble on the planner's input data structures, but it's OK.
@@ -1972,15 +2019,28 @@ fix_expr_common(PlannerInfo *root, Node *node)
 				g->cols = cols;
 		}
 	}
+	else if (IsA(node, Param))
+	{
+		Param	   *p = (Param *) node;
+
+		if (p->paramkind == PARAM_VARIABLE)
+			record_plan_variable_dependency(root, p->paramvarid);
+	}
 }
 
 /*
  * fix_param_node
  *		Do set_plan_references processing on a Param
+ *		Collect session variables list and replace variable oid by
+ *		index to collected list.
  *
  * If it's a PARAM_MULTIEXPR, replace it with the appropriate Param from
  * root->multiexpr_params; otherwise no change is needed.
  * Just for paranoia's sake, we make a copy of the node in either case.
+ *
+ * If it's a PARAM_VARIABLE, then we collect used session variables in
+ * list root->glob->sessionVariable. We should to assign Param paramvarid
+ * too, and it is position of related session variable in mentioned list.
  */
 static Node *
 fix_param_node(PlannerInfo *root, Param *p)
@@ -1999,6 +2059,41 @@ fix_param_node(PlannerInfo *root, Param *p)
 			elog(ERROR, "unexpected PARAM_MULTIEXPR ID: %d", p->paramid);
 		return copyObject(list_nth(params, colno - 1));
 	}
+
+	if (p->paramkind == PARAM_VARIABLE)
+	{
+		ListCell   *lc;
+		int			n = 0;
+		bool		found = false;
+
+		/* We will modify object */
+		p = (Param *) copyObject(p);
+
+		/*
+		 * Now, we can actualize list of session variables, and we can
+		 * complete paramid parameter.
+		 */
+		foreach(lc, root->glob->sessionVariables)
+		{
+			if (lfirst_oid(lc) == p->paramvarid)
+			{
+				p->paramid = n;
+				found = true;
+				break;
+			}
+			n += 1;
+		}
+
+		if (!found)
+		{
+			root->glob->sessionVariables = lappend_oid(root->glob->sessionVariables,
+													   p->paramvarid);
+			p->paramid = n;
+		}
+
+		return (Node *) p;
+	}
+
 	return (Node *) copyObject(p);
 }
 
@@ -2060,7 +2155,10 @@ fix_alternative_subplan(PlannerInfo *root, AlternativeSubPlan *asplan,
  * replacing Aggref nodes that should be replaced by initplan output Params,
  * choosing the best implementation for AlternativeSubPlans,
  * looking up operator opcode info for OpExpr and related nodes,
- * and adding OIDs from regclass Const nodes into root->glob->relationOids.
+ * adding OIDs from regclass Const nodes into root->glob->relationOids,
+ * and assigning paramvarid to PARAM_VARIABLE params, and collecting
+ * of OIDs of session variables in root->glob->sessionVariables list
+ * (paramvarid is an position of related session variable in this list).
  *
  * 'node': the expression to be modified
  * 'rtoffset': how much to increment varnos by
@@ -2082,7 +2180,8 @@ fix_scan_expr(PlannerInfo *root, Node *node, int rtoffset, double num_exec)
 		root->multiexpr_params != NIL ||
 		root->glob->lastPHId != 0 ||
 		root->minmax_aggs != NIL ||
-		root->hasAlternativeSubPlans)
+		root->hasAlternativeSubPlans ||
+		root->hasSessionVariables)
 	{
 		return fix_scan_expr_mutator(node, &context);
 	}
@@ -3320,6 +3419,25 @@ record_plan_type_dependency(PlannerInfo *root, Oid typid)
 }
 
 /*
+ * Record dependency on a session variable. The variable can be used as a
+ * session variable in expression list, or target of LET statement.
+ */
+static void
+record_plan_variable_dependency(PlannerInfo *root, Oid varid)
+{
+	PlanInvalItem *inval_item = makeNode(PlanInvalItem);
+
+	/* paramid is still session variable id */
+	inval_item->cacheId = VARIABLEOID;
+	inval_item->hashValue = GetSysCacheHashValue1(VARIABLEOID,
+												  ObjectIdGetDatum(varid));
+
+	/* Append this variable to global, register dependency */
+	root->glob->invalItems = lappend(root->glob->invalItems,
+									 inval_item);
+}
+
+/*
  * extract_query_dependencies
  *		Given a rewritten, but not yet planned, query or queries
  *		(i.e. a Query node or list of Query nodes), extract dependencies
@@ -3392,6 +3510,10 @@ extract_query_dependencies_walker(Node *node, PlannerInfo *context)
 			query = UtilityContainsQuery(query->utilityStmt);
 			if (query == NULL)
 				return false;
+
+			/* Record the session variable used as target of LET statement. */
+			if (OidIsValid(query->resultVariable))
+				record_plan_variable_dependency(context, query->resultVariable);
 		}
 
 		/* Remember if any Query has RLS quals applied by rewriter */

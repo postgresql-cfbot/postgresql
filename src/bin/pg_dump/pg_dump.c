@@ -290,6 +290,7 @@ static void dumpPolicy(Archive *fout, const PolicyInfo *polinfo);
 static void dumpPublication(Archive *fout, const PublicationInfo *pubinfo);
 static void dumpPublicationTable(Archive *fout, const PublicationRelInfo *pubrinfo);
 static void dumpSubscription(Archive *fout, const SubscriptionInfo *subinfo);
+static void dumpVariable(Archive *fout, const VariableInfo *varinfo);
 static void dumpDatabase(Archive *fout);
 static void dumpDatabaseConfig(Archive *AH, PQExpBuffer outbuf,
 							   const char *dbname, Oid dboid);
@@ -4792,6 +4793,232 @@ get_next_possible_free_pg_type_oid(Archive *fout, PQExpBuffer upgrade_query)
 	} while (is_dup);
 
 	return next_possible_free_oid;
+}
+
+/*
+ * getVariables
+ *	  get information about variables
+ */
+void
+getVariables(Archive *fout)
+{
+	PQExpBuffer query;
+	PGresult   *res;
+	VariableInfo *varinfo;
+	int			i_tableoid;
+	int			i_oid;
+	int			i_varname;
+	int			i_varnamespace;
+	int			i_vartype;
+	int			i_vartypname;
+	int			i_vardefexpr;
+	int			i_vareoxaction;
+	int			i_varisnotnull;
+	int			i_varisimmutable;
+	int			i_varowner;
+	int			i_varcollation;
+	int			i_varacl;
+	int			i_acldefault;
+	int			i,
+				ntups;
+
+	if (fout->remoteVersion < 160000)
+		return;
+
+	query = createPQExpBuffer();
+
+	resetPQExpBuffer(query);
+
+	/* Get the variables in current database. */
+	appendPQExpBuffer(query,
+					  "SELECT v.tableoid, v.oid, v.varname,\n"
+					  "v.vareoxaction,\n"
+					  "v.varnamespace,\n"
+					  "v.vartype,\n"
+					  "pg_catalog.format_type(v.vartype, v.vartypmod) as vartypname,\n"
+					  "v.varisnotnull,\n"
+					  "v.varisimmutable,\n"
+					  "CASE WHEN v.varcollation <> t.typcollation "
+					  "THEN v.varcollation ELSE 0 END AS varcollation,\n"
+					  "pg_catalog.pg_get_expr(v.vardefexpr,0) as vardefexpr,\n"
+					  "v.varowner,\n"
+					  "v.varacl,\n"
+					  "acldefault('V', v.varowner) AS acldefault\n"
+					  "FROM pg_catalog.pg_variable v\n"
+					  "JOIN pg_catalog.pg_type t "
+					  "ON (v.vartype = t.oid)");
+
+	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
+
+	ntups = PQntuples(res);
+
+	i_tableoid = PQfnumber(res, "tableoid");
+	i_oid = PQfnumber(res, "oid");
+	i_varname = PQfnumber(res, "varname");
+	i_varnamespace = PQfnumber(res, "varnamespace");
+	i_vartype = PQfnumber(res, "vartype");
+	i_vartypname = PQfnumber(res, "vartypname");
+	i_vareoxaction = PQfnumber(res, "vareoxaction");
+	i_vardefexpr = PQfnumber(res, "vardefexpr");
+	i_varisnotnull = PQfnumber(res, "varisnotnull");
+	i_varisimmutable = PQfnumber(res, "varisimmutable");
+	i_varcollation = PQfnumber(res, "varcollation");
+
+	i_varowner = PQfnumber(res, "varowner");
+	i_varacl = PQfnumber(res, "varacl");
+	i_acldefault = PQfnumber(res, "acldefault");
+
+	varinfo = pg_malloc(ntups * sizeof(VariableInfo));
+
+	for (i = 0; i < ntups; i++)
+	{
+		TypeInfo   *vtype;
+
+		varinfo[i].dobj.objType = DO_VARIABLE;
+		varinfo[i].dobj.catId.tableoid =
+			atooid(PQgetvalue(res, i, i_tableoid));
+		varinfo[i].dobj.catId.oid = atooid(PQgetvalue(res, i, i_oid));
+		AssignDumpId(&varinfo[i].dobj);
+		varinfo[i].dobj.name = pg_strdup(PQgetvalue(res, i, i_varname));
+		varinfo[i].dobj.namespace =
+			findNamespace(atooid(PQgetvalue(res, i, i_varnamespace)));
+
+		varinfo[i].vartype = atooid(PQgetvalue(res, i, i_vartype));
+		varinfo[i].vartypname = pg_strdup(PQgetvalue(res, i, i_vartypname));
+		varinfo[i].vareoxaction = pg_strdup(PQgetvalue(res, i, i_vareoxaction));
+		varinfo[i].varisnotnull = *(PQgetvalue(res, i, i_varisnotnull)) == 't';
+		varinfo[i].varisimmutable = *(PQgetvalue(res, i, i_varisimmutable)) == 't';
+		varinfo[i].varcollation = atooid(PQgetvalue(res, i, i_varcollation));
+
+		varinfo[i].dacl.acl = pg_strdup(PQgetvalue(res, i, i_varacl));
+		varinfo[i].dacl.acldefault = pg_strdup(PQgetvalue(res, i, i_acldefault));
+		varinfo[i].dacl.privtype = 0;
+		varinfo[i].dacl.initprivs = NULL;
+		varinfo[i].rolname = getRoleName(PQgetvalue(res, i, i_varowner));
+
+		/* Decide whether we want to dump it */
+		selectDumpableObject(&(varinfo[i].dobj), fout);
+
+		/* Do not try to dump ACL if no ACL exists. */
+		if (!PQgetisnull(res, i, i_varacl))
+			varinfo[i].dobj.components |= DUMP_COMPONENT_ACL;
+
+		if (PQgetisnull(res, i, i_vardefexpr))
+			varinfo[i].vardefexpr = NULL;
+		else
+			varinfo[i].vardefexpr = pg_strdup(PQgetvalue(res, i, i_vardefexpr));
+
+		if (strlen(varinfo[i].rolname) == 0)
+			pg_log_warning("owner of variable \"%s\" appears to be invalid",
+						   varinfo[i].dobj.name);
+
+		/* Decide whether we want to dump it */
+		selectDumpableObject(&(varinfo[i].dobj), fout);
+
+		vtype = findTypeByOid(varinfo[i].vartype);
+		addObjectDependency(&varinfo[i].dobj, vtype->dobj.dumpId);
+	}
+	PQclear(res);
+
+	destroyPQExpBuffer(query);
+}
+
+/*
+ * dumpVariable
+ *	  dump the definition of the given session variable
+ */
+static void
+dumpVariable(Archive *fout, const VariableInfo *varinfo)
+{
+	DumpOptions *dopt = fout->dopt;
+
+	PQExpBuffer delq;
+	PQExpBuffer query;
+	char	   *qualvarname;
+	const char *vartypname;
+	const char *vardefexpr;
+	const char *vareoxaction;
+	const char *varisimmutable;
+	Oid			varcollation;
+	bool		varisnotnull;
+
+	/* Skip if not to be dumped */
+	if (!varinfo->dobj.dump || dopt->dataOnly)
+		return;
+
+	delq = createPQExpBuffer();
+	query = createPQExpBuffer();
+
+	qualvarname = pg_strdup(fmtQualifiedDumpable(varinfo));
+	vartypname = varinfo->vartypname;
+	vardefexpr = varinfo->vardefexpr;
+	vareoxaction = varinfo->vareoxaction;
+	varisnotnull = varinfo->varisnotnull;
+	varisimmutable = varinfo->varisimmutable ? "IMMUTABLE " : "";
+	varcollation = varinfo->varcollation;
+
+	appendPQExpBuffer(delq, "DROP VARIABLE %s;\n",
+					  qualvarname);
+
+	appendPQExpBuffer(query, "CREATE %sVARIABLE %s AS %s",
+					  varisimmutable, qualvarname, vartypname);
+
+	if (OidIsValid(varcollation))
+	{
+		CollInfo   *coll;
+
+		coll = findCollationByOid(varcollation);
+		if (coll)
+			appendPQExpBuffer(query, " COLLATE %s",
+							  fmtQualifiedDumpable(coll));
+	}
+
+	if (varisnotnull)
+		appendPQExpBuffer(query, " NOT NULL");
+
+	if (vardefexpr)
+		appendPQExpBuffer(query, " DEFAULT %s",
+						  vardefexpr);
+
+	if (strcmp(vareoxaction, "d") == 0)
+		appendPQExpBuffer(query, " ON COMMIT DROP");
+	else if (strcmp(vareoxaction, "r") == 0)
+		appendPQExpBuffer(query, " ON TRANSACTION END RESET");
+
+	appendPQExpBuffer(query, ";\n");
+
+	if (varinfo->dobj.dump & DUMP_COMPONENT_DEFINITION)
+		ArchiveEntry(fout, varinfo->dobj.catId, varinfo->dobj.dumpId,
+					 ARCHIVE_OPTS(.tag = varinfo->dobj.name,
+								  .namespace = varinfo->dobj.namespace->dobj.name,
+								  .owner = varinfo->rolname,
+								  .description = "VARIABLE",
+								  .section = SECTION_PRE_DATA,
+								  .createStmt = query->data,
+								  .dropStmt = delq->data));
+
+	/* Dump comment if any */
+	if (varinfo->dobj.dump & DUMP_COMPONENT_COMMENT)
+		dumpComment(fout, "VARIABLE", qualvarname,
+					NULL, varinfo->rolname,
+					varinfo->dobj.catId, 0, varinfo->dobj.dumpId);
+
+	/* Dump ACL if any */
+	if (varinfo->dobj.dump & DUMP_COMPONENT_ACL)
+	{
+		char	   *qvarname = pg_strdup(fmtId(varinfo->dobj.name));
+
+		dumpACL(fout, varinfo->dobj.dumpId, InvalidDumpId, "VARIABLE",
+				qvarname, NULL,
+				varinfo->dobj.namespace->dobj.name, varinfo->rolname, &varinfo->dacl);
+
+		free(qvarname);
+	}
+
+	destroyPQExpBuffer(delq);
+	destroyPQExpBuffer(query);
+
+	free(qualvarname);
 }
 
 static void
@@ -9448,7 +9675,8 @@ getAdditionalACLs(Archive *fout)
 					dobj->objType == DO_TABLE ||
 					dobj->objType == DO_PROCLANG ||
 					dobj->objType == DO_FDW ||
-					dobj->objType == DO_FOREIGN_SERVER)
+					dobj->objType == DO_FOREIGN_SERVER ||
+					dobj->objType == DO_VARIABLE)
 				{
 					DumpableObjectWithAcl *daobj = (DumpableObjectWithAcl *) dobj;
 
@@ -10037,6 +10265,9 @@ dumpDumpableObject(Archive *fout, DumpableObject *dobj)
 			break;
 		case DO_SUBSCRIPTION:
 			dumpSubscription(fout, (const SubscriptionInfo *) dobj);
+			break;
+		case DO_VARIABLE:
+			dumpVariable(fout, (VariableInfo *) dobj);
 			break;
 		case DO_PRE_DATA_BOUNDARY:
 		case DO_POST_DATA_BOUNDARY:
@@ -14414,6 +14645,9 @@ dumpDefaultACL(Archive *fout, const DefaultACLInfo *daclinfo)
 		case DEFACLOBJ_NAMESPACE:
 			type = "SCHEMAS";
 			break;
+		case DEFACLOBJ_VARIABLE:
+			type = "VARIABLES";
+			break;
 		default:
 			/* shouldn't get here */
 			pg_fatal("unrecognized object type in default privileges: %d",
@@ -17955,6 +18189,7 @@ addBoundaryDependencies(DumpableObject **dobjs, int numObjs,
 			case DO_CONVERSION:
 			case DO_TABLE:
 			case DO_TABLE_ATTACH:
+			case DO_VARIABLE:
 			case DO_ATTRDEF:
 			case DO_PROCLANG:
 			case DO_CAST:

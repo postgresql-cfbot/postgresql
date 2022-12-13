@@ -595,6 +595,18 @@ typedef struct AsyncRequest
 } AsyncRequest;
 
 /* ----------------
+ * SessionVariableValue
+ * ----------------
+ */
+typedef struct SessionVariableValue
+{
+	Oid			varid;
+	Oid			typid;
+	bool		isnull;
+	Datum		value;
+} SessionVariableValue;
+
+/* ----------------
  *	  EState information
  *
  * Working state for an Executor invocation
@@ -646,6 +658,13 @@ typedef struct EState
 	/* Parameter info: */
 	ParamListInfo es_param_list_info;	/* values of external params */
 	ParamExecData *es_param_exec_vals;	/* values of internal params */
+
+	/* Variables info: */
+	/* number of used session variables */
+	int			es_num_session_variables;
+
+	/* array of copied values of session variables */
+	SessionVariableValue *es_session_variables;
 
 	QueryEnvironment *es_queryEnv;	/* query environment */
 

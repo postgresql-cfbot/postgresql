@@ -5942,6 +5942,18 @@ $$ LANGUAGE plpgsql STRICT IMMUTABLE;
 </programlisting>
     </para>
    </sect3>
+
+   <sect3>
+    <title><command>Session variables</command></title>
+
+    <para>
+     The <application>PL/pgSQL</application> language has no packages, and
+     therefore no package variables or package constants.
+     <productname>PostgreSQL</productname> has session variables and immutable
+     session variables. Session variables can be created by <command>CREATE
+     VARIABLE</command>, as described in <xref linkend="sql-createvariable"/>.
+    </para>
+   </sect3>
   </sect2>
 
   <sect2 id="plpgsql-porting-appendix">

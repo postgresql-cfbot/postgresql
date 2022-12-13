@@ -88,7 +88,9 @@ transformTargetEntry(ParseState *pstate,
 		 * through unmodified.  (transformExpr will throw the appropriate
 		 * error if we're disallowing it.)
 		 */
-		if (exprKind == EXPR_KIND_UPDATE_SOURCE && IsA(node, SetToDefault))
+		if ((exprKind == EXPR_KIND_UPDATE_SOURCE ||
+			 exprKind == EXPR_KIND_LET_TARGET)
+			&& IsA(node, SetToDefault))
 			expr = node;
 		else
 			expr = transformExpr(pstate, node, exprKind);
@@ -777,7 +779,9 @@ transformAssignmentIndirection(ParseState *pstate,
 			if (!typrelid)
 				ereport(ERROR,
 						(errcode(ERRCODE_DATATYPE_MISMATCH),
-						 errmsg("cannot assign to field \"%s\" of column \"%s\" because its type %s is not a composite type",
+						 errmsg(expr_kind_allows_session_variables(pstate->p_expr_kind) ?
+								 "cannot assign to field \"%s\" of column or variable \"%s\" because its type %s is not a composite type" :
+								 "cannot assign to field \"%s\" of column \"%s\" because its type %s is not a composite type",
 								strVal(n), targetName,
 								format_type_be(targetTypeId)),
 						 parser_errposition(pstate, location)));
@@ -786,7 +790,9 @@ transformAssignmentIndirection(ParseState *pstate,
 			if (attnum == InvalidAttrNumber)
 				ereport(ERROR,
 						(errcode(ERRCODE_UNDEFINED_COLUMN),
-						 errmsg("cannot assign to field \"%s\" of column \"%s\" because there is no such column in data type %s",
+						 errmsg(expr_kind_allows_session_variables(pstate->p_expr_kind) ?
+								 "cannot assign to field \"%s\" of column or variable \"%s\" because there is no such column in data type %s" :
+								 "cannot assign to field \"%s\" of column \"%s\" because there is no such column in data type %s",
 								strVal(n), targetName,
 								format_type_be(targetTypeId)),
 						 parser_errposition(pstate, location)));

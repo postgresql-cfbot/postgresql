@@ -36,6 +36,7 @@ backend_sources += files(
   'schemacmds.c',
   'seclabel.c',
   'sequence.c',
+  'session_variable.c',
   'statscmds.c',
   'subscriptioncmds.c',
   'tablecmds.c',

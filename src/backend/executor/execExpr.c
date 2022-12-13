@@ -34,6 +34,7 @@
 #include "catalog/objectaccess.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
+#include "commands/session_variable.h"
 #include "executor/execExpr.h"
 #include "executor/nodeSubplan.h"
 #include "funcapi.h"
@@ -995,6 +996,81 @@ ExecInitExprRec(Expr *node, ExprState *state,
 						scratch.d.param.paramtype = param->paramtype;
 						ExprEvalPushStep(state, &scratch);
 						break;
+
+					case PARAM_VARIABLE:
+						{
+							int			es_num_session_variables = 0;
+							SessionVariableValue *es_session_variables = NULL;
+
+							if (state->parent && state->parent->state)
+							{
+								es_session_variables = state->parent->state->es_session_variables;
+								es_num_session_variables = state->parent->state->es_num_session_variables;
+							}
+
+							if (es_session_variables)
+							{
+								SessionVariableValue *var;
+
+								/*
+								 * Use buffered session variables when the
+								 * buffer with copied values is avaiable
+								 * (standard query executor mode)
+								 */
+
+								/* Parameter sanity checks. */
+								if (param->paramid >= es_num_session_variables)
+									elog(ERROR, "paramid of PARAM_VARIABLE param is out of range");
+
+								var = &es_session_variables[param->paramid];
+
+								if (var->typid != param->paramtype)
+									elog(ERROR, "type of buffered value is different than PARAM_VARIABLE type");
+
+								/*
+								 * In this case, pass the value like
+								 * a constant.
+								 */
+								scratch.opcode = EEOP_CONST;
+								scratch.d.constval.value = var->value;
+								scratch.d.constval.isnull = var->isnull;
+								ExprEvalPushStep(state, &scratch);
+							}
+							else
+							{
+								AclResult	aclresult;
+								Oid			varid = param->paramvarid;
+								Oid			vartype = param->paramtype;
+
+								/*
+								 * When the expression is evaluated directly
+								 * without query executor start (plpgsql simple
+								 * expr evaluation), then the array es_session_variables
+								 * is null. In this case we need to use direct
+								 * access to session variables. The values are
+								 * not protected by using copy, but it is not
+								 * problem (we don't need to emulate stability
+								 * of the value).
+								 *
+								 * In this case we should to do aclcheck, because
+								 * usual aclcheck from standard_ExecutorStart
+								 * is not executed in this case. Fortunately
+								 * it is just once per transaction.
+								 */
+								aclresult = object_aclcheck(VariableRelationId, varid,
+															GetUserId(), ACL_SELECT);
+								if (aclresult != ACLCHECK_OK)
+									aclcheck_error(aclresult, OBJECT_VARIABLE,
+												   get_session_variable_name(varid));
+
+								scratch.opcode = EEOP_PARAM_VARIABLE;
+								scratch.d.vparam.varid = varid;
+								scratch.d.vparam.vartype = vartype;
+								ExprEvalPushStep(state, &scratch);
+							}
+						}
+						break;
+
 					case PARAM_EXTERN:
 
 						/*

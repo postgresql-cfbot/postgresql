@@ -1499,6 +1499,16 @@ struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
+		{"session_variables_ambiguity_warning", PGC_USERSET, DEVELOPER_OPTIONS,
+			gettext_noop("Raise warning when reference to a session variable is ambiguous."),
+			NULL,
+			GUC_NOT_IN_SAMPLE
+		},
+		&session_variables_ambiguity_warning,
+		false,
+		NULL, NULL, NULL
+	},
+	{
 		{"db_user_namespace", PGC_SIGHUP, CONN_AUTH_AUTH,
 			gettext_noop("Enables per-database user names."),
 			NULL

@@ -42,6 +42,7 @@
 #include "access/xlogutils.h"
 #include "backup/basebackup.h"
 #include "catalog/pg_control.h"
+#include "catalog/storage.h"
 #include "commands/tablespace.h"
 #include "common/file_utils.h"
 #include "miscadmin.h"
@@ -56,6 +57,7 @@
 #include "storage/pmsignal.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
+#include "storage/reinit.h"
 #include "storage/spin.h"
 #include "utils/builtins.h"
 #include "utils/datetime.h"
@@ -1776,6 +1778,14 @@ PerformWalRecovery(void)
 
 		RmgrCleanup();
 
+		/* cleanup garbage files left during crash recovery */
+		if (!InArchiveRecovery)
+			ResetUnloggedRelations(UNLOGGED_RELATION_DROP_BUFFER |
+								   UNLOGGED_RELATION_CLEANUP);
+
+		/* run rollback cleanup if any */
+		smgrDoPendingDeletes(false);
+
 		ereport(LOG,
 				(errmsg("redo done at %X/%X system usage: %s",
 						LSN_FORMAT_ARGS(xlogreader->ReadRecPtr),
@@ -3110,6 +3120,14 @@ ReadRecord(XLogPrefetcher *xlogprefetcher, int emode,
 			{
 				ereport(DEBUG1,
 						(errmsg_internal("reached end of WAL in pg_wal, entering archive recovery")));
+
+				/* cleanup garbage files left during crash recovery */
+				ResetUnloggedRelations(UNLOGGED_RELATION_DROP_BUFFER |
+									   UNLOGGED_RELATION_CLEANUP);
+
+				/* run rollback cleanup if any */
+				smgrDoPendingDeletes(false);
+
 				InArchiveRecovery = true;
 				if (StandbyModeRequested)
 					StandbyMode = true;

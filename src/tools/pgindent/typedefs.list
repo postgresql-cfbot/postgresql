@@ -1970,6 +1970,7 @@ PatternInfoArray
 Pattern_Prefix_Status
 Pattern_Type
 PendingFsyncEntry
+PendingMarkCleanup
 PendingRelDelete
 PendingRelSync
 PendingUnlinkEntry
@@ -2599,6 +2600,7 @@ StdRdOptIndexCleanup
 StdRdOptions
 Step
 StopList
+StorageMarks
 StrategyNumber
 StreamCtl
 String
@@ -3609,6 +3611,7 @@ registered_buffer
 regmatch_t
 regoff_t
 regproc
+relfile_entry
 relopt_bool
 relopt_enum
 relopt_enum_elt_def
@@ -3662,6 +3665,7 @@ slist_iter
 slist_mutable_iter
 slist_node
 slock_t
+smgr_mark_action
 socket_set
 socklen_t
 spgBulkDeleteState
@@ -3861,8 +3865,11 @@ xl_replorigin_set
 xl_restore_point
 xl_running_xacts
 xl_seq_rec
+xl_smgr_bufpersistence
 xl_smgr_create
+xl_smgr_mark
 xl_smgr_truncate
+xl_smgr_unlink
 xl_standby_lock
 xl_standby_locks
 xl_tblspc_create_rec

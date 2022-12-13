@@ -74,7 +74,7 @@ extern int	forkname_chars(const char *str, ForkNumber *fork);
 extern char *GetDatabasePath(Oid dbOid, Oid spcOid);
 
 extern char *GetRelationPath(Oid dbOid, Oid spcOid, RelFileNumber relNumber,
-							 int backendId, ForkNumber forkNumber);
+							 int backendId, ForkNumber forkNumber, char mark);
 
 /*
  * Wrapper macros for GetRelationPath.  Beware of multiple
@@ -84,7 +84,7 @@ extern char *GetRelationPath(Oid dbOid, Oid spcOid, RelFileNumber relNumber,
 /* First argument is a RelFileLocator */
 #define relpathbackend(rlocator, backend, forknum) \
 	GetRelationPath((rlocator).dbOid, (rlocator).spcOid, (rlocator).relNumber, \
-					backend, forknum)
+					backend, forknum, 0)
 
 /* First argument is a RelFileLocator */
 #define relpathperm(rlocator, forknum) \
@@ -94,4 +94,9 @@ extern char *GetRelationPath(Oid dbOid, Oid spcOid, RelFileNumber relNumber,
 #define relpath(rlocator, forknum) \
 	relpathbackend((rlocator).locator, (rlocator).backend, forknum)
 
+/* First argument is a RelFileLocatorBackend */
+#define markpath(rlocator, forknum, mark)								\
+	GetRelationPath((rlocator).locator.dbOid, (rlocator).locator.spcOid, \
+					(rlocator).locator.relNumber,						\
+					(rlocator).backend, forknum, mark)
 #endif							/* RELPATH_H */

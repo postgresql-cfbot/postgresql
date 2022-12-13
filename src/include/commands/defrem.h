@@ -75,7 +75,7 @@ extern void interpret_function_parameter_list(ParseState *pstate,
 											  Oid *requiredResultType);
 
 /* commands/operatorcmds.c */
-extern ObjectAddress DefineOperator(List *names, List *parameters);
+extern ObjectAddress DefineOperator(List *names, List *parameters, bool replace);
 extern void RemoveOperatorById(Oid operOid);
 extern ObjectAddress AlterOperator(AlterOperatorStmt *stmt);
 

@@ -464,6 +464,122 @@ test1
 SELECT * FROM instead_of_insert_tbl;
 COMMIT;
 
+-- tests for IGNORE_ERRORS option
+-- CIM_MULTI case
+CREATE TABLE check_ign_err (n int, m int[], k int);
+COPY check_ign_err FROM STDIN WITH IGNORE_ERRORS WHERE n < 9;
+1	{1}	1
+2	{2}	2	2
+3	{3}
+a	{4}	4
+5	{5}	5555555555
+
+7	{a, 7}	7
+8	{8}	8
+\.
+SELECT * FROM check_ign_err;
+
+-- CIM_SINGLE cases
+-- BEFORE row trigger
+TRUNCATE check_ign_err;
+CREATE TABLE trig_test(n int, m int[], k int);
+CREATE FUNCTION fn_trig_before () RETURNS TRIGGER AS '
+  BEGIN
+    INSERT INTO trig_test VALUES(NEW.n, NEW.m, NEW.k);
+    RETURN NEW;
+  END;
+' LANGUAGE plpgsql;
+CREATE TRIGGER trig_before BEFORE INSERT ON check_ign_err
+FOR EACH ROW EXECUTE PROCEDURE fn_trig_before();
+COPY check_ign_err FROM STDIN WITH IGNORE_ERRORS WHERE n < 9;
+1	{1}	1
+2	{2}	2	2
+3	{3}
+a	{4}	4
+5	{5}	5555555555
+
+7	{a, 7}	7
+8	{8}	8
+\.
+SELECT * FROM check_ign_err;
+DROP TRIGGER trig_before on check_ign_err;
+
+-- INSTEAD OF row trigger
+TRUNCATE check_ign_err;
+TRUNCATE trig_test;
+CREATE VIEW check_ign_err_view AS SELECT * FROM check_ign_err;
+CREATE FUNCTION fn_trig_instead_of () RETURNS TRIGGER AS '
+  BEGIN
+    INSERT INTO trig_test VALUES(NEW.n, NEW.m, NEW.k);
+    RETURN NEW;
+  END;
+' LANGUAGE plpgsql;
+CREATE TRIGGER trig_instead_of INSTEAD OF INSERT ON check_ign_err_view
+FOR EACH ROW EXECUTE PROCEDURE fn_trig_instead_of();
+COPY check_ign_err_view FROM STDIN WITH IGNORE_ERRORS WHERE n < 9;
+1	{1}	1
+2	{2}	2	2
+3	{3}
+a	{4}	4
+5	{5}	5555555555
+
+7	{a, 7}	7
+8	{8}	8
+\.
+SELECT * FROM trig_test;
+DROP TRIGGER trig_instead_of ON check_ign_err_view;
+DROP VIEW check_ign_err_view;
+
+-- foreign table case is in postgres_fdw extension
+
+-- volatile function in WHERE clause
+TRUNCATE check_ign_err;
+COPY check_ign_err FROM STDIN WITH IGNORE_ERRORS
+  WHERE n = floor(random()*(1-1+1))+1; /* finds values equal 1 */
+1	{1}	1
+2	{2}	2	2
+3	{3}
+a	{4}	4
+5	{5}	5555555555
+
+7	{a, 7}	7
+8	{8}	8
+\.
+SELECT * FROM check_ign_err;
+DROP TABLE check_ign_err;
+
+-- CIM_MULTI_CONDITIONAL case
+-- INSERT triggers for partition tables
+TRUNCATE trig_test;
+CREATE TABLE check_ign_err (n int, m int[], k int)
+  PARTITION BY RANGE (k);
+CREATE TABLE check_ign_err_part1 PARTITION OF check_ign_err
+  FOR VALUES FROM (1) TO (4);
+CREATE TABLE check_ign_err_part2 PARTITION OF check_ign_err
+  FOR VALUES FROM (4) TO (9);
+CREATE FUNCTION fn_trig_before_part () RETURNS TRIGGER AS '
+  BEGIN
+    INSERT INTO trig_test VALUES(NEW.n, NEW.m);
+    RETURN NEW;
+  END;
+' LANGUAGE plpgsql;
+CREATE TRIGGER trig_before_part BEFORE INSERT ON check_ign_err
+FOR EACH ROW EXECUTE PROCEDURE fn_trig_before_part();
+COPY check_ign_err FROM STDIN WITH IGNORE_ERRORS WHERE n < 9;
+1	{1}	1
+2	{2}	2	2
+3	{3}
+a	{4}	4
+5	{5}	5555555555
+
+7	{a, 7}	7
+8	{8}	8
+\.
+SELECT * FROM check_ign_err;
+DROP TRIGGER trig_before_part on check_ign_err;
+DROP TABLE trig_test;
+DROP TABLE check_ign_err CASCADE;
+
 -- clean up
 DROP TABLE forcetest;
 DROP TABLE vistest;

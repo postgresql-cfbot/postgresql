@@ -684,11 +684,16 @@ set_rel_consider_parallel(PlannerInfo *root, RelOptInfo *rel,
 			 * inconsistent results at the top-level.  (In some cases, where
 			 * the result is ordered, we could relax this restriction.  But it
 			 * doesn't currently seem worth expending extra effort to do so.)
+			 * We can carve out an exception, however, for cases in which the
+			 * subquery with a limit is already going to be executed in the
+			 * context of a single outer tuple. In that case we executed the
+			 * subquery more than once anyway, and so we already cannot
+			 * guarantee row order determinicity whether parallel or not.
 			 */
 			{
 				Query	   *subquery = castNode(Query, rte->subquery);
 
-				if (limit_needed(subquery))
+				if (bms_is_empty(rel->lateral_relids) && limit_needed(subquery))
 					return;
 			}
 			break;

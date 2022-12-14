@@ -7,6 +7,7 @@
 #include "btree_utils_num.h"
 #include "fmgr.h"
 #include "utils/builtins.h"
+#include "utils/sortsupport.h"
 
 /* enums are really Oids, so we just use the same structure */
 
@@ -26,7 +27,15 @@ PG_FUNCTION_INFO_V1(gbt_enum_picksplit);
 PG_FUNCTION_INFO_V1(gbt_enum_consistent);
 PG_FUNCTION_INFO_V1(gbt_enum_penalty);
 PG_FUNCTION_INFO_V1(gbt_enum_same);
+PG_FUNCTION_INFO_V1(gbt_enum_sortsupport);
 
+
+static int
+enum_fast_cmp(Datum x, Datum y, SortSupport ssup)
+{
+	return DatumGetInt32(CallerFInfoFunctionCall2(enum_cmp, ssup->ssup_extra,
+												  InvalidOid, x, y));
+}
 
 static bool
 gbt_enumgt(const void *a, const void *b, FmgrInfo *flinfo)
@@ -182,4 +191,21 @@ gbt_enum_same(PG_FUNCTION_ARGS)
 
 	*result = gbt_num_same((void *) b1, (void *) b2, &tinfo, fcinfo->flinfo);
 	PG_RETURN_POINTER(result);
+}
+
+Datum
+gbt_enum_sortsupport(PG_FUNCTION_ARGS)
+{
+	SortSupport ssup = (SortSupport) PG_GETARG_POINTER(0);
+
+	ssup->comparator = enum_fast_cmp;
+
+	/*
+	 * Since enum_fast_cmp() also uses enum_cmp() like the rest of the
+	 * comparsion functions, it also needs to pass on flinfo when calling
+	 * it. Thus save it in ->ssup_extra and later retrieve it in enum_fast_cmp().
+	 */
+	ssup->ssup_extra = fcinfo->flinfo;
+
+	PG_RETURN_VOID();
 }

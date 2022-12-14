@@ -2490,15 +2490,16 @@ SampleHeapTupleVisible(TableScanDesc scan, Buffer buffer,
 	{
 		/*
 		 * In pageatatime mode, heapgetpage() already did visibility checks,
-		 * so just look at the info it left in rs_vistuples[].
+		 * so just look at the info it left in rs_vistuples[] starting at
+		 * rs_startindex.
 		 *
 		 * We use a binary search over the known-sorted array.  Note: we could
 		 * save some effort if we insisted that NextSampleTuple select tuples
 		 * in increasing order, but it's not clear that there would be enough
 		 * gain to justify the restriction.
 		 */
-		int			start = 0,
-					end = hscan->rs_ntuples - 1;
+		int			start = hscan->rs_startindex,
+					end = hscan->rs_startindex + hscan->rs_ntuples - 1;
 
 		while (start <= end)
 		{

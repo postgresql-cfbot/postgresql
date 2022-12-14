@@ -361,6 +361,14 @@ typedef void (*pg_funcptr_t) (void);
  */
 #define FLEXIBLE_ARRAY_MEMBER	/* empty */
 
+/* Do we have support for prefetching memory? */
+#if defined(HAVE__BUILTIN_PREFETCH)
+#define pg_prefetch_mem(a) __builtin_prefetch(a)
+#elif defined(_MSC_VER)
+#define pg_prefetch_mem(a) _m_prefetch(a)
+#else
+#define pg_prefetch_mem(a)
+#endif
 
 /* ----------------------------------------------------------------
  *				Section 2:	bool, true, false

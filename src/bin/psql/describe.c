@@ -2983,17 +2983,36 @@ describeOneTableDetails(const char *schemaname,
 								  "          WHERE attrelid = pr.prrelid AND attnum = prattrs[s])\n"
 								  "        ELSE NULL END) "
 								  "FROM pg_catalog.pg_publication p\n"
-								  "     JOIN pg_catalog.pg_publication_rel pr ON p.oid = pr.prpubid\n"
-								  "     JOIN pg_catalog.pg_class c ON c.oid = pr.prrelid\n"
-								  "WHERE pr.prrelid = '%s'\n"
+								  "		JOIN pg_catalog.pg_publication_rel pr ON p.oid = pr.prpubid\n"
+								  "		JOIN pg_catalog.pg_class c ON c.oid = pr.prrelid\n"
+								  "WHERE pr.prrelid = '%s'\n",
+								  oid, oid, oid);
+
+				/* FIXME: 150000 should be changed to 160000 later for PG16. */
+				if (pset.sversion >= 150000)
+					appendPQExpBufferStr(&buf, " AND NOT pr.prexcept\n");
+
+				appendPQExpBuffer(&buf,
 								  "UNION\n"
 								  "SELECT pubname\n"
-								  "     , NULL\n"
-								  "     , NULL\n"
+								  "		, NULL\n"
+								  "		, NULL\n"
 								  "FROM pg_catalog.pg_publication p\n"
-								  "WHERE p.puballtables AND pg_catalog.pg_relation_is_publishable('%s')\n"
-								  "ORDER BY 1;",
-								  oid, oid, oid, oid);
+								  "WHERE p.puballtables AND pg_catalog.pg_relation_is_publishable('%s')\n",
+								  oid);
+
+				/* FIXME: 150000 should be changed to 160000 later for PG16. */
+				if (pset.sversion >= 150000)
+					appendPQExpBuffer(&buf,
+									  "     AND NOT EXISTS (\n"
+									  "		SELECT 1\n"
+									  "		FROM pg_catalog.pg_publication_rel pr\n"
+									  "		JOIN pg_catalog.pg_class pc\n"
+									  "		ON pr.prrelid = pc.oid\n"
+									  "		WHERE pr.prrelid = '%s' AND pr.prpubid = p.oid)\n",
+									  oid);
+
+				appendPQExpBufferStr(&buf, "ORDER BY 1;");
 			}
 			else
 			{
@@ -6422,8 +6441,13 @@ describePublications(const char *pattern)
 							  "     pg_catalog.pg_publication_rel pr\n"
 							  "WHERE c.relnamespace = n.oid\n"
 							  "  AND c.oid = pr.prrelid\n"
-							  "  AND pr.prpubid = '%s'\n"
-							  "ORDER BY 1,2", pubid);
+							  "  AND pr.prpubid = '%s'\n", pubid);
+
+			/* FIXME: 150000 should be changed to 160000 later for PG16. */
+			if (pset.sversion >= 150000)
+				appendPQExpBuffer(&buf, "  AND NOT pr.prexcept\n");
+
+			appendPQExpBuffer(&buf, "ORDER BY 1,2");
 			if (!addFooterToPublicationDesc(&buf, _("Tables:"), false, &cont))
 				goto error_return;
 
@@ -6437,6 +6461,24 @@ describePublications(const char *pattern)
 								  "WHERE pn.pnpubid = '%s'\n"
 								  "ORDER BY 1", pubid);
 				if (!addFooterToPublicationDesc(&buf, _("Tables from schemas:"),
+												true, &cont))
+					goto error_return;
+			}
+		}
+		else
+		{
+			/* FIXME: 150000 should be changed to 160000 later for PG16. */
+			if (pset.sversion >= 150000)
+			{
+				/* Get the excluded tables for the specified publication */
+				printfPQExpBuffer(&buf,
+								  "SELECT concat(c.relnamespace::regnamespace, '.', c.relname)\n"
+								  "FROM pg_catalog.pg_class c\n"
+								  "     JOIN pg_catalog.pg_publication_rel pr ON c.oid = pr.prrelid\n"
+								  "WHERE pr.prpubid = '%s'\n"
+								  "  AND pr.prexcept\n"
+								  "ORDER BY 1", pubid);
+				if (!addFooterToPublicationDesc(&buf, _("Except tables:"),
 												true, &cont))
 					goto error_return;
 			}

@@ -1721,10 +1721,10 @@ CONTEXT:  processing remote data for replication origin "pg_16395" during "INSER
   </para>
 
   <para>
-   To add tables to a publication, the user must have ownership rights on the
-   table. To add all tables in schema to a publication, the user must be a
-   superuser. To create a publication that publishes all tables or all tables in
-   schema automatically, the user must be a superuser.
+   To create a publication using FOR ALL TABLES or FOR ALL TABLES IN SCHEMA,
+   the user must be a superuser. To add ALL TABLES or ALL TABLES IN SCHEMA to a
+   publication, the user must be a superuser. To add tables to a publication,
+   the user must have ownership rights on the table.
   </para>
 
   <para>

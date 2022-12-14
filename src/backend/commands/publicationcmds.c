@@ -55,6 +55,14 @@
 #include "utils/varlena.h"
 
 
+/* CREATE PUBLICATION default values for flags and publication parameters */
+#define PUB_DEFAULT_ACTION_INSERT true
+#define PUB_DEFAULT_ACTION_UPDATE true
+#define PUB_DEFAULT_ACTION_DELETE true
+#define PUB_DEFAULT_ACTION_TRUNCATE true
+#define PUB_DEFAULT_VIA_ROOT false
+#define PUB_DEFAULT_ALL_TABLES false
+
 /*
  * Information used to validate the columns in the row filter expression. See
  * contain_invalid_rfcolumn_walker for details.
@@ -93,11 +101,11 @@ parse_publication_options(ParseState *pstate,
 	*publish_via_partition_root_given = false;
 
 	/* defaults */
-	pubactions->pubinsert = true;
-	pubactions->pubupdate = true;
-	pubactions->pubdelete = true;
-	pubactions->pubtruncate = true;
-	*publish_via_partition_root = false;
+	pubactions->pubinsert = PUB_DEFAULT_ACTION_INSERT;
+	pubactions->pubupdate = PUB_DEFAULT_ACTION_UPDATE;
+	pubactions->pubdelete = PUB_DEFAULT_ACTION_DELETE;
+	pubactions->pubtruncate = PUB_DEFAULT_ACTION_TRUNCATE;
+	*publish_via_partition_root = PUB_DEFAULT_VIA_ROOT;
 
 	/* Parse options */
 	foreach(lc, options)
@@ -189,6 +197,11 @@ ObjectsInPublicationToOids(List *pubobjspec_list, ParseState *pstate,
 		switch (pubobj->pubobjtype)
 		{
 			case PUBLICATIONOBJ_TABLE:
+				pubobj->pubtable->except = false;
+				*rels = lappend(*rels, pubobj->pubtable);
+				break;
+			case PUBLICATIONOBJ_EXCEPT_TABLE:
+				pubobj->pubtable->except = true;
 				*rels = lappend(*rels, pubobj->pubtable);
 				break;
 			case PUBLICATIONOBJ_TABLES_IN_SCHEMA:
@@ -263,7 +276,7 @@ contain_invalid_rfcolumn_walker(Node *node, rf_context *context)
  */
 bool
 pub_rf_contains_invalid_column(Oid pubid, Relation relation, List *ancestors,
-							   bool pubviaroot)
+							   bool pubviaroot, bool puballtables)
 {
 	HeapTuple	rftuple;
 	Oid			relid = RelationGetRelid(relation);
@@ -290,7 +303,8 @@ pub_rf_contains_invalid_column(Oid pubid, Relation relation, List *ancestors,
 	if (pubviaroot && relation->rd_rel->relispartition)
 	{
 		publish_as_relid
-			= GetTopMostAncestorInPublication(pubid, ancestors, NULL);
+			= GetTopMostAncestorInPublication(pubid, ancestors, NULL,
+											  puballtables);
 
 		if (!OidIsValid(publish_as_relid))
 			publish_as_relid = relid;
@@ -339,7 +353,7 @@ pub_rf_contains_invalid_column(Oid pubid, Relation relation, List *ancestors,
  */
 bool
 pub_collist_contains_invalid_column(Oid pubid, Relation relation, List *ancestors,
-									bool pubviaroot)
+									bool pubviaroot, bool puballtables)
 {
 	HeapTuple	tuple;
 	Oid			relid = RelationGetRelid(relation);
@@ -358,7 +372,8 @@ pub_collist_contains_invalid_column(Oid pubid, Relation relation, List *ancestor
 	 */
 	if (pubviaroot && relation->rd_rel->relispartition)
 	{
-		publish_as_relid = GetTopMostAncestorInPublication(pubid, ancestors, NULL);
+		publish_as_relid = GetTopMostAncestorInPublication(pubid, ancestors,
+														   NULL, puballtables);
 
 		if (!OidIsValid(publish_as_relid))
 			publish_as_relid = relid;
@@ -814,51 +829,49 @@ CreatePublication(ParseState *pstate, CreatePublicationStmt *stmt)
 	/* Make the changes visible. */
 	CommandCounterIncrement();
 
+	ObjectsInPublicationToOids(stmt->pubobjects, pstate, &relations,
+							   &schemaidlist);
+
+	/* FOR TABLES IN SCHEMA requires superuser */
+	if (schemaidlist != NIL && !superuser())
+		ereport(ERROR,
+				errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				errmsg("must be superuser to create FOR TABLES IN SCHEMA publication"));
+
+	if (relations != NIL)
+	{
+		List	   *rels;
+
+		rels = OpenTableList(relations);
+		TransformPubWhereClauses(rels, pstate->p_sourcetext,
+									publish_via_partition_root);
+
+		CheckPubRelationColumnList(stmt->pubname, rels,
+									schemaidlist != NIL,
+									publish_via_partition_root);
+
+		PublicationAddTables(puboid, rels, true, NULL);
+		CloseTableList(rels);
+	}
+
+	if (schemaidlist != NIL)
+	{
+		/*
+		 * Schema lock is held until the publication is created to prevent
+		 * concurrent schema deletion.
+		 */
+		LockSchemaList(schemaidlist);
+		PublicationAddSchemas(puboid, schemaidlist, true, NULL);
+	}
+
+	table_close(rel, RowExclusiveLock);
+
 	/* Associate objects with the publication. */
 	if (stmt->for_all_tables)
 	{
 		/* Invalidate relcache so that publication info is rebuilt. */
 		CacheInvalidateRelcacheAll();
 	}
-	else
-	{
-		ObjectsInPublicationToOids(stmt->pubobjects, pstate, &relations,
-								   &schemaidlist);
-
-		/* FOR TABLES IN SCHEMA requires superuser */
-		if (schemaidlist != NIL && !superuser())
-			ereport(ERROR,
-					errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-					errmsg("must be superuser to create FOR TABLES IN SCHEMA publication"));
-
-		if (relations != NIL)
-		{
-			List	   *rels;
-
-			rels = OpenTableList(relations);
-			TransformPubWhereClauses(rels, pstate->p_sourcetext,
-									 publish_via_partition_root);
-
-			CheckPubRelationColumnList(stmt->pubname, rels,
-									   schemaidlist != NIL,
-									   publish_via_partition_root);
-
-			PublicationAddTables(puboid, rels, true, NULL);
-			CloseTableList(rels);
-		}
-
-		if (schemaidlist != NIL)
-		{
-			/*
-			 * Schema lock is held until the publication is created to prevent
-			 * concurrent schema deletion.
-			 */
-			LockSchemaList(schemaidlist);
-			PublicationAddSchemas(puboid, schemaidlist, true, NULL);
-		}
-	}
-
-	table_close(rel, RowExclusiveLock);
 
 	InvokeObjectPostCreateHook(PublicationRelationId, puboid, 0);
 
@@ -1077,6 +1090,185 @@ InvalidatePublicationRels(List *relids)
 	}
 	else
 		CacheInvalidateRelcacheAll();
+}
+
+/*
+ * Reset the publication.
+ *
+ * Reset the publication parameters, setting ALL TABLES flag to false and drop
+ * all relations and schemas that are associated with the publication.
+ */
+static void
+AlterPublicationReset(ParseState *pstate, AlterPublicationStmt *stmt,
+					  Relation rel, HeapTuple tup)
+{
+	Form_pg_publication pubform = (Form_pg_publication) GETSTRUCT(tup);
+	Oid			pubid = pubform->oid;
+	List	   *schemas = NIL;
+	List	   *rels = NIL;
+	bool		nulls[Natts_pg_publication];
+	bool		replaces[Natts_pg_publication];
+	Datum		values[Natts_pg_publication];
+	ObjectAddress obj;
+	ListCell   *lc;
+	Oid			prid;
+
+	/* RESET publication requires superuser */
+	if (!superuser())
+		ereport(ERROR,
+				errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				errmsg("must be superuser to RESET publication"));
+
+	memset(values, 0, sizeof(values));
+	memset(nulls, false, sizeof(nulls));
+	memset(replaces, false, sizeof(replaces));
+
+	/* Reset the publication parameters */
+	values[Anum_pg_publication_pubinsert - 1] = BoolGetDatum(PUB_DEFAULT_ACTION_INSERT);
+	replaces[Anum_pg_publication_pubinsert - 1] = true;
+
+	values[Anum_pg_publication_pubupdate - 1] = BoolGetDatum(PUB_DEFAULT_ACTION_UPDATE);
+	replaces[Anum_pg_publication_pubupdate - 1] = true;
+
+	values[Anum_pg_publication_pubdelete - 1] = BoolGetDatum(PUB_DEFAULT_ACTION_DELETE);
+	replaces[Anum_pg_publication_pubdelete - 1] = true;
+
+	values[Anum_pg_publication_pubtruncate - 1] = BoolGetDatum(PUB_DEFAULT_ACTION_TRUNCATE);
+	replaces[Anum_pg_publication_pubtruncate - 1] = true;
+
+	values[Anum_pg_publication_pubviaroot - 1] = BoolGetDatum(PUB_DEFAULT_VIA_ROOT);
+	replaces[Anum_pg_publication_pubviaroot - 1] = true;
+
+	/*
+	 * Lock the publication so nobody else can do anything with it. This
+	 * prevents concurrent publication parameter changes, add/drop tables(s) to
+	 * the publication and add/drop schema(s) to the publication.
+	 */
+	LockDatabaseObject(PublicationRelationId, pubid, 0,
+						AccessExclusiveLock);
+
+	/*
+	 * It is possible that by the time we acquire the lock on publication,
+	 * concurrent DDL has removed it. We can test this by checking the
+	 * existence of publication. We get the tuple again to avoid the risk
+	 * of any publication option getting changed.
+	 */
+	tup = SearchSysCacheCopy1(PUBLICATIONOID, ObjectIdGetDatum(pubid));
+	if (!HeapTupleIsValid(tup))
+		ereport(ERROR,
+				errcode(ERRCODE_UNDEFINED_OBJECT),
+				errmsg("publication \"%s\" does not exist",
+						stmt->pubname));
+
+	/* Set ALL TABLES flag to false */
+	if (pubform->puballtables)
+	{
+		values[Anum_pg_publication_puballtables - 1] = BoolGetDatum(PUB_DEFAULT_ALL_TABLES);
+		replaces[Anum_pg_publication_puballtables - 1] = true;
+		CacheInvalidateRelcacheAll();
+	}
+
+	tup = heap_modify_tuple(tup, RelationGetDescr(rel), values, nulls,
+							replaces);
+
+	/* Update the catalog. */
+	CatalogTupleUpdate(rel, &tup->t_self, tup);
+
+	/* Drop the schemas associated with the publication */
+	schemas = GetPublicationSchemas(pubid);
+	PublicationDropSchemas(pubid, schemas, false);
+
+	/* Drop the relations associated with the publication */
+	rels = GetPublicationRelations(pubid, PUBLICATION_PART_ROOT);
+	foreach(lc, rels)
+	{
+		Oid			relid = lfirst_oid(lc);
+
+		prid = GetSysCacheOid2(PUBLICATIONRELMAP, Anum_pg_publication_rel_oid,
+							   ObjectIdGetDatum(relid),
+							   ObjectIdGetDatum(pubid));
+		if (!OidIsValid(prid))
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("relation \"%s\" is not part of the publication",
+							get_rel_name(relid))));
+
+		ObjectAddressSet(obj, PublicationRelRelationId, prid);
+		performDeletion(&obj, DROP_CASCADE, 0);
+	}
+}
+
+/*
+ * Check if the publication has default values.
+ *
+ * Returns true if the publication satisfies all the following conditions:
+ * a) Publication is not set with "FOR ALL TABLES"
+ * b) Publication is having default publication parameter values
+ * c) Publication is not associated with schemas
+ * d) Publication is not associated with relations
+ */
+static bool
+CheckPublicationDefValues(HeapTuple tup)
+{
+	Form_pg_publication pubform = (Form_pg_publication) GETSTRUCT(tup);
+	Oid			pubid = pubform->oid;
+	List	   *pubobjs = NIL;
+
+	if (pubform->puballtables != PUB_DEFAULT_ALL_TABLES)
+		return false;
+
+	if (pubform->pubinsert != PUB_DEFAULT_ACTION_INSERT ||
+		pubform->pubupdate != PUB_DEFAULT_ACTION_UPDATE ||
+		pubform->pubdelete != PUB_DEFAULT_ACTION_DELETE ||
+		pubform->pubtruncate != PUB_DEFAULT_ACTION_TRUNCATE ||
+		pubform->pubviaroot != PUB_DEFAULT_VIA_ROOT)
+		return false;
+
+	pubobjs = GetPublicationSchemas(pubid);
+	if (list_length(pubobjs))
+		return false;
+
+	pubobjs = GetPublicationRelations(pubid, PUBLICATION_PART_ROOT);
+	if (list_length(pubobjs))
+		return false;
+
+	return true;
+}
+
+/*
+ * Set publication to publish all tables.
+ */
+static void
+AlterPublicationSetAllTables(Relation rel, HeapTuple tup)
+{
+	Form_pg_publication pubform PG_USED_FOR_ASSERTS_ONLY = (Form_pg_publication) GETSTRUCT(tup);
+	bool		nulls[Natts_pg_publication];
+	bool		replaces[Natts_pg_publication];
+	Datum		values[Natts_pg_publication];
+
+#ifdef USE_ASSERT_CHECKING
+	Assert(!pubform->puballtables);
+#endif
+
+	/* Add ALL TABLES to the publication requires superuser */
+	if (!superuser())
+		ereport(ERROR,
+				errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				errmsg("must be superuser to ADD ALL TABLES to the publication"));
+
+	memset(values, 0, sizeof(values));
+	memset(nulls, false, sizeof(nulls));
+	memset(replaces, false, sizeof(replaces));
+
+	/* Set ALL TABLES flag */
+	values[Anum_pg_publication_puballtables - 1] = BoolGetDatum(true);
+	replaces[Anum_pg_publication_puballtables - 1] = true;
+
+	tup = heap_modify_tuple(tup, RelationGetDescr(rel), values, nulls,
+							replaces);
+
+	/* Update the catalog. */
+	CatalogTupleUpdate(rel, &tup->t_self, tup);
 }
 
 /*
@@ -1399,8 +1591,24 @@ AlterPublication(ParseState *pstate, AlterPublicationStmt *stmt)
 		aclcheck_error(ACLCHECK_NOT_OWNER, OBJECT_PUBLICATION,
 					   stmt->pubname);
 
+	if (stmt->for_all_tables)
+	{
+		bool		isdefault = CheckPublicationDefValues(tup);
+
+		if (!isdefault)
+			ereport(ERROR,
+					errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+					errmsg("adding ALL TABLES requires the publication to have default publication parameter values"),
+					errdetail("ALL TABLES flag should not be set and no tables/schemas should be associated.");
+					errhint("Use ALTER PUBLICATION ... RESET to reset the publication"));
+
+		AlterPublicationSetAllTables(rel, tup);
+	}
+
 	if (stmt->options)
 		AlterPublicationOptions(pstate, stmt, rel, tup);
+	else if (stmt->action == AP_ResetPublication)
+		AlterPublicationReset(pstate, stmt, rel, tup);
 	else
 	{
 		List	   *relations = NIL;
@@ -1609,6 +1817,7 @@ OpenTableList(List *tables)
 		pub_rel->relation = rel;
 		pub_rel->whereClause = t->whereClause;
 		pub_rel->columns = t->columns;
+		pub_rel->except = t->except;
 		rels = lappend(rels, pub_rel);
 		relids = lappend_oid(relids, myrelid);
 
@@ -1681,6 +1890,7 @@ OpenTableList(List *tables)
 
 				/* child inherits column list from parent */
 				pub_rel->columns = t->columns;
+				pub_rel->except = t->except;
 				rels = lappend(rels, pub_rel);
 				relids = lappend_oid(relids, childrelid);
 
@@ -1755,8 +1965,6 @@ PublicationAddTables(Oid pubid, List *rels, bool if_not_exists,
 					 AlterPublicationStmt *stmt)
 {
 	ListCell   *lc;
-
-	Assert(!stmt || !stmt->for_all_tables);
 
 	foreach(lc, rels)
 	{

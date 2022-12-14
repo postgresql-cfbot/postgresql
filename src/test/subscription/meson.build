@@ -36,6 +36,7 @@ tests += {
       't/029_on_error.pl',
       't/030_origin.pl',
       't/031_column_list.pl',
+      't/032_rep_changes_except_table.pl',
       't/100_bugs.pl',
     ],
   },

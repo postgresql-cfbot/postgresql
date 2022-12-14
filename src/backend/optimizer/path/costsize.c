@@ -790,6 +790,260 @@ cost_index(IndexPath *path, PlannerInfo *root, double loop_count,
 	path->path.total_cost = startup_cost + run_cost;
 }
 
+void
+cost_brinsort(BrinSortPath *path, PlannerInfo *root, double loop_count,
+		   bool partial_path)
+{
+	IndexOptInfo *index = path->ipath.indexinfo;
+	RelOptInfo *baserel = index->rel;
+	amcostestimate_function amcostestimate;
+	List	   *qpquals;
+	Cost		startup_cost = 0;
+	Cost		run_cost = 0;
+	Cost		cpu_run_cost = 0;
+	Cost		indexStartupCost;
+	Cost		indexTotalCost;
+	Selectivity indexSelectivity;
+	double		indexCorrelation,
+				csquared;
+	double		spc_seq_page_cost,
+				spc_random_page_cost;
+	Cost		min_IO_cost,
+				max_IO_cost;
+	QualCost	qpqual_cost;
+	Cost		cpu_per_tuple;
+	double		tuples_fetched;
+	double		pages_fetched;
+	double		rand_heap_pages;
+	double		index_pages;
+
+	/* Should only be applied to base relations */
+	Assert(IsA(baserel, RelOptInfo) &&
+		   IsA(index, IndexOptInfo));
+	Assert(baserel->relid > 0);
+	Assert(baserel->rtekind == RTE_RELATION);
+
+	/*
+	 * Mark the path with the correct row estimate, and identify which quals
+	 * will need to be enforced as qpquals.  We need not check any quals that
+	 * are implied by the index's predicate, so we can use indrestrictinfo not
+	 * baserestrictinfo as the list of relevant restriction clauses for the
+	 * rel.
+	 */
+	if (path->ipath.path.param_info)
+	{
+		path->ipath.path.rows = path->ipath.path.param_info->ppi_rows;
+		/* qpquals come from the rel's restriction clauses and ppi_clauses */
+		qpquals = list_concat(extract_nonindex_conditions(path->ipath.indexinfo->indrestrictinfo,
+														  path->ipath.indexclauses),
+							  extract_nonindex_conditions(path->ipath.path.param_info->ppi_clauses,
+														  path->ipath.indexclauses));
+	}
+	else
+	{
+		path->ipath.path.rows = baserel->rows;
+		/* qpquals come from just the rel's restriction clauses */
+		qpquals = extract_nonindex_conditions(path->ipath.indexinfo->indrestrictinfo,
+											  path->ipath.indexclauses);
+	}
+
+	if (!enable_indexscan)
+		startup_cost += disable_cost;
+	/* we don't need to check enable_indexonlyscan; indxpath.c does that */
+
+	/*
+	 * Call index-access-method-specific code to estimate the processing cost
+	 * for scanning the index, as well as the selectivity of the index (ie,
+	 * the fraction of main-table tuples we will have to retrieve) and its
+	 * correlation to the main-table tuple order.  We need a cast here because
+	 * pathnodes.h uses a weak function type to avoid including amapi.h.
+	 */
+	amcostestimate = (amcostestimate_function) index->amcostestimate;
+	amcostestimate(root, &path->ipath, loop_count,
+				   &indexStartupCost, &indexTotalCost,
+				   &indexSelectivity, &indexCorrelation,
+				   &index_pages);
+
+	/*
+	 * Save amcostestimate's results for possible use in bitmap scan planning.
+	 * We don't bother to save indexStartupCost or indexCorrelation, because a
+	 * bitmap scan doesn't care about either.
+	 */
+	path->ipath.indextotalcost = indexTotalCost;
+	path->ipath.indexselectivity = indexSelectivity;
+
+	/* all costs for touching index itself included here */
+	startup_cost += indexStartupCost;
+	run_cost += indexTotalCost - indexStartupCost;
+
+	/* estimate number of main-table tuples fetched */
+	tuples_fetched = clamp_row_est(indexSelectivity * baserel->tuples);
+
+	/* fetch estimated page costs for tablespace containing table */
+	get_tablespace_page_costs(baserel->reltablespace,
+							  &spc_random_page_cost,
+							  &spc_seq_page_cost);
+
+	/*----------
+	 * Estimate number of main-table pages fetched, and compute I/O cost.
+	 *
+	 * When the index ordering is uncorrelated with the table ordering,
+	 * we use an approximation proposed by Mackert and Lohman (see
+	 * index_pages_fetched() for details) to compute the number of pages
+	 * fetched, and then charge spc_random_page_cost per page fetched.
+	 *
+	 * When the index ordering is exactly correlated with the table ordering
+	 * (just after a CLUSTER, for example), the number of pages fetched should
+	 * be exactly selectivity * table_size.  What's more, all but the first
+	 * will be sequential fetches, not the random fetches that occur in the
+	 * uncorrelated case.  So if the number of pages is more than 1, we
+	 * ought to charge
+	 *		spc_random_page_cost + (pages_fetched - 1) * spc_seq_page_cost
+	 * For partially-correlated indexes, we ought to charge somewhere between
+	 * these two estimates.  We currently interpolate linearly between the
+	 * estimates based on the correlation squared (XXX is that appropriate?).
+	 *
+	 * If it's an index-only scan, then we will not need to fetch any heap
+	 * pages for which the visibility map shows all tuples are visible.
+	 * Hence, reduce the estimated number of heap fetches accordingly.
+	 * We use the measured fraction of the entire heap that is all-visible,
+	 * which might not be particularly relevant to the subset of the heap
+	 * that this query will fetch; but it's not clear how to do better.
+	 *----------
+	 */
+	if (loop_count > 1)
+	{
+		/*
+		 * For repeated indexscans, the appropriate estimate for the
+		 * uncorrelated case is to scale up the number of tuples fetched in
+		 * the Mackert and Lohman formula by the number of scans, so that we
+		 * estimate the number of pages fetched by all the scans; then
+		 * pro-rate the costs for one scan.  In this case we assume all the
+		 * fetches are random accesses.
+		 */
+		pages_fetched = index_pages_fetched(tuples_fetched * loop_count,
+											baserel->pages,
+											(double) index->pages,
+											root);
+
+		rand_heap_pages = pages_fetched;
+
+		max_IO_cost = (pages_fetched * spc_random_page_cost) / loop_count;
+
+		/*
+		 * In the perfectly correlated case, the number of pages touched by
+		 * each scan is selectivity * table_size, and we can use the Mackert
+		 * and Lohman formula at the page level to estimate how much work is
+		 * saved by caching across scans.  We still assume all the fetches are
+		 * random, though, which is an overestimate that's hard to correct for
+		 * without double-counting the cache effects.  (But in most cases
+		 * where such a plan is actually interesting, only one page would get
+		 * fetched per scan anyway, so it shouldn't matter much.)
+		 */
+		pages_fetched = ceil(indexSelectivity * (double) baserel->pages);
+
+		pages_fetched = index_pages_fetched(pages_fetched * loop_count,
+											baserel->pages,
+											(double) index->pages,
+											root);
+
+		min_IO_cost = (pages_fetched * spc_random_page_cost) / loop_count;
+	}
+	else
+	{
+		/*
+		 * Normal case: apply the Mackert and Lohman formula, and then
+		 * interpolate between that and the correlation-derived result.
+		 */
+		pages_fetched = index_pages_fetched(tuples_fetched,
+											baserel->pages,
+											(double) index->pages,
+											root);
+
+		rand_heap_pages = pages_fetched;
+
+		/* max_IO_cost is for the perfectly uncorrelated case (csquared=0) */
+		max_IO_cost = pages_fetched * spc_random_page_cost;
+
+		/* min_IO_cost is for the perfectly correlated case (csquared=1) */
+		pages_fetched = ceil(indexSelectivity * (double) baserel->pages);
+
+		if (pages_fetched > 0)
+		{
+			min_IO_cost = spc_random_page_cost;
+			if (pages_fetched > 1)
+				min_IO_cost += (pages_fetched - 1) * spc_seq_page_cost;
+		}
+		else
+			min_IO_cost = 0;
+	}
+
+	if (partial_path)
+	{
+		/*
+		 * Estimate the number of parallel workers required to scan index. Use
+		 * the number of heap pages computed considering heap fetches won't be
+		 * sequential as for parallel scans the pages are accessed in random
+		 * order.
+		 */
+		path->ipath.path.parallel_workers = compute_parallel_worker(baserel,
+															  rand_heap_pages,
+															  index_pages,
+															  max_parallel_workers_per_gather);
+
+		/*
+		 * Fall out if workers can't be assigned for parallel scan, because in
+		 * such a case this path will be rejected.  So there is no benefit in
+		 * doing extra computation.
+		 */
+		if (path->ipath.path.parallel_workers <= 0)
+			return;
+
+		path->ipath.path.parallel_aware = true;
+	}
+
+	/*
+	 * Now interpolate based on estimated index order correlation to get total
+	 * disk I/O cost for main table accesses.
+	 */
+	csquared = indexCorrelation * indexCorrelation;
+
+	run_cost += max_IO_cost + csquared * (min_IO_cost - max_IO_cost);
+
+	/*
+	 * Estimate CPU costs per tuple.
+	 *
+	 * What we want here is cpu_tuple_cost plus the evaluation costs of any
+	 * qual clauses that we have to evaluate as qpquals.
+	 */
+	cost_qual_eval(&qpqual_cost, qpquals, root);
+
+	startup_cost += qpqual_cost.startup;
+	cpu_per_tuple = cpu_tuple_cost + qpqual_cost.per_tuple;
+
+	cpu_run_cost += cpu_per_tuple * tuples_fetched;
+
+	/* tlist eval costs are paid per output row, not per tuple scanned */
+	startup_cost += path->ipath.path.pathtarget->cost.startup;
+	cpu_run_cost += path->ipath.path.pathtarget->cost.per_tuple * path->ipath.path.rows;
+
+	/* Adjust costing for parallelism, if used. */
+	if (path->ipath.path.parallel_workers > 0)
+	{
+		double		parallel_divisor = get_parallel_divisor(&path->ipath.path);
+
+		path->ipath.path.rows = clamp_row_est(path->ipath.path.rows / parallel_divisor);
+
+		/* The CPU cost is divided among all the workers. */
+		cpu_run_cost /= parallel_divisor;
+	}
+
+	run_cost += cpu_run_cost;
+
+	path->ipath.path.startup_cost = startup_cost;
+	path->ipath.path.total_cost = startup_cost + run_cost;
+}
+
 /*
  * extract_nonindex_conditions
  *

@@ -38,6 +38,7 @@ OBJS = \
 	nodeBitmapHeapscan.o \
 	nodeBitmapIndexscan.o \
 	nodeBitmapOr.o \
+	nodeBrinSort.o \
 	nodeCtescan.o \
 	nodeCustom.o \
 	nodeForeignscan.o \

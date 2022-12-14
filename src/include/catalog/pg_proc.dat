@@ -5278,7 +5278,7 @@
   proname => 'pg_stat_get_numscans', provolatile => 's', proparallel => 'r',
   prorettype => 'int8', proargtypes => 'oid',
   prosrc => 'pg_stat_get_numscans' },
-{ oid => '9976', descr => 'statistics: time of the last scan for table/index',
+{ oid => '8912', descr => 'statistics: time of the last scan for table/index',
   proname => 'pg_stat_get_lastscan', provolatile => 's', proparallel => 'r',
   prorettype => 'timestamptz', proargtypes => 'oid',
   prosrc => 'pg_stat_get_lastscan' },
@@ -8442,6 +8442,13 @@
 { oid => '3386', descr => 'BRIN minmax support',
   proname => 'brin_minmax_union', prorettype => 'bool',
   proargtypes => 'internal internal internal', prosrc => 'brin_minmax_union' },
+{ oid => '9979', descr => 'BRIN minmax support',
+  proname => 'brin_minmax_stats', prorettype => 'bool',
+  proargtypes => 'internal internal int2 int2 internal int4',
+  prosrc => 'brin_minmax_stats' },
+{ oid => '9980', descr => 'BRIN minmax support',
+  proname => 'brin_minmax_ranges', prorettype => 'bool',
+  proargtypes => 'internal int2 bool', prosrc => 'brin_minmax_ranges' },
 
 # BRIN minmax multi
 { oid => '4616', descr => 'BRIN multi minmax support',

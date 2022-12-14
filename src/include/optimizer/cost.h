@@ -69,6 +69,7 @@ extern PGDLLIMPORT bool enable_parallel_append;
 extern PGDLLIMPORT bool enable_parallel_hash;
 extern PGDLLIMPORT bool enable_partition_pruning;
 extern PGDLLIMPORT bool enable_async_append;
+extern PGDLLIMPORT bool enable_brinsort;
 extern PGDLLIMPORT int constraint_exclusion;
 
 extern double index_pages_fetched(double tuples_fetched, BlockNumber pages,
@@ -79,6 +80,8 @@ extern void cost_samplescan(Path *path, PlannerInfo *root, RelOptInfo *baserel,
 							ParamPathInfo *param_info);
 extern void cost_index(IndexPath *path, PlannerInfo *root,
 					   double loop_count, bool partial_path);
+extern void cost_brinsort(BrinSortPath *path, PlannerInfo *root,
+						  double loop_count, bool partial_path);
 extern void cost_bitmap_heap_scan(Path *path, PlannerInfo *root, RelOptInfo *baserel,
 								  ParamPathInfo *param_info,
 								  Path *bitmapqual, double loop_count);

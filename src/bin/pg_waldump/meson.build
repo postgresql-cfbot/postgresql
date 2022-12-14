@@ -29,6 +29,7 @@ tests += {
   'tap': {
     'tests': [
       't/001_basic.pl',
+      't/002_save_fullpage.pl',
     ],
   },
 }

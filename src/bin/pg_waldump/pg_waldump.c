@@ -23,9 +23,13 @@
 #include "access/xlogrecord.h"
 #include "access/xlogstats.h"
 #include "common/fe_memutils.h"
+#include "common/file_perm.h"
+#include "common/file_utils.h"
 #include "common/logging.h"
+#include "common/relpath.h"
 #include "getopt_long.h"
 #include "rmgrdesc.h"
+#include "storage/bufpage.h"
 
 /*
  * NOTE: For any code change or issue fix here, it is highly recommended to
@@ -70,6 +74,9 @@ typedef struct XLogDumpConfig
 	bool		filter_by_relation_block_enabled;
 	ForkNumber	filter_by_relation_forknum;
 	bool		filter_by_fpw;
+
+	/* save options */
+	char	   *save_fpi_path;
 } XLogDumpConfig;
 
 
@@ -423,7 +430,7 @@ XLogRecordMatchesRelationBlock(XLogReaderState *record,
  * Boolean to return whether the given WAL record contains a full page write.
  */
 static bool
-XLogRecordHasFPW(XLogReaderState *record)
+XLogRecordHasFPI(XLogReaderState *record)
 {
 	int			block_id;
 
@@ -437,6 +444,61 @@ XLogRecordHasFPW(XLogReaderState *record)
 	}
 
 	return false;
+}
+
+/*
+ * Function to externally save all FPIs stored in the given WAL record
+ */
+static void
+XLogRecordSaveFPIs(XLogReaderState *record, const char *savepath)
+{
+	int			block_id;
+
+	for (block_id = 0; block_id <= XLogRecMaxBlockId(record); block_id++)
+	{
+		PGAlignedBlock buf;
+		Page		page;
+		char		filename[MAXPGPATH];
+		char		forkname[FORKNAMECHARS + 2];	/* _ + \0 */
+		FILE	   *OPF;
+		BlockNumber blk;
+		RelFileLocator rnode;
+		ForkNumber	fork;
+
+		page = (Page) buf.data;
+
+		if (!XLogRecHasBlockRef(record, block_id))
+			continue;
+
+		if (!XLogRecHasBlockImage(record, block_id))
+			continue;
+
+		if (!RestoreBlockImage(record, block_id, page))
+			continue;
+
+		/* we have our extracted FPI, let's save it now */
+
+		XLogRecGetBlockTagExtended(record, block_id,
+								   &rnode, &fork, &blk, NULL);
+
+		if (fork >= 0 && fork <= MAX_FORKNUM)
+			sprintf(forkname, "_%s", forkNames[fork]);
+		else
+			pg_fatal("found invalid fork number: %u", fork);
+
+		snprintf(filename, MAXPGPATH, "%s/%08X-%08X.%u.%u.%u.%u%s", savepath,
+				 LSN_FORMAT_ARGS(record->ReadRecPtr),
+				 rnode.spcOid, rnode.dbOid, rnode.relNumber, blk, forkname);
+
+		OPF = fopen(filename, PG_BINARY_W);
+		if (!OPF)
+			pg_fatal("couldn't open file for output: %s", filename);
+
+		if (fwrite(page, BLCKSZ, 1, OPF) != 1)
+			pg_fatal("couldn't write out complete full page image to file: %s", filename);
+
+		fclose(OPF);
+	}
 }
 
 /*
@@ -679,6 +741,8 @@ usage(void)
 			 "                         (default: 1 or the value used in STARTSEG)\n"));
 	printf(_("  -V, --version          output version information, then exit\n"));
 	printf(_("  -w, --fullpage         only show records with a full page write\n"));
+	printf(_("  -W, --save-fpi=path    save full page images to given path as\n"
+			 "                         LSN.T.D.R.B_F\n"));
 	printf(_("  -x, --xid=XID          only show records with transaction ID XID\n"));
 	printf(_("  -z, --stats[=record]   show statistics instead of records\n"
 			 "                         (optionally, show per-record statistics)\n"));
@@ -712,6 +776,7 @@ main(int argc, char **argv)
 		{"limit", required_argument, NULL, 'n'},
 		{"path", required_argument, NULL, 'p'},
 		{"quiet", no_argument, NULL, 'q'},
+		{"save-fpi", required_argument, NULL, 'W'},
 		{"relation", required_argument, NULL, 'R'},
 		{"rmgr", required_argument, NULL, 'r'},
 		{"start", required_argument, NULL, 's'},
@@ -772,6 +837,7 @@ main(int argc, char **argv)
 	config.filter_by_fpw = false;
 	config.stats = false;
 	config.stats_per_record = false;
+	config.save_fpi_path = NULL;
 
 	stats.startptr = InvalidXLogRecPtr;
 	stats.endptr = InvalidXLogRecPtr;
@@ -782,7 +848,7 @@ main(int argc, char **argv)
 		goto bad_argument;
 	}
 
-	while ((option = getopt_long(argc, argv, "bB:e:fF:n:p:qr:R:s:t:wx:z",
+	while ((option = getopt_long(argc, argv, "bB:e:fF:n:p:qr:R:s:t:wW:x:X:z",
 								 long_options, &optindex)) != -1)
 	{
 		switch (option)
@@ -918,6 +984,9 @@ main(int argc, char **argv)
 			case 'w':
 				config.filter_by_fpw = true;
 				break;
+			case 'W':
+				config.save_fpi_path = pg_strdup(optarg);
+				break;
 			case 'x':
 				if (sscanf(optarg, "%u", &config.filter_by_xid) != 1)
 				{
@@ -968,6 +1037,17 @@ main(int argc, char **argv)
 		if (!verify_directory(waldir))
 		{
 			pg_log_error("could not open directory \"%s\": %m", waldir);
+			goto bad_argument;
+		}
+	}
+
+	if (config.save_fpi_path != NULL)
+	{
+		/* Create the dir if it doesn't exist */
+		if (pg_mkdir_p(config.save_fpi_path, pg_dir_create_mode) < 0)
+		{
+			pg_log_error("could not create output directory \"%s\": %m",
+						 config.save_fpi_path);
 			goto bad_argument;
 		}
 	}
@@ -1139,7 +1219,7 @@ main(int argc, char **argv)
 											config.filter_by_relation_forknum))
 			continue;
 
-		if (config.filter_by_fpw && !XLogRecordHasFPW(xlogreader_state))
+		if (config.filter_by_fpw && !XLogRecordHasFPI(xlogreader_state))
 			continue;
 
 		/* perform any per-record work */
@@ -1149,6 +1229,11 @@ main(int argc, char **argv)
 			{
 				XLogRecStoreStats(&stats, xlogreader_state);
 				stats.endptr = xlogreader_state->EndRecPtr;
+			}
+			else if (config.save_fpi_path != NULL)
+			{
+				if (XLogRecordHasFPI(xlogreader_state))
+					XLogRecordSaveFPIs(xlogreader_state, config.save_fpi_path);
 			}
 			else
 				XLogDumpDisplayRecord(&config, xlogreader_state);
@@ -1163,6 +1248,16 @@ main(int argc, char **argv)
 
 	if (config.stats == true && !config.quiet)
 		XLogDumpDisplayStats(&config, &stats);
+
+	if (config.save_fpi_path != NULL)
+	{
+		/* We fsync our output directory only; since these files are not part
+		 * of the production database we do not require the performance hit
+		 * that fsyncing every FPI would entail, so are doing this as a
+		 * compromise. */
+
+		fsync_fname(config.save_fpi_path, true);
+	}
 
 	if (time_to_stop)
 		exit(0);

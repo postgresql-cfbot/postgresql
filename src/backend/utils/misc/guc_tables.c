@@ -1181,7 +1181,7 @@ struct config_bool ConfigureNamesBool[] =
 	},
 	{
 		{"log_replication_commands", PGC_SUSET, LOGGING_WHAT,
-			gettext_noop("Logs each replication command."),
+			gettext_noop("Logs each replication command and related activity."),
 			NULL
 		},
 		&log_replication_commands,

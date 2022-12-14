@@ -31,6 +31,13 @@ extern ResultRelInfo *ExecFindPartition(ModifyTableState *mtstate,
 										EState *estate);
 extern void ExecCleanupTupleRouting(ModifyTableState *mtstate,
 									PartitionTupleRouting *proute);
+extern Relation ExecGetLeafPartitionForKey(PartitionDirectory partdir,
+										   Relation root_rel,
+										   int key_natts,
+										   const AttrNumber *key_attnums,
+										   Datum *key_vals, bool *key_nulls,
+										   Oid root_idxoid, int lockmode,
+										   Oid *leaf_idxoid);
 
 
 /*

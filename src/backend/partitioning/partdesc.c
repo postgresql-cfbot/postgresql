@@ -37,7 +37,7 @@ typedef struct PartitionDirectoryData
 {
 	MemoryContext pdir_mcxt;
 	HTAB	   *pdir_hash;
-	bool		omit_detached;
+	Snapshot	omit_detached_snapshot;
 }			PartitionDirectoryData;
 
 typedef struct PartitionDirectoryEntry
@@ -48,17 +48,23 @@ typedef struct PartitionDirectoryEntry
 } PartitionDirectoryEntry;
 
 static PartitionDesc RelationBuildPartitionDesc(Relation rel,
-												bool omit_detached);
+												Snapshot omit_detached_snapshot);
 
 
 /*
- * RelationGetPartitionDesc -- get partition descriptor, if relation is partitioned
+ * RelationGetPartitionDescExt
+ * 		Get partition descriptor of a partitioned table, building one and
+ * 		caching it for later use if not already or if the cached one would
+ * 		not be suitable for a given request
  *
  * We keep two partdescs in relcache: rd_partdesc includes all partitions
- * (even those being concurrently marked detached), while rd_partdesc_nodetach
- * omits (some of) those.  We store the pg_inherits.xmin value for the latter,
- * to determine whether it can be validly reused in each case, since that
- * depends on the active snapshot.
+ * (even the one being concurrently marked detached), while
+ * rd_partdesc_nodetach omits the detach-pending partition.  If the latter one
+ * is present, rd_partdesc_nodetach_xmin would have been set to the xmin of
+ * the detach-pending partition's pg_inherits row, which is used to determine
+ * whether rd_partdesc_nodetach can be validly reused for a given request by
+ * checking if the xmin appears visible to 'omit_detached_snapshot' passed by
+ * the caller.
  *
  * Note: we arrange for partition descriptors to not get freed until the
  * relcache entry's refcount goes to zero (see hacks in RelationClose,
@@ -69,7 +75,7 @@ static PartitionDesc RelationBuildPartitionDesc(Relation rel,
  * that the data doesn't become stale.
  */
 PartitionDesc
-RelationGetPartitionDesc(Relation rel, bool omit_detached)
+RelationGetPartitionDescExt(Relation rel, Snapshot omit_detached_snapshot)
 {
 	Assert(rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE);
 
@@ -78,36 +84,51 @@ RelationGetPartitionDesc(Relation rel, bool omit_detached)
 	 * do so when we are asked to include all partitions including detached;
 	 * and also when we know that there are no detached partitions.
 	 *
-	 * If there is no active snapshot, detached partitions aren't omitted
-	 * either, so we can use the cached descriptor too in that case.
+	 * omit_detached_snapshot being NULL means that the caller doesn't care
+	 * that the returned partition descriptor may contain detached partitions,
+	 * so we we can used the cached descriptor in that case too.
 	 */
 	if (likely(rel->rd_partdesc &&
-			   (!rel->rd_partdesc->detached_exist || !omit_detached ||
-				!ActiveSnapshotSet())))
+			   (!rel->rd_partdesc->detached_exist ||
+				omit_detached_snapshot == NULL)))
 		return rel->rd_partdesc;
 
 	/*
-	 * If we're asked to omit detached partitions, we may be able to use a
-	 * cached descriptor too.  We determine that based on the pg_inherits.xmin
-	 * that was saved alongside that descriptor: if the xmin that was not in
-	 * progress for that active snapshot is also not in progress for the
-	 * current active snapshot, then we can use it.  Otherwise build one from
-	 * scratch.
+	 * If we're asked to omit the detached partition, we may be able to use
+	 * the other cached descriptor, which has been made to omit the detached
+	 * partition.  Whether that descriptor can be reused in this case is
+	 * determined based on cross-checking the visibility of
+	 * rd_partdesc_nodetached_xmin, that is, the pg_inherits.xmin of the
+	 * pg_inherits row of the detached partition: if the xmin seems in-progress
+	 * to both the given omit_detached_snapshot and to the snapshot that would
+	 * have been passed when rd_partdesc_nodetached was built, then we can
+	 * reuse it.  Otherwise we must build one from scratch.
 	 */
-	if (omit_detached &&
-		rel->rd_partdesc_nodetached &&
-		ActiveSnapshotSet())
+	if (rel->rd_partdesc_nodetached && omit_detached_snapshot)
 	{
-		Snapshot	activesnap;
-
 		Assert(TransactionIdIsValid(rel->rd_partdesc_nodetached_xmin));
-		activesnap = GetActiveSnapshot();
 
-		if (!XidInMVCCSnapshot(rel->rd_partdesc_nodetached_xmin, activesnap))
+		if (!XidInMVCCSnapshot(rel->rd_partdesc_nodetached_xmin,
+							   omit_detached_snapshot))
 			return rel->rd_partdesc_nodetached;
 	}
 
-	return RelationBuildPartitionDesc(rel, omit_detached);
+	return RelationBuildPartitionDesc(rel, omit_detached_snapshot);
+}
+
+/*
+ * RelationGetPartitionDesc
+ *		Like RelationGetPartitionDescExt() but for callers that are fine with
+ *		ActiveSnapshot being used as omit_detached_snapshot
+ */
+PartitionDesc
+RelationGetPartitionDesc(Relation rel, bool omit_detached)
+{
+	Snapshot	snapshot = NULL;
+
+	if (omit_detached && ActiveSnapshotSet())
+		snapshot = GetActiveSnapshot();
+	return RelationGetPartitionDescExt(rel, snapshot);
 }
 
 /*
@@ -132,7 +153,8 @@ RelationGetPartitionDesc(Relation rel, bool omit_detached)
  * for them.
  */
 static PartitionDesc
-RelationBuildPartitionDesc(Relation rel, bool omit_detached)
+RelationBuildPartitionDesc(Relation rel,
+						   Snapshot omit_detached_snapshot)
 {
 	PartitionDesc partdesc;
 	PartitionBoundInfo boundinfo = NULL;
@@ -160,7 +182,8 @@ RelationBuildPartitionDesc(Relation rel, bool omit_detached)
 	detached_exist = false;
 	detached_xmin = InvalidTransactionId;
 	inhoids = find_inheritance_children_extended(RelationGetRelid(rel),
-												 omit_detached, NoLock,
+												 omit_detached_snapshot,
+												 NoLock,
 												 &detached_exist,
 												 &detached_xmin);
 
@@ -322,11 +345,11 @@ RelationBuildPartitionDesc(Relation rel, bool omit_detached)
 	 *
 	 * Note that if a partition was found by the catalog's scan to have been
 	 * detached, but the pg_inherit tuple saying so was not visible to the
-	 * active snapshot (find_inheritance_children_extended will not have set
-	 * detached_xmin in that case), we consider there to be no "omittable"
-	 * detached partitions.
+	 * omit_detached_snapshot (find_inheritance_children_extended() will not
+	 * have set detached_xmin in that case), we consider there to be no
+	 * "omittable" detached partitions.
 	 */
-	is_omit = omit_detached && detached_exist && ActiveSnapshotSet() &&
+	is_omit = detached_exist && omit_detached_snapshot &&
 		TransactionIdIsValid(detached_xmin);
 
 	/*
@@ -380,7 +403,7 @@ RelationBuildPartitionDesc(Relation rel, bool omit_detached)
  *		Create a new partition directory object.
  */
 PartitionDirectory
-CreatePartitionDirectory(MemoryContext mcxt, bool omit_detached)
+CreatePartitionDirectory(MemoryContext mcxt, Snapshot omit_detached_snapshot)
 {
 	MemoryContext oldcontext = MemoryContextSwitchTo(mcxt);
 	PartitionDirectory pdir;
@@ -395,7 +418,7 @@ CreatePartitionDirectory(MemoryContext mcxt, bool omit_detached)
 
 	pdir->pdir_hash = hash_create("partition directory", 256, &ctl,
 								  HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
-	pdir->omit_detached = omit_detached;
+	pdir->omit_detached_snapshot = omit_detached_snapshot;
 
 	MemoryContextSwitchTo(oldcontext);
 	return pdir;
@@ -428,7 +451,8 @@ PartitionDirectoryLookup(PartitionDirectory pdir, Relation rel)
 		 */
 		RelationIncrementReferenceCount(rel);
 		pde->rel = rel;
-		pde->pd = RelationGetPartitionDesc(rel, pdir->omit_detached);
+		pde->pd = RelationGetPartitionDescExt(rel,
+											  pdir->omit_detached_snapshot);
 		Assert(pde->pd != NULL);
 	}
 	return pde->pd;

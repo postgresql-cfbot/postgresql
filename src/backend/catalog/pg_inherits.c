@@ -52,14 +52,18 @@ typedef struct SeenRelsEntry
  * then no locks are acquired, but caller must beware of race conditions
  * against possible DROPs of child relations.
  *
- * Partitions marked as being detached are omitted; see
+ * A partition marked as being detached is omitted from the result if the
+ * pg_inherits row showing the partition as being detached is visible to
+ * ActiveSnapshot, doing so only when one has been pushed; see
  * find_inheritance_children_extended for details.
  */
 List *
 find_inheritance_children(Oid parentrelId, LOCKMODE lockmode)
 {
-	return find_inheritance_children_extended(parentrelId, true, lockmode,
-											  NULL, NULL);
+	return find_inheritance_children_extended(parentrelId,
+											  ActiveSnapshotSet() ?
+											  GetActiveSnapshot() : NULL,
+											  lockmode, NULL, NULL);
 }
 
 /*
@@ -71,16 +75,17 @@ find_inheritance_children(Oid parentrelId, LOCKMODE lockmode)
  * If a partition's pg_inherits row is marked "detach pending",
  * *detached_exist (if not null) is set true.
  *
- * If omit_detached is true and there is an active snapshot (not the same as
- * the catalog snapshot used to scan pg_inherits!) and a pg_inherits tuple
- * marked "detach pending" is visible to that snapshot, then that partition is
- * omitted from the output list.  This makes partitions invisible depending on
- * whether the transaction that marked those partitions as detached appears
- * committed to the active snapshot.  In addition, *detached_xmin (if not null)
- * is set to the xmin of the row of the detached partition.
+ * If the caller passed 'omit_detached_snapshot', the partition whose
+ * pg_inherits tuple marks it as "detach pending" is omitted from the output
+ * list if the tuple is visible to that snapshot.  That is, such a partition
+ * is omitted from the output list depending on whether the transaction that
+ * marked that partition as detached appears committed to
+ * omit_detached_snapshot.  If omitted, *detached_xmin (if non NULL) is set
+ * to the xmin of that pg_inherits tuple.
  */
 List *
-find_inheritance_children_extended(Oid parentrelId, bool omit_detached,
+find_inheritance_children_extended(Oid parentrelId,
+								   Snapshot omit_detached_snapshot,
 								   LOCKMODE lockmode, bool *detached_exist,
 								   TransactionId *detached_xmin)
 {
@@ -141,15 +146,13 @@ find_inheritance_children_extended(Oid parentrelId, bool omit_detached,
 			if (detached_exist)
 				*detached_exist = true;
 
-			if (omit_detached && ActiveSnapshotSet())
+			if (omit_detached_snapshot)
 			{
 				TransactionId xmin;
-				Snapshot	snap;
 
 				xmin = HeapTupleHeaderGetXmin(inheritsTuple->t_data);
-				snap = GetActiveSnapshot();
 
-				if (!XidInMVCCSnapshot(xmin, snap))
+				if (!XidInMVCCSnapshot(xmin, omit_detached_snapshot))
 				{
 					if (detached_xmin)
 					{

@@ -2231,11 +2231,15 @@ set_relation_partition_info(PlannerInfo *root, RelOptInfo *rel,
 
 	/*
 	 * Create the PartitionDirectory infrastructure if we didn't already.
+	 * Note that the planner always omits the partitions being detached
+	 * concurrently.
 	 */
 	if (root->glob->partition_directory == NULL)
 	{
+		Assert(ActiveSnapshotSet());
 		root->glob->partition_directory =
-			CreatePartitionDirectory(CurrentMemoryContext, true);
+			CreatePartitionDirectory(CurrentMemoryContext,
+									 GetActiveSnapshot());
 	}
 
 	partdesc = PartitionDirectoryLookup(root->glob->partition_directory,

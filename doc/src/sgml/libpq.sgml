@@ -2679,6 +2679,30 @@ void *PQgetssl(const PGconn *conn);
      </listitem>
     </varlistentry>
 
+    <varlistentry id="libpq-PQConncheck">
+     <term><function>PQConncheck</function><indexterm><primary>PQConncheck</primary></indexterm></term>
+     <listitem>
+      <para>
+       Returns the status of the socket.
+
+<synopsis>
+int PQConncheck(PGconn *conn);
+</synopsis>
+      </para>
+
+      <para>
+       Unlike <xref linkend="libpq-PQstatus"/>, this function checks socket
+       health. This check is performed by polling the socket. This function is
+       currently available only on systems that support the non-standard
+       <symbol>POLLRDHUP</symbol> extension to the <symbol>poll</symbol> system
+       call, including Linux. <xref linkend="libpq-PQConncheck"/> returns <literal>1</literal>
+       if the remote peer seems to be closed, returns <literal>0</literal> if
+       the socket is valid, and returns <literal>-1</literal> if the connection
+       has been already invalid.
+      </para>
+     </listitem>
+    </varlistentry>
+
    </variablelist>
   </para>
 

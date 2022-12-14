@@ -1218,6 +1218,48 @@ PQenv2encoding(void)
 	return encoding;
 }
 
+/*
+ * Helper function for PQconncheck().
+ *
+ * Return >0 if opposite side seems to be disconnected.
+ */
+static int
+pqConncheck_internal(int sock)
+{
+#if (defined(HAVE_POLL) && defined(POLLRDHUP))
+	struct pollfd input_fd;
+	int errflags = POLLHUP | POLLERR | POLLNVAL;
+
+	input_fd.fd = sock;
+	input_fd.events = POLLRDHUP | errflags;
+	input_fd.revents = 0;
+
+	poll(&input_fd, 1, 0);
+
+	return input_fd.revents & POLLRDHUP;
+#else
+	/* Do not support socket checking on this platform, return 0 */
+	return 0;
+#endif
+}
+
+/*
+ * Check whether the socket peer closed connection or not.
+ *
+ * Returns >0 if remote peer seems to be closed, 0 if it is valid,
+ * -1 if the input connection is bad.
+ */
+int
+PQConncheck(PGconn *conn)
+{
+	/* quick exit if invalid connection has come */
+	if (conn == NULL ||
+		conn->sock == PGINVALID_SOCKET ||
+		conn->status != CONNECTION_OK)
+		return -1;
+
+	return pqConncheck_internal(conn->sock);
+}
 
 #ifdef ENABLE_NLS
 

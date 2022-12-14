@@ -11732,10 +11732,9 @@ SELECT pg_terminate_backend(pid, 180000) FROM pg_stat_activity
 -- execute check function. This should return false on supported platforms,
 -- otherwise return true.
 SELECT postgres_fdw_verify_connection_states('loopback');
-WARNING:  08006
  postgres_fdw_verify_connection_states 
 ---------------------------------------
- f
+ t
 (1 row)
 
 ABORT;

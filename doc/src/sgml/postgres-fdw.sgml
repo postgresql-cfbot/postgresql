@@ -790,6 +790,55 @@ postgres=# SELECT postgres_fdw_disconnect_all();
      </para>
     </listitem>
    </varlistentry>
+
+   <varlistentry>
+    <term><function>postgres_fdw_verify_connection_states(server_name text) returns boolean</function></term>
+    <listitem>
+     <para>
+      This function checks the status of remote connections that are established
+      by <filename>postgres_fdw</filename> from the local session to the foreign
+      server with the given name. This check is performed by polling the socket
+      and allows long-running transactions to be aborted sooner if the kernel
+      reports that the connection is closed. This function is currently
+      available only on systems that support the non-standard <symbol>POLLRDHUP</symbol>
+      extension to the <symbol>poll</symbol> system call, including Linux. This
+      returns <literal>true</literal> if a checked connections are still valid,
+      or the checking is not supported on this platform. <literal>false</literal>
+      is returned if the local session seems to be disconnected from other
+      servers. Example usage of the function:
+<screen>
+postgres=# SELECT postgres_fdw_verify_foreign_servers(false);
+ postgres_fdw_verify_connection_states
+---------------------------------------
+ t
+</screen>
+     </para>
+    </listitem>
+   </varlistentry>
+   <varlistentry>
+    <term><function>postgres_fdw_verify_connection_states_all() returns boolean</function></term>
+    <listitem>
+     <para>
+      This function checks the status of remote connections that are established
+      by <filename>postgres_fdw</filename> from the local session to the foreign
+      servers. This check is performed by polling the socket and allows
+      long-running transactions to be aborted sooner if the kernel reports that
+      the connection is closed. This function is currently available only on
+      systems that support the non-standard <symbol>POLLRDHUP</symbol> extension
+      to the <symbol>poll</symbol> system call, including Linux. This returns
+      <literal>true</literal> if a lastly checked connections are still valid,
+      or the checking is not supported on this platform. <literal>false</literal>
+      is returned if the local session seems to be disconnected from other
+      servers. Example usage of the function:
+<screen>
+postgres=# SELECT postgres_fdw_verify_foreign_servers(false);
+ postgres_fdw_verify_connection_states_all
+-------------------------------------------
+ t
+</screen>
+     </para>
+    </listitem>
+   </varlistentry>
    </variablelist>
 
 </sect2>

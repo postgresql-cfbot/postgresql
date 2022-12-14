@@ -3874,3 +3874,33 @@ SELECT * FROM prem2;
 
 ALTER SERVER loopback OPTIONS (DROP parallel_commit);
 ALTER SERVER loopback2 OPTIONS (DROP parallel_commit);
+
+-- ===================================================================
+-- test for postgres_fdw_verify_foreign_servers function
+-- ===================================================================
+
+-- Disable debug_discard_caches in order to manage remote connections
+SET debug_discard_caches TO '0';
+
+-- Disconnect once and set application_name to an arbitrary value
+SELECT 1 FROM postgres_fdw_disconnect_all();
+ALTER SERVER loopback OPTIONS (SET application_name 'healthcheck');
+
+-- The text of the error might vary across platforms, so only show SQLSTATE.
+\set VERBOSITY sqlstate
+
+BEGIN;
+SELECT 1 FROM ft1 LIMIT 1;
+-- Terminate the remote backend process
+SELECT pg_terminate_backend(pid, 180000) FROM pg_stat_activity
+       WHERE application_name = 'healthcheck';
+
+-- execute check function. This should return false on supported platforms,
+-- otherwise return true.
+SELECT postgres_fdw_verify_connection_states('loopback');
+ABORT;
+
+\set VERBOSITY default
+
+-- Clean up
+RESET debug_discard_caches;

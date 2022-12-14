@@ -86,6 +86,8 @@ static bool xact_got_connection = false;
 PG_FUNCTION_INFO_V1(postgres_fdw_get_connections);
 PG_FUNCTION_INFO_V1(postgres_fdw_disconnect);
 PG_FUNCTION_INFO_V1(postgres_fdw_disconnect_all);
+PG_FUNCTION_INFO_V1(postgres_fdw_verify_connection_states);
+PG_FUNCTION_INFO_V1(postgres_fdw_verify_connection_states_all);
 
 /* prototypes of private functions */
 static void make_new_connection(ConnCacheEntry *entry, UserMapping *user);
@@ -116,6 +118,7 @@ static void pgfdw_finish_pre_subcommit_cleanup(List *pending_entries,
 											   int curlevel);
 static bool UserMappingPasswordRequired(UserMapping *user);
 static bool disconnect_cached_connections(Oid serverid);
+static bool verify_cached_connections(Oid serverid);
 
 /*
  * Get a PGconn which can be used to execute queries on the remote PostgreSQL
@@ -1861,4 +1864,101 @@ disconnect_cached_connections(Oid serverid)
 	}
 
 	return result;
+}
+
+/*
+ * Workhorse to verify cached connections.
+ *
+ * This function scans all the connection cache entries and verifies the
+ * connections whose foreign server OID matches with the specified one. If
+ * InvalidOid is specified, it verifies all the cached connections.
+ *
+ * This function emits warnings if a disconnection is found, and this returns
+ * false only when the lastly verified server seems to be disconnected.
+ *
+ * Note that the verification can be used on some limited platforms. If this
+ * server does not support it, this function alwayse returns true.
+ */
+static bool
+verify_cached_connections(Oid serverid)
+{
+	HASH_SEQ_STATUS scan;
+	ConnCacheEntry *entry;
+	bool		all = !OidIsValid(serverid);
+	bool		result = true;
+
+	/* quick exit if connection cache has been not initialized yet. */
+	if (!ConnectionHash)
+		return true;
+
+	hash_seq_init(&scan, ConnectionHash);
+	while ((entry = (ConnCacheEntry *) hash_seq_search(&scan)))
+	{
+		/* Ignore cache entry if no open connection right now. */
+		if (!entry->conn)
+			continue;
+
+		/* Skip if the entry is invalidated. */
+		if (entry->invalidated)
+			continue;
+
+		if (all || entry->serverid == serverid)
+		{
+			if (PQConncheck(entry->conn))
+			{
+				/*
+				 * Foreign server might be down, so throw ereport(WARNING).
+				 */
+				ForeignServer *server;
+
+				server = GetForeignServer(entry->serverid);
+				ereport(WARNING,
+						(errcode(ERRCODE_CONNECTION_FAILURE),
+						 errmsg("could not connect to server \"%s\"",
+								server->servername),
+						 errdetail("Socket close is detected."),
+						 errhint("Plsease check the health of the server.")));
+
+				result = false;
+			}
+		}
+	}
+
+	return result;
+}
+
+/*
+ * Verify the specified cached connections.
+ *
+ * This function verifies the connections that are established by postgres_fdw
+ * from the local session to the foreign server with the given name.
+ *
+ * This function emits a warning if a disconnection is found, and this returns
+ * false only when the verified server seems to be disconnected.
+ *
+ * Note that the verification can be used on some limited platforms. If this
+ * server does not support it, this function alwayse returns true.
+ */
+Datum
+postgres_fdw_verify_connection_states(PG_FUNCTION_ARGS)
+{
+	ForeignServer *server;
+	char	   *servername;
+
+	servername = text_to_cstring(PG_GETARG_TEXT_PP(0));
+	server = GetForeignServerByName(servername, false);
+
+	PG_RETURN_BOOL(verify_cached_connections(server->serverid));
+}
+
+/*
+ * Verify all the cached connections.
+ *
+ * This function verifies all the connections that are established by postgres_fdw
+ * from the local session to the foreign servers.
+ */
+Datum
+postgres_fdw_verify_connection_states_all(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_BOOL(verify_cached_connections(InvalidOid));
 }

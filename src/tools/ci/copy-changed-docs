@@ -1,0 +1,68 @@
+#! /bin/sh
+# Copy HTML which differ between $old and $new into $outdir
+set -e
+
+old=$1
+new=$2
+outdir=$3
+branch=$CIRRUS_BRANCH
+
+# The index is large and changes often
+skippages="bookindex.html"
+
+# The index is large and changes often
+skippages="bookindex.html"
+
+mkdir "$outdir"
+cp doc/src/sgml/*.css "$outdir"
+cp doc/src/sgml/images/*.svg "$outdir"
+
+# The index is useful to allow a static link (not specific to a cirrus run) to the artifacts for the most-recent, successful CI run for a branch
+branchurl=https://api.cirrus-ci.com/v1/artifact/github/$CIRRUS_REPO_FULL_NAME/$CIRRUS_TASK_NAME/html_docs/html_docs/00-index.html?branch=$branch
+
+index="$outdir/00-index.html"
+cat >"$index" <<EOF
+<html>
+<head><title>Index of docs changed since: $BASE_COMMIT</title></head>
+<body>
+<!-- A link to documentation for the most recent successful build: $branchurl -->
+<h1>Index of docs changed since: $BASE_COMMIT</h1>
+<ul>
+EOF
+
+changed=`git diff --no-index --name-only "$old"/src/sgml/html "$new"/src/sgml/html` ||
+	[ $? -eq 1 ]
+
+for f in $changed
+do
+	# Avoid removed files
+	[ -f "$f" ] || continue
+
+	echo "$f" |grep -Ew "$skippages" >/dev/null &&
+		continue
+
+	cp -v "$f" "$outdir" >&2
+	fn=${f##*/}
+	# ?branch=... is needed when accessing the artifacts for the static link for the branch
+	# It's not needed and ignored if accessing artifacts for *this* CI run
+	echo "<li><a href='$fn?branch=$branch'>$fn</a>"
+done >>"$index"
+
+github=https://github.com/$CIRRUS_REPO_FULL_NAME/commit
+cirrus=https://cirrus-ci.com/build
+
+cat >>"$index" <<EOF
+</ul>
+<hr>
+<code>
+<br>This file was written on: `date --rfc-822 --utc`
+<br>CIRRUS_CHANGE_TITLE: $CIRRUS_CHANGE_TITLE
+<br>CIRRUS_CHANGE_IN_REPO: <a href="$github/$CIRRUS_CHANGE_IN_REPO">$CIRRUS_CHANGE_IN_REPO</a>
+<br>CIRRUS_BUILD_ID: <a href="$cirrus/$CIRRUS_BUILD_ID">$CIRRUS_BUILD_ID</a>
+<br>CIRRUS_LAST_GREEN_CHANGE: <a href="$github/$CIRRUS_LAST_GREEN_CHANGE">$CIRRUS_LAST_GREEN_CHANGE</a>
+<br>CIRRUS_LAST_GREEN_BUILD_ID: <a href="$cirrus/$CIRRUS_LAST_GREEN_BUILD_ID">$CIRRUS_LAST_GREEN_BUILD_ID</a>
+</code>
+</body></html>
+EOF
+
+exit 0

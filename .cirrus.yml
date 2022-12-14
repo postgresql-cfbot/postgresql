@@ -27,6 +27,14 @@ env:
   TEMP_CONFIG: ${CIRRUS_WORKING_DIR}/src/tools/ci/pg_ci_base.conf
   PG_TEST_EXTRA: kerberos ldap ssl
 
+  # The commit that this branch is rebased on.  There's no easy way to find this.
+  # This does the right thing for cfbot, which always squishes all patches into a single commit.
+  # And does the right thing for any 1-patch commits.
+  # Patch series manually submitted to cirrus would benefit from setting this to the
+  # number of patches in the series (or directly to the commit the series was rebased on).
+  #BASE_COMMIT: HEAD~1
+  # For demo purposes:
+  BASE_COMMIT: 3d14e171e9e2236139e8976f3309a588bcc8683b
 
 # What files to preserve in case tests fail
 on_failure_ac: &on_failure_ac
@@ -47,7 +55,7 @@ on_failure_meson: &on_failure_meson
 
   # In theory it'd be nice to upload the junit files meson generates, so that
   # cirrus will nicely annotate the commit. Unfortunately the files don't
-  # contain identifieable file + line numbers right now, so the annotations
+  # contain identifiable file + line numbers right now, so the annotations
   # don't end up useful. We could probably improve on that with a some custom
   # conversion script, but ...
   meson_log_artifacts:
@@ -74,7 +82,7 @@ task:
     # no options enabled, should be small
     CCACHE_MAXSIZE: "150M"
 
-  # Container starts up quickly, but is slower at runtime, particularly for
+  # Containers start up quickly, but is slower at runtime, particularly for
   # tests. Good for the briefly running sanity check.
   container:
     image: $CONTAINER_REPO/linux_debian_bullseye_ci:latest
@@ -131,11 +139,9 @@ task:
   name: FreeBSD - 13 - Meson
 
   env:
-    # FreeBSD on GCP is slow when running with larger number of CPUS /
-    # jobs. Using one more job than cpus seems to work best.
-    CPUS: 2
-    BUILD_JOBS: 3
-    TEST_JOBS: 3
+    CPUS: 4
+    BUILD_JOBS: 4
+    TEST_JOBS: 6
 
     CCACHE_DIR: /tmp/ccache_dir
     CPPFLAGS: -DRELCACHE_FORCE_RELEASE -DCOPY_PARSE_PLAN_TREES -DWRITE_READ_PARSE_PLAN_TREES -DRAW_EXPRESSION_COVERAGE_TEST
@@ -160,8 +166,6 @@ task:
 
   ccache_cache:
     folder: $CCACHE_DIR
-  # Workaround around performance issues due to 32KB block size
-  repartition_script: src/tools/ci/gcp_freebsd_repartition.sh
   create_user_script: |
     pw useradd postgres
     chown -R postgres:postgres .
@@ -404,10 +408,10 @@ task:
 
 
 task:
-  name: macOS - Monterey - Meson
+  name: macOS - Ventura - Meson
 
   env:
-    CPUS: 12 # always get that much for cirrusci macOS instances
+    CPUS: 4 # always get that much for cirrusci macOS instances
     BUILD_JOBS: $CPUS
     # Test performance regresses noticably when using all cores. 8 seems to
     # work OK. See
@@ -428,8 +432,10 @@ task:
   depends_on: SanityCheck
   only_if: $CIRRUS_CHANGE_MESSAGE !=~ '.*\nci-os-only:.*' || $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-os-only:[^\n]*(macos|darwin|osx).*'
 
-  osx_instance:
-    image: monterey-base
+  macos_instance:
+    image: ghcr.io/cirruslabs/macos-ventura-base:latest
+    #cpus: 4
+    #memory: 8G
 
   sysinfo_script: |
     id
@@ -475,7 +481,7 @@ task:
   ccache_cache:
     folder: $CCACHE_DIR
   configure_script: |
-    brewpath="/usr/local"
+    brewpath="/opt/homebrew"
     PKG_CONFIG_PATH="${brewpath}/lib/pkgconfig:${PKG_CONFIG_PATH}"
 
     for pkg in icu4c krb5 openldap openssl zstd ; do
@@ -564,11 +570,20 @@ task:
 
   build_script: |
     vcvarsall x64
-    ninja -C build
+    ninja -C build |tee build.txt
+    REM Since pipes lose the exit status of the preceding command, rerun the compilation
+    REM without the pipe, exiting now if it fails, to avoid trying to run checks
+    ninja -C build > nul
 
   check_world_script: |
     vcvarsall x64
     meson test %MTEST_ARGS% --num-processes %TEST_JOBS%
+
+  # This should be last, so check_world is run even if there are warnings
+  always:
+    compiler_warnings_script:
+      # this avoids using metachars which would be interpretted by the windows shell
+      - sh -c 'if grep ": warning " build.txt; then exit 1; fi; exit 0'
 
   on_failure:
     <<: *on_failure_meson
@@ -600,7 +615,7 @@ task:
     CCACHE_MAXSIZE: "500M"
     CCACHE_SLOPPINESS: pch_defines,time_macros
     CCACHE_DEPEND: 1
-    # for some reason mingw plpython cannot find it's installation without this
+    # for some reason mingw plpython cannot find its installation without this
     PYTHONHOME: C:/msys64/ucrt64
     # prevents MSYS bash from resetting error mode
     MSYS: winjitdebug
@@ -655,7 +670,7 @@ task:
 
     # Use larger ccache cache, as this task compiles with multiple compilers /
     # flag combinations
-    CCACHE_MAXSIZE: "1GB"
+    CCACHE_MAXSIZE: "1G"
     CCACHE_DIR: "/tmp/ccache_dir"
 
     LINUX_CONFIGURE_FEATURES: *LINUX_CONFIGURE_FEATURES
@@ -674,9 +689,6 @@ task:
     clang -v
     export
 
-  ccache_cache:
-    folder: $CCACHE_DIR
-
   setup_additional_packages_script: |
     #apt-get update
     #DEBIAN_FRONTEND=noninteractive apt-get -y install ...
@@ -691,8 +703,11 @@ task:
   # different compilers to build with different combinations of dtrace on/off
   # and cassert on/off.
 
-  # gcc, cassert off, dtrace on
   always:
+    ccache_cache:
+      folder: $CCACHE_DIR
+
+    # gcc, cassert off, dtrace on
     gcc_warning_script: |
       time ./configure \
         --cache gcc.cache \
@@ -702,8 +717,7 @@ task:
       make -s -j${BUILD_JOBS} clean
       time make -s -j${BUILD_JOBS} world-bin
 
-  # gcc, cassert on, dtrace off
-  always:
+    # gcc, cassert on, dtrace off
     gcc_a_warning_script: |
       time ./configure \
         --cache gcc.cache \
@@ -713,8 +727,7 @@ task:
       make -s -j${BUILD_JOBS} clean
       time make -s -j${BUILD_JOBS} world-bin
 
-  # clang, cassert off, dtrace off
-  always:
+    # clang, cassert off, dtrace off
     clang_warning_script: |
       time ./configure \
         --cache clang.cache \
@@ -723,8 +736,7 @@ task:
       make -s -j${BUILD_JOBS} clean
       time make -s -j${BUILD_JOBS} world-bin
 
-  # clang, cassert on, dtrace on
-  always:
+    # clang, cassert on, dtrace on
     clang_a_warning_script: |
       time ./configure \
         --cache clang.cache \
@@ -735,8 +747,7 @@ task:
       make -s -j${BUILD_JOBS} clean
       time make -s -j${BUILD_JOBS} world-bin
 
-  # cross-compile to windows
-  always:
+    # cross-compile to windows
     mingw_cross_warning_script: |
       time ./configure \
         --host=x86_64-w64-mingw32 \
@@ -746,30 +757,15 @@ task:
       make -s -j${BUILD_JOBS} clean
       time make -s -j${BUILD_JOBS} world-bin
 
-  ###
-  # Verify docs can be built
-  ###
-  # XXX: Only do this if there have been changes in doc/ since last build
-  always:
-    docs_build_script: |
-      time ./configure \
-        --cache gcc.cache \
-        CC="ccache gcc" \
-        CXX="ccache g++" \
-        CLANG="ccache clang"
-      make -s -j${BUILD_JOBS} clean
-      time make -s -j${BUILD_JOBS} -C doc
-
-  ###
-  # Verify headerscheck / cpluspluscheck succeed
-  #
-  # - Don't use ccache, the files are uncacheable, polluting ccache's
-  #   cache
-  # - Use -fmax-errors, as particularly cpluspluscheck can be very verbose
-  # - XXX have to disable ICU to avoid errors:
-  #   https://postgr.es/m/20220323002024.f2g6tivduzrktgfa%40alap3.anarazel.de
-  ###
-  always:
+    ###
+    # Verify headerscheck / cpluspluscheck succeed
+    #
+    # - Don't use ccache, the files are uncacheable, polluting ccache's
+    #   cache
+    # - Use -fmax-errors, as particularly cpluspluscheck can be very verbose
+    # - XXX have to disable ICU to avoid errors:
+    #   https://postgr.es/m/20220323002024.f2g6tivduzrktgfa%40alap3.anarazel.de
+    ###
     headers_headerscheck_script: |
       time ./configure \
         ${LINUX_CONFIGURE_FEATURES} \
@@ -781,5 +777,48 @@ task:
     headers_cpluspluscheck_script: |
       time make -s cpluspluscheck EXTRAFLAGS='-fmax-errors=10'
 
-  always:
     upload_caches: ccache
+
+
+###
+# Verify docs can be built, and upload changed docs as artifacts
+# changesInclude() will skip this task if none of the commits since
+# CIRRUS_LAST_GREEN_CHANGE touched any relevant files. The comparison appears
+# to be like "git log a..b -- ./file", not "git diff a..b -- ./file"
+###
+
+task:
+  name: Documentation
+  only_if: $CIRRUS_CHANGE_MESSAGE !=~ '.*\nci-os-only:.*' || $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-os-only:[^\n]*(docs|html).*'
+  skip: "!changesInclude('.cirrus.yml', 'doc/**', 'src/tools/ci/copy-changed-docs')"
+
+  env:
+    CPUS: 2
+
+  container:
+    image: $CONTAINER_REPO/linux_debian_bullseye_ci:latest
+    cpu: $CPUS
+    memory: 2G
+
+  sysinfo_script: |
+    git diff --name-only "$BASE_COMMIT"
+
+  # Exercise HTML and other docs:
+  ninja_docs_build_script: |
+    mkdir build-ninja
+    cd build-ninja
+    time meson setup
+    time ninja docs
+    cp -r doc ../new-docs
+
+    # Re-build docs from the base commit.
+    git checkout "$BASE_COMMIT" -- ../doc
+    ninja clean
+    time ninja doc/src/sgml/html
+    cp -r doc ../old-docs
+
+  copy_changed_docs_script:
+    - src/tools/ci/copy-changed-docs "old-docs" "new-docs" "html_docs"
+
+  html_docs_artifacts:
+    paths: ['html_docs/*.html', 'html_docs/*.png', 'html_docs/*.css']

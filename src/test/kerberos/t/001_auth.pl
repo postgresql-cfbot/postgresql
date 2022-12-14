@@ -34,8 +34,18 @@ my ($krb5_bin_dir, $krb5_sbin_dir);
 
 if ($^O eq 'darwin')
 {
-	$krb5_bin_dir  = '/usr/local/opt/krb5/bin';
-	$krb5_sbin_dir = '/usr/local/opt/krb5/sbin';
+	if (-d "/usr/local/opt/krb5")
+	{
+		# old
+		$krb5_bin_dir  = '/usr/local/opt/krb5/bin';
+		$krb5_sbin_dir = '/usr/local/opt/krb5/sbin';
+	}
+	elsif (-d "/opt/homebrew/opt/krb5")
+	{
+		# new
+		$krb5_bin_dir  = '/opt/homebrew/opt/krb5/bin';
+		$krb5_sbin_dir = '/opt/homebrew/opt/krb5/sbin';
+	}
 }
 elsif ($^O eq 'freebsd')
 {

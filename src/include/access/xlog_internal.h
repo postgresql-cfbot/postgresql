@@ -401,4 +401,12 @@ extern PGDLLIMPORT bool InArchiveRecovery;
 extern PGDLLIMPORT bool StandbyMode;
 extern PGDLLIMPORT char *recoveryRestoreCommand;
 
+extern void GetCheckpointLocation(XLogRecPtr *loc, XLogRecPtr *redoloc,
+								  TimeLineID *tli, bool *fpw);
+extern void XLogGetMinRecoveryPoint(XLogRecPtr *loc, TimeLineID *tli);
+extern XLogRecPtr XLogGetLastFPWDisableRecptr(void);
+extern bool XLogBackupSetLastStart(XLogRecPtr recptr);
+extern void XLogBackupSetRunning(void);
+extern void XLogBackupResetRunning(void);
+
 #endif							/* XLOG_INTERNAL_H */

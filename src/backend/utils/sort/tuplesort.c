@@ -1445,7 +1445,6 @@ tuplesort_performsort(Tuplesortstate *state)
 			state->eof_reached = false;
 			state->markpos_offset = 0;
 			state->markpos_eof = false;
-			state->status = TSS_SORTEDINMEM;
 			break;
 
 		case TSS_BUILDRUNS:

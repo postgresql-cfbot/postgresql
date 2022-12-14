@@ -561,13 +561,23 @@ AddUserToTokenDacl(HANDLE hToken)
 	TOKEN_DEFAULT_DACL *ptdd = NULL;
 	TOKEN_INFORMATION_CLASS tic = TokenDefaultDacl;
 	BOOL		ret = FALSE;
+	HANDLE		hDefaultProcessHeap;
+
+	hDefaultProcessHeap = GetProcessHeap();
+	if (unlikely(hDefaultProcessHeap == NULL))
+	{
+		log_error(errcode(ERRCODE_SYSTEM_ERROR),
+				  "could not get default process heap: error code %lu",
+				  GetLastError());
+		return FALSE;
+	}
 
 	/* Figure out the buffer size for the DACL info */
 	if (!GetTokenInformation(hToken, tic, (LPVOID) NULL, dwTokenInfoLength, &dwSize))
 	{
 		if (GetLastError() == ERROR_INSUFFICIENT_BUFFER)
 		{
-			ptdd = (TOKEN_DEFAULT_DACL *) LocalAlloc(LPTR, dwSize);
+			ptdd = (TOKEN_DEFAULT_DACL *) HeapAlloc(hDefaultProcessHeap, 0, dwSize);
 			if (ptdd == NULL)
 			{
 				log_error(errcode(ERRCODE_OUT_OF_MEMORY),
@@ -612,7 +622,7 @@ AddUserToTokenDacl(HANDLE hToken)
 		GetLengthSid(pTokenUser->User.Sid) - sizeof(DWORD);
 
 	/* Allocate the ACL buffer & initialize it */
-	pacl = (PACL) LocalAlloc(LPTR, dwNewAclSize);
+	pacl = (PACL) HeapAlloc(hDefaultProcessHeap, 0, dwNewAclSize);
 	if (pacl == NULL)
 	{
 		log_error(errcode(ERRCODE_OUT_OF_MEMORY),
@@ -669,13 +679,13 @@ AddUserToTokenDacl(HANDLE hToken)
 
 cleanup:
 	if (pTokenUser)
-		LocalFree((HLOCAL) pTokenUser);
+		HeapFree(hDefaultProcessHeap, 0, pTokenUser);
 
 	if (pacl)
-		LocalFree((HLOCAL) pacl);
+		HeapFree(hDefaultProcessHeap, 0, pacl);
 
 	if (ptdd)
-		LocalFree((HLOCAL) ptdd);
+		HeapFree(hDefaultProcessHeap, 0, ptdd);
 
 	return ret;
 }
@@ -685,15 +695,25 @@ cleanup:
  *
  * Get the users token information from a process token.
  *
- * The caller of this function is responsible for calling LocalFree() on the
+ * The caller of this function is responsible for calling HeapFree() on the
  * returned TOKEN_USER memory.
  */
 static BOOL
 GetTokenUser(HANDLE hToken, PTOKEN_USER *ppTokenUser)
 {
 	DWORD		dwLength;
+	HANDLE		hDefaultProcessHeap;
 
 	*ppTokenUser = NULL;
+
+	hDefaultProcessHeap = GetProcessHeap();
+	if (unlikely(hDefaultProcessHeap == NULL))
+	{
+		log_error(errcode(ERRCODE_SYSTEM_ERROR),
+				  "could not get default process heap: error code %lu",
+				  GetLastError());
+		return FALSE;
+	}
 
 	if (!GetTokenInformation(hToken,
 							 TokenUser,
@@ -703,7 +723,7 @@ GetTokenUser(HANDLE hToken, PTOKEN_USER *ppTokenUser)
 	{
 		if (GetLastError() == ERROR_INSUFFICIENT_BUFFER)
 		{
-			*ppTokenUser = (PTOKEN_USER) LocalAlloc(LPTR, dwLength);
+			*ppTokenUser = (PTOKEN_USER) HeapAlloc(hDefaultProcessHeap, 0, dwLength);
 
 			if (*ppTokenUser == NULL)
 			{
@@ -727,7 +747,7 @@ GetTokenUser(HANDLE hToken, PTOKEN_USER *ppTokenUser)
 							 dwLength,
 							 &dwLength))
 	{
-		LocalFree(*ppTokenUser);
+		HeapFree(hDefaultProcessHeap, 0, *ppTokenUser);
 		*ppTokenUser = NULL;
 
 		log_error(errcode(ERRCODE_SYSTEM_ERROR),
@@ -736,7 +756,7 @@ GetTokenUser(HANDLE hToken, PTOKEN_USER *ppTokenUser)
 		return FALSE;
 	}
 
-	/* Memory in *ppTokenUser is LocalFree():d by the caller */
+	/* Memory in *ppTokenUser is HeapFree():d by the caller */
 	return TRUE;
 }
 

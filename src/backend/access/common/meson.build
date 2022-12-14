@@ -4,6 +4,7 @@ backend_sources += files(
   'detoast.c',
   'heaptuple.c',
   'indextuple.c',
+  'options.c',
   'printsimple.c',
   'printtup.c',
   'relation.c',

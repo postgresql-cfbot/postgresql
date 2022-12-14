@@ -196,7 +196,7 @@ file_fdw_handler(PG_FUNCTION_ARGS)
 Datum
 file_fdw_validator(PG_FUNCTION_ARGS)
 {
-	List	   *options_list = untransformRelOptions(PG_GETARG_DATUM(0));
+	List	   *options_list = optionsTextArrayToDefList(PG_GETARG_DATUM(0));
 	Oid			catalog = PG_GETARG_OID(1);
 	char	   *filename = NULL;
 	DefElem    *force_not_null = NULL;

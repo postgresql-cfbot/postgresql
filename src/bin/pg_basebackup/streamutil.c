@@ -755,7 +755,7 @@ AppendStringCommandOption(PQExpBuffer buf, bool use_new_option_syntax,
 {
 	AppendPlainCommandOption(buf, use_new_option_syntax, option_name);
 
-	if (option_value != NULL)
+	if (option_value !=NULL)
 	{
 		size_t		length = strlen(option_value);
 		char	   *escaped_value = palloc(1 + 2 * length);

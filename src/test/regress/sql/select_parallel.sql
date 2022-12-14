@@ -111,6 +111,31 @@ explain (costs off)
 	(select hundred, thousand from tenk2 where thousand > 100);
 select count(*) from tenk1 where (two, four) not in
 	(select hundred, thousand from tenk2 where thousand > 100);
+-- test parallel plans for queries containing correlated subplans
+-- where the subplan only needs params available from the current
+-- worker's scan.
+explain (costs off, verbose) select
+  (select t.unique1 from tenk1 where tenk1.unique1 = t.unique1)
+  from tenk1 t, generate_series(1, 10);
+explain (costs off, verbose) select
+  (select t.unique1 from tenk1 where tenk1.unique1 = t.unique1)
+  from tenk1 t;
+explain (costs off, verbose) select
+  (select t.unique1 from tenk1 where tenk1.unique1 = t.unique1)
+  from tenk1 t
+  limit 1;
+explain (costs off, verbose) select t.unique1
+  from tenk1 t
+  where t.unique1 = (select t.unique1 from tenk1 where tenk1.unique1 = t.unique1);
+explain (costs off, verbose) select *
+  from tenk1 t
+  order by (select t.unique1 from tenk1 where tenk1.unique1 = t.unique1);
+-- test subplan in join/lateral join
+explain (costs off, verbose, timing off) select t.unique1, l.*
+  from tenk1 t
+  join lateral (
+    select (select t.unique1 from tenk1 where tenk1.unique1 = t.unique1 offset 0)
+  ) l on true;
 -- this is not parallel-safe due to use of random() within SubLink's testexpr:
 explain (costs off)
 	select * from tenk1 where (unique1 + random())::integer not in

@@ -695,6 +695,7 @@ extern void ReorderBufferXidSetCatalogChanges(ReorderBuffer *rb, TransactionId x
 extern bool ReorderBufferXidHasCatalogChanges(ReorderBuffer *rb, TransactionId xid);
 extern bool ReorderBufferXidHasBaseSnapshot(ReorderBuffer *rb, TransactionId xid);
 
+extern bool	ReorderBufferXidIsKnownSubXact(ReorderBuffer *rb, TransactionId xid);
 extern bool ReorderBufferRememberPrepareInfo(ReorderBuffer *rb, TransactionId xid,
 											 XLogRecPtr prepare_lsn, XLogRecPtr end_lsn,
 											 TimestampTz prepare_time,

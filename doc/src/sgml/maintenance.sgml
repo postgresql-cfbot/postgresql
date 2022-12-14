@@ -860,10 +860,15 @@ analyze threshold = analyze base threshold + analyze scale factor * number of tu
    </para>
 
    <para>
-    Partitioned tables are not processed by autovacuum.  Statistics
-    should be collected by running a manual <command>ANALYZE</command> when it is
-    first populated, and again whenever the distribution of data in its
-    partitions changes significantly.
+    Partitioned tables are not processed by autovacuum.  This is no problem
+    as far as <command>VACUUM</command> is concerned, since autovacuum will process
+    the partitions.  But, as mentioned in <xref linkend="vacuum-for-statistics"/>,
+    it also means that autovacuum won't run <command>ANALYZE</command> on the
+    partitioned table itself.  While statistics are gathered for the partitions,
+    some queries may rely on the statistics for the partitioned table.  You should
+    collect statistics by running a manual <command>ANALYZE</command> when the
+    partitioned table is first populated, and again whenever the distribution
+    of data in its partitions changes significantly.
    </para>
 
    <para>

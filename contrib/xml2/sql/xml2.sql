@@ -34,6 +34,9 @@ as t(id int4);
 SELECT * FROM xpath_table('id', 't', 'xpath_test', '/doc/int', 'true')
 as t(id int4, doc int4);
 
+select * from xml_valid('xpath_test');
+select xml_encode_special_chars('<doc><int>1</int></doc>');
+
 create table articles (article_id integer, article_xml xml, date_entered date);
 insert into articles (article_id, article_xml, date_entered)
 values (2, '<article><author>test</author><pages>37</pages></article>', now());
@@ -72,6 +75,11 @@ Value</attribute></attributes>');
 
 create index idx_xpath on t1 ( xpath_string
 ('/attributes/attribute[@name="attr_1"]/text()', xml_data::text));
+
+select xpath_number('/attributes/attribute[@name="attr_1"]/', xml_data::text) from t1;
+select xpath_bool('/attributes/attribute[@name="attr_1"]/', xml_data::text) from t1;
+select xpath_nodeset('/attributes/attribute[@name="attr_1"]/', xml_data::text) from t1;
+select xpath_list('/attributes/attribute[@name="attr_1"]/', xml_data::text) from t1;
 
 SELECT xslt_process('<employee><name>cim</name><age>30</age><pay>400</pay></employee>'::text, $$<xsl:stylesheet xmlns:xsl="http://www.w3.org/1999/XSL/Transform" version="1.0">
   <xsl:output method="xml" omit-xml-declaration="yes" indent="yes"/>

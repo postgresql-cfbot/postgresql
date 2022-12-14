@@ -14,6 +14,15 @@
  *-------------------------------------------------------------------------
  */
 
+/*
+ * On macOS, "man realpath" avers:
+ *    Defining _DARWIN_C_SOURCE or _DARWIN_BETTER_REALPATH before including
+ *    stdlib.h will cause the provided implementation of realpath() to use
+ *    F_GETPATH from fcntl(2) to discover the path.
+ * This should be harmless everywhere else.
+ */
+#define _DARWIN_BETTER_REALPATH
+
 #ifndef FRONTEND
 #include "postgres.h"
 #else
@@ -58,11 +67,8 @@ extern int	_CRT_glob = 0;		/* 0 turns off globbing; 1 turns it on */
 	(fprintf(stderr, __VA_ARGS__), fputc('\n', stderr))
 #endif
 
-#ifdef _MSC_VER
-#define getcwd(cwd,len)  GetCurrentDirectory(len, cwd)
-#endif
-
-static int	resolve_symlinks(char *path);
+static int	normalize_exec_path(char *path);
+static char *pg_realpath(const char *fname);
 
 #ifdef WIN32
 static BOOL GetTokenUser(HANDLE hToken, PTOKEN_USER *ppTokenUser);
@@ -87,7 +93,7 @@ validate_exec(const char *path)
 	char		path_exe[MAXPGPATH + sizeof(".exe") - 1];
 
 	/* Win32 requires a .exe suffix for stat() */
-	if (strlen(path) >= strlen(".exe") &&
+	if (strlen(path) < strlen(".exe") ||
 		pg_strcasecmp(path + strlen(path) - strlen(".exe"), ".exe") != 0)
 	{
 		strlcpy(path_exe, path, sizeof(path_exe) - 4);
@@ -151,30 +157,16 @@ validate_exec(const char *path)
 int
 find_my_exec(const char *argv0, char *retpath)
 {
-	char		cwd[MAXPGPATH],
-				test_path[MAXPGPATH];
 	char	   *path;
-
-	if (!getcwd(cwd, MAXPGPATH))
-	{
-		log_error(errcode_for_file_access(),
-				  _("could not identify current directory: %m"));
-		return -1;
-	}
 
 	/*
 	 * If argv0 contains a separator, then PATH wasn't used.
 	 */
-	if (first_dir_separator(argv0) != NULL)
+	strlcpy(retpath, argv0, MAXPGPATH);
+	if (first_dir_separator(retpath) != NULL)
 	{
-		if (is_absolute_path(argv0))
-			strlcpy(retpath, argv0, MAXPGPATH);
-		else
-			join_path_components(retpath, cwd, argv0);
-		canonicalize_path(retpath);
-
 		if (validate_exec(retpath) == 0)
-			return resolve_symlinks(retpath);
+			return normalize_exec_path(retpath);
 
 		log_error(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				  _("invalid binary \"%s\": %m"), retpath);
@@ -183,9 +175,8 @@ find_my_exec(const char *argv0, char *retpath)
 
 #ifdef WIN32
 	/* Win32 checks the current directory first for names without slashes */
-	join_path_components(retpath, cwd, argv0);
 	if (validate_exec(retpath) == 0)
-		return resolve_symlinks(retpath);
+		return normalize_exec_path(retpath);
 #endif
 
 	/*
@@ -208,21 +199,15 @@ find_my_exec(const char *argv0, char *retpath)
 			if (!endp)
 				endp = startp + strlen(startp); /* point to end */
 
-			strlcpy(test_path, startp, Min(endp - startp + 1, MAXPGPATH));
+			strlcpy(retpath, startp, Min(endp - startp + 1, MAXPGPATH));
 
-			if (is_absolute_path(test_path))
-				join_path_components(retpath, test_path, argv0);
-			else
-			{
-				join_path_components(retpath, cwd, test_path);
-				join_path_components(retpath, retpath, argv0);
-			}
+			join_path_components(retpath, retpath, argv0);
 			canonicalize_path(retpath);
 
 			switch (validate_exec(retpath))
 			{
 				case 0:			/* found ok */
-					return resolve_symlinks(retpath);
+					return normalize_exec_path(retpath);
 				case -1:		/* wasn't even a candidate, keep looking */
 					break;
 				case -2:		/* found but disqualified */
@@ -241,105 +226,136 @@ find_my_exec(const char *argv0, char *retpath)
 
 
 /*
- * resolve_symlinks - resolve symlinks to the underlying file
+ * normalize_exec_path - convert to absolute path and resolve symlinks
  *
- * Replace "path" by the absolute path to the referenced file.
+ * Given a path that refers to an executable, convert it to absolute form
+ * and make sure it does not refer to a symlink.
  *
+ * On success, replaces the contents of "path" with the absolute path.
+ * ("path" is assumed to be of size MAXPGPATH.)
  * Returns 0 if OK, -1 if error.
- *
- * Note: we are not particularly tense about producing nice error messages
- * because we are not really expecting error here; we just determined that
- * the symlink does point to a valid executable.
- *
- * Here we test HAVE_READLINK, which excludes Windows.  There's no point in
- * using our junction point-based replacement code for this, because that only
- * works for directories.
  */
 static int
-resolve_symlinks(char *path)
+normalize_exec_path(char *path)
 {
-#ifdef HAVE_READLINK
-	struct stat buf;
-	char		orig_wd[MAXPGPATH],
-				link_buf[MAXPGPATH];
-	char	   *fname;
+	char	   *abspath;
 
 	/*
-	 * To resolve a symlink properly, we have to chdir into its directory and
-	 * then chdir to where the symlink points; otherwise we may fail to
-	 * resolve relative links correctly (consider cases involving mount
-	 * points, for example).  After following the final symlink, we use
-	 * getcwd() to figure out where the heck we're at.
-	 *
-	 * One might think we could skip all this if path doesn't point to a
-	 * symlink to start with, but that's wrong.  We also want to get rid of
-	 * any directory symlinks that are present in the given path. We expect
-	 * getcwd() to give us an accurate, symlink-free path.
+	 * Canonicalize the given path, for cleanliness and to be sure that
+	 * is_absolute_path() isn't fooled.  (This is redundant in some calling
+	 * cases, but not all.)
 	 */
-	if (!getcwd(orig_wd, MAXPGPATH))
-	{
-		log_error(errcode_for_file_access(),
-				  _("could not identify current directory: %m"));
-		return -1;
-	}
-
-	for (;;)
-	{
-		char	   *lsep;
-		int			rllen;
-
-		lsep = last_dir_separator(path);
-		if (lsep)
-		{
-			*lsep = '\0';
-			if (chdir(path) == -1)
-			{
-				log_error(errcode_for_file_access(),
-						  _("could not change directory to \"%s\": %m"), path);
-				return -1;
-			}
-			fname = lsep + 1;
-		}
-		else
-			fname = path;
-
-		if (lstat(fname, &buf) < 0 ||
-			!S_ISLNK(buf.st_mode))
-			break;
-
-		errno = 0;
-		rllen = readlink(fname, link_buf, sizeof(link_buf));
-		if (rllen < 0 || rllen >= sizeof(link_buf))
-		{
-			log_error(errcode_for_file_access(),
-					  _("could not read symbolic link \"%s\": %m"), fname);
-			return -1;
-		}
-		link_buf[rllen] = '\0';
-		strcpy(path, link_buf);
-	}
-
-	/* must copy final component out of 'path' temporarily */
-	strlcpy(link_buf, fname, sizeof(link_buf));
-
-	if (!getcwd(path, MAXPGPATH))
-	{
-		log_error(errcode_for_file_access(),
-				  _("could not identify current directory: %m"));
-		return -1;
-	}
-	join_path_components(path, path, link_buf);
 	canonicalize_path(path);
 
-	if (chdir(orig_wd) == -1)
+	/*
+	 * If it's absolute and doesn't refer to a symlink, return the
+	 * canonicalized path as-is, without factoring out any symlinks occurring
+	 * earlier in the path.  This supports situations where our whole
+	 * installation tree is symlinked, for example our executable path is
+	 * /usr/local/pgsql/bin/psql while /usr/local/pgsql is a symlink to
+	 * /usr/local/pgsql-14.5.  It's also possible that the user has symlinked
+	 * an individual program, say "ln -s /usr/local/pgsql/bin/psql ~/bin", and
+	 * in that case we'd better resolve the symlink or we won't be able to
+	 * find the rest of our installation.
+	 *
+	 * A case that will not work well is if the symlink is for the bin
+	 * directory as a whole, as we won't be able to find sibling installation
+	 * directories unless there are sibling symlinks.  We could deal with that
+	 * by also insisting that the immediate parent dir not be a symlink.  But
+	 * such setups appear to be rare if not nonexistent, so currently it
+	 * doesn't seem worth the extra complication to handle that.
+	 */
+	if (is_absolute_path(path))
+	{
+		struct stat st;
+
+		/* Note that caller already verified that stat() says it's S_ISREG */
+		if (lstat(path, &st) == 0 &&
+			S_ISREG(st.st_mode))
+			return 0;
+	}
+
+	/*
+	 * The path is relative or refers to a symlink, so resolve it to a full
+	 * absolute path.
+	 *
+	 * We used to do a lot of work ourselves here, but now we just let
+	 * realpath(3) do all the heavy lifting.
+	 */
+	abspath = pg_realpath(path);
+
+	if (abspath == NULL)
 	{
 		log_error(errcode_for_file_access(),
-				  _("could not change directory to \"%s\": %m"), orig_wd);
+				  _("could not resolve path \"%s\" to absolute form: %m"),
+				  path);
 		return -1;
 	}
-#endif							/* HAVE_READLINK */
+	strlcpy(path, abspath, MAXPGPATH);
+	free(abspath);
+
+#ifdef WIN32
+	/* On Windows, be sure to convert '\' to '/' */
+	canonicalize_path(path);
+#endif
 
 	return 0;
+}
+
+
+/*
+ * pg_realpath() - realpath(3) with POSIX.1-2008 semantics
+ *
+ * This is equivalent to realpath(fname, NULL), in that it returns a
+ * malloc'd buffer containing the absolute path equivalent to fname.
+ * On error, returns NULL with errno set.
+ *
+ * On Windows, what you get is spelled per platform conventions,
+ * so you probably want to apply canonicalize_path() to the result.
+ *
+ * For now, this is needed only here so mark it static.  If you choose to
+ * move it into its own file, move the _DARWIN_BETTER_REALPATH #define too!
+ */
+static char *
+pg_realpath(const char *fname)
+{
+	char	   *path;
+
+#ifndef WIN32
+	path = realpath(fname, NULL);
+	if (path == NULL && errno == EINVAL)
+	{
+		/*
+		 * Cope with old-POSIX systems that require a user-provided buffer.
+		 * Assume MAXPGPATH is enough room on all such systems.
+		 */
+		char	   *buf = malloc(MAXPGPATH);
+
+		if (buf == NULL)
+			return NULL;		/* assume errno is set */
+		path = realpath(fname, buf);
+		if (path == NULL)		/* don't leak memory */
+		{
+			int			save_errno = errno;
+
+			free(buf);
+			errno = save_errno;
+		}
+	}
+#else							/* WIN32 */
+
+	/*
+	 * Microsoft is resolutely non-POSIX, but _fullpath() does the same thing.
+	 * The documentation claims it reports errors by setting errno, which is a
+	 * bit surprising for Microsoft, but we'll believe that until it's proven
+	 * wrong.  Clear errno first, though, so we can at least tell if a failure
+	 * occurs and doesn't set it.
+	 */
+	errno = 0;
+	path = _fullpath(NULL, fname, 0);
+#endif
+
+	return path;
 }
 
 

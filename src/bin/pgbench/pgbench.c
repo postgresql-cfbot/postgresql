@@ -301,12 +301,38 @@ uint32		max_tries = 1;
 bool		failures_detailed = false;	/* whether to group failures in
 										 * reports or logs by basic types */
 
+char	   *logfile_prefix = NULL;
+
+/* main connection definition */
 const char *pghost = NULL;
 const char *pgport = NULL;
 const char *username = NULL;
-const char *dbName = NULL;
-char	   *logfile_prefix = NULL;
 const char *progname;
+
+/* multi connections */
+typedef enum mc_policy_t
+{
+	MC_UNKNOWN = 0,
+	MC_FIRST,
+	MC_RANDOM,
+	MC_ROUND_ROBIN,
+	MC_WORKING
+} mc_policy_t;
+
+/* connection info list */
+typedef struct connection_t
+{
+	const char *connection;		/* conninfo or dbname */
+	int			errors;			/* number of connection errors */
+} connection_t;
+
+static int				n_connections = 0;
+static connection_t	   *connections = NULL;
+static mc_policy_t	mc_policy = MC_ROUND_ROBIN;
+
+/* last used connection */
+// FIXME per thread?
+static int current_connection = 0;
 
 #define WSEP '@'				/* weight separator */
 
@@ -871,7 +897,7 @@ usage(void)
 {
 	printf("%s is a benchmarking tool for PostgreSQL.\n\n"
 		   "Usage:\n"
-		   "  %s [OPTION]... [DBNAME]\n"
+		   "  %s [OPTION]... [DBNAME or CONNINFO ...]\n"
 		   "\nInitialization options:\n"
 		   "  -i, --initialize         invokes initialization mode\n"
 		   "  -I, --init-steps=[" ALL_INIT_STEPS "]+ (default \"" DEFAULT_INIT_STEPS "\")\n"
@@ -929,6 +955,7 @@ usage(void)
 		   "  -h, --host=HOSTNAME      database server host or socket directory\n"
 		   "  -p, --port=PORT          database server port number\n"
 		   "  -U, --username=USERNAME  connect as specified database user\n"
+		   "  --connection-policy=S    set multiple connection policy (\"first\", \"rand\", \"round-robin\", \"working\")\n"
 		   "  -V, --version            output version information, then exit\n"
 		   "  -?, --help               show this help, then exit\n"
 		   "\n"
@@ -1535,13 +1562,89 @@ tryExecuteStatement(PGconn *con, const char *sql)
 	PQclear(res);
 }
 
+/* store a new connection information string */
+static void
+push_connection(const char *c)
+{
+	connections = pg_realloc(connections, sizeof(connection_t) * (n_connections+1));
+	connections[n_connections].connection = pg_strdup(c);
+	connections[n_connections].errors = 0;
+	n_connections++;
+}
+
+/* switch connection */
+static int
+next_connection(int *pci)
+{
+	int ci;
+
+	ci = ((*pci) + 1) % n_connections;
+	*pci = ci;
+
+	return ci;
+}
+
+/* return the connection index to use for next attempt */
+static int
+choose_connection(int *pci)
+{
+	int ci;
+
+	switch (mc_policy)
+	{
+		case MC_FIRST:
+			ci = 0;
+			break;
+		case MC_RANDOM:
+			// FIXME should use a prng state ; not thread safe ;
+			ci = (int) getrand(&base_random_sequence, 0, n_connections-1);
+			*pci = ci;
+			break;
+		case MC_ROUND_ROBIN:
+			ci = next_connection(pci);
+			break;
+		case MC_WORKING:
+			ci = *pci;
+			break;
+		default:
+			pg_fatal("unexpected multi connection policy: %d", mc_policy);
+			exit(1);
+	}
+
+	return ci;
+}
+
+/* return multi-connection policy based on its name or shortest prefix */
+static mc_policy_t
+get_connection_policy(const char *s)
+{
+	if (s == NULL || *s == '\0' || strcmp(s, "first") == 0 || strcmp(s, "f") == 0)
+		return MC_FIRST;
+	else if (strcmp(s, "random") == 0 || strcmp(s, "ra") == 0)
+		return MC_RANDOM;
+	else if (strcmp(s, "round-robin") == 0 || strcmp(s, "ro") == 0)
+		return MC_ROUND_ROBIN;
+	else if (strcmp(s, "working") == 0 || strcmp(s, "w") == 0)
+		return MC_WORKING;
+	else
+		return MC_UNKNOWN;
+}
+
+/* get backend connection info */
+static connection_t *
+getConnection(void)
+{
+	return &connections[choose_connection(&current_connection)];
+}
+
 /* set up a connection to the backend */
 static PGconn *
 doConnect(void)
 {
-	PGconn	   *conn;
-	bool		new_pass;
-	static char *password = NULL;
+	PGconn		   *conn;
+	bool			new_pass;
+	static char    *password = NULL;
+	connection_t   *ci = getConnection();
 
 	/*
 	 * Start the connection.  Loop until we have a password if requested by
@@ -1562,8 +1665,9 @@ doConnect(void)
 		values[2] = username;
 		keywords[3] = "password";
 		values[3] = password;
+		/* dbname can include a full conninfo */
 		keywords[4] = "dbname";
-		values[4] = dbName;
+		values[4] = ci->connection;
 		keywords[5] = "fallback_application_name";
 		values[5] = progname;
 		keywords[6] = NULL;
@@ -1571,11 +1675,12 @@ doConnect(void)
 
 		new_pass = false;
 
+		pg_log_debug("connecting to %s", ci->connection);
 		conn = PQconnectdbParams(keywords, values, true);
 
 		if (!conn)
 		{
-			pg_log_error("connection to database \"%s\" failed", dbName);
+			pg_log_error("connection to database \"%s\" failed", ci->connection);
 			return NULL;
 		}
 
@@ -1594,6 +1699,9 @@ doConnect(void)
 	{
 		pg_log_error("%s", PQerrorMessage(conn));
 		PQfinish(conn);
+		ci->errors += 1;
+		if (mc_policy == MC_WORKING)
+			(void) next_connection(&current_connection);
 		return NULL;
 	}
 
@@ -6544,6 +6652,7 @@ main(int argc, char **argv)
 		{"failures-detailed", no_argument, NULL, 13},
 		{"max-tries", required_argument, NULL, 14},
 		{"verbose-errors", no_argument, NULL, 15},
+		{"connection-policy", required_argument, NULL, 16},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -6881,6 +6990,14 @@ main(int argc, char **argv)
 				benchmarking_option_set = true;
 				verbose_errors = true;
 				break;
+			case 16:
+				mc_policy = get_connection_policy(optarg);
+				if (mc_policy == MC_UNKNOWN)
+				{
+					pg_fatal("unexpected connection policy: %s", optarg);
+					exit(1);
+				}
+				break;
 			default:
 				/* getopt_long already emitted a complaint */
 				pg_log_error_hint("Try \"%s --help\" for more information.", progname);
@@ -6932,23 +7049,18 @@ main(int argc, char **argv)
 	throttle_delay *= nthreads;
 
 	if (argc > optind)
-		dbName = argv[optind++];
+	{
+		while (optind < argc)
+			push_connection(argv[optind++]);
+	}
 	else
 	{
 		if ((env = getenv("PGDATABASE")) != NULL && *env != '\0')
-			dbName = env;
+			push_connection(env);
 		else if ((env = getenv("PGUSER")) != NULL && *env != '\0')
-			dbName = env;
+			push_connection(env);
 		else
-			dbName = get_user_name_or_exit(progname);
-	}
-
-	if (optind < argc)
-	{
-		pg_log_error("too many command-line arguments (first is \"%s\")",
-					 argv[optind]);
-		pg_log_error_hint("Try \"%s --help\" for more information.", progname);
-		exit(1);
+			push_connection(get_user_name_or_exit(progname));
 	}
 
 	if (is_init_mode)

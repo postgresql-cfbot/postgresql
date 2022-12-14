@@ -29,7 +29,7 @@ PostgreSQL documentation
   <cmdsynopsis>
    <command>pgbench</command>
    <arg rep="repeat"><replaceable>option</replaceable></arg>
-   <arg choice="opt"><replaceable>dbname</replaceable></arg>
+   <arg rep="repeat"><replaceable>dbname or conninfo</replaceable></arg>
   </cmdsynopsis>
  </refsynopsisdiv>
 
@@ -169,6 +169,9 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
         not specified, the environment variable
         <envar>PGDATABASE</envar> is used. If that is not set, the
         user name specified for the connection is used.
+        Alternatively, the <replaceable>dbname</replaceable> can be
+        a standard connection information string.
+        Several connections can be provided.
        </para>
       </listitem>
      </varlistentry>
@@ -917,6 +920,21 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
     arguments for connection parameters:
 
     <variablelist>
+
+     <varlistentry>
+      <term><option>--connection-policy=</option><replaceable>policy</replaceable></term>
+      <listitem>
+       <para>
+        Set the connection policy when multiple connections are available.
+        Default is <literal>round-robin</literal> provided (<literal>ro</literal>).
+        Possible values are:
+        <literal>first</literal> (<literal>f</literal>),
+        <literal>random</literal> (<literal>ra</literal>),
+        <literal>round-robin</literal> (<literal>ro</literal>),
+        <literal>working</literal> (<literal>w</literal>).
+       </para>
+      </listitem>
+     </varlistentry>
 
      <varlistentry>
       <term><option>-h</option> <replaceable>hostname</replaceable></term>

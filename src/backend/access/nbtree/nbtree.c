@@ -998,6 +998,8 @@ btvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 			if (info->report_progress)
 				pgstat_progress_update_param(PROGRESS_SCAN_BLOCKS_DONE,
 											 scanblkno);
+			if (info->report_parallel_progress && (scanblkno % REPORT_PARALLEL_VACUUM_EVERY_PAGES) == 0)
+				parallel_vacuum_update_progress();
 		}
 	}
 

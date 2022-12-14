@@ -506,6 +506,12 @@ loop_top:
 		blkno = bucket_blkno;
 
 		/*
+		 * For hash indexes, we report parallel vacuum progress
+		 * for every bucket.
+		 */
+		if (info->report_parallel_progress)
+			parallel_vacuum_update_progress();
+		/*
 		 * We need to acquire a cleanup lock on the primary bucket page to out
 		 * wait concurrent scans before deleting the dead tuples.
 		 */

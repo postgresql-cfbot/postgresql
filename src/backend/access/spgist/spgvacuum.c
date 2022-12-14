@@ -21,11 +21,13 @@
 #include "access/transam.h"
 #include "access/xloginsert.h"
 #include "catalog/storage_xlog.h"
+#include "commands/progress.h"
 #include "commands/vacuum.h"
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
 #include "storage/indexfsm.h"
 #include "storage/lmgr.h"
+#include "utils/backend_progress.h"
 #include "utils/snapmgr.h"
 
 
@@ -843,6 +845,9 @@ spgvacuumscan(spgBulkDeleteState *bds)
 			/* empty the pending-list after each page */
 			if (bds->pendingList != NULL)
 				spgprocesspending(bds);
+			/* report parallel vacuum progress */
+			if (bds->info->report_parallel_progress && (blkno % REPORT_PARALLEL_VACUUM_EVERY_PAGES) == 0)
+				parallel_vacuum_update_progress();
 		}
 	}
 

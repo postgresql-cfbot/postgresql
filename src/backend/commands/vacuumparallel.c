@@ -30,6 +30,7 @@
 #include "access/table.h"
 #include "access/xact.h"
 #include "catalog/index.h"
+#include "commands/progress.h"
 #include "commands/vacuum.h"
 #include "optimizer/paths.h"
 #include "pgstat.h"
@@ -49,6 +50,8 @@
 #define PARALLEL_VACUUM_KEY_BUFFER_USAGE	4
 #define PARALLEL_VACUUM_KEY_WAL_USAGE		5
 #define PARALLEL_VACUUM_KEY_INDEX_STATS		6
+
+#define PARALLEL_VACUUM_PROGRESS_TIMEOUT	1000
 
 /*
  * Shared information among parallel workers.  So this is allocated in the DSM
@@ -103,6 +106,17 @@ typedef struct PVShared
 
 	/* Counter for vacuuming and cleanup */
 	pg_atomic_uint32 idx;
+
+	/*
+	 * Counter for vacuuming and cleanup progress reporting.
+	 * This value is used to report index vacuum/cleanup progress
+	 * in parallel_vacuum_progress_report. We keep this
+	 * counter to avoid having to loop through
+	 * ParallelVacuumState->indstats to determine the number
+	 * of indexes completed.
+	 */
+	pg_atomic_uint32 idx_completed_progress;
+
 } PVShared;
 
 /* Status used during parallel index vacuum or cleanup */
@@ -213,6 +227,7 @@ static void parallel_vacuum_process_one_index(ParallelVacuumState *pvs, Relation
 static bool parallel_vacuum_index_is_parallel_safe(Relation indrel, int num_index_scans,
 												   bool vacuum);
 static void parallel_vacuum_error_callback(void *arg);
+static void parallel_wait_for_workers_to_finish(ParallelVacuumState *pvs);
 
 /*
  * Try to enter parallel mode and create a parallel context.  Then initialize
@@ -364,6 +379,7 @@ parallel_vacuum_init(Relation rel, Relation *indrels, int nindexes,
 	pg_atomic_init_u32(&(shared->cost_balance), 0);
 	pg_atomic_init_u32(&(shared->active_nworkers), 0);
 	pg_atomic_init_u32(&(shared->idx), 0);
+	pg_atomic_init_u32(&(shared->idx_completed_progress), 0);
 
 	shm_toc_insert(pcxt->toc, PARALLEL_VACUUM_KEY_SHARED, shared);
 	pvs->shared = shared;
@@ -618,8 +634,9 @@ parallel_vacuum_process_all_indexes(ParallelVacuumState *pvs, int num_index_scan
 													vacuum));
 	}
 
-	/* Reset the parallel index processing counter */
+	/* Reset the parallel index processing counter ( index progress counter also ) */
 	pg_atomic_write_u32(&(pvs->shared->idx), 0);
+	pg_atomic_write_u32(&(pvs->shared->idx_completed_progress), 0);
 
 	/* Setup the shared cost-based vacuum delay and launch workers */
 	if (nworkers > 0)
@@ -644,6 +661,14 @@ parallel_vacuum_process_all_indexes(ParallelVacuumState *pvs, int num_index_scan
 		ReinitializeParallelWorkers(pvs->pcxt, nworkers);
 
 		LaunchParallelWorkers(pvs->pcxt);
+
+		/*
+		 * Set the shared parallel vacuum progress. This will be used
+		 * to periodically update progress.h with completed indexes
+		 * in a parallel vacuum. See comments in parallel_vacuum_update_progress
+		 * for more details.
+		 */
+		ParallelVacuumProgress = &(pvs->shared->idx_completed_progress);
 
 		if (pvs->pcxt->nworkers_launched > 0)
 		{
@@ -688,7 +713,21 @@ parallel_vacuum_process_all_indexes(ParallelVacuumState *pvs, int num_index_scan
 	 */
 	if (nworkers > 0)
 	{
-		/* Wait for all vacuum workers to finish */
+		/*
+		 * To wait for parallel workers to finish,
+		 * first call parallel_wait_for_workers_to_finish
+		 * which is responsible for reporting the
+		 * number of indexes completed.
+		 *
+		 * Afterwards, WaitForParallelWorkersToFinish is called
+		 * to do the real work of waiting for parallel workers
+		 * to finish.
+		 *
+		 * Note: Both routines will acquire a WaitLatch in their
+		 * respective loops.
+		 */
+		parallel_wait_for_workers_to_finish(pvs);
+
 		WaitForParallelWorkersToFinish(pvs->pcxt);
 
 		for (int i = 0; i < pvs->pcxt->nworkers_launched; i++)
@@ -709,6 +748,9 @@ parallel_vacuum_process_all_indexes(ParallelVacuumState *pvs, int num_index_scan
 
 		indstats->status = PARALLEL_INDVAC_STATUS_INITIAL;
 	}
+
+	/* Reset parallel progress */
+	ParallelVacuumProgress = NULL;
 
 	/*
 	 * Carry the shared balance value to heap scan and disable shared costing
@@ -838,7 +880,8 @@ parallel_vacuum_process_one_index(ParallelVacuumState *pvs, Relation indrel,
 	ivinfo.estimated_count = pvs->shared->estimated_count;
 	ivinfo.num_heap_tuples = pvs->shared->reltuples;
 	ivinfo.strategy = pvs->bstrategy;
-
+	/* Only the leader should report parallel vacuum progress */
+	ivinfo.report_parallel_progress = !IsParallelWorker();
 	/* Update error traceback information */
 	pvs->indname = pstrdup(RelationGetRelationName(indrel));
 	pvs->status = indstats->status;
@@ -856,6 +899,9 @@ parallel_vacuum_process_one_index(ParallelVacuumState *pvs, Relation indrel,
 				 indstats->status,
 				 RelationGetRelationName(indrel));
 	}
+
+	if (ivinfo.report_parallel_progress)
+		parallel_vacuum_update_progress();
 
 	/*
 	 * Copy the index bulk-deletion result returned from ambulkdelete and
@@ -888,6 +934,9 @@ parallel_vacuum_process_one_index(ParallelVacuumState *pvs, Relation indrel,
 	pvs->status = PARALLEL_INDVAC_STATUS_COMPLETED;
 	pfree(pvs->indname);
 	pvs->indname = NULL;
+
+	/* Update the number of indexes completed. */
+	pg_atomic_add_fetch_u32(&(pvs->shared->idx_completed_progress), 1);
 }
 
 /*
@@ -1070,5 +1119,60 @@ parallel_vacuum_error_callback(void *arg)
 		case PARALLEL_INDVAC_STATUS_COMPLETED:
 		default:
 			return;
+	}
+}
+
+/*
+ * Read the shared ParallelVacuumProgress and update progress.h
+ * with indexes vacuumed so far. This function is called periodically
+ * by index AMs as well as parallel_vacuum_process_one_index.
+ *
+ * To avoid unnecessarily updating progress, we check the progress
+ * values from the backend entry and only update if the value
+ * of completed indexes increases.
+ *
+ * Note: This function should be used by the leader process only,
+ * and it's up to the caller to ensure this.
+ */
+void
+parallel_vacuum_update_progress(void)
+{
+	volatile PgBackendStatus *beentry = MyBEEntry;
+
+	Assert(!IsParallelWorker);
+
+	if (beentry && ParallelVacuumProgress)
+	{
+		int parallel_vacuum_current_value = beentry->st_progress_param[PROGRESS_VACUUM_INDEX_COMPLETED];
+		int parallel_vacuum_new_value = pg_atomic_read_u32(ParallelVacuumProgress);
+
+		if (parallel_vacuum_new_value > parallel_vacuum_current_value)
+			pgstat_progress_update_param(PROGRESS_VACUUM_INDEX_COMPLETED, parallel_vacuum_new_value);
+	}
+}
+
+/*
+ * Check if we are done vacuuming indexes and report
+ * progress.
+ *
+ * We nap using with a WaitLatch to avoid a busy loop.
+ *
+ * Note: This function should be used by the leader process only,
+ * and it's up to the caller to ensure this.
+ */
+void
+parallel_wait_for_workers_to_finish(ParallelVacuumState *pvs)
+{
+	Assert(!IsParallelWorker);
+
+	while (pg_atomic_read_u32(ParallelVacuumProgress) < pvs->nindexes)
+	{
+		CHECK_FOR_INTERRUPTS();
+
+		parallel_vacuum_update_progress();
+
+		(void) WaitLatch(MyLatch, WL_TIMEOUT | WL_LATCH_SET | WL_EXIT_ON_PM_DEATH, PARALLEL_VACUUM_PROGRESS_TIMEOUT,
+						 WAIT_EVENT_PARALLEL_VACUUM_FINISH);
+		ResetLatch(MyLatch);
 	}
 }

@@ -15,12 +15,14 @@
 #include "access/genam.h"
 #include "bloom.h"
 #include "catalog/storage.h"
+#include "commands/progress.h"
 #include "commands/vacuum.h"
 #include "miscadmin.h"
 #include "postmaster/autovacuum.h"
 #include "storage/bufmgr.h"
 #include "storage/indexfsm.h"
 #include "storage/lmgr.h"
+#include "utils/backend_progress.h"
 
 
 /*
@@ -62,6 +64,9 @@ blbulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 				   *itupEnd;
 
 		vacuum_delay_point();
+		if (info->report_parallel_progress && (blkno % REPORT_PARALLEL_VACUUM_EVERY_PAGES) == 0)
+			parallel_vacuum_update_progress();
+
 
 		buffer = ReadBufferExtended(index, MAIN_FORKNUM, blkno,
 									RBM_NORMAL, info->strategy);
@@ -192,6 +197,8 @@ blvacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 		Page		page;
 
 		vacuum_delay_point();
+		if (info->report_parallel_progress && (blkno % REPORT_PARALLEL_VACUUM_EVERY_PAGES) == 0)
+			parallel_vacuum_update_progress();
 
 		buffer = ReadBufferExtended(index, MAIN_FORKNUM, blkno,
 									RBM_NORMAL, info->strategy);

@@ -3348,6 +3348,7 @@ validate_index(Oid heapId, Oid indexId, Snapshot snapshot)
 	ivinfo.index = indexRelation;
 	ivinfo.analyze_only = false;
 	ivinfo.report_progress = true;
+	ivinfo.report_parallel_progress = false;
 	ivinfo.estimated_count = true;
 	ivinfo.message_level = DEBUG2;
 	ivinfo.num_heap_tuples = heapRelation->rd_rel->reltuples;

@@ -17,11 +17,13 @@
 #include "access/genam.h"
 #include "access/gist_private.h"
 #include "access/transam.h"
+#include "commands/progress.h"
 #include "commands/vacuum.h"
 #include "lib/integerset.h"
 #include "miscadmin.h"
 #include "storage/indexfsm.h"
 #include "storage/lmgr.h"
+#include "utils/backend_progress.h"
 #include "utils/memutils.h"
 
 /* Working state needed by gistbulkdelete */
@@ -223,7 +225,11 @@ gistvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 			break;
 		/* Iterate over pages, then loop back to recheck length */
 		for (; blkno < num_pages; blkno++)
+		{
 			gistvacuumpage(&vstate, blkno, blkno);
+			if (info->report_parallel_progress && (blkno % REPORT_PARALLEL_VACUUM_EVERY_PAGES) == 0)
+				parallel_vacuum_update_progress();
+		}
 	}
 
 	/*

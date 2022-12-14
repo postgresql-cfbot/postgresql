@@ -415,6 +415,7 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 	vacrel->rel = rel;
 	vac_open_indexes(vacrel->rel, RowExclusiveLock, &vacrel->nindexes,
 					 &vacrel->indrels);
+
 	if (instrument && vacrel->nindexes > 0)
 	{
 		/* Copy index names used by instrumentation (not error reporting) */
@@ -458,6 +459,10 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 		/* Default/auto, make all decisions dynamically */
 		Assert(params->index_cleanup == VACOPTVALUE_AUTO);
 	}
+
+	/* report number of indexes to vacuum, if we are told to cleanup indexes */
+	if (vacrel->do_index_cleanup)
+		pgstat_progress_update_param(PROGRESS_VACUUM_INDEX_TOTAL, vacrel->nindexes);
 
 	vacrel->bstrategy = bstrategy;
 	vacrel->relfrozenxid = rel->rd_rel->relfrozenxid;
@@ -2301,6 +2306,12 @@ lazy_vacuum_all_indexes(LVRelState *vacrel)
 				lazy_vacuum_one_index(indrel, istat, vacrel->old_live_tuples,
 									  vacrel);
 
+			/*
+			 * Done vacuuming an index. Increment the indexes completed
+			 */
+			pgstat_progress_update_param(PROGRESS_VACUUM_INDEX_COMPLETED,
+										 idx + 1);
+
 			if (lazy_check_wraparound_failsafe(vacrel))
 			{
 				/* Wraparound emergency -- end current index scan */
@@ -2335,11 +2346,14 @@ lazy_vacuum_all_indexes(LVRelState *vacrel)
 	Assert(allindexes || vacrel->failsafe_active);
 
 	/*
-	 * Increase and report the number of index scans.
+	 * Reset and report the number of indexes scanned.
+	 * Also, increase and report the number of index
+	 * scans.
 	 *
 	 * We deliberately include the case where we started a round of bulk
 	 * deletes that we weren't able to finish due to the failsafe triggering.
 	 */
+	pgstat_progress_update_param(PROGRESS_VACUUM_INDEX_COMPLETED, 0);
 	vacrel->num_index_scans++;
 	pgstat_progress_update_param(PROGRESS_VACUUM_NUM_INDEX_VACUUMS,
 								 vacrel->num_index_scans);
@@ -2593,10 +2607,17 @@ lazy_check_wraparound_failsafe(LVRelState *vacrel)
 	{
 		vacrel->failsafe_active = true;
 
-		/* Disable index vacuuming, index cleanup, and heap rel truncation */
+		/*
+		 * Disable index vacuuming, index cleanup, and heap rel truncation
+		 *
+		 * Also, report to progress.h that we are no longer tracking
+		 * index vacuum/cleanup.
+		 */
 		vacrel->do_index_vacuuming = false;
 		vacrel->do_index_cleanup = false;
 		vacrel->do_rel_truncate = false;
+		pgstat_progress_update_param(PROGRESS_VACUUM_INDEX_TOTAL, 0);
+		pgstat_progress_update_param(PROGRESS_VACUUM_INDEX_COMPLETED, 0);
 
 		ereport(WARNING,
 				(errmsg("bypassing nonessential maintenance of table \"%s.%s.%s\" as a failsafe after %d index scans",
@@ -2644,6 +2665,12 @@ lazy_cleanup_all_indexes(LVRelState *vacrel)
 			vacrel->indstats[idx] =
 				lazy_cleanup_one_index(indrel, istat, reltuples,
 									   estimated_count, vacrel);
+
+			/*
+			 * Done cleaning an index. Increment the indexes completed
+			 */
+			pgstat_progress_update_param(PROGRESS_VACUUM_INDEX_COMPLETED,
+										 idx + 1);
 		}
 	}
 	else
@@ -2678,6 +2705,7 @@ lazy_vacuum_one_index(Relation indrel, IndexBulkDeleteResult *istat,
 	ivinfo.index = indrel;
 	ivinfo.analyze_only = false;
 	ivinfo.report_progress = false;
+	ivinfo.report_parallel_progress = false;
 	ivinfo.estimated_count = true;
 	ivinfo.message_level = DEBUG2;
 	ivinfo.num_heap_tuples = reltuples;
@@ -2726,6 +2754,7 @@ lazy_cleanup_one_index(Relation indrel, IndexBulkDeleteResult *istat,
 	ivinfo.index = indrel;
 	ivinfo.analyze_only = false;
 	ivinfo.report_progress = false;
+	ivinfo.report_parallel_progress = false;
 	ivinfo.estimated_count = estimated_count;
 	ivinfo.message_level = DEBUG2;
 

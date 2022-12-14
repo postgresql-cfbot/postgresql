@@ -64,6 +64,12 @@
 /* value for checking vacuum flags */
 #define VACUUM_OPTION_MAX_VALID_VALUE		((1 << 3) - 1)
 
+/*
+ * Parallel Index vacuum progress is reported every 1GB of blocks
+ * scanned.
+ */
+#define REPORT_PARALLEL_VACUUM_EVERY_PAGES ((BlockNumber) (((uint64) 1024 * 1024 * 1024) / BLCKSZ))
+
 /* Abstract type for parallel vacuum state */
 typedef struct ParallelVacuumState ParallelVacuumState;
 
@@ -259,6 +265,8 @@ extern PGDLLIMPORT int vacuum_multixact_freeze_table_age;
 extern PGDLLIMPORT int vacuum_failsafe_age;
 extern PGDLLIMPORT int vacuum_multixact_failsafe_age;
 
+extern PGDLLIMPORT pg_atomic_uint32 *ParallelVacuumProgress;
+
 /* Variables for cost-based parallel vacuum */
 extern PGDLLIMPORT pg_atomic_uint32 *VacuumSharedCostBalance;
 extern PGDLLIMPORT pg_atomic_uint32 *VacuumActiveNWorkers;
@@ -333,5 +341,6 @@ extern bool std_typanalyze(VacAttrStats *stats);
 extern double anl_random_fract(void);
 extern double anl_init_selection_state(int n);
 extern double anl_get_next_S(double t, int n, double *stateptr);
+extern void parallel_vacuum_update_progress(void);
 
 #endif							/* VACUUM_H */

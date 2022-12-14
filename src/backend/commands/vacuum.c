@@ -75,6 +75,8 @@ int			vacuum_multixact_failsafe_age;
 static MemoryContext vac_context = NULL;
 static BufferAccessStrategy vac_strategy;
 
+/* Shared parameter to track vacuum parallel progress */
+pg_atomic_uint32 *ParallelVacuumProgress = NULL;
 
 /*
  * Variables for cost-based parallel vacuum.  See comments atop

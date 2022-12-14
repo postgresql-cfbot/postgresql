@@ -1761,6 +1761,10 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
       <entry>Waiting for parallel workers to finish computing.</entry>
      </row>
      <row>
+      <entry><literal>ParallelVacuumFinish</literal></entry>
+      <entry>Waiting for parallel vacuum workers to finish computing.</entry>
+     </row>
+     <row>
       <entry><literal>ProcArrayGroupUpdate</literal></entry>
       <entry>Waiting for the group leader to clear the transaction ID at
        end of a parallel operation.</entry>
@@ -6815,6 +6819,28 @@ FROM pg_stat_get_backend_idset() AS backendid;
       </para>
       <para>
        Number of dead tuples collected since the last index vacuum cycle.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>indexes_total</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of indexes that wil be vacuumed. This value will be
+       <literal>0</literal> if there are no indexes to vacuum, <literal>INDEX_CLEANUP</literal>
+       is set to <literal>OFF</literal>, or vacuum failsafe is triggered.
+       See <xref linkend="guc-vacuum-failsafe-age"/>
+       for more on vacuum failsafe.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>indexes_completed</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of indexes vacuumed in the current vacuum cycle.
       </para></entry>
      </row>
     </tbody>

@@ -17,12 +17,14 @@
 #include "access/gin_private.h"
 #include "access/ginxlog.h"
 #include "access/xloginsert.h"
+#include "commands/progress.h"
 #include "commands/vacuum.h"
 #include "miscadmin.h"
 #include "postmaster/autovacuum.h"
 #include "storage/indexfsm.h"
 #include "storage/lmgr.h"
 #include "storage/predicate.h"
+#include "utils/backend_progress.h"
 #include "utils/memutils.h"
 
 struct GinVacuumState
@@ -665,6 +667,9 @@ ginbulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 
 		vacuum_delay_point();
 
+		if (info->report_parallel_progress && (blkno % REPORT_PARALLEL_VACUUM_EVERY_PAGES) == 0)
+			parallel_vacuum_update_progress();
+
 		for (i = 0; i < nRoot; i++)
 		{
 			ginVacuumPostingTree(&gvs, rootOfPostingTree[i]);
@@ -750,6 +755,9 @@ ginvacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 		Page		page;
 
 		vacuum_delay_point();
+
+		if (info->report_parallel_progress && (blkno % REPORT_PARALLEL_VACUUM_EVERY_PAGES) == 0)
+			parallel_vacuum_update_progress();
 
 		buffer = ReadBufferExtended(index, MAIN_FORKNUM, blkno,
 									RBM_NORMAL, info->strategy);

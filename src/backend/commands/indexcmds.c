@@ -93,6 +93,11 @@ static char *ChooseIndexName(const char *tabname, Oid namespaceId,
 							 bool primary, bool isconstraint);
 static char *ChooseIndexNameAddition(List *colnames);
 static List *ChooseIndexColumnNames(List *indexElems);
+static void DefineIndexConcurrentInternal(Oid relationId,
+										  Oid indexRelationId,
+										  IndexInfo *indexInfo,
+										  LOCKTAG heaplocktag,
+										  LockRelId heaprelid);
 static void ReindexIndex(RangeVar *indexRelation, ReindexParams *params,
 						 bool isTopLevel);
 static void RangeVarCallbackForReindexIndex(const RangeVar *relation,
@@ -552,7 +557,6 @@ DefineIndex(Oid relationId,
 	bool		amcanorder;
 	amoptions_function amoptions;
 	bool		partitioned;
-	bool		safe_index;
 	Datum		reloptions;
 	int16	   *coloptions;
 	IndexInfo  *indexInfo;
@@ -560,12 +564,10 @@ DefineIndex(Oid relationId,
 	bits16		constr_flags;
 	int			numberOfAttributes;
 	int			numberOfKeyAttributes;
-	TransactionId limitXmin;
 	ObjectAddress address;
 	LockRelId	heaprelid;
 	LOCKTAG		heaplocktag;
 	LOCKMODE	lockmode;
-	Snapshot	snapshot;
 	Oid			root_save_userid;
 	int			root_save_sec_context;
 	int			root_save_nestlevel;
@@ -698,17 +700,6 @@ DefineIndex(Oid relationId,
 	partitioned = rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE;
 	if (partitioned)
 	{
-		/*
-		 * Note: we check 'stmt->concurrent' rather than 'concurrent', so that
-		 * the error is thrown also for temporary tables.  Seems better to be
-		 * consistent, even though we could do it on temporary table because
-		 * we're not actually doing it concurrently.
-		 */
-		if (stmt->concurrent)
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("cannot create index on partitioned table \"%s\" concurrently",
-							RelationGetRelationName(rel))));
 		if (stmt->excludeOpNames)
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
@@ -1080,10 +1071,6 @@ DefineIndex(Oid relationId,
 		}
 	}
 
-	/* Is index safe for others to ignore?  See set_indexsafe_procflags() */
-	safe_index = indexInfo->ii_Expressions == NIL &&
-		indexInfo->ii_Predicate == NIL;
-
 	/*
 	 * Report index creation if appropriate (delay this till after most of the
 	 * error checks)
@@ -1147,6 +1134,11 @@ DefineIndex(Oid relationId,
 
 		if (pd->nparts != 0)
 			flags |= INDEX_CREATE_INVALID;
+	}
+	else if (concurrent && OidIsValid(parentIndexId))
+	{
+		/* If concurrent, initially build index partitions as "invalid" */
+		flags |= INDEX_CREATE_INVALID;
 	}
 
 	if (stmt->deferrable)
@@ -1428,12 +1420,15 @@ DefineIndex(Oid relationId,
 								createdConstraintId,
 								is_alter_table, check_rights, check_not_in_use,
 								skip_build, quiet);
+
 					SetUserIdAndSecContext(child_save_userid,
 										   child_save_sec_context);
 				}
 
-				pgstat_progress_update_param(PROGRESS_CREATEIDX_PARTITIONS_DONE,
-											 i + 1);
+				/* For concurrent build, this is a catalog-only stage */
+				if (!concurrent)
+					pgstat_progress_update_param(PROGRESS_CREATEIDX_PARTITIONS_DONE,
+												 i + 1);
 				free_attrmap(attmap);
 			}
 
@@ -1445,46 +1440,39 @@ DefineIndex(Oid relationId,
 			 * invalid, this is incorrect, so update our row to invalid too.
 			 */
 			if (invalidate_parent)
-			{
-				Relation	pg_index = table_open(IndexRelationId, RowExclusiveLock);
-				HeapTuple	tup,
-							newtup;
-
-				tup = SearchSysCache1(INDEXRELID,
-									  ObjectIdGetDatum(indexRelationId));
-				if (!HeapTupleIsValid(tup))
-					elog(ERROR, "cache lookup failed for index %u",
-						 indexRelationId);
-				newtup = heap_copytuple(tup);
-				((Form_pg_index) GETSTRUCT(newtup))->indisvalid = false;
-				CatalogTupleUpdate(pg_index, &tup->t_self, newtup);
-				ReleaseSysCache(tup);
-				table_close(pg_index, RowExclusiveLock);
-				heap_freetuple(newtup);
-			}
+				index_set_state_flags(indexRelationId, INDEX_DROP_CLEAR_VALID);
 		}
 
 		/*
 		 * Indexes on partitioned tables are not themselves built, so we're
-		 * done here.
+		 * done here in the non-concurrent case.
 		 */
-		AtEOXact_GUC(false, root_save_nestlevel);
-		SetUserIdAndSecContext(root_save_userid, root_save_sec_context);
-		table_close(rel, NoLock);
-		if (!OidIsValid(parentIndexId))
-			pgstat_progress_end_command();
-		return address;
+
+		if (!concurrent)
+		{
+			AtEOXact_GUC(false, root_save_nestlevel);
+			SetUserIdAndSecContext(root_save_userid, root_save_sec_context);
+			table_close(rel, NoLock);
+
+			if (!OidIsValid(parentIndexId))
+				pgstat_progress_end_command();
+
+			return address;
+		}
 	}
 
 	AtEOXact_GUC(false, root_save_nestlevel);
 	SetUserIdAndSecContext(root_save_userid, root_save_sec_context);
 
-	if (!concurrent)
+	/*
+	 * All done in the non-concurrent case, and when building catalog entries
+	 * of partitions for CIC.
+	 */
+	if (!concurrent || OidIsValid(parentIndexId))
 	{
-		/* Close the heap and we're done, in the non-concurrent case */
 		table_close(rel, NoLock);
 
-		/* If this is the top-level index, we're done. */
+		/* If this is the top-level index, the command is complete. */
 		if (!OidIsValid(parentIndexId))
 			pgstat_progress_end_command();
 
@@ -1495,6 +1483,92 @@ DefineIndex(Oid relationId,
 	heaprelid = rel->rd_lockInfo.lockRelId;
 	SET_LOCKTAG_RELATION(heaplocktag, heaprelid.dbId, heaprelid.relId);
 	table_close(rel, NoLock);
+
+	if (!partitioned)
+	{
+		DefineIndexConcurrentInternal(relationId, indexRelationId,
+									  indexInfo, heaplocktag, heaprelid);
+		pgstat_progress_end_command();
+		return address;
+	}
+	else
+	{
+		/* finish CIC by building indexes on partitions */
+		ListCell   *lc;
+		List	   *childs;
+		int			npart = 0;
+		MemoryContext cic_context,
+					old_context;
+
+		/*
+		 * Create special memory context for cross-transaction storage.
+		 */
+		cic_context = AllocSetContextCreate(PortalContext,
+											"Create index concurrently",
+											ALLOCSET_DEFAULT_SIZES);
+
+		old_context = MemoryContextSwitchTo(cic_context);
+		childs = find_all_inheritors(indexRelationId, ShareLock, NULL);
+		MemoryContextSwitchTo(old_context);
+
+		foreach(lc, childs)
+		{
+			Oid			indrelid = lfirst_oid(lc);
+			Oid			tabrelid = IndexGetRelation(indrelid, false);
+
+			if (RELKIND_HAS_STORAGE(get_rel_relkind(indrelid)) &&
+				!get_index_isvalid(indrelid))
+			{
+				rel = table_open(relationId, ShareUpdateExclusiveLock);
+				heaprelid = rel->rd_lockInfo.lockRelId;
+				table_close(rel, ShareUpdateExclusiveLock);
+				SET_LOCKTAG_RELATION(heaplocktag, heaprelid.dbId, heaprelid.relId);
+
+				/* Process each partition in a separate transaction */
+				DefineIndexConcurrentInternal(tabrelid, indrelid, indexInfo,
+											  heaplocktag, heaprelid);
+
+				PushActiveSnapshot(GetTransactionSnapshot());
+			}
+
+			pgstat_progress_update_param(PROGRESS_CREATEIDX_PARTITIONS_DONE,
+										 ++npart);
+		}
+
+		/* Set all indexes as valid, including the parent */
+		foreach(lc, childs)
+		{
+			Oid			indrelid = lfirst_oid(lc);
+
+			if (get_rel_relkind(indrelid) != RELKIND_PARTITIONED_INDEX)
+				continue;
+			if (get_index_isvalid(indrelid))
+				continue;
+
+			index_set_state_flags(indrelid, INDEX_CREATE_SET_READY);
+			CommandCounterIncrement();
+			index_set_state_flags(indrelid, INDEX_CREATE_SET_VALID);
+		}
+
+		MemoryContextDelete(cic_context);
+		pgstat_progress_end_command();
+		PopActiveSnapshot();
+		return address;
+	}
+}
+
+
+static void
+DefineIndexConcurrentInternal(Oid relationId,
+							  Oid indexRelationId, IndexInfo *indexInfo,
+							  LOCKTAG heaplocktag, LockRelId heaprelid)
+{
+	TransactionId limitXmin;
+	Snapshot	snapshot;
+
+	/* Is index safe for others to ignore?  See set_indexsafe_procflags() */
+	bool		safe_index = indexInfo->ii_Expressions == NIL &&
+					indexInfo->ii_Predicate == NIL;
 
 	/*
 	 * For a concurrent build, it's important to make the catalog entries
@@ -1691,10 +1765,6 @@ DefineIndex(Oid relationId,
 	 * Last thing to do is release the session-level lock on the parent table.
 	 */
 	UnlockRelationIdForSession(&heaprelid, ShareUpdateExclusiveLock);
-
-	pgstat_progress_end_command();
-
-	return address;
 }
 
 

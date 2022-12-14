@@ -4151,9 +4151,7 @@ ALTER TABLE measurement ATTACH PARTITION measurement_y2008m02
      so that they are applied automatically to the entire hierarchy.
      This is very
      convenient, as not only will the existing partitions become indexed, but
-     also any partitions that are created in the future will.  One limitation is
-     that it's not possible to use the <literal>CONCURRENTLY</literal>
-     qualifier when creating such a partitioned index.  To avoid long lock
+     also any partitions that are created in the future will.  To avoid long lock
      times, it is possible to use <command>CREATE INDEX ON ONLY</command>
      the partitioned table; such an index is marked invalid, and the partitions
      do not get the index applied automatically.  The indexes on partitions can

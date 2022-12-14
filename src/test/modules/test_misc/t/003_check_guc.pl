@@ -106,4 +106,37 @@ foreach my $param (@sample_intersect)
 	);
 }
 
+# Test that GUCs in postgresql.conf.sample show the correct default values
+my $check_defaults = $node->safe_psql(
+	'postgres',
+	"
+	CREATE TABLE sample_conf AS
+	SELECT m[1] AS name, COALESCE(m[3], m[5]) AS sample_value
+	FROM (SELECT regexp_split_to_table(pg_read_file('$sample_file'), '\n') AS ln) conf,
+	regexp_match(ln, '^#?([_[:alpha:]]+) (= ''([^'']*)''|(= ([^[:space:]]*))).*') AS m
+	WHERE ln ~ '^#?[[:alpha:]]'
+	");
+
+$check_defaults = $node->safe_psql(
+	'postgres',
+	"
+	SELECT name, current_setting(name), sc.sample_value, boot_val
+	FROM pg_show_all_settings() psas
+	JOIN sample_conf sc USING(name)
+	WHERE sc.sample_value != boot_val -- same value (specified by Cluster.pm)
+	AND sc.sample_value != current_setting(name) -- same value, with human units
+	AND sc.sample_value != current_setting(name)||'.0' -- same value with .0 suffix
+	AND 'DEFAULT_COMPILE' != ALL(pg_settings_get_flags(psas.name)) -- dynamically-set defaults
+	AND 'DEFAULT_INITDB' != ALL(pg_settings_get_flags(psas.name)) -- dynamically-set defaults
+	AND NOT (sc.sample_value ~ '^0' AND current_setting(name) ~ '^0') -- zeros may be written differently
+	AND NOT (sc.sample_value='60s' AND current_setting(name) = '1min') -- two ways to write 1min
+	AND name NOT IN ('krb_server_keyfile', 'wal_retrieve_retry_interval', 'log_autovacuum_min_duration'); -- exceptions
+	");
+
+my @check_defaults_array = split("\n", lc($check_defaults));
+print(STDERR "$check_defaults\n");
+
+is (@check_defaults_array, 0,
+	'check for consistency of defaults in postgresql.conf.sample');
+
 done_testing();

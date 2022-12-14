@@ -221,6 +221,8 @@ typedef enum
 #define GUC_DISALLOW_IN_AUTO_FILE \
 							   0x002000 /* can't set in PG_AUTOCONF_FILENAME */
 #define GUC_RUNTIME_COMPUTED   0x004000 /* delay processing in 'postgres -C' */
+#define GUC_DEFAULT_COMPILE	   0x008000	/* default is determined at compile time */
+#define GUC_DEFAULT_INITDB	   0x010000	/* default is determined at during initdb */
 
 #define GUC_UNIT_KB			 0x01000000 /* value is in kilobytes */
 #define GUC_UNIT_BLOCKS		 0x02000000 /* value is in blocks */

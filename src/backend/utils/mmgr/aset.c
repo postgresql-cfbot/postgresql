@@ -47,6 +47,7 @@
 #include "postgres.h"
 
 #include "port/pg_bitutils.h"
+#include "utils/backend_status.h"
 #include "utils/memdebug.h"
 #include "utils/memutils.h"
 #include "utils/memutils_memorychunk.h"
@@ -521,6 +522,7 @@ AllocSetContextCreateInternal(MemoryContext parent,
 						name);
 
 	((MemoryContext) set)->mem_allocated = firstBlockSize;
+	pgstat_report_allocated_bytes(firstBlockSize, PG_ALLOC_INCREASE);
 
 	return (MemoryContext) set;
 }
@@ -543,6 +545,7 @@ AllocSetReset(MemoryContext context)
 	AllocSet	set = (AllocSet) context;
 	AllocBlock	block;
 	Size		keepersize PG_USED_FOR_ASSERTS_ONLY;
+	uint64		deallocation = 0;
 
 	Assert(AllocSetIsValid(set));
 
@@ -585,6 +588,7 @@ AllocSetReset(MemoryContext context)
 		{
 			/* Normal case, release the block */
 			context->mem_allocated -= block->endptr - ((char *) block);
+			deallocation += block->endptr - ((char *) block);
 
 #ifdef CLOBBER_FREED_MEMORY
 			wipe_mem(block, block->freeptr - ((char *) block));
@@ -595,6 +599,7 @@ AllocSetReset(MemoryContext context)
 	}
 
 	Assert(context->mem_allocated == keepersize);
+	pgstat_report_allocated_bytes(deallocation, PG_ALLOC_DECREASE);
 
 	/* Reset block size allocation sequence, too */
 	set->nextBlockSize = set->initBlockSize;
@@ -613,6 +618,7 @@ AllocSetDelete(MemoryContext context)
 	AllocSet	set = (AllocSet) context;
 	AllocBlock	block = set->blocks;
 	Size		keepersize PG_USED_FOR_ASSERTS_ONLY;
+	uint64		deallocation = 0;
 
 	Assert(AllocSetIsValid(set));
 
@@ -651,11 +657,13 @@ AllocSetDelete(MemoryContext context)
 
 				freelist->first_free = (AllocSetContext *) oldset->header.nextchild;
 				freelist->num_free--;
+				deallocation += oldset->header.mem_allocated;
 
 				/* All that remains is to free the header/initial block */
 				free(oldset);
 			}
 			Assert(freelist->num_free == 0);
+			pgstat_report_allocated_bytes(deallocation, PG_ALLOC_DECREASE);
 		}
 
 		/* Now add the just-deleted context to the freelist. */
@@ -672,7 +680,10 @@ AllocSetDelete(MemoryContext context)
 		AllocBlock	next = block->next;
 
 		if (block != set->keeper)
+		{
 			context->mem_allocated -= block->endptr - ((char *) block);
+			deallocation += block->endptr - ((char *) block);
+		}
 
 #ifdef CLOBBER_FREED_MEMORY
 		wipe_mem(block, block->freeptr - ((char *) block));
@@ -685,6 +696,7 @@ AllocSetDelete(MemoryContext context)
 	}
 
 	Assert(context->mem_allocated == keepersize);
+	pgstat_report_allocated_bytes(deallocation + context->mem_allocated, PG_ALLOC_DECREASE);
 
 	/* Finally, free the context header, including the keeper block */
 	free(set);
@@ -734,6 +746,7 @@ AllocSetAlloc(MemoryContext context, Size size)
 			return NULL;
 
 		context->mem_allocated += blksize;
+		pgstat_report_allocated_bytes(blksize, PG_ALLOC_INCREASE);
 
 		block->aset = set;
 		block->freeptr = block->endptr = ((char *) block) + blksize;
@@ -944,6 +957,7 @@ AllocSetAlloc(MemoryContext context, Size size)
 			return NULL;
 
 		context->mem_allocated += blksize;
+		pgstat_report_allocated_bytes(blksize, PG_ALLOC_INCREASE);
 
 		block->aset = set;
 		block->freeptr = ((char *) block) + ALLOC_BLOCKHDRSZ;
@@ -1043,6 +1057,7 @@ AllocSetFree(void *pointer)
 			block->next->prev = block->prev;
 
 		set->header.mem_allocated -= block->endptr - ((char *) block);
+		pgstat_report_allocated_bytes(block->endptr - ((char *) block), PG_ALLOC_DECREASE);
 
 #ifdef CLOBBER_FREED_MEMORY
 		wipe_mem(block, block->freeptr - ((char *) block));
@@ -1173,7 +1188,9 @@ AllocSetRealloc(void *pointer, Size size)
 
 		/* updated separately, not to underflow when (oldblksize > blksize) */
 		set->header.mem_allocated -= oldblksize;
+		pgstat_report_allocated_bytes(oldblksize, PG_ALLOC_DECREASE);
 		set->header.mem_allocated += blksize;
+		pgstat_report_allocated_bytes(blksize, PG_ALLOC_INCREASE);
 
 		block->freeptr = block->endptr = ((char *) block) + blksize;
 

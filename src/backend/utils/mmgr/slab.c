@@ -53,6 +53,7 @@
 #include "postgres.h"
 
 #include "lib/ilist.h"
+#include "utils/backend_status.h"
 #include "utils/memdebug.h"
 #include "utils/memutils.h"
 #include "utils/memutils_memorychunk.h"
@@ -238,6 +239,12 @@ SlabContextCreate(MemoryContext parent,
 						parent,
 						name);
 
+	/*
+	 * If SlabContextCreate is updated to add headerSize to
+	 * context->mem_allocated, then update here and SlabDelete appropriately
+	 */
+	pgstat_report_allocated_bytes(headerSize, PG_ALLOC_INCREASE);
+
 	return (MemoryContext) slab;
 }
 
@@ -253,6 +260,7 @@ SlabReset(MemoryContext context)
 {
 	SlabContext *slab = (SlabContext *) context;
 	int			i;
+	uint64		deallocation = 0;
 
 	Assert(SlabIsValid(slab));
 
@@ -278,9 +286,11 @@ SlabReset(MemoryContext context)
 			free(block);
 			slab->nblocks--;
 			context->mem_allocated -= slab->blockSize;
+			deallocation += slab->blockSize;
 		}
 	}
 
+	pgstat_report_allocated_bytes(deallocation, PG_ALLOC_DECREASE);
 	slab->minFreeChunks = 0;
 
 	Assert(slab->nblocks == 0);
@@ -294,8 +304,17 @@ SlabReset(MemoryContext context)
 void
 SlabDelete(MemoryContext context)
 {
+	/*
+	 * Until header allocation is included in context->mem_allocated, cast to
+	 * slab and decrement the headerSize
+	 */
+	SlabContext *slab = castNode(SlabContext, context);
+
 	/* Reset to release all the SlabBlocks */
 	SlabReset(context);
+
+	pgstat_report_allocated_bytes(slab->headerSize, PG_ALLOC_DECREASE);
+
 	/* And free the context header */
 	free(context);
 }
@@ -364,6 +383,7 @@ SlabAlloc(MemoryContext context, Size size)
 		slab->minFreeChunks = slab->chunksPerBlock;
 		slab->nblocks += 1;
 		context->mem_allocated += slab->blockSize;
+		pgstat_report_allocated_bytes(slab->blockSize, PG_ALLOC_INCREASE);
 	}
 
 	/* grab the block from the freelist (even the new block is there) */
@@ -537,6 +557,7 @@ SlabFree(void *pointer)
 		free(block);
 		slab->nblocks--;
 		slab->header.mem_allocated -= slab->blockSize;
+		pgstat_report_allocated_bytes(slab->blockSize, PG_ALLOC_DECREASE);
 	}
 	else
 		dlist_push_head(&slab->freelist[block->nfree], &block->node);

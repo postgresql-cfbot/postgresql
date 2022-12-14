@@ -679,6 +679,9 @@ SysLogger_Start(void)
 
 #ifndef EXEC_BACKEND
 		case 0:
+			/* Zero allocated bytes to avoid double counting parent allocation */
+			pgstat_zero_my_allocated_bytes();
+
 			/* in postmaster child ... */
 			InitPostmasterChild();
 

@@ -1175,6 +1175,20 @@ mark_async_capable_plan(Plan *plan, Path *path)
 										((ProjectionPath *) path)->subpath))
 				return true;
 			return false;
+		case T_CustomPath:
+			{
+				CustomPath *customPath = castNode(CustomPath, path);
+				/*
+				* If the generated plan node includes a Result node for the
+				* projection, we can't execute it asynchronously.
+				*/
+				if (IsA(plan, Result))
+					return false;
+
+				if (customPath->flags & CUSTOMPATH_SUPPORT_ASYNC_EXECUTION)
+					break;
+				return false;
+			}
 		default:
 			return false;
 	}

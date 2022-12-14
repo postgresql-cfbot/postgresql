@@ -54,7 +54,8 @@ static const char *plugin = "test_decoding";
 
 /* Global State */
 static int	outfd = -1;
-static volatile sig_atomic_t time_to_abort = false;
+static bool	time_to_abort = false;
+static volatile sig_atomic_t ready_to_exit = false;
 static volatile sig_atomic_t output_reopen = false;
 static bool output_isfile;
 static TimestampTz output_last_fsync = -1;
@@ -281,6 +282,23 @@ StreamLogicalLog(void)
 		{
 			PQfreemem(copybuf);
 			copybuf = NULL;
+		}
+
+		/* When we get SIGINT/SIGTERM, we exit */
+		if (ready_to_exit)
+		{
+			/*
+			 * Try informing the server about our exit, but don't wait around
+			 * or retry on failure.
+			 */
+			(void) PQputCopyEnd(conn, NULL);
+			(void) PQflush(conn);
+			time_to_abort = true;
+
+			if (verbose)
+				pg_log_info("received interrupt signal, exiting");
+
+			break;
 		}
 
 		/*
@@ -614,7 +632,10 @@ StreamLogicalLog(void)
 
 		res = PQgetResult(conn);
 	}
-	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+
+	/* It is not unexepected termination error when Ctrl-C'ed. */
+	if (!ready_to_exit &&
+		PQresultStatus(res) != PGRES_COMMAND_OK)
 	{
 		pg_log_error("unexpected termination of replication stream: %s",
 					 PQresultErrorMessage(res));
@@ -656,7 +677,7 @@ error:
 static void
 sigexit_handler(SIGNAL_ARGS)
 {
-	time_to_abort = true;
+	ready_to_exit = true;
 }
 
 /*
@@ -976,7 +997,7 @@ main(int argc, char **argv)
 	while (true)
 	{
 		StreamLogicalLog();
-		if (time_to_abort)
+		if (ready_to_exit || time_to_abort)
 		{
 			/*
 			 * We've been Ctrl-C'ed or reached an exit limit condition. That's

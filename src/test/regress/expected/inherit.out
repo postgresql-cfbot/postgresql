@@ -1,6 +1,8 @@
 --
 -- Test inheritance features
 --
+-- XXX These tables are not dropped. Why?
+-- XXX Are they needed for later tests? For dump-restore? Dropping them doesn't fail any test from check-world.
 CREATE TABLE a (aa TEXT);
 CREATE TABLE b (bb TEXT) INHERITS (a);
 CREATE TABLE c (cc TEXT) INHERITS (a);

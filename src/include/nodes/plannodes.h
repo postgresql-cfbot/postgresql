@@ -103,11 +103,6 @@ typedef struct PlannedStmt
 	int			stmt_len;		/* length in bytes; 0 means "rest of string" */
 } PlannedStmt;
 
-/* macro for fetching the Plan associated with a SubPlan node */
-#define exec_subplan_get_plan(plannedstmt, subplan) \
-	((Plan *) list_nth((plannedstmt)->subplans, (subplan)->plan_id - 1))
-
-
 /* ----------------
  *		Plan node
  *

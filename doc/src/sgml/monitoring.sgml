@@ -948,6 +948,21 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
      </para></entry>
     </row>
 
+    <row>
+     <entry role="catalog_table_entry"><para role="column_definition">
+      <structfield>allocated_bytes</structfield> <type>bigint</type>
+     </para>
+     <para>
+      Memory currently allocated to this backend in bytes. This is the balance
+      of bytes allocated and freed by this backend. Dynamic shared memory
+      allocations are included only in the value displayed for the backend that
+      created them, they are not included in the value for backends that are
+      attached to them to avoid double counting. Use <function>pg_size_pretty</function>
+      described in <xref linkend="functions-admin-dbsize"/> to make this value
+      more easily readable.
+     </para></entry>
+    </row>
+
      <row>
       <entry role="catalog_table_entry"><para role="column_definition">
        <structfield>query</structfield> <type>text</type>

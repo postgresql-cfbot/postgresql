@@ -3070,6 +3070,30 @@ chooseScript(TState *thread)
 	return i - 1;
 }
 
+/* Prepare SQL commands in the chosen script */
+static void
+prepareCommands(CState *st)
+{
+	int			j;
+	Command   **commands = sql_script[st->use_file].commands;
+
+	for (j = 0; commands[j] != NULL; j++)
+	{
+		PGresult   *res;
+		char		name[MAX_PREPARE_NAME];
+
+		if (commands[j]->type != SQL_COMMAND)
+			continue;
+		preparedStatementName(name, st->use_file, j);
+		res = PQprepare(st->con, name,
+						commands[j]->argv[0], commands[j]->argc - 1, NULL);
+		if (PQresultStatus(res) != PGRES_COMMAND_OK)
+			pg_log_error("%s", PQerrorMessage(st->con));
+		PQclear(res);
+	}
+	st->prepared[st->use_file] = true;
+}
+
 /* Send a SQL command, using the chosen querymode */
 static bool
 sendCommand(CState *st, Command *command)
@@ -3104,39 +3128,7 @@ sendCommand(CState *st, Command *command)
 		const char *params[MAX_ARGS];
 
 		if (!st->prepared[st->use_file])
-		{
-			int			j;
-			Command   **commands = sql_script[st->use_file].commands;
-
-			for (j = 0; commands[j] != NULL; j++)
-			{
-				PGresult   *res;
-
-				if (commands[j]->type != SQL_COMMAND)
-					continue;
-				preparedStatementName(name, st->use_file, j);
-				if (PQpipelineStatus(st->con) == PQ_PIPELINE_OFF)
-				{
-					res = PQprepare(st->con, name,
-									commands[j]->argv[0], commands[j]->argc - 1, NULL);
-					if (PQresultStatus(res) != PGRES_COMMAND_OK)
-						pg_log_error("%s", PQerrorMessage(st->con));
-					PQclear(res);
-				}
-				else
-				{
-					/*
-					 * In pipeline mode, we use asynchronous functions. If a
-					 * server-side error occurs, it will be processed later
-					 * among the other results.
-					 */
-					if (!PQsendPrepare(st->con, name,
-									   commands[j]->argv[0], commands[j]->argc - 1, NULL))
-						pg_log_error("%s", PQerrorMessage(st->con));
-				}
-			}
-			st->prepared[st->use_file] = true;
-		}
+			prepareCommands(st);
 
 		getQueryParams(&st->variables, command, params);
 		preparedStatementName(name, st->use_file, st->command);
@@ -4376,6 +4368,19 @@ executeMetaCommand(CState *st, pg_time_usec_t *now)
 			commandFailed(st, "startpipeline", "cannot use pipeline mode with the simple query protocol");
 			return CSTATE_ABORTED;
 		}
+		/*
+		 * Prepare SQL commands if needed.
+		 *
+		 * We should send Parse messages before executing /startpipeline.
+		 * If a Parse message is sent in pipeline mode, a transaction starts
+		 * before BEGIN is sent, and it could be a problem. For example, if
+		 * "BEGIN ISOLATION LEVEL SERIALIZABLE" is sent after a transaction
+		 * starts, the error
+		 * "ERROR:  SET TRANSACTION ISOLATION LEVEL must be called before any query"
+		 * occurs.
+		 */
+		else if (querymode == QUERY_PREPARED && !st->prepared[st->use_file])
+			prepareCommands(st);
 
 		if (PQpipelineStatus(st->con) != PQ_PIPELINE_OFF)
 		{

@@ -114,6 +114,31 @@ extern void mark_dummy_rel(RelOptInfo *rel);
  * equivclass.c
  *	  routines for managing EquivalenceClasses
  */
+
+/*
+ * EquivalenceMemberIterator
+ *		Data structure used for iteration over an EquivalenceClass's
+ *		EquivalenceMember in order to quickly find the members matching our
+ *		search pattern.
+ *
+ * Callers should assume all of the fields within this struct are internal.
+ *
+ * XXX where should this struct go? Not here.
+ */
+typedef struct EquivalenceMemberIterator
+{
+	bool		use_index;		/* use matching_ems index? */
+	bool		with_children;	/* include em_is_child members? */
+	bool		with_norel_members;	/* include members with empty em_relids */
+	int			current_index;	/* current iterator position, or -1. */
+	int			orig_length;	/* elements in eclass->ec_members at the start */
+	Relids		with_relids;	/* relids to match in em_relids */
+	PlannerInfo *root;		/* PlannerInfo the eclass belongs to */
+	EquivalenceClass *eclass;	/* the EquivalenceClass we're looking at */
+	Bitmapset  *matching_ems;	/* when use_index == true, these are the
+								 * matching indexes in root eq_members */
+} EquivalenceMemberIterator;
+
 typedef bool (*ec_matches_callback_type) (PlannerInfo *root,
 										  RelOptInfo *rel,
 										  EquivalenceClass *ec,
@@ -135,7 +160,8 @@ extern EquivalenceClass *get_eclass_for_sort_expr(PlannerInfo *root,
 												  Index sortref,
 												  Relids rel,
 												  bool create_it);
-extern EquivalenceMember *find_ec_member_matching_expr(EquivalenceClass *ec,
+extern EquivalenceMember *find_ec_member_matching_expr(PlannerInfo *root,
+													   EquivalenceClass *ec,
 													   Expr *expr,
 													   Relids relids);
 extern EquivalenceMember *find_computable_ec_member(PlannerInfo *root,
@@ -160,7 +186,8 @@ extern bool exprs_known_equal(PlannerInfo *root, Node *item1, Node *item2);
 extern EquivalenceClass *match_eclasses_to_foreign_key_col(PlannerInfo *root,
 														   ForeignKeyOptInfo *fkinfo,
 														   int colno);
-extern RestrictInfo *find_derived_clause_for_ec_member(EquivalenceClass *ec,
+extern RestrictInfo *find_derived_clause_for_ec_member(PlannerInfo *root,
+													   EquivalenceClass *ec,
 													   EquivalenceMember *em);
 extern void add_child_rel_equivalences(PlannerInfo *root,
 									   AppendRelInfo *appinfo,
@@ -186,6 +213,42 @@ extern bool eclass_useful_for_merging(PlannerInfo *root,
 extern bool is_redundant_derived_clause(RestrictInfo *rinfo, List *clauselist);
 extern bool is_redundant_with_indexclauses(RestrictInfo *rinfo,
 										   List *indexclauses);
+extern Bitmapset *get_ecmember_indexes(PlannerInfo *root,
+										   EquivalenceClass *ec,
+										   Relids relids,
+										   bool with_children,
+										   bool with_norel_members);
+extern Bitmapset *get_ecmember_indexes_strict(PlannerInfo *root,
+											  EquivalenceClass *ec,
+											  Relids relids,
+											  bool with_children,
+											  bool with_norel_members);
+extern void setup_eclass_member_iterator(EquivalenceMemberIterator *iter,
+										 PlannerInfo *root,
+										 EquivalenceClass *ec, Relids relids,
+										 bool with_children,
+										 bool with_norel_members);
+extern void setup_eclass_member_strict_iterator(EquivalenceMemberIterator *iter,
+												PlannerInfo *root,
+												EquivalenceClass *ec,
+												Relids relids,
+												bool with_children,
+												bool with_norel_members);
+extern EquivalenceMember *eclass_member_iterator_next(EquivalenceMemberIterator *iter);
+extern EquivalenceMember *eclass_member_iterator_strict_next(EquivalenceMemberIterator *iter);
+extern void eclass_member_iterator_dispose(EquivalenceMemberIterator *iter);
+extern Bitmapset *get_ec_source_indexes(PlannerInfo *root,
+										EquivalenceClass *ec,
+										Relids relids);
+extern Bitmapset *get_ec_source_indexes_strict(PlannerInfo *root,
+											   EquivalenceClass *ec,
+											   Relids relids);
+extern Bitmapset *get_ec_derive_indexes(PlannerInfo *root,
+										EquivalenceClass *ec,
+										Relids relids);
+extern Bitmapset *get_ec_derive_indexes_strict(PlannerInfo *root,
+										EquivalenceClass *ec,
+										Relids relids);
 
 /*
  * pathkeys.c

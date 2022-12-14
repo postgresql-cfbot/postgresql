@@ -356,6 +356,7 @@ build_minmax_path(PlannerInfo *root, MinMaxAggInfo *mminfo,
 	Assert(subroot->join_info_list == NIL);
 	/* and we haven't made equivalence classes, either */
 	Assert(subroot->eq_classes == NIL);
+	Assert(root->eq_members == NIL);
 	/* and we haven't created PlaceHolderInfos, either */
 	Assert(subroot->placeholder_list == NIL);
 

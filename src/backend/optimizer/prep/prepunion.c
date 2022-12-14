@@ -128,6 +128,7 @@ plan_set_operations(PlannerInfo *root)
 	 * so that pathkeys.c won't complain.
 	 */
 	Assert(root->eq_classes == NIL);
+	Assert(root->eq_members == NIL);
 	root->ec_merging_done = true;
 
 	/*

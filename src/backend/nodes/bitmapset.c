@@ -920,8 +920,16 @@ bms_int_members(Bitmapset *a, const Bitmapset *b)
 	shortlen = Min(a->nwords, b->nwords);
 	for (i = 0; i < shortlen; i++)
 		a->words[i] &= b->words[i];
-	for (; i < a->nwords; i++)
-		a->words[i] = 0;
+
+	/*
+	 * We simply shorten the left input to both remove the need to zero the
+	 * trailing words and also to reduce the required processing if this
+	 * function is being called in a loop.  If more words are required later
+	 * then AllocSetRealloc is likely not going to have to work very hard if
+	 * the new requested size is >= the actual size of the allocation.
+	 */
+	a->nwords = shortlen;
+
 	return a;
 }
 

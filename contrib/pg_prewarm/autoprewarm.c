@@ -177,6 +177,8 @@ autoprewarm_main(Datum main_arg)
 	pqsignal(SIGUSR1, procsignal_sigusr1_handler);
 	BackgroundWorkerUnblockSignals();
 
+	LoadBacktraceFunctions();
+
 	/* Create (if necessary) and attach to our shared memory area. */
 	if (apw_init_shmem())
 		first_time = false;

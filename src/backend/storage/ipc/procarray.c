@@ -3152,6 +3152,66 @@ HaveVirtualXIDsDelayingChkpt(VirtualTransactionId *vxids, int nvxids, int type)
 }
 
 /*
+ * SendProcSignalBackendOrAuxproc -- check if the process with given pid is a
+ * backend or an auxiliary process and send it the SIGUSR1 signal for a given
+ * reason.
+ *
+ * Returns true if sending the signal was successful, false otherwise.
+ */
+bool
+SendProcSignalBackendOrAuxproc(int pid, ProcSignalReason reason)
+{
+	PGPROC	   *proc;
+	BackendId	backendId = InvalidBackendId;
+
+	proc = BackendPidGetProc(pid);
+
+	/*
+	 * See if the process with given pid is a backend or an auxiliary process.
+	 *
+	 * If the given process is a backend, use its backend id in
+	 * SendProcSignal() later to speed up the operation. Otherwise, don't do
+	 * that because auxiliary processes (except the startup process) don't
+	 * have a valid backend id.
+	 */
+	if (proc != NULL)
+		backendId = proc->backendId;
+	else
+		proc = AuxiliaryPidGetProc(pid);
+
+	/*
+	 * BackendPidGetProc() and AuxiliaryPidGetProc() return NULL if the pid
+	 * isn't valid; but by the time we reach kill(), a process for which we
+	 * get a valid proc here might have terminated on its own.  There's no way
+	 * to acquire a lock on an arbitrary process to prevent that. But since
+	 * this mechanism is usually used to debug a backend or an auxiliary
+	 * process running and consuming lots of memory or a long running process,
+	 * that it might end on its own first and its memory contexts are not
+	 * logged or backtrace not logged is not a problem.
+	 */
+	if (proc == NULL)
+	{
+		/*
+		 * This is just a warning so a loop-through-resultset will not abort
+		 * if one backend terminated on its own during the run.
+		 */
+		ereport(WARNING,
+				(errmsg("PID %d is not a PostgreSQL server process", pid)));
+		return false;
+	}
+
+	if (SendProcSignal(pid, reason, backendId) < 0)
+	{
+		/* Again, just a warning to allow loops */
+		ereport(WARNING,
+				(errmsg("could not send signal to process %d: %m", pid)));
+		return false;
+	}
+
+	return true;
+}
+
+/*
  * BackendPidGetProc -- get a backend's PGPROC given its PID
  *
  * Returns NULL if not found.  Note that it is up to the caller to be

@@ -4121,6 +4121,8 @@ PostgresMain(const char *dbname, const char *username)
 		 */
 		pqsignal(SIGCHLD, SIG_DFL); /* system() requires this on some
 									 * platforms */
+
+		LoadBacktraceFunctions();
 	}
 
 	/* Early initialization */

@@ -261,6 +261,8 @@ StartupProcessMain(void)
 	 */
 	PG_SETMASK(&UnBlockSig);
 
+	LoadBacktraceFunctions();
+
 	/*
 	 * Do what we came for.
 	 */

@@ -1207,6 +1207,10 @@ retry:
 	else if (RELKIND_HAS_TABLE_AM(relation->rd_rel->relkind) ||
 			 relation->rd_rel->relkind == RELKIND_SEQUENCE)
 		RelationInitTableAccessMethod(relation);
+	else if (relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+	{
+		/* Do nothing: the am is a catalog setting for partitions to inherit */
+	}
 	else
 		Assert(relation->rd_rel->relam == InvalidOid);
 

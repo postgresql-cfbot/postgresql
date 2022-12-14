@@ -195,6 +195,13 @@ static const struct config_enum_entry isolation_level_options[] = {
 	{NULL, 0}
 };
 
+static const struct config_enum_entry xact_nesting_options[] = {
+	{"off", XACT_NEST_OFF, false},
+	{"all", XACT_NEST_ALL, false},
+	{"outer", XACT_NEST_OUTER, false},
+	{NULL, 0, false}
+};
+
 static const struct config_enum_entry session_replication_role_options[] = {
 	{"origin", SESSION_REPLICATION_ROLE_ORIGIN, false},
 	{"replica", SESSION_REPLICATION_ROLE_REPLICA, false},
@@ -1545,6 +1552,15 @@ struct config_bool ConfigureNamesBool[] =
 		&XactDeferrable,
 		false,
 		check_transaction_deferrable, NULL, NULL
+	},
+	{
+		{"rollback_on_commit", PGC_USERSET, CLIENT_CONN_STATEMENT,
+			gettext_noop("Whether to rollback the current transaction when a COMMIT statement is issued."),
+			NULL
+		},
+		&DefaultXactRollbackOnCommit,
+		false,
+		NULL, NULL, NULL
 	},
 	{
 		{"row_security", PGC_USERSET, CLIENT_CONN_STATEMENT,
@@ -4538,6 +4554,16 @@ struct config_enum ConfigureNamesEnum[] =
 		&default_toast_compression,
 		TOAST_PGLZ_COMPRESSION,
 		default_toast_compression_options,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"nested_transactions", PGC_USERSET, CLIENT_CONN_STATEMENT,
+			gettext_noop("Sets the transaction nesting behavior for each new transaction."),
+			NULL
+		},
+		&DefaultXactNesting,
+		XACT_NEST_OFF, xact_nesting_options,
 		NULL, NULL, NULL
 	},
 

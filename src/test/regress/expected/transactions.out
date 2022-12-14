@@ -1147,6 +1147,298 @@ SELECT * FROM abc ORDER BY 1;
  17
 (3 rows)
 
+SET nested_transactions = 'off';
+TRUNCATE abc;
+BEGIN;
+INSERT INTO abc VALUES (1);
+BEGIN;
+WARNING:  there is already a transaction in progress
+INSERT INTO abc VALUES (2);
+COMMIT;
+INSERT INTO abc VALUES (3);
+COMMIT;
+WARNING:  there is no transaction in progress
+SELECT * FROM abc ORDER BY 1;
+ a 
+---
+ 1
+ 2
+ 3
+(3 rows)
+
+TRUNCATE abc;
+BEGIN;
+INSERT INTO abc VALUES (1);
+BEGIN;
+WARNING:  there is already a transaction in progress
+INSERT INTO abc VALUES (2);
+ROLLBACK;
+INSERT INTO abc VALUES (3);
+COMMIT;
+WARNING:  there is no transaction in progress
+SELECT * FROM abc ORDER BY 1;
+ a 
+---
+ 3
+(1 row)
+
+TRUNCATE abc;
+BEGIN;
+INSERT INTO abc VALUES (1);
+BEGIN;
+WARNING:  there is already a transaction in progress
+INSERT INTO abc VALUES (2);
+COMMIT;
+INSERT INTO abc VALUES (3))); --error
+ERROR:  syntax error at or near ")"
+LINE 1: INSERT INTO abc VALUES (3)));
+                                  ^
+COMMIT;
+WARNING:  there is no transaction in progress
+SELECT * FROM abc ORDER BY 1;
+ a 
+---
+ 1
+ 2
+(2 rows)
+
+TRUNCATE abc;
+BEGIN;
+INSERT INTO abc VALUES (1);
+BEGIN;
+WARNING:  there is already a transaction in progress
+INSERT INTO abc VALUES (2))); --error
+ERROR:  syntax error at or near ")"
+LINE 1: INSERT INTO abc VALUES (2)));
+                                  ^
+COMMIT;
+INSERT INTO abc VALUES (3);
+COMMIT;
+WARNING:  there is no transaction in progress
+SELECT * FROM abc ORDER BY 1;
+ a 
+---
+ 3
+(1 row)
+
+SET nested_transactions = 'all';
+TRUNCATE abc;
+BEGIN;
+INSERT INTO abc VALUES (1);
+BEGIN;
+NOTICE:  BEGIN starts nested subtransaction, level 1
+INSERT INTO abc VALUES (2);
+COMMIT;
+NOTICE:  COMMIT will commit nested subtransaction, level 1
+INSERT INTO abc VALUES (3);
+COMMIT;
+SELECT * FROM abc ORDER BY 1;
+ a 
+---
+ 1
+ 2
+ 3
+(3 rows)
+
+TRUNCATE abc;
+BEGIN;
+INSERT INTO abc VALUES (1);
+BEGIN;
+NOTICE:  BEGIN starts nested subtransaction, level 1
+INSERT INTO abc VALUES (2);
+ROLLBACK;
+NOTICE:  ROLLBACK will rollback nested subtransaction, level 1
+INSERT INTO abc VALUES (3);
+COMMIT;
+SELECT * FROM abc ORDER BY 1;
+ a 
+---
+ 1
+ 3
+(2 rows)
+
+TRUNCATE abc;
+BEGIN;
+INSERT INTO abc VALUES (1);
+BEGIN;
+NOTICE:  BEGIN starts nested subtransaction, level 1
+INSERT INTO abc VALUES (2);
+COMMIT;
+NOTICE:  COMMIT will commit nested subtransaction, level 1
+INSERT INTO abc VALUES (3))); --error
+ERROR:  syntax error at or near ")"
+LINE 1: INSERT INTO abc VALUES (3)));
+                                  ^
+COMMIT;
+SELECT * FROM abc ORDER BY 1;
+ a 
+---
+(0 rows)
+
+TRUNCATE abc;
+BEGIN;
+INSERT INTO abc VALUES (1);
+BEGIN;
+NOTICE:  BEGIN starts nested subtransaction, level 1
+INSERT INTO abc VALUES (2))); --error
+ERROR:  syntax error at or near ")"
+LINE 1: INSERT INTO abc VALUES (2)));
+                                  ^
+COMMIT;
+NOTICE:  COMMIT will rollback nested subtransaction, level 1
+INSERT INTO abc VALUES (3);
+COMMIT;
+SELECT * FROM abc ORDER BY 1;
+ a 
+---
+ 1
+ 3
+(2 rows)
+
+TRUNCATE abc;
+BEGIN;
+INSERT INTO abc VALUES (1);
+BEGIN;
+NOTICE:  BEGIN starts nested subtransaction, level 1
+SAVEPOINT _internal_nested_xact;
+ERROR:  cannot reference savepoint with name _internal_nested_xact
+INSERT INTO abc VALUES (2);
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+COMMIT;
+NOTICE:  COMMIT will rollback nested subtransaction, level 1
+INSERT INTO abc VALUES (3);
+COMMIT;
+SELECT * FROM abc ORDER BY 1;
+ a 
+---
+ 1
+ 3
+(2 rows)
+
+TRUNCATE abc;
+BEGIN;
+INSERT INTO abc VALUES (1);
+BEGIN;
+NOTICE:  BEGIN starts nested subtransaction, level 1
+INSERT INTO abc VALUES (2);
+ROLLBACK TO SAVEPOINT _internal_nested_xact;
+ERROR:  cannot reference savepoint with name _internal_nested_xact
+COMMIT;
+NOTICE:  COMMIT will rollback nested subtransaction, level 1
+INSERT INTO abc VALUES (3);
+COMMIT;
+SELECT * FROM abc ORDER BY 1;
+ a 
+---
+ 1
+ 3
+(2 rows)
+
+TRUNCATE abc;
+BEGIN;
+INSERT INTO abc VALUES (1);
+BEGIN;
+NOTICE:  BEGIN starts nested subtransaction, level 1
+INSERT INTO abc VALUES (2);
+RELEASE SAVEPOINT _internal_nested_xact;
+ERROR:  cannot reference savepoint with name _internal_nested_xact
+COMMIT;
+NOTICE:  COMMIT will rollback nested subtransaction, level 1
+INSERT INTO abc VALUES (3);
+COMMIT;
+SELECT * FROM abc ORDER BY 1;
+ a 
+---
+ 1
+ 3
+(2 rows)
+
+SET nested_transactions = 'outer';
+TRUNCATE abc;
+BEGIN;
+INSERT INTO abc VALUES (1);
+BEGIN;
+NOTICE:  nested BEGIN, level 1
+INSERT INTO abc VALUES (2);
+COMMIT;
+NOTICE:  nested COMMIT, level 1
+INSERT INTO abc VALUES (3);
+COMMIT;
+SELECT * FROM abc ORDER BY 1;
+ a 
+---
+ 1
+ 2
+ 3
+(3 rows)
+
+TRUNCATE abc;
+BEGIN;
+INSERT INTO abc VALUES (1);
+BEGIN;
+NOTICE:  nested BEGIN, level 1
+INSERT INTO abc VALUES (2);
+ROLLBACK;
+ERROR:  nested ROLLBACK, level 1 aborts outer transaction
+INSERT INTO abc VALUES (3);
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+COMMIT;
+SELECT * FROM abc ORDER BY 1;
+ a 
+---
+(0 rows)
+
+TRUNCATE abc;
+BEGIN;
+INSERT INTO abc VALUES (1);
+BEGIN;
+NOTICE:  nested BEGIN, level 1
+INSERT INTO abc VALUES (2);
+COMMIT;
+NOTICE:  nested COMMIT, level 1
+INSERT INTO abc VALUES (3))); --error
+ERROR:  syntax error at or near ")"
+LINE 1: INSERT INTO abc VALUES (3)));
+                                  ^
+INSERT INTO abc VALUES (4);
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+COMMIT;
+SELECT * FROM abc ORDER BY 1;
+ a 
+---
+(0 rows)
+
+TRUNCATE abc;
+BEGIN;
+INSERT INTO abc VALUES (1);
+BEGIN;
+NOTICE:  nested BEGIN, level 1
+INSERT INTO abc VALUES (2))); --error
+ERROR:  syntax error at or near ")"
+LINE 1: INSERT INTO abc VALUES (2)));
+                                  ^
+COMMIT;
+NOTICE:  nested COMMIT, level 1 in aborted transaction
+INSERT INTO abc VALUES (3);
+ERROR:  current transaction is aborted, commands ignored until end of transaction block
+COMMIT;
+SELECT * FROM abc ORDER BY 1;
+ a 
+---
+(0 rows)
+
+RESET nested_transactions;
+SET rollback_on_commit = true;
+TRUNCATE abc;
+BEGIN;
+INSERT INTO abc VALUES (1);
+COMMIT;
+SELECT * FROM abc ORDER BY 1;
+ a 
+---
+(0 rows)
+
+RESET rollback_on_commit;
 DROP TABLE abc;
 -- Test for successful cleanup of an aborted transaction at session exit.
 -- THIS MUST BE THE LAST TEST IN THIS FILE.

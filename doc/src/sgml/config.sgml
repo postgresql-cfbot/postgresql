@@ -8868,6 +8868,24 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-rollback-on-commit" xreflabel="default_rollback_on_commit">
+      <term><varname>default_rollback_on_commit</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary>rollback on commit</primary>
+      </indexterm>
+      <indexterm>
+       <primary><varname>rollback_on_commit</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+        <para>
+        This parameter controls whether a <command>COMMIT</command>
+        will rollback each transaction (<literal>on</literal>), or
+        commit each transaction. The default is <literal>off</literal>.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-default-transaction-deferrable" xreflabel="default_transaction_deferrable">
       <term><varname>default_transaction_deferrable</varname> (<type>boolean</type>)
       <indexterm>
@@ -8898,6 +8916,51 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
 
        <para>
         Consult <xref linkend="sql-set-transaction"/> for more information.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-default-transaction-nesting" xreflabel="default_transaction_nesting">
+      <term><varname>nested_transactions</varname> (<type>enum</type>)
+      <indexterm>
+       <primary>nested transactions</primary>
+      </indexterm>
+      <indexterm>
+       <primary><varname>nested_transactions</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        This parameter controls the behavior of transactions when
+        <command>BEGIN</command>, <command>COMMIT</command> or
+        <command>ROLLBACK</command> are received when already in a transaction
+        block.
+       </para>
+       <para>
+        The default is <quote>off</quote>, indicating
+        that when a transaction block is already in progress, a
+        <command>BEGIN</command> will throw a <literal>WARNING</literal>
+        but otherwise do nothing. This is the historic behavior of
+        <productname>PostgreSQL</productname>.
+       </para>
+       <para>
+        A setting of <quote>all</quote> will cause a nested
+        <command>BEGIN</command> to start a subtransaction, which will end when
+        a <command>COMMIT</command> or <command>ROLLBACK</command> is
+        received. In that case a <command>ROLLBACK</command> will only
+        abort the subtransaction. Once the top-level of nesting is reached,
+        the final <command>COMMIT</command> will end the transaction.
+        This ensures that commands at each transaction nesting level are atomic.
+       </para>
+       <para>
+        A setting of <quote>outer</quote> will cause a nested
+        <command>BEGIN</command> to be remembered, so that an equal number
+        of <command>COMMIT</command> or <command>ROLLBACK</command> commands
+        are required to end the nesting. In that case a <command>ROLLBACK</command>
+        at any level will abort the entire outer transaction.
+        Once we reach the top-level transaction,
+        the final <command>COMMIT</command> will end the transaction.
+        This ensures that all commands within the outer transaction are atomic.
        </para>
       </listitem>
      </varlistentry>

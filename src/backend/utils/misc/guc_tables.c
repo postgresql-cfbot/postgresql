@@ -993,11 +993,10 @@ struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
-		/* Not for general use --- used by SET SESSION AUTHORIZATION */
-		{"is_superuser", PGC_INTERNAL, UNGROUPED,
+		{"is_superuser", PGC_INTERNAL, PRESET_OPTIONS,
 			gettext_noop("Shows whether the current user is a superuser."),
 			NULL,
-			GUC_REPORT | GUC_NO_SHOW_ALL | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+			GUC_REPORT | GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
 		},
 		&session_auth_is_superuser,
 		false,

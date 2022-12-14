@@ -10600,6 +10600,23 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-is-superuser" xreflabel="is_superuser">
+      <term><varname>is_superuser</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>is_superuser</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Reports whether the current user is a superuser.
+        Within a session, this can change when the current user is changed by
+        <link linkend="sql-set-role"><command>SET ROLE</command></link>,
+        <link linkend="sql-set-session-authorization"><command>
+        SET SESSION AUTHORIZATION</command></link>, etc.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-lc-collate" xreflabel="lc_collate">
       <term><varname>lc_collate</varname> (<type>string</type>)
       <indexterm>

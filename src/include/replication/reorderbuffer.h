@@ -653,7 +653,7 @@ extern void ReorderBufferQueueChange(ReorderBuffer *rb, TransactionId xid,
 									 XLogRecPtr lsn, ReorderBufferChange *change,
 									 bool toast_insert);
 extern void ReorderBufferQueueMessage(ReorderBuffer *rb, TransactionId xid,
-									  Snapshot snap, XLogRecPtr lsn,
+									  XLogRecPtr lsn,
 									  bool transactional, const char *prefix,
 									  Size message_size, const char *message);
 extern void ReorderBufferCommit(ReorderBuffer *rb, TransactionId xid,

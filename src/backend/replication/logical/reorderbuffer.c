@@ -842,7 +842,7 @@ ReorderBufferQueueChange(ReorderBuffer *rb, TransactionId xid, XLogRecPtr lsn,
  */
 void
 ReorderBufferQueueMessage(ReorderBuffer *rb, TransactionId xid,
-						  Snapshot snap, XLogRecPtr lsn,
+						  XLogRecPtr lsn,
 						  bool transactional, const char *prefix,
 						  Size message_size, const char *message)
 {
@@ -869,7 +869,11 @@ ReorderBufferQueueMessage(ReorderBuffer *rb, TransactionId xid,
 	else
 	{
 		ReorderBufferTXN *txn = NULL;
-		volatile Snapshot snapshot_now = snap;
+
+		LogicalDecodingContext *ctx = rb->private_data;
+		SnapBuild  *builder = ctx->snapshot_builder;
+
+		volatile Snapshot snapshot_now = SnapBuildGetOrBuildSnapshot(builder);
 
 		if (xid != InvalidTransactionId)
 			txn = ReorderBufferTXNByXid(rb, xid, true, NULL, lsn, true);

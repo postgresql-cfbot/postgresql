@@ -564,7 +564,6 @@ logicalmsg_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 	TransactionId xid = XLogRecGetXid(r);
 	uint8		info = XLogRecGetInfo(r) & ~XLR_INFO_MASK;
 	RepOriginId origin_id = XLogRecGetOrigin(r);
-	Snapshot	snapshot;
 	xl_logical_message *message;
 
 	if (info != XLOG_LOGICAL_MESSAGE)
@@ -594,8 +593,7 @@ logicalmsg_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 			  SnapBuildXactNeedsSkip(builder, buf->origptr)))
 		return;
 
-	snapshot = SnapBuildGetOrBuildSnapshot(builder);
-	ReorderBufferQueueMessage(ctx->reorder, xid, snapshot, buf->endptr,
+	ReorderBufferQueueMessage(ctx->reorder, xid, buf->endptr,
 							  message->transactional,
 							  message->message, /* first part of message is
 												 * prefix */

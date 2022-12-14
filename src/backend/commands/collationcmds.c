@@ -610,6 +610,167 @@ get_icu_locale_comment(const char *localename)
 #endif							/* USE_ICU */
 
 
+/* will we use EnumSystemLocalesEx in pg_import_system_collations? */
+#ifdef WIN32
+#define ENUM_SYSTEM_LOCALE
+#endif
+
+
+#if defined(READ_LOCALE_A_OUTPUT) || defined(ENUM_SYSTEM_LOCALE)
+/*
+ * Create a new collation using the input locale 'locale'.
+ *
+ * The parameter 'nvalid' is incremented if the locale has a valid encoding.
+ *
+ * The parameter 'ncreated' is incremented if the collation is actually
+ * created, if the collation already exists it will quietly do nothing.
+ *
+ * The parameter 'nspid' is the namespace id where the collation will be
+ * created.
+ *
+ * The returned value is the encoding of the locale, -1 if it is not valid for
+ * creating a collation.
+ *
+ */
+static int
+create_collation_from_locale(const char *locale, int *nvalid, int *ncreated,
+							 const int nspid)
+{
+	int			enc;
+	Oid			collid;
+
+	/*
+	 * Some systems have locale names that don't consist entirely of
+	 * ASCII letters (such as "bokm&aring;l" or "fran&ccedil;ais").
+	 * This is pretty silly, since we need the locale itself to
+	 * interpret the non-ASCII characters. We can't do much with
+	 * those, so we filter them out.
+	 */
+	if (!pg_is_ascii(locale))
+	{
+		elog(DEBUG1, "skipping locale with non-ASCII name: \"%s\"", locale);
+		return -1;
+	}
+
+	enc = pg_get_encoding_from_locale(locale, false);
+	if (enc < 0)
+	{
+		elog(DEBUG1, "skipping locale with unrecognized encoding: \"%s\"", locale);
+		return -1;
+	}
+	if (!PG_VALID_BE_ENCODING(enc))
+	{
+		elog(DEBUG1, "skipping locale with client-only encoding: \"%s\"", locale);
+		return -1;
+	}
+	if (enc == PG_SQL_ASCII)
+		return -1;		/* C/POSIX are already in the catalog */
+
+	/* count valid locales found in operating system */
+	(*nvalid)++;
+
+	/*
+	 * Create a collation named the same as the locale, but quietly
+	 * doing nothing if it already exists.  This is the behavior we
+	 * need even at initdb time, because some versions of "locale -a"
+	 * can report the same locale name more than once.  And it's
+	 * convenient for later import runs, too, since you just about
+	 * always want to add on new locales without a lot of chatter
+	 * about existing ones.
+	 */
+	collid = CollationCreate(locale, nspid, GetUserId(),
+							 COLLPROVIDER_LIBC, true, enc,
+							 locale, locale, NULL,
+							 get_collation_actual_version(COLLPROVIDER_LIBC, locale),
+							 true, true);
+	if (OidIsValid(collid))
+	{
+		(*ncreated)++;
+
+		/* Must do CCI between inserts to handle duplicates correctly */
+		CommandCounterIncrement();
+	}
+
+	return enc;
+}
+#endif							/* defined(READ_LOCALE_A_OUTPUT) || defined(ENUM_SYSTEM_LOCALE) */
+
+
+#ifdef ENUM_SYSTEM_LOCALE
+/* parameter to be passed to the callback function win32_read_locale() */
+typedef struct
+{
+	int		   *ncreated;
+	int		   *nvalid;
+	Oid			nspid;
+} CollParam;
+
+/*
+ * Callback function for EnumSystemLocalesEx() in pg_import_system_collations()
+ * Creates a collation for every valid locale and a POSIX alias collation.
+ */
+static BOOL CALLBACK
+win32_read_locale(LPWSTR pStr, DWORD dwFlags, LPARAM lparam)
+{
+	CollParam  *param = (CollParam *) lparam;
+	char		localebuf[NAMEDATALEN];
+	int			result;
+	int			enc;
+	char		alias[NAMEDATALEN];
+	char	   *hyphen;
+
+	(void) dwFlags;
+
+	result = WideCharToMultiByte(CP_ACP, 0, pStr, -1, localebuf, NAMEDATALEN,
+								 NULL, NULL);
+
+	if (result == 0)
+	{
+		if (GetLastError() == ERROR_INSUFFICIENT_BUFFER)
+			elog(DEBUG1, "skipping locale with too-long name: \"%s\"", localebuf);
+		return TRUE;
+	}
+	if (localebuf[0] == '\0')
+		return TRUE;
+
+	enc = create_collation_from_locale(localebuf, param->nvalid, param->ncreated,
+									   param->nspid);
+	if (enc < 0)
+		return TRUE;
+
+	/*
+	 * Windows will use hyphens between language and territory, where POSIX
+	 * uses an underscore. Simply create a POSIX alias.
+	 */
+	strcpy(alias, localebuf);
+	hyphen = strchr(alias, '-');
+	if (hyphen)
+	{
+		Oid			collid;
+
+		while (hyphen)
+		{
+			*hyphen = '_';
+			hyphen = strchr(hyphen, '-');
+		}
+		collid = CollationCreate(alias, param->nspid, GetUserId(),
+								 COLLPROVIDER_LIBC, true, enc,
+								 localebuf, localebuf, NULL,
+								 get_collation_actual_version(COLLPROVIDER_LIBC, localebuf),
+								 true, true);
+		if (OidIsValid(collid))
+		{
+			(*param->ncreated)++;
+
+			CommandCounterIncrement();
+		}
+	}
+
+	return TRUE;
+}
+#endif							/* ENUM_SYSTEM_LOCALE */
+
+
 /*
  * pg_import_system_collations: add known system collations to pg_collation
  */
@@ -668,58 +829,9 @@ pg_import_system_collations(PG_FUNCTION_ARGS)
 			}
 			localebuf[len - 1] = '\0';
 
-			/*
-			 * Some systems have locale names that don't consist entirely of
-			 * ASCII letters (such as "bokm&aring;l" or "fran&ccedil;ais").
-			 * This is pretty silly, since we need the locale itself to
-			 * interpret the non-ASCII characters. We can't do much with
-			 * those, so we filter them out.
-			 */
-			if (!pg_is_ascii(localebuf))
-			{
-				elog(DEBUG1, "skipping locale with non-ASCII name: \"%s\"", localebuf);
-				continue;
-			}
-
-			enc = pg_get_encoding_from_locale(localebuf, false);
+			enc = create_collation_from_locale(localebuf, &nvalid, &ncreated, nspid);
 			if (enc < 0)
-			{
-				elog(DEBUG1, "skipping locale with unrecognized encoding: \"%s\"",
-					 localebuf);
 				continue;
-			}
-			if (!PG_VALID_BE_ENCODING(enc))
-			{
-				elog(DEBUG1, "skipping locale with client-only encoding: \"%s\"", localebuf);
-				continue;
-			}
-			if (enc == PG_SQL_ASCII)
-				continue;		/* C/POSIX are already in the catalog */
-
-			/* count valid locales found in operating system */
-			nvalid++;
-
-			/*
-			 * Create a collation named the same as the locale, but quietly
-			 * doing nothing if it already exists.  This is the behavior we
-			 * need even at initdb time, because some versions of "locale -a"
-			 * can report the same locale name more than once.  And it's
-			 * convenient for later import runs, too, since you just about
-			 * always want to add on new locales without a lot of chatter
-			 * about existing ones.
-			 */
-			collid = CollationCreate(localebuf, nspid, GetUserId(),
-									 COLLPROVIDER_LIBC, true, enc,
-									 localebuf, localebuf, NULL,
-									 get_collation_actual_version(COLLPROVIDER_LIBC, localebuf),
-									 true, true);
-			if (OidIsValid(collid))
-			{
-				ncreated++;
-
-				/* Must do CCI between inserts to handle duplicates correctly */
-				CommandCounterIncrement();
-			}
 
 			/*
 			 * Generate aliases such as "en_US" in addition to "en_US.utf8"
@@ -856,6 +968,30 @@ pg_import_system_collations(PG_FUNCTION_ARGS)
 		}
 	}
 #endif							/* USE_ICU */
+
+	/* Load collations known to WIN32 */
+#ifdef ENUM_SYSTEM_LOCALE
+	{
+		int			nvalid = 0;
+		CollParam	param;
+		param.ncreated = &ncreated;
+		param.nvalid = &nvalid;
+		param.nspid = nspid;
+
+		/*
+		 * Enumerate the locales that are either installed on or supported
+		 * by the OS.
+		 */
+		if (!EnumSystemLocalesEx(win32_read_locale, LOCALE_ALL,
+								 (LPARAM) &param, NULL))
+			_dosmaperr(GetLastError());
+
+		/* Give a warning if EnumSystemLocalesEx seems to be malfunctioning */
+		if (nvalid == 0)
+			ereport(WARNING,
+					(errmsg("no usable system locales were found")));
+	}
+#endif							/* ENUM_SYSTEM_LOCALE */
 
 	PG_RETURN_INT32(ncreated);
 }

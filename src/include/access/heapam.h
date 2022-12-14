@@ -38,6 +38,7 @@
 
 typedef struct BulkInsertStateData *BulkInsertState;
 struct TupleTableSlot;
+struct VacuumCutoffs;
 
 #define MaxLockTupleMode	LockTupleExclusive
 
@@ -112,6 +113,71 @@ typedef struct HeapTupleFreeze
 	OffsetNumber offset;
 } HeapTupleFreeze;
 
+/*
+ * State used by VACUUM to track the details of freezing all eligible tuples
+ * on a given heap page.
+ *
+ * VACUUM prepares freeze plans for each page via heap_prepare_freeze_tuple
+ * calls (every tuple with storage gets its own call).  This page-level freeze
+ * state is updated across each call, which ultimately determines whether or
+ * not freezing the page is required. (VACUUM freezes the page via a call to
+ * heap_freeze_execute_prepared, which freezes using prepared freeze plans.)
+ *
+ * Aside from the basic question of whether or not freezing will go ahead, the
+ * state also tracks the oldest extant XID/MXID in the table as a whole, for
+ * the purposes of advancing relfrozenxid/relminmxid values in pg_class later
+ * on.  Each heap_prepare_freeze_tuple call pushes NewRelfrozenXid and/or
+ * NewRelminMxid back as required to avoid unsafe final pg_class values.  Any
+ * and all unfrozen XIDs or MXIDs that remain after VACUUM finishes _must_
+ * have values >= the final relfrozenxid/relminmxid values in pg_class.  This
+ * includes XIDs that remain as MultiXact members from any tuple's xmax.
+ *
+ * When 'freeze_required' flag isn't set after all tuples are examined, the
+ * final choice on freezing is made by vacuumlazy.c.  It can decide to trigger
+ * freezing based on whatever criteria it deems appropriate.  However, it is
+ * highly recommended that vacuumlazy.c avoid freezing any page that cannot be
+ * marked all-frozen in the visibility map afterwards.
+ *
+ * Freezing is typically optional for most individual pages scanned during any
+ * given VACUUM operation.  This allows vacuumlazy.c to manage the cost of
+ * freezing at the level of the entire VACUUM operation/entire heap relation.
+ */
+typedef struct HeapPageFreeze
+{
+	/* Is heap_prepare_freeze_tuple caller required to freeze page? */
+	bool		freeze_required;
+
+	/*
+	 * "No freeze" NewRelfrozenXid/NewRelminMxid trackers.
+	 *
+	 * These trackers are maintained in the same way as the trackers used when
+	 * VACUUM scans a page that isn't cleanup locked.  Both code paths are
+	 * based on the same general idea (do less work for this page during the
+	 * ongoing VACUUM, at the cost of having to accept older final values).
+	 */
+	TransactionId NoFreezePageRelfrozenXid;
+	MultiXactId NoFreezePageRelminMxid;
+
+	/*
+	 * Trackers used when heap_freeze_execute_prepared freezes the page.
+	 *
+	 * When we freeze a page, we generally freeze all XIDs < OldestXmin, only
+	 * leaving behind XIDs that are ineligible for freezing, if any.  And so
+	 * you might wonder why these trackers are necessary at all; why should
+	 * _any_ page that VACUUM freezes _ever_ be left with XIDs/MXIDs that
+	 * ratchet back the rel-level NewRelfrozenXid/NewRelminMxid trackers?
+	 *
+	 * It is useful to use a definition of "freeze the page" that does not
+	 * overspecify how MultiXacts are affected.  heap_prepare_freeze_tuple
+	 * generally prefers to remove Multis eagerly, but lazy processing is used
+	 * in cases where laziness allows VACUUM to avoid allocating a new Multi.
+	 * The "freeze the page" trackers enable this flexibility.
+	 */
+	TransactionId FreezePageRelfrozenXid;
+	MultiXactId FreezePageRelminMxid;
+
+} HeapPageFreeze;
+
 /* ----------------
  *		function prototypes for heap access method
  *
@@ -178,21 +244,19 @@ extern TM_Result heap_lock_tuple(Relation relation, HeapTuple tuple,
 
 extern void heap_inplace_update(Relation relation, HeapTuple tuple);
 extern bool heap_prepare_freeze_tuple(HeapTupleHeader tuple,
-									  TransactionId relfrozenxid, TransactionId relminmxid,
-									  TransactionId cutoff_xid, TransactionId cutoff_multi,
-									  HeapTupleFreeze *frz, bool *totally_frozen,
-									  TransactionId *relfrozenxid_out,
-									  MultiXactId *relminmxid_out);
+									  const struct VacuumCutoffs *cutoffs,
+									  HeapPageFreeze *pagefrz,
+									  HeapTupleFreeze *frz, bool *totally_frozen);
 extern void heap_freeze_execute_prepared(Relation rel, Buffer buffer,
-										 TransactionId FreezeLimit,
+										 TransactionId snapshotConflictHorizon,
 										 HeapTupleFreeze *tuples, int ntuples);
 extern bool heap_freeze_tuple(HeapTupleHeader tuple,
 							  TransactionId relfrozenxid, TransactionId relminmxid,
-							  TransactionId cutoff_xid, TransactionId cutoff_multi);
-extern bool heap_tuple_would_freeze(HeapTupleHeader tuple, TransactionId cutoff_xid,
-									MultiXactId cutoff_multi,
-									TransactionId *relfrozenxid_out,
-									MultiXactId *relminmxid_out);
+							  TransactionId FreezeLimit, TransactionId MultiXactCutoff);
+extern bool heap_tuple_should_freeze(HeapTupleHeader tuple,
+									 const struct VacuumCutoffs *cutoffs, bool MinCutoffs,
+									 TransactionId *NoFreezePageRelfrozenXid,
+									 MultiXactId *NoFreezePageRelminMxid);
 extern bool heap_tuple_needs_eventual_freeze(HeapTupleHeader tuple);
 
 extern void simple_heap_insert(Relation relation, HeapTuple tup);
@@ -210,7 +274,7 @@ extern int	heap_page_prune(Relation relation, Buffer buffer,
 							struct GlobalVisState *vistest,
 							TransactionId old_snap_xmin,
 							TimestampTz old_snap_ts,
-							int *nnewlpdead,
+							int *nnewlpdead, bool *prune_fpi,
 							OffsetNumber *off_loc);
 extern void heap_page_prune_execute(Buffer buffer,
 									OffsetNumber *redirected, int nredirected,

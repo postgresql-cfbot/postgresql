@@ -16,6 +16,10 @@
  *		visibilitymap_pin_ok - check whether correct map page is already pinned
  *		visibilitymap_set	 - set a bit in a previously pinned page
  *		visibilitymap_get_status - get status of bits
+ *		visibilitymap_snap_acquire - acquire snapshot of visibility map
+ *		visibilitymap_snap_strategy - set VACUUM's skipping strategy
+ *		visibilitymap_snap_next - get next block to scan from vmsnap
+ *		visibilitymap_snap_release - release previously acquired snapshot
  *		visibilitymap_count  - count number of bits set in visibility map
  *		visibilitymap_prepare_truncate -
  *			prepare for truncation of the visibility map
@@ -52,6 +56,10 @@
  *
  * VACUUM will normally skip pages for which the visibility map bit is set;
  * such pages can't contain any dead tuples and therefore don't need vacuuming.
+ * VACUUM uses a snapshot of the visibility map to avoid scanning pages whose
+ * visibility map bit gets concurrently unset.  This also provides us with a
+ * convenient way of performing I/O prefetching on behalf of VACUUM, since the
+ * pages that VACUUM's first heap pass will scan are fully predetermined.
  *
  * LOCKING
  *
@@ -92,10 +100,12 @@
 #include "access/xlogutils.h"
 #include "miscadmin.h"
 #include "port/pg_bitutils.h"
+#include "storage/buffile.h"
 #include "storage/bufmgr.h"
 #include "storage/lmgr.h"
 #include "storage/smgr.h"
 #include "utils/inval.h"
+#include "utils/spccache.h"
 
 
 /*#define TRACE_VISIBILITYMAP */
@@ -124,9 +134,87 @@
 #define FROZEN_MASK64	UINT64CONST(0xaaaaaaaaaaaaaaaa) /* The upper bit of each
 														 * bit pair */
 
+/*
+ * Prefetching of heap pages takes place as VACUUM requests the next block in
+ * line from its visibility map snapshot
+ *
+ * XXX MIN_PREFETCH_SIZE of 32 is a little on the high side, but matches
+ * hard-coded constant used by vacuumlazy.c when prefetching for rel
+ * truncation.  Might be better to increase the maintenance_io_concurrency
+ * default, or to do nothing like this at all.
+ */
+#define STAGED_BUFSIZE			(MAX_IO_CONCURRENCY * 2)
+#define MIN_PREFETCH_SIZE		((BlockNumber) 32)
+
+typedef struct vmsnapblock
+{
+	BlockNumber scanned_block;
+	bool		all_visible;
+} vmsnapblock;
+
+/*
+ * Snapshot of visibility map at the start of a VACUUM operation
+ */
+struct vmsnapshot
+{
+	/* Target heap rel */
+	Relation	rel;
+	/* Skipping strategy used by VACUUM operation */
+	vmstrategy	strat;
+	/* Per-strategy final scanned_pages */
+	BlockNumber rel_pages;
+	BlockNumber scanned_pages_skipallvis;
+	BlockNumber scanned_pages_skipallfrozen;
+
+	/*
+	 * Materialized visibility map state.
+	 *
+	 * VM snapshots spill to a temp file when required.
+	 */
+	BlockNumber nvmpages;
+	BufFile    *file;
+
+	/*
+	 * Prefetch distance, used to perform I/O prefetching of heap pages
+	 */
+	int			prefetch_distance;
+
+	/* Current VM page cached */
+	BlockNumber curvmpage;
+	char	   *rawmap;
+	PGAlignedBlock vmpage;
+
+	/* Staging area for blocks returned to VACUUM */
+	vmsnapblock staged[STAGED_BUFSIZE];
+	int			current_nblocks_staged;
+
+	/*
+	 * Next block from range of rel_pages to consider placing in staged block
+	 * array (it will be placed there if it's going to be scanned by VACUUM)
+	 */
+	BlockNumber next_block;
+
+	/*
+	 * Number of blocks that we still need to return, and number of blocks
+	 * that we still need to prefetch
+	 */
+	BlockNumber scanned_pages_to_return;
+	BlockNumber scanned_pages_to_prefetch;
+
+	/* offset of next block in line to return (from staged) */
+	int			next_return_idx;
+	/* offset of next block in line to prefetch (from staged) */
+	int			next_prefetch_idx;
+	/* offset of first garbage/invalid element (from staged) */
+	int			first_invalid_idx;
+};
+
+
 /* prototypes for internal routines */
 static Buffer vm_readbuf(Relation rel, BlockNumber blkno, bool extend);
 static void vm_extend(Relation rel, BlockNumber vm_nblocks);
+static void vm_snap_stage_blocks(vmsnapshot *vmsnap);
+static uint8 vm_snap_get_status(vmsnapshot *vmsnap, BlockNumber heapBlk);
 
 
 /*
@@ -371,6 +459,350 @@ visibilitymap_get_status(Relation rel, BlockNumber heapBlk, Buffer *vmbuf)
 	 */
 	result = ((map[mapByte] >> mapOffset) & VISIBILITYMAP_VALID_BITS);
 	return result;
+}
+
+/*
+ *	visibilitymap_snap_acquire - get read-only snapshot of visibility map
+ *
+ * Initializes VACUUM caller's snapshot, allocating memory in current context.
+ * Used by VACUUM to determine which pages it must scan up front.
+ *
+ * Set scanned_pages_skipallvis and scanned_pages_skipallfrozen to help VACUUM
+ * decide on its skipping strategy.  These are VACUUM's scanned_pages when it
+ * opts to skip all eligible pages and scanned_pages when it opts to just skip
+ * all-frozen pages, respectively.
+ *
+ * Caller finalizes skipping strategy by calling visibilitymap_snap_strategy.
+ * This determines the kind of blocks visibilitymap_snap_next should indicate
+ * need to be scanned by VACUUM.
+ */
+vmsnapshot *
+visibilitymap_snap_acquire(Relation rel, BlockNumber rel_pages,
+						   BlockNumber *scanned_pages_skipallvis,
+						   BlockNumber *scanned_pages_skipallfrozen)
+{
+	BlockNumber nvmpages = 0,
+				mapBlockLast = 0,
+				all_visible = 0,
+				all_frozen = 0;
+	uint8		mapbits_last_page = 0;
+	vmsnapshot *vmsnap;
+
+#ifdef TRACE_VISIBILITYMAP
+	elog(DEBUG1, "visibilitymap_snap_acquire %s %u",
+		 RelationGetRelationName(rel), rel_pages);
+#endif
+
+	/*
+	 * Allocate space for VM pages up to and including those required to have
+	 * bits for the would-be heap block that is just beyond rel_pages
+	 */
+	if (rel_pages > 0)
+	{
+		mapBlockLast = HEAPBLK_TO_MAPBLOCK(rel_pages - 1);
+		nvmpages = mapBlockLast + 1;
+	}
+
+	/* Allocate and initialize VM snapshot state */
+	vmsnap = palloc0(sizeof(vmsnapshot));
+	vmsnap->rel = rel;
+	vmsnap->strat = VMSNAP_SKIP_NONE;	/* for now */
+	vmsnap->rel_pages = rel_pages;	/* scanned_pages for VMSNAP_SKIP_NONE */
+	vmsnap->scanned_pages_skipallvis = 0;
+	vmsnap->scanned_pages_skipallfrozen = 0;
+
+	/*
+	 * vmsnap temp file state.
+	 *
+	 * Only relations large enough to need more than one visibility map page
+	 * use a temp file (cannot wholly rely on vmsnap's single page cache).
+	 */
+	vmsnap->nvmpages = nvmpages;
+	vmsnap->file = NULL;
+	if (nvmpages > 1)
+		vmsnap->file = BufFileCreateTemp(false);
+	vmsnap->prefetch_distance = 0;
+#ifdef USE_PREFETCH
+	vmsnap->prefetch_distance =
+		get_tablespace_maintenance_io_concurrency(rel->rd_rel->reltablespace);
+#endif
+	vmsnap->prefetch_distance = Max(vmsnap->prefetch_distance, MIN_PREFETCH_SIZE);
+
+	/* cache of VM pages read from temp file */
+	vmsnap->curvmpage = 0;
+	vmsnap->rawmap = NULL;
+
+	/* staged blocks array state */
+	vmsnap->current_nblocks_staged = 0;
+	vmsnap->next_block = 0;
+	vmsnap->scanned_pages_to_return = 0;
+	vmsnap->scanned_pages_to_prefetch = 0;
+	/* Offsets into staged blocks array */
+	vmsnap->next_return_idx = 0;
+	vmsnap->next_prefetch_idx = 0;
+	vmsnap->first_invalid_idx = 0;
+
+	for (BlockNumber mapBlock = 0; mapBlock <= mapBlockLast; mapBlock++)
+	{
+		Buffer		mapBuffer;
+		char	   *map;
+		uint64	   *umap;
+
+		mapBuffer = vm_readbuf(rel, mapBlock, false);
+		if (!BufferIsValid(mapBuffer))
+		{
+			/*
+			 * Not all VM pages available.  Remember that, so that we'll treat
+			 * relevant heap pages as not all-visible/all-frozen when asked.
+			 */
+			vmsnap->nvmpages = mapBlock;
+			break;
+		}
+
+		/* Cache page locally */
+		LockBuffer(mapBuffer, BUFFER_LOCK_SHARE);
+		memcpy(vmsnap->vmpage.data, BufferGetPage(mapBuffer), BLCKSZ);
+		UnlockReleaseBuffer(mapBuffer);
+
+		/* Finish off this VM page using snapshot's vmpage cache */
+		vmsnap->curvmpage = mapBlock;
+		vmsnap->rawmap = map = PageGetContents(vmsnap->vmpage.data);
+		umap = (uint64 *) map;
+
+		if (mapBlock == mapBlockLast)
+		{
+			uint32		mapByte;
+			uint8		mapOffset;
+
+			/*
+			 * The last VM page requires some extra steps.
+			 *
+			 * First get the status of the last heap page (page in the range
+			 * of rel_pages) in passing.
+			 */
+			Assert(mapBlock == HEAPBLK_TO_MAPBLOCK(rel_pages - 1));
+			mapByte = HEAPBLK_TO_MAPBYTE(rel_pages - 1);
+			mapOffset = HEAPBLK_TO_OFFSET(rel_pages - 1);
+			mapbits_last_page = ((map[mapByte] >> mapOffset) &
+								 VISIBILITYMAP_VALID_BITS);
+
+			/*
+			 * Also defensively "truncate" our local copy of the last page in
+			 * order to reliably exclude heap pages beyond the range of
+			 * rel_pages.  This is sheer paranoia.
+			 */
+			mapByte = HEAPBLK_TO_MAPBYTE(rel_pages);
+			mapOffset = HEAPBLK_TO_OFFSET(rel_pages);
+			if (mapByte != 0 || mapOffset != 0)
+			{
+				MemSet(&map[mapByte + 1], 0, MAPSIZE - (mapByte + 1));
+				map[mapByte] &= (1 << mapOffset) - 1;
+			}
+		}
+
+		/* Maintain count of all-frozen and all-visible pages */
+		for (int i = 0; i < MAPSIZE / sizeof(uint64); i++)
+		{
+			all_visible += pg_popcount64(umap[i] & VISIBLE_MASK64);
+			all_frozen += pg_popcount64(umap[i] & FROZEN_MASK64);
+		}
+
+		/* Finally, write out vmpage cache VM page to vmsnap's temp file */
+		if (vmsnap->file)
+			BufFileWrite(vmsnap->file, vmsnap->vmpage.data, BLCKSZ);
+	}
+
+	/*
+	 * Done copying all VM pages from authoritative VM into a VM snapshot.
+	 *
+	 * Figure out the final scanned_pages for the two skipping policies that
+	 * we might use: skipallvis (skip both all-frozen and all-visible) and
+	 * skipallfrozen (just skip all-frozen).
+	 */
+	Assert(all_frozen <= all_visible && all_visible <= rel_pages);
+	*scanned_pages_skipallvis = rel_pages - all_visible;
+	*scanned_pages_skipallfrozen = rel_pages - all_frozen;
+
+	/*
+	 * When the last page is skippable in principle, it still won't be treated
+	 * as skippable by visibilitymap_snap_next, which recognizes the last page
+	 * as a special case.  Compensate by incrementing each skipping strategy's
+	 * scanned_pages as needed to avoid counting the last page as skippable.
+	 */
+	if (mapbits_last_page & VISIBILITYMAP_ALL_VISIBLE)
+		(*scanned_pages_skipallvis)++;
+	if (mapbits_last_page & VISIBILITYMAP_ALL_FROZEN)
+		(*scanned_pages_skipallfrozen)++;
+
+	vmsnap->scanned_pages_skipallvis = *scanned_pages_skipallvis;
+	vmsnap->scanned_pages_skipallfrozen = *scanned_pages_skipallfrozen;
+
+	return vmsnap;
+}
+
+/*
+ *	visibilitymap_snap_strategy -- determine VACUUM's skipping strategy.
+ *
+ * VACUUM chooses a vmsnap strategy according to priorities around advancing
+ * relfrozenxid.  See visibilitymap_snap_acquire.
+ */
+void
+visibilitymap_snap_strategy(vmsnapshot *vmsnap, vmstrategy strat)
+{
+	int			nprefetch;
+
+	/* Remember final skipping strategy */
+	vmsnap->strat = strat;
+
+	if (vmsnap->strat == VMSNAP_SKIP_ALL_VISIBLE)
+		vmsnap->scanned_pages_to_return = vmsnap->scanned_pages_skipallvis;
+	else if (vmsnap->strat == VMSNAP_SKIP_ALL_FROZEN)
+		vmsnap->scanned_pages_to_return = vmsnap->scanned_pages_skipallfrozen;
+	else
+		vmsnap->scanned_pages_to_return = vmsnap->rel_pages;
+
+	vmsnap->scanned_pages_to_prefetch = vmsnap->scanned_pages_to_return;
+
+#ifdef TRACE_VISIBILITYMAP
+	elog(DEBUG1, "visibilitymap_snap_strategy %s %d %u",
+		 RelationGetRelationName(vmsnap->rel), (int) strat,
+		 vmsnap->scanned_pages_to_return);
+#endif
+
+	/*
+	 * Stage blocks (may have to read from temp file).
+	 *
+	 * We rely on the assumption that we'll always have a large enough staged
+	 * blocks array to accommodate any possible prefetch distance.
+	 */
+	vm_snap_stage_blocks(vmsnap);
+
+	nprefetch = Min(vmsnap->current_nblocks_staged, vmsnap->prefetch_distance);
+#ifdef USE_PREFETCH
+	for (int i = 0; i < nprefetch; i++)
+	{
+		BlockNumber block = vmsnap->staged[i].scanned_block;
+
+		PrefetchBuffer(vmsnap->rel, MAIN_FORKNUM, block);
+	}
+#endif
+
+	vmsnap->scanned_pages_to_prefetch -= nprefetch;
+	vmsnap->next_prefetch_idx += nprefetch;
+}
+
+/*
+ *	visibilitymap_snap_next -- get next block to scan from vmsnap.
+ *
+ * Returns next block in line for VACUUM to scan according to vmsnap.  Caller
+ * skips any and all blocks preceding returned block.
+ *
+ * The all-visible status of returned block is set in *all_visible.  Block
+ * usually won't be set all-visible (else VACUUM wouldn't need to scan it),
+ * but it can be in certain corner cases.  This includes the VMSNAP_SKIP_NONE
+ * case, as well as a special case that VACUUM expects us to handle: the final
+ * block (rel_pages - 1) is always returned here (regardless of our strategy).
+ *
+ * VACUUM always scans the last page to determine whether it has tuples.  This
+ * is useful as a way of avoiding certain pathological cases with heap rel
+ * truncation.
+ */
+BlockNumber
+visibilitymap_snap_next(vmsnapshot *vmsnap, bool *allvisible)
+{
+	BlockNumber next_block_to_scan;
+	vmsnapblock block;
+
+	*allvisible = true;
+	if (vmsnap->scanned_pages_to_return == 0)
+		return InvalidBlockNumber;
+
+	/* Prepare to return this block */
+	block = vmsnap->staged[vmsnap->next_return_idx++];
+	*allvisible = block.all_visible;
+	next_block_to_scan = block.scanned_block;
+	vmsnap->current_nblocks_staged--;
+	vmsnap->scanned_pages_to_return--;
+
+	/*
+	 * Did the staged blocks array just run out of blocks to return to caller,
+	 * or do we need to stage more blocks for I/O prefetching purposes?
+	 */
+	Assert(vmsnap->next_prefetch_idx <= vmsnap->first_invalid_idx);
+	if ((vmsnap->current_nblocks_staged == 0 &&
+		 vmsnap->scanned_pages_to_return > 0) ||
+		(vmsnap->next_prefetch_idx == vmsnap->first_invalid_idx &&
+		 vmsnap->scanned_pages_to_prefetch > 0))
+	{
+		if (vmsnap->current_nblocks_staged > 0)
+		{
+			/*
+			 * We've run out of prefetchable blocks, but still have some
+			 * non-returned blocks.  Shift existing blocks to the start of the
+			 * array.  The newly staged blocks go after these ones.
+			 */
+			memmove(&vmsnap->staged[0],
+					&vmsnap->staged[vmsnap->next_return_idx],
+					sizeof(vmsnapblock) * vmsnap->current_nblocks_staged);
+		}
+
+		/*
+		 * Reset offsets in staged blocks array, while accounting for likely
+		 * presence of preexisting blocks that have already been prefetched
+		 * but have yet to be returned to VACUUM caller
+		 */
+		vmsnap->next_prefetch_idx -= vmsnap->next_return_idx;
+		vmsnap->first_invalid_idx -= vmsnap->next_return_idx;
+		vmsnap->next_return_idx = 0;
+
+		/* Stage more blocks (may have to read from temp file) */
+		vm_snap_stage_blocks(vmsnap);
+	}
+
+	/*
+	 * By here we're guaranteed to have at least one prefetchable block in the
+	 * staged blocks array (unless we've already prefetched all blocks that
+	 * will ever be returned to VACUUM caller)
+	 */
+	if (vmsnap->next_prefetch_idx < vmsnap->first_invalid_idx)
+	{
+#ifdef USE_PREFETCH
+		/* Still have remaining blocks to prefetch, so prefetch next one */
+		vmsnapblock prefetch = vmsnap->staged[vmsnap->next_prefetch_idx++];
+
+		PrefetchBuffer(vmsnap->rel, MAIN_FORKNUM, prefetch.scanned_block);
+#else
+		vmsnap->next_prefetch_idx++;
+#endif
+		Assert(vmsnap->current_nblocks_staged > 1);
+		Assert(vmsnap->scanned_pages_to_prefetch > 0);
+		vmsnap->scanned_pages_to_prefetch--;
+	}
+	else
+	{
+		Assert(vmsnap->scanned_pages_to_prefetch == 0);
+	}
+
+#ifdef TRACE_VISIBILITYMAP
+	elog(DEBUG1, "visibilitymap_snap_next %s %u",
+		 RelationGetRelationName(vmsnap->rel), next_block_to_scan);
+#endif
+
+	return next_block_to_scan;
+}
+
+/*
+ *	visibilitymap_snap_release - release previously acquired snapshot
+ *
+ * Frees resources allocated in visibilitymap_snap_acquire for VACUUM.
+ */
+void
+visibilitymap_snap_release(vmsnapshot *vmsnap)
+{
+	Assert(vmsnap->scanned_pages_to_return == 0);
+	if (vmsnap->file)
+		BufFileClose(vmsnap->file);
+	pfree(vmsnap);
 }
 
 /*
@@ -676,4 +1108,113 @@ vm_extend(Relation rel, BlockNumber vm_nblocks)
 	CacheInvalidateSmgr(reln->smgr_rlocator);
 
 	UnlockRelationForExtension(rel, ExclusiveLock);
+}
+
+/*
+ * Stage some heap blocks from vmsnap to return to VACUUM caller.
+ *
+ * Called when we completely run out of staged blocks to return to VACUUM, or
+ * when vmsnap still has some pending staged blocks, but too few to be able to
+ * prefetch incrementally as the remaining blocks are returned to VACUUM.
+ */
+static void
+vm_snap_stage_blocks(vmsnapshot *vmsnap)
+{
+	Assert(vmsnap->current_nblocks_staged < STAGED_BUFSIZE);
+	Assert(vmsnap->first_invalid_idx < STAGED_BUFSIZE);
+	Assert(vmsnap->next_return_idx <= vmsnap->first_invalid_idx);
+	Assert(vmsnap->next_prefetch_idx <= vmsnap->first_invalid_idx);
+
+	while (vmsnap->next_block < vmsnap->rel_pages &&
+		   vmsnap->current_nblocks_staged < STAGED_BUFSIZE)
+	{
+		bool		all_visible = true;
+		vmsnapblock stage;
+
+		for (;;)
+		{
+			uint8		mapbits = vm_snap_get_status(vmsnap,
+													 vmsnap->next_block);
+
+			if ((mapbits & VISIBILITYMAP_ALL_VISIBLE) == 0)
+			{
+				Assert((mapbits & VISIBILITYMAP_ALL_FROZEN) == 0);
+				all_visible = false;
+				break;
+			}
+
+			/*
+			 * Stop staging blocks just before final page, which must always
+			 * be scanned by VACUUM
+			 */
+			if (vmsnap->next_block == vmsnap->rel_pages - 1)
+				break;
+
+			/* VMSNAP_SKIP_NONE forcing VACUUM to scan every page? */
+			if (vmsnap->strat == VMSNAP_SKIP_NONE)
+				break;
+
+			/*
+			 * Check if it would be unsafe to scan page because it's just
+			 * all-visible, and we're using VISIBILITYMAP_ALL_FROZEN strategy.
+			 */
+			if (vmsnap->strat == VMSNAP_SKIP_ALL_FROZEN &&
+				(mapbits & VISIBILITYMAP_ALL_FROZEN) == 0)
+				break;
+
+			/* VACUUM will skip this page -- so don't stage it for later */
+			vmsnap->next_block++;
+		}
+
+		/* VACUUM will scan this block, so stage it for later */
+		stage.scanned_block = vmsnap->next_block++;
+		stage.all_visible = all_visible;
+		vmsnap->staged[vmsnap->first_invalid_idx++] = stage;
+		vmsnap->current_nblocks_staged++;
+	}
+}
+
+/*
+ * Get status of bits from vm snapshot
+ */
+static uint8
+vm_snap_get_status(vmsnapshot *vmsnap, BlockNumber heapBlk)
+{
+	BlockNumber mapBlock = HEAPBLK_TO_MAPBLOCK(heapBlk);
+	uint32		mapByte = HEAPBLK_TO_MAPBYTE(heapBlk);
+	uint8		mapOffset = HEAPBLK_TO_OFFSET(heapBlk);
+
+#ifdef TRACE_VISIBILITYMAP
+	elog(DEBUG1, "vm_snap_get_status %u", heapBlk);
+#endif
+
+	/*
+	 * If we didn't see the VM page when the snapshot was first acquired we
+	 * defensively assume heapBlk not all-visible or all-frozen
+	 */
+	Assert(heapBlk <= vmsnap->rel_pages);
+	if (mapBlock >= vmsnap->nvmpages)
+		return 0;
+
+	/* Read from temp file when required */
+	if (mapBlock != vmsnap->curvmpage)
+	{
+		size_t		nread;
+
+		if (BufFileSeekBlock(vmsnap->file, mapBlock) != 0)
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not seek to block %u of vmsnap temporary file",
+							mapBlock)));
+		nread = BufFileRead(vmsnap->file, vmsnap->vmpage.data, BLCKSZ);
+		if (nread != BLCKSZ)
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not read block %u of vmsnap temporary file: read only %zu of %zu bytes",
+							mapBlock, nread, (size_t) BLCKSZ)));
+		vmsnap->curvmpage = mapBlock;
+		vmsnap->rawmap = PageGetContents(vmsnap->vmpage.data);
+	}
+
+	return ((vmsnap->rawmap[mapByte] >> mapOffset) & VISIBILITYMAP_VALID_BITS);
 }

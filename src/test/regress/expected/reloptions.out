@@ -102,8 +102,8 @@ SELECT reloptions FROM pg_class WHERE oid = 'reloptions_test'::regclass;
 INSERT INTO reloptions_test VALUES (1, NULL), (NULL, NULL);
 ERROR:  null value in column "i" of relation "reloptions_test" violates not-null constraint
 DETAIL:  Failing row contains (null, null).
--- Do an aggressive vacuum to prevent page-skipping.
-VACUUM (FREEZE, DISABLE_PAGE_SKIPPING) reloptions_test;
+-- Do a VACUUM FREEZE to prevent skipping any pruning.
+VACUUM FREEZE reloptions_test;
 SELECT pg_relation_size('reloptions_test') > 0;
  ?column? 
 ----------
@@ -128,8 +128,8 @@ SELECT reloptions FROM pg_class WHERE oid = 'reloptions_test'::regclass;
 INSERT INTO reloptions_test VALUES (1, NULL), (NULL, NULL);
 ERROR:  null value in column "i" of relation "reloptions_test" violates not-null constraint
 DETAIL:  Failing row contains (null, null).
--- Do an aggressive vacuum to prevent page-skipping.
-VACUUM (FREEZE, DISABLE_PAGE_SKIPPING) reloptions_test;
+-- Do a VACUUM FREEZE to prevent skipping any pruning.
+VACUUM FREEZE reloptions_test;
 SELECT pg_relation_size('reloptions_test') = 0;
  ?column? 
 ----------

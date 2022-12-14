@@ -262,6 +262,15 @@ static relopt_int intRelOpts[] =
 	},
 	{
 		{
+			"autovacuum_freeze_strategy_threshold",
+			"Table size at which VACUUM freezes using eager strategy.",
+			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
+			ShareUpdateExclusiveLock
+		},
+		-1, 0, INT_MAX
+	},
+	{
+		{
 			"autovacuum_freeze_min_age",
 			"Minimum age at which VACUUM should freeze a table row, for autovacuum",
 			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
@@ -1851,6 +1860,8 @@ default_reloptions(Datum reloptions, bool validate, relopt_kind kind)
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, analyze_threshold)},
 		{"autovacuum_vacuum_cost_limit", RELOPT_TYPE_INT,
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, vacuum_cost_limit)},
+		{"autovacuum_freeze_strategy_threshold", RELOPT_TYPE_INT,
+		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, freeze_strategy_threshold)},
 		{"autovacuum_freeze_min_age", RELOPT_TYPE_INT,
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, freeze_min_age)},
 		{"autovacuum_freeze_max_age", RELOPT_TYPE_INT,

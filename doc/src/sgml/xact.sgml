@@ -49,8 +49,8 @@
 
   <para>
    The internal transaction ID type <type>xid</type> is 32 bits wide
-   and <link linkend="vacuum-for-wraparound">wraps around</link> every
-   4 billion transactions. A 32-bit epoch is incremented during each
+   and <link linkend="vacuum-xid-space">wraps around</link> every
+   2 billion transactions. A 32-bit epoch is incremented during each
    wraparound. There is also a 64-bit type <type>xid8</type> which
    includes this epoch and therefore does not wrap around during the
    life of an installation;  it can be converted to xid by casting.

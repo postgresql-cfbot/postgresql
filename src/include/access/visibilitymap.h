@@ -26,6 +26,17 @@
 #define VM_ALL_FROZEN(r, b, v) \
 	((visibilitymap_get_status((r), (b), (v)) & VISIBILITYMAP_ALL_FROZEN) != 0)
 
+/* Snapshot of visibility map at a point in time */
+typedef struct vmsnapshot vmsnapshot;
+
+/* VACUUM skipping strategy */
+typedef enum vmstrategy
+{
+	VMSNAP_SKIP_NONE = 0,
+	VMSNAP_SKIP_ALL_VISIBLE,
+	VMSNAP_SKIP_ALL_FROZEN
+} vmstrategy;
+
 extern bool visibilitymap_clear(Relation rel, BlockNumber heapBlk,
 								Buffer vmbuf, uint8 flags);
 extern void visibilitymap_pin(Relation rel, BlockNumber heapBlk,
@@ -35,6 +46,12 @@ extern void visibilitymap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
 							  XLogRecPtr recptr, Buffer vmBuf, TransactionId cutoff_xid,
 							  uint8 flags);
 extern uint8 visibilitymap_get_status(Relation rel, BlockNumber heapBlk, Buffer *vmbuf);
+extern vmsnapshot *visibilitymap_snap_acquire(Relation rel, BlockNumber rel_pages,
+											  BlockNumber *scanned_pages_skipallvis,
+											  BlockNumber *scanned_pages_skipallfrozen);
+extern void visibilitymap_snap_strategy(vmsnapshot *vmsnap, vmstrategy strat);
+extern BlockNumber visibilitymap_snap_next(vmsnapshot *vmsnap, bool *allvisible);
+extern void visibilitymap_snap_release(vmsnapshot *vmsnap);
 extern void visibilitymap_count(Relation rel, BlockNumber *all_visible, BlockNumber *all_frozen);
 extern BlockNumber visibilitymap_prepare_truncate(Relation rel,
 												  BlockNumber nheapblocks);

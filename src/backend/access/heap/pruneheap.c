@@ -21,6 +21,7 @@
 #include "access/xlog.h"
 #include "access/xloginsert.h"
 #include "catalog/catalog.h"
+#include "executor/instrument.h"
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "storage/bufmgr.h"
@@ -205,9 +206,10 @@ heap_page_prune_opt(Relation relation, Buffer buffer)
 		{
 			int			ndeleted,
 						nnewlpdead;
+			bool		fpi;
 
 			ndeleted = heap_page_prune(relation, buffer, vistest, limited_xmin,
-									   limited_ts, &nnewlpdead, NULL);
+									   limited_ts, &nnewlpdead, &fpi, NULL);
 
 			/*
 			 * Report the number of tuples reclaimed to pgstats.  This is
@@ -255,7 +257,9 @@ heap_page_prune_opt(Relation relation, Buffer buffer)
  * InvalidTransactionId/0 respectively.
  *
  * Sets *nnewlpdead for caller, indicating the number of items that were
- * newly set LP_DEAD during prune operation.
+ * newly set LP_DEAD during prune operation.  Also sets *prune_fpi for
+ * caller, indicating if pruning generated a full-page image as torn page
+ * protection.
  *
  * off_loc is the offset location required by the caller to use in error
  * callback.
@@ -267,7 +271,7 @@ heap_page_prune(Relation relation, Buffer buffer,
 				GlobalVisState *vistest,
 				TransactionId old_snap_xmin,
 				TimestampTz old_snap_ts,
-				int *nnewlpdead,
+				int *nnewlpdead, bool *prune_fpi,
 				OffsetNumber *off_loc)
 {
 	int			ndeleted = 0;
@@ -380,6 +384,8 @@ heap_page_prune(Relation relation, Buffer buffer,
 	if (off_loc)
 		*off_loc = InvalidOffsetNumber;
 
+	*prune_fpi = false;			/* for now */
+
 	/* Any error while applying the changes is critical */
 	START_CRIT_SECTION();
 
@@ -417,6 +423,7 @@ heap_page_prune(Relation relation, Buffer buffer,
 		{
 			xl_heap_prune xlrec;
 			XLogRecPtr	recptr;
+			int64		wal_fpi_before = pgWalUsage.wal_fpi;
 
 			xlrec.snapshotConflictHorizon = prstate.snapshotConflictHorizon;
 			xlrec.nredirected = prstate.nredirected;
@@ -448,6 +455,9 @@ heap_page_prune(Relation relation, Buffer buffer,
 			recptr = XLogInsert(RM_HEAP2_ID, XLOG_HEAP2_PRUNE);
 
 			PageSetLSN(BufferGetPage(buffer), recptr);
+
+			if (wal_fpi_before != pgWalUsage.wal_fpi)
+				*prune_fpi = true;
 		}
 	}
 	else

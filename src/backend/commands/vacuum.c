@@ -67,6 +67,7 @@ int			vacuum_freeze_min_age;
 int			vacuum_freeze_table_age;
 int			vacuum_multixact_freeze_min_age;
 int			vacuum_multixact_freeze_table_age;
+int			vacuum_freeze_strategy_threshold;
 int			vacuum_failsafe_age;
 int			vacuum_multixact_failsafe_age;
 
@@ -262,6 +263,9 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 		params.multixact_freeze_min_age = -1;
 		params.multixact_freeze_table_age = -1;
 	}
+
+	/* Determine freezing strategy later on using GUC or reloption */
+	params.freeze_strategy_threshold = -1;
 
 	/* user-invoked vacuum is never "for wraparound" */
 	params.is_wraparound = false;
@@ -907,52 +911,48 @@ get_all_vacuum_rels(int options)
 }
 
 /*
- * vacuum_set_xid_limits() -- compute OldestXmin and freeze cutoff points
+ * vacuum_get_cutoffs() -- compute OldestXmin and freeze cutoff points
  *
  * The target relation and VACUUM parameters are our inputs.
  *
- * Our output parameters are:
- * - OldestXmin is the Xid below which tuples deleted by any xact (that
- *   committed) should be considered DEAD, not just RECENTLY_DEAD.
- * - OldestMxact is the Mxid below which MultiXacts are definitely not
- *   seen as visible by any running transaction.
- * - FreezeLimit is the Xid below which all Xids are definitely frozen or
- *   removed during aggressive vacuums.
- * - MultiXactCutoff is the value below which all MultiXactIds are definitely
- *   removed from Xmax during aggressive vacuums.
+ * Output parameters are the cutoffs that VACUUM caller should use, and
+ * tableagefrac, which indicates how close rel is to requiring that VACUUM
+ * advance relfrozenxid and/or relminmxid.
  *
- * Return value indicates if vacuumlazy.c caller should make its VACUUM
- * operation aggressive.  An aggressive VACUUM must advance relfrozenxid up to
- * FreezeLimit (at a minimum), and relminmxid up to MultiXactCutoff (at a
- * minimum).
- *
- * OldestXmin and OldestMxact are the most recent values that can ever be
- * passed to vac_update_relstats() as frozenxid and minmulti arguments by our
- * vacuumlazy.c caller later on.  These values should be passed when it turns
- * out that VACUUM will leave no unfrozen XIDs/MXIDs behind in the table.
+ * The tableagefrac value 1.0 represents the point that autovacuum.c scheduling
+ * (and VACUUM itself) considers relfrozenxid advancement strictly necessary.
+ * Lower values provide useful context, and influence whether VACUUM will opt
+ * to advance relfrozenxid before the point that it is strictly necessary.
+ * VACUUM can (and often does) opt to advance relfrozenxid proactively.  It is
+ * especially likely with tables where the _added_ costs happen to be low.
  */
-bool
-vacuum_set_xid_limits(Relation rel, const VacuumParams *params,
-					  TransactionId *OldestXmin, MultiXactId *OldestMxact,
-					  TransactionId *FreezeLimit, MultiXactId *MultiXactCutoff)
+void
+vacuum_get_cutoffs(Relation rel, const VacuumParams *params,
+				   struct VacuumCutoffs *cutoffs, double *tableagefrac)
 {
 	int			freeze_min_age,
 				multixact_freeze_min_age,
 				freeze_table_age,
 				multixact_freeze_table_age,
-				effective_multixact_freeze_max_age;
+				effective_multixact_freeze_max_age,
+				freeze_strategy_threshold;
 	TransactionId nextXID,
-				safeOldestXmin,
-				aggressiveXIDCutoff;
+				safeOldestXmin;
 	MultiXactId nextMXID,
-				safeOldestMxact,
-				aggressiveMXIDCutoff;
+				safeOldestMxact;
+	double		XIDFrac,
+				MXIDFrac;
 
 	/* Use mutable copies of freeze age parameters */
 	freeze_min_age = params->freeze_min_age;
 	multixact_freeze_min_age = params->multixact_freeze_min_age;
 	freeze_table_age = params->freeze_table_age;
 	multixact_freeze_table_age = params->multixact_freeze_table_age;
+	freeze_strategy_threshold = params->freeze_strategy_threshold;
+
+	/* Set pg_class fields in cutoffs */
+	cutoffs->relfrozenxid = rel->rd_rel->relfrozenxid;
+	cutoffs->relminmxid = rel->rd_rel->relminmxid;
 
 	/*
 	 * Acquire OldestXmin.
@@ -965,14 +965,14 @@ vacuum_set_xid_limits(Relation rel, const VacuumParams *params,
 	 * that only one vacuum process can be working on a particular table at
 	 * any time, and that each vacuum is always an independent transaction.
 	 */
-	*OldestXmin = GetOldestNonRemovableTransactionId(rel);
+	cutoffs->OldestXmin = GetOldestNonRemovableTransactionId(rel);
 
 	if (OldSnapshotThresholdActive())
 	{
 		TransactionId limit_xmin;
 		TimestampTz limit_ts;
 
-		if (TransactionIdLimitedForOldSnapshots(*OldestXmin, rel,
+		if (TransactionIdLimitedForOldSnapshots(cutoffs->OldestXmin, rel,
 												&limit_xmin, &limit_ts))
 		{
 			/*
@@ -982,19 +982,47 @@ vacuum_set_xid_limits(Relation rel, const VacuumParams *params,
 			 * frequency), but would still be a significant improvement.
 			 */
 			SetOldSnapshotThresholdTimestamp(limit_ts, limit_xmin);
-			*OldestXmin = limit_xmin;
+			cutoffs->OldestXmin = limit_xmin;
 		}
 	}
 
-	Assert(TransactionIdIsNormal(*OldestXmin));
+	Assert(TransactionIdIsNormal(cutoffs->OldestXmin));
 
 	/* Acquire OldestMxact */
-	*OldestMxact = GetOldestMultiXactId();
-	Assert(MultiXactIdIsValid(*OldestMxact));
+	cutoffs->OldestMxact = GetOldestMultiXactId();
+	Assert(MultiXactIdIsValid(cutoffs->OldestMxact));
 
 	/* Acquire next XID/next MXID values used to apply age-based settings */
 	nextXID = ReadNextTransactionId();
 	nextMXID = ReadNextMultiXactId();
+
+	/*
+	 * Also compute the multixact age for which freezing is urgent.  This is
+	 * normally autovacuum_multixact_freeze_max_age, but may be less if we are
+	 * short of multixact member space.
+	 */
+	effective_multixact_freeze_max_age = MultiXactMemberFreezeThreshold();
+
+	/*
+	 * Almost ready to set freeze output parameters; check if OldestXmin or
+	 * OldestMxact are held back to an unsafe degree before we start on that
+	 */
+	safeOldestXmin = nextXID - autovacuum_freeze_max_age;
+	if (!TransactionIdIsNormal(safeOldestXmin))
+		safeOldestXmin = FirstNormalTransactionId;
+	safeOldestMxact = nextMXID - effective_multixact_freeze_max_age;
+	if (safeOldestMxact < FirstMultiXactId)
+		safeOldestMxact = FirstMultiXactId;
+	if (TransactionIdPrecedes(cutoffs->OldestXmin, safeOldestXmin))
+		ereport(WARNING,
+				(errmsg("cutoff for removing and freezing tuples is far in the past"),
+				 errhint("Close open transactions soon to avoid wraparound problems.\n"
+						 "You might also need to commit or roll back old prepared transactions, or drop stale replication slots.")));
+	if (MultiXactIdPrecedes(cutoffs->OldestMxact, safeOldestMxact))
+		ereport(WARNING,
+				(errmsg("cutoff for freezing multixacts is far in the past"),
+				 errhint("Close open transactions soon to avoid wraparound problems.\n"
+						 "You might also need to commit or roll back old prepared transactions, or drop stale replication slots.")));
 
 	/*
 	 * Determine the minimum freeze age to use: as specified by the caller, or
@@ -1008,19 +1036,12 @@ vacuum_set_xid_limits(Relation rel, const VacuumParams *params,
 	Assert(freeze_min_age >= 0);
 
 	/* Compute FreezeLimit, being careful to generate a normal XID */
-	*FreezeLimit = nextXID - freeze_min_age;
-	if (!TransactionIdIsNormal(*FreezeLimit))
-		*FreezeLimit = FirstNormalTransactionId;
+	cutoffs->FreezeLimit = nextXID - freeze_min_age;
+	if (!TransactionIdIsNormal(cutoffs->FreezeLimit))
+		cutoffs->FreezeLimit = FirstNormalTransactionId;
 	/* FreezeLimit must always be <= OldestXmin */
-	if (TransactionIdPrecedes(*OldestXmin, *FreezeLimit))
-		*FreezeLimit = *OldestXmin;
-
-	/*
-	 * Compute the multixact age for which freezing is urgent.  This is
-	 * normally autovacuum_multixact_freeze_max_age, but may be less if we are
-	 * short of multixact member space.
-	 */
-	effective_multixact_freeze_max_age = MultiXactMemberFreezeThreshold();
+	if (TransactionIdPrecedes(cutoffs->OldestXmin, cutoffs->FreezeLimit))
+		cutoffs->FreezeLimit = cutoffs->OldestXmin;
 
 	/*
 	 * Determine the minimum multixact freeze age to use: as specified by
@@ -1035,77 +1056,96 @@ vacuum_set_xid_limits(Relation rel, const VacuumParams *params,
 	Assert(multixact_freeze_min_age >= 0);
 
 	/* Compute MultiXactCutoff, being careful to generate a valid value */
-	*MultiXactCutoff = nextMXID - multixact_freeze_min_age;
-	if (*MultiXactCutoff < FirstMultiXactId)
-		*MultiXactCutoff = FirstMultiXactId;
+	cutoffs->MultiXactCutoff = nextMXID - multixact_freeze_min_age;
+	if (cutoffs->MultiXactCutoff < FirstMultiXactId)
+		cutoffs->MultiXactCutoff = FirstMultiXactId;
 	/* MultiXactCutoff must always be <= OldestMxact */
-	if (MultiXactIdPrecedes(*OldestMxact, *MultiXactCutoff))
-		*MultiXactCutoff = *OldestMxact;
+	if (MultiXactIdPrecedes(cutoffs->OldestMxact, cutoffs->MultiXactCutoff))
+		cutoffs->MultiXactCutoff = cutoffs->OldestMxact;
 
 	/*
-	 * Done setting output parameters; check if OldestXmin or OldestMxact are
-	 * held back to an unsafe degree in passing
+	 * Determine the freeze_strategy_threshold to use: as specified by the
+	 * caller, or vacuum_freeze_strategy_threshold
 	 */
-	safeOldestXmin = nextXID - autovacuum_freeze_max_age;
-	if (!TransactionIdIsNormal(safeOldestXmin))
-		safeOldestXmin = FirstNormalTransactionId;
-	safeOldestMxact = nextMXID - effective_multixact_freeze_max_age;
-	if (safeOldestMxact < FirstMultiXactId)
-		safeOldestMxact = FirstMultiXactId;
-	if (TransactionIdPrecedes(*OldestXmin, safeOldestXmin))
-		ereport(WARNING,
-				(errmsg("cutoff for removing and freezing tuples is far in the past"),
-				 errhint("Close open transactions soon to avoid wraparound problems.\n"
-						 "You might also need to commit or roll back old prepared transactions, or drop stale replication slots.")));
-	if (MultiXactIdPrecedes(*OldestMxact, safeOldestMxact))
-		ereport(WARNING,
-				(errmsg("cutoff for freezing multixacts is far in the past"),
-				 errhint("Close open transactions soon to avoid wraparound problems.\n"
-						 "You might also need to commit or roll back old prepared transactions, or drop stale replication slots.")));
+	if (freeze_strategy_threshold < 0)
+		freeze_strategy_threshold = vacuum_freeze_strategy_threshold;
+	Assert(freeze_strategy_threshold >= 0);
+	cutoffs->freeze_strategy_threshold = freeze_strategy_threshold;
 
 	/*
-	 * Finally, figure out if caller needs to do an aggressive VACUUM or not.
-	 *
 	 * Determine the table freeze age to use: as specified by the caller, or
-	 * the value of the vacuum_freeze_table_age GUC, but in any case not more
-	 * than autovacuum_freeze_max_age * 0.95, so that if you have e.g nightly
-	 * VACUUM schedule, the nightly VACUUM gets a chance to freeze XIDs before
-	 * anti-wraparound autovacuum is launched.
+	 * the value of the vacuum_freeze_table_age GUC.  The GUC's default value
+	 * of -1 is interpreted as "just use autovacuum_freeze_max_age value".
+	 * Also clamp using autovacuum_freeze_max_age.
 	 */
 	if (freeze_table_age < 0)
 		freeze_table_age = vacuum_freeze_table_age;
-	freeze_table_age = Min(freeze_table_age, autovacuum_freeze_max_age * 0.95);
-	Assert(freeze_table_age >= 0);
-	aggressiveXIDCutoff = nextXID - freeze_table_age;
-	if (!TransactionIdIsNormal(aggressiveXIDCutoff))
-		aggressiveXIDCutoff = FirstNormalTransactionId;
-	if (TransactionIdPrecedesOrEquals(rel->rd_rel->relfrozenxid,
-									  aggressiveXIDCutoff))
-		return true;
+	if (freeze_table_age < 0 || freeze_table_age > autovacuum_freeze_max_age)
+		freeze_table_age = autovacuum_freeze_max_age;
 
 	/*
 	 * Similar to the above, determine the table freeze age to use for
 	 * multixacts: as specified by the caller, or the value of the
-	 * vacuum_multixact_freeze_table_age GUC, but in any case not more than
-	 * effective_multixact_freeze_max_age * 0.95, so that if you have e.g.
-	 * nightly VACUUM schedule, the nightly VACUUM gets a chance to freeze
-	 * multixacts before anti-wraparound autovacuum is launched.
+	 * vacuum_multixact_freeze_table_age GUC.  The GUC's default value of -1
+	 * is interpreted as "just use effective_multixact_freeze_max_age value".
+	 * Also clamp using effective_multixact_freeze_max_age.
 	 */
 	if (multixact_freeze_table_age < 0)
 		multixact_freeze_table_age = vacuum_multixact_freeze_table_age;
-	multixact_freeze_table_age =
-		Min(multixact_freeze_table_age,
-			effective_multixact_freeze_max_age * 0.95);
-	Assert(multixact_freeze_table_age >= 0);
-	aggressiveMXIDCutoff = nextMXID - multixact_freeze_table_age;
-	if (aggressiveMXIDCutoff < FirstMultiXactId)
-		aggressiveMXIDCutoff = FirstMultiXactId;
-	if (MultiXactIdPrecedesOrEquals(rel->rd_rel->relminmxid,
-									aggressiveMXIDCutoff))
-		return true;
+	if (multixact_freeze_table_age < 0 ||
+		multixact_freeze_table_age > effective_multixact_freeze_max_age)
+		multixact_freeze_table_age = effective_multixact_freeze_max_age;
 
-	/* Non-aggressive VACUUM */
-	return false;
+	/*
+	 * Determine the cutoffs used by VACUUM to decide on whether to wait for a
+	 * cleanup lock on a page (that it can't cleanup lock right away).  These
+	 * are the MinXid and MinMulti cutoffs.  They are related to the cutoffs
+	 * for freezing (FreezeLimit and MultiXactCutoff), and are only applied on
+	 * pages that we cannot freeze right away.  See vacuumlazy.c for details.
+	 *
+	 * VACUUM can ratchet back NewRelfrozenXid and/or NewRelminMxid instead of
+	 * waiting indefinitely for a cleanup lock in almost all cases.  The high
+	 * level goal is to create as many opportunities as possible to freeze
+	 * (across many successive VACUUM operations), while avoiding waiting for
+	 * a cleanup lock whenever possible.  Any time spent waiting is time spent
+	 * not freezing other eligible pages, which is typically a bad trade-off.
+	 *
+	 * As a consequence of all this, MinXid and MinMulti also act as limits on
+	 * the oldest acceptable values that can ever be set in pg_class by VACUUM
+	 * (though this is only relevant when they have already attained XID/XMID
+	 * ages that approach freeze_table_age and/or multixact_freeze_table_age).
+	 */
+	cutoffs->MinXid = nextXID - (freeze_table_age * 0.5);
+	if (!TransactionIdIsNormal(cutoffs->MinXid))
+		cutoffs->MinXid = FirstNormalTransactionId;
+	/* MinXid must always be <= FreezeLimit */
+	if (TransactionIdPrecedes(cutoffs->FreezeLimit, cutoffs->MinXid))
+		cutoffs->MinXid = cutoffs->FreezeLimit;
+
+	cutoffs->MinMulti = nextMXID - (multixact_freeze_table_age * 0.5);
+	if (cutoffs->MinMulti < FirstMultiXactId)
+		cutoffs->MinMulti = FirstMultiXactId;
+	/* MinMulti must always be <= MultiXactCutoff */
+	if (MultiXactIdPrecedes(cutoffs->MultiXactCutoff, cutoffs->MinMulti))
+		cutoffs->MinMulti = cutoffs->MultiXactCutoff;
+
+	/*
+	 * Finally, set tableagefrac for VACUUM.  This can come from either XID or
+	 * XMID table age (whichever is greater currently).
+	 */
+	XIDFrac = (double) (nextXID - cutoffs->relfrozenxid) /
+		((double) freeze_table_age + 0.5);
+	MXIDFrac = (double) (nextMXID - cutoffs->relminmxid) /
+		((double) multixact_freeze_table_age + 0.5);
+	*tableagefrac = Max(XIDFrac, MXIDFrac);
+
+	/*
+	 * Make sure that antiwraparound autovacuums reliably advance relfrozenxid
+	 * to the satisfaction of autovacuum.c, even when the reloption version of
+	 * autovacuum_freeze_max_age happens to be in use
+	 */
+	if (params->is_wraparound)
+		*tableagefrac = 1.0;
 }
 
 /*
@@ -1113,13 +1153,13 @@ vacuum_set_xid_limits(Relation rel, const VacuumParams *params,
  * mechanism to determine if its table's relfrozenxid and relminmxid are now
  * dangerously far in the past.
  *
- * Input parameters are the target relation's relfrozenxid and relminmxid.
- *
  * When we return true, VACUUM caller triggers the failsafe.
  */
 bool
-vacuum_xid_failsafe_check(TransactionId relfrozenxid, MultiXactId relminmxid)
+vacuum_xid_failsafe_check(const struct VacuumCutoffs *cutoffs)
 {
+	TransactionId relfrozenxid = cutoffs->relfrozenxid;
+	MultiXactId relminmxid = cutoffs->relminmxid;
 	TransactionId xid_skip_limit;
 	MultiXactId multi_skip_limit;
 	int			skip_index_vacuum;

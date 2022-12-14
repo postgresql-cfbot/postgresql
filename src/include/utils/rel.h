@@ -308,6 +308,7 @@ typedef struct AutoVacOpts
 	int			vacuum_ins_threshold;
 	int			analyze_threshold;
 	int			vacuum_cost_limit;
+	int			freeze_strategy_threshold;
 	int			freeze_min_age;
 	int			freeze_max_age;
 	int			freeze_table_age;

@@ -187,7 +187,7 @@ typedef struct VacAttrStats
 #define VACOPT_FULL 0x10		/* FULL (non-concurrent) vacuum */
 #define VACOPT_SKIP_LOCKED 0x20 /* skip if cannot get lock */
 #define VACOPT_PROCESS_TOAST 0x40	/* process the TOAST table, if any */
-#define VACOPT_DISABLE_PAGE_SKIPPING 0x80	/* don't skip any pages */
+#define VACOPT_DISABLE_PAGE_SKIPPING 0x80	/* don't skip using VM */
 
 /*
  * Values used by index_cleanup and truncate params.
@@ -220,6 +220,9 @@ typedef struct VacuumParams
 											 * use default */
 	int			multixact_freeze_table_age; /* multixact age at which to scan
 											 * whole table */
+	int			freeze_strategy_threshold;	/* threshold to use eager
+											 * freezing, in total heap blocks,
+											 * -1 to use default */
 	bool		is_wraparound;	/* force a for-wraparound vacuum */
 	int			log_min_duration;	/* minimum execution threshold in ms at
 									 * which autovacuum is logged, -1 to use
@@ -234,6 +237,58 @@ typedef struct VacuumParams
 	 */
 	int			nworkers;
 } VacuumParams;
+
+/*
+ * VacuumCutoffs is immutable state that describes the cutoffs used by VACUUM.
+ * Established at the beginning of each VACUUM operation.
+ */
+struct VacuumCutoffs
+{
+	/*
+	 * Existing pg_class fields at start of VACUUM (used for sanity checks)
+	 */
+	TransactionId relfrozenxid;
+	MultiXactId relminmxid;
+
+	/*
+	 * OldestXmin is the Xid below which tuples deleted by any xact (that
+	 * committed) should be considered DEAD, not just RECENTLY_DEAD.
+	 *
+	 * OldestMxact is the Mxid below which MultiXacts are definitely not seen
+	 * as visible by any running transaction.
+	 *
+	 * OldestXmin and OldestMxact are also the most recent values that can
+	 * ever be passed to vac_update_relstats() as frozenxid and minmulti
+	 * arguments at the end of VACUUM.  These same values should be passed
+	 * when it turns out that VACUUM will leave no unfrozen XIDs/MXIDs behind
+	 * in the table.
+	 */
+	TransactionId OldestXmin;
+	MultiXactId OldestMxact;
+
+	/*
+	 * FreezeLimit is the Xid below which all Xids are definitely replaced by
+	 * FrozenTransactionId in heap pages that VACUUM can cleanup lock.
+	 *
+	 * MultiXactCutoff is the value below which all MultiXactIds are
+	 * definitely removed from Xmax in heap pages VACUUM can cleanup lock.
+	 */
+	TransactionId FreezeLimit;
+	MultiXactId MultiXactCutoff;
+
+	/*
+	 * Earliest permissible NewRelfrozenXid/NewRelminMxid values that can be
+	 * set in pg_class at the end of VACUUM.
+	 */
+	TransactionId MinXid;
+	MultiXactId MinMulti;
+
+	/*
+	 * Threshold cutoff point (expressed in # of physical heap rel blocks in
+	 * rel's main fork) for triggering eager/all-visible freezing strategy
+	 */
+	BlockNumber freeze_strategy_threshold;
+};
 
 /*
  * VacDeadItems stores TIDs whose index tuples are deleted by index vacuuming.
@@ -256,6 +311,7 @@ extern PGDLLIMPORT int vacuum_freeze_min_age;
 extern PGDLLIMPORT int vacuum_freeze_table_age;
 extern PGDLLIMPORT int vacuum_multixact_freeze_min_age;
 extern PGDLLIMPORT int vacuum_multixact_freeze_table_age;
+extern PGDLLIMPORT int vacuum_freeze_strategy_threshold;
 extern PGDLLIMPORT int vacuum_failsafe_age;
 extern PGDLLIMPORT int vacuum_multixact_failsafe_age;
 
@@ -286,13 +342,10 @@ extern void vac_update_relstats(Relation relation,
 								bool *frozenxid_updated,
 								bool *minmulti_updated,
 								bool in_outer_xact);
-extern bool vacuum_set_xid_limits(Relation rel, const VacuumParams *params,
-								  TransactionId *OldestXmin,
-								  MultiXactId *OldestMxact,
-								  TransactionId *FreezeLimit,
-								  MultiXactId *MultiXactCutoff);
-extern bool vacuum_xid_failsafe_check(TransactionId relfrozenxid,
-									  MultiXactId relminmxid);
+extern void vacuum_get_cutoffs(Relation rel, const VacuumParams *params,
+							   struct VacuumCutoffs *cutoffs,
+							   double *tableagefrac);
+extern bool vacuum_xid_failsafe_check(const struct VacuumCutoffs *cutoffs);
 extern void vac_update_datfrozenxid(void);
 extern void vacuum_delay_point(void);
 extern bool vacuum_is_permitted_for_relation(Oid relid, Form_pg_class reltuple,

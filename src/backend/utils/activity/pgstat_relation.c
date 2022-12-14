@@ -235,8 +235,8 @@ pgstat_report_vacuum(Oid tableoid, bool shared,
 	tabentry->dead_tuples = deadtuples;
 
 	/*
-	 * It is quite possible that a non-aggressive VACUUM ended up skipping
-	 * various pages, however, we'll zero the insert counter here regardless.
+	 * It is quite possible that VACUUM will skip all-visible pages for a
+	 * smaller table, however, we'll zero the insert counter here regardless.
 	 * It's currently used only to track when we need to perform an "insert"
 	 * autovacuum, which are mainly intended to freeze newly inserted tuples.
 	 * Zeroing this may just mean we'll not try to vacuum the table again

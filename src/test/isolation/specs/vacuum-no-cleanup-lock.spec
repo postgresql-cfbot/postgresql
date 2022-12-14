@@ -55,15 +55,18 @@ step dml_other_key_share  { SELECT id FROM smalltbl WHERE id = 3 FOR KEY SHARE; 
 step dml_other_update     { UPDATE smalltbl SET t = 'u' WHERE id = 3; }
 step dml_other_commit     { COMMIT; }
 
-# This session runs non-aggressive VACUUM, but with maximally aggressive
-# cutoffs for tuple freezing (e.g., FreezeLimit == OldestXmin):
+# This session runs VACUUM with maximally aggressive cutoffs for tuple
+# freezing (e.g., FreezeLimit == OldestXmin), without ever being
+# prepared to wait for a cleanup lock (we'll never wait on a cleanup
+# lock because the separate MinXid cutoff for waiting will still be
+# well before FreezeLimit, given our default autovacuum_freeze_max_age).
 session vacuumer
 setup
 {
   SET vacuum_freeze_min_age = 0;
   SET vacuum_multixact_freeze_min_age = 0;
 }
-step vacuumer_nonaggressive_vacuum
+step vacuumer_vacuum_noprune
 {
   VACUUM smalltbl;
 }
@@ -75,15 +78,14 @@ step vacuumer_pg_class_stats
 # Test VACUUM's reltuples counting mechanism.
 #
 # Final pg_class.reltuples should never be affected by VACUUM's inability to
-# get a cleanup lock on any page, except to the extent that any cleanup lock
-# contention changes the number of tuples that remain ("missed dead" tuples
-# are counted in reltuples, much like "recently dead" tuples).
+# get a cleanup lock on any page.  Note that "missed dead" tuples are counted
+# in reltuples, much like "recently dead" tuples.
 
 # Easy case:
 permutation
     vacuumer_pg_class_stats  # Start with 20 tuples
     dml_insert
-    vacuumer_nonaggressive_vacuum
+    vacuumer_vacuum_noprune
     vacuumer_pg_class_stats  # End with 21 tuples
 
 # Harder case -- count 21 tuples at the end (like last time), but with cleanup
@@ -92,7 +94,7 @@ permutation
     vacuumer_pg_class_stats  # Start with 20 tuples
     dml_insert
     pinholder_cursor
-    vacuumer_nonaggressive_vacuum
+    vacuumer_vacuum_noprune
     vacuumer_pg_class_stats  # End with 21 tuples
     pinholder_commit  # order doesn't matter
 
@@ -103,7 +105,7 @@ permutation
     dml_insert
     dml_delete
     dml_insert
-    vacuumer_nonaggressive_vacuum
+    vacuumer_vacuum_noprune
     # reltuples is 21 here again -- "recently dead" tuple won't be included in
     # count here:
     vacuumer_pg_class_stats
@@ -116,7 +118,7 @@ permutation
     dml_delete
     pinholder_cursor
     dml_insert
-    vacuumer_nonaggressive_vacuum
+    vacuumer_vacuum_noprune
     # reltuples is 21 here again -- "missed dead" tuple ("recently dead" when
     # concurrent activity held back VACUUM's OldestXmin) won't be included in
     # count here:
@@ -128,7 +130,7 @@ permutation
 # This provides test coverage for code paths that are only hit when we need to
 # freeze, but inability to acquire a cleanup lock on a heap page makes
 # freezing some XIDs/MXIDs < FreezeLimit/MultiXactCutoff impossible (without
-# waiting for a cleanup lock, which non-aggressive VACUUM is unwilling to do).
+# waiting for a cleanup lock, which won't ever happen here).
 permutation
     dml_begin
     dml_other_begin
@@ -136,15 +138,15 @@ permutation
     dml_other_key_share
     # Will get cleanup lock, can't advance relminmxid yet:
     # (though will usually advance relfrozenxid by ~2 XIDs)
-    vacuumer_nonaggressive_vacuum
+    vacuumer_vacuum_noprune
     pinholder_cursor
     dml_other_update
     dml_commit
     dml_other_commit
     # Can't cleanup lock, so still can't advance relminmxid here:
     # (relfrozenxid held back by XIDs in MultiXact too)
-    vacuumer_nonaggressive_vacuum
+    vacuumer_vacuum_noprune
     pinholder_commit
     # Pin was dropped, so will advance relminmxid, at long last:
     # (ditto for relfrozenxid advancement)
-    vacuumer_nonaggressive_vacuum
+    vacuumer_vacuum_noprune

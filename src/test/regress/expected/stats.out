@@ -1126,4 +1126,229 @@ SELECT pg_stat_get_subscription_stats(NULL);
  
 (1 row)
 
+-- Test that the following operations are tracked in pg_stat_io:
+-- - reads of target blocks into shared buffers
+-- - writes of shared buffers to permanent storage
+-- - extends of relations using shared buffers
+-- - fsyncs done to ensure the durability of data dirtying shared buffers
+-- There is no test for blocks evicted from shared buffers, because we cannot
+-- be sure of the state of shared buffers at the point the test is run.
+-- Create a regular table and insert some data to generate IOCONTEXT_NORMAL
+-- extends.
+SELECT sum(extended) AS io_sum_shared_extends_before
+  FROM pg_stat_io WHERE io_context = 'normal' AND io_object = 'relation' \gset
+CREATE TABLE test_io_shared(a int);
+INSERT INTO test_io_shared SELECT i FROM generate_series(1,100)i;
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+SELECT sum(extended) AS io_sum_shared_extends_after
+  FROM pg_stat_io WHERE io_context = 'normal' AND io_object = 'relation'  \gset
+SELECT :io_sum_shared_extends_after > :io_sum_shared_extends_before;
+ ?column? 
+----------
+ t
+(1 row)
+
+-- After a checkpoint, there should be some additional IOCONTEXT_NORMAL writes
+-- and fsyncs.
+-- The second checkpoint ensures that stats from the first checkpoint have been
+-- reported and protects against any potential races amongst the table
+-- creation, a possible timing-triggered checkpoint, and the explicit
+-- checkpoint in the test.
+SELECT sum(written) AS io_sum_shared_writes_before
+  FROM pg_stat_io WHERE io_context = 'normal' AND io_object = 'relation' \gset
+SELECT sum(files_synced) AS io_sum_shared_fsyncs_before
+  FROM pg_stat_io WHERE io_context = 'normal' AND io_object = 'relation' \gset
+CHECKPOINT;
+CHECKPOINT;
+SELECT sum(written) AS io_sum_shared_writes_after
+  FROM pg_stat_io WHERE io_context = 'normal' AND io_object = 'relation'  \gset
+SELECT sum(files_synced) AS io_sum_shared_fsyncs_after
+  FROM pg_stat_io WHERE io_context = 'normal' AND io_object = 'relation'  \gset
+SELECT :io_sum_shared_writes_after > :io_sum_shared_writes_before;
+ ?column? 
+----------
+ t
+(1 row)
+
+SELECT current_setting('fsync') = 'off' OR :io_sum_shared_fsyncs_after > :io_sum_shared_fsyncs_before;
+ ?column? 
+----------
+ t
+(1 row)
+
+-- Change the tablespace so that the table is rewritten directly, then SELECT
+-- from it to cause it to be read back into shared buffers.
+SET allow_in_place_tablespaces = true;
+CREATE TABLESPACE test_io_shared_stats_tblspc LOCATION '';
+SELECT sum(read) AS io_sum_shared_reads_before
+  FROM pg_stat_io WHERE io_context = 'normal' AND io_object = 'relation' \gset
+ALTER TABLE test_io_shared SET TABLESPACE test_io_shared_stats_tblspc;
+-- SELECT from the table so that it is read into shared buffers and io_context
+-- 'normal', io_object 'relation' reads are counted.
+SELECT COUNT(*) FROM test_io_shared;
+ count 
+-------
+   100
+(1 row)
+
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+SELECT sum(read) AS io_sum_shared_reads_after
+  FROM pg_stat_io WHERE io_context = 'normal' AND io_object = 'relation'  \gset
+SELECT :io_sum_shared_reads_after > :io_sum_shared_reads_before;
+ ?column? 
+----------
+ t
+(1 row)
+
+DROP TABLE test_io_shared;
+DROP TABLESPACE test_io_shared_stats_tblspc;
+-- Test that the follow IOCONTEXT_LOCAL IOOps are tracked in pg_stat_io:
+-- - eviction of local buffers in order to reuse them
+-- - reads of temporary table blocks into local buffers
+-- - writes of local buffers to permanent storage
+-- - extends of temporary tables
+-- Set temp_buffers to a low value so that we can trigger writes with fewer
+-- inserted tuples. Do so in a new session in case temporary tables have been
+-- accessed by previous tests in this session.
+\c
+SET temp_buffers TO '1MB';
+CREATE TEMPORARY TABLE test_io_local(a int, b TEXT);
+SELECT sum(extended) AS io_sum_local_extends_before
+  FROM pg_stat_io WHERE io_context = 'normal' AND io_object = 'temp relation' \gset
+SELECT sum(evicted) AS io_sum_local_evictions_before
+  FROM pg_stat_io WHERE io_context = 'normal' AND io_object = 'temp relation' \gset
+SELECT sum(written) AS io_sum_local_writes_before
+  FROM pg_stat_io WHERE io_context = 'normal' AND io_object = 'temp relation' \gset
+-- Insert tuples into the temporary table, generating extends in the stats.
+-- Insert enough values that we need to reuse and write out dirty local
+-- buffers, generating evictions and writes.
+INSERT INTO test_io_local SELECT generate_series(1, 8000) as id, repeat('a', 100);
+SELECT sum(read) AS io_sum_local_reads_before
+  FROM pg_stat_io WHERE io_context = 'normal' AND io_object = 'temp relation' \gset
+-- Read in evicted buffers, generating reads.
+SELECT COUNT(*) FROM test_io_local;
+ count 
+-------
+  8000
+(1 row)
+
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+SELECT sum(evicted) AS io_sum_local_evictions_after
+  FROM pg_stat_io WHERE io_context = 'normal' AND io_object = 'temp relation'  \gset
+SELECT sum(read) AS io_sum_local_reads_after
+  FROM pg_stat_io WHERE io_context = 'normal' AND io_object = 'temp relation'  \gset
+SELECT sum(written) AS io_sum_local_writes_after
+  FROM pg_stat_io WHERE io_context = 'normal' AND io_object = 'temp relation'  \gset
+SELECT sum(extended) AS io_sum_local_extends_after
+  FROM pg_stat_io WHERE io_context = 'normal' AND io_object = 'temp relation'  \gset
+SELECT :io_sum_local_evictions_after > :io_sum_local_evictions_before;
+ ?column? 
+----------
+ t
+(1 row)
+
+SELECT :io_sum_local_reads_after > :io_sum_local_reads_before;
+ ?column? 
+----------
+ t
+(1 row)
+
+SELECT :io_sum_local_writes_after > :io_sum_local_writes_before;
+ ?column? 
+----------
+ t
+(1 row)
+
+SELECT :io_sum_local_extends_after > :io_sum_local_extends_before;
+ ?column? 
+----------
+ t
+(1 row)
+
+RESET temp_buffers;
+-- Test that reuse of strategy buffers and reads of blocks into these reused
+-- buffers while VACUUMing are tracked in pg_stat_io.
+-- Set wal_skip_threshold smaller than the expected size of
+-- test_io_vac_strategy so that, even if wal_level is minimal, VACUUM FULL will
+-- fsync the newly rewritten test_io_vac_strategy instead of writing it to WAL.
+-- Writing it to WAL will result in the newly written relation pages being in
+-- shared buffers -- preventing us from testing BAS_VACUUM BufferAccessStrategy
+-- reads.
+SET wal_skip_threshold = '1 kB';
+SELECT sum(reused) AS io_sum_vac_strategy_reuses_before FROM pg_stat_io WHERE io_context = 'vacuum' \gset
+SELECT sum(read) AS io_sum_vac_strategy_reads_before FROM pg_stat_io WHERE io_context = 'vacuum' \gset
+CREATE TABLE test_io_vac_strategy(a int, b int) WITH (autovacuum_enabled = 'false');
+INSERT INTO test_io_vac_strategy SELECT i, i from generate_series(1, 8000)i;
+-- Ensure that the next VACUUM will need to perform IO by rewriting the table
+-- first with VACUUM (FULL).
+VACUUM (FULL) test_io_vac_strategy;
+VACUUM (PARALLEL 0) test_io_vac_strategy;
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+SELECT sum(reused) AS io_sum_vac_strategy_reuses_after FROM pg_stat_io WHERE io_context = 'vacuum' \gset
+SELECT sum(read) AS io_sum_vac_strategy_reads_after FROM pg_stat_io WHERE io_context = 'vacuum' \gset
+SELECT :io_sum_vac_strategy_reads_after > :io_sum_vac_strategy_reads_before;
+ ?column? 
+----------
+ t
+(1 row)
+
+SELECT :io_sum_vac_strategy_reuses_after > :io_sum_vac_strategy_reuses_before;
+ ?column? 
+----------
+ t
+(1 row)
+
+RESET wal_skip_threshold;
+-- Test that extends done by a CTAS, which uses a BAS_BULKWRITE
+-- BufferAccessStrategy, are tracked in pg_stat_io.
+SELECT sum(extended) AS io_sum_bulkwrite_strategy_extends_before FROM pg_stat_io WHERE io_context = 'bulkwrite' \gset
+CREATE TABLE test_io_bulkwrite_strategy AS SELECT i FROM generate_series(1,100)i;
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+SELECT sum(extended) AS io_sum_bulkwrite_strategy_extends_after FROM pg_stat_io WHERE io_context = 'bulkwrite' \gset
+SELECT :io_sum_bulkwrite_strategy_extends_after > :io_sum_bulkwrite_strategy_extends_before;
+ ?column? 
+----------
+ t
+(1 row)
+
+-- Test IO stats reset
+SELECT sum(evicted) + sum(reused) + sum(extended) + sum(files_synced) + sum(read) + sum(written) AS io_stats_pre_reset FROM pg_stat_io \gset
+SELECT pg_stat_reset_shared('io');
+ pg_stat_reset_shared 
+----------------------
+ 
+(1 row)
+
+SELECT sum(evicted) + sum(reused) + sum(extended) + sum(files_synced) + sum(read) + sum(written) AS io_stats_post_reset FROM pg_stat_io \gset
+SELECT :io_stats_post_reset < :io_stats_pre_reset;
+ ?column? 
+----------
+ t
+(1 row)
+
 -- End of Stats Test

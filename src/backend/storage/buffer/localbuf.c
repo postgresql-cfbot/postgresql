@@ -18,6 +18,7 @@
 #include "access/parallel.h"
 #include "catalog/catalog.h"
 #include "executor/instrument.h"
+#include "pgstat.h"
 #include "storage/buf_internals.h"
 #include "storage/bufmgr.h"
 #include "utils/guc_hooks.h"
@@ -226,6 +227,8 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 				  localpage,
 				  false);
 
+		pgstat_count_io_op(IOOP_WRITE, IOOBJECT_TEMP_RELATION, IOCONTEXT_NORMAL);
+
 		/* Mark not-dirty now in case we error out below */
 		buf_state &= ~BM_DIRTY;
 		pg_atomic_unlocked_write_u32(&bufHdr->state, buf_state);
@@ -256,6 +259,7 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 		ClearBufferTag(&bufHdr->tag);
 		buf_state &= ~(BM_VALID | BM_TAG_VALID);
 		pg_atomic_unlocked_write_u32(&bufHdr->state, buf_state);
+		pgstat_count_io_op(IOOP_EVICT, IOOBJECT_TEMP_RELATION, IOCONTEXT_NORMAL);
 	}
 
 	hresult = (LocalBufferLookupEnt *)

@@ -1197,6 +1197,152 @@ pg_stat_get_buf_alloc(PG_FUNCTION_ARGS)
 }
 
 /*
+* When adding a new column to the pg_stat_io view, add a new enum value
+* here above IO_NUM_COLUMNS.
+*/
+typedef enum io_stat_col
+{
+	IO_COL_BACKEND_TYPE,
+	IO_COL_IO_CONTEXT,
+	IO_COL_IO_OBJECT,
+	IO_COL_READS,
+	IO_COL_WRITES,
+	IO_COL_EXTENDS,
+	IO_COL_CONVERSION,
+	IO_COL_EVICTIONS,
+	IO_COL_REUSES,
+	IO_COL_FSYNCS,
+	IO_COL_RESET_TIME,
+	IO_NUM_COLUMNS,
+}			io_stat_col;
+
+/*
+ * When adding a new IOOp, add a new io_stat_col and add a case to this
+ * function returning the corresponding io_stat_col.
+ */
+static io_stat_col
+pgstat_io_op_get_index(IOOp io_op)
+{
+	switch (io_op)
+	{
+		case IOOP_EVICT:
+			return IO_COL_EVICTIONS;
+		case IOOP_READ:
+			return IO_COL_READS;
+		case IOOP_REUSE:
+			return IO_COL_REUSES;
+		case IOOP_WRITE:
+			return IO_COL_WRITES;
+		case IOOP_EXTEND:
+			return IO_COL_EXTENDS;
+		case IOOP_FSYNC:
+			return IO_COL_FSYNCS;
+	}
+
+	elog(ERROR, "unrecognized IOOp value: %d", io_op);
+
+	pg_unreachable();
+}
+
+Datum
+pg_stat_get_io(PG_FUNCTION_ARGS)
+{
+	PgStat_BackendIOContextOps *backends_io_stats;
+	ReturnSetInfo *rsinfo;
+	Datum		reset_time;
+
+	InitMaterializedSRF(fcinfo, 0);
+	rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+
+	backends_io_stats = pgstat_fetch_backend_io_context_ops();
+
+	reset_time = TimestampTzGetDatum(backends_io_stats->stat_reset_timestamp);
+
+	for (BackendType bktype = B_INVALID; bktype < BACKEND_NUM_TYPES; bktype++)
+	{
+		Datum		bktype_desc = CStringGetTextDatum(GetBackendTypeDesc(bktype));
+		bool		expect_backend_stats = true;
+		PgStat_IOContextOps *io_context_ops = &backends_io_stats->stats[bktype];
+
+		/*
+		 * For those BackendTypes without IO Operation stats, skip
+		 * representing them in the view altogether. We still loop through
+		 * their counters so that we can assert that all values are zero.
+		 */
+		expect_backend_stats = pgstat_io_op_stats_collected(bktype);
+
+		for (IOContext io_context = IOCONTEXT_BULKREAD;
+			 io_context < IOCONTEXT_NUM_TYPES; io_context++)
+		{
+			const char *io_context_str = pgstat_io_context_desc(io_context);
+			PgStat_IOObjectOps *io_objs = &io_context_ops->data[io_context];
+
+			for (IOObject io_object = IOOBJECT_RELATION;
+				 io_object < IOOBJECT_NUM_TYPES; io_object++)
+			{
+				PgStat_IOOpCounters *counters = &io_objs->data[io_object];
+				const char *io_obj_str = pgstat_io_object_desc(io_object);
+
+				Datum		values[IO_NUM_COLUMNS] = {0};
+				bool		nulls[IO_NUM_COLUMNS] = {0};
+
+				/*
+				 * Some combinations of IOContext, IOObject, and BackendType
+				 * are not valid for any type of IOOp. In such cases, omit the
+				 * entire row from the view.
+				 */
+				if (!expect_backend_stats ||
+					!pgstat_bktype_io_context_io_object_valid(bktype,
+															  io_context, io_object))
+				{
+					pgstat_io_context_ops_assert_zero(counters);
+					continue;
+				}
+
+				values[IO_COL_BACKEND_TYPE] = bktype_desc;
+				values[IO_COL_IO_CONTEXT] = CStringGetTextDatum(io_context_str);
+				values[IO_COL_IO_OBJECT] = CStringGetTextDatum(io_obj_str);
+				values[IO_COL_READS] = Int64GetDatum(counters->reads);
+				values[IO_COL_WRITES] = Int64GetDatum(counters->writes);
+				values[IO_COL_EXTENDS] = Int64GetDatum(counters->extends);
+
+				/*
+				 * Hard-code this to the value of BLCKSZ for now. Future
+				 * values could include XLOG_BLCKSZ, once WAL IO is tracked,
+				 * and constant multipliers, once non-block-oriented IO (e.g.
+				 * temporary file IO) is tracked.
+				 */
+				values[IO_COL_CONVERSION] = Int64GetDatum(BLCKSZ);
+				values[IO_COL_EVICTIONS] = Int64GetDatum(counters->evictions);
+				values[IO_COL_REUSES] = Int64GetDatum(counters->reuses);
+				values[IO_COL_FSYNCS] = Int64GetDatum(counters->fsyncs);
+				values[IO_COL_RESET_TIME] = TimestampTzGetDatum(reset_time);
+
+				/*
+				 * Some combinations of BackendType and IOOp, of IOContext and
+				 * IOOp, and of IOObject and IOOp are not valid. Set these
+				 * cells in the view NULL and assert that these stats are zero
+				 * as expected.
+				 */
+				for (IOOp io_op = IOOP_EVICT; io_op < IOOP_NUM_TYPES; io_op++)
+				{
+					if (!pgstat_io_op_valid(bktype, io_context, io_object,
+											io_op))
+					{
+						pgstat_io_op_assert_zero(counters, io_op);
+						nulls[pgstat_io_op_get_index(io_op)] = true;
+					}
+				}
+
+				tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
+			}
+		}
+	}
+
+	return (Datum) 0;
+}
+
+/*
  * Returns statistics of WAL activity
  */
 Datum
@@ -1555,6 +1701,8 @@ pg_stat_reset_shared(PG_FUNCTION_ARGS)
 		pgstat_reset_of_kind(PGSTAT_KIND_BGWRITER);
 		pgstat_reset_of_kind(PGSTAT_KIND_CHECKPOINTER);
 	}
+	else if (strcmp(target, "io") == 0)
+		pgstat_reset_of_kind(PGSTAT_KIND_IOOPS);
 	else if (strcmp(target, "recovery_prefetch") == 0)
 		XLogPrefetchResetStats();
 	else if (strcmp(target, "wal") == 0)
@@ -1563,7 +1711,7 @@ pg_stat_reset_shared(PG_FUNCTION_ARGS)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("unrecognized reset target: \"%s\"", target),
-				 errhint("Target must be \"archiver\", \"bgwriter\", \"recovery_prefetch\", or \"wal\".")));
+				 errhint("Target must be \"archiver\", \"io\", \"bgwriter\", \"recovery_prefetch\", or \"wal\".")));
 
 	PG_RETURN_VOID();
 }

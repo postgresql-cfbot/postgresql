@@ -202,6 +202,10 @@ StatsShmemInit(void)
 		LWLockInitialize(&ctl->checkpointer.lock, LWTRANCHE_PGSTATS_DATA);
 		LWLockInitialize(&ctl->slru.lock, LWTRANCHE_PGSTATS_DATA);
 		LWLockInitialize(&ctl->wal.lock, LWTRANCHE_PGSTATS_DATA);
+
+		for (int i = 0; i < BACKEND_NUM_TYPES; i++)
+			LWLockInitialize(&ctl->io_ops.stats[i].lock,
+							 LWTRANCHE_PGSTATS_DATA);
 	}
 	else
 	{

@@ -254,11 +254,27 @@
 
      <row>
       <entry role="catalog_table_entry"><para role="column_definition">
-       <structfield>shared_blks_read</structfield> <type>bigint</type>
+       <structfield>shared_blks_read</structfield> <type>bigint</type></para>
+      <para>
+       Total number of shared blocks read by the statement.
       </para>
       <para>
-       Total number of shared blocks read by the statement
-      </para></entry>
+       <varname>shared_blks_read</varname> in
+       <structname>pg_stat_statements</structname> is equivalent to
+       <link linkend="monitoring-pg-stat-io-view"><structname>pg_stat_io</structname></link>'s
+       <varname>read</varname> for all <varname>io_context</varname>s with
+       <varname>io_object</varname> <literal>relation</literal> for
+       <varname>backend_type</varname>s:
+       <itemizedlist>
+        <listitem><para><literal>autovacuum launcher</literal></para></listitem>
+        <listitem><para><literal>autovacuum worker</literal></para></listitem>
+        <listitem><para><literal>client backend</literal></para></listitem>
+        <listitem><para><literal>standalone backend</literal></para></listitem>
+        <listitem><para><literal>background worker</literal></para></listitem>
+        <listitem><para><literal>walsender</literal></para></listitem>
+       </itemizedlist>
+      </para>
+      </entry>
      </row>
 
      <row>
@@ -272,11 +288,28 @@
 
      <row>
       <entry role="catalog_table_entry"><para role="column_definition">
-       <structfield>shared_blks_written</structfield> <type>bigint</type>
-      </para>
+       <structfield>shared_blks_written</structfield> <type>bigint</type></para>
       <para>
        Total number of shared blocks written by the statement
-      </para></entry>
+      </para>
+      <para>
+       <varname>shared_blks_written</varname> in
+       <structname>pg_stat_statements</structname> is equivalent to
+       <link linkend="monitoring-pg-stat-io-view"><structname>pg_stat_io</structname></link>'s
+       <varname>written</varname> plus <varname>extended</varname> for all
+       <varname>io_context</varname>s with <varname>io_object</varname>
+       <literal>relation</literal> for <varname>backend_type</varname>s:
+       <itemizedlist>
+        <listitem><para><literal>autovacuum launcher</literal></para></listitem>
+        <listitem><para><literal>autovacuum worker</literal></para></listitem>
+        <listitem><para><literal>client backend</literal></para></listitem>
+        <listitem><para><literal>standalone backend</literal></para></listitem>
+        <listitem><para><literal>background worker</literal></para></listitem>
+        <listitem><para><literal>walsender</literal></para></listitem>
+       </itemizedlist>
+      </para>
+
+      </entry>
      </row>
 
      <row>
@@ -290,11 +323,24 @@
 
      <row>
       <entry role="catalog_table_entry"><para role="column_definition">
-       <structfield>local_blks_read</structfield> <type>bigint</type>
-      </para>
+       <structfield>local_blks_read</structfield> <type>bigint</type></para>
       <para>
        Total number of local blocks read by the statement
-      </para></entry>
+      </para>
+      <para>
+       <varname>local_blks_read</varname> in
+       <structname>pg_stat_statements</structname> is equivalent to
+       <link linkend="monitoring-pg-stat-io-view"><structname>pg_stat_io</structname></link>'s
+       <varname>read</varname> for <varname>io_context</varname>
+       <literal>normal</literal> with <varname>io_object</varname>
+       <literal>temp relation</literal> for <varname>backend_type</varname>s:
+       <itemizedlist>
+        <listitem><para><literal>client backend</literal></para></listitem>
+        <listitem><para><literal>background worker</literal></para></listitem>
+        <listitem><para><literal>walsender</literal></para></listitem>
+       </itemizedlist>
+      </para>
+      </entry>
      </row>
 
      <row>
@@ -308,11 +354,25 @@
 
      <row>
       <entry role="catalog_table_entry"><para role="column_definition">
-       <structfield>local_blks_written</structfield> <type>bigint</type>
-      </para>
+       <structfield>local_blks_written</structfield> <type>bigint</type></para>
       <para>
        Total number of local blocks written by the statement
-      </para></entry>
+      </para>
+      <para>
+       <varname>local_blks_written</varname> in
+       <structname>pg_stat_statements</structname> is equivalent to
+       <link linkend="monitoring-pg-stat-io-view"><structname>pg_stat_io</structname></link>'s
+       <varname>written</varname> plus <varname>extended</varname> for
+       <varname>io_context</varname> <literal>normal</literal> with
+       <varname>io_object</varname> <literal>temp relation</literal> for
+       <varname>backend_type</varname>s:
+       <itemizedlist>
+        <listitem><para><literal>client backend</literal></para></listitem>
+        <listitem><para><literal>background worker</literal></para></listitem>
+        <listitem><para><literal>walsender</literal></para></listitem>
+       </itemizedlist>
+      </para>
+      </entry>
      </row>
 
      <row>

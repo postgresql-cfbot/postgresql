@@ -20,10 +20,25 @@ SELECT * FROM verify_heapam(relation := 'heaptest', skip := 'NONE');
 SELECT * FROM verify_heapam(relation := 'heaptest', skip := 'ALL-FROZEN');
 SELECT * FROM verify_heapam(relation := 'heaptest', skip := 'ALL-VISIBLE');
 
+
 -- Add some data so subsequent tests are not entirely trivial
 INSERT INTO heaptest (a, b)
 	(SELECT gs, repeat('x', gs)
 		FROM generate_series(1,50) gs);
+
+-- pg_stat_io test:
+-- verify_heapam always uses a BAS_BULKREAD BufferAccessStrategy. This allows
+-- us to reliably test that pg_stat_io BULKREAD reads are being captured
+-- without relying on the size of shared buffers or on an expensive operation
+-- like CREATE DATABASE.
+--
+-- Create an alternative tablespace and move the heaptest table to it, causing
+-- it to be rewritten.
+SET allow_in_place_tablespaces = true;
+CREATE TABLESPACE test_stats LOCATION '';
+SELECT sum(read) AS stats_bulkreads_before
+  FROM pg_stat_io WHERE io_context = 'bulkread' \gset
+ALTER TABLE heaptest SET TABLESPACE test_stats;
 
 -- Check that valid options are not rejected nor corruption reported
 -- for a non-empty table
@@ -31,6 +46,14 @@ SELECT * FROM verify_heapam(relation := 'heaptest', skip := 'none');
 SELECT * FROM verify_heapam(relation := 'heaptest', skip := 'all-frozen');
 SELECT * FROM verify_heapam(relation := 'heaptest', skip := 'all-visible');
 SELECT * FROM verify_heapam(relation := 'heaptest', startblock := 0, endblock := 0);
+
+-- verify_heapam will need to read in the page written out by ALTER TABLE ...
+-- SET TABLESPACE ... causing an additional bulkread, which should be reflected
+-- in pg_stat_io.
+SELECT pg_stat_force_next_flush();
+SELECT sum(read) AS stats_bulkreads_after
+  FROM pg_stat_io WHERE io_context = 'bulkread' \gset
+SELECT :stats_bulkreads_after > :stats_bulkreads_before;
 
 CREATE ROLE regress_heaptest_role;
 
@@ -110,6 +133,7 @@ SELECT * FROM verify_heapam('test_foreign_table',
 
 -- cleanup
 DROP TABLE heaptest;
+DROP TABLESPACE test_stats;
 DROP TABLE test_partition;
 DROP TABLE test_partitioned;
 DROP OWNED BY regress_heaptest_role; -- permissions

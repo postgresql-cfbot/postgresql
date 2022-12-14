@@ -449,6 +449,15 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
      </row>
 
      <row>
+      <entry><structname>pg_stat_io</structname><indexterm><primary>pg_stat_io</primary></indexterm></entry>
+      <entry>A row for each IO Context for each backend type showing
+      statistics about backend IO operations. See
+       <link linkend="monitoring-pg-stat-io-view">
+       <structname>pg_stat_io</structname></link> for details.
+     </entry>
+     </row>
+
+     <row>
       <entry><structname>pg_stat_wal</structname><indexterm><primary>pg_stat_wal</primary></indexterm></entry>
       <entry>One row only, showing statistics about WAL activity. See
        <link linkend="monitoring-pg-stat-wal-view">
@@ -658,20 +667,20 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
   </para>
 
   <para>
-   The <structname>pg_statio_</structname> views are primarily useful to
-   determine the effectiveness of the buffer cache.  When the number
-   of actual disk reads is much smaller than the number of buffer
-   hits, then the cache is satisfying most read requests without
-   invoking a kernel call. However, these statistics do not give the
-   entire story: due to the way in which <productname>PostgreSQL</productname>
-   handles disk I/O, data that is not in the
-   <productname>PostgreSQL</productname> buffer cache might still reside in the
-   kernel's I/O cache, and might therefore still be fetched without
-   requiring a physical read. Users interested in obtaining more
-   detailed information on <productname>PostgreSQL</productname> I/O behavior are
-   advised to use the <productname>PostgreSQL</productname> statistics views
-   in combination with operating system utilities that allow insight
-   into the kernel's handling of I/O.
+   The <structname>pg_stat_io</structname> and
+   <structname>pg_statio_</structname> set of views are primarily useful to
+   determine the effectiveness of the buffer cache.  When the number of actual
+   disk reads is much smaller than the number of buffer hits, then the cache is
+   satisfying most read requests without invoking a kernel call. However, these
+   statistics do not give the entire story: due to the way in which
+   <productname>PostgreSQL</productname> handles disk I/O, data that is not in
+   the <productname>PostgreSQL</productname> buffer cache might still reside in
+   the kernel's I/O cache, and might therefore still be fetched without
+   requiring a physical read. Users interested in obtaining more detailed
+   information on <productname>PostgreSQL</productname> I/O behavior are
+   advised to use the <productname>PostgreSQL</productname> statistics views in
+   combination with operating system utilities that allow insight into the
+   kernel's handling of I/O.
   </para>
 
  </sect2>
@@ -3606,13 +3615,12 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
        <structfield>stats_reset</structfield> <type>timestamp with time zone</type>
       </para>
       <para>
-       Time at which these statistics were last reset
+       Time at which these statistics were last reset.
       </para></entry>
      </row>
     </tbody>
    </tgroup>
   </table>
-
   <para>
     Normally, WAL files are archived in order, oldest to newest, but that is
     not guaranteed, and does not hold under special circumstances like when
@@ -3621,7 +3629,368 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
     <structfield>last_archived_wal</structfield> have also been successfully
     archived.
   </para>
+ </sect2>
 
+ <sect2 id="monitoring-pg-stat-io-view">
+  <title><structname>pg_stat_io</structname></title>
+
+  <indexterm>
+   <primary>pg_stat_io</primary>
+  </indexterm>
+
+  <para>
+   The <structname>pg_stat_io</structname> view has a row for each valid
+   backend type, IO context, IO object combination containing global data for
+   the cluster on IO operations done by that backend type in that IO context on
+   that IO object. Currently only a subset of IO operations are tracked here.
+   WAL IO, IO on temporary files, and some forms of IO outside of shared
+   buffers (such as when building indexes or moving a table from one tablespace
+   to another) may be added in the future.
+  </para>
+
+  <table id="pg-stat-io-view" xreflabel="pg_stat_io">
+   <title><structname>pg_stat_io</structname> View</title>
+   <tgroup cols="1">
+    <thead>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       Column Type
+      </para>
+      <para>
+       Description
+      </para></entry>
+     </row>
+    </thead>
+    <tbody>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>backend_type</structfield> <type>text</type></para>
+      <para>
+       Type of backend (e.g. background worker, autovacuum worker).
+       See <link linkend="monitoring-pg-stat-activity-view">
+       <structname>pg_stat_activity</structname></link> for more information on
+       <varname>backend_type</varname>s. Some <varname>backend_type</varname>s
+       do not accumulate IO operation statistics and will not be included in
+       the view.
+      </para>
+      </entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>io_context</structfield> <type>text</type></para>
+      <para>
+       The context of an IO operation or location of an IO object:
+      </para>
+       <itemizedlist>
+        <listitem>
+         <para>
+          <literal>normal</literal> refers to the default or standard type or
+          location of IO operations on IO objects.
+         </para>
+         <para>
+          Operations on temporary relations use a process-local buffer pool and
+          are counted as <varname>io_context</varname>
+          <literal>normal</literal> , <varname>io_object</varname>
+          <literal>temp relation</literal> operations.
+         </para>
+         <para>
+          IO operations on permanent relations are done by default in shared
+          buffers. These are tracked in <varname>io_context</varname>
+          <literal>normal</literal>, <varname>io_object</varname>
+          <literal>relation</literal>.
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>vacuum</literal> refers to the IO operations incurred while
+          vacuuming and analyzing permanent relations.
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>bulkread</literal> refers to IO operations on permanent
+          relations specially designated as <literal>bulkreads</literal>, such
+          as the sequential scan of a large table.
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>bulkwrite</literal> refers to IO operations on permanent
+          relations specially designated as <literal>bulkwrites</literal>,
+          such as <command>COPY</command>.
+         </para>
+        </listitem>
+       </itemizedlist>
+       <para>
+        These last three <varname>io_context</varname>s are counted separately
+        because the autovacuum daemon, explicit <command>VACUUM</command>,
+        explicit <command>ANALYZE</command>, many bulk reads, and many bulk
+        writes acquire a fixed number of shared buffers and reuse them
+        circularly to avoid occupying an undue portion of the main shared
+        buffer pool. This pattern is called a <quote>Buffer Access
+        Strategy</quote> in the <productname>PostgreSQL</productname> source
+        code and the fixed-size ring buffer is referred to as a <quote>strategy
+        ring buffer</quote> for the purposes of this view's documentation.
+        These <varname>io_context</varname>s are referred to as <quote>strategy
+        contexts</quote> and IO operations on strategy contexts are referred to
+        as <quote>strategy operations</quote>.
+      </para>
+      <para>
+       Some <varname>io_context</varname>s are not used by some
+       <varname>backend_type</varname>s and will not be in the view. For
+       example, the checkpointer does not use a Buffer Access Strategy
+       (currently), so there will be no rows for
+       <varname>backend_type</varname> <literal>checkpointer</literal> in any
+       of the strategy <varname>io_context</varname>s.
+      </para>
+      <para>
+       Some IO operations are invalid in combination with certain
+       <varname>io_context</varname>s and <varname>io_object</varname>s. Those
+       cells will be NULL to distinguish between 0 observed IO operations of
+       that type and an invalid combination. For example, temporary tables are
+       not fsynced, so cells for all <varname>backend_type</varname>s for
+       <varname>io_object</varname> <literal>temp relation</literal> in
+       <varname>io_context</varname> <literal>normal</literal> for
+       <varname>files_synced</varname> will be NULL. Some
+       <varname>backend_type</varname>s never perform certain IO operations.
+       Those cells will also be NULL in the view. For example
+       <literal>background writer</literal> should not perform reads.
+      </para>
+      </entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>io_object</structfield> <type>text</type></para>
+      <para>
+       Object operated on in a given <varname>io_context</varname> by a given
+       <varname>backend_type</varname>. Current values are
+       <literal>relation</literal>, which includes permanent relations, and
+       <literal>temp relation</literal> which includes temporary relations
+       created by <command>CREATE TEMPORARY TABLE...</command>.
+      </para>
+      <para>
+       Some <varname>backend_type</varname>s will never do IO operations on
+       some <varname>io_object</varname>s, either at all or in certain
+       <varname>io_context</varname>s. These rows are omitted from the view.
+      </para>
+     </entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>read</structfield> <type>bigint</type></para>
+      <para>
+       Reads by a given <varname>backend_type</varname> of a given
+       <varname>io_object</varname> into buffers in a given
+       <varname>io_context</varname>.
+      </para>
+      <para>
+       Note that the sum of
+       <varname>heap_blks_read</varname>,
+       <varname>idx_blks_read</varname>,
+       <varname>tidx_blks_read</varname>, and
+       <varname>toast_blks_read</varname>
+       in <link linkend="monitoring-pg-statio-all-tables-view">
+       <structname>pg_statio_all_tables</structname></link> as well as
+       <varname>blks_read</varname> in <link
+       linkend="monitoring-pg-stat-database-view">
+       <structname>pg_stat_database</structname></link> are both similar to
+       <varname>read</varname> plus <varname>extended</varname> for all
+       <varname>io_context</varname>s for the following
+       <varname>backend_type</varname>s in <structname>pg_stat_io</structname>:
+       <itemizedlist>
+        <listitem><para><literal>autovacuum launcher</literal></para></listitem>
+        <listitem><para><literal>autovacuum worker</literal></para></listitem>
+        <listitem><para><literal>client backend</literal></para></listitem>
+        <listitem><para><literal>standalone backend</literal></para></listitem>
+        <listitem><para><literal>background worker</literal></para></listitem>
+        <listitem><para><literal>walsender</literal></para></listitem>
+       </itemizedlist>
+       The difference is that reads done as part of <command>CREATE
+       DATABASE</command> are not counted in
+       <structname>pg_statio_all_tables</structname> and
+       <structname>pg_stat_database</structname>.
+      </para>
+      </entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>written</structfield> <type>bigint</type></para>
+      <para>
+       Writes by a given <varname>backend_type</varname> of a given
+       <varname>io_object</varname> of data from a given
+       <varname>io_context</varname>.
+      </para>
+      <para>
+       Normal client backends should be able to rely on auxiliary processes
+       like the checkpointer and background writer to write out dirty data as
+       much as possible. Large numbers of writes by
+       <varname>backend_type</varname> <literal>client backend</literal> in
+       <varname>io_context</varname> <literal>normal</literal> and
+       <varname>io_object</varname> <literal>relation</literal> could indicate
+       a misconfiguration of shared buffers or of checkpointer. More
+       information on checkpointer configuration can be found in <xref
+       linkend="wal-configuration"/>.
+      </para>
+      <para>
+       Note that the values of <varname>written</varname> for
+       <varname>backend_type</varname> <literal>background writer</literal> and
+       <varname>backend_type</varname> <literal>checkpointer</literal> are
+       equivalent to the values of <varname>buffers_clean</varname> and
+       <varname>buffers_checkpoint</varname>, respectively, in <link
+       linkend="monitoring-pg-stat-bgwriter-view">
+       <structname>pg_stat_bgwriter</structname></link>.
+       <varname>buffers_backend</varname> in
+       <structname>pg_stat_bgwriter</structname> is equivalent to
+       <structname>pg_stat_io</structname>'s <varname>written</varname> plus
+       <varname>extended</varname> for <varname>io_context</varname>s
+       <literal>normal</literal>, <literal>bulkread</literal>,
+       <literal>bulkwrite</literal>, and <literal>vacuum</literal> on
+       <varname>io_object</varname> <literal>relation</literal> for
+       <varname>backend_type</varname>s:
+       <itemizedlist>
+        <listitem><para><literal>client backend</literal></para></listitem>
+        <listitem><para><literal>autovacuum worker</literal></para></listitem>
+        <listitem><para><literal>background worker</literal></para></listitem>
+        <listitem><para><literal>walsender</literal></para></listitem>
+       </itemizedlist>
+      </para>
+      </entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>extended</structfield> <type>bigint</type></para>
+      <para>
+       Extends of relations done by a given <varname>backend_type</varname> in
+       order to write data for a given <varname>io_object</varname> in a given
+       <varname>io_context</varname>.
+      </para>
+      </entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>op_bytes</structfield> <type>bigint</type></para>
+      <para>
+       The number of bytes per unit of IO read, written, or extended. For
+       block-oriented IO of relation data, reads, writes, and extends are done
+       in <varname>block_size</varname> units, derived from the build-time
+       parameter <symbol>BLCKSZ</symbol>, which is <literal>8192</literal> by
+       default.
+      </para>
+      </entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>evicted</structfield> <type>bigint</type></para>
+      <para>
+       Number of times a <varname>backend_type</varname> has evicted a block
+       from a shared or local buffer in order to reuse the buffer in this
+       <varname>io_context</varname>. Blocks are only evicted when there are no
+       unoccupied buffers.
+      </para>
+      <para>
+       <varname>evicted</varname> in <varname>io_context</varname>
+       <literal>normal</literal> and <varname>io_object</varname>
+       <literal>relation</literal> counts the number of times a block from a
+       shared buffer was evicted so that it can be replaced with another block,
+       also in shared buffers.
+      </para>
+      <para>
+       A high <varname>evicted</varname> count in <varname>io_context</varname>
+       <literal>normal</literal> and <varname>io_object</varname>
+       <literal>relation</literal> could indicate that shared buffers is too
+       small and should be set to a larger value.
+      </para>
+      <para>
+       <varname>evicted</varname> in <varname>io_context</varname>
+       <literal>vacuum</literal>, <literal>bulkread</literal>, and
+       <literal>bulkwrite</literal> counts the number of times occupied shared
+       buffers were added to the fixed-size strategy ring buffer, causing the
+       buffer contents to be evicted. If the current buffer in the ring is
+       pinned or in use by another backend, it may be replaced by a new shared
+       buffer. If this shared buffer contains valid data, that block must be
+       evicted and will count as <varname>evicted</varname>.
+      </para>
+      <para>
+       Seeing a large number of <varname>evicted</varname> in strategy
+       <varname>io_context</varname>s can provide insight into primary working
+       set cache misses.
+      </para>
+      </entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>reused</structfield> <type>bigint</type></para>
+      <para>
+       The number of times an existing buffer in the strategy ring was reused
+       as part of an operation in the <literal>bulkread</literal>,
+       <literal>bulkwrite</literal>, or <literal>vacuum</literal>
+       <varname>io_context</varname>s. When a Buffer Access Strategy reuses a
+       buffer in the strategy ring, it evicts the buffer contents, incrementing
+       <varname>reused</varname>. When a Buffer Access Strategy adds a new
+       shared buffer to the strategy ring and this shared buffer is occupied,
+       the Buffer Access Strategy must evict the contents of the shared buffer,
+       incrementing <varname>evicted</varname>.
+      </para>
+      </entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>files_synced</structfield> <type>bigint</type></para>
+      <para>
+       Number of files <literal>fsync</literal>ed by a given
+       <varname>backend_type</varname> for the purpose of persisting data from
+       a given <varname>io_object</varname> dirtied in a given
+       <varname>io_context</varname>. <literal>fsync</literal>s are done at
+       segment boundaries so <varname>op_bytes</varname> does not apply to the
+       <varname>files_synced</varname> column. <literal>fsync</literal>s done
+       by backends in order to persist data written in
+       <varname>io_context</varname> <literal>vacuum</literal>,
+       <varname>io_context</varname> <literal>bulkread</literal>, or
+       <varname>io_context</varname> <literal>bulkwrite</literal> are counted
+       as <varname>io_context</varname> <literal>normal</literal>
+       <varname>io_object</varname> <literal>relation</literal>
+       <varname>files_synced</varname>.
+      </para>
+      <para>
+       Normal client backends should be able to rely on the checkpointer to
+       ensure data is persisted to permanent storage. Large numbers of
+       <varname>files_synced</varname> by <varname>backend_type</varname>
+       <literal>client backend</literal> could indicate a misconfiguration of
+       shared buffers or of checkpointer. More information on checkpointer
+       configuration can be found in <xref linkend="wal-configuration"/>.
+      </para>
+      <para>
+       Note that the sum of <varname>files_synced</varname> for all
+       <varname>io_context</varname> <literal>normal</literal>
+       <varname>io_object</varname> <literal>relation</literal> for all
+       <varname>backend_type</varname>s except <literal>checkpointer</literal>
+       is equivalent to <varname>buffers_backend_fsync</varname> in <link
+       linkend="monitoring-pg-stat-bgwriter-view">
+       <structname>pg_stat_bgwriter</structname></link>.
+      </para>
+      </entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>stats_reset</structfield> <type>timestamp with time zone</type></para>
+      <para>
+       Time at which these statistics were last reset.
+      </para>
+      </entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
  </sect2>
 
  <sect2 id="monitoring-pg-stat-bgwriter-view">
@@ -5396,6 +5765,8 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
         the <structname>pg_stat_bgwriter</structname>
         view, <literal>archiver</literal> to reset all the counters shown in
         the <structname>pg_stat_archiver</structname> view,
+        <literal>io</literal> to reset all the counters shown in the
+        <structname>pg_stat_io</structname> view,
         <literal>wal</literal> to reset all the counters shown in the
         <structname>pg_stat_wal</structname> view or
         <literal>recovery_prefetch</literal> to reset all the counters shown

@@ -48,6 +48,7 @@ typedef enum PgStat_Kind
 	PGSTAT_KIND_ARCHIVER,
 	PGSTAT_KIND_BGWRITER,
 	PGSTAT_KIND_CHECKPOINTER,
+	PGSTAT_KIND_IOOPS,
 	PGSTAT_KIND_SLRU,
 	PGSTAT_KIND_WAL,
 } PgStat_Kind;
@@ -276,6 +277,69 @@ typedef struct PgStat_CheckpointerStats
 	PgStat_Counter buf_fsync_backend;
 } PgStat_CheckpointerStats;
 
+/*
+ * Types related to counting IO Operations for various IO Contexts.
+ * When adding a new value, ensure that the proper assertions are added to
+ * pgstat_io_context_ops_assert_zero() and pgstat_io_op_assert_zero() (though
+ * the compiler will remind you about the latter).
+ */
+
+typedef enum IOOp
+{
+	IOOP_EVICT,
+	IOOP_EXTEND,
+	IOOP_FSYNC,
+	IOOP_READ,
+	IOOP_REUSE,
+	IOOP_WRITE,
+} IOOp;
+
+#define IOOP_NUM_TYPES (IOOP_WRITE + 1)
+
+typedef enum IOObject
+{
+	IOOBJECT_RELATION,
+	IOOBJECT_TEMP_RELATION,
+} IOObject;
+
+#define IOOBJECT_NUM_TYPES (IOOBJECT_TEMP_RELATION + 1)
+
+typedef enum IOContext
+{
+	IOCONTEXT_BULKREAD,
+	IOCONTEXT_BULKWRITE,
+	IOCONTEXT_NORMAL,
+	IOCONTEXT_VACUUM,
+} IOContext;
+
+#define IOCONTEXT_NUM_TYPES (IOCONTEXT_VACUUM + 1)
+
+typedef struct PgStat_IOOpCounters
+{
+	PgStat_Counter evictions;
+	PgStat_Counter extends;
+	PgStat_Counter fsyncs;
+	PgStat_Counter reads;
+	PgStat_Counter reuses;
+	PgStat_Counter writes;
+} PgStat_IOOpCounters;
+
+typedef struct PgStat_IOObjectOps
+{
+	PgStat_IOOpCounters data[IOOBJECT_NUM_TYPES];
+} PgStat_IOObjectOps;
+
+typedef struct PgStat_IOContextOps
+{
+	PgStat_IOObjectOps data[IOCONTEXT_NUM_TYPES];
+} PgStat_IOContextOps;
+
+typedef struct PgStat_BackendIOContextOps
+{
+	TimestampTz stat_reset_timestamp;
+	PgStat_IOContextOps stats[BACKEND_NUM_TYPES];
+} PgStat_BackendIOContextOps;
+
 typedef struct PgStat_StatDBEntry
 {
 	PgStat_Counter xact_commit;
@@ -451,6 +515,69 @@ extern PgStat_BgWriterStats *pgstat_fetch_stat_bgwriter(void);
 
 extern void pgstat_report_checkpointer(void);
 extern PgStat_CheckpointerStats *pgstat_fetch_stat_checkpointer(void);
+
+
+/*
+ * Functions in pgstat_io_ops.c
+ */
+
+extern void pgstat_count_io_op(IOOp io_op, IOObject io_object, IOContext io_context);
+extern PgStat_BackendIOContextOps *pgstat_fetch_backend_io_context_ops(void);
+extern const char *pgstat_io_context_desc(IOContext io_context);
+extern const char *pgstat_io_object_desc(IOObject io_object);
+extern const char *pgstat_io_op_desc(IOOp io_op);
+
+/* Validation functions in pgstat_io_ops.c */
+extern bool pgstat_io_op_stats_collected(BackendType bktype);
+extern bool pgstat_bktype_io_context_io_object_valid(BackendType bktype,
+													 IOContext io_context, IOObject io_object);
+extern bool pgstat_io_op_valid(BackendType bktype, IOContext io_context,
+							   IOObject io_object, IOOp io_op);
+extern bool pgstat_expect_io_op(BackendType bktype,
+								IOContext io_context, IOObject io_object, IOOp io_op);
+
+/*
+ * Functions to assert that invalid IO Operation counters are zero.
+ */
+static inline void
+pgstat_io_context_ops_assert_zero(PgStat_IOOpCounters *counters)
+{
+	Assert(counters->evictions == 0);
+	Assert(counters->extends == 0);
+	Assert(counters->fsyncs == 0);
+	Assert(counters->reads == 0);
+	Assert(counters->reuses == 0);
+	Assert(counters->writes == 0);
+}
+
+static inline void
+pgstat_io_op_assert_zero(PgStat_IOOpCounters *counters, IOOp io_op)
+{
+	switch (io_op)
+	{
+		case IOOP_EVICT:
+			Assert(counters->evictions == 0);
+			return;
+		case IOOP_EXTEND:
+			Assert(counters->extends == 0);
+			return;
+		case IOOP_FSYNC:
+			Assert(counters->fsyncs == 0);
+			return;
+		case IOOP_READ:
+			Assert(counters->reads == 0);
+			return;
+		case IOOP_REUSE:
+			Assert(counters->reuses == 0);
+			return;
+		case IOOP_WRITE:
+			Assert(counters->writes == 0);
+			return;
+	}
+
+	/* Should not reach here */
+	Assert(false);
+}
 
 
 /*

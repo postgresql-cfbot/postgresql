@@ -66,6 +66,7 @@
 #include "postmaster/postmaster.h"
 #include "storage/dsm_impl.h"
 #include "storage/fd.h"
+#include "utils/backend_status.h"
 #include "utils/guc.h"
 #include "utils/memutils.h"
 
@@ -232,6 +233,14 @@ dsm_impl_posix(dsm_op op, dsm_handle handle, Size request_size,
 							name)));
 			return false;
 		}
+
+		/*
+		 * Detach and destroy pass through here, only decrease the memory
+		 * shown allocated in pg_stat_activity when the creator destroys the
+		 * allocation.
+		 */
+		if (op == DSM_OP_DESTROY)
+			pgstat_report_allocated_bytes(*mapped_size, PG_ALLOC_DECREASE);
 		*mapped_address = NULL;
 		*mapped_size = 0;
 		if (op == DSM_OP_DESTROY && shm_unlink(name) != 0)
@@ -331,6 +340,36 @@ dsm_impl_posix(dsm_op op, dsm_handle handle, Size request_size,
 				 errmsg("could not map shared memory segment \"%s\": %m",
 						name)));
 		return false;
+	}
+
+	/*
+	 * Attach and create pass through here, only update backend memory
+	 * allocated in pg_stat_activity for the creator process.
+	 */
+	if (op == DSM_OP_CREATE)
+	{
+		/*
+		 * Posix creation calls dsm_impl_posix_resize implying that resizing
+		 * occurs or may be added in the future. As implemented
+		 * dsm_impl_posix_resize utilizes fallocate or truncate, passing the
+		 * whole new size as input, growing the allocation as needed (only
+		 * truncate supports shrinking). We update by replacing the old
+		 * allocation with the new.
+		 */
+#if defined(HAVE_POSIX_FALLOCATE) && defined(__linux__)
+		/*
+		 * posix_fallocate does not shrink allocations, adjust only on
+		 * allocation increase.
+		 */
+		if (request_size > *mapped_size)
+		{
+			pgstat_report_allocated_bytes(request_size - *mapped_size,
+										  PG_ALLOC_INCREASE);
+		}
+#else
+		pgstat_report_allocated_bytes(*mapped_size, PG_ALLOC_DECREASE);
+		pgstat_report_allocated_bytes(request_size, PG_ALLOC_INCREASE);
+#endif
 	}
 	*mapped_address = address;
 	*mapped_size = request_size;
@@ -537,6 +576,14 @@ dsm_impl_sysv(dsm_op op, dsm_handle handle, Size request_size,
 							name)));
 			return false;
 		}
+
+		/*
+		 * Detach and destroy pass through here, only decrease the memory
+		 * shown allocated in pg_stat_activity when the creator destroys the
+		 * allocation.
+		 */
+		if (op == DSM_OP_DESTROY)
+			pgstat_report_allocated_bytes(*mapped_size, PG_ALLOC_DECREASE);
 		*mapped_address = NULL;
 		*mapped_size = 0;
 		if (op == DSM_OP_DESTROY && shmctl(ident, IPC_RMID, NULL) < 0)
@@ -584,6 +631,13 @@ dsm_impl_sysv(dsm_op op, dsm_handle handle, Size request_size,
 						name)));
 		return false;
 	}
+
+	/*
+	 * Attach and create pass through here, only update backend memory
+	 * allocated in pg_stat_activity for the creator process.
+	 */
+	if (op == DSM_OP_CREATE)
+		pgstat_report_allocated_bytes(request_size, PG_ALLOC_INCREASE);
 	*mapped_address = address;
 	*mapped_size = request_size;
 
@@ -652,6 +706,13 @@ dsm_impl_windows(dsm_op op, dsm_handle handle, Size request_size,
 			return false;
 		}
 
+		/*
+		 * Detach and destroy pass through here, only decrease the memory
+		 * shown allocated in pg_stat_activity when the creator destroys the
+		 * allocation.
+		 */
+		if (op == DSM_OP_DESTROY)
+			pgstat_report_allocated_bytes(*mapped_size, PG_ALLOC_DECREASE);
 		*impl_private = NULL;
 		*mapped_address = NULL;
 		*mapped_size = 0;
@@ -768,6 +829,12 @@ dsm_impl_windows(dsm_op op, dsm_handle handle, Size request_size,
 		return false;
 	}
 
+	/*
+	 * Attach and create pass through here, only update backend memory
+	 * allocated in pg_stat_activity for the creator process.
+	 */
+	if (op == DSM_OP_CREATE)
+		pgstat_report_allocated_bytes(info.RegionSize, PG_ALLOC_INCREASE);
 	*mapped_address = address;
 	*mapped_size = info.RegionSize;
 	*impl_private = hmap;
@@ -812,6 +879,13 @@ dsm_impl_mmap(dsm_op op, dsm_handle handle, Size request_size,
 							name)));
 			return false;
 		}
+
+		/*
+		 * Detach and destroy pass through here, only decrease the memory
+		 * shown allocated in pg_stat_activity when the creator destroys the
+		 * allocation.
+		 */
+		pgstat_report_allocated_bytes(*mapped_size, PG_ALLOC_DECREASE);
 		*mapped_address = NULL;
 		*mapped_size = 0;
 		if (op == DSM_OP_DESTROY && unlink(name) != 0)
@@ -933,6 +1007,13 @@ dsm_impl_mmap(dsm_op op, dsm_handle handle, Size request_size,
 						name)));
 		return false;
 	}
+
+	/*
+	 * Attach and create pass through here, only update backend memory
+	 * allocated in pg_stat_activity for the creator process.
+	 */
+	if (op == DSM_OP_CREATE)
+		pgstat_report_allocated_bytes(request_size, PG_ALLOC_INCREASE);
 	*mapped_address = address;
 	*mapped_size = request_size;
 

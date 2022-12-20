@@ -1030,6 +1030,63 @@ create_index_path(PlannerInfo *root,
 	return pathnode;
 }
 
+
+/*
+ * create_brinsort_path
+ *	  Creates a path node for sorted brin sort scan.
+ *
+ * 'index' is a usable index.
+ * 'indexclauses' is a list of IndexClause nodes representing clauses
+ *			to be enforced as qual conditions in the scan.
+ * 'indexorderbys' is a list of bare expressions (no RestrictInfos)
+ *			to be used as index ordering operators in the scan.
+ * 'indexorderbycols' is an integer list of index column numbers (zero based)
+ *			the ordering operators can be used with.
+ * 'pathkeys' describes the ordering of the path.
+ * 'indexscandir' is ForwardScanDirection or BackwardScanDirection
+ *			for an ordered index, or NoMovementScanDirection for
+ *			an unordered index.
+ * 'indexonly' is true if an index-only scan is wanted.
+ * 'required_outer' is the set of outer relids for a parameterized path.
+ * 'loop_count' is the number of repetitions of the indexscan to factor into
+ *		estimates of caching behavior.
+ * 'partial_path' is true if constructing a parallel index scan path.
+ *
+ * Returns the new path node.
+ */
+BrinSortPath *
+create_brinsort_path(PlannerInfo *root,
+					 IndexOptInfo *index,
+					 List *indexclauses,
+					 List *pathkeys,
+					 ScanDirection indexscandir,
+					 bool indexonly,
+					 Relids required_outer,
+					 double loop_count,
+					 bool partial_path)
+{
+	BrinSortPath  *pathnode = makeNode(BrinSortPath);
+	RelOptInfo *rel = index->rel;
+
+	pathnode->ipath.path.pathtype = T_BrinSort;
+	pathnode->ipath.path.parent = rel;
+	pathnode->ipath.path.pathtarget = rel->reltarget;
+	pathnode->ipath.path.param_info = get_baserel_parampathinfo(root, rel,
+														  required_outer);
+	pathnode->ipath.path.parallel_aware = false;
+	pathnode->ipath.path.parallel_safe = rel->consider_parallel;
+	pathnode->ipath.path.parallel_workers = 0;
+	pathnode->ipath.path.pathkeys = pathkeys;
+
+	pathnode->ipath.indexinfo = index;
+	pathnode->ipath.indexclauses = indexclauses;
+	pathnode->ipath.indexscandir = indexscandir;
+
+	cost_brinsort(pathnode, root, loop_count, partial_path);
+
+	return pathnode;
+}
+
 /*
  * create_bitmap_heap_path
  *	  Creates a path node for a bitmap scan.

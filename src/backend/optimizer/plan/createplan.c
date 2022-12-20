@@ -124,6 +124,8 @@ static SampleScan *create_samplescan_plan(PlannerInfo *root, Path *best_path,
 										  List *tlist, List *scan_clauses);
 static Scan *create_indexscan_plan(PlannerInfo *root, IndexPath *best_path,
 								   List *tlist, List *scan_clauses, bool indexonly);
+static BrinSort *create_brinsort_plan(PlannerInfo *root, BrinSortPath *best_path,
+									  List *tlist, List *scan_clauses);
 static BitmapHeapScan *create_bitmap_scan_plan(PlannerInfo *root,
 											   BitmapHeapPath *best_path,
 											   List *tlist, List *scan_clauses);
@@ -191,6 +193,9 @@ static IndexOnlyScan *make_indexonlyscan(List *qptlist, List *qpqual,
 										 List *indexorderby,
 										 List *indextlist,
 										 ScanDirection indexscandir);
+static BrinSort *make_brinsort(List *qptlist, List *qpqual, Index scanrelid,
+							   Oid indexid, List *indexqual, List *indexqualorig,
+							   ScanDirection indexscandir);
 static BitmapIndexScan *make_bitmap_indexscan(Index scanrelid, Oid indexid,
 											  List *indexqual,
 											  List *indexqualorig);
@@ -408,6 +413,9 @@ create_plan_recurse(PlannerInfo *root, Path *best_path, int flags)
 		case T_NamedTuplestoreScan:
 		case T_ForeignScan:
 		case T_CustomScan:
+			plan = create_scan_plan(root, best_path, flags);
+			break;
+		case T_BrinSort:
 			plan = create_scan_plan(root, best_path, flags);
 			break;
 		case T_HashJoin:
@@ -774,6 +782,13 @@ create_scan_plan(PlannerInfo *root, Path *best_path, int flags)
 												   (CustomPath *) best_path,
 												   tlist,
 												   scan_clauses);
+			break;
+
+		case T_BrinSort:
+			plan = (Plan *) create_brinsort_plan(root,
+												 (BrinSortPath *) best_path,
+												 tlist,
+												 scan_clauses);
 			break;
 
 		default:
@@ -3183,6 +3198,154 @@ create_indexscan_plan(PlannerInfo *root,
 }
 
 /*
+ * create_brinsort_plan
+ *	  Returns a brinsort plan for the base relation scanned by 'best_path'
+ *	  with restriction clauses 'scan_clauses' and targetlist 'tlist'.
+ *
+ * This is mostly a slighly simplified version of create_indexscan_plan, with
+ * the unecessary parts removed (we don't support indexonly scans, or reordering
+ * and similar stuff).
+ */
+static BrinSort *
+create_brinsort_plan(PlannerInfo *root,
+					 BrinSortPath *best_path,
+					 List *tlist,
+					 List *scan_clauses)
+{
+	BrinSort   *brinsort_plan;
+	List	   *indexclauses = best_path->ipath.indexclauses;
+	Index		baserelid = best_path->ipath.path.parent->relid;
+	IndexOptInfo *indexinfo = best_path->ipath.indexinfo;
+	Oid			indexoid = indexinfo->indexoid;
+	List	   *qpqual;
+	List	   *stripped_indexquals;
+	List	   *fixed_indexquals;
+	ListCell   *l;
+
+	List	   *pathkeys = best_path->ipath.path.pathkeys;
+
+	/* it should be a base rel... */
+	Assert(baserelid > 0);
+	Assert(best_path->ipath.path.parent->rtekind == RTE_RELATION);
+
+	/*
+	 * Extract the index qual expressions (stripped of RestrictInfos) from the
+	 * IndexClauses list, and prepare a copy with index Vars substituted for
+	 * table Vars.  (This step also does replace_nestloop_params on the
+	 * fixed_indexquals.)
+	 */
+	fix_indexqual_references(root, &best_path->ipath,
+							 &stripped_indexquals,
+							 &fixed_indexquals);
+
+	/*
+	 * The qpqual list must contain all restrictions not automatically handled
+	 * by the index, other than pseudoconstant clauses which will be handled
+	 * by a separate gating plan node.  All the predicates in the indexquals
+	 * will be checked (either by the index itself, or by nodeIndexscan.c),
+	 * but if there are any "special" operators involved then they must be
+	 * included in qpqual.  The upshot is that qpqual must contain
+	 * scan_clauses minus whatever appears in indexquals.
+	 *
+	 * is_redundant_with_indexclauses() detects cases where a scan clause is
+	 * present in the indexclauses list or is generated from the same
+	 * EquivalenceClass as some indexclause, and is therefore redundant with
+	 * it, though not equal.  (The latter happens when indxpath.c prefers a
+	 * different derived equality than what generate_join_implied_equalities
+	 * picked for a parameterized scan's ppi_clauses.)  Note that it will not
+	 * match to lossy index clauses, which is critical because we have to
+	 * include the original clause in qpqual in that case.
+	 *
+	 * In some situations (particularly with OR'd index conditions) we may
+	 * have scan_clauses that are not equal to, but are logically implied by,
+	 * the index quals; so we also try a predicate_implied_by() check to see
+	 * if we can discard quals that way.  (predicate_implied_by assumes its
+	 * first input contains only immutable functions, so we have to check
+	 * that.)
+	 *
+	 * Note: if you change this bit of code you should also look at
+	 * extract_nonindex_conditions() in costsize.c.
+	 */
+	qpqual = NIL;
+	foreach(l, scan_clauses)
+	{
+		RestrictInfo *rinfo = lfirst_node(RestrictInfo, l);
+
+		if (rinfo->pseudoconstant)
+			continue;			/* we may drop pseudoconstants here */
+		if (is_redundant_with_indexclauses(rinfo, indexclauses))
+			continue;			/* dup or derived from same EquivalenceClass */
+		if (!contain_mutable_functions((Node *) rinfo->clause) &&
+			predicate_implied_by(list_make1(rinfo->clause), stripped_indexquals,
+								 false))
+			continue;			/* provably implied by indexquals */
+		qpqual = lappend(qpqual, rinfo);
+	}
+
+	/* Sort clauses into best execution order */
+	qpqual = order_qual_clauses(root, qpqual);
+
+	/* Reduce RestrictInfo list to bare expressions; ignore pseudoconstants */
+	qpqual = extract_actual_clauses(qpqual, false);
+
+	/*
+	 * We have to replace any outer-relation variables with nestloop params in
+	 * the indexqualorig, qpqual, and indexorderbyorig expressions.  A bit
+	 * annoying to have to do this separately from the processing in
+	 * fix_indexqual_references --- rethink this when generalizing the inner
+	 * indexscan support.  But note we can't really do this earlier because
+	 * it'd break the comparisons to predicates above ... (or would it?  Those
+	 * wouldn't have outer refs)
+	 */
+	if (best_path->ipath.path.param_info)
+	{
+		stripped_indexquals = (List *)
+			replace_nestloop_params(root, (Node *) stripped_indexquals);
+		qpqual = (List *)
+			replace_nestloop_params(root, (Node *) qpqual);
+	}
+
+	/* Finally ready to build the plan node */
+	brinsort_plan = make_brinsort(tlist,
+								  qpqual,
+								  baserelid,
+								  indexoid,
+								  fixed_indexquals,
+								  stripped_indexquals,
+								  best_path->ipath.indexscandir);
+
+	if (pathkeys != NIL)
+	{
+		/*
+		 * Compute sort column info, and adjust the Append's tlist as needed.
+		 * Because we pass adjust_tlist_in_place = true, we may ignore the
+		 * function result; it must be the same plan node.  However, we then
+		 * need to detect whether any tlist entries were added.
+		 */
+		(void) prepare_sort_from_pathkeys((Plan *) brinsort_plan, pathkeys,
+										  best_path->ipath.path.parent->relids,
+										  NULL,
+										  true,
+										  &brinsort_plan->numCols,
+										  &brinsort_plan->sortColIdx,
+										  &brinsort_plan->sortOperators,
+										  &brinsort_plan->collations,
+										  &brinsort_plan->nullsFirst);
+		//tlist_was_changed = (orig_tlist_length != list_length(plan->plan.targetlist));
+		for (int i = 0; i < brinsort_plan->numCols; i++)
+			elog(DEBUG1, "%d => %d %d %d %d", i,
+				 brinsort_plan->sortColIdx[i],
+				 brinsort_plan->sortOperators[i],
+				 brinsort_plan->collations[i],
+				 brinsort_plan->nullsFirst[i]);
+	}
+
+	copy_generic_path_info(&brinsort_plan->scan.plan, &best_path->ipath.path);
+
+	return brinsort_plan;
+}
+
+/*
  * create_bitmap_scan_plan
  *	  Returns a bitmap scan plan for the base relation scanned by 'best_path'
  *	  with restriction clauses 'scan_clauses' and targetlist 'tlist'.
@@ -5523,6 +5686,31 @@ make_indexscan(List *qptlist,
 	node->indexorderby = indexorderby;
 	node->indexorderbyorig = indexorderbyorig;
 	node->indexorderbyops = indexorderbyops;
+	node->indexorderdir = indexscandir;
+
+	return node;
+}
+
+static BrinSort *
+make_brinsort(List *qptlist,
+			   List *qpqual,
+			   Index scanrelid,
+			   Oid indexid,
+			   List *indexqual,
+			   List *indexqualorig,
+			   ScanDirection indexscandir)
+{
+	BrinSort  *node = makeNode(BrinSort);
+	Plan	   *plan = &node->scan.plan;
+
+	plan->targetlist = qptlist;
+	plan->qual = qpqual;
+	plan->lefttree = NULL;
+	plan->righttree = NULL;
+	node->scan.scanrelid = scanrelid;
+	node->indexid = indexid;
+	node->indexqual = indexqual;
+	node->indexqualorig = indexqualorig;
 	node->indexorderdir = indexscandir;
 
 	return node;

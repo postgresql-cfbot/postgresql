@@ -501,6 +501,32 @@ typedef struct IndexOnlyScan
 	ScanDirection indexorderdir;	/* forward or backward or don't care */
 } IndexOnlyScan;
 
+
+typedef struct BrinSort
+{
+	Scan		scan;
+	Oid			indexid;		/* OID of index to scan */
+	List	   *indexqual;		/* list of index quals (usually OpExprs) */
+	List	   *indexqualorig;	/* the same in original form */
+	ScanDirection indexorderdir;	/* forward or backward or don't care */
+
+	/* number of sort-key columns */
+	int			numCols;
+
+	/* their indexes in the target list */
+	AttrNumber *sortColIdx pg_node_attr(array_size(numCols));
+
+	/* OIDs of operators to sort them by */
+	Oid		   *sortOperators pg_node_attr(array_size(numCols));
+
+	/* OIDs of collations */
+	Oid		   *collations pg_node_attr(array_size(numCols));
+
+	/* NULLS FIRST/LAST directions */
+	bool	   *nullsFirst pg_node_attr(array_size(numCols));
+
+} BrinSort;
+
 /* ----------------
  *		bitmap index scan node
  *

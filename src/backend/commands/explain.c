@@ -85,6 +85,8 @@ static void show_sort_keys(SortState *sortstate, List *ancestors,
 						   ExplainState *es);
 static void show_incremental_sort_keys(IncrementalSortState *incrsortstate,
 									   List *ancestors, ExplainState *es);
+static void show_brinsort_keys(BrinSortState *sortstate, List *ancestors,
+							   ExplainState *es);
 static void show_merge_append_keys(MergeAppendState *mstate, List *ancestors,
 								   ExplainState *es);
 static void show_agg_keys(AggState *astate, List *ancestors,
@@ -1100,6 +1102,7 @@ ExplainPreScanNode(PlanState *planstate, Bitmapset **rels_used)
 		case T_IndexScan:
 		case T_IndexOnlyScan:
 		case T_BitmapHeapScan:
+		case T_BrinSort:
 		case T_TidScan:
 		case T_TidRangeScan:
 		case T_SubqueryScan:
@@ -1261,6 +1264,9 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			break;
 		case T_IndexOnlyScan:
 			pname = sname = "Index Only Scan";
+			break;
+		case T_BrinSort:
+			pname = sname = "BRIN Sort";
 			break;
 		case T_BitmapIndexScan:
 			pname = sname = "Bitmap Index Scan";
@@ -1506,6 +1512,16 @@ ExplainNode(PlanState *planstate, List *ancestors,
 										indexonlyscan->indexorderdir,
 										es);
 				ExplainScanTarget((Scan *) indexonlyscan, es);
+			}
+			break;
+		case T_BrinSort:
+			{
+				BrinSort  *brinsort = (BrinSort *) plan;
+
+				ExplainIndexScanDetails(brinsort->indexid,
+										brinsort->indexorderdir,
+										es);
+				ExplainScanTarget((Scan *) brinsort, es);
 			}
 			break;
 		case T_BitmapIndexScan:
@@ -1789,6 +1805,18 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			if (es->analyze)
 				ExplainPropertyFloat("Heap Fetches", NULL,
 									 planstate->instrument->ntuples2, 0, es);
+			break;
+		case T_BrinSort:
+			show_scan_qual(((BrinSort *) plan)->indexqualorig,
+						   "Index Cond", planstate, ancestors, es);
+			if (((BrinSort *) plan)->indexqualorig)
+				show_instrumentation_count("Rows Removed by Index Recheck", 2,
+										   planstate, es);
+			show_scan_qual(plan->qual, "Filter", planstate, ancestors, es);
+			show_brinsort_keys(castNode(BrinSortState, planstate), ancestors, es);
+			if (plan->qual)
+				show_instrumentation_count("Rows Removed by Filter", 1,
+										   planstate, es);
 			break;
 		case T_BitmapIndexScan:
 			show_scan_qual(((BitmapIndexScan *) plan)->indexqualorig,
@@ -2386,6 +2414,21 @@ show_incremental_sort_keys(IncrementalSortState *incrsortstate,
 						 plan->sort.sortColIdx,
 						 plan->sort.sortOperators, plan->sort.collations,
 						 plan->sort.nullsFirst,
+						 ancestors, es);
+}
+
+/*
+ * Show the sort keys for a BRIN Sort node.
+ */
+static void
+show_brinsort_keys(BrinSortState *sortstate, List *ancestors, ExplainState *es)
+{
+	BrinSort	   *plan = (BrinSort *) sortstate->ss.ps.plan;
+
+	show_sort_group_keys((PlanState *) sortstate, "Sort Key",
+						 plan->numCols, 0, plan->sortColIdx,
+						 plan->sortOperators, plan->collations,
+						 plan->nullsFirst,
 						 ancestors, es);
 }
 
@@ -3812,6 +3855,7 @@ ExplainTargetRel(Plan *plan, Index rti, ExplainState *es)
 		case T_ForeignScan:
 		case T_CustomScan:
 		case T_ModifyTable:
+		case T_BrinSort:
 			/* Assert it's on a real relation */
 			Assert(rte->rtekind == RTE_RELATION);
 			objectname = get_rel_name(rte->relid);

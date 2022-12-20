@@ -79,6 +79,7 @@
 #include "executor/nodeBitmapHeapscan.h"
 #include "executor/nodeBitmapIndexscan.h"
 #include "executor/nodeBitmapOr.h"
+#include "executor/nodeBrinSort.h"
 #include "executor/nodeCtescan.h"
 #include "executor/nodeCustom.h"
 #include "executor/nodeForeignscan.h"
@@ -224,6 +225,11 @@ ExecInitNode(Plan *node, EState *estate, int eflags)
 		case T_IndexOnlyScan:
 			result = (PlanState *) ExecInitIndexOnlyScan((IndexOnlyScan *) node,
 														 estate, eflags);
+			break;
+
+		case T_BrinSort:
+			result = (PlanState *) ExecInitBrinSort((BrinSort *) node,
+													estate, eflags);
 			break;
 
 		case T_BitmapIndexScan:
@@ -637,6 +643,10 @@ ExecEndNode(PlanState *node)
 
 		case T_IndexOnlyScanState:
 			ExecEndIndexOnlyScan((IndexOnlyScanState *) node);
+			break;
+
+		case T_BrinSortState:
+			ExecEndBrinSort((BrinSortState *) node);
 			break;
 
 		case T_BitmapIndexScanState:

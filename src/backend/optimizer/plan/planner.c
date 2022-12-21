@@ -611,6 +611,21 @@ subquery_planner(PlannerGlobal *glob, Query *parse,
 	RelOptInfo *final_rel;
 	ListCell   *l;
 
+	for (int align = 8; align <= 8192; align *= 2)
+	{
+		void *a = palloc0(512);
+		void *p = palloc_aligned(512, align, 0);
+		memset(p, 0, 512);
+
+		Assert(memcmp(p, a, 512) == 0);
+		p = repalloc(p, 1024);
+		Assert(memcmp(p, a, 512) == 0);
+		p = repalloc(p, 256);
+		Assert(memcmp(p, a, 256) == 0);
+		pfree(a);
+		pfree(p);
+	}
+
 	/* Create a PlannerInfo data structure for this subquery */
 	root = makeNode(PlannerInfo);
 	root->parse = parse;

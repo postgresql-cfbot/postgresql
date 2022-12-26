@@ -1691,13 +1691,14 @@ apply_handle_insert(StringInfo s)
 
 	relid = logicalrep_read_insert(s, &newtup);
 	rel = logicalrep_rel_open(relid, RowExclusiveLock);
-	if (!should_apply_changes_for_rel(rel))
+	if (!rel || !should_apply_changes_for_rel(rel))
 	{
 		/*
 		 * The relation can't become interesting in the middle of the
 		 * transaction so it's safe to unlock it.
 		 */
-		logicalrep_rel_close(rel, RowExclusiveLock);
+		if (rel)
+			logicalrep_rel_close(rel, RowExclusiveLock);
 		end_replication_step();
 		return;
 	}
@@ -1832,13 +1833,14 @@ apply_handle_update(StringInfo s)
 	relid = logicalrep_read_update(s, &has_oldtup, &oldtup,
 								   &newtup);
 	rel = logicalrep_rel_open(relid, RowExclusiveLock);
-	if (!should_apply_changes_for_rel(rel))
+	if (!rel || !should_apply_changes_for_rel(rel))
 	{
 		/*
 		 * The relation can't become interesting in the middle of the
 		 * transaction so it's safe to unlock it.
 		 */
-		logicalrep_rel_close(rel, RowExclusiveLock);
+		if (rel)
+			logicalrep_rel_close(rel, RowExclusiveLock);
 		end_replication_step();
 		return;
 	}
@@ -2001,13 +2003,14 @@ apply_handle_delete(StringInfo s)
 
 	relid = logicalrep_read_delete(s, &oldtup);
 	rel = logicalrep_rel_open(relid, RowExclusiveLock);
-	if (!should_apply_changes_for_rel(rel))
+	if (!rel || !should_apply_changes_for_rel(rel))
 	{
 		/*
 		 * The relation can't become interesting in the middle of the
 		 * transaction so it's safe to unlock it.
 		 */
-		logicalrep_rel_close(rel, RowExclusiveLock);
+		if (rel)
+			logicalrep_rel_close(rel, RowExclusiveLock);
 		end_replication_step();
 		return;
 	}
@@ -2421,13 +2424,14 @@ apply_handle_truncate(StringInfo s)
 		LogicalRepRelMapEntry *rel;
 
 		rel = logicalrep_rel_open(relid, lockmode);
-		if (!should_apply_changes_for_rel(rel))
+		if (!rel || !should_apply_changes_for_rel(rel))
 		{
 			/*
 			 * The relation can't become interesting in the middle of the
 			 * transaction so it's safe to unlock it.
 			 */
-			logicalrep_rel_close(rel, lockmode);
+			if (rel)
+				logicalrep_rel_close(rel, lockmode);
 			continue;
 		}
 

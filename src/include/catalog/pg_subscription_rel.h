@@ -89,5 +89,6 @@ extern void RemoveSubscriptionRel(Oid subid, Oid relid);
 
 extern bool HasSubscriptionRelations(Oid subid);
 extern List *GetSubscriptionRelations(Oid subid, bool not_ready);
+extern bool CheckSubscriptionRelation(Oid subid, Oid relid);
 
 #endif							/* PG_SUBSCRIPTION_REL_H */

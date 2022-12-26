@@ -384,6 +384,18 @@ logicalrep_rel_open(LogicalRepRelId remoteid, LOCKMODE lockmode)
 		relid = RangeVarGetRelid(makeRangeVar(remoterel->nspname,
 											  remoterel->relname, -1),
 								 lockmode, true);
+
+		/* Check if relation really exists for the subscription. */
+		if (!CheckSubscriptionRelation(MySubscription->oid, relid))
+		{
+			ereport(WARNING,
+					errmsg("Subscription \"%s\" does not have a relation named \"%s.%s\".",
+						   MySubscription->name, remoterel->nspname, remoterel->relname),
+					errhint("Try to run \"ALTER SUBSCRIPTION %s REFRESH PUBLICATION\".",
+							MySubscription->name));
+			return NULL;
+		}
+
 		if (!OidIsValid(relid))
 			ereport(ERROR,
 					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),

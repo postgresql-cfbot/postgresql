@@ -543,3 +543,37 @@ GetSubscriptionRelations(Oid subid, bool not_ready)
 
 	return res;
 }
+
+/*
+ * Check whether the subscription has the given relation.
+ *
+ * Returns true if the relation exists in the subscription, false otherwise.
+ */
+bool
+CheckSubscriptionRelation(Oid subid, Oid relid)
+{
+	HeapTuple	tup;
+	Relation	rel;
+	bool		result = false;
+
+	/*
+	 * This is to avoid the race condition with AlterSubscription which tries
+	 * to remove this relstate.
+	 */
+	rel = table_open(SubscriptionRelRelationId, AccessShareLock);
+
+	/* Try finding the mapping. */
+	tup = SearchSysCacheCopy2(SUBSCRIPTIONRELMAP,
+							  ObjectIdGetDatum(relid),
+							  ObjectIdGetDatum(subid));
+
+	if (HeapTupleIsValid(tup))
+	{
+		result = true;
+	}
+
+	/* Cleanup */
+	table_close(rel, AccessShareLock);
+
+	return result;
+}

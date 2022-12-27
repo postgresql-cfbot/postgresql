@@ -44,6 +44,8 @@ sub filter_dump
 	$dump_contents =~ s/^\-\-.*//mgx;
 	# Remove empty lines.
 	$dump_contents =~ s/^\n//mgx;
+	# Replace specific privilegies with ALL
+	$dump_contents =~ s/^(GRANT\s|REVOKE\s)(\S*)\s/$1ALL /mgx;
 
 	# Apply custom filtering rules, if any.
 	if (defined($ENV{filter_rules}))
@@ -68,6 +70,30 @@ sub filter_dump
 			eval $filter;
 		}
 		close $filter_handle;
+	}
+
+	if (defined($ENV{filter}))
+	{
+		# Use the external filter
+		my $ext_filter_file = $ENV{filter};
+		die "no file with external filter found!" unless -e $ext_filter_file;
+
+		open my $ext_filter_handle, '<', $ext_filter_file;
+		chomp(my @ext_filter_lines = <$ext_filter_handle>);
+		close $ext_filter_handle;
+
+		foreach (@ext_filter_lines)
+		{
+			# omit lines with comments
+			if (substr($_, 0, 1) eq '#')
+			{
+				next;
+			}
+
+			# apply lines with filters
+			my $filter = "\$dump_contents =~ $_";
+			eval $filter;
+		}
 	}
 
 	my $dump_file_filtered = "${dump_file}_filtered";

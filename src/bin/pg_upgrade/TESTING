@@ -71,3 +71,12 @@ Once the dump is created, it can be repeatedly used with $olddump and
 the dump out of the new database and the comparison of the dumps between
 the old and new databases.  The contents of the dumps can also be manually
 compared.
+
+You can use additional dump filtering. To do this, you need to define the
+'filter' environment variable and specify the path to the file with
+filtering rules in it. Here is an example contens of such a file:
+# examples:
+# Remove all CREATE POLICY statements
+s/^CREATE\sPOLICY.*//mgx
+# Replace REFRESH with DROP for materialized views
+s/^REFRESH\s(MATERIALIZED\sVIEW)/DROP $1/mgx

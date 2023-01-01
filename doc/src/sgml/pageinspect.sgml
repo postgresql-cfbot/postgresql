@@ -348,6 +348,53 @@ btpo_flags    | 3
 
    <varlistentry>
     <term>
+     <function>bt_multi_page_stats(relname text, blkno bigint, blk_count bigint) returns setof record</function>
+     <indexterm>
+      <primary>bt_multi_page_stats</primary>
+     </indexterm>
+    </term>
+
+    <listitem>
+     <para>
+      <function>bt_multi_page_stats</function> returns summary information
+      about the <structfield>blk_count</structfield> number of B-tree index
+      pages starting from <structfield>blkno</structfield> page.  A value of
+      <literal>-1</literal> for <structfield>blk_count</structfield> returns
+      summary information for all index pages starting from
+      <structfield>blkno</structfield> page.  For example:
+<screen>
+test=# SELECT * FROM bt_multi_page_stats('pg_proc_oid_index', 5, 2);
+-[ RECORD 1 ]-+-----
+blkno         | 5
+type          | l
+live_items    | 367
+dead_items    | 0
+avg_item_size | 16
+page_size     | 8192
+free_size     | 808
+btpo_prev     | 4
+btpo_next     | 6
+btpo_level    | 0
+btpo_flags    | 1
+-[ RECORD 2 ]-+-----
+blkno         | 6
+type          | l
+live_items    | 367
+dead_items    | 0
+avg_item_size | 16
+page_size     | 8192
+free_size     | 808
+btpo_prev     | 5
+btpo_next     | 7
+btpo_level    | 0
+btpo_flags    | 1
+</screen>
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term>
      <function>bt_page_items(relname text, blkno bigint) returns setof record</function>
      <indexterm>
       <primary>bt_page_items</primary>

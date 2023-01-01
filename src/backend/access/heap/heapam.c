@@ -452,31 +452,118 @@ heapgetpage(TableScanDesc sscan, BlockNumber block)
 	 */
 	all_visible = PageIsAllVisible(page) && !snapshot->takenDuringRecovery;
 
-	for (lineoff = FirstOffsetNumber, lpp = PageGetItemId(page, lineoff);
-		 lineoff <= lines;
-		 lineoff++, lpp++)
+	if (all_visible)
 	{
-		if (ItemIdIsNormal(lpp))
-		{
-			HeapTupleData loctup;
-			bool		valid;
+		HeapTupleData loctup;
 
-			loctup.t_tableOid = RelationGetRelid(scan->rs_base.rs_rd);
+		loctup.t_tableOid = RelationGetRelid(scan->rs_base.rs_rd);
+
+		for (lineoff = FirstOffsetNumber, lpp = PageGetItemId(page, lineoff);
+			 lineoff <= lines;
+			 lineoff++, lpp++)
+		{
+			if (!ItemIdIsNormal(lpp))
+				continue;
+
 			loctup.t_data = (HeapTupleHeader) PageGetItem(page, lpp);
 			loctup.t_len = ItemIdGetLength(lpp);
 			ItemPointerSet(&(loctup.t_self), block, lineoff);
 
-			if (all_visible)
-				valid = true;
-			else
-				valid = HeapTupleSatisfiesVisibility(&loctup, snapshot, buffer);
+			HeapCheckForSerializableConflictOut(true, scan->rs_base.rs_rd,
+												&loctup, buffer, snapshot);
+			scan->rs_vistuples[ntup++] = lineoff;
+		}
+		scan->rs_startindex = 0;
+	}
+	else
+	{
+		HeapTupleData loctup;
+		int			normcount = 0;
+		int			startindex = MaxHeapTuplesPerPage;
+		OffsetNumber normoffsets[MaxHeapTuplesPerPage];
+
+		loctup.t_tableOid = RelationGetRelid(scan->rs_base.rs_rd);
+
+		/*
+		 * Iterate forward over line items processing 16 at a time (this
+		 * assumes there will be 16 ItemIds per CPU cacheline.
+		 */
+		for (lineoff = FirstOffsetNumber, lpp = PageGetItemId(page, lineoff);
+			 lineoff <= lines - 15;
+			 lineoff += 16, lpp += 16)
+		{
+			pg_prefetch_mem(PageGetItemId(page, lineoff + 16));
+			if (ItemIdIsNormal(lpp))
+				normoffsets[normcount++] = lineoff;
+			if (ItemIdIsNormal(lpp + 1))
+				normoffsets[normcount++] = lineoff + 1;
+			if (ItemIdIsNormal(lpp + 2))
+				normoffsets[normcount++] = lineoff + 2;
+			if (ItemIdIsNormal(lpp + 3))
+				normoffsets[normcount++] = lineoff + 3;
+			if (ItemIdIsNormal(lpp + 4))
+				normoffsets[normcount++] = lineoff + 4;
+			if (ItemIdIsNormal(lpp + 5))
+				normoffsets[normcount++] = lineoff + 5;
+			if (ItemIdIsNormal(lpp + 6))
+				normoffsets[normcount++] = lineoff + 6;
+			if (ItemIdIsNormal(lpp + 7))
+				normoffsets[normcount++] = lineoff + 7;
+			if (ItemIdIsNormal(lpp + 8))
+				normoffsets[normcount++] = lineoff + 8;
+			if (ItemIdIsNormal(lpp + 9))
+				normoffsets[normcount++] = lineoff + 9;
+			if (ItemIdIsNormal(lpp + 10))
+				normoffsets[normcount++] = lineoff + 10;
+			if (ItemIdIsNormal(lpp + 11))
+				normoffsets[normcount++] = lineoff + 11;
+			if (ItemIdIsNormal(lpp + 12))
+				normoffsets[normcount++] = lineoff + 12;
+			if (ItemIdIsNormal(lpp + 13))
+				normoffsets[normcount++] = lineoff + 13;
+			if (ItemIdIsNormal(lpp + 14))
+				normoffsets[normcount++] = lineoff + 14;
+			if (ItemIdIsNormal(lpp + 15))
+				normoffsets[normcount++] = lineoff + 15;
+		}
+
+		/* get remainder */
+		for (; lineoff <= lines; lineoff++, lpp++)
+		{
+			if (ItemIdIsNormal(lpp))
+				normoffsets[normcount++] = lineoff;
+		}
+
+		/*
+		 * Process tuples in reverse order. That'll most often lead to memory
+		 * accesses in increasing order, which typically is more efficient for
+		 * the CPUs prefetcher. To avoid affecting sort order, we populate the
+		 * rs_vistuples[] array backwards and use rs_startindex to mark the
+		 * first used element in the array.
+		 */
+		for (int i = normcount - 1; i >= 0; i--)
+		{
+			bool valid;
+
+			lineoff = normoffsets[i];
+			lpp = PageGetItemId(page, lineoff);
+
+			loctup.t_data = (HeapTupleHeader) PageGetItem(page, lpp);
+			loctup.t_len = ItemIdGetLength(lpp);
+			ItemPointerSet(&(loctup.t_self), block, lineoff);
+			valid = HeapTupleSatisfiesVisibility(&loctup, snapshot, buffer);
 
 			HeapCheckForSerializableConflictOut(valid, scan->rs_base.rs_rd,
 												&loctup, buffer, snapshot);
 
 			if (valid)
-				scan->rs_vistuples[ntup++] = lineoff;
+			{
+				scan->rs_vistuples[--startindex] = lineoff;
+				ntup++;
+			}
 		}
+		/* record the first used element in rs_vistuples[] */
+		scan->rs_startindex = startindex;
 	}
 
 	LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
@@ -903,7 +990,7 @@ heapgettup_pagemode(HeapScanDesc scan,
 			else
 				block = scan->rs_startblock; /* first page */
 			heapgetpage((TableScanDesc) scan, block);
-			lineindex = 0;
+			lineindex = scan->rs_startindex;
 			scan->rs_inited = true;
 		}
 		else
@@ -918,7 +1005,7 @@ heapgettup_pagemode(HeapScanDesc scan,
 		lines = scan->rs_ntuples;
 		/* block and lineindex now reference the next visible tid */
 
-		linesleft = lines - lineindex;
+		linesleft = lines - lineindex + scan->rs_startindex;
 	}
 	else if (backward)
 	{
@@ -969,7 +1056,7 @@ heapgettup_pagemode(HeapScanDesc scan,
 
 		if (!scan->rs_inited)
 		{
-			lineindex = lines - 1;
+			lineindex = scan->rs_startindex + lines - 1;
 			scan->rs_inited = true;
 		}
 		else
@@ -978,7 +1065,7 @@ heapgettup_pagemode(HeapScanDesc scan,
 		}
 		/* block and lineindex now reference the previous visible tid */
 
-		linesleft = lineindex + 1;
+		linesleft = lineindex + 1 - scan->rs_startindex;
 	}
 	else
 	{
@@ -1028,6 +1115,17 @@ heapgettup_pagemode(HeapScanDesc scan,
 			tuple->t_data = (HeapTupleHeader) PageGetItem(page, lpp);
 			tuple->t_len = ItemIdGetLength(lpp);
 			ItemPointerSet(&(tuple->t_self), block, lineoff);
+
+			/*
+			 * Prefetching the memory for the next tuple has shown to improve
+			 * performance on certain hardware.
+			 */
+			if (!backward && linesleft > 1)
+			{
+				lineoff = scan->rs_vistuples[lineindex + 1];
+				lpp = PageGetItemId(page, lineoff);
+				pg_prefetch_mem(PageGetItem(page, lpp));
+			}
 
 			/*
 			 * if current tuple qualifies, return it.
@@ -1128,9 +1226,9 @@ heapgettup_pagemode(HeapScanDesc scan,
 		lines = scan->rs_ntuples;
 		linesleft = lines;
 		if (backward)
-			lineindex = lines - 1;
+			lineindex = MaxHeapTuplesPerPage - 1;
 		else
-			lineindex = 0;
+			lineindex = scan->rs_startindex;
 	}
 }
 

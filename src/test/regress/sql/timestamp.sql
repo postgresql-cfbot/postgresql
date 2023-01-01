@@ -49,6 +49,10 @@ INSERT INTO TIMESTAMP_TBL VALUES ('-infinity');
 INSERT INTO TIMESTAMP_TBL VALUES ('infinity');
 INSERT INTO TIMESTAMP_TBL VALUES ('epoch');
 
+-- Make sure 'infinity' and '+infinity' are the same
+SELECT timestamp 'infinity' = timestamp '+infinity' AS t;
+SELECT timestamptz 'infinity' = timestamptz '+infinity' AS t;
+
 -- Postgres v6.0 standard output format
 INSERT INTO TIMESTAMP_TBL VALUES ('Mon Feb 10 17:32:01 1997 PST');
 

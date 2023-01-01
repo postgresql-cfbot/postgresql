@@ -329,6 +329,7 @@ select 'infinity'::date, '-infinity'::date;
 select 'infinity'::date > 'today'::date as t;
 select '-infinity'::date < 'today'::date as t;
 select isfinite('infinity'::date), isfinite('-infinity'::date), isfinite('today'::date);
+select 'infinity'::date = '+infinity'::date as t;
 --
 -- oscillating fields from non-finite date:
 --

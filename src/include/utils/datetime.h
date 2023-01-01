@@ -38,6 +38,7 @@ struct tzEntry;
 #define INVALID			"invalid"
 #define EARLY			"-infinity"
 #define LATE			"infinity"
+#define LATE2			"+infinity"
 #define NOW				"now"
 #define TODAY			"today"
 #define TOMORROW		"tomorrow"

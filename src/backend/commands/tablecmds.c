@@ -20,6 +20,7 @@
 #include "access/heapam_xlog.h"
 #include "access/multixact.h"
 #include "access/reloptions.h"
+#include "access/options.h"
 #include "access/relscan.h"
 #include "access/sysattr.h"
 #include "access/tableam.h"
@@ -676,7 +677,6 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	ListCell   *listptr;
 	AttrNumber	attnum;
 	bool		partitioned;
-	static char *validnsps[] = HEAP_RELOPT_NAMESPACES;
 	Oid			ofTypeId;
 	ObjectAddress address;
 	LOCKMODE	parentLockmode;
@@ -824,19 +824,36 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	/*
 	 * Parse and validate reloptions, if any.
 	 */
-	reloptions = transformRelOptions((Datum) 0, stmt->options, NULL, validnsps,
-									 true, false);
 
 	switch (relkind)
 	{
 		case RELKIND_VIEW:
-			(void) view_reloptions(reloptions, true);
+			reloptions = optionDefListToTextArray(get_view_relopt_spec_set(),
+												  stmt->options);
 			break;
 		case RELKIND_PARTITIONED_TABLE:
-			(void) partitioned_table_reloptions(reloptions, true);
-			break;
+			{
+				/* If it is not all listed above, then it if heap */
+				char	   *namespaces[] = HEAP_RELOPT_NAMESPACES;
+				List	   *heapDefList;
+
+				optionsDefListValdateNamespaces(stmt->options, namespaces);
+				heapDefList = optionsDefListFilterNamespaces(stmt->options, NULL);
+				reloptions = optionDefListToTextArray(
+													  get_partitioned_relopt_spec_set(), heapDefList);
+				break;
+			}
 		default:
-			(void) heap_reloptions(relkind, reloptions, true);
+			{
+				/* If it is not all listed above, is should be heap */
+				char	   *namespaces[] = HEAP_RELOPT_NAMESPACES;
+				List	   *heapDefList;
+
+				optionsDefListValdateNamespaces(stmt->options, namespaces);
+				heapDefList = optionsDefListFilterNamespaces(stmt->options, NULL);
+				reloptions = optionDefListToTextArray(get_heap_relopt_spec_set(),
+													  heapDefList);
+			}
 	}
 
 	if (stmt->ofTypename)
@@ -4120,7 +4137,7 @@ void
 AlterTableInternal(Oid relid, List *cmds, bool recurse)
 {
 	Relation	rel;
-	LOCKMODE	lockmode = AlterTableGetLockLevel(cmds);
+	LOCKMODE	lockmode = AlterTableGetLockLevel(relid, cmds);
 
 	rel = relation_open(relid, lockmode);
 
@@ -4162,7 +4179,7 @@ AlterTableInternal(Oid relid, List *cmds, bool recurse)
  * otherwise we might end up with an inconsistent dump that can't restore.
  */
 LOCKMODE
-AlterTableGetLockLevel(List *cmds)
+AlterTableGetLockLevel(Oid relid, List *cmds)
 {
 	/*
 	 * This only works if we read catalog tables using MVCC snapshots.
@@ -4382,9 +4399,14 @@ AlterTableGetLockLevel(List *cmds)
 									 * getTables() */
 			case AT_ResetRelOptions:	/* Uses MVCC in getIndexes() and
 										 * getTables() */
-				cmd_lockmode = AlterTableGetRelOptionsLockLevel((List *) cmd->def);
-				break;
+				{
+					Relation	rel = relation_open(relid, AccessShareLock);
 
+					cmd_lockmode = AlterTableGetRelOptionsLockLevel(rel,
+																	castNode(List, cmd->def));
+					relation_close(rel, AccessShareLock);
+					break;
+				}
 			case AT_AttachPartition:
 				cmd_lockmode = ShareUpdateExclusiveLock;
 				break;
@@ -8154,12 +8176,13 @@ ATExecSetOptions(Relation rel, const char *colName, Node *options,
 	/* Generate new proposed attoptions (text array) */
 	datum = SysCacheGetAttr(ATTNAME, tuple, Anum_pg_attribute_attoptions,
 							&isnull);
-	newOptions = transformRelOptions(isnull ? (Datum) 0 : datum,
-									 castNode(List, options), NULL, NULL,
-									 false, isReset);
-	/* Validate new options */
-	(void) attribute_reloptions(newOptions, true);
+	if (isnull)
+		datum = (Datum) 0;
 
+	newOptions = optionsUpdateTexArrayWithDefList(
+												  get_attribute_options_spec_set(),
+												  datum, castNode(List, options),
+												  isReset);
 	/* Build new tuple. */
 	memset(repl_null, false, sizeof(repl_null));
 	memset(repl_repl, false, sizeof(repl_repl));
@@ -14143,12 +14166,13 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 	HeapTuple	tuple;
 	HeapTuple	newtuple;
 	Datum		datum;
-	bool		isnull;
 	Datum		newOptions;
 	Datum		repl_val[Natts_pg_class];
 	bool		repl_null[Natts_pg_class];
 	bool		repl_repl[Natts_pg_class];
-	static char *validnsps[] = HEAP_RELOPT_NAMESPACES;
+	List	   *optionsDefList;
+	options_spec_set *optionsSpecSet;
+	char	   *heap_namespaces[] = HEAP_RELOPT_NAMESPACES;
 
 	if (defList == NIL && operation != AT_ReplaceRelOptions)
 		return;					/* nothing to do */
@@ -14168,38 +14192,56 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 		 * there were none before.
 		 */
 		datum = (Datum) 0;
-		isnull = true;
 	}
 	else
 	{
+		bool		isnull;
+
 		/* Get the old reloptions */
 		datum = SysCacheGetAttr(RELOID, tuple, Anum_pg_class_reloptions,
 								&isnull);
+		if (isnull)
+			datum = (Datum) 0;
 	}
 
 	/* Generate new proposed reloptions (text array) */
-	newOptions = transformRelOptions(isnull ? (Datum) 0 : datum,
-									 defList, NULL, validnsps, false,
-									 operation == AT_ResetRelOptions);
 
 	/* Validate */
+
+	optionsSpecSet = NULL;
 	switch (rel->rd_rel->relkind)
 	{
 		case RELKIND_RELATION:
-		case RELKIND_TOASTVALUE:
 		case RELKIND_MATVIEW:
-			(void) heap_reloptions(rel->rd_rel->relkind, newOptions, true);
+			optionsDefListValdateNamespaces(defList, heap_namespaces);
+			optionsDefList = optionsDefListFilterNamespaces(defList, NULL);
+			optionsSpecSet = get_heap_relopt_spec_set();
 			break;
 		case RELKIND_PARTITIONED_TABLE:
-			(void) partitioned_table_reloptions(newOptions, true);
+			optionsDefListValdateNamespaces(defList, heap_namespaces);
+			optionsDefList = optionsDefListFilterNamespaces(defList, NULL);
+			optionsSpecSet = get_partitioned_relopt_spec_set();
 			break;
 		case RELKIND_VIEW:
-			(void) view_reloptions(newOptions, true);
+			optionsDefList = defList;
+			optionsSpecSet = get_view_relopt_spec_set();
 			break;
 		case RELKIND_INDEX:
 		case RELKIND_PARTITIONED_INDEX:
-			(void) index_reloptions(rel->rd_indam->amoptions, newOptions, true);
+			if (!rel->rd_indam->amreloptspecset)
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("index %s does not support options",
+								RelationGetRelationName(rel))));
+			optionsDefList = defList;
+			optionsSpecSet = rel->rd_indam->amreloptspecset();
 			break;
+		case RELKIND_TOASTVALUE:
+			/* Should never get here */
+			/* TOAST options are never altered directly */
+			Assert(0);
+			/* FALLTHRU */
+			/* If we get here in prod. error is the best option */
 		default:
 			ereport(ERROR,
 					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
@@ -14209,11 +14251,15 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 			break;
 	}
 
+	newOptions = optionsUpdateTexArrayWithDefList(optionsSpecSet, datum,
+												  optionsDefList,
+												  operation == AT_ResetRelOptions);
+
 	/* Special-case validation of view options */
 	if (rel->rd_rel->relkind == RELKIND_VIEW)
 	{
 		Query	   *view_query = get_view_query(rel);
-		List	   *view_options = untransformRelOptions(newOptions);
+		List	   *view_options = optionsTextArrayToDefList(newOptions);
 		ListCell   *cell;
 		bool		check_option = false;
 
@@ -14288,20 +14334,23 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 			 * pretend there were none before.
 			 */
 			datum = (Datum) 0;
-			isnull = true;
 		}
 		else
 		{
+			bool		isnull;
+
 			/* Get the old reloptions */
 			datum = SysCacheGetAttr(RELOID, tuple, Anum_pg_class_reloptions,
 									&isnull);
+			if (isnull)
+				datum = (Datum) 0;
 		}
 
-		newOptions = transformRelOptions(isnull ? (Datum) 0 : datum,
-										 defList, "toast", validnsps, false,
-										 operation == AT_ResetRelOptions);
-
-		(void) heap_reloptions(RELKIND_TOASTVALUE, newOptions, true);
+		optionsDefList = optionsDefListFilterNamespaces(defList, "toast");
+		newOptions = optionsUpdateTexArrayWithDefList(
+													  get_toast_relopt_spec_set(),
+													  datum, optionsDefList,
+													  operation == AT_ResetRelOptions);
 
 		memset(repl_val, 0, sizeof(repl_val));
 		memset(repl_null, false, sizeof(repl_null));

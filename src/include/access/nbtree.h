@@ -1260,7 +1260,7 @@ extern void _bt_end_vacuum(Relation rel);
 extern void _bt_end_vacuum_callback(int code, Datum arg);
 extern Size BTreeShmemSize(void);
 extern void BTreeShmemInit(void);
-extern bytea *btoptions(Datum reloptions, bool validate);
+extern void *btgetreloptspecset(void);
 extern bool btproperty(Oid index_oid, int attno,
 					   IndexAMProperty prop, const char *propname,
 					   bool *res, bool *isnull);

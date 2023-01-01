@@ -23,6 +23,7 @@
 #include "access/relscan.h"
 #include "access/xlog.h"
 #include "access/xloginsert.h"
+#include "access/options.h"
 #include "commands/progress.h"
 #include "commands/vacuum.h"
 #include "miscadmin.h"
@@ -125,7 +126,6 @@ bthandler(PG_FUNCTION_ARGS)
 	amroutine->amvacuumcleanup = btvacuumcleanup;
 	amroutine->amcanreturn = btcanreturn;
 	amroutine->amcostestimate = btcostestimate;
-	amroutine->amoptions = btoptions;
 	amroutine->amproperty = btproperty;
 	amroutine->ambuildphasename = btbuildphasename;
 	amroutine->amvalidate = btvalidate;
@@ -140,6 +140,7 @@ bthandler(PG_FUNCTION_ARGS)
 	amroutine->amestimateparallelscan = btestimateparallelscan;
 	amroutine->aminitparallelscan = btinitparallelscan;
 	amroutine->amparallelrescan = btparallelrescan;
+	amroutine->amreloptspecset = btgetreloptspecset;
 
 	PG_RETURN_POINTER(amroutine);
 }
@@ -1418,4 +1419,36 @@ bool
 btcanreturn(Relation index, int attno)
 {
 	return true;
+}
+
+static options_spec_set *bt_relopt_specset = NULL;
+
+void *
+btgetreloptspecset(void)
+{
+	if (bt_relopt_specset)
+		return bt_relopt_specset;
+
+	bt_relopt_specset = allocateOptionsSpecSet(NULL,
+											   sizeof(BTOptions), false, 3);
+
+	optionsSpecSetAddInt(bt_relopt_specset, "fillfactor",
+						 "Packs btree index pages only to this percentage",
+						 ShareUpdateExclusiveLock,	/* affects inserts only */
+						 offsetof(BTOptions, fillfactor), NULL,
+						 BTREE_DEFAULT_FILLFACTOR, BTREE_MIN_FILLFACTOR, 100);
+
+	optionsSpecSetAddReal(bt_relopt_specset, "vacuum_cleanup_index_scale_factor",
+						  "Number of tuple inserts prior to index cleanup as a fraction of reltuples",
+						  ShareUpdateExclusiveLock,
+						  offsetof(BTOptions, vacuum_cleanup_index_scale_factor),
+						  NULL, -1, 0.0, 1e10);
+
+	optionsSpecSetAddBool(bt_relopt_specset, "deduplicate_items",
+						  "Enables \"deduplicate items\" feature for this btree index",
+						  ShareUpdateExclusiveLock, /* affects inserts only */
+						  offsetof(BTOptions, deduplicate_items), NULL,
+						  true);
+
+	return bt_relopt_specset;
 }

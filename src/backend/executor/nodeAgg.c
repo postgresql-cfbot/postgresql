@@ -3494,6 +3494,10 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 				{
 					int			length = phasedata->gset_lengths[k];
 
+					/* skip empty grouping set */
+					if (length == 0)
+						continue;
+
 					if (phasedata->eqfunctions[length - 1] != NULL)
 						continue;
 

@@ -51,6 +51,36 @@ typedef enum
 } ResourceReleasePhase;
 
 /*
+ * In order to track an object, resowner.c needs a few callbacks for it.
+ * The callbacks for resources of a specific kind are encapsulated in
+ * ResourceOwnerFuncs.
+ *
+ * Note that the callback occurs post-commit or post-abort, so these callback
+ * functions can only do noncritical cleanup.
+ */
+typedef struct ResourceOwnerFuncs
+{
+	const char *name;			/* name for the object kind, for debugging */
+
+	ResourceReleasePhase phase; /* when are these objects released? */
+
+	/*
+	 * Release resource.
+	 *
+	 * NOTE: this must call ResourceOwnerForget to disassociate it with the
+	 * resource owner.
+	 */
+	void		(*ReleaseResource) (Datum res);
+
+	/*
+	 * Print a warning, when a resource has not been properly released before
+	 * commit.
+	 */
+	void		(*PrintLeakWarning) (Datum res);
+
+} ResourceOwnerFuncs;
+
+/*
  *	Dynamically loaded modules can get control during ResourceOwnerRelease
  *	by providing a callback of this form.
  */
@@ -71,16 +101,29 @@ extern void ResourceOwnerRelease(ResourceOwner owner,
 								 ResourceReleasePhase phase,
 								 bool isCommit,
 								 bool isTopLevel);
-extern void ResourceOwnerReleaseAllPlanCacheRefs(ResourceOwner owner);
 extern void ResourceOwnerDelete(ResourceOwner owner);
 extern ResourceOwner ResourceOwnerGetParent(ResourceOwner owner);
 extern void ResourceOwnerNewParent(ResourceOwner owner,
 								   ResourceOwner newparent);
+
+extern void ResourceOwnerEnlarge(ResourceOwner owner);
+extern void ResourceOwnerRemember(ResourceOwner owner, Datum res, ResourceOwnerFuncs *kind);
+extern void ResourceOwnerForget(ResourceOwner owner, Datum res, ResourceOwnerFuncs *kind);
+
 extern void RegisterResourceReleaseCallback(ResourceReleaseCallback callback,
 											void *arg);
 extern void UnregisterResourceReleaseCallback(ResourceReleaseCallback callback,
 											  void *arg);
+
 extern void CreateAuxProcessResourceOwner(void);
 extern void ReleaseAuxProcessResources(bool isCommit);
+
+/* special support for local lock management */
+struct LOCALLOCK;
+extern void ResourceOwnerRememberLock(ResourceOwner owner, struct LOCALLOCK *locallock);
+extern void ResourceOwnerForgetLock(ResourceOwner owner, struct LOCALLOCK *locallock);
+
+/* special function to relase all plancache references */
+extern void ResourceOwnerReleaseAllPlanCacheRefs(ResourceOwner owner);
 
 #endif							/* RESOWNER_H */

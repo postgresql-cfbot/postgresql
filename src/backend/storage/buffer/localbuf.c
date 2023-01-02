@@ -22,7 +22,7 @@
 #include "storage/bufmgr.h"
 #include "utils/guc_hooks.h"
 #include "utils/memutils.h"
-#include "utils/resowner_private.h"
+#include "utils/resowner.h"
 
 
 /*#define LBDEBUG*/
@@ -122,6 +122,9 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 	/* Initialize local buffers if first request in this session */
 	if (LocalBufHash == NULL)
 		InitLocalBuffers();
+
+	/* Make sure we will have room to remember the buffer pin */
+	ResourceOwnerEnlarge(CurrentResourceOwner);
 
 	/* See if the desired buffer already exists */
 	hresult = (LocalBufferLookupEnt *)

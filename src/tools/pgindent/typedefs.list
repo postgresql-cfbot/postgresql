@@ -2322,8 +2322,10 @@ ReplicationStateOnDisk
 ResTarget
 ReservoirState
 ReservoirStateData
-ResourceArray
+ResourceElem
 ResourceOwner
+ResourceOwnerData
+ResourceOwnerFuncs
 ResourceReleaseCallback
 ResourceReleaseCallbackItem
 ResourceReleasePhase

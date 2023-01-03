@@ -155,6 +155,12 @@ static int	nseclabels = 0;
 #define DUMP_DEFAULT_ROWS_PER_INSERT 1
 
 /*
+ * Send 'LOCK TABLE foo, bar, baz ...' when the length of the query exceeds
+ * the given threshold.
+ */
+#define LOCK_QUERY_THRESHOLD (1024*1024)
+
+/*
  * Macro for producing quoted, schema-qualified name of a dumpable object.
  */
 #define fmtQualifiedDumpable(obj) \
@@ -6470,6 +6476,8 @@ getTables(Archive *fout, int *numTables)
 		ExecuteSqlStatement(fout, query->data);
 	}
 
+	resetPQExpBuffer(query);
+
 	for (i = 0; i < ntups; i++)
 	{
 		tblinfo[i].dobj.objType = DO_TABLE;
@@ -6587,12 +6595,35 @@ getTables(Archive *fout, int *numTables)
 			(tblinfo[i].relkind == RELKIND_RELATION ||
 			 tblinfo[i].relkind == RELKIND_PARTITIONED_TABLE))
 		{
-			resetPQExpBuffer(query);
-			appendPQExpBuffer(query,
-							  "LOCK TABLE %s IN ACCESS SHARE MODE",
-							  fmtQualifiedDumpable(&tblinfo[i]));
-			ExecuteSqlStatement(fout, query->data);
+			/*
+			 * Tables are locked in batches. When dumping multiple tables from
+			 * a remote server this can save the user a significant amount of
+			 * time by reducing the amount of round trips.
+			 */
+			if (query->len == 0)
+				appendPQExpBuffer(query, "LOCK TABLE %s",
+								  fmtQualifiedDumpable(&tblinfo[i]));
+			else
+			{
+				appendPQExpBuffer(query, ",%s",
+								  fmtQualifiedDumpable(&tblinfo[i]));
+
+				if (query->len >= LOCK_QUERY_THRESHOLD)
+				{
+					/* Lock another batch of tables. */
+					appendPQExpBuffer(query, " IN ACCESS SHARE MODE");
+					ExecuteSqlStatement(fout, query->data);
+					resetPQExpBuffer(query);
+				}
+			}
 		}
+	}
+
+	if (query->len != 0)
+	{
+		/* Lock the tables in the last batch. */
+		appendPQExpBuffer(query, " IN ACCESS SHARE MODE");
+		ExecuteSqlStatement(fout, query->data);
 	}
 
 	if (dopt->lockWaitTimeout)

@@ -25,6 +25,7 @@
 #include "optimizer/inherit.h"
 #include "optimizer/optimizer.h"
 #include "optimizer/pathnode.h"
+#include "optimizer/plancat.h"
 #include "optimizer/planmain.h"
 #include "optimizer/planner.h"
 #include "optimizer/prep.h"
@@ -345,11 +346,6 @@ expand_partitioned_rtentry(PlannerInfo *root, RelOptInfo *relinfo,
 		root->partColsUpdated =
 			has_partition_attrs(parentrel, parent_updatedCols, NULL);
 
-	/*
-	 * There shouldn't be any generated columns in the partition key.
-	 */
-	Assert(!has_partition_attrs(parentrel, parentrte->extraUpdatedCols, NULL));
-
 	/* Nothing further to do here if there are no partitions. */
 	if (partdesc->nparts == 0)
 		return;
@@ -566,13 +562,6 @@ expand_single_inheritance_child(PlannerInfo *root, RangeTblEntry *parentrte,
 	childrte->alias = childrte->eref = makeAlias(parentrte->eref->aliasname,
 												 child_colnames);
 
-	/* Translate the bitmapset of generated columns being updated. */
-	if (childOID != parentOID)
-		childrte->extraUpdatedCols = translate_col_privs(parentrte->extraUpdatedCols,
-														 appinfo->translated_vars);
-	else
-		childrte->extraUpdatedCols = bms_copy(parentrte->extraUpdatedCols);
-
 	/*
 	 * Store the RTE and appinfo in the respective PlannerInfo arrays, which
 	 * the caller must already have allocated space for.
@@ -672,21 +661,16 @@ get_rel_all_updated_cols(PlannerInfo *root, RelOptInfo *rel)
 	Assert(IS_SIMPLE_REL(rel));
 
 	/*
-	 * We obtain updatedCols and extraUpdatedCols for the query's result
-	 * relation.  Then, if necessary, we map it to the column numbers of the
-	 * relation for which they were requested.
+	 * We obtain updatedCols for the query's result relation.  Then, if
+	 * necessary, we map it to the column numbers of the relation for which
+	 * they were requested.
 	 */
 	relid = root->parse->resultRelation;
 	rte = planner_rt_fetch(relid, root);
 	perminfo = getRTEPermissionInfo(root->parse->rteperminfos, rte);
 
 	updatedCols = perminfo->updatedCols;
-	extraUpdatedCols = rte->extraUpdatedCols;
 
-	/*
-	 * For "other" rels, we must look up the root parent relation mentioned in
-	 * the query, and translate the column numbers.
-	 */
 	if (rel->relid != relid)
 	{
 		RelOptInfo *top_parent_rel = find_base_rel(root, relid);
@@ -695,9 +679,14 @@ get_rel_all_updated_cols(PlannerInfo *root, RelOptInfo *rel)
 
 		updatedCols = translate_col_privs_multilevel(root, rel, top_parent_rel,
 													 updatedCols);
-		extraUpdatedCols = translate_col_privs_multilevel(root, rel, top_parent_rel,
-														  extraUpdatedCols);
 	}
+
+	/*
+	 * Now we must check to see if there are any generated columns that depend
+	 * on the updatedCols, and add them to the result.
+	 */
+	extraUpdatedCols = get_dependent_generated_columns(root, rel->relid,
+													   updatedCols);
 
 	return bms_union(updatedCols, extraUpdatedCols);
 }

@@ -462,6 +462,9 @@ typedef struct ResultRelInfo
 	 */
 	AttrNumber	ri_RowIdAttNo;
 
+	/* If UPDATE, attribute numbers of generated columns to be updated */
+	Bitmapset  *ri_extraUpdatedCols;
+
 	/* Projection to generate new tuple in an INSERT/UPDATE */
 	ProjectionInfo *ri_projectNew;
 	/* Slot to hold that tuple */

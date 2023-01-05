@@ -80,6 +80,8 @@ static void run_vacuum_command(PGconn *conn, const char *sql, bool echo,
 
 static void help(const char *progname);
 
+static bool UpdateDatfrozenxidHandler(PGresult *res, PGconn *conn, void *context);
+
 void check_objfilter(void);
 
 /* For analyze-in-stages mode */
@@ -791,6 +793,29 @@ vacuum_one_database(ConnParams *cparams,
 
 	if (!ParallelSlotsWaitCompletion(sa))
 		failed = true;
+	else if (!vacopts->analyze_only && PQserverVersion(conn) >= 160000)
+	{
+		/* v16 and later updates datfrozenxid/datminmxid at the end */
+		const char *cmd = "SELECT pg_catalog.pg_update_datfrozenxid()";
+		ParallelSlot *free_slot = ParallelSlotsGetIdle(sa, NULL);
+
+		if (!free_slot)
+		{
+			failed = true;
+			goto finish;
+		}
+
+		ParallelSlotSetHandler(free_slot, UpdateDatfrozenxidHandler, NULL);
+
+		if (echo)
+			printf("%s\n", cmd);
+
+		if (PQsendQuery(free_slot->connection, cmd) != 1)
+			pg_log_error("\"pg_update_datfrozenxid()\" failed: %s",
+						 PQerrorMessage(free_slot->connection));
+
+		failed = !ParallelSlotsWaitCompletion(sa);
+	}
 
 finish:
 	ParallelSlotsTerminate(sa);
@@ -800,6 +825,27 @@ finish:
 
 	if (failed)
 		exit(1);
+}
+
+/*
+ * UpdateDatfrozenxidHandler
+ *
+ * ParallelSlotResultHandler for result of pg_update_datfrozenxid().  Requires
+ * that the result status is PGRES_TUPLES_OK.  Otherwise, logs an error and
+ * terminates further processing.
+ *
+ * res: PGresult from the query executed on the slot's connection
+ * conn: connection belonging to the slot
+ * context: unused
+ */
+static bool
+UpdateDatfrozenxidHandler(PGresult *res, PGconn *conn, void *context)
+{
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+		pg_log_error("\"pg_update_datfrozenxid()\" failed: %s",
+					 PQerrorMessage(conn));
+
+	return (PQresultStatus(res) == PGRES_TUPLES_OK);
 }
 
 /*
@@ -990,6 +1036,12 @@ prepare_vacuum_command(PQExpBuffer sql, int serverVersion,
 				Assert(serverVersion >= 130000);
 				appendPQExpBuffer(sql, "%sPARALLEL %d", sep,
 								  vacopts->parallel_workers);
+				sep = comma;
+			}
+			if (serverVersion >= 160000)
+			{
+				/* v16 and later calls pg_update_datfrozenxid() at the end */
+				appendPQExpBuffer(sql, "%sUPDATE_DATFROZENXID FALSE", sep);
 				sep = comma;
 			}
 			if (sep != paren)

@@ -36,6 +36,7 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
     PROCESS_TOAST [ <replaceable class="parameter">boolean</replaceable> ]
     TRUNCATE [ <replaceable class="parameter">boolean</replaceable> ]
     PARALLEL <replaceable class="parameter">integer</replaceable>
+    UPDATE_DATFROZENXID [ <replaceable class="parameter">boolean</replaceable> ]
 
 <phrase>and <replaceable class="parameter">table_and_columns</replaceable> is:</phrase>
 
@@ -291,6 +292,27 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
       vacuum are launched before the start of each phase and exit at the end of
       the phase.  These behaviors might change in a future release.  This
       option can't be used with the <literal>FULL</literal> option.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>UPDATE_DATFROZENXID</literal></term>
+    <listitem>
+     <para>
+      Specifies that <command>VACUUM</command> should attempt to update the
+      current database's
+      <structname>pg_database</structname>.<structfield>datfrozenxid</structfield>
+      and
+      <structname>pg_database</structname>.<structfield>datminmxid</structfield>
+      values to the minimum of the per-table
+      <structname>pg_class</structname>.<structfield>relfrozenxid</structfield>
+      and
+      <structname>pg_class</structname>.<structfield>relminmxid</structfield>
+      values.  This is usually the desired behavior and is the default.
+      Setting this option to false may be useful to avoid the extra work of
+      scanning all of the database's tables when executing several independent
+      <command>VACUUM</command> commands.
      </para>
     </listitem>
    </varlistentry>

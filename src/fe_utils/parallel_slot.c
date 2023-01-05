@@ -475,6 +475,10 @@ ParallelSlotsWaitCompletion(ParallelSlotArray *sa)
 			continue;
 		if (!consumeQueryResult(&sa->slots[i]))
 			return false;
+
+		/* mark slot as idle so it can be reused */
+		sa->slots[i].inUse = false;
+		ParallelSlotClearHandler(&sa->slots[i]);
 	}
 
 	return true;

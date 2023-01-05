@@ -11817,6 +11817,10 @@
   proargmodes => '{i,o,o,o}',
   proargnames => '{slot_name,name,size,modification}',
   prosrc => 'pg_ls_replslotdir' },
+{ oid => '2173',
+  descr => 'update datfrozenxid and datminmxid for current database',
+  proname => 'pg_update_datfrozenxid', provolatile => 'v', prorettype => 'void',
+  proargtypes => '', prosrc => 'pg_update_datfrozenxid' },
 
 # hash partitioning constraint function
 { oid => '5028', descr => 'hash partition CHECK constraint',

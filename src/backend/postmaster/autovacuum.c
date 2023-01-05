@@ -2854,7 +2854,7 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 		tab->at_relid = relid;
 		tab->at_sharedrel = classForm->relisshared;
 
-		/* Note that this skips toast relations */
+		/* Note that this skips toast relations and updating datfrozenxid */
 		tab->at_params.options = (dovacuum ? VACOPT_VACUUM : 0) |
 			(doanalyze ? VACOPT_ANALYZE : 0) |
 			(!wraparound ? VACOPT_SKIP_LOCKED : 0);

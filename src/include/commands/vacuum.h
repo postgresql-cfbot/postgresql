@@ -188,6 +188,7 @@ typedef struct VacAttrStats
 #define VACOPT_SKIP_LOCKED 0x20 /* skip if cannot get lock */
 #define VACOPT_PROCESS_TOAST 0x40	/* process the TOAST table, if any */
 #define VACOPT_DISABLE_PAGE_SKIPPING 0x80	/* don't skip any pages */
+#define VACOPT_UPDATE_DATFROZENXID 0x100	/* update datfrozenxid afterwards */
 
 /*
  * Values used by index_cleanup and truncate params.
@@ -328,6 +329,7 @@ extern void vac_update_relstats(Relation relation,
 extern bool vacuum_get_cutoffs(Relation rel, const VacuumParams *params,
 							   struct VacuumCutoffs *cutoffs);
 extern bool vacuum_xid_failsafe_check(const struct VacuumCutoffs *cutoffs);
+extern Datum pg_update_datfrozenxid(PG_FUNCTION_ARGS);
 extern void vac_update_datfrozenxid(void);
 extern void vacuum_delay_point(void);
 extern bool vacuum_is_permitted_for_relation(Oid relid, Form_pg_class reltuple,

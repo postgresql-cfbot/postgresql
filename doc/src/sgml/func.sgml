@@ -27286,6 +27286,50 @@ postgres=# SELECT '0/0'::pg_lsn + pd.segment_number * ps.setting::int + :offset 
    </table>
 
    <para>
+    <xref linkend="functions-admin-db"/> lists functions used to manage the
+    current database.
+   </para>
+
+   <table id="functions-admin-db">
+    <title>Database Management Functions</title>
+     <tgroup cols="1">
+      <thead>
+       <row>
+        <entry role="func_table_entry"><para role="func_signature">
+         Function
+        </para>
+        <para>
+         Description
+        </para></entry>
+       </row>
+      </thead>
+
+      <tbody>
+       <row>
+        <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>pg_update_datfrozenxid</primary>
+        </indexterm>
+        <function>pg_update_datfrozenxid</function> ()
+        <returnvalue>void</returnvalue>
+       </para>
+       <para>
+        Updates the current database's
+        <structname>pg_database</structname>.<structfield>datfrozenxid</structfield>
+        and
+        <structname>pg_database</structname>.<structfield>relminmxid</structfield>
+        values to the minimum of the per-table
+        <structname>pg_class</structname>.<structfield>relfrozenxid</structfield>
+        and
+        <structname>pg_class</structname>.<structfield>relminmxid</structfield>
+        values.
+       </para></entry>
+      </row>
+     </tbody>
+    </tgroup>
+   </table>
+
+   <para>
     <xref linkend="functions-admin-collation"/> lists functions used to manage
     collations.
    </para>

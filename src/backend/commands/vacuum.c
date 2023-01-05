@@ -39,6 +39,7 @@
 #include "catalog/pg_database.h"
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_namespace.h"
+#include "catalog/pg_proc.h"
 #include "commands/cluster.h"
 #include "commands/defrem.h"
 #include "commands/vacuum.h"
@@ -114,6 +115,7 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 	bool		full = false;
 	bool		disable_page_skipping = false;
 	bool		process_toast = true;
+	bool		update_datfrozenxid = vacstmt->is_vacuumcmd;
 	ListCell   *lc;
 
 	/* index_cleanup and truncate values unspecified for now */
@@ -200,6 +202,8 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 					params.nworkers = nworkers;
 			}
 		}
+		else if (strcmp(opt->defname, "update_datfrozenxid") == 0)
+			update_datfrozenxid = defGetBoolean(opt);
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -216,7 +220,8 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 		(freeze ? VACOPT_FREEZE : 0) |
 		(full ? VACOPT_FULL : 0) |
 		(disable_page_skipping ? VACOPT_DISABLE_PAGE_SKIPPING : 0) |
-		(process_toast ? VACOPT_PROCESS_TOAST : 0);
+		(process_toast ? VACOPT_PROCESS_TOAST : 0) |
+		(update_datfrozenxid ? VACOPT_UPDATE_DATFROZENXID : 0);
 
 	/* sanity checks on options */
 	Assert(params.options & (VACOPT_VACUUM | VACOPT_ANALYZE));
@@ -528,11 +533,10 @@ vacuum(List *relations, VacuumParams *params,
 		StartTransactionCommand();
 	}
 
-	if ((params->options & VACOPT_VACUUM) && !IsAutoVacuumWorkerProcess())
+	if (params->options & VACOPT_UPDATE_DATFROZENXID)
 	{
 		/*
 		 * Update pg_database.datfrozenxid, and truncate pg_xact if possible.
-		 * (autovacuum.c does this for itself.)
 		 */
 		vac_update_datfrozenxid();
 	}
@@ -1409,6 +1413,17 @@ vac_update_relstats(Relation relation,
 				 errmsg_internal("overwrote invalid relminmxid value %u with new value %u for table \"%s\"",
 								 oldminmulti, minmulti,
 								 RelationGetRelationName(relation))));
+}
+
+
+/*
+ * Allow calling vac_update_datfrozenxid() via SQL.
+ */
+Datum
+pg_update_datfrozenxid(PG_FUNCTION_ARGS)
+{
+	vac_update_datfrozenxid();
+	PG_RETURN_VOID();
 }
 
 

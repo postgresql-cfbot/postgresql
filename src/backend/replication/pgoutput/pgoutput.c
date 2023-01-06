@@ -14,18 +14,21 @@
 
 #include "access/tupconvert.h"
 #include "catalog/partition.h"
+#include "catalog/pg_authid.h"
 #include "catalog/pg_publication.h"
 #include "catalog/pg_publication_rel.h"
 #include "catalog/pg_subscription.h"
 #include "commands/defrem.h"
 #include "executor/executor.h"
 #include "fmgr.h"
+#include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "optimizer/optimizer.h"
 #include "replication/logical.h"
 #include "replication/logicalproto.h"
 #include "replication/origin.h"
 #include "replication/pgoutput.h"
+#include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/inval.h"
 #include "utils/lsyscache.h"
@@ -2089,14 +2092,23 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 		{
 			Publication *pub = lfirst(lc);
 			bool		publish = false;
+			Oid			roleid = GetUserId();
+			AclResult	aclresult;
 
 			/*
 			 * Under what relid should we publish changes in this publication?
 			 * We'll use the top-most relid across all publications. Also
 			 * track the ancestor level for this publication.
 			 */
-			Oid			pub_relid = relid;
-			int			ancestor_level = 0;
+			Oid	pub_relid = relid;
+			int	ancestor_level = 0;
+
+			/* Check if we have the usage privilege on the publication. */
+			aclresult = object_aclcheck(PublicationRelationId, pub->oid,
+										roleid, ACL_USAGE);
+			if (aclresult != ACLCHECK_OK)
+				aclcheck_error(aclresult, OBJECT_PUBLICATION,
+							   get_publication_name(pub->oid, false));
 
 			/*
 			 * If this is a FOR ALL TABLES publication, pick the partition

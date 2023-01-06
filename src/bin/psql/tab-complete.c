@@ -3874,6 +3874,7 @@ psql_completion(const char *text, int start, int end)
 											"LARGE OBJECT",
 											"PARAMETER",
 											"PROCEDURE",
+											"PUBLICATION",
 											"ROUTINE",
 											"SCHEMA",
 											"SEQUENCE",
@@ -3911,6 +3912,8 @@ psql_completion(const char *text, int start, int end)
 			COMPLETE_WITH_QUERY(Query_for_list_of_languages);
 		else if (TailMatches("PROCEDURE"))
 			COMPLETE_WITH_VERSIONED_SCHEMA_QUERY(Query_for_list_of_procedures);
+		else if (TailMatches("PUBLICATION"))
+			COMPLETE_WITH_VERSIONED_QUERY(Query_for_list_of_publications);
 		else if (TailMatches("ROUTINE"))
 			COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_routines);
 		else if (TailMatches("SCHEMA"))

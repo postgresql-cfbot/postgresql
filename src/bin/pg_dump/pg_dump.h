@@ -613,6 +613,7 @@ typedef struct _policyInfo
 typedef struct _PublicationInfo
 {
 	DumpableObject dobj;
+	DumpableAcl dacl;
 	const char *rolname;
 	bool		puballtables;
 	bool		pubinsert;

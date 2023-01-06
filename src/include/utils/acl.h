@@ -169,6 +169,7 @@ typedef struct ArrayType Acl;
 #define ACL_ALL_RIGHTS_SCHEMA		(ACL_USAGE|ACL_CREATE)
 #define ACL_ALL_RIGHTS_TABLESPACE	(ACL_CREATE)
 #define ACL_ALL_RIGHTS_TYPE			(ACL_USAGE)
+#define ACL_ALL_RIGHTS_PUBLICATION	(ACL_USAGE)
 
 /* operation codes for pg_*_aclmask */
 typedef enum

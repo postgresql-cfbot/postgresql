@@ -3950,6 +3950,8 @@ getPublications(Archive *fout, int *numPublications)
 	int			i_pubdelete;
 	int			i_pubtruncate;
 	int			i_pubviaroot;
+	int			i_pubacl;
+	int			i_acldefault;
 	int			i,
 				ntups;
 
@@ -3964,27 +3966,32 @@ getPublications(Archive *fout, int *numPublications)
 	resetPQExpBuffer(query);
 
 	/* Get the publications. */
-	if (fout->remoteVersion >= 130000)
+	if (fout->remoteVersion >= 150000)
 		appendPQExpBufferStr(query,
-							 "SELECT p.tableoid, p.oid, p.pubname, "
-							 "p.pubowner, "
-							 "p.puballtables, p.pubinsert, p.pubupdate, p.pubdelete, p.pubtruncate, p.pubviaroot "
-							 "FROM pg_publication p");
+						  "SELECT p.tableoid, p.oid, p.pubname, "
+						  "p.pubowner, "
+						  "p.puballtables, p.pubinsert, p.pubupdate, p.pubdelete, p.pubtruncate, p.pubviaroot, p.pubacl, acldefault('P', p.pubowner) AS acldefault "
+						  "FROM pg_publication p");
+	else if (fout->remoteVersion >= 130000)
+		appendPQExpBuffer(query,
+						  "SELECT p.tableoid, p.oid, p.pubname, "
+						  "p.pubowner, "
+						  "p.puballtables, p.pubinsert, p.pubupdate, p.pubdelete, p.pubtruncate, p.pubviaroot, '{}' AS pubacl, '{}' AS acldefault "
+						  "FROM pg_publication p");
 	else if (fout->remoteVersion >= 110000)
 		appendPQExpBufferStr(query,
-							 "SELECT p.tableoid, p.oid, p.pubname, "
-							 "p.pubowner, "
-							 "p.puballtables, p.pubinsert, p.pubupdate, p.pubdelete, p.pubtruncate, false AS pubviaroot "
-							 "FROM pg_publication p");
+						  "SELECT p.tableoid, p.oid, p.pubname, "
+						  "p.pubowner, "
+						  "p.puballtables, p.pubinsert, p.pubupdate, p.pubdelete, p.pubtruncate, false AS pubviaroot, '{}' AS pubacl, '{}' AS acldefault "
+						  "FROM pg_publication p");
 	else
 		appendPQExpBufferStr(query,
-							 "SELECT p.tableoid, p.oid, p.pubname, "
-							 "p.pubowner, "
-							 "p.puballtables, p.pubinsert, p.pubupdate, p.pubdelete, false AS pubtruncate, false AS pubviaroot "
-							 "FROM pg_publication p");
+						  "SELECT p.tableoid, p.oid, p.pubname, "
+						  "p.pubowner, "
+						  "p.puballtables, p.pubinsert, p.pubupdate, p.pubdelete, false AS pubtruncate, false AS pubviaroot, '{}' AS pubacl, '{}' AS acldefault "
+						  "FROM pg_publication p");
 
 	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
-
 	ntups = PQntuples(res);
 
 	i_tableoid = PQfnumber(res, "tableoid");
@@ -3997,6 +4004,8 @@ getPublications(Archive *fout, int *numPublications)
 	i_pubdelete = PQfnumber(res, "pubdelete");
 	i_pubtruncate = PQfnumber(res, "pubtruncate");
 	i_pubviaroot = PQfnumber(res, "pubviaroot");
+	i_pubacl = PQfnumber(res, "pubacl");
+	i_acldefault = PQfnumber(res, "acldefault");
 
 	pubinfo = pg_malloc(ntups * sizeof(PublicationInfo));
 
@@ -4021,6 +4030,11 @@ getPublications(Archive *fout, int *numPublications)
 			(strcmp(PQgetvalue(res, i, i_pubtruncate), "t") == 0);
 		pubinfo[i].pubviaroot =
 			(strcmp(PQgetvalue(res, i, i_pubviaroot), "t") == 0);
+		pubinfo[i].dacl.acl = pg_strdup(PQgetvalue(res, i, i_pubacl));
+		pubinfo[i].dacl.acldefault = pg_strdup(PQgetvalue(res, i, i_acldefault));
+		pubinfo[i].dacl.privtype = 0;
+		pubinfo[i].dacl.initprivs = NULL;
+		pubinfo[i].dobj.components |= DUMP_COMPONENT_ACL;
 
 		/* Decide whether we want to dump it */
 		selectDumpableObject(&(pubinfo[i].dobj), fout);
@@ -4123,6 +4137,11 @@ dumpPublication(Archive *fout, const PublicationInfo *pubinfo)
 		dumpSecLabel(fout, "PUBLICATION", qpubname,
 					 NULL, pubinfo->rolname,
 					 pubinfo->dobj.catId, 0, pubinfo->dobj.dumpId);
+
+	if (pubinfo->dobj.dump & DUMP_COMPONENT_ACL)
+		dumpACL(fout, pubinfo->dobj.dumpId, InvalidDumpId, "PUBLICATION",
+				pg_strdup(fmtId(pubinfo->dobj.name)), NULL, NULL,
+				pubinfo->rolname, &pubinfo->dacl);
 
 	destroyPQExpBuffer(delq);
 	destroyPQExpBuffer(query);

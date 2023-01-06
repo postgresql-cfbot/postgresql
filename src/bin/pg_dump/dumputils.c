@@ -511,6 +511,8 @@ do { \
 		CONVERT_PRIV('r', "SELECT");
 		CONVERT_PRIV('w', "UPDATE");
 	}
+	else if (strcmp(type, "PUBLICATION") == 0)
+		CONVERT_PRIV('U', "USAGE");
 	else
 		abort();
 

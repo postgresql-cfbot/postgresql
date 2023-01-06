@@ -59,6 +59,8 @@ typedef struct CopyFormatOptions
 	bool	   *force_null_flags;	/* per-column CSV FN flags */
 	bool		convert_selectively;	/* do selective binary conversion? */
 	List	   *convert_select; /* list of column names (can be NIL) */
+	bool		publications;	/* only copy data of some publications? */
+	List	   *publication_names;	/* only copy data of these publications */
 } CopyFormatOptions;
 
 /* These are private in commands/copy[from|to].c */

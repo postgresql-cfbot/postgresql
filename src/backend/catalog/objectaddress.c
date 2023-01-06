@@ -587,7 +587,7 @@ static const ObjectPropertyType ObjectProperty[] =
 		Anum_pg_publication_pubname,
 		InvalidAttrNumber,
 		Anum_pg_publication_pubowner,
-		InvalidAttrNumber,
+		Anum_pg_publication_pubacl,
 		OBJECT_PUBLICATION,
 		true
 	},

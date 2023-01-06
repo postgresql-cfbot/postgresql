@@ -1714,12 +1714,6 @@ CONTEXT:  processing remote data for replication origin "pg_16395" during "INSER
   </para>
 
   <para>
-   In order to be able to copy the initial table data, the role used for the
-   replication connection must have the <literal>SELECT</literal> privilege on
-   a published table (or be a superuser).
-  </para>
-
-  <para>
    To create a publication, the user must have the <literal>CREATE</literal>
    privilege in the database.
   </para>
@@ -1742,6 +1736,20 @@ CONTEXT:  processing remote data for replication origin "pg_16395" during "INSER
    finer-grained access control.
   </para>
 
+  <note>
+   <para>
+    If a subscriber is not aware of the <literal>USAGE</literal> privilege on
+    publications (because its <productname>PostgreSQL</productname> version is
+    not recent enough) and if a table is listed in multiple publications, the
+    initial synchronization can fail even if the subscriber does have
+    sufficient privileges on his publications. The problem is that the old
+    subscribers are not able to tell which particular publications they are
+    interested in, so the publisher has to check the <literal>USAGE</literal>
+    privilege on all publications for given table. However, some of those
+    publications might only be accessible by other subscriptions.
+   </para>
+  </note>
+
   <para>
    To create a subscription, the user must be a superuser.
   </para>
@@ -1749,11 +1757,6 @@ CONTEXT:  processing remote data for replication origin "pg_16395" during "INSER
   <para>
    The subscription apply process will run in the local database with the
    privileges of the subscription owner.
-  </para>
-
-  <para>
-   On the publisher, privileges are only checked once at the start of a
-   replication connection and are not re-checked as each change record is read.
   </para>
 
   <para>

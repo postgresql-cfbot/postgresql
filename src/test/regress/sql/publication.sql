@@ -808,9 +808,37 @@ SET ROLE regress_publication_user3;
 ALTER PUBLICATION testpub4 owner to regress_publication_user2; -- fail
 ALTER PUBLICATION testpub4 owner to regress_publication_user; -- ok
 
+-- Test the USAGE privilege.
+SET ROLE regress_publication_user;
+CREATE ROLE regress_publication_user4;
+-- First, check that USAGE is granted to PUBLIC by default.
+SET ROLE regress_publication_user4;
+SELECT has_publication_privilege(p.oid, 'usage')
+FROM pg_catalog.pg_publication p
+WHERE p.pubname='testpub4';
+
+-- Revoke the USAGE privilege from PUBLIC.
+SET ROLE regress_publication_user;
+REVOKE USAGE ON PUBLICATION testpub4 FROM public;
+-- regress_publication_user4 does not have the privilege now.
+SET ROLE regress_publication_user4;
+SELECT has_publication_privilege(p.oid, 'usage')
+FROM pg_catalog.pg_publication p
+WHERE p.pubname='testpub4';
+
+-- Grant USAGE to regress_publication_user4 explicitly.
+SET ROLE regress_publication_user;
+GRANT USAGE ON PUBLICATION testpub4 TO regress_publication_user4;
+-- regress_publication_user4 does have the privilege now.
+SET ROLE regress_publication_user4;
+SELECT has_publication_privilege(p.oid, 'usage')
+FROM pg_catalog.pg_publication p
+WHERE p.pubname='testpub4';
+
 SET ROLE regress_publication_user;
 DROP PUBLICATION testpub4;
 DROP ROLE regress_publication_user3;
+DROP ROLE regress_publication_user4;
 
 REVOKE CREATE ON DATABASE regression FROM regress_publication_user2;
 

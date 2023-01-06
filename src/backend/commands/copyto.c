@@ -27,19 +27,24 @@
 #include "commands/progress.h"
 #include "executor/execdesc.h"
 #include "executor/executor.h"
+#include "executor/spi.h"
 #include "executor/tuptable.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
+#include "nodes/makefuncs.h"
 #include "optimizer/optimizer.h"
 #include "pgstat.h"
+#include "replication/walsender.h"
 #include "rewrite/rewriteHandler.h"
 #include "storage/fd.h"
 #include "tcop/tcopprot.h"
+#include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/partcache.h"
+#include "utils/acl.h"
 #include "utils/rel.h"
 #include "utils/snapmgr.h"
 
@@ -131,6 +136,8 @@ static void CopySendEndOfRow(CopyToState cstate);
 static void CopySendInt32(CopyToState cstate, int32 val);
 static void CopySendInt16(CopyToState cstate, int16 val);
 
+static void check_publication_privileges(Relation rel);
+static Node *get_publication_filters(Relation rel, List *publications);
 
 /*
  * Send copy start/stop messages for frontend copies.  These have changed
@@ -438,6 +445,27 @@ BeginCopyTo(ParseState *pstate,
 	{
 		Assert(!raw_query);
 
+		/*
+		 * Check the USAGE privileges on the publications.
+		 *
+		 * If the subscriber sent the publication names, it's aware of
+		 * publication ACL, but in such a case it's expected to send the whole
+		 * query rather than a table name.
+		 */
+		if (cstate->opts.publication_names)
+			ereport(ERROR,
+					(errmsg("PUBLICATION_NAMES option is only supported if query is passed")));
+
+		if (am_db_walsender)
+		{
+			/*
+			 * The subscriber is not aware of publication ACL, therefore check
+			 * permissions on all the publications the relation is registered
+			 * in.
+			 */
+			check_publication_privileges(rel);
+		}
+
 		cstate->rel = rel;
 
 		tupDesc = RelationGetDescr(cstate->rel);
@@ -516,6 +544,72 @@ BeginCopyTo(ParseState *pstate,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("COPY query must have a RETURNING clause")));
 		}
+
+		if (am_db_walsender)
+		{
+			RangeTblEntry *rte;
+			Relation	qrel;
+
+			if (list_length(query->rtable) != 1)
+				ereport(ERROR,
+						(errmsg("the query received from walsender must reference exactly one relation")));
+
+			rte = linitial_node(RangeTblEntry, query->rtable);
+
+			/*
+			 * NoLock because the relation should already be locked due to the
+			 * prior rewriting.
+			 */
+			qrel = relation_open(rte->relid, NoLock);
+
+			/*
+			 * If the user is only interested in specific publications,
+			 * construct the WHERE clause out of them.
+			 */
+			if (cstate->opts.publication_names)
+			{
+				FromExpr   *from_expr = NULL;
+
+				if (query->jointree == NULL)
+					ereport(ERROR,
+							(errmsg("COPY query must have a FROM expression if PUBLICATION_NAMES is passed")));
+
+				from_expr = query->jointree;
+				if (from_expr->quals)
+					ereport(ERROR,
+							(errmsg("COPY query must not have a WHERE clause if PUBLICATION_NAMES is passed")));
+
+				/*
+				 * Construct the clause and check the USAGE privilege on the
+				 * publications.
+				 */
+				from_expr->quals = get_publication_filters(qrel,
+														   cstate->opts.publication_names);
+			}
+			else
+			{
+				/*
+				 * Check the USAGE privilege for all the publications the
+				 * relation belongs to.
+				 *
+				 * This is what happens for subscribers which are not aware of
+				 * the publication ACL. We check all the publications because
+				 * we don't try to control the query. (The worst case is that
+				 * the subscriber gets ACL error, but no data should leak.)
+				 */
+				check_publication_privileges(qrel);
+			}
+
+			relation_close(qrel, NoLock);
+		}
+		else if (cstate->opts.publication_names)
+			/*
+			 * Technically it's possible to accept the PUBLICATION_NAMES
+			 * option regardless the kind of backend, but we prohibit it in
+			 * the "COPY <table> TO" variant above, so be consistent.
+			 */
+			ereport(ERROR,
+					(errmsg("PUBLICATION_NAMES option can only be used by walsender")));
 
 		/* plan the query */
 		plan = pg_plan_query(query, pstate->p_sourcetext,
@@ -1286,4 +1380,273 @@ CreateCopyDestReceiver(void)
 	self->processed = 0;
 
 	return (DestReceiver *) self;
+}
+
+/*
+ * Check if the current user has the USAGE privilege on all publications the
+ * relation belongs to.
+ *
+ * The test ends with success immediately if the user has the privilege for at
+ * least one single publication which has no filter. (The publication with no
+ * filter gives access to all the table data, regardless the other
+ * publications.)
+ */
+static void
+check_publication_privileges(Relation rel)
+{
+	StringInfoData cmd;
+	int			i;
+	TupleTableSlot *slot;
+	bool		can_use_plain = false;
+	bool		missing_priv = false;
+
+	/* Retrieve all the publication ids. */
+	initStringInfo(&cmd);
+	appendStringInfo(&cmd,
+					 "SELECT DISTINCT p.oid, gpt.qual"
+					 "  FROM pg_publication p,"
+					 "  LATERAL pg_get_publication_tables(p.pubname) gpt"
+					 " WHERE gpt.relid = %u",
+					 RelationGetRelid(rel));
+	if (SPI_connect() != SPI_OK_CONNECT)
+		ereport(ERROR, (errmsg("could not connect to SPI manager")));
+	if (SPI_execute(cmd.data, true, 0) != SPI_OK_SELECT)
+		ereport(ERROR, (errmsg("SPI_exec failed: %s", cmd.data)));
+
+	/*
+	 * Hasn't the subscriber noticed that the table was removed from the
+	 * publication(s) concurrently?
+	 */
+	if (SPI_processed == 0)
+	{
+		if (SPI_finish() != SPI_OK_FINISH)
+			ereport(ERROR,
+					(errmsg("SPI_finish failed")));
+		return;
+	}
+
+	Assert(SPI_tuptable->numvals > 0);
+
+	slot = MakeSingleTupleTableSlot(SPI_tuptable->tupdesc,
+									&TTSOpsHeapTuple);
+	for (i = 0; i < SPI_tuptable->numvals; i++)
+	{
+		HeapTuple	tuple = SPI_tuptable->vals[i];
+		bool		isnull,
+					has_qual;
+		Datum		datum;
+		Oid			pubid;
+		AclResult	aclresult;
+
+		ExecStoreHeapTuple(tuple, slot, false);
+
+		datum = slot_getattr(slot, 1, &isnull);
+		Assert(!isnull);
+		pubid = DatumGetObjectId(datum);
+
+		aclresult = object_aclcheck(PublicationRelationId, pubid,
+									GetUserId(), ACL_USAGE);
+
+		/* Does the publication have a filter expression? */
+		datum = slot_getattr(slot, 2, &isnull);
+		has_qual = !isnull;
+
+		if (aclresult == ACLCHECK_OK)
+		{
+			if (!has_qual)
+			{
+				/*
+				 * The whole table is available to the user, regardless other
+				 * publications.
+				 */
+				can_use_plain = true;
+				break;
+			}
+		}
+		else if (!missing_priv)
+		{
+			/*
+			 * Found a publication for which the used does not have the
+			 * privilege.
+			 */
+			missing_priv = true;
+		}
+
+		ExecClearTuple(slot);
+	}
+
+	/* Cleanup. */
+	ExecDropSingleTupleTableSlot(slot);
+	if (SPI_finish() != SPI_OK_FINISH)
+		ereport(ERROR, (errmsg("SPI_finish failed")));
+	pfree(cmd.data);
+
+	/* Is all data of the relation available to the user? */
+	if (can_use_plain)
+		return;
+
+	/*
+	 * Isn't there any publication the user does not have the privilege for?
+	 */
+	if (!missing_priv)
+		return;
+
+	ereport(ERROR,
+			(errmsg("current user does not have sufficient privileges on the publications of relation \"%s\"",
+					get_rel_name(RelationGetRelid(rel)))));
+}
+
+/*
+ * Construct WHERE clause for a relation according to the given subset of
+ * publications which are aware of the relation. While doing so, check if the
+ * current user is allowed to read data from the publications.
+ *
+ * Return NULL if at least one of the publications has no filter or if no
+ * publication is aware of the relation.
+ */
+static Node *
+get_publication_filters(Relation rel, List *publications)
+{
+	StringInfoData cmd;
+	int			i;
+	TupleTableSlot *slot;
+	FmgrInfo	fmgrinfo;
+	List	   *filters = NIL;
+	bool		omit_filter = false;
+	Node	   *result = NULL;
+	ListCell   *lc;
+	StringInfoData buf;
+	char	   *publication_names;
+	Oid			outfunc;
+	bool		isvarlena;
+	MemoryContext nonSPICxt = CurrentMemoryContext;
+
+	/* The function should not be called otherwise. */
+	Assert(publications);
+
+	initStringInfo(&buf);
+	foreach(lc, publications)
+	{
+		if (foreach_current_index(lc) > 0)
+			appendStringInfoString(&buf, ", ");
+		appendStringInfoString(&buf, quote_literal_cstr(strVal(lfirst(lc))));
+	}
+	publication_names = pstrdup(buf.data);
+	pfree(buf.data);
+
+	/*
+	 * Retrieve the publication filters - this is the same query we did for
+	 * older server versions in fetch_remote_table_info().
+	 */
+	initStringInfo(&cmd);
+	appendStringInfo(&cmd,
+					 "SELECT DISTINCT p.oid, gpt.qual"
+					 "  FROM pg_publication p,"
+					 "  LATERAL pg_get_publication_tables(p.pubname) gpt"
+					 " WHERE gpt.relid = %u"
+					 "   AND p.pubname IN ( %s )",
+					 RelationGetRelid(rel),
+					 publication_names);
+	if (SPI_connect() != SPI_OK_CONNECT)
+		ereport(ERROR, (errmsg("could not connect to SPI manager")));
+	if (SPI_execute(cmd.data, true, 0) != SPI_OK_SELECT)
+		ereport(ERROR, (errmsg("SPI_exec failed: %s", cmd.data)));
+
+	/*
+	 * Hasn't the subscriber noticed that the table was removed from the
+	 * publication(s) concurrently?
+	 */
+	if (SPI_processed == 0)
+	{
+		if (SPI_finish() != SPI_OK_FINISH)
+			ereport(ERROR,
+					(errmsg("SPI_finish failed")));
+		return NULL;
+	}
+
+	Assert(SPI_tuptable->numvals > 0);
+
+	/*
+	 * Make sure we're ready to get retrieve the filter expressions.  The
+	 * pg_get_publication_tables() function returns the qual as pg_node_tree
+	 * type.
+	 */
+	getTypeOutputInfo(PG_NODE_TREEOID, &outfunc, &isvarlena);
+	Assert(isvarlena);
+	fmgr_info(outfunc, &fmgrinfo);
+
+	slot = MakeSingleTupleTableSlot(SPI_tuptable->tupdesc,
+									&TTSOpsHeapTuple);
+	for (i = 0; i < SPI_tuptable->numvals; i++)
+	{
+		HeapTuple	tuple = SPI_tuptable->vals[i];
+		bool		isnull;
+		Datum		datum;
+		Oid			pubid;
+		AclResult	aclresult;
+
+		ExecStoreHeapTuple(tuple, slot, false);
+
+		/* Check the publication privileges. */
+		datum = slot_getattr(slot, 1, &isnull);
+		Assert(!isnull);
+		pubid = DatumGetObjectId(datum);
+		aclresult = object_aclcheck(PublicationRelationId, pubid,
+									GetUserId(), ACL_USAGE);
+		if (aclresult != ACLCHECK_OK)
+			aclcheck_error(aclresult, OBJECT_PUBLICATION,
+						   get_publication_name(pubid, false));
+
+		/* Get the filter expression. */
+		datum = slot_getattr(slot, 2, &isnull);
+
+		/*
+		 * A single publication w/o expression means that the whole table
+		 * should be published.
+		 */
+		if (!omit_filter && isnull)
+		{
+			if (filters)
+			{
+				list_free_deep(filters);
+				filters = NIL;
+			}
+
+			/*
+			 * Cannot break out of the loop because privileges of all the
+			 * publications must be checked. So at least remember that we no
+			 * longer care about the filter expressions.
+			 */
+			omit_filter = true;
+		}
+
+		if (!omit_filter)
+		{
+			char	   *nodeStr;
+			Node	   *node;
+			MemoryContext oldCxt;
+
+			/* Get the filter expression and add it to the list. */
+			nodeStr = OutputFunctionCall(&fmgrinfo, datum);
+			/* The filter list must survive SPI_finish(). */
+			oldCxt = MemoryContextSwitchTo(nonSPICxt);
+			node = stringToNode(nodeStr);
+			pfree(nodeStr);
+			filters = lappend(filters, node);
+			MemoryContextSwitchTo(oldCxt);
+		}
+
+		ExecClearTuple(slot);
+	}
+
+	/* Cleanup. */
+	ExecDropSingleTupleTableSlot(slot);
+	if (SPI_finish() != SPI_OK_FINISH)
+		ereport(ERROR, (errmsg("SPI_finish failed")));
+	pfree(cmd.data);
+
+	if (filters)
+		result = (Node *) make_orclause(filters);
+
+	return result;
 }

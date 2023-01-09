@@ -17,6 +17,7 @@
 
 #include "catalog/pg_collation.h"
 #include "utils/pg_locale.h"
+#include "utils/pg_locale_internal.h"
 
 /*
  * To provide as much functionality as possible on a variety of platforms,
@@ -306,13 +307,13 @@ pg_wc_isdigit(pg_wchar c)
 		case PG_REGEX_LOCALE_WIDE_L:
 #ifdef HAVE_LOCALE_T
 			if (sizeof(wchar_t) >= 4 || c <= (pg_wchar) 0xFFFF)
-				return iswdigit_l((wint_t) c, pg_regex_locale->info.lt);
+				return iswdigit_l((wint_t) c, pg_regex_locale->info.libc.lt);
 #endif
 			/* FALL THRU */
 		case PG_REGEX_LOCALE_1BYTE_L:
 #ifdef HAVE_LOCALE_T
 			return (c <= (pg_wchar) UCHAR_MAX &&
-					isdigit_l((unsigned char) c, pg_regex_locale->info.lt));
+					isdigit_l((unsigned char) c, pg_regex_locale->info.libc.lt));
 #endif
 			break;
 		case PG_REGEX_LOCALE_ICU:
@@ -342,13 +343,13 @@ pg_wc_isalpha(pg_wchar c)
 		case PG_REGEX_LOCALE_WIDE_L:
 #ifdef HAVE_LOCALE_T
 			if (sizeof(wchar_t) >= 4 || c <= (pg_wchar) 0xFFFF)
-				return iswalpha_l((wint_t) c, pg_regex_locale->info.lt);
+				return iswalpha_l((wint_t) c, pg_regex_locale->info.libc.lt);
 #endif
 			/* FALL THRU */
 		case PG_REGEX_LOCALE_1BYTE_L:
 #ifdef HAVE_LOCALE_T
 			return (c <= (pg_wchar) UCHAR_MAX &&
-					isalpha_l((unsigned char) c, pg_regex_locale->info.lt));
+					isalpha_l((unsigned char) c, pg_regex_locale->info.libc.lt));
 #endif
 			break;
 		case PG_REGEX_LOCALE_ICU:
@@ -378,13 +379,13 @@ pg_wc_isalnum(pg_wchar c)
 		case PG_REGEX_LOCALE_WIDE_L:
 #ifdef HAVE_LOCALE_T
 			if (sizeof(wchar_t) >= 4 || c <= (pg_wchar) 0xFFFF)
-				return iswalnum_l((wint_t) c, pg_regex_locale->info.lt);
+				return iswalnum_l((wint_t) c, pg_regex_locale->info.libc.lt);
 #endif
 			/* FALL THRU */
 		case PG_REGEX_LOCALE_1BYTE_L:
 #ifdef HAVE_LOCALE_T
 			return (c <= (pg_wchar) UCHAR_MAX &&
-					isalnum_l((unsigned char) c, pg_regex_locale->info.lt));
+					isalnum_l((unsigned char) c, pg_regex_locale->info.libc.lt));
 #endif
 			break;
 		case PG_REGEX_LOCALE_ICU:
@@ -423,13 +424,13 @@ pg_wc_isupper(pg_wchar c)
 		case PG_REGEX_LOCALE_WIDE_L:
 #ifdef HAVE_LOCALE_T
 			if (sizeof(wchar_t) >= 4 || c <= (pg_wchar) 0xFFFF)
-				return iswupper_l((wint_t) c, pg_regex_locale->info.lt);
+				return iswupper_l((wint_t) c, pg_regex_locale->info.libc.lt);
 #endif
 			/* FALL THRU */
 		case PG_REGEX_LOCALE_1BYTE_L:
 #ifdef HAVE_LOCALE_T
 			return (c <= (pg_wchar) UCHAR_MAX &&
-					isupper_l((unsigned char) c, pg_regex_locale->info.lt));
+					isupper_l((unsigned char) c, pg_regex_locale->info.libc.lt));
 #endif
 			break;
 		case PG_REGEX_LOCALE_ICU:
@@ -459,13 +460,13 @@ pg_wc_islower(pg_wchar c)
 		case PG_REGEX_LOCALE_WIDE_L:
 #ifdef HAVE_LOCALE_T
 			if (sizeof(wchar_t) >= 4 || c <= (pg_wchar) 0xFFFF)
-				return iswlower_l((wint_t) c, pg_regex_locale->info.lt);
+				return iswlower_l((wint_t) c, pg_regex_locale->info.libc.lt);
 #endif
 			/* FALL THRU */
 		case PG_REGEX_LOCALE_1BYTE_L:
 #ifdef HAVE_LOCALE_T
 			return (c <= (pg_wchar) UCHAR_MAX &&
-					islower_l((unsigned char) c, pg_regex_locale->info.lt));
+					islower_l((unsigned char) c, pg_regex_locale->info.libc.lt));
 #endif
 			break;
 		case PG_REGEX_LOCALE_ICU:
@@ -495,13 +496,13 @@ pg_wc_isgraph(pg_wchar c)
 		case PG_REGEX_LOCALE_WIDE_L:
 #ifdef HAVE_LOCALE_T
 			if (sizeof(wchar_t) >= 4 || c <= (pg_wchar) 0xFFFF)
-				return iswgraph_l((wint_t) c, pg_regex_locale->info.lt);
+				return iswgraph_l((wint_t) c, pg_regex_locale->info.libc.lt);
 #endif
 			/* FALL THRU */
 		case PG_REGEX_LOCALE_1BYTE_L:
 #ifdef HAVE_LOCALE_T
 			return (c <= (pg_wchar) UCHAR_MAX &&
-					isgraph_l((unsigned char) c, pg_regex_locale->info.lt));
+					isgraph_l((unsigned char) c, pg_regex_locale->info.libc.lt));
 #endif
 			break;
 		case PG_REGEX_LOCALE_ICU:
@@ -531,13 +532,13 @@ pg_wc_isprint(pg_wchar c)
 		case PG_REGEX_LOCALE_WIDE_L:
 #ifdef HAVE_LOCALE_T
 			if (sizeof(wchar_t) >= 4 || c <= (pg_wchar) 0xFFFF)
-				return iswprint_l((wint_t) c, pg_regex_locale->info.lt);
+				return iswprint_l((wint_t) c, pg_regex_locale->info.libc.lt);
 #endif
 			/* FALL THRU */
 		case PG_REGEX_LOCALE_1BYTE_L:
 #ifdef HAVE_LOCALE_T
 			return (c <= (pg_wchar) UCHAR_MAX &&
-					isprint_l((unsigned char) c, pg_regex_locale->info.lt));
+					isprint_l((unsigned char) c, pg_regex_locale->info.libc.lt));
 #endif
 			break;
 		case PG_REGEX_LOCALE_ICU:
@@ -567,13 +568,13 @@ pg_wc_ispunct(pg_wchar c)
 		case PG_REGEX_LOCALE_WIDE_L:
 #ifdef HAVE_LOCALE_T
 			if (sizeof(wchar_t) >= 4 || c <= (pg_wchar) 0xFFFF)
-				return iswpunct_l((wint_t) c, pg_regex_locale->info.lt);
+				return iswpunct_l((wint_t) c, pg_regex_locale->info.libc.lt);
 #endif
 			/* FALL THRU */
 		case PG_REGEX_LOCALE_1BYTE_L:
 #ifdef HAVE_LOCALE_T
 			return (c <= (pg_wchar) UCHAR_MAX &&
-					ispunct_l((unsigned char) c, pg_regex_locale->info.lt));
+					ispunct_l((unsigned char) c, pg_regex_locale->info.libc.lt));
 #endif
 			break;
 		case PG_REGEX_LOCALE_ICU:
@@ -603,13 +604,13 @@ pg_wc_isspace(pg_wchar c)
 		case PG_REGEX_LOCALE_WIDE_L:
 #ifdef HAVE_LOCALE_T
 			if (sizeof(wchar_t) >= 4 || c <= (pg_wchar) 0xFFFF)
-				return iswspace_l((wint_t) c, pg_regex_locale->info.lt);
+				return iswspace_l((wint_t) c, pg_regex_locale->info.libc.lt);
 #endif
 			/* FALL THRU */
 		case PG_REGEX_LOCALE_1BYTE_L:
 #ifdef HAVE_LOCALE_T
 			return (c <= (pg_wchar) UCHAR_MAX &&
-					isspace_l((unsigned char) c, pg_regex_locale->info.lt));
+					isspace_l((unsigned char) c, pg_regex_locale->info.libc.lt));
 #endif
 			break;
 		case PG_REGEX_LOCALE_ICU:
@@ -647,13 +648,13 @@ pg_wc_toupper(pg_wchar c)
 		case PG_REGEX_LOCALE_WIDE_L:
 #ifdef HAVE_LOCALE_T
 			if (sizeof(wchar_t) >= 4 || c <= (pg_wchar) 0xFFFF)
-				return towupper_l((wint_t) c, pg_regex_locale->info.lt);
+				return towupper_l((wint_t) c, pg_regex_locale->info.libc.lt);
 #endif
 			/* FALL THRU */
 		case PG_REGEX_LOCALE_1BYTE_L:
 #ifdef HAVE_LOCALE_T
 			if (c <= (pg_wchar) UCHAR_MAX)
-				return toupper_l((unsigned char) c, pg_regex_locale->info.lt);
+				return toupper_l((unsigned char) c, pg_regex_locale->info.libc.lt);
 #endif
 			return c;
 		case PG_REGEX_LOCALE_ICU:
@@ -691,13 +692,13 @@ pg_wc_tolower(pg_wchar c)
 		case PG_REGEX_LOCALE_WIDE_L:
 #ifdef HAVE_LOCALE_T
 			if (sizeof(wchar_t) >= 4 || c <= (pg_wchar) 0xFFFF)
-				return towlower_l((wint_t) c, pg_regex_locale->info.lt);
+				return towlower_l((wint_t) c, pg_regex_locale->info.libc.lt);
 #endif
 			/* FALL THRU */
 		case PG_REGEX_LOCALE_1BYTE_L:
 #ifdef HAVE_LOCALE_T
 			if (c <= (pg_wchar) UCHAR_MAX)
-				return tolower_l((unsigned char) c, pg_regex_locale->info.lt);
+				return tolower_l((unsigned char) c, pg_regex_locale->info.libc.lt);
 #endif
 			return c;
 		case PG_REGEX_LOCALE_ICU:

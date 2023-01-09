@@ -1642,7 +1642,8 @@ select a.unique1, b.unique2
   where b.unique2 = any (select q1 from int8_tbl c where c.q1 < b.unique1);
 
 --
--- test join removal
+-- test join removal for plain tables
+-- we have almost the smare tests for partitioned tables below
 --
 
 begin;
@@ -1708,6 +1709,37 @@ select i8.* from int8_tbl i8 left join (select f1 from int4_tbl group by f1) i4
 explain (costs off)
 select 1 from (select a.id FROM a left join b on a.b_id = b.id) q,
 			  lateral generate_series(1, q.id) gs(i) where q.id = gs.i;
+
+rollback;
+
+--
+-- test join removal for partitioned tables
+-- this is analog to the non partitioned case above
+--
+
+begin;
+
+CREATE TABLE b_p (id int PRIMARY KEY, c_id int) partition by range(id);
+CREATE TABLE b_m partition of b_p for values from (0) to (10) partition by range(id);
+CREATE TABLE b_c partition of b_m for values from (0) to (10);
+CREATE TABLE c_p (id int PRIMARY KEY) partition by range(id);
+CREATE TABLE c_m partition of c_p for values from (0) to (10) partition by range(id);
+CREATE TABLE c_c partition of c_m for values from (0) to (10);
+INSERT INTO b_p VALUES (0, 0), (1, NULL);
+INSERT INTO c_p VALUES (0), (1);
+
+-- all three cases should be optimizable into a simple seqscan
+EXPLAIN (COSTS OFF) SELECT b0.* FROM b_p b0 LEFT JOIN b_p b ON b0.c_id = b.id;
+EXPLAIN (COSTS OFF) SELECT b.* FROM b_p b LEFT JOIN c_p c ON b.c_id = c.id;
+EXPLAIN (COSTS OFF)
+  SELECT b0.* FROM b_p b0 LEFT JOIN (b_p b LEFT JOIN c_p c on b.c_id = c.id)
+  ON (b0.c_id = b.id);
+
+-- check optimization of outer join within another special join
+EXPLAIN (COSTS OFF)
+select id from b_p b0 WHERE id in (
+	SELECT b.id FROM b_p b LEFT JOIN c_p c on b.id = c.id
+);
 
 rollback;
 

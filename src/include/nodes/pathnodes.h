@@ -637,7 +637,7 @@ typedef struct PartitionSchemeData *PartitionScheme;
  *		lateral_relids - required outer rels for LATERAL, as a Relids set
  *			(includes both direct and indirect lateral references)
  *
- * If the relation is a base relation it will have these fields set:
+ * If the relation is a base relation, it will have these fields set:
  *
  *		relid - RTE index (this is redundant with the relids field, but
  *				is provided for convenience of access)
@@ -652,8 +652,6 @@ typedef struct PartitionSchemeData *PartitionScheme;
  *					   Vars and PlaceHolderVars)
  *		lateral_referencers - relids of rels that reference this one laterally
  *				(includes both direct and indirect lateral references)
- *		indexlist - list of IndexOptInfo nodes for relation's indexes
- *					(always NIL if it's not a table)
  *		pages - number of disk pages in relation (zero if not a table)
  *		tuples - number of tuples in relation (not considering restrictions)
  *		allvisfrac - fraction of disk pages that are marked all-visible
@@ -668,6 +666,13 @@ typedef struct PartitionSchemeData *PartitionScheme;
  *
  *		For otherrels that are appendrel members, these fields are filled
  *		in just as for a baserel, except we don't bother with lateral_vars.
+ *
+ * If the relation is either a base relation or a partitioned table, it will have a set:
+ *		indexlist - list of IndexOptInfo nodes for relation's indexes
+ *		                        (for patitioned indexes not all of the
+ *		                            IndexOptInfo fields are set, since they
+ *		                            can't be accessed)
+ *					(always NIL if it's not a table)
  *
  * If the relation is either a foreign table or a join of foreign tables that
  * all belong to the same foreign server and are assigned to the same user to

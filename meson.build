@@ -724,6 +724,8 @@ if not icuopt.disabled()
 
   if icu.found()
     cdata.set('USE_ICU', 1)
+  else
+    warning('did not find icu')
   endif
 
 else

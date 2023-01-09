@@ -123,28 +123,35 @@ if ($ENV{with_icu} eq 'yes')
 		[
 			'initdb',                '--no-sync',
 			'--locale-provider=icu', '--encoding=SQL_ASCII',
-			'--icu-locale=en', "$tempdir/dataX"
+			"$tempdir/dataX"
 		],
 		qr/error: encoding mismatch/,
 		'fails for encoding not supported by ICU');
 }
 else
 {
-	command_fails(
-		[ 'initdb', '--no-sync', '--locale-provider=icu', "$tempdir/data2" ],
+	command_fails_like(
+		[
+			'initdb',                '--no-sync',
+			'--locale-provider=icu', '--icu-locale=en',
+			"$tempdir/data2"
+		],
+		qr/error: ICU is not supported in this build/,
 		'locale provider ICU fails since no ICU support');
 }
 
-command_fails(
+command_fails_like(
 	[ 'initdb', '--no-sync', '--locale-provider=xyz', "$tempdir/dataX" ],
+	qr/error: unrecognized locale provider: xyz/,
 	'fails for invalid locale provider');
 
-command_fails(
+command_fails_like(
 	[
 		'initdb',                 '--no-sync',
 		'--locale-provider=libc', '--icu-locale=en',
 		"$tempdir/dataX"
 	],
+	qr/error: --icu-locale cannot be specified unless locale provider "icu" is chosen/,
 	'fails for invalid option combination');
 
 done_testing();

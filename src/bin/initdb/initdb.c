@@ -2008,7 +2008,7 @@ check_locale_encoding(const char *locale, int user_enc)
  *
  * this should match the similar check in the backend createdb() function
  */
-static bool
+static void
 check_icu_locale_encoding(int user_enc)
 {
 	if (!(is_encoding_supported_by_icu(user_enc)))
@@ -2019,9 +2019,19 @@ check_icu_locale_encoding(int user_enc)
 		pg_log_error_hint("Rerun %s and either do not specify an encoding explicitly, "
 						  "or choose a matching combination.",
 						  progname);
-		return false;
+		exit(1);
 	}
-	return true;
+
+	if (!icu_locale)
+		pg_fatal("ICU locale must be specified");
+
+	/*
+	 * In supported builds, the ICU locale ID will be checked by the backend
+	 * during post-bootstrap initialization.
+	 */
+#ifndef USE_ICU
+	pg_fatal("ICU is not supported in this build");
+#endif
 }
 
 /*
@@ -2074,20 +2084,6 @@ setlocales(void)
 	check_locale_name(LC_CTYPE, lc_messages, &canonname);
 	lc_messages = canonname;
 #endif
-
-	if (locale_provider == COLLPROVIDER_ICU)
-	{
-		if (!icu_locale)
-			pg_fatal("ICU locale must be specified");
-
-		/*
-		 * In supported builds, the ICU locale ID will be checked by the
-		 * backend during post-bootstrap initialization.
-		 */
-#ifndef USE_ICU
-		pg_fatal("ICU is not supported in this build");
-#endif
-	}
 }
 
 /*
@@ -2349,9 +2345,8 @@ setup_locale_encoding(void)
 		!check_locale_encoding(lc_collate, encodingid))
 		exit(1);				/* check_locale_encoding printed the error */
 
-	if (locale_provider == COLLPROVIDER_ICU &&
-		!check_icu_locale_encoding(encodingid))
-		exit(1);
+	if (locale_provider == COLLPROVIDER_ICU)
+		check_icu_locale_encoding(encodingid);
 }
 
 

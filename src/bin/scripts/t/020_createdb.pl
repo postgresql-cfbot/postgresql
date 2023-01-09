@@ -30,11 +30,12 @@ if ($ENV{with_icu} eq 'yes')
 	# This fails because template0 uses libc provider and has no ICU
 	# locale set.  It would succeed if template0 used the icu
 	# provider.  XXX Maybe split into multiple tests?
-	$node->command_fails(
+	$node->command_fails_like(
 		[
 			'createdb', '-T', 'template0', '-E', 'UTF8',
 			'--locale-provider=icu', 'foobar4'
 		],
+		qr/ERROR:  ICU locale must be specified/,
 		'create database with ICU fails without ICU locale specified');
 
 	$node->issues_sql_like(
@@ -46,12 +47,13 @@ if ($ENV{with_icu} eq 'yes')
 		qr/statement: CREATE DATABASE foobar5 .* LOCALE_PROVIDER icu ICU_LOCALE 'en'/,
 		'create database with ICU locale specified');
 
-	$node->command_fails(
+	$node->command_fails_like(
 		[
 			'createdb', '-T', 'template0', '-E', 'UTF8',
 			'--locale-provider=icu',
 			'--icu-locale=@colNumeric=lower', 'foobarX'
 		],
+		qr/ERROR:  could not open collator for locale/,
 		'fails for invalid ICU locale');
 
 	$node->command_fails_like(
@@ -78,17 +80,31 @@ if ($ENV{with_icu} eq 'yes')
 }
 else
 {
-	$node->command_fails(
-		[ 'createdb', '-T', 'template0', '--locale-provider=icu', 'foobar4' ],
+	$node->command_fails_like(
+		[
+			'createdb', '-T', 'template0', '-E', 'UTF8',
+			'--locale-provider=icu', '--icu-locale=en', 'foobar4'
+		],
+		qr/ERROR:  ICU is not supported in this build/,
 		'create database with ICU fails since no ICU support');
 }
 
 $node->command_fails([ 'createdb', 'foobar1' ],
 	'fails if database already exists');
 
-$node->command_fails(
+$node->command_fails_like(
 	[ 'createdb', '-T', 'template0', '--locale-provider=xyz', 'foobarX' ],
+	qr/ERROR:  unrecognized locale provider: xyz/,
 	'fails for invalid locale provider');
+
+$node->command_fails_like(
+	[
+		'createdb',        '-T',
+		'template0',       '--locale-provider=libc',
+		'--icu-locale=en', 'foobarX'
+	],
+	qr/ERROR:  ICU locale cannot be specified unless locale provider is ICU/,
+	'fails for invalid option combination');
 
 # Check use of templates with shared dependencies copied from the template.
 my ($ret, $stdout, $stderr) = $node->psql(

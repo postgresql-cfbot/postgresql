@@ -853,13 +853,22 @@ AC_SUBST(enable_thread_safety)
 # ICU
 #
 AC_MSG_CHECKING([whether to build with ICU support])
-PGAC_ARG_BOOL(with, icu, no, [build with ICU support],
+PGAC_ARG_BOOL(with, icu, yes, [build without ICU support],
               [AC_DEFINE([USE_ICU], 1, [Define to build with ICU support. (--with-icu)])])
 AC_MSG_RESULT([$with_icu])
 AC_SUBST(with_icu)
 
 if test "$with_icu" = yes; then
-  PKG_CHECK_MODULES(ICU, icu-uc icu-i18n)
+  PKG_CHECK_MODULES(ICU, icu-uc icu-i18n, [],
+                    [AC_MSG_ERROR([ICU library not found
+If you have ICU already installed, see config.log for details on the
+failure.  It is possible pkg-config isn't looking in the proper directory.
+
+Alternatively, you may set the environment variables ICU_CFLAGS
+and ICU_LIBS to avoid the need to call pkg-config.
+See the pkg-config man page for more details.
+
+Use --without-icu to disable ICU support.])])
 fi
 
 #
@@ -1957,7 +1966,10 @@ if test "$with_icu" = yes; then
 
   # Verify we have ICU's header files
   AC_CHECK_HEADER(unicode/ucol.h, [],
-        [AC_MSG_ERROR([header file <unicode/ucol.h> is required for ICU])])
+        [AC_MSG_ERROR([ICU header file <unicode/ucol.h> not found
+If you have ICU already installed, see config.log for details on the
+failure.  It is possible the compiler isn't looking in the proper directory.
+Use --without-icu to disable ICU support.])])
 
   CPPFLAGS=$ac_save_CPPFLAGS
 fi

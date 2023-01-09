@@ -24,6 +24,8 @@
 #include "catalog/pg_operator_d.h"
 #include "catalog/pg_proc_d.h"
 #include "catalog/pg_publication_d.h"
+#include "catalog/pg_toaster_d.h"
+#include "catalog/pg_toastrel_d.h"
 #include "catalog/pg_type_d.h"
 #include "common/hashfn.h"
 #include "fe_utils/string_utils.h"
@@ -125,6 +127,7 @@ getSchemaData(Archive *fout, int *numTablesPtr)
 	int			numForeignServers;
 	int			numDefaultACLs;
 	int			numEventTriggers;
+	int			numToasters;
 
 	/*
 	 * We must read extensions and extension membership info first, because
@@ -197,6 +200,9 @@ getSchemaData(Archive *fout, int *numTablesPtr)
 
 	pg_log_info("reading default privileges");
 	getDefaultACLs(fout, &numDefaultACLs);
+
+	pg_log_info("reading user-defined toasters");
+	getToasters(fout, &numToasters);
 
 	pg_log_info("reading user-defined collations");
 	(void) getCollations(fout, &numCollations);
@@ -860,6 +866,42 @@ findCollationByOid(Oid oid)
 	dobj = findObjectByCatalogId(catId);
 	Assert(dobj == NULL || dobj->objType == DO_COLLATION);
 	return (CollInfo *) dobj;
+}
+
+/*
+ * findToasterByOid
+ *	  finds the DumpableObject for the toaster with the given oid
+ *	  returns NULL if not found
+ */
+ToasterInfo *
+findToasterByOid(Oid oid)
+{
+	CatalogId	catId;
+	DumpableObject *dobj;
+
+	catId.tableoid = ToasterRelationId;
+	catId.oid = oid;
+	dobj = findObjectByCatalogId(catId);
+	Assert(dobj == NULL || dobj->objType == DO_TOASTER);
+	return (ToasterInfo *) dobj;
+}
+
+/*
+ * findToastrelByOid
+ *	  finds the DumpableObject for the toastrel with the given oid
+ *	  returns NULL if not found
+ */
+ToastrelInfo *
+findToastrelByOid(Oid oid)
+{
+	CatalogId	catId;
+	DumpableObject *dobj;
+
+	catId.tableoid = ToastrelRelationId;
+	catId.oid = oid;
+	dobj = findObjectByCatalogId(catId);
+	Assert(dobj == NULL || dobj->objType == DO_TABLE_DATA);
+	return (ToastrelInfo *) dobj;
 }
 
 /*

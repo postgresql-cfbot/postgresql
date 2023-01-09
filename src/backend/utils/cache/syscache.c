@@ -67,6 +67,8 @@
 #include "catalog/pg_subscription.h"
 #include "catalog/pg_subscription_rel.h"
 #include "catalog/pg_tablespace.h"
+#include "catalog/pg_toaster.h"
+#include "catalog/pg_toastrel.h"
 #include "catalog/pg_transform.h"
 #include "catalog/pg_ts_config.h"
 #include "catalog/pg_ts_config_map.h"
@@ -577,6 +579,33 @@ static const struct cachedesc cacheinfo[] = {
 		KEY(Anum_pg_tablespace_oid),
 		4
 	},
+	[TOASTERNAME] = {
+		ToasterRelationId,
+		ToasterNameIndexId,
+		KEY(Anum_pg_toaster_tsrname),
+		4
+	},
+	[TOASTEROID] = {
+		ToasterRelationId,
+		ToasterOidIndexId,
+		KEY(Anum_pg_toaster_oid),
+		16
+	},
+	[TOASTRELKEY] = {
+		ToastrelRelationId,
+		ToastrelKeyIndexId,
+		KEY(Anum_pg_toastrel_toasteroid,
+			Anum_pg_toastrel_relid,
+			Anum_pg_toastrel_version,
+			Anum_pg_toastrel_attnum),
+		16
+	},
+	[TOASTRELOID] = {
+		ToastrelRelationId,
+		ToastrelOidIndexId,
+		KEY(Anum_pg_toastrel_oid),
+		16
+	},
 	[TRFOID] = {
 		TransformRelationId,
 		TransformOidIndexId,
@@ -719,6 +748,7 @@ InitCatalogCache(void)
 		 * Assert that every enumeration value defined in syscache.h has been
 		 * populated in the cacheinfo array.
 		 */
+
 		Assert(cacheinfo[cacheId].reloid != 0);
 
 		SysCache[cacheId] = InitCatCache(cacheId,

@@ -62,15 +62,17 @@ enum dbObjectTypePriorities
 	PRIO_FUNC,
 	PRIO_AGG,
 	PRIO_ACCESS_METHOD,
+	PRIO_TSPARSER,
 	PRIO_OPERATOR,
 	PRIO_OPFAMILY,				/* used for DO_OPFAMILY and DO_OPCLASS */
 	PRIO_CONVERSION,
-	PRIO_TSPARSER,
 	PRIO_TSTEMPLATE,
 	PRIO_TSDICT,
 	PRIO_TSCONFIG,
 	PRIO_FDW,
 	PRIO_FOREIGN_SERVER,
+	PRIO_TOASTER,
+	PRIO_TOASTREL,
 	PRIO_TABLE,
 	PRIO_TABLE_ATTACH,
 	PRIO_DUMMY_TYPE,
@@ -113,6 +115,8 @@ static const int dbObjectTypePriority[] =
 	PRIO_OPFAMILY,				/* DO_OPFAMILY */
 	PRIO_COLLATION,				/* DO_COLLATION */
 	PRIO_CONVERSION,			/* DO_CONVERSION */
+	PRIO_TOASTER,				/* DO_TOASTER */
+/*	PRIO_TOASTREL,				*//* XXX DO_TOASTREL */
 	PRIO_TABLE,					/* DO_TABLE */
 	PRIO_TABLE_ATTACH,			/* DO_TABLE_ATTACH */
 	PRIO_ATTRDEF,				/* DO_ATTRDEF */
@@ -1498,6 +1502,16 @@ describeDumpableObject(DumpableObject *obj, char *buf, int bufsize)
 					 "SUBSCRIPTION (ID %d OID %u)",
 					 obj->dumpId, obj->catId.oid);
 			return;
+		case DO_TOASTER:
+			snprintf(buf, bufsize,
+					 "TOASTER %s  (ID %d OID %u)",
+					 obj->name, obj->dumpId, obj->catId.oid);
+			return;
+/*		case DO_TOASTREL:
+			snprintf(buf, bufsize,
+					 "TOASTREL %s  (ID %d OID %u)",
+					 obj->name, obj->dumpId, obj->catId.oid);
+			return; */
 		case DO_PRE_DATA_BOUNDARY:
 			snprintf(buf, bufsize,
 					 "PRE-DATA BOUNDARY  (ID %d)",

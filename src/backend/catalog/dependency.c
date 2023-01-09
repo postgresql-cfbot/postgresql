@@ -57,6 +57,8 @@
 #include "catalog/pg_statistic_ext.h"
 #include "catalog/pg_subscription.h"
 #include "catalog/pg_tablespace.h"
+#include "catalog/pg_toaster.h"
+#include "catalog/pg_toastrel.h"
 #include "catalog/pg_transform.h"
 #include "catalog/pg_trigger.h"
 #include "catalog/pg_ts_config.h"
@@ -188,7 +190,9 @@ static const Oid object_classes[] = {
 	PublicationRelationId,		/* OCLASS_PUBLICATION */
 	PublicationRelRelationId,	/* OCLASS_PUBLICATION_REL */
 	SubscriptionRelationId,		/* OCLASS_SUBSCRIPTION */
-	TransformRelationId			/* OCLASS_TRANSFORM */
+	TransformRelationId,		/* OCLASS_TRANSFORM */
+	ToasterRelationId,		/* OCLASS_TOASTER */
+	ToastrelRelationId		/* OCLASS_TOASTREL */
 };
 
 /*
@@ -1419,7 +1423,7 @@ doDeletion(const ObjectAddress *object, int flags)
 						RemoveAttributeById(object->objectId,
 											object->objectSubId);
 					else
-						heap_drop_with_catalog(object->objectId);
+						heap_drop_with_catalog(object->objectId, true);
 				}
 
 				/*
@@ -1514,6 +1518,12 @@ doDeletion(const ObjectAddress *object, int flags)
 			DropObjectById(object);
 			break;
 
+		case OCLASS_TOASTER:
+			elog(ERROR, "toaster cannot be deleted by doDeletion");
+			break;
+		case OCLASS_TOASTREL:
+			elog(ERROR, "toast relation cannot be deleted by doDeletion");
+			break;
 			/*
 			 * These global object types are not supported here.
 			 */
@@ -2966,6 +2976,13 @@ getObjectClass(const ObjectAddress *object)
 
 		case TransformRelationId:
 			return OCLASS_TRANSFORM;
+
+		case ToasterRelationId:
+			return OCLASS_TOASTER;
+
+		case ToastrelRelationId:
+			return OCLASS_TOASTREL;
+
 	}
 
 	/* shouldn't get here */

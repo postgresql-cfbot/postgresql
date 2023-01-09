@@ -31,6 +31,7 @@
 #include "access/sysattr.h"
 #include "access/tableam.h"
 #include "access/toast_compression.h"
+#include "access/toasterapi.h"
 #include "access/transam.h"
 #include "access/visibilitymap.h"
 #include "access/xact.h"
@@ -51,6 +52,9 @@
 #include "catalog/pg_opclass.h"
 #include "catalog/pg_operator.h"
 #include "catalog/pg_tablespace.h"
+#include "catalog/pg_toaster.h"
+#include "catalog/pg_toastrel.h"
+#include "catalog/pg_toastrel_d.h"
 #include "catalog/pg_trigger.h"
 #include "catalog/pg_type.h"
 #include "catalog/storage.h"
@@ -3861,7 +3865,7 @@ bool
 reindex_relation(Oid relid, int flags, ReindexParams *params)
 {
 	Relation	rel;
-	Oid			toast_relid;
+/*	Oid			toast_relid; */
 	List	   *indexIds;
 	char		persistence;
 	bool		result;
@@ -3891,7 +3895,7 @@ reindex_relation(Oid relid, int flags, ReindexParams *params)
 			 get_namespace_name(RelationGetNamespace(rel)),
 			 RelationGetRelationName(rel));
 
-	toast_relid = rel->rd_rel->reltoastrelid;
+/*	toast_relid = rel->rd_rel->reltoastrelid; */
 
 	/*
 	 * Get the list of index OIDs for this relation.  (We trust to the
@@ -3971,7 +3975,17 @@ reindex_relation(Oid relid, int flags, ReindexParams *params)
 	 * If the relation has a secondary toast rel, reindex that too while we
 	 * still hold the lock on the main table.
 	 */
+/*
 	if ((flags & REINDEX_REL_PROCESS_TOAST) && OidIsValid(toast_relid))
+	{
+		ReindexParams newparams = *params;
+
+		newparams.options &= ~(REINDEXOPT_MISSING_OK);
+		newparams.tablespaceOid = InvalidOid;
+		result |= reindex_relation(toast_relid, flags, &newparams);
+	}
+*/
+	if ((flags & REINDEX_REL_PROCESS_TOAST) && HasToastrel(InvalidOid, rel->rd_id, 0, AccessShareLock))
 	{
 		/*
 		 * Note that this should fail if the toast relation is missing, so
@@ -3980,10 +3994,17 @@ reindex_relation(Oid relid, int flags, ReindexParams *params)
 		 * This rule is enforced by setting tablespaceOid to InvalidOid.
 		 */
 		ReindexParams newparams = *params;
+		List *toastrelids = NIL;
+		ListCell *lc;
 
 		newparams.options &= ~(REINDEXOPT_MISSING_OK);
 		newparams.tablespaceOid = InvalidOid;
-		result |= reindex_relation(toast_relid, flags, &newparams);
+
+		toastrelids = (List *) DatumGetPointer(GetToastrelList(toastrelids, rel->rd_id, 0, AccessShareLock));
+		foreach(lc, toastrelids)
+		{
+			result |= reindex_relation(lfirst_oid(lc), flags, &newparams);
+		}
 	}
 
 	return result;

@@ -23,6 +23,7 @@
 #include "access/toast_compression.h"
 #include "access/tupdesc_details.h"
 #include "catalog/pg_collation.h"
+#include "catalog/pg_toaster.h"
 #include "catalog/pg_type.h"
 #include "common/hashfn.h"
 #include "miscadmin.h"
@@ -31,6 +32,7 @@
 #include "utils/builtins.h"
 #include "utils/datum.h"
 #include "utils/resowner_private.h"
+#include "utils/lsyscache.h"
 #include "utils/syscache.h"
 
 

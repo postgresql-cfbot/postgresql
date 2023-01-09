@@ -14,11 +14,13 @@ SUBDIRS = \
 		bloom		\
 		btree_gin	\
 		btree_gist	\
+		bytea_toaster	\
 		citext		\
 		cube		\
 		dblink		\
 		dict_int	\
 		dict_xsyn	\
+		dummy_toaster	\
 		earthdistance	\
 		file_fdw	\
 		fuzzystrmatch	\
@@ -32,6 +34,7 @@ SUBDIRS = \
 		old_snapshot	\
 		pageinspect	\
 		passwordcheck	\
+		pg_bt		\
 		pg_buffercache	\
 		pg_freespacemap \
 		pg_prewarm	\

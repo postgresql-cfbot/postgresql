@@ -52,6 +52,7 @@
 #include "utils/datum.h"
 #include "utils/lsyscache.h"
 #include "utils/pg_locale.h"
+#include "utils/pg_locale_internal.h"
 #include "utils/selfuncs.h"
 #include "utils/varlena.h"
 
@@ -1511,7 +1512,7 @@ pattern_char_isalpha(char c, bool is_multibyte,
 			(c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
 #ifdef HAVE_LOCALE_T
 	else if (locale && locale->provider == COLLPROVIDER_LIBC)
-		return isalpha_l((unsigned char) c, locale->info.lt);
+		return isalpha_l((unsigned char) c, locale->info.libc.lt);
 #endif
 	else
 		return isalpha((unsigned char) c);

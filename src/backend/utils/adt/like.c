@@ -24,6 +24,7 @@
 #include "miscadmin.h"
 #include "utils/builtins.h"
 #include "utils/pg_locale.h"
+#include "utils/pg_locale_internal.h"
 
 
 #define LIKE_TRUE						1
@@ -96,7 +97,7 @@ SB_lower_char(unsigned char c, pg_locale_t locale, bool locale_is_c)
 		return pg_ascii_tolower(c);
 #ifdef HAVE_LOCALE_T
 	else if (locale)
-		return tolower_l(c, locale->info.lt);
+		return tolower_l(c, locale->info.libc.lt);
 #endif
 	else
 		return pg_tolower(c);

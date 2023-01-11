@@ -70,6 +70,8 @@ typedef struct CommitTimestampEntry
 #define TransactionIdToCTsEntry(xid)	\
 	((xid) % (TransactionId) COMMIT_TS_XACTS_PER_PAGE)
 
+#define NUM_COMMIT_TS_BUFFERS	(128 << slru_buffers_size_scale)
+
 /*
  * Link to shared-memory data structures for CommitTs control
  */
@@ -488,25 +490,12 @@ pg_xact_commit_timestamp_origin(PG_FUNCTION_ARGS)
 }
 
 /*
- * Number of shared CommitTS buffers.
- *
- * We use a very similar logic as for the number of CLOG buffers (except we
- * scale up twice as fast with shared buffers, and the maximum is twice as
- * high); see comments in CLOGShmemBuffers.
- */
-Size
-CommitTsShmemBuffers(void)
-{
-	return Min(256, Max(4, NBuffers / 256));
-}
-
-/*
  * Shared memory sizing for CommitTs
  */
 Size
 CommitTsShmemSize(void)
 {
-	return SimpleLruShmemSize(CommitTsShmemBuffers(), 0) +
+	return SimpleLruShmemSize(NUM_COMMIT_TS_BUFFERS, 0) +
 		sizeof(CommitTimestampShared);
 }
 
@@ -520,7 +509,7 @@ CommitTsShmemInit(void)
 	bool		found;
 
 	CommitTsCtl->PagePrecedes = CommitTsPagePrecedes;
-	SimpleLruInit(CommitTsCtl, "CommitTs", CommitTsShmemBuffers(), 0,
+	SimpleLruInit(CommitTsCtl, "CommitTs", NUM_COMMIT_TS_BUFFERS, 0,
 				  CommitTsSLRULock, "pg_commit_ts",
 				  LWTRANCHE_COMMITTS_BUFFER,
 				  SYNC_HANDLER_COMMIT_TS);

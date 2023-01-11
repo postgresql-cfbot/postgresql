@@ -18,7 +18,7 @@
 /*
  * The number of SLRU page buffers we use for the notification queue.
  */
-#define NUM_NOTIFY_BUFFERS	8
+#define NUM_NOTIFY_BUFFERS	(16 << slru_buffers_size_scale)
 
 extern PGDLLIMPORT bool Trace_notify;
 extern PGDLLIMPORT volatile sig_atomic_t notifyInterruptPending;

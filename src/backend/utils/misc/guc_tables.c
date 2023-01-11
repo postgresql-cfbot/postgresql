@@ -2217,6 +2217,16 @@ struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"slru_buffers_size_scale", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("SLRU buffers size scale of power 2"),
+			NULL
+		},
+		&slru_buffers_size_scale,
+		2, 0, 7,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"temp_buffers", PGC_USERSET, RESOURCES_MEM,
 			gettext_noop("Sets the maximum number of temporary buffers used by each session."),
 			NULL,

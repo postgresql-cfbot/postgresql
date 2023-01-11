@@ -151,3 +151,5 @@ int64		VacuumPageDirty = 0;
 
 int			VacuumCostBalance = 0;	/* working state for vacuum */
 bool		VacuumCostActive = false;
+
+int			slru_buffers_size_scale = 2;	/* power 2 scale for SLRU buffers */

@@ -134,6 +134,11 @@ typedef struct SlruCtlData
 	 * it's always the same, it doesn't need to be in shared memory.
 	 */
 	char		Dir[64];
+
+	/*
+	 * mask for slotno hash bank
+	 */
+	Size		bank_mask;
 } SlruCtlData;
 
 typedef SlruCtlData *SlruCtl;

@@ -80,6 +80,7 @@ static void copy_table_data(Oid OIDNewHeap, Oid OIDOldHeap, Oid OIDOldIndex,
 static List *get_tables_to_cluster(MemoryContext cluster_context);
 static List *get_tables_to_cluster_partitioned(MemoryContext cluster_context,
 											   Oid indexOid);
+static bool cluster_is_permitted_for_relation(Oid relid, Oid userid);
 
 
 /*---------------------------------------------------------------------------
@@ -366,8 +367,7 @@ cluster_rel(Oid tableOid, Oid indexOid, ClusterParams *params)
 	if (recheck)
 	{
 		/* Check that the user still has privileges for the relation */
-		if (!object_ownercheck(RelationRelationId, tableOid, save_userid) &&
-			pg_class_aclcheck(tableOid, save_userid, ACL_MAINTAIN) != ACLCHECK_OK)
+		if (!cluster_is_permitted_for_relation(tableOid, save_userid))
 		{
 			relation_close(OldHeap, AccessExclusiveLock);
 			goto out;
@@ -1645,8 +1645,7 @@ get_tables_to_cluster(MemoryContext cluster_context)
 
 		index = (Form_pg_index) GETSTRUCT(indexTuple);
 
-		if (!object_ownercheck(RelationRelationId, index->indrelid, GetUserId()) &&
-			pg_class_aclcheck(index->indrelid, GetUserId(), ACL_MAINTAIN) != ACLCHECK_OK)
+		if (!cluster_is_permitted_for_relation(index->indrelid, GetUserId()))
 			continue;
 
 		/* Use a permanent memory context for the result list */
@@ -1695,10 +1694,7 @@ get_tables_to_cluster_partitioned(MemoryContext cluster_context, Oid indexOid)
 			continue;
 
 		/* Silently skip partitions which the user has no access to. */
-		if (!object_ownercheck(RelationRelationId, relid, GetUserId()) &&
-			pg_class_aclcheck(relid, GetUserId(), ACL_MAINTAIN) != ACLCHECK_OK &&
-			(!object_ownercheck(DatabaseRelationId, MyDatabaseId, GetUserId()) ||
-			 IsSharedRelation(relid)))
+		if (!cluster_is_permitted_for_relation(relid, GetUserId()))
 			continue;
 
 		/* Use a permanent memory context for the result list */
@@ -1713,4 +1709,17 @@ get_tables_to_cluster_partitioned(MemoryContext cluster_context, Oid indexOid)
 	}
 
 	return rtcs;
+}
+
+static bool
+cluster_is_permitted_for_relation(Oid relid, Oid userid)
+{
+	if (object_ownercheck(RelationRelationId, relid, userid) ||
+		pg_class_aclcheck(relid, userid, ACL_MAINTAIN) == ACLCHECK_OK)
+		return true;
+
+	ereport(WARNING,
+			(errmsg("permission denied to cluster \"%s\", skipping it",
+					get_rel_name(relid))));
+	return false;
 }

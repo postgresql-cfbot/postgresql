@@ -961,6 +961,15 @@ mymap   /^(.*)@otherdomain\.com$   guest
    <literal>@mydomain.com</literal>, and allow any user whose system name ends with
    <literal>@otherdomain.com</literal> to log in as <literal>guest</literal>.
   </para>
+  <para>
+   If the <replaceable>database-username</replaceable> begins with a
+   <literal>+</literal> character, then the operating system user can login as
+   any user belonging to that role, similarly to how user names beginning with
+   <literal>+</literal> are treated in <literal>pg_hba.conf</literal>.
+   Thus, a <literal>+</literal> mark means <quote>match any of the roles that
+   are directly or indirectly members of this role</quote>, while a name
+   without a <literal>+</literal> mark matches only that specific role.
+  </para>
 
   <tip>
    <para>

@@ -100,6 +100,8 @@ if (find_in_log(
 
 # Add a database role, to use for the user name map.
 $node->safe_psql('postgres', qq{CREATE ROLE testmapuser LOGIN});
+$node->safe_psql('postgres',"CREATE ROLE testmapgroup NOLOGIN");
+$node->safe_psql('postgres', "GRANT testmapgroup TO testmapuser");
 
 # Extract as well the system user for the user name map.
 my $system_user =
@@ -142,17 +144,59 @@ test_role(
 
 
 # Concatenate system_user to system_user.
-$regex_test_string = $system_user . $system_user;
+my $bad_regex_test_string = $system_user . $system_user;
 
 # Failure as the regular expression does not match.
-reset_pg_ident($node, 'mypeermap', qq{/^.*$regex_test_string\$},
+reset_pg_ident($node, 'mypeermap', qq{/^.*$bad_regex_test_string\$},
 	'testmapuser');
 test_role(
 	$node,
 	qq{testmapuser},
 	'peer',
 	2,
-	'with regular expression in user name map',
+	'with bad regular expression in user name map',
 	log_like => [qr/no match in usermap "mypeermap" for user "testmapuser"/]);
+
+# test using a group role match
+# first with a plain user ...
+reset_pg_ident($node, 'mypeermap', $system_user, '+testmapgroup');
+test_role(
+	$node,
+	qq{testmapuser},
+	'peer',
+	0,
+	'plain user with group',
+	log_like =>
+	  [qr/connection authenticated: identity="$system_user" method=peer/]);
+
+test_role(
+	$node,
+	qq{testmapgroup},
+	'peer',
+	2,
+	'group user with group',
+	log_like =>
+	  [qr/role "testmapgroup" is not permitted to log in/]);
+
+# ... then with a regex user
+reset_pg_ident($node, 'mypeermap', qq{/^.*$regex_test_string\$}, '+testmapgroup');
+
+test_role(
+	$node,
+	qq{testmapuser},
+	'peer',
+	0,
+	'regex user with group',
+	log_like =>
+	  [qr/connection authenticated: identity="$system_user" method=peer/]);
+
+test_role(
+	$node,
+	qq{testmapgroup},
+	'peer',
+	2,
+	'regex group user with group',
+	log_like =>
+	  [qr/role "testmapgroup" is not permitted to log in/]);
 
 done_testing();

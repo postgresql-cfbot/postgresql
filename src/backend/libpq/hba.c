@@ -2900,9 +2900,20 @@ check_ident_usermap(IdentLine *identLine, const char *usermap_name,
 
 		/*
 		 * now check if the username actually matched what the user is trying
-		 * to connect as
+		 * to connect as. First check if it's a member of a specified group
+		 * role.
 		 */
-		if (case_insensitive)
+		if (regexp_pgrole[0] == '+')
+		{
+			/*
+			 * Since we're not comparing role names here, use of case
+			 * insensitive matching doesn't really apply.
+			 */
+			Oid roleid = get_role_oid(pg_role, true);
+			if (is_member(roleid, regexp_pgrole +1))
+				*found_p = true;
+		}
+		else if (case_insensitive)
 		{
 			if (pg_strcasecmp(regexp_pgrole, pg_role) == 0)
 				*found_p = true;
@@ -2919,16 +2930,29 @@ check_ident_usermap(IdentLine *identLine, const char *usermap_name,
 	else
 	{
 		/* Not regular expression, so make complete match */
-		if (case_insensitive)
+
+		char *map_role = identLine->pg_role;
+
+		if (case_insensitive ?
+			(pg_strcasecmp(identLine->token->string, ident_user) != 0) :
+			(strcmp(identLine->token->string, ident_user) != 0))
+			return;
+
+		if (map_role[0] == '+')
 		{
-			if (pg_strcasecmp(identLine->pg_role, pg_role) == 0 &&
-				pg_strcasecmp(identLine->token->string, ident_user) == 0)
+			/* see comment above re case insensitive matching in this case */
+			Oid roleid = get_role_oid(pg_role, true);
+			if (is_member(roleid, ++map_role))
+				*found_p = true;
+		}
+		else if (case_insensitive)
+		{
+			if (pg_strcasecmp(map_role, pg_role) == 0)
 				*found_p = true;
 		}
 		else
 		{
-			if (strcmp(identLine->pg_role, pg_role) == 0 &&
-				strcmp(identLine->token->string, ident_user) == 0)
+			if (strcmp(map_role, pg_role) == 0)
 				*found_p = true;
 		}
 	}

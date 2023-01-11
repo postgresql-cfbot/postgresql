@@ -1025,6 +1025,10 @@ typedef struct RangeTblEntry
 	 * target table.  We leave such RTEs with their original lockmode so as to
 	 * avoid getting an additional, lesser lock.
 	 *
+	 * Note: There's a hack in ApplyRetrieveRule() that converts a view
+	 * relation's RTE_RELATION entry to become an RTE_SUBQUERY entry, while
+	 * still keeping relid and perminfoindex set.
+	 *
 	 * perminfoindex is 1-based index of the RTEPermissionInfo belonging to
 	 * this RTE in the containing struct's list of same; 0 if permissions need
 	 * not be checked for this RTE.

@@ -27,7 +27,6 @@ extern bool TransactionIdGetCommitTsData(TransactionId xid,
 extern TransactionId GetLatestCommitTsData(TimestampTz *ts,
 										   RepOriginId *nodeid);
 
-extern Size CommitTsShmemBuffers(void);
 extern Size CommitTsShmemSize(void);
 extern void CommitTsShmemInit(void);
 extern void BootStrapCommitTs(void);
@@ -40,8 +39,6 @@ extern void TruncateCommitTs(TransactionId oldestXact);
 extern void SetCommitTsLimit(TransactionId oldestXact,
 							 TransactionId newestXact);
 extern void AdvanceOldestCommitTsXid(TransactionId oldestXact);
-
-extern int	committssyncfiletag(const FileTag *ftag, char *path);
 
 /* XLOG stuff */
 #define COMMIT_TS_ZEROPAGE		0x00

@@ -7,6 +7,7 @@
  *	src/bin/pg_upgrade/function.c
  */
 
+
 #include "postgres_fe.h"
 
 #include "access/transam.h"
@@ -42,6 +43,43 @@ library_name_compare(const void *p1, const void *p2)
 			((const LibraryInfo *) p2)->dbnum;
 }
 
+/*
+ * qsort comparator for hex filenames
+ */
+static int
+file_name_compare(const struct dirent ** de_1, const struct dirent ** de_2)
+{
+	int n1;
+	int n2;
+
+
+	char * fname_1;
+	char * fname_2;
+
+	fname_1 = (char *) (*de_1)->d_name;
+	fname_2 = (char *) (*de_2)->d_name;
+	
+	if ((strcmp(fname_1, ".")) || strcmp(fname_1, "..")) 
+	{
+		n1 = (int) strtol(fname_1, NULL, 16);
+	} else {
+		n1 = -1;
+	}
+
+	if ((strcmp(fname_2, ".")) || strcmp(fname_2, ".."))
+	{
+		n2 = (int) strtol(fname_2, NULL, 16);
+	} else {
+		n2 = -1;
+	}
+
+	if (n1 == n2) 
+	{
+		return 1; //arbitrarily select the first input
+	} else {
+		return n1 - n2;
+	}
+}
 
 /*
  * get_loadable_libraries()
@@ -109,6 +147,34 @@ get_loadable_libraries(void)
 }
 
 
+/*
+ * get_sorted_hex_files()
+ * given the filepath of a directory,
+ * return array of child dirents with hex filenames e.g '000A'
+ * in sorted order
+ */
+struct dirent** 
+get_sorted_hex_files(char * dr, int * size)
+{
+	struct dirent **entry_list;
+
+	*size = scandir(dr, &entry_list, NULL, file_name_compare);
+	if (*size < 0)
+	{
+		return NULL; //error
+	}
+	return entry_list;
+}
+
+void
+cleanup_dirents(struct dirent ** all_dirents, int total_read_files)
+{	
+	for (int i = 0; i < total_read_files; i++)
+	{
+		 free((struct dirent **) all_dirents[i]);
+	}
+	free((struct dirent **) all_dirents);
+}
 /*
  * check_loadable_libraries()
  *

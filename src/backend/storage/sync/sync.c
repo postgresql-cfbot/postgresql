@@ -18,9 +18,7 @@
 #include <fcntl.h>
 #include <sys/file.h>
 
-#include "access/commit_ts.h"
-#include "access/clog.h"
-#include "access/multixact.h"
+#include "access/slru.h"
 #include "access/xlog.h"
 #include "access/xlogutils.h"
 #include "commands/tablespace.h"
@@ -106,22 +104,6 @@ static const SyncOps syncsw[] = {
 		.sync_unlinkfiletag = mdunlinkfiletag,
 		.sync_filetagmatches = mdfiletagmatches
 	},
-	/* pg_xact */
-	[SYNC_HANDLER_CLOG] = {
-		.sync_syncfiletag = clogsyncfiletag
-	},
-	/* pg_commit_ts */
-	[SYNC_HANDLER_COMMIT_TS] = {
-		.sync_syncfiletag = committssyncfiletag
-	},
-	/* pg_multixact/offsets */
-	[SYNC_HANDLER_MULTIXACT_OFFSET] = {
-		.sync_syncfiletag = multixactoffsetssyncfiletag
-	},
-	/* pg_multixact/members */
-	[SYNC_HANDLER_MULTIXACT_MEMBER] = {
-		.sync_syncfiletag = multixactmemberssyncfiletag
-	}
 };
 
 /*

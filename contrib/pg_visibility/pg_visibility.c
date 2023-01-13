@@ -386,13 +386,14 @@ pg_truncate_visibility_map(PG_FUNCTION_ARGS)
 	check_relation_relkind(rel);
 
 	/* Forcibly reset cached file size */
-	RelationGetSmgr(rel)->smgr_cached_nblocks[VISIBILITYMAP_FORKNUM] = InvalidBlockNumber;
+	RelationGetSmgr(rel, VISIBILITYMAP_FORKNUM)->smgr_cached_nblocks = InvalidBlockNumber;
 
 	block = visibilitymap_prepare_truncate(rel, 0);
 	if (BlockNumberIsValid(block))
 	{
 		fork = VISIBILITYMAP_FORKNUM;
-		smgrtruncate(RelationGetSmgr(rel), &fork, 1, &block);
+		DropRelationBuffers(rel->rd_locator, rel->rd_backend, &fork, 1, &block);
+		smgrtruncate_multi(rel->rd_locator, rel->rd_backend, &fork, 1, &block);
 	}
 
 	if (RelationNeedsWAL(rel))

@@ -116,11 +116,11 @@ AddPendingSync(const RelFileLocator *rlocator)
  * that does not want the storage to be destroyed in case of an abort may
  * pass register_delete = false.
  */
-SMgrRelation
+SMgrFileHandle
 RelationCreateStorage(RelFileLocator rlocator, char relpersistence,
 					  bool register_delete)
 {
-	SMgrRelation srel;
+	SMgrFileHandle sfile;
 	BackendId	backend;
 	bool		needs_wal;
 
@@ -145,11 +145,11 @@ RelationCreateStorage(RelFileLocator rlocator, char relpersistence,
 			return NULL;		/* placate compiler */
 	}
 
-	srel = smgropen(rlocator, backend);
-	smgrcreate(srel, MAIN_FORKNUM, false);
+	sfile = smgropen(rlocator, backend, MAIN_FORKNUM);
+	smgrcreate(sfile, false);
 
 	if (needs_wal)
-		log_smgrcreate(&srel->smgr_rlocator.locator, MAIN_FORKNUM);
+		log_smgrcreate(&rlocator, MAIN_FORKNUM);
 
 	/*
 	 * Add the relation to the list of stuff to delete at abort, if we are
@@ -175,7 +175,7 @@ RelationCreateStorage(RelFileLocator rlocator, char relpersistence,
 		AddPendingSync(&rlocator);
 	}
 
-	return srel;
+	return sfile;
 }
 
 /*
@@ -292,16 +292,18 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 	ForkNumber	forks[MAX_FORKNUM];
 	BlockNumber blocks[MAX_FORKNUM];
 	int			nforks = 0;
-	SMgrRelation reln;
 
 	/*
 	 * Make sure smgr_targblock etc aren't pointing somewhere past new end.
 	 * (Note: don't rely on this reln pointer below this loop.)
 	 */
-	reln = RelationGetSmgr(rel);
-	reln->smgr_targblock = InvalidBlockNumber;
-	for (int i = 0; i <= MAX_FORKNUM; ++i)
-		reln->smgr_cached_nblocks[i] = InvalidBlockNumber;
+	for (int i = 0; i <= MAX_FORKNUM; i++)
+	{
+		SMgrFileHandle sfile = RelationGetSmgr(rel, i);
+
+		sfile->smgr_targblock = InvalidBlockNumber;
+		sfile->smgr_cached_nblocks = InvalidBlockNumber;
+	}
 
 	/* Prepare for truncation of MAIN fork of the relation */
 	forks[nforks] = MAIN_FORKNUM;
@@ -309,7 +311,7 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 	nforks++;
 
 	/* Prepare for truncation of the FSM if it exists */
-	fsm = smgrexists(RelationGetSmgr(rel), FSM_FORKNUM);
+	fsm = smgrexists(RelationGetSmgr(rel, FSM_FORKNUM));
 	if (fsm)
 	{
 		blocks[nforks] = FreeSpaceMapPrepareTruncateRel(rel, nblocks);
@@ -322,7 +324,7 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 	}
 
 	/* Prepare for truncation of the visibility map too if it exists */
-	vm = smgrexists(RelationGetSmgr(rel), VISIBILITYMAP_FORKNUM);
+	vm = smgrexists(RelationGetSmgr(rel, VISIBILITYMAP_FORKNUM));
 	if (vm)
 	{
 		blocks[nforks] = visibilitymap_prepare_truncate(rel, nblocks);
@@ -390,11 +392,12 @@ RelationTruncate(Relation rel, BlockNumber nblocks)
 	}
 
 	/*
-	 * This will first remove any buffers from the buffer pool that should no
+	 * First remove any buffers from the buffer pool that should no
 	 * longer exist after truncation is complete, and then truncate the
 	 * corresponding files on disk.
 	 */
-	smgrtruncate(RelationGetSmgr(rel), forks, nforks, blocks);
+	DropRelationBuffers(rel->rd_locator, rel->rd_backend, forks, nforks, blocks);
+	smgrtruncate_multi(rel->rd_locator, rel->rd_backend, forks, nforks, blocks);
 
 	/* We've done all the critical work, so checkpoints are OK now. */
 	MyProc->delayChkptFlags &= ~DELAY_CHKPT_COMPLETE;
@@ -428,7 +431,7 @@ RelationPreTruncate(Relation rel)
 		return;
 
 	pending = hash_search(pendingSyncHash,
-						  &(RelationGetSmgr(rel)->smgr_rlocator.locator),
+						  &rel->rd_locator,
 						  HASH_FIND, NULL);
 	if (pending)
 		pending->is_truncated = true;
@@ -444,12 +447,12 @@ RelationPreTruncate(Relation rel)
  * Also note that this is frequently called via locutions such as
  *		RelationCopyStorage(RelationGetSmgr(rel), ...);
  * That's safe only because we perform only smgr and WAL operations here.
- * If we invoked anything else, a relcache flush could cause our SMgrRelation
+ * If we invoked anything else, a relcache flush could cause our SMgrFileHandle
  * argument to become a dangling pointer.
  */
 void
-RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
-					ForkNumber forkNum, char relpersistence)
+RelationCopyStorage(SMgrFileHandle src, SMgrFileHandle dst,
+					char relpersistence)
 {
 	PGAlignedBlock buf;
 	Page		page;
@@ -466,7 +469,7 @@ RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
 	 * it needs to be synced to disk.
 	 */
 	copying_initfork = relpersistence == RELPERSISTENCE_UNLOGGED &&
-		forkNum == INIT_FORKNUM;
+		src->smgr_locator.forknum == INIT_FORKNUM;
 
 	/*
 	 * We need to log the copied data in WAL iff WAL archiving/streaming is
@@ -477,14 +480,14 @@ RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
 	use_wal = XLogIsNeeded() &&
 		(relpersistence == RELPERSISTENCE_PERMANENT || copying_initfork);
 
-	nblocks = smgrnblocks(src, forkNum);
+	nblocks = smgrnblocks(src);
 
 	for (blkno = 0; blkno < nblocks; blkno++)
 	{
 		/* If we got a cancel signal during the copy of the data, quit */
 		CHECK_FOR_INTERRUPTS();
 
-		smgrread(src, forkNum, blkno, buf.data);
+		smgrread(src, blkno, buf.data);
 
 		if (!PageIsVerifiedExtended(page, blkno,
 									PIV_LOG_WARNING | PIV_REPORT_STAT))
@@ -496,9 +499,7 @@ RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
 			 * (errcontext callbacks shouldn't be risking any such thing, but
 			 * people have been known to forget that rule.)
 			 */
-			char	   *relpath = relpathbackend(src->smgr_rlocator.locator,
-												 src->smgr_rlocator.backend,
-												 forkNum);
+			char	   *relpath = smgrfilepath(src->smgr_locator);
 
 			ereport(ERROR,
 					(errcode(ERRCODE_DATA_CORRUPTED),
@@ -512,7 +513,7 @@ RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
 		 * space.
 		 */
 		if (use_wal)
-			log_newpage(&dst->smgr_rlocator.locator, forkNum, blkno, page, false);
+			log_newpage(&dst->smgr_locator.locator, dst->smgr_locator.forknum, blkno, page, false);
 
 		PageSetChecksumInplace(page, blkno);
 
@@ -521,7 +522,7 @@ RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
 		 * need for smgr to schedule an fsync for this write; we'll do it
 		 * ourselves below.
 		 */
-		smgrextend(dst, forkNum, blkno, buf.data, true);
+		smgrextend(dst, blkno, buf.data, true);
 	}
 
 	/*
@@ -534,7 +535,7 @@ RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
 	 * they might still not be on disk when the crash occurs.
 	 */
 	if (use_wal || copying_initfork)
-		smgrimmedsync(dst, forkNum);
+		smgrimmedsync(dst);
 }
 
 /*
@@ -653,9 +654,9 @@ smgrDoPendingDeletes(bool isCommit)
 	PendingRelDelete *pending;
 	PendingRelDelete *prev;
 	PendingRelDelete *next;
-	int			nrels = 0,
-				maxrels = 0;
-	SMgrRelation *srels = NULL;
+	int			nlocators = 0,
+				maxlocators = 0;
+	RelFileLocatorBackend *locators = NULL;
 
 	prev = NULL;
 	for (pending = pendingDeletes; pending != NULL; pending = next)
@@ -676,23 +677,21 @@ smgrDoPendingDeletes(bool isCommit)
 			/* do deletion if called for */
 			if (pending->atCommit == isCommit)
 			{
-				SMgrRelation srel;
-
-				srel = smgropen(pending->rlocator, pending->backend);
+				RelFileLocatorBackend rlocator = { pending->rlocator, pending->backend };
 
 				/* allocate the initial array, or extend it, if needed */
-				if (maxrels == 0)
+				if (maxlocators == 0)
 				{
-					maxrels = 8;
-					srels = palloc(sizeof(SMgrRelation) * maxrels);
+					maxlocators = 8;
+					locators = palloc(sizeof(RelFileLocatorBackend) * maxlocators);
 				}
-				else if (maxrels <= nrels)
+				else if (maxlocators <= nlocators)
 				{
-					maxrels *= 2;
-					srels = repalloc(srels, sizeof(SMgrRelation) * maxrels);
+					maxlocators *= 2;
+					locators = repalloc(locators, sizeof(RelFileLocatorBackend) * maxlocators);
 				}
 
-				srels[nrels++] = srel;
+				locators[nlocators++] = rlocator;
 			}
 			/* must explicitly free the list entry */
 			pfree(pending);
@@ -700,15 +699,58 @@ smgrDoPendingDeletes(bool isCommit)
 		}
 	}
 
-	if (nrels > 0)
+	if (nlocators > 0)
 	{
-		smgrdounlinkall(srels, nrels, false);
+		ForkNumber forks[MAX_FORKNUM + 1];
 
-		for (int i = 0; i < nrels; i++)
-			smgrclose(srels[i]);
+		for (int i = 0; i <= MAX_FORKNUM; i++)
+			forks[i] = i;
 
-		pfree(srels);
+		/*
+		 * Get rid of any remaining buffers for the relations.  bufmgr will just
+		 * drop them without bothering to write the contents.
+		 */
+		DropRelationsAllBuffers(locators, nlocators);
+
+		for (int i = 0; i < nlocators; i++)
+			smgrunlink_multi(locators[i].locator, locators[i].backend, forks, MAX_FORKNUM + 1, false);
+		pfree(locators);
 	}
+}
+
+/*
+ * DropRelationFiles -- drop files of all given relations
+ */
+void
+DropRelationFiles(RelFileLocator *delrels, int ndelrels, bool isRedo)
+{
+	RelFileLocatorBackend *locators;
+	int			i;
+	ForkNumber	all_forks[MAX_FORKNUM + 1];
+
+	locators = palloc(sizeof(RelFileLocatorBackend) * ndelrels);
+	for (i = 0; i < ndelrels; i++)
+	{
+		if (isRedo)
+		{
+			for (int fork = 0; fork <= MAX_FORKNUM; fork++)
+				XLogDropRelation(delrels[i], fork);
+		}
+		locators[i].locator = delrels[i];
+		locators[i].backend = InvalidBackendId;
+	}
+
+	/*
+	 * Get rid of any remaining buffers for the relations.  bufmgr will just
+	 * drop them without bothering to write the contents.
+	 */
+	DropRelationsAllBuffers(locators, ndelrels);
+
+	for (int fork = 0; fork <= MAX_FORKNUM; fork++)
+		all_forks[fork] = fork;
+
+	for (i = 0; i < ndelrels; i++)
+		smgrunlink_multi(locators[i].locator, locators[i].backend, all_forks, MAX_FORKNUM + 1, true);
 }
 
 /*
@@ -718,9 +760,9 @@ void
 smgrDoPendingSyncs(bool isCommit, bool isParallelWorker)
 {
 	PendingRelDelete *pending;
-	int			nrels = 0,
-				maxrels = 0;
-	SMgrRelation *srels = NULL;
+	int			nlocators = 0,
+				maxlocators = 0;
+	RelFileLocator *locators = NULL;
 	HASH_SEQ_STATUS scan;
 	PendingRelSync *pendingsync;
 
@@ -757,9 +799,6 @@ smgrDoPendingSyncs(bool isCommit, bool isParallelWorker)
 		ForkNumber	fork;
 		BlockNumber nblocks[MAX_FORKNUM + 1];
 		BlockNumber total_blocks = 0;
-		SMgrRelation srel;
-
-		srel = smgropen(pendingsync->rlocator, InvalidBackendId);
 
 		/*
 		 * We emit newpage WAL records for smaller relations.
@@ -773,9 +812,12 @@ smgrDoPendingSyncs(bool isCommit, bool isParallelWorker)
 		{
 			for (fork = 0; fork <= MAX_FORKNUM; fork++)
 			{
-				if (smgrexists(srel, fork))
+				SMgrFileHandle sfile;
+
+				sfile = smgropen(pendingsync->rlocator, InvalidBackendId, fork);
+				if (smgrexists(sfile))
 				{
-					BlockNumber n = smgrnblocks(srel, fork);
+					BlockNumber n = smgrnblocks(sfile);
 
 					/* we shouldn't come here for unlogged relations */
 					Assert(fork != INIT_FORKNUM);
@@ -803,18 +845,19 @@ smgrDoPendingSyncs(bool isCommit, bool isParallelWorker)
 			total_blocks * BLCKSZ / 1024 >= wal_skip_threshold)
 		{
 			/* allocate the initial array, or extend it, if needed */
-			if (maxrels == 0)
+			if (maxlocators == 0)
 			{
-				maxrels = 8;
-				srels = palloc(sizeof(SMgrRelation) * maxrels);
+				maxlocators = 8;
+				locators = palloc(sizeof(RelFileLocatorBackend) * maxlocators);
 			}
-			else if (maxrels <= nrels)
+			else if (maxlocators <= nlocators)
 			{
-				maxrels *= 2;
-				srels = repalloc(srels, sizeof(SMgrRelation) * maxrels);
+				maxlocators *= 2;
+				locators = repalloc(locators, sizeof(RelFileLocatorBackend) * maxlocators);
 			}
 
-			srels[nrels++] = srel;
+			locators[nlocators] = pendingsync->rlocator;
+			nlocators++;
 		}
 		else
 		{
@@ -833,7 +876,7 @@ smgrDoPendingSyncs(bool isCommit, bool isParallelWorker)
 				 * page including any unused space.  ReadBufferExtended()
 				 * counts some pgstat events; unfortunately, we discard them.
 				 */
-				rel = CreateFakeRelcacheEntry(srel->smgr_rlocator.locator);
+				rel = CreateFakeRelcacheEntry(pendingsync->rlocator);
 				log_newpage_range(rel, fork, 0, n, false);
 				FreeFakeRelcacheEntry(rel);
 			}
@@ -842,11 +885,20 @@ smgrDoPendingSyncs(bool isCommit, bool isParallelWorker)
 
 	pendingSyncHash = NULL;
 
-	if (nrels > 0)
+	FlushRelationsAllBuffers(locators, nlocators);
+
+	for (int i = 0; i < nlocators; i++)
 	{
-		smgrdosyncall(srels, nrels);
-		pfree(srels);
+		for (int fork = 0; fork <= MAX_FORKNUM; fork++)
+		{
+			SMgrFileHandle sfile = smgropen(locators[i], InvalidBackendId, fork);
+
+			if (smgrexists(sfile))
+				smgrimmedsync(sfile);
+		}
 	}
+	if (locators != NULL)
+		pfree(locators);
 }
 
 /*
@@ -966,22 +1018,22 @@ smgr_redo(XLogReaderState *record)
 	if (info == XLOG_SMGR_CREATE)
 	{
 		xl_smgr_create *xlrec = (xl_smgr_create *) XLogRecGetData(record);
-		SMgrRelation reln;
+		SMgrFileHandle sfile;
 
-		reln = smgropen(xlrec->rlocator, InvalidBackendId);
-		smgrcreate(reln, xlrec->forkNum, true);
+		sfile = smgropen(xlrec->rlocator, InvalidBackendId, xlrec->forkNum);
+		smgrcreate(sfile, true);
 	}
 	else if (info == XLOG_SMGR_TRUNCATE)
 	{
 		xl_smgr_truncate *xlrec = (xl_smgr_truncate *) XLogRecGetData(record);
-		SMgrRelation reln;
+		SMgrFileHandle sfile;
 		Relation	rel;
 		ForkNumber	forks[MAX_FORKNUM];
 		BlockNumber blocks[MAX_FORKNUM];
 		int			nforks = 0;
 		bool		need_fsm_vacuum = false;
 
-		reln = smgropen(xlrec->rlocator, InvalidBackendId);
+		sfile = smgropen(xlrec->rlocator, InvalidBackendId, MAIN_FORKNUM);
 
 		/*
 		 * Forcibly create relation if it doesn't exist (which suggests that
@@ -989,7 +1041,7 @@ smgr_redo(XLogReaderState *record)
 		 * XLogReadBufferForRedo, we prefer to recreate the rel and replay the
 		 * log as best we can until the drop is seen.
 		 */
-		smgrcreate(reln, MAIN_FORKNUM, true);
+		smgrcreate(sfile, true);
 
 		/*
 		 * Before we perform the truncation, update minimum recovery point to
@@ -1022,8 +1074,10 @@ smgr_redo(XLogReaderState *record)
 		/* Prepare for truncation of FSM and VM too */
 		rel = CreateFakeRelcacheEntry(xlrec->rlocator);
 
+		DropRelationBuffers(xlrec->rlocator, InvalidBackendId, forks, nforks, blocks);
+
 		if ((xlrec->flags & SMGR_TRUNCATE_FSM) != 0 &&
-			smgrexists(reln, FSM_FORKNUM))
+			smgrexists(smgropen(xlrec->rlocator, InvalidBackendId, FSM_FORKNUM)))
 		{
 			blocks[nforks] = FreeSpaceMapPrepareTruncateRel(rel, xlrec->blkno);
 			if (BlockNumberIsValid(blocks[nforks]))
@@ -1034,7 +1088,7 @@ smgr_redo(XLogReaderState *record)
 			}
 		}
 		if ((xlrec->flags & SMGR_TRUNCATE_VM) != 0 &&
-			smgrexists(reln, VISIBILITYMAP_FORKNUM))
+			smgrexists(smgropen(xlrec->rlocator, InvalidBackendId, VISIBILITYMAP_FORKNUM)))
 		{
 			blocks[nforks] = visibilitymap_prepare_truncate(rel, xlrec->blkno);
 			if (BlockNumberIsValid(blocks[nforks]))
@@ -1046,7 +1100,10 @@ smgr_redo(XLogReaderState *record)
 
 		/* Do the real work to truncate relation forks */
 		if (nforks > 0)
-			smgrtruncate(reln, forks, nforks, blocks);
+		{
+			DropRelationBuffers(xlrec->rlocator, InvalidBackendId, forks, nforks, blocks);
+			smgrtruncate_multi(xlrec->rlocator, InvalidBackendId, forks, nforks, blocks);
+		}
 
 		/*
 		 * Update upper-level FSM pages to account for the truncation. This is

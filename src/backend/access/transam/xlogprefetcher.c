@@ -652,7 +652,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 		{
 			int			block_id = prefetcher->next_block_id++;
 			DecodedBkpBlock *block = &record->blocks[block_id];
-			SMgrRelation reln;
+			SMgrFileHandle sfile;
 			PrefetchBufferResult result;
 
 			if (!block->in_use)
@@ -722,7 +722,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 			 * same relation (with some scheme to handle invalidations
 			 * safely), but for now we'll call smgropen() every time.
 			 */
-			reln = smgropen(block->rlocator, InvalidBackendId);
+			sfile = smgropen(block->rlocator, InvalidBackendId, block->forknum);
 
 			/*
 			 * If the relation file doesn't exist on disk, for example because
@@ -731,14 +731,14 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 			 * further prefetching in the relation until this record is
 			 * replayed.
 			 */
-			if (!smgrexists(reln, MAIN_FORKNUM))
+			if (!smgrexists(sfile))
 			{
 #ifdef XLOGPREFETCHER_DEBUG_LEVEL
 				elog(XLOGPREFETCHER_DEBUG_LEVEL,
 					 "suppressing all prefetch in relation %u/%u/%u until %X/%X is replayed, because the relation does not exist on disk",
-					 reln->smgr_rlocator.locator.spcOid,
-					 reln->smgr_rlocator.locator.dbOid,
-					 reln->smgr_rlocator.locator.relNumber,
+					 sfile->smgr_rlocator.locator.spcOid,
+					 sfile->smgr_rlocator.locator.dbOid,
+					 sfile->smgr_rlocator.locator.relNumber,
 					 LSN_FORMAT_ARGS(record->lsn));
 #endif
 				XLogPrefetcherAddFilter(prefetcher, block->rlocator, 0,
@@ -752,14 +752,14 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 			 * block yet, suppress prefetching of this block and higher until
 			 * this record is replayed.
 			 */
-			if (block->blkno >= smgrnblocks(reln, block->forknum))
+			if (block->blkno >= smgrnblocks(sfile))
 			{
 #ifdef XLOGPREFETCHER_DEBUG_LEVEL
 				elog(XLOGPREFETCHER_DEBUG_LEVEL,
 					 "suppressing prefetch in relation %u/%u/%u from block %u until %X/%X is replayed, because the relation is too small",
-					 reln->smgr_rlocator.locator.spcOid,
-					 reln->smgr_rlocator.locator.dbOid,
-					 reln->smgr_rlocator.locator.relNumber,
+					 sfile->smgr_rlocator.locator.spcOid,
+					 sfile->smgr_rlocator.locator.dbOid,
+					 sfile->smgr_rlocator.locator.relNumber,
 					 block->blkno,
 					 LSN_FORMAT_ARGS(record->lsn));
 #endif
@@ -770,7 +770,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 			}
 
 			/* Try to initiate prefetching. */
-			result = PrefetchSharedBuffer(reln, block->forknum, block->blkno);
+			result = PrefetchSharedBuffer(sfile, block->blkno);
 			if (BufferIsValid(result.recent_buffer))
 			{
 				/* Cache hit, nothing to do. */
@@ -796,9 +796,9 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 				 */
 				elog(ERROR,
 					 "could not prefetch relation %u/%u/%u block %u",
-					 reln->smgr_rlocator.locator.spcOid,
-					 reln->smgr_rlocator.locator.dbOid,
-					 reln->smgr_rlocator.locator.relNumber,
+					 sfile->smgr_locator.locator.spcOid,
+					 sfile->smgr_locator.locator.dbOid,
+					 sfile->smgr_locator.locator.relNumber,
 					 block->blkno);
 			}
 		}

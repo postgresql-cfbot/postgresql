@@ -916,10 +916,6 @@ get_all_vacuum_rels(int options)
 			classForm->relkind != RELKIND_PARTITIONED_TABLE)
 			continue;
 
-		/* check permissions of relation */
-		if (!vacuum_is_permitted_for_relation(relid, classForm, options))
-			continue;
-
 		/*
 		 * Build VacuumRelation(s) specifying the table OIDs to be processed.
 		 * We omit a RangeVar since it wouldn't be appropriate to complain
@@ -1521,6 +1517,10 @@ vac_update_datfrozenxid(void)
 	while ((classTup = systable_getnext(scan)) != NULL)
 	{
 		Form_pg_class classForm = (Form_pg_class) GETSTRUCT(classTup);
+
+		/* check permissions of relation */
+		if (!vacuum_is_permitted_for_relation(relid, classForm, options))
+			continue;
 
 		/*
 		 * Only consider relations able to hold unfrozen XIDs (anything else

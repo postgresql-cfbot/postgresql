@@ -2063,25 +2063,19 @@ apply_spooled_messages(FileSet *stream_fileset, TransactionId xid,
 	nchanges = 0;
 	while (true)
 	{
-		int			nbytes;
+		size_t		nbytes;
 		int			len;
 
 		CHECK_FOR_INTERRUPTS();
 
 		/* read length of the on-disk record */
-		nbytes = BufFileRead(stream_fd, &len, sizeof(len));
+		nbytes = BufFileReadMaybeEOF(stream_fd, &len, sizeof(len), true);
 
 		/* have we reached end of the file? */
 		if (nbytes == 0)
 			break;
 
 		/* do we have a correct length? */
-		if (nbytes != sizeof(len))
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not read from streaming transaction's changes file \"%s\": %m",
-							path)));
-
 		if (len <= 0)
 			elog(ERROR, "incorrect length %d in streaming transaction's changes file \"%s\"",
 				 len, path);
@@ -2090,11 +2084,7 @@ apply_spooled_messages(FileSet *stream_fileset, TransactionId xid,
 		buffer = repalloc(buffer, len);
 
 		/* and finally read the data into the buffer */
-		if (BufFileRead(stream_fd, buffer, len) != len)
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not read from streaming transaction's changes file \"%s\": %m",
-							path)));
+		BufFileReadExact(stream_fd, buffer, len);
 
 		BufFileTell(stream_fd, &fileno, &offset);
 
@@ -4011,13 +4001,7 @@ subxact_info_read(Oid subid, TransactionId xid)
 		return;
 
 	/* read number of subxact items */
-	if (BufFileRead(fd, &subxact_data.nsubxacts,
-					sizeof(subxact_data.nsubxacts)) !=
-		sizeof(subxact_data.nsubxacts))
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not read from streaming transaction's subxact file \"%s\": %m",
-						path)));
+	BufFileReadExact(fd, &subxact_data.nsubxacts, sizeof(subxact_data.nsubxacts));
 
 	len = sizeof(SubXactInfo) * subxact_data.nsubxacts;
 
@@ -4035,11 +4019,8 @@ subxact_info_read(Oid subid, TransactionId xid)
 								   sizeof(SubXactInfo));
 	MemoryContextSwitchTo(oldctx);
 
-	if ((len > 0) && ((BufFileRead(fd, subxact_data.subxacts, len)) != len))
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not read from streaming transaction's subxact file \"%s\": %m",
-						path)));
+	if (len > 0)
+		BufFileReadExact(fd, subxact_data.subxacts, len);
 
 	BufFileClose(fd);
 }

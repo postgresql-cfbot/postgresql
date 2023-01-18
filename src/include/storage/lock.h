@@ -19,6 +19,7 @@
 #endif
 
 #include "storage/backendid.h"
+#include "storage/latch.h"
 #include "storage/lockdefs.h"
 #include "storage/lwlock.h"
 #include "storage/shmem.h"
@@ -588,7 +589,7 @@ extern bool LockCheckConflicts(LockMethod lockMethodTable,
 							   LOCK *lock, PROCLOCK *proclock);
 extern void GrantLock(LOCK *lock, PROCLOCK *proclock, LOCKMODE lockmode);
 extern void GrantAwaitedLock(void);
-extern void RemoveFromWaitQueue(PGPROC *proc, uint32 hashcode);
+extern void RemoveFromWaitQueue(PGPROC *proc, uint32 hashcode, LatchGroup *wakeups);
 extern Size LockShmemSize(void);
 extern LockData *GetLockStatusData(void);
 extern BlockedProcsData *GetBlockerStatusData(int blocked_pid);
@@ -605,7 +606,7 @@ extern void lock_twophase_postabort(TransactionId xid, uint16 info,
 extern void lock_twophase_standby_recover(TransactionId xid, uint16 info,
 										  void *recdata, uint32 len);
 
-extern DeadLockState DeadLockCheck(PGPROC *proc);
+extern DeadLockState DeadLockCheck(PGPROC *proc, LatchGroup *wakeups);
 extern PGPROC *GetBlockingAutoVacuumPgproc(void);
 extern void DeadLockReport(void) pg_attribute_noreturn();
 extern void RememberSimpleDeadLock(PGPROC *proc1,

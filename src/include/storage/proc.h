@@ -413,6 +413,9 @@ extern PGDLLIMPORT PGPROC *PreparedXactProcs;
 /* Accessor for PGPROC given a pgprocno. */
 #define GetPGProcByNumber(n) (&ProcGlobal->allProcs[(n)])
 
+/* Accessor for procLatch given a pgprocno. */
+#define GetProcLatchByNumber(n) (&(GetPGProcByNumber(n))->procLatch)
+
 /*
  * We set aside some extra PGPROC structures for auxiliary processes,
  * ie things that aren't full-fledged backends but need shmem access.
@@ -449,15 +452,13 @@ extern bool HaveNFreeProcs(int n);
 extern void ProcReleaseLocks(bool isCommit);
 
 extern void ProcQueueInit(PROC_QUEUE *queue);
-extern ProcWaitStatus ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable);
-extern PGPROC *ProcWakeup(PGPROC *proc, ProcWaitStatus waitStatus);
-extern void ProcLockWakeup(LockMethod lockMethodTable, LOCK *lock);
+extern ProcWaitStatus ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable, LatchGroup *wakeups);
+extern void ProcLockWakeup(LockMethod lockMethodTable, LOCK *lock, LatchGroup *wakeups);
 extern void CheckDeadLockAlert(void);
 extern bool IsWaitingForLock(void);
 extern void LockErrorCleanup(void);
 
 extern void ProcWaitForSignal(uint32 wait_event_info);
-extern void ProcSendSignal(int pgprocno);
 
 extern PGPROC *AuxiliaryPidGetProc(int pid);
 

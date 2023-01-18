@@ -592,6 +592,94 @@ WaitLatchOrSocket(Latch *latch, int wakeEvents, pgsocket sock,
 }
 
 /*
+ * Set multiple latches at the same time.
+ * Note: modifies input array.
+ */
+static void
+SetLatchV(Latch **latches, int nlatches)
+{
+	/* Flush any other changes out to main memory just once. */
+	pg_memory_barrier();
+
+	/* Keep only latches that are not already set, and set them. */
+	for (int i = 0; i < nlatches; ++i)
+	{
+		Latch	   *latch = latches[i];
+
+		if (!latch->is_set)
+			latch->is_set = true;
+		else
+			latches[i] = NULL;
+	}
+
+	pg_memory_barrier();
+
+	/* Wake the remaining latches that might be sleeping. */
+#ifndef WIN32
+	for (int i = 0; i < nlatches; ++i)
+	{
+		Latch	   *latch = latches[i];
+		pid_t		owner_pid;
+
+		if (!latch || !latch->maybe_sleeping)
+			continue;
+
+		/*
+		 * See if anyone's waiting for the latch. It can be the current
+		 * process if we're in a signal handler. We use the self-pipe or
+		 * SIGURG to ourselves to wake up WaitEventSetWaitBlock() without
+		 * races in that case. If it's another process, send a signal.
+		 *
+		 * Fetch owner_pid only once, in case the latch is concurrently
+		 * getting owned or disowned. XXX: This assumes that pid_t is atomic,
+		 * which isn't guaranteed to be true! In practice, the effective range
+		 * of pid_t fits in a 32 bit integer, and so should be atomic. In the
+		 * worst case, we might end up signaling the wrong process. Even then,
+		 * you're very unlucky if a process with that bogus pid exists and
+		 * belongs to Postgres; and PG database processes should handle excess
+		 * SIGURG interrupts without a problem anyhow.
+		 *
+		 * Another sort of race condition that's possible here is for a new
+		 * process to own the latch immediately after we look, so we don't
+		 * signal it. This is okay so long as all callers of
+		 * ResetLatch/WaitLatch follow the standard coding convention of
+		 * waiting at the bottom of their loops, not the top, so that they'll
+		 * correctly process latch-setting events that happen before they
+		 * enter the loop.
+		 */
+		owner_pid = latch->owner_pid;
+
+		if (owner_pid == MyProcPid)
+		{
+			if (waiting)
+			{
+#if defined(WAIT_USE_SELF_PIPE)
+				sendSelfPipeByte();
+#else
+				kill(MyProcPid, SIGURG);
+#endif
+			}
+		}
+		else
+			kill(owner_pid, SIGURG);
+	}
+#else
+	for (int i = 0; i < nlatches; ++i)
+	{
+		Latch	   *latch = latches[i];
+
+		if (latch && latch->maybe_sleeping)
+		{
+			HANDLE		event = latch->event;
+
+			if (event)
+				SetEvent(event);
+		}
+	}
+#endif
+}
+
+/*
  * Sets a latch and wakes up anyone waiting on it.
  *
  * This is cheap if the latch is already set, otherwise not so much.
@@ -606,89 +694,76 @@ WaitLatchOrSocket(Latch *latch, int wakeEvents, pgsocket sock,
 void
 SetLatch(Latch *latch)
 {
-#ifndef WIN32
-	pid_t		owner_pid;
-#else
-	HANDLE		handle;
-#endif
+	SetLatchV(&latch, 1);
+}
 
-	/*
-	 * The memory barrier has to be placed here to ensure that any flag
-	 * variables possibly changed by this process have been flushed to main
-	 * memory, before we check/set is_set.
-	 */
-	pg_memory_barrier();
-
-	/* Quick exit if already set */
-	if (latch->is_set)
-		return;
-
-	latch->is_set = true;
-
-	pg_memory_barrier();
-	if (!latch->maybe_sleeping)
-		return;
-
-#ifndef WIN32
-
-	/*
-	 * See if anyone's waiting for the latch. It can be the current process if
-	 * we're in a signal handler. We use the self-pipe or SIGURG to ourselves
-	 * to wake up WaitEventSetWaitBlock() without races in that case. If it's
-	 * another process, send a signal.
-	 *
-	 * Fetch owner_pid only once, in case the latch is concurrently getting
-	 * owned or disowned. XXX: This assumes that pid_t is atomic, which isn't
-	 * guaranteed to be true! In practice, the effective range of pid_t fits
-	 * in a 32 bit integer, and so should be atomic. In the worst case, we
-	 * might end up signaling the wrong process. Even then, you're very
-	 * unlucky if a process with that bogus pid exists and belongs to
-	 * Postgres; and PG database processes should handle excess SIGUSR1
-	 * interrupts without a problem anyhow.
-	 *
-	 * Another sort of race condition that's possible here is for a new
-	 * process to own the latch immediately after we look, so we don't signal
-	 * it. This is okay so long as all callers of ResetLatch/WaitLatch follow
-	 * the standard coding convention of waiting at the bottom of their loops,
-	 * not the top, so that they'll correctly process latch-setting events
-	 * that happen before they enter the loop.
-	 */
-	owner_pid = latch->owner_pid;
-	if (owner_pid == 0)
-		return;
-	else if (owner_pid == MyProcPid)
+/*
+ * Add a latch to a group, to be set later.
+ */
+void
+AddLatch(LatchGroup *group, Latch *latch)
+{
+	/* First time.  Set up the in-place buffer. */
+	if (!group->latches)
 	{
-#if defined(WAIT_USE_SELF_PIPE)
-		if (waiting)
-			sendSelfPipeByte();
-#else
-		if (waiting)
-			kill(MyProcPid, SIGURG);
-#endif
+		group->latches = group->in_place_buffer;
+		group->capacity = lengthof(group->in_place_buffer);
+		Assert(group->size == 0);
 	}
-	else
-		kill(owner_pid, SIGURG);
 
-#else
-
-	/*
-	 * See if anyone's waiting for the latch. It can be the current process if
-	 * we're in a signal handler.
-	 *
-	 * Use a local variable here just in case somebody changes the event field
-	 * concurrently (which really should not happen).
-	 */
-	handle = latch->event;
-	if (handle)
+	/* Are we full? */
+	if (group->size == group->capacity)
 	{
-		SetEvent(handle);
+		Latch	  **new_latches;
+		int			new_capacity;
 
-		/*
-		 * Note that we silently ignore any errors. We might be in a signal
-		 * handler or other critical path where it's not safe to call elog().
-		 */
+		/* Try to allocate more space. */
+		new_capacity = group->capacity * 2;
+		new_latches = palloc_extended(sizeof(latch) * new_capacity,
+									  MCXT_ALLOC_NO_OOM);
+		if (!new_latches)
+		{
+			/*
+			 * Allocation failed.  This is very unlikely to happen, but it
+			 * might be useful to be able to use this function in critical
+			 * sections, so we handle allocation failure by flushing instead
+			 * of throwing.
+			 */
+			SetLatches(group);
+		}
+		else
+		{
+			memcpy(new_latches, group->latches, sizeof(latch) * group->size);
+			if (group->latches != group->in_place_buffer)
+				pfree(group->latches);
+			group->latches = new_latches;
+			group->capacity = new_capacity;
+		}
 	}
-#endif
+
+	Assert(group->size < group->capacity);
+	group->latches[group->size++] = latch;
+}
+
+/*
+ * Set all the latches accumulated in 'group'.
+ */
+void
+SetLatches(LatchGroup *group)
+{
+	if (group->size > 0)
+	{
+		SetLatchV(group->latches, group->size);
+		group->size = 0;
+
+		/* If we allocated a large buffer, it's time to free it. */
+		if (group->latches != group->in_place_buffer)
+		{
+			pfree(group->latches);
+			group->latches = group->in_place_buffer;
+			group->capacity = lengthof(group->in_place_buffer);
+		}
+	}
 }
 
 /*

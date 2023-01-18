@@ -36,7 +36,7 @@ static ConditionVariable *cv_sleep_target = NULL;
 void
 ConditionVariableInit(ConditionVariable *cv)
 {
-	SpinLockInit(&cv->mutex);
+	LWLockInitialize(&cv->mutex, LWTRANCHE_CONDITION_VARIABLE);
 	proclist_init(&cv->wakeup);
 }
 
@@ -74,9 +74,9 @@ ConditionVariablePrepareToSleep(ConditionVariable *cv)
 	cv_sleep_target = cv;
 
 	/* Add myself to the wait queue. */
-	SpinLockAcquire(&cv->mutex);
+	LWLockAcquire(&cv->mutex, LW_EXCLUSIVE);
 	proclist_push_tail(&cv->wakeup, pgprocno, cvWaitLink);
-	SpinLockRelease(&cv->mutex);
+	LWLockRelease(&cv->mutex);
 }
 
 /*
@@ -180,13 +180,13 @@ ConditionVariableTimedSleep(ConditionVariable *cv, long timeout,
 		 * by something other than ConditionVariableSignal; though we don't
 		 * guarantee not to return spuriously, we'll avoid this obvious case.
 		 */
-		SpinLockAcquire(&cv->mutex);
+		LWLockAcquire(&cv->mutex, LW_EXCLUSIVE);
 		if (!proclist_contains(&cv->wakeup, MyProc->pgprocno, cvWaitLink))
 		{
 			done = true;
 			proclist_push_tail(&cv->wakeup, MyProc->pgprocno, cvWaitLink);
 		}
-		SpinLockRelease(&cv->mutex);
+		LWLockRelease(&cv->mutex);
 
 		/*
 		 * Check for interrupts, and return spuriously if that caused the
@@ -233,12 +233,12 @@ ConditionVariableCancelSleep(void)
 	if (cv == NULL)
 		return;
 
-	SpinLockAcquire(&cv->mutex);
+	LWLockAcquire(&cv->mutex, LW_EXCLUSIVE);
 	if (proclist_contains(&cv->wakeup, MyProc->pgprocno, cvWaitLink))
 		proclist_delete(&cv->wakeup, MyProc->pgprocno, cvWaitLink);
 	else
 		signaled = true;
-	SpinLockRelease(&cv->mutex);
+	LWLockRelease(&cv->mutex);
 
 	/*
 	 * If we've received a signal, pass it on to another waiting process, if
@@ -265,10 +265,10 @@ ConditionVariableSignal(ConditionVariable *cv)
 	PGPROC	   *proc = NULL;
 
 	/* Remove the first process from the wakeup queue (if any). */
-	SpinLockAcquire(&cv->mutex);
+	LWLockAcquire(&cv->mutex, LW_EXCLUSIVE);
 	if (!proclist_is_empty(&cv->wakeup))
 		proc = proclist_pop_head_node(&cv->wakeup, cvWaitLink);
-	SpinLockRelease(&cv->mutex);
+	LWLockRelease(&cv->mutex);
 
 	/* If we found someone sleeping, set their latch to wake them up. */
 	if (proc != NULL)
@@ -287,6 +287,7 @@ ConditionVariableBroadcast(ConditionVariable *cv)
 {
 	int			pgprocno = MyProc->pgprocno;
 	PGPROC	   *proc = NULL;
+	bool		inserted_sentinel = false;
 	bool		have_sentinel = false;
 
 	/*
@@ -313,52 +314,43 @@ ConditionVariableBroadcast(ConditionVariable *cv)
 	if (cv_sleep_target != NULL)
 		ConditionVariableCancelSleep();
 
-	/*
-	 * Inspect the state of the queue.  If it's empty, we have nothing to do.
-	 * If there's exactly one entry, we need only remove and signal that
-	 * entry.  Otherwise, remove the first entry and insert our sentinel.
-	 */
-	SpinLockAcquire(&cv->mutex);
-	/* While we're here, let's assert we're not in the list. */
-	Assert(!proclist_contains(&cv->wakeup, pgprocno, cvWaitLink));
-
-	if (!proclist_is_empty(&cv->wakeup))
+	do
 	{
-		proc = proclist_pop_head_node(&cv->wakeup, cvWaitLink);
-		if (!proclist_is_empty(&cv->wakeup))
+		LatchGroup	wakeups = {0};
+
+		LWLockAcquire(&cv->mutex, LW_EXCLUSIVE);
+		while (!proclist_is_empty(&cv->wakeup))
 		{
-			proclist_push_tail(&cv->wakeup, pgprocno, cvWaitLink);
-			have_sentinel = true;
-		}
-	}
-	SpinLockRelease(&cv->mutex);
+			/* Wake up in small sized batches.  XXX tune */
+			if (wakeups.size == 8)
+			{
+				if (!inserted_sentinel)
+				{
+					/* First batch of many to wake up.  Add sentinel. */
+					proclist_push_tail(&cv->wakeup, pgprocno, cvWaitLink);
+					inserted_sentinel = true;
+					have_sentinel = true;
+				}
+				break;
+			}
 
-	/* Awaken first waiter, if there was one. */
-	if (proc != NULL)
-		SetLatch(&proc->procLatch);
-
-	while (have_sentinel)
-	{
-		/*
-		 * Each time through the loop, remove the first wakeup list entry, and
-		 * signal it unless it's our sentinel.  Repeat as long as the sentinel
-		 * remains in the list.
-		 *
-		 * Notice that if someone else removes our sentinel, we will waken one
-		 * additional process before exiting.  That's intentional, because if
-		 * someone else signals the CV, they may be intending to waken some
-		 * third process that added itself to the list after we added the
-		 * sentinel.  Better to give a spurious wakeup (which should be
-		 * harmless beyond wasting some cycles) than to lose a wakeup.
-		 */
-		proc = NULL;
-		SpinLockAcquire(&cv->mutex);
-		if (!proclist_is_empty(&cv->wakeup))
 			proc = proclist_pop_head_node(&cv->wakeup, cvWaitLink);
-		have_sentinel = proclist_contains(&cv->wakeup, pgprocno, cvWaitLink);
-		SpinLockRelease(&cv->mutex);
+			if (proc == MyProc)
+			{
+				/* We hit our sentinel.  We're done. */
+				have_sentinel = false;
+				break;
+			}
+			else if (!proclist_contains(&cv->wakeup, pgprocno, cvWaitLink))
+			{
+				/* Someone else hit our sentinel.  We're done. */
+				have_sentinel = false;
+			}
+			AddLatch(&wakeups, &proc->procLatch);
+		}
+		LWLockRelease(&cv->mutex);
 
-		if (proc != NULL && proc != MyProc)
-			SetLatch(&proc->procLatch);
-	}
+		/* Awaken this batch of waiters, if there were some. */
+		SetLatches(&wakeups);
+	} while (have_sentinel);
 }

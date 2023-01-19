@@ -28,6 +28,7 @@
 #include "access/xlog.h"
 #include "access/xlogutils.h"
 #include "commands/tablespace.h"
+#include "common/file_utils.h"
 #include "miscadmin.h"
 #include "pg_trace.h"
 #include "pgstat.h"
@@ -498,6 +499,108 @@ mdextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 		register_dirty_segment(reln, forknum, v);
 
 	Assert(_mdnblocks(reln, forknum, v) <= ((BlockNumber) RELSEG_SIZE));
+}
+
+void
+mdzeroextend(SMgrRelation reln, ForkNumber forknum,
+			 BlockNumber blocknum, int nblocks, bool skipFsync)
+{
+	MdfdVec    *v;
+	BlockNumber curblocknum = blocknum;
+	int         remblocks = nblocks;
+
+	Assert(nblocks > 0);
+
+	/* This assert is too expensive to have on normally ... */
+#ifdef CHECK_WRITE_VS_EXTEND
+	Assert(blocknum >= mdnblocks(reln, forknum));
+#endif
+
+	/*
+	 * If a relation manages to grow to 2^32-1 blocks, refuse to extend it any
+	 * more --- we mustn't create a block whose number actually is
+	 * InvalidBlockNumber or larger.
+	 */
+	if ((uint64) blocknum + nblocks >= (uint64) InvalidBlockNumber)
+		ereport(ERROR,
+				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
+				 errmsg("cannot extend file \"%s\" beyond %u blocks",
+						relpath(reln->smgr_rlocator, forknum),
+						InvalidBlockNumber)));
+
+	while (remblocks > 0)
+	{
+		int			segstartblock = curblocknum % ((BlockNumber) RELSEG_SIZE);
+		int			segendblock = (curblocknum % ((BlockNumber) RELSEG_SIZE)) + remblocks;
+		off_t       seekpos = (off_t) BLCKSZ * segstartblock;
+		int			numblocks;
+
+		if (segendblock > RELSEG_SIZE)
+			segendblock = RELSEG_SIZE;
+
+		numblocks = segendblock - segstartblock;
+
+		v = _mdfd_getseg(reln, forknum, curblocknum, skipFsync, EXTENSION_CREATE);
+
+		Assert(segstartblock < RELSEG_SIZE);
+		Assert(segendblock <= RELSEG_SIZE);
+
+		/*
+		 * If available use posix_fallocate() to extend the relation. That's
+		 * often more efficient than using write(), as it commonly won't cause
+		 * the kernel to allocate page cache space for the extended pages.
+		 *
+		 * However, we shouldn't use fallocate() for small extensions, it
+		 * defeats delayed allocation on some filesystems. Not clear where
+		 * that decision should be made though? For now just use a cutoff of
+		 * 8, anything between 4 and 8 worked OK in some local testing.
+		 */
+		if (numblocks > 8)
+		{
+			int         ret;
+
+			ret = FileFallocate(v->mdfd_vfd, seekpos,
+								(off_t) BLCKSZ * numblocks,
+								WAIT_EVENT_DATA_FILE_EXTEND);
+			if (ret != 0)
+			{
+				ereport(ERROR,
+							(errcode_for_file_access(),
+							 errmsg("could not extend file \"%s\" with posix_fallocate(): %m",
+									FilePathName(v->mdfd_vfd)),
+							 errhint("Check free disk space.")));
+			}
+		}
+		else
+		{
+			int         ret;
+
+			/*
+			 * Even if we don't have fallocate, we can still extend a bit more
+			 * efficiently than writing each 8kB block individually.
+			 * FileZero() uses pg_writev[with_retry] with a single zeroed
+			 * buffer to avoid needing a zeroed buffer for the whole length of
+			 * the extension.
+			 */
+			ret = FileZero(v->mdfd_vfd, seekpos,
+						   (off_t) BLCKSZ * numblocks,
+						   WAIT_EVENT_DATA_FILE_EXTEND);
+			if (ret < 0)
+				ereport(ERROR,
+						(errcode_for_file_access(),
+						 errmsg("could not extend file \"%s\": %m",
+								FilePathName(v->mdfd_vfd)),
+						 errhint("Check free disk space.")));
+		}
+
+		if (!skipFsync && !SmgrIsTemp(reln))
+			register_dirty_segment(reln, forknum, v);
+
+		Assert(_mdnblocks(reln, forknum, v) <= ((BlockNumber) RELSEG_SIZE));
+
+		remblocks -= segendblock - segstartblock;
+		curblocknum += segendblock - segstartblock;
+	}
 }
 
 /*

@@ -24,6 +24,7 @@
 #include "storage/lmgr.h"
 #include "storage/smgr.h"
 
+#define NEW_EXTEND
 
 /*
  * RelationPutHeapTuple - place tuple at specified page
@@ -185,6 +186,8 @@ GetVisibilityMapPins(Relation relation, Buffer buffer1, Buffer buffer2,
 	}
 }
 
+#ifndef NEW_EXTEND
+
 /*
  * Extend a relation by multiple blocks to avoid future contention on the
  * relation extension lock.  Our goal is to pre-extend the relation by an
@@ -268,12 +271,18 @@ RelationAddExtraBlocks(Relation relation, BulkInsertState bistate)
 	 */
 	FreeSpaceMapVacuumRange(relation, firstBlock, blockNum + 1);
 }
+#endif
 
 /*
  * RelationGetBufferForTuple
  *
  *	Returns pinned and exclusive-locked buffer of a page in given relation
  *	with free space >= given len.
+ *
+ *	If num_pages is > 1, the relation will be extended by at least that many
+ *	pages when we decide to extend the relation. This is more efficient for
+ *	callers that know they will need multiple pages
+ *	(e.g. heap_multi_insert()).
  *
  *	If otherBuffer is not InvalidBuffer, then it references a previously
  *	pinned buffer of another page in the same relation; on return, this
@@ -333,7 +342,8 @@ Buffer
 RelationGetBufferForTuple(Relation relation, Size len,
 						  Buffer otherBuffer, int options,
 						  BulkInsertState bistate,
-						  Buffer *vmbuffer, Buffer *vmbuffer_other)
+						  Buffer *vmbuffer, Buffer *vmbuffer_other,
+						  int num_pages)
 {
 	bool		use_fsm = !(options & HEAP_INSERT_SKIP_FSM);
 	Buffer		buffer = InvalidBuffer;
@@ -347,6 +357,9 @@ RelationGetBufferForTuple(Relation relation, Size len,
 	bool		needLock;
 
 	len = MAXALIGN(len);		/* be conservative */
+
+	if (num_pages <= 0)
+		num_pages = 1;
 
 	/* Bulk insert is not supported for updates, only inserts. */
 	Assert(otherBuffer == InvalidBuffer || !bistate);
@@ -552,18 +565,46 @@ loop:
 			ReleaseBuffer(buffer);
 		}
 
-		/* Without FSM, always fall out of the loop and extend */
-		if (!use_fsm)
-			break;
+		if (bistate
+			&& bistate->next_free != InvalidBlockNumber
+			&& bistate->next_free <= bistate->last_free)
+		{
+			/*
+			 * We bulk extended the relation before, and there are still some
+			 * unused pages from that extension, so we don't need to look in
+			 * the FSM for a new page. But do record the free space from the
+			 * last page, somebody might insert narrower tuples later.
+			 */
+			if (use_fsm)
+				RecordPageWithFreeSpace(relation, targetBlock, pageFreeSpace);
 
-		/*
-		 * Update FSM as to condition of this page, and ask for another page
-		 * to try.
-		 */
-		targetBlock = RecordAndGetPageWithFreeSpace(relation,
-													targetBlock,
-													pageFreeSpace,
-													targetFreeSpace);
+			Assert(bistate->last_free != InvalidBlockNumber &&
+				   bistate->next_free <= bistate->last_free);
+			targetBlock = bistate->next_free;
+			if (bistate->next_free >= bistate->last_free)
+			{
+				bistate->next_free = InvalidBlockNumber;
+				bistate->last_free = InvalidBlockNumber;
+			}
+			else
+				bistate->next_free++;
+		}
+		else if (!use_fsm)
+		{
+			/* Without FSM, always fall out of the loop and extend */
+			break;
+		}
+		else
+		{
+			/*
+			 * Update FSM as to condition of this page, and ask for another page
+			 * to try.
+			 */
+			targetBlock = RecordAndGetPageWithFreeSpace(relation,
+														targetBlock,
+														pageFreeSpace,
+														targetFreeSpace);
+		}
 	}
 
 	/*
@@ -576,6 +617,129 @@ loop:
 	 */
 	needLock = !RELATION_IS_LOCAL(relation);
 
+#ifdef NEW_EXTEND
+	{
+#define MAX_BUFFERS 64
+		Buffer victim_buffers[MAX_BUFFERS];
+		BlockNumber firstBlock = InvalidBlockNumber;
+		BlockNumber firstBlockFSM = InvalidBlockNumber;
+		BlockNumber curBlock;
+		uint32 extend_by_pages;
+		uint32 no_fsm_pages;
+		uint32 waitcount;
+
+		extend_by_pages = num_pages;
+
+		/*
+		 * Multiply the number of pages to extend by the number of waiters. Do
+		 * this even if we're not using the FSM, as it does relieve
+		 * contention. Pages will be found via bistate->next_free.
+		 */
+		if (needLock)
+			waitcount = RelationExtensionLockWaiterCount(relation);
+		else
+			waitcount = 0;
+		extend_by_pages += extend_by_pages * waitcount;
+
+		/*
+		 * can't extend by more than MAX_BUFFERS, we need to pin them all
+		 * concurrently. FIXME: Need an NBuffers / MaxBackends type limit
+		 * here.
+		 */
+		extend_by_pages = Min(extend_by_pages, MAX_BUFFERS);
+
+		/*
+		 * How many of the extended pages not to enter into the FSM.
+		 *
+		 * Only enter pages that we don't need ourselves into the
+		 * FSM. Otherwise every other backend will immediately try to use the
+		 * pages this backend neds itself, causing unnecessary contention.
+		 *
+		 * Bulk extended pages are remembered in bistate->next_free_buffer. So
+		 * without a bistate we can't directly make use of them.
+		 *
+		 * Never enter the page returned into the FSM, we'll immediately use
+		 * it.
+		 */
+		if (num_pages > 1 && bistate == NULL)
+			no_fsm_pages = 1;
+		else
+			no_fsm_pages = num_pages;
+
+		if (bistate && bistate->current_buf != InvalidBuffer)
+		{
+			ReleaseBuffer(bistate->current_buf);
+			bistate->current_buf = InvalidBuffer;
+		}
+
+		firstBlock = BulkExtendRelationBuffered(relation,
+												NULL,
+												false,
+												relation->rd_rel->relpersistence,
+												MAIN_FORKNUM,
+												RBM_ZERO_AND_LOCK,
+												bistate ? bistate->strategy : NULL,
+												&extend_by_pages,
+												1,
+												victim_buffers);
+		/*
+		 * Relation is now extended. Make all but the first buffer available
+		 * to other backends.
+		 *
+		 * XXX: We don't necessarily need to release pin / update FSM while
+		 * holding the extension lock. But there are some advantages.
+		 */
+		curBlock = firstBlock;
+		for (uint32 i = 0; i < extend_by_pages; i++, curBlock++)
+		{
+			Assert(curBlock == BufferGetBlockNumber(victim_buffers[i]));
+			Assert(BlockNumberIsValid(curBlock));
+
+			/* don't release the pin on the page returned by this function */
+			if (i > 0)
+				ReleaseBuffer(victim_buffers[i]);
+
+			if (i >= no_fsm_pages && use_fsm)
+			{
+				if (firstBlockFSM == InvalidBlockNumber)
+					firstBlockFSM = curBlock;
+
+				RecordPageWithFreeSpace(relation,
+										curBlock,
+										BufferGetPageSize(victim_buffers[i]) - SizeOfPageHeaderData);
+			}
+		}
+
+		if (use_fsm && firstBlockFSM != InvalidBlockNumber)
+			FreeSpaceMapVacuumRange(relation, firstBlockFSM, firstBlock + num_pages);
+
+		if (bistate)
+		{
+			if (extend_by_pages > 1)
+			{
+				bistate->next_free = firstBlock + 1;
+				bistate->last_free = firstBlock + extend_by_pages - 1;
+			}
+			else
+			{
+				bistate->next_free = InvalidBlockNumber;
+				bistate->last_free = InvalidBlockNumber;
+			}
+		}
+
+		buffer = victim_buffers[0];
+		if (bistate)
+		{
+			IncrBufferRefCount(buffer);
+			bistate->current_buf = buffer;
+		}
+#if 0
+		ereport(LOG, errmsg("block start %u, size %zu, requested pages: %u, extend_by_pages: %d, waitcount: %d",
+							firstBlock, len, num_pages, extend_by_pages, waitcount),
+				errhidestmt(true), errhidecontext(true));
+#endif
+	}
+#else
 	/*
 	 * If we need the lock but are not able to acquire it immediately, we'll
 	 * consider extending the relation by multiple blocks at a time to manage
@@ -624,6 +788,14 @@ loop:
 	buffer = ReadBufferBI(relation, P_NEW, RBM_ZERO_AND_LOCK, bistate);
 
 	/*
+	 * Release the file-extension lock; it's now OK for someone else to extend
+	 * the relation some more.
+	 */
+	if (needLock)
+		UnlockRelationForExtension(relation, ExclusiveLock);
+#endif
+
+	/*
 	 * We need to initialize the empty new page.  Double-check that it really
 	 * is empty (this should never happen, but if it does we don't want to
 	 * risk wiping out valid data).
@@ -646,13 +818,6 @@ loop:
 		Assert(PageGetMaxOffsetNumber(BufferGetPage(buffer)) == 0);
 		visibilitymap_pin(relation, BufferGetBlockNumber(buffer), vmbuffer);
 	}
-
-	/*
-	 * Release the file-extension lock; it's now OK for someone else to extend
-	 * the relation some more.
-	 */
-	if (needLock)
-		UnlockRelationForExtension(relation, ExclusiveLock);
 
 	/*
 	 * Lock the other buffer. It's guaranteed to be of a lower page number

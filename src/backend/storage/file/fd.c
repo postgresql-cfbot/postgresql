@@ -93,6 +93,7 @@
 #include "common/pg_prng.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "port/pg_iovec.h"
 #include "portability/mem.h"
 #include "postmaster/startup.h"
 #include "storage/fd.h"
@@ -2205,6 +2206,105 @@ FileSync(File file, uint32 wait_event_info)
 	return returnCode;
 }
 
+/* So that FileZero() doesn't have to re-zero a block on every call */
+static const PGAlignedBlock zerobuf = {0};
+
+int
+FileZero(File file, off_t offset, off_t len, uint32 wait_event_info)
+{
+	int			returnCode;
+	int			numblocks;
+	struct iovec iov[PG_IOV_MAX];
+
+	/*
+	 * FIXME: Quick-and-dirty implementation, to be replaced by
+	 * pg_pwrite_zeros() from
+	 * https://postgr.es/m/Y1oc%2BFjiyVjNZa%2BL%40paquier.xyz
+	 *
+	 * Otherwise it'd not at all be ok to rely on len being a multiple of
+	 * BLCKSZ.
+	 */
+	Assert((len % BLCKSZ) == 0);
+
+	Assert(FileIsValid(file));
+	returnCode = FileAccess(file);
+	if (returnCode < 0)
+		return returnCode;
+
+	numblocks = len / BLCKSZ;
+
+	for (int i = 0; i < Min(numblocks, lengthof(iov)); ++i)
+	{
+		iov[i].iov_base = (char *) zerobuf.data;
+		iov[i].iov_len = BLCKSZ;
+	}
+
+	while (numblocks > 0)
+	{
+		int			iovcnt = Min(numblocks, lengthof(iov));
+		off_t		seekpos_l = offset;
+		ssize_t		ret;
+
+		pgstat_report_wait_start(wait_event_info);
+		ret = pg_pwritev_with_retry(VfdCache[file].fd, iov, iovcnt, seekpos_l);
+		pgstat_report_wait_end();
+
+		if (ret < 0)
+			return -1;
+
+		Assert(ret == iovcnt * BLCKSZ);
+		offset += iovcnt * BLCKSZ;
+		numblocks -= iovcnt;
+	}
+
+	return 0;
+}
+
+/*
+ * Try to reserve file space with posix_fallocate(). If posix_fallocate() is
+ * not implemented on the operating system or fails with EINVAL / EOPNOTSUPP,
+ * use FileZero() instead.
+ *
+ * Note that at least glibc() implements posix_fallocate() in userspace if not
+ * implemented by the filesystem. That's not the case for all environments
+ * though.
+ */
+int
+FileFallocate(File file, off_t offset, off_t len, uint32 wait_event_info)
+{
+	int			returnCode;
+
+	Assert(FileIsValid(file));
+	returnCode = FileAccess(file);
+	if (returnCode < 0)
+		return returnCode;
+
+#ifdef HAVE_POSIX_FALLOCATE
+	pgstat_report_wait_start(wait_event_info);
+	returnCode = posix_fallocate(VfdCache[file].fd, offset, len);
+	pgstat_report_wait_end();
+
+	if (returnCode == 0)
+		return 0;
+
+	/* for compatibility with %m printing etc */
+	errno = returnCode;
+
+	/*
+	 * Return in cases of a "real" failure, if fallocate is not supported,
+	 * fall through to the FileZero() backed implementation.
+	 */
+	if (returnCode != EINVAL && returnCode != EOPNOTSUPP)
+		return returnCode;
+
+	if (returnCode == 0 ||
+		(returnCode != EINVAL && returnCode != EINVAL))
+		return returnCode;
+#endif
+
+	return FileZero(file, offset, len, wait_event_info);
+}
+
 off_t
 FileSize(File file)
 {
@@ -2277,6 +2377,11 @@ int
 FileGetRawDesc(File file)
 {
 	Assert(FileIsValid(file));
+
+	if (FileAccess(file) < 0)
+		return -1;
+
+	FileAccess(file);
 	return VfdCache[file].fd;
 }
 

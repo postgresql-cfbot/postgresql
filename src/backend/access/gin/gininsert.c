@@ -440,12 +440,14 @@ ginbuildempty(Relation index)
 				MetaBuffer;
 
 	/* An empty GIN index has two pages. */
-	MetaBuffer =
-		ReadBufferExtended(index, INIT_FORKNUM, P_NEW, RBM_NORMAL, NULL);
-	LockBuffer(MetaBuffer, BUFFER_LOCK_EXCLUSIVE);
-	RootBuffer =
-		ReadBufferExtended(index, INIT_FORKNUM, P_NEW, RBM_NORMAL, NULL);
-	LockBuffer(RootBuffer, BUFFER_LOCK_EXCLUSIVE);
+	MetaBuffer = ExtendRelationBuffered(index, NULL, true,
+										index->rd_rel->relpersistence,
+										INIT_FORKNUM, RBM_ZERO_AND_LOCK,
+										NULL);
+	RootBuffer = ExtendRelationBuffered(index, NULL, true,
+										index->rd_rel->relpersistence,
+										INIT_FORKNUM, RBM_ZERO_AND_LOCK,
+										NULL);
 
 	/* Initialize and xlog metabuffer and root buffer. */
 	START_CRIT_SECTION();

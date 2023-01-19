@@ -1979,6 +1979,8 @@ GetBulkInsertState(void)
 	bistate = (BulkInsertState) palloc(sizeof(BulkInsertStateData));
 	bistate->strategy = GetAccessStrategy(BAS_BULKWRITE);
 	bistate->current_buf = InvalidBuffer;
+	bistate->next_free = InvalidBlockNumber;
+	bistate->last_free = InvalidBlockNumber;
 	return bistate;
 }
 
@@ -2052,7 +2054,8 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 	 */
 	buffer = RelationGetBufferForTuple(relation, heaptup->t_len,
 									   InvalidBuffer, options, bistate,
-									   &vmbuffer, NULL);
+									   &vmbuffer, NULL,
+									   0);
 
 	/*
 	 * We're about to do the actual insert -- but check for conflict first, to
@@ -2256,6 +2259,33 @@ heap_prepare_insert(Relation relation, HeapTuple tup, TransactionId xid,
 }
 
 /*
+ * Helper for heap_multi_insert() that computes the number of full pages s
+ */
+static int
+heap_multi_insert_pages(HeapTuple *heaptuples, int done, int ntuples, Size saveFreeSpace)
+{
+	size_t		page_avail;
+	int			npages = 0;
+
+	page_avail = BLCKSZ - SizeOfPageHeaderData - saveFreeSpace;
+	npages++;
+
+	for (int i = done; i < ntuples; i++)
+	{
+		size_t tup_sz = sizeof(ItemIdData) + MAXALIGN(heaptuples[i]->t_len);
+
+		if (page_avail < tup_sz)
+		{
+			npages++;
+			page_avail = BLCKSZ - SizeOfPageHeaderData - saveFreeSpace;
+		}
+		page_avail -= tup_sz;
+	}
+
+	return npages;
+}
+
+/*
  *	heap_multi_insert	- insert multiple tuples into a heap
  *
  * This is like heap_insert(), but inserts multiple tuples in one operation.
@@ -2281,6 +2311,9 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 	Size		saveFreeSpace;
 	bool		need_tuple_data = RelationIsLogicallyLogged(relation);
 	bool		need_cids = RelationIsAccessibleInLogicalDecoding(relation);
+	bool		starting_with_empty_page = false;
+	int			npages = 0;
+	int			npages_used = 0;
 
 	/* currently not needed (thus unsupported) for heap_multi_insert() */
 	Assert(!(options & HEAP_INSERT_NO_LOGICAL));
@@ -2331,12 +2364,29 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 	while (ndone < ntuples)
 	{
 		Buffer		buffer;
-		bool		starting_with_empty_page;
 		bool		all_visible_cleared = false;
 		bool		all_frozen_set = false;
 		int			nthispage;
 
 		CHECK_FOR_INTERRUPTS();
+
+		/*
+		 * Compute number of pages needed to insert tuples in the worst
+		 * case. This will be used to determine how much to extend the
+		 * relation by in RelationGetBufferForTuple(), if needed.  If we
+		 * filled a prior page from scratch, we can just update our last
+		 * computation, but if we started with a partially filled page
+		 * recompute from scratch, the number of potentially required pages
+		 * can vary due to tuples needing to fit onto the page, page headers
+		 * etc.
+		 */
+		if (ndone == 0 || !starting_with_empty_page)
+		{
+			npages = heap_multi_insert_pages(heaptuples, ndone, ntuples, saveFreeSpace);
+			npages_used = 0;
+		}
+		else
+			npages_used++;
 
 		/*
 		 * Find buffer where at least the next tuple will fit.  If the page is
@@ -2347,7 +2397,8 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 		 */
 		buffer = RelationGetBufferForTuple(relation, heaptuples[ndone]->t_len,
 										   InvalidBuffer, options, bistate,
-										   &vmbuffer, NULL);
+										   &vmbuffer, NULL,
+										   npages - npages_used);
 		page = BufferGetPage(buffer);
 
 		starting_with_empty_page = PageGetMaxOffsetNumber(page) == 0;
@@ -3770,7 +3821,8 @@ l2:
 				/* It doesn't fit, must use RelationGetBufferForTuple. */
 				newbuf = RelationGetBufferForTuple(relation, heaptup->t_len,
 												   buffer, 0, NULL,
-												   &vmbuffer_new, &vmbuffer);
+												   &vmbuffer_new, &vmbuffer,
+												   0);
 				/* We're all done. */
 				break;
 			}

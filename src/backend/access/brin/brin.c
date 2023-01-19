@@ -829,9 +829,11 @@ brinbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 	 * whole relation will be rolled back.
 	 */
 
-	meta = ReadBuffer(index, P_NEW);
+	meta = ExtendRelationBuffered(index, NULL, true,
+								  index->rd_rel->relpersistence,
+								  MAIN_FORKNUM, RBM_ZERO_AND_LOCK,
+								  NULL);
 	Assert(BufferGetBlockNumber(meta) == BRIN_METAPAGE_BLKNO);
-	LockBuffer(meta, BUFFER_LOCK_EXCLUSIVE);
 
 	brin_metapage_init(BufferGetPage(meta), BrinGetPagesPerRange(index),
 					   BRIN_CURRENT_VERSION);
@@ -896,9 +898,10 @@ brinbuildempty(Relation index)
 	Buffer		metabuf;
 
 	/* An empty BRIN index has a metapage only. */
-	metabuf =
-		ReadBufferExtended(index, INIT_FORKNUM, P_NEW, RBM_NORMAL, NULL);
-	LockBuffer(metabuf, BUFFER_LOCK_EXCLUSIVE);
+	metabuf = ExtendRelationBuffered(index, NULL, true,
+									 index->rd_rel->relpersistence,
+									 INIT_FORKNUM, RBM_ZERO_AND_LOCK,
+									 NULL);
 
 	/* Initialize and xlog metabuffer. */
 	START_CRIT_SECTION();

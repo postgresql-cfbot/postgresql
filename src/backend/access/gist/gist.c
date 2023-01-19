@@ -133,8 +133,10 @@ gistbuildempty(Relation index)
 	Buffer		buffer;
 
 	/* Initialize the root page */
-	buffer = ReadBufferExtended(index, INIT_FORKNUM, P_NEW, RBM_NORMAL, NULL);
-	LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
+	buffer = ExtendRelationBuffered(index, NULL, true,
+									index->rd_rel->relpersistence,
+									INIT_FORKNUM, RBM_ZERO_AND_LOCK,
+									NULL);
 
 	/* Initialize and xlog buffer */
 	START_CRIT_SECTION();

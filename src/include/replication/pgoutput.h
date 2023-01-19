@@ -30,6 +30,7 @@ typedef struct PGOutputData
 	bool		messages;
 	bool		two_phase;
 	char	   *origin;
+	bool		sequences;
 } PGOutputData;
 
 #endif							/* PGOUTPUT_H */

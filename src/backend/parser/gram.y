@@ -642,6 +642,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <partboundspec> PartitionBoundSpec
 %type <list>		hash_partbound
 %type <defelt>		hash_partbound_elem
+%type <node>	cast_on_error_clause
+%type <node>	cast_on_error_action
 
 
 /*
@@ -690,7 +692,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	DETACH DICTIONARY DISABLE_P DISCARD DISTINCT DO DOCUMENT_P DOMAIN_P
 	DOUBLE_P DROP
 
-	EACH ELSE ENABLE_P ENCODING ENCRYPTED END_P ENUM_P ESCAPE EVENT EXCEPT
+	EACH ELSE ENABLE_P ENCODING ENCRYPTED END_P ENUM_P ERROR_P ESCAPE EVENT EXCEPT
 	EXCLUDE EXCLUDING EXCLUSIVE EXECUTE EXISTS EXPLAIN EXPRESSION
 	EXTENSION EXTERNAL EXTRACT
 
@@ -14392,8 +14394,7 @@ interval_second:
  * you expect!  So we use %prec annotations freely to set precedences.
  */
 a_expr:		c_expr									{ $$ = $1; }
-			| a_expr TYPECAST Typename
-					{ $$ = makeTypeCast($1, $3, @2); }
+			| a_expr TYPECAST Typename { $$ = makeTypeCast($1, $3, @2); }
 			| a_expr COLLATE any_name
 				{
 					CollateClause *n = makeNode(CollateClause);
@@ -15323,8 +15324,26 @@ func_expr_common_subexpr:
 											   COERCE_SQL_SYNTAX,
 											   @1);
 				}
-			| CAST '(' a_expr AS Typename ')'
-				{ $$ = makeTypeCast($3, $5, @1); }
+			| CAST '(' a_expr AS Typename cast_on_error_clause ')'
+				{
+					TypeCast *cast = (TypeCast *) makeTypeCast($3, $5, @1);
+					if ($6 == NULL)
+						$$ = (Node *) cast;
+					else
+					{
+						/*
+						 * On-error actions must themselves be typecast to the
+						 * same type as the original expression.
+						 */
+						TypeCast *on_err = (TypeCast *) makeTypeCast($6, $5, @6);
+						CoalesceExpr *c = makeNode(CoalesceExpr);
+						cast->safe_mode = true;
+						c->args = list_make2(cast, on_err);
+						c->op = ERROR_TEST;
+						c->location = @1;
+						$$ = (Node *) c;
+					}
+				}
 			| EXTRACT '(' extract_list ')'
 				{
 					$$ = (Node *) makeFuncCall(SystemFuncName("extract"),
@@ -15455,6 +15474,7 @@ func_expr_common_subexpr:
 					CoalesceExpr *c = makeNode(CoalesceExpr);
 
 					c->args = $3;
+					c->op = NULL_TEST;
 					c->location = @1;
 					$$ = (Node *) c;
 				}
@@ -15542,6 +15562,15 @@ func_expr_common_subexpr:
 					n->location = @1;
 					$$ = (Node *) n;
 				}
+		;
+
+cast_on_error_clause: cast_on_error_action ON ERROR_P { $$ = $1; }
+			| /* EMPTY */ { $$ = NULL; }
+		;
+
+cast_on_error_action: ERROR_P { $$ = NULL; }
+			| NULL_P { $$ = makeNullAConst(-1); }
+			| DEFAULT a_expr { $$ = $2; }
 		;
 
 /*
@@ -16131,8 +16160,8 @@ substr_list:
 					 * is unknown or doesn't have an implicit cast to int4.
 					 */
 					$$ = list_make3($1, makeIntConst(1, -1),
-									makeTypeCast($3,
-												 SystemTypeName("int4"), -1));
+									makeTypeCast($3, SystemTypeName("int4"),
+									-1));
 				}
 			| a_expr SIMILAR a_expr ESCAPE a_expr
 				{
@@ -16792,6 +16821,7 @@ unreserved_keyword:
 			| ENCODING
 			| ENCRYPTED
 			| ENUM_P
+			| ERROR_P
 			| ESCAPE
 			| EVENT
 			| EXCLUDE
@@ -17339,6 +17369,7 @@ bare_label_keyword:
 			| ENCRYPTED
 			| END_P
 			| ENUM_P
+			| ERROR_P
 			| ESCAPE
 			| EVENT
 			| EXCLUDE
@@ -17742,6 +17773,7 @@ makeTypeCast(Node *arg, TypeName *typename, int location)
 
 	n->arg = arg;
 	n->typeName = typename;
+	n->safe_mode = false;
 	n->location = location;
 	return (Node *) n;
 }

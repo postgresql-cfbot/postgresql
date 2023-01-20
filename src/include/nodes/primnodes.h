@@ -604,6 +604,7 @@ typedef struct FuncExpr
 	Oid			funccollid;		/* OID of collation of result */
 	Oid			inputcollid;	/* OID of collation that function should use */
 	List	   *args;			/* arguments to the function */
+	bool		safe_mode;		/* use safe mode */
 	int			location;		/* token location, or -1 if unknown */
 } FuncExpr;
 
@@ -1023,6 +1024,7 @@ typedef struct CoerceViaIO
 	/* output typmod is not stored, but is presumed -1 */
 	Oid			resultcollid;	/* OID of collation, or InvalidOid if none */
 	CoercionForm coerceformat;	/* how to display this node */
+	bool		safe_mode;		/* use safe mode */
 	int			location;		/* token location, or -1 if unknown */
 } CoerceViaIO;
 
@@ -1048,6 +1050,7 @@ typedef struct ArrayCoerceExpr
 	int32		resulttypmod;	/* output typmod (also element typmod) */
 	Oid			resultcollid;	/* OID of collation, or InvalidOid if none */
 	CoercionForm coerceformat;	/* how to display this node */
+	bool		safe_mode;		/* use safe mode */
 	int			location;		/* token location, or -1 if unknown */
 } ArrayCoerceExpr;
 
@@ -1260,8 +1263,14 @@ typedef struct RowCompareExpr
 	List	   *rargs;			/* the right-hand input arguments */
 } RowCompareExpr;
 
+typedef enum CoalesceOp
+{
+	NULL_TEST,					/* Test for NULL, like SQL COALECE() */
+	ERROR_TEST					/* Test for error flag */
+} CoalesceOp;
+
 /*
- * CoalesceExpr - a COALESCE expression
+ * CoalesceExpr - a COALESCE expression or OnError expression
  */
 typedef struct CoalesceExpr
 {
@@ -1269,6 +1278,7 @@ typedef struct CoalesceExpr
 	Oid			coalescetype;	/* type of expression result */
 	Oid			coalescecollid; /* OID of collation, or InvalidOid if none */
 	List	   *args;			/* the arguments */
+	CoalesceOp	op;				/* test for NULL or test for ERROR */
 	int			location;		/* token location, or -1 if unknown */
 } CoalesceExpr;
 

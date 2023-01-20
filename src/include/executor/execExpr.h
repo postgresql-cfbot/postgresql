@@ -138,6 +138,7 @@ typedef enum ExprEvalOp
 	/* conditional jumps based on current result value */
 	EEOP_JUMP_IF_NULL,
 	EEOP_JUMP_IF_NOT_NULL,
+	EEOP_JUMP_IF_NOT_ERROR,
 	EEOP_JUMP_IF_NOT_TRUE,
 
 	/* perform NULL tests for scalar values */
@@ -273,6 +274,7 @@ typedef struct ExprEvalStep
 	/* where to store the result of this step */
 	Datum	   *resvalue;
 	bool	   *resnull;
+	bool	   *reserror;
 
 	/*
 	 * Inline data for the operation.  Inline data is faster to access, but
@@ -395,6 +397,7 @@ typedef struct ExprEvalStep
 		{
 			Datum	   *value;	/* value to return */
 			bool	   *isnull;
+			bool	   *iserror;
 		}			casetest;
 
 		/* for EEOP_MAKE_READONLY */
@@ -402,6 +405,7 @@ typedef struct ExprEvalStep
 		{
 			Datum	   *value;	/* value to coerce to read-only */
 			bool	   *isnull;
+			bool	   *iserror;
 		}			make_readonly;
 
 		/* for EEOP_IOCOERCE */

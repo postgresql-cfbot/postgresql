@@ -4049,7 +4049,8 @@ get_qual_for_hash(Relation parent, PartitionBoundSpec *spec)
 						 args,
 						 InvalidOid,
 						 InvalidOid,
-						 COERCE_EXPLICIT_CALL);
+						 COERCE_EXPLICIT_CALL,
+						 NULL);
 
 	return list_make1(fexpr);
 }

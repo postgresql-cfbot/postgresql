@@ -95,6 +95,9 @@ typedef struct ExprState
 #define FIELDNO_EXPRSTATE_RESULTSLOT 4
 	TupleTableSlot *resultslot;
 
+#define FIELDNO_EXPRSTATE_RESERROR 5
+	bool		reserror;
+
 	/*
 	 * Instructions to compute expression's return value.
 	 */
@@ -126,6 +129,7 @@ typedef struct ExprState
 
 	Datum	   *innermost_caseval;
 	bool	   *innermost_casenull;
+	bool	   *innermost_caseerror;
 
 	Datum	   *innermost_domainval;
 	bool	   *innermost_domainnull;

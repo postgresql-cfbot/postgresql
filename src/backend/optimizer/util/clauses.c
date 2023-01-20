@@ -2894,6 +2894,7 @@ eval_const_expressions_mutator(Node *node,
 				newexpr->resulttype = expr->resulttype;
 				newexpr->resultcollid = expr->resultcollid;
 				newexpr->coerceformat = expr->coerceformat;
+				newexpr->safe_mode = expr->safe_mode;
 				newexpr->location = expr->location;
 				return (Node *) newexpr;
 			}
@@ -3158,7 +3159,7 @@ eval_const_expressions_mutator(Node *node,
 					 * drop following arguments since they will never be
 					 * reached.
 					 */
-					if (IsA(e, Const))
+					if ((coalesceexpr->op == NULL_TEST) && IsA(e, Const))
 					{
 						if (((Const *) e)->constisnull)
 							continue;	/* drop null constant */
@@ -3183,6 +3184,7 @@ eval_const_expressions_mutator(Node *node,
 				newcoalesce->coalescetype = coalesceexpr->coalescetype;
 				newcoalesce->coalescecollid = coalesceexpr->coalescecollid;
 				newcoalesce->args = newargs;
+				newcoalesce->op = coalesceexpr->op;
 				newcoalesce->location = coalesceexpr->location;
 				return (Node *) newcoalesce;
 			}

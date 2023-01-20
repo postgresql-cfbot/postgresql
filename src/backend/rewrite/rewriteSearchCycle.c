@@ -191,7 +191,7 @@ make_path_cat_expr(RowExpr *rowexpr, AttrNumber path_varattno)
 	fexpr = makeFuncExpr(F_ARRAY_CAT, RECORDARRAYOID,
 						 list_make2(makeVar(1, path_varattno, RECORDARRAYOID, -1, 0, 0),
 									arr),
-						 InvalidOid, InvalidOid, COERCE_EXPLICIT_CALL);
+						 InvalidOid, InvalidOid, COERCE_EXPLICIT_CALL, NULL);
 
 	return (Expr *) fexpr;
 }
@@ -521,7 +521,7 @@ rewriteSearchAndCycle(CommonTableExpr *cte)
 			fs->resulttype = INT8OID;
 			fs->resulttypmod = -1;
 
-			fexpr = makeFuncExpr(F_INT8INC, INT8OID, list_make1(fs), InvalidOid, InvalidOid, COERCE_EXPLICIT_CALL);
+			fexpr = makeFuncExpr(F_INT8INC, INT8OID, list_make1(fs), InvalidOid, InvalidOid, COERCE_EXPLICIT_CALL, NULL);
 
 			lfirst(list_head(search_col_rowexpr->args)) = fexpr;
 

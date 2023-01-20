@@ -517,7 +517,8 @@ makeColumnDef(const char *colname, Oid typeOid, int32 typmod, Oid collOid)
  */
 FuncExpr *
 makeFuncExpr(Oid funcid, Oid rettype, List *args,
-			 Oid funccollid, Oid inputcollid, CoercionForm fformat)
+			 Oid funccollid, Oid inputcollid, CoercionForm fformat,
+			 bool safe_mode)
 {
 	FuncExpr   *funcexpr;
 
@@ -530,6 +531,7 @@ makeFuncExpr(Oid funcid, Oid rettype, List *args,
 	funcexpr->funccollid = funccollid;
 	funcexpr->inputcollid = inputcollid;
 	funcexpr->args = args;
+	funcexpr->safe_mode = safe_mode;
 	funcexpr->location = -1;
 
 	return funcexpr;

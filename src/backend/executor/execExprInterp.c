@@ -64,6 +64,7 @@
 #include "funcapi.h"
 #include "miscadmin.h"
 #include "nodes/nodeFuncs.h"
+#include "nodes/miscnodes.h"
 #include "parser/parsetree.h"
 #include "pgstat.h"
 #include "utils/array.h"
@@ -434,6 +435,7 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 		&&CASE_EEOP_JUMP,
 		&&CASE_EEOP_JUMP_IF_NULL,
 		&&CASE_EEOP_JUMP_IF_NOT_NULL,
+		&&CASE_EEOP_JUMP_IF_NOT_ERROR,
 		&&CASE_EEOP_JUMP_IF_NOT_TRUE,
 		&&CASE_EEOP_NULLTEST_ISNULL,
 		&&CASE_EEOP_NULLTEST_ISNOTNULL,
@@ -729,6 +731,13 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 			*op->resvalue = d;
 			*op->resnull = fcinfo->isnull;
 
+			if (SOFT_ERROR_OCCURRED(fcinfo->context))
+			{
+				ErrorSaveContext *escontext = (ErrorSaveContext *) fcinfo->context;
+				escontext->error_occurred = false;
+				*op->reserror = true;
+			}
+
 			EEO_NEXT();
 		}
 
@@ -966,6 +975,21 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 			EEO_NEXT();
 		}
 
+		EEO_CASE(EEOP_JUMP_IF_NOT_ERROR)
+		{
+			/* Transfer control if current result is non-error */
+			if (!*op->reserror)
+			{
+				*op->reserror = false;
+				EEO_JUMP(op->d.jump.jumpdone);
+			}
+
+			/* reset error flag */
+			*op->reserror = false;
+
+			EEO_NEXT();
+		}
+
 		EEO_CASE(EEOP_JUMP_IF_NOT_TRUE)
 		{
 			/* Transfer control if current result is null or false */
@@ -1181,10 +1205,17 @@ ExecInterpExpr(ExprState *state, ExprContext *econtext, bool *isnull)
 
 				fcinfo_in->isnull = false;
 				d = FunctionCallInvoke(fcinfo_in);
+
 				*op->resvalue = d;
 
-				/* Should get null result if and only if str is NULL */
-				if (str == NULL)
+				if (SOFT_ERROR_OCCURRED(fcinfo_in->context))
+				{
+					ErrorSaveContext *escontext = (ErrorSaveContext *) fcinfo_in->context;
+					escontext->error_occurred = false;
+					*op->reserror = true;
+				}
+				/* If no error, should get null result if and only if str is NULL */
+				else if (str == NULL)
 				{
 					Assert(*op->resnull);
 					Assert(fcinfo_in->isnull);

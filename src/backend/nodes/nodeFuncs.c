@@ -1522,13 +1522,16 @@ exprLocation(const Node *expr)
 			{
 				const TypeCast *tc = (const TypeCast *) expr;
 
-				/*
-				 * This could represent CAST(), ::, or TypeName 'literal', so
-				 * any of the components might be leftmost.
-				 */
 				loc = exprLocation(tc->arg);
-				loc = leftmostLoc(loc, tc->typeName->location);
-				loc = leftmostLoc(loc, tc->location);
+				if (likely(!tc->safe_mode))
+				{
+					/*
+					 * This could represent CAST(), ::, or TypeName 'literal',
+					 * so any of the components might be leftmost.
+					 */
+					loc = leftmostLoc(loc, tc->typeName->location);
+					loc = leftmostLoc(loc, tc->location);
+				}
 			}
 			break;
 		case T_CollateClause:

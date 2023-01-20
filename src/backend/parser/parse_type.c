@@ -19,6 +19,7 @@
 #include "catalog/pg_type.h"
 #include "lib/stringinfo.h"
 #include "nodes/makefuncs.h"
+#include "nodes/miscnodes.h"
 #include "parser/parse_type.h"
 #include "parser/parser.h"
 #include "utils/array.h"
@@ -658,6 +659,18 @@ stringTypeDatum(Type tp, char *string, int32 atttypmod)
 	Oid			typioparam = getTypeIOParam(tp);
 
 	return OidInputFunctionCall(typinput, string, typioparam, atttypmod);
+}
+
+bool
+stringTypeDatumSafe(Type tp, char *string, int32 atttypmod, Datum *result)
+{
+	Form_pg_type typform = (Form_pg_type) GETSTRUCT(tp);
+	Oid			typinput = typform->typinput;
+	Oid			typioparam = getTypeIOParam(tp);
+	ErrorSaveContext escontext = {T_ErrorSaveContext};
+
+	return OidInputFunctionCallSafe(typinput, string, typioparam, atttypmod,
+									(fmNodePtr) &escontext, result);
 }
 
 /*

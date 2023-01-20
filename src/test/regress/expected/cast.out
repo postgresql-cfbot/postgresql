@@ -1,0 +1,40 @@
+/* ON ERROR behavior */
+VALUES (CAST('error' AS integer));
+ERROR:  invalid input syntax for type integer: "error"
+LINE 2: VALUES (CAST('error' AS integer));
+                     ^
+VALUES (CAST('error' AS integer ERROR ON ERROR));
+ERROR:  invalid input syntax for type integer: "error"
+LINE 1: VALUES (CAST('error' AS integer ERROR ON ERROR));
+                     ^
+VALUES (CAST('error' AS integer NULL ON ERROR));
+ column1 
+---------
+        
+(1 row)
+
+VALUES (CAST('error' AS integer DEFAULT 42 ON ERROR));
+ column1 
+---------
+      42
+(1 row)
+
+SELECT CAST('{123,abc,456}' AS integer[] DEFAULT '{-789}' ON ERROR) as array_test1;
+ array_test1 
+-------------
+ {-789}
+(1 row)
+
+SELECT CAST('{234,def,567}'::text[] AS integer[] DEFAULT '{-1011}' ON ERROR) as array_test2;
+ array_test2 
+-------------
+ {-1011}
+(1 row)
+
+SELECT CAST(u.arg AS integer DEFAULT -1 ON ERROR) AS unnest_test1 FROM unnest('{345,ghi,678}'::text[]) AS u(arg);
+ unnest_test1 
+--------------
+          345
+           -1
+          678
+(3 rows)

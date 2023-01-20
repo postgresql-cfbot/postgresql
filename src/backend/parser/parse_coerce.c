@@ -36,13 +36,15 @@ static Node *coerce_type_typmod(Node *node,
 								Oid targetTypeId, int32 targetTypMod,
 								CoercionContext ccontext, CoercionForm cformat,
 								int location,
-								bool hideInputCoercion);
+								bool hideInputCoercion,
+								bool *cast_error_found);
 static void hide_coercion_node(Node *node);
 static Node *build_coercion_expression(Node *node,
 									   CoercionPathType pathtype,
 									   Oid funcId,
 									   Oid targetTypeId, int32 targetTypMod,
 									   CoercionContext ccontext, CoercionForm cformat,
+									   bool *cast_error_found,
 									   int location);
 static Node *coerce_record_to_complex(ParseState *pstate, Node *node,
 									  Oid targetTypeId,
@@ -81,6 +83,19 @@ coerce_to_target_type(ParseState *pstate, Node *expr, Oid exprtype,
 					  CoercionForm cformat,
 					  int location)
 {
+	return coerce_to_target_type_safe(pstate, expr, exprtype, targettype,
+									  targettypmod, ccontext, cformat,
+									  NULL, location);
+}
+
+Node *
+coerce_to_target_type_safe(ParseState *pstate, Node *expr, Oid exprtype,
+					  Oid targettype, int32 targettypmod,
+					  CoercionContext ccontext,
+					  CoercionForm cformat,
+					  bool *cast_error_found,
+					  int location)
+{
 	Node	   *result;
 	Node	   *origexpr;
 
@@ -101,19 +116,30 @@ coerce_to_target_type(ParseState *pstate, Node *expr, Oid exprtype,
 	while (expr && IsA(expr, CollateExpr))
 		expr = (Node *) ((CollateExpr *) expr)->arg;
 
-	result = coerce_type(pstate, expr, exprtype,
-						 targettype, targettypmod,
-						 ccontext, cformat, location);
+	result = coerce_type_safe(pstate, expr, exprtype,
+							  targettype, targettypmod,
+							  ccontext, cformat,
+							  cast_error_found, location);
+
+	/*
+	 * If this coercion failed on bad input, we want to report that to the
+	 * caller.
+	 */
+	if (cast_error_found != NULL && *cast_error_found)
+		return NULL;
 
 	/*
 	 * If the target is a fixed-length type, it may need a length coercion as
 	 * well as a type coercion.  If we find ourselves adding both, force the
 	 * inner coercion node to implicit display form.
 	 */
-	result = coerce_type_typmod(result,
-								targettype, targettypmod,
+	result = coerce_type_typmod(result, targettype, targettypmod,
 								ccontext, cformat, location,
-								(result != expr && !IsA(result, Const)));
+								(result != expr && !IsA(result, Const)),
+								cast_error_found);
+
+	if (cast_error_found != NULL && *cast_error_found)
+		return NULL;
 
 	if (expr != origexpr && type_is_collatable(targettype))
 	{
@@ -157,6 +183,18 @@ Node *
 coerce_type(ParseState *pstate, Node *node,
 			Oid inputTypeId, Oid targetTypeId, int32 targetTypeMod,
 			CoercionContext ccontext, CoercionForm cformat, int location)
+{
+	return coerce_type_safe(pstate, node, inputTypeId, targetTypeId,
+							targetTypeMod, ccontext, cformat,
+							NULL, location);
+}
+
+Node *
+coerce_type_safe(ParseState *pstate, Node *node,
+				 Oid inputTypeId, Oid targetTypeId, int32 targetTypeMod,
+				 CoercionContext ccontext, CoercionForm cformat,
+				 bool *cast_error_found,
+				 int location)
 {
 	Node	   *result;
 	CoercionPathType pathtype;
@@ -255,6 +293,7 @@ coerce_type(ParseState *pstate, Node *node,
 		int32		inputTypeMod;
 		Type		baseType;
 		ParseCallbackState pcbstate;
+		bool		coerce_failed = false;
 
 		/*
 		 * If the target type is a domain, we want to call its base type's
@@ -307,21 +346,47 @@ coerce_type(ParseState *pstate, Node *node,
 		 * We assume here that UNKNOWN's internal representation is the same
 		 * as CSTRING.
 		 */
-		if (!con->constisnull)
-			newcon->constvalue = stringTypeDatum(baseType,
-												 DatumGetCString(con->constvalue),
-												 inputTypeMod);
+		if (cast_error_found == NULL)
+		{
+			if (!con->constisnull)
+				newcon->constvalue = stringTypeDatum(baseType,
+													 DatumGetCString(con->constvalue),
+													 inputTypeMod);
+			else
+				newcon->constvalue = stringTypeDatum(baseType,
+													 NULL,
+													 inputTypeMod);
+		}
 		else
-			newcon->constvalue = stringTypeDatum(baseType,
-												 NULL,
-												 inputTypeMod);
+		{
+			/* If we find an error, just carry it up to the caller */
+			Datum val2;
+			bool success;
+
+			if (!con->constisnull)
+				success = stringTypeDatumSafe(baseType,
+											  DatumGetCString(con->constvalue),
+											  inputTypeMod, &val2);
+			else
+				success = stringTypeDatumSafe(baseType, NULL, inputTypeMod,
+											  &val2);
+
+			if (success)
+				newcon->constvalue = val2;
+			else
+			{
+				*cast_error_found = true;
+				coerce_failed = true;
+				result = NULL;
+			}
+		}
 
 		/*
 		 * If it's a varlena value, force it to be in non-expanded
 		 * (non-toasted) format; this avoids any possible dependency on
 		 * external values and improves consistency of representation.
 		 */
-		if (!con->constisnull && newcon->constlen == -1)
+		if (!coerce_failed && !con->constisnull && newcon->constlen == -1)
 			newcon->constvalue =
 				PointerGetDatum(PG_DETOAST_DATUM(newcon->constvalue));
 
@@ -338,32 +403,53 @@ coerce_type(ParseState *pstate, Node *node,
 		 * identical may not get recognized as such.  See pgsql-hackers
 		 * discussion of 2008-04-04.
 		 */
-		if (!con->constisnull && !newcon->constbyval)
+		if (!coerce_failed && !con->constisnull && !newcon->constbyval)
 		{
 			Datum		val2;
 
-			val2 = stringTypeDatum(baseType,
-								   DatumGetCString(con->constvalue),
-								   inputTypeMod);
-			if (newcon->constlen == -1)
-				val2 = PointerGetDatum(PG_DETOAST_DATUM(val2));
-			if (!datumIsEqual(newcon->constvalue, val2, false, newcon->constlen))
-				elog(WARNING, "type %s has unstable input conversion for \"%s\"",
-					 typeTypeName(baseType), DatumGetCString(con->constvalue));
+			if (cast_error_found != NULL)
+			{
+				if (!stringTypeDatumSafe(baseType,
+									     DatumGetCString(con->constvalue),
+									     inputTypeMod, &val2))
+				{
+					coerce_failed = true;
+					*cast_error_found = true;
+					result = NULL;
+				}
+			}
+			else
+				val2 = stringTypeDatum(baseType,
+									   DatumGetCString(con->constvalue),
+									   inputTypeMod);
+			if (!coerce_failed)
+			{
+				if (newcon->constlen == -1)
+					val2 = PointerGetDatum(PG_DETOAST_DATUM(val2));
+				if (!datumIsEqual(newcon->constvalue, val2,
+													false, newcon->constlen))
+					elog(WARNING,
+						 "type %s has unstable input conversion for \"%s\"",
+						 typeTypeName(baseType),
+						 DatumGetCString(con->constvalue));
+			}
 		}
 #endif
 
 		cancel_parser_errposition_callback(&pcbstate);
 
-		result = (Node *) newcon;
+		if (!coerce_failed)
+		{
+			result = (Node *) newcon;
 
-		/* If target is a domain, apply constraints. */
-		if (baseTypeId != targetTypeId)
-			result = coerce_to_domain(result,
-									  baseTypeId, baseTypeMod,
-									  targetTypeId,
-									  ccontext, cformat, location,
-									  false);
+			/* If target is a domain, apply constraints. */
+			if (baseTypeId != targetTypeId)
+				result = coerce_to_domain_safe(result,
+											   baseTypeId, baseTypeMod,
+											   targetTypeId,
+											   ccontext, cformat, location,
+											   false, cast_error_found);
+		}
 
 		ReleaseSysCache(baseType);
 
@@ -396,9 +482,15 @@ coerce_type(ParseState *pstate, Node *node,
 		 */
 		CollateExpr *coll = (CollateExpr *) node;
 
-		result = coerce_type(pstate, (Node *) coll->arg,
-							 inputTypeId, targetTypeId, targetTypeMod,
-							 ccontext, cformat, location);
+		result = coerce_type_safe(pstate, (Node *) coll->arg,
+								  inputTypeId, targetTypeId, targetTypeMod,
+								  ccontext, cformat,
+								  cast_error_found,
+								  location);
+
+		if (cast_error_found != NULL && *cast_error_found)
+			return NULL;
+
 		if (type_is_collatable(targetTypeId))
 		{
 			CollateExpr *newcoll = makeNode(CollateExpr);
@@ -431,17 +523,23 @@ coerce_type(ParseState *pstate, Node *node,
 
 			result = build_coercion_expression(node, pathtype, funcId,
 											   baseTypeId, baseTypeMod,
-											   ccontext, cformat, location);
+											   ccontext, cformat,
+											   cast_error_found,
+											   location);
 
 			/*
 			 * If domain, coerce to the domain type and relabel with domain
 			 * type ID, hiding the previous coercion node.
 			 */
 			if (targetTypeId != baseTypeId)
-				result = coerce_to_domain(result, baseTypeId, baseTypeMod,
+			{
+				result = coerce_to_domain_safe(result, baseTypeId, baseTypeMod,
 										  targetTypeId,
 										  ccontext, cformat, location,
-										  true);
+										  true, cast_error_found);
+				if (cast_error_found != NULL && *cast_error_found)
+					return NULL;
+			}
 		}
 		else
 		{
@@ -454,9 +552,11 @@ coerce_type(ParseState *pstate, Node *node,
 			 * that must be accounted for.  If the destination is a domain
 			 * then we won't need a RelabelType node.
 			 */
-			result = coerce_to_domain(node, InvalidOid, -1, targetTypeId,
+			result = coerce_to_domain_safe(node, InvalidOid, -1, targetTypeId,
 									  ccontext, cformat, location,
-									  false);
+									  false, cast_error_found);
+			if (cast_error_found != NULL && *cast_error_found)
+				return NULL;
 			if (result == node)
 			{
 				/*
@@ -677,6 +777,17 @@ coerce_to_domain(Node *arg, Oid baseTypeId, int32 baseTypeMod, Oid typeId,
 				 CoercionContext ccontext, CoercionForm cformat, int location,
 				 bool hideInputCoercion)
 {
+	return coerce_to_domain_safe(arg, baseTypeId, baseTypeMod, typeId,
+								 ccontext, cformat, location,
+								 hideInputCoercion, NULL);
+}
+
+Node *
+coerce_to_domain_safe(Node *arg, Oid baseTypeId, int32 baseTypeMod, Oid typeId,
+					  CoercionContext ccontext, CoercionForm cformat,
+					  int location, bool hideInputCoercion,
+					  bool *cast_error_found)
+{
 	CoerceToDomain *result;
 
 	/* Get the base type if it hasn't been supplied */
@@ -706,7 +817,7 @@ coerce_to_domain(Node *arg, Oid baseTypeId, int32 baseTypeMod, Oid typeId,
 	 */
 	arg = coerce_type_typmod(arg, baseTypeId, baseTypeMod,
 							 ccontext, COERCE_IMPLICIT_CAST, location,
-							 false);
+							 false, cast_error_found);
 
 	/*
 	 * Now build the domain coercion node.  This represents run-time checking
@@ -753,7 +864,7 @@ static Node *
 coerce_type_typmod(Node *node, Oid targetTypeId, int32 targetTypMod,
 				   CoercionContext ccontext, CoercionForm cformat,
 				   int location,
-				   bool hideInputCoercion)
+				   bool hideInputCoercion, bool *cast_error_found)
 {
 	CoercionPathType pathtype;
 	Oid			funcId;
@@ -780,7 +891,9 @@ coerce_type_typmod(Node *node, Oid targetTypeId, int32 targetTypMod,
 	{
 		node = build_coercion_expression(node, pathtype, funcId,
 										 targetTypeId, targetTypMod,
-										 ccontext, cformat, location);
+										 ccontext, cformat,
+										 cast_error_found,
+										 location);
 	}
 	else
 	{
@@ -841,9 +954,10 @@ build_coercion_expression(Node *node,
 						  Oid funcId,
 						  Oid targetTypeId, int32 targetTypMod,
 						  CoercionContext ccontext, CoercionForm cformat,
-						  int location)
+						  bool *cast_error_found, int location)
 {
 	int			nargs = 0;
+	bool		safe_mode = (cast_error_found != NULL);
 
 	if (OidIsValid(funcId))
 	{
@@ -913,13 +1027,14 @@ build_coercion_expression(Node *node,
 		}
 
 		fexpr = makeFuncExpr(funcId, targetTypeId, args,
-							 InvalidOid, InvalidOid, cformat);
+							 InvalidOid, InvalidOid, cformat, safe_mode);
 		fexpr->location = location;
 		return (Node *) fexpr;
 	}
 	else if (pathtype == COERCION_PATH_ARRAYCOERCE)
 	{
 		/* We need to build an ArrayCoerceExpr */
+		/* TODO pass in Safe param */
 		ArrayCoerceExpr *acoerce = makeNode(ArrayCoerceExpr);
 		CaseTestExpr *ctest = makeNode(CaseTestExpr);
 		Oid			sourceBaseTypeId;
@@ -951,14 +1066,20 @@ build_coercion_expression(Node *node,
 		targetElementType = get_element_type(targetTypeId);
 		Assert(OidIsValid(targetElementType));
 
-		elemexpr = coerce_to_target_type(NULL,
+		/*
+		 * No node gets resolved here, so this cast cannot fail
+		 * at parse time.
+		 */
+		elemexpr = coerce_to_target_type_safe(NULL,
 										 (Node *) ctest,
 										 ctest->typeId,
 										 targetElementType,
 										 targetTypMod,
 										 ccontext,
 										 cformat,
+										 cast_error_found,
 										 location);
+
 		if (elemexpr == NULL)	/* shouldn't happen */
 			elog(ERROR, "failed to coerce array element type as expected");
 
@@ -973,6 +1094,7 @@ build_coercion_expression(Node *node,
 		acoerce->resulttypmod = exprTypmod(elemexpr);
 		/* resultcollid will be set by parse_collate.c */
 		acoerce->coerceformat = cformat;
+		acoerce->safe_mode = safe_mode;
 		acoerce->location = location;
 
 		return (Node *) acoerce;
@@ -988,6 +1110,7 @@ build_coercion_expression(Node *node,
 		iocoerce->resulttype = targetTypeId;
 		/* resultcollid will be set by parse_collate.c */
 		iocoerce->coerceformat = cformat;
+		iocoerce->safe_mode = safe_mode;
 		iocoerce->location = location;
 
 		return (Node *) iocoerce;

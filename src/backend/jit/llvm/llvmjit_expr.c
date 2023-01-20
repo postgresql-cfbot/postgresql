@@ -919,6 +919,21 @@ llvm_compile_expr(ExprState *state)
 					break;
 				}
 
+			case EEOP_JUMP_IF_NOT_ERROR:
+				{
+					LLVMValueRef v_reserror;
+
+					/* Transfer control if current result is non-error */
+
+					v_resnull = LLVMBuildLoad(b, v_reserrorp, "");
+
+					LLVMBuildCondBr(b,
+									LLVMBuildICmp(b, LLVMIntEQ, v_reserror,
+												  l_sbool_const(0), ""),
+									opblocks[op->d.jump.jumpdone],
+									opblocks[opno + 1]);
+					break;
+				}
 
 			case EEOP_JUMP_IF_NOT_TRUE:
 				{

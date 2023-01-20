@@ -57,7 +57,8 @@ static Node *transformMultiAssignRef(ParseState *pstate, MultiAssignRef *maref);
 static Node *transformCaseExpr(ParseState *pstate, CaseExpr *c);
 static Node *transformSubLink(ParseState *pstate, SubLink *sublink);
 static Node *transformArrayExpr(ParseState *pstate, A_ArrayExpr *a,
-								Oid array_type, Oid element_type, int32 typmod);
+								Oid array_type, Oid element_type, int32 typmod,
+								bool *cast_error_found);
 static Node *transformRowExpr(ParseState *pstate, RowExpr *r, bool allowDefault);
 static Node *transformCoalesceExpr(ParseState *pstate, CoalesceExpr *c);
 static Node *transformMinMaxExpr(ParseState *pstate, MinMaxExpr *m);
@@ -137,7 +138,7 @@ transformExprRecurse(ParseState *pstate, Node *expr)
 
 		case T_A_ArrayExpr:
 			result = transformArrayExpr(pstate, (A_ArrayExpr *) expr,
-										InvalidOid, InvalidOid, -1);
+										InvalidOid, InvalidOid, -1, NULL);
 			break;
 
 		case T_TypeCast:
@@ -1907,7 +1908,8 @@ transformSubLink(ParseState *pstate, SubLink *sublink)
  */
 static Node *
 transformArrayExpr(ParseState *pstate, A_ArrayExpr *a,
-				   Oid array_type, Oid element_type, int32 typmod)
+				   Oid array_type, Oid element_type, int32 typmod,
+				   bool *cast_error_found)
 {
 	ArrayExpr  *newa = makeNode(ArrayExpr);
 	List	   *newelems = NIL;
@@ -1938,7 +1940,12 @@ transformArrayExpr(ParseState *pstate, A_ArrayExpr *a,
 									  (A_ArrayExpr *) e,
 									  array_type,
 									  element_type,
-									  typmod);
+									  typmod,
+									  cast_error_found);
+
+			if (cast_error_found != NULL && *cast_error_found)
+				return NULL;
+
 			/* we certainly have an array here */
 			Assert(array_type == InvalidOid || array_type == exprType(newe));
 			newa->multidims = true;
@@ -2027,13 +2034,18 @@ transformArrayExpr(ParseState *pstate, A_ArrayExpr *a,
 
 		if (coerce_hard)
 		{
-			newe = coerce_to_target_type(pstate, e,
+			newe = coerce_to_target_type_safe(pstate, e,
 										 exprType(e),
 										 coerce_type,
 										 typmod,
 										 COERCION_EXPLICIT,
 										 COERCE_EXPLICIT_CAST,
+										 cast_error_found,
 										 -1);
+
+			if (cast_error_found != NULL && *cast_error_found)
+				return NULL;
+
 			if (newe == NULL)
 				ereport(ERROR,
 						(errcode(ERRCODE_CANNOT_COERCE),
@@ -2105,13 +2117,19 @@ transformCoalesceExpr(ParseState *pstate, CoalesceExpr *c)
 	List	   *newcoercedargs = NIL;
 	ListCell   *args;
 
+
 	foreach(args, c->args)
 	{
 		Node	   *e = (Node *) lfirst(args);
 		Node	   *newe;
 
 		newe = transformExprRecurse(pstate, e);
-		newargs = lappend(newargs, newe);
+		/*
+		 * Some child nodes can return NULL if they would result in a
+		 * safe_mode error. Filter those out here
+		 */
+		if (newe != NULL)
+			newargs = lappend(newargs, newe);
 	}
 
 	newc->coalescetype = select_common_type(pstate, newargs, "COALESCE", NULL);
@@ -2141,6 +2159,7 @@ transformCoalesceExpr(ParseState *pstate, CoalesceExpr *c)
 									exprLocation(pstate->p_last_srf))));
 
 	newc->args = newcoercedargs;
+	newc->op = c->op;
 	newc->location = c->location;
 	return (Node *) newc;
 }
@@ -2345,8 +2364,7 @@ transformXmlSerialize(ParseState *pstate, XmlSerialize *xs)
 	result = coerce_to_target_type(pstate, (Node *) xexpr,
 								   TEXTOID, targetType, targetTypmod,
 								   COERCION_IMPLICIT,
-								   COERCE_IMPLICIT_CAST,
-								   -1);
+								   COERCE_IMPLICIT_CAST, -1);
 	if (result == NULL)
 		ereport(ERROR,
 				(errcode(ERRCODE_CANNOT_COERCE),
@@ -2524,10 +2542,25 @@ transformTypeCast(ParseState *pstate, TypeCast *tc)
 	Oid			inputType;
 	Oid			targetType;
 	int32		targetTypmod;
-	int			location;
+	int			location = tc->location;
+	TypeName   *typeName = tc->typeName;
+	bool		cast_error;
+	bool	   *cast_error_found;
+
+
+	if (tc->safe_mode)
+	{
+		cast_error = false;
+		cast_error_found = &cast_error;
+	}
+	else
+	{
+		cast_error_found = NULL;
+	}
+
 
 	/* Look up the type name first */
-	typenameTypeIdAndMod(pstate, tc->typeName, &targetType, &targetTypmod);
+	typenameTypeIdAndMod(pstate, typeName, &targetType, &targetTypmod);
 
 	/*
 	 * If the subject of the typecast is an ARRAY[] construct and the target
@@ -2557,7 +2590,16 @@ transformTypeCast(ParseState *pstate, TypeCast *tc)
 									  (A_ArrayExpr *) arg,
 									  targetBaseType,
 									  elementType,
-									  targetBaseTypmod);
+									  targetBaseTypmod,
+									  cast_error_found);
+
+			/*
+			 * if any element of the tranformation failed, then that means that the
+			 * larger cast has failed. Returning NULL here is safe when the
+			 * parent node (CoalesceExpr) knows to look for it (and filter it out).
+			 */
+			if (cast_error_found != NULL && *cast_error_found)
+				return NULL;
 		}
 		else
 			expr = transformExprRecurse(pstate, arg);
@@ -2574,15 +2616,24 @@ transformTypeCast(ParseState *pstate, TypeCast *tc)
 	 * CAST symbol, but if there is none then use the location of the type
 	 * name (this can happen in TypeName 'string' syntax, for instance).
 	 */
-	location = tc->location;
 	if (location < 0)
-		location = tc->typeName->location;
+		location = typeName->location;
 
-	result = coerce_to_target_type(pstate, expr, inputType,
-								   targetType, targetTypmod,
-								   COERCION_EXPLICIT,
-								   COERCE_EXPLICIT_CAST,
-								   location);
+	result = coerce_to_target_type_safe(pstate, expr, inputType,
+										targetType, targetTypmod,
+										COERCION_EXPLICIT,
+										COERCE_EXPLICIT_CAST,
+										cast_error_found,
+										location);
+
+	/*
+	 * If this typecast reported a cast error, and the cast failed outright,
+	 * then we want to replace this node entirely with the default,
+	 * and we signal the parent node to do that by returning NULL.
+	 */
+	if (cast_error_found != NULL && *cast_error_found)
+		return NULL;
+
 	if (result == NULL)
 		ereport(ERROR,
 				(errcode(ERRCODE_CANNOT_COERCE),

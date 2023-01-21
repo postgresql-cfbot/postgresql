@@ -174,6 +174,7 @@
 #include "postmaster/walwriter.h"
 #include "replication/decode.h"
 #include "replication/logical.h"
+#include "replication/logicallauncher.h"
 #include "replication/logicalproto.h"
 #include "replication/logicalrelation.h"
 #include "replication/logicalworker.h"
@@ -3811,6 +3812,13 @@ apply_worker_exit(void)
 		return;
 	}
 
+	/*
+	 * Clear the last-start time for the apply worker so that the launcher
+	 * will restart it immediately, bypassing wal_retrieve_retry_interval.
+	 */
+	if (!am_tablesync_worker())
+		logicalrep_launcher_delete_last_start_time(MyLogicalRepWorker->subid);
+
 	proc_exit(0);
 }
 
@@ -3851,6 +3859,8 @@ maybe_reread_subscription(void)
 				(errmsg("%s for subscription \"%s\" will stop because the subscription was removed",
 						get_worker_name(), MySubscription->name)));
 
+		if (!am_tablesync_worker() && !am_parallel_apply_worker())
+			logicalrep_launcher_delete_last_start_time(MyLogicalRepWorker->subid);
 		proc_exit(0);
 	}
 
@@ -4421,6 +4431,8 @@ InitializeApplyWorker(void)
 				(errmsg("%s for subscription %u will not start because the subscription was removed during startup",
 						get_worker_name(), MyLogicalRepWorker->subid)));
 
+		if (!am_tablesync_worker() && !am_parallel_apply_worker())
+			logicalrep_launcher_delete_last_start_time(MyLogicalRepWorker->subid);
 		proc_exit(0);
 	}
 
@@ -4683,6 +4695,8 @@ DisableSubscriptionAndExit(void)
 			errmsg("subscription \"%s\" has been disabled because of an error",
 				   MySubscription->name));
 
+	if (!am_tablesync_worker() && !am_parallel_apply_worker())
+		logicalrep_launcher_delete_last_start_time(MyLogicalRepWorker->subid);
 	proc_exit(0);
 }
 

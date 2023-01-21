@@ -29,4 +29,6 @@ extern bool IsLogicalLauncher(void);
 
 extern pid_t GetLeaderApplyWorkerPid(pid_t pid);
 
+extern void logicalrep_launcher_delete_last_start_time(Oid subid);
+
 #endif							/* LOGICALLAUNCHER_H */

@@ -1505,6 +1505,14 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 	list_free(subworkers);
 
 	/*
+	 * Clear the last-start time for the apply worker to free up space.  If
+	 * this transaction rolls back, the launcher might restart the apply worker
+	 * before wal_retrieve_retry_interval milliseconds have elapsed, but that's
+	 * probably okay.
+	 */
+	logicalrep_launcher_delete_last_start_time(subid);
+
+	/*
 	 * Cleanup of tablesync replication origins.
 	 *
 	 * Any READY-state relations would already have dealt with clean-ups.

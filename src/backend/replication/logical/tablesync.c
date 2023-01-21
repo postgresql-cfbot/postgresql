@@ -628,7 +628,15 @@ process_syncing_tables_for_apply(XLogRecPtr current_lsn)
 	}
 
 	if (should_exit)
+	{
+		/*
+		 * Clear the last-start time for this worker so that the launcher will
+		 * restart it immediately.
+		 */
+		logicalrep_launcher_delete_last_start_time(MySubscription->oid);
+
 		proc_exit(0);
+	}
 }
 
 /*

@@ -25,6 +25,7 @@
 #include "catalog/pg_subscription.h"
 #include "catalog/pg_subscription_rel.h"
 #include "funcapi.h"
+#include "lib/dshash.h"
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -57,12 +58,35 @@ int			max_logical_replication_workers = 4;
 int			max_sync_workers_per_subscription = 2;
 int			max_parallel_apply_workers_per_subscription = 2;
 
+/* an entry in the last-start times hash table */
+typedef struct LauncherLastStartTimesEntry
+{
+	Oid		subid;
+	TimestampTz last_start_time;
+} LauncherLastStartTimesEntry;
+
+/* parameters for the last-start times hash table */
+static const dshash_parameters dsh_params = {
+	sizeof(Oid),
+	sizeof(LauncherLastStartTimesEntry),
+	dshash_memcmp,
+	dshash_memhash,
+	LWTRANCHE_LAUNCHER_HASH
+};
+
+static dsa_area *last_start_times_dsa = NULL;
+static dshash_table *last_start_times = NULL;
+
 LogicalRepWorker *MyLogicalRepWorker = NULL;
 
 typedef struct LogicalRepCtxStruct
 {
 	/* Supervisor process. */
 	pid_t		launcher_pid;
+
+	/* hash table for last-start times */
+	dsa_handle	last_start_dsa;
+	dshash_table_handle last_start_dsh;
 
 	/* Background workers. */
 	LogicalRepWorker workers[FLEXIBLE_ARRAY_MEMBER];
@@ -76,6 +100,9 @@ static void logicalrep_worker_onexit(int code, Datum arg);
 static void logicalrep_worker_detach(void);
 static void logicalrep_worker_cleanup(LogicalRepWorker *worker);
 static int	logicalrep_pa_worker_count(Oid subid);
+static void logicalrep_launcher_attach_dshmem(void);
+static void logicalrep_launcher_set_last_start_time(Oid subid, TimestampTz start_time);
+static TimestampTz logicalrep_launcher_get_last_start_time(Oid subid);
 
 static bool on_commit_launcher_wakeup = false;
 
@@ -902,6 +929,9 @@ ApplyLauncherShmemInit(void)
 			memset(worker, 0, sizeof(LogicalRepWorker));
 			SpinLockInit(&worker->relmutex);
 		}
+
+		LogicalRepCtx->last_start_dsa = DSM_HANDLE_INVALID;
+		LogicalRepCtx->last_start_dsh = DSM_HANDLE_INVALID;
 	}
 }
 
@@ -947,8 +977,6 @@ ApplyLauncherWakeup(void)
 void
 ApplyLauncherMain(Datum main_arg)
 {
-	TimestampTz last_start_time = 0;
-
 	ereport(DEBUG1,
 			(errmsg_internal("logical replication launcher started")));
 
@@ -983,57 +1011,62 @@ ApplyLauncherMain(Datum main_arg)
 
 		now = GetCurrentTimestamp();
 
-		/* Limit the start retry to once a wal_retrieve_retry_interval */
-		if (TimestampDifferenceExceeds(last_start_time, now,
-									   wal_retrieve_retry_interval))
+		/* Use temporary context for the database list and worker info. */
+		subctx = AllocSetContextCreate(TopMemoryContext,
+									   "Logical Replication Launcher sublist",
+									   ALLOCSET_DEFAULT_SIZES);
+		oldctx = MemoryContextSwitchTo(subctx);
+
+		sublist = get_subscription_list();
+		foreach(lc, sublist)
 		{
-			/* Use temporary context for the database list and worker info. */
-			subctx = AllocSetContextCreate(TopMemoryContext,
-										   "Logical Replication Launcher sublist",
-										   ALLOCSET_DEFAULT_SIZES);
-			oldctx = MemoryContextSwitchTo(subctx);
+			Subscription *sub = (Subscription *) lfirst(lc);
+			LogicalRepWorker *w;
+			TimestampTz last_start;
 
-			/* search for subscriptions to start or stop. */
-			sublist = get_subscription_list();
+			if (!sub->enabled)
+				continue;
 
-			/* Start the missing workers for enabled subscriptions. */
-			foreach(lc, sublist)
-			{
-				Subscription *sub = (Subscription *) lfirst(lc);
-				LogicalRepWorker *w;
+			LWLockAcquire(LogicalRepWorkerLock, LW_EXCLUSIVE);
+			w = logicalrep_worker_find(sub->oid, InvalidOid, false);
+			LWLockRelease(LogicalRepWorkerLock);
 
-				if (!sub->enabled)
-					continue;
+			if (w != NULL)
+				continue;
 
-				LWLockAcquire(LogicalRepWorkerLock, LW_SHARED);
-				w = logicalrep_worker_find(sub->oid, InvalidOid, false);
-				LWLockRelease(LogicalRepWorkerLock);
-
-				if (w == NULL)
-				{
-					last_start_time = now;
-					wait_time = wal_retrieve_retry_interval;
-
-					logicalrep_worker_launch(sub->dbid, sub->oid, sub->name,
-											 sub->owner, InvalidOid, DSM_HANDLE_INVALID);
-				}
-			}
-
-			/* Switch back to original memory context. */
-			MemoryContextSwitchTo(oldctx);
-			/* Clean the temporary memory. */
-			MemoryContextDelete(subctx);
-		}
-		else
-		{
 			/*
-			 * The wait in previous cycle was interrupted in less than
-			 * wal_retrieve_retry_interval since last worker was started, this
-			 * usually means crash of the worker, so we should retry in
-			 * wal_retrieve_retry_interval again.
+			 * If the worker is eligible to start now, launch it.  Otherwise,
+			 * adjust wait_time so that we wake up when it can be started.
+			 * Each subscription's apply worker can only be restarted once per
+			 * wal_retrieve_retry_interval so that errors do not cause us to
+			 * repeatedly restart the worker as fast as posible.  In cases
+			 * where a restart is expected (e.g., subscription parameter
+			 * changes), another process should remove the last-start entry for
+			 * the subscription so that wal_retrieve_retry_interval is bypassed
+			 * and the worker is restarted immediately.
 			 */
-			wait_time = wal_retrieve_retry_interval;
+			last_start = logicalrep_launcher_get_last_start_time(sub->oid);
+			if (TimestampDifferenceExceeds(last_start, now,
+										   wal_retrieve_retry_interval))
+			{
+				logicalrep_launcher_set_last_start_time(sub->oid, now);
+				logicalrep_worker_launch(sub->dbid, sub->oid, sub->name,
+										 sub->owner, InvalidOid,
+										 DSM_HANDLE_INVALID);
+			}
+			else
+			{
+				long		elapsed;
+
+				elapsed = TimestampDifferenceMilliseconds(last_start, now);
+				wait_time = Min(wait_time, wal_retrieve_retry_interval - elapsed);
+			}
 		}
+
+		/* Switch back to original memory context. */
+		MemoryContextSwitchTo(oldctx);
+		/* Clean the temporary memory. */
+		MemoryContextDelete(subctx);
 
 		/* Wait for more work. */
 		rc = WaitLatch(MyLatch,
@@ -1175,4 +1208,90 @@ pg_stat_get_subscription(PG_FUNCTION_ARGS)
 	LWLockRelease(LogicalRepWorkerLock);
 
 	return (Datum) 0;
+}
+
+/*
+ * Initialize or attach to the dynamic shared hash table that stores the
+ * last-start times, if not already done.  This must be called before using the
+ * table.
+ */
+static void
+logicalrep_launcher_attach_dshmem(void)
+{
+	MemoryContext oldcontext;
+
+	oldcontext = MemoryContextSwitchTo(TopMemoryContext);
+	LWLockAcquire(LogicalRepWorkerLock, LW_EXCLUSIVE);
+
+	if (LogicalRepCtx->last_start_dsh == DSM_HANDLE_INVALID)
+	{
+		/* Initialize dynamic shared hash table for last-start times. */
+		last_start_times_dsa = dsa_create(LWTRANCHE_LAUNCHER_DSA);
+		dsa_pin(last_start_times_dsa);
+		dsa_pin_mapping(last_start_times_dsa);
+		last_start_times = dshash_create(last_start_times_dsa, &dsh_params, 0);
+
+		/* Store handles in shared memory for other backends to use. */
+		LogicalRepCtx->last_start_dsa = dsa_get_handle(last_start_times_dsa);
+		LogicalRepCtx->last_start_dsh = dshash_get_hash_table_handle(last_start_times);
+	}
+	else if (!last_start_times)
+	{
+		/* Attach to existing dynamic shared hash table. */
+		last_start_times_dsa = dsa_attach(LogicalRepCtx->last_start_dsa);
+		dsa_pin_mapping(last_start_times_dsa);
+		last_start_times = dshash_attach(last_start_times_dsa, &dsh_params,
+										 LogicalRepCtx->last_start_dsh, 0);
+	}
+
+	LWLockRelease(LogicalRepWorkerLock);
+	MemoryContextSwitchTo(oldcontext);
+}
+
+/*
+ * Set the last-start time for the subscription.
+ */
+static void
+logicalrep_launcher_set_last_start_time(Oid subid, TimestampTz start_time)
+{
+	LauncherLastStartTimesEntry *entry;
+	bool		found;
+
+	logicalrep_launcher_attach_dshmem();
+
+	entry = dshash_find_or_insert(last_start_times, &subid, &found);
+	entry->last_start_time = start_time;
+	dshash_release_lock(last_start_times, entry);
+}
+
+/*
+ * Return the last-start time for the subscription, or 0 if there isn't one.
+ */
+static TimestampTz
+logicalrep_launcher_get_last_start_time(Oid subid)
+{
+	LauncherLastStartTimesEntry *entry;
+	TimestampTz ret;
+
+	logicalrep_launcher_attach_dshmem();
+
+	entry = dshash_find(last_start_times, &subid, false);
+	if (entry == NULL)
+		return 0;
+
+	ret = entry->last_start_time;
+	dshash_release_lock(last_start_times, entry);
+
+	return ret;
+}
+
+/*
+ * Remove the last-start time for the subscription, if one exists.
+ */
+void
+logicalrep_launcher_delete_last_start_time(Oid subid)
+{
+	logicalrep_launcher_attach_dshmem();
+
+	(void) dshash_delete_key(last_start_times, &subid);
 }

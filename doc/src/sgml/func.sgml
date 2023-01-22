@@ -18495,6 +18495,40 @@ SELECT NULLIF(value, '(none)') ...
 
       <row>
        <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>array_sample</primary>
+        </indexterm>
+        <function>array_sample</function> ( <parameter>array</parameter> <type>anyarray</type>, <parameter>n</parameter> <type>integer</type> )
+        <returnvalue>anyarray</returnvalue>
+       </para>
+       <para>
+        Returns <parameter>n</parameter> randomly chosen elements from <parameter>array</parameter> in selection order.
+       </para>
+       <para>
+        <literal>array_sample(ARRAY[[1,2],[3,4],[5,6]], 2)</literal>
+        <returnvalue>{{5,6},{1,2}}</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>array_shuffle</primary>
+        </indexterm>
+        <function>array_shuffle</function> ( <type>anyarray</type> )
+        <returnvalue>anyarray</returnvalue>
+       </para>
+       <para>
+        Shuffles the first dimension of the array.
+       </para>
+       <para>
+        <literal>array_shuffle(ARRAY[[1,2],[3,4],[5,6]])</literal>
+        <returnvalue>{{5,6},{1,2},{3,4}}</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
         <indexterm id="function-array-to-string">
          <primary>array_to_string</primary>
         </indexterm>

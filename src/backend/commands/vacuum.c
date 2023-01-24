@@ -68,6 +68,7 @@ int			vacuum_freeze_min_age;
 int			vacuum_freeze_table_age;
 int			vacuum_multixact_freeze_min_age;
 int			vacuum_multixact_freeze_table_age;
+int			vacuum_freeze_strategy_threshold;
 int			vacuum_failsafe_age;
 int			vacuum_multixact_failsafe_age;
 
@@ -264,6 +265,7 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 		params.freeze_table_age = 0;
 		params.multixact_freeze_min_age = 0;
 		params.multixact_freeze_table_age = 0;
+		params.freeze_strategy_threshold = 0;
 	}
 	else
 	{
@@ -271,6 +273,7 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 		params.freeze_table_age = -1;
 		params.multixact_freeze_min_age = -1;
 		params.multixact_freeze_table_age = -1;
+		params.freeze_strategy_threshold = -1;
 	}
 
 	/* user-invoked vacuum is never "for wraparound" */
@@ -948,13 +951,8 @@ get_all_vacuum_rels(int options)
  * The target relation and VACUUM parameters are our inputs.
  *
  * Output parameters are the cutoffs that VACUUM caller should use.
- *
- * Return value indicates if vacuumlazy.c caller should make its VACUUM
- * operation aggressive.  An aggressive VACUUM must advance relfrozenxid up to
- * FreezeLimit (at a minimum), and relminmxid up to MultiXactCutoff (at a
- * minimum).
  */
-bool
+void
 vacuum_get_cutoffs(Relation rel, const VacuumParams *params,
 				   struct VacuumCutoffs *cutoffs)
 {
@@ -962,19 +960,22 @@ vacuum_get_cutoffs(Relation rel, const VacuumParams *params,
 				multixact_freeze_min_age,
 				freeze_table_age,
 				multixact_freeze_table_age,
-				effective_multixact_freeze_max_age;
+				effective_multixact_freeze_max_age,
+				freeze_strategy_threshold;
+	uint64		threshold_strategy_pages;
 	TransactionId nextXID,
-				safeOldestXmin,
-				aggressiveXIDCutoff;
+				safeOldestXmin;
 	MultiXactId nextMXID,
-				safeOldestMxact,
-				aggressiveMXIDCutoff;
+				safeOldestMxact;
+	double		XIDFrac,
+				MXIDFrac;
 
 	/* Use mutable copies of freeze age parameters */
 	freeze_min_age = params->freeze_min_age;
 	multixact_freeze_min_age = params->multixact_freeze_min_age;
 	freeze_table_age = params->freeze_table_age;
 	multixact_freeze_table_age = params->multixact_freeze_table_age;
+	freeze_strategy_threshold = params->freeze_strategy_threshold;
 
 	/* Set pg_class fields in cutoffs */
 	cutoffs->relfrozenxid = rel->rd_rel->relfrozenxid;
@@ -1090,48 +1091,98 @@ vacuum_get_cutoffs(Relation rel, const VacuumParams *params,
 		cutoffs->MultiXactCutoff = cutoffs->OldestMxact;
 
 	/*
-	 * Finally, figure out if caller needs to do an aggressive VACUUM or not.
-	 *
+	 * Determine the freeze_strategy_threshold to use: as specified by the
+	 * caller, or vacuum_freeze_strategy_threshold
+	 */
+	if (freeze_strategy_threshold < 0)
+		freeze_strategy_threshold = vacuum_freeze_strategy_threshold;
+	Assert(freeze_strategy_threshold >= 0);
+
+	/*
+	 * Convert MB-based GUC to page-based value used within vacuumlazy.c,
+	 * while being careful to avoid overflow
+	 */
+	threshold_strategy_pages =
+		(uint64) freeze_strategy_threshold * 1024 * 1024 / BLCKSZ;
+	threshold_strategy_pages = Min(threshold_strategy_pages, MaxBlockNumber);
+	cutoffs->freeze_strategy_threshold_pages = threshold_strategy_pages;
+
+	/*
 	 * Determine the table freeze age to use: as specified by the caller, or
-	 * the value of the vacuum_freeze_table_age GUC, but in any case not more
-	 * than autovacuum_freeze_max_age * 0.95, so that if you have e.g nightly
-	 * VACUUM schedule, the nightly VACUUM gets a chance to freeze XIDs before
-	 * anti-wraparound autovacuum is launched.
+	 * the value of the vacuum_freeze_table_age GUC.  The GUC's default value
+	 * of -1 is interpreted as "just use autovacuum_freeze_max_age value".
+	 * Also clamp using autovacuum_freeze_max_age.
 	 */
 	if (freeze_table_age < 0)
 		freeze_table_age = vacuum_freeze_table_age;
-	freeze_table_age = Min(freeze_table_age, autovacuum_freeze_max_age * 0.95);
+	if (freeze_table_age < 0 || freeze_table_age > autovacuum_freeze_max_age)
+		freeze_table_age = autovacuum_freeze_max_age;
 	Assert(freeze_table_age >= 0);
-	aggressiveXIDCutoff = nextXID - freeze_table_age;
-	if (!TransactionIdIsNormal(aggressiveXIDCutoff))
-		aggressiveXIDCutoff = FirstNormalTransactionId;
-	if (TransactionIdPrecedesOrEquals(rel->rd_rel->relfrozenxid,
-									  aggressiveXIDCutoff))
-		return true;
 
 	/*
 	 * Similar to the above, determine the table freeze age to use for
 	 * multixacts: as specified by the caller, or the value of the
-	 * vacuum_multixact_freeze_table_age GUC, but in any case not more than
-	 * effective_multixact_freeze_max_age * 0.95, so that if you have e.g.
-	 * nightly VACUUM schedule, the nightly VACUUM gets a chance to freeze
-	 * multixacts before anti-wraparound autovacuum is launched.
+	 * vacuum_multixact_freeze_table_age GUC.  The GUC's default value of -1
+	 * is interpreted as "just use effective_multixact_freeze_max_age value".
+	 * Also clamp using effective_multixact_freeze_max_age.
 	 */
 	if (multixact_freeze_table_age < 0)
 		multixact_freeze_table_age = vacuum_multixact_freeze_table_age;
-	multixact_freeze_table_age =
-		Min(multixact_freeze_table_age,
-			effective_multixact_freeze_max_age * 0.95);
+	if (multixact_freeze_table_age < 0 ||
+		multixact_freeze_table_age > effective_multixact_freeze_max_age)
+		multixact_freeze_table_age = effective_multixact_freeze_max_age;
 	Assert(multixact_freeze_table_age >= 0);
-	aggressiveMXIDCutoff = nextMXID - multixact_freeze_table_age;
-	if (aggressiveMXIDCutoff < FirstMultiXactId)
-		aggressiveMXIDCutoff = FirstMultiXactId;
-	if (MultiXactIdPrecedesOrEquals(rel->rd_rel->relminmxid,
-									aggressiveMXIDCutoff))
-		return true;
 
-	/* Non-aggressive VACUUM */
-	return false;
+	/*
+	 * Determine the cutoffs used by VACUUM to decide on whether to wait for a
+	 * cleanup lock on a page (that it can't cleanup lock right away).  These
+	 * are the MinXid and MinMulti cutoffs.  They are related to the cutoffs
+	 * for freezing (FreezeLimit and MultiXactCutoff), and are only applied on
+	 * pages that we cannot freeze right away.  See vacuumlazy.c for details.
+	 *
+	 * VACUUM can ratchet back NewRelfrozenXid and/or NewRelminMxid instead of
+	 * waiting indefinitely for a cleanup lock in almost all cases.  The high
+	 * level goal is to create as many opportunities as possible to freeze
+	 * (across many successive VACUUM operations), while avoiding waiting for
+	 * a cleanup lock whenever possible.  Any time spent waiting is time spent
+	 * not freezing other eligible pages, which is typically a bad trade-off.
+	 *
+	 * As a consequence of all this, MinXid and MinMulti also act as limits on
+	 * the oldest acceptable values that can ever be set in pg_class by VACUUM
+	 * (though this is only relevant when they have already attained XID/XMID
+	 * ages that approach freeze_table_age and/or multixact_freeze_table_age).
+	 */
+	cutoffs->MinXid = nextXID - (freeze_table_age * 0.95);
+	if (!TransactionIdIsNormal(cutoffs->MinXid))
+		cutoffs->MinXid = FirstNormalTransactionId;
+	/* MinXid must always be <= FreezeLimit */
+	if (TransactionIdPrecedes(cutoffs->FreezeLimit, cutoffs->MinXid))
+		cutoffs->MinXid = cutoffs->FreezeLimit;
+
+	cutoffs->MinMulti = nextMXID - (multixact_freeze_table_age * 0.95);
+	if (cutoffs->MinMulti < FirstMultiXactId)
+		cutoffs->MinMulti = FirstMultiXactId;
+	/* MinMulti must always be <= MultiXactCutoff */
+	if (MultiXactIdPrecedes(cutoffs->MultiXactCutoff, cutoffs->MinMulti))
+		cutoffs->MinMulti = cutoffs->MultiXactCutoff;
+
+	/*
+	 * Finally, set tableagefrac for VACUUM.  This can come from either XID or
+	 * XMID table age (whichever is greater currently).
+	 */
+	XIDFrac = (double) (nextXID - cutoffs->relfrozenxid) /
+		((double) freeze_table_age + 0.5);
+	MXIDFrac = (double) (nextMXID - cutoffs->relminmxid) /
+		((double) multixact_freeze_table_age + 0.5);
+	cutoffs->tableagefrac = Max(XIDFrac, MXIDFrac);
+
+	/*
+	 * Make sure that antiwraparound autovacuums reliably advance relfrozenxid
+	 * to the satisfaction of autovacuum.c, even when the reloption version of
+	 * autovacuum_freeze_max_age happens to be in use
+	 */
+	if (params->is_wraparound)
+		cutoffs->tableagefrac = 1.0;
 }
 
 /*

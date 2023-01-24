@@ -2507,11 +2507,11 @@ struct config_int ConfigureNamesInt[] =
 
 	{
 		{"vacuum_freeze_table_age", PGC_USERSET, CLIENT_CONN_STATEMENT,
-			gettext_noop("Age at which VACUUM should scan whole table to freeze tuples."),
-			NULL
+			gettext_noop("Age at which VACUUM must scan whole table to freeze tuples."),
+			gettext_noop("-1 to use autovacuum_freeze_max_age value.")
 		},
 		&vacuum_freeze_table_age,
-		150000000, 0, 2000000000,
+		-1, -1, 2000000000,
 		NULL, NULL, NULL
 	},
 
@@ -2527,11 +2527,25 @@ struct config_int ConfigureNamesInt[] =
 
 	{
 		{"vacuum_multixact_freeze_table_age", PGC_USERSET, CLIENT_CONN_STATEMENT,
-			gettext_noop("Multixact age at which VACUUM should scan whole table to freeze tuples."),
-			NULL
+			gettext_noop("Multixact age at which VACUUM must scan whole table to freeze tuples."),
+			gettext_noop("-1 to use autovacuum_multixact_freeze_max_age value.")
 		},
 		&vacuum_multixact_freeze_table_age,
-		150000000, 0, 2000000000,
+		-1, -1, 2000000000,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"vacuum_freeze_strategy_threshold", PGC_USERSET, CLIENT_CONN_STATEMENT,
+			gettext_noop("Table size at which VACUUM freezes using eager strategy, in megabytes."),
+			gettext_noop("This is applied by comparing it to the size of a table's main fork at "
+						 "the beginning of each VACUUM. Eager freezing strategy is used when size "
+						 "exceeds the threshold or when table is a temporary or unlogged table. "
+						 "Otherwise lazy freezing strategy is used."),
+			GUC_UNIT_MB
+		},
+		&vacuum_freeze_strategy_threshold,
+		4096, 0, MAX_VACUUM_THRESHOLD,
 		NULL, NULL, NULL
 	},
 

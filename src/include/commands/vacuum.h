@@ -187,9 +187,12 @@ typedef struct VacAttrStats
 #define VACOPT_FULL 0x10		/* FULL (non-concurrent) vacuum */
 #define VACOPT_SKIP_LOCKED 0x20 /* skip if cannot get lock */
 #define VACOPT_PROCESS_TOAST 0x40	/* process the TOAST table, if any */
-#define VACOPT_DISABLE_PAGE_SKIPPING 0x80	/* don't skip any pages */
+#define VACOPT_DISABLE_PAGE_SKIPPING 0x80	/* don't skip using VM */
 #define VACOPT_SKIP_DATABASE_STATS 0x100	/* skip vac_update_datfrozenxid() */
 #define VACOPT_ONLY_DATABASE_STATS 0x200	/* only vac_update_datfrozenxid() */
+
+/* Absolute maximum of VacuumParams->freeze_strategy_threshold is 512TB */
+#define MAX_VACUUM_THRESHOLD 536870912
 
 /*
  * Values used by index_cleanup and truncate params.
@@ -222,6 +225,9 @@ typedef struct VacuumParams
 											 * use default */
 	int			multixact_freeze_table_age; /* multixact age at which to scan
 											 * whole table */
+	int			freeze_strategy_threshold;	/* threshold to use eager
+											 * freezing, in megabytes,
+											 * -1 to use default */
 	bool		is_wraparound;	/* force a for-wraparound vacuum */
 	int			log_min_duration;	/* minimum execution threshold in ms at
 									 * which autovacuum is logged, -1 to use
@@ -274,6 +280,36 @@ struct VacuumCutoffs
 	 */
 	TransactionId FreezeLimit;
 	MultiXactId MultiXactCutoff;
+
+	/*
+	 * Earliest permissible NewRelfrozenXid/NewRelminMxid values that can be
+	 * set in pg_class at the end of VACUUM.
+	 */
+	TransactionId MinXid;
+	MultiXactId MinMulti;
+
+	/*
+	 * Threshold that triggers VACUUM's eager freezing strategy
+	 */
+	BlockNumber freeze_strategy_threshold_pages;
+
+	/*
+	 * The tableagefrac value 1.0 represents the point that autovacuum.c
+	 * scheduling (and VACUUM itself) considers relfrozenxid/relminmxid
+	 * advancement strictly necessary.  Values near 0.0 mean that both
+	 * relfrozenxid and relminmxid are a recently allocated XID/MXID.
+	 *
+	 * We don't need separate relfrozenxid and relminmxid tableagefrac
+	 * variants.  We base tableagefrac on whichever pg_class field is closer
+	 * to the point of having autovacuum.c launch an autovacuum to advance the
+	 * field's value.
+	 *
+	 * Lower values provide useful context, and influence whether VACUUM will
+	 * opt to advance relfrozenxid before the point that it is strictly
+	 * necessary.  VACUUM can (and often does) opt to advance relfrozenxid
+	 * and/or relminmxid proactively.
+	 */
+	double		tableagefrac;
 };
 
 /*
@@ -297,6 +333,7 @@ extern PGDLLIMPORT int vacuum_freeze_min_age;
 extern PGDLLIMPORT int vacuum_freeze_table_age;
 extern PGDLLIMPORT int vacuum_multixact_freeze_min_age;
 extern PGDLLIMPORT int vacuum_multixact_freeze_table_age;
+extern PGDLLIMPORT int vacuum_freeze_strategy_threshold;
 extern PGDLLIMPORT int vacuum_failsafe_age;
 extern PGDLLIMPORT int vacuum_multixact_failsafe_age;
 
@@ -327,7 +364,7 @@ extern void vac_update_relstats(Relation relation,
 								bool *frozenxid_updated,
 								bool *minmulti_updated,
 								bool in_outer_xact);
-extern bool vacuum_get_cutoffs(Relation rel, const VacuumParams *params,
+extern void vacuum_get_cutoffs(Relation rel, const VacuumParams *params,
 							   struct VacuumCutoffs *cutoffs);
 extern bool vacuum_xid_failsafe_check(const struct VacuumCutoffs *cutoffs);
 extern void vac_update_datfrozenxid(void);

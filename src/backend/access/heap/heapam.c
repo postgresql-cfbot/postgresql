@@ -7057,6 +7057,10 @@ heap_freeze_tuple(HeapTupleHeader tuple,
 	cutoffs.OldestMxact = MultiXactCutoff;
 	cutoffs.FreezeLimit = FreezeLimit;
 	cutoffs.MultiXactCutoff = MultiXactCutoff;
+	cutoffs.MinXid = FreezeLimit;
+	cutoffs.MinMulti = MultiXactCutoff;
+	cutoffs.freeze_strategy_threshold_pages = 0;
+	cutoffs.tableagefrac = 0;
 
 	pagefrz.freeze_required = true;
 	pagefrz.FreezePageRelfrozenXid = FreezeLimit;

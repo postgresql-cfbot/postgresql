@@ -661,6 +661,13 @@
 					# autovacuum, -1 means use
 					# vacuum_cost_limit
 
+# - AUTOVACUUM compatibility options (legacy) -
+
+#vacuum_freeze_table_age = -1	# target maximum XID age, or -1 to
+					# use autovacuum_freeze_max_age
+#vacuum_multixact_freeze_table_age = -1	# target maximum MXID age, or -1 to
+					# use autovacuum_multixact_freeze_max_age
+
 
 #------------------------------------------------------------------------------
 # CLIENT CONNECTION DEFAULTS
@@ -694,12 +701,11 @@
 #lock_timeout = 0			# in milliseconds, 0 is disabled
 #idle_in_transaction_session_timeout = 0	# in milliseconds, 0 is disabled
 #idle_session_timeout = 0		# in milliseconds, 0 is disabled
-#vacuum_freeze_table_age = 150000000
 #vacuum_freeze_min_age = 50000000
 #vacuum_failsafe_age = 1600000000
-#vacuum_multixact_freeze_table_age = 150000000
 #vacuum_multixact_freeze_min_age = 5000000
 #vacuum_multixact_failsafe_age = 1600000000
+#vacuum_freeze_strategy_threshold = 4GB
 #bytea_output = 'hex'			# hex, escape
 #xmlbinary = 'base64'
 #xmloption = 'content'

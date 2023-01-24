@@ -158,11 +158,11 @@ VACUUM [ FULL ] [ FREEZE ] [ VERBOSE ] [ ANALYZE ] [ <replaceable class="paramet
      <para>
       Normally, <command>VACUUM</command> will skip pages based on the <link
       linkend="vacuum-for-visibility-map">visibility map</link>.  Pages where
-      all tuples are known to be frozen can always be skipped, and those
-      where all tuples are known to be visible to all transactions may be
-      skipped except when performing an aggressive vacuum.  Furthermore,
-      except when performing an aggressive vacuum, some pages may be skipped
-      in order to avoid waiting for other sessions to finish using them.
+      all tuples are known to be frozen can always be skipped.  Pages
+      where all tuples are known to be visible to all transactions are
+      skipped whenever <command>VACUUM</command> determined that
+      advancing <structfield>relfrozenxid</structfield> and
+      <structfield>relminmxid</structfield> was unnecessary.
       This option disables all page-skipping behavior, and is intended to
       be used only when the contents of the visibility map are
       suspect, which should happen only if there is a hardware or software

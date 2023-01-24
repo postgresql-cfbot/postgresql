@@ -9225,6 +9225,21 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-vacuum-freeze-strategy-threshold" xreflabel="vacuum_freeze_strategy_threshold">
+      <term><varname>vacuum_freeze_strategy_threshold</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>vacuum_freeze_strategy_threshold</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies the cutoff size (in megabytes) that <command>VACUUM</command>
+        should use to decide whether to apply its eager freezing strategy.
+        The default is 4096 megabytes (equivalent to <literal>4GB</literal>).
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-vacuum-freeze-table-age" xreflabel="vacuum_freeze_table_age">
       <term><varname>vacuum_freeze_table_age</varname> (<type>integer</type>)
       <indexterm>
@@ -9233,20 +9248,28 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
       </term>
       <listitem>
        <para>
-        <command>VACUUM</command> performs an aggressive scan if the table's
-        <structname>pg_class</structname>.<structfield>relfrozenxid</structfield> field has reached
-        the age specified by this setting.  An aggressive scan differs from
-        a regular <command>VACUUM</command> in that it visits every page that might
-        contain unfrozen XIDs or MXIDs, not just those that might contain dead
-        tuples.  The default is 150 million transactions.  Although users can
-        set this value anywhere from zero to two billion, <command>VACUUM</command>
-        will silently limit the effective value to 95% of
-        <xref linkend="guc-autovacuum-freeze-max-age"/>, so that a
-        periodic manual <command>VACUUM</command> has a chance to run before an
-        anti-wraparound autovacuum is launched for the table. For more
-        information see
-        <xref linkend="vacuum-for-wraparound"/>.
+        <command>VACUUM</command> reliably advances
+        <structfield>relfrozenxid</structfield> to a recent value if
+        the table's
+        <structname>pg_class</structname>.<structfield>relfrozenxid</structfield>
+        field has reached the age specified by this setting.
+        The default is -1.  If -1 is specified, the value
+        of <xref linkend="guc-autovacuum-freeze-max-age"/> is used.
+        Although users can set this value anywhere from zero to two
+        billion, <command>VACUUM</command> will silently limit the
+        effective value to <xref
+         linkend="guc-autovacuum-freeze-max-age"/>. For more
+        information see <xref linkend="vacuum-for-wraparound"/>.
        </para>
+       <note>
+        <para>
+         The meaning of this parameter, and its default value, changed
+         in <productname>PostgreSQL</productname> 16.  Freezing and advancing
+         <structname>pg_class</structname>.<structfield>relfrozenxid</structfield>
+         now take place more proactively, based on criteria that considers both
+         costs and benefits.
+        </para>
+       </note>
       </listitem>
      </varlistentry>
 
@@ -9260,7 +9283,9 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
        <para>
         Specifies the cutoff age (in transactions) that
         <command>VACUUM</command> should use to decide whether to
-        trigger freezing of pages that have an older XID.
+        trigger freezing of pages that have an older XID.  When VACUUM
+        uses its eager freezing strategy, freezing a page can also be
+        triggered when the page contains only all-visible tuples.
         The default is 50 million transactions.  Although
         users can set this value anywhere from zero to one billion,
         <command>VACUUM</command> will silently limit the effective value to half
@@ -9313,19 +9338,27 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
       </term>
       <listitem>
        <para>
-        <command>VACUUM</command> performs an aggressive scan if the table's
-        <structname>pg_class</structname>.<structfield>relminmxid</structfield> field has reached
-        the age specified by this setting.  An aggressive scan differs from
-        a regular <command>VACUUM</command> in that it visits every page that might
-        contain unfrozen XIDs or MXIDs, not just those that might contain dead
-        tuples.  The default is 150 million multixacts.
-        Although users can set this value anywhere from zero to two billion,
-        <command>VACUUM</command> will silently limit the effective value to 95% of
-        <xref linkend="guc-autovacuum-multixact-freeze-max-age"/>, so that a
-        periodic manual <command>VACUUM</command> has a chance to run before an
-        anti-wraparound is launched for the table.
-        For more information see <xref linkend="vacuum-for-multixact-wraparound"/>.
+       <command>VACUUM</command> reliably advances
+       <structfield>relminmxid</structfield> to a recent value if the table's
+       <structname>pg_class</structname>.<structfield>relminmxid</structfield>
+       field has reached the age specified by this setting.
+       The default is -1.  If -1 is specified, the value of <xref
+        linkend="guc-autovacuum-multixact-freeze-max-age"/> is used.
+       Although users can set this value anywhere from zero to two
+       billion, <command>VACUUM</command> will silently limit the
+       effective value to <xref
+        linkend="guc-autovacuum-multixact-freeze-max-age"/>. For more
+       information see <xref linkend="vacuum-for-wraparound"/>.
        </para>
+       <note>
+        <para>
+         The meaning of this parameter, and its default value, changed
+         in <productname>PostgreSQL</productname> 16.  Freezing and advancing
+         <structname>pg_class</structname>.<structfield>relminmxid</structfield>
+         now take place more proactively, based on criteria that considers both
+         costs and benefits.
+        </para>
+       </note>
       </listitem>
      </varlistentry>
 

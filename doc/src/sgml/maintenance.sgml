@@ -478,14 +478,46 @@
    </note>
 
    <para>
-    <xref linkend="guc-vacuum-freeze-min-age"/>
-    controls how old an XID value has to be before rows bearing that XID will be
-    frozen.  Increasing this setting may avoid unnecessary work if the
-    rows that would otherwise be frozen will soon be modified again,
-    but decreasing this setting increases
-    the number of transactions that can elapse before the table must be
-    vacuumed again.
+    <xref linkend="guc-vacuum-freeze-strategy-threshold"/> controls
+    <command>VACUUM</command>'s freezing strategy.  The
+    <firstterm>eager freezing strategy</firstterm> freezes all tuples
+    on a page when they are considered visible to all current
+    transactions.  The goal is to freeze pages in batch earlier to
+    spread out the overhead of freezing over time, improving system
+    level performance stability.  The <firstterm>lazy freezing
+     strategy</firstterm> determines whether each page is to be frozen
+    largely on the basis of the age of the oldest extant XID on the
+    page.  The goal is to avoid wholly unnecessary freezing.
+    Increasing <xref linkend="guc-vacuum-freeze-strategy-threshold"/>
+    may avoid unnecessary work if the pages that would otherwise be
+    frozen will soon be modified again, but decreasing this setting
+    increases the risk of an eventual <command>VACUUM</command> that
+    must perform an excessive amount of <quote>catch up</quote>
+    freezing.
    </para>
+
+   <para>
+    <xref linkend="guc-vacuum-freeze-min-age"/> controls how old an
+    XID value has to be before pages with rows bearing that XID are
+    frozen.  This setting is an additional trigger criteria for
+    freezing a page's tuples, used by both freezing strategies.
+    Unlogged relations always use eager freezing strategy.  There is
+    also an optimization that makes <command>VACUUM</command> trigger
+    freezing pages whenever a full page image is logged (see <xref
+     linkend="wal-reliability"/>), which aims to avoid another full
+    page image for the same page later on.
+    </para>
+
+   <note>
+    <para>
+     In <productname>PostgreSQL</productname> versions before 16, all
+     freezing was triggered by
+     <varname>vacuum_freeze_min_age</varname>.  Newer versions trigger
+     freezing with the goal of finding the most opportune time to
+     freeze, spreading out the cost over multiple
+     <command>VACUUM</command> operations.
+    </para>
+   </note>
 
    <para>
     <command>VACUUM</command> uses the <link linkend="storage-vm">visibility map</link>
@@ -493,26 +525,13 @@
     will skip pages that don't have any dead row versions even if those pages
     might still have row versions with old XID values.  Therefore, normal
     <command>VACUUM</command>s won't always freeze every old row version in the table.
-    When that happens, <command>VACUUM</command> will eventually need to perform an
-    <firstterm>aggressive vacuum</firstterm>, which will freeze all eligible unfrozen
-    XID and MXID values, including those from all-visible but not all-frozen pages.
-    In practice most tables require periodic aggressive vacuuming.
-    <xref linkend="guc-vacuum-freeze-table-age"/>
-    controls when <command>VACUUM</command> does that: all-visible but not all-frozen
-    pages are scanned if the number of transactions that have passed since the
-    last such scan is greater than <varname>vacuum_freeze_table_age</varname> minus
-    <varname>vacuum_freeze_min_age</varname>. Setting
-    <varname>vacuum_freeze_table_age</varname> to 0 forces <command>VACUUM</command> to
-    always use its aggressive strategy.
    </para>
 
    <para>
     The maximum time that a table can go unvacuumed is two billion
     transactions minus the <varname>vacuum_freeze_min_age</varname> value at
-    the time of the last aggressive vacuum. If it were to go
-    unvacuumed for longer than
-    that, data loss could result.  To ensure that this does not happen,
-    autovacuum is invoked on any table that might contain unfrozen rows with
+    the time of the last vacuum that advanced <structfield>relfrozenxid</structfield>.
+    Autovacuum is invoked on any table that might contain unfrozen rows with
     XIDs older than the age specified by the configuration parameter <xref
     linkend="guc-autovacuum-freeze-max-age"/>.  (This will happen even if
     autovacuum is disabled.)
@@ -534,26 +553,8 @@
    </para>
 
    <para>
-    The effective maximum for <varname>vacuum_freeze_table_age</varname> is 0.95 *
-    <varname>autovacuum_freeze_max_age</varname>; a setting higher than that will be
-    capped to the maximum. A value higher than
-    <varname>autovacuum_freeze_max_age</varname> wouldn't make sense because an
-    anti-wraparound autovacuum would be triggered at that point anyway, and
-    the 0.95 multiplier leaves some breathing room to run a manual
-    <command>VACUUM</command> before that happens.  As a rule of thumb,
-    <command>vacuum_freeze_table_age</command> should be set to a value somewhat
-    below <varname>autovacuum_freeze_max_age</varname>, leaving enough gap so that
-    a regularly scheduled <command>VACUUM</command> or an autovacuum triggered by
-    normal delete and update activity is run in that window.  Setting it too
-    close could lead to anti-wraparound autovacuums, even though the table
-    was recently vacuumed to reclaim space, whereas lower values lead to more
-    frequent aggressive vacuuming.
-   </para>
-
-   <para>
     The sole disadvantage of increasing <varname>autovacuum_freeze_max_age</varname>
-    (and <varname>vacuum_freeze_table_age</varname> along with it) is that
-    the <filename>pg_xact</filename> and <filename>pg_commit_ts</filename>
+    is that the <filename>pg_xact</filename> and <filename>pg_commit_ts</filename>
     subdirectories of the database cluster will take more space, because it
     must store the commit status and (if <varname>track_commit_timestamp</varname> is
     enabled) timestamp of all transactions back to
@@ -588,8 +589,7 @@
     the <structfield>relfrozenxid</structfield> column of a table's
     <structname>pg_class</structname> row contains the oldest remaining unfrozen
     XID at the end of the most recent <command>VACUUM</command> that successfully
-    advanced <structfield>relfrozenxid</structfield> (typically the most recent
-    aggressive VACUUM).  Similarly, the
+    advanced <structfield>relfrozenxid</structfield>.  Similarly, the
     <structfield>datfrozenxid</structfield> column of a database's
     <structname>pg_database</structname> row is a lower bound on the unfrozen XIDs
     appearing in that database &mdash; it is just the minimum of the
@@ -630,7 +630,7 @@ SELECT datname, age(datfrozenxid) FROM pg_database;
     advanced when every page of the table
     that might contain unfrozen XIDs is scanned.  This happens when
     <structfield>relfrozenxid</structfield> is more than
-    <varname>vacuum_freeze_table_age</varname> transactions old, when
+    <varname>autovacuum_freeze_max_age</varname> transactions old, when
     <command>VACUUM</command>'s <literal>FREEZE</literal> option is used, or when all
     pages that are not already all-frozen happen to
     require vacuuming to remove dead row versions. When <command>VACUUM</command>
@@ -647,6 +647,29 @@ SELECT datname, age(datfrozenxid) FROM pg_database;
     <varname>autovacuum_freeze_max_age</varname> is reached, an autovacuum will soon
     be forced for the table.
    </para>
+
+   <tip>
+   <para>
+    <varname>vacuum_freeze_table_age</varname> can be used to override
+    <varname>autovacuum_freeze_max_age</varname> locally.
+    <command>VACUUM</command> will advance
+    <structfield>relfrozenxid</structfield> in the same way as it
+    would had <varname>autovacuum_freeze_max_age</varname> been set to
+    the same value, without any direct impact on autovacuum
+    scheduling.
+   </para>
+   <para>
+    Prior to <productname>PostgreSQL</productname> 16,
+    <command>VACUUM</command> did not apply a cost model to decide
+    when to advance <structfield>relfrozenxid</structfield>, which
+    made <varname>vacuum_freeze_table_age</varname> an important
+    tunable setting.  This is no longer the case.  The revised
+    <varname>vacuum_freeze_table_age</varname> default of
+    <literal>-1</literal> makes <command>VACUUM</command> use
+    <varname>autovacuum_freeze_max_age</varname> as an input to its
+    cost model, which should be adequate in most environments.
+   </para>
+   </tip>
 
    <para>
     If for some reason autovacuum fails to clear old XIDs from a table, the
@@ -720,31 +743,17 @@ HINT:  Stop the postmaster and vacuum that database in single-user mode.
      transaction ID, or a newer multixact ID.  For each table,
      <structname>pg_class</structname>.<structfield>relminmxid</structfield> stores the oldest
      possible multixact ID still appearing in any tuple of that table.
-     If this value is older than
-     <xref linkend="guc-vacuum-multixact-freeze-table-age"/>, an aggressive
-     vacuum is forced.  As discussed in the previous section, an aggressive
-     vacuum means that only those pages which are known to be all-frozen will
-     be skipped.  <function>mxid_age()</function> can be used on
-     <structname>pg_class</structname>.<structfield>relminmxid</structfield> to find its age.
     </para>
 
     <para>
-     Aggressive <command>VACUUM</command>s, regardless of what causes
-     them, are <emphasis>guaranteed</emphasis> to be able to advance
-     the table's <structfield>relminmxid</structfield>.
-     Eventually, as all tables in all databases are scanned and their
-     oldest multixact values are advanced, on-disk storage for older
-     multixacts can be removed.
-    </para>
-
-    <para>
-     As a safety device, an aggressive vacuum scan will
-     occur for any table whose multixact-age is greater than <xref
-     linkend="guc-autovacuum-multixact-freeze-max-age"/>.  Also, if the
-     storage occupied by multixacts members exceeds 2GB, aggressive vacuum
-     scans will occur more often for all tables, starting with those that
-     have the oldest multixact-age.  Both of these kinds of aggressive
-     scans will occur even if autovacuum is nominally disabled.
+     As a safety device, a vacuum to advance
+     <structfield>relminmxid</structfield> will occur for any table
+     whose multixact-age is greater than <xref
+      linkend="guc-autovacuum-multixact-freeze-max-age"/>.
+     Also, if the storage occupied by multixacts members exceeds 2GB,
+     vacuum scans will occur more often for all tables, starting with those that
+     have the oldest multixact-age.  This will occur even if
+     autovacuum is nominally disabled.
     </para>
    </sect3>
   </sect2>
@@ -837,17 +846,29 @@ vacuum insert threshold = vacuum base insert threshold + vacuum insert scale fac
     For tables which receive <command>INSERT</command> operations but no or
     almost no <command>UPDATE</command>/<command>DELETE</command> operations,
     it may be beneficial to lower the table's
-    <xref linkend="reloption-autovacuum-freeze-min-age"/> as this may allow
-    tuples to be frozen by earlier vacuums.  The number of obsolete tuples and
+    <xref linkend="reloption-autovacuum-freeze-strategy-threshold"/>
+    to allow freezing to take place proactively.  The number of obsolete tuples and
     the number of inserted tuples are obtained from the cumulative statistics system;
     it is a semi-accurate count updated by each <command>UPDATE</command>,
     <command>DELETE</command> and <command>INSERT</command> operation.  (It is
     only semi-accurate because some information might be lost under heavy
     load.)  If the <structfield>relfrozenxid</structfield> value of the table
-    is more than <varname>vacuum_freeze_table_age</varname> transactions old,
-    an aggressive vacuum is performed to freeze old tuples and advance
-    <structfield>relfrozenxid</structfield>; otherwise, only pages that have been modified
-    since the last vacuum are scanned.
+    is more than <varname>autovacuum_freeze_max_age</varname> transactions old,
+    vacuum must freeze old tuples from existing all-visible pages to
+    be able to advance <structfield>relfrozenxid</structfield>;
+    otherwise, vacuum applies a cost model that advances
+    <structfield>relfrozenxid</structfield> whenever the added cost of
+    doing so during the ongoing operation is sufficiently low.
+    <varname>autovacuum_freeze_max_age</varname> is used to guide
+    <command>VACUUM</command> on how
+    <structfield>relfrozenxid</structfield> must be advanced in the
+    worst case, which is often only weakly predictive of the actual
+    rate.  Much depends on workload characteristics.  A cost model
+    dynamically determines whether or not to advance
+    <structfield>relfrozenxid</structfield> at the start of each
+    <command>VACUUM</command>.  The model finds the most opportune
+    time by weighing the added cost of advancement against the age
+    that <structfield>relfrozenxid</structfield> has already attained.
    </para>
 
    <para>

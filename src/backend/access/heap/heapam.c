@@ -6145,7 +6145,8 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
 	TransactionId newxmax;
 	MultiXactMember *members;
 	int			nmembers;
-	bool		need_replace;
+	bool		need_replace,
+				cheap_to_replace;
 	int			nnewmembers;
 	MultiXactMember *newmembers;
 	bool		has_lockers;
@@ -6261,6 +6262,7 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
 	 * OldestXmin/OldestMxact, so later values never need to be tracked here.)
 	 */
 	need_replace = false;
+	cheap_to_replace = true;
 	FreezePageRelfrozenXid = pagefrz->FreezePageRelfrozenXid;
 	for (int i = 0; i < nmembers; i++)
 	{
@@ -6274,6 +6276,8 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
 			need_replace = true;
 			break;
 		}
+		if (TransactionIdFollowsOrEquals(xid, cutoffs->OldestXmin))
+			cheap_to_replace = false;
 		if (TransactionIdPrecedes(xid, FreezePageRelfrozenXid))
 			FreezePageRelfrozenXid = xid;
 	}
@@ -6282,7 +6286,12 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
 	if (!need_replace)
 		need_replace = MultiXactIdPrecedes(multi, cutoffs->MultiXactCutoff);
 
-	if (!need_replace)
+	/*
+	 * FRM_NOOP isn't cheaper than a second pass that indicates that xmax gets
+	 * FRM_INVALIDATE_XMAX processing.  Avoid FRM_NOOP whenever we've already
+	 * determined that doing a second pass will be cheaper (and more useful).
+	 */
+	if (!need_replace && !cheap_to_replace)
 	{
 		/*
 		 * vacuumlazy.c might ratchet back NewRelminMxid, NewRelfrozenXid, or
@@ -6423,6 +6432,7 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
 		 * interesting, because those are longer-lived.)
 		 */
 		Assert(nnewmembers == 1);
+		Assert(need_replace);
 		*flags |= FRM_RETURN_IS_XID;
 		if (update_committed)
 			*flags |= FRM_MARK_COMMITTED;
@@ -6434,6 +6444,7 @@ FreezeMultiXactId(MultiXactId multi, uint16 t_infomask,
 		 * Create a new multixact with the surviving members of the previous
 		 * one, to set as new Xmax in the tuple
 		 */
+		Assert(need_replace);
 		newxmax = MultiXactIdCreateFromMembers(nnewmembers, newmembers);
 		*flags |= FRM_RETURN_IS_MULTI;
 	}

@@ -273,8 +273,9 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 		params.multixact_freeze_table_age = -1;
 	}
 
-	/* user-invoked vacuum is never "for wraparound" */
+	/* user-invoked vacuum never uses these autovacuum-only flags */
 	params.is_wraparound = false;
+	params.trigger = AUTOVACUUM_NONE;
 
 	/* user-invoked vacuum uses VACOPT_VERBOSE instead of log_min_duration */
 	params.log_min_duration = -1;
@@ -1874,7 +1875,11 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params, bool skip_privs)
 		LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
 		MyProc->statusFlags |= PROC_IN_VACUUM;
 		if (params->is_wraparound)
+		{
+			Assert(params->trigger == AUTOVACUUM_TABLE_XID_AGE ||
+				   params->trigger == AUTOVACUUM_TABLE_MXID_AGE);
 			MyProc->statusFlags |= PROC_VACUUM_FOR_WRAPAROUND;
+		}
 		ProcGlobal->statusFlags[MyProc->pgxactoff] = MyProc->statusFlags;
 		LWLockRelease(ProcArrayLock);
 	}
@@ -2174,6 +2179,30 @@ vac_close_indexes(int nindexes, Relation *Irel, LOCKMODE lockmode)
 		index_close(ind, lockmode);
 	}
 	pfree(Irel);
+}
+
+/*
+ * Return translatable string describing autovacuum trigger threshold type
+ */
+const char *
+vac_autovacuum_trigger_msg(AutoVacType trigger)
+{
+	switch (trigger)
+	{
+		case AUTOVACUUM_NONE:
+			return _("none");
+		case AUTOVACUUM_TABLE_XID_AGE:
+			return _("table XID age");
+		case AUTOVACUUM_TABLE_MXID_AGE:
+			return _("table MXID age");
+		case AUTOVACUUM_DEAD_TUPLES:
+			return _("dead tuples");
+		case AUTOVACUUM_INSERTED_TUPLES:
+			return _("inserted tuples");
+	}
+
+	Assert(false);				/* cannot be reached */
+	return NULL;
 }
 
 /*

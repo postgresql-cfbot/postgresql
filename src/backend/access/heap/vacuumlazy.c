@@ -639,6 +639,8 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 				 * implies aggressive.  Produce distinct output for the corner
 				 * case all the same, just in case.
 				 */
+				Assert(params->trigger == AUTOVACUUM_TABLE_XID_AGE ||
+					   params->trigger == AUTOVACUUM_TABLE_MXID_AGE);
 				if (vacrel->aggressive)
 					msgfmt = _("automatic aggressive vacuum to prevent wraparound of table \"%s.%s.%s\": index scans: %d\n");
 				else
@@ -656,6 +658,9 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 							 vacrel->relnamespace,
 							 vacrel->relname,
 							 vacrel->num_index_scans);
+			if (!verbose)
+				appendStringInfo(&buf, _("triggered by: %s\n"),
+								 vac_autovacuum_trigger_msg(params->trigger));
 			appendStringInfo(&buf, _("pages: %u removed, %u remain, %u scanned (%.2f%% of total)\n"),
 							 vacrel->removed_pages,
 							 new_rel_pages,

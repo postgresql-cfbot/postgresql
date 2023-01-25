@@ -222,7 +222,8 @@ typedef struct VacuumParams
 											 * use default */
 	int			multixact_freeze_table_age; /* multixact age at which to scan
 											 * whole table */
-	bool		is_wraparound;	/* force a for-wraparound vacuum */
+	bool		is_wraparound;	/* antiwraparound autovacuum? */
+	AutoVacType trigger;		/* autovacuum trigger condition, if any */
 	int			log_min_duration;	/* minimum execution threshold in ms at
 									 * which autovacuum is logged, -1 to use
 									 * default */
@@ -313,6 +314,7 @@ extern void vacuum(List *relations, VacuumParams *params,
 extern void vac_open_indexes(Relation relation, LOCKMODE lockmode,
 							 int *nindexes, Relation **Irel);
 extern void vac_close_indexes(int nindexes, Relation *Irel, LOCKMODE lockmode);
+extern const char *vac_autovacuum_trigger_msg(AutoVacType trigger);
 extern double vac_estimate_reltuples(Relation relation,
 									 BlockNumber total_pages,
 									 BlockNumber scanned_pages,

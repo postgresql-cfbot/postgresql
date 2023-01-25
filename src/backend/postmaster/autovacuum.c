@@ -330,12 +330,14 @@ static autovac_table *table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 static void recheck_relation_needs_vacanalyze(Oid relid, AutoVacOpts *avopts,
 											  Form_pg_class classForm,
 											  int effective_multixact_freeze_max_age,
-											  bool *dovacuum, bool *doanalyze, bool *wraparound);
+											  AutoVacType *dovacuum, bool *doanalyze,
+											  bool *wraparound);
 static void relation_needs_vacanalyze(Oid relid, AutoVacOpts *relopts,
 									  Form_pg_class classForm,
 									  PgStat_StatTabEntry *tabentry,
 									  int effective_multixact_freeze_max_age,
-									  bool *dovacuum, bool *doanalyze, bool *wraparound);
+									  AutoVacType *dovacuum, bool *doanalyze,
+									  bool *wraparound);
 
 static void autovacuum_do_vac_analyze(autovac_table *tab,
 									  BufferAccessStrategy bstrategy);
@@ -2064,7 +2066,7 @@ do_autovacuum(void)
 		PgStat_StatTabEntry *tabentry;
 		AutoVacOpts *relopts;
 		Oid			relid;
-		bool		dovacuum;
+		AutoVacType dovacuum;
 		bool		doanalyze;
 		bool		wraparound;
 
@@ -2110,7 +2112,7 @@ do_autovacuum(void)
 								  &dovacuum, &doanalyze, &wraparound);
 
 		/* Relations that need work are added to table_oids */
-		if (dovacuum || doanalyze)
+		if (dovacuum != AUTOVACUUM_NONE || doanalyze)
 			table_oids = lappend_oid(table_oids, relid);
 
 		/*
@@ -2157,7 +2159,7 @@ do_autovacuum(void)
 		PgStat_StatTabEntry *tabentry;
 		Oid			relid;
 		AutoVacOpts *relopts = NULL;
-		bool		dovacuum;
+		AutoVacType	dovacuum;
 		bool		doanalyze;
 		bool		wraparound;
 
@@ -2193,7 +2195,7 @@ do_autovacuum(void)
 								  &dovacuum, &doanalyze, &wraparound);
 
 		/* ignore analyze for toast tables */
-		if (dovacuum)
+		if (dovacuum != AUTOVACUUM_NONE)
 			table_oids = lappend_oid(table_oids, relid);
 	}
 
@@ -2762,7 +2764,7 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 {
 	Form_pg_class classForm;
 	HeapTuple	classTup;
-	bool		dovacuum;
+	AutoVacType dovacuum;
 	bool		doanalyze;
 	autovac_table *tab = NULL;
 	bool		wraparound;
@@ -2792,10 +2794,11 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 
 	recheck_relation_needs_vacanalyze(relid, avopts, classForm,
 									  effective_multixact_freeze_max_age,
-									  &dovacuum, &doanalyze, &wraparound);
+									  &dovacuum, &doanalyze,
+									  &wraparound);
 
 	/* OK, it needs something done */
-	if (doanalyze || dovacuum)
+	if (doanalyze || dovacuum != AUTOVACUUM_NONE)
 	{
 		int			freeze_min_age;
 		int			freeze_table_age;
@@ -2860,7 +2863,7 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 		 * skip vac_update_datfrozenxid(); we'll do that separately.
 		 */
 		tab->at_params.options =
-			(dovacuum ? (VACOPT_VACUUM | VACOPT_SKIP_DATABASE_STATS) : 0) |
+			(dovacuum != AUTOVACUUM_NONE ? (VACOPT_VACUUM | VACOPT_SKIP_DATABASE_STATS) : 0) |
 			(doanalyze ? VACOPT_ANALYZE : 0) |
 			(!wraparound ? VACOPT_SKIP_LOCKED : 0);
 
@@ -2878,6 +2881,7 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 		tab->at_params.multixact_freeze_min_age = multixact_freeze_min_age;
 		tab->at_params.multixact_freeze_table_age = multixact_freeze_table_age;
 		tab->at_params.is_wraparound = wraparound;
+		tab->at_params.trigger = dovacuum;
 		tab->at_params.log_min_duration = log_min_duration;
 		tab->at_vacuum_cost_limit = vac_cost_limit;
 		tab->at_vacuum_cost_delay = vac_cost_delay;
@@ -2911,7 +2915,7 @@ recheck_relation_needs_vacanalyze(Oid relid,
 								  AutoVacOpts *avopts,
 								  Form_pg_class classForm,
 								  int effective_multixact_freeze_max_age,
-								  bool *dovacuum,
+								  AutoVacType *dovacuum,
 								  bool *doanalyze,
 								  bool *wraparound)
 {
@@ -2933,9 +2937,9 @@ recheck_relation_needs_vacanalyze(Oid relid,
 /*
  * relation_needs_vacanalyze
  *
- * Check whether a relation needs to be vacuumed or analyzed; return each into
- * "dovacuum" and "doanalyze", respectively.  Also return whether the vacuum is
- * being forced because of Xid or multixact wraparound.
+ * Check whether a relation needs to be vacuumed or analyzed; return whether
+ * and why vacuum needs to be performed in *dovacuum, whether the table needs
+ * to be analyzed in *doanalyze.
  *
  * relopts is a pointer to the AutoVacOpts options (either for itself in the
  * case of a plain table, or for either itself or its parent table in the case
@@ -2966,6 +2970,15 @@ recheck_relation_needs_vacanalyze(Oid relid,
  * autovacuum_vacuum_threshold GUC variable.  Similarly, a vac_scale_factor
  * value < 0 is substituted with the value of
  * autovacuum_vacuum_scale_factor GUC variable.  Ditto for analyze.
+ *
+ *
+ * There can only be exactly one triggering condition for vacuum, even when
+ * multiple thresholds happened to be crossed at the same time.  We prefer to
+ * return "table XID age" in the event of such a conflict, after which we
+ * prefer "table MXID age" as the criteria, then "dead tuples", with "inserted
+ * tuples" placed last.  These predecence rules are largely arbitrary.  We
+ * must at least ensure that all antiwraparound autovacuums are advertised as
+ * triggered by table XID/MXID age criteria.
  */
 static void
 relation_needs_vacanalyze(Oid relid,
@@ -2974,11 +2987,10 @@ relation_needs_vacanalyze(Oid relid,
 						  PgStat_StatTabEntry *tabentry,
 						  int effective_multixact_freeze_max_age,
  /* output params below */
-						  bool *dovacuum,
+						  AutoVacType *dovacuum,
 						  bool *doanalyze,
 						  bool *wraparound)
 {
-	bool		force_vacuum;
 	bool		av_enabled;
 	float4		reltuples;		/* pg_class.reltuples */
 
@@ -3055,24 +3067,27 @@ relation_needs_vacanalyze(Oid relid,
 	xidForceLimit = recentXid - freeze_max_age;
 	if (xidForceLimit < FirstNormalTransactionId)
 		xidForceLimit -= FirstNormalTransactionId;
-	force_vacuum = (TransactionIdIsNormal(classForm->relfrozenxid) &&
-					TransactionIdPrecedes(classForm->relfrozenxid,
-										  xidForceLimit));
-	if (!force_vacuum)
-	{
-		multiForceLimit = recentMulti - multixact_freeze_max_age;
-		if (multiForceLimit < FirstMultiXactId)
-			multiForceLimit -= FirstMultiXactId;
-		force_vacuum = MultiXactIdIsValid(classForm->relminmxid) &&
-			MultiXactIdPrecedes(classForm->relminmxid, multiForceLimit);
-	}
-	*wraparound = force_vacuum;
+	multiForceLimit = recentMulti - multixact_freeze_max_age;
+	if (multiForceLimit < FirstMultiXactId)
+		multiForceLimit -= FirstMultiXactId;
+
+	/* See header comments about trigger precedence */
+	if (TransactionIdIsNormal(classForm->relfrozenxid) &&
+		TransactionIdPrecedes(classForm->relfrozenxid, xidForceLimit))
+		*dovacuum = AUTOVACUUM_TABLE_XID_AGE;
+	else if (MultiXactIdIsValid(classForm->relminmxid) &&
+			 MultiXactIdPrecedes(classForm->relminmxid, multiForceLimit))
+		*dovacuum = AUTOVACUUM_TABLE_MXID_AGE;
+	else
+		*dovacuum = AUTOVACUUM_NONE;
+
+	/* A table age autovacuum always gets antiwraparound protections */
+	*wraparound = *dovacuum != AUTOVACUUM_NONE;
 
 	/* User disabled it in pg_class.reloptions?  (But ignore if at risk) */
-	if (!av_enabled && !force_vacuum)
+	if (!av_enabled && !*wraparound)
 	{
 		*doanalyze = false;
-		*dovacuum = false;
 		return;
 	}
 
@@ -3112,9 +3127,18 @@ relation_needs_vacanalyze(Oid relid,
 				 NameStr(classForm->relname),
 				 vactuples, vacthresh, anltuples, anlthresh);
 
-		/* Determine if this table needs vacuum or analyze. */
-		*dovacuum = force_vacuum || (vactuples > vacthresh) ||
-			(vac_ins_base_thresh >= 0 && instuples > vacinsthresh);
+		/*
+		 * Determine if this table needs vacuum or analyze.
+		 *
+		 * See header comments about trigger precedence.
+		 */
+		if (*dovacuum == AUTOVACUUM_NONE)
+		{
+			if (vactuples > vacthresh)
+				*dovacuum = AUTOVACUUM_DEAD_TUPLES;
+			else if (vac_ins_base_thresh >= 0 && instuples > vacinsthresh)
+				*dovacuum = AUTOVACUUM_INSERTED_TUPLES;
+		}
 		*doanalyze = (anltuples > anlthresh);
 	}
 	else
@@ -3124,7 +3148,6 @@ relation_needs_vacanalyze(Oid relid,
 		 * for anti-wrap purposes.  If it's not acted upon, there's no need to
 		 * vacuum it.
 		 */
-		*dovacuum = force_vacuum;
 		*doanalyze = false;
 	}
 
@@ -3169,14 +3192,15 @@ autovacuum_do_vac_analyze(autovac_table *tab, BufferAccessStrategy bstrategy)
 static void
 autovac_report_activity(autovac_table *tab)
 {
-#define MAX_AUTOVAC_ACTIV_LEN (NAMEDATALEN * 2 + 56)
+#define MAX_AUTOVAC_ACTIV_LEN (NAMEDATALEN * 2 + 100)
 	char		activity[MAX_AUTOVAC_ACTIV_LEN];
 	int			len;
 
 	/* Report the command and possible options */
 	if (tab->at_params.options & VACOPT_VACUUM)
 		snprintf(activity, MAX_AUTOVAC_ACTIV_LEN,
-				 "autovacuum: VACUUM%s",
+				 "autovacuum due to %s: VACUUM%s",
+				 vac_autovacuum_trigger_msg(tab->at_params.trigger),
 				 tab->at_params.options & VACOPT_ANALYZE ? " ANALYZE" : "");
 	else
 		snprintf(activity, MAX_AUTOVAC_ACTIV_LEN,

@@ -106,6 +106,18 @@ unlike(
 	qr/Query Parameters:/,
 	"query parameters not logged when disabled, text mode");
 
+# Query Identifier.
+$log_contents = query_log(
+	$node,
+	"SELECT * FROM pg_class;",
+	{ "auto_explain.log_verbose" => "on",
+	  "compute_query_id" => "on"});
+
+like(
+	$log_contents,
+	qr/Query Identifier:/,
+	"query identifier logged, text mode");
+
 # JSON format.
 $log_contents = query_log(
 	$node,

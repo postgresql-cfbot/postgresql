@@ -428,6 +428,7 @@ CompiledExprState
 CompositeIOData
 CompositeTypeStmt
 CompoundAffixFlag
+CompressFileHandle
 CompressionLocation
 CompressorState
 ComputeXidHorizonsResult
@@ -1034,6 +1035,7 @@ GucStack
 GucStackState
 GucStringAssignHook
 GucStringCheckHook
+GzipCompressorState
 HANDLE
 HASHACTION
 HASHBUCKET
@@ -1381,6 +1383,7 @@ LWLock
 LWLockHandle
 LWLockMode
 LWLockPadded
+LZ4CompressorState
 LZ4F_compressionContext_t
 LZ4F_decompressOptions_t
 LZ4F_decompressionContext_t

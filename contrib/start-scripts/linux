@@ -61,7 +61,7 @@ PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 
 # What to use to start up the postmaster.  (If you want the script to wait
 # until the server has started, you could use "pg_ctl start" here.)
-DAEMON="$prefix/bin/postmaster"
+DAEMON="$prefix/bin/postgres"
 
 # What to use to shut down the postmaster
 PGCTL="$prefix/bin/pg_ctl"

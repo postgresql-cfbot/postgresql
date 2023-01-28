@@ -339,7 +339,7 @@ static void pgss_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 static void pgss_store(const char *query, uint64 queryId,
 					   int query_location, int query_len,
 					   pgssStoreKind kind,
-					   double total_time, uint64 rows,
+					   double total_time, uint64 rows, uint64 calls,
 					   const BufferUsage *bufusage,
 					   const WalUsage *walusage,
 					   const struct JitInstrumentation *jitusage,
@@ -855,6 +855,7 @@ pgss_post_parse_analyze(ParseState *pstate, Query *query, JumbleState *jstate)
 				   PGSS_INVALID,
 				   0,
 				   0,
+				   0,
 				   NULL,
 				   NULL,
 				   NULL,
@@ -940,6 +941,7 @@ pgss_planner(Query *parse,
 				   PGSS_PLAN,
 				   INSTR_TIME_GET_MILLISEC(duration),
 				   0,
+				   1,
 				   &bufusage,
 				   &walusage,
 				   NULL,
@@ -1000,6 +1002,7 @@ pgss_ExecutorRun(QueryDesc *queryDesc, ScanDirection direction, uint64 count,
 				 bool execute_once)
 {
 	exec_nested_level++;
+
 	PG_TRY();
 	{
 		if (prev_ExecutorRun)
@@ -1058,7 +1061,8 @@ pgss_ExecutorEnd(QueryDesc *queryDesc)
 				   queryDesc->plannedstmt->stmt_len,
 				   PGSS_EXEC,
 				   queryDesc->totaltime->total * 1000.0,	/* convert to msec */
-				   queryDesc->estate->es_processed,
+				   queryDesc->estate->es_total_processed,
+				   queryDesc->estate->es_calls,
 				   &queryDesc->totaltime->bufusage,
 				   &queryDesc->totaltime->walusage,
 				   queryDesc->estate->es_jit ? &queryDesc->estate->es_jit->instr : NULL,
@@ -1189,6 +1193,7 @@ pgss_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 				   PGSS_EXEC,
 				   INSTR_TIME_GET_MILLISEC(duration),
 				   rows,
+				   1,
 				   &bufusage,
 				   &walusage,
 				   NULL,
@@ -1222,7 +1227,7 @@ static void
 pgss_store(const char *query, uint64 queryId,
 		   int query_location, int query_len,
 		   pgssStoreKind kind,
-		   double total_time, uint64 rows,
+		   double total_time, uint64 rows, uint64 calls,
 		   const BufferUsage *bufusage,
 		   const WalUsage *walusage,
 		   const struct JitInstrumentation *jitusage,
@@ -1348,7 +1353,7 @@ pgss_store(const char *query, uint64 queryId,
 		if (IS_STICKY(e->counters))
 			e->counters.usage = USAGE_INIT;
 
-		e->counters.calls[kind] += 1;
+		e->counters.calls[kind] += calls;
 		e->counters.total_time[kind] += total_time;
 
 		if (e->counters.calls[kind] == 1)

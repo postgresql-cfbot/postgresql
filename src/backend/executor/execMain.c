@@ -342,6 +342,11 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 	dest = queryDesc->dest;
 
 	/*
+	 * update the counter for total_processed and calls
+	 */
+	queryDesc->estate->es_total_processed += queryDesc->estate->es_processed;
+	estate->es_calls++;
+	/*
 	 * startup tuple receiver, if we will be emitting tuples
 	 */
 	estate->es_processed = 0;
@@ -444,6 +449,7 @@ standard_ExecutorFinish(QueryDesc *queryDesc)
 	MemoryContextSwitchTo(oldcontext);
 
 	estate->es_finished = true;
+	queryDesc->estate->es_total_processed += queryDesc->estate->es_processed;
 }
 
 /* ----------------------------------------------------------------

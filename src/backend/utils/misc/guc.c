@@ -24,7 +24,7 @@
  */
 #include "postgres.h"
 
-#include <limits.h>
+// #include <limits.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -4519,7 +4519,7 @@ AlterSystemSetConfigFile(AlterSystemStmt *altersysstmt)
 
 			/* Check that it's acceptable for the indicated parameter */
 			if (!parse_and_validate_value(record, name, value,
-										  PGC_S_FILE, ERROR,
+										  PGC_S_TEST, ERROR,
 										  &newval, &newextra))
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),

@@ -2679,6 +2679,47 @@ void *PQgetssl(const PGconn *conn);
      </listitem>
     </varlistentry>
 
+    <varlistentry id="libpq-PQconnCheck">
+     <term><function>PQconnCheck</function><indexterm><primary>PQconnCheck</primary></indexterm></term>
+     <listitem>
+      <para>
+       Returns the status of the socket.
+
+<synopsis>
+int PQconnCheck(PGconn *conn);
+</synopsis>
+      </para>
+
+      <para>
+       Unlike <xref linkend="libpq-PQstatus"/>, this function checks socket
+       health. This check is performed by polling the socket. This option
+       relies on kernel events exposed by Linux, macOS, illumos and the BSD
+       family of operating systems, and is not currently available on other
+       systems. <xref linkend="libpq-PQconnCheck"/> returns
+       <literal>1</literal> if the remote peer seems to be closed, returns
+       <literal>0</literal> if the socket is valid, and returns
+       <literal>-1</literal> if the connection has been already invalid or
+       an error is error occurred.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry id="libpq-PQcanConnCheck">
+     <term><function>PQcanConnCheck</function><indexterm><primary>PQcanConnCheck</primary></indexterm></term>
+     <listitem>
+      <para>
+       Returns whether <xref linkend="libpq-PQconnCheck"/> is available on this
+       platform. <xref linkend="libpq-PQcanConnCheck"/> returns
+       <literal>1</literal> if the function is supported, otherwise returns
+       <literal>0</literal>.
+
+<synopsis>
+int PQcanConnCheck(void);
+</synopsis>
+      </para>
+     </listitem>
+    </varlistentry>
+
    </variablelist>
   </para>
 

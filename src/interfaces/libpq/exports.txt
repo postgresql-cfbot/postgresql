@@ -186,3 +186,5 @@ PQpipelineStatus          183
 PQsetTraceFlags           184
 PQmblenBounded            185
 PQsendFlushRequest        186
+PQconnCheck               187
+PQcanConnCheck            188

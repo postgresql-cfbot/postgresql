@@ -648,6 +648,10 @@ extern int	PQdsplen(const char *s, int encoding);
 /* Get encoding id from environment variable PGCLIENTENCODING */
 extern int	PQenv2encoding(void);
 
+/* Check whether the postgres server is still alive or not */
+extern int PQconnCheck(PGconn *conn);
+extern int PQcanConnCheck(void);
+
 /* === in fe-auth.c === */
 
 extern char *PQencryptPassword(const char *passwd, const char *user);

@@ -45,6 +45,14 @@
 #include <poll.h>
 #endif
 
+/* We use poll(2) if it has POLLRDHUP event, otherwise kqueue(2) */
+#if (!(defined(HAVE_POLL) && defined(POLLRDHUP)) && \
+	 defined(HAVE_KQUEUE))
+#include <sys/types.h>
+#include <sys/event.h>
+#include <sys/time.h>
+#endif
+
 #include "libpq-fe.h"
 #include "libpq-int.h"
 #include "mb/pg_wchar.h"
@@ -1218,6 +1226,112 @@ PQenv2encoding(void)
 	return encoding;
 }
 
+/*
+ * Helper function for PQconnCheck().
+ *
+ * Return >0 if opposite side seems to be disconnected, 0 the socket is valid,
+ * and -1 if an error occurred.
+ */
+static int
+pqconnCheck_internal(int sock)
+{
+	/* We use poll(2) if it has POLLRDHUP event, otherwise kqueue(2) */
+#if (defined(HAVE_POLL) && defined(POLLRDHUP))
+	struct pollfd input_fd;
+	int errflags = POLLHUP | POLLERR | POLLNVAL;
+	int result;
+
+	/* Prepare pollfd entry */
+	input_fd.fd = sock;
+	input_fd.events = POLLRDHUP | errflags;
+	input_fd.revents = 0;
+
+	/*
+	 * Check the status of socket. Note that we will retry as long as we get
+	 * EINTR.
+	 */
+	do
+		result = poll(&input_fd, 1, 0);
+	while (result < 0 && errno == EINTR);
+
+	if (result < 0)
+			return -1;
+
+	return input_fd.revents;
+#elif defined(HAVE_KQUEUE)
+	struct kevent kev, ret;
+	struct timespec timeout = {};
+	static int kq = -1;
+	int result;
+
+	/* If this function has never called yet, create a kernel event queue */
+	if (kq < 0)
+	{
+		kq = kqueue();
+		if (kq < 0)
+			return -1;
+	}
+
+	/* Prepare kevent structure */
+	EV_SET(&kev, sock, EVFILT_READ, EV_ADD, 0, 0, NULL);
+	if (kevent(kq, &kev, 1, NULL, 0, NULL))
+		return -1;
+
+	/*
+	 * Check the status of socket. Note that we will retry as long as we get
+	 * EINTR.
+	 */
+	do
+		result = kevent(kq, NULL, 0, &ret, 1, &timeout);
+	while (result < 0 && errno == EINTR);
+
+	/* Clean up the queue */
+	EV_SET(&kev, sock, EVFILT_READ, EV_DELETE, 0, 0, NULL);
+	kevent(kq, &kev, 1, NULL, 0, NULL);
+
+	if (result < 0)
+		return -1;
+
+	return ret.flags & EV_EOF;
+#else
+	/* Do not support socket checking on this platform, return 0 */
+	return 0;
+#endif
+}
+
+/*
+ * Check whether the socket peer closed connection or not.
+ *
+ * Returns >0 if remote peer seems to be closed, 0 if it is valid,
+ * -1 if the input connection is bad or an error occurred.
+ */
+int
+PQconnCheck(PGconn *conn)
+{
+	/* quick exit if invalid connection has come */
+	if (conn == NULL ||
+		conn->sock == PGINVALID_SOCKET ||
+		conn->status != CONNECTION_OK)
+		return -1;
+
+	return pqconnCheck_internal(conn->sock);
+}
+
+/*
+ * Check whether PQconnCheck() can work well on this platform.
+ *
+ * Returns 1 if this can use PQconnCheck(), otherwise 0.
+ */
+int
+PQcanConnCheck(void)
+{
+#if ((defined(HAVE_POLL) && defined(POLLRDHUP)) || \
+	 defined(HAVE_KQUEUE))
+	return true;
+#else
+	return false;
+#endif
+}
 
 #ifdef ENABLE_NLS
 

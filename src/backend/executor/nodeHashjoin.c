@@ -217,10 +217,10 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 
 				/*
 				 * If the outer relation is completely empty, and it's not
-				 * right/full join, we can quit without building the hash
-				 * table.  However, for an inner join it is only a win to
-				 * check this when the outer relation's startup cost is less
-				 * than the projected cost of building the hash table.
+				 * right/right-anti/full join, we can quit without building
+				 * the hash table.  However, for an inner join it is only a
+				 * win to check this when the outer relation's startup cost is
+				 * less than the projected cost of building the hash table.
 				 * Otherwise it's best to build the hash table first and see
 				 * if the inner relation is empty.  (When it's a left join, we
 				 * should always make this check, since we aren't going to be
@@ -458,11 +458,10 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 					if (parallel)
 					{
 						/*
-						 * Full/right outer joins are currently not supported
-						 * for parallel joins, so we don't need to set the
-						 * match bit.  Experiments show that it's worth
-						 * avoiding the shared memory traffic on large
-						 * systems.
+						 * Full/right/right-anti outer joins are currently not
+						 * supported for parallel joins, so we don't need to
+						 * set the match bit.  Experiments show that it's worth
+						 * avoiding the shared memory traffic on large systems.
 						 */
 						Assert(!HJ_FILL_INNER(node));
 					}
@@ -481,6 +480,14 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 						node->hj_JoinState = HJ_NEED_NEW_OUTER;
 						continue;
 					}
+
+					/*
+					 * In a right-antijoin, we never return a matched tuple.
+					 * And we need to use current outer tuple to scan the
+					 * bucket for matches
+					 */
+					if (node->js.jointype == JOIN_RIGHT_ANTI)
+						continue;
 
 					/*
 					 * If we only need to join to the first matching inner
@@ -527,9 +534,10 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 			case HJ_FILL_INNER_TUPLES:
 
 				/*
-				 * We have finished a batch, but we are doing right/full join,
-				 * so any unmatched inner tuples in the hashtable have to be
-				 * emitted before we continue to the next batch.
+				 * We have finished a batch, but we are doing
+				 * right/right-anti/full join, so any unmatched inner tuples in
+				 * the hashtable have to be emitted before we continue to the
+				 * next batch.
 				 */
 				if (!ExecScanHashTableForUnmatched(node, econtext))
 				{
@@ -694,6 +702,7 @@ ExecInitHashJoin(HashJoin *node, EState *estate, int eflags)
 				ExecInitNullTupleSlot(estate, innerDesc, &TTSOpsVirtual);
 			break;
 		case JOIN_RIGHT:
+		case JOIN_RIGHT_ANTI:
 			hjstate->hj_NullOuterTupleSlot =
 				ExecInitNullTupleSlot(estate, outerDesc, &TTSOpsVirtual);
 			break;
@@ -987,8 +996,8 @@ ExecHashJoinNewBatch(HashJoinState *hjstate)
 	 * side, but there are exceptions:
 	 *
 	 * 1. In a left/full outer join, we have to process outer batches even if
-	 * the inner batch is empty.  Similarly, in a right/full outer join, we
-	 * have to process inner batches even if the outer batch is empty.
+	 * the inner batch is empty.  Similarly, in a right/right-anti/full outer
+	 * join, we have to process inner batches even if the outer batch is empty.
 	 *
 	 * 2. If we have increased nbatch since the initial estimate, we have to
 	 * scan inner batches since they might contain tuples that need to be
@@ -1298,8 +1307,8 @@ ExecReScanHashJoin(HashJoinState *node)
 			/*
 			 * Okay to reuse the hash table; needn't rescan inner, either.
 			 *
-			 * However, if it's a right/full join, we'd better reset the
-			 * inner-tuple match flags contained in the table.
+			 * However, if it's a right/right-anti/full join, we'd better reset
+			 * the inner-tuple match flags contained in the table.
 			 */
 			if (HJ_FILL_INNER(node))
 				ExecHashTableResetMatchFlags(node->hj_HashTable);

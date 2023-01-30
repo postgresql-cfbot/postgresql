@@ -19,6 +19,7 @@
 #include "funcapi.h"
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
+#include "storage/proc.h"
 #include "storage/procarray.h"
 #include "storage/smgr.h"
 #include "utils/rel.h"
@@ -556,11 +557,18 @@ collect_corrupt_items(Oid relid, bool all_visible, bool all_frozen)
 	Buffer		vmbuffer = InvalidBuffer;
 	BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
 	TransactionId OldestXmin = InvalidTransactionId;
+	uint8		oldStatusFlags;
 
 	rel = relation_open(relid, AccessShareLock);
 
 	/* Only some relkinds have a visibility map */
 	check_relation_relkind(rel);
+
+	LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
+	oldStatusFlags = MyProc->statusFlags;
+	MyProc->statusFlags |= PROC_IN_VACUUM;
+	ProcGlobal->statusFlags[MyProc->pgxactoff] = MyProc->statusFlags;
+	LWLockRelease(ProcArrayLock);
 
 	if (all_visible)
 		OldestXmin = GetOldestNonRemovableTransactionId(rel);
@@ -714,6 +722,11 @@ collect_corrupt_items(Oid relid, bool all_visible, bool all_frozen)
 	 */
 	items->count = items->next;
 	items->next = 0;
+
+	LWLockAcquire(ProcArrayLock, LW_EXCLUSIVE);
+	MyProc->statusFlags = oldStatusFlags;
+	ProcGlobal->statusFlags[MyProc->pgxactoff] = MyProc->statusFlags;
+	LWLockRelease(ProcArrayLock);
 
 	return items;
 }

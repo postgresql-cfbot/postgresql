@@ -517,3 +517,17 @@ select explain_filter('explain (verbose) select * from int8_tbl i8');
  Query Identifier: N
 (3 rows)
 
+-- Test EXPLAIN (GENERIC_PLAN)
+select explain_filter('explain (generic_plan) select unique1 from tenk1 where thousand = $1');
+                                 explain_filter                                  
+---------------------------------------------------------------------------------
+ Bitmap Heap Scan on tenk1  (cost=N.N..N.N rows=N width=N)
+   Recheck Cond: (thousand = $N)
+   ->  Bitmap Index Scan on tenk1_thous_tenthous  (cost=N.N..N.N rows=N width=N)
+         Index Cond: (thousand = $N)
+(4 rows)
+
+-- should fail
+select explain_filter('explain (analyze, generic_plan) select unique1 from tenk1 where thousand = $1');
+ERROR:  EXPLAIN ANALYZE cannot be used with GENERIC_PLAN
+CONTEXT:  PL/pgSQL function explain_filter(text) line 5 at FOR over EXECUTE statement

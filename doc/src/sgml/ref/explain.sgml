@@ -40,6 +40,7 @@ EXPLAIN [ ANALYZE ] [ VERBOSE ] <replaceable class="parameter">statement</replac
     VERBOSE [ <replaceable class="parameter">boolean</replaceable> ]
     COSTS [ <replaceable class="parameter">boolean</replaceable> ]
     SETTINGS [ <replaceable class="parameter">boolean</replaceable> ]
+    GENERIC_PLAN [ <replaceable class="parameter">boolean</replaceable> ]
     BUFFERS [ <replaceable class="parameter">boolean</replaceable> ]
     WAL [ <replaceable class="parameter">boolean</replaceable> ]
     TIMING [ <replaceable class="parameter">boolean</replaceable> ]
@@ -163,6 +164,20 @@ ROLLBACK;
       Include information on configuration parameters.  Specifically, include
       options affecting query planning with value different from the built-in
       default value.  This parameter defaults to <literal>FALSE</literal>.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>GENERIC_PLAN</literal></term>
+    <listitem>
+     <para>
+      Generate a generic plan for the statement (see <xref linkend="sql-prepare"/>
+      for details about generic plans).  The statement can contain parameter
+      placeholders like <literal>$1</literal> and must be a statement that can
+      use parameters.  This option cannot be used together with
+      <literal>ANALYZE</literal>, since a statement with unknown parameters
+      cannot be executed.
      </para>
     </listitem>
    </varlistentry>

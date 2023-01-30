@@ -808,6 +808,22 @@ transformParamRef(ParseState *pstate, ParamRef *pref)
 {
 	Node	   *result;
 
+	/* for "generic_plan" EXPLAIN, supply an unknown parameter */
+	if (pstate->p_generic_explain)
+	{
+		Param  *param;
+
+		param = makeNode(Param);
+		param->paramkind = PARAM_EXTERN;
+		param->paramid = pref->number;
+		param->paramtype = UNKNOWNOID;
+		param->paramtypmod = -1;
+		param->paramcollid = InvalidOid;
+		param->location = pref->location;
+
+		return (Node *)param;
+	}
+
 	/*
 	 * The core parser knows nothing about Params.  If a hook is supplied,
 	 * call it.  If not, or if the hook returns NULL, throw a generic error.

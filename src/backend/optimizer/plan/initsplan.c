@@ -584,11 +584,48 @@ create_lateral_join_info(PlannerInfo *root)
 		PlaceHolderInfo *phinfo = (PlaceHolderInfo *) lfirst(lc);
 		Relids		eval_at = phinfo->ph_eval_at;
 		int			varno;
+		List	   *vars;
+		List	   *ph_lateral_vars;
+		ListCell   *cell;
 
 		if (phinfo->ph_lateral == NULL)
 			continue;			/* PHV is uninteresting if no lateral refs */
 
 		found_laterals = true;
+
+		/* Fetch Vars and PHVs of lateral references within PlaceHolderVars */
+		vars = pull_vars_of_level((Node *) phinfo->ph_var->phexpr, 0);
+
+		ph_lateral_vars = NIL;
+		foreach(cell, vars)
+		{
+			Node	   *node = (Node *) lfirst(cell);
+
+			node = copyObject(node);
+			if (IsA(node, Var))
+			{
+				Var		   *var = (Var *) node;
+
+				Assert(var->varlevelsup == 0);
+
+				if (bms_is_member(var->varno, phinfo->ph_lateral))
+					ph_lateral_vars = lappend(ph_lateral_vars, node);
+			}
+			else if (IsA(node, PlaceHolderVar))
+			{
+				PlaceHolderVar *phv = (PlaceHolderVar *) node;
+
+				Assert(phv->phlevelsup == 0);
+
+				if (bms_is_subset(find_placeholder_info(root, phv)->ph_eval_at,
+								  phinfo->ph_lateral))
+					ph_lateral_vars = lappend(ph_lateral_vars, node);
+			}
+			else
+				Assert(false);
+		}
+
+		list_free(vars);
 
 		if (bms_get_singleton_member(eval_at, &varno))
 		{
@@ -601,6 +638,13 @@ create_lateral_join_info(PlannerInfo *root)
 			brel->lateral_relids =
 				bms_add_members(brel->lateral_relids,
 								phinfo->ph_lateral);
+
+			/*
+			 * Remember the lateral references. We need this info for searching
+			 * memoize cache keys.
+			 */
+			brel->lateral_vars =
+				list_concat(brel->lateral_vars, ph_lateral_vars);
 		}
 		else
 		{
@@ -614,6 +658,13 @@ create_lateral_join_info(PlannerInfo *root)
 					continue;	/* ignore outer joins in eval_at */
 				brel->lateral_relids = bms_add_members(brel->lateral_relids,
 													   phinfo->ph_lateral);
+
+				/*
+				 * Remember the lateral references. We need this info for
+				 * searching memoize cache keys.
+				 */
+				brel->lateral_vars = list_concat(brel->lateral_vars,
+												 ph_lateral_vars);
 			}
 		}
 	}

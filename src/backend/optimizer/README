@@ -1158,3 +1158,92 @@ breaking down aggregation or grouping over a partitioned relation into
 aggregation or grouping over its partitions is called partitionwise
 aggregation.  Especially when the partition keys match the GROUP BY clause,
 this can be significantly faster than the regular method.
+
+Aggregate push-down
+-------------------
+
+The obvious way to evaluate aggregates is to evaluate the FROM clause of the
+SQL query (this is what query_planner does) and use the resulting paths as the
+input of Agg node. However, if the groups are large enough, it may be more
+efficient to apply the partial aggregation to the output of base relation
+scan, and finalize it when we have all relations of the query joined:
+
+  EXPLAIN
+  SELECT a.i, avg(b.y)
+  FROM a JOIN b ON b.j = a.i
+  GROUP BY a.i;
+
+  Finalize HashAggregate
+    Group Key: a.i
+    ->  Nested Loop
+          ->  Partial HashAggregate
+                Group Key: b.j
+                ->  Seq Scan on b
+          ->  Index Only Scan using a_pkey on a
+                Index Cond: (i = b.j)
+
+Thus the join above the partial aggregate node receives fewer input rows, and
+so the number of outer-to-inner pairs of tuples to be checked can be
+significantly lower, which can in turn lead to considerably lower join cost.
+
+Note that the GROUP BY expression might not be useful for the partial
+aggregate. In the example above, the aggregate avg(b.y) references table "b",
+but the GROUP BY expression mentions "a". However, the equivalence class {a.i,
+b.j} allows us to use the b.j column as a grouping key for the partial
+aggregation of the "b" table. The equivalence class mechanism is suitable
+because it's designed to derive join clauses, and at the same time the join
+clauses determine the choice of grouping columns of the partial aggregate: the
+only way for the partial aggregate to provide upper join(s) with input values
+is to have the join input expression(s) in the grouping key: besides grouping
+columns, the partial aggregate can only produce the transient states of the
+aggregate functions, but aggregate functions cannot be referenced by the JOIN
+clauses.
+
+Regarding correctness, join node considers the output of the partial aggregate
+to be equivalent to the output of a plain (non-aggregated) relation scan. That
+is, a group (i.e. a row of the partial aggregate output) matches the other
+side of the join if and only if each row of the non-aggregate relation
+does. In other words, all rows belonging to the same group have the same value
+of the join columns (As mentioned above, a join cannot reference other output
+expressions of the partial aggregate than the grouping expressions.).
+
+However, there's a restriction from the aggregate's perspective: the aggregate
+cannot be pushed down if any column referenced by either grouping expression
+or aggregate function can be set to NULL by an outer join above the relation
+to which we want to apply the partiall aggregation. The point is that those
+NULL values would not appear on the input of the pushed-down, so it could
+either put the rows into groups in a different way than the aggregate at the
+top of the plan, or it could compute wrong values of the aggregate functions.
+
+Besides base relation, the aggregation can also be pushed down to join:
+
+  EXPLAIN
+  SELECT a.i, avg(b.y + c.v)
+  FROM   a JOIN b ON b.j = a.i
+         JOIN c ON c.k = a.i
+  WHERE b.j = c.k GROUP BY a.i;
+
+  Finalize HashAggregate
+    Group Key: a.i
+    ->  Hash Join
+	  Hash Cond: (b.j = a.i)
+	  ->  Partial HashAggregate
+		Group Key: b.j
+		->  Hash Join
+		      Hash Cond: (b.j = c.k)
+		      ->  Seq Scan on b
+		      ->  Hash
+			    ->  Seq Scan on c
+	  ->  Hash
+		->  Seq Scan on a
+
+Whether the Agg node is created out of base relation or out of join, it's
+added to a separate RelOptInfo that we call "grouped relation". Grouped
+relation can be joined to a non-grouped relation, which results in a grouped
+relation too. Join of two grouped relations does not seem to be very useful
+and is currently not supported.
+
+If query_planner produces a grouped relation that contains valid paths, these
+are simply added to the UPPERREL_PARTIAL_GROUP_AGG relation. Further
+processing of these paths then does not differ from processing of other
+partially grouped paths.

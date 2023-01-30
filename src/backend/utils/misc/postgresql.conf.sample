@@ -390,6 +390,7 @@
 #enable_seqscan = on
 #enable_sort = on
 #enable_tidscan = on
+#enable_agg_pushdown = on
 
 # - Planner Cost Constants -
 

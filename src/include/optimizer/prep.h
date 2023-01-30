@@ -46,6 +46,8 @@ extern PlanRowMark *get_plan_rowmark(List *rowmarks, Index rtindex);
  */
 extern void get_agg_clause_costs(PlannerInfo *root, AggSplit aggsplit,
 								 AggClauseCosts *costs);
+extern void get_agg_clause_costs_some(PlannerInfo *root, AggSplit aggsplit,
+									  List *aggrefs, AggClauseCosts *costs);
 extern void preprocess_aggrefs(PlannerInfo *root, Node *clause);
 
 /*

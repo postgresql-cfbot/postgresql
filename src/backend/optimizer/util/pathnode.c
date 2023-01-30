@@ -2670,8 +2670,7 @@ create_projection_path(PlannerInfo *root,
 	pathnode->path.pathtype = T_Result;
 	pathnode->path.parent = rel;
 	pathnode->path.pathtarget = target;
-	/* For now, assume we are above any joins, so no parameterization */
-	pathnode->path.param_info = NULL;
+	pathnode->path.param_info = subpath->param_info;
 	pathnode->path.parallel_aware = false;
 	pathnode->path.parallel_safe = rel->consider_parallel &&
 		subpath->parallel_safe &&
@@ -3161,6 +3160,129 @@ create_agg_path(PlannerInfo *root,
 		target->cost.per_tuple * pathnode->path.rows;
 
 	return pathnode;
+}
+
+/*
+ * create_agg_sorted_path
+ *		Creates a pathnode performing sorted aggregation/grouping
+ *
+ * Apply AGG_SORTED aggregation path to subpath if it's suitably sorted.
+ *
+ * NULL is returned if sorting of subpath output is not suitable.
+ */
+AggPath *
+create_agg_sorted_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
+					   RelAggInfo *agg_info)
+{
+	List	   *agg_exprs;
+	AggSplit	aggsplit;
+	AggClauseCosts agg_costs;
+	PathTarget *target;
+	double		dNumGroups;
+	AggPath    *result = NULL;
+
+	aggsplit = AGGSPLIT_INITIAL_SERIAL;
+	agg_exprs = agg_info->agg_exprs;
+	target = agg_info->target;
+
+	/* group_pathkeys are necessary to evaluate the sorting. */
+	if (agg_info->group_pathkeys == NIL)
+		return NULL;
+
+	/*
+	 * The input path must be sorted in a specific way, but if it's not sorted
+	 * at all, it's not useful for AGG_SORTED.
+	 */
+	if (subpath->pathkeys == NIL)
+		return NULL;
+
+	/* Are the grouping clauses suitable for sorted aggregation? */
+	if (!grouping_is_sortable(agg_info->group_clauses))
+		return NULL;
+
+	/*
+	 * Is the input path sorted enough for this grouping? TODO Consider using
+	 * incremental sort if the sorting is "almost sufficient".
+	 */
+	if (!pathkeys_contained_in(agg_info->group_pathkeys, subpath->pathkeys))
+		return NULL;
+
+	MemSet(&agg_costs, 0, sizeof(AggClauseCosts));
+	get_agg_clause_costs_some(root, aggsplit, agg_exprs, &agg_costs);
+
+	Assert(agg_info->group_exprs != NIL);
+	dNumGroups = estimate_num_groups(root, agg_info->group_exprs,
+									 subpath->rows, NULL, NULL);
+
+	/*
+	 * qual is NIL because the HAVING clause cannot be evaluated until the
+	 * final value of the aggregate is known.
+	 */
+	result = create_agg_path(root, rel, subpath, target,
+							 AGG_SORTED, aggsplit,
+							 agg_info->group_clauses,
+							 NIL,	/* qual for HAVING clause */
+							 &agg_costs,
+							 dNumGroups);
+
+	/* The agg path should require no fewer parameters than the plain one. */
+	result->path.param_info = subpath->param_info;
+
+	return result;
+}
+
+/*
+ * Apply AGG_HASHED aggregation to subpath.
+ */
+AggPath *
+create_agg_hashed_path(PlannerInfo *root, RelOptInfo *rel,
+					   Path *subpath, RelAggInfo *agg_info)
+{
+	bool		can_hash;
+	List	   *agg_exprs;
+	AggSplit	aggsplit;
+	AggClauseCosts agg_costs;
+	PathTarget *target;
+	double		dNumGroups;
+	Query	   *parse = root->parse;
+	AggPath    *result = NULL;
+
+	/* Do not try to create hash table for each parameter value. */
+	Assert(subpath->param_info == NULL);
+
+	aggsplit = AGGSPLIT_INITIAL_SERIAL;
+	agg_exprs = agg_info->agg_exprs;
+	target = agg_info->target;
+
+	MemSet(&agg_costs, 0, sizeof(AggClauseCosts));
+	get_agg_clause_costs_some(root, aggsplit, agg_exprs, &agg_costs);
+
+	can_hash = (parse->groupClause != NIL &&
+				parse->groupingSets == NIL &&
+				root->numOrderedAggs == 0 &&
+				grouping_is_hashable(parse->groupClause));
+
+	if (can_hash)
+	{
+		Assert(agg_info->group_exprs != NIL);
+		dNumGroups = estimate_num_groups(root, agg_info->group_exprs,
+										 subpath->rows, NULL, NULL);
+
+		/*
+		 * qual is NIL because the HAVING clause cannot be evaluated until the
+		 * final value of the aggregate is known.
+		 */
+		result = create_agg_path(root, rel, subpath,
+								 target,
+								 AGG_HASHED,
+								 aggsplit,
+								 agg_info->group_clauses,
+								 NIL, /* qual for HAVING clause */
+								 &agg_costs,
+								 dNumGroups);
+	}
+
+	return result;
 }
 
 /*

@@ -1011,6 +1011,7 @@ pull_up_simple_subquery(PlannerInfo *root, Node *jtnode, RangeTblEntry *rte,
 	subroot->processed_groupClause = NIL;
 	subroot->processed_distinctClause = NIL;
 	subroot->processed_tlist = NIL;
+	root->max_sortgroupref = 0;
 	subroot->update_colnos = NIL;
 	subroot->grouping_map = NULL;
 	subroot->minmax_aggs = NIL;

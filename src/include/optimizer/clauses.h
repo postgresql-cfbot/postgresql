@@ -54,5 +54,6 @@ extern Query *inline_set_returning_function(PlannerInfo *root,
 											RangeTblEntry *rte);
 
 extern Bitmapset *pull_paramids(Expr *expr);
-
+extern GroupedVarInfo *translate_expression_to_rel(PlannerInfo *root,
+												   GroupedVarInfo *gvi, Index relid);
 #endif							/* CLAUSES_H */

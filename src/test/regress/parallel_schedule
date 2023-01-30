@@ -96,6 +96,8 @@ test: select_parallel
 test: write_parallel
 test: vacuum_parallel
 
+test: agg_pushdown
+
 # no relation related tests can be put in this group
 test: publication subscription
 

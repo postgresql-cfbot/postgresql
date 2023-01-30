@@ -638,6 +638,7 @@ subquery_planner(PlannerGlobal *glob, Query *parse,
 	root->processed_groupClause = NIL;
 	root->processed_distinctClause = NIL;
 	root->processed_tlist = NIL;
+	root->max_sortgroupref = 0;
 	root->update_colnos = NIL;
 	root->grouping_map = NULL;
 	root->minmax_aggs = NIL;
@@ -3969,11 +3970,11 @@ create_ordinary_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
 		bool		force_rel_creation;
 
 		/*
-		 * If we're doing partitionwise aggregation at this level, force
-		 * creation of a partially_grouped_rel so we can add partitionwise
-		 * paths to it.
+		 * If we're doing partitionwise aggregation at this level or if
+		 * aggregate push-down succeeded to create some paths, force creation
+		 * of a partially_grouped_rel so we can add the related paths to it.
 		 */
-		force_rel_creation = (patype == PARTITIONWISE_AGGREGATE_PARTIAL);
+		force_rel_creation = patype == PARTITIONWISE_AGGREGATE_PARTIAL;
 
 		partially_grouped_rel =
 			create_partial_grouping_paths(root,
@@ -4006,10 +4007,14 @@ create_ordinary_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
 
 	/* Gather any partially grouped partial paths. */
 	if (partially_grouped_rel && partially_grouped_rel->partial_pathlist)
-	{
 		gather_grouping_paths(root, partially_grouped_rel);
+
+	/*
+	 * The non-partial paths can come either from the Gather above or from
+	 * aggregate push-down.
+	 */
+	if (partially_grouped_rel && partially_grouped_rel->pathlist)
 		set_cheapest(partially_grouped_rel);
-	}
 
 	/*
 	 * Estimate number of groups.
@@ -7036,6 +7041,19 @@ create_partial_grouping_paths(PlannerInfo *root,
 	bool		can_sort = (extra->flags & GROUPING_CAN_USE_SORT) != 0;
 
 	/*
+	 * The output relation could have been already created due to aggregate
+	 * push-down.
+	 */
+	partially_grouped_rel = find_grouped_rel(root, input_rel->relids, NULL);
+
+	/*
+	 * If the relation already exists, it must have been created by aggregate
+	 * pushdown. We can't check how exactly it got created, but we can at
+	 * least check that aggregate pushdown is enabled.
+	 */
+	Assert(enable_agg_pushdown || partially_grouped_rel == NULL);
+
+	/*
 	 * Consider whether we should generate partially aggregated non-partial
 	 * paths.  We can only do this if we have a non-partial path, and only if
 	 * the parent of the input rel is performing partial partitionwise
@@ -7057,20 +7075,30 @@ create_partial_grouping_paths(PlannerInfo *root,
 	/*
 	 * If we can't partially aggregate partial paths, and we can't partially
 	 * aggregate non-partial paths, then don't bother creating the new
-	 * RelOptInfo at all, unless the caller specified force_rel_creation.
+	 * RelOptInfo at all, unless the caller specified force_rel_creation. However
 	 */
 	if (cheapest_total_path == NULL &&
 		cheapest_partial_path == NULL &&
 		!force_rel_creation)
-		return NULL;
+	{
+		/*
+		 * If partially_grouped_rel exists, it should contain paths generated
+		 * by the aggregate push-down feature, so the caller is interested in
+		 * it.
+		 */
+		return partially_grouped_rel;
+	}
 
 	/*
 	 * Build a new upper relation to represent the result of partially
-	 * aggregating the rows from the input relation.
+	 * aggregating the rows from the input relation. The relation may already
+	 * exist due to aggregate pushdown, in which case we don't need to create
+	 * it.
 	 */
-	partially_grouped_rel = fetch_upper_rel(root,
-											UPPERREL_PARTIAL_GROUP_AGG,
-											grouped_rel->relids);
+	if (partially_grouped_rel == NULL)
+		partially_grouped_rel = fetch_upper_rel(root,
+												UPPERREL_PARTIAL_GROUP_AGG,
+												grouped_rel->relids);
 	partially_grouped_rel->consider_parallel =
 		grouped_rel->consider_parallel;
 	partially_grouped_rel->reloptkind = grouped_rel->reloptkind;
@@ -7084,10 +7112,19 @@ create_partial_grouping_paths(PlannerInfo *root,
 	 * emit the same tlist as regular aggregate paths, because (1) we must
 	 * include Vars and Aggrefs needed in HAVING, which might not appear in
 	 * the result tlist, and (2) the Aggrefs must be set in partial mode.
+	 *
+	 * If the target was already created for the sake of aggregate push-down,
+	 * it should be compatible with what we'd create here.
+	 *
+	 * XXX If fetch_upper_rel() had to create a new relation (i.e. aggregate
+	 * push-down generated no paths), it created an empty target. Should we
+	 * change the convention and have it assign NULL to reltarget instead?  Or
+	 * should we introduce a function like is_pathtarget_empty()?
 	 */
-	partially_grouped_rel->reltarget =
-		make_partial_grouping_target(root, grouped_rel->reltarget,
-									 extra->havingQual);
+	if (partially_grouped_rel->reltarget->exprs == NIL)
+		partially_grouped_rel->reltarget =
+			make_partial_grouping_target(root, grouped_rel->reltarget,
+										 extra->havingQual);
 
 	if (!extra->partial_costs_set)
 	{

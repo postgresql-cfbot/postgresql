@@ -12,6 +12,10 @@
   all HTML output variants (chunked and single-page).
   -->
 
+<!-- Imports - to override stylesheet templates -->
+<xsl:import
+    href="http://cdn.docbook.org/release/xsl/current/html/sections.xsl"/>
+
 <!-- Parameters -->
 <xsl:param name="make.valid.html" select="1"></xsl:param>
 <xsl:param name="generate.id.attributes" select="1"></xsl:param>
@@ -297,6 +301,55 @@ set       toc,title
     </xsl:when>
     <xsl:otherwise>
       <xsl:value-of select="generate-id($object)"/>
+    </xsl:otherwise>
+  </xsl:choose>
+</xsl:template>
+
+<!-- Override the standard section heading generation to add an id link -->
+<xsl:template name="section.heading">
+  <xsl:param name="section" select="."/>
+  <xsl:param name="level" select="1"/>
+  <xsl:param name="allow-anchors" select="1"/>
+  <xsl:param name="title"/>
+  <xsl:param name="class" select="'title'"/>
+  <xsl:apply-imports/>
+  <xsl:call-template name="pg.id.link">
+    <xsl:with-param name="object" select="$section"/>
+  </xsl:call-template>
+</xsl:template>
+
+<!-- Creates a link pointing to an id within the document -->
+<xsl:template name="pg.id.link">
+  <xsl:param name="object" select="."/>
+  <xsl:choose>
+    <xsl:when test="$object/@id or $object/@xml:id">
+      <a>
+        <xsl:attribute name="href">
+          <xsl:text>#</xsl:text>
+          <xsl:call-template name="object.id">
+            <xsl:with-param name="object" select="$object"/>
+          </xsl:call-template>
+        </xsl:attribute>
+        <xsl:attribute name="class">
+          <xsl:text>id_link</xsl:text>
+        </xsl:attribute>
+        <xsl:text> #</xsl:text>
+      </a>
+    </xsl:when>
+    <xsl:otherwise>
+      <!-- Only complain about varlistentries if at least one entry in the list has an id -->
+      <xsl:if test="name($object) != 'varlistentry' or $object/parent::variablelist/varlistentry[@id]">
+        <xsl:message terminate="no">
+          <xsl:value-of select ="name($object)"/>
+          <xsl:text> element without id. Please add an id to make it usable</xsl:text>
+          <xsl:text> as stable anchor in the public HTML documentation.</xsl:text>
+        </xsl:message>
+        <xsl:comment>
+          <xsl:text>Please add an id to the </xsl:text>
+          <xsl:value-of select ="name($object)"/>
+          <xsl:text> element in the sgml source code.</xsl:text>
+        </xsl:comment>
+      </xsl:if>
     </xsl:otherwise>
   </xsl:choose>
 </xsl:template>

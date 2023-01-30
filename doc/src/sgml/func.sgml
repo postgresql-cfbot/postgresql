@@ -25654,6 +25654,27 @@ SELECT collation for ('foo' COLLATE "de_DE");
       <row>
        <entry role="func_table_entry"><para role="func_signature">
         <indexterm>
+         <primary>pg_log_backtrace</primary>
+        </indexterm>
+        <function>pg_log_backtrace</function> ( <parameter>pid</parameter> <type>integer</type> )
+        <returnvalue>boolean</returnvalue>
+       </para>
+       <para>
+        Requests to log the backtrace of the backend with the specified
+        process ID. This function can send the request to backends and
+        auxiliary processes except the logger and statistics collector.
+        The backtraces will be logged to <systemitem>stderr</systemitem>.
+        Typically, a backtrace identifies which function a process is
+        currently executing and it is useful for developers to diagnose
+        stuck processes and other problems. This function is supported
+        only if PostgreSQL was built with the ability to capture backtraces,
+        otherwise it will emit a warning.
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
          <primary>set_config</primary>
         </indexterm>
         <function>set_config</function> (
@@ -25869,6 +25890,61 @@ LOG:  Grand total: 1651920 bytes in 201 blocks; 622360 free (88 chunks); 1029560
     100 child contexts are logged, along with a summary of the remaining contexts.
     Note that frequent calls to this function could incur significant overhead,
     because it may generate a large number of log messages.
+   </para>
+
+   <para>
+    <function>pg_log_backtrace</function> can be used to log the backtrace of
+    a backend process. For example:
+<programlisting>
+postgres=# select pg_log_backtrace(pg_backend_pid());
+ pg_log_backtrace
+------------------
+ t
+(1 row)
+</programlisting>
+The backtrace will be logged as specified by the logging configuration.
+For example:
+<screen>
+logging current backtrace of process with PID 3499242:
+postgres: ubuntu postgres [local] INSERT(+0x61a355)[0x5559b94de355]
+postgres: ubuntu postgres [local] INSERT(procsignal_sigusr1_handler+0x9e)[0x5559b94de4ef]
+/lib/x86_64-linux-gnu/libc.so.6(+0x42520)[0x7f7e9c0e8520]
+postgres: ubuntu postgres [local] INSERT(+0x868004)[0x5559b972c004]
+postgres: ubuntu postgres [local] INSERT(pfree+0x1c)[0x5559b972e445]
+postgres: ubuntu postgres [local] INSERT(heap_free_minimal_tuple+0x1c)[0x5559b8fa7b48]
+postgres: ubuntu postgres [local] INSERT(+0x8826d6)[0x5559b97466d6]
+postgres: ubuntu postgres [local] INSERT(+0x881126)[0x5559b9745126]
+postgres: ubuntu postgres [local] INSERT(tuplestore_putvalues+0x83)[0x5559b9744ed5]
+postgres: ubuntu postgres [local] INSERT(ExecMakeTableFunctionResult+0x68b)[0x5559b9284295]
+postgres: ubuntu postgres [local] INSERT(+0x3dd14a)[0x5559b92a114a]
+postgres: ubuntu postgres [local] INSERT(+0x3c1a5c)[0x5559b9285a5c]
+postgres: ubuntu postgres [local] INSERT(ExecScan+0x77)[0x5559b9285ad5]
+postgres: ubuntu postgres [local] INSERT(+0x3dd4f4)[0x5559b92a14f4]
+postgres: ubuntu postgres [local] INSERT(+0x3bd485)[0x5559b9281485]
+postgres: ubuntu postgres [local] INSERT(+0x3f96f0)[0x5559b92bd6f0]
+postgres: ubuntu postgres [local] INSERT(+0x3ff25e)[0x5559b92c325e]
+postgres: ubuntu postgres [local] INSERT(+0x3bd485)[0x5559b9281485]
+postgres: ubuntu postgres [local] INSERT(+0x3b07a4)[0x5559b92747a4]
+postgres: ubuntu postgres [local] INSERT(+0x3b3594)[0x5559b9277594]
+postgres: ubuntu postgres [local] INSERT(standard_ExecutorRun+0x1f4)[0x5559b9274e8c]
+postgres: ubuntu postgres [local] INSERT(ExecutorRun+0x5d)[0x5559b9274c95]
+postgres: ubuntu postgres [local] INSERT(+0x64ee3a)[0x5559b9512e3a]
+postgres: ubuntu postgres [local] INSERT(+0x6509c9)[0x5559b95149c9]
+postgres: ubuntu postgres [local] INSERT(PortalRun+0x378)[0x5559b9513ec0]
+postgres: ubuntu postgres [local] INSERT(+0x648c56)[0x5559b950cc56]
+postgres: ubuntu postgres [local] INSERT(PostgresMain+0x80c)[0x5559b9511c46]
+postgres: ubuntu postgres [local] INSERT(+0x576647)[0x5559b943a647]
+postgres: ubuntu postgres [local] INSERT(+0x575ed3)[0x5559b9439ed3]
+postgres: ubuntu postgres [local] INSERT(+0x572388)[0x5559b9436388]
+postgres: ubuntu postgres [local] INSERT(PostmasterMain+0x14b3)[0x5559b9435ae5]
+postgres: ubuntu postgres [local] INSERT(+0x43b563)[0x5559b92ff563]
+/lib/x86_64-linux-gnu/libc.so.6(+0x29d90)[0x7f7e9c0cfd90]
+/lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80)[0x7f7e9c0cfe40]
+postgres: ubuntu postgres [local] INSERT(_start+0x25)[0x5559b8f8f005]
+</screen>
+    One can obtain the file name and line number from the logged details by using
+    gdb/addr2line in linux platforms (users must ensure gdb/addr2line is
+    already installed).
    </para>
 
   </sect2>

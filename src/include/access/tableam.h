@@ -1033,6 +1033,9 @@ extern void table_scan_update_snapshot(TableScanDesc scan, Snapshot snapshot);
 static inline bool
 table_scan_getnextslot(TableScanDesc sscan, ScanDirection direction, TupleTableSlot *slot)
 {
+	Assert(direction == ForwardScanDirection ||
+		   direction == BackwardScanDirection);
+
 	slot->tts_tableOid = RelationGetRelid(sscan->rs_rd);
 
 	/*
@@ -1096,6 +1099,9 @@ static inline bool
 table_scan_getnextslot_tidrange(TableScanDesc sscan, ScanDirection direction,
 								TupleTableSlot *slot)
 {
+	Assert(direction == ForwardScanDirection ||
+		   direction == BackwardScanDirection);
+
 	/* Ensure table_beginscan_tidrange() was used. */
 	Assert((sscan->rs_flags & SO_TYPE_TIDRANGESCAN) != 0);
 

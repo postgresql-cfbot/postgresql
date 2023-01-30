@@ -70,15 +70,7 @@ IndexOnlyNext(IndexOnlyScanState *node)
 	 * extract necessary information from index scan node
 	 */
 	estate = node->ss.ps.state;
-	direction = estate->es_direction;
-	/* flip direction if this is an overall backward scan */
-	if (ScanDirectionIsBackward(((IndexOnlyScan *) node->ss.ps.plan)->indexorderdir))
-	{
-		if (ScanDirectionIsForward(direction))
-			direction = BackwardScanDirection;
-		else if (ScanDirectionIsBackward(direction))
-			direction = ForwardScanDirection;
-	}
+	direction = estate->es_direction * ((IndexOnlyScan *) node->ss.ps.plan)->indexorderdir;
 	scandesc = node->ioss_ScanDesc;
 	econtext = node->ss.ps.ps_ExprContext;
 	slot = node->ss.ss_ScanTupleSlot;
@@ -502,6 +494,13 @@ ExecInitIndexOnlyScan(IndexOnlyScan *node, EState *estate, int eflags)
 	indexstate->ss.ps.plan = (Plan *) node;
 	indexstate->ss.ps.state = estate;
 	indexstate->ss.ps.ExecProcNode = ExecIndexOnlyScan;
+
+	/*
+	 * Only forward and backward are valid scan directions. Unordered indexes
+	 * will always have ForwardScanDirection.
+	 */
+	Assert(node->indexorderdir == ForwardScanDirection ||
+		   node->indexorderdir == BackwardScanDirection);
 
 	/*
 	 * Miscellaneous initialization

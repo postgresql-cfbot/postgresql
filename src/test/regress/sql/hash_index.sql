@@ -53,6 +53,29 @@ CREATE INDEX hash_txt_index ON hash_txt_heap USING hash (random text_ops);
 CREATE INDEX hash_f8_index ON hash_f8_heap USING hash (random float8_ops)
   WITH (fillfactor=60);
 
+CREATE OR REPLACE FUNCTION scan_dir(query text, scan_type text)
+RETURNS TEXT LANGUAGE plpgsql
+AS
+$$
+DECLARE
+  plan json;
+  node json;
+BEGIN
+  FOR plan IN
+    EXECUTE 'EXPLAIN (FORMAT ''json'') ' || query
+  LOOP
+    node := json_extract_path(plan, '0', 'Plan');
+    IF node->>'Node Type' = scan_type THEN
+      RETURN node->>'Scan Direction';
+    END IF;
+  END LOOP;
+  RETURN NULL;
+END;
+$$;
+
+-- Hash Indexes are unordered and thus only forward scan direction makes sense.
+SELECT 'Forward' = scan_dir(
+   $$ SELECT random FROM hash_i4_heap WHERE random = 1345971420; $$, 'Index Scan');
 --
 -- Also try building functional, expressional, and partial indexes on
 -- tables that already contain data.

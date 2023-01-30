@@ -982,9 +982,8 @@ create_samplescan_path(PlannerInfo *root, RelOptInfo *rel, Relids required_outer
  * 'indexorderbycols' is an integer list of index column numbers (zero based)
  *			the ordering operators can be used with.
  * 'pathkeys' describes the ordering of the path.
- * 'indexscandir' is ForwardScanDirection or BackwardScanDirection
- *			for an ordered index, or NoMovementScanDirection for
- *			an unordered index.
+ * 'indexscandir' is either ForwardScanDirection or BackwardScanDirection.
+ * 			Unordered index types need not support BackwardScanDirection.
  * 'indexonly' is true if an index-only scan is wanted.
  * 'required_outer' is the set of outer relids for a parameterized path.
  * 'loop_count' is the number of repetitions of the indexscan to factor into

@@ -499,6 +499,7 @@ CreateRoleStmt
 CreateSchemaStmt
 CreateSchemaStmtContext
 CreateSeqStmt
+CreateSessionVarStmt
 CreateStatsStmt
 CreateStmt
 CreateStmtContext
@@ -825,6 +826,7 @@ FormData_pg_ts_parser
 FormData_pg_ts_template
 FormData_pg_type
 FormData_pg_user_mapping
+FormData_pg_variable
 Form_pg_aggregate
 Form_pg_am
 Form_pg_amop
@@ -883,6 +885,7 @@ Form_pg_ts_parser
 Form_pg_ts_template
 Form_pg_type
 Form_pg_user_mapping
+Form_pg_variable
 FormatNode
 FreeBlockNumberArray
 FreeListData
@@ -1392,6 +1395,7 @@ LargeObjectDesc
 LastAttnumInfo
 Latch
 LerpFunc
+LetStmt
 LexDescr
 LexemeEntry
 LexemeHashKey
@@ -1778,6 +1782,7 @@ PLpgSQL_stmt_forq
 PLpgSQL_stmt_fors
 PLpgSQL_stmt_getdiag
 PLpgSQL_stmt_if
+PLpgSQL_stmt_let
 PLpgSQL_stmt_loop
 PLpgSQL_stmt_open
 PLpgSQL_stmt_perform
@@ -2458,6 +2463,7 @@ SerializedTransactionState
 Session
 SessionBackupState
 SessionEndType
+SessionVariableValue
 SetConstraintState
 SetConstraintStateData
 SetConstraintTriggerData
@@ -2642,6 +2648,11 @@ SupportRequestRows
 SupportRequestSelectivity
 SupportRequestSimplify
 SupportRequestWFuncMonotonic
+SVariableState
+SVariable
+SVariableData
+SVariableXActAction
+SVariableXActActionItem
 Syn
 SyncOps
 SyncRepConfigData
@@ -2911,6 +2922,7 @@ Variable
 VariableAssignHook
 VariableCache
 VariableCacheData
+VariableInfo
 VariableSetKind
 VariableSetStmt
 VariableShowStmt

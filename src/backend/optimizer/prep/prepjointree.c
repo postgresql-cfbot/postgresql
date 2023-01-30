@@ -1281,6 +1281,9 @@ pull_up_simple_subquery(PlannerInfo *root, Node *jtnode, RangeTblEntry *rte,
 	/* If subquery had any RLS conditions, now main query does too */
 	parse->hasRowSecurity |= subquery->hasRowSecurity;
 
+	/* If subquery had session variables, now main query does too */
+	parse->hasSessionVariables |= subquery->hasSessionVariables;
+
 	/*
 	 * subquery won't be pulled up if it hasAggs, hasWindowFuncs, or
 	 * hasTargetSRFs, so no work needed on those flags

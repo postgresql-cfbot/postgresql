@@ -287,6 +287,7 @@ slashUsage(unsigned short int pager)
 	HELP0("  \\dT[S+] [PATTERN]      list data types\n");
 	HELP0("  \\du[S+] [PATTERN]      list roles\n");
 	HELP0("  \\dv[S+] [PATTERN]      list views\n");
+	HELP0("  \\dV     [PATTERN]      list variables\n");
 	HELP0("  \\dx[+]  [PATTERN]      list extensions\n");
 	HELP0("  \\dX     [PATTERN]      list extended statistics\n");
 	HELP0("  \\dy[+]  [PATTERN]      list event triggers\n");

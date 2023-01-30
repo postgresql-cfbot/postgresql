@@ -27,6 +27,7 @@
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
 #include "parser/parse_enr.h"
+#include "parser/parse_expr.h"
 #include "parser/parse_relation.h"
 #include "parser/parse_type.h"
 #include "parser/parsetree.h"
@@ -3615,6 +3616,19 @@ errorMissingRTE(ParseState *pstate, RangeVar *relation)
 }
 
 /*
+ * set message "column does not exist" or "column or variable does not exist"
+ * in dependency if expression context allows session variables.
+ */
+static int
+column_or_variable_does_not_exists(ParseState *pstate, const char *colname)
+{
+	if (expr_kind_allows_session_variables(pstate->p_expr_kind))
+		return errmsg("column or variable \"%s\" does not exist", colname);
+	else
+		return errmsg("column \"%s\" does not exist", colname);
+}
+
+/*
  * Generate a suitable error about a missing column.
  *
  * Since this is a very common type of error, we work rather hard to
@@ -3648,7 +3662,7 @@ errorMissingColumn(ParseState *pstate,
 					(errcode(ERRCODE_UNDEFINED_COLUMN),
 					 relname ?
 					 errmsg("column %s.%s does not exist", relname, colname) :
-					 errmsg("column \"%s\" does not exist", colname),
+					 column_or_variable_does_not_exists(pstate, colname),
 					 errdetail("There are columns named \"%s\", but they are in tables that cannot be referenced from this part of the query.",
 							   colname),
 					 !relname ? errhint("Try using a table-qualified name.") : 0,
@@ -3658,7 +3672,7 @@ errorMissingColumn(ParseState *pstate,
 				(errcode(ERRCODE_UNDEFINED_COLUMN),
 				 relname ?
 				 errmsg("column %s.%s does not exist", relname, colname) :
-				 errmsg("column \"%s\" does not exist", colname),
+				 column_or_variable_does_not_exists(pstate, colname),
 				 errdetail("There is a column named \"%s\" in table \"%s\", but it cannot be referenced from this part of the query.",
 						   colname, state->rexact1->eref->aliasname),
 				 rte_visible_if_lateral(pstate, state->rexact1) ?
@@ -3676,14 +3690,14 @@ errorMissingColumn(ParseState *pstate,
 					(errcode(ERRCODE_UNDEFINED_COLUMN),
 					 relname ?
 					 errmsg("column %s.%s does not exist", relname, colname) :
-					 errmsg("column \"%s\" does not exist", colname),
+					 column_or_variable_does_not_exists(pstate, colname),
 					 parser_errposition(pstate, location)));
 		/* Handle case where we have a single alternative spelling to offer */
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_COLUMN),
 				 relname ?
 				 errmsg("column %s.%s does not exist", relname, colname) :
-				 errmsg("column \"%s\" does not exist", colname),
+				 column_or_variable_does_not_exists(pstate, colname),
 				 errhint("Perhaps you meant to reference the column \"%s.%s\".",
 						 state->rfirst->eref->aliasname,
 						 strVal(list_nth(state->rfirst->eref->colnames,
@@ -3697,7 +3711,7 @@ errorMissingColumn(ParseState *pstate,
 				(errcode(ERRCODE_UNDEFINED_COLUMN),
 				 relname ?
 				 errmsg("column %s.%s does not exist", relname, colname) :
-				 errmsg("column \"%s\" does not exist", colname),
+				 column_or_variable_does_not_exists(pstate, colname),
 				 errhint("Perhaps you meant to reference the column \"%s.%s\" or the column \"%s.%s\".",
 						 state->rfirst->eref->aliasname,
 						 strVal(list_nth(state->rfirst->eref->colnames,

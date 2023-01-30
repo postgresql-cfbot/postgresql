@@ -43,7 +43,9 @@ typedef struct Alias
 	List	   *colnames;		/* optional list of column aliases */
 } Alias;
 
-/* What to do at commit time for temporary relations */
+/*
+ * What to do at commit time for temporary relations or session variables.
+ */
 typedef enum OnCommitAction
 {
 	ONCOMMIT_NOOP,				/* No ON COMMIT clause (do nothing) */
@@ -315,13 +317,17 @@ typedef struct Const
  *				of the `paramid' field contain the SubLink's subLinkId, and
  *				the low-order 16 bits contain the column number.  (This type
  *				of Param is also converted to PARAM_EXEC during planning.)
+ *
+ *		PARAM_VARIABLE:  The parameter is an access to session variable
+ *				paramid holds varid.
  */
 typedef enum ParamKind
 {
 	PARAM_EXTERN,
 	PARAM_EXEC,
 	PARAM_SUBLINK,
-	PARAM_MULTIEXPR
+	PARAM_MULTIEXPR,
+	PARAM_VARIABLE
 } ParamKind;
 
 typedef struct Param
@@ -334,6 +340,8 @@ typedef struct Param
 	int32		paramtypmod;
 	/* OID of collation, or InvalidOid if none */
 	Oid			paramcollid;
+	/* OID of session variable if it is used */
+	Oid			paramvarid;
 	/* token location, or -1 if unknown */
 	int			location;
 } Param;

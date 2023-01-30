@@ -41,7 +41,7 @@ NOTICE:  a = {"(,11)"}, a[1].i = 11
 -- perhaps this ought to work, but for now it doesn't:
 do $$ declare a complex[];
 begin a[1:2].i := array[11,12]; raise notice 'a = %', a; end$$;
-ERROR:  cannot assign to field "i" of column "a" because its type complex[] is not a composite type
+ERROR:  cannot assign to field "i" of column or variable "a" because its type complex[] is not a composite type
 LINE 1: a[1:2].i := array[11,12]
         ^
 QUERY:  a[1:2].i := array[11,12]

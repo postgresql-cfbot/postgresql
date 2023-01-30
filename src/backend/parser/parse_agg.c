@@ -349,6 +349,7 @@ check_agglevels_and_constraints(ParseState *pstate, Node *expr)
 			Assert(false);		/* can't happen */
 			break;
 		case EXPR_KIND_OTHER:
+		case EXPR_KIND_LET_TARGET:
 
 			/*
 			 * Accept aggregate/grouping here; caller must throw error if
@@ -472,6 +473,7 @@ check_agglevels_and_constraints(ParseState *pstate, Node *expr)
 			break;
 		case EXPR_KIND_COLUMN_DEFAULT:
 		case EXPR_KIND_FUNCTION_DEFAULT:
+		case EXPR_KIND_VARIABLE_DEFAULT:
 
 			if (isAgg)
 				err = _("aggregate functions are not allowed in DEFAULT expressions");
@@ -916,6 +918,7 @@ transformWindowFuncCall(ParseState *pstate, WindowFunc *wfunc,
 			break;
 		case EXPR_KIND_COLUMN_DEFAULT:
 		case EXPR_KIND_FUNCTION_DEFAULT:
+		case EXPR_KIND_VARIABLE_DEFAULT:
 			err = _("window functions are not allowed in DEFAULT expressions");
 			break;
 		case EXPR_KIND_INDEX_EXPRESSION:
@@ -953,6 +956,9 @@ transformWindowFuncCall(ParseState *pstate, WindowFunc *wfunc,
 			break;
 		case EXPR_KIND_CYCLE_MARK:
 			errkind = true;
+			break;
+		case EXPR_KIND_LET_TARGET:
+			err = _("window functions are not allowed in LET statement");
 			break;
 
 			/*

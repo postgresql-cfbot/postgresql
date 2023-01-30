@@ -2956,6 +2956,14 @@ _tocEntryRequired(TocEntry *te, teSection curSection, ArchiveHandle *AH)
 					!simple_string_list_member(&ropt->triggerNames, te->tag))
 					return 0;
 			}
+			else if (strcmp(te->desc, "VARIABLE") == 0)
+			{
+				if (!ropt->selVariable)
+					return 0;
+				if (ropt->variableNames.head != NULL &&
+					!simple_string_list_member(&ropt->variableNames, te->tag))
+					return 0;
+			}
 			else
 				return 0;
 		}
@@ -3440,6 +3448,7 @@ _getObjectDescription(PQExpBuffer buf, const TocEntry *te)
 		strcmp(type, "TEXT SEARCH DICTIONARY") == 0 ||
 		strcmp(type, "TEXT SEARCH CONFIGURATION") == 0 ||
 		strcmp(type, "TYPE") == 0 ||
+		strcmp(type, "VARIABLE") == 0 ||
 		strcmp(type, "VIEW") == 0 ||
 	/* non-schema-specified objects */
 		strcmp(type, "DATABASE") == 0 ||

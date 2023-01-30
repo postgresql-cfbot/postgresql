@@ -65,12 +65,15 @@
 #include "catalog/pg_ts_template.h"
 #include "catalog/pg_type.h"
 #include "catalog/pg_user_mapping.h"
+#include "catalog/pg_variable.h"
 #include "commands/comment.h"
 #include "commands/defrem.h"
 #include "commands/event_trigger.h"
 #include "commands/extension.h"
 #include "commands/policy.h"
 #include "commands/publicationcmds.h"
+#include "commands/schemacmds.h"
+#include "commands/session_variable.h"
 #include "commands/seclabel.h"
 #include "commands/sequence.h"
 #include "commands/trigger.h"
@@ -188,7 +191,8 @@ static const Oid object_classes[] = {
 	PublicationRelationId,		/* OCLASS_PUBLICATION */
 	PublicationRelRelationId,	/* OCLASS_PUBLICATION_REL */
 	SubscriptionRelationId,		/* OCLASS_SUBSCRIPTION */
-	TransformRelationId			/* OCLASS_TRANSFORM */
+	TransformRelationId,		/* OCLASS_TRANSFORM */
+	VariableRelationId			/* OCLASS_VARIABLE */
 };
 
 /*
@@ -1514,6 +1518,10 @@ doDeletion(const ObjectAddress *object, int flags)
 			DropObjectById(object);
 			break;
 
+		case OCLASS_VARIABLE:
+			DropVariable(object->objectId);
+			break;
+
 			/*
 			 * These global object types are not supported here.
 			 */
@@ -1906,6 +1914,11 @@ find_expr_references_walker(Node *node,
 	else if (IsA(node, Param))
 	{
 		Param	   *param = (Param *) node;
+
+		/* A variable parameter depends on the session variable */
+		if (param->paramkind == PARAM_VARIABLE)
+			add_object_address(OCLASS_VARIABLE, param->paramvarid, 0,
+							   context->addrs);
 
 		/* A parameter must depend on the parameter's datatype */
 		add_object_address(OCLASS_TYPE, param->paramtype, 0,
@@ -2966,6 +2979,9 @@ getObjectClass(const ObjectAddress *object)
 
 		case TransformRelationId:
 			return OCLASS_TRANSFORM;
+
+		case VariableRelationId:
+			return OCLASS_VARIABLE;
 	}
 
 	/* shouldn't get here */

@@ -24,6 +24,7 @@
 #include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
 #include "commands/defrem.h"
+#include "commands/session_variable.h"
 #include "executor/execExpr.h"
 #include "executor/spi.h"
 #include "executor/tstoreReceiver.h"
@@ -318,6 +319,8 @@ static int	exec_stmt_commit(PLpgSQL_execstate *estate,
 							 PLpgSQL_stmt_commit *stmt);
 static int	exec_stmt_rollback(PLpgSQL_execstate *estate,
 							   PLpgSQL_stmt_rollback *stmt);
+static int	exec_stmt_let(PLpgSQL_execstate *estate,
+						  PLpgSQL_stmt_let *let);
 
 static void plpgsql_estate_setup(PLpgSQL_execstate *estate,
 								 PLpgSQL_function *func,
@@ -2107,6 +2110,10 @@ exec_stmts(PLpgSQL_execstate *estate, List *stmts)
 
 			case PLPGSQL_STMT_ROLLBACK:
 				rc = exec_stmt_rollback(estate, (PLpgSQL_stmt_rollback *) stmt);
+				break;
+
+			case PLPGSQL_STMT_LET:
+				rc = exec_stmt_let(estate, (PLpgSQL_stmt_let *) stmt);
 				break;
 
 			default:
@@ -4973,6 +4980,54 @@ exec_stmt_rollback(PLpgSQL_execstate *estate, PLpgSQL_stmt_rollback *stmt)
 	estate->simple_eval_estate = NULL;
 	estate->simple_eval_resowner = NULL;
 	plpgsql_create_econtext(estate);
+
+	return PLPGSQL_RC_OK;
+}
+
+/* ----------
+ * exec_stmt_let			Evaluate an expression and
+ *					put the result into a session variable.
+ * ----------
+ */
+static int
+exec_stmt_let(PLpgSQL_execstate *estate, PLpgSQL_stmt_let *stmt)
+{
+	bool		isNull;
+	Oid			valtype;
+	int32		valtypmod;
+	Datum		value;
+	Oid			varid;
+
+	List	   *plansources;
+	CachedPlanSource *plansource;
+
+	value = exec_eval_expr(estate,
+						   stmt->expr,
+						   &isNull,
+						   &valtype,
+						   &valtypmod);
+
+	/*
+	 * Oid of target session variable is stored in Query structure. It is
+	 * safer to read this value directly from the plan than to hold this value
+	 * in the plpgsql context, because it's not necessary to handle
+	 * invalidation of the cached value. Next operations are read only without
+	 * any allocations, so we can expect that retrieving varid from Query
+	 * should be fast.
+	 */
+	plansources = SPI_plan_get_plan_sources(stmt->expr->plan);
+	if (list_length(plansources) != 1)
+		elog(ERROR, "unexpected length of plansources of query for LET statement");
+
+	plansource = (CachedPlanSource *) linitial(plansources);
+	if (list_length(plansource->query_list) != 1)
+		elog(ERROR, "unexpected length of plansource of query for LET statement");
+
+	varid = linitial_node(Query, plansource->query_list)->resultVariable;
+	if (!OidIsValid(varid))
+		elog(ERROR, "oid of target session variable is not valid");
+
+	SetSessionVariableWithSecurityCheck(varid, value, isNull);
 
 	return PLPGSQL_RC_OK;
 }

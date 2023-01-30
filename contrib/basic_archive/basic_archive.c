@@ -32,7 +32,7 @@
 
 #include "common/int.h"
 #include "miscadmin.h"
-#include "postmaster/pgarch.h"
+#include "postmaster/archive_module.h"
 #include "storage/copydir.h"
 #include "storage/fd.h"
 #include "utils/guc.h"
@@ -41,13 +41,18 @@
 PG_MODULE_MAGIC;
 
 static char *archive_directory = NULL;
-static MemoryContext basic_archive_context;
 
-static bool basic_archive_configured(void);
-static bool basic_archive_file(const char *file, const char *path);
+static bool basic_archive_configured(void *arg);
+static bool basic_archive_file(const char *file, const char *path, void *arg);
 static void basic_archive_file_internal(const char *file, const char *path);
 static bool check_archive_directory(char **newval, void **extra, GucSource source);
 static bool compare_files(const char *file1, const char *file2);
+
+static const ArchiveModuleCallbacks basic_archive_callbacks = {
+	.check_configured_cb = basic_archive_configured,
+	.archive_file_cb = basic_archive_file,
+	.shutdown_cb = NULL
+};
 
 /*
  * _PG_init
@@ -67,24 +72,23 @@ _PG_init(void)
 							   check_archive_directory, NULL, NULL);
 
 	MarkGUCPrefixReserved("basic_archive");
-
-	basic_archive_context = AllocSetContextCreate(TopMemoryContext,
-												  "basic_archive",
-												  ALLOCSET_DEFAULT_SIZES);
 }
 
 /*
  * _PG_archive_module_init
  *
- * Returns the module's archiving callbacks.
+ * Returns the module's archiving callbacks and initializes private state.
  */
-void
-_PG_archive_module_init(ArchiveModuleCallbacks *cb)
+const ArchiveModuleCallbacks *
+_PG_archive_module_init(void **arg)
 {
 	AssertVariableIsOfType(&_PG_archive_module_init, ArchiveModuleInit);
 
-	cb->check_configured_cb = basic_archive_configured;
-	cb->archive_file_cb = basic_archive_file;
+	(*arg) = (void *) AllocSetContextCreate(TopMemoryContext,
+											"basic_archive",
+											ALLOCSET_DEFAULT_SIZES);
+
+	return &basic_archive_callbacks;
 }
 
 /*
@@ -135,7 +139,7 @@ check_archive_directory(char **newval, void **extra, GucSource source)
  * Checks that archive_directory is not blank.
  */
 static bool
-basic_archive_configured(void)
+basic_archive_configured(void *arg)
 {
 	return archive_directory != NULL && archive_directory[0] != '\0';
 }
@@ -146,7 +150,7 @@ basic_archive_configured(void)
  * Archives one file.
  */
 static bool
-basic_archive_file(const char *file, const char *path)
+basic_archive_file(const char *file, const char *path, void *arg)
 {
 	sigjmp_buf	local_sigjmp_buf;
 	MemoryContext oldcontext;
@@ -156,7 +160,7 @@ basic_archive_file(const char *file, const char *path)
 	 * we can easily reset it during error recovery (thus avoiding memory
 	 * leaks).
 	 */
-	oldcontext = MemoryContextSwitchTo(basic_archive_context);
+	oldcontext = MemoryContextSwitchTo((MemoryContext) arg);
 
 	/*
 	 * Since the archiver operates at the bottom of the exception stack,
@@ -183,7 +187,7 @@ basic_archive_file(const char *file, const char *path)
 
 		/* Reset our memory context and switch back to the original one */
 		MemoryContextSwitchTo(oldcontext);
-		MemoryContextReset(basic_archive_context);
+		MemoryContextReset((MemoryContext) arg);
 
 		/* Remove our exception handler */
 		PG_exception_stack = NULL;
@@ -206,7 +210,7 @@ basic_archive_file(const char *file, const char *path)
 
 	/* Reset our memory context and switch back to the original one */
 	MemoryContextSwitchTo(oldcontext);
-	MemoryContextReset(basic_archive_context);
+	MemoryContextReset((MemoryContext) arg);
 
 	return true;
 }

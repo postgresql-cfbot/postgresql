@@ -52,6 +52,7 @@
 #include "parser/parse_expr.h"
 #include "parser/parser.h"
 #include "pgstat.h"
+#include "postmaster/archive_module.h"
 #include "postmaster/autovacuum.h"
 #include "postmaster/bgworker_internals.h"
 #include "postmaster/bgwriter.h"

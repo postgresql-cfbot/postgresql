@@ -34,6 +34,7 @@
 #include "lib/binaryheap.h"
 #include "libpq/pqsignal.h"
 #include "pgstat.h"
+#include "postmaster/archive_module.h"
 #include "postmaster/interrupt.h"
 #include "postmaster/pgarch.h"
 #include "storage/fd.h"
@@ -97,7 +98,8 @@ char	   *XLogArchiveLibrary = "";
  */
 static time_t last_sigterm_time = 0;
 static PgArchData *PgArch = NULL;
-static ArchiveModuleCallbacks ArchiveContext;
+static const ArchiveModuleCallbacks *ArchiveCallbacks;
+static void *arch_module_private = NULL;
 
 
 /*
@@ -416,8 +418,8 @@ pgarch_ArchiverCopyLoop(void)
 			HandlePgArchInterrupts();
 
 			/* can't do anything if not configured ... */
-			if (ArchiveContext.check_configured_cb != NULL &&
-				!ArchiveContext.check_configured_cb())
+			if (ArchiveCallbacks->check_configured_cb != NULL &&
+				!ArchiveCallbacks->check_configured_cb(arch_module_private))
 			{
 				ereport(WARNING,
 						(errmsg("archive_mode enabled, yet archiving is not configured")));
@@ -518,7 +520,7 @@ pgarch_archiveXlog(char *xlog)
 	snprintf(activitymsg, sizeof(activitymsg), "archiving %s", xlog);
 	set_ps_display(activitymsg);
 
-	ret = ArchiveContext.archive_file_cb(xlog, pathname);
+	ret = ArchiveCallbacks->archive_file_cb(xlog, pathname, arch_module_private);
 	if (ret)
 		snprintf(activitymsg, sizeof(activitymsg), "last was %s", xlog);
 	else
@@ -824,7 +826,7 @@ HandlePgArchInterrupts(void)
 /*
  * LoadArchiveLibrary
  *
- * Loads the archiving callbacks into our local ArchiveContext.
+ * Loads the archiving callbacks into our local ArchiveCallbacks.
  */
 static void
 LoadArchiveLibrary(void)
@@ -836,8 +838,6 @@ LoadArchiveLibrary(void)
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("both archive_command and archive_library set"),
 				 errdetail("Only one of archive_command, archive_library may be set.")));
-
-	memset(&ArchiveContext, 0, sizeof(ArchiveModuleCallbacks));
 
 	/*
 	 * If shell archiving is enabled, use our special initialization function.
@@ -854,9 +854,9 @@ LoadArchiveLibrary(void)
 		ereport(ERROR,
 				(errmsg("archive modules have to define the symbol %s", "_PG_archive_module_init")));
 
-	(*archive_init) (&ArchiveContext);
+	ArchiveCallbacks = (*archive_init) (&arch_module_private);
 
-	if (ArchiveContext.archive_file_cb == NULL)
+	if (ArchiveCallbacks->archive_file_cb == NULL)
 		ereport(ERROR,
 				(errmsg("archive modules must register an archive callback")));
 
@@ -869,6 +869,6 @@ LoadArchiveLibrary(void)
 static void
 pgarch_call_module_shutdown_cb(int code, Datum arg)
 {
-	if (ArchiveContext.shutdown_cb != NULL)
-		ArchiveContext.shutdown_cb();
+	if (ArchiveCallbacks->shutdown_cb != NULL)
+		ArchiveCallbacks->shutdown_cb(arch_module_private);
 }

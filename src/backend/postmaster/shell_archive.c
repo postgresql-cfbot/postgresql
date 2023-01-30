@@ -20,30 +20,34 @@
 #include "access/xlog.h"
 #include "common/percentrepl.h"
 #include "pgstat.h"
-#include "postmaster/pgarch.h"
+#include "postmaster/archive_module.h"
 
-static bool shell_archive_configured(void);
-static bool shell_archive_file(const char *file, const char *path);
-static void shell_archive_shutdown(void);
+static bool shell_archive_configured(void *arg);
+static bool shell_archive_file(const char *file, const char *path, void *arg);
+static void shell_archive_shutdown(void *arg);
 
-void
-shell_archive_init(ArchiveModuleCallbacks *cb)
+static const ArchiveModuleCallbacks shell_archive_callbacks = {
+	.check_configured_cb = shell_archive_configured,
+	.archive_file_cb = shell_archive_file,
+	.shutdown_cb = shell_archive_shutdown
+};
+
+const ArchiveModuleCallbacks *
+shell_archive_init(void **arg)
 {
 	AssertVariableIsOfType(&shell_archive_init, ArchiveModuleInit);
 
-	cb->check_configured_cb = shell_archive_configured;
-	cb->archive_file_cb = shell_archive_file;
-	cb->shutdown_cb = shell_archive_shutdown;
+	return &shell_archive_callbacks;
 }
 
 static bool
-shell_archive_configured(void)
+shell_archive_configured(void *arg)
 {
 	return XLogArchiveCommand[0] != '\0';
 }
 
 static bool
-shell_archive_file(const char *file, const char *path)
+shell_archive_file(const char *file, const char *path, void *arg)
 {
 	char	   *xlogarchcmd;
 	char	   *nativePath = NULL;
@@ -125,7 +129,7 @@ shell_archive_file(const char *file, const char *path)
 }
 
 static void
-shell_archive_shutdown(void)
+shell_archive_shutdown(void *arg)
 {
 	elog(DEBUG1, "archiver process shutting down");
 }

@@ -24,13 +24,15 @@
  *		values plus row-locating info for UPDATE and MERGE cases, or just the
  *		row-locating info for DELETE cases.
  *
- *		MERGE runs a join between the source relation and the target
- *		table; if any WHEN NOT MATCHED clauses are present, then the
- *		join is an outer join.  In this case, any unmatched tuples will
- *		have NULL row-locating info, and only INSERT can be run. But for
- *		matched tuples, then row-locating info is used to determine the
- *		tuple to UPDATE or DELETE. When all clauses are WHEN MATCHED,
- *		then an inner join is used, so all tuples contain row-locating info.
+ *		MERGE runs a join between the source relation and the target table.
+ *		If any WHEN NOT MATCHED [BY TARGET] clauses are present, then the join
+ *		is an outer join that might output tuples without a matching target
+ *		tuple.  In this case, any unmatched target tuples will have NULL
+ *		row-locating info, and only INSERT can be run.  But for matched
+ *		target tuples, the row-locating info is used to determine the tuple
+ *		to UPDATE or DELETE.  When all clauses are WHEN MATCHED or WHEN NOT
+ *		MATCHED BY SOURCE, all tuples produced by the join will include a
+ *		matching target tuple, so all tuples contain row-locating info.
  *
  *		If the query specifies RETURNING, then the ModifyTable returns a
  *		RETURNING tuple after completing each row insert, update, or delete.
@@ -2695,6 +2697,20 @@ ExecMerge(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
 	bool		matched;
 
 	/*-----
+	 * Note that as far as the executor is concerned, WHEN NOT MATCHED BY
+	 * SOURCE actions are treated exactly the same as WHEN MATCHED actions,
+	 * since both match target tuples.  They are distinguished from one
+	 * another by a qual that tests if the source tuple is NULL, but the
+	 * executor knows nothing about the contents of the merge action quals.
+	 * Thus WHEN MATCHED and WHEN NOT MATCHED BY SOURCE actions are stored
+	 * together in the same "matched" list.  In the case of concurrent updates
+	 * and rechecks discussed below, the target tuple might be modified, but
+	 * not the source tuple, and so there is no danger of a WHEN MATCHED case
+	 * becoming a WHEN NOT MATCHED BY SOURCE case, or vice versa.  Thus, in
+	 * the dicussion that follows "MATCHED" means "matched by target", and
+	 * should be taken to include both WHEN MATCHED and WHEN NOT MATCHED BY
+	 * SOURCE, while "NOT MATCHED" means NOT MATCHED BY TARGET.
+	 *
 	 * If we are dealing with a WHEN MATCHED case (tupleid is valid), we
 	 * execute the first action for which the additional WHEN MATCHED AND
 	 * quals pass.  If an action without quals is found, that action is
@@ -3257,8 +3273,14 @@ ExecInitMerge(ModifyTableState *mtstate, EState *estate)
 			 * We create two lists - one for WHEN MATCHED actions and one for
 			 * WHEN NOT MATCHED actions - and stick the MergeActionState into
 			 * the appropriate list.
+			 *
+			 * Note that the executor treats WHEN NOT MATCHED BY SOURCE
+			 * actions in exactly the same way as WHEN MATCHED actions, since
+			 * they both match the target (see ExecMerge).  Thus both types go
+			 * in the "matched" list.  Only WHEN NOT MATCHED BY TARGET actions
+			 * go in the "not matched" list.
 			 */
-			if (action_state->mas_action->matched)
+			if (action->matchKind != MERGE_WHEN_NOT_MATCHED_BY_TARGET)
 				list = &resultRelInfo->ri_matchedMergeAction;
 			else
 				list = &resultRelInfo->ri_notMatchedMergeAction;

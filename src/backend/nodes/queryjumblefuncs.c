@@ -734,7 +734,7 @@ JumbleExpr(JumbleState *jstate, Node *node)
 			{
 				MergeAction *mergeaction = (MergeAction *) node;
 
-				APP_JUMB(mergeaction->matched);
+				APP_JUMB(mergeaction->matchKind);
 				APP_JUMB(mergeaction->commandType);
 				JumbleExpr(jstate, mergeaction->qual);
 				JumbleExpr(jstate, (Node *) mergeaction->targetList);

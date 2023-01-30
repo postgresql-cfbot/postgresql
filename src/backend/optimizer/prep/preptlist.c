@@ -157,15 +157,14 @@ preprocess_targetlist(PlannerInfo *root)
 			/*
 			 * Add resjunk entries for any Vars used in each action's
 			 * targetlist and WHEN condition that belong to relations other
-			 * than target.  Note that aggregates, window functions and
-			 * placeholder vars are not possible anywhere in MERGE's WHEN
-			 * clauses.  (PHVs may be added later, but they don't concern us
-			 * here.)
+			 * than target.  Note that aggregates and window functions are not
+			 * possible anywhere in MERGE's WHEN clauses, but PlaceHolderVars
+			 * may have been added by subquery pullup.
 			 */
 			vars = pull_var_clause((Node *)
 								   list_concat_copy((List *) action->qual,
 													action->targetList),
-								   0);
+								   PVC_INCLUDE_PLACEHOLDERS);
 			foreach(l2, vars)
 			{
 				Var		   *var = (Var *) lfirst(l2);

@@ -51,6 +51,12 @@ USING source AS s
 ON t.tid = s.sid
 WHEN MATCHED THEN
 	INSERT DEFAULT VALUES;
+-- NOT MATCHED BY SOURCE/INSERT error
+MERGE INTO target t
+USING source AS s
+ON t.tid = s.sid
+WHEN NOT MATCHED BY SOURCE THEN
+	INSERT DEFAULT VALUES;
 -- incorrectly specifying INTO target
 MERGE INTO target t
 USING source AS s
@@ -74,6 +80,12 @@ MERGE INTO target t
 USING source AS s
 ON t.tid = s.sid
 WHEN NOT MATCHED THEN
+	UPDATE SET balance = 0;
+-- NOT MATCHED BY TARGET/UPDATE
+MERGE INTO target t
+USING source AS s
+ON t.tid = s.sid
+WHEN NOT MATCHED BY TARGET THEN
 	UPDATE SET balance = 0;
 -- UPDATE tablename
 MERGE INTO target t
@@ -210,6 +222,18 @@ USING source AS s
 ON t.tid = s.sid
 WHEN NOT MATCHED THEN
 	INSERT DEFAULT VALUES;
+SELECT * FROM target ORDER BY tid;
+ROLLBACK;
+
+-- DELETE/INSERT not matched by source/target
+BEGIN;
+MERGE INTO target t
+USING source AS s
+ON t.tid = s.sid
+WHEN NOT MATCHED BY SOURCE THEN
+	DELETE
+WHEN NOT MATCHED BY TARGET THEN
+	INSERT VALUES (s.sid, s.delta);
 SELECT * FROM target ORDER BY tid;
 ROLLBACK;
 
@@ -497,6 +521,17 @@ WHEN NOT MATCHED AND s.balance = 100 THEN
 	INSERT (tid) VALUES (s.sid);
 SELECT * FROM wq_target;
 
+-- conditions in NOT MATCHED BY SOURCE clause can only refer to target columns
+MERGE INTO wq_target t
+USING wq_source s ON t.tid = s.sid
+WHEN NOT MATCHED BY SOURCE AND s.balance = 100 THEN
+	DELETE;
+
+MERGE INTO wq_target t
+USING wq_source s ON t.tid = s.sid
+WHEN NOT MATCHED BY SOURCE AND t.balance = 100 THEN
+    DELETE;
+
 -- conditions in MATCHED clause can refer to both source and target
 SELECT * FROM wq_source;
 MERGE INTO wq_target t
@@ -621,6 +656,25 @@ WHEN MATCHED THEN
 	DELETE
 WHEN NOT MATCHED THEN
 	INSERT VALUES (s.sid, s.delta);
+SELECT * FROM target ORDER BY tid;
+ROLLBACK;
+
+-- UPSERT with UPDATE/DELETE when not matched by source
+BEGIN;
+DELETE FROM SOURCE WHERE sid = 2;
+MERGE INTO target t
+USING source AS s
+ON t.tid = s.sid
+WHEN MATCHED AND t.balance > s.delta THEN
+    UPDATE SET balance = t.balance - s.delta
+WHEN MATCHED THEN
+	UPDATE SET balance = 0
+WHEN NOT MATCHED THEN
+    INSERT VALUES (s.sid, s.delta)
+WHEN NOT MATCHED BY SOURCE AND tid = 1 THEN
+	UPDATE SET balance = 0
+WHEN NOT MATCHED BY SOURCE THEN
+	DELETE;
 SELECT * FROM target ORDER BY tid;
 ROLLBACK;
 
@@ -914,6 +968,20 @@ WHEN MATCHED AND t.a < 10 THEN
 WHEN MATCHED AND t.a >= 30 AND t.a <= 40 THEN
 	DELETE
 WHEN NOT MATCHED AND s.a < 20 THEN
+	INSERT VALUES (a, b)');
+
+-- not matched by source
+SELECT explain_merge('
+MERGE INTO ex_mtarget t USING ex_msource s ON t.a = s.a
+WHEN NOT MATCHED BY SOURCE and t.a < 10 THEN
+	DELETE');
+
+-- not matched by source and target
+SELECT explain_merge('
+MERGE INTO ex_mtarget t USING ex_msource s ON t.a = s.a
+WHEN NOT MATCHED BY SOURCE AND t.a < 10 THEN
+	DELETE
+WHEN NOT MATCHED BY TARGET AND s.a < 20 THEN
 	INSERT VALUES (a, b)');
 
 -- nothing

@@ -71,6 +71,15 @@ WHEN MATCHED THEN
 ERROR:  syntax error at or near "INSERT"
 LINE 5:  INSERT DEFAULT VALUES;
          ^
+-- NOT MATCHED BY SOURCE/INSERT error
+MERGE INTO target t
+USING source AS s
+ON t.tid = s.sid
+WHEN NOT MATCHED BY SOURCE THEN
+	INSERT DEFAULT VALUES;
+ERROR:  syntax error at or near "INSERT"
+LINE 5:  INSERT DEFAULT VALUES;
+         ^
 -- incorrectly specifying INTO target
 MERGE INTO target t
 USING source AS s
@@ -103,6 +112,15 @@ MERGE INTO target t
 USING source AS s
 ON t.tid = s.sid
 WHEN NOT MATCHED THEN
+	UPDATE SET balance = 0;
+ERROR:  syntax error at or near "UPDATE"
+LINE 5:  UPDATE SET balance = 0;
+         ^
+-- NOT MATCHED BY TARGET/UPDATE
+MERGE INTO target t
+USING source AS s
+ON t.tid = s.sid
+WHEN NOT MATCHED BY TARGET THEN
 	UPDATE SET balance = 0;
 ERROR:  syntax error at or near "UPDATE"
 LINE 5:  UPDATE SET balance = 0;
@@ -269,6 +287,22 @@ SELECT * FROM target ORDER BY tid;
    3 |      30
      |        
 (4 rows)
+
+ROLLBACK;
+-- DELETE/INSERT not matched by source/target
+BEGIN;
+MERGE INTO target t
+USING source AS s
+ON t.tid = s.sid
+WHEN NOT MATCHED BY SOURCE THEN
+	DELETE
+WHEN NOT MATCHED BY TARGET THEN
+	INSERT VALUES (s.sid, s.delta);
+SELECT * FROM target ORDER BY tid;
+ tid | balance 
+-----+---------
+   4 |      40
+(1 row)
 
 ROLLBACK;
 -- index plans
@@ -738,6 +772,19 @@ SELECT * FROM wq_target;
    1 |      -1
 (1 row)
 
+-- conditions in NOT MATCHED BY SOURCE clause can only refer to target columns
+MERGE INTO wq_target t
+USING wq_source s ON t.tid = s.sid
+WHEN NOT MATCHED BY SOURCE AND s.balance = 100 THEN
+	DELETE;
+ERROR:  invalid reference to FROM-clause entry for table "s"
+LINE 3: WHEN NOT MATCHED BY SOURCE AND s.balance = 100 THEN
+                                       ^
+DETAIL:  There is an entry for table "s", but it cannot be referenced from this part of the query.
+MERGE INTO wq_target t
+USING wq_source s ON t.tid = s.sid
+WHEN NOT MATCHED BY SOURCE AND t.balance = 100 THEN
+    DELETE;
 -- conditions in MATCHED clause can refer to both source and target
 SELECT * FROM wq_source;
  balance | sid 
@@ -919,6 +966,45 @@ SELECT * FROM target ORDER BY tid;
 -----+---------
    1 |      10
    2 |      15
+   4 |      40
+(3 rows)
+
+ROLLBACK;
+-- UPSERT with UPDATE/DELETE when not matched by source
+BEGIN;
+DELETE FROM SOURCE WHERE sid = 2;
+MERGE INTO target t
+USING source AS s
+ON t.tid = s.sid
+WHEN MATCHED AND t.balance > s.delta THEN
+    UPDATE SET balance = t.balance - s.delta
+WHEN MATCHED THEN
+	UPDATE SET balance = 0
+WHEN NOT MATCHED THEN
+    INSERT VALUES (s.sid, s.delta)
+WHEN NOT MATCHED BY SOURCE AND tid = 1 THEN
+	UPDATE SET balance = 0
+WHEN NOT MATCHED BY SOURCE THEN
+	DELETE;
+NOTICE:  BEFORE INSERT STATEMENT trigger
+NOTICE:  BEFORE UPDATE STATEMENT trigger
+NOTICE:  BEFORE DELETE STATEMENT trigger
+NOTICE:  BEFORE UPDATE ROW trigger row: (3,30) -> (3,10)
+NOTICE:  BEFORE INSERT ROW trigger row: (4,40)
+NOTICE:  BEFORE DELETE ROW trigger row: (2,20)
+NOTICE:  BEFORE UPDATE ROW trigger row: (1,10) -> (1,0)
+NOTICE:  AFTER UPDATE ROW trigger row: (3,30) -> (3,10)
+NOTICE:  AFTER INSERT ROW trigger row: (4,40)
+NOTICE:  AFTER DELETE ROW trigger row: (2,20)
+NOTICE:  AFTER UPDATE ROW trigger row: (1,10) -> (1,0)
+NOTICE:  AFTER DELETE STATEMENT trigger
+NOTICE:  AFTER UPDATE STATEMENT trigger
+NOTICE:  AFTER INSERT STATEMENT trigger
+SELECT * FROM target ORDER BY tid;
+ tid | balance 
+-----+---------
+   1 |       0
+   3 |      10
    4 |      40
 (3 rows)
 
@@ -1434,6 +1520,50 @@ WHEN NOT MATCHED AND s.a < 20 THEN
                Sort Key: t.a
                Sort Method: quicksort  Memory: xxx
                ->  Seq Scan on ex_mtarget t (actual rows=49 loops=1)
+(12 rows)
+
+-- not matched by source
+SELECT explain_merge('
+MERGE INTO ex_mtarget t USING ex_msource s ON t.a = s.a
+WHEN NOT MATCHED BY SOURCE and t.a < 10 THEN
+	DELETE');
+                            explain_merge                             
+----------------------------------------------------------------------
+ Merge on ex_mtarget t (actual rows=0 loops=1)
+   Tuples: skipped=54
+   ->  Merge Left Join (actual rows=54 loops=1)
+         Merge Cond: (t.a = s.a)
+         ->  Sort (actual rows=54 loops=1)
+               Sort Key: t.a
+               Sort Method: quicksort  Memory: xxx
+               ->  Seq Scan on ex_mtarget t (actual rows=54 loops=1)
+         ->  Sort (actual rows=100 loops=1)
+               Sort Key: s.a
+               Sort Method: quicksort  Memory: xxx
+               ->  Seq Scan on ex_msource s (actual rows=100 loops=1)
+(12 rows)
+
+-- not matched by source and target
+SELECT explain_merge('
+MERGE INTO ex_mtarget t USING ex_msource s ON t.a = s.a
+WHEN NOT MATCHED BY SOURCE AND t.a < 10 THEN
+	DELETE
+WHEN NOT MATCHED BY TARGET AND s.a < 20 THEN
+	INSERT VALUES (a, b)');
+                            explain_merge                             
+----------------------------------------------------------------------
+ Merge on ex_mtarget t (actual rows=0 loops=1)
+   Tuples: skipped=100
+   ->  Merge Full Join (actual rows=100 loops=1)
+         Merge Cond: (t.a = s.a)
+         ->  Sort (actual rows=54 loops=1)
+               Sort Key: t.a
+               Sort Method: quicksort  Memory: xxx
+               ->  Seq Scan on ex_mtarget t (actual rows=54 loops=1)
+         ->  Sort (actual rows=100 loops=1)
+               Sort Key: s.a
+               Sort Method: quicksort  Memory: xxx
+               ->  Seq Scan on ex_msource s (actual rows=100 loops=1)
 (12 rows)
 
 -- nothing

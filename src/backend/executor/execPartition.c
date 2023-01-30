@@ -898,8 +898,16 @@ ExecInitPartitionInfo(ModifyTableState *mtstate, EState *estate,
 			action_state = makeNode(MergeActionState);
 			action_state->mas_action = action;
 
-			/* And put the action in the appropriate list */
-			if (action->matched)
+			/*
+			 * Put the action in the appropriate list.
+			 *
+			 * Note that the executor treats WHEN NOT MATCHED BY SOURCE
+			 * actions in exactly the same way as WHEN MATCHED actions, since
+			 * they both match the target (see ExecMerge).  Thus both types go
+			 * in the "matched" list.  Only WHEN NOT MATCHED BY TARGET actions
+			 * go in the "not matched" list.
+			 */
+			if (action->matchKind != MERGE_WHEN_NOT_MATCHED_BY_TARGET)
 				list = &leaf_part_rri->ri_matchedMergeAction;
 			else
 				list = &leaf_part_rri->ri_notMatchedMergeAction;

@@ -4787,6 +4787,17 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
        the <filename>postgresql.conf</filename> file or on the server
        command line.
       </para>
+      <para>
+       For time-delayed logical replication, the apply worker sends a feedback
+       message to the publisher every
+       <varname>wal_receiver_status_interval</varname> milliseconds. Make sure
+       to set <varname>wal_receiver_status_interval</varname> less than the
+       <varname>wal_sender_timeout</varname> on the publisher, otherwise, the
+       <literal>walsender</literal> will repeatedly terminate due to timeout
+       error. Note that if <varname>wal_receiver_status_interval</varname> is
+       set to zero, the apply worker sends no feedback messages during the
+       <literal>min_apply_delay</literal> period.
+      </para>
       </listitem>
      </varlistentry>
 

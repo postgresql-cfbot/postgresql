@@ -704,7 +704,8 @@ pa_process_spooled_messages_if_required(void)
 	{
 		apply_spooled_messages(&MyParallelShared->fileset,
 							   MyParallelShared->xid,
-							   InvalidXLogRecPtr);
+							   InvalidXLogRecPtr,
+							   0);
 		pa_set_fileset_state(MyParallelShared, FS_EMPTY);
 	}
 

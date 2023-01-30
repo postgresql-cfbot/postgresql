@@ -255,7 +255,7 @@ extern void stream_stop_internal(TransactionId xid);
 
 /* Common streaming function to apply all the spooled messages */
 extern void apply_spooled_messages(FileSet *stream_fileset, TransactionId xid,
-								   XLogRecPtr lsn);
+								   XLogRecPtr lsn, TimestampTz finish_ts);
 
 extern void apply_dispatch(StringInfo s);
 

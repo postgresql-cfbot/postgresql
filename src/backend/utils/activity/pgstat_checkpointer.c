@@ -49,6 +49,9 @@ pgstat_report_checkpointer(void)
 #define CHECKPOINTER_ACC(fld) stats_shmem->stats.fld += PendingCheckpointerStats.fld
 	CHECKPOINTER_ACC(timed_checkpoints);
 	CHECKPOINTER_ACC(requested_checkpoints);
+	CHECKPOINTER_ACC(timed_restartpoints);
+	CHECKPOINTER_ACC(requested_restartpoints);
+	CHECKPOINTER_ACC(performed_restartpoints);
 	CHECKPOINTER_ACC(checkpoint_write_time);
 	CHECKPOINTER_ACC(checkpoint_sync_time);
 	CHECKPOINTER_ACC(buf_written_checkpoints);
@@ -112,6 +115,9 @@ pgstat_checkpointer_snapshot_cb(void)
 #define CHECKPOINTER_COMP(fld) pgStatLocal.snapshot.checkpointer.fld -= reset.fld;
 	CHECKPOINTER_COMP(timed_checkpoints);
 	CHECKPOINTER_COMP(requested_checkpoints);
+	CHECKPOINTER_COMP(timed_restartpoints);
+	CHECKPOINTER_COMP(requested_restartpoints);
+	CHECKPOINTER_COMP(performed_restartpoints);
 	CHECKPOINTER_COMP(checkpoint_write_time);
 	CHECKPOINTER_COMP(checkpoint_sync_time);
 	CHECKPOINTER_COMP(buf_written_checkpoints);

@@ -118,7 +118,8 @@ toast_compress_datum(Datum value, char cmethod)
  */
 Datum
 toast_save_datum(Relation rel, Datum value,
-				 struct varlena *oldexternal, int options)
+				 struct varlena *oldexternal, int options,
+				 BulkInsertState bistate)
 {
 	Relation	toastrel;
 	Relation   *toastidxs;
@@ -321,7 +322,8 @@ toast_save_datum(Relation rel, Datum value,
 		memcpy(VARDATA(&chunk_data), data_p, chunk_size);
 		toasttup = heap_form_tuple(toasttupDesc, t_values, t_isnull);
 
-		heap_insert(toastrel, toasttup, mycid, options, NULL);
+		heap_insert(toastrel, toasttup, mycid, options, bistate ?
+				bistate->toast_state : NULL);
 
 		/*
 		 * Create the index entry.  We cheat a little here by not using

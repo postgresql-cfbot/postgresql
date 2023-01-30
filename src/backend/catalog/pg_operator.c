@@ -303,6 +303,7 @@ OperatorShellMake(const char *operatorName,
  *		joinId					X join selectivity procedure ID
  *		canMerge				merge join can be used with this operator
  *		canHash					hash join can be used with this operator
+ *		replace					replace operator if exists
  *
  * The caller should have validated properties and permissions for the
  * objects passed as OID references.  We must handle the commutator and
@@ -334,7 +335,8 @@ OperatorCreate(const char *operatorName,
 			   Oid restrictionId,
 			   Oid joinId,
 			   bool canMerge,
-			   bool canHash)
+			   bool canHash,
+			   bool replace)
 {
 	Relation	pg_operator_desc;
 	HeapTuple	tup;
@@ -415,11 +417,17 @@ OperatorCreate(const char *operatorName,
 								   rightTypeId,
 								   &operatorAlreadyDefined);
 
-	if (operatorAlreadyDefined)
+	if (operatorAlreadyDefined && !replace)
 		ereport(ERROR,
 				(errcode(ERRCODE_DUPLICATE_FUNCTION),
 				 errmsg("operator %s already exists",
 						operatorName)));
+
+	/*
+	 * No such operator yet, so CREATE OR REPLACE is equivalent to CREATE
+	 */
+	if (!OidIsValid(operatorObjectId) && replace)
+		replace = false;
 
 	/*
 	 * At this point, if operatorObjectId is not InvalidOid then we are
@@ -430,6 +438,59 @@ OperatorCreate(const char *operatorName,
 		!object_ownercheck(OperatorRelationId, operatorObjectId, GetUserId()))
 		aclcheck_error(ACLCHECK_NOT_OWNER, OBJECT_OPERATOR,
 					   operatorName);
+
+	/*
+	 * When operator is updated,
+	 * params others than RESTRICT and JOIN should remain the same.
+	 */
+	if (replace)
+	{
+		Form_pg_operator oprForm;
+
+		tup = SearchSysCache4(OPERNAMENSP,
+							  PointerGetDatum(operatorName),
+							  ObjectIdGetDatum(leftTypeId),
+							  ObjectIdGetDatum(rightTypeId),
+							  ObjectIdGetDatum(operatorNamespace));
+		oprForm = (Form_pg_operator) GETSTRUCT(tup);
+
+		if (oprForm->oprcanmerge != canMerge)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					errmsg("operator attribute \"merges\" cannot be changed")));
+
+		if (oprForm->oprcanhash != canHash)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					errmsg("operator attribute \"hashes\" cannot be changed")));
+
+		commutatorId = commutatorName ? get_other_operator(commutatorName,
+										  rightTypeId, leftTypeId,
+										  operatorName, operatorNamespace,
+										  leftTypeId, rightTypeId,
+										  true) : InvalidOid;
+		if (oprForm->oprcom != commutatorId)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					errmsg("operator attribute \"commutator\" cannot be changed")));
+
+		negatorId = negatorName ? get_other_operator(negatorName,
+									   leftTypeId, rightTypeId,
+									   operatorName, operatorNamespace,
+									   leftTypeId, rightTypeId,
+									   false) : InvalidOid;
+		if (oprForm->oprnegate != negatorId)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					errmsg("operator attribute \"negator\" cannot be changed")));
+
+		if (oprForm->oprcode != procedureId)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					errmsg("operator attribute \"function\" cannot be changed")));
+
+		ReleaseSysCache(tup);
+	}
 
 	/*
 	 * Set up the other operators.  If they do not currently exist, create
@@ -486,25 +547,36 @@ OperatorCreate(const char *operatorName,
 	for (i = 0; i < Natts_pg_operator; ++i)
 	{
 		values[i] = (Datum) NULL;
-		replaces[i] = true;
+		replaces[i] = !replace;
 		nulls[i] = false;
 	}
 
-	namestrcpy(&oname, operatorName);
-	values[Anum_pg_operator_oprname - 1] = NameGetDatum(&oname);
-	values[Anum_pg_operator_oprnamespace - 1] = ObjectIdGetDatum(operatorNamespace);
-	values[Anum_pg_operator_oprowner - 1] = ObjectIdGetDatum(GetUserId());
-	values[Anum_pg_operator_oprkind - 1] = CharGetDatum(leftTypeId ? 'b' : 'l');
-	values[Anum_pg_operator_oprcanmerge - 1] = BoolGetDatum(canMerge);
-	values[Anum_pg_operator_oprcanhash - 1] = BoolGetDatum(canHash);
-	values[Anum_pg_operator_oprleft - 1] = ObjectIdGetDatum(leftTypeId);
-	values[Anum_pg_operator_oprright - 1] = ObjectIdGetDatum(rightTypeId);
-	values[Anum_pg_operator_oprresult - 1] = ObjectIdGetDatum(operResultType);
-	values[Anum_pg_operator_oprcom - 1] = ObjectIdGetDatum(commutatorId);
-	values[Anum_pg_operator_oprnegate - 1] = ObjectIdGetDatum(negatorId);
-	values[Anum_pg_operator_oprcode - 1] = ObjectIdGetDatum(procedureId);
-	values[Anum_pg_operator_oprrest - 1] = ObjectIdGetDatum(restrictionId);
-	values[Anum_pg_operator_oprjoin - 1] = ObjectIdGetDatum(joinId);
+	if (!replace)
+	{
+		namestrcpy(&oname, operatorName);
+		values[Anum_pg_operator_oprname - 1] = NameGetDatum(&oname);
+		values[Anum_pg_operator_oprnamespace - 1] = ObjectIdGetDatum(operatorNamespace);
+		values[Anum_pg_operator_oprowner - 1] = ObjectIdGetDatum(GetUserId());
+		values[Anum_pg_operator_oprkind - 1] = CharGetDatum(leftTypeId ? 'b' : 'l');
+		values[Anum_pg_operator_oprcanmerge - 1] = BoolGetDatum(canMerge);
+		values[Anum_pg_operator_oprcanhash - 1] = BoolGetDatum(canHash);
+		values[Anum_pg_operator_oprleft - 1] = ObjectIdGetDatum(leftTypeId);
+		values[Anum_pg_operator_oprright - 1] = ObjectIdGetDatum(rightTypeId);
+		values[Anum_pg_operator_oprresult - 1] = ObjectIdGetDatum(operResultType);
+		values[Anum_pg_operator_oprcom - 1] = ObjectIdGetDatum(commutatorId);
+		values[Anum_pg_operator_oprnegate - 1] = ObjectIdGetDatum(negatorId);
+		values[Anum_pg_operator_oprcode - 1] = ObjectIdGetDatum(procedureId);
+		values[Anum_pg_operator_oprrest - 1] = ObjectIdGetDatum(restrictionId);
+		values[Anum_pg_operator_oprjoin - 1] = ObjectIdGetDatum(joinId);
+	}
+	else
+	{
+		replaces[Anum_pg_operator_oprrest - 1] = true;
+		values[Anum_pg_operator_oprrest - 1] = ObjectIdGetDatum(restrictionId);
+
+		replaces[Anum_pg_operator_oprrest - 1] = true;
+		values[Anum_pg_operator_oprjoin - 1] = ObjectIdGetDatum(joinId);
+	}
 
 	pg_operator_desc = table_open(OperatorRelationId, RowExclusiveLock);
 
@@ -546,10 +618,17 @@ OperatorCreate(const char *operatorName,
 	}
 
 	/* Add dependencies for the entry */
-	address = makeOperatorDependencies(tup, true, isUpdate);
+	address = makeOperatorDependencies(tup, !replace, isUpdate);
 
-	/* Post creation hook for new operator */
-	InvokeObjectPostCreateHook(OperatorRelationId, operatorObjectId, 0);
+	if (replace)
+	{
+		InvokeObjectPostAlterHook(OperatorRelationId, operatorObjectId, 0);
+	}
+	else
+	{
+		/* Post creation hook for new operator */
+		InvokeObjectPostCreateHook(OperatorRelationId, operatorObjectId, 0);
+	}
 
 	table_close(pg_operator_desc, RowExclusiveLock);
 

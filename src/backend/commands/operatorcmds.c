@@ -64,7 +64,7 @@ static Oid	ValidateJoinEstimator(List *joinName);
  * 'parameters' is a list of DefElem
  */
 ObjectAddress
-DefineOperator(List *names, List *parameters)
+DefineOperator(List *names, List *parameters, bool replace)
 {
 	char	   *oprName;
 	Oid			oprNamespace;
@@ -263,7 +263,9 @@ DefineOperator(List *names, List *parameters)
 					   restrictionOid,	/* optional restrict. sel. function */
 					   joinOid, /* optional join sel. function name */
 					   canMerge,	/* operator merges */
-					   canHash);	/* operator hashes */
+					   canHash,	/* operator hashes */
+					   replace);	/* maybe replacement */
+
 }
 
 /*

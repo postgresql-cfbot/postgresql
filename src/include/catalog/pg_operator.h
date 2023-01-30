@@ -96,7 +96,8 @@ extern ObjectAddress OperatorCreate(const char *operatorName,
 									Oid restrictionId,
 									Oid joinId,
 									bool canMerge,
-									bool canHash);
+									bool canHash,
+									bool replace);
 
 extern ObjectAddress makeOperatorDependencies(HeapTuple tuple,
 											  bool makeExtensionDep,

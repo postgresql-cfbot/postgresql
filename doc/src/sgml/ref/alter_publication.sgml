@@ -22,16 +22,23 @@ PostgreSQL documentation
  <refsynopsisdiv>
 <synopsis>
 ALTER PUBLICATION <replaceable class="parameter">name</replaceable> ADD <replaceable class="parameter">publication_object</replaceable> [, ...]
+ALTER PUBLICATION <replaceable class="parameter">name</replaceable> ADD ALL TABLES [ EXCEPT [ TABLE ] <replaceable class="parameter">exception_object</replaceable> [, ... ] ]
 ALTER PUBLICATION <replaceable class="parameter">name</replaceable> SET <replaceable class="parameter">publication_object</replaceable> [, ...]
 ALTER PUBLICATION <replaceable class="parameter">name</replaceable> DROP <replaceable class="parameter">publication_object</replaceable> [, ...]
 ALTER PUBLICATION <replaceable class="parameter">name</replaceable> SET ( <replaceable class="parameter">publication_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] )
 ALTER PUBLICATION <replaceable class="parameter">name</replaceable> OWNER TO { <replaceable>new_owner</replaceable> | CURRENT_ROLE | CURRENT_USER | SESSION_USER }
 ALTER PUBLICATION <replaceable class="parameter">name</replaceable> RENAME TO <replaceable>new_name</replaceable>
+ALTER PUBLICATION <replaceable class="parameter">name</replaceable> RESET
 
 <phrase>where <replaceable class="parameter">publication_object</replaceable> is one of:</phrase>
 
     TABLE [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ * ] [ ( <replaceable class="parameter">column_name</replaceable> [, ... ] ) ] [ WHERE ( <replaceable class="parameter">expression</replaceable> ) ] [, ... ]
     TABLES IN SCHEMA { <replaceable class="parameter">schema_name</replaceable> | CURRENT_SCHEMA } [, ... ]
+
+<phrase>where <replaceable class="parameter">exception_object</replaceable> is:</phrase>
+
+    [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ * ]
+
 </synopsis>
  </refsynopsisdiv>
 
@@ -67,18 +74,33 @@ ALTER PUBLICATION <replaceable class="parameter">name</replaceable> RENAME TO <r
   </para>
 
   <para>
-   The remaining variants change the owner and the name of the publication.
+   The <literal>OWNER</literal> clause will change the owner of the
+   publication.
+  </para>
+
+   <para>
+    The <literal>RENAME</literal> clause will change the name of the
+    publication.
+   </para>
+
+   <para>
+    The <literal>RESET</literal> clause will reset the publication to the
+    default state which includes resetting the publication parameters, setting
+    <literal>ALL TABLES</literal> flag to <literal>false</literal> and
+    dropping all relations and schemas that are associated with the
+    publication.
   </para>
 
   <para>
    You must own the publication to use <command>ALTER PUBLICATION</command>.
-   Adding a table to a publication additionally requires owning that table.
-   The <literal>ADD TABLES IN SCHEMA</literal> and
-   <literal>SET TABLES IN SCHEMA</literal> to a publication requires the
-   invoking user to be a superuser.
-   To alter the owner, you must be able to <literal>SET ROLE</literal> to the
-   new owning role, and that role must have <literal>CREATE</literal>
-   privilege on the database.
+   Adding a table to or excluding a table from a publication additionally
+   requires owning that table. The <literal>ADD ALL TABLES</literal>,
+   <literal>ADD ALL TABLES IN SCHEMA</literal>,
+   <literal>SET TABLES IN SCHEMA</literal> to a publication and
+   <literal>RESET</literal> of publication requires the invoking user to be a
+   superuser. To alter the owner, you must be able to
+   <literal>SET ROLE</literal> to the new owning role, and that role must have
+   <literal>CREATE</literal> privilege on the database.
    Also, the new owner of a <literal>FOR ALL TABLES</literal> or
    <literal>FOR TABLES IN SCHEMA</literal>
    publication must be a superuser. However, a superuser can
@@ -206,12 +228,26 @@ ALTER PUBLICATION sales_publication ADD TABLES IN SCHEMA marketing, sales;
   </para>
 
   <para>
+   Alter publication <structname>production_publication</structname> to publish
+   all tables except <structname>users</structname> and
+   <structname>departments</structname>:
+<programlisting>
+ALTER PUBLICATION production_publication ADD ALL TABLES EXCEPT users, departments;
+</programlisting></para>
+
+  <para>
    Add tables <structname>users</structname>,
    <structname>departments</structname> and schema
    <structname>production</structname> to the publication
    <structname>production_publication</structname>:
 <programlisting>
 ALTER PUBLICATION production_publication ADD TABLE users, departments, TABLES IN SCHEMA production;
+</programlisting></para>
+
+  <para>
+   Reset the publication <structname>production_publication</structname>:
+<programlisting>
+ALTER PUBLICATION production_publication RESET;
 </programlisting></para>
  </refsect1>
 

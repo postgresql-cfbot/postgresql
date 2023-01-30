@@ -5618,6 +5618,8 @@ void
 RelationBuildPublicationDesc(Relation relation, PublicationDesc *pubdesc)
 {
 	List	   *puboids;
+	List	   *alltablespuboids;
+	List	   *exceptpuboids = NIL;
 	ListCell   *lc;
 	MemoryContext oldcxt;
 	Oid			schemaid;
@@ -5651,7 +5653,7 @@ RelationBuildPublicationDesc(Relation relation, PublicationDesc *pubdesc)
 	pubdesc->cols_valid_for_delete = true;
 
 	/* Fetch the publication membership info. */
-	puboids = GetRelationPublications(relid);
+	puboids = GetRelationPublications(relid, false);
 	schemaid = RelationGetNamespace(relation);
 	puboids = list_concat_unique_oid(puboids, GetSchemaPublications(schemaid));
 
@@ -5665,14 +5667,19 @@ RelationBuildPublicationDesc(Relation relation, PublicationDesc *pubdesc)
 			Oid			ancestor = lfirst_oid(lc);
 
 			puboids = list_concat_unique_oid(puboids,
-											 GetRelationPublications(ancestor));
+											 GetRelationPublications(ancestor, false));
 			schemaid = get_rel_namespace(ancestor);
 			puboids = list_concat_unique_oid(puboids,
 											 GetSchemaPublications(schemaid));
+			exceptpuboids = list_concat_unique_oid(exceptpuboids,
+												   GetRelationPublications(ancestor, true));
 		}
 	}
-	puboids = list_concat_unique_oid(puboids, GetAllTablesPublications());
 
+	alltablespuboids = GetAllTablesPublications();
+	puboids = list_concat_unique_oid(puboids,
+									 list_difference_oid(alltablespuboids,
+														 exceptpuboids));
 	foreach(lc, puboids)
 	{
 		Oid			pubid = lfirst_oid(lc);
@@ -5701,7 +5708,7 @@ RelationBuildPublicationDesc(Relation relation, PublicationDesc *pubdesc)
 		if (!pubform->puballtables &&
 			(pubform->pubupdate || pubform->pubdelete) &&
 			pub_rf_contains_invalid_column(pubid, relation, ancestors,
-										   pubform->pubviaroot))
+										   pubform->pubviaroot, pubform->puballtables))
 		{
 			if (pubform->pubupdate)
 				pubdesc->rf_valid_for_update = false;
@@ -5718,7 +5725,7 @@ RelationBuildPublicationDesc(Relation relation, PublicationDesc *pubdesc)
 		if (!pubform->puballtables &&
 			(pubform->pubupdate || pubform->pubdelete) &&
 			pub_collist_contains_invalid_column(pubid, relation, ancestors,
-												pubform->pubviaroot))
+												pubform->pubviaroot, pubform->puballtables))
 		{
 			if (pubform->pubupdate)
 				pubdesc->cols_valid_for_update = false;

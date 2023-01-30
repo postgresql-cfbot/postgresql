@@ -3811,6 +3811,7 @@ typedef struct PublicationTable
 	RangeVar   *relation;		/* relation to be published */
 	Node	   *whereClause;	/* qualifications */
 	List	   *columns;		/* List of columns in a publication table */
+	bool		except;			/* exclude the relation */
 } PublicationTable;
 
 /*
@@ -3819,6 +3820,7 @@ typedef struct PublicationTable
 typedef enum PublicationObjSpecType
 {
 	PUBLICATIONOBJ_TABLE,		/* A table */
+	PUBLICATIONOBJ_EXCEPT_TABLE,		/* A table to be excluded */
 	PUBLICATIONOBJ_TABLES_IN_SCHEMA,	/* All tables in schema */
 	PUBLICATIONOBJ_TABLES_IN_CUR_SCHEMA,	/* All tables in first element of
 											 * search_path */
@@ -3847,7 +3849,8 @@ typedef enum AlterPublicationAction
 {
 	AP_AddObjects,				/* add objects to publication */
 	AP_DropObjects,				/* remove objects from publication */
-	AP_SetObjects				/* set list of objects */
+	AP_SetObjects,				/* set list of objects */
+	AP_ResetPublication			/* reset the publication */
 } AlterPublicationAction;
 
 typedef struct AlterPublicationStmt

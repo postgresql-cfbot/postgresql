@@ -2518,6 +2518,32 @@ my %tests = (
 		like => { %full_runs, section_post_data => 1, },
 	},
 
+	'CREATE PUBLICATION pub5' => {
+		create_order => 50,
+		create_sql   => 'CREATE PUBLICATION pub5 FOR ALL TABLES EXCEPT dump_test.test_table;',
+		regexp => qr/^
+			\QCREATE PUBLICATION pub5 FOR ALL TABLES EXCEPT TABLE ONLY dump_test.test_table WITH (publish = 'insert, update, delete, truncate');\E
+			/xm,
+		like => { %full_runs, section_post_data => 1, },
+		unlike => {
+			exclude_dump_test_schema => 1,
+			exclude_test_table       => 1,
+		},
+	},
+
+	'CREATE PUBLICATION pub6' => {
+		create_order => 50,
+		create_sql   => 'CREATE PUBLICATION pub6 FOR ALL TABLES EXCEPT TABLE dump_test.test_table, dump_test.test_second_table;',
+		regexp => qr/^
+			\QCREATE PUBLICATION pub6 FOR ALL TABLES EXCEPT TABLE ONLY dump_test.test_table, ONLY dump_test.test_second_table WITH (publish = 'insert, update, delete, truncate');\E
+			/xm,
+		like => { %full_runs, section_post_data => 1, },
+		unlike => {
+			exclude_dump_test_schema => 1,
+			exclude_test_table       => 1,
+		},
+	},
+
 	'CREATE SUBSCRIPTION sub1' => {
 		create_order => 50,
 		create_sql   => 'CREATE SUBSCRIPTION sub1

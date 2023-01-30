@@ -22,7 +22,7 @@ PostgreSQL documentation
  <refsynopsisdiv>
 <synopsis>
 CREATE PUBLICATION <replaceable class="parameter">name</replaceable>
-    [ FOR ALL TABLES
+    [ FOR ALL TABLES [ EXCEPT [ TABLE ] <replaceable class="parameter">exception_object</replaceable> [, ... ] ]
       | FOR <replaceable class="parameter">publication_object</replaceable> [, ... ] ]
     [ WITH ( <replaceable class="parameter">publication_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] ) ]
 
@@ -30,6 +30,10 @@ CREATE PUBLICATION <replaceable class="parameter">name</replaceable>
 
     TABLE [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ * ] [ ( <replaceable class="parameter">column_name</replaceable> [, ... ] ) ] [ WHERE ( <replaceable class="parameter">expression</replaceable> ) ] [, ... ]
     TABLES IN SCHEMA { <replaceable class="parameter">schema_name</replaceable> | CURRENT_SCHEMA } [, ... ]
+
+<phrase>where <replaceable class="parameter">exception_object</replaceable> is:</phrase>
+
+    [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ * ]
 </synopsis>
  </refsynopsisdiv>
 
@@ -122,7 +126,9 @@ CREATE PUBLICATION <replaceable class="parameter">name</replaceable>
     <listitem>
      <para>
       Marks the publication as one that replicates changes for all tables in
-      the database, including tables created in the future.
+      the database, including tables created in the future. If
+      <literal>EXCEPT TABLE</literal> is specified, then exclude replicating
+      the changes for the specified tables.
      </para>
     </listitem>
    </varlistentry>
@@ -154,6 +160,16 @@ CREATE PUBLICATION <replaceable class="parameter">name</replaceable>
       So, even operations that are performed directly on a
       partition are also published via publications that its ancestors are
       part of.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>EXCEPT TABLE</literal></term>
+    <listitem>
+     <para>
+      This clause specifies a list of tables to be excluded from the
+      publication. It can only be used with <literal>FOR ALL TABLES</literal>.
      </para>
     </listitem>
    </varlistentry>
@@ -371,6 +387,15 @@ CREATE PUBLICATION production_publication FOR TABLE users, departments, TABLES I
 <programlisting>
 CREATE PUBLICATION sales_publication FOR TABLES IN SCHEMA marketing, sales;
 </programlisting></para>
+
+  <para>
+   Create a publication that publishes all changes in all the tables except for
+   the changes of <structname>users</structname> and
+   <structname>departments</structname>:
+<programlisting>
+CREATE PUBLICATION mypublication FOR ALL TABLES EXCEPT users, departments;
+</programlisting>
+  </para>
 
   <para>
    Create a publication that publishes all changes for table <structname>users</structname>,

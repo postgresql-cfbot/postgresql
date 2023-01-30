@@ -1450,6 +1450,10 @@ ProcessPendingWrites(void)
 		/* Try to flush pending output to the client */
 		if (pq_flush_if_writable() != 0)
 			WalSndShutdown();
+
+		/* If we got shut down requested, try to exit the process */
+		if (got_STOPPING)
+			WalSndDone(XLogSendLogical);
 	}
 
 	/* reactivate latch so WalSndLoop knows to continue */
@@ -2513,17 +2517,13 @@ WalSndLoop(WalSndSendDataCallback send_data)
 										 application_name)));
 				WalSndSetState(WALSNDSTATE_STREAMING);
 			}
-
-			/*
-			 * When SIGUSR2 arrives, we send any outstanding logs up to the
-			 * shutdown checkpoint record (i.e., the latest record), wait for
-			 * them to be replicated to the standby, and exit. This may be a
-			 * normal termination at shutdown, or a promotion, the walsender
-			 * is not sure which.
-			 */
-			if (got_SIGUSR2)
-				WalSndDone(send_data);
 		}
+
+		/*
+		 * When SIGUSR2 arrives, try to exit the process.
+		 */
+		if (got_SIGUSR2)
+			WalSndDone(send_data);
 
 		/* Check for replication timeout. */
 		WalSndCheckTimeOut();
@@ -3094,13 +3094,14 @@ XLogSendLogical(void)
 }
 
 /*
- * Shutdown if the sender is caught up.
+ * Shutdown if the sender is we are in a convenient time.
  *
  * NB: This should only be called when the shutdown signal has been received
  * from postmaster.
  *
- * Note that if we determine that there's still more data to send, this
- * function will return control to the caller.
+ * Note that if we determine that there's still more data to send or we are in
+ * physical replication mode and all WALs are not yet replicated, this function
+ * will return control to the caller.
  */
 static void
 WalSndDone(WalSndSendDataCallback send_data)
@@ -3118,15 +3119,32 @@ WalSndDone(WalSndSendDataCallback send_data)
 	replicatedPtr = XLogRecPtrIsInvalid(MyWalSnd->flush) ?
 		MyWalSnd->write : MyWalSnd->flush;
 
-	if (WalSndCaughtUp && sentPtr == replicatedPtr &&
-		!pq_is_send_pending())
+	/*
+	 * Exit if we are in the convenient time.
+	 *
+	 * When we are logical replication mode, we don't have to wait that all
+	 * sent data to be flushed on the subscriber because we cannot support
+	 * clean switchover for it.
+	 */
+	if (WalSndCaughtUp &&
+		(send_data == XLogSendLogical ||
+		 (sentPtr == replicatedPtr && !pq_is_send_pending())))
 	{
 		QueryCompletion qc;
 
 		/* Inform the standby that XLOG streaming is done */
 		SetQueryCompletion(&qc, CMDTAG_COPY, 0);
 		EndCommand(&qc, DestRemote, false);
-		pq_flush();
+
+		/*
+		 * Flush pending data if writable.
+		 *
+		 * Note that the output buffer may be full in case of logical
+		 * replication. If pq_flush() is called at that time, the walsender
+		 * process will be stuck. Therefore, call pq_flush_if_writable()
+		 * instead.
+		 */
+		pq_flush_if_writable();
 
 		proc_exit(0);
 	}

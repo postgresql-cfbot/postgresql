@@ -1695,6 +1695,16 @@ CONTEXT:  processing remote data for replication origin "pg_16395" during "INSER
    being synchronized. Moreover, if the streaming transaction is applied in
    parallel, there may be additional parallel apply workers.
   </para>
+
+  <caution>
+   <para>
+    Unlike physical replication, data synchronization by logical replication is
+    more likely to be suspended. It is because workers sometimes wait for
+    acquiring locks and they do not consume messages from the publisher. It
+    will be resolved automatically when workers acquire locks and start
+    consuming arrivals.
+   </para>
+  </caution>
  </sect1>
 
  <sect1 id="logical-replication-security">

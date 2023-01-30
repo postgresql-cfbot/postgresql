@@ -22,8 +22,7 @@
  *	Interface:
  *
  *	InitLocks(), GetLocksMethodTable(), GetLockTagsMethodTable(),
- *	LockAcquire(), LockRelease(), LockReleaseAll(),
- *	LockCheckConflicts(), GrantLock()
+ *	LockAcquire(), LockRelease(), LockCheckConflicts(), GrantLock()
  *
  *-------------------------------------------------------------------------
  */
@@ -289,6 +288,9 @@ static LOCALLOCK *awaitedLock;
 static ResourceOwner awaitedOwner;
 
 
+static dlist_head session_locks[lengthof(LockMethods)];
+
+
 #ifdef LOCK_DEBUG
 
 /*------
@@ -375,8 +377,8 @@ static void GrantLockLocal(LOCALLOCK *locallock, ResourceOwner owner);
 static void BeginStrongLockAcquire(LOCALLOCK *locallock, uint32 fasthashcode);
 static void FinishStrongLockAcquire(void);
 static void WaitOnLock(LOCALLOCK *locallock, ResourceOwner owner);
-static void ReleaseLockIfHeld(LOCALLOCK *locallock, bool sessionLock);
-static void LockReassignOwner(LOCALLOCK *locallock, ResourceOwner parent);
+static void ReleaseLockIfHeld(LOCALLOCKOWNER *locallockowner, bool sessionLock);
+static void LockReassignOwner(LOCALLOCKOWNER *locallockowner, ResourceOwner parent);
 static bool UnGrantLock(LOCK *lock, LOCKMODE lockmode,
 						PROCLOCK *proclock, LockMethod lockMethodTable);
 static void CleanUpLock(LOCK *lock, PROCLOCK *proclock,
@@ -477,6 +479,10 @@ InitLocks(void)
 									  16,
 									  &info,
 									  HASH_ELEM | HASH_BLOBS);
+
+	/* Initialize each element of the session_locks array */
+	for (int i = 0; i < lengthof(LockMethods); i++)
+		dlist_init(&session_locks[i]);
 }
 
 
@@ -839,26 +845,9 @@ LockAcquireExtended(const LOCKTAG *locktag,
 		locallock->nLocks = 0;
 		locallock->holdsStrongLockCount = false;
 		locallock->lockCleared = false;
-		locallock->numLockOwners = 0;
-		locallock->maxLockOwners = 8;
-		locallock->lockOwners = NULL;	/* in case next line fails */
-		locallock->lockOwners = (LOCALLOCKOWNER *)
-			MemoryContextAlloc(TopMemoryContext,
-							   locallock->maxLockOwners * sizeof(LOCALLOCKOWNER));
+		dlist_init(&locallock->locallockowners);
 	}
-	else
-	{
-		/* Make sure there will be room to remember the lock */
-		if (locallock->numLockOwners >= locallock->maxLockOwners)
-		{
-			int			newsize = locallock->maxLockOwners * 2;
 
-			locallock->lockOwners = (LOCALLOCKOWNER *)
-				repalloc(locallock->lockOwners,
-						 newsize * sizeof(LOCALLOCKOWNER));
-			locallock->maxLockOwners = newsize;
-		}
-	}
 	hashcode = locallock->hashcode;
 
 	if (locallockp)
@@ -1268,7 +1257,6 @@ SetupLockInTable(LockMethod lockMethodTable, PGPROC *proc,
 		proclock->groupLeader = proc->lockGroupLeader != NULL ?
 			proc->lockGroupLeader : proc;
 		proclock->holdMask = 0;
-		proclock->releaseMask = 0;
 		/* Add proclock to appropriate lists */
 		dlist_push_tail(&lock->procLocks, &proclock->lockLink);
 		dlist_push_tail(&proc->myProcLocks[partition], &proclock->procLink);
@@ -1365,17 +1353,18 @@ CheckAndSetLockHeld(LOCALLOCK *locallock, bool acquired)
 static void
 RemoveLocalLock(LOCALLOCK *locallock)
 {
-	int			i;
+	dlist_mutable_iter iter;
 
-	for (i = locallock->numLockOwners - 1; i >= 0; i--)
+	dlist_foreach_modify(iter, &locallock->locallockowners)
 	{
-		if (locallock->lockOwners[i].owner != NULL)
-			ResourceOwnerForgetLock(locallock->lockOwners[i].owner, locallock);
+		LOCALLOCKOWNER *locallockowner = dlist_container(LOCALLOCKOWNER, locallock_node, iter.cur);
+
+		Assert(locallockowner->owner != NULL);
+		dlist_delete(&locallockowner->locallock_node);
+		ResourceOwnerForgetLock(locallockowner);
 	}
-	locallock->numLockOwners = 0;
-	if (locallock->lockOwners != NULL)
-		pfree(locallock->lockOwners);
-	locallock->lockOwners = NULL;
+
+	Assert(dlist_is_empty(&locallock->locallockowners));
 
 	if (locallock->holdsStrongLockCount)
 	{
@@ -1683,26 +1672,38 @@ CleanUpLock(LOCK *lock, PROCLOCK *proclock,
 static void
 GrantLockLocal(LOCALLOCK *locallock, ResourceOwner owner)
 {
-	LOCALLOCKOWNER *lockOwners = locallock->lockOwners;
-	int			i;
+	LOCALLOCKOWNER *locallockowner;
+	dlist_iter iter;
 
-	Assert(locallock->numLockOwners < locallock->maxLockOwners);
 	/* Count the total */
 	locallock->nLocks++;
 	/* Count the per-owner lock */
-	for (i = 0; i < locallock->numLockOwners; i++)
+	dlist_foreach(iter, &locallock->locallockowners)
 	{
-		if (lockOwners[i].owner == owner)
+		locallockowner = dlist_container(LOCALLOCKOWNER, locallock_node, iter.cur);
+
+		if (locallockowner->owner == owner)
 		{
-			lockOwners[i].nLocks++;
+			locallockowner->nLocks++;
 			return;
 		}
 	}
-	lockOwners[i].owner = owner;
-	lockOwners[i].nLocks = 1;
-	locallock->numLockOwners++;
+	locallockowner = MemoryContextAlloc(TopMemoryContext, sizeof(LOCALLOCKOWNER));
+	locallockowner->owner = owner;
+	locallockowner->nLocks = 1;
+	locallockowner->locallock = locallock;
+
+	dlist_push_tail(&locallock->locallockowners, &locallockowner->locallock_node);
+
 	if (owner != NULL)
-		ResourceOwnerRememberLock(owner, locallock);
+		ResourceOwnerRememberLock(owner, locallockowner);
+	else
+	{
+		LOCKMETHODID lockmethodid = LOCALLOCK_LOCKMETHOD(*locallockowner->locallock);
+
+		Assert(lockmethodid > 0 && lockmethodid <= 2);
+		dlist_push_tail(&session_locks[lockmethodid - 1], &locallockowner->resowner_node);
+	}
 
 	/* Indicate that the lock is acquired for certain types of locks. */
 	CheckAndSetLockHeld(locallock, true);
@@ -2015,9 +2016,9 @@ LockRelease(const LOCKTAG *locktag, LOCKMODE lockmode, bool sessionLock)
 	 * Decrease the count for the resource owner.
 	 */
 	{
-		LOCALLOCKOWNER *lockOwners = locallock->lockOwners;
 		ResourceOwner owner;
-		int			i;
+		dlist_iter iter;
+		bool		found = false;
 
 		/* Identify owner for lock */
 		if (sessionLock)
@@ -2025,24 +2026,29 @@ LockRelease(const LOCKTAG *locktag, LOCKMODE lockmode, bool sessionLock)
 		else
 			owner = CurrentResourceOwner;
 
-		for (i = locallock->numLockOwners - 1; i >= 0; i--)
+		dlist_foreach(iter, &locallock->locallockowners)
 		{
-			if (lockOwners[i].owner == owner)
+			LOCALLOCKOWNER *locallockowner = dlist_container(LOCALLOCKOWNER, locallock_node, iter.cur);
+
+			if (locallockowner->owner != owner)
+				continue;
+
+			found = true;
+
+			if (--locallockowner->nLocks == 0)
 			{
-				Assert(lockOwners[i].nLocks > 0);
-				if (--lockOwners[i].nLocks == 0)
-				{
-					if (owner != NULL)
-						ResourceOwnerForgetLock(owner, locallock);
-					/* compact out unused slot */
-					locallock->numLockOwners--;
-					if (i < locallock->numLockOwners)
-						lockOwners[i] = lockOwners[locallock->numLockOwners];
-				}
-				break;
+				dlist_delete(&locallockowner->locallock_node);
+
+				if (owner != NULL)
+					ResourceOwnerForgetLock(locallockowner);
+				else
+					dlist_delete(&locallockowner->resowner_node);
 			}
+
+			Assert(locallockowner->nLocks >= 0);
 		}
-		if (i < 0)
+
+		if (!found)
 		{
 			/* don't release a lock belonging to another owner */
 			elog(WARNING, "you don't own a lock of type %s",
@@ -2059,6 +2065,8 @@ LockRelease(const LOCKTAG *locktag, LOCKMODE lockmode, bool sessionLock)
 
 	if (locallock->nLocks > 0)
 		return true;
+
+	Assert(locallock->nLocks >= 0);
 
 	/*
 	 * At this point we can no longer suppose we are clear of invalidation
@@ -2162,274 +2170,44 @@ LockRelease(const LOCKTAG *locktag, LOCKMODE lockmode, bool sessionLock)
 	return true;
 }
 
+#ifdef USE_ASSERT_CHECKING
 /*
- * LockReleaseAll -- Release all locks of the specified lock method that
- *		are held by the current process.
- *
- * Well, not necessarily *all* locks.  The available behaviors are:
- *		allLocks == true: release all locks including session locks.
- *		allLocks == false: release all non-session locks.
+ * LockAssertNoneHeld -- Assert that we no longer hold any DEFAULT_LOCKMETHOD
+ * locks during an abort.
  */
-void
-LockReleaseAll(LOCKMETHODID lockmethodid, bool allLocks)
+extern void
+LockAssertNoneHeld(bool isCommit)
 {
 	HASH_SEQ_STATUS status;
-	LockMethod	lockMethodTable;
-	int			i,
-				numLockModes;
 	LOCALLOCK  *locallock;
-	LOCK	   *lock;
-	int			partition;
-	bool		have_fast_path_lwlock = false;
 
-	if (lockmethodid <= 0 || lockmethodid >= lengthof(LockMethods))
-		elog(ERROR, "unrecognized lock method: %d", lockmethodid);
-	lockMethodTable = LockMethods[lockmethodid];
-
-#ifdef LOCK_DEBUG
-	if (*(lockMethodTable->trace_flag))
-		elog(LOG, "LockReleaseAll: lockmethod=%d", lockmethodid);
-#endif
-
-	/*
-	 * Get rid of our fast-path VXID lock, if appropriate.  Note that this is
-	 * the only way that the lock we hold on our own VXID can ever get
-	 * released: it is always and only released when a toplevel transaction
-	 * ends.
-	 */
-	if (lockmethodid == DEFAULT_LOCKMETHOD)
-		VirtualXactLockTableCleanup();
-
-	numLockModes = lockMethodTable->numLockModes;
-
-	/*
-	 * First we run through the locallock table and get rid of unwanted
-	 * entries, then we scan the process's proclocks and get rid of those. We
-	 * do this separately because we may have multiple locallock entries
-	 * pointing to the same proclock, and we daren't end up with any dangling
-	 * pointers.  Fast-path locks are cleaned up during the locallock table
-	 * scan, though.
-	 */
-	hash_seq_init(&status, LockMethodLocalHash);
-
-	while ((locallock = (LOCALLOCK *) hash_seq_search(&status)) != NULL)
+	if (!isCommit)
 	{
-		/*
-		 * If the LOCALLOCK entry is unused, we must've run out of shared
-		 * memory while trying to set up this lock.  Just forget the local
-		 * entry.
-		 */
-		if (locallock->nLocks == 0)
+		hash_seq_init(&status, LockMethodLocalHash);
+
+		while ((locallock = (LOCALLOCK *) hash_seq_search(&status)) != NULL)
 		{
-			RemoveLocalLock(locallock);
-			continue;
+			dlist_iter local_iter;
+
+			Assert(locallock->nLocks >= 0);
+
+			dlist_foreach(local_iter, &locallock->locallockowners)
+			{
+				LOCALLOCKOWNER *locallockowner = dlist_container(LOCALLOCKOWNER,
+																 locallock_node,
+																 local_iter.cur);
+
+				Assert(locallockowner->owner == NULL);
+
+				if (locallockowner->nLocks > 0 &&
+					LOCALLOCK_LOCKMETHOD(*locallock) == DEFAULT_LOCKMETHOD)
+					Assert(false);
+			}
 		}
-
-		/* Ignore items that are not of the lockmethod to be removed */
-		if (LOCALLOCK_LOCKMETHOD(*locallock) != lockmethodid)
-			continue;
-
-		/*
-		 * If we are asked to release all locks, we can just zap the entry.
-		 * Otherwise, must scan to see if there are session locks. We assume
-		 * there is at most one lockOwners entry for session locks.
-		 */
-		if (!allLocks)
-		{
-			LOCALLOCKOWNER *lockOwners = locallock->lockOwners;
-
-			/* If session lock is above array position 0, move it down to 0 */
-			for (i = 0; i < locallock->numLockOwners; i++)
-			{
-				if (lockOwners[i].owner == NULL)
-					lockOwners[0] = lockOwners[i];
-				else
-					ResourceOwnerForgetLock(lockOwners[i].owner, locallock);
-			}
-
-			if (locallock->numLockOwners > 0 &&
-				lockOwners[0].owner == NULL &&
-				lockOwners[0].nLocks > 0)
-			{
-				/* Fix the locallock to show just the session locks */
-				locallock->nLocks = lockOwners[0].nLocks;
-				locallock->numLockOwners = 1;
-				/* We aren't deleting this locallock, so done */
-				continue;
-			}
-			else
-				locallock->numLockOwners = 0;
-		}
-
-		/*
-		 * If the lock or proclock pointers are NULL, this lock was taken via
-		 * the relation fast-path (and is not known to have been transferred).
-		 */
-		if (locallock->proclock == NULL || locallock->lock == NULL)
-		{
-			LOCKMODE	lockmode = locallock->tag.mode;
-			Oid			relid;
-
-			/* Verify that a fast-path lock is what we've got. */
-			if (!EligibleForRelationFastPath(&locallock->tag.lock, lockmode))
-				elog(PANIC, "locallock table corrupted");
-
-			/*
-			 * If we don't currently hold the LWLock that protects our
-			 * fast-path data structures, we must acquire it before attempting
-			 * to release the lock via the fast-path.  We will continue to
-			 * hold the LWLock until we're done scanning the locallock table,
-			 * unless we hit a transferred fast-path lock.  (XXX is this
-			 * really such a good idea?  There could be a lot of entries ...)
-			 */
-			if (!have_fast_path_lwlock)
-			{
-				LWLockAcquire(&MyProc->fpInfoLock, LW_EXCLUSIVE);
-				have_fast_path_lwlock = true;
-			}
-
-			/* Attempt fast-path release. */
-			relid = locallock->tag.lock.locktag_field2;
-			if (FastPathUnGrantRelationLock(relid, lockmode))
-			{
-				RemoveLocalLock(locallock);
-				continue;
-			}
-
-			/*
-			 * Our lock, originally taken via the fast path, has been
-			 * transferred to the main lock table.  That's going to require
-			 * some extra work, so release our fast-path lock before starting.
-			 */
-			LWLockRelease(&MyProc->fpInfoLock);
-			have_fast_path_lwlock = false;
-
-			/*
-			 * Now dump the lock.  We haven't got a pointer to the LOCK or
-			 * PROCLOCK in this case, so we have to handle this a bit
-			 * differently than a normal lock release.  Unfortunately, this
-			 * requires an extra LWLock acquire-and-release cycle on the
-			 * partitionLock, but hopefully it shouldn't happen often.
-			 */
-			LockRefindAndRelease(lockMethodTable, MyProc,
-								 &locallock->tag.lock, lockmode, false);
-			RemoveLocalLock(locallock);
-			continue;
-		}
-
-		/* Mark the proclock to show we need to release this lockmode */
-		if (locallock->nLocks > 0)
-			locallock->proclock->releaseMask |= LOCKBIT_ON(locallock->tag.mode);
-
-		/* And remove the locallock hashtable entry */
-		RemoveLocalLock(locallock);
 	}
-
-	/* Done with the fast-path data structures */
-	if (have_fast_path_lwlock)
-		LWLockRelease(&MyProc->fpInfoLock);
-
-	/*
-	 * Now, scan each lock partition separately.
-	 */
-	for (partition = 0; partition < NUM_LOCK_PARTITIONS; partition++)
-	{
-		LWLock	   *partitionLock;
-		dlist_head *procLocks = &MyProc->myProcLocks[partition];
-		dlist_mutable_iter proclock_iter;
-
-		partitionLock = LockHashPartitionLockByIndex(partition);
-
-		/*
-		 * If the proclock list for this partition is empty, we can skip
-		 * acquiring the partition lock.  This optimization is trickier than
-		 * it looks, because another backend could be in process of adding
-		 * something to our proclock list due to promoting one of our
-		 * fast-path locks.  However, any such lock must be one that we
-		 * decided not to delete above, so it's okay to skip it again now;
-		 * we'd just decide not to delete it again.  We must, however, be
-		 * careful to re-fetch the list header once we've acquired the
-		 * partition lock, to be sure we have a valid, up-to-date pointer.
-		 * (There is probably no significant risk if pointer fetch/store is
-		 * atomic, but we don't wish to assume that.)
-		 *
-		 * XXX This argument assumes that the locallock table correctly
-		 * represents all of our fast-path locks.  While allLocks mode
-		 * guarantees to clean up all of our normal locks regardless of the
-		 * locallock situation, we lose that guarantee for fast-path locks.
-		 * This is not ideal.
-		 */
-		if (dlist_is_empty(procLocks))
-			continue;			/* needn't examine this partition */
-
-		LWLockAcquire(partitionLock, LW_EXCLUSIVE);
-
-		dlist_foreach_modify(proclock_iter, procLocks)
-		{
-			PROCLOCK   *proclock = dlist_container(PROCLOCK, procLink, proclock_iter.cur);
-			bool		wakeupNeeded = false;
-
-			Assert(proclock->tag.myProc == MyProc);
-
-			lock = proclock->tag.myLock;
-
-			/* Ignore items that are not of the lockmethod to be removed */
-			if (LOCK_LOCKMETHOD(*lock) != lockmethodid)
-				continue;
-
-			/*
-			 * In allLocks mode, force release of all locks even if locallock
-			 * table had problems
-			 */
-			if (allLocks)
-				proclock->releaseMask = proclock->holdMask;
-			else
-				Assert((proclock->releaseMask & ~proclock->holdMask) == 0);
-
-			/*
-			 * Ignore items that have nothing to be released, unless they have
-			 * holdMask == 0 and are therefore recyclable
-			 */
-			if (proclock->releaseMask == 0 && proclock->holdMask != 0)
-				continue;
-
-			PROCLOCK_PRINT("LockReleaseAll", proclock);
-			LOCK_PRINT("LockReleaseAll", lock, 0);
-			Assert(lock->nRequested >= 0);
-			Assert(lock->nGranted >= 0);
-			Assert(lock->nGranted <= lock->nRequested);
-			Assert((proclock->holdMask & ~lock->grantMask) == 0);
-
-			/*
-			 * Release the previously-marked lock modes
-			 */
-			for (i = 1; i <= numLockModes; i++)
-			{
-				if (proclock->releaseMask & LOCKBIT_ON(i))
-					wakeupNeeded |= UnGrantLock(lock, i, proclock,
-												lockMethodTable);
-			}
-			Assert((lock->nRequested >= 0) && (lock->nGranted >= 0));
-			Assert(lock->nGranted <= lock->nRequested);
-			LOCK_PRINT("LockReleaseAll: updated", lock, 0);
-
-			proclock->releaseMask = 0;
-
-			/* CleanUpLock will wake up waiters if needed. */
-			CleanUpLock(lock, proclock,
-						lockMethodTable,
-						LockTagHashCode(&lock->tag),
-						wakeupNeeded);
-		}						/* loop over PROCLOCKs within this partition */
-
-		LWLockRelease(partitionLock);
-	}							/* loop over partitions */
-
-#ifdef LOCK_DEBUG
-	if (*(lockMethodTable->trace_flag))
-		elog(LOG, "LockReleaseAll done");
-#endif
+	Assert(MyProc->fpLockBits == 0);
 }
+#endif
 
 /*
  * LockReleaseSession -- Release all session locks of the specified lock method
@@ -2438,59 +2216,41 @@ LockReleaseAll(LOCKMETHODID lockmethodid, bool allLocks)
 void
 LockReleaseSession(LOCKMETHODID lockmethodid)
 {
-	HASH_SEQ_STATUS status;
-	LOCALLOCK  *locallock;
+	dlist_mutable_iter iter;
 
 	if (lockmethodid <= 0 || lockmethodid >= lengthof(LockMethods))
 		elog(ERROR, "unrecognized lock method: %d", lockmethodid);
 
-	hash_seq_init(&status, LockMethodLocalHash);
-
-	while ((locallock = (LOCALLOCK *) hash_seq_search(&status)) != NULL)
+	dlist_foreach_modify(iter, &session_locks[lockmethodid - 1])
 	{
-		/* Ignore items that are not of the specified lock method */
-		if (LOCALLOCK_LOCKMETHOD(*locallock) != lockmethodid)
-			continue;
+		LOCALLOCKOWNER *locallockowner = dlist_container(LOCALLOCKOWNER, resowner_node, iter.cur);
 
-		ReleaseLockIfHeld(locallock, true);
+		Assert(LOCALLOCK_LOCKMETHOD(*locallockowner->locallock) == lockmethodid);
+
+		ReleaseLockIfHeld(locallockowner, true);
 	}
+
+	Assert(dlist_is_empty(&session_locks[lockmethodid - 1]));
 }
 
 /*
  * LockReleaseCurrentOwner
- *		Release all locks belonging to CurrentResourceOwner
- *
- * If the caller knows what those locks are, it can pass them as an array.
- * That speeds up the call significantly, when a lot of locks are held.
- * Otherwise, pass NULL for locallocks, and we'll traverse through our hash
- * table to find them.
+ *		Release all locks belonging to 'owner'
  */
 void
-LockReleaseCurrentOwner(LOCALLOCK **locallocks, int nlocks)
+LockReleaseCurrentOwner(ResourceOwner owner, dlist_node *resowner_node)
 {
-	if (locallocks == NULL)
-	{
-		HASH_SEQ_STATUS status;
-		LOCALLOCK  *locallock;
+	LOCALLOCKOWNER *locallockowner = dlist_container(LOCALLOCKOWNER, resowner_node, resowner_node);
 
-		hash_seq_init(&status, LockMethodLocalHash);
+	Assert(locallockowner->owner == owner);
 
-		while ((locallock = (LOCALLOCK *) hash_seq_search(&status)) != NULL)
-			ReleaseLockIfHeld(locallock, false);
-	}
-	else
-	{
-		int			i;
-
-		for (i = nlocks - 1; i >= 0; i--)
-			ReleaseLockIfHeld(locallocks[i], false);
-	}
+	ReleaseLockIfHeld(locallockowner, false);
 }
 
 /*
  * ReleaseLockIfHeld
- *		Release any session-level locks on this lockable object if sessionLock
- *		is true; else, release any locks held by CurrentResourceOwner.
+ *		Release any session-level locks on this 'locallockowner' if
+ *		sessionLock is true; else, release any locks held by 'locallockowner'.
  *
  * It is tempting to pass this a ResourceOwner pointer (or NULL for session
  * locks), but without refactoring LockRelease() we cannot support releasing
@@ -2501,52 +2261,39 @@ LockReleaseCurrentOwner(LOCALLOCK **locallocks, int nlocks)
  * convenience.
  */
 static void
-ReleaseLockIfHeld(LOCALLOCK *locallock, bool sessionLock)
+ReleaseLockIfHeld(LOCALLOCKOWNER *locallockowner, bool sessionLock)
 {
-	ResourceOwner owner;
-	LOCALLOCKOWNER *lockOwners;
-	int			i;
+	LOCALLOCK *locallock = locallockowner->locallock;
 
-	/* Identify owner for lock (must match LockRelease!) */
+	/* release all references to the lock by this resource owner */
+
 	if (sessionLock)
-		owner = NULL;
+		Assert(locallockowner->owner == NULL);
 	else
-		owner = CurrentResourceOwner;
+		Assert(locallockowner->owner != NULL);
 
-	/* Scan to see if there are any locks belonging to the target owner */
-	lockOwners = locallock->lockOwners;
-	for (i = locallock->numLockOwners - 1; i >= 0; i--)
+	/* We will still hold this lock after forgetting this ResourceOwner. */
+	if (locallockowner->nLocks < locallock->nLocks)
 	{
-		if (lockOwners[i].owner == owner)
-		{
-			Assert(lockOwners[i].nLocks > 0);
-			if (lockOwners[i].nLocks < locallock->nLocks)
-			{
-				/*
-				 * We will still hold this lock after forgetting this
-				 * ResourceOwner.
-				 */
-				locallock->nLocks -= lockOwners[i].nLocks;
-				/* compact out unused slot */
-				locallock->numLockOwners--;
-				if (owner != NULL)
-					ResourceOwnerForgetLock(owner, locallock);
-				if (i < locallock->numLockOwners)
-					lockOwners[i] = lockOwners[locallock->numLockOwners];
-			}
-			else
-			{
-				Assert(lockOwners[i].nLocks == locallock->nLocks);
-				/* We want to call LockRelease just once */
-				lockOwners[i].nLocks = 1;
-				locallock->nLocks = 1;
-				if (!LockRelease(&locallock->tag.lock,
-								 locallock->tag.mode,
-								 sessionLock))
-					elog(WARNING, "ReleaseLockIfHeld: failed??");
-			}
-			break;
-		}
+		locallock->nLocks -= locallockowner->nLocks;
+		dlist_delete(&locallockowner->locallock_node);
+
+		if (sessionLock)
+			dlist_delete(&locallockowner->resowner_node);
+		else
+			ResourceOwnerForgetLock(locallockowner);
+	}
+	else
+	{
+		Assert(locallockowner->nLocks == locallock->nLocks);
+		/* We want to call LockRelease just once */
+		locallockowner->nLocks = 1;
+		locallock->nLocks = 1;
+
+		if (!LockRelease(&locallock->tag.lock,
+						 locallock->tag.mode,
+						 sessionLock))
+			elog(WARNING, "ReleaseLockIfHeld: failed??");
 	}
 }
 
@@ -2561,75 +2308,48 @@ ReleaseLockIfHeld(LOCALLOCK *locallock, bool sessionLock)
  * and we'll traverse through our hash table to find them.
  */
 void
-LockReassignCurrentOwner(LOCALLOCK **locallocks, int nlocks)
+LockReassignCurrentOwner(ResourceOwner owner, dlist_node *resowner_node)
 {
+	LOCALLOCKOWNER *locallockowner = dlist_container(LOCALLOCKOWNER,
+													 resowner_node,
+													 resowner_node);
 	ResourceOwner parent = ResourceOwnerGetParent(CurrentResourceOwner);
 
-	Assert(parent != NULL);
-
-	if (locallocks == NULL)
-	{
-		HASH_SEQ_STATUS status;
-		LOCALLOCK  *locallock;
-
-		hash_seq_init(&status, LockMethodLocalHash);
-
-		while ((locallock = (LOCALLOCK *) hash_seq_search(&status)) != NULL)
-			LockReassignOwner(locallock, parent);
-	}
-	else
-	{
-		int			i;
-
-		for (i = nlocks - 1; i >= 0; i--)
-			LockReassignOwner(locallocks[i], parent);
-	}
+	LockReassignOwner(locallockowner, parent);
 }
 
 /*
- * Subroutine of LockReassignCurrentOwner. Reassigns a given lock belonging to
- * CurrentResourceOwner to its parent.
+ * Subroutine of LockReassignCurrentOwner. Reassigns the given
+ *'locallockowner' to 'parent'.
  */
 static void
-LockReassignOwner(LOCALLOCK *locallock, ResourceOwner parent)
+LockReassignOwner(LOCALLOCKOWNER *locallockowner, ResourceOwner parent)
 {
-	LOCALLOCKOWNER *lockOwners;
-	int			i;
-	int			ic = -1;
-	int			ip = -1;
+	dlist_iter iter;
+	LOCALLOCK *locallock = locallockowner->locallock;
 
-	/*
-	 * Scan to see if there are any locks belonging to current owner or its
-	 * parent
-	 */
-	lockOwners = locallock->lockOwners;
-	for (i = locallock->numLockOwners - 1; i >= 0; i--)
+	ResourceOwnerForgetLock(locallockowner);
+
+	dlist_foreach(iter, &locallock->locallockowners)
 	{
-		if (lockOwners[i].owner == CurrentResourceOwner)
-			ic = i;
-		else if (lockOwners[i].owner == parent)
-			ip = i;
+		LOCALLOCKOWNER *parentlocalowner = dlist_container(LOCALLOCKOWNER, locallock_node, iter.cur);
+
+		Assert(parentlocalowner->locallock == locallock);
+
+		if (parentlocalowner->owner != parent)
+			continue;
+
+		parentlocalowner->nLocks += locallockowner->nLocks;
+
+		locallockowner->nLocks = 0;
+		dlist_delete(&locallockowner->locallock_node);
+		pfree(locallockowner);
+		return;
 	}
 
-	if (ic < 0)
-		return;					/* no current locks */
-
-	if (ip < 0)
-	{
-		/* Parent has no slot, so just give it the child's slot */
-		lockOwners[ic].owner = parent;
-		ResourceOwnerRememberLock(parent, locallock);
-	}
-	else
-	{
-		/* Merge child's count with parent's */
-		lockOwners[ip].nLocks += lockOwners[ic].nLocks;
-		/* compact out unused slot */
-		locallock->numLockOwners--;
-		if (ic < locallock->numLockOwners)
-			lockOwners[ic] = lockOwners[locallock->numLockOwners];
-	}
-	ResourceOwnerForgetLock(CurrentResourceOwner, locallock);
+	/* reassign locallockowner to parent resowner */
+	locallockowner->owner = parent;
+	ResourceOwnerRememberLock(parent, locallockowner);
 }
 
 /*
@@ -3101,7 +2821,7 @@ GetLockConflicts(const LOCKTAG *locktag, LOCKMODE lockmode, int *countp)
  * We currently use this in two situations: first, to release locks held by
  * prepared transactions on commit (see lock_twophase_postcommit); and second,
  * to release locks taken via the fast-path, transferred to the main hash
- * table, and then released (see LockReleaseAll).
+ * table, and then released (see ResourceOwnerRelease).
  */
 static void
 LockRefindAndRelease(LockMethod lockMethodTable, PGPROC *proc,
@@ -3237,10 +2957,9 @@ CheckForSessionAndXactLocks(void)
 
 	while ((locallock = (LOCALLOCK *) hash_seq_search(&status)) != NULL)
 	{
-		LOCALLOCKOWNER *lockOwners = locallock->lockOwners;
 		PerLockTagEntry *hentry;
 		bool		found;
-		int			i;
+		dlist_iter iter;
 
 		/*
 		 * Ignore VXID locks.  We don't want those to be held by prepared
@@ -3261,9 +2980,13 @@ CheckForSessionAndXactLocks(void)
 			hentry->sessLock = hentry->xactLock = false;
 
 		/* Scan to see if we hold lock at session or xact level or both */
-		for (i = locallock->numLockOwners - 1; i >= 0; i--)
+		dlist_foreach(iter, &locallock->locallockowners)
 		{
-			if (lockOwners[i].owner == NULL)
+			LOCALLOCKOWNER *locallockowner = dlist_container(LOCALLOCKOWNER,
+															 locallock_node,
+															 iter.cur);
+
+			if (locallockowner->owner == NULL)
 				hentry->sessLock = true;
 			else
 				hentry->xactLock = true;
@@ -3310,10 +3033,9 @@ AtPrepare_Locks(void)
 	while ((locallock = (LOCALLOCK *) hash_seq_search(&status)) != NULL)
 	{
 		TwoPhaseLockRecord record;
-		LOCALLOCKOWNER *lockOwners = locallock->lockOwners;
 		bool		haveSessionLock;
 		bool		haveXactLock;
-		int			i;
+		dlist_iter iter;
 
 		/*
 		 * Ignore VXID locks.  We don't want those to be held by prepared
@@ -3328,9 +3050,13 @@ AtPrepare_Locks(void)
 
 		/* Scan to see whether we hold it at session or transaction level */
 		haveSessionLock = haveXactLock = false;
-		for (i = locallock->numLockOwners - 1; i >= 0; i--)
+		dlist_foreach(iter, &locallock->locallockowners)
 		{
-			if (lockOwners[i].owner == NULL)
+			LOCALLOCKOWNER *locallockowner = dlist_container(LOCALLOCKOWNER,
+															 locallock_node,
+															 iter.cur);
+
+			if (locallockowner->owner == NULL)
 				haveSessionLock = true;
 			else
 				haveXactLock = true;
@@ -3388,8 +3114,8 @@ AtPrepare_Locks(void)
  * pointers in the transaction's resource owner.  This is OK at the
  * moment since resowner.c doesn't try to free locks retail at a toplevel
  * transaction commit or abort.  We could alternatively zero out nLocks
- * and leave the LOCALLOCK entries to be garbage-collected by LockReleaseAll,
- * but that probably costs more cycles.
+ * and leave the LOCALLOCK entries to be garbage-collected by
+ * ResourceOwnerRelease, but that probably costs more cycles.
  */
 void
 PostPrepare_Locks(TransactionId xid)
@@ -3422,10 +3148,9 @@ PostPrepare_Locks(TransactionId xid)
 
 	while ((locallock = (LOCALLOCK *) hash_seq_search(&status)) != NULL)
 	{
-		LOCALLOCKOWNER *lockOwners = locallock->lockOwners;
 		bool		haveSessionLock;
 		bool		haveXactLock;
-		int			i;
+		dlist_iter iter;
 
 		if (locallock->proclock == NULL || locallock->lock == NULL)
 		{
@@ -3444,9 +3169,13 @@ PostPrepare_Locks(TransactionId xid)
 
 		/* Scan to see whether we hold it at session or transaction level */
 		haveSessionLock = haveXactLock = false;
-		for (i = locallock->numLockOwners - 1; i >= 0; i--)
+		dlist_foreach(iter, &locallock->locallockowners)
 		{
-			if (lockOwners[i].owner == NULL)
+			LOCALLOCKOWNER *locallockowner = dlist_container(LOCALLOCKOWNER,
+															 locallock_node,
+															 iter.cur);
+
+			if (locallockowner->owner == NULL)
 				haveSessionLock = true;
 			else
 				haveXactLock = true;
@@ -3461,10 +3190,6 @@ PostPrepare_Locks(TransactionId xid)
 			ereport(PANIC,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("cannot PREPARE while holding both session-level and transaction-level locks on the same object")));
-
-		/* Mark the proclock to show we need to release this lockmode */
-		if (locallock->nLocks > 0)
-			locallock->proclock->releaseMask |= LOCKBIT_ON(locallock->tag.mode);
 
 		/* And remove the locallock hashtable entry */
 		RemoveLocalLock(locallock);
@@ -3483,11 +3208,7 @@ PostPrepare_Locks(TransactionId xid)
 
 		/*
 		 * If the proclock list for this partition is empty, we can skip
-		 * acquiring the partition lock.  This optimization is safer than the
-		 * situation in LockReleaseAll, because we got rid of any fast-path
-		 * locks during AtPrepare_Locks, so there cannot be any case where
-		 * another backend is adding something to our lists now.  For safety,
-		 * though, we code this the same way as in LockReleaseAll.
+		 * acquiring the partition lock.
 		 */
 		if (dlist_is_empty(procLocks))
 			continue;			/* needn't examine this partition */
@@ -3512,14 +3233,6 @@ PostPrepare_Locks(TransactionId xid)
 			Assert(lock->nGranted >= 0);
 			Assert(lock->nGranted <= lock->nRequested);
 			Assert((proclock->holdMask & ~lock->grantMask) == 0);
-
-			/* Ignore it if nothing to release (must be a session lock) */
-			if (proclock->releaseMask == 0)
-				continue;
-
-			/* Else we should be releasing all locks */
-			if (proclock->releaseMask != proclock->holdMask)
-				elog(PANIC, "we seem to have dropped a bit somewhere");
 
 			/*
 			 * We cannot simply modify proclock->tag.myProc to reassign
@@ -4288,7 +4001,6 @@ lock_twophase_recover(TransactionId xid, uint16 info,
 		Assert(proc->lockGroupLeader == NULL);
 		proclock->groupLeader = proc;
 		proclock->holdMask = 0;
-		proclock->releaseMask = 0;
 		/* Add proclock to appropriate lists */
 		dlist_push_tail(&lock->procLocks, &proclock->lockLink);
 		dlist_push_tail(&proc->myProcLocks[partition],
@@ -4425,7 +4137,7 @@ lock_twophase_postabort(TransactionId xid, uint16 info,
  *
  *		We don't bother recording this lock in the local lock table, since it's
  *		only ever released at the end of a transaction.  Instead,
- *		LockReleaseAll() calls VirtualXactLockTableCleanup().
+ *		ProcReleaseLocks() calls VirtualXactLockTableCleanup().
  */
 void
 VirtualXactLockTableInsert(VirtualTransactionId vxid)

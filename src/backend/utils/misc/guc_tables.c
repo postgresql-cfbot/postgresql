@@ -3467,6 +3467,19 @@ struct config_int ConfigureNamesInt[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"const_merge_threshold", PGC_SUSET, STATS_MONITORING,
+			gettext_noop("Sets the minimal numer of constants in an array"
+						 " after which they will be merged"),
+			gettext_noop("Computing query id for an array of constants"
+						 " will produce the same id for all arrays with length"
+						 " larger than this value. Zero turns off merging."),
+		},
+		&const_merge_threshold,
+		0, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, 0, 0, 0, NULL, NULL, NULL

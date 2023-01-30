@@ -8278,6 +8278,32 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-const-merge-threshold" xreflabel="const_merge_treshold">
+      <term><varname>const_merge_threshold</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>const_merge_threshold</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies the minimal length of an array to be eligible for constants
+        collapsing.  Normally every element of an array contributes to a query
+        identifier, which means the same query containing an array of constants
+        could get multiple different identifiers, depending of size of the
+        array.  If this parameter is nonzero, the array contains only constants
+        and it's length is larger than <varname> const_merge_threshold </varname>,
+        then array elements will contribute nothing to the query identifier.
+        Thus the query will get the same identifier no matter how many constants
+        it contains.
+
+        Zero turns off collapsing, and it is the default value.
+
+        The <xref linkend="pgstatstatements"/> extension will represent such
+        collapsed constants via <literal>'(...)'</literal>.
+       </para>
+      </listitem>
+     </varlistentry>
+
      </variablelist>
 
     </sect2>

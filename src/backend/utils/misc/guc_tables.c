@@ -294,6 +294,12 @@ static const struct config_enum_entry compute_query_id_options[] = {
 	{NULL, 0, false}
 };
 
+static const struct config_enum_entry utility_query_id_options[] = {
+	{"string", UTILITY_QUERY_ID_STRING, false},
+	{"jumble", UTILITY_QUERY_ID_JUMBLE, false},
+	{NULL, 0, false}
+};
+
 /*
  * Although only "on", "off", and "partition" are documented, we
  * accept all the likely variants of "on" and "off".
@@ -4571,6 +4577,16 @@ struct config_enum ConfigureNamesEnum[] =
 		},
 		&compute_query_id,
 		COMPUTE_QUERY_ID_AUTO, compute_query_id_options,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"utility_query_id", PGC_SUSET, STATS_MONITORING,
+			gettext_noop("Controls method computing query ID for utilities."),
+			NULL
+		},
+		&utility_query_id,
+		UTILITY_QUERY_ID_STRING, utility_query_id_options,
 		NULL, NULL, NULL
 	},
 

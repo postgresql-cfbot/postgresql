@@ -258,6 +258,7 @@ DROP TABLE pgss_a, pgss_b CASCADE;
 -- utility commands
 --
 SET pg_stat_statements.track_utility = TRUE;
+SET utility_query_id = 'string';
 SELECT pg_stat_statements_reset();
 
 SELECT 1;
@@ -271,6 +272,22 @@ DROP FUNCTION IF EXISTS PLUS_ONE(INTEGER);
 DROP FUNCTION PLUS_TWO(INTEGER);
 
 SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
+
+SELECT pg_stat_statements_reset();
+SET utility_query_id = 'jumble';
+-- These queries have a different string, but the same parsing
+-- representation.
+Begin;
+Create Table test_utility_query (a int);
+Drop Table test_utility_query;
+Commit;
+BEGIN;
+CREATE TABLE test_utility_query (a int);
+DROP TABLE test_utility_query;
+COMMIT;
+
+SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
+RESET utility_query_id;
 
 --
 -- Track the total number of rows retrieved or affected by the utility

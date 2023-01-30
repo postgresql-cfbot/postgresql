@@ -59,8 +59,15 @@ enum ComputeQueryIdType
 	COMPUTE_QUERY_ID_REGRESS
 };
 
+enum UtilityQueryIdType
+{
+	UTILITY_QUERY_ID_STRING,
+	UTILITY_QUERY_ID_JUMBLE
+};
+
 /* GUC parameters */
 extern PGDLLIMPORT int compute_query_id;
+extern PGDLLIMPORT int utility_query_id;
 
 
 extern const char *CleanQuerytext(const char *query, int *location, int *len);

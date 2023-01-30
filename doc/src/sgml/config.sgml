@@ -8241,6 +8241,37 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-utility-query-id" xreflabel="utility_query_id">
+      <term><varname>utility_query_id</varname> (<type>enum</type>)
+      <indexterm>
+       <primary><varname>utility_query_id</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Controls the method used to compute the query identifier of a utility
+        query. Valid values are <literal>string</literal> to use a hash of the
+        query string and <literal>jumble</literal> to compute the query
+        identifier depending on the parsed tree of the utility query.
+        The default is <literal>string</literal>.
+       </para>
+       <para>
+        <literal>jumble</literal> is more costly than <literal>string</literal>
+        as the computation of the query identifier walks through the
+        post-parse-analysis representation of the queries for utility queries.
+        However, <literal>jumble</literal> is able to apply normalization
+        to the queries computed, meaning that queries written differently
+        but having the same query representation may be able to use the same
+        identifier.
+        For example, <literal>BEGIN;</literal> and <literal>begin;</literal>
+        will have the same query identifier under <literal>jumble</literal> as
+        both queries have the same query representation. The query identifier
+        would be different under <literal>string</literal>, because the query
+        strings are different.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-log-statement-stats">
       <term><varname>log_statement_stats</varname> (<type>boolean</type>)
       <indexterm>

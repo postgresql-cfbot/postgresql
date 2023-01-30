@@ -140,7 +140,7 @@ encrypt_password(PasswordType target_type, const char *role,
 			return encrypted_password;
 
 		case PASSWORD_TYPE_SCRAM_SHA_256:
-			return pg_be_scram_build_secret(password);
+			return pg_be_scram_build_secret(password, NULL, -1, 0, PG_SHA256);
 
 		case PASSWORD_TYPE_PLAINTEXT:
 			elog(ERROR, "cannot encrypt password with 'plaintext'");

@@ -7610,6 +7610,10 @@
 { oid => '3422', descr => 'SHA-512 hash',
   proname => 'sha512', proleakproof => 't', prorettype => 'bytea',
   proargtypes => 'bytea', prosrc => 'sha512_bytea' },
+{ oid => '8557', descr => 'Build a SCRAM secret',
+  proname => 'scram_build_secret', prorettype => 'text',
+  proisstrict => 'f', proargtypes => 'text text bytea int4',
+  prosrc => 'scram_build_secret_str' },
 
 # crosstype operations for date vs. timestamp and timestamptz
 { oid => '2338',

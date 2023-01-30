@@ -29,16 +29,9 @@ print $conf "port = $node_port\n";
 print $conf PostgreSQL::Test::Utils::slurp_file($ENV{TEMP_CONFIG})
   if defined $ENV{TEMP_CONFIG};
 
-if ($use_unix_sockets)
-{
-	print $conf "listen_addresses = ''\n";
-	$tempdir_short =~ s!\\!/!g if $PostgreSQL::Test::Utils::windows_os;
-	print $conf "unix_socket_directories = '$tempdir_short'\n";
-}
-else
-{
-	print $conf "listen_addresses = '127.0.0.1'\n";
-}
+print $conf "listen_addresses = ''\n";
+$tempdir_short =~ s!\\!/!g if $PostgreSQL::Test::Utils::windows_os;
+print $conf "unix_socket_directories = '$tempdir_short'\n";
 close $conf;
 my $ctlcmd = [
 	'pg_ctl', 'start', '-D', "$tempdir/data", '-l',

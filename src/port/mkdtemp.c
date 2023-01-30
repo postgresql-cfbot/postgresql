@@ -80,6 +80,10 @@ __RCSID("$NetBSD: gettemp.c,v 1.17 2014/01/21 19:09:48 seanb Exp $");
 #include <stdlib.h>
 #include <unistd.h>
 
+#ifdef WIN32
+#include <sddl.h>
+#endif
+
 #ifdef NOT_POSTGRESQL
 #if HAVE_NBTOOL_CONFIG_H
 #define GETTEMP		__nbcompat_gettemp
@@ -187,8 +191,50 @@ GETTEMP(char *path, int *doopen, int domkdir)
 		}
 		else if (domkdir)
 		{
+#ifdef WIN32
+			HANDLE				hToken = NULL;
+			DWORD				dwBufferSize = 0;
+			PTOKEN_USER			pTokenUser = NULL;
+			char			   *pSid = NULL;
+			char				pSdd[570];
+			SECURITY_ATTRIBUTES	sa = {sizeof(SECURITY_ATTRIBUTES)};
+
+			/* open the access token associated with the calling process */
+			if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hToken))
+				_dosmaperr(GetLastError());
+
+			/* get the size of the memory buffer needed for the SID */
+			(void)GetTokenInformation(hToken, TokenUser, NULL, 0, &dwBufferSize);
+
+			pTokenUser = (PTOKEN_USER)malloc(dwBufferSize);
+			memset(pTokenUser, 0, dwBufferSize);
+
+			/* retrieve the token information in a TOKEN_USER structure */
+			if (!GetTokenInformation(hToken, TokenUser, pTokenUser, dwBufferSize,
+				&dwBufferSize))
+				_dosmaperr(GetLastError());
+
+			CloseHandle(hToken);
+			ConvertSidToStringSid(pTokenUser->User.Sid, &pSid);
+			free(pTokenUser);
+
+			/*
+			 * Security descriptor for granting access to system, administrators and
+			 * current user.
+			 */
+			sprintf(pSdd, "O:%sD:(A;OICIID;FA;;;SY)(A;OICIID;FA;;;BA)(A;OICIID;FA;;;%s)",
+					pSid, pSid);
+			LocalFree(pSid);
+
+			if (ConvertStringSecurityDescriptorToSecurityDescriptor(pSdd, SDDL_REVISION_1,
+				&sa.lpSecurityDescriptor, NULL) && CreateDirectory(path, &sa))
+				return 1;
+
+			_dosmaperr(GetLastError());
+#else
 			if (mkdir(path, 0700) >= 0)
 				return 1;
+#endif
 			if (errno != EEXIST)
 				return 0;
 		}

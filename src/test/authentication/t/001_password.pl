@@ -6,18 +6,12 @@
 # - Plain
 # - MD5-encrypted
 # - SCRAM-encrypted
-# This test can only run with Unix-domain sockets.
 
 use strict;
 use warnings;
 use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
 use Test::More;
-if (!$use_unix_sockets)
-{
-	plan skip_all =>
-	  "authentication tests cannot run without Unix-domain sockets";
-}
 
 # Delete pg_hba.conf from the given node, add a new entry to it
 # and then execute a reload to refresh it.

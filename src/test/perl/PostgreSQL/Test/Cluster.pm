@@ -116,7 +116,7 @@ use PostgreSQL::Test::Utils ();
 use Time::HiRes qw(usleep);
 use Scalar::Util qw(blessed);
 
-our ($use_tcp, $test_localhost, $test_pghost, $last_host_assigned,
+our ($test_pghost,
 	$last_port_assigned, @all_nodes, $died, $portdir);
 
 # the minimum version we believe to be compatible with this package without
@@ -131,21 +131,11 @@ INIT
 
 	# Set PGHOST for backward compatibility.  This doesn't work for own_host
 	# nodes, so prefer to not rely on this when writing new tests.
-	$use_tcp            = !$PostgreSQL::Test::Utils::use_unix_sockets;
-	$test_localhost     = "127.0.0.1";
-	$last_host_assigned = 1;
-	if ($use_tcp)
-	{
-		$test_pghost = $test_localhost;
-	}
-	else
-	{
-		# On windows, replace windows-style \ path separators with / when
-		# putting socket directories either in postgresql.conf or libpq
-		# connection strings, otherwise they are interpreted as escapes.
-		$test_pghost = PostgreSQL::Test::Utils::tempdir_short;
-		$test_pghost =~ s!\\!/!g if $PostgreSQL::Test::Utils::windows_os;
-	}
+	# On windows, replace windows-style \ path separators with / when
+	# putting socket directories either in postgresql.conf or libpq
+	# connection strings, otherwise they are interpreted as escapes.
+	$test_pghost = PostgreSQL::Test::Utils::tempdir_short;
+	$test_pghost =~ s!\\!/!g if $PostgreSQL::Test::Utils::windows_os;
 	$ENV{PGHOST}     = $test_pghost;
 	$ENV{PGDATABASE} = 'postgres';
 
@@ -470,12 +460,6 @@ sub set_replication_conf
 	open my $hba, '>>', "$pgdata/pg_hba.conf";
 	print $hba
 	  "\n# Allow replication (set up by PostgreSQL::Test::Cluster.pm)\n";
-	if ($PostgreSQL::Test::Utils::windows_os
-		&& !$PostgreSQL::Test::Utils::use_unix_sockets)
-	{
-		print $hba
-		  "host replication all $test_localhost/32 sspi include_realm=1 map=regress\n";
-	}
 	close $hba;
 	return;
 }
@@ -568,16 +552,8 @@ sub init
 	}
 
 	print $conf "port = $port\n";
-	if ($use_tcp)
-	{
-		print $conf "unix_socket_directories = ''\n";
-		print $conf "listen_addresses = '$host'\n";
-	}
-	else
-	{
-		print $conf "unix_socket_directories = '$host'\n";
-		print $conf "listen_addresses = ''\n";
-	}
+	print $conf "unix_socket_directories = '$host'\n";
+	print $conf "listen_addresses = ''\n";
 	close $conf;
 
 	chmod($self->group_access ? 0640 : 0600, "$pgdata/postgresql.conf")
@@ -796,15 +772,8 @@ sub init_from_backup
 		qq(
 port = $port
 ));
-	if ($use_tcp)
-	{
-		$self->append_conf('postgresql.conf', "listen_addresses = '$host'");
-	}
-	else
-	{
-		$self->append_conf('postgresql.conf',
-			"unix_socket_directories = '$host'");
-	}
+	$self->append_conf('postgresql.conf',
+		"unix_socket_directories = '$host'");
 	$self->enable_streaming($root_node) if $params{has_streaming};
 	$self->enable_restoring($root_node, $params{standby})
 	  if $params{has_restoring};
@@ -1270,9 +1239,7 @@ sub new
 	else
 	{
 		# When selecting a port, we look for an unassigned TCP port number,
-		# even if we intend to use only Unix-domain sockets.  This is clearly
-		# necessary on $use_tcp (Windows) configurations, and it seems like a
-		# good idea on Unixen as well.
+		# even if we intend to use only Unix-domain sockets.
 		$port = get_free_port();
 	}
 
@@ -1280,17 +1247,8 @@ sub new
 	my $host = $test_pghost;
 	if ($params{own_host})
 	{
-		if ($use_tcp)
-		{
-			$last_host_assigned++;
-			$last_host_assigned > 254 and BAIL_OUT("too many own_host nodes");
-			$host = '127.0.0.' . $last_host_assigned;
-		}
-		else
-		{
-			$host = "$test_pghost/$name"; # Assume $name =~ /^[-_a-zA-Z0-9]+$/
-			mkdir $host;
-		}
+		$host = "$test_pghost/$name"; # Assume $name =~ /^[-_a-zA-Z0-9]+$/
+		mkdir $host;
 	}
 
 	my $testname = basename($0);
@@ -1526,29 +1484,11 @@ sub get_free_port
 		}
 
 		# Check to see if anything else is listening on this TCP port.
-		# Seek a port available for all possible listen_addresses values,
-		# so callers can harness this port for the widest range of purposes.
-		# The 0.0.0.0 test achieves that for MSYS, which automatically sets
-		# SO_EXCLUSIVEADDRUSE.  Testing 0.0.0.0 is insufficient for Windows
-		# native Perl (https://stackoverflow.com/a/14388707), so we also
-		# have to test individual addresses.  Doing that for 127.0.0/24
-		# addresses other than 127.0.0.1 might fail with EADDRNOTAVAIL on
-		# non-Linux, non-Windows kernels.
-		#
-		# Thus, 0.0.0.0 and individual 127.0.0/24 addresses are tested
-		# only on Windows and only when TCP usage is requested.
 		if ($found == 1)
 		{
-			foreach my $addr (qw(127.0.0.1),
-				($use_tcp && $PostgreSQL::Test::Utils::windows_os)
-				  ? qw(127.0.0.2 127.0.0.3 0.0.0.0)
-				  : ())
+			if (!can_bind(qw(127.0.0.1), $port))
 			{
-				if (!can_bind($addr, $port))
-				{
-					$found = 0;
-					last;
-				}
+				$found = 0;
 			}
 			$found = _reserve_port($port) if $found;
 		}

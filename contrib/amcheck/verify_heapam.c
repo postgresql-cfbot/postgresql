@@ -399,6 +399,9 @@ verify_heapam(PG_FUNCTION_ARGS)
 	for (ctx.blkno = first_block; ctx.blkno <= last_block; ctx.blkno++)
 	{
 		OffsetNumber maxoff;
+		OffsetNumber predecessor[MaxOffsetNumber] = {InvalidOffsetNumber};
+		OffsetNumber successor[MaxOffsetNumber] = {InvalidOffsetNumber};
+		bool		lp_valid[MaxOffsetNumber] = {false};
 
 		CHECK_FOR_INTERRUPTS();
 
@@ -433,6 +436,8 @@ verify_heapam(PG_FUNCTION_ARGS)
 		for (ctx.offnum = FirstOffsetNumber; ctx.offnum <= maxoff;
 			 ctx.offnum = OffsetNumberNext(ctx.offnum))
 		{
+			OffsetNumber nextoffnum;
+
 			ctx.itemid = PageGetItemId(ctx.page, ctx.offnum);
 
 			/* Skip over unused/dead line pointers */
@@ -469,6 +474,13 @@ verify_heapam(PG_FUNCTION_ARGS)
 					report_corruption(&ctx,
 									  psprintf("line pointer redirection to unused item at offset %u",
 											   (unsigned) rdoffnum));
+
+				/*
+				 * make entry in successor array, redirected tuple will be
+				 * validated at the time when we loop over successor array
+				 */
+				successor[ctx.offnum] = rdoffnum;
+				lp_valid[ctx.offnum] = true;
 				continue;
 			}
 
@@ -504,9 +516,268 @@ verify_heapam(PG_FUNCTION_ARGS)
 			/* It should be safe to examine the tuple's header, at least */
 			ctx.tuphdr = (HeapTupleHeader) PageGetItem(ctx.page, ctx.itemid);
 			ctx.natts = HeapTupleHeaderGetNatts(ctx.tuphdr);
+			lp_valid[ctx.offnum] = true;
 
 			/* Ok, ready to check this next tuple */
 			check_tuple(&ctx);
+
+			/*
+			 * Add the data to the successor array if next updated tuple is in
+			 * the same page. It will be used later to generate the
+			 * predecessor array.
+			 *
+			 * We need to access the tuple's header to populate the
+			 * predecessor array. However the tuple is not necessarily sanity
+			 * checked yet so delaying construction of predecessor array until
+			 * all tuples are sanity checked.
+			 */
+			nextoffnum = ItemPointerGetOffsetNumber(&(ctx.tuphdr)->t_ctid);
+			if (ItemPointerGetBlockNumber(&(ctx.tuphdr)->t_ctid) == ctx.blkno &&
+				nextoffnum != ctx.offnum)
+			{
+				successor[ctx.offnum] = nextoffnum;
+			}
+		}
+
+		/*
+		 * Loop over offset and populate predecessor array from all entries
+		 * that are present in successor array.
+		 */
+		ctx.attnum = -1;
+		for (ctx.offnum = FirstOffsetNumber; ctx.offnum <= maxoff;
+			 ctx.offnum = OffsetNumberNext(ctx.offnum))
+		{
+			ItemId		curr_lp;
+			ItemId		next_lp;
+			HeapTupleHeader curr_htup;
+			HeapTupleHeader next_htup;
+			TransactionId curr_xmax;
+			TransactionId next_xmin;
+
+			OffsetNumber nextoffnum = successor[ctx.offnum];
+
+			if (nextoffnum == InvalidOffsetNumber || !lp_valid[ctx.offnum] || !lp_valid[nextoffnum])
+			{
+				/*
+				 * Set lp_valid of nextoffnum to false if current tuple's
+				 * lp_valid is true. We don't add this to predecessor array as
+				 * it's of no use to validate tuple if its predecessor is
+				 * already corrupted but we need to identify all those tuple's
+				 * so that we can differentiate between all the cases of
+				 * missing offset in predecessor array, this will help in
+				 * validating the root of chain when we loop over predecessor
+				 * array.
+				 */
+				if (!lp_valid[ctx.offnum] && lp_valid[nextoffnum])
+					lp_valid[nextoffnum] = false;
+
+				/*
+				 * This is either the last updated tuple in the chain or a
+				 * corrupted Tuple/lp or unused/dead line pointer.
+				 */
+				continue;
+			}
+
+			curr_lp = PageGetItemId(ctx.page, ctx.offnum);
+			if (ItemIdIsRedirected(curr_lp))
+			{
+				next_lp = PageGetItemId(ctx.page, nextoffnum);
+				if (ItemIdIsRedirected(next_lp))
+				{
+					report_corruption(&ctx,
+									  psprintf("redirected line pointer pointing to another redirected line pointer at offset %u",
+											   (unsigned) nextoffnum));
+					continue;
+				}
+				next_htup = (HeapTupleHeader) PageGetItem(ctx.page, next_lp);
+				if (!HeapTupleHeaderIsHeapOnly(next_htup))
+				{
+					report_corruption(&ctx,
+									  psprintf("redirected tuple at line pointer offset %u is not heap only tuple",
+											   (unsigned) nextoffnum));
+				}
+				if ((next_htup->t_infomask & HEAP_UPDATED) == 0)
+				{
+					report_corruption(&ctx,
+									  psprintf("redirected tuple at line pointer offset %u is not heap updated tuple",
+											   (unsigned) nextoffnum));
+				}
+
+				/*
+				 * Add data related to redirected offset to predecessor array
+				 * so that we can differentiate between all the cases of
+				 * missing offset in predecessor array, this will help in
+				 * validating the root of chain when we loop over predecessor
+				 * array.
+				 */
+				predecessor[nextoffnum] = ctx.offnum;
+				continue;
+			}
+
+			/*
+			 * Add a line pointer offset to the predecessor array if xmax is
+			 * matching with xmin of next tuple (reaching via its t_ctid).
+			 * Raise corruption if we have two tuples having the same
+			 * predecessor.
+			 *
+			 * We add the offset to the predecessor array irrespective of the
+			 * transaction (t_xmin) status. We will do validation related to
+			 * the transaction status (and also all other validations) when we
+			 * loop over the predecessor array.
+			 */
+			curr_htup = (HeapTupleHeader) PageGetItem(ctx.page, curr_lp);
+			curr_xmax = HeapTupleHeaderGetUpdateXid(curr_htup);
+
+			next_lp = PageGetItemId(ctx.page, nextoffnum);
+			next_htup = (HeapTupleHeader) PageGetItem(ctx.page, next_lp);
+			next_xmin = HeapTupleHeaderGetXmin(next_htup);
+			if (TransactionIdIsValid(curr_xmax) &&
+				TransactionIdEquals(curr_xmax, next_xmin))
+			{
+				if (predecessor[nextoffnum] != InvalidOffsetNumber)
+				{
+					report_corruption(&ctx,
+									  psprintf("updated version at offset %u is also the updated version of tuple at offset %u",
+											   (unsigned) nextoffnum, (unsigned) predecessor[nextoffnum]));
+					continue;
+				}
+				predecessor[nextoffnum] = ctx.offnum;
+			}
+			else
+				lp_valid[nextoffnum] = false;
+			/* Non matching xmax with xmin is not a corruption */
+
+		}
+
+		/* Loop over offsets and validate the data in the predecessor array. */
+		for (OffsetNumber currentoffnum = FirstOffsetNumber; currentoffnum <= maxoff;
+			 currentoffnum = OffsetNumberNext(currentoffnum))
+		{
+			HeapTupleHeader pred_htup;
+			HeapTupleHeader curr_htup;
+			TransactionId pred_xmin;
+			TransactionId curr_xmin;
+			ItemId		pred_lp;
+			ItemId		curr_lp;
+			bool		pred_in_progress;
+			XidBoundsViolation xid_status;
+
+			ctx.offnum = predecessor[currentoffnum];
+			ctx.attnum = -1;
+
+			if (!lp_valid[currentoffnum])
+				continue;
+
+			curr_lp = PageGetItemId(ctx.page, currentoffnum);
+			if (ItemIdIsRedirected(curr_lp))
+				continue;
+
+			curr_htup = (HeapTupleHeader) PageGetItem(ctx.page, curr_lp);
+			curr_xmin = HeapTupleHeaderGetXmin(curr_htup);
+			xid_status = get_xid_status(curr_xmin, &ctx, NULL);
+			if (!(xid_status == XID_BOUNDS_OK || xid_status == XID_INVALID))
+				continue;
+
+			if (ctx.offnum == InvalidOffsetNumber)
+			{
+				/*
+				 * No harm in overriding value of ctx.offnum as we will always
+				 * continue if we are here.
+				 */
+				ctx.offnum = currentoffnum;
+				if (TransactionIdIsInProgress(curr_xmin) || TransactionIdDidCommit(curr_xmin))
+				{
+					/* Root of chain must not be HEAP_ONLY_TUPLE. */
+					if (HeapTupleHeaderIsHeapOnly(curr_htup))
+					{
+						report_corruption(&ctx,
+										  psprintf("tuple is root of chain but it is marked as heap-only tuple"));
+					}
+					continue;
+				}
+				else
+				{
+					/*
+					 * xmin aborted tuple from an abandoned portion of the
+					 * chain.
+					 */
+					continue;
+				}
+			}
+
+			ctx.itemid = pred_lp = PageGetItemId(ctx.page, ctx.offnum);
+
+			/*
+			 * Redirected LP were validated previously, so don't need any
+			 * validation.
+			 */
+			if (ItemIdIsRedirected(pred_lp))
+				continue;
+
+			pred_htup = (HeapTupleHeader) PageGetItem(ctx.page, pred_lp);
+			pred_xmin = HeapTupleHeaderGetXmin(pred_htup);
+			xid_status = get_xid_status(pred_xmin, &ctx, NULL);
+			if (!(xid_status == XID_BOUNDS_OK || xid_status == XID_INVALID))
+				continue;
+
+			/*
+			 * If the predecessor's xmin is in progress then current tuple's
+			 * xmin should either be aborted (in case of subtransaction) or
+			 * in-progress.
+			 */
+			pred_in_progress = TransactionIdIsInProgress(pred_xmin);
+			if (pred_in_progress || TransactionIdDidCommit(curr_xmin))
+			{
+				/* Re-check to avoid race condition */
+				if (TransactionIdIsInProgress(pred_xmin))
+				{
+					report_corruption(&ctx,
+									  psprintf("tuple with in-progress xmin %u was updated to produce a tuple at offset %u with committed xmin %u",
+											   (unsigned) pred_xmin, (unsigned) currentoffnum, (unsigned) curr_xmin));
+				}
+				else
+				{
+					pred_in_progress = false;
+				}
+			}
+
+			/* raise corruption if pred_xmin is aborted but curr_xmin is not */
+			if (!pred_in_progress && !TransactionIdDidCommit(pred_xmin))
+			{
+				if (TransactionIdIsInProgress(curr_xmin))
+					report_corruption(&ctx,
+									  psprintf("tuple with aborted xmin %u was updated to produce a tuple at offset %u with in-progress xmin %u",
+											   (unsigned) pred_xmin, (unsigned) currentoffnum, (unsigned) curr_xmin));
+				else if (TransactionIdDidCommit(curr_xmin))
+					report_corruption(&ctx,
+									  psprintf("tuple with aborted xmin %u was updated to produce a tuple at offset %u with committed xmin %u",
+											   (unsigned) pred_xmin, (unsigned) currentoffnum, (unsigned) curr_xmin));
+
+			}
+
+			/*
+			 * If the current tuple is HOT then it's predecessor's tuple must
+			 * be HEAP_HOT_UPDATED.
+			 */
+			if (!HeapTupleHeaderIsHotUpdated(pred_htup) &&
+				HeapTupleHeaderIsHeapOnly(curr_htup))
+			{
+				report_corruption(&ctx,
+								  psprintf("non-heap-only update produced a heap-only tuple at offset %u",
+										   (unsigned) currentoffnum));
+			}
+
+			/*
+			 * If the current tuple is not HOT then its predecessor's tuple
+			 * must not be HEAP_HOT_UPDATED.
+			 */
+			if (HeapTupleHeaderIsHotUpdated(pred_htup) &&
+				!HeapTupleHeaderIsHeapOnly(curr_htup))
+			{
+				report_corruption(&ctx,
+								  psprintf("heap-only update produced a non-heap only tuple at offset %u",
+										   (unsigned) currentoffnum));
+			}
 		}
 
 		/* clean up */
@@ -638,6 +909,7 @@ check_tuple_header(HeapCheckContext *ctx)
 {
 	HeapTupleHeader tuphdr = ctx->tuphdr;
 	uint16		infomask = tuphdr->t_infomask;
+	TransactionId curr_xmax = HeapTupleHeaderGetUpdateXid(tuphdr);
 	bool		result = true;
 	unsigned	expected_hoff;
 
@@ -649,6 +921,12 @@ check_tuple_header(HeapCheckContext *ctx)
 		result = false;
 	}
 
+	if (!TransactionIdIsValid(curr_xmax) && HeapTupleHeaderIsHotUpdated(tuphdr))
+	{
+		report_corruption(ctx,
+						  psprintf("tuple has been HOT updated, but xmax is 0"));
+		result = false;
+	}
 	if ((ctx->tuphdr->t_infomask & HEAP_XMAX_COMMITTED) &&
 		(ctx->tuphdr->t_infomask & HEAP_XMAX_IS_MULTI))
 	{

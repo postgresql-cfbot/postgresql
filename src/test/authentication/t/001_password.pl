@@ -115,6 +115,74 @@ is($res, 't',
 	"users with trust authentication use SYSTEM_USER = NULL in parallel workers"
 );
 
+# All positive require_auth options should fail...
+$node->connect_fails("user=scram_role require_auth=gss",
+	"GSS authentication can be required: fails with trust auth",
+	expected_stderr => qr/server did not complete authentication/);
+$node->connect_fails("user=scram_role require_auth=sspi",
+	"SSPI authentication can be required: fails with trust auth",
+	expected_stderr => qr/server did not complete authentication/);
+$node->connect_fails("user=scram_role require_auth=password",
+	"password authentication can be required: fails with trust auth",
+	expected_stderr => qr/server did not complete authentication/);
+$node->connect_fails("user=scram_role require_auth=md5",
+	"md5 authentication can be required: fails with trust auth",
+	expected_stderr => qr/server did not complete authentication/);
+$node->connect_fails("user=scram_role require_auth=scram-sha-256",
+	"SCRAM authentication can be required: fails with trust auth",
+	expected_stderr => qr/server did not complete authentication/);
+$node->connect_fails("user=scram_role require_auth=password,scram-sha-256",
+	"multiple authentication types can be required: fails with trust auth",
+	expected_stderr => qr/server did not complete authentication/);
+
+# ...and negative require_auth options should succeed.
+$node->connect_ok("user=scram_role require_auth=!gss",
+	"GSS authentication can be forbidden: succeeds with trust auth");
+$node->connect_ok("user=scram_role require_auth=!sspi",
+	"SSPI authentication can be forbidden: succeeds with trust auth");
+$node->connect_ok("user=scram_role require_auth=!password",
+	"password authentication can be forbidden: succeeds with trust auth");
+$node->connect_ok("user=scram_role require_auth=!md5",
+	"md5 authentication can be forbidden: succeeds with trust auth");
+$node->connect_ok("user=scram_role require_auth=!scram-sha-256",
+	"SCRAM authentication can be forbidden: succeeds with trust auth");
+$node->connect_ok("user=scram_role require_auth=!password,!scram-sha-256",
+	"multiple authentication types can be forbidden: succeeds with trust auth");
+
+# require_auth=[!]none should interact correctly with trust auth.
+$node->connect_ok("user=scram_role require_auth=none",
+	"all authentication can be forbidden: succeeds with trust auth");
+$node->connect_fails("user=scram_role require_auth=!none",
+	"any authentication can be required: fails with trust auth",
+	expected_stderr => qr/server did not complete authentication/);
+
+# Negative and positive require_auth options can't be mixed.
+$node->connect_fails("user=scram_role require_auth=scram-sha-256,!md5",
+	"negative require_auth methods can't be mixed with positive",
+	expected_stderr => qr/negative require_auth method "!md5" cannot be mixed with non-negative methods/);
+$node->connect_fails("user=scram_role require_auth=!password,scram-sha-256",
+	"positive require_auth methods can't be mixed with negative",
+	expected_stderr => qr/require_auth method "scram-sha-256" cannot be mixed with negative methods/);
+
+# require_auth methods can't be duplicated.
+$node->connect_fails("user=scram_role require_auth=password,md5,password",
+	"require_auth methods can't be duplicated: positive case",
+	expected_stderr => qr/require_auth method "password" is specified more than once/);
+$node->connect_fails("user=scram_role require_auth=!password,!md5,!password",
+	"require_auth methods can't be duplicated: negative case",
+	expected_stderr => qr/require_auth method "!password" is specified more than once/);
+$node->connect_fails("user=scram_role require_auth=none,md5,none",
+	"require_auth methods can't be duplicated: none case",
+	expected_stderr => qr/require_auth method "none" is specified more than once/);
+$node->connect_fails("user=scram_role require_auth=!none,!md5,!none",
+	"require_auth methods can't be duplicated: !none case",
+	expected_stderr => qr/require_auth method "!none" is specified more than once/);
+
+# Unknown require_auth methods are caught.
+$node->connect_fails("user=scram_role require_auth=none,abcdefg",
+	"unknown require_auth methods are rejected",
+	expected_stderr => qr/invalid require_auth method: "abcdefg"/);
+
 # For plain "password" method, all users should also be able to connect.
 reset_pg_hba($node, 'all', 'all', 'password');
 test_conn($node, 'user=scram_role', 'password', 0,
@@ -123,6 +191,33 @@ test_conn($node, 'user=scram_role', 'password', 0,
 test_conn($node, 'user=md5_role', 'password', 0,
 	log_like =>
 	  [qr/connection authenticated: identity="md5_role" method=password/]);
+
+# require_auth should succeed with a plaintext password...
+$node->connect_ok("user=scram_role require_auth=password",
+	"password authentication can be required: works with password auth");
+$node->connect_ok("user=scram_role require_auth=!none",
+	"any authentication can be required: works with password auth");
+$node->connect_ok("user=scram_role require_auth=scram-sha-256,password,md5",
+	"multiple authentication types can be required: works with password auth");
+
+# ...fail for other auth types...
+$node->connect_fails("user=scram_role require_auth=md5",
+	"md5 authentication can be required: fails with password auth",
+	expected_stderr => qr/server requested a cleartext password/);
+$node->connect_fails("user=scram_role require_auth=scram-sha-256",
+	"SCRAM authentication can be required: fails with password auth",
+	expected_stderr => qr/server requested a cleartext password/);
+$node->connect_fails("user=scram_role require_auth=none",
+	"all authentication can be forbidden: fails with password auth",
+	expected_stderr => qr/server requested a cleartext password/);
+
+# ...and allow password authentication to be prohibited.
+$node->connect_fails("user=scram_role require_auth=!password",
+	"password authentication can be forbidden: fails with password auth",
+	expected_stderr => qr/server requested a cleartext password/);
+$node->connect_fails("user=scram_role require_auth=!password,!md5,!scram-sha-256",
+	"multiple authentication types can be forbidden: fails with password auth",
+	expected_stderr => qr/server requested a cleartext password/);
 
 # For "scram-sha-256" method, user "scram_role" should be able to connect.
 reset_pg_hba($node, 'all', 'all', 'scram-sha-256');
@@ -136,6 +231,33 @@ test_conn(
 	]);
 test_conn($node, 'user=md5_role', 'scram-sha-256', 2,
 	log_unlike => [qr/connection authenticated:/]);
+
+# require_auth should succeed with SCRAM...
+$node->connect_ok("user=scram_role require_auth=scram-sha-256",
+	"SCRAM authentication can be required: works with SCRAM auth");
+$node->connect_ok("user=scram_role require_auth=!none",
+	"any authentication can be required: works with SCRAM auth");
+$node->connect_ok("user=scram_role require_auth=password,scram-sha-256,md5",
+	"multiple authentication types can be required: works with SCRAM auth");
+
+# ...fail for other auth types...
+$node->connect_fails("user=scram_role require_auth=password",
+	"password authentication can be required: fails with SCRAM auth",
+	expected_stderr => qr/server requested unacceptable SASL mechanism "SCRAM-SHA-256"/);
+$node->connect_fails("user=scram_role require_auth=md5",
+	"md5 authentication can be required: fails with SCRAM auth",
+	expected_stderr => qr/server requested unacceptable SASL mechanism "SCRAM-SHA-256"/);
+$node->connect_fails("user=scram_role require_auth=none",
+	"all authentication can be forbidden: fails with SCRAM auth",
+	expected_stderr => qr/server requested unacceptable SASL mechanism "SCRAM-SHA-256"/);
+
+# ...and allow SCRAM authentication to be prohibited.
+$node->connect_fails("user=scram_role require_auth=!scram-sha-256",
+	"SCRAM authentication can be forbidden: fails with SCRAM auth",
+	expected_stderr => qr/server requested unacceptable SASL mechanism "SCRAM-SHA-256"/);
+$node->connect_fails("user=scram_role require_auth=!password,!md5,!scram-sha-256",
+	"multiple authentication types can be forbidden: fails with SCRAM auth",
+	expected_stderr => qr/server requested unacceptable SASL mechanism "SCRAM-SHA-256"/);
 
 # Test that bad passwords are rejected.
 $ENV{"PGPASSWORD"} = 'badpass';
@@ -152,6 +274,33 @@ test_conn($node, 'user=scram_role', 'md5', 0,
 test_conn($node, 'user=md5_role', 'md5', 0,
 	log_like =>
 	  [qr/connection authenticated: identity="md5_role" method=md5/]);
+
+# require_auth should succeed with MD5...
+$node->connect_ok("user=md5_role require_auth=md5",
+	"MD5 authentication can be required: works with MD5 auth");
+$node->connect_ok("user=md5_role require_auth=!none",
+	"any authentication can be required: works with MD5 auth");
+$node->connect_ok("user=md5_role require_auth=md5,scram-sha-256,password",
+	"multiple authentication types can be required: works with MD5 auth");
+
+# ...fail for other auth types...
+$node->connect_fails("user=md5_role require_auth=password",
+	"password authentication can be required: fails with MD5 auth",
+	expected_stderr => qr/server requested a hashed password/);
+$node->connect_fails("user=md5_role require_auth=scram-sha-256",
+	"SCRAM authentication can be required: fails with MD5 auth",
+	expected_stderr => qr/server requested a hashed password/);
+$node->connect_fails("user=md5_role require_auth=none",
+	"all authentication can be forbidden: fails with MD5 auth",
+	expected_stderr => qr/server requested a hashed password/);
+
+# ...and allow MD5 authentication to be prohibited.
+$node->connect_fails("user=md5_role require_auth=!md5",
+	"password authentication can be forbidden: fails with MD5 auth",
+	expected_stderr => qr/server requested a hashed password/);
+$node->connect_fails("user=md5_role require_auth=!password,!md5,!scram-sha-256",
+	"multiple authentication types can be forbidden: fails with MD5 auth",
+	expected_stderr => qr/server requested a hashed password/);
 
 # Test SYSTEM_USER <> NULL with parallel workers.
 $node->safe_psql(

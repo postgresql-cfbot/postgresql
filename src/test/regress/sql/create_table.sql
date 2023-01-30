@@ -106,10 +106,17 @@ CREATE TABLE partitioned (
 	a2 int
 ) PARTITION BY LIST (a1, a2);	-- fail
 
--- unsupported constraint type for partitioned tables
+-- exclusion constraint type for partitioned tables
 CREATE TABLE partitioned (
-	a int,
-	EXCLUDE USING gist (a WITH &&)
+	a int4range,
+	EXCLUDE USING gist (a WITH =)
+) PARTITION BY RANGE (a);
+DROP TABLE partitioned;
+
+-- unsupported exclusion constraint operator for partitioned tables
+CREATE TABLE partitioned (
+	a int4range,
+	EXCLUDE USING gist (a WITH -|-)
 ) PARTITION BY RANGE (a);
 
 -- prevent using prohibited expressions in the key

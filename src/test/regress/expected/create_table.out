@@ -153,14 +153,18 @@ CREATE TABLE partitioned (
 	a2 int
 ) PARTITION BY LIST (a1, a2);	-- fail
 ERROR:  cannot use "list" partition strategy with more than one column
--- unsupported constraint type for partitioned tables
+-- exclusion constraint type for partitioned tables
 CREATE TABLE partitioned (
-	a int,
-	EXCLUDE USING gist (a WITH &&)
+	a int4range,
+	EXCLUDE USING gist (a WITH =)
 ) PARTITION BY RANGE (a);
-ERROR:  exclusion constraints are not supported on partitioned tables
-LINE 3:  EXCLUDE USING gist (a WITH &&)
-         ^
+DROP TABLE partitioned;
+-- unsupported exclusion constraint operator for partitioned tables
+CREATE TABLE partitioned (
+	a int4range,
+	EXCLUDE USING gist (a WITH -|-)
+) PARTITION BY RANGE (a);
+ERROR:  cannot match partition key to index on column "a" using non-equal operator "-|-".
 -- prevent using prohibited expressions in the key
 CREATE FUNCTION retset (a int) RETURNS SETOF int AS $$ SELECT 1; $$ LANGUAGE SQL IMMUTABLE;
 CREATE TABLE partitioned (

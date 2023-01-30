@@ -709,11 +709,6 @@ DefineIndex(Oid relationId,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("cannot create index on partitioned table \"%s\" concurrently",
 							RelationGetRelationName(rel))));
-		if (stmt->excludeOpNames)
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("cannot create exclusion constraints on partitioned table \"%s\"",
-							RelationGetRelationName(rel))));
 	}
 
 	/*
@@ -926,7 +921,7 @@ DefineIndex(Oid relationId,
 	 * We could lift this limitation if we had global indexes, but those have
 	 * their own problems, so this is a useful feature combination.
 	 */
-	if (partitioned && (stmt->unique || stmt->primary))
+	if (partitioned && (stmt->unique || stmt->primary || stmt->excludeOpNames != NIL))
 	{
 		PartitionKey key = RelationGetPartitionKey(rel);
 		const char *constraint_type;
@@ -983,6 +978,8 @@ DefineIndex(Oid relationId,
 			 */
 			if (accessMethodId == BTREE_AM_OID)
 				eq_strategy = BTEqualStrategyNumber;
+			else if (accessMethodId == GIST_AM_OID)
+				eq_strategy = RTEqualStrategyNumber;
 			else
 				ereport(ERROR,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
@@ -1020,8 +1017,41 @@ DefineIndex(Oid relationId,
 													   idx_opcintype,
 													   idx_opcintype,
 													   eq_strategy);
+
 						if (ptkey_eqop == idx_eqop)
 						{
+							/* For exclusion constraints, fail on columns that don't compare for equality. */
+							if (stmt->excludeOpNames != NIL)
+							{
+								if (idx_eqop != indexInfo->ii_ExclusionOps[j])
+								{
+									Form_pg_attribute att;
+
+									att = TupleDescAttr(RelationGetDescr(rel),
+														key->partattrs[i] - 1);
+									ereport(ERROR,
+											(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+											 errmsg("cannot match partition key to index on column \"%s\" using non-equal operator \"%s\".",
+													NameStr(att->attname), get_opname(indexInfo->ii_ExclusionOps[j]))));
+								}
+
+								/*
+								 * Require a matching collation too.
+								 * This should have been set correctly above, but it doesn't hurt to check.
+								 */
+								if (key->partcollation[i] != collationObjectId[j])
+								{
+									Form_pg_attribute att;
+
+									att = TupleDescAttr(RelationGetDescr(rel),
+														key->partattrs[i] - 1);
+									ereport(ERROR,
+											(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+											 errmsg("cannot match partition key to index on column \"%s\" using collation \"%s\".",
+													NameStr(att->attname), get_collation_name(collationObjectId[j]))));
+								}
+							}
+
 							found = true;
 							break;
 						}

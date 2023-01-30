@@ -3797,16 +3797,35 @@ Referenced by:
     TABLE "ataddindex" CONSTRAINT "ataddindex_ref_id_fkey" FOREIGN KEY (ref_id) REFERENCES ataddindex(id)
 
 DROP TABLE ataddindex;
--- unsupported constraint types for partitioned tables
+-- supported exclusion constraint parts for partitioned tables
+CREATE TABLE partitioned (
+	a int4range,
+	b int4range
+) PARTITION BY RANGE (a);
+ALTER TABLE partitioned ADD EXCLUDE USING gist (a WITH =);
+DROP TABLE partitioned;
+-- unsupported exclusion constraint parts for partitioned tables
+CREATE TABLE partitioned (
+	a int4range,
+	b int4range
+) PARTITION BY RANGE (a, b);
+ALTER TABLE partitioned ADD EXCLUDE USING gist (a WITH =);
+ERROR:  unique constraint on partitioned table must include all partitioning columns
+DETAIL:  EXCLUDE constraint on table "partitioned" lacks column "b" which is part of the partition key.
+DROP TABLE partitioned;
+-- unsupported exclusion constraint operator for partitioned tables
+CREATE TABLE partitioned (
+	a int4range,
+	b int4range
+) PARTITION BY RANGE (a, b);
+ALTER TABLE partitioned ADD EXCLUDE USING gist (a WITH -|-);
+ERROR:  cannot match partition key to index on column "a" using non-equal operator "-|-".
+DROP TABLE partitioned;
+-- cannot drop column that is part of the partition key
 CREATE TABLE partitioned (
 	a int,
 	b int
 ) PARTITION BY RANGE (a, (a+b+1));
-ALTER TABLE partitioned ADD EXCLUDE USING gist (a WITH &&);
-ERROR:  exclusion constraints are not supported on partitioned tables
-LINE 1: ALTER TABLE partitioned ADD EXCLUDE USING gist (a WITH &&);
-                                    ^
--- cannot drop column that is part of the partition key
 ALTER TABLE partitioned DROP COLUMN a;
 ERROR:  cannot drop column "a" because it is part of the partition key of relation "partitioned"
 ALTER TABLE partitioned ALTER COLUMN a TYPE char(5);

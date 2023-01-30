@@ -35,7 +35,7 @@ typedef struct rewind_source
 	 * handy for text files.
 	 */
 	char	   *(*fetch_file) (struct rewind_source *, const char *path,
-							   size_t *filesize);
+							   size_t *filesize, bool noerror);
 
 	/*
 	 * Request to fetch (part of) a file in the source system, specified by an

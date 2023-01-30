@@ -188,6 +188,11 @@ primary_conninfo='$connstr_primary'
 
 sub promote_standby
 {
+	my (%options) = (
+		'skip_checkpoint' => 0,
+		@_
+	);
+
 	#### Now run the test-specific parts to run after standby has been started
 	# up standby
 
@@ -198,13 +203,16 @@ sub promote_standby
 	# the primary out-of-sync with the standby.
 	$node_standby->promote;
 
-	# Force a checkpoint after the promotion. pg_rewind looks at the control
-	# file to determine what timeline the server is on, and that isn't updated
-	# immediately at promotion, but only at the next checkpoint. When running
-	# pg_rewind in remote mode, it's possible that we complete the test steps
-	# after promotion so quickly that when pg_rewind runs, the standby has not
-	# performed a checkpoint after promotion yet.
-	standby_psql("checkpoint");
+	unless ($options{'skip_checkpoint'})
+	{
+		# Force a checkpoint after the promotion. pg_rewind looks at the control
+		# file to determine what timeline the server is on, and that isn't updated
+		# immediately at promotion, but only at the next checkpoint. When running
+		# pg_rewind in remote mode, it's possible that we complete the test steps
+		# after promotion so quickly that when pg_rewind runs, the standby has not
+		# performed a checkpoint after promotion yet.
+		standby_psql("checkpoint");
+	}
 
 	return;
 }

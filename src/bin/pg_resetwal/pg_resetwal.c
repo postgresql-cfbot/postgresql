@@ -50,6 +50,7 @@
 #include "access/xlog.h"
 #include "access/xlog_internal.h"
 #include "common/controldata_utils.h"
+#include "common/controllog_utils.h"
 #include "common/fe_memutils.h"
 #include "common/file_perm.h"
 #include "common/logging.h"
@@ -885,6 +886,9 @@ RewriteControlFile(void)
 
 	/* The control file gets flushed here. */
 	update_controlfile(".", &ControlFile, true);
+
+	/* Put information into operation log. */
+	put_operation_log_element(".", OLT_RESETWAL);
 }
 
 

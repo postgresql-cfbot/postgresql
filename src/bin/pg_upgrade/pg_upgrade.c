@@ -194,6 +194,8 @@ main(int argc, char **argv)
 		check_ok();
 	}
 
+	copy_operation_log();
+
 	create_script_for_old_cluster_deletion(&deletion_script_file_name);
 
 	issue_warnings_and_set_wal_level();

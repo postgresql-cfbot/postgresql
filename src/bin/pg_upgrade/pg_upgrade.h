@@ -264,6 +264,7 @@ typedef struct
 	uint32		major_version;	/* PG_VERSION of cluster */
 	char		major_version_str[64];	/* string PG_VERSION of cluster */
 	uint32		bin_version;	/* version returned from pg_ctl */
+	uint32		bin_version_num;	/* full version (incl. minor part) returned from pg_ctl */
 	const char *tablespace_suffix;	/* directory specification */
 } ClusterInfo;
 
@@ -348,6 +349,7 @@ void		create_script_for_old_cluster_deletion(char **deletion_script_file_name);
 void		get_control_data(ClusterInfo *cluster, bool live_check);
 void		check_control_data(ControlData *oldctrl, ControlData *newctrl);
 void		disable_old_cluster(void);
+void		copy_operation_log(void);
 
 
 /* dump.c */

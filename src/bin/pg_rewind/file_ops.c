@@ -355,6 +355,26 @@ slurpFile(const char *datadir, const char *path, size_t *filesize)
 }
 
 /*
+ * Try to open file.
+ * Returns true if file exists.
+ */
+bool
+check_file_exists(const char *datadir, const char *path)
+{
+	struct		stat st;
+	char		name[MAXPGPATH];
+
+	snprintf(name, sizeof(name), "%s/%s", datadir, path);
+
+	if (stat(name, &st) == 0)
+		return !S_ISDIR(st.st_mode);
+	else if (!(errno == ENOENT || errno == ENOTDIR))
+		pg_fatal("could not access file \"%s\": %m", name);
+
+	return false;
+}
+
+/*
  * Traverse through all files in a data directory, calling 'callback'
  * for each file.
  */

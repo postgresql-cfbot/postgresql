@@ -37,7 +37,8 @@ get_bin_version(ClusterInfo *cluster)
 	FILE	   *output;
 	int			rc;
 	int			v1 = 0,
-				v2 = 0;
+				v2 = 0,
+				v3 = 0;
 
 	snprintf(cmd, sizeof(cmd), "\"%s/pg_ctl\" --version", cluster->bindir);
 	fflush(NULL);
@@ -52,18 +53,20 @@ get_bin_version(ClusterInfo *cluster)
 		pg_fatal("could not get pg_ctl version data using %s: %s",
 				 cmd, wait_result_to_str(rc));
 
-	if (sscanf(cmd_output, "%*s %*s %d.%d", &v1, &v2) < 1)
-		pg_fatal("could not get pg_ctl version output from %s", cmd);
+	if (sscanf(cmd_output, "%*s %*s %d.%d.%d", &v1, &v2, &v3) < 1)
+		pg_fatal("could not get pg_ctl version output from %s\n", cmd);
 
 	if (v1 < 10)
 	{
 		/* old style, e.g. 9.6.1 */
 		cluster->bin_version = v1 * 10000 + v2 * 100;
+		cluster->bin_version_num = (cluster->bin_version + v3) * 100;
 	}
 	else
 	{
 		/* new style, e.g. 10.1 */
 		cluster->bin_version = v1 * 10000;
+		cluster->bin_version_num = (cluster->bin_version + v2) * 100;
 	}
 }
 

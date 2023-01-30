@@ -23,6 +23,7 @@ OBJS = \
 	help_config.o \
 	pg_config.o \
 	pg_controldata.o \
+	pg_controllog.o \
 	pg_rusage.o \
 	ps_status.o \
 	queryenvironment.o \

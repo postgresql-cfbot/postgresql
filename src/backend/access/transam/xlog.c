@@ -68,6 +68,7 @@
 #include "catalog/pg_control.h"
 #include "catalog/pg_database.h"
 #include "common/controldata_utils.h"
+#include "common/controllog_utils.h"
 #include "common/file_utils.h"
 #include "executor/instrument.h"
 #include "miscadmin.h"
@@ -4777,6 +4778,9 @@ BootStrapXLOG(void)
 	/* some additional ControlFile fields are set in WriteControlFile() */
 	WriteControlFile();
 
+	/* Put information into operation log. */
+	put_operation_log_element(DataDir, OLT_BOOTSTRAP);
+
 	/* Bootstrap the commit log, too */
 	BootStrapCLOG();
 	BootStrapCommitTs();
@@ -5745,7 +5749,13 @@ StartupXLOG(void)
 	SpinLockRelease(&XLogCtl->info_lck);
 
 	UpdateControlFile();
+
 	LWLockRelease(ControlFileLock);
+
+	/* Put information into operation log. */
+	if (promoted)
+		put_operation_log_element(DataDir, OLT_PROMOTED);
+	put_operation_log_element(DataDir, OLT_STARTUP);
 
 	/*
 	 * Shutdown the recovery environment.  This must occur after

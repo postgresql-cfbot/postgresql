@@ -5,6 +5,7 @@ common_sources = files(
   'checksum_helper.c',
   'compression.c',
   'controldata_utils.c',
+  'controllog_utils.c',
   'encnames.c',
   'exec.c',
   'file_perm.c',

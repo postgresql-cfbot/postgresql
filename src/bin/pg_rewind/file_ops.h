@@ -26,4 +26,6 @@ extern char *slurpFile(const char *datadir, const char *path, size_t *filesize);
 typedef void (*process_file_callback_t) (const char *path, file_type_t type, size_t size, const char *link_target);
 extern void traverse_datadir(const char *datadir, process_file_callback_t callback);
 
+extern bool check_file_exists(const char *datadir, const char *path);
+
 #endif							/* FILE_OPS_H */

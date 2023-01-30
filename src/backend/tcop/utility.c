@@ -1446,7 +1446,8 @@ ProcessUtilitySlow(ParseState *pstate,
 							address = DefineCollation(pstate,
 													  stmt->defnames,
 													  stmt->definition,
-													  stmt->if_not_exists);
+													  stmt->if_not_exists,
+													  &secondaryObject);
 							break;
 						default:
 							elog(ERROR, "unrecognized define stmt type: %d",
@@ -1665,8 +1666,11 @@ ProcessUtilitySlow(ParseState *pstate,
 				break;
 
 			case T_CreateTableAsStmt:
+				EventTriggerTableInitWriteStart(parsetree);
 				address = ExecCreateTableAs(pstate, (CreateTableAsStmt *) parsetree,
 											params, queryEnv, qc);
+				EventTriggerTableInitWriteEnd(address);
+				commandCollected = true;
 				break;
 
 			case T_RefreshMatViewStmt:
@@ -1834,14 +1838,20 @@ ProcessUtilitySlow(ParseState *pstate,
 
 			case T_CreatePublicationStmt:
 				address = CreatePublication(pstate, (CreatePublicationStmt *) parsetree);
+
+				/*
+				 * CreatePublication calls EventTriggerCollectCreatePublication
+				 * directly
+				 */
+				commandCollected = true;
 				break;
 
 			case T_AlterPublicationStmt:
 				AlterPublication(pstate, (AlterPublicationStmt *) parsetree);
 
 				/*
-				 * AlterPublication calls EventTriggerCollectSimpleCommand
-				 * directly
+				 * AlterPublication calls EventTriggerCollectSimpleCommand and
+				 * EventTriggerCollectAlterPublication directly
 				 */
 				commandCollected = true;
 				break;
@@ -2196,6 +2206,96 @@ UtilityContainsQuery(Node *parsetree)
 	}
 }
 
+/*
+ * Return the given object type as a string.
+ */
+const char *
+stringify_objtype(ObjectType objtype, bool isgrant)
+{
+	switch (objtype)
+	{
+		case OBJECT_AGGREGATE:
+			return "AGGREGATE";
+		case OBJECT_CAST:
+			return "CAST";
+		case OBJECT_COLLATION:
+			return "COLLATION";
+		case OBJECT_COLUMN:
+			return isgrant ? "TABLE" : "COLUMN";
+		case OBJECT_CONVERSION:
+			return "CONVERSION";
+		case OBJECT_DATABASE:
+			return "DATABASE";
+		case OBJECT_DOMAIN:
+			return "DOMAIN";
+		case OBJECT_EVENT_TRIGGER:
+			return "EVENT TRIGGER";
+		case OBJECT_EXTENSION:
+			return "EXTENSION";
+		case OBJECT_FDW:
+			return "FOREIGN DATA WRAPPER";
+		case OBJECT_FOREIGN_SERVER:
+			return isgrant ? "FOREIGN SERVER" : "SERVER";
+		case OBJECT_FOREIGN_TABLE:
+			return "FOREIGN TABLE";
+		case OBJECT_FUNCTION:
+			return "FUNCTION";
+		case OBJECT_INDEX:
+			return "INDEX";
+		case OBJECT_LANGUAGE:
+			return "LANGUAGE";
+		case OBJECT_LARGEOBJECT:
+			return "LARGE OBJECT";
+		case OBJECT_MATVIEW:
+			return "MATERIALIZED VIEW";
+		case OBJECT_OPCLASS:
+			return "OPERATOR CLASS";
+		case OBJECT_OPERATOR:
+			return "OPERATOR";
+		case OBJECT_OPFAMILY:
+			return "OPERATOR FAMILY";
+		case OBJECT_POLICY:
+			return "POLICY";
+		case OBJECT_PROCEDURE:
+			return "PROCEDURE";
+		case OBJECT_PUBLICATION:
+			return "PUBLICATION";
+		case OBJECT_ROLE:
+			return "ROLE";
+		case OBJECT_ROUTINE:
+			return "ROUTINE";
+		case OBJECT_RULE:
+			return "RULE";
+		case OBJECT_SCHEMA:
+			return "SCHEMA";
+		case OBJECT_SEQUENCE:
+			return "SEQUENCE";
+		case OBJECT_STATISTIC_EXT:
+			return "STATISTICS";
+		case OBJECT_TABLE:
+			return "TABLE";
+		case OBJECT_TABLESPACE:
+			return "TABLESPACE";
+		case OBJECT_TRIGGER:
+			return "TRIGGER";
+		case OBJECT_TSCONFIGURATION:
+			return "TEXT SEARCH CONFIGURATION";
+		case OBJECT_TSDICTIONARY:
+			return "TEXT SEARCH DICTIONARY";
+		case OBJECT_TSPARSER:
+			return "TEXT SEARCH PARSER";
+		case OBJECT_TSTEMPLATE:
+			return "TEXT SEARCH TEMPLATE";
+		case OBJECT_TYPE:
+			return "TYPE";
+		case OBJECT_USER_MAPPING:
+			return "USER MAPPING";
+		case OBJECT_VIEW:
+			return "VIEW";
+		default:
+			elog(ERROR, "unsupported object type %d", objtype);
+	}
+}
 
 /*
  * AlterObjectTypeCommandTag

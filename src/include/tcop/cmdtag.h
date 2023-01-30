@@ -16,7 +16,7 @@
 /* buffer size required for command completion tags */
 #define COMPLETION_TAG_BUFSIZE	64
 
-#define PG_CMDTAG(tag, name, evtrgok, rwrok, rowcnt) \
+#define PG_CMDTAG(tag, name, evtrgok, rwrok, rowcnt, ddlreplok) \
 	tag,
 
 typedef enum CommandTag
@@ -53,9 +53,11 @@ CopyQueryCompletion(QueryCompletion *dst, const QueryCompletion *src)
 extern void InitializeQueryCompletion(QueryCompletion *qc);
 extern const char *GetCommandTagName(CommandTag commandTag);
 extern const char *GetCommandTagNameAndLen(CommandTag commandTag, Size *len);
+extern CommandTag *GetCommandTagsForDDLRepl(int *ncommands);
 extern bool command_tag_display_rowcount(CommandTag commandTag);
 extern bool command_tag_event_trigger_ok(CommandTag commandTag);
 extern bool command_tag_table_rewrite_ok(CommandTag commandTag);
+extern bool command_tag_ddl_replication_ok(CommandTag commandTag);
 extern CommandTag GetCommandTagEnum(const char *commandname);
 extern Size BuildQueryCompletionString(char *buff, const QueryCompletion *qc,
 									   bool nameonly);

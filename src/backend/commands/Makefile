@@ -29,6 +29,8 @@ OBJS = \
 	copyto.o \
 	createas.o \
 	dbcommands.o \
+	ddl_deparse.o \
+	ddl_json.o \
 	define.o \
 	discard.o \
 	dropcmds.o \

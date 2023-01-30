@@ -166,6 +166,7 @@
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "optimizer/optimizer.h"
+#include "parser/analyze.h"
 #include "parser/parse_relation.h"
 #include "pgstat.h"
 #include "postmaster/bgworker.h"
@@ -191,7 +192,10 @@
 #include "storage/lmgr.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
+#include "tcop/ddl_deparse.h"
+#include "tcop/pquery.h"
 #include "tcop/tcopprot.h"
+#include "tcop/utility.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/catcache.h"
@@ -3236,6 +3240,238 @@ apply_handle_truncate(StringInfo s)
 	end_replication_step();
 }
 
+/*
+ * Special handling for CREATE TABLE AS and SELECT INTO
+ * to not populate data from the source table on the subscriber.
+ * Allow the data to be replicated through INSERTs on the publisher.
+ */
+static void
+preprocess_create_table(RawStmt *command)
+{
+	CommandTag	commandTag;
+
+	commandTag = CreateCommandTag((Node *) command);
+
+	switch (commandTag)
+	{
+		case CMDTAG_CREATE_TABLE_AS:
+		case CMDTAG_SELECT_INTO:
+			{
+				CreateTableAsStmt *castmt = (CreateTableAsStmt *) command->stmt;
+
+				if (castmt->objtype == OBJECT_TABLE)
+				{
+					/*
+					 * Force skipping data population to avoid data
+					 * inconsistency. Data should be replicated from the
+					 * publisher instead.
+					 */
+					castmt->into->skipData = true;
+				}
+			}
+			break;
+		case CMDTAG_SELECT:
+			{
+				SelectStmt *sstmt = (SelectStmt *) command->stmt;
+
+				if (sstmt->intoClause != NULL)
+				{
+					/*
+					 * Force skipping data population to avoid data
+					 * inconsistency. Data should be replicated from the
+					 * publisher instead.
+					 */
+					sstmt->intoClause->skipData = true;
+				}
+			}
+			break;
+		default:
+			break;
+	}
+}
+
+/*
+ * Handle CREATE TABLE command
+ *
+ * Call AddSubscriptionRelState for CREATE LABEL command to set the relstate to
+ * SUBREL_STATE_READY so DML changes on this new table can be replicated without
+ * having to manually run "alter subscription ... refresh publication"
+ */
+static void
+handle_create_table(RawStmt *command)
+{
+	CommandTag	commandTag;
+	RangeVar   *rv = NULL;
+	Oid			relid;
+	Oid			relnamespace = InvalidOid;
+	CreateStmt *cstmt;
+	char	   *schemaname = NULL;
+	char	   *relname = NULL;
+
+	commandTag = CreateCommandTag((Node *) command);
+	cstmt = (CreateStmt *) command->stmt;
+	rv = cstmt->relation;
+
+	if (commandTag == CMDTAG_CREATE_TABLE)
+	{
+		cstmt = (CreateStmt *) command->stmt;
+		rv = cstmt->relation;
+	}
+	else
+	{
+		return;
+	}
+
+	if (!rv)
+		return;
+
+	schemaname = rv->schemaname;
+	relname = rv->relname;
+
+	if (schemaname != NULL)
+		relnamespace = get_namespace_oid(schemaname, false);
+
+	if (relnamespace != InvalidOid)
+		relid = get_relname_relid(relname, relnamespace);
+	else
+		relid = RelnameGetRelid(relname);
+
+	if (OidIsValid(relid))
+	{
+		AddSubscriptionRelState(MySubscription->oid, relid,
+								SUBREL_STATE_READY,
+								InvalidXLogRecPtr);
+		ereport(DEBUG1,
+				(errmsg_internal("table \"%s\" added to subscription \"%s\"",
+								 relname, MySubscription->name)));
+	}
+}
+
+/*
+ * Handle DDL replication messages.
+ */
+static void
+apply_handle_ddl(StringInfo s)
+{
+	XLogRecPtr	lsn;
+	const char *prefix = NULL;
+	char	   *message = NULL;
+	char	   *ddl_command;
+	Size		sz;
+	List	   *parsetree_list;
+	ListCell   *parsetree_item;
+	DestReceiver *receiver;
+	MemoryContext oldcontext;
+	const char *save_debug_query_string = debug_query_string;
+
+	message = logicalrep_read_ddl(s, &lsn, &prefix, &sz);
+
+	/* Make sure we are in a transaction command */
+	begin_replication_step();
+
+	ddl_command = deparse_ddl_json_to_string(message);
+	debug_query_string = ddl_command;
+
+	/* DestNone for logical replication */
+	receiver = CreateDestReceiver(DestNone);
+	parsetree_list = pg_parse_query(ddl_command);
+
+	foreach(parsetree_item, parsetree_list)
+	{
+		List	   *plantree_list;
+		List	   *querytree_list;
+		RawStmt    *command = (RawStmt *) lfirst(parsetree_item);
+		CommandTag	commandTag;
+		MemoryContext per_parsetree_context = NULL;
+		Portal		portal;
+		bool		snapshot_set = false;
+
+		commandTag = CreateCommandTag((Node *) command);
+
+		/* If we got a cancel signal in parsing or prior command, quit */
+		CHECK_FOR_INTERRUPTS();
+
+		/* Remove data population from the command */
+		preprocess_create_table(command);
+
+		/*
+		 * Set up a snapshot if parse analysis/planning will need one.
+		 */
+		if (analyze_requires_snapshot(command))
+		{
+			PushActiveSnapshot(GetTransactionSnapshot());
+			snapshot_set = true;
+		}
+
+		/*
+		 * We do the work for each parsetree in a short-lived context, to
+		 * limit the memory used when there are many commands in the string.
+		 */
+		per_parsetree_context =
+			AllocSetContextCreate(CurrentMemoryContext,
+								  "execute_sql_string per-statement context",
+								  ALLOCSET_DEFAULT_SIZES);
+		oldcontext = MemoryContextSwitchTo(per_parsetree_context);
+
+		querytree_list = pg_analyze_and_rewrite_fixedparams(command,
+															ddl_command,
+															NULL, 0, NULL);
+
+		plantree_list = pg_plan_queries(querytree_list, ddl_command, 0, NULL);
+
+		/* Done with the snapshot used for parsing/planning */
+		if (snapshot_set)
+			PopActiveSnapshot();
+
+		portal = CreatePortal("logical replication", true, true);
+
+		/*
+		 * We don't have to copy anything into the portal, because everything
+		 * we are passing here is in ApplyMessageContext or the
+		 * per_parsetree_context, and so will outlive the portal anyway.
+		 */
+		PortalDefineQuery(portal,
+						  NULL,
+						  ddl_command,
+						  commandTag,
+						  plantree_list,
+						  NULL);
+
+		/*
+		 * Start the portal.  No parameters here.
+		 */
+		PortalStart(portal, NULL, 0, InvalidSnapshot);
+
+		/*
+		 * Switch back to transaction context for execution.
+		 */
+		MemoryContextSwitchTo(oldcontext);
+
+		(void) PortalRun(portal,
+						 FETCH_ALL,
+						 true,
+						 true,
+						 receiver,
+						 receiver,
+						 NULL);
+
+		PortalDrop(portal, false);
+
+		CommandCounterIncrement();
+
+		/*
+		 * Table created by DDL replication (database level) is automatically
+		 * added to the subscription here.
+		 */
+		handle_create_table(command);
+
+		/* Now we may drop the per-parsetree context, if one was created. */
+		MemoryContextDelete(per_parsetree_context);
+	}
+
+	debug_query_string = save_debug_query_string;
+	end_replication_step();
+}
 
 /*
  * Logical replication protocol message dispatcher.
@@ -3299,6 +3535,10 @@ apply_dispatch(StringInfo s)
 			 * Although, it could be used by other applications that use this
 			 * output plugin.
 			 */
+			break;
+
+		case LOGICAL_REP_MSG_DDL:
+			apply_handle_ddl(s);
 			break;
 
 		case LOGICAL_REP_MSG_STREAM_START:

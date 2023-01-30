@@ -209,6 +209,8 @@ extern AclMode aclmask(const Acl *acl, Oid roleid, Oid ownerId,
 					   AclMode mask, AclMaskHow how);
 extern int	aclmembers(const Acl *acl, Oid **roleids);
 
+extern const char *privilege_to_string(AclMode privilege);
+
 extern bool has_privs_of_role(Oid member, Oid role);
 extern bool member_can_set_role(Oid member, Oid role);
 extern void check_can_set_role(Oid member, Oid role);

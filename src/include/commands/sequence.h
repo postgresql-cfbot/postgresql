@@ -54,6 +54,7 @@ typedef struct xl_seq_rec
 extern int64 nextval_internal(Oid relid, bool check_permissions);
 extern Datum nextval(PG_FUNCTION_ARGS);
 extern List *sequence_options(Oid relid);
+extern Form_pg_sequence_data get_sequence_values(Oid sequenceId);
 
 extern ObjectAddress DefineSequence(ParseState *pstate, CreateSeqStmt *seq);
 extern ObjectAddress AlterSequence(ParseState *pstate, AlterSeqStmt *stmt);

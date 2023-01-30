@@ -134,6 +134,9 @@ ExecSecLabelStmt(SecLabelStmt *stmt)
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 					 errmsg("must specify provider when multiple security label providers have been loaded")));
 		provider = (LabelProvider *) linitial(label_provider_list);
+
+		/* Copy the provider name to the parsetree, needed for DDL deparsing of SecLabelStmt */
+		stmt->provider = pstrdup(provider->provider_name);
 	}
 	else
 	{

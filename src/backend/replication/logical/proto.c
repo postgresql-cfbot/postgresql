@@ -664,6 +664,47 @@ logicalrep_write_message(StringInfo out, TransactionId xid, XLogRecPtr lsn,
 }
 
 /*
+ * Read DDL MESSAGE from stream
+ */
+char *
+logicalrep_read_ddl(StringInfo in, XLogRecPtr *lsn,
+						   const char **prefix,
+						   Size *sz)
+{
+	uint8 flags;
+	char *msg;
+
+	flags = pq_getmsgint(in, 1);
+	if (flags != 0)
+		elog(ERROR, "unrecognized flags %u in ddl message", flags);
+
+	*lsn = pq_getmsgint64(in);
+	*prefix = pq_getmsgstring(in);
+	*sz = pq_getmsgint(in, 4);
+	msg = (char *) pq_getmsgbytes(in, *sz);
+
+	return msg;
+}
+
+/*
+ * Write DDL MESSAGE to stream
+ */
+void
+logicalrep_write_ddl(StringInfo out, XLogRecPtr lsn,
+							const char *prefix, Size sz, const char *message)
+{
+	uint8		flags = 0;
+
+	pq_sendbyte(out, LOGICAL_REP_MSG_DDL);
+
+	pq_sendint8(out, flags);
+	pq_sendint64(out, lsn);
+	pq_sendstring(out, prefix);
+	pq_sendint32(out, sz);
+	pq_sendbytes(out, message, sz);
+}
+
+/*
  * Write relation description to the output stream.
  */
 void
@@ -1244,6 +1285,8 @@ logicalrep_message_type(LogicalRepMsgType action)
 			return "TYPE";
 		case LOGICAL_REP_MSG_MESSAGE:
 			return "MESSAGE";
+		case LOGICAL_REP_MSG_DDL:
+			return "DDL";
 		case LOGICAL_REP_MSG_BEGIN_PREPARE:
 			return "BEGIN PREPARE";
 		case LOGICAL_REP_MSG_PREPARE:

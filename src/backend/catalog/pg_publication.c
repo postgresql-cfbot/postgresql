@@ -1005,6 +1005,8 @@ GetPublication(Oid pubid)
 	pub->pubactions.pubupdate = pubform->pubupdate;
 	pub->pubactions.pubdelete = pubform->pubdelete;
 	pub->pubactions.pubtruncate = pubform->pubtruncate;
+	pub->pubactions.pubddl_all = pubform->pubddl_all;
+	pub->pubactions.pubddl_table = pubform->pubddl_table;
 	pub->pubviaroot = pubform->pubviaroot;
 
 	ReleaseSysCache(tup);

@@ -6162,7 +6162,7 @@ listPublications(const char *pattern)
 	PQExpBufferData buf;
 	PGresult   *res;
 	printQueryOpt myopt = pset.popt;
-	static const bool translate_columns[] = {false, false, false, false, false, false, false, false};
+	static const bool translate_columns[] = {false, false, false, false, false, false, false, false, false, false};
 
 	if (pset.sversion < 100000)
 	{
@@ -6179,13 +6179,23 @@ listPublications(const char *pattern)
 	printfPQExpBuffer(&buf,
 					  "SELECT pubname AS \"%s\",\n"
 					  "  pg_catalog.pg_get_userbyid(pubowner) AS \"%s\",\n"
-					  "  puballtables AS \"%s\",\n"
-					  "  pubinsert AS \"%s\",\n"
-					  "  pubupdate AS \"%s\",\n"
-					  "  pubdelete AS \"%s\"",
+					  "  puballtables AS \"%s\"",
 					  gettext_noop("Name"),
 					  gettext_noop("Owner"),
-					  gettext_noop("All tables"),
+					  gettext_noop("All tables"));
+	if (pset.sversion >= 160000)
+	{
+		appendPQExpBuffer(&buf,
+						  ",\n  pubddl_all AS \"%s\"",
+						  gettext_noop("All DDLs"));
+		appendPQExpBuffer(&buf,
+						  ",\n  pubddl_table AS \"%s\"",
+						  gettext_noop("Table DDLs"));
+	}
+	appendPQExpBuffer(&buf,
+					  ",\n  pubinsert AS \"%s\",\n"
+					  "  pubupdate AS \"%s\",\n"
+					  "  pubdelete AS \"%s\"",
 					  gettext_noop("Inserts"),
 					  gettext_noop("Updates"),
 					  gettext_noop("Deletes"));
@@ -6197,7 +6207,6 @@ listPublications(const char *pattern)
 		appendPQExpBuffer(&buf,
 						  ",\n  pubviaroot AS \"%s\"",
 						  gettext_noop("Via root"));
-
 	appendPQExpBufferStr(&buf,
 						 "\nFROM pg_catalog.pg_publication\n");
 
@@ -6287,6 +6296,7 @@ describePublications(const char *pattern)
 	PGresult   *res;
 	bool		has_pubtruncate;
 	bool		has_pubviaroot;
+	bool		has_pubddl;
 
 	PQExpBufferData title;
 	printTableContent cont;
@@ -6303,13 +6313,19 @@ describePublications(const char *pattern)
 
 	has_pubtruncate = (pset.sversion >= 110000);
 	has_pubviaroot = (pset.sversion >= 130000);
+	has_pubddl =  (pset.sversion >= 160000);
 
 	initPQExpBuffer(&buf);
 
 	printfPQExpBuffer(&buf,
 					  "SELECT oid, pubname,\n"
 					  "  pg_catalog.pg_get_userbyid(pubowner) AS owner,\n"
-					  "  puballtables, pubinsert, pubupdate, pubdelete");
+					  "  puballtables");
+	if (has_pubddl)
+		appendPQExpBufferStr(&buf,
+							 ", pubddl_all, pubddl_table");
+	appendPQExpBufferStr(&buf,
+						 ",  pubinsert, pubupdate, pubdelete");
 	if (has_pubtruncate)
 		appendPQExpBufferStr(&buf,
 							 ", pubtruncate");
@@ -6367,6 +6383,8 @@ describePublications(const char *pattern)
 			ncols++;
 		if (has_pubviaroot)
 			ncols++;
+		if (has_pubddl)
+			ncols += 2;
 
 		initPQExpBuffer(&title);
 		printfPQExpBuffer(&title, _("Publication %s"), pubname);
@@ -6374,6 +6392,11 @@ describePublications(const char *pattern)
 
 		printTableAddHeader(&cont, gettext_noop("Owner"), true, align);
 		printTableAddHeader(&cont, gettext_noop("All tables"), true, align);
+		if (has_pubddl)
+		{
+			printTableAddHeader(&cont, gettext_noop("All DDLs"), true, align);
+			printTableAddHeader(&cont, gettext_noop("Table DDLs"), true, align);
+		}
 		printTableAddHeader(&cont, gettext_noop("Inserts"), true, align);
 		printTableAddHeader(&cont, gettext_noop("Updates"), true, align);
 		printTableAddHeader(&cont, gettext_noop("Deletes"), true, align);
@@ -6391,6 +6414,11 @@ describePublications(const char *pattern)
 			printTableAddCell(&cont, PQgetvalue(res, i, 7), false, false);
 		if (has_pubviaroot)
 			printTableAddCell(&cont, PQgetvalue(res, i, 8), false, false);
+		if (has_pubddl)
+		{
+			printTableAddCell(&cont, PQgetvalue(res, i, 9), false, false);
+			printTableAddCell(&cont, PQgetvalue(res, i, 10), false, false);
+		}
 
 		if (!puballtables)
 		{

@@ -559,6 +559,7 @@ DefElemAction
 DefaultACLInfo
 DefineStmt
 DeleteStmt
+DeparsedCommandType
 DependencyGenerator
 DependencyGeneratorData
 DependencyType
@@ -1441,6 +1442,8 @@ LogicalDecodeBeginPrepareCB
 LogicalDecodeChangeCB
 LogicalDecodeCommitCB
 LogicalDecodeCommitPreparedCB
+LogicalDecodeDDLMessageCB
+LogicalDecodeStreamDDLMessageCB
 LogicalDecodeFilterByOriginCB
 LogicalDecodeFilterPrepareCB
 LogicalDecodeMessageCB
@@ -1614,6 +1617,9 @@ OSInfo
 OSSLCipher
 OSSLDigest
 OVERLAPPED
+ObjElem
+ObjTree
+ObjType
 ObjectAccessDrop
 ObjectAccessNamespaceSearch
 ObjectAccessPostAlter
@@ -2291,6 +2297,8 @@ ReorderBufferChange
 ReorderBufferChangeType
 ReorderBufferCommitCB
 ReorderBufferCommitPreparedCB
+ReorderBufferDDLMessageCB
+ReorderBufferStreamDDLMessageCB
 ReorderBufferDiskChange
 ReorderBufferIterTXNEntry
 ReorderBufferIterTXNState
@@ -3185,6 +3193,7 @@ compare_context
 config_var_value
 contain_aggs_of_level_context
 convert_testexpr_context
+convSpecifier
 copy_data_dest_cb
 copy_data_source_cb
 core_YYSTYPE
@@ -3589,6 +3598,7 @@ pthread_mutex_t
 pthread_once_t
 pthread_t
 ptrdiff_t
+publication_rel
 pull_var_clause_context
 pull_varattnos_context
 pull_varnos_context

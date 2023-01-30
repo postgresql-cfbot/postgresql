@@ -619,6 +619,8 @@ typedef struct _PublicationInfo
 	bool		pubupdate;
 	bool		pubdelete;
 	bool		pubtruncate;
+	bool		pubddl_all;
+	bool		pubddl_table;
 	bool		pubviaroot;
 } PublicationInfo;
 

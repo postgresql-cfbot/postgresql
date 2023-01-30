@@ -22,6 +22,13 @@
 /* Same as MAXNUMMESSAGES in sinvaladt.c */
 #define MAX_RELCACHE_INVAL_MSGS 4096
 
+typedef struct PublicationRelInfo
+{
+	Relation	relation;
+	Node	   *whereClause;
+	List	   *columns;
+} PublicationRelInfo;
+
 extern ObjectAddress CreatePublication(ParseState *pstate, CreatePublicationStmt *stmt);
 extern void AlterPublication(ParseState *pstate, AlterPublicationStmt *stmt);
 extern void RemovePublicationById(Oid pubid);
@@ -35,5 +42,12 @@ extern bool pub_rf_contains_invalid_column(Oid pubid, Relation relation,
 										   List *ancestors, bool pubviaroot);
 extern bool pub_collist_contains_invalid_column(Oid pubid, Relation relation,
 												List *ancestors, bool pubviaroot);
+extern Bitmapset *pub_collist_to_bitmapset(Bitmapset *columns, Datum pubcols,
+										   MemoryContext mcxt);
+extern ObjectAddress publication_add_relation(Oid pubid, PublicationRelInfo *pri,
+											  bool if_not_exists);
+extern ObjectAddress publication_add_schema(Oid pubid, Oid schemaid,
+											bool if_not_exists);
+extern bool is_publishable_relation(Relation rel);
 
 #endif							/* PUBLICATIONCMDS_H */

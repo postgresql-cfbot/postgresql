@@ -14,6 +14,7 @@
 
 #include "access/attmap.h"
 #include "replication/logicalproto.h"
+#include "storage/lockdefs.h"
 
 typedef struct LogicalRepRelMapEntry
 {

@@ -1385,6 +1385,8 @@ if test "$with_ssl" = openssl ; then
   # thread-safety. In 1.1.0, it's no longer required, and CRYPTO_lock()
   # function was removed.
   AC_CHECK_FUNCS([CRYPTO_lock])
+  # Let tests differentiate between vanilla OpenSSL and LibreSSL.
+  AC_CHECK_DECLS([LIBRESSL_VERSION_NUMBER], [], [], [#include <openssl/opensslv.h>])
   AC_DEFINE([USE_OPENSSL], 1, [Define to 1 to build with OpenSSL support. (--with-ssl=openssl)])
 elif test "$with_ssl" != no ; then
   AC_MSG_ERROR([--with-ssl must specify openssl])

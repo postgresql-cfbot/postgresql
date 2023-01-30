@@ -1236,6 +1236,13 @@ if get_option('ssl') == 'openssl'
     endif
   endforeach
 
+  # Let tests differentiate between vanilla OpenSSL and LibreSSL.
+  sym = 'LIBRESSL_VERSION_NUMBER'
+  found = cc.has_header_symbol('openssl/opensslv.h', sym, dependencies: ssl_int)
+  cdata.set10('HAVE_DECL_' + sym, found, description:
+'''Define to 1 if you have the declaration of `@0@', and to 0 if you
+   don't.'''.format(sym))
+
   cdata.set('USE_OPENSSL', 1,
             description: 'Define to 1 to build with OpenSSL support. (-Dssl=openssl)')
   cdata.set('OPENSSL_API_COMPAT', '0x10001000L',

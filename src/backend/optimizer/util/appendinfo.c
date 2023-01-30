@@ -228,6 +228,14 @@ adjust_appendrel_attrs_mutator(Node *node,
 		if (var->varlevelsup != 0)
 			return (Node *) var;	/* no changes needed */
 
+		/*
+		 * You might think we need to adjust var->varnullingrels, but that
+		 * shouldn't need any changes.  It will contain outer-join relids,
+		 * while the transformation we are making affects only baserels.
+		 * Below, we just propagate var->varnullingrels into the translated
+		 * Var.  (XXX what to do if translation is not a Var??)
+		 */
+
 		for (cnt = 0; cnt < nappinfos; cnt++)
 		{
 			if (var->varno == appinfos[cnt]->parent_relid)
@@ -255,6 +263,8 @@ adjust_appendrel_attrs_mutator(Node *node,
 				if (newnode == NULL)
 					elog(ERROR, "attribute %d of relation \"%s\" does not exist",
 						 var->varattno, get_rel_name(appinfo->parent_reloid));
+				if (IsA(newnode, Var))
+					((Var *) newnode)->varnullingrels = var->varnullingrels;
 				return newnode;
 			}
 			else if (var->varattno == 0)
@@ -348,6 +358,8 @@ adjust_appendrel_attrs_mutator(Node *node,
 					var = copyObject(ridinfo->rowidvar);
 					/* ... but use the correct relid */
 					var->varno = leaf_relid;
+					/* identity vars shouldn't have nulling rels */
+					Assert(var->varnullingrels == NULL);
 					/* varnosyn in the RowIdentityVarInfo is probably wrong */
 					var->varnosyn = 0;
 					var->varattnosyn = 0;
@@ -392,8 +404,11 @@ adjust_appendrel_attrs_mutator(Node *node,
 														 (void *) context);
 		/* now fix PlaceHolderVar's relid sets */
 		if (phv->phlevelsup == 0)
-			phv->phrels = adjust_child_relids(phv->phrels, context->nappinfos,
-											  context->appinfos);
+		{
+			phv->phrels = adjust_child_relids(phv->phrels,
+											  nappinfos, appinfos);
+			/* as above, we needn't touch phnullingrels */
+		}
 		return (Node *) phv;
 	}
 	/* Shouldn't need to handle planner auxiliary nodes here */
@@ -412,7 +427,7 @@ adjust_appendrel_attrs_mutator(Node *node,
 		RestrictInfo *oldinfo = (RestrictInfo *) node;
 		RestrictInfo *newinfo = makeNode(RestrictInfo);
 
-		/* Copy all flat-copiable fields */
+		/* Copy all flat-copiable fields, notably including rinfo_serial */
 		memcpy(newinfo, oldinfo, sizeof(RestrictInfo));
 
 		/* Recursively fix the clause itself */
@@ -433,9 +448,6 @@ adjust_appendrel_attrs_mutator(Node *node,
 		newinfo->outer_relids = adjust_child_relids(oldinfo->outer_relids,
 													context->nappinfos,
 													context->appinfos);
-		newinfo->nullable_relids = adjust_child_relids(oldinfo->nullable_relids,
-													   context->nappinfos,
-													   context->appinfos);
 		newinfo->left_relids = adjust_child_relids(oldinfo->left_relids,
 												   context->nappinfos,
 												   context->appinfos);
@@ -688,7 +700,11 @@ get_translated_update_targetlist(PlannerInfo *root, Index relid,
 
 /*
  * find_appinfos_by_relids
- * 		Find AppendRelInfo structures for all relations specified by relids.
+ * 		Find AppendRelInfo structures for base relations listed in relids.
+ *
+ * The relids argument is typically a join relation's relids, which can
+ * include outer-join RT indexes in addition to baserels.  We silently
+ * ignore the outer joins.
  *
  * The AppendRelInfos are returned in an array, which can be pfree'd by the
  * caller. *nappinfos is set to the number of entries in the array.
@@ -700,8 +716,9 @@ find_appinfos_by_relids(PlannerInfo *root, Relids relids, int *nappinfos)
 	int			cnt = 0;
 	int			i;
 
-	*nappinfos = bms_num_members(relids);
-	appinfos = (AppendRelInfo **) palloc(sizeof(AppendRelInfo *) * *nappinfos);
+	/* Allocate an array that's certainly big enough */
+	appinfos = (AppendRelInfo **)
+		palloc(sizeof(AppendRelInfo *) * bms_num_members(relids));
 
 	i = -1;
 	while ((i = bms_next_member(relids, i)) >= 0)
@@ -709,10 +726,17 @@ find_appinfos_by_relids(PlannerInfo *root, Relids relids, int *nappinfos)
 		AppendRelInfo *appinfo = root->append_rel_array[i];
 
 		if (!appinfo)
+		{
+			/* Probably i is an OJ index, but let's check */
+			if (find_base_rel_ignore_join(root, i) == NULL)
+				continue;
+			/* It's a base rel, but we lack an append_rel_array entry */
 			elog(ERROR, "child rel %d not found in append_rel_array", i);
+		}
 
 		appinfos[cnt++] = appinfo;
 	}
+	*nappinfos = cnt;
 	return appinfos;
 }
 
@@ -754,6 +778,7 @@ add_row_identity_var(PlannerInfo *root, Var *orig_var,
 	Assert(IsA(orig_var, Var));
 	Assert(orig_var->varno == rtindex);
 	Assert(orig_var->varlevelsup == 0);
+	Assert(orig_var->varnullingrels == NULL);
 
 	/*
 	 * If we're doing non-inherited UPDATE/DELETE/MERGE, there's little need

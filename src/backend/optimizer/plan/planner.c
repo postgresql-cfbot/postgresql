@@ -625,8 +625,10 @@ subquery_planner(PlannerGlobal *glob, Query *parse,
 	root->init_plans = NIL;
 	root->cte_plan_ids = NIL;
 	root->multiexpr_params = NIL;
+	root->join_domains = NIL;
 	root->eq_classes = NIL;
 	root->ec_merging_done = false;
+	root->last_rinfo_serial = 0;
 	root->all_result_relids =
 		parse->resultRelation ? bms_make_singleton(parse->resultRelation) : NULL;
 	root->leaf_result_relids = NULL;	/* we'll find out leaf-ness later */
@@ -652,6 +654,13 @@ subquery_planner(PlannerGlobal *glob, Query *parse,
 		root->wt_param_id = -1;
 	root->non_recursive_path = NULL;
 	root->partColsUpdated = false;
+
+	/*
+	 * Create the top-level join domain.  This won't have valid contents until
+	 * deconstruct_jointree fills it in, but the node needs to exist before
+	 * that so we can build EquivalenceClasses referencing it.
+	 */
+	root->join_domains = list_make1(makeNode(JoinDomain));
 
 	/*
 	 * If there is a WITH list, process each WITH query and either convert it
@@ -912,7 +921,7 @@ subquery_planner(PlannerGlobal *glob, Query *parse,
 			 */
 			if (rte->lateral && root->hasJoinRTEs)
 				rte->subquery = (Query *)
-					flatten_join_alias_vars(root->parse,
+					flatten_join_alias_vars(root, root->parse,
 											(Node *) rte->subquery);
 		}
 		else if (rte->rtekind == RTE_FUNCTION)
@@ -1043,10 +1052,11 @@ subquery_planner(PlannerGlobal *glob, Query *parse,
 
 	/*
 	 * If we have any RTE_RESULT relations, see if they can be deleted from
-	 * the jointree.  This step is most effectively done after we've done
-	 * expression preprocessing and outer join reduction.
+	 * the jointree.  We also rely on this processing to flatten single-child
+	 * FromExprs underneath outer joins.  This step is most effectively done
+	 * after we've done expression preprocessing and outer join reduction.
 	 */
-	if (hasResultRTEs)
+	if (hasResultRTEs || hasOuterJoins)
 		remove_useless_result_rtes(root);
 
 	/*
@@ -1110,7 +1120,7 @@ preprocess_expression(PlannerInfo *root, Node *expr, int kind)
 		  kind == EXPRKIND_VALUES ||
 		  kind == EXPRKIND_TABLESAMPLE ||
 		  kind == EXPRKIND_TABLEFUNC))
-		expr = flatten_join_alias_vars(root->parse, expr);
+		expr = flatten_join_alias_vars(root, root->parse, expr);
 
 	/*
 	 * Simplify constant expressions.  For function RTEs, this was already
@@ -2246,7 +2256,7 @@ preprocess_rowmarks(PlannerInfo *root)
 	 * make a bitmapset of all base rels and then remove the items we don't
 	 * need or have FOR [KEY] UPDATE/SHARE marks for.
 	 */
-	rels = get_relids_in_jointree((Node *) parse->jointree, false);
+	rels = get_relids_in_jointree((Node *) parse->jointree, false, false);
 	if (parse->resultRelation)
 		rels = bms_del_member(rels, parse->resultRelation);
 
@@ -6532,6 +6542,7 @@ plan_cluster_use_sort(Oid tableOid, Oid indexOid)
 	root->query_level = 1;
 	root->planner_cxt = CurrentMemoryContext;
 	root->wt_param_id = -1;
+	root->join_domains = list_make1(makeNode(JoinDomain));
 
 	/* Build a minimal RTE for the rel */
 	rte = makeNode(RangeTblEntry);
@@ -6653,6 +6664,7 @@ plan_create_index_workers(Oid tableOid, Oid indexOid)
 	root->query_level = 1;
 	root->planner_cxt = CurrentMemoryContext;
 	root->wt_param_id = -1;
+	root->join_domains = list_make1(makeNode(JoinDomain));
 
 	/*
 	 * Build a minimal RTE.

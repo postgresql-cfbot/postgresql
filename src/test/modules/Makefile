@@ -34,7 +34,8 @@ SUBDIRS = \
 		  test_shm_mq \
 		  test_slru \
 		  unsafe_tests \
-		  worker_spi
+		  worker_spi \
+		  test_dsa
 
 ifeq ($(with_ssl),openssl)
 SUBDIRS += ssl_passphrase_callback

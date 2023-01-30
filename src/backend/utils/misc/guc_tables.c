@@ -102,6 +102,8 @@ extern bool trace_syncscan;
 #ifdef DEBUG_BOUNDED_SORT
 extern bool optimize_bounded_sort;
 #endif
+extern bool sort_abbreviated_keys;
+extern bool trust_strxfrm;
 
 /*
  * Options for enum values defined in this module.
@@ -1672,6 +1674,28 @@ struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 #endif
+
+	{
+		{"sort_abbreviated_keys", PGC_USERSET, DEVELOPER_OPTIONS,
+			gettext_noop("Enables the use of abbreviated sort keys."),
+			NULL,
+			GUC_NOT_IN_SAMPLE | GUC_EXPLAIN
+		},
+		&sort_abbreviated_keys,
+		true,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"trust_strxfrm", PGC_SUSET, DEVELOPER_OPTIONS,
+		 gettext_noop("Allow use of strxfrm() for abbreviated keys optimization for libc provider."),
+		 NULL,
+		 GUC_NOT_IN_SAMPLE
+		},
+		&trust_strxfrm,
+		false,
+		NULL, NULL, NULL
+	},
 
 #ifdef WAL_DEBUG
 	{

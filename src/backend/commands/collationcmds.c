@@ -36,6 +36,7 @@
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/pg_locale.h"
+#include "utils/pg_locale_internal.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
 

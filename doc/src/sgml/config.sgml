@@ -11252,6 +11252,46 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-sort-abbreviated-keys" xreflabel="sort_abbreviated_keys">
+      <term><varname>sort_abbreviated_keys</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>sort_abbreviated_keys</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Enables or disables the use of abbreviated sort keys, a sort optimization,
+        if applicable. The default is <literal>true</literal>. Disabling may
+        be useful to diagnose problems or measure performance.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-trust-strxfrm" xreflabel="trust_strxfrm">
+      <term><varname>trust_strxfrm</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>trust_strxfrm</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Abbreviated keys, a sort optimization, depends on correct behavior of
+        the operating system function <function>strxfrm()</function> when
+        using a collation with the <literal>libc</literal> provider. On some
+        platforms <function>strxfrm()</function> does not return results
+        consistent with <function>strcoll()</function>, which means the
+        optimization could return wrong results. Set to
+        <literal>true</literal> if it is certain that
+        <function>strxfrm()</function> can be trusted.
+       </para>
+       <para>
+        The default value is <literal>false</literal>. This setting has no
+        effect if <xref linkend="guc-sort-abbreviated-keys"/> is set to
+        <literal>false</literal>.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-trace-locks" xreflabel="trace_locks">
       <term><varname>trace_locks</varname> (<type>boolean</type>)
       <indexterm>

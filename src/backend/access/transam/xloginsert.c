@@ -141,6 +141,17 @@ static XLogRecData *XLogRecordAssemble(RmgrId rmid, uint8 info,
 									   bool *topxid_included);
 static bool XLogCompressBackupBlock(char *page, uint16 hole_offset,
 									uint16 hole_length, char *dest, uint16 *dlen);
+static inline void XLogErrorDataLimitExceeded();
+
+/*
+ * Error due to exceeding the maximum size of a WAL record, or registering
+ * more datas than are being accounted for by the XLog infrastructure.
+ */
+static inline void
+XLogErrorDataLimitExceeded()
+{
+	elog(ERROR, "too much WAL data");
+}
 
 /*
  * Begin constructing a WAL record. This must be called before the
@@ -352,10 +363,25 @@ XLogRegisterData(char *data, uint32 len)
 {
 	XLogRecData *rdata;
 
-	Assert(begininsert_called);
+	Assert(begininsert_called && XLogRecordLengthIsValid(len));
 
-	if (num_rdatas >= max_rdatas)
-		elog(ERROR, "too much WAL data");
+	/*
+	 * Check against max_rdatas; and ensure we don't fill a record with
+	 * more data than can be replayed. Records are allocated in one chunk
+	 * with some overhead, so ensure XLogRecordLengthIsValid() for that
+	 * size of record.
+	 *
+	 * Additionally, check that we don't accidentally overflow the
+	 * intermediate sum value on 32-bit systems by ensuring that the
+	 * sum of the two inputs is no less than one of the inputs.
+	 */
+	if (num_rdatas >= max_rdatas ||
+#if SIZEOF_SIZE_T == 4
+		 mainrdata_len + len < len ||
+#endif
+		!XLogRecordLengthIsValid((size_t) mainrdata_len + (size_t) len))
+		XLogErrorDataLimitExceeded();
+
 	rdata = &rdatas[num_rdatas++];
 
 	rdata->data = data;
@@ -391,7 +417,7 @@ XLogRegisterBufData(uint8 block_id, char *data, uint32 len)
 	registered_buffer *regbuf;
 	XLogRecData *rdata;
 
-	Assert(begininsert_called);
+	Assert(begininsert_called && len <= UINT16_MAX);
 
 	/* find the registered buffer struct */
 	regbuf = &registered_buffers[block_id];
@@ -400,14 +426,14 @@ XLogRegisterBufData(uint8 block_id, char *data, uint32 len)
 			 block_id);
 
 	/*
-	 * Check against max_rdatas and ensure we do not register more data per
+	 * Check against max_rdatas; and ensure we don't register more data per
 	 * buffer than can be handled by the physical data format; i.e. that
 	 * regbuf->rdata_len does not grow beyond what
 	 * XLogRecordBlockHeader->data_length can hold.
 	 */
 	if (num_rdatas >= max_rdatas ||
 		regbuf->rdata_len + len > UINT16_MAX)
-		elog(ERROR, "too much WAL data");
+		XLogErrorDataLimitExceeded();
 
 	rdata = &rdatas[num_rdatas++];
 
@@ -527,6 +553,12 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
 				   XLogRecPtr *fpw_lsn, int *num_fpi, bool *topxid_included)
 {
 	XLogRecData *rdt;
+	/*
+	 * Overflow of total_len is not normally possible, considering that
+	 * this value will be at most 33 RegBufDatas (at UINT16_MAX each)
+	 * plus one MaxXLogRecordSize, which together are still an order of
+	 * magnitude smaller than UINT32_MAX.
+	 */
 	uint32		total_len = 0;
 	int			block_id;
 	pg_crc32c	rdata_crc;
@@ -534,6 +566,9 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
 	XLogRecData *rdt_datas_last;
 	XLogRecord *rechdr;
 	char	   *scratch = hdr_scratch;
+
+	/* ensure that any assembled record can be decoded */
+	Assert(AllocSizeIsValid(DecodeXLogRecordRequiredSpace(MaxXLogRecordSize)));
 
 	/*
 	 * Note: this function can be called multiple times for the same record.
@@ -766,7 +801,7 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
 		{
 			/*
 			 * When copying to XLogRecordBlockHeader, the length is narrowed
-			 * to an uint16.  Double-check that it is still correct.
+			 * to an uint16. We double-check that that is still correct.
 			 */
 			Assert(regbuf->rdata_len <= UINT16_MAX);
 
@@ -871,6 +906,16 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
 	COMP_CRC32C(rdata_crc, hdr_scratch + SizeOfXLogRecord, hdr_rdt.len - SizeOfXLogRecord);
 	for (rdt = hdr_rdt.next; rdt != NULL; rdt = rdt->next)
 		COMP_CRC32C(rdata_crc, rdt->data, rdt->len);
+
+	/*
+	 * Ensure that the XLogRecord is not too large.
+	 *
+	 * XLogReader machinery is only able to handle records up to a certain
+	 * size (ignoring machine resource limitations), so make sure we will
+	 * not emit records larger than those sizes we advertise we support.
+	 */
+	if (!XLogRecordLengthIsValid(total_len))
+		XLogErrorDataLimitExceeded();
 
 	/*
 	 * Fill in the fields in the record header. Prev-link is filled in later,

@@ -187,12 +187,17 @@ transform_MERGE_to_join(Query *parse)
 
 	/*
 	 * Create a JOIN between the target and the source relation.
+	 *
+	 * Here the target is identified by parse->mergeTargetSrcIdx.  For a
+	 * regular table, this will equal parse->resultRelation, but for a
+	 * trigger-updatable view, it will be the expanded view subquery that we
+	 * need to pull data from.
 	 */
 	joinexpr = makeNode(JoinExpr);
 	joinexpr->jointype = jointype;
 	joinexpr->isNatural = false;
 	joinexpr->larg = (Node *) makeNode(RangeTblRef);
-	((RangeTblRef *) joinexpr->larg)->rtindex = parse->resultRelation;
+	((RangeTblRef *) joinexpr->larg)->rtindex = parse->mergeTargetSrcIdx;
 	joinexpr->rarg = linitial(parse->jointree->fromlist);	/* original join */
 	joinexpr->usingClause = NIL;
 	joinexpr->join_using_alias = NULL;

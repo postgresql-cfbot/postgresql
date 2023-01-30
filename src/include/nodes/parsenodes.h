@@ -179,6 +179,8 @@ typedef struct Query
 	List	   *mergeActionList;	/* list of actions for MERGE (only) */
 	/* whether to use outer join */
 	bool		mergeUseOuterJoin;
+	/* rtable index of target relation that MERGE pulls data from */
+	int			mergeTargetSrcIdx;
 
 	List	   *targetList;		/* target list (of TargetEntry) */
 

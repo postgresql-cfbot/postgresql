@@ -768,7 +768,7 @@ CopyFrom(CopyFromState cstate)
 	estate->es_rteperminfos = cstate->rteperminfos;
 
 	/* Verify the named relation is a valid target for INSERT */
-	CheckValidResultRel(resultRelInfo, CMD_INSERT);
+	CheckValidResultRel(resultRelInfo, CMD_INSERT, NIL);
 
 	ExecOpenIndices(resultRelInfo, false);
 

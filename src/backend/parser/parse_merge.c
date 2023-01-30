@@ -165,30 +165,31 @@ transformMergeStmt(ParseState *pstate, MergeStmt *stmt)
 
 	/*
 	 * Set up the MERGE target table.  The target table is added to the
-	 * namespace below and to joinlist in transform_MERGE_to_join, so don't
-	 * do it here.
+	 * namespace below and to joinlist in transform_MERGE_to_join, so don't do
+	 * it here.
+	 *
+	 * Initially mergeTargetSrcIdx is the same as resultRelation, so data is
+	 * read from the table being updated.  However, that might be changed by
+	 * the rewriter, if the target is a trigger-updatable view, to allow
+	 * target data to be read from the expanded view query while updating the
+	 * original view relation.
 	 */
 	qry->resultRelation = setTargetTable(pstate, stmt->relation,
 										 stmt->relation->inh,
 										 false, targetPerms);
+	qry->mergeTargetSrcIdx = qry->resultRelation;
 
 	/*
 	 * MERGE is unsupported in various cases
 	 */
 	if (pstate->p_target_relation->rd_rel->relkind != RELKIND_RELATION &&
-		pstate->p_target_relation->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
+		pstate->p_target_relation->rd_rel->relkind != RELKIND_PARTITIONED_TABLE &&
+		pstate->p_target_relation->rd_rel->relkind != RELKIND_VIEW)
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("cannot execute MERGE on relation \"%s\"",
 						RelationGetRelationName(pstate->p_target_relation)),
 				 errdetail_relkind_not_supported(pstate->p_target_relation->rd_rel->relkind)));
-	if (pstate->p_target_relation->rd_rules != NULL &&
-		pstate->p_target_relation->rd_rules->numLocks > 0)
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("cannot execute MERGE on relation \"%s\"",
-						RelationGetRelationName(pstate->p_target_relation)),
-				 errdetail("MERGE is not supported for relations with rules.")));
 
 	/* Now transform the source relation to produce the source RTE. */
 	transformFromClause(pstate,

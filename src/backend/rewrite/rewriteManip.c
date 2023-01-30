@@ -474,9 +474,10 @@ OffsetVarNodes(Node *node, int offset, int sublevels_up)
 		/*
 		 * If we are starting at a Query, and sublevels_up is zero, then we
 		 * must also fix rangetable indexes in the Query itself --- namely
-		 * resultRelation, exclRelIndex and rowMarks entries.  sublevels_up
-		 * cannot be zero when recursing into a subquery, so there's no need
-		 * to have the same logic inside OffsetVarNodes_walker.
+		 * resultRelation, mergeTargetSrcIdx, exclRelIndex and rowMarks
+		 * entries.  sublevels_up cannot be zero when recursing into a
+		 * subquery, so there's no need to have the same logic inside
+		 * OffsetVarNodes_walker.
 		 */
 		if (sublevels_up == 0)
 		{
@@ -484,6 +485,9 @@ OffsetVarNodes(Node *node, int offset, int sublevels_up)
 
 			if (qry->resultRelation)
 				qry->resultRelation += offset;
+
+			if (qry->mergeTargetSrcIdx)
+				qry->mergeTargetSrcIdx += offset;
 
 			if (qry->onConflict && qry->onConflict->exclRelIndex)
 				qry->onConflict->exclRelIndex += offset;
@@ -660,9 +664,10 @@ ChangeVarNodes(Node *node, int rt_index, int new_index, int sublevels_up)
 		/*
 		 * If we are starting at a Query, and sublevels_up is zero, then we
 		 * must also fix rangetable indexes in the Query itself --- namely
-		 * resultRelation and rowMarks entries.  sublevels_up cannot be zero
-		 * when recursing into a subquery, so there's no need to have the same
-		 * logic inside ChangeVarNodes_walker.
+		 * resultRelation, mergeTargetSrcIdx, exclRelIndex  and rowMarks
+		 * entries.  sublevels_up cannot be zero when recursing into a
+		 * subquery, so there's no need to have the same logic inside
+		 * ChangeVarNodes_walker.
 		 */
 		if (sublevels_up == 0)
 		{
@@ -670,6 +675,9 @@ ChangeVarNodes(Node *node, int rt_index, int new_index, int sublevels_up)
 
 			if (qry->resultRelation == rt_index)
 				qry->resultRelation = new_index;
+
+			if (qry->mergeTargetSrcIdx == rt_index)
+				qry->mergeTargetSrcIdx = new_index;
 
 			/* this is unlikely to ever be used, but ... */
 			if (qry->onConflict && qry->onConflict->exclRelIndex == rt_index)

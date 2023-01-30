@@ -7109,7 +7109,6 @@ make_modifytable(PlannerInfo *root, Plan *subplan,
 			RangeTblEntry *rte = planner_rt_fetch(rti, root);
 
 			Assert(rte->rtekind == RTE_RELATION);
-			Assert(operation != CMD_MERGE);
 			if (rte->relkind == RELKIND_FOREIGN_TABLE)
 				fdwroutine = GetFdwRoutineByRelId(rte->relid);
 			else

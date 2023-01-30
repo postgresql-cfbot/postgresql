@@ -33,6 +33,7 @@
 #include "catalog/storage.h"
 #include "catalog/storage_xlog.h"
 #include "commands/progress.h"
+#include "commands/vacuum.h"
 #include "executor/executor.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -587,9 +588,18 @@ heapam_relation_set_new_filelocator(Relation rel,
 	 * could reuse values from their local cache, so we are careful to
 	 * consider all currently running multis.
 	 *
-	 * XXX this could be refined further, but is it worth the hassle?
+	 * In the case of temporary tables we can refine this slightly and use a
+	 * our own oldest visible MultiXactId. This is also cheaper to calculate
+	 * which is nice since temporary tables might be getting created often.
 	 */
-	*minmulti = GetOldestMultiXactId();
+	if (persistence == RELPERSISTENCE_TEMP)
+	{
+		*minmulti = GetOurOldestMultiXactId();
+	}
+	else
+	{
+		*minmulti = GetOldestMultiXactId();
+	}
 
 	srel = RelationCreateStorage(*newrlocator, persistence, true);
 
@@ -618,6 +628,43 @@ heapam_relation_set_new_filelocator(Relation rel,
 static void
 heapam_relation_nontransactional_truncate(Relation rel)
 {
+	/* This function from vacuum.c does a non-transactional update of the
+	 * catalog entry for this relation. That's ok because these values are
+	 * always safe regardless of whether we commit and in any case this is
+	 * either a temporary table or a filenode created in this transaction so
+	 * this tuple will be irrelevant if we do not commit. It's also important
+	 * to avoid lots of catalog bloat due to temporary tables being truncated
+	 * on every transaction commit.
+	 *
+	 * We set in_outer_transaction=false because that controls whether
+	 * vac_update_relstats updates other columns like relhasindex,
+	 * relhasrules, relhastriggers which is not changing here. This is a bit
+	 * of a hack, perhaps this parameter should change name.
+	 *
+	 * These parameters should stay in sync with
+	 * heapam_relation_set_new_filelocator() above and AddNewRelationTuple()
+	 * in heap.c. In theory this should probably return the relfrozenxid and
+	 * relminmxid and heap_truncate_one_rel() in heap.c should handle
+	 * num_tuples and num_pages but that would be slightly inconvenient and
+	 * require an api change.
+	 */
+
+	/* Ensure RecentXmin is valid -- it almost certainly is but regression
+	 * tests turned up an unlikely corner case where it might not be */
+	if (!FirstSnapshotSet)
+		(void)GetLatestSnapshot();
+	Assert(FirstSnapshotSet);
+	vac_update_relstats(rel,
+						0, /* num_pages */
+						-1, /* num_tuples */
+						0, /* num_all_visible_pages */
+						true, /* hasindex -- ignored due to in_outer_xact false */
+						RecentXmin, /* frozenxid */
+						RelationIsPermanent(rel) ? GetOldestMultiXactId() : GetOurOldestMultiXactId(),
+						NULL, NULL, /* frozenxid_updated, minmxid_updated */
+						false /* in_outer_xac (see above) */
+		);
+						
 	RelationTruncate(rel, 0);
 }
 

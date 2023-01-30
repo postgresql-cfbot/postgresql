@@ -30,6 +30,7 @@
 #include "postgres.h"
 
 #include "access/genam.h"
+#include "access/heapam.h"
 #include "access/multixact.h"
 #include "access/relation.h"
 #include "access/table.h"
@@ -72,6 +73,7 @@
 #include "utils/fmgroids.h"
 #include "utils/inval.h"
 #include "utils/lsyscache.h"
+#include "utils/snapmgr.h"
 #include "utils/syscache.h"
 
 
@@ -972,7 +974,9 @@ AddNewRelationTuple(Relation pg_class_desc,
 	 */
 	new_rel_reltup = new_rel_desc->rd_rel;
 
-	/* The relation is empty */
+	/* The relation is empty
+	   (These are also in heapam_relation_nontransactional_truncate)
+	*/
 	new_rel_reltup->relpages = 0;
 	new_rel_reltup->reltuples = -1;
 	new_rel_reltup->relallvisible = 0;
@@ -2996,6 +3000,14 @@ RelationTruncateIndexes(Relation heapRelation)
  * This is not transaction-safe!  There is another, transaction-safe
  * implementation in commands/tablecmds.c.  We now use this only for
  * ON COMMIT truncation of temporary tables, where it doesn't matter.
+ *
+ * Or whenever a table's relfilenode was created within the same transaction
+ * such as when the table was created or truncated (normally) within this
+ * transaction.
+ *
+ * The correctness of this code depends on the fact that the table creation or
+ * truncation would be rolled back *including* the insert/update to the
+ * pg_class row that we update in place here.
  */
 void
 heap_truncate(List *relids)

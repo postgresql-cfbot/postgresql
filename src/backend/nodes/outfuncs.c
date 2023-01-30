@@ -463,8 +463,11 @@ _outEquivalenceClass(StringInfo str, const EquivalenceClass *node)
 	WRITE_NODE_FIELD(ec_opfamilies);
 	WRITE_OID_FIELD(ec_collation);
 	WRITE_NODE_FIELD(ec_members);
-	WRITE_NODE_FIELD(ec_sources);
-	WRITE_NODE_FIELD(ec_derives);
+	WRITE_BITMAPSET_FIELD(ec_member_indexes);
+	WRITE_BITMAPSET_FIELD(ec_nonchild_indexes);
+	WRITE_BITMAPSET_FIELD(ec_norel_indexes);
+	WRITE_BITMAPSET_FIELD(ec_source_indexes);
+	WRITE_BITMAPSET_FIELD(ec_derive_indexes);
 	WRITE_BITMAPSET_FIELD(ec_relids);
 	WRITE_BOOL_FIELD(ec_has_const);
 	WRITE_BOOL_FIELD(ec_has_volatile);

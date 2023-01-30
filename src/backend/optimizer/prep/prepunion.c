@@ -45,7 +45,7 @@
 #include "utils/selfuncs.h"
 #include "utils/syscache.h"
 
-
+static void setup_append_rel_entry(PlannerInfo *root);
 static RelOptInfo *recurse_set_operations(Node *setOp, PlannerInfo *root,
 										  List *colTypes, List *colCollations,
 										  bool junkOK,
@@ -128,6 +128,7 @@ plan_set_operations(PlannerInfo *root)
 	 * so that pathkeys.c won't complain.
 	 */
 	Assert(root->eq_classes == NIL);
+	Assert(root->eq_members == NIL);
 	root->ec_merging_done = true;
 
 	/*
@@ -148,6 +149,8 @@ plan_set_operations(PlannerInfo *root)
 	leftmostRTE = root->simple_rte_array[((RangeTblRef *) node)->rtindex];
 	leftmostQuery = leftmostRTE->subquery;
 	Assert(leftmostQuery != NULL);
+
+	setup_append_rel_entry(root);
 
 	/*
 	 * If the topmost node is a recursive union, it needs special processing.
@@ -178,6 +181,26 @@ plan_set_operations(PlannerInfo *root)
 	root->processed_tlist = top_tlist;
 
 	return setop_rel;
+}
+
+/*
+ * setup_append_rel_entry
+ *		Add entry into root's simple_rel_array at element 0.  This is required
+ *		because generate_append_tlist() makes Vars with varno=0.  In
+ *		add_eq_member() we need to index EquivalenceMembers belonging to this
+ *		relation.
+ */
+static void
+setup_append_rel_entry(PlannerInfo *root)
+{
+	RelOptInfo *rel = makeNode(RelOptInfo);
+
+	memset(rel, 0, sizeof(RelOptInfo));
+	rel->eclass_member_indexes = NULL;
+
+	/* make sure nothing else has made use of this element */
+	Assert(root->simple_rel_array[0] == NULL);
+	root->simple_rel_array[0] = rel;
 }
 
 /*

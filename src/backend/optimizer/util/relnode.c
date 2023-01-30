@@ -219,6 +219,9 @@ build_simple_rel(PlannerInfo *root, int relid, RelOptInfo *parent)
 	rel->tuples = 0;
 	rel->allvisfrac = 0;
 	rel->eclass_indexes = NULL;
+	rel->eclass_member_indexes = NULL;
+	rel->eclass_source_indexes = NULL;
+	rel->eclass_derive_indexes = NULL;
 	rel->subroot = NULL;
 	rel->subplan_params = NIL;
 	rel->rel_parallel_workers = -1; /* set up in get_relation_info */
@@ -648,6 +651,9 @@ build_join_rel(PlannerInfo *root,
 	joinrel->tuples = 0;
 	joinrel->allvisfrac = 0;
 	joinrel->eclass_indexes = NULL;
+	joinrel->eclass_member_indexes = NULL;
+	joinrel->eclass_source_indexes = NULL;
+	joinrel->eclass_derive_indexes = NULL;
 	joinrel->subroot = NULL;
 	joinrel->subplan_params = NIL;
 	joinrel->rel_parallel_workers = -1;
@@ -834,6 +840,9 @@ build_child_join_rel(PlannerInfo *root, RelOptInfo *outer_rel,
 	joinrel->tuples = 0;
 	joinrel->allvisfrac = 0;
 	joinrel->eclass_indexes = NULL;
+	joinrel->eclass_member_indexes = NULL;
+	joinrel->eclass_source_indexes = NULL;
+	joinrel->eclass_derive_indexes = NULL;
 	joinrel->subroot = NULL;
 	joinrel->subplan_params = NIL;
 	joinrel->amflags = 0;

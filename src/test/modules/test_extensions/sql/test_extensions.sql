@@ -209,3 +209,10 @@ CREATE EXTENSION test_ext_cine;
 ALTER EXTENSION test_ext_cine UPDATE TO '1.1';
 
 \dx+ test_ext_cine
+
+
+CREATE EXTENSION test_ext_wildcard1;
+SELECT ext_wildcard1_version();
+ALTER EXTENSION test_ext_wildcard1 UPDATE TO '2.0';
+SELECT ext_wildcard1_version();
+DROP EXTENSION test_ext_wildcard1;

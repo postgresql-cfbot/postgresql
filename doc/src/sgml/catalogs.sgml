@@ -8002,6 +8002,18 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
        origin.
       </para></entry>
      </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>sublastusedid</structfield> <type>int8</type>
+      </para>
+      <para>
+       The last used ID for tablesync workers. This ID is used to
+       create replication slots. The last used ID needs to be stored
+       to make logical replication can safely proceed after any interruption.
+       If sublastusedid is 0, then no table has been synced yet.
+      </para></entry>
+     </row>
     </tbody>
    </tgroup>
   </table>
@@ -8084,6 +8096,24 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
        Remote LSN of the state change used for synchronization coordination
        when in <literal>s</literal> or <literal>r</literal> states,
        otherwise null
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>srrelslotname</structfield> <type>text</type>
+      </para>
+      <para>
+       Replication slot name that is used for synchronization of relation
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>srreloriginname</structfield> <type>text</type>
+      </para>
+      <para>
+       Origin name that is used for tracking synchronization of relation
       </para></entry>
      </row>
     </tbody>

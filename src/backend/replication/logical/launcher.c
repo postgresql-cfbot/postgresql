@@ -304,7 +304,7 @@ logicalrep_workers_find(Oid subid, bool only_running)
  */
 bool
 logicalrep_worker_launch(Oid dbid, Oid subid, const char *subname, Oid userid,
-						 Oid relid, dsm_handle subworker_dsm)
+						 Oid relid, dsm_handle subworker_dsm, int64 slotid)
 {
 	BackgroundWorker bgw;
 	BackgroundWorkerHandle *bgw_handle;
@@ -429,7 +429,11 @@ retry:
 	/* Prepare the worker slot. */
 	worker->launch_time = now;
 	worker->in_use = true;
+	worker->is_first_run = true;
 	worker->generation++;
+	worker->created_slot = false;
+	worker->rep_slot_id = slotid;
+	worker->slot_name = (char *) palloc(NAMEDATALEN);
 	worker->proc = NULL;
 	worker->dbid = dbid;
 	worker->userid = userid;
@@ -437,6 +441,7 @@ retry:
 	worker->relid = relid;
 	worker->relstate = SUBREL_STATE_UNKNOWN;
 	worker->relstate_lsn = InvalidXLogRecPtr;
+	worker->move_to_next_rel = false;
 	worker->stream_fileset = NULL;
 	worker->leader_pid = is_parallel_apply_worker ? MyProcPid : InvalidPid;
 	worker->parallel_apply = is_parallel_apply_worker;
@@ -1155,7 +1160,7 @@ ApplyLauncherMain(Datum main_arg)
 				ApplyLauncherSetWorkerStartTime(sub->oid, now);
 				logicalrep_worker_launch(sub->dbid, sub->oid, sub->name,
 										 sub->owner, InvalidOid,
-										 DSM_HANDLE_INVALID);
+										 DSM_HANDLE_INVALID, 0);
 			}
 			else
 			{

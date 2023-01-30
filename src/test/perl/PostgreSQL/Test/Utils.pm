@@ -74,6 +74,7 @@ our @EXPORT = qw(
   run_log
   run_command
   pump_until
+  perl_binary
 
   command_ok
   command_fails
@@ -444,6 +445,23 @@ sub pump_until
 		$proc->pump();
 	}
 	return 1;
+}
+
+=pod
+
+=item perl_binary()
+
+Return the location of the currently running Perl interpreter.
+
+=cut
+
+sub perl_binary
+{
+	# Note: use of forward slashes here avoids any escaping problems
+	# that arise from use of backslashes.
+	my $perlbin = $^X;
+	$perlbin =~ s!\\!/!g if $windows_os;
+	return $perlbin;
 }
 
 =pod

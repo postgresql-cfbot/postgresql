@@ -436,3 +436,49 @@ BEGIN
   RAISE NOTICE '%', v_Text;
 END;
 $$;
+
+
+-- dynamic result sets
+
+CREATE TABLE cp_test2 (a int);
+INSERT INTO cp_test2 VALUES (1), (2), (3);
+CREATE TABLE cp_test3 (x text, y text);
+INSERT INTO cp_test3 VALUES ('abc', 'def'), ('foo', 'bar');
+
+CREATE PROCEDURE pdrstest1(x int)
+LANGUAGE plpgsql
+DYNAMIC RESULT SETS 2
+AS $$
+DECLARE
+  c1 CURSOR WITH RETURN (y int) FOR SELECT a * y AS ay FROM cp_test2;
+  c2 CURSOR WITH RETURN FOR SELECT * FROM cp_test3;
+BEGIN
+  OPEN c1(x);
+  IF x > 1 THEN
+    OPEN c2;
+  END IF;
+END;
+$$;
+
+CALL pdrstest1(1);
+CALL pdrstest1(2);
+
+CREATE PROCEDURE pdrstest2(x int)
+LANGUAGE plpgsql
+DYNAMIC RESULT SETS 2
+AS $$
+DECLARE
+  c1 refcursor;
+  c2 refcursor;
+BEGIN
+  OPEN c1 WITH RETURN FOR SELECT a * x AS ax FROM cp_test2;
+  IF x > 1 THEN
+    OPEN c2 SCROLL WITH RETURN FOR SELECT * FROM cp_test3;
+  END IF;
+END;
+$$;
+
+CALL pdrstest2(1);
+CALL pdrstest2(2);
+
+DROP TABLE cp_test2, cp_test3;

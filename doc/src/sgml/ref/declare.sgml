@@ -32,7 +32,8 @@ PostgreSQL documentation
  <refsynopsisdiv>
 <synopsis>
 DECLARE <replaceable class="parameter">name</replaceable> [ BINARY ] [ ASENSITIVE | INSENSITIVE ] [ [ NO ] SCROLL ]
-    CURSOR [ { WITH | WITHOUT } HOLD ] FOR <replaceable class="parameter">query</replaceable>
+    CURSOR [ { WITH | WITHOUT } HOLD ] [ { WITH | WITHOUT } RETURN ]
+    FOR <replaceable class="parameter">query</replaceable>
 </synopsis>
  </refsynopsisdiv>
 
@@ -134,6 +135,22 @@ DECLARE <replaceable class="parameter">name</replaceable> [ BINARY ] [ ASENSITIV
       created it. If neither <literal>WITHOUT HOLD</literal> nor
       <literal>WITH HOLD</literal> is specified, <literal>WITHOUT
       HOLD</literal> is the default.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>WITH RETURN</literal></term>
+    <term><literal>WITHOUT RETURN</literal></term>
+    <listitem>
+     <para>
+      This option is only valid for cursors defined inside a procedure.
+      <literal>WITH RETURN</literal> specifies that the cursor's result rows
+      will be provided as a result set of the procedure invocation.  To
+      accomplish that, the cursor must be left open at the end of the
+      procedure.  If multiple <literal>WITH RETURN</literal> cursors are
+      declared, then their results will be returned in the order they were
+      created.  <literal>WITHOUT RETURN</literal> is the default.
      </para>
     </listitem>
    </varlistentry>
@@ -338,6 +355,21 @@ DECLARE liahona CURSOR FOR SELECT * FROM films;
 </programlisting>
    See <xref linkend="sql-fetch"/> for more
    examples of cursor usage.
+  </para>
+
+  <para>
+   This example shows how to return multiple result sets from a procedure:
+<programlisting>
+CREATE PROCEDURE test()
+LANGUAGE SQL
+AS $$
+DECLARE a CURSOR WITH RETURN FOR SELECT * FROM tbl1;
+DECLARE b CURSOR WITH RETURN FOR SELECT * FROM tbl2;
+$$;
+
+CALL test();
+</programlisting>
+   The results of the two cursors will be returned in order from this call.
   </para>
  </refsect1>
 

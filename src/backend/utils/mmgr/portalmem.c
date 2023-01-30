@@ -1289,3 +1289,51 @@ ForgetPortalSnapshots(void)
 		elog(ERROR, "portal snapshots (%d) did not account for all active snapshots (%d)",
 			 numPortalSnaps, numActiveSnaps);
 }
+
+static int
+cmp_portals_by_creation(const ListCell *a, const ListCell *b)
+{
+	Portal		pa = lfirst(a);
+	Portal		pb = lfirst(b);
+
+	return pa->createCid - pb->createCid;
+}
+
+List *
+GetReturnableCursors(void)
+{
+	List	   *ret = NIL;
+	HASH_SEQ_STATUS status;
+	PortalHashEnt *hentry;
+
+	hash_seq_init(&status, PortalHashTable);
+
+	while ((hentry = (PortalHashEnt *) hash_seq_search(&status)) != NULL)
+	{
+		Portal		portal = hentry->portal;
+
+		if (portal->cursorOptions & CURSOR_OPT_RETURN)
+			ret = lappend(ret, portal);
+	}
+
+	list_sort(ret, cmp_portals_by_creation);
+
+	return ret;
+}
+
+void
+CloseOtherReturnableCursors(Oid procid)
+{
+	HASH_SEQ_STATUS status;
+	PortalHashEnt *hentry;
+
+	hash_seq_init(&status, PortalHashTable);
+
+	while ((hentry = (PortalHashEnt *) hash_seq_search(&status)) != NULL)
+	{
+		Portal		portal = hentry->portal;
+
+		if (portal->cursorOptions & CURSOR_OPT_RETURN && portal->procId != procid)
+			PortalDrop(portal, false);
+	}
+}

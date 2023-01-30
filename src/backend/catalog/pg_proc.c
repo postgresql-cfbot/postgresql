@@ -95,7 +95,8 @@ ProcedureCreate(const char *procedureName,
 				Datum proconfig,
 				Oid prosupport,
 				float4 procost,
-				float4 prorows)
+				float4 prorows,
+				int dynres)
 {
 	Oid			retval;
 	int			parameterCount;
@@ -314,6 +315,7 @@ ProcedureCreate(const char *procedureName,
 	values[Anum_pg_proc_proretset - 1] = BoolGetDatum(returnsSet);
 	values[Anum_pg_proc_provolatile - 1] = CharGetDatum(volatility);
 	values[Anum_pg_proc_proparallel - 1] = CharGetDatum(parallel);
+	values[Anum_pg_proc_prodynres - 1] = Int32GetDatum(dynres);
 	values[Anum_pg_proc_pronargs - 1] = UInt16GetDatum(parameterCount);
 	values[Anum_pg_proc_pronargdefaults - 1] = UInt16GetDatum(list_length(parameterDefaults));
 	values[Anum_pg_proc_prorettype - 1] = ObjectIdGetDatum(returnType);

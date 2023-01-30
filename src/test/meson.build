@@ -9,6 +9,7 @@ subdir('subscription')
 subdir('modules')
 
 if ssl.found()
+  subdir('column_encryption')
   subdir('ssl')
 endif
 

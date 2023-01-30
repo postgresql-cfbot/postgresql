@@ -24,7 +24,10 @@
 #include "catalog/pg_amop.h"
 #include "catalog/pg_amproc.h"
 #include "catalog/pg_cast.h"
+#include "catalog/pg_colenckey.h"
+#include "catalog/pg_colenckeydata.h"
 #include "catalog/pg_collation.h"
+#include "catalog/pg_colmasterkey.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_language.h"
 #include "catalog/pg_namespace.h"
@@ -2658,6 +2661,25 @@ type_is_multirange(Oid typid)
 	return (get_typtype(typid) == TYPTYPE_MULTIRANGE);
 }
 
+bool
+type_is_encrypted(Oid typid)
+{
+	HeapTuple	tp;
+
+	tp = SearchSysCache1(TYPEOID, ObjectIdGetDatum(typid));
+	if (HeapTupleIsValid(tp))
+	{
+		Form_pg_type typtup = (Form_pg_type) GETSTRUCT(tp);
+		bool		result;
+
+		result = (typtup->typcategory == TYPCATEGORY_ENCRYPTED);
+		ReleaseSysCache(tp);
+		return result;
+	}
+	else
+		return false;
+}
+
 /*
  * get_type_category_preferred
  *
@@ -3682,4 +3704,65 @@ get_subscription_name(Oid subid, bool missing_ok)
 	ReleaseSysCache(tup);
 
 	return subname;
+}
+
+char *
+get_cek_name(Oid cekid, bool missing_ok)
+{
+	HeapTuple	tup;
+	char	   *cekname;
+
+	tup = SearchSysCache1(CEKOID, ObjectIdGetDatum(cekid));
+
+	if (!HeapTupleIsValid(tup))
+	{
+		if (!missing_ok)
+			elog(ERROR, "cache lookup failed for column encryption key %u", cekid);
+		return NULL;
+	}
+
+	cekname = pstrdup(NameStr(((Form_pg_colenckey) GETSTRUCT(tup))->cekname));
+
+	ReleaseSysCache(tup);
+
+	return cekname;
+}
+
+Oid
+get_cekdata_oid(Oid cekid, Oid cmkid, bool missing_ok)
+{
+	Oid			cekdataid;
+
+	cekdataid = GetSysCacheOid2(CEKDATACEKCMK, Anum_pg_colenckeydata_oid,
+								ObjectIdGetDatum(cekid),
+								ObjectIdGetDatum(cmkid));
+	if (!OidIsValid(cekdataid) && !missing_ok)
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("column encryption key \"%s\" has no data for master key \"%s\"",
+						get_cek_name(cekid, false), get_cmk_name(cmkid, false))));
+
+	return cekdataid;
+}
+
+char *
+get_cmk_name(Oid cmkid, bool missing_ok)
+{
+	HeapTuple	tup;
+	char	   *cmkname;
+
+	tup = SearchSysCache1(CMKOID, ObjectIdGetDatum(cmkid));
+
+	if (!HeapTupleIsValid(tup))
+	{
+		if (!missing_ok)
+			elog(ERROR, "cache lookup failed for column master key %u", cmkid);
+		return NULL;
+	}
+
+	cmkname = pstrdup(NameStr(((Form_pg_colmasterkey) GETSTRUCT(tup))->cmkname));
+
+	ReleaseSysCache(tup);
+
+	return cmkname;
 }

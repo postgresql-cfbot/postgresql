@@ -24,7 +24,7 @@ ifeq ($(with_ldap),yes)
 SUBDIRS += ldap
 endif
 ifeq ($(with_ssl),openssl)
-SUBDIRS += ssl
+SUBDIRS += column_encryption ssl
 endif
 
 # Test suites that are not safe by default but can be run if selected
@@ -36,7 +36,7 @@ export PG_TEST_EXTRA
 # clean" etc to recurse into them.  (We must filter out those that we
 # have conditionally included into SUBDIRS above, else there will be
 # make confusion.)
-ALWAYS_SUBDIRS = $(filter-out $(SUBDIRS),examples kerberos icu ldap ssl)
+ALWAYS_SUBDIRS = $(filter-out $(SUBDIRS),examples kerberos icu ldap ssl column_encryption)
 
 # We want to recurse to all subdirs for all standard targets, except that
 # installcheck and install should not recurse into the subdirectory "modules".

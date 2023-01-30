@@ -686,6 +686,112 @@ unknownsend(PG_FUNCTION_ARGS)
 	PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
 }
 
+/*
+ * pg_encrypted_in -
+ *
+ * Input function for pg_encrypted_* types.
+ *
+ * The format and additional checks ensure that one cannot easily insert a
+ * value directly into an encrypted column by accident.  (That's why we don't
+ * just use the bytea format, for example.)  But we still have to support
+ * direct inserts into encrypted columns, for example for restoring backups
+ * made by pg_dump.
+ */
+Datum
+pg_encrypted_in(PG_FUNCTION_ARGS)
+{
+	char	   *inputText = PG_GETARG_CSTRING(0);
+	char	   *ip;
+	size_t		hexlen;
+	int			bc;
+	bytea	   *result;
+
+	if (strncmp(inputText, "encrypted$", 10) != 0)
+		ereport(ERROR,
+				errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+				errmsg("invalid input value for encrypted column value: \"%s\"",
+					   inputText));
+
+	ip = inputText + 10;
+	hexlen = strlen(ip);
+
+	/* sanity check to catch obvious mistakes */
+	if (hexlen / 2 < 32 || (hexlen / 2) % 16 != 0)
+		ereport(ERROR,
+				errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+				errmsg("invalid input value for encrypted column value: \"%s\"",
+					   inputText));
+
+	bc = hexlen / 2 + VARHDRSZ;	/* maximum possible length */
+	result = palloc(bc);
+	bc = hex_decode(ip, hexlen, VARDATA(result));
+	SET_VARSIZE(result, bc + VARHDRSZ); /* actual length */
+
+	PG_RETURN_BYTEA_P(result);
+}
+
+/*
+ * pg_encrypted_out -
+ *
+ * Output function for pg_encrypted_* types.
+ *
+ * This output is seen when reading an encrypted column without column
+ * encryption mode enabled.  Therefore, the output format is chosen so that it
+ * is easily recognizable.
+ */
+Datum
+pg_encrypted_out(PG_FUNCTION_ARGS)
+{
+	bytea	   *vlena = PG_GETARG_BYTEA_PP(0);
+	char	   *result;
+	char	   *rp;
+
+	rp = result = palloc(VARSIZE_ANY_EXHDR(vlena) * 2 + 10 + 1);
+	memcpy(rp, "encrypted$", 10);
+	rp += 10;
+	rp += hex_encode(VARDATA_ANY(vlena), VARSIZE_ANY_EXHDR(vlena), rp);
+	*rp = '\0';
+	PG_RETURN_CSTRING(result);
+}
+
+/*
+ * pg_encrypted_recv -
+ *
+ * Receive function for pg_encrypted_* types.
+ */
+Datum
+pg_encrypted_recv(PG_FUNCTION_ARGS)
+{
+	StringInfo	buf = (StringInfo) PG_GETARG_POINTER(0);
+	bytea	   *result;
+	int			nbytes;
+
+	nbytes = buf->len - buf->cursor;
+	/* sanity check to catch obvious mistakes */
+	if (nbytes < 32)
+		ereport(ERROR,
+				errcode(ERRCODE_INVALID_BINARY_REPRESENTATION),
+				errmsg("invalid binary input value for encrypted column value"));
+	result = (bytea *) palloc(nbytes + VARHDRSZ);
+	SET_VARSIZE(result, nbytes + VARHDRSZ);
+	pq_copymsgbytes(buf, VARDATA(result), nbytes);
+	PG_RETURN_BYTEA_P(result);
+}
+
+/*
+ * pg_encrypted_send -
+ *
+ * Send function for pg_encrypted_* types.
+ */
+Datum
+pg_encrypted_send(PG_FUNCTION_ARGS)
+{
+	bytea	   *vlena = PG_GETARG_BYTEA_P_COPY(0);
+
+	/* just return input */
+	PG_RETURN_BYTEA_P(vlena);
+}
+
 
 /* ========== PUBLIC ROUTINES ========== */
 

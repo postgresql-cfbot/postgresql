@@ -48,6 +48,7 @@ LIBS += $(PTHREAD_LIBS)
 OBJS_COMMON = \
 	base64.o \
 	checksum_helper.o \
+	colenc.o \
 	compression.o \
 	config_info.o \
 	controldata_utils.o \

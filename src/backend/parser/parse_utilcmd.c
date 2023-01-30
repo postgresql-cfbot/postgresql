@@ -1035,8 +1035,16 @@ transformTableLikeClause(CreateStmtContext *cxt, TableLikeClause *table_like_cla
 		 */
 		def = makeNode(ColumnDef);
 		def->colname = pstrdup(attributeName);
-		def->typeName = makeTypeNameFromOid(attribute->atttypid,
-											attribute->atttypmod);
+		if (type_is_encrypted(attribute->atttypid))
+		{
+			def->typeName = makeTypeNameFromOid(attribute->attrealtypid,
+												attribute->atttypmod);
+			if (table_like_clause->options & CREATE_TABLE_LIKE_ENCRYPTED)
+				def->encryption = makeColumnEncryption(attribute);
+		}
+		else
+			def->typeName = makeTypeNameFromOid(attribute->atttypid,
+												attribute->atttypmod);
 		def->inhcount = 0;
 		def->is_local = true;
 		def->is_not_null = attribute->attnotnull;

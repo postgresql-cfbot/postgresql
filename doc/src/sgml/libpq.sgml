@@ -1964,6 +1964,141 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
        </para>
       </listitem>
      </varlistentry>
+
+     <varlistentry id="libpq-connect-column-encryption" xreflabel="column_encryption">
+      <term><literal>column_encryption</literal></term>
+      <listitem>
+       <para>
+        If set to <literal>on</literal>, <literal>true</literal>, or
+        <literal>1</literal>, this enables transparent column encryption for
+        the connection.  If encrypted columns are queried and this is not
+        enabled, the encrypted value is returned.  See <xref
+        linkend="ddl-column-encryption"/> for more information about this
+        feature.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="libpq-connect-cmklookup" xreflabel="cmklookup">
+      <term><literal>cmklookup</literal></term>
+      <listitem>
+       <para>
+        This specifies how libpq should look up column master keys (CMKs) in
+        order to decrypt the column encryption keys (CEKs).
+        The value is a list of <literal>key=value</literal> entries separated
+        by semicolons.  Each key is the name of a key realm, or
+        <literal>*</literal> to match all realms.  The value is a
+        <literal>scheme:data</literal> specification.  The scheme specifies
+        the method to look up the key, the remaining data is specific to the
+        scheme.  Placeholders are replaced in the remaining data as follows:
+
+        <variablelist>
+         <varlistentry>
+          <term><literal>%a</literal></term>
+          <listitem>
+           <para>
+            The CMK algorithm name (see <xref linkend="protocol-cmk-table"/>)
+           </para>
+          </listitem>
+         </varlistentry>
+
+         <varlistentry>
+          <term><literal>%j</literal></term>
+          <listitem>
+           <para>
+            The CMK algorithm name in JSON Web Algorithms format (see <xref
+            linkend="protocol-cmk-table"/>).  This is useful for interfacing
+            with some key management systems that use these names.
+           </para>
+          </listitem>
+         </varlistentry>
+
+         <varlistentry>
+          <term><literal>%k</literal></term>
+          <listitem>
+           <para>
+            The CMK key name
+           </para>
+          </listitem>
+         </varlistentry>
+
+         <varlistentry>
+          <term><literal>%p</literal></term>
+          <listitem>
+           <para>
+            The name of a temporary file with the encrypted CEK data (only for
+            the <literal>run</literal> scheme)
+           </para>
+          </listitem>
+         </varlistentry>
+
+         <varlistentry>
+          <term><literal>%r</literal></term>
+          <listitem>
+           <para>
+            The realm name
+           </para>
+          </listitem>
+         </varlistentry>
+        </variablelist>
+       </para>
+
+       <para>
+        Available schemes are:
+        <variablelist>
+         <varlistentry>
+          <term><literal>file</literal></term>
+          <listitem>
+           <para>
+            Load the key material from a file.  The remaining data is the file
+            name.  Use this if the CMKs are kept in a file on the file system.
+           </para>
+
+           <para>
+            The file scheme does not support the CMK algorithm
+            <literal>unspecified</literal>.
+           </para>
+          </listitem>
+         </varlistentry>
+
+         <varlistentry>
+          <term><literal>run</literal></term>
+          <listitem>
+           <para>
+            Run the specified command to decrypt the CEK.  The remaining data
+            is a shell command.  Use this with key management systems that
+            perform the decryption themselves.  The command must print the
+            decrypted plaintext on the standard output.
+           </para>
+          </listitem>
+         </varlistentry>
+        </variablelist>
+       </para>
+
+       <para>
+        The default value is empty.
+       </para>
+
+       <para>
+        Example:
+<programlisting>
+cmklookup="r1=file:/some/where/secrets/%k.pem;*=file:/else/where/%r/%k.pem"
+</programlisting>
+        This specification says, for keys in realm <quote>r1</quote>, load
+        them from the specified file, replacing <literal>%k</literal> by the
+        key name.  For keys in other realms, load them from the file,
+        replacing realm and key names as specified.
+       </para>
+
+       <para>
+        An example for interacting with a (hypothetical) key management
+        system:
+<programlisting>
+cmklookup="*=run:acmekms decrypt --key %k --alg %a --infile '%p'"
+</programlisting>
+       </para>
+      </listitem>
+     </varlistentry>
     </variablelist>
    </para>
   </sect2>
@@ -2864,6 +2999,25 @@ PGresult *PQexecParams(PGconn *conn,
             <filename>src/backend/utils/adt/numeric.c::numeric_send()</filename> and
             <filename>src/backend/utils/adt/numeric.c::numeric_recv()</filename>.
            </para>
+
+           <para>
+            When column encryption is enabled, the second-least-significant
+            byte of this parameter specifies whether encryption should be
+            forced for a parameter.  Set this byte to one to force encryption.
+            For example, use the C code literal <literal>0x10</literal> to
+            specify text format with forced encryption.  If the array pointer
+            is null then encryption is not forced for any parameter.
+           </para>
+
+           <para>
+            If encryption is forced for a parameter but the parameter does not
+            correspond to an encrypted column on the server, then the call
+            will fail and the parameter will not be sent.  This can be used
+            for additional security against a compromised server.  (The
+            drawback is that application code then needs to be kept up to date
+            with knowledge about which columns are encrypted rather than
+            letting the server specify this.)
+           </para>
           </listitem>
          </varlistentry>
 
@@ -2875,6 +3029,13 @@ PGresult *PQexecParams(PGconn *conn,
             results in binary format.  (There is not currently a provision
             to obtain different result columns in different formats,
             although that is possible in the underlying protocol.)
+           </para>
+
+           <para>
+            If column encryption is used, then encrypted columns will be
+            returned in text format independent of this setting.  Applications
+            can check the format of each result column with <xref
+            linkend="libpq-PQfformat"/> before accessing it.
            </para>
           </listitem>
          </varlistentry>
@@ -3024,6 +3185,44 @@ PGresult *PQexecPrepared(PGconn *conn,
         name of a prepared statement is given instead of a query string, and the
         <parameter>paramTypes[]</parameter> parameter is not present (it is not needed since
         the prepared statement's parameter types were determined when it was created).
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="libpq-PQexecPreparedDescribed">
+      <term><function>PQexecPreparedDescribed</function><indexterm><primary>PQexecPreparedDescribed</primary></indexterm></term>
+
+      <listitem>
+       <para>
+        Sends a request to execute a prepared statement with given
+        parameters, and waits for the result, with support for encrypted columns.
+<synopsis>
+PGresult *PQexecPreparedDescribed(PGconn *conn,
+                                  const char *stmtName,
+                                  int nParams,
+                                  const char * const *paramValues,
+                                  const int *paramLengths,
+                                  const int *paramFormats,
+                                  int resultFormat,
+                                  PGresult *paramDesc);
+</synopsis>
+       </para>
+
+       <para>
+        <xref linkend="libpq-PQexecPreparedDescribed"/> is like <xref
+        linkend="libpq-PQexecPrepared"/> with additional support for encrypted
+        columns.  The parameter <parameter>paramDesc</parameter> must be a
+        result set obtained from <xref linkend="libpq-PQdescribePrepared"/> on
+        the same prepared statement.
+       </para>
+
+       <para>
+        This function must be used if a statement parameter corresponds to an
+        underlying encrypted column.  In that situation, the prepared
+        statement needs to be described first so that libpq can obtain the
+        necessary key and other information from the server.  When that is
+        done, the parameters corresponding to encrypted columns are
+        automatically encrypted appropriately before being sent to the server.
        </para>
       </listitem>
      </varlistentry>
@@ -3878,6 +4077,28 @@ int PQfmod(const PGresult *res,
      </listitem>
     </varlistentry>
 
+    <varlistentry id="libpq-PQfisencrypted">
+     <term><function>PQfisencrypted</function><indexterm><primary>PQfisencrypted</primary></indexterm></term>
+
+     <listitem>
+      <para>
+       Returns whether the value for the given column came from an encrypted
+       column.  Column numbers start at 0.
+<synopsis>
+int PQfisencrypted(const PGresult *res,
+                   int column_number);
+</synopsis>
+      </para>
+
+      <para>
+       Encrypted column values are automatically decrypted, so this function
+       is not necessary to access the column value.  It can be used for extra
+       security to check whether the value was stored encrypted when one
+       thought it should be.
+      </para>
+     </listitem>
+    </varlistentry>
+
     <varlistentry id="libpq-PQfsize">
      <term><function>PQfsize</function><indexterm><primary>PQfsize</primary></indexterm></term>
 
@@ -4055,6 +4276,31 @@ Oid PQparamtype(const PGresult *res, int param_number);
        This function is only useful when inspecting the result of
        <xref linkend="libpq-PQdescribePrepared"/>.  For other types of results it
        will return zero.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry id="libpq-PQparamisencrypted">
+     <term><function>PQparamisencrypted</function><indexterm><primary>PQparamisencrypted</primary></indexterm></term>
+
+     <listitem>
+      <para>
+       Returns whether the value for the given parameter is destined for an
+       encrypted column.  Parameter numbers start at 0.
+<synopsis>
+int PQparamisencrypted(const PGresult *res, int param_number);
+</synopsis>
+      </para>
+
+      <para>
+       Values for parameters destined for encrypted columns are automatically
+       encrypted, so this function is not necessary to prepare the parameter
+       value.  It can be used for extra security to check whether the value
+       will be stored encrypted when one thought it should be.  (But see also
+       at <xref linkend="libpq-PQexecPreparedDescribed"/> for another way to do that.)
+       This function is only useful when inspecting the result of <xref
+       linkend="libpq-PQdescribePrepared"/>.  For other types of results it
+       will return false.
       </para>
      </listitem>
     </varlistentry>
@@ -4584,6 +4830,7 @@ unsigned char *PQunescapeBytea(const unsigned char *from, size_t *to_length);
    <xref linkend="libpq-PQsendQueryParams"/>,
    <xref linkend="libpq-PQsendPrepare"/>,
    <xref linkend="libpq-PQsendQueryPrepared"/>,
+   <xref linkend="libpq-PQsendQueryPreparedDescribed"/>,
    <xref linkend="libpq-PQsendDescribePrepared"/>, and
    <xref linkend="libpq-PQsendDescribePortal"/>,
    which can be used with <xref linkend="libpq-PQgetResult"/> to duplicate
@@ -4591,6 +4838,7 @@ unsigned char *PQunescapeBytea(const unsigned char *from, size_t *to_length);
    <xref linkend="libpq-PQexecParams"/>,
    <xref linkend="libpq-PQprepare"/>,
    <xref linkend="libpq-PQexecPrepared"/>,
+   <xref linkend="libpq-PQexecPreparedDescribed"/>,
    <xref linkend="libpq-PQdescribePrepared"/>, and
    <xref linkend="libpq-PQdescribePortal"/>
    respectively.
@@ -4647,6 +4895,13 @@ int PQsendQueryParams(PGconn *conn,
        <xref linkend="libpq-PQexecParams"/>, it allows only one command in the
        query string.
       </para>
+
+      <para>
+       If column encryption is enabled, then this function is not
+       asynchronous.  To get asynchronous behavior, <xref
+       linkend="libpq-PQsendPrepare"/> followed by <xref
+       linkend="libpq-PQsendQueryPreparedDescribed"/> should be called individually.
+      </para>
      </listitem>
     </varlistentry>
 
@@ -4701,6 +4956,45 @@ int PQsendQueryPrepared(PGconn *conn,
      </listitem>
     </varlistentry>
 
+    <varlistentry id="libpq-PQsendQueryPreparedDescribed">
+     <term><function>PQsendQueryPreparedDescribed</function><indexterm><primary>PQsendQueryPreparedDescribed</primary></indexterm></term>
+
+     <listitem>
+      <para>
+       Sends a request to execute a prepared statement with given
+       parameters, without waiting for the result(s), with support for encrypted columns.
+<synopsis>
+int PQsendQueryPreparedDescribed(PGconn *conn,
+                                 const char *stmtName,
+                                 int nParams,
+                                 const char * const *paramValues,
+                                 const int *paramLengths,
+                                 const int *paramFormats,
+                                 int resultFormat,
+                                 PGresult *paramDesc);
+</synopsis>
+      </para>
+
+      <para>
+       <xref linkend="libpq-PQsendQueryPreparedDescribed"/> is like <xref
+       linkend="libpq-PQsendQueryPrepared"/> with additional support for encrypted
+       columns.  The parameter <parameter>paramDesc</parameter> must be a
+       result set obtained from <xref linkend="libpq-PQsendDescribePrepared"/> on
+       the same prepared statement.
+      </para>
+
+      <para>
+       This function must be used if a statement parameter corresponds to an
+       underlying encrypted column.  In that situation, the prepared
+       statement needs to be described first so that libpq can obtain the
+       necessary key and other information from the server.  When that is
+       done, the parameters corresponding to encrypted columns are
+       automatically encrypted appropriately before being sent to the server.
+       See also under <xref linkend="libpq-PQexecPreparedDescribed"/>.
+      </para>
+     </listitem>
+    </varlistentry>
+
     <varlistentry id="libpq-PQsendDescribePrepared">
      <term><function>PQsendDescribePrepared</function><indexterm><primary>PQsendDescribePrepared</primary></indexterm></term>
 
@@ -4751,6 +5045,7 @@ int PQsendDescribePortal(PGconn *conn, const char *portalName);
        <xref linkend="libpq-PQsendQueryParams"/>,
        <xref linkend="libpq-PQsendPrepare"/>,
        <xref linkend="libpq-PQsendQueryPrepared"/>,
+       <xref linkend="libpq-PQsendQueryPreparedDescribed"/>,
        <xref linkend="libpq-PQsendDescribePrepared"/>,
        <xref linkend="libpq-PQsendDescribePortal"/>, or
        <xref linkend="libpq-PQpipelineSync"/>
@@ -7781,6 +8076,26 @@ myEventProc(PGEventId evtId, void *evtInfo, void *passThrough)
       </indexterm>
       <envar>PGCHANNELBINDING</envar> behaves the same as the <xref
       linkend="libpq-connect-channel-binding"/> connection parameter.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      <indexterm>
+       <primary><envar>PGCMKLOOKUP</envar></primary>
+      </indexterm>
+      <envar>PGCMKLOOKUP</envar> behaves the same as the <xref
+      linkend="libpq-connect-cmklookup"/> connection parameter.
+     </para>
+    </listitem>
+
+    <listitem>
+     <para>
+      <indexterm>
+       <primary><envar>PGCOLUMNENCRYPTION</envar></primary>
+      </indexterm>
+      <envar>PGCOLUMNENCRYPTION</envar> behaves the same as the <xref
+      linkend="libpq-connect-column-encryption"/> connection parameter.
      </para>
     </listitem>
 

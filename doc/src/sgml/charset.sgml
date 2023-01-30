@@ -1721,6 +1721,15 @@ RESET client_encoding;
      Just as for the server, use of <literal>SQL_ASCII</literal> is unwise
      unless you are working with all-ASCII data.
     </para>
+
+    <para>
+     When transparent column encryption is used, then no encoding conversion
+     is possible.  (The encoding conversion happens on the server, and the
+     server cannot look inside any encrypted column values.)  If column
+     encryption is enabled for a session, then the server enforces that the
+     client encoding matches the server encoding, and any attempts to change
+     the client encoding will be rejected by the server.
+    </para>
    </sect2>
 
    <sect2 id="multibyte-conversions-supported">

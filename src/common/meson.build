@@ -3,6 +3,7 @@
 common_sources = files(
   'base64.c',
   'checksum_helper.c',
+  'colenc.c',
   'compression.c',
   'controldata_utils.c',
   'encnames.c',

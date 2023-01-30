@@ -267,6 +267,8 @@ typedef struct pgresAttDesc
 	Oid			typid;			/* type id */
 	int			typlen;			/* type size */
 	int			atttypmod;		/* type-specific modifier info */
+	Oid			cekid;
+	int			cekalg;
 } PGresAttDesc;
 
 /* ----------------
@@ -438,6 +440,14 @@ extern PGresult *PQexecPrepared(PGconn *conn,
 								const int *paramLengths,
 								const int *paramFormats,
 								int resultFormat);
+extern PGresult *PQexecPreparedDescribed(PGconn *conn,
+										 const char *stmtName,
+										 int nParams,
+										 const char *const *paramValues,
+										 const int *paramLengths,
+										 const int *paramFormats,
+										 int resultFormat,
+										 PGresult *paramDesc);
 
 /* Interface for multiple-result or asynchronous queries */
 #define PQ_QUERY_PARAM_MAX_LIMIT 65535
@@ -461,6 +471,14 @@ extern int	PQsendQueryPrepared(PGconn *conn,
 								const int *paramLengths,
 								const int *paramFormats,
 								int resultFormat);
+extern int	PQsendQueryPreparedDescribed(PGconn *conn,
+										 const char *stmtName,
+										 int nParams,
+										 const char *const *paramValues,
+										 const int *paramLengths,
+										 const int *paramFormats,
+										 int resultFormat,
+										 PGresult *paramDesc);
 extern int	PQsetSingleRowMode(PGconn *conn);
 extern PGresult *PQgetResult(PGconn *conn);
 
@@ -531,6 +549,7 @@ extern int	PQfformat(const PGresult *res, int field_num);
 extern Oid	PQftype(const PGresult *res, int field_num);
 extern int	PQfsize(const PGresult *res, int field_num);
 extern int	PQfmod(const PGresult *res, int field_num);
+extern int	PQfisencrypted(const PGresult *res, int field_num);
 extern char *PQcmdStatus(PGresult *res);
 extern char *PQoidStatus(const PGresult *res);	/* old and ugly */
 extern Oid	PQoidValue(const PGresult *res);	/* new and improved */
@@ -540,6 +559,7 @@ extern int	PQgetlength(const PGresult *res, int tup_num, int field_num);
 extern int	PQgetisnull(const PGresult *res, int tup_num, int field_num);
 extern int	PQnparams(const PGresult *res);
 extern Oid	PQparamtype(const PGresult *res, int param_num);
+extern int	PQparamisencrypted(const PGresult *res, int param_num);
 
 /* Describe prepared statements and portals */
 extern PGresult *PQdescribePrepared(PGconn *conn, const char *stmt);

@@ -30,7 +30,10 @@
 #include "catalog/pg_authid.h"
 #include "catalog/pg_auth_members.h"
 #include "catalog/pg_cast.h"
+#include "catalog/pg_colenckey.h"
+#include "catalog/pg_colenckeydata.h"
 #include "catalog/pg_collation.h"
+#include "catalog/pg_colmasterkey.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_conversion.h"
 #include "catalog/pg_database.h"
@@ -153,6 +156,9 @@ static const Oid object_classes[] = {
 	TypeRelationId,				/* OCLASS_TYPE */
 	CastRelationId,				/* OCLASS_CAST */
 	CollationRelationId,		/* OCLASS_COLLATION */
+	ColumnEncKeyRelationId,		/* OCLASS_CEK */
+	ColumnEncKeyDataRelationId,	/* OCLASS_CEKDATA */
+	ColumnMasterKeyRelationId,	/* OCLASS_CMK */
 	ConstraintRelationId,		/* OCLASS_CONSTRAINT */
 	ConversionRelationId,		/* OCLASS_CONVERSION */
 	AttrDefaultRelationId,		/* OCLASS_DEFAULT */
@@ -1493,6 +1499,9 @@ doDeletion(const ObjectAddress *object, int flags)
 
 		case OCLASS_CAST:
 		case OCLASS_COLLATION:
+		case OCLASS_CEK:
+		case OCLASS_CEKDATA:
+		case OCLASS_CMK:
 		case OCLASS_CONVERSION:
 		case OCLASS_LANGUAGE:
 		case OCLASS_OPCLASS:
@@ -2858,6 +2867,15 @@ getObjectClass(const ObjectAddress *object)
 
 		case CollationRelationId:
 			return OCLASS_COLLATION;
+
+		case ColumnEncKeyRelationId:
+			return OCLASS_CEK;
+
+		case ColumnEncKeyDataRelationId:
+			return OCLASS_CEKDATA;
+
+		case ColumnMasterKeyRelationId:
+			return OCLASS_CMK;
 
 		case ConstraintRelationId:
 			return OCLASS_CONSTRAINT;

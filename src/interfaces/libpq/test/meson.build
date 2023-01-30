@@ -36,3 +36,26 @@ executable('libpq_testclient',
     'install': false,
   }
 )
+
+
+libpq_test_encrypt_sources = files(
+  '../fe-encrypt-openssl.c',
+)
+
+if host_system == 'windows'
+  libpq_test_encrypt_sources += rc_bin_gen.process(win32ver_rc, extra_args: [
+    '--NAME', 'libpq_test_encrypt',
+    '--FILEDESC', 'libpq test program',])
+endif
+
+if ssl.found()
+  executable('libpq_test_encrypt',
+    libpq_test_encrypt_sources,
+    include_directories: include_directories('../../../port'),
+    dependencies: [frontend_code, libpq, ssl],
+    c_args: ['-DTEST_ENCRYPT'],
+    kwargs: default_bin_args + {
+      'install': false,
+    }
+  )
+endif

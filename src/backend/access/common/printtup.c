@@ -15,13 +15,28 @@
  */
 #include "postgres.h"
 
+#include "access/genam.h"
 #include "access/printtup.h"
+#include "access/skey.h"
+#include "access/table.h"
+#include "catalog/pg_colenckey.h"
+#include "catalog/pg_colenckeydata.h"
+#include "catalog/pg_colmasterkey.h"
 #include "libpq/libpq.h"
+#include "libpq/libpq-be.h"
 #include "libpq/pqformat.h"
+#include "miscadmin.h"
 #include "tcop/pquery.h"
+#include "utils/array.h"
+#include "utils/arrayaccess.h"
+#include "utils/builtins.h"
+#include "utils/fmgroids.h"
+#include "utils/inval.h"
 #include "utils/lsyscache.h"
 #include "utils/memdebug.h"
 #include "utils/memutils.h"
+#include "utils/rel.h"
+#include "utils/syscache.h"
 
 
 static void printtup_startup(DestReceiver *self, int operation,
@@ -152,6 +167,156 @@ printtup_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 }
 
 /*
+ * Send ColumnMasterKey message, unless it's already been sent in this session
+ * for this key.
+ */
+List	   *cmk_sent = NIL;
+
+static void
+cmk_change_cb(Datum arg, int cacheid, uint32 hashvalue)
+{
+	list_free(cmk_sent);
+	cmk_sent = NIL;
+}
+
+static void
+MaybeSendColumnMasterKeyMessage(Oid cmkid)
+{
+	HeapTuple	tuple;
+	Form_pg_colmasterkey cmkform;
+	Datum		datum;
+	bool		isnull;
+	StringInfoData buf;
+	static bool registered_inval = false;
+	MemoryContext oldcontext;
+
+	Assert(MyProcPort->column_encryption_enabled);
+
+	if (list_member_oid(cmk_sent, cmkid))
+		return;
+
+	tuple = SearchSysCache1(CMKOID, ObjectIdGetDatum(cmkid));
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "cache lookup failed for column master key %u", cmkid);
+	cmkform = (Form_pg_colmasterkey) GETSTRUCT(tuple);
+
+	pq_beginmessage(&buf, 'y'); /* ColumnMasterKey */
+	pq_sendint32(&buf, cmkform->oid);
+	pq_sendstring(&buf, NameStr(cmkform->cmkname));
+	datum = SysCacheGetAttr(CMKOID, tuple, Anum_pg_colmasterkey_cmkrealm, &isnull);
+	Assert(!isnull);
+	pq_sendstring(&buf, TextDatumGetCString(datum));
+	pq_endmessage(&buf);
+
+	ReleaseSysCache(tuple);
+
+	if (!registered_inval)
+	{
+		CacheRegisterSyscacheCallback(CMKOID, cmk_change_cb, (Datum) 0);
+		registered_inval = true;
+	}
+
+	oldcontext = MemoryContextSwitchTo(TopMemoryContext);
+	cmk_sent = lappend_oid(cmk_sent, cmkid);
+	MemoryContextSwitchTo(oldcontext);
+}
+
+/*
+ * Send ColumnEncryptionKey message, unless it's already been sent in this
+ * session for this key.
+ */
+List	   *cek_sent = NIL;
+
+static void
+cek_change_cb(Datum arg, int cacheid, uint32 hashvalue)
+{
+	list_free(cek_sent);
+	cek_sent = NIL;
+}
+
+void
+MaybeSendColumnEncryptionKeyMessage(Oid attcek)
+{
+	HeapTuple	tuple;
+	ScanKeyData skey[1];
+	SysScanDesc sd;
+	Relation	rel;
+	bool		found = false;
+	static bool registered_inval = false;
+	MemoryContext oldcontext;
+
+	Assert(MyProcPort->column_encryption_enabled);
+
+	if (list_member_oid(cek_sent, attcek))
+		return;
+
+	/*
+	 * We really only need data from pg_colenckeydata, but before we scan
+	 * that, let's check that an entry exists in pg_colenckey, so that if
+	 * there are catalog inconsistencies, we can locate them better.
+	 */
+	if (!SearchSysCacheExists1(CEKOID, ObjectIdGetDatum(attcek)))
+		elog(ERROR, "cache lookup failed for column encryption key %u", attcek);
+
+	/*
+	 * Now scan pg_colenckeydata.
+	 */
+	ScanKeyInit(&skey[0],
+				Anum_pg_colenckeydata_ckdcekid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(attcek));
+	rel = table_open(ColumnEncKeyDataRelationId, AccessShareLock);
+	sd = systable_beginscan(rel, ColumnEncKeyCekidCmkidIndexId, true, NULL, 1, skey);
+
+	while ((tuple = systable_getnext(sd)))
+	{
+		Form_pg_colenckeydata ckdform = (Form_pg_colenckeydata) GETSTRUCT(tuple);
+		Datum		datum;
+		bool		isnull;
+		bytea	   *ba;
+		StringInfoData buf;
+
+		MaybeSendColumnMasterKeyMessage(ckdform->ckdcmkid);
+
+		datum = heap_getattr(tuple, Anum_pg_colenckeydata_ckdencval, RelationGetDescr(rel), &isnull);
+		Assert(!isnull);
+		ba = pg_detoast_datum_packed((bytea *) DatumGetPointer(datum));
+
+		pq_beginmessage(&buf, 'Y'); /* ColumnEncryptionKey */
+		pq_sendint32(&buf, ckdform->ckdcekid);
+		pq_sendint32(&buf, ckdform->ckdcmkid);
+		pq_sendint32(&buf, ckdform->ckdcmkalg);
+		pq_sendint32(&buf, VARSIZE_ANY_EXHDR(ba));
+		pq_sendbytes(&buf, VARDATA_ANY(ba), VARSIZE_ANY_EXHDR(ba));
+		pq_endmessage(&buf);
+
+		found = true;
+	}
+
+	/*
+	 * This is a user-facing message, because with ALTER it is possible to
+	 * delete all data entries for a CEK.
+	 */
+	if (!found)
+		ereport(ERROR,
+				errcode(ERRCODE_UNDEFINED_OBJECT),
+				errmsg("no data for column encryption key \"%s\"", get_cek_name(attcek, false)));
+
+	systable_endscan(sd);
+	table_close(rel, NoLock);
+
+	if (!registered_inval)
+	{
+		CacheRegisterSyscacheCallback(CEKDATAOID, cek_change_cb, (Datum) 0);
+		registered_inval = true;
+	}
+
+	oldcontext = MemoryContextSwitchTo(TopMemoryContext);
+	cek_sent = lappend_oid(cek_sent, attcek);
+	MemoryContextSwitchTo(oldcontext);
+}
+
+/*
  * SendRowDescriptionMessage --- send a RowDescription message to the frontend
  *
  * Notes: the TupleDesc has typically been manufactured by ExecTypeFromTL()
@@ -167,6 +332,7 @@ SendRowDescriptionMessage(StringInfo buf, TupleDesc typeinfo,
 						  List *targetlist, int16 *formats)
 {
 	int			natts = typeinfo->natts;
+	size_t		sz;
 	int			i;
 	ListCell   *tlist_item = list_head(targetlist);
 
@@ -183,14 +349,17 @@ SendRowDescriptionMessage(StringInfo buf, TupleDesc typeinfo,
 	 * Have to overestimate the size of the column-names, to account for
 	 * character set overhead.
 	 */
-	enlargeStringInfo(buf, (NAMEDATALEN * MAX_CONVERSION_GROWTH /* attname */
-							+ sizeof(Oid)	/* resorigtbl */
-							+ sizeof(AttrNumber)	/* resorigcol */
-							+ sizeof(Oid)	/* atttypid */
-							+ sizeof(int16) /* attlen */
-							+ sizeof(int32) /* attypmod */
-							+ sizeof(int16) /* format */
-							) * natts);
+	sz = (NAMEDATALEN * MAX_CONVERSION_GROWTH /* attname */
+		  + sizeof(Oid)	/* resorigtbl */
+		  + sizeof(AttrNumber)	/* resorigcol */
+		  + sizeof(Oid)	/* atttypid */
+		  + sizeof(int16) /* attlen */
+		  + sizeof(int32) /* attypmod */
+		  + sizeof(int16)); /* format */
+	if (MyProcPort->column_encryption_enabled)
+		sz += (sizeof(int32)		/* attcekid */
+			   + sizeof(int32));	/* attencalg */
+	enlargeStringInfo(buf, sz * natts);
 
 	for (i = 0; i < natts; ++i)
 	{
@@ -200,6 +369,8 @@ SendRowDescriptionMessage(StringInfo buf, TupleDesc typeinfo,
 		Oid			resorigtbl;
 		AttrNumber	resorigcol;
 		int16		format;
+		Oid			attcekid = InvalidOid;
+		int32		attencalg = 0;
 
 		/*
 		 * If column is a domain, send the base type and typmod instead.
@@ -231,6 +402,28 @@ SendRowDescriptionMessage(StringInfo buf, TupleDesc typeinfo,
 		else
 			format = 0;
 
+		if (MyProcPort->column_encryption_enabled && type_is_encrypted(atttypid))
+		{
+			HeapTuple	tp;
+			Form_pg_attribute orig_att;
+
+			tp = SearchSysCache2(ATTNUM, ObjectIdGetDatum(resorigtbl), Int16GetDatum(resorigcol));
+			if (!HeapTupleIsValid(tp))
+				elog(ERROR, "cache lookup failed for attribute %d of relation %u", resorigcol, resorigtbl);
+			orig_att = (Form_pg_attribute) GETSTRUCT(tp);
+			MaybeSendColumnEncryptionKeyMessage(orig_att->attcek);
+			atttypid = orig_att->attrealtypid;
+			attcekid = orig_att->attcek;
+			attencalg = orig_att->attencalg;
+			ReleaseSysCache(tp);
+
+			/*
+			 * Encrypted types are always sent in binary when column
+			 * encryption is enabled.
+			 */
+			format = 1;
+		}
+
 		pq_writestring(buf, NameStr(att->attname));
 		pq_writeint32(buf, resorigtbl);
 		pq_writeint16(buf, resorigcol);
@@ -238,6 +431,11 @@ SendRowDescriptionMessage(StringInfo buf, TupleDesc typeinfo,
 		pq_writeint16(buf, att->attlen);
 		pq_writeint32(buf, atttypmod);
 		pq_writeint16(buf, format);
+		if (MyProcPort->column_encryption_enabled)
+		{
+			pq_writeint32(buf, attcekid);
+			pq_writeint32(buf, attencalg);
+		}
 	}
 
 	pq_endmessage_reuse(buf);
@@ -270,6 +468,13 @@ printtup_prepare_info(DR_printtup *myState, TupleDesc typeinfo, int numAttrs)
 		PrinttupAttrInfo *thisState = myState->myinfo + i;
 		int16		format = (formats ? formats[i] : 0);
 		Form_pg_attribute attr = TupleDescAttr(typeinfo, i);
+
+		/*
+		 * Encrypted types are always sent in binary when column encryption is
+		 * enabled.
+		 */
+		if (MyProcPort->column_encryption_enabled && type_is_encrypted(attr->atttypid))
+			format = 1;
 
 		thisState->format = format;
 		if (format == 0)

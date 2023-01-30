@@ -276,6 +276,20 @@ does_not_exist_skipping(ObjectType objtype, Node *object)
 				name = NameListToString(castNode(List, object));
 			}
 			break;
+		case OBJECT_CEK:
+			if (!schema_does_not_exist_skipping(castNode(List, object), &msg, &name))
+			{
+				msg = gettext_noop("column encryption key \"%s\" does not exist, skipping");
+				name = NameListToString(castNode(List, object));
+			}
+			break;
+		case OBJECT_CMK:
+			if (!schema_does_not_exist_skipping(castNode(List, object), &msg, &name))
+			{
+				msg = gettext_noop("column master key \"%s\" does not exist, skipping");
+				name = NameListToString(castNode(List, object));
+			}
+			break;
 		case OBJECT_CONVERSION:
 			if (!schema_does_not_exist_skipping(castNode(List, object), &msg, &name))
 			{
@@ -503,6 +517,7 @@ does_not_exist_skipping(ObjectType objtype, Node *object)
 		case OBJECT_AMOP:
 		case OBJECT_AMPROC:
 		case OBJECT_ATTRIBUTE:
+		case OBJECT_CEKDATA:
 		case OBJECT_DEFAULT:
 		case OBJECT_DEFACL:
 		case OBJECT_DOMCONSTRAINT:

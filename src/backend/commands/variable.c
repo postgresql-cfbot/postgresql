@@ -25,6 +25,7 @@
 #include "access/xlogprefetcher.h"
 #include "catalog/pg_authid.h"
 #include "common/string.h"
+#include "libpq/libpq-be.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "postmaster/postmaster.h"
@@ -706,7 +707,11 @@ check_client_encoding(char **newval, void **extra, GucSource source)
 	 */
 	if (PrepareClientEncoding(encoding) < 0)
 	{
-		if (IsTransactionState())
+		if (MyProcPort->column_encryption_enabled)
+			GUC_check_errdetail("Conversion between %s and %s is not possible when column encryption is enabled.",
+								canonical_name,
+								GetDatabaseEncodingName());
+		else if (IsTransactionState())
 		{
 			/* Must be a genuine no-such-conversion problem */
 			GUC_check_errcode(ERRCODE_FEATURE_NOT_SUPPORTED);

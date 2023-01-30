@@ -97,8 +97,6 @@ static dlist_head saved_plan_list = DLIST_STATIC_INIT(saved_plan_list);
 static dlist_head cached_expression_list = DLIST_STATIC_INIT(cached_expression_list);
 
 static void ReleaseGenericPlan(CachedPlanSource *plansource);
-static List *RevalidateCachedQuery(CachedPlanSource *plansource,
-								   QueryEnvironment *queryEnv);
 static bool CheckCachedPlan(CachedPlanSource *plansource);
 static CachedPlan *BuildCachedPlan(CachedPlanSource *plansource, List *qlist,
 								   ParamListInfo boundParams, QueryEnvironment *queryEnv);
@@ -551,7 +549,7 @@ ReleaseGenericPlan(CachedPlanSource *plansource)
  * had to do re-analysis, and NIL otherwise.  (This is returned just to save
  * a tree copying step in a subsequent BuildCachedPlan call.)
  */
-static List *
+List *
 RevalidateCachedQuery(CachedPlanSource *plansource,
 					  QueryEnvironment *queryEnv)
 {

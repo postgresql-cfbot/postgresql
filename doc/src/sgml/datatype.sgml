@@ -5360,4 +5360,59 @@ WHERE ...
 
   </sect1>
 
+  <sect1 id="datatype-encrypted">
+   <title>Types Related to Encryption</title>
+
+   <para>
+    An encrypted column value (see <xref linkend="ddl-column-encryption"/>) is
+    internally stored using the types
+    <type>pg_encrypted_rnd</type> (for randomized encryption) or
+    <type>pg_encrypted_det</type> (for deterministic encryption); see <xref
+    linkend="datatype-encrypted-table"/>.  Most of the database system treats
+    these as normal types.  For example, the type <type>pg_encrypted_det</type> has
+    an equals operator that allows lookup of encrypted values.  It is,
+    however, not allowed to create a table using one of these types directly
+    as a column type.
+   </para>
+
+   <para>
+    The external representation of these types is the string
+    <literal>encrypted$</literal> followed by hexadecimal byte values, for
+    example
+    <literal>encrypted$3aacd063d2d3a1a04119df76874e0b9785ea466177f18fe9c0a1a313eaf09c98</literal>.
+    Clients that don't support transparent column encryption or have disabled
+    it will see the encrypted values in this format.  Clients that support
+    transparent data encryption will not see these types in result sets, as
+    the protocol layer will translate them back to the declared underlying type in
+    the table definition.
+   </para>
+
+    <table id="datatype-encrypted-table">
+     <title>Types Related to Encryption</title>
+     <tgroup cols="3">
+      <colspec colname="col1" colwidth="1*"/>
+      <colspec colname="col2" colwidth="3*"/>
+      <colspec colname="col3" colwidth="2*"/>
+      <thead>
+       <row>
+        <entry>Name</entry>
+        <entry>Storage Size</entry>
+        <entry>Description</entry>
+       </row>
+      </thead>
+      <tbody>
+       <row>
+        <entry><type>pg_encrypted_det</type></entry>
+        <entry>1 or 4 bytes plus the actual binary string</entry>
+        <entry>encrypted column value, deterministic encryption</entry>
+       </row>
+       <row>
+        <entry><type>pg_encrypted_rnd</type></entry>
+        <entry>1 or 4 bytes plus the actual binary string</entry>
+        <entry>encrypted column value, randomized encryption</entry>
+       </row>
+      </tbody>
+     </tgroup>
+    </table>
+  </sect1>
  </chapter>

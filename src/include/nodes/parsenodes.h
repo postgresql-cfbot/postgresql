@@ -715,6 +715,7 @@ typedef struct ColumnDef
 	char	   *colname;		/* name of column */
 	TypeName   *typeName;		/* type of column */
 	char	   *compression;	/* compression method for column */
+	List	   *encryption;		/* encryption info for column */
 	int			inhcount;		/* number of times column is inherited */
 	bool		is_local;		/* column has local (non-inherited) def'n */
 	bool		is_not_null;	/* NOT NULL constraint specified? */
@@ -751,11 +752,12 @@ typedef enum TableLikeOption
 	CREATE_TABLE_LIKE_COMPRESSION = 1 << 1,
 	CREATE_TABLE_LIKE_CONSTRAINTS = 1 << 2,
 	CREATE_TABLE_LIKE_DEFAULTS = 1 << 3,
-	CREATE_TABLE_LIKE_GENERATED = 1 << 4,
-	CREATE_TABLE_LIKE_IDENTITY = 1 << 5,
-	CREATE_TABLE_LIKE_INDEXES = 1 << 6,
-	CREATE_TABLE_LIKE_STATISTICS = 1 << 7,
-	CREATE_TABLE_LIKE_STORAGE = 1 << 8,
+	CREATE_TABLE_LIKE_ENCRYPTED = 1 << 4,
+	CREATE_TABLE_LIKE_GENERATED = 1 << 5,
+	CREATE_TABLE_LIKE_IDENTITY = 1 << 6,
+	CREATE_TABLE_LIKE_INDEXES = 1 << 7,
+	CREATE_TABLE_LIKE_STATISTICS = 1 << 8,
+	CREATE_TABLE_LIKE_STORAGE = 1 << 9,
 	CREATE_TABLE_LIKE_ALL = PG_INT32_MAX
 } TableLikeOption;
 
@@ -1957,6 +1959,9 @@ typedef enum ObjectType
 	OBJECT_CAST,
 	OBJECT_COLUMN,
 	OBJECT_COLLATION,
+	OBJECT_CEK,
+	OBJECT_CEKDATA,
+	OBJECT_CMK,
 	OBJECT_CONVERSION,
 	OBJECT_DATABASE,
 	OBJECT_DEFAULT,
@@ -2142,6 +2147,31 @@ typedef struct AlterCollationStmt
 	NodeTag		type;
 	List	   *collname;
 } AlterCollationStmt;
+
+
+/* ----------------------
+ * Alter Column Encryption Key
+ * ----------------------
+ */
+typedef struct AlterColumnEncryptionKeyStmt
+{
+	NodeTag		type;
+	List	   *cekname;
+	bool		isDrop;			/* ADD or DROP the items? */
+	List	   *definition;
+} AlterColumnEncryptionKeyStmt;
+
+
+/* ----------------------
+ * Alter Column Master Key
+ * ----------------------
+ */
+typedef struct AlterColumnMasterKeyStmt
+{
+	NodeTag		type;
+	List	   *cmkname;
+	List	   *definition;
+} AlterColumnMasterKeyStmt;
 
 
 /* ----------------------

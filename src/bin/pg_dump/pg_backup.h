@@ -85,6 +85,7 @@ typedef struct _connParams
 	char	   *pghost;
 	char	   *username;
 	trivalue	promptPassword;
+	int			column_encryption;
 	/* If not NULL, this overrides the dbname obtained from command line */
 	/* (but *only* the DB name, not anything else in the connstring) */
 	char	   *override_dbname;

@@ -47,6 +47,8 @@ typedef enum
 	DO_ACCESS_METHOD,
 	DO_OPCLASS,
 	DO_OPFAMILY,
+	DO_CEK,
+	DO_CMK,
 	DO_COLLATION,
 	DO_CONVERSION,
 	DO_TABLE,
@@ -333,6 +335,9 @@ typedef struct _tableInfo
 	bool	   *attisdropped;	/* true if attr is dropped; don't dump it */
 	char	   *attidentity;
 	char	   *attgenerated;
+	struct _CekInfo **attcek;
+	int		   *attencalg;
+	bool	   *attencdet;
 	int		   *attlen;			/* attribute length, used by binary_upgrade */
 	char	   *attalign;		/* attribute align, used by binary_upgrade */
 	bool	   *attislocal;		/* true if attr has local definition */
@@ -665,6 +670,30 @@ typedef struct _SubscriptionInfo
 } SubscriptionInfo;
 
 /*
+ * The CekInfo struct is used to represent column encryption key.
+ */
+typedef struct _CekInfo
+{
+	DumpableObject dobj;
+	const char *rolname;
+	int			numdata;
+	/* The following are arrays of numdata entries each: */
+	struct _CmkInfo **cekcmks;
+	int		   *cekcmkalgs;
+	char	  **cekencvals;
+} CekInfo;
+
+/*
+ * The CmkInfo struct is used to represent column master key.
+ */
+typedef struct _CmkInfo
+{
+	DumpableObject dobj;
+	const char *rolname;
+	char	   *cmkrealm;
+} CmkInfo;
+
+/*
  *	common utility functions
  */
 
@@ -684,6 +713,8 @@ extern TableInfo *findTableByOid(Oid oid);
 extern TypeInfo *findTypeByOid(Oid oid);
 extern FuncInfo *findFuncByOid(Oid oid);
 extern OprInfo *findOprByOid(Oid oid);
+extern CekInfo *findCekByOid(Oid oid);
+extern CmkInfo *findCmkByOid(Oid oid);
 extern CollInfo *findCollationByOid(Oid oid);
 extern NamespaceInfo *findNamespaceByOid(Oid oid);
 extern ExtensionInfo *findExtensionByOid(Oid oid);
@@ -711,6 +742,8 @@ extern AccessMethodInfo *getAccessMethods(Archive *fout, int *numAccessMethods);
 extern OpclassInfo *getOpclasses(Archive *fout, int *numOpclasses);
 extern OpfamilyInfo *getOpfamilies(Archive *fout, int *numOpfamilies);
 extern CollInfo *getCollations(Archive *fout, int *numCollations);
+extern void getColumnEncryptionKeys(Archive *fout);
+extern void getColumnMasterKeys(Archive *fout);
 extern ConvInfo *getConversions(Archive *fout, int *numConversions);
 extern TableInfo *getTables(Archive *fout, int *numTables);
 extern void getOwnedSeqs(Archive *fout, TableInfo tblinfo[], int numTables);

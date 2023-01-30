@@ -8,6 +8,8 @@ Complete list of usable sgml source files in this directory.
 <!ENTITY abort              SYSTEM "abort.sgml">
 <!ENTITY alterAggregate     SYSTEM "alter_aggregate.sgml">
 <!ENTITY alterCollation     SYSTEM "alter_collation.sgml">
+<!ENTITY alterColumnEncryptionKey SYSTEM "alter_column_encryption_key.sgml">
+<!ENTITY alterColumnMasterKey SYSTEM "alter_column_master_key.sgml">
 <!ENTITY alterConversion    SYSTEM "alter_conversion.sgml">
 <!ENTITY alterDatabase      SYSTEM "alter_database.sgml">
 <!ENTITY alterDefaultPrivileges SYSTEM "alter_default_privileges.sgml">
@@ -62,6 +64,8 @@ Complete list of usable sgml source files in this directory.
 <!ENTITY createAggregate    SYSTEM "create_aggregate.sgml">
 <!ENTITY createCast         SYSTEM "create_cast.sgml">
 <!ENTITY createCollation    SYSTEM "create_collation.sgml">
+<!ENTITY createColumnEncryptionKey SYSTEM "create_column_encryption_key.sgml">
+<!ENTITY createColumnMasterKey SYSTEM "create_column_master_key.sgml">
 <!ENTITY createConversion   SYSTEM "create_conversion.sgml">
 <!ENTITY createDatabase     SYSTEM "create_database.sgml">
 <!ENTITY createDomain       SYSTEM "create_domain.sgml">
@@ -109,6 +113,8 @@ Complete list of usable sgml source files in this directory.
 <!ENTITY dropAggregate      SYSTEM "drop_aggregate.sgml">
 <!ENTITY dropCast           SYSTEM "drop_cast.sgml">
 <!ENTITY dropCollation      SYSTEM "drop_collation.sgml">
+<!ENTITY dropColumnEncryptionKey SYSTEM "drop_column_encryption_key.sgml">
+<!ENTITY dropColumnMasterKey SYSTEM "drop_column_master_key.sgml">
 <!ENTITY dropConversion     SYSTEM "drop_conversion.sgml">
 <!ENTITY dropDatabase       SYSTEM "drop_database.sgml">
 <!ENTITY dropDomain         SYSTEM "drop_domain.sgml">

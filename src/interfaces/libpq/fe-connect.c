@@ -341,6 +341,14 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 		"Target-Session-Attrs", "", 15, /* sizeof("prefer-standby") = 15 */
 	offsetof(struct pg_conn, target_session_attrs)},
 
+	{"cmklookup", "PGCMKLOOKUP", "", NULL,
+		"CMK-Lookup", "", 64,
+	offsetof(struct pg_conn, cmklookup)},
+
+	{"column_encryption", "PGCOLUMNENCRYPTION", "0", NULL,
+		"Column-Encryption", "", 1,
+	offsetof(struct pg_conn, column_encryption_setting)},
+
 	/* Terminating entry --- MUST BE LAST */
 	{NULL, NULL, NULL, NULL,
 	NULL, NULL, 0}
@@ -1410,6 +1418,28 @@ connectOptions2(PGconn *conn)
 		conn->client_encoding_initial = strdup(pg_encoding_to_char(pg_get_encoding_from_locale(NULL, true)));
 		if (!conn->client_encoding_initial)
 			goto oom_error;
+	}
+
+	/*
+	 * validate column_encryption option
+	 */
+	if (conn->column_encryption_setting)
+	{
+		if (strcmp(conn->column_encryption_setting, "on") == 0 ||
+			strcmp(conn->column_encryption_setting, "true") == 0 ||
+			strcmp(conn->column_encryption_setting, "1") == 0)
+			conn->column_encryption_enabled = true;
+		else if (strcmp(conn->column_encryption_setting, "off") == 0 ||
+				 strcmp(conn->column_encryption_setting, "false") == 0 ||
+				 strcmp(conn->column_encryption_setting, "0") == 0)
+			conn->column_encryption_enabled = false;
+		else
+		{
+			conn->status = CONNECTION_BAD;
+			libpq_append_conn_error(conn, "invalid %s value: \"%s\"",
+									"column_encryption", conn->column_encryption_setting);
+			return false;
+		}
 	}
 
 	/*
@@ -4029,6 +4059,22 @@ freePGconn(PGconn *conn)
 	free(conn->krbsrvname);
 	free(conn->gsslib);
 	free(conn->connip);
+	free(conn->cmklookup);
+	for (int i = 0; i < conn->ncmks; i++)
+	{
+		free(conn->cmks[i].cmkname);
+		free(conn->cmks[i].cmkrealm);
+	}
+	free(conn->cmks);
+	for (int i = 0; i < conn->nceks; i++)
+	{
+		if (conn->ceks[i].cekdata)
+		{
+			explicit_bzero(conn->ceks[i].cekdata, conn->ceks[i].cekdatalen);
+			free(conn->ceks[i].cekdata);
+		}
+	}
+	free(conn->ceks);
 	/* Note that conn->Pfdebug is not ours to close or free */
 	free(conn->write_err_msg);
 	free(conn->inBuffer);

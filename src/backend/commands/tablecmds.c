@@ -35,6 +35,7 @@
 #include "catalog/partition.h"
 #include "catalog/pg_am.h"
 #include "catalog/pg_attrdef.h"
+#include "catalog/pg_colenckey.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_depend.h"
@@ -61,6 +62,7 @@
 #include "commands/trigger.h"
 #include "commands/typecmds.h"
 #include "commands/user.h"
+#include "common/colenc.h"
 #include "executor/executor.h"
 #include "foreign/fdwapi.h"
 #include "foreign/foreign.h"
@@ -637,6 +639,7 @@ static List *GetParentedForeignKeyRefs(Relation partition);
 static void ATDetachCheckNoForeignKeyRefs(Relation partition);
 static char GetAttributeCompression(Oid atttypid, char *compression);
 static char GetAttributeStorage(Oid atttypid, const char *storagemode);
+static void GetColumnEncryption(const List *coldefencryption, Form_pg_attribute attr);
 
 
 /* ----------------------------------------------------------------
@@ -935,6 +938,9 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 		if (colDef->compression)
 			attr->attcompression = GetAttributeCompression(attr->atttypid,
 														   colDef->compression);
+
+		if (colDef->encryption)
+			GetColumnEncryption(colDef->encryption, attr);
 
 		if (colDef->storage_name)
 			attr->attstorage = GetAttributeStorage(attr->atttypid, colDef->storage_name);
@@ -2562,13 +2568,43 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 				Oid			defCollId;
 
 				/*
-				 * Yes, try to merge the two column definitions. They must
-				 * have the same type, typmod, and collation.
+				 * Yes, try to merge the two column definitions.
 				 */
 				ereport(NOTICE,
 						(errmsg("merging multiple inherited definitions of column \"%s\"",
 								attributeName)));
 				def = (ColumnDef *) list_nth(inhSchema, exist_attno - 1);
+
+				/*
+				 * Check encryption parameter.  All parents must have the same
+				 * encryption settings for a column.
+				 */
+				if ((def->encryption && !attribute->attcek) ||
+					(!def->encryption && attribute->attcek))
+				{
+					ereport(ERROR,
+							(errcode(ERRCODE_DATATYPE_MISMATCH),
+							 errmsg("column \"%s\" has an encryption specification conflict",
+									attributeName)));
+				}
+				else if (def->encryption && attribute->attcek)
+				{
+					/*
+					 * Merging the encryption properties of two encrypted
+					 * parent columns is not yet implemented.  Right now, this
+					 * would confuse the checks of the type etc. below (we
+					 * must check the physical and the real types against each
+					 * other, respectively), which might require a larger
+					 * restructuring.  For now, just give up here.
+					 */
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("multiple inheritance of encrypted columns is not implemented")));
+				}
+
+				/*
+				 * Must have the same type, typmod, and collation.
+				 */
 				typenameTypeIdAndMod(NULL, def->typeName, &defTypeId, &deftypmod);
 				if (defTypeId != attribute->atttypid ||
 					deftypmod != attribute->atttypmod)
@@ -2641,6 +2677,12 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 				def->colname = pstrdup(attributeName);
 				def->typeName = makeTypeNameFromOid(attribute->atttypid,
 													attribute->atttypmod);
+				if (type_is_encrypted(attribute->atttypid))
+				{
+					def->typeName = makeTypeNameFromOid(attribute->attrealtypid,
+														attribute->atttypmod);
+					def->encryption = makeColumnEncryption(attribute);
+				}
 				def->inhcount = 1;
 				def->is_local = false;
 				def->is_not_null = attribute->attnotnull;
@@ -2917,6 +2959,34 @@ MergeAttributes(List *schema, List *supers, char relpersistence,
 								 errmsg("column \"%s\" has a compression method conflict",
 										attributeName),
 								 errdetail("%s versus %s", def->compression, newdef->compression)));
+				}
+
+				/*
+				 * Check encryption parameter.  All parents and children must
+				 * have the same encryption settings for a column.
+				 */
+				if ((def->encryption && !newdef->encryption) ||
+					(!def->encryption && newdef->encryption))
+				{
+					ereport(ERROR,
+							(errcode(ERRCODE_DATATYPE_MISMATCH),
+							 errmsg("column \"%s\" has an encryption specification conflict",
+									attributeName)));
+				}
+				else if (def->encryption && newdef->encryption)
+				{
+					FormData_pg_attribute a, newa;
+
+					GetColumnEncryption(def->encryption, &a);
+					GetColumnEncryption(newdef->encryption, &newa);
+
+					if (a.atttypid != newa.atttypid ||
+						a.attcek != newa.attcek ||
+						a.attencalg != newa.attencalg)
+						ereport(ERROR,
+								(errcode(ERRCODE_DATATYPE_MISMATCH),
+								 errmsg("column \"%s\" has an encryption specification conflict",
+										attributeName)));
 				}
 
 				/* Mark the column as locally defined */
@@ -6844,6 +6914,14 @@ ATExecAddColumn(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	attribute.attislocal = colDef->is_local;
 	attribute.attinhcount = colDef->inhcount;
 	attribute.attcollation = collOid;
+	if (colDef->encryption)
+		GetColumnEncryption(colDef->encryption, &attribute);
+	else
+	{
+		attribute.attcek = 0;
+		attribute.attrealtypid = 0;
+		attribute.attencalg = 0;
+	}
 
 	ReleaseSysCache(typeTuple);
 
@@ -12675,6 +12753,9 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 			case OCLASS_TYPE:
 			case OCLASS_CAST:
 			case OCLASS_COLLATION:
+			case OCLASS_CEK:
+			case OCLASS_CEKDATA:
+			case OCLASS_CMK:
 			case OCLASS_CONVERSION:
 			case OCLASS_LANGUAGE:
 			case OCLASS_LARGEOBJECT:
@@ -19273,4 +19354,109 @@ GetAttributeStorage(Oid atttypid, const char *storagemode)
 						format_type_be(atttypid))));
 
 	return cstorage;
+}
+
+/*
+ * resolve column encryption specification
+ */
+static void
+GetColumnEncryption(const List *coldefencryption, Form_pg_attribute attr)
+{
+	ListCell   *lc;
+	List	   *cek = NULL;
+	Oid			cekoid;
+	bool		encdet = false;
+	int			alg = PG_CEK_AEAD_AES_128_CBC_HMAC_SHA_256;
+
+	foreach(lc, coldefencryption)
+	{
+		DefElem    *el = lfirst_node(DefElem, lc);
+
+		if (strcmp(el->defname, "column_encryption_key") == 0)
+			cek = defGetQualifiedName(el);
+		else if (strcmp(el->defname, "encryption_type") == 0)
+		{
+			char	   *val = strVal(linitial(castNode(TypeName, el->arg)->names));
+
+			if (strcmp(val, "deterministic") == 0)
+				encdet = true;
+			else if (strcmp(val, "randomized") == 0)
+				encdet = false;
+			else
+				ereport(ERROR,
+						errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						errmsg("unrecognized encryption type: %s", val));
+		}
+		else if (strcmp(el->defname, "algorithm") == 0)
+		{
+			char	   *val = strVal(el->arg);
+
+			alg = get_cekalg_num(val);
+
+			if (!alg)
+				ereport(ERROR,
+						errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						errmsg("unrecognized encryption algorithm: %s", val));
+		}
+		else
+			ereport(ERROR,
+					errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					errmsg("unrecognized column encryption parameter: %s", el->defname));
+	}
+
+	if (!cek)
+		ereport(ERROR,
+				errcode(ERRCODE_INVALID_COLUMN_DEFINITION),
+				errmsg("column encryption key must be specified"));
+
+	cekoid = get_cek_oid(cek, false);
+
+	attr->attcek = cekoid;
+	attr->attrealtypid = attr->atttypid;
+	attr->attencalg = alg;
+
+	/* override physical type */
+	if (encdet)
+		attr->atttypid = PG_ENCRYPTED_DETOID;
+	else
+		attr->atttypid = PG_ENCRYPTED_RNDOID;
+	get_typlenbyvalalign(attr->atttypid,
+						 &attr->attlen, &attr->attbyval, &attr->attalign);
+	attr->attstorage = get_typstorage(attr->atttypid);
+	attr->attcollation = InvalidOid;
+}
+
+/*
+ * Construct input to GetColumnEncryption(), for synthesizing a column
+ * definition.
+ */
+List *
+makeColumnEncryption(const FormData_pg_attribute *attr)
+{
+	List	   *result;
+	HeapTuple	tup;
+	Form_pg_colenckey form;
+	char	   *nspname;
+
+	tup = SearchSysCache1(CEKOID, ObjectIdGetDatum(attr->attcek));
+	if (!HeapTupleIsValid(tup))
+		elog(ERROR, "cache lookup failed for column encryption key %u", attr->attcek);
+
+	form = (Form_pg_colenckey) GETSTRUCT(tup);
+	nspname = get_namespace_name(form->ceknamespace);
+
+	result = list_make3(makeDefElem("column_encryption_key",
+									(Node *) list_make2(makeString(nspname), makeString(pstrdup(NameStr(form->cekname)))),
+									-1),
+						makeDefElem("encryption_type",
+									(Node *) makeTypeName(attr->atttypid == PG_ENCRYPTED_DETOID ?
+														  "deterministic" : "randomized"),
+									-1),
+						makeDefElem("algorithm",
+									(Node *) makeString(pstrdup(get_cekalg_name(attr->attencalg))),
+									-1));
+
+	ReleaseSysCache(tup);
+
+	return result;
 }

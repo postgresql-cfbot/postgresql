@@ -115,6 +115,12 @@ extern bool OpclassIsVisible(Oid opcid);
 extern Oid	OpfamilynameGetOpfid(Oid amid, const char *opfname);
 extern bool OpfamilyIsVisible(Oid opfid);
 
+extern Oid	get_cek_oid(List *names, bool missing_ok);
+extern bool CEKIsVisible(Oid cekid);
+
+extern Oid	get_cmk_oid(List *names, bool missing_ok);
+extern bool CMKIsVisible(Oid cmkid);
+
 extern Oid	CollationGetCollid(const char *collname);
 extern bool CollationIsVisible(Oid collid);
 

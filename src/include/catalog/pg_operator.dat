@@ -3458,4 +3458,14 @@
   oprcode => 'multirange_after_multirange', oprrest => 'multirangesel',
   oprjoin => 'scalargtjoinsel' },
 
+{ oid => '8247', descr => 'equal',
+  oprname => '=', oprcanmerge => 'f', oprcanhash => 't', oprleft => 'pg_encrypted_det',
+  oprright => 'pg_encrypted_det', oprresult => 'bool', oprcom => '=(pg_encrypted_det,pg_encrypted_det)',
+  oprnegate => '<>(pg_encrypted_det,pg_encrypted_det)', oprcode => 'pg_encrypted_det_eq', oprrest => 'eqsel',
+  oprjoin => 'eqjoinsel' },
+{ oid => '8248', descr => 'not equal',
+  oprname => '<>', oprleft => 'pg_encrypted_det', oprright => 'pg_encrypted_det', oprresult => 'bool',
+  oprcom => '<>(pg_encrypted_det,pg_encrypted_det)', oprnegate => '=(pg_encrypted_det,pg_encrypted_det)',
+  oprcode => 'pg_encrypted_det_ne', oprrest => 'neqsel', oprjoin => 'neqjoinsel' },
+
 ]

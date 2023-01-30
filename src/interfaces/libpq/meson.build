@@ -29,6 +29,7 @@ endif
 
 if ssl.found()
   libpq_sources += files('fe-secure-common.c')
+  libpq_sources += files('fe-encrypt-openssl.c')
   libpq_sources += files('fe-secure-openssl.c')
 endif
 
@@ -116,6 +117,7 @@ tests += {
     'tests': [
       't/001_uri.pl',
       't/002_api.pl',
+      't/003_encrypt.pl',
     ],
     'env': {'with_ssl': get_option('ssl')},
   },

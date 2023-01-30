@@ -1,0 +1,197 @@
+<!--
+doc/src/sgml/ref/alter_column_encryption_key.sgml
+PostgreSQL documentation
+-->
+
+<refentry id="sql-alter-column-encryption-key">
+ <indexterm zone="sql-alter-column-encryption-key">
+  <primary>ALTER COLUMN ENCRYPTION KEY</primary>
+ </indexterm>
+
+ <refmeta>
+  <refentrytitle>ALTER COLUMN ENCRYPTION KEY</refentrytitle>
+  <manvolnum>7</manvolnum>
+  <refmiscinfo>SQL - Language Statements</refmiscinfo>
+ </refmeta>
+
+ <refnamediv>
+  <refname>ALTER COLUMN ENCRYPTION KEY</refname>
+  <refpurpose>change the definition of a column encryption key</refpurpose>
+ </refnamediv>
+
+ <refsynopsisdiv>
+<synopsis>
+ALTER COLUMN ENCRYPTION KEY <replaceable>name</replaceable> ADD VALUE (
+    COLUMN_MASTER_KEY = <replaceable>cmk</replaceable>,
+    [ ALGORITHM = <replaceable>algorithm</replaceable>, ]
+    ENCRYPTED_VALUE = <replaceable>encval</replaceable>
+)
+
+ALTER COLUMN ENCRYPTION KEY <replaceable>name</replaceable> DROP VALUE (
+    COLUMN_MASTER_KEY = <replaceable>cmk</replaceable>
+)
+
+ALTER COLUMN ENCRYPTION KEY <replaceable>name</replaceable> RENAME TO <replaceable>new_name</replaceable>
+ALTER COLUMN ENCRYPTION KEY <replaceable>name</replaceable> OWNER TO { <replaceable>new_owner</replaceable> | CURRENT_ROLE | CURRENT_USER | SESSION_USER }
+ALTER COLUMN ENCRYPTION KEY <replaceable>name</replaceable> SET SCHEMA <replaceable>new_schema</replaceable>
+</synopsis>
+ </refsynopsisdiv>
+
+ <refsect1>
+  <title>Description</title>
+
+  <para>
+   <command>ALTER COLUMN ENCRYPTION KEY</command> changes the definition of a
+   column encryption key.
+  </para>
+
+  <para>
+   The first form adds new encrypted key data to a column encryption key,
+   which must be encrypted with a different column master key than the
+   existing key data.  The second form removes a key data entry for a given
+   column master key.  Together, these forms can be used for column master key
+   rotation.
+  </para>
+
+  <para>
+   You must own the column encryption key to use <command>ALTER COLUMN
+   ENCRYPTION KEY</command>.  To alter the owner, you must also be a direct or
+   indirect member of the new owning role, and that role must have
+   <literal>CREATE</literal> privilege on the column encryption key's
+   schema.  (These restrictions enforce that altering the owner doesn't do
+   anything you couldn't do by dropping and recreating the column encryption
+   key.  However, a superuser can alter ownership of any column encryption key
+   anyway.)
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Parameters</title>
+
+  <variablelist>
+   <varlistentry>
+    <term><replaceable class="parameter">name</replaceable></term>
+    <listitem>
+     <para>
+      The name (optionally schema-qualified) of an existing column encryption
+      key.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable>cmk</replaceable></term>
+
+    <listitem>
+     <para>
+      The name of the column master key that was used to encrypt this column
+      encryption key.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable>algorithm</replaceable></term>
+
+    <listitem>
+     <para>
+      The encryption algorithm that was used to encrypt the key material of
+      this column encryption key.  See <xref
+      linkend="sql-create-column-encryption-key"/> for details
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable>encval</replaceable></term>
+
+    <listitem>
+     <para>
+      The key material of this column encryption key, encrypted with the
+      specified column master key using the specified algorithm.  The value
+      must be a <type>bytea</type>-compatible literal.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">new_name</replaceable></term>
+    <listitem>
+     <para>
+      The new name of the column encryption key.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">new_owner</replaceable></term>
+    <listitem>
+     <para>
+      The new owner of the column encryption key.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">new_schema</replaceable></term>
+    <listitem>
+     <para>
+      The new schema for the column encryption key.
+     </para>
+    </listitem>
+   </varlistentry>
+  </variablelist>
+ </refsect1>
+
+ <refsect1>
+  <title>Examples</title>
+
+  <para>
+   To rotate the master keys used to encrypt a given column encryption key,
+   use a command sequence like this:
+<programlisting>
+ALTER COLUMN ENCRYPTION KEY cek1 ADD VALUE (
+    COLUMN_MASTER_KEY = cmk2,
+    ENCRYPTED_VALUE = '\x01020204...'
+);
+
+ALTER COLUMN ENCRYPTION KEY cek1 DROP VALUE (
+    COLUMN_MASTER_KEY = cmk1
+);
+</programlisting>
+  </para>
+
+  <para>
+   To rename the column encryption key <literal>cek1</literal> to
+   <literal>cek2</literal>:
+<programlisting>
+ALTER COLUMN ENCRYPTION KEY cek1 RENAME TO cek2;
+</programlisting>
+  </para>
+
+  <para>
+   To change the owner of the column encryption key <literal>cek1</literal> to
+   <literal>joe</literal>:
+<programlisting>
+ALTER COLUMN ENCRYPTION KEY cek1 OWNER TO joe;
+</programlisting></para>
+ </refsect1>
+
+ <refsect1>
+  <title>Compatibility</title>
+
+  <para>
+   There is no <command>ALTER COLUMN ENCRYPTION KEY</command> statement in the
+   SQL standard.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>See Also</title>
+
+  <simplelist type="inline">
+   <member><xref linkend="sql-create-column-encryption-key"/></member>
+   <member><xref linkend="sql-drop-column-encryption-key"/></member>
+  </simplelist>
+ </refsect1>
+</refentry>

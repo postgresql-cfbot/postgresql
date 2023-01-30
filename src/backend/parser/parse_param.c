@@ -29,6 +29,7 @@
 #include "catalog/pg_type.h"
 #include "nodes/nodeFuncs.h"
 #include "parser/parse_param.h"
+#include "parser/parsetree.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 
@@ -356,4 +357,147 @@ query_contains_extern_params_walker(Node *node, void *context)
 	}
 	return expression_tree_walker(node, query_contains_extern_params_walker,
 								  context);
+}
+
+/*
+ * Walk a query tree and find out what tables and columns a parameter is
+ * associated with.
+ *
+ * We need to find 1) parameters written directly into a table column, and 2)
+ * binary predicates relating a parameter to a table column.
+ *
+ * We just need to find Var and Param nodes in appropriate places.  We don't
+ * need to do harder things like looking through casts, since this is used for
+ * column encryption, and encrypted columns can't be usefully cast to
+ * anything.
+ */
+
+struct find_param_origs_context
+{
+	const Query *query;
+	Oid		   *param_orig_tbls;
+	AttrNumber *param_orig_cols;
+};
+
+static bool
+find_param_origs_walker(Node *node, struct find_param_origs_context *context)
+{
+	if (node == NULL)
+		return false;
+
+	if (IsA(node, OpExpr) || IsA(node, DistinctExpr) || IsA(node, NullIfExpr))
+	{
+		OpExpr	   *opexpr = (OpExpr *) node;
+
+		if (list_length(opexpr->args) == 2)
+		{
+			Node	   *lexpr = linitial(opexpr->args);
+			Node	   *rexpr = lsecond(opexpr->args);
+			Var		   *v = NULL;
+			Param	   *p = NULL;
+
+			if (IsA(lexpr, Var) && IsA(rexpr, Param))
+			{
+				v = castNode(Var, lexpr);
+				p = castNode(Param, rexpr);
+			}
+			else if (IsA(rexpr, Var) && IsA(lexpr, Param))
+			{
+				v = castNode(Var, rexpr);
+				p = castNode(Param, lexpr);
+			}
+
+			if (v && p)
+			{
+				RangeTblEntry *rte;
+
+				rte = rt_fetch(v->varno, context->query->rtable);
+				if (rte->rtekind == RTE_RELATION)
+				{
+					context->param_orig_tbls[p->paramid - 1] = rte->relid;
+					context->param_orig_cols[p->paramid - 1] = v->varattno;
+				}
+			}
+		}
+		return false;
+	}
+
+	/*
+	 * TargetEntry in a query with a result relation
+	 */
+	if (IsA(node, TargetEntry) && context->query->resultRelation > 0)
+	{
+		TargetEntry *te = (TargetEntry *) node;
+		RangeTblEntry *resrte;
+
+		resrte = rt_fetch(context->query->resultRelation, context->query->rtable);
+		if (resrte->rtekind == RTE_RELATION)
+		{
+			/*
+			 * Param directly in a target list
+			 */
+			if (IsA(te->expr, Param))
+			{
+				Param	   *p = (Param *) te->expr;
+
+				context->param_orig_tbls[p->paramid - 1] = resrte->relid;
+				context->param_orig_cols[p->paramid - 1] = te->resno;
+			}
+			/*
+			 * If it's a Var, check whether it corresponds to a VALUES list
+			 * with top-level parameters.  This covers multi-row INSERTS.
+			 */
+			else if (IsA(te->expr, Var))
+			{
+				Var	   *v = (Var *) te->expr;
+				RangeTblEntry *srcrte;
+
+				srcrte = rt_fetch(v->varno, context->query->rtable);
+				if (srcrte->rtekind == RTE_VALUES)
+				{
+					ListCell *lc;
+
+					foreach (lc, srcrte->values_lists)
+					{
+						List *values_list = lfirst_node(List, lc);
+						Node *value = list_nth(values_list, v->varattno - 1);
+
+						if (IsA(value, Param))
+						{
+							Param	   *p = (Param *) value;
+
+							context->param_orig_tbls[p->paramid - 1] = resrte->relid;
+							context->param_orig_cols[p->paramid - 1] = te->resno;
+						}
+					}
+				}
+			}
+		}
+		return false;
+	}
+
+	if (IsA(node, Query))
+	{
+		return query_tree_walker((Query *) node, find_param_origs_walker, context, 0);
+	}
+
+	return expression_tree_walker(node, find_param_origs_walker, context);
+}
+
+void
+find_param_origs(List *query_list, Oid **param_orig_tbls, AttrNumber **param_orig_cols)
+{
+	struct find_param_origs_context context;
+	ListCell   *lc;
+
+	context.param_orig_tbls = *param_orig_tbls;
+	context.param_orig_cols = *param_orig_cols;
+
+	foreach (lc, query_list)
+	{
+		Query	   *query = lfirst_node(Query, lc);
+
+		context.query = query;
+		query_tree_walker(query, find_param_origs_walker, &context, 0);
+	}
 }

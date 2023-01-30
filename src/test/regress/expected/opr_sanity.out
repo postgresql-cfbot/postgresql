@@ -159,7 +159,8 @@ ORDER BY 1, 2;
  text                        | character varying
  timestamp without time zone | timestamp with time zone
  txid_snapshot               | pg_snapshot
-(4 rows)
+ pg_encrypted_det            | pg_encrypted_rnd
+(5 rows)
 
 SELECT DISTINCT p1.proargtypes[0]::regtype, p2.proargtypes[0]::regtype
 FROM pg_proc AS p1, pg_proc AS p2
@@ -175,13 +176,15 @@ WHERE p1.oid != p2.oid AND
 ORDER BY 1, 2;
          proargtypes         |       proargtypes        
 -----------------------------+--------------------------
+ bytea                       | pg_encrypted_det
  bigint                      | xid8
  text                        | character
  text                        | character varying
  timestamp without time zone | timestamp with time zone
  bit                         | bit varying
  txid_snapshot               | pg_snapshot
-(6 rows)
+ pg_encrypted_det            | pg_encrypted_rnd
+(8 rows)
 
 SELECT DISTINCT p1.proargtypes[1]::regtype, p2.proargtypes[1]::regtype
 FROM pg_proc AS p1, pg_proc AS p2
@@ -197,12 +200,13 @@ WHERE p1.oid != p2.oid AND
 ORDER BY 1, 2;
          proargtypes         |       proargtypes        
 -----------------------------+--------------------------
+ bytea                       | pg_encrypted_det
  integer                     | xid
  timestamp without time zone | timestamp with time zone
  bit                         | bit varying
  txid_snapshot               | pg_snapshot
  anyrange                    | anymultirange
-(5 rows)
+(6 rows)
 
 SELECT DISTINCT p1.proargtypes[2]::regtype, p2.proargtypes[2]::regtype
 FROM pg_proc AS p1, pg_proc AS p2
@@ -872,6 +876,8 @@ xid8ge(xid8,xid8)
 xid8eq(xid8,xid8)
 xid8ne(xid8,xid8)
 xid8cmp(xid8,xid8)
+pg_encrypted_det_eq(pg_encrypted_det,pg_encrypted_det)
+pg_encrypted_det_ne(pg_encrypted_det,pg_encrypted_det)
 -- restore normal output mode
 \a\t
 -- List of functions used by libpq's fe-lobj.c

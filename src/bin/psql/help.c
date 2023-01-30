@@ -455,6 +455,10 @@ helpVariables(unsigned short int pager)
 		  "    show all results of a combined query (\\;) instead of only the last\n");
 	HELP0("  SHOW_CONTEXT\n"
 		  "    controls display of message context fields [never, errors, always]\n");
+	HELP0("  SHELL_ERROR\n"
+		  "    true if last shell command failed, else false\n");
+	HELP0("  SHELL_EXIT_CODE\n"
+		  "    Exit code of the last shell command\n");
 	HELP0("  SINGLELINE\n"
 		  "    if set, end of line terminates SQL commands (same as -S option)\n");
 	HELP0("  SINGLESTEP\n"

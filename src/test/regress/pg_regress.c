@@ -594,6 +594,17 @@ initialize_environment(void)
 #endif
 	}
 
+		/*
+		 * Regression tests that invoke OS commands must occasionally use
+		 * OS-specific syntax (example: NUL vs /dev/null). This env var allows
+		 * those tests to adjust commands accordingly.
+		 */
+#if defined(WIN32)
+		setenv("PG_OS_TARGET", "WIN32", 1);
+#else
+		setenv("PG_OS_TARGET", "OTHER", 1);
+#endif
+
 	/*
 	 * Set translation-related settings to English; otherwise psql will
 	 * produce translated messages and produce diffs.  (XXX If we ever support

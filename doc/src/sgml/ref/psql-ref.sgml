@@ -4264,6 +4264,27 @@ bar
         </listitem>
       </varlistentry>
 
+      <varlistentry id="app-psql-variables-shell-error">
+       <term><varname>SHELL_ERROR</varname></term>
+       <listitem>
+        <para>
+         <literal>true</literal> if the last shell command failed, <literal>false</literal> if
+         it succeeded. This applies to shell commands invoked via either <literal>\!</literal>
+         or <literal>`</literal>. See also <varname>SHELL_EXIT_CODE</varname>.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry id="app-psql-variables-exit-code">
+       <term><varname>SHELL_EXIT_CODE</varname></term>
+       <listitem>
+        <para>
+         The exit code return by the last shell command, invoked via either <literal>\!</literal> or <literal>`</literal>.
+         0 means no error. See also <varname>SHELL_ERROR</varname>.
+        </para>
+       </listitem>
+      </varlistentry>
+
       <varlistentry id="app-psql-variables-show-all-results">
         <term><varname>SHOW_ALL_RESULTS</varname></term>
         <listitem>

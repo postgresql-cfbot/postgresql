@@ -23,6 +23,7 @@
 #include "fe_utils/conditional.h"
 
 #include "libpq-fe.h"
+#include "settings.h"
 }
 
 %{
@@ -774,6 +775,7 @@ evaluate_backtick(PsqlScanState state)
 	bool		error = false;
 	char		buf[512];
 	size_t		result;
+	int			exit_code = 0;
 
 	initPQExpBuffer(&cmd_output);
 
@@ -783,6 +785,7 @@ evaluate_backtick(PsqlScanState state)
 	{
 		pg_log_error("%s: %m", cmd);
 		error = true;
+		exit_code = -1;
 	}
 
 	if (!error)
@@ -790,7 +793,8 @@ evaluate_backtick(PsqlScanState state)
 		do
 		{
 			result = fread(buf, 1, sizeof(buf), fd);
-			if (ferror(fd))
+			exit_code = ferror(fd);
+			if (exit_code)
 			{
 				pg_log_error("%s: %m", cmd);
 				error = true;
@@ -800,10 +804,21 @@ evaluate_backtick(PsqlScanState state)
 		} while (!feof(fd));
 	}
 
-	if (fd && pclose(fd) == -1)
+	if (fd)
 	{
-		pg_log_error("%s: %m", cmd);
-		error = true;
+		/*
+		 * Capture exit code for SHELL_EXIT_CODE, but to not erase an existing
+		 * nonzero exit_code.
+		 */
+		int close_exit_code = pclose(fd);
+
+		if (close_exit_code && !exit_code)
+		{
+			error = true;
+			exit_code = close_exit_code;
+			if (close_exit_code == -1)
+				pg_log_error("%s: %m", cmd);
+		}
 	}
 
 	if (PQExpBufferDataBroken(cmd_output))
@@ -824,7 +839,15 @@ evaluate_backtick(PsqlScanState state)
 			cmd_output.data[cmd_output.len - 1] == '\n')
 			cmd_output.len--;
 		appendBinaryPQExpBuffer(output_buf, cmd_output.data, cmd_output.len);
+		SetVariable(pset.vars, "SHELL_EXIT_CODE", "0");
+		SetVariable(pset.vars, "SHELL_ERROR", "false");
 	}
-
-	termPQExpBuffer(&cmd_output);
+	else
+	{
+		char	exit_code_buf[32];
+		snprintf(exit_code_buf, sizeof(exit_code_buf), "%d",
+				 wait_result_to_exit_code(exit_code));
+		SetVariable(pset.vars, "SHELL_EXIT_CODE", exit_code_buf);
+		SetVariable(pset.vars, "SHELL_ERROR", "true");
+	}
 }

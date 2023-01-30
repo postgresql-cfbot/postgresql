@@ -291,6 +291,31 @@ execute q;
 
 deallocate q;
 
+-- test SHELL_ERROR / SHELL_EXIT_CODE
+\getenv pg_os_target PG_OS_TARGET
+SELECT :'pg_os_target' = 'WIN32' AS windows_target \gset
+\if :windows_target
+    \set bad_cmd 'nosuchcommand 2> NUL'
+\else
+    \set bad_cmd 'nosuchcommand 2> /dev/null'
+\endif
+\set bad_shbang '\\! ' :bad_cmd
+
+:bad_shbang
+\echo :SHELL_ERROR
+-- Exit codes are shell dependent, we can only test nonzero
+SELECT :'SHELL_EXIT_CODE' != '0' AS nonzero \gset
+\echo :nonzero
+\set SHELL_ERROR 'clear'
+\set SHELL_EXIT_CODE 'clear'
+\echo :SHELL_ERROR
+\echo :SHELL_EXIT_CODE
+\set nosuchvar `:bad_cmd`
+\echo :SHELL_ERROR
+SELECT :'SHELL_EXIT_CODE' != '0' AS nonzero \gset
+\echo :nonzero
+\unset nonzero
+
 -- test single-line header and data
 prepare q as select repeat('x',2*n) as "0123456789abcdef", repeat('y',20-2*n) as "0123456789" from generate_series(1,10) as n;
 

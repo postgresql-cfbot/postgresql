@@ -127,3 +127,18 @@ wait_result_is_any_signal(int exit_status, bool include_command_not_found)
 		return true;
 	return false;
 }
+
+/*
+ * Return the POSIX exit code (0 to 255) that corresponds to the argument.
+ * The argument is a return code returned by wait(2) or waitpid(2), which
+ * also applies to pclose(3) and system(3).
+ */
+int
+wait_result_to_exit_code(int exit_status)
+{
+	if (WIFEXITED(exit_status))
+		return WEXITSTATUS(exit_status);
+	if (WIFSIGNALED(exit_status))
+		return WTERMSIG(exit_status);
+	return 0;
+}

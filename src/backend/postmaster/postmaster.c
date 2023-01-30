@@ -235,7 +235,6 @@ int			PreAuthDelay = 0;
 int			AuthenticationTimeout = 60;
 
 bool		log_hostname;		/* for ps display and logging */
-bool		Log_connections = false;
 bool		Db_user_namespace = false;
 
 bool		enable_bonjour = false;
@@ -4343,8 +4342,8 @@ BackendInitialize(Port *port)
 	port->remote_host = strdup(remote_host);
 	port->remote_port = strdup(remote_port);
 
-	/* And now we can issue the Log_connections message, if wanted */
-	if (Log_connections)
+	/* And now we can issue the "connection received" message, if wanted */
+	if (Log_connection_messages & LOG_CONNECTION_RECEIVED)
 	{
 		if (remote_port[0])
 			ereport(LOG,

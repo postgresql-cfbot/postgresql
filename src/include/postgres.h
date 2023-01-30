@@ -576,4 +576,13 @@ extern Datum Float8GetDatum(float8 X);
 #define NON_EXEC_STATIC static
 #endif
 
+extern PGDLLIMPORT int	Log_connection_messages;
+
+/* Bitmap for logging connection messages */
+#define LOG_CONNECTION_RECEIVED		 1
+#define LOG_CONNECTION_AUTHENTICATED 2
+#define LOG_CONNECTION_AUTHORIZED	 4
+#define LOG_CONNECTION_DISCONNECTED  8
+#define LOG_CONNECTION_ALL			 15
+
 #endif							/* POSTGRES_H */

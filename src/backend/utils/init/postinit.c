@@ -250,7 +250,7 @@ PerformAuthentication(Port *port)
 	 */
 	disable_timeout(STATEMENT_TIMEOUT, false);
 
-	if (Log_connections)
+	if (Log_connection_messages & LOG_CONNECTION_AUTHORIZED)
 	{
 		StringInfoData logmsg;
 

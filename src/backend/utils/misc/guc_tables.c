@@ -585,6 +585,7 @@ static char *recovery_target_string;
 static char *recovery_target_xid_string;
 static char *recovery_target_name_string;
 static char *recovery_target_lsn_string;
+static char *log_connection_messages_string;
 
 /* should be static, but commands/variable.c needs to get at this */
 char	   *role_string;
@@ -1180,24 +1181,6 @@ struct config_bool ConfigureNamesBool[] =
 		},
 		&log_checkpoints,
 		true,
-		NULL, NULL, NULL
-	},
-	{
-		{"log_connections", PGC_SU_BACKEND, LOGGING_WHAT,
-			gettext_noop("Logs each successful connection."),
-			NULL
-		},
-		&Log_connections,
-		false,
-		NULL, NULL, NULL
-	},
-	{
-		{"log_disconnections", PGC_SU_BACKEND, LOGGING_WHAT,
-			gettext_noop("Logs end of a session, including duration."),
-			NULL
-		},
-		&Log_disconnections,
-		false,
 		NULL, NULL, NULL
 	},
 	{
@@ -4163,6 +4146,16 @@ struct config_string ConfigureNamesString[] =
 		check_session_authorization, assign_session_authorization, NULL
 	},
 
+	{
+		{"log_connection_messages", PGC_SU_BACKEND, LOGGING_WHAT,
+			gettext_noop("Lists connection stages to log."),
+			NULL,
+			GUC_LIST_INPUT
+		},
+		&log_connection_messages_string,
+		"",
+		check_log_connection_messages, assign_log_connection_messages, NULL
+	},
 	{
 		{"log_destination", PGC_SIGHUP, LOGGING_WHERE,
 			gettext_noop("Sets the destination for server log output."),

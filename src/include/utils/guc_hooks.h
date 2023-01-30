@@ -67,6 +67,8 @@ extern bool check_locale_numeric(char **newval, void **extra, GucSource source);
 extern void assign_locale_numeric(const char *newval, void *extra);
 extern bool check_locale_time(char **newval, void **extra, GucSource source);
 extern void assign_locale_time(const char *newval, void *extra);
+extern bool check_log_connection_messages(char **newval, void **extra, GucSource source);
+extern void assign_log_connection_messages(const char *newval, void *extra);
 extern bool check_log_destination(char **newval, void **extra,
 								  GucSource source);
 extern void assign_log_destination(const char *newval, void *extra);

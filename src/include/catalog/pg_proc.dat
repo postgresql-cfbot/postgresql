@@ -11918,4 +11918,14 @@
   prorettype => 'bytea', proargtypes => 'pg_brin_minmax_multi_summary',
   prosrc => 'brin_minmax_multi_summary_send' },
 
+{ oid => '9693', descr => 'lower bounds of ranges',
+  proname => 'ranges_lower', provolatile => 's',
+  prorettype => 'anyarray', proargtypes => 'anyarray',
+  prosrc => 'ranges_lower_bounds' },
+
+{ oid => '9694', descr => 'upper bounds of ranges',
+  proname => 'ranges_upper', provolatile => 's',
+  prorettype => 'anyarray', proargtypes => 'anyarray',
+  prosrc => 'ranges_upper_bounds' },
+
 ]

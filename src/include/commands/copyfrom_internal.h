@@ -16,6 +16,7 @@
 
 #include "commands/copy.h"
 #include "commands/trigger.h"
+#include "utils/resowner.h"
 
 /*
  * Represents the different source cases we need to worry about at
@@ -53,6 +54,25 @@ typedef enum CopyInsertMethod
 } CopyInsertMethod;
 
 /*
+ * Struct that holding fields for safe copying option enabled by IGNORE_ERRORS.
+ */
+typedef struct SafeCopyFromState
+{
+#define		SAFE_BUFFER_SIZE	1000
+#define		MAX_SAFE_BUFFER_BYTES	65535
+
+	HeapTuple	safe_buffer[SAFE_BUFFER_SIZE]; 	/* accumulates valid tuples */
+	int			saved_tuples;					/* # of tuples in safe_buffer */
+	int 		replayed_tuples;				/* # of tuples were replayed from buffer */
+	int			safeBufferBytes;				/* # of bytes from all buffered tuples */
+	int			errors;							/* total # of errors */
+
+	MemoryContext	safe_cxt;
+	MemoryContext	oldcontext;
+	ResourceOwner	oldowner;
+} SafeCopyFromState;
+
+/*
  * This struct contains all the state variables used throughout a COPY FROM
  * operation.
  */
@@ -74,6 +94,7 @@ typedef struct CopyFromStateData
 	char	   *filename;		/* filename, or NULL for STDIN */
 	bool		is_program;		/* is 'filename' a program to popen? */
 	copy_data_source_cb data_source_cb; /* function for reading data */
+	SafeCopyFromState *sfcstate; /* struct for ignore_errors option */
 
 	CopyFormatOptions opts;
 	bool	   *convert_select_flags;	/* per-column CSV/TEXT CS flags */

@@ -107,6 +107,9 @@ static char *limit_printout_length(const char *str);
 
 static void ClosePipeFromProgram(CopyFromState cstate);
 
+static bool SafeCopying(CopyFromState cstate, ExprContext *econtext,
+							 TupleTableSlot *myslot);
+
 /*
  * error context callback for COPY FROM
  *
@@ -626,6 +629,175 @@ CopyMultiInsertInfoStore(CopyMultiInsertInfo *miinfo, ResultRelInfo *rri,
 }
 
 /*
+ * Safely reads source data, converts to a tuple and fills tuple buffer.
+ * Skips some data in the case of failed conversion if data source for
+ * a next tuple can be surely read without a danger.
+ */
+bool
+SafeCopying(CopyFromState cstate, ExprContext *econtext, TupleTableSlot *myslot)
+{
+	SafeCopyFromState  *sfcstate = cstate->sfcstate;
+	bool 				valid_row = true;
+
+	/* Standard COPY if IGNORE_ERRORS is disabled */
+	if (!cstate->sfcstate)
+		/* Directly stores the values/nulls array in the slot */
+		return NextCopyFrom(cstate, econtext, myslot->tts_values, myslot->tts_isnull);
+
+	if (sfcstate->replayed_tuples < sfcstate->saved_tuples)
+	{
+		Assert(sfcstate->saved_tuples > 0);
+
+		/* Prepare to replay the tuple */
+		heap_deform_tuple(sfcstate->safe_buffer[sfcstate->replayed_tuples++], RelationGetDescr(cstate->rel),
+						  myslot->tts_values, myslot->tts_isnull);
+		return true;
+	}
+	else
+	{
+		/* All tuples from buffer were replayed, clean it up */
+		MemoryContextReset(sfcstate->safe_cxt);
+
+		sfcstate->saved_tuples = sfcstate->replayed_tuples = 0;
+		sfcstate->safeBufferBytes = 0;
+	}
+
+	BeginInternalSubTransaction(NULL);
+	CurrentResourceOwner = sfcstate->oldowner;
+
+	while (sfcstate->saved_tuples < SAFE_BUFFER_SIZE &&
+		   sfcstate->safeBufferBytes < MAX_SAFE_BUFFER_BYTES)
+	{
+		bool	tuple_is_valid = true;
+
+		PG_TRY();
+		{
+			MemoryContext cxt = MemoryContextSwitchTo(econtext->ecxt_per_tuple_memory);
+
+			valid_row = NextCopyFrom(cstate, econtext, myslot->tts_values, myslot->tts_isnull);
+			tuple_is_valid = valid_row;
+
+			if (valid_row)
+				sfcstate->safeBufferBytes += cstate->line_buf.len;
+
+			CurrentMemoryContext = cxt;
+		}
+		PG_CATCH();
+		{
+			MemoryContext ecxt = MemoryContextSwitchTo(sfcstate->oldcontext);
+			ErrorData 	 *errdata = CopyErrorData();
+
+			tuple_is_valid = false;
+
+			Assert(IsSubTransaction());
+
+			RollbackAndReleaseCurrentSubTransaction();
+			CurrentResourceOwner = sfcstate->oldowner;
+
+			switch (errdata->sqlerrcode)
+			{
+				/* Ignore data exceptions */
+				case ERRCODE_CHARACTER_NOT_IN_REPERTOIRE:
+				case ERRCODE_DATA_EXCEPTION:
+				case ERRCODE_ARRAY_ELEMENT_ERROR:
+				case ERRCODE_DATETIME_VALUE_OUT_OF_RANGE:
+				case ERRCODE_INTERVAL_FIELD_OVERFLOW:
+				case ERRCODE_INVALID_CHARACTER_VALUE_FOR_CAST:
+				case ERRCODE_INVALID_DATETIME_FORMAT:
+				case ERRCODE_INVALID_ESCAPE_CHARACTER:
+				case ERRCODE_INVALID_ESCAPE_SEQUENCE:
+				case ERRCODE_NONSTANDARD_USE_OF_ESCAPE_CHARACTER:
+				case ERRCODE_INVALID_PARAMETER_VALUE:
+				case ERRCODE_INVALID_TABLESAMPLE_ARGUMENT:
+				case ERRCODE_INVALID_TIME_ZONE_DISPLACEMENT_VALUE:
+				case ERRCODE_NULL_VALUE_NOT_ALLOWED:
+				case ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE:
+				case ERRCODE_SEQUENCE_GENERATOR_LIMIT_EXCEEDED:
+				case ERRCODE_STRING_DATA_LENGTH_MISMATCH:
+				case ERRCODE_STRING_DATA_RIGHT_TRUNCATION:
+				case ERRCODE_INVALID_TEXT_REPRESENTATION:
+				case ERRCODE_INVALID_BINARY_REPRESENTATION:
+				case ERRCODE_BAD_COPY_FILE_FORMAT:
+				case ERRCODE_UNTRANSLATABLE_CHARACTER:
+				case ERRCODE_DUPLICATE_JSON_OBJECT_KEY_VALUE:
+				case ERRCODE_INVALID_ARGUMENT_FOR_SQL_JSON_DATETIME_FUNCTION:
+				case ERRCODE_INVALID_JSON_TEXT:
+				case ERRCODE_INVALID_SQL_JSON_SUBSCRIPT:
+				case ERRCODE_MORE_THAN_ONE_SQL_JSON_ITEM:
+				case ERRCODE_NO_SQL_JSON_ITEM:
+				case ERRCODE_NON_NUMERIC_SQL_JSON_ITEM:
+				case ERRCODE_NON_UNIQUE_KEYS_IN_A_JSON_OBJECT:
+				case ERRCODE_SINGLETON_SQL_JSON_ITEM_REQUIRED:
+				case ERRCODE_SQL_JSON_ARRAY_NOT_FOUND:
+				case ERRCODE_SQL_JSON_MEMBER_NOT_FOUND:
+				case ERRCODE_SQL_JSON_NUMBER_NOT_FOUND:
+				case ERRCODE_SQL_JSON_OBJECT_NOT_FOUND:
+				case ERRCODE_TOO_MANY_JSON_ARRAY_ELEMENTS:
+				case ERRCODE_TOO_MANY_JSON_OBJECT_MEMBERS:
+				case ERRCODE_SQL_JSON_SCALAR_REQUIRED:
+				case ERRCODE_SQL_JSON_ITEM_CANNOT_BE_CAST_TO_TARGET_TYPE:
+					/* If the error can be processed, begin a new subtransaction */
+					BeginInternalSubTransaction(NULL);
+					CurrentResourceOwner = sfcstate->oldowner;
+
+					sfcstate->errors++;
+					if (sfcstate->errors <= 100)
+						ereport(WARNING,
+								(errcode(errdata->sqlerrcode),
+								errmsg("%s", errdata->context)));
+					break;
+				default:
+					MemoryContextSwitchTo(ecxt);
+
+					PG_RE_THROW();
+
+					break;
+			}
+
+			FlushErrorState();
+			FreeErrorData(errdata);
+			errdata = NULL;
+
+			MemoryContextSwitchTo(ecxt);
+		}
+		PG_END_TRY();
+
+		if (tuple_is_valid)
+		{
+			/* Add tuple to safe_buffer in Safe_context */
+			HeapTuple 	  saved_tuple;
+
+			MemoryContextSwitchTo(sfcstate->safe_cxt);
+
+			saved_tuple = heap_form_tuple(RelationGetDescr(cstate->rel), myslot->tts_values, myslot->tts_isnull);
+			sfcstate->safe_buffer[sfcstate->saved_tuples++] = saved_tuple;
+		}
+
+		ExecClearTuple(myslot);
+
+		if (!valid_row)
+			break;
+	}
+
+	ReleaseCurrentSubTransaction();
+	CurrentResourceOwner = sfcstate->oldowner;
+
+	/* Prepare to replay the first tuple from safe_buffer */
+	if (sfcstate->saved_tuples != 0)
+	{
+		heap_deform_tuple(sfcstate->safe_buffer[sfcstate->replayed_tuples++], RelationGetDescr(cstate->rel),
+						  myslot->tts_values, myslot->tts_isnull);
+		return true;
+	}
+
+	/* End of file and nothing to replay? */
+	if (!valid_row && sfcstate->replayed_tuples == sfcstate->saved_tuples)
+		return false;
+
+	return true;
+}
+
+/*
  * Copy FROM file to relation.
  */
 uint64
@@ -991,8 +1163,8 @@ CopyFrom(CopyFromState cstate)
 
 		ExecClearTuple(myslot);
 
-		/* Directly store the values/nulls array in the slot */
-		if (!NextCopyFrom(cstate, econtext, myslot->tts_values, myslot->tts_isnull))
+		/* Standard copying with option "safe copying" enabled by IGNORE_ERRORS. */
+		if (!SafeCopying(cstate, econtext, myslot))
 			break;
 
 		ExecStoreVirtualTuple(myslot);
@@ -1275,6 +1447,10 @@ CopyFrom(CopyFromState cstate)
 										 ++processed);
 		}
 	}
+
+	if (cstate->sfcstate && cstate->sfcstate->errors > 0)
+		ereport(WARNING,
+				errmsg("Errors: %d", cstate->sfcstate->errors));
 
 	/* Flush any remaining buffered tuples */
 	if (insertMethod != CIM_SINGLE)
@@ -1702,6 +1878,23 @@ BeginCopyFrom(ParseState *pstate,
 
 		cstate->max_fields = attr_count;
 		cstate->raw_fields = (char **) palloc(attr_count * sizeof(char *));
+	}
+
+	/* Initialize safeCopyFromState for IGNORE_ERRORS option */
+	if (cstate->opts.ignore_errors)
+	{
+		cstate->sfcstate = palloc(sizeof(SafeCopyFromState));
+
+		cstate->sfcstate->safe_cxt = AllocSetContextCreate(oldcontext,
+									 "Safe_context",
+									 ALLOCSET_DEFAULT_SIZES);
+		cstate->sfcstate->saved_tuples = 0;
+		cstate->sfcstate->replayed_tuples = 0;
+		cstate->sfcstate->safeBufferBytes = 0;
+		cstate->sfcstate->errors = 0;
+
+		cstate->sfcstate->oldowner = CurrentResourceOwner;
+		cstate->sfcstate->oldcontext = cstate->copycontext;
 	}
 
 	MemoryContextSwitchTo(oldcontext);

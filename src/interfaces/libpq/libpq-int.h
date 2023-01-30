@@ -26,7 +26,8 @@
 #include <netdb.h>
 #include <sys/socket.h>
 #include <time.h>
-#ifndef WIN32
+/* MinGW has sys/time.h, but MSVC doesn't */
+#ifndef _MSC_VER
 #include <sys/time.h>
 #endif
 
@@ -81,6 +82,8 @@ typedef struct
 #define USE_SSL_ENGINE
 #endif
 #endif							/* USE_OPENSSL */
+
+#include "common/pg_prng.h"
 
 /*
  * POSTGRES backend dependent Constants.
@@ -242,6 +245,13 @@ typedef enum
 	SERVER_TYPE_PREFER_STANDBY_PASS2	/* second pass - behaves same as ANY */
 } PGTargetServerType;
 
+/* Target server type (decoded value of load_balance_hosts) */
+typedef enum
+{
+	LOAD_BALANCE_DISABLE = 0,	/* Use the existing host order (default) */
+	LOAD_BALANCE_RANDOM,		/* Read-write server */
+}			PGLoadBalanceType;
+
 /* Boolean value plus a not-known state, for GUCs we might have to fetch */
 typedef enum
 {
@@ -396,6 +406,8 @@ struct pg_conn
 	char	   *ssl_min_protocol_version;	/* minimum TLS protocol version */
 	char	   *ssl_max_protocol_version;	/* maximum TLS protocol version */
 	char	   *target_session_attrs;	/* desired session properties */
+	char	   *load_balance_hosts; /* load balance over hosts */
+	char	   *randomseed;		/* seed for randomization of load balancing */
 
 	/* Optional file to write trace info to */
 	FILE	   *Pfdebug;
@@ -459,10 +471,14 @@ struct pg_conn
 
 	/* Transient state needed while establishing connection */
 	PGTargetServerType target_server_type;	/* desired session properties */
+	PGLoadBalanceType load_balance_type;	/* desired load balancing
+											 * algorithm */
 	bool		try_next_addr;	/* time to advance to next address/host? */
 	bool		try_next_host;	/* time to advance to next connhost[]? */
-	struct addrinfo *addrlist;	/* list of addresses for current connhost */
-	struct addrinfo *addr_cur;	/* the one currently being tried */
+	int			naddr;			/* number of addresses returned by getaddrinfo */
+	int			whichaddr;		/* the address currently being tried */
+	AddrInfo   *addr;			/* the array of addresses for the currently
+								 * tried host */
 	int			addrlist_family;	/* needed to know how to free addrlist */
 	bool		send_appname;	/* okay to send application_name? */
 
@@ -477,6 +493,8 @@ struct pg_conn
 	PGVerbosity verbosity;		/* error/notice message verbosity */
 	PGContextVisibility show_context;	/* whether to show CONTEXT field */
 	PGlobjfuncs *lobjfuncs;		/* private state for large-object access fns */
+	pg_prng_state prng_state;	/* prng state for load balancing connections */
+
 
 	/* Buffer for data received from backend and not yet processed */
 	char	   *inBuffer;		/* currently allocated buffer */
@@ -888,8 +906,8 @@ extern char *libpq_ngettext(const char *msgid, const char *msgid_plural, unsigne
  */
 #undef _
 
-extern void libpq_append_error(PQExpBuffer errorMessage, const char *fmt, ...) pg_attribute_printf(2, 3);
-extern void libpq_append_conn_error(PGconn *conn, const char *fmt, ...) pg_attribute_printf(2, 3);
+extern void libpq_append_error(PQExpBuffer errorMessage, const char *fmt,...) pg_attribute_printf(2, 3);
+extern void libpq_append_conn_error(PGconn *conn, const char *fmt,...) pg_attribute_printf(2, 3);
 
 /*
  * These macros are needed to let error-handling code be portable between

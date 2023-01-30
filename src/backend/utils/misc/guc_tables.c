@@ -1213,7 +1213,7 @@ struct config_bool ConfigureNamesBool[] =
 		{"debug_assertions", PGC_INTERNAL, PRESET_OPTIONS,
 			gettext_noop("Shows whether the running server has assertion checks enabled."),
 			NULL,
-			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE | GUC_DEFAULT_COMPILE
 		},
 		&assert_enabled,
 		DEFAULT_ASSERT_ENABLED,
@@ -1405,7 +1405,8 @@ struct config_bool ConfigureNamesBool[] =
 	{
 		{"update_process_title", PGC_SUSET, PROCESS_TITLE,
 			gettext_noop("Updates the process title to show the active SQL command."),
-			gettext_noop("Enables updating of the process title every time a new SQL command is received by the server.")
+			gettext_noop("Enables updating of the process title every time a new SQL command is received by the server."),
+			GUC_DEFAULT_COMPILE
 		},
 		&update_process_title,
 		DEFAULT_UPDATE_PROCESS_TITLE,
@@ -2150,7 +2151,8 @@ struct config_int ConfigureNamesInt[] =
 	{
 		{"max_connections", PGC_POSTMASTER, CONN_AUTH_SETTINGS,
 			gettext_noop("Sets the maximum number of concurrent connections."),
-			NULL
+			NULL,
+			GUC_DEFAULT_INITDB
 		},
 		&MaxConnections,
 		100, 1, MAX_BACKENDS,
@@ -2198,7 +2200,7 @@ struct config_int ConfigureNamesInt[] =
 		{"shared_buffers", PGC_POSTMASTER, RESOURCES_MEM,
 			gettext_noop("Sets the number of shared memory buffers used by the server."),
 			NULL,
-			GUC_UNIT_BLOCKS
+			GUC_UNIT_BLOCKS | GUC_DEFAULT_INITDB
 		},
 		&NBuffers,
 		16384, 16, INT_MAX / 2,
@@ -2241,7 +2243,8 @@ struct config_int ConfigureNamesInt[] =
 	{
 		{"port", PGC_POSTMASTER, CONN_AUTH_SETTINGS,
 			gettext_noop("Sets the TCP port the server listens on."),
-			NULL
+			NULL,
+			GUC_DEFAULT_COMPILE
 		},
 		&PostPortNumber,
 		DEF_PGPORT, 1, 65535,
@@ -2270,7 +2273,8 @@ struct config_int ConfigureNamesInt[] =
 						 "to be a numeric mode specification in the form "
 						 "accepted by the chmod and umask system calls. "
 						 "(To use the customary octal format the number must "
-						 "start with a 0 (zero).)")
+						 "start with a 0 (zero).)"),
+			GUC_DEFAULT_INITDB
 		},
 		&Log_file_mode,
 		0600, 0000, 0777,
@@ -2712,7 +2716,7 @@ struct config_int ConfigureNamesInt[] =
 		{"checkpoint_flush_after", PGC_SIGHUP, WAL_CHECKPOINTS,
 			gettext_noop("Number of pages after which previously performed writes are flushed to disk."),
 			NULL,
-			GUC_UNIT_BLOCKS
+			GUC_UNIT_BLOCKS | GUC_DEFAULT_COMPILE
 		},
 		&checkpoint_flush_after,
 		DEFAULT_CHECKPOINT_FLUSH_AFTER, 0, WRITEBACK_MAX_PENDING_FLUSHES,
@@ -2930,7 +2934,7 @@ struct config_int ConfigureNamesInt[] =
 		{"bgwriter_flush_after", PGC_SIGHUP, RESOURCES_BGWRITER,
 			gettext_noop("Number of pages after which previously performed writes are flushed to disk."),
 			NULL,
-			GUC_UNIT_BLOCKS
+			GUC_UNIT_BLOCKS | GUC_DEFAULT_COMPILE
 		},
 		&bgwriter_flush_after,
 		DEFAULT_BGWRITER_FLUSH_AFTER, 0, WRITEBACK_MAX_PENDING_FLUSHES,
@@ -2943,7 +2947,7 @@ struct config_int ConfigureNamesInt[] =
 			RESOURCES_ASYNCHRONOUS,
 			gettext_noop("Number of simultaneous requests that can be handled efficiently by the disk subsystem."),
 			NULL,
-			GUC_EXPLAIN
+			GUC_EXPLAIN | GUC_DEFAULT_COMPILE
 		},
 		&effective_io_concurrency,
 		DEFAULT_EFFECTIVE_IO_CONCURRENCY,
@@ -2957,7 +2961,7 @@ struct config_int ConfigureNamesInt[] =
 			RESOURCES_ASYNCHRONOUS,
 			gettext_noop("A variant of effective_io_concurrency that is used for maintenance work."),
 			NULL,
-			GUC_EXPLAIN
+			GUC_EXPLAIN | GUC_DEFAULT_COMPILE
 		},
 		&maintenance_io_concurrency,
 		DEFAULT_MAINTENANCE_IO_CONCURRENCY,
@@ -2970,7 +2974,7 @@ struct config_int ConfigureNamesInt[] =
 		{"backend_flush_after", PGC_USERSET, RESOURCES_ASYNCHRONOUS,
 			gettext_noop("Number of pages after which previously performed writes are flushed to disk."),
 			NULL,
-			GUC_UNIT_BLOCKS
+			GUC_UNIT_BLOCKS | GUC_DEFAULT_COMPILE
 		},
 		&backend_flush_after,
 		DEFAULT_BACKEND_FLUSH_AFTER, 0, WRITEBACK_MAX_PENDING_FLUSHES,
@@ -3425,7 +3429,7 @@ struct config_int ConfigureNamesInt[] =
 		{"debug_discard_caches", PGC_SUSET, DEVELOPER_OPTIONS,
 			gettext_noop("Aggressively flush system caches for debugging purposes."),
 			NULL,
-			GUC_NOT_IN_SAMPLE
+			GUC_NOT_IN_SAMPLE | GUC_DEFAULT_COMPILE
 		},
 		&debug_discard_caches,
 #ifdef DISCARD_CACHES_ENABLED
@@ -3908,7 +3912,8 @@ struct config_string ConfigureNamesString[] =
 	{
 		{"log_timezone", PGC_SIGHUP, LOGGING_WHAT,
 			gettext_noop("Sets the time zone to use in log messages."),
-			NULL
+			NULL,
+			GUC_DEFAULT_INITDB
 		},
 		&log_timezone_string,
 		"GMT",
@@ -3920,7 +3925,7 @@ struct config_string ConfigureNamesString[] =
 			gettext_noop("Sets the display format for date and time values."),
 			gettext_noop("Also controls interpretation of ambiguous "
 						 "date inputs."),
-			GUC_LIST_INPUT | GUC_REPORT
+			GUC_LIST_INPUT | GUC_REPORT | GUC_DEFAULT_INITDB
 		},
 		&datestyle_string,
 		"ISO, MDY",
@@ -4034,7 +4039,8 @@ struct config_string ConfigureNamesString[] =
 	{
 		{"lc_messages", PGC_SUSET, CLIENT_CONN_LOCALE,
 			gettext_noop("Sets the language in which messages are displayed."),
-			NULL
+			NULL,
+			GUC_DEFAULT_INITDB
 		},
 		&locale_messages,
 		"",
@@ -4044,7 +4050,8 @@ struct config_string ConfigureNamesString[] =
 	{
 		{"lc_monetary", PGC_USERSET, CLIENT_CONN_LOCALE,
 			gettext_noop("Sets the locale for formatting monetary amounts."),
-			NULL
+			NULL,
+			GUC_DEFAULT_INITDB
 		},
 		&locale_monetary,
 		"C",
@@ -4054,7 +4061,8 @@ struct config_string ConfigureNamesString[] =
 	{
 		{"lc_numeric", PGC_USERSET, CLIENT_CONN_LOCALE,
 			gettext_noop("Sets the locale for formatting numbers."),
-			NULL
+			NULL,
+			GUC_DEFAULT_INITDB
 		},
 		&locale_numeric,
 		"C",
@@ -4064,7 +4072,8 @@ struct config_string ConfigureNamesString[] =
 	{
 		{"lc_time", PGC_USERSET, CLIENT_CONN_LOCALE,
 			gettext_noop("Sets the locale for formatting date and time values."),
-			NULL
+			NULL,
+			GUC_DEFAULT_INITDB
 		},
 		&locale_time,
 		"C",
@@ -4223,7 +4232,8 @@ struct config_string ConfigureNamesString[] =
 		{"TimeZone", PGC_USERSET, CLIENT_CONN_LOCALE,
 			gettext_noop("Sets the time zone for displaying and interpreting time stamps."),
 			NULL,
-			GUC_REPORT
+			GUC_REPORT | GUC_DEFAULT_INITDB
+
 		},
 		&timezone_string,
 		"GMT",
@@ -4254,7 +4264,7 @@ struct config_string ConfigureNamesString[] =
 		{"unix_socket_directories", PGC_POSTMASTER, CONN_AUTH_SETTINGS,
 			gettext_noop("Sets the directories where Unix-domain sockets will be created."),
 			NULL,
-			GUC_LIST_INPUT | GUC_LIST_QUOTE | GUC_SUPERUSER_ONLY
+			GUC_LIST_INPUT | GUC_LIST_QUOTE | GUC_SUPERUSER_ONLY | GUC_DEFAULT_COMPILE
 		},
 		&Unix_socket_directories,
 		DEFAULT_PGSOCKET_DIR,
@@ -4335,7 +4345,7 @@ struct config_string ConfigureNamesString[] =
 		{"ssl_library", PGC_INTERNAL, PRESET_OPTIONS,
 			gettext_noop("Shows the name of the SSL library."),
 			NULL,
-			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE
+			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE | GUC_DEFAULT_COMPILE
 		},
 		&ssl_library,
 #ifdef USE_SSL
@@ -4410,7 +4420,9 @@ struct config_string ConfigureNamesString[] =
 	{
 		{"default_text_search_config", PGC_USERSET, CLIENT_CONN_LOCALE,
 			gettext_noop("Sets default text search configuration."),
-			NULL
+			NULL,
+			GUC_DEFAULT_INITDB
+
 		},
 		&TSCurrentConfig,
 		"pg_catalog.simple",
@@ -4421,7 +4433,7 @@ struct config_string ConfigureNamesString[] =
 		{"ssl_ciphers", PGC_SIGHUP, CONN_AUTH_SSL,
 			gettext_noop("Sets the list of allowed SSL ciphers."),
 			NULL,
-			GUC_SUPERUSER_ONLY
+			GUC_SUPERUSER_ONLY | GUC_DEFAULT_COMPILE
 		},
 		&SSLCipherSuites,
 #ifdef USE_OPENSSL
@@ -4436,7 +4448,7 @@ struct config_string ConfigureNamesString[] =
 		{"ssl_ecdh_curve", PGC_SIGHUP, CONN_AUTH_SSL,
 			gettext_noop("Sets the curve to use for ECDH."),
 			NULL,
-			GUC_SUPERUSER_ONLY
+			GUC_SUPERUSER_ONLY | GUC_DEFAULT_COMPILE
 		},
 		&SSLECDHCurve,
 #ifdef USE_SSL
@@ -4674,7 +4686,8 @@ struct config_enum ConfigureNamesEnum[] =
 	{
 		{"syslog_facility", PGC_SIGHUP, LOGGING_WHERE,
 			gettext_noop("Sets the syslog \"facility\" to be used when syslog enabled."),
-			NULL
+			NULL,
+			GUC_DEFAULT_COMPILE
 		},
 		&syslog_facility,
 		DEFAULT_SYSLOG_FACILITY,
@@ -4783,7 +4796,9 @@ struct config_enum ConfigureNamesEnum[] =
 	{
 		{"dynamic_shared_memory_type", PGC_POSTMASTER, RESOURCES_MEM,
 			gettext_noop("Selects the dynamic shared memory implementation used."),
-			NULL
+			NULL,
+			/* platform-specific default, which is also overriden during initdb */
+			GUC_DEFAULT_COMPILE | GUC_DEFAULT_INITDB
 		},
 		&dynamic_shared_memory_type,
 		DEFAULT_DYNAMIC_SHARED_MEMORY_TYPE, dynamic_shared_memory_options,
@@ -4793,7 +4808,8 @@ struct config_enum ConfigureNamesEnum[] =
 	{
 		{"shared_memory_type", PGC_POSTMASTER, RESOURCES_MEM,
 			gettext_noop("Selects the shared memory implementation used for the main shared memory region."),
-			NULL
+			NULL,
+			GUC_DEFAULT_COMPILE
 		},
 		&shared_memory_type,
 		DEFAULT_SHARED_MEMORY_TYPE, shared_memory_options,
@@ -4803,7 +4819,8 @@ struct config_enum ConfigureNamesEnum[] =
 	{
 		{"wal_sync_method", PGC_SIGHUP, WAL_SETTINGS,
 			gettext_noop("Selects the method used for forcing WAL updates to disk."),
-			NULL
+			NULL,
+			GUC_DEFAULT_COMPILE
 		},
 		&sync_method,
 		DEFAULT_SYNC_METHOD, sync_method_options,
@@ -4865,7 +4882,8 @@ struct config_enum ConfigureNamesEnum[] =
 	{
 		{"password_encryption", PGC_USERSET, CONN_AUTH_AUTH,
 			gettext_noop("Chooses the algorithm for encrypting passwords."),
-			NULL
+			NULL,
+			GUC_DEFAULT_INITDB
 		},
 		&Password_encryption,
 		PASSWORD_TYPE_SCRAM_SHA_256, password_encryption_options,

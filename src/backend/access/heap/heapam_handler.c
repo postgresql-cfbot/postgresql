@@ -53,6 +53,12 @@ static bool SampleHeapTupleVisible(TableScanDesc scan, Buffer buffer,
 								   HeapTuple tuple,
 								   OffsetNumber tupoffset);
 
+static TM_Result heapam_tuple_lock_internal(Relation relation, ItemPointer tid,
+											Snapshot snapshot, TupleTableSlot *slot,
+											CommandId cid, LockTupleMode mode,
+											LockWaitPolicy wait_policy, uint8 flags,
+											TM_FailureData *tmfd, bool updated);
+
 static BlockNumber heapam_scan_get_blocks_done(HeapScanDesc hscan);
 
 static const TableAmRoutine heapam_methods;
@@ -299,14 +305,39 @@ heapam_tuple_complete_speculative(Relation relation, TupleTableSlot *slot,
 static TM_Result
 heapam_tuple_delete(Relation relation, ItemPointer tid, CommandId cid,
 					Snapshot snapshot, Snapshot crosscheck, bool wait,
-					TM_FailureData *tmfd, bool changingPart)
+					TM_FailureData *tmfd, bool changingPart,
+					TupleTableSlot *lockedSlot)
 {
+	TM_Result	result;
+
 	/*
 	 * Currently Deleting of index tuples are handled at vacuum, in case if
 	 * the storage itself is cleaning the dead tuples by itself, it is the
 	 * time to call the index tuple deletion also.
 	 */
-	return heap_delete(relation, tid, cid, crosscheck, wait, tmfd, changingPart);
+	result = heap_delete(relation, tid, cid, crosscheck, wait, tmfd, changingPart);
+
+	/*
+	 * If the tuple has been concurrently updated, get lock already so that on
+	 * retry it will succeed, provided that the caller asked to do this by
+	 * providing a lockedSlot.
+	 */
+	if (result == TM_Updated && lockedSlot != NULL)
+	{
+		result = heapam_tuple_lock_internal(relation, tid, snapshot,
+											lockedSlot, cid, LockTupleExclusive,
+											LockWaitBlock,
+											TUPLE_LOCK_FLAG_FIND_LAST_VERSION,
+											tmfd, true);
+
+		if (result == TM_Ok)
+		{
+			tmfd->traversed = true;
+			return TM_Updated;
+		}
+	}
+
+	return result;
 }
 
 
@@ -314,7 +345,8 @@ static TM_Result
 heapam_tuple_update(Relation relation, ItemPointer otid, TupleTableSlot *slot,
 					CommandId cid, Snapshot snapshot, Snapshot crosscheck,
 					bool wait, TM_FailureData *tmfd,
-					LockTupleMode *lockmode, bool *update_indexes)
+					LockTupleMode *lockmode, bool *update_indexes,
+					TupleTableSlot *lockedSlot)
 {
 	bool		shouldFree = true;
 	HeapTuple	tuple = ExecFetchSlotHeapTuple(slot, true, &shouldFree);
@@ -341,6 +373,26 @@ heapam_tuple_update(Relation relation, ItemPointer otid, TupleTableSlot *slot,
 	if (shouldFree)
 		pfree(tuple);
 
+	/*
+	 * If the tuple has been concurrently updated, get lock already so that on
+	 * retry it will succeed, provided that the caller asked to do this by
+	 * providing a lockedSlot.
+	 */
+	if (result == TM_Updated && lockedSlot != NULL)
+	{
+		result = heapam_tuple_lock_internal(relation, otid, snapshot,
+											lockedSlot, cid, *lockmode,
+											LockWaitBlock,
+											TUPLE_LOCK_FLAG_FIND_LAST_VERSION,
+											tmfd, true);
+
+		if (result == TM_Ok)
+		{
+			tmfd->traversed = true;
+			return TM_Updated;
+		}
+	}
+
 	return result;
 }
 
@@ -350,213 +402,8 @@ heapam_tuple_lock(Relation relation, ItemPointer tid, Snapshot snapshot,
 				  LockWaitPolicy wait_policy, uint8 flags,
 				  TM_FailureData *tmfd)
 {
-	BufferHeapTupleTableSlot *bslot = (BufferHeapTupleTableSlot *) slot;
-	TM_Result	result;
-	Buffer		buffer;
-	HeapTuple	tuple = &bslot->base.tupdata;
-	bool		follow_updates;
-
-	follow_updates = (flags & TUPLE_LOCK_FLAG_LOCK_UPDATE_IN_PROGRESS) != 0;
-	tmfd->traversed = false;
-
-	Assert(TTS_IS_BUFFERTUPLE(slot));
-
-tuple_lock_retry:
-	tuple->t_self = *tid;
-	result = heap_lock_tuple(relation, tuple, cid, mode, wait_policy,
-							 follow_updates, &buffer, tmfd);
-
-	if (result == TM_Updated &&
-		(flags & TUPLE_LOCK_FLAG_FIND_LAST_VERSION))
-	{
-		/* Should not encounter speculative tuple on recheck */
-		Assert(!HeapTupleHeaderIsSpeculative(tuple->t_data));
-
-		ReleaseBuffer(buffer);
-
-		if (!ItemPointerEquals(&tmfd->ctid, &tuple->t_self))
-		{
-			SnapshotData SnapshotDirty;
-			TransactionId priorXmax;
-
-			/* it was updated, so look at the updated version */
-			*tid = tmfd->ctid;
-			/* updated row should have xmin matching this xmax */
-			priorXmax = tmfd->xmax;
-
-			/* signal that a tuple later in the chain is getting locked */
-			tmfd->traversed = true;
-
-			/*
-			 * fetch target tuple
-			 *
-			 * Loop here to deal with updated or busy tuples
-			 */
-			InitDirtySnapshot(SnapshotDirty);
-			for (;;)
-			{
-				if (ItemPointerIndicatesMovedPartitions(tid))
-					ereport(ERROR,
-							(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
-							 errmsg("tuple to be locked was already moved to another partition due to concurrent update")));
-
-				tuple->t_self = *tid;
-				if (heap_fetch(relation, &SnapshotDirty, tuple, &buffer, true))
-				{
-					/*
-					 * If xmin isn't what we're expecting, the slot must have
-					 * been recycled and reused for an unrelated tuple.  This
-					 * implies that the latest version of the row was deleted,
-					 * so we need do nothing.  (Should be safe to examine xmin
-					 * without getting buffer's content lock.  We assume
-					 * reading a TransactionId to be atomic, and Xmin never
-					 * changes in an existing tuple, except to invalid or
-					 * frozen, and neither of those can match priorXmax.)
-					 */
-					if (!TransactionIdEquals(HeapTupleHeaderGetXmin(tuple->t_data),
-											 priorXmax))
-					{
-						ReleaseBuffer(buffer);
-						return TM_Deleted;
-					}
-
-					/* otherwise xmin should not be dirty... */
-					if (TransactionIdIsValid(SnapshotDirty.xmin))
-						ereport(ERROR,
-								(errcode(ERRCODE_DATA_CORRUPTED),
-								 errmsg_internal("t_xmin %u is uncommitted in tuple (%u,%u) to be updated in table \"%s\"",
-												 SnapshotDirty.xmin,
-												 ItemPointerGetBlockNumber(&tuple->t_self),
-												 ItemPointerGetOffsetNumber(&tuple->t_self),
-												 RelationGetRelationName(relation))));
-
-					/*
-					 * If tuple is being updated by other transaction then we
-					 * have to wait for its commit/abort, or die trying.
-					 */
-					if (TransactionIdIsValid(SnapshotDirty.xmax))
-					{
-						ReleaseBuffer(buffer);
-						switch (wait_policy)
-						{
-							case LockWaitBlock:
-								XactLockTableWait(SnapshotDirty.xmax,
-												  relation, &tuple->t_self,
-												  XLTW_FetchUpdated);
-								break;
-							case LockWaitSkip:
-								if (!ConditionalXactLockTableWait(SnapshotDirty.xmax))
-									/* skip instead of waiting */
-									return TM_WouldBlock;
-								break;
-							case LockWaitError:
-								if (!ConditionalXactLockTableWait(SnapshotDirty.xmax))
-									ereport(ERROR,
-											(errcode(ERRCODE_LOCK_NOT_AVAILABLE),
-											 errmsg("could not obtain lock on row in relation \"%s\"",
-													RelationGetRelationName(relation))));
-								break;
-						}
-						continue;	/* loop back to repeat heap_fetch */
-					}
-
-					/*
-					 * If tuple was inserted by our own transaction, we have
-					 * to check cmin against cid: cmin >= current CID means
-					 * our command cannot see the tuple, so we should ignore
-					 * it. Otherwise heap_lock_tuple() will throw an error,
-					 * and so would any later attempt to update or delete the
-					 * tuple.  (We need not check cmax because
-					 * HeapTupleSatisfiesDirty will consider a tuple deleted
-					 * by our transaction dead, regardless of cmax.)  We just
-					 * checked that priorXmax == xmin, so we can test that
-					 * variable instead of doing HeapTupleHeaderGetXmin again.
-					 */
-					if (TransactionIdIsCurrentTransactionId(priorXmax) &&
-						HeapTupleHeaderGetCmin(tuple->t_data) >= cid)
-					{
-						tmfd->xmax = priorXmax;
-
-						/*
-						 * Cmin is the problematic value, so store that. See
-						 * above.
-						 */
-						tmfd->cmax = HeapTupleHeaderGetCmin(tuple->t_data);
-						ReleaseBuffer(buffer);
-						return TM_SelfModified;
-					}
-
-					/*
-					 * This is a live tuple, so try to lock it again.
-					 */
-					ReleaseBuffer(buffer);
-					goto tuple_lock_retry;
-				}
-
-				/*
-				 * If the referenced slot was actually empty, the latest
-				 * version of the row must have been deleted, so we need do
-				 * nothing.
-				 */
-				if (tuple->t_data == NULL)
-				{
-					Assert(!BufferIsValid(buffer));
-					return TM_Deleted;
-				}
-
-				/*
-				 * As above, if xmin isn't what we're expecting, do nothing.
-				 */
-				if (!TransactionIdEquals(HeapTupleHeaderGetXmin(tuple->t_data),
-										 priorXmax))
-				{
-					ReleaseBuffer(buffer);
-					return TM_Deleted;
-				}
-
-				/*
-				 * If we get here, the tuple was found but failed
-				 * SnapshotDirty. Assuming the xmin is either a committed xact
-				 * or our own xact (as it certainly should be if we're trying
-				 * to modify the tuple), this must mean that the row was
-				 * updated or deleted by either a committed xact or our own
-				 * xact.  If it was deleted, we can ignore it; if it was
-				 * updated then chain up to the next version and repeat the
-				 * whole process.
-				 *
-				 * As above, it should be safe to examine xmax and t_ctid
-				 * without the buffer content lock, because they can't be
-				 * changing.  We'd better hold a buffer pin though.
-				 */
-				if (ItemPointerEquals(&tuple->t_self, &tuple->t_data->t_ctid))
-				{
-					/* deleted, so forget about it */
-					ReleaseBuffer(buffer);
-					return TM_Deleted;
-				}
-
-				/* updated, so look at the updated row */
-				*tid = tuple->t_data->t_ctid;
-				/* updated row should have xmin matching this xmax */
-				priorXmax = HeapTupleHeaderGetUpdateXid(tuple->t_data);
-				ReleaseBuffer(buffer);
-				/* loop back to fetch next in chain */
-			}
-		}
-		else
-		{
-			/* tuple was deleted, so give up */
-			return TM_Deleted;
-		}
-	}
-
-	slot->tts_tableOid = RelationGetRelid(relation);
-	tuple->t_tableOid = slot->tts_tableOid;
-
-	/* store in slot, transferring existing pin */
-	ExecStorePinnedBufferHeapTuple(tuple, slot, buffer);
-
-	return result;
+	return heapam_tuple_lock_internal(relation, tid, snapshot, slot, cid, mode,
+									  wait_policy, flags, tmfd, false);
 }
 
 
@@ -2521,6 +2368,236 @@ SampleHeapTupleVisible(TableScanDesc scan, Buffer buffer,
 		return HeapTupleSatisfiesVisibility(tuple, scan->rs_snapshot,
 											buffer);
 	}
+}
+
+/*
+ * This routine does the work for heapam_tuple_lock(), but also support
+ * `updated` to re-use the work done by heapam_tuple_update() or
+ * heapam_tuple_delete() on fetching tuple and checking its visibility.
+ */
+static TM_Result
+heapam_tuple_lock_internal(Relation relation, ItemPointer tid, Snapshot snapshot,
+						   TupleTableSlot *slot, CommandId cid, LockTupleMode mode,
+						   LockWaitPolicy wait_policy, uint8 flags,
+						   TM_FailureData *tmfd, bool updated)
+{
+	BufferHeapTupleTableSlot *bslot = (BufferHeapTupleTableSlot *) slot;
+	TM_Result	result;
+	Buffer		buffer = InvalidBuffer;
+	HeapTuple	tuple = &bslot->base.tupdata;
+	bool		follow_updates;
+
+	follow_updates = (flags & TUPLE_LOCK_FLAG_LOCK_UPDATE_IN_PROGRESS) != 0;
+	tmfd->traversed = false;
+
+	Assert(TTS_IS_BUFFERTUPLE(slot));
+
+tuple_lock_retry:
+	tuple->t_self = *tid;
+	if (!updated)
+		result = heap_lock_tuple(relation, tuple, cid, mode, wait_policy,
+								 follow_updates, &buffer, tmfd);
+	else
+		result = TM_Updated;
+
+	if (result == TM_Updated &&
+		(flags & TUPLE_LOCK_FLAG_FIND_LAST_VERSION))
+	{
+		if (!updated)
+		{
+			/* Should not encounter speculative tuple on recheck */
+			Assert(!HeapTupleHeaderIsSpeculative(tuple->t_data));
+
+			ReleaseBuffer(buffer);
+		}
+		else
+		{
+			updated = false;
+		}
+
+		if (!ItemPointerEquals(&tmfd->ctid, &tuple->t_self))
+		{
+			SnapshotData SnapshotDirty;
+			TransactionId priorXmax;
+
+			/* it was updated, so look at the updated version */
+			*tid = tmfd->ctid;
+			/* updated row should have xmin matching this xmax */
+			priorXmax = tmfd->xmax;
+
+			/* signal that a tuple later in the chain is getting locked */
+			tmfd->traversed = true;
+
+			/*
+			 * fetch target tuple
+			 *
+			 * Loop here to deal with updated or busy tuples
+			 */
+			InitDirtySnapshot(SnapshotDirty);
+			for (;;)
+			{
+				if (ItemPointerIndicatesMovedPartitions(tid))
+					ereport(ERROR,
+							(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
+							 errmsg("tuple to be locked was already moved to another partition due to concurrent update")));
+
+				tuple->t_self = *tid;
+				if (heap_fetch(relation, &SnapshotDirty, tuple, &buffer, true))
+				{
+					/*
+					 * If xmin isn't what we're expecting, the slot must have
+					 * been recycled and reused for an unrelated tuple.  This
+					 * implies that the latest version of the row was deleted,
+					 * so we need do nothing.  (Should be safe to examine xmin
+					 * without getting buffer's content lock.  We assume
+					 * reading a TransactionId to be atomic, and Xmin never
+					 * changes in an existing tuple, except to invalid or
+					 * frozen, and neither of those can match priorXmax.)
+					 */
+					if (!TransactionIdEquals(HeapTupleHeaderGetXmin(tuple->t_data),
+											 priorXmax))
+					{
+						ReleaseBuffer(buffer);
+						return TM_Deleted;
+					}
+
+					/* otherwise xmin should not be dirty... */
+					if (TransactionIdIsValid(SnapshotDirty.xmin))
+						ereport(ERROR,
+								(errcode(ERRCODE_DATA_CORRUPTED),
+								 errmsg_internal("t_xmin %u is uncommitted in tuple (%u,%u) to be updated in table \"%s\"",
+												 SnapshotDirty.xmin,
+												 ItemPointerGetBlockNumber(&tuple->t_self),
+												 ItemPointerGetOffsetNumber(&tuple->t_self),
+												 RelationGetRelationName(relation))));
+
+					/*
+					 * If tuple is being updated by other transaction then we
+					 * have to wait for its commit/abort, or die trying.
+					 */
+					if (TransactionIdIsValid(SnapshotDirty.xmax))
+					{
+						ReleaseBuffer(buffer);
+						switch (wait_policy)
+						{
+							case LockWaitBlock:
+								XactLockTableWait(SnapshotDirty.xmax,
+												  relation, &tuple->t_self,
+												  XLTW_FetchUpdated);
+								break;
+							case LockWaitSkip:
+								if (!ConditionalXactLockTableWait(SnapshotDirty.xmax))
+									/* skip instead of waiting */
+									return TM_WouldBlock;
+								break;
+							case LockWaitError:
+								if (!ConditionalXactLockTableWait(SnapshotDirty.xmax))
+									ereport(ERROR,
+											(errcode(ERRCODE_LOCK_NOT_AVAILABLE),
+											 errmsg("could not obtain lock on row in relation \"%s\"",
+													RelationGetRelationName(relation))));
+								break;
+						}
+						continue;	/* loop back to repeat heap_fetch */
+					}
+
+					/*
+					 * If tuple was inserted by our own transaction, we have
+					 * to check cmin against cid: cmin >= current CID means
+					 * our command cannot see the tuple, so we should ignore
+					 * it. Otherwise heap_lock_tuple() will throw an error,
+					 * and so would any later attempt to update or delete the
+					 * tuple.  (We need not check cmax because
+					 * HeapTupleSatisfiesDirty will consider a tuple deleted
+					 * by our transaction dead, regardless of cmax.)  We just
+					 * checked that priorXmax == xmin, so we can test that
+					 * variable instead of doing HeapTupleHeaderGetXmin again.
+					 */
+					if (TransactionIdIsCurrentTransactionId(priorXmax) &&
+						HeapTupleHeaderGetCmin(tuple->t_data) >= cid)
+					{
+						tmfd->xmax = priorXmax;
+
+						/*
+						 * Cmin is the problematic value, so store that. See
+						 * above.
+						 */
+						tmfd->cmax = HeapTupleHeaderGetCmin(tuple->t_data);
+						ReleaseBuffer(buffer);
+						return TM_SelfModified;
+					}
+
+					/*
+					 * This is a live tuple, so try to lock it again.
+					 */
+					ReleaseBuffer(buffer);
+					goto tuple_lock_retry;
+				}
+
+				/*
+				 * If the referenced slot was actually empty, the latest
+				 * version of the row must have been deleted, so we need do
+				 * nothing.
+				 */
+				if (tuple->t_data == NULL)
+				{
+					Assert(!BufferIsValid(buffer));
+					return TM_Deleted;
+				}
+
+				/*
+				 * As above, if xmin isn't what we're expecting, do nothing.
+				 */
+				if (!TransactionIdEquals(HeapTupleHeaderGetXmin(tuple->t_data),
+										 priorXmax))
+				{
+					ReleaseBuffer(buffer);
+					return TM_Deleted;
+				}
+
+				/*
+				 * If we get here, the tuple was found but failed
+				 * SnapshotDirty. Assuming the xmin is either a committed xact
+				 * or our own xact (as it certainly should be if we're trying
+				 * to modify the tuple), this must mean that the row was
+				 * updated or deleted by either a committed xact or our own
+				 * xact.  If it was deleted, we can ignore it; if it was
+				 * updated then chain up to the next version and repeat the
+				 * whole process.
+				 *
+				 * As above, it should be safe to examine xmax and t_ctid
+				 * without the buffer content lock, because they can't be
+				 * changing.  We'd better hold a buffer pin though.
+				 */
+				if (ItemPointerEquals(&tuple->t_self, &tuple->t_data->t_ctid))
+				{
+					/* deleted, so forget about it */
+					ReleaseBuffer(buffer);
+					return TM_Deleted;
+				}
+
+				/* updated, so look at the updated row */
+				*tid = tuple->t_data->t_ctid;
+				/* updated row should have xmin matching this xmax */
+				priorXmax = HeapTupleHeaderGetUpdateXid(tuple->t_data);
+				ReleaseBuffer(buffer);
+				/* loop back to fetch next in chain */
+			}
+		}
+		else
+		{
+			/* tuple was deleted, so give up */
+			return TM_Deleted;
+		}
+	}
+
+	slot->tts_tableOid = RelationGetRelid(relation);
+	tuple->t_tableOid = slot->tts_tableOid;
+
+	/* store in slot, transferring existing pin */
+	ExecStorePinnedBufferHeapTuple(tuple, slot, buffer);
+
+	return result;
 }
 
 

@@ -1098,7 +1098,34 @@ initialize_SSL(PGconn *conn)
 	if (conn->sslcert && strlen(conn->sslcert) > 0)
 		strlcpy(fnbuf, conn->sslcert, sizeof(fnbuf));
 	else if (have_homedir)
-		snprintf(fnbuf, sizeof(fnbuf), "%s/%s", homedir, USER_CERT_FILE);
+	{
+
+		/* sslmode no-clientcert */
+		if (conn->sslmode[0] == 'n')
+		{
+
+			/*
+			 * The option "no-clientcert" ignores the client certificate in case they are
+			 * stored in ~/.postgresql/postgresql.crt and ~/.postgresql/postgresql.key,
+			 * and therefore automatically sent to the server. This is useful for
+			 * pg_hba.conf entries of type "hostssl" without "cert" as authentication
+			 * method - e.g. using "md5" or "scram-sha-256" - as they will fail if
+			 * the client certificate is sent to the server in the background and it
+			 * does not exist in the server's 'ssl_ca_file'.
+			 */
+
+			fnbuf[0] = '\0';
+
+		}
+		else
+		{
+
+			snprintf(fnbuf, sizeof(fnbuf), "%s/%s", homedir, USER_CERT_FILE);
+
+		}
+
+
+	}
 	else
 		fnbuf[0] = '\0';
 

@@ -640,6 +640,89 @@ task:
 
 
 task:
+  name: Windows - Cygwin
+
+  # due to resource constraints we don't run this task by default for now
+  #XXX trigger_type: manual
+  # worth using only_if despite being manual, otherwise this task will show up
+  # when e.g. ci-os-only: linux is used.
+  only_if: $CIRRUS_CHANGE_MESSAGE !=~ '.*\nci-os-only:.*' || $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-os-only:[^\n]*cygwin.*'
+  # otherwise it'll be sorted before other tasks
+  depends_on: SanityCheck
+
+  #XXX only_if: $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-os-only:[^\n]*cygwin.*'
+  #timeout_in: 120m
+
+  env:
+    CPUS: 4
+    BUILD_JOBS: $CPUS
+    TEST_JOBS: $CPUS
+    CCACHE_DIR: /tmp/ccache
+    CCACHE_LOGFILE: ccache.log
+    # --disable-dynamicbase
+    # --with-gssapi
+    CONFIGURE_CACHE: /tmp/ccache/configure.cache
+    PG_TEST_USE_UNIX_SOCKETS: 1
+    EXTRA_REGRESS_OPTS: --max-connections=1
+    PG_TEST_EXTRA: ldap ssl # disable kerberos
+    CC: ccache gcc
+    CFLAGS: -Og -ggdb
+    BASH: C:\tools\cygwin\bin\bash.exe --login
+
+  #windows_container:
+    #image: cirrusci/windowsservercore:2019-2022.06.23
+    #os_version: 2019
+  compute_engine_instance:
+    image_project: $IMAGE_PROJECT
+    image: family/pg-ci-windows-ci-vs-2019
+    platform: windows
+    cpu: $CPUS
+    memory: 4G
+
+  setup_additional_packages_script: |
+    choco install -y --no-progress cygwin
+    C:\tools\cygwin\cygwinsetup.exe -q -P cygrunsrv,make,gcc-core,ccache,binutils,libtool,pkg-config,flex,bison,zlib-devel,libxml2-devel,libxslt-devel,libssl-devel,openldap-devel,libreadline-devel,perl,meson,ninja,perl-IPC-Run
+    REM libkrb5-devel,krb5-server
+    %BASH% -c "cygserver-config -y"
+    %BASH% -c "echo 'kern.ipc.semmni 1024' >> /etc/cygserver.conf"
+    %BASH% -c "echo 'kern.ipc.semmns 1024' >> /etc/cygserver.conf"
+    %BASH% -c "net start cygserver"
+
+  sysinfo_script: |
+    chcp
+    systeminfo
+    powershell -Command get-psdrive -psprovider filesystem
+    set
+    %BASH% -c "id; uname -a; ulimit -a -H; ulimit -a -S; export"
+
+  ccache_cache:
+    folder: C:\tools\cygwin\tmp\ccache
+    fingerprint_key: ccache/cygwin
+    reupload_on_changes: true
+
+  configure_script: |
+    %BASH% -c "cd '%cd%' && meson setup --buildtype=debug -Dcassert=true -Dssl=openssl -Duuid=e2fs -DPG_TEST_EXTRA='$PG_TEST_EXTRA' build"
+
+  build_script: |
+    %BASH% -c "cd '%cd%' && ninja -C build -j${BUILD_JOBS}"
+    %BASH% -c "ccache --show-stats"
+
+  always:
+    upload_caches: ccache
+
+    #%BASH% -c "cd '%cd%' && echo 'data_sync_retry = on' >> src/tools/ci/pg_ci_base.conf"
+    #%BASH% -c "cd '%cd%' && echo 'wal_sync_method = fdatasync' >> src/tools/ci/pg_ci_base.conf"
+    # --repeat 9
+  test_world_script: |
+    %BASH% -c "cd '%cd%' && meson test $MTEST_ARGS --num-processes ${TEST_JOBS}"
+
+  on_failure:
+    <<: *on_failure_meson
+    cores_script: |
+      %BASH% -c "cd '%cd%' && src/tools/ci/cores_backtrace.sh cygwin ."
+
+
+task:
   name: CompilerWarnings
 
   # To limit unnecessary work only run this once the SanityCheck

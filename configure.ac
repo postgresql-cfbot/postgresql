@@ -1899,7 +1899,7 @@ fi
 
 # mingw has adopted a GNU-centric interpretation of optind/optreset,
 # so always use our version on Windows.
-if test "$PORTNAME" = "win32"; then
+if test "$PORTNAME" = "win32" -o "$PORTNAME" = "cygwin"; then
   AC_LIBOBJ(getopt)
   AC_LIBOBJ(getopt_long)
 fi

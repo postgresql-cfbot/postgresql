@@ -72,6 +72,9 @@ typedef struct EventTriggerQueryState
 
 static EventTriggerQueryState *currentEventTriggerState = NULL;
 
+/* GUC parameter */
+int		ignore_event_trigger = IGNORE_EVENT_TRIGGER_NONE;
+
 /* Support for dropped objects */
 typedef struct SQLDropObject
 {
@@ -100,6 +103,7 @@ static void validate_table_rewrite_tags(const char *filtervar, List *taglist);
 static void EventTriggerInvoke(List *fn_oid_list, EventTriggerData *trigdata);
 static const char *stringify_grant_objtype(ObjectType objtype);
 static const char *stringify_adefprivs_objtype(ObjectType objtype);
+static bool ignore_event_trigger_check(EventTriggerEvent event);
 
 /*
  * Create an event trigger.
@@ -657,8 +661,11 @@ EventTriggerDDLCommandStart(Node *parsetree)
 	 * wherein event triggers are disabled.  (Or we could implement
 	 * heapscan-and-sort logic for that case, but having disaster recovery
 	 * scenarios depend on code that's otherwise untested isn't appetizing.)
+	 *
+	 * Additionally, event triggers can be disabled with a superuser-only GUC
+	 * to make fixing database easier as per 1 above.
 	 */
-	if (!IsUnderPostmaster)
+	if (!IsUnderPostmaster || ignore_event_trigger_check(EVT_DDLCommandStart))
 		return;
 
 	runlist = EventTriggerCommonSetup(parsetree,
@@ -692,9 +699,9 @@ EventTriggerDDLCommandEnd(Node *parsetree)
 
 	/*
 	 * See EventTriggerDDLCommandStart for a discussion about why event
-	 * triggers are disabled in single user mode.
+	 * triggers are disabled in single user mode or via GUC.
 	 */
-	if (!IsUnderPostmaster)
+	if (!IsUnderPostmaster || ignore_event_trigger_check(EVT_DDLCommandEnd))
 		return;
 
 	/*
@@ -740,9 +747,9 @@ EventTriggerSQLDrop(Node *parsetree)
 
 	/*
 	 * See EventTriggerDDLCommandStart for a discussion about why event
-	 * triggers are disabled in single user mode.
+	 * triggers are disabled in single user mode or via a GUC.
 	 */
-	if (!IsUnderPostmaster)
+	if (!IsUnderPostmaster || ignore_event_trigger_check(EVT_SQLDrop))
 		return;
 
 	/*
@@ -811,9 +818,9 @@ EventTriggerTableRewrite(Node *parsetree, Oid tableOid, int reason)
 
 	/*
 	 * See EventTriggerDDLCommandStart for a discussion about why event
-	 * triggers are disabled in single user mode.
+	 * triggers are disabled in single user mode or via a GUC.
 	 */
-	if (!IsUnderPostmaster)
+	if (!IsUnderPostmaster || ignore_event_trigger_check(EVT_TableRewrite))
 		return;
 
 	/*
@@ -2174,4 +2181,23 @@ stringify_adefprivs_objtype(ObjectType objtype)
 	}
 
 	return "???";				/* keep compiler quiet */
+}
+
+
+/*
+ * Checks whether the specified event is ignored by the ignore_event_trigger
+ * GUC or not. Currently, the GUC only supports ignoring all or nothing but
+ * that might change so the function takes an event to aid that.
+ */
+static bool
+ignore_event_trigger_check(EventTriggerEvent event)
+{
+	(void) event;			/* unused parameter */
+
+	if (ignore_event_trigger == IGNORE_EVENT_TRIGGER_ALL)
+		return true;
+
+	/* IGNORE_EVENT_TRIGGER_NONE */
+	return false;
+
 }

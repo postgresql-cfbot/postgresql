@@ -9518,6 +9518,25 @@ SET XML OPTION { DOCUMENT | CONTENT };
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-ignore-event-trigger" xreflabel="ignore_event_trigger">
+      <term><varname>ignore_event_trigger</varname> (<type>enum</type>)
+      <indexterm>
+       <primary><varname>ignore_event_trigger</varname></primary>
+       <secondary>configuration parameter</secondary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Allows to temporarily disable event triggers from executing in order
+        to troubleshoot and repair faulty event triggers.  The default value
+        is <literal>none</literal>, with which all event triggers are enabled.
+        When set to <literal>all</literal> then all event triggers will be
+        disabled.  Only superusers and users with the appropriate
+        <literal>SET</literal> privilege can change this setting.
+       </para>
+      </listitem>
+     </varlistentry>
+
      </variablelist>
     </sect2>
      <sect2 id="runtime-config-client-format">

@@ -16,11 +16,15 @@
 
 #include "executor/nodeAgg.h"
 #include "nodes/execnodes.h"
+#include "nodes/miscnodes.h"
 
 /* forward references to avoid circularity */
 struct ExprEvalStep;
 struct SubscriptingRefState;
 struct ScalarArrayOpExprHashTable;
+struct JsonConstructorExprState;
+struct JsonbValue;
+struct JsonExprState;
 
 /* Bits in ExprState->flags (see also execnodes.h for public flag bits): */
 /* expression's interpreter has been initialized */
@@ -238,6 +242,13 @@ typedef enum ExprEvalOp
 	EEOP_GROUPING_FUNC,
 	EEOP_WINDOW_FUNC,
 	EEOP_SUBPLAN,
+	EEOP_JSON_CONSTRUCTOR,
+	EEOP_IS_JSON,
+	EEOP_JSONEXPR_SKIP,
+	EEOP_JSONEXPR_PATH,
+	EEOP_JSONEXPR_BEHAVIOR,
+	EEOP_JSONEXPR_COERCION,
+	EEOP_JSONEXPR_COERCION_FINISH,
 
 	/* aggregation related nodes */
 	EEOP_AGG_STRICT_DESERIALIZE,
@@ -666,6 +677,70 @@ typedef struct ExprEvalStep
 			int			transno;
 			int			setoff;
 		}			agg_trans;
+
+		/* for EEOP_JSON_CONSTRUCTOR */
+		struct
+		{
+			struct JsonConstructorExprState *jcstate;
+		}			json_constructor;
+
+		/* for EEOP_IS_JSON */
+		struct
+		{
+			JsonIsPredicate *pred;	/* original expression node */
+		}			is_json;
+
+		/* for EEOP_JSONEXPR_PATH */
+		struct
+		{
+			struct JsonExprState *jsestate;
+		}			jsonexpr;
+
+		/* for EEOP_JSONEXPR_SKIP */
+		struct
+		{
+			/* Same as jsonexpr.jsestate */
+			struct JsonExprState *jsestate;
+
+			/* See ExecEvalJsonExprSkip() */
+			int		jump_coercion;
+			int		jump_passing_args;
+		}			jsonexpr_skip;
+
+		/* for EEOP_JSONEXPR_BEHAVIOR */
+		struct
+		{
+			/* Same as jsonexpr.jsestate */
+			struct JsonExprState *jsestate;
+
+			/* See ExecEvalJsonExprBehavior() */
+			int		jump_onerror_default;
+			int		jump_onempty_default;
+			int		jump_coercion;
+			int		jump_skip_coercion;
+		}		jsonexpr_behavior;
+
+		/* for EEOP_JSONEXPR_COERCION */
+		struct
+		{
+			/* Same as jsonexpr.jsestate */
+			struct JsonExprState *jsestate;
+
+			/* See ExecEvalJsonExprCoercion() */
+			int		jump_coercion_error;
+			int		jump_coercion_done;
+		}		jsonexpr_coercion;
+
+		/* for EEOP_JSONEXPR_COERCION_FINISH */
+		struct
+		{
+			/* Same as jsonexpr.jsestate */
+			struct JsonExprState *jsestate;
+
+			/* See ExecEvalJsonExprCoercion() */
+			int		jump_coercion_error;
+			int		jump_coercion_done;
+		}		jsonexpr_coercion_finish;
 	}			d;
 } ExprEvalStep;
 
@@ -710,6 +785,118 @@ typedef struct SubscriptExecSteps
 	ExecEvalSubroutine sbs_fetch_old;	/* fetch old value for assignment */
 } SubscriptExecSteps;
 
+/* EEOP_JSON_CONSTRUCTOR state, too big to inline */
+typedef struct JsonConstructorExprState
+{
+	JsonConstructorExpr *constructor;
+	Datum	   *arg_values;
+	bool	   *arg_nulls;
+	Oid		   *arg_types;
+	struct
+	{
+		int			category;
+		Oid			outfuncid;
+	}		   *arg_type_cache; /* cache for datum_to_json[b]() */
+	int			nargs;
+} JsonConstructorExprState;
+
+/*
+ * Information computed before evaluating a JsonExpr expression.
+ */
+typedef struct JsonExprPreEvalState
+{
+	/* value/isnull for JsonExpr.formatted_expr */
+	NullableDatum	formatted_expr;
+
+	/* value/isnull for JsonExpr.pathspec */
+	NullableDatum	pathspec;
+
+	/* JsonPathVariableEvalContext entries for JsonExpr.passing_values */
+	List		   *args;
+}	JsonExprPreEvalState;
+
+/*
+ * State for a given member of JsonItemCoercions.
+ */
+typedef struct JsonCoercionState
+{
+	/* Expression used to evaluate the coercion */
+	JsonCoercion   *coercion;
+
+	/* ExprEvalStep to compute this coercion's expression */
+	int				jump_eval_expr;
+} JsonCoercionState;
+
+/*
+ * State for evaluating the coercion for a given JSON item using one of
+ * the following coercions.
+ *
+ * Note that while ExecInitExprRec() for JsonItemCoercions will initialize
+ * ExprEvalSteps for all of the members that need it, only one will get run
+ * during a given evaluation of the enclosing JsonExpr depending on the type
+ * of the result JSON item.
+ */
+typedef struct JsonItemCoercionsState
+{
+	JsonCoercionState  *null;
+	JsonCoercionState  *string;
+	JsonCoercionState  *numeric;
+	JsonCoercionState  *boolean;
+	JsonCoercionState  *date;
+	JsonCoercionState  *time;
+	JsonCoercionState  *timetz;
+	JsonCoercionState  *timestamp;
+	JsonCoercionState  *timestamptz;
+	JsonCoercionState  *composite;
+} JsonItemCoercionsState;
+
+/*
+ * State for some post-JsonExpr-evaluation processing steps that gets filled
+ * in JsonExpr evaluation.
+ */
+typedef struct JsonExprPostEvalState
+{
+	/* Is JSON item empty? */
+	bool		empty;
+
+	/* Did JSON item evaluation cause an error? */
+	bool		error;
+
+	/* Cache for json_populate_type() called for coercion in some cases */
+	void	   *cache;
+
+	/*
+	 * State for evaluating a JSON item coercion.  Points to one of those in
+	 * JsonExprState.coercions chosen by ExecPrepareJsonItemCoercion().
+	 */
+	JsonCoercionState   *item_jcstate;
+	bool		coercion_error;
+	bool		coercion_done;
+
+	ErrorSaveContext escontext;
+}	JsonExprPostEvalState;
+
+/* EEOP_JSONEXPR state, too big to inline */
+typedef struct JsonExprState
+{
+	JsonExpr   *jsexpr;			/* original expression node */
+
+	JsonExprPreEvalState	pre_eval;
+	JsonExprPostEvalState	post_eval;
+
+	struct
+	{
+		FmgrInfo	*finfo;	/* typinput function for output type */
+		Oid			typioparam;
+	}			input;			/* I/O info for output type */
+
+	/*
+	 * Either of the following two is used by ExecEvalJsonCoercion() to apply
+	 * coercion to the final result if needed.
+	 */
+	JsonCoercionState  *result_jcstate;
+	JsonItemCoercionsState *item_jcstates;
+} JsonExprState;
 
 /* functions in execExpr.c */
 extern void ExprEvalPushStep(ExprState *es, const ExprEvalStep *s);
@@ -759,6 +946,7 @@ extern void ExecEvalHashedScalarArrayOp(ExprState *state, ExprEvalStep *op,
 extern void ExecEvalConstraintNotNull(ExprState *state, ExprEvalStep *op);
 extern void ExecEvalConstraintCheck(ExprState *state, ExprEvalStep *op);
 extern void ExecEvalXmlExpr(ExprState *state, ExprEvalStep *op);
+extern void ExecEvalJsonIsPredicate(ExprState *state, ExprEvalStep *op);
 extern void ExecEvalGroupingFunc(ExprState *state, ExprEvalStep *op);
 extern void ExecEvalSubPlan(ExprState *state, ExprEvalStep *op,
 							ExprContext *econtext);
@@ -766,6 +954,16 @@ extern void ExecEvalWholeRowVar(ExprState *state, ExprEvalStep *op,
 								ExprContext *econtext);
 extern void ExecEvalSysVar(ExprState *state, ExprEvalStep *op,
 						   ExprContext *econtext, TupleTableSlot *slot);
+extern void ExecEvalJsonConstructor(ExprState *state, ExprEvalStep *op,
+									ExprContext *econtext);
+extern int ExecEvalJsonExprSkip(ExprState *state, ExprEvalStep *op);
+extern int ExecEvalJsonExprBehavior(ExprState *state, ExprEvalStep *op);
+extern int ExecEvalJsonExprCoercion(ExprState *state, ExprEvalStep *op,
+									ExprContext *econtext,
+									Datum res, bool resnull);
+extern int ExecEvalJsonExprCoercionFinish(ExprState *state, ExprEvalStep *op);
+extern void ExecEvalJson(ExprState *state, ExprEvalStep *op,
+						 ExprContext *econtext);
 
 extern void ExecAggInitGroup(AggState *aggstate, AggStatePerTrans pertrans, AggStatePerGroup pergroup,
 							 ExprContext *aggcontext);

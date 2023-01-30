@@ -15,8 +15,11 @@
 #define JSONPATH_H
 
 #include "fmgr.h"
+#include "executor/tablefunc.h"
 #include "nodes/pg_list.h"
+#include "nodes/primnodes.h"
 #include "utils/jsonb.h"
+#include "utils/jsonfuncs.h"
 
 typedef struct
 {
@@ -184,6 +187,7 @@ extern bool jspGetBool(JsonPathItem *v);
 extern char *jspGetString(JsonPathItem *v, int32 *len);
 extern bool jspGetArraySubscript(JsonPathItem *v, JsonPathItem *from,
 								 JsonPathItem *to, int i);
+extern bool jspIsMutable(JsonPath *path, List *varnames, List *varexprs);
 
 extern const char *jspOperationName(JsonPathItemType type);
 
@@ -260,5 +264,35 @@ extern JsonPathParseResult *parsejsonpath(const char *str, int len,
 extern bool jspConvertRegexFlags(uint32 xflags, int *result,
 								 struct Node *escontext);
 
+
+/*
+ * Evaluation of jsonpath
+ */
+
+/* External variable passed into jsonpath. */
+typedef struct JsonPathVariableEvalContext
+{
+	char	   *name;
+	Oid			typid;
+	int32		typmod;
+	struct ExprContext *econtext;
+	struct ExprState *estate;
+	MemoryContext mcxt;			/* memory context for cached value */
+	Datum		value;
+	bool		isnull;
+	bool		evaluated;
+} JsonPathVariableEvalContext;
+
+/* SQL/JSON item */
+extern void JsonItemFromDatum(Datum val, Oid typid, int32 typmod,
+							  JsonbValue *res);
+
+extern bool JsonPathExists(Datum jb, JsonPath *path, List *vars, bool *error);
+extern Datum JsonPathQuery(Datum jb, JsonPath *jp, JsonWrapper wrapper,
+						   bool *empty, bool *error, List *vars);
+extern JsonbValue *JsonPathValue(Datum jb, JsonPath *jp, bool *empty,
+								 bool *error, List *vars);
+
+extern PGDLLIMPORT const TableFuncRoutine JsonbTableRoutine;
 
 #endif

@@ -264,6 +264,8 @@ typedef struct PopulateArrayContext
 	int		   *dims;			/* dimensions */
 	int		   *sizes;			/* current dimension counters */
 	int			ndims;			/* number of dimensions */
+	Node	   *escontext;		/* For soft-error capture */
+	bool		error;			/* Caught a soft-error? */
 } PopulateArrayContext;
 
 /* state for populate_array_json() */
@@ -441,12 +443,13 @@ static void JsValueToJsObject(JsValue *jsv, JsObject *jso);
 static Datum populate_composite(CompositeIOData *io, Oid typid,
 								const char *colname, MemoryContext mcxt,
 								HeapTupleHeader defaultval, JsValue *jsv, bool isnull);
-static Datum populate_scalar(ScalarIOData *io, Oid typid, int32 typmod, JsValue *jsv);
+static Datum populate_scalar(ScalarIOData *io, Oid typid, int32 typmod, JsValue *jsv,
+							 Node *escontext);
 static void prepare_column_cache(ColumnIOData *column, Oid typid, int32 typmod,
 								 MemoryContext mcxt, bool need_scalar);
 static Datum populate_record_field(ColumnIOData *col, Oid typid, int32 typmod,
 								   const char *colname, MemoryContext mcxt, Datum defaultval,
-								   JsValue *jsv, bool *isnull);
+								   JsValue *jsv, bool *isnull, Node *escontext);
 static RecordIOData *allocate_record_info(MemoryContext mcxt, int ncolumns);
 static bool JsObjectGetField(JsObject *obj, char *field, JsValue *jsv);
 static void populate_recordset_record(PopulateRecordsetState *state, JsObject *obj);
@@ -458,7 +461,7 @@ static void populate_array_assign_ndims(PopulateArrayContext *ctx, int ndims);
 static void populate_array_check_dimension(PopulateArrayContext *ctx, int ndim);
 static void populate_array_element(PopulateArrayContext *ctx, int ndim, JsValue *jsv);
 static Datum populate_array(ArrayIOData *aio, const char *colname,
-							MemoryContext mcxt, JsValue *jsv);
+							MemoryContext mcxt, JsValue *jsv, Node *escontext);
 static Datum populate_domain(DomainIOData *io, Oid typid, const char *colname,
 							 MemoryContext mcxt, JsValue *jsv, bool isnull);
 
@@ -2482,12 +2485,12 @@ populate_array_report_expected_array(PopulateArrayContext *ctx, int ndim)
 	if (ndim <= 0)
 	{
 		if (ctx->colname)
-			ereport(ERROR,
+			errsave(ctx->escontext,
 					(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 					 errmsg("expected JSON array"),
 					 errhint("See the value of key \"%s\".", ctx->colname)));
 		else
-			ereport(ERROR,
+			errsave(ctx->escontext,
 					(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 					 errmsg("expected JSON array")));
 	}
@@ -2504,18 +2507,20 @@ populate_array_report_expected_array(PopulateArrayContext *ctx, int ndim)
 			appendStringInfo(&indices, "[%d]", ctx->sizes[i]);
 
 		if (ctx->colname)
-			ereport(ERROR,
+			errsave(ctx->escontext,
 					(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 					 errmsg("expected JSON array"),
 					 errhint("See the array element %s of key \"%s\".",
 							 indices.data, ctx->colname)));
 		else
-			ereport(ERROR,
+			errsave(ctx->escontext,
 					(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 					 errmsg("expected JSON array"),
 					 errhint("See the array element %s.",
 							 indices.data)));
 	}
+
+	ctx->error = SOFT_ERROR_OCCURRED(ctx->escontext);
 }
 
 /* set the number of dimensions of the populated array when it becomes known */
@@ -2528,6 +2533,9 @@ populate_array_assign_ndims(PopulateArrayContext *ctx, int ndims)
 
 	if (ndims <= 0)
 		populate_array_report_expected_array(ctx, ndims);
+
+	if (ctx->error)
+		return;
 
 	ctx->ndims = ndims;
 	ctx->dims = palloc(sizeof(int) * ndims);
@@ -2546,7 +2554,7 @@ populate_array_check_dimension(PopulateArrayContext *ctx, int ndim)
 	if (ctx->dims[ndim] == -1)
 		ctx->dims[ndim] = dim;	/* assign dimension if not yet known */
 	else if (ctx->dims[ndim] != dim)
-		ereport(ERROR,
+		errsave(ctx->escontext,
 				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 				 errmsg("malformed JSON array"),
 				 errdetail("Multidimensional arrays must have "
@@ -2571,7 +2579,7 @@ populate_array_element(PopulateArrayContext *ctx, int ndim, JsValue *jsv)
 									ctx->aio->element_type,
 									ctx->aio->element_typmod,
 									NULL, ctx->mcxt, PointerGetDatum(NULL),
-									jsv, &element_isnull);
+									jsv, &element_isnull, NULL);
 
 	accumArrayResult(ctx->astate, element, element_isnull,
 					 ctx->aio->element_type, ctx->acxt);
@@ -2713,7 +2721,7 @@ populate_array_json(PopulateArrayContext *ctx, char *json, int len)
 	sem.array_element_end = populate_array_element_end;
 	sem.scalar = populate_array_scalar;
 
-	pg_parse_json_or_ereport(state.lex, &sem);
+	pg_parse_json_or_errsave(state.lex, &sem, ctx->escontext);
 
 	/* number of dimensions should be already known */
 	Assert(ctx->ndims > 0 && ctx->dims);
@@ -2738,10 +2746,13 @@ populate_array_dim_jsonb(PopulateArrayContext *ctx, /* context */
 
 	check_stack_depth();
 
-	if (jbv->type != jbvBinary || !JsonContainerIsArray(jbc))
+	if (jbv->type != jbvBinary ||
+		!JsonContainerIsArray(jbc) ||
+		JsonContainerIsScalar(jbc))
 		populate_array_report_expected_array(ctx, ndim - 1);
 
-	Assert(!JsonContainerIsScalar(jbc));
+	if (ctx->error)
+		return;
 
 	it = JsonbIteratorInit(jbc);
 
@@ -2779,6 +2790,9 @@ populate_array_dim_jsonb(PopulateArrayContext *ctx, /* context */
 			/* populate child sub-array */
 			populate_array_dim_jsonb(ctx, &val, ndim + 1);
 
+			if (ctx->error)
+				return;
+
 			/* number of dimensions should be already known */
 			Assert(ctx->ndims > 0 && ctx->dims);
 
@@ -2800,7 +2814,8 @@ static Datum
 populate_array(ArrayIOData *aio,
 			   const char *colname,
 			   MemoryContext mcxt,
-			   JsValue *jsv)
+			   JsValue *jsv,
+			   Node *escontext)
 {
 	PopulateArrayContext ctx;
 	Datum		result;
@@ -2815,6 +2830,8 @@ populate_array(ArrayIOData *aio,
 	ctx.ndims = 0;				/* unknown yet */
 	ctx.dims = NULL;
 	ctx.sizes = NULL;
+	ctx.escontext = escontext;
+	ctx.error = false;
 
 	if (jsv->is_json)
 		populate_array_json(&ctx, jsv->val.json.str,
@@ -2823,8 +2840,13 @@ populate_array(ArrayIOData *aio,
 	else
 	{
 		populate_array_dim_jsonb(&ctx, jsv->val.jsonb, 1);
-		ctx.dims[0] = ctx.sizes[0];
+		if (!ctx.error)
+			ctx.dims[0] = ctx.sizes[0];
 	}
+
+	/* Caller should check SOFT_ERROR_OCCURRED(escontext)! */
+	if (ctx.error)
+		return (Datum) 0;
 
 	Assert(ctx.ndims > 0);
 
@@ -2955,7 +2977,8 @@ populate_composite(CompositeIOData *io,
 
 /* populate non-null scalar value from json/jsonb value */
 static Datum
-populate_scalar(ScalarIOData *io, Oid typid, int32 typmod, JsValue *jsv)
+populate_scalar(ScalarIOData *io, Oid typid, int32 typmod, JsValue *jsv,
+				Node *escontext)
 {
 	Datum		res;
 	char	   *str = NULL;
@@ -3026,7 +3049,11 @@ populate_scalar(ScalarIOData *io, Oid typid, int32 typmod, JsValue *jsv)
 			elog(ERROR, "unrecognized jsonb type: %d", (int) jbv->type);
 	}
 
-	res = InputFunctionCall(&io->typiofunc, str, io->typioparam, typmod);
+	if (!InputFunctionCallSafe(&io->typiofunc, str, io->typioparam, typmod,
+							   escontext, &res))
+	{
+		res = (Datum) 0;
+	}
 
 	/* free temporary buffer */
 	if (str != json)
@@ -3052,7 +3079,7 @@ populate_domain(DomainIOData *io,
 		res = populate_record_field(io->base_io,
 									io->base_typid, io->base_typmod,
 									colname, mcxt, PointerGetDatum(NULL),
-									jsv, &isnull);
+									jsv, &isnull, NULL);
 		Assert(!isnull);
 	}
 
@@ -3157,7 +3184,8 @@ populate_record_field(ColumnIOData *col,
 					  MemoryContext mcxt,
 					  Datum defaultval,
 					  JsValue *jsv,
-					  bool *isnull)
+					  bool *isnull,
+					  Node *escontext)
 {
 	TypeCat		typcat;
 
@@ -3190,10 +3218,12 @@ populate_record_field(ColumnIOData *col,
 	switch (typcat)
 	{
 		case TYPECAT_SCALAR:
-			return populate_scalar(&col->scalar_io, typid, typmod, jsv);
+			return populate_scalar(&col->scalar_io, typid, typmod, jsv,
+								   escontext);
 
 		case TYPECAT_ARRAY:
-			return populate_array(&col->io.array, colname, mcxt, jsv);
+			return populate_array(&col->io.array, colname, mcxt, jsv,
+								  escontext);
 
 		case TYPECAT_COMPOSITE:
 		case TYPECAT_COMPOSITE_DOMAIN:
@@ -3212,6 +3242,53 @@ populate_record_field(ColumnIOData *col,
 			elog(ERROR, "unrecognized type category '%c'", typcat);
 			return (Datum) 0;
 	}
+}
+
+/* recursively populate specified type from a json/jsonb value */
+Datum
+json_populate_type(Datum json_val, Oid json_type, Oid typid, int32 typmod,
+				   void **cache, MemoryContext mcxt, bool *isnull,
+				   Node *escontext)
+{
+	JsValue		jsv = {0};
+	JsonbValue	jbv;
+
+	jsv.is_json = json_type == JSONOID;
+
+	if (*isnull)
+	{
+		if (jsv.is_json)
+			jsv.val.json.str = NULL;
+		else
+			jsv.val.jsonb = NULL;
+	}
+	else if (jsv.is_json)
+	{
+		text	   *json = DatumGetTextPP(json_val);
+
+		jsv.val.json.str = VARDATA_ANY(json);
+		jsv.val.json.len = VARSIZE_ANY_EXHDR(json);
+		jsv.val.json.type = JSON_TOKEN_INVALID; /* not used in
+												 * populate_composite() */
+	}
+	else
+	{
+		Jsonb	   *jsonb = DatumGetJsonbP(json_val);
+
+		jsv.val.jsonb = &jbv;
+
+		/* fill binary jsonb value pointing to jb */
+		jbv.type = jbvBinary;
+		jbv.val.binary.data = &jsonb->root;
+		jbv.val.binary.len = VARSIZE(jsonb) - VARHDRSZ;
+	}
+
+	if (!*cache)
+		*cache = MemoryContextAllocZero(mcxt, sizeof(ColumnIOData));
+
+	return populate_record_field(*cache, typid, typmod, NULL, mcxt,
+								 PointerGetDatum(NULL), &jsv, isnull,
+								 escontext);
 }
 
 static RecordIOData *
@@ -3355,7 +3432,8 @@ populate_record(TupleDesc tupdesc,
 										  mcxt,
 										  nulls[i] ? (Datum) 0 : values[i],
 										  &field,
-										  &nulls[i]);
+										  &nulls[i],
+										  NULL);
 	}
 
 	res = heap_form_tuple(tupdesc, values, nulls);
@@ -5663,4 +5741,24 @@ transform_string_values_scalar(void *state, char *token, JsonTokenType tokentype
 		appendStringInfoString(_state->strval, token);
 
 	return JSON_SUCCESS;
+}
+
+JsonTokenType
+json_get_first_token(text *json, bool throw_error)
+{
+	JsonLexContext *lex;
+	JsonParseErrorType result;
+
+	lex = makeJsonLexContext(json, false);
+
+	/* Lex exactly one token from the input and check its type. */
+	result = json_lex(lex);
+
+	if (result == JSON_SUCCESS)
+		return lex->token_type;
+
+	if (throw_error)
+		json_errsave_error(result, lex, NULL);
+
+	return JSON_TOKEN_INVALID;	/* invalid json */
 }

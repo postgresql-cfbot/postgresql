@@ -15,6 +15,7 @@
 #define JSONFUNCS_H
 
 #include "common/jsonapi.h"
+#include "nodes/nodes.h"
 #include "utils/jsonb.h"
 
 /*
@@ -50,6 +51,9 @@ extern bool pg_parse_json_or_errsave(JsonLexContext *lex, JsonSemAction *sem,
 extern void json_errsave_error(JsonParseErrorType error, JsonLexContext *lex,
 							   struct Node *escontext);
 
+/* get first JSON token */
+extern JsonTokenType json_get_first_token(text *json, bool throw_error);
+
 extern uint32 parse_jsonb_index_flags(Jsonb *jb);
 extern void iterate_jsonb_values(Jsonb *jb, uint32 flags, void *state,
 								 JsonIterateStringValuesAction action);
@@ -59,5 +63,10 @@ extern Jsonb *transform_jsonb_string_values(Jsonb *jsonb, void *action_state,
 											JsonTransformStringValuesAction transform_action);
 extern text *transform_json_string_values(text *json, void *action_state,
 										  JsonTransformStringValuesAction transform_action);
+
+extern Datum json_populate_type(Datum json_val, Oid json_type,
+								Oid typid, int32 typmod,
+								void **cache, MemoryContext mcxt, bool *isnull,
+								Node *escontext);
 
 #endif

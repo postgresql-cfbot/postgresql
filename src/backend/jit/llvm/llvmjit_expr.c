@@ -2389,6 +2389,264 @@ llvm_compile_expr(ExprState *state)
 				LLVMBuildBr(b, opblocks[opno + 1]);
 				break;
 
+			case EEOP_JSON_CONSTRUCTOR:
+				build_EvalXFunc(b, mod, "ExecEvalJsonConstructor",
+								v_state, op, v_econtext);
+				LLVMBuildBr(b, opblocks[opno + 1]);
+				break;
+
+			case EEOP_IS_JSON:
+				build_EvalXFunc(b, mod, "ExecEvalJsonIsPredicate",
+								v_state, op);
+				LLVMBuildBr(b, opblocks[opno + 1]);
+				break;
+
+			case EEOP_JSONEXPR_PATH:
+				build_EvalXFunc(b, mod, "ExecEvalJson",
+								v_state, op, v_econtext);
+				LLVMBuildBr(b, opblocks[opno + 1]);
+				break;
+
+			case EEOP_JSONEXPR_SKIP:
+				{
+					LLVMValueRef params[2];
+					LLVMValueRef v_ret;
+
+					/*
+					 * Call ExecEvalJsonExprSkip() to decide if JSON path
+					 * evaluation can be skipped.  This returns the step
+					 * address to jump to.
+					 */
+					params[0] = v_state;
+					params[1] = l_ptr_const(op, l_ptr(StructExprEvalStep));
+					v_ret = LLVMBuildCall(b,
+										  llvm_pg_func(mod, "ExecEvalJsonExprSkip"),
+										  params, lengthof(params), "");
+
+					/*
+					 * Jump to coercion step if the returned address is the
+					 * same as jsonexpr_skip.jump_coercion, which signifies
+					 * skipping of JSON path evaluation, else to the next step
+					 * which must point to the steps to evaluate PASSING args,
+					 * if any, or to the JSON path evaluation.
+					 */
+					LLVMBuildCondBr(b,
+									LLVMBuildICmp(b,
+												  LLVMIntEQ,
+												  v_ret,
+												  l_int32_const(op->d.jsonexpr_skip.jump_coercion),
+												  ""),
+									opblocks[op->d.jsonexpr_skip.jump_coercion],
+									opblocks[opno + 1]);
+					break;
+				}
+
+			case EEOP_JSONEXPR_BEHAVIOR:
+				{
+					LLVMValueRef params[2];
+					LLVMValueRef v_ret;
+					LLVMBasicBlockRef b_jump_onerror_default;
+
+					/*
+					 * Call ExecEvalJsonExprBehavior() to decide if ON EMPTY or
+					 * ON ERROR behavior must be invoked depending on what JSON
+					 * path evaluation returned.  This returns the step address
+					 * to jump to.
+					 */
+					params[0] = v_state;
+					params[1] = l_ptr_const(op, l_ptr(StructExprEvalStep));
+					v_ret = LLVMBuildCall(b,
+										  llvm_pg_func(mod, "ExecEvalJsonExprBehavior"),
+										  params, lengthof(params), "");
+
+					b_jump_onerror_default =
+						l_bb_before_v(opblocks[opno + 1],
+									  "op.%d.jsonexpr_behavior_jump_onerror_default", opno);
+
+					/*
+					 * Jump to coercion step if the returned address is the
+					 * same as jsonexpr_behavior.jump_coercion, else to the
+					 * next block, one that checks whether to evaluate
+					 * the ON ERROR default expression.
+					 */
+					LLVMBuildCondBr(b,
+									LLVMBuildICmp(b,
+												  LLVMIntEQ,
+												  v_ret,
+												  l_int32_const(op->d.jsonexpr_behavior.jump_coercion),
+												  ""),
+									opblocks[op->d.jsonexpr_behavior.jump_coercion],
+									b_jump_onerror_default);
+
+					/*
+					 * Block that checks whether to evaluate the ON ERROR
+					 * default expression.
+					 *
+					 * Jump to evaluate the ON ERROR default expression if the
+					 * returned address is the same as
+					 * jsonexpr_behavior.jump_onerror_default, else jump to
+					 * evaluate the ON EMPTY default expression.
+					 */
+					LLVMPositionBuilderAtEnd(b, b_jump_onerror_default);
+					LLVMBuildCondBr(b,
+									LLVMBuildICmp(b,
+												  LLVMIntEQ,
+												  v_ret,
+												  l_int32_const(op->d.jsonexpr_behavior.jump_onerror_default),
+												  ""),
+									opblocks[op->d.jsonexpr_behavior.jump_onerror_default],
+									opblocks[op->d.jsonexpr_behavior.jump_onempty_default]);
+					break;
+				}
+			case EEOP_JSONEXPR_COERCION:
+				{
+					JsonExprState *jsestate = op->d.jsonexpr_coercion.jsestate;
+					JsonItemCoercionsState *item_jcstates = jsestate->item_jcstates;
+					JsonCoercionState *result_jcstate = jsestate->result_jcstate;
+					LLVMValueRef v_ret;
+					LLVMValueRef params[5];
+
+					/*
+					 * Call ExecEvalJsonExprCoercion() to evaluate appropriate
+					 * coercion.  This will return the step address to jump
+					 * to.
+					 */
+					params[0] = v_state;
+					params[1] = l_ptr_const(op, l_ptr(StructExprEvalStep));
+					params[2] = v_econtext;
+					params[3] = v_resvaluep;
+					params[4] = v_resnullp;
+					v_ret = LLVMBuildCall(b,
+										  llvm_pg_func(mod, "ExecEvalJsonExprCoercion"),
+										  params, lengthof(params), "");
+
+					/*
+					 * Jump to handle a coercion error if the returned address
+					 * is the same as jsonexpr_coercion.jump_coercion_error,
+					 * else to the step after coercion (coercion done!).
+					 */
+					LLVMBuildCondBr(b,
+									LLVMBuildICmp(b,
+												  LLVMIntEQ,
+												  v_ret,
+												  l_int32_const(op->d.jsonexpr_coercion.jump_coercion_error),
+												  ""),
+									opblocks[op->d.jsonexpr_coercion.jump_coercion_error],
+									opblocks[op->d.jsonexpr_coercion.jump_coercion_done]);
+
+					if (item_jcstates)
+					{
+						JsonCoercionState **item_jcstate;
+						int		n_coercions = (int)
+						(item_jcstates->composite - item_jcstates->null) + 1;
+						int		i;
+						LLVMBasicBlockRef *b_coercions;
+
+
+						/*
+						 * Will create a block for each coercion below to check
+						 * whether to evaluate the coercion's expression if there's
+						 * one or to skip to the end if not.
+						 */
+						b_coercions = palloc((n_coercions + 1) * sizeof(LLVMBasicBlockRef));
+						for (i = 0; i < n_coercions + 1; i++)
+							b_coercions[i] =
+								l_bb_before_v(opblocks[opno + 1],
+											  "op.%d.json_item_coercion.%d",
+											  opno, i);
+
+						/* Jump to check first coercion */
+						LLVMBuildBr(b, b_coercions[0]);
+
+						/* Add conditional branches for individual coercion's expressions */
+						for (item_jcstate = &item_jcstates->null, i = 0;
+							 item_jcstate <= &item_jcstates->composite;
+							 item_jcstate++, i++)
+						{
+							/* Block for this coercion */
+							LLVMPositionBuilderAtEnd(b, b_coercions[i]);
+
+							/*
+							 * Jump to evaluate the coercion's expression if the
+							 * address returned is the same as this coercion's
+							 * jump_eval_expr (that is, if it is valid), else
+							 * check the next coercion's.
+							 */
+							LLVMBuildCondBr(b,
+											LLVMBuildICmp(b,
+														  LLVMIntEQ,
+														  v_ret,
+														  l_int32_const((*item_jcstate)->jump_eval_expr),
+														  ""),
+											(*item_jcstate)->jump_eval_expr >= 0 ?
+											opblocks[(*item_jcstate)->jump_eval_expr] :
+											opblocks[op->d.jsonexpr_coercion.jump_coercion_done],
+											b_coercions[i + 1]);
+						}
+
+						/*
+						 * A placeholder block that the last coercion's block might
+						 * jump to, which unconditionally jumps to end of
+						 * coercions.
+						 */
+						LLVMPositionBuilderAtEnd(b, b_coercions[i]);
+						LLVMBuildBr(b, opblocks[op->d.jsonexpr_coercion.jump_coercion_done]);
+					}
+
+					/*
+					 * Jump to evaluate the result_coercion's expression if
+					 * none of the above coercions matched, that is, if
+					 * there's one.
+					 */
+					if (result_jcstate)
+					{
+						LLVMBuildCondBr(b,
+										LLVMBuildICmp(b,
+													  LLVMIntEQ,
+													  v_ret,
+													  l_int32_const(result_jcstate->jump_eval_expr),
+													  ""),
+										result_jcstate->jump_eval_expr >= 0 ?
+										opblocks[result_jcstate->jump_eval_expr] :
+										opblocks[op->d.jsonexpr_coercion.jump_coercion_done],
+										opblocks[op->d.jsonexpr_coercion.jump_coercion_done]);
+					}
+					break;
+				}
+
+			case EEOP_JSONEXPR_COERCION_FINISH:
+				{
+					LLVMValueRef params[2];
+					LLVMValueRef v_ret;
+
+					/*
+					 * Call ExecEvalJsonExprCoercionFinish() to check whether
+					 * an coercion error occurred, in which case we must jump
+					 * to whatever step handles the error.  This returns the
+					 * step address to jump to.
+					 */
+					params[0] = v_state;
+					params[1] = l_ptr_const(op, l_ptr(StructExprEvalStep));
+					v_ret = LLVMBuildCall(b,
+										  llvm_pg_func(mod, "ExecEvalJsonExprCoercionFinish"),
+										  params, lengthof(params), "");
+
+					/*
+					 * Jump to the step that handles coercion error if the
+					 * returned address is the same as
+					 * jsonexpr_coercion_finish.jump_coercion_error, else to
+					 * jsonexpr_coercion_finish.jump_coercion_done.
+					 */
+					LLVMBuildCondBr(b,
+									LLVMBuildICmp(b,
+												  LLVMIntEQ,
+												  v_ret,
+												  l_int32_const(op->d.jsonexpr_coercion_finish.jump_coercion_error),
+												  ""),
+									opblocks[op->d.jsonexpr_coercion_finish.jump_coercion_error],
+									opblocks[op->d.jsonexpr_coercion_finish.jump_coercion_done]);
+					break;
+				}
 			case EEOP_LAST:
 				Assert(false);
 				break;

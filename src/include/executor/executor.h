@@ -17,6 +17,7 @@
 #include "executor/execdesc.h"
 #include "fmgr.h"
 #include "nodes/lockoptions.h"
+#include "nodes/miscnodes.h"
 #include "nodes/parsenodes.h"
 #include "utils/memutils.h"
 
@@ -268,6 +269,8 @@ ExecProcNode(PlanState *node)
  */
 extern ExprState *ExecInitExpr(Expr *node, PlanState *parent);
 extern ExprState *ExecInitExprWithParams(Expr *node, ParamListInfo ext_params);
+extern ExprState *ExecInitExprWithCaseValue(Expr *node, PlanState *parent,
+						  Datum *caseval, bool *casenull);
 extern ExprState *ExecInitQual(List *qual, PlanState *parent);
 extern ExprState *ExecInitCheck(List *qual, PlanState *parent);
 extern List *ExecInitExprList(List *nodes, PlanState *parent);
@@ -323,6 +326,36 @@ ExecEvalExpr(ExprState *state,
 			 bool *isNull)
 {
 	return state->evalfunc(state, econtext, isNull);
+}
+
+/*
+ * ExecEvalExprSafe
+ *
+ * Like ExecEvalExpr(), though this allows the caller to pass an
+ * ErrorSaveContext to declare its intenion to catch any errors that occur when
+ * executing the expression, such as when calling type input functions that may
+ * be present in it.
+ */
+static inline Datum
+ExecEvalExprSafe(ExprState *state,
+				 ExprContext *econtext,
+				 bool *isNull,
+				 Node *escontext,
+				 bool *error)
+{
+	Datum	res;
+
+	Assert(error != NULL && escontext != NULL);
+	state->escontext = escontext;
+	res = state->evalfunc(state, econtext, isNull);
+	if (SOFT_ERROR_OCCURRED(escontext))
+	{
+		*error = true;
+		*isNull = true;
+		res = (Datum) 0;
+	}
+	return res;
+
 }
 #endif
 

@@ -48,6 +48,9 @@
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/datum.h"
+#include "utils/json.h"
+#include "utils/jsonb.h"
+#include "utils/jsonpath.h"
 #include "utils/lsyscache.h"
 #include "utils/typcache.h"
 
@@ -84,6 +87,15 @@ static void ExecBuildAggTransCall(ExprState *state, AggState *aggstate,
 								  FunctionCallInfo fcinfo, AggStatePerTrans pertrans,
 								  int transno, int setno, int setoff, bool ishash,
 								  bool nullcheck);
+static void ExecInitJsonExpr(JsonExpr *jexpr, ExprState *state,
+				 Datum *resv, bool *resnull,
+				 ExprEvalStep *scratch);
+static JsonCoercionState *ExecInitJsonCoercion(ExprEvalStep *scratch, ExprState *state,
+					 JsonCoercion *coercion,
+					 Datum *resv, bool *resnull);
+static JsonItemCoercionsState *ExecInitJsonItemCoercions(ExprEvalStep *scratch, ExprState *state,
+						  JsonItemCoercions *coercions,
+						  Datum *resv, bool *resnull);
 
 
 /*
@@ -172,6 +184,48 @@ ExecInitExprWithParams(Expr *node, ParamListInfo ext_params)
 	state->expr = node;
 	state->parent = NULL;
 	state->ext_params = ext_params;
+
+	/* Insert EEOP_*_FETCHSOME steps as needed */
+	ExecInitExprSlots(state, (Node *) node);
+
+	/* Compile the expression proper */
+	ExecInitExprRec(node, state, &state->resvalue, &state->resnull);
+
+	/* Finally, append a DONE step */
+	scratch.opcode = EEOP_DONE;
+	ExprEvalPushStep(state, &scratch);
+
+	ExecReadyExpr(state);
+
+	return state;
+}
+
+/*
+ * ExecInitExprWithCaseValue
+ *
+ * This is the same as ExecInitExpr, except the caller passes the Datum and
+ * bool pointers that it would like the ExprState.innermost_caseval
+ * and ExprState.innermost_casenull, respectively, to be set to.  That way,
+ * it can pass an input value to evaluate the expression via a CaseTestExpr.
+ */
+ExprState *
+ExecInitExprWithCaseValue(Expr *node, PlanState *parent,
+						  Datum *caseval, bool *casenull)
+{
+	ExprState  *state;
+	ExprEvalStep scratch = {0};
+
+	/* Special case: NULL expression produces a NULL ExprState pointer */
+	if (node == NULL)
+		return NULL;
+
+	/* Initialize ExprState with empty step list */
+	state = makeNode(ExprState);
+	state->expr = node;
+	state->parent = parent;
+	state->ext_params = NULL;
+	state->innermost_caseval = caseval;
+	state->innermost_casenull = casenull;
 
 	/* Insert EEOP_*_FETCHSOME steps as needed */
 	ExecInitExprSlots(state, (Node *) node);
@@ -2401,6 +2455,161 @@ ExecInitExprRec(Expr *node, ExprState *state,
 				break;
 			}
 
+		case T_JsonValueExpr:
+			{
+				JsonValueExpr *jve = (JsonValueExpr *) node;
+
+				ExecInitExprRec(jve->raw_expr, state, resv, resnull);
+
+				if (jve->formatted_expr)
+				{
+					Datum	   *innermost_caseval = state->innermost_caseval;
+					bool	   *innermost_isnull = state->innermost_casenull;
+
+					state->innermost_caseval = resv;
+					state->innermost_casenull = resnull;
+
+					ExecInitExprRec(jve->formatted_expr, state, resv, resnull);
+
+					state->innermost_caseval = innermost_caseval;
+					state->innermost_casenull = innermost_isnull;
+				}
+				break;
+			}
+
+		case T_JsonConstructorExpr:
+			{
+				JsonConstructorExpr *ctor = (JsonConstructorExpr *) node;
+				List	   *args = ctor->args;
+				ListCell   *lc;
+				int			nargs = list_length(args);
+				int			argno = 0;
+
+				if (ctor->func)
+				{
+					ExecInitExprRec(ctor->func, state, resv, resnull);
+				}
+				else if ((ctor->type == JSCTOR_JSON_PARSE && !ctor->unique) ||
+						 ctor->type == JSCTOR_JSON_SERIALIZE)
+				{
+					/* Use the value of the first argument as a result */
+					ExecInitExprRec(linitial(args), state, resv, resnull);
+				}
+				else
+				{
+					JsonConstructorExprState *jcstate;
+
+					jcstate = palloc0(sizeof(JsonConstructorExprState));
+
+					scratch.opcode = EEOP_JSON_CONSTRUCTOR;
+					scratch.d.json_constructor.jcstate = jcstate;
+
+					jcstate->constructor = ctor;
+					jcstate->arg_values = palloc(sizeof(Datum) * nargs);
+					jcstate->arg_nulls = palloc(sizeof(bool) * nargs);
+					jcstate->arg_types = palloc(sizeof(Oid) * nargs);
+					jcstate->nargs = nargs;
+
+					foreach(lc, args)
+					{
+						Expr	   *arg = (Expr *) lfirst(lc);
+
+						jcstate->arg_types[argno] = exprType((Node *) arg);
+
+						if (IsA(arg, Const))
+						{
+							/* Don't evaluate const arguments every round */
+							Const	   *con = (Const *) arg;
+
+							jcstate->arg_values[argno] = con->constvalue;
+							jcstate->arg_nulls[argno] = con->constisnull;
+						}
+						else
+						{
+							ExecInitExprRec(arg, state,
+											&jcstate->arg_values[argno],
+											&jcstate->arg_nulls[argno]);
+						}
+						argno++;
+					}
+
+					/* prepare type cache for datum_to_json[b]() */
+					if (ctor->type == JSCTOR_JSON_SCALAR)
+					{
+						bool		is_jsonb =
+						ctor->returning->format->format_type == JS_FORMAT_JSONB;
+
+						jcstate->arg_type_cache =
+							palloc(sizeof(*jcstate->arg_type_cache) * nargs);
+
+						for (int i = 0; i < nargs; i++)
+						{
+							int			category;
+							Oid			outfuncid;
+							Oid			typid = jcstate->arg_types[i];
+
+							if (is_jsonb)
+							{
+								JsonbTypeCategory jbcat;
+
+								jsonb_categorize_type(typid, &jbcat, &outfuncid);
+
+								category = (int) jbcat;
+							}
+							else
+							{
+								JsonTypeCategory jscat;
+
+								json_categorize_type(typid, &jscat, &outfuncid);
+
+								category = (int) jscat;
+							}
+
+							jcstate->arg_type_cache[i].outfuncid = outfuncid;
+							jcstate->arg_type_cache[i].category = category;
+						}
+					}
+
+					ExprEvalPushStep(state, &scratch);
+				}
+
+				if (ctor->coercion)
+				{
+					Datum	   *innermost_caseval = state->innermost_caseval;
+					bool	   *innermost_isnull = state->innermost_casenull;
+
+					state->innermost_caseval = resv;
+					state->innermost_casenull = resnull;
+
+					ExecInitExprRec(ctor->coercion, state, resv, resnull);
+
+					state->innermost_caseval = innermost_caseval;
+					state->innermost_casenull = innermost_isnull;
+				}
+			}
+			break;
+
+		case T_JsonIsPredicate:
+			{
+				JsonIsPredicate *pred = (JsonIsPredicate *) node;
+
+				ExecInitExprRec((Expr *) pred->expr, state, resv, resnull);
+
+				scratch.opcode = EEOP_IS_JSON;
+				scratch.d.is_json.pred = pred;
+
+				ExprEvalPushStep(state, &scratch);
+				break;
+			}
+
+		case T_JsonExpr:
+			{
+				JsonExpr   *jexpr = castNode(JsonExpr, node);
+
+				ExecInitJsonExpr(jexpr, state, resv, resnull, &scratch);
+				break;
+			}
+
 		default:
 			elog(ERROR, "unrecognized node type: %d",
 				 (int) nodeTag(node));
@@ -3989,4 +4198,324 @@ ExecBuildParamSetEqual(TupleDesc desc,
 	ExecReadyExpr(state);
 
 	return state;
+}
+
+/*
+ * Push steps to evaluate a JsonExpr and its various subsidiary expressions.
+ */
+static void
+ExecInitJsonExpr(JsonExpr *jexpr, ExprState *state,
+				 Datum *resv, bool *resnull,
+				 ExprEvalStep *scratch)
+{
+	JsonExprState *jsestate = palloc0(sizeof(JsonExprState));
+	JsonExprPreEvalState *pre_eval = &jsestate->pre_eval;
+	ListCell   *argexprlc;
+	ListCell   *argnamelc;
+	int			skip_step_off;
+	int			passing_args_step_off;
+	int			behavior_step_off;
+	int			onempty_default_step_off;
+	int			onerror_default_step_off;
+	List	   *adjust_jumps = NIL;
+	ListCell   *lc;
+	int			coercion_step_off;
+	int			coercion_finish_step_off;
+	ExprEvalStep *as;
+
+	jsestate->jsexpr = jexpr;
+
+	/*
+	 * Add steps to compute formatted_expr, pathspec, and PASSING arg
+	 * expressions as things that must be evaluated *before* the actual JSON
+	 * path expression.
+	 */
+	ExecInitExprRec((Expr *) jexpr->formatted_expr, state,
+					&pre_eval->formatted_expr.value,
+					&pre_eval->formatted_expr.isnull);
+	ExecInitExprRec((Expr *) jexpr->path_spec, state,
+					&pre_eval->pathspec.value,
+					&pre_eval->pathspec.isnull);
+
+	/*
+	 * Before pushing steps for PASSING args, push a step to decide whether to
+	 * skip evaluating the args and the JSON path expression depending on
+	 * whether either of formatted_expr and pathspec is NULL; see
+	 * ExecEvalJsonExprSkip().
+	 */
+	scratch->opcode = EEOP_JSONEXPR_SKIP;
+	scratch->d.jsonexpr_skip.jsestate = jsestate;
+	skip_step_off = state->steps_len;
+	ExprEvalPushStep(state, scratch);
+
+	/* PASSING args. */
+	jsestate->pre_eval.args = NIL;
+	passing_args_step_off = state->steps_len;
+	forboth(argexprlc, jexpr->passing_values,
+			argnamelc, jexpr->passing_names)
+	{
+		Expr	   *argexpr = (Expr *) lfirst(argexprlc);
+		String	   *argname = lfirst_node(String, argnamelc);
+		JsonPathVariableEvalContext *var = palloc(sizeof(*var));
+
+		var->name = pstrdup(argname->sval);
+		var->typid = exprType((Node *) argexpr);
+		var->typmod = exprTypmod((Node *) argexpr);
+
+		/*
+		 * A separate ExprState is not necessary for these expressions when
+		 * being evaluated for a JsonExpr, like  in this case, because they
+		 * will evaluated as the steps of the JsonExpr.
+		 */
+		var->estate = NULL;
+		var->econtext = NULL;
+
+		/*
+		 * Mark these as always evaluated because they must have been evaluated
+		 * before JSON path evaluation begins, because we haven't pushed the
+		 * step for the latter yet.
+		 */
+		var->evaluated = true;
+
+		ExecInitExprRec((Expr *) argexpr, state, &var->value, &var->isnull);
+
+		pre_eval->args = lappend(pre_eval->args, var);
+	}
+
+	/*
+	 * Step for the actual JSON path evaluation; see ExecEvalJson() and
+	 * ExecEvalJsonExpr().
+	 */
+	scratch->opcode = EEOP_JSONEXPR_PATH;
+	scratch->d.jsonexpr.jsestate = jsestate;
+	ExprEvalPushStep(state, scratch);
+
+	/*
+	 * Push steps to control the evaluation of expressions based
+	 * on the result of JSON path evaluation.
+	 */
+
+	/*
+	 * Step to handle ON ERROR and ON EMPTY behavior; see
+	 * ExecEvalJsonExprBehavior().
+	 */
+	scratch->opcode = EEOP_JSONEXPR_BEHAVIOR;
+	scratch->d.jsonexpr_behavior.jsestate = jsestate;
+	behavior_step_off = state->steps_len;
+	ExprEvalPushStep(state, scratch);
+
+	/* Step(s) to evaluate ON EMPTY default expression */
+	onempty_default_step_off = state->steps_len;
+	if (jexpr->on_empty && jexpr->on_empty->default_expr)
+	{
+		ExecInitExprRec((Expr *) jexpr->on_empty->default_expr,
+						 state, resv, resnull);
+
+		/*
+		 * Emit JUMP step to jump to end of JsonExpr code, because evaluating
+		 * the default expression gives the final result and there's nothing
+		 * more to do.
+		 */
+		scratch->opcode = EEOP_JUMP;
+		scratch->d.jump.jumpdone = -1;	/* computed later */
+		ExprEvalPushStep(state, scratch);
+
+		/*
+		 * Don't know address for that jump yet, compute once the whole
+		 * JsonExpr is built.
+		 */
+		adjust_jumps = lappend_int(adjust_jumps, state->steps_len - 1);
+	}
+
+	/* Step(s) to evaluate ON ERROR default expression */
+	onerror_default_step_off = state->steps_len;
+	if (jexpr->on_error && jexpr->on_error->default_expr)
+	{
+		ExecInitExprRec((Expr *) jexpr->on_error->default_expr,
+						state, resv, resnull);
+
+		/* See the comment above. */
+		scratch->opcode = EEOP_JUMP;
+		scratch->d.jump.jumpdone = -1;	/* computed later */
+		ExprEvalPushStep(state, scratch);
+		adjust_jumps = lappend_int(adjust_jumps, state->steps_len - 1);
+	}
+
+	/*
+	 * Step to handle applying coercion to the JSON item returned by
+	 * EEOP_JSONEXPR_PATH or to the ON EMPTY/ERROR expression as
+	 * EEOP_JSONEXPR_BEHAVIOR decides; see ExecEvalJsonExprCoercion().
+	 */
+	scratch->opcode = EEOP_JSONEXPR_COERCION;
+	scratch->d.jsonexpr_coercion.jsestate = jsestate;
+	coercion_step_off = state->steps_len;
+	ExprEvalPushStep(state, scratch);
+
+	/* Initialize coercion expression(s). */
+	if (jexpr->result_coercion)
+	{
+		jsestate->result_jcstate =
+			ExecInitJsonCoercion(scratch, state, jexpr->result_coercion,
+								 resv, resnull);
+		/* See the comment above. */
+		scratch->opcode = EEOP_JUMP;
+		scratch->d.jump.jumpdone = -1;	/* computed later */
+		ExprEvalPushStep(state, scratch);
+		adjust_jumps = lappend_int(adjust_jumps, state->steps_len - 1);
+	}
+	if (jexpr->coercions)
+	{
+		/*
+		 * ExecPrepareJsonItemCoercion() called by ExecEvalJsonExpr() chooses
+		 * one for a given JSON item returned by JsonPathValue().
+		 */
+		jsestate->item_jcstates =
+			ExecInitJsonItemCoercions(scratch, state, jexpr->coercions,
+									  resv, resnull);
+	}
+
+	/*
+	 * And a step to clean up after the coercion step; see
+	 * ExecEvalJsonExprCoercionFinish().
+	 */
+	scratch->opcode = EEOP_JSONEXPR_COERCION_FINISH;
+	scratch->d.jsonexpr_coercion.jsestate = jsestate;
+	coercion_finish_step_off = state->steps_len;
+	ExprEvalPushStep(state, scratch);
+
+	/*
+	 * Adjust jump target addresses in various post-eval steps now that we have
+	 * all the steps in place.
+	 */
+
+	/* EEOP_JSONEXPR_SKIP */
+	as = &state->steps[skip_step_off];
+	as->d.jsonexpr_skip.jump_coercion = coercion_step_off;
+	as->d.jsonexpr_skip.jump_passing_args = passing_args_step_off;
+
+	/* EEOP_JSONEXPR_BEHAVIOR */
+	as = &state->steps[behavior_step_off];
+	as->d.jsonexpr_behavior.jump_onerror_default = onerror_default_step_off;
+	as->d.jsonexpr_behavior.jump_onempty_default = onempty_default_step_off;
+	as->d.jsonexpr_behavior.jump_coercion = coercion_step_off;
+	as->d.jsonexpr_behavior.jump_skip_coercion = coercion_finish_step_off + 1;
+
+	/* EEOP_JSONEXPR_COERCION */
+	as = &state->steps[coercion_step_off];
+	as->d.jsonexpr_coercion.jump_coercion_error = behavior_step_off;
+	as->d.jsonexpr_coercion.jump_coercion_done = coercion_finish_step_off + 1;
+
+	/* EEOP_JSONEXPR_COERCION_FINISH */
+	as = &state->steps[coercion_finish_step_off];
+	as->d.jsonexpr_coercion_finish.jump_coercion_error = behavior_step_off;
+	as->d.jsonexpr_coercion_finish.jump_coercion_done = coercion_finish_step_off + 1;
+
+	/*
+	 * EEOP_JUMP steps added after ON EMPTY and ON ERROR default expression
+	 * should jump to the current step address.
+	 */
+	foreach(lc, adjust_jumps)
+	{
+		as = &state->steps[lfirst_int(lc)];
+		as->d.jump.jumpdone = state->steps_len;
+	}
+
+	/*
+	 * Set RETURNING type's input function used by ExecEvalJsonExprCoercion().
+	 */
+	if (jexpr->omit_quotes ||
+		(jexpr->result_coercion && jexpr->result_coercion->via_io))
+	{
+		Oid			typinput;
+		FmgrInfo   *finfo;
+
+		/* lookup the result type's input function */
+		getTypeInputInfo(jexpr->returning->typid, &typinput,
+						 &jsestate->input.typioparam);
+		finfo = palloc0(sizeof(FmgrInfo));
+		fmgr_info(typinput, finfo);
+		jsestate->input.finfo = finfo;
+	}
+}
+
+/* Initialize one JsonCoercion for execution. */
+static JsonCoercionState *
+ExecInitJsonCoercion(ExprEvalStep *scratch, ExprState *state,
+					 JsonCoercion *coercion,
+					 Datum *resv, bool *resnull)
+{
+	JsonCoercionState *jcstate = palloc0(sizeof(JsonCoercionState));
+
+	jcstate->coercion = coercion;
+	if (coercion && coercion->expr)
+	{
+		Datum   *save_innermost_caseval;
+		bool	*save_innermost_casenull;
+
+		jcstate->jump_eval_expr = state->steps_len;
+
+		/* Push step(s) to compute cstate->coercion. */
+		save_innermost_caseval = state->innermost_caseval;
+		save_innermost_casenull = state->innermost_casenull;
+
+		state->innermost_caseval = resv;
+		state->innermost_casenull = resnull;
+
+		ExecInitExprRec((Expr *) coercion->expr, state, resv, resnull);
+
+		state->innermost_caseval = save_innermost_caseval;
+		state->innermost_casenull = save_innermost_casenull;
+	}
+	else
+		jcstate->jump_eval_expr = -1;
+
+	return jcstate;
+}
+
+/*
+ * Push steps to evaluate coercions from a given JsonItemCoercions, which
+ * contains all possible coercions that may need to be applied to JSON
+ * items coming from evaluating the parent JsonExpr.
+ */
+static JsonItemCoercionsState *
+ExecInitJsonItemCoercions(ExprEvalStep *scratch, ExprState *state,
+						  JsonItemCoercions *coercions,
+						  Datum *resv, bool *resnull)
+{
+	JsonCoercion **coercion;
+	JsonItemCoercionsState *item_jcstates = palloc0(sizeof(JsonItemCoercionsState));
+	JsonCoercionState **item_jcstate;
+	ExprEvalStep *as;
+	List	   *adjust_jumps = NIL;
+	ListCell   *lc;
+
+	/* Push the steps of individual coercions. */
+	for (coercion = &coercions->null,
+		 item_jcstate = &item_jcstates->null;
+		 coercion <= &coercions->composite;
+		 coercion++, item_jcstate++)
+	{
+		*item_jcstate = ExecInitJsonCoercion(scratch, state, *coercion,
+											 resv, resnull);
+
+		/* Emit JUMP step to skip past other coercions' steps. */
+		scratch->opcode = EEOP_JUMP;
+
+		/*
+		 * Remember JUMP step address to set the actual jump target addreess
+		 * below.
+		 */
+		adjust_jumps = lappend_int(adjust_jumps, state->steps_len);
+		ExprEvalPushStep(state, scratch);
+	}
+
+	foreach(lc, adjust_jumps)
+	{
+		int		jump_step_id = lfirst_int(lc);
+
+		as = &state->steps[jump_step_id];
+		as->d.jump.jumpdone = state->steps_len;
+	}
+
+	return item_jcstates;
 }

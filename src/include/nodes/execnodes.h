@@ -129,6 +129,9 @@ typedef struct ExprState
 
 	Datum	   *innermost_domainval;
 	bool	   *innermost_domainnull;
+
+	/* ErrorSaveContext for soft-error capture. */
+	Node	   *escontext;
 } ExprState;
 
 

@@ -88,6 +88,7 @@ CATALOG(pg_subscription,6100,SubscriptionRelationId) BKI_SHARED_RELATION BKI_ROW
 	bool		subdisableonerr;	/* True if a worker error should cause the
 									 * subscription to be disabled */
 
+	char		subcopyformat BKI_DEFAULT(LOGICALREP_COPY_AS_TEXT); /* Copy format */
 #ifdef CATALOG_VARLEN			/* variable-length fields start here */
 	/* Connection string to the publisher */
 	text		subconninfo BKI_FORCE_NOT_NULL;
@@ -137,6 +138,8 @@ typedef struct Subscription
 	List	   *publications;	/* List of publication names to subscribe to */
 	char	   *origin;			/* Only publish data originating from the
 								 * specified origin */
+	char		copyformat;		/* Copy format for subscriptions with binary
+								 * option enabled */
 } Subscription;
 
 /* Disallow streaming in-progress transactions. */
@@ -153,6 +156,16 @@ typedef struct Subscription
  * apply worker.
  */
 #define LOGICALREP_STREAM_PARALLEL 'p'
+
+/*
+ * Copy data as text. This is the default.
+ */
+#define LOGICALREP_COPY_AS_TEXT 't'
+
+/*
+ * Copy data as binary if the binary options is enabled in the subscription.
+ */
+#define LOGICALREP_COPY_AS_BINARY 'b'
 
 extern Subscription *GetSubscription(Oid subid, bool missing_ok);
 extern void FreeSubscription(Subscription *sub);

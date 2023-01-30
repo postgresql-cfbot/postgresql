@@ -36,6 +36,16 @@ my $ddl = qq(
 $node_publisher->safe_psql('postgres', $ddl);
 $node_subscriber->safe_psql('postgres', $ddl);
 
+# Insert some content and make sure it's synced to subscriber
+$node_publisher->safe_psql(
+	'postgres', qq(
+	INSERT INTO public.test_arrays (a, b, c) VALUES
+		('{1,2,3}', '{1.1, 1.2, 1.3}', '{"one", "two", "three"}');
+
+	INSERT INTO public.test_numerical (a, b, c, d) VALUES
+		(1, 1.2, 1.3, 10);
+	));
+
 # Configure logical replication
 $node_publisher->safe_psql('postgres',
 	"CREATE PUBLICATION tpub FOR ALL TABLES");
@@ -48,27 +58,35 @@ $node_subscriber->safe_psql('postgres',
 # Ensure nodes are in sync with each other
 $node_subscriber->wait_for_subscription_sync($node_publisher, 'tsub');
 
+my $result = $node_subscriber->safe_psql('postgres',
+	"SELECT a, b, c, d FROM test_numerical ORDER BY a;
+	SELECT a, b, c FROM test_arrays ORDER BY a;");
+
+is( $result, '1|1.2|1.3|10
+{1,2,3}|{1.1,1.2,1.3}|{one,two,three}', 'check syned data on subscriber');
+
 # Insert some content and make sure it's replicated across
 $node_publisher->safe_psql(
 	'postgres', qq(
 	INSERT INTO public.test_arrays (a, b, c) VALUES
-		('{1,2,3}', '{1.1, 1.2, 1.3}', '{"one", "two", "three"}'),
 		('{3,1,2}', '{1.3, 1.1, 1.2}', '{"three", "one", "two"}');
 
 	INSERT INTO public.test_numerical (a, b, c, d) VALUES
-		(1, 1.2, 1.3, 10),
 		(2, 2.2, 2.3, 20),
 		(3, 3.2, 3.3, 30);
 	));
 
 $node_publisher->wait_for_catchup('tsub');
 
-my $result = $node_subscriber->safe_psql('postgres',
-	"SELECT a, b, c, d FROM test_numerical ORDER BY a");
+$result = $node_subscriber->safe_psql('postgres',
+	"SELECT a, b, c, d FROM test_numerical ORDER BY a;
+	SELECT a, b, c FROM test_arrays ORDER BY a;");
 
 is( $result, '1|1.2|1.3|10
 2|2.2|2.3|20
-3|3.2|3.3|30', 'check replicated data on subscriber');
+3|3.2|3.3|30
+{1,2,3}|{1.1,1.2,1.3}|{one,two,three}
+{3,1,2}|{1.3,1.1,1.2}|{three,one,two}', 'check replicated data on subscriber');
 
 # Test updates as well
 $node_publisher->safe_psql(

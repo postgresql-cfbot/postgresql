@@ -189,8 +189,9 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
         <term><literal>binary</literal> (<type>boolean</type>)</term>
         <listitem>
          <para>
-          Specifies whether the subscription will request the publisher to
-          send the data in binary format (as opposed to text).
+          Specifies whether the subscription will copy the initial data to
+          synchronize relations in binary format and also request the publisher
+          to send the data in binary format too (as opposed to text).
           The default is <literal>false</literal>.
           Even when this option is enabled, only data types having
           binary send and receive functions will be transferred in binary.
@@ -346,6 +347,22 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
           See <xref linkend="sql-createsubscription-notes"/> for details of how
           <literal>copy_data = true</literal> can interact with the
           <literal>origin</literal> parameter.
+         </para>
+        </listitem>
+       </varlistentry>
+
+      <varlistentry>
+        <term><literal>copy_format</literal> (<type>string</type>)</term>
+        <listitem>
+         <para>
+          Specifies the format in which pre-existing data on the publisher will
+          copied to the subscriber. Supported formats are 
+          <literal>text</literal> and <literal>binary</literal>. The default is
+          <literal>text</literal>.
+
+          <literal>binary</literal> format can be selected only if
+          <literal>binary</literal> is set to <literal>true</literal>. Note
+          that data will not be copied if <literal>copy_data = false</literal>.  
          </para>
         </listitem>
        </varlistentry>

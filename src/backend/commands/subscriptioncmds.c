@@ -66,6 +66,7 @@
 #define SUBOPT_DISABLE_ON_ERR		0x00000400
 #define SUBOPT_LSN					0x00000800
 #define SUBOPT_ORIGIN				0x00001000
+#define SUBOPT_COPY_FORMAT			0x00002000
 
 /* check if the 'val' has 'bits' set */
 #define IsSet(val, bits)  (((val) & (bits)) == (bits))
@@ -90,6 +91,7 @@ typedef struct SubOpts
 	bool		disableonerr;
 	char	   *origin;
 	XLogRecPtr	lsn;
+	char	    copy_format;
 } SubOpts;
 
 static List *fetch_table_list(WalReceiverConn *wrconn, List *publications);
@@ -146,6 +148,8 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 		opts->disableonerr = false;
 	if (IsSet(supported_opts, SUBOPT_ORIGIN))
 		opts->origin = pstrdup(LOGICALREP_ORIGIN_ANY);
+	if (IsSet(supported_opts, SUBOPT_COPY_FORMAT))
+		opts->copy_format = LOGICALREP_COPY_AS_TEXT;
 
 	/* Parse options */
 	foreach(lc, stmt_options)
@@ -324,6 +328,15 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 			opts->specified_opts |= SUBOPT_LSN;
 			opts->lsn = lsn;
 		}
+		else if (IsSet(supported_opts, SUBOPT_COPY_FORMAT) &&
+				 strcmp(defel->defname, "copy_format") == 0)
+		{
+			if (IsSet(opts->specified_opts, SUBOPT_COPY_FORMAT))
+				errorConflictingDefElem(defel, pstate);
+
+			opts->specified_opts |= SUBOPT_COPY_FORMAT;
+			opts->copy_format = defGetCopyFormat(defel);
+		}
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -404,6 +417,16 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 								"slot_name = NONE", "create_slot = false")));
 		}
 	}
+
+	if (!opts->binary &&
+		opts->copy_format == LOGICALREP_COPY_AS_BINARY)
+	{
+		ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("%s and %s are mutually exclusive options",
+								"binary = false", "copy_format = binary")));
+	}
+
 }
 
 /*
@@ -560,7 +583,8 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 					  SUBOPT_SLOT_NAME | SUBOPT_COPY_DATA |
 					  SUBOPT_SYNCHRONOUS_COMMIT | SUBOPT_BINARY |
 					  SUBOPT_STREAMING | SUBOPT_TWOPHASE_COMMIT |
-					  SUBOPT_DISABLE_ON_ERR | SUBOPT_ORIGIN);
+					  SUBOPT_DISABLE_ON_ERR | SUBOPT_ORIGIN |
+					  SUBOPT_COPY_FORMAT);
 	parse_subscription_options(pstate, stmt->options, supported_opts, &opts);
 
 	/*
@@ -649,6 +673,7 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 		publicationListToArray(publications);
 	values[Anum_pg_subscription_suborigin - 1] =
 		CStringGetTextDatum(opts.origin);
+	values[Anum_pg_subscription_subcopyformat - 1] = CharGetDatum(opts.copy_format);
 
 	tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
 
@@ -1054,7 +1079,7 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 				supported_opts = (SUBOPT_SLOT_NAME |
 								  SUBOPT_SYNCHRONOUS_COMMIT | SUBOPT_BINARY |
 								  SUBOPT_STREAMING | SUBOPT_DISABLE_ON_ERR |
-								  SUBOPT_ORIGIN);
+								  SUBOPT_ORIGIN | SUBOPT_COPY_FORMAT);
 
 				parse_subscription_options(pstate, stmt->options,
 										   supported_opts, &opts);
@@ -1116,6 +1141,13 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 					values[Anum_pg_subscription_suborigin - 1] =
 						CStringGetTextDatum(opts.origin);
 					replaces[Anum_pg_subscription_suborigin - 1] = true;
+				}
+
+				if (IsSet(opts.specified_opts, SUBOPT_COPY_FORMAT))
+				{
+					values[Anum_pg_subscription_subcopyformat - 1] =
+						CharGetDatum(opts.copy_format);
+					replaces[Anum_pg_subscription_subcopyformat - 1] = true;
 				}
 
 				update_tuple = true;
@@ -2194,4 +2226,34 @@ defGetStreamingMode(DefElem *def)
 			 errmsg("%s requires a Boolean value or \"parallel\"",
 					def->defname)));
 	return LOGICALREP_STREAM_OFF;	/* keep compiler quiet */
+}
+
+/*
+ * Extract the copy format value from a DefElem.
+ */
+char
+defGetCopyFormat(DefElem *def)
+{
+	char	   *sval;
+
+	/*
+	 * If no parameter value given, set it to text format.
+	 */
+	if (!def->arg)
+		return LOGICALREP_COPY_AS_TEXT;
+
+	/*
+	 * Currently supported formats are "text" and "binary".
+	 */
+	sval = defGetString(def);
+	if (pg_strcasecmp(sval, "text") == 0)
+		return LOGICALREP_COPY_AS_TEXT;
+	if (pg_strcasecmp(sval, "binary") == 0)
+		return LOGICALREP_COPY_AS_BINARY;
+
+	ereport(ERROR,
+			(errcode(ERRCODE_SYNTAX_ERROR),
+			 errmsg("%s value should be either \"text\" or \"binary\"",
+					def->defname)));
+	return LOGICALREP_COPY_AS_TEXT;	/* keep compiler quiet */
 }

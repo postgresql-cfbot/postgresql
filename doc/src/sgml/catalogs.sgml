@@ -7906,7 +7906,8 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
        <structfield>subbinary</structfield> <type>bool</type>
       </para>
       <para>
-       If true, the subscription will request that the publisher send data
+       If true, the subscription will copy the initial data to synchronize
+       relations in binary format and request that the publisher send data
        in binary format
       </para></entry>
      </row>

@@ -6472,7 +6472,7 @@ describeSubscriptions(const char *pattern, bool verbose)
 	PGresult   *res;
 	printQueryOpt myopt = pset.popt;
 	static const bool translate_columns[] = {false, false, false, false,
-	false, false, false, false, false, false, false, false};
+	false, false, false, false, false, false, false, false, false};
 
 	if (pset.sversion < 100000)
 	{
@@ -6543,6 +6543,12 @@ describeSubscriptions(const char *pattern, bool verbose)
 			appendPQExpBuffer(&buf,
 							  ", subskiplsn AS \"%s\"\n",
 							  gettext_noop("Skip LSN"));
+
+		/* Copy format is only supported in v16 and higher */
+		if (pset.sversion >= 160000)
+			appendPQExpBuffer(&buf,
+							  ", subcopyformat AS \"%s\"\n",
+							  gettext_noop("Copy Format"));
 	}
 
 	/* Only display subscriptions in current database. */

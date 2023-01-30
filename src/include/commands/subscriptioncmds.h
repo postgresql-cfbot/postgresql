@@ -27,5 +27,6 @@ extern ObjectAddress AlterSubscriptionOwner(const char *name, Oid newOwnerId);
 extern void AlterSubscriptionOwner_oid(Oid subid, Oid newOwnerId);
 
 extern char defGetStreamingMode(DefElem *def);
+extern char defGetCopyFormat(DefElem *def);
 
 #endif							/* SUBSCRIPTIONCMDS_H */

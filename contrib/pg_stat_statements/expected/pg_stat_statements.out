@@ -4,10 +4,10 @@ CREATE EXTENSION pg_stat_statements;
 --
 SET pg_stat_statements.track_utility = FALSE;
 SET pg_stat_statements.track_planning = TRUE;
-SELECT pg_stat_statements_reset();
- pg_stat_statements_reset 
---------------------------
- 
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
+ t 
+---
+ t
 (1 row)
 
 SELECT 1 AS "int";
@@ -134,7 +134,7 @@ SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
  SELECT $1 AS "int"                                                           |     2 |    2
  SELECT $1 AS i UNION SELECT $2 ORDER BY i                                    |     1 |    2
  SELECT $1 || $2                                                              |     1 |    1
- SELECT pg_stat_statements_reset()                                            |     1 |    1
+ SELECT pg_stat_statements_reset() IS NOT NULL AS t                           |     1 |    1
  SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C" |     0 |    0
  WITH t(f) AS (                                                              +|     1 |    2
    VALUES ($1), ($2)                                                         +|       | 
@@ -146,10 +146,10 @@ SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
 --
 -- CRUD: INSERT SELECT UPDATE DELETE on test table
 --
-SELECT pg_stat_statements_reset();
- pg_stat_statements_reset 
---------------------------
- 
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
+ t 
+---
+ t
 (1 row)
 
 -- utility "create table" should not be shown
@@ -270,7 +270,7 @@ SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
  SELECT * FROM test ORDER BY a                                                |     1 |   12
  SELECT * FROM test WHERE a > $1 ORDER BY a                                   |     2 |    4
  SELECT * FROM test WHERE a IN ($1, $2, $3, $4, $5)                           |     1 |    8
- SELECT pg_stat_statements_reset()                                            |     1 |    1
+ SELECT pg_stat_statements_reset() IS NOT NULL AS t                           |     1 |    1
  SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C" |     0 |    0
  UPDATE test SET b = $1 WHERE a = $2                                          |     6 |    6
  UPDATE test SET b = $1 WHERE a > $2                                          |     1 |    3
@@ -279,10 +279,10 @@ SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
 --
 -- INSERT, UPDATE, DELETE on test table to validate WAL generation metrics
 --
-SELECT pg_stat_statements_reset();
- pg_stat_statements_reset 
---------------------------
- 
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
+ t 
+---
+ t
 (1 row)
 
 -- utility "create table" should not be shown
@@ -305,7 +305,7 @@ FROM pg_stat_statements ORDER BY query COLLATE "C";
  DELETE FROM pgss_test WHERE a > $1                        |     1 |    1 | t                   | t                     | t
  DROP TABLE pgss_test                                      |     1 |    0 | t                   | t                     | t
  INSERT INTO pgss_test VALUES(generate_series($1, $2), $3) |     1 |   10 | t                   | t                     | t
- SELECT pg_stat_statements_reset()                         |     1 |    1 | f                   | f                     | f
+ SELECT pg_stat_statements_reset() IS NOT NULL AS t        |     1 |    1 | f                   | f                     | f
  SELECT query, calls, rows,                               +|     0 |    0 | f                   | f                     | t
  wal_bytes > $1 as wal_bytes_generated,                   +|       |      |                     |                       | 
  wal_records > $2 as wal_records_generated,               +|       |      |                     |                       | 
@@ -319,10 +319,10 @@ FROM pg_stat_statements ORDER BY query COLLATE "C";
 -- pg_stat_statements.track = none
 --
 SET pg_stat_statements.track = 'none';
-SELECT pg_stat_statements_reset();
- pg_stat_statements_reset 
---------------------------
- 
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
+ t 
+---
+ t
 (1 row)
 
 SELECT 1 AS "one";
@@ -346,10 +346,10 @@ SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
 -- pg_stat_statements.track = top
 --
 SET pg_stat_statements.track = 'top';
-SELECT pg_stat_statements_reset();
- pg_stat_statements_reset 
---------------------------
- 
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
+ t 
+---
+ t
 (1 row)
 
 DO LANGUAGE plpgsql $$
@@ -399,7 +399,7 @@ SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
  SELECT $1::TEXT                                                              |     1 |    1
  SELECT PLUS_ONE($1)                                                          |     2 |    2
  SELECT PLUS_TWO($1)                                                          |     2 |    2
- SELECT pg_stat_statements_reset()                                            |     1 |    1
+ SELECT pg_stat_statements_reset() IS NOT NULL AS t                           |     1 |    1
  SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C" |     0 |    0
 (5 rows)
 
@@ -407,10 +407,10 @@ SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
 -- pg_stat_statements.track = all
 --
 SET pg_stat_statements.track = 'all';
-SELECT pg_stat_statements_reset();
- pg_stat_statements_reset 
---------------------------
- 
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
+ t 
+---
+ t
 (1 row)
 
 -- we drop and recreate the functions to avoid any caching funnies
@@ -458,7 +458,7 @@ SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
  SELECT (i + $2)::INTEGER LIMIT $3                                            |     2 |    2
  SELECT PLUS_ONE($1)                                                          |     2 |    2
  SELECT PLUS_TWO($1)                                                          |     2 |    2
- SELECT pg_stat_statements_reset()                                            |     1 |    1
+ SELECT pg_stat_statements_reset() IS NOT NULL AS t                           |     1 |    1
  SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C" |     0 |    0
 (6 rows)
 
@@ -467,10 +467,10 @@ SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
 --
 CREATE TABLE pgss_a (id integer PRIMARY KEY);
 CREATE TABLE pgss_b (id integer PRIMARY KEY, a_id integer REFERENCES pgss_a);
-SELECT pg_stat_statements_reset();
- pg_stat_statements_reset 
---------------------------
- 
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
+ t 
+---
+ t
 (1 row)
 
 -- control query
@@ -546,7 +546,7 @@ SELECT calls, query FROM pg_stat_statements ORDER BY query COLLATE "C";
      1 | SELECT * FROM pgss_a JOIN pgss_b ON pgss_b.a_id = pgss_a.id FOR UPDATE OF pgss_b, pgss_a
      1 | SELECT * FROM pgss_a JOIN pgss_b ON pgss_b.a_id = pgss_a.id FOR UPDATE SKIP LOCKED
      0 | SELECT calls, query FROM pg_stat_statements ORDER BY query COLLATE "C"
-     1 | SELECT pg_stat_statements_reset()
+     1 | SELECT pg_stat_statements_reset() IS NOT NULL AS t
 (12 rows)
 
 DROP TABLE pgss_a, pgss_b CASCADE;
@@ -554,10 +554,10 @@ DROP TABLE pgss_a, pgss_b CASCADE;
 -- utility commands
 --
 SET pg_stat_statements.track_utility = TRUE;
-SELECT pg_stat_statements_reset();
- pg_stat_statements_reset 
---------------------------
- 
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
+ t 
+---
+ t
 (1 row)
 
 SELECT 1;
@@ -589,7 +589,7 @@ SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
  DROP TABLE IF EXISTS test                                                    |     3 |    0
  DROP TABLE test                                                              |     1 |    0
  SELECT $1                                                                    |     1 |    1
- SELECT pg_stat_statements_reset()                                            |     1 |    1
+ SELECT pg_stat_statements_reset() IS NOT NULL AS t                           |     1 |    1
  SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C" |     0 |    0
 (9 rows)
 
@@ -598,10 +598,10 @@ SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
 -- commands of COPY, FETCH, CREATE TABLE AS, CREATE MATERIALIZED VIEW,
 -- REFRESH MATERIALIZED VIEW and SELECT INTO
 --
-SELECT pg_stat_statements_reset();
- pg_stat_statements_reset 
---------------------------
- 
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
+ t 
+---
+ t
 (1 row)
 
 CREATE TABLE pgss_ctas AS SELECT a, 'ctas' b FROM generate_series(1, 10) a;
@@ -654,17 +654,17 @@ SELECT query, plans, calls, rows FROM pg_stat_statements ORDER BY query COLLATE 
  FETCH NEXT pgss_cursor                                                              |     0 |     1 |    1
  REFRESH MATERIALIZED VIEW pgss_matv                                                 |     0 |     1 |   13
  SELECT generate_series(1, 10) c INTO pgss_select_into                               |     0 |     1 |   10
- SELECT pg_stat_statements_reset()                                                   |     0 |     1 |    1
+ SELECT pg_stat_statements_reset() IS NOT NULL AS t                                  |     0 |     1 |    1
  SELECT query, plans, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C" |     1 |     0 |    0
 (13 rows)
 
 --
 -- Track user activity and reset them
 --
-SELECT pg_stat_statements_reset();
- pg_stat_statements_reset 
---------------------------
- 
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
+ t 
+---
+ t
 (1 row)
 
 CREATE ROLE regress_stats_user1;
@@ -707,7 +707,7 @@ SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
  SELECT $1 AS "ONE"                                                           |     1 |    1
  SELECT $1+$2 AS "TWO"                                                        |     1 |    1
  SELECT $1+$2 AS "TWO"                                                        |     1 |    1
- SELECT pg_stat_statements_reset()                                            |     1 |    1
+ SELECT pg_stat_statements_reset() IS NOT NULL AS t                           |     1 |    1
  SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C" |     0 |    0
  SET ROLE regress_stats_user1                                                 |     1 |    0
  SET ROLE regress_stats_user2                                                 |     1 |    0
@@ -716,10 +716,10 @@ SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
 --
 -- Don't reset anything if any of the parameter is NULL
 --
-SELECT pg_stat_statements_reset(NULL);
- pg_stat_statements_reset 
---------------------------
- 
+SELECT pg_stat_statements_reset(NULL) IS NOT NULL AS t;
+ t 
+---
+ f
 (1 row)
 
 SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
@@ -732,8 +732,8 @@ SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
  SELECT $1 AS "ONE"                                                           |     1 |    1
  SELECT $1+$2 AS "TWO"                                                        |     1 |    1
  SELECT $1+$2 AS "TWO"                                                        |     1 |    1
- SELECT pg_stat_statements_reset($1)                                          |     1 |    1
- SELECT pg_stat_statements_reset()                                            |     1 |    1
+ SELECT pg_stat_statements_reset($1) IS NOT NULL AS t                         |     1 |    1
+ SELECT pg_stat_statements_reset() IS NOT NULL AS t                           |     1 |    1
  SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C" |     1 |   11
  SET ROLE regress_stats_user1                                                 |     1 |    0
  SET ROLE regress_stats_user2                                                 |     1 |    0
@@ -747,10 +747,10 @@ SELECT pg_stat_statements_reset(
 	(SELECT r.oid FROM pg_roles AS r WHERE r.rolname = 'regress_stats_user2'),
 	(SELECT d.oid FROM pg_database As d where datname = current_database()),
 	(SELECT s.queryid FROM pg_stat_statements AS s
-				WHERE s.query = 'SELECT $1+$2 AS "TWO"' LIMIT 1));
- pg_stat_statements_reset 
---------------------------
- 
+				WHERE s.query = 'SELECT $1+$2 AS "TWO"' LIMIT 1)) IS NOT NULL AS t;
+ t 
+---
+ t
 (1 row)
 
 SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
@@ -766,9 +766,9 @@ SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
          (SELECT r.oid FROM pg_roles AS r WHERE r.rolname = $1),                 +|       | 
          (SELECT d.oid FROM pg_database As d where datname = current_database()),+|       | 
          (SELECT s.queryid FROM pg_stat_statements AS s                          +|       | 
-                                 WHERE s.query = $2 LIMIT $3))                    |       | 
- SELECT pg_stat_statements_reset($1)                                              |     1 |    1
- SELECT pg_stat_statements_reset()                                                |     1 |    1
+                                 WHERE s.query = $2 LIMIT $3)) IS NOT NULL AS t   |       | 
+ SELECT pg_stat_statements_reset($1) IS NOT NULL AS t                             |     1 |    1
+ SELECT pg_stat_statements_reset() IS NOT NULL AS t                               |     1 |    1
  SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C"     |     2 |   23
  SET ROLE regress_stats_user1                                                     |     1 |    0
  SET ROLE regress_stats_user2                                                     |     1 |    0
@@ -777,12 +777,12 @@ SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
 --
 -- remove query ('SELECT $1 AS "ONE"') executed by two users
 --
-SELECT pg_stat_statements_reset(0,0,s.queryid)
+SELECT pg_stat_statements_reset(0,0,s.queryid) IS NOT NULL AS t
 	FROM pg_stat_statements AS s WHERE s.query = 'SELECT $1 AS "ONE"';
- pg_stat_statements_reset 
---------------------------
- 
- 
+ t 
+---
+ t
+ t
 (2 rows)
 
 SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
@@ -796,11 +796,11 @@ SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
          (SELECT r.oid FROM pg_roles AS r WHERE r.rolname = $1),                 +|       | 
          (SELECT d.oid FROM pg_database As d where datname = current_database()),+|       | 
          (SELECT s.queryid FROM pg_stat_statements AS s                          +|       | 
-                                 WHERE s.query = $2 LIMIT $3))                    |       | 
- SELECT pg_stat_statements_reset($1)                                              |     1 |    1
- SELECT pg_stat_statements_reset($1,$2,s.queryid)                                +|     1 |    2
+                                 WHERE s.query = $2 LIMIT $3)) IS NOT NULL AS t   |       | 
+ SELECT pg_stat_statements_reset($1) IS NOT NULL AS t                             |     1 |    1
+ SELECT pg_stat_statements_reset($1,$2,s.queryid) IS NOT NULL AS t               +|     1 |    2
          FROM pg_stat_statements AS s WHERE s.query = $3                          |       | 
- SELECT pg_stat_statements_reset()                                                |     1 |    1
+ SELECT pg_stat_statements_reset() IS NOT NULL AS t                               |     1 |    1
  SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C"     |     3 |   35
  SET ROLE regress_stats_user1                                                     |     1 |    0
  SET ROLE regress_stats_user2                                                     |     1 |    0
@@ -809,11 +809,11 @@ SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
 --
 -- remove query of a user (regress_stats_user1)
 --
-SELECT pg_stat_statements_reset(r.oid)
+SELECT pg_stat_statements_reset(r.oid) IS NOT NULL AS t
 		FROM pg_roles AS r WHERE r.rolname = 'regress_stats_user1';
- pg_stat_statements_reset 
---------------------------
- 
+ t 
+---
+ t
 (1 row)
 
 SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
@@ -826,12 +826,12 @@ SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
          (SELECT r.oid FROM pg_roles AS r WHERE r.rolname = $1),                 +|       | 
          (SELECT d.oid FROM pg_database As d where datname = current_database()),+|       | 
          (SELECT s.queryid FROM pg_stat_statements AS s                          +|       | 
-                                 WHERE s.query = $2 LIMIT $3))                    |       | 
- SELECT pg_stat_statements_reset($1)                                              |     1 |    1
- SELECT pg_stat_statements_reset($1,$2,s.queryid)                                +|     1 |    2
+                                 WHERE s.query = $2 LIMIT $3)) IS NOT NULL AS t   |       | 
+ SELECT pg_stat_statements_reset($1) IS NOT NULL AS t                             |     1 |    1
+ SELECT pg_stat_statements_reset($1,$2,s.queryid) IS NOT NULL AS t               +|     1 |    2
          FROM pg_stat_statements AS s WHERE s.query = $3                          |       | 
- SELECT pg_stat_statements_reset()                                                |     1 |    1
- SELECT pg_stat_statements_reset(r.oid)                                          +|     1 |    1
+ SELECT pg_stat_statements_reset() IS NOT NULL AS t                               |     1 |    1
+ SELECT pg_stat_statements_reset(r.oid) IS NOT NULL AS t                         +|     1 |    1
                  FROM pg_roles AS r WHERE r.rolname = $1                          |       | 
  SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C"     |     4 |   46
  SET ROLE regress_stats_user2                                                     |     1 |    0
@@ -840,16 +840,16 @@ SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
 --
 -- reset all
 --
-SELECT pg_stat_statements_reset(0,0,0);
- pg_stat_statements_reset 
---------------------------
- 
+SELECT pg_stat_statements_reset(0,0,0) IS NOT NULL AS t;
+ t 
+---
+ t
 (1 row)
 
 SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C";
                                     query                                     | calls | rows 
 ------------------------------------------------------------------------------+-------+------
- SELECT pg_stat_statements_reset(0,0,0)                                       |     1 |    1
+ SELECT pg_stat_statements_reset(0,0,0) IS NOT NULL AS t                      |     1 |    1
  SELECT query, calls, rows FROM pg_stat_statements ORDER BY query COLLATE "C" |     0 |    0
 (2 rows)
 
@@ -864,10 +864,10 @@ DROP TABLE pgss_select_into;
 --
 -- [re]plan counting
 --
-SELECT pg_stat_statements_reset();
- pg_stat_statements_reset 
---------------------------
- 
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
+ t 
+---
+ t
 (1 row)
 
 CREATE TABLE test ();
@@ -922,7 +922,7 @@ SELECT query, plans, calls, rows FROM pg_stat_statements
  ALTER TABLE test ADD COLUMN x int                        |     0 |     1 |    0
  CREATE TABLE test ()                                     |     0 |     1 |    0
  SELECT $1                                                |     3 |     3 |    3
- SELECT pg_stat_statements_reset()                        |     0 |     1 |    1
+ SELECT pg_stat_statements_reset() IS NOT NULL AS t       |     0 |     1 |    1
  SELECT query, plans, calls, rows FROM pg_stat_statements+|     1 |     0 |    0
    WHERE query NOT LIKE $1 ORDER BY query COLLATE "C"     |       |       | 
 (5 rows)
@@ -939,16 +939,25 @@ SELECT query, plans >= 2 AND plans <= calls AS plans_ok, calls, rows FROM pg_sta
 --
 -- access to pg_stat_statements_info view
 --
-SELECT pg_stat_statements_reset();
- pg_stat_statements_reset 
---------------------------
- 
+SELECT now() AS ref_ts \gset
+SELECT dealloc, stats_reset >= :'ref_ts' AS reset_after_ref FROM pg_stat_statements_info;
+ dealloc | reset_after_ref 
+---------+-----------------
+       0 | f
 (1 row)
 
-SELECT dealloc FROM pg_stat_statements_info;
- dealloc 
----------
-       0
+SELECT pg_stat_statements_reset() AS stats_reset_ts \gset
+SELECT dealloc, stats_reset >= :'ref_ts' AS reset_after_ref FROM pg_stat_statements_info;
+ dealloc | reset_after_ref 
+---------+-----------------
+       0 | t
+(1 row)
+
+-- check stats_reset timestamp
+SELECT stats_reset = :'stats_reset_ts' AS reset_ts_match FROM pg_stat_statements_info;
+ reset_ts_match 
+----------------
+ t
 (1 row)
 
 --
@@ -1140,6 +1149,162 @@ SELECT COUNT(*) FROM pg_stat_statements WHERE query LIKE '%SELECT GROUPING%';
  count 
 -------
      2
+(1 row)
+
+--
+-- statement timestamps
+--
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
+ t 
+---
+ t
+(1 row)
+
+SELECT 1 AS "STMTTS1";
+ STMTTS1 
+---------
+       1
+(1 row)
+
+SELECT now() AS ref_ts \gset
+SELECT 1,2 AS "STMTTS2";
+ ?column? | STMTTS2 
+----------+---------
+        1 |       2
+(1 row)
+
+SELECT stats_since >= :'ref_ts', count(*) FROM pg_stat_statements
+WHERE query LIKE '%STMTTS%'
+GROUP BY stats_since >= :'ref_ts'
+ORDER BY stats_since >= :'ref_ts';
+ ?column? | count 
+----------+-------
+ f        |     1
+ t        |     1
+(2 rows)
+
+SELECT now() AS ref_ts \gset
+SELECT
+  count(*) as total,
+  count(*) FILTER (
+    WHERE min_plan_time + max_plan_time = 0
+  ) as minmax_plan_zero,
+  count(*) FILTER (
+    WHERE min_exec_time + max_exec_time = 0
+  ) as minmax_exec_zero,
+  count(*) FILTER (
+    WHERE minmax_stats_since >= :'ref_ts'
+  ) as minmax_stats_since_after_ref,
+  count(*) FILTER (
+    WHERE stats_since >= :'ref_ts'
+  ) as stats_since_after_ref
+FROM pg_stat_statements
+WHERE query LIKE '%STMTTS%';
+ total | minmax_plan_zero | minmax_exec_zero | minmax_stats_since_after_ref | stats_since_after_ref 
+-------+------------------+------------------+------------------------------+-----------------------
+     2 |                0 |                0 |                            0 |                     0
+(1 row)
+
+-- Perform single min/max reset
+SELECT pg_stat_statements_reset(0, 0, queryid, true) AS minmax_reset_ts
+FROM pg_stat_statements
+WHERE query LIKE '%STMTTS1%' \gset
+-- check
+SELECT
+  count(*) as total,
+  count(*) FILTER (
+    WHERE min_plan_time + max_plan_time = 0
+  ) as minmax_plan_zero,
+  count(*) FILTER (
+    WHERE min_exec_time + max_exec_time = 0
+  ) as minmax_exec_zero,
+  count(*) FILTER (
+    WHERE minmax_stats_since >= :'ref_ts'
+  ) as minmax_stats_since_after_ref,
+  count(*) FILTER (
+    WHERE stats_since >= :'ref_ts'
+  ) as stats_since_after_ref
+FROM pg_stat_statements
+WHERE query LIKE '%STMTTS%';
+ total | minmax_plan_zero | minmax_exec_zero | minmax_stats_since_after_ref | stats_since_after_ref 
+-------+------------------+------------------+------------------------------+-----------------------
+     2 |                1 |                1 |                            1 |                     0
+(1 row)
+
+-- check minmax reset timestamps
+SELECT
+query, minmax_stats_since = :'minmax_reset_ts' AS reset_ts_match
+FROM pg_stat_statements
+WHERE query LIKE '%STMTTS%'
+ORDER BY query COLLATE "C";
+           query           | reset_ts_match 
+---------------------------+----------------
+ SELECT $1 AS "STMTTS1"    | t
+ SELECT $1,$2 AS "STMTTS2" | f
+(2 rows)
+
+-- check that minmax reset does not set stats_reset
+SELECT
+stats_reset = :'minmax_reset_ts' AS stats_reset_ts_match
+FROM pg_stat_statements_info;
+ stats_reset_ts_match 
+----------------------
+ f
+(1 row)
+
+-- Perform common min/max reset
+SELECT pg_stat_statements_reset(0, 0, 0, true) AS minmax_reset_ts \gset
+-- check again
+SELECT
+  count(*) as total,
+  count(*) FILTER (
+    WHERE min_plan_time + max_plan_time = 0
+  ) as minmax_plan_zero,
+  count(*) FILTER (
+    WHERE min_exec_time + max_exec_time = 0
+  ) as minmax_exec_zero,
+  count(*) FILTER (
+    WHERE minmax_stats_since >= :'ref_ts'
+  ) as minmax_ts_after_ref,
+  count(*) FILTER (
+    WHERE minmax_stats_since = :'minmax_reset_ts'
+  ) as minmax_ts_match,
+  count(*) FILTER (
+    WHERE stats_since >= :'ref_ts'
+  ) as stats_since_after_ref
+FROM pg_stat_statements
+WHERE query LIKE '%STMTTS%';
+ total | minmax_plan_zero | minmax_exec_zero | minmax_ts_after_ref | minmax_ts_match | stats_since_after_ref 
+-------+------------------+------------------+---------------------+-----------------+-----------------------
+     2 |                2 |                2 |                   2 |               2 |                     0
+(1 row)
+
+-- Execute first query once more to check stats update
+SELECT 1 AS "STMTTS1";
+ STMTTS1 
+---------
+       1
+(1 row)
+
+-- check
+-- we don't check planing times here to be independent of
+-- plan caching approach
+SELECT
+  count(*) as total,
+  count(*) FILTER (
+    WHERE min_exec_time + max_exec_time = 0
+  ) as minmax_exec_zero,
+  count(*) FILTER (
+    WHERE minmax_stats_since >= :'ref_ts'
+  ) as minmax_ts_after_ref,
+  count(*) FILTER (
+    WHERE stats_since >= :'ref_ts'
+  ) as stats_since_after_ref
+FROM pg_stat_statements
+WHERE query LIKE '%STMTTS%';
+ total | minmax_exec_zero | minmax_ts_after_ref | stats_since_after_ref 
+-------+------------------+---------------------+-----------------------
+     2 |                1 |                   2 |                     0
 (1 row)
 
 DROP EXTENSION pg_stat_statements;

@@ -1041,3 +1041,16 @@ pg_get_replica_identity_index(PG_FUNCTION_ARGS)
 	else
 		PG_RETURN_NULL();
 }
+
+/*
+ * Transition function for the ANY_VALUE aggregate
+ *
+ * Currently this just returns the first value, but in the future it might be
+ * able to signal to the aggregate that it does not need to be called anymore.
+ */
+Datum
+any_value_trans(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_DATUM(PG_GETARG_DATUM(0));
+}
+

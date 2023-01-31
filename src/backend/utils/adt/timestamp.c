@@ -69,6 +69,7 @@ typedef struct
 	TimestampTz finish;
 	Interval	step;
 	int			step_sign;
+	pg_tz	   *attimezone;
 } generate_series_timestamptz_fctx;
 
 
@@ -78,6 +79,8 @@ static bool AdjustIntervalForTypmod(Interval *interval, int32 typmod,
 									Node *escontext);
 static TimestampTz timestamp2timestamptz(Timestamp timestamp);
 static Timestamp timestamptz2timestamp(TimestampTz timestamp);
+static pg_tz* lookup_timezone(text *zone);
+static Datum generate_series_timestamptz_internal(FunctionCallInfo fcinfo);
 
 
 /* common code for timestamptypmodin and timestamptztypmodin */
@@ -548,6 +551,54 @@ parse_sane_timezone(struct pg_tm *tm, text *zone)
 	}
 
 	return tz;
+}
+
+/*
+ * Look up the requested timezone (see notes in timestamptz_zone()).
+ */
+static pg_tz *
+lookup_timezone(text *zone)
+{
+	char		tzname[TZ_STRLEN_MAX + 1];
+	char	   *lowzone;
+	int			type,
+				dterr,
+				val;
+	pg_tz	   *tzp;
+
+	DateTimeErrorExtra extra;
+
+	text_to_cstring_buffer(zone, tzname, sizeof(tzname));
+
+	/* DecodeTimezoneAbbrev requires lowercase input */
+	lowzone = downcase_truncate_identifier(tzname,
+										   strlen(tzname),
+										   false);
+
+	dterr = DecodeTimezoneAbbrev(0, lowzone, &type, &val, &tzp, &extra);
+	if (dterr)
+		DateTimeParseError(dterr, &extra, NULL, NULL, NULL);
+
+	if (type == TZ || type == DTZ)
+	{
+		/* fixed-offset abbreviation, get a pg_tz descriptor for that */
+		tzp = pg_tzset_offset(-val);
+	}
+	else if (type == DYNTZ)
+	{
+		/* dynamic-offset abbreviation, use its referenced timezone */
+	}
+	else
+	{
+		/* try it as a full zone name */
+		tzp = pg_tzset(tzname);
+		if (!tzp)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("time zone \"%s\" not recognized", tzname)));
+	}
+
+	return tzp;
 }
 
 /*
@@ -3014,97 +3065,112 @@ timestamp_mi_interval(PG_FUNCTION_ARGS)
 }
 
 
-/* timestamptz_pl_interval()
- * Add an interval to a timestamp with time zone data type.
- * Note that interval has provisions for qualitative year/month
+/*
+ * timestamptz_pl_interval_internal()
+ * Add an interval to timestamptz, in the given (or session) timezone
+ *
+ * Note that interval has provisions for qualitative year/month and day
  *	units, so try to do the right thing with them.
  * To add a month, increment the month, and use the same day of month.
  * Then, if the next month has fewer days, set the day of month
  *	to the last day of month.
+ * To add a day, increment the mday, and use the same time of day.
  * Lastly, add in the "quantitative time".
+ */
+static TimestampTz
+timestamptz_pl_interval_internal(TimestampTz timestamp,
+								 Interval *span,
+								 pg_tz *attimezone)
+{
+	int tz;
+
+	if (TIMESTAMP_NOT_FINITE(timestamp))
+		return timestamp;
+
+	/* Use session timezone if caller asks for default */
+	if (attimezone == NULL)
+		attimezone = session_timezone;
+
+	if (span->month != 0)
+	{
+		struct pg_tm tt,
+				   *tm = &tt;
+		fsec_t		fsec;
+
+		if (timestamp2tm(timestamp, &tz, tm, &fsec, NULL, attimezone) != 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+					 errmsg("timestamp out of range")));
+
+		tm->tm_mon += span->month;
+		if (tm->tm_mon > MONTHS_PER_YEAR)
+		{
+			tm->tm_year += (tm->tm_mon - 1) / MONTHS_PER_YEAR;
+			tm->tm_mon = ((tm->tm_mon - 1) % MONTHS_PER_YEAR) + 1;
+		}
+		else if (tm->tm_mon < 1)
+		{
+			tm->tm_year += tm->tm_mon / MONTHS_PER_YEAR - 1;
+			tm->tm_mon = tm->tm_mon % MONTHS_PER_YEAR + MONTHS_PER_YEAR;
+		}
+
+		/* adjust for end of month boundary problems... */
+		if (tm->tm_mday > day_tab[isleap(tm->tm_year)][tm->tm_mon - 1])
+			tm->tm_mday = (day_tab[isleap(tm->tm_year)][tm->tm_mon - 1]);
+
+		tz = DetermineTimeZoneOffset(tm, attimezone);
+
+		if (tm2timestamp(tm, fsec, &tz, &timestamp) != 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+					 errmsg("timestamp out of range")));
+	}
+
+	if (span->day != 0)
+	{
+		struct pg_tm tt,
+				   *tm = &tt;
+		fsec_t		fsec;
+		int			julian;
+
+		if (timestamp2tm(timestamp, &tz, tm, &fsec, NULL, attimezone) != 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+					 errmsg("timestamp out of range")));
+
+		/* Add days by converting to and from Julian */
+		julian = date2j(tm->tm_year, tm->tm_mon, tm->tm_mday) + span->day;
+		j2date(julian, &tm->tm_year, &tm->tm_mon, &tm->tm_mday);
+
+		tz = DetermineTimeZoneOffset(tm, attimezone);
+
+		if (tm2timestamp(tm, fsec, &tz, &timestamp) != 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+					 errmsg("timestamp out of range")));
+	}
+
+	timestamp += span->time;
+
+	if (!IS_VALID_TIMESTAMP(timestamp))
+		ereport(ERROR,
+				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+				 errmsg("timestamp out of range")));
+
+	return timestamp;
+}
+
+
+/* timestamptz_pl_interval()
+ * Add an interval to a timestamptz, in session timezone.
  */
 Datum
 timestamptz_pl_interval(PG_FUNCTION_ARGS)
 {
 	TimestampTz timestamp = PG_GETARG_TIMESTAMPTZ(0);
 	Interval   *span = PG_GETARG_INTERVAL_P(1);
-	TimestampTz result;
-	int			tz;
 
-	if (TIMESTAMP_NOT_FINITE(timestamp))
-		result = timestamp;
-	else
-	{
-		if (span->month != 0)
-		{
-			struct pg_tm tt,
-					   *tm = &tt;
-			fsec_t		fsec;
-
-			if (timestamp2tm(timestamp, &tz, tm, &fsec, NULL, NULL) != 0)
-				ereport(ERROR,
-						(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-						 errmsg("timestamp out of range")));
-
-			tm->tm_mon += span->month;
-			if (tm->tm_mon > MONTHS_PER_YEAR)
-			{
-				tm->tm_year += (tm->tm_mon - 1) / MONTHS_PER_YEAR;
-				tm->tm_mon = ((tm->tm_mon - 1) % MONTHS_PER_YEAR) + 1;
-			}
-			else if (tm->tm_mon < 1)
-			{
-				tm->tm_year += tm->tm_mon / MONTHS_PER_YEAR - 1;
-				tm->tm_mon = tm->tm_mon % MONTHS_PER_YEAR + MONTHS_PER_YEAR;
-			}
-
-			/* adjust for end of month boundary problems... */
-			if (tm->tm_mday > day_tab[isleap(tm->tm_year)][tm->tm_mon - 1])
-				tm->tm_mday = (day_tab[isleap(tm->tm_year)][tm->tm_mon - 1]);
-
-			tz = DetermineTimeZoneOffset(tm, session_timezone);
-
-			if (tm2timestamp(tm, fsec, &tz, &timestamp) != 0)
-				ereport(ERROR,
-						(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-						 errmsg("timestamp out of range")));
-		}
-
-		if (span->day != 0)
-		{
-			struct pg_tm tt,
-					   *tm = &tt;
-			fsec_t		fsec;
-			int			julian;
-
-			if (timestamp2tm(timestamp, &tz, tm, &fsec, NULL, NULL) != 0)
-				ereport(ERROR,
-						(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-						 errmsg("timestamp out of range")));
-
-			/* Add days by converting to and from Julian */
-			julian = date2j(tm->tm_year, tm->tm_mon, tm->tm_mday) + span->day;
-			j2date(julian, &tm->tm_year, &tm->tm_mon, &tm->tm_mday);
-
-			tz = DetermineTimeZoneOffset(tm, session_timezone);
-
-			if (tm2timestamp(tm, fsec, &tz, &timestamp) != 0)
-				ereport(ERROR,
-						(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-						 errmsg("timestamp out of range")));
-		}
-
-		timestamp += span->time;
-
-		if (!IS_VALID_TIMESTAMP(timestamp))
-			ereport(ERROR,
-					(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
-					 errmsg("timestamp out of range")));
-
-		result = timestamp;
-	}
-
-	PG_RETURN_TIMESTAMP(result);
+	PG_RETURN_TIMESTAMP(timestamptz_pl_interval_internal(timestamp, span, NULL));
 }
 
 Datum
@@ -3118,11 +3184,38 @@ timestamptz_mi_interval(PG_FUNCTION_ARGS)
 	tspan.day = -span->day;
 	tspan.time = -span->time;
 
-	return DirectFunctionCall2(timestamptz_pl_interval,
-							   TimestampGetDatum(timestamp),
-							   PointerGetDatum(&tspan));
+	PG_RETURN_TIMESTAMP(timestamptz_pl_interval_internal(timestamp, &tspan, NULL));
 }
 
+/* timestamptz_pl_interval_at_zone()
+ * Add an interval to a timestamp with time zone data type in specified timezone.
+ */
+Datum
+timestamptz_pl_interval_at_zone(PG_FUNCTION_ARGS)
+{
+	TimestampTz	timestamp = PG_GETARG_TIMESTAMPTZ(0);
+	Interval   *span = PG_GETARG_INTERVAL_P(1);
+	text	   *zone = PG_GETARG_TEXT_PP(2);
+	pg_tz	   *attimezone = lookup_timezone(zone);
+
+	PG_RETURN_TIMESTAMP(timestamptz_pl_interval_internal(timestamp, span, attimezone));
+}
+
+Datum
+timestamptz_mi_interval_at_zone(PG_FUNCTION_ARGS)
+{
+	TimestampTz	timestamp = PG_GETARG_TIMESTAMPTZ(0);
+	Interval   *span = PG_GETARG_INTERVAL_P(1);
+	text	   *zone = PG_GETARG_TEXT_PP(2);
+	pg_tz	   *attimezone = lookup_timezone(zone);
+	Interval	tspan;
+
+	tspan.month = -span->month;
+	tspan.day = -span->day;
+	tspan.time = -span->time;
+
+	PG_RETURN_TIMESTAMP(timestamptz_pl_interval_internal(timestamp, &tspan, attimezone));
+}
 
 Datum
 interval_um(PG_FUNCTION_ARGS)
@@ -4300,13 +4393,7 @@ timestamptz_trunc_zone(PG_FUNCTION_ARGS)
 	TimestampTz timestamp = PG_GETARG_TIMESTAMPTZ(1);
 	text	   *zone = PG_GETARG_TEXT_PP(2);
 	TimestampTz result;
-	char		tzname[TZ_STRLEN_MAX + 1];
-	char	   *lowzone;
-	int			dterr,
-				type,
-				val;
 	pg_tz	   *tzp;
-	DateTimeErrorExtra extra;
 
 	/*
 	 * timestamptz_zone() doesn't look up the zone for infinite inputs, so we
@@ -4315,38 +4402,7 @@ timestamptz_trunc_zone(PG_FUNCTION_ARGS)
 	if (TIMESTAMP_NOT_FINITE(timestamp))
 		PG_RETURN_TIMESTAMP(timestamp);
 
-	/*
-	 * Look up the requested timezone (see notes in timestamptz_zone()).
-	 */
-	text_to_cstring_buffer(zone, tzname, sizeof(tzname));
-
-	/* DecodeTimezoneAbbrev requires lowercase input */
-	lowzone = downcase_truncate_identifier(tzname,
-										   strlen(tzname),
-										   false);
-
-	dterr = DecodeTimezoneAbbrev(0, lowzone, &type, &val, &tzp, &extra);
-	if (dterr)
-		DateTimeParseError(dterr, &extra, NULL, NULL, NULL);
-
-	if (type == TZ || type == DTZ)
-	{
-		/* fixed-offset abbreviation, get a pg_tz descriptor for that */
-		tzp = pg_tzset_offset(-val);
-	}
-	else if (type == DYNTZ)
-	{
-		/* dynamic-offset abbreviation, use its referenced timezone */
-	}
-	else
-	{
-		/* try it as a full zone name */
-		tzp = pg_tzset(tzname);
-		if (!tzp)
-			ereport(ERROR,
-					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					 errmsg("time zone \"%s\" not recognized", tzname)));
-	}
+	tzp = lookup_timezone(zone);
 
 	result = timestamptz_trunc_internal(units, timestamp, tzp);
 
@@ -5675,6 +5731,9 @@ timestamptz2timestamp(TimestampTz timestamp)
 /* timestamptz_zone()
  * Evaluate timestamp with time zone type at the specified time zone.
  * Returns a timestamp without time zone.
+ *
+ * Note: If you change anything here, also review the code in
+ * lookup_timezone().
  */
 Datum
 timestamptz_zone(PG_FUNCTION_ARGS)
@@ -5882,6 +5941,22 @@ generate_series_timestamp(PG_FUNCTION_ARGS)
 Datum
 generate_series_timestamptz(PG_FUNCTION_ARGS)
 {
+	return generate_series_timestamptz_internal(fcinfo);
+}
+
+/* generate_series_timestamptz_at_zone()
+ * Generate the set of timestamps from start to finish by step, in the
+ * specified timezone.
+ */
+Datum
+generate_series_timestamptz_at_zone(PG_FUNCTION_ARGS)
+{
+	return generate_series_timestamptz_internal(fcinfo);
+}
+
+static Datum
+generate_series_timestamptz_internal(FunctionCallInfo fcinfo)
+{
 	FuncCallContext *funcctx;
 	generate_series_timestamptz_fctx *fctx;
 	TimestampTz result;
@@ -5892,8 +5967,11 @@ generate_series_timestamptz(PG_FUNCTION_ARGS)
 		TimestampTz start = PG_GETARG_TIMESTAMPTZ(0);
 		TimestampTz finish = PG_GETARG_TIMESTAMPTZ(1);
 		Interval   *step = PG_GETARG_INTERVAL_P(2);
-		MemoryContext oldcontext;
-		const Interval interval_zero = {0};
+		text	   *zone = (PG_NARGS() == 4 && !PG_ARGISNULL(3))
+							? PG_GETARG_TEXT_PP(3) : NULL;
+
+		MemoryContext	oldcontext;
+		const Interval	interval_zero = {0};
 
 		/* create a function context for cross-call persistence */
 		funcctx = SRF_FIRSTCALL_INIT();
@@ -5914,6 +5992,7 @@ generate_series_timestamptz(PG_FUNCTION_ARGS)
 		fctx->current = start;
 		fctx->finish = finish;
 		fctx->step = *step;
+		fctx->attimezone = zone ? lookup_timezone(zone) : NULL;
 
 		/* Determine sign of the interval */
 		fctx->step_sign = interval_cmp_internal(&fctx->step, &interval_zero);
@@ -5941,9 +6020,7 @@ generate_series_timestamptz(PG_FUNCTION_ARGS)
 		timestamp_cmp_internal(result, fctx->finish) >= 0)
 	{
 		/* increment current in preparation for next iteration */
-		fctx->current = DatumGetTimestampTz(DirectFunctionCall2(timestamptz_pl_interval,
-																TimestampTzGetDatum(fctx->current),
-																PointerGetDatum(&fctx->step)));
+		fctx->current = timestamptz_pl_interval_internal(fctx->current, &fctx->step, fctx->attimezone);
 
 		/* do when there is more left to send */
 		SRF_RETURN_NEXT(funcctx, TimestampTzGetDatum(result));

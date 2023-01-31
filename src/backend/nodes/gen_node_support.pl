@@ -696,6 +696,7 @@ static bool
 _equal${n}(const $n *a, const $n *b)
 {
 " unless $struct_no_equal;
+  my $memcpy_ignore = 0;
 
 	# track already-processed fields to support field order checks
 	my %previous_fields;
@@ -741,8 +742,14 @@ _equal${n}(const $n *a, const $n *b)
 			}
 		}
 
+		if (!$memcpy_ignore && $node_type_info{$n}->{fields} > 2)
+		{
+			print $cff "\tmemcpy(newnode, from, sizeof(*from));\n" unless $copy_ignore;
+			$memcpy_ignore = 1;
+		}
+
 		# override type-specific copy method if requested
-		if (defined $copy_as_field)
+		if (defined $copy_as_field && !$memcpy_ignore)
 		{
 			print $cff "\tnewnode->$f = $copy_as_field;\n"
 			  unless $copy_ignore;
@@ -751,7 +758,7 @@ _equal${n}(const $n *a, const $n *b)
 		elsif ($copy_as_scalar)
 		{
 			print $cff "\tCOPY_SCALAR_FIELD($f);\n"
-			  unless $copy_ignore;
+			  unless $copy_ignore || $memcpy_ignore;
 			$copy_ignore = 1;
 		}
 
@@ -777,12 +784,12 @@ _equal${n}(const $n *a, const $n *b)
 		}
 		elsif ($t eq 'int' && $f =~ 'location$')
 		{
-			print $cff "\tCOPY_LOCATION_FIELD($f);\n"    unless $copy_ignore;
+			print $cff "\tCOPY_LOCATION_FIELD($f);\n"    unless $copy_ignore || $memcpy_ignore;
 			print $eff "\tCOMPARE_LOCATION_FIELD($f);\n" unless $equal_ignore;
 		}
 		elsif (elem $t, @scalar_types or elem $t, @enum_types)
 		{
-			print $cff "\tCOPY_SCALAR_FIELD($f);\n" unless $copy_ignore;
+			print $cff "\tCOPY_SCALAR_FIELD($f);\n" unless $copy_ignore || $memcpy_ignore;
 			if (elem 'equal_ignore_if_zero', @a)
 			{
 				print $eff
@@ -826,7 +833,7 @@ _equal${n}(const $n *a, const $n *b)
 		elsif ($t eq 'function pointer')
 		{
 			# we can copy and compare as a scalar
-			print $cff "\tCOPY_SCALAR_FIELD($f);\n"    unless $copy_ignore;
+			print $cff "\tCOPY_SCALAR_FIELD($f);\n"    unless $copy_ignore || $memcpy_ignore;
 			print $eff "\tCOMPARE_SCALAR_FIELD($f);\n" unless $equal_ignore;
 		}
 		# node type
@@ -850,7 +857,7 @@ _equal${n}(const $n *a, const $n *b)
 		# array (inline)
 		elsif ($t =~ /^\w+\[\w+\]$/)
 		{
-			print $cff "\tCOPY_ARRAY_FIELD($f);\n"    unless $copy_ignore;
+			print $cff "\tCOPY_ARRAY_FIELD($f);\n"    unless $copy_ignore || $memcpy_ignore;
 			print $eff "\tCOMPARE_ARRAY_FIELD($f);\n" unless $equal_ignore;
 		}
 		elsif ($t eq 'struct CustomPathMethods*'
@@ -859,7 +866,7 @@ _equal${n}(const $n *a, const $n *b)
 			# Fields of these types are required to be a pointer to a
 			# static table of callback functions.  So we don't copy
 			# the table itself, just reference the original one.
-			print $cff "\tCOPY_SCALAR_FIELD($f);\n"    unless $copy_ignore;
+			print $cff "\tCOPY_SCALAR_FIELD($f);\n"    unless $copy_ignore || $memcpy_ignore;
 			print $eff "\tCOMPARE_SCALAR_FIELD($f);\n" unless $equal_ignore;
 		}
 		else

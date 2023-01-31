@@ -910,6 +910,23 @@ RETURNS anycompatible AS ...
 
      <listitem>
       <para>
+       An extension might depend on other extensions.
+       It is useful to schema qualify calls to dependent extension to minimize reliance on search_path.
+       This is critical for cases such as functions used in indexes, materialized views, or check constraints.
+       To reference a required extension's schema, you must first have <literal>requires</literal>
+       variable specifying the list of extensions your extension requires.
+       In your extension sql scripts,
+       you can reference a required extension's schema with syntax
+       <literal>@extschema:reqextname@</literal> where <literal>reqextname</literal> 
+       is the name of an extension in your <literal>requires</literal> list.
+       All occurrences of this string will be
+       replaced by the schema the required extension is installed in before the script is
+       executed.
+      </para>
+     </listitem>
+
+     <listitem>
+      <para>
        If the extension does not support relocation at all, set
        <literal>relocatable = false</literal> in its control file, and also set
        <literal>schema</literal> to the name of the intended target schema.  This

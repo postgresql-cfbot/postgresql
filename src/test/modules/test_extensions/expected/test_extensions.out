@@ -312,3 +312,32 @@ Objects in extension "test_ext_cine"
  table ext_cine_tab3
 (9 rows)
 
+CREATE SCHEMA test_s_dep;
+CREATE EXTENSION test_ext_req_schema1 SCHEMA test_s_dep;
+CREATE EXTENSION test_ext_req_schema3 CASCADE;
+NOTICE:  installing required extension "test_ext_req_schema2"
+SELECT dep_req();
+ dep_req 
+---------
+ 1032w
+(1 row)
+
+SELECT dep_req2();
+ dep_req2 
+----------
+ 1032w
+(1 row)
+
+SELECT dep_req3();
+ dep_req3 
+----------
+ 2032w
+(1 row)
+
+ALTER EXTENSION test_ext_req_schema2 UPDATE TO '2.0';
+SELECT dep_req();
+ dep_req 
+---------
+ 1update
+(1 row)
+

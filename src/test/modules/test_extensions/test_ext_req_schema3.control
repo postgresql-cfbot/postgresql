@@ -1,0 +1,4 @@
+comment = 'Test schema referencing of 2 required extensions'
+default_version = '1.0'
+relocatable = true
+requires = 'test_ext_req_schema1,test_ext_req_schema2'

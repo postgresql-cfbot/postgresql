@@ -1031,6 +1031,39 @@ execute_extension_script(Oid extensionOid, ExtensionControlFile *control,
 		}
 
 		/*
+		 * If an extension requires other extensions
+		 * Replace each occurence of @extschema:extname@ 
+		 * where extname is the name of the required extension
+		 * with the schema name that extname is located in.
+		 */
+		if (control->requires)
+		{
+			foreach(lc, control->requires)
+			{
+				char	   *curreq = (char *) lfirst(lc);
+				Oid			reqext;
+				Oid			reqschema;
+				reqext = get_required_extension(curreq,
+												control->name,
+												schemaName,
+												false,
+												NIL,
+												false);
+				reqschema = get_extension_schema(reqext);
+				char *reqname;
+				reqname = get_namespace_name(reqschema);
+				StringInfoData rToken;
+				initStringInfo(&rToken);
+				appendStringInfo(&rToken, "%s%s%s", "@extschema:", curreq, "@");
+
+				t_sql = DirectFunctionCall3Coll(replace_text,
+										C_COLLATION_OID,
+										t_sql,
+										CStringGetTextDatum(rToken.data),
+										CStringGetTextDatum(quote_identifier(reqname)));
+			}
+		}
+		/*
 		 * If module_pathname was set in the control file, substitute its
 		 * value for occurrences of MODULE_PATHNAME.
 		 */

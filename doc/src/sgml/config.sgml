@@ -4884,6 +4884,52 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
       </listitem>
      </varlistentry>
 
+    <varlistentry id="guc-streaming-replication-retry-interval" xreflabel="streaming_replication_retry_interval">
+      <term><varname>streaming_replication_retry_interval</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>streaming_replication_retry_interval</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies amount of time after which standby attempts to switch WAL
+        source from WAL archive to streaming replication (get WAL from
+        primary). However, exhaust all the WAL present in pg_wal before
+        switching. If the standby fails to switch to stream mode, it falls
+        back to archive mode.
+        If this value is specified without units, it is taken as milliseconds.
+        The default is five minutes (<literal>5min</literal>).
+        With a lower setting of this parameter, the standby makes frequent
+        WAL source switch attempts when the primary is lost for quite longer.
+        To avoid this, set a reasonable value.
+        A setting of <literal>0</literal> disables the feature. When disabled,
+        the standby typically switches to stream mode, only when receive from
+        WAL archive finishes (no more WAL left there) or fails for any reason.
+        This parameter can only be set in
+        the <filename>postgresql.conf</filename> file or on the server
+        command line.
+       </para>
+       <para>
+        Reading WAL from archive may not always be efficient and cheaper
+        because network latencies, disk IO cost might differ on the archive as
+        compared to primary and often the archive may sit far from standby
+        impacting recovery performance on the standby. Hence reading WAL
+        from the primary, by setting this parameter, as opposed to the archive
+        enables the standby to catch up with the primary sooner thus reducing
+        replication lag and avoiding WAL files accumulation on the primary.
+      </para>
+       <para>
+        Note that the standby may not always attempt to switch source from
+        WAL archive to streaming replication at exact
+        <varname>streaming_replication_retry_interval</varname> intervals.
+        For example, if the parameter is set to <literal>1min</literal> and
+        fetching from WAL archive takes <literal>5min</literal>, then the
+        source switch attempt happens for the next WAL after current WAL is
+        fetched from WAL archive and applied.
+      </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-recovery-min-apply-delay" xreflabel="recovery_min_apply_delay">
       <term><varname>recovery_min_apply_delay</varname> (<type>integer</type>)
       <indexterm>

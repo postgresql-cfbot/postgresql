@@ -9,16 +9,16 @@ COPY test_extdep_commands FROM stdin;
  CREATE EXTENSION test_ext5 SCHEMA test_ext
  SET search_path TO test_ext
  CREATE TABLE a (a1 int)
-
+ -- function b
  CREATE FUNCTION b() RETURNS TRIGGER LANGUAGE plpgsql AS\n   $$ BEGIN NEW.a1 := NEW.a1 + 42; RETURN NEW; END; $$
  ALTER FUNCTION b() DEPENDS ON EXTENSION test_ext5
-
+ -- trigger c
  CREATE TRIGGER c BEFORE INSERT ON a FOR EACH ROW EXECUTE PROCEDURE b()
  ALTER TRIGGER c ON a DEPENDS ON EXTENSION test_ext5
-
+ -- materialized view d
  CREATE MATERIALIZED VIEW d AS SELECT * FROM a
  ALTER MATERIALIZED VIEW d DEPENDS ON EXTENSION test_ext5
-
+ -- index e
  CREATE INDEX e ON a (a1)
  ALTER INDEX e DEPENDS ON EXTENSION test_ext5
  RESET search_path

@@ -3434,6 +3434,26 @@ ReorderBufferXidHasBaseSnapshot(ReorderBuffer *rb, TransactionId xid)
 
 
 /*
+ * ReorderBufferXidIsKnownSubXact
+ *		Returns true if the xid is a known subtransaction.
+ */
+bool
+ReorderBufferXidIsKnownSubXact(ReorderBuffer *rb, TransactionId xid)
+{
+	ReorderBufferTXN *txn;
+
+	txn = ReorderBufferTXNByXid(rb, xid, false,
+								NULL, InvalidXLogRecPtr, false);
+
+	/* a known subtxn? */
+	if (txn && rbtxn_is_known_subxact(txn))
+		return true;
+
+	return false;
+}
+
+
+/*
  * ---------------------------------------
  * Disk serialization support
  * ---------------------------------------

@@ -52,6 +52,7 @@ pgstat_report_checkpointer(void)
 	CHECKPOINTER_ACC(checkpoint_write_time);
 	CHECKPOINTER_ACC(checkpoint_sync_time);
 	CHECKPOINTER_ACC(buf_written_checkpoints);
+	CHECKPOINTER_ACC(slru_written_checkpoints);
 	CHECKPOINTER_ACC(buf_written_backend);
 	CHECKPOINTER_ACC(buf_fsync_backend);
 #undef CHECKPOINTER_ACC

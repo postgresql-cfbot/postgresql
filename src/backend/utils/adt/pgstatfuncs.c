@@ -1194,6 +1194,12 @@ pg_stat_get_bgwriter_buf_written_checkpoints(PG_FUNCTION_ARGS)
 }
 
 Datum
+pg_stat_get_bgwriter_slru_written_checkpoints(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_INT64(pgstat_fetch_stat_checkpointer()->slru_written_checkpoints);
+}
+
+Datum
 pg_stat_get_bgwriter_buf_written_clean(PG_FUNCTION_ARGS)
 {
 	PG_RETURN_INT64(pgstat_fetch_stat_bgwriter()->buf_written_clean);

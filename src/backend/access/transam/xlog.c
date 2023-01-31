@@ -6285,14 +6285,16 @@ LogCheckpointEnd(bool restartpoint)
 	 */
 	if (restartpoint)
 		ereport(LOG,
-				(errmsg("restartpoint complete: wrote %d buffers (%.1f%%); "
-						"%d WAL file(s) added, %d removed, %d recycled; "
-						"write=%ld.%03d s, sync=%ld.%03d s, total=%ld.%03d s; "
-						"sync files=%d, longest=%ld.%03d s, average=%ld.%03d s; "
-						"distance=%d kB, estimate=%d kB; "
-						"lsn=%X/%X, redo lsn=%X/%X",
+				(errmsg("restartpoint complete: wrote %d buffers (%.1f%%), "
+						"wrote %d slru buffers (%.1f%%); %d WAL file(s) added, "
+						"%d removed, %d recycled; write=%ld.%03d s, "
+						"sync=%ld.%03d s, total=%ld.%03d s; sync files=%d, "
+						"longest=%ld.%03d s, average=%ld.%03d s; distance=%d kB, "
+						"estimate=%d kB; lsn=%X/%X, redo lsn=%X/%X",
 						CheckpointStats.ckpt_bufs_written,
 						(double) CheckpointStats.ckpt_bufs_written * 100 / NBuffers,
+						CheckpointStats.ckpt_slru_written,
+						(double) CheckpointStats.ckpt_slru_written * 100 / NBuffers,
 						CheckpointStats.ckpt_segs_added,
 						CheckpointStats.ckpt_segs_removed,
 						CheckpointStats.ckpt_segs_recycled,
@@ -6308,14 +6310,16 @@ LogCheckpointEnd(bool restartpoint)
 						LSN_FORMAT_ARGS(ControlFile->checkPointCopy.redo))));
 	else
 		ereport(LOG,
-				(errmsg("checkpoint complete: wrote %d buffers (%.1f%%); "
-						"%d WAL file(s) added, %d removed, %d recycled; "
-						"write=%ld.%03d s, sync=%ld.%03d s, total=%ld.%03d s; "
-						"sync files=%d, longest=%ld.%03d s, average=%ld.%03d s; "
-						"distance=%d kB, estimate=%d kB; "
-						"lsn=%X/%X, redo lsn=%X/%X",
+				(errmsg("checkpoint complete: wrote %d buffers (%.1f%%), "
+						"wrote %d slru buffers (%.1f%%); %d WAL file(s) added, "
+						"%d removed, %d recycled; write=%ld.%03d s, "
+						"sync=%ld.%03d s, total=%ld.%03d s; sync files=%d, "
+						"longest=%ld.%03d s, average=%ld.%03d s; distance=%d kB, "
+						"estimate=%d kB; lsn=%X/%X, redo lsn=%X/%X",
 						CheckpointStats.ckpt_bufs_written,
 						(double) CheckpointStats.ckpt_bufs_written * 100 / NBuffers,
+						CheckpointStats.ckpt_slru_written,
+						(double) CheckpointStats.ckpt_slru_written * 100 / NBuffers,
 						CheckpointStats.ckpt_segs_added,
 						CheckpointStats.ckpt_segs_removed,
 						CheckpointStats.ckpt_segs_recycled,

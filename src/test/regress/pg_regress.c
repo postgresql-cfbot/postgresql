@@ -1862,14 +1862,25 @@ create_database(const char *dbname)
 	/*
 	 * We use template0 so that any installation-local cruft in template1 will
 	 * not mess up the tests.
+	 *
+	 * Explicitly set the locale provider libc for the option --no-locale.
+	 * Otherwise during installcheck the new database may use the ICU locale
+	 * provider with the custom ICU locale from template0.
 	 */
 	header(_("creating database \"%s\""), dbname);
 	if (encoding)
+
+		/*
+		 * Explicitly set the locale provider libc for the manually chosen
+		 * encoding. Otherwise during installcheck the new database may use
+		 * the ICU locale provider (from template0) which does not support all
+		 * encodings.
+		 */
 		psql_add_command(buf, "CREATE DATABASE \"%s\" TEMPLATE=template0 ENCODING='%s'%s", dbname, encoding,
-						 (nolocale) ? " LC_COLLATE='C' LC_CTYPE='C'" : "");
+						 (nolocale) ? " LC_COLLATE='C' LC_CTYPE='C' LOCALE_PROVIDER='libc'" : " LOCALE_PROVIDER='libc'");
 	else
 		psql_add_command(buf, "CREATE DATABASE \"%s\" TEMPLATE=template0%s", dbname,
-						 (nolocale) ? " LC_COLLATE='C' LC_CTYPE='C'" : "");
+						 (nolocale) ? " LC_COLLATE='C' LC_CTYPE='C' LOCALE_PROVIDER='libc'" : "");
 	psql_add_command(buf,
 					 "ALTER DATABASE \"%s\" SET lc_messages TO 'C';"
 					 "ALTER DATABASE \"%s\" SET lc_monetary TO 'C';"

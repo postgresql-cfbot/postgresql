@@ -84,6 +84,10 @@ extern void InitWalRecovery(ControlFileData *ControlFile,
 							bool *haveTblspcMap_ptr);
 extern void PerformWalRecovery(void);
 
+#ifdef USE_ASSERT_CHECKING
+extern bool InStandbyMainRedoApplyLoop(void);
+#endif
+
 /*
  * FinishWalRecovery() returns this.  It contains information about the point
  * where recovery ended, and why it ended.

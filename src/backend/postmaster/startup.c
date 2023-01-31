@@ -314,25 +314,51 @@ startup_progress_timeout_handler(void)
 	startup_progress_timer_expired = true;
 }
 
-/*
- * Set the start timestamp of the current operation and enable the timeout.
- */
 void
-begin_startup_progress_phase(void)
+disable_startup_progress_timeout(void)
 {
-	TimestampTz fin_time;
-
-	/* Feature is disabled. */
+	/* Quick exit if feature is disabled. */
 	if (log_startup_progress_interval == 0)
 		return;
 
 	disable_timeout(STARTUP_PROGRESS_TIMEOUT, false);
 	startup_progress_timer_expired = false;
+}
+
+/*
+ * Set the start timestamp of the current operation and enable the timeout.
+ */
+void
+enable_startup_progress_timeout(void)
+{
+	TimestampTz fin_time;
+
+	/* Quick exit if feature is disabled. */
+	if (log_startup_progress_interval == 0)
+		return;
+
+	/* Should not get here from standby's main redo apply loop. */
+	Assert(!InStandbyMainRedoApplyLoop());
+
 	startup_progress_phase_start_time = GetCurrentTimestamp();
 	fin_time = TimestampTzPlusMilliseconds(startup_progress_phase_start_time,
 										   log_startup_progress_interval);
 	enable_timeout_every(STARTUP_PROGRESS_TIMEOUT, fin_time,
 						 log_startup_progress_interval);
+}
+
+/*
+ * A thin wrapper to first disable and then enable the startup progress timeout.
+ */
+void
+begin_startup_progress_phase(void)
+{
+	/* Quick exit if feature is disabled. */
+	if (log_startup_progress_interval == 0)
+		return;
+
+	disable_startup_progress_timeout();
+	enable_startup_progress_timeout();
 }
 
 /*

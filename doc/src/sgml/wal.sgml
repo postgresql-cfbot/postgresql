@@ -532,7 +532,11 @@
    adjust the <xref linkend="guc-archive-timeout"/> parameter rather than the
    checkpoint parameters.)
    It is also possible to force a checkpoint by using the SQL
-   command <command>CHECKPOINT</command>.
+   command <command>CHECKPOINT</command>. The checkpointer process running the
+   checkpoint will report its progress in the
+   <structname>pg_stat_progress_checkpoint</structname> view except for the
+   shutdown and end-of-recovery cases. See
+   <xref linkend="checkpoint-progress-reporting"/> for details.
   </para>
 
   <para>

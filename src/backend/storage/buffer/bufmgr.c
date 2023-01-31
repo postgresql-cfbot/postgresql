@@ -39,6 +39,7 @@
 #include "catalog/catalog.h"
 #include "catalog/storage.h"
 #include "catalog/storage_xlog.h"
+#include "commands/progress.h"
 #include "executor/instrument.h"
 #include "lib/binaryheap.h"
 #include "miscadmin.h"
@@ -2028,6 +2029,8 @@ BufferSync(int flags)
 	WritebackContextInit(&wb_context, &checkpoint_flush_after);
 
 	TRACE_POSTGRESQL_BUFFER_SYNC_START(NBuffers, num_to_scan);
+	pgstat_progress_update_param(PROGRESS_CHECKPOINT_BUFFERS_TOTAL,
+								 num_to_scan);
 
 	/*
 	 * Sort buffers that need to be written to reduce the likelihood of random
@@ -2145,6 +2148,8 @@ BufferSync(int flags)
 		bufHdr = GetBufferDescriptor(buf_id);
 
 		num_processed++;
+		pgstat_progress_update_param(PROGRESS_CHECKPOINT_BUFFERS_PROCESSED,
+									 num_processed);
 
 		/*
 		 * We don't need to acquire the lock here, because we're only looking
@@ -2165,6 +2170,8 @@ BufferSync(int flags)
 				TRACE_POSTGRESQL_BUFFER_SYNC_WRITTEN(buf_id);
 				PendingCheckpointerStats.buf_written_checkpoints++;
 				num_written++;
+				pgstat_progress_update_param(PROGRESS_CHECKPOINT_BUFFERS_WRITTEN,
+											 num_written);
 			}
 		}
 

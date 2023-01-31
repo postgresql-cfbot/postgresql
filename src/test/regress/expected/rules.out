@@ -1916,6 +1916,76 @@ pg_stat_progress_basebackup| SELECT pid,
     param4 AS tablespaces_total,
     param5 AS tablespaces_streamed
    FROM pg_stat_get_progress_info('BASEBACKUP'::text) s(pid, datid, relid, param1, param2, param3, param4, param5, param6, param7, param8, param9, param10, param11, param12, param13, param14, param15, param16, param17, param18, param19, param20);
+pg_stat_progress_checkpoint| SELECT s.pid,
+        CASE s.param1
+            WHEN 1 THEN 'checkpoint'::text
+            WHEN 2 THEN 'restartpoint'::text
+            ELSE NULL::text
+        END AS type,
+    (((((
+        CASE
+            WHEN ((s.param2 & (4)::bigint) > 0) THEN 'immediate '::text
+            ELSE ''::text
+        END ||
+        CASE
+            WHEN ((s.param2 & (8)::bigint) > 0) THEN 'force '::text
+            ELSE ''::text
+        END) ||
+        CASE
+            WHEN ((s.param2 & (16)::bigint) > 0) THEN 'flush-all '::text
+            ELSE ''::text
+        END) ||
+        CASE
+            WHEN ((s.param2 & (32)::bigint) > 0) THEN 'wait '::text
+            ELSE ''::text
+        END) ||
+        CASE
+            WHEN ((s.param2 & (128)::bigint) > 0) THEN 'wal '::text
+            ELSE ''::text
+        END) ||
+        CASE
+            WHEN ((s.param2 & (256)::bigint) > 0) THEN 'time '::text
+            ELSE ''::text
+        END) AS flags,
+    ('0/0'::pg_lsn + (
+        CASE
+            WHEN (s.param3 < 0) THEN pow((2)::numeric, (64)::numeric)
+            ELSE (0)::numeric
+        END + (s.param3)::numeric)) AS start_lsn,
+    to_timestamp(((946684800)::double precision + ((s.param4)::double precision / (1000000)::double precision))) AS start_time,
+        CASE s.param5
+            WHEN 1 THEN 'initializing'::text
+            WHEN 2 THEN 'getting virtual transaction IDs'::text
+            WHEN 3 THEN 'checkpointing replication slots'::text
+            WHEN 4 THEN 'checkpointing logical replication snapshot files'::text
+            WHEN 5 THEN 'checkpointing logical rewrite mapping files'::text
+            WHEN 6 THEN 'checkpointing replication origin'::text
+            WHEN 7 THEN 'checkpointing commit log pages'::text
+            WHEN 8 THEN 'checkpointing commit time stamp pages'::text
+            WHEN 9 THEN 'checkpointing subtransaction pages'::text
+            WHEN 10 THEN 'checkpointing multixact pages'::text
+            WHEN 11 THEN 'checkpointing predicate lock pages'::text
+            WHEN 12 THEN 'checkpointing buffers'::text
+            WHEN 13 THEN 'processing file sync requests'::text
+            WHEN 14 THEN 'performing two phase checkpoint'::text
+            WHEN 15 THEN 'performing post checkpoint cleanup'::text
+            WHEN 16 THEN 'invalidating replication slots'::text
+            WHEN 17 THEN 'recycling old WAL files'::text
+            WHEN 18 THEN 'truncating subtransactions'::text
+            WHEN 19 THEN 'finalizing'::text
+            ELSE NULL::text
+        END AS phase,
+    s.param6 AS buffers_total,
+    s.param7 AS buffers_processed,
+    s.param8 AS buffers_written,
+    s.param9 AS files_total,
+    s.param10 AS files_synced,
+        CASE s.param11
+            WHEN 0 THEN 'false'::text
+            WHEN 1 THEN 'true'::text
+            ELSE NULL::text
+        END AS new_requests
+   FROM pg_stat_get_progress_info('CHECKPOINT'::text) s(pid, datid, relid, param1, param2, param3, param4, param5, param6, param7, param8, param9, param10, param11, param12, param13, param14, param15, param16, param17, param18, param19, param20);
 pg_stat_progress_cluster| SELECT s.pid,
     s.datid,
     d.datname,

@@ -1267,6 +1267,57 @@ CREATE VIEW pg_stat_progress_copy AS
     FROM pg_stat_get_progress_info('COPY') AS S
         LEFT JOIN pg_database D ON S.datid = D.oid;
 
+CREATE VIEW pg_stat_progress_checkpoint AS
+    SELECT
+        S.pid AS pid,
+        CASE S.param1 WHEN 1 THEN 'checkpoint'
+                      WHEN 2 THEN 'restartpoint'
+                      END AS type,
+        ( CASE WHEN (S.param2 & 4) > 0 THEN 'immediate ' ELSE '' END ||
+          CASE WHEN (S.param2 & 8) > 0 THEN 'force ' ELSE '' END ||
+          CASE WHEN (S.param2 & 16) > 0 THEN 'flush-all ' ELSE '' END ||
+          CASE WHEN (S.param2 & 32) > 0 THEN 'wait ' ELSE '' END ||
+          CASE WHEN (S.param2 & 128) > 0 THEN 'wal ' ELSE '' END ||
+          CASE WHEN (S.param2 & 256) > 0 THEN 'time ' ELSE '' END
+        ) AS flags,
+        ( '0/0'::pg_lsn +
+          ((CASE
+                WHEN S.param3 < 0 THEN pow(2::numeric, 64::numeric)::numeric
+                ELSE 0::numeric
+            END) +
+           S.param3::numeric)
+        ) AS start_lsn,
+        to_timestamp(946684800 + (S.param4::float8 / 1000000)) AS start_time,
+        CASE S.param5 WHEN 1 THEN 'initializing'
+                      WHEN 2 THEN 'getting virtual transaction IDs'
+                      WHEN 3 THEN 'checkpointing replication slots'
+                      WHEN 4 THEN 'checkpointing logical replication snapshot files'
+                      WHEN 5 THEN 'checkpointing logical rewrite mapping files'
+                      WHEN 6 THEN 'checkpointing replication origin'
+                      WHEN 7 THEN 'checkpointing commit log pages'
+                      WHEN 8 THEN 'checkpointing commit time stamp pages'
+                      WHEN 9 THEN 'checkpointing subtransaction pages'
+                      WHEN 10 THEN 'checkpointing multixact pages'
+                      WHEN 11 THEN 'checkpointing predicate lock pages'
+                      WHEN 12 THEN 'checkpointing buffers'
+                      WHEN 13 THEN 'processing file sync requests'
+                      WHEN 14 THEN 'performing two phase checkpoint'
+                      WHEN 15 THEN 'performing post checkpoint cleanup'
+                      WHEN 16 THEN 'invalidating replication slots'
+                      WHEN 17 THEN 'recycling old WAL files'
+                      WHEN 18 THEN 'truncating subtransactions'
+                      WHEN 19 THEN 'finalizing'
+                      END AS phase,
+        S.param6 AS buffers_total,
+        S.param7 AS buffers_processed,
+        S.param8 AS buffers_written,
+        S.param9 AS files_total,
+        S.param10 AS files_synced,
+        CASE S.param11 WHEN 0 THEN 'false'
+                       WHEN 1 THEN 'true'
+                       END AS new_requests
+    FROM pg_stat_get_progress_info('CHECKPOINT') AS S;
+
 CREATE VIEW pg_user_mappings AS
     SELECT
         U.oid       AS umid,

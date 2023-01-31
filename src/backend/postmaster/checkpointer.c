@@ -39,6 +39,7 @@
 #include "access/xlog.h"
 #include "access/xlog_internal.h"
 #include "access/xlogrecovery.h"
+#include "commands/progress.h"
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -163,7 +164,7 @@ static pg_time_t last_xlog_switch_time;
 static void HandleCheckpointerInterrupts(void);
 static void CheckArchiveTimeout(void);
 static bool IsCheckpointOnSchedule(double progress);
-static bool ImmediateCheckpointRequested(void);
+static bool ImmediateCheckpointRequested(int flags);
 static bool CompactCheckpointerRequestQueue(void);
 static void UpdateSharedMemoryConfig(void);
 
@@ -667,16 +668,24 @@ CheckArchiveTimeout(void)
  * there is one pending behind it.)
  */
 static bool
-ImmediateCheckpointRequested(void)
+ImmediateCheckpointRequested(int flags)
 {
 	volatile CheckpointerShmemStruct *cps = CheckpointerShmem;
+
+	if (cps->ckpt_flags & CHECKPOINT_REQUESTED)
+		pgstat_progress_update_param(PROGRESS_CHECKPOINT_NEW_REQUESTS, true);
 
 	/*
 	 * We don't need to acquire the ckpt_lck in this case because we're only
 	 * looking at a single flag bit.
 	 */
 	if (cps->ckpt_flags & CHECKPOINT_IMMEDIATE)
+	{
+		pgstat_progress_update_param(PROGRESS_CHECKPOINT_FLAGS,
+									 (flags | CHECKPOINT_IMMEDIATE));
 		return true;
+	}
+
 	return false;
 }
 
@@ -708,7 +717,7 @@ CheckpointWriteDelay(int flags, double progress)
 	 */
 	if (!(flags & CHECKPOINT_IMMEDIATE) &&
 		!ShutdownRequestPending &&
-		!ImmediateCheckpointRequested() &&
+		!ImmediateCheckpointRequested(flags) &&
 		IsCheckpointOnSchedule(progress))
 	{
 		if (ConfigReloadPending)

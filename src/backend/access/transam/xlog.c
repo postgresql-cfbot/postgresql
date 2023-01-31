@@ -67,6 +67,7 @@
 #include "catalog/catversion.h"
 #include "catalog/pg_control.h"
 #include "catalog/pg_database.h"
+#include "commands/progress.h"
 #include "common/controldata_utils.h"
 #include "common/file_utils.h"
 #include "executor/instrument.h"
@@ -698,6 +699,8 @@ static void WALInsertLockAcquire(void);
 static void WALInsertLockAcquireExclusive(void);
 static void WALInsertLockRelease(void);
 static void WALInsertLockUpdateInsertingAt(XLogRecPtr insertingAt);
+
+static void checkpoint_progress_start(int flags, int type);
 
 /*
  * Insert an XLOG record represented by an already-constructed chain of data
@@ -6595,6 +6598,9 @@ CreateCheckPoint(int flags)
 	XLogCtl->RedoRecPtr = checkPoint.redo;
 	SpinLockRelease(&XLogCtl->info_lck);
 
+	/* Prepare to report progress of the checkpoint. */
+	checkpoint_progress_start(flags, PROGRESS_CHECKPOINT_TYPE_CHECKPOINT);
+
 	/*
 	 * If enabled, log checkpoint start.  We postpone this until now so as not
 	 * to log anything if we decided to skip the checkpoint.
@@ -6677,6 +6683,8 @@ CreateCheckPoint(int flags)
 	 * clog and we will correctly flush the update below.  So we cannot miss
 	 * any xacts we need to wait for.
 	 */
+	pgstat_progress_update_param(PROGRESS_CHECKPOINT_PHASE,
+								 PROGRESS_CHECKPOINT_PHASE_GET_VIRTUAL_TRANSACTION_IDS);
 	vxids = GetVirtualXIDsDelayingChkpt(&nvxids, DELAY_CHKPT_START);
 	if (nvxids > 0)
 	{
@@ -6792,6 +6800,8 @@ CreateCheckPoint(int flags)
 	/*
 	 * Let smgr do post-checkpoint cleanup (eg, deleting old files).
 	 */
+	pgstat_progress_update_param(PROGRESS_CHECKPOINT_PHASE,
+								 PROGRESS_CHECKPOINT_PHASE_POST_CHECKPOINT_CLEANUP);
 	SyncPostCheckpoint();
 
 	/*
@@ -6807,6 +6817,9 @@ CreateCheckPoint(int flags)
 	 */
 	XLByteToSeg(RedoRecPtr, _logSegNo, wal_segment_size);
 	KeepLogSeg(recptr, &_logSegNo);
+	pgstat_progress_update_param(PROGRESS_CHECKPOINT_PHASE,
+								 PROGRESS_CHECKPOINT_PHASE_INVALIDATE_REPLI_SLOTS);
+
 	if (InvalidateObsoleteReplicationSlots(_logSegNo))
 	{
 		/*
@@ -6817,6 +6830,8 @@ CreateCheckPoint(int flags)
 		KeepLogSeg(recptr, &_logSegNo);
 	}
 	_logSegNo--;
+	pgstat_progress_update_param(PROGRESS_CHECKPOINT_PHASE,
+								 PROGRESS_CHECKPOINT_PHASE_RECYCLE_OLD_XLOG);
 	RemoveOldXlogFiles(_logSegNo, RedoRecPtr, recptr,
 					   checkPoint.ThisTimeLineID);
 
@@ -6835,10 +6850,20 @@ CreateCheckPoint(int flags)
 	 * StartupSUBTRANS hasn't been called yet.
 	 */
 	if (!RecoveryInProgress())
+	{
+		pgstat_progress_update_param(PROGRESS_CHECKPOINT_PHASE,
+									 PROGRESS_CHECKPOINT_PHASE_TRUNCATE_SUBTRANS);
 		TruncateSUBTRANS(GetOldestTransactionIdConsideredRunning());
+	}
+
+	pgstat_progress_update_param(PROGRESS_CHECKPOINT_PHASE,
+								 PROGRESS_CHECKPOINT_PHASE_FINALIZE);
 
 	/* Real work is done; log and update stats. */
 	LogCheckpointEnd(false);
+
+	/* Stop reporting progress of the checkpoint. */
+	pgstat_progress_end_command();
 
 	/* Reset the process title */
 	update_checkpoint_display(flags, false, true);
@@ -6996,29 +7021,63 @@ static void
 CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 {
 	CheckPointRelationMap();
+
+	pgstat_progress_update_param(PROGRESS_CHECKPOINT_PHASE,
+								 PROGRESS_CHECKPOINT_PHASE_REPLI_SLOTS);
 	CheckPointReplicationSlots();
+
+	pgstat_progress_update_param(PROGRESS_CHECKPOINT_PHASE,
+								 PROGRESS_CHECKPOINT_PHASE_SNAPSHOTS);
 	CheckPointSnapBuild();
+
+	pgstat_progress_update_param(PROGRESS_CHECKPOINT_PHASE,
+								 PROGRESS_CHECKPOINT_PHASE_LOGICAL_REWRITE_MAPPINGS);
 	CheckPointLogicalRewriteHeap();
+
+	pgstat_progress_update_param(PROGRESS_CHECKPOINT_PHASE,
+								 PROGRESS_CHECKPOINT_PHASE_REPLI_ORIGIN);
 	CheckPointReplicationOrigin();
 
 	/* Write out all dirty data in SLRUs and the main buffer pool */
 	TRACE_POSTGRESQL_BUFFER_CHECKPOINT_START(flags);
 	CheckpointStats.ckpt_write_t = GetCurrentTimestamp();
+
+	pgstat_progress_update_param(PROGRESS_CHECKPOINT_PHASE,
+								 PROGRESS_CHECKPOINT_PHASE_CLOG_PAGES);
 	CheckPointCLOG();
+
+	pgstat_progress_update_param(PROGRESS_CHECKPOINT_PHASE,
+								 PROGRESS_CHECKPOINT_PHASE_COMMITTS_PAGES);
 	CheckPointCommitTs();
+
+	pgstat_progress_update_param(PROGRESS_CHECKPOINT_PHASE,
+								 PROGRESS_CHECKPOINT_PHASE_SUBTRANS_PAGES);
 	CheckPointSUBTRANS();
+
+	pgstat_progress_update_param(PROGRESS_CHECKPOINT_PHASE,
+								 PROGRESS_CHECKPOINT_PHASE_MULTIXACT_PAGES);
 	CheckPointMultiXact();
+
+	pgstat_progress_update_param(PROGRESS_CHECKPOINT_PHASE,
+								 PROGRESS_CHECKPOINT_PHASE_PREDICATE_LOCK_PAGES);
 	CheckPointPredicate();
+
+	pgstat_progress_update_param(PROGRESS_CHECKPOINT_PHASE,
+								 PROGRESS_CHECKPOINT_PHASE_BUFFERS);
 	CheckPointBuffers(flags);
 
 	/* Perform all queued up fsyncs */
 	TRACE_POSTGRESQL_BUFFER_CHECKPOINT_SYNC_START();
 	CheckpointStats.ckpt_sync_t = GetCurrentTimestamp();
+	pgstat_progress_update_param(PROGRESS_CHECKPOINT_PHASE,
+								 PROGRESS_CHECKPOINT_PHASE_SYNC_FILES);
 	ProcessSyncRequests();
 	CheckpointStats.ckpt_sync_end_t = GetCurrentTimestamp();
 	TRACE_POSTGRESQL_BUFFER_CHECKPOINT_DONE();
 
 	/* We deliberately delay 2PC checkpointing as long as possible */
+	pgstat_progress_update_param(PROGRESS_CHECKPOINT_PHASE,
+								 PROGRESS_CHECKPOINT_PHASE_TWO_PHASE);
 	CheckPointTwoPhase(checkPointRedo);
 }
 
@@ -7168,6 +7227,9 @@ CreateRestartPoint(int flags)
 	MemSet(&CheckpointStats, 0, sizeof(CheckpointStats));
 	CheckpointStats.ckpt_start_t = GetCurrentTimestamp();
 
+	/* Prepare to report progress of the restartpoint. */
+	checkpoint_progress_start(flags, PROGRESS_CHECKPOINT_TYPE_RESTARTPOINT);
+
 	if (log_checkpoints)
 		LogCheckpointStart(flags, true);
 
@@ -7251,6 +7313,9 @@ CreateRestartPoint(int flags)
 	replayPtr = GetXLogReplayRecPtr(&replayTLI);
 	endptr = (receivePtr < replayPtr) ? replayPtr : receivePtr;
 	KeepLogSeg(endptr, &_logSegNo);
+	pgstat_progress_update_param(PROGRESS_CHECKPOINT_PHASE,
+								 PROGRESS_CHECKPOINT_PHASE_INVALIDATE_REPLI_SLOTS);
+
 	if (InvalidateObsoleteReplicationSlots(_logSegNo))
 	{
 		/*
@@ -7277,6 +7342,8 @@ CreateRestartPoint(int flags)
 	if (!RecoveryInProgress())
 		replayTLI = XLogCtl->InsertTimeLineID;
 
+	pgstat_progress_update_param(PROGRESS_CHECKPOINT_PHASE,
+								 PROGRESS_CHECKPOINT_PHASE_RECYCLE_OLD_XLOG);
 	RemoveOldXlogFiles(_logSegNo, RedoRecPtr, endptr, replayTLI);
 
 	/*
@@ -7293,10 +7360,19 @@ CreateRestartPoint(int flags)
 	 * this because StartupSUBTRANS hasn't been called yet.
 	 */
 	if (EnableHotStandby)
+	{
+		pgstat_progress_update_param(PROGRESS_CHECKPOINT_PHASE,
+									 PROGRESS_CHECKPOINT_PHASE_TRUNCATE_SUBTRANS);
 		TruncateSUBTRANS(GetOldestTransactionIdConsideredRunning());
+	}
 
+	pgstat_progress_update_param(PROGRESS_CHECKPOINT_PHASE,
+								 PROGRESS_CHECKPOINT_PHASE_FINALIZE);
 	/* Real work is done; log and update stats. */
 	LogCheckpointEnd(true);
+
+	/* Stop reporting progress of the restartpoint. */
+	pgstat_progress_end_command();
 
 	/* Reset the process title */
 	update_checkpoint_display(flags, true, true);
@@ -8951,4 +9027,30 @@ SetWalWriterSleeping(bool sleeping)
 	SpinLockAcquire(&XLogCtl->info_lck);
 	XLogCtl->WalWriterSleeping = sleeping;
 	SpinLockRelease(&XLogCtl->info_lck);
+}
+
+/*
+ * Start reporting progress of the checkpoint.
+ */
+static void
+checkpoint_progress_start(int flags, int type)
+{
+	const int	index[] = {
+		PROGRESS_CHECKPOINT_TYPE,
+		PROGRESS_CHECKPOINT_FLAGS,
+		PROGRESS_CHECKPOINT_LSN,
+		PROGRESS_CHECKPOINT_START_TIMESTAMP,
+		PROGRESS_CHECKPOINT_PHASE
+		};
+	int64		val[5];
+
+	pgstat_progress_start_command(PROGRESS_COMMAND_CHECKPOINT, InvalidOid);
+
+	val[0] = type;
+	val[1] = flags;
+	val[2] = RedoRecPtr;
+	val[3] = CheckpointStats.ckpt_start_t;
+	val[4] = PROGRESS_CHECKPOINT_PHASE_INIT;
+
+	pgstat_progress_update_multi_param(5, index, val);
 }

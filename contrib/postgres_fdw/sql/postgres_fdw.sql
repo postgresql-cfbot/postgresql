@@ -2944,16 +2944,34 @@ RESET enable_partitionwise_join;
 -- ===================================================================
 -- test partitionwise aggregates
 -- ===================================================================
+CREATE OR REPLACE FUNCTION f_server_version_lag(version_offset int4) RETURNS text AS $$
+    SELECT (setting::int4 + version_offset)::text FROM pg_settings WHERE name = 'server_version_num';
+$$ LANGUAGE sql;
 
-CREATE TABLE pagg_tab (a int, b int, c text) PARTITION BY RANGE(a);
+CREATE OR REPLACE FUNCTION f_alter_server_version(server_name text, operation text, version_offset int4) RETURNS void AS $$
+    DECLARE
+        version_num text;
+    BEGIN
+        EXECUTE 'SELECT f_server_version_lag($1) '
+            INTO version_num
+            USING version_offset;
+        EXECUTE format('ALTER SERVER %I OPTIONS (%I server_version %L)',
+            server_name, operation, version_num);
+        RETURN;
+    END;
+$$ LANGUAGE plpgsql;
+
+SELECT f_alter_server_version('loopback', 'add', 0);
+
+CREATE TABLE pagg_tab (a int, b int, c text, d int4) PARTITION BY RANGE(a);
 
 CREATE TABLE pagg_tab_p1 (LIKE pagg_tab);
 CREATE TABLE pagg_tab_p2 (LIKE pagg_tab);
 CREATE TABLE pagg_tab_p3 (LIKE pagg_tab);
 
-INSERT INTO pagg_tab_p1 SELECT i % 30, i % 50, to_char(i/30, 'FM0000') FROM generate_series(1, 3000) i WHERE (i % 30) < 10;
-INSERT INTO pagg_tab_p2 SELECT i % 30, i % 50, to_char(i/30, 'FM0000') FROM generate_series(1, 3000) i WHERE (i % 30) < 20 and (i % 30) >= 10;
-INSERT INTO pagg_tab_p3 SELECT i % 30, i % 50, to_char(i/30, 'FM0000') FROM generate_series(1, 3000) i WHERE (i % 30) < 30 and (i % 30) >= 20;
+INSERT INTO pagg_tab_p1 SELECT i % 30, i % 50, to_char(i/30, 'FM0000'), i % 40 FROM generate_series(1, 3000) i WHERE (i % 30) < 10;
+INSERT INTO pagg_tab_p2 SELECT i % 30, i % 50, to_char(i/30, 'FM0000'), i % 40 FROM generate_series(1, 3000) i WHERE (i % 30) < 20 and (i % 30) >= 10;
+INSERT INTO pagg_tab_p3 SELECT i % 30, i % 50, to_char(i/30, 'FM0000'), i % 40 FROM generate_series(1, 3000) i WHERE (i % 30) < 30 and (i % 30) >= 20;
 
 -- Create foreign partitions
 CREATE FOREIGN TABLE fpagg_tab_p1 PARTITION OF pagg_tab FOR VALUES FROM (0) TO (10) SERVER loopback OPTIONS (table_name 'pagg_tab_p1');
@@ -2986,6 +3004,65 @@ SELECT a, count(t1) FROM pagg_tab t1 GROUP BY a HAVING avg(b) < 22 ORDER BY 1;
 -- When GROUP BY clause does not match with PARTITION KEY.
 EXPLAIN (COSTS OFF)
 SELECT b, avg(a), max(a), count(*) FROM pagg_tab GROUP BY b HAVING sum(a) < 700 ORDER BY 1;
+
+-- It's unsafe to push down having clause when there are partial aggregates
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT b, max(a), count(*) FROM pagg_tab GROUP BY b HAVING sum(a) < 700 ORDER BY 1;
+
+-- Partial aggregates are fine to push down without having clause
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT b, min(a), max(a), count(*), sum(d), sum(d::int8), avg(d), avg(d::int8) FROM pagg_tab GROUP BY b ORDER BY 1;
+SELECT b, min(a), max(a), count(*), sum(d), sum(d::int8), avg(d), avg(d::int8) FROM pagg_tab GROUP BY b ORDER BY 1;
+
+-- Partial aggregates are fine to push down
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT min(a), max(a), count(*), sum(d), sum(d::int8), avg(d), avg(d::int8) FROM pagg_tab;
+SELECT min(a), max(a), count(*), sum(d), sum(d::int8), avg(d), avg(d::int8) FROM pagg_tab;
+
+-- It's unsafe to push down partial aggregates which contains distinct clause
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT max(a), count(distinct b) FROM pagg_tab;
+SELECT max(a), count(distinct b) FROM pagg_tab;
+
+-- It's unsafe to push down partial aggregates when
+-- server_version is older than partialagg_minversion, described by pg_aggregate
+SELECT f_alter_server_version('loopback', 'set', -1);
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT avg(d) FROM pagg_tab;
+SELECT avg(d) FROM pagg_tab;
+
+-- It's safe to push down partial aggregate for user defined aggregate
+-- which has valid options.
+CREATE AGGREGATE postgres_fdw_sum_p_int8(int8) (
+	SFUNC = int8_avg_accum,
+	STYPE = internal,
+	FINALFUNC = int8_avg_serialize
+);
+
+CREATE AGGREGATE postgres_fdw_sum(int8) (
+	SFUNC = int8_avg_accum,
+	STYPE = internal,
+	COMBINEFUNC = int8_avg_combine,
+	FINALFUNC = numeric_poly_sum,
+	SERIALFUNC = int8_avg_serialize,
+	DESERIALFUNC = int8_avg_deserialize,
+	PARTIALAGGFUNC = postgres_fdw_sum_p_int8,
+	PARTIALAGG_MINVERSION = 150000
+);
+
+ALTER EXTENSION postgres_fdw ADD FUNCTION postgres_fdw_sum(int8);
+
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT postgres_fdw_sum(d::int8) FROM pagg_tab;
+SELECT postgres_fdw_sum(d::int8) FROM pagg_tab;
+
+ALTER EXTENSION postgres_fdw DROP FUNCTION postgres_fdw_sum(int8);
+DROP AGGREGATE postgres_fdw_sum(int8);
+DROP AGGREGATE postgres_fdw_sum_p_int8(int8);
+
+DROP FUNCTION f_server_version_lag(int4);
+DROP FUNCTION f_alter_server_version(text, text, int4);
+ALTER SERVER loopback OPTIONS (DROP server_version);
 
 -- ===================================================================
 -- access rights and superuser

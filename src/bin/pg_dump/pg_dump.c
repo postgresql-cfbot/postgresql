@@ -13480,6 +13480,8 @@ dumpAgg(Archive *fout, const AggInfo *agginfo)
 	const char *aggmtransfn;
 	const char *aggminvtransfn;
 	const char *aggmfinalfn;
+	const char *partialaggfn;
+	const char *partialagg_minversion;
 	bool		aggfinalextra;
 	bool		aggmfinalextra;
 	char		aggfinalmodify;
@@ -13562,11 +13564,19 @@ dumpAgg(Archive *fout, const AggInfo *agginfo)
 		if (fout->remoteVersion >= 110000)
 			appendPQExpBufferStr(query,
 								 "aggfinalmodify,\n"
-								 "aggmfinalmodify\n");
+								 "aggmfinalmodify,\n");
 		else
 			appendPQExpBufferStr(query,
 								 "'0' AS aggfinalmodify,\n"
-								 "'0' AS aggmfinalmodify\n");
+								 "'0' AS aggmfinalmodify,\n");
+		if (fout->remoteVersion >= 160000)
+			appendPQExpBufferStr(query,
+								"partialaggfn,\n"
+								"partialagg_minversion\n");
+		else
+			appendPQExpBufferStr(query,
+								"'-' AS partialaggfn,\n"
+								"0 AS partialagg_minversion\n");
 
 		appendPQExpBufferStr(query,
 							 "FROM pg_catalog.pg_aggregate a, pg_catalog.pg_proc p "
@@ -13592,6 +13602,8 @@ dumpAgg(Archive *fout, const AggInfo *agginfo)
 	aggcombinefn = PQgetvalue(res, 0, PQfnumber(res, "aggcombinefn"));
 	aggserialfn = PQgetvalue(res, 0, PQfnumber(res, "aggserialfn"));
 	aggdeserialfn = PQgetvalue(res, 0, PQfnumber(res, "aggdeserialfn"));
+	partialaggfn = PQgetvalue(res, 0, PQfnumber(res, "partialaggfn"));
+	partialagg_minversion = PQgetvalue(res, 0, PQfnumber(res, "partialagg_minversion"));
 	aggmtransfn = PQgetvalue(res, 0, PQfnumber(res, "aggmtransfn"));
 	aggminvtransfn = PQgetvalue(res, 0, PQfnumber(res, "aggminvtransfn"));
 	aggmfinalfn = PQgetvalue(res, 0, PQfnumber(res, "aggmfinalfn"));
@@ -13680,6 +13692,15 @@ dumpAgg(Archive *fout, const AggInfo *agginfo)
 
 	if (strcmp(aggdeserialfn, "-") != 0)
 		appendPQExpBuffer(details, ",\n    DESERIALFUNC = %s", aggdeserialfn);
+
+	if (strcmp(partialaggfn, "-") != 0)
+		appendPQExpBuffer(details, ",\n    PARTIALAGGFUNC = %s", partialaggfn);
+
+	if (strcmp(partialagg_minversion, "0") != 0)
+	{
+		appendPQExpBuffer(details, ",\n    PARTIALAGG_MINVERSION = %s",
+						  partialagg_minversion);
+	}
 
 	if (strcmp(aggmtransfn, "-") != 0)
 	{

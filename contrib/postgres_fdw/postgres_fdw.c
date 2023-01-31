@@ -519,7 +519,7 @@ static bool foreign_join_ok(PlannerInfo *root, RelOptInfo *joinrel,
 							JoinType jointype, RelOptInfo *outerrel, RelOptInfo *innerrel,
 							JoinPathExtraData *extra);
 static bool foreign_grouping_ok(PlannerInfo *root, RelOptInfo *grouped_rel,
-								Node *havingQual);
+								Node *havingQual, PartitionwiseAggregateType patype);
 static List *get_useful_pathkeys_for_relation(PlannerInfo *root,
 											  RelOptInfo *rel);
 static List *get_useful_ecs_for_relation(PlannerInfo *root, RelOptInfo *rel);
@@ -651,6 +651,7 @@ postgresGetForeignRelSize(PlannerInfo *root,
 	fpinfo->shippable_extensions = NIL;
 	fpinfo->fetch_size = 100;
 	fpinfo->async_capable = false;
+	fpinfo->server_version = 0;
 
 	apply_server_options(fpinfo);
 	apply_table_options(fpinfo);
@@ -6130,6 +6131,8 @@ apply_server_options(PgFdwRelationInfo *fpinfo)
 			(void) parse_int(defGetString(def), &fpinfo->fetch_size, 0, NULL);
 		else if (strcmp(def->defname, "async_capable") == 0)
 			fpinfo->async_capable = defGetBoolean(def);
+		else if (strcmp(def->defname, "server_version") == 0)
+			(void)parse_int(defGetString(def), &fpinfo->server_version, 0, NULL);
 	}
 }
 
@@ -6188,6 +6191,7 @@ merge_fdw_options(PgFdwRelationInfo *fpinfo,
 	fpinfo->use_remote_estimate = fpinfo_o->use_remote_estimate;
 	fpinfo->fetch_size = fpinfo_o->fetch_size;
 	fpinfo->async_capable = fpinfo_o->async_capable;
+	fpinfo->server_version = fpinfo_o->server_version;
 
 	/* Merge the table level options from either side of the join. */
 	if (fpinfo_i)
@@ -6367,7 +6371,7 @@ postgresGetForeignJoinPaths(PlannerInfo *root,
  */
 static bool
 foreign_grouping_ok(PlannerInfo *root, RelOptInfo *grouped_rel,
-					Node *havingQual)
+					Node *havingQual, PartitionwiseAggregateType patype)
 {
 	Query	   *query = root->parse;
 	PgFdwRelationInfo *fpinfo = (PgFdwRelationInfo *) grouped_rel->fdw_private;
@@ -6379,6 +6383,10 @@ foreign_grouping_ok(PlannerInfo *root, RelOptInfo *grouped_rel,
 
 	/* We currently don't support pushing Grouping Sets. */
 	if (query->groupingSets)
+		return false;
+
+	/* It's unsafe to push having statements with partial aggregates */
+	if ((patype == PARTITIONWISE_AGGREGATE_PARTIAL) && havingQual)
 		return false;
 
 	/* Get the fpinfo of the underlying scan relation. */
@@ -6619,6 +6627,7 @@ postgresGetForeignUpperPaths(PlannerInfo *root, UpperRelationKind stage,
 
 	/* Ignore stages we don't support; and skip any duplicate calls. */
 	if ((stage != UPPERREL_GROUP_AGG &&
+		stage != UPPERREL_PARTIAL_GROUP_AGG &&
 		 stage != UPPERREL_ORDERED &&
 		 stage != UPPERREL_FINAL) ||
 		output_rel->fdw_private)
@@ -6634,6 +6643,10 @@ postgresGetForeignUpperPaths(PlannerInfo *root, UpperRelationKind stage,
 		case UPPERREL_GROUP_AGG:
 			add_foreign_grouping_paths(root, input_rel, output_rel,
 									   (GroupPathExtraData *) extra);
+			break;
+		case UPPERREL_PARTIAL_GROUP_AGG:
+			add_foreign_grouping_paths(root, input_rel, output_rel,
+									   (GroupPathExtraData*)extra);
 			break;
 		case UPPERREL_ORDERED:
 			add_foreign_ordered_paths(root, input_rel, output_rel);
@@ -6675,7 +6688,8 @@ add_foreign_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
 		return;
 
 	Assert(extra->patype == PARTITIONWISE_AGGREGATE_NONE ||
-		   extra->patype == PARTITIONWISE_AGGREGATE_FULL);
+		   extra->patype == PARTITIONWISE_AGGREGATE_FULL ||
+		   extra->patype == PARTITIONWISE_AGGREGATE_PARTIAL);
 
 	/* save the input_rel as outerrel in fpinfo */
 	fpinfo->outerrel = input_rel;
@@ -6695,7 +6709,7 @@ add_foreign_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
 	 * Use HAVING qual from extra. In case of child partition, it will have
 	 * translated Vars.
 	 */
-	if (!foreign_grouping_ok(root, grouped_rel, extra->havingQual))
+	if (!foreign_grouping_ok(root, grouped_rel, extra->havingQual, extra->patype))
 		return;
 
 	/*

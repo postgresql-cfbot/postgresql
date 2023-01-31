@@ -227,6 +227,27 @@ postgres_fdw_validator(PG_FUNCTION_ARGS)
 						 errmsg("invalid value for string option \"%s\": %s",
 								def->defname, value)));
 		}
+		else if (strcmp(def->defname, "server_version") == 0)
+		{
+			char* value;
+			int			int_val;
+			bool		is_parsed;
+
+			value = defGetString(def);
+			is_parsed = parse_int(value, &int_val, 0, NULL);
+
+			if (!is_parsed)
+				ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						errmsg("invalid value for integer option \"%s\": %s",
+							def->defname, value)));
+
+			if (int_val <= 0)
+				ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						errmsg("\"%s\" must be an integer value greater than zero",
+							def->defname)));
+		}
 	}
 
 	PG_RETURN_VOID();
@@ -285,6 +306,9 @@ InitPgFdwOptions(void)
 		 */
 		{"sslcert", UserMappingRelationId, true},
 		{"sslkey", UserMappingRelationId, true},
+
+		/* options for partial aggregation pushdown */
+		{"server_version", ForeignServerRelationId, false},
 
 		{NULL, InvalidOid, false}
 	};

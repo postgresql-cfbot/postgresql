@@ -328,3 +328,27 @@ CREATE AGGREGATE case_agg(float8)
 	"Finalfunc_modify" = read_write,
 	"Parallel" = safe
 );
+
+-- invalid: partialaggfunc which doesn't exist
+CREATE AGGREGATE haspartialagg_agg(int8) (
+	sfunc = int8_avg_accum,
+	stype = internal,
+	combinefunc = int8_avg_combine,
+	finalfunc = numeric_poly_sum,
+	serialfunc = int8_avg_serialize,
+	deserialfunc = int8_avg_deserialize,
+	partialaggfunc = partialagg_foo,
+	partialagg_minversion = 160000
+);
+
+-- invalid: partialagg_minversion is not integer
+CREATE AGGREGATE haspartialagg_agg(int8) (
+	sfunc = int8_avg_accum,
+	stype = internal,
+	combinefunc = int8_avg_combine,
+	finalfunc = numeric_poly_sum,
+	serialfunc = int8_avg_serialize,
+	deserialfunc = int8_avg_deserialize,
+	partialaggfunc = partialagg_foo,
+	partialagg_minversion = aaa
+);

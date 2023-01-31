@@ -145,6 +145,7 @@ NOTICE:  checking pg_aggregate {aggfinalfn} => pg_proc {oid}
 NOTICE:  checking pg_aggregate {aggcombinefn} => pg_proc {oid}
 NOTICE:  checking pg_aggregate {aggserialfn} => pg_proc {oid}
 NOTICE:  checking pg_aggregate {aggdeserialfn} => pg_proc {oid}
+NOTICE:  checking pg_aggregate {partialaggfn} => pg_proc {oid}
 NOTICE:  checking pg_aggregate {aggmtransfn} => pg_proc {oid}
 NOTICE:  checking pg_aggregate {aggminvtransfn} => pg_proc {oid}
 NOTICE:  checking pg_aggregate {aggmfinalfn} => pg_proc {oid}

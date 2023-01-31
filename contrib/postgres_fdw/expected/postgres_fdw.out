@@ -9677,13 +9677,34 @@ RESET enable_partitionwise_join;
 -- ===================================================================
 -- test partitionwise aggregates
 -- ===================================================================
-CREATE TABLE pagg_tab (a int, b int, c text) PARTITION BY RANGE(a);
+CREATE OR REPLACE FUNCTION f_server_version_lag(version_offset int4) RETURNS text AS $$
+    SELECT (setting::int4 + version_offset)::text FROM pg_settings WHERE name = 'server_version_num';
+$$ LANGUAGE sql;
+CREATE OR REPLACE FUNCTION f_alter_server_version(server_name text, operation text, version_offset int4) RETURNS void AS $$
+    DECLARE
+        version_num text;
+    BEGIN
+        EXECUTE 'SELECT f_server_version_lag($1) '
+            INTO version_num
+            USING version_offset;
+        EXECUTE format('ALTER SERVER %I OPTIONS (%I server_version %L)',
+            server_name, operation, version_num);
+        RETURN;
+    END;
+$$ LANGUAGE plpgsql;
+SELECT f_alter_server_version('loopback', 'add', 0);
+ f_alter_server_version 
+------------------------
+ 
+(1 row)
+
+CREATE TABLE pagg_tab (a int, b int, c text, d int4) PARTITION BY RANGE(a);
 CREATE TABLE pagg_tab_p1 (LIKE pagg_tab);
 CREATE TABLE pagg_tab_p2 (LIKE pagg_tab);
 CREATE TABLE pagg_tab_p3 (LIKE pagg_tab);
-INSERT INTO pagg_tab_p1 SELECT i % 30, i % 50, to_char(i/30, 'FM0000') FROM generate_series(1, 3000) i WHERE (i % 30) < 10;
-INSERT INTO pagg_tab_p2 SELECT i % 30, i % 50, to_char(i/30, 'FM0000') FROM generate_series(1, 3000) i WHERE (i % 30) < 20 and (i % 30) >= 10;
-INSERT INTO pagg_tab_p3 SELECT i % 30, i % 50, to_char(i/30, 'FM0000') FROM generate_series(1, 3000) i WHERE (i % 30) < 30 and (i % 30) >= 20;
+INSERT INTO pagg_tab_p1 SELECT i % 30, i % 50, to_char(i/30, 'FM0000'), i % 40 FROM generate_series(1, 3000) i WHERE (i % 30) < 10;
+INSERT INTO pagg_tab_p2 SELECT i % 30, i % 50, to_char(i/30, 'FM0000'), i % 40 FROM generate_series(1, 3000) i WHERE (i % 30) < 20 and (i % 30) >= 10;
+INSERT INTO pagg_tab_p3 SELECT i % 30, i % 50, to_char(i/30, 'FM0000'), i % 40 FROM generate_series(1, 3000) i WHERE (i % 30) < 30 and (i % 30) >= 20;
 -- Create foreign partitions
 CREATE FOREIGN TABLE fpagg_tab_p1 PARTITION OF pagg_tab FOR VALUES FROM (0) TO (10) SERVER loopback OPTIONS (table_name 'pagg_tab_p1');
 CREATE FOREIGN TABLE fpagg_tab_p2 PARTITION OF pagg_tab FOR VALUES FROM (10) TO (20) SERVER loopback OPTIONS (table_name 'pagg_tab_p2');
@@ -9742,8 +9763,8 @@ SELECT a, sum(b), min(b), count(*) FROM pagg_tab GROUP BY a HAVING avg(b) < 22 O
 -- Should have all the columns in the target list for the given relation
 EXPLAIN (VERBOSE, COSTS OFF)
 SELECT a, count(t1) FROM pagg_tab t1 GROUP BY a HAVING avg(b) < 22 ORDER BY 1;
-                               QUERY PLAN                               
-------------------------------------------------------------------------
+                                QUERY PLAN                                 
+---------------------------------------------------------------------------
  Sort
    Output: t1.a, (count(((t1.*)::pagg_tab)))
    Sort Key: t1.a
@@ -9754,21 +9775,21 @@ SELECT a, count(t1) FROM pagg_tab t1 GROUP BY a HAVING avg(b) < 22 ORDER BY 1;
                Filter: (avg(t1.b) < '22'::numeric)
                ->  Foreign Scan on public.fpagg_tab_p1 t1
                      Output: t1.a, t1.*, t1.b
-                     Remote SQL: SELECT a, b, c FROM public.pagg_tab_p1
+                     Remote SQL: SELECT a, b, c, d FROM public.pagg_tab_p1
          ->  HashAggregate
                Output: t1_1.a, count(((t1_1.*)::pagg_tab))
                Group Key: t1_1.a
                Filter: (avg(t1_1.b) < '22'::numeric)
                ->  Foreign Scan on public.fpagg_tab_p2 t1_1
                      Output: t1_1.a, t1_1.*, t1_1.b
-                     Remote SQL: SELECT a, b, c FROM public.pagg_tab_p2
+                     Remote SQL: SELECT a, b, c, d FROM public.pagg_tab_p2
          ->  HashAggregate
                Output: t1_2.a, count(((t1_2.*)::pagg_tab))
                Group Key: t1_2.a
                Filter: (avg(t1_2.b) < '22'::numeric)
                ->  Foreign Scan on public.fpagg_tab_p3 t1_2
                      Output: t1_2.a, t1_2.*, t1_2.b
-                     Remote SQL: SELECT a, b, c FROM public.pagg_tab_p3
+                     Remote SQL: SELECT a, b, c, d FROM public.pagg_tab_p3
 (25 rows)
 
 SELECT a, count(t1) FROM pagg_tab t1 GROUP BY a HAVING avg(b) < 22 ORDER BY 1;
@@ -9804,6 +9825,263 @@ SELECT b, avg(a), max(a), count(*) FROM pagg_tab GROUP BY b HAVING sum(a) < 700 
                      ->  Foreign Scan on fpagg_tab_p3 pagg_tab_2
 (15 rows)
 
+-- It's unsafe to push down having clause when there are partial aggregates
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT b, max(a), count(*) FROM pagg_tab GROUP BY b HAVING sum(a) < 700 ORDER BY 1;
+                                                    QUERY PLAN                                                    
+------------------------------------------------------------------------------------------------------------------
+ Sort
+   Output: pagg_tab.b, (max(pagg_tab.a)), (count(*))
+   Sort Key: pagg_tab.b
+   ->  Finalize HashAggregate
+         Output: pagg_tab.b, max(pagg_tab.a), count(*)
+         Group Key: pagg_tab.b
+         Filter: (sum(pagg_tab.a) < 700)
+         ->  Append
+               ->  Partial HashAggregate
+                     Output: pagg_tab.b, PARTIAL max(pagg_tab.a), PARTIAL count(*), PARTIAL sum(pagg_tab.a)
+                     Group Key: pagg_tab.b
+                     ->  Foreign Scan on public.fpagg_tab_p1 pagg_tab
+                           Output: pagg_tab.b, pagg_tab.a
+                           Remote SQL: SELECT a, b FROM public.pagg_tab_p1
+               ->  Partial HashAggregate
+                     Output: pagg_tab_1.b, PARTIAL max(pagg_tab_1.a), PARTIAL count(*), PARTIAL sum(pagg_tab_1.a)
+                     Group Key: pagg_tab_1.b
+                     ->  Foreign Scan on public.fpagg_tab_p2 pagg_tab_1
+                           Output: pagg_tab_1.b, pagg_tab_1.a
+                           Remote SQL: SELECT a, b FROM public.pagg_tab_p2
+               ->  Partial HashAggregate
+                     Output: pagg_tab_2.b, PARTIAL max(pagg_tab_2.a), PARTIAL count(*), PARTIAL sum(pagg_tab_2.a)
+                     Group Key: pagg_tab_2.b
+                     ->  Foreign Scan on public.fpagg_tab_p3 pagg_tab_2
+                           Output: pagg_tab_2.b, pagg_tab_2.a
+                           Remote SQL: SELECT a, b FROM public.pagg_tab_p3
+(26 rows)
+
+-- Partial aggregates are fine to push down without having clause
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT b, min(a), max(a), count(*), sum(d), sum(d::int8), avg(d), avg(d::int8) FROM pagg_tab GROUP BY b ORDER BY 1;
+                                                                                                                           QUERY PLAN                                                                                                                           
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Sort
+   Output: pagg_tab.b, (min(pagg_tab.a)), (max(pagg_tab.a)), (count(*)), (sum(pagg_tab.d)), (sum((pagg_tab.d)::bigint)), (avg(pagg_tab.d)), (avg((pagg_tab.d)::bigint))
+   Sort Key: pagg_tab.b
+   ->  Finalize HashAggregate
+         Output: pagg_tab.b, min(pagg_tab.a), max(pagg_tab.a), count(*), sum(pagg_tab.d), sum((pagg_tab.d)::bigint), avg(pagg_tab.d), avg((pagg_tab.d)::bigint)
+         Group Key: pagg_tab.b
+         ->  Append
+               ->  Foreign Scan
+                     Output: pagg_tab.b, (PARTIAL min(pagg_tab.a)), (PARTIAL max(pagg_tab.a)), (PARTIAL count(*)), (PARTIAL sum(pagg_tab.d)), (PARTIAL sum((pagg_tab.d)::bigint)), (PARTIAL avg(pagg_tab.d)), (PARTIAL avg((pagg_tab.d)::bigint))
+                     Relations: Aggregate on (public.fpagg_tab_p1 pagg_tab)
+                     Remote SQL: SELECT b, min(a), max(a), count(*), sum(d), sum_p_int8(d::bigint), avg_p_int4(d), avg_p_int8(d::bigint) FROM public.pagg_tab_p1 GROUP BY 1
+               ->  Foreign Scan
+                     Output: pagg_tab_1.b, (PARTIAL min(pagg_tab_1.a)), (PARTIAL max(pagg_tab_1.a)), (PARTIAL count(*)), (PARTIAL sum(pagg_tab_1.d)), (PARTIAL sum((pagg_tab_1.d)::bigint)), (PARTIAL avg(pagg_tab_1.d)), (PARTIAL avg((pagg_tab_1.d)::bigint))
+                     Relations: Aggregate on (public.fpagg_tab_p2 pagg_tab_1)
+                     Remote SQL: SELECT b, min(a), max(a), count(*), sum(d), sum_p_int8(d::bigint), avg_p_int4(d), avg_p_int8(d::bigint) FROM public.pagg_tab_p2 GROUP BY 1
+               ->  Foreign Scan
+                     Output: pagg_tab_2.b, (PARTIAL min(pagg_tab_2.a)), (PARTIAL max(pagg_tab_2.a)), (PARTIAL count(*)), (PARTIAL sum(pagg_tab_2.d)), (PARTIAL sum((pagg_tab_2.d)::bigint)), (PARTIAL avg(pagg_tab_2.d)), (PARTIAL avg((pagg_tab_2.d)::bigint))
+                     Relations: Aggregate on (public.fpagg_tab_p3 pagg_tab_2)
+                     Remote SQL: SELECT b, min(a), max(a), count(*), sum(d), sum_p_int8(d::bigint), avg_p_int4(d), avg_p_int8(d::bigint) FROM public.pagg_tab_p3 GROUP BY 1
+(19 rows)
+
+SELECT b, min(a), max(a), count(*), sum(d), sum(d::int8), avg(d), avg(d::int8) FROM pagg_tab GROUP BY b ORDER BY 1;
+ b  | min | max | count | sum  | sum  |         avg         |         avg         
+----+-----+-----+-------+------+------+---------------------+---------------------
+  0 |   0 |  20 |    60 |  900 |  900 | 15.0000000000000000 | 15.0000000000000000
+  1 |   1 |  21 |    60 |  960 |  960 | 16.0000000000000000 | 16.0000000000000000
+  2 |   2 |  22 |    60 | 1020 | 1020 | 17.0000000000000000 | 17.0000000000000000
+  3 |   3 |  23 |    60 | 1080 | 1080 | 18.0000000000000000 | 18.0000000000000000
+  4 |   4 |  24 |    60 | 1140 | 1140 | 19.0000000000000000 | 19.0000000000000000
+  5 |   5 |  25 |    60 | 1200 | 1200 | 20.0000000000000000 | 20.0000000000000000
+  6 |   6 |  26 |    60 | 1260 | 1260 | 21.0000000000000000 | 21.0000000000000000
+  7 |   7 |  27 |    60 | 1320 | 1320 | 22.0000000000000000 | 22.0000000000000000
+  8 |   8 |  28 |    60 | 1380 | 1380 | 23.0000000000000000 | 23.0000000000000000
+  9 |   9 |  29 |    60 | 1440 | 1440 | 24.0000000000000000 | 24.0000000000000000
+ 10 |   0 |  20 |    60 |  900 |  900 | 15.0000000000000000 | 15.0000000000000000
+ 11 |   1 |  21 |    60 |  960 |  960 | 16.0000000000000000 | 16.0000000000000000
+ 12 |   2 |  22 |    60 | 1020 | 1020 | 17.0000000000000000 | 17.0000000000000000
+ 13 |   3 |  23 |    60 | 1080 | 1080 | 18.0000000000000000 | 18.0000000000000000
+ 14 |   4 |  24 |    60 | 1140 | 1140 | 19.0000000000000000 | 19.0000000000000000
+ 15 |   5 |  25 |    60 | 1200 | 1200 | 20.0000000000000000 | 20.0000000000000000
+ 16 |   6 |  26 |    60 | 1260 | 1260 | 21.0000000000000000 | 21.0000000000000000
+ 17 |   7 |  27 |    60 | 1320 | 1320 | 22.0000000000000000 | 22.0000000000000000
+ 18 |   8 |  28 |    60 | 1380 | 1380 | 23.0000000000000000 | 23.0000000000000000
+ 19 |   9 |  29 |    60 | 1440 | 1440 | 24.0000000000000000 | 24.0000000000000000
+ 20 |   0 |  20 |    60 |  900 |  900 | 15.0000000000000000 | 15.0000000000000000
+ 21 |   1 |  21 |    60 |  960 |  960 | 16.0000000000000000 | 16.0000000000000000
+ 22 |   2 |  22 |    60 | 1020 | 1020 | 17.0000000000000000 | 17.0000000000000000
+ 23 |   3 |  23 |    60 | 1080 | 1080 | 18.0000000000000000 | 18.0000000000000000
+ 24 |   4 |  24 |    60 | 1140 | 1140 | 19.0000000000000000 | 19.0000000000000000
+ 25 |   5 |  25 |    60 | 1200 | 1200 | 20.0000000000000000 | 20.0000000000000000
+ 26 |   6 |  26 |    60 | 1260 | 1260 | 21.0000000000000000 | 21.0000000000000000
+ 27 |   7 |  27 |    60 | 1320 | 1320 | 22.0000000000000000 | 22.0000000000000000
+ 28 |   8 |  28 |    60 | 1380 | 1380 | 23.0000000000000000 | 23.0000000000000000
+ 29 |   9 |  29 |    60 | 1440 | 1440 | 24.0000000000000000 | 24.0000000000000000
+ 30 |   0 |  20 |    60 |  900 |  900 | 15.0000000000000000 | 15.0000000000000000
+ 31 |   1 |  21 |    60 |  960 |  960 | 16.0000000000000000 | 16.0000000000000000
+ 32 |   2 |  22 |    60 | 1020 | 1020 | 17.0000000000000000 | 17.0000000000000000
+ 33 |   3 |  23 |    60 | 1080 | 1080 | 18.0000000000000000 | 18.0000000000000000
+ 34 |   4 |  24 |    60 | 1140 | 1140 | 19.0000000000000000 | 19.0000000000000000
+ 35 |   5 |  25 |    60 | 1200 | 1200 | 20.0000000000000000 | 20.0000000000000000
+ 36 |   6 |  26 |    60 | 1260 | 1260 | 21.0000000000000000 | 21.0000000000000000
+ 37 |   7 |  27 |    60 | 1320 | 1320 | 22.0000000000000000 | 22.0000000000000000
+ 38 |   8 |  28 |    60 | 1380 | 1380 | 23.0000000000000000 | 23.0000000000000000
+ 39 |   9 |  29 |    60 | 1440 | 1440 | 24.0000000000000000 | 24.0000000000000000
+ 40 |   0 |  20 |    60 |  900 |  900 | 15.0000000000000000 | 15.0000000000000000
+ 41 |   1 |  21 |    60 |  960 |  960 | 16.0000000000000000 | 16.0000000000000000
+ 42 |   2 |  22 |    60 | 1020 | 1020 | 17.0000000000000000 | 17.0000000000000000
+ 43 |   3 |  23 |    60 | 1080 | 1080 | 18.0000000000000000 | 18.0000000000000000
+ 44 |   4 |  24 |    60 | 1140 | 1140 | 19.0000000000000000 | 19.0000000000000000
+ 45 |   5 |  25 |    60 | 1200 | 1200 | 20.0000000000000000 | 20.0000000000000000
+ 46 |   6 |  26 |    60 | 1260 | 1260 | 21.0000000000000000 | 21.0000000000000000
+ 47 |   7 |  27 |    60 | 1320 | 1320 | 22.0000000000000000 | 22.0000000000000000
+ 48 |   8 |  28 |    60 | 1380 | 1380 | 23.0000000000000000 | 23.0000000000000000
+ 49 |   9 |  29 |    60 | 1440 | 1440 | 24.0000000000000000 | 24.0000000000000000
+(50 rows)
+
+-- Partial aggregates are fine to push down
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT min(a), max(a), count(*), sum(d), sum(d::int8), avg(d), avg(d::int8) FROM pagg_tab;
+                                                                                                                 QUERY PLAN                                                                                                                 
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Finalize Aggregate
+   Output: min(pagg_tab.a), max(pagg_tab.a), count(*), sum(pagg_tab.d), sum((pagg_tab.d)::bigint), avg(pagg_tab.d), avg((pagg_tab.d)::bigint)
+   ->  Append
+         ->  Foreign Scan
+               Output: (PARTIAL min(pagg_tab.a)), (PARTIAL max(pagg_tab.a)), (PARTIAL count(*)), (PARTIAL sum(pagg_tab.d)), (PARTIAL sum((pagg_tab.d)::bigint)), (PARTIAL avg(pagg_tab.d)), (PARTIAL avg((pagg_tab.d)::bigint))
+               Relations: Aggregate on (public.fpagg_tab_p1 pagg_tab)
+               Remote SQL: SELECT min(a), max(a), count(*), sum(d), sum_p_int8(d::bigint), avg_p_int4(d), avg_p_int8(d::bigint) FROM public.pagg_tab_p1
+         ->  Foreign Scan
+               Output: (PARTIAL min(pagg_tab_1.a)), (PARTIAL max(pagg_tab_1.a)), (PARTIAL count(*)), (PARTIAL sum(pagg_tab_1.d)), (PARTIAL sum((pagg_tab_1.d)::bigint)), (PARTIAL avg(pagg_tab_1.d)), (PARTIAL avg((pagg_tab_1.d)::bigint))
+               Relations: Aggregate on (public.fpagg_tab_p2 pagg_tab_1)
+               Remote SQL: SELECT min(a), max(a), count(*), sum(d), sum_p_int8(d::bigint), avg_p_int4(d), avg_p_int8(d::bigint) FROM public.pagg_tab_p2
+         ->  Foreign Scan
+               Output: (PARTIAL min(pagg_tab_2.a)), (PARTIAL max(pagg_tab_2.a)), (PARTIAL count(*)), (PARTIAL sum(pagg_tab_2.d)), (PARTIAL sum((pagg_tab_2.d)::bigint)), (PARTIAL avg(pagg_tab_2.d)), (PARTIAL avg((pagg_tab_2.d)::bigint))
+               Relations: Aggregate on (public.fpagg_tab_p3 pagg_tab_2)
+               Remote SQL: SELECT min(a), max(a), count(*), sum(d), sum_p_int8(d::bigint), avg_p_int4(d), avg_p_int8(d::bigint) FROM public.pagg_tab_p3
+(15 rows)
+
+SELECT min(a), max(a), count(*), sum(d), sum(d::int8), avg(d), avg(d::int8) FROM pagg_tab;
+ min | max | count |  sum  |  sum  |         avg         |         avg         
+-----+-----+-------+-------+-------+---------------------+---------------------
+   0 |  29 |  3000 | 58500 | 58500 | 19.5000000000000000 | 19.5000000000000000
+(1 row)
+
+-- It's unsafe to push down partial aggregates which contains distinct clause
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT max(a), count(distinct b) FROM pagg_tab;
+                                       QUERY PLAN                                        
+-----------------------------------------------------------------------------------------
+ Aggregate
+   Output: max(pagg_tab.a), count(DISTINCT pagg_tab.b)
+   ->  Merge Append
+         Sort Key: pagg_tab.b
+         ->  Foreign Scan on public.fpagg_tab_p1 pagg_tab_1
+               Output: pagg_tab_1.a, pagg_tab_1.b
+               Remote SQL: SELECT a, b FROM public.pagg_tab_p1 ORDER BY b ASC NULLS LAST
+         ->  Foreign Scan on public.fpagg_tab_p2 pagg_tab_2
+               Output: pagg_tab_2.a, pagg_tab_2.b
+               Remote SQL: SELECT a, b FROM public.pagg_tab_p2 ORDER BY b ASC NULLS LAST
+         ->  Foreign Scan on public.fpagg_tab_p3 pagg_tab_3
+               Output: pagg_tab_3.a, pagg_tab_3.b
+               Remote SQL: SELECT a, b FROM public.pagg_tab_p3 ORDER BY b ASC NULLS LAST
+(13 rows)
+
+SELECT max(a), count(distinct b) FROM pagg_tab;
+ max | count 
+-----+-------
+  29 |    50
+(1 row)
+
+-- It's unsafe to push down partial aggregates when
+-- server_version is older than partialagg_minversion, described by pg_aggregate
+SELECT f_alter_server_version('loopback', 'set', -1);
+ f_alter_server_version 
+------------------------
+ 
+(1 row)
+
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT avg(d) FROM pagg_tab;
+                            QUERY PLAN                            
+------------------------------------------------------------------
+ Finalize Aggregate
+   Output: avg(pagg_tab.d)
+   ->  Append
+         ->  Partial Aggregate
+               Output: PARTIAL avg(pagg_tab.d)
+               ->  Foreign Scan on public.fpagg_tab_p1 pagg_tab
+                     Output: pagg_tab.d
+                     Remote SQL: SELECT d FROM public.pagg_tab_p1
+         ->  Partial Aggregate
+               Output: PARTIAL avg(pagg_tab_1.d)
+               ->  Foreign Scan on public.fpagg_tab_p2 pagg_tab_1
+                     Output: pagg_tab_1.d
+                     Remote SQL: SELECT d FROM public.pagg_tab_p2
+         ->  Partial Aggregate
+               Output: PARTIAL avg(pagg_tab_2.d)
+               ->  Foreign Scan on public.fpagg_tab_p3 pagg_tab_2
+                     Output: pagg_tab_2.d
+                     Remote SQL: SELECT d FROM public.pagg_tab_p3
+(18 rows)
+
+SELECT avg(d) FROM pagg_tab;
+         avg         
+---------------------
+ 19.5000000000000000
+(1 row)
+
+-- It's safe to push down partial aggregate for user defined aggregate
+-- which has valid options.
+CREATE AGGREGATE postgres_fdw_sum_p_int8(int8) (
+	SFUNC = int8_avg_accum,
+	STYPE = internal,
+	FINALFUNC = int8_avg_serialize
+);
+CREATE AGGREGATE postgres_fdw_sum(int8) (
+	SFUNC = int8_avg_accum,
+	STYPE = internal,
+	COMBINEFUNC = int8_avg_combine,
+	FINALFUNC = numeric_poly_sum,
+	SERIALFUNC = int8_avg_serialize,
+	DESERIALFUNC = int8_avg_deserialize,
+	PARTIALAGGFUNC = postgres_fdw_sum_p_int8,
+	PARTIALAGG_MINVERSION = 150000
+);
+ALTER EXTENSION postgres_fdw ADD FUNCTION postgres_fdw_sum(int8);
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT postgres_fdw_sum(d::int8) FROM pagg_tab;
+                                             QUERY PLAN                                             
+----------------------------------------------------------------------------------------------------
+ Finalize Aggregate
+   Output: postgres_fdw_sum((pagg_tab.d)::bigint)
+   ->  Append
+         ->  Foreign Scan
+               Output: (PARTIAL postgres_fdw_sum((pagg_tab.d)::bigint))
+               Relations: Aggregate on (public.fpagg_tab_p1 pagg_tab)
+               Remote SQL: SELECT public.postgres_fdw_sum_p_int8(d::bigint) FROM public.pagg_tab_p1
+         ->  Foreign Scan
+               Output: (PARTIAL postgres_fdw_sum((pagg_tab_1.d)::bigint))
+               Relations: Aggregate on (public.fpagg_tab_p2 pagg_tab_1)
+               Remote SQL: SELECT public.postgres_fdw_sum_p_int8(d::bigint) FROM public.pagg_tab_p2
+         ->  Foreign Scan
+               Output: (PARTIAL postgres_fdw_sum((pagg_tab_2.d)::bigint))
+               Relations: Aggregate on (public.fpagg_tab_p3 pagg_tab_2)
+               Remote SQL: SELECT public.postgres_fdw_sum_p_int8(d::bigint) FROM public.pagg_tab_p3
+(15 rows)
+
+SELECT postgres_fdw_sum(d::int8) FROM pagg_tab;
+ postgres_fdw_sum 
+------------------
+            58500
+(1 row)
+
+ALTER EXTENSION postgres_fdw DROP FUNCTION postgres_fdw_sum(int8);
+DROP AGGREGATE postgres_fdw_sum(int8);
+DROP AGGREGATE postgres_fdw_sum_p_int8(int8);
+DROP FUNCTION f_server_version_lag(int4);
+DROP FUNCTION f_alter_server_version(text, text, int4);
+ALTER SERVER loopback OPTIONS (DROP server_version);
 -- ===================================================================
 -- access rights and superuser
 -- ===================================================================

@@ -63,6 +63,7 @@ AggregateCreate(const char *aggName,
 				List *aggmtransfnName,
 				List *aggminvtransfnName,
 				List *aggmfinalfnName,
+				List *partialaggfnName,
 				bool finalfnExtraArgs,
 				bool mfinalfnExtraArgs,
 				char finalfnModify,
@@ -72,6 +73,7 @@ AggregateCreate(const char *aggName,
 				int32 aggTransSpace,
 				Oid aggmTransType,
 				int32 aggmTransSpace,
+				int32 partialaggMinversion,
 				const char *agginitval,
 				const char *aggminitval,
 				char proparallel)
@@ -91,6 +93,7 @@ AggregateCreate(const char *aggName,
 	Oid			mtransfn = InvalidOid;	/* can be omitted */
 	Oid			minvtransfn = InvalidOid;	/* can be omitted */
 	Oid			mfinalfn = InvalidOid;	/* can be omitted */
+	Oid			partialaggfn = InvalidOid;	/* can be omitted */
 	Oid			sortop = InvalidOid;	/* can be omitted */
 	Oid		   *aggArgTypes = parameterTypes->values;
 	bool		mtransIsStrict = false;
@@ -569,6 +572,33 @@ AggregateCreate(const char *aggName,
 							format_type_be(finaltype))));
 	}
 
+	/*
+	 * Validate the partial aggregate function, if present.
+	 */
+	if (partialaggfnName)
+	{
+		HeapTuple aggtup;
+		partialaggfn = LookupFuncName(partialaggfnName, numArgs, aggArgTypes, false);
+
+		/* Check aggregate creator has permission to call the function */
+		aclresult = object_aclcheck(ProcedureRelationId, partialaggfn, GetUserId(), ACL_EXECUTE);
+		if (aclresult != ACLCHECK_OK)
+			aclcheck_error(aclresult, OBJECT_FUNCTION, get_func_name(partialaggfn));
+
+		rettype = get_func_rettype(partialaggfn);
+
+		if (((aggTransType == INTERNALOID) && (rettype != BYTEAOID))
+			|| ((aggTransType != INTERNALOID) && (rettype != aggTransType)))
+			ereport(ERROR,
+				(errcode(ERRCODE_DATATYPE_MISMATCH),
+					errmsg("return type of partialaggfunc of %s is not stype",
+						NameListToString(partialaggfnName))));
+		aggtup = SearchSysCache1(AGGFNOID, ObjectIdGetDatum(partialaggfn));
+		if (!HeapTupleIsValid(aggtup))
+			elog(ERROR, "cache lookup failed for partialaggfunc %u", partialaggfn);
+		ReleaseSysCache(aggtup);
+	}
+
 	/* handle sortop, if supplied */
 	if (aggsortopName)
 	{
@@ -684,6 +714,8 @@ AggregateCreate(const char *aggName,
 		values[Anum_pg_aggregate_aggminitval - 1] = CStringGetTextDatum(aggminitval);
 	else
 		nulls[Anum_pg_aggregate_aggminitval - 1] = true;
+	values[Anum_pg_aggregate_partialaggfn - 1] = ObjectIdGetDatum(partialaggfn);
+	values[Anum_pg_aggregate_partialagg_minversion - 1] = Int32GetDatum(partialaggMinversion);
 
 	if (replace)
 		oldtup = SearchSysCache1(AGGFNOID, ObjectIdGetDatum(procOid));

@@ -202,7 +202,7 @@ static bool is_subquery_var(Var *node, RelOptInfo *foreignrel,
 							int *relno, int *colno);
 static void get_relation_column_alias_ids(Var *node, RelOptInfo *foreignrel,
 										  int *relno, int *colno);
-
+static bool partial_agg_ok(Aggref* agg, PgFdwRelationInfo* fpinfo);
 
 /*
  * Examine each qual clause in input_conds, and classify them into two groups,
@@ -907,8 +907,9 @@ foreign_expr_walker(Node *node,
 				if (!IS_UPPER_REL(glob_cxt->foreignrel))
 					return false;
 
-				/* Only non-split aggregates are pushable. */
-				if (agg->aggsplit != AGGSPLIT_SIMPLE)
+				if ((agg->aggsplit != AGGSPLIT_SIMPLE) && (agg->aggsplit != AGGSPLIT_INITIAL_SERIAL))
+					return false;
+				if (agg->aggsplit == AGGSPLIT_INITIAL_SERIAL && !partial_agg_ok(agg, fpinfo))
 					return false;
 
 				/* As usual, it must be shippable. */
@@ -3517,14 +3518,37 @@ deparseAggref(Aggref *node, deparse_expr_cxt *context)
 	StringInfo	buf = context->buf;
 	bool		use_variadic;
 
-	/* Only basic, non-split aggregation accepted. */
-	Assert(node->aggsplit == AGGSPLIT_SIMPLE);
+
+	Assert((node->aggsplit == AGGSPLIT_SIMPLE) ||
+		(node->aggsplit == AGGSPLIT_INITIAL_SERIAL));
 
 	/* Check if need to print VARIADIC (cf. ruleutils.c) */
 	use_variadic = node->aggvariadic;
 
-	/* Find aggregate name from aggfnoid which is a pg_proc entry */
-	appendFunctionName(node->aggfnoid, context);
+	if (node->aggsplit == AGGSPLIT_SIMPLE) {
+		/* Find aggregate name from aggfnoid which is a pg_proc entry */
+		appendFunctionName(node->aggfnoid, context);
+	}
+	else {
+		HeapTuple			aggtup;
+		Form_pg_aggregate	aggform;
+
+		/* Find aggregate name from aggfnoid or partialaggfn which is a pg_proc entry */
+		aggtup = SearchSysCache1(AGGFNOID, ObjectIdGetDatum(node->aggfnoid));
+		if (!HeapTupleIsValid(aggtup))
+			elog(ERROR, "cache lookup failed for aggregate %u", node->aggfnoid);
+		aggform = (Form_pg_aggregate)GETSTRUCT(aggtup);
+
+		if ((aggform->aggtranstype != INTERNALOID) && (aggform->aggfinalfn == InvalidOid)) {
+			appendFunctionName(node->aggfnoid, context);
+		} else if(aggform->partialaggfn) {
+			appendFunctionName(aggform->partialaggfn, context);
+		} else {
+			elog(ERROR, "there is no partialaggfn %u", node->aggfnoid);
+		}
+		ReleaseSysCache(aggtup);
+	}
+
 	appendStringInfoChar(buf, '(');
 
 	/* Add DISTINCT */
@@ -4046,4 +4070,63 @@ get_relation_column_alias_ids(Var *node, RelOptInfo *foreignrel,
 
 	/* Shouldn't get here */
 	elog(ERROR, "unexpected expression in subquery output");
+}
+
+/*
+ * Check that partial aggregate function, described by aggform,
+ * exists on remote server, described by fpinfo.
+ */
+static bool
+partial_agg_compatible(Form_pg_aggregate aggform, PgFdwRelationInfo *fpinfo)
+{
+	int32  partialagg_minversion = PG_VERSION_NUM;
+	if (aggform->partialagg_minversion != PARTIALAGG_MINVERSION_DEFAULT) {
+		partialagg_minversion = aggform->partialagg_minversion;
+	}
+	return (fpinfo->server_version >= partialagg_minversion);
+}
+
+/*
+ * Check that partial aggregate agg is fine to push down.
+ *
+ * It is fine when all of the following conditions are true.
+ * condition1) agg is AGGKIND_NORMAL aggregate which contains no distinct
+ *   or order by clauses
+ * condition2) there is an aggregate function for partial aggregation
+ *   (then we call this partialaggfunc) corresponding to agg.
+ *   condition2 is true when either of the following cases is true.
+ *   case2-1) return type of agg is not internal and agg has no finalfunc.
+ *     In this case, partialaggfunc is agg itself.
+ *   case2-2) agg has valid partialaggfn and partialagg_minversion <= server_version.
+ *     In this case, partialaggfunc is a aggregate function whose oid is partialaggfn.
+ */
+static bool
+partial_agg_ok(Aggref* agg, PgFdwRelationInfo *fpinfo)
+{
+	HeapTuple	aggtup;
+	Form_pg_aggregate aggform;
+	bool        partial_agg_ok = true;
+
+	Assert(agg->aggsplit == AGGSPLIT_INITIAL_SERIAL);
+
+	/* We don't support complex partial aggregates */
+	if (agg->aggdistinct || agg->aggkind != AGGKIND_NORMAL || agg->aggorder != NIL)
+		return false;
+
+	aggtup = SearchSysCache1(AGGFNOID, ObjectIdGetDatum(agg->aggfnoid));
+	if (!HeapTupleIsValid(aggtup))
+		elog(ERROR, "cache lookup failed for aggregate %u", agg->aggfnoid);
+	aggform = (Form_pg_aggregate)GETSTRUCT(aggtup);
+
+	if ((aggform->aggtranstype == INTERNALOID) || (aggform->aggfinalfn != InvalidOid)) {
+		/* Only aggregates which has partialaggfn, are allowed */
+		if (!aggform->partialaggfn) {
+			partial_agg_ok = false;
+		} else if (!partial_agg_compatible(aggform, fpinfo)) {
+			partial_agg_ok = false;
+		}
+	}
+
+	ReleaseSysCache(aggtup);
+	return partial_agg_ok;
 }

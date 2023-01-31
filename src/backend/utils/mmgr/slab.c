@@ -69,6 +69,7 @@
 #include "postgres.h"
 
 #include "lib/ilist.h"
+#include "utils/backend_status.h"
 #include "utils/memdebug.h"
 #include "utils/memutils.h"
 #include "utils/memutils_memorychunk.h"
@@ -355,9 +356,12 @@ SlabContextCreate(MemoryContext parent,
 		elog(ERROR, "block size %zu for slab is too small for %zu-byte chunks",
 			 blockSize, chunkSize);
 
-
+	/* Do not exceed maximum allowed memory allocation */
+	if (exceeds_max_total_bkend_mem(Slab_CONTEXT_HDRSZ(chunksPerBlock)))
+		return NULL;
 
 	slab = (SlabContext *) malloc(Slab_CONTEXT_HDRSZ(chunksPerBlock));
+
 	if (slab == NULL)
 	{
 		MemoryContextStats(TopMemoryContext);
@@ -413,6 +417,13 @@ SlabContextCreate(MemoryContext parent,
 						parent,
 						name);
 
+	/*
+	 * If SlabContextCreate is updated to add context header size to
+	 * context->mem_allocated, then update here and SlabDelete appropriately
+	 */
+	pgstat_report_allocated_bytes(Slab_CONTEXT_HDRSZ(slab->chunksPerBlock),
+								  PG_ALLOC_INCREASE);
+
 	return (MemoryContext) slab;
 }
 
@@ -429,6 +440,7 @@ SlabReset(MemoryContext context)
 	SlabContext *slab = (SlabContext *) context;
 	dlist_mutable_iter miter;
 	int			i;
+	uint64		deallocation = 0;
 
 	Assert(SlabIsValid(slab));
 
@@ -465,9 +477,11 @@ SlabReset(MemoryContext context)
 #endif
 			free(block);
 			context->mem_allocated -= slab->blockSize;
+			deallocation += slab->blockSize;
 		}
 	}
 
+	pgstat_report_allocated_bytes(deallocation, PG_ALLOC_DECREASE);
 	slab->curBlocklistIndex = 0;
 
 	Assert(context->mem_allocated == 0);
@@ -480,8 +494,17 @@ SlabReset(MemoryContext context)
 void
 SlabDelete(MemoryContext context)
 {
+
 	/* Reset to release all the SlabBlocks */
 	SlabReset(context);
+
+	/*
+	 * Until context header allocation is included in context->mem_allocated,
+	 * cast to slab and decrement the header allocation
+	 */
+	pgstat_report_allocated_bytes(Slab_CONTEXT_HDRSZ(((SlabContext *)context)->chunksPerBlock),
+								  PG_ALLOC_DECREASE);
+
 	/* And free the context header */
 	free(context);
 }
@@ -539,6 +562,10 @@ SlabAlloc(MemoryContext context, Size size)
 		}
 		else
 		{
+			/* Do not exceed maximum allowed memory allocation */
+			if (exceeds_max_total_bkend_mem(slab->blockSize))
+				return NULL;
+
 			block = (SlabBlock *) malloc(slab->blockSize);
 
 			if (unlikely(block == NULL))
@@ -546,6 +573,7 @@ SlabAlloc(MemoryContext context, Size size)
 
 			block->slab = slab;
 			context->mem_allocated += slab->blockSize;
+			pgstat_report_allocated_bytes(slab->blockSize, PG_ALLOC_INCREASE);
 
 			/* use the first chunk in the new block */
 			chunk = SlabBlockGetChunk(slab, block, 0);
@@ -732,6 +760,7 @@ SlabFree(void *pointer)
 #endif
 			free(block);
 			slab->header.mem_allocated -= slab->blockSize;
+			pgstat_report_allocated_bytes(slab->blockSize, PG_ALLOC_DECREASE);
 		}
 
 		/*

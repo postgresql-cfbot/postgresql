@@ -2113,6 +2113,32 @@ include_dir 'conf.d'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-max-total-backend-memory" xreflabel="max_total_backend_memory">
+      <term><varname>max_total_backend_memory</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>max_total_backend_memory</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies a limit to the amount of memory (MB) that may be allocated to
+        backends in total (i.e. this is not a per user or per backend limit).
+        If unset, or set to 0 it is disabled.  A backend request that would
+        push the total over the limit will be denied with an out of memory
+        error causing that backend's current query/transaction to fail. Due to
+        the dynamic nature of memory allocations, this limit is not exact. If
+        within 1.5MB of the limit and two backends request 1MB each at the same
+        time both may be allocated, and exceed the limit. Further requests will
+        not be allocated until dropping below the limit. Keep this in mind when
+        setting this value. This limit does not affect auxiliary backend
+        processes <xref linkend="glossary-auxiliary-proc"/> . Backend memory
+        allocations (<varname>allocated_bytes</varname>) are displayed in the
+        <link linkend="monitoring-pg-stat-activity-view"><structname>pg_stat_activity</structname></link>
+        view.
+       </para>
+      </listitem>
+     </varlistentry>
+
      </variablelist>
      </sect2>
 

@@ -15,6 +15,7 @@
 #include "miscadmin.h"			/* for BackendType */
 #include "storage/backendid.h"
 #include "utils/backend_progress.h"
+#include "common/int.h"
 
 
 /* ----------
@@ -32,6 +33,13 @@ typedef enum BackendState
 	STATE_DISABLED
 } BackendState;
 
+/* Enum helper for reporting memory allocated bytes */
+enum allocation_direction
+{
+	PG_ALLOC_DECREASE = -1,
+	PG_ALLOC_IGNORE,
+	PG_ALLOC_INCREASE,
+};
 
 /* ----------
  * Shared-memory data structures
@@ -169,6 +177,9 @@ typedef struct PgBackendStatus
 
 	/* query identifier, optionally computed using post_parse_analyze_hook */
 	uint64		st_query_id;
+
+	/* Current memory allocated to this backend */
+	uint64		allocated_bytes;
 } PgBackendStatus;
 
 
@@ -286,6 +297,7 @@ typedef struct LocalPgBackendStatus
  */
 extern PGDLLIMPORT bool pgstat_track_activities;
 extern PGDLLIMPORT int pgstat_track_activity_query_size;
+extern PGDLLIMPORT int max_total_bkend_mem;
 
 
 /* ----------
@@ -293,6 +305,7 @@ extern PGDLLIMPORT int pgstat_track_activity_query_size;
  * ----------
  */
 extern PGDLLIMPORT PgBackendStatus *MyBEEntry;
+extern PGDLLIMPORT uint64 *my_allocated_bytes;
 
 
 /* ----------
@@ -324,7 +337,9 @@ extern const char *pgstat_get_backend_current_activity(int pid, bool checkUser);
 extern const char *pgstat_get_crashed_backend_activity(int pid, char *buffer,
 													   int buflen);
 extern uint64 pgstat_get_my_query_id(void);
-
+extern uint64 pgstat_get_all_backend_memory_allocated(void);
+extern void pgstat_set_allocated_bytes_storage(uint64 *allocated_bytes);
+extern void pgstat_reset_allocated_bytes_storage(void);
 
 /* ----------
  * Support functions for the SQL-callable functions to
@@ -335,6 +350,55 @@ extern int	pgstat_fetch_stat_numbackends(void);
 extern PgBackendStatus *pgstat_fetch_stat_beentry(BackendId beid);
 extern LocalPgBackendStatus *pgstat_fetch_stat_local_beentry(int beid);
 extern char *pgstat_clip_activity(const char *raw_activity);
+extern bool exceeds_max_total_bkend_mem(uint64 allocation_request);
 
+/* ----------
+ * pgstat_report_allocated_bytes() -
+ *
+ *  Called to report change in memory allocated for this backend.
+ *
+ * my_allocated_bytes initially points to local memory, making it safe to call
+ * this before pgstats has been initialized. allocation_direction is a
+ * positive/negative multiplier enum defined above.
+ * ----------
+ */
+static inline void
+pgstat_report_allocated_bytes(int64 allocated_bytes, int allocation_direction)
+{
+	uint64		temp;
+
+	/*
+	 * Avoid *my_allocated_bytes unsigned integer overflow on
+	 * PG_ALLOC_DECREASE
+	 */
+	if (allocation_direction == PG_ALLOC_DECREASE &&
+		pg_sub_u64_overflow(*my_allocated_bytes, allocated_bytes, &temp))
+	{
+		*my_allocated_bytes = 0;
+		ereport(LOG,
+				errmsg("Backend %d deallocated %lld bytes, exceeding the %llu bytes it is currently reporting allocated. Setting reported to 0.",
+					   MyProcPid, (long long) allocated_bytes,
+					   (unsigned long long) *my_allocated_bytes));
+	}
+	else
+		*my_allocated_bytes += (allocated_bytes) * allocation_direction;
+
+	return;
+}
+
+/* ---------
+ * pgstat_zero_my_allocated_bytes() -
+ *
+ * Called to zero out local allocated bytes variable after fork to avoid double
+ * counting allocations.
+ * ---------
+ */
+static inline void
+pgstat_zero_my_allocated_bytes(void)
+{
+	*my_allocated_bytes = 0;
+
+	return;
+}
 
 #endif							/* BACKEND_STATUS_H */

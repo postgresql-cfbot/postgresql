@@ -4167,6 +4167,9 @@ BackendStartup(Port *port)
 	{
 		free(bn);
 
+		/* Zero allocated bytes to avoid double counting parent allocation */
+		pgstat_zero_my_allocated_bytes();
+
 		/* Detangle from postmaster */
 		InitPostmasterChild();
 
@@ -5374,6 +5377,11 @@ StartChildProcess(AuxProcType type)
 		MemoryContextDelete(PostmasterContext);
 		PostmasterContext = NULL;
 
+		/* Zero allocated bytes to avoid double counting parent allocation.
+		 * Needs to be after the MemoryContextDelete(PostmasterContext) above.
+		 */
+		pgstat_zero_my_allocated_bytes();
+
 		AuxiliaryProcessMain(type); /* does not return */
 	}
 #endif							/* EXEC_BACKEND */
@@ -5766,6 +5774,11 @@ do_start_bgworker(RegisteredBgWorker *rw)
 			MemoryContextSwitchTo(TopMemoryContext);
 			MemoryContextDelete(PostmasterContext);
 			PostmasterContext = NULL;
+
+			/* Zero allocated bytes to avoid double counting parent allocation.
+			 * Needs to be after the MemoryContextDelete(PostmasterContext) above.
+			 */
+			pgstat_zero_my_allocated_bytes();
 
 			StartBackgroundWorker();
 

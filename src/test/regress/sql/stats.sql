@@ -535,5 +535,8 @@ SET enable_seqscan TO on;
 SELECT pg_stat_get_replication_slot(NULL);
 SELECT pg_stat_get_subscription_stats(NULL);
 
+-- ensure that allocated_bytes exist for backends
+SELECT allocated_bytes > 0 AS result FROM pg_stat_activity WHERE backend_type
+IN ('checkpointer', 'background writer', 'walwriter', 'autovacuum launcher');
 
 -- End of Stats Test

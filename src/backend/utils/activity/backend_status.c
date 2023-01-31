@@ -45,10 +45,16 @@
 bool		pgstat_track_activities = false;
 int			pgstat_track_activity_query_size = 1024;
 
+/* Max backend memory allocation allowed (MB). 0 = disabled */
+int			max_total_bkend_mem = 0;
+
 
 /* exposed so that backend_progress.c can access it */
 PgBackendStatus *MyBEEntry = NULL;
 
+/* Memory allocated to this backend prior to pgstats initialization */
+uint64	local_my_allocated_bytes = 0;
+uint64	*my_allocated_bytes = &local_my_allocated_bytes;
 
 static PgBackendStatus *BackendStatusArray = NULL;
 static char *BackendAppnameBuffer = NULL;
@@ -400,6 +406,15 @@ pgstat_bestart(void)
 	lbeentry.st_progress_command_target = InvalidOid;
 	lbeentry.st_query_id = UINT64CONST(0);
 
+	/* Alter allocation reporting from local_my_allocated_bytes to shared memory */
+	pgstat_set_allocated_bytes_storage(&MyBEEntry->allocated_bytes);
+
+	/* Populate sum of memory allocated prior to pgstats initialization to pgstats
+	 * and zero the local variable.
+	 */
+	lbeentry.allocated_bytes += local_my_allocated_bytes;
+	local_my_allocated_bytes = 0;
+
 	/*
 	 * we don't zero st_progress_param here to save cycles; nobody should
 	 * examine it until st_progress_command has been set to something other
@@ -458,6 +473,11 @@ static void
 pgstat_beshutdown_hook(int code, Datum arg)
 {
 	volatile PgBackendStatus *beentry = MyBEEntry;
+
+	/*
+	 * Stop reporting memory allocation changes to &MyBEEntry->allocated_bytes
+	 */
+	pgstat_reset_allocated_bytes_storage();
 
 	/*
 	 * Clear my status entry, following the protocol of bumping st_changecount
@@ -1193,4 +1213,137 @@ pgstat_clip_activity(const char *raw_activity)
 	activity[cliplen] = '\0';
 
 	return activity;
+}
+
+/*
+ * Configure bytes allocated reporting to report allocated bytes to
+ * *allocated_bytes.  *allocated_bytes needs to be valid until
+ * pgstat_set_allocated_bytes_storage() is called.
+ *
+ * Expected to be called during backend startup (in pgstat_bestart), to point
+ * my_allocated_bytes into shared memory.
+ */
+void
+pgstat_set_allocated_bytes_storage(uint64 *new_allocated_bytes)
+{
+	my_allocated_bytes = new_allocated_bytes;
+	*new_allocated_bytes = local_my_allocated_bytes;
+}
+
+/*
+ * Reset allocated bytes storage location.
+ *
+ * Expected to be called during backend shutdown, before the location set up
+ * by pgstat_set_allocated_bytes_storage() becomes invalid.
+ */
+void
+pgstat_reset_allocated_bytes_storage(void)
+{
+	my_allocated_bytes = &local_my_allocated_bytes;
+}
+
+/* ----------
+ * pgstat_get_all_memory_allocated() -
+ *
+ *	Return a uint64 representing the current shared memory allocated to all
+ *	backends.  This looks directly at the BackendStatusArray, and so will
+ *	provide current information regardless of the age of our transaction's
+ *	snapshot of the status array.
+ *	In the future we will likely utilize additional values - perhaps limit
+ *	backend allocation by user/role, etc.
+ * ----------
+ */
+uint64
+pgstat_get_all_backend_memory_allocated(void)
+{
+	PgBackendStatus *beentry;
+	int			i;
+	uint64		all_memory_allocated = 0;
+
+	beentry = BackendStatusArray;
+
+	/*
+	 * We probably shouldn't get here before shared memory has been set up,
+	 * but be safe.
+	 */
+	if (beentry == NULL || BackendActivityBuffer == NULL)
+		return 0;
+
+	/*
+	 * We include AUX procs in all backend memory calculation
+	 */
+	for (i = 1; i <= NumBackendStatSlots; i++)
+	{
+		/*
+		 * We use a volatile pointer here to ensure the compiler doesn't try
+		 * to get cute.
+		 */
+		volatile PgBackendStatus *vbeentry = beentry;
+		bool		found;
+		uint64		allocated_bytes = 0;
+
+		for (;;)
+		{
+			int			before_changecount;
+			int			after_changecount;
+
+			pgstat_begin_read_activity(vbeentry, before_changecount);
+
+			/*
+			 * Ignore invalid entries, which may contain invalid data.
+			 * See pgstat_beshutdown_hook()
+			 */
+			if (vbeentry->st_procpid > 0)
+				allocated_bytes = vbeentry->allocated_bytes;
+
+			pgstat_end_read_activity(vbeentry, after_changecount);
+
+			if ((found = pgstat_read_activity_complete(before_changecount,
+													   after_changecount)))
+				break;
+
+			/* Make sure we can break out of loop if stuck... */
+			CHECK_FOR_INTERRUPTS();
+		}
+
+		if (found)
+			all_memory_allocated += allocated_bytes;
+
+		beentry++;
+	}
+
+	return all_memory_allocated;
+}
+
+/*
+ * Determine if allocation request will exceed max backend memory allowed.
+ * Do not apply to auxiliary processes.
+ */
+bool
+exceeds_max_total_bkend_mem(uint64 allocation_request)
+{
+	bool		result = false;
+
+	/* Exclude auxiliary processes from the check */
+	if (MyAuxProcType != NotAnAuxProcess)
+		return result;
+
+	/* Convert max_total_bkend_mem to bytes for comparison */
+	if (max_total_bkend_mem &&
+		pgstat_get_all_backend_memory_allocated() +
+		allocation_request > (uint64) max_total_bkend_mem * 1024 * 1024)
+	{
+		/*
+		 * Explicitly identify the OOM being a result of this configuration
+		 * parameter vs a system failure to allocate OOM.
+		 */
+		ereport(WARNING,
+				errmsg("allocation would exceed max_total_memory limit (%llu > %llu)",
+					   (unsigned long long) pgstat_get_all_backend_memory_allocated() +
+					   allocation_request, (unsigned long long) max_total_bkend_mem * 1024 * 1024));
+
+		result = true;
+	}
+
+	return result;
 }

@@ -2394,6 +2394,61 @@ XLogSetAsyncXactLSN(XLogRecPtr asyncXactLSN)
 }
 
 /*
+ * Wake up WAL writer process to write and flush newly generated WAL.
+ *
+ * This function better be in walwriter.c, but it reads LogwrtResult, a static
+ * variable from xlog.c. Hence we choose to keep it here for the sake of
+ * simplicity.
+ */
+void
+WakeupWALWriter(void)
+{
+	XLogRecPtr WriteRqstPtr = XactLastRecEnd;
+
+	/* back off to last completed page boundary */
+	WriteRqstPtr -= WriteRqstPtr % XLOG_BLCKSZ;
+
+	/*
+	 * Let's not nudge WAL writer if somebody (this backend itself in
+	 * XLogInsertRecord() or other backend or WAL writer itself in the ongoing
+	 * run) already flushed that far. This avoids unnecessary WAL writer
+	 * wakeups.
+	 *
+	 * It's possible that LogwrtResult is older, in which case, we nudge the
+	 * WAL writer and it may do nothing. This is okay than to make this
+	 * function costly by acquiring info_lck and read LogwrtResult freshly.
+	 */
+	if (WriteRqstPtr <= LogwrtResult.Flush)
+		return;
+
+	/*
+	 * XXXX: While more number of nudges/SetLatch() calls reduce the amount of
+	 * WAL that this backend needs to write/flsuh, it might burden the WAL
+	 * writer too much.
+	 *
+	 * To reduce the number of nudges, we can do all or some of the following
+	 * things:
+	 *
+	 * 1) Nudge only when WAL writer is sleeping (use WalWriterSleeping).
+	 *
+	 * 2) Nudge only after wal_writer_delay has elapsed since the last nudge.
+	 *
+	 * 3) Nudge only after this backend has generated a configurable amount of
+	 *    WAL. Introduce a new GUC for this purpose wal_writer_wakeup_after
+	 *    (Amount of WAL written out by a backend that wakes up WAL writer to
+	 *    help write and flush WAL). Or use existing GUC
+	 *    wal_writer_flush_after.
+	 */
+
+	/*
+	 * Nudge WAL writer. Even if WAL writer is woken up, it does its work only
+	 * when necessary at its own pace, see XLogBackgroundFlush() for details.
+	 */
+	if (ProcGlobal->walwriterLatch)
+		SetLatch(ProcGlobal->walwriterLatch);
+}
+
+/*
  * Record the LSN up to which we can remove WAL because it's not required by
  * any replication slot.
  */

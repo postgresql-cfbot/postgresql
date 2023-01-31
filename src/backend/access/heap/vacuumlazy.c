@@ -2316,6 +2316,17 @@ lazy_vacuum_all_indexes(LVRelState *vacrel)
 {
 	bool		allindexes = true;
 	double		old_live_tuples = vacrel->rel->rd_rel->reltuples;
+	const int progress_start_index[] = {
+		PROGRESS_VACUUM_PHASE,
+		PROGRESS_VACUUM_INDEX_TOTAL
+	};
+	const int progress_end_index[] = {
+		PROGRESS_VACUUM_INDEX_TOTAL,
+		PROGRESS_VACUUM_INDEX_COMPLETED,
+		PROGRESS_VACUUM_NUM_INDEX_VACUUMS
+	};
+	int64       progress_start_val[2];
+	int64       progress_end_val[3];
 
 	Assert(vacrel->nindexes > 0);
 	Assert(vacrel->do_index_vacuuming);
@@ -2328,9 +2339,13 @@ lazy_vacuum_all_indexes(LVRelState *vacrel)
 		return false;
 	}
 
-	/* Report that we are now vacuuming indexes */
-	pgstat_progress_update_param(PROGRESS_VACUUM_PHASE,
-								 PROGRESS_VACUUM_PHASE_VACUUM_INDEX);
+	/*
+	 * Report that we are now vacuuming indexes
+	 * and the number of indexes to vacuum.
+	 */
+	progress_start_val[0] = PROGRESS_VACUUM_PHASE_VACUUM_INDEX;
+	progress_start_val[1] = vacrel->nindexes;
+	pgstat_progress_update_multi_param(2, progress_start_index, progress_start_val);
 
 	if (!ParallelVacuumIsActive(vacrel))
 	{
@@ -2342,6 +2357,10 @@ lazy_vacuum_all_indexes(LVRelState *vacrel)
 			vacrel->indstats[idx] = lazy_vacuum_one_index(indrel, istat,
 														  old_live_tuples,
 														  vacrel);
+
+			/* Done vacuuming an index -- increment the indexes completed */
+			pgstat_progress_update_param(PROGRESS_VACUUM_INDEX_COMPLETED,
+										 idx + 1);
 
 			if (lazy_check_wraparound_failsafe(vacrel))
 			{
@@ -2377,14 +2396,18 @@ lazy_vacuum_all_indexes(LVRelState *vacrel)
 	Assert(allindexes || vacrel->failsafe_active);
 
 	/*
-	 * Increase and report the number of index scans.
+	 * Reset and report the total indexes to vacuum and the number of
+	 * indexes vacuumed.
+	 * Also, increase and report the number of index scans completed.
 	 *
 	 * We deliberately include the case where we started a round of bulk
 	 * deletes that we weren't able to finish due to the failsafe triggering.
 	 */
 	vacrel->num_index_scans++;
-	pgstat_progress_update_param(PROGRESS_VACUUM_NUM_INDEX_VACUUMS,
-								 vacrel->num_index_scans);
+	progress_end_val[0] = 0;
+	progress_end_val[1] = 0;
+	progress_end_val[2] = vacrel->num_index_scans;
+	pgstat_progress_update_multi_param(3, progress_end_index, progress_end_val);
 
 	return allindexes;
 }
@@ -2621,12 +2644,23 @@ lazy_check_wraparound_failsafe(LVRelState *vacrel)
 
 	if (unlikely(vacuum_xid_failsafe_check(&vacrel->cutoffs)))
 	{
+		const int   progress_index[] = {
+			PROGRESS_VACUUM_INDEX_TOTAL,
+			PROGRESS_VACUUM_INDEX_COMPLETED
+		};
+		int64       progress_val[2] = {0, 0};
+
 		vacrel->failsafe_active = true;
 
-		/* Disable index vacuuming, index cleanup, and heap rel truncation */
+		/*
+		 * Disable index vacuuming, index cleanup, and heap rel truncation.
+		 *
+		 * Also, report that we are no longer tracking index vacuum/cleanup.
+		 */
 		vacrel->do_index_vacuuming = false;
 		vacrel->do_index_cleanup = false;
 		vacrel->do_rel_truncate = false;
+		pgstat_progress_update_multi_param(2, progress_index, progress_val);
 
 		ereport(WARNING,
 				(errmsg("bypassing nonessential maintenance of table \"%s.%s.%s\" as a failsafe after %d index scans",
@@ -2654,13 +2688,27 @@ lazy_cleanup_all_indexes(LVRelState *vacrel)
 {
 	double		reltuples = vacrel->new_rel_tuples;
 	bool		estimated_count = vacrel->scanned_pages < vacrel->rel_pages;
+	const int progress_start_index[] = {
+		PROGRESS_VACUUM_PHASE,
+		PROGRESS_VACUUM_INDEX_TOTAL
+	};
+	const int progress_end_index[] = {
+		PROGRESS_VACUUM_INDEX_TOTAL,
+		PROGRESS_VACUUM_INDEX_COMPLETED
+	};
+	int64       progress_start_val[2];
+	int64       progress_end_val[2];
 
 	Assert(vacrel->do_index_cleanup);
 	Assert(vacrel->nindexes > 0);
 
-	/* Report that we are now cleaning up indexes */
-	pgstat_progress_update_param(PROGRESS_VACUUM_PHASE,
-								 PROGRESS_VACUUM_PHASE_INDEX_CLEANUP);
+	/*
+	 * Report that we are now cleaning up indexes
+	 * and the number of indexes to cleanup.
+	 */
+	progress_start_val[0] = PROGRESS_VACUUM_PHASE_INDEX_CLEANUP;
+	progress_start_val[1] = vacrel->nindexes;
+	pgstat_progress_update_multi_param(2, progress_start_index, progress_start_val);
 
 	if (!ParallelVacuumIsActive(vacrel))
 	{
@@ -2672,6 +2720,10 @@ lazy_cleanup_all_indexes(LVRelState *vacrel)
 			vacrel->indstats[idx] =
 				lazy_cleanup_one_index(indrel, istat, reltuples,
 									   estimated_count, vacrel);
+
+			/* Done cleaning an index -- increment the indexes completed */
+			pgstat_progress_update_param(PROGRESS_VACUUM_INDEX_COMPLETED,
+										 idx + 1);
 		}
 	}
 	else
@@ -2681,6 +2733,14 @@ lazy_cleanup_all_indexes(LVRelState *vacrel)
 											vacrel->num_index_scans,
 											estimated_count);
 	}
+
+	/*
+	 * Reset and report the total number of indexes to cleanup
+	 * and the number of indexes cleaned.
+	 */
+	progress_end_val[0] = 0;
+	progress_end_val[1] = 0;
+	pgstat_progress_update_multi_param(2, progress_end_index, progress_end_val);
 }
 
 /*

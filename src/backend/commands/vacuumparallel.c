@@ -30,7 +30,9 @@
 #include "access/table.h"
 #include "access/xact.h"
 #include "catalog/index.h"
+#include "commands/progress.h"
 #include "commands/vacuum.h"
+#include "libpq/pqformat.h"
 #include "optimizer/paths.h"
 #include "pgstat.h"
 #include "storage/bufmgr.h"
@@ -103,6 +105,17 @@ typedef struct PVShared
 
 	/* Counter for vacuuming and cleanup */
 	pg_atomic_uint32 idx;
+
+	/*
+	 * Counter for vacuuming and cleanup progress reporting.
+	 * This value is used to report index vacuum/cleanup progress
+	 * in parallel_vacuum_progress_report. We keep this
+	 * counter to avoid having to loop through
+	 * ParallelVacuumState->indstats to determine the number
+	 * of indexes completed.
+	 */
+	pg_atomic_uint32 nindexes_completed;
+
 } PVShared;
 
 /* Status used during parallel index vacuum or cleanup */
@@ -272,6 +285,8 @@ parallel_vacuum_init(Relation rel, Relation *indrels, int nindexes,
 								 parallel_workers);
 	Assert(pcxt->nworkers > 0);
 	pvs->pcxt = pcxt;
+	pcxt->parallel_progress_callback = parallel_vacuum_update_progress;
+	pcxt->parallel_progress_callback_arg = pvs;
 
 	/* Estimate size for index vacuum stats -- PARALLEL_VACUUM_KEY_INDEX_STATS */
 	est_indstats_len = mul_size(sizeof(PVIndStats), nindexes);
@@ -364,6 +379,7 @@ parallel_vacuum_init(Relation rel, Relation *indrels, int nindexes,
 	pg_atomic_init_u32(&(shared->cost_balance), 0);
 	pg_atomic_init_u32(&(shared->active_nworkers), 0);
 	pg_atomic_init_u32(&(shared->idx), 0);
+	pg_atomic_init_u32(&(shared->nindexes_completed), 0);
 
 	shm_toc_insert(pcxt->toc, PARALLEL_VACUUM_KEY_SHARED, shared);
 	pvs->shared = shared;
@@ -618,8 +634,9 @@ parallel_vacuum_process_all_indexes(ParallelVacuumState *pvs, int num_index_scan
 													vacuum));
 	}
 
-	/* Reset the parallel index processing counter */
+	/* Reset the parallel index processing and progress counters */
 	pg_atomic_write_u32(&(pvs->shared->idx), 0);
+	pg_atomic_write_u32(&(pvs->shared->nindexes_completed), 0);
 
 	/* Setup the shared cost-based vacuum delay and launch workers */
 	if (nworkers > 0)
@@ -888,6 +905,26 @@ parallel_vacuum_process_one_index(ParallelVacuumState *pvs, Relation indrel,
 	pvs->status = PARALLEL_INDVAC_STATUS_COMPLETED;
 	pfree(pvs->indname);
 	pvs->indname = NULL;
+
+	/*
+	 * Update index vacuum progress.
+	 *
+	 * When a parallel worker completes an
+	 * index vacuum, it sends a protocol message
+	 * to notify the leader. The leader then
+	 * updates the progress. See HandleParallelMessage().
+	 *
+	 * When a leader performs the index vacuum,
+	 * it can update the progress directly.
+	 */
+	if (IsParallelWorker())
+	{
+		StringInfoData msgbuf;
+
+		pq_beginmessage(&msgbuf, 'P');
+		pq_endmessage(&msgbuf);
+	} else
+		parallel_vacuum_update_progress(pvs);
 }
 
 /*
@@ -1071,4 +1108,23 @@ parallel_vacuum_error_callback(void *arg)
 		default:
 			return;
 	}
+}
+
+/*
+ * Read pvs->shared->nindexes_completed and report the number of indexes
+ * vacuumed so far.
+ *
+ * Note: This function should be called by the leader process only,
+ * and it's up to the caller to ensure this.
+ */
+void
+parallel_vacuum_update_progress(void *arg)
+{
+	ParallelVacuumState *pvs = (ParallelVacuumState *)arg;
+
+	Assert(!IsParallelWorker());
+
+	if (pvs)
+		pgstat_progress_update_param(PROGRESS_VACUUM_INDEX_COMPLETED,
+									 pg_atomic_add_fetch_u32(&(pvs->shared->nindexes_completed), 1));
 }

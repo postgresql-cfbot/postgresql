@@ -185,6 +185,8 @@ CreateParallelContext(const char *library_name, const char *function_name,
 	pcxt->library_name = pstrdup(library_name);
 	pcxt->function_name = pstrdup(function_name);
 	pcxt->error_context_stack = error_context_stack;
+	pcxt->parallel_progress_callback = NULL;
+	pcxt->parallel_progress_callback_arg = NULL;
 	shm_toc_initialize_estimator(&pcxt->estimator);
 	dlist_push_head(&pcxt_list, &pcxt->node);
 
@@ -1195,6 +1197,21 @@ HandleParallelMessage(ParallelContext *pcxt, int i, StringInfo msg)
 				pq_endmessage(msg);
 
 				NotifyMyFrontEnd(channel, payload, pid);
+
+				break;
+			}
+
+		case 'P':				/* Parallel progress reporting */
+			{
+				/*
+				 * A Leader process that receives this message
+				 * must be ready to update progress.
+				 */
+				Assert(pcxt->parallel_progress_callback);
+				Assert(pcxt->parallel_progress_callback_arg);
+
+				/* Report progress */
+				pcxt->parallel_progress_callback(pcxt->parallel_progress_callback_arg);
 
 				break;
 			}

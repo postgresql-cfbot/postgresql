@@ -370,5 +370,6 @@ extern bool std_typanalyze(VacAttrStats *stats);
 extern double anl_random_fract(void);
 extern double anl_init_selection_state(int n);
 extern double anl_get_next_S(double t, int n, double *stateptr);
+extern void parallel_vacuum_update_progress(void *arg);
 
 #endif							/* VACUUM_H */

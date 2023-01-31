@@ -228,6 +228,13 @@
 #define PG_CACHE_LINE_SIZE		128
 
 /*
+ * Assumed memory alignment requirement for direct I/O.  On currently known
+ * systems this size applies, even for memory that is backed by larger virtual
+ * memory pages.
+ */
+#define PG_IO_ALIGN_SIZE		4096
+
+/*
  *------------------------------------------------------------------------
  * The following symbols are for enabling debugging code, not for
  * controlling user-visible features or resource limits.

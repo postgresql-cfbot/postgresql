@@ -98,7 +98,9 @@
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "utils/guc.h"
+#include "utils/guc_hooks.h"
 #include "utils/resowner_private.h"
+#include "utils/varlena.h"
 
 /* Define PG_FLUSH_DATA_WORKS if we have an implementation for pg_flush_data */
 #if defined(HAVE_SYNC_FILE_RANGE)
@@ -161,6 +163,9 @@ bool		data_sync_retry = false;
 
 /* How SyncDataDirectory() should do its job. */
 int			recovery_init_sync_method = RECOVERY_INIT_SYNC_METHOD_FSYNC;
+
+/* Which kinds of files should be opened with PG_O_DIRECT. */
+int			io_direct_flags;
 
 /* Debugging.... */
 
@@ -2021,6 +2026,9 @@ FileWriteback(File file, off_t offset, off_t nbytes, uint32 wait_event_info)
 	if (nbytes <= 0)
 		return;
 
+	if (VfdCache[file].fileFlags & PG_O_DIRECT)
+		return;
+
 	returnCode = FileAccess(file);
 	if (returnCode < 0)
 		return;
@@ -3736,4 +3744,83 @@ int
 data_sync_elevel(int elevel)
 {
 	return data_sync_retry ? elevel : PANIC;
+}
+
+bool
+check_io_direct(char **newval, void **extra, GucSource source)
+{
+	int		   *flags = guc_malloc(ERROR, sizeof(*flags));
+
+#if PG_O_DIRECT == 0
+	if (strcmp(*newval, "") != 0)
+	{
+		GUC_check_errdetail("io_direct is not supported on this platform.");
+		return false;
+	}
+	*flags = 0;
+#else
+	List	   *list;
+	ListCell   *l;
+
+	if (!SplitGUCList(*newval, ',', &list))
+	{
+		GUC_check_errdetail("invalid list syntax in parameter \"%s\"",
+							"io_direct");
+		return false;
+	}
+
+	*flags = 0;
+	foreach (l, list)
+	{
+		char	   *item = (char *) lfirst(l);
+
+		if (pg_strcasecmp(item, "data") == 0)
+			*flags |= IO_DIRECT_DATA;
+		else if (pg_strcasecmp(item, "wal") == 0)
+			*flags |= IO_DIRECT_WAL;
+		else if (pg_strcasecmp(item, "wal_init") == 0)
+			*flags |= IO_DIRECT_WAL_INIT;
+		else
+		{
+			GUC_check_errdetail("invalid option \"%s\"", item);
+			return false;
+		}
+	}
+#endif
+
+	*extra = flags;
+
+	return true;
+}
+
+extern void
+assign_io_direct(const char *newval, void *extra)
+{
+	int	   *flags = (int *) extra;
+
+	io_direct_flags = *flags;
+}
+
+extern const char *
+show_io_direct(void)
+{
+	static char result[80];
+
+	result[0] = 0;
+	if (io_direct_flags & IO_DIRECT_DATA)
+		strcat(result, "data");
+	if (io_direct_flags & IO_DIRECT_WAL)
+	{
+		if (result[0])
+			strcat(result, ", ");
+		strcat(result, "wal");
+	}
+	if (io_direct_flags & IO_DIRECT_WAL_INIT)
+	{
+		if (result[0])
+			strcat(result, ", ");
+		strcat(result, "wal_init");
+	}
+
+	return result;
 }

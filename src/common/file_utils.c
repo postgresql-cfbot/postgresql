@@ -539,7 +539,7 @@ pg_pwritev_with_retry(int fd, const struct iovec *iov, int iovcnt, off_t offset)
 ssize_t
 pg_pwrite_zeros(int fd, size_t size)
 {
-	PGAlignedBlock zbuffer;		/* worth BLCKSZ */
+	PGIOAlignedBlock zbuffer;		/* worth BLCKSZ */
 	size_t		zbuffer_sz;
 	struct iovec iov[PG_IOV_MAX];
 	int			blocks;

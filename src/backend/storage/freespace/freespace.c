@@ -608,7 +608,7 @@ static void
 fsm_extend(Relation rel, BlockNumber fsm_nblocks)
 {
 	BlockNumber fsm_nblocks_now;
-	PGAlignedBlock pg;
+	PGIOAlignedBlock pg;
 	SMgrRelation reln;
 
 	PageInit((Page) pg.data, BLCKSZ, 0);

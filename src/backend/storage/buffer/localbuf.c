@@ -87,8 +87,11 @@ PrefetchLocalBuffer(SMgrRelation smgr, ForkNumber forkNum,
 	{
 #ifdef USE_PREFETCH
 		/* Not in buffers, so initiate prefetch */
-		smgrprefetch(smgr, forkNum, blockNum);
-		result.initiated_io = true;
+		if ((io_direct_flags & IO_DIRECT_DATA) == 0 &&
+			smgrprefetch(smgr, forkNum, blockNum))
+		{
+			result.initiated_io = true;
+		}
 #endif							/* USE_PREFETCH */
 	}
 
@@ -546,8 +549,11 @@ GetLocalBufferStorage(void)
 		/* And don't overflow MaxAllocSize, either */
 		num_bufs = Min(num_bufs, MaxAllocSize / BLCKSZ);
 
-		cur_block = (char *) MemoryContextAlloc(LocalBufferContext,
-												num_bufs * BLCKSZ);
+		/* Buffers should be I/O aligned. */
+		cur_block = (char *)
+			TYPEALIGN(PG_IO_ALIGN_SIZE,
+					  MemoryContextAlloc(LocalBufferContext,
+										 num_bufs * BLCKSZ + PG_IO_ALIGN_SIZE));
 		next_buf_in_block = 0;
 		num_bufs_in_block = num_bufs;
 	}

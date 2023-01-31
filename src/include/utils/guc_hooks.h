@@ -154,5 +154,8 @@ extern bool check_wal_consistency_checking(char **newval, void **extra,
 										   GucSource source);
 extern void assign_wal_consistency_checking(const char *newval, void *extra);
 extern void assign_xlog_sync_method(int new_sync_method, void *extra);
+extern bool check_io_direct(char **newval, void **extra, GucSource source);
+extern void assign_io_direct(const char *newval, void *extra);
+extern const char *show_io_direct(void);
 
 #endif							/* GUC_HOOKS_H */

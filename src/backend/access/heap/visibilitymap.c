@@ -623,7 +623,7 @@ static void
 vm_extend(Relation rel, BlockNumber vm_nblocks)
 {
 	BlockNumber vm_nblocks_now;
-	PGAlignedBlock pg;
+	PGIOAlignedBlock pg;
 	SMgrRelation reln;
 
 	PageInit((Page) pg.data, BLCKSZ, 0);

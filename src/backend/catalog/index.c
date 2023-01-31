@@ -1752,7 +1752,7 @@ index_concurrently_swap(Oid newIndexId, Oid oldIndexId, const char *oldName)
 	changeDependenciesOn(RelationRelationId, oldIndexId, newIndexId);
 
 	/* copy over statistics from old to new index */
-	pgstat_copy_relation_stats(newClassRel, oldClassRel);
+	pgstat_copy_index_stats(newClassRel, oldClassRel);
 
 	/* Copy data of pg_statistic from the old index to the new one */
 	CopyStatistics(oldIndexId, newIndexId);
@@ -2326,7 +2326,7 @@ index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode)
 		RelationDropStorage(userIndexRelation);
 
 	/* ensure that stats are dropped if transaction commits */
-	pgstat_drop_relation(userIndexRelation);
+	pgstat_drop_index(userIndexRelation);
 
 	/*
 	 * Close and flush the index's relcache entry, to ensure relcache doesn't

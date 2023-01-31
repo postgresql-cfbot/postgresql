@@ -127,6 +127,77 @@ FROM prevstats AS pr;
 COMMIT;
 
 ----
+-- Basic tests for toast
+---
+CREATE TABLE stats_toast(stuff text);
+ALTER TABLE stats_toast ALTER COLUMN stuff SET STORAGE EXTERNAL;
+INSERT INTO stats_toast VALUES (repeat('a',1000000));
+SELECT count(*) FROM stats_toast WHERE stuff like '%a%';
+
+-- ensure pending stats are flushed
+SELECT pg_stat_force_next_flush();
+
+select toast_blks_read > 0 as toast_blks_read, toast_blks_hit > 0 as toast_blks_hit,
+       tidx_blks_read > 0 as tidx_blks_read, tidx_blks_hit > 0 as tidx_blks_hit,
+       toast_blks_hit >= toast_blks_read,
+       tidx_blks_hit >= tidx_blks_read
+   from pg_statio_all_tables
+ where relname = 'stats_toast';
+
+----
+-- Basic tests for partition
+---
+CREATE TABLE stats_partition (
+    id1         int not null,
+    id2         int not null
+) PARTITION BY RANGE (id2);
+
+CREATE TABLE stats_partition_5 PARTITION OF stats_partition
+    FOR VALUES FROM (0) TO (5);
+
+CREATE TABLE stats_partition_20000 PARTITION OF stats_partition
+    FOR VALUES FROM (5) TO (20001);
+
+CREATE INDEX ON stats_partition (id2);
+
+insert into stats_partition select a,a from generate_series(0,20000) a;
+
+SET enable_seqscan TO off;
+SET enable_bitmapscan TO off;
+
+select * from stats_partition where id2 = 2000;
+select * from stats_partition where id2 = 2;
+-- ensure pending stats are flushed
+SELECT pg_stat_force_next_flush();
+
+select relname, indexrelname, idx_scan > 0 as idx_scan, idx_tup_read > 0 as idx_tup_read,
+       idx_tup_fetch > 0 as idx_tup_fetch
+   from pg_stat_all_indexes
+ where relname like '%stats_partition%'
+ order by relname COLLATE "C";
+
+select relname, indexrelname, idx_blks_read > 0 as idx_blks_read,
+       idx_blks_hit > 0 as idx_blks_hit
+   from pg_statio_all_indexes
+ where relname like '%stats_partition%'
+ order by relname COLLATE "C";
+
+select relname,seq_scan > 0 as seq_scan, seq_tup_read > 0 as seq_tup_read,
+       idx_scan > 0 as idx_scan, idx_tup_fetch > 0 as idx_tup_fetch
+   from pg_stat_all_tables
+  where relname like '%stats_partition%'
+  order by relname COLLATE "C";
+
+select relname, heap_blks_read > 0 as heap_blks_read, heap_blks_hit > 0 as heap_blks_hit,
+       idx_blks_read > 0 as idx_blks_read, idx_blks_hit > 0 as idx_blks_hit
+   from pg_statio_all_tables
+ where relname like '%stats_partition%'
+ order by relname COLLATE "C";
+
+SET enable_seqscan TO on;
+SET enable_bitmapscan TO on;
+
+----
 -- Basic tests for track_functions
 ---
 CREATE FUNCTION stats_test_func1() RETURNS VOID LANGUAGE plpgsql AS $$BEGIN END;$$;
@@ -218,15 +289,15 @@ SELECT 'drop_stats_test_subxact'::regclass::oid AS drop_stats_test_subxact_oid \
 
 SELECT pg_stat_force_next_flush();
 
-SELECT pg_stat_get_live_tuples(:drop_stats_test_oid);
+SELECT pg_stat_get_tab_live_tuples(:drop_stats_test_oid);
 DROP TABLE drop_stats_test;
-SELECT pg_stat_get_live_tuples(:drop_stats_test_oid);
+SELECT pg_stat_get_tab_live_tuples(:drop_stats_test_oid);
 SELECT pg_stat_get_xact_tuples_inserted(:drop_stats_test_oid);
 
 -- check that rollback protects against having stats dropped and that local
 -- modifications don't pose a problem
-SELECT pg_stat_get_live_tuples(:drop_stats_test_xact_oid);
-SELECT pg_stat_get_tuples_inserted(:drop_stats_test_xact_oid);
+SELECT pg_stat_get_tab_live_tuples(:drop_stats_test_xact_oid);
+SELECT pg_stat_get_tab_tuples_inserted(:drop_stats_test_xact_oid);
 SELECT pg_stat_get_xact_tuples_inserted(:drop_stats_test_xact_oid);
 BEGIN;
 INSERT INTO drop_stats_test_xact DEFAULT VALUES;
@@ -235,12 +306,12 @@ DROP TABLE drop_stats_test_xact;
 SELECT pg_stat_get_xact_tuples_inserted(:drop_stats_test_xact_oid);
 ROLLBACK;
 SELECT pg_stat_force_next_flush();
-SELECT pg_stat_get_live_tuples(:drop_stats_test_xact_oid);
-SELECT pg_stat_get_tuples_inserted(:drop_stats_test_xact_oid);
+SELECT pg_stat_get_tab_live_tuples(:drop_stats_test_xact_oid);
+SELECT pg_stat_get_tab_tuples_inserted(:drop_stats_test_xact_oid);
 
 -- transactional drop
-SELECT pg_stat_get_live_tuples(:drop_stats_test_xact_oid);
-SELECT pg_stat_get_tuples_inserted(:drop_stats_test_xact_oid);
+SELECT pg_stat_get_tab_live_tuples(:drop_stats_test_xact_oid);
+SELECT pg_stat_get_tab_tuples_inserted(:drop_stats_test_xact_oid);
 BEGIN;
 INSERT INTO drop_stats_test_xact DEFAULT VALUES;
 SELECT pg_stat_get_xact_tuples_inserted(:drop_stats_test_xact_oid);
@@ -248,11 +319,11 @@ DROP TABLE drop_stats_test_xact;
 SELECT pg_stat_get_xact_tuples_inserted(:drop_stats_test_xact_oid);
 COMMIT;
 SELECT pg_stat_force_next_flush();
-SELECT pg_stat_get_live_tuples(:drop_stats_test_xact_oid);
-SELECT pg_stat_get_tuples_inserted(:drop_stats_test_xact_oid);
+SELECT pg_stat_get_tab_live_tuples(:drop_stats_test_xact_oid);
+SELECT pg_stat_get_tab_tuples_inserted(:drop_stats_test_xact_oid);
 
 -- savepoint rollback (2 levels)
-SELECT pg_stat_get_live_tuples(:drop_stats_test_subxact_oid);
+SELECT pg_stat_get_tab_live_tuples(:drop_stats_test_subxact_oid);
 BEGIN;
 INSERT INTO drop_stats_test_subxact DEFAULT VALUES;
 SAVEPOINT sp1;
@@ -264,27 +335,27 @@ ROLLBACK TO SAVEPOINT sp2;
 SELECT pg_stat_get_xact_tuples_inserted(:drop_stats_test_subxact_oid);
 COMMIT;
 SELECT pg_stat_force_next_flush();
-SELECT pg_stat_get_live_tuples(:drop_stats_test_subxact_oid);
+SELECT pg_stat_get_tab_live_tuples(:drop_stats_test_subxact_oid);
 
 -- savepoint rolback (1 level)
-SELECT pg_stat_get_live_tuples(:drop_stats_test_subxact_oid);
+SELECT pg_stat_get_tab_live_tuples(:drop_stats_test_subxact_oid);
 BEGIN;
 SAVEPOINT sp1;
 DROP TABLE drop_stats_test_subxact;
 SAVEPOINT sp2;
 ROLLBACK TO SAVEPOINT sp1;
 COMMIT;
-SELECT pg_stat_get_live_tuples(:drop_stats_test_subxact_oid);
+SELECT pg_stat_get_tab_live_tuples(:drop_stats_test_subxact_oid);
 
 -- and now actually drop
-SELECT pg_stat_get_live_tuples(:drop_stats_test_subxact_oid);
+SELECT pg_stat_get_tab_live_tuples(:drop_stats_test_subxact_oid);
 BEGIN;
 SAVEPOINT sp1;
 DROP TABLE drop_stats_test_subxact;
 SAVEPOINT sp2;
 RELEASE SAVEPOINT sp1;
 COMMIT;
-SELECT pg_stat_get_live_tuples(:drop_stats_test_subxact_oid);
+SELECT pg_stat_get_tab_live_tuples(:drop_stats_test_subxact_oid);
 
 DROP TABLE trunc_stats_test, trunc_stats_test1, trunc_stats_test2, trunc_stats_test3, trunc_stats_test4;
 DROP TABLE prevstats;
@@ -493,40 +564,40 @@ CREATE index stats_test_idx1 on stats_test_tab1(a);
 SELECT 'stats_test_idx1'::regclass::oid AS stats_test_idx1_oid \gset
 SET enable_seqscan TO off;
 select a from stats_test_tab1 where a = 3;
-SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid);
+SELECT pg_stat_have_stats('index', :dboid, :stats_test_idx1_oid);
 
 -- pg_stat_have_stats returns false for dropped index with stats
-SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid);
+SELECT pg_stat_have_stats('index', :dboid, :stats_test_idx1_oid);
 DROP index stats_test_idx1;
-SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid);
+SELECT pg_stat_have_stats('index', :dboid, :stats_test_idx1_oid);
 
 -- pg_stat_have_stats returns false for rolled back index creation
 BEGIN;
 CREATE index stats_test_idx1 on stats_test_tab1(a);
 SELECT 'stats_test_idx1'::regclass::oid AS stats_test_idx1_oid \gset
 select a from stats_test_tab1 where a = 3;
-SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid);
+SELECT pg_stat_have_stats('index', :dboid, :stats_test_idx1_oid);
 ROLLBACK;
-SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid);
+SELECT pg_stat_have_stats('index', :dboid, :stats_test_idx1_oid);
 
 -- pg_stat_have_stats returns true for reindex CONCURRENTLY
 CREATE index stats_test_idx1 on stats_test_tab1(a);
 SELECT 'stats_test_idx1'::regclass::oid AS stats_test_idx1_oid \gset
 select a from stats_test_tab1 where a = 3;
-SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid);
+SELECT pg_stat_have_stats('index', :dboid, :stats_test_idx1_oid);
 REINDEX index CONCURRENTLY stats_test_idx1;
 -- false for previous oid
-SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid);
+SELECT pg_stat_have_stats('index', :dboid, :stats_test_idx1_oid);
 -- true for new oid
 SELECT 'stats_test_idx1'::regclass::oid AS stats_test_idx1_oid \gset
-SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid);
+SELECT pg_stat_have_stats('index', :dboid, :stats_test_idx1_oid);
 
 -- pg_stat_have_stats returns true for a rolled back drop index with stats
 BEGIN;
-SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid);
+SELECT pg_stat_have_stats('index', :dboid, :stats_test_idx1_oid);
 DROP index stats_test_idx1;
 ROLLBACK;
-SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid);
+SELECT pg_stat_have_stats('index', :dboid, :stats_test_idx1_oid);
 
 -- put enable_seqscan back to on
 SET enable_seqscan TO on;

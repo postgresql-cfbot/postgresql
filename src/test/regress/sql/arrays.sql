@@ -671,20 +671,20 @@ select * from t1;
 
 -- Check that arrays of composites are safely detoasted when needed
 
-create temp table src (f1 text);
+create temp table src (f1 bytea);
 insert into src
-  select string_agg(random()::text,'') from generate_series(1,10000);
-create type textandtext as (c1 text, c2 text);
-create temp table dest (f1 textandtext[]);
-insert into dest select array[row(f1,f1)::textandtext] from src;
-select length(md5((f1[1]).c2)) from dest;
+  select string_agg(random()::text::bytea,'') from generate_series(1,10000);
+create type byteaandbytea as (c1 bytea, c2 bytea);
+create temp table dest (f1 byteaandbytea[]);
+insert into dest select array[row(f1,f1)::byteaandbytea] from src;
+select length(sha256((f1[1]).c2)) from dest;
 delete from src;
-select length(md5((f1[1]).c2)) from dest;
+select length(sha256((f1[1]).c2)) from dest;
 truncate table src;
 drop table src;
-select length(md5((f1[1]).c2)) from dest;
+select length(sha256((f1[1]).c2)) from dest;
 drop table dest;
-drop type textandtext;
+drop type byteaandbytea;
 
 -- Tests for polymorphic-array form of width_bucket()
 

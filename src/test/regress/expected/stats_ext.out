@@ -2615,18 +2615,18 @@ CREATE TABLE mcv_lists_uuid (
 WITH (autovacuum_enabled = off);
 INSERT INTO mcv_lists_uuid (a, b, c)
      SELECT
-         md5(mod(i,100)::text)::uuid,
-         md5(mod(i,50)::text)::uuid,
-         md5(mod(i,25)::text)::uuid
+         substr(encode(sha256(mod(i,100)::text::bytea), 'hex'), 1, 32)::uuid,
+         substr(encode(sha256(mod(i,50)::text::bytea), 'hex'), 1, 32)::uuid,
+         substr(encode(sha256(mod(i,25)::text::bytea), 'hex'), 1, 32)::uuid
      FROM generate_series(1,5000) s(i);
 ANALYZE mcv_lists_uuid;
-SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_uuid WHERE a = ''1679091c-5a88-0faf-6fb5-e6087eb1b2dc'' AND b = ''1679091c-5a88-0faf-6fb5-e6087eb1b2dc''');
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_uuid WHERE a = ''e7f6c011-776e-8db7-cd33-0b54174fd76f'' AND b = ''e7f6c011-776e-8db7-cd33-0b54174fd76f''');
  estimated | actual 
 -----------+--------
          1 |     50
 (1 row)
 
-SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_uuid WHERE a = ''1679091c-5a88-0faf-6fb5-e6087eb1b2dc'' AND b = ''1679091c-5a88-0faf-6fb5-e6087eb1b2dc'' AND c = ''1679091c-5a88-0faf-6fb5-e6087eb1b2dc''');
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_uuid WHERE a = ''e7f6c011-776e-8db7-cd33-0b54174fd76f'' AND b = ''e7f6c011-776e-8db7-cd33-0b54174fd76f'' AND c = ''e7f6c011-776e-8db7-cd33-0b54174fd76f''');
  estimated | actual 
 -----------+--------
          1 |     50
@@ -2635,13 +2635,13 @@ SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_uuid WHERE a = ''167
 CREATE STATISTICS mcv_lists_uuid_stats (mcv) ON a, b, c
   FROM mcv_lists_uuid;
 ANALYZE mcv_lists_uuid;
-SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_uuid WHERE a = ''1679091c-5a88-0faf-6fb5-e6087eb1b2dc'' AND b = ''1679091c-5a88-0faf-6fb5-e6087eb1b2dc''');
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_uuid WHERE a = ''e7f6c011-776e-8db7-cd33-0b54174fd76f'' AND b = ''e7f6c011-776e-8db7-cd33-0b54174fd76f''');
  estimated | actual 
 -----------+--------
         50 |     50
 (1 row)
 
-SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_uuid WHERE a = ''1679091c-5a88-0faf-6fb5-e6087eb1b2dc'' AND b = ''1679091c-5a88-0faf-6fb5-e6087eb1b2dc'' AND c = ''1679091c-5a88-0faf-6fb5-e6087eb1b2dc''');
+SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists_uuid WHERE a = ''e7f6c011-776e-8db7-cd33-0b54174fd76f'' AND b = ''e7f6c011-776e-8db7-cd33-0b54174fd76f'' AND c = ''e7f6c011-776e-8db7-cd33-0b54174fd76f''');
  estimated | actual 
 -----------+--------
         50 |     50

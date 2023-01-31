@@ -18,6 +18,8 @@ begin
     loop
         -- Replace any numeric word with just 'N'
         ln := regexp_replace(ln, '-?\m\d+\M', 'N', 'g');
+        -- Replace NaN with 'N.N' to support TIMING SAMPLING tests
+        ln := regexp_replace(ln, '-?\mNaN\M', 'N.N', 'g');
         -- In sort output, the above won't match units-suffixed numbers
         ln := regexp_replace(ln, '\m\d+kB', 'NkB', 'g');
         -- Ignore text-mode buffers output because it varies depending
@@ -42,6 +44,8 @@ begin
     loop
         -- Replace any numeric word with just '0'
         ln := regexp_replace(ln, '\m\d+\M', '0', 'g');
+        -- Replace NaN with '0.0' to support TIMING SAMPLING tests
+        ln := regexp_replace(ln, '\mNaN\M', '0.0', 'g');
         data := data || ln;
     end loop;
     return data::jsonb;
@@ -173,6 +177,70 @@ select explain_filter('explain (analyze, buffers, format yaml) select * from int
      Local Written Blocks: N  +
      Temp Read Blocks: N      +
      Temp Written Blocks: N   +
+   Planning Time: N.N         +
+   Triggers:                  +
+   Execution Time: N.N
+(1 row)
+
+select explain_filter('explain (analyze, timing sampling) select * from int8_tbl i8');
+                                          explain_filter                                          
+--------------------------------------------------------------------------------------------------
+ Seq Scan on int8_tbl i8  (cost=N.N..N.N rows=N width=N) (actual sampled time=N.N rows=N loops=N)
+ Planning Time: N.N ms
+ Execution Time: N.N ms
+(3 rows)
+
+select explain_filter('explain (analyze, timing sampling, samplefreq 10, format text) select * from int8_tbl i8');
+                                          explain_filter                                          
+--------------------------------------------------------------------------------------------------
+ Seq Scan on int8_tbl i8  (cost=N.N..N.N rows=N width=N) (actual sampled time=N.N rows=N loops=N)
+ Planning Time: N.N ms
+ Execution Time: N.N ms
+(3 rows)
+
+select explain_filter('explain (analyze, timing sampling, samplefreq 100, format xml) select * from int8_tbl i8');
+                    explain_filter                     
+-------------------------------------------------------
+ <explain xmlns="http://www.postgresql.org/N/explain">+
+   <Query>                                            +
+     <Plan>                                           +
+       <Node-Type>Seq Scan</Node-Type>                +
+       <Parallel-Aware>false</Parallel-Aware>         +
+       <Async-Capable>false</Async-Capable>           +
+       <Relation-Name>int8_tbl</Relation-Name>        +
+       <Alias>i8</Alias>                              +
+       <Startup-Cost>N.N</Startup-Cost>               +
+       <Total-Cost>N.N</Total-Cost>                   +
+       <Plan-Rows>N</Plan-Rows>                       +
+       <Plan-Width>N</Plan-Width>                     +
+       <Actual-Sampled-Time>N.N</Actual-Sampled-Time> +
+       <Actual-Rows>N</Actual-Rows>                   +
+       <Actual-Loops>N</Actual-Loops>                 +
+     </Plan>                                          +
+     <Planning-Time>N.N</Planning-Time>               +
+     <Triggers>                                       +
+     </Triggers>                                      +
+     <Execution-Time>N.N</Execution-Time>             +
+   </Query>                                           +
+ </explain>
+(1 row)
+
+select explain_filter('explain (analyze, timing sampling, samplefreq 1000, format yaml) select * from int8_tbl i8');
+        explain_filter         
+-------------------------------
+ - Plan:                      +
+     Node Type: "Seq Scan"    +
+     Parallel Aware: false    +
+     Async Capable: false     +
+     Relation Name: "int8_tbl"+
+     Alias: "i8"              +
+     Startup Cost: N.N        +
+     Total Cost: N.N          +
+     Plan Rows: N             +
+     Plan Width: N            +
+     Actual Sampled Time: N.N +
+     Actual Rows: N           +
+     Actual Loops: N          +
    Planning Time: N.N         +
    Triggers:                  +
    Execution Time: N.N

@@ -90,7 +90,10 @@ CreateQueryDesc(PlannedStmt *plannedstmt,
 	qd->tupDesc = NULL;
 	qd->estate = NULL;
 	qd->planstate = NULL;
+
+	/* may be set later by EXPLAIN (ANALYZE, TIMING SAMPLING), or plugins */
 	qd->totaltime = NULL;
+	qd->sample_freq_hz = 0;
 
 	/* not yet executed */
 	qd->already_executed = false;

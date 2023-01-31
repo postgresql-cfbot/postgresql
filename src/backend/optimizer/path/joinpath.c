@@ -1848,10 +1848,12 @@ match_unsorted_outer(PlannerInfo *root,
 	 * Consider partial nestloop and mergejoin plan if outerrel has any
 	 * partial path and the joinrel is parallel-safe.  However, we can't
 	 * handle JOIN_UNIQUE_OUTER, because the outer path will be partial, and
-	 * therefore we won't be able to properly guarantee uniqueness.  Nor can
-	 * we handle joins needing lateral rels, since partial paths must not be
-	 * parameterized. Similarly, we can't handle JOIN_FULL and JOIN_RIGHT,
-	 * because they can produce false null extended rows.
+	 * therefore we won't be able to properly guarantee uniqueness.  Similarly,
+	 * we can't handle JOIN_FULL and JOIN_RIGHT, because they can produce false
+	 * null extended rows.
+	 *
+	 * While partial paths may now be parameterized so long as all of the params
+	 * can be generated wholly within a worker we punt on supporting that here.
 	 */
 	if (joinrel->consider_parallel &&
 		save_jointype != JOIN_UNIQUE_OUTER &&

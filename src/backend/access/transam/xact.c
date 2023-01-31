@@ -84,6 +84,15 @@ bool		XactReadOnly;
 bool		DefaultXactDeferrable = false;
 bool		XactDeferrable;
 
+bool		DefaultXactRollbackOnCommit = false;
+bool		XactRollbackOnCommit;
+
+int			DefaultXactNesting;
+int			XactNesting = XACT_NEST_OFF;
+int			XactNestingLevel = 0;
+
+#define	NESTED_XACT_NAME	"_internal_nested_xact"
+
 int			synchronous_commit = SYNCHRONOUS_COMMIT_ON;
 
 /*
@@ -2063,6 +2072,9 @@ StartTransaction(void)
 	}
 	XactDeferrable = DefaultXactDeferrable;
 	XactIsoLevel = DefaultXactIsoLevel;
+	XactNesting = DefaultXactNesting;
+	XactNestingLevel = 0;
+	XactRollbackOnCommit = DefaultXactRollbackOnCommit;
 	forceSyncCommit = false;
 	MyXactFlags = 0;
 
@@ -3011,7 +3023,7 @@ StartTransactionCommand(void)
 
 /*
  * Simple system for saving and restoring transaction characteristics
- * (isolation level, read only, deferrable).  We need this for transaction
+ * (isolation level, read only, deferrable, nesting).  We need this for transaction
  * chaining, so that we can set the characteristics of the new transaction to
  * be the same as the previous one.  (We need something like this because the
  * GUC system resets the characteristics at transaction end, so for example
@@ -3023,6 +3035,8 @@ SaveTransactionCharacteristics(SavedTransactionCharacteristics *s)
 	s->save_XactIsoLevel = XactIsoLevel;
 	s->save_XactReadOnly = XactReadOnly;
 	s->save_XactDeferrable = XactDeferrable;
+	s->save_XactNesting = XactNesting;
+	s->save_XactRollbackOnCommit = XactRollbackOnCommit;
 }
 
 void
@@ -3031,6 +3045,8 @@ RestoreTransactionCharacteristics(const SavedTransactionCharacteristics *s)
 	XactIsoLevel = s->save_XactIsoLevel;
 	XactReadOnly = s->save_XactReadOnly;
 	XactDeferrable = s->save_XactDeferrable;
+	XactNesting = s->save_XactNesting;
+	XactRollbackOnCommit = s->save_XactRollbackOnCommit;
 }
 
 
@@ -3201,7 +3217,10 @@ CommitTransactionCommand(void)
 				CommitSubTransaction();
 				s = CurrentTransactionState;	/* changed by pop */
 			} while (s->blockState == TBLOCK_SUBCOMMIT);
-			/* If we had a COMMIT command, finish off the main xact too */
+			/*
+			 * If we had a COMMIT command, finish off the main xact too,
+			 * unless this is a nested transaction.
+			 */
 			if (s->blockState == TBLOCK_END)
 			{
 				Assert(s->parent == NULL);
@@ -3221,7 +3240,7 @@ CommitTransactionCommand(void)
 				PrepareTransaction();
 				s->blockState = TBLOCK_DEFAULT;
 			}
-			else
+			else if (XactNesting == XACT_NEST_OFF)
 				elog(ERROR, "CommitTransactionCommand: unexpected state %s",
 					 BlockStateAsString(s->blockState));
 			break;
@@ -3800,8 +3819,33 @@ BeginTransactionBlock(void)
 			 * Already a transaction block in progress.
 			 */
 		case TBLOCK_INPROGRESS:
-		case TBLOCK_PARALLEL_INPROGRESS:
 		case TBLOCK_SUBINPROGRESS:
+			if (XactNesting == XACT_NEST_ALL)
+			{
+				/*
+				 * BEGIN starts a nested subtransaction.
+				 */
+				XactNestingLevel++;
+				ereport(NOTICE,
+						(errmsg("BEGIN starts nested subtransaction, level %u", XactNestingLevel)));
+				BeginInternalSubTransaction(NESTED_XACT_NAME);
+				break;
+			}
+			else if (XactNesting == XACT_NEST_OUTER)
+			{
+				XactNestingLevel++;
+				ereport(NOTICE,
+							(errcode(ERRCODE_ACTIVE_SQL_TRANSACTION),
+							 errmsg("nested BEGIN, level %u", XactNestingLevel)));
+				break;
+			}
+			else
+				ereport(WARNING,
+					(errcode(ERRCODE_ACTIVE_SQL_TRANSACTION),
+					 errmsg("there is already a transaction in progress")));
+			break;
+
+		case TBLOCK_PARALLEL_INPROGRESS:
 		case TBLOCK_ABORT:
 		case TBLOCK_SUBABORT:
 			ereport(WARNING,
@@ -3849,6 +3893,10 @@ PrepareTransactionBlock(const char *gid)
 
 	/* Set up to commit the current transaction */
 	result = EndTransactionBlock(false);
+
+	/* Don't allow prepare until we are back to an unnested state at level 0 */
+	if (XactNestingLevel > 0)
+		return false;
 
 	/* If successful, change outer tblock state to PREPARE */
 	if (result)
@@ -3898,6 +3946,7 @@ EndTransactionBlock(bool chain)
 {
 	TransactionState s = CurrentTransactionState;
 	bool		result = false;
+	bool found_subxact = false;
 
 	switch (s->blockState)
 	{
@@ -3906,7 +3955,23 @@ EndTransactionBlock(bool chain)
 			 * to COMMIT.
 			 */
 		case TBLOCK_INPROGRESS:
-			s->blockState = TBLOCK_END;
+			if (XactNesting == XACT_NEST_OUTER)
+			{
+				/*
+				 * Don't respond to a COMMIT until we hit the top level
+				 * of nesting.
+				 */
+				if (XactNestingLevel <= 0)
+					s->blockState = TBLOCK_END;
+				else
+					ereport(NOTICE,
+							(errcode(ERRCODE_ACTIVE_SQL_TRANSACTION),
+							 errmsg("nested COMMIT, level %u", XactNestingLevel)));
+				XactNestingLevel--;
+				return true;
+			}
+			else
+				s->blockState = TBLOCK_END;
 			result = true;
 			break;
 
@@ -3935,6 +4000,14 @@ EndTransactionBlock(bool chain)
 			 * CommitTransactionCommand it's time to exit the block.
 			 */
 		case TBLOCK_ABORT:
+			if (XactNesting == XACT_NEST_OUTER &&
+				XactNestingLevel > 0)
+			{
+				ereport(NOTICE,
+						(errmsg("nested COMMIT, level %u in aborted transaction", XactNestingLevel)));
+				XactNestingLevel--;
+				return false;
+			}
 			s->blockState = TBLOCK_ABORT_END;
 			break;
 
@@ -3943,8 +4016,19 @@ EndTransactionBlock(bool chain)
 			 * open subtransactions and then commit the main transaction.
 			 */
 		case TBLOCK_SUBINPROGRESS:
-			while (s->parent != NULL)
+			while (s->parent != NULL && !found_subxact)
 			{
+				/*
+				 * If we are handling nested transactions, release all
+				 * subtransactions up to the last nested subtransaction,
+				 * located via its internal name.
+				 */
+				if (XactNesting == XACT_NEST_ALL &&
+					XactNestingLevel > 0 &&
+					PointerIsValid(s->name) &&
+					strcmp(s->name, NESTED_XACT_NAME) == 0)
+					found_subxact = true;
+
 				if (s->blockState == TBLOCK_SUBINPROGRESS)
 					s->blockState = TBLOCK_SUBCOMMIT;
 				else
@@ -3952,7 +4036,26 @@ EndTransactionBlock(bool chain)
 						 BlockStateAsString(s->blockState));
 				s = s->parent;
 			}
-			if (s->blockState == TBLOCK_INPROGRESS)
+			if (XactNesting == XACT_NEST_ALL && XactNestingLevel > 0)
+			{
+				if (s->parent == NULL && !found_subxact)
+					ereport(ERROR,
+							(errcode(ERRCODE_S_E_INVALID_SPECIFICATION),
+							 errmsg("nested transaction does not exist")));
+
+				/*
+				 * With transaction nesting, the COMMIT command no
+				 * longer forces main transaction abort, only the
+				 * subcommit of subxacts up to the last nested BEGIN.
+				 * We only mark state here; CommitTransactionCommand()
+				 * will release portals and resources.
+				 */
+				ereport(NOTICE,
+						(errmsg("COMMIT will commit nested subtransaction, level %u", XactNestingLevel)));
+				XactNestingLevel--;
+				return true;
+			}
+			else if (s->blockState == TBLOCK_INPROGRESS)
 				s->blockState = TBLOCK_END;
 			else
 				elog(FATAL, "EndTransactionBlock: unexpected state %s",
@@ -3966,8 +4069,19 @@ EndTransactionBlock(bool chain)
 			 * transaction.
 			 */
 		case TBLOCK_SUBABORT:
-			while (s->parent != NULL)
+			while (s->parent != NULL && !found_subxact)
 			{
+				/*
+				 * If we are handling nested transactions, release all
+				 * subtransactions up to the last nested subtransaction,
+				 * located via its internal name.
+				 */
+				if (XactNesting == XACT_NEST_ALL &&
+					XactNestingLevel > 0 &&
+					PointerIsValid(s->name) &&
+					strcmp(s->name, NESTED_XACT_NAME) == 0)
+					found_subxact = true;
+
 				if (s->blockState == TBLOCK_SUBINPROGRESS)
 					s->blockState = TBLOCK_SUBABORT_PENDING;
 				else if (s->blockState == TBLOCK_SUBABORT)
@@ -3976,6 +4090,18 @@ EndTransactionBlock(bool chain)
 					elog(FATAL, "EndTransactionBlock: unexpected state %s",
 						 BlockStateAsString(s->blockState));
 				s = s->parent;
+			}
+			if (XactNesting == XACT_NEST_ALL && XactNestingLevel > 0)
+			{
+				if (!found_subxact)
+					ereport(ERROR,
+							(errcode(ERRCODE_S_E_INVALID_SPECIFICATION),
+							 errmsg("nested transaction does not exist")));
+
+				ereport(NOTICE,
+						(errmsg("COMMIT will rollback nested subtransaction, level %u", XactNestingLevel)));
+				XactNestingLevel--;
+				return false;
 			}
 			if (s->blockState == TBLOCK_INPROGRESS)
 				s->blockState = TBLOCK_ABORT_PENDING;
@@ -4044,6 +4170,12 @@ EndTransactionBlock(bool chain)
 
 	s->chain = chain;
 
+	if (s->blockState == TBLOCK_END && XactRollbackOnCommit)
+	{
+		s->blockState = TBLOCK_ABORT_PENDING;
+		result = false;
+	}
+
 	return result;
 }
 
@@ -4057,6 +4189,7 @@ void
 UserAbortTransactionBlock(bool chain)
 {
 	TransactionState s = CurrentTransactionState;
+	bool found_subxact = false;
 
 	switch (s->blockState)
 	{
@@ -4066,7 +4199,14 @@ UserAbortTransactionBlock(bool chain)
 			 * exit the transaction block.
 			 */
 		case TBLOCK_INPROGRESS:
-			s->blockState = TBLOCK_ABORT_PENDING;
+			if (XactNesting == XACT_NEST_OUTER && XactNestingLevel > 0)
+			{
+				/* Throw ERROR */
+				ereport(ERROR,
+						(errmsg("nested ROLLBACK, level %u aborts outer transaction", XactNestingLevel--)));
+			}
+			else
+				s->blockState = TBLOCK_ABORT_PENDING;
 			break;
 
 			/*
@@ -4076,7 +4216,19 @@ UserAbortTransactionBlock(bool chain)
 			 * idle state.
 			 */
 		case TBLOCK_ABORT:
-			s->blockState = TBLOCK_ABORT_END;
+			if (XactNesting == XACT_NEST_OUTER)
+			{
+				if (XactNestingLevel <= 0)
+					s->blockState = TBLOCK_ABORT_END;
+				else
+				{
+					ereport(NOTICE,
+							(errmsg("nested ROLLBACK, level %u in aborted transaction", XactNestingLevel--)));
+				}
+				return;
+			}
+			else
+				s->blockState = TBLOCK_ABORT_END;
 			break;
 
 			/*
@@ -4085,8 +4237,19 @@ UserAbortTransactionBlock(bool chain)
 			 */
 		case TBLOCK_SUBINPROGRESS:
 		case TBLOCK_SUBABORT:
-			while (s->parent != NULL)
+			while (s->parent != NULL && !found_subxact)
 			{
+				/*
+				 * If we are handling nested transactions, release all
+				 * subtransactions up to the last nested subtransaction,
+				 * located via its internal name.
+				 */
+				if (XactNesting == XACT_NEST_ALL &&
+					XactNestingLevel > 0 &&
+					PointerIsValid(s->name) &&
+					strcmp(s->name, NESTED_XACT_NAME) == 0)
+					found_subxact = true;
+
 				if (s->blockState == TBLOCK_SUBINPROGRESS)
 					s->blockState = TBLOCK_SUBABORT_PENDING;
 				else if (s->blockState == TBLOCK_SUBABORT)
@@ -4095,6 +4258,18 @@ UserAbortTransactionBlock(bool chain)
 					elog(FATAL, "UserAbortTransactionBlock: unexpected state %s",
 						 BlockStateAsString(s->blockState));
 				s = s->parent;
+			}
+			if (XactNesting == XACT_NEST_ALL && XactNestingLevel > 0)
+			{
+				if (!found_subxact)
+					ereport(ERROR,
+							(errcode(ERRCODE_S_E_INVALID_SPECIFICATION),
+							 errmsg("nested transaction does not exist")));
+
+				ereport(NOTICE,
+						(errmsg("ROLLBACK will rollback nested subtransaction, level %u", XactNestingLevel)));
+				XactNestingLevel--;
+				return;
 			}
 			if (s->blockState == TBLOCK_INPROGRESS)
 				s->blockState = TBLOCK_ABORT_PENDING;
@@ -4239,6 +4414,11 @@ DefineSavepoint(const char *name)
 				(errcode(ERRCODE_INVALID_TRANSACTION_STATE),
 				 errmsg("cannot define savepoints during a parallel operation")));
 
+	if (name && strcmp(name, NESTED_XACT_NAME) == 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_TRANSACTION_STATE),
+				 errmsg("cannot reference savepoint with name %s", NESTED_XACT_NAME)));
+
 	switch (s->blockState)
 	{
 		case TBLOCK_INPROGRESS:
@@ -4325,6 +4505,11 @@ ReleaseSavepoint(const char *name)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TRANSACTION_STATE),
 				 errmsg("cannot release savepoints during a parallel operation")));
+
+	if (name && strcmp(name, NESTED_XACT_NAME) == 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_TRANSACTION_STATE),
+				 errmsg("cannot reference savepoint with name %s", NESTED_XACT_NAME)));
 
 	switch (s->blockState)
 	{
@@ -4434,6 +4619,11 @@ RollbackToSavepoint(const char *name)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TRANSACTION_STATE),
 				 errmsg("cannot rollback to savepoints during a parallel operation")));
+
+	if (name && strcmp(name, NESTED_XACT_NAME) == 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_TRANSACTION_STATE),
+				 errmsg("cannot reference savepoint with name %s", NESTED_XACT_NAME)));
 
 	switch (s->blockState)
 	{

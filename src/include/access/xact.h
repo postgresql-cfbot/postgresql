@@ -42,6 +42,17 @@ extern PGDLLIMPORT int DefaultXactIsoLevel;
 extern PGDLLIMPORT int XactIsoLevel;
 
 /*
+ * Xact nesting
+ */
+#define XACT_NEST_OFF	0
+#define XACT_NEST_ALL	1
+#define XACT_NEST_OUTER	2
+
+extern PGDLLIMPORT int DefaultXactNesting;
+
+extern PGDLLIMPORT bool DefaultXactRollbackOnCommit;
+
+/*
  * We implement three isolation levels internally.
  * The two stronger ones use one snapshot per database transaction;
  * the others use one snapshot per statement.
@@ -154,6 +165,8 @@ typedef struct SavedTransactionCharacteristics
 	int			save_XactIsoLevel;
 	bool		save_XactReadOnly;
 	bool		save_XactDeferrable;
+	int			save_XactNesting;
+	bool		save_XactRollbackOnCommit;
 } SavedTransactionCharacteristics;
 
 

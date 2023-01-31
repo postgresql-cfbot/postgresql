@@ -1105,7 +1105,7 @@ SendQuery(const char *query)
 		on_error_rollback_savepoint = true;
 	}
 
-	if (pset.gdesc_flag)
+	if (pset.gdesc_flag || pset.parse_only)
 	{
 		/* Describe query's result columns, without executing it */
 		OK = DescribeQuery(query, &elapsed_msec);
@@ -1296,6 +1296,19 @@ DescribeQuery(const char *query, double *elapsed_msec)
 		return false;
 	}
 	PQclear(result);
+
+	if (pset.parse_only)
+	{
+		/*
+		 * If you wanted to, here would be a good place to output a message.
+		 * By normal practice, success returns nothing, not even a
+		 * command tag, to differentiate from normal execution.
+		 *
+		fprintf(pset.queryFout,
+				_("Parsed successfully.\n"));
+		 */
+		return true;
+	}
 
 	result = PQdescribePrepared(pset.db, "");
 	OK = AcceptResult(result, true) &&

@@ -463,6 +463,9 @@ pgstat_get_wait_ipc(WaitEventIPC w)
 		case WAIT_EVENT_WAL_RECEIVER_WAIT_START:
 			event_name = "WalReceiverWaitStart";
 			break;
+		case WAIT_EVENT_WAL_SENDER_WAIT_REPLAY:
+			event_name = "WalReceiverWaitReplay";
+			break;
 		case WAIT_EVENT_XACT_GROUP_UPDATE:
 			event_name = "XactGroupUpdate";
 			break;

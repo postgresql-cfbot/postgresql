@@ -980,8 +980,10 @@ hash_xlog_vacuum_one_page(XLogReaderState *record)
 	Page		page;
 	XLogRedoAction action;
 	HashPageOpaque pageopaque;
+	OffsetNumber *toDelete;
 
 	xldata = (xl_hash_vacuum_one_page *) XLogRecGetData(record);
+	toDelete = xldata->offsets;
 
 	/*
 	 * If we have any conflict processing to do, it must happen before we
@@ -1001,6 +1003,7 @@ hash_xlog_vacuum_one_page(XLogReaderState *record)
 
 		XLogRecGetBlockTag(record, 0, &rlocator, NULL, NULL);
 		ResolveRecoveryConflictWithSnapshot(xldata->snapshotConflictHorizon,
+											xldata->isCatalogRel,
 											rlocator);
 	}
 
@@ -1010,15 +1013,7 @@ hash_xlog_vacuum_one_page(XLogReaderState *record)
 	{
 		page = (Page) BufferGetPage(buffer);
 
-		if (XLogRecGetDataLen(record) > SizeOfHashVacuumOnePage)
-		{
-			OffsetNumber *unused;
-
-			unused = (OffsetNumber *) ((char *) xldata + SizeOfHashVacuumOnePage);
-
-			PageIndexMultiDelete(page, unused, xldata->ntuples);
-		}
-
+		PageIndexMultiDelete(page, toDelete, xldata->ntuples);
 		/*
 		 * Mark the page as not containing any LP_DEAD items. See comments in
 		 * _hash_vacuum_one_page() for details.

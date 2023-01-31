@@ -232,7 +232,7 @@ pg_drop_replication_slot(PG_FUNCTION_ARGS)
 Datum
 pg_get_replication_slots(PG_FUNCTION_ARGS)
 {
-#define PG_GET_REPLICATION_SLOTS_COLS 14
+#define PG_GET_REPLICATION_SLOTS_COLS 15
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
 	XLogRecPtr	currlsn;
 	int			slotno;
@@ -403,6 +403,17 @@ pg_get_replication_slots(PG_FUNCTION_ARGS)
 		}
 
 		values[i++] = BoolGetDatum(slot_contents.data.two_phase);
+
+		if (slot_contents.data.database == InvalidOid)
+			nulls[i++] = true;
+		else
+		{
+			if (slot_contents.data.xmin == InvalidTransactionId &&
+				slot_contents.data.catalog_xmin == InvalidTransactionId)
+				values[i++] = BoolGetDatum(true);
+			else
+				values[i++] = BoolGetDatum(false);
+		}
 
 		Assert(i == PG_GET_REPLICATION_SLOTS_COLS);
 

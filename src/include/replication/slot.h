@@ -17,6 +17,8 @@
 #include "storage/spin.h"
 #include "replication/walreceiver.h"
 
+#define LogicalReplicationSlotIsInvalid(s) (!TransactionIdIsValid(s->data.xmin) && \
+											 !TransactionIdIsValid(s->data.catalog_xmin))
 /*
  * Behaviour of replication slots, upon release or crash.
  *
@@ -215,7 +217,7 @@ extern void ReplicationSlotsComputeRequiredLSN(void);
 extern XLogRecPtr ReplicationSlotsComputeLogicalRestartLSN(void);
 extern bool ReplicationSlotsCountDBSlots(Oid dboid, int *nslots, int *nactive);
 extern void ReplicationSlotsDropDBSlots(Oid dboid);
-extern bool InvalidateObsoleteReplicationSlots(XLogSegNo oldestSegno);
+extern void InvalidateObsoleteReplicationSlots(XLogSegNo oldestSegno, bool *invalidated, Oid dboid, TransactionId *xid);
 extern ReplicationSlot *SearchNamedReplicationSlot(const char *name, bool need_lock);
 extern int	ReplicationSlotIndex(ReplicationSlot *slot);
 extern bool ReplicationSlotName(int index, Name name);
@@ -227,5 +229,6 @@ extern void CheckPointReplicationSlots(void);
 
 extern void CheckSlotRequirements(void);
 extern void CheckSlotPermissions(void);
+extern void ResolveRecoveryConflictWithLogicalSlots(Oid dboid, TransactionId xid, char *reason);
 
 #endif							/* SLOT_H */

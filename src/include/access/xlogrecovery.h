@@ -15,6 +15,7 @@
 #include "catalog/pg_control.h"
 #include "lib/stringinfo.h"
 #include "utils/timestamp.h"
+#include "storage/condition_variable.h"
 
 /*
  * Recovery target type.
@@ -154,5 +155,7 @@ extern void XLogRequestWalReceiverReply(void);
 extern void RecoveryRequiresIntParameter(const char *param_name, int currValue, int minValue);
 
 extern void xlog_outdesc(StringInfo buf, XLogReaderState *record);
+
+extern ConditionVariable *check_for_replay(void);
 
 #endif							/* XLOGRECOVERY_H */

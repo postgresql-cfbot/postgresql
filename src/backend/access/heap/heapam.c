@@ -6872,6 +6872,7 @@ heap_freeze_execute_prepared(Relation rel, Buffer buffer,
 		nplans = heap_log_freeze_plan(tuples, ntuples, plans, offsets);
 
 		xlrec.snapshotConflictHorizon = snapshotConflictHorizon;
+		xlrec.isCatalogRel = RelationIsAccessibleInLogicalDecoding(rel);
 		xlrec.nplans = nplans;
 
 		XLogBeginInsert();
@@ -8442,7 +8443,7 @@ bottomup_sort_and_shrink(TM_IndexDeleteOp *delstate)
  * update the heap page's LSN.
  */
 XLogRecPtr
-log_heap_visible(RelFileLocator rlocator, Buffer heap_buffer, Buffer vm_buffer,
+log_heap_visible(Relation rel, Buffer heap_buffer, Buffer vm_buffer,
 				 TransactionId snapshotConflictHorizon, uint8 vmflags)
 {
 	xl_heap_visible xlrec;
@@ -8454,6 +8455,8 @@ log_heap_visible(RelFileLocator rlocator, Buffer heap_buffer, Buffer vm_buffer,
 
 	xlrec.snapshotConflictHorizon = snapshotConflictHorizon;
 	xlrec.flags = vmflags;
+	if (RelationIsAccessibleInLogicalDecoding(rel))
+		xlrec.flags |= VISIBILITYMAP_IS_CATALOG_REL;
 	XLogBeginInsert();
 	XLogRegisterData((char *) &xlrec, SizeOfHeapVisible);
 
@@ -8888,6 +8891,7 @@ heap_xlog_prune(XLogReaderState *record)
 	 */
 	if (InHotStandby)
 		ResolveRecoveryConflictWithSnapshot(xlrec->snapshotConflictHorizon,
+											xlrec->isCatalogRel,
 											rlocator);
 
 	/*
@@ -9057,6 +9061,7 @@ heap_xlog_visible(XLogReaderState *record)
 	 */
 	if (InHotStandby)
 		ResolveRecoveryConflictWithSnapshot(xlrec->snapshotConflictHorizon,
+											xlrec->flags & VISIBILITYMAP_IS_CATALOG_REL,
 											rlocator);
 
 	/*
@@ -9174,6 +9179,7 @@ heap_xlog_freeze_page(XLogReaderState *record)
 
 		XLogRecGetBlockTag(record, 0, &rlocator, NULL, NULL);
 		ResolveRecoveryConflictWithSnapshot(xlrec->snapshotConflictHorizon,
+											xlrec->isCatalogRel,
 											rlocator);
 	}
 

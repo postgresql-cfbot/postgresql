@@ -4466,6 +4466,17 @@ LocalProcessControlFile(bool reset)
 }
 
 /*
+ * Get the wal_level from the control file. For a standby, this value should be
+ * considered as its active wal_level, because it may be different from what
+ * was originally configured on standby.
+ */
+WalLevel
+GetActiveWalLevelOnStandby(void)
+{
+	return ControlFile->wal_level;
+}
+
+/*
  * Initialization of shared memory for XLOG
  */
 Size
@@ -6447,6 +6458,7 @@ CreateCheckPoint(int flags)
 	VirtualTransactionId *vxids;
 	int			nvxids;
 	int			oldXLogAllowed = 0;
+	bool		invalidated = false;
 
 	/*
 	 * An end-of-recovery checkpoint is really a shutdown checkpoint, just
@@ -6807,7 +6819,8 @@ CreateCheckPoint(int flags)
 	 */
 	XLByteToSeg(RedoRecPtr, _logSegNo, wal_segment_size);
 	KeepLogSeg(recptr, &_logSegNo);
-	if (InvalidateObsoleteReplicationSlots(_logSegNo))
+	InvalidateObsoleteReplicationSlots(_logSegNo, &invalidated, InvalidOid, NULL);
+	if (invalidated)
 	{
 		/*
 		 * Some slots have been invalidated; recalculate the old-segment
@@ -7086,6 +7099,7 @@ CreateRestartPoint(int flags)
 	XLogRecPtr	endptr;
 	XLogSegNo	_logSegNo;
 	TimestampTz xtime;
+	bool		invalidated = false;
 
 	/* Concurrent checkpoint/restartpoint cannot happen */
 	Assert(!IsUnderPostmaster || MyBackendType == B_CHECKPOINTER);
@@ -7251,7 +7265,8 @@ CreateRestartPoint(int flags)
 	replayPtr = GetXLogReplayRecPtr(&replayTLI);
 	endptr = (receivePtr < replayPtr) ? replayPtr : receivePtr;
 	KeepLogSeg(endptr, &_logSegNo);
-	if (InvalidateObsoleteReplicationSlots(_logSegNo))
+	InvalidateObsoleteReplicationSlots(_logSegNo, &invalidated, InvalidOid, NULL);
+	if (invalidated)
 	{
 		/*
 		 * Some slots have been invalidated; recalculate the old-segment
@@ -7965,6 +7980,22 @@ xlog_redo(XLogReaderState *record)
 
 		/* Update our copy of the parameters in pg_control */
 		memcpy(&xlrec, XLogRecGetData(record), sizeof(xl_parameter_change));
+
+		/*
+		 * Invalidate logical slots if we are in hot standby and the primary does not
+		 * have a WAL level sufficient for logical decoding. No need to search
+		 * for potentially conflicting logically slots if standby is running
+		 * with wal_level lower than logical, because in that case, we would
+		 * have either disallowed creation of logical slots or invalidated existing
+		 * ones.
+		 */
+		if (InRecovery && InHotStandby &&
+			xlrec.wal_level < WAL_LEVEL_LOGICAL &&
+			wal_level >= WAL_LEVEL_LOGICAL)
+		{
+			TransactionId ConflictHorizon = InvalidTransactionId;
+			InvalidateObsoleteReplicationSlots(InvalidXLogRecPtr, NULL, InvalidOid, &ConflictHorizon);
+		}
 
 		LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
 		ControlFile->MaxConnections = xlrec.MaxConnections;

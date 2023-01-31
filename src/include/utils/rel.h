@@ -27,6 +27,7 @@
 #include "storage/smgr.h"
 #include "utils/relcache.h"
 #include "utils/reltrigger.h"
+#include "catalog/catalog.h"
 
 
 /*

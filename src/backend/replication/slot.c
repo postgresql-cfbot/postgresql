@@ -51,6 +51,7 @@
 #include "storage/proc.h"
 #include "storage/procarray.h"
 #include "utils/builtins.h"
+#include "access/xlogrecovery.h"
 
 /*
  * Replication slot on-disk data structure.
@@ -855,8 +856,10 @@ ReplicationSlotsComputeRequiredXmin(bool already_locked)
 		SpinLockAcquire(&s->mutex);
 		effective_xmin = s->effective_xmin;
 		effective_catalog_xmin = s->effective_catalog_xmin;
-		invalidated = (!XLogRecPtrIsInvalid(s->data.invalidated_at) &&
-					   XLogRecPtrIsInvalid(s->data.restart_lsn));
+		invalidated = ((!XLogRecPtrIsInvalid(s->data.invalidated_at) &&
+						XLogRecPtrIsInvalid(s->data.restart_lsn))
+					   || (!TransactionIdIsValid(s->data.xmin) &&
+						   !TransactionIdIsValid(s->data.catalog_xmin)));
 		SpinLockRelease(&s->mutex);
 
 		/* invalidated slots need not apply */
@@ -1175,37 +1178,28 @@ ReplicationSlotReserveWal(void)
 		/*
 		 * For logical slots log a standby snapshot and start logical decoding
 		 * at exactly that position. That allows the slot to start up more
-		 * quickly.
+		 * quickly. But on a standby we cannot do WAL writes, so just use the
+		 * replay pointer; effectively, an attempt to create a logical slot on
+		 * standby will cause it to wait for an xl_running_xact record to be
+		 * logged independently on the primary, so that a snapshot can be built
+		 * using the record.
 		 *
-		 * That's not needed (or indeed helpful) for physical slots as they'll
-		 * start replay at the last logged checkpoint anyway. Instead return
-		 * the location of the last redo LSN. While that slightly increases
-		 * the chance that we have to retry, it's where a base backup has to
-		 * start replay at.
+		 * None of this is needed (or indeed helpful) for physical slots as
+		 * they'll start replay at the last logged checkpoint anyway. Instead
+		 * return the location of the last redo LSN. While that slightly
+		 * increases the chance that we have to retry, it's where a base backup
+		 * has to start replay at.
 		 */
-		if (!RecoveryInProgress() && SlotIsLogical(slot))
-		{
-			XLogRecPtr	flushptr;
-
-			/* start at current insert position */
-			restart_lsn = GetXLogInsertRecPtr();
-			SpinLockAcquire(&slot->mutex);
-			slot->data.restart_lsn = restart_lsn;
-			SpinLockRelease(&slot->mutex);
-
-			/* make sure we have enough information to start */
-			flushptr = LogStandbySnapshot();
-
-			/* and make sure it's fsynced to disk */
-			XLogFlush(flushptr);
-		}
-		else
-		{
+		if (SlotIsPhysical(slot))
 			restart_lsn = GetRedoRecPtr();
-			SpinLockAcquire(&slot->mutex);
-			slot->data.restart_lsn = restart_lsn;
-			SpinLockRelease(&slot->mutex);
-		}
+		else if (RecoveryInProgress())
+			restart_lsn = GetXLogReplayRecPtr(NULL);
+		else
+			restart_lsn = GetXLogInsertRecPtr();
+
+		SpinLockAcquire(&slot->mutex);
+		slot->data.restart_lsn = restart_lsn;
+		SpinLockRelease(&slot->mutex);
 
 		/* prevent WAL removal as fast as possible */
 		ReplicationSlotsComputeRequiredLSN();
@@ -1221,23 +1215,35 @@ ReplicationSlotReserveWal(void)
 		if (XLogGetLastRemovedSegno() < segno)
 			break;
 	}
+
+	if (!RecoveryInProgress() && SlotIsLogical(slot))
+	{
+		XLogRecPtr	flushptr;
+
+		/* make sure we have enough information to start */
+		flushptr = LogStandbySnapshot();
+
+		/* and make sure it's fsynced to disk */
+		XLogFlush(flushptr);
+	}
 }
 
 /*
- * Helper for InvalidateObsoleteReplicationSlots -- acquires the given slot
- * and mark it invalid, if necessary and possible.
+ * Helper for InvalidateObsoleteReplicationSlots
+ *
+ * Acquires the given slot and mark it invalid, if necessary and possible.
  *
  * Returns whether ReplicationSlotControlLock was released in the interim (and
  * in that case we're not holding the lock at return, otherwise we are).
  *
- * Sets *invalidated true if the slot was invalidated. (Untouched otherwise.)
+ * Sets *invalidated true if an obsolete slot was invalidated. (Untouched otherwise.)
  *
  * This is inherently racy, because we release the LWLock
  * for syscalls, so caller must restart if we return true.
  */
 static bool
-InvalidatePossiblyObsoleteSlot(ReplicationSlot *s, XLogRecPtr oldestLSN,
-							   bool *invalidated)
+InvalidatePossiblyObsoleteOrConflictingLogicalSlot(ReplicationSlot *s, XLogRecPtr oldestLSN,
+												   bool *invalidated, TransactionId *xid)
 {
 	int			last_signaled_pid = 0;
 	bool		released_lock = false;
@@ -1245,6 +1251,9 @@ InvalidatePossiblyObsoleteSlot(ReplicationSlot *s, XLogRecPtr oldestLSN,
 	for (;;)
 	{
 		XLogRecPtr	restart_lsn;
+		TransactionId slot_xmin;
+		TransactionId slot_catalog_xmin;
+
 		NameData	slotname;
 		int			active_pid = 0;
 
@@ -1261,18 +1270,33 @@ InvalidatePossiblyObsoleteSlot(ReplicationSlot *s, XLogRecPtr oldestLSN,
 		 * Check if the slot needs to be invalidated. If it needs to be
 		 * invalidated, and is not currently acquired, acquire it and mark it
 		 * as having been invalidated.  We do this with the spinlock held to
-		 * avoid race conditions -- for example the restart_lsn could move
-		 * forward, or the slot could be dropped.
+		 * avoid race conditions -- for example the restart_lsn (or the
+		 * xmin(s) could) move forward or the slot could be dropped.
 		 */
 		SpinLockAcquire(&s->mutex);
 
 		restart_lsn = s->data.restart_lsn;
+		slot_xmin = s->data.xmin;
+		slot_catalog_xmin = s->data.catalog_xmin;
+
+		/* slot has been invalidated (logical decoding conflict case) */
+		if ((xid &&
+			 ((LogicalReplicationSlotIsInvalid(s))
+			  ||
 
 		/*
-		 * If the slot is already invalid or is fresh enough, we don't need to
-		 * do anything.
+		 * We are not forcing for invalidation because the xid is valid and
+		 * this is a non conflicting slot.
 		 */
-		if (XLogRecPtrIsInvalid(restart_lsn) || restart_lsn >= oldestLSN)
+			  (TransactionIdIsValid(*xid) && !(
+											   (TransactionIdIsValid(slot_xmin) && TransactionIdPrecedesOrEquals(slot_xmin, *xid))
+											   ||
+											   (TransactionIdIsValid(slot_catalog_xmin) && TransactionIdPrecedesOrEquals(slot_catalog_xmin, *xid))
+											   ))
+			  ))
+			||
+		/* slot has been invalidated (obsolete LSN case) */
+			(!xid && (XLogRecPtrIsInvalid(restart_lsn) || restart_lsn >= oldestLSN)))
 		{
 			SpinLockRelease(&s->mutex);
 			if (released_lock)
@@ -1292,9 +1316,16 @@ InvalidatePossiblyObsoleteSlot(ReplicationSlot *s, XLogRecPtr oldestLSN,
 		{
 			MyReplicationSlot = s;
 			s->active_pid = MyProcPid;
-			s->data.invalidated_at = restart_lsn;
-			s->data.restart_lsn = InvalidXLogRecPtr;
-
+			if (xid)
+			{
+				s->data.xmin = InvalidTransactionId;
+				s->data.catalog_xmin = InvalidTransactionId;
+			}
+			else
+			{
+				s->data.invalidated_at = restart_lsn;
+				s->data.restart_lsn = InvalidXLogRecPtr;
+			}
 			/* Let caller know */
 			*invalidated = true;
 		}
@@ -1327,15 +1358,39 @@ InvalidatePossiblyObsoleteSlot(ReplicationSlot *s, XLogRecPtr oldestLSN,
 			 */
 			if (last_signaled_pid != active_pid)
 			{
-				ereport(LOG,
-						errmsg("terminating process %d to release replication slot \"%s\"",
-							   active_pid, NameStr(slotname)),
-						errdetail("The slot's restart_lsn %X/%X exceeds the limit by %llu bytes.",
-								  LSN_FORMAT_ARGS(restart_lsn),
-								  (unsigned long long) (oldestLSN - restart_lsn)),
-						errhint("You might need to increase max_slot_wal_keep_size."));
+				if (xid)
+				{
+					if (TransactionIdIsValid(*xid))
+					{
+						ereport(LOG,
+								errmsg("terminating process %d because replication slot \"%s\" conflicts with recovery",
+									   active_pid, NameStr(slotname)),
+								errdetail("The slot conflicted with xid horizon %u.",
+										  *xid));
+					}
+					else
+					{
+						ereport(LOG,
+								errmsg("terminating process %d because replication slot \"%s\" conflicts with recovery",
+									   active_pid, NameStr(slotname)),
+								errdetail("Logical decoding on standby requires wal_level to be at least logical on the primary server"));
+					}
 
-				(void) kill(active_pid, SIGTERM);
+					(void) SendProcSignal(active_pid, PROCSIG_RECOVERY_CONFLICT_LOGICALSLOT, InvalidBackendId);
+				}
+				else
+				{
+					ereport(LOG,
+							errmsg("terminating process %d to release replication slot \"%s\"",
+								   active_pid, NameStr(slotname)),
+							errdetail("The slot's restart_lsn %X/%X exceeds the limit by %llu bytes.",
+									  LSN_FORMAT_ARGS(restart_lsn),
+									  (unsigned long long) (oldestLSN - restart_lsn)),
+							errhint("You might need to increase max_slot_wal_keep_size."));
+
+					(void) kill(active_pid, SIGTERM);
+				}
+
 				last_signaled_pid = active_pid;
 			}
 
@@ -1369,13 +1424,33 @@ InvalidatePossiblyObsoleteSlot(ReplicationSlot *s, XLogRecPtr oldestLSN,
 			ReplicationSlotSave();
 			ReplicationSlotRelease();
 
-			ereport(LOG,
-					errmsg("invalidating obsolete replication slot \"%s\"",
-						   NameStr(slotname)),
-					errdetail("The slot's restart_lsn %X/%X exceeds the limit by %llu bytes.",
-							  LSN_FORMAT_ARGS(restart_lsn),
-							  (unsigned long long) (oldestLSN - restart_lsn)),
-					errhint("You might need to increase max_slot_wal_keep_size."));
+			if (xid)
+			{
+				pgstat_drop_replslot(s);
+
+				if (TransactionIdIsValid(*xid))
+				{
+					ereport(LOG,
+							errmsg("invalidating slot \"%s\" because it conflicts with recovery", NameStr(slotname)),
+							errdetail("The slot conflicted with xid horizon %u.", *xid));
+				}
+				else
+				{
+					ereport(LOG,
+							errmsg("invalidating slot \"%s\" because it conflicts with recovery", NameStr(slotname)),
+							errdetail("Logical decoding on standby requires wal_level to be at least logical on the primary server"));
+				}
+			}
+			else
+			{
+				ereport(LOG,
+						errmsg("invalidating obsolete replication slot \"%s\"",
+							   NameStr(slotname)),
+						errdetail("The slot's restart_lsn %X/%X exceeds the limit by %llu bytes.",
+								  LSN_FORMAT_ARGS(restart_lsn),
+								  (unsigned long long) (oldestLSN - restart_lsn)),
+						errhint("You might need to increase max_slot_wal_keep_size."));
+			}
 
 			/* done with this slot for now */
 			break;
@@ -1388,20 +1463,40 @@ InvalidatePossiblyObsoleteSlot(ReplicationSlot *s, XLogRecPtr oldestLSN,
 }
 
 /*
- * Mark any slot that points to an LSN older than the given segment
- * as invalid; it requires WAL that's about to be removed.
+ * Invalidate Obsolete slots or resolve recovery conflicts with logical slots.
  *
- * Returns true when any slot have got invalidated.
+ * Obsolete case (aka xid is NULL):
  *
- * NB - this runs as part of checkpoint, so avoid raising errors if possible.
+ *	 Mark any slot that points to an LSN older than the given segment
+ *	 as invalid; it requires WAL that's about to be removed.
+ *	 invalidated is set to true when any slot have got invalidated.
+ *
+ *  Logical replication slot case:
+ *
+ *	 When xid is valid, it means that we are about to remove rows older than xid.
+ *	 Therefore we need to invalidate slots that depend on seeing those rows.
+ *	 When xid is invalid, invalidate all logical slots. This is required when the
+ *	 master wal_level is set back to replica, so existing logical slots need to
+ *	 be invalidated.
  */
-bool
-InvalidateObsoleteReplicationSlots(XLogSegNo oldestSegno)
+void
+InvalidateObsoleteReplicationSlots(XLogSegNo oldestSegno, bool *invalidated, Oid dboid, TransactionId *xid)
 {
-	XLogRecPtr	oldestLSN;
-	bool		invalidated = false;
 
-	XLogSegNoOffsetToRecPtr(oldestSegno, 0, wal_segment_size, oldestLSN);
+	XLogRecPtr	oldestLSN = InvalidXLogRecPtr;
+	bool logical_slot_invalidated = false;
+
+	Assert(max_replication_slots >= 0);
+
+	if (max_replication_slots == 0)
+		return;
+
+	if (!xid)
+	{
+		Assert(invalidated);
+		*invalidated = false;
+		XLogSegNoOffsetToRecPtr(oldestSegno, 0, wal_segment_size, oldestLSN);
+	}
 
 restart:
 	LWLockAcquire(ReplicationSlotControlLock, LW_SHARED);
@@ -1412,24 +1507,36 @@ restart:
 		if (!s->in_use)
 			continue;
 
-		if (InvalidatePossiblyObsoleteSlot(s, oldestLSN, &invalidated))
+		if (xid)
 		{
-			/* if the lock was released, start from scratch */
-			goto restart;
+			/* we are only dealing with *logical* slot conflicts */
+			if (!SlotIsLogical(s))
+				continue;
+
+			/*
+			 * not the database of interest and we don't want all the
+			 * database, skip
+			 */
+			if (s->data.database != dboid && TransactionIdIsValid(*xid))
+				continue;
 		}
+
+		if (InvalidatePossiblyObsoleteOrConflictingLogicalSlot(s, oldestLSN, invalidated ? invalidated : &logical_slot_invalidated, xid))
+				goto restart;
 	}
+
 	LWLockRelease(ReplicationSlotControlLock);
 
 	/*
-	 * If any slots have been invalidated, recalculate the resource limits.
+	 * If any slots have been invalidated, recalculate the required xmin
+	 * and the required lsn (if appropriate).
 	 */
-	if (invalidated)
+	if ((!xid && *invalidated) || (xid && logical_slot_invalidated))
 	{
 		ReplicationSlotsComputeRequiredXmin(false);
-		ReplicationSlotsComputeRequiredLSN();
+		if (!xid && *invalidated)
+			ReplicationSlotsComputeRequiredLSN();
 	}
-
-	return invalidated;
 }
 
 /*

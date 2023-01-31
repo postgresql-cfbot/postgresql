@@ -348,7 +348,7 @@ gistplacetopage(Relation rel, Size freespace, GISTSTATE *giststate,
 		for (; ptr; ptr = ptr->next)
 		{
 			/* Allocate new page */
-			ptr->buffer = gistNewBuffer(rel);
+			ptr->buffer = gistNewBuffer(rel, heapRel);
 			GISTInitBuffer(ptr->buffer, (is_leaf) ? F_LEAF : 0);
 			ptr->page = BufferGetPage(ptr->buffer);
 			ptr->block.blkno = BufferGetBlockNumber(ptr->buffer);
@@ -1694,7 +1694,8 @@ gistprunepage(Relation rel, Page page, Buffer buffer, Relation heapRel)
 
 			recptr = gistXLogDelete(buffer,
 									deletable, ndeletable,
-									snapshotConflictHorizon);
+									snapshotConflictHorizon,
+									heapRel);
 
 			PageSetLSN(page, recptr);
 		}

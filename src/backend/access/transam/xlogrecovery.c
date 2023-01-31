@@ -358,6 +358,9 @@ typedef struct XLogRecoveryCtlData
 	RecoveryPauseState recoveryPauseState;
 	ConditionVariable recoveryNotPausedCV;
 
+	/* Replay state (see check_for_replay() for more explanation) */
+	ConditionVariable replayedCV;
+
 	slock_t		info_lck;		/* locks shared variables shown above */
 } XLogRecoveryCtlData;
 
@@ -467,6 +470,7 @@ XLogRecoveryShmemInit(void)
 	SpinLockInit(&XLogRecoveryCtl->info_lck);
 	InitSharedLatch(&XLogRecoveryCtl->recoveryWakeupLatch);
 	ConditionVariableInit(&XLogRecoveryCtl->recoveryNotPausedCV);
+	ConditionVariableInit(&XLogRecoveryCtl->replayedCV);
 }
 
 /*
@@ -1915,6 +1919,11 @@ ApplyWalRecord(XLogReaderState *xlogreader, XLogRecord *record, TimeLineID *repl
 	XLogRecoveryCtl->lastReplayedEndRecPtr = xlogreader->EndRecPtr;
 	XLogRecoveryCtl->lastReplayedTLI = *replayTLI;
 	SpinLockRelease(&XLogRecoveryCtl->info_lck);
+
+	/*
+	 * wake up walsender(s) used by logical decoding on standby.
+	 */
+	ConditionVariableBroadcast(&XLogRecoveryCtl->replayedCV);
 
 	/*
 	 * If rm_redo called XLogRequestWalReceiverReply, then we wake up the
@@ -4922,4 +4931,23 @@ assign_recovery_target_xid(const char *newval, void *extra)
 	}
 	else
 		recoveryTarget = RECOVERY_TARGET_UNSET;
+}
+
+/*
+ * Return the ConditionVariable indicating that a replay has been done.
+ *
+ * This is needed for logical decoding on standby. Indeed the "problem" is that
+ * WalSndWaitForWal() waits for the *replay* LSN to increase, but gets woken up
+ * by walreceiver when new WAL has been flushed. Which means that typically
+ * walsenders will get woken up at the same time that the startup process
+ * will be - which means that by the time the logical walsender checks
+ * GetXLogReplayRecPtr() it's unlikely that the startup process already replayed
+ * the record and updated XLogCtl->lastReplayedEndRecPtr.
+ *
+ * The ConditionVariable XLogRecoveryCtl->replayedCV solves this corner case.
+ */
+ConditionVariable *
+check_for_replay(void)
+{
+	return &XLogRecoveryCtl->replayedCV;
 }

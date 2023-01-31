@@ -216,9 +216,9 @@ pg_logical_slot_get_changes_guts(FunctionCallInfo fcinfo, bool confirm, bool bin
 
 		/*
 		 * After the sanity checks in CreateDecodingContext, make sure the
-		 * restart_lsn is valid.  Avoid "cannot get changes" wording in this
-		 * errmsg because that'd be confusingly ambiguous about no changes
-		 * being available.
+		 * restart_lsn is valid or both xmin and catalog_xmin are valid. Avoid
+		 * "cannot get changes" wording in this errmsg because that'd be
+		 * confusingly ambiguous about no changes being available.
 		 */
 		if (XLogRecPtrIsInvalid(MyReplicationSlot->data.restart_lsn))
 			ereport(ERROR,
@@ -226,6 +226,13 @@ pg_logical_slot_get_changes_guts(FunctionCallInfo fcinfo, bool confirm, bool bin
 					 errmsg("can no longer get changes from replication slot \"%s\"",
 							NameStr(*name)),
 					 errdetail("This slot has never previously reserved WAL, or it has been invalidated.")));
+
+		if (LogicalReplicationSlotIsInvalid(MyReplicationSlot))
+			ereport(ERROR,
+					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+					 errmsg("cannot read from logical replication slot \"%s\"",
+							NameStr(*name)),
+					 errdetail("This slot has been invalidated because it was conflicting with recovery.")));
 
 		MemoryContextSwitchTo(oldcontext);
 

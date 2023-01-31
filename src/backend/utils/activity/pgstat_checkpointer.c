@@ -89,6 +89,7 @@ pgstat_checkpointer_reset_all_cb(TimestampTz ts)
 									&stats_shmem->stats,
 									sizeof(stats_shmem->stats),
 									&stats_shmem->changecount);
+	stats_shmem->stats.stat_reset_timestamp = ts;
 	LWLockRelease(&stats_shmem->lock);
 }
 

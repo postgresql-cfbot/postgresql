@@ -1176,19 +1176,19 @@ PG_STAT_GET_DBENTRY_FLOAT8(idle_in_transaction_time)
 PG_STAT_GET_DBENTRY_FLOAT8(session_time)
 
 Datum
-pg_stat_get_bgwriter_timed_checkpoints(PG_FUNCTION_ARGS)
+pg_stat_get_timed_checkpoints(PG_FUNCTION_ARGS)
 {
 	PG_RETURN_INT64(pgstat_fetch_stat_checkpointer()->timed_checkpoints);
 }
 
 Datum
-pg_stat_get_bgwriter_requested_checkpoints(PG_FUNCTION_ARGS)
+pg_stat_get_requested_checkpoints(PG_FUNCTION_ARGS)
 {
 	PG_RETURN_INT64(pgstat_fetch_stat_checkpointer()->requested_checkpoints);
 }
 
 Datum
-pg_stat_get_bgwriter_buf_written_checkpoints(PG_FUNCTION_ARGS)
+pg_stat_get_buf_written_checkpoints(PG_FUNCTION_ARGS)
 {
 	PG_RETURN_INT64(pgstat_fetch_stat_checkpointer()->buf_written_checkpoints);
 }
@@ -1219,6 +1219,12 @@ pg_stat_get_checkpoint_sync_time(PG_FUNCTION_ARGS)
 	/* time is already in msec, just convert to double for presentation */
 	PG_RETURN_FLOAT8((double)
 					 pgstat_fetch_stat_checkpointer()->checkpoint_sync_time);
+}
+
+Datum
+pg_stat_get_checkpointer_stat_reset_time(PG_FUNCTION_ARGS)
+{
+	PG_RETURN_TIMESTAMPTZ(pgstat_fetch_stat_checkpointer()->stat_reset_timestamp);
 }
 
 Datum
@@ -1596,14 +1602,9 @@ pg_stat_reset_shared(PG_FUNCTION_ARGS)
 	if (strcmp(target, "archiver") == 0)
 		pgstat_reset_of_kind(PGSTAT_KIND_ARCHIVER);
 	else if (strcmp(target, "bgwriter") == 0)
-	{
-		/*
-		 * Historically checkpointer was part of bgwriter, continue to reset
-		 * both for now.
-		 */
 		pgstat_reset_of_kind(PGSTAT_KIND_BGWRITER);
+	else if (strcmp(target, "checkpointer") == 0)
 		pgstat_reset_of_kind(PGSTAT_KIND_CHECKPOINTER);
-	}
 	else if (strcmp(target, "recovery_prefetch") == 0)
 		XLogPrefetchResetStats();
 	else if (strcmp(target, "wal") == 0)

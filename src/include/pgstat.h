@@ -274,6 +274,7 @@ typedef struct PgStat_CheckpointerStats
 	PgStat_Counter buf_written_checkpoints;
 	PgStat_Counter buf_written_backend;
 	PgStat_Counter buf_fsync_backend;
+	TimestampTz stat_reset_timestamp;
 } PgStat_CheckpointerStats;
 
 typedef struct PgStat_StatDBEntry

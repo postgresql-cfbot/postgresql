@@ -45,6 +45,7 @@ extern void ExecCleanupTupleRouting(ModifyTableState *mtstate,
  * nparts						Length of subplan_map[] and subpart_map[].
  * subplan_map					Subplan index by partition index, or -1.
  * subpart_map					Subpart index by partition index, or -1.
+ * rti_map						Range table index by partition index, or 0.
  * present_parts				A Bitmapset of the partition indexes that we
  *								have subplans or subparts for.
  * initial_pruning_steps		List of PartitionPruneSteps used to
@@ -61,6 +62,7 @@ typedef struct PartitionedRelPruningData
 	int			nparts;
 	int		   *subplan_map;
 	int		   *subpart_map;
+	Index	   *rti_map;
 	Bitmapset  *present_parts;
 	List	   *initial_pruning_steps;
 	List	   *exec_pruning_steps;
@@ -126,6 +128,16 @@ extern PartitionPruneState *ExecInitPartitionPruning(PlanState *planstate,
 													 int part_prune_index,
 													 Bitmapset *root_parent_relids,
 													 Bitmapset **initially_valid_subplans);
+extern PartitionPruneState *ExecCreatePartitionPruneState(PlanState *planstate, EState *estate,
+							  PartitionPruneInfo *pruneinfo,
+							  bool consider_initial_steps,
+							  bool consider_exec_steps);
 extern Bitmapset *ExecFindMatchingSubPlans(PartitionPruneState *prunestate,
-										   bool initial_prune);
+										   bool initial_prune,
+										   Bitmapset **scan_leafpart_rtis);
+extern PartitionPruneState *ExecCreatePartitionPruneState(PlanState *planstate,
+														  EState *estate,
+														  PartitionPruneInfo *pruneinfo,
+														  bool consider_initial_steps,
+														  bool consider_exec_steps);
 #endif							/* EXECPARTITION_H */

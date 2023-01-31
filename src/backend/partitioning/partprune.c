@@ -144,7 +144,9 @@ static List *make_partitionedrel_pruneinfo(PlannerInfo *root,
 										   List *prunequal,
 										   Bitmapset *partrelids,
 										   int *relid_subplan_map,
-										   Bitmapset **matchedsubplans);
+										   Bitmapset **matchedsubplans,
+										   bool *needs_init_pruning,
+										   bool *needs_exec_pruning);
 static void gen_partprune_steps(RelOptInfo *rel, List *clauses,
 								PartClauseTarget target,
 								GeneratePruningStepsContext *context);
@@ -234,6 +236,8 @@ make_partition_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 	int		   *relid_subplan_map;
 	ListCell   *lc;
 	int			i;
+	bool		needs_init_pruning = false;
+	bool		needs_exec_pruning = false;
 
 	/*
 	 * Scan the subpaths to see which ones are scans of partition child
@@ -313,12 +317,16 @@ make_partition_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 		Bitmapset  *partrelids = (Bitmapset *) lfirst(lc);
 		List	   *pinfolist;
 		Bitmapset  *matchedsubplans = NULL;
+		bool		partrel_needs_init_pruning;
+		bool		partrel_needs_exec_pruning;
 
 		pinfolist = make_partitionedrel_pruneinfo(root, parentrel,
 												  prunequal,
 												  partrelids,
 												  relid_subplan_map,
-												  &matchedsubplans);
+												  &matchedsubplans,
+												  &partrel_needs_init_pruning,
+												  &partrel_needs_exec_pruning);
 
 		/* When pruning is possible, record the matched subplans */
 		if (pinfolist != NIL)
@@ -327,6 +335,9 @@ make_partition_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 			allmatchedsubplans = bms_join(matchedsubplans,
 										  allmatchedsubplans);
 		}
+
+		needs_init_pruning |= partrel_needs_init_pruning;
+		needs_exec_pruning |= partrel_needs_exec_pruning;
 	}
 
 	pfree(relid_subplan_map);
@@ -342,6 +353,8 @@ make_partition_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 	pruneinfo = makeNode(PartitionPruneInfo);
 	pruneinfo->root_parent_relids = parentrel->relids;
 	pruneinfo->prune_infos = prunerelinfos;
+	pruneinfo->needs_init_pruning = needs_init_pruning;
+	pruneinfo->needs_exec_pruning = needs_exec_pruning;
 
 	/*
 	 * Some subplans may not belong to any of the identified partitioned rels.
@@ -442,13 +455,19 @@ add_part_relids(List *allpartrelids, Bitmapset *partrelids)
  * If we cannot find any useful run-time pruning steps, return NIL.
  * However, on success, each rel identified in partrelids will have
  * an element in the result list, even if some of them are useless.
+ * *needs_init_pruning and *needs_exec_pruning are set to indicate whether
+ * the pruning steps contained in the returned PartitionedRelPruneInfos
+ * can be performed during executor startup and during execution,
+ * respectively.
  */
 static List *
 make_partitionedrel_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 							  List *prunequal,
 							  Bitmapset *partrelids,
 							  int *relid_subplan_map,
-							  Bitmapset **matchedsubplans)
+							  Bitmapset **matchedsubplans,
+							  bool *needs_init_pruning,
+							  bool *needs_exec_pruning)
 {
 	RelOptInfo *targetpart = NULL;
 	List	   *pinfolist = NIL;
@@ -458,6 +477,10 @@ make_partitionedrel_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 	ListCell   *lc;
 	int			rti;
 	int			i;
+
+	/* Will find out below. */
+	*needs_init_pruning = false;
+	*needs_exec_pruning = false;
 
 	/*
 	 * Examine each partitioned rel, constructing a temporary array to map
@@ -546,6 +569,9 @@ make_partitionedrel_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 		 * executor per-scan pruning steps.  This first pass creates startup
 		 * pruning steps and detects whether there's any possibly-useful quals
 		 * that would require per-scan pruning.
+		 *
+		 * In the first pass, we note whether the 2nd pass is necessary by
+		 * noting the presence of EXEC parameters.
 		 */
 		gen_partprune_steps(subpart, partprunequal, PARTTARGET_INITIAL,
 							&context);
@@ -620,6 +646,12 @@ make_partitionedrel_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 		pinfo->execparamids = execparamids;
 		/* Remaining fields will be filled in the next loop */
 
+		/* record which types of pruning steps we've seen so far */
+		if (initial_pruning_steps != NIL)
+			*needs_init_pruning = true;
+		if (exec_pruning_steps != NIL)
+			*needs_exec_pruning = true;
+
 		pinfolist = lappend(pinfolist, pinfo);
 	}
 
@@ -647,6 +679,7 @@ make_partitionedrel_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 		int		   *subplan_map;
 		int		   *subpart_map;
 		Oid		   *relid_map;
+		Index	   *rti_map;
 
 		/*
 		 * Construct the subplan and subpart maps for this partitioning level.
@@ -659,6 +692,7 @@ make_partitionedrel_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 		subpart_map = (int *) palloc(nparts * sizeof(int));
 		memset(subpart_map, -1, nparts * sizeof(int));
 		relid_map = (Oid *) palloc0(nparts * sizeof(Oid));
+		rti_map = (Index *) palloc0(nparts * sizeof(Index));
 		present_parts = NULL;
 
 		i = -1;
@@ -673,6 +707,7 @@ make_partitionedrel_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 			subplan_map[i] = subplanidx = relid_subplan_map[partrel->relid] - 1;
 			subpart_map[i] = subpartidx = relid_subpart_map[partrel->relid] - 1;
 			relid_map[i] = planner_rt_fetch(partrel->relid, root)->relid;
+			rti_map[i] = partrel->relid;
 			if (subplanidx >= 0)
 			{
 				present_parts = bms_add_member(present_parts, i);
@@ -697,6 +732,7 @@ make_partitionedrel_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 		pinfo->subplan_map = subplan_map;
 		pinfo->subpart_map = subpart_map;
 		pinfo->relid_map = relid_map;
+		pinfo->rti_map = rti_map;
 	}
 
 	pfree(relid_subpart_map);

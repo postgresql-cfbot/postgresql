@@ -59,10 +59,12 @@
 #define EXEC_FLAG_MARK			0x0008	/* need mark/restore */
 #define EXEC_FLAG_SKIP_TRIGGERS 0x0010	/* skip AfterTrigger calls */
 #define EXEC_FLAG_WITH_NO_DATA	0x0020	/* rel scannability doesn't matter */
+#define EXEC_FLAG_GET_LOCKS		0x0400	/* should ExecGetRangeTableRelation()
+										 * lock relations? */
 
 
 /* Hook for plugins to get control in ExecutorStart() */
-typedef void (*ExecutorStart_hook_type) (QueryDesc *queryDesc, int eflags);
+typedef void (*ExecutorStart_hook_type) (QueryDesc *queryDesc, int eflags, bool *replan);
 extern PGDLLIMPORT ExecutorStart_hook_type ExecutorStart_hook;
 
 /* Hook for plugins to get control in ExecutorRun() */
@@ -187,8 +189,8 @@ ExecGetJunkAttribute(TupleTableSlot *slot, AttrNumber attno, bool *isNull)
 /*
  * prototypes from functions in execMain.c
  */
-extern void ExecutorStart(QueryDesc *queryDesc, int eflags);
-extern void standard_ExecutorStart(QueryDesc *queryDesc, int eflags);
+extern void ExecutorStart(QueryDesc *queryDesc, int eflags, bool *replan);
+extern void standard_ExecutorStart(QueryDesc *queryDesc, int eflags, bool *replan);
 extern void ExecutorRun(QueryDesc *queryDesc,
 						ScanDirection direction, uint64 count, bool execute_once);
 extern void standard_ExecutorRun(QueryDesc *queryDesc,

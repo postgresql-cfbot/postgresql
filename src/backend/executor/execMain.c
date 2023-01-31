@@ -49,6 +49,7 @@
 #include "commands/matview.h"
 #include "commands/trigger.h"
 #include "executor/execdebug.h"
+#include "executor/execPartition.h"
 #include "executor/nodeSubplan.h"
 #include "foreign/fdwapi.h"
 #include "jit/jit.h"
@@ -64,6 +65,7 @@
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/partcache.h"
+#include "utils/plancache.h"
 #include "utils/rls.h"
 #include "utils/ruleutils.h"
 #include "utils/snapmgr.h"
@@ -79,7 +81,12 @@ ExecutorEnd_hook_type ExecutorEnd_hook = NULL;
 ExecutorCheckPerms_hook_type ExecutorCheckPerms_hook = NULL;
 
 /* decls for local routines only used within this module */
-static void InitPlan(QueryDesc *queryDesc, int eflags);
+static void InitPlan(QueryDesc *queryDesc, int eflags, bool *replan);
+static void ExecLockRelationsIfNeeded(QueryDesc *queryDesc, bool *replan);
+static Bitmapset *ExecDoInitialPartitionPruning(PlannedStmt *stmt,
+												EState *estate);
+static void AcquireExecutorLocks(Bitmapset *lockRelids, EState *estate,
+								 bool acquire);
 static void CheckValidRowMarkRel(Relation rel, RowMarkType markType);
 static void ExecPostprocessPlan(EState *estate);
 static void ExecEndPlan(PlanState *planstate, EState *estate);
@@ -119,6 +126,11 @@ static void EvalPlanQualStart(EPQState *epqstate, Plan *planTree);
  *
  * eflags contains flag bits as described in executor.h.
  *
+ * replan must be non-NULL when executing a cached query plan.  On return,
+ * *replan is set if queryDesc->cplan is found to have been invalidated.  In
+ * that case, callers must recreate the CachedPlan before retrying the
+ * execution.
+ *
  * NB: the CurrentMemoryContext when this is called will become the parent
  * of the per-query context used for this Executor invocation.
  *
@@ -129,8 +141,10 @@ static void EvalPlanQualStart(EPQState *epqstate, Plan *planTree);
  * ----------------------------------------------------------------
  */
 void
-ExecutorStart(QueryDesc *queryDesc, int eflags)
+ExecutorStart(QueryDesc *queryDesc, int eflags, bool *replan)
 {
+	Assert(replan != NULL || queryDesc->cplan == NULL);
+
 	/*
 	 * In some cases (e.g. an EXECUTE statement) a query execution will skip
 	 * parse analysis, which means that the query_id won't be reported.  Note
@@ -140,13 +154,13 @@ ExecutorStart(QueryDesc *queryDesc, int eflags)
 	pgstat_report_query_id(queryDesc->plannedstmt->queryId, false);
 
 	if (ExecutorStart_hook)
-		(*ExecutorStart_hook) (queryDesc, eflags);
+		(*ExecutorStart_hook) (queryDesc, eflags, replan);
 	else
-		standard_ExecutorStart(queryDesc, eflags);
+		standard_ExecutorStart(queryDesc, eflags, replan);
 }
 
 void
-standard_ExecutorStart(QueryDesc *queryDesc, int eflags)
+standard_ExecutorStart(QueryDesc *queryDesc, int eflags, bool *replan)
 {
 	EState	   *estate;
 	MemoryContext oldcontext;
@@ -263,7 +277,7 @@ standard_ExecutorStart(QueryDesc *queryDesc, int eflags)
 	/*
 	 * Initialize the plan state tree
 	 */
-	InitPlan(queryDesc, eflags);
+	InitPlan(queryDesc, eflags, replan);
 
 	MemoryContextSwitchTo(oldcontext);
 }
@@ -794,7 +808,7 @@ ExecCheckXactReadOnly(PlannedStmt *plannedstmt)
  * ----------------------------------------------------------------
  */
 static void
-InitPlan(QueryDesc *queryDesc, int eflags)
+InitPlan(QueryDesc *queryDesc, int eflags, bool *replan)
 {
 	CmdType		operation = queryDesc->operation;
 	PlannedStmt *plannedstmt = queryDesc->plannedstmt;
@@ -807,18 +821,25 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 	int			i;
 
 	/*
-	 * Do permissions checks and save the list for later use.
-	 */
-	ExecCheckPermissions(rangeTable, plannedstmt->permInfos, true);
-	estate->es_rteperminfos = plannedstmt->permInfos;
-
-	/*
-	 * initialize the node's execution state
+	 * Initialize es_range_table and es_relations.
 	 */
 	ExecInitRangeTable(estate, rangeTable);
 
 	estate->es_plannedstmt = plannedstmt;
 	estate->es_part_prune_infos = plannedstmt->partPruneInfos;
+
+	/*
+	 * Acquire locks on relations referenced in the plan if it comes
+	 * from a CachedPlan after performing "initial" partition pruning.
+	 * Results of pruning, if any, are saved in es_part_prune_results.
+	 */
+	ExecLockRelationsIfNeeded(queryDesc, replan);
+
+	/*
+	 * Do permissions checks and save the list for later use.
+	 */
+	ExecCheckPermissions(rangeTable, plannedstmt->permInfos, true);
+	estate->es_rteperminfos = plannedstmt->permInfos;
 
 	/*
 	 * Next, build the ExecRowMark array from the PlanRowMark(s), if any.
@@ -973,6 +994,133 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 
 	queryDesc->tupDesc = tupType;
 	queryDesc->planstate = planstate;
+}
+
+/*
+ * ExecLockRelationsIfNeeded
+ *		Lock relations that a query's plan depends on if the plan comes
+ *		from a CachedPlan
+ *
+ * On return, we have all acquired the locks needed to run the plan.
+ * Also *replan is set to true if acquiring those locks would have invalidated
+ * the CachedPlan.
+ */
+static void
+ExecLockRelationsIfNeeded(QueryDesc *queryDesc, bool *replan)
+{
+	PlannedStmt	*plannedstmt = queryDesc->plannedstmt;
+	EState		*estate = queryDesc->estate;
+	CachedPlan	*cplan = queryDesc->cplan;
+	Bitmapset	*allLockRelids;
+
+	/* Nothing to do if the plan tree is not cached. */
+	if (cplan == NULL || cplan->is_oneshot)
+		return;
+
+	Assert(plannedstmt);
+	Assert(replan);
+	*replan = false;
+
+	/*
+	 * Temporarily signal to ExecGetRangeTableRelation() that it must take
+	 * take a lock.  This is needed for CreatePartitionPruneState() to be
+	 * able to open parent partitioned tables using
+	 * ExecGetRangeTableRelation().
+	 */
+	estate->es_top_eflags |= EXEC_FLAG_GET_LOCKS;
+
+	allLockRelids = plannedstmt->minLockRelids;
+	if (plannedstmt->containsInitialPruning)
+	{
+		Bitmapset *partRelids = ExecDoInitialPartitionPruning(plannedstmt,
+															  estate);
+
+		allLockRelids = bms_add_members(allLockRelids, partRelids);
+	}
+
+	/* Done with it.  */
+	estate->es_top_eflags &= ~EXEC_FLAG_GET_LOCKS;
+
+	/* Acquire locks. */
+	AcquireExecutorLocks(allLockRelids, estate, true);
+
+	/* Check if acquiring those locks has invalidated the plan. */
+	*replan = !CachedPlanStillValid(cplan);
+
+	/* Release useless locks if needed. */
+	if (*replan)
+		AcquireExecutorLocks(allLockRelids, estate, false);
+}
+
+/*
+ * ExecDoInitialPartitionPruning
+ * 		Perform initial partition pruning if needed by the plan
+ *
+ * The return value is the set of RT indexes of surviving partitions.
+ * A list of PartitionPruneResult with an element for each in
+ * plannedstmt->partPruneInfos is saved in estate->es_part_prune_results.
+ */
+static Bitmapset *
+ExecDoInitialPartitionPruning(PlannedStmt *plannedstmt, EState *estate)
+{
+	ListCell   *lc;
+	Bitmapset  *lockPartRelids = NULL;
+
+	Assert(plannedstmt->containsInitialPruning);
+	Assert(plannedstmt->partPruneInfos);
+
+	foreach(lc, plannedstmt->partPruneInfos)
+	{
+		PartitionPruneInfo *pruneinfo = lfirst_node(PartitionPruneInfo, lc);
+		PartitionPruneState *prunestate;
+		PartitionPruneResult *pruneresult;
+		Bitmapset *validsubplans;
+
+		/* No PlanState here; unnecessary for "initial" pruning. */
+		prunestate = ExecCreatePartitionPruneState(NULL, estate, pruneinfo,
+												   true, false);
+		validsubplans = ExecFindMatchingSubPlans(prunestate, true,
+												 &lockPartRelids);
+
+		pruneresult = makeNode(PartitionPruneResult);
+		pruneresult->root_parent_relids = bms_copy(pruneinfo->root_parent_relids);
+		pruneresult->validsubplans = bms_copy(validsubplans);
+		estate->es_part_prune_results = lappend(estate->es_part_prune_results,
+												pruneresult);
+	}
+
+	return lockPartRelids;
+}
+
+/*
+ * AcquireExecutorLocks: acquire locks needed for execution of a cached plan;
+ * or release them if acquire is false.
+ */
+static void
+AcquireExecutorLocks(Bitmapset *lockRelids, EState *estate, bool acquire)
+{
+	int			rti;
+
+	rti = -1;
+	while ((rti = bms_next_member(lockRelids, rti)) > 0)
+	{
+		RangeTblEntry *rte = exec_rt_fetch(rti, estate);
+
+		if (!(rte->rtekind == RTE_RELATION ||
+			  (rte->rtekind == RTE_SUBQUERY && OidIsValid(rte->relid))))
+			continue;
+
+		/*
+		 * Acquire the appropriate type of lock on each relation OID. Note
+		 * that we don't actually try to open the rel, and hence will not
+		 * fail if it's been dropped entirely --- we'll just transiently
+		 * acquire a non-conflicting lock.
+		 */
+		if (acquire)
+			LockRelationOid(rte->relid, rte->rellockmode);
+		else
+			UnlockRelationOid(rte->relid, rte->rellockmode);
+	}
 }
 
 /*
@@ -1389,7 +1537,7 @@ ExecGetAncestorResultRels(EState *estate, ResultRelInfo *resultRelInfo)
 
 			/*
 			 * All ancestors up to the root target relation must have been
-			 * locked by the planner or AcquireExecutorLocks().
+			 * locked by the planner.
 			 */
 			ancRel = table_open(ancOid, NoLock);
 			rInfo = makeNode(ResultRelInfo);
@@ -2797,7 +2945,8 @@ EvalPlanQualStart(EPQState *epqstate, Plan *planTree)
 	 * Child EPQ EStates share the parent's copy of unchanging state such as
 	 * the snapshot, rangetable, and external Param info.  They need their own
 	 * copies of local state, including a tuple table, es_param_exec_vals,
-	 * result-rel info, etc.
+	 * result-rel info, etc.  Also, we don't pass the parent't copy of the
+	 * CachedPlan, because no new locks will be taken for EvalPlanQual().
 	 */
 	rcestate->es_direction = ForwardScanDirection;
 	rcestate->es_snapshot = parentestate->es_snapshot;

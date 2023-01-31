@@ -66,6 +66,7 @@
 #define PARALLEL_KEY_QUERY_TEXT		UINT64CONST(0xE000000000000008)
 #define PARALLEL_KEY_JIT_INSTRUMENTATION UINT64CONST(0xE000000000000009)
 #define PARALLEL_KEY_WAL_USAGE			UINT64CONST(0xE00000000000000A)
+#define PARALLEL_KEY_PARTITION_PRUNE_RESULTS	UINT64CONST(0xE00000000000000B)
 
 #define PARALLEL_TUPLE_QUEUE_SIZE		65536
 
@@ -182,6 +183,7 @@ ExecSerializePlan(Plan *plan, EState *estate)
 	pstmt->transientPlan = false;
 	pstmt->dependsOnRole = false;
 	pstmt->parallelModeNeeded = false;
+	pstmt->containsInitialPruning = false;	/* workers need not know! */
 	pstmt->planTree = plan;
 	pstmt->partPruneInfos = estate->es_part_prune_infos;
 	pstmt->rtable = estate->es_range_table;
@@ -598,12 +600,15 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 	FixedParallelExecutorState *fpes;
 	char	   *pstmt_data;
 	char	   *pstmt_space;
+	char	   *part_prune_results_data;
+	char	   *part_prune_results_space;
 	char	   *paramlistinfo_space;
 	BufferUsage *bufusage_space;
 	WalUsage   *walusage_space;
 	SharedExecutorInstrumentation *instrumentation = NULL;
 	SharedJitInstrumentation *jit_instrumentation = NULL;
 	int			pstmt_len;
+	int			part_prune_results_len;
 	int			paramlistinfo_len;
 	int			instrumentation_len = 0;
 	int			jit_instrumentation_len = 0;
@@ -632,6 +637,7 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 
 	/* Fix up and serialize plan to be sent to workers. */
 	pstmt_data = ExecSerializePlan(planstate->plan, estate);
+	part_prune_results_data = nodeToString(estate->es_part_prune_results);
 
 	/* Create a parallel context. */
 	pcxt = CreateParallelContext("postgres", "ParallelQueryMain", nworkers);
@@ -656,6 +662,11 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 	/* Estimate space for serialized PlannedStmt. */
 	pstmt_len = strlen(pstmt_data) + 1;
 	shm_toc_estimate_chunk(&pcxt->estimator, pstmt_len);
+	shm_toc_estimate_keys(&pcxt->estimator, 1);
+
+	/* Estimate space for serialized List of PartitionPruneResult. */
+	part_prune_results_len = strlen(part_prune_results_data) + 1;
+	shm_toc_estimate_chunk(&pcxt->estimator, part_prune_results_len);
 	shm_toc_estimate_keys(&pcxt->estimator, 1);
 
 	/* Estimate space for serialized ParamListInfo. */
@@ -751,6 +762,12 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 	pstmt_space = shm_toc_allocate(pcxt->toc, pstmt_len);
 	memcpy(pstmt_space, pstmt_data, pstmt_len);
 	shm_toc_insert(pcxt->toc, PARALLEL_KEY_PLANNEDSTMT, pstmt_space);
+
+	/* Store serialized List of PartitionPruneResult */
+	part_prune_results_space = shm_toc_allocate(pcxt->toc, part_prune_results_len);
+	memcpy(part_prune_results_space, part_prune_results_data, part_prune_results_len);
+	shm_toc_insert(pcxt->toc, PARALLEL_KEY_PARTITION_PRUNE_RESULTS,
+				   part_prune_results_space);
 
 	/* Store serialized ParamListInfo. */
 	paramlistinfo_space = shm_toc_allocate(pcxt->toc, paramlistinfo_len);
@@ -1233,8 +1250,11 @@ ExecParallelGetQueryDesc(shm_toc *toc, DestReceiver *receiver,
 						 int instrument_options)
 {
 	char	   *pstmtspace;
+	char	   *part_prune_results_space;
 	char	   *paramspace;
 	PlannedStmt *pstmt;
+	QueryDesc  *queryDesc;
+	List	   *part_prune_results;
 	ParamListInfo paramLI;
 	char	   *queryString;
 
@@ -1245,15 +1265,29 @@ ExecParallelGetQueryDesc(shm_toc *toc, DestReceiver *receiver,
 	pstmtspace = shm_toc_lookup(toc, PARALLEL_KEY_PLANNEDSTMT, false);
 	pstmt = (PlannedStmt *) stringToNode(pstmtspace);
 
+	/* Reconstruct leader-supplied PartitionPruneResult. */
+	part_prune_results_space =
+		shm_toc_lookup(toc, PARALLEL_KEY_PARTITION_PRUNE_RESULTS, false);
+	part_prune_results = (List *) stringToNode(part_prune_results_space);
+
 	/* Reconstruct ParamListInfo. */
 	paramspace = shm_toc_lookup(toc, PARALLEL_KEY_PARAMLISTINFO, false);
 	paramLI = RestoreParamList(&paramspace);
 
-	/* Create a QueryDesc for the query. */
-	return CreateQueryDesc(pstmt,
-						   queryString,
-						   GetActiveSnapshot(), InvalidSnapshot,
-						   receiver, paramLI, NULL, instrument_options);
+	/*
+	 * Create a QueryDesc for the query.  Note that no CachedPlan is available
+	 * here even if the containing plan tree may have come from one in the
+	 * leader.
+	 */
+	queryDesc = CreateQueryDesc(pstmt,
+								NULL,
+								queryString,
+								GetActiveSnapshot(), InvalidSnapshot,
+								receiver, paramLI, NULL, instrument_options);
+
+	queryDesc->part_prune_results = part_prune_results;
+
+	return queryDesc;
 }
 
 /*
@@ -1431,7 +1465,7 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 
 	/* Start up the executor */
 	queryDesc->plannedstmt->jitFlags = fpes->jit_flags;
-	ExecutorStart(queryDesc, fpes->eflags);
+	ExecutorStart(queryDesc, fpes->eflags, NULL);
 
 	/* Special executor initialization steps for parallel workers */
 	queryDesc->planstate->state->es_query_dsa = area;

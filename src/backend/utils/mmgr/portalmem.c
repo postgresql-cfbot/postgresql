@@ -201,6 +201,10 @@ CreatePortal(const char *name, bool allowDup, bool dupSilent)
 	portal->portalContext = AllocSetContextCreate(TopPortalContext,
 												  "PortalContext",
 												  ALLOCSET_SMALL_SIZES);
+	/* initialize portal's query context to store QueryDescs */
+	portal->queryContext = AllocSetContextCreate(TopPortalContext,
+												 "PortalQueryContext",
+												 ALLOCSET_SMALL_SIZES);
 
 	/* create a resource owner for the portal */
 	portal->resowner = ResourceOwnerCreate(CurTransactionResourceOwner,
@@ -224,6 +228,7 @@ CreatePortal(const char *name, bool allowDup, bool dupSilent)
 
 	/* for named portals reuse portal->name copy */
 	MemoryContextSetIdentifier(portal->portalContext, portal->name[0] ? portal->name : "<unnamed>");
+	MemoryContextSetIdentifier(portal->queryContext, portal->name[0] ? portal->name : "<unnamed>");
 
 	return portal;
 }
@@ -594,6 +599,7 @@ PortalDrop(Portal portal, bool isTopCommit)
 
 	/* release subsidiary storage */
 	MemoryContextDelete(portal->portalContext);
+	MemoryContextDelete(portal->queryContext);
 
 	/* release portal struct (it's in TopPortalContext) */
 	pfree(portal);

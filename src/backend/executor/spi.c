@@ -71,7 +71,7 @@ static int	_SPI_execute_plan(SPIPlanPtr plan, const SPIExecuteOptions *options,
 static ParamListInfo _SPI_convert_params(int nargs, Oid *argtypes,
 										 Datum *Values, const char *Nulls);
 
-static int	_SPI_pquery(QueryDesc *queryDesc, bool fire_triggers, uint64 tcount);
+static int	_SPI_pquery(QueryDesc *queryDesc, uint64 tcount);
 
 static void _SPI_error_callback(void *arg);
 
@@ -1578,6 +1578,7 @@ SPI_cursor_open_internal(const char *name, SPIPlanPtr plan,
 	CachedPlanSource *plansource;
 	CachedPlan *cplan;
 	List	   *stmt_list;
+	bool		replan;
 	char	   *query_string;
 	Snapshot	snapshot;
 	MemoryContext oldcontext;
@@ -1657,6 +1658,7 @@ SPI_cursor_open_internal(const char *name, SPIPlanPtr plan,
 	 */
 
 	/* Replan if needed, and increment plan refcount for portal */
+replan:
 	cplan = GetCachedPlan(plansource, paramLI, NULL, _SPI_current->queryEnv);
 	stmt_list = cplan->stmt_list;
 
@@ -1766,9 +1768,16 @@ SPI_cursor_open_internal(const char *name, SPIPlanPtr plan,
 	}
 
 	/*
-	 * Start portal execution.
+	 * Start portal execution.  If the portal contains a cached plan, it must
+	 * be recreated if *replan is set.
 	 */
-	PortalStart(portal, paramLI, 0, snapshot);
+	PortalStart(portal, paramLI, 0, snapshot, &replan);
+
+	if (replan)
+	{
+		MarkPortalFailed(portal);
+		goto replan;
+	}
 
 	Assert(portal->strategy != PORTAL_MULTI_QUERY);
 
@@ -2548,6 +2557,7 @@ _SPI_execute_plan(SPIPlanPtr plan, const SPIExecuteOptions *options,
 		 * Replan if needed, and increment plan refcount.  If it's a saved
 		 * plan, the refcount must be backed by the plan_owner.
 		 */
+replan:
 		cplan = GetCachedPlan(plansource, options->params,
 							  plan_owner, _SPI_current->queryEnv);
 
@@ -2657,6 +2667,8 @@ _SPI_execute_plan(SPIPlanPtr plan, const SPIExecuteOptions *options,
 			{
 				QueryDesc  *qdesc;
 				Snapshot	snap;
+				int			eflags;
+				bool		replan = false;
 
 				if (ActiveSnapshotSet())
 					snap = GetActiveSnapshot();
@@ -2664,14 +2676,28 @@ _SPI_execute_plan(SPIPlanPtr plan, const SPIExecuteOptions *options,
 					snap = InvalidSnapshot;
 
 				qdesc = CreateQueryDesc(stmt,
+										cplan,
 										plansource->query_string,
 										snap, crosscheck_snapshot,
 										dest,
 										options->params,
 										_SPI_current->queryEnv,
 										0);
-				res = _SPI_pquery(qdesc, fire_triggers,
-								  canSetTag ? options->tcount : 0);
+
+				/* Select execution options */
+				if (fire_triggers)
+					eflags = 0;				/* default run-to-completion flags */
+				else
+					eflags = EXEC_FLAG_SKIP_TRIGGERS;
+				ExecutorStart(qdesc, eflags, &replan);
+				if (replan)
+				{
+					ExecutorEnd(qdesc);
+					FreeQueryDesc(qdesc);
+					goto replan;
+				}
+
+				res = _SPI_pquery(qdesc, canSetTag ? options->tcount : 0);
 				FreeQueryDesc(qdesc);
 			}
 			else
@@ -2846,10 +2872,9 @@ _SPI_convert_params(int nargs, Oid *argtypes,
 }
 
 static int
-_SPI_pquery(QueryDesc *queryDesc, bool fire_triggers, uint64 tcount)
+_SPI_pquery(QueryDesc *queryDesc, uint64 tcount)
 {
 	int			operation = queryDesc->operation;
-	int			eflags;
 	int			res;
 
 	switch (operation)
@@ -2892,14 +2917,6 @@ _SPI_pquery(QueryDesc *queryDesc, bool fire_triggers, uint64 tcount)
 	if (ShowExecutorStats)
 		ResetUsage();
 #endif
-
-	/* Select execution options */
-	if (fire_triggers)
-		eflags = 0;				/* default run-to-completion flags */
-	else
-		eflags = EXEC_FLAG_SKIP_TRIGGERS;
-
-	ExecutorStart(queryDesc, eflags);
 
 	ExecutorRun(queryDesc, ForwardScanDirection, tcount, true);
 

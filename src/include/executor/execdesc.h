@@ -32,9 +32,12 @@
  */
 typedef struct QueryDesc
 {
+	NodeTag		type;
+
 	/* These fields are provided by CreateQueryDesc */
 	CmdType		operation;		/* CMD_SELECT, CMD_UPDATE, etc. */
 	PlannedStmt *plannedstmt;	/* planner's output (could be utility, too) */
+	struct CachedPlan *cplan;	/* CachedPlan, if plannedstmt is from one */
 	const char *sourceText;		/* source text of the query */
 	Snapshot	snapshot;		/* snapshot to use for query */
 	Snapshot	crosscheck_snapshot;	/* crosscheck for RI update/delete */
@@ -42,6 +45,12 @@ typedef struct QueryDesc
 	ParamListInfo params;		/* param values being passed in */
 	QueryEnvironment *queryEnv; /* query environment passed in */
 	int			instrument_options; /* OR of InstrumentOption flags */
+
+	/*
+	 * Used by ExecParallelGetQueryDesc() to save the result of initial
+	 * partition pruning performed by the leader.
+	 */
+	List		*part_prune_results; /* list of PartitionPruneResult */
 
 	/* These fields are set by ExecutorStart */
 	TupleDesc	tupDesc;		/* descriptor for result tuples */
@@ -57,6 +66,7 @@ typedef struct QueryDesc
 
 /* in pquery.c */
 extern QueryDesc *CreateQueryDesc(PlannedStmt *plannedstmt,
+								  struct CachedPlan *cplan,
 								  const char *sourceText,
 								  Snapshot snapshot,
 								  Snapshot crosscheck_snapshot,

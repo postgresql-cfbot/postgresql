@@ -384,6 +384,7 @@ ExplainOneQuery(Query *query, int cursorOptions,
 	else
 	{
 		PlannedStmt *plan;
+		QueryDesc   *queryDesc;
 		instr_time	planstart,
 					planduration;
 		BufferUsage bufusage_start,
@@ -406,10 +407,92 @@ ExplainOneQuery(Query *query, int cursorOptions,
 			BufferUsageAccumDiff(&bufusage, &pgBufferUsage, &bufusage_start);
 		}
 
+		queryDesc = ExplainQueryDesc(plan, NULL, queryString, into, es,
+									 params, queryEnv, NULL);
+
 		/* run it (if needed) and produce output */
-		ExplainOnePlan(plan, into, es, queryString, params, queryEnv,
+		ExplainOnePlan(queryDesc, into, es, queryString, params, queryEnv,
 					   &planduration, (es->buffers ? &bufusage : NULL));
+
+		/* One pushed by ExplainQueryDesc(). */
+		PopActiveSnapshot();
 	}
+}
+
+/*
+ * ExplainQueryDesc
+ *		Set up QueryDesc for EXPLAINing a given plan
+ *
+ * On return, *replan is set to true if cplan is found to have been
+ * invalidated since its creation.
+ */
+QueryDesc *
+ExplainQueryDesc(PlannedStmt *stmt, CachedPlan *cplan,
+				 const char *queryString, IntoClause *into, ExplainState *es,
+				 ParamListInfo params, QueryEnvironment *queryEnv,
+				 bool *replan)
+{
+	QueryDesc  *queryDesc;
+	DestReceiver *dest;
+	int			eflags;
+	int			instrument_option = 0;
+
+	/*
+	 * Normally we discard the query's output, but if explaining CREATE TABLE
+	 * AS, we'd better use the appropriate tuple receiver.
+	 */
+	if (into)
+		dest = CreateIntoRelDestReceiver(into);
+	else
+		dest = None_Receiver;
+
+	if (es->analyze && es->timing)
+		instrument_option |= INSTRUMENT_TIMER;
+	else if (es->analyze)
+		instrument_option |= INSTRUMENT_ROWS;
+
+	if (es->buffers)
+		instrument_option |= INSTRUMENT_BUFFERS;
+	if (es->wal)
+		instrument_option |= INSTRUMENT_WAL;
+
+	/*
+	 * Use a snapshot with an updated command ID to ensure this query sees
+	 * results of any previously executed queries.
+	 */
+	PushCopiedSnapshot(GetActiveSnapshot());
+	UpdateActiveSnapshotCommandId();
+
+	/* Create a QueryDesc for the query */
+	queryDesc = CreateQueryDesc(stmt, cplan, queryString,
+								GetActiveSnapshot(), InvalidSnapshot,
+								dest, params, queryEnv, instrument_option);
+
+	/* Select execution options */
+	if (es->analyze)
+		eflags = 0;				/* default run-to-completion flags */
+	else
+		eflags = EXEC_FLAG_EXPLAIN_ONLY;
+	if (into)
+		eflags |= GetIntoRelEFlags(into);
+
+	/*
+	 * Call ExecutorStart to prepare the plan for execution.  A cached plan
+	 * may get invalidated as we're doing that.
+	 */
+	if (replan)
+		*replan = false;
+	ExecutorStart(queryDesc, eflags, replan);
+	if (replan && *replan)
+	{
+		/* Clean up. */
+		ExecutorEnd(queryDesc);
+		FreeQueryDesc(queryDesc);
+		PopActiveSnapshot();
+		return NULL;
+	}
+
+	return queryDesc;
 }
 
 /*
@@ -515,29 +598,17 @@ ExplainOneUtility(Node *utilityStmt, IntoClause *into, ExplainState *es,
  * to call it.
  */
 void
-ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
+ExplainOnePlan(QueryDesc *queryDesc,
+			   IntoClause *into, ExplainState *es,
 			   const char *queryString, ParamListInfo params,
 			   QueryEnvironment *queryEnv, const instr_time *planduration,
 			   const BufferUsage *bufusage)
 {
-	DestReceiver *dest;
-	QueryDesc  *queryDesc;
+	PlannedStmt *plannedstmt = queryDesc->plannedstmt;
 	instr_time	starttime;
 	double		totaltime = 0;
-	int			eflags;
-	int			instrument_option = 0;
 
 	Assert(plannedstmt->commandType != CMD_UTILITY);
-
-	if (es->analyze && es->timing)
-		instrument_option |= INSTRUMENT_TIMER;
-	else if (es->analyze)
-		instrument_option |= INSTRUMENT_ROWS;
-
-	if (es->buffers)
-		instrument_option |= INSTRUMENT_BUFFERS;
-	if (es->wal)
-		instrument_option |= INSTRUMENT_WAL;
 
 	/*
 	 * We always collect timing for the entire statement, even when node-level
@@ -545,38 +616,6 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	 * this if !es->summary, but it's hardly worth the complication.)
 	 */
 	INSTR_TIME_SET_CURRENT(starttime);
-
-	/*
-	 * Use a snapshot with an updated command ID to ensure this query sees
-	 * results of any previously executed queries.
-	 */
-	PushCopiedSnapshot(GetActiveSnapshot());
-	UpdateActiveSnapshotCommandId();
-
-	/*
-	 * Normally we discard the query's output, but if explaining CREATE TABLE
-	 * AS, we'd better use the appropriate tuple receiver.
-	 */
-	if (into)
-		dest = CreateIntoRelDestReceiver(into);
-	else
-		dest = None_Receiver;
-
-	/* Create a QueryDesc for the query */
-	queryDesc = CreateQueryDesc(plannedstmt, queryString,
-								GetActiveSnapshot(), InvalidSnapshot,
-								dest, params, queryEnv, instrument_option);
-
-	/* Select execution options */
-	if (es->analyze)
-		eflags = 0;				/* default run-to-completion flags */
-	else
-		eflags = EXEC_FLAG_EXPLAIN_ONLY;
-	if (into)
-		eflags |= GetIntoRelEFlags(into);
-
-	/* call ExecutorStart to prepare the plan for execution */
-	ExecutorStart(queryDesc, eflags);
 
 	/* Execute the plan for statistics if asked for */
 	if (es->analyze)
@@ -641,8 +680,6 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	ExecutorEnd(queryDesc);
 
 	FreeQueryDesc(queryDesc);
-
-	PopActiveSnapshot();
 
 	/* We need a CCI just in case query expanded to multiple plans */
 	if (es->analyze)
@@ -4852,6 +4889,17 @@ ExplainDummyGroup(const char *objtype, const char *labelname, ExplainState *es)
 			escape_yaml(es->str, objtype);
 			break;
 	}
+}
+
+/*
+ * Discard output buffer for a fresh restart.
+ */
+void
+ExplainResetOutput(ExplainState *es)
+{
+	Assert(es->str);
+	resetStringInfo(es->str);
+	ExplainBeginOutput(es);
 }
 
 /*

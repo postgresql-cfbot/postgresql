@@ -100,13 +100,13 @@ static void ReleaseGenericPlan(CachedPlanSource *plansource);
 static List *RevalidateCachedQuery(CachedPlanSource *plansource,
 								   QueryEnvironment *queryEnv);
 static bool CheckCachedPlan(CachedPlanSource *plansource);
+static bool GenericPlanIsValid(CachedPlan *cplan);
 static CachedPlan *BuildCachedPlan(CachedPlanSource *plansource, List *qlist,
 								   ParamListInfo boundParams, QueryEnvironment *queryEnv);
 static bool choose_custom_plan(CachedPlanSource *plansource,
 							   ParamListInfo boundParams);
 static double cached_plan_cost(CachedPlan *plan, bool include_planner);
 static Query *QueryListGetPrimaryStmt(List *stmts);
-static void AcquireExecutorLocks(List *stmt_list, bool acquire);
 static void AcquirePlannerLocks(List *stmt_list, bool acquire);
 static void ScanQueryForLocks(Query *parsetree, bool acquire);
 static bool ScanQueryWalker(Node *node, bool *acquire);
@@ -787,9 +787,6 @@ RevalidateCachedQuery(CachedPlanSource *plansource,
  *
  * Caller must have already called RevalidateCachedQuery to verify that the
  * querytree is up to date.
- *
- * On a "true" return, we have acquired the locks needed to run the plan.
- * (We must do this for the "true" result to be race-condition-free.)
  */
 static bool
 CheckCachedPlan(CachedPlanSource *plansource)
@@ -803,53 +800,8 @@ CheckCachedPlan(CachedPlanSource *plansource)
 	if (!plan)
 		return false;
 
-	Assert(plan->magic == CACHEDPLAN_MAGIC);
-	/* Generic plans are never one-shot */
-	Assert(!plan->is_oneshot);
-
-	/*
-	 * If plan isn't valid for current role, we can't use it.
-	 */
-	if (plan->is_valid && plan->dependsOnRole &&
-		plan->planRoleId != GetUserId())
-		plan->is_valid = false;
-
-	/*
-	 * If it appears valid, acquire locks and recheck; this is much the same
-	 * logic as in RevalidateCachedQuery, but for a plan.
-	 */
-	if (plan->is_valid)
-	{
-		/*
-		 * Plan must have positive refcount because it is referenced by
-		 * plansource; so no need to fear it disappears under us here.
-		 */
-		Assert(plan->refcount > 0);
-
-		AcquireExecutorLocks(plan->stmt_list, true);
-
-		/*
-		 * If plan was transient, check to see if TransactionXmin has
-		 * advanced, and if so invalidate it.
-		 */
-		if (plan->is_valid &&
-			TransactionIdIsValid(plan->saved_xmin) &&
-			!TransactionIdEquals(plan->saved_xmin, TransactionXmin))
-			plan->is_valid = false;
-
-		/*
-		 * By now, if any invalidation has happened, the inval callback
-		 * functions will have marked the plan invalid.
-		 */
-		if (plan->is_valid)
-		{
-			/* Successfully revalidated and locked the query. */
-			return true;
-		}
-
-		/* Oops, the race case happened.  Release useless locks. */
-		AcquireExecutorLocks(plan->stmt_list, false);
-	}
+	if (GenericPlanIsValid(plan))
+		return true;
 
 	/*
 	 * Plan has been invalidated, so unlink it from the parent and release it.
@@ -857,6 +809,60 @@ CheckCachedPlan(CachedPlanSource *plansource)
 	ReleaseGenericPlan(plansource);
 
 	return false;
+}
+
+/*
+ * GenericPlanIsValid
+ *		Is a generic plan still valid?
+ *
+ * It may have gone stale due to concurrent schema modifications of relations
+ * mentioned in the plan or a couple of other things mentioned below.
+ */
+static bool
+GenericPlanIsValid(CachedPlan *cplan)
+{
+	Assert(cplan != NULL);
+	Assert(cplan->magic == CACHEDPLAN_MAGIC);
+	/* Generic plans are never one-shot */
+	Assert(!cplan->is_oneshot);
+
+	if (cplan->is_valid)
+	{
+		/*
+		 * Plan must have positive refcount because it is referenced by
+		 * plansource; so no need to fear it disappears under us here.
+		 */
+		Assert(cplan->refcount > 0);
+
+		/*
+		 * If plan isn't valid for current role, we can't use it.
+		 */
+		if (cplan->dependsOnRole && cplan->planRoleId != GetUserId())
+			cplan->is_valid = false;
+
+		/*
+		 * If plan was transient, check to see if TransactionXmin has
+		 * advanced, and if so invalidate it.
+		 */
+		if (TransactionIdIsValid(cplan->saved_xmin) &&
+			!TransactionIdEquals(cplan->saved_xmin, TransactionXmin))
+			cplan->is_valid = false;
+	}
+
+	return cplan->is_valid;
+}
+
+/*
+ * CachedPlanStillValid
+ *		Returns if a cached generic plan is still valid
+ *
+ * Called by the executor after it has finished taking locks on a plan tree
+ * in a CachedPlan.
+ */
+bool
+CachedPlanStillValid(CachedPlan *cplan)
+{
+	return GenericPlanIsValid(cplan);
 }
 
 /*
@@ -1126,9 +1132,6 @@ cached_plan_cost(CachedPlan *plan, bool include_planner)
  * plan or a custom plan for the given parameters: the caller does not know
  * which it will get.
  *
- * On return, the plan is valid and we have sufficient locks to begin
- * execution.
- *
  * On return, the refcount of the plan has been incremented; a later
  * ReleaseCachedPlan() call is expected.  If "owner" is not NULL then
  * the refcount has been reported to that ResourceOwner (note that this
@@ -1362,6 +1365,7 @@ CachedPlanAllowsSimpleValidityCheck(CachedPlanSource *plansource,
 	/*
 	 * Reject if AcquireExecutorLocks would have anything to do.  This is
 	 * probably unnecessary given the previous check, but let's be safe.
+	 * XXX - maybe remove?
 	 */
 	foreach(lc, plan->stmt_list)
 	{
@@ -1733,58 +1737,6 @@ QueryListGetPrimaryStmt(List *stmts)
 			return stmt;
 	}
 	return NULL;
-}
-
-/*
- * AcquireExecutorLocks: acquire locks needed for execution of a cached plan;
- * or release them if acquire is false.
- */
-static void
-AcquireExecutorLocks(List *stmt_list, bool acquire)
-{
-	ListCell   *lc1;
-
-	foreach(lc1, stmt_list)
-	{
-		PlannedStmt *plannedstmt = lfirst_node(PlannedStmt, lc1);
-		ListCell   *lc2;
-
-		if (plannedstmt->commandType == CMD_UTILITY)
-		{
-			/*
-			 * Ignore utility statements, except those (such as EXPLAIN) that
-			 * contain a parsed-but-not-planned query.  Note: it's okay to use
-			 * ScanQueryForLocks, even though the query hasn't been through
-			 * rule rewriting, because rewriting doesn't change the query
-			 * representation.
-			 */
-			Query	   *query = UtilityContainsQuery(plannedstmt->utilityStmt);
-
-			if (query)
-				ScanQueryForLocks(query, acquire);
-			continue;
-		}
-
-		foreach(lc2, plannedstmt->rtable)
-		{
-			RangeTblEntry *rte = (RangeTblEntry *) lfirst(lc2);
-
-			if (!(rte->rtekind == RTE_RELATION ||
-				  (rte->rtekind == RTE_SUBQUERY && OidIsValid(rte->relid))))
-				continue;
-
-			/*
-			 * Acquire the appropriate type of lock on each relation OID. Note
-			 * that we don't actually try to open the rel, and hence will not
-			 * fail if it's been dropped entirely --- we'll just transiently
-			 * acquire a non-conflicting lock.
-			 */
-			if (acquire)
-				LockRelationOid(rte->relid, rte->rellockmode);
-			else
-				UnlockRelationOid(rte->relid, rte->rellockmode);
-		}
-	}
 }
 
 /*

@@ -325,7 +325,7 @@ static PlannedStmt *pgss_planner(Query *parse,
 								 const char *query_string,
 								 int cursorOptions,
 								 ParamListInfo boundParams);
-static void pgss_ExecutorStart(QueryDesc *queryDesc, int eflags);
+static void pgss_ExecutorStart(QueryDesc *queryDesc, int eflags, bool *replan);
 static void pgss_ExecutorRun(QueryDesc *queryDesc,
 							 ScanDirection direction,
 							 uint64 count, bool execute_once);
@@ -962,12 +962,12 @@ pgss_planner(Query *parse,
  * ExecutorStart hook: start up tracking if needed
  */
 static void
-pgss_ExecutorStart(QueryDesc *queryDesc, int eflags)
+pgss_ExecutorStart(QueryDesc *queryDesc, int eflags, bool *replan)
 {
 	if (prev_ExecutorStart)
-		prev_ExecutorStart(queryDesc, eflags);
+		prev_ExecutorStart(queryDesc, eflags, replan);
 	else
-		standard_ExecutorStart(queryDesc, eflags);
+		standard_ExecutorStart(queryDesc, eflags, replan);
 
 	/*
 	 * If query has queryId zero, don't track it.  This prevents double

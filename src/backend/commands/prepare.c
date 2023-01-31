@@ -155,6 +155,7 @@ ExecuteQuery(ParseState *pstate,
 	PreparedStatement *entry;
 	CachedPlan *cplan;
 	List	   *plan_list;
+	bool		replan;
 	ParamListInfo paramLI = NULL;
 	EState	   *estate = NULL;
 	Portal		portal;
@@ -193,6 +194,7 @@ ExecuteQuery(ParseState *pstate,
 									   entry->plansource->query_string);
 
 	/* Replan if needed, and increment plan refcount for portal */
+replan:
 	cplan = GetCachedPlan(entry->plansource, paramLI, NULL, NULL);
 	plan_list = cplan->stmt_list;
 
@@ -251,9 +253,16 @@ ExecuteQuery(ParseState *pstate,
 	}
 
 	/*
-	 * Run the portal as appropriate.
+	 * Run the portal as appropriate.  If the portal contains a cached plan,
+	 * it must be recreated if *replan is set.
 	 */
-	PortalStart(portal, paramLI, eflags, GetActiveSnapshot());
+	PortalStart(portal, paramLI, eflags, GetActiveSnapshot(), &replan);
+
+	if (replan)
+	{
+		MarkPortalFailed(portal);
+		goto replan;
+	}
 
 	(void) PortalRun(portal, count, false, true, dest, dest, qc);
 
@@ -574,7 +583,7 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 {
 	PreparedStatement *entry;
 	const char *query_string;
-	CachedPlan *cplan;
+	CachedPlan *cplan = NULL;
 	List	   *plan_list;
 	ListCell   *p;
 	ParamListInfo paramLI = NULL;
@@ -583,6 +592,7 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 	instr_time	planduration;
 	BufferUsage bufusage_start,
 				bufusage;
+	bool		replan = true;
 
 	if (es->buffers)
 		bufusage_start = pgBufferUsage;
@@ -618,38 +628,57 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 	}
 
 	/* Replan if needed, and acquire a transient refcount */
-	cplan = GetCachedPlan(entry->plansource, paramLI,
-						  CurrentResourceOwner, queryEnv);
-
-	INSTR_TIME_SET_CURRENT(planduration);
-	INSTR_TIME_SUBTRACT(planduration, planstart);
-
-	/* calc differences of buffer counters. */
-	if (es->buffers)
+	while (replan)
 	{
-		memset(&bufusage, 0, sizeof(BufferUsage));
-		BufferUsageAccumDiff(&bufusage, &pgBufferUsage, &bufusage_start);
-	}
+		cplan = GetCachedPlan(entry->plansource, paramLI,
+							  CurrentResourceOwner, queryEnv);
 
-	plan_list = cplan->stmt_list;
+		INSTR_TIME_SET_CURRENT(planduration);
+		INSTR_TIME_SUBTRACT(planduration, planstart);
 
-	/* Explain each query */
-	foreach(p, plan_list)
-	{
-		PlannedStmt *pstmt = lfirst_node(PlannedStmt, p);
+		/* calc differences of buffer counters. */
+		if (es->buffers)
+		{
+			memset(&bufusage, 0, sizeof(BufferUsage));
+			BufferUsageAccumDiff(&bufusage, &pgBufferUsage, &bufusage_start);
+		}
 
-		if (pstmt->commandType != CMD_UTILITY)
-			ExplainOnePlan(pstmt, into, es, query_string, paramLI, queryEnv,
-						   &planduration, (es->buffers ? &bufusage : NULL));
-		else
-			ExplainOneUtility(pstmt->utilityStmt, into, es, query_string,
-							  paramLI, queryEnv);
+		plan_list = cplan->stmt_list;
 
-		/* No need for CommandCounterIncrement, as ExplainOnePlan did it */
+		/* Explain each query */
+		foreach(p, plan_list)
+		{
+			PlannedStmt *pstmt = lfirst_node(PlannedStmt, p);
 
-		/* Separate plans with an appropriate separator */
-		if (lnext(plan_list, p) != NULL)
-			ExplainSeparatePlans(es);
+			if (pstmt->commandType != CMD_UTILITY)
+			{
+				QueryDesc *queryDesc;
+
+				queryDesc = ExplainQueryDesc(pstmt, cplan, queryString,
+											 into, es, paramLI, queryEnv,
+											 &replan);
+				if (replan)
+				{
+					ExplainResetOutput(es);
+					break;
+				}
+				ExplainOnePlan(queryDesc, into, es, query_string, paramLI,
+							   queryEnv, &planduration,
+							   (es->buffers ? &bufusage : NULL));
+
+				/* One pushed by ExplainQueryDesc(). */
+				PopActiveSnapshot();
+			}
+			else
+				ExplainOneUtility(pstmt->utilityStmt, into, es, query_string,
+								  paramLI, queryEnv);
+
+			/* No need for CommandCounterIncrement, as ExplainOnePlan did it */
+
+			/* Separate plans with an appropriate separator */
+			if (lnext(plan_list, p) != NULL)
+				ExplainSeparatePlans(es);
+		}
 	}
 
 	if (estate)

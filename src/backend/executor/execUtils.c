@@ -140,6 +140,7 @@ CreateExecutorState(void)
 	estate->es_param_exec_vals = NULL;
 
 	estate->es_queryEnv = NULL;
+	estate->es_part_prune_results = NIL;
 
 	estate->es_query_cxt = qcontext;
 
@@ -800,7 +801,12 @@ ExecGetRangeTableRelation(EState *estate, Index rti)
 
 		Assert(rte->rtekind == RTE_RELATION);
 
-		if (!IsParallelWorker())
+		/*
+		 * Must take a lock on the relation if we got here by way of
+		 * ExecLockRelationsIfNeeded().
+		 */
+		if (!IsParallelWorker() &&
+			(estate->es_top_eflags & EXEC_FLAG_GET_LOCKS) == 0)
 		{
 			/*
 			 * In a normal query, we should already have the appropriate lock,

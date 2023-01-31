@@ -1195,7 +1195,7 @@ exec_simple_query(const char *query_string)
 		/*
 		 * Start the portal.  No parameters here.
 		 */
-		PortalStart(portal, NULL, 0, InvalidSnapshot);
+		PortalStart(portal, NULL, 0, InvalidSnapshot, NULL);
 
 		/*
 		 * Select the appropriate output format: text unless we are doing a
@@ -1597,6 +1597,7 @@ exec_bind_message(StringInfo input_message)
 	int16	   *rformats = NULL;
 	CachedPlanSource *psrc;
 	CachedPlan *cplan;
+	bool		replan;
 	Portal		portal;
 	char	   *query_string;
 	char	   *saved_stmt_name;
@@ -1971,6 +1972,7 @@ exec_bind_message(StringInfo input_message)
 	 * will be generated in MessageContext.  The plan refcount will be
 	 * assigned to the Portal, so it will be released at portal destruction.
 	 */
+replan:
 	cplan = GetCachedPlan(psrc, params, NULL, NULL);
 
 	/*
@@ -1993,7 +1995,13 @@ exec_bind_message(StringInfo input_message)
 	/*
 	 * And we're ready to start portal execution.
 	 */
-	PortalStart(portal, params, 0, InvalidSnapshot);
+	PortalStart(portal, params, 0, InvalidSnapshot, &replan);
+
+	if (replan)
+	{
+		MarkPortalFailed(portal);
+		goto replan;
+	}
 
 	/*
 	 * Apply the result format requests to the portal.

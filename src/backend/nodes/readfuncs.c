@@ -158,6 +158,11 @@
 	token = pg_strtok(&length);		/* skip :fldname */ \
 	local_node->fldname = readIntCols(len)
 
+/* Read an Index array */
+#define READ_INDEX_ARRAY(fldname, len) \
+	token = pg_strtok(&length);		/* skip :fldname */ \
+	local_node->fldname = readIndexCols(len)
+
 /* Read a bool array */
 #define READ_BOOL_ARRAY(fldname, len) \
 	token = pg_strtok(&length);		/* skip :fldname */ \
@@ -800,7 +805,6 @@ fnname(int numCols) \
  */
 READ_SCALAR_ARRAY(readAttrNumberCols, int16, atoi)
 READ_SCALAR_ARRAY(readOidCols, Oid, atooid)
-/* outfuncs.c has writeIndexCols, but we don't yet need that here */
-/* READ_SCALAR_ARRAY(readIndexCols, Index, atoui) */
+READ_SCALAR_ARRAY(readIndexCols, Index, atoui)
 READ_SCALAR_ARRAY(readIntCols, int, atoi)
 READ_SCALAR_ARRAY(readBoolCols, bool, strtobool)

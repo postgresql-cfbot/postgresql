@@ -78,7 +78,8 @@ static ExecutorRun_hook_type prev_ExecutorRun = NULL;
 static ExecutorFinish_hook_type prev_ExecutorFinish = NULL;
 static ExecutorEnd_hook_type prev_ExecutorEnd = NULL;
 
-static void explain_ExecutorStart(QueryDesc *queryDesc, int eflags);
+static void explain_ExecutorStart(QueryDesc *queryDesc, int eflags,
+								  bool *replan);
 static void explain_ExecutorRun(QueryDesc *queryDesc,
 								ScanDirection direction,
 								uint64 count, bool execute_once);
@@ -259,7 +260,7 @@ _PG_init(void)
  * ExecutorStart hook: start up logging if needed
  */
 static void
-explain_ExecutorStart(QueryDesc *queryDesc, int eflags)
+explain_ExecutorStart(QueryDesc *queryDesc, int eflags, bool *replan)
 {
 	/*
 	 * At the beginning of each top-level statement, decide whether we'll
@@ -296,9 +297,9 @@ explain_ExecutorStart(QueryDesc *queryDesc, int eflags)
 	}
 
 	if (prev_ExecutorStart)
-		prev_ExecutorStart(queryDesc, eflags);
+		prev_ExecutorStart(queryDesc, eflags, replan);
 	else
-		standard_ExecutorStart(queryDesc, eflags);
+		standard_ExecutorStart(queryDesc, eflags, replan);
 
 	if (auto_explain_enabled())
 	{

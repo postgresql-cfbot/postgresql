@@ -184,8 +184,6 @@ static char *ExecBuildSlotPartitionKeyDescription(Relation rel,
 												  int maxfieldlen);
 static List *adjust_partition_colnos(List *colnos, ResultRelInfo *leaf_part_rri);
 static List *adjust_partition_colnos_using_map(List *colnos, AttrMap *attrMap);
-static PartitionPruneState *CreatePartitionPruneState(PlanState *planstate,
-													  PartitionPruneInfo *pruneinfo);
 static void InitPartitionPruneContext(PartitionPruneContext *context,
 									  List *pruning_steps,
 									  PartitionDesc partdesc,
@@ -198,7 +196,8 @@ static void PartitionPruneFixSubPlanMap(PartitionPruneState *prunestate,
 static void find_matching_subplans_recurse(PartitionPruningData *prunedata,
 										   PartitionedRelPruningData *pprune,
 										   bool initial_prune,
-										   Bitmapset **validsubplans);
+										   Bitmapset **validsubplans,
+										   Bitmapset **scan_leafpart_rtis);
 
 
 /*
@@ -1759,6 +1758,11 @@ adjust_partition_colnos_using_map(List *colnos, AttrMap *attrMap)
  *		account for initial pruning possibly having eliminated some of the
  *		subplans.
  *
+ * ExecCreatePartitionPruneState:
+ *		A sub-routine of ExecInitPartitionPruning() that creates the
+ *		PartitionPruneState from a given PartitionPruneInfo.  Exported for the
+ *		use by callers that don't need to do ExecInitPartitionPruning().
+ *
  * ExecFindMatchingSubPlans:
  *		Returns indexes of matching subplans after evaluating the expressions
  *		that are safe to evaluate at a given point.  This function is first
@@ -1779,8 +1783,10 @@ adjust_partition_colnos_using_map(List *colnos, AttrMap *attrMap)
  *
  * On return, *initially_valid_subplans is assigned the set of indexes of
  * child subplans that must be initialized along with the parent plan node.
- * Initial pruning is performed here if needed and in that case only the
- * surviving subplans' indexes are added.
+ * That set is computed by either performing the "initial pruning" here or
+ * reusing the one present in EState.es_part_prune_results[part_prune_index]
+ * if it has been set, which it would be if ExecDoInitialPartitionPruning()
+ * would have done the initial pruning.
  *
  * If subplans are indeed pruned, subplan_map arrays contained in the returned
  * PartitionPruneState are re-sequenced to not count those, though only if the
@@ -1793,9 +1799,10 @@ ExecInitPartitionPruning(PlanState *planstate,
 						 Bitmapset *root_parent_relids,
 						 Bitmapset **initially_valid_subplans)
 {
-	PartitionPruneState *prunestate;
+	PartitionPruneState *prunestate = NULL;
 	EState	   *estate = planstate->state;
 	PartitionPruneInfo *pruneinfo;
+	PartitionPruneResult *pruneresult = NULL;
 
 	/* Obtain the pruneinfo we need, and make sure it's the right one */
 	pruneinfo = list_nth(estate->es_part_prune_infos, part_prune_index);
@@ -1811,20 +1818,56 @@ ExecInitPartitionPruning(PlanState *planstate,
 	/* We may need an expression context to evaluate partition exprs */
 	ExecAssignExprContext(estate, planstate);
 
-	/* Create the working data structure for pruning */
-	prunestate = CreatePartitionPruneState(planstate, pruneinfo);
+	/* Initial pruning already done if es_part_prune_results has been set. */
+	if (estate->es_part_prune_results)
+	{
+		pruneresult = list_nth_node(PartitionPruneResult,
+									estate->es_part_prune_results,
+									part_prune_index);
+		if (!bms_equal(root_parent_relids, pruneinfo->root_parent_relids))
+			ereport(ERROR,
+					errcode(ERRCODE_INTERNAL_ERROR),
+					errmsg_internal("mismatching PartitionPruneInfo and PartitionPruneResult at part_prune_index %d",
+									part_prune_index),
+					errdetail_internal("prunresult relids %s, pruneinfo relids %s",
+									   bmsToString(pruneresult->root_parent_relids),
+									   bmsToString(pruneinfo->root_parent_relids)));
+	}
+
+	if (pruneresult == NULL || pruneinfo->needs_exec_pruning)
+	{
+		/* We may need an expression context to evaluate partition exprs */
+		ExecAssignExprContext(estate, planstate);
+
+		/*
+		 * Create the working data structure for pruning.  No need to consider
+		 * initial pruning steps if we have a PartitionPruneResult.
+		 */
+		prunestate = ExecCreatePartitionPruneState(planstate, estate,
+												   pruneinfo,
+												   pruneresult == NULL,
+											pruneinfo->needs_exec_pruning);
+	}
 
 	/*
 	 * Perform an initial partition prune pass, if required.
 	 */
-	if (prunestate->do_initial_prune)
-		*initially_valid_subplans = ExecFindMatchingSubPlans(prunestate, true);
+	if (pruneresult)
+	{
+		*initially_valid_subplans = bms_copy(pruneresult->validsubplans);
+	}
+	else if (prunestate && prunestate->do_initial_prune)
+	{
+		*initially_valid_subplans = ExecFindMatchingSubPlans(prunestate, true,
+															 NULL);
+	}
 	else
 	{
-		/* No pruning, so we'll need to initialize all subplans */
+		/* No initial pruning, so we'll need to initialize all subplans */
 		Assert(n_total_subplans > 0);
 		*initially_valid_subplans = bms_add_range(NULL, 0,
 												  n_total_subplans - 1);
+		return prunestate;
 	}
 
 	/*
@@ -1832,7 +1875,8 @@ ExecInitPartitionPruning(PlanState *planstate,
 	 * that were removed above due to initial pruning.  No need to do this if
 	 * no steps were removed.
 	 */
-	if (bms_num_members(*initially_valid_subplans) < n_total_subplans)
+	if (prunestate &&
+		bms_num_members(*initially_valid_subplans) < n_total_subplans)
 	{
 		/*
 		 * We can safely skip this when !do_exec_prune, even though that
@@ -1849,7 +1893,7 @@ ExecInitPartitionPruning(PlanState *planstate,
 }
 
 /*
- * CreatePartitionPruneState
+ * ExecCreatePartitionPruneState
  *		Build the data structure required for calling ExecFindMatchingSubPlans
  *
  * 'planstate' is the parent plan node's execution state.
@@ -1865,15 +1909,18 @@ ExecInitPartitionPruning(PlanState *planstate,
  * re-evaluate which partitions match the pruning steps provided in each
  * PartitionedRelPruneInfo.
  */
-static PartitionPruneState *
-CreatePartitionPruneState(PlanState *planstate, PartitionPruneInfo *pruneinfo)
+PartitionPruneState *
+ExecCreatePartitionPruneState(PlanState *planstate, EState *estate,
+							  PartitionPruneInfo *pruneinfo,
+							  bool consider_initial_steps,
+							  bool consider_exec_steps)
 {
-	EState	   *estate = planstate->state;
 	PartitionPruneState *prunestate;
 	int			n_part_hierarchies;
 	ListCell   *lc;
 	int			i;
-	ExprContext *econtext = planstate->ps_ExprContext;
+	ExprContext *econtext = planstate ? planstate->ps_ExprContext :
+		GetPerTupleExprContext(estate);
 
 	/* For data reading, executor always omits detached partitions */
 	if (estate->es_partition_directory == NULL)
@@ -1955,6 +2002,7 @@ CreatePartitionPruneState(PlanState *planstate, PartitionPruneInfo *pruneinfo)
 			Assert(partdesc->nparts >= pinfo->nparts);
 			pprune->nparts = partdesc->nparts;
 			pprune->subplan_map = palloc(sizeof(int) * partdesc->nparts);
+			pprune->rti_map = palloc(sizeof(Index) * partdesc->nparts);
 			if (partdesc->nparts == pinfo->nparts)
 			{
 				/*
@@ -1964,6 +2012,8 @@ CreatePartitionPruneState(PlanState *planstate, PartitionPruneInfo *pruneinfo)
 				 */
 				pprune->subpart_map = pinfo->subpart_map;
 				memcpy(pprune->subplan_map, pinfo->subplan_map,
+					   sizeof(int) * pinfo->nparts);
+				memcpy(pprune->rti_map, pinfo->rti_map,
 					   sizeof(int) * pinfo->nparts);
 
 				/*
@@ -2015,6 +2065,8 @@ CreatePartitionPruneState(PlanState *planstate, PartitionPruneInfo *pruneinfo)
 							pinfo->subplan_map[pd_idx];
 						pprune->subpart_map[pp_idx] =
 							pinfo->subpart_map[pd_idx];
+						pprune->rti_map[pp_idx] =
+							pinfo->rti_map[pd_idx];
 						pd_idx++;
 					}
 					else
@@ -2022,6 +2074,7 @@ CreatePartitionPruneState(PlanState *planstate, PartitionPruneInfo *pruneinfo)
 						/* this partdesc entry is not in the plan */
 						pprune->subplan_map[pp_idx] = -1;
 						pprune->subpart_map[pp_idx] = -1;
+						pprune->rti_map[pp_idx] = 0;
 					}
 				}
 
@@ -2043,7 +2096,7 @@ CreatePartitionPruneState(PlanState *planstate, PartitionPruneInfo *pruneinfo)
 			 * Initialize pruning contexts as needed.
 			 */
 			pprune->initial_pruning_steps = pinfo->initial_pruning_steps;
-			if (pinfo->initial_pruning_steps)
+			if (consider_initial_steps && pinfo->initial_pruning_steps)
 			{
 				InitPartitionPruneContext(&pprune->initial_context,
 										  pinfo->initial_pruning_steps,
@@ -2053,7 +2106,7 @@ CreatePartitionPruneState(PlanState *planstate, PartitionPruneInfo *pruneinfo)
 				prunestate->do_initial_prune = true;
 			}
 			pprune->exec_pruning_steps = pinfo->exec_pruning_steps;
-			if (pinfo->exec_pruning_steps)
+			if (consider_exec_steps && pinfo->exec_pruning_steps)
 			{
 				InitPartitionPruneContext(&pprune->exec_context,
 										  pinfo->exec_pruning_steps,
@@ -2281,10 +2334,14 @@ PartitionPruneFixSubPlanMap(PartitionPruneState *prunestate,
  * Pass initial_prune if PARAM_EXEC Params cannot yet be evaluated.  This
  * differentiates the initial executor-time pruning step from later
  * runtime pruning.
+ *
+ * RT indexes of leaf partitions scanned by the chosen subplans are added to
+ * *scan_leafpart_rtis if the pointer is non-NULL.
  */
 Bitmapset *
 ExecFindMatchingSubPlans(PartitionPruneState *prunestate,
-						 bool initial_prune)
+						 bool initial_prune,
+						 Bitmapset **scan_leafpart_rtis)
 {
 	Bitmapset  *result = NULL;
 	MemoryContext oldcontext;
@@ -2319,10 +2376,10 @@ ExecFindMatchingSubPlans(PartitionPruneState *prunestate,
 		 */
 		pprune = &prunedata->partrelprunedata[0];
 		find_matching_subplans_recurse(prunedata, pprune, initial_prune,
-									   &result);
+									   &result, scan_leafpart_rtis);
 
 		/* Expression eval may have used space in ExprContext too */
-		if (pprune->exec_pruning_steps)
+		if (pprune->exec_pruning_steps && !initial_prune)
 			ResetExprContext(pprune->exec_context.exprcontext);
 	}
 
@@ -2333,6 +2390,8 @@ ExecFindMatchingSubPlans(PartitionPruneState *prunestate,
 
 	/* Copy result out of the temp context before we reset it */
 	result = bms_copy(result);
+	if (scan_leafpart_rtis)
+		*scan_leafpart_rtis = bms_copy(*scan_leafpart_rtis);
 
 	MemoryContextReset(prunestate->prune_context);
 
@@ -2343,13 +2402,15 @@ ExecFindMatchingSubPlans(PartitionPruneState *prunestate,
  * find_matching_subplans_recurse
  *		Recursive worker function for ExecFindMatchingSubPlans
  *
- * Adds valid (non-prunable) subplan IDs to *validsubplans
+ * Adds valid (non-prunable) subplan IDs to *validsubplans and RT indexes of
+ * of the corresponding leaf partitions to *scan_leafpart_rtis (if asked for).
  */
 static void
 find_matching_subplans_recurse(PartitionPruningData *prunedata,
 							   PartitionedRelPruningData *pprune,
 							   bool initial_prune,
-							   Bitmapset **validsubplans)
+							   Bitmapset **validsubplans,
+							   Bitmapset **scan_leafpart_rtis)
 {
 	Bitmapset  *partset;
 	int			i;
@@ -2376,8 +2437,14 @@ find_matching_subplans_recurse(PartitionPruningData *prunedata,
 	while ((i = bms_next_member(partset, i)) >= 0)
 	{
 		if (pprune->subplan_map[i] >= 0)
+		{
 			*validsubplans = bms_add_member(*validsubplans,
 											pprune->subplan_map[i]);
+			Assert(pprune->rti_map[i] > 0);
+			if (scan_leafpart_rtis)
+				*scan_leafpart_rtis = bms_add_member(*scan_leafpart_rtis,
+													 pprune->rti_map[i]);
+		}
 		else
 		{
 			int			partidx = pprune->subpart_map[i];
@@ -2385,7 +2452,8 @@ find_matching_subplans_recurse(PartitionPruningData *prunedata,
 			if (partidx >= 0)
 				find_matching_subplans_recurse(prunedata,
 											   &prunedata->partrelprunedata[partidx],
-											   initial_prune, validsubplans);
+											   initial_prune, validsubplans,
+											   scan_leafpart_rtis);
 			else
 			{
 				/*

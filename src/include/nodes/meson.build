@@ -13,6 +13,7 @@ node_support_input_i = [
   'access/tsmapi.h',
   'commands/event_trigger.h',
   'commands/trigger.h',
+  'executor/execdesc.h',
   'executor/tuptable.h',
   'foreign/fdwapi.h',
   'nodes/bitmapset.h',

@@ -354,10 +354,10 @@ static void mXactCachePut(MultiXactId multi, int nmembers,
 static char *mxstatus_to_string(MultiXactStatus status);
 
 /* management of SLRU infrastructure */
-static int	ZeroMultiXactOffsetPage(int pageno, bool writeXlog);
-static int	ZeroMultiXactMemberPage(int pageno, bool writeXlog);
-static bool MultiXactOffsetPagePrecedes(int page1, int page2);
-static bool MultiXactMemberPagePrecedes(int page1, int page2);
+static int	ZeroMultiXactOffsetPage(int64 pageno, bool writeXlog);
+static int	ZeroMultiXactMemberPage(int64 pageno, bool writeXlog);
+static bool MultiXactOffsetPagePrecedes(int64 page1, int64 page2);
+static bool MultiXactMemberPagePrecedes(int64 page1, int64 page2);
 static bool MultiXactOffsetPrecedes(MultiXactOffset offset1,
 									MultiXactOffset offset2);
 static void ExtendMultiXactOffset(MultiXactId multi);
@@ -366,7 +366,7 @@ static bool MultiXactOffsetWouldWrap(MultiXactOffset boundary,
 									 MultiXactOffset start, uint32 distance);
 static bool SetOffsetVacuumLimit(bool is_startup);
 static bool find_multixact_start(MultiXactId multi, MultiXactOffset *result);
-static void WriteMZeroPageXlogRec(int pageno, uint8 info);
+static void WriteMZeroPageXlogRec(int64 pageno, uint8 info);
 static void WriteMTruncateXlogRec(Oid oldestMultiDB,
 								  MultiXactId startTruncOff,
 								  MultiXactId endTruncOff,
@@ -864,8 +864,8 @@ static void
 RecordNewMultiXact(MultiXactId multi, MultiXactOffset offset,
 				   int nmembers, MultiXactMember *members)
 {
-	int			pageno;
-	int			prev_pageno;
+	int64		pageno;
+	int64		prev_pageno;
 	int			entryno;
 	int			slotno;
 	MultiXactOffset *offptr;
@@ -1225,8 +1225,8 @@ int
 GetMultiXactIdMembers(MultiXactId multi, MultiXactMember **members,
 					  bool from_pgupgrade, bool isLockOnly)
 {
-	int			pageno;
-	int			prev_pageno;
+	int64		pageno;
+	int64		prev_pageno;
 	int			entryno;
 	int			slotno;
 	MultiXactOffset *offptr;
@@ -1928,7 +1928,7 @@ BootStrapMultiXact(void)
  * Control lock must be held at entry, and will be held at exit.
  */
 static int
-ZeroMultiXactOffsetPage(int pageno, bool writeXlog)
+ZeroMultiXactOffsetPage(int64 pageno, bool writeXlog)
 {
 	int			slotno;
 
@@ -1944,7 +1944,7 @@ ZeroMultiXactOffsetPage(int pageno, bool writeXlog)
  * Ditto, for MultiXactMember
  */
 static int
-ZeroMultiXactMemberPage(int pageno, bool writeXlog)
+ZeroMultiXactMemberPage(int64 pageno, bool writeXlog)
 {
 	int			slotno;
 
@@ -1974,7 +1974,7 @@ ZeroMultiXactMemberPage(int pageno, bool writeXlog)
 static void
 MaybeExtendOffsetSlru(void)
 {
-	int			pageno;
+	int64		pageno;
 
 	pageno = MultiXactIdToOffsetPage(MultiXactState->nextMXact);
 
@@ -2009,7 +2009,7 @@ StartupMultiXact(void)
 {
 	MultiXactId multi = MultiXactState->nextMXact;
 	MultiXactOffset offset = MultiXactState->nextOffset;
-	int			pageno;
+	int64		pageno;
 
 	/*
 	 * Initialize offset's idea of the latest page number.
@@ -2034,7 +2034,7 @@ TrimMultiXact(void)
 	MultiXactOffset offset;
 	MultiXactId oldestMXact;
 	Oid			oldestMXactDB;
-	int			pageno;
+	int64		pageno;
 	int			entryno;
 	int			flagsoff;
 
@@ -2403,7 +2403,7 @@ MultiXactAdvanceOldest(MultiXactId oldestMulti, Oid oldestMultiDB)
 static void
 ExtendMultiXactOffset(MultiXactId multi)
 {
-	int			pageno;
+	int64		pageno;
 
 	/*
 	 * No work except at first MultiXactId of a page.  But beware: just after
@@ -2452,7 +2452,7 @@ ExtendMultiXactMember(MultiXactOffset offset, int nmembers)
 		flagsbit = MXOffsetToFlagsBitShift(offset);
 		if (flagsoff == 0 && flagsbit == 0)
 		{
-			int			pageno;
+			int64		pageno;
 
 			pageno = MXOffsetToMemberPage(offset);
 
@@ -2735,7 +2735,7 @@ static bool
 find_multixact_start(MultiXactId multi, MultiXactOffset *result)
 {
 	MultiXactOffset offset;
-	int			pageno;
+	int64		pageno;
 	int			entryno;
 	int			slotno;
 	MultiXactOffset *offptr;
@@ -2854,7 +2854,7 @@ MultiXactMemberFreezeThreshold(void)
 
 typedef struct mxtruncinfo
 {
-	int			earliestExistingPage;
+	int64		earliestExistingPage;
 } mxtruncinfo;
 
 /*
@@ -2862,7 +2862,7 @@ typedef struct mxtruncinfo
  *		This callback determines the earliest existing page number.
  */
 static bool
-SlruScanDirCbFindEarliest(SlruCtl ctl, char *filename, int segpage, void *data)
+SlruScanDirCbFindEarliest(SlruCtl ctl, char *filename, int64 segpage, void *data)
 {
 	mxtruncinfo *trunc = (mxtruncinfo *) data;
 
@@ -3113,7 +3113,7 @@ TruncateMultiXact(MultiXactId newOldestMulti, Oid newOldestMultiDB)
  * translational symmetry.
  */
 static bool
-MultiXactOffsetPagePrecedes(int page1, int page2)
+MultiXactOffsetPagePrecedes(int64 page1, int64 page2)
 {
 	MultiXactId multi1;
 	MultiXactId multi2;
@@ -3133,7 +3133,7 @@ MultiXactOffsetPagePrecedes(int page1, int page2)
  * purposes.  There is no "invalid offset number" so use the numbers verbatim.
  */
 static bool
-MultiXactMemberPagePrecedes(int page1, int page2)
+MultiXactMemberPagePrecedes(int64 page1, int64 page2)
 {
 	MultiXactOffset offset1;
 	MultiXactOffset offset2;
@@ -3191,10 +3191,10 @@ MultiXactOffsetPrecedes(MultiXactOffset offset1, MultiXactOffset offset2)
  * OFFSETs page (info shows which)
  */
 static void
-WriteMZeroPageXlogRec(int pageno, uint8 info)
+WriteMZeroPageXlogRec(int64 pageno, uint8 info)
 {
 	XLogBeginInsert();
-	XLogRegisterData((char *) (&pageno), sizeof(int));
+	XLogRegisterData((char *) (&pageno), sizeof(pageno));
 	(void) XLogInsert(RM_MULTIXACT_ID, info);
 }
 
@@ -3239,10 +3239,10 @@ multixact_redo(XLogReaderState *record)
 
 	if (info == XLOG_MULTIXACT_ZERO_OFF_PAGE)
 	{
-		int			pageno;
+		int64		pageno;
 		int			slotno;
 
-		memcpy(&pageno, XLogRecGetData(record), sizeof(int));
+		memcpy(&pageno, XLogRecGetData(record), sizeof(pageno));
 
 		LWLockAcquire(MultiXactOffsetSLRULock, LW_EXCLUSIVE);
 
@@ -3254,10 +3254,10 @@ multixact_redo(XLogReaderState *record)
 	}
 	else if (info == XLOG_MULTIXACT_ZERO_MEM_PAGE)
 	{
-		int			pageno;
+		int64		pageno;
 		int			slotno;
 
-		memcpy(&pageno, XLogRecGetData(record), sizeof(int));
+		memcpy(&pageno, XLogRecGetData(record), sizeof(pageno));
 
 		LWLockAcquire(MultiXactMemberSLRULock, LW_EXCLUSIVE);
 
@@ -3299,7 +3299,7 @@ multixact_redo(XLogReaderState *record)
 	else if (info == XLOG_MULTIXACT_TRUNCATE_ID)
 	{
 		xl_multixact_truncate xlrec;
-		int			pageno;
+		int64		pageno;
 
 		memcpy(&xlrec, XLogRecGetData(record),
 			   SizeOfMultiXactTruncate);

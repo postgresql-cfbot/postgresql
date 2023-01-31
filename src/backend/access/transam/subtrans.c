@@ -38,20 +38,54 @@
 /*
  * Defines for SubTrans page sizes.  A page is the same BLCKSZ as is used
  * everywhere else in Postgres.
- *
- * Note: because TransactionIds are 32 bits and wrap around at 0xFFFFFFFF,
- * SubTrans page numbering also wraps around at
- * 0xFFFFFFFF/SUBTRANS_XACTS_PER_PAGE, and segment numbering at
- * 0xFFFFFFFF/SUBTRANS_XACTS_PER_PAGE/SLRU_PAGES_PER_SEGMENT.  We need take no
- * explicit notice of that fact in this module, except when comparing segment
- * and page numbers in TruncateSUBTRANS (see SubTransPagePrecedes) and zeroing
- * them in StartupSUBTRANS.
  */
 
 /* We need four bytes per xact */
 #define SUBTRANS_XACTS_PER_PAGE (BLCKSZ / sizeof(TransactionId))
 
-#define TransactionIdToPage(xid) ((xid) / (TransactionId) SUBTRANS_XACTS_PER_PAGE)
+static inline int64
+TransactionIdToPageInternal(TransactionId xid, bool lock)
+{
+	FullTransactionId	fxid,
+						nextXid;
+	uint32				epoch;
+
+	/* make local copy */
+	if (lock)
+		LWLockAcquire(XidGenLock, LW_SHARED);
+
+	nextXid = ShmemVariableCache->nextXid;
+
+	if (lock)
+		LWLockRelease(XidGenLock);
+
+	epoch = EpochFromFullTransactionId(nextXid);
+	if (xid > XidFromFullTransactionId(nextXid))
+		--epoch;
+
+	fxid = FullTransactionIdFromEpochAndXid(epoch, xid);
+
+	return fxid.value / (uint64) SUBTRANS_XACTS_PER_PAGE;
+}
+
+static inline int64
+TransactionIdToPage(TransactionId xid)
+{
+	return TransactionIdToPageInternal(xid, true);
+}
+
+static inline int64
+TransactionIdToPageNoLock(TransactionId xid)
+{
+	return TransactionIdToPageInternal(xid, false);
+}
+
+static inline int64
+FullTransactionIdToPage(FullTransactionId xid)
+{
+	return xid.value / (uint64) SUBTRANS_XACTS_PER_PAGE;
+}
+
 #define TransactionIdToEntry(xid) ((xid) % (TransactionId) SUBTRANS_XACTS_PER_PAGE)
 
 
@@ -63,8 +97,8 @@ static SlruCtlData SubTransCtlData;
 #define SubTransCtl  (&SubTransCtlData)
 
 
-static int	ZeroSUBTRANSPage(int pageno);
-static bool SubTransPagePrecedes(int page1, int page2);
+static int	ZeroSUBTRANSPage(int64 pageno);
+static bool SubTransPagePrecedes(int64 page1, int64 page2);
 
 
 /*
@@ -73,7 +107,7 @@ static bool SubTransPagePrecedes(int page1, int page2);
 void
 SubTransSetParent(TransactionId xid, TransactionId parent)
 {
-	int			pageno = TransactionIdToPage(xid);
+	int64		pageno = TransactionIdToPage(xid);
 	int			entryno = TransactionIdToEntry(xid);
 	int			slotno;
 	TransactionId *ptr;
@@ -108,7 +142,7 @@ SubTransSetParent(TransactionId xid, TransactionId parent)
 TransactionId
 SubTransGetParent(TransactionId xid)
 {
-	int			pageno = TransactionIdToPage(xid);
+	int64		pageno = TransactionIdToPage(xid);
 	int			entryno = TransactionIdToEntry(xid);
 	int			slotno;
 	TransactionId *ptr;
@@ -233,7 +267,7 @@ BootStrapSUBTRANS(void)
  * Control lock must be held at entry, and will be held at exit.
  */
 static int
-ZeroSUBTRANSPage(int pageno)
+ZeroSUBTRANSPage(int64 pageno)
 {
 	return SimpleLruZeroPage(SubTransCtl, pageno);
 }
@@ -249,8 +283,8 @@ void
 StartupSUBTRANS(TransactionId oldestActiveXID)
 {
 	FullTransactionId nextXid;
-	int			startPage;
-	int			endPage;
+	int64		startPage;
+	int64		endPage;
 
 	/*
 	 * Since we don't expect pg_subtrans to be valid across crashes, we
@@ -262,7 +296,7 @@ StartupSUBTRANS(TransactionId oldestActiveXID)
 
 	startPage = TransactionIdToPage(oldestActiveXID);
 	nextXid = ShmemVariableCache->nextXid;
-	endPage = TransactionIdToPage(XidFromFullTransactionId(nextXid));
+	endPage = FullTransactionIdToPage(nextXid);
 
 	while (startPage != endPage)
 	{
@@ -307,7 +341,7 @@ CheckPointSUBTRANS(void)
 void
 ExtendSUBTRANS(TransactionId newestXact)
 {
-	int			pageno;
+	int64		pageno;
 
 	/*
 	 * No work except at first XID of a page.  But beware: just after
@@ -317,7 +351,7 @@ ExtendSUBTRANS(TransactionId newestXact)
 		!TransactionIdEquals(newestXact, FirstNormalTransactionId))
 		return;
 
-	pageno = TransactionIdToPage(newestXact);
+	pageno = TransactionIdToPageNoLock(newestXact);
 
 	LWLockAcquire(SubtransSLRULock, LW_EXCLUSIVE);
 
@@ -337,7 +371,7 @@ ExtendSUBTRANS(TransactionId newestXact)
 void
 TruncateSUBTRANS(TransactionId oldestXact)
 {
-	int			cutoffPage;
+	int64		cutoffPage;
 
 	/*
 	 * The cutoff point is the start of the segment containing oldestXact. We
@@ -359,7 +393,7 @@ TruncateSUBTRANS(TransactionId oldestXact)
  * Analogous to CLOGPagePrecedes().
  */
 static bool
-SubTransPagePrecedes(int page1, int page2)
+SubTransPagePrecedes(int64 page1, int64 page2)
 {
 	TransactionId xid1;
 	TransactionId xid2;

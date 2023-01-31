@@ -126,6 +126,11 @@ extern char *output_files[];
  */
 #define JSONB_FORMAT_CHANGE_CAT_VER 201409291
 
+/*
+ * change in SLRU numbering to 64–bit
+ */
+#define SLRU_FORMAT_CHANGE_CAT_VER 202212092
+
 
 /*
  * Each relation is represented by a relinfo structure.

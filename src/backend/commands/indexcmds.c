@@ -130,6 +130,29 @@ typedef struct ReindexErrorInfo
 	char		relkind;
 } ReindexErrorInfo;
 
+
+/*
+ * Count the number of direct and indirect leaf partitions, excluding foreign
+ * tables.
+ */
+static int
+count_leaf_partitions(Oid relid)
+{
+	int		nleaves = 0;
+	List	*childs = find_all_inheritors(relid, NoLock, NULL);
+	ListCell *lc;
+
+	foreach(lc, childs)
+	{
+		Oid	partrelid = lfirst_oid(lc);
+		if (RELKIND_HAS_STORAGE(get_rel_relkind(partrelid)))
+			nleaves++;
+	}
+
+	list_free(childs);
+	return nleaves;
+}
+
 /*
  * CheckIndexCompatible
  *		Determine whether an existing index definition is compatible with a
@@ -1219,8 +1242,14 @@ DefineIndex(Oid relationId,
 			Relation	parentIndex;
 			TupleDesc	parentDesc;
 
-			pgstat_progress_update_param(PROGRESS_CREATEIDX_PARTITIONS_TOTAL,
-										 nparts);
+			if (!OidIsValid(parentIndexId))
+			{
+				int total_parts;
+
+				total_parts = count_leaf_partitions(relationId);
+				pgstat_progress_update_param(PROGRESS_CREATEIDX_PARTITIONS_TOTAL,
+											 total_parts);
+			}
 
 			/* Make a local copy of partdesc->oids[], just for safety */
 			memcpy(part_oids, partdesc->oids, sizeof(Oid) * nparts);
@@ -1431,9 +1460,16 @@ DefineIndex(Oid relationId,
 					SetUserIdAndSecContext(child_save_userid,
 										   child_save_sec_context);
 				}
+				else
+				{
+					/*
+					 * If the index has been attached, count all of its leaf indexes as attached,
+					 * because PROGRESS_CREATEIDX_PARTITIONS_TOTAL includes them all initially.
+					 */
+					pgstat_progress_incr_param(PROGRESS_CREATEIDX_PARTITIONS_DONE,
+												count_leaf_partitions(childRelid));
+				}
 
-				pgstat_progress_update_param(PROGRESS_CREATEIDX_PARTITIONS_DONE,
-											 i + 1);
 				free_attrmap(attmap);
 			}
 
@@ -1484,9 +1520,14 @@ DefineIndex(Oid relationId,
 		/* Close the heap and we're done, in the non-concurrent case */
 		table_close(rel, NoLock);
 
-		/* If this is the top-level index, we're done. */
+		/*
+		 * If this is the top-level index, we're done, otherwise, increment
+		 * done partition counter, if the counter is initialized.
+		 */
 		if (!OidIsValid(parentIndexId))
 			pgstat_progress_end_command();
+		else
+			pgstat_progress_incr_param(PROGRESS_CREATEIDX_PARTITIONS_DONE, 1);
 
 		return address;
 	}

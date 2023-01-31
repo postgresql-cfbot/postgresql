@@ -14,6 +14,7 @@
 
 #include "partitioning/partdefs.h"
 #include "utils/relcache.h"
+#include "utils/snapshot.h"
 
 /*
  * Information about partitions of a partitioned table.
@@ -65,8 +66,11 @@ typedef struct PartitionDescData
 
 
 extern PartitionDesc RelationGetPartitionDesc(Relation rel, bool omit_detached);
+extern PartitionDesc RelationGetPartitionDescExt(Relation rel,
+												 Snapshot omit_detached_snapshot);
 
-extern PartitionDirectory CreatePartitionDirectory(MemoryContext mcxt, bool omit_detached);
+extern PartitionDirectory CreatePartitionDirectory(MemoryContext mcxt,
+												   Snapshot omit_detached_snapshot);
 extern PartitionDesc PartitionDirectoryLookup(PartitionDirectory, Relation);
 extern void DestroyPartitionDirectory(PartitionDirectory pdir);
 

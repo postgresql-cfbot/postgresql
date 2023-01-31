@@ -90,6 +90,7 @@ typedef struct ExtensionControlFile
 	bool		trusted;		/* allow becoming superuser on the fly? */
 	int			encoding;		/* encoding of the script file, or -1 */
 	List	   *requires;		/* names of prerequisite extensions */
+	List	   *updates_without_script;	/* updates that don't need a script */
 } ExtensionControlFile;
 
 /*
@@ -98,13 +99,23 @@ typedef struct ExtensionControlFile
 typedef struct ExtensionVersionInfo
 {
 	char	   *name;			/* name of the starting version */
-	List	   *reachable;		/* List of ExtensionVersionInfo's */
+	List	   *reachable;		/* List of ExtensionUpdateStep's */
 	bool		installable;	/* does this version have an install script? */
+	bool		without_script;	/* reachable from the previous without a script? */
 	/* working state for Dijkstra's algorithm: */
 	bool		distance_known; /* is distance from start known yet? */
 	int			distance;		/* current worst-case distance estimate */
 	struct ExtensionVersionInfo *previous;	/* current best predecessor */
 } ExtensionVersionInfo;
+
+/*
+ * Internal data structure for each step in an update path
+ */
+typedef struct ExtensionUpdateStep
+{
+	ExtensionVersionInfo *next_version;		/* the next version */
+	bool	without_script;		/* reachable to the next without a script? */
+} ExtensionUpdateStep;
 
 /* Local functions */
 static List *find_update_path(List *evi_list,
@@ -606,6 +617,27 @@ parse_extension_control_file(ExtensionControlFile *control,
 								item->name)));
 			}
 		}
+		else if (strcmp(item->name, "updates_without_script") == 0)
+		{
+			/* Need a modifiable copy of string */
+			char	   *rawnames = pstrdup(item->value);
+
+			if (version)
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						 errmsg("parameter \"%s\" cannot be set in a secondary extension control file",
+								item->name)));
+
+			/* Parse string into list of identifiers */
+			if (!SplitIdentifierString(rawnames, ',', &control->updates_without_script))
+			{
+				/* syntax error in name list */
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("parameter \"%s\" must be a list of \"old_version--target_version\"",
+								item->name)));
+			}
+		}
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -1092,6 +1124,7 @@ get_ext_ver_info(const char *versionname, List **evi_list)
 	evi->name = pstrdup(versionname);
 	evi->reachable = NIL;
 	evi->installable = false;
+	evi->without_script = false;
 	/* initialize for later application of Dijkstra's algorithm */
 	evi->distance_known = false;
 	evi->distance = INT_MAX;
@@ -1131,9 +1164,43 @@ get_nearest_unprocessed_vertex(List *evi_list)
 }
 
 /*
+ * Extract version name(s) from a string in 'vername--vername2' format
+ */
+static bool
+extract_version_names(const char *str, char **vername, char **vername2)
+{
+	*vername = pstrdup(str);
+	*vername2 = strstr(*vername, "--");
+	if (*vername2)
+	{
+		**vername2 = '\0';		/* terminate first version */
+		*vername2 += 2;			/* and point to second */
+
+		/* if there's a third --, it's bogus, ignore it */
+		if (strstr(*vername2, "--"))
+			return false;
+	}
+	return true;
+}
+
+/*
+ * Make ExensionUpdateStep data
+ */
+static ExtensionUpdateStep *
+make_ext_update_step(ExtensionVersionInfo *evi, bool without_script)
+{
+	ExtensionUpdateStep *step = (ExtensionUpdateStep *) palloc(sizeof(ExtensionUpdateStep));
+
+	step->next_version = evi;
+	step->without_script = without_script;
+
+	return step;
+}
+
+/*
  * Obtain information about the set of update scripts available for the
  * specified extension.  The result is a List of ExtensionVersionInfo
- * structs, each with a subsidiary list of the ExtensionVersionInfos for
+ * structs, each with a subsidiary list of the ExtensionUpdateSteps for
  * the versions that can be reached in one step from that version.
  */
 static List *
@@ -1144,11 +1211,13 @@ get_ext_ver_list(ExtensionControlFile *control)
 	char	   *location;
 	DIR		   *dir;
 	struct dirent *de;
+	ListCell   *lc;
 
 	location = get_extension_script_directory(control);
 	dir = AllocateDir(location);
 	while ((de = ReadDir(dir, location)) != NULL)
 	{
+		char	   *vernames;
 		char	   *vername;
 		char	   *vername2;
 		ExtensionVersionInfo *evi;
@@ -1165,29 +1234,43 @@ get_ext_ver_list(ExtensionControlFile *control)
 			continue;
 
 		/* extract version name(s) from 'extname--something.sql' filename */
-		vername = pstrdup(de->d_name + extnamelen + 2);
-		*strrchr(vername, '.') = '\0';
-		vername2 = strstr(vername, "--");
-		if (!vername2)
-		{
-			/* It's an install, not update, script; record its version name */
-			evi = get_ext_ver_info(vername, &evi_list);
-			evi->installable = true;
-			continue;
-		}
-		*vername2 = '\0';		/* terminate first version */
-		vername2 += 2;			/* and point to second */
-
-		/* if there's a third --, it's bogus, ignore it */
-		if (strstr(vername2, "--"))
+		vernames = pstrdup(de->d_name + extnamelen + 2);
+		*strrchr(vernames, '.') = '\0';
+		if (!extract_version_names(vernames, &vername, &vername2))
 			continue;
 
 		/* Create ExtensionVersionInfos and link them together */
 		evi = get_ext_ver_info(vername, &evi_list);
+		if (!vername2)
+		{
+			/* It's an install, not update, script. */
+			evi->installable = true;
+			continue;
+		}
 		evi2 = get_ext_ver_info(vername2, &evi_list);
-		evi->reachable = lappend(evi->reachable, evi2);
+		evi->reachable = lappend(evi->reachable, make_ext_update_step(evi2, false));
 	}
 	FreeDir(dir);
+
+	/*
+	 * Obtain version information from 'old-version--new-version' list in
+	 * updates_without_script option
+	 */
+	foreach (lc, control->updates_without_script)
+	{
+		char	   *vernames = (char *) lfirst(lc);
+		char	   *vername;
+		char	   *vername2;
+		ExtensionVersionInfo *evi;
+		ExtensionVersionInfo *evi2;
+
+		if (!extract_version_names(vernames, &vername, &vername2))
+			continue;
+
+		evi = get_ext_ver_info(vername, &evi_list);
+		evi2 = get_ext_ver_info(vername2, &evi_list);
+		evi->reachable = lappend(evi->reachable, make_ext_update_step(evi2, true));
+	}
 
 	return evi_list;
 }
@@ -1196,8 +1279,9 @@ get_ext_ver_list(ExtensionControlFile *control)
  * Given an initial and final version name, identify the sequence of update
  * scripts that have to be applied to perform that update.
  *
- * Result is a List of names of versions to transition through (the initial
- * version is *not* included).
+ * Result is a List of the ExtensionUpdateSteps to transition through (the
+ * initial version infomration is *not* included).  Returns NIL if no such
+ * path.
  */
 static List *
 identify_update_path(ExtensionControlFile *control,
@@ -1239,8 +1323,9 @@ identify_update_path(ExtensionControlFile *control,
  * been used for this before, and the initialization done by get_ext_ver_info
  * is still good.  Otherwise, reinitialize all transient fields used here.
  *
- * Result is a List of names of versions to transition through (the initial
- * version is *not* included).  Returns NIL if no such path.
+ * Result is a List of the ExtensionUpdateSteps to transition through (the
+ * initial version infomration is *not* included).  Returns NIL if no such
+ * path.
  */
 static List *
 find_update_path(List *evi_list,
@@ -1280,7 +1365,8 @@ find_update_path(List *evi_list,
 			break;				/* found shortest path to target */
 		foreach(lc, evi->reachable)
 		{
-			ExtensionVersionInfo *evi2 = (ExtensionVersionInfo *) lfirst(lc);
+			ExtensionUpdateStep  *step = (ExtensionUpdateStep *) lfirst(lc);
+			ExtensionVersionInfo *evi2 = step->next_version;
 			int			newdist;
 
 			/* if reject_indirect, treat installable versions as unreachable */
@@ -1291,6 +1377,7 @@ find_update_path(List *evi_list,
 			{
 				evi2->distance = newdist;
 				evi2->previous = evi;
+				evi2->without_script = step->without_script;
 			}
 			else if (newdist == evi2->distance &&
 					 evi2->previous != NULL &&
@@ -1305,6 +1392,16 @@ find_update_path(List *evi_list,
 				 * entries get visited.
 				 */
 				evi2->previous = evi;
+				evi2->without_script = step->without_script;
+			}
+			else if (evi == evi2->previous &&
+					 evi->without_script != evi2->without_script)
+			{
+				/*
+				 * If it is reachable both with and without an update script,
+				 * we prefer to use the script.
+				 */
+				evi2->without_script = false;
 			}
 		}
 	}
@@ -1313,10 +1410,10 @@ find_update_path(List *evi_list,
 	if (!evi_target->distance_known)
 		return NIL;
 
-	/* Build and return list of version names representing the update path */
+	/* Build and return list of update steps representing the update path */
 	result = NIL;
 	for (evi = evi_target; evi != evi_start; evi = evi->previous)
-		result = lcons(evi->name, result);
+		result = lcons(make_ext_update_step(evi, evi->without_script), result);
 
 	return result;
 }
@@ -2332,7 +2429,8 @@ pg_extension_update_paths(PG_FUNCTION_ARGS)
 				appendStringInfoString(&pathbuf, evi1->name);
 				foreach(lcv, path)
 				{
-					char	   *versionName = (char *) lfirst(lcv);
+					ExtensionUpdateStep *step = (ExtensionUpdateStep *) lfirst(lcv);
+					char	   *versionName = step->next_version->name;
 
 					appendStringInfoString(&pathbuf, "--");
 					appendStringInfoString(&pathbuf, versionName);
@@ -3047,7 +3145,8 @@ ApplyExtensionUpdates(Oid extensionOid,
 
 	foreach(lcv, updateVersions)
 	{
-		char	   *versionName = (char *) lfirst(lcv);
+		ExtensionUpdateStep *step = (ExtensionUpdateStep *) lfirst(lcv);
+		char	   *versionName = step->next_version->name;
 		ExtensionControlFile *control;
 		char	   *schemaName;
 		Oid			schemaOid;
@@ -3167,12 +3266,18 @@ ApplyExtensionUpdates(Oid extensionOid,
 		InvokeObjectPostAlterHook(ExtensionRelationId, extensionOid, 0);
 
 		/*
-		 * Finally, execute the update script file
+		 * Finally, execute the update script file if we have
 		 */
-		execute_extension_script(extensionOid, control,
-								 oldVersionName, versionName,
-								 requiredSchemas,
-								 schemaName, schemaOid);
+		if (!step->without_script)
+			execute_extension_script(extensionOid, control,
+									 oldVersionName, versionName,
+									 requiredSchemas,
+									 schemaName, schemaOid);
+		/*
+		 * Otherwise, advance the command counter to make the catalog change visible
+		 */
+		else
+			CommandCounterIncrement();
 
 		/*
 		 * Update prior-version name and loop around.  Since

@@ -65,6 +65,14 @@ end';
 -- dropping it should still work
 drop extension test_ext8;
 
+-- test updates_without_script
+create extension test_ext9;
+drop extension test_ext9;
+create extension test_ext9 version '1.0';
+alter extension test_ext9 update to '4.0';
+drop extension test_ext9;
+
+
 -- Test creation of extension in temporary schema with two-phase commit,
 -- which should not work.  This function wrapper is useful for portability.
 

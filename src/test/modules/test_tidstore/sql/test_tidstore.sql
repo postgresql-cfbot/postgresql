@@ -1,0 +1,7 @@
+CREATE EXTENSION test_tidstore;
+
+--
+-- All the logic is in the test_tidstore() function. It will throw
+-- an error if something fails.
+--
+SELECT test_tidstore();

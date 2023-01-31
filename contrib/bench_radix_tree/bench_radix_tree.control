@@ -1,0 +1,6 @@
+# bench_radix_tree extension
+comment = 'benchmark suits for radix tree'
+default_version = '1.0'
+module_pathname = '$libdir/bench_radix_tree'
+relocatable = true
+trusted = true

@@ -258,7 +258,7 @@ create index cluster_sort on clstr_4 (hundred, thousand, tenthous);
 set enable_indexscan = off;
 
 -- Use external sort:
-set maintenance_work_mem = '1MB';
+set maintenance_work_mem = '2MB';
 cluster clstr_4 using cluster_sort;
 select * from
 (select hundred, lag(hundred) over () as lhundred,

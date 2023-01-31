@@ -1191,6 +1191,7 @@ sendDir(bbsink *sink, const char *path, int basepathlen, bool sizeonly,
 		ForkNumber	relForkNum; /* Type of fork if file is a relation */
 		int			relnumchars;	/* Chars in filename that are the
 									 * relnumber */
+		StorageMarks mark;		/* marker file sign */
 
 		/* Skip special stuff */
 		if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0)
@@ -1241,7 +1242,7 @@ sendDir(bbsink *sink, const char *path, int basepathlen, bool sizeonly,
 		/* Exclude all forks for unlogged tables except the init fork */
 		if (isDbDir &&
 			parse_filename_for_nontemp_relation(de->d_name, &relnumchars,
-												&relForkNum))
+												&relForkNum, &mark))
 		{
 			/* Never exclude init forks */
 			if (relForkNum != INIT_FORKNUM)
@@ -1448,6 +1449,7 @@ is_checksummed_file(const char *fullpath, const char *filename)
 		strncmp(fullpath, "/", 1) == 0)
 	{
 		int			excludeIdx;
+		char	   *p;
 
 		/* Compare file against noChecksumFiles skip list */
 		for (excludeIdx = 0; noChecksumFiles[excludeIdx].name != NULL; excludeIdx++)
@@ -1460,6 +1462,11 @@ is_checksummed_file(const char *fullpath, const char *filename)
 						cmplen) == 0)
 				return false;
 		}
+
+		/* exclude mark files */
+		p = strchr(filename, '.');
+		if (p && isalpha(p[1]) && p[2] == 0)
+			return false;
 
 		return true;
 	}

@@ -2227,6 +2227,9 @@ CommitTransaction(void)
 	 */
 	smgrDoPendingSyncs(true, is_parallel_worker);
 
+	/* Likewise delete mark files for files created during this transaction. */
+	smgrDoPendingCleanups(true);
+
 	/* close large objects before lower-level cleanup */
 	AtEOXact_LargeObject(true);
 
@@ -2477,6 +2480,9 @@ PrepareTransaction(void)
 	 * committed-but-broken files after a crash and COMMIT PREPARED.
 	 */
 	smgrDoPendingSyncs(true, false);
+
+	/* Likewise delete mark files for files created during this transaction. */
+	smgrDoPendingCleanups(true);
 
 	/* close large objects before lower-level cleanup */
 	AtEOXact_LargeObject(true);
@@ -2806,6 +2812,7 @@ AbortTransaction(void)
 	AfterTriggerEndXact(false); /* 'false' means it's abort */
 	AtAbort_Portals();
 	smgrDoPendingSyncs(false, is_parallel_worker);
+	smgrDoPendingCleanups(false);
 	AtEOXact_LargeObject(false);
 	AtAbort_Notify();
 	AtEOXact_RelationMap(false, is_parallel_worker);

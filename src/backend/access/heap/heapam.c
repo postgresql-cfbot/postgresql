@@ -479,7 +479,7 @@ heapgetpage(TableScanDesc sscan, BlockNumber block)
 
 	LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
 
-	Assert(ntup <= MaxHeapTuplesPerPage);
+	Assert(ntup <= MaxHeapTuplesPerPage());
 	scan->rs_ntuples = ntup;
 }
 
@@ -6862,8 +6862,8 @@ heap_freeze_execute_prepared(Relation rel, Buffer buffer,
 	/* Now WAL-log freezing if necessary */
 	if (RelationNeedsWAL(rel))
 	{
-		xl_heap_freeze_plan plans[MaxHeapTuplesPerPage];
-		OffsetNumber offsets[MaxHeapTuplesPerPage];
+		xl_heap_freeze_plan plans[MaxHeapTuplesPerPageLimit];
+		OffsetNumber offsets[MaxHeapTuplesPerPageLimit];
 		int			nplans;
 		xl_heap_freeze_page xlrec;
 		XLogRecPtr	recptr;
@@ -9133,7 +9133,7 @@ heap_xlog_visible(XLogReaderState *record)
 
 		/* initialize the page if it was read as zeros */
 		if (PageIsNew(vmpage))
-			PageInit(vmpage, BLCKSZ, 0);
+			PageInit(vmpage, BLCKSZ, 0, cluster_page_features);
 
 		/*
 		 * XLogReadBufferForRedoExtended locked the buffer. But
@@ -9331,7 +9331,7 @@ heap_xlog_insert(XLogReaderState *record)
 	union
 	{
 		HeapTupleHeaderData hdr;
-		char		data[MaxHeapTupleSize];
+		char		data[MaxHeapTupleSizeLimit];
 	}			tbuf;
 	HeapTupleHeader htup;
 	xl_heap_header xlhdr;
@@ -9369,7 +9369,7 @@ heap_xlog_insert(XLogReaderState *record)
 	{
 		buffer = XLogInitBufferForRedo(record, 0);
 		page = BufferGetPage(buffer);
-		PageInit(page, BufferGetPageSize(buffer), 0);
+		PageInit(page, BufferGetPageSize(buffer), 0, cluster_page_features);
 		action = BLK_NEEDS_REDO;
 	}
 	else
@@ -9387,7 +9387,7 @@ heap_xlog_insert(XLogReaderState *record)
 		data = XLogRecGetBlockData(record, 0, &datalen);
 
 		newlen = datalen - SizeOfHeapHeader;
-		Assert(datalen > SizeOfHeapHeader && newlen <= MaxHeapTupleSize);
+		Assert(datalen > SizeOfHeapHeader && newlen <= MaxHeapTupleSize());
 		memcpy((char *) &xlhdr, data, SizeOfHeapHeader);
 		data += SizeOfHeapHeader;
 
@@ -9453,7 +9453,7 @@ heap_xlog_multi_insert(XLogReaderState *record)
 	union
 	{
 		HeapTupleHeaderData hdr;
-		char		data[MaxHeapTupleSize];
+		char		data[MaxHeapTupleSizeLimit];
 	}			tbuf;
 	HeapTupleHeader htup;
 	uint32		newlen;
@@ -9493,7 +9493,7 @@ heap_xlog_multi_insert(XLogReaderState *record)
 	{
 		buffer = XLogInitBufferForRedo(record, 0);
 		page = BufferGetPage(buffer);
-		PageInit(page, BufferGetPageSize(buffer), 0);
+		PageInit(page, BufferGetPageSize(buffer), 0, cluster_page_features);
 		action = BLK_NEEDS_REDO;
 	}
 	else
@@ -9531,7 +9531,7 @@ heap_xlog_multi_insert(XLogReaderState *record)
 			tupdata = ((char *) xlhdr) + SizeOfMultiInsertTuple;
 
 			newlen = xlhdr->datalen;
-			Assert(newlen <= MaxHeapTupleSize);
+			Assert(newlen <= MaxHeapTupleSize());
 			htup = &tbuf.hdr;
 			MemSet((char *) htup, 0, SizeofHeapTupleHeader);
 			/* PG73FORMAT: get bitmap [+ padding] [+ oid] + data */
@@ -9610,7 +9610,7 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
 	union
 	{
 		HeapTupleHeaderData hdr;
-		char		data[MaxHeapTupleSize];
+		char		data[MaxHeapTupleSizeLimit];
 	}			tbuf;
 	xl_heap_header xlhdr;
 	uint32		newlen;
@@ -9711,7 +9711,7 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
 	{
 		nbuffer = XLogInitBufferForRedo(record, 0);
 		page = (Page) BufferGetPage(nbuffer);
-		PageInit(page, BufferGetPageSize(nbuffer), 0);
+		PageInit(page, BufferGetPageSize(nbuffer), 0, cluster_page_features);
 		newaction = BLK_NEEDS_REDO;
 	}
 	else
@@ -9766,7 +9766,7 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
 		recdata += SizeOfHeapHeader;
 
 		tuplen = recdata_end - recdata;
-		Assert(tuplen <= MaxHeapTupleSize);
+		Assert(tuplen <= MaxHeapTupleSize());
 
 		htup = &tbuf.hdr;
 		MemSet((char *) htup, 0, SizeofHeapTupleHeader);

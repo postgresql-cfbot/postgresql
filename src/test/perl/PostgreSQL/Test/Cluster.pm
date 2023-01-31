@@ -3007,6 +3007,8 @@ The server must be stopped for this to work reliably.
 The file name should be specified relative to the cluster datadir.
 page_offset had better be a multiple of the cluster's block size.
 
+TODO: what to do about page features instead of checksums?
+
 =cut
 
 sub corrupt_page_checksum

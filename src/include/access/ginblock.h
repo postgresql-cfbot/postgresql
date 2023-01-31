@@ -162,7 +162,7 @@ extern bool GinPageIsRecyclable(Page page);
  *				pointers for that page
  * Note that these are all distinguishable from an "invalid" item pointer
  * (which is InvalidBlockNumber/0) as well as from all normal item
- * pointers (which have item numbers in the range 1..MaxHeapTuplesPerPage).
+ * pointers (which have item numbers in the range 1..MaxHeapTuplesPerPage()).
  */
 #define ItemPointerSetMin(p)  \
 	ItemPointerSet((p), (BlockNumber)0, (OffsetNumber)0)
@@ -246,7 +246,13 @@ typedef signed char GinNullCategory;
  * currently store the high key explicitly, we just use the rightmost item on
  * the page, so it would actually be enough to fit two items.)
  */
-#define GinMaxItemSize \
+#define GinMaxItemSize() \
+	Min(INDEX_SIZE_MASK, \
+		MAXALIGN_DOWN(((BLCKSZ - \
+						SizeOfPageReservedSpace() - \
+						MAXALIGN(SizeOfPageHeaderData + 3 * sizeof(ItemIdData)) - \
+						MAXALIGN(sizeof(GinPageOpaqueData))) / 3)))
+#define GinMaxItemSizeLimit \
 	Min(INDEX_SIZE_MASK, \
 		MAXALIGN_DOWN(((BLCKSZ - \
 						MAXALIGN(SizeOfPageHeaderData + 3 * sizeof(ItemIdData)) - \
@@ -309,15 +315,20 @@ typedef signed char GinNullCategory;
  */
 #define GinDataPageSetDataSize(page, size) \
 	{ \
-		Assert(size <= GinDataPageMaxDataSize); \
+		Assert(size <= GinDataPageMaxDataSize()); \
 		((PageHeader) page)->pd_lower = (size) + MAXALIGN(SizeOfPageHeaderData) + MAXALIGN(sizeof(ItemPointerData)); \
 	}
 
 #define GinNonLeafDataPageGetFreeSpace(page)	\
-	(GinDataPageMaxDataSize - \
+	(GinDataPageMaxDataSize() - \
 	 GinPageGetOpaque(page)->maxoff * sizeof(PostingItem))
 
-#define GinDataPageMaxDataSize	\
+#define GinDataPageMaxDataSize()	\
+	(BLCKSZ - MAXALIGN(SizeOfPageHeaderData) \
+	 - SizeOfPageReservedSpace() \
+	 - MAXALIGN(sizeof(ItemPointerData)) \
+	 - MAXALIGN(sizeof(GinPageOpaqueData)))
+#define GinDataPageMaxDataSizeLimit	\
 	(BLCKSZ - MAXALIGN(SizeOfPageHeaderData) \
 	 - MAXALIGN(sizeof(ItemPointerData)) \
 	 - MAXALIGN(sizeof(GinPageOpaqueData)))
@@ -325,8 +336,10 @@ typedef signed char GinNullCategory;
 /*
  * List pages
  */
-#define GinListPageSize  \
-	( BLCKSZ - SizeOfPageHeaderData - MAXALIGN(sizeof(GinPageOpaqueData)) )
+#define GinListPageSize()  \
+	( BLCKSZ - SizeOfPageHeaderData - MAXALIGN(sizeof(GinPageOpaqueData)) - SizeOfPageReservedSpace())
+#define GinListPageSizeLimit  \
+	( BLCKSZ - SizeOfPageHeaderData - MAXALIGN(sizeof(GinPageOpaqueData)))
 
 /*
  * A compressed posting list.

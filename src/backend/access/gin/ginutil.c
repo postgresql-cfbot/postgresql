@@ -345,7 +345,7 @@ GinInitPage(Page page, uint32 f, Size pageSize)
 {
 	GinPageOpaque opaque;
 
-	PageInit(page, pageSize, sizeof(GinPageOpaqueData));
+	PageInit(page, pageSize, sizeof(GinPageOpaqueData), cluster_page_features);
 
 	opaque = GinPageGetOpaque(page);
 	opaque->flags = f;

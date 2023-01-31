@@ -287,6 +287,7 @@ typedef struct HashOptions
 #define HashMaxItemSize(page) \
 	MAXALIGN_DOWN(PageGetPageSize(page) - \
 				  SizeOfPageHeaderData - \
+				  SizeOfPageReservedSpace() - \
 				  sizeof(ItemIdData) - \
 				  MAXALIGN(sizeof(HashPageOpaqueData)))
 
@@ -318,7 +319,9 @@ typedef struct HashOptions
 
 #define HashGetMaxBitmapSize(page) \
 	(PageGetPageSize((Page) page) - \
-	 (MAXALIGN(SizeOfPageHeaderData) + MAXALIGN(sizeof(HashPageOpaqueData))))
+	 (MAXALIGN(SizeOfPageHeaderData) + \
+	  SizeOfPageReservedSpace() + \
+	  MAXALIGN(sizeof(HashPageOpaqueData))))
 
 #define HashPageGetMeta(page) \
 	((HashMetaPage) PageGetContents(page))

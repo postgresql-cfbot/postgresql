@@ -839,10 +839,10 @@ data. Empty in ordinary tables.</entry>
    to this page</entry>
   </row>
   <row>
-   <entry>pd_checksum</entry>
+   <entry>pd_feat</entry>
    <entry>uint16</entry>
    <entry>2 bytes</entry>
-   <entry>Page checksum</entry>
+   <entry>Page checksum or Page Features</entry>
   </row>
   <row>
    <entry>pd_flags</entry>

@@ -17,6 +17,7 @@
 #include "storage/block.h"
 #include "storage/buf.h"
 #include "storage/bufpage.h"
+#include "common/pagefeat.h"
 #include "storage/relfilelocator.h"
 #include "utils/relcache.h"
 #include "utils/snapmgr.h"

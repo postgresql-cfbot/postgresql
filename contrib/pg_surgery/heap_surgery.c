@@ -89,7 +89,7 @@ heap_force_common(FunctionCallInfo fcinfo, HeapTupleForceOption heap_force_opt)
 	Relation	rel;
 	OffsetNumber curr_start_ptr,
 				next_start_ptr;
-	bool		include_this_tid[MaxHeapTuplesPerPage];
+	bool		include_this_tid[MaxHeapTuplesPerPageLimit];
 
 	if (RecoveryInProgress())
 		ereport(ERROR,
@@ -225,7 +225,7 @@ heap_force_common(FunctionCallInfo fcinfo, HeapTupleForceOption heap_force_opt)
 			}
 
 			/* Mark it for processing. */
-			Assert(offno < MaxHeapTuplesPerPage);
+			Assert(offno < MaxHeapTuplesPerPage());
 			include_this_tid[offno] = true;
 		}
 

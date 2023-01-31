@@ -101,6 +101,7 @@
  */
 
 #include "storage/bufpage.h"
+#include "common/komihash.h"
 
 /* number of checksums to calculate in parallel */
 #define N_SUMS 32
@@ -194,22 +195,111 @@ pg_checksum_page(char *page, BlockNumber blkno)
 	Assert(!PageIsNew((Page) page));
 
 	/*
-	 * Save pd_checksum and temporarily set it to zero, so that the checksum
-	 * calculation isn't affected by the old checksum stored on the page.
-	 * Restore it after, because actually updating the checksum is NOT part of
-	 * the API of this function.
+	 * Save pd_feat.checksum and temporarily set it to zero, so that the
+	 * checksum calculation isn't affected by the old checksum stored on the
+	 * page.  Restore it after, because actually updating the checksum is NOT
+	 * part of the API of this function.
 	 */
-	save_checksum = cpage->phdr.pd_checksum;
-	cpage->phdr.pd_checksum = 0;
+	save_checksum = cpage->phdr.pd_feat.checksum;
+	cpage->phdr.pd_feat.checksum = 0;
 	checksum = pg_checksum_block(cpage);
-	cpage->phdr.pd_checksum = save_checksum;
+	cpage->phdr.pd_feat.checksum = save_checksum;
 
 	/* Mix in the block number to detect transposed pages */
 	checksum ^= blkno;
 
 	/*
-	 * Reduce to a uint16 (to fit in the pd_checksum field) with an offset of
-	 * one. That avoids checksums of zero, which seems like a good idea.
+	 * Reduce to a uint16 (to fit in the pd_feat.checksum field) with an
+	 * offset of one. That avoids checksums of zero, which seems like a good
+	 * idea.
 	 */
 	return (uint16) ((checksum % 65535) + 1);
 }
+
+
+/*
+ * 64-bit block checksum algorithm.  The page must be adequately aligned
+ * (on an 8-byte boundary).
+ */
+
+static uint64
+pg_checksum64_block(const PGChecksummablePage *page)
+{
+	/* ensure that the size is compatible with the algorithm */
+	Assert(sizeof(PGChecksummablePage) == BLCKSZ);
+
+	return (uint64)komihash(page, BLCKSZ, 0);
+}
+
+/*
+ * Compute and return a 64-bit checksum for a Postgres page.
+ *
+ * Beware that the 64-bit portion of the page that cksum points to is
+ * transiently zeroed, though it is restored.
+ *
+ * The checksum includes the block number (to detect the case where a page is
+ * somehow moved to a different location), the page header (excluding the
+ * checksum itself), and the page data.
+ */
+uint64
+pg_checksum64_page(char *page, BlockNumber blkno, uint64 *cksumloc)
+{
+	PGChecksummablePage *cpage = (PGChecksummablePage *) page;
+	uint64      saved;
+	uint64      checksum;
+
+	/* We only calculate the checksum for properly-initialized pages */
+	Assert(!PageIsNew((Page) page));
+	/* Ensure that the cksum pointer is in the page range on this page */
+	Assert((char*)cksumloc >= page && (char*)cksumloc <= (page + BLCKSZ - sizeof(uint64)));
+
+	saved = *cksumloc;
+	*cksumloc = 0;
+
+	checksum = pg_checksum64_block(cpage);
+
+	/* restore */
+	*cksumloc = saved;
+
+	/* Mix in the block number to detect transposed pages */
+	checksum ^= blkno;
+
+	/* ensure in the extremely unlikely case that we have non-zero return
+	 * value here; this does double-up on our coset for group 1 here, but it's
+	 * a nice property to preserve */
+	return (checksum == 0 ? 1 : checksum);
+}
+
+
+/*
+ * Set a 64-bit checksum onto a Postgres page.
+ *
+ */
+void
+pg_set_checksum64_page(char *page, uint64 checksum, uint64 *cksumloc)
+{
+	/* Can only set the checksum for properly-initialized pages */
+	Assert(!PageIsNew((Page) page));
+
+	/* Ensure that the cksum pointer is in the page range on this page */
+	Assert((char*)cksumloc >= page && (char*)cksumloc <= (page + BLCKSZ - sizeof(uint64)));
+	*cksumloc = checksum;
+}
+
+/*
+ * Get the 64-bit checksum onto a Postgres page given the offset to the
+ * containing uint64.
+ */
+uint64
+pg_get_checksum64_page(char *page, uint64 *cksumloc)
+{
+	/* Can only set the checksum for properly-initialized pages */
+	Assert(!PageIsNew((Page) page));
+
+	/* Ensure that the cksum pointer is in the page range on this page */
+	Assert((char*)cksumloc >= page && (char*)cksumloc <= (page + BLCKSZ - sizeof(uint64)));
+	Assert(MAXALIGN((uint64)cksumloc) == (uint64)cksumloc);
+
+	return *cksumloc;
+}
+

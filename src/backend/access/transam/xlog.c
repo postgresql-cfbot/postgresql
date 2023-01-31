@@ -689,6 +689,7 @@ static bool ReserveXLogSwitch(XLogRecPtr *StartPos, XLogRecPtr *EndPos,
 							  XLogRecPtr *PrevPtr);
 static XLogRecPtr WaitXLogInsertionsToFinish(XLogRecPtr upto);
 static char *GetXLogBuffer(XLogRecPtr ptr, TimeLineID tli);
+static char *GetXLogBufferForRead(XLogRecPtr ptr, TimeLineID tli, char *page);
 static XLogRecPtr XLogBytePosToRecPtr(uint64 bytepos);
 static XLogRecPtr XLogBytePosToEndRecPtr(uint64 bytepos);
 static uint64 XLogRecPtrToBytePos(XLogRecPtr ptr);
@@ -1638,6 +1639,159 @@ GetXLogBuffer(XLogRecPtr ptr, TimeLineID tli)
 	Assert(((XLogPageHeader) cachedPos)->xlp_pageaddr == ptr - (ptr % XLOG_BLCKSZ));
 
 	return cachedPos + ptr % XLOG_BLCKSZ;
+}
+
+/*
+ * Get the WAL buffer page containing passed in WAL record and also return the
+ * record's location within that buffer page.
+ */
+static char *
+GetXLogBufferForRead(XLogRecPtr ptr, TimeLineID tli, char *page)
+{
+	XLogRecPtr	expectedEndPtr;
+	XLogRecPtr	endptr;
+	int 	idx;
+	char    *recptr = NULL;
+
+	idx = XLogRecPtrToBufIdx(ptr);
+	expectedEndPtr = ptr;
+	expectedEndPtr += XLOG_BLCKSZ - ptr % XLOG_BLCKSZ;
+
+	/*
+	 * Try to acquire WALBufMappingLock in shared mode so that the other
+	 * concurrent WAL readers are also allowed. We try to do as less work as
+	 * possible while holding the lock as it might impact concurrent WAL
+	 * writers.
+	 *
+	 * If we cannot immediately acquire the lock, meaning the lock was busy,
+	 * then exit quickly to not cause any contention. The caller can then
+	 * fallback to reading WAL from WAL file.
+	 */
+	if (!LWLockConditionalAcquire(WALBufMappingLock, LW_SHARED))
+		return recptr;
+
+	/*
+	 * Holding WALBufMappingLock ensures inserters don't overwrite this value
+	 * while we are reading it.
+	 */
+	endptr = XLogCtl->xlblocks[idx];
+
+	if (expectedEndPtr == endptr)
+	{
+		XLogPageHeader phdr;
+
+		/*
+		 * We have found the WAL buffer page holding the given LSN. Read from a
+		 * pointer to the right offset within the page.
+		 */
+		memcpy(page, (XLogCtl->pages + idx * (Size) XLOG_BLCKSZ),
+			   (Size) XLOG_BLCKSZ);
+
+		/*
+		 * Release the lock as early as possible to avoid creating any possible
+		 * contention.
+		 */
+		LWLockRelease(WALBufMappingLock);
+
+		/*
+		 * The fact that we acquire WALBufMappingLock while reading the WAL
+		 * buffer page itself guarantees that no one else initializes it or
+		 * makes it ready for next use in AdvanceXLInsertBuffer().
+		 *
+		 * However, we perform basic page header checks for ensuring that we
+		 * are not reading a page that got just initialized. The callers will
+		 * anyway perform extensive page-level and record-level checks.
+		 */
+		phdr = (XLogPageHeader) page;
+
+		if (phdr->xlp_magic == XLOG_PAGE_MAGIC &&
+			phdr->xlp_pageaddr == (ptr - (ptr % XLOG_BLCKSZ)) &&
+			phdr->xlp_tli == tli)
+		{
+			/*
+			 * Page looks valid, so return the page and the requested record's
+			 * LSN.
+			 */
+			recptr = page + ptr % XLOG_BLCKSZ;
+		}
+	}
+	else
+	{
+		/* We have found nothing. */
+		LWLockRelease(WALBufMappingLock);
+	}
+
+	return recptr;
+}
+
+/*
+ * When possible, read WAL starting at 'startptr' of size 'count' bytes from
+ * WAL buffers into buffer passed in by the caller 'buf'. Read as much WAL as
+ * possible from the WAL buffers, remaining WAL, if any, the caller will take
+ * care of reading from WAL files directly.
+ *
+ * This function sets read bytes to 'read_bytes'.
+ */
+void
+XLogReadFromBuffers(XLogRecPtr startptr,
+					TimeLineID tli,
+					Size count,
+					char *buf,
+					Size *read_bytes)
+{
+	XLogRecPtr	ptr;
+	char    *dst;
+	Size    nbytes;
+
+	Assert(!XLogRecPtrIsInvalid(startptr));
+	Assert(count > 0);
+	Assert(startptr <= GetFlushRecPtr(NULL));
+	Assert(!RecoveryInProgress());
+
+	ptr = startptr;
+	nbytes = count;
+	dst = buf;
+	*read_bytes = 0;
+
+	while (nbytes > 0)
+	{
+		char 	page[XLOG_BLCKSZ] = {0};
+		char    *recptr;
+
+		recptr = GetXLogBufferForRead(ptr, tli, page);
+
+		if (recptr == NULL)
+			break;
+
+		if ((recptr + nbytes) <= (page + XLOG_BLCKSZ))
+		{
+			/* All the bytes are in one page. */
+			memcpy(dst, recptr, nbytes);
+			dst += nbytes;
+			*read_bytes += nbytes;
+			ptr += nbytes;
+			nbytes = 0;
+		}
+		else if ((recptr + nbytes) > (page + XLOG_BLCKSZ))
+		{
+			/* All the bytes are not in one page. */
+			Size bytes_remaining;
+
+			/*
+			 * Compute the remaining bytes on the current page, copy them over
+			 * to output buffer and move forward to read further.
+			 */
+			bytes_remaining = XLOG_BLCKSZ - (recptr - page);
+			memcpy(dst, recptr, bytes_remaining);
+			dst += bytes_remaining;
+			nbytes -= bytes_remaining;
+			*read_bytes += bytes_remaining;
+			ptr += bytes_remaining;
+		}
+	}
+
+	elog(DEBUG1, "read %zu bytes out of %zu bytes from WAL buffers for given LSN %X/%X, Timeline ID %u",
+		 *read_bytes, count, LSN_FORMAT_ARGS(startptr), tli);
 }
 
 /*

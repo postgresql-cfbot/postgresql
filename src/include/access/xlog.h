@@ -247,6 +247,12 @@ extern XLogRecPtr GetLastImportantRecPtr(void);
 
 extern void SetWalWriterSleeping(bool sleeping);
 
+extern void XLogReadFromBuffers(XLogRecPtr startptr,
+								TimeLineID tli,
+								Size count,
+								char *buf,
+								Size *read_bytes);
+
 /*
  * Routines used by xlogrecovery.c to call back into xlog.c during recovery.
  */

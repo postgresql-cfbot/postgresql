@@ -190,6 +190,7 @@ typedef struct VacAttrStats
 #define VACOPT_DISABLE_PAGE_SKIPPING 0x80	/* don't skip any pages */
 #define VACOPT_SKIP_DATABASE_STATS 0x100	/* skip vac_update_datfrozenxid() */
 #define VACOPT_ONLY_DATABASE_STATS 0x200	/* only vac_update_datfrozenxid() */
+#define VACOPT_PROCESS_MAIN 0x400	/* process main relation */
 
 /*
  * Values used by index_cleanup and truncate params.

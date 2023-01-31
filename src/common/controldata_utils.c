@@ -40,6 +40,42 @@
 #endif
 
 /*
+ * Advisory-lock the control file until closed.
+ */
+static int
+lock_file(int fd, bool exclusive)
+{
+#ifdef WIN32
+	/*
+	 * LockFile() might work, but it seems dangerous because there are reports
+	 * that the lock can sometimes linger if a program crashes without
+	 * unlocking.  That would prevent recovery after a PANIC, so we'd better
+	 * not use it without more research.  Because of the lack of portability,
+	 * this function is kept private to controldata_utils.c.
+	 */
+	return 0;
+#else
+	struct flock lock;
+	int		rc;
+
+	memset(&lock, 0, sizeof(lock));
+	lock.l_type = exclusive ? F_WRLCK : F_RDLCK;
+	lock.l_start = 0;
+	lock.l_whence = SEEK_SET;
+	lock.l_len = 0;
+	lock.l_pid = -1;
+
+	do
+	{
+		rc = fcntl(fd, F_SETLKW, &lock);
+	}
+	while (rc < 0 && errno == EINTR);
+
+	return rc;
+#endif
+}
+
+/*
  * get_controlfile()
  *
  * Get controlfile values.  The result is returned as a palloc'd copy of the
@@ -73,6 +109,20 @@ get_controlfile(const char *DataDir, bool *crc_ok_p)
 		pg_fatal("could not open file \"%s\" for reading: %m",
 				 ControlFilePath);
 #endif
+
+	/* Make sure we can read the file atomically. */
+	if (lock_file(fd, false) < 0)
+	{
+#ifndef FRONTEND
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not lock file \"%s\" for reading: %m",
+						ControlFilePath)));
+#else
+		pg_fatal("could not lock file \"%s\" for reading: %m",
+				 ControlFilePath);
+#endif
+	}
 
 	r = read(fd, ControlFile, sizeof(ControlFileData));
 	if (r != sizeof(ControlFileData))
@@ -185,6 +235,25 @@ update_controlfile(const char *DataDir,
 				   pg_file_create_mode)) == -1)
 		pg_fatal("could not open file \"%s\": %m", ControlFilePath);
 #endif
+
+	/*
+	 * Make sure that any concurrent reader (including frontend programs) can
+	 * read the file atomically.  Note that this refers to atomicity of
+	 * concurrent reads and writes.  For our assumption of atomicity under
+	 * power failure, see PG_CONTROL_MAX_SAFE_SIZE.
+	 */
+	if (lock_file(fd, true) < 0)
+	{
+#ifndef FRONTEND
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 errmsg("could not lock file \"%s\" for writing: %m",
+						ControlFilePath)));
+#else
+		pg_fatal("could not lock file \"%s\" for writing: %m",
+				 ControlFilePath);
+#endif
+	}
 
 	errno = 0;
 #ifndef FRONTEND

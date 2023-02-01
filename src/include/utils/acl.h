@@ -258,6 +258,7 @@ extern AclResult pg_parameter_aclcheck(const char *name, Oid roleid,
 									   AclMode mode);
 extern AclResult pg_largeobject_aclcheck_snapshot(Oid lobj_oid, Oid roleid,
 												  AclMode mode, Snapshot snapshot);
+extern bool function_owner_trust(Oid proowner);
 
 extern void aclcheck_error(AclResult aclerr, ObjectType objtype,
 						   const char *objectname);

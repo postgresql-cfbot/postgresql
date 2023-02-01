@@ -4414,6 +4414,7 @@ inline_function(Oid funcid, Oid result_type, Oid result_collid,
 		funcform->prokind != PROKIND_FUNCTION ||
 		funcform->prosecdef ||
 		funcform->proretset ||
+		!function_owner_trust(funcform->proowner) ||
 		funcform->prorettype == RECORDOID ||
 		!heap_attisnull(func_tuple, Anum_pg_proc_proconfig, NULL) ||
 		funcform->pronargs != list_length(args))
@@ -4998,6 +4999,7 @@ inline_set_returning_function(PlannerInfo *root, RangeTblEntry *rte)
 		funcform->prorettype == VOIDOID ||
 		funcform->prosecdef ||
 		!funcform->proretset ||
+		!function_owner_trust(funcform->proowner) ||
 		list_length(fexpr->args) != funcform->pronargs ||
 		!heap_attisnull(func_tuple, Anum_pg_proc_proconfig, NULL))
 	{

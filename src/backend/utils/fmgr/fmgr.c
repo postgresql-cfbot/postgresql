@@ -214,6 +214,16 @@ fmgr_info_cxt_security(Oid functionId, FmgrInfo *finfo, MemoryContext mcxt,
 		return;
 	}
 
+	/* SECURITY INVOKER; check that we trust the function owner */
+	if (!ignore_security && !function_owner_trust(procedureStruct->proowner))
+		ereport(ERROR,
+				(errmsg("cannot execute function %s owned by untrusted user %s",
+						NameStr(procedureStruct->proname),
+						GetUserNameFromId(procedureStruct->proowner, false)),
+				 errdetail("When check_function_owner_trust is on, "
+						   "SECURITY INVOKER functions must be owned by "
+						   "a role that can SET ROLE to the calling user.")));
+
 	switch (procedureStruct->prolang)
 	{
 		case INTERNALlanguageId:

@@ -249,6 +249,7 @@ extern PGDLLIMPORT bool log_executor_stats;
 extern PGDLLIMPORT bool log_statement_stats;
 extern PGDLLIMPORT bool log_btree_build_stats;
 
+extern PGDLLIMPORT bool check_function_owner_trust;
 extern PGDLLIMPORT bool check_function_bodies;
 extern PGDLLIMPORT bool session_auth_is_superuser;
 

@@ -3978,6 +3978,19 @@ pg_largeobject_aclcheck_snapshot(Oid lobj_oid, Oid roleid, AclMode mode,
 }
 
 /*
+ * For SECURITY INVOKER functions, check that the calling user trusts the
+ * function owner enough to run the code.
+ */
+bool
+function_owner_trust(Oid proowner)
+{
+	if (!check_function_owner_trust)
+		return true;
+
+	return member_can_set_role(proowner, GetUserId());
+}
+
+/*
  * Generic ownership check for an object
  */
 bool

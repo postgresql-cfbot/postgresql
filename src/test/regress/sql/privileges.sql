@@ -265,6 +265,63 @@ bar	true
 \.
 SELECT * FROM atest1; -- ok
 
+-- test that we trust the owner of SECURITY INVOKER functions
+
+RESET SESSION AUTHORIZATION;
+GRANT regress_priv_user1 TO regress_priv_user2;
+
+SET SESSION AUTHORIZATION regress_priv_user2;
+
+CREATE FUNCTION testf_trust1() RETURNS INT SECURITY INVOKER
+  LANGUAGE sql AS $$ SELECT 42 $$;
+CREATE FUNCTION testf_trust2() RETURNS INT SECURITY INVOKER
+  LANGUAGE plpgsql AS $$ BEGIN RETURN 42; END; $$;
+CREATE PROCEDURE testp_trust3() SECURITY INVOKER
+  LANGUAGE plpgsql AS $$ BEGIN PERFORM 42; END; $$;
+CREATE FUNCTION testf_trust4() RETURNS INT SECURITY DEFINER
+  LANGUAGE plpgsql AS $$ BEGIN RETURN 42; END; $$;
+
+CREATE VIEW testv_trust1 WITH (security_invoker = true)
+  AS SELECT testf_trust4(), testf_trust1();
+CREATE VIEW testv_trust2 WITH (security_invoker = false)
+  AS SELECT testf_trust2(), testf_trust4();
+
+GRANT SELECT ON testv_trust1 TO regress_priv_user1, regress_priv_user7;
+GRANT SELECT ON testv_trust2 TO regress_priv_user1, regress_priv_user7;
+
+-- should succeed; regress_priv_user2 is a member of regress_priv_user1
+SET SESSION AUTHORIZATION regress_priv_user1;
+SET check_function_owner_trust = true;
+
+SELECT testf_trust1();
+SELECT testf_trust2();
+CALL testp_trust3();
+SELECT testf_trust4();
+SELECT * FROM testv_trust1;
+SELECT * FROM testv_trust2;
+
+SET SESSION AUTHORIZATION regress_priv_user7;
+SET check_function_owner_trust = true;
+
+SELECT testf_trust1(); -- fails
+SELECT testf_trust2(); -- fails
+CALL testp_trust3(); -- fails
+SELECT testf_trust4();
+SELECT * FROM testv_trust1; -- fails
+SELECT * FROM testv_trust2; -- fails
+
+SET SESSION AUTHORIZATION regress_priv_user2;
+DROP VIEW testv_trust1;
+DROP VIEW testv_trust2;
+DROP FUNCTION testf_trust1();
+DROP FUNCTION testf_trust2();
+DROP PROCEDURE testp_trust3();
+DROP FUNCTION testf_trust4();
+
+RESET SESSION AUTHORIZATION;
+REVOKE regress_priv_user1 FROM regress_priv_user2;
+
+SET check_function_owner_trust TO DEFAULT;
 
 -- test leaky-function protections in selfuncs
 

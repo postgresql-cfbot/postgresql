@@ -479,6 +479,7 @@ bool		log_btree_build_stats = false;
 char	   *event_source;
 
 bool		row_security;
+bool		check_function_owner_trust = false;
 bool		check_function_bodies = true;
 
 /*
@@ -1574,6 +1575,15 @@ struct config_bool ConfigureNamesBool[] =
 		},
 		&row_security,
 		true,
+		NULL, NULL, NULL
+	},
+	{
+		{"check_function_owner_trust", PGC_USERSET, CLIENT_CONN_STATEMENT,
+			gettext_noop("Check that a SECURITY INVOKER function's owner is trusted before executing."),
+			NULL
+		},
+		&check_function_owner_trust,
+		false,
 		NULL, NULL, NULL
 	},
 	{

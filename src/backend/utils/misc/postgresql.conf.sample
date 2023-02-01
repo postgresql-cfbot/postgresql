@@ -685,6 +685,7 @@
 #default_toast_compression = 'pglz'	# 'pglz' or 'lz4'
 #temp_tablespaces = ''			# a list of tablespace names, '' uses
 					# only default tablespace
+#check_function_owner_trust = off
 #check_function_bodies = on
 #default_transaction_isolation = 'read committed'
 #default_transaction_read_only = off

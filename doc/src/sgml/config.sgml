@@ -8745,6 +8745,32 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-check-function-owner-trust" xreflabel="check_function_owner_trust">
+      <term><varname>check_function_owner_trust</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>check_function_owner_trust</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        This variable controls whether to raise an error in lieu of executing
+        a <literal>SECURITY INVOKER</literal> function (see <xref
+        linkend="sql-createfunction"/>) when that function is owned by an
+        untrusted user. When set to <literal>off</literal> (the default),
+        functions are executed normally regardless of the owner. When set to
+        <literal>on</literal>, an error is raised unless the <literal>SECURITY
+        INVOKER</literal> function is owned by the current user, or a user
+        that can <xref linkend="sql-set-role"/> to the current user.
+       </para>
+
+       <para>
+        Setting this variable to <literal>on</literal> provides protection
+        against unexpectedly executing code written by another user, e.g. due
+        to a trigger (<xref linkend="triggers"/>).
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-default-table-access-method" xreflabel="default_table_access_method">
       <term><varname>default_table_access_method</varname> (<type>string</type>)
       <indexterm>

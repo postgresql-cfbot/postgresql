@@ -88,10 +88,9 @@ our @EXPORT = qw(
 
   $windows_os
   $is_msys2
-  $use_unix_sockets
 );
 
-our ($windows_os, $is_msys2, $use_unix_sockets, $timeout_default,
+our ($windows_os, $is_msys2, $timeout_default,
 	$tmp_check, $log_path, $test_logfile);
 
 BEGIN
@@ -152,12 +151,6 @@ BEGIN
 		require Win32API::File;
 		Win32API::File->import(qw(createFile OsFHandleOpen CloseHandle));
 	}
-
-	# Specifies whether to use Unix sockets for test setups.  On
-	# Windows we don't use them by default since it's not universally
-	# supported, but it can be overridden if desired.
-	$use_unix_sockets =
-	  (!$windows_os || defined $ENV{PG_TEST_USE_UNIX_SOCKETS});
 
 	$timeout_default = $ENV{PG_TEST_TIMEOUT_DEFAULT};
 	$timeout_default = 180

@@ -11,11 +11,6 @@ use PostgreSQL::Test::Utils;
 use File::Basename qw(basename);
 use Test::More;
 use Data::Dumper;
-if (!$use_unix_sockets)
-{
-	plan skip_all =>
-	  "authentication tests cannot run without Unix-domain sockets";
-}
 
 # Stores the number of lines created for each file.  hba_rule and ident_rule
 # are used to respectively track pg_hba_file_rules.rule_number and

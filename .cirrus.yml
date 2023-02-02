@@ -519,9 +519,6 @@ WINDOWS_ENVIRONMENT_BASE: &WINDOWS_ENVIRONMENT_BASE
     # git's tar doesn't deal with drive letters, see
     # https://postgr.es/m/b6782dc3-a7b0-ed56-175f-f8f54cb08d67%40dunslane.net
     TAR: "c:/windows/system32/tar.exe"
-    # Avoids port conflicts between concurrent tap test runs
-    PG_TEST_USE_UNIX_SOCKETS: 1
-    PG_REGRESS_SOCK_DIR: "c:/cirrus/"
 
   sysinfo_script: |
     chcp

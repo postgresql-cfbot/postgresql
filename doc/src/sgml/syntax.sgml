@@ -729,6 +729,20 @@ $function$
     </note>
 
     <para>
+     For visual grouping, underscores can be inserted between digits.  These
+     have no further effect on the value of the literal.  For example:
+<literallayout>1_500_000_000
+0b10001000_00000000
+0o_1_755
+0xFFFF_FFFF
+1.618_034
+</literallayout>
+     Underscores are not allowed at the start or end of a numeric constant or
+     a group of digits (that is, immediately before or after a period or the
+     <quote>e</quote>), and more than one underscore in a row is not allowed.
+    </para>
+
+    <para>
      <indexterm><primary>integer</primary></indexterm>
      <indexterm><primary>bigint</primary></indexterm>
      <indexterm><primary>numeric</primary></indexterm>

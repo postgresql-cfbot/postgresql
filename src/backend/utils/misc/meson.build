@@ -8,6 +8,7 @@ backend_sources += files(
   'help_config.c',
   'pg_config.c',
   'pg_controldata.c',
+  'pg_controllog.c',
   'pg_rusage.c',
   'ps_status.c',
   'queryenvironment.c',

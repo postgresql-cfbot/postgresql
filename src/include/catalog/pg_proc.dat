@@ -11918,4 +11918,13 @@
   prorettype => 'bytea', proargtypes => 'pg_brin_minmax_multi_summary',
   prosrc => 'brin_minmax_multi_summary_send' },
 
+# operation log function
+{ oid => '8110', descr => 'show operation log',
+  proname => 'pg_operation_log', prorows => '170', proretset => 't',
+  provolatile => 'v', prorettype => 'record', proargtypes => '',
+  proallargtypes => '{text,text,text,pg_lsn,timestamptz,int4}',
+  proargmodes => '{o,o,o,o,o,o}',
+  proargnames => '{event,edition,version,lsn,last,count}',
+  prosrc => 'pg_operation_log' },
+
 ]

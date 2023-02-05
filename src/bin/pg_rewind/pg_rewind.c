@@ -19,6 +19,7 @@
 #include "catalog/catversion.h"
 #include "catalog/pg_control.h"
 #include "common/controldata_utils.h"
+#include "common/controllog_utils.h"
 #include "common/file_perm.h"
 #include "common/restricted_token.h"
 #include "common/string.h"
@@ -43,6 +44,8 @@ static void createBackupLabel(XLogRecPtr startpoint, TimeLineID starttli,
 
 static void digestControlFile(ControlFileData *ControlFile,
 							  const char *content, size_t size);
+static void digestOperationLog(OperationLogBuffer * LogBuffer,
+							   const char *content, size_t size);
 static void getRestoreCommand(const char *argv0);
 static void sanityChecks(void);
 static void findCommonAncestorTimeline(XLogRecPtr *recptr, int *tliIndex);
@@ -52,6 +55,8 @@ static void disconnect_atexit(void);
 static ControlFileData ControlFile_target;
 static ControlFileData ControlFile_source;
 static ControlFileData ControlFile_source_after;
+
+static OperationLogBuffer OperationLog_target = {0};
 
 const char *progname;
 int			WalSegSz;
@@ -329,6 +334,15 @@ main(int argc, char **argv)
 	buffer = source->fetch_file(source, "global/pg_control", &size);
 	digestControlFile(&ControlFile_source, buffer, size);
 	pg_free(buffer);
+
+	/* Read target operation log for prevent rewriting it. */
+	if (check_file_exists(datadir_target, PG_OPERATION_LOG_FILE))
+	{
+		buffer = slurpFile(datadir_target, PG_OPERATION_LOG_FILE, &size);
+		digestOperationLog(&OperationLog_target, buffer, size);
+		pg_free(buffer);
+	}
+	/* Otherwise we have OperationLog_target with zeros. */
 
 	sanityChecks();
 
@@ -672,7 +686,14 @@ perform_rewind(filemap_t *filemap, rewind_source *source,
 	ControlFile_new.minRecoveryPointTLI = endtli;
 	ControlFile_new.state = DB_IN_ARCHIVE_RECOVERY;
 	if (!dry_run)
+	{
 		update_controlfile(datadir_target, &ControlFile_new, do_sync);
+
+		/* Restore saved operation log. */
+		update_operation_log(datadir_target, &OperationLog_target);
+		/* Put information about "pg_rewind" into operation log. */
+		put_operation_log_element(datadir_target, OLT_REWIND);
+	}
 }
 
 static void
@@ -1007,6 +1028,44 @@ digestControlFile(ControlFileData *ControlFile, const char *content,
 
 	/* Additional checks on control file */
 	checkControlFile(ControlFile);
+}
+
+/*
+ * Check CRC of operation log buffer
+ */
+static void
+checkOperationLogBuffer(OperationLogBuffer * LogBuffer)
+{
+	pg_crc32c	crc;
+
+	/* Calculate CRC */
+	INIT_CRC32C(crc);
+	COMP_CRC32C(crc,
+				(char *) LogBuffer + sizeof(pg_crc32c),
+				PG_OPERATION_LOG_FULL_SIZE - sizeof(pg_crc32c));
+	FIN_CRC32C(crc);
+
+	/* And simply compare it */
+	if (!EQ_CRC32C(crc, LogBuffer->header.ol_crc))
+		pg_fatal("unexpected operation log CRC");
+}
+
+/*
+ * Verify operation log contents in the buffer 'content', and copy it to
+ * *LogBuffer.
+ */
+static void
+digestOperationLog(OperationLogBuffer * LogBuffer, const char *content,
+				   size_t size)
+{
+	if (size != PG_OPERATION_LOG_FULL_SIZE)
+		pg_fatal("unexpected operation log size %d, expected %d",
+				 (int) size, PG_OPERATION_LOG_FULL_SIZE);
+
+	memcpy(LogBuffer, content, size);
+
+	/* Additional checks on operation log */
+	checkOperationLogBuffer(LogBuffer);
 }
 
 /*

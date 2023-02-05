@@ -211,6 +211,7 @@ static const struct exclude_list_item excludeFiles[] =
  */
 static const struct exclude_list_item noChecksumFiles[] = {
 	{"pg_control", false},
+	{"pg_control_log", false},
 	{"pg_filenode.map", false},
 	{"pg_internal.init", true},
 	{"PG_VERSION", false},

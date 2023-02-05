@@ -14,6 +14,7 @@
 #include "pg_upgrade.h"
 #include "common/string.h"
 
+#include "common/controllog_utils.h"
 
 /*
  * get_control_data()
@@ -730,4 +731,55 @@ disable_old_cluster(void)
 		   "Because \"link\" mode was used, the old cluster cannot be safely\n"
 		   "started once the new cluster has been started.",
 		   old_cluster.pgdata);
+}
+
+
+/*
+ * copy_operation_log()
+ *
+ * Copy operation log from the old cluster to the new cluster and put info
+ * about upgrade. If operation log not exists in the old cluster then put
+ * startup message with version info of old cluster.
+ */
+void
+copy_operation_log(void)
+{
+	OperationLogBuffer *log_buffer;
+	bool		log_is_empty;
+	ClusterInfo *cluster;
+	bool		crc_ok;
+
+	/* Read operation log from the old cluster. */
+	log_buffer = get_operation_log(old_cluster.pgdata, &crc_ok);
+	if (!crc_ok)
+		pg_fatal("pg_control operation log CRC value is incorrect");
+
+	/*
+	 * Check operation log records in the old cluster. Need to put information
+	 * about old version in case operation log is empty.
+	 */
+	log_is_empty = (get_operation_log_count(log_buffer) == 0);
+
+	if (user_opts.transfer_mode == TRANSFER_MODE_LINK)
+		cluster = &old_cluster;
+	else
+	{
+		cluster = &new_cluster;
+
+		/* Place operation log in the new cluster. */
+		update_operation_log(cluster->pgdata, log_buffer);
+	}
+
+	pfree(log_buffer);
+
+	/* Put information about the old cluster if needed. */
+	if (log_is_empty)
+		put_operation_log_element_version(cluster->pgdata, OLT_STARTUP,
+										  ED_PG_ORIGINAL,
+										  old_cluster.bin_version_num);
+
+	/*
+	 * Put information about upgrade in the operation log of the old cluster.
+	 */
+	put_operation_log_element(cluster->pgdata, OLT_UPGRADE);
 }

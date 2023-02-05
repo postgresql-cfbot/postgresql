@@ -51,6 +51,7 @@ OBJS_COMMON = \
 	compression.o \
 	config_info.o \
 	controldata_utils.o \
+	controllog_utils.o \
 	d2s.o \
 	encnames.o \
 	exec.o \

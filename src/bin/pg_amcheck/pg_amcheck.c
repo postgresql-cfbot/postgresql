@@ -39,8 +39,7 @@ typedef struct PatternInfo
 								 * NULL */
 	bool		heap_only;		/* true if rel_regex should only match heap
 								 * tables */
-	bool		btree_only;		/* true if rel_regex should only match btree
-								 * indexes */
+	bool		index_only;		/* true if rel_regex should only match indexes */
 	bool		matched;		/* true if the pattern matched in any database */
 } PatternInfo;
 
@@ -74,7 +73,7 @@ typedef struct AmcheckOptions
 
 	/*
 	 * As an optimization, if any pattern in the exclude list applies to heap
-	 * tables, or similarly if any such pattern applies to btree indexes, or
+	 * tables, or similarly if any such pattern applies to indexes, or
 	 * to schemas, then these will be true, otherwise false.  These should
 	 * always agree with what you'd conclude by grep'ing through the exclude
 	 * list.
@@ -98,14 +97,14 @@ typedef struct AmcheckOptions
 	int64		endblock;
 	const char *skip;
 
-	/* btree index checking options */
+	/* index checking options */
 	bool		parent_check;
 	bool		rootdescend;
 	bool		heapallindexed;
 	bool		checkunique;
 
-	/* heap and btree hybrid option */
-	bool		no_btree_expansion;
+	/* heap and indexes hybrid option */
+	bool		no_index_expansion;
 } AmcheckOptions;
 
 static AmcheckOptions opts = {
@@ -134,7 +133,7 @@ static AmcheckOptions opts = {
 	.rootdescend = false,
 	.heapallindexed = false,
 	.checkunique = false,
-	.no_btree_expansion = false
+	.no_index_expansion = false
 };
 
 static const char *progname = NULL;
@@ -151,13 +150,15 @@ typedef struct DatabaseInfo
 	char	   *datname;
 	char	   *amcheck_schema; /* escaped, quoted literal */
 	bool		is_checkunique;
+	bool		gist_supported;
 } DatabaseInfo;
 
 typedef struct RelationInfo
 {
 	const DatabaseInfo *datinfo;	/* shared by other relinfos */
 	Oid			reloid;
-	bool		is_heap;		/* true if heap, false if btree */
+	Oid			amoid;
+	bool		is_heap;		/* true if heap, false if index */
 	char	   *nspname;
 	char	   *relname;
 	int			relpages;
@@ -178,10 +179,12 @@ static void prepare_heap_command(PQExpBuffer sql, RelationInfo *rel,
 								 PGconn *conn);
 static void prepare_btree_command(PQExpBuffer sql, RelationInfo *rel,
 								  PGconn *conn);
+static void prepare_gist_command(PQExpBuffer sql, RelationInfo *rel,
+								  PGconn *conn);
 static void run_command(ParallelSlot *slot, const char *sql);
 static bool verify_heap_slot_handler(PGresult *res, PGconn *conn,
 									 void *context);
-static bool verify_btree_slot_handler(PGresult *res, PGconn *conn, void *context);
+static bool verify_index_slot_handler(PGresult *res, PGconn *conn, void *context);
 static void help(const char *progname);
 static void progress_report(uint64 relations_total, uint64 relations_checked,
 							uint64 relpages_total, uint64 relpages_checked,
@@ -195,7 +198,7 @@ static void append_relation_pattern(PatternInfoArray *pia, const char *pattern,
 									int encoding);
 static void append_heap_pattern(PatternInfoArray *pia, const char *pattern,
 								int encoding);
-static void append_btree_pattern(PatternInfoArray *pia, const char *pattern,
+static void append_index_pattern(PatternInfoArray *pia, const char *pattern,
 								 int encoding);
 static void compile_database_list(PGconn *conn, SimplePtrList *databases,
 								  const char *initial_dbname);
@@ -287,6 +290,7 @@ main(int argc, char *argv[])
 	enum trivalue prompt_password = TRI_DEFAULT;
 	int			encoding = pg_get_encoding_from_locale(NULL, false);
 	ConnParams	cparams;
+	bool		gist_warn_printed = false;
 
 	pg_logging_init(argv[0]);
 	progname = get_progname(argv[0]);
@@ -322,11 +326,11 @@ main(int argc, char *argv[])
 				break;
 			case 'i':
 				opts.allrel = false;
-				append_btree_pattern(&opts.include, optarg, encoding);
+				append_index_pattern(&opts.include, optarg, encoding);
 				break;
 			case 'I':
 				opts.excludeidx = true;
-				append_btree_pattern(&opts.exclude, optarg, encoding);
+				append_index_pattern(&opts.exclude, optarg, encoding);
 				break;
 			case 'j':
 				if (!option_parse_int(optarg, "-j/--jobs", 1, INT_MAX,
@@ -381,7 +385,7 @@ main(int argc, char *argv[])
 				maintenance_db = pg_strdup(optarg);
 				break;
 			case 2:
-				opts.no_btree_expansion = true;
+				opts.no_index_expansion = true;
 				break;
 			case 3:
 				opts.no_toast_expansion = true;
@@ -530,6 +534,10 @@ main(int argc, char *argv[])
 		int			ntups;
 		const char *amcheck_schema = NULL;
 		DatabaseInfo *dat = (DatabaseInfo *) cell->ptr;
+		int			vmaj = 0,
+					vmin = 0,
+					vrev = 0;
+		const char *amcheck_version;
 
 		cparams.override_dbname = dat->datname;
 		if (conn == NULL || strcmp(PQdb(conn), dat->datname) != 0)
@@ -598,36 +606,33 @@ main(int argc, char *argv[])
 												 strlen(amcheck_schema));
 
 		/*
-		 * Check the version of amcheck extension. Skip requested unique
-		 * constraint check with warning if it is not yet supported by
-		 * amcheck.
+		 * Check the version of amcheck extension. 
 		 */
-		if (opts.checkunique == true)
+		amcheck_version = PQgetvalue(result, 0, 1);
+
+		/*
+		 * Now amcheck has only major and minor versions in the string but
+		 * we also support revision just in case. Now it is expected to be
+		 * zero.
+		 */
+		sscanf(amcheck_version, "%d.%d.%d", &vmaj, &vmin, &vrev);
+
+		/*
+		 * checkunique option is supported in amcheck since version 1.4. Skip
+		 * requested unique constraint check with warning if it is not yet
+		 * supported by amcheck.
+		 */
+		if (opts.checkunique && ((vmaj == 1 && vmin < 4) || vmaj == 0))
 		{
-			/*
-			 * Now amcheck has only major and minor versions in the string but
-			 * we also support revision just in case. Now it is expected to be
-			 * zero.
-			 */
-			int			vmaj = 0,
-						vmin = 0,
-						vrev = 0;
-			const char *amcheck_version = PQgetvalue(result, 0, 1);
-
-			sscanf(amcheck_version, "%d.%d.%d", &vmaj, &vmin, &vrev);
-
-			/*
-			 * checkunique option is supported in amcheck since version 1.4
-			 */
-			if ((vmaj == 1 && vmin < 4) || vmaj == 0)
-			{
-				pg_log_warning("--checkunique option is not supported by amcheck "
-							   "version \"%s\"", amcheck_version);
-				dat->is_checkunique = false;
-			}
-			else
-				dat->is_checkunique = true;
+			pg_log_warning("--checkunique option is not supported by amcheck "
+							"version \"%s\"", amcheck_version);
+			dat->is_checkunique = false;
 		}
+		else
+			dat->is_checkunique = opts.checkunique;
+
+		/* GiST indexes are supported in 1.5+ */
+		dat->gist_supported = ((vmaj == 1 && vmin >= 5) || vmaj > 1);
 
 		PQclear(result);
 
@@ -649,8 +654,8 @@ main(int argc, char *argv[])
 			if (pat->heap_only)
 				log_no_match("no heap tables to check matching \"%s\"",
 							 pat->pattern);
-			else if (pat->btree_only)
-				log_no_match("no btree indexes to check matching \"%s\"",
+			else if (pat->index_only)
+				log_no_match("no indexes to check matching \"%s\"",
 							 pat->pattern);
 			else if (pat->rel_regex == NULL)
 				log_no_match("no relations to check in schemas matching \"%s\"",
@@ -783,13 +788,29 @@ main(int argc, char *argv[])
 				if (opts.show_progress && progress_since_last_stderr)
 					fprintf(stderr, "\n");
 
-				pg_log_info("checking btree index \"%s.%s.%s\"",
+				pg_log_info("checking index \"%s.%s.%s\"",
 							rel->datinfo->datname, rel->nspname, rel->relname);
 				progress_since_last_stderr = false;
 			}
-			prepare_btree_command(&sql, rel, free_slot->connection);
+			if (rel->amoid == BTREE_AM_OID)
+				prepare_btree_command(&sql, rel, free_slot->connection);
+			else if (rel->amoid == GIST_AM_OID)
+			{
+				if (rel->datinfo->gist_supported)
+					prepare_gist_command(&sql, rel, free_slot->connection);
+				else
+				{
+					if (!gist_warn_printed)
+						pg_log_warning("GiST verification is not supported by installed amcheck version");
+					gist_warn_printed = true;
+				}
+			}
+			else
+				/* should not happen at this stage */
+				pg_log_info("Verification of index type %u not supported",
+							rel->amoid);
 			rel->sql = pstrdup(sql.data);	/* pg_free'd after command */
-			ParallelSlotSetHandler(free_slot, verify_btree_slot_handler, rel);
+			ParallelSlotSetHandler(free_slot, verify_index_slot_handler, rel);
 			run_command(free_slot, rel->sql);
 		}
 	}
@@ -867,7 +888,7 @@ prepare_heap_command(PQExpBuffer sql, RelationInfo *rel, PGconn *conn)
  * Creates a SQL command for running amcheck checking on the given btree index
  * relation.  The command does not select any columns, as btree checking
  * functions do not return any, but rather return corruption information by
- * raising errors, which verify_btree_slot_handler expects.
+ * raising errors, which verify_index_slot_handler expects.
  *
  * The constructed SQL command will silently skip temporary indexes, and
  * indexes being reindexed concurrently, as checking them would needlessly draw
@@ -914,6 +935,28 @@ prepare_btree_command(PQExpBuffer sql, RelationInfo *rel, PGconn *conn)
 }
 
 /*
+ * prepare_gist_command
+ * Similar to btree equivalent prepares command to check GiST index.
+ */
+static void
+prepare_gist_command(PQExpBuffer sql, RelationInfo *rel, PGconn *conn)
+{
+	resetPQExpBuffer(sql);
+
+	appendPQExpBuffer(sql,
+						"SELECT %s.gist_index_check("
+						"index := c.oid, heapallindexed := %s)"
+						"\nFROM pg_catalog.pg_class c, pg_catalog.pg_index i "
+						"WHERE c.oid = %u "
+						"AND c.oid = i.indexrelid "
+						"AND c.relpersistence != 't' "
+						"AND i.indisready AND i.indisvalid AND i.indislive",
+						rel->datinfo->amcheck_schema,
+						(opts.heapallindexed ? "true" : "false"),
+						rel->reloid);
+}
+
+/*
  * run_command
  *
  * Sends a command to the server without waiting for the command to complete.
@@ -952,7 +995,7 @@ run_command(ParallelSlot *slot, const char *sql)
  * Note: Heap relation corruption is reported by verify_heapam() via the result
  * set, rather than an ERROR, but running verify_heapam() on a corrupted heap
  * table may still result in an error being returned from the server due to
- * missing relation files, bad checksums, etc.  The btree corruption checking
+ * missing relation files, bad checksums, etc.  The corruption checking
  * functions always use errors to communicate corruption messages.  We can't
  * just abort processing because we got a mere ERROR.
  *
@@ -1102,11 +1145,11 @@ verify_heap_slot_handler(PGresult *res, PGconn *conn, void *context)
 }
 
 /*
- * verify_btree_slot_handler
+ * verify_index_slot_handler
  *
- * ParallelSlotHandler that receives results from a btree checking command
- * created by prepare_btree_command and outputs them for the user.  The results
- * from the btree checking command is assumed to be empty, but when the results
+ * ParallelSlotHandler that receives results from a checking command created by
+ * prepare_[btree,gist]_command and outputs them for the user.  The results
+ * from the checking command is assumed to be empty, but when the results
  * are an error code, the useful information about the corruption is expected
  * in the connection's error message.
  *
@@ -1115,7 +1158,7 @@ verify_heap_slot_handler(PGresult *res, PGconn *conn, void *context)
  * context: unused
  */
 static bool
-verify_btree_slot_handler(PGresult *res, PGconn *conn, void *context)
+verify_index_slot_handler(PGresult *res, PGconn *conn, void *context)
 {
 	RelationInfo *rel = (RelationInfo *) context;
 
@@ -1126,7 +1169,7 @@ verify_btree_slot_handler(PGresult *res, PGconn *conn, void *context)
 		if (ntups > 1)
 		{
 			/*
-			 * We expect the btree checking functions to return one void row
+			 * We expect the checking functions to return one void row
 			 * each, or zero rows if the check was skipped due to the object
 			 * being in the wrong state to be checked, so we should output
 			 * some sort of warning if we get anything more, not because it
@@ -1141,7 +1184,7 @@ verify_btree_slot_handler(PGresult *res, PGconn *conn, void *context)
 			 */
 			if (opts.show_progress && progress_since_last_stderr)
 				fprintf(stderr, "\n");
-			pg_log_warning("btree index \"%s.%s.%s\": btree checking function returned unexpected number of rows: %d",
+			pg_log_warning("index \"%s.%s.%s\": checking function returned unexpected number of rows: %d",
 						   rel->datinfo->datname, rel->nspname, rel->relname, ntups);
 			if (opts.verbose)
 				pg_log_warning_detail("Query was: %s", rel->sql);
@@ -1155,7 +1198,7 @@ verify_btree_slot_handler(PGresult *res, PGconn *conn, void *context)
 		char	   *msg = indent_lines(PQerrorMessage(conn));
 
 		all_checks_pass = false;
-		printf(_("btree index \"%s.%s.%s\":\n"),
+		printf(_("index \"%s.%s.%s\":\n"),
 			   rel->datinfo->datname, rel->nspname, rel->relname);
 		printf("%s", msg);
 		if (opts.verbose)
@@ -1209,6 +1252,8 @@ help(const char *progname)
 	printf(_("      --heapallindexed            check that all heap tuples are found within indexes\n"));
 	printf(_("      --parent-check              check index parent/child relationships\n"));
 	printf(_("      --rootdescend               search from root page to refind tuples\n"));
+	printf(_("\nGiST index checking options:\n"));
+	printf(_("      --heapallindexed            check that all heap tuples are found within indexes\n"));
 	printf(_("\nConnection options:\n"));
 	printf(_("  -h, --host=HOSTNAME             database server host or socket directory\n"));
 	printf(_("  -p, --port=PORT                 database server port\n"));
@@ -1422,11 +1467,11 @@ append_schema_pattern(PatternInfoArray *pia, const char *pattern, int encoding)
  * pattern: the relation name pattern
  * encoding: client encoding for parsing the pattern
  * heap_only: whether the pattern should only be matched against heap tables
- * btree_only: whether the pattern should only be matched against btree indexes
+ * index_only: whether the pattern should only be matched against indexes
  */
 static void
 append_relation_pattern_helper(PatternInfoArray *pia, const char *pattern,
-							   int encoding, bool heap_only, bool btree_only)
+							   int encoding, bool heap_only, bool index_only)
 {
 	PQExpBufferData dbbuf;
 	PQExpBufferData nspbuf;
@@ -1461,14 +1506,14 @@ append_relation_pattern_helper(PatternInfoArray *pia, const char *pattern,
 	termPQExpBuffer(&relbuf);
 
 	info->heap_only = heap_only;
-	info->btree_only = btree_only;
+	info->index_only = index_only;
 }
 
 /*
  * append_relation_pattern
  *
  * Adds the given pattern interpreted as a relation pattern, to be matched
- * against both heap tables and btree indexes.
+ * against both heap tables and indexes.
  *
  * pia: the pattern info array to be appended
  * pattern: the relation name pattern
@@ -1497,17 +1542,17 @@ append_heap_pattern(PatternInfoArray *pia, const char *pattern, int encoding)
 }
 
 /*
- * append_btree_pattern
+ * append_index_pattern
  *
  * Adds the given pattern interpreted as a relation pattern, to be matched only
- * against btree indexes.
+ * against indexes.
  *
  * pia: the pattern info array to be appended
  * pattern: the relation name pattern
  * encoding: client encoding for parsing the pattern
  */
 static void
-append_btree_pattern(PatternInfoArray *pia, const char *pattern, int encoding)
+append_index_pattern(PatternInfoArray *pia, const char *pattern, int encoding)
 {
 	append_relation_pattern_helper(pia, pattern, encoding, false, true);
 }
@@ -1765,7 +1810,7 @@ compile_database_list(PGconn *conn, SimplePtrList *databases,
  *     rel_regex: the relname regexp parsed from the pattern, or NULL if the
  *                pattern had no relname part
  *     heap_only: true if the pattern applies only to heap tables (not indexes)
- *     btree_only: true if the pattern applies only to btree indexes (not tables)
+ *     index_only: true if the pattern applies only to indexes (not tables)
  *
  * buf: the buffer to be appended
  * patterns: the array of patterns to be inserted into the CTE
@@ -1807,7 +1852,7 @@ append_rel_pattern_raw_cte(PQExpBuffer buf, const PatternInfoArray *pia,
 			appendPQExpBufferStr(buf, "::TEXT, true::BOOLEAN");
 		else
 			appendPQExpBufferStr(buf, "::TEXT, false::BOOLEAN");
-		if (info->btree_only)
+		if (info->index_only)
 			appendPQExpBufferStr(buf, ", true::BOOLEAN");
 		else
 			appendPQExpBufferStr(buf, ", false::BOOLEAN");
@@ -1845,8 +1890,8 @@ append_rel_pattern_filtered_cte(PQExpBuffer buf, const char *raw,
 								const char *filtered, PGconn *conn)
 {
 	appendPQExpBuffer(buf,
-					  "\n%s (pattern_id, nsp_regex, rel_regex, heap_only, btree_only) AS ("
-					  "\nSELECT pattern_id, nsp_regex, rel_regex, heap_only, btree_only "
+					  "\n%s (pattern_id, nsp_regex, rel_regex, heap_only, index_only) AS ("
+					  "\nSELECT pattern_id, nsp_regex, rel_regex, heap_only, index_only "
 					  "FROM %s r"
 					  "\nWHERE (r.db_regex IS NULL "
 					  "OR ",
@@ -1869,7 +1914,7 @@ append_rel_pattern_filtered_cte(PQExpBuffer buf, const char *raw,
  * The cells of the constructed list contain all information about the relation
  * necessary to connect to the database and check the object, including which
  * database to connect to, where contrib/amcheck is installed, and the Oid and
- * type of object (heap table vs. btree index).  Rather than duplicating the
+ * type of object (heap table vs. index).  Rather than duplicating the
  * database details per relation, the relation structs use references to the
  * same database object, provided by the caller.
  *
@@ -1896,7 +1941,7 @@ compile_relation_list_one_db(PGconn *conn, SimplePtrList *relations,
 	if (!opts.allrel)
 	{
 		appendPQExpBufferStr(&sql,
-							 " include_raw (pattern_id, db_regex, nsp_regex, rel_regex, heap_only, btree_only) AS (");
+							 " include_raw (pattern_id, db_regex, nsp_regex, rel_regex, heap_only, index_only) AS (");
 		append_rel_pattern_raw_cte(&sql, &opts.include, conn);
 		appendPQExpBufferStr(&sql, "\n),");
 		append_rel_pattern_filtered_cte(&sql, "include_raw", "include_pat", conn);
@@ -1906,7 +1951,7 @@ compile_relation_list_one_db(PGconn *conn, SimplePtrList *relations,
 	if (opts.excludetbl || opts.excludeidx || opts.excludensp)
 	{
 		appendPQExpBufferStr(&sql,
-							 " exclude_raw (pattern_id, db_regex, nsp_regex, rel_regex, heap_only, btree_only) AS (");
+							 " exclude_raw (pattern_id, db_regex, nsp_regex, rel_regex, heap_only, index_only) AS (");
 		append_rel_pattern_raw_cte(&sql, &opts.exclude, conn);
 		appendPQExpBufferStr(&sql, "\n),");
 		append_rel_pattern_filtered_cte(&sql, "exclude_raw", "exclude_pat", conn);
@@ -1914,36 +1959,36 @@ compile_relation_list_one_db(PGconn *conn, SimplePtrList *relations,
 
 	/* Append the relation CTE. */
 	appendPQExpBufferStr(&sql,
-						 " relation (pattern_id, oid, nspname, relname, reltoastrelid, relpages, is_heap, is_btree) AS ("
+						 " relation (pattern_id, oid, amoid, nspname, relname, reltoastrelid, relpages, is_heap, is_index) AS ("
 						 "\nSELECT DISTINCT ON (c.oid");
 	if (!opts.allrel)
 		appendPQExpBufferStr(&sql, ", ip.pattern_id) ip.pattern_id,");
 	else
 		appendPQExpBufferStr(&sql, ") NULL::INTEGER AS pattern_id,");
 	appendPQExpBuffer(&sql,
-					  "\nc.oid, n.nspname, c.relname, c.reltoastrelid, c.relpages, "
-					  "c.relam = %u AS is_heap, "
-					  "c.relam = %u AS is_btree"
+					  "\nc.oid, c.relam as amoid, n.nspname, c.relname, "
+					  "c.reltoastrelid, c.relpages, c.relam = %u AS is_heap, "
+					  "(c.relam = %u OR c.relam = %u) AS is_index"
 					  "\nFROM pg_catalog.pg_class c "
 					  "INNER JOIN pg_catalog.pg_namespace n "
 					  "ON c.relnamespace = n.oid",
-					  HEAP_TABLE_AM_OID, BTREE_AM_OID);
+					  HEAP_TABLE_AM_OID, BTREE_AM_OID, GIST_AM_OID);
 	if (!opts.allrel)
 		appendPQExpBuffer(&sql,
 						  "\nINNER JOIN include_pat ip"
 						  "\nON (n.nspname ~ ip.nsp_regex OR ip.nsp_regex IS NULL)"
 						  "\nAND (c.relname ~ ip.rel_regex OR ip.rel_regex IS NULL)"
 						  "\nAND (c.relam = %u OR NOT ip.heap_only)"
-						  "\nAND (c.relam = %u OR NOT ip.btree_only)",
-						  HEAP_TABLE_AM_OID, BTREE_AM_OID);
+						  "\nAND ((c.relam = %u OR c.relam = %u) OR NOT ip.index_only)",
+						  HEAP_TABLE_AM_OID, BTREE_AM_OID, GIST_AM_OID);
 	if (opts.excludetbl || opts.excludeidx || opts.excludensp)
 		appendPQExpBuffer(&sql,
 						  "\nLEFT OUTER JOIN exclude_pat ep"
 						  "\nON (n.nspname ~ ep.nsp_regex OR ep.nsp_regex IS NULL)"
 						  "\nAND (c.relname ~ ep.rel_regex OR ep.rel_regex IS NULL)"
 						  "\nAND (c.relam = %u OR NOT ep.heap_only OR ep.rel_regex IS NULL)"
-						  "\nAND (c.relam = %u OR NOT ep.btree_only OR ep.rel_regex IS NULL)",
-						  HEAP_TABLE_AM_OID, BTREE_AM_OID);
+						  "\nAND ((c.relam = %u OR c.relam = %u) OR NOT ep.index_only OR ep.rel_regex IS NULL)",
+						  HEAP_TABLE_AM_OID, BTREE_AM_OID, GIST_AM_OID);
 
 	/*
 	 * Exclude temporary tables and indexes, which must necessarily belong to
@@ -1977,12 +2022,12 @@ compile_relation_list_one_db(PGconn *conn, SimplePtrList *relations,
 						  HEAP_TABLE_AM_OID, PG_TOAST_NAMESPACE);
 	else
 		appendPQExpBuffer(&sql,
-						  " AND c.relam IN (%u, %u)"
+						  " AND c.relam IN (%u, %u, %u)"
 						  "AND c.relkind IN ('r', 'S', 'm', 't', 'i') "
 						  "AND ((c.relam = %u AND c.relkind IN ('r', 'S', 'm', 't')) OR "
-						  "(c.relam = %u AND c.relkind = 'i'))",
-						  HEAP_TABLE_AM_OID, BTREE_AM_OID,
-						  HEAP_TABLE_AM_OID, BTREE_AM_OID);
+						  "((c.relam = %u OR c.relam = %u) AND c.relkind = 'i'))",
+						  HEAP_TABLE_AM_OID, BTREE_AM_OID, GIST_AM_OID,
+						  HEAP_TABLE_AM_OID, BTREE_AM_OID, GIST_AM_OID);
 
 	appendPQExpBufferStr(&sql,
 						 "\nORDER BY c.oid)");
@@ -2011,7 +2056,7 @@ compile_relation_list_one_db(PGconn *conn, SimplePtrList *relations,
 		appendPQExpBufferStr(&sql,
 							 "\n)");
 	}
-	if (!opts.no_btree_expansion)
+	if (!opts.no_index_expansion)
 	{
 		/*
 		 * Include a CTE for btree indexes associated with primary heap tables
@@ -2019,9 +2064,9 @@ compile_relation_list_one_db(PGconn *conn, SimplePtrList *relations,
 		 * btree index names.
 		 */
 		appendPQExpBufferStr(&sql,
-							 ", index (oid, nspname, relname, relpages) AS ("
-							 "\nSELECT c.oid, r.nspname, c.relname, c.relpages "
-							 "FROM relation r"
+							 ", index (oid, amoid, nspname, relname, relpages) AS ("
+							 "\nSELECT c.oid, c.relam as amoid, r.nspname, "
+							 "c.relname, c.relpages FROM relation r"
 							 "\nINNER JOIN pg_catalog.pg_index i "
 							 "ON r.oid = i.indrelid "
 							 "INNER JOIN pg_catalog.pg_class c "
@@ -2034,15 +2079,15 @@ compile_relation_list_one_db(PGconn *conn, SimplePtrList *relations,
 								 "\nLEFT OUTER JOIN exclude_pat ep "
 								 "ON (n.nspname ~ ep.nsp_regex OR ep.nsp_regex IS NULL) "
 								 "AND (c.relname ~ ep.rel_regex OR ep.rel_regex IS NULL) "
-								 "AND ep.btree_only"
+								 "AND ep.index_only"
 								 "\nWHERE ep.pattern_id IS NULL");
 		else
 			appendPQExpBufferStr(&sql,
 								 "\nWHERE true");
 		appendPQExpBuffer(&sql,
-						  " AND c.relam = %u "
+						  " AND (c.relam = %u or c.relam = %u) "
 						  "AND c.relkind = 'i'",
-						  BTREE_AM_OID);
+						  BTREE_AM_OID, GIST_AM_OID);
 		if (opts.no_toast_expansion)
 			appendPQExpBuffer(&sql,
 							  " AND c.relnamespace != %u",
@@ -2050,7 +2095,7 @@ compile_relation_list_one_db(PGconn *conn, SimplePtrList *relations,
 		appendPQExpBufferStr(&sql, "\n)");
 	}
 
-	if (!opts.no_toast_expansion && !opts.no_btree_expansion)
+	if (!opts.no_toast_expansion && !opts.no_index_expansion)
 	{
 		/*
 		 * Include a CTE for btree indexes associated with toast tables of
@@ -2071,13 +2116,13 @@ compile_relation_list_one_db(PGconn *conn, SimplePtrList *relations,
 								 "\nLEFT OUTER JOIN exclude_pat ep "
 								 "ON ('pg_toast' ~ ep.nsp_regex OR ep.nsp_regex IS NULL) "
 								 "AND (c.relname ~ ep.rel_regex OR ep.rel_regex IS NULL) "
-								 "AND ep.btree_only "
+								 "AND ep.index_only "
 								 "WHERE ep.pattern_id IS NULL");
 		else
 			appendPQExpBufferStr(&sql,
 								 "\nWHERE true");
 		appendPQExpBuffer(&sql,
-						  " AND c.relam = %u"
+						  " AND c.relam = %u "
 						  " AND c.relkind = 'i')",
 						  BTREE_AM_OID);
 	}
@@ -2091,12 +2136,13 @@ compile_relation_list_one_db(PGconn *conn, SimplePtrList *relations,
 	 * list.
 	 */
 	appendPQExpBufferStr(&sql,
-						 "\nSELECT pattern_id, is_heap, is_btree, oid, nspname, relname, relpages "
+						 "\nSELECT pattern_id, is_heap, is_index, oid, amoid, nspname, relname, relpages "
 						 "FROM (");
 	appendPQExpBufferStr(&sql,
 	/* Inclusion patterns that failed to match */
-						 "\nSELECT pattern_id, is_heap, is_btree, "
+						 "\nSELECT pattern_id, is_heap, is_index, "
 						 "NULL::OID AS oid, "
+						 "NULL::OID AS amoid, "
 						 "NULL::TEXT AS nspname, "
 						 "NULL::TEXT AS relname, "
 						 "NULL::INTEGER AS relpages"
@@ -2105,29 +2151,29 @@ compile_relation_list_one_db(PGconn *conn, SimplePtrList *relations,
 						 "UNION"
 	/* Primary relations */
 						 "\nSELECT NULL::INTEGER AS pattern_id, "
-						 "is_heap, is_btree, oid, nspname, relname, relpages "
+						 "is_heap, is_index, oid, amoid, nspname, relname, relpages "
 						 "FROM relation");
 	if (!opts.no_toast_expansion)
-		appendPQExpBufferStr(&sql,
+		appendPQExpBuffer(&sql,
 							 " UNION"
 		/* Toast tables for primary relations */
 							 "\nSELECT NULL::INTEGER AS pattern_id, TRUE AS is_heap, "
-							 "FALSE AS is_btree, oid, nspname, relname, relpages "
+							 "FALSE AS is_index, oid, 0 as amoid, nspname, relname, relpages "
 							 "FROM toast");
-	if (!opts.no_btree_expansion)
+	if (!opts.no_index_expansion)
 		appendPQExpBufferStr(&sql,
 							 " UNION"
 		/* Indexes for primary relations */
 							 "\nSELECT NULL::INTEGER AS pattern_id, FALSE AS is_heap, "
-							 "TRUE AS is_btree, oid, nspname, relname, relpages "
+							 "TRUE AS is_index, oid, amoid, nspname, relname, relpages "
 							 "FROM index");
-	if (!opts.no_toast_expansion && !opts.no_btree_expansion)
-		appendPQExpBufferStr(&sql,
+	if (!opts.no_toast_expansion && !opts.no_index_expansion)
+		appendPQExpBuffer(&sql,
 							 " UNION"
 		/* Indexes for toast relations */
 							 "\nSELECT NULL::INTEGER AS pattern_id, FALSE AS is_heap, "
-							 "TRUE AS is_btree, oid, nspname, relname, relpages "
-							 "FROM toast_index");
+							 "TRUE AS is_index, oid, %u as amoid, nspname, relname, relpages "
+							 "FROM toast_index", BTREE_AM_OID);
 	appendPQExpBufferStr(&sql,
 						 "\n) AS combined_records "
 						 "ORDER BY relpages DESC NULLS FIRST, oid");
@@ -2147,8 +2193,9 @@ compile_relation_list_one_db(PGconn *conn, SimplePtrList *relations,
 	{
 		int			pattern_id = -1;
 		bool		is_heap = false;
-		bool		is_btree PG_USED_FOR_ASSERTS_ONLY = false;
+		bool		is_index PG_USED_FOR_ASSERTS_ONLY = false;
 		Oid			oid = InvalidOid;
+		Oid			amoid = InvalidOid;
 		const char *nspname = NULL;
 		const char *relname = NULL;
 		int			relpages = 0;
@@ -2158,15 +2205,17 @@ compile_relation_list_one_db(PGconn *conn, SimplePtrList *relations,
 		if (!PQgetisnull(res, i, 1))
 			is_heap = (PQgetvalue(res, i, 1)[0] == 't');
 		if (!PQgetisnull(res, i, 2))
-			is_btree = (PQgetvalue(res, i, 2)[0] == 't');
+			is_index = (PQgetvalue(res, i, 2)[0] == 't');
 		if (!PQgetisnull(res, i, 3))
 			oid = atooid(PQgetvalue(res, i, 3));
 		if (!PQgetisnull(res, i, 4))
-			nspname = PQgetvalue(res, i, 4);
+			amoid = atooid(PQgetvalue(res, i, 4));
 		if (!PQgetisnull(res, i, 5))
-			relname = PQgetvalue(res, i, 5);
+			nspname = PQgetvalue(res, i, 5);
 		if (!PQgetisnull(res, i, 6))
-			relpages = atoi(PQgetvalue(res, i, 6));
+			relname = PQgetvalue(res, i, 6);
+		if (!PQgetisnull(res, i, 7))
+			relpages = atoi(PQgetvalue(res, i, 7));
 
 		if (pattern_id >= 0)
 		{
@@ -2188,10 +2237,11 @@ compile_relation_list_one_db(PGconn *conn, SimplePtrList *relations,
 			RelationInfo *rel = (RelationInfo *) pg_malloc0(sizeof(RelationInfo));
 
 			Assert(OidIsValid(oid));
-			Assert((is_heap && !is_btree) || (is_btree && !is_heap));
+			Assert((is_heap && !is_index) || (is_index && !is_heap));
 
 			rel->datinfo = dat;
 			rel->reloid = oid;
+			rel->amoid = amoid;
 			rel->is_heap = is_heap;
 			rel->nspname = pstrdup(nspname);
 			rel->relname = pstrdup(relname);
@@ -2201,7 +2251,7 @@ compile_relation_list_one_db(PGconn *conn, SimplePtrList *relations,
 			{
 				/*
 				 * We apply --startblock and --endblock to heap tables, but
-				 * not btree indexes, and for progress purposes we need to
+				 * not supported indexes, and for progress purposes we need to
 				 * track how many blocks we expect to check.
 				 */
 				if (opts.endblock >= 0 && rel->blocks_to_check > opts.endblock)

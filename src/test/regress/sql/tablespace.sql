@@ -20,8 +20,6 @@ SELECT spcoptions FROM pg_tablespace WHERE spcname = 'regress_tblspacewith';
 -- drop the tablespace so we can re-use the location
 DROP TABLESPACE regress_tblspacewith;
 
--- create a tablespace we can use
-CREATE TABLESPACE regress_tblspace LOCATION '';
 -- This returns a relative path as of an effect of allow_in_place_tablespaces,
 -- masking the tablespace OID used in the path name.
 SELECT regexp_replace(pg_tablespace_location(oid), '(pg_tblspc)/(\d+)', '\1/NNN')
@@ -66,7 +64,9 @@ REINDEX (TABLESPACE regress_tblspace) INDEX regress_tblspace_test_tbl_idx;
 REINDEX (TABLESPACE regress_tblspace) TABLE regress_tblspace_test_tbl;
 ROLLBACK;
 -- no relation moved to the new tablespace
-SELECT c.relname FROM pg_class c, pg_tablespace s
+SELECT c.relname <> 'regress_tblspace_test_tbl_idx',
+       c.relname <> 'regress_tblspace_test_tbl'
+  FROM pg_class c, pg_tablespace s
   WHERE c.reltablespace = s.oid AND s.spcname = 'regress_tblspace';
 
 -- check that all indexes are moved to a new tablespace with different
@@ -74,6 +74,7 @@ SELECT c.relname FROM pg_class c, pg_tablespace s
 -- Save first the existing relfilenode for the toast and main relations.
 SELECT relfilenode as main_filenode FROM pg_class
   WHERE relname = 'regress_tblspace_test_tbl_idx' \gset
+
 SELECT relfilenode as toast_filenode FROM pg_class
   WHERE oid =
     (SELECT i.indexrelid
@@ -81,24 +82,37 @@ SELECT relfilenode as toast_filenode FROM pg_class
             pg_index i
        WHERE i.indrelid = c.reltoastrelid AND
              c.relname = 'regress_tblspace_test_tbl') \gset
+
 REINDEX (TABLESPACE regress_tblspace) TABLE regress_tblspace_test_tbl;
-SELECT c.relname FROM pg_class c, pg_tablespace s
-  WHERE c.reltablespace = s.oid AND s.spcname = 'regress_tblspace'
-  ORDER BY c.relname;
+
+SELECT 'regress_tblspace_test_tbl_idx' IN
+  (SELECT c.relname
+  FROM pg_class c, pg_tablespace s
+  WHERE c.reltablespace = s.oid AND s.spcname = 'regress_tblspace');
+
 ALTER TABLE regress_tblspace_test_tbl SET TABLESPACE regress_tblspace;
 ALTER TABLE regress_tblspace_test_tbl SET TABLESPACE pg_default;
-SELECT c.relname FROM pg_class c, pg_tablespace s
-  WHERE c.reltablespace = s.oid AND s.spcname = 'regress_tblspace'
-  ORDER BY c.relname;
+
+SELECT 'regress_tblspace_test_tbl_idx' IN
+  (SELECT c.relname
+  FROM pg_class c, pg_tablespace s
+  WHERE c.reltablespace = s.oid AND s.spcname = 'regress_tblspace');
+
 -- Move back to the default tablespace.
 ALTER INDEX regress_tblspace_test_tbl_idx SET TABLESPACE pg_default;
-SELECT c.relname FROM pg_class c, pg_tablespace s
+SELECT c.relname <> 'regress_tblspace_test_tbl_idx',
+       c.relname <> 'regress_tblspace_test_tbl'
+  FROM pg_class c, pg_tablespace s
   WHERE c.reltablespace = s.oid AND s.spcname = 'regress_tblspace'
   ORDER BY c.relname;
+
 REINDEX (TABLESPACE regress_tblspace, CONCURRENTLY) TABLE regress_tblspace_test_tbl;
-SELECT c.relname FROM pg_class c, pg_tablespace s
-  WHERE c.reltablespace = s.oid AND s.spcname = 'regress_tblspace'
-  ORDER BY c.relname;
+
+SELECT 'regress_tblspace_test_tbl_idx' IN
+  (SELECT c.relname
+  FROM pg_class c, pg_tablespace s
+  WHERE c.reltablespace = s.oid AND s.spcname = 'regress_tblspace');
+
 SELECT relfilenode = :main_filenode AS main_same FROM pg_class
   WHERE relname = 'regress_tblspace_test_tbl_idx';
 SELECT relfilenode = :toast_filenode as toast_same FROM pg_class
@@ -225,7 +239,7 @@ CREATE TABLE testschema.part1 PARTITION OF testschema.part FOR VALUES IN (1);
 CREATE INDEX part_a_idx ON testschema.part (a) TABLESPACE regress_tblspace;
 CREATE TABLE testschema.part2 PARTITION OF testschema.part FOR VALUES IN (2);
 SELECT relname, spcname FROM pg_catalog.pg_tablespace t, pg_catalog.pg_class c
-    where c.reltablespace = t.oid AND c.relname LIKE 'part%_idx';
+    where c.reltablespace = t.oid AND c.relname LIKE 'part%_idx' ORDER BY relname;
 \d testschema.part
 \d+ testschema.part
 \d testschema.part1

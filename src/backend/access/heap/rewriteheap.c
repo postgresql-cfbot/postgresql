@@ -325,7 +325,7 @@ end_heap_rewrite(RewriteState state)
 
 		PageSetChecksumInplace(state->rs_buffer, state->rs_blockno);
 
-		smgrextend(RelationGetSmgr(state->rs_new_rel), MAIN_FORKNUM,
+		smgrextend(RelationGetSmgr(state->rs_new_rel, MAIN_FORKNUM),
 				   state->rs_blockno, (char *) state->rs_buffer, true);
 	}
 
@@ -337,7 +337,7 @@ end_heap_rewrite(RewriteState state)
 	 * wrote before the checkpoint.
 	 */
 	if (RelationNeedsWAL(state->rs_new_rel))
-		smgrimmedsync(RelationGetSmgr(state->rs_new_rel), MAIN_FORKNUM);
+		smgrimmedsync(RelationGetSmgr(state->rs_new_rel, MAIN_FORKNUM));
 
 	logical_end_heap_rewrite(state);
 
@@ -691,7 +691,7 @@ raw_heap_insert(RewriteState state, HeapTuple tup)
 			 */
 			PageSetChecksumInplace(page, state->rs_blockno);
 
-			smgrextend(RelationGetSmgr(state->rs_new_rel), MAIN_FORKNUM,
+			smgrextend(RelationGetSmgr(state->rs_new_rel, MAIN_FORKNUM),
 					   state->rs_blockno, (char *) page, true);
 
 			state->rs_blockno++;

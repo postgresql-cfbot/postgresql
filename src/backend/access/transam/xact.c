@@ -68,6 +68,7 @@
 #include "utils/inval.h"
 #include "utils/memutils.h"
 #include "utils/relmapper.h"
+#include "utils/resowner_private.h"
 #include "utils/snapmgr.h"
 #include "utils/timeout.h"
 #include "utils/timestamp.h"
@@ -1397,6 +1398,7 @@ RecordTransactionCommit(void)
 		 * are delaying the checkpoint a bit fuzzy, but it doesn't matter.
 		 */
 		Assert((MyProc->delayChkptFlags & DELAY_CHKPT_START) == 0);
+
 		START_CRIT_SECTION();
 		MyProc->delayChkptFlags |= DELAY_CHKPT_START;
 

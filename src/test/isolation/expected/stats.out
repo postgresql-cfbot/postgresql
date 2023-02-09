@@ -3032,15 +3032,11 @@ seq_scan|seq_tup_read|n_tup_ins|n_tup_upd|n_tup_del|n_live_tup|n_dead_tup|vacuum
 (1 row)
 
 
-starting permutation: s1_slru_save_stats s1_listen s1_begin s1_big_notify s1_ff s1_slru_check_stats s1_commit s1_slru_check_stats
+starting permutation: s1_listen s1_begin s1_big_notify s1_ff s1_commit
 pg_stat_force_next_flush
 ------------------------
                         
 (1 row)
-
-step s1_slru_save_stats: 
-	INSERT INTO test_slru_stats VALUES('Notify', 'blks_zeroed',
-    (SELECT blks_zeroed FROM pg_stat_slru WHERE name = 'Notify'));
 
 step s1_listen: LISTEN stats_test_nothing;
 step s1_begin: BEGIN;
@@ -3060,41 +3056,13 @@ pg_stat_force_next_flush
                         
 (1 row)
 
-step s1_slru_check_stats: 
-	SELECT current.blks_zeroed > before.value
-  FROM test_slru_stats before
-  INNER JOIN pg_stat_slru current
-  ON before.slru = current.name
-  WHERE before.stat = 'blks_zeroed';
-
-?column?
---------
-f       
-(1 row)
-
 step s1_commit: COMMIT;
-step s1_slru_check_stats: 
-	SELECT current.blks_zeroed > before.value
-  FROM test_slru_stats before
-  INNER JOIN pg_stat_slru current
-  ON before.slru = current.name
-  WHERE before.stat = 'blks_zeroed';
 
-?column?
---------
-t       
-(1 row)
-
-
-starting permutation: s1_slru_save_stats s1_listen s2_big_notify s2_ff s1_slru_check_stats
+starting permutation: s1_listen s2_big_notify s2_ff
 pg_stat_force_next_flush
 ------------------------
                         
 (1 row)
-
-step s1_slru_save_stats: 
-	INSERT INTO test_slru_stats VALUES('Notify', 'blks_zeroed',
-    (SELECT blks_zeroed FROM pg_stat_slru WHERE name = 'Notify'));
 
 step s1_listen: LISTEN stats_test_nothing;
 step s2_big_notify: SELECT pg_notify('stats_test_use',
@@ -3113,28 +3081,12 @@ pg_stat_force_next_flush
                         
 (1 row)
 
-step s1_slru_check_stats: 
-	SELECT current.blks_zeroed > before.value
-  FROM test_slru_stats before
-  INNER JOIN pg_stat_slru current
-  ON before.slru = current.name
-  WHERE before.stat = 'blks_zeroed';
 
-?column?
---------
-t       
-(1 row)
-
-
-starting permutation: s1_slru_save_stats s1_listen s2_begin s2_big_notify s2_ff s1_slru_check_stats s2_commit
+starting permutation: s1_listen s2_begin s2_big_notify s2_ff s2_commit
 pg_stat_force_next_flush
 ------------------------
                         
 (1 row)
-
-step s1_slru_save_stats: 
-	INSERT INTO test_slru_stats VALUES('Notify', 'blks_zeroed',
-    (SELECT blks_zeroed FROM pg_stat_slru WHERE name = 'Notify'));
 
 step s1_listen: LISTEN stats_test_nothing;
 step s2_begin: BEGIN;
@@ -3154,45 +3106,17 @@ pg_stat_force_next_flush
                         
 (1 row)
 
-step s1_slru_check_stats: 
-	SELECT current.blks_zeroed > before.value
-  FROM test_slru_stats before
-  INNER JOIN pg_stat_slru current
-  ON before.slru = current.name
-  WHERE before.stat = 'blks_zeroed';
-
-?column?
---------
-f       
-(1 row)
-
 step s2_commit: COMMIT;
 
-starting permutation: s1_fetch_consistency_none s1_slru_save_stats s1_listen s1_begin s1_slru_check_stats s2_big_notify s2_ff s1_slru_check_stats s1_commit s1_slru_check_stats
+starting permutation: s1_fetch_consistency_none s1_listen s1_begin s2_big_notify s2_ff s1_commit
 pg_stat_force_next_flush
 ------------------------
                         
 (1 row)
 
 step s1_fetch_consistency_none: SET stats_fetch_consistency = 'none';
-step s1_slru_save_stats: 
-	INSERT INTO test_slru_stats VALUES('Notify', 'blks_zeroed',
-    (SELECT blks_zeroed FROM pg_stat_slru WHERE name = 'Notify'));
-
 step s1_listen: LISTEN stats_test_nothing;
 step s1_begin: BEGIN;
-step s1_slru_check_stats: 
-	SELECT current.blks_zeroed > before.value
-  FROM test_slru_stats before
-  INNER JOIN pg_stat_slru current
-  ON before.slru = current.name
-  WHERE before.stat = 'blks_zeroed';
-
-?column?
---------
-f       
-(1 row)
-
 step s2_big_notify: SELECT pg_notify('stats_test_use',
                 repeat(i::text, current_setting('block_size')::int / 2)) FROM generate_series(1, 3) g(i);
 
@@ -3209,57 +3133,17 @@ pg_stat_force_next_flush
                         
 (1 row)
 
-step s1_slru_check_stats: 
-	SELECT current.blks_zeroed > before.value
-  FROM test_slru_stats before
-  INNER JOIN pg_stat_slru current
-  ON before.slru = current.name
-  WHERE before.stat = 'blks_zeroed';
-
-?column?
---------
-t       
-(1 row)
-
 step s1_commit: COMMIT;
-step s1_slru_check_stats: 
-	SELECT current.blks_zeroed > before.value
-  FROM test_slru_stats before
-  INNER JOIN pg_stat_slru current
-  ON before.slru = current.name
-  WHERE before.stat = 'blks_zeroed';
 
-?column?
---------
-t       
-(1 row)
-
-
-starting permutation: s1_fetch_consistency_cache s1_slru_save_stats s1_listen s1_begin s1_slru_check_stats s2_big_notify s2_ff s1_slru_check_stats s1_commit s1_slru_check_stats
+starting permutation: s1_fetch_consistency_cache s1_listen s1_begin s2_big_notify s2_ff s1_commit
 pg_stat_force_next_flush
 ------------------------
                         
 (1 row)
 
 step s1_fetch_consistency_cache: SET stats_fetch_consistency = 'cache';
-step s1_slru_save_stats: 
-	INSERT INTO test_slru_stats VALUES('Notify', 'blks_zeroed',
-    (SELECT blks_zeroed FROM pg_stat_slru WHERE name = 'Notify'));
-
 step s1_listen: LISTEN stats_test_nothing;
 step s1_begin: BEGIN;
-step s1_slru_check_stats: 
-	SELECT current.blks_zeroed > before.value
-  FROM test_slru_stats before
-  INNER JOIN pg_stat_slru current
-  ON before.slru = current.name
-  WHERE before.stat = 'blks_zeroed';
-
-?column?
---------
-f       
-(1 row)
-
 step s2_big_notify: SELECT pg_notify('stats_test_use',
                 repeat(i::text, current_setting('block_size')::int / 2)) FROM generate_series(1, 3) g(i);
 
@@ -3276,57 +3160,17 @@ pg_stat_force_next_flush
                         
 (1 row)
 
-step s1_slru_check_stats: 
-	SELECT current.blks_zeroed > before.value
-  FROM test_slru_stats before
-  INNER JOIN pg_stat_slru current
-  ON before.slru = current.name
-  WHERE before.stat = 'blks_zeroed';
-
-?column?
---------
-f       
-(1 row)
-
 step s1_commit: COMMIT;
-step s1_slru_check_stats: 
-	SELECT current.blks_zeroed > before.value
-  FROM test_slru_stats before
-  INNER JOIN pg_stat_slru current
-  ON before.slru = current.name
-  WHERE before.stat = 'blks_zeroed';
 
-?column?
---------
-t       
-(1 row)
-
-
-starting permutation: s1_fetch_consistency_snapshot s1_slru_save_stats s1_listen s1_begin s1_slru_check_stats s2_big_notify s2_ff s1_slru_check_stats s1_commit s1_slru_check_stats
+starting permutation: s1_fetch_consistency_snapshot s1_listen s1_begin s2_big_notify s2_ff s1_commit
 pg_stat_force_next_flush
 ------------------------
                         
 (1 row)
 
 step s1_fetch_consistency_snapshot: SET stats_fetch_consistency = 'snapshot';
-step s1_slru_save_stats: 
-	INSERT INTO test_slru_stats VALUES('Notify', 'blks_zeroed',
-    (SELECT blks_zeroed FROM pg_stat_slru WHERE name = 'Notify'));
-
 step s1_listen: LISTEN stats_test_nothing;
 step s1_begin: BEGIN;
-step s1_slru_check_stats: 
-	SELECT current.blks_zeroed > before.value
-  FROM test_slru_stats before
-  INNER JOIN pg_stat_slru current
-  ON before.slru = current.name
-  WHERE before.stat = 'blks_zeroed';
-
-?column?
---------
-f       
-(1 row)
-
 step s2_big_notify: SELECT pg_notify('stats_test_use',
                 repeat(i::text, current_setting('block_size')::int / 2)) FROM generate_series(1, 3) g(i);
 
@@ -3343,57 +3187,17 @@ pg_stat_force_next_flush
                         
 (1 row)
 
-step s1_slru_check_stats: 
-	SELECT current.blks_zeroed > before.value
-  FROM test_slru_stats before
-  INNER JOIN pg_stat_slru current
-  ON before.slru = current.name
-  WHERE before.stat = 'blks_zeroed';
-
-?column?
---------
-f       
-(1 row)
-
 step s1_commit: COMMIT;
-step s1_slru_check_stats: 
-	SELECT current.blks_zeroed > before.value
-  FROM test_slru_stats before
-  INNER JOIN pg_stat_slru current
-  ON before.slru = current.name
-  WHERE before.stat = 'blks_zeroed';
 
-?column?
---------
-t       
-(1 row)
-
-
-starting permutation: s1_fetch_consistency_none s1_slru_save_stats s1_listen s1_begin s1_slru_check_stats s2_big_notify s2_ff s1_slru_check_stats s1_clear_snapshot s1_slru_check_stats s1_commit
+starting permutation: s1_fetch_consistency_none s1_listen s1_begin s2_big_notify s2_ff s1_clear_snapshot s1_commit
 pg_stat_force_next_flush
 ------------------------
                         
 (1 row)
 
 step s1_fetch_consistency_none: SET stats_fetch_consistency = 'none';
-step s1_slru_save_stats: 
-	INSERT INTO test_slru_stats VALUES('Notify', 'blks_zeroed',
-    (SELECT blks_zeroed FROM pg_stat_slru WHERE name = 'Notify'));
-
 step s1_listen: LISTEN stats_test_nothing;
 step s1_begin: BEGIN;
-step s1_slru_check_stats: 
-	SELECT current.blks_zeroed > before.value
-  FROM test_slru_stats before
-  INNER JOIN pg_stat_slru current
-  ON before.slru = current.name
-  WHERE before.stat = 'blks_zeroed';
-
-?column?
---------
-f       
-(1 row)
-
 step s2_big_notify: SELECT pg_notify('stats_test_use',
                 repeat(i::text, current_setting('block_size')::int / 2)) FROM generate_series(1, 3) g(i);
 
@@ -3410,63 +3214,23 @@ pg_stat_force_next_flush
                         
 (1 row)
 
-step s1_slru_check_stats: 
-	SELECT current.blks_zeroed > before.value
-  FROM test_slru_stats before
-  INNER JOIN pg_stat_slru current
-  ON before.slru = current.name
-  WHERE before.stat = 'blks_zeroed';
-
-?column?
---------
-t       
-(1 row)
-
 step s1_clear_snapshot: SELECT pg_stat_clear_snapshot();
 pg_stat_clear_snapshot
 ----------------------
                       
 (1 row)
 
-step s1_slru_check_stats: 
-	SELECT current.blks_zeroed > before.value
-  FROM test_slru_stats before
-  INNER JOIN pg_stat_slru current
-  ON before.slru = current.name
-  WHERE before.stat = 'blks_zeroed';
-
-?column?
---------
-t       
-(1 row)
-
 step s1_commit: COMMIT;
 
-starting permutation: s1_fetch_consistency_cache s1_slru_save_stats s1_listen s1_begin s1_slru_check_stats s2_big_notify s2_ff s1_slru_check_stats s1_clear_snapshot s1_slru_check_stats s1_commit
+starting permutation: s1_fetch_consistency_cache s1_listen s1_begin s2_big_notify s2_ff s1_clear_snapshot s1_commit
 pg_stat_force_next_flush
 ------------------------
                         
 (1 row)
 
 step s1_fetch_consistency_cache: SET stats_fetch_consistency = 'cache';
-step s1_slru_save_stats: 
-	INSERT INTO test_slru_stats VALUES('Notify', 'blks_zeroed',
-    (SELECT blks_zeroed FROM pg_stat_slru WHERE name = 'Notify'));
-
 step s1_listen: LISTEN stats_test_nothing;
 step s1_begin: BEGIN;
-step s1_slru_check_stats: 
-	SELECT current.blks_zeroed > before.value
-  FROM test_slru_stats before
-  INNER JOIN pg_stat_slru current
-  ON before.slru = current.name
-  WHERE before.stat = 'blks_zeroed';
-
-?column?
---------
-f       
-(1 row)
-
 step s2_big_notify: SELECT pg_notify('stats_test_use',
                 repeat(i::text, current_setting('block_size')::int / 2)) FROM generate_series(1, 3) g(i);
 
@@ -3483,63 +3247,23 @@ pg_stat_force_next_flush
                         
 (1 row)
 
-step s1_slru_check_stats: 
-	SELECT current.blks_zeroed > before.value
-  FROM test_slru_stats before
-  INNER JOIN pg_stat_slru current
-  ON before.slru = current.name
-  WHERE before.stat = 'blks_zeroed';
-
-?column?
---------
-f       
-(1 row)
-
 step s1_clear_snapshot: SELECT pg_stat_clear_snapshot();
 pg_stat_clear_snapshot
 ----------------------
                       
 (1 row)
 
-step s1_slru_check_stats: 
-	SELECT current.blks_zeroed > before.value
-  FROM test_slru_stats before
-  INNER JOIN pg_stat_slru current
-  ON before.slru = current.name
-  WHERE before.stat = 'blks_zeroed';
-
-?column?
---------
-t       
-(1 row)
-
 step s1_commit: COMMIT;
 
-starting permutation: s1_fetch_consistency_snapshot s1_slru_save_stats s1_listen s1_begin s1_slru_check_stats s2_big_notify s2_ff s1_slru_check_stats s1_clear_snapshot s1_slru_check_stats s1_commit
+starting permutation: s1_fetch_consistency_snapshot s1_listen s1_begin s2_big_notify s2_ff s1_clear_snapshot s1_commit
 pg_stat_force_next_flush
 ------------------------
                         
 (1 row)
 
 step s1_fetch_consistency_snapshot: SET stats_fetch_consistency = 'snapshot';
-step s1_slru_save_stats: 
-	INSERT INTO test_slru_stats VALUES('Notify', 'blks_zeroed',
-    (SELECT blks_zeroed FROM pg_stat_slru WHERE name = 'Notify'));
-
 step s1_listen: LISTEN stats_test_nothing;
 step s1_begin: BEGIN;
-step s1_slru_check_stats: 
-	SELECT current.blks_zeroed > before.value
-  FROM test_slru_stats before
-  INNER JOIN pg_stat_slru current
-  ON before.slru = current.name
-  WHERE before.stat = 'blks_zeroed';
-
-?column?
---------
-f       
-(1 row)
-
 step s2_big_notify: SELECT pg_notify('stats_test_use',
                 repeat(i::text, current_setting('block_size')::int / 2)) FROM generate_series(1, 3) g(i);
 
@@ -3556,49 +3280,21 @@ pg_stat_force_next_flush
                         
 (1 row)
 
-step s1_slru_check_stats: 
-	SELECT current.blks_zeroed > before.value
-  FROM test_slru_stats before
-  INNER JOIN pg_stat_slru current
-  ON before.slru = current.name
-  WHERE before.stat = 'blks_zeroed';
-
-?column?
---------
-f       
-(1 row)
-
 step s1_clear_snapshot: SELECT pg_stat_clear_snapshot();
 pg_stat_clear_snapshot
 ----------------------
                       
 (1 row)
 
-step s1_slru_check_stats: 
-	SELECT current.blks_zeroed > before.value
-  FROM test_slru_stats before
-  INNER JOIN pg_stat_slru current
-  ON before.slru = current.name
-  WHERE before.stat = 'blks_zeroed';
-
-?column?
---------
-t       
-(1 row)
-
 step s1_commit: COMMIT;
 
-starting permutation: s1_fetch_consistency_snapshot s1_slru_save_stats s1_listen s1_begin s1_func_stats s2_big_notify s2_ff s1_slru_check_stats s1_commit
+starting permutation: s1_fetch_consistency_snapshot s1_listen s1_begin s1_func_stats s2_big_notify s2_ff s1_commit
 pg_stat_force_next_flush
 ------------------------
                         
 (1 row)
 
 step s1_fetch_consistency_snapshot: SET stats_fetch_consistency = 'snapshot';
-step s1_slru_save_stats: 
-	INSERT INTO test_slru_stats VALUES('Notify', 'blks_zeroed',
-    (SELECT blks_zeroed FROM pg_stat_slru WHERE name = 'Notify'));
-
 step s1_listen: LISTEN stats_test_nothing;
 step s1_begin: BEGIN;
 step s1_func_stats: 
@@ -3631,31 +3327,15 @@ pg_stat_force_next_flush
                         
 (1 row)
 
-step s1_slru_check_stats: 
-	SELECT current.blks_zeroed > before.value
-  FROM test_slru_stats before
-  INNER JOIN pg_stat_slru current
-  ON before.slru = current.name
-  WHERE before.stat = 'blks_zeroed';
-
-?column?
---------
-f       
-(1 row)
-
 step s1_commit: COMMIT;
 
-starting permutation: s1_fetch_consistency_snapshot s1_slru_save_stats s1_listen s1_begin s2_big_notify s2_ff s1_slru_check_stats s2_func_call s2_ff s1_func_stats s1_clear_snapshot s1_func_stats s1_commit
+starting permutation: s1_fetch_consistency_snapshot s1_listen s1_begin s2_big_notify s2_ff s2_func_call s2_ff s1_func_stats s1_clear_snapshot s1_func_stats s1_commit
 pg_stat_force_next_flush
 ------------------------
                         
 (1 row)
 
 step s1_fetch_consistency_snapshot: SET stats_fetch_consistency = 'snapshot';
-step s1_slru_save_stats: 
-	INSERT INTO test_slru_stats VALUES('Notify', 'blks_zeroed',
-    (SELECT blks_zeroed FROM pg_stat_slru WHERE name = 'Notify'));
-
 step s1_listen: LISTEN stats_test_nothing;
 step s1_begin: BEGIN;
 step s2_big_notify: SELECT pg_notify('stats_test_use',
@@ -3672,18 +3352,6 @@ step s2_ff: SELECT pg_stat_force_next_flush();
 pg_stat_force_next_flush
 ------------------------
                         
-(1 row)
-
-step s1_slru_check_stats: 
-	SELECT current.blks_zeroed > before.value
-  FROM test_slru_stats before
-  INNER JOIN pg_stat_slru current
-  ON before.slru = current.name
-  WHERE before.stat = 'blks_zeroed';
-
-?column?
---------
-t       
 (1 row)
 
 step s2_func_call: SELECT test_stat_func()
@@ -3709,7 +3377,7 @@ step s1_func_stats:
 
 name          |pg_stat_get_function_calls|total_above_zero|self_above_zero
 --------------+--------------------------+----------------+---------------
-test_stat_func|                          |                |               
+test_stat_func|                         1|t               |t              
 (1 row)
 
 step s1_clear_snapshot: SELECT pg_stat_clear_snapshot();

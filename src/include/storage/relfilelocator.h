@@ -53,6 +53,8 @@
  * Note: various places use RelFileLocator in hashtable keys.  Therefore,
  * there *must not* be any unused padding bytes in this struct.  That
  * should be safe as long as all the fields are of type Oid.
+ *
+ * See also SMgrFileLocator in smgr.h.
  */
 typedef struct RelFileLocator
 {
@@ -62,38 +64,15 @@ typedef struct RelFileLocator
 } RelFileLocator;
 
 /*
- * Augmenting a relfilelocator with the backend ID provides all the information
- * we need to locate the physical storage.  The backend ID is InvalidBackendId
- * for regular relations (those accessible to more than one backend), or the
- * owning backend's ID for backend-local relations.  Backend-local relations
- * are always transient and removed in case of a database crash; they are
- * never WAL-logged or fsync'd.
- */
-typedef struct RelFileLocatorBackend
-{
-	RelFileLocator locator;
-	BackendId	backend;
-} RelFileLocatorBackend;
-
-#define RelFileLocatorBackendIsTemp(rlocator) \
-	((rlocator).backend != InvalidBackendId)
-
-/*
- * Note: RelFileLocatorEquals and RelFileLocatorBackendEquals compare relNumber
+ * Note: RelFileLocatorEquals compares relNumber
  * first since that is most likely to be different in two unequal
  * RelFileLocators.  It is probably redundant to compare spcOid if the other
  * fields are found equal, but do it anyway to be sure.  Likewise for checking
- * the backend ID in RelFileLocatorBackendEquals.
+ * the backend ID in SMgrFileLocatorBackendEquals.
  */
 #define RelFileLocatorEquals(locator1, locator2) \
 	((locator1).relNumber == (locator2).relNumber && \
 	 (locator1).dbOid == (locator2).dbOid && \
 	 (locator1).spcOid == (locator2).spcOid)
-
-#define RelFileLocatorBackendEquals(locator1, locator2) \
-	((locator1).locator.relNumber == (locator2).locator.relNumber && \
-	 (locator1).locator.dbOid == (locator2).locator.dbOid && \
-	 (locator1).backend == (locator2).backend && \
-	 (locator1).locator.spcOid == (locator2).locator.spcOid)
 
 #endif							/* RELFILELOCATOR_H */

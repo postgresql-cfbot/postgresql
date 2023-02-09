@@ -201,6 +201,7 @@ typedef PageHeaderData *PageHeader;
  * handling pages.
  */
 #define PG_PAGE_LAYOUT_VERSION		4
+#define PG_METAPAGE_LAYOUT_VERSION  1
 #define PG_DATA_CHECKSUM_VERSION	1
 
 /* ----------------------------------------------------------------
@@ -301,6 +302,20 @@ PageSetPageSizeAndVersion(Page page, Size size, uint8 version)
 
 	((PageHeader) page)->pd_pagesize_version = size | version;
 }
+
+/*
+ * PageSetHeaderDataMinimal 
+ * Sets the LSN, page size and version, and checksum
+ */
+#define PageSetHeaderDataNonRel(page, pageno, lsn, size, version) \
+( \
+	PageSetLSN(page, lsn), \
+	PageSetPageSizeAndVersion(page, size, version), \
+	PageClearHasFreeLinePointers(page), \
+	PageSetChecksumInplace(page, pageno) \
+)
+
+
 
 /* ----------------
  *		page special data functions
@@ -486,6 +501,8 @@ StaticAssertDecl(BLCKSZ == ((BLCKSZ / sizeof(size_t)) * sizeof(size_t)),
 				 "BLCKSZ has to be a multiple of sizeof(size_t)");
 
 extern void PageInit(Page page, Size pageSize, Size specialSize);
+extern void PageInitSLRU(Page page, Size pageSize, Size specialSize);
+
 extern bool PageIsVerifiedExtended(Page page, BlockNumber blkno, int flags);
 extern OffsetNumber PageAddItemExtended(Page page, Item item, Size size,
 										OffsetNumber offsetNumber, int flags);

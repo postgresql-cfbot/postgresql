@@ -631,10 +631,10 @@ table_block_relation_size(Relation rel, ForkNumber forkNumber)
 	if (forkNumber == InvalidForkNumber)
 	{
 		for (int i = 0; i < MAX_FORKNUM; i++)
-			nblocks += smgrnblocks(RelationGetSmgr(rel), i);
+			nblocks += smgrnblocks(RelationGetSmgr(rel, i));
 	}
 	else
-		nblocks = smgrnblocks(RelationGetSmgr(rel), forkNumber);
+		nblocks = smgrnblocks(RelationGetSmgr(rel, forkNumber));
 
 	return nblocks * BLCKSZ;
 }

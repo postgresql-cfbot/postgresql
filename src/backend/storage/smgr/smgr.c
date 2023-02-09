@@ -41,27 +41,24 @@ typedef struct f_smgr
 {
 	void		(*smgr_init) (void);	/* may be NULL */
 	void		(*smgr_shutdown) (void);	/* may be NULL */
-	void		(*smgr_open) (SMgrRelation reln);
-	void		(*smgr_close) (SMgrRelation reln, ForkNumber forknum);
-	void		(*smgr_create) (SMgrRelation reln, ForkNumber forknum,
-								bool isRedo);
-	bool		(*smgr_exists) (SMgrRelation reln, ForkNumber forknum);
-	void		(*smgr_unlink) (RelFileLocatorBackend rlocator, ForkNumber forknum,
-								bool isRedo);
-	void		(*smgr_extend) (SMgrRelation reln, ForkNumber forknum,
+	void		(*smgr_open) (SMgrFileHandle sfile);
+	void		(*smgr_close) (SMgrFileHandle sfile);
+	void		(*smgr_create) (SMgrFileHandle sfile, bool isRedo);
+	bool		(*smgr_exists) (SMgrFileHandle sfile);
+	void		(*smgr_unlink) (SMgrFileLocator slocator, bool isRedo);
+	void		(*smgr_extend) (SMgrFileHandle sfile,
 								BlockNumber blocknum, char *buffer, bool skipFsync);
-	bool		(*smgr_prefetch) (SMgrRelation reln, ForkNumber forknum,
+	bool		(*smgr_prefetch) (SMgrFileHandle sfile,
 								  BlockNumber blocknum);
-	void		(*smgr_read) (SMgrRelation reln, ForkNumber forknum,
+	void		(*smgr_read) (SMgrFileHandle sfile,
 							  BlockNumber blocknum, char *buffer);
-	void		(*smgr_write) (SMgrRelation reln, ForkNumber forknum,
+	void		(*smgr_write) (SMgrFileHandle sfile,
 							   BlockNumber blocknum, char *buffer, bool skipFsync);
-	void		(*smgr_writeback) (SMgrRelation reln, ForkNumber forknum,
+	void		(*smgr_writeback) (SMgrFileHandle sfile,
 								   BlockNumber blocknum, BlockNumber nblocks);
-	BlockNumber (*smgr_nblocks) (SMgrRelation reln, ForkNumber forknum);
-	void		(*smgr_truncate) (SMgrRelation reln, ForkNumber forknum,
-								  BlockNumber nblocks);
-	void		(*smgr_immedsync) (SMgrRelation reln, ForkNumber forknum);
+	BlockNumber (*smgr_nblocks) (SMgrFileHandle sfile);
+	void		(*smgr_truncate) (SMgrFileHandle sfile, BlockNumber nblocks);
+	void		(*smgr_immedsync) (SMgrFileHandle sfile);
 } f_smgr;
 
 static const f_smgr smgrsw[] = {
@@ -88,12 +85,12 @@ static const f_smgr smgrsw[] = {
 static const int NSmgr = lengthof(smgrsw);
 
 /*
- * Each backend has a hashtable that stores all extant SMgrRelation objects.
- * In addition, "unowned" SMgrRelation objects are chained together in a list.
+ * Each backend has a hashtable that stores all extant SMgrFileData objects.
+ * In addition, "unowned" SMgrFile objects are chained together in a list.
  */
-static HTAB *SMgrRelationHash = NULL;
+static HTAB *SMgrFileHash = NULL;
 
-static dlist_head unowned_relns;
+static dlist_head unowned_sfiles;
 
 /* local function prototypes */
 static void smgrshutdown(int code, Datum arg);
@@ -142,50 +139,52 @@ smgrshutdown(int code, Datum arg)
  *
  *		This does not attempt to actually open the underlying file.
  */
-SMgrRelation
-smgropen(RelFileLocator rlocator, BackendId backend)
+SMgrFileHandle
+smgropen(RelFileLocator rlocator, BackendId backend, ForkNumber forkNum)
 {
-	RelFileLocatorBackend brlocator;
-	SMgrRelation reln;
+	SMgrFileLocator slocator;
+	SMgrFileHandle sfile;
 	bool		found;
 
-	if (SMgrRelationHash == NULL)
+	if (SMgrFileHash == NULL)
 	{
 		/* First time through: initialize the hash table */
 		HASHCTL		ctl;
 
-		ctl.keysize = sizeof(RelFileLocatorBackend);
-		ctl.entrysize = sizeof(SMgrRelationData);
-		SMgrRelationHash = hash_create("smgr relation table", 400,
+		ctl.keysize = sizeof(SMgrFileLocator);
+		ctl.entrysize = sizeof(SMgrFileData);
+		SMgrFileHash = hash_create("smgr relation table", 400,
 									   &ctl, HASH_ELEM | HASH_BLOBS);
-		dlist_init(&unowned_relns);
+		dlist_init(&unowned_sfiles);
 	}
 
 	/* Look up or create an entry */
-	brlocator.locator = rlocator;
-	brlocator.backend = backend;
-	reln = (SMgrRelation) hash_search(SMgrRelationHash,
-									  &brlocator,
-									  HASH_ENTER, &found);
+
+	slocator.locator = rlocator;
+	slocator.backend = backend;
+	slocator.forknum = forkNum;
+	sfile = (SMgrFileHandle) hash_search(SMgrFileHash,
+										 &slocator,
+										 HASH_ENTER, &found);
+
 
 	/* Initialize it if not present before */
 	if (!found)
 	{
 		/* hash_search already filled in the lookup key */
-		reln->smgr_owner = NULL;
-		reln->smgr_targblock = InvalidBlockNumber;
-		for (int i = 0; i <= MAX_FORKNUM; ++i)
-			reln->smgr_cached_nblocks[i] = InvalidBlockNumber;
-		reln->smgr_which = 0;	/* we only have md.c at present */
+		sfile->smgr_owner = NULL;
+		sfile->smgr_targblock = InvalidBlockNumber;
+		sfile->smgr_cached_nblocks = InvalidBlockNumber;
+		sfile->smgr_which = 0;	/* we only have md.c at present */
 
 		/* implementation-specific initialization */
-		smgrsw[reln->smgr_which].smgr_open(reln);
+		smgrsw[sfile->smgr_which].smgr_open(sfile);
 
 		/* it has no owner yet */
-		dlist_push_tail(&unowned_relns, &reln->node);
+		dlist_push_tail(&unowned_sfiles, &sfile->node);
 	}
 
-	return reln;
+	return sfile;
 }
 
 /*
@@ -195,7 +194,7 @@ smgropen(RelFileLocator rlocator, BackendId backend)
  * the only such owners exist in the relcache.
  */
 void
-smgrsetowner(SMgrRelation *owner, SMgrRelation reln)
+smgrsetowner(SMgrFileHandle *owner, SMgrFileHandle sfile)
 {
 	/* We don't support "disowning" an SMgrRelation here, use smgrclearowner */
 	Assert(owner != NULL);
@@ -206,68 +205,67 @@ smgrsetowner(SMgrRelation *owner, SMgrRelation reln)
 	 * depending on the order of processing.  It's ok to close the old
 	 * relcache entry early in that case.)
 	 *
-	 * If there isn't an old owner, then the reln should be in the unowned
+	 * If there isn't an old owner, then the sfile should be in the unowned
 	 * list, and we need to remove it.
 	 */
-	if (reln->smgr_owner)
-		*(reln->smgr_owner) = NULL;
+	if (sfile->smgr_owner)
+		*(sfile->smgr_owner) = NULL;
 	else
-		dlist_delete(&reln->node);
+		dlist_delete(&sfile->node);
 
 	/* Now establish the ownership relationship. */
-	reln->smgr_owner = owner;
-	*owner = reln;
+	sfile->smgr_owner = owner;
+	*owner = sfile;
 }
 
 /*
- * smgrclearowner() -- Remove long-lived reference to an SMgrRelation object
+ * smgrclearowner() -- Remove long-lived reference to an SMgrFileHandle object
  *					   if one exists
  */
 void
-smgrclearowner(SMgrRelation *owner, SMgrRelation reln)
+smgrclearowner(SMgrFileHandle *owner, SMgrFileHandle sfile)
 {
 	/* Do nothing if the SMgrRelation object is not owned by the owner */
-	if (reln->smgr_owner != owner)
+	if (sfile->smgr_owner != owner)
 		return;
 
 	/* unset the owner's reference */
 	*owner = NULL;
 
 	/* unset our reference to the owner */
-	reln->smgr_owner = NULL;
+	sfile->smgr_owner = NULL;
 
 	/* add to list of unowned relations */
-	dlist_push_tail(&unowned_relns, &reln->node);
+	dlist_push_tail(&unowned_sfiles, &sfile->node);
 }
 
 /*
- *	smgrexists() -- Does the underlying file for a fork exist?
+ *	smgrexists() -- Does the underlying file exist?
  */
 bool
-smgrexists(SMgrRelation reln, ForkNumber forknum)
+smgrexists(SMgrFileHandle sfile)
 {
-	return smgrsw[reln->smgr_which].smgr_exists(reln, forknum);
+	return smgrsw[sfile->smgr_which].smgr_exists(sfile);
 }
 
 /*
- *	smgrclose() -- Close and delete an SMgrRelation object.
+ *	smgrclose() -- Close and delete an SMgrFile object.
  */
 void
-smgrclose(SMgrRelation reln)
+smgrclose(SMgrFileHandle sfile)
 {
-	SMgrRelation *owner;
-	ForkNumber	forknum;
+	SMgrFileHandle *owner;
 
-	for (forknum = 0; forknum <= MAX_FORKNUM; forknum++)
-		smgrsw[reln->smgr_which].smgr_close(reln, forknum);
+	smgrsw[sfile->smgr_which].smgr_close(sfile);
 
-	owner = reln->smgr_owner;
+	owner = sfile->smgr_owner;
 
 	if (!owner)
-		dlist_delete(&reln->node);
+		dlist_delete(&sfile->node);
 
-	if (hash_search(SMgrRelationHash,
-					&(reln->smgr_rlocator),
+
+	if (hash_search(SMgrFileHash,
+					&(sfile->smgr_locator),
 					HASH_REMOVE, NULL) == NULL)
 		elog(ERROR, "SMgrRelation hashtable corrupted");
 
@@ -284,14 +282,11 @@ smgrclose(SMgrRelation reln)
  *
  *	The object remains valid.
  */
-void
-smgrrelease(SMgrRelation reln)
+static void
+smgrrelease(SMgrFileHandle sfile)
 {
-	for (ForkNumber forknum = 0; forknum <= MAX_FORKNUM; forknum++)
-	{
-		smgrsw[reln->smgr_which].smgr_close(reln, forknum);
-		reln->smgr_cached_nblocks[forknum] = InvalidBlockNumber;
-	}
+	smgrsw[sfile->smgr_which].smgr_close(sfile);
+	sfile->smgr_cached_nblocks = InvalidBlockNumber;
 }
 
 /*
@@ -303,16 +298,16 @@ void
 smgrreleaseall(void)
 {
 	HASH_SEQ_STATUS status;
-	SMgrRelation reln;
+	SMgrFileHandle sfile;
 
 	/* Nothing to do if hashtable not set up */
-	if (SMgrRelationHash == NULL)
+	if (SMgrFileHash == NULL)
 		return;
 
-	hash_seq_init(&status, SMgrRelationHash);
+	hash_seq_init(&status, SMgrFileHash);
 
-	while ((reln = (SMgrRelation) hash_seq_search(&status)) != NULL)
-		smgrrelease(reln);
+	while ((sfile = (SMgrFileHandle) hash_seq_search(&status)) != NULL)
+		smgrrelease(sfile);
 }
 
 /*
@@ -322,16 +317,16 @@ void
 smgrcloseall(void)
 {
 	HASH_SEQ_STATUS status;
-	SMgrRelation reln;
+	SMgrFileHandle sfile;
 
 	/* Nothing to do if hashtable not set up */
-	if (SMgrRelationHash == NULL)
+	if (SMgrFileHash == NULL)
 		return;
 
-	hash_seq_init(&status, SMgrRelationHash);
+	hash_seq_init(&status, SMgrFileHash);
 
-	while ((reln = (SMgrRelation) hash_seq_search(&status)) != NULL)
-		smgrclose(reln);
+	while ((sfile = (SMgrFileHandle) hash_seq_search(&status)) != NULL)
+		smgrclose(sfile);
 }
 
 /*
@@ -343,111 +338,65 @@ smgrcloseall(void)
  * such entry exists already.
  */
 void
-smgrcloserellocator(RelFileLocatorBackend rlocator)
+smgrcloserellocator(RelFileLocator rlocator, BackendId backend)
 {
-	SMgrRelation reln;
+	SMgrFileHandle sfile;
 
 	/* Nothing to do if hashtable not set up */
-	if (SMgrRelationHash == NULL)
+	if (SMgrFileHash == NULL)
 		return;
 
-	reln = (SMgrRelation) hash_search(SMgrRelationHash,
-									  &rlocator,
-									  HASH_FIND, NULL);
-	if (reln != NULL)
-		smgrclose(reln);
-}
-
-/*
- *	smgrcreate() -- Create a new relation.
- *
- *		Given an already-created (but presumably unused) SMgrRelation,
- *		cause the underlying disk file or other storage for the fork
- *		to be created.
- */
-void
-smgrcreate(SMgrRelation reln, ForkNumber forknum, bool isRedo)
-{
-	smgrsw[reln->smgr_which].smgr_create(reln, forknum, isRedo);
-}
-
-/*
- *	smgrdosyncall() -- Immediately sync all forks of all given relations
- *
- *		All forks of all given relations are synced out to the store.
- *
- *		This is equivalent to FlushRelationBuffers() for each smgr relation,
- *		then calling smgrimmedsync() for all forks of each relation, but it's
- *		significantly quicker so should be preferred when possible.
- */
-void
-smgrdosyncall(SMgrRelation *rels, int nrels)
-{
-	int			i = 0;
-	ForkNumber	forknum;
-
-	if (nrels == 0)
-		return;
-
-	FlushRelationsAllBuffers(rels, nrels);
-
-	/*
-	 * Sync the physical file(s).
-	 */
-	for (i = 0; i < nrels; i++)
+	for (int i = 0; i <= MAX_FORKNUM; i++)
 	{
-		int			which = rels[i]->smgr_which;
+		SMgrFileLocator slocator = { rlocator, backend, i };
 
-		for (forknum = 0; forknum <= MAX_FORKNUM; forknum++)
-		{
-			if (smgrsw[which].smgr_exists(rels[i], forknum))
-				smgrsw[which].smgr_immedsync(rels[i], forknum);
-		}
+		sfile = (SMgrFileHandle) hash_search(SMgrFileHash,
+											 &slocator,
+											 HASH_FIND, NULL);
+		if (sfile != NULL)
+			smgrclose(sfile);
 	}
 }
 
 /*
- *	smgrdounlinkall() -- Immediately unlink all forks of all given relations
+ *	smgrcreate() -- Create a new file.
  *
- *		All forks of all given relations are removed from the store.  This
+ *		Given an already-created (but presumably unused) SMgrFileHandle,
+ *		cause the underlying disk file or other storage for the fork
+ *		to be created.
+ */
+void
+smgrcreate(SMgrFileHandle sfile, bool isRedo)
+{
+	smgrsw[sfile->smgr_which].smgr_create(sfile, isRedo);
+}
+
+/*
+ *	smgrunlink_multi() -- Immediately unlink given forks of given relation
+ *
+ *		The given forks of the relation are removed from the store.  This
  *		should not be used during transactional operations, since it can't be
  *		undone.
+ *
+ *		This handles multiple forks in one call, because the cache invalidation
+ *		happens at relation granularity. If we had an smgrunlink() function
+ *		to unlink just a single smgr file, and the caller wanted to delete
+ *		multiple forks of a single relation, each call would send a new
+ *		cache invalidation event, which would be wasteful.
  *
  *		If isRedo is true, it is okay for the underlying file(s) to be gone
  *		already.
  */
 void
-smgrdounlinkall(SMgrRelation *rels, int nrels, bool isRedo)
+smgrunlink_multi(RelFileLocator rlocator, BackendId backend, ForkNumber *forks, int nforks, bool isRedo)
 {
+	int			which;
 	int			i = 0;
-	RelFileLocatorBackend *rlocators;
-	ForkNumber	forknum;
 
-	if (nrels == 0)
-		return;
+	which = 0;	/* we only have md.c at present */
 
-	/*
-	 * Get rid of any remaining buffers for the relations.  bufmgr will just
-	 * drop them without bothering to write the contents.
-	 */
-	DropRelationsAllBuffers(rels, nrels);
-
-	/*
-	 * create an array which contains all relations to be dropped, and close
-	 * each relation's forks at the smgr level while at it
-	 */
-	rlocators = palloc(sizeof(RelFileLocatorBackend) * nrels);
-	for (i = 0; i < nrels; i++)
-	{
-		RelFileLocatorBackend rlocator = rels[i]->smgr_rlocator;
-		int			which = rels[i]->smgr_which;
-
-		rlocators[i] = rlocator;
-
-		/* Close the forks at smgr level */
-		for (forknum = 0; forknum <= MAX_FORKNUM; forknum++)
-			smgrsw[which].smgr_close(rels[i], forknum);
-	}
+	/* Close the forks at smgr level */
+	smgrcloserellocator(rlocator, backend);
 
 	/*
 	 * Send a shared-inval message to force other backends to close any
@@ -457,8 +406,7 @@ smgrdounlinkall(SMgrRelation *rels, int nrels, bool isRedo)
 	 * back to this backend, too, and thereby provide a backstop that we
 	 * closed our own smgr rel.
 	 */
-	for (i = 0; i < nrels; i++)
-		CacheInvalidateSmgr(rlocators[i]);
+	CacheInvalidateSmgr(rlocator, backend);
 
 	/*
 	 * Delete the physical file(s).
@@ -467,16 +415,54 @@ smgrdounlinkall(SMgrRelation *rels, int nrels, bool isRedo)
 	 * ERROR, because we've already decided to commit or abort the current
 	 * xact.
 	 */
-
-	for (i = 0; i < nrels; i++)
+	for (i = 0; i < nforks; i++)
 	{
-		int			which = rels[i]->smgr_which;
-
-		for (forknum = 0; forknum <= MAX_FORKNUM; forknum++)
-			smgrsw[which].smgr_unlink(rlocators[i], forknum, isRedo);
+		SMgrFileLocator slocator = { rlocator, backend, forks[i] };
+		smgrsw[which].smgr_unlink(slocator, isRedo);
 	}
+}
 
-	pfree(rlocators);
+/*
+ *	smgrdounlink() -- Immediately unlink a file
+ *
+ *		If isRedo is true, it is okay for the underlying file(s) to be gone
+ *		already.
+ *
+ * To remove a relation transactionally, see RelationDropStorage() instead.
+ * This will cause cache invalidation of all forks of the relation, not just
+ * this one.
+ */
+void
+smgrunlink(SMgrFileHandle sfile, bool isRedo)
+{
+	SMgrFileLocator locator;
+	int			which;
+
+	/* remember before closing */
+	which = sfile->smgr_which;
+	locator = sfile->smgr_locator;
+
+	/* Close the file at smgr level */
+	smgrclose(sfile);
+
+	/*
+	 * Send a shared-inval message to force other backends to close any
+	 * dangling smgr references they may have for these rels.  We should do
+	 * this before starting the actual unlinking, in case we fail partway
+	 * through that step.  Note that the sinval messages will eventually come
+	 * back to this backend, too, and thereby provide a backstop that we
+	 * closed our own smgr rel.
+	 */
+	CacheInvalidateSmgr(locator.locator, locator.backend);
+
+	/*
+	 * Delete the physical file(s).
+	 *
+	 * Note: smgr_unlink must treat deletion failure as a WARNING, not an
+	 * ERROR, because we've already decided to commit or abort the current
+	 * xact.
+	 */
+	smgrsw[which].smgr_unlink(locator, isRedo);
 }
 
 
@@ -490,21 +476,21 @@ smgrdounlinkall(SMgrRelation *rels, int nrels, bool isRedo)
  *		causes intervening file space to become filled with zeroes.
  */
 void
-smgrextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+smgrextend(SMgrFileHandle sfile, BlockNumber blocknum,
 		   char *buffer, bool skipFsync)
 {
-	smgrsw[reln->smgr_which].smgr_extend(reln, forknum, blocknum,
-										 buffer, skipFsync);
+	smgrsw[sfile->smgr_which].smgr_extend(sfile, blocknum,
+										  buffer, skipFsync);
 
 	/*
 	 * Normally we expect this to increase nblocks by one, but if the cached
 	 * value isn't as expected, just invalidate it so the next call asks the
 	 * kernel.
 	 */
-	if (reln->smgr_cached_nblocks[forknum] == blocknum)
-		reln->smgr_cached_nblocks[forknum] = blocknum + 1;
+	if (sfile->smgr_cached_nblocks == blocknum)
+		sfile->smgr_cached_nblocks = blocknum + 1;
 	else
-		reln->smgr_cached_nblocks[forknum] = InvalidBlockNumber;
+		sfile->smgr_cached_nblocks = InvalidBlockNumber;
 }
 
 /*
@@ -515,13 +501,13 @@ smgrextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
  *		record).
  */
 bool
-smgrprefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
+smgrprefetch(SMgrFileHandle sfile, BlockNumber blocknum)
 {
-	return smgrsw[reln->smgr_which].smgr_prefetch(reln, forknum, blocknum);
+	return smgrsw[sfile->smgr_which].smgr_prefetch(sfile, blocknum);
 }
 
 /*
- *	smgrread() -- read a particular block from a relation into the supplied
+ *	smgrread() -- read a particular block from a file into the supplied
  *				  buffer.
  *
  *		This routine is called from the buffer manager in order to
@@ -529,10 +515,9 @@ smgrprefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
  *		return pages in the format that POSTGRES expects.
  */
 void
-smgrread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
-		 char *buffer)
+smgrread(SMgrFileHandle sfile, BlockNumber blocknum, char *buffer)
 {
-	smgrsw[reln->smgr_which].smgr_read(reln, forknum, blocknum, buffer);
+	smgrsw[sfile->smgr_which].smgr_read(sfile, blocknum, buffer);
 }
 
 /*
@@ -551,11 +536,11 @@ smgrread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
  *		do not require fsync.
  */
 void
-smgrwrite(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+smgrwrite(SMgrFileHandle sfile, BlockNumber blocknum,
 		  char *buffer, bool skipFsync)
 {
-	smgrsw[reln->smgr_which].smgr_write(reln, forknum, blocknum,
-										buffer, skipFsync);
+	smgrsw[sfile->smgr_which].smgr_write(sfile, blocknum,
+										 buffer, skipFsync);
 }
 
 
@@ -564,11 +549,11 @@ smgrwrite(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
  *					   blocks.
  */
 void
-smgrwriteback(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+smgrwriteback(SMgrFileHandle sfile, BlockNumber blocknum,
 			  BlockNumber nblocks)
 {
-	smgrsw[reln->smgr_which].smgr_writeback(reln, forknum, blocknum,
-											nblocks);
+	smgrsw[sfile->smgr_which].smgr_writeback(sfile, blocknum,
+											 nblocks);
 }
 
 /*
@@ -576,18 +561,18 @@ smgrwriteback(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
  *					 supplied relation.
  */
 BlockNumber
-smgrnblocks(SMgrRelation reln, ForkNumber forknum)
+smgrnblocks(SMgrFileHandle sfile)
 {
 	BlockNumber result;
 
 	/* Check and return if we get the cached value for the number of blocks. */
-	result = smgrnblocks_cached(reln, forknum);
+	result = smgrnblocks_cached(sfile);
 	if (result != InvalidBlockNumber)
 		return result;
 
-	result = smgrsw[reln->smgr_which].smgr_nblocks(reln, forknum);
+	result = smgrsw[sfile->smgr_which].smgr_nblocks(sfile);
 
-	reln->smgr_cached_nblocks[forknum] = result;
+	sfile->smgr_cached_nblocks = result;
 
 	return result;
 }
@@ -600,38 +585,41 @@ smgrnblocks(SMgrRelation reln, ForkNumber forknum)
  * fork size is not cached.
  */
 BlockNumber
-smgrnblocks_cached(SMgrRelation reln, ForkNumber forknum)
+smgrnblocks_cached(SMgrFileHandle sfile)
 {
 	/*
 	 * For now, we only use cached values in recovery due to lack of a shared
 	 * invalidation mechanism for changes in file size.
 	 */
-	if (InRecovery && reln->smgr_cached_nblocks[forknum] != InvalidBlockNumber)
-		return reln->smgr_cached_nblocks[forknum];
+	if (InRecovery && sfile->smgr_cached_nblocks != InvalidBlockNumber)
+		return sfile->smgr_cached_nblocks;
 
 	return InvalidBlockNumber;
 }
 
 /*
- *	smgrtruncate() -- Truncate the given forks of supplied relation to
- *					  each specified numbers of blocks
+ *	smgrtruncate_multi() -- Truncate the given forks of supplied relation to
+ *							each specified numbers of blocks
  *
  * The truncation is done immediately, so this can't be rolled back.
  *
  * The caller must hold AccessExclusiveLock on the relation, to ensure that
  * other backends receive the smgr invalidation event that this function sends
  * before they access any forks of the relation again.
+ *
+ * Like smgrunlink_multi(), this handles multiple forks in one call because
+ * the cache invalidation happens at relation granularity.
+ *
+ * NB: The caller is responsible for dropping buffers! Before v16, this
+ * function did it.
  */
 void
-smgrtruncate(SMgrRelation reln, ForkNumber *forknum, int nforks, BlockNumber *nblocks)
+smgrtruncate_multi(RelFileLocator rlocator, BackendId backend, ForkNumber *forks,
+				   int nforks, BlockNumber *nblocks)
 {
 	int			i;
 
-	/*
-	 * Get rid of any buffers for the about-to-be-deleted blocks. bufmgr will
-	 * just drop them without bothering to write the contents.
-	 */
-	DropRelationBuffers(reln, forknum, nforks, nblocks);
+	Assert(nforks < MAX_FORKNUM + 1);
 
 	/*
 	 * Send a shared-inval message to force other backends to close any smgr
@@ -643,15 +631,19 @@ smgrtruncate(SMgrRelation reln, ForkNumber *forknum, int nforks, BlockNumber *nb
 	 * is a performance-critical path.)  As in the unlink code, we want to be
 	 * sure the message is sent before we start changing things on-disk.
 	 */
-	CacheInvalidateSmgr(reln->smgr_rlocator);
+	CacheInvalidateSmgr(rlocator, backend);
 
-	/* Do the truncation */
+	/* Do the truncations */
 	for (i = 0; i < nforks; i++)
 	{
-		/* Make the cached size is invalid if we encounter an error. */
-		reln->smgr_cached_nblocks[forknum[i]] = InvalidBlockNumber;
+		SMgrFileHandle sfile;
 
-		smgrsw[reln->smgr_which].smgr_truncate(reln, forknum[i], nblocks[i]);
+		sfile = smgropen(rlocator, backend, forks[i]);
+
+		/* Make the cached size is invalid if we encounter an error. */
+		sfile->smgr_cached_nblocks = InvalidBlockNumber;
+
+		smgrsw[sfile->smgr_which].smgr_truncate(sfile, nblocks[i]);
 
 		/*
 		 * We might as well update the local smgr_cached_nblocks values. The
@@ -660,7 +652,7 @@ smgrtruncate(SMgrRelation reln, ForkNumber *forknum, int nforks, BlockNumber *nb
 		 * smgr_vm_nblocks, and these ones too at the next command boundary.
 		 * But these ensure they aren't outright wrong until then.
 		 */
-		reln->smgr_cached_nblocks[forknum[i]] = nblocks[i];
+		sfile->smgr_cached_nblocks = nblocks[i];
 	}
 }
 
@@ -688,9 +680,9 @@ smgrtruncate(SMgrRelation reln, ForkNumber *forknum, int nforks, BlockNumber *nb
  *		otherwise the sync is not very meaningful.
  */
 void
-smgrimmedsync(SMgrRelation reln, ForkNumber forknum)
+smgrimmedsync(SMgrFileHandle sfile)
 {
-	smgrsw[reln->smgr_which].smgr_immedsync(reln, forknum);
+	smgrsw[sfile->smgr_which].smgr_immedsync(sfile);
 }
 
 /*
@@ -714,14 +706,14 @@ AtEOXact_SMgr(void)
 	 * Zap all unowned SMgrRelations.  We rely on smgrclose() to remove each
 	 * one from the list.
 	 */
-	dlist_foreach_modify(iter, &unowned_relns)
+	dlist_foreach_modify(iter, &unowned_sfiles)
 	{
-		SMgrRelation rel = dlist_container(SMgrRelationData, node,
-										   iter.cur);
+		SMgrFileHandle sfile = dlist_container(SMgrFileData, node,
+											   iter.cur);
 
-		Assert(rel->smgr_owner == NULL);
+		Assert(sfile->smgr_owner == NULL);
 
-		smgrclose(rel);
+		smgrclose(sfile);
 	}
 }
 

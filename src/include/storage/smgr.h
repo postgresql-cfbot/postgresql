@@ -18,31 +18,56 @@
 #include "storage/block.h"
 #include "storage/relfilelocator.h"
 
+
 /*
- * smgr.c maintains a table of SMgrRelation objects, which are essentially
- * cached file handles.  An SMgrRelation is created (if not already present)
+ * SMgrFileLocator contains all the information needed to locate the physical
+ * storage of a relation fork, or some other file that is managed by the buffer
+ * manager.
+ *
+ * The backend ID is InvalidBackendId for regular relations (those accessible
+ * to more than one backend), or the owning backend's ID for backend-local
+ * relations. Backend-local relations are always transient and removed in
+ * case of a database crash; they are never WAL-logged or fsync'd.
+ */
+typedef struct SMgrFileLocator
+{
+	RelFileLocator locator;
+	BackendId	backend;
+	ForkNumber	forknum;
+} SMgrFileLocator;
+
+#define SMgrFileLocatorIsTemp(slocator) \
+	((slocator).backend != InvalidBackendId)
+
+/*
+ * smgr.c maintains a table of SMgrFileData objects, which are essentially
+ * cached file handles.  An SMgrFile is created (if not already present)
  * by smgropen(), and destroyed by smgrclose().  Note that neither of these
  * operations imply I/O, they just create or destroy a hashtable entry.
  * (But smgrclose() may release associated resources, such as OS-level file
  * descriptors.)
  *
- * An SMgrRelation may have an "owner", which is just a pointer to it from
- * somewhere else; smgr.c will clear this pointer if the SMgrRelation is
+ * An SMgrFile may have an "owner", which is just a pointer to it from
+ * somewhere else; smgr.c will clear this pointer if the SMgrFile is
  * closed.  We use this to avoid dangling pointers from relcache to smgr
  * without having to make the smgr explicitly aware of relcache.  There
  * can't be more than one "owner" pointer per SMgrRelation, but that's
  * all we need.
  *
- * SMgrRelations that do not have an "owner" are considered to be transient,
+ * SMgrFiles that do not have an "owner" are considered to be transient,
  * and are deleted at end of transaction.
+ *
+ * A file that is represented by an SMgrFile can be managed by the buffer
+ * manager. Currently, it's only used for relation files, but could be used
+ * for SLRUs and other things in the future.
  */
-typedef struct SMgrRelationData
+typedef struct SMgrFileData
 {
-	/* rlocator is the hashtable lookup key, so it must be first! */
-	RelFileLocatorBackend smgr_rlocator;	/* relation physical identifier */
+	/* locator is the hashtable lookup key, so must be first! */
+	SMgrFileLocator smgr_locator;	/* file physical identifier */
 
 	/* pointer to owning pointer, or NULL if none */
-	struct SMgrRelationData **smgr_owner;
+	struct SMgrFileData **smgr_owner;
 
 	/*
 	 * The following fields are reset to InvalidBlockNumber upon a cache flush
@@ -51,7 +76,7 @@ typedef struct SMgrRelationData
 	 * invalidation for fork extension.
 	 */
 	BlockNumber smgr_targblock; /* current insertion target block */
-	BlockNumber smgr_cached_nblocks[MAX_FORKNUM + 1];	/* last known size */
+	BlockNumber smgr_cached_nblocks;	/* last known size */
 
 	/* additional public fields may someday exist here */
 
@@ -65,46 +90,46 @@ typedef struct SMgrRelationData
 	 * for md.c; per-fork arrays of the number of open segments
 	 * (md_num_open_segs) and the segments themselves (md_seg_fds).
 	 */
-	int			md_num_open_segs[MAX_FORKNUM + 1];
-	struct _MdfdVec *md_seg_fds[MAX_FORKNUM + 1];
+	int			md_num_open_segs;
+	struct _MdfdVec *md_seg_fds;
 
-	/* if unowned, list link in list of all unowned SMgrRelations */
+	/* if unowned, list link in list of all unowned SMgrFiles */
 	dlist_node	node;
-} SMgrRelationData;
+} SMgrFileData;
 
-typedef SMgrRelationData *SMgrRelation;
+typedef SMgrFileData *SMgrFileHandle;
 
 #define SmgrIsTemp(smgr) \
-	RelFileLocatorBackendIsTemp((smgr)->smgr_rlocator)
+	SMgrFileLocatorIsTemp((smgr)->smgr_locator)
 
 extern void smgrinit(void);
-extern SMgrRelation smgropen(RelFileLocator rlocator, BackendId backend);
-extern bool smgrexists(SMgrRelation reln, ForkNumber forknum);
-extern void smgrsetowner(SMgrRelation *owner, SMgrRelation reln);
-extern void smgrclearowner(SMgrRelation *owner, SMgrRelation reln);
-extern void smgrclose(SMgrRelation reln);
+extern SMgrFileHandle smgropen(RelFileLocator rlocator, BackendId backend, ForkNumber forkNum);
+extern bool smgrexists(SMgrFileHandle sfile);
+extern void smgrsetowner(SMgrFileHandle *owner, SMgrFileHandle sfile);
+extern void smgrclearowner(SMgrFileHandle *owner, SMgrFileHandle sfile);
+extern void smgrclose(SMgrFileHandle sfile);
 extern void smgrcloseall(void);
-extern void smgrcloserellocator(RelFileLocatorBackend rlocator);
-extern void smgrrelease(SMgrRelation reln);
 extern void smgrreleaseall(void);
-extern void smgrcreate(SMgrRelation reln, ForkNumber forknum, bool isRedo);
-extern void smgrdosyncall(SMgrRelation *rels, int nrels);
-extern void smgrdounlinkall(SMgrRelation *rels, int nrels, bool isRedo);
-extern void smgrextend(SMgrRelation reln, ForkNumber forknum,
+extern void smgrcreate(SMgrFileHandle sfile, bool isRedo);
+extern void smgrextend(SMgrFileHandle sfile,
 					   BlockNumber blocknum, char *buffer, bool skipFsync);
-extern bool smgrprefetch(SMgrRelation reln, ForkNumber forknum,
-						 BlockNumber blocknum);
-extern void smgrread(SMgrRelation reln, ForkNumber forknum,
+extern bool smgrprefetch(SMgrFileHandle sfile, BlockNumber blocknum);
+extern void smgrread(SMgrFileHandle sfile,
 					 BlockNumber blocknum, char *buffer);
-extern void smgrwrite(SMgrRelation reln, ForkNumber forknum,
+extern void smgrwrite(SMgrFileHandle sfile,
 					  BlockNumber blocknum, char *buffer, bool skipFsync);
-extern void smgrwriteback(SMgrRelation reln, ForkNumber forknum,
+extern void smgrwriteback(SMgrFileHandle sfile,
 						  BlockNumber blocknum, BlockNumber nblocks);
-extern BlockNumber smgrnblocks(SMgrRelation reln, ForkNumber forknum);
-extern BlockNumber smgrnblocks_cached(SMgrRelation reln, ForkNumber forknum);
-extern void smgrtruncate(SMgrRelation reln, ForkNumber *forknum,
-						 int nforks, BlockNumber *nblocks);
-extern void smgrimmedsync(SMgrRelation reln, ForkNumber forknum);
+extern BlockNumber smgrnblocks(SMgrFileHandle sfile);
+extern BlockNumber smgrnblocks_cached(SMgrFileHandle sfile);
+extern void smgrimmedsync(SMgrFileHandle sfile);
+extern void smgrunlink(SMgrFileHandle sfile, bool isRedo);
+
+extern void smgrtruncate_multi(RelFileLocator rlocator, BackendId backend, ForkNumber *forks, int nforks, BlockNumber *nblocks);
+extern void smgrunlink_multi(RelFileLocator rlocator, BackendId backend, ForkNumber *forks, int nforks, bool isRedo);
+
+extern void smgrcloserellocator(RelFileLocator rlocator, BackendId backend);
+
 extern void AtEOXact_SMgr(void);
 extern bool ProcessBarrierSmgrRelease(void);
 

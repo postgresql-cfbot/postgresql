@@ -535,7 +535,7 @@ autoprewarm_database_main(Datum main_arg)
 			 */
 			if (blk->forknum > InvalidForkNumber &&
 				blk->forknum <= MAX_FORKNUM &&
-				smgrexists(RelationGetSmgr(rel), blk->forknum))
+				smgrexists(RelationGetSmgr(rel, blk->forknum)))
 				nblocks = RelationGetNumberOfBlocksInFork(rel, blk->forknum);
 			else
 				nblocks = 0;

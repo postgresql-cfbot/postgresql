@@ -22,19 +22,20 @@
 /* GUC variables */
 extern PGDLLIMPORT int wal_skip_threshold;
 
-extern SMgrRelation RelationCreateStorage(RelFileLocator rlocator,
-										  char relpersistence,
-										  bool register_delete);
+extern SMgrFileHandle RelationCreateStorage(RelFileLocator rlocator,
+											char relpersistence,
+											bool register_delete);
 extern void RelationDropStorage(Relation rel);
 extern void RelationPreserveStorage(RelFileLocator rlocator, bool atCommit);
 extern void RelationPreTruncate(Relation rel);
 extern void RelationTruncate(Relation rel, BlockNumber nblocks);
-extern void RelationCopyStorage(SMgrRelation src, SMgrRelation dst,
-								ForkNumber forkNum, char relpersistence);
+extern void RelationCopyStorage(SMgrFileHandle src, SMgrFileHandle dst,
+								char relpersistence);
 extern bool RelFileLocatorSkippingWAL(RelFileLocator rlocator);
 extern Size EstimatePendingSyncsSpace(void);
 extern void SerializePendingSyncs(Size maxSize, char *startAddress);
 extern void RestorePendingSyncs(char *startAddress);
+extern void DropRelationFiles(RelFileLocator *delrels, int ndelrels, bool isRedo);
 
 /*
  * These functions used to be in storage/smgr/smgr.c, which explains the

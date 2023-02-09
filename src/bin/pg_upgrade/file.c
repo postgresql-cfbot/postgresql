@@ -20,6 +20,7 @@
 #endif
 
 #include "access/visibilitymapdefs.h"
+#include "access/slrudefs.h"
 #include "common/file_perm.h"
 #include "pg_upgrade.h"
 #include "storage/bufpage.h"
@@ -138,7 +139,6 @@ copyFile(const char *src, const char *dst,
 
 #endif							/* WIN32 */
 }
-
 
 /*
  * linkFile()
@@ -314,6 +314,179 @@ rewriteVisibilityMap(const char *fromfile, const char *tofile,
 	/* Clean up */
 	close(dst_fd);
 	close(src_fd);
+}
+
+
+//create new file and initialize to 256K
+static int
+init_new_slru_file(FILE * fp)
+{ 
+	int fd;
+	int res;
+	
+	fd = fileno(fp);
+	res = ftruncate(fd, BLCKSZ * SLRU_PAGES_PER_SEGMENT);
+	return res;
+}
+
+int 
+copy_to_new_format(const char *old_subdir, const char *new_subdir, int element_size) 
+{
+	DIR *dr;
+	struct dirent *de;
+	
+	size_t 	read_items;
+	size_t 	n_items;
+	size_t 	to_read_items;
+	size_t 	write_items;
+	size_t 	pages_written;
+	size_t 	write_offset;
+
+	char * 	read_file;	
+	char * 	write_file;
+	
+	int 	res;
+	int 	write_file_segno;
+	int 	total_read_files;
+	
+	FILE * 	old_fd; 
+	FILE * 	new_fp;
+
+#define MAXBUFSIZE (BLCKSZ - SizeOfPageHeaderData)
+
+	char	old_path[MAXPGPATH];
+	char	new_path[MAXPGPATH];
+	PGAlignedBlock pg_buf;
+	BlockNumber blkno; //track aboslute block number
+	
+
+	struct 	dirent** all_dirents;
+
+
+	snprintf(old_path, sizeof(old_path), "%s/%s", old_cluster.pgdata, old_subdir);
+	snprintf(new_path, sizeof(new_path), "%s/%s", new_cluster.pgdata, new_subdir);
+
+	/* 
+	 * calculate the number of items that can fit 
+	 * inside BLCKSZ - SizeOfPageHeaderData
+	 */
+
+	n_items = (size_t) (MAXBUFSIZE / element_size); 
+	
+	/* number of items to read in at a time */
+	to_read_items = n_items;
+	
+	//bufsize = (size_t) (n_items * element_size); 
+	write_file_segno = 0; /* track which segment we are writing into */
+	write_offset = (size_t) (SizeOfPageHeaderData); 
+
+	dr = opendir((char *)old_path);
+	if (dr == NULL)
+		return -1;
+
+	write_file = psprintf("%s/%04X", new_path, write_file_segno);
+	
+	new_fp = fopen(write_file, "wb");
+	
+	if (new_fp == NULL)
+		return -1;
+
+	res = init_new_slru_file(new_fp);
+	if (res < 0)	
+		return -1;
+
+	if (res < 0)
+		return -1;
+
+	pages_written = 0;
+	blkno = 0; /* absolute blkno */
+
+	all_dirents = get_sorted_hex_files(old_path, &total_read_files);
+
+	write_items = 0;
+	for (int i = 0; i < total_read_files; i++)
+	{
+		de = all_dirents[i];
+		
+		if ((!strcmp((char *) de->d_name, ".")) || !strcmp((char *) de->d_name, ".."))
+	 	{
+			continue;
+	 	}
+
+		read_file = psprintf("%s/%s", (char *) old_path, (char *) de->d_name);
+		
+		old_fd = fopen(read_file, "rb");
+		read_items = 0;
+		
+		do 
+		{
+			memset(pg_buf.data, 0, BLCKSZ);		
+			read_items = fread(pg_buf.data + write_offset, element_size, to_read_items, old_fd);  /* how many items we read */
+
+			if (to_read_items == n_items) /* not finishing up a partial read */
+			{
+
+				((PageHeader) pg_buf.data)->pd_lower = SizeOfPageHeaderData;
+				((PageHeader) pg_buf.data)->pd_upper = BLCKSZ;
+				((PageHeader) pg_buf.data)->pd_special = BLCKSZ;
+				
+				((PageHeader) pg_buf.data)->pd_checksum =
+					pg_checksum_page(pg_buf.data, blkno);
+
+				fwrite(pg_buf.data, SizeOfPageHeaderData, 1, new_fp); /* write page header data */
+			}
+
+			
+			write_items += fwrite(pg_buf.data + write_offset, element_size, read_items, new_fp);  /* increment how many items written */
+						
+			if (write_items % n_items == 0 && write_items > 0 && errno == 0) /* finished writing into new page. */
+			{
+				if (write_items == n_items * SLRU_PAGES_PER_SEGMENT) /* end of segment */
+				{
+					fclose(new_fp);
+					pages_written = 0;
+					write_file_segno ++;
+					write_items = 0;
+					write_file = psprintf("%s/%04X", new_path, write_file_segno);
+					new_fp = fopen((char *)write_file, "wb");
+					res = init_new_slru_file(new_fp);
+					if (res < 0 || new_fp == NULL)
+					{
+						fclose(new_fp);
+						cleanup_dirents(all_dirents, total_read_files);
+						
+					}
+				} else { /* end of page but not segment */
+					//fflush(new_fp);
+					pages_written ++; 
+				}
+
+				blkno++; 
+
+				to_read_items = n_items; /* to_read_items = n */
+				res = fseek(new_fp, (pages_written * BLCKSZ), SEEK_SET);
+				if (res < 0)
+				{
+					fclose(new_fp);
+					cleanup_dirents(all_dirents, total_read_files);
+					return -1;
+				}
+			} else {
+				/*end of segment in source dir*/
+				if (read_items < to_read_items) 
+				{
+					to_read_items = n_items - read_items; /* read remaining items */
+				}
+			}
+		} while (!feof(old_fd));  /* until end of file */
+		fclose(old_fd);
+	}
+	fflush(new_fp);
+	
+	/* free memory malloc'd by scandir while sorting */
+	cleanup_dirents(all_dirents, total_read_files);
+
+	return 0;
 }
 
 void

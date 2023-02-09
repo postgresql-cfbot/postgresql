@@ -12,8 +12,6 @@ setup
     CREATE FUNCTION test_stat_func2() RETURNS VOID LANGUAGE plpgsql AS $$BEGIN END;$$;
     INSERT INTO test_stat_oid(name, oid) VALUES('test_stat_func2', 'test_stat_func2'::regproc);
 
-    CREATE TABLE test_slru_stats(slru TEXT, stat TEXT, value INT);
-
     -- calls test_stat_func, but hides error if it doesn't exist
     CREATE FUNCTION test_stat_func_ifexists() RETURNS VOID LANGUAGE plpgsql AS $$
     BEGIN
@@ -27,7 +25,6 @@ setup
 teardown
 {
     DROP TABLE test_stat_oid;
-    DROP TABLE test_slru_stats;
 
     DROP TABLE IF EXISTS test_stat_tab;
     DROP FUNCTION IF EXISTS test_stat_func();
@@ -105,23 +102,13 @@ step s1_table_stats {
     WHERE tso.name = 'test_stat_tab'
 }
 
-# SLRU stats steps
-step s1_slru_save_stats {
-	INSERT INTO test_slru_stats VALUES('Notify', 'blks_zeroed',
-    (SELECT blks_zeroed FROM pg_stat_slru WHERE name = 'Notify'));
-}
+
 step s1_listen { LISTEN stats_test_nothing; }
 step s1_big_notify { SELECT pg_notify('stats_test_use',
                 repeat(i::text, current_setting('block_size')::int / 2)) FROM generate_series(1, 3) g(i);
                 }
 
-step s1_slru_check_stats {
-	SELECT current.blks_zeroed > before.value
-  FROM test_slru_stats before
-  INNER JOIN pg_stat_slru current
-  ON before.slru = current.name
-  WHERE before.stat = 'blks_zeroed';
-	}
+
 
 
 session s2
@@ -637,31 +624,24 @@ permutation
 
 # Verify SLRU stats generated in own transaction
 permutation
-  s1_slru_save_stats
   s1_listen
   s1_begin
   s1_big_notify
   s1_ff
-  s1_slru_check_stats
   s1_commit
-  s1_slru_check_stats
 
 # Verify SLRU stats generated in separate transaction
 permutation
-  s1_slru_save_stats
   s1_listen
   s2_big_notify
   s2_ff
-  s1_slru_check_stats
 
 # shouldn't see stats yet, not committed
 permutation
-  s1_slru_save_stats
   s1_listen
   s2_begin
   s2_big_notify
   s2_ff
-  s1_slru_check_stats
   s2_commit
 
 
@@ -669,89 +649,69 @@ permutation
 
 permutation
   s1_fetch_consistency_none
-  s1_slru_save_stats s1_listen
+  s1_listen
   s1_begin
-  s1_slru_check_stats
   s2_big_notify
   s2_ff
-  s1_slru_check_stats
   s1_commit
-  s1_slru_check_stats
 permutation
   s1_fetch_consistency_cache
-  s1_slru_save_stats s1_listen
+  s1_listen
   s1_begin
-  s1_slru_check_stats
   s2_big_notify
   s2_ff
-  s1_slru_check_stats
   s1_commit
-  s1_slru_check_stats
 permutation
   s1_fetch_consistency_snapshot
-  s1_slru_save_stats s1_listen
+  s1_listen
   s1_begin
-  s1_slru_check_stats
   s2_big_notify
   s2_ff
-  s1_slru_check_stats
   s1_commit
-  s1_slru_check_stats
 
 # check that pg_stat_clear_snapshot(), well ...
 permutation
   s1_fetch_consistency_none
-  s1_slru_save_stats s1_listen
+  s1_listen
   s1_begin
-  s1_slru_check_stats
   s2_big_notify
   s2_ff
-  s1_slru_check_stats
   s1_clear_snapshot
-  s1_slru_check_stats
   s1_commit
 permutation
   s1_fetch_consistency_cache
-  s1_slru_save_stats s1_listen
+  s1_listen
   s1_begin
-  s1_slru_check_stats
   s2_big_notify
   s2_ff
-  s1_slru_check_stats
   s1_clear_snapshot
-  s1_slru_check_stats
   s1_commit
 permutation
   s1_fetch_consistency_snapshot
-  s1_slru_save_stats s1_listen
+  s1_listen
   s1_begin
-  s1_slru_check_stats
   s2_big_notify
   s2_ff
-  s1_slru_check_stats
   s1_clear_snapshot
-  s1_slru_check_stats
   s1_commit
 
 # check that a variable-amount stats access caches fixed-amount stat too
 permutation
   s1_fetch_consistency_snapshot
-  s1_slru_save_stats s1_listen
+  s1_listen
   s1_begin
   s1_func_stats
   s2_big_notify
   s2_ff
-  s1_slru_check_stats
   s1_commit
 
 # and the other way round
 permutation
   s1_fetch_consistency_snapshot
-  s1_slru_save_stats s1_listen
+  s1_listen
   s1_begin
   s2_big_notify
   s2_ff
-  s1_slru_check_stats
   s2_func_call
   s2_ff
   s1_func_stats

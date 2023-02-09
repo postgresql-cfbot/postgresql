@@ -281,6 +281,11 @@ typedef union BufferDescPadded
 	char		pad[BUFFERDESC_PAD_TO_SIZE];
 } BufferDescPadded;
 
+#define BufferGetExternalLSN(bufHdr) \
+	BufferExternalLSNs[(bufHdr)->buf_id]
+#define BufferSetExternalLSN(bufHdr, lsn) \
+	BufferExternalLSNs[(bufHdr)->buf_id] = (lsn)
+
 /*
  * The PendingWriteback & WritebackContext structure are used to keep
  * information about pending flush requests to be issued to the OS.
@@ -307,6 +312,7 @@ typedef struct WritebackContext
 /* in buf_init.c */
 extern PGDLLIMPORT BufferDescPadded *BufferDescriptors;
 extern PGDLLIMPORT ConditionVariableMinimallyPadded *BufferIOCVArray;
+extern PGDLLIMPORT XLogRecPtr *BufferExternalLSNs;
 extern PGDLLIMPORT WritebackContext BackendWritebackContext;
 
 /* in localbuf.c */
@@ -413,10 +419,9 @@ extern int	BufTableInsert(BufferTag *tagPtr, uint32 hashcode, int buf_id);
 extern void BufTableDelete(BufferTag *tagPtr, uint32 hashcode);
 
 /* localbuf.c */
-extern PrefetchBufferResult PrefetchLocalBuffer(SMgrRelation smgr,
-												ForkNumber forkNum,
+extern PrefetchBufferResult PrefetchLocalBuffer(SMgrFileHandle smgr,
 												BlockNumber blockNum);
-extern BufferDesc *LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum,
+extern BufferDesc *LocalBufferAlloc(SMgrFileHandle smgr,
 									BlockNumber blockNum, bool *foundPtr);
 extern void MarkLocalBufferDirty(Buffer buffer);
 extern void DropRelationLocalBuffers(RelFileLocator rlocator,

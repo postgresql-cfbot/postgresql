@@ -2709,6 +2709,45 @@ sub wait_for_catchup
 	return;
 }
 
+# Now defining helper functions wait_for_replay_catchup() and
+# wait_for_write_catchup().
+# Please note that wait_for_flush_catchup() and wait_for_sent_catchup() are not
+# defined as: 1) they are not used yet and 2) it lets their author (if any)
+# decide the node->lsn() mode to be used.
+
+=pod
+
+=item $node->wait_for_replay_catchup(standby_name, node)
+
+Helper function for wait_for_catchup when waiting for the replay_lsn column
+to catchup.
+
+=cut
+
+sub wait_for_replay_catchup
+{
+	my ($self, $standby_name, $node) = @_;
+	$node = defined($node) ? $node : $self;
+
+	$self->wait_for_catchup($standby_name, 'replay', $node->lsn('flush'));
+}
+
+=pod
+
+=item $node->wait_for_write_catchup(standby_name, node)
+
+Helper function for wait_for_catchup when waiting for the write_lsn column
+to catchup.
+
+=cut
+
+sub wait_for_write_catchup
+{
+	my ($self, $standby_name, $node) = @_;
+
+	$self->wait_for_catchup($standby_name, 'write', $node->lsn('write'));
+}
+
 =pod
 
 =item $node->wait_for_slot_catchup(slot_name, mode, target_lsn)

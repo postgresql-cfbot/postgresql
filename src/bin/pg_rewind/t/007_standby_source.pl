@@ -74,9 +74,8 @@ $node_a->safe_psql('postgres',
 	"INSERT INTO tbl1 values ('in A, before promotion')");
 $node_a->safe_psql('postgres', 'CHECKPOINT');
 
-my $lsn = $node_a->lsn('write');
-$node_a->wait_for_catchup('node_b', 'write', $lsn);
-$node_b->wait_for_catchup('node_c', 'write', $lsn);
+$node_a->wait_for_write_catchup('node_b', $node_a);
+$node_b->wait_for_write_catchup('node_c', $node_a);
 
 # Promote C
 #
@@ -160,7 +159,7 @@ in A, after C was promoted
 $node_a->safe_psql('postgres',
 	"INSERT INTO tbl1 values ('in A, after rewind')");
 
-$node_b->wait_for_catchup('node_c', 'replay', $node_a->lsn('write'));
+$node_b->wait_for_replay_catchup('node_c', $node_a);
 
 check_query(
 	'SELECT * FROM tbl1',

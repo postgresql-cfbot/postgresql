@@ -42,8 +42,7 @@ sub test_tablespace
 	$node_standby->start;
 
 	# Make sure the connection is made
-	$node_primary->wait_for_catchup($node_standby, 'write',
-		$node_primary->lsn('write'));
+	$node_primary->wait_for_write_catchup($node_standby, $node_primary);
 
 	# Do immediate shutdown just after a sequence of CREATE DATABASE / DROP
 	# DATABASE / DROP TABLESPACE. This causes CREATE DATABASE WAL records
@@ -65,8 +64,7 @@ sub test_tablespace
 	$query =~ s/<STRATEGY>/$strategy/g;
 
 	$node_primary->safe_psql('postgres', $query);
-	$node_primary->wait_for_catchup($node_standby, 'write',
-		$node_primary->lsn('write'));
+	$node_primary->wait_for_write_catchup($node_standby, $node_primary);
 
 	# show "create missing directory" log message
 	$node_standby->safe_psql('postgres',

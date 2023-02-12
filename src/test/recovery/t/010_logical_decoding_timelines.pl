@@ -135,7 +135,7 @@ cmp_ok(
 	'xmin on physical slot must not be lower than catalog_xmin');
 
 $node_primary->safe_psql('postgres', 'CHECKPOINT');
-$node_primary->wait_for_catchup($node_replica, 'write');
+$node_primary->wait_for_write_catchup($node_replica, $node_primary);
 
 # Boom, crash
 $node_primary->stop('immediate');

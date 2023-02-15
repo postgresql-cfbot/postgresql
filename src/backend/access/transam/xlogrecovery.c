@@ -4210,7 +4210,8 @@ XLogFileRead(XLogSegNo segno, int emode, TimeLineID tli,
 			if (!RestoreArchivedFile(path, xlogfname,
 									 "RECOVERYXLOG",
 									 wal_segment_size,
-									 InRedo))
+									 InRedo,
+									 ARCHIVE_TYPE_WAL_SEGMENT))
 				return -1;
 			break;
 

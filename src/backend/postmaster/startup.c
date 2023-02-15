@@ -169,8 +169,7 @@ HandleStartupProcInterrupts(void)
 	/*
 	 * Check if we were requested to exit without finishing recovery.
 	 */
-	if (shutdown_requested)
-		proc_exit(1);
+	HandleStartupProcShutdownRequests();
 
 	/*
 	 * Emergency bailout if postmaster has died.  This is to avoid the
@@ -192,6 +191,16 @@ HandleStartupProcInterrupts(void)
 	/* Perform logging of memory contexts of this process */
 	if (LogMemoryContextPending)
 		ProcessLogMemoryContextInterrupt();
+}
+
+/*
+ * If there is a pending shutdown request, exit.
+ */
+void
+HandleStartupProcShutdownRequests(void)
+{
+	if (shutdown_requested)
+		proc_exit(1);
 }
 
 
@@ -274,8 +283,7 @@ PreRestoreCommand(void)
 	 * shutdown request received just before this.
 	 */
 	in_restore_command = true;
-	if (shutdown_requested)
-		proc_exit(1);
+	HandleStartupProcShutdownRequests();
 }
 
 void

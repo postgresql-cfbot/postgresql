@@ -1703,6 +1703,9 @@ generate_orderedappend_paths(PlannerInfo *root, RelOptInfo *rel,
 		ListCell   *lcr;
 		bool		match_partition_order;
 		bool		match_partition_order_desc;
+		int			end_element;
+		int			first_element;
+		int			direction;
 
 		/*
 		 * Determine if this sort ordering matches any partition pathkeys we
@@ -1723,10 +1726,31 @@ generate_orderedappend_paths(PlannerInfo *root, RelOptInfo *rel,
 			 (!partition_pathkeys_desc_partial &&
 			  pathkeys_contained_in(partition_pathkeys_desc, pathkeys)));
 
-		/* Select the child paths for this ordering... */
-		foreach(lcr, live_childrels)
+		/*
+		 * When the required pathkeys match the reverse of the partition
+		 * order, we must build the list of paths in reverse starting with the
+		 * last matching partition first.  We can get away without making any
+		 * special cases for this in the loop by just looping backward over
+		 * the child relations in this case.
+		 */
+		if (match_partition_order_desc)
 		{
-			RelOptInfo *childrel = (RelOptInfo *) lfirst(lcr);
+			first_element = list_length(live_childrels) - 1;
+			end_element = -1;
+			direction = -1;
+			match_partition_order = true;
+		}
+		else
+		{
+			first_element = 0;
+			end_element = list_length(live_childrels);
+			direction = 1;
+		}
+
+		/* Select the child paths for this ordering... */
+		for (int i = first_element; i != end_element; i += direction)
+		{
+			RelOptInfo *childrel = list_nth_node(RelOptInfo, live_childrels, i);
 			Path	   *cheapest_startup,
 					   *cheapest_total,
 					   *cheapest_fractional = NULL;
@@ -1822,25 +1846,6 @@ generate_orderedappend_paths(PlannerInfo *root, RelOptInfo *rel,
 					fractional_subpaths = lappend(fractional_subpaths, cheapest_fractional);
 				}
 			}
-			else if (match_partition_order_desc)
-			{
-				/*
-				 * As above, but we need to reverse the order of the children,
-				 * because nodeAppend.c doesn't know anything about reverse
-				 * ordering and will scan the children in the order presented.
-				 */
-				cheapest_startup = get_singleton_append_subpath(cheapest_startup);
-				cheapest_total = get_singleton_append_subpath(cheapest_total);
-
-				startup_subpaths = lcons(cheapest_startup, startup_subpaths);
-				total_subpaths = lcons(cheapest_total, total_subpaths);
-
-				if (cheapest_fractional)
-				{
-					cheapest_fractional = get_singleton_append_subpath(cheapest_fractional);
-					fractional_subpaths = lcons(cheapest_fractional, fractional_subpaths);
-				}
-			}
 			else
 			{
 				/*
@@ -1859,7 +1864,7 @@ generate_orderedappend_paths(PlannerInfo *root, RelOptInfo *rel,
 		}
 
 		/* ... and build the Append or MergeAppend paths */
-		if (match_partition_order || match_partition_order_desc)
+		if (match_partition_order)
 		{
 			/* We only need Append */
 			add_path(rel, (Path *) create_append_path(root,

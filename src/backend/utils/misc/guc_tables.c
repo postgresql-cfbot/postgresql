@@ -4292,7 +4292,7 @@ struct config_string ConfigureNamesString[] =
 		{"config_file", PGC_POSTMASTER, FILE_LOCATIONS,
 			gettext_noop("Sets the server's main configuration file."),
 			NULL,
-			GUC_DISALLOW_IN_FILE | GUC_SUPERUSER_ONLY
+			GUC_NOT_IN_SAMPLE | GUC_DISALLOW_IN_FILE | GUC_SUPERUSER_ONLY
 		},
 		&ConfigFileName,
 		NULL,

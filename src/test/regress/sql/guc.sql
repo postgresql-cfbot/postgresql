@@ -323,6 +323,7 @@ set default_with_oids to t;
 SELECT pg_settings_get_flags(NULL);
 SELECT pg_settings_get_flags('does_not_exist');
 CREATE TABLE tab_settings_flags AS SELECT name, category,
+    'DISALLOW_IN_FILE' = ANY(flags) AS disallow_in_file,
     'EXPLAIN'          = ANY(flags) AS explain,
     'NO_RESET'         = ANY(flags) AS no_reset,
     'NO_RESET_ALL'     = ANY(flags) AS no_reset_all,
@@ -351,5 +352,9 @@ SELECT name FROM tab_settings_flags
 -- NO_RESET implies NO_RESET_ALL.
 SELECT name FROM tab_settings_flags
   WHERE no_reset AND NOT no_reset_all
+  ORDER BY 1;
+-- DISALLOW_IN_FILE implies NOT_IN_SAMPLE.
+SELECT name FROM tab_settings_flags
+  WHERE disallow_in_file AND NOT not_in_sample
   ORDER BY 1;
 DROP TABLE tab_settings_flags;

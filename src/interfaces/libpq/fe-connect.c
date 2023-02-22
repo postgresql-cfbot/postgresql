@@ -3225,17 +3225,28 @@ keep_going:						/* We will come back to here until there is
 				 */
 				if ((beresp == 'R' || beresp == 'v') && (msgLength < 8 || msgLength > 2000))
 				{
-					libpq_append_conn_error(conn, "expected authentication request from server, but received %c",
-									   beresp);
+					libpq_append_conn_error(conn, "received invalid authentication request");
 					goto error_return;
 				}
 
-				if (beresp == 'E' && (msgLength < 8 || msgLength > 30000))
+#define MAX_ERRLEN 30000
+				if (beresp == 'E' && (msgLength < 8 || msgLength > MAX_ERRLEN))
 				{
 					/* Handle error from a pre-3.0 server */
 					conn->inCursor = conn->inStart + 1; /* reread data */
 					if (pqGets_append(&conn->errorMessage, conn))
 					{
+						/*
+						 * We may not have authenticated the server yet, so
+						 * don't let the buffer grow forever.
+						 */
+						avail = conn->inEnd - conn->inCursor;
+						if (avail > MAX_ERRLEN)
+						{
+							libpq_append_conn_error(conn, "received invalid error message");
+							goto error_return;
+						}
+
 						/* We'll come back when there is more data */
 						return PGRES_POLLING_READING;
 					}
@@ -3255,9 +3266,15 @@ keep_going:						/* We will come back to here until there is
 
 					goto error_return;
 				}
+#undef MAX_ERRLEN
 
 				/*
 				 * Can't process if message body isn't all here yet.
+				 *
+				 * After this check passes, any further EOF during parsing
+				 * implies that the server sent a bad/truncated message. Reading
+				 * more bytes won't help in that case, so don't return
+				 * PGRES_POLLING_READING after this point.
 				 */
 				msgLength -= 4;
 				avail = conn->inEnd - conn->inCursor;
@@ -3280,8 +3297,8 @@ keep_going:						/* We will come back to here until there is
 				{
 					if (pqGetErrorNotice3(conn, true))
 					{
-						/* We'll come back when there is more data */
-						return PGRES_POLLING_READING;
+						libpq_append_conn_error(conn, "received invalid error message");
+						goto error_return;
 					}
 					/* OK, we read the message; mark data consumed */
 					conn->inStart = conn->inCursor;
@@ -3357,6 +3374,7 @@ keep_going:						/* We will come back to here until there is
 				{
 					if (pqGetNegotiateProtocolVersion3(conn))
 					{
+						libpq_append_conn_error(conn, "received invalid protocol negotiation message");
 						goto error_return;
 					}
 					/* OK, we read the message; mark data consumed */
@@ -3370,6 +3388,7 @@ keep_going:						/* We will come back to here until there is
 				/* Get the type of request. */
 				if (pqGetInt((int *) &areq, 4, conn))
 				{
+					libpq_append_conn_error(conn, "received invalid authentication request");
 					goto error_return;
 				}
 				msgLength -= 4;

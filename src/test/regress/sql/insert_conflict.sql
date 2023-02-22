@@ -434,20 +434,51 @@ insert into selfconflict values (3,1), (3,2) on conflict do nothing;
 commit;
 
 begin transaction isolation level read committed;
-insert into selfconflict values (4,1), (4,2) on conflict(f1) do update set f2 = 0;
+insert into selfconflict values (4,1), (4,2) on conflict(f1) do update set f2 = -1;
 commit;
 
 begin transaction isolation level repeatable read;
-insert into selfconflict values (5,1), (5,2) on conflict(f1) do update set f2 = 0;
+insert into selfconflict values (5,1), (5,2) on conflict(f1) do update set f2 = -2;
 commit;
 
 begin transaction isolation level serializable;
-insert into selfconflict values (6,1), (6,2) on conflict(f1) do update set f2 = 0;
+insert into selfconflict values (6,1), (6,2) on conflict(f1) do update set f2 = -3;
 commit;
 
 select * from selfconflict;
 
 drop table selfconflict;
+
+-- check if self-conflicting INSERTs work with triggers
+
+create table t (a int unique, b int);
+
+create or replace function t_insert() returns trigger as $$
+begin
+  raise notice 't_insert triggered: new = %, old = %', new, old;
+  return null;
+end
+$$ language 'plpgsql';
+
+create or replace function t_update() returns trigger as $$
+begin
+  raise notice 't_update triggered: new = %, old = %', new, old;
+  return null;
+end
+$$ language 'plpgsql';
+
+create trigger t_insert_trigger
+after insert on t
+for each row execute procedure t_insert();
+
+create trigger t_insert_update
+after update on t
+for each row execute procedure t_update();
+
+insert into t values (1,1), (1,2) on conflict (a) do update set b = 0;
+insert into t values (2,1), (2,2), (3,1) on conflict (a) do update set b = 0;
+
+drop table t;
 
 -- check ON CONFLICT handling with partitioned tables
 create table parted_conflict_test (a int unique, b char) partition by list (a);

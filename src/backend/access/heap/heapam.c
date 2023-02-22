@@ -2924,7 +2924,7 @@ simple_heap_delete(Relation relation, ItemPointer tid)
 TM_Result
 heap_update(Relation relation, ItemPointer otid, HeapTuple newtup,
 			CommandId cid, Snapshot crosscheck, bool wait,
-			TM_FailureData *tmfd, LockTupleMode *lockmode)
+			TM_FailureData *tmfd, LockTupleMode *lockmode, bool force_visibility)
 {
 	TM_Result	result;
 	TransactionId xid = GetCurrentTransactionId();
@@ -3094,6 +3094,21 @@ l2:
 	locker_remains = false;
 	result = HeapTupleSatisfiesUpdate(&oldtup, cid, buffer);
 
+	if (force_visibility && (result == TM_Invisible))
+	{
+		/*
+		 * Special case of ON CONFLICT .. DO UPDATE with conflicting tuples
+		 * created within the same command. Normally a command doesn't see the
+		 * tuples created by this command e.g. to avoid Halloween problem.
+		 * However in this particular case we want to treat the tuples as if
+		 * they were inserted by the previosly executed command.
+		 *
+		 * This is done in order to make the behavior consistent with ON
+		 * CONFLICT .. DO NOTHING.
+		 */
+		result = TM_Ok;
+	}
+
 	/* see below about the "no wait" case */
 	Assert(result != TM_BeingModified || wait);
 
@@ -3252,6 +3267,7 @@ l2:
 			LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
 			heap_acquire_tuplock(relation, &(oldtup.t_self), *lockmode,
 								 LockWaitBlock, &have_tuple_lock);
+
 			XactLockTableWait(xwait, relation, &oldtup.t_self,
 							  XLTW_Update);
 			checked_lockers = true;
@@ -3969,7 +3985,7 @@ simple_heap_update(Relation relation, ItemPointer otid, HeapTuple tup)
 	result = heap_update(relation, otid, tup,
 						 GetCurrentCommandId(true), InvalidSnapshot,
 						 true /* wait for commit */ ,
-						 &tmfd, &lockmode);
+						 &tmfd, &lockmode, false);
 	switch (result)
 	{
 		case TM_SelfModified:

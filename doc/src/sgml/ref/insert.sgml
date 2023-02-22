@@ -531,9 +531,7 @@ INSERT INTO <replaceable class="parameter">table_name</replaceable> [ AS <replac
     clause is a <quote>deterministic</quote> statement.  This means
     that the command will not be allowed to affect any single existing
     row more than once; a cardinality violation error will be raised
-    when this situation arises.  Rows proposed for insertion should
-    not duplicate each other in terms of attributes constrained by an
-    arbiter index or constraint.
+    when this situation arises.
    </para>
 
    <para>

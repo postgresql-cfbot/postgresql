@@ -299,8 +299,8 @@ INSERT INTO UNIQUE_TBL (t) VALUES ('seven');
 
 INSERT INTO UNIQUE_TBL VALUES (5, 'five-upsert-insert') ON CONFLICT (i) DO UPDATE SET t = 'five-upsert-update';
 INSERT INTO UNIQUE_TBL VALUES (6, 'six-upsert-insert') ON CONFLICT (i) DO UPDATE SET t = 'six-upsert-update';
--- should fail
-INSERT INTO UNIQUE_TBL VALUES (1, 'a'), (2, 'b'), (2, 'b') ON CONFLICT (i) DO UPDATE SET t = 'fails';
+-- should not fail
+INSERT INTO UNIQUE_TBL VALUES (11, 'a'), (22, 'b'), (22, 'b') ON CONFLICT (i) DO UPDATE SET t = 'success';
 
 SELECT * FROM UNIQUE_TBL;
 

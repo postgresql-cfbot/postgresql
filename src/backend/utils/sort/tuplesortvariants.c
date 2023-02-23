@@ -37,6 +37,8 @@
 #define DATUM_SORT		2
 #define CLUSTER_SORT	3
 
+bool sort_abbreviated_keys = true;
+
 static void removeabbrev_heap(Tuplesortstate *state, SortTuple *stups,
 							  int count);
 static void removeabbrev_cluster(Tuplesortstate *state, SortTuple *stups,
@@ -185,7 +187,8 @@ tuplesort_begin_heap(TupleDesc tupDesc,
 		sortKey->ssup_nulls_first = nullsFirstFlags[i];
 		sortKey->ssup_attno = attNums[i];
 		/* Convey if abbreviation optimization is applicable in principle */
-		sortKey->abbreviate = (i == 0 && base->haveDatum1);
+		if (sort_abbreviated_keys)
+			sortKey->abbreviate = (i == 0 && base->haveDatum1);
 
 		PrepareSortSupportFromOrderingOp(sortOperators[i], sortKey);
 	}
@@ -295,7 +298,8 @@ tuplesort_begin_cluster(TupleDesc tupDesc,
 			(scanKey->sk_flags & SK_BT_NULLS_FIRST) != 0;
 		sortKey->ssup_attno = scanKey->sk_attno;
 		/* Convey if abbreviation optimization is applicable in principle */
-		sortKey->abbreviate = (i == 0 && base->haveDatum1);
+		if (sort_abbreviated_keys)
+			sortKey->abbreviate = (i == 0 && base->haveDatum1);
 
 		Assert(sortKey->ssup_attno != 0);
 
@@ -379,7 +383,8 @@ tuplesort_begin_index_btree(Relation heapRel,
 			(scanKey->sk_flags & SK_BT_NULLS_FIRST) != 0;
 		sortKey->ssup_attno = scanKey->sk_attno;
 		/* Convey if abbreviation optimization is applicable in principle */
-		sortKey->abbreviate = (i == 0 && base->haveDatum1);
+		if (sort_abbreviated_keys)
+			sortKey->abbreviate = (i == 0 && base->haveDatum1);
 
 		Assert(sortKey->ssup_attno != 0);
 
@@ -499,7 +504,8 @@ tuplesort_begin_index_gist(Relation heapRel,
 		sortKey->ssup_nulls_first = false;
 		sortKey->ssup_attno = i + 1;
 		/* Convey if abbreviation optimization is applicable in principle */
-		sortKey->abbreviate = (i == 0 && base->haveDatum1);
+		if (sort_abbreviated_keys)
+			sortKey->abbreviate = (i == 0 && base->haveDatum1);
 
 		Assert(sortKey->ssup_attno != 0);
 
@@ -573,7 +579,8 @@ tuplesort_begin_datum(Oid datumType, Oid sortOperator, Oid sortCollation,
 	 * can't, because a datum sort only stores a single copy of the datum; the
 	 * "tuple" field of each SortTuple is NULL.
 	 */
-	base->sortKeys->abbreviate = !typbyval;
+	if (sort_abbreviated_keys)
+		base->sortKeys->abbreviate = !typbyval;
 
 	PrepareSortSupportFromOrderingOp(sortOperator, base->sortKeys);
 

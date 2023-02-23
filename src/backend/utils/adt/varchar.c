@@ -762,7 +762,7 @@ bpchareq(PG_FUNCTION_ARGS)
 	else
 		mylocale = pg_newlocale_from_collation(collid);
 
-	if (locale_is_c || !mylocale || mylocale->deterministic)
+	if (locale_is_c || pg_locale_deterministic(mylocale))
 	{
 		/*
 		 * Since we only care about equality or not-equality, we can avoid all
@@ -807,7 +807,7 @@ bpcharne(PG_FUNCTION_ARGS)
 	else
 		mylocale = pg_newlocale_from_collation(collid);
 
-	if (locale_is_c || !mylocale || mylocale->deterministic)
+	if (locale_is_c || pg_locale_deterministic(mylocale))
 	{
 		/*
 		 * Since we only care about equality or not-equality, we can avoid all
@@ -1015,37 +1015,25 @@ hashbpchar(PG_FUNCTION_ARGS)
 	if (!lc_collate_is_c(collid))
 		mylocale = pg_newlocale_from_collation(collid);
 
-	if (!mylocale || mylocale->deterministic)
+	if (pg_locale_deterministic(mylocale))
 	{
 		result = hash_any((unsigned char *) keydata, keylen);
 	}
 	else
 	{
-#ifdef USE_ICU
-		if (mylocale->provider == COLLPROVIDER_ICU)
-		{
-			int32_t		ulen = -1;
-			UChar	   *uchar = NULL;
-			Size		bsize;
-			uint8_t    *buf;
+		Size		bsize, rsize;
+		char	   *buf;
 
-			ulen = icu_to_uchar(&uchar, keydata, keylen);
+		bsize = pg_strnxfrm(NULL, 0, keydata, keylen, mylocale);
+		buf = palloc(bsize);
 
-			bsize = ucol_getSortKey(mylocale->info.icu.ucol,
-									uchar, ulen, NULL, 0);
-			buf = palloc(bsize);
-			ucol_getSortKey(mylocale->info.icu.ucol,
-							uchar, ulen, buf, bsize);
-			pfree(uchar);
+		rsize = pg_strnxfrm(buf, bsize, keydata, keylen, mylocale);
+		if (rsize != bsize)
+			elog(ERROR, "pg_strnxfrm() returned unexpected result");
 
-			result = hash_any(buf, bsize);
+		result = hash_any((uint8_t *) buf, bsize);
 
-			pfree(buf);
-		}
-		else
-#endif
-			/* shouldn't happen */
-			elog(ERROR, "unsupported collprovider: %c", mylocale->provider);
+		pfree(buf);
 	}
 
 	/* Avoid leaking memory for toasted inputs */
@@ -1076,38 +1064,27 @@ hashbpcharextended(PG_FUNCTION_ARGS)
 	if (!lc_collate_is_c(collid))
 		mylocale = pg_newlocale_from_collation(collid);
 
-	if (!mylocale || mylocale->deterministic)
+	if (pg_locale_deterministic(mylocale))
 	{
 		result = hash_any_extended((unsigned char *) keydata, keylen,
 								   PG_GETARG_INT64(1));
 	}
 	else
 	{
-#ifdef USE_ICU
-		if (mylocale->provider == COLLPROVIDER_ICU)
-		{
-			int32_t		ulen = -1;
-			UChar	   *uchar = NULL;
-			Size		bsize;
-			uint8_t    *buf;
+		Size		bsize, rsize;
+		char	   *buf;
 
-			ulen = icu_to_uchar(&uchar, keydata, keylen);
+		bsize = pg_strnxfrm(NULL, 0, keydata, keylen, mylocale);
+		buf = palloc(bsize);
 
-			bsize = ucol_getSortKey(mylocale->info.icu.ucol,
-									uchar, ulen, NULL, 0);
-			buf = palloc(bsize);
-			ucol_getSortKey(mylocale->info.icu.ucol,
-							uchar, ulen, buf, bsize);
-			pfree(uchar);
+		rsize = pg_strnxfrm(buf, bsize, keydata, keylen, mylocale);
+		if (rsize != bsize)
+			elog(ERROR, "pg_strnxfrm() returned unexpected result");
 
-			result = hash_any_extended(buf, bsize, PG_GETARG_INT64(1));
+		result = hash_any_extended((uint8_t *) buf, bsize,
+								   PG_GETARG_INT64(1));
 
-			pfree(buf);
-		}
-		else
-#endif
-			/* shouldn't happen */
-			elog(ERROR, "unsupported collprovider: %c", mylocale->provider);
+		pfree(buf);
 	}
 
 	PG_FREE_IF_COPY(key, 0);

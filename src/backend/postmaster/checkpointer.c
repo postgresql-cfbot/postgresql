@@ -543,6 +543,11 @@ CheckpointerMain(void)
 static void
 HandleCheckpointerInterrupts(void)
 {
+#ifdef WIN32
+	if (UNBLOCKED_SIGNAL_QUEUE())
+		pgwin32_dispatch_queued_signals();
+#endif
+
 	if (ProcSignalBarrierPending)
 		ProcessProcSignalBarrier();
 

@@ -295,7 +295,7 @@ index_compute_xid_horizon_for_tuples(Relation irel,
 									 Relation hrel,
 									 Buffer ibuf,
 									 OffsetNumber *itemnos,
-									 int nitems)
+									 uint16 nitems)
 {
 	TM_IndexDeleteOp delstate;
 	TransactionId snapshotConflictHorizon = InvalidTransactionId;

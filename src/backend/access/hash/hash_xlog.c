@@ -591,11 +591,11 @@ hash_xlog_move_page_contents(XLogReaderState *record)
 
 		if (len > 0)
 		{
-			OffsetNumber *unused;
-			OffsetNumber *unend;
+			uint16 *unused;
+			uint16 *unend;
 
-			unused = (OffsetNumber *) ptr;
-			unend = (OffsetNumber *) ((char *) ptr + len);
+			unused = (uint16 *) ptr;
+			unend = (uint16 *) ((char *) ptr + len);
 
 			if ((unend - unused) > 0)
 				PageIndexMultiDelete(page, unused, unend - unused);

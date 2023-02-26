@@ -130,7 +130,7 @@ cmpOffsetNumbers(const void *a, const void *b)
  */
 void
 spgPageIndexMultiDelete(SpGistState *state, Page page,
-						OffsetNumber *itemnos, int nitems,
+						OffsetNumber *itemnos, uint16 nitems,
 						int firststate, int reststate,
 						BlockNumber blkno, OffsetNumber offnum)
 {
@@ -389,8 +389,8 @@ moveLeafs(Relation index, SpGistState *state,
 		  SPPageDesc *current, SPPageDesc *parent,
 		  SpGistLeafTuple newLeafTuple, bool isNulls)
 {
+	uint16		nDelete;
 	int			i,
-				nDelete,
 				nInsert,
 				size;
 	Buffer		nbuf;
@@ -711,8 +711,8 @@ doPickSplit(Relation index, SpGistState *state,
 	char	   *leafdata,
 			   *leafptr;
 	SPPageDesc	saveCurrent;
-	int			nToDelete,
-				nToInsert,
+	uint16		nToDelete;
+	int			nToInsert,
 				maxToInclude;
 
 	in.level = level;

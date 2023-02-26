@@ -310,7 +310,7 @@ restart:
 	else if (GistPageIsLeaf(page))
 	{
 		OffsetNumber todelete[MaxOffsetNumber];
-		int			ntodelete = 0;
+		uint16			ntodelete = 0;
 		int			nremain;
 		GISTPageOpaque opaque = GistPageGetOpaque(page);
 		OffsetNumber maxoff = PageGetMaxOffsetNumber(page);

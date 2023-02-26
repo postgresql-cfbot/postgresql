@@ -372,7 +372,7 @@ static void
 _hash_vacuum_one_page(Relation rel, Relation hrel, Buffer metabuf, Buffer buf)
 {
 	OffsetNumber deletable[MaxOffsetNumber];
-	int			ndeletable = 0;
+	uint16			ndeletable = 0;
 	OffsetNumber offnum,
 				maxoff;
 	Page		page = BufferGetPage(buf);

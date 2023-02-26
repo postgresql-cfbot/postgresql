@@ -573,8 +573,8 @@ gistplacetopage(Relation rel, Size freespace, GISTSTATE *giststate,
 		{
 			if (RelationNeedsWAL(rel))
 			{
-				OffsetNumber ndeloffs = 0,
-							deloffs[1];
+				uint16 ndeloffs = 0;
+				OffsetNumber deloffs[1];
 
 				if (OffsetNumberIsValid(oldoffnum))
 				{
@@ -1642,7 +1642,7 @@ static void
 gistprunepage(Relation rel, Page page, Buffer buffer, Relation heapRel)
 {
 	OffsetNumber deletable[MaxIndexTuplesPerPage];
-	int			ndeletable = 0;
+	uint16			ndeletable = 0;
 	OffsetNumber offnum,
 				maxoff;
 

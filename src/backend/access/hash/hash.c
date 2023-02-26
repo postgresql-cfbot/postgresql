@@ -709,7 +709,7 @@ hashbucketcleanup(Relation rel, Bucket cur_bucket, Buffer bucket_buf,
 		Buffer		next_buf;
 		Page		page;
 		OffsetNumber deletable[MaxOffsetNumber];
-		int			ndeletable = 0;
+		uint16			ndeletable = 0;
 		bool		retain_pin = false;
 		bool		clear_dead_marking = false;
 

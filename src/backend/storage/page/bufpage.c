@@ -1158,7 +1158,7 @@ PageIndexTupleDelete(Page page, OffsetNumber offnum)
  * of item numbers to be deleted in item number order!
  */
 void
-PageIndexMultiDelete(Page page, OffsetNumber *itemnos, int nitems)
+PageIndexMultiDelete(Page page, OffsetNumber *itemnos, uint16 nitems)
 {
 	PageHeader	phdr = (PageHeader) page;
 	Offset		pd_lower = phdr->pd_lower;
@@ -1177,6 +1177,7 @@ PageIndexMultiDelete(Page page, OffsetNumber *itemnos, int nitems)
 	int			nextitm;
 	OffsetNumber offnum;
 	bool		presorted = true;	/* For now */
+	int			nbitems = nitems;
 
 	Assert(nitems <= MaxIndexTuplesPerPage);
 
@@ -1188,10 +1189,13 @@ PageIndexMultiDelete(Page page, OffsetNumber *itemnos, int nitems)
 	 *
 	 * TODO: tune the magic number here
 	 */
-	if (nitems <= 2)
+	if (nbitems <= 2)
 	{
-		while (--nitems >= 0)
-			PageIndexTupleDelete(page, itemnos[nitems]);
+		/*
+		 * Be careful that nbitems has to be an int and not an uint16.
+		 */
+		while (--nbitems >= 0)
+			PageIndexTupleDelete(page, itemnos[nbitems]);
 		return;
 	}
 

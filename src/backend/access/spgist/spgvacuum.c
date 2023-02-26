@@ -493,8 +493,8 @@ vacuumRedirectAndPlaceholder(Relation index, Buffer buffer)
 {
 	Page		page = BufferGetPage(buffer);
 	SpGistPageOpaque opaque = SpGistPageGetOpaque(page);
-	OffsetNumber i,
-				max = PageGetMaxOffsetNumber(page),
+	uint16 i;
+	OffsetNumber max = PageGetMaxOffsetNumber(page),
 				firstPlaceholder = InvalidOffsetNumber;
 	bool		hasNonPlaceholder = false;
 	bool		hasUpdate = false;

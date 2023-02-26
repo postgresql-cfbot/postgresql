@@ -208,7 +208,7 @@ extern TransactionId index_compute_xid_horizon_for_tuples(Relation irel,
 														  Relation hrel,
 														  Buffer ibuf,
 														  OffsetNumber *itemnos,
-														  int nitems);
+														  uint16 nitems);
 
 /*
  * heap-or-index access to system catalogs (in genam.c)

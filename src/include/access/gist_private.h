@@ -444,12 +444,12 @@ extern void gistXLogPageReuse(Relation rel, BlockNumber blkno,
 							  FullTransactionId deleteXid);
 
 extern XLogRecPtr gistXLogUpdate(Buffer buffer,
-								 OffsetNumber *todelete, int ntodelete,
+								 OffsetNumber *todelete, uint16 ntodelete,
 								 IndexTuple *itup, int ituplen,
 								 Buffer leftchildbuf);
 
 extern XLogRecPtr gistXLogDelete(Buffer buffer, OffsetNumber *todelete,
-								 int ntodelete, TransactionId snapshotConflictHorizon);
+								 uint16 ntodelete, TransactionId snapshotConflictHorizon);
 
 extern XLogRecPtr gistXLogSplit(bool page_is_leaf,
 								SplitedPageLayout *dist,

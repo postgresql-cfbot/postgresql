@@ -42,8 +42,8 @@ static void _bt_log_reuse_page(Relation rel, BlockNumber blkno,
 							   FullTransactionId safexid);
 static void _bt_delitems_delete(Relation rel, Buffer buf,
 								TransactionId snapshotConflictHorizon,
-								OffsetNumber *deletable, int ndeletable,
-								BTVacuumPosting *updatable, int nupdatable);
+								OffsetNumber *deletable, uint16 ndeletable,
+								BTVacuumPosting *updatable, uint16 nupdatable);
 static char *_bt_delitems_update(BTVacuumPosting *updatable, int nupdatable,
 								 OffsetNumber *updatedoffsets,
 								 Size *updatedbuflen, bool needswal);
@@ -1164,8 +1164,8 @@ _bt_pageinit(Page page, Size size)
  */
 void
 _bt_delitems_vacuum(Relation rel, Buffer buf,
-					OffsetNumber *deletable, int ndeletable,
-					BTVacuumPosting *updatable, int nupdatable)
+					OffsetNumber *deletable, uint16 ndeletable,
+					BTVacuumPosting *updatable, uint16 nupdatable)
 {
 	Page		page = BufferGetPage(buf);
 	BTPageOpaque opaque;
@@ -1295,8 +1295,8 @@ _bt_delitems_vacuum(Relation rel, Buffer buf,
 static void
 _bt_delitems_delete(Relation rel, Buffer buf,
 					TransactionId snapshotConflictHorizon,
-					OffsetNumber *deletable, int ndeletable,
-					BTVacuumPosting *updatable, int nupdatable)
+					OffsetNumber *deletable, uint16 ndeletable,
+					BTVacuumPosting *updatable, uint16 nupdatable)
 {
 	Page		page = BufferGetPage(buf);
 	BTPageOpaque opaque;
@@ -1532,7 +1532,7 @@ _bt_delitems_delete_check(Relation rel, Buffer buf, Relation heapRel,
 	Page		page = BufferGetPage(buf);
 	TransactionId snapshotConflictHorizon;
 	OffsetNumber postingidxoffnum = InvalidOffsetNumber;
-	int			ndeletable = 0,
+	uint16			ndeletable = 0,
 				nupdatable = 0;
 	OffsetNumber deletable[MaxIndexTuplesPerPage];
 	BTVacuumPosting updatable[MaxIndexTuplesPerPage];

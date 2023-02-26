@@ -886,7 +886,7 @@ spgRedoVacuumRedirect(XLogReaderState *record)
 	{
 		Page		page = BufferGetPage(buffer);
 		SpGistPageOpaque opaque = SpGistPageGetOpaque(page);
-		int			i;
+		uint16			i;
 
 		/* Convert redirect pointers to plain placeholders */
 		for (i = 0; i < xldata->nToPlaceholder; i++)

@@ -631,7 +631,7 @@ gistXLogPageReuse(Relation rel, BlockNumber blkno, FullTransactionId deleteXid)
  */
 XLogRecPtr
 gistXLogUpdate(Buffer buffer,
-			   OffsetNumber *todelete, int ntodelete,
+			   OffsetNumber *todelete, uint16 ntodelete,
 			   IndexTuple *itup, int ituplen,
 			   Buffer leftchildbuf)
 {
@@ -671,7 +671,7 @@ gistXLogUpdate(Buffer buffer,
  * standby queries and needs special handling.
  */
 XLogRecPtr
-gistXLogDelete(Buffer buffer, OffsetNumber *todelete, int ntodelete,
+gistXLogDelete(Buffer buffer, OffsetNumber *todelete, uint16 ntodelete,
 			   TransactionId snapshotConflictHorizon)
 {
 	gistxlogDelete xlrec;

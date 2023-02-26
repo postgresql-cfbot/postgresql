@@ -534,7 +534,7 @@ extern bool spgproperty(Oid index_oid, int attno,
 extern void spgUpdateNodeLink(SpGistInnerTuple tup, int nodeN,
 							  BlockNumber blkno, OffsetNumber offset);
 extern void spgPageIndexMultiDelete(SpGistState *state, Page page,
-									OffsetNumber *itemnos, int nitems,
+									OffsetNumber *itemnos, uint16 nitems,
 									int firststate, int reststate,
 									BlockNumber blkno, OffsetNumber offnum);
 extern bool spgdoinsert(Relation index, SpGistState *state,

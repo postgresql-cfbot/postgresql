@@ -20,6 +20,7 @@
 #include <signal.h>
 
 #include "access/detoast.h"
+#include "access/heapam.h"
 #include "access/htup_details.h"
 #include "access/transam.h"
 #include "access/xact.h"
@@ -45,6 +46,7 @@
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
+#include "utils/snapmgr.h"
 #include "utils/typcache.h"
 
 #define EXPECT_TRUE(expr)	\
@@ -1261,4 +1263,69 @@ get_columns_length(PG_FUNCTION_ARGS)
 	}
 
 	PG_RETURN_INT32(column_offset);
+}
+
+/*
+ * Used for testing SK_SEARCHNULL/SK_SEARCHNOTNULL support for heap-only scans.
+ *
+ * Returns the primary key of the first row found in the "phonebook" table for
+ * which "phone" is NULL or NOT NULL, depending on the "isnull" argument.
+ *
+ * Returns -1 if nothing was found.
+ */
+PG_FUNCTION_INFO_V1(phonebook_find_first_phone);
+
+typedef enum Anum_phonebook
+{
+	Anum_phonebook_id = 1,
+	Anum_phonebook_name,
+	Anum_phonebook_phone,
+	_Anum_phonebook_max,
+}			Anum_phonebook;
+
+#define Natts_phonebook (_Anum_phonebook_max - 1)
+
+Datum
+phonebook_find_first_phone(PG_FUNCTION_ARGS)
+{
+	bool		isnull = PG_GETARG_BOOL(0);
+	int			flags = SK_ISNULL;
+	int32		found_id = -1;
+	Relation	rel;
+	HeapTuple	tup;
+	TableScanDesc scan;
+	Datum		tbl_oid_datum;
+	ScanKeyData scanKey;
+
+	flags |= isnull ? SK_SEARCHNULL : SK_SEARCHNOTNULL;
+	ScanKeyEntryInitialize(
+						   &scanKey,
+						   flags,
+						   Anum_phonebook_phone,
+						   InvalidStrategy, /* no strategy */
+						   InvalidOid,	/* no strategy subtype */
+						   InvalidOid,	/* no collation */
+						   InvalidOid,	/* no reg proc for this */
+						   (Datum) 0);	/* constant */
+
+	tbl_oid_datum = DirectFunctionCall1(to_regclass,
+										CStringGetTextDatum("phonebook"));
+
+	rel = table_open(DatumGetObjectId(tbl_oid_datum), AccessShareLock);
+	scan = table_beginscan(rel, GetTransactionSnapshot(), 1, &scanKey);
+
+	while ((tup = heap_getnext(scan, ForwardScanDirection)) != NULL)
+	{
+		Datum		values[Natts_phonebook];
+		bool		isnull[Natts_phonebook];
+
+		heap_deform_tuple(tup, RelationGetDescr(rel), values, isnull);
+		found_id = DatumGetInt32(values[Anum_phonebook_id - 1]);
+		break;
+	}
+
+	table_endscan(scan);
+	table_close(rel, AccessShareLock);
+
+	PG_RETURN_INT32(found_id);
 }

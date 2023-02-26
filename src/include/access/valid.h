@@ -32,24 +32,41 @@ HeapKeyTest(HeapTuple tuple, TupleDesc tupdesc, int nkeys, ScanKey keys)
 
 	for (; cur_nkeys--; cur_key++)
 	{
-		Datum		atp;
 		bool		isnull;
-		Datum		test;
 
-		if (cur_key->sk_flags & SK_ISNULL)
-			return false;
+		if (cur_key->sk_flags & (SK_SEARCHNULL | SK_SEARCHNOTNULL))
+		{
+			/* special case: looking for NULL / NOT NULL values */
+			Assert(cur_key->sk_flags & SK_ISNULL);
 
-		atp = heap_getattr(tuple, cur_key->sk_attno, tupdesc, &isnull);
+			isnull = heap_attisnull(tuple, cur_key->sk_attno, tupdesc);
 
-		if (isnull)
-			return false;
+			if (isnull && (cur_key->sk_flags & SK_SEARCHNOTNULL))
+				return false;
 
-		test = FunctionCall2Coll(&cur_key->sk_func,
-								 cur_key->sk_collation,
-								 atp, cur_key->sk_argument);
+			if (!isnull && (cur_key->sk_flags & SK_SEARCHNULL))
+				return false;
+		}
+		else
+		{
+			Datum		atp;
+			Datum		test;
 
-		if (!DatumGetBool(test))
-			return false;
+			if (cur_key->sk_flags & SK_ISNULL)
+				return false;
+
+			atp = heap_getattr(tuple, cur_key->sk_attno, tupdesc, &isnull);
+
+			if (isnull)
+				return false;
+
+			test = FunctionCall2Coll(&cur_key->sk_func,
+									 cur_key->sk_collation,
+									 atp, cur_key->sk_argument);
+
+			if (!DatumGetBool(test))
+				return false;
+		}
 	}
 
 	return true;

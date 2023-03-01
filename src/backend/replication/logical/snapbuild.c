@@ -1812,7 +1812,9 @@ SnapBuildSerialize(SnapBuild *builder, XLogRecPtr lsn)
 	}
 
 	/* make sure we persist */
-	fsync_fname(path, false);
+	if (fsync_fname_ext(path, false, false, ERROR))
+		elog(ERROR, "failed to fsync");
+
 	fsync_fname("pg_logical/snapshots", true);
 
 	/*

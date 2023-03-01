@@ -1,5 +1,7 @@
 #! /bin/sh
 
+#set -e
+
 if [ $# -ne 2 ]; then
     echo "cores_backtrace.sh <os> <directory>"
     exit 1
@@ -8,9 +10,22 @@ fi
 os=$1
 directory=$2
 
+findargs=''
 case $os in
     freebsd|linux|macos)
-    ;;
+        ;;
+
+    cygwin)
+        for stack in $(find "$directory" -type f -name "*.stackdump") ; do
+            binary=`basename "$stack" .stackdump`
+            echo;echo;
+            echo "dumping ${stack} for ${binary}"
+            awk '/^0/{print $2}' $stack |addr2line -f -i -e ./build/tmp_install/usr/local/pgsql/bin/postgres.exe
+            #awk '/^0/{print $2}' $stack |addr2line -f -i -e "./build/src/backend/$binary.exe"
+        done
+        exit 0
+        ;;
+
     *)
         echo "unsupported operating system ${os}"
         exit 1
@@ -48,3 +63,5 @@ for corefile in $(find "$directory" -type f) ; do
         gdb --batch --quiet -ex "thread apply all bt full" -ex "quit" "$binary" "$corefile" 2>/dev/null
     fi
 done
+
+exit 0

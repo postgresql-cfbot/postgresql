@@ -16454,7 +16454,7 @@ fi
 
 # mingw has adopted a GNU-centric interpretation of optind/optreset,
 # so always use our version on Windows.
-if test "$PORTNAME" = "win32"; then
+if test "$PORTNAME" = "win32" -o "$PORTNAME" = "cygwin"; then
   case " $LIBOBJS " in
   *" getopt.$ac_objext "* ) ;;
   *) LIBOBJS="$LIBOBJS getopt.$ac_objext"

@@ -1275,6 +1275,43 @@ reset work_mem;
 \do - pg_catalog.int4
 \do && anyarray *
 
+-- check \df+
+BEGIN;
+CREATE ROLE regress_psql_df;
+CREATE OR REPLACE FUNCTION regress_psql_df_c (integer, integer, cstring, internal, integer)
+  RETURNS VOID
+  LANGUAGE c
+  IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/utf8_and_iso8859', 'utf8_to_iso8859';
+CREATE OR REPLACE FUNCTION regress_psql_df_internal (regclass, text)
+  RETURNS bigint
+  LANGUAGE internal
+  PARALLEL SAFE STRICT
+AS 'pg_relation_size';
+CREATE OR REPLACE FUNCTION regress_psql_df_sql ()
+  RETURNS VOID
+BEGIN ATOMIC
+  SELECT NULL;
+END;
+CREATE OR REPLACE FUNCTION regress_psql_df_plpgsql ()
+  RETURNS VOID
+  LANGUAGE plpgsql
+AS $$
+BEGIN
+  RETURN;
+END;
+$$;
+ALTER FUNCTION regress_psql_df_c (integer, integer, cstring, internal, integer)
+  OWNER TO regress_psql_df;
+ALTER FUNCTION regress_psql_df_internal (regclass, text)
+  OWNER TO regress_psql_df;
+ALTER FUNCTION regress_psql_df_sql ()
+  OWNER TO regress_psql_df;
+ALTER FUNCTION regress_psql_df_plpgsql ()
+  OWNER TO regress_psql_df;
+\df+ regress_psql_df_*
+ROLLBACK;
+
 -- check \sf
 \sf information_schema._pg_expandarray
 \sf+ information_schema._pg_expandarray

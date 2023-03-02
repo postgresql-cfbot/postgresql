@@ -5247,6 +5247,51 @@ reset work_mem;
  pg_catalog | &&   | anyarray      | anyarray       | boolean     | overlaps
 (1 row)
 
+-- check \df+
+BEGIN;
+CREATE ROLE regress_psql_df;
+CREATE OR REPLACE FUNCTION regress_psql_df_c (integer, integer, cstring, internal, integer)
+  RETURNS VOID
+  LANGUAGE c
+  IMMUTABLE PARALLEL SAFE STRICT
+AS '$libdir/utf8_and_iso8859', 'utf8_to_iso8859';
+CREATE OR REPLACE FUNCTION regress_psql_df_internal (regclass, text)
+  RETURNS bigint
+  LANGUAGE internal
+  PARALLEL SAFE STRICT
+AS 'pg_relation_size';
+CREATE OR REPLACE FUNCTION regress_psql_df_sql ()
+  RETURNS VOID
+BEGIN ATOMIC
+  SELECT NULL;
+END;
+CREATE OR REPLACE FUNCTION regress_psql_df_plpgsql ()
+  RETURNS VOID
+  LANGUAGE plpgsql
+AS $$
+BEGIN
+  RETURN;
+END;
+$$;
+ALTER FUNCTION regress_psql_df_c (integer, integer, cstring, internal, integer)
+  OWNER TO regress_psql_df;
+ALTER FUNCTION regress_psql_df_internal (regclass, text)
+  OWNER TO regress_psql_df;
+ALTER FUNCTION regress_psql_df_sql ()
+  OWNER TO regress_psql_df;
+ALTER FUNCTION regress_psql_df_plpgsql ()
+  OWNER TO regress_psql_df;
+\df+ regress_psql_df_*
+                                                                                                        List of functions
+ Schema |           Name           | Result data type |             Argument data types              | Type | Volatility | Parallel |      Owner      | Security | Access privileges | Language |  Internal name   | Description 
+--------+--------------------------+------------------+----------------------------------------------+------+------------+----------+-----------------+----------+-------------------+----------+------------------+-------------
+ public | regress_psql_df_c        | void             | integer, integer, cstring, internal, integer | func | immutable  | safe     | regress_psql_df | invoker  |                   | c        | utf8_to_iso8859  | 
+ public | regress_psql_df_internal | bigint           | regclass, text                               | func | volatile   | safe     | regress_psql_df | invoker  |                   | internal | pg_relation_size | 
+ public | regress_psql_df_plpgsql  | void             |                                              | func | volatile   | unsafe   | regress_psql_df | invoker  |                   | plpgsql  |                  | 
+ public | regress_psql_df_sql      | void             |                                              | func | volatile   | unsafe   | regress_psql_df | invoker  |                   | sql      |                  | 
+(4 rows)
+
+ROLLBACK;
 -- check \sf
 \sf information_schema._pg_expandarray
 CREATE OR REPLACE FUNCTION information_schema._pg_expandarray(anyarray, OUT x anyelement, OUT n integer)

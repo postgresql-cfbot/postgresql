@@ -3503,6 +3503,14 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 			switch (currentSource)
 			{
 				case XLOG_FROM_ARCHIVE:
+
+					/*
+					 * After failing to read from archive, we try to read from
+					 * pg_wal.
+					 */
+					currentSource = XLOG_FROM_PG_WAL;
+					break;
+
 				case XLOG_FROM_PG_WAL:
 
 					/*
@@ -3660,12 +3668,7 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 				if (randAccess)
 					curFileTLI = 0;
 
-				/*
-				 * Try to restore the file from archive, or read an existing
-				 * file from pg_wal.
-				 */
 				readFile = XLogFileReadAnyTLI(readSegNo, DEBUG2,
-											  currentSource == XLOG_FROM_ARCHIVE ? XLOG_FROM_ANY :
 											  currentSource);
 				if (readFile >= 0)
 					return XLREAD_SUCCESS;	/* success! */
@@ -4229,29 +4232,14 @@ XLogFileReadAnyTLI(XLogSegNo segno, int emode, XLogSource source)
 				continue;
 		}
 
-		if (source == XLOG_FROM_ANY || source == XLOG_FROM_ARCHIVE)
+		fd = XLogFileRead(segno, emode, tli, source, true);
+		if (fd != -1)
 		{
-			fd = XLogFileRead(segno, emode, tli,
-							  XLOG_FROM_ARCHIVE, true);
-			if (fd != -1)
-			{
+			if (source == XLOG_FROM_ARCHIVE)
 				elog(DEBUG1, "got WAL segment from archive");
-				if (!expectedTLEs)
-					expectedTLEs = tles;
-				return fd;
-			}
-		}
-
-		if (source == XLOG_FROM_ANY || source == XLOG_FROM_PG_WAL)
-		{
-			fd = XLogFileRead(segno, emode, tli,
-							  XLOG_FROM_PG_WAL, true);
-			if (fd != -1)
-			{
-				if (!expectedTLEs)
-					expectedTLEs = tles;
-				return fd;
-			}
+			if (!expectedTLEs)
+				expectedTLEs = tles;
+			return fd;
 		}
 	}
 

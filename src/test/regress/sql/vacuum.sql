@@ -231,10 +231,20 @@ BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
 ANALYZE vactst;
 COMMIT;
 
+CREATE VIEW vactst_vacuum_counts AS
+	SELECT CASE WHEN c.relname IS NULL THEN 'main' ELSE 'toast' END as rel,
+	s.vacuum_count
+	FROM pg_stat_all_tables s
+	LEFT JOIN pg_class c ON s.relid = c.reltoastrelid
+	WHERE c.relname = 'vactst' OR s.relname = 'vactst'
+	ORDER BY rel;
+
 -- PROCESS_TOAST option
 ALTER TABLE vactst ADD COLUMN t TEXT;
 ALTER TABLE vactst ALTER COLUMN t SET STORAGE EXTERNAL;
+SELECT pg_stat_reset();
 VACUUM (PROCESS_TOAST FALSE) vactst;
+SELECT * FROM vactst_vacuum_counts;
 VACUUM (PROCESS_TOAST FALSE, FULL) vactst;
 
 -- SKIP_DATABASE_STATS option
@@ -244,6 +254,21 @@ VACUUM (SKIP_DATABASE_STATS) vactst;
 VACUUM (ONLY_DATABASE_STATS);
 VACUUM (ONLY_DATABASE_STATS) vactst;  -- error
 
+-- PROCESS_MAIN option
+SELECT pg_stat_reset();
+VACUUM (PROCESS_MAIN FALSE) vactst;
+SELECT * FROM vactst_vacuum_counts;
+VACUUM (PROCESS_MAIN FALSE, PROCESS_TOAST FALSE) vactst;
+SELECT * FROM vactst_vacuum_counts;
+SELECT relfilenode AS main_filenode FROM pg_class WHERE relname = 'vactst' \gset
+SELECT t.relfilenode AS toast_filenode FROM pg_class c, pg_class t
+	WHERE c.reltoastrelid = t.oid AND c.relname = 'vactst' \gset
+VACUUM (PROCESS_MAIN FALSE, FULL) vactst;
+SELECT relfilenode = :main_filenode FROM pg_class WHERE relname = 'vactst';
+SELECT t.relfilenode = :toast_filenode FROM pg_class c, pg_class t
+	WHERE c.reltoastrelid = t.oid AND c.relname = 'vactst';
+
+DROP VIEW vactst_vacuum_counts;
 DROP TABLE vaccluster;
 DROP TABLE vactst;
 DROP TABLE vacparted;

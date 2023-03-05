@@ -37,36 +37,22 @@ while (<$feat>)
 	my ($feature_id,      $feature_name, $subfeature_id,
 		$subfeature_name, $is_supported, $comments) = split /\t/;
 
+	die if $subfeature_id;  # XXX
+
 	$is_supported eq $yesno || next;
 
 	$feature_name =~ s/</&lt;/g;
 	$feature_name =~ s/>/&gt;/g;
-	$subfeature_name =~ s/</&lt;/g;
-	$subfeature_name =~ s/>/&gt;/g;
 
 	print " <row>\n";
 
-	if ($subfeature_id)
-	{
-		print "  <entry>$feature_id-$subfeature_id</entry>\n";
-	}
-	else
-	{
-		print "  <entry>$feature_id</entry>\n";
-	}
+	print "  <entry>$feature_id</entry>\n";
 	print "  <entry>",
 	  defined($feature_packages{$feature_id})
 	  ? $feature_packages{$feature_id}
 	  : "",
 	  "</entry>\n";
-	if ($subfeature_id)
-	{
-		print "  <entry>$subfeature_name</entry>\n";
-	}
-	else
-	{
-		print "  <entry>$feature_name</entry>\n";
-	}
+	print "  <entry>$feature_name</entry>\n";
 	print "  <entry>$comments</entry>\n";
 
 	print " </row>\n";

@@ -721,8 +721,11 @@ endif
 
 icuopt = get_option('icu')
 if not icuopt.disabled()
-  icu = dependency('icu-uc', required: icuopt.enabled())
-  icu_i18n = dependency('icu-i18n', required: icuopt.enabled())
+
+  icu = cc.find_library('icuuc', required: icuopt.enabled(),
+     dirs: postgres_lib_d, header_include_directories: postgres_inc)
+  icu_i18n = cc.find_library('icui18n', required: icuopt.enabled(),
+    dirs: postgres_lib_d, header_include_directories: postgres_inc)
 
   if icu.found()
     cdata.set('USE_ICU', 1)

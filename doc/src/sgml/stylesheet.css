@@ -163,3 +163,6 @@ acronym		{ font-style: inherit; }
     width: 75%;
   }
 }
+
+/* Adequate spacing between columns in a simplelist non-inline table */
+table.simplelist td { padding-left: 2em; padding-right: 2em; }

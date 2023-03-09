@@ -397,3 +397,13 @@ select generate_series('2022-01-01 00:00'::timestamp,
 select * from generate_series('2020-01-01 00:00'::timestamp,
                               '2020-01-02 03:00'::timestamp,
                               '0 hour'::interval);
+
+-- test errors with reserved keywords
+SELECT timestamp '1995-08-06 01:01:01 epoch';
+SELECT timestamp '1995-08-06 01:01:01 infinity';
+SELECT timestamp '1995-08-06 01:01:01 -infinity';
+SELECT timestamp 'epoch 1995-08-06 01:01:01';
+SELECT timestamp 'infinity 1995-08-06 01:01:01';
+SELECT timestamp '-infinity 1995-08-06 01:01:01';
+SELECT timestamp 'today epoch';
+SELECT timestamp '-infinity infinity';

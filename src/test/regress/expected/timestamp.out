@@ -2125,3 +2125,36 @@ select * from generate_series('2020-01-01 00:00'::timestamp,
                               '2020-01-02 03:00'::timestamp,
                               '0 hour'::interval);
 ERROR:  step size cannot equal zero
+-- test errors with reserved keywords
+SELECT timestamp '1995-08-06 01:01:01 epoch';
+ERROR:  invalid input syntax for type timestamp: "1995-08-06 01:01:01 epoch"
+LINE 1: SELECT timestamp '1995-08-06 01:01:01 epoch';
+                         ^
+SELECT timestamp '1995-08-06 01:01:01 infinity';
+ERROR:  invalid input syntax for type timestamp: "1995-08-06 01:01:01 infinity"
+LINE 1: SELECT timestamp '1995-08-06 01:01:01 infinity';
+                         ^
+SELECT timestamp '1995-08-06 01:01:01 -infinity';
+ERROR:  invalid input syntax for type timestamp: "1995-08-06 01:01:01 -infinity"
+LINE 1: SELECT timestamp '1995-08-06 01:01:01 -infinity';
+                         ^
+SELECT timestamp 'epoch 1995-08-06 01:01:01';
+ERROR:  invalid input syntax for type timestamp: "epoch 1995-08-06 01:01:01"
+LINE 1: SELECT timestamp 'epoch 1995-08-06 01:01:01';
+                         ^
+SELECT timestamp 'infinity 1995-08-06 01:01:01';
+ERROR:  invalid input syntax for type timestamp: "infinity 1995-08-06 01:01:01"
+LINE 1: SELECT timestamp 'infinity 1995-08-06 01:01:01';
+                         ^
+SELECT timestamp '-infinity 1995-08-06 01:01:01';
+ERROR:  invalid input syntax for type timestamp: "-infinity 1995-08-06 01:01:01"
+LINE 1: SELECT timestamp '-infinity 1995-08-06 01:01:01';
+                         ^
+SELECT timestamp 'today epoch';
+ERROR:  invalid input syntax for type timestamp: "today epoch"
+LINE 1: SELECT timestamp 'today epoch';
+                         ^
+SELECT timestamp '-infinity infinity';
+ERROR:  invalid input syntax for type timestamp: "-infinity infinity"
+LINE 1: SELECT timestamp '-infinity infinity';
+                         ^

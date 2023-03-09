@@ -600,3 +600,13 @@ insert into tmptz values ('2017-01-18 00:00+00');
 explain (costs off)
 select * from tmptz where f1 at time zone 'utc' = '2017-01-18 00:00';
 select * from tmptz where f1 at time zone 'utc' = '2017-01-18 00:00';
+
+-- test errors with reserved keywords
+SELECT timestamptz '1995-08-06 01:01:01 epoch';
+SELECT timestamptz '1995-08-06 01:01:01 infinity';
+SELECT timestamptz '1995-08-06 01:01:01 -infinity';
+SELECT timestamptz 'epoch 1995-08-06 01:01:01';
+SELECT timestamptz 'infinity 1995-08-06 01:01:01';
+SELECT timestamptz '-infinity 1995-08-06 01:01:01';
+SELECT timestamptz 'today epoch';
+SELECT timestamptz '-infinity infinity';

@@ -1532,3 +1532,36 @@ select make_time(10, 55, 100.1);
 ERROR:  time field value out of range: 10:55:100.1
 select make_time(24, 0, 2.1);
 ERROR:  time field value out of range: 24:00:2.1
+-- test errors with reserved keywords
+SELECT date '1995-08-06 epoch';
+ERROR:  invalid input syntax for type date: "1995-08-06 epoch"
+LINE 1: SELECT date '1995-08-06 epoch';
+                    ^
+SELECT date '1995-08-06 infinity';
+ERROR:  invalid input syntax for type date: "1995-08-06 infinity"
+LINE 1: SELECT date '1995-08-06 infinity';
+                    ^
+SELECT date '1995-08-06 -infinity';
+ERROR:  invalid input syntax for type date: "1995-08-06 -infinity"
+LINE 1: SELECT date '1995-08-06 -infinity';
+                    ^
+SELECT date 'epoch 1995-08-06';
+ERROR:  invalid input syntax for type date: "epoch 1995-08-06"
+LINE 1: SELECT date 'epoch 1995-08-06';
+                    ^
+SELECT date 'infinity 1995-08-06';
+ERROR:  invalid input syntax for type date: "infinity 1995-08-06"
+LINE 1: SELECT date 'infinity 1995-08-06';
+                    ^
+SELECT date '-infinity 1995-08-06';
+ERROR:  invalid input syntax for type date: "-infinity 1995-08-06"
+LINE 1: SELECT date '-infinity 1995-08-06';
+                    ^
+SELECT date 'now infinity';
+ERROR:  invalid input syntax for type date: "now infinity"
+LINE 1: SELECT date 'now infinity';
+                    ^
+SELECT date '-infinity infinity';
+ERROR:  invalid input syntax for type date: "-infinity infinity"
+LINE 1: SELECT date '-infinity infinity';
+                    ^

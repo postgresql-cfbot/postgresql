@@ -3100,3 +3100,36 @@ select * from tmptz where f1 at time zone 'utc' = '2017-01-18 00:00';
  Tue Jan 17 16:00:00 2017 PST
 (1 row)
 
+-- test errors with reserved keywords
+SELECT timestamptz '1995-08-06 01:01:01 epoch';
+ERROR:  invalid input syntax for type timestamp with time zone: "1995-08-06 01:01:01 epoch"
+LINE 1: SELECT timestamptz '1995-08-06 01:01:01 epoch';
+                           ^
+SELECT timestamptz '1995-08-06 01:01:01 infinity';
+ERROR:  invalid input syntax for type timestamp with time zone: "1995-08-06 01:01:01 infinity"
+LINE 1: SELECT timestamptz '1995-08-06 01:01:01 infinity';
+                           ^
+SELECT timestamptz '1995-08-06 01:01:01 -infinity';
+ERROR:  invalid input syntax for type timestamp with time zone: "1995-08-06 01:01:01 -infinity"
+LINE 1: SELECT timestamptz '1995-08-06 01:01:01 -infinity';
+                           ^
+SELECT timestamptz 'epoch 1995-08-06 01:01:01';
+ERROR:  invalid input syntax for type timestamp with time zone: "epoch 1995-08-06 01:01:01"
+LINE 1: SELECT timestamptz 'epoch 1995-08-06 01:01:01';
+                           ^
+SELECT timestamptz 'infinity 1995-08-06 01:01:01';
+ERROR:  invalid input syntax for type timestamp with time zone: "infinity 1995-08-06 01:01:01"
+LINE 1: SELECT timestamptz 'infinity 1995-08-06 01:01:01';
+                           ^
+SELECT timestamptz '-infinity 1995-08-06 01:01:01';
+ERROR:  invalid input syntax for type timestamp with time zone: "-infinity 1995-08-06 01:01:01"
+LINE 1: SELECT timestamptz '-infinity 1995-08-06 01:01:01';
+                           ^
+SELECT timestamptz 'today epoch';
+ERROR:  invalid input syntax for type timestamp with time zone: "today epoch"
+LINE 1: SELECT timestamptz 'today epoch';
+                           ^
+SELECT timestamptz '-infinity infinity';
+ERROR:  invalid input syntax for type timestamp with time zone: "-infinity infinity"
+LINE 1: SELECT timestamptz '-infinity infinity';
+                           ^

@@ -373,3 +373,13 @@ select make_date(2013, 13, 1);
 select make_date(2013, 11, -1);
 select make_time(10, 55, 100.1);
 select make_time(24, 0, 2.1);
+
+-- test errors with reserved keywords
+SELECT date '1995-08-06 epoch';
+SELECT date '1995-08-06 infinity';
+SELECT date '1995-08-06 -infinity';
+SELECT date 'epoch 1995-08-06';
+SELECT date 'infinity 1995-08-06';
+SELECT date '-infinity 1995-08-06';
+SELECT date 'now infinity';
+SELECT date '-infinity infinity';

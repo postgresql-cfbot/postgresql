@@ -250,6 +250,9 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt,
 								pstrdup(RelationGetRelationName(rel)),
 								-1);
 
+			/* COPY TO should not process child tables. */
+			from->inh = false;
+
 			/* Build query */
 			select = makeNode(SelectStmt);
 			select->targetList = targetList;

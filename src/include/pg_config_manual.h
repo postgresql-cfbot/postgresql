@@ -364,3 +364,10 @@
  * Enable tracing of syncscan operations (see also the trace_syncscan GUC var).
  */
 /* #define TRACE_SYNCSCAN */
+
+/*
+ * When this is defined, it emulates the OpenSSL FIPS module by disabling old
+ * cryptographic functions such as MD5.  This is meant for ensuring that the
+ * test suites are FIPS-clean.  Not intended for production builds.
+ */
+/* #define FAKE_FIPS_MODE */

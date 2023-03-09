@@ -158,6 +158,17 @@ pg_cryptohash_init(pg_cryptohash_ctx *ctx)
 	if (ctx == NULL)
 		return -1;
 
+#ifdef FAKE_FIPS_MODE
+	switch (ctx->type)
+	{
+		case PG_MD5:
+			ctx->errreason = SSLerrmessage(ERR_R_UNSUPPORTED);
+			ctx->error = PG_CRYPTOHASH_ERROR_OPENSSL;
+			return -1;
+		default:
+	}
+#endif
+
 	switch (ctx->type)
 	{
 		case PG_MD5:

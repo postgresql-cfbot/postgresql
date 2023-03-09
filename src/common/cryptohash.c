@@ -44,7 +44,8 @@
 typedef enum pg_cryptohash_errno
 {
 	PG_CRYPTOHASH_ERROR_NONE = 0,
-	PG_CRYPTOHASH_ERROR_DEST_LEN
+	PG_CRYPTOHASH_ERROR_DEST_LEN,
+	PG_CRYPTOHASH_ERROR_UNSUPPORTED,
 } pg_cryptohash_errno;
 
 /* Internal pg_cryptohash_ctx structure */
@@ -94,14 +95,23 @@ pg_cryptohash_create(pg_cryptohash_type type)
 /*
  * pg_cryptohash_init
  *
- * Initialize a hash context.  Note that this implementation is designed
- * to never fail, so this always returns 0.
+ * Initialize a hash context.
  */
 int
 pg_cryptohash_init(pg_cryptohash_ctx *ctx)
 {
 	if (ctx == NULL)
 		return -1;
+
+#ifdef FAKE_FIPS_MODE
+	switch (ctx->type)
+	{
+		case PG_MD5:
+			ctx->error = PG_CRYPTOHASH_ERROR_UNSUPPORTED;
+			return -1;
+		default:
+	}
+#endif
 
 	switch (ctx->type)
 	{
@@ -271,6 +281,8 @@ pg_cryptohash_error(pg_cryptohash_ctx *ctx)
 			return _("success");
 		case PG_CRYPTOHASH_ERROR_DEST_LEN:
 			return _("destination buffer too small");
+		case PG_CRYPTOHASH_ERROR_UNSUPPORTED:
+			return _("unsupported");
 	}
 
 	Assert(false);

@@ -212,7 +212,7 @@ pg_logical_slot_get_changes_guts(FunctionCallInfo fcinfo, bool confirm, bool bin
 											   .segment_open = wal_segment_open,
 											   .segment_close = wal_segment_close),
 									LogicalOutputPrepareWrite,
-									LogicalOutputWrite, NULL);
+									LogicalOutputWrite, NULL, NULL);
 
 		/*
 		 * After the sanity checks in CreateDecodingContext, make sure the

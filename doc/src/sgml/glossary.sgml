@@ -1729,6 +1729,21 @@
    </glossdef>
   </glossentry>
 
+  <glossentry id="glossary-time-delayed-replication">
+   <glossterm>Time-delayed replication</glossterm>
+   <glossdef>
+    <para>
+     Replication setup that delays the application of changes by a specified
+     minimum time-delay period.
+    </para>
+    <para>
+     For more information, see
+     <xref linkend="guc-recovery-min-apply-delay"/> for physical replication
+     and <xref linkend="sql-createsubscription"/> for logical replication.
+    </para>
+   </glossdef>
+  </glossentry>
+
   <glossentry id="glossary-toast">
    <glossterm>TOAST</glossterm>
    <glossdef>

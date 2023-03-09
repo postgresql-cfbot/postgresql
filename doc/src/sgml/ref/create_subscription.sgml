@@ -349,7 +349,68 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
          </para>
         </listitem>
        </varlistentry>
-      </variablelist></para>
+
+       <varlistentry>
+        <term><literal>min_send_delay</literal> (<type>integer</type>)</term>
+        <listitem>
+         <para>
+          By default, the publisher sends changes as soon as possible. This
+          parameter allows the user to delay changes by the given time period.
+          If the value is specified without units, it is taken as milliseconds.
+          The default is zero (no delay). See <xref linkend="config-setting-names-values"/>
+          for details on the available valid time units.
+         </para>
+         <para>
+          The delay is effective only when the initial table synchronization
+          has been finished. However, there is a possibility that the table
+          status updated in <link linkend="catalog-pg-subscription-rel"><structname>pg_subscription_rel</structname></link>
+          could be delayed in getting to the "ready" state, and also two-phase
+          (if specified) could be delayed in getting to "enabled".
+         </para>
+         <para>
+          The delay does not take into account the overhead of time spent
+          transferring the transaction. Therefore, the arrival time at the
+          subscriber may be delayed more than the specified
+          <literal>min_send_delay</literal> time.
+         </para>
+         <warning>
+           <para>
+            Delaying the replication means there is a much longer time between
+            making a change on the publisher, and that change being committed
+            on the subscriber. This can impact the performance of synchronous
+            replication. See <xref linkend="guc-synchronous-commit"/>
+            parameter.
+           </para>
+         </warning>
+         <caution>
+           <para>
+            While delaying the sending of changes, there is a possibility that
+            WAL segment files cannot be recycled, which can eventually lead to
+            exceeding the available disk space on the publisher. This is
+            because the replication slot related to the subscription regards
+            these WALs as needed until they are sent to the subscriber and
+            flushed. To avoid this, the <varname>max_slot_wal_keep_size</varname>
+            on the publisher and <literal>min_send_delay</literal> must be
+            tuned, and these values depend on the machine environment and
+            workload. There are several methods to check the amount of delayed
+            WALs, and a typical way is to calculate it from the
+            <link linkend="view-pg-replication-slots"><structname>pg_replication_slots</structname></link>
+            system view and <function>pg_current_wal_lsn</function>. Following
+            shows the amounts of WALs that are delayed the sending in bytes.
+<programlisting>
+SELECT pg_current_wal_lsn() - pg_replication_slots.restart_lsn
+       AS "amount of delaying WALs" FROM pg_replication_slots;
+ amount of delaying WALs
+-------------------------
+              1688964992
+(1 row)
+</programlisting>
+           </para>
+         </caution>
+        </listitem>
+       </varlistentry>
+      </variablelist>
+     </para>
 
     </listitem>
    </varlistentry>
@@ -418,6 +479,11 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
   <para>
    Subscriptions having several publications in which the same table has been
    published with different column lists are not supported.
+  </para>
+
+  <para>
+   A non-zero <literal>min_send_delay</literal> parameter is not allowed when
+   streaming in parallel mode.
   </para>
 
   <para>

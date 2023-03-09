@@ -3900,7 +3900,8 @@ maybe_reread_subscription(void)
 		newsub->stream != MySubscription->stream ||
 		strcmp(newsub->origin, MySubscription->origin) != 0 ||
 		newsub->owner != MySubscription->owner ||
-		!equal(newsub->publications, MySubscription->publications))
+		!equal(newsub->publications, MySubscription->publications) ||
+		newsub->minsenddelay != MySubscription->minsenddelay)
 	{
 		if (am_parallel_apply_worker())
 			ereport(LOG,
@@ -4619,9 +4620,20 @@ ApplyWorkerMain(Datum main_arg)
 
 	options.proto.logical.twophase = false;
 	options.proto.logical.origin = pstrdup(MySubscription->origin);
+	options.proto.logical.min_send_delay = 0;
 
 	if (!am_tablesync_worker())
 	{
+		/*
+		 * We support time-delayed logical replication only for the apply
+		 * worker. This is because if we support delay during the initial sync
+		 * then once we reach the limit of tablesync workers it would impose a
+		 * delay for each subsequent worker. That would cause initial table
+		 * synchronization completion to take a long time.
+		 */
+		if (server_version >= 160000 && MySubscription->minsenddelay > 0)
+			options.proto.logical.min_send_delay = MySubscription->minsenddelay;
+
 		/*
 		 * Even when the two_phase mode is requested by the user, it remains
 		 * as the tri-state PENDING until all tablesyncs have reached READY

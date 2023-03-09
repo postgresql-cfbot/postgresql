@@ -187,6 +187,7 @@ typedef struct
 									 * prepare time */
 			char	   *origin; /* Only publish data originating from the
 								 * specified origin */
+			int32		min_send_delay; /* The minimum send delay (ms) */
 		}			logical;
 	}			proto;
 } WalRcvStreamOptions;

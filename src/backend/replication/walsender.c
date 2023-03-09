@@ -252,6 +252,7 @@ static void WalSndPrepareWrite(LogicalDecodingContext *ctx, XLogRecPtr lsn, Tran
 static void WalSndWriteData(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid, bool last_write);
 static void WalSndUpdateProgress(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid,
 								 bool skipped_xact);
+static void WalSndDelay(LogicalDecodingContext *ctx, TransactionId xid, TimestampTz delay_start);
 static XLogRecPtr WalSndWaitForWal(XLogRecPtr loc);
 static void LagTrackerWrite(XLogRecPtr lsn, TimestampTz local_flush_time);
 static TimeOffset LagTrackerRead(int head, XLogRecPtr lsn, TimestampTz now);
@@ -1126,7 +1127,7 @@ CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 												   .segment_open = WalSndSegmentOpen,
 												   .segment_close = wal_segment_close),
 										WalSndPrepareWrite, WalSndWriteData,
-										WalSndUpdateProgress);
+										WalSndUpdateProgress, WalSndDelay);
 
 		/*
 		 * Signal that we don't need the timeout mechanism. We're just
@@ -1285,7 +1286,7 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 										 .segment_open = WalSndSegmentOpen,
 										 .segment_close = wal_segment_close),
 							  WalSndPrepareWrite, WalSndWriteData,
-							  WalSndUpdateProgress);
+							  WalSndUpdateProgress, WalSndDelay);
 	xlogreader = logical_decoding_ctx->reader;
 
 	WalSndSetState(WALSNDSTATE_CATCHUP);
@@ -3848,4 +3849,92 @@ LagTrackerRead(int head, XLogRecPtr lsn, TimestampTz now)
 	/* Return the elapsed time since local flush time in microseconds. */
 	Assert(time != 0);
 	return now - time;
+}
+
+/*
+ * LogicalDecodingContext 'delay' callback.
+ *
+ * Wait long enough to make sure a transaction is applied at least
+ * min_send_delay time period after it is performed at the publisher.
+ *
+ * delay_start is the transaction end time.
+ */
+static void
+WalSndDelay(LogicalDecodingContext *ctx, TransactionId xid, TimestampTz delay_start)
+{
+	/* Apply the delay by the latch mechanism */
+	while (true)
+	{
+		TimestampTz now;
+		TimestampTz delayUntil;
+		long		remaining_wait_time_ms;
+		long		timeout_sleeptime_ms;
+
+		ResetLatch(MyLatch);
+
+		CHECK_FOR_INTERRUPTS();
+
+		/* This might change wal_sender_timeout */
+		if (ConfigReloadPending)
+		{
+			ConfigReloadPending = false;
+			ProcessConfigFile(PGC_SIGHUP);
+		}
+
+		/* Check for input from the client */
+		ProcessRepliesIfAny();
+
+		/* Die if timeout was reached */
+		WalSndCheckTimeOut();
+
+		/* Send keepalive if the time has come */
+		WalSndKeepaliveIfNecessary();
+
+		/* Try to flush pending output to the client */
+		if (pq_flush_if_writable() != 0)
+			WalSndShutdown();
+
+		/*
+		 * If we've requested to shut down, exit the process.
+		 *
+		 * This is unlike handling at other places where we allow complete WAL
+		 * to be sent before shutdown because we don't want the delayed
+		 * transactions to be applied downstream. This will allow one to use
+		 * the data from downstream in case of some unwanted operations on the
+		 * current node.
+		 */
+		if (got_STOPPING)
+		{
+			QueryCompletion qc;
+
+			/* Inform the standby that XLOG streaming is done */
+			SetQueryCompletion(&qc, CMDTAG_COPY, 0);
+			EndCommand(&qc, DestRemote, false);
+			pq_flush();
+
+			proc_exit(0);
+		}
+
+		now = GetCurrentTimestamp();
+		delayUntil = TimestampTzPlusMilliseconds(delay_start, ctx->min_send_delay);
+		remaining_wait_time_ms = TimestampDifferenceMilliseconds(now, delayUntil);
+
+		/*
+		 * Exit without arming the latch if it's already past time to send
+		 * this transaction.
+		 */
+		if (remaining_wait_time_ms <= 0)
+			break;
+
+		/* Sleep until appropriate time */
+		timeout_sleeptime_ms = WalSndComputeSleeptime(now);
+
+		elog(DEBUG2, "time-delayed replication for txid %u, delay_time = %d ms, remaining wait time: %ld ms",
+			 xid, (int) ctx->min_send_delay, remaining_wait_time_ms);
+
+		/* Sleep until we get reply from worker or we time out */
+		WalSndWait(WL_SOCKET_READABLE,
+				   Min(timeout_sleeptime_ms, remaining_wait_time_ms),
+				   WAIT_EVENT_WALSENDER_SEND_DELAY);
+	}
 }

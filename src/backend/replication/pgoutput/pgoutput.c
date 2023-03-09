@@ -286,6 +286,7 @@ parse_output_parameters(List *options, PGOutputData *data)
 	bool		streaming_given = false;
 	bool		two_phase_option_given = false;
 	bool		origin_option_given = false;
+	bool		min_send_delay_option_given = false;
 
 	data->binary = false;
 	data->streaming = LOGICALREP_STREAM_OFF;
@@ -397,6 +398,32 @@ parse_output_parameters(List *options, PGOutputData *data)
 						errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 						errmsg("unrecognized origin value: \"%s\"", data->origin));
 		}
+		else if (strcmp(defel->defname, "min_send_delay") == 0)
+		{
+			unsigned long delay_val;
+			char	   *endptr;
+
+			if (min_send_delay_option_given)
+				ereport(ERROR,
+						errcode(ERRCODE_SYNTAX_ERROR),
+						errmsg("conflicting or redundant options"));
+			min_send_delay_option_given = true;
+
+			errno = 0;
+			delay_val = strtoul(strVal(defel->arg), &endptr, 10);
+			if (errno != 0 || *endptr != '\0')
+				ereport(ERROR,
+						errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						errmsg("invalid min_send_delay"));
+
+			if (delay_val > PG_INT32_MAX)
+				ereport(ERROR,
+						errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						errmsg("min_send_delay \"%s\" out of range",
+							   strVal(defel->arg)));
+
+			data->min_send_delay = (int32) delay_val;
+		}
 		else
 			elog(ERROR, "unrecognized pgoutput option: %s", defel->defname);
 	}
@@ -502,6 +529,12 @@ pgoutput_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
 					 errmsg("two-phase commit requested, but not supported by output plugin")));
 		else
 			ctx->twophase_opt_given = true;
+
+		/*
+		 * Remember the delay time period to be used later before sending the
+		 * changes.
+		 */
+		ctx->min_send_delay = data->min_send_delay;
 
 		/* Init publication state. */
 		data->publications = NIL;

@@ -247,6 +247,12 @@
    target table.
   </para>
 
+  <para>
+   A subscription can delay the receipt of changes by specifying the
+   <literal>min_send_delay</literal> subscription parameter. See
+   <xref linkend="sql-createsubscription"/> for details.
+  </para>
+
   <sect2 id="logical-replication-subscription-slot">
    <title>Replication Slot Management</title>
 

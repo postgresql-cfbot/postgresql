@@ -30,6 +30,11 @@ typedef void (*LogicalOutputPluginWriterUpdateProgress) (struct LogicalDecodingC
 														 bool skipped_xact
 );
 
+typedef void (*LogicalOutputPluginWriterDelay) (struct LogicalDecodingContext *lr,
+												TransactionId xid,
+												TimestampTz start_time
+);
+
 typedef struct LogicalDecodingContext
 {
 	/* memory context this is all allocated in */
@@ -64,6 +69,7 @@ typedef struct LogicalDecodingContext
 	LogicalOutputPluginWriterPrepareWrite prepare_write;
 	LogicalOutputPluginWriterWrite write;
 	LogicalOutputPluginWriterUpdateProgress update_progress;
+	LogicalOutputPluginWriterDelay delay_send;
 
 	/*
 	 * Output buffer.
@@ -101,6 +107,12 @@ typedef struct LogicalDecodingContext
 	bool		twophase_opt_given;
 
 	/*
+	 * The minimum delay, in milliseconds, by the publisher before sending all
+	 * the changes.
+	 */
+	int32		min_send_delay;
+
+	/*
 	 * State for writing output.
 	 */
 	bool		accept_writes;
@@ -121,14 +133,16 @@ extern LogicalDecodingContext *CreateInitDecodingContext(const char *plugin,
 														 XLogReaderRoutine *xl_routine,
 														 LogicalOutputPluginWriterPrepareWrite prepare_write,
 														 LogicalOutputPluginWriterWrite do_write,
-														 LogicalOutputPluginWriterUpdateProgress update_progress);
+														 LogicalOutputPluginWriterUpdateProgress update_progress,
+														 LogicalOutputPluginWriterDelay delay_send);
 extern LogicalDecodingContext *CreateDecodingContext(XLogRecPtr start_lsn,
 													 List *output_plugin_options,
 													 bool fast_forward,
 													 XLogReaderRoutine *xl_routine,
 													 LogicalOutputPluginWriterPrepareWrite prepare_write,
 													 LogicalOutputPluginWriterWrite do_write,
-													 LogicalOutputPluginWriterUpdateProgress update_progress);
+													 LogicalOutputPluginWriterUpdateProgress update_progress,
+													 LogicalOutputPluginWriterDelay delay_send);
 extern void DecodingContextFindStartpoint(LogicalDecodingContext *ctx);
 extern bool DecodingContextReady(LogicalDecodingContext *ctx);
 extern void FreeDecodingContext(LogicalDecodingContext *ctx);

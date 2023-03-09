@@ -2349,6 +2349,11 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
       <entry>Waiting to acquire an exclusive lock to truncate off any
        empty pages at the end of a table vacuumed.</entry>
      </row>
+     <row>
+      <entry><literal>WalSenderSendDelay</literal></entry>
+      <entry>Waiting while sending changes for time-delayed logical replication
+      in the WAL sender process.</entry>
+     </row>
     </tbody>
    </tgroup>
   </table>

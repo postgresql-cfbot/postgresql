@@ -677,6 +677,15 @@ DecodeCommit(LogicalDecodingContext *ctx, XLogRecordBuffer *buf,
 	}
 
 	/*
+	 * Delay sending the changes if required. For streaming transactions, this
+	 * means a delay in sending the last stream but that is OK because on the
+	 * downstream the changes will be applied only after receiving the last
+	 * stream.
+	 */
+	if (ctx->min_send_delay > 0 && ctx->delay_send)
+		ctx->delay_send(ctx, xid, commit_time);
+
+	/*
 	 * Send the final commit record if the transaction data is already
 	 * decoded, otherwise, process the entire transaction.
 	 */

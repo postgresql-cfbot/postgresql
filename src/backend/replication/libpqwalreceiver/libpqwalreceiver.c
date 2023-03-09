@@ -443,6 +443,11 @@ libpqrcv_startstreaming(WalReceiverConn *conn,
 			PQserverVersion(conn->streamConn) >= 140000)
 			appendStringInfoString(&cmd, ", binary 'true'");
 
+		if (options->proto.logical.min_send_delay > 0 &&
+			PQserverVersion(conn->streamConn) >= 160000)
+			appendStringInfo(&cmd, ", min_send_delay '%d'",
+							 options->proto.logical.min_send_delay);
+
 		appendStringInfoChar(&cmd, ')');
 	}
 	else

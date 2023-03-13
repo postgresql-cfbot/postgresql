@@ -26,6 +26,8 @@
 #include "catalog/dependency.h"
 #include "catalog/objectaccess.h"
 #include "catalog/pg_authid.h"
+#include "catalog/pg_colenckey.h"
+#include "catalog/pg_colmasterkey.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_conversion.h"
 #include "catalog/pg_database.h"
@@ -1993,6 +1995,254 @@ OpfamilyIsVisible(Oid opfid)
 	}
 
 	ReleaseSysCache(opftup);
+
+	return visible;
+}
+
+/*
+ * get_cek_oid - find a CEK by possibly qualified name
+ */
+Oid
+get_cek_oid(List *names, bool missing_ok)
+{
+	char	   *schemaname;
+	char	   *cekname;
+	Oid			namespaceId;
+	Oid			cekoid = InvalidOid;
+	ListCell   *l;
+
+	/* deconstruct the name list */
+	DeconstructQualifiedName(names, &schemaname, &cekname);
+
+	if (schemaname)
+	{
+		/* use exact schema given */
+		namespaceId = LookupExplicitNamespace(schemaname, missing_ok);
+		if (missing_ok && !OidIsValid(namespaceId))
+			cekoid = InvalidOid;
+		else
+			cekoid = GetSysCacheOid2(CEKNAMENSP, Anum_pg_colenckey_oid,
+									 PointerGetDatum(cekname),
+									 ObjectIdGetDatum(namespaceId));
+	}
+	else
+	{
+		/* search for it in search path */
+		recomputeNamespacePath();
+
+		foreach(l, activeSearchPath)
+		{
+			namespaceId = lfirst_oid(l);
+
+			if (namespaceId == myTempNamespace)
+				continue;		/* do not look in temp namespace */
+
+			cekoid = GetSysCacheOid2(CEKNAMENSP, Anum_pg_colenckey_oid,
+									 PointerGetDatum(cekname),
+									 ObjectIdGetDatum(namespaceId));
+			if (OidIsValid(cekoid))
+				return cekoid;
+		}
+	}
+
+	/* Not found in path */
+	if (!OidIsValid(cekoid) && !missing_ok)
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("column encryption key \"%s\" does not exist",
+						NameListToString(names))));
+	return cekoid;
+}
+
+/*
+ * CEKIsVisible
+ *		Determine whether a CEK (identified by OID) is visible in the
+ *		current search path.  Visible means "would be found by searching
+ *		for the unqualified CEK name".
+ */
+bool
+CEKIsVisible(Oid cekid)
+{
+	HeapTuple	tup;
+	Form_pg_colenckey form;
+	Oid			namespace;
+	bool		visible;
+
+	tup = SearchSysCache1(CEKOID, ObjectIdGetDatum(cekid));
+	if (!HeapTupleIsValid(tup))
+		elog(ERROR, "cache lookup failed for column encryption key %u", cekid);
+	form = (Form_pg_colenckey) GETSTRUCT(tup);
+
+	recomputeNamespacePath();
+
+	/*
+	 * Quick check: if it ain't in the path at all, it ain't visible. Items in
+	 * the system namespace are surely in the path and so we needn't even do
+	 * list_member_oid() for them.
+	 */
+	namespace = form->ceknamespace;
+	if (namespace != PG_CATALOG_NAMESPACE &&
+		!list_member_oid(activeSearchPath, namespace))
+		visible = false;
+	else
+	{
+		/*
+		 * If it is in the path, it might still not be visible; it could be
+		 * hidden by another parser of the same name earlier in the path. So
+		 * we must do a slow check for conflicting CEKs.
+		 */
+		char	   *name = NameStr(form->cekname);
+		ListCell   *l;
+
+		visible = false;
+		foreach(l, activeSearchPath)
+		{
+			Oid			namespaceId = lfirst_oid(l);
+
+			if (namespaceId == myTempNamespace)
+				continue;		/* do not look in temp namespace */
+
+			if (namespaceId == namespace)
+			{
+				/* Found it first in path */
+				visible = true;
+				break;
+			}
+			if (SearchSysCacheExists2(CEKNAMENSP,
+									  PointerGetDatum(name),
+									  ObjectIdGetDatum(namespaceId)))
+			{
+				/* Found something else first in path */
+				break;
+			}
+		}
+	}
+
+	ReleaseSysCache(tup);
+
+	return visible;
+}
+
+/*
+ * get_cmk_oid - find a CMK by possibly qualified name
+ */
+Oid
+get_cmk_oid(List *names, bool missing_ok)
+{
+	char	   *schemaname;
+	char	   *cmkname;
+	Oid			namespaceId;
+	Oid			cmkoid = InvalidOid;
+	ListCell   *l;
+
+	/* deconstruct the name list */
+	DeconstructQualifiedName(names, &schemaname, &cmkname);
+
+	if (schemaname)
+	{
+		/* use exact schema given */
+		namespaceId = LookupExplicitNamespace(schemaname, missing_ok);
+		if (missing_ok && !OidIsValid(namespaceId))
+			cmkoid = InvalidOid;
+		else
+			cmkoid = GetSysCacheOid2(CMKNAMENSP, Anum_pg_colmasterkey_oid,
+									 PointerGetDatum(cmkname),
+									 ObjectIdGetDatum(namespaceId));
+	}
+	else
+	{
+		/* search for it in search path */
+		recomputeNamespacePath();
+
+		foreach(l, activeSearchPath)
+		{
+			namespaceId = lfirst_oid(l);
+
+			if (namespaceId == myTempNamespace)
+				continue;		/* do not look in temp namespace */
+
+			cmkoid = GetSysCacheOid2(CMKNAMENSP, Anum_pg_colmasterkey_oid,
+									 PointerGetDatum(cmkname),
+									 ObjectIdGetDatum(namespaceId));
+			if (OidIsValid(cmkoid))
+				return cmkoid;
+		}
+	}
+
+	/* Not found in path */
+	if (!OidIsValid(cmkoid) && !missing_ok)
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("column master key \"%s\" does not exist",
+						NameListToString(names))));
+	return cmkoid;
+}
+
+/*
+ * CMKIsVisible
+ *		Determine whether a CMK (identified by OID) is visible in the
+ *		current search path.  Visible means "would be found by searching
+ *		for the unqualified CMK name".
+ */
+bool
+CMKIsVisible(Oid cmkid)
+{
+	HeapTuple	tup;
+	Form_pg_colmasterkey form;
+	Oid			namespace;
+	bool		visible;
+
+	tup = SearchSysCache1(CMKOID, ObjectIdGetDatum(cmkid));
+	if (!HeapTupleIsValid(tup))
+		elog(ERROR, "cache lookup failed for column master key %u", cmkid);
+	form = (Form_pg_colmasterkey) GETSTRUCT(tup);
+
+	recomputeNamespacePath();
+
+	/*
+	 * Quick check: if it ain't in the path at all, it ain't visible. Items in
+	 * the system namespace are surely in the path and so we needn't even do
+	 * list_member_oid() for them.
+	 */
+	namespace = form->cmknamespace;
+	if (namespace != PG_CATALOG_NAMESPACE &&
+		!list_member_oid(activeSearchPath, namespace))
+		visible = false;
+	else
+	{
+		/*
+		 * If it is in the path, it might still not be visible; it could be
+		 * hidden by another parser of the same name earlier in the path. So
+		 * we must do a slow check for conflicting CMKs.
+		 */
+		char	   *name = NameStr(form->cmkname);
+		ListCell   *l;
+
+		visible = false;
+		foreach(l, activeSearchPath)
+		{
+			Oid			namespaceId = lfirst_oid(l);
+
+			if (namespaceId == myTempNamespace)
+				continue;		/* do not look in temp namespace */
+
+			if (namespaceId == namespace)
+			{
+				/* Found it first in path */
+				visible = true;
+				break;
+			}
+			if (SearchSysCacheExists2(CMKNAMENSP,
+									  PointerGetDatum(name),
+									  ObjectIdGetDatum(namespaceId)))
+			{
+				/* Found something else first in path */
+				break;
+			}
+		}
+	}
+
+	ReleaseSysCache(tup);
 
 	return visible;
 }
@@ -4565,6 +4815,28 @@ pg_opfamily_is_visible(PG_FUNCTION_ARGS)
 		PG_RETURN_NULL();
 
 	PG_RETURN_BOOL(OpfamilyIsVisible(oid));
+}
+
+Datum
+pg_cek_is_visible(PG_FUNCTION_ARGS)
+{
+	Oid			oid = PG_GETARG_OID(0);
+
+	if (!SearchSysCacheExists1(CEKOID, ObjectIdGetDatum(oid)))
+		PG_RETURN_NULL();
+
+	PG_RETURN_BOOL(CEKIsVisible(oid));
+}
+
+Datum
+pg_cmk_is_visible(PG_FUNCTION_ARGS)
+{
+	Oid			oid = PG_GETARG_OID(0);
+
+	if (!SearchSysCacheExists1(CMKOID, ObjectIdGetDatum(oid)))
+		PG_RETURN_NULL();
+
+	PG_RETURN_BOOL(CMKIsVisible(oid));
 }
 
 Datum

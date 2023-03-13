@@ -166,6 +166,8 @@
   opcintype => 'bool' },
 { opcmethod => 'hash', opcname => 'bytea_ops', opcfamily => 'hash/bytea_ops',
   opcintype => 'bytea' },
+{ opcmethod => 'hash', opcname => 'pg_encrypted_det_ops', opcfamily => 'hash/pg_encrypted_det_ops',
+  opcintype => 'pg_encrypted_det' },
 { opcmethod => 'btree', opcname => 'tid_ops', opcfamily => 'btree/tid_ops',
   opcintype => 'tid' },
 { opcmethod => 'hash', opcname => 'xid_ops', opcfamily => 'hash/xid_ops',

@@ -1539,7 +1539,7 @@ describeOneTableDetails(const char *schemaname,
 	bool		printTableInitialized = false;
 	int			i;
 	char	   *view_def = NULL;
-	char	   *headers[12];
+	char	   *headers[13];
 	PQExpBufferData title;
 	PQExpBufferData tmpbuf;
 	int			cols;
@@ -1555,6 +1555,7 @@ describeOneTableDetails(const char *schemaname,
 				fdwopts_col = -1,
 				attstorage_col = -1,
 				attcompression_col = -1,
+				attcekname_col = -1,
 				attstattarget_col = -1,
 				attdescr_col = -1;
 	int			numrows;
@@ -1577,6 +1578,8 @@ describeOneTableDetails(const char *schemaname,
 		char	   *relam;
 	}			tableinfo;
 	bool		show_column_details = false;
+	const char *attusertypid;
+	const char *attusertypmod;
 
 	myopt.default_footer = false;
 	/* This output looks confusing in expanded mode. */
@@ -1853,7 +1856,17 @@ describeOneTableDetails(const char *schemaname,
 	cols = 0;
 	printfPQExpBuffer(&buf, "SELECT a.attname");
 	attname_col = cols++;
-	appendPQExpBufferStr(&buf, ",\n  pg_catalog.format_type(a.atttypid, a.atttypmod)");
+	if (pset.sversion >= 160000)
+	{
+		attusertypid = "CASE WHEN a.attusertypid <> 0 THEN a.attusertypid ELSE a.atttypid END";
+		attusertypmod = "CASE WHEN a.attusertypid <> 0 THEN a.attusertypmod ELSE a.atttypmod END";
+	}
+	else
+	{
+		attusertypid = "a.atttypid";
+		attusertypmod = "a.atttypmod";
+	}
+	appendPQExpBuffer(&buf, ",\n  pg_catalog.format_type(%s, %s)", attusertypid, attusertypmod);
 	atttype_col = cols++;
 
 	if (show_column_details)
@@ -1866,7 +1879,8 @@ describeOneTableDetails(const char *schemaname,
 							 ",\n  a.attnotnull");
 		attrdef_col = cols++;
 		attnotnull_col = cols++;
-		appendPQExpBufferStr(&buf, ",\n  (SELECT c.collname FROM pg_catalog.pg_collation c, pg_catalog.pg_type t\n"
+		appendPQExpBufferStr(&buf, ",\n"
+							 "  (SELECT c.collname FROM pg_catalog.pg_collation c, pg_catalog.pg_type t\n"
 							 "   WHERE c.oid = a.attcollation AND t.oid = a.atttypid AND a.attcollation <> t.typcollation) AS attcollation");
 		attcoll_col = cols++;
 		if (pset.sversion >= 100000)
@@ -1916,6 +1930,18 @@ describeOneTableDetails(const char *schemaname,
 		{
 			appendPQExpBufferStr(&buf, ",\n  a.attcompression AS attcompression");
 			attcompression_col = cols++;
+		}
+
+		/* encryption info */
+		if (pset.sversion >= 160000 &&
+			!pset.hide_column_encryption &&
+			(tableinfo.relkind == RELKIND_RELATION ||
+			 tableinfo.relkind == RELKIND_VIEW ||
+			 tableinfo.relkind == RELKIND_MATVIEW ||
+			 tableinfo.relkind == RELKIND_PARTITIONED_TABLE))
+		{
+			appendPQExpBufferStr(&buf, ",\n  (SELECT cekname FROM pg_colenckey cek WHERE cek.oid = a.attcek) AS attcekname");
+			attcekname_col = cols++;
 		}
 
 		/* stats target, if relevant to relkind */
@@ -2041,6 +2067,8 @@ describeOneTableDetails(const char *schemaname,
 		headers[cols++] = gettext_noop("Storage");
 	if (attcompression_col >= 0)
 		headers[cols++] = gettext_noop("Compression");
+	if (attcekname_col >= 0)
+		headers[cols++] = gettext_noop("Encryption");
 	if (attstattarget_col >= 0)
 		headers[cols++] = gettext_noop("Stats target");
 	if (attdescr_col >= 0)
@@ -2131,6 +2159,17 @@ describeOneTableDetails(const char *schemaname,
 									   (compression[0] == '\0' ? "" :
 										"???"))),
 							  false, false);
+		}
+
+		/* Column encryption */
+		if (attcekname_col >= 0)
+		{
+			if (!PQgetisnull(res, i, attcekname_col))
+				printTableAddCell(&cont, PQgetvalue(res, i, attcekname_col),
+								  false, false);
+			else
+				printTableAddCell(&cont, "",
+								  false, false);
 		}
 
 		/* Statistics target, if the relkind supports this feature */
@@ -4479,6 +4518,152 @@ listConversions(const char *pattern, bool verbose, bool showSystem)
 	myopt.translate_header = true;
 	myopt.translate_columns = translate_columns;
 	myopt.n_translate_columns = lengthof(translate_columns);
+
+	printQuery(res, &myopt, pset.queryFout, false, pset.logfile);
+
+	PQclear(res);
+	return true;
+}
+
+/*
+ * \dcek
+ *
+ * Lists column encryption keys.
+ */
+bool
+listCEKs(const char *pattern, bool verbose)
+{
+	PQExpBufferData buf;
+	PGresult   *res;
+	printQueryOpt myopt = pset.popt;
+
+	if (pset.sversion < 160000)
+	{
+		char		sverbuf[32];
+
+		pg_log_error("The server (version %s) does not support column encryption.",
+					 formatPGVersionNumber(pset.sversion, false,
+										   sverbuf, sizeof(sverbuf)));
+		return true;
+	}
+
+	initPQExpBuffer(&buf);
+
+	printfPQExpBuffer(&buf,
+					  "SELECT "
+					  "n.nspname AS \"%s\", "
+					  "cekname AS \"%s\", "
+					  "pg_catalog.pg_get_userbyid(cekowner) AS \"%s\", "
+					  "cmkname AS \"%s\"",
+					  gettext_noop("Schema"),
+					  gettext_noop("Name"),
+					  gettext_noop("Owner"),
+					  gettext_noop("Master key"));
+	if (verbose)
+	{
+		appendPQExpBuffer(&buf, ", ");
+		printACLColumn(&buf, "cekacl");
+		appendPQExpBuffer(&buf,
+						  ", pg_catalog.obj_description(cek.oid, 'pg_colenckey') AS \"%s\"",
+						  gettext_noop("Description"));
+	}
+	appendPQExpBufferStr(&buf,
+						 "\nFROM pg_catalog.pg_colenckey cek "
+						 "LEFT JOIN pg_catalog.pg_namespace n ON n.oid = cek.ceknamespace "
+						 "JOIN pg_catalog.pg_colenckeydata ckd ON (cek.oid = ckd.ckdcekid) "
+						 "JOIN pg_catalog.pg_colmasterkey cmk ON (ckd.ckdcmkid = cmk.oid) ");
+
+	if (!validateSQLNamePattern(&buf, pattern, false, false,
+								"n.nspname", "cekname", NULL,
+								"pg_catalog.pg_cek_is_visible(cek.oid)",
+								NULL, 3))
+	{
+		termPQExpBuffer(&buf);
+		return false;
+	}
+
+	appendPQExpBufferStr(&buf, "ORDER BY 1, 2, 4");
+
+	res = PSQLexec(buf.data);
+	termPQExpBuffer(&buf);
+	if (!res)
+		return false;
+
+	myopt.nullPrint = NULL;
+	myopt.title = _("List of column encryption keys");
+	myopt.translate_header = true;
+
+	printQuery(res, &myopt, pset.queryFout, false, pset.logfile);
+
+	PQclear(res);
+	return true;
+}
+
+/*
+ * \dcmk
+ *
+ * Lists column master keys.
+ */
+bool
+listCMKs(const char *pattern, bool verbose)
+{
+	PQExpBufferData buf;
+	PGresult   *res;
+	printQueryOpt myopt = pset.popt;
+
+	if (pset.sversion < 160000)
+	{
+		char		sverbuf[32];
+
+		pg_log_error("The server (version %s) does not support column encryption.",
+					 formatPGVersionNumber(pset.sversion, false,
+										   sverbuf, sizeof(sverbuf)));
+		return true;
+	}
+
+	initPQExpBuffer(&buf);
+
+	printfPQExpBuffer(&buf,
+					  "SELECT "
+					  "n.nspname AS \"%s\", "
+					  "cmkname AS \"%s\", "
+					  "pg_catalog.pg_get_userbyid(cmkowner) AS \"%s\", "
+					  "cmkrealm AS \"%s\"",
+					  gettext_noop("Schema"),
+					  gettext_noop("Name"),
+					  gettext_noop("Owner"),
+					  gettext_noop("Realm"));
+	if (verbose)
+	{
+		appendPQExpBuffer(&buf, ", ");
+		printACLColumn(&buf, "cmkacl");
+		appendPQExpBuffer(&buf,
+						  ", pg_catalog.obj_description(cmk.oid, 'pg_colmasterkey') AS \"%s\"",
+						  gettext_noop("Description"));
+	}
+	appendPQExpBufferStr(&buf,
+						 "\nFROM pg_catalog.pg_colmasterkey cmk "
+						 "LEFT JOIN pg_catalog.pg_namespace n ON n.oid = cmk.cmknamespace ");
+
+	if (!validateSQLNamePattern(&buf, pattern, false, false,
+								"n.nspname", "cmkname", NULL,
+								"pg_catalog.pg_cmk_is_visible(cmk.oid)",
+								NULL, 3))
+	{
+		termPQExpBuffer(&buf);
+		return false;
+	}
+
+	appendPQExpBufferStr(&buf, "ORDER BY 1, 2");
+
+	res = PSQLexec(buf.data);
+	termPQExpBuffer(&buf);
+	if (!res)
+		return false;
+
+	myopt.nullPrint = NULL;
+	myopt.title = _("List of column master keys");
+	myopt.translate_header = true;
 
 	printQuery(res, &myopt, pset.queryFout, false, pset.logfile);
 

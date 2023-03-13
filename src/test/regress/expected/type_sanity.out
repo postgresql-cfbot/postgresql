@@ -75,7 +75,9 @@ ORDER BY t1.oid;
  4600 | pg_brin_bloom_summary
  4601 | pg_brin_minmax_multi_summary
  5017 | pg_mcv_list
-(6 rows)
+ 8243 | pg_encrypted_det
+ 8244 | pg_encrypted_rnd
+(8 rows)
 
 -- Make sure typarray points to a "true" array type of our own base
 SELECT t1.oid, t1.typname as basetype, t2.typname as arraytype,
@@ -716,6 +718,8 @@ SELECT oid, typname, typtype, typelem, typarray
   WHERE oid < 16384 AND
     -- Exclude pseudotypes and composite types.
     typtype NOT IN ('p', 'c') AND
+    -- Exclude encryption internal types.
+    oid != ALL(ARRAY['pg_encrypted_det', 'pg_encrypted_rnd']::regtype[]) AND
     -- These reg* types cannot be pg_upgraded, so discard them.
     oid != ALL(ARRAY['regproc', 'regprocedure', 'regoper',
                      'regoperator', 'regconfig', 'regdictionary',

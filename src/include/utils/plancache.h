@@ -207,6 +207,9 @@ extern void CompleteCachedPlan(CachedPlanSource *plansource,
 extern void SaveCachedPlan(CachedPlanSource *plansource);
 extern void DropCachedPlan(CachedPlanSource *plansource);
 
+extern List *RevalidateCachedQuery(CachedPlanSource *plansource,
+								   QueryEnvironment *queryEnv);
+
 extern void CachedPlanSetParentContext(CachedPlanSource *plansource,
 									   MemoryContext newcontext);
 

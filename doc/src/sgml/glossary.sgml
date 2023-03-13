@@ -389,6 +389,32 @@
    </glossdef>
   </glossentry>
 
+  <glossentry id="glossary-column-encryption-key">
+   <glossterm>Column encryption key</glossterm>
+   <glossdef>
+    <para>
+     A cryptographic key used to encrypt column values when using automatic
+     client-side column-level encryption (<xref
+     linkend="ddl-column-encryption"/>).  Column encryption keys are stored in
+     the database encrypted by another key, the <glossterm
+     linkend="glossary-column-master-key">column master key</glossterm>.
+    </para>
+   </glossdef>
+  </glossentry>
+
+  <glossentry id="glossary-column-master-key">
+   <glossterm>Column master key</glossterm>
+   <glossdef>
+    <para>
+     A cryptographic key used to encrypt <glossterm
+     linkend="glossary-column-encryption-key">column encryption
+     keys</glossterm>.  (So the column master key is a <firstterm>key
+     encryption key</firstterm>.)  Column master keys are stored outside the
+     database system, for example in a key management system.
+    </para>
+   </glossdef>
+  </glossentry>
+
   <glossentry id="glossary-commit">
    <glossterm>Commit</glossterm>
    <glossdef>

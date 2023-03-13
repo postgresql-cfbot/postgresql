@@ -2210,12 +2210,27 @@ retry1:
 									valptr),
 							 errhint("Valid values are: \"false\", 0, \"true\", 1, \"database\".")));
 			}
+			else if (strcmp(nameptr, "_pq_.column_encryption") == 0)
+			{
+				/*
+				 * Right now, the only accepted value is "1".  This gives room
+				 * to expand this into a version number, for example.
+				 */
+				if (strcmp(valptr, "1") == 0)
+					port->column_encryption_enabled = true;
+				else
+					ereport(FATAL,
+							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							 errmsg("invalid value for parameter \"%s\": \"%s\"",
+									"column_encryption",
+									valptr),
+							 errhint("Valid values are: 1.")));
+			}
 			else if (strncmp(nameptr, "_pq_.", 5) == 0)
 			{
 				/*
 				 * Any option beginning with _pq_. is reserved for use as a
-				 * protocol-level option, but at present no such options are
-				 * defined.
+				 * protocol-level option.
 				 */
 				unrecognized_protocol_options =
 					lappend(unrecognized_protocol_options, pstrdup(nameptr));

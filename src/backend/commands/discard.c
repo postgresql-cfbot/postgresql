@@ -13,6 +13,7 @@
  */
 #include "postgres.h"
 
+#include "access/printtup.h"
 #include "access/xact.h"
 #include "catalog/namespace.h"
 #include "commands/async.h"
@@ -25,7 +26,7 @@
 static void DiscardAll(bool isTopLevel);
 
 /*
- * DISCARD { ALL | SEQUENCES | TEMP | PLANS }
+ * DISCARD
  */
 void
 DiscardCommand(DiscardStmt *stmt, bool isTopLevel)
@@ -34,6 +35,10 @@ DiscardCommand(DiscardStmt *stmt, bool isTopLevel)
 	{
 		case DISCARD_ALL:
 			DiscardAll(isTopLevel);
+			break;
+
+		case DISCARD_COLUMN_ENCRYPTION_KEYS:
+			DiscardColumnEncryptionKeys();
 			break;
 
 		case DISCARD_PLANS:
@@ -75,4 +80,5 @@ DiscardAll(bool isTopLevel)
 	ResetPlanCache();
 	ResetTempTableNamespace();
 	ResetSequenceCaches();
+	DiscardColumnEncryptionKeys();
 }

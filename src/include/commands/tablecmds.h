@@ -105,4 +105,6 @@ extern void RangeVarCallbackOwnsRelation(const RangeVar *relation,
 extern bool PartConstraintImpliedByRelConstraint(Relation scanrel,
 												 List *partConstraint);
 
+extern List *makeColumnEncryption(const FormData_pg_attribute *attr);
+
 #endif							/* TABLECMDS_H */

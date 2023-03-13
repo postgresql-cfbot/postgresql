@@ -164,6 +164,17 @@ CATALOG(pg_attribute,1249,AttributeRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(75,
 	 */
 	bool		attislocal BKI_DEFAULT(t);
 
+	/* column encryption key */
+	Oid			attcek BKI_DEFAULT(0) BKI_LOOKUP_OPT(pg_colenckey);
+
+	/*
+	 * User-visible type and typmod, currently used for encrypted columns.
+	 * These are only set to nondefault values if they are different from
+	 * atttypid and attypmod.
+	 */
+	Oid			attusertypid BKI_DEFAULT(0) BKI_LOOKUP_OPT(pg_type);
+	int32		attusertypmod BKI_DEFAULT(-1);
+
 	/* Number of times inherited from direct parent relation(s) */
 	int32		attinhcount BKI_DEFAULT(0);
 

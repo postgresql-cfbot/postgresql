@@ -22,6 +22,8 @@
 #include "catalog/pg_auth_members.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_class.h"
+#include "catalog/pg_colenckey.h"
+#include "catalog/pg_colmasterkey.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_foreign_data_wrapper.h"
 #include "catalog/pg_foreign_server.h"
@@ -101,6 +103,10 @@ static AclMode convert_table_priv_string(text *priv_type_text);
 static AclMode convert_sequence_priv_string(text *priv_type_text);
 static AttrNumber convert_column_name(Oid tableoid, text *column);
 static AclMode convert_column_priv_string(text *priv_type_text);
+static Oid	convert_column_encryption_key_name(text *cekname);
+static AclMode convert_column_encryption_key_priv_string(text *priv_type_text);
+static Oid	convert_column_master_key_name(text *cmkname);
+static AclMode convert_column_master_key_priv_string(text *priv_type_text);
 static Oid	convert_database_name(text *databasename);
 static AclMode convert_database_priv_string(text *priv_type_text);
 static Oid	convert_foreign_data_wrapper_name(text *fdwname);
@@ -800,6 +806,14 @@ acldefault(ObjectType objtype, Oid ownerId)
 			world_default = ACL_NO_RIGHTS;
 			owner_default = ACL_ALL_RIGHTS_SEQUENCE;
 			break;
+		case OBJECT_CEK:
+			world_default = ACL_NO_RIGHTS;
+			owner_default = ACL_ALL_RIGHTS_CEK;
+			break;
+		case OBJECT_CMK:
+			world_default = ACL_NO_RIGHTS;
+			owner_default = ACL_ALL_RIGHTS_CMK;
+			break;
 		case OBJECT_DATABASE:
 			/* for backwards compatibility, grant some rights by default */
 			world_default = ACL_CREATE_TEMP | ACL_CONNECT;
@@ -910,6 +924,12 @@ acldefault_sql(PG_FUNCTION_ARGS)
 			break;
 		case 's':
 			objtype = OBJECT_SEQUENCE;
+			break;
+		case 'Y':
+			objtype = OBJECT_CEK;
+			break;
+		case 'y':
+			objtype = OBJECT_CMK;
 			break;
 		case 'd':
 			objtype = OBJECT_DATABASE;
@@ -2912,6 +2932,384 @@ convert_column_priv_string(text *priv_type_text)
 	};
 
 	return convert_any_priv_string(priv_type_text, column_priv_map);
+}
+
+
+/*
+ * has_column_encryption_key_privilege variants
+ *		These are all named "has_column_encryption_key_privilege" at the SQL level.
+ *		They take various combinations of column encryption key name,
+ *		cek OID, user name, user OID, or implicit user = current_user.
+ *
+ *		The result is a boolean value: true if user has the indicated
+ *		privilege, false if not.
+ */
+
+/*
+ * has_column_encryption_key_privilege_name_name
+ *		Check user privileges on a column encryption key given
+ *		name username, text cekname, and text priv name.
+ */
+Datum
+has_column_encryption_key_privilege_name_name(PG_FUNCTION_ARGS)
+{
+	Name		username = PG_GETARG_NAME(0);
+	text	   *cekname = PG_GETARG_TEXT_PP(1);
+	text	   *priv_type_text = PG_GETARG_TEXT_PP(2);
+	Oid			roleid;
+	Oid			cekid;
+	AclMode		mode;
+	AclResult	aclresult;
+
+	roleid = get_role_oid_or_public(NameStr(*username));
+	cekid = convert_column_encryption_key_name(cekname);
+	mode = convert_column_encryption_key_priv_string(priv_type_text);
+
+	aclresult = object_aclcheck(ColumnEncKeyRelationId, cekid, roleid, mode);
+
+	PG_RETURN_BOOL(aclresult == ACLCHECK_OK);
+}
+
+/*
+ * has_column_encryption_key_privilege_name
+ *		Check user privileges on a column encryption key given
+ *		text cekname and text priv name.
+ *		current_user is assumed
+ */
+Datum
+has_column_encryption_key_privilege_name(PG_FUNCTION_ARGS)
+{
+	text	   *cekname = PG_GETARG_TEXT_PP(0);
+	text	   *priv_type_text = PG_GETARG_TEXT_PP(1);
+	Oid			roleid;
+	Oid			cekid;
+	AclMode		mode;
+	AclResult	aclresult;
+
+	roleid = GetUserId();
+	cekid = convert_column_encryption_key_name(cekname);
+	mode = convert_column_encryption_key_priv_string(priv_type_text);
+
+	aclresult = object_aclcheck(ColumnEncKeyRelationId, cekid, roleid, mode);
+
+	PG_RETURN_BOOL(aclresult == ACLCHECK_OK);
+}
+
+/*
+ * has_column_encryption_key_privilege_name_id
+ *		Check user privileges on a column encryption key given
+ *		name usename, column encryption key oid, and text priv name.
+ */
+Datum
+has_column_encryption_key_privilege_name_id(PG_FUNCTION_ARGS)
+{
+	Name		username = PG_GETARG_NAME(0);
+	Oid			cekid = PG_GETARG_OID(1);
+	text	   *priv_type_text = PG_GETARG_TEXT_PP(2);
+	Oid			roleid;
+	AclMode		mode;
+	AclResult	aclresult;
+
+	roleid = get_role_oid_or_public(NameStr(*username));
+	mode = convert_column_encryption_key_priv_string(priv_type_text);
+
+	if (!SearchSysCacheExists1(CEKOID, ObjectIdGetDatum(cekid)))
+		PG_RETURN_NULL();
+
+	aclresult = object_aclcheck(ColumnEncKeyRelationId, cekid, roleid, mode);
+
+	PG_RETURN_BOOL(aclresult == ACLCHECK_OK);
+}
+
+/*
+ * has_column_encryption_key_privilege_id
+ *		Check user privileges on a column encryption key given
+ *		column encryption key oid, and text priv name.
+ *		current_user is assumed
+ */
+Datum
+has_column_encryption_key_privilege_id(PG_FUNCTION_ARGS)
+{
+	Oid			cekid = PG_GETARG_OID(0);
+	text	   *priv_type_text = PG_GETARG_TEXT_PP(1);
+	Oid			roleid;
+	AclMode		mode;
+	AclResult	aclresult;
+
+	roleid = GetUserId();
+	mode = convert_column_encryption_key_priv_string(priv_type_text);
+
+	if (!SearchSysCacheExists1(CEKOID, ObjectIdGetDatum(cekid)))
+		PG_RETURN_NULL();
+
+	aclresult = object_aclcheck(ColumnEncKeyRelationId, cekid, roleid, mode);
+
+	PG_RETURN_BOOL(aclresult == ACLCHECK_OK);
+}
+
+/*
+ * has_column_encryption_key_privilege_id_name
+ *		Check user privileges on a column encryption key given
+ *		roleid, text cekname, and text priv name.
+ */
+Datum
+has_column_encryption_key_privilege_id_name(PG_FUNCTION_ARGS)
+{
+	Oid			roleid = PG_GETARG_OID(0);
+	text	   *cekname = PG_GETARG_TEXT_PP(1);
+	text	   *priv_type_text = PG_GETARG_TEXT_PP(2);
+	Oid			cekid;
+	AclMode		mode;
+	AclResult	aclresult;
+
+	cekid = convert_column_encryption_key_name(cekname);
+	mode = convert_column_encryption_key_priv_string(priv_type_text);
+
+	aclresult = object_aclcheck(ColumnEncKeyRelationId, cekid, roleid, mode);
+
+	PG_RETURN_BOOL(aclresult == ACLCHECK_OK);
+}
+
+/*
+ * has_column_encryption_key_privilege_id_id
+ *		Check user privileges on a column encryption key given
+ *		roleid, cek oid, and text priv name.
+ */
+Datum
+has_column_encryption_key_privilege_id_id(PG_FUNCTION_ARGS)
+{
+	Oid			roleid = PG_GETARG_OID(0);
+	Oid			cekid = PG_GETARG_OID(1);
+	text	   *priv_type_text = PG_GETARG_TEXT_PP(2);
+	AclMode		mode;
+	AclResult	aclresult;
+
+	mode = convert_column_encryption_key_priv_string(priv_type_text);
+
+	if (!SearchSysCacheExists1(CEKOID, ObjectIdGetDatum(cekid)))
+		PG_RETURN_NULL();
+
+	aclresult = object_aclcheck(ColumnEncKeyRelationId, cekid, roleid, mode);
+
+	PG_RETURN_BOOL(aclresult == ACLCHECK_OK);
+}
+
+/*
+ *		Support routines for has_column_encryption_key_privilege family.
+ */
+
+/*
+ * Given a CEK name expressed as a string, look it up and return Oid
+ */
+static Oid
+convert_column_encryption_key_name(text *cekname)
+{
+	return get_cek_oid(textToQualifiedNameList(cekname), false);
+}
+
+/*
+ * convert_column_encryption_key_priv_string
+ *		Convert text string to AclMode value.
+ */
+static AclMode
+convert_column_encryption_key_priv_string(text *priv_type_text)
+{
+	static const priv_map column_encryption_key_priv_map[] = {
+		{"USAGE", ACL_USAGE},
+		{"USAGE WITH GRANT OPTION", ACL_GRANT_OPTION_FOR(ACL_USAGE)},
+		{NULL, 0}
+	};
+
+	return convert_any_priv_string(priv_type_text, column_encryption_key_priv_map);
+}
+
+
+/*
+ * has_column_master_key_privilege variants
+ *		These are all named "has_column_master_key_privilege" at the SQL level.
+ *		They take various combinations of column master key name,
+ *		cmk OID, user name, user OID, or implicit user = current_user.
+ *
+ *		The result is a boolean value: true if user has the indicated
+ *		privilege, false if not.
+ */
+
+/*
+ * has_column_master_key_privilege_name_name
+ *		Check user privileges on a column master key given
+ *		name username, text cmkname, and text priv name.
+ */
+Datum
+has_column_master_key_privilege_name_name(PG_FUNCTION_ARGS)
+{
+	Name		username = PG_GETARG_NAME(0);
+	text	   *cmkname = PG_GETARG_TEXT_PP(1);
+	text	   *priv_type_text = PG_GETARG_TEXT_PP(2);
+	Oid			roleid;
+	Oid			cmkid;
+	AclMode		mode;
+	AclResult	aclresult;
+
+	roleid = get_role_oid_or_public(NameStr(*username));
+	cmkid = convert_column_master_key_name(cmkname);
+	mode = convert_column_master_key_priv_string(priv_type_text);
+
+	aclresult = object_aclcheck(ColumnMasterKeyRelationId, cmkid, roleid, mode);
+
+	PG_RETURN_BOOL(aclresult == ACLCHECK_OK);
+}
+
+/*
+ * has_column_master_key_privilege_name
+ *		Check user privileges on a column master key given
+ *		text cmkname and text priv name.
+ *		current_user is assumed
+ */
+Datum
+has_column_master_key_privilege_name(PG_FUNCTION_ARGS)
+{
+	text	   *cmkname = PG_GETARG_TEXT_PP(0);
+	text	   *priv_type_text = PG_GETARG_TEXT_PP(1);
+	Oid			roleid;
+	Oid			cmkid;
+	AclMode		mode;
+	AclResult	aclresult;
+
+	roleid = GetUserId();
+	cmkid = convert_column_master_key_name(cmkname);
+	mode = convert_column_master_key_priv_string(priv_type_text);
+
+	aclresult = object_aclcheck(ColumnMasterKeyRelationId, cmkid, roleid, mode);
+
+	PG_RETURN_BOOL(aclresult == ACLCHECK_OK);
+}
+
+/*
+ * has_column_master_key_privilege_name_id
+ *		Check user privileges on a column master key given
+ *		name usename, column master key oid, and text priv name.
+ */
+Datum
+has_column_master_key_privilege_name_id(PG_FUNCTION_ARGS)
+{
+	Name		username = PG_GETARG_NAME(0);
+	Oid			cmkid = PG_GETARG_OID(1);
+	text	   *priv_type_text = PG_GETARG_TEXT_PP(2);
+	Oid			roleid;
+	AclMode		mode;
+	AclResult	aclresult;
+
+	roleid = get_role_oid_or_public(NameStr(*username));
+	mode = convert_column_master_key_priv_string(priv_type_text);
+
+	if (!SearchSysCacheExists1(CMKOID, ObjectIdGetDatum(cmkid)))
+		PG_RETURN_NULL();
+
+	aclresult = object_aclcheck(ColumnMasterKeyRelationId, cmkid, roleid, mode);
+
+	PG_RETURN_BOOL(aclresult == ACLCHECK_OK);
+}
+
+/*
+ * has_column_master_key_privilege_id
+ *		Check user privileges on a column master key given
+ *		column master key oid, and text priv name.
+ *		current_user is assumed
+ */
+Datum
+has_column_master_key_privilege_id(PG_FUNCTION_ARGS)
+{
+	Oid			cmkid = PG_GETARG_OID(0);
+	text	   *priv_type_text = PG_GETARG_TEXT_PP(1);
+	Oid			roleid;
+	AclMode		mode;
+	AclResult	aclresult;
+
+	roleid = GetUserId();
+	mode = convert_column_master_key_priv_string(priv_type_text);
+
+	if (!SearchSysCacheExists1(CMKOID, ObjectIdGetDatum(cmkid)))
+		PG_RETURN_NULL();
+
+	aclresult = object_aclcheck(ColumnMasterKeyRelationId, cmkid, roleid, mode);
+
+	PG_RETURN_BOOL(aclresult == ACLCHECK_OK);
+}
+
+/*
+ * has_column_master_key_privilege_id_name
+ *		Check user privileges on a column master key given
+ *		roleid, text cmkname, and text priv name.
+ */
+Datum
+has_column_master_key_privilege_id_name(PG_FUNCTION_ARGS)
+{
+	Oid			roleid = PG_GETARG_OID(0);
+	text	   *cmkname = PG_GETARG_TEXT_PP(1);
+	text	   *priv_type_text = PG_GETARG_TEXT_PP(2);
+	Oid			cmkid;
+	AclMode		mode;
+	AclResult	aclresult;
+
+	cmkid = convert_column_master_key_name(cmkname);
+	mode = convert_column_master_key_priv_string(priv_type_text);
+
+	aclresult = object_aclcheck(ColumnMasterKeyRelationId, cmkid, roleid, mode);
+
+	PG_RETURN_BOOL(aclresult == ACLCHECK_OK);
+}
+
+/*
+ * has_column_master_key_privilege_id_id
+ *		Check user privileges on a column master key given
+ *		roleid, cmk oid, and text priv name.
+ */
+Datum
+has_column_master_key_privilege_id_id(PG_FUNCTION_ARGS)
+{
+	Oid			roleid = PG_GETARG_OID(0);
+	Oid			cmkid = PG_GETARG_OID(1);
+	text	   *priv_type_text = PG_GETARG_TEXT_PP(2);
+	AclMode		mode;
+	AclResult	aclresult;
+
+	mode = convert_column_master_key_priv_string(priv_type_text);
+
+	if (!SearchSysCacheExists1(CMKOID, ObjectIdGetDatum(cmkid)))
+		PG_RETURN_NULL();
+
+	aclresult = object_aclcheck(ColumnMasterKeyRelationId, cmkid, roleid, mode);
+
+	PG_RETURN_BOOL(aclresult == ACLCHECK_OK);
+}
+
+/*
+ *		Support routines for has_column_master_key_privilege family.
+ */
+
+/*
+ * Given a CMK name expressed as a string, look it up and return Oid
+ */
+static Oid
+convert_column_master_key_name(text *cmkname)
+{
+	return get_cmk_oid(textToQualifiedNameList(cmkname), false);
+}
+
+/*
+ * convert_column_master_key_priv_string
+ *		Convert text string to AclMode value.
+ */
+static AclMode
+convert_column_master_key_priv_string(text *priv_type_text)
+{
+	static const priv_map column_master_key_priv_map[] = {
+		{"USAGE", ACL_USAGE},
+		{"USAGE WITH GRANT OPTION", ACL_GRANT_OPTION_FOR(ACL_USAGE)},
+		{NULL, 0}
+	};
+
+	return convert_any_priv_string(priv_type_text, column_master_key_priv_map);
 }
 
 

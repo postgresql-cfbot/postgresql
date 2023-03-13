@@ -4,6 +4,7 @@ common_sources = files(
   'archive.c',
   'base64.c',
   'checksum_helper.c',
+  'colenc.c',
   'compression.c',
   'controldata_utils.c',
   'encnames.c',

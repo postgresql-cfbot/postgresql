@@ -43,6 +43,8 @@ static int	getRowDescriptions(PGconn *conn, int msgLength);
 static int	getParamDescriptions(PGconn *conn, int msgLength);
 static int	getAnotherTuple(PGconn *conn, int msgLength);
 static int	getParameterStatus(PGconn *conn);
+static int	getColumnMasterKey(PGconn *conn);
+static int	getColumnEncryptionKey(PGconn *conn);
 static int	getNotify(PGconn *conn);
 static int	getCopyStart(PGconn *conn, ExecStatusType copytype);
 static int	getReadyForQuery(PGconn *conn);
@@ -297,6 +299,12 @@ pqParseInput3(PGconn *conn)
 					if (pqGetInt(&(conn->be_key), 4, conn))
 						return;
 					break;
+				case 'y':		/* Column Master Key */
+					getColumnMasterKey(conn);
+					break;
+				case 'Y':		/* Column Encryption Key */
+					getColumnEncryptionKey(conn);
+					break;
 				case 'T':		/* Row Description */
 					if (conn->error_result ||
 						(conn->result != NULL &&
@@ -358,8 +366,21 @@ pqParseInput3(PGconn *conn)
 					}
 					break;
 				case 't':		/* Parameter Description */
-					if (getParamDescriptions(conn, msgLength))
-						return;
+					if (conn->error_result ||
+						(conn->result != NULL &&
+						 conn->result->resultStatus == PGRES_FATAL_ERROR))
+					{
+						/*
+						 * We've already choked for some reason.  Just discard
+						 * the data till we get to the end of the query.
+						 */
+						conn->inCursor += msgLength;
+					}
+					else
+					{
+						if (getParamDescriptions(conn, msgLength))
+							return;
+					}
 					break;
 				case 'D':		/* Data Row */
 					if (conn->result != NULL &&
@@ -547,6 +568,9 @@ getRowDescriptions(PGconn *conn, int msgLength)
 		int			typlen;
 		int			atttypmod;
 		int			format;
+		int			cekid;
+		int			cekalg;
+		int			flags;
 
 		if (pqGets(&conn->workBuffer, conn) ||
 			pqGetInt(&tableid, 4, conn) ||
@@ -559,6 +583,23 @@ getRowDescriptions(PGconn *conn, int msgLength)
 			/* We should not run out of data here, so complain */
 			errmsg = libpq_gettext("insufficient data in \"T\" message");
 			goto advance_and_error;
+		}
+
+		if (conn->column_encryption_enabled)
+		{
+			if (pqGetInt(&cekid, 4, conn) ||
+				pqGetInt(&cekalg, 4, conn) ||
+				pqGetInt(&flags, 2, conn))
+			{
+				errmsg = libpq_gettext("insufficient data in \"T\" message");
+				goto advance_and_error;
+			}
+		}
+		else
+		{
+			cekid = 0;
+			cekalg = 0;
+			flags = 0;
 		}
 
 		/*
@@ -582,6 +623,8 @@ getRowDescriptions(PGconn *conn, int msgLength)
 		result->attDescs[i].typid = typid;
 		result->attDescs[i].typlen = typlen;
 		result->attDescs[i].atttypmod = atttypmod;
+		result->attDescs[i].cekid = cekid;
+		result->attDescs[i].cekalg = cekalg;
 
 		if (format != 1)
 			result->binary = 0;
@@ -685,10 +728,31 @@ getParamDescriptions(PGconn *conn, int msgLength)
 	for (i = 0; i < nparams; i++)
 	{
 		int			typid;
+		int			cekid;
+		int			cekalg;
+		int			flags;
 
 		if (pqGetInt(&typid, 4, conn))
 			goto not_enough_data;
+		if (conn->column_encryption_enabled)
+		{
+			if (pqGetInt(&cekid, 4, conn))
+				goto not_enough_data;
+			if (pqGetInt(&cekalg, 4, conn))
+				goto not_enough_data;
+			if (pqGetInt(&flags, 2, conn))
+				goto not_enough_data;
+		}
+		else
+		{
+			cekid = 0;
+			cekalg = 0;
+			flags = 0;
+		}
 		result->paramDescs[i].typid = typid;
+		result->paramDescs[i].cekid = cekid;
+		result->paramDescs[i].cekalg = cekalg;
+		result->paramDescs[i].flags = flags;
 	}
 
 	/* Success! */
@@ -1468,6 +1532,92 @@ getParameterStatus(PGconn *conn)
 	return 0;
 }
 
+/*
+ * Attempt to read a ColumnMasterKey message.
+ * Entry: 'y' message type and length have already been consumed.
+ * Exit: returns 0 if successfully consumed message.
+ *		 returns EOF if not enough data.
+ */
+static int
+getColumnMasterKey(PGconn *conn)
+{
+	int			keyid;
+	char	   *keyname;
+	char	   *keyrealm;
+	int			ret;
+
+	/* Get the key ID */
+	if (pqGetInt(&keyid, 4, conn) != 0)
+		return EOF;
+	/* Get the key name */
+	if (pqGets(&conn->workBuffer, conn) != 0)
+		return EOF;
+	keyname = strdup(conn->workBuffer.data);
+	if (!keyname)
+		return EOF;
+	/* Get the key realm */
+	if (pqGets(&conn->workBuffer, conn) != 0)
+		return EOF;
+	keyrealm = strdup(conn->workBuffer.data);
+	if (!keyrealm)
+		return EOF;
+	/* And save it */
+	ret = pqSaveColumnMasterKey(conn, keyid, keyname, keyrealm);
+	if (ret != 0)
+		pqSaveErrorResult(conn);
+
+	free(keyname);
+	free(keyrealm);
+
+	return ret;
+}
+
+/*
+ * Attempt to read a ColumnEncryptionKey message.
+ * Entry: 'Y' message type and length have already been consumed.
+ * Exit: returns 0 if successfully consumed message.
+ *		 returns EOF if not enough data.
+ */
+static int
+getColumnEncryptionKey(PGconn *conn)
+{
+	int			keyid;
+	int			cmkid;
+	int			cmkalg;
+	char	   *buf;
+	int			vallen;
+	int			ret;
+
+	/* Get the key ID */
+	if (pqGetInt(&keyid, 4, conn) != 0)
+		return EOF;
+	/* Get the CMK ID */
+	if (pqGetInt(&cmkid, 4, conn) != 0)
+		return EOF;
+	/* Get the CMK algorithm */
+	if (pqGetInt(&cmkalg, 4, conn) != 0)
+		return EOF;
+	/* Get the key data len */
+	if (pqGetInt(&vallen, 4, conn) != 0)
+		return EOF;
+	/* Get the key data */
+	buf = malloc(vallen);
+	if (!buf)
+		return EOF;
+	if (pqGetnchar(buf, vallen, conn) != 0)
+	{
+		free(buf);
+		return EOF;
+	}
+	/* And save it */
+	ret = pqSaveColumnEncryptionKey(conn, keyid, cmkid, cmkalg, (unsigned char *) buf, vallen);
+	if (ret != 0)
+		pqSaveErrorResult(conn);
+
+	free(buf);
+
+	return ret;
+}
 
 /*
  * Attempt to read a Notify response message.
@@ -2285,6 +2435,9 @@ build_startup_packet(const PGconn *conn, char *packet,
 
 	if (conn->client_encoding_initial && conn->client_encoding_initial[0])
 		ADD_STARTUP_OPTION("client_encoding", conn->client_encoding_initial);
+
+	if (conn->column_encryption_enabled)
+		ADD_STARTUP_OPTION("_pq_.column_encryption", "1");
 
 	/* Add any environment-driven GUC settings needed */
 	for (next_eo = options; next_eo->envName; next_eo++)

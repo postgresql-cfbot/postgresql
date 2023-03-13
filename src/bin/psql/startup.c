@@ -1189,6 +1189,13 @@ hide_compression_hook(const char *newval)
 }
 
 static bool
+hide_column_encryption_hook(const char *newval)
+{
+	return ParseVariableBool(newval, "HIDE_COLUMN_ENCRYPTION",
+							 &pset.hide_column_encryption);
+}
+
+static bool
 hide_tableam_hook(const char *newval)
 {
 	return ParseVariableBool(newval, "HIDE_TABLEAM", &pset.hide_tableam);
@@ -1259,6 +1266,9 @@ EstablishVariableSpace(void)
 	SetVariableHooks(pset.vars, "SHOW_CONTEXT",
 					 show_context_substitute_hook,
 					 show_context_hook);
+	SetVariableHooks(pset.vars, "HIDE_COLUMN_ENCRYPTION",
+					 bool_substitute_hook,
+					 hide_column_encryption_hook);
 	SetVariableHooks(pset.vars, "HIDE_TOAST_COMPRESSION",
 					 bool_substitute_hook,
 					 hide_compression_hook);

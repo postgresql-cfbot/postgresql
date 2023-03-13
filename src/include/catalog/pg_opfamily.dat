@@ -108,6 +108,8 @@
   opfmethod => 'hash', opfname => 'bool_ops' },
 { oid => '2223',
   opfmethod => 'hash', opfname => 'bytea_ops' },
+{ oid => '8249',
+  opfmethod => 'hash', opfname => 'pg_encrypted_det_ops' },
 { oid => '2789',
   opfmethod => 'btree', opfname => 'tid_ops' },
 { oid => '2225',

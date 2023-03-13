@@ -544,6 +544,8 @@ SELECT oid, typname, typtype, typelem, typarray
   WHERE oid < 16384 AND
     -- Exclude pseudotypes and composite types.
     typtype NOT IN ('p', 'c') AND
+    -- Exclude encryption internal types.
+    oid != ALL(ARRAY['pg_encrypted_det', 'pg_encrypted_rnd']::regtype[]) AND
     -- These reg* types cannot be pg_upgraded, so discard them.
     oid != ALL(ARRAY['regproc', 'regprocedure', 'regoper',
                      'regoperator', 'regconfig', 'regdictionary',

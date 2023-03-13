@@ -21,7 +21,7 @@ PostgreSQL documentation
 
  <refsynopsisdiv>
 <synopsis>
-DISCARD { ALL | PLANS | SEQUENCES | TEMPORARY | TEMP }
+DISCARD { ALL | COLUMN ENCRYPTION KEYS | PLANS | SEQUENCES | TEMPORARY | TEMP }
 </synopsis>
  </refsynopsisdiv>
 
@@ -41,6 +41,17 @@ DISCARD { ALL | PLANS | SEQUENCES | TEMPORARY | TEMP }
   <title>Parameters</title>
 
   <variablelist>
+
+   <varlistentry>
+    <term><literal>COLUMN ENCRYPTION KEYS</literal></term>
+    <listitem>
+     <para>
+      Discards knowledge about which column encryption keys and column master
+      keys have been sent to the client in this session.  (They will
+      subsequently be re-sent as required.)
+     </para>
+    </listitem>
+   </varlistentry>
 
    <varlistentry>
     <term><literal>PLANS</literal></term>
@@ -93,6 +104,7 @@ SELECT pg_advisory_unlock_all();
 DISCARD PLANS;
 DISCARD TEMP;
 DISCARD SEQUENCES;
+DISCARD COLUMN ENCRYPTION KEYS;
 </programlisting></para>
     </listitem>
    </varlistentry>

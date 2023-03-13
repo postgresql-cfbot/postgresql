@@ -20,8 +20,12 @@ extern DestReceiver *printtup_create_DR(CommandDest dest);
 
 extern void SetRemoteDestReceiverParams(DestReceiver *self, Portal portal);
 
+extern void MaybeSendColumnEncryptionKeyMessage(Oid attcek);
+
 extern void SendRowDescriptionMessage(StringInfo buf,
 									  TupleDesc typeinfo, List *targetlist, int16 *formats);
+
+extern void DiscardColumnEncryptionKeys(void);
 
 extern void debugStartup(DestReceiver *self, int operation,
 						 TupleDesc typeinfo);

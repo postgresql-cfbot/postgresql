@@ -933,6 +933,20 @@ static const SchemaQuery Query_for_list_of_collations = {
 	.result = "c.collname",
 };
 
+static const SchemaQuery Query_for_list_of_ceks = {
+	.catname = "pg_catalog.pg_colenckey c",
+	.viscondition = "pg_catalog.pg_cek_is_visible(c.oid)",
+	.namespace = "c.ceknamespace",
+	.result = "c.cekname",
+};
+
+static const SchemaQuery Query_for_list_of_cmks = {
+	.catname = "pg_catalog.pg_colmasterkey c",
+	.viscondition = "pg_catalog.pg_cmk_is_visible(c.oid)",
+	.namespace = "c.cmknamespace",
+	.result = "c.cmkname",
+};
+
 static const SchemaQuery Query_for_partition_of_table = {
 	.catname = "pg_catalog.pg_class c1, pg_catalog.pg_class c2, pg_catalog.pg_inherits i",
 	.selcondition = "c1.oid=i.inhparent and i.inhrelid=c2.oid and c2.relispartition",
@@ -1223,6 +1237,8 @@ static const pgsql_thing_t words_after_create[] = {
 	{"CAST", NULL, NULL, NULL}, /* Casts have complex structures for names, so
 								 * skip it */
 	{"COLLATION", NULL, NULL, &Query_for_list_of_collations},
+	{"COLUMN ENCRYPTION KEY", NULL, NULL, NULL},
+	{"COLUMN MASTER KEY KEY", NULL, NULL, NULL},
 
 	/*
 	 * CREATE CONSTRAINT TRIGGER is not supported here because it is designed
@@ -1705,7 +1721,7 @@ psql_completion(const char *text, int start, int end)
 		"\\connect", "\\conninfo", "\\C", "\\cd", "\\copy",
 		"\\copyright", "\\crosstabview",
 		"\\d", "\\da", "\\dA", "\\dAc", "\\dAf", "\\dAo", "\\dAp",
-		"\\db", "\\dc", "\\dconfig", "\\dC", "\\dd", "\\ddp", "\\dD",
+		"\\db", "\\dc", "\\dcek", "\\dcmk", "\\dconfig", "\\dC", "\\dd", "\\ddp", "\\dD",
 		"\\des", "\\det", "\\deu", "\\dew", "\\dE", "\\df",
 		"\\dF", "\\dFd", "\\dFp", "\\dFt", "\\dg", "\\di", "\\dl", "\\dL",
 		"\\dm", "\\dn", "\\do", "\\dO", "\\dp", "\\dP", "\\dPi", "\\dPt",
@@ -1951,6 +1967,22 @@ psql_completion(const char *text, int start, int end)
 	/* ALTER COLLATION <name> */
 	else if (Matches("ALTER", "COLLATION", MatchAny))
 		COMPLETE_WITH("OWNER TO", "REFRESH VERSION", "RENAME TO", "SET SCHEMA");
+
+	/* ALTER/DROP COLUMN ENCRYPTION KEY */
+	else if (Matches("ALTER|DROP", "COLUMN", "ENCRYPTION", "KEY"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_ceks);
+
+	/* ALTER COLUMN ENCRYPTION KEY */
+	else if (Matches("ALTER", "COLUMN", "ENCRYPTION", "KEY", MatchAny))
+		COMPLETE_WITH("ADD VALUE (", "DROP VALUE (", "OWNER TO", "RENAME TO", "SET SCHEMA");
+
+	/* ALTER/DROP COLUMN MASTER KEY */
+	else if (Matches("ALTER|DROP", "COLUMN", "MASTER", "KEY"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_cmks);
+
+	/* ALTER COLUMN MASTER KEY */
+	else if (Matches("ALTER", "COLUMN", "MASTER", "KEY", MatchAny))
+		COMPLETE_WITH("(", "OWNER TO", "RENAME TO", "SET SCHEMA");
 
 	/* ALTER CONVERSION <name> */
 	else if (Matches("ALTER", "CONVERSION", MatchAny))
@@ -2894,6 +2926,26 @@ psql_completion(const char *text, int start, int end)
 			COMPLETE_WITH("true", "false");
 	}
 
+	/* CREATE/ALTER/DROP COLUMN ... KEY */
+	else if (Matches("CREATE|ALTER|DROP", "COLUMN"))
+		COMPLETE_WITH("ENCRYPTION", "MASTER");
+	else if (Matches("CREATE|ALTER|DROP", "COLUMN", "ENCRYPTION|MASTER"))
+		COMPLETE_WITH("KEY");
+
+	/* CREATE COLUMN ENCRYPTION KEY */
+	else if (Matches("CREATE", "COLUMN", "ENCRYPTION", "KEY", MatchAny))
+		COMPLETE_WITH("WITH");
+	else if (Matches("CREATE", "COLUMN", "ENCRYPTION", "KEY", MatchAny, "WITH"))
+		COMPLETE_WITH("VALUES");
+	else if (Matches("CREATE", "COLUMN", "ENCRYPTION", "KEY", MatchAny, "WITH", "VALUES"))
+		COMPLETE_WITH("(");
+
+	/* CREATE COLUMN MASTER KEY */
+	else if (Matches("CREATE", "COLUMN", "MASTER", "KEY", MatchAny))
+		COMPLETE_WITH("WITH");
+	else if (Matches("CREATE", "COLUMN", "MASTER", "KEY", MatchAny, "WITH"))
+		COMPLETE_WITH("(");
+
 	/* CREATE DATABASE */
 	else if (Matches("CREATE", "DATABASE", MatchAny))
 		COMPLETE_WITH("OWNER", "TEMPLATE", "ENCODING", "TABLESPACE",
@@ -3605,7 +3657,7 @@ psql_completion(const char *text, int start, int end)
 
 /* DISCARD */
 	else if (Matches("DISCARD"))
-		COMPLETE_WITH("ALL", "PLANS", "SEQUENCES", "TEMP");
+		COMPLETE_WITH("ALL", "COLUMN ENCRYPTION KEYS", "PLANS", "SEQUENCES", "TEMP");
 
 /* DO */
 	else if (Matches("DO"))
@@ -3619,6 +3671,7 @@ psql_completion(const char *text, int start, int end)
 			 Matches("DROP", "ACCESS", "METHOD", MatchAny) ||
 			 (Matches("DROP", "AGGREGATE|FUNCTION|PROCEDURE|ROUTINE", MatchAny, MatchAny) &&
 			  ends_with(prev_wd, ')')) ||
+			 Matches("DROP", "COLUMN", "ENCRYPTION|MASTER", "KEY", MatchAny) ||
 			 Matches("DROP", "EVENT", "TRIGGER", MatchAny) ||
 			 Matches("DROP", "FOREIGN", "DATA", "WRAPPER", MatchAny) ||
 			 Matches("DROP", "FOREIGN", "TABLE", MatchAny) ||
@@ -3931,6 +3984,8 @@ psql_completion(const char *text, int start, int end)
 											"ALL ROUTINES IN SCHEMA",
 											"ALL SEQUENCES IN SCHEMA",
 											"ALL TABLES IN SCHEMA",
+											"COLUMN ENCRYPTION KEY",
+											"COLUMN MASTER KEY",
 											"DATABASE",
 											"DOMAIN",
 											"FOREIGN DATA WRAPPER",
@@ -4041,6 +4096,16 @@ psql_completion(const char *text, int start, int end)
 			 TailMatches("REVOKE", "GRANT", "OPTION", "FOR", MatchAny, "ON", "ALL", MatchAny, "IN", "SCHEMA", MatchAny))
 	{
 		if (TailMatches("GRANT", MatchAny, MatchAny, MatchAny, MatchAny, MatchAny, MatchAny, MatchAny))
+			COMPLETE_WITH("TO");
+		else
+			COMPLETE_WITH("FROM");
+	}
+
+	/* Complete "GRANT/REVOKE * ON COLUMN ENCRYPTION|MASTER KEY *" with TO/FROM */
+	else if (TailMatches("GRANT|REVOKE", MatchAny, "ON", "COLUMN", "ENCRYPTION|MASTER", "KEY", MatchAny) ||
+			 TailMatches("REVOKE", "GRANT", "OPTION", "FOR", MatchAny, "ON", "COLUMN", "ENCRYPTION|MASTER", "KEY", MatchAny))
+	{
+		if (TailMatches("GRANT", MatchAny, MatchAny, MatchAny, MatchAny, MatchAny, MatchAny))
 			COMPLETE_WITH("TO");
 		else
 			COMPLETE_WITH("FROM");

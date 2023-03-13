@@ -29,7 +29,10 @@
 #include "catalog/pg_authid.h"
 #include "catalog/pg_auth_members.h"
 #include "catalog/pg_cast.h"
+#include "catalog/pg_colenckey.h"
+#include "catalog/pg_colenckeydata.h"
 #include "catalog/pg_collation.h"
+#include "catalog/pg_colmasterkey.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_conversion.h"
 #include "catalog/pg_database.h"
@@ -189,6 +192,48 @@ static const ObjectPropertyType ObjectProperty[] =
 		Anum_pg_collation_collowner,
 		InvalidAttrNumber,
 		OBJECT_COLLATION,
+		true
+	},
+	{
+		"column encryption key",
+		ColumnEncKeyRelationId,
+		ColumnEncKeyOidIndexId,
+		CEKOID,
+		CEKNAMENSP,
+		Anum_pg_colenckey_oid,
+		Anum_pg_colenckey_cekname,
+		Anum_pg_colenckey_ceknamespace,
+		Anum_pg_colenckey_cekowner,
+		Anum_pg_colenckey_cekacl,
+		OBJECT_CEK,
+		true
+	},
+	{
+		"column encryption key data",
+		ColumnEncKeyDataRelationId,
+		ColumnEncKeyDataOidIndexId,
+		CEKDATAOID,
+		-1,
+		Anum_pg_colenckeydata_oid,
+		InvalidAttrNumber,
+		InvalidAttrNumber,
+		InvalidAttrNumber,
+		InvalidAttrNumber,
+		-1,
+		false
+	},
+	{
+		"column master key",
+		ColumnMasterKeyRelationId,
+		ColumnMasterKeyOidIndexId,
+		CMKOID,
+		CMKNAMENSP,
+		Anum_pg_colmasterkey_oid,
+		Anum_pg_colmasterkey_cmkname,
+		Anum_pg_colmasterkey_cmknamespace,
+		Anum_pg_colmasterkey_cmkowner,
+		Anum_pg_colmasterkey_cmkacl,
+		OBJECT_CMK,
 		true
 	},
 	{
@@ -723,6 +768,18 @@ static const struct object_type_map
 	{
 		"collation", OBJECT_COLLATION
 	},
+	/* OCLASS_CEK */
+	{
+		"column encryption key", OBJECT_CEK
+	},
+	/* OCLASS_CEKDATA */
+	{
+		"column encryption key data", OBJECT_CEKDATA
+	},
+	/* OCLASS_CMK */
+	{
+		"column master key", OBJECT_CMK
+	},
 	/* OCLASS_CONSTRAINT */
 	{
 		"table constraint", OBJECT_TABCONSTRAINT
@@ -1029,6 +1086,16 @@ get_object_address(ObjectType objtype, Node *object,
 					address.objectSubId = 0;
 				}
 				break;
+			case OBJECT_CEK:
+				address.classId = ColumnEncKeyRelationId;
+				address.objectId = get_cek_oid(castNode(List, object), missing_ok);
+				address.objectSubId = 0;
+				break;
+			case OBJECT_CMK:
+				address.classId = ColumnMasterKeyRelationId;
+				address.objectId = get_cmk_oid(castNode(List, object), missing_ok);
+				address.objectSubId = 0;
+				break;
 			case OBJECT_DATABASE:
 			case OBJECT_EXTENSION:
 			case OBJECT_TABLESPACE:
@@ -1105,6 +1172,21 @@ get_object_address(ObjectType objtype, Node *object,
 					address.classId = CastRelationId;
 					address.objectId =
 						get_cast_oid(sourcetypeid, targettypeid, missing_ok);
+					address.objectSubId = 0;
+				}
+				break;
+			case OBJECT_CEKDATA:
+				{
+					List	   *cekname = linitial_node(List, castNode(List, object));
+					List	   *cmkname = lsecond_node(List, castNode(List, object));
+					Oid			cekid;
+					Oid			cmkid;
+
+					cekid = get_cek_oid(cekname, missing_ok);
+					cmkid = get_cmk_oid(cmkname, missing_ok);
+
+					address.classId = ColumnEncKeyDataRelationId;
+					address.objectId = get_cekdata_oid(cekid, cmkid, missing_ok);
 					address.objectSubId = 0;
 				}
 				break;
@@ -2311,6 +2393,8 @@ pg_get_object_address(PG_FUNCTION_ARGS)
 		case OBJECT_FOREIGN_TABLE:
 		case OBJECT_COLUMN:
 		case OBJECT_ATTRIBUTE:
+		case OBJECT_CEK:
+		case OBJECT_CMK:
 		case OBJECT_COLLATION:
 		case OBJECT_CONVERSION:
 		case OBJECT_STATISTIC_EXT:
@@ -2367,6 +2451,7 @@ pg_get_object_address(PG_FUNCTION_ARGS)
 			break;
 		case OBJECT_AMOP:
 		case OBJECT_AMPROC:
+		case OBJECT_CEKDATA:
 			objnode = (Node *) list_make2(name, args);
 			break;
 		case OBJECT_FUNCTION:
@@ -2489,6 +2574,8 @@ check_object_ownership(Oid roleid, ObjectType objtype, ObjectAddress address,
 				aclcheck_error(ACLCHECK_NOT_OWNER, objtype,
 							   strVal(object));
 			break;
+		case OBJECT_CEK:
+		case OBJECT_CMK:
 		case OBJECT_COLLATION:
 		case OBJECT_CONVERSION:
 		case OBJECT_OPCLASS:
@@ -2575,6 +2662,7 @@ check_object_ownership(Oid roleid, ObjectType objtype, ObjectAddress address,
 			break;
 		case OBJECT_AMOP:
 		case OBJECT_AMPROC:
+		case OBJECT_CEKDATA:
 		case OBJECT_DEFAULT:
 		case OBJECT_DEFACL:
 		case OBJECT_PUBLICATION_NAMESPACE:
@@ -3037,6 +3125,92 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 								 quote_qualified_identifier(nspname,
 															NameStr(coll->collname)));
 				ReleaseSysCache(collTup);
+				break;
+			}
+
+		case OCLASS_CEK:
+			{
+				HeapTuple	tup;
+				Form_pg_colenckey form;
+				char	   *nspname;
+
+				tup = SearchSysCache1(CEKOID,
+									  ObjectIdGetDatum(object->objectId));
+				if (!HeapTupleIsValid(tup))
+				{
+					if (!missing_ok)
+						elog(ERROR, "cache lookup failed for column encryption key %u",
+							 object->objectId);
+					break;
+				}
+
+				form = (Form_pg_colenckey) GETSTRUCT(tup);
+
+				/* Qualify the name if not visible in search path */
+				if (CEKIsVisible(object->objectId))
+					nspname = NULL;
+				else
+					nspname = get_namespace_name(form->ceknamespace);
+
+				appendStringInfo(&buffer, _("column encryption key %s"),
+								 quote_qualified_identifier(nspname,
+															NameStr(form->cekname)));
+				ReleaseSysCache(tup);
+				break;
+			}
+
+		case OCLASS_CEKDATA:
+			{
+				HeapTuple	tup;
+				Form_pg_colenckeydata cekdata;
+
+				tup = SearchSysCache1(CEKDATAOID, ObjectIdGetDatum(object->objectId));
+				if (!HeapTupleIsValid(tup))
+				{
+					if (!missing_ok)
+						elog(ERROR, "cache lookup failed for column encryption key data %u",
+							 object->objectId);
+					break;
+				}
+
+				cekdata = (Form_pg_colenckeydata) GETSTRUCT(tup);
+
+				appendStringInfo(&buffer, _("column encryption key data of %s for %s"),
+								 getObjectDescription(&(ObjectAddress){ColumnEncKeyRelationId, cekdata->ckdcekid}, false),
+								 getObjectDescription(&(ObjectAddress){ColumnMasterKeyRelationId, cekdata->ckdcmkid}, false));
+
+				ReleaseSysCache(tup);
+				break;
+			}
+
+		case OCLASS_CMK:
+			{
+				HeapTuple	tup;
+				Form_pg_colmasterkey form;
+				char	   *nspname;
+
+				tup = SearchSysCache1(CMKOID,
+									  ObjectIdGetDatum(object->objectId));
+				if (!HeapTupleIsValid(tup))
+				{
+					if (!missing_ok)
+						elog(ERROR, "cache lookup failed for column encryption key %u",
+							 object->objectId);
+					break;
+				}
+
+				form = (Form_pg_colmasterkey) GETSTRUCT(tup);
+
+				/* Qualify the name if not visible in search path */
+				if (CMKIsVisible(object->objectId))
+					nspname = NULL;
+				else
+					nspname = get_namespace_name(form->cmknamespace);
+
+				appendStringInfo(&buffer, _("column master key %s"),
+								 quote_qualified_identifier(nspname,
+															NameStr(form->cmkname)));
+				ReleaseSysCache(tup);
 				break;
 			}
 
@@ -4440,6 +4614,18 @@ getObjectTypeDescription(const ObjectAddress *object, bool missing_ok)
 			appendStringInfoString(&buffer, "collation");
 			break;
 
+		case OCLASS_CEK:
+			appendStringInfoString(&buffer, "column encryption key");
+			break;
+
+		case OCLASS_CEKDATA:
+			appendStringInfoString(&buffer, "column encryption key data");
+			break;
+
+		case OCLASS_CMK:
+			appendStringInfoString(&buffer, "column master key");
+			break;
+
 		case OCLASS_CONSTRAINT:
 			getConstraintTypeDescription(&buffer, object->objectId,
 										 missing_ok);
@@ -4902,6 +5088,108 @@ getObjectIdentityParts(const ObjectAddress *object,
 					*objname = list_make2(schema,
 										  pstrdup(NameStr(coll->collname)));
 				ReleaseSysCache(collTup);
+				break;
+			}
+
+		case OCLASS_CEK:
+			{
+				HeapTuple	tup;
+				Form_pg_colenckey form;
+				char	   *schema;
+
+				tup = SearchSysCache1(CEKOID, ObjectIdGetDatum(object->objectId));
+				if (!HeapTupleIsValid(tup))
+				{
+					if (!missing_ok)
+						elog(ERROR, "cache lookup failed for column encryption key %u",
+							 object->objectId);
+					break;
+				}
+				form = (Form_pg_colenckey) GETSTRUCT(tup);
+				schema = get_namespace_name_or_temp(form->ceknamespace);
+				appendStringInfoString(&buffer,
+									   quote_qualified_identifier(schema,
+																  NameStr(form->cekname)));
+				if (objname)
+					*objname = list_make2(schema, pstrdup(NameStr(form->cekname)));
+				ReleaseSysCache(tup);
+				break;
+			}
+
+		case OCLASS_CEKDATA:
+			{
+				HeapTuple	tup;
+				Form_pg_colenckeydata form;
+
+				tup = SearchSysCache1(CEKDATAOID, ObjectIdGetDatum(object->objectId));
+				if (!HeapTupleIsValid(tup))
+				{
+					if (!missing_ok)
+						elog(ERROR, "cache lookup failed for column encryption key data %u",
+							 object->objectId);
+					break;
+				}
+				form = (Form_pg_colenckeydata) GETSTRUCT(tup);
+				appendStringInfo(&buffer,
+								 "of %s for %s",
+								 getObjectIdentityParts(&(ObjectAddress){ColumnEncKeyRelationId, form->ckdcekid}, NULL, NULL, false),
+								 getObjectIdentityParts(&(ObjectAddress){ColumnMasterKeyRelationId, form->ckdcmkid}, NULL, NULL, false));
+
+				if (objname)
+				{
+					HeapTuple	tup2;
+					Form_pg_colenckey form2;
+					char	   *schema;
+
+					tup2 = SearchSysCache1(CEKOID, ObjectIdGetDatum(form->ckdcekid));
+					if (!HeapTupleIsValid(tup2))
+						elog(ERROR, "cache lookup failed for column encryption key %u", form->ckdcekid);
+					form2 = (Form_pg_colenckey) GETSTRUCT(tup2);
+					schema = get_namespace_name_or_temp(form2->ceknamespace);
+					*objname = list_make2(schema, pstrdup(NameStr(form2->cekname)));
+					ReleaseSysCache(tup2);
+				}
+				if (objargs)
+				{
+					HeapTuple	tup2;
+					Form_pg_colmasterkey form2;
+					char	   *schema;
+
+					tup2 = SearchSysCache1(CMKOID, ObjectIdGetDatum(form->ckdcmkid));
+					if (!HeapTupleIsValid(tup2))
+						elog(ERROR, "cache lookup failed for column master key %u", form->ckdcmkid);
+					form2 = (Form_pg_colmasterkey) GETSTRUCT(tup2);
+					schema = get_namespace_name_or_temp(form2->cmknamespace);
+					if (objargs)
+						*objargs = list_make2(schema, pstrdup(NameStr(form2->cmkname)));
+					ReleaseSysCache(tup2);
+				}
+				ReleaseSysCache(tup);
+				break;
+			}
+
+		case OCLASS_CMK:
+			{
+				HeapTuple	tup;
+				Form_pg_colmasterkey form;
+				char	   *schema;
+
+				tup = SearchSysCache1(CMKOID, ObjectIdGetDatum(object->objectId));
+				if (!HeapTupleIsValid(tup))
+				{
+					if (!missing_ok)
+						elog(ERROR, "cache lookup failed for column master key %u",
+							 object->objectId);
+					break;
+				}
+				form = (Form_pg_colmasterkey) GETSTRUCT(tup);
+				schema = get_namespace_name_or_temp(form->cmknamespace);
+				appendStringInfoString(&buffer,
+									   quote_qualified_identifier(schema,
+																  NameStr(form->cmkname)));
+				if (objname)
+					*objname = list_make2(schema, pstrdup(NameStr(form->cmkname)));
+				ReleaseSysCache(tup);
 				break;
 			}
 

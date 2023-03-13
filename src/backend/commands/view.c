@@ -88,6 +88,26 @@ DefineVirtualRelation(RangeVar *relation, List *tlist, bool replace,
 			else
 				Assert(!OidIsValid(def->collOid));
 
+			if (type_is_encrypted(exprType((Node *) tle->expr)))
+			{
+				HeapTuple	tp;
+				Form_pg_attribute orig_att;
+
+				if (!tle->resorigtbl || !tle->resorigcol)
+					ereport(ERROR,
+							errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+							errmsg("underlying table and column could not be determined for encrypted view column"));
+
+				tp = SearchSysCache2(ATTNUM, ObjectIdGetDatum(tle->resorigtbl), Int16GetDatum(tle->resorigcol));
+				if (!HeapTupleIsValid(tp))
+					elog(ERROR, "cache lookup failed for attribute %d of relation %u", tle->resorigcol, tle->resorigtbl);
+				orig_att = (Form_pg_attribute) GETSTRUCT(tp);
+				def->typeName = makeTypeNameFromOid(orig_att->attusertypid,
+													orig_att->attusertypmod);
+				def->encryption = makeColumnEncryption(orig_att);
+				ReleaseSysCache(tp);
+			}
+
 			attrList = lappend(attrList, def);
 		}
 	}

@@ -1109,6 +1109,76 @@ SELCT 1/0;<!-- this typo is intentional -->
    </para>
   </sect2>
 
+  <sect2 id="protocol-flow-column-encryption">
+   <title>Automatic Client-side Column-level Encryption</title>
+
+   <para>
+    Automatic client-side column-level encryption is enabled by sending the
+    parameter <literal>_pq_.column_encryption</literal> with a value of
+    <literal>1</literal> in the StartupMessage.  This is a protocol extension
+    that enables a few additional protocol messages and adds additional fields
+    to existing protocol messages.  Client drivers should only activate this
+    protocol extension when requested by the user, for example through a
+    connection parameter.
+   </para>
+
+   <para>
+    When automatic client-side column-level encryption is enabled, the
+    messages ColumnMasterKey and ColumnEncryptionKey can appear before
+    RowDescription and ParameterDescription messages.  Clients should collect
+    the information in these messages and keep them for the duration of the
+    connection.  A server is not required to resend the key information for
+    each statement cycle if it was already sent during this connection.  If a
+    server resends a key that the client has already stored (that is, a key
+    having an ID equal to one already stored), the new information should
+    replace the old.  (This could happen, for example, if the key was altered
+    by server-side DDL commands.)
+   </para>
+
+   <para>
+    A client supporting automatic column-level encryption should automatically
+    decrypt the column value fields of DataRow messages corresponding to
+    encrypted columns, and it should automatically encrypt the parameter value
+    fields of Bind messages corresponding to encrypted columns.
+   </para>
+
+   <para>
+    When column encryption is used, format specifications (text/binary) in the
+    various protocol messages apply to the ciphertext.  The plaintext inside
+    the ciphertext is always in text format, but this is invisible to the
+    protocol.  Even though the ciphertext could in theory be sent in either
+    text or binary format, the server will always send it in binary if the
+    column-level encryption protocol option is enabled.  That way, a client
+    library only needs to support decrypting data sent in binary and does not
+    have to support decoding the text format of the encryption-related types
+    (see <xref linkend="datatype-encrypted"/>).
+   </para>
+
+   <para>
+    When deterministic encryption is used, clients need to take care to
+    represent plaintext to be encrypted in a consistent form.  For example,
+    encrypting an integer represented by the string <literal>100</literal> and
+    an integer represented by the string <literal>+100</literal> would result
+    in two different ciphertexts, thus defeating the main point of
+    deterministic encryption.  This protocol specification requires the
+    plaintext to be in <quote>canonical</quote> form, which is the form that
+    is produced by the server when it outputs a particular value in text
+    format.
+   </para>
+
+   <para>
+    When automatic client-side column-level encryption is enabled, the client
+    encoding must match the server encoding.  This ensures that all values
+    encrypted or decrypted by the client match the server encoding.
+   </para>
+
+   <para>
+    The cryptographic operations used for automatic client-side column-level
+    encryption are described in <xref
+    linkend="protocol-column-encryption-crypto"/>.
+   </para>
+  </sect2>
+
   <sect2 id="protocol-flow-function-call">
    <title>Function Call</title>
 
@@ -3841,6 +3911,16 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
          The parameter format codes.  Each must presently be
          zero (text) or one (binary).
         </para>
+
+        <para>
+         If the protocol extension <literal>_pq_.column_encryption</literal>
+         is enabled (see <xref linkend="protocol-flow-column-encryption"/>),
+         then the second-least-significant half-byte is set to one if the
+         parameter was encrypted by the client.  (So, for example, to send an
+         encrypted value in binary, the field is set to 0x11 in total.)  This
+         is used by the server to check that a parameter that was required to
+         be encrypted was actually encrypted.
+        </para>
        </listitem>
       </varlistentry>
 
@@ -4054,6 +4134,140 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
        <listitem>
         <para>
          Length of message contents in bytes, including self.
+        </para>
+       </listitem>
+      </varlistentry>
+     </variablelist>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="protocol-message-formats-ColumnEncryptionKey">
+    <term>ColumnEncryptionKey (B)</term>
+    <listitem>
+     <para>
+      This message can only appear if the protocol extension
+      <literal>_pq_.column_encryption</literal> is enabled.  (See <xref
+      linkend="protocol-flow-column-encryption"/>.)
+     </para>
+
+     <variablelist>
+      <varlistentry>
+       <term>Byte1('Y')</term>
+       <listitem>
+        <para>
+         Identifies the message as a column encryption key message.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>Int32</term>
+       <listitem>
+        <para>
+         Length of message contents in bytes, including self.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>Int32</term>
+       <listitem>
+        <para>
+         The session-specific identifier of the key.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>Int32</term>
+       <listitem>
+        <para>
+         The identifier of the master key used to encrypt this key.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>Int32</term>
+       <listitem>
+        <para>
+         The identifier of the algorithm used to encrypt this key.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>Int32</term>
+       <listitem>
+        <para>
+         The length of the following key material.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>Byte<replaceable>n</replaceable></term>
+       <listitem>
+        <para>
+         The key material, encrypted with the master key referenced above.
+        </para>
+       </listitem>
+      </varlistentry>
+     </variablelist>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="protocol-message-formats-ColumnMasterKey">
+    <term>ColumnMasterKey (B)</term>
+    <listitem>
+     <para>
+      This message can only appear if the protocol extension
+      <literal>_pq_.column_encryption</literal> is enabled.  (See <xref
+      linkend="protocol-flow-column-encryption"/>.)
+     </para>
+
+     <variablelist>
+      <varlistentry>
+       <term>Byte1('y')</term>
+       <listitem>
+        <para>
+         Identifies the message as a column master key message.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>Int32</term>
+       <listitem>
+        <para>
+         Length of message contents in bytes, including self.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>Int32</term>
+       <listitem>
+        <para>
+         The session-specific identifier of the key.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>String</term>
+       <listitem>
+        <para>
+         The name of the key.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>String</term>
+       <listitem>
+        <para>
+         The key's realm.
         </para>
        </listitem>
       </varlistentry>
@@ -5164,6 +5378,45 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
        </listitem>
       </varlistentry>
      </variablelist>
+
+     <para>
+      If the protocol extension <literal>_pq_.column_encryption</literal> is
+      enabled (see <xref linkend="protocol-flow-column-encryption"/>), then
+      there is also the following for each parameter:
+     </para>
+
+     <variablelist>
+      <varlistentry>
+       <term>Int32</term>
+       <listitem>
+        <para>
+         If this parameter is to be encrypted, this specifies the
+         identifier of the column encryption key to use, else zero.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>Int32</term>
+       <listitem>
+        <para>
+         If this parameter is to be encrypted, this specifies the
+         identifier of the encryption algorithm, else zero.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>Int16</term>
+       <listitem>
+        <para>
+         This is used as a bit field of flags.  If the parameter is to be
+         encrypted and bit 0x0001 is set, the column underlying the parameter
+         uses deterministic encryption, otherwise randomized encryption.
+        </para>
+       </listitem>
+      </varlistentry>
+     </variablelist>
     </listitem>
    </varlistentry>
 
@@ -5549,6 +5802,50 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
          returned from the statement variant of Describe, the
          format code is not yet known and will always be zero.
         </para>
+       </listitem>
+      </varlistentry>
+     </variablelist>
+
+     <para>
+      If the protocol extension <literal>_pq_.column_encryption</literal> is
+      enabled (see <xref linkend="protocol-flow-column-encryption"/>), then
+      there is also the following for each field:
+     </para>
+
+     <variablelist>
+      <varlistentry>
+       <term>Int32</term>
+       <listitem>
+        <para>
+         If the field is encrypted, this specifies the identifier of the
+         column encryption key to use, else zero.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>Int32</term>
+       <listitem>
+        <para>
+         If the field is encrypted, this specifies the identifier of the
+         encryption algorithm, else zero.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>Int16</term>
+       <listitem>
+        <para>
+         This is used as a bit field of flags.  If the field is encrypted and
+         bit 0x0001 is set, the field uses deterministic encryption, otherwise
+         randomized encryption.
+        </para>
+        <!--
+            This is not really useful here, but it keeps alignment with
+            ParameterDescription.  Future flags might be useful in both
+            places.
+        -->
        </listitem>
       </varlistentry>
      </variablelist>
@@ -7375,6 +7672,176 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
     </listitem>
    </varlistentry>
   </variablelist>
+ </sect1>
+
+ <sect1 id="protocol-column-encryption-crypto">
+  <title>Automatic Client-side Column-level Encryption Cryptography</title>
+
+  <para>
+   This section describes the cryptographic operations used by the automatic
+   client-side column-level encryption functionality.  A client that supports
+   this functionality needs to implement these operations as specified here in
+   order to be able to interoperate with other clients.
+  </para>
+
+  <para>
+   Column encryption key algorithms and column master key algorithms are
+   identified by integers in the protocol messages and the system catalogs.
+   Additional algorithms may be added to this protocol specification without a
+   change in the protocol version number.  Clients should implement support
+   for all the algorithms specified here.  If a client encounters an algorithm
+   identifier it does not recognize or does not support, it must raise an
+   error.  A suitable error message should be provided to the application or
+   user.
+  </para>
+
+  <sect2 id="protocol-cmk">
+   <title>Column Master Keys</title>
+
+   <para>
+    The currently defined algorithms for column master keys are listed in
+    <xref linkend="protocol-cmk-table"/>.
+   </para>
+
+   <!-- see also src/include/common/colenc.h -->
+
+   <table id="protocol-cmk-table">
+    <title>Column Master Key Algorithms</title>
+    <tgroup cols="4">
+     <thead>
+      <row>
+       <entry>PostgreSQL ID</entry>
+       <entry>Name</entry>
+       <entry>JWA (<ulink url="https://tools.ietf.org/html/rfc7518">RFC 7518</ulink>) name</entry>
+       <entry>Description</entry>
+      </row>
+     </thead>
+     <tbody>
+      <row>
+       <entry>1</entry>
+       <entry><literal>unspecified</literal></entry>
+       <entry>(none)</entry>
+       <entry>interpreted by client</entry>
+      </row>
+      <row>
+       <entry>2</entry>
+       <entry><literal>RSAES_OAEP_SHA_1</literal></entry>
+       <entry><literal>RSA-OAEP</literal></entry>
+       <entry>RSAES OAEP using default parameters (<ulink
+       url="https://tools.ietf.org/html/rfc8017">RFC 8017</ulink>/PKCS #1)</entry>
+      </row>
+      <row>
+       <entry>3</entry>
+       <entry><literal>RSAES_OAEP_SHA_256</literal></entry>
+       <entry><literal>RSA-OAEP-256</literal></entry>
+       <entry>RSAES OAEP using SHA-256 and MGF1 with SHA-256 (<ulink
+       url="https://tools.ietf.org/html/rfc8017">RFC
+       8017</ulink>/PKCS #1)</entry>
+      </row>
+     </tbody>
+    </tgroup>
+   </table>
+  </sect2>
+
+  <sect2 id="protocol-cek">
+   <title>Column Encryption Keys</title>
+
+   <para>
+    The currently defined algorithms for column encryption keys are listed in
+    <xref linkend="protocol-cek-table"/>.
+   </para>
+
+   <!-- see also src/include/common/colenc.h -->
+
+   <para>
+    The key material of a column encryption key consists of three components,
+    concatenated in this order: the MAC key, the encryption key, and the IV
+    key.  <xref linkend="protocol-cek-table"/> shows the total length that a
+    key generated for each algorithm is required to have.  The MAC key and the
+    encryption key are used by the referenced encryption algorithms; see there
+    for details.  The IV key is used for computing the static initialization
+    vector for deterministic encryption; it is unused for randomized
+    encryption.
+   </para>
+
+   <!-- see also https://datatracker.ietf.org/doc/html/draft-mcgrew-aead-aes-cbc-hmac-sha2-05#section-2.8 -->
+   <table id="protocol-cek-table">
+    <title>Column Encryption Key Algorithms</title>
+    <tgroup cols="7">
+     <thead>
+      <row>
+       <entry>PostgreSQL ID</entry>
+       <entry>Name</entry>
+       <entry>Description</entry>
+       <entry>MAC key length (octets)</entry>
+       <entry>Encryption key length (octets)</entry>
+       <entry>IV key length (octets)</entry>
+       <entry>Total key length (octets)</entry>
+      </row>
+     </thead>
+     <tbody>
+      <row>
+       <entry>32768</entry>
+       <entry><literal>AEAD_AES_128_CBC_HMAC_SHA_256</literal></entry>
+       <entry><ulink url="https://datatracker.ietf.org/doc/html/draft-mcgrew-aead-aes-cbc-hmac-sha2-05"/></entry>
+       <entry>16</entry>
+       <entry>16</entry>
+       <entry>16</entry>
+       <entry>48</entry>
+      </row>
+      <row>
+       <entry>32769</entry>
+       <entry><literal>AEAD_AES_192_CBC_HMAC_SHA_384</literal></entry>
+       <entry><ulink url="https://datatracker.ietf.org/doc/html/draft-mcgrew-aead-aes-cbc-hmac-sha2-05"/></entry>
+       <entry>24</entry>
+       <entry>24</entry>
+       <entry>24</entry>
+       <entry>72</entry>
+      </row>
+      <row>
+       <entry>32770</entry>
+       <entry><literal>AEAD_AES_256_CBC_HMAC_SHA_384</literal></entry>
+       <entry><ulink url="https://datatracker.ietf.org/doc/html/draft-mcgrew-aead-aes-cbc-hmac-sha2-05"/></entry>
+       <entry>24</entry>
+       <entry>32</entry>
+       <entry>24</entry>
+       <entry>90</entry>
+      </row>
+      <row>
+       <entry>32771</entry>
+       <entry><literal>AEAD_AES_256_CBC_HMAC_SHA_512</literal></entry>
+       <entry><ulink url="https://datatracker.ietf.org/doc/html/draft-mcgrew-aead-aes-cbc-hmac-sha2-05"/></entry>
+       <entry>32</entry>
+       <entry>32</entry>
+       <entry>32</entry>
+       <entry>96</entry>
+      </row>
+     </tbody>
+    </tgroup>
+   </table>
+
+   <para>
+    The <quote>associated data</quote> in these algorithms consists of 4
+    bytes: The ASCII letters <literal>P</literal> and <literal>G</literal>
+    (byte values 80 and 71), followed by the version number as a 16-bit
+    unsigned integer in network byte order.  The version number is currently
+    always 1.  (This is intended to allow for possible incompatible changes or
+    extensions in the future.)
+   </para>
+
+   <para>
+    The length of the initialization vector is 16 octets for all CEK algorithm
+    variants.  For randomized encryption, the initialization vector should be
+    (cryptographically strong) random bytes.  For deterministic encryption,
+    the initialization vector is constructed as
+<programlisting>
+SUBSTRING(<replaceable>HMAC</replaceable>(<replaceable>K</replaceable>, <replaceable>P</replaceable>) FOR <replaceable>IVLEN</replaceable>)
+</programlisting>
+    where <replaceable>HMAC</replaceable> is the HMAC function associated with
+    the algorithm, <replaceable>K</replaceable> is the IV key, and
+    <replaceable>P</replaceable> is the plaintext to be encrypted.
+   </para>
+  </sect2>
  </sect1>
 
  <sect1 id="protocol-changes">

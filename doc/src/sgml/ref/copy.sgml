@@ -569,6 +569,16 @@ COPY <replaceable class="parameter">count</replaceable>
     null strings to null values and unquoted null strings to empty strings.
    </para>
 
+   <para>
+    <command>COPY</command> does not support automatic client-side
+    column-level encryption or decryption; its input or output data will
+    always be the ciphertext.  This is usually suitable for backups (see also
+    <xref linkend="app-pgdump"/>).  If automatic client-side encryption or
+    decryption is wanted, <command>INSERT</command> and
+    <command>SELECT</command> need to be used instead to write and read the
+    data.
+   </para>
+
  </refsect1>
 
  <refsect1>

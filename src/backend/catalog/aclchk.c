@@ -33,7 +33,9 @@
 #include "catalog/pg_authid.h"
 #include "catalog/pg_cast.h"
 #include "catalog/pg_class.h"
+#include "catalog/pg_colenckey.h"
 #include "catalog/pg_collation.h"
+#include "catalog/pg_colmasterkey.h"
 #include "catalog/pg_conversion.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_default_acl.h"
@@ -246,6 +248,12 @@ restrict_and_check_grant(bool is_grant, AclMode avail_goptions, bool all_privs,
 			break;
 		case OBJECT_SEQUENCE:
 			whole_mask = ACL_ALL_RIGHTS_SEQUENCE;
+			break;
+		case OBJECT_CEK:
+			whole_mask = ACL_ALL_RIGHTS_CEK;
+			break;
+		case OBJECT_CMK:
+			whole_mask = ACL_ALL_RIGHTS_CMK;
 			break;
 		case OBJECT_DATABASE:
 			whole_mask = ACL_ALL_RIGHTS_DATABASE;
@@ -473,6 +481,14 @@ ExecuteGrantStmt(GrantStmt *stmt)
 			all_privileges = ACL_ALL_RIGHTS_SEQUENCE;
 			errormsg = gettext_noop("invalid privilege type %s for sequence");
 			break;
+		case OBJECT_CEK:
+			all_privileges = ACL_ALL_RIGHTS_CEK;
+			errormsg = gettext_noop("invalid privilege type %s for column encryption key");
+			break;
+		case OBJECT_CMK:
+			all_privileges = ACL_ALL_RIGHTS_CMK;
+			errormsg = gettext_noop("invalid privilege type %s for column master key");
+			break;
 		case OBJECT_DATABASE:
 			all_privileges = ACL_ALL_RIGHTS_DATABASE;
 			errormsg = gettext_noop("invalid privilege type %s for database");
@@ -597,6 +613,12 @@ ExecGrantStmt_oids(InternalGrant *istmt)
 		case OBJECT_SEQUENCE:
 			ExecGrant_Relation(istmt);
 			break;
+		case OBJECT_CEK:
+			ExecGrant_common(istmt, ColumnEncKeyRelationId, ACL_ALL_RIGHTS_CEK, NULL);
+			break;
+		case OBJECT_CMK:
+			ExecGrant_common(istmt, ColumnMasterKeyRelationId, ACL_ALL_RIGHTS_CMK, NULL);
+			break;
 		case OBJECT_DATABASE:
 			ExecGrant_common(istmt, DatabaseRelationId, ACL_ALL_RIGHTS_DATABASE, NULL);
 			break;
@@ -674,6 +696,26 @@ objectNamesToOids(ObjectType objtype, List *objnames, bool is_grant)
 
 				relOid = RangeVarGetRelid(relvar, NoLock, false);
 				objects = lappend_oid(objects, relOid);
+			}
+			break;
+		case OBJECT_CEK:
+			foreach(cell, objnames)
+			{
+				List	   *cekname = (List *) lfirst(cell);
+				Oid			oid;
+
+				oid = get_cek_oid(cekname, false);
+				objects = lappend_oid(objects, oid);
+			}
+			break;
+		case OBJECT_CMK:
+			foreach(cell, objnames)
+			{
+				List	   *cmkname = (List *) lfirst(cell);
+				Oid			oid;
+
+				oid = get_cmk_oid(cmkname, false);
+				objects = lappend_oid(objects, oid);
 			}
 			break;
 		case OBJECT_DATABASE:
@@ -2693,6 +2735,12 @@ aclcheck_error(AclResult aclerr, ObjectType objtype,
 					case OBJECT_AGGREGATE:
 						msg = gettext_noop("permission denied for aggregate %s");
 						break;
+					case OBJECT_CEK:
+						msg = gettext_noop("permission denied for column encryption key %s");
+						break;
+					case OBJECT_CMK:
+						msg = gettext_noop("permission denied for column master key %s");
+						break;
 					case OBJECT_COLLATION:
 						msg = gettext_noop("permission denied for collation %s");
 						break;
@@ -2798,6 +2846,7 @@ aclcheck_error(AclResult aclerr, ObjectType objtype,
 					case OBJECT_AMPROC:
 					case OBJECT_ATTRIBUTE:
 					case OBJECT_CAST:
+					case OBJECT_CEKDATA:
 					case OBJECT_DEFAULT:
 					case OBJECT_DEFACL:
 					case OBJECT_DOMCONSTRAINT:
@@ -2827,6 +2876,12 @@ aclcheck_error(AclResult aclerr, ObjectType objtype,
 				{
 					case OBJECT_AGGREGATE:
 						msg = gettext_noop("must be owner of aggregate %s");
+						break;
+					case OBJECT_CEK:
+						msg = gettext_noop("must be owner of column encryption key %s");
+						break;
+					case OBJECT_CMK:
+						msg = gettext_noop("must be owner of column master key %s");
 						break;
 					case OBJECT_COLLATION:
 						msg = gettext_noop("must be owner of collation %s");
@@ -2938,6 +2993,7 @@ aclcheck_error(AclResult aclerr, ObjectType objtype,
 					case OBJECT_AMPROC:
 					case OBJECT_ATTRIBUTE:
 					case OBJECT_CAST:
+					case OBJECT_CEKDATA:
 					case OBJECT_DEFAULT:
 					case OBJECT_DEFACL:
 					case OBJECT_DOMCONSTRAINT:
@@ -3019,6 +3075,10 @@ pg_aclmask(ObjectType objtype, Oid object_oid, AttrNumber attnum, Oid roleid,
 		case OBJECT_TABLE:
 		case OBJECT_SEQUENCE:
 			return pg_class_aclmask(object_oid, roleid, mask, how);
+		case OBJECT_CEK:
+			return object_aclmask(ColumnEncKeyRelationId, object_oid, roleid, mask, how);
+		case OBJECT_CMK:
+			return object_aclmask(ColumnMasterKeyRelationId, object_oid, roleid, mask, how);
 		case OBJECT_DATABASE:
 			return object_aclmask(DatabaseRelationId, object_oid, roleid, mask, how);
 		case OBJECT_FUNCTION:

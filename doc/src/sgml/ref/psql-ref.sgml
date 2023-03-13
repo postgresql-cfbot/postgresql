@@ -1420,6 +1420,34 @@ INSERT INTO tbl1 VALUES ($1, $2) \bind 'first value' 'second value' \g
       </varlistentry>
 
 
+      <varlistentry id="app-psql-meta-command-dcek">
+        <term><literal>\dcek[+] [ <link linkend="app-psql-patterns"><replaceable class="parameter">pattern</replaceable></link> ]</literal></term>
+        <listitem>
+        <para>
+        Lists column encryption keys.  If <replaceable
+        class="parameter">pattern</replaceable> is specified, only column
+        encryption keys whose names match the pattern are listed.  If
+        <literal>+</literal> is appended to the command name, each object is
+        listed with its associated description.
+        </para>
+        </listitem>
+      </varlistentry>
+
+
+      <varlistentry id="app-psql-meta-command-dcmk">
+        <term><literal>\dcmk[+] [ <link linkend="app-psql-patterns"><replaceable class="parameter">pattern</replaceable></link> ]</literal></term>
+        <listitem>
+        <para>
+        Lists column master keys.  If <replaceable
+        class="parameter">pattern</replaceable> is specified, only column
+        master keys whose names match the pattern are listed.  If
+        <literal>+</literal> is appended to the command name, each object is
+        listed with its associated description.
+        </para>
+        </listitem>
+      </varlistentry>
+
+
       <varlistentry id="app-psql-meta-command-dconfig">
         <term><literal>\dconfig[+] [ <link linkend="app-psql-patterns"><replaceable class="parameter">pattern</replaceable></link> ]</literal></term>
         <listitem>
@@ -4025,6 +4053,17 @@ bar
          If this variable is set to <literal>true</literal>, a table's access
          method details are not displayed. This is mainly useful for
          regression tests.
+        </para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry id="app-psql-variables-hide-column-encryption">
+        <term><varname>HIDE_COLUMN_ENCRYPTION</varname></term>
+        <listitem>
+        <para>
+         If this variable is set to <literal>true</literal>, column encryption
+         details are not displayed. This is mainly useful for regression
+         tests.
         </para>
         </listitem>
       </varlistentry>

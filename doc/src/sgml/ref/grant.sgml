@@ -47,6 +47,16 @@ GRANT { { CREATE | CONNECT | TEMPORARY | TEMP } [, ...] | ALL [ PRIVILEGES ] }
     [ GRANTED BY <replaceable class="parameter">role_specification</replaceable> ]
 
 GRANT { USAGE | ALL [ PRIVILEGES ] }
+    ON COLUMN ENCRYPTION KEY <replaceable>cek_name</replaceable> [, ...]
+    TO <replaceable class="parameter">role_specification</replaceable> [, ...] [ WITH GRANT OPTION ]
+    [ GRANTED BY <replaceable class="parameter">role_specification</replaceable> ]
+
+GRANT { USAGE | ALL [ PRIVILEGES ] }
+    ON COLUMN MASTER KEY <replaceable>cmk_name</replaceable> [, ...]
+    TO <replaceable class="parameter">role_specification</replaceable> [, ...] [ WITH GRANT OPTION ]
+    [ GRANTED BY <replaceable class="parameter">role_specification</replaceable> ]
+
+GRANT { USAGE | ALL [ PRIVILEGES ] }
     ON DOMAIN <replaceable>domain_name</replaceable> [, ...]
     TO <replaceable class="parameter">role_specification</replaceable> [, ...] [ WITH GRANT OPTION ]
     [ GRANTED BY <replaceable class="parameter">role_specification</replaceable> ]
@@ -513,7 +523,7 @@ GRANT admins TO joe;
    </para>
 
    <para>
-    Privileges on databases, tablespaces, schemas, languages, and
+    Privileges on databases, tablespaces, schemas, keys, languages, and
     configuration parameters are
     <productname>PostgreSQL</productname> extensions.
    </para>

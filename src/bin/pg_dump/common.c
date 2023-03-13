@@ -18,7 +18,9 @@
 #include <ctype.h>
 
 #include "catalog/pg_class_d.h"
+#include "catalog/pg_colenckey_d.h"
 #include "catalog/pg_collation_d.h"
+#include "catalog/pg_colmasterkey_d.h"
 #include "catalog/pg_extension_d.h"
 #include "catalog/pg_namespace_d.h"
 #include "catalog/pg_operator_d.h"
@@ -200,6 +202,12 @@ getSchemaData(Archive *fout, int *numTablesPtr)
 
 	pg_log_info("reading user-defined collations");
 	(void) getCollations(fout, &numCollations);
+
+	pg_log_info("reading column master keys");
+	getColumnMasterKeys(fout);
+
+	pg_log_info("reading column encryption keys");
+	getColumnEncryptionKeys(fout);
 
 	pg_log_info("reading user-defined conversions");
 	getConversions(fout, &numConversions);
@@ -874,6 +882,42 @@ findOprByOid(Oid oid)
 	dobj = findObjectByCatalogId(catId);
 	Assert(dobj == NULL || dobj->objType == DO_OPERATOR);
 	return (OprInfo *) dobj;
+}
+
+/*
+ * findCekByOid
+ *	  finds the DumpableObject for the CEK with the given oid
+ *	  returns NULL if not found
+ */
+CekInfo *
+findCekByOid(Oid oid)
+{
+	CatalogId	catId;
+	DumpableObject *dobj;
+
+	catId.tableoid = ColumnEncKeyRelationId;
+	catId.oid = oid;
+	dobj = findObjectByCatalogId(catId);
+	Assert(dobj == NULL || dobj->objType == DO_CEK);
+	return (CekInfo *) dobj;
+}
+
+/*
+ * findCmkByOid
+ *	  finds the DumpableObject for the CMK with the given oid
+ *	  returns NULL if not found
+ */
+CmkInfo *
+findCmkByOid(Oid oid)
+{
+	CatalogId	catId;
+	DumpableObject *dobj;
+
+	catId.tableoid = ColumnMasterKeyRelationId;
+	catId.oid = oid;
+	dobj = findObjectByCatalogId(catId);
+	Assert(dobj == NULL || dobj->objType == DO_CMK);
+	return (CmkInfo *) dobj;
 }
 
 /*

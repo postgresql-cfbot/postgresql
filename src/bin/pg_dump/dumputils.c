@@ -484,6 +484,10 @@ do { \
 		CONVERT_PRIV('C', "CREATE");
 		CONVERT_PRIV('U', "USAGE");
 	}
+	else if (strcmp(type, "COLUMN ENCRYPTION KEY") == 0)
+		CONVERT_PRIV('U', "USAGE");
+	else if (strcmp(type, "COLUMN MASTER KEY") == 0)
+		CONVERT_PRIV('U', "USAGE");
 	else if (strcmp(type, "DATABASE") == 0)
 	{
 		CONVERT_PRIV('C', "CREATE");

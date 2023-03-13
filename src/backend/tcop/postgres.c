@@ -44,6 +44,7 @@
 #include "nodes/print.h"
 #include "optimizer/optimizer.h"
 #include "parser/analyze.h"
+#include "parser/parse_param.h"
 #include "parser/parser.h"
 #include "pg_getopt.h"
 #include "pg_trace.h"
@@ -71,6 +72,7 @@
 #include "utils/memutils.h"
 #include "utils/ps_status.h"
 #include "utils/snapmgr.h"
+#include "utils/syscache.h"
 #include "utils/timeout.h"
 #include "utils/timestamp.h"
 
@@ -1815,6 +1817,16 @@ exec_bind_message(StringInfo input_message)
 			else
 				pformat = 0;	/* default = text */
 
+			if (type_is_encrypted(ptype))
+			{
+				if (pformat & 0xF0)
+					pformat &= ~0xF0;
+				else
+					ereport(ERROR,
+							(errcode(ERRCODE_PROTOCOL_VIOLATION),
+							 errmsg("parameter $%d corresponds to an encrypted column, but the parameter value was not encrypted", paramno + 1)));
+			}
+
 			if (pformat == 0)	/* text mode */
 			{
 				Oid			typinput;
@@ -2560,6 +2572,8 @@ static void
 exec_describe_statement_message(const char *stmt_name)
 {
 	CachedPlanSource *psrc;
+	Oid		   *param_orig_tbls;
+	AttrNumber *param_orig_cols;
 
 	/*
 	 * Start up a transaction command. (Note that this will normally change
@@ -2618,11 +2632,61 @@ exec_describe_statement_message(const char *stmt_name)
 														 * message type */
 	pq_sendint16(&row_description_buf, psrc->num_params);
 
+	/*
+	 * If column encryption is enabled, find the associated tables and columns
+	 * for any parameters, so that we can determine encryption information for
+	 * them.
+	 */
+	if (MyProcPort->column_encryption_enabled && psrc->num_params)
+	{
+		param_orig_tbls = palloc0_array(Oid, psrc->num_params);
+		param_orig_cols = palloc0_array(AttrNumber, psrc->num_params);
+
+		RevalidateCachedQuery(psrc, NULL);
+		find_param_origs(psrc->query_list, &param_orig_tbls, &param_orig_cols);
+	}
+
 	for (int i = 0; i < psrc->num_params; i++)
 	{
 		Oid			ptype = psrc->param_types[i];
+		Oid			pcekid = InvalidOid;
+		int			pcekalg = 0;
+		int16		pflags = 0;
+
+		if (MyProcPort->column_encryption_enabled && type_is_encrypted(ptype))
+		{
+			Oid			porigtbl = param_orig_tbls[i];
+			AttrNumber	porigcol = param_orig_cols[i];
+			HeapTuple	tp;
+			Form_pg_attribute orig_att;
+
+			if (porigtbl == InvalidOid || porigcol == InvalidAttrNumber)
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("parameter $%d corresponds to an encrypted column, but an underlying table and column could not be determined", i + 1)));
+
+			tp = SearchSysCache2(ATTNUM, ObjectIdGetDatum(porigtbl), Int16GetDatum(porigcol));
+			if (!HeapTupleIsValid(tp))
+				elog(ERROR, "cache lookup failed for attribute %d of relation %u", porigcol, porigtbl);
+			orig_att = (Form_pg_attribute) GETSTRUCT(tp);
+			ptype = orig_att->attusertypid;
+			pcekid = orig_att->attcek;
+			pcekalg = orig_att->atttypmod;
+			ReleaseSysCache(tp);
+
+			if (psrc->param_types[i] == PG_ENCRYPTED_DETOID)
+				pflags |= 0x0001;
+
+			MaybeSendColumnEncryptionKeyMessage(pcekid);
+		}
 
 		pq_sendint32(&row_description_buf, (int) ptype);
+		if (MyProcPort->column_encryption_enabled)
+		{
+			pq_sendint32(&row_description_buf, (int) pcekid);
+			pq_sendint32(&row_description_buf, pcekalg);
+			pq_sendint16(&row_description_buf, pflags);
+		}
 	}
 	pq_endmessage_reuse(&row_description_buf);
 

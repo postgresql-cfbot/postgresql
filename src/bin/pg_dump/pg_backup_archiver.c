@@ -3396,6 +3396,8 @@ _getObjectDescription(PQExpBuffer buf, const TocEntry *te)
 
 	/* objects that don't require special decoration */
 	if (strcmp(type, "COLLATION") == 0 ||
+		strcmp(type, "COLUMN ENCRYPTION KEY") == 0 ||
+		strcmp(type, "COLUMN MASTER KEY") == 0 ||
 		strcmp(type, "CONVERSION") == 0 ||
 		strcmp(type, "DOMAIN") == 0 ||
 		strcmp(type, "FOREIGN TABLE") == 0 ||

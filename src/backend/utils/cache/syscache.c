@@ -29,7 +29,10 @@
 #include "catalog/pg_auth_members.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_cast.h"
+#include "catalog/pg_colenckey.h"
+#include "catalog/pg_colenckeydata.h"
 #include "catalog/pg_collation.h"
+#include "catalog/pg_colmasterkey.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_conversion.h"
 #include "catalog/pg_database.h"
@@ -219,6 +222,32 @@ static const struct cachedesc cacheinfo[] = {
 			Anum_pg_cast_casttarget),
 		256
 	},
+	[CEKDATACEKCMK] = {
+		ColumnEncKeyDataRelationId,
+		ColumnEncKeyCekidCmkidIndexId,
+		KEY(Anum_pg_colenckeydata_ckdcekid,
+			Anum_pg_colenckeydata_ckdcmkid),
+		8
+	},
+	[CEKDATAOID] = {
+		ColumnEncKeyDataRelationId,
+		ColumnEncKeyDataOidIndexId,
+		KEY(Anum_pg_colenckeydata_oid),
+		8
+	},
+	[CEKNAMENSP] = {
+		ColumnEncKeyRelationId,
+		ColumnEncKeyNameNspIndexId,
+		KEY(Anum_pg_colenckey_cekname,
+			Anum_pg_colenckey_ceknamespace),
+		8
+	},
+	[CEKOID] = {
+		ColumnEncKeyRelationId,
+		ColumnEncKeyOidIndexId,
+		KEY(Anum_pg_colenckey_oid),
+		8
+	},
 	[CLAAMNAMENSP] = {
 		OperatorClassRelationId,
 		OpclassAmNameNspIndexId,
@@ -231,6 +260,19 @@ static const struct cachedesc cacheinfo[] = {
 		OperatorClassRelationId,
 		OpclassOidIndexId,
 		KEY(Anum_pg_opclass_oid),
+		8
+	},
+	[CMKNAMENSP] = {
+		ColumnMasterKeyRelationId,
+		ColumnMasterKeyNameNspIndexId,
+		KEY(Anum_pg_colmasterkey_cmkname,
+			Anum_pg_colmasterkey_cmknamespace),
+		8
+	},
+	[CMKOID] = {
+		ColumnMasterKeyRelationId,
+		ColumnMasterKeyOidIndexId,
+		KEY(Anum_pg_colmasterkey_oid),
 		8
 	},
 	[COLLNAMEENCNSP] = {

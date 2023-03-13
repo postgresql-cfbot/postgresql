@@ -57,12 +57,30 @@
    </varlistentry>
 
    <varlistentry>
+    <term><acronym>CEK</acronym></term>
+    <listitem>
+     <para>
+      Column Encryption Key; see <xref linkend="ddl-column-encryption"/>
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><acronym>CIDR</acronym></term>
     <listitem>
      <para>
       <ulink
       url="https://en.wikipedia.org/wiki/Classless_Inter-Domain_Routing">Classless
       Inter-Domain Routing</ulink>
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><acronym>CMK</acronym></term>
+    <listitem>
+     <para>
+      Column Master Key; see <xref linkend="ddl-column-encryption"/>
      </para>
     </listitem>
    </varlistentry>

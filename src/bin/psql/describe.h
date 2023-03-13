@@ -76,6 +76,12 @@ extern bool listDomains(const char *pattern, bool verbose, bool showSystem);
 /* \dc */
 extern bool listConversions(const char *pattern, bool verbose, bool showSystem);
 
+/* \dcek */
+extern bool listCEKs(const char *pattern, bool verbose);
+
+/* \dcmk */
+extern bool listCMKs(const char *pattern, bool verbose);
+
 /* \dconfig */
 extern bool describeConfigurationParameters(const char *pattern, bool verbose,
 											bool showSystem);

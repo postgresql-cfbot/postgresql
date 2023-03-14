@@ -3829,6 +3829,7 @@ ExecEvalXmlExpr(ExprState *state, ExprEvalStep *op)
 			{
 				Datum	   *argvalue = op->d.xmlexpr.argvalue;
 				bool	   *argnull = op->d.xmlexpr.argnull;
+				text	   *result;
 
 				/* argument type is known to be xml */
 				Assert(list_length(xexpr->args) == 1);
@@ -3837,8 +3838,12 @@ ExecEvalXmlExpr(ExprState *state, ExprEvalStep *op)
 					return;
 				value = argvalue[0];
 
-				*op->resvalue = PointerGetDatum(xmltotext_with_xmloption(DatumGetXmlP(value),
-																		 xexpr->xmloption));
+				result = xmltotext_with_xmloption(DatumGetXmlP(value),
+												  xexpr->xmloption);
+				if (xexpr->indent)
+					result = xmlserialize_indent(result,xexpr->xmloption);
+
+				*op->resvalue = PointerGetDatum(result);
 				*op->resnull = false;
 			}
 			break;

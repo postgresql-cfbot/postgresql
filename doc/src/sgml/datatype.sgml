@@ -4460,14 +4460,18 @@ xml '<foo>bar</foo>'
     <type>xml</type>, uses the function
     <function>xmlserialize</function>:<indexterm><primary>xmlserialize</primary></indexterm>
 <synopsis>
-XMLSERIALIZE ( { DOCUMENT | CONTENT } <replaceable>value</replaceable> AS <replaceable>type</replaceable> )
+XMLSERIALIZE ( { DOCUMENT | CONTENT } <replaceable>value</replaceable> AS <replaceable>type</replaceable> [ [NO] INDENT ] )
 </synopsis>
     <replaceable>type</replaceable> can be
     <type>character</type>, <type>character varying</type>, or
     <type>text</type> (or an alias for one of those).  Again, according
     to the SQL standard, this is the only way to convert between type
     <type>xml</type> and character types, but PostgreSQL also allows
-    you to simply cast the value.
+    you to simply cast the value. The option <type>INDENT</type> allows to
+    indent the serialized xml output - the default is <type>NO INDENT</type>.
+    It is designed to indent XML strings of type <type>DOCUMENT</type>, but it can also
+   be used with <type>CONTENT</type> as long as <replaceable>value</replaceable>
+   contains a well-formed XML.
    </para>
 
    <para>

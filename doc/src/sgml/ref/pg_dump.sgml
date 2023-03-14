@@ -776,6 +776,16 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><option>--exclude-table-and-children=<replaceable class="parameter">pattern</replaceable></option></term>
+      <listitem>
+       <para>
+        Same as <option>-T</option>/<option>--exclude-table</option> option but automatically
+        exclude partitions or child tables of the specified tables if any.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>--exclude-table-data=<replaceable class="parameter">pattern</replaceable></option></term>
       <listitem>
        <para>
@@ -792,6 +802,17 @@ PostgreSQL documentation
        </para>
       </listitem>
      </varlistentry>
+
+     <varlistentry>
+      <term><option>--exclude-table-data-and-children=<replaceable class="parameter">pattern</replaceable></option></term>
+      <listitem>
+       <para>
+        Same as <option>--exclude-table-data</option>  but automatically
+        exclude partitions or child tables of the specified tables if any.
+       </para>
+      </listitem>
+     </varlistentry>
+
 
      <varlistentry>
       <term><option>--extra-float-digits=<replaceable class="parameter">ndigits</replaceable></option></term>
@@ -1154,6 +1175,16 @@ PostgreSQL documentation
         <option>-T</option>/<option>--exclude-table</option>,
         or <option>--exclude-table-data</option>.  An exclude pattern failing
         to match any objects is not considered an error.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>--table-and-children=<replaceable class="parameter">pattern</replaceable></option></term>
+      <listitem>
+       <para>
+        Same as <option>-t</option>/<option>--table</option> option but automatically
+        include partitions or child tables of the specified tables if any.
        </para>
       </listitem>
      </varlistentry>

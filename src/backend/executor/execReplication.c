@@ -51,7 +51,6 @@ build_replindex_scan_key(ScanKey skey, Relation rel, Relation idxrel,
 						 TupleTableSlot *searchslot)
 {
 	int			attoff;
-	bool		isnull;
 	Datum		indclassDatum;
 	oidvector  *opclass;
 	int2vector *indkey = &idxrel->rd_index->indkey;
@@ -60,9 +59,8 @@ build_replindex_scan_key(ScanKey skey, Relation rel, Relation idxrel,
 	Assert(RelationGetReplicaIndex(rel) == RelationGetRelid(idxrel) ||
 		   RelationGetPrimaryKeyIndex(rel) == RelationGetRelid(idxrel));
 
-	indclassDatum = SysCacheGetAttr(INDEXRELID, idxrel->rd_indextuple,
-									Anum_pg_index_indclass, &isnull);
-	Assert(!isnull);
+	indclassDatum = SysCacheGetAttrNotNull(INDEXRELID, idxrel->rd_indextuple,
+										   Anum_pg_index_indclass);
 	opclass = (oidvector *) DatumGetPointer(indclassDatum);
 
 	/* Build scankey for every attribute in the index. */

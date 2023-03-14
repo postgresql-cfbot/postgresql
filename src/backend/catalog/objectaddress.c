@@ -2597,7 +2597,6 @@ get_object_namespace(const ObjectAddress *address)
 {
 	int			cache;
 	HeapTuple	tuple;
-	bool		isnull;
 	Oid			oid;
 	const ObjectPropertyType *property;
 
@@ -2615,11 +2614,9 @@ get_object_namespace(const ObjectAddress *address)
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "cache lookup failed for cache %d oid %u",
 			 cache, address->objectId);
-	oid = DatumGetObjectId(SysCacheGetAttr(cache,
-										   tuple,
-										   property->attnum_namespace,
-										   &isnull));
-	Assert(!isnull);
+	oid = DatumGetObjectId(SysCacheGetAttrNotNull(cache,
+												  tuple,
+												  property->attnum_namespace));
 	ReleaseSysCache(tuple);
 
 	return oid;
@@ -3890,7 +3887,6 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 			{
 				HeapTuple	tup;
 				Datum		nameDatum;
-				bool		isNull;
 				char	   *parname;
 
 				tup = SearchSysCache1(PARAMETERACLOID,
@@ -3902,10 +3898,8 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 							 object->objectId);
 					break;
 				}
-				nameDatum = SysCacheGetAttr(PARAMETERACLOID, tup,
-											Anum_pg_parameter_acl_parname,
-											&isNull);
-				Assert(!isNull);
+				nameDatum = SysCacheGetAttrNotNull(PARAMETERACLOID, tup,
+												   Anum_pg_parameter_acl_parname);
 				parname = TextDatumGetCString(nameDatum);
 				appendStringInfo(&buffer, _("parameter %s"), parname);
 				ReleaseSysCache(tup);
@@ -5753,7 +5747,6 @@ getObjectIdentityParts(const ObjectAddress *object,
 			{
 				HeapTuple	tup;
 				Datum		nameDatum;
-				bool		isNull;
 				char	   *parname;
 
 				tup = SearchSysCache1(PARAMETERACLOID,
@@ -5765,10 +5758,8 @@ getObjectIdentityParts(const ObjectAddress *object,
 							 object->objectId);
 					break;
 				}
-				nameDatum = SysCacheGetAttr(PARAMETERACLOID, tup,
-											Anum_pg_parameter_acl_parname,
-											&isNull);
-				Assert(!isNull);
+				nameDatum = SysCacheGetAttrNotNull(PARAMETERACLOID, tup,
+												   Anum_pg_parameter_acl_parname);
 				parname = TextDatumGetCString(nameDatum);
 				appendStringInfoString(&buffer, parname);
 				if (objname)

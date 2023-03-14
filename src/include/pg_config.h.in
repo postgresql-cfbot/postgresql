@@ -149,6 +149,9 @@
 /* Define to 1 if you have the <editline/readline.h> header file. */
 #undef HAVE_EDITLINE_READLINE_H
 
+/* Define to 1 if you have the `epoll_pwait2' function. */
+#undef HAVE_EPOLL_PWAIT2
+
 /* Define to 1 if you have the <execinfo.h> header file. */
 #undef HAVE_EXECINFO_H
 

@@ -247,6 +247,7 @@ sub GenerateFiles
 		HAVE_DECL_STRNLEN                           => 1,
 		HAVE_EDITLINE_HISTORY_H                     => undef,
 		HAVE_EDITLINE_READLINE_H                    => undef,
+		HAVE_EPOLL_PWAIT2                           => undef,
 		HAVE_EXECINFO_H                             => undef,
 		HAVE_EXPLICIT_BZERO                         => undef,
 		HAVE_FSEEKO                                 => 1,

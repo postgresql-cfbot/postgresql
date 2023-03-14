@@ -1720,6 +1720,26 @@ TimestampDifferenceMilliseconds(TimestampTz start_time, TimestampTz stop_time)
 }
 
 /*
+ * TimestampDifferenceMicroseconds -- convert the difference between two
+ * 		timestamps into microseconds
+ *
+ * Compute a wait time for WaitLatchUs().
+ */
+int64
+TimestampDifferenceMicroseconds(TimestampTz start_time, TimestampTz stop_time)
+{
+	TimestampTz diff;
+
+	/* Deal with zero or negative elapsed time quickly. */
+	if (start_time >= stop_time)
+		return 0;
+	/* To not fail with timestamp infinities, we must detect overflow. */
+	if (pg_sub_s64_overflow(stop_time, start_time, &diff))
+		return PG_INT64_MAX;
+	return diff;
+}
+
+/*
  * TimestampDifferenceExceeds -- report whether the difference between two
  *		timestamps is >= a threshold (expressed in milliseconds)
  *

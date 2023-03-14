@@ -194,7 +194,7 @@ static void WaitEventAdjustPoll(WaitEventSet *set, WaitEvent *event);
 static void WaitEventAdjustWin32(WaitEventSet *set, WaitEvent *event);
 #endif
 
-static inline int WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
+static inline int WaitEventSetWaitBlock(WaitEventSet *set, int64 cur_timeout_us,
 										WaitEvent *occurred_events, int nevents);
 
 /*
@@ -475,10 +475,9 @@ DisownLatch(Latch *latch)
  * to wait for. If the latch is already set (and WL_LATCH_SET is given), the
  * function returns immediately.
  *
- * The "timeout" is given in milliseconds. It must be >= 0 if WL_TIMEOUT flag
- * is given.  Although it is declared as "long", we don't actually support
- * timeouts longer than INT_MAX milliseconds.  Note that some extra overhead
- * is incurred when WL_TIMEOUT is given, so avoid using a timeout if possible.
+ * The "timeout" is given in microseconds.  It must be >= 0 if WL_TIMEOUT flag
+ * is given.  Note that some extra overhead is incurred when WL_TIMEOUT is
+ * given, so avoid using a timeout if possible.
  *
  * The latch must be owned by the current process, ie. it must be a
  * process-local latch initialized with InitLatch, or a shared latch
@@ -489,8 +488,8 @@ DisownLatch(Latch *latch)
  * we return all of them in one call, but we will return at least one.
  */
 int
-WaitLatch(Latch *latch, int wakeEvents, long timeout,
-		  uint32 wait_event_info)
+WaitLatchUs(Latch *latch, int wakeEvents, int64 timeout_us,
+			uint32 wait_event_info)
 {
 	WaitEvent	event;
 
@@ -510,13 +509,30 @@ WaitLatch(Latch *latch, int wakeEvents, long timeout,
 	LatchWaitSet->exit_on_postmaster_death =
 		((wakeEvents & WL_EXIT_ON_PM_DEATH) != 0);
 
-	if (WaitEventSetWait(LatchWaitSet,
-						 (wakeEvents & WL_TIMEOUT) ? timeout : -1,
-						 &event, 1,
-						 wait_event_info) == 0)
+	if (WaitEventSetWaitUs(LatchWaitSet,
+						   (wakeEvents & WL_TIMEOUT) ? timeout_us : -1,
+						   &event, 1,
+						   wait_event_info) == 0)
 		return WL_TIMEOUT;
 	else
 		return event.events;
+}
+
+/*
+ * Like WaitLatchUs(), but with the timeout in milliseconds.
+ *
+ * The "timeout" is given in milliseconds. It must be >= 0 if WL_TIMEOUT flag
+ * is given.  Although it is declared as "long", we don't actually support
+ * timeouts longer than INT_MAX milliseconds.  Note that some extra overhead
+ * is incurred when WL_TIMEOUT is given, so avoid using a timeout if possible.
+ */
+int
+WaitLatch(Latch *latch, int wakeEvents, long timeout_ms,
+		  uint32 wait_event_info)
+{
+	return WaitLatchUs(latch, wakeEvents,
+					   timeout_ms <= 0 ? timeout_ms : timeout_ms * 1000,
+					   wait_event_info);
 }
 
 /*
@@ -537,8 +553,8 @@ WaitLatch(Latch *latch, int wakeEvents, long timeout,
  * WaitEventSet instead; that's more efficient.
  */
 int
-WaitLatchOrSocket(Latch *latch, int wakeEvents, pgsocket sock,
-				  long timeout, uint32 wait_event_info)
+WaitLatchOrSocketUs(Latch *latch, int wakeEvents, pgsocket sock,
+					int64 timeout_us, uint32 wait_event_info)
 {
 	int			ret = 0;
 	int			rc;
@@ -546,9 +562,9 @@ WaitLatchOrSocket(Latch *latch, int wakeEvents, pgsocket sock,
 	WaitEventSet *set = CreateWaitEventSet(CurrentMemoryContext, 3);
 
 	if (wakeEvents & WL_TIMEOUT)
-		Assert(timeout >= 0);
+		Assert(timeout_us >= 0);
 	else
-		timeout = -1;
+		timeout_us = -1;
 
 	if (wakeEvents & WL_LATCH_SET)
 		AddWaitEventToSet(set, WL_LATCH_SET, PGINVALID_SOCKET,
@@ -575,7 +591,7 @@ WaitLatchOrSocket(Latch *latch, int wakeEvents, pgsocket sock,
 		AddWaitEventToSet(set, ev, sock, NULL, NULL);
 	}
 
-	rc = WaitEventSetWait(set, timeout, &event, 1, wait_event_info);
+	rc = WaitEventSetWaitUs(set, timeout_us, &event, 1, wait_event_info);
 
 	if (rc == 0)
 		ret |= WL_TIMEOUT;
@@ -589,6 +605,20 @@ WaitLatchOrSocket(Latch *latch, int wakeEvents, pgsocket sock,
 	FreeWaitEventSet(set);
 
 	return ret;
+}
+
+/*
+ * Like WaitLatchOrSocket, but with timeout in milliseconds.
+ */
+int
+WaitLatchOrSocket(Latch *latch, int wakeEvents, pgsocket sock,
+				  long timeout_ms, uint32 wait_event_info)
+{
+	return WaitLatchOrSocketUs(latch,
+							   wakeEvents,
+							   sock,
+							   timeout_ms > 0 ? timeout_ms * 1000 : timeout_ms,
+							   wait_event_info);
 }
 
 /*
@@ -1380,14 +1410,14 @@ WaitEventAdjustWin32(WaitEventSet *set, WaitEvent *event)
  * values associated with the registered event.
  */
 int
-WaitEventSetWait(WaitEventSet *set, long timeout,
-				 WaitEvent *occurred_events, int nevents,
-				 uint32 wait_event_info)
+WaitEventSetWaitUs(WaitEventSet *set, int64 timeout_us,
+				   WaitEvent *occurred_events, int nevents,
+				   uint32 wait_event_info)
 {
 	int			returned_events = 0;
 	instr_time	start_time;
 	instr_time	cur_time;
-	long		cur_timeout = -1;
+	int64		cur_timeout = -1;
 
 	Assert(nevents > 0);
 
@@ -1395,11 +1425,11 @@ WaitEventSetWait(WaitEventSet *set, long timeout,
 	 * Initialize timeout if requested.  We must record the current time so
 	 * that we can determine the remaining timeout if interrupted.
 	 */
-	if (timeout >= 0)
+	if (timeout_us >= 0)
 	{
 		INSTR_TIME_SET_CURRENT(start_time);
-		Assert(timeout >= 0 && timeout <= INT_MAX);
-		cur_timeout = timeout;
+		Assert(timeout_us >= 0);
+		cur_timeout = timeout_us;
 	}
 	else
 		INSTR_TIME_SET_ZERO(start_time);
@@ -1487,11 +1517,11 @@ WaitEventSetWait(WaitEventSet *set, long timeout,
 			returned_events = rc;
 
 		/* If we're not done, update cur_timeout for next iteration */
-		if (returned_events == 0 && timeout >= 0)
+		if (returned_events == 0 && timeout_us >= 0)
 		{
 			INSTR_TIME_SET_CURRENT(cur_time);
 			INSTR_TIME_SUBTRACT(cur_time, start_time);
-			cur_timeout = timeout - (long) INSTR_TIME_GET_MILLISEC(cur_time);
+			cur_timeout = timeout_us - INSTR_TIME_GET_MICROSEC(cur_time);
 			if (cur_timeout <= 0)
 				break;
 		}
@@ -1505,6 +1535,20 @@ WaitEventSetWait(WaitEventSet *set, long timeout,
 	return returned_events;
 }
 
+/*
+ * Like WaitEventSetWaitUs(), but the timeout specified in milliseconds.
+ */
+int
+WaitEventSetWait(WaitEventSet *set, long timeout_ms,
+				 WaitEvent *occurred_events, int nevents,
+				 uint32 wait_event_info)
+{
+	return WaitEventSetWaitUs(set,
+							  timeout_ms <= 0 ? timeout_ms : timeout_ms * 1000,
+							  occurred_events,
+							  nevents,
+							  wait_event_info);
+}
 
 #if defined(WAIT_USE_EPOLL)
 
@@ -1517,17 +1561,31 @@ WaitEventSetWait(WaitEventSet *set, long timeout,
  * easy.
  */
 static inline int
-WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
+WaitEventSetWaitBlock(WaitEventSet *set, int64 cur_timeout_us,
 					  WaitEvent *occurred_events, int nevents)
 {
 	int			returned_events = 0;
 	int			rc;
 	WaitEvent  *cur_event;
 	struct epoll_event *cur_epoll_event;
+#ifdef HAVE_EPOLL_PWAIT2
+	struct timespec nap;
+#endif
 
 	/* Sleep */
+#ifdef HAVE_EPOLL_PWAIT2
+	nap.tv_sec = cur_timeout_us / 1000000;
+	nap.tv_nsec = (cur_timeout_us % 1000000) * 1000;
+	rc = epoll_pwait2(set->epoll_fd, set->epoll_ret_events,
+					  Min(nevents, set->nevents_space),
+					  cur_timeout_us >= 0 ? &nap : NULL,
+					  NULL);
+#else
 	rc = epoll_wait(set->epoll_fd, set->epoll_ret_events,
-					Min(nevents, set->nevents_space), cur_timeout);
+					Min(nevents, set->nevents_space),
+					cur_timeout_us >= 0 ? (cur_timeout_us + 999) / 1000
+					: cur_timeout_us);
+#endif
 
 	/* Check return code */
 	if (rc < 0)
@@ -1653,7 +1711,7 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
  * with separate system calls.
  */
 static int
-WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
+WaitEventSetWaitBlock(WaitEventSet *set, int64 cur_timeout_us,
 					  WaitEvent *occurred_events, int nevents)
 {
 	int			returned_events = 0;
@@ -1663,12 +1721,12 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 	struct timespec timeout;
 	struct timespec *timeout_p;
 
-	if (cur_timeout < 0)
+	if (cur_timeout_us < 0)
 		timeout_p = NULL;
 	else
 	{
-		timeout.tv_sec = cur_timeout / 1000;
-		timeout.tv_nsec = (cur_timeout % 1000) * 1000000;
+		timeout.tv_sec = cur_timeout_us / 1000000;
+		timeout.tv_nsec = (cur_timeout_us % 1000000) * 1000;
 		timeout_p = &timeout;
 	}
 
@@ -1806,16 +1864,25 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
  * but requires iterating through all of set->pollfds.
  */
 static inline int
-WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
+WaitEventSetWaitBlock(WaitEventSet *set, int64 cur_timeout_us,
 					  WaitEvent *occurred_events, int nevents)
 {
 	int			returned_events = 0;
 	int			rc;
 	WaitEvent  *cur_event;
 	struct pollfd *cur_pollfd;
+	int			cur_timeout_ms;
+
+	/* Round up to the nearest millisecond, and cap at INT_MAX. */
+	if (cur_timeout_us >= PG_INT64_MAX - 999)
+		cur_timeout_ms = INT_MAX;
+	else if (cur_timeout_us > 0)
+		cur_timeout_ms = Min((int64) INT_MAX, (cur_timeout_us + 999) / 1000);
+	else
+		cur_timeout_ms = cur_timeout_us;
 
 	/* Sleep */
-	rc = poll(set->pollfds, set->nevents, (int) cur_timeout);
+	rc = poll(set->pollfds, set->nevents, cur_timeout_ms);
 
 	/* Check return code */
 	if (rc < 0)
@@ -1943,12 +2010,21 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
  * that only one event is "consumed".
  */
 static inline int
-WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
+WaitEventSetWaitBlock(WaitEventSet *set, int64 cur_timeout_us,
 					  WaitEvent *occurred_events, int nevents)
 {
 	int			returned_events = 0;
 	DWORD		rc;
 	WaitEvent  *cur_event;
+	int			cur_timeout_ms;
+
+	/* Round up to the nearest millisecond, and cap at INT_MAX. */
+	if (cur_timeout_us >= PG_INT64_MAX - 999)
+		cur_timeout_ms = INT_MAX;
+	else if (cur_timeout_us > 0)
+		cur_timeout_ms = Min((int64) INT_MAX, (cur_timeout_us + 999) / 1000);
+	else
+		cur_timeout_ms = cur_timeout_us;
 
 	/* Reset any wait events that need it */
 	for (cur_event = set->events;
@@ -2000,7 +2076,7 @@ WaitEventSetWaitBlock(WaitEventSet *set, int cur_timeout,
 	 * Need to wait for ->nevents + 1, because signal handle is in [0].
 	 */
 	rc = WaitForMultipleObjects(set->nevents + 1, set->handles, FALSE,
-								cur_timeout);
+								cur_timeout_ms);
 
 	/* Check return code */
 	if (rc == WAIT_FAILED)

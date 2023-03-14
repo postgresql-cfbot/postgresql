@@ -445,7 +445,7 @@ WalReceiverMain(void)
 				pgsocket	wait_fd = PGINVALID_SOCKET;
 				int			rc;
 				TimestampTz nextWakeup;
-				long		nap;
+				int64		nap;
 
 				/*
 				 * Exit walreceiver if we're not in recovery. This should not
@@ -530,7 +530,7 @@ WalReceiverMain(void)
 
 				/* Calculate the nap time, clamping as necessary. */
 				now = GetCurrentTimestamp();
-				nap = TimestampDifferenceMilliseconds(now, nextWakeup);
+				nap = TimestampDifferenceMicroseconds(now, nextWakeup);
 
 				/*
 				 * Ideally we would reuse a WaitEventSet object repeatedly
@@ -544,12 +544,12 @@ WalReceiverMain(void)
 				 * avoiding some system calls.
 				 */
 				Assert(wait_fd != PGINVALID_SOCKET);
-				rc = WaitLatchOrSocket(MyLatch,
-									   WL_EXIT_ON_PM_DEATH | WL_SOCKET_READABLE |
-									   WL_TIMEOUT | WL_LATCH_SET,
-									   wait_fd,
-									   nap,
-									   WAIT_EVENT_WAL_RECEIVER_MAIN);
+				rc = WaitLatchOrSocketUs(MyLatch,
+										 WL_EXIT_ON_PM_DEATH | WL_SOCKET_READABLE |
+										 WL_TIMEOUT | WL_LATCH_SET,
+										 wait_fd,
+										 nap,
+										 WAIT_EVENT_WAL_RECEIVER_MAIN);
 				if (rc & WL_LATCH_SET)
 				{
 					ResetLatch(MyLatch);

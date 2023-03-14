@@ -2372,6 +2372,7 @@ func_checks = [
   # when enabling asan the dlopen check doesn't notice that -ldl is actually
   # required. Just checking for dlsym() ought to suffice.
   ['dlsym', {'dependencies': [dl_dep], 'define': false}],
+  ['epoll_pwait2'],
   ['explicit_bzero'],
   ['fdatasync', {'dependencies': [rt_dep, posix4_dep], 'define': false}], # Solaris
   ['getifaddrs'],

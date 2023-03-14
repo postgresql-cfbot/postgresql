@@ -2232,10 +2232,10 @@ vacuum_delay_point(void)
 		if (msec > VacuumCostDelay * 4)
 			msec = VacuumCostDelay * 4;
 
-		(void) WaitLatch(MyLatch,
-						 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-						 msec,
-						 WAIT_EVENT_VACUUM_DELAY);
+		(void) WaitLatchUs(MyLatch,
+						   WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+						   msec * 1000,
+						   WAIT_EVENT_VACUUM_DELAY);
 		ResetLatch(MyLatch);
 
 		VacuumCostBalance = 0;

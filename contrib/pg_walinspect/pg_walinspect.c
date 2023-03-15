@@ -43,7 +43,8 @@ static XLogRecPtr GetCurrentLSN(void);
 static XLogReaderState *InitXLogReaderState(XLogRecPtr lsn);
 static XLogRecord *ReadNextXLogRecord(XLogReaderState *xlogreader);
 static void GetWALRecordInfo(XLogReaderState *record, Datum *values,
-							 bool *nulls, uint32 ncols);
+							 bool *nulls, uint32 ncols,
+							 bool fetch_blk_ref);
 static void GetWALRecordsInfo(FunctionCallInfo fcinfo,
 							  XLogRecPtr start_lsn,
 							  XLogRecPtr end_lsn);
@@ -180,7 +181,8 @@ ReadNextXLogRecord(XLogReaderState *xlogreader)
  */
 static void
 GetWALRecordInfo(XLogReaderState *record, Datum *values,
-				 bool *nulls, uint32 ncols)
+				 bool *nulls, uint32 ncols,
+				 bool fetch_blk_ref)
 {
 	const char *id;
 	RmgrData	desc;
@@ -200,8 +202,11 @@ GetWALRecordInfo(XLogReaderState *record, Datum *values,
 	desc.rm_desc(&rec_desc, record);
 
 	/* Block references. */
-	initStringInfo(&rec_blk_ref);
-	XLogRecGetBlockRefInfo(record, false, true, &rec_blk_ref, &fpi_len);
+	if (fetch_blk_ref)
+	{
+		initStringInfo(&rec_blk_ref);
+		XLogRecGetBlockRefInfo(record, false, true, &rec_blk_ref, &fpi_len);
+	}
 
 	main_data_len = XLogRecGetDataLen(record);
 
@@ -213,9 +218,14 @@ GetWALRecordInfo(XLogReaderState *record, Datum *values,
 	values[i++] = CStringGetTextDatum(id);
 	values[i++] = UInt32GetDatum(XLogRecGetTotalLen(record));
 	values[i++] = UInt32GetDatum(main_data_len);
-	values[i++] = UInt32GetDatum(fpi_len);
+
+	if (fetch_blk_ref)
+		values[i++] = UInt32GetDatum(fpi_len);
+
 	values[i++] = CStringGetTextDatum(rec_desc.data);
-	values[i++] = CStringGetTextDatum(rec_blk_ref.data);
+
+	if (fetch_blk_ref)
+		values[i++] = CStringGetTextDatum(rec_blk_ref.data);
 
 	Assert(i == ncols);
 }
@@ -228,9 +238,16 @@ GetWALRecordInfo(XLogReaderState *record, Datum *values,
 static void
 GetWALBlockInfo(FunctionCallInfo fcinfo, XLogReaderState *record)
 {
-#define PG_GET_WAL_BLOCK_INFO_COLS 11
+#define PG_GET_WAL_BLOCK_INFO_COLS 19
+#define PG_GET_WAL_BLOCK_INFO_PER_RECORD_COLS 9
+	Datum		values[PG_GET_WAL_BLOCK_INFO_COLS] = {0};
+	bool		nulls[PG_GET_WAL_BLOCK_INFO_COLS] = {0};
 	int			block_id;
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+
+	/* Get per-record info. */
+	GetWALRecordInfo(record, values, nulls,
+					 PG_GET_WAL_BLOCK_INFO_PER_RECORD_COLS, false);
 
 	for (block_id = 0; block_id <= XLogRecMaxBlockId(record); block_id++)
 	{
@@ -238,9 +255,13 @@ GetWALBlockInfo(FunctionCallInfo fcinfo, XLogReaderState *record)
 		BlockNumber blkno;
 		RelFileLocator rnode;
 		ForkNumber	fork;
-		Datum		values[PG_GET_WAL_BLOCK_INFO_COLS] = {0};
-		bool		nulls[PG_GET_WAL_BLOCK_INFO_COLS] = {0};
-		int			i = 0;
+		int			i = PG_GET_WAL_BLOCK_INFO_PER_RECORD_COLS;
+
+		/* Reset only the per-block output columns. */
+		memset(&nulls[PG_GET_WAL_BLOCK_INFO_PER_RECORD_COLS], 0,
+			   PG_GET_WAL_BLOCK_INFO_PER_RECORD_COLS * sizeof(bool));
+		memset(&values[PG_GET_WAL_BLOCK_INFO_PER_RECORD_COLS], 0,
+			   PG_GET_WAL_BLOCK_INFO_PER_RECORD_COLS * sizeof(bool));
 
 		if (!XLogRecHasBlockRef(record, block_id))
 			continue;
@@ -250,7 +271,6 @@ GetWALBlockInfo(FunctionCallInfo fcinfo, XLogReaderState *record)
 		(void) XLogRecGetBlockTagExtended(record, block_id,
 										  &rnode, &fork, &blkno, NULL);
 
-		values[i++] = LSNGetDatum(record->ReadRecPtr);
 		values[i++] = Int16GetDatum(block_id);
 		values[i++] = ObjectIdGetDatum(blk->rlocator.spcOid);
 		values[i++] = ObjectIdGetDatum(blk->rlocator.dbOid);
@@ -345,6 +365,7 @@ GetWALBlockInfo(FunctionCallInfo fcinfo, XLogReaderState *record)
 							 values, nulls);
 	}
 
+#undef PG_GET_WAL_BLOCK_INFO_PER_RECORD_COLS
 #undef PG_GET_WAL_FPI_BLOCK_COLS
 }
 
@@ -434,7 +455,8 @@ pg_get_wal_record_info(PG_FUNCTION_ARGS)
 				 errmsg("could not read WAL at %X/%X",
 						LSN_FORMAT_ARGS(xlogreader->EndRecPtr))));
 
-	GetWALRecordInfo(xlogreader, values, nulls, PG_GET_WAL_RECORD_INFO_COLS);
+	GetWALRecordInfo(xlogreader, values, nulls, PG_GET_WAL_RECORD_INFO_COLS,
+					 true);
 
 	pfree(xlogreader->private_data);
 	XLogReaderFree(xlogreader);
@@ -505,7 +527,7 @@ GetWALRecordsInfo(FunctionCallInfo fcinfo, XLogRecPtr start_lsn,
 		old_cxt = MemoryContextSwitchTo(tmp_cxt);
 
 		GetWALRecordInfo(xlogreader, values, nulls,
-						 PG_GET_WAL_RECORDS_INFO_COLS);
+						 PG_GET_WAL_RECORDS_INFO_COLS, true);
 
 		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc,
 							 values, nulls);

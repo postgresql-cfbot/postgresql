@@ -1,0 +1,48 @@
+#! /bin/sh
+# Called during CI to generate a code coverage report of changed files.
+set -e
+
+base_branch=$1
+build_dir=$2
+outdir=$3
+args=$4
+
+changed=`git diff --name-only "$base_branch" '*.c'`
+[ -z "$changed" ] && exit 0 # Nothing changed
+
+[ -d "$outdir" ] ||
+	mkdir "$outdir"
+
+# This could be used to map from object file back to source file:
+# readelf --debug-dump=info src/backend/postgres_lib.a.p/utils_adt_array_userfuncs.c.o |awk '/DW_AT_name/{print $NF;exit}'
+# gcov ./src/port/libpgport_shlib.a.p/inet_net_ntop.c.gcno --stdout
+
+gcov=$outdir/coverage.gcov
+lcov --quiet --capture --directory "$build_dir" $args >"$gcov.new"
+
+# Filter to include only changed files
+echo "$changed" |sed 's,^,*/,' |
+	xargs -rt lcov --extract "$gcov.new" >"$gcov.filtered"
+rm "$gcov.new"
+
+echo "$args" |grep initial >/dev/null && {
+	mv "$gcov.filtered" "$gcov.init"
+	exit 0
+}
+
+# Exit successfully if no relevant files were changed
+[ -s "$gcov.filtered" ] || {
+	rm "$gcov.init"
+	exit 0
+}
+
+# Otherwise combine with the init file:
+lcov -a "$gcov.init" -a "$gcov.filtered" >"$gcov"
+
+genhtml "$gcov" --show-details --legend --quiet --num-spaces=4 --output-directory "$outdir" \
+	--title="Coverage report of files changed since: $base_branch"
+cp "$outdir"/index.html "$outdir"/00-index.html
+
+gzip "$gcov" "$gcov.init" "$gcov.filtered"
+ls -l "$outdir"
+du -sh "$outdir"

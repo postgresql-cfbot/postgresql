@@ -290,7 +290,8 @@ GetPubPartitionOptionRelations(List *result, PublicationPartOpt pub_partopt,
  * ancestor is at the end of the list.
  */
 Oid
-GetTopMostAncestorInPublication(Oid puboid, List *ancestors, int *ancestor_level)
+GetTopMostAncestorInPublication(Oid puboid, List *ancestors,
+								int *ancestor_level, bool puballtables)
 {
 	ListCell   *lc;
 	Oid			topmost_relid = InvalidOid;
@@ -302,32 +303,44 @@ GetTopMostAncestorInPublication(Oid puboid, List *ancestors, int *ancestor_level
 	foreach(lc, ancestors)
 	{
 		Oid			ancestor = lfirst_oid(lc);
-		List	   *apubids = GetRelationPublications(ancestor);
-		List	   *aschemaPubids = NIL;
+		List	   *apubids = GetRelationPublications(ancestor, false);
+		List	   *aschemapubids = NIL;
+		List	   *aexceptpubids = NIL;
+		bool		set_top = false;
 
 		level++;
 
-		if (list_member_oid(apubids, puboid))
+		/* check if member of table publications */
+		set_top = list_member_oid(apubids, puboid);
+		if (!set_top)
+		{
+			aschemapubids = GetSchemaPublications(get_rel_namespace(ancestor));
+
+			/* check if member of schema publications */
+			set_top = list_member_oid(aschemapubids, puboid);
+
+			/*
+			 * If the publication is all tables publication and the table
+			 * is not part of exception tables.
+			 */
+			if (!set_top && puballtables)
+			{
+				aexceptpubids = GetRelationPublications(ancestor, true);
+				set_top = !list_member_oid(aexceptpubids, puboid);
+			}
+		}
+
+		if (set_top)
 		{
 			topmost_relid = ancestor;
 
 			if (ancestor_level)
 				*ancestor_level = level;
 		}
-		else
-		{
-			aschemaPubids = GetSchemaPublications(get_rel_namespace(ancestor));
-			if (list_member_oid(aschemaPubids, puboid))
-			{
-				topmost_relid = ancestor;
-
-				if (ancestor_level)
-					*ancestor_level = level;
-			}
-		}
 
 		list_free(apubids);
-		list_free(aschemaPubids);
+		list_free(aschemapubids);
+		list_free(aexceptpubids);
 	}
 
 	return topmost_relid;
@@ -396,6 +409,8 @@ publication_add_relation(Oid pubid, PublicationRelInfo *pri,
 		ObjectIdGetDatum(pubid);
 	values[Anum_pg_publication_rel_prrelid - 1] =
 		ObjectIdGetDatum(relid);
+	values[Anum_pg_publication_rel_prexcept - 1] =
+		BoolGetDatum(pri->except);
 
 	/* Add qualifications, if available */
 	if (pri->whereClause != NULL)
@@ -664,9 +679,9 @@ publication_add_schema(Oid pubid, Oid schemaid, bool if_not_exists)
 	return myself;
 }
 
-/* Gets list of publication oids for a relation */
+/* Gets list of publication oids for a relation that matches the except_flag */
 List *
-GetRelationPublications(Oid relid)
+GetRelationPublications(Oid relid, bool except_flag)
 {
 	List	   *result = NIL;
 	CatCList   *pubrellist;
@@ -680,7 +695,8 @@ GetRelationPublications(Oid relid)
 		HeapTuple	tup = &pubrellist->members[i]->tuple;
 		Oid			pubid = ((Form_pg_publication_rel) GETSTRUCT(tup))->prpubid;
 
-		result = lappend_oid(result, pubid);
+		if (except_flag == ((Form_pg_publication_rel) GETSTRUCT(tup))->prexcept)
+			result = lappend_oid(result, pubid);
 	}
 
 	ReleaseSysCacheList(pubrellist);
@@ -779,13 +795,16 @@ GetAllTablesPublications(void)
  * root partitioned tables.
  */
 List *
-GetAllTablesPublicationRelations(bool pubviaroot)
+GetAllTablesPublicationRelations(Oid pubid, bool pubviaroot)
 {
 	Relation	classRel;
 	ScanKeyData key[1];
 	TableScanDesc scan;
 	HeapTuple	tuple;
 	List	   *result = NIL;
+	List	   *exceptlist;
+
+	exceptlist = GetPublicationRelations(pubid, PUBLICATION_PART_ALL);
 
 	classRel = table_open(RelationRelationId, AccessShareLock);
 
@@ -802,7 +821,8 @@ GetAllTablesPublicationRelations(bool pubviaroot)
 		Oid			relid = relForm->oid;
 
 		if (is_publishable_class(relid, relForm) &&
-			!(relForm->relispartition && pubviaroot))
+			!(relForm->relispartition && pubviaroot) &&
+			!list_member_oid(exceptlist, relid))
 			result = lappend_oid(result, relid);
 	}
 
@@ -823,7 +843,8 @@ GetAllTablesPublicationRelations(bool pubviaroot)
 			Oid			relid = relForm->oid;
 
 			if (is_publishable_class(relid, relForm) &&
-				!relForm->relispartition)
+				!relForm->relispartition &&
+				!list_member_oid(exceptlist, relid))
 				result = lappend_oid(result, relid);
 		}
 
@@ -1058,7 +1079,8 @@ pg_get_publication_tables(PG_FUNCTION_ARGS)
 		 */
 		if (publication->alltables)
 		{
-			tables = GetAllTablesPublicationRelations(publication->pubviaroot);
+			tables = GetAllTablesPublicationRelations(publication->oid,
+													  publication->pubviaroot);
 		}
 		else
 		{

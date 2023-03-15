@@ -2064,7 +2064,8 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 	if (!entry->replicate_valid)
 	{
 		Oid			schemaId = get_rel_namespace(relid);
-		List	   *pubids = GetRelationPublications(relid);
+		List	   *pubids = GetRelationPublications(relid, false);
+		List	   *exceptTablePubids = GetRelationPublications(relid, true);
 
 		/*
 		 * We don't acquire a lock on the namespace system table as we build
@@ -2153,22 +2154,6 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 			Oid			pub_relid = relid;
 			int			ancestor_level = 0;
 
-			/*
-			 * If this is a FOR ALL TABLES publication, pick the partition
-			 * root and set the ancestor level accordingly.
-			 */
-			if (pub->alltables)
-			{
-				publish = true;
-				if (pub->pubviaroot && am_partition)
-				{
-					List	   *ancestors = get_partition_ancestors(relid);
-
-					pub_relid = llast_oid(ancestors);
-					ancestor_level = list_length(ancestors);
-				}
-			}
-
 			if (!publish)
 			{
 				bool		ancestor_published = false;
@@ -2187,7 +2172,8 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 
 					ancestor = GetTopMostAncestorInPublication(pub->oid,
 															   ancestors,
-															   &level);
+															   &level,
+															   pub->alltables);
 
 					if (ancestor != InvalidOid)
 					{
@@ -2202,6 +2188,8 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 
 				if (list_member_oid(pubids, pub->oid) ||
 					list_member_oid(schemaPubids, pub->oid) ||
+					(pub->alltables &&
+					 !list_member_oid(exceptTablePubids, pub->oid)) ||
 					ancestor_published)
 					publish = true;
 			}
@@ -2277,6 +2265,7 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 
 		list_free(pubids);
 		list_free(schemaPubids);
+		list_free(exceptTablePubids);
 		list_free(rel_publications);
 
 		entry->replicate_valid = true;

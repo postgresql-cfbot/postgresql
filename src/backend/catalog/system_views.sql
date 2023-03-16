@@ -1107,6 +1107,9 @@ CREATE VIEW pg_stat_bgwriter AS
     SELECT
         pg_stat_get_bgwriter_timed_checkpoints() AS checkpoints_timed,
         pg_stat_get_bgwriter_requested_checkpoints() AS checkpoints_req,
+        pg_stat_get_bgwriter_timed_restartpoints() AS restartpoints_timed,
+        pg_stat_get_bgwriter_requested_restartpoints() AS restartpoints_req,
+        pg_stat_get_bgwriter_performed_restartpoints() AS restartpoints_done,
         pg_stat_get_checkpoint_write_time() AS checkpoint_write_time,
         pg_stat_get_checkpoint_sync_time() AS checkpoint_sync_time,
         pg_stat_get_bgwriter_buf_written_checkpoints() AS buffers_checkpoint,

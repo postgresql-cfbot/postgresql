@@ -3222,7 +3222,15 @@ XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr, int reqLen,
 			{
 				(void) GetRedoRecPtr();
 				if (XLogCheckpointNeeded(readSegNo))
-					RequestCheckpoint(CHECKPOINT_CAUSE_XLOG);
+				{
+					/*
+						* If there is no new checkpoint WAL records since the
+						* last restartpoint the creation of new one
+						* will certainly fail, so skip it.
+						*/
+					if (RestartPointAvailable())
+						RequestCheckpoint(CHECKPOINT_CAUSE_XLOG);
+				}
 			}
 		}
 

@@ -1256,6 +1256,9 @@ create_append_path(PlannerInfo *root,
 	pathnode->path.pathtarget = rel->reltarget;
 
 	/*
+	 * There are several reasons why we might need parameterized quals for
+	 * baserel.
+	 *
 	 * When generating an Append path for a partitioned table, there may be
 	 * parameterized quals that are useful for run-time pruning.  Hence,
 	 * compute path.param_info the same way as for any other baserel, so that
@@ -1263,8 +1266,11 @@ create_append_path(PlannerInfo *root,
 	 * would not work right for a non-baserel, ie a scan on a non-leaf child
 	 * partition, and it's not necessary anyway in that case.  Must skip it if
 	 * we don't have "root", too.)
+	 *
+	 * Another reason is that we need parameterized quals to search for memoize
+	 * cache keys when generating a Memoize path atop an Append path.
 	 */
-	if (root && rel->reloptkind == RELOPT_BASEREL && IS_PARTITIONED_REL(rel))
+	if (root && rel->reloptkind == RELOPT_BASEREL)
 		pathnode->path.param_info = get_baserel_parampathinfo(root,
 															  rel,
 															  required_outer);

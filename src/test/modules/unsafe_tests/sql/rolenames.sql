@@ -494,6 +494,19 @@ RESET SESSION AUTHORIZATION;
 ROLLBACK;
 REVOKE pg_read_all_settings FROM regress_role_haspriv;
 
+-- test some warnings
+ALTER ROLE regress_testrol0 SET session_preload_libraries="DoesNotExist";
+ALTER ROLE regress_testrol0 SET local_preload_libraries="DoesNotExist";
+CREATE DATABASE regress_nosuch_db;
+ALTER DATABASE regress_nosuch_db SET session_preload_libraries="DoesNotExist";
+ALTER DATABASE regress_nosuch_db SET local_preload_libraries="DoesNotExist";
+DROP DATABASE regress_nosuch_db;
+
+-- SET doesn't do anything, but should not warn, either
+SET session_preload_libraries="DoesNotExist";
+SET SESSION session_preload_libraries="DoesNotExist";
+begin; SET LOCAL session_preload_libraries="DoesNotExist"; rollback;
+
 -- clean up
 \c
 

@@ -219,6 +219,15 @@ typedef struct
 
 static LagTracker *lag_tracker;
 
+/* Shutdown modes */
+typedef enum
+{
+	WALSND_SHUTDOWN_MODE_WAIT_FLUSH,
+	WALSND_SHUTDOWN_MODE_IMMEDIATE
+} WalSndShutdownMode;
+
+static WalSndShutdownMode shutdown_mode = WALSND_SHUTDOWN_MODE_WAIT_FLUSH;
+
 /* Signal handlers */
 static void WalSndLastCycleHandler(SIGNAL_ARGS);
 
@@ -260,6 +269,7 @@ static bool TransactionIdInRecentPast(TransactionId xid, uint32 epoch);
 static void WalSndSegmentOpen(XLogReaderState *state, XLogSegNo nextSegNo,
 							  TimeLineID *tli_p);
 
+static void CheckWalSndOptions(const StartReplicationCmd *cmd);
 
 /* Initialize walsender process before entering the main command loop */
 void
@@ -1272,6 +1282,9 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 		got_STOPPING = true;
 	}
 
+	/* Check given options and set flags accordingly */
+	CheckWalSndOptions(cmd);
+
 	/*
 	 * Create our decoding context, making it start at the previously ack'ed
 	 * position.
@@ -1450,6 +1463,16 @@ ProcessPendingWrites(void)
 		/* Try to flush pending output to the client */
 		if (pq_flush_if_writable() != 0)
 			WalSndShutdown();
+
+		/*
+		 * In this function, there is a possibility that the walsender is
+		 * stuck. This can happen when the receiving worker is stuck, and then
+		 * the send-buffer of the walsender becomes full. Therefore, we must
+		 * add an additional path for shutdown for immediate shutdown mode.
+		 */
+		if (got_STOPPING &&
+			shutdown_mode == WALSND_SHUTDOWN_MODE_IMMEDIATE)
+			WalSndDone(XLogSendLogical);
 	}
 
 	/* reactivate latch so WalSndLoop knows to continue */
@@ -3114,19 +3137,25 @@ WalSndDone(WalSndSendDataCallback send_data)
 	 * To figure out whether all WAL has successfully been replicated, check
 	 * flush location if valid, write otherwise. Tools like pg_receivewal will
 	 * usually (unless in synchronous mode) return an invalid flush location.
+	 *
+	 * If we are in the 'immediate' shutdown mode, flush location and output
+	 * buffer is not checked. This may break the consistency between nodes,
+	 * but it may be useful for the system that has high-latency network to
+	 * reduce the amount of time for shutdown.
 	 */
 	replicatedPtr = XLogRecPtrIsInvalid(MyWalSnd->flush) ?
 		MyWalSnd->write : MyWalSnd->flush;
 
-	if (WalSndCaughtUp && sentPtr == replicatedPtr &&
-		!pq_is_send_pending())
+	if (WalSndCaughtUp &&
+		(shutdown_mode == WALSND_SHUTDOWN_MODE_IMMEDIATE ||
+		 (sentPtr == replicatedPtr && !pq_is_send_pending())))
 	{
 		QueryCompletion qc;
 
 		/* Inform the standby that XLOG streaming is done */
 		SetQueryCompletion(&qc, CMDTAG_COPY, 0);
 		EndCommand(&qc, DestRemote, false);
-		pq_flush();
+		pq_flush_if_writable();
 
 		proc_exit(0);
 	}
@@ -3848,4 +3877,29 @@ LagTrackerRead(int head, XLogRecPtr lsn, TimestampTz now)
 	/* Return the elapsed time since local flush time in microseconds. */
 	Assert(time != 0);
 	return now - time;
+}
+
+/*
+ * Check options for walsender itself and set flags accordingly.
+ *
+ * Currently only one option is accepted.
+ */
+static void
+CheckWalSndOptions(const StartReplicationCmd *cmd)
+{
+	if (cmd->shutdownmode)
+	{
+		char	   *mode = cmd->shutdownmode;
+
+		if (pg_strcasecmp(mode, "wait_flush") == 0)
+			shutdown_mode = WALSND_SHUTDOWN_MODE_WAIT_FLUSH;
+		else if (pg_strcasecmp(mode, "immediate") == 0)
+			shutdown_mode = WALSND_SHUTDOWN_MODE_IMMEDIATE;
+		else
+			ereport(ERROR,
+					errcode(ERRCODE_SYNTAX_ERROR),
+					errmsg("invalid value for shutdown mode: \"%s\"", mode),
+					errhint("Available values: wait_flush, immediate."));
+	}
+
 }

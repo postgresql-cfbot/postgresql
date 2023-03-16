@@ -83,6 +83,7 @@ typedef struct StartReplicationCmd
 	char	   *slotname;
 	TimeLineID	timeline;
 	XLogRecPtr	startpoint;
+	char	   *shutdownmode;
 	List	   *options;
 } StartReplicationCmd;
 

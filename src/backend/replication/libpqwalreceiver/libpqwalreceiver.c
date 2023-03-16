@@ -403,6 +403,12 @@ libpqrcv_startstreaming(WalReceiverConn *conn,
 		List	   *pubnames;
 		char	   *pubnames_literal;
 
+		/* Add SHUTDOWN_MODE clause if not using the default shutdown_mode */
+		if (options->proto.logical.shutdown_mode_str &&
+			PQserverVersion(conn->streamConn) >= 160000)
+			appendStringInfo(&cmd, " SHUTDOWN_MODE '%s'",
+							 options->proto.logical.shutdown_mode_str);
+
 		appendStringInfoString(&cmd, " (");
 
 		appendStringInfo(&cmd, "proto_version '%u'",
@@ -448,6 +454,7 @@ libpqrcv_startstreaming(WalReceiverConn *conn,
 	else
 		appendStringInfo(&cmd, " TIMELINE %u",
 						 options->proto.physical.startpointTLI);
+
 
 	/* Start streaming. */
 	res = libpqrcv_PQexec(conn->streamConn, cmd.data);

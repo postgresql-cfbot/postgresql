@@ -319,6 +319,20 @@ static List *on_commit_wakeup_workers_subids = NIL;
 bool		in_remote_transaction = false;
 static XLogRecPtr remote_final_lsn = InvalidXLogRecPtr;
 
+/*
+ * In order to avoid walsender timeout for time-delayed logical replication the
+ * apply worker keeps sending feedback messages during the delay period.
+ * Meanwhile, the feature delays the apply before the start of the
+ * transaction and thus we don't write WAL records for the suspended changes
+ * during the wait. When the apply worker sends a feedback message during the
+ * delay, we should not overwrite positions of the flushed and apply LSN by the
+ * last received latest LSN. See send_feedback() for details.
+ */
+static XLogRecPtr last_received = InvalidXLogRecPtr;
+
+/* The last time we send a feedback message */
+static TimestampTz send_time = 0;
+
 /* fields valid only when processing streamed transaction */
 static bool in_streamed_transaction = false;
 
@@ -389,7 +403,8 @@ static void stream_write_change(char action, StringInfo s);
 static void stream_open_and_write_change(TransactionId xid, char action, StringInfo s);
 static void stream_close_file(void);
 
-static void send_feedback(XLogRecPtr recvpos, bool force, bool requestReply);
+static void send_feedback(XLogRecPtr recvpos, bool force, bool requestReply,
+						  bool has_unprocessed_change);
 
 static void DisableSubscriptionAndExit(void);
 
@@ -1005,6 +1020,128 @@ slot_modify_data(TupleTableSlot *slot, TupleTableSlot *srcslot,
 }
 
 /*
+ * When min_apply_delay parameter is set on the subscriber, we wait long enough
+ * to make sure a transaction is applied at least that period behind the
+ * publisher.
+ *
+ * While the physical replication applies the delay at commit time, this
+ * feature applies the delay for the next transaction but before starting the
+ * transaction. This is mainly because keeping a transaction that conducted
+ * write operations open for a long time results in some issues such as bloat
+ * and locks.
+ *
+ * The min_apply_delay parameter will take effect only after all tables are in
+ * READY state.
+ *
+ * xid is the transaction id where we apply the delay.
+ *
+ * finish_ts is the commit/prepare time of both regular (non-streamed) and
+ * streamed transactions. Unlike the regular (non-streamed) cases, the delay
+ * is applied in a STREAM COMMIT/STREAM PREPARE message for streamed
+ * transactions. The STREAM START message does not contain a commit/prepare
+ * time (it will be available when the in-progress transaction finishes).
+ * Hence, it's not appropriate to apply a delay at the STREAM START time.
+ */
+static void
+maybe_apply_delay(TransactionId xid, TimestampTz finish_ts)
+{
+	long		status_interval_ms = 0;
+
+	Assert(finish_ts > 0);
+
+	/* Nothing to do if no delay set */
+	if (!MySubscription->minapplydelay)
+		return;
+
+	/*
+	 * The min_apply_delay parameter is ignored until all tablesync workers
+	 * have reached READY state. This is because if we allowed the delay
+	 * during the catchup phase, then once we reached the limit of tablesync
+	 * workers it would impose a delay for each subsequent worker. That would
+	 * cause initial table synchronization completion to take a long time.
+	 */
+	if (!AllTablesyncsReady())
+		return;
+
+	/* Apply the delay by the latch mechanism */
+	do
+	{
+		TimestampTz delayUntil;
+		long		diffms;
+
+		ResetLatch(MyLatch);
+
+		CHECK_FOR_INTERRUPTS();
+
+		/* This might change wal_receiver_status_interval */
+		if (ConfigReloadPending)
+		{
+			ConfigReloadPending = false;
+			ProcessConfigFile(PGC_SIGHUP);
+		}
+
+		/*
+		 * Before calculating the time duration, reload the catalog if needed.
+		 */
+		if (!in_remote_transaction && !in_streamed_transaction)
+		{
+			AcceptInvalidationMessages();
+			maybe_reread_subscription();
+		}
+
+		delayUntil = TimestampTzPlusMilliseconds(finish_ts, MySubscription->minapplydelay);
+		diffms = TimestampDifferenceMilliseconds(GetCurrentTimestamp(), delayUntil);
+
+		/*
+		 * Exit without arming the latch if it's already past time to apply
+		 * this transaction.
+		 */
+		if (diffms <= 0)
+			break;
+
+		elog(DEBUG2, "time-delayed replication for txid %u, min_apply_delay = %d ms, remaining wait time: %ld ms",
+			 xid, MySubscription->minapplydelay, diffms);
+
+		/*
+		 * Call send_feedback() to prevent the publisher from exiting by
+		 * timeout during the delay, when the status interval is greater than
+		 * zero.
+		 */
+		if (!status_interval_ms)
+		{
+			TimestampTz nextFeedback;
+
+			/*
+			 * Based on the last time when we send a feedback message, adjust
+			 * the first delay time for this transaction. This ensures that
+			 * the first feedback message follows wal_receiver_status_interval
+			 * interval.
+			 */
+			nextFeedback = TimestampTzPlusMilliseconds(send_time,
+													   wal_receiver_status_interval * 1000L);
+			status_interval_ms = TimestampDifferenceMilliseconds(GetCurrentTimestamp(), nextFeedback);
+		}
+		else
+			status_interval_ms = wal_receiver_status_interval * 1000L;
+
+		if (status_interval_ms > 0 && diffms > status_interval_ms)
+		{
+			WaitLatch(MyLatch,
+					  WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+					  status_interval_ms,
+					  WAIT_EVENT_LOGICAL_APPLY_DELAY);
+			send_feedback(last_received, true, false, true);
+		}
+		else
+			WaitLatch(MyLatch,
+					  WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+					  diffms,
+					  WAIT_EVENT_LOGICAL_APPLY_DELAY);
+
+	} while (true);
+}
+
+/*
  * Handle BEGIN message.
  */
 static void
@@ -1017,6 +1154,9 @@ apply_handle_begin(StringInfo s)
 
 	logicalrep_read_begin(s, &begin_data);
 	set_apply_error_context_xact(begin_data.xid, begin_data.final_lsn);
+
+	/* Should we delay the current transaction? */
+	maybe_apply_delay(begin_data.xid, begin_data.committime);
 
 	remote_final_lsn = begin_data.final_lsn;
 
@@ -1074,6 +1214,9 @@ apply_handle_begin_prepare(StringInfo s)
 
 	logicalrep_read_begin_prepare(s, &begin_data);
 	set_apply_error_context_xact(begin_data.xid, begin_data.prepare_lsn);
+
+	/* Should we delay the current prepared transaction? */
+	maybe_apply_delay(begin_data.xid, begin_data.prepare_time);
 
 	remote_final_lsn = begin_data.prepare_lsn;
 
@@ -1322,7 +1465,8 @@ apply_handle_stream_prepare(StringInfo s)
 			 * spooled operations.
 			 */
 			apply_spooled_messages(MyLogicalRepWorker->stream_fileset,
-								   prepare_data.xid, prepare_data.prepare_lsn);
+								   prepare_data.xid, prepare_data.prepare_lsn,
+								   prepare_data.prepare_time);
 
 			/* Mark the transaction as prepared. */
 			apply_handle_prepare_internal(&prepare_data);
@@ -2016,10 +2160,13 @@ ensure_last_message(FileSet *stream_fileset, TransactionId xid, int fileno,
 
 /*
  * Common spoolfile processing.
+ *
+ * The commit/prepare time (finish_ts) is required for time-delayed logical
+ * replication.
  */
 void
 apply_spooled_messages(FileSet *stream_fileset, TransactionId xid,
-					   XLogRecPtr lsn)
+					   XLogRecPtr lsn, TimestampTz finish_ts)
 {
 	StringInfoData s2;
 	int			nchanges;
@@ -2029,6 +2176,10 @@ apply_spooled_messages(FileSet *stream_fileset, TransactionId xid,
 	ResourceOwner oldowner;
 	int			fileno;
 	off_t		offset;
+
+	/* Should we delay the current transaction? */
+	if (finish_ts)
+		maybe_apply_delay(xid, finish_ts);
 
 	if (!am_parallel_apply_worker())
 		maybe_start_skipping_changes(lsn);
@@ -2179,7 +2330,7 @@ apply_handle_stream_commit(StringInfo s)
 			 * spooled operations.
 			 */
 			apply_spooled_messages(MyLogicalRepWorker->stream_fileset, xid,
-								   commit_data.commit_lsn);
+								   commit_data.commit_lsn, commit_data.committime);
 
 			apply_handle_commit_internal(&commit_data);
 
@@ -3439,7 +3590,7 @@ UpdateWorkerStats(XLogRecPtr last_lsn, TimestampTz send_time, bool reply)
  * Apply main loop.
  */
 static void
-LogicalRepApplyLoop(XLogRecPtr last_received)
+LogicalRepApplyLoop(void)
 {
 	TimestampTz last_recv_timestamp = GetCurrentTimestamp();
 	bool		ping_sent = false;
@@ -3560,7 +3711,7 @@ LogicalRepApplyLoop(XLogRecPtr last_received)
 						if (last_received < end_lsn)
 							last_received = end_lsn;
 
-						send_feedback(last_received, reply_requested, false);
+						send_feedback(last_received, reply_requested, false, false);
 						UpdateWorkerStats(last_received, timestamp, true);
 					}
 					/* other message types are purposefully ignored */
@@ -3573,7 +3724,7 @@ LogicalRepApplyLoop(XLogRecPtr last_received)
 		}
 
 		/* confirm all writes so far */
-		send_feedback(last_received, false, false);
+		send_feedback(last_received, false, false, false);
 
 		if (!in_remote_transaction && !in_streamed_transaction)
 		{
@@ -3670,7 +3821,7 @@ LogicalRepApplyLoop(XLogRecPtr last_received)
 				}
 			}
 
-			send_feedback(last_received, requestReply, requestReply);
+			send_feedback(last_received, requestReply, requestReply, false);
 
 			/*
 			 * Force reporting to ensure long idle periods don't lead to
@@ -3700,10 +3851,9 @@ LogicalRepApplyLoop(XLogRecPtr last_received)
  * to send a response to avoid timeouts.
  */
 static void
-send_feedback(XLogRecPtr recvpos, bool force, bool requestReply)
+send_feedback(XLogRecPtr recvpos, bool force, bool requestReply, bool has_unprocessed_change)
 {
 	static StringInfo reply_message = NULL;
-	static TimestampTz send_time = 0;
 
 	static XLogRecPtr last_recvpos = InvalidXLogRecPtr;
 	static XLogRecPtr last_writepos = InvalidXLogRecPtr;
@@ -3730,8 +3880,14 @@ send_feedback(XLogRecPtr recvpos, bool force, bool requestReply)
 	/*
 	 * No outstanding transactions to flush, we can report the latest received
 	 * position. This is important for synchronous replication.
+	 *
+	 * If the logical replication subscription has unprocessed changes then do
+	 * not inform the publisher that the received latest LSN is already
+	 * applied and flushed, otherwise, the publisher will make a wrong
+	 * assumption about the logical replication progress. Instead, just send a
+	 * feedback message to avoid a replication timeout during the delay.
 	 */
-	if (!have_pending_txes)
+	if (!have_pending_txes && !has_unprocessed_change)
 		flushpos = writepos = recvpos;
 
 	if (writepos < last_writepos)
@@ -3768,8 +3924,9 @@ send_feedback(XLogRecPtr recvpos, bool force, bool requestReply)
 	pq_sendint64(reply_message, now);	/* sendTime */
 	pq_sendbyte(reply_message, requestReply);	/* replyRequested */
 
-	elog(DEBUG2, "sending feedback (force %d) to recv %X/%X, write %X/%X, flush %X/%X",
+	elog(DEBUG2, "sending feedback (force %d, has_unprocessed_change %d) to recv %X/%X, write %X/%X, flush %X/%X",
 		 force,
+		 has_unprocessed_change,
 		 LSN_FORMAT_ARGS(recvpos),
 		 LSN_FORMAT_ARGS(writepos),
 		 LSN_FORMAT_ARGS(flushpos));
@@ -3878,10 +4035,16 @@ maybe_reread_subscription(void)
 
 	/*
 	 * Exit if any parameter that affects the remote connection was changed.
+	 *
 	 * The launcher will start a new worker but note that the parallel apply
 	 * worker won't restart if the streaming option's value is changed from
 	 * 'parallel' to any other value or the server decides not to stream the
 	 * in-progress transaction.
+	 *
+	 * Time-delayed logical replication affects the SHUTDOWN_MODE clause. The
+	 * 'immediate' shutdown mode will be specified if min_apply_delay is
+	 * non-zero, otherwise the default shutdown mode will be used. See
+	 * ApplyWorkerMain.
 	 */
 	if (strcmp(newsub->conninfo, MySubscription->conninfo) != 0 ||
 		strcmp(newsub->name, MySubscription->name) != 0 ||
@@ -3890,7 +4053,8 @@ maybe_reread_subscription(void)
 		newsub->stream != MySubscription->stream ||
 		strcmp(newsub->origin, MySubscription->origin) != 0 ||
 		newsub->owner != MySubscription->owner ||
-		!equal(newsub->publications, MySubscription->publications))
+		!equal(newsub->publications, MySubscription->publications) ||
+		(newsub->minapplydelay == 0) != (MySubscription->minapplydelay == 0))
 	{
 		if (am_parallel_apply_worker())
 			ereport(LOG,
@@ -4359,11 +4523,11 @@ start_table_sync(XLogRecPtr *origin_startpos, char **myslotname)
  * of system resource error and are not repeatable.
  */
 static void
-start_apply(XLogRecPtr origin_startpos)
+start_apply(void)
 {
 	PG_TRY();
 	{
-		LogicalRepApplyLoop(origin_startpos);
+		LogicalRepApplyLoop();
 	}
 	PG_CATCH();
 	{
@@ -4609,9 +4773,18 @@ ApplyWorkerMain(Datum main_arg)
 
 	options.proto.logical.twophase = false;
 	options.proto.logical.origin = pstrdup(MySubscription->origin);
+	options.proto.logical.shutdown_mode_str = NULL;
 
 	if (!am_tablesync_worker())
 	{
+		/*
+		 * Time-delayed logical replication does not support tablesync
+		 * workers, so only the leader apply worker can request walsenders to
+		 * exit before confirming remote flush.
+		 */
+		if (server_version >= 160000 && MySubscription->minapplydelay > 0)
+			options.proto.logical.shutdown_mode_str = pstrdup("immediate");
+
 		/*
 		 * Even when the two_phase mode is requested by the user, it remains
 		 * as the tri-state PENDING until all tablesyncs have reached READY
@@ -4653,7 +4826,8 @@ ApplyWorkerMain(Datum main_arg)
 	}
 
 	/* Run the main loop. */
-	start_apply(origin_startpos);
+	last_received = origin_startpos;
+	start_apply();
 
 	proc_exit(0);
 }

@@ -74,6 +74,8 @@ CATALOG(pg_subscription,6100,SubscriptionRelationId) BKI_SHARED_RELATION BKI_ROW
 
 	Oid			subowner BKI_LOOKUP(pg_authid); /* Owner of the subscription */
 
+	int32		subminapplydelay;	/* Replication apply delay (ms) */
+
 	bool		subenabled;		/* True if the subscription is enabled (the
 								 * worker should be running) */
 
@@ -122,6 +124,7 @@ typedef struct Subscription
 								 * skipped */
 	char	   *name;			/* Name of the subscription */
 	Oid			owner;			/* Oid of the subscription owner */
+	int32		minapplydelay;	/* Replication apply delay (ms) */
 	bool		enabled;		/* Indicates if the subscription is enabled */
 	bool		binary;			/* Indicates if the subscription wants data in
 								 * binary format */

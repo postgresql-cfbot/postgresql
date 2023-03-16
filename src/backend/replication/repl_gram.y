@@ -76,6 +76,7 @@ Node *replication_parse_result;
 %token K_EXPORT_SNAPSHOT
 %token K_NOEXPORT_SNAPSHOT
 %token K_USE_SNAPSHOT
+%token K_SHUTDOWN_MODE
 
 %type <node>	command
 %type <node>	base_backup start_replication start_logical_replication
@@ -91,6 +92,7 @@ Node *replication_parse_result;
 %type <boolval>	opt_temporary
 %type <list>	create_slot_options create_slot_legacy_opt_list
 %type <defelt>	create_slot_legacy_opt
+%type <str>		opt_shutdown_mode
 
 %%
 
@@ -276,14 +278,15 @@ start_replication:
 
 /* START_REPLICATION SLOT slot LOGICAL %X/%X options */
 start_logical_replication:
-			K_START_REPLICATION K_SLOT IDENT K_LOGICAL RECPTR plugin_options
+			K_START_REPLICATION K_SLOT IDENT K_LOGICAL RECPTR opt_shutdown_mode plugin_options
 				{
 					StartReplicationCmd *cmd;
 					cmd = makeNode(StartReplicationCmd);
 					cmd->kind = REPLICATION_KIND_LOGICAL;
 					cmd->slotname = $3;
 					cmd->startpoint = $5;
-					cmd->options = $6;
+					cmd->shutdownmode = $6;
+					cmd->options = $7;
 					$$ = (Node *) cmd;
 				}
 			;
@@ -336,6 +339,10 @@ opt_timeline:
 				| /* EMPTY */			{ $$ = 0; }
 			;
 
+opt_shutdown_mode:
+			K_SHUTDOWN_MODE SCONST			{ $$ = $2; }
+			| /* EMPTY */					{ $$ = NULL; }
+		;
 
 plugin_options:
 			'(' plugin_opt_list ')'			{ $$ = $2; }

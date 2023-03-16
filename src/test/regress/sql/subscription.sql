@@ -286,6 +286,30 @@ ALTER SUBSCRIPTION regress_testsub SET (disable_on_error = true);
 ALTER SUBSCRIPTION regress_testsub SET (slot_name = NONE);
 DROP SUBSCRIPTION regress_testsub;
 
+-- fail -- min_apply_delay must be a non-negative integer
+CREATE SUBSCRIPTION regress_testsub CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub WITH (connect = false, min_apply_delay = foo);
+CREATE SUBSCRIPTION regress_testsub CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub WITH (connect = false, min_apply_delay = -1);
+
+-- fail - utilizing streaming = parallel with time-delayed replication is not supported
+CREATE SUBSCRIPTION regress_testsub CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub WITH (connect = false, streaming = parallel, min_apply_delay = 123);
+
+-- success -- min_apply_delay value without unit is taken as milliseconds
+CREATE SUBSCRIPTION regress_testsub CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub WITH (connect = false, min_apply_delay = 123);
+\dRs+
+
+-- success -- min_apply_delay value with unit is converted into ms and stored as an integer
+ALTER SUBSCRIPTION regress_testsub SET (min_apply_delay = '1 d');
+\dRs+
+
+-- fail - alter subscription with streaming = parallel should fail when time-delayed replication is set
+ALTER SUBSCRIPTION regress_testsub SET (streaming = parallel);
+
+-- fail - alter subscription with min_apply_delay should fail when streaming = parallel is set
+ALTER SUBSCRIPTION regress_testsub SET (min_apply_delay = 0, streaming = parallel);
+ALTER SUBSCRIPTION regress_testsub SET (min_apply_delay = 123);
+ALTER SUBSCRIPTION regress_testsub SET (slot_name = NONE);
+DROP SUBSCRIPTION regress_testsub;
+
 RESET SESSION AUTHORIZATION;
 DROP ROLE regress_subscription_user;
 DROP ROLE regress_subscription_user2;

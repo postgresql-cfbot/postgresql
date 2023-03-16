@@ -66,6 +66,7 @@ GetSubscription(Oid subid, bool missing_ok)
 	sub->skiplsn = subform->subskiplsn;
 	sub->name = pstrdup(NameStr(subform->subname));
 	sub->owner = subform->subowner;
+	sub->minapplydelay = subform->subminapplydelay;
 	sub->enabled = subform->subenabled;
 	sub->binary = subform->subbinary;
 	sub->stream = subform->substream;

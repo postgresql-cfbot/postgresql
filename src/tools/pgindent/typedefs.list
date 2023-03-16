@@ -2980,6 +2980,7 @@ WalReceiverFunctionsType
 WalSnd
 WalSndCtlData
 WalSndSendDataCallback
+WalSndShutdownMode
 WalSndState
 WalTimeSample
 WalUsage

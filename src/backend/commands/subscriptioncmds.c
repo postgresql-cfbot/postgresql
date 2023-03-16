@@ -66,6 +66,7 @@
 #define SUBOPT_DISABLE_ON_ERR		0x00000400
 #define SUBOPT_LSN					0x00000800
 #define SUBOPT_ORIGIN				0x00001000
+#define SUBOPT_MIN_APPLY_DELAY		0x00002000
 
 /* check if the 'val' has 'bits' set */
 #define IsSet(val, bits)  (((val) & (bits)) == (bits))
@@ -90,6 +91,7 @@ typedef struct SubOpts
 	bool		disableonerr;
 	char	   *origin;
 	XLogRecPtr	lsn;
+	int32		min_apply_delay;
 } SubOpts;
 
 static List *fetch_table_list(WalReceiverConn *wrconn, List *publications);
@@ -100,7 +102,7 @@ static void check_publications_origin(WalReceiverConn *wrconn,
 static void check_duplicates_in_publist(List *publist, Datum *datums);
 static List *merge_publications(List *oldpublist, List *newpublist, bool addpub, const char *subname);
 static void ReportSlotConnectionError(List *rstates, Oid subid, char *slotname, char *err);
-
+static int32 defGetMinApplyDelay(DefElem *def);
 
 /*
  * Common option parsing function for CREATE and ALTER SUBSCRIPTION commands.
@@ -146,6 +148,8 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 		opts->disableonerr = false;
 	if (IsSet(supported_opts, SUBOPT_ORIGIN))
 		opts->origin = pstrdup(LOGICALREP_ORIGIN_ANY);
+	if (IsSet(supported_opts, SUBOPT_MIN_APPLY_DELAY))
+		opts->min_apply_delay = 0;
 
 	/* Parse options */
 	foreach(lc, stmt_options)
@@ -324,6 +328,15 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 			opts->specified_opts |= SUBOPT_LSN;
 			opts->lsn = lsn;
 		}
+		else if (IsSet(supported_opts, SUBOPT_MIN_APPLY_DELAY) &&
+				 strcmp(defel->defname, "min_apply_delay") == 0)
+		{
+			if (IsSet(opts->specified_opts, SUBOPT_MIN_APPLY_DELAY))
+				errorConflictingDefElem(defel, pstate);
+
+			opts->specified_opts |= SUBOPT_MIN_APPLY_DELAY;
+			opts->min_apply_delay = defGetMinApplyDelay(defel);
+		}
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -404,6 +417,32 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 								"slot_name = NONE", "create_slot = false")));
 		}
 	}
+
+	/*
+	 * The combination of parallel streaming mode and min_apply_delay is not
+	 * allowed. This is because in parallel streaming mode, we start applying
+	 * the transaction stream as soon as the first change arrives without
+	 * knowing the transaction's prepare/commit time. This means we cannot
+	 * calculate the underlying network/decoding lag between publisher and
+	 * subscriber, and so always waiting for the full 'min_apply_delay' period
+	 * might include unnecessary delay.
+	 *
+	 * The other possibility was to apply the delay at the end of the parallel
+	 * apply transaction but that would cause issues related to resource bloat
+	 * and locks being held for a long time.
+	 */
+	if (IsSet(supported_opts, SUBOPT_MIN_APPLY_DELAY) &&
+		opts->min_apply_delay > 0 &&
+		opts->streaming == LOGICALREP_STREAM_PARALLEL)
+		ereport(ERROR,
+				errcode(ERRCODE_SYNTAX_ERROR),
+
+		/*
+		 * translator: the first %s is a string of the form "parameter > 0"
+		 * and the second one is "option = value".
+		 */
+				errmsg("%s and %s are mutually exclusive options",
+					   "min_apply_delay > 0", "streaming = parallel"));
 }
 
 /*
@@ -560,7 +599,8 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 					  SUBOPT_SLOT_NAME | SUBOPT_COPY_DATA |
 					  SUBOPT_SYNCHRONOUS_COMMIT | SUBOPT_BINARY |
 					  SUBOPT_STREAMING | SUBOPT_TWOPHASE_COMMIT |
-					  SUBOPT_DISABLE_ON_ERR | SUBOPT_ORIGIN);
+					  SUBOPT_DISABLE_ON_ERR | SUBOPT_ORIGIN |
+					  SUBOPT_MIN_APPLY_DELAY);
 	parse_subscription_options(pstate, stmt->options, supported_opts, &opts);
 
 	/*
@@ -625,6 +665,7 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	values[Anum_pg_subscription_oid - 1] = ObjectIdGetDatum(subid);
 	values[Anum_pg_subscription_subdbid - 1] = ObjectIdGetDatum(MyDatabaseId);
 	values[Anum_pg_subscription_subskiplsn - 1] = LSNGetDatum(InvalidXLogRecPtr);
+	values[Anum_pg_subscription_subminapplydelay - 1] = Int32GetDatum(opts.min_apply_delay);
 	values[Anum_pg_subscription_subname - 1] =
 		DirectFunctionCall1(namein, CStringGetDatum(stmt->subname));
 	values[Anum_pg_subscription_subowner - 1] = ObjectIdGetDatum(owner);
@@ -1054,7 +1095,7 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 				supported_opts = (SUBOPT_SLOT_NAME |
 								  SUBOPT_SYNCHRONOUS_COMMIT | SUBOPT_BINARY |
 								  SUBOPT_STREAMING | SUBOPT_DISABLE_ON_ERR |
-								  SUBOPT_ORIGIN);
+								  SUBOPT_ORIGIN | SUBOPT_MIN_APPLY_DELAY);
 
 				parse_subscription_options(pstate, stmt->options,
 										   supported_opts, &opts);
@@ -1098,6 +1139,19 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 
 				if (IsSet(opts.specified_opts, SUBOPT_STREAMING))
 				{
+					/*
+					 * The combination of parallel streaming mode and
+					 * min_apply_delay is not allowed. See
+					 * parse_subscription_options.
+					 */
+					if (opts.streaming == LOGICALREP_STREAM_PARALLEL &&
+						!IsSet(opts.specified_opts, SUBOPT_MIN_APPLY_DELAY)
+						&& sub->minapplydelay > 0)
+						ereport(ERROR,
+								errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+								errmsg("cannot set parallel streaming mode for subscription with %s",
+									   "min_apply_delay"));
+
 					values[Anum_pg_subscription_substream - 1] =
 						CharGetDatum(opts.streaming);
 					replaces[Anum_pg_subscription_substream - 1] = true;
@@ -1109,6 +1163,26 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 						= BoolGetDatum(opts.disableonerr);
 					replaces[Anum_pg_subscription_subdisableonerr - 1]
 						= true;
+				}
+
+				if (IsSet(opts.specified_opts, SUBOPT_MIN_APPLY_DELAY))
+				{
+					/*
+					 * The combination of parallel streaming mode and
+					 * min_apply_delay is not allowed. See
+					 * parse_subscription_options.
+					 */
+					if (opts.min_apply_delay > 0 &&
+						!IsSet(opts.specified_opts, SUBOPT_STREAMING)
+						&& sub->stream == LOGICALREP_STREAM_PARALLEL)
+						ereport(ERROR,
+								errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+								errmsg("cannot set %s for subscription in parallel streaming mode",
+									   "min_apply_delay"));
+
+					values[Anum_pg_subscription_subminapplydelay - 1] =
+						Int32GetDatum(opts.min_apply_delay);
+					replaces[Anum_pg_subscription_subminapplydelay - 1] = true;
 				}
 
 				if (IsSet(opts.specified_opts, SUBOPT_ORIGIN))
@@ -2194,4 +2268,46 @@ defGetStreamingMode(DefElem *def)
 			 errmsg("%s requires a Boolean value or \"parallel\"",
 					def->defname)));
 	return LOGICALREP_STREAM_OFF;	/* keep compiler quiet */
+}
+
+/*
+ * Extract the min_apply_delay value from a DefElem. This is very similar to
+ * parse_and_validate_value() for integer values, because min_apply_delay
+ * accepts the same parameter format as recovery_min_apply_delay.
+ */
+static int32
+defGetMinApplyDelay(DefElem *def)
+{
+	char	   *input_string;
+	int			result;
+	const char *hintmsg;
+
+	input_string = defGetString(def);
+
+	/*
+	 * Parse given string as parameter which has millisecond unit
+	 */
+	if (!parse_int(input_string, &result, GUC_UNIT_MS, &hintmsg))
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("invalid value for parameter \"%s\": \"%s\"",
+						"min_apply_delay", input_string),
+				 hintmsg ? errhint("%s", _(hintmsg)) : 0));
+
+	/*
+	 * Check both the lower boundary for the valid min_apply_delay range and
+	 * the upper boundary as the safeguard for some platforms where INT_MAX is
+	 * wider than int32 respectively. Although parse_int() has confirmed that
+	 * the result is less than or equal to INT_MAX, the value will be stored
+	 * in a catalog column of int32.
+	 */
+	if (result < 0 || result > PG_INT32_MAX)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("%d ms is outside the valid range for parameter \"%s\" (%d .. %d)",
+						result,
+						"min_apply_delay",
+						0, PG_INT32_MAX)));
+
+	return result;
 }

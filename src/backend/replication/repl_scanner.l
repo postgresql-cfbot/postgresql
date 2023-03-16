@@ -136,6 +136,7 @@ EXPORT_SNAPSHOT		{ return K_EXPORT_SNAPSHOT; }
 NOEXPORT_SNAPSHOT	{ return K_NOEXPORT_SNAPSHOT; }
 USE_SNAPSHOT		{ return K_USE_SNAPSHOT; }
 WAIT				{ return K_WAIT; }
+SHUTDOWN_MODE		{ return K_SHUTDOWN_MODE; }
 
 {space}+		{ /* do nothing */ }
 

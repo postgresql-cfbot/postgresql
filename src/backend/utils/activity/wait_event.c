@@ -515,6 +515,9 @@ pgstat_get_wait_timeout(WaitEventTimeout w)
 		case WAIT_EVENT_VACUUM_TRUNCATE:
 			event_name = "VacuumTruncate";
 			break;
+		case WAIT_EVENT_LOGICAL_APPLY_DELAY:
+			event_name = "LogicalApplyDelay";
+			break;
 			/* no default case, so that compiler will warn */
 	}
 

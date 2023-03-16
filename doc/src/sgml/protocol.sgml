@@ -2500,7 +2500,7 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
     </varlistentry>
 
     <varlistentry id="protocol-replication-start-replication-slot-logical">
-     <term><literal>START_REPLICATION</literal> <literal>SLOT</literal> <replaceable class="parameter">slot_name</replaceable> <literal>LOGICAL</literal> <replaceable class="parameter">XXX/XXX</replaceable> [ ( <replaceable>option_name</replaceable> [ <replaceable>option_value</replaceable> ] [, ...] ) ]</term>
+     <term><literal>START_REPLICATION</literal> <literal>SLOT</literal> <replaceable class="parameter">slot_name</replaceable> <literal>LOGICAL</literal> <replaceable class="parameter">XXX/XXX</replaceable> [ <literal>SHUTDOWN_MODE</literal> { <literal>'wait_flush'</literal> | <literal>'immediate'</literal> } ] [ ( <replaceable>option_name</replaceable> [ <replaceable>option_value</replaceable> ] [, ...] ) ]</term>
      <listitem>
       <para>
        Instructs server to start streaming WAL for logical replication,
@@ -2551,6 +2551,20 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
         <listitem>
          <para>
           The WAL location to begin streaming at.
+         </para>
+        </listitem>
+       </varlistentry>
+
+       <varlistentry>
+        <term><literal>shutdown_mode</literal></term>
+        <listitem>
+         <para>
+          Determines the behavior of the walsender process at shutdown. If
+          shutdown_mode is <literal>'wait_flush'</literal>, the walsender waits
+          for all the sent WALs to be flushed on the subscriber side. This is
+          the default when SHUTDOWN_MODE is not specified. If shutdown_mode is
+          <literal>'immediate'</literal>, the walsender exits without
+          confirming the remote flush.
          </para>
         </listitem>
        </varlistentry>

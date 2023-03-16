@@ -187,6 +187,8 @@ typedef struct
 									 * prepare time */
 			char	   *origin; /* Only publish data originating from the
 								 * specified origin */
+			char	   *shutdown_mode_str;	/* The specified shutdown mode
+											 * string, or NULL. */
 		}			logical;
 	}			proto;
 } WalRcvStreamOptions;

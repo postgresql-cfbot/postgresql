@@ -4138,7 +4138,9 @@ ALTER TABLE measurement ATTACH PARTITION measurement_y2008m02
 
     <para>
      The <command>ATTACH PARTITION</command> command requires taking a
-     <literal>SHARE UPDATE EXCLUSIVE</literal> lock on the partitioned table.
+     <literal>SHARE UPDATE EXCLUSIVE</literal> lock on the partitioned table,
+     as opposed to the <literal>Access Exclusive</literal> lock which is
+     required by <literal>CREATE TABLE .. PARTITION OF</literal>.
     </para>
 
     <para>

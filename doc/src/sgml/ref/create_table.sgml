@@ -621,6 +621,16 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       with <literal>DROP TABLE</literal> requires taking an <literal>ACCESS
       EXCLUSIVE</literal> lock on the parent table.
      </para>
+
+     <para>
+      Note that creating a partition using <literal>PARTITION OF</literal>
+      requires taking an <literal>ACCESS EXCLUSIVE</literal> lock on the parent
+      table.  It may be preferable to first create a separate table and then
+      attach it, which does not require as strong a lock.
+      See <link linkend="sql-altertable-attach-partition">ATTACH PARTITION</link>
+      for more information.
+     </para>
+
     </listitem>
    </varlistentry>
 

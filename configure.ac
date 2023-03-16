@@ -1843,6 +1843,8 @@ AC_CHECK_DECLS([strlcat, strlcpy, strnlen])
 
 # We can't use AC_REPLACE_FUNCS to replace these functions, because it
 # won't handle deployment target restrictions on macOS
+AC_CHECK_DECLS([accept4], [], [], [#include <sys/socket.h>])
+AC_CHECK_DECLS([pipe2], [], [], [#include <unistd.h>])
 AC_CHECK_DECLS([preadv], [], [AC_LIBOBJ(preadv)], [#include <sys/uio.h>])
 AC_CHECK_DECLS([pwritev], [], [AC_LIBOBJ(pwritev)], [#include <sys/uio.h>])
 

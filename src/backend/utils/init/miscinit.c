@@ -164,12 +164,19 @@ InitPostmasterChild(void)
 	/* Request a signal if the postmaster dies, if possible. */
 	PostmasterDeathSignalInit();
 
-	/* Don't give the pipe to subprograms that we execute. */
+	/*
+	 * Don't give the pipe to subprograms that we execute.  We only need to
+	 * do this explicitly here if the platform lacks pipe2(), or we're in an
+	 * EXEC_BACKEND build so the pipe had to survive the first level of
+	 * exec*() to get here.
+	 */
 #ifndef WIN32
+#if !HAVE_DECL_PIPE2 || defined(EXEC_BACKEND)
 	if (fcntl(postmaster_alive_fds[POSTMASTER_FD_WATCH], F_SETFD, FD_CLOEXEC) < 0)
 		ereport(FATAL,
 				(errcode_for_socket_access(),
 				 errmsg_internal("could not set postmaster death monitoring pipe to FD_CLOEXEC mode: %m")));
+#endif
 #endif
 }
 

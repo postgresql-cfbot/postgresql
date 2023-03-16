@@ -184,6 +184,14 @@ pq_init(void)
 	/* set up process-exit hook to close the socket */
 	on_proc_exit(socket_close, 0);
 
+#ifndef WIN32
+	/*
+	 * On most systems, the socket has already been made non-blocking and
+	 * close-on-exec by StreamConnection().  On systems that don't have
+	 * accept4() yet, and EXEC_BACKEND builds that need the socket to survive
+	 * exec*(), we do that separately here in the child process.
+	 */
+#if !HAVE_DECL_ACCEPT4 || defined(EXEC_BACKEND)
 	/*
 	 * In backends (as soon as forked) we operate the underlying socket in
 	 * nonblocking mode and use latches to implement blocking semantics if
@@ -194,17 +202,14 @@ pq_init(void)
 	 * the client, which might require changing the mode again, leading to
 	 * infinite recursion.
 	 */
-#ifndef WIN32
 	if (!pg_set_noblock(MyProcPort->sock))
 		ereport(COMMERROR,
 				(errmsg("could not set socket to nonblocking mode: %m")));
-#endif
-
-#ifndef WIN32
 
 	/* Don't give the socket to any subprograms we execute. */
 	if (fcntl(MyProcPort->sock, F_SETFD, FD_CLOEXEC) < 0)
 		elog(FATAL, "fcntl(F_SETFD) failed on socket: %m");
+#endif
 #endif
 
 	FeBeWaitSet = CreateWaitEventSet(TopMemoryContext, FeBeWaitSetNEvents);
@@ -699,9 +704,24 @@ StreamConnection(pgsocket server_fd, Port *port)
 {
 	/* accept connection and fill in the client (remote) address */
 	port->raddr.salen = sizeof(port->raddr.addr);
-	if ((port->sock = accept(server_fd,
-							 (struct sockaddr *) &port->raddr.addr,
-							 &port->raddr.salen)) == PGINVALID_SOCKET)
+
+#if HAVE_DECL_ACCEPT4 && !defined(EXEC_BACKEND)
+	/*
+	 * If we have accept4(), we can avoid a couple of fcntl() calls in
+	 * pq_init().  We can't use this optimization in EXEC_BACKEND builds,
+	 * though, because they need the socket to survive exec().
+	 */
+	port->sock = accept4(server_fd,
+						 (struct sockaddr *) &port->raddr.addr,
+						 &port->raddr.salen,
+						 SOCK_CLOEXEC | SOCK_NONBLOCK);
+#else
+	port->sock = accept(server_fd,
+						(struct sockaddr *) &port->raddr.addr,
+						&port->raddr.salen);
+#endif
+
+	if (port->sock == PGINVALID_SOCKET)
 	{
 		ereport(LOG,
 				(errcode_for_socket_access(),

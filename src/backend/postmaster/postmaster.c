@@ -6516,12 +6516,22 @@ InitPostmasterDeathWatchHandle(void)
 	 * close the write end as soon as possible after forking, because EOF
 	 * won't be signaled in the read end until all processes have closed the
 	 * write fd. That is taken care of in ClosePostmasterPorts().
+	 *
+	 * If this platform has pipe2(), and we're not in an EXEC_BACKEND build,
+	 * then we can avoid a later fcntl() call by asking for O_CLOEXEC now.
 	 */
 	Assert(MyProcPid == PostmasterPid);
+#if HAVE_DECL_PIPE2 && !defined(EXEC_BACKEND)
+	if (pipe2(postmaster_alive_fds, O_CLOEXEC) < 0)
+		ereport(FATAL,
+				(errcode_for_file_access(),
+				 errmsg_internal("could not create pipe to monitor postmaster death: %m")));
+#else
 	if (pipe(postmaster_alive_fds) < 0)
 		ereport(FATAL,
 				(errcode_for_file_access(),
 				 errmsg_internal("could not create pipe to monitor postmaster death: %m")));
+#endif
 
 	/* Notify fd.c that we've eaten two FDs for the pipe. */
 	ReserveExternalFD();

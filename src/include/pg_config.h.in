@@ -91,6 +91,10 @@
 /* Define to 1 if you have the `CRYPTO_lock' function. */
 #undef HAVE_CRYPTO_LOCK
 
+/* Define to 1 if you have the declaration of `accept4', and to 0 if you
+   don't. */
+#undef HAVE_DECL_ACCEPT4
+
 /* Define to 1 if you have the declaration of `fdatasync', and to 0 if you
    don't. */
 #undef HAVE_DECL_FDATASYNC
@@ -118,6 +122,10 @@
 /* Define to 1 if you have the declaration of `LLVMOrcGetSymbolAddressIn', and
    to 0 if you don't. */
 #undef HAVE_DECL_LLVMORCGETSYMBOLADDRESSIN
+
+/* Define to 1 if you have the declaration of `pipe2', and to 0 if you don't.
+   */
+#undef HAVE_DECL_PIPE2
 
 /* Define to 1 if you have the declaration of `posix_fadvise', and to 0 if you
    don't. */

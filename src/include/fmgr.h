@@ -206,7 +206,7 @@ extern void fmgr_symbol(Oid functionId, char **mod, char **fn);
  * If function is not marked "proisstrict" in pg_proc, it must check for
  * null arguments using this macro.  Do not try to GETARG a null argument!
  */
-#define PG_ARGISNULL(n)  (fcinfo->args[n].isnull)
+#define PG_ARGISNULL(n)  (AssertMacro(n < PG_NARGS()), fcinfo->args[n].isnull)
 
 /*
  * Support for fetching detoasted copies of toastable datatypes (all of
@@ -265,7 +265,7 @@ extern struct varlena *pg_detoast_datum_packed(struct varlena *datum);
 
 /* Macros for fetching arguments of standard types */
 
-#define PG_GETARG_DATUM(n)	 (fcinfo->args[n].value)
+#define PG_GETARG_DATUM(n)	 (AssertMacro(n < PG_NARGS()), fcinfo->args[n].value)
 #define PG_GETARG_INT32(n)	 DatumGetInt32(PG_GETARG_DATUM(n))
 #define PG_GETARG_UINT32(n)  DatumGetUInt32(PG_GETARG_DATUM(n))
 #define PG_GETARG_INT16(n)	 DatumGetInt16(PG_GETARG_DATUM(n))

@@ -9268,6 +9268,22 @@ SELECT regexp_match('abc01234xyz', '(?:(.*?)(\d+)(.*)){1,1}');
 
        <row>
         <entry role="func_table_entry"><para role="func_signature">
+         <function>date_add</function> ( <type>timestamp with time zone</type>, <type>interval</type> <optional>, <type>text</type> </optional> )
+         <returnvalue>timestamp with time zone</returnvalue>
+        </para>
+        <para>
+         Add <type>interval</type> to a <type>timestamp with time zone</type> value,
+         at the time zone specified by the third parameter. The time zone value
+         defaults to current <xref linkend="guc-timezone"/> setting.
+        </para>
+        <para>
+         <literal>date_add('2021-10-31 00:00:00+02'::timestamptz, '1 day'::interval, 'Europe/Warsaw')</literal>
+         <returnvalue>2021-10-31 23:00:00</returnvalue>
+        </para></entry>
+       </row>
+
+       <row>
+        <entry role="func_table_entry"><para role="func_signature">
          <function>date_bin</function> ( <type>interval</type>, <type>timestamp</type>, <type>timestamp</type> )
          <returnvalue>timestamp</returnvalue>
         </para>
@@ -9310,6 +9326,22 @@ SELECT regexp_match('abc01234xyz', '(?:(.*?)(\d+)(.*)){1,1}');
         <para>
          <literal>date_part('month', interval '2 years 3 months')</literal>
          <returnvalue>3</returnvalue>
+        </para></entry>
+       </row>
+
+       <row>
+        <entry role="func_table_entry"><para role="func_signature">
+         <function>date_subtract</function> ( <type>timestamp with time zone</type>, <type>interval</type> <optional>, <type>text</type> </optional> )
+         <returnvalue>timestamp with time zone</returnvalue>
+        </para>
+        <para>
+         Subtract <type>interval</type> from a <type>timestamp with time zone</type> value,
+         at the time zone specified by the third parameter. The time zone value
+         defaults to the current <xref linkend="guc-timezone"/> setting.
+        </para>
+        <para>
+         <literal>date_subtract('2021-10-31 00:00:00+02'::timestamptz, '1 day'::interval, 'Europe/Warsaw')</literal>
+         <returnvalue>2021-10-29 22:00:00</returnvalue>
         </para></entry>
        </row>
 
@@ -22017,13 +22049,14 @@ AND
         <returnvalue>setof timestamp</returnvalue>
        </para>
        <para role="func_signature">
-        <function>generate_series</function> ( <parameter>start</parameter> <type>timestamp with time zone</type>, <parameter>stop</parameter> <type>timestamp with time zone</type>, <parameter>step</parameter> <type>interval</type> )
+        <function>generate_series</function> ( <parameter>start</parameter> <type>timestamp with time zone</type>, <parameter>stop</parameter> <type>timestamp with time zone</type>, <parameter>step</parameter> <type>interval</type> <optional>, <parameter>timezone</parameter> <type>text</type> </optional> )
         <returnvalue>setof timestamp with time zone</returnvalue>
        </para>
        <para>
         Generates a series of values from <parameter>start</parameter>
         to <parameter>stop</parameter>, with a step size
-        of <parameter>step</parameter>.
+        of <parameter>step</parameter>. <parameter>timezone</parameter>
+        defaults to the current <xref linkend="guc-timezone"/> setting.
        </para></entry>
       </row>
      </tbody>

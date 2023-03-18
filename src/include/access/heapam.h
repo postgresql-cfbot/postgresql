@@ -56,9 +56,18 @@ typedef struct HeapScanDescData
 	/* rs_numblocks is usually InvalidBlockNumber, meaning "scan whole rel" */
 
 	/* scan current state */
-	bool		rs_inited;		/* false = scan not init'd yet */
-	OffsetNumber rs_coffset;	/* current offset # in non-page-at-a-time mode */
-	BlockNumber rs_cblock;		/* current block # in scan, if any */
+	union
+	{
+		/* current offset in non-page-at-a-time mode */
+		OffsetNumber rs_coffset;
+
+		/* current tuple's index in vistuples for page-at-a-time mode */
+		int			rs_cindex;
+	};
+
+	BlockNumber rs_cblock;		/* current block # in scan, or
+								 * InvalidBlockNumber when the scan is not yet
+								 * initialized */
 	Buffer		rs_cbuf;		/* current buffer in scan, if any */
 	/* NB: if rs_cbuf is not InvalidBuffer, we hold a pin on that buffer */
 
@@ -73,7 +82,6 @@ typedef struct HeapScanDescData
 	ParallelBlockTableScanWorkerData *rs_parallelworkerdata;
 
 	/* these fields only used in page-at-a-time mode and for bitmap scans */
-	int			rs_cindex;		/* current tuple's index in vistuples */
 	int			rs_ntuples;		/* number of visible tuples on page */
 	OffsetNumber rs_vistuples[MaxHeapTuplesPerPage];	/* their offsets */
 }			HeapScanDescData;

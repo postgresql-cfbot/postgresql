@@ -2279,14 +2279,9 @@ heapam_scan_sample_next_block(TableScanDesc scan, SampleScanState *scanstate)
 		/* scanning table sequentially */
 
 		if (hscan->rs_cblock == InvalidBlockNumber)
-		{
-			Assert(!hscan->rs_inited);
 			blockno = hscan->rs_startblock;
-		}
 		else
 		{
-			Assert(hscan->rs_inited);
-
 			blockno = hscan->rs_cblock + 1;
 
 			if (blockno >= hscan->rs_nblocks)
@@ -2321,13 +2316,12 @@ heapam_scan_sample_next_block(TableScanDesc scan, SampleScanState *scanstate)
 			ReleaseBuffer(hscan->rs_cbuf);
 		hscan->rs_cbuf = InvalidBuffer;
 		hscan->rs_cblock = InvalidBlockNumber;
-		hscan->rs_inited = false;
 
 		return false;
 	}
 
 	heapgetpage(scan, blockno);
-	hscan->rs_inited = true;
+	Assert(hscan->rs_cblock != InvalidBlockNumber);
 
 	return true;
 }

@@ -321,13 +321,15 @@ initscan(HeapScanDesc scan, ScanKey key, bool keep_startblock)
 	}
 
 	scan->rs_numblocks = InvalidBlockNumber;
-	scan->rs_inited = false;
 	scan->rs_ctup.t_data = NULL;
 	ItemPointerSetInvalid(&scan->rs_ctup.t_self);
 	scan->rs_cbuf = InvalidBuffer;
 	scan->rs_cblock = InvalidBlockNumber;
 
-	/* page-at-a-time fields are always invalid when not rs_inited */
+	/*
+	 * page-at-a-time fields are always invalid when
+	 * rs_cblock == InvalidBlockNumber
+	 */
 
 	/*
 	 * copy the scan key, if appropriate
@@ -355,7 +357,8 @@ heap_setscanlimits(TableScanDesc sscan, BlockNumber startBlk, BlockNumber numBlk
 {
 	HeapScanDesc scan = (HeapScanDesc) sscan;
 
-	Assert(!scan->rs_inited);	/* else too late to change */
+	/* we can't set any limits when there's a scan already running */
+	Assert(scan->rs_cblock == InvalidBlockNumber);
 	/* else rs_startblock is significant */
 	Assert(!(scan->rs_base.rs_flags & SO_ALLOW_SYNC));
 
@@ -493,7 +496,7 @@ heapgetpage(TableScanDesc sscan, BlockNumber block)
 static BlockNumber
 heapgettup_initial_block(HeapScanDesc scan, ScanDirection dir)
 {
-	Assert(!scan->rs_inited);
+	Assert(scan->rs_cblock == InvalidBlockNumber);
 
 	/* When there are no pages to scan, return InvalidBlockNumber */
 	if (scan->rs_nblocks == 0 || scan->rs_numblocks == 0)
@@ -559,7 +562,7 @@ heapgettup_start_page(HeapScanDesc scan, ScanDirection dir, int *linesleft,
 {
 	Page		page;
 
-	Assert(scan->rs_inited);
+	Assert(scan->rs_cblock != InvalidBlockNumber);
 	Assert(BufferIsValid(scan->rs_cbuf));
 
 	/* Caller is responsible for ensuring buffer is locked if needed */
@@ -592,7 +595,7 @@ heapgettup_continue_page(HeapScanDesc scan, ScanDirection dir, int *linesleft,
 {
 	Page		page;
 
-	Assert(scan->rs_inited);
+	Assert(scan->rs_cblock != InvalidBlockNumber);
 	Assert(BufferIsValid(scan->rs_cbuf));
 
 	/* Caller is responsible for ensuring buffer is locked if needed */
@@ -717,9 +720,9 @@ heapgettup_advance_block(HeapScanDesc scan, BlockNumber block, ScanDirection dir
  * the scankeys.
  *
  * Note: when we fall off the end of the scan in either direction, we
- * reset rs_inited.  This means that a further request with the same
- * scan direction will restart the scan, which is a bit odd, but a
- * request with the opposite scan direction will start a fresh scan
+ * reset rs_cblock to InvalidBlockNumber.  This means that a further request
+ * with the same scan direction will restart the scan, which is a bit odd, but
+ * a request with the opposite scan direction will start a fresh scan
  * in the proper direction.  The latter is required behavior for cursors,
  * while the former case is generally undefined behavior in Postgres
  * so we don't care too much.
@@ -737,12 +740,11 @@ heapgettup(HeapScanDesc scan,
 	OffsetNumber lineoff;
 	int			linesleft;
 
-	if (unlikely(!scan->rs_inited))
+	if (unlikely(scan->rs_cblock == InvalidBlockNumber))
 	{
 		block = heapgettup_initial_block(scan, dir);
 		/* ensure rs_cbuf is invalid when we get InvalidBlockNumber */
 		Assert(block != InvalidBlockNumber || !BufferIsValid(scan->rs_cbuf));
-		scan->rs_inited = true;
 	}
 	else
 	{
@@ -824,7 +826,6 @@ continue_page:
 	scan->rs_cbuf = InvalidBuffer;
 	scan->rs_cblock = InvalidBlockNumber;
 	tuple->t_data = NULL;
-	scan->rs_inited = false;
 }
 
 /* ----------------
@@ -852,12 +853,11 @@ heapgettup_pagemode(HeapScanDesc scan,
 	int			lineindex;
 	int			linesleft;
 
-	if (unlikely(!scan->rs_inited))
+	if (unlikely(scan->rs_cblock == InvalidBlockNumber))
 	{
 		block = heapgettup_initial_block(scan, dir);
 		/* ensure rs_cbuf is invalid when we get InvalidBlockNumber */
 		Assert(block != InvalidBlockNumber || !BufferIsValid(scan->rs_cbuf));
-		scan->rs_inited = true;
 	}
 	else
 	{
@@ -924,7 +924,6 @@ continue_page:
 	scan->rs_cbuf = InvalidBuffer;
 	scan->rs_cblock = InvalidBlockNumber;
 	tuple->t_data = NULL;
-	scan->rs_inited = false;
 }
 
 

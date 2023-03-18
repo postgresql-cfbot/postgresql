@@ -3792,6 +3792,9 @@ SyncVariables(void)
 	SetVariable(pset.vars, "PORT", PQport(pset.db));
 	SetVariable(pset.vars, "ENCODING", pg_encoding_to_char(pset.encoding));
 
+	snprintf(vbuf, sizeof(vbuf), "%d", PQbackendPID(pset.db));
+	SetVariable(pset.vars, "BACKEND_PID", vbuf);
+
 	/* this bit should match connection_warnings(): */
 	/* Try to get full text form of version, might include "devel" etc */
 	server_version = PQparameterStatus(pset.db, "server_version");
@@ -3826,6 +3829,7 @@ UnsyncVariables(void)
 	SetVariable(pset.vars, "ENCODING", NULL);
 	SetVariable(pset.vars, "SERVER_VERSION_NAME", NULL);
 	SetVariable(pset.vars, "SERVER_VERSION_NUM", NULL);
+	SetVariable(pset.vars, "BACKEND_PID", NULL);
 }
 
 

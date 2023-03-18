@@ -3905,6 +3905,17 @@ bar
         </listitem>
       </varlistentry>
 
+      <varlistentry id="app-psql-variables-backend-pid">
+        <term><varname>BACKEND_PID</varname></term>
+        <listitem>
+        <para>
+        The id of server process of the current connection. This is set every
+        time you connect to a database (including program start-up), but can
+        be changed or unset. This variable is unset when the connection is lost.
+        </para>
+        </listitem>
+      </varlistentry>
+
       <varlistentry id="app-psql-variables-comp-keyword-case">
         <term><varname>COMP_KEYWORD_CASE</varname></term>
         <listitem>
@@ -4551,7 +4562,10 @@ testdb=&gt; <userinput>INSERT INTO my_table VALUES (:'content');</userinput>
       <varlistentry id="app-psql-prompting-p">
         <term><literal>%p</literal></term>
         <listitem>
-         <para>The process ID of the backend currently connected to.</para>
+         <para>The process ID of the backend currently connected to.
+         This substitution is almost equal to using <literal>%:BACKEND_PID:</literal>,
+         but it is safer, because psql variable can be overwriten or unset.
+         </para>
         </listitem>
       </varlistentry>
 

@@ -6607,3 +6607,10 @@ cross-database references are not implemented: "no.such.database"."no.such.schem
 cross-database references are not implemented: "no.such.database"."no.such.schema"."no.such.data.type"
 \dX "no.such.database"."no.such.schema"."no.such.extended.statistics"
 cross-database references are not implemented: "no.such.database"."no.such.schema"."no.such.extended.statistics"
+-- should be true
+SELECT :BACKEND_PID = pg_backend_pid();
+ ?column? 
+----------
+ t
+(1 row)
+

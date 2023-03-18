@@ -396,6 +396,8 @@ helpVariables(unsigned short int pager)
 
 	HELP0("  AUTOCOMMIT\n"
 		  "    if set, successful SQL commands are automatically committed\n");
+	HELP0("  BACKEND_PID\n"
+		  "    id of server process of the current connection\n");
 	HELP0("  COMP_KEYWORD_CASE\n"
 		  "    determines the case used to complete SQL key words\n"
 		  "    [lower, upper, preserve-lower, preserve-upper]\n");

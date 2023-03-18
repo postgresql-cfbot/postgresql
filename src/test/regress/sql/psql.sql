@@ -1815,3 +1815,6 @@ DROP FUNCTION psql_error;
 \dP "no.such.database"."no.such.schema"."no.such.partitioned.relation"
 \dT "no.such.database"."no.such.schema"."no.such.data.type"
 \dX "no.such.database"."no.such.schema"."no.such.extended.statistics"
+
+-- should be true
+SELECT :BACKEND_PID = pg_backend_pid();

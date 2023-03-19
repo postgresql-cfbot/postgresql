@@ -20,7 +20,6 @@
 #include "access/brin_pageops.h"
 #include "access/brin_xlog.h"
 #include "access/relation.h"
-#include "access/reloptions.h"
 #include "access/relscan.h"
 #include "access/table.h"
 #include "access/tableam.h"
@@ -40,7 +39,6 @@
 #include "utils/index_selfuncs.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
-
 
 /*
  * We use a BrinBuildState during initial construction of a BRIN index.
@@ -120,7 +118,6 @@ brinhandler(PG_FUNCTION_ARGS)
 	amroutine->amvacuumcleanup = brinvacuumcleanup;
 	amroutine->amcanreturn = NULL;
 	amroutine->amcostestimate = brincostestimate;
-	amroutine->amoptions = brinoptions;
 	amroutine->amproperty = NULL;
 	amroutine->ambuildphasename = NULL;
 	amroutine->amvalidate = brinvalidate;
@@ -135,6 +132,7 @@ brinhandler(PG_FUNCTION_ARGS)
 	amroutine->amestimateparallelscan = NULL;
 	amroutine->aminitparallelscan = NULL;
 	amroutine->amparallelrescan = NULL;
+	amroutine->amreloptspecset = bringetreloptspecset;
 
 	PG_RETURN_POINTER(amroutine);
 }
@@ -970,23 +968,6 @@ brinvacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 }
 
 /*
- * reloptions processor for BRIN indexes
- */
-bytea *
-brinoptions(Datum reloptions, bool validate)
-{
-	static const relopt_parse_elt tab[] = {
-		{"pages_per_range", RELOPT_TYPE_INT, offsetof(BrinOptions, pagesPerRange)},
-		{"autosummarize", RELOPT_TYPE_BOOL, offsetof(BrinOptions, autosummarize)}
-	};
-
-	return (bytea *) build_reloptions(reloptions, validate,
-									  RELOPT_KIND_BRIN,
-									  sizeof(BrinOptions),
-									  tab, lengthof(tab));
-}
-
-/*
  * SQL-callable function to scan through an index and summarize all ranges
  * that are not currently summarized.
  */
@@ -1796,4 +1777,30 @@ check_null_keys(BrinValues *bval, ScanKey *nullkeys, int nnullkeys)
 	}
 
 	return true;
+}
+
+static options_spec_set *brin_relopt_specset = NULL;
+
+void *
+bringetreloptspecset(void)
+{
+	if (brin_relopt_specset)
+		return brin_relopt_specset;
+	brin_relopt_specset = allocateOptionsSpecSet(NULL,
+												 sizeof(BrinOptions), false, 2);
+
+	optionsSpecSetAddInt(brin_relopt_specset, "pages_per_range",
+						 "Number of pages that each page range covers in a BRIN index",
+						 NoLock,	/* since ALTER is not allowed no lock
+									 * needed */
+						 offsetof(BrinOptions, pagesPerRange), NULL,
+						 BRIN_DEFAULT_PAGES_PER_RANGE,
+						 BRIN_MIN_PAGES_PER_RANGE,
+						 BRIN_MAX_PAGES_PER_RANGE);
+	optionsSpecSetAddBool(brin_relopt_specset, "autosummarize",
+						  "Enables automatic summarization on this BRIN index",
+						  AccessExclusiveLock,
+						  offsetof(BrinOptions, autosummarize), NULL,
+						  false);
+	return brin_relopt_specset;
 }

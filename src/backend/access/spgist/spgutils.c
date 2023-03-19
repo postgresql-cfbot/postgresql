@@ -17,7 +17,7 @@
 
 #include "access/amvalidate.h"
 #include "access/htup_details.h"
-#include "access/reloptions.h"
+#include "access/options.h"
 #include "access/spgist_private.h"
 #include "access/toast_compression.h"
 #include "access/transam.h"
@@ -73,7 +73,6 @@ spghandler(PG_FUNCTION_ARGS)
 	amroutine->amvacuumcleanup = spgvacuumcleanup;
 	amroutine->amcanreturn = spgcanreturn;
 	amroutine->amcostestimate = spgcostestimate;
-	amroutine->amoptions = spgoptions;
 	amroutine->amproperty = spgproperty;
 	amroutine->ambuildphasename = NULL;
 	amroutine->amvalidate = spgvalidate;
@@ -88,6 +87,7 @@ spghandler(PG_FUNCTION_ARGS)
 	amroutine->amestimateparallelscan = NULL;
 	amroutine->aminitparallelscan = NULL;
 	amroutine->amparallelrescan = NULL;
+	amroutine->amreloptspecset = spggetreloptspecset;
 
 	PG_RETURN_POINTER(amroutine);
 }
@@ -733,22 +733,6 @@ SpGistInitMetapage(Page page)
 }
 
 /*
- * reloptions processing for SPGiST
- */
-bytea *
-spgoptions(Datum reloptions, bool validate)
-{
-	static const relopt_parse_elt tab[] = {
-		{"fillfactor", RELOPT_TYPE_INT, offsetof(SpGistOptions, fillfactor)},
-	};
-
-	return (bytea *) build_reloptions(reloptions, validate,
-									  RELOPT_KIND_SPGIST,
-									  sizeof(SpGistOptions),
-									  tab, lengthof(tab));
-}
-
-/*
  * Get the space needed to store a non-null datum of the indicated type
  * in an inner tuple (that is, as a prefix or node label).
  * Note the result is already rounded up to a MAXALIGN boundary.
@@ -1346,4 +1330,25 @@ spgproperty(Oid index_oid, int attno,
 	*isnull = false;
 
 	return true;
+}
+
+static options_spec_set *spgist_relopt_specset = NULL;
+
+void *
+spggetreloptspecset(void)
+{
+
+	if (spgist_relopt_specset)
+		return spgist_relopt_specset;
+
+	spgist_relopt_specset = allocateOptionsSpecSet(NULL,
+												   sizeof(SpGistOptions), false, 1);
+
+	optionsSpecSetAddInt(spgist_relopt_specset, "fillfactor",
+						 "Packs spgist index pages only to this percentage",
+						 ShareUpdateExclusiveLock,	/* affects only inserts */
+						 offsetof(SpGistOptions, fillfactor), NULL,
+						 SPGIST_DEFAULT_FILLFACTOR, SPGIST_MIN_FILLFACTOR, 100);
+
+	return spgist_relopt_specset;
 }

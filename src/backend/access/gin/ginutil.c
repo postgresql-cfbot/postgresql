@@ -16,7 +16,7 @@
 
 #include "access/gin_private.h"
 #include "access/ginxlog.h"
-#include "access/reloptions.h"
+#include "access/options.h"
 #include "access/xloginsert.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_type.h"
@@ -28,6 +28,7 @@
 #include "utils/builtins.h"
 #include "utils/index_selfuncs.h"
 #include "utils/typcache.h"
+#include "utils/guc.h"
 
 
 /*
@@ -67,7 +68,6 @@ ginhandler(PG_FUNCTION_ARGS)
 	amroutine->amvacuumcleanup = ginvacuumcleanup;
 	amroutine->amcanreturn = NULL;
 	amroutine->amcostestimate = gincostestimate;
-	amroutine->amoptions = ginoptions;
 	amroutine->amproperty = NULL;
 	amroutine->ambuildphasename = NULL;
 	amroutine->amvalidate = ginvalidate;
@@ -82,6 +82,7 @@ ginhandler(PG_FUNCTION_ARGS)
 	amroutine->amestimateparallelscan = NULL;
 	amroutine->aminitparallelscan = NULL;
 	amroutine->amparallelrescan = NULL;
+	amroutine->amreloptspecset = gingetreloptspecset;
 
 	PG_RETURN_POINTER(amroutine);
 }
@@ -604,21 +605,6 @@ ginExtractEntries(GinState *ginstate, OffsetNumber attnum,
 	return entries;
 }
 
-bytea *
-ginoptions(Datum reloptions, bool validate)
-{
-	static const relopt_parse_elt tab[] = {
-		{"fastupdate", RELOPT_TYPE_BOOL, offsetof(GinOptions, useFastUpdate)},
-		{"gin_pending_list_limit", RELOPT_TYPE_INT, offsetof(GinOptions,
-															 pendingListCleanupSize)}
-	};
-
-	return (bytea *) build_reloptions(reloptions, validate,
-									  RELOPT_KIND_GIN,
-									  sizeof(GinOptions),
-									  tab, lengthof(tab));
-}
-
 /*
  * Fetch index's statistical data into *stats
  *
@@ -704,4 +690,30 @@ ginUpdateStats(Relation index, const GinStatsData *stats, bool is_build)
 	UnlockReleaseBuffer(metabuffer);
 
 	END_CRIT_SECTION();
+}
+
+static options_spec_set *gin_relopt_specset = NULL;
+
+void *
+gingetreloptspecset(void)
+{
+	if (gin_relopt_specset)
+		return gin_relopt_specset;
+
+	gin_relopt_specset = allocateOptionsSpecSet(NULL,
+												sizeof(GinOptions), false, 2);
+
+	optionsSpecSetAddBool(gin_relopt_specset, "fastupdate",
+						  "Enables \"fast update\" feature for this GIN index",
+						  AccessExclusiveLock,
+						  offsetof(GinOptions, useFastUpdate), NULL,
+						  GIN_DEFAULT_USE_FASTUPDATE);
+
+	optionsSpecSetAddInt(gin_relopt_specset, "gin_pending_list_limit",
+						 "Maximum size of the pending list for this GIN index, in kilobytes",
+						 AccessExclusiveLock,
+						 offsetof(GinOptions, pendingListCleanupSize), NULL,
+						 -1, 64, MAX_KILOBYTES);
+
+	return gin_relopt_specset;
 }

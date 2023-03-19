@@ -462,7 +462,7 @@ static void
 RelationParseRelOptions(Relation relation, HeapTuple tuple)
 {
 	bytea	   *options;
-	amoptions_function amoptsfn;
+	amreloptspecset_function amoptspecsetfn;
 
 	relation->rd_options = NULL;
 
@@ -477,11 +477,11 @@ RelationParseRelOptions(Relation relation, HeapTuple tuple)
 		case RELKIND_VIEW:
 		case RELKIND_MATVIEW:
 		case RELKIND_PARTITIONED_TABLE:
-			amoptsfn = NULL;
+			amoptspecsetfn = NULL;
 			break;
 		case RELKIND_INDEX:
 		case RELKIND_PARTITIONED_INDEX:
-			amoptsfn = relation->rd_indam->amoptions;
+			amoptspecsetfn = relation->rd_indam->amreloptspecset;
 			break;
 		default:
 			return;
@@ -492,7 +492,7 @@ RelationParseRelOptions(Relation relation, HeapTuple tuple)
 	 * we might not have any other for pg_class yet (consider executing this
 	 * code for pg_class itself)
 	 */
-	options = extractRelOptions(tuple, GetPgClassDescriptor(), amoptsfn);
+	options = extractRelOptions(tuple, GetPgClassDescriptor(), amoptspecsetfn);
 
 	/*
 	 * Copy parsed data into CacheMemoryContext.  To guard against the

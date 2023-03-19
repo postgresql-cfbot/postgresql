@@ -15,7 +15,7 @@
 
 #include "access/amapi.h"
 #include "access/generic_xlog.h"
-#include "access/reloptions.h"
+#include "access/options.h"
 #include "bloom.h"
 #include "catalog/index.h"
 #include "commands/vacuum.h"
@@ -34,51 +34,11 @@
 
 PG_FUNCTION_INFO_V1(blhandler);
 
-/* Kind of relation options for bloom index */
-static relopt_kind bl_relopt_kind;
-
-/* parse table for fillRelOptions */
-static relopt_parse_elt bl_relopt_tab[INDEX_MAX_KEYS + 1];
+/* Catalog of relation options for bloom index */
+static options_spec_set *bl_relopt_specset;
 
 static int32 myRand(void);
 static void mySrand(uint32 seed);
-
-/*
- * Module initialize function: initialize info about Bloom relation options.
- *
- * Note: keep this in sync with makeDefaultBloomOptions().
- */
-void
-_PG_init(void)
-{
-	int			i;
-	char		buf[16];
-
-	bl_relopt_kind = add_reloption_kind();
-
-	/* Option for length of signature */
-	add_int_reloption(bl_relopt_kind, "length",
-					  "Length of signature in bits",
-					  DEFAULT_BLOOM_LENGTH, 1, MAX_BLOOM_LENGTH,
-					  AccessExclusiveLock);
-	bl_relopt_tab[0].optname = "length";
-	bl_relopt_tab[0].opttype = RELOPT_TYPE_INT;
-	bl_relopt_tab[0].offset = offsetof(BloomOptions, bloomLength);
-
-	/* Number of bits for each possible index column: col1, col2, ... */
-	for (i = 0; i < INDEX_MAX_KEYS; i++)
-	{
-		snprintf(buf, sizeof(buf), "col%d", i + 1);
-		add_int_reloption(bl_relopt_kind, buf,
-						  "Number of bits generated for each index column",
-						  DEFAULT_BLOOM_BITS, 1, MAX_BLOOM_BITS,
-						  AccessExclusiveLock);
-		bl_relopt_tab[i + 1].optname = MemoryContextStrdup(TopMemoryContext,
-														   buf);
-		bl_relopt_tab[i + 1].opttype = RELOPT_TYPE_INT;
-		bl_relopt_tab[i + 1].offset = offsetof(BloomOptions, bitSize[0]) + sizeof(int) * i;
-	}
-}
 
 /*
  * Construct a default set of Bloom options.
@@ -135,7 +95,7 @@ blhandler(PG_FUNCTION_ARGS)
 	amroutine->amvacuumcleanup = blvacuumcleanup;
 	amroutine->amcanreturn = NULL;
 	amroutine->amcostestimate = blcostestimate;
-	amroutine->amoptions = bloptions;
+	amroutine->amreloptspecset = blrelopt_specset;
 	amroutine->amproperty = NULL;
 	amroutine->ambuildphasename = NULL;
 	amroutine->amvalidate = blvalidate;
@@ -153,6 +113,15 @@ blhandler(PG_FUNCTION_ARGS)
 
 	PG_RETURN_POINTER(amroutine);
 }
+
+void
+blReloptionPostprocess(void *data, bool validate)
+{
+	BloomOptions *opts = (BloomOptions *) data;
+	/* Convert signature length from # of bits to # to words, rounding up */
+	opts->bloomLength = (opts->bloomLength + SIGNWORDBITS - 1) / SIGNWORDBITS;
+}
+
 
 /*
  * Fill BloomState structure for particular index.
@@ -474,24 +443,37 @@ BloomInitMetapage(Relation index)
 	UnlockReleaseBuffer(metaBuffer);
 }
 
-/*
- * Parse reloptions for bloom index, producing a BloomOptions struct.
- */
-bytea *
-bloptions(Datum reloptions, bool validate)
+void *
+blrelopt_specset(void)
 {
-	BloomOptions *rdopts;
+	int			i;
+	char		buf[16];
 
-	/* Parse the user-given reloptions */
-	rdopts = (BloomOptions *) build_reloptions(reloptions, validate,
-											   bl_relopt_kind,
-											   sizeof(BloomOptions),
-											   bl_relopt_tab,
-											   lengthof(bl_relopt_tab));
+	if (bl_relopt_specset)
+		return bl_relopt_specset;
 
-	/* Convert signature length from # of bits to # to words, rounding up */
-	if (rdopts)
-		rdopts->bloomLength = (rdopts->bloomLength + SIGNWORDBITS - 1) / SIGNWORDBITS;
 
-	return (bytea *) rdopts;
+	bl_relopt_specset = allocateOptionsSpecSet(NULL,
+											   sizeof(BloomOptions), false, INDEX_MAX_KEYS + 1);
+	bl_relopt_specset->postprocess_fun = blReloptionPostprocess;
+
+	optionsSpecSetAddInt(bl_relopt_specset, "length",
+						 "Length of signature in bits",
+						 NoLock,	/* No lock as far as ALTER is not
+									 * effective */
+						 offsetof(BloomOptions, bloomLength), NULL,
+						 DEFAULT_BLOOM_LENGTH, 1, MAX_BLOOM_LENGTH);
+
+	/* Number of bits for each possible index column: col1, col2, ... */
+	for (i = 0; i < INDEX_MAX_KEYS; i++)
+	{
+		snprintf(buf, 16, "col%d", i + 1);
+		optionsSpecSetAddInt(bl_relopt_specset, buf,
+							 "Number of bits for corresponding column",
+							 NoLock,	/* No lock as far as ALTER is not
+										 * effective */
+							 offsetof(BloomOptions, bitSize[i]), NULL,
+							 DEFAULT_BLOOM_BITS, 1, MAX_BLOOM_BITS);
+	}
+	return bl_relopt_specset;
 }

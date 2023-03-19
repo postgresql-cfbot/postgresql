@@ -136,10 +136,6 @@ typedef void (*amcostestimate_function) (struct PlannerInfo *root,
 										 double *indexCorrelation,
 										 double *indexPages);
 
-/* parse index reloptions */
-typedef bytea *(*amoptions_function) (Datum reloptions,
-									  bool validate);
-
 /* report AM, index, or index column property */
 typedef bool (*amproperty_function) (Oid index_oid, int attno,
 									 IndexAMProperty prop, const char *propname,
@@ -185,6 +181,9 @@ typedef void (*ammarkpos_function) (IndexScanDesc scan);
 
 /* restore marked scan position */
 typedef void (*amrestrpos_function) (IndexScanDesc scan);
+
+/* get catalog of reloptions definitions */
+typedef void *(*amreloptspecset_function) ();
 
 /*
  * Callback function signatures - for parallel index scans.
@@ -263,7 +262,6 @@ typedef struct IndexAmRoutine
 	amvacuumcleanup_function amvacuumcleanup;
 	amcanreturn_function amcanreturn;	/* can be NULL */
 	amcostestimate_function amcostestimate;
-	amoptions_function amoptions;
 	amproperty_function amproperty; /* can be NULL */
 	ambuildphasename_function ambuildphasename; /* can be NULL */
 	amvalidate_function amvalidate;
@@ -275,6 +273,7 @@ typedef struct IndexAmRoutine
 	amendscan_function amendscan;
 	ammarkpos_function ammarkpos;	/* can be NULL */
 	amrestrpos_function amrestrpos; /* can be NULL */
+	amreloptspecset_function amreloptspecset;	/* can be NULL */
 
 	/* interface functions to support parallel index scans */
 	amestimateparallelscan_function amestimateparallelscan; /* can be NULL */

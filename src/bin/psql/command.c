@@ -34,6 +34,7 @@
 #include "describe.h"
 #include "fe_utils/cancel.h"
 #include "fe_utils/print.h"
+#include "fe_utils/psqlscan_int.h"
 #include "fe_utils/string_utils.h"
 #include "help.h"
 #include "input.h"
@@ -2394,9 +2395,13 @@ exec_command_set(PsqlScanState scan_state, bool active_branch)
 			 */
 			char	   *newval;
 			char	   *opt;
+			PQExpBuffer output_buf = scan_state->output_buf;
 
 			opt = psql_scan_slash_option(scan_state,
 										 OT_NORMAL, NULL, false);
+			if (output_buf->len >= output_buf->maxlen
+				&& (pset.on_error_stop == PSQL_ERROR_STOP_SHELL || pset.on_error_stop == PSQL_ERROR_STOP_ALL))
+				success = false;
 			newval = pg_strdup(opt ? opt : "");
 			free(opt);
 
@@ -5041,10 +5046,19 @@ do_shell(const char *command)
 	else
 		result = system(command);
 
-	if (result == 127 || result == -1)
+	if (result != 0)
 	{
-		pg_log_error("\\!: failed");
-		return false;
+		if (result < 0)
+			pg_log_error("could not execute command: %m");
+		else
+		{
+			char *reason = wait_result_to_str(result);
+
+			pg_log_error("%s: %s", command, reason ? reason : "");
+			free(reason);
+		}
+		if (pset.on_error_stop == PSQL_ERROR_STOP_SHELL || pset.on_error_stop == PSQL_ERROR_STOP_ALL)
+			return false;
 	}
 	return true;
 }

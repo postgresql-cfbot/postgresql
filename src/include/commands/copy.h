@@ -92,6 +92,8 @@ extern DestReceiver *CreateCopyDestReceiver(void);
 /*
  * internal prototypes
  */
+extern RawStmt *CreateCopyToQuery(const CopyStmt *stmt, Relation rel,
+								  int stmt_location, int stmt_len);
 extern CopyToState BeginCopyTo(ParseState *pstate, Relation rel, RawStmt *raw_query,
 							   Oid queryRelId, const char *filename, bool is_program,
 							   copy_data_dest_cb data_dest_cb, List *attnamelist, List *options);

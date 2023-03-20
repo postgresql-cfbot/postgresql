@@ -183,92 +183,13 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt,
 		 */
 		if (check_enable_rls(relid, InvalidOid, false) == RLS_ENABLED)
 		{
-			SelectStmt *select;
-			ColumnRef  *cr;
-			ResTarget  *target;
-			RangeVar   *from;
-			List	   *targetList = NIL;
-
 			if (is_from)
 				ereport(ERROR,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 						 errmsg("COPY FROM not supported with row-level security"),
 						 errhint("Use INSERT statements instead.")));
 
-			/*
-			 * Build target list
-			 *
-			 * If no columns are specified in the attribute list of the COPY
-			 * command, then the target list is 'all' columns. Therefore, '*'
-			 * should be used as the target list for the resulting SELECT
-			 * statement.
-			 *
-			 * In the case that columns are specified in the attribute list,
-			 * create a ColumnRef and ResTarget for each column and add them
-			 * to the target list for the resulting SELECT statement.
-			 */
-			if (!stmt->attlist)
-			{
-				cr = makeNode(ColumnRef);
-				cr->fields = list_make1(makeNode(A_Star));
-				cr->location = -1;
-
-				target = makeNode(ResTarget);
-				target->name = NULL;
-				target->indirection = NIL;
-				target->val = (Node *) cr;
-				target->location = -1;
-
-				targetList = list_make1(target);
-			}
-			else
-			{
-				ListCell   *lc;
-
-				foreach(lc, stmt->attlist)
-				{
-					/*
-					 * Build the ColumnRef for each column.  The ColumnRef
-					 * 'fields' property is a String node that corresponds to
-					 * the column name respectively.
-					 */
-					cr = makeNode(ColumnRef);
-					cr->fields = list_make1(lfirst(lc));
-					cr->location = -1;
-
-					/* Build the ResTarget and add the ColumnRef to it. */
-					target = makeNode(ResTarget);
-					target->name = NULL;
-					target->indirection = NIL;
-					target->val = (Node *) cr;
-					target->location = -1;
-
-					/* Add each column to the SELECT statement's target list */
-					targetList = lappend(targetList, target);
-				}
-			}
-
-			/*
-			 * Build RangeVar for from clause, fully qualified based on the
-			 * relation which we have opened and locked.  Use "ONLY" so that
-			 * COPY retrieves rows from only the target table not any
-			 * inheritance children, the same as when RLS doesn't apply.
-			 */
-			from = makeRangeVar(get_namespace_name(RelationGetNamespace(rel)),
-								pstrdup(RelationGetRelationName(rel)),
-								-1);
-			from->inh = false;	/* apply ONLY */
-
-			/* Build query */
-			select = makeNode(SelectStmt);
-			select->targetList = targetList;
-			select->fromClause = list_make1(from);
-
-			query = makeNode(RawStmt);
-			query->stmt = (Node *) select;
-			query->stmt_location = stmt_location;
-			query->stmt_len = stmt_len;
-
+			query = CreateCopyToQuery(stmt, rel, stmt_location, stmt_len);
 			/*
 			 * Close the relation for now, but keep the lock on it to prevent
 			 * changes between now and when we start the query-based COPY.

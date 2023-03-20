@@ -2063,21 +2063,7 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 	/* Validate the entry */
 	if (!entry->replicate_valid)
 	{
-		Oid			schemaId = get_rel_namespace(relid);
-		List	   *pubids = GetRelationPublications(relid);
-
-		/*
-		 * We don't acquire a lock on the namespace system table as we build
-		 * the cache entry using a historic snapshot and all the later changes
-		 * are absorbed while decoding WAL.
-		 */
-		List	   *schemaPubids = GetSchemaPublications(schemaId);
-		ListCell   *lc;
-		Oid			publish_as_relid = relid;
-		int			publish_ancestor_level = 0;
-		bool		am_partition = get_rel_relispartition(relid);
-		char		relkind = get_rel_relkind(relid);
-		List	   *rel_publications = NIL;
+		List	*rel_publications;
 
 		/* Reload publications if needed before use. */
 		if (!publications_valid)
@@ -2140,123 +2126,10 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 		 * but here we only need to consider ones that the subscriber
 		 * requested.
 		 */
-		foreach(lc, data->publications)
-		{
-			Publication *pub = lfirst(lc);
-			bool		publish = false;
-
-			/*
-			 * Under what relid should we publish changes in this publication?
-			 * We'll use the top-most relid across all publications. Also
-			 * track the ancestor level for this publication.
-			 */
-			Oid			pub_relid = relid;
-			int			ancestor_level = 0;
-
-			/*
-			 * If this is a FOR ALL TABLES publication, pick the partition
-			 * root and set the ancestor level accordingly.
-			 */
-			if (pub->alltables)
-			{
-				publish = true;
-				if (pub->pubviaroot && am_partition)
-				{
-					List	   *ancestors = get_partition_ancestors(relid);
-
-					pub_relid = llast_oid(ancestors);
-					ancestor_level = list_length(ancestors);
-				}
-			}
-
-			if (!publish)
-			{
-				bool		ancestor_published = false;
-
-				/*
-				 * For a partition, check if any of the ancestors are
-				 * published.  If so, note down the topmost ancestor that is
-				 * published via this publication, which will be used as the
-				 * relation via which to publish the partition's changes.
-				 */
-				if (am_partition)
-				{
-					Oid			ancestor;
-					int			level;
-					List	   *ancestors = get_partition_ancestors(relid);
-
-					ancestor = GetTopMostAncestorInPublication(pub->oid,
-															   ancestors,
-															   &level);
-
-					if (ancestor != InvalidOid)
-					{
-						ancestor_published = true;
-						if (pub->pubviaroot)
-						{
-							pub_relid = ancestor;
-							ancestor_level = level;
-						}
-					}
-				}
-
-				if (list_member_oid(pubids, pub->oid) ||
-					list_member_oid(schemaPubids, pub->oid) ||
-					ancestor_published)
-					publish = true;
-			}
-
-			/*
-			 * If the relation is to be published, determine actions to
-			 * publish, and list of columns, if appropriate.
-			 *
-			 * Don't publish changes for partitioned tables, because
-			 * publishing those of its partitions suffices, unless partition
-			 * changes won't be published due to pubviaroot being set.
-			 */
-			if (publish &&
-				(relkind != RELKIND_PARTITIONED_TABLE || pub->pubviaroot))
-			{
-				entry->pubactions.pubinsert |= pub->pubactions.pubinsert;
-				entry->pubactions.pubupdate |= pub->pubactions.pubupdate;
-				entry->pubactions.pubdelete |= pub->pubactions.pubdelete;
-				entry->pubactions.pubtruncate |= pub->pubactions.pubtruncate;
-
-				/*
-				 * We want to publish the changes as the top-most ancestor
-				 * across all publications. So we need to check if the already
-				 * calculated level is higher than the new one. If yes, we can
-				 * ignore the new value (as it's a child). Otherwise the new
-				 * value is an ancestor, so we keep it.
-				 */
-				if (publish_ancestor_level > ancestor_level)
-					continue;
-
-				/*
-				 * If we found an ancestor higher up in the tree, discard the
-				 * list of publications through which we replicate it, and use
-				 * the new ancestor.
-				 */
-				if (publish_ancestor_level < ancestor_level)
-				{
-					publish_as_relid = pub_relid;
-					publish_ancestor_level = ancestor_level;
-
-					/* reset the publication list for this relation */
-					rel_publications = NIL;
-				}
-				else
-				{
-					/* Same ancestor level, has to be the same OID. */
-					Assert(publish_as_relid == pub_relid);
-				}
-
-				/* Track publications for this ancestor. */
-				rel_publications = lappend(rel_publications, pub);
-			}
-		}
-
-		entry->publish_as_relid = publish_as_relid;
+		rel_publications = GetEffectiveRelationPublications(relid,
+															data->publications,
+															&entry->publish_as_relid,
+															&entry->pubactions);
 
 		/*
 		 * Initialize the tuple slot, map, and row filter. These are only used
@@ -2275,8 +2148,6 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 			pgoutput_column_list_init(data, rel_publications, entry);
 		}
 
-		list_free(pubids);
-		list_free(schemaPubids);
 		list_free(rel_publications);
 
 		entry->replicate_valid = true;

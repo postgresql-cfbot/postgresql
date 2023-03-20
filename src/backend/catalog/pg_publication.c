@@ -1026,6 +1026,208 @@ GetPublicationByName(const char *pubname, bool missing_ok)
 }
 
 /*
+ * Get the mapping for given publication and relation.
+ */
+void
+GetPublicationRelationMapping(Oid pubid, Oid relid,
+							  Datum *attrs, bool *attrs_isnull,
+							  Datum *qual, bool *qual_isnull)
+{
+	Publication *publication;
+	HeapTuple	pubtuple = NULL;
+	Oid			schemaid = get_rel_namespace(relid);
+
+	publication = GetPublication(pubid);
+
+	/*
+	 * We don't consider row filters or column lists for FOR ALL TABLES or
+	 * FOR TABLES IN SCHEMA publications.
+	 */
+	if (!publication->alltables &&
+		!SearchSysCacheExists2(PUBLICATIONNAMESPACEMAP,
+							   ObjectIdGetDatum(schemaid),
+							   ObjectIdGetDatum(publication->oid)))
+		pubtuple = SearchSysCacheCopy2(PUBLICATIONRELMAP,
+									   ObjectIdGetDatum(relid),
+									   ObjectIdGetDatum(publication->oid));
+
+	if (HeapTupleIsValid(pubtuple))
+	{
+		/* Lookup the column list attribute. */
+		*attrs = SysCacheGetAttr(PUBLICATIONRELMAP, pubtuple,
+								 Anum_pg_publication_rel_prattrs,
+								 attrs_isnull);
+
+		/* Null indicates no filter. */
+		*qual = SysCacheGetAttr(PUBLICATIONRELMAP, pubtuple,
+								Anum_pg_publication_rel_prqual,
+								qual_isnull);
+	}
+	else
+	{
+		*attrs_isnull = true;
+		*qual_isnull = true;
+	}
+}
+/*
+ * Pick those publications from a list which should actually be used to
+ * publish given relation and return them.
+ *
+ * If publish_as_relid_p is passed, the relation whose tuple descriptor should
+ * be used to publish the data is stored in *publish_as_relid_p.
+ *
+ * If pubactions is passed, update the structure according to the matching
+ * publications.
+ */
+List *
+GetEffectiveRelationPublications(Oid relid, List *publications,
+								 Oid *publish_as_relid_p,
+								 PublicationActions *pubactions)
+{
+	Oid			schemaId = get_rel_namespace(relid);
+	List	   *pubids = GetRelationPublications(relid);
+	/*
+	 * We don't acquire a lock on the namespace system table as we build the
+	 * cache entry using a historic snapshot and all the later changes are
+	 * absorbed while decoding WAL.
+	 */
+	List	   *schemaPubids = GetSchemaPublications(schemaId);
+	ListCell   *lc;
+	Oid			publish_as_relid = relid;
+	int			publish_ancestor_level = 0;
+	bool		am_partition = get_rel_relispartition(relid);
+	char		relkind = get_rel_relkind(relid);
+	List	   *rel_publications = NIL;
+
+	foreach(lc, publications)
+	{
+		Publication *pub = lfirst(lc);
+		bool		publish = false;
+
+		/*
+		 * Under what relid should we publish changes in this publication?
+		 * We'll use the top-most relid across all publications. Also track
+		 * the ancestor level for this publication.
+		 */
+		Oid	pub_relid = relid;
+		int	ancestor_level = 0;
+
+		/*
+		 * If this is a FOR ALL TABLES publication, pick the partition root
+		 * and set the ancestor level accordingly.
+		 */
+		if (pub->alltables)
+		{
+			publish = true;
+			if (pub->pubviaroot && am_partition)
+			{
+				List	   *ancestors = get_partition_ancestors(relid);
+
+				pub_relid = llast_oid(ancestors);
+				ancestor_level = list_length(ancestors);
+			}
+		}
+
+		if (!publish)
+		{
+			bool		ancestor_published = false;
+
+			/*
+			 * For a partition, check if any of the ancestors are published.
+			 * If so, note down the topmost ancestor that is published via
+			 * this publication, which will be used as the relation via which
+			 * to publish the partition's changes.
+			 */
+			if (am_partition)
+			{
+				Oid			ancestor;
+				int			level;
+				List	   *ancestors = get_partition_ancestors(relid);
+
+				ancestor = GetTopMostAncestorInPublication(pub->oid,
+														   ancestors,
+														   &level);
+
+				if (ancestor != InvalidOid)
+				{
+					ancestor_published = true;
+					if (pub->pubviaroot)
+					{
+						pub_relid = ancestor;
+						ancestor_level = level;
+					}
+				}
+			}
+
+			if (list_member_oid(pubids, pub->oid) ||
+				list_member_oid(schemaPubids, pub->oid) ||
+				ancestor_published)
+				publish = true;
+		}
+
+		/*
+		 * If the relation is to be published, determine actions to publish,
+		 * and list of columns, if appropriate.
+		 *
+		 * Don't publish changes for partitioned tables, because publishing
+		 * those of its partitions suffices, unless partition changes won't be
+		 * published due to pubviaroot being set.
+		 */
+		if (publish &&
+			(relkind != RELKIND_PARTITIONED_TABLE || pub->pubviaroot))
+		{
+			if (pubactions)
+			{
+				pubactions->pubinsert |= pub->pubactions.pubinsert;
+				pubactions->pubupdate |= pub->pubactions.pubupdate;
+				pubactions->pubdelete |= pub->pubactions.pubdelete;
+				pubactions->pubtruncate |= pub->pubactions.pubtruncate;
+			}
+
+			/*
+			 * We want to publish the changes as the top-most ancestor across
+			 * all publications. So we need to check if the already calculated
+			 * level is higher than the new one. If yes, we can ignore the new
+			 * value (as it's a child). Otherwise the new value is an
+			 * ancestor, so we keep it.
+			 */
+			if (publish_ancestor_level > ancestor_level)
+				continue;
+
+			/*
+			 * If we found an ancestor higher up in the tree, discard the list
+			 * of publications through which we replicate it, and use the new
+			 * ancestor.
+			 */
+			if (publish_ancestor_level < ancestor_level)
+			{
+				publish_as_relid = pub_relid;
+				publish_ancestor_level = ancestor_level;
+
+				/* reset the publication list for this relation */
+				rel_publications = NIL;
+			}
+			else
+			{
+				/* Same ancestor level, has to be the same OID. */
+				Assert(publish_as_relid == pub_relid);
+			}
+
+			/* Track publications for this ancestor. */
+			rel_publications = lappend(rel_publications, pub);
+		}
+	}
+
+	list_free(pubids);
+	list_free(schemaPubids);
+
+	if (publish_as_relid_p)
+		*publish_as_relid_p = publish_as_relid;
+
+	return rel_publications;
+}
+
+/*
  * Returns information of tables in a publication.
  */
 Datum
@@ -1108,10 +1310,8 @@ pg_get_publication_tables(PG_FUNCTION_ARGS)
 
 	if (funcctx->call_cntr < list_length(tables))
 	{
-		HeapTuple	pubtuple = NULL;
 		HeapTuple	rettuple;
 		Oid			relid = list_nth_oid(tables, funcctx->call_cntr);
-		Oid			schemaid = get_rel_namespace(relid);
 		Datum		values[NUM_PUBLICATION_TABLES_ELEM] = {0};
 		bool		nulls[NUM_PUBLICATION_TABLES_ELEM] = {0};
 
@@ -1123,35 +1323,9 @@ pg_get_publication_tables(PG_FUNCTION_ARGS)
 
 		values[0] = ObjectIdGetDatum(relid);
 
-		/*
-		 * We don't consider row filters or column lists for FOR ALL TABLES or
-		 * FOR TABLES IN SCHEMA publications.
-		 */
-		if (!publication->alltables &&
-			!SearchSysCacheExists2(PUBLICATIONNAMESPACEMAP,
-								   ObjectIdGetDatum(schemaid),
-								   ObjectIdGetDatum(publication->oid)))
-			pubtuple = SearchSysCacheCopy2(PUBLICATIONRELMAP,
-										   ObjectIdGetDatum(relid),
-										   ObjectIdGetDatum(publication->oid));
-
-		if (HeapTupleIsValid(pubtuple))
-		{
-			/* Lookup the column list attribute. */
-			values[1] = SysCacheGetAttr(PUBLICATIONRELMAP, pubtuple,
-										Anum_pg_publication_rel_prattrs,
-										&(nulls[1]));
-
-			/* Null indicates no filter. */
-			values[2] = SysCacheGetAttr(PUBLICATIONRELMAP, pubtuple,
-										Anum_pg_publication_rel_prqual,
-										&(nulls[2]));
-		}
-		else
-		{
-			nulls[1] = true;
-			nulls[2] = true;
-		}
+		GetPublicationRelationMapping(publication->oid, relid,
+									  &values[1], &nulls[1],
+									  &values[2], &nulls[2]);
 
 		/* Show all columns when the column list is not specified. */
 		if (nulls[1] == true)

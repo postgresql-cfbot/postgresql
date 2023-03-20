@@ -113,6 +113,12 @@ typedef struct PublicationRelInfo
 extern Publication *GetPublication(Oid pubid);
 extern Publication *GetPublicationByName(const char *pubname, bool missing_ok);
 extern List *GetRelationPublications(Oid relid);
+extern void GetPublicationRelationMapping(Oid pubid, Oid relid,
+										  Datum *attrs, bool *attrs_isnull,
+										  Datum *qual, bool *qual_isnull);
+extern List *GetEffectiveRelationPublications(Oid relid, List *publications,
+											  Oid *publish_as_relid_p,
+											  PublicationActions *pubactions);
 
 /*---------
  * Expected values for pub_partopt parameter of GetRelationPublications(),

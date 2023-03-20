@@ -40,7 +40,10 @@
 
 /* Copy a field that is a pointer to a C string, or perhaps NULL */
 #define COPY_STRING_FIELD(fldname) \
-	(newnode->fldname = from->fldname ? pstrdup(from->fldname) : (char *) NULL)
+	do { \
+		if (from->fldname) \
+			newnode->fldname = pstrdup(from->fldname); \
+	} while (0)
 
 /* Copy a field that is an inline array */
 #define COPY_ARRAY_FIELD(fldname) \
@@ -49,11 +52,10 @@
 /* Copy a field that is a pointer to a simple palloc'd object of size sz */
 #define COPY_POINTER_FIELD(fldname, sz) \
 	do { \
-		Size	_size = (sz); \
-		if (_size > 0) \
+		if (from->fldname && (sz) > 0) \
 		{ \
-			newnode->fldname = palloc(_size); \
-			memcpy(newnode->fldname, from->fldname, _size); \
+			newnode->fldname = palloc((sz)); \
+			memcpy(newnode->fldname, from->fldname, (sz)); \
 		} \
 	} while (0)
 
@@ -74,10 +76,7 @@ _copyConst(const Const *from)
 {
 	Const	   *newnode = makeNode(Const);
 
-	COPY_SCALAR_FIELD(consttype);
-	COPY_SCALAR_FIELD(consttypmod);
-	COPY_SCALAR_FIELD(constcollid);
-	COPY_SCALAR_FIELD(constlen);
+	memcpy(newnode, from, sizeof(*from));
 
 	if (from->constbyval || from->constisnull)
 	{
@@ -97,10 +96,6 @@ _copyConst(const Const *from)
 										from->constlen);
 	}
 
-	COPY_SCALAR_FIELD(constisnull);
-	COPY_SCALAR_FIELD(constbyval);
-	COPY_LOCATION_FIELD(location);
-
 	return newnode;
 }
 
@@ -109,7 +104,8 @@ _copyA_Const(const A_Const *from)
 {
 	A_Const    *newnode = makeNode(A_Const);
 
-	COPY_SCALAR_FIELD(isnull);
+	memcpy(newnode, from, sizeof(*from));
+
 	if (!from->isnull)
 	{
 		/* This part must duplicate other _copy*() functions. */
@@ -137,8 +133,6 @@ _copyA_Const(const A_Const *from)
 				break;
 		}
 	}
-
-	COPY_LOCATION_FIELD(location);
 
 	return newnode;
 }

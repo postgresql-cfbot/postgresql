@@ -312,3 +312,44 @@ Objects in extension "test_ext_cine"
  table ext_cine_tab3
 (9 rows)
 
+CREATE SCHEMA test_s_dep;
+CREATE EXTENSION test_ext_req_schema1 SCHEMA test_s_dep;
+CREATE EXTENSION test_ext_req_schema3 CASCADE;
+NOTICE:  installing required extension "test_ext_req_schema2"
+SELECT dep_req();
+ dep_req 
+---------
+ 1032w
+(1 row)
+
+SELECT dep_req2();
+ dep_req2 
+----------
+ 1032w
+(1 row)
+
+SELECT dep_req3();
+ dep_req3 
+----------
+ 2032w
+(1 row)
+
+ALTER EXTENSION test_ext_req_schema2 UPDATE TO '2.0';
+CREATE SCHEMA test_s_dep2;
+ALTER EXTENSION test_ext_req_schema1 SET SCHEMA test_s_dep2;
+ERROR:  cannot SET SCHEMA of extension test_ext_req_schema1 because other extensions prevent it
+DETAIL:  extension test_ext_req_schema3 prevents relocation of extension test_ext_req_schema1
+SELECT dep_req();
+ dep_req 
+---------
+ 1update
+(1 row)
+
+ALTER EXTENSION test_ext_req_schema2 SET SCHEMA test_s_dep;
+DROP EXTENSION test_ext_req_schema1;
+ERROR:  cannot drop extension test_ext_req_schema1 because other objects depend on it
+DETAIL:  extension test_ext_req_schema2 depends on extension test_ext_req_schema1
+extension test_ext_req_schema3 depends on extension test_ext_req_schema1
+HINT:  Use DROP ... CASCADE to drop the dependent objects too.
+DROP EXTENSION test_ext_req_schema3;
+DROP EXTENSION test_ext_req_schema2;

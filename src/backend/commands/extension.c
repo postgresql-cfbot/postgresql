@@ -90,6 +90,8 @@ typedef struct ExtensionControlFile
 	bool		trusted;		/* allow becoming superuser on the fly? */
 	int			encoding;		/* encoding of the script file, or -1 */
 	List	   *requires;		/* names of prerequisite extensions */
+	List	   *no_relocate;	/* names of extensions that should be marked as not relocatable
+									these should be a subset of the requires */
 } ExtensionControlFile;
 
 /*
@@ -606,6 +608,21 @@ parse_extension_control_file(ExtensionControlFile *control,
 								item->name)));
 			}
 		}
+		else if (strcmp(item->name, "no_relocate") == 0)
+		{
+			/* Need a modifiable copy of string */
+			char	   *rawnames = pstrdup(item->value);
+
+			/* Parse string into list of identifiers */
+			if (!SplitIdentifierString(rawnames, ',', &control->no_relocate))
+			{
+				/* syntax error in name list */
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("parameter \"%s\" must be a list of extension names",
+								item->name)));
+			}
+		}
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -851,7 +868,7 @@ execute_extension_script(Oid extensionOid, ExtensionControlFile *control,
 						 const char *from_version,
 						 const char *version,
 						 List *requiredSchemas,
-						 const char *schemaName, Oid schemaOid)
+						 const char *schemaName, Oid schemaOid, List *requiredExtensions)
 {
 	bool		switch_to_superuser = false;
 	char	   *filename;
@@ -1030,6 +1047,34 @@ execute_extension_script(Oid extensionOid, ExtensionControlFile *control,
 											CStringGetTextDatum(qSchemaName));
 		}
 
+		/*
+		* If this extension requires other extensions
+		* Check each required extension to see if its schema
+		* is referenced by @extschema:reqextname@ syntax
+		*/
+		foreach(lc, requiredExtensions)
+		{
+			Oid				reqext = lfirst_oid(lc);
+			Oid				reqschema;
+			StringInfoData	rToken;
+			char			*reqname;
+			reqschema = get_extension_schema(reqext);
+			reqname = get_namespace_name(reqschema);
+			initStringInfo(&rToken);
+			appendStringInfo(&rToken, "%s%s%s", "@extschema:", get_extension_name(reqext), "@");
+
+			/*
+			* If the required extension's schema is referenced
+			* by variable name,
+			* Replace each occurence of @extschema:<reqextname>@
+			* with the required extension's schema
+			*/
+			t_sql = DirectFunctionCall3Coll(replace_text,
+								C_COLLATION_OID,
+								t_sql,
+								CStringGetTextDatum(rToken.data),
+								CStringGetTextDatum(quote_identifier(reqname)));
+		}
 		/*
 		 * If module_pathname was set in the control file, substitute its
 		 * value for occurrences of MODULE_PATHNAME.
@@ -1613,7 +1658,7 @@ CreateExtensionInternal(char *extensionName,
 	execute_extension_script(extensionOid, control,
 							 NULL, versionName,
 							 requiredSchemas,
-							 schemaName, schemaOid);
+							 schemaName, schemaOid, requiredExtensions);
 
 	/*
 	 * If additional update scripts have to be executed, apply the updates as
@@ -2094,8 +2139,8 @@ get_available_versions_for_extension(ExtensionControlFile *pcontrol,
 	{
 		ExtensionVersionInfo *evi = (ExtensionVersionInfo *) lfirst(lc);
 		ExtensionControlFile *control;
-		Datum		values[8];
-		bool		nulls[8];
+		Datum		values[9];
+		bool		nulls[9];
 		ListCell   *lc2;
 
 		if (!evi->installable)
@@ -2120,6 +2165,7 @@ get_available_versions_for_extension(ExtensionControlFile *pcontrol,
 		values[3] = BoolGetDatum(control->trusted);
 		/* relocatable */
 		values[4] = BoolGetDatum(control->relocatable);
+
 		/* schema */
 		if (control->schema == NULL)
 			nulls[5] = true;
@@ -2131,11 +2177,18 @@ get_available_versions_for_extension(ExtensionControlFile *pcontrol,
 			nulls[6] = true;
 		else
 			values[6] = convert_requires_to_datum(control->requires);
+
 		/* comment */
 		if (control->comment == NULL)
 			nulls[7] = true;
 		else
 			values[7] = CStringGetTextDatum(control->comment);
+
+		/* no_relocate */
+		if (control->no_relocate == NIL)
+			nulls[8] = true;
+		else
+			values[8] = convert_requires_to_datum(control->no_relocate);
 
 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
 
@@ -2177,6 +2230,14 @@ get_available_versions_for_extension(ExtensionControlFile *pcontrol,
 					nulls[6] = false;
 				}
 				/* comment stays the same */
+				/* no_relocate */
+				if (control->no_relocate == NIL)
+					nulls[8] = true;
+				else
+				{
+					values[8] = convert_requires_to_datum(control->no_relocate);
+					nulls[8] = false;
+				}
 
 				tuplestore_putvalues(tupstore, tupdesc, values, nulls);
 			}
@@ -2816,6 +2877,33 @@ AlterExtensionNamespace(const char *extensionName, const char *newschema, Oid *o
 		ObjectAddress dep;
 		Oid			dep_oldNspOid;
 
+		/* If an extension requires this extension
+		 * and the extension has this extension marked as no_relocate,
+		   then prevent set schema */
+		if (pg_depend->deptype == DEPENDENCY_NORMAL && pg_depend->classid == ExtensionRelationId){
+			ExtensionControlFile *dcontrol;
+			dep.classId = pg_depend->classid;
+			dep.objectId = pg_depend->objid;
+			dep.objectSubId = pg_depend->objsubid;
+			/** Check if dependent extension has a no_relocate request for this extension **/
+			dcontrol = read_extension_control_file(get_extension_name(dep.objectId));
+			if (dcontrol->no_relocate) {
+				ListCell   *lc;
+				foreach(lc, dcontrol->no_relocate)
+				{
+					char	*curreq = (char *) lfirst(lc);
+					if (strcmp(curreq, NameStr(extForm->extname)) == 0 ){
+						/** This dependent extension, has a no_relocate hold for this extension **/
+						ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							errmsg("cannot SET SCHEMA of extension %s because other extensions prevent it",
+									NameStr(extForm->extname)),
+							errdetail("%s prevents relocation of extension %s",
+									getObjectDescription(&dep, false), NameStr(extForm->extname))));
+					}
+				}
+			}
+		}
 		/*
 		 * Ignore non-membership dependencies.  (Currently, the only other
 		 * case we could see here is a normal dependency from another
@@ -3172,7 +3260,7 @@ ApplyExtensionUpdates(Oid extensionOid,
 		execute_extension_script(extensionOid, control,
 								 oldVersionName, versionName,
 								 requiredSchemas,
-								 schemaName, schemaOid);
+								 schemaName, schemaOid, requiredExtensions);
 
 		/*
 		 * Update prior-version name and loop around.  Since

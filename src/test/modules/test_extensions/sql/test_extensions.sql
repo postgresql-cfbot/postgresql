@@ -209,3 +209,18 @@ CREATE EXTENSION test_ext_cine;
 ALTER EXTENSION test_ext_cine UPDATE TO '1.1';
 
 \dx+ test_ext_cine
+
+CREATE SCHEMA test_s_dep;
+CREATE EXTENSION test_ext_req_schema1 SCHEMA test_s_dep;
+CREATE EXTENSION test_ext_req_schema3 CASCADE;
+SELECT dep_req();
+SELECT dep_req2();
+SELECT dep_req3();
+ALTER EXTENSION test_ext_req_schema2 UPDATE TO '2.0';
+CREATE SCHEMA test_s_dep2;
+ALTER EXTENSION test_ext_req_schema1 SET SCHEMA test_s_dep2;
+SELECT dep_req();
+ALTER EXTENSION test_ext_req_schema2 SET SCHEMA test_s_dep;
+DROP EXTENSION test_ext_req_schema1;
+DROP EXTENSION test_ext_req_schema3;
+DROP EXTENSION test_ext_req_schema2;

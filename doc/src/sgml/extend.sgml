@@ -739,6 +739,22 @@ RETURNS anycompatible AS ...
       </listitem>
      </varlistentry>
 
+     <varlistentry id="extend-extensions-files-no-relocate">
+      <term><varname>no_relocate</varname> (<type>string</type>)</term>
+      <listitem>
+       <para>
+        A list of names of extensions that this extension depends on,
+        and that should be barred from SET SCHEMA.
+        This is needed if an extension script references
+        a required extensions schema by variable name
+        and the object references are in places that can't track renames.
+        for example <literal>no_relocate = 'foo, bar'</literal>.
+        This setting is checked at ALTER EXTENSION .. SET SCHEMA
+        time of a required extension.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="extend-extensions-files-superuser">
       <term><varname>superuser</varname> (<type>boolean</type>)</term>
       <listitem>
@@ -906,6 +922,25 @@ RETURNS anycompatible AS ...
        executed.  The user can set the target schema using the
        <literal>SCHEMA</literal> option of <command>CREATE EXTENSION</command>.
       </para>
+     </listitem>
+
+     <listitem>
+      <para>
+       An extension might depend on other extensions.
+       It is useful to schema qualify calls to dependent extension to minimize reliance on search_path.
+       This is critical for cases such as functions used in indexes, materialized views, or check constraints.
+       To reference a required extension's schema, you must first have <literal>requires</literal>
+       variable specifying the list of extensions your extension requires.
+       In your extension sql scripts,
+       you can reference a required extension's schema with syntax
+       <literal>@extschema:reqextname@</literal> where <literal>reqextname</literal>
+       is the name of an extension in your <literal>requires</literal> list.
+       All occurrences of this string will be
+       replaced by the schema the required extension is installed in before the script is
+       executed.
+      </para>
+      <para>For extensions that you reference by this syntax, make sure to add them to the
+       <literal>no_relocate</literal> list as well.</para>
      </listitem>
 
      <listitem>

@@ -21,7 +21,7 @@ PostgreSQL documentation
 
  <refsynopsisdiv>
 <synopsis>
-CREATE OPERATOR <replaceable>name</replaceable> (
+CREATE [ OR REPLACE ] OPERATOR <replaceable>name</replaceable> (
     {FUNCTION|PROCEDURE} = <replaceable class="parameter">function_name</replaceable>
     [, LEFTARG = <replaceable class="parameter">left_type</replaceable> ] [, RIGHTARG = <replaceable class="parameter">right_type</replaceable> ]
     [, COMMUTATOR = <replaceable class="parameter">com_op</replaceable> ] [, NEGATOR = <replaceable class="parameter">neg_op</replaceable> ]
@@ -36,7 +36,8 @@ CREATE OPERATOR <replaceable>name</replaceable> (
 
   <para>
    <command>CREATE OPERATOR</command> defines a new operator,
-   <replaceable class="parameter">name</replaceable>.  The user who
+   <replaceable class="parameter">name</replaceable>.  <command>CREATE OR REPLACE OPERATOR</command>
+   will either create a new operator, or replace an existing definition.  The user who
    defines an operator becomes its owner.  If a schema name is given
    then the operator is created in the specified schema.  Otherwise it
    is created in the current schema.
@@ -113,6 +114,12 @@ CREATE OPERATOR <replaceable>name</replaceable> (
    privilege on the argument types and the return type, as well
    as <literal>EXECUTE</literal> privilege on the underlying function.  If a
    commutator or negator operator is specified, you must own these operators.
+  </para>
+
+  <para>
+   When <command>CREATE OR REPLACE OPERATOR</command> is used to replace an
+   existing operator, only <replaceable class="parameter">res_proc</replaceable>
+   and <replaceable class="parameter">join_proc</replaceable> can be changed.
   </para>
  </refsect1>
 

@@ -1415,7 +1415,8 @@ ProcessUtilitySlow(ParseState *pstate,
 						case OBJECT_OPERATOR:
 							Assert(stmt->args == NIL);
 							address = DefineOperator(stmt->defnames,
-													 stmt->definition);
+													 stmt->definition,
+													 stmt->replace);
 							break;
 						case OBJECT_TYPE:
 							Assert(stmt->args == NIL);

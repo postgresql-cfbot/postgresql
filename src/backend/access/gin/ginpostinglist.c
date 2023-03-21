@@ -26,7 +26,7 @@
  * lowest 32 bits are the block number. That leaves 21 bits unused, i.e.
  * only 43 low bits are used.
  *
- * 11 bits is enough for the offset number, because MaxHeapTuplesPerPage <
+ * 11 bits is enough for the offset number, because MaxHeapTuplesPerPage() <
  * 2^11 on all supported block sizes. We are frugal with the bits, because
  * smaller integers use fewer bytes in the varbyte encoding, saving disk
  * space. (If we get a new table AM in the future that wants to use the full
@@ -74,9 +74,9 @@
 /*
  * How many bits do you need to encode offset number? OffsetNumber is a 16-bit
  * integer, but you can't fit that many items on a page. 11 ought to be more
- * than enough. It's tempting to derive this from MaxHeapTuplesPerPage, and
+ * than enough. It's tempting to derive this from MaxHeapTuplesPerPage(), and
  * use the minimum number of bits, but that would require changing the on-disk
- * format if MaxHeapTuplesPerPage changes. Better to leave some slack.
+ * format if MaxHeapTuplesPerPage() changes. Better to leave some slack.
  */
 #define MaxHeapTuplesPerPageBits		11
 

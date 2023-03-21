@@ -18,6 +18,7 @@
 #include "access/transam.h"
 #include "access/tupdesc.h"
 #include "access/tupmacs.h"
+#include "common/pagefeat.h"
 #include "storage/bufpage.h"
 #include "varatt.h"
 
@@ -550,31 +551,51 @@ StaticAssertDecl(MaxOffsetNumber < SpecTokenOffsetNumber,
 #define BITMAPLEN(NATTS)	(((int)(NATTS) + 7) / 8)
 
 /*
- * MaxHeapTupleSize is the maximum allowed size of a heap tuple, including
+ * MaxHeapTupleSize() is the maximum allowed size of a heap tuple, including
  * header and MAXALIGN alignment padding.  Basically it's BLCKSZ minus the
- * other stuff that has to be on a disk page.  Since heap pages use no
- * "special space", there's no deduction for that.
+ * other stuff that has to be on a disk page.  We also include
+ * SizeOfPageReservedSpace() bytes in this calculation to account for page
+ * trailers.
+ *
+ * MaxHeapTupleSizeLimit is the maximum buffer-size required for any cluster,
+ * explicitly excluding the PageReservedSpace.  This is needed for any data
+ * structure which uses a fixed-size buffer, since compilers do not want a
+ * variable-sized array, and MaxHeapTupleSize() is now variable.
  *
  * NOTE: we allow for the ItemId that must point to the tuple, ensuring that
  * an otherwise-empty page can indeed hold a tuple of this size.  Because
  * ItemIds and tuples have different alignment requirements, don't assume that
- * you can, say, fit 2 tuples of size MaxHeapTupleSize/2 on the same page.
+ * you can, say, fit 2 tuples of size MaxHeapTupleSize()/2 on the same page.
  */
-#define MaxHeapTupleSize  (BLCKSZ - MAXALIGN(SizeOfPageHeaderData + sizeof(ItemIdData)))
+#define MaxHeapTupleSize()  (BLCKSZ - MAXALIGN(SizeOfPageHeaderData + sizeof(ItemIdData) + SizeOfPageReservedSpace()))
+#define MaxHeapTupleSizeLimit  (BLCKSZ - MAXALIGN(SizeOfPageHeaderData + sizeof(ItemIdData)))
 #define MinHeapTupleSize  MAXALIGN(SizeofHeapTupleHeader)
 
 /*
- * MaxHeapTuplesPerPage is an upper bound on the number of tuples that can
- * fit on one heap page.  (Note that indexes could have more, because they
- * use a smaller tuple header.)  We arrive at the divisor because each tuple
- * must be maxaligned, and it must have an associated line pointer.
+ * MaxHeapTuplesPerPage() is an upper bound on the number of tuples that can fit
+ * on one heap page.  (Note that indexes could have more, because they use a
+ * smaller tuple header.)  We arrive at the divisor because each tuple must be
+ * maxaligned, and it must have an associated line pointer.  This is a dynamic
+ * value, accounting for PageReservedSpace on the end.
+ *
+ * MaxHeapTuplesPerPageLimit is this same limit, but discounting
+ * PageReservedSpace (which can be zero), so is appropriate for defining data
+ * structures which require fixed-size buffers.  Code should not assume
+ * MaxHeapTuplesPerPage() == MaxHeapTuplesPerPageLimit, so if iterating over
+ * such a structure, the *size* of the buffer should be
+ * MaxHeapTuplesPerPageLimit, but the limits of iteration should be
+ * MaxHeapTuplesPerPage(), implying that MaxHeapTuplesPerPage() <=
+ * MaxHeapTuplesPerPageLimit.
  *
  * Note: with HOT, there could theoretically be more line pointers (not actual
  * tuples) than this on a heap page.  However we constrain the number of line
  * pointers to this anyway, to avoid excessive line-pointer bloat and not
  * require increases in the size of work arrays.
  */
-#define MaxHeapTuplesPerPage	\
+#define MaxHeapTuplesPerPage()	\
+	((int) ((BLCKSZ - SizeOfPageHeaderData - SizeOfPageReservedSpace()) / \
+			(MAXALIGN(SizeofHeapTupleHeader) + sizeof(ItemIdData))))
+#define MaxHeapTuplesPerPageLimit	\
 	((int) ((BLCKSZ - SizeOfPageHeaderData) / \
 			(MAXALIGN(SizeofHeapTupleHeader) + sizeof(ItemIdData))))
 

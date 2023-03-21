@@ -595,7 +595,7 @@ _hash_init_metabuffer(Buffer buf, double num_tuples, RegProcedure procid,
 void
 _hash_pageinit(Page page, Size size)
 {
-	PageInit(page, size, sizeof(HashPageOpaqueData));
+	PageInit(page, size, sizeof(HashPageOpaqueData), cluster_page_features);
 }
 
 /*

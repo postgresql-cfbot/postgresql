@@ -116,7 +116,7 @@ blbulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 		 */
 		if (BloomPageGetMaxOffset(page) != 0 &&
 			BloomPageGetFreeSpace(&state, page) >= state.sizeOfBloomTuple &&
-			countPage < BloomMetaBlockN)
+			countPage < BloomMetaBlockN())
 			notFullPage[countPage++] = blkno;
 
 		/* Did we delete something? */

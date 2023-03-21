@@ -284,7 +284,7 @@ page_header(PG_FUNCTION_ARGS)
 	}
 	else
 		values[0] = LSNGetDatum(lsn);
-	values[1] = UInt16GetDatum(pageheader->pd_checksum);
+	values[1] = UInt16GetDatum(pageheader->pd_feat.checksum);
 	values[2] = UInt16GetDatum(pageheader->pd_flags);
 
 	/* pageinspect >= 1.10 uses int4 instead of int2 for those fields */

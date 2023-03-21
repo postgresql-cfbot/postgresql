@@ -408,7 +408,7 @@ BloomInitPage(Page page, uint16 flags)
 {
 	BloomPageOpaque opaque;
 
-	PageInit(page, BLCKSZ, sizeof(BloomPageOpaqueData));
+	PageInit(page, BLCKSZ, sizeof(BloomPageOpaqueData), cluster_page_features);
 
 	opaque = BloomPageGetOpaque(page);
 	opaque->flags = flags;
@@ -438,10 +438,10 @@ BloomFillMetapage(Relation index, Page metaPage)
 	 */
 	BloomInitPage(metaPage, BLOOM_META);
 	metadata = BloomPageGetMeta(metaPage);
-	memset(metadata, 0, sizeof(BloomMetaPageData));
+	memset(metadata, 0, sizeof(BloomMetaPageData) - SizeOfPageReservedSpace());
 	metadata->magickNumber = BLOOM_MAGICK_NUMBER;
 	metadata->opts = *opts;
-	((PageHeader) metaPage)->pd_lower += sizeof(BloomMetaPageData);
+	((PageHeader) metaPage)->pd_lower += sizeof(BloomMetaPageData) - SizeOfPageReservedSpace();
 
 	/* If this fails, probably FreeBlockNumberArray size calc is wrong: */
 	Assert(((PageHeader) metaPage)->pd_lower <= ((PageHeader) metaPage)->pd_upper);

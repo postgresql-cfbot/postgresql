@@ -906,8 +906,8 @@ lazy_scan_heap(LVRelState *vacrel)
 		 * dead_items TIDs, pause and do a cycle of vacuuming before we tackle
 		 * this page.
 		 */
-		Assert(dead_items->max_items >= MaxHeapTuplesPerPage);
-		if (dead_items->max_items - dead_items->num_items < MaxHeapTuplesPerPage)
+		Assert(dead_items->max_items >= MaxHeapTuplesPerPage());
+		if (dead_items->max_items - dead_items->num_items < MaxHeapTuplesPerPage())
 		{
 			/*
 			 * Before beginning index vacuuming, we release any pin we may
@@ -1549,8 +1549,8 @@ lazy_scan_prune(LVRelState *vacrel,
 	int			nnewlpdead;
 	HeapPageFreeze pagefrz;
 	int64		fpi_before = pgWalUsage.wal_fpi;
-	OffsetNumber deadoffsets[MaxHeapTuplesPerPage];
-	HeapTupleFreeze frozen[MaxHeapTuplesPerPage];
+	OffsetNumber deadoffsets[MaxHeapTuplesPerPageLimit];
+	HeapTupleFreeze frozen[MaxHeapTuplesPerPageLimit];
 
 	Assert(BufferGetBlockNumber(buf) == blkno);
 
@@ -1969,7 +1969,7 @@ lazy_scan_noprune(LVRelState *vacrel,
 	HeapTupleHeader tupleheader;
 	TransactionId NoFreezePageRelfrozenXid = vacrel->NewRelfrozenXid;
 	MultiXactId NoFreezePageRelminMxid = vacrel->NewRelminMxid;
-	OffsetNumber deadoffsets[MaxHeapTuplesPerPage];
+	OffsetNumber deadoffsets[MaxHeapTuplesPerPageLimit];
 
 	Assert(BufferGetBlockNumber(buf) == blkno);
 
@@ -2501,7 +2501,7 @@ lazy_vacuum_heap_page(LVRelState *vacrel, BlockNumber blkno, Buffer buffer,
 {
 	VacDeadItems *dead_items = vacrel->dead_items;
 	Page		page = BufferGetPage(buffer);
-	OffsetNumber unused[MaxHeapTuplesPerPage];
+	OffsetNumber unused[MaxHeapTuplesPerPageLimit];
 	int			nunused = 0;
 	TransactionId visibility_cutoff_xid;
 	bool		all_frozen;
@@ -3118,16 +3118,16 @@ dead_items_max_items(LVRelState *vacrel)
 		max_items = Min(max_items, MAXDEADITEMS(MaxAllocSize));
 
 		/* curious coding here to ensure the multiplication can't overflow */
-		if ((BlockNumber) (max_items / MaxHeapTuplesPerPage) > rel_pages)
-			max_items = rel_pages * MaxHeapTuplesPerPage;
+		if ((BlockNumber) (max_items / MaxHeapTuplesPerPage()) > rel_pages)
+			max_items = rel_pages * MaxHeapTuplesPerPage();
 
 		/* stay sane if small maintenance_work_mem */
-		max_items = Max(max_items, MaxHeapTuplesPerPage);
+		max_items = Max(max_items, MaxHeapTuplesPerPage());
 	}
 	else
 	{
 		/* One-pass case only stores a single heap page's TIDs at a time */
-		max_items = MaxHeapTuplesPerPage;
+		max_items = MaxHeapTuplesPerPage();
 	}
 
 	return (int) max_items;
@@ -3147,7 +3147,7 @@ dead_items_alloc(LVRelState *vacrel, int nworkers)
 	int			max_items;
 
 	max_items = dead_items_max_items(vacrel);
-	Assert(max_items >= MaxHeapTuplesPerPage);
+	Assert(max_items >= MaxHeapTuplesPerPage());
 
 	/*
 	 * Initialize state for a parallel vacuum.  As of now, only one worker can

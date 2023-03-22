@@ -698,7 +698,7 @@ AssignTransactionId(TransactionState s)
 
 	if (isSubXact)
 		SubTransSetParent(XidFromFullTransactionId(s->fullTransactionId),
-						  XidFromFullTransactionId(s->parent->fullTransactionId));
+						  XidFromFullTransactionId(XactTopFullTransactionId));
 
 	/*
 	 * If it's a top-level transaction, the predicate locking system needs to

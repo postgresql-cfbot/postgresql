@@ -61,7 +61,7 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
   <title>Parameters</title>
 
   <variablelist>
-   <varlistentry>
+   <varlistentry id="sql-createsubscription-params-subscription-name">
     <term><replaceable class="parameter">subscription_name</replaceable></term>
     <listitem>
      <para>
@@ -70,7 +70,7 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
     </listitem>
    </varlistentry>
 
-   <varlistentry>
+   <varlistentry id="sql-createsubscription-params-connection">
     <term><literal>CONNECTION '<replaceable class="parameter">conninfo</replaceable>'</literal></term>
     <listitem>
      <para>
@@ -81,7 +81,7 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
     </listitem>
    </varlistentry>
 
-   <varlistentry>
+   <varlistentry id="sql-createsubscription-params-publication">
     <term><literal>PUBLICATION <replaceable class="parameter">publication_name</replaceable> [, ...]</literal></term>
     <listitem>
      <para>
@@ -90,7 +90,7 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
     </listitem>
    </varlistentry>
 
-   <varlistentry>
+   <varlistentry id="sql-createsubscription-params-WITH">
     <term><literal>WITH ( <replaceable class="parameter">subscription_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] )</literal></term>
     <listitem>
      <para>
@@ -102,7 +102,7 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
 
       <variablelist>
 
-       <varlistentry>
+       <varlistentry id="sql-createsubscription-params-optional-connect">
         <term><literal>connect</literal> (<type>boolean</type>)</term>
         <listitem>
          <para>
@@ -129,7 +129,7 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
         </listitem>
        </varlistentry>
 
-       <varlistentry>
+       <varlistentry id="sql-createsubscription-params-optional-create-slot">
         <term><literal>create_slot</literal> (<type>boolean</type>)</term>
         <listitem>
          <para>
@@ -145,7 +145,7 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
         </listitem>
        </varlistentry>
 
-       <varlistentry>
+       <varlistentry id="sql-createsubscription-params-optional-enabled">
         <term><literal>enabled</literal> (<type>boolean</type>)</term>
         <listitem>
          <para>
@@ -156,7 +156,7 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
         </listitem>
        </varlistentry>
 
-       <varlistentry>
+       <varlistentry id="sql-createsubscription-params-optional-slot-name">
         <term><literal>slot_name</literal> (<type>string</type>)</term>
         <listitem>
          <para>
@@ -185,15 +185,25 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
 
       <variablelist>
 
-       <varlistentry>
+       <varlistentry id="sql-createsubscription-params-optional-binary" xreflabel="binary">
         <term><literal>binary</literal> (<type>boolean</type>)</term>
         <listitem>
          <para>
-          Specifies whether the subscription will request the publisher to
-          send the data in binary format (as opposed to text).
-          The default is <literal>false</literal>.
-          Even when this option is enabled, only data types having
-          binary send and receive functions will be transferred in binary.
+          Specifies whether the subscription will request the publisher to send
+          the data in binary format (as opposed to text). The default is
+          <literal>false</literal>. Any initial table synchronization copy
+          (see <literal>copy_data</literal>) also uses the same format. Binary
+          format can be faster than the text format, but it is less portable
+          across machine architectures and <productname>PostgreSQL</productname>
+          versions. Binary format is very data type specific; for example, it
+          will not allow copying from a <type>smallint</type> column to an
+          <type>integer</type> column, even though that would work fine in text
+          format. Even when this option is enabled, only data types having binary
+          send and receive functions will be transferred in binary. Note that
+          the initial synchronization requires all data types to have binary
+          send and receive functions, otherwise the synchronization will fail
+          (see <xref linkend="sql-createtype"/> for more about send/receive
+          functions).
          </para>
 
          <para>
@@ -203,10 +213,16 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
           such a case, data transfer will fail, and
           the <literal>binary</literal> option cannot be used.
          </para>
+
+         <para>
+          If the publisher is a <productname>PostgreSQL</productname> version
+          before 16, then any initial table synchronization will use text format
+          even if <literal>binary = true</literal>.
+         </para>
         </listitem>
        </varlistentry>
 
-       <varlistentry>
+       <varlistentry id="sql-createsubscription-params-optional-copy-data">
         <term><literal>copy_data</literal> (<type>boolean</type>)</term>
         <listitem>
          <para>
@@ -227,7 +243,7 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
         </listitem>
        </varlistentry>
 
-       <varlistentry>
+       <varlistentry id="sql-createsubscription-params-optional-streaming">
         <term><literal>streaming</literal> (<type>enum</type>)</term>
         <listitem>
          <para>
@@ -255,7 +271,7 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
         </listitem>
        </varlistentry>
 
-       <varlistentry>
+       <varlistentry id="sql-createsubscription-params-optional-synchronous-commit">
         <term><literal>synchronous_commit</literal> (<type>enum</type>)</term>
         <listitem>
          <para>
@@ -287,7 +303,7 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
         </listitem>
        </varlistentry>
 
-       <varlistentry>
+       <varlistentry id="sql-createsubscription-params-optional-two-phase">
         <term><literal>two_phase</literal> (<type>boolean</type>)</term>
         <listitem>
          <para>
@@ -318,7 +334,7 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
         </listitem>
        </varlistentry>
 
-       <varlistentry>
+       <varlistentry id="sql-createsubscription-params-optional-disable-on-error">
         <term><literal>disable_on_error</literal> (<type>boolean</type>)</term>
         <listitem>
          <para>
@@ -330,7 +346,7 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
         </listitem>
        </varlistentry>
 
-       <varlistentry>
+       <varlistentry id="sql-createsubscription-params-optional-origin">
         <term><literal>origin</literal> (<type>string</type>)</term>
         <listitem>
          <para>

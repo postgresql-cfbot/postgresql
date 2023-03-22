@@ -174,12 +174,16 @@ sub write_tuple
 # Set umask so test directories and files are created with default permissions
 umask(0077);
 
+my $pred_xmax;
+my $pred_posid;
+my $aborted_xid;
 # Set up the node.  Once we create and corrupt the table,
 # autovacuum workers visiting the table could crash the backend.
 # Disable autovacuum so that won't happen.
 my $node = PostgreSQL::Test::Cluster->new('test');
 $node->init;
 $node->append_conf('postgresql.conf', 'autovacuum=off');
+$node->append_conf('postgresql.conf', 'max_prepared_transactions=10');
 
 # Start the node and load the extensions.  We depend on both
 # amcheck and pageinspect for this test.
@@ -217,7 +221,11 @@ my $rel = $node->safe_psql('postgres',
 my $relpath = "$pgdata/$rel";
 
 # Insert data and freeze public.test
-my $ROWCOUNT = 17;
+my $ROWCOUNT = 43; # Total row count in this page.
+my $ROWCOUNT_HOT = 27; # Row count related to test of HOT chains validations and redirected LP.
+my $ROWCOUNT_NONHOT = $ROWCOUNT-$ROWCOUNT_HOT;
+
+# First insert data needed for non-HOT chain validation.
 $node->safe_psql(
 	'postgres', qq(
 	INSERT INTO public.test (a, b, c)
@@ -225,9 +233,74 @@ $node->safe_psql(
 			x'DEADF9F9DEADF9F9'::bigint,
 			'abcdefg',
 			repeat('w', 10000)
-        FROM generate_series(1, $ROWCOUNT);
+	FROM generate_series(1, $ROWCOUNT_NONHOT);
 	VACUUM FREEZE public.test;)
 );
+
+# Data for Redirected LP.
+$node->safe_psql(
+	'postgres', qq(
+		INSERT INTO public.test (a, b, c)
+			VALUES ( x'DEADF9F9DEADF9F9'::bigint, 'abcdefg', generate_series(1,2));
+		UPDATE public.test SET c = 'a' WHERE c = '1';
+		UPDATE public.test SET c = 'a' WHERE c = '2';
+		INSERT INTO public.test (a, b, c)
+			VALUES ( x'DEADF9F9DEADF9F9'::bigint, 'abcdefg', generate_series(3,6));
+		UPDATE public.test SET c = 'a' WHERE c = '3';
+		UPDATE public.test SET c = 'a' WHERE c = '4';
+	));
+
+# Negative test case of HOT-pruning with aborted tuple.
+$node->safe_psql(
+        'postgres', qq(
+                BEGIN;
+                        UPDATE public.test SET c = 'a' WHERE c = '5';
+                ABORT;
+		VACUUM FREEZE public.test;
+        ));
+
+# Next update on any tuple will be stored at the same place of tuple inserted by aborted transaction.
+# This should not raise any corruption.
+$node->safe_psql(
+        'postgres', qq(
+                        UPDATE public.test SET c = 'a' WHERE c = '6';
+                VACUUM FREEZE public.test;
+        ));
+
+# Data for HOT chains validation, so not calling VACUUM FREEZE.
+$node->safe_psql(
+	'postgres', qq(
+		INSERT INTO public.test (a, b, c)
+			VALUES ( x'DEADF9F9DEADF9F9'::bigint, 'abcdefg', generate_series(7,15));
+		UPDATE public.test SET c = 'a' WHERE c = '7';
+		UPDATE public.test SET c = 'a' WHERE c = '10';
+		UPDATE public.test SET c = 'a' WHERE c = '11';
+		UPDATE public.test SET c = 'a' WHERE c = '12';
+		UPDATE public.test SET c = 'a' WHERE c = '13';
+		UPDATE public.test SET c = 'a' WHERE c = '14';
+		UPDATE public.test SET c = 'a' WHERE c = '15';
+	));
+
+# Need one aborted transaction to test corruption in HOT chains.
+$node->safe_psql(
+	'postgres', qq(
+		BEGIN;
+			UPDATE public.test SET c = 'a' WHERE c = '9';
+		ABORT;
+	));
+
+# Need one in-progress transaction to test few corruption in HOT chains.
+# We are creating PREPARE TRANSACTION here as these will not be aborted
+# even if we stop the node.
+$node->safe_psql(
+	'postgres', qq(
+		BEGIN;
+			PREPARE TRANSACTION 'in_progress_tx';
+	));
+my $in_progress_xid = $node->safe_psql(
+				'postgres', qq(
+					SELECT transaction FROM pg_prepared_xacts;
+				));
 
 my $relfrozenxid = $node->safe_psql('postgres',
 	q(select relfrozenxid from pg_class where relname = 'test'));
@@ -248,8 +321,9 @@ if ($datfrozenxid <= 3 || $datfrozenxid >= $relfrozenxid)
 # Find where each of the tuples is located on the page.
 my @lp_off = split '\n', $node->safe_psql(
 	'postgres', qq(
-	    select lp_off from heap_page_items(get_raw_page('test', 'main', 0))
-		where lp <= $ROWCOUNT
+	    SELECT CASE WHEN lp_flags = 2 THEN -1 ELSE lp_off END
+	    FROM heap_page_items(get_raw_page('test', 'main', 0))
+		WHERE lp <= $ROWCOUNT
     )
 );
 is(scalar @lp_off, $ROWCOUNT, "acquired row offsets");
@@ -268,6 +342,10 @@ for (my $tupidx = 0; $tupidx < $ROWCOUNT; $tupidx++)
 {
 	my $offnum = $tupidx + 1;        # offnum is 1-based, not zero-based
 	my $offset = $lp_off[$tupidx];
+	if ($offset == -1)
+	{
+		next;
+	}
 	my $tup = read_tuple($file, $offset);
 
 	# Sanity-check that the data appears on the page where we expect.
@@ -280,7 +358,7 @@ for (my $tupidx = 0; $tupidx < $ROWCOUNT; $tupidx++)
 		$node->clean_node;
 		plan skip_all =>
 		  sprintf(
-			"Page layout differs from our expectations: expected (%x, %x, \"%s\"), got (%x, %x, \"%s\")",
+			"Page layout of index %d differs from our expectations: expected (%x, %x, \"%s\"), got (%x, %x, \"%s\")", $tupidx,
 			0xDEADF9F9, 0xDEADF9F9, "abcdefg", $a_1, $a_2, $b);
 		exit;
 	}
@@ -315,6 +393,9 @@ use constant HEAP_XMAX_INVALID   => 0x0800;
 use constant HEAP_NATTS_MASK     => 0x07FF;
 use constant HEAP_XMAX_IS_MULTI  => 0x1000;
 use constant HEAP_KEYS_UPDATED   => 0x2000;
+use constant HEAP_HOT_UPDATED    => 0x4000;
+use constant HEAP_ONLY_TUPLE     => 0x8000;
+use constant HEAP_UPDATED        => 0x2000;
 
 # Helper function to generate a regular expression matching the header we
 # expect verify_heapam() to return given which fields we expect to be non-null.
@@ -346,9 +427,77 @@ for (my $tupidx = 0; $tupidx < $ROWCOUNT; $tupidx++)
 {
 	my $offnum = $tupidx + 1;        # offnum is 1-based, not zero-based
 	my $offset = $lp_off[$tupidx];
+	my $header = header(0, $offnum, undef);
+	# offset -1 means its redirected lp.
+	if ($offset == -1)
+	{	# at offnum 19 we will unset HEAP_ONLY_TUPLE and HEAP_UPDATED flags.
+		if ($offnum == 17)
+		{
+			push @expected,
+			  qr/${header}redirected line pointer points to a non-heap-only tuple at offset \d+/;
+			push @expected,
+			  qr/${header}redirected line pointer points to a non-heap-updated tuple at offset \d+/;
+		}
+		elsif ($offnum == 18)
+		{
+			# we re-set lp offset to 17, we need to rewrite the 4 bytes values so that line pointer will be
+			# lp.off = 17, lp_flags = 2, lp_len = 0.
+			if ($ENDIANNESS eq 'little')
+			{
+				sysseek($file, 92, 0)
+				  or BAIL_OUT("sysseek failed: $!");
+				syswrite(
+					$file,
+					pack("L",
+						0x00010011)
+				) or BAIL_OUT("syswrite failed: $!");
+			}
+			else
+			{
+				sysseek($file, 92, 0)
+				  or BAIL_OUT("sysseek failed: $!");
+				syswrite(
+					$file,
+					pack("L",
+						0x11000100)
+				) or BAIL_OUT("syswrite failed: $!");
+
+			}
+			push @expected,
+			  qr/${header}redirected line pointer points to another redirected line pointer at offset \d+/;
+		}
+		elsif ($offnum == 22)
+		{
+			# we re-set lp offset to 25, we need to rewrite the 4 bytes values so that line pointer will be
+			# lp.off = 25, lp_flags = 2, lp_len = 0.
+			if ($ENDIANNESS eq 'little')
+			{
+				sysseek($file, 108, 0)
+				  or BAIL_OUT("sysseek failed: $!");
+				syswrite(
+					$file,
+					pack("L",
+						0x00010019)
+				) or BAIL_OUT("syswrite failed: $!");
+			}
+			else
+			{
+				sysseek($file, 108, 0)
+				  or BAIL_OUT("sysseek failed: $!");
+				syswrite(
+					$file,
+					pack("L",
+						0x19000100)
+				) or BAIL_OUT("syswrite failed: $!");
+
+			}
+			push @expected,
+			  qr/${header}redirect line pointer points to offset \d+, but offset \d+ also points there/;
+		}
+		next;
+	}
 	my $tup = read_tuple($file, $offset);
 
-	my $header = header(0, $offnum, undef);
 	if ($offnum == 1)
 	{
 		# Corruptly set xmin < relfrozenxid
@@ -521,6 +670,111 @@ for (my $tupidx = 0; $tupidx < $ROWCOUNT; $tupidx++)
 		push @expected,
 		  qr/${$header}xmin ${xmin} equals or exceeds next valid transaction ID 0:\d+/;
 	}
+	# Test for redirected line pointer.
+	# offnum 17 and 18 are redirected line pointer, so don't need any tuple
+	# validation.
+	elsif ($offnum == 19)
+	{
+		# unset HEAP_ONLY_TUPLE and HEAP_UPDATED flag.
+		$tup->{t_infomask2} &= ~HEAP_ONLY_TUPLE;
+		$tup->{t_infomask} &= ~HEAP_UPDATED;
+	}
+	# offnum 18 is redirected lp and is redirected to offset 20,
+	# We have corrupted it to route its lp.off to point it to line pointer at
+	# offset 17.
+
+	# Test related to HOT chains.
+	elsif ($offnum == 28)
+	{
+		# Unset HEAP_HOT_UPDATED.
+		$tup->{t_infomask2} &= ~HEAP_HOT_UPDATED;
+		$pred_xmax = $tup->{t_xmax}; # to be used for tuple at offnum 29.
+		$pred_posid = $tup->{ip_posid}; # to be used for tuple at offnum 29.
+		push @expected,
+		  qr/${header}non-heap-only update produced a heap-only tuple at offset \d+/;
+	}
+	elsif ($offnum == 29)
+	{
+		# Set ip_posid and t_xmax from ip_posid and t_xmax of tuple at offnum 28.
+		$tup->{t_xmax} = $pred_xmax;
+		$tup->{ip_posid} = $pred_posid;
+		push @expected,
+		  qr/${header}tuple points to new version at offset \d+, but offset \d+ also points there/;
+	}
+	elsif ($offnum == 30)
+	{
+		# Get aborted xid, that is needed to test corruption at offnum 31.
+		$aborted_xid = $tup->{t_xmax};
+	}
+	elsif ($offnum == 31)
+	{
+		# Set xmin to aborted xid.
+		$tup->{t_xmin} = $aborted_xid;
+		$tup->{t_infomask} &= ~HEAP_XMIN_COMMITTED;
+		push @expected,
+		  qr/${header}tuple with aborted xmin \d+ was updated to produce a tuple at offset \d+ with committed xmin \d+/;
+	}
+	elsif ($offnum == 32)
+	{
+		# Raised corruption as root of HOT chain can't be HEAP_ONLY_TUPLE.
+		# set HEAP_ONLY_TUPLE.
+		$tup->{t_infomask2} |= HEAP_ONLY_TUPLE;
+		push @expected,
+		  qr/${header}tuple is root of chain but is marked as heap-only tuple/;
+	}
+	elsif ($offnum == 33)
+	{
+		# Next updated Tuple at offnum 37 is corrupted.
+		push @expected,
+		  qr/${header}heap-only update produced a non-heap only tuple at offset \d+/;
+	}
+	elsif ($offnum == 34)
+	{
+		# set xmax to invalid transaction id.
+		$tup->{t_xmax} = 0;
+		push @expected,
+		  qr/${header}tuple has been HOT updated, but xmax is 0/;
+	}
+	elsif ($offnum == 35)
+	{
+		# set xmax to invalid transaction id.
+		$tup->{t_xmin} = $in_progress_xid;
+		$tup->{t_infomask} &= ~HEAP_XMIN_COMMITTED;
+		push @expected,
+		  qr/${header}tuple with in-progress xmin \d+ was updated to produce a tuple at offset \d+ with committed xmin \d+/;
+	}
+	elsif ($offnum == 36)
+	{
+		# set xmax to invalid transaction id.
+		$tup->{t_xmin} = $aborted_xid;
+		$tup->{t_xmax} = $in_progress_xid;
+		$tup->{t_infomask} &= ~HEAP_XMIN_COMMITTED;
+		push @expected,
+		  qr/${header}tuple with aborted xmin \d+ was updated to produce a tuple at offset \d+ with in-progress xmin \d+/;
+	}
+	# Tuple at offnum 37 is an update of tuple at offnum 28.
+
+	# Tuple at offnum 38 is an update of tuple at offnum 31.
+
+	# Tuple at offnum 39 is an update of tuple at offnum 32.
+
+	elsif($offnum == 40)
+	{
+		# Unset HEAP_ONLY_TUPLE, corrupton will be raised for tuple at offnum #33
+		$tup->{t_infomask2} &= ~HEAP_ONLY_TUPLE;
+	}
+	# Tuple at offnum 41 is an update of corrupted tuple at offnum 34.
+	# Tuple at offnum 42 is an update of corrupted tuple at offnum 35.
+	# Tuple at offnum 43 is an update of tuple at offnum 36..
+	elsif ($offnum == 43)
+	{
+		# set xmax to invalid transaction id.
+		$tup->{t_xmin} = $in_progress_xid;
+		$tup->{t_infomask} &= ~HEAP_XMIN_COMMITTED;
+	}
+	# Tuple at offnum 44 is an update of tuple at offnum 30.
+	# offset 44 is an updated tuple of tuple at offset #30 and was updated by an aborted transaction.
+	# this is needed to have aborted transaction xid to test corruption related to aborted transaction at offset #36.
 	write_tuple($file, $offset, $tup);
 }
 close($file)
@@ -532,6 +786,10 @@ $node->start;
 $node->command_checks_all(
 	[ 'pg_amcheck', '--no-dependent-indexes', '-p', $port, 'postgres' ],
 	2, [@expected], [], 'Expected corruption message output');
+$node->safe_psql(
+        'postgres', qq(
+                        COMMIT PREPARED 'in_progress_tx';
+        ));
 
 $node->teardown_node;
 $node->clean_node;

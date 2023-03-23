@@ -689,6 +689,8 @@
 #default_transaction_isolation = 'read committed'
 #default_transaction_read_only = off
 #default_transaction_deferrable = off
+#nested_transactions = 'off'
+#rollback_on_commit = off
 #session_replication_role = 'origin'
 #statement_timeout = 0			# in milliseconds, 0 is disabled
 #lock_timeout = 0			# in milliseconds, 0 is disabled

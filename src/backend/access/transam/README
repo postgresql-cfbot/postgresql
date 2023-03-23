@@ -911,3 +911,79 @@ yet simplifies emulation of subtransactions considerably.
 
 Further details on locking mechanics in recovery are given in comments
 with the Lock rmgr code.
+
+Nested Transactions
+-------------------
+
+Nested BEGIN/COMMIT statements can be confusing for developers. In this
+example, the first BEGIN and the first COMMIT match, leaving the commands
+between the first and second COMMIT outside of a transaction block,
+allowing them to commit separately from each other.  The second BEGIN and
+second COMMIT throw WARNING messages but if an ERROR occurs, the result
+is not atomic and can be hard to manually undo the damage.
+
+BEGIN
+INSERT
+BEGIN
+WARNING:  there is already a transaction in progress
+INSERT
+COMMIT
+INSERT
+ERROR:  syntax error
+COMMIT
+WARNING:  there is no transaction in progress
+SELECT
+val
+---
+1
+2
+(2 rows)
+
+Using SET nested_transactions = 'outer', we get simpler and more understandable
+behavior, with all commands now within the outer transaction block.
+In this example, the ERROR causes rollback of all commands because nested
+begin and commit commands are ignored, while we track the nesting level.
+
+BEGIN
+INSERT
+BEGIN
+NOTICE:  nested BEGIN, level 1
+INSERT
+COMMIT
+NOTICE:  nested COMMIT, level 1
+INSERT
+ERROR:  syntax error
+ROLLBACK
+SELECT
+val
+--
+(0 rows)
+
+Notices are shown, so that developers can be certain of the behavior.
+
+Nested COMMIT/ROLLBACK affects all subtransactions under the transaction
+that issued BEGIN, irrespective of subsequent SAVEPOINT/ROLLBACK/RELEASE.
+Nesting can occur to any level.
+
+An alternative approach is to use SET nested_transactions = 'all',
+which changes nested BEGINs into subtransactions and COMMITs into subcommits.
+This allows us to trap nested errors and yet continue the main transaction.
+In this example, a nested ERROR aborts the nested subtransaction, but not
+the main transaction.
+
+BEGIN
+INSERT
+BEGIN
+NOTICE:  BEGIN starts nested subtransaction, level 1
+INSERT
+ERROR:  syntax error
+COMMIT
+NOTICE:  COMMIT will rollback nested subtransaction, level 1
+INSERT
+ROLLBACK
+SELECT
+val
+--
+(0 rows)
+
+The default behavior is equivalent to using SET nested_transactions = 'off'.

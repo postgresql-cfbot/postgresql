@@ -24,13 +24,19 @@
 #include "access/table.h"
 #include "catalog/indexing.h"
 #include "catalog/pg_inherits.h"
+#include "catalog/partition.h"
 #include "parser/parse_type.h"
 #include "storage/lmgr.h"
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
+#include "utils/fmgrprotos.h"
+#include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
+
+static List * find_all_inheritors_internal(Oid parentrelId, LOCKMODE lockmode,
+										   List **numparents, bool logical_only);
 
 /*
  * Entry of a hash table used in find_all_inheritors. See below.
@@ -59,14 +65,14 @@ List *
 find_inheritance_children(Oid parentrelId, LOCKMODE lockmode)
 {
 	return find_inheritance_children_extended(parentrelId, true, lockmode,
-											  NULL, NULL);
+											  NULL, NULL, false);
 }
 
 /*
  * find_inheritance_children_extended
  *
  * As find_inheritance_children, with more options regarding detached
- * partitions.
+ * partitions and logical roots.
  *
  * If a partition's pg_inherits row is marked "detach pending",
  * *detached_exist (if not null) is set true.
@@ -78,16 +84,21 @@ find_inheritance_children(Oid parentrelId, LOCKMODE lockmode)
  * whether the transaction that marked those partitions as detached appears
  * committed to the active snapshot.  In addition, *detached_xmin (if not null)
  * is set to the xmin of the row of the detached partition.
+ *
+ * If logical_only is true, only tables marked explicitly via
+ * pg_set_logical_root() are included in the output list.
  */
 List *
 find_inheritance_children_extended(Oid parentrelId, bool omit_detached,
 								   LOCKMODE lockmode, bool *detached_exist,
-								   TransactionId *detached_xmin)
+								   TransactionId *detached_xmin,
+								   bool logical_only)
 {
 	List	   *list = NIL;
 	Relation	relation;
+	Oid			index;
 	SysScanDesc scan;
-	ScanKeyData key[1];
+	ScanKeyData key[2];
 	HeapTuple	inheritsTuple;
 	Oid			inhrelid;
 	Oid		   *oidarr;
@@ -110,14 +121,24 @@ find_inheritance_children_extended(Oid parentrelId, bool omit_detached,
 	numoids = 0;
 
 	relation = table_open(InheritsRelationId, AccessShareLock);
+	index = InheritsParentIndexId;
 
 	ScanKeyInit(&key[0],
 				Anum_pg_inherits_inhparent,
 				BTEqualStrategyNumber, F_OIDEQ,
 				ObjectIdGetDatum(parentrelId));
 
-	scan = systable_beginscan(relation, InheritsParentIndexId, true,
-							  NULL, 1, key);
+	if (logical_only)
+	{
+		index = InheritsParentSeqnoIndexId;
+		ScanKeyInit(&key[1],
+					Anum_pg_inherits_inhseqno,
+					BTEqualStrategyNumber, F_INT4EQ,
+					Int32GetDatum(0));
+	}
+
+	scan = systable_beginscan(relation, index, true,
+							  NULL, logical_only ? 2 : 1, key);
 
 	while ((inheritsTuple = systable_getnext(scan)) != NULL)
 	{
@@ -255,6 +276,20 @@ find_inheritance_children_extended(Oid parentrelId, bool omit_detached,
 List *
 find_all_inheritors(Oid parentrelId, LOCKMODE lockmode, List **numparents)
 {
+	return find_all_inheritors_internal(parentrelId, lockmode, numparents,
+										false);
+}
+
+List *
+find_all_logical_inheritors(Oid parentrelId)
+{
+	return find_all_inheritors_internal(parentrelId, NoLock, NULL, true);
+}
+
+static List *
+find_all_inheritors_internal(Oid parentrelId, LOCKMODE lockmode,
+							 List **numparents, bool logical_only)
+{
 	/* hash table for O(1) rel_oid -> rel_numparents cell lookup */
 	HTAB	   *seen_rels;
 	HASHCTL		ctl;
@@ -290,7 +325,9 @@ find_all_inheritors(Oid parentrelId, LOCKMODE lockmode, List **numparents)
 		ListCell   *lc;
 
 		/* Get the direct children of this rel */
-		currentchildren = find_inheritance_children(currentrel, lockmode);
+		currentchildren =
+			find_inheritance_children_extended(currentrel, true, lockmode,
+											   NULL, NULL, logical_only);
 
 		/*
 		 * Add to the queue only those children not already seen. This avoids
@@ -654,4 +691,155 @@ PartitionHasPendingDetach(Oid partoid)
 
 	elog(ERROR, "relation %u is not a partition", partoid);
 	return false;				/* keep compiler quiet */
+}
+
+static Oid
+get_logical_parent_worker(Relation inhRel, Oid relid)
+{
+	SysScanDesc scan;
+	ScanKeyData key[2];
+	Oid			result = InvalidOid;
+	HeapTuple	tuple;
+
+	ScanKeyInit(&key[0],
+				Anum_pg_inherits_inhrelid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(relid));
+	ScanKeyInit(&key[1],
+				Anum_pg_inherits_inhseqno,
+				BTEqualStrategyNumber, F_INT4EQ,
+				Int32GetDatum(0));
+
+	scan = systable_beginscan(inhRel, InheritsRelidSeqnoIndexId, true,
+							  NULL, 2, key);
+	tuple = systable_getnext(scan);
+	if (HeapTupleIsValid(tuple))
+	{
+		Form_pg_inherits form = (Form_pg_inherits) GETSTRUCT(tuple);
+		result = form->inhparent;
+	}
+
+	systable_endscan(scan);
+
+	return result;
+}
+
+static void
+get_logical_ancestors_worker(Relation inhRel, Oid relid, List **ancestors)
+{
+	Oid			parentOid;
+
+	/*
+	 * Recursion ends at the topmost level, ie., when there's no parent.
+	 */
+	parentOid = get_logical_parent_worker(inhRel, relid);
+	if (parentOid == InvalidOid)
+		return;
+
+	*ancestors = lappend_oid(*ancestors, parentOid);
+	get_logical_ancestors_worker(inhRel, parentOid, ancestors);
+}
+
+List *
+get_logical_ancestors(Oid relid, bool is_partition)
+{
+	List	   *result = NIL;
+	Relation	inhRel;
+
+	/* For partitions, this is identical to get_partition_ancestors(). */
+	if (is_partition)
+		return get_partition_ancestors(relid);
+
+	inhRel = table_open(InheritsRelationId, AccessShareLock);
+	get_logical_ancestors_worker(inhRel, relid, &result);
+	table_close(inhRel, AccessShareLock);
+
+	return result;
+}
+
+bool
+has_logical_parent(Relation inhRel, Oid relid)
+{
+	return (get_logical_parent_worker(inhRel, relid) != InvalidOid);
+}
+
+Datum
+pg_set_logical_root(PG_FUNCTION_ARGS)
+{
+	Oid			tableoid = PG_GETARG_OID(0);
+	Oid			rootoid = PG_GETARG_OID(1);
+	char	   *tablename;
+	char	   *rootname;
+	Relation	inhRel;
+	ScanKeyData key;
+	SysScanDesc scan;
+	Oid			parent = InvalidOid;
+	HeapTuple	tuple, copyTuple;
+	Form_pg_inherits form;
+
+	/*
+	 * Check that the tables exist.
+	 * TODO: check inheritance
+	 * TODO: and identical schemas too? or does replication handle that?
+	 * TODO: check ownership
+	 */
+	tablename = get_rel_name(tableoid);
+	if (tablename == NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_TABLE),
+				 errmsg("OID %u does not refer to a table", tableoid)));
+	rootname = get_rel_name(rootoid);
+	if (rootname == NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_TABLE),
+				 errmsg("OID %u does not refer to a table", rootoid)));
+
+	/* Open pg_inherits with RowExclusiveLock so that we can update it. */
+	inhRel = table_open(InheritsRelationId, RowExclusiveLock);
+
+	/*
+	 * We have to make sure that the inheritance relationship already exists,
+	 * and that there is only one existing parent for this table.
+	 *
+	 * TODO: do we have to lock the tables themselves to avoid races?
+	 */
+	ScanKeyInit(&key,
+				Anum_pg_inherits_inhrelid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(tableoid));
+
+	scan = systable_beginscan(inhRel, InheritsRelidSeqnoIndexId, true,
+							  NULL, 1, &key);
+	tuple = systable_getnext(scan);
+	if (HeapTupleIsValid(tuple))
+	{
+		form = (Form_pg_inherits) GETSTRUCT(tuple);
+		parent = form->inhparent;
+		copyTuple = heap_copytuple(tuple);
+
+		if (HeapTupleIsValid(systable_getnext(scan)))
+			ereport(ERROR,
+					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+					 errmsg("table \"%s\" inherits from multiple tables",
+							tablename)));
+	}
+
+	if (parent != rootoid)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("table \"%s\" does not inherit from intended root table \"%s\"",
+						tablename, rootname)));
+
+	systable_endscan(scan);
+
+	/* Mark the inheritance as a logical root by setting it to zero. */
+	form = (Form_pg_inherits) GETSTRUCT(copyTuple);
+	form->inhseqno = 0;
+
+	CatalogTupleUpdate(inhRel, &copyTuple->t_self, copyTuple);
+
+	heap_freetuple(copyTuple);
+	table_close(inhRel, RowExclusiveLock);
+
+	PG_RETURN_VOID();
 }

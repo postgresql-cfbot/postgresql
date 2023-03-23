@@ -1087,9 +1087,34 @@ ALTER TABLE sch1.tbl1 ATTACH PARTITION sch1.tbl1_part3 FOR VALUES FROM (20) to (
 CREATE PUBLICATION pub FOR TABLES IN SCHEMA sch1 WITH (PUBLISH_VIA_PARTITION_ROOT=1);
 SELECT * FROM pg_publication_tables;
 
+-- Sanity check cases for pg_set_logical_root().
+CREATE TABLE sch1.iroot (a int);
+CREATE TABLE sch1.ipart1 (a int);
+CREATE TABLE sch1.ipart2 () INHERITS (sch1.iroot);
+
+-- marking roots between unrelated tables is not allowed
+SELECT pg_set_logical_root('sch1.ipart1', 'sch1.iroot');
+SELECT pg_set_logical_root('sch1.ipart2', 'sch1.tbl1');
+
+-- establishing an inheritance relationship fixes the problem
+ALTER TABLE sch1.ipart1 INHERIT sch1.iroot;
+SELECT pg_set_logical_root('sch1.ipart1', 'sch1.iroot');
+
+-- but multiple inheritance is not allowed
+ALTER TABLE sch1.ipart2 INHERIT sch1.ipart1;
+SELECT pg_set_logical_root('sch1.ipart2', 'sch1.iroot');
+
+ALTER TABLE sch1.ipart2 NO INHERIT sch1.ipart1;
+SELECT pg_set_logical_root('sch1.ipart2', 'sch1.iroot');
+
+-- TODO: make sure existing logical descendant can't be ALTERed [NO] INHERIT
+
 RESET client_min_messages;
 DROP PUBLICATION pub;
 DROP TABLE sch1.tbl1;
+DROP TABLE sch1.ipart1;
+DROP TABLE sch1.ipart2;
+DROP TABLE sch1.iroot;
 DROP SCHEMA sch1 cascade;
 DROP SCHEMA sch2 cascade;
 

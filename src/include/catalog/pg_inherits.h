@@ -46,14 +46,17 @@ typedef FormData_pg_inherits *Form_pg_inherits;
 
 DECLARE_UNIQUE_INDEX_PKEY(pg_inherits_relid_seqno_index, 2680, InheritsRelidSeqnoIndexId, on pg_inherits using btree(inhrelid oid_ops, inhseqno int4_ops));
 DECLARE_INDEX(pg_inherits_parent_index, 2187, InheritsParentIndexId, on pg_inherits using btree(inhparent oid_ops));
+DECLARE_INDEX(pg_inherits_parent_seqno_index, 8138, InheritsParentSeqnoIndexId, on pg_inherits using btree(inhparent oid_ops, inhseqno int4_ops));
 
 
 extern List *find_inheritance_children(Oid parentrelId, LOCKMODE lockmode);
 extern List *find_inheritance_children_extended(Oid parentrelId, bool omit_detached,
-												LOCKMODE lockmode, bool *detached_exist, TransactionId *detached_xmin);
+												LOCKMODE lockmode, bool *detached_exist, TransactionId *detached_xmin,
+												bool logical_only);
 
 extern List *find_all_inheritors(Oid parentrelId, LOCKMODE lockmode,
 								 List **numparents);
+extern List *find_all_logical_inheritors(Oid parentrelId);
 extern bool has_subclass(Oid relationId);
 extern bool has_superclass(Oid relationId);
 extern bool typeInheritsFrom(Oid subclassTypeId, Oid superclassTypeId);
@@ -63,5 +66,7 @@ extern bool DeleteInheritsTuple(Oid inhrelid, Oid inhparent,
 								bool expect_detach_pending,
 								const char *childname);
 extern bool PartitionHasPendingDetach(Oid partoid);
+extern List *get_logical_ancestors(Oid relid, bool is_partition);
+extern bool has_logical_parent(Relation inhRel, Oid relid);
 
 #endif							/* PG_INHERITS_H */

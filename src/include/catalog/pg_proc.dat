@@ -11757,6 +11757,11 @@
   proname => 'pg_relation_is_publishable', provolatile => 's',
   prorettype => 'bool', proargtypes => 'regclass',
   prosrc => 'pg_relation_is_publishable' },
+{ oid => '8137', descr => 'get list of tables to copy during initial sync',
+  proname => 'pg_get_publication_rels_to_sync', prorows => '10', proretset => 't',
+  provolatile => 's', prorettype => 'regclass', proargtypes => 'regclass text',
+  proargnames => '{rootid,pubname}',
+  prosrc => 'pg_get_publication_rels_to_sync' },
 
 # rls
 { oid => '3298',
@@ -11914,6 +11919,11 @@
 { oid => '3424', descr => 'get top-most partition root parent',
   proname => 'pg_partition_root', prorettype => 'regclass',
   proargtypes => 'regclass', prosrc => 'pg_partition_root' },
+
+{ oid => '8136', descr => 'mark a table root for logical replication',
+  proname => 'pg_set_logical_root', provolatile => 'v', proparallel => 'u',
+  prorettype => 'void', proargtypes => 'regclass regclass',
+  prosrc => 'pg_set_logical_root' },
 
 { oid => '4350', descr => 'Unicode normalization',
   proname => 'normalize', prorettype => 'text', proargtypes => 'text text',

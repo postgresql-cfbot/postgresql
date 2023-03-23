@@ -14,6 +14,7 @@
 
 #include "access/tupconvert.h"
 #include "catalog/partition.h"
+#include "catalog/pg_inherits.h"
 #include "catalog/pg_publication.h"
 #include "catalog/pg_publication_rel.h"
 #include "catalog/pg_subscription.h"
@@ -1459,7 +1460,6 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 			/* Switch relation if publishing via root. */
 			if (relentry->publish_as_relid != RelationGetRelid(relation))
 			{
-				Assert(relation->rd_rel->relispartition);
 				ancestor = RelationIdGetRelation(relentry->publish_as_relid);
 				targetrel = ancestor;
 				/* Convert tuple if needed. */
@@ -2154,55 +2154,57 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 			int			ancestor_level = 0;
 
 			/*
-			 * If this is a FOR ALL TABLES publication, pick the partition
+			 * If this is a FOR ALL TABLES publication, pick the logical
 			 * root and set the ancestor level accordingly.
 			 */
 			if (pub->alltables)
 			{
 				publish = true;
-				if (pub->pubviaroot && am_partition)
+				if (pub->pubviaroot)
 				{
-					List	   *ancestors = get_partition_ancestors(relid);
+					List	   *ancestors;
 
-					pub_relid = llast_oid(ancestors);
-					ancestor_level = list_length(ancestors);
+					ancestors = get_logical_ancestors(relid, am_partition);
+					if (ancestors != NIL)
+					{
+						pub_relid = llast_oid(ancestors);
+						ancestor_level = list_length(ancestors);
+					}
 				}
 			}
 
 			if (!publish)
 			{
 				bool		ancestor_published = false;
+				Oid			ancestor;
+				int			level;
+				List	   *ancestors;
 
 				/*
-				 * For a partition, check if any of the ancestors are
-				 * published.  If so, note down the topmost ancestor that is
+				 * Check if any of the logical ancestors (that is, partition
+				 * parents or tables marked with pg_set_logical_root()) are
+				 * published. If so, note down the topmost ancestor that is
 				 * published via this publication, which will be used as the
-				 * relation via which to publish the partition's changes.
+				 * relation via which to publish this table's changes.
 				 */
-				if (am_partition)
+				ancestors = get_logical_ancestors(relid, am_partition);
+				ancestor = GetTopMostAncestorInPublication(pub->oid,
+														   ancestors,
+														   &level);
+
+				if (ancestor != InvalidOid)
 				{
-					Oid			ancestor;
-					int			level;
-					List	   *ancestors = get_partition_ancestors(relid);
-
-					ancestor = GetTopMostAncestorInPublication(pub->oid,
-															   ancestors,
-															   &level);
-
-					if (ancestor != InvalidOid)
+					ancestor_published = true;
+					if (pub->pubviaroot)
 					{
-						ancestor_published = true;
-						if (pub->pubviaroot)
-						{
-							pub_relid = ancestor;
-							ancestor_level = level;
-						}
+						pub_relid = ancestor;
+						ancestor_level = level;
 					}
 				}
 
 				if (list_member_oid(pubids, pub->oid) ||
 					list_member_oid(schemaPubids, pub->oid) ||
-					ancestor_published)
+					(am_partition && ancestor_published))
 					publish = true;
 			}
 

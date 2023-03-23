@@ -1718,9 +1718,41 @@ SELECT * FROM pg_publication_tables;
  pub     | sch1       | tbl1      | {a}      | 
 (1 row)
 
+-- Sanity check cases for pg_set_logical_root().
+CREATE TABLE sch1.iroot (a int);
+CREATE TABLE sch1.ipart1 (a int);
+CREATE TABLE sch1.ipart2 () INHERITS (sch1.iroot);
+-- marking roots between unrelated tables is not allowed
+SELECT pg_set_logical_root('sch1.ipart1', 'sch1.iroot');
+ERROR:  table "ipart1" does not inherit from intended root table "iroot"
+SELECT pg_set_logical_root('sch1.ipart2', 'sch1.tbl1');
+ERROR:  table "ipart2" does not inherit from intended root table "tbl1"
+-- establishing an inheritance relationship fixes the problem
+ALTER TABLE sch1.ipart1 INHERIT sch1.iroot;
+SELECT pg_set_logical_root('sch1.ipart1', 'sch1.iroot');
+ pg_set_logical_root 
+---------------------
+ 
+(1 row)
+
+-- but multiple inheritance is not allowed
+ALTER TABLE sch1.ipart2 INHERIT sch1.ipart1;
+SELECT pg_set_logical_root('sch1.ipart2', 'sch1.iroot');
+ERROR:  table "ipart2" inherits from multiple tables
+ALTER TABLE sch1.ipart2 NO INHERIT sch1.ipart1;
+SELECT pg_set_logical_root('sch1.ipart2', 'sch1.iroot');
+ pg_set_logical_root 
+---------------------
+ 
+(1 row)
+
+-- TODO: make sure existing logical descendant can't be ALTERed [NO] INHERIT
 RESET client_min_messages;
 DROP PUBLICATION pub;
 DROP TABLE sch1.tbl1;
+DROP TABLE sch1.ipart1;
+DROP TABLE sch1.ipart2;
+DROP TABLE sch1.iroot;
 DROP SCHEMA sch1 cascade;
 DROP SCHEMA sch2 cascade;
 RESET SESSION AUTHORIZATION;

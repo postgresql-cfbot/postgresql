@@ -172,11 +172,11 @@ pg_relation_is_publishable(PG_FUNCTION_ARGS)
 }
 
 /*
- * Filter out the partitions whose parent tables were also specified in
+ * Filter out the tables whose logical parent tables were also specified in
  * the publication.
  */
 static List *
-filter_partitions(List *relids)
+filter_logical_descendants(List *relids)
 {
 	List	   *result = NIL;
 	ListCell   *lc;
@@ -188,8 +188,7 @@ filter_partitions(List *relids)
 		List	   *ancestors = NIL;
 		Oid			relid = lfirst_oid(lc);
 
-		if (get_rel_relispartition(relid))
-			ancestors = get_partition_ancestors(relid);
+		ancestors = get_logical_ancestors(relid, get_rel_relispartition(relid));
 
 		foreach(lc2, ancestors)
 		{
@@ -782,11 +781,15 @@ List *
 GetAllTablesPublicationRelations(bool pubviaroot)
 {
 	Relation	classRel;
+	Relation	inhRel;
 	ScanKeyData key[1];
 	TableScanDesc scan;
 	HeapTuple	tuple;
 	List	   *result = NIL;
 
+	/* TODO: is there a required order to acquire these locks? */
+	if (pubviaroot)
+		inhRel = table_open(InheritsRelationId, AccessShareLock);
 	classRel = table_open(RelationRelationId, AccessShareLock);
 
 	ScanKeyInit(&key[0],
@@ -802,7 +805,8 @@ GetAllTablesPublicationRelations(bool pubviaroot)
 		Oid			relid = relForm->oid;
 
 		if (is_publishable_class(relid, relForm) &&
-			!(relForm->relispartition && pubviaroot))
+			!(relForm->relispartition && pubviaroot) &&
+			!(pubviaroot && has_logical_parent(inhRel, relid)))
 			result = lappend_oid(result, relid);
 	}
 
@@ -831,6 +835,9 @@ GetAllTablesPublicationRelations(bool pubviaroot)
 	}
 
 	table_close(classRel, AccessShareLock);
+	if (pubviaroot)
+		table_close(inhRel, AccessShareLock);
+
 	return result;
 }
 
@@ -1076,15 +1083,14 @@ pg_get_publication_tables(PG_FUNCTION_ARGS)
 			tables = list_concat_unique_oid(relids, schemarelids);
 
 			/*
-			 * If the publication publishes partition changes via their
-			 * respective root partitioned tables, we must exclude partitions
-			 * in favor of including the root partitioned tables. Otherwise,
-			 * the function could return both the child and parent tables
-			 * which could cause data of the child table to be
-			 * double-published on the subscriber side.
+			 * If the publication publishes table changes via their respective
+			 * logical root tables, we must exclude logical descendants in favor
+			 * of including the root tables. Otherwise, the function could
+			 * return both the child and parent tables which could cause data of
+			 * the child table to be double-published on the subscriber side.
 			 */
 			if (publication->pubviaroot)
-				tables = filter_partitions(tables);
+				tables = filter_logical_descendants(tables);
 		}
 
 		/* Construct a tuple descriptor for the result rows. */
@@ -1186,6 +1192,96 @@ pg_get_publication_tables(PG_FUNCTION_ARGS)
 		rettuple = heap_form_tuple(funcctx->tuple_desc, values, nulls);
 
 		SRF_RETURN_NEXT(funcctx, HeapTupleGetDatum(rettuple));
+	}
+
+	SRF_RETURN_DONE(funcctx);
+}
+
+/*
+ * Returns a list of tables that should be copied during initial sync for the
+ * given root table and publication.
+ *
+ * The only time this list consists of anything more than the table itself is
+ * when a publication's publish_via_partition_root is set to true and the table
+ * has inherited child tables in the publication that have been marked with
+ * pg_set_logical_root().
+ */
+Datum
+pg_get_publication_rels_to_sync(PG_FUNCTION_ARGS)
+{
+#define NUM_SYNC_TABLES_ELEM	1
+	FuncCallContext *funcctx;
+	Oid			rootid = PG_GETARG_OID(0);
+	char	   *pubname = text_to_cstring(PG_GETARG_TEXT_PP(1));
+	List	   *tables;
+
+	/* stuff done only on the first call of the function */
+	if (SRF_IS_FIRSTCALL())
+	{
+		MemoryContext oldcontext;
+		Publication *publication;
+
+		/* create a function context for cross-call persistence */
+		funcctx = SRF_FIRSTCALL_INIT();
+
+		/* switch to memory context appropriate for multiple function calls */
+		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
+
+		publication = GetPublicationByName(pubname, false);
+
+		/* TODO: do the tables in this list need to be locked? */
+		if (publication->pubviaroot)
+			tables = find_all_logical_inheritors(rootid);
+		else
+			tables = list_make1_oid(rootid);
+
+		if (!publication->alltables)
+		{
+			List	   *relids;
+			List	   *schemarelids;
+			List	   *published;
+			List	   *result = NIL;
+			ListCell   *cell;
+
+			/*
+			 * Filter our list of tables to those that are actually included in
+			 * the publication.
+			 */
+			relids = GetPublicationRelations(publication->oid,
+											 publication->pubviaroot ?
+											 PUBLICATION_PART_ROOT :
+											 PUBLICATION_PART_ALL);
+			schemarelids = GetAllSchemaPublicationRelations(publication->oid,
+															publication->pubviaroot ?
+															PUBLICATION_PART_ROOT :
+															PUBLICATION_PART_LEAF);
+			published = list_concat_unique_oid(relids, schemarelids);
+
+			foreach(cell, tables)
+			{
+				Oid		current = lfirst_oid(cell);
+
+				if (list_member_oid(published, current))
+					result = lappend_oid(result, current);
+			}
+
+			tables = result;
+		}
+
+		funcctx->user_fctx = (void *) tables;
+
+		MemoryContextSwitchTo(oldcontext);
+	}
+
+	/* stuff done on every call of the function */
+	funcctx = SRF_PERCALL_SETUP();
+	tables = (List *) funcctx->user_fctx;
+
+	if (funcctx->call_cntr < list_length(tables))
+	{
+		Oid			relid = list_nth_oid(tables, funcctx->call_cntr);
+
+		SRF_RETURN_NEXT(funcctx, ObjectIdGetDatum(relid));
 	}
 
 	SRF_RETURN_DONE(funcctx);

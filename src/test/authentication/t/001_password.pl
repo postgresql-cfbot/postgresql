@@ -301,30 +301,34 @@ $node->connect_fails(
 	"user=scram_role require_auth=password",
 	"password authentication required, fails with SCRAM auth",
 	expected_stderr =>
-	  qr/auth method "password" requirement failed: server requested SASL authentication/
+	  qr/server requested unacceptable SASL mechanism "SCRAM-SHA-256"/
 );
 $node->connect_fails(
 	"user=scram_role require_auth=md5",
 	"md5 authentication required, fails with SCRAM auth",
 	expected_stderr =>
-	  qr/auth method "md5" requirement failed: server requested SASL authentication/
+	  qr/server requested unacceptable SASL mechanism "SCRAM-SHA-256"/
 );
 $node->connect_fails(
 	"user=scram_role require_auth=none",
 	"all authentication forbidden, fails with SCRAM auth",
 	expected_stderr =>
-	  qr/auth method "none" requirement failed: server requested SASL authentication/
+	  qr/server requested unacceptable SASL mechanism "SCRAM-SHA-256"/
 );
 
 # Authentication fails if SCRAM authentication is forbidden.
 $node->connect_fails(
 	"user=scram_role require_auth=!scram-sha-256",
 	"SCRAM authentication forbidden, fails with SCRAM auth",
-	expected_stderr => qr/server requested SASL authentication/);
+	expected_stderr =>
+	  qr/server requested unacceptable SASL mechanism "SCRAM-SHA-256"/
+);
 $node->connect_fails(
 	"user=scram_role require_auth=!password,!md5,!scram-sha-256",
 	"multiple authentication types forbidden, fails with SCRAM auth",
-	expected_stderr => qr/server requested SASL authentication/);
+	expected_stderr =>
+	  qr/server requested unacceptable SASL mechanism "SCRAM-SHA-256"/
+);
 
 # Test that bad passwords are rejected.
 $ENV{"PGPASSWORD"} = 'badpass';

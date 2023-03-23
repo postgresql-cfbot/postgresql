@@ -522,6 +522,40 @@ pg_SASL_init(PGconn *conn, int payloadlen)
 		goto error;
 	}
 
+	/*
+	 * Before going ahead with any SASL exchange, ensure that the user has
+	 * allowed (or, alternatively, has not forbidden) this particular mechanism.
+	 *
+	 * In a hypothetical future where a server responds with multiple SASL
+	 * mechanism families, we would need to instead consult this list up above,
+	 * during mechanism negotiation. We don't live in that world yet. The server
+	 * presents one auth method and we decide whether that's acceptable or not.
+	 */
+	if (conn->sasl_mechs)
+	{
+		const char **mech;
+		bool		found = false;
+
+		Assert(conn->require_auth);
+
+		for (mech = conn->sasl_mechs; *mech; mech++)
+		{
+			if (strcmp(*mech, selected_mechanism) == 0)
+			{
+				found = true;
+				break;
+			}
+		}
+
+		if ((conn->sasl_mechs_denied && found)
+			|| (!conn->sasl_mechs_denied && !found))
+		{
+			libpq_append_conn_error(conn, "auth method \"%s\" requirement failed: server requested unacceptable SASL mechanism \"%s\"",
+									conn->require_auth, selected_mechanism);
+			goto error;
+		}
+	}
+
 	if (conn->channel_binding[0] == 'r' &&	/* require */
 		strcmp(selected_mechanism, SCRAM_SHA_256_PLUS_NAME) != 0)
 	{
@@ -797,6 +831,25 @@ check_expected_areq(AuthRequest areq, PGconn *conn)
 
 	StaticAssertDecl((sizeof(conn->allowed_auth_methods) * CHAR_BIT) > AUTH_REQ_MAX,
 					 "AUTH_REQ_MAX overflows the allowed_auth_methods bitmask");
+
+	if (conn->sslcertmode[0] == 'r' /* require */
+		&& areq == AUTH_REQ_OK)
+	{
+		/*
+		 * Trade off a little bit of complexity to try to get these error
+		 * messages as precise as possible.
+		 */
+		if (!conn->ssl_cert_requested)
+		{
+			libpq_append_conn_error(conn, "server did not request an SSL certificate");
+			return false;
+		}
+		else if (!conn->ssl_cert_sent)
+		{
+			libpq_append_conn_error(conn, "server accepted connection without a valid SSL certificate");
+			return false;
+		}
+	}
 
 	/*
 	 * If the user required a specific auth method, or specified an allowed

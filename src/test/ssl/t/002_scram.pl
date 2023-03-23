@@ -157,6 +157,12 @@ if ($supports_tls_server_end_point)
 		"$common_connstr user=ssltestuser channel_binding=require require_auth=scram-sha-256",
 		"SCRAM with SSL, channel_binding=require, and require_auth=scram-sha-256"
 	);
+	$node->connect_fails(
+		"$common_connstr user=ssltestuser channel_binding=require require_auth=password",
+		"SCRAM with SSL, channel_binding=require, and require_auth=password",
+		expected_stderr =>
+		  qr/server requested unacceptable SASL mechanism "SCRAM-SHA-256-PLUS"/
+	);
 }
 else
 {

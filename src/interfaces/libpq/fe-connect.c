@@ -125,8 +125,10 @@ static int	ldapServiceLookup(const char *purl, PQconninfoOption *options,
 #define DefaultTargetSessionAttrs	"any"
 #ifdef USE_SSL
 #define DefaultSSLMode "prefer"
+#define DefaultSSLCertMode "allow"
 #else
 #define DefaultSSLMode	"disable"
+#define DefaultSSLCertMode "disable"
 #endif
 #ifdef ENABLE_GSS
 #include "fe-gssapi-common.h"
@@ -282,6 +284,10 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 	{"sslkey", "PGSSLKEY", NULL, NULL,
 		"SSL-Client-Key", "", 64,
 	offsetof(struct pg_conn, sslkey)},
+
+	{"sslcertmode", "PGSSLCERTMODE", NULL, NULL,
+		"SSL-Client-Cert-Mode", "", 8, /* sizeof("disable") == 8 */
+	offsetof(struct pg_conn, sslcertmode)},
 
 	{"sslpassword", NULL, NULL, NULL,
 		"SSL-Client-Key-Password", "*", 20,
@@ -1252,12 +1258,25 @@ connectOptions2(PGconn *conn)
 					more;
 		bool		negated = false;
 
+		static const uint32 default_methods = (
+			1 << AUTH_REQ_SASL
+			| 1 << AUTH_REQ_SASL_CONT
+			| 1 << AUTH_REQ_SASL_FIN
+		);
+		static const char *no_mechs[] = { NULL };
+
 		/*
-		 * By default, start from an empty set of allowed options and add to
+		 * By default, start from a minimum set of allowed options and add to
 		 * it.
+		 *
+		 * NB: The SASL method codes are always "allowed" here. If the server
+		 * requests SASL auth, pg_SASL_init() will enforce adherence to the
+		 * sasl_mechs list, which by default is empty.
 		 */
 		conn->auth_required = true;
-		conn->allowed_auth_methods = 0;
+		conn->allowed_auth_methods = default_methods;
+		conn->sasl_mechs = no_mechs;
+		conn->sasl_mechs_denied = false;
 
 		for (first = true, more = true; more; first = false)
 		{
@@ -1284,6 +1303,9 @@ connectOptions2(PGconn *conn)
 					 */
 					conn->auth_required = false;
 					conn->allowed_auth_methods = -1;
+
+					/* conn->sasl_mechs is now a list of denied mechanisms. */
+					conn->sasl_mechs_denied = true;
 				}
 				else if (!negated)
 				{
@@ -1328,10 +1350,23 @@ connectOptions2(PGconn *conn)
 			}
 			else if (strcmp(method, "scram-sha-256") == 0)
 			{
-				/* This currently assumes that SCRAM is the only SASL method. */
-				bits = (1 << AUTH_REQ_SASL);
-				bits |= (1 << AUTH_REQ_SASL_CONT);
-				bits |= (1 << AUTH_REQ_SASL_FIN);
+				static const char *scram_mechs[] = {
+					SCRAM_SHA_256_NAME,
+					SCRAM_SHA_256_PLUS_NAME,
+					NULL /* list terminator */
+				};
+
+				/*
+				 * This currently assumes that SCRAM is the only SASL method.
+				 * Once a second mechanism is added, this code will need to add
+				 * to the list instead of replacing it wholesale.
+				 */
+				if (conn->sasl_mechs[0])
+					goto duplicate;
+				conn->sasl_mechs = scram_mechs;
+
+				free(part);
+				continue; /* avoid the bitmask manipulation below */
 			}
 			else if (strcmp(method, "none") == 0)
 			{
@@ -1457,8 +1492,8 @@ connectOptions2(PGconn *conn)
 			case 'r':			/* "require" */
 			case 'v':			/* "verify-ca" or "verify-full" */
 				conn->status = CONNECTION_BAD;
-				libpq_append_conn_error(conn, "sslmode value \"%s\" invalid when SSL support is not compiled in",
-										conn->sslmode);
+				libpq_append_conn_error(conn, "%s value \"%s\" invalid when SSL support is not compiled in",
+										"sslmode", conn->sslmode);
 				return false;
 		}
 #endif
@@ -1504,6 +1539,51 @@ connectOptions2(PGconn *conn)
 		conn->status = CONNECTION_BAD;
 		libpq_append_conn_error(conn, "invalid SSL protocol version range");
 		return false;
+	}
+
+	/*
+	 * validate sslcertmode option
+	 */
+	if (conn->sslcertmode)
+	{
+		if (strcmp(conn->sslcertmode, "disable") != 0 &&
+			strcmp(conn->sslcertmode, "allow") != 0 &&
+			strcmp(conn->sslcertmode, "require") != 0)
+		{
+			conn->status = CONNECTION_BAD;
+			libpq_append_conn_error(conn, "invalid %s value: \"%s\"",
+									"sslcertmode", conn->sslcertmode);
+			return false;
+		}
+#ifndef USE_SSL
+		if (strcmp(conn->sslcertmode, "require") == 0)
+		{
+			conn->status = CONNECTION_BAD;
+			libpq_append_conn_error(conn, "%s value \"%s\" invalid when SSL support is not compiled in",
+									"sslcertmode", conn->sslcertmode);
+			return false;
+		}
+#endif
+#ifndef HAVE_SSL_CTX_SET_CERT_CB
+		/*
+		 * Without a certificate callback, the current implementation can't
+		 * figure out if a certificate was actually requested, so "require" is
+		 * useless.
+		 */
+		if (strcmp(conn->sslcertmode, "require") == 0)
+		{
+			conn->status = CONNECTION_BAD;
+			libpq_append_conn_error(conn, "sslcertmode value \"%s\" is not supported (check OpenSSL version)",
+									conn->sslcertmode);
+			return false;
+		}
+#endif
+	}
+	else
+	{
+		conn->sslcertmode = strdup(DefaultSSLCertMode);
+		if (!conn->sslcertmode)
+			goto oom_error;
 	}
 
 	/*
@@ -4238,6 +4318,7 @@ freePGconn(PGconn *conn)
 		explicit_bzero(conn->sslpassword, strlen(conn->sslpassword));
 		free(conn->sslpassword);
 	}
+	free(conn->sslcertmode);
 	free(conn->sslrootcert);
 	free(conn->sslcrl);
 	free(conn->sslcrldir);

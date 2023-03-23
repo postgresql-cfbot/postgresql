@@ -128,3 +128,27 @@ select explain_filter('explain (verbose) select * from t1 where pg_temp.mysin(f1
 -- Test compute_query_id
 set compute_query_id = on;
 select explain_filter('explain (verbose) select * from int8_tbl i8');
+
+-- Test EXPLAIN (GENERIC_PLAN)
+select explain_filter('explain (generic_plan) select unique1 from tenk1 where thousand = $1');
+-- should fail
+select explain_filter('explain (analyze, generic_plan) select unique1 from tenk1 where thousand = $1');
+-- Test EXPLAIN (GENERIC_PLAN) with partition pruning
+-- partitions should be pruned at plan time, based on constants,
+-- but there should be no pruning based on parameter placeholders
+create table gen_part (
+  key1 integer not null,
+  key2 integer not null
+) partition by list (key1);
+create table gen_part_1
+  partition of gen_part for values in (1)
+  partition by range (key2);
+create table gen_part_1_1
+  partition of gen_part_1 for values from (1) to (2);
+create table gen_part_1_2
+  partition of gen_part_1 for values from (2) to (3);
+create table gen_part_2
+  partition of gen_part for values in (2);
+-- should only scan gen_part_1_1 and gen_part_1_2, but not gen_part_2
+select explain_filter('explain (generic_plan) select key1, key2 from gen_part where key1 = 1 and key2 = $1');
+drop table gen_part;

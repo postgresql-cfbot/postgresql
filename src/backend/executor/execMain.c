@@ -131,6 +131,9 @@ static void EvalPlanQualStart(EPQState *epqstate, Plan *planTree);
 void
 ExecutorStart(QueryDesc *queryDesc, int eflags)
 {
+	/* EXEC_FLAG_EXPLAIN_GENERIC can only occur with EXEC_FLAG_EXPLAIN_ONLY */
+	Assert((eflags & EXEC_FLAG_EXPLAIN_ONLY) ||
+		   !(eflags & EXEC_FLAG_EXPLAIN_GENERIC));
 	/*
 	 * In some cases (e.g. an EXECUTE statement) a query execution will skip
 	 * parse analysis, which means that the query_id won't be reported.  Note

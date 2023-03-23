@@ -36,6 +36,11 @@
  * of startup should occur.  However, error checks (such as permission checks)
  * should be performed.
  *
+ * EXPLAIN_GENERIC can only be used together with EXPLAIN_ONLY.  It indicates
+ * that a generic plan is being calculated using EXPLAIN (GENERIC_PLAN), which
+ * means that missing parameters must be tolerated.  Currently, the only effect
+ * is to suppress execution-time partition pruning.
+ *
  * REWIND indicates that the plan node should try to efficiently support
  * rescans without parameter changes.  (Nodes must support ExecReScan calls
  * in any case, but if this flag was not given, they are at liberty to do it
@@ -53,12 +58,13 @@
  * mean that the plan can't queue any AFTER triggers; just that the caller
  * is responsible for there being a trigger context for them to be queued in.
  */
-#define EXEC_FLAG_EXPLAIN_ONLY	0x0001	/* EXPLAIN, no ANALYZE */
-#define EXEC_FLAG_REWIND		0x0002	/* need efficient rescan */
-#define EXEC_FLAG_BACKWARD		0x0004	/* need backward scan */
-#define EXEC_FLAG_MARK			0x0008	/* need mark/restore */
-#define EXEC_FLAG_SKIP_TRIGGERS 0x0010	/* skip AfterTrigger calls */
-#define EXEC_FLAG_WITH_NO_DATA	0x0020	/* rel scannability doesn't matter */
+#define EXEC_FLAG_EXPLAIN_ONLY		0x0001	/* EXPLAIN, no ANALYZE */
+#define EXEC_FLAG_REWIND			0x0002	/* need efficient rescan */
+#define EXEC_FLAG_BACKWARD			0x0004	/* need backward scan */
+#define EXEC_FLAG_MARK				0x0008	/* need mark/restore */
+#define EXEC_FLAG_SKIP_TRIGGERS		0x0010	/* skip AfterTrigger calls */
+#define EXEC_FLAG_WITH_NO_DATA		0x0020	/* rel scannability doesn't matter */
+#define EXEC_FLAG_EXPLAIN_GENERIC	0x0040	/* EXPLAIN (GENERIC_PLAN) */
 
 
 /* Hook for plugins to get control in ExecutorStart() */

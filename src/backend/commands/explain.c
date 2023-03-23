@@ -190,6 +190,8 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
 			es->wal = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "settings") == 0)
 			es->settings = defGetBoolean(opt);
+		else if (strcmp(opt->defname, "generic_plan") == 0)
+			es->generic = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "timing") == 0)
 		{
 			timing_set = true;
@@ -227,6 +229,13 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
 					 parser_errposition(pstate, opt->location)));
 	}
 
+	/* check that GENERIC_PLAN is not used with EXPLAIN ANALYZE */
+	if (es->generic && es->analyze)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("EXPLAIN option ANALYZE cannot be used with GENERIC_PLAN")));
+
+	/* check that WAL is used with EXPLAIN ANALYZE */
 	if (es->wal && !es->analyze)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
@@ -574,6 +583,8 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 		eflags = EXEC_FLAG_EXPLAIN_ONLY;
 	if (into)
 		eflags |= GetIntoRelEFlags(into);
+	if (es->generic)
+		eflags |= EXEC_FLAG_EXPLAIN_GENERIC;
 
 	/* call ExecutorStart to prepare the plan for execution */
 	ExecutorStart(queryDesc, eflags);

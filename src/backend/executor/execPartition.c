@@ -2044,10 +2044,12 @@ CreatePartitionPruneState(PlanState *planstate, PartitionPruneInfo *pruneinfo)
 			pprune->present_parts = bms_copy(pinfo->present_parts);
 
 			/*
-			 * Initialize pruning contexts as needed.
+			 * Initialize pruning contexts as needed.  Specifically, we want to
+			 * skip execution-time partition pruning for EXPLAIN (GENERIC_PLAN).
 			 */
 			pprune->initial_pruning_steps = pinfo->initial_pruning_steps;
-			if (pinfo->initial_pruning_steps)
+			if (pinfo->initial_pruning_steps &&
+				!(econtext->ecxt_estate->es_top_eflags & EXEC_FLAG_EXPLAIN_GENERIC))
 			{
 				InitPartitionPruneContext(&pprune->initial_context,
 										  pinfo->initial_pruning_steps,
@@ -2057,7 +2059,8 @@ CreatePartitionPruneState(PlanState *planstate, PartitionPruneInfo *pruneinfo)
 				prunestate->do_initial_prune = true;
 			}
 			pprune->exec_pruning_steps = pinfo->exec_pruning_steps;
-			if (pinfo->exec_pruning_steps)
+			if (pinfo->exec_pruning_steps &&
+				!(econtext->ecxt_estate->es_top_eflags & EXEC_FLAG_EXPLAIN_GENERIC))
 			{
 				InitPartitionPruneContext(&pprune->exec_context,
 										  pinfo->exec_pruning_steps,

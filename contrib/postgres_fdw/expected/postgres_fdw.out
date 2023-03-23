@@ -11783,3 +11783,33 @@ ANALYZE analyze_table;
 -- cleanup
 DROP FOREIGN TABLE analyze_ftable;
 DROP TABLE analyze_table;
+-- ===================================================
+-- test EXPLAIN (GENERIC_PLAN) with foreign partitions
+-- ===================================================
+-- this is needed to exercise the EXEC_FLAG_EXPLAIN_GENERIC flag
+CREATE TABLE gen_part (
+    key1 integer NOT NULL,
+    key2 integer NOT NULL
+) PARTITION BY LIST (key1);
+CREATE TABLE gen_part_1
+    PARTITION OF gen_part FOR VALUES IN (1)
+    PARTITION BY RANGE (key2);
+CREATE FOREIGN TABLE gen_part_1_1
+    PARTITION OF gen_part_1 FOR VALUES FROM (1) TO (2)
+    SERVER testserver1 OPTIONS (table_name 'whatever_1_1');
+CREATE FOREIGN TABLE gen_part_1_2
+    PARTITION OF gen_part_1 FOR VALUES FROM (2) TO (3)
+    SERVER testserver1 OPTIONS (table_name 'whatever_1_2');
+CREATE FOREIGN TABLE gen_part_2
+    PARTITION OF gen_part FOR VALUES IN (2)
+    SERVER testserver1 OPTIONS (table_name 'whatever_2');
+-- this should only scan "gen_part_1_1" and "gen_part_1_2", but not "gen_part_2"
+EXPLAIN (GENERIC_PLAN, COSTS OFF) SELECT key1, key2 FROM gen_part WHERE key1 = 1 AND key2 = $1;
+                  QUERY PLAN                   
+-----------------------------------------------
+ Append
+   ->  Foreign Scan on gen_part_1_1 gen_part_1
+   ->  Foreign Scan on gen_part_1_2 gen_part_2
+(3 rows)
+
+DROP TABLE gen_part;

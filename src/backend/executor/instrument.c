@@ -16,15 +16,111 @@
 #include <unistd.h>
 
 #include "executor/instrument.h"
+#include "nodes/pg_list.h"
+#include "utils/timeout.h"
+#include "utils/timestamp.h"
+#include "utils/memutils.h"
 
 BufferUsage pgBufferUsage;
 static BufferUsage save_pgBufferUsage;
 WalUsage	pgWalUsage;
 static WalUsage save_pgWalUsage;
 
+volatile uint64 last_sampled_time;
+static List *sample_rate_stack;
+
 static void BufferUsageAdd(BufferUsage *dst, const BufferUsage *add);
 static void WalUsageAdd(WalUsage *dst, WalUsage *add);
 
+/*
+ * Update the last sampled timestamp
+ *
+ * NB: Runs inside a signal handler, be careful.
+ */
+void
+InstrumentSamplingTimeoutHandler(void)
+{
+	instr_time now;
+	INSTR_TIME_SET_CURRENT(now);
+	last_sampled_time = INSTR_TIME_GET_NANOSEC(now);
+}
+
+static void
+StartSamplingTimeout(int sample_rate_hz, bool disable_old_timeout)
+{
+	int timeout_delay_ms = 1000 / sample_rate_hz;
+	TimestampTz fin_time = TimestampTzPlusMilliseconds(GetCurrentTimestamp(), timeout_delay_ms);
+	instr_time now;
+
+	if (disable_old_timeout)
+		disable_timeout(INSTRUMENT_SAMPLING_TIMEOUT, false);
+
+	INSTR_TIME_SET_CURRENT(now);
+	last_sampled_time = INSTR_TIME_GET_NANOSEC(now);
+
+	enable_timeout_every(INSTRUMENT_SAMPLING_TIMEOUT, fin_time, timeout_delay_ms);
+}
+
+/*
+ * Start sampling timing information with the given rate (or higher)
+ *
+ * Note this may be called multiple times in a nested manner, for example when
+ * a query calls a function which calls a query. Further, it is possible for
+ * different statement nesting levels to have different sampling rates. In such
+ * cases we pick the highest sampling rate of all currently in effect.
+ */
+void
+InstrStartSampling(int sample_rate_hz)
+{
+	MemoryContext old_ctx;
+
+	Assert(sample_rate_hz > 0);
+	Assert(sample_rate_hz <= 1000);
+
+	/* In case of errors, a previous timeout may have been stopped without us knowing */
+	if (sample_rate_stack != NIL && !get_timeout_active(INSTRUMENT_SAMPLING_TIMEOUT))
+	{
+		list_free(sample_rate_stack);
+		sample_rate_stack = NIL;
+	}
+
+	if (sample_rate_stack == NIL)
+		StartSamplingTimeout(sample_rate_hz, false);
+	else if (sample_rate_hz > llast_int(sample_rate_stack))
+		/* Reset timeout if a higher sampling frequency is requested */
+		StartSamplingTimeout(sample_rate_hz, true);
+	else
+		sample_rate_hz = llast_int(sample_rate_stack);
+
+	/* Keep sample rate so we can reduce the frequency or stop the timeout */
+	old_ctx = MemoryContextSwitchTo(TopMemoryContext);
+	sample_rate_stack = lappend_int(sample_rate_stack, sample_rate_hz);
+	MemoryContextSwitchTo(old_ctx);
+}
+
+/*
+ * Stop sampling timing information at the current rate
+ *
+ * When called in a nested manner this will go back to the lower sampling rate
+ * (if applicable), if this is the highest nesting level it will stop sampling
+ * timing altogether.
+ */
+void
+InstrStopSampling()
+{
+	int old_sample_rate_hz;
+
+	Assert(sample_rate_stack != NIL);
+
+	old_sample_rate_hz = llast_int(sample_rate_stack);
+	sample_rate_stack = list_delete_last(sample_rate_stack);
+
+	if (sample_rate_stack == NIL)
+		disable_timeout(INSTRUMENT_SAMPLING_TIMEOUT, false);
+	else if (old_sample_rate_hz > llast_int(sample_rate_stack))
+		/* Reset timeout if we're returning to a lower frequency */
+		StartSamplingTimeout(llast_int(sample_rate_stack), true);
+}
 
 /* Allocate new instrumentation structure(s) */
 Instrumentation *
@@ -77,6 +173,9 @@ InstrStartNode(Instrumentation *instr)
 
 	if (instr->need_walusage)
 		instr->walusage_start = pgWalUsage;
+
+	/* Save sampled start time unconditionally (this is very cheap and not worth a branch) */
+	instr->sampled_starttime = last_sampled_time;
 }
 
 /* Exit from a plan node */
@@ -125,6 +224,9 @@ InstrStopNode(Instrumentation *instr, double nTuples)
 		if (instr->async_mode && save_tuplecount < 1.0)
 			instr->firsttuple = INSTR_TIME_GET_DOUBLE(instr->counter);
 	}
+
+	/* Calculate sampled time unconditionally (this is very cheap and not worth a branch) */
+	instr->sampled_total += last_sampled_time - instr->sampled_starttime;
 }
 
 /* Update tuple count */
@@ -193,6 +295,8 @@ InstrAggNode(Instrumentation *dst, Instrumentation *add)
 
 	if (dst->need_walusage)
 		WalUsageAdd(&dst->walusage, &add->walusage);
+
+	dst->sampled_total += add->sampled_total;
 }
 
 /* note current values during parallel executor startup */

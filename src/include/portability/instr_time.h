@@ -126,6 +126,9 @@ pg_clock_gettime_ns(void)
 	((int64) (t).ticks)
 
 
+#define INSTR_TIME_GET_NANOSEC(t) \
+	(((uint64) (t).tv_sec * (uint64) 1000000000) + (uint64) ((t).tv_nsec))
+
 #else							/* WIN32 */
 
 
@@ -143,6 +146,9 @@ pg_query_performance_counter(void)
 
 	return now;
 }
+
+#define INSTR_TIME_GET_NANOSEC(t) \
+	((uint64) (((double) (t).QuadPart * 1000000000.0) / GetTimerFrequency()))
 
 static inline double
 GetTimerFrequency(void)

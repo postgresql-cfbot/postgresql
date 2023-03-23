@@ -20,6 +20,8 @@ begin
     loop
         -- Replace any numeric word with just 'N'
         ln := regexp_replace(ln, '-?\m\d+\M', 'N', 'g');
+        -- Replace NaN with 'N.N' to support TIMING SAMPLING tests
+        ln := regexp_replace(ln, '-?\mNaN\M', 'N.N', 'g');
         -- In sort output, the above won't match units-suffixed numbers
         ln := regexp_replace(ln, '\m\d+kB', 'NkB', 'g');
         -- Ignore text-mode buffers output because it varies depending
@@ -45,6 +47,8 @@ begin
     loop
         -- Replace any numeric word with just '0'
         ln := regexp_replace(ln, '\m\d+\M', '0', 'g');
+        -- Replace NaN with '0.0' to support TIMING SAMPLING tests
+        ln := regexp_replace(ln, '\mNaN\M', '0.0', 'g');
         data := data || ln;
     end loop;
     return data::jsonb;
@@ -67,6 +71,10 @@ select explain_filter('explain (analyze, verbose) select * from int8_tbl i8');
 select explain_filter('explain (analyze, buffers, format text) select * from int8_tbl i8');
 select explain_filter('explain (analyze, buffers, format xml) select * from int8_tbl i8');
 select explain_filter('explain (analyze, buffers, format yaml) select * from int8_tbl i8');
+select explain_filter('explain (analyze, timing sampling) select * from int8_tbl i8');
+select explain_filter('explain (analyze, timing sampling, samplefreq 10, format text) select * from int8_tbl i8');
+select explain_filter('explain (analyze, timing sampling, samplefreq 100, format xml) select * from int8_tbl i8');
+select explain_filter('explain (analyze, timing sampling, samplefreq 1000, format yaml) select * from int8_tbl i8');
 select explain_filter('explain (buffers, format text) select * from int8_tbl i8');
 select explain_filter('explain (buffers, format json) select * from int8_tbl i8');
 

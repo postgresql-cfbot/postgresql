@@ -251,6 +251,7 @@ standard_ExecutorStart(QueryDesc *queryDesc, int eflags)
 	estate->es_crosscheck_snapshot = RegisterSnapshot(queryDesc->crosscheck_snapshot);
 	estate->es_top_eflags = eflags;
 	estate->es_instrument = queryDesc->instrument_options;
+	estate->es_sample_freq_hz = queryDesc->sample_freq_hz;
 	estate->es_jit_flags = queryDesc->plannedstmt->jitFlags;
 
 	/*
@@ -333,7 +334,11 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 
 	/* Allow instrumentation of Executor overall runtime */
 	if (queryDesc->totaltime)
+	{
+		if (queryDesc->instrument_options & INSTRUMENT_TIMER_SAMPLING)
+			InstrStartSampling(queryDesc->sample_freq_hz);
 		InstrStartNode(queryDesc->totaltime);
+	}
 
 	/*
 	 * extract information from the query descriptor and the query feature.
@@ -379,7 +384,11 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 		dest->rShutdown(dest);
 
 	if (queryDesc->totaltime)
+	{
 		InstrStopNode(queryDesc->totaltime, estate->es_processed);
+		if (queryDesc->instrument_options & INSTRUMENT_TIMER_SAMPLING)
+			InstrStopSampling();
+	}
 
 	MemoryContextSwitchTo(oldcontext);
 }
@@ -429,7 +438,11 @@ standard_ExecutorFinish(QueryDesc *queryDesc)
 
 	/* Allow instrumentation of Executor overall runtime */
 	if (queryDesc->totaltime)
+	{
+		if (queryDesc->instrument_options & INSTRUMENT_TIMER_SAMPLING)
+			InstrStartSampling(queryDesc->sample_freq_hz);
 		InstrStartNode(queryDesc->totaltime);
+	}
 
 	/* Run ModifyTable nodes to completion */
 	ExecPostprocessPlan(estate);
@@ -439,7 +452,11 @@ standard_ExecutorFinish(QueryDesc *queryDesc)
 		AfterTriggerEndQuery(estate);
 
 	if (queryDesc->totaltime)
+	{
 		InstrStopNode(queryDesc->totaltime, 0);
+		if (queryDesc->instrument_options & INSTRUMENT_TIMER_SAMPLING)
+			InstrStopSampling();
+	}
 
 	MemoryContextSwitchTo(oldcontext);
 
@@ -2820,6 +2837,7 @@ EvalPlanQualStart(EPQState *epqstate, Plan *planTree)
 	/* es_trig_target_relations must NOT be copied */
 	rcestate->es_top_eflags = parentestate->es_top_eflags;
 	rcestate->es_instrument = parentestate->es_instrument;
+	rcestate->es_sample_freq_hz = parentestate->es_sample_freq_hz;
 	/* es_auxmodifytables must NOT be copied */
 
 	/*

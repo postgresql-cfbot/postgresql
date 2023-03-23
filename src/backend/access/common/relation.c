@@ -73,7 +73,10 @@ relation_open(Oid relationId, LOCKMODE lockmode)
 	if (RelationUsesLocalBuffers(r))
 		MyXactFlags |= XACT_FLAGS_ACCESSEDTEMPNAMESPACE;
 
-	pgstat_init_relation(r);
+	if (r->rd_rel->relkind == RELKIND_INDEX)
+		pgstat_init_index(r);
+	else
+		pgstat_init_table(r);
 
 	return r;
 }
@@ -123,7 +126,10 @@ try_relation_open(Oid relationId, LOCKMODE lockmode)
 	if (RelationUsesLocalBuffers(r))
 		MyXactFlags |= XACT_FLAGS_ACCESSEDTEMPNAMESPACE;
 
-	pgstat_init_relation(r);
+	if (r->rd_rel->relkind == RELKIND_INDEX)
+		pgstat_init_index(r);
+	else
+		pgstat_init_table(r);
 
 	return r;
 }

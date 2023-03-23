@@ -73,10 +73,11 @@
  * - pgstat_database.c
  * - pgstat_function.c
  * - pgstat_io.c
- * - pgstat_relation.c
+ * - pgstat_index.c
  * - pgstat_replslot.c
  * - pgstat_slru.c
  * - pgstat_subscription.c
+ * - pgstat_table.c
  * - pgstat_wal.c
  *
  * Whenever possible infrastructure files should not contain code related to
@@ -270,18 +271,32 @@ static const PgStat_KindInfo pgstat_kind_infos[PGSTAT_NUM_KINDS] = {
 		.reset_timestamp_cb = pgstat_database_reset_timestamp_cb,
 	},
 
-	[PGSTAT_KIND_RELATION] = {
-		.name = "relation",
+	[PGSTAT_KIND_TABLE] = {
+		.name = "table",
 
 		.fixed_amount = false,
 
-		.shared_size = sizeof(PgStatShared_Relation),
-		.shared_data_off = offsetof(PgStatShared_Relation, stats),
-		.shared_data_len = sizeof(((PgStatShared_Relation *) 0)->stats),
+		.shared_size = sizeof(PgStatShared_Table),
+		.shared_data_off = offsetof(PgStatShared_Table, stats),
+		.shared_data_len = sizeof(((PgStatShared_Table *) 0)->stats),
 		.pending_size = sizeof(PgStat_TableStatus),
 
-		.flush_pending_cb = pgstat_relation_flush_cb,
-		.delete_pending_cb = pgstat_relation_delete_pending_cb,
+		.flush_pending_cb = pgstat_table_flush_cb,
+		.delete_pending_cb = pgstat_table_delete_pending_cb,
+	},
+
+	[PGSTAT_KIND_INDEX] = {
+		.name = "index",
+
+		.fixed_amount = false,
+
+		.shared_size = sizeof(PgStatShared_Index),
+		.shared_data_off = offsetof(PgStatShared_Index, stats),
+		.shared_data_len = sizeof(((PgStatShared_Index *) 0)->stats),
+		.pending_size = sizeof(PgStat_IndexStatus),
+
+		.flush_pending_cb = pgstat_index_flush_cb,
+		.delete_pending_cb = pgstat_index_delete_pending_cb,
 	},
 
 	[PGSTAT_KIND_FUNCTION] = {

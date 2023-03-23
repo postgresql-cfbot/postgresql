@@ -404,7 +404,10 @@ heap_create(const char *relname,
 									 reltablespace);
 
 	/* ensure that stats are dropped if transaction aborts */
-	pgstat_create_relation(rel);
+	if (rel->rd_rel->relkind == RELKIND_INDEX)
+		pgstat_create_index(rel);
+	else
+		pgstat_create_table(rel);
 
 	return rel;
 }
@@ -1853,7 +1856,7 @@ heap_drop_with_catalog(Oid relid)
 		RelationDropStorage(rel);
 
 	/* ensure that stats are dropped if transaction commits */
-	pgstat_drop_relation(rel);
+	pgstat_drop_table(rel);
 
 	/*
 	 * Close relcache entry, but *keep* AccessExclusiveLock on the relation

@@ -39,7 +39,8 @@ typedef enum PgStat_Kind
 
 	/* stats for variable-numbered objects */
 	PGSTAT_KIND_DATABASE,		/* database-wide statistics */
-	PGSTAT_KIND_RELATION,		/* per-table statistics */
+	PGSTAT_KIND_TABLE,			/* per-table statistics */
+	PGSTAT_KIND_INDEX,			/* per-index statistics */
 	PGSTAT_KIND_FUNCTION,		/* per-function statistics */
 	PGSTAT_KIND_REPLSLOT,		/* per-slot statistics */
 	PGSTAT_KIND_SUBSCRIPTION,	/* per-subscription statistics */
@@ -138,18 +139,37 @@ typedef struct PgStat_BackendSubEntry
 } PgStat_BackendSubEntry;
 
 /* ----------
+ * PgStat_IndexCounts			The actual per-index counts kept by a backend
+ *
+ * This struct should contain only actual event counters, because we memcmp
+ * it against zeroes to detect whether there are any stats updates to apply.
+ * It is a component of PgStat_IndexStatus (within-backend state).
+ *
+ * tuples_returned is the number of index entries returned by
+ * the index AM, while tuples_fetched is the number of tuples successfully
+ * fetched by heap_fetch under the control of simple indexscans for this index.
+ * ----------
+ */
+typedef struct PgStat_IndexCounts
+{
+	PgStat_Counter i_numscans;
+
+	PgStat_Counter i_tuples_returned;
+	PgStat_Counter i_tuples_fetched;
+	PgStat_Counter i_blocks_fetched;
+	PgStat_Counter i_blocks_hit;
+} PgStat_IndexCounts;
+
+/* ----------
  * PgStat_TableCounts			The actual per-table counts kept by a backend
  *
  * This struct should contain only actual event counters, because we memcmp
  * it against zeroes to detect whether there are any stats updates to apply.
  * It is a component of PgStat_TableStatus (within-backend state).
  *
- * Note: for a table, tuples_returned is the number of tuples successfully
+ * Note: tuples_returned is the number of tuples successfully
  * fetched by heap_getnext, while tuples_fetched is the number of tuples
  * successfully fetched by heap_fetch under the control of bitmap indexscans.
- * For an index, tuples_returned is the number of index entries returned by
- * the index AM, while tuples_fetched is the number of tuples successfully
- * fetched by heap_fetch under the control of simple indexscans for this index.
  *
  * tuples_inserted/updated/deleted/hot_updated count attempted actions,
  * regardless of whether the transaction committed.  delta_live_tuples,
@@ -201,6 +221,22 @@ typedef struct PgStat_TableStatus
 	PgStat_TableCounts t_counts;	/* event counts to be sent */
 	Relation	relation;		/* rel that is using this entry */
 } PgStat_TableStatus;
+
+/* ----------
+ * PgStat_IndexStatus			Per-index status within a backend
+ *
+ * Many of the event counters are nontransactional, ie, we count events
+ * in committed and aborted transactions alike.  For these, we just count
+ * directly in the PgStat_IndexStatus.
+ * ----------
+ */
+typedef struct PgStat_IndexStatus
+{
+	Oid			r_id;			/* relation's OID */
+	bool		r_shared;		/* is it a shared catalog? */
+	PgStat_IndexCounts i_counts;	/* event counts to be sent */
+	Relation	relation;		/* rel that is using this entry */
+} PgStat_IndexStatus;
 
 /* ----------
  * PgStat_TableXactStatus		Per-table, per-subtransaction status
@@ -420,6 +456,17 @@ typedef struct PgStat_StatTabEntry
 	PgStat_Counter autoanalyze_count;
 } PgStat_StatTabEntry;
 
+typedef struct PgStat_StatIndEntry
+{
+	PgStat_Counter numscans;
+	TimestampTz lastscan;
+
+	PgStat_Counter tuples_returned;
+	PgStat_Counter tuples_fetched;
+	PgStat_Counter blocks_fetched;
+	PgStat_Counter blocks_hit;
+} PgStat_StatIndEntry;
+
 typedef struct PgStat_WalStats
 {
 	PgStat_Counter wal_records;
@@ -551,16 +598,15 @@ extern PgStat_FunctionCounts *find_funcstat_entry(Oid func_id);
 
 
 /*
- * Functions in pgstat_relation.c
+ * Functions in pgstat_table.c
  */
 
-extern void pgstat_create_relation(Relation rel);
-extern void pgstat_drop_relation(Relation rel);
-extern void pgstat_copy_relation_stats(Relation dst, Relation src);
+extern void pgstat_create_table(Relation rel);
+extern void pgstat_drop_table(Relation rel);
+extern void pgstat_init_table(Relation rel);
 
-extern void pgstat_init_relation(Relation rel);
-extern void pgstat_assoc_relation(Relation rel);
-extern void pgstat_unlink_relation(Relation rel);
+extern void pgstat_assoc_table(Relation rel);
+extern void pgstat_unlink_table(Relation rel);
 
 extern void pgstat_report_vacuum(Oid tableoid, bool shared,
 								 PgStat_Counter livetuples, PgStat_Counter deadtuples);
@@ -569,52 +615,82 @@ extern void pgstat_report_analyze(Relation rel,
 								  bool resetcounter);
 
 /*
- * If stats are enabled, but pending data hasn't been prepared yet, call
- * pgstat_assoc_relation() to do so. See its comment for why this is done
- * separately from pgstat_init_relation().
+ * Functions in pgstat_index.c
  */
-#define pgstat_should_count_relation(rel)                           \
-	(likely((rel)->pgstat_info != NULL) ? true :                    \
-	 ((rel)->pgstat_enabled ? pgstat_assoc_relation(rel), true : false))
+
+extern void pgstat_create_index(Relation rel);
+extern void pgstat_drop_index(Relation rel);
+extern void pgstat_copy_index_stats(Relation dst, Relation src);
+extern void pgstat_init_index(Relation rel);
+extern void pgstat_assoc_index(Relation rel);
+extern void pgstat_unlink_index(Relation rel);
+
+/*
+ * If stats are enabled, but pending data hasn't been prepared yet, call
+ * pgstat_assoc_table() / pgstat_assoc_index() to do so.
+ * See their comment for why this is done separately from pgstat_init_table()
+ * and pgstat_init_index().
+ */
+#define pgstat_should_count_table(rel)                           \
+	(likely((rel)->pgstattab_info != NULL) ? true :                    \
+	 ((rel)->pgstat_enabled ? pgstat_assoc_table(rel), true : false))
+
+#define pgstat_should_count_index(rel)                           \
+	(likely((rel)->pgstatind_info != NULL) ? true :                    \
+	 ((rel)->pgstat_enabled ? pgstat_assoc_index(rel), true : false))
 
 /* nontransactional event counts are simple enough to inline */
 
 #define pgstat_count_heap_scan(rel)									\
 	do {															\
-		if (pgstat_should_count_relation(rel))						\
-			(rel)->pgstat_info->t_counts.t_numscans++;				\
+		if (pgstat_should_count_table(rel))						\
+			(rel)->pgstattab_info->t_counts.t_numscans++;				\
 	} while (0)
 #define pgstat_count_heap_getnext(rel)								\
 	do {															\
-		if (pgstat_should_count_relation(rel))						\
-			(rel)->pgstat_info->t_counts.t_tuples_returned++;		\
+		if (pgstat_should_count_table(rel))						\
+			(rel)->pgstattab_info->t_counts.t_tuples_returned++;		\
 	} while (0)
 #define pgstat_count_heap_fetch(rel)								\
 	do {															\
-		if (pgstat_should_count_relation(rel))						\
-			(rel)->pgstat_info->t_counts.t_tuples_fetched++;		\
+		if (pgstat_should_count_table(rel))						\
+			(rel)->pgstattab_info->t_counts.t_tuples_fetched++;		\
+	} while (0)
+#define pgstat_count_index_fetch(rel)								\
+	do {															\
+		if (pgstat_should_count_index(rel))						\
+			(rel)->pgstatind_info->i_counts.i_tuples_fetched++;		\
 	} while (0)
 #define pgstat_count_index_scan(rel)								\
 	do {															\
-		if (pgstat_should_count_relation(rel))						\
-			(rel)->pgstat_info->t_counts.t_numscans++;				\
+		if (pgstat_should_count_index(rel))						\
+			(rel)->pgstatind_info->i_counts.i_numscans++;			\
 	} while (0)
 #define pgstat_count_index_tuples(rel, n)							\
 	do {															\
-		if (pgstat_should_count_relation(rel))						\
-			(rel)->pgstat_info->t_counts.t_tuples_returned += (n);	\
+		if (pgstat_should_count_index(rel))						\
+			(rel)->pgstatind_info->i_counts.i_tuples_returned += (n);	\
 	} while (0)
-#define pgstat_count_buffer_read(rel)								\
+#define pgstat_count_table_buffer_read(rel)								\
 	do {															\
-		if (pgstat_should_count_relation(rel))						\
-			(rel)->pgstat_info->t_counts.t_blocks_fetched++;		\
+		if (pgstat_should_count_table(rel))	\
+			(rel)->pgstattab_info->t_counts.t_blocks_fetched++;		\
 	} while (0)
-#define pgstat_count_buffer_hit(rel)								\
+#define pgstat_count_index_buffer_read(rel)								\
 	do {															\
-		if (pgstat_should_count_relation(rel))						\
-			(rel)->pgstat_info->t_counts.t_blocks_hit++;			\
+		if (pgstat_should_count_index(rel))	\
+			(rel)->pgstatind_info->i_counts.i_blocks_fetched++;		\
 	} while (0)
-
+#define pgstat_count_table_buffer_hit(rel)								\
+	do {															\
+		if (pgstat_should_count_table(rel))	\
+			(rel)->pgstattab_info->t_counts.t_blocks_hit++; \
+	} while (0)
+#define pgstat_count_index_buffer_hit(rel)								\
+	do {															\
+		if (pgstat_should_count_index(rel))	\
+			(rel)->pgstatind_info->i_counts.i_blocks_hit++; \
+	} while (0)
 extern void pgstat_count_heap_insert(Relation rel, PgStat_Counter n);
 extern void pgstat_count_heap_update(Relation rel, bool hot);
 extern void pgstat_count_heap_delete(Relation rel);
@@ -630,6 +706,10 @@ extern PgStat_StatTabEntry *pgstat_fetch_stat_tabentry(Oid relid);
 extern PgStat_StatTabEntry *pgstat_fetch_stat_tabentry_ext(bool shared,
 														   Oid reloid);
 extern PgStat_TableStatus *find_tabstat_entry(Oid rel_id);
+extern PgStat_IndexStatus *find_indstat_entry(Oid rel_id);
+extern PgStat_StatIndEntry *pgstat_fetch_stat_indentry(Oid relid);
+extern PgStat_StatIndEntry *pgstat_fetch_stat_indentry_ext(bool shared,
+														   Oid relid);
 
 
 /*

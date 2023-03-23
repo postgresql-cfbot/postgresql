@@ -23,11 +23,12 @@ OBJS = \
 	pgstat_database.o \
 	pgstat_function.o \
 	pgstat_io.o \
-	pgstat_relation.o \
+	pgstat_index.o \
 	pgstat_replslot.o \
 	pgstat_shmem.o \
 	pgstat_slru.o \
 	pgstat_subscription.o \
+	pgstat_table.o \
 	pgstat_wal.o \
 	pgstat_xact.o \
 	wait_event.o

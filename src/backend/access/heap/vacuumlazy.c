@@ -1042,6 +1042,13 @@ lazy_scan_heap(LVRelState *vacrel)
 
 				/* Forget the LP_DEAD items that we just vacuumed */
 				dead_items->num_items = 0;
+				{
+					const int	progress_inds[] = {PROGRESS_VACUUM_NUM_DEAD_TUPLES};
+					const int64 progress_vals[] = {0};
+
+					pgstat_progress_update_multi_param(1, progress_inds, progress_vals);
+				}
+
 
 				/*
 				 * Periodically perform FSM vacuuming to make newly-freed
@@ -2199,6 +2206,13 @@ lazy_vacuum(LVRelState *vacrel)
 	{
 		Assert(!vacrel->do_index_cleanup);
 		vacrel->dead_items->num_items = 0;
+		{
+			const int	progress_inds[] = {PROGRESS_VACUUM_NUM_DEAD_TUPLES};
+			const int64 progress_vals[] = {0};
+
+			pgstat_progress_update_multi_param(1, progress_inds, progress_vals);
+		}
+
 		return;
 	}
 
@@ -2301,6 +2315,13 @@ lazy_vacuum(LVRelState *vacrel)
 	 * vacuum)
 	 */
 	vacrel->dead_items->num_items = 0;
+
+	{
+		const int	progress_inds[] = {PROGRESS_VACUUM_NUM_DEAD_TUPLES};
+		const int64 progress_vals[] = {0};
+
+		pgstat_progress_update_multi_param(1, progress_inds, progress_vals);
+	}
 }
 
 /*
@@ -2414,12 +2435,23 @@ lazy_vacuum_heap_rel(LVRelState *vacrel)
 	BlockNumber vacuumed_pages = 0;
 	Buffer		vmbuffer = InvalidBuffer;
 	LVSavedErrInfo saved_err_info;
+#if 0
+	const int	progress_inds[] = {
+		PROGRESS_VACUUM_PHASE,
+		PROGRESS_VACUUM_NUM_DEAD_TUPLES,
+	};
+	const int64 progress_vals[] = {
+		PROGRESS_VACUUM_PHASE_VACUUM_HEAP,
+		0,
+	};
+#endif
 
 	Assert(vacrel->do_index_vacuuming);
 	Assert(vacrel->do_index_cleanup);
 	Assert(vacrel->num_index_scans > 0);
 
 	/* Report that we are now vacuuming the heap */
+	//pgstat_progress_update_multi_param(2, progress_inds, progress_vals);
 	pgstat_progress_update_param(PROGRESS_VACUUM_PHASE,
 								 PROGRESS_VACUUM_PHASE_VACUUM_HEAP);
 
@@ -3190,7 +3222,12 @@ dead_items_alloc(LVRelState *vacrel, int nworkers)
 	dead_items = (VacDeadItems *) palloc(vac_max_items_to_alloc_size(max_items));
 	dead_items->max_items = max_items;
 	dead_items->num_items = 0;
+	{
+		const int	progress_inds[] = {PROGRESS_VACUUM_NUM_DEAD_TUPLES};
+		const int64 progress_vals[] = {0};
 
+		pgstat_progress_update_multi_param(1, progress_inds, progress_vals);
+	}
 	vacrel->dead_items = dead_items;
 }
 

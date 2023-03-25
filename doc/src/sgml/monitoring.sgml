@@ -6947,7 +6947,10 @@ FROM pg_stat_get_backend_idset() AS backendid;
       </para>
       <para>
        When creating an index on a partitioned table, this column is set to
-       the total number of partitions on which the index is to be created.
+       the total number of partitions on which the index is to be created or attached.
+       In the case of intermediate partitioned tables, this includes both
+       direct and indirect partitions, and includes the intermediate
+       partitioned tables themselves.
        This field is <literal>0</literal> during a <literal>REINDEX</literal>.
       </para></entry>
      </row>
@@ -6958,7 +6961,10 @@ FROM pg_stat_get_backend_idset() AS backendid;
       </para>
       <para>
        When creating an index on a partitioned table, this column is set to
-       the number of partitions on which the index has been created.
+       the number of partitions on which the index has been created or attached.
+       In the case of intermediate partitioned tables, this includes both
+       direct and indirect partitions, and includes the intermediate
+       partitioned tables themselves.
        This field is <literal>0</literal> during a <literal>REINDEX</literal>.
       </para></entry>
      </row>

@@ -521,6 +521,7 @@ WaitForOlderSnapshots(TransactionId limitXmin, bool progress)
  *		case the caller had better have checked it earlier.
  * 'skip_build': make the catalog entries but don't create the index files
  * 'quiet': suppress the NOTICE chatter ordinarily provided for constraints.
+ * 'total_parts': total number of direct and indirect partitions
  *
  * Returns the object address of the created index.
  */
@@ -530,6 +531,7 @@ DefineIndex(Oid relationId,
 			Oid indexRelationId,
 			Oid parentIndexId,
 			Oid parentConstraintId,
+			int total_parts,
 			bool is_alter_table,
 			bool check_rights,
 			bool check_not_in_use,
@@ -1225,8 +1227,30 @@ DefineIndex(Oid relationId,
 			Relation	parentIndex;
 			TupleDesc	parentDesc;
 
-			pgstat_progress_update_param(PROGRESS_CREATEIDX_PARTITIONS_TOTAL,
-										 nparts);
+			/*
+			 * Set the total number of partitions at the start of the command;
+			 * but don't update it when being called recursively.
+			 */
+			if (!OidIsValid(parentIndexId))
+			{
+				/*
+				 * When called by ProcessUtilitySlow(), the number of
+				 * partitions is passed in as an optimization.  This should
+				 * count partitions the same way.  Subtract one since
+				 * find_all_inheritors() includes the rel itself.
+				 */
+				if (total_parts < 0)
+				{
+					List	   *childs = find_all_inheritors(relationId,
+															 NoLock, NULL);
+
+					total_parts = list_length(childs) - 1;
+					list_free(childs);
+				}
+
+				pgstat_progress_update_param(PROGRESS_CREATEIDX_PARTITIONS_TOTAL,
+											 total_parts);
+			}
 
 			/* Make a local copy of partdesc->oids[], just for safety */
 			memcpy(part_oids, partdesc->oids, sizeof(Oid) * nparts);
@@ -1432,14 +1456,23 @@ DefineIndex(Oid relationId,
 								InvalidOid, /* no predefined OID */
 								indexRelationId,	/* this is our child */
 								createdConstraintId,
+								-1,
 								is_alter_table, check_rights, check_not_in_use,
 								skip_build, quiet);
 					SetUserIdAndSecContext(child_save_userid,
 										   child_save_sec_context);
 				}
+				else
+				{
+					/*
+					 * If a pre-existing index was ATTACHed, the progress
+					 * report is updated here.  A partitioned index is
+					 * likewise counted when attached, but not its partitions,
+					 * since that's expensive, and ATTACH is fast anyway.
+					 */
+					pgstat_progress_incr_param(PROGRESS_CREATEIDX_PARTITIONS_DONE, 1);
+				}
 
-				pgstat_progress_update_param(PROGRESS_CREATEIDX_PARTITIONS_DONE,
-											 i + 1);
 				free_attrmap(attmap);
 			}
 
@@ -1479,6 +1512,16 @@ DefineIndex(Oid relationId,
 		table_close(rel, NoLock);
 		if (!OidIsValid(parentIndexId))
 			pgstat_progress_end_command();
+		else
+		{
+			/*
+			 * Update progress for a partitioned index itself; the
+			 * recursively-called function will have updated the counter for
+			 * its child indexes.
+			 */
+			pgstat_progress_incr_param(PROGRESS_CREATEIDX_PARTITIONS_DONE, 1);
+		}
+
 		return address;
 	}
 
@@ -1490,9 +1533,16 @@ DefineIndex(Oid relationId,
 		/* Close the heap and we're done, in the non-concurrent case */
 		table_close(rel, NoLock);
 
-		/* If this is the top-level index, we're done. */
+		/*
+		 * If this is the top-level index, the command is done. When called
+		 * recursively for child tables, the done partition counter is
+		 * incremented now, rather than in the caller, to provide fine-grained
+		 * progress reporting in the case of intermediate partitioning.
+		 */
 		if (!OidIsValid(parentIndexId))
 			pgstat_progress_end_command();
+		else
+			pgstat_progress_incr_param(PROGRESS_CREATEIDX_PARTITIONS_DONE, 1);
 
 		return address;
 	}

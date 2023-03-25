@@ -1145,6 +1145,12 @@ acquire_sample_rows(Relation onerel, int elevel,
 	TableScanDesc scan;
 	BlockNumber nblocks;
 	BlockNumber blksdone = 0;
+	int64		progress_vals[2] = {0};
+	int const	progress_inds[2] = {
+		PROGRESS_ANALYZE_BLOCKS_DONE,
+		PROGRESS_ANALYZE_BLOCKS_TOTAL
+	};
+
 #ifdef USE_PREFETCH
 	int			prefetch_maximum = 0;	/* blocks to prefetch if enabled */
 	BlockSamplerData prefetch_bs;
@@ -1169,8 +1175,8 @@ acquire_sample_rows(Relation onerel, int elevel,
 #endif
 
 	/* Report sampling block numbers */
-	pgstat_progress_update_param(PROGRESS_ANALYZE_BLOCKS_TOTAL,
-								 nblocks);
+	progress_vals[1] = nblocks;
+	pgstat_progress_update_multi_param(2, progress_inds, progress_vals);
 
 	/* Prepare for sampling rows */
 	reservoir_init_selection_state(&rstate, targrows);

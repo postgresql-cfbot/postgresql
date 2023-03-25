@@ -1465,6 +1465,7 @@ ProcessUtilitySlow(ParseState *pstate,
 					Oid			relid;
 					LOCKMODE	lockmode;
 					bool		is_alter_table;
+					int			nparts = 0;
 
 					if (stmt->concurrent)
 						PreventInTransactionBlock(isTopLevel,
@@ -1503,9 +1504,11 @@ ProcessUtilitySlow(ParseState *pstate,
 						List	   *inheritors = NIL;
 
 						inheritors = find_all_inheritors(relid, lockmode, NULL);
+						nparts = list_length(inheritors) - 1;
 						foreach(lc, inheritors)
 						{
-							char		relkind = get_rel_relkind(lfirst_oid(lc));
+							Oid			partrelid = lfirst_oid(lc);
+							char		relkind = get_rel_relkind(partrelid);
 
 							if (relkind != RELKIND_RELATION &&
 								relkind != RELKIND_MATVIEW &&
@@ -1548,6 +1551,7 @@ ProcessUtilitySlow(ParseState *pstate,
 									InvalidOid, /* no predefined OID */
 									InvalidOid, /* no parent index */
 									InvalidOid, /* no parent constraint */
+									nparts,
 									is_alter_table,
 									true,	/* check_rights */
 									true,	/* check_not_in_use */

@@ -912,6 +912,13 @@ WaitForLockersMultiple(List *locktags, LOCKMODE lockmode, bool progress)
 	int			total = 0;
 	int			done = 0;
 
+	const int	progress_index[] = {
+		PROGRESS_WAITFOR_TOTAL,
+		PROGRESS_WAITFOR_DONE,
+		PROGRESS_WAITFOR_CURRENT_PID
+	};
+	const int64 progress_values[] = {0, 0, 0};
+
 	/* Done if no locks to wait for */
 	if (locktags == NIL)
 		return;
@@ -930,7 +937,10 @@ WaitForLockersMultiple(List *locktags, LOCKMODE lockmode, bool progress)
 	}
 
 	if (progress)
+	{
+		pgstat_progress_update_multi_param(3, progress_index, progress_values);
 		pgstat_progress_update_param(PROGRESS_WAITFOR_TOTAL, total);
+	}
 
 	/*
 	 * Note: GetLockConflicts() never reports our own xid, hence we need not
@@ -960,19 +970,9 @@ WaitForLockersMultiple(List *locktags, LOCKMODE lockmode, bool progress)
 				pgstat_progress_update_param(PROGRESS_WAITFOR_DONE, ++done);
 		}
 	}
-	if (progress)
-	{
-		const int	index[] = {
-			PROGRESS_WAITFOR_TOTAL,
-			PROGRESS_WAITFOR_DONE,
-			PROGRESS_WAITFOR_CURRENT_PID
-		};
-		const int64 values[] = {
-			0, 0, 0
-		};
 
-		pgstat_progress_update_multi_param(3, index, values);
-	}
+	if (progress)
+		pgstat_progress_update_multi_param(3, progress_index, progress_values);
 
 	list_free_deep(holders);
 }

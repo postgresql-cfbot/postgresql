@@ -11,6 +11,7 @@ backend_sources += files(
   'arraysubs.c',
   'arrayutils.c',
   'ascii.c',
+  'authfuncs.c',
   'bool.c',
   'cash.c',
   'char.c',

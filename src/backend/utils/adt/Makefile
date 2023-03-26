@@ -22,6 +22,7 @@ OBJS = \
 	arraysubs.o \
 	arrayutils.o \
 	ascii.o \
+	authfuncs.o \
 	bool.o \
 	cash.o \
 	char.o \

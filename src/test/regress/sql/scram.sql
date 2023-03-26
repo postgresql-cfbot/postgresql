@@ -1,0 +1,68 @@
+-- Test building SCRAM functions
+
+-- test all nulls
+-- fail
+SELECT scram_build_secret(NULL, NULL);
+SELECT scram_build_secret('sha256', NULL);
+SELECT scram_build_secret('sha256', NULL, NULL);
+SELECT scram_build_secret('sha256', NULL, NULL, NULL);
+
+-- test unsupported hashes
+-- fail
+SELECT scram_build_secret('sha384', 'password');
+SELECT scram_build_secret('sha512', 'password');
+
+-- generated a SCRAM secret from a plaintext password
+SELECT regexp_replace(
+  scram_build_secret('sha256', 'secret password'),
+    '(SCRAM-SHA-256)\$(\d+):([a-zA-Z0-9+/=]+)\$([a-zA-Z0-9+=/]+):([a-zA-Z0-9+/=]+)',
+    '\1$\2:<salt>$<storedkey>:<serverkey>') AS scram_secret;
+
+-- test building a SCRAM secret with a predefined salt with a valid base64
+-- encoded string
+SELECT scram_build_secret('sha256', 'secret password',
+    decode('MTIzNDU2Nzg5MGFiY2RlZg==', 'base64'));
+
+-- test building a SCRAM secret with a predefined salt that is not a valid
+-- base64 string
+-- fail
+SELECT scram_build_secret('sha256', 'secret password',
+  decode('abc', 'base64'));
+
+-- test building a SCRAM secret with a salt that looks like a string but is
+-- cast to a bytea
+SELECT scram_build_secret('sha256', 'secret password', 'abc');
+
+-- test building a SCRAM secret with a bytea salt using the hex format
+SELECT scram_build_secret('sha256', 'secret password', '\xabba5432');
+
+-- test building a SCRAM secret with a valid salt and a different set of
+-- iterations
+SELECT scram_build_secret('sha256', 'secret password',
+  decode('MTIzNDU2Nzg5MGFiY2RlZg==', 'base64'), 10000);
+
+-- test what happens when the salt is a NULL value.
+-- this should build a SCRAM secret using a random salt.
+SELECT regexp_replace(
+  scram_build_secret('sha256', 'secret password', NULL, 10000),
+    '(SCRAM-SHA-256)\$(\d+):([a-zA-Z0-9+/=]{24})\$([a-zA-Z0-9+=/]+):([a-zA-Z0-9+/=]+)',
+    '\1$\2:<salt>$<storedkey>:<serverkey>') AS scram_secret;
+
+-- test what happens when iterations is a null value. this should set iterations
+-- to be the default, currently 4096.
+SELECT
+  scram_build_secret('sha256', 'secret password',
+    decode('MTIzNDU2Nzg5MGFiY2RlZg==', 'base64'), NULL) ~
+  '^SCRAM-SHA-256\$4096' AS has_default_iterations;
+
+-- skip the remaining tests if this not a UTF8 server
+SELECT getdatabaseencoding() <> 'UTF8' AS skip_test \gset
+\if :skip_test
+\quit
+\endif
+
+-- test SASLprep. This tests the case where a user supplies a non-ASCII space
+-- character.
+SELECT
+  scram_build_secret('sha256', U&'one\1680space', decode('h2y81+nUwWp5uIJc4PgyXA==', 'base64')) =
+  'SCRAM-SHA-256$4096:h2y81+nUwWp5uIJc4PgyXA==$EiywEpO6rM3z3DGehubeoRpp8Orq0XuDUbdT9fQWwz8=:Wh7fq4C+bageihh3vTrkCr7YrlcDTG+JhfcFAuHn/6E=';

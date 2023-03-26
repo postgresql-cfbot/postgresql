@@ -235,3 +235,36 @@ ExecShutdownCustomScan(CustomScanState *node)
 	if (methods->ShutdownCustomScan)
 		methods->ShutdownCustomScan(node);
 }
+
+/*
+ * Asynchronous execution support
+ */
+void
+ExecAsyncCustomScanRequest(AsyncRequest *areq)
+{
+	CustomScanState *node = (CustomScanState *) areq->requestee;
+	const CustomExecMethods *methods = node->methods;
+
+	Assert(methods->CustomScanAsyncRequest != NULL);
+	methods->CustomScanAsyncRequest(areq);
+}
+
+void
+ExecAsyncCustomScanConfigureWait(AsyncRequest *areq)
+{
+	CustomScanState *node = (CustomScanState *) areq->requestee;
+	const CustomExecMethods *methods = node->methods;
+
+	Assert(methods->CustomScanAsyncConfigureWait != NULL);
+	methods->CustomScanAsyncConfigureWait(areq);
+}
+
+void
+ExecAsyncCustomScanNotify(AsyncRequest *areq)
+{
+	CustomScanState *node = (CustomScanState *) areq->requestee;
+	const CustomExecMethods *methods = node->methods;
+
+	Assert(methods->CustomScanAsyncNotify != NULL);
+	methods->CustomScanAsyncNotify(areq);
+}

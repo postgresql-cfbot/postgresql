@@ -32,6 +32,7 @@
 #include "libpq/pqformat.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
+#include "nodes/makefuncs.h"
 #include "optimizer/optimizer.h"
 #include "pgstat.h"
 #include "rewrite/rewriteHandler.h"
@@ -337,6 +338,94 @@ EndCopy(CopyToState cstate)
 
 	MemoryContextDelete(cstate->copycontext);
 	pfree(cstate);
+}
+
+/*
+ * Turn "COPY table_name TO" form into "COPY (query) TO".
+ */
+RawStmt *
+CreateCopyToQuery(const CopyStmt *stmt, Relation rel, int stmt_location,
+				  int stmt_len)
+{
+	SelectStmt *select;
+	ColumnRef  *cr;
+	ResTarget  *target;
+	RangeVar   *from;
+	List	   *targetList = NIL;
+	RawStmt    *query = NULL;
+
+	/*
+	 * Build target list
+	 *
+	 * If no columns are specified in the attribute list of the COPY command,
+	 * then the target list is 'all' columns. Therefore, '*' should be used as
+	 * the target list for the resulting SELECT statement.
+	 *
+	 * In the case that columns are specified in the attribute list, create a
+	 * ColumnRef and ResTarget for each column and add them to the target list
+	 * for the resulting SELECT statement.
+	 */
+	if (!stmt->attlist)
+	{
+		cr = makeNode(ColumnRef);
+		cr->fields = list_make1(makeNode(A_Star));
+		cr->location = -1;
+
+		target = makeNode(ResTarget);
+		target->name = NULL;
+		target->indirection = NIL;
+		target->val = (Node *) cr;
+		target->location = -1;
+
+		targetList = list_make1(target);
+	}
+	else
+	{
+		ListCell   *lc;
+
+		foreach(lc, stmt->attlist)
+		{
+			/*
+			 * Build the ColumnRef for each column.  The ColumnRef 'fields'
+			 * property is a String node that corresponds to the column name
+			 * respectively.
+			 */
+			cr = makeNode(ColumnRef);
+			cr->fields = list_make1(lfirst(lc));
+			cr->location = -1;
+
+			/* Build the ResTarget and add the ColumnRef to it. */
+			target = makeNode(ResTarget);
+			target->name = NULL;
+			target->indirection = NIL;
+			target->val = (Node *) cr;
+			target->location = -1;
+
+			/* Add each column to the SELECT statement's target list */
+			targetList = lappend(targetList, target);
+		}
+	}
+
+	/*
+	 * Build RangeVar for from clause, fully qualified based on the relation
+	 * which we have opened and locked.
+	 */
+	from = makeRangeVar(get_namespace_name(RelationGetNamespace(rel)),
+						pstrdup(RelationGetRelationName(rel)),
+						-1);
+	from->inh = false;	/* apply ONLY */
+
+	/* Build query */
+	select = makeNode(SelectStmt);
+	select->targetList = targetList;
+	select->fromClause = list_make1(from);
+
+	query = makeNode(RawStmt);
+	query->stmt = (Node *) select;
+	query->stmt_location = stmt_location;
+	query->stmt_len = stmt_len;
+
+	return query;
 }
 
 /*

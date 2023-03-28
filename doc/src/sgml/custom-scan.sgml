@@ -275,7 +275,9 @@ void (*EndCustomScan) (CustomScanState *node);
 </programlisting>
     Clean up any private data associated with the <literal>CustomScanState</literal>.
     This method is required, but it does not need to do anything if there is
-    no associated data or it will be cleaned up automatically.
+    no associated data or it will be cleaned up automatically.  Note that this
+    may be called even if the corresponding <function>BeginCustomScan</function>
+    was not called by <function>ExecInitCustomScan</function>.
    </para>
 
    <para>

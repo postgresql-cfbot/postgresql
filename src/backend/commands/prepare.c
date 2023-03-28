@@ -183,6 +183,7 @@ ExecuteQuery(ParseState *pstate,
 		paramLI = EvaluateParams(pstate, entry, stmt->params, estate);
 	}
 
+replan:
 	/* Create a new portal to run the query in */
 	portal = CreateNewPortal();
 	/* Don't display the portal in pg_cursors, it is for internal use only */
@@ -251,9 +252,18 @@ ExecuteQuery(ParseState *pstate,
 	}
 
 	/*
-	 * Run the portal as appropriate.
+	 * Run the portal as appropriate.  If the portal contains a cached plan, it
+	 * must be recreated if portal->plan_valid is false which tells that the
+	 * cached plan was found to have been invalidated when initializing one of
+	 * the plan trees contained in it.
 	 */
 	PortalStart(portal, paramLI, eflags, GetActiveSnapshot());
+
+	if (!portal->plan_valid)
+	{
+		PortalDrop(portal, false);
+		goto replan;
+	}
 
 	(void) PortalRun(portal, count, false, true, dest, dest, qc);
 
@@ -574,7 +584,7 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 {
 	PreparedStatement *entry;
 	const char *query_string;
-	CachedPlan *cplan;
+	CachedPlan *cplan = NULL;
 	List	   *plan_list;
 	ListCell   *p;
 	ParamListInfo paramLI = NULL;
@@ -618,6 +628,7 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 	}
 
 	/* Replan if needed, and acquire a transient refcount */
+replan:
 	cplan = GetCachedPlan(entry->plansource, paramLI,
 						  CurrentResourceOwner, queryEnv);
 
@@ -639,8 +650,21 @@ ExplainExecuteQuery(ExecuteStmt *execstmt, IntoClause *into, ExplainState *es,
 		PlannedStmt *pstmt = lfirst_node(PlannedStmt, p);
 
 		if (pstmt->commandType != CMD_UTILITY)
-			ExplainOnePlan(pstmt, into, es, query_string, paramLI, queryEnv,
-						   &planduration, (es->buffers ? &bufusage : NULL));
+		{
+			QueryDesc *queryDesc;
+
+			queryDesc = ExplainQueryDesc(pstmt, cplan, queryString,
+										 into, es, paramLI, queryEnv);
+			if (queryDesc == NULL)
+			{
+				ExplainResetOutput(es);
+				ReleaseCachedPlan(cplan, CurrentResourceOwner);
+				goto replan;
+			}
+			ExplainOnePlan(queryDesc, into, es, query_string, paramLI,
+						   queryEnv, &planduration,
+						   (es->buffers ? &bufusage : NULL));
+		}
 		else
 			ExplainOneUtility(pstmt->utilityStmt, into, es, query_string,
 							  paramLI, queryEnv);

@@ -483,7 +483,8 @@ ExecEndTidScan(TidScanState *node)
 	 */
 	if (node->ss.ps.ps_ResultTupleSlot)
 		ExecClearTuple(node->ss.ps.ps_ResultTupleSlot);
-	ExecClearTuple(node->ss.ss_ScanTupleSlot);
+	if (node->ss.ss_ScanTupleSlot)
+		ExecClearTuple(node->ss.ss_ScanTupleSlot);
 }
 
 /* ----------------------------------------------------------------
@@ -529,6 +530,8 @@ ExecInitTidScan(TidScan *node, EState *estate, int eflags)
 	 * open the scan relation
 	 */
 	currentRelation = ExecOpenScanRelation(estate, node->scan.scanrelid, eflags);
+	if (!ExecPlanStillValid(estate))
+		return tidstate;
 
 	tidstate->ss.ss_currentRelation = currentRelation;
 	tidstate->ss.ss_currentScanDesc = NULL; /* no heap scan here */

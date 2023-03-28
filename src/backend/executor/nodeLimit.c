@@ -476,6 +476,8 @@ ExecInitLimit(Limit *node, EState *estate, int eflags)
 	 */
 	outerPlan = outerPlan(node);
 	outerPlanState(limitstate) = ExecInitNode(outerPlan, estate, eflags);
+	if (!ExecPlanStillValid(estate))
+		return limitstate;
 
 	/*
 	 * initialize child expressions

@@ -3134,15 +3134,18 @@ hashagg_reset_spill_state(AggState *aggstate)
 		{
 			HashAggSpill *spill = &aggstate->hash_spills[setno];
 
-			pfree(spill->ntuples);
-			pfree(spill->partitions);
+			if (spill->ntuples)
+				pfree(spill->ntuples);
+			if (spill->partitions)
+				pfree(spill->partitions);
 		}
 		pfree(aggstate->hash_spills);
 		aggstate->hash_spills = NULL;
 	}
 
 	/* free batches */
-	list_free_deep(aggstate->hash_batches);
+	if (aggstate->hash_batches)
+		list_free_deep(aggstate->hash_batches);
 	aggstate->hash_batches = NIL;
 
 	/* close tape set */
@@ -3296,6 +3299,8 @@ ExecInitAgg(Agg *node, EState *estate, int eflags)
 		eflags &= ~EXEC_FLAG_REWIND;
 	outerPlan = outerPlan(node);
 	outerPlanState(aggstate) = ExecInitNode(outerPlan, estate, eflags);
+	if (!ExecPlanStillValid(estate))
+		return aggstate;
 
 	/*
 	 * initialize source tuple type.
@@ -4336,10 +4341,13 @@ ExecEndAgg(AggState *node)
 	{
 		AggStatePerTrans pertrans = &node->pertrans[transno];
 
-		for (setno = 0; setno < numGroupingSets; setno++)
+		if (pertrans)
 		{
-			if (pertrans->sortstates[setno])
-				tuplesort_end(pertrans->sortstates[setno]);
+			for (setno = 0; setno < numGroupingSets; setno++)
+			{
+				if (pertrans->sortstates[setno])
+					tuplesort_end(pertrans->sortstates[setno]);
+			}
 		}
 	}
 
@@ -4357,7 +4365,8 @@ ExecEndAgg(AggState *node)
 	ExecFreeExprContext(&node->ss.ps);
 
 	/* clean up tuple table */
-	ExecClearTuple(node->ss.ss_ScanTupleSlot);
+	if (node->ss.ss_ScanTupleSlot)
+		ExecClearTuple(node->ss.ss_ScanTupleSlot);
 
 	outerPlan = outerPlanState(node);
 	ExecEndNode(outerPlan);

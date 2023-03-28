@@ -804,7 +804,8 @@ ExecGetRangeTableRelation(EState *estate, Index rti)
 
 		Assert(rte->rtekind == RTE_RELATION);
 
-		if (!IsParallelWorker())
+		if (!IsParallelWorker() &&
+			(estate->es_top_eflags & EXEC_FLAG_GET_LOCKS) == 0)
 		{
 			/*
 			 * In a normal query, we should already have the appropriate lock,
@@ -828,9 +829,66 @@ ExecGetRangeTableRelation(EState *estate, Index rti)
 		}
 
 		estate->es_relations[rti - 1] = rel;
+		estate->es_opened_relations = lappend(estate->es_opened_relations,
+											  rel);
 	}
 
 	return rel;
+}
+
+/*
+ * ExecLockViewRelations
+ *		Lock view relations, if any, in a given query
+ */
+void
+ExecLockViewRelations(List *viewRelations, EState *estate)
+{
+	ListCell *lc;
+
+	/* Nothing to do if no locks need to be taken. */
+	if ((estate->es_top_eflags & EXEC_FLAG_GET_LOCKS) == 0)
+		return;
+
+	foreach(lc, viewRelations)
+	{
+		Index	rti = lfirst_int(lc);
+		RangeTblEntry *rte = exec_rt_fetch(rti, estate);
+
+		Assert(OidIsValid(rte->relid));
+		Assert(rte->relkind == RELKIND_VIEW);
+		Assert(rte->rellockmode != NoLock);
+
+		LockRelationOid(rte->relid, rte->rellockmode);
+	}
+}
+
+/*
+ * ExecLockAppendNonLeafRelations
+ *		Lock non-leaf relations whose children are scanned by a given
+ *		Append/MergeAppend node
+ */
+void
+ExecLockAppendNonLeafRelations(EState *estate, List *allpartrelids)
+{
+	ListCell *l;
+
+	/* Nothing to do if no locks need to be taken. */
+	if ((estate->es_top_eflags & EXEC_FLAG_GET_LOCKS) == 0)
+		return;
+
+	foreach(l, allpartrelids)
+	{
+		Bitmapset *partrelids = lfirst_node(Bitmapset, l);
+		int		i;
+
+		i = -1;
+		while ((i = bms_next_member(partrelids, i)) > 0)
+		{
+			RangeTblEntry *rte = exec_rt_fetch(i, estate);
+
+			LockRelationOid(rte->relid, rte->rellockmode);
+		}
+	}
 }
 
 /*
@@ -848,6 +906,8 @@ ExecInitResultRelation(EState *estate, ResultRelInfo *resultRelInfo,
 	Relation	resultRelationDesc;
 
 	resultRelationDesc = ExecGetRangeTableRelation(estate, rti);
+	if (!ExecPlanStillValid(estate))
+		return;
 	InitResultRelInfo(resultRelInfo,
 					  resultRelationDesc,
 					  rti,

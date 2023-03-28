@@ -78,6 +78,9 @@ typedef struct PlannedStmt
 	List	   *permInfos;		/* list of RTEPermissionInfo nodes for rtable
 								 * entries needing one */
 
+	List	   *viewRelations;	/* integer list of RT indexes, or NIL if no
+								 * views are queried */
+
 	/* rtable indexes of target relations for INSERT/UPDATE/DELETE/MERGE */
 	List	   *resultRelations;	/* integer list of RT indexes, or NIL */
 
@@ -271,6 +274,13 @@ typedef struct Append
 	int			nasyncplans;	/* # of asynchronous plans */
 
 	/*
+	 * RTIs of all partitioned tables whose children are scanned by
+	 * appendplans. The list contains a bitmapset for every partition tree
+	 * covered by this Append.
+	 */
+	List	   *allpartrelids;
+
+	/*
 	 * All 'appendplans' preceding this index are non-partial plans. All
 	 * 'appendplans' from this index onwards are partial plans.
 	 */
@@ -293,6 +303,13 @@ typedef struct MergeAppend
 	Bitmapset  *apprelids;
 
 	List	   *mergeplans;
+
+	/*
+	 * RTIs of all partitioned tables whose children are scanned by
+	 * mergeplans. The list contains a bitmapset for every partition tree
+	 * covered by this MergeAppend.
+	 */
+	List	   *allpartrelids;
 
 	/* these fields are just like the sort-key info in struct Sort: */
 

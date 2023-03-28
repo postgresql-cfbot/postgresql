@@ -88,7 +88,11 @@ extern void ExplainOneUtility(Node *utilityStmt, IntoClause *into,
 							  ExplainState *es, const char *queryString,
 							  ParamListInfo params, QueryEnvironment *queryEnv);
 
-extern void ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into,
+extern QueryDesc *ExplainQueryDesc(PlannedStmt *stmt, struct CachedPlan *cplan,
+				 const char *queryString, IntoClause *into, ExplainState *es,
+				 ParamListInfo params, QueryEnvironment *queryEnv);
+extern void ExplainOnePlan(QueryDesc *queryDesc,
+						   IntoClause *into,
 						   ExplainState *es, const char *queryString,
 						   ParamListInfo params, QueryEnvironment *queryEnv,
 						   const instr_time *planduration,
@@ -104,6 +108,7 @@ extern void ExplainQueryParameters(ExplainState *es, ParamListInfo params, int m
 
 extern void ExplainBeginOutput(ExplainState *es);
 extern void ExplainEndOutput(ExplainState *es);
+extern void ExplainResetOutput(ExplainState *es);
 extern void ExplainSeparatePlans(ExplainState *es);
 
 extern void ExplainPropertyList(const char *qlabel, List *data,

@@ -116,6 +116,9 @@ typedef struct PlannerGlobal
 	/* "flat" list of RTEPermissionInfos */
 	List	   *finalrteperminfos;
 
+	/* "flat" list of integer RT indexes */
+	List	   *viewRelations;
+
 	/* "flat" list of PlanRowMarks */
 	List	   *finalrowmarks;
 

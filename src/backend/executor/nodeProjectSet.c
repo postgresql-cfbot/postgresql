@@ -247,6 +247,8 @@ ExecInitProjectSet(ProjectSet *node, EState *estate, int eflags)
 	 * initialize child nodes
 	 */
 	outerPlanState(state) = ExecInitNode(outerPlan(node), estate, eflags);
+	if (!ExecPlanStillValid(estate))
+		return state;
 
 	/*
 	 * we don't use inner plan
@@ -328,7 +330,8 @@ ExecEndProjectSet(ProjectSetState *node)
 	/*
 	 * clean out the tuple table
 	 */
-	ExecClearTuple(node->ps.ps_ResultTupleSlot);
+	if (node->ps.ps_ResultTupleSlot)
+		ExecClearTuple(node->ps.ps_ResultTupleSlot);
 
 	/*
 	 * shut down subplans

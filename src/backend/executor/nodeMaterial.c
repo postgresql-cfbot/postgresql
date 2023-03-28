@@ -214,6 +214,8 @@ ExecInitMaterial(Material *node, EState *estate, int eflags)
 
 	outerPlan = outerPlan(node);
 	outerPlanState(matstate) = ExecInitNode(outerPlan, estate, eflags);
+	if (!ExecPlanStillValid(estate))
+		return matstate;
 
 	/*
 	 * Initialize result type and slot. No need to initialize projection info
@@ -242,7 +244,8 @@ ExecEndMaterial(MaterialState *node)
 	/*
 	 * clean out the tuple table
 	 */
-	ExecClearTuple(node->ss.ss_ScanTupleSlot);
+	if (node->ss.ss_ScanTupleSlot)
+		ExecClearTuple(node->ss.ss_ScanTupleSlot);
 
 	/*
 	 * Release tuplestore resources

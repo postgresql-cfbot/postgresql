@@ -1249,8 +1249,13 @@ ExecParallelGetQueryDesc(shm_toc *toc, DestReceiver *receiver,
 	paramspace = shm_toc_lookup(toc, PARALLEL_KEY_PARAMLISTINFO, false);
 	paramLI = RestoreParamList(&paramspace);
 
-	/* Create a QueryDesc for the query. */
+	/*
+	 * Create a QueryDesc for the query.  Note that no CachedPlan is available
+	 * here even if the containing plan tree may have come from one in the
+	 * leader.
+	 */
 	return CreateQueryDesc(pstmt,
+						   NULL,
 						   queryString,
 						   GetActiveSnapshot(), InvalidSnapshot,
 						   receiver, paramLI, NULL, instrument_options);
@@ -1432,6 +1437,7 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 	/* Start up the executor */
 	queryDesc->plannedstmt->jitFlags = fpes->jit_flags;
 	ExecutorStart(queryDesc, fpes->eflags);
+	Assert(queryDesc->plan_valid);
 
 	/* Special executor initialization steps for parallel workers */
 	queryDesc->planstate->state->es_query_dsa = area;

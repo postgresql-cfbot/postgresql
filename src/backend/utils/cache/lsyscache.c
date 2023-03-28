@@ -2073,6 +2073,27 @@ get_rel_persistence(Oid relid)
 	return result;
 }
 
+/*
+ * get_rel_relisshared
+ *
+ *		Returns if the given relation is shared or not
+ */
+bool
+get_rel_relisshared(Oid relid)
+{
+	HeapTuple	tp;
+	Form_pg_class reltup;
+	bool		result;
+
+	tp = SearchSysCache1(RELOID, ObjectIdGetDatum(relid));
+	if (!HeapTupleIsValid(tp))
+		elog(ERROR, "cache lookup failed for relation %u", relid);
+	reltup = (Form_pg_class) GETSTRUCT(tp);
+	result = reltup->relisshared;
+	ReleaseSysCache(tp);
+
+	return result;
+}
 
 /*				---------- TRANSFORM CACHE ----------						 */
 

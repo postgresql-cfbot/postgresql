@@ -57,6 +57,7 @@ ExecInitBitmapAnd(BitmapAnd *node, EState *estate, int eflags)
 	BitmapAndState *bitmapandstate = makeNode(BitmapAndState);
 	PlanState **bitmapplanstates;
 	int			nplans;
+	int			ninited = 0;
 	int			i;
 	ListCell   *l;
 	Plan	   *initNode;
@@ -77,8 +78,6 @@ ExecInitBitmapAnd(BitmapAnd *node, EState *estate, int eflags)
 	bitmapandstate->ps.plan = (Plan *) node;
 	bitmapandstate->ps.state = estate;
 	bitmapandstate->ps.ExecProcNode = ExecBitmapAnd;
-	bitmapandstate->bitmapplans = bitmapplanstates;
-	bitmapandstate->nplans = nplans;
 
 	/*
 	 * call ExecInitNode on each of the plans to be executed and save the
@@ -89,6 +88,9 @@ ExecInitBitmapAnd(BitmapAnd *node, EState *estate, int eflags)
 	{
 		initNode = (Plan *) lfirst(l);
 		bitmapplanstates[i] = ExecInitNode(initNode, estate, eflags);
+		ninited++;
+		if (!ExecPlanStillValid(estate))
+			goto early_exit;
 		i++;
 	}
 
@@ -98,6 +100,10 @@ ExecInitBitmapAnd(BitmapAnd *node, EState *estate, int eflags)
 	 * BitmapAnd plans don't have expression contexts because they never call
 	 * ExecQual or ExecProject.  They don't need any tuple slots either.
 	 */
+
+early_exit:
+	bitmapandstate->bitmapplans = bitmapplanstates;
+	bitmapandstate->nplans = ninited;
 
 	return bitmapandstate;
 }

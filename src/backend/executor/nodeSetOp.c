@@ -528,6 +528,8 @@ ExecInitSetOp(SetOp *node, EState *estate, int eflags)
 	if (node->strategy == SETOP_HASHED)
 		eflags &= ~EXEC_FLAG_REWIND;
 	outerPlanState(setopstate) = ExecInitNode(outerPlan(node), estate, eflags);
+	if (!ExecPlanStillValid(estate))
+		return setopstate;
 	outerDesc = ExecGetResultType(outerPlanState(setopstate));
 
 	/*
@@ -583,7 +585,8 @@ void
 ExecEndSetOp(SetOpState *node)
 {
 	/* clean up tuple table */
-	ExecClearTuple(node->ps.ps_ResultTupleSlot);
+	if (node->ps.ps_ResultTupleSlot)
+		ExecClearTuple(node->ps.ps_ResultTupleSlot);
 
 	/* free subsidiary stuff including hashtable */
 	if (node->tableContext)

@@ -388,6 +388,9 @@ ExecInitNode(Plan *node, EState *estate, int eflags)
 			break;
 	}
 
+	if (!ExecPlanStillValid(estate))
+		return result;
+
 	ExecSetExecProcNode(result, result->ExecProcNode);
 
 	/*
@@ -403,6 +406,12 @@ ExecInitNode(Plan *node, EState *estate, int eflags)
 		Assert(IsA(subplan, SubPlan));
 		sstate = ExecInitSubPlan(subplan, result);
 		subps = lappend(subps, sstate);
+		if (!ExecPlanStillValid(estate))
+		{
+			/* Don't lose track of those initialized. */
+			result->initPlan = subps;
+			return result;
+		}
 	}
 	result->initPlan = subps;
 
@@ -551,6 +560,13 @@ MultiExecProcNode(PlanState *node)
  *		After this operation, the query plan will not be able to be
  *		processed any further.  This should be called only after
  *		the query plan has been fully executed.
+ *
+ *		Note: Subroutines for various node types should be prepared to handle
+ *		the cases where the corresponding ExecInitNode() subroutines may return
+ *		early if the lock taken on relation handled by a given node caused the
+ *		plan to be invalidated (ExecPlanStillValid() stops returnins true), in
+ *		which case, not all of the node's PlanState struct's fields would have
+ *		been initialized.
  * ----------------------------------------------------------------
  */
 void

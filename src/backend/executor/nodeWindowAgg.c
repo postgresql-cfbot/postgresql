@@ -1334,7 +1334,7 @@ release_partition(WindowAggState *winstate)
 		WindowStatePerFunc perfuncstate = &(winstate->perfunc[i]);
 
 		/* Release any partition-local state of this window function */
-		if (perfuncstate->winobj)
+		if (perfuncstate && perfuncstate->winobj)
 			perfuncstate->winobj->localmem = NULL;
 	}
 
@@ -1344,12 +1344,17 @@ release_partition(WindowAggState *winstate)
 	 * any aggregate temp data).  We don't rely on retail pfree because some
 	 * aggregates might have allocated data we don't have direct pointers to.
 	 */
-	MemoryContextResetAndDeleteChildren(winstate->partcontext);
-	MemoryContextResetAndDeleteChildren(winstate->aggcontext);
-	for (i = 0; i < winstate->numaggs; i++)
+	if (winstate->partcontext)
+		MemoryContextResetAndDeleteChildren(winstate->partcontext);
+	if (winstate->aggcontext)
+		MemoryContextResetAndDeleteChildren(winstate->aggcontext);
+	if (winstate->peragg)
 	{
-		if (winstate->peragg[i].aggcontext != winstate->aggcontext)
-			MemoryContextResetAndDeleteChildren(winstate->peragg[i].aggcontext);
+		for (i = 0; i < winstate->numaggs; i++)
+		{
+			if (winstate->peragg[i].aggcontext != winstate->aggcontext)
+				MemoryContextResetAndDeleteChildren(winstate->peragg[i].aggcontext);
+		}
 	}
 
 	if (winstate->buffer)
@@ -2451,6 +2456,8 @@ ExecInitWindowAgg(WindowAgg *node, EState *estate, int eflags)
 	 */
 	outerPlan = outerPlan(node);
 	outerPlanState(winstate) = ExecInitNode(outerPlan, estate, eflags);
+	if (!ExecPlanStillValid(estate))
+		return winstate;
 
 	/*
 	 * initialize source tuple type (which is also the tuple type that we'll
@@ -2679,11 +2686,16 @@ ExecEndWindowAgg(WindowAggState *node)
 
 	release_partition(node);
 
-	ExecClearTuple(node->ss.ss_ScanTupleSlot);
-	ExecClearTuple(node->first_part_slot);
-	ExecClearTuple(node->agg_row_slot);
-	ExecClearTuple(node->temp_slot_1);
-	ExecClearTuple(node->temp_slot_2);
+	if (node->ss.ss_ScanTupleSlot)
+		ExecClearTuple(node->ss.ss_ScanTupleSlot);
+	if (node->first_part_slot)
+		ExecClearTuple(node->first_part_slot);
+	if (node->agg_row_slot)
+		ExecClearTuple(node->agg_row_slot);
+	if (node->temp_slot_1)
+		ExecClearTuple(node->temp_slot_1);
+	if (node->temp_slot_2)
+		ExecClearTuple(node->temp_slot_2);
 	if (node->framehead_slot)
 		ExecClearTuple(node->framehead_slot);
 	if (node->frametail_slot)
@@ -2696,16 +2708,23 @@ ExecEndWindowAgg(WindowAggState *node)
 	node->ss.ps.ps_ExprContext = node->tmpcontext;
 	ExecFreeExprContext(&node->ss.ps);
 
-	for (i = 0; i < node->numaggs; i++)
+	if (node->peragg)
 	{
-		if (node->peragg[i].aggcontext != node->aggcontext)
-			MemoryContextDelete(node->peragg[i].aggcontext);
+		for (i = 0; i < node->numaggs; i++)
+		{
+			if (node->peragg[i].aggcontext != node->aggcontext)
+				MemoryContextDelete(node->peragg[i].aggcontext);
+		}
 	}
-	MemoryContextDelete(node->partcontext);
-	MemoryContextDelete(node->aggcontext);
+	if (node->partcontext)
+		MemoryContextDelete(node->partcontext);
+	if (node->aggcontext)
+		MemoryContextDelete(node->aggcontext);
 
-	pfree(node->perfunc);
-	pfree(node->peragg);
+	if (node->perfunc)
+		pfree(node->perfunc);
+	if (node->peragg)
+		pfree(node->peragg);
 
 	outerPlan = outerPlanState(node);
 	ExecEndNode(outerPlan);

@@ -838,6 +838,7 @@ postquel_start(execution_state *es, SQLFunctionCachePtr fcache)
 		dest = None_Receiver;
 
 	es->qd = CreateQueryDesc(es->stmt,
+							 NULL,	/* fmgr_sql() doesn't use CachedPlans */
 							 fcache->src,
 							 GetActiveSnapshot(),
 							 InvalidSnapshot,
@@ -863,6 +864,7 @@ postquel_start(execution_state *es, SQLFunctionCachePtr fcache)
 		else
 			eflags = 0;			/* default run-to-completion flags */
 		ExecutorStart(es->qd, eflags);
+		Assert(es->qd->plan_valid);
 	}
 
 	es->status = F_EXEC_RUN;

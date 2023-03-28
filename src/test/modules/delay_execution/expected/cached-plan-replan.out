@@ -1,0 +1,117 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1prep s2lock s1exec s2dropi s2unlock
+step s1prep: SET plan_cache_mode = force_generic_plan;
+		  PREPARE q AS SELECT * FROM foov WHERE a = $1;
+		  EXPLAIN (COSTS OFF) EXECUTE q (1);
+QUERY PLAN                                  
+--------------------------------------------
+Append                                      
+  Subplans Removed: 1                       
+  ->  Bitmap Heap Scan on foo11 foo_1       
+        Recheck Cond: (a = $1)              
+        ->  Bitmap Index Scan on foo11_a_idx
+              Index Cond: (a = $1)          
+(6 rows)
+
+step s2lock: SELECT pg_advisory_lock(12345);
+pg_advisory_lock
+----------------
+                
+(1 row)
+
+step s1exec: LOAD 'delay_execution';
+		  SET delay_execution.executor_start_lock_id = 12345;
+		  EXPLAIN (COSTS OFF) EXECUTE q (1); <waiting ...>
+step s2dropi: DROP INDEX foo11_a;
+step s2unlock: SELECT pg_advisory_unlock(12345);
+pg_advisory_unlock
+------------------
+t                 
+(1 row)
+
+step s1exec: <... completed>
+s1: NOTICE:  Finished ExecutorStart(): CachedPlan is not valid
+s1: NOTICE:  Finished ExecutorStart(): CachedPlan is valid
+QUERY PLAN                   
+-----------------------------
+Append                       
+  Subplans Removed: 1        
+  ->  Seq Scan on foo11 foo_1
+        Filter: (a = $1)     
+(4 rows)
+
+
+starting permutation: s1prep2 s2lock s1exec2 s2dropi s2unlock
+step s1prep2: SET plan_cache_mode = force_generic_plan;
+		  SET enable_partitionwise_aggregate = on;
+		  SET enable_partitionwise_join = on;
+		  PREPARE q2 AS SELECT t1.a, count(t2.b) FROM foo t1, foo t2 WHERE t1.a = t2.a GROUP BY 1;
+		  EXPLAIN (COSTS OFF) EXECUTE q2;
+s1: NOTICE:  Finished ExecutorStart(): CachedPlan is valid
+QUERY PLAN                                                      
+----------------------------------------------------------------
+Append                                                          
+  ->  GroupAggregate                                            
+        Group Key: t1.a                                         
+        ->  Merge Join                                          
+              Merge Cond: (t1.a = t2.a)                         
+              ->  Index Only Scan using foo11_a_idx on foo11 t1 
+              ->  Materialize                                   
+                    ->  Index Scan using foo11_a_idx on foo11 t2
+  ->  GroupAggregate                                            
+        Group Key: t1_1.a                                       
+        ->  Merge Join                                          
+              Merge Cond: (t1_1.a = t2_1.a)                     
+              ->  Sort                                          
+                    Sort Key: t1_1.a                            
+                    ->  Seq Scan on foo2 t1_1                   
+              ->  Sort                                          
+                    Sort Key: t2_1.a                            
+                    ->  Seq Scan on foo2 t2_1                   
+(18 rows)
+
+step s2lock: SELECT pg_advisory_lock(12345);
+pg_advisory_lock
+----------------
+                
+(1 row)
+
+step s1exec2: LOAD 'delay_execution';
+		  SET delay_execution.executor_start_lock_id = 12345;
+		  EXPLAIN (COSTS OFF) EXECUTE q2; <waiting ...>
+step s2dropi: DROP INDEX foo11_a;
+step s2unlock: SELECT pg_advisory_unlock(12345);
+pg_advisory_unlock
+------------------
+t                 
+(1 row)
+
+step s1exec2: <... completed>
+s1: NOTICE:  Finished ExecutorStart(): CachedPlan is not valid
+s1: NOTICE:  Finished ExecutorStart(): CachedPlan is valid
+QUERY PLAN                                   
+---------------------------------------------
+Append                                       
+  ->  GroupAggregate                         
+        Group Key: t1.a                      
+        ->  Merge Join                       
+              Merge Cond: (t1.a = t2.a)      
+              ->  Sort                       
+                    Sort Key: t1.a           
+                    ->  Seq Scan on foo11 t1 
+              ->  Sort                       
+                    Sort Key: t2.a           
+                    ->  Seq Scan on foo11 t2 
+  ->  GroupAggregate                         
+        Group Key: t1_1.a                    
+        ->  Merge Join                       
+              Merge Cond: (t1_1.a = t2_1.a)  
+              ->  Sort                       
+                    Sort Key: t1_1.a         
+                    ->  Seq Scan on foo2 t1_1
+              ->  Sort                       
+                    Sort Key: t2_1.a         
+                    ->  Seq Scan on foo2 t2_1
+(21 rows)
+

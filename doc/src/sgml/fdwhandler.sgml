@@ -289,7 +289,9 @@ EndForeignScan(ForeignScanState *node);
 
      End the scan and release resources.  It is normally not important
      to release palloc'd memory, but for example open files and connections
-     to remote servers should be cleaned up.
+     to remote servers should be cleaned up.  Note that this may be called
+     even if the corresponding <function>BeginForeignScan</function> was
+     not called by <function>ExecInitForeignScan</function>.
     </para>
 
    </sect2>

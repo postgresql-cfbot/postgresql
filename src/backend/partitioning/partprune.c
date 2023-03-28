@@ -138,7 +138,6 @@ typedef struct PruneStepResult
 } PruneStepResult;
 
 
-static List *add_part_relids(List *allpartrelids, Bitmapset *partrelids);
 static List *make_partitionedrel_pruneinfo(PlannerInfo *root,
 										   RelOptInfo *parentrel,
 										   List *prunequal,
@@ -221,33 +220,32 @@ static void partkey_datum_from_expr(PartitionPruneContext *context,
  * of scan paths for its child rels.
  * 'prunequal' is a list of potential pruning quals (i.e., restriction
  * clauses that are applicable to the appendrel).
+ * 'allpartrelids' contains Bitmapsets of RT indexes of partitioned parents
+ * whose partitions' Paths are in 'subpaths'; there's one Bitmapset for every
+ * partition tree involved.
  */
 int
 make_partition_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 						 List *subpaths,
-						 List *prunequal)
+						 List *prunequal,
+						 List *allpartrelids)
 {
 	PartitionPruneInfo *pruneinfo;
 	Bitmapset  *allmatchedsubplans = NULL;
-	List	   *allpartrelids;
 	List	   *prunerelinfos;
 	int		   *relid_subplan_map;
 	ListCell   *lc;
 	int			i;
 
+	Assert(list_length(allpartrelids) > 0);
+
 	/*
-	 * Scan the subpaths to see which ones are scans of partition child
-	 * relations, and identify their parent partitioned rels.  (Note: we must
-	 * restrict the parent partitioned rels to be parentrel or children of
-	 * parentrel, otherwise we couldn't translate prunequal to match.)
-	 *
-	 * Also construct a temporary array to map from partition-child-relation
-	 * relid to the index in 'subpaths' of the scan plan for that partition.
+	 * Construct a temporary array to map from partition-child-relation relid
+	 * to the index in 'subpaths' of the scan plan for that partition.
 	 * (Use of "subplan" rather than "subpath" is a bit of a misnomer, but
 	 * we'll let it stand.)  For convenience, we use 1-based indexes here, so
 	 * that zero can represent an un-filled array entry.
 	 */
-	allpartrelids = NIL;
 	relid_subplan_map = palloc0(sizeof(int) * root->simple_rel_array_size);
 
 	i = 1;
@@ -256,50 +254,9 @@ make_partition_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 		Path	   *path = (Path *) lfirst(lc);
 		RelOptInfo *pathrel = path->parent;
 
-		/* We don't consider partitioned joins here */
-		if (pathrel->reloptkind == RELOPT_OTHER_MEMBER_REL)
-		{
-			RelOptInfo *prel = pathrel;
-			Bitmapset  *partrelids = NULL;
-
-			/*
-			 * Traverse up to the pathrel's topmost partitioned parent,
-			 * collecting parent relids as we go; but stop if we reach
-			 * parentrel.  (Normally, a pathrel's topmost partitioned parent
-			 * is either parentrel or a UNION ALL appendrel child of
-			 * parentrel.  But when handling partitionwise joins of
-			 * multi-level partitioning trees, we can see an append path whose
-			 * parentrel is an intermediate partitioned table.)
-			 */
-			do
-			{
-				AppendRelInfo *appinfo;
-
-				Assert(prel->relid < root->simple_rel_array_size);
-				appinfo = root->append_rel_array[prel->relid];
-				prel = find_base_rel(root, appinfo->parent_relid);
-				if (!IS_PARTITIONED_REL(prel))
-					break;		/* reached a non-partitioned parent */
-				/* accept this level as an interesting parent */
-				partrelids = bms_add_member(partrelids, prel->relid);
-				if (prel == parentrel)
-					break;		/* don't traverse above parentrel */
-			} while (prel->reloptkind == RELOPT_OTHER_MEMBER_REL);
-
-			if (partrelids)
-			{
-				/*
-				 * Found some relevant parent partitions, which may or may not
-				 * overlap with partition trees we already found.  Add new
-				 * information to the allpartrelids list.
-				 */
-				allpartrelids = add_part_relids(allpartrelids, partrelids);
-				/* Also record the subplan in relid_subplan_map[] */
-				/* No duplicates please */
-				Assert(relid_subplan_map[pathrel->relid] == 0);
-				relid_subplan_map[pathrel->relid] = i;
-			}
-		}
+		/* No duplicates please */
+		Assert(relid_subplan_map[pathrel->relid] == 0);
+		relid_subplan_map[pathrel->relid] = i;
 		i++;
 	}
 
@@ -366,63 +323,6 @@ make_partition_pruneinfo(PlannerInfo *root, RelOptInfo *parentrel,
 	root->partPruneInfos = lappend(root->partPruneInfos, pruneinfo);
 
 	return list_length(root->partPruneInfos) - 1;
-}
-
-/*
- * add_part_relids
- *		Add new info to a list of Bitmapsets of partitioned relids.
- *
- * Within 'allpartrelids', there is one Bitmapset for each topmost parent
- * partitioned rel.  Each Bitmapset contains the RT indexes of the topmost
- * parent as well as its relevant non-leaf child partitions.  Since (by
- * construction of the rangetable list) parent partitions must have lower
- * RT indexes than their children, we can distinguish the topmost parent
- * as being the lowest set bit in the Bitmapset.
- *
- * 'partrelids' contains the RT indexes of a parent partitioned rel, and
- * possibly some non-leaf children, that are newly identified as parents of
- * some subpath rel passed to make_partition_pruneinfo().  These are added
- * to an appropriate member of 'allpartrelids'.
- *
- * Note that the list contains only RT indexes of partitioned tables that
- * are parents of some scan-level relation appearing in the 'subpaths' that
- * make_partition_pruneinfo() is dealing with.  Also, "topmost" parents are
- * not allowed to be higher than the 'parentrel' associated with the append
- * path.  In this way, we avoid expending cycles on partitioned rels that
- * can't contribute useful pruning information for the problem at hand.
- * (It is possible for 'parentrel' to be a child partitioned table, and it
- * is also possible for scan-level relations to be child partitioned tables
- * rather than leaf partitions.  Hence we must construct this relation set
- * with reference to the particular append path we're dealing with, rather
- * than looking at the full partitioning structure represented in the
- * RelOptInfos.)
- */
-static List *
-add_part_relids(List *allpartrelids, Bitmapset *partrelids)
-{
-	Index		targetpart;
-	ListCell   *lc;
-
-	/* We can easily get the lowest set bit this way: */
-	targetpart = bms_next_member(partrelids, -1);
-	Assert(targetpart > 0);
-
-	/* Look for a matching topmost parent */
-	foreach(lc, allpartrelids)
-	{
-		Bitmapset  *currpartrelids = (Bitmapset *) lfirst(lc);
-		Index		currtarget = bms_next_member(currpartrelids, -1);
-
-		if (targetpart == currtarget)
-		{
-			/* Found a match, so add any new RT indexes to this hierarchy */
-			currpartrelids = bms_add_members(currpartrelids, partrelids);
-			lfirst(lc) = currpartrelids;
-			return allpartrelids;
-		}
-	}
-	/* No match, so add the new partition hierarchy to the list */
-	return lappend(allpartrelids, partrelids);
 }
 
 /*

@@ -46,5 +46,8 @@ extern void add_row_identity_columns(PlannerInfo *root, Index rtindex,
 									 RangeTblEntry *target_rte,
 									 Relation target_relation);
 extern void distribute_row_identity_vars(PlannerInfo *root);
+extern List *add_append_subpath_partrelids(PlannerInfo *root, Path *subpath,
+							  RelOptInfo *parentrel,
+							  List *allpartrelids);
 
 #endif							/* APPENDINFO_H */

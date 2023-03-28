@@ -65,9 +65,10 @@ MergeAppendState *
 ExecInitMergeAppend(MergeAppend *node, EState *estate, int eflags)
 {
 	MergeAppendState *mergestate = makeNode(MergeAppendState);
-	PlanState **mergeplanstates;
+	PlanState **mergeplanstates = NULL;
 	Bitmapset  *validsubplans;
 	int			nplans;
+	int			ninited = 0;
 	int			i,
 				j;
 
@@ -80,6 +81,15 @@ ExecInitMergeAppend(MergeAppend *node, EState *estate, int eflags)
 	mergestate->ps.plan = (Plan *) node;
 	mergestate->ps.state = estate;
 	mergestate->ps.ExecProcNode = ExecMergeAppend;
+
+	/*
+	 * Lock non-leaf partitions.  In the pruning case, some of these locks
+	 * will be retaken when the partition will be opened for pruning, but it
+	 * does not seem worthwhile to spend cycles to filter those out here.
+	 */
+	ExecLockAppendNonLeafRelations(estate, node->allpartrelids);
+	if (!ExecPlanStillValid(estate))
+		goto early_exit;
 
 	/* If run-time partition pruning is enabled, then set that up now */
 	if (node->part_prune_index >= 0)
@@ -96,6 +106,8 @@ ExecInitMergeAppend(MergeAppend *node, EState *estate, int eflags)
 											  node->part_prune_index,
 											  node->apprelids,
 											  &validsubplans);
+		if (!ExecPlanStillValid(estate))
+			return mergestate;
 		mergestate->ms_prune_state = prunestate;
 		nplans = bms_num_members(validsubplans);
 
@@ -122,8 +134,6 @@ ExecInitMergeAppend(MergeAppend *node, EState *estate, int eflags)
 	}
 
 	mergeplanstates = (PlanState **) palloc(nplans * sizeof(PlanState *));
-	mergestate->mergeplans = mergeplanstates;
-	mergestate->ms_nplans = nplans;
 
 	mergestate->ms_slots = (TupleTableSlot **) palloc0(sizeof(TupleTableSlot *) * nplans);
 	mergestate->ms_heap = binaryheap_allocate(nplans, heap_compare_slots,
@@ -152,6 +162,9 @@ ExecInitMergeAppend(MergeAppend *node, EState *estate, int eflags)
 		Plan	   *initNode = (Plan *) list_nth(node->mergeplans, i);
 
 		mergeplanstates[j++] = ExecInitNode(initNode, estate, eflags);
+		ninited++;
+		if (!ExecPlanStillValid(estate))
+			goto early_exit;
 	}
 
 	mergestate->ps.ps_ProjInfo = NULL;
@@ -187,6 +200,10 @@ ExecInitMergeAppend(MergeAppend *node, EState *estate, int eflags)
 	 * initialize to show we have not run the subplans yet
 	 */
 	mergestate->ms_initialized = false;
+
+early_exit:
+	mergestate->mergeplans = mergeplanstates;
+	mergestate->ms_nplans = ninited;
 
 	return mergestate;
 }

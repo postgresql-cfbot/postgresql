@@ -61,6 +61,8 @@ ExecInitCustomScan(CustomScan *cscan, EState *estate, int eflags)
 	if (scanrelid > 0)
 	{
 		scan_rel = ExecOpenScanRelation(estate, scanrelid, eflags);
+		if (!ExecPlanStillValid(estate))
+			return css;
 		css->ss.ss_currentRelation = scan_rel;
 	}
 
@@ -127,6 +129,11 @@ ExecCustomScan(PlanState *pstate)
 void
 ExecEndCustomScan(CustomScanState *node)
 {
+	/*
+	 * XXX - BeginCustomScan() may not have occurred if ExecInitCustomScan()
+	 * hit the early exit case.  Perhaps we should document that the custom
+	 * scan provider should be ready to encounter such a situation.
+	 */
 	Assert(node->methods->EndCustomScan != NULL);
 	node->methods->EndCustomScan(node);
 
@@ -134,8 +141,10 @@ ExecEndCustomScan(CustomScanState *node)
 	ExecFreeExprContext(&node->ss.ps);
 
 	/* Clean out the tuple table */
-	ExecClearTuple(node->ss.ps.ps_ResultTupleSlot);
-	ExecClearTuple(node->ss.ss_ScanTupleSlot);
+	if (node->ss.ps.ps_ResultTupleSlot)
+		ExecClearTuple(node->ss.ps.ps_ResultTupleSlot);
+	if (node->ss.ss_ScanTupleSlot)
+		ExecClearTuple(node->ss.ss_ScanTupleSlot);
 }
 
 void

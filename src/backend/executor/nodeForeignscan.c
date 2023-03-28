@@ -173,6 +173,8 @@ ExecInitForeignScan(ForeignScan *node, EState *estate, int eflags)
 	if (scanrelid > 0)
 	{
 		currentRelation = ExecOpenScanRelation(estate, scanrelid, eflags);
+		if (!ExecPlanStillValid(estate))
+			return scanstate;
 		scanstate->ss.ss_currentRelation = currentRelation;
 		fdwroutine = GetFdwRoutineForRelation(currentRelation, true);
 	}
@@ -264,6 +266,8 @@ ExecInitForeignScan(ForeignScan *node, EState *estate, int eflags)
 	if (outerPlan(node))
 		outerPlanState(scanstate) =
 			ExecInitNode(outerPlan(node), estate, eflags);
+	if (!ExecPlanStillValid(estate))
+		return scanstate;
 
 	/*
 	 * Tell the FDW to initialize the scan.
@@ -300,14 +304,23 @@ ExecEndForeignScan(ForeignScanState *node)
 	ForeignScan *plan = (ForeignScan *) node->ss.ps.plan;
 	EState	   *estate = node->ss.ps.state;
 
-	/* Let the FDW shut down */
-	if (plan->operation != CMD_SELECT)
+	/*
+	 * Let the FDW shut down if needed.
+	 *
+	 * XXX - BeginDirectModify()/BeginForeignScan() may not have been called
+	 * if ExecInitForeignScan() returned early due to plan being invalidated
+	 * upon taking a lock on the foreign table.
+	 */
+	if (node->fdw_state)
 	{
-		if (estate->es_epq_active == NULL)
-			node->fdwroutine->EndDirectModify(node);
+		if (plan->operation != CMD_SELECT)
+		{
+			if (estate->es_epq_active == NULL)
+				node->fdwroutine->EndDirectModify(node);
+		}
+		else
+			node->fdwroutine->EndForeignScan(node);
 	}
-	else
-		node->fdwroutine->EndForeignScan(node);
 
 	/* Shut down any outer plan. */
 	if (outerPlanState(node))
@@ -319,7 +332,8 @@ ExecEndForeignScan(ForeignScanState *node)
 	/* clean out the tuple table */
 	if (node->ss.ps.ps_ResultTupleSlot)
 		ExecClearTuple(node->ss.ps.ps_ResultTupleSlot);
-	ExecClearTuple(node->ss.ss_ScanTupleSlot);
+	if (node->ss.ss_ScanTupleSlot)
+		ExecClearTuple(node->ss.ss_ScanTupleSlot);
 }
 
 /* ----------------------------------------------------------------

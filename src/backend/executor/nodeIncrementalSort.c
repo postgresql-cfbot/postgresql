@@ -1041,6 +1041,8 @@ ExecInitIncrementalSort(IncrementalSort *node, EState *estate, int eflags)
 	 * nodes may be able to do something more useful.
 	 */
 	outerPlanState(incrsortstate) = ExecInitNode(outerPlan(node), estate, eflags);
+	if (!ExecPlanStillValid(estate))
+		return incrsortstate;
 
 	/*
 	 * Initialize scan slot and type.
@@ -1080,12 +1082,16 @@ ExecEndIncrementalSort(IncrementalSortState *node)
 	SO_printf("ExecEndIncrementalSort: shutting down sort node\n");
 
 	/* clean out the scan tuple */
-	ExecClearTuple(node->ss.ss_ScanTupleSlot);
+	if (node->ss.ss_ScanTupleSlot)
+		ExecClearTuple(node->ss.ss_ScanTupleSlot);
 	/* must drop pointer to sort result tuple */
-	ExecClearTuple(node->ss.ps.ps_ResultTupleSlot);
+	if (node->ss.ps.ps_ResultTupleSlot)
+		ExecClearTuple(node->ss.ps.ps_ResultTupleSlot);
 	/* must drop standalone tuple slots from outer node */
-	ExecDropSingleTupleTableSlot(node->group_pivot);
-	ExecDropSingleTupleTableSlot(node->transfer_tuple);
+	if (node->group_pivot)
+		ExecDropSingleTupleTableSlot(node->group_pivot);
+	if (node->transfer_tuple)
+		ExecDropSingleTupleTableSlot(node->transfer_tuple);
 
 	/*
 	 * Release tuplesort resources.

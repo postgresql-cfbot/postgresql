@@ -16,6 +16,7 @@
 #include "postgres.h"
 
 #include "access/transam.h"
+#include "catalog/pg_class.h"
 #include "catalog/pg_type.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
@@ -603,6 +604,10 @@ add_rte_to_flat_rtable(PlannerGlobal *glob, List *rteperminfos,
 	if (newrte->rtekind == RTE_RELATION ||
 		(newrte->rtekind == RTE_SUBQUERY && OidIsValid(newrte->relid)))
 		glob->relationOids = lappend_oid(glob->relationOids, newrte->relid);
+
+	if (newrte->relkind == RELKIND_VIEW)
+		glob->viewRelations = lappend_int(glob->viewRelations,
+										  list_length(glob->finalrtable));
 
 	/*
 	 * Add a copy of the RTEPermissionInfo, if any, corresponding to this RTE

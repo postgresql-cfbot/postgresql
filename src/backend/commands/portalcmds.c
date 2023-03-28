@@ -146,6 +146,7 @@ PerformCursorOpen(ParseState *pstate, DeclareCursorStmt *cstmt, ParamListInfo pa
 	PortalStart(portal, params, 0, GetActiveSnapshot());
 
 	Assert(portal->strategy == PORTAL_ONE_SELECT);
+	Assert(portal->plan_valid);
 
 	/*
 	 * We're done; the query won't actually be run until PerformPortalFetch is
@@ -250,6 +251,17 @@ PerformPortalClose(const char *name)
 }
 
 /*
+ * Release a portal's QueryDesc.
+ */
+void
+PortalQueryFinish(QueryDesc *queryDesc)
+{
+	ExecutorFinish(queryDesc);
+	ExecutorEnd(queryDesc);
+	FreeQueryDesc(queryDesc);
+}
+
+/*
  * PortalCleanup
  *
  * Clean up a portal when it's dropped.  This is the standard cleanup hook
@@ -295,9 +307,7 @@ PortalCleanup(Portal portal)
 			if (portal->resowner)
 				CurrentResourceOwner = portal->resowner;
 
-			ExecutorFinish(queryDesc);
-			ExecutorEnd(queryDesc);
-			FreeQueryDesc(queryDesc);
+			PortalQueryFinish(queryDesc);
 
 			CurrentResourceOwner = saveResourceOwner;
 		}

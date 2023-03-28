@@ -1199,6 +1199,7 @@ exec_simple_query(const char *query_string)
 		 * Start the portal.  No parameters here.
 		 */
 		PortalStart(portal, NULL, 0, InvalidSnapshot);
+		Assert(portal->plan_valid);
 
 		/*
 		 * Select the appropriate output format: text unless we are doing a
@@ -1703,6 +1704,7 @@ exec_bind_message(StringInfo input_message)
 						"commands ignored until end of transaction block"),
 				 errdetail_abort()));
 
+replan:
 	/*
 	 * Create the portal.  Allow silent replacement of an existing portal only
 	 * if the unnamed portal is specified.
@@ -1994,9 +1996,18 @@ exec_bind_message(StringInfo input_message)
 		PopActiveSnapshot();
 
 	/*
-	 * And we're ready to start portal execution.
+	 * Start portal execution.  If the portal contains a cached plan, it must
+	 * be recreated if portal->plan_valid is false which tells that the cached
+	 * plan was found to have been invalidated when initializing one of the
+	 * plan trees contained in it.
 	 */
 	PortalStart(portal, params, 0, InvalidSnapshot);
+
+	if (!portal->plan_valid)
+	{
+		PortalDrop(portal, false);
+		goto replan;
+	}
 
 	/*
 	 * Apply the result format requests to the portal.

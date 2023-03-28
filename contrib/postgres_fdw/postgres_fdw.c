@@ -2659,7 +2659,11 @@ postgresBeginDirectModify(ForeignScanState *node, int eflags)
 	/* Get info about foreign table. */
 	rtindex = node->resultRelInfo->ri_RangeTableIndex;
 	if (fsplan->scan.scanrelid == 0)
+	{
 		dmstate->rel = ExecOpenScanRelation(estate, rtindex, eflags);
+		if (!ExecPlanStillValid(estate))
+			return;
+	}
 	else
 		dmstate->rel = node->ss.ss_currentRelation;
 	table = GetForeignTable(RelationGetRelid(dmstate->rel));

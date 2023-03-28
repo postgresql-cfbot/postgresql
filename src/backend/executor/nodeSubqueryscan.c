@@ -124,6 +124,8 @@ ExecInitSubqueryScan(SubqueryScan *node, EState *estate, int eflags)
 	 * initialize subquery
 	 */
 	subquerystate->subplan = ExecInitNode(node->subplan, estate, eflags);
+	if (!ExecPlanStillValid(estate))
+		return subquerystate;
 
 	/*
 	 * Initialize scan slot and type (needed by ExecAssignScanProjectionInfo)
@@ -177,7 +179,8 @@ ExecEndSubqueryScan(SubqueryScanState *node)
 	 */
 	if (node->ss.ps.ps_ResultTupleSlot)
 		ExecClearTuple(node->ss.ps.ps_ResultTupleSlot);
-	ExecClearTuple(node->ss.ss_ScanTupleSlot);
+	if (node->ss.ss_ScanTupleSlot)
+		ExecClearTuple(node->ss.ss_ScanTupleSlot);
 
 	/*
 	 * close down subquery

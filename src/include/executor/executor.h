@@ -19,6 +19,7 @@
 #include "nodes/lockoptions.h"
 #include "nodes/parsenodes.h"
 #include "utils/memutils.h"
+#include "utils/plancache.h"
 
 
 /*
@@ -61,6 +62,10 @@
  * WITH_NO_DATA indicates that we are performing REFRESH MATERIALIZED VIEW
  * ... WITH NO DATA.  Currently, the only effect is to suppress errors about
  * scanning unpopulated materialized views.
+ *
+ * GET_LOCKS indicates that the caller of ExecutorStart() is executing a
+ * cached plan which must be validated by taking the remaining locks necessary
+ * for execution.
  */
 #define EXEC_FLAG_EXPLAIN_ONLY		0x0001	/* EXPLAIN, no ANALYZE */
 #define EXEC_FLAG_EXPLAIN_GENERIC	0x0002	/* EXPLAIN (GENERIC_PLAN) */
@@ -69,6 +74,8 @@
 #define EXEC_FLAG_MARK				0x0010	/* need mark/restore */
 #define EXEC_FLAG_SKIP_TRIGGERS		0x0020	/* skip AfterTrigger setup */
 #define EXEC_FLAG_WITH_NO_DATA		0x0040	/* REFRESH ... WITH NO DATA */
+#define EXEC_FLAG_GET_LOCKS			0x0400	/* should the executor lock
+											 * relations? */
 
 
 /* Hook for plugins to get control in ExecutorStart() */
@@ -255,6 +262,13 @@ extern void ExecEndNode(PlanState *node);
 extern void ExecShutdownNode(PlanState *node);
 extern void ExecSetTupleBound(int64 tuples_needed, PlanState *child_node);
 
+/* Is the cached plan*/
+static inline bool
+ExecPlanStillValid(EState *estate)
+{
+	return estate->es_cachedplan == NULL ? true :
+		CachedPlanStillValid(estate->es_cachedplan);
+}
 
 /* ----------------------------------------------------------------
  *		ExecProcNode
@@ -589,6 +603,8 @@ exec_rt_fetch(Index rti, EState *estate)
 }
 
 extern Relation ExecGetRangeTableRelation(EState *estate, Index rti);
+extern void ExecLockViewRelations(List *viewRelations, EState *estate);
+extern void ExecLockAppendNonLeafRelations(EState *estate, List *allpartrelids);
 extern void ExecInitResultRelation(EState *estate, ResultRelInfo *resultRelInfo,
 								   Index rti);
 

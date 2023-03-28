@@ -342,7 +342,8 @@ ExecEndTidRangeScan(TidRangeScanState *node)
 	 */
 	if (node->ss.ps.ps_ResultTupleSlot)
 		ExecClearTuple(node->ss.ps.ps_ResultTupleSlot);
-	ExecClearTuple(node->ss.ss_ScanTupleSlot);
+	if (node->ss.ss_ScanTupleSlot)
+		ExecClearTuple(node->ss.ss_ScanTupleSlot);
 }
 
 /* ----------------------------------------------------------------
@@ -386,6 +387,8 @@ ExecInitTidRangeScan(TidRangeScan *node, EState *estate, int eflags)
 	 * open the scan relation
 	 */
 	currentRelation = ExecOpenScanRelation(estate, node->scan.scanrelid, eflags);
+	if (!ExecPlanStillValid(estate))
+		return tidrangestate;
 
 	tidrangestate->ss.ss_currentRelation = currentRelation;
 	tidrangestate->ss.ss_currentScanDesc = NULL;	/* no table scan here */

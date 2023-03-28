@@ -58,6 +58,7 @@ ExecInitBitmapOr(BitmapOr *node, EState *estate, int eflags)
 	BitmapOrState *bitmaporstate = makeNode(BitmapOrState);
 	PlanState **bitmapplanstates;
 	int			nplans;
+	int			ninited = 0;
 	int			i;
 	ListCell   *l;
 	Plan	   *initNode;
@@ -78,8 +79,6 @@ ExecInitBitmapOr(BitmapOr *node, EState *estate, int eflags)
 	bitmaporstate->ps.plan = (Plan *) node;
 	bitmaporstate->ps.state = estate;
 	bitmaporstate->ps.ExecProcNode = ExecBitmapOr;
-	bitmaporstate->bitmapplans = bitmapplanstates;
-	bitmaporstate->nplans = nplans;
 
 	/*
 	 * call ExecInitNode on each of the plans to be executed and save the
@@ -90,6 +89,9 @@ ExecInitBitmapOr(BitmapOr *node, EState *estate, int eflags)
 	{
 		initNode = (Plan *) lfirst(l);
 		bitmapplanstates[i] = ExecInitNode(initNode, estate, eflags);
+		ninited++;
+		if (!ExecPlanStillValid(estate))
+			goto early_exit;
 		i++;
 	}
 
@@ -99,6 +101,10 @@ ExecInitBitmapOr(BitmapOr *node, EState *estate, int eflags)
 	 * BitmapOr plans don't have expression contexts because they never call
 	 * ExecQual or ExecProject.  They don't need any tuple slots either.
 	 */
+
+early_exit:
+	bitmaporstate->bitmapplans = bitmapplanstates;
+	bitmaporstate->nplans = ninited;
 
 	return bitmaporstate;
 }

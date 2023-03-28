@@ -136,6 +136,8 @@ ExecInitUnique(Unique *node, EState *estate, int eflags)
 	 * then initialize outer plan
 	 */
 	outerPlanState(uniquestate) = ExecInitNode(outerPlan(node), estate, eflags);
+	if (!ExecPlanStillValid(estate))
+		return uniquestate;
 
 	/*
 	 * Initialize result slot and type. Unique nodes do no projections, so
@@ -169,7 +171,8 @@ void
 ExecEndUnique(UniqueState *node)
 {
 	/* clean up tuple table */
-	ExecClearTuple(node->ps.ps_ResultTupleSlot);
+	if (node->ps.ps_ResultTupleSlot)
+		ExecClearTuple(node->ps.ps_ResultTupleSlot);
 
 	ExecFreeExprContext(&node->ps);
 

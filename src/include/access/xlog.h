@@ -207,6 +207,7 @@ extern int	XLogFileOpen(XLogSegNo segno, TimeLineID tli);
 extern void CheckXLogRemoved(XLogSegNo segno, TimeLineID tli);
 extern XLogSegNo XLogGetLastRemovedSegno(void);
 extern void XLogSetAsyncXactLSN(XLogRecPtr asyncXactLSN);
+extern void WakeupWALWriter(void);
 extern void XLogSetReplicationSlotMinimumLSN(XLogRecPtr lsn);
 
 extern void xlog_redo(struct XLogReaderState *record);

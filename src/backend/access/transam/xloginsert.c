@@ -503,6 +503,12 @@ XLogInsert(RmgrId rmid, uint8 info)
 
 	XLogResetInsertion();
 
+	/*
+	 * XXX: Effects of calling WakeupWALWriter() in XLogInsert() needs to be
+	 * measured, say with high-write workload.
+	 */
+	WakeupWALWriter();
+
 	return EndPos;
 }
 

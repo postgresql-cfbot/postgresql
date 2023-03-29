@@ -3792,6 +3792,16 @@ raw_expression_tree_walker_impl(Node *node,
 					return true;
 			}
 			break;
+		case T_LetStmt:
+			{
+				LetStmt    *stmt = (LetStmt *) node;
+
+				if (WALK(stmt->target))
+					return true;
+				if (WALK(stmt->query))
+					return true;
+			}
+			break;
 		case T_PLAssignStmt:
 			{
 				PLAssignStmt *stmt = (PLAssignStmt *) node;

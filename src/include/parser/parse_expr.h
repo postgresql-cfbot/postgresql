@@ -17,9 +17,11 @@
 
 /* GUC parameters */
 extern PGDLLIMPORT bool Transform_null_equals;
+extern PGDLLIMPORT bool session_variables_ambiguity_warning;
 
 extern Node *transformExpr(ParseState *pstate, Node *expr, ParseExprKind exprKind);
 
 extern const char *ParseExprKindName(ParseExprKind exprKind);
+extern bool expr_kind_allows_session_variables(ParseExprKind p_expr_kind);
 
 #endif							/* PARSE_EXPR_H */

@@ -1998,9 +1998,13 @@ get_call_expr_arg_stable(Node *expr, int argnum)
 	 */
 	if (IsA(arg, Const))
 		return true;
-	if (IsA(arg, Param) &&
-		((Param *) arg)->paramkind == PARAM_EXTERN)
-		return true;
+	if (IsA(arg, Param))
+	{
+		Param	   *p = (Param *) arg;
+
+		if (p->paramkind == PARAM_EXTERN || p->paramkind == PARAM_VARIABLE)
+			return true;
+	}
 
 	return false;
 }

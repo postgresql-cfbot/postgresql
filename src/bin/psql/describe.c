@@ -5089,6 +5089,102 @@ error_return:
 	return false;
 }
 
+/*
+ * \dV
+ *
+ * listVariables()
+ */
+bool
+listVariables(const char *pattern, bool verbose)
+{
+	PQExpBufferData buf;
+	PGresult   *res;
+	printQueryOpt myopt = pset.popt;
+	static const bool translate_columns[] = {false, false, false, false, false, false, false, false, false, false, false};
+
+	initPQExpBuffer(&buf);
+
+	printfPQExpBuffer(&buf,
+					  "SELECT n.nspname as \"%s\",\n"
+					  "  v.varname as \"%s\",\n"
+					  "  pg_catalog.format_type(v.vartype, v.vartypmod) as \"%s\",\n"
+					  "  (SELECT c.collname FROM pg_catalog.pg_collation c, pg_catalog.pg_type bt\n"
+					  "   WHERE c.oid = v.varcollation AND bt.oid = v.vartype AND v.varcollation <> bt.typcollation) as \"%s\",\n"
+					  "  NOT v.varisnotnull as \"%s\",\n"
+					  "  NOT v.varisimmutable as \"%s\",\n"
+					  "  pg_catalog.pg_get_expr(v.vardefexpr, 0) as \"%s\",\n"
+					  "  pg_catalog.pg_get_userbyid(v.varowner) as \"%s\",\n"
+					  "  CASE v.vareoxaction\n"
+					  "    WHEN 'd' THEN 'ON COMMIT DROP'\n"
+					  "    WHEN 'r' THEN 'ON TRANSACTION END RESET' END as \"%s\"\n",
+					  gettext_noop("Schema"),
+					  gettext_noop("Name"),
+					  gettext_noop("Type"),
+					  gettext_noop("Collation"),
+					  gettext_noop("Nullable"),
+					  gettext_noop("Mutable"),
+					  gettext_noop("Default"),
+					  gettext_noop("Owner"),
+					  gettext_noop("Transactional end action"));
+
+	if (verbose)
+	{
+		appendPQExpBufferStr(&buf, ",\n  ");
+		printACLColumn(&buf, "v.varacl");
+		appendPQExpBuffer(&buf,
+						  ",\n  pg_catalog.obj_description(v.oid, 'pg_variable') AS \"%s\"",
+						  gettext_noop("Description"));
+	}
+
+	appendPQExpBufferStr(&buf,
+						 "\nFROM pg_catalog.pg_variable v"
+						 "\n     LEFT JOIN pg_catalog.pg_namespace n ON n.oid = v.varnamespace");
+
+	appendPQExpBufferStr(&buf, "\nWHERE true\n");
+	if (!pattern)
+		appendPQExpBufferStr(&buf, "      AND n.nspname <> 'pg_catalog'\n"
+							 "      AND n.nspname <> 'information_schema'\n");
+
+	if (!validateSQLNamePattern(&buf, pattern, true, false,
+								"n.nspname", "v.varname", NULL,
+								"pg_catalog.pg_variable_is_visible(v.oid)",
+								NULL, 3))
+		return false;
+
+	appendPQExpBufferStr(&buf, "ORDER BY 1,2;");
+
+	res = PSQLexec(buf.data);
+	termPQExpBuffer(&buf);
+	if (!res)
+		return false;
+
+	/*
+	 * Most functions in this file are content to print an empty table when
+	 * there are no matching objects.  We intentionally deviate from that
+	 * here, but only in !quiet mode, for historical reasons.
+	 */
+	if (PQntuples(res) == 0 && !pset.quiet)
+	{
+		if (pattern)
+			pg_log_error("Did not find any session variable named \"%s\".",
+						 pattern);
+		else
+			pg_log_error("Did not find any session variables.");
+	}
+	else
+	{
+		myopt.nullPrint = NULL;
+		myopt.title = _("List of variables");
+		myopt.translate_header = true;
+		myopt.translate_columns = translate_columns;
+		myopt.n_translate_columns = lengthof(translate_columns);
+
+		printQuery(res, &myopt, pset.queryFout, false, pset.logfile);
+	}
+
+	PQclear(res);
+	return true;
+}
 
 /*
  * \dFp

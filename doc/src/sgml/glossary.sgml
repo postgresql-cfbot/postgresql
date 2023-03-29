@@ -1534,6 +1534,22 @@
    </glossdef>
   </glossentry>
 
+  <glossentry id="glossary-session-variable">
+   <glossterm>Session variable</glossterm>
+   <glossdef>
+    <para>
+     A persistent database object that holds a value in session memory.  This
+     memory is not shared across sessions, and after session end, this memory
+     (the value) is released. The access (read or write) to session variables
+     is controlled by access rights similarly to other database object access
+     rights.
+    </para>
+    <para>
+     For more information, see <xref linkend="ddl-session-variables"/>.
+    </para>
+   </glossdef>
+  </glossentry>
+
   <glossentry id="glossary-shared-memory">
    <glossterm>Shared memory</glossterm>
    <glossdef>

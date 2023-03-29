@@ -158,6 +158,7 @@ typedef enum ExprEvalOp
 	EEOP_PARAM_EXEC,
 	EEOP_PARAM_EXTERN,
 	EEOP_PARAM_CALLBACK,
+	EEOP_PARAM_VARIABLE,
 
 	/* return CaseTestExpr value */
 	EEOP_CASE_TESTVAL,
@@ -380,6 +381,13 @@ typedef struct ExprEvalStep
 			int			paramid;	/* numeric ID for parameter */
 			Oid			paramtype;	/* OID of parameter's datatype */
 		}			param;
+
+		/* for EEOP_PARAM_VARIABLE */
+		struct
+		{
+			Oid			varid;	/* OID of assigned variable */
+			Oid			vartype;	/* OID of parameter's datatype */
+		}			vparam;
 
 		/* for EEOP_PARAM_CALLBACK */
 		struct
@@ -738,6 +746,9 @@ extern void ExecEvalParamExec(ExprState *state, ExprEvalStep *op,
 							  ExprContext *econtext);
 extern void ExecEvalParamExtern(ExprState *state, ExprEvalStep *op,
 								ExprContext *econtext);
+extern void ExecEvalParamVariable(ExprState *state, ExprEvalStep *op,
+								  ExprContext *econtext);
+extern void ExecEvalSQLValueFunction(ExprState *state, ExprEvalStep *op);
 extern void ExecEvalCurrentOfExpr(ExprState *state, ExprEvalStep *op);
 extern void ExecEvalNextValueExpr(ExprState *state, ExprEvalStep *op);
 extern void ExecEvalRowNull(ExprState *state, ExprEvalStep *op,

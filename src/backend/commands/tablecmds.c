@@ -47,6 +47,7 @@
 #include "catalog/pg_tablespace.h"
 #include "catalog/pg_trigger.h"
 #include "catalog/pg_type.h"
+#include "catalog/pg_variable.h"
 #include "catalog/storage.h"
 #include "catalog/storage_xlog.h"
 #include "catalog/toasting.h"
@@ -6471,6 +6472,8 @@ ATTypedTableRecursion(List **wqueue, Relation rel, AlterTableCmd *cmd,
  * Eventually, we'd like to propagate the check or rewrite operation
  * into such tables, but for now, just error out if we find any.
  *
+ * Check if the type "typeOid" is used as type of some session variable too.
+ *
  * Caller should provide either the associated relation of a rowtype,
  * or a type name (not both) for use in the error message, if any.
  *
@@ -6530,6 +6533,45 @@ find_composite_type_dependencies(Oid typeOid, Relation origRelation,
 			 */
 			find_composite_type_dependencies(pg_depend->objid,
 											 origRelation, origTypeName);
+			continue;
+		}
+
+		/* Don't allow change of type used by session's variable */
+		if (pg_depend->classid == VariableRelationId)
+		{
+			Oid			varid = pg_depend->objid;
+
+			if (origTypeName)
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("cannot alter type \"%s\" because session variable \"%s.%s\" uses it",
+								origTypeName,
+								get_namespace_name(get_session_variable_namespace(varid)),
+								get_session_variable_name(varid))));
+			else if (origRelation->rd_rel->relkind == RELKIND_COMPOSITE_TYPE)
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("cannot alter type \"%s\" because session variable \"%s.%s\" uses it",
+								RelationGetRelationName(origRelation),
+								get_namespace_name(get_session_variable_namespace(varid)),
+								get_session_variable_name(varid))));
+			else if (origRelation->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("cannot alter foreign table \"%s\" because session variable \"%s.%s\" uses it",
+								RelationGetRelationName(origRelation),
+								get_namespace_name(get_session_variable_namespace(varid)),
+								get_session_variable_name(varid))));
+			else if (origRelation->rd_rel->relkind == RELKIND_RELATION ||
+					 origRelation->rd_rel->relkind == RELKIND_MATVIEW ||
+					 origRelation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("cannot alter table \"%s\" because session variable \"%s.%s\" uses it",
+								RelationGetRelationName(origRelation),
+								get_namespace_name(get_session_variable_namespace(varid)),
+								get_session_variable_name(varid))));
+
 			continue;
 		}
 
@@ -12808,6 +12850,7 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 			case OCLASS_PUBLICATION_REL:
 			case OCLASS_SUBSCRIPTION:
 			case OCLASS_TRANSFORM:
+			case OCLASS_VARIABLE:
 
 				/*
 				 * We don't expect any of these sorts of objects to depend on

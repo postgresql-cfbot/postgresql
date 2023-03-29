@@ -10429,6 +10429,66 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-session-variables-ambiguity-warning" xreflabel="session_variables_ambiguity_warning">
+      <term><varname>session_variables_ambiguity_warning</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>session_variables_ambiguity_warning</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        When on, a warning is raised when any identifier in a query could be
+        used as both a column identifier, routine variable or a session
+        variable identifier. The default is <literal>off</literal>.
+       </para>
+       <para>
+        Session variables can be shadowed by column references in a query, this
+        is an expected behavior.  Previously working queries shouldn't error out
+        by creating any session variable, so session variables are always shadowed
+        if an identifier is ambiguous.  Variables should be referenced using
+        anunambiguous identifier without any possibility for a collision with
+        identifier of other database objects (column names or record fields names).
+        The warning messages emitted when enabling <varname>session_variables_ambiguity_warning</varname>
+        can help finding such identifier collision.
+<programlisting>
+CREATE TABLE foo(a int);
+INSERT INTO foo VALUES(10);
+CREATE VARIABLE a int;
+LET a = 100;
+SELECT a FROM foo;
+</programlisting>
+
+<screen>
+ a  
+----
+ 10
+(1 row)
+</screen>
+
+<programlisting>
+SET session_variables_ambiguity_warning TO on;
+SELECT a FROM foo;
+</programlisting>
+
+<screen>
+WARNING:  session variable "a" is shadowed
+LINE 1: SELECT a FROM foo;
+               ^
+DETAIL:  Session variables can be shadowed by columns, routine's variables and routine's arguments with the same name.
+ a  
+----
+ 10
+(1 row)
+</screen>
+       </para>
+       <para>
+        This feature can significantly increase log size, so it's disabled by
+        default.  For testing or development environments it's recommended to
+        enable it if you use session variables.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-standard-conforming-strings" xreflabel="standard_conforming_strings">
       <term><varname>standard_conforming_strings</varname> (<type>boolean</type>)
       <indexterm><primary>strings</primary><secondary>standard conforming</secondary></indexterm>

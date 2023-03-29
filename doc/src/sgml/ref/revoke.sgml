@@ -137,6 +137,13 @@ REVOKE [ { ADMIN | INHERIT | SET } OPTION FOR ]
   | CURRENT_ROLE
   | CURRENT_USER
   | SESSION_USER
+
+REVOKE [ GRANT OPTION FOR ]
+    { { SELECT | UPDATE } [, ...] | ALL [ PRIVILEGES ] }
+    ON VARIABLE <replaceable>variable_name</replaceable> [, ...]
+       | ALL VARIABLES IN SCHEMA <replaceable class="parameter">schema_name</replaceable> [, ...] }
+    FROM { [ GROUP ] <replaceable class="parameter">role_name</replaceable> | PUBLIC } [, ...]
+    [ CASCADE | RESTRICT ]
 </synopsis>
  </refsynopsisdiv>
 

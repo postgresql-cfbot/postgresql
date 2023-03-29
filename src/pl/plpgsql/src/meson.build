@@ -86,6 +86,7 @@ tests += {
       'plpgsql_trap',
       'plpgsql_trigger',
       'plpgsql_varprops',
+      'plpgsql_with_return',
     ],
   },
 }

@@ -3010,6 +3010,7 @@ typedef struct SecLabelStmt
 #define CURSOR_OPT_INSENSITIVE	0x0008	/* INSENSITIVE */
 #define CURSOR_OPT_ASENSITIVE	0x0010	/* ASENSITIVE */
 #define CURSOR_OPT_HOLD			0x0020	/* WITH HOLD */
+#define CURSOR_OPT_RETURN		0x0040	/* WITH RETURN */
 /* these planner-control flags do not correspond to any SQL grammar: */
 #define CURSOR_OPT_FAST_PLAN	0x0100	/* prefer fast-start plan */
 #define CURSOR_OPT_GENERIC_PLAN 0x0200	/* force use of generic plan */

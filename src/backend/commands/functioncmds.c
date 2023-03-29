@@ -72,6 +72,7 @@
 #include "utils/guc.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
+#include "utils/portal.h"
 #include "utils/rel.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
@@ -513,7 +514,8 @@ compute_common_attribute(ParseState *pstate,
 						 DefElem **cost_item,
 						 DefElem **rows_item,
 						 DefElem **support_item,
-						 DefElem **parallel_item)
+						 DefElem **parallel_item,
+						 DefElem **dynres_item)
 {
 	if (strcmp(defel->defname, "volatility") == 0)
 	{
@@ -589,11 +591,27 @@ compute_common_attribute(ParseState *pstate,
 
 		*parallel_item = defel;
 	}
+	else if (strcmp(defel->defname, "dynamic_result_sets") == 0)
+	{
+		if (!is_procedure)
+			goto function_error;
+		if (*dynres_item)
+			errorConflictingDefElem(defel, pstate);
+
+		*dynres_item = defel;
+	}
 	else
 		return false;
 
 	/* Recognized an option */
 	return true;
+
+function_error:
+	ereport(ERROR,
+			(errcode(ERRCODE_INVALID_FUNCTION_DEFINITION),
+			 errmsg("invalid attribute in function definition"),
+			 parser_errposition(pstate, defel->location)));
+	return false;
 
 procedure_error:
 	ereport(ERROR,
@@ -731,7 +749,8 @@ compute_function_attributes(ParseState *pstate,
 							float4 *procost,
 							float4 *prorows,
 							Oid *prosupport,
-							char *parallel_p)
+							char *parallel_p,
+							int *dynres_p)
 {
 	ListCell   *option;
 	DefElem    *as_item = NULL;
@@ -747,6 +766,7 @@ compute_function_attributes(ParseState *pstate,
 	DefElem    *rows_item = NULL;
 	DefElem    *support_item = NULL;
 	DefElem    *parallel_item = NULL;
+	DefElem    *dynres_item = NULL;
 
 	foreach(option, options)
 	{
@@ -792,7 +812,8 @@ compute_function_attributes(ParseState *pstate,
 										  &cost_item,
 										  &rows_item,
 										  &support_item,
-										  &parallel_item))
+										  &parallel_item,
+										  &dynres_item))
 		{
 			/* recognized common option */
 			continue;
@@ -840,6 +861,11 @@ compute_function_attributes(ParseState *pstate,
 		*prosupport = interpret_func_support(support_item);
 	if (parallel_item)
 		*parallel_p = interpret_func_parallel(parallel_item);
+	if (dynres_item)
+	{
+		*dynres_p = intVal(dynres_item->arg);
+		Assert(*dynres_p >= 0);	/* enforced by parser */
+	}
 }
 
 
@@ -1051,6 +1077,7 @@ CreateFunction(ParseState *pstate, CreateFunctionStmt *stmt)
 	Form_pg_language languageStruct;
 	List	   *as_clause;
 	char		parallel;
+	int			dynres;
 
 	/* Convert list of names to a name and namespace */
 	namespaceId = QualifiedNameGetCreationNamespace(stmt->funcname,
@@ -1075,6 +1102,7 @@ CreateFunction(ParseState *pstate, CreateFunctionStmt *stmt)
 	prorows = -1;				/* indicates not set */
 	prosupport = InvalidOid;
 	parallel = PROPARALLEL_UNSAFE;
+	dynres = 0;
 
 	/* Extract non-default attributes from stmt->options list */
 	compute_function_attributes(pstate,
@@ -1084,7 +1112,7 @@ CreateFunction(ParseState *pstate, CreateFunctionStmt *stmt)
 								&isWindowFunc, &volatility,
 								&isStrict, &security, &isLeakProof,
 								&proconfig, &procost, &prorows,
-								&prosupport, &parallel);
+								&prosupport, &parallel, &dynres);
 
 	if (!language)
 	{
@@ -1285,7 +1313,8 @@ CreateFunction(ParseState *pstate, CreateFunctionStmt *stmt)
 						   PointerGetDatum(proconfig),
 						   prosupport,
 						   procost,
-						   prorows);
+						   prorows,
+						   dynres);
 }
 
 /*
@@ -1362,6 +1391,7 @@ AlterFunction(ParseState *pstate, AlterFunctionStmt *stmt)
 	DefElem    *rows_item = NULL;
 	DefElem    *support_item = NULL;
 	DefElem    *parallel_item = NULL;
+	DefElem    *dynres_item = NULL;
 	ObjectAddress address;
 
 	rel = table_open(ProcedureRelationId, RowExclusiveLock);
@@ -1405,7 +1435,8 @@ AlterFunction(ParseState *pstate, AlterFunctionStmt *stmt)
 									 &cost_item,
 									 &rows_item,
 									 &support_item,
-									 &parallel_item) == false)
+									 &parallel_item,
+									 &dynres_item) == false)
 			elog(ERROR, "option \"%s\" not recognized", defel->defname);
 	}
 
@@ -1467,6 +1498,8 @@ AlterFunction(ParseState *pstate, AlterFunctionStmt *stmt)
 	}
 	if (parallel_item)
 		procForm->proparallel = interpret_func_parallel(parallel_item);
+	if (dynres_item)
+		procForm->prodynres = intVal(dynres_item->arg);
 	if (set_items)
 	{
 		Datum		datum;
@@ -2044,6 +2077,17 @@ IsThereFunctionInNamespace(const char *proname, int pronargs,
 						get_namespace_name(nspOid))));
 }
 
+static List *procedure_stack;
+
+Oid
+CurrentProcedure(void)
+{
+	if (!procedure_stack)
+		return InvalidOid;
+	else
+		return llast_oid(procedure_stack);
+}
+
 /*
  * ExecuteDoStmt
  *		Execute inline procedural-language code
@@ -2140,8 +2184,19 @@ ExecuteDoStmt(ParseState *pstate, DoStmt *stmt, bool atomic)
 
 	ReleaseSysCache(languageTuple);
 
-	/* execute the inline handler */
-	OidFunctionCall1(laninline, PointerGetDatum(codeblock));
+	procedure_stack = lappend_oid(procedure_stack, InvalidOid);
+	PG_TRY();
+	{
+		/* execute the inline handler */
+		OidFunctionCall1(laninline, PointerGetDatum(codeblock));
+	}
+	PG_FINALLY();
+	{
+		procedure_stack = list_delete_last(procedure_stack);
+	}
+	PG_END_TRY();
+
+	CloseOtherReturnableCursors(InvalidOid);
 }
 
 /*
@@ -2183,6 +2238,7 @@ ExecuteCallStmt(CallStmt *stmt, ParamListInfo params, bool atomic, DestReceiver 
 	AclResult	aclresult;
 	FmgrInfo	flinfo;
 	CallContext *callcontext;
+	int			prodynres;
 	EState	   *estate;
 	ExprContext *econtext;
 	HeapTuple	tp;
@@ -2222,6 +2278,8 @@ ExecuteCallStmt(CallStmt *stmt, ParamListInfo params, bool atomic, DestReceiver 
 	 */
 	if (((Form_pg_proc) GETSTRUCT(tp))->prosecdef)
 		callcontext->atomic = true;
+
+	prodynres = ((Form_pg_proc) GETSTRUCT(tp))->prodynres;
 
 	ReleaseSysCache(tp);
 
@@ -2283,7 +2341,18 @@ ExecuteCallStmt(CallStmt *stmt, ParamListInfo params, bool atomic, DestReceiver 
 
 	/* Here we actually call the procedure */
 	pgstat_init_function_usage(fcinfo, &fcusage);
-	retval = FunctionCallInvoke(fcinfo);
+
+	procedure_stack = lappend_oid(procedure_stack, fexpr->funcid);
+	PG_TRY();
+	{
+		retval = FunctionCallInvoke(fcinfo);
+	}
+	PG_FINALLY();
+	{
+		procedure_stack = list_delete_last(procedure_stack);
+	}
+	PG_END_TRY();
+
 	pgstat_end_function_usage(&fcusage, true);
 
 	/* Handle the procedure's outputs */
@@ -2344,6 +2413,13 @@ ExecuteCallStmt(CallStmt *stmt, ParamListInfo params, bool atomic, DestReceiver 
 			 fexpr->funcresulttype);
 
 	FreeExecutorState(estate);
+
+	CloseOtherReturnableCursors(fexpr->funcid);
+
+	if (list_length(GetReturnableCursors()) > prodynres)
+		ereport(WARNING,
+				errcode(ERRCODE_WARNING_ATTEMPT_TO_RETURN_TOO_MANY_RESULT_SETS),
+				errmsg("attempt to return too many result sets"));
 }
 
 /*

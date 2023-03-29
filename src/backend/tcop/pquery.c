@@ -641,6 +641,8 @@ PortalSetResultFormat(Portal portal, int nFormats, int16 *formats)
 					 errmsg("bind message has %d result formats but query has %d columns",
 							nFormats, natts)));
 		memcpy(portal->formats, formats, natts * sizeof(int16));
+
+		portal->dynamic_format = 0;
 	}
 	else if (nFormats > 0)
 	{
@@ -649,12 +651,16 @@ PortalSetResultFormat(Portal portal, int nFormats, int16 *formats)
 
 		for (i = 0; i < natts; i++)
 			portal->formats[i] = format1;
+
+		portal->dynamic_format = format1;
 	}
 	else
 	{
 		/* use default format for all columns */
 		for (i = 0; i < natts; i++)
 			portal->formats[i] = 0;
+
+		portal->dynamic_format = 0;
 	}
 }
 

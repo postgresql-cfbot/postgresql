@@ -2514,6 +2514,21 @@ parse_hba_auth_opt(char *name, char *val, HbaLine *hbaline,
 		hbaline->radiusidentifiers = parsed_identifiers;
 		hbaline->radiusidentifiers_s = pstrdup(val);
 	}
+	else if (strcmp(name, "radiustimeout") == 0)
+	{
+		REQUIRE_AUTH_OPTION(uaRADIUS, "radiustimeout", "radius");
+
+		if ((hbaline->radiustimeout = atoi(val)) <= 0)
+		{
+			ereport(elevel,
+					(errcode(ERRCODE_CONFIG_FILE_ERROR),
+					 errmsg("could not parse RADIUS timeout \"%s\"",
+							val),
+					 errcontext("line %d of configuration file \"%s\"",
+								line_num, file_name)));
+			return false;
+		}
+	}
 	else
 	{
 		ereport(elevel,

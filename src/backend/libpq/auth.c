@@ -199,7 +199,7 @@ static int	pg_SSPI_make_upn(char *accountname,
  *----------------------------------------------------------------
  */
 static int	CheckRADIUSAuth(Port *port);
-static int	PerformRadiusTransaction(const char *server, const char *secret, const char *portstr, const char *identifier, const char *user_name, const char *passwd);
+static int	PerformRadiusTransaction(const char *server, const char *secret, const char *portstr, const char *identifier, const char *user_name, const char *passwd, int timeout);
 
 
 /*
@@ -2812,9 +2812,6 @@ typedef struct
 /* RADIUS service types */
 #define RADIUS_AUTHENTICATE_ONLY	8
 
-/* Seconds to wait - XXX: should be in a config variable! */
-#define RADIUS_TIMEOUT 3
-
 static void
 radius_add_attribute(radius_packet *packet, uint8 type, const unsigned char *data, int len)
 {
@@ -2849,6 +2846,7 @@ CheckRADIUSAuth(Port *port)
 			   *secrets,
 			   *radiusports,
 			   *identifiers;
+	int			timeout;
 
 	/* Make sure struct alignment is correct */
 	Assert(offsetof(radius_packet, vector) == 4);
@@ -2867,6 +2865,10 @@ CheckRADIUSAuth(Port *port)
 				(errmsg("RADIUS secret not specified")));
 		return STATUS_ERROR;
 	}
+
+	timeout = port->hba->radiustimeout;
+	if (timeout == 0)
+		timeout = 3000;			/* default to 3 seconds */
 
 	/* Send regular password request to client, and get the response */
 	sendAuthRequest(port, AUTH_REQ_PASSWORD, NULL, 0);
@@ -2896,7 +2898,8 @@ CheckRADIUSAuth(Port *port)
 												   radiusports ? lfirst(radiusports) : NULL,
 												   identifiers ? lfirst(identifiers) : NULL,
 												   port->user_name,
-												   passwd);
+												   passwd,
+												   timeout);
 
 		/*------
 		 * STATUS_OK = Login OK
@@ -2937,7 +2940,13 @@ CheckRADIUSAuth(Port *port)
 }
 
 static int
-PerformRadiusTransaction(const char *server, const char *secret, const char *portstr, const char *identifier, const char *user_name, const char *passwd)
+PerformRadiusTransaction(const char *server,
+						 const char *secret,
+						 const char *portstr,
+						 const char *identifier,
+						 const char *user_name,
+						 const char *passwd,
+						 int timeout)
 {
 	radius_packet radius_send_pack;
 	radius_packet radius_recv_pack;
@@ -2959,8 +2968,7 @@ PerformRadiusTransaction(const char *server, const char *secret, const char *por
 	struct addrinfo *serveraddrs;
 	int			port;
 	socklen_t	addrsize;
-	fd_set		fdset;
-	struct timeval endtime;
+	TimestampTz endtime;
 	int			i,
 				j,
 				r;
@@ -3095,26 +3103,18 @@ PerformRadiusTransaction(const char *server, const char *secret, const char *por
 
 	/*
 	 * Figure out at what time we should time out. We can't just use a single
-	 * call to select() with a timeout, since somebody can be sending invalid
-	 * packets to our port thus causing us to retry in a loop and never time
-	 * out.
-	 *
-	 * XXX: Using WaitLatchOrSocket() and doing a CHECK_FOR_INTERRUPTS() if
-	 * the latch was set would improve the responsiveness to
-	 * timeouts/cancellations.
+	 * wait with a timeout, since somebody can be sending invalid packets to
+	 * our port thus causing us to retry in a loop and never time out.
 	 */
-	gettimeofday(&endtime, NULL);
-	endtime.tv_sec += RADIUS_TIMEOUT;
+	endtime = TimestampTzPlusMilliseconds(GetCurrentTimestamp(), timeout);
 
 	while (true)
 	{
-		struct timeval timeout;
-		struct timeval now;
-		int64		timeoutval;
+		int			timeoutval;
 		const char *errstr = NULL;
 
-		gettimeofday(&now, NULL);
-		timeoutval = (endtime.tv_sec * 1000000 + endtime.tv_usec) - (now.tv_sec * 1000000 + now.tv_usec);
+		/* Remaining time, rounded up to the nearest millisecond. */
+		timeoutval = TimestampDifferenceMilliseconds(GetCurrentTimestamp(), endtime);
 		if (timeoutval <= 0)
 		{
 			ereport(LOG,
@@ -3123,31 +3123,49 @@ PerformRadiusTransaction(const char *server, const char *secret, const char *por
 			closesocket(sock);
 			return STATUS_ERROR;
 		}
-		timeout.tv_sec = timeoutval / 1000000;
-		timeout.tv_usec = timeoutval % 1000000;
 
-		FD_ZERO(&fdset);
-		FD_SET(sock, &fdset);
-
-		r = select(sock + 1, &fdset, NULL, NULL, &timeout);
-		if (r < 0)
+		/*
+		 * No point in supplying a wait_event value as we don't have a row in
+		 * pg_stat_activity yet.
+		 */
+		r = WaitLatchOrSocket(MyLatch,
+							  WL_SOCKET_READABLE | WL_EXIT_ON_PM_DEATH |
+							  WL_LATCH_SET | WL_TIMEOUT,
+							  sock,
+							  timeoutval,
+							  0);
+		if (r & WL_LATCH_SET)
 		{
-			if (errno == EINTR)
-				continue;
+			ResetLatch(MyLatch);
 
-			/* Anything else is an actual error */
-			ereport(LOG,
-					(errmsg("could not check status on RADIUS socket: %m")));
-			closesocket(sock);
-			return STATUS_ERROR;
+			/* Process interrupts, making sure to close the socket if we throw. */
+			if (INTERRUPTS_PENDING_CONDITION())
+			{
+				volatile pgsocket vsock = sock;
+				PG_TRY();
+				{
+					CHECK_FOR_INTERRUPTS();
+				}
+				PG_CATCH();
+				{
+					closesocket(vsock);
+					PG_RE_THROW();
+				}
+				PG_END_TRY();
+			}
+			continue;
 		}
-		if (r == 0)
+		else if (r & WL_TIMEOUT)
 		{
 			ereport(LOG,
 					(errmsg("timeout waiting for RADIUS response from %s",
 							server)));
 			closesocket(sock);
 			return STATUS_ERROR;
+		}
+		else
+		{
+			Assert(r & WL_SOCKET_READABLE);
 		}
 
 		/*
@@ -3256,4 +3274,6 @@ PerformRadiusTransaction(const char *server, const char *secret, const char *por
 			continue;
 		}
 	}							/* while (true) */
+
+	pg_unreachable();
 }

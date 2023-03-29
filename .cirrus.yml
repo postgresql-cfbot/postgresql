@@ -25,7 +25,7 @@ env:
   MTEST_ARGS: --print-errorlogs --no-rebuild -C build
   PGCTLTIMEOUT: 120 # avoids spurious failures during parallel tests
   TEMP_CONFIG: ${CIRRUS_WORKING_DIR}/src/tools/ci/pg_ci_base.conf
-  PG_TEST_EXTRA: kerberos ldap ssl
+  PG_TEST_EXTRA: kerberos ldap ssl radius
 
 
 # What files to preserve in case tests fail
@@ -173,6 +173,7 @@ task:
     sysctl kern.corefile='/tmp/cores/%N.%P.core'
   setup_additional_packages_script: |
     #pkg install -y ...
+    pkg install -y freeradius3
 
   # NB: Intentionally build without -Dllvm. The freebsd image size is already
   # large enough to make VM startup slow, and even without llvm freebsd
@@ -283,6 +284,7 @@ task:
     LINUX_CONFIGURE_FEATURES: *LINUX_CONFIGURE_FEATURES
     LINUX_MESON_FEATURES: *LINUX_MESON_FEATURES
 
+
   depends_on: SanityCheck
   only_if: $CIRRUS_CHANGE_MESSAGE !=~ '.*\nci-os-only:.*' || $CIRRUS_CHANGE_MESSAGE =~ '.*\nci-os-only:[^\n]*linux.*'
 
@@ -316,6 +318,8 @@ task:
   setup_additional_packages_script: |
     #apt-get update
     #DEBIAN_FRONTEND=noninteractive apt-get -y install ...
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get -y install freeradius
 
   matrix:
     - name: Linux - Debian Bullseye - Autoconf
@@ -462,6 +466,7 @@ task:
   setup_additional_packages_script: |
     brew install \
       ccache \
+      freeradius-server \
       icu4c \
       krb5 \
       llvm \

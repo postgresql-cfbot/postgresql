@@ -2147,6 +2147,18 @@ host ... ldap ldapbasedn="dc=example,dc=net"
        </listitem>
       </varlistentry>
 
+      <varlistentry>
+       <term><literal>radiustimeout</literal></term>
+       <listitem>
+        <para>
+         The time, in milliseconds, to wait for a response from a RADIUS
+         server before trying the next one in the list.  The default time,
+         if not specified, is 3000 milliseconds (3 seconds), which may not
+         be enough for some systems.
+        </para>
+       </listitem>
+      </varlistentry>
+
      </variablelist>
    </para>
 

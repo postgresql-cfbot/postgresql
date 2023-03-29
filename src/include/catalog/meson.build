@@ -27,6 +27,7 @@ catalog_headers = [
   'pg_event_trigger.h',
   'pg_description.h',
   'pg_cast.h',
+  'pg_dict.h',
   'pg_enum.h',
   'pg_namespace.h',
   'pg_conversion.h',

@@ -35,6 +35,23 @@ typedef struct LogicalRepWorker
 	/* Indicates if this slot is used or free. */
 	bool		in_use;
 
+	/*
+	 * Indicates if the sync worker created a replication slot for itself
+	 * in any point of its lifetime.
+	 * False means that the worker has not created a slot yet, and has been
+	 * reusing replication slots created by other workers so far.
+	 */
+	bool		created_slot;
+
+	/*
+	 * Unique identifier for replication slot to be created by tablesnync
+	 * workers, if needed.
+	 */
+	int64		rep_slot_id;
+
+	/* Replication slot name used by the worker. */
+	char	   *slot_name;
+
 	/* Increased every time the slot is taken by new worker. */
 	uint16		generation;
 
@@ -55,6 +72,12 @@ typedef struct LogicalRepWorker
 	char		relstate;
 	XLogRecPtr	relstate_lsn;
 	slock_t		relmutex;
+
+	/*
+	 * Used to indicate whether sync worker will be reused for another
+	 * relation
+	 */
+	bool		ready_to_reuse;
 
 	/*
 	 * Used to create the changes and subxact files for the streaming
@@ -231,7 +254,8 @@ extern LogicalRepWorker *logicalrep_worker_find(Oid subid, Oid relid,
 extern List *logicalrep_workers_find(Oid subid, bool only_running);
 extern bool logicalrep_worker_launch(Oid dbid, Oid subid, const char *subname,
 									 Oid userid, Oid relid,
-									 dsm_handle subworker_dsm);
+									 dsm_handle subworker_dsm,
+									 int64 slotid);
 extern void logicalrep_worker_stop(Oid subid, Oid relid);
 extern void logicalrep_pa_worker_stop(int slot_no, uint16 generation);
 extern void logicalrep_worker_wakeup(Oid subid, Oid relid);
@@ -323,5 +347,8 @@ am_parallel_apply_worker(void)
 {
 	return isParallelApplyWorker(MyLogicalRepWorker);
 }
+
+/* Invalid identifier to be used for naming replication slots */
+#define InvalidRepSlotId	0
 
 #endif							/* WORKER_INTERNAL_H */

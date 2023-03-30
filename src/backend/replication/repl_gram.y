@@ -65,6 +65,7 @@ Node *replication_parse_result;
 %token K_CREATE_REPLICATION_SLOT
 %token K_DROP_REPLICATION_SLOT
 %token K_TIMELINE_HISTORY
+%token K_CREATE_REPLICATION_SNAPSHOT
 %token K_WAIT
 %token K_TIMELINE
 %token K_PHYSICAL
@@ -80,7 +81,7 @@ Node *replication_parse_result;
 %type <node>	command
 %type <node>	base_backup start_replication start_logical_replication
 				create_replication_slot drop_replication_slot identify_system
-				read_replication_slot timeline_history show
+				read_replication_slot timeline_history show create_replication_snapshot
 %type <list>	generic_option_list
 %type <defelt>	generic_option
 %type <uintval>	opt_timeline
@@ -114,6 +115,7 @@ command:
 			| read_replication_slot
 			| timeline_history
 			| show
+			| create_replication_snapshot
 			;
 
 /*
@@ -307,6 +309,19 @@ timeline_history:
 				}
 			;
 
+/*
+ * CREATE_REPLICATION_SNAPSHOT %s options
+ */
+create_replication_snapshot:
+			K_CREATE_REPLICATION_SNAPSHOT var_name plugin_options
+				{
+					CreateReplicationSnapshotCmd *n = makeNode(CreateReplicationSnapshotCmd);
+					n->slotname = $2;
+					n->options = $3;
+					$$ = (Node *) n;
+				}
+			;
+
 opt_physical:
 			K_PHYSICAL
 			| /* EMPTY */
@@ -400,6 +415,7 @@ ident_or_keyword:
 			| K_CREATE_REPLICATION_SLOT	{ $$ = "create_replication_slot"; }
 			| K_DROP_REPLICATION_SLOT		{ $$ = "drop_replication_slot"; }
 			| K_TIMELINE_HISTORY			{ $$ = "timeline_history"; }
+			| K_CREATE_REPLICATION_SNAPSHOT	{ $$ = "create_replication_snapshot"; }
 			| K_WAIT						{ $$ = "wait"; }
 			| K_TIMELINE					{ $$ = "timeline"; }
 			| K_PHYSICAL					{ $$ = "physical"; }

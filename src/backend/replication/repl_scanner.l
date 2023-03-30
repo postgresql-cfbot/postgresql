@@ -126,6 +126,7 @@ START_REPLICATION	{ return K_START_REPLICATION; }
 CREATE_REPLICATION_SLOT		{ return K_CREATE_REPLICATION_SLOT; }
 DROP_REPLICATION_SLOT		{ return K_DROP_REPLICATION_SLOT; }
 TIMELINE_HISTORY	{ return K_TIMELINE_HISTORY; }
+CREATE_REPLICATION_SNAPSHOT	{ return K_CREATE_REPLICATION_SNAPSHOT; }
 PHYSICAL			{ return K_PHYSICAL; }
 RESERVE_WAL			{ return K_RESERVE_WAL; }
 LOGICAL				{ return K_LOGICAL; }
@@ -303,6 +304,7 @@ replication_scanner_is_replication_command(void)
 		case K_DROP_REPLICATION_SLOT:
 		case K_READ_REPLICATION_SLOT:
 		case K_TIMELINE_HISTORY:
+		case K_CREATE_REPLICATION_SNAPSHOT:
 		case K_SHOW:
 			/* Yes; push back the first token so we can parse later. */
 			repl_pushed_back_token = first_token;

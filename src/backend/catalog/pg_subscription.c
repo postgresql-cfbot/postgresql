@@ -106,6 +106,14 @@ GetSubscription(Oid subid, bool missing_ok)
 								   Anum_pg_subscription_suborigin);
 	sub->origin = TextDatumGetCString(datum);
 
+	/* Get last used id */
+	datum = SysCacheGetAttr(SUBSCRIPTIONOID,
+							tup,
+							Anum_pg_subscription_sublastusedid,
+							&isnull);
+	Assert(!isnull);
+	sub->lastusedid = DatumGetInt64(datum);
+
 	ReleaseSysCache(tup);
 
 	return sub;
@@ -198,6 +206,44 @@ DisableSubscription(Oid subid)
 }
 
 /*
+ * Update the last used replication slot ID for the given subscription.
+ */
+void
+UpdateSubscriptionLastSlotId(Oid subid, int64 lastusedid)
+{
+	Relation	rel;
+	bool		nulls[Natts_pg_subscription];
+	bool		replaces[Natts_pg_subscription];
+	Datum		values[Natts_pg_subscription];
+	HeapTuple	tup;
+
+	/* Look up the subscription in the catalog */
+	rel = table_open(SubscriptionRelationId, RowExclusiveLock);
+	tup = SearchSysCacheCopy1(SUBSCRIPTIONOID, ObjectIdGetDatum(subid));
+
+	if (!HeapTupleIsValid(tup))
+		elog(ERROR, "cache lookup failed for subscription %u", subid);
+
+	LockSharedObject(SubscriptionRelationId, subid, 0, AccessShareLock);
+
+	/* Form a new tuple. */
+	memset(values, 0, sizeof(values));
+	memset(nulls, false, sizeof(nulls));
+	memset(replaces, false, sizeof(replaces));
+
+	replaces[Anum_pg_subscription_sublastusedid - 1] = true;
+	values[Anum_pg_subscription_sublastusedid- 1] = Int64GetDatum(lastusedid);
+
+	/* Update the catalog */
+	tup = heap_modify_tuple(tup, RelationGetDescr(rel), values, nulls,
+							replaces);
+	CatalogTupleUpdate(rel, &tup->t_self, tup);
+	heap_freetuple(tup);
+
+	table_close(rel, NoLock);
+}
+
+/*
  * Convert text array to list of strings.
  *
  * Note: the resulting list of strings is pallocated here.
@@ -226,7 +272,7 @@ textarray_to_stringlist(ArrayType *textarray)
  */
 void
 AddSubscriptionRelState(Oid subid, Oid relid, char state,
-						XLogRecPtr sublsn)
+						XLogRecPtr sublsn, char *relslotname, char *reloriginname)
 {
 	Relation	rel;
 	HeapTuple	tup;
@@ -255,6 +301,16 @@ AddSubscriptionRelState(Oid subid, Oid relid, char state,
 		values[Anum_pg_subscription_rel_srsublsn - 1] = LSNGetDatum(sublsn);
 	else
 		nulls[Anum_pg_subscription_rel_srsublsn - 1] = true;
+	if (relslotname)
+		values[Anum_pg_subscription_rel_srrelslotname - 1] =
+			DirectFunctionCall1(namein, CStringGetDatum(relslotname));
+	else
+		nulls[Anum_pg_subscription_rel_srrelslotname - 1] = true;
+	if (reloriginname)
+		values[Anum_pg_subscription_rel_srreloriginname - 1] =
+			DirectFunctionCall1(namein, CStringGetDatum(reloriginname));
+	else
+		nulls[Anum_pg_subscription_rel_srreloriginname - 1] = true;
 
 	tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
 
@@ -265,6 +321,60 @@ AddSubscriptionRelState(Oid subid, Oid relid, char state,
 
 	/* Cleanup. */
 	table_close(rel, NoLock);
+}
+
+/*
+ * Internal function to modify columns for relation state update
+ */
+static void
+UpdateSubscriptionRelState_internal(Datum *values,
+									bool *nulls,
+									bool *replaces,
+									char state,
+									XLogRecPtr sublsn)
+{
+	replaces[Anum_pg_subscription_rel_srsubstate - 1] = true;
+	values[Anum_pg_subscription_rel_srsubstate - 1] = CharGetDatum(state);
+
+	replaces[Anum_pg_subscription_rel_srsublsn - 1] = true;
+	if (sublsn != InvalidXLogRecPtr)
+		values[Anum_pg_subscription_rel_srsublsn - 1] = LSNGetDatum(sublsn);
+	else
+		nulls[Anum_pg_subscription_rel_srsublsn - 1] = true;
+}
+
+/*
+ * Internal function to modify columns for replication slot update
+ */
+static void
+UpdateSubscriptionRelReplicationSlot_internal(Datum *values,
+											bool *nulls,
+											bool *replaces,
+											char *relslotname)
+{
+	replaces[Anum_pg_subscription_rel_srrelslotname - 1] = true;
+	if (relslotname)
+		values[Anum_pg_subscription_rel_srrelslotname - 1] =
+			DirectFunctionCall1(namein, CStringGetDatum(relslotname));
+	else
+		nulls[Anum_pg_subscription_rel_srrelslotname - 1] = true;
+}
+
+/*
+ * Internal function to modify columns for replication origin update
+ */
+static void
+UpdateSubscriptionRelOrigin_internal(Datum *values,
+									bool *nulls,
+									bool *replaces,
+									char *reloriginname)
+{
+	replaces[Anum_pg_subscription_rel_srreloriginname - 1] = true;
+	if (reloriginname)
+		values[Anum_pg_subscription_rel_srreloriginname - 1] =
+			DirectFunctionCall1(namein, CStringGetDatum(reloriginname));
+	else
+		nulls[Anum_pg_subscription_rel_srreloriginname - 1] = true;
 }
 
 /*
@@ -297,14 +407,7 @@ UpdateSubscriptionRelState(Oid subid, Oid relid, char state,
 	memset(nulls, false, sizeof(nulls));
 	memset(replaces, false, sizeof(replaces));
 
-	replaces[Anum_pg_subscription_rel_srsubstate - 1] = true;
-	values[Anum_pg_subscription_rel_srsubstate - 1] = CharGetDatum(state);
-
-	replaces[Anum_pg_subscription_rel_srsublsn - 1] = true;
-	if (sublsn != InvalidXLogRecPtr)
-		values[Anum_pg_subscription_rel_srsublsn - 1] = LSNGetDatum(sublsn);
-	else
-		nulls[Anum_pg_subscription_rel_srsublsn - 1] = true;
+	UpdateSubscriptionRelState_internal(values, nulls, replaces, state, sublsn);
 
 	tup = heap_modify_tuple(tup, RelationGetDescr(rel), values, nulls,
 							replaces);
@@ -314,6 +417,134 @@ UpdateSubscriptionRelState(Oid subid, Oid relid, char state,
 
 	/* Cleanup. */
 	table_close(rel, NoLock);
+}
+
+/*
+ * Update replication slot name, origin name and state of
+ * a subscription table in one transaction.
+ */
+void
+UpdateSubscriptionRel(Oid subid,
+					  Oid relid,
+					  char state,
+					  XLogRecPtr sublsn,
+					  char *relslotname,
+					  char *reloriginname)
+{
+	Relation	rel;
+	HeapTuple	tup;
+	bool		nulls[Natts_pg_subscription_rel];
+	Datum		values[Natts_pg_subscription_rel];
+	bool		replaces[Natts_pg_subscription_rel];
+
+	LockSharedObject(SubscriptionRelationId, subid, 0, AccessShareLock);
+
+	rel = table_open(SubscriptionRelRelationId, RowExclusiveLock);
+
+	/* Try finding existing mapping. */
+	tup = SearchSysCacheCopy2(SUBSCRIPTIONRELMAP,
+							  ObjectIdGetDatum(relid),
+							  ObjectIdGetDatum(subid));
+	if (!HeapTupleIsValid(tup))
+		elog(ERROR, "subscription table %u in subscription %u does not exist",
+			 relid, subid);
+
+	/* Update the tuple. */
+	memset(values, 0, sizeof(values));
+	memset(nulls, false, sizeof(nulls));
+	memset(replaces, false, sizeof(replaces));
+
+	UpdateSubscriptionRelState_internal(values, nulls, replaces, state, sublsn);
+	UpdateSubscriptionRelReplicationSlot_internal(values, nulls, replaces, relslotname);
+	UpdateSubscriptionRelOrigin_internal(values, nulls, replaces, reloriginname);
+
+	tup = heap_modify_tuple(tup, RelationGetDescr(rel), values, nulls,
+							replaces);
+
+	/* Update the catalog. */
+	CatalogTupleUpdate(rel, &tup->t_self, tup);
+
+	/* Cleanup. */
+	table_close(rel, NoLock);
+}
+
+/*
+ * Get origin name of subscription table.
+ *
+ * reloriginname's value has the replication origin name if the origin exists.
+ */
+void
+GetSubscriptionRelOrigin(Oid subid, Oid relid, char *reloriginname, bool *isnull)
+{
+	HeapTuple	tup;
+	Relation	rel;
+	Datum 		d;
+	char		*originname;
+
+	rel = table_open(SubscriptionRelRelationId, AccessShareLock);
+
+	/* Try finding the mapping. */
+	tup = SearchSysCache2(SUBSCRIPTIONRELMAP,
+						  ObjectIdGetDatum(relid),
+						  ObjectIdGetDatum(subid));
+
+	if (!HeapTupleIsValid(tup))
+	{
+		table_close(rel, AccessShareLock);
+	}
+
+	d = SysCacheGetAttr(SUBSCRIPTIONRELMAP, tup,
+						Anum_pg_subscription_rel_srreloriginname, isnull);
+	if (!*isnull)
+	{
+		originname = DatumGetCString(DirectFunctionCall1(nameout, d));
+		memcpy(reloriginname, originname, NAMEDATALEN);
+	}
+
+	/* Cleanup */
+	ReleaseSysCache(tup);
+
+	table_close(rel, AccessShareLock);
+}
+
+/*
+ * Get replication slot name of subscription table.
+ *
+ * slotname's value has the replication slot name if the subscription has any.
+ */
+void
+GetSubscriptionRelReplicationSlot(Oid subid, Oid relid, char *slotname)
+{
+	HeapTuple	tup;
+	Relation	rel;
+	Datum 		d;
+	char		*relrepslot;
+	bool		isnull;
+
+	rel = table_open(SubscriptionRelRelationId, AccessShareLock);
+
+	/* Try finding the mapping. */
+	tup = SearchSysCache2(SUBSCRIPTIONRELMAP,
+						  ObjectIdGetDatum(relid),
+						  ObjectIdGetDatum(subid));
+
+	if (!HeapTupleIsValid(tup))
+	{
+		table_close(rel, AccessShareLock);
+	}
+
+	d = SysCacheGetAttr(SUBSCRIPTIONRELMAP, tup,
+						Anum_pg_subscription_rel_srrelslotname, &isnull);
+	if (!isnull)
+	{
+		relrepslot = DatumGetCString(DirectFunctionCall1(nameout, d));
+		memcpy(slotname, relrepslot, NAMEDATALEN);
+	}
+
+	/* Cleanup */
+	ReleaseSysCache(tup);
+
+	table_close(rel, AccessShareLock);
 }
 
 /*

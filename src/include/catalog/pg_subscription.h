@@ -103,6 +103,9 @@ CATALOG(pg_subscription,6100,SubscriptionRelationId) BKI_SHARED_RELATION BKI_ROW
 
 	/* Only publish data originating from the specified origin */
 	text		suborigin BKI_DEFAULT(LOGICALREP_ORIGIN_ANY);
+
+	/* The last used ID to create a replication slot for tablesync */
+	int64		sublastusedid BKI_DEFAULT(0);
 #endif
 } FormData_pg_subscription;
 
@@ -137,6 +140,8 @@ typedef struct Subscription
 	List	   *publications;	/* List of publication names to subscribe to */
 	char	   *origin;			/* Only publish data originating from the
 								 * specified origin */
+	int64		lastusedid;		/* Last used unique ID to create replication
+								 * slots in tablesync */
 } Subscription;
 
 /* Disallow streaming in-progress transactions. */
@@ -157,6 +162,7 @@ typedef struct Subscription
 extern Subscription *GetSubscription(Oid subid, bool missing_ok);
 extern void FreeSubscription(Subscription *sub);
 extern void DisableSubscription(Oid subid);
+extern void UpdateSubscriptionLastSlotId(Oid subid, int64 lastusedid);
 
 extern int	CountDBSubscriptions(Oid dbid);
 

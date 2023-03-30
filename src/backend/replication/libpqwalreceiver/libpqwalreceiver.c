@@ -81,6 +81,8 @@ static WalRcvExecResult *libpqrcv_exec(WalReceiverConn *conn,
 									   const int nRetTypes,
 									   const Oid *retTypes);
 static void libpqrcv_disconnect(WalReceiverConn *conn);
+static void libpqrcv_slot_snapshot(WalReceiverConn *conn, char *slotname,
+								   const WalRcvStreamOptions *options, XLogRecPtr *lsn);
 
 static WalReceiverFunctionsType PQWalReceiverFunctions = {
 	.walrcv_connect = libpqrcv_connect,
@@ -97,7 +99,8 @@ static WalReceiverFunctionsType PQWalReceiverFunctions = {
 	.walrcv_create_slot = libpqrcv_create_slot,
 	.walrcv_get_backend_pid = libpqrcv_get_backend_pid,
 	.walrcv_exec = libpqrcv_exec,
-	.walrcv_disconnect = libpqrcv_disconnect
+	.walrcv_disconnect = libpqrcv_disconnect,
+	.walrcv_slot_snapshot = libpqrcv_slot_snapshot
 };
 
 /* Prototypes for private functions */
@@ -931,6 +934,70 @@ libpqrcv_create_slot(WalReceiverConn *conn, const char *slotname,
 	PQclear(res);
 
 	return snapshot;
+}
+
+/*
+ * TODO
+ */
+static void
+libpqrcv_slot_snapshot(WalReceiverConn *conn,
+					   char *slotname,
+					   const WalRcvStreamOptions *options,
+					   XLogRecPtr *lsn)
+{
+	StringInfoData cmd;
+	PGresult   *res;
+	char	   *pubnames_str;
+	List	   *pubnames;
+	char	   *pubnames_literal;
+
+	initStringInfo(&cmd);
+
+	/* Build the command. */
+	appendStringInfo(&cmd, "CREATE_REPLICATION_SNAPSHOT \"%s\"", slotname);
+	appendStringInfoString(&cmd, " (");
+	appendStringInfo(&cmd, " proto_version '%u'",
+					 options->proto.logical.proto_version);
+
+	/* Add publication names. */
+	pubnames = options->proto.logical.publication_names;
+	pubnames_str = stringlist_to_identifierstr(conn->streamConn, pubnames);
+	if (!pubnames_str)
+		ereport(ERROR,
+				(errcode(ERRCODE_OUT_OF_MEMORY),	/* likely guess */
+				 errmsg("could not start WAL streaming: %s",
+						pchomp(PQerrorMessage(conn->streamConn)))));
+	pubnames_literal = PQescapeLiteral(conn->streamConn, pubnames_str,
+									   strlen(pubnames_str));
+	if (!pubnames_literal)
+		ereport(ERROR,
+				(errcode(ERRCODE_OUT_OF_MEMORY),	/* likely guess */
+				 errmsg("could not start WAL streaming: %s",
+						pchomp(PQerrorMessage(conn->streamConn)))));
+	appendStringInfo(&cmd, ", publication_names %s", pubnames_literal);
+	PQfreemem(pubnames_literal);
+	pfree(pubnames_str);
+
+	appendStringInfoString(&cmd, " )");
+
+	/* Execute the command. */
+	res = libpqrcv_PQexec(conn->streamConn, cmd.data);
+	pfree(cmd.data);
+
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+	{
+		PQclear(res);
+		ereport(ERROR,
+				(errcode(ERRCODE_PROTOCOL_VIOLATION),
+				 errmsg("Could not create a snapshot by replication slot \"%s\": %s",
+						slotname, pchomp(PQerrorMessage(conn->streamConn)))));
+	}
+
+	if (lsn)
+		*lsn = DatumGetLSN(DirectFunctionCall1Coll(pg_lsn_in, InvalidOid,
+												   CStringGetDatum(PQgetvalue(res, 0, 0))));
+
+	PQclear(res);
 }
 
 /*

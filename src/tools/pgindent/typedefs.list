@@ -2339,6 +2339,7 @@ ReplicationSlotCtlData
 ReplicationSlotOnDisk
 ReplicationSlotPersistency
 ReplicationSlotPersistentData
+CreateReplicationSnapshotCmd
 ReplicationState
 ReplicationStateCtl
 ReplicationStateOnDisk
@@ -3814,6 +3815,7 @@ walrcv_receive_fn
 walrcv_send_fn
 walrcv_server_version_fn
 walrcv_startstreaming_fn
+walrcv_slot_snapshot_fn
 wchar2mb_with_len_converter
 wchar_t
 win32_deadchild_waitinfo

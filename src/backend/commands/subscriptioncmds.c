@@ -649,6 +649,7 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 		publicationListToArray(publications);
 	values[Anum_pg_subscription_suborigin - 1] =
 		CStringGetTextDatum(opts.origin);
+	values[Anum_pg_subscription_sublastusedid - 1] = Int64GetDatum(0);
 
 	tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
 
@@ -709,7 +710,7 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 										 rv->schemaname, rv->relname);
 
 				AddSubscriptionRelState(subid, relid, table_state,
-										InvalidXLogRecPtr);
+										InvalidXLogRecPtr, NULL, NULL);
 			}
 
 			/*
@@ -799,6 +800,8 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data,
 	} SubRemoveRels;
 	SubRemoveRels *sub_remove_rels;
 	WalReceiverConn *wrconn;
+	List	   *sub_remove_slots = NIL;
+	LogicalRepWorker *worker;
 
 	/* Load the library providing us libpq calls. */
 	load_file("libpqwalreceiver", false);
@@ -876,7 +879,7 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data,
 			{
 				AddSubscriptionRelState(sub->oid, relid,
 										copy_data ? SUBREL_STATE_INIT : SUBREL_STATE_READY,
-										InvalidXLogRecPtr);
+										InvalidXLogRecPtr, NULL, NULL);
 				ereport(DEBUG1,
 						(errmsg_internal("table \"%s.%s\" added to subscription \"%s\"",
 										 rv->schemaname, rv->relname, sub->name)));
@@ -900,6 +903,7 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data,
 			{
 				char		state;
 				XLogRecPtr	statelsn;
+				char		slotname[NAMEDATALEN] = {0};
 
 				/*
 				 * Lock pg_subscription_rel with AccessExclusiveLock to
@@ -926,7 +930,29 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data,
 
 				RemoveSubscriptionRel(sub->oid, relid);
 
-				logicalrep_worker_stop(sub->oid, relid);
+				/*
+				 * Find the logical replication sync worker. If exists, store
+				 * the slot number for dropping associated replication slots
+				 * later.
+				 */
+				LWLockAcquire(LogicalRepWorkerLock, LW_SHARED);
+				worker = logicalrep_worker_find(sub->oid, relid, false);
+				if (worker)
+				{
+					logicalrep_worker_stop(sub->oid, relid);
+					sub_remove_slots = lappend(sub_remove_slots, &worker->slot_name);
+				}
+				else
+				{
+					/*
+					 * Sync of this relation might be failed in an earlier
+					 * attempt, but the replication slot might still exist.
+					 */
+					GetSubscriptionRelReplicationSlot(sub->oid, relid, slotname);
+					if (strlen(slotname) > 0)
+						sub_remove_slots = lappend(sub_remove_slots, slotname);
+				}
+				LWLockRelease(LogicalRepWorkerLock);
 
 				/*
 				 * For READY state, we would have already dropped the
@@ -960,31 +986,24 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data,
 		}
 
 		/*
-		 * Drop the tablesync slots associated with removed tables. This has
-		 * to be at the end because otherwise if there is an error while doing
-		 * the database operations we won't be able to rollback dropped slots.
+		 * Drop the replication slots associated with tablesync workers for
+		 * removed tables. This has to be at the end because otherwise if
+		 * there is an error while doing the database operations we won't be
+		 * able to rollback dropped slots.
 		 */
-		for (off = 0; off < remove_rel_len; off++)
+		foreach(lc, sub_remove_slots)
 		{
-			if (sub_remove_rels[off].state != SUBREL_STATE_READY &&
-				sub_remove_rels[off].state != SUBREL_STATE_SYNCDONE)
-			{
-				char		syncslotname[NAMEDATALEN] = {0};
+			char		syncslotname[NAMEDATALEN] = {0};
 
-				/*
-				 * For READY/SYNCDONE states we know the tablesync slot has
-				 * already been dropped by the tablesync worker.
-				 *
-				 * For other states, there is no certainty, maybe the slot
-				 * does not exist yet. Also, if we fail after removing some of
-				 * the slots, next time, it will again try to drop already
-				 * dropped slots and fail. For these reasons, we allow
-				 * missing_ok = true for the drop.
-				 */
-				ReplicationSlotNameForTablesync(sub->oid, sub_remove_rels[off].relid,
-												syncslotname, sizeof(syncslotname));
-				ReplicationSlotDropAtPubNode(wrconn, syncslotname, true);
-			}
+			memcpy(syncslotname, lfirst(lc), sizeof(NAMEDATALEN));
+
+			/*
+			 * There is no certainty, maybe the slot does not exist yet. Also,
+			 * if we fail after removing some of the slots, next time, it will
+			 * again try to drop already dropped slots and fail. For these
+			 * reasons, we allow missing_ok = true for the drop.
+			 */
+			ReplicationSlotDropAtPubNode(wrconn, syncslotname, true);
 		}
 	}
 	PG_FINALLY();
@@ -1384,6 +1403,7 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 	char	   *subname;
 	char	   *conninfo;
 	char	   *slotname;
+	int64		lastusedid;
 	List	   *subworkers;
 	ListCell   *lc;
 	char		originname[NAMEDATALEN];
@@ -1453,6 +1473,14 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 	else
 		slotname = NULL;
 
+	/* Get the last used identifier by the subscription */
+	datum = SysCacheGetAttr(SUBSCRIPTIONOID, tup,
+							Anum_pg_subscription_sublastusedid, &isnull);
+	if (!isnull)
+		lastusedid = DatumGetInt64(datum);
+	else
+		lastusedid = 0;
+
 	/*
 	 * Since dropping a replication slot is not transactional, the replication
 	 * slot stays dropped even if the transaction rolls back.  So we cannot
@@ -1502,6 +1530,8 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 	}
 	list_free(subworkers);
 
+	rstates = GetSubscriptionRelations(subid, true);
+
 	/*
 	 * Remove the no-longer-useful entry in the launcher's table of apply
 	 * worker start times.
@@ -1513,35 +1543,25 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 	ApplyLauncherForgetWorkerStartTime(subid);
 
 	/*
-	 * Cleanup of tablesync replication origins.
-	 *
-	 * Any READY-state relations would already have dealt with clean-ups.
+	 * Cleanup of tablesync replication origins associated with the
+	 * subscription, if exists. Try to drop origins by creating all origin
+	 * names created for this subscription.
 	 *
 	 * Note that the state can't change because we have already stopped both
 	 * the apply and tablesync workers and they can't restart because of
 	 * exclusive lock on the subscription.
+	 *
+	 * XXX: This can be handled better instead of looping through all possible
 	 */
-	rstates = GetSubscriptionRelations(subid, true);
-	foreach(lc, rstates)
+	for (int64 i = 1; i <= lastusedid; i++)
 	{
-		SubscriptionRelState *rstate = (SubscriptionRelState *) lfirst(lc);
-		Oid			relid = rstate->relid;
+		char		originname_to_drop[NAMEDATALEN] = {0};
 
-		/* Only cleanup resources of tablesync workers */
-		if (!OidIsValid(relid))
-			continue;
-
-		/*
-		 * Drop the tablesync's origin tracking if exists.
-		 *
-		 * It is possible that the origin is not yet created for tablesync
-		 * worker so passing missing_ok = true. This can happen for the states
-		 * before SUBREL_STATE_FINISHEDCOPY.
-		 */
-		ReplicationOriginNameForLogicalRep(subid, relid, originname,
-										   sizeof(originname));
-		replorigin_drop_by_name(originname, true, false);
+		snprintf(originname_to_drop, sizeof(originname_to_drop), "pg_%u_%lld", subid, (long long) i);
+		/* missing_ok = true, since the origin might be already dropped. */
+		replorigin_drop_by_name(originname_to_drop, true, false);
 	}
+
 
 	/* Clean up dependencies */
 	deleteSharedDependencyRecordsFor(SubscriptionRelationId, subid, 0);
@@ -1594,38 +1614,16 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 
 	PG_TRY();
 	{
-		foreach(lc, rstates)
+		List	   *slots = NULL;
+
+
+		slots = GetReplicationSlotNamesBySubId(wrconn, subid, true);
+		foreach(lc, slots)
 		{
-			SubscriptionRelState *rstate = (SubscriptionRelState *) lfirst(lc);
-			Oid			relid = rstate->relid;
+			char	   *syncslotname = (char *) lfirst(lc);
 
-			/* Only cleanup resources of tablesync workers */
-			if (!OidIsValid(relid))
-				continue;
-
-			/*
-			 * Drop the tablesync slots associated with removed tables.
-			 *
-			 * For SYNCDONE/READY states, the tablesync slot is known to have
-			 * already been dropped by the tablesync worker.
-			 *
-			 * For other states, there is no certainty, maybe the slot does
-			 * not exist yet. Also, if we fail after removing some of the
-			 * slots, next time, it will again try to drop already dropped
-			 * slots and fail. For these reasons, we allow missing_ok = true
-			 * for the drop.
-			 */
-			if (rstate->state != SUBREL_STATE_SYNCDONE)
-			{
-				char		syncslotname[NAMEDATALEN] = {0};
-
-				ReplicationSlotNameForTablesync(subid, relid, syncslotname,
-												sizeof(syncslotname));
-				ReplicationSlotDropAtPubNode(wrconn, syncslotname, true);
-			}
+			ReplicationSlotDropAtPubNode(wrconn, syncslotname, true);
 		}
-
-		list_free(rstates);
 
 		/*
 		 * If there is a slot associated with the subscription, then drop the
@@ -1647,6 +1645,71 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 	pgstat_drop_subscription(subid);
 
 	table_close(rel, NoLock);
+}
+
+/*
+ * GetReplicationSlotNamesBySubId
+ *
+ * Get the replication slot names associated with the subscription.
+ */
+List *
+GetReplicationSlotNamesBySubId(WalReceiverConn *wrconn, Oid subid, bool missing_ok)
+{
+	StringInfoData cmd;
+	TupleTableSlot *slot;
+	Oid			tableRow[1] = {NAMEOID};
+	List	   *tablelist = NIL;
+
+	Assert(wrconn);
+
+	load_file("libpqwalreceiver", false);
+
+	initStringInfo(&cmd);
+	appendStringInfo(&cmd, "SELECT slot_name"
+					 " FROM pg_replication_slots"
+					 " WHERE slot_name LIKE 'pg_%i_sync_%%';",
+					 subid);
+	PG_TRY();
+	{
+		WalRcvExecResult *res;
+
+		res = walrcv_exec(wrconn, cmd.data, 1, tableRow);
+
+		if (res->status != WALRCV_OK_TUPLES)
+		{
+			ereport(ERROR,
+					errmsg("could not receive list of slots associated with the subscription %u, error: %s",
+					subid, res->err));
+		}
+
+		/* Process tables. */
+		slot = MakeSingleTupleTableSlot(res->tupledesc, &TTSOpsMinimalTuple);
+		while (tuplestore_gettupleslot(res->tuplestore, true, false, slot))
+		{
+			char	   *repslotname;
+			char	   *slotattr;
+			bool		isnull;
+
+			slotattr = NameStr(*DatumGetName(slot_getattr(slot, 1, &isnull)));
+			Assert(!isnull);
+
+			repslotname = palloc(sizeof(char) * strlen(slotattr) + 1);
+			memcpy(repslotname, slotattr, sizeof(char) * strlen(slotattr));
+			repslotname[strlen(slotattr)] = '\0';
+			tablelist = lappend(tablelist, repslotname);
+
+			ExecClearTuple(slot);
+		}
+		ExecDropSingleTupleTableSlot(slot);
+
+		walrcv_clear_result(res);
+	}
+	PG_FINALLY();
+	{
+		pfree(cmd.data);
+	}
+	PG_END_TRY();
+		return tablelist;
 }
 
 /*
@@ -2042,6 +2105,7 @@ static void
 ReportSlotConnectionError(List *rstates, Oid subid, char *slotname, char *err)
 {
 	ListCell   *lc;
+	LogicalRepWorker *worker;
 
 	foreach(lc, rstates)
 	{
@@ -2052,18 +2116,20 @@ ReportSlotConnectionError(List *rstates, Oid subid, char *slotname, char *err)
 		if (!OidIsValid(relid))
 			continue;
 
+		/* Check if there is a sync worker for the relation */
+		LWLockAcquire(LogicalRepWorkerLock, LW_SHARED);
+		worker = logicalrep_worker_find(subid, relid, false);
+		LWLockRelease(LogicalRepWorkerLock);
+
 		/*
 		 * Caller needs to ensure that relstate doesn't change underneath us.
 		 * See DropSubscription where we get the relstates.
 		 */
-		if (rstate->state != SUBREL_STATE_SYNCDONE)
+		if (worker &&
+			rstate->state != SUBREL_STATE_SYNCDONE)
 		{
-			char		syncslotname[NAMEDATALEN] = {0};
-
-			ReplicationSlotNameForTablesync(subid, relid, syncslotname,
-											sizeof(syncslotname));
 			elog(WARNING, "could not drop tablesync replication slot \"%s\"",
-				 syncslotname);
+				 worker->slot_name);
 		}
 	}
 

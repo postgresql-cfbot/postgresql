@@ -238,6 +238,7 @@ static void CreateReplicationSlot(CreateReplicationSlotCmd *cmd);
 static void DropReplicationSlot(DropReplicationSlotCmd *cmd);
 static void StartReplication(StartReplicationCmd *cmd);
 static void StartLogicalReplication(StartReplicationCmd *cmd);
+static void CreateReplicationSnapshot(CreateReplicationSnapshotCmd *cmd);
 static void ProcessStandbyMessage(void);
 static void ProcessStandbyReplyMessage(void);
 static void ProcessStandbyHSFeedbackMessage(void);
@@ -1280,7 +1281,7 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 	 * are reported early.
 	 */
 	logical_decoding_ctx =
-		CreateDecodingContext(cmd->startpoint, cmd->options, false,
+		CreateDecodingContext(cmd->startpoint, cmd->options, false, false,
 							  XL_ROUTINE(.page_read = logical_read_xlog_page,
 										 .segment_open = WalSndSegmentOpen,
 										 .segment_close = wal_segment_close),
@@ -1330,6 +1331,98 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 	/* Get out of COPY mode (CommandComplete). */
 	SetQueryCompletion(&qc, CMDTAG_COPY, 0);
 	EndCommand(&qc, DestRemote, false);
+}
+
+/*
+ * Create a snapshot from an existing replication slot.
+ */
+static void
+CreateReplicationSnapshot(CreateReplicationSnapshotCmd *cmd)
+{
+	Snapshot	snap;
+	LogicalDecodingContext *ctx;
+	char		xloc[MAXFNAMELEN];
+	DestReceiver *dest;
+	TupOutputState *tstate;
+	TupleDesc	tupdesc;
+	Datum		values[1];
+	bool		nulls[1] = {0};
+
+	Assert(!MyReplicationSlot);
+
+	CheckLogicalDecodingRequirements();
+
+	if (!IsTransactionBlock())
+		ereport(ERROR,
+				(errmsg("%s must be called inside a transaction",
+						"CREATE_REPLICATION_SNAPSHOT ...")));
+
+	if (XactIsoLevel != XACT_REPEATABLE_READ)
+		ereport(ERROR,
+				(errmsg("%s must be called in REPEATABLE READ isolation mode transaction",
+						"CREATE_REPLICATION_SNAPSHOT ...")));
+
+	if (!XactReadOnly)
+		ereport(ERROR,
+				(errmsg("%s must be called in a read only transaction",
+						"CREATE_REPLICATION_SNAPSHOT ...")));
+
+	if (FirstSnapshotSet)
+		ereport(ERROR,
+				(errmsg("%s must be called before any query",
+						"CREATE_REPLICATION_SNAPSHOT ...")));
+
+	if (IsSubTransaction())
+		ereport(ERROR,
+				(errmsg("%s must not be called in a subtransaction",
+						"CREATE_REPLICATION_SNAPSHOT ...")));
+
+	ReplicationSlotAcquire(cmd->slotname, false);
+
+	ctx = CreateDecodingContext(MyReplicationSlot->data.restart_lsn,
+								cmd->options,
+								false,
+								true,
+								XL_ROUTINE(.page_read = logical_read_xlog_page,
+										   .segment_open = WalSndSegmentOpen,
+										   .segment_close = wal_segment_close),
+								WalSndPrepareWrite, WalSndWriteData,
+								WalSndUpdateProgress);
+
+	/*
+	 * Signal that we don't need the timeout mechanism. We're just creating
+	 * the snapshot with the replication slot and don't yet accept feedback
+	 * messages or send keepalives. As we possibly need to wait for further
+	 * WAL the walsender would otherwise possibly be killed too soon.
+	 */
+	last_reply_timestamp = 0;
+
+	/* build initial snapshot, might take a while */
+	DecodingContextFindStartpoint(ctx);
+
+	snap = SnapBuildInitialSnapshot(ctx->snapshot_builder);
+	RestoreTransactionSnapshot(snap, MyProc);
+
+	/* Don't need the decoding context anymore */
+	FreeDecodingContext(ctx);
+
+	/* Create a tuple to send consistent WAL location */
+	snprintf(xloc, sizeof(xloc), "%X/%X",
+			 LSN_FORMAT_ARGS(MyReplicationSlot->data.confirmed_flush));
+
+	dest = CreateDestReceiver(DestRemoteSimple);
+	tupdesc = CreateTemplateTupleDesc(1);
+	TupleDescInitBuiltinEntry(tupdesc, (AttrNumber) 1, "consistent_point",
+							  TEXTOID, -1, 0);
+	tstate = begin_tup_output_tupdesc(dest, tupdesc, &TTSOpsVirtual);
+
+	/* consistent wal location */
+	values[0] = CStringGetTextDatum(xloc);
+
+	do_tup_output(tstate, values, nulls);
+	end_tup_output(tstate);
+
+	ReplicationSlotRelease();
 }
 
 /*
@@ -1859,6 +1952,15 @@ exec_replication_command(const char *cmd_string)
 				EndReplicationCommand(cmdtag);
 			}
 			break;
+
+		case T_CreateReplicationSnapshotCmd:
+			{
+				cmdtag = "CREATE_REPLICATION_SNAPSHOT";
+				set_ps_display(cmdtag);
+				CreateReplicationSnapshot((CreateReplicationSnapshotCmd *) cmd_node);
+				EndReplicationCommand(cmdtag);
+				break;
+			}
 
 		default:
 			elog(ERROR, "unrecognized replication command node tag: %u",

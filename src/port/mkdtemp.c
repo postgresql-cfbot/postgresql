@@ -187,8 +187,35 @@ GETTEMP(char *path, int *doopen, int domkdir)
 		}
 		else if (domkdir)
 		{
+#ifdef WIN32
+			/*
+			 * Plain mkdir(path, 0700) would ignore the mode argument, so
+			 * we'll use the native Windows API to create the directory.  By
+			 * setting lpSecurityDescriptor to NULL, we get "the default
+			 * security descriptor associated with the access token of the
+			 * calling process.  [...]  By default, the default DACL in the
+			 * access token of a process allows access only to the user
+			 * represented by the access token."
+			 *
+			 * Note that a NULL lpSecurityDescriptor is not the same as a NULL
+			 * lpSecurityAttributes argument.  The latter would mean that the
+			 * ACL is inherited from the parent directory, which would
+			 * probably work out the same if it's the TMP directory, but by a
+			 * different route.
+			 */
+			SECURITY_ATTRIBUTES sa = {
+				.nLength = sizeof(SECURITY_ATTRIBUTES),
+				.lpSecurityDescriptor = NULL,
+				.bInheritHandle = false
+			};
+
+			if (CreateDirectory(path, &sa))
+				return 1;
+			_dosmaperr(GetLastError());
+#else
 			if (mkdir(path, 0700) >= 0)
 				return 1;
+#endif
 			if (errno != EEXIST)
 				return 0;
 		}

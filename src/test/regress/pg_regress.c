@@ -56,6 +56,20 @@ static char *shellprog = SHELLPROG;
 #endif
 
 /*
+ * The name of the environment variable that controls where we put temporary
+ * files, to override the defaut of "/tmp".
+ */
+#ifdef WIN32
+#define TMPDIR "TMP"
+#else
+#define TMPDIR "TMPDIR"
+#endif
+
+#if defined(WIN32) && defined(USE_ASSERT_CHECKING)
+static DWORD main_thread_id;
+#endif
+
+/*
  * On Windows we use -w in diff switches to avoid problems with inconsistent
  * newline representation.  The actual result files will generally have
  * Windows-style newlines, but the comparison files might or might not.
@@ -285,9 +299,7 @@ stop_postmaster(void)
  * postmaster exit, so it is indeterminate whether the postmaster has yet to
  * unlink the socket and lock file.  Unlink them here so we can proceed to
  * remove the directory.  Ignore errors; leaking a temporary directory is
- * unimportant.  This can run from a signal handler.  The code is not
- * acceptable in a Windows signal handler (see initdb.c:trapsig()), but
- * on Windows, pg_regress does not use Unix sockets by default.
+ * unimportant.  This can run from a signal handler.
  */
 static void
 remove_temp(void)
@@ -304,6 +316,18 @@ remove_temp(void)
 static void
 signal_remove_temp(SIGNAL_ARGS)
 {
+#ifdef WIN32
+	/*
+	 * In general, it would not be acceptable to call remove_temp() in a
+	 * Windows signal handler.  It is safe in this program though, because
+	 * SIGHUP and SIGPIPE don't really exist and SIGTERM is never raised by the
+	 * system, leaving just SIGINT.  SIGINT doesn't interrupt the main
+	 * execution context on Windows, it runs the handler concurrently in
+	 * another thread.
+	 */
+	Assert(GetCurrentThreadId() != main_thread_id);
+#endif
+
 	remove_temp();
 
 	pqsignal(postgres_signal_arg, SIG_DFL);
@@ -326,7 +350,7 @@ static const char *
 make_temp_sockdir(void)
 {
 	char	   *template = psprintf("%s/pg_regress-XXXXXX",
-									getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp");
+									getenv(TMPDIR) ? getenv(TMPDIR) : "/tmp");
 
 	temp_sockdir = mkdtemp(template);
 	if (temp_sockdir == NULL)
@@ -342,6 +366,10 @@ make_temp_sockdir(void)
 
 	/* Remove the directory during clean exit. */
 	atexit(remove_temp);
+
+#if defined(WIN32) && defined(USE_ASSERT_CHECKING)
+	main_thread_id = GetCurrentThreadId();
+#endif
 
 	/*
 	 * Remove the directory before dying to the usual signals.  Omit SIGQUIT,
@@ -752,211 +780,6 @@ initialize_environment(void)
 
 	load_resultmap();
 }
-
-#ifdef ENABLE_SSPI
-
-/* support for config_sspi_auth() */
-static const char *
-fmtHba(const char *raw)
-{
-	static char *ret;
-	const char *rp;
-	char	   *wp;
-
-	wp = ret = pg_realloc(ret, 3 + strlen(raw) * 2);
-
-	*wp++ = '"';
-	for (rp = raw; *rp; rp++)
-	{
-		if (*rp == '"')
-			*wp++ = '"';
-		*wp++ = *rp;
-	}
-	*wp++ = '"';
-	*wp++ = '\0';
-
-	return ret;
-}
-
-/*
- * Get account and domain/realm names for the current user.  This is based on
- * pg_SSPI_recvauth().  The returned strings use static storage.
- */
-static void
-current_windows_user(const char **acct, const char **dom)
-{
-	static char accountname[MAXPGPATH];
-	static char domainname[MAXPGPATH];
-	HANDLE		token;
-	TOKEN_USER *tokenuser;
-	DWORD		retlen;
-	DWORD		accountnamesize = sizeof(accountname);
-	DWORD		domainnamesize = sizeof(domainname);
-	SID_NAME_USE accountnameuse;
-
-	if (!OpenProcessToken(GetCurrentProcess(), TOKEN_READ, &token))
-	{
-		fprintf(stderr,
-				_("%s: could not open process token: error code %lu\n"),
-				progname, GetLastError());
-		exit(2);
-	}
-
-	if (!GetTokenInformation(token, TokenUser, NULL, 0, &retlen) && GetLastError() != 122)
-	{
-		fprintf(stderr,
-				_("%s: could not get token information buffer size: error code %lu\n"),
-				progname, GetLastError());
-		exit(2);
-	}
-	tokenuser = pg_malloc(retlen);
-	if (!GetTokenInformation(token, TokenUser, tokenuser, retlen, &retlen))
-	{
-		fprintf(stderr,
-				_("%s: could not get token information: error code %lu\n"),
-				progname, GetLastError());
-		exit(2);
-	}
-
-	if (!LookupAccountSid(NULL, tokenuser->User.Sid, accountname, &accountnamesize,
-						  domainname, &domainnamesize, &accountnameuse))
-	{
-		fprintf(stderr,
-				_("%s: could not look up account SID: error code %lu\n"),
-				progname, GetLastError());
-		exit(2);
-	}
-
-	free(tokenuser);
-
-	*acct = accountname;
-	*dom = domainname;
-}
-
-/*
- * Rewrite pg_hba.conf and pg_ident.conf to use SSPI authentication.  Permit
- * the current OS user to authenticate as the bootstrap superuser and as any
- * user named in a --create-role option.
- *
- * In --config-auth mode, the --user switch can be used to specify the
- * bootstrap superuser's name, otherwise we assume it is the default.
- */
-static void
-config_sspi_auth(const char *pgdata, const char *superuser_name)
-{
-	const char *accountname,
-			   *domainname;
-	char	   *errstr;
-	bool		have_ipv6;
-	char		fname[MAXPGPATH];
-	int			res;
-	FILE	   *hba,
-			   *ident;
-	_stringlist *sl;
-
-	/* Find out the name of the current OS user */
-	current_windows_user(&accountname, &domainname);
-
-	/* Determine the bootstrap superuser's name */
-	if (superuser_name == NULL)
-	{
-		/*
-		 * Compute the default superuser name the same way initdb does.
-		 *
-		 * It's possible that this result always matches "accountname", the
-		 * value SSPI authentication discovers.  But the underlying system
-		 * functions do not clearly guarantee that.
-		 */
-		superuser_name = get_user_name(&errstr);
-		if (superuser_name == NULL)
-		{
-			fprintf(stderr, "%s: %s\n", progname, errstr);
-			exit(2);
-		}
-	}
-
-	/*
-	 * Like initdb.c:setup_config(), determine whether the platform recognizes
-	 * ::1 (IPv6 loopback) as a numeric host address string.
-	 */
-	{
-		struct addrinfo *gai_result;
-		struct addrinfo hints;
-		WSADATA		wsaData;
-
-		hints.ai_flags = AI_NUMERICHOST;
-		hints.ai_family = AF_UNSPEC;
-		hints.ai_socktype = 0;
-		hints.ai_protocol = 0;
-		hints.ai_addrlen = 0;
-		hints.ai_canonname = NULL;
-		hints.ai_addr = NULL;
-		hints.ai_next = NULL;
-
-		have_ipv6 = (WSAStartup(MAKEWORD(2, 2), &wsaData) == 0 &&
-					 getaddrinfo("::1", NULL, &hints, &gai_result) == 0);
-	}
-
-	/* Check a Write outcome and report any error. */
-#define CW(cond)	\
-	do { \
-		if (!(cond)) \
-		{ \
-			fprintf(stderr, _("%s: could not write to file \"%s\": %s\n"), \
-					progname, fname, strerror(errno)); \
-			exit(2); \
-		} \
-	} while (0)
-
-	res = snprintf(fname, sizeof(fname), "%s/pg_hba.conf", pgdata);
-	if (res < 0 || res >= sizeof(fname))
-	{
-		/*
-		 * Truncating this name is a fatal error, because we must not fail to
-		 * overwrite an original trust-authentication pg_hba.conf.
-		 */
-		fprintf(stderr, _("%s: directory name too long\n"), progname);
-		exit(2);
-	}
-	hba = fopen(fname, "w");
-	if (hba == NULL)
-	{
-		fprintf(stderr, _("%s: could not open file \"%s\" for writing: %s\n"),
-				progname, fname, strerror(errno));
-		exit(2);
-	}
-	CW(fputs("# Configuration written by config_sspi_auth()\n", hba) >= 0);
-	CW(fputs("host all all 127.0.0.1/32  sspi include_realm=1 map=regress\n",
-			 hba) >= 0);
-	if (have_ipv6)
-		CW(fputs("host all all ::1/128  sspi include_realm=1 map=regress\n",
-				 hba) >= 0);
-	CW(fclose(hba) == 0);
-
-	snprintf(fname, sizeof(fname), "%s/pg_ident.conf", pgdata);
-	ident = fopen(fname, "w");
-	if (ident == NULL)
-	{
-		fprintf(stderr, _("%s: could not open file \"%s\" for writing: %s\n"),
-				progname, fname, strerror(errno));
-		exit(2);
-	}
-	CW(fputs("# Configuration written by config_sspi_auth()\n", ident) >= 0);
-
-	/*
-	 * Double-quote for the benefit of account names containing whitespace or
-	 * '#'.  Windows forbids the double-quote character itself, so don't
-	 * bother escaping embedded double-quote characters.
-	 */
-	CW(fprintf(ident, "regress  \"%s@%s\"  %s\n",
-			   accountname, domainname, fmtHba(superuser_name)) >= 0);
-	for (sl = extraroles; sl; sl = sl->next)
-		CW(fprintf(ident, "regress  \"%s@%s\"  %s\n",
-				   accountname, domainname, fmtHba(sl->str)) >= 0);
-	CW(fclose(ident) == 0);
-}
-
-#endif							/* ENABLE_SSPI */
 
 /*
  * psql_start_command, psql_add_command, psql_end_command
@@ -2015,7 +1838,6 @@ regression_main(int argc, char *argv[],
 		{NULL, 0, NULL, 0}
 	};
 
-	bool		use_unix_sockets;
 	_stringlist *sl;
 	int			c;
 	int			i;
@@ -2030,20 +1852,6 @@ regression_main(int argc, char *argv[],
 	get_restricted_token();
 
 	atexit(stop_postmaster);
-
-#if defined(WIN32)
-
-	/*
-	 * We don't use Unix-domain sockets on Windows by default (see comment at
-	 * remove_temp() for a reason).  Override at your own risk.
-	 */
-	use_unix_sockets = getenv("PG_TEST_USE_UNIX_SOCKETS") ? true : false;
-#else
-	use_unix_sockets = true;
-#endif
-
-	if (!use_unix_sockets)
-		hostname = "localhost";
 
 	/*
 	 * We call the initialization function here because that way we can set
@@ -2170,13 +1978,7 @@ regression_main(int argc, char *argv[],
 	}
 
 	if (config_auth_datadir)
-	{
-#ifdef ENABLE_SSPI
-		if (!use_unix_sockets)
-			config_sspi_auth(config_auth_datadir, user);
-#endif
 		exit(0);
-	}
 
 	if (temp_instance && !port_specified_by_user)
 
@@ -2294,18 +2096,6 @@ regression_main(int argc, char *argv[],
 		}
 
 		fclose(pg_conf);
-
-#ifdef ENABLE_SSPI
-		if (!use_unix_sockets)
-		{
-			/*
-			 * Since we successfully used the same buffer for the much-longer
-			 * "initdb" command, this can't truncate.
-			 */
-			snprintf(buf, sizeof(buf), "%s/data", temp_instance);
-			config_sspi_auth(buf, NULL);
-		}
-#endif
 
 		/*
 		 * Check if there is a postmaster running already.

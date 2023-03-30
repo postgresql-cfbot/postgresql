@@ -2066,6 +2066,7 @@ typedef struct MergeJoinState
  *								(NULL if table not built yet)
  *		hj_CurHashValue			hash value for current outer tuple
  *		hj_CurBucketNo			regular bucket# for current outer tuple
+ *		hj_MaxBucketNo			bucket range allocated to parallel process
  *		hj_CurSkewBucketNo		skew bucket# for current outer tuple
  *		hj_CurTuple				last inner tuple matched to current outer
  *								tuple, or NULL if starting search
@@ -2096,6 +2097,7 @@ typedef struct HashJoinState
 	HashJoinTable hj_HashTable;
 	uint32		hj_CurHashValue;
 	int			hj_CurBucketNo;
+	int			hj_MaxBucketNo;
 	int			hj_CurSkewBucketNo;
 	HashJoinTuple hj_CurTuple;
 	TupleTableSlot *hj_OuterTupleSlot;

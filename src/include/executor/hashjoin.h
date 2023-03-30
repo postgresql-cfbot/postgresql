@@ -160,6 +160,7 @@ typedef struct ParallelHashJoinBatch
 	size_t		old_ntuples;	/* number of tuples before repartitioning */
 	bool		space_exhausted;
 	bool		skip_unmatched; /* whether to abandon unmatched scan */
+	pg_atomic_uint32 bucket;	/* cursor for unmatched inner scan */
 
 	/*
 	 * Variable-sized SharedTuplestore objects follow this struct in memory.

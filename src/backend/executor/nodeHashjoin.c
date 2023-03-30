@@ -597,6 +597,20 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 				{
 					if (!ExecParallelHashJoinNewBatch(node))
 						return NULL;	/* end of parallel-aware join */
+
+					/*
+					 * If we've attached to a batch that is already in the
+					 * inner scan phase, we'll help with that.
+					 */
+					if (BarrierPhase(&hashtable->batches[hashtable->curbatch].shared->batch_barrier) == PHJ_BATCH_SCAN)
+					{
+						if (HJ_FILL_INNER(node))
+							node->hj_JoinState = HJ_FILL_INNER_TUPLES;
+						else
+							node->hj_JoinState = HJ_NEED_NEW_BATCH;
+						break;
+					}
+					Assert(BarrierPhase(&hashtable->batches[hashtable->curbatch].shared->batch_barrier) == PHJ_BATCH_PROBE);
 				}
 				else
 				{
@@ -1216,20 +1230,19 @@ ExecParallelHashJoinNewBatch(HashJoinState *hjstate)
 				case PHJ_BATCH_SCAN:
 
 					/*
-					 * In principle, we could help scan for unmatched tuples,
-					 * since that phase is already underway (the thing we
-					 * can't do under current deadlock-avoidance rules is wait
-					 * for others to arrive at PHJ_BATCH_SCAN, because
-					 * PHJ_BATCH_PROBE emits tuples, but in this case we just
-					 * got here without waiting).  That is not yet done.  For
-					 * now, we just detach and go around again.  We have to
-					 * use ExecHashTableDetachBatch() because there's a small
-					 * chance we'll be the last to detach, and then we're
-					 * responsible for freeing memory.
+					 * Join in with inner scan, if we have not been asked to
+					 * skip it by another process.
 					 */
 					ExecParallelHashTableSetCurrentBatch(hashtable, batchno);
+					if (ExecParallelPrepHashTableForUnmatched(hjstate))
+						return true;
+
+					/*
+					 * Otherwise, we've been detached and we need to go around
+					 * again.
+					 */
 					hashtable->batches[batchno].done = true;
-					ExecHashTableDetachBatch(hashtable);
+					hashtable->curbatch = -1;
 					break;
 
 				case PHJ_BATCH_FREE:

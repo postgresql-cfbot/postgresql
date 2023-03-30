@@ -2067,14 +2067,13 @@ ExecPrepHashTableForUnmatched(HashJoinState *hjstate)
 	 *----------
 	 */
 	hjstate->hj_CurBucketNo = 0;
+	hjstate->hj_MaxBucketNo = 0;			/* for parallel scan */
 	hjstate->hj_CurSkewBucketNo = 0;
 	hjstate->hj_CurTuple = NULL;
 }
 
 /*
- * Decide if this process is allowed to run the unmatched scan.  If so, the
- * batch barrier is advanced to PHJ_BATCH_SCAN and true is returned.
- * Otherwise the batch is detached and false is returned.
+ * Decide if this process is allowed to run the unmatched scan.
  */
 bool
 ExecParallelPrepHashTableForUnmatched(HashJoinState *hjstate)
@@ -2083,17 +2082,20 @@ ExecParallelPrepHashTableForUnmatched(HashJoinState *hjstate)
 	int			curbatch = hashtable->curbatch;
 	ParallelHashJoinBatch *batch = hashtable->batches[curbatch].shared;
 
-	Assert(BarrierPhase(&batch->batch_barrier) == PHJ_BATCH_PROBE);
+	Assert(BarrierPhase(&batch->batch_barrier) == PHJ_BATCH_PROBE ||
+		   BarrierPhase(&batch->batch_barrier) == PHJ_BATCH_SCAN);
 
 	/*
-	 * It would not be deadlock-free to wait on the batch barrier, because it
+	 * It would not be deadlock-free to wait on the batch barrier when it
 	 * is in PHJ_BATCH_PROBE phase, and thus processes attached to it have
 	 * already emitted tuples.  Therefore, we'll hold a wait-free election:
 	 * only one process can continue to the next phase, and all others detach
 	 * from this batch.  They can still go any work on other batches, if there
-	 * are any.
+	 * are any.  If we got here when it's already in PHJ_BATCH_SCAN phase,
+	 * we can proceed without further ado.
 	 */
-	if (!BarrierArriveAndDetachExceptLast(&batch->batch_barrier))
+	if (BarrierPhase(&batch->batch_barrier) == PHJ_BATCH_PROBE &&
+		!BarrierArriveAndDetachExceptLast(&batch->batch_barrier))
 	{
 		/* This process considers the batch to be done. */
 		hashtable->batches[hashtable->curbatch].done = true;
@@ -2113,9 +2115,7 @@ ExecParallelPrepHashTableForUnmatched(HashJoinState *hjstate)
 		return false;
 	}
 
-	/* Now we are alone with this batch. */
 	Assert(BarrierPhase(&batch->batch_barrier) == PHJ_BATCH_SCAN);
-	Assert(BarrierParticipants(&batch->batch_barrier) == 1);
 
 	/*
 	 * Has another process decided to give up early and command all processes
@@ -2232,9 +2232,24 @@ ExecParallelScanHashTableForUnmatched(HashJoinState *hjstate,
 		 */
 		if (hashTuple != NULL)
 			hashTuple = ExecParallelHashNextTuple(hashtable, hashTuple);
-		else if (hjstate->hj_CurBucketNo < hashtable->nbuckets)
+		else if (hjstate->hj_CurBucketNo < hjstate->hj_MaxBucketNo)
 			hashTuple = ExecParallelHashFirstTuple(hashtable,
 												   hjstate->hj_CurBucketNo++);
+		else if (hjstate->hj_CurBucketNo < hashtable->nbuckets)
+		{
+			/*
+			 * Allocate a few cachelines' worth of buckets, and loop around.
+			 * Testing shows that 8 is a good multiplier.
+			 */
+			size_t step = (PG_CACHE_LINE_SIZE * 8) / sizeof(dsa_pointer_atomic);
+			ParallelHashJoinBatch *batch;
+
+			batch = hashtable->batches[hashtable->curbatch].shared;
+			hjstate->hj_CurBucketNo =
+				pg_atomic_fetch_add_u32(&batch->bucket, step);
+			hjstate->hj_MaxBucketNo =
+				Min(hjstate->hj_CurBucketNo + step, hashtable->nbuckets);
+		}
 		else
 			break;				/* finished all buckets */
 
@@ -3113,6 +3128,7 @@ ExecParallelHashJoinSetUpBatches(HashJoinTable hashtable, int nbatch)
 		 * up the Barrier.
 		 */
 		BarrierInit(&shared->batch_barrier, 0);
+		pg_atomic_init_u32(&shared->bucket, 0);
 		if (i == 0)
 		{
 			/* Batch 0 doesn't need to be loaded. */

@@ -46,9 +46,7 @@ make check
    At the end you should see something like:
 <screen>
 <computeroutput>
-=======================
- All 193 tests passed.
-=======================
+# All 213 tests passed.
 </computeroutput>
 </screen>
    or otherwise a note about which tests failed.  See <xref

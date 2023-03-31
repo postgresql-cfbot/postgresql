@@ -39,6 +39,15 @@
 int			from_collapse_limit;
 int			join_collapse_limit;
 
+typedef struct AdjustedRelidsInfo
+{
+	/*
+	 * Vars and PHVs in quals of this jointree node that belong to
+	 * target_relids should be adjusted to include added_relids.
+	 */
+	Relids		target_relids;
+	Relids		added_relids;
+} AdjustedRelidsInfo;
 
 /*
  * deconstruct_jointree requires multiple passes over the join tree, because we
@@ -78,6 +87,10 @@ typedef struct JoinTreeItem
 	List	   *oj_joinclauses; /* outer join quals not yet distributed */
 	List	   *lateral_clauses;	/* quals postponed from children due to
 									 * lateral references */
+	List	   *adjusted_relids_list; /* list of AdjustedRelidsInfos for this
+									   * node */
+	Relids		all_target_relids; /* set of all target relids */
+	Relids		all_added_relids; /* set of all added relids */
 } JoinTreeItem;
 
 
@@ -96,7 +109,7 @@ static SpecialJoinInfo *make_outerjoininfo(PlannerInfo *root,
 										   Relids left_rels, Relids right_rels,
 										   Relids inner_join_rels,
 										   JoinType jointype, Index ojrelid,
-										   List *clause);
+										   List *clause, JoinTreeItem *jtitem);
 static void compute_semijoin_info(PlannerInfo *root, SpecialJoinInfo *sjinfo,
 								  List *clause);
 static void deconstruct_distribute_oj_quals(PlannerInfo *root,
@@ -1179,7 +1192,8 @@ deconstruct_distribute(PlannerInfo *root, JoinTreeItem *jtitem)
 										jtitem->inner_join_rels,
 										j->jointype,
 										j->rtindex,
-										my_quals);
+										my_quals,
+										jtitem);
 			jtitem->sjinfo = sjinfo;
 			if (j->jointype == JOIN_SEMI)
 				ojscope = NULL;
@@ -1333,6 +1347,7 @@ mark_rels_nulled_by_join(PlannerInfo *root, Index ojrelid,
  *	jointype: what it says (must always be LEFT, FULL, SEMI, or ANTI)
  *	ojrelid: RT index of the join RTE (0 for SEMI, which isn't in the RT list)
  *	clause: the outer join's join condition (in implicit-AND format)
+ *	jtitem: the JoinTreeItem for the containing jointree node
  *
  * The node should eventually be appended to root->join_info_list, but we
  * do not do that here.
@@ -1346,7 +1361,7 @@ make_outerjoininfo(PlannerInfo *root,
 				   Relids left_rels, Relids right_rels,
 				   Relids inner_join_rels,
 				   JoinType jointype, Index ojrelid,
-				   List *clause)
+				   List *clause, JoinTreeItem *jtitem)
 {
 	SpecialJoinInfo *sjinfo = makeNode(SpecialJoinInfo);
 	Relids		clause_relids;
@@ -1656,6 +1671,39 @@ make_outerjoininfo(PlannerInfo *root,
 		 */
 		commute_below_l = bms_del_members(commute_below_l, min_lefthand);
 		commute_below_r = bms_del_members(commute_below_r, min_righthand);
+
+		/*
+		 * Record info about target_relids and added_relids for this
+		 * commutation.  For target_relids, we just need the min_righthand.
+		 * For added_relids, we need the current commute_below_l as well as all
+		 * earlier commute_below_l.
+		 */
+		if (!bms_is_empty(commute_below_l) && jtitem->jti_parent)
+		{
+			JoinTreeItem	   *parent = jtitem->jti_parent;
+			AdjustedRelidsInfo *arinfo = palloc0_object(AdjustedRelidsInfo);
+			Relids				all_target_relids;
+			Relids				all_added_relids;
+
+			all_target_relids = bms_union(parent->all_target_relids,
+										  min_righthand);
+			all_added_relids = bms_union(parent->all_added_relids,
+										 commute_below_l);
+
+			arinfo->target_relids = bms_copy(min_righthand);
+			arinfo->added_relids = all_added_relids;
+
+			while (parent)
+			{
+				parent->adjusted_relids_list =
+					lappend(parent->adjusted_relids_list, arinfo);
+
+				parent->all_target_relids = all_target_relids;
+				parent->all_added_relids = all_added_relids;
+
+				parent = parent->jti_parent;
+			}
+		}
 
 		/* Anything left? */
 		commute_below = bms_union(commute_below_l, commute_below_r);
@@ -2359,6 +2407,19 @@ distribute_qual_to_rels(PlannerInfo *root, Node *clause,
 		 * can mark it as pushed-down.
 		 */
 		is_pushed_down = true;
+
+		if (bms_overlap(relids, jtitem->all_target_relids))
+		{
+			ListCell   *lc;
+
+			foreach(lc, jtitem->adjusted_relids_list)
+			{
+				AdjustedRelidsInfo *arinfo = (AdjustedRelidsInfo *) lfirst(lc);
+
+				if (bms_overlap(relids, arinfo->target_relids))
+					relids = bms_add_members(relids, arinfo->added_relids);
+			}
+		}
 
 		/*
 		 * It's possible that this is an IS NULL clause that's redundant with

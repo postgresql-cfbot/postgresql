@@ -3405,6 +3405,7 @@ interval_div(PG_FUNCTION_ARGS)
 	int32		orig_month = span->month,
 				orig_day = span->day;
 	Interval   *result;
+	int			is_factor_inf = isinf(factor);
 
 	result = (Interval *) palloc(sizeof(Interval));
 
@@ -3415,6 +3416,15 @@ interval_div(PG_FUNCTION_ARGS)
 
 	result->month = (int32) (span->month / factor);
 	result->day = (int32) (span->day / factor);
+
+	if (is_factor_inf != 0)
+	{
+		if (is_factor_inf < 0)
+			INTERVAL_NOBEGIN(result);
+		else
+			INTERVAL_NOEND(result);
+		PG_RETURN_INTERVAL_P(result);
+	}
 
 	/*
 	 * Fractional months full days into days.  See comment in interval_mul().

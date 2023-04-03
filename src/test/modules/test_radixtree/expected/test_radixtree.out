@@ -1,0 +1,42 @@
+CREATE EXTENSION test_radixtree;
+--
+-- All the logic is in the test_radixtree() function. It will throw
+-- an error if something fails.
+--
+SELECT test_radixtree();
+NOTICE:  testing basic operations with leaf node 1
+NOTICE:  testing basic operations with inner node 1
+NOTICE:  testing basic operations with leaf node 3
+NOTICE:  testing basic operations with inner node 3
+NOTICE:  testing basic operations with leaf node 15
+NOTICE:  testing basic operations with inner node 15
+NOTICE:  testing basic operations with leaf node 32
+NOTICE:  testing basic operations with inner node 32
+NOTICE:  testing basic operations with leaf node 61
+NOTICE:  testing basic operations with inner node 61
+NOTICE:  testing basic operations with leaf node 125
+NOTICE:  testing basic operations with inner node 125
+NOTICE:  testing basic operations with leaf node 256
+NOTICE:  testing basic operations with inner node 256
+NOTICE:  testing radix tree node types with shift "0"
+NOTICE:  testing radix tree node types with shift "8"
+NOTICE:  testing radix tree node types with shift "16"
+NOTICE:  testing radix tree node types with shift "24"
+NOTICE:  testing radix tree node types with shift "32"
+NOTICE:  testing radix tree node types with shift "40"
+NOTICE:  testing radix tree node types with shift "48"
+NOTICE:  testing radix tree node types with shift "56"
+NOTICE:  testing radix tree with pattern "all ones"
+NOTICE:  testing radix tree with pattern "alternating bits"
+NOTICE:  testing radix tree with pattern "clusters of ten"
+NOTICE:  testing radix tree with pattern "clusters of hundred"
+NOTICE:  testing radix tree with pattern "one-every-64k"
+NOTICE:  testing radix tree with pattern "sparse"
+NOTICE:  testing radix tree with pattern "single values, distance > 2^32"
+NOTICE:  testing radix tree with pattern "clusters, distance > 2^32"
+NOTICE:  testing radix tree with pattern "clusters, distance > 2^60"
+ test_radixtree 
+----------------
+ 
+(1 row)
+

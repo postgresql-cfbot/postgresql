@@ -30,39 +30,7 @@
 #define BITMAPSET_SIZE(nwords)	\
 	(offsetof(Bitmapset, words) + (nwords) * sizeof(bitmapword))
 
-/*----------
- * This is a well-known cute trick for isolating the rightmost one-bit
- * in a word.  It assumes two's complement arithmetic.  Consider any
- * nonzero value, and focus attention on the rightmost one.  The value is
- * then something like
- *				xxxxxx10000
- * where x's are unspecified bits.  The two's complement negative is formed
- * by inverting all the bits and adding one.  Inversion gives
- *				yyyyyy01111
- * where each y is the inverse of the corresponding x.  Incrementing gives
- *				yyyyyy10000
- * and then ANDing with the original value gives
- *				00000010000
- * This works for all cases except original value = zero, where of course
- * we get zero.
- *----------
- */
-#define RIGHTMOST_ONE(x) ((signedbitmapword) (x) & -((signedbitmapword) (x)))
-
-#define HAS_MULTIPLE_ONES(x)	((bitmapword) RIGHTMOST_ONE(x) != (x))
-
-/* Select appropriate bit-twiddling functions for bitmap word size */
-#if BITS_PER_BITMAPWORD == 32
-#define bmw_leftmost_one_pos(w)		pg_leftmost_one_pos32(w)
-#define bmw_rightmost_one_pos(w)	pg_rightmost_one_pos32(w)
-#define bmw_popcount(w)				pg_popcount32(w)
-#elif BITS_PER_BITMAPWORD == 64
-#define bmw_leftmost_one_pos(w)		pg_leftmost_one_pos64(w)
-#define bmw_rightmost_one_pos(w)	pg_rightmost_one_pos64(w)
-#define bmw_popcount(w)				pg_popcount64(w)
-#else
-#error "invalid BITS_PER_BITMAPWORD"
-#endif
+#define HAS_MULTIPLE_ONES(x)	(bmw_rightmost_one(x) != (x))
 
 static bool bms_is_empty_internal(const Bitmapset *a);
 

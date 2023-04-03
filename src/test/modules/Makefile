@@ -28,11 +28,13 @@ SUBDIRS = \
 		  test_pg_db_role_setting \
 		  test_pg_dump \
 		  test_predtest \
+		  test_radixtree \
 		  test_rbtree \
 		  test_regex \
 		  test_rls_hooks \
 		  test_shm_mq \
 		  test_slru \
+		  test_tidstore \
 		  unsafe_tests \
 		  worker_spi
 

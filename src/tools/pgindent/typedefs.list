@@ -1245,6 +1245,7 @@ JsonBaseObjectInfo
 JsonBehavior
 JsonBehaviorType
 JsonCoercion
+JsonCoercionState
 JsonCommon
 JsonConstructorExpr
 JsonConstructorExprState
@@ -1252,6 +1253,7 @@ JsonConstructorType
 JsonEncoding
 JsonExpr
 JsonExprOp
+JsonExprState
 JsonFormat
 JsonFormatType
 JsonFunc
@@ -1259,6 +1261,7 @@ JsonFuncExpr
 JsonHashEntry
 JsonIsPredicate
 JsonItemCoercions
+JsonItemCoercionsState
 JsonIterateStringValuesAction
 JsonKeyValue
 JsonLexContext
@@ -1295,6 +1298,7 @@ JsonPathParseResult
 JsonPathPredicateCallback
 JsonPathString
 JsonPathVarCallback
+JsonPathVariable
 JsonPathVariableEvalContext
 JsonQuotes
 JsonReturning

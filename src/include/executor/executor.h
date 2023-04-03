@@ -17,6 +17,7 @@
 #include "executor/execdesc.h"
 #include "fmgr.h"
 #include "nodes/lockoptions.h"
+#include "nodes/miscnodes.h"
 #include "nodes/parsenodes.h"
 #include "utils/memutils.h"
 

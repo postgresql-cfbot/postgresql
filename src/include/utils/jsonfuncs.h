@@ -15,6 +15,7 @@
 #define JSONFUNCS_H
 
 #include "common/jsonapi.h"
+#include "nodes/nodes.h"
 #include "utils/jsonb.h"
 
 /*
@@ -62,5 +63,10 @@ extern Jsonb *transform_jsonb_string_values(Jsonb *jsonb, void *action_state,
 											JsonTransformStringValuesAction transform_action);
 extern text *transform_json_string_values(text *json, void *action_state,
 										  JsonTransformStringValuesAction transform_action);
+
+extern Datum json_populate_type(Datum json_val, Oid json_type,
+								Oid typid, int32 typmod,
+								void **cache, MemoryContext mcxt, bool *isnull,
+								Node *escontext);
 
 #endif

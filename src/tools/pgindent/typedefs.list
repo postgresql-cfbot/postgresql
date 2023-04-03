@@ -722,6 +722,7 @@ FPI
 FSMAddress
 FSMPage
 FSMPageData
+FailedConnection_hook_type
 FakeRelCacheEntry
 FakeRelCacheEntryData
 FastPathStrongRelationLockData

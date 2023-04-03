@@ -34,4 +34,21 @@ typedef char *(*auth_password_hook_typ) (char *input);
 /* Default LDAP password mutator hook, can be overridden by a shared library */
 extern PGDLLIMPORT auth_password_hook_typ ldap_password_hook;
 
+/*
+ * The failed connection events to be used in the FailedConnection_hook.
+ */
+typedef enum FailedConnectionEventType
+{
+	FCET_BAD_DATABASE_NAME,
+	FCET_BAD_DATABASE_OID,
+	FCET_BAD_DATABASE_PERMISSION,
+	FCET_BAD_STARTUP_PACKET,
+	FCET_STARTUP_PACKET_TIMEOUT
+} FailedConnectionEventType;
+
+/* kluge to avoid including libpq/libpq-be.h here */
+struct Port;
+typedef void (*FailedConnection_hook_type) (FailedConnectionEventType event, const struct Port *port);
+extern PGDLLIMPORT FailedConnection_hook_type FailedConnection_hook;
+
 #endif							/* AUTH_H */

@@ -365,12 +365,18 @@ pg_tablespace_location(PG_FUNCTION_ARGS)
 
 /*
  * pg_sleep - delay for N seconds
+ *
+ * If the caller provides a NULL 'check_interrupts' function,
+ * CHECK_FOR_INTERRUPTS() is used instead.
+ *
+ * This function is careful to set the latch before returning if it had to be
+ * reset.
  */
-Datum
-pg_sleep(PG_FUNCTION_ARGS)
+void
+pg_sleep(float8 secs, void (*check_interrupts) (void))
 {
-	float8		secs = PG_GETARG_FLOAT8(0);
 	float8		endtime;
+	bool		latch_set = false;
 
 	/*
 	 * We sleep using WaitLatch, to ensure that we'll wake up promptly if an
@@ -392,8 +398,12 @@ pg_sleep(PG_FUNCTION_ARGS)
 	{
 		float8		delay;
 		long		delay_ms;
+		int			rc;
 
-		CHECK_FOR_INTERRUPTS();
+		if (check_interrupts == NULL)
+			CHECK_FOR_INTERRUPTS();
+		else
+			(*check_interrupts) ();
 
 		delay = endtime - GetNowFloat();
 		if (delay >= 600.0)
@@ -403,13 +413,30 @@ pg_sleep(PG_FUNCTION_ARGS)
 		else
 			break;
 
-		(void) WaitLatch(MyLatch,
-						 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-						 delay_ms,
-						 WAIT_EVENT_PG_SLEEP);
-		ResetLatch(MyLatch);
+		rc = WaitLatch(MyLatch,
+					   WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+					   delay_ms,
+					   WAIT_EVENT_PG_SLEEP);
+
+		if (rc & WL_LATCH_SET)
+		{
+			latch_set = true;
+			ResetLatch(MyLatch);
+		}
 	}
 
+	if (latch_set)
+		SetLatch(MyLatch);
+}
+
+/*
+ * pg_sleep_sql - SQL-callable version of pg_sleep()
+ */
+Datum
+pg_sleep_sql(PG_FUNCTION_ARGS)
+{
+	pg_sleep(PG_GETARG_FLOAT8(0), NULL);
+	ResetLatch(MyLatch);	/* pg_sleep might've set latch before returning */
 	PG_RETURN_VOID();
 }
 

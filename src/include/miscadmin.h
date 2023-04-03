@@ -495,4 +495,7 @@ extern void RestoreClientConnectionInfo(char *conninfo);
 /* in executor/nodeHash.c */
 extern size_t get_hash_memory_limit(void);
 
+/* in utils/adt/misc.c */
+extern void pg_sleep(float8 secs, void (*check_interrupts) (void));
+
 #endif							/* MISCADMIN_H */

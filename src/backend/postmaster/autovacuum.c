@@ -687,7 +687,7 @@ AutoVacLauncherMain(int argc, char *argv[])
 				 * of a worker will continue to fail in the same way.
 				 */
 				AutoVacuumShmem->av_signal[AutoVacForkFailed] = false;
-				pg_usleep(1000000L);	/* 1s */
+				pg_sleep(1, HandleAutoVacLauncherInterrupts);
 				SendPostmasterSignal(PMSIGNAL_START_AUTOVAC_WORKER);
 				continue;
 			}
@@ -1708,7 +1708,7 @@ AutoVacWorkerMain(int argc, char *argv[])
 				(errmsg_internal("autovacuum: processing database \"%s\"", dbname)));
 
 		if (PostAuthDelay)
-			pg_usleep(PostAuthDelay * 1000000L);
+			pg_sleep(PostAuthDelay, NULL);
 
 		/* And do an appropriate amount of work */
 		recentXid = ReadNextTransactionId();

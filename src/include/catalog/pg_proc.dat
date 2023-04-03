@@ -6571,7 +6571,7 @@
   prosrc => 'pg_ls_dir' },
 { oid => '2626', descr => 'sleep for the specified time in seconds',
   proname => 'pg_sleep', provolatile => 'v', prorettype => 'void',
-  proargtypes => 'float8', prosrc => 'pg_sleep' },
+  proargtypes => 'float8', prosrc => 'pg_sleep_sql' },
 { oid => '3935', descr => 'sleep for the specified interval',
   proname => 'pg_sleep_for', prolang => 'sql', provolatile => 'v',
   prorettype => 'void', proargtypes => 'interval',

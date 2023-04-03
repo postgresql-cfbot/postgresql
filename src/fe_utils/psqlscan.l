@@ -318,6 +318,16 @@ op_chars		[\~\!\@\#\^\&\|\`\?\+\-\*\/\%\<\>\=]
 operator		{op_chars}+
 
 /*
+ * Named Operators, e.g. :foo:
+ *
+ * {namedopfailed*} are error rules to avoid scanner backup when
+ * {namedop} fails to match its trailing tokens.
+ */
+namedop			\\\{{identifier}\}
+namedopfailed1	\\\{{identifier}
+namedopfailed2	\\\{
+
+/*
  * Numbers
  *
  * Unary minus is not part of a number here.  Instead we pass it separately to
@@ -582,6 +592,18 @@ other			.
 				}
 <xdolq>.		{
 					/* This is only needed for $ inside the quoted text */
+					ECHO;
+				}
+
+{namedop}		{
+					ECHO;
+				}
+
+{namedopfailed1}	{
+					ECHO;
+				}
+
+{namedopfailed2}	{
 					ECHO;
 				}
 

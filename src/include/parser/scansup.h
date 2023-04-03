@@ -24,4 +24,7 @@ extern void truncate_identifier(char *ident, int len, bool warn);
 
 extern bool scanner_isspace(char ch);
 
+extern bool validNamedOperator(const char *name);
+extern bool validIdentifier(const char *name, size_t len);
+
 #endif							/* SCANSUP_H */

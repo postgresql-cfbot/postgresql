@@ -382,6 +382,16 @@ op_chars		[\~\!\@\#\^\&\|\`\?\+\-\*\/\%\<\>\=]
 operator		{op_chars}+
 
 /*
+ * Named Operators, e.g. \{foo}
+ *
+ * {namedopfailed*} are error rules to avoid scanner backup when
+ * {namedop} fails to match its trailing tokens.
+ */
+namedop			\\\{{identifier}\}
+namedopfailed1	\\\{{identifier}
+namedopfailed2	\\\{
+
+/*
  * Numbers
  *
  * Unary minus is not part of a number here.  Instead we pass it separately to
@@ -784,6 +794,23 @@ other			.
 					addlitchar(yytext[0], yyscanner);
 				}
 <xdolq><<EOF>>	{ yyerror("unterminated dollar-quoted string"); }
+
+{namedop}		{
+					SET_YYLLOC();
+					if (yyleng >= NAMEDATALEN)
+						yyerror("operator name too long");
+					/* XXX Should we support double-quoted, case sensitive names? */
+					yylval->str = downcase_identifier(yytext, yyleng, false, false);
+					return Op;
+				}
+
+{namedopfailed1}	{
+					yyerror("unexpected token");
+				}
+
+{namedopfailed2}	{
+					yyerror("unexpected token");
+				}
 
 {xdstart}		{
 					SET_YYLLOC();

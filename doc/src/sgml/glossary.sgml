@@ -144,6 +144,7 @@
      (but not the autovacuum workers),
      the <glossterm linkend="glossary-background-writer">background writer</glossterm>,
      the <glossterm linkend="glossary-checkpointer">checkpointer</glossterm>,
+     the <glossterm linkend="glossary-custodian">custodian</glossterm>,
      the <glossterm linkend="glossary-logger">logger</glossterm>,
      the <glossterm linkend="glossary-startup-process">startup process</glossterm>,
      the <glossterm linkend="glossary-wal-archiver">WAL archiver</glossterm>,
@@ -508,6 +509,16 @@
     <para>
       For more information, see
       <xref linkend="monitoring-stats"/>.
+    </para>
+   </glossdef>
+  </glossentry>
+
+  <glossentry id="glossary-custodian">
+   <glossterm>Custodian (process)</glossterm>
+   <glossdef>
+    <para>
+     An <glossterm linkend="glossary-auxiliary-proc">auxiliary process</glossterm>
+     that is responsible for executing assorted cleanup tasks.
     </para>
    </glossdef>
   </glossentry>

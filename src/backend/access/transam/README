@@ -741,6 +741,16 @@ we must panic and abort recovery.  The DBA will have to manually clean up
 then restart recovery.  This is part of the reason for not writing a WAL
 entry until we've successfully done the original action.
 
+================================
+Smgr MARK files
+--------------------------------
+
+An smgr mark file is an empty file that is created alongside a new
+relation storage file to signal that the storage file must be cleaned
+up during recovery.  In contrast to the four actions above, failing to
+remove these files will result in a data loss, in which case the
+server will shut down.
+
 
 Skipping WAL for New RelFileLocator
 --------------------------------

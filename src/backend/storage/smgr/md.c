@@ -141,7 +141,8 @@ static MdfdVec *_mdfd_getseg(SMgrRelation reln, ForkNumber forknum,
 							 BlockNumber blkno, bool skipFsync, int behavior);
 static BlockNumber _mdnblocks(SMgrRelation reln, ForkNumber forknum,
 							  MdfdVec *seg);
-
+static bool mdmarkexists(SMgrRelation reln, ForkNumber forkNum,
+						 StorageMarks mark);
 
 /*
  *	mdinit() -- Initialize private state for magnetic disk storage manager.
@@ -171,6 +172,82 @@ mdexists(SMgrRelation reln, ForkNumber forknum)
 		mdclose(reln, forknum);
 
 	return (mdopenfork(reln, forknum, EXTENSION_RETURN_NULL) != NULL);
+}
+
+/*
+ *  mdcreatemark() -- Create a mark file.
+ *
+ * If isRedo is true, it's okay for the file to exist already.
+ */
+void
+mdcreatemark(SMgrRelation reln, ForkNumber forkNum, StorageMarks mark,
+			 bool isRedo)
+{
+	char	   *path = markpath(reln->smgr_rlocator, forkNum, mark);
+	int			fd;
+
+	/* See mdcreate for details.. */
+	TablespaceCreateDbspace(reln->smgr_rlocator.locator.spcOid,
+							reln->smgr_rlocator.locator.dbOid,
+							isRedo);
+
+	fd = BasicOpenFile(path, O_WRONLY | O_CREAT | O_EXCL);
+	if (fd < 0 && (!isRedo || errno != EEXIST))
+		ereport(ERROR,
+				errcode_for_file_access(),
+				errmsg("could not create mark file \"%s\": %m", path));
+
+	pg_fsync(fd);
+	close(fd);
+
+	/*
+	 * To guarantee that the creation of the file is persistent, fsync its
+	 * parent directory.
+	 */
+	fsync_parent_path(path, ERROR);
+
+	pfree(path);
+}
+
+
+/*
+ *  mdunlinkmark()  -- Delete the mark file
+ *
+ * If isRedo is true, it's okay for the file being not found.
+ */
+void
+mdunlinkmark(SMgrRelation reln, ForkNumber forkNum, StorageMarks mark,
+			 bool isRedo)
+{
+	char	   *path = markpath(reln->smgr_rlocator, forkNum, mark);
+
+	if (!isRedo || mdmarkexists(reln, forkNum, mark))
+		durable_unlink(path, ERROR);
+
+	pfree(path);
+}
+
+/*
+ *  mdmarkexists()  -- Check if the file exists.
+ */
+static bool
+mdmarkexists(SMgrRelation reln, ForkNumber forkNum, StorageMarks mark)
+{
+	char	   *path = markpath(reln->smgr_rlocator, forkNum, mark);
+	int			fd;
+
+	fd = BasicOpenFile(path, O_RDONLY);
+	if (fd < 0 && errno != ENOENT)
+		ereport(ERROR,
+				errcode_for_file_access(),
+				errmsg("could not access mark file \"%s\": %m", path));
+	pfree(path);
+
+	if (fd < 0)
+		return false;
+
+	close(fd);
+	return true;
 }
 
 /*
@@ -1086,6 +1163,16 @@ register_forget_request(RelFileLocatorBackend rlocator, ForkNumber forknum,
 }
 
 /*
+ * ForgetRelationForkSyncRequests -- forget any fsyncs and unlinks for a fork
+ */
+void
+ForgetRelationForkSyncRequests(RelFileLocatorBackend rlocator,
+							   ForkNumber forknum)
+{
+	register_forget_request(rlocator, forknum, 0);
+}
+
+/*
  * ForgetDatabaseSyncRequests -- forget any fsyncs and unlinks for a DB
  */
 void
@@ -1445,12 +1532,14 @@ mdsyncfiletag(const FileTag *ftag, char *path)
  * Return 0 on success, -1 on failure, with errno set.
  */
 int
-mdunlinkfiletag(const FileTag *ftag, char *path)
+mdunlinkfiletag(const FileTag *ftag, char *path, StorageMarks mark)
 {
 	char	   *p;
 
 	/* Compute the path. */
-	p = relpathperm(ftag->rlocator, MAIN_FORKNUM);
+	p = GetRelationPath(ftag->rlocator.dbOid, ftag->rlocator.spcOid,
+						ftag->rlocator.relNumber,InvalidBackendId,
+						MAIN_FORKNUM, mark);
 	strlcpy(path, p, MAXPGPATH);
 	pfree(p);
 

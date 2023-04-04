@@ -206,14 +206,13 @@ add_paths_to_joinrel(PlannerInfo *root,
 	 * way of implementing a full outer join, so override enable_mergejoin if
 	 * it's a full join.
 	 */
-	if (enable_mergejoin || jointype == JOIN_FULL)
-		extra.mergeclause_list = select_mergejoin_clauses(root,
-														  joinrel,
-														  outerrel,
-														  innerrel,
-														  restrictlist,
-														  jointype,
-														  &mergejoin_allowed);
+	extra.mergeclause_list = select_mergejoin_clauses(root,
+													  joinrel,
+													  outerrel,
+													  innerrel,
+													  restrictlist,
+													  jointype,
+													  &mergejoin_allowed);
 
 	/*
 	 * If it's SEMI, ANTI, or inner_unique join, compute correction factors
@@ -316,9 +315,8 @@ add_paths_to_joinrel(PlannerInfo *root,
 	 * before being joined.  As above, disregard enable_hashjoin for full
 	 * joins, because there may be no other alternative.
 	 */
-	if (enable_hashjoin || jointype == JOIN_FULL)
-		hash_inner_and_outer(root, joinrel, outerrel, innerrel,
-							 jointype, &extra);
+	hash_inner_and_outer(root, joinrel, outerrel, innerrel,
+						 jointype, &extra);
 
 	/*
 	 * 5. If inner and outer relations are foreign tables (or joins) belonging

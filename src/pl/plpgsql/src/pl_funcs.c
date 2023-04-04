@@ -325,6 +325,8 @@ plpgsql_getdiag_kindname(PLpgSQL_getdiag_kind kind)
 			return "TABLE_NAME";
 		case PLPGSQL_GETDIAG_SCHEMA_NAME:
 			return "SCHEMA_NAME";
+		case PLPGSQL_GETDIAG_ROUTINE_OID:
+			return "PG_ROUTINE_OID";
 	}
 
 	return "unknown";

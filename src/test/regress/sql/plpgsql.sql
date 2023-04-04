@@ -4731,3 +4731,30 @@ BEGIN
   GET DIAGNOSTICS x = ROW_COUNT;
   RETURN;
 END; $$ LANGUAGE plpgsql;
+
+--
+-- Check pg_current_routine_oid
+--
+-- Note: the result cannot be displayed, but we can check so
+-- the related value is assigned without errors.
+--
+DO $$
+DECLARE
+  fn_oid oid;
+BEGIN
+  GET DIAGNOSTICS fn_oid = PG_ROUTINE_OID;
+  RAISE NOTICE 'ok';
+END;
+$$;
+
+-- should fail, PG_ROUTINE_OID is not allowed in GET STACKED DIAGNOSTICS
+DO $$
+DECLARE
+  fn_oid oid;
+BEGIN
+  RAISE EXCEPTION 'error';
+EXCEPTION WHEN others THEN
+  GET STACKED DIAGNOSTICS fn_oid = PG_ROUTINE_OID;
+  RAISE NOTICE 'ok';
+END;
+$$;

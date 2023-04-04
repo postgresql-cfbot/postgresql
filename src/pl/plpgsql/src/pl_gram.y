@@ -318,6 +318,7 @@ static	void			check_raise_parameters(PLpgSQL_stmt_raise *stmt);
 %token <keyword>	K_OR
 %token <keyword>	K_PERFORM
 %token <keyword>	K_PG_CONTEXT
+%token <keyword>	K_PG_ROUTINE_OID
 %token <keyword>	K_PG_DATATYPE_NAME
 %token <keyword>	K_PG_EXCEPTION_CONTEXT
 %token <keyword>	K_PG_EXCEPTION_DETAIL
@@ -1008,6 +1009,7 @@ stmt_getdiag	: K_GET getdiag_area_opt K_DIAGNOSTICS getdiag_list ';'
 							{
 								/* these fields are disallowed in stacked case */
 								case PLPGSQL_GETDIAG_ROW_COUNT:
+								case PLPGSQL_GETDIAG_ROUTINE_OID:
 									if (new->is_stacked)
 										ereport(ERROR,
 												(errcode(ERRCODE_SYNTAX_ERROR),
@@ -1123,6 +1125,9 @@ getdiag_item :
 						else if (tok_is_keyword(tok, &yylval,
 												K_RETURNED_SQLSTATE, "returned_sqlstate"))
 							$$ = PLPGSQL_GETDIAG_RETURNED_SQLSTATE;
+						else if (tok_is_keyword(tok, &yylval,
+												K_PG_ROUTINE_OID, "pg_routine_oid"))
+							$$ = PLPGSQL_GETDIAG_ROUTINE_OID;
 						else
 							yyerror("unrecognized GET DIAGNOSTICS item");
 					}
@@ -2523,6 +2528,7 @@ unreserved_keyword	:
 				| K_OPEN
 				| K_OPTION
 				| K_PERFORM
+				| K_PG_ROUTINE_OID
 				| K_PG_CONTEXT
 				| K_PG_DATATYPE_NAME
 				| K_PG_EXCEPTION_CONTEXT

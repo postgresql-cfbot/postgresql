@@ -2475,6 +2475,12 @@ exec_stmt_getdiag(PLpgSQL_execstate *estate, PLpgSQL_stmt_getdiag *stmt)
 				}
 				break;
 
+			case PLPGSQL_GETDIAG_ROUTINE_OID:
+				exec_assign_value(estate, var,
+								  ObjectIdGetDatum(estate->func->fn_oid),
+								  false, OIDOID, -1);
+				  break;
+
 			default:
 				elog(ERROR, "unrecognized diagnostic item kind: %d",
 					 diag_item->kind);

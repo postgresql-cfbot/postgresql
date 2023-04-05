@@ -9551,6 +9551,29 @@ SET XML OPTION { DOCUMENT | CONTENT };
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-ignore-event-trigger" xreflabel="ignore_event_trigger">
+      <term><varname>ignore_event_trigger</varname> (<type>enum</type>)
+      <indexterm>
+       <primary><varname>ignore_event_trigger</varname></primary>
+       <secondary>configuration parameter</secondary>
+     </indexterm>
+     </term>
+     <listitem>
+      <para>
+        Allow temporarily disabling execution of event triggers in order
+        to troubleshoot and repair faulty event triggers. The value matches
+        the type of event trigger to be ignored:
+        <literal>ddl_command_start</literal>, <literal>ddl_command_end</literal>,
+        <literal>table_rewrite</literal> and <literal>sql_drop</literal>.
+        Additionally, all event triggers can be disabled by setting it to
+        <literal>all</literal>. Setting the value to <literal>none</literal>
+        will not disable any event triggers, this is the default value. Only
+        superusers and users with the appropriate <literal>SET</literal>
+        privilege can change this setting.
+       </para>
+      </listitem>
+     </varlistentry>
+
      </variablelist>
     </sect2>
      <sect2 id="runtime-config-client-format">

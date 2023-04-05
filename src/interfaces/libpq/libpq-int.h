@@ -410,6 +410,10 @@ struct pg_conn
 	char	   *require_auth;	/* name of the expected auth method */
 	char	   *load_balance_hosts; /* load balance over hosts */
 
+	bool		cancelRequest;	/* true if this connection is used to send a
+								 * cancel request, instead of being a normal
+								 * connection that's used for queries */
+
 	/* Optional file to write trace info to */
 	FILE	   *Pfdebug;
 	int			traceFlags;
@@ -619,6 +623,11 @@ struct pg_conn
 
 	/* Buffer for receiving various parts of messages */
 	PQExpBufferData workBuffer; /* expansible string */
+};
+
+struct pg_cancel_conn
+{
+	PGconn		conn;
 };
 
 /* PGcancel stores all data necessary to cancel a connection. A copy of this
@@ -917,8 +926,8 @@ extern char *libpq_ngettext(const char *msgid, const char *msgid_plural, unsigne
  */
 #undef _
 
-extern void libpq_append_error(PQExpBuffer errorMessage, const char *fmt, ...) pg_attribute_printf(2, 3);
-extern void libpq_append_conn_error(PGconn *conn, const char *fmt, ...) pg_attribute_printf(2, 3);
+extern void libpq_append_error(PQExpBuffer errorMessage, const char *fmt,...) pg_attribute_printf(2, 3);
+extern void libpq_append_conn_error(PGconn *conn, const char *fmt,...) pg_attribute_printf(2, 3);
 
 /*
  * These macros are needed to let error-handling code be portable between

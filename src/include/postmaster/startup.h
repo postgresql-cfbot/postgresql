@@ -26,6 +26,7 @@
 extern PGDLLIMPORT int log_startup_progress_interval;
 
 extern void HandleStartupProcInterrupts(void);
+extern void HandleStartupProcShutdownRequests(void);
 extern void StartupProcessMain(void) pg_attribute_noreturn();
 extern void PreRestoreCommand(void);
 extern void PostRestoreCommand(void);

@@ -3827,7 +3827,8 @@ include_dir 'conf.d'
      recovery when the end of archived WAL is reached, but will keep trying to
      continue recovery by connecting to the sending server as specified by the
      <varname>primary_conninfo</varname> setting and/or by fetching new WAL
-     segments using <varname>restore_command</varname>.  For this mode, the
+     segments using <varname>restore_command</varname> or
+     <varname>restore_library</varname>.  For this mode, the
      parameters from this section and <xref
      linkend="runtime-config-replication-standby"/> are of interest.
      Parameters from <xref linkend="runtime-config-wal-recovery-target"/> will
@@ -3855,7 +3856,8 @@ include_dir 'conf.d'
       <listitem>
        <para>
         The local shell command to execute to retrieve an archived segment of
-        the WAL file series. This parameter is required for archive recovery,
+        the WAL file series.  Either <varname>restore_command</varname> or
+        <xref linkend="guc-restore-library"/> is required for archive recovery,
         but optional for streaming replication.
         Any <literal>%f</literal> in the string is
         replaced by the name of the file to retrieve from the archive,
@@ -3890,7 +3892,42 @@ restore_command = 'copy "C:\\server\\archivedir\\%f" "%p"'  # Windows
 
        <para>
         This parameter can only be set in the <filename>postgresql.conf</filename>
-        file or on the server command line.
+        file or on the server command line.  It is only used if
+        <varname>restore_library</varname> is set to an empty string.  If both
+        <varname>restore_command</varname> and
+        <varname>restore_library</varname> are set, an error will be raised.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-restore-library" xreflabel="restore_library">
+      <term><varname>restore_library</varname> (<type>string</type>)
+      <indexterm>
+       <primary><varname>restore_library</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        The library to use for restore actions, including retrieving archived
+        files and executing tasks at restartpoints and at recovery end.  Either
+        <xref linkend="guc-restore-command"/> or
+        <varname>restore_library</varname> is required for archive recovery,
+        but optional for streaming replication.  If this parameter is set to an
+        empty string (the default), restoring via shell is enabled, and
+        <varname>restore_command</varname>,
+        <varname>archive_cleanup_command</varname>, and
+        <varname>recovery_end_command</varname> are used.  If both
+        <varname>restore_library</varname> and any of
+        <varname>restore_command</varname>,
+        <varname>archive_cleanup_command</varname>, or
+        <varname>recovery_end_command</varname> are set, an error will be
+        raised.  Otherwise, the specified shared library is used for restoring.
+        For more information, see <xref linkend="restore-modules"/>.
+       </para>
+
+       <para>
+        This parameter can only be set in the
+        <filename>postgresql.conf</filename> file or on the server command line.
        </para>
       </listitem>
      </varlistentry>
@@ -3935,7 +3972,10 @@ restore_command = 'copy "C:\\server\\archivedir\\%f" "%p"'  # Windows
        </para>
        <para>
         This parameter can only be set in the <filename>postgresql.conf</filename>
-        file or on the server command line.
+        file or on the server command line.  It is only used if
+        <varname>restore_library</varname> is set to an empty string.  If both
+        <varname>archive_cleanup_command</varname> and
+        <varname>restore_library</varname> are set, an error will be raised.
        </para>
       </listitem>
      </varlistentry>
@@ -3964,7 +4004,10 @@ restore_command = 'copy "C:\\server\\archivedir\\%f" "%p"'  # Windows
        </para>
        <para>
         This parameter can only be set in the <filename>postgresql.conf</filename>
-        file or on the server command line.
+        file or on the server command line.  It is only used if
+        <varname>restore_library</varname> is set to an empty string.  If both
+        <varname>recovery_end_command</varname> and
+        <varname>restore_library</varname> are set, an error will be raised.
        </para>
       </listitem>
      </varlistentry>

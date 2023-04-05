@@ -17,6 +17,11 @@
  * a file is successfully archived and then the system crashes before
  * a durable record of the success has been made.
  *
+ * This file also demonstrates a basic restore library implementation that
+ * is roughly equivalent to the following shell command:
+ *
+ *		cp /path/to/archivedir/%f %p
+ *
  * Copyright (c) 2022-2023, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
@@ -33,6 +38,7 @@
 #include "archive/archive_module.h"
 #include "common/int.h"
 #include "miscadmin.h"
+#include "restore/restore_module.h"
 #include "storage/copydir.h"
 #include "storage/fd.h"
 #include "utils/guc.h"
@@ -54,12 +60,37 @@ static void basic_archive_file_internal(const char *file, const char *path);
 static bool check_archive_directory(char **newval, void **extra, GucSource source);
 static bool compare_files(const char *file1, const char *file2);
 static void basic_archive_shutdown(ArchiveModuleState *state);
+static bool basic_restore_configured(RestoreModuleState *state);
+static bool basic_restore_wal_segment(RestoreModuleState *state,
+									  const char *file, const char *path,
+									  const char *lastRestartPointFileName);
+static bool basic_restore_timeline_history(RestoreModuleState *state,
+										   const char *file, const char *path);
+static bool basic_restore_file(const char *file, const char *path);
+static bool basic_restore_timeline_history_exists(RestoreModuleState *state,
+												  const char *file,
+												  const char *path);
 
 static const ArchiveModuleCallbacks basic_archive_callbacks = {
 	.startup_cb = basic_archive_startup,
 	.check_configured_cb = basic_archive_configured,
 	.archive_file_cb = basic_archive_file,
 	.shutdown_cb = basic_archive_shutdown
+};
+
+static const RestoreModuleCallbacks basic_restore_callbacks = {
+	.startup_cb = NULL,
+	.restore_wal_segment_configured_cb = basic_restore_configured,
+	.restore_wal_segment_cb = basic_restore_wal_segment,
+	.restore_timeline_history_configured_cb = basic_restore_configured,
+	.restore_timeline_history_cb = basic_restore_timeline_history,
+	.timeline_history_exists_configured_cb = basic_restore_configured,
+	.timeline_history_exists_cb = basic_restore_timeline_history_exists,
+	.archive_cleanup_configured_cb = NULL,
+	.archive_cleanup_cb = NULL,
+	.recovery_end_configured_cb = NULL,
+	.recovery_end_cb = NULL,
+	.shutdown_cb = NULL
 };
 
 /*
@@ -71,7 +102,7 @@ void
 _PG_init(void)
 {
 	DefineCustomStringVariable("basic_archive.archive_directory",
-							   gettext_noop("Archive file destination directory."),
+							   gettext_noop("Archive file source/destination directory."),
 							   NULL,
 							   &archive_directory,
 							   "",
@@ -91,6 +122,17 @@ const ArchiveModuleCallbacks *
 _PG_archive_module_init(void)
 {
 	return &basic_archive_callbacks;
+}
+
+/*
+ * _PG_restore_module_init
+ *
+ * Returns the module's restore callbacks.
+ */
+const RestoreModuleCallbacks *
+_PG_restore_module_init(void)
+{
+	return &basic_restore_callbacks;
 }
 
 /*
@@ -425,4 +467,113 @@ basic_archive_shutdown(ArchiveModuleState *state)
 	 */
 	pfree(data);
 	state->private_data = NULL;
+}
+
+/*
+ * basic_restore_configured
+ *
+ * Checks that archive_directory is not blank.
+ */
+static bool
+basic_restore_configured(RestoreModuleState *state)
+{
+	return archive_directory != NULL && archive_directory[0] != '\0';
+}
+
+/*
+ * basic_restore_wal_segment
+ *
+ * Retrieves one archived WAL segment.
+ */
+static bool
+basic_restore_wal_segment(RestoreModuleState *state,
+						  const char *file, const char *path,
+						  const char *lastRestartPointFileName)
+{
+	return basic_restore_file(file, path);
+}
+
+/*
+ * basic_restore_timeline_history
+ *
+ * Retrieves one timeline history file.
+ */
+static bool
+basic_restore_timeline_history(RestoreModuleState *state,
+							   const char *file, const char *path)
+{
+	return basic_restore_file(file, path);
+}
+
+/*
+ * basic_restore_file
+ *
+ * Retrieves one file.
+ */
+static bool
+basic_restore_file(const char *file, const char *path)
+{
+	char		archive_path[MAXPGPATH];
+	struct stat st;
+
+	ereport(DEBUG1,
+			(errmsg("restoring \"%s\" via basic_archive",
+					file)));
+
+	/*
+	 * If the file doesn't exist, return false to indicate that there are no
+	 * more files to restore.
+	 */
+	snprintf(archive_path, MAXPGPATH, "%s/%s", archive_directory, file);
+	if (stat(archive_path, &st) != 0)
+	{
+		int			elevel = (errno == ENOENT) ? DEBUG1 : ERROR;
+
+		ereport(elevel,
+				(errcode_for_file_access(),
+				 errmsg("could not stat file \"%s\": %m",
+						archive_path)));
+		return false;
+	}
+
+	copy_file(archive_path, path);
+
+	ereport(DEBUG1,
+			(errmsg("restored \"%s\" via basic_archive",
+					file)));
+	return true;
+}
+
+/*
+ * basic_restore_timeline_history_exists
+ *
+ * Check whether a timeline history file is present in the archive directory.
+ */
+static bool
+basic_restore_timeline_history_exists(RestoreModuleState *state,
+									  const char *file, const char *path)
+{
+	char		archive_path[MAXPGPATH];
+	struct stat st;
+
+	ereport(DEBUG1,
+			(errmsg("checking existence of \"%s\" via basic_archive",
+					file)));
+
+	snprintf(archive_path, MAXPGPATH, "%s/%s", archive_directory, file);
+	if (stat(archive_path, &st) != 0)
+	{
+		int			elevel = (errno == ENOENT) ? DEBUG1 : ERROR;
+
+		ereport(elevel,
+				(errcode_for_file_access(),
+				 errmsg("could not stat file \"%s\": %m",
+						archive_path)));
+		return false;
+	}
+
+	ereport(DEBUG1,
+			(errmsg("verified existence of \"%s\" via basic_archive",
+					file)));
+	return true;
 }

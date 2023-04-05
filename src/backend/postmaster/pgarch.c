@@ -824,11 +824,9 @@ LoadArchiveLibrary(void)
 {
 	ArchiveModuleInit archive_init;
 
-	if (XLogArchiveLibrary[0] != '\0' && XLogArchiveCommand[0] != '\0')
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("both archive_command and archive_library set"),
-				 errdetail("Only one of archive_command, archive_library may be set.")));
+	(void) CheckMutuallyExclusiveStringGUCs(XLogArchiveLibrary, "archive_library",
+											XLogArchiveCommand, "archive_command",
+											ERROR);
 
 	/*
 	 * If shell archiving is enabled, use our special initialization function.

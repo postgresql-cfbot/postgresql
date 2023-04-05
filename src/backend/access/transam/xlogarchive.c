@@ -23,15 +23,22 @@
 #include "access/xlog_internal.h"
 #include "access/xlogarchive.h"
 #include "common/archive.h"
-#include "common/percentrepl.h"
+#include "fmgr.h"
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "postmaster/startup.h"
 #include "postmaster/pgarch.h"
 #include "replication/walsender.h"
+#include "restore/restore_module.h"
+#include "restore/shell_restore.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/lwlock.h"
+#include "utils/memutils.h"
+
+char *restoreLibrary = "";
+const RestoreModuleCallbacks *RestoreCallbacks = NULL;
+RestoreModuleState *restore_module_state;
 
 /*
  * Attempt to retrieve the specified file from off-line archival storage.
@@ -54,12 +61,11 @@
 bool
 RestoreArchivedFile(char *path, const char *xlogfname,
 					const char *recovername, off_t expectedSize,
-					bool cleanupEnabled)
+					bool cleanupEnabled, ArchiveType archive_type)
 {
 	char		xlogpath[MAXPGPATH];
-	char	   *xlogRestoreCmd;
 	char		lastRestartPointFname[MAXPGPATH];
-	int			rc;
+	bool		ret = false;
 	struct stat stat_buf;
 	XLogSegNo	restartSegNo;
 	XLogRecPtr	restartRedoPtr;
@@ -73,8 +79,21 @@ RestoreArchivedFile(char *path, const char *xlogfname,
 		goto not_available;
 
 	/* In standby mode, restore_command might not be supplied */
-	if (recoveryRestoreCommand == NULL || strcmp(recoveryRestoreCommand, "") == 0)
-		goto not_available;
+	switch (archive_type)
+	{
+		case ARCHIVE_TYPE_WAL_SEGMENT:
+			if (!restore_wal_segment_configured())
+				goto not_available;
+			break;
+		case ARCHIVE_TYPE_TIMELINE_HISTORY:
+			if (!restore_timeline_history_configured())
+				goto not_available;
+			break;
+		case ARCHIVE_TYPE_TIMELINE_HISTORY_EXISTS:
+			if (!timeline_history_exists_configured())
+				goto not_available;
+			break;
+	}
 
 	/*
 	 * When doing archive recovery, we always prefer an archived log file even
@@ -150,33 +169,47 @@ RestoreArchivedFile(char *path, const char *xlogfname,
 	else
 		XLogFileName(lastRestartPointFname, 0, 0, wal_segment_size);
 
-	/* Build the restore command to execute */
-	xlogRestoreCmd = BuildRestoreCommand(recoveryRestoreCommand,
-										 xlogpath, xlogfname,
-										 lastRestartPointFname);
-
-	ereport(DEBUG3,
-			(errmsg_internal("executing restore command \"%s\"",
-							 xlogRestoreCmd)));
-
 	/*
-	 * Check signals before restore command and reset afterwards.
+	 * To ensure we are responsive to server shutdown, check for shutdown
+	 * requests before and after restoring a file.  If there is one, we exit
+	 * right away.
 	 */
-	PreRestoreCommand();
+	HandleStartupProcShutdownRequests();
 
 	/*
 	 * Copy xlog from archival storage to XLOGDIR
 	 */
-	fflush(NULL);
-	pgstat_report_wait_start(WAIT_EVENT_RESTORE_COMMAND);
-	rc = system(xlogRestoreCmd);
-	pgstat_report_wait_end();
-
-	PostRestoreCommand();
-	pfree(xlogRestoreCmd);
-
-	if (rc == 0)
+	switch (archive_type)
 	{
+		case ARCHIVE_TYPE_WAL_SEGMENT:
+			ret = RestoreCallbacks->restore_wal_segment_cb(restore_module_state,
+														   xlogfname, xlogpath,
+														   lastRestartPointFname);
+			break;
+		case ARCHIVE_TYPE_TIMELINE_HISTORY:
+			ret = RestoreCallbacks->restore_timeline_history_cb(restore_module_state,
+																xlogfname, xlogpath);
+			break;
+		case ARCHIVE_TYPE_TIMELINE_HISTORY_EXISTS:
+			ret = RestoreCallbacks->timeline_history_exists_cb(restore_module_state,
+															   xlogfname, xlogpath);
+			break;
+	}
+
+	HandleStartupProcShutdownRequests();
+
+	if (ret)
+	{
+		/*
+		 * Some restore functions might not copy the file (e.g., checking
+		 * whether a timeline history file exists), but they can set a flag to
+		 * tell us if they do.  We only need to verify file existence if this
+		 * flag is enabled.
+		 */
+		if (archive_type == ARCHIVE_TYPE_TIMELINE_HISTORY_EXISTS &&
+			!restore_module_state->timeline_history_exists_cb_copies)
+			return true;
+
 		/*
 		 * command apparently succeeded, but let's make sure the file is
 		 * really there now and has the correct size.
@@ -231,37 +264,6 @@ RestoreArchivedFile(char *path, const char *xlogfname,
 		}
 	}
 
-	/*
-	 * Remember, we rollforward UNTIL the restore fails so failure here is
-	 * just part of the process... that makes it difficult to determine
-	 * whether the restore failed because there isn't an archive to restore,
-	 * or because the administrator has specified the restore program
-	 * incorrectly.  We have to assume the former.
-	 *
-	 * However, if the failure was due to any sort of signal, it's best to
-	 * punt and abort recovery.  (If we "return false" here, upper levels will
-	 * assume that recovery is complete and start up the database!) It's
-	 * essential to abort on child SIGINT and SIGQUIT, because per spec
-	 * system() ignores SIGINT and SIGQUIT while waiting; if we see one of
-	 * those it's a good bet we should have gotten it too.
-	 *
-	 * On SIGTERM, assume we have received a fast shutdown request, and exit
-	 * cleanly. It's pure chance whether we receive the SIGTERM first, or the
-	 * child process. If we receive it first, the signal handler will call
-	 * proc_exit, otherwise we do it here. If we or the child process received
-	 * SIGTERM for any other reason than a fast shutdown request, postmaster
-	 * will perform an immediate shutdown when it sees us exiting
-	 * unexpectedly.
-	 *
-	 * We treat hard shell errors such as "command not found" as fatal, too.
-	 */
-	if (wait_result_is_signal(rc, SIGTERM))
-		proc_exit(1);
-
-	ereport(wait_result_is_any_signal(rc, true) ? FATAL : DEBUG2,
-			(errmsg("could not restore file \"%s\" from archive: %s",
-					xlogfname, wait_result_to_str(rc))));
-
 not_available:
 
 	/*
@@ -274,74 +276,6 @@ not_available:
 	snprintf(path, MAXPGPATH, XLOGDIR "/%s", xlogfname);
 	return false;
 }
-
-/*
- * Attempt to execute an external shell command during recovery.
- *
- * 'command' is the shell command to be executed, 'commandName' is a
- * human-readable name describing the command emitted in the logs. If
- * 'failOnSignal' is true and the command is killed by a signal, a FATAL
- * error is thrown. Otherwise a WARNING is emitted.
- *
- * This is currently used for recovery_end_command and archive_cleanup_command.
- */
-void
-ExecuteRecoveryCommand(const char *command, const char *commandName,
-					   bool failOnSignal, uint32 wait_event_info)
-{
-	char	   *xlogRecoveryCmd;
-	char		lastRestartPointFname[MAXPGPATH];
-	int			rc;
-	XLogSegNo	restartSegNo;
-	XLogRecPtr	restartRedoPtr;
-	TimeLineID	restartTli;
-
-	Assert(command && commandName);
-
-	/*
-	 * Calculate the archive file cutoff point for use during log shipping
-	 * replication. All files earlier than this point can be deleted from the
-	 * archive, though there is no requirement to do so.
-	 */
-	GetOldestRestartPoint(&restartRedoPtr, &restartTli);
-	XLByteToSeg(restartRedoPtr, restartSegNo, wal_segment_size);
-	XLogFileName(lastRestartPointFname, restartTli, restartSegNo,
-				 wal_segment_size);
-
-	/*
-	 * construct the command to be executed
-	 */
-	xlogRecoveryCmd = replace_percent_placeholders(command, commandName, "r", lastRestartPointFname);
-
-	ereport(DEBUG3,
-			(errmsg_internal("executing %s \"%s\"", commandName, command)));
-
-	/*
-	 * execute the constructed command
-	 */
-	fflush(NULL);
-	pgstat_report_wait_start(wait_event_info);
-	rc = system(xlogRecoveryCmd);
-	pgstat_report_wait_end();
-
-	pfree(xlogRecoveryCmd);
-
-	if (rc != 0)
-	{
-		/*
-		 * If the failure was due to any sort of signal, it's best to punt and
-		 * abort recovery.  See comments in RestoreArchivedFile().
-		 */
-		ereport((failOnSignal && wait_result_is_any_signal(rc, true)) ? FATAL : WARNING,
-		/*------
-		   translator: First %s represents a postgresql.conf parameter name like
-		  "recovery_end_command", the 2nd is the value of that parameter, the
-		  third an already translated error message. */
-				(errmsg("%s \"%s\": %s", commandName,
-						command, wait_result_to_str(rc))));
-	}
-}
-
 
 /*
  * A file was restored from the archive under a temporary filename (path),
@@ -716,4 +650,66 @@ XLogArchiveCleanup(const char *xlog)
 	StatusFilePath(archiveStatusPath, xlog, ".ready");
 	unlink(archiveStatusPath);
 	/* should we complain about failure? */
+}
+
+/*
+ * Loads all the restore callbacks into our global RestoreCallbacks.  The
+ * caller is responsible for validating the combination of library/command
+ * parameters that are set (e.g., restore_command and restore_library cannot
+ * both be set).
+ */
+void
+LoadRestoreCallbacks(void)
+{
+	RestoreModuleInit init;
+
+	/*
+	 * If the shell command is enabled, use our special initialization
+	 * function.  Otherwise, load the library and call its
+	 * _PG_restore_module_init().
+	 */
+	if (restoreLibrary[0] == '\0')
+		init = shell_restore_init;
+	else
+		init = (RestoreModuleInit)
+				load_external_function(restoreLibrary, "_PG_restore_module_init",
+									   false, NULL);
+
+	if (init == NULL)
+		ereport(ERROR,
+				(errmsg("restore modules have to define the symbol "
+						"_PG_restore_module_init")));
+
+	RestoreCallbacks = (*init) ();
+
+	/* restore state should be freed before calling this function */
+	Assert(restore_module_state == NULL);
+	restore_module_state = (RestoreModuleState *)
+							MemoryContextAllocZero(TopMemoryContext,
+												   sizeof(RestoreModuleState));
+
+	if (RestoreCallbacks->startup_cb != NULL)
+		RestoreCallbacks->startup_cb(restore_module_state);
+}
+
+/*
+ * Call the shutdown callback of the loaded restore module, if defined.  Also,
+ * free the restore module state if it was allocated.
+ *
+ * Processes that load restore libraries should register this via
+ * before_shmem_exit().
+ */
+void
+call_restore_module_shutdown_cb(int code, Datum arg)
+{
+	if (RestoreCallbacks != NULL &&
+		RestoreCallbacks->shutdown_cb != NULL &&
+		restore_module_state != NULL)
+		RestoreCallbacks->shutdown_cb(restore_module_state);
+
+	if (restore_module_state != NULL)
+	{
+		pfree(restore_module_state);
+		restore_module_state = NULL;
+	}
 }

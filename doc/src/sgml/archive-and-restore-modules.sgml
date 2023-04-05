@@ -1,0 +1,516 @@
+<!-- doc/src/sgml/archive-and-restore-modules.sgml -->
+
+<chapter id="archive-and-restore-modules">
+ <title>Archive and Restore Modules</title>
+ <indexterm zone="archive-and-restore-modules">
+  <primary>Archive and Restore Modules</primary>
+ </indexterm>
+
+ <para>
+  PostgreSQL provides infrastructure to create custom modules for continuous
+  archiving and recovery (see <xref linkend="continuous-archiving"/>).  While a
+  shell command (i.e., <xref linkend="guc-archive-command"/>,
+  <xref linkend="guc-restore-command"/>) is much simpler, a custom module will
+  often be considerably more robust and performant.
+ </para>
+
+ <para>
+  The <filename>contrib/basic_archive</filename> module contains a working
+  example, which demonstrates some useful techniques.  As demonstrated in
+  <filename>basic_archive</filename> a single module may serve as both an
+  archive module and a restore module.
+ </para>
+
+ <sect1 id="archive-modules">
+  <title>Archive Modules</title>
+  <indexterm zone="archive-modules">
+   <primary>Archive Modules</primary>
+  </indexterm>
+
+  <para>
+   When a custom <xref linkend="guc-archive-library"/> is configured,
+   PostgreSQL will submit completed WAL files to the module, and the server
+   will avoid recycling or removing these WAL files until the module indicates
+   that the files were successfully archived.  It is ultimately up to the
+   module to decide what to do with each WAL file, but many recommendations are
+   listed at <xref linkend="backup-archiving-wal"/>.
+  </para>
+
+  <para>
+   Archiving modules must at least consist of an initialization function (see
+   <xref linkend="archive-module-init"/>) and the required callbacks (see
+   <xref linkend="archive-module-callbacks"/>).  However, archive modules are
+   also permitted to do much more (e.g., declare GUCs and register background
+   workers).
+  </para>
+
+  <sect2 id="archive-module-init">
+   <title>Initialization Functions</title>
+   <indexterm zone="archive-module-init">
+    <primary>_PG_archive_module_init</primary>
+   </indexterm>
+
+   <para>
+    An archive library is loaded by dynamically loading a shared library with
+    the <xref linkend="guc-archive-library"/>'s name as the library base name.
+    The normal library search path is used to locate the library.  To provide
+    the required archive module callbacks and to indicate that the library is
+    actually an archive module, it needs to provide a function named
+    <function>_PG_archive_module_init</function>.  The result of the function
+    must be a pointer to a struct of type
+    <structname>ArchiveModuleCallbacks</structname>, which contains everything
+    that the core code needs to know how to make use of the archive module.
+    The return value needs to be of server lifetime, which is typically
+    achieved by defining it as a <literal>static const</literal> variable in
+    global scope.
+
+<programlisting>
+typedef struct ArchiveModuleCallbacks
+{
+    ArchiveStartupCB startup_cb;
+    ArchiveCheckConfiguredCB check_configured_cb;
+    ArchiveFileCB archive_file_cb;
+    ArchiveShutdownCB shutdown_cb;
+} ArchiveModuleCallbacks;
+typedef const ArchiveModuleCallbacks *(*ArchiveModuleInit) (void);
+</programlisting>
+
+    Only the <function>archive_file_cb</function> callback is required.  The
+    others are optional.
+   </para>
+  </sect2>
+
+  <sect2 id="archive-module-callbacks">
+   <title>Archive Module Callbacks</title>
+
+   <para>
+    The archive callbacks define the actual archiving behavior of the module.
+    The server will call them as required to process each individual WAL file.
+   </para>
+
+   <sect3 id="archive-module-startup">
+    <title>Startup Callback</title>
+
+    <para>
+     The <function>startup_cb</function> callback is called shortly after the
+     module is loaded.  This callback can be used to perform any additional
+     initialization required.  If the archive module has state, it can use
+     <structfield>state->private_data</structfield> to store it.
+
+<programlisting>
+typedef void (*ArchiveStartupCB) (ArchiveModuleState *state);
+</programlisting>
+    </para>
+   </sect3>
+
+   <sect3 id="archive-module-check">
+    <title>Check Callback</title>
+
+    <para>
+     The <function>check_configured_cb</function> callback is called to
+     determine whether the module is fully configured and ready to accept WAL
+     files (e.g., its configuration parameters are set to valid values).  If no
+     <function>check_configured_cb</function> is defined, the server always
+     assumes the module is configured.
+
+<programlisting>
+typedef bool (*ArchiveCheckConfiguredCB) (ArchiveModuleState *state);
+</programlisting>
+
+     If <literal>true</literal> is returned, the server will proceed with
+     archiving the file by calling the <function>archive_file_cb</function>
+     callback.  If <literal>false</literal> is returned, archiving will not
+     proceed, and the archiver will emit the following message to the server
+     log:
+<screen>
+WARNING:  archive_mode enabled, yet archiving is not configured
+</screen>
+     In the latter case, the server will periodically call this function, and
+     archiving will proceed only when it returns <literal>true</literal>.
+    </para>
+   </sect3>
+
+   <sect3 id="archive-module-archive">
+    <title>Archive Callback</title>
+
+    <para>
+     The <function>archive_file_cb</function> callback is called to archive a
+     single WAL file.
+
+<programlisting>
+typedef bool (*ArchiveFileCB) (ArchiveModuleState *state, const char *file, const char *path);
+</programlisting>
+
+     If <literal>true</literal> is returned, the server proceeds as if the file
+     was successfully archived, which may include recycling or removing the
+     original WAL file.  If <literal>false</literal> is returned, the server
+     will keep the original WAL file and retry archiving later.
+     <replaceable>file</replaceable> will contain just the file name of the WAL
+     file to archive, while <replaceable>path</replaceable> contains the full
+     path of the WAL file (including the file name).
+    </para>
+   </sect3>
+
+   <sect3 id="archive-module-shutdown">
+    <title>Shutdown Callback</title>
+
+    <para>
+     The <function>shutdown_cb</function> callback is called when the archiver
+     process exits (e.g., after an error) or the value of
+     <xref linkend="guc-archive-library"/> changes.  If no
+     <function>shutdown_cb</function> is defined, no special action is taken in
+     these situations.  If the archive module has state, this callback should
+     free it to avoid leaks.
+
+<programlisting>
+typedef void (*ArchiveShutdownCB) (ArchiveModuleState *state);
+</programlisting>
+    </para>
+   </sect3>
+  </sect2>
+ </sect1>
+
+ <sect1 id="restore-modules">
+  <title>Restore Modules</title>
+  <indexterm zone="restore-modules">
+   <primary>Restore Modules</primary>
+  </indexterm>
+
+  <para>
+   When a custom <xref linkend="guc-restore-library"/> is configured,
+   PostgreSQL will use the module for restore actions.  It is
+   ultimately up to the module to decide how to accomplish each task,
+   but some recommendations are listed at
+   <xref linkend="backup-pitr-recovery"/>.
+  </para>
+
+  <para>
+   Restore modules must at least consist of an initialization function
+   (see <xref linkend="restore-module-init"/>) and the required callbacks (see
+   <xref linkend="restore-module-callbacks"/>).  However, restore modules are
+   also permitted to do much more (e.g., declare GUCs and register background
+   workers).
+  </para>
+
+  <sect2 id="restore-module-init">
+   <title>Initialization Functions</title>
+   <indexterm zone="restore-module-init">
+    <primary>_PG_restore_module_init</primary>
+   </indexterm>
+
+   <para>
+    An restore library is loaded by dynamically loading a shared library with
+    the <xref linkend="guc-restore-library"/>'s name as the library base name.
+    The normal library search path is used to locate the library.  To provide
+    the required restore module callbacks and to indicate that the library is
+    actually a restore module, it needs to provide a function named
+    <function>_PG_restore_module_init</function>.  The result of the function
+    must be a pointer to a struct of type
+    <structname>RestoreModuleCallbacks</structname>, which contains everything
+    that the core code needs to know how to make use of the restore module.
+    The return value needs to be of server lifetime, which is typically
+    achieved by defining it as a <literal>static const</literal> variable in
+    global scope.
+
+<programlisting>
+typedef struct RestoreModuleCallbacks
+{
+    RestoreStartupCB startup_cb;
+    RestoreWalSegmentConfiguredCB restore_wal_segment_configured_cb;
+    RestoreWalSegmentCB restore_wal_segment_cb;
+    RestoreTimelineHistoryConfiguredCB restore_timeline_history_configured_cb;
+    RestoreTimelineHistoryCB restore_timeline_history_cb;
+    TimelineHistoryExistsConfiguredCB timeline_history_exists_configured_cb;
+    TimelineHistoryExistsCB timeline_history_exists_cb;
+    ArchiveCleanupConfiguredCB archive_cleanup_configured_cb;
+    ArchiveCleanupCB archive_cleanup_cb;
+    RecoveryEndConfiguredCB recovery_end_configured_cb;
+    RecoveryEndCB recovery_end_cb;
+    RestoreShutdownCB shutdown_cb;
+} RestoreModuleCallbacks;
+typedef const RestoreModuleCallbacks *(*RestoreModuleInit) (void);
+</programlisting>
+
+    The <function>restore_wal_segment_configured_cb</function>,
+    <function>restore_wal_segment_cb</function>,
+    <function>restore_timeline_history_configured_cb</function>,
+    <function>restore_timeline_history_cb</function>,
+    <function>timeline_history_exists_configured_cb</function>, and
+    <function>timeline_history_exists_cb</function> callbacks are required for
+    archive recovery but optional for streaming replication.  The others are
+    always optional.
+   </para>
+  </sect2>
+
+  <sect2 id="restore-module-callbacks">
+   <title>Restore Module Callbacks</title>
+
+   <para>
+    The restore callbacks define the actual behavior of the module.  The server
+    will call them as required to execute restore actions.
+   </para>
+
+   <sect3 id="restore-module-startup">
+    <title>Startup Callback</title>
+
+    <para>
+     The <function>startup_cb</function> callback is called shortly after the
+     module is loaded.  This callback can be used to perform any additional
+     initialization required.  If the restore module has state, it can use
+     <structfield>state->private_data</structfield> to store it.
+
+<programlisting>
+typedef void (*RestoreStartupCB) (RestoreModuleState *state);
+</programlisting>
+    </para>
+   </sect3>
+
+   <sect3 id="restore-module-restore-wal-segment-configured">
+    <title>Restore WAL Segment Configured Callback</title>
+    <para>
+     The <function>restore_wal_segment_configured_cb</function> callback is
+     called to determine whether the module is fully configured and ready to
+     accept requests to retrieve WAL files (e.g., its configuration parameters
+     are set to valid values).  If no
+     <function>restore_wal_segment_configured_cb</function> is defined, the
+     server always assumes the module is not configured to retrieve WAL files.
+
+<programlisting>
+typedef bool (*RestoreWalSegmentConfiguredCB)  (RestoreModuleState *state);
+</programlisting>
+
+     If <literal>true</literal> is returned, the server will retrieve WAL files
+     by calling the <function>restore_wal_segment_cb</function> callback.  If
+     <literal>false</literal> is returned, the server will not use the
+     <function>restore_wal_segment_cb</function> callback to retrieve WAL
+     files.
+    </para>
+   </sect3>
+
+   <sect3 id="restore-module-restore-wal-segment">
+    <title>Restore WAL Segment Callback</title>
+    <para>
+     The <function>restore_wal_segment_cb</function> callback is called to
+     retrieve a single archived segment of the WAL file series for archive
+     recovery or streaming replication.
+
+<programlisting>
+typedef bool (*RestoreWalSegmentCB) (RestoreModuleState *state, const char *file, const char *path, const char *lastRestartPointFileName);
+</programlisting>
+
+     This callback must return <literal>true</literal> only if the file was
+     successfully retrieved.  If the file is not available in the archives, the
+     callback must return <literal>false</literal>.
+     <replaceable>file</replaceable> will contain just the file name
+     of the WAL file to retrieve, while <replaceable>path</replaceable>
+     contains the destination's relative path (including the file name).
+     <replaceable>lastRestartPointFileName</replaceable> will contain the name
+     of the file containing the last valid restart point.  That is the earliest
+     file that must be kept to allow a restore to be restartable, so this
+     information can be used to truncate the archive to just the minimum
+     required to support restarting from the current restore.
+     <replaceable>lastRestartPointFileName</replaceable> is typically only used
+     by warm-standby configurations (see <xref linkend="warm-standby"/>).  Note
+     that if multiple standby servers are restoring from the same archive
+     directory, you will need to ensure that you do not delete WAL files until
+     they are no longer needed by any of the servers.
+    </para>
+   </sect3>
+
+   <sect3 id="restore-module-restore-timeline-history-configured">
+    <title>Restore Timeline History Configured Callback</title>
+    <para>
+     The <function>restore_timeline_history_configured_cb</function> callback
+     is called to determine whether the module is fully configured and ready to
+     accept requests to retrieve timeline history files (e.g., its
+     configuration parameters are set to valid values).  If no
+     <function>restore_timeline_history_configured_cb</function> is defined,
+     the server always assumes the module is not configured to retrieve
+     timeline history files.
+
+<programlisting>
+typedef bool (*RestoreTimelineHistoryConfiguredCB)  (RestoreModuleState *state);
+</programlisting>
+
+     If <literal>true</literal> is returned, the server will retrieve timeline
+     history files by calling the
+     <function>restore_timeline_history_cb</function> callback.  If
+     <literal>false</literal> is returned, the server will not use the
+     <function>restore_timeline_history_cb</function> callback to retrieve
+     timeline history files.
+    </para>
+   </sect3>
+
+   <sect3 id="restore-module-restore-timeline-history">
+    <title>Restore Timeline History Callback</title>
+    <para>
+     The <function>restore_timeline_history_cb</function> callback is called to
+     retrieve a single archived timeline history file for archive recovery or
+     streaming replication.
+
+<programlisting>
+typedef bool (*RestoreTimelineHistoryCB) (RestoreModuleState *state, const char *file, const char *path);
+</programlisting>
+
+     This callback must return <literal>true</literal> only if the file was
+     successfully retrieved.  If the file is not available in the archives, the
+     callback must return <literal>false</literal>.
+     <replaceable>file</replaceable> will contain just the file name
+     of the WAL file to retrieve, while <replaceable>path</replaceable>
+     contains the destination's relative path (including the file name).
+    </para>
+   </sect3>
+
+   <sect3 id="restore-module-timeline-history-exists-configured">
+    <title>Timeline History Exists Configured Callback</title>
+    <para>
+     The <function>timeline_history_exists_configured_cb</function> callback is
+     called to determine whether the module is fully configured and ready to
+     accept requests to determine whether a timeline history file exists in the
+     archives (e.g., its configuration parameters are set to valid values).  If
+     no <function>timeline_history_exists_configured_cb</function> is defined,
+     the server always assumes the module is not configured to check whether
+     certain timeline history files exist.
+
+<programlisting>
+typedef bool (*TimelineHistoryConfiguredCB)  (RestoreModuleState *state);
+</programlisting>
+
+     If <literal>true</literal> is returned, the server will check whether
+     certain timeline history files are present in the archives by calling the
+     <function>timeline_history_exists_cb</function> callback.  If
+     <literal>false</literal> is returned, the server will not use the
+     <function>timeline_history_exists_cb</function> callback to check if
+     timeline history files exist in the archives.
+    </para>
+   </sect3>
+
+   <sect3 id="restore-module-timeline-history-exists">
+    <title>Timeline History Exists Callback</title>
+    <para>
+     The <function>timeline_history_exists_cb</function> callback is called to
+     check whether a timeline history file is present in the archives.
+
+<programlisting>
+typedef bool (*TimelineHistoryExistsCB) (RestoreModuleState *state, const char *file, const char *path);
+</programlisting>
+
+     This callback must return <literal>true</literal> only if the file is
+     present in the archives.  If the file is not available in the archives,
+     the callback must return <literal>false</literal>.
+     <replaceable>file</replaceable> will contain just the file name
+     of the timeline history file.
+    </para>
+
+    <para>
+     Some restore modules might not have a dedicated way to determine whether a
+     timeline history file exists.  For example,
+     <varname>restore_command</varname> only tells the server how to retrieve
+     files.  In this case, the <function>timeline_history_exists_cb</function>
+     callback should copy the file to <replaceable>path</replaceable>, which
+     contains the destination's relative path (including the file name), and
+     the restore module should set
+     <structfield>state->timeline_history_exists_cb_copies</structfield> to
+     <literal>true</literal>.  It is recommended to set this flag in the
+     module's <function>startup_cb</function> callback.  This flag tells the
+     server that it should verify that the file was successfully retrieved
+     after invoking this callback.
+    </para>
+   </sect3>
+
+   <sect3 id="restore-module-archive-cleanup-configured">
+    <title>Archive Cleanup Configured Callback</title>
+    <para>
+     The <function>archive_cleanup_configured_cb</function> callback is called
+     to determine whether the module is fully configured and ready to accept
+     requests to remove old WAL files from the archives (e.g., its
+     configuration parameters are set to valid values).  If no
+     <function>archive_cleanup_configured_cb</function> is defined, the server
+     always assumes the module is not configured to remove old WAL files.
+
+<programlisting>
+typedef bool (*ArchiveCleanupConfiguredCB)  (RestoreModuleState *state);
+</programlisting>
+
+     If <literal>true</literal> is returned, the server will remove old WAL
+     files by calling the <function>archive_cleanup_cb</function> callback.  If
+     <literal>false</literal> is returned, the server will not use the
+     <function>archive_cleanup_cb</function> callback to remove old WAL files.
+    </para>
+   </sect3>
+
+   <sect3 id="restore-module-archive-cleanup">
+    <title>Archive Cleanup Callback</title>
+    <para>
+     The <function>archive_cleanup_cb</function> callback is called at every
+     restart point by the checkpointer process and is intended to provide a
+     mechanism for cleaning up old archived WAL files that are no longer
+     needed by the standby server.
+
+<programlisting>
+typedef void (*ArchiveCleanupCB) (RestoreModuleState *state, const char *lastRestartPointFileName);
+</programlisting>
+
+     <replaceable>lastRestartPointFileName</replaceable> will contain the
+     name of the file that includes the last valid restart point, like in
+     <link linkend="restore-module-restore-wal-segment"><function>restore_wal_segment_cb</function></link>.
+    </para>
+   </sect3>
+
+   <sect3 id="restore-module-recovery-end-configured">
+    <title>Recovery End Configured Callback</title>
+    <para>
+     The <function>recovery_end_configured_cb</function> callback is called to
+     determine whether the module is fully configured and ready to execute its
+     <function>recovery_end_cb</function> callback once at the end of recovery
+     (e.g., its configuration parameters are set to valid values).  If no
+     <function>recovery_end_configured_cb</function> is defined, the server
+     always assumes the module is not configured to execute its
+     <function>recovery_end_cb</function> callback.
+
+<programlisting>
+typedef bool (*RecoveryEndConfiguredCB)  (RestoreModuleState *state);
+</programlisting>
+
+     If <literal>true</literal> is returned, the server will execute the
+     <function>recovery_end_cb</function> callback once at the end of recovery.
+     If <literal>false</literal> is returned, the server will not use the
+     <function>recovery_end_cb</function> callback at the end of recovery.
+    </para>
+   </sect3>
+
+   <sect3 id="restore-module-recovery-end">
+    <title>Recovery End Callback</title>
+    <para>
+     The <function>recovery_end_cb</function> callback is called once at the
+     end of recovery and is intended to provide a mechanism for cleanup
+     following the end of replication or recovery.
+
+<programlisting>
+typedef void (*RecoveryEndCB) (RestoreModuleState *state, const char *lastRestartPointFileName);
+</programlisting>
+
+     <replaceable>lastRestartPointFileName</replaceable> will contain the name
+     of the file containing the last valid restart point, like in
+     <link linkend="restore-module-restore-wal-segment"><function>restore_wal_segment_cb</function></link>.
+    </para>
+   </sect3>
+
+   <sect3 id="restore-module-shutdown">
+    <title>Shutdown Callback</title>
+    <para>
+     The <function>shutdown_cb</function> callback is called when a process
+     that has loaded the restore module exits (e.g., after an error) or the
+     value of <xref linkend="guc-restore-library"/> changes.  If no
+     <function>shutdown_cb</function> is defined, no special action is taken in
+     these situations.  If the restore module has state, this callback should
+     free it to avoid leaks.
+
+<programlisting>
+typedef void (*RestoreShutdownCB) (RestoreModuleState *state);
+ </programlisting>
+    </para>
+   </sect3>
+  </sect2>
+ </sect1>
+</chapter>

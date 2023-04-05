@@ -84,6 +84,7 @@
 #include "replication/snapbuild.h"
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
+#include "restore/restore_module.h"
 #include "storage/bufmgr.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
@@ -692,6 +693,7 @@ static char *GetXLogBuffer(XLogRecPtr ptr, TimeLineID tli);
 static XLogRecPtr XLogBytePosToRecPtr(uint64 bytepos);
 static XLogRecPtr XLogBytePosToEndRecPtr(uint64 bytepos);
 static uint64 XLogRecPtrToBytePos(XLogRecPtr ptr);
+static void GetOldestRestartPointFileName(char *fname);
 
 static void WALInsertLockAcquire(void);
 static void WALInsertLockAcquireExclusive(void);
@@ -4888,13 +4890,20 @@ CleanupAfterArchiveRecovery(TimeLineID EndOfLogTLI, XLogRecPtr EndOfLog,
 							TimeLineID newTLI)
 {
 	/*
-	 * Execute the recovery_end_command, if any.
+	 * Execute the recovery-end callback, if any.
+	 *
+	 * The callback is provided the archive file cutoff point for use during
+	 * log shipping replication.  All files earlier than this point can be
+	 * deleted from the archive, though there is no requirement to do so.
 	 */
-	if (recoveryEndCommand && strcmp(recoveryEndCommand, "") != 0)
-		ExecuteRecoveryCommand(recoveryEndCommand,
-							   "recovery_end_command",
-							   true,
-							   WAIT_EVENT_RECOVERY_END_COMMAND);
+	if (recovery_end_configured())
+	{
+		char		lastRestartPointFname[MAXFNAMELEN];
+
+		GetOldestRestartPointFileName(lastRestartPointFname);
+		RestoreCallbacks->recovery_end_cb(restore_module_state,
+										  lastRestartPointFname);
+	}
 
 	/*
 	 * We switched to a new timeline. Clean up segments on the old timeline.
@@ -7308,13 +7317,20 @@ CreateRestartPoint(int flags)
 							   timestamptz_to_str(xtime)) : 0));
 
 	/*
-	 * Finally, execute archive_cleanup_command, if any.
+	 * Finally, execute archive-cleanup callback, if any.
+	 *
+	 * The callback is provided the archive file cutoff point for use during
+	 * log shipping replication.  All files earlier than this point can be
+	 * deleted from the archive, though there is no requirement to do so.
 	 */
-	if (archiveCleanupCommand && strcmp(archiveCleanupCommand, "") != 0)
-		ExecuteRecoveryCommand(archiveCleanupCommand,
-							   "archive_cleanup_command",
-							   false,
-							   WAIT_EVENT_ARCHIVE_CLEANUP_COMMAND);
+	if (archive_cleanup_configured())
+	{
+		char		lastRestartPointFname[MAXFNAMELEN];
+
+		GetOldestRestartPointFileName(lastRestartPointFname);
+		RestoreCallbacks->archive_cleanup_cb(restore_module_state,
+											 lastRestartPointFname);
+	}
 
 	return true;
 }
@@ -8888,6 +8904,22 @@ GetOldestRestartPoint(XLogRecPtr *oldrecptr, TimeLineID *oldtli)
 	*oldrecptr = ControlFile->checkPointCopy.redo;
 	*oldtli = ControlFile->checkPointCopy.ThisTimeLineID;
 	LWLockRelease(ControlFileLock);
+}
+
+/*
+ * Returns the WAL file name for the last checkpoint or restartpoint.  This is
+ * the oldest WAL file that we still need if we have to restart recovery.
+ */
+static void
+GetOldestRestartPointFileName(char *fname)
+{
+	XLogRecPtr	restartRedoPtr;
+	TimeLineID	restartTli;
+	XLogSegNo	restartSegNo;
+
+	GetOldestRestartPoint(&restartRedoPtr, &restartTli);
+	XLByteToSeg(restartRedoPtr, restartSegNo, wal_segment_size);
+	XLogFileName(fname, restartTli, restartSegNo, wal_segment_size);
 }
 
 /* Thin wrapper around ShutdownWalRcv(). */

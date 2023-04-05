@@ -20,7 +20,7 @@ include $(top_builddir)/src/Makefile.global
 SUBDIRS = access archive backup bootstrap catalog parser commands executor \
 	foreign lib libpq \
 	main nodes optimizer partitioning port postmaster \
-	regex replication rewrite \
+	regex replication restore rewrite \
 	statistics storage tcop tsearch utils $(top_builddir)/src/timezone \
 	jit
 

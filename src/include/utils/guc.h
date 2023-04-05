@@ -372,6 +372,9 @@ extern int	NewGUCNestLevel(void);
 extern void AtEOXact_GUC(bool isCommit, int nestLevel);
 extern void BeginReportingGUCOptions(void);
 extern void ReportChangedGUCOptions(void);
+extern bool CheckMutuallyExclusiveStringGUCs(const char *p1val, const char *p1name,
+											 const char *p2val, const char *p2name,
+											 int elevel);
 extern void ParseLongOption(const char *string, char **name, char **value);
 extern const char *get_config_unit_name(int flags);
 extern bool parse_int(const char *value, int *result, int flags,

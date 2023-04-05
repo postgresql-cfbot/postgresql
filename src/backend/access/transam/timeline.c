@@ -59,7 +59,8 @@ restoreTimeLineHistoryFiles(TimeLineID begin, TimeLineID end)
 			continue;
 
 		TLHistoryFileName(histfname, tli);
-		if (RestoreArchivedFile(path, histfname, "RECOVERYHISTORY", 0, false))
+		if (RestoreArchivedFile(path, histfname, "RECOVERYHISTORY", 0, false,
+								ARCHIVE_TYPE_TIMELINE_HISTORY))
 			KeepFileRestoredFromArchive(path, histfname);
 	}
 }
@@ -97,7 +98,8 @@ readTimeLineHistory(TimeLineID targetTLI)
 	{
 		TLHistoryFileName(histfname, targetTLI);
 		fromArchive =
-			RestoreArchivedFile(path, histfname, "RECOVERYHISTORY", 0, false);
+			RestoreArchivedFile(path, histfname, "RECOVERYHISTORY", 0, false,
+								ARCHIVE_TYPE_TIMELINE_HISTORY);
 	}
 	else
 		TLHistoryFilePath(path, targetTLI);
@@ -232,7 +234,8 @@ existsTimeLineHistory(TimeLineID probeTLI)
 	if (ArchiveRecoveryRequested)
 	{
 		TLHistoryFileName(histfname, probeTLI);
-		RestoreArchivedFile(path, histfname, "RECOVERYHISTORY", 0, false);
+		RestoreArchivedFile(path, histfname, "RECOVERYHISTORY", 0, false,
+							ARCHIVE_TYPE_TIMELINE_HISTORY_EXISTS);
 	}
 	else
 		TLHistoryFilePath(path, probeTLI);
@@ -334,7 +337,8 @@ writeTimeLineHistory(TimeLineID newTLI, TimeLineID parentTLI,
 	if (ArchiveRecoveryRequested)
 	{
 		TLHistoryFileName(histfname, parentTLI);
-		RestoreArchivedFile(path, histfname, "RECOVERYHISTORY", 0, false);
+		RestoreArchivedFile(path, histfname, "RECOVERYHISTORY", 0, false,
+							ARCHIVE_TYPE_TIMELINE_HISTORY);
 	}
 	else
 		TLHistoryFilePath(path, parentTLI);

@@ -50,6 +50,7 @@
 #include "postmaster/startup.h"
 #include "replication/slot.h"
 #include "replication/walreceiver.h"
+#include "restore/restore_module.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/latch.h"
@@ -1078,18 +1079,21 @@ validateRecoveryParameters(void)
 	if (StandbyModeRequested)
 	{
 		if ((PrimaryConnInfo == NULL || strcmp(PrimaryConnInfo, "") == 0) &&
-			(recoveryRestoreCommand == NULL || strcmp(recoveryRestoreCommand, "") == 0))
+			(!restore_wal_segment_configured() ||
+			 !restore_timeline_history_configured() ||
+			 !timeline_history_exists_configured()))
 			ereport(WARNING,
-					(errmsg("specified neither primary_conninfo nor restore_command"),
+					(errmsg("specified neither primary_conninfo nor restore_command nor a configured restore_library"),
 					 errhint("The database server will regularly poll the pg_wal subdirectory to check for files placed there.")));
 	}
 	else
 	{
-		if (recoveryRestoreCommand == NULL ||
-			strcmp(recoveryRestoreCommand, "") == 0)
+		if (!restore_wal_segment_configured() ||
+			!restore_timeline_history_configured() ||
+			!timeline_history_exists_configured())
 			ereport(FATAL,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					 errmsg("must specify restore_command when standby mode is not enabled")));
+					 errmsg("must specify restore_command or a configured restore_library when standby mode is not enabled")));
 	}
 
 	/*
@@ -4106,7 +4110,8 @@ XLogFileRead(XLogSegNo segno, int emode, TimeLineID tli,
 			if (!RestoreArchivedFile(path, xlogfname,
 									 "RECOVERYXLOG",
 									 wal_segment_size,
-									 InRedo))
+									 InRedo,
+									 ARCHIVE_TYPE_WAL_SEGMENT))
 				return -1;
 			break;
 

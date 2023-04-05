@@ -133,6 +133,7 @@ ArchiveModuleState
 ArchiveOpts
 ArchiveShutdownCB
 ArchiveStreamState
+ArchiveType
 ArchiverOutput
 ArchiverStage
 ArrayAnalyzeExtraData

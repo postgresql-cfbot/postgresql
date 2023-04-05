@@ -7356,11 +7356,16 @@ gather_grouping_paths(PlannerInfo *root, RelOptInfo *rel)
 	ListCell   *lc;
 	Path	   *cheapest_partial_path;
 
+	/* By grouping time we shouldn't have any lateral dependencies. */
+	Assert(rel->lateral_relids == NULL);
+
 	/* Try Gather for unordered paths and Gather Merge for ordered ones. */
 	generate_useful_gather_paths(root, rel, true);
 
 	/* Try cheapest partial path + explicit Sort + Gather Merge. */
 	cheapest_partial_path = linitial(rel->partial_pathlist);
+	/* By grouping time we shouldn't have any lateral dependencies. */
+	Assert(PATH_REQ_OUTER(cheapest_partial_path) == NULL);
 	if (!pathkeys_contained_in(root->group_pathkeys,
 							   cheapest_partial_path->pathkeys))
 	{
@@ -7411,6 +7416,9 @@ gather_grouping_paths(PlannerInfo *root, RelOptInfo *rel)
 
 		if (presorted_keys == 0)
 			continue;
+
+		/* By grouping time we shouldn't have any lateral dependencies. */
+		Assert(PATH_REQ_OUTER(path) == NULL);
 
 		path = (Path *) create_incremental_sort_path(root,
 													 rel,

@@ -1284,60 +1284,64 @@ EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM part p(x) ORDER BY x;
 --
 -- pruning won't work for mc3p, because some keys are Params
 explain (costs off) select * from mc2p t1, lateral (select count(*) from mc3p t2 where t2.a = t1.b and abs(t2.b) = 1 and t2.c = 1) s where t1.a = 1;
-                              QUERY PLAN                               
------------------------------------------------------------------------
- Nested Loop
-   ->  Append
-         ->  Seq Scan on mc2p1 t1_1
-               Filter: (a = 1)
-         ->  Seq Scan on mc2p2 t1_2
-               Filter: (a = 1)
-         ->  Seq Scan on mc2p_default t1_3
-               Filter: (a = 1)
-   ->  Aggregate
-         ->  Append
-               ->  Seq Scan on mc3p0 t2_1
-                     Filter: ((a = t1.b) AND (c = 1) AND (abs(b) = 1))
-               ->  Seq Scan on mc3p1 t2_2
-                     Filter: ((a = t1.b) AND (c = 1) AND (abs(b) = 1))
-               ->  Seq Scan on mc3p2 t2_3
-                     Filter: ((a = t1.b) AND (c = 1) AND (abs(b) = 1))
-               ->  Seq Scan on mc3p3 t2_4
-                     Filter: ((a = t1.b) AND (c = 1) AND (abs(b) = 1))
-               ->  Seq Scan on mc3p4 t2_5
-                     Filter: ((a = t1.b) AND (c = 1) AND (abs(b) = 1))
-               ->  Seq Scan on mc3p5 t2_6
-                     Filter: ((a = t1.b) AND (c = 1) AND (abs(b) = 1))
-               ->  Seq Scan on mc3p6 t2_7
-                     Filter: ((a = t1.b) AND (c = 1) AND (abs(b) = 1))
-               ->  Seq Scan on mc3p7 t2_8
-                     Filter: ((a = t1.b) AND (c = 1) AND (abs(b) = 1))
-               ->  Seq Scan on mc3p_default t2_9
-                     Filter: ((a = t1.b) AND (c = 1) AND (abs(b) = 1))
-(28 rows)
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather
+   Workers Planned: 2
+   ->  Nested Loop
+         ->  Parallel Append
+               ->  Parallel Seq Scan on mc2p1 t1_1
+                     Filter: (a = 1)
+               ->  Parallel Seq Scan on mc2p2 t1_2
+                     Filter: (a = 1)
+               ->  Parallel Seq Scan on mc2p_default t1_3
+                     Filter: (a = 1)
+         ->  Aggregate
+               ->  Append
+                     ->  Seq Scan on mc3p0 t2_1
+                           Filter: ((a = t1.b) AND (c = 1) AND (abs(b) = 1))
+                     ->  Seq Scan on mc3p1 t2_2
+                           Filter: ((a = t1.b) AND (c = 1) AND (abs(b) = 1))
+                     ->  Seq Scan on mc3p2 t2_3
+                           Filter: ((a = t1.b) AND (c = 1) AND (abs(b) = 1))
+                     ->  Seq Scan on mc3p3 t2_4
+                           Filter: ((a = t1.b) AND (c = 1) AND (abs(b) = 1))
+                     ->  Seq Scan on mc3p4 t2_5
+                           Filter: ((a = t1.b) AND (c = 1) AND (abs(b) = 1))
+                     ->  Seq Scan on mc3p5 t2_6
+                           Filter: ((a = t1.b) AND (c = 1) AND (abs(b) = 1))
+                     ->  Seq Scan on mc3p6 t2_7
+                           Filter: ((a = t1.b) AND (c = 1) AND (abs(b) = 1))
+                     ->  Seq Scan on mc3p7 t2_8
+                           Filter: ((a = t1.b) AND (c = 1) AND (abs(b) = 1))
+                     ->  Seq Scan on mc3p_default t2_9
+                           Filter: ((a = t1.b) AND (c = 1) AND (abs(b) = 1))
+(30 rows)
 
 -- pruning should work fine, because values for a prefix of keys (a, b) are
 -- available
 explain (costs off) select * from mc2p t1, lateral (select count(*) from mc3p t2 where t2.c = t1.b and abs(t2.b) = 1 and t2.a = 1) s where t1.a = 1;
-                              QUERY PLAN                               
------------------------------------------------------------------------
- Nested Loop
-   ->  Append
-         ->  Seq Scan on mc2p1 t1_1
-               Filter: (a = 1)
-         ->  Seq Scan on mc2p2 t1_2
-               Filter: (a = 1)
-         ->  Seq Scan on mc2p_default t1_3
-               Filter: (a = 1)
-   ->  Aggregate
-         ->  Append
-               ->  Seq Scan on mc3p0 t2_1
-                     Filter: ((c = t1.b) AND (a = 1) AND (abs(b) = 1))
-               ->  Seq Scan on mc3p1 t2_2
-                     Filter: ((c = t1.b) AND (a = 1) AND (abs(b) = 1))
-               ->  Seq Scan on mc3p_default t2_3
-                     Filter: ((c = t1.b) AND (a = 1) AND (abs(b) = 1))
-(16 rows)
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
+ Gather
+   Workers Planned: 2
+   ->  Nested Loop
+         ->  Parallel Append
+               ->  Parallel Seq Scan on mc2p1 t1_1
+                     Filter: (a = 1)
+               ->  Parallel Seq Scan on mc2p2 t1_2
+                     Filter: (a = 1)
+               ->  Parallel Seq Scan on mc2p_default t1_3
+                     Filter: (a = 1)
+         ->  Aggregate
+               ->  Append
+                     ->  Seq Scan on mc3p0 t2_1
+                           Filter: ((c = t1.b) AND (a = 1) AND (abs(b) = 1))
+                     ->  Seq Scan on mc3p1 t2_2
+                           Filter: ((c = t1.b) AND (a = 1) AND (abs(b) = 1))
+                     ->  Seq Scan on mc3p_default t2_3
+                           Filter: ((c = t1.b) AND (a = 1) AND (abs(b) = 1))
+(18 rows)
 
 -- also here, because values for all keys are provided
 explain (costs off) select * from mc2p t1, lateral (select count(*) from mc3p t2 where t2.a = 1 and abs(t2.b) = 1 and t2.c = 1) s where t1.a = 1;

@@ -69,7 +69,7 @@
 #include "tcop/utility.h"
 #include "utils/inval.h"
 #include "utils/memutils.h"
-#include "utils/resowner_private.h"
+#include "utils/resowner.h"
 #include "utils/rls.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
@@ -114,6 +114,26 @@ static TupleDesc PlanCacheComputeResultDesc(List *stmt_list);
 static void PlanCacheRelCallback(Datum arg, Oid relid);
 static void PlanCacheObjectCallback(Datum arg, int cacheid, uint32 hashvalue);
 static void PlanCacheSysCallback(Datum arg, int cacheid, uint32 hashvalue);
+
+/* ResourceOwner callbacks to track plancache references */
+static void ResOwnerReleaseCachedPlan(Datum res);
+static void ResOwnerPrintPlanCacheLeakWarning(Datum res);
+
+static ResourceOwnerFuncs planref_resowner_funcs =
+{
+	.name = "plancache reference",
+	.release_phase = RESOURCE_RELEASE_AFTER_LOCKS,
+	.release_priority = RELEASE_PRIO_PLANCACHE_REFS,
+	.ReleaseResource = ResOwnerReleaseCachedPlan,
+	.PrintLeakWarning = ResOwnerPrintPlanCacheLeakWarning
+};
+
+/* Convenience wrappers over ResourceOwnerRemember/Forget */
+#define ResourceOwnerRememberPlanCacheRef(owner, plan) \
+	ResourceOwnerRemember(owner, PointerGetDatum(plan), &planref_resowner_funcs)
+#define ResourceOwnerForgetPlanCacheRef(owner, plan) \
+	ResourceOwnerForget(owner, PointerGetDatum(plan), &planref_resowner_funcs)
+
 
 /* GUC parameter */
 int			plan_cache_mode = PLAN_CACHE_MODE_AUTO;
@@ -1229,7 +1249,7 @@ GetCachedPlan(CachedPlanSource *plansource, ParamListInfo boundParams,
 
 	/* Flag the plan as in use by caller */
 	if (owner)
-		ResourceOwnerEnlargePlanCacheRefs(owner);
+		ResourceOwnerEnlarge(owner);
 	plan->refcount++;
 	if (owner)
 		ResourceOwnerRememberPlanCacheRef(owner, plan);
@@ -1392,7 +1412,7 @@ CachedPlanAllowsSimpleValidityCheck(CachedPlanSource *plansource,
 	/* Bump refcount if requested. */
 	if (owner)
 	{
-		ResourceOwnerEnlargePlanCacheRefs(owner);
+		ResourceOwnerEnlarge(owner);
 		plan->refcount++;
 		ResourceOwnerRememberPlanCacheRef(owner, plan);
 	}
@@ -1451,7 +1471,7 @@ CachedPlanIsSimplyValid(CachedPlanSource *plansource, CachedPlan *plan,
 	/* It's still good.  Bump refcount if requested. */
 	if (owner)
 	{
-		ResourceOwnerEnlargePlanCacheRefs(owner);
+		ResourceOwnerEnlarge(owner);
 		plan->refcount++;
 		ResourceOwnerRememberPlanCacheRef(owner, plan);
 	}
@@ -2205,4 +2225,28 @@ ResetPlanCache(void)
 
 		cexpr->is_valid = false;
 	}
+}
+
+/*
+ * Release all CachedPlans remembered by 'owner'
+ */
+void
+ReleaseAllPlanCacheRefsInOwner(ResourceOwner owner)
+{
+	ResourceOwnerReleaseAllOfKind(owner, &planref_resowner_funcs);
+}
+
+/* ResourceOwner callbacks */
+
+static void
+ResOwnerReleaseCachedPlan(Datum res)
+{
+	ReleaseCachedPlan((CachedPlan *) DatumGetPointer(res), NULL);
+}
+
+static void
+ResOwnerPrintPlanCacheLeakWarning(Datum res)
+{
+	elog(WARNING, "plancache reference leak: plan %p not closed",
+		 DatumGetPointer(res));
 }

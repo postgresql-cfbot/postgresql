@@ -80,13 +80,14 @@
 #include "storage/smgr.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
+#include "utils/catcache.h"
 #include "utils/datum.h"
 #include "utils/fmgroids.h"
 #include "utils/inval.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/relmapper.h"
-#include "utils/resowner_private.h"
+#include "utils/resowner.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
 
@@ -273,6 +274,7 @@ static HTAB *OpClassCache = NULL;
 
 /* non-export function prototypes */
 
+static void RelationCloseCleanup(Relation relation);
 static void RelationDestroyRelation(Relation relation, bool remember_tupdesc);
 static void RelationClearRelation(Relation relation, bool rebuild);
 
@@ -2115,6 +2117,25 @@ RelationIdGetRelation(Oid relationId)
  * ----------------------------------------------------------------
  */
 
+/* ResourceOwner callbacks to track relcache references */
+static void ResOwnerReleaseRelation(Datum res);
+static void ResOwnerPrintRelCacheLeakWarning(Datum res);
+
+static ResourceOwnerFuncs relref_resowner_funcs =
+{
+	.name = "relcache reference",
+	.release_phase = RESOURCE_RELEASE_BEFORE_LOCKS,
+	.release_priority = RELEASE_PRIO_RELCACHE_REFS,
+	.ReleaseResource = ResOwnerReleaseRelation,
+	.PrintLeakWarning = ResOwnerPrintRelCacheLeakWarning
+};
+
+/* Convenience wrappers over ResourceOwnerRemember/Forget */
+#define ResourceOwnerRememberRelationRef(owner, rel) \
+	ResourceOwnerRemember(owner, PointerGetDatum(rel), &relref_resowner_funcs)
+#define ResourceOwnerForgetRelationRef(owner, rel) \
+	ResourceOwnerForget(owner, PointerGetDatum(rel), &relref_resowner_funcs)
+
 /*
  * RelationIncrementReferenceCount
  *		Increments relation reference count.
@@ -2126,7 +2147,7 @@ RelationIdGetRelation(Oid relationId)
 void
 RelationIncrementReferenceCount(Relation rel)
 {
-	ResourceOwnerEnlargeRelationRefs(CurrentResourceOwner);
+	ResourceOwnerEnlarge(CurrentResourceOwner);
 	rel->rd_refcnt += 1;
 	if (!IsBootstrapProcessingMode())
 		ResourceOwnerRememberRelationRef(CurrentResourceOwner, rel);
@@ -2162,6 +2183,12 @@ RelationClose(Relation relation)
 	/* Note: no locking manipulations needed */
 	RelationDecrementReferenceCount(relation);
 
+	RelationCloseCleanup(relation);
+}
+
+static void
+RelationCloseCleanup(Relation relation)
+{
 	/*
 	 * If the relation is no longer open in this session, we can clean up any
 	 * stale partition descriptors it has.  This is unlikely, so check to see
@@ -6812,4 +6839,32 @@ unlink_initfile(const char *initfilename, int elevel)
 					 errmsg("could not remove cache file \"%s\": %m",
 							initfilename)));
 	}
+}
+
+/*
+ * ResourceOwner callbacks
+ */
+static void
+ResOwnerPrintRelCacheLeakWarning(Datum res)
+{
+	Relation	rel = (Relation) DatumGetPointer(res);
+
+	elog(WARNING, "relcache reference leak: relation \"%s\" not closed",
+		 RelationGetRelationName(rel));
+}
+
+static void
+ResOwnerReleaseRelation(Datum res)
+{
+	Relation	rel = (Relation) DatumGetPointer(res);
+
+	/*
+	 * This reference has already been removed from ther resource owner, so
+	 * decrement reference count without calling
+	 * ResourceOwnerForgetRelationRef.
+	 */
+	Assert(rel->rd_refcnt > 0);
+	rel->rd_refcnt -= 1;
+
+	RelationCloseCleanup((Relation) res);
 }

@@ -383,6 +383,15 @@ typedef struct CkptSortItem
 
 extern PGDLLIMPORT CkptSortItem *CkptBufferIds;
 
+/* ResourceOwner callbacks to hold buffer pins */
+extern ResourceOwnerFuncs buffer_resowner_funcs;
+
+/* Convenience wrappers over ResourceOwnerRemember/Forget */
+#define ResourceOwnerRememberBuffer(owner, buffer) \
+	ResourceOwnerRemember(owner, Int32GetDatum(buffer), &buffer_resowner_funcs)
+#define ResourceOwnerForgetBuffer(owner, buffer) \
+	ResourceOwnerForget(owner, Int32GetDatum(buffer), &buffer_resowner_funcs)
+
 /*
  * Internal buffer management routines
  */

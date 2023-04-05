@@ -57,6 +57,7 @@
 #include "lib/pairingheap.h"
 #include "miscadmin.h"
 #include "port/pg_lfind.h"
+#include "storage/fd.h"
 #include "storage/predicate.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
@@ -67,7 +68,7 @@
 #include "utils/memutils.h"
 #include "utils/old_snapshot.h"
 #include "utils/rel.h"
-#include "utils/resowner_private.h"
+#include "utils/resowner.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
 #include "utils/timestamp.h"
@@ -172,8 +173,28 @@ static List *exportedSnapshots = NIL;
 /* Prototypes for local functions */
 static TimestampTz AlignTimestampToMinuteBoundary(TimestampTz ts);
 static Snapshot CopySnapshot(Snapshot snapshot);
+static void UnregisterSnapshotNoOwner(Snapshot snapshot);
 static void FreeSnapshot(Snapshot snapshot);
 static void SnapshotResetXmin(void);
+
+/* ResourceOwner callbacks to track snapshot references */
+static void ResOwnerReleaseSnapshot(Datum res);
+static void ResOwnerPrintSnapshotLeakWarning(Datum res);
+
+static ResourceOwnerFuncs snapshot_resowner_funcs =
+{
+	.name = "snapshot reference",
+	.release_phase = RESOURCE_RELEASE_AFTER_LOCKS,
+	.release_priority = RELEASE_PRIO_SNAPSHOT_REFS,
+	.ReleaseResource = ResOwnerReleaseSnapshot,
+	.PrintLeakWarning = ResOwnerPrintSnapshotLeakWarning
+};
+
+/* Convenience wrappers over ResourceOwnerRemember/Forget */
+#define ResourceOwnerRememberSnapshot(owner, snap) \
+	ResourceOwnerRemember(owner, PointerGetDatum(snap), &snapshot_resowner_funcs)
+#define ResourceOwnerForgetSnapshot(owner, snap) \
+	ResourceOwnerForget(owner, PointerGetDatum(snap), &snapshot_resowner_funcs)
 
 /*
  * Snapshot fields to be serialized.
@@ -850,7 +871,7 @@ RegisterSnapshotOnOwner(Snapshot snapshot, ResourceOwner owner)
 	snap = snapshot->copied ? snapshot : CopySnapshot(snapshot);
 
 	/* and tell resowner.c about it */
-	ResourceOwnerEnlargeSnapshots(owner);
+	ResourceOwnerEnlarge(owner);
 	snap->regd_count++;
 	ResourceOwnerRememberSnapshot(owner, snap);
 
@@ -886,10 +907,15 @@ UnregisterSnapshotFromOwner(Snapshot snapshot, ResourceOwner owner)
 	if (snapshot == NULL)
 		return;
 
+	ResourceOwnerForgetSnapshot(owner, snapshot);
+	UnregisterSnapshotNoOwner(snapshot);
+}
+
+static void
+UnregisterSnapshotNoOwner(Snapshot snapshot)
+{
 	Assert(snapshot->regd_count > 0);
 	Assert(!pairingheap_is_empty(&RegisteredSnapshots));
-
-	ResourceOwnerForgetSnapshot(owner, snapshot);
 
 	snapshot->regd_count--;
 	if (snapshot->regd_count == 0)
@@ -2378,4 +2404,19 @@ XidInMVCCSnapshot(TransactionId xid, Snapshot snapshot)
 	}
 
 	return false;
+}
+
+/* ResourceOwner callbacks */
+
+static void
+ResOwnerReleaseSnapshot(Datum res)
+{
+	UnregisterSnapshotNoOwner((Snapshot) DatumGetPointer(res));
+}
+
+static void
+ResOwnerPrintSnapshotLeakWarning(Datum res)
+{
+	elog(WARNING, "Snapshot reference leak: Snapshot %p still referenced",
+		 DatumGetPointer(res));
 }

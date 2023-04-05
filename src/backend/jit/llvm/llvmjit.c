@@ -40,7 +40,7 @@
 #include "portability/instr_time.h"
 #include "storage/ipc.h"
 #include "utils/memutils.h"
-#include "utils/resowner_private.h"
+#include "utils/resowner.h"
 
 /* Handle of a module emitted via ORC JIT */
 typedef struct LLVMJitHandle
@@ -121,6 +121,25 @@ static LLVMOrcLLJITRef llvm_create_jit_instance(LLVMTargetMachineRef tm);
 static char *llvm_error_message(LLVMErrorRef error);
 #endif							/* LLVM_VERSION_MAJOR > 11 */
 
+/* ResourceOwner callbacks to hold JitContexts  */
+static void ResOwnerReleaseJitContext(Datum res);
+static void ResOwnerPrintJitContextLeakWarning(Datum res);
+
+static ResourceOwnerFuncs jit_resowner_funcs =
+{
+	.name = "LLVM JIT context",
+	.release_phase = RESOURCE_RELEASE_BEFORE_LOCKS,
+	.release_priority = RELEASE_PRIO_JIT_CONTEXTS,
+	.ReleaseResource = ResOwnerReleaseJitContext,
+	.PrintLeakWarning = ResOwnerPrintJitContextLeakWarning
+};
+
+/* Convenience wrappers over ResourceOwnerRemember/Forget */
+#define ResourceOwnerRememberJIT(owner, handle) \
+	ResourceOwnerRemember(owner, PointerGetDatum(handle), &jit_resowner_funcs)
+#define ResourceOwnerForgetJIT(owner, handle) \
+	ResourceOwnerForget(owner, PointerGetDatum(handle), &jit_resowner_funcs)
+
 PG_MODULE_MAGIC;
 
 
@@ -151,7 +170,7 @@ llvm_create_context(int jitFlags)
 
 	llvm_session_initialize();
 
-	ResourceOwnerEnlargeJIT(CurrentResourceOwner);
+	ResourceOwnerEnlarge(CurrentResourceOwner);
 
 	context = MemoryContextAllocZero(TopMemoryContext,
 									 sizeof(LLVMJitContext));
@@ -159,7 +178,7 @@ llvm_create_context(int jitFlags)
 
 	/* ensure cleanup */
 	context->base.resowner = CurrentResourceOwner;
-	ResourceOwnerRememberJIT(CurrentResourceOwner, PointerGetDatum(context));
+	ResourceOwnerRememberJIT(CurrentResourceOwner, context);
 
 	return context;
 }
@@ -221,6 +240,9 @@ llvm_release_context(JitContext *context)
 	}
 	list_free(llvm_context->handles);
 	llvm_context->handles = NIL;
+
+	if (context->resowner)
+		ResourceOwnerForgetJIT(context->resowner, context);
 }
 
 /*
@@ -1266,3 +1288,24 @@ llvm_error_message(LLVMErrorRef error)
 }
 
 #endif							/* LLVM_VERSION_MAJOR > 11 */
+
+/*
+ * ResourceOwner callbacks
+ */
+static void
+ResOwnerReleaseJitContext(Datum res)
+{
+	JitContext *context = (JitContext *) DatumGetPointer(res);
+
+	context->resowner = NULL;
+	jit_release_context(context);
+}
+
+static void
+ResOwnerPrintJitContextLeakWarning(Datum res)
+{
+	/* XXX: We used to not print these. Was that intentional? */
+	JitContext *context = (JitContext *) DatumGetPointer(res);
+
+	elog(WARNING, "JIT context leak: context %p still referenced", context);
+}

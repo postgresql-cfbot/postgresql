@@ -69,6 +69,51 @@ $node_publisher->wait_for_catchup('sub1');
 
 pass('index predicates do not cause crash');
 
+# https://www.postgresql.org/message-id/flat/adf0452f-8c6b-7def-d35e-ab516c80088e%40inbox.ru
+
+# The bug was that when a syntax error occurred in a SQL-language or PL/pgSQL-language
+# CREATE FUNCTION or DO command executed in a logical replication worker,
+# we'd suffer a null pointer dereference or assertion failure.
+
+$node_subscriber->safe_psql('postgres', q{
+	create or replace procedure rebuild_test(
+	) as
+	$body$
+	declare
+		l_code  text:= E'create or replace function public.test_selector(
+	) returns setof public.tab1 as
+	\$body\$
+		select * from  error_name
+	\$body\$ language sql;';
+	begin
+		execute l_code;
+		perform public.test_selector();
+	end
+	$body$ language plpgsql;
+	create or replace function test_trg()
+	returns trigger as
+	$body$
+		declare
+		begin
+			call public.rebuild_test();
+			return NULL;
+		end
+	$body$ language plpgsql;
+	create trigger test_trigger after insert on tab1 for each row
+								execute function test_trg();
+	alter table tab1 enable replica trigger test_trigger;
+});
+
+# This command will cause a crash on the replica if that bug hasn't been fixed
+$node_publisher->safe_psql('postgres', "INSERT INTO tab1 VALUES (3, 4)");
+
+my $result = $node_subscriber->wait_for_log(
+	"ERROR:  relation \"error_name\" does not exist at character"
+);
+
+ok($result,
+	"ERROR: Logical decoding doesn't fail on function error");
+
 # We'll re-use these nodes below, so drop their replication state.
 $node_subscriber->safe_psql('postgres', "DROP SUBSCRIPTION sub1");
 $node_publisher->safe_psql('postgres', "DROP PUBLICATION pub1");
@@ -352,7 +397,7 @@ $node_subscriber->wait_for_subscription_sync($node_publisher, 'tap_sub_sch');
 
 # Subscriber's sch1.t1 should receive the row inserted into the new sch1.t1,
 # but not the row inserted into the old sch1.t1 post-rename.
-my $result = $node_subscriber->safe_psql('postgres', "SELECT * FROM sch1.t1");
+$result = $node_subscriber->safe_psql('postgres', "SELECT * FROM sch1.t1");
 is( $result, qq(1
 2), 'check data in subscriber sch1.t1 after schema rename');
 

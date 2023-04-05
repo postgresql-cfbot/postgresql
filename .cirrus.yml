@@ -244,6 +244,7 @@ LINUX_CONFIGURE_FEATURES: &LINUX_CONFIGURE_FEATURES >-
 LINUX_MESON_FEATURES: &LINUX_MESON_FEATURES >-
   -Dllvm=enabled
   -Duuid=e2fs
+  -Dzstd=enabled
 
 
 task:
@@ -362,6 +363,9 @@ task:
 
       configure_script: |
         su postgres <<-EOF
+          mkdir subprojects
+          meson wrap install zstd
+          meson configure -D zstd:multithread=enabled --force-fallback-for=zstd
           meson setup \
             --buildtype=debug \
             -Dcassert=true \
@@ -581,7 +585,10 @@ task:
   # Use /DEBUG:FASTLINK to avoid high memory usage during linking
   configure_script: |
     vcvarsall x64
-    meson setup --backend ninja --buildtype debug -Dc_link_args=/DEBUG:FASTLINK -Dcassert=true -Db_pch=true -Dextra_lib_dirs=c:\openssl\1.1\lib -Dextra_include_dirs=c:\openssl\1.1\include -DTAR=%TAR% -DPG_TEST_EXTRA="%PG_TEST_EXTRA%" build
+    mkdir subprojects
+    meson wrap install zstd
+    meson configure -D zstd:multithread=enabled --force-fallback-for=zstd
+    meson setup --backend ninja --buildtype debug -Dc_link_args=/DEBUG:FASTLINK -Dcassert=true -Db_pch=true -Dextra_lib_dirs=c:\openssl\1.1\lib -Dextra_include_dirs=c:\openssl\1.1\include -DTAR=%TAR% -DPG_TEST_EXTRA="%PG_TEST_EXTRA%" -D zstd=enabled build
 
   build_script: |
     vcvarsall x64

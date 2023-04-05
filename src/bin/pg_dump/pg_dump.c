@@ -56,6 +56,7 @@
 #include "catalog/pg_type_d.h"
 #include "common/connect.h"
 #include "common/relpath.h"
+#include "compress_io.h"
 #include "dumputils.h"
 #include "fe_utils/option_utils.h"
 #include "fe_utils/string_utils.h"
@@ -735,18 +736,9 @@ main(int argc, char **argv)
 		pg_fatal("invalid compression specification: %s",
 				 error_detail);
 
-	switch (compression_algorithm)
-	{
-		case PG_COMPRESSION_NONE:
-			/* fallthrough */
-		case PG_COMPRESSION_GZIP:
-			/* fallthrough */
-		case PG_COMPRESSION_LZ4:
-			break;
-		case PG_COMPRESSION_ZSTD:
-			pg_fatal("compression with %s is not yet supported", "ZSTD");
-			break;
-	}
+	error_detail = supports_compression(compression_spec);
+	if (error_detail != NULL)
+		pg_fatal("%s", error_detail);
 
 	/*
 	 * Custom and directory formats are compressed by default with gzip when
@@ -755,8 +747,8 @@ main(int argc, char **argv)
 	if ((archiveFormat == archCustom || archiveFormat == archDirectory) &&
 		!user_compression_defined)
 	{
-#ifdef HAVE_LIBZ
-		parse_compress_specification(PG_COMPRESSION_GZIP, NULL,
+#ifdef USE_ZSTD
+		parse_compress_specification(PG_COMPRESSION_ZSTD, NULL,
 									 &compression_spec);
 #else
 		/* Nothing to do in the default case */

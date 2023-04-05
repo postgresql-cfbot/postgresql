@@ -30,6 +30,17 @@ typedef struct BulkInsertStateData
 {
 	BufferAccessStrategy strategy;	/* our BULKWRITE strategy object */
 	Buffer		current_buf;	/* current insertion target page */
+
+	/*
+	 * State for bulk extensions. Further pages that were unused at the time
+	 * of the extension. They might be in use by the time we use them though,
+	 * so rechecks are needed.
+	 *
+	 * XXX: It's possible these should live in RelationData instead, alongside
+	 * targetblock.
+	 */
+	BlockNumber next_free;
+	BlockNumber last_free;
 } BulkInsertStateData;
 
 
@@ -38,6 +49,7 @@ extern void RelationPutHeapTuple(Relation relation, Buffer buffer,
 extern Buffer RelationGetBufferForTuple(Relation relation, Size len,
 										Buffer otherBuffer, int options,
 										BulkInsertStateData *bistate,
-										Buffer *vmbuffer, Buffer *vmbuffer_other);
+										Buffer *vmbuffer, Buffer *vmbuffer_other,
+										int num_pages);
 
 #endif							/* HIO_H */

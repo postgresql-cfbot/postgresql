@@ -736,6 +736,10 @@ ginvacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 	 */
 	needLock = !RELATION_IS_LOCAL(index);
 
+	/*
+	 * FIXME: Now that new pages are locked with RBM_ZERO_AND_LOCK, I don't
+	 * think this is still required?
+	 */
 	if (needLock)
 		LockRelationForExtension(index, ExclusiveLock);
 	npages = RelationGetNumberOfBlocks(index);
@@ -786,6 +790,10 @@ ginvacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 
 	stats->pages_free = totFreePages;
 
+	/*
+	 * FIXME: Now that new pages are locked with RBM_ZERO_AND_LOCK, I don't
+	 * think this is still required?
+	 */
 	if (needLock)
 		LockRelationForExtension(index, ExclusiveLock);
 	stats->num_pages = RelationGetNumberOfBlocks(index);

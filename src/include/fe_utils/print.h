@@ -220,7 +220,10 @@ extern void printTableCleanup(printTableContent *const content);
 extern void printTable(const printTableContent *cont,
 					   FILE *fout, bool is_pager, FILE *flog);
 extern void printQuery(const PGresult *result, const printQueryOpt *opt,
-					   FILE *fout, bool is_pager, FILE *flog);
+						  FILE *fout, bool is_pager, FILE *flog);
+extern void printQueryChunks(const PGresult *results[], int nresults,
+							 const printQueryOpt *opt,
+							 FILE *fout, bool is_pager, FILE *flog);
 
 extern char column_type_alignment(Oid);
 

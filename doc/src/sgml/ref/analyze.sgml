@@ -28,6 +28,7 @@ ANALYZE [ VERBOSE ] [ <replaceable class="parameter">table_and_columns</replacea
 
     VERBOSE [ <replaceable class="parameter">boolean</replaceable> ]
     SKIP_LOCKED [ <replaceable class="parameter">boolean</replaceable> ]
+    BUFFER_USAGE_LIMIT [ <replaceable class="parameter">string</replaceable> ]
 
 <phrase>and <replaceable class="parameter">table_and_columns</replaceable> is:</phrase>
 
@@ -94,6 +95,23 @@ ANALYZE [ VERBOSE ] [ <replaceable class="parameter">table_and_columns</replacea
      </para>
     </listitem>
    </varlistentry>
+
+   <varlistentry>
+    <term><literal>BUFFER_USAGE_LIMIT</literal></term>
+    <listitem>
+     <para>
+      Specifies the
+      <glossterm linkend="glossary-buffer-access-strategy">Buffer Access Strategy</glossterm>
+      ring buffer size for <command>ANALYZE</command>.  This size is used to
+      calculate the number of shared buffers which will be reused as part of
+      this strategy.  <literal>0</literal> disables use of a
+      <literal>Buffer Access Strategy</literal>.   When this option is not
+      specified, <command>ANALYZE</command> uses the value from
+      <xref linkend="guc-vacuum-buffer-usage-limit"/>.
+     </para>
+    </listitem>
+   </varlistentry>
+
 
    <varlistentry>
     <term><replaceable class="parameter">boolean</replaceable></term>

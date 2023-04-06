@@ -2448,7 +2448,7 @@ UnpinBuffer(BufferDesc *buf)
 
 				buf_state &= ~BM_PIN_COUNT_WAITER;
 				UnlockBufHdr(buf, buf_state);
-				ProcSendSignal(wait_backend_pgprocno);
+				SetLatch(GetProcLatchByNumber(wait_backend_pgprocno));
 			}
 			else
 				UnlockBufHdr(buf, buf_state);

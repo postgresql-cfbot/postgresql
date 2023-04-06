@@ -1403,6 +1403,7 @@ LagTracker
 LargeObjectDesc
 LastAttnumInfo
 Latch
+LatchGroup
 LerpFunc
 LexDescr
 LexemeEntry

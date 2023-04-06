@@ -100,7 +100,7 @@ static int	SyncRepWaitMode = SYNC_REP_NO_WAIT;
 
 static void SyncRepQueueInsert(int mode);
 static void SyncRepCancelWait(void);
-static int	SyncRepWakeQueue(bool all, int mode);
+static int	SyncRepWakeQueue(bool all, int mode, LatchGroup *wakeups);
 
 static bool SyncRepGetSyncRecPtr(XLogRecPtr *writePtr,
 								 XLogRecPtr *flushPtr,
@@ -440,6 +440,7 @@ SyncRepReleaseWaiters(void)
 	int			numwrite = 0;
 	int			numflush = 0;
 	int			numapply = 0;
+	LatchGroup	wakeups = {0};
 
 	/*
 	 * If this WALSender is serving a standby that is not on the list of
@@ -509,20 +510,22 @@ SyncRepReleaseWaiters(void)
 	if (walsndctl->lsn[SYNC_REP_WAIT_WRITE] < writePtr)
 	{
 		walsndctl->lsn[SYNC_REP_WAIT_WRITE] = writePtr;
-		numwrite = SyncRepWakeQueue(false, SYNC_REP_WAIT_WRITE);
+		numwrite = SyncRepWakeQueue(false, SYNC_REP_WAIT_WRITE, &wakeups);
 	}
 	if (walsndctl->lsn[SYNC_REP_WAIT_FLUSH] < flushPtr)
 	{
 		walsndctl->lsn[SYNC_REP_WAIT_FLUSH] = flushPtr;
-		numflush = SyncRepWakeQueue(false, SYNC_REP_WAIT_FLUSH);
+		numflush = SyncRepWakeQueue(false, SYNC_REP_WAIT_FLUSH, &wakeups);
 	}
 	if (walsndctl->lsn[SYNC_REP_WAIT_APPLY] < applyPtr)
 	{
 		walsndctl->lsn[SYNC_REP_WAIT_APPLY] = applyPtr;
-		numapply = SyncRepWakeQueue(false, SYNC_REP_WAIT_APPLY);
+		numapply = SyncRepWakeQueue(false, SYNC_REP_WAIT_APPLY, &wakeups);
 	}
 
 	LWLockRelease(SyncRepLock);
+
+	SetLatches(&wakeups);
 
 	elog(DEBUG3, "released %d procs up to write %X/%X, %d procs up to flush %X/%X, %d procs up to apply %X/%X",
 		 numwrite, LSN_FORMAT_ARGS(writePtr),
@@ -867,7 +870,7 @@ SyncRepGetStandbyPriority(void)
  * The caller must hold SyncRepLock in exclusive mode.
  */
 static int
-SyncRepWakeQueue(bool all, int mode)
+SyncRepWakeQueue(bool all, int mode, LatchGroup *wakeups)
 {
 	volatile WalSndCtlData *walsndctl = WalSndCtl;
 	int			numprocs = 0;
@@ -908,7 +911,7 @@ SyncRepWakeQueue(bool all, int mode)
 		/*
 		 * Wake only when we have set state and removed from queue.
 		 */
-		SetLatch(&(proc->procLatch));
+		AddLatch(wakeups, &proc->procLatch);
 
 		numprocs++;
 	}
@@ -930,6 +933,8 @@ SyncRepUpdateSyncStandbysDefined(void)
 
 	if (sync_standbys_defined != WalSndCtl->sync_standbys_defined)
 	{
+		LatchGroup		wakeups = {0};
+
 		LWLockAcquire(SyncRepLock, LW_EXCLUSIVE);
 
 		/*
@@ -942,7 +947,7 @@ SyncRepUpdateSyncStandbysDefined(void)
 			int			i;
 
 			for (i = 0; i < NUM_SYNC_REP_WAIT_MODE; i++)
-				SyncRepWakeQueue(true, i);
+				SyncRepWakeQueue(true, i, &wakeups);
 		}
 
 		/*
@@ -955,6 +960,8 @@ SyncRepUpdateSyncStandbysDefined(void)
 		WalSndCtl->sync_standbys_defined = sync_standbys_defined;
 
 		LWLockRelease(SyncRepLock);
+
+		SetLatches(&wakeups);
 	}
 }
 

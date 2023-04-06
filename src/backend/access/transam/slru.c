@@ -59,6 +59,7 @@
 #include "pgstat.h"
 #include "storage/fd.h"
 #include "storage/shmem.h"
+#include "port/pg_bitutils.h"
 
 #define SlruFileName(ctl, path, seg) \
 	snprintf(path, MAXPGPATH, "%s/%04X", (ctl)->Dir, seg)
@@ -70,6 +71,17 @@
  * to SimpleLruWriteAll().  This data structure remembers which files are open.
  */
 #define MAX_WRITEALL_BUFFERS	16
+
+/*
+ * To avoid overflowing internal arithmetic and the size_t data type, the
+ * number of buffers should not exceed this number.
+ */
+#define SLRU_MAX_ALLOWED_BUFFERS ((1024 * 1024 * 1024) / BLCKSZ)
+
+/*
+ * SLRU bank size for slotno hash banks
+ */
+#define SLRU_BANK_SIZE 8
 
 typedef struct SlruWriteAllData
 {
@@ -134,7 +146,7 @@ typedef enum
 static SlruErrorCause slru_errcause;
 static int	slru_errno;
 
-
+static void SlruAdjustNSlots(int *nslots, int *bankmask);
 static void SimpleLruZeroLSNs(SlruCtl ctl, int slotno);
 static void SimpleLruWaitIO(SlruCtl ctl, int slotno);
 static void SlruInternalWritePage(SlruCtl ctl, int slotno, SlruWriteAll fdata);
@@ -149,6 +161,25 @@ static bool SlruScanDirCbDeleteCutoff(SlruCtl ctl, char *filename,
 static void SlruInternalDeleteSegment(SlruCtl ctl, int segno);
 
 /*
+ * Pick number of slots and bank size optimal for hashed associative SLRU buffers.
+ * We declare SLRU nslots is always power of 2.
+ * We split SLRU to 8-sized hash banks, after some performance benchmarks.
+ * We hash pageno to banks by pageno masked by 3 upper bits.
+ */
+static void
+SlruAdjustNSlots(int *nslots, int *bankmask)
+{
+	Assert(*nslots > 0);
+	Assert(*nslots <= SLRU_MAX_ALLOWED_BUFFERS);
+
+	*nslots = (int) pg_nextpower2_32(Max(SLRU_BANK_SIZE, Min(*nslots, NBuffers / 256)));
+
+	*bankmask = *nslots / SLRU_BANK_SIZE - 1;
+
+	elog(DEBUG5, "nslots %d banksize %d nbanks %d bankmask %x", *nslots, SLRU_BANK_SIZE, *nslots / SLRU_BANK_SIZE, *bankmask);
+}
+
+/*
  * Initialization of shared memory
  */
 
@@ -156,6 +187,9 @@ Size
 SimpleLruShmemSize(int nslots, int nlsns)
 {
 	Size		sz;
+	int			bankmask_ignore;
+
+	SlruAdjustNSlots(&nslots, &bankmask_ignore);
 
 	/* we assume nslots isn't so large as to risk overflow */
 	sz = MAXALIGN(sizeof(SlruSharedData));
@@ -191,6 +225,9 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 {
 	SlruShared	shared;
 	bool		found;
+	int			bankmask;
+
+	SlruAdjustNSlots(&nslots, &bankmask);
 
 	shared = (SlruShared) ShmemInitStruct(name,
 										  SimpleLruShmemSize(nslots, nlsns),
@@ -258,7 +295,10 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 		Assert(ptr - (char *) shared <= SimpleLruShmemSize(nslots, nlsns));
 	}
 	else
+	{
 		Assert(found);
+		Assert(shared->num_slots == nslots);
+	}
 
 	/*
 	 * Initialize the unshared control struct, including directory path. We
@@ -266,6 +306,7 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 	 */
 	ctl->shared = shared;
 	ctl->sync_handler = sync_handler;
+	ctl->bank_mask = bankmask;
 	strlcpy(ctl->Dir, subdir, sizeof(ctl->Dir));
 }
 
@@ -497,12 +538,14 @@ SimpleLruReadPage_ReadOnly(SlruCtl ctl, int pageno, TransactionId xid)
 {
 	SlruShared	shared = ctl->shared;
 	int			slotno;
+	int			bankstart = (pageno & ctl->bank_mask) * SLRU_BANK_SIZE;
+	int			bankend = bankstart + SLRU_BANK_SIZE;
 
 	/* Try to find the page while holding only shared lock */
 	LWLockAcquire(shared->ControlLock, LW_SHARED);
 
 	/* See if page is already in a buffer */
-	for (slotno = 0; slotno < shared->num_slots; slotno++)
+	for (slotno = bankstart; slotno < bankend; slotno++)
 	{
 		if (shared->page_number[slotno] == pageno &&
 			shared->page_status[slotno] != SLRU_PAGE_EMPTY &&
@@ -1031,7 +1074,10 @@ SlruSelectLRUPage(SlruCtl ctl, int pageno)
 		int			best_invalid_page_number = 0;	/* keep compiler quiet */
 
 		/* See if page already has a buffer assigned */
-		for (slotno = 0; slotno < shared->num_slots; slotno++)
+		int			bankstart = (pageno & ctl->bank_mask) * SLRU_BANK_SIZE;
+		int			bankend = bankstart + SLRU_BANK_SIZE;
+
+		for (slotno = bankstart; slotno < bankend; slotno++)
 		{
 			if (shared->page_number[slotno] == pageno &&
 				shared->page_status[slotno] != SLRU_PAGE_EMPTY)
@@ -1066,7 +1112,7 @@ SlruSelectLRUPage(SlruCtl ctl, int pageno)
 		 * multiple pages with the same lru_count.
 		 */
 		cur_count = (shared->cur_lru_count)++;
-		for (slotno = 0; slotno < shared->num_slots; slotno++)
+		for (slotno = bankstart; slotno < bankend; slotno++)
 		{
 			int			this_delta;
 			int			this_page_number;

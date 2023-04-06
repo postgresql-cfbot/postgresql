@@ -157,6 +157,8 @@
 					#   mmap
 					# (change requires restart)
 #min_dynamic_shared_memory = 0MB	# (change requires restart)
+#slru_buffers_size_scale = 2 # SLRU buffers size scale of power 2, range 0..7
+					# (change requires restart)
 
 # - Disk -
 

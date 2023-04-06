@@ -74,6 +74,8 @@
 #define GetLSNIndex(slotno, xid)	((slotno) * CLOG_LSNS_PER_PAGE + \
 	((xid) % (TransactionId) CLOG_XACTS_PER_PAGE) / CLOG_XACTS_PER_LSN_GROUP)
 
+#define NUM_CLOG_BUFFERS 	(128 << slru_buffers_size_scale)
+
 /*
  * The number of subtransactions below which we consider to apply clog group
  * update optimization.  Testing reveals that the number higher than this can
@@ -661,41 +663,19 @@ TransactionIdGetStatus(TransactionId xid, XLogRecPtr *lsn)
 }
 
 /*
- * Number of shared CLOG buffers.
- *
- * On larger multi-processor systems, it is possible to have many CLOG page
- * requests in flight at one time which could lead to disk access for CLOG
- * page if the required page is not found in memory.  Testing revealed that we
- * can get the best performance by having 128 CLOG buffers, more than that it
- * doesn't improve performance.
- *
- * Unconditionally keeping the number of CLOG buffers to 128 did not seem like
- * a good idea, because it would increase the minimum amount of shared memory
- * required to start, which could be a problem for people running very small
- * configurations.  The following formula seems to represent a reasonable
- * compromise: people with very low values for shared_buffers will get fewer
- * CLOG buffers as well, and everyone else will get 128.
- */
-Size
-CLOGShmemBuffers(void)
-{
-	return Min(128, Max(4, NBuffers / 512));
-}
-
-/*
  * Initialization of shared memory for CLOG
  */
 Size
 CLOGShmemSize(void)
 {
-	return SimpleLruShmemSize(CLOGShmemBuffers(), CLOG_LSNS_PER_PAGE);
+	return SimpleLruShmemSize(NUM_CLOG_BUFFERS, CLOG_LSNS_PER_PAGE);
 }
 
 void
 CLOGShmemInit(void)
 {
 	XactCtl->PagePrecedes = CLOGPagePrecedes;
-	SimpleLruInit(XactCtl, "Xact", CLOGShmemBuffers(), CLOG_LSNS_PER_PAGE,
+	SimpleLruInit(XactCtl, "Xact", NUM_CLOG_BUFFERS, CLOG_LSNS_PER_PAGE,
 				  XactSLRULock, "pg_xact", LWTRANCHE_XACT_BUFFER,
 				  SYNC_HANDLER_CLOG);
 	SlruPagePrecedesUnitTests(XactCtl, CLOG_XACTS_PER_PAGE);

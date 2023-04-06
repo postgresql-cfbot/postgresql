@@ -28,7 +28,7 @@ extern PGDLLIMPORT int max_predicate_locks_per_page;
 
 
 /* Number of SLRU buffers to use for Serial SLRU */
-#define NUM_SERIAL_BUFFERS		16
+#define NUM_SERIAL_BUFFERS	(16 << slru_buffers_size_scale)
 
 /*
  * A handle used for sharing SERIALIZABLEXACT objects between the participants

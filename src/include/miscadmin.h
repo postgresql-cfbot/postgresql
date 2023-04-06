@@ -177,6 +177,7 @@ extern PGDLLIMPORT int MaxBackends;
 extern PGDLLIMPORT int MaxConnections;
 extern PGDLLIMPORT int max_worker_processes;
 extern PGDLLIMPORT int max_parallel_workers;
+extern PGDLLIMPORT int slru_buffers_size_scale;
 
 extern PGDLLIMPORT int MyProcPid;
 extern PGDLLIMPORT pg_time_t MyStartTime;
@@ -262,6 +263,7 @@ extern PGDLLIMPORT int work_mem;
 extern PGDLLIMPORT double hash_mem_multiplier;
 extern PGDLLIMPORT int maintenance_work_mem;
 extern PGDLLIMPORT int max_parallel_maintenance_workers;
+extern PGDLLIMPORT int slru_buffers_size_scale;
 
 extern PGDLLIMPORT int VacuumCostPageHit;
 extern PGDLLIMPORT int VacuumCostPageMiss;

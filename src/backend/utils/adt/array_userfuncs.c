@@ -15,6 +15,7 @@
 #include "catalog/pg_type.h"
 #include "libpq/pqformat.h"
 #include "common/int.h"
+#include "common/pg_prng.h"
 #include "port/pg_bitutils.h"
 #include "utils/array.h"
 #include "utils/datum.h"
@@ -1524,4 +1525,164 @@ array_positions(PG_FUNCTION_ARGS)
 	PG_FREE_IF_COPY(array, 0);
 
 	PG_RETURN_DATUM(makeArrayResult(astate, CurrentMemoryContext));
+}
+
+/*
+ * array_shuffle_n
+ *		Return a copy of array with n randomly chosen items.
+ *
+ * The number of items must not exceed the size of the first dimension of the
+ * array.
+ *
+ * NOTE: it would be cleaner to look up the elmlen/elmbval/elmalign info
+ * from the system catalogs, given the elmtyp. However, the caller is
+ * in a better position to cache this info across multiple uses, or even
+ * to hard-wire values if the element type is hard-wired.
+ */
+static ArrayType *
+array_shuffle_n(ArrayType *array, int n, Oid elmtyp, TypeCacheEntry *typentry)
+{
+	ArrayType  *result;
+	int			ndim,
+			   *dims,
+			   *lbs,
+				rdims[MAXDIM],
+				nelm,
+				nitem;
+	Datum		elm,
+			   *elms,
+			   *ielms;
+	bool		nul,
+			   *nuls,
+			   *inuls;
+	int16		elmlen;
+	bool		elmbyval;
+	char		elmalign;
+
+	ndim = ARR_NDIM(array);
+	dims = ARR_DIMS(array);
+	lbs = ARR_LBOUND(array);
+
+	elmlen = typentry->typlen;
+	elmbyval = typentry->typbyval;
+	elmalign = typentry->typalign;
+
+	/* If the target array is empty, exit fast */
+	if (ndim < 1 || dims[0] < 1 || n < 1)
+		return construct_empty_array(elmtyp);
+
+	deconstruct_array(array, elmtyp, elmlen, elmbyval, elmalign,
+					  &elms, &nuls, &nelm);
+
+	nitem = dims[0];			/* total number of items */
+	nelm /= nitem;				/* number of elements per item */
+
+	ielms = elms;
+	inuls = nuls;
+
+	/*
+	 * Shuffle array using Fisher-Yates algorithm. Iterate array and swap head
+	 * (ielms) with an randomly chosen item (jelms) at each iteration.
+	 */
+	for (int i = 0; i < n; i++)
+	{
+		int		j = (int) pg_prng_uint64_range(&pg_global_prng_state, 0, nitem - i - 1) * nelm;
+		Datum  *jelms = ielms + j;
+		bool   *jnuls = inuls + j;
+
+		/*
+		 * Swap elements in item (i) with elements in the (jelms) item which is
+		 * chosen by the random offset of (j).
+		 */
+		for (int k = 0; k < nelm; k++)
+		{
+			elm = *ielms;
+			nul = *inuls;
+			*ielms++ = *jelms;
+			*inuls++ = *jnuls;
+			*jelms++ = elm;
+			*jnuls++ = nul;
+		}
+	}
+
+	memcpy(rdims, dims, ndim * sizeof(int));
+	rdims[0] = n;
+
+	result = construct_md_array(elms, nuls, ndim, rdims, lbs,
+								elmtyp, elmlen, elmbyval, elmalign);
+
+	pfree(elms);
+	pfree(nuls);
+
+	return result;
+}
+
+/*
+ * array_shuffle
+ *
+ * Returns an array with the same dimensions as the input array, with its
+ * elements in random order.
+ */
+Datum
+array_shuffle(PG_FUNCTION_ARGS)
+{
+	ArrayType  *array = PG_GETARG_ARRAYTYPE_P(0);
+	ArrayType  *result;
+	Oid			elmtyp;
+	TypeCacheEntry *typentry;
+
+	/*
+	 * There is no point in shuffling empty arrays or arrays with less than
+	 * two items.
+	 */
+	if (ARR_NDIM(array) < 1 || ARR_DIMS(array)[0] < 2)
+		PG_RETURN_ARRAYTYPE_P(array);
+
+	elmtyp = ARR_ELEMTYPE(array);
+	typentry = (TypeCacheEntry *) fcinfo->flinfo->fn_extra;
+	if (typentry == NULL || typentry->type_id != elmtyp)
+	{
+		typentry = lookup_type_cache(elmtyp, 0);
+		fcinfo->flinfo->fn_extra = (void *) typentry;
+	}
+
+	result = array_shuffle_n(array, ARR_DIMS(array)[0], elmtyp, typentry);
+
+	PG_RETURN_ARRAYTYPE_P(result);
+}
+
+/*
+ * array_sample
+ *
+ * Returns an array of the same dimensionality with an upper-bound of n with
+ * randomly chosen items from the input array.
+ */
+Datum
+array_sample(PG_FUNCTION_ARGS)
+{
+	ArrayType  *array = PG_GETARG_ARRAYTYPE_P(0);
+	int			n = PG_GETARG_INT32(1);
+	ArrayType  *result;
+	Oid			elmtyp;
+	TypeCacheEntry *typentry;
+	int			nitem;
+
+	nitem = (ARR_NDIM(array) < 1) ? 0 : ARR_DIMS(array)[0];
+
+	if (n < 0 || n > nitem)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("sample size must be between 0 and %d", nitem)));
+
+	elmtyp = ARR_ELEMTYPE(array);
+	typentry = (TypeCacheEntry *) fcinfo->flinfo->fn_extra;
+	if (typentry == NULL || typentry->type_id != elmtyp)
+	{
+		typentry = lookup_type_cache(elmtyp, 0);
+		fcinfo->flinfo->fn_extra = (void *) typentry;
+	}
+
+	result = array_shuffle_n(array, n, elmtyp, typentry);
+
+	PG_RETURN_ARRAYTYPE_P(result);
 }

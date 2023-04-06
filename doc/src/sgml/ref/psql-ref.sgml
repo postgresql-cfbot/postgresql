@@ -3551,7 +3551,7 @@ testdb=&gt; <userinput>\setenv LESS -imx4F</userinput>
 
 
       <varlistentry id="app-psql-meta-command-watch">
-        <term><literal>\watch [ <replaceable class="parameter">seconds</replaceable> ]</literal></term>
+        <term><literal>\watch [ <replaceable class="parameter">i[nterval]</replaceable>=<replaceable class="parameter">seconds</replaceable> ] [ <replaceable class="parameter">c[ount]</replaceable>=<replaceable class="parameter">times</replaceable> ] [ <replaceable class="parameter">seconds</replaceable> ]</literal></term>
         <listitem>
         <para>
         Repeatedly execute the current query buffer (as <literal>\g</literal> does)
@@ -3563,6 +3563,10 @@ testdb=&gt; <userinput>\setenv LESS -imx4F</userinput>
         <para>
         If the current query buffer is empty, the most recently sent query
         is re-executed instead.
+        </para>
+        <para>
+        If number of iterations is specified, query will be executed only
+        given number of times.
         </para>
         </listitem>
       </varlistentry>

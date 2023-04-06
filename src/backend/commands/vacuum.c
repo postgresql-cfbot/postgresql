@@ -48,6 +48,7 @@
 #include "pgstat.h"
 #include "postmaster/autovacuum.h"
 #include "postmaster/bgworker_internals.h"
+#include "postmaster/interrupt.h"
 #include "storage/bufmgr.h"
 #include "storage/lmgr.h"
 #include "storage/pmsignal.h"
@@ -71,6 +72,30 @@ int			vacuum_multixact_freeze_min_age;
 int			vacuum_multixact_freeze_table_age;
 int			vacuum_failsafe_age;
 int			vacuum_multixact_failsafe_age;
+
+/*
+ * Variables for cost-based vacuum delay. The defaults differ between
+ * autovacuum and vacuum. They should be set with the appropriate GUC value in
+ * vacuum code. They are initialized here to the defaults for client backends
+ * executing VACUUM or ANALYZE.
+ */
+double		vacuum_cost_delay = 0;
+int			vacuum_cost_limit = 200;
+
+/*
+ * VacuumFailsafeActive is a defined as a global so that we can determine
+ * whether or not to re-enable cost-based vacuum delay when vacuuming a table.
+ * If failsafe mode has been engaged, we will not re-enable cost-based delay
+ * for the table until after vacuuming has completed, regardless of other
+ * settings.
+ *
+ * Only VACUUM code should inspect this variable and only table access methods
+ * should set it to true. In Table AM-agnostic VACUUM code, this variable is
+ * inspected to determine whether or not to allow cost-based delays. Table AMs
+ * are free to set it if they desire this behavior, but it is false by default
+ * and reset to false in between vacuuming each relation.
+ */
+bool		VacuumFailsafeActive = false;
 
 /*
  * Variables for cost-based parallel vacuum.  See comments atop
@@ -500,7 +525,8 @@ vacuum(List *relations, VacuumParams *params, BufferAccessStrategy bstrategy,
 		ListCell   *cur;
 
 		in_vacuum = true;
-		VacuumCostActive = (VacuumCostDelay > 0);
+		VacuumFailsafeActive = false;
+		VacuumUpdateCosts();
 		VacuumCostBalance = 0;
 		VacuumPageHit = 0;
 		VacuumPageMiss = 0;
@@ -554,12 +580,20 @@ vacuum(List *relations, VacuumParams *params, BufferAccessStrategy bstrategy,
 					CommandCounterIncrement();
 				}
 			}
+
+			/*
+			 * Ensure VacuumFailsafeActive has been reset before vacuuming the
+			 * next relation.
+			 */
+			VacuumFailsafeActive = false;
 		}
 	}
 	PG_FINALLY();
 	{
 		in_vacuum = false;
 		VacuumCostActive = false;
+		VacuumFailsafeActive = false;
+		VacuumCostBalance = 0;
 	}
 	PG_END_TRY();
 
@@ -2220,7 +2254,28 @@ vacuum_delay_point(void)
 	/* Always check for interrupts */
 	CHECK_FOR_INTERRUPTS();
 
-	if (!VacuumCostActive || InterruptPending)
+	if (InterruptPending ||
+		(!VacuumCostActive && !ConfigReloadPending))
+		return;
+
+	/*
+	 * Autovacuum workers should reload the configuration file if requested.
+	 * This allows changes to [autovacuum_]vacuum_cost_limit and
+	 * [autovacuum_]vacuum_cost_delay to take effect while a table is being
+	 * vacuumed or analyzed.
+	 */
+	if (ConfigReloadPending && IsAutoVacuumWorkerProcess())
+	{
+		ConfigReloadPending = false;
+		ProcessConfigFile(PGC_SIGHUP);
+		VacuumUpdateCosts();
+	}
+
+	/*
+	 * If we disabled cost-based delays after reloading the config file,
+	 * return.
+	 */
+	if (!VacuumCostActive)
 		return;
 
 	/*
@@ -2229,14 +2284,14 @@ vacuum_delay_point(void)
 	 */
 	if (VacuumSharedCostBalance != NULL)
 		msec = compute_parallel_delay();
-	else if (VacuumCostBalance >= VacuumCostLimit)
-		msec = VacuumCostDelay * VacuumCostBalance / VacuumCostLimit;
+	else if (VacuumCostBalance >= vacuum_cost_limit)
+		msec = vacuum_cost_delay * VacuumCostBalance / vacuum_cost_limit;
 
 	/* Nap if appropriate */
 	if (msec > 0)
 	{
-		if (msec > VacuumCostDelay * 4)
-			msec = VacuumCostDelay * 4;
+		if (msec > vacuum_cost_delay * 4)
+			msec = vacuum_cost_delay * 4;
 
 		pgstat_report_wait_start(WAIT_EVENT_VACUUM_DELAY);
 		pg_usleep(msec * 1000);
@@ -2253,8 +2308,15 @@ vacuum_delay_point(void)
 
 		VacuumCostBalance = 0;
 
-		/* update balance values for workers */
-		AutoVacuumUpdateDelay();
+		/*
+		 * Balance and update limit values for autovacuum workers. We must do
+		 * this periodically, as the number of workers across which we are
+		 * balancing the limit may have changed.
+		 *
+		 * XXX: There may be better criteria for determining when to do this
+		 * besides "check after napping".
+		 */
+		AutoVacuumUpdateCostLimit();
 
 		/* Might have gotten an interrupt while sleeping */
 		CHECK_FOR_INTERRUPTS();
@@ -2304,11 +2366,11 @@ compute_parallel_delay(void)
 	/* Compute the total local balance for the current worker */
 	VacuumCostBalanceLocal += VacuumCostBalance;
 
-	if ((shared_balance >= VacuumCostLimit) &&
-		(VacuumCostBalanceLocal > 0.5 * ((double) VacuumCostLimit / nworkers)))
+	if ((shared_balance >= vacuum_cost_limit) &&
+		(VacuumCostBalanceLocal > 0.5 * ((double) vacuum_cost_limit / nworkers)))
 	{
 		/* Compute sleep time based on the local cost balance */
-		msec = VacuumCostDelay * VacuumCostBalanceLocal / VacuumCostLimit;
+		msec = vacuum_cost_delay * VacuumCostBalanceLocal / vacuum_cost_limit;
 		pg_atomic_sub_fetch_u32(VacuumSharedCostBalance, VacuumCostBalanceLocal);
 		VacuumCostBalanceLocal = 0;
 	}

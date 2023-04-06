@@ -103,7 +103,13 @@ setQFout(const char *fname)
 	if (pset.queryFout && pset.queryFout != stdout && pset.queryFout != stderr)
 	{
 		if (pset.queryFoutPipe)
-			pclose(pset.queryFout);
+		{
+			char	buf[32];
+			int		exit_code = pclose(pset.queryFout);
+			snprintf(buf, sizeof(buf), "%d", wait_result_to_exit_code(exit_code));
+			SetVariable(pset.vars, "SHELL_EXIT_CODE", buf);
+			SetVariable(pset.vars, "SHELL_ERROR", (exit_code == 0) ? "false" : "true");
+		}
 		else
 			fclose(pset.queryFout);
 	}
@@ -1652,7 +1658,11 @@ ExecQueryAndProcessResults(const char *query,
 	{
 		if (gfile_is_pipe)
 		{
-			pclose(gfile_fout);
+			char	buf[32];
+			int		exit_code = pclose(gfile_fout);
+			snprintf(buf, sizeof(buf), "%d", wait_result_to_exit_code(exit_code));
+			SetVariable(pset.vars, "SHELL_EXIT_CODE", buf);
+			SetVariable(pset.vars, "SHELL_ERROR", (exit_code == 0) ? "false" : "true");
 			restore_sigpipe_trap();
 		}
 		else
@@ -1870,7 +1880,11 @@ ExecQueryUsingCursor(const char *query, double *elapsed_msec)
 		/* close \g argument file/pipe */
 		if (is_pipe)
 		{
-			pclose(fout);
+			char	buf[32];
+			int		exit_code = pclose(fout);
+			snprintf(buf, sizeof(buf), "%d", wait_result_to_exit_code(exit_code));
+			SetVariable(pset.vars, "SHELL_EXIT_CODE", buf);
+			SetVariable(pset.vars, "SHELL_ERROR", (exit_code == 0) ? "false" : "true");
 			restore_sigpipe_trap();
 		}
 		else

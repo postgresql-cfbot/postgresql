@@ -375,6 +375,7 @@ do_copy(const char *args)
 	{
 		if (options->program)
 		{
+			char		buf[32];
 			int			pclose_rc = pclose(copystream);
 
 			if (pclose_rc != 0)
@@ -391,6 +392,9 @@ do_copy(const char *args)
 				}
 				success = false;
 			}
+			snprintf(buf, sizeof(buf), "%d", wait_result_to_exit_code(pclose_rc));
+			SetVariable(pset.vars, "SHELL_EXIT_CODE", buf);
+			SetVariable(pset.vars, "SHELL_ERROR", (pclose_rc == 0) ? "false" : "true");
 			restore_sigpipe_trap();
 		}
 		else

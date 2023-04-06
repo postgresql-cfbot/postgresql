@@ -1332,3 +1332,39 @@ CREATE VIEW pg_stat_subscription_stats AS
         ss.stats_reset
     FROM pg_subscription as s,
          pg_stat_get_subscription_stats(s.oid) as ss;
+
+CREATE VIEW pg_stat_memory_allocation AS
+    SELECT
+        S.datid AS datid,
+        S.pid,
+        S.allocated_bytes,
+        S.aset_allocated_bytes,
+        S.dsm_allocated_bytes,
+        S.generation_allocated_bytes,
+        S.slab_allocated_bytes
+    FROM pg_stat_get_memory_allocation(NULL) AS S
+        LEFT JOIN pg_database AS D ON (S.datid = D.oid);
+
+CREATE VIEW pg_stat_global_memory_allocation AS
+WITH sums AS (
+    SELECT
+        SUM(aset_allocated_bytes) AS total_aset_allocated_bytes,
+        SUM(dsm_allocated_bytes) AS total_dsm_allocated_bytes,
+        SUM(generation_allocated_bytes) AS total_generation_allocated_bytes,
+        SUM(slab_allocated_bytes) AS total_slab_allocated_bytes
+    FROM
+        pg_stat_memory_allocation
+)
+SELECT
+        S.datid AS datid,
+        current_setting('shared_memory_size', true) as shared_memory_size,
+        (current_setting('shared_memory_size_in_huge_pages', true))::integer as shared_memory_size_in_huge_pages,
+        pg_size_bytes(current_setting('max_total_backend_memory', true)) as max_total_backend_memory_bytes,
+        S.max_total_bkend_mem_bytes_available,
+        S.global_dsm_allocated_bytes,
+        sums.total_aset_allocated_bytes,
+        sums.total_dsm_allocated_bytes,
+        sums.total_generation_allocated_bytes,
+        sums.total_slab_allocated_bytes
+    FROM sums, pg_stat_get_global_memory_allocation() AS S
+        LEFT JOIN pg_database AS D ON (S.datid = D.oid);

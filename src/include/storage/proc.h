@@ -404,6 +404,15 @@ typedef struct PROC_HDR
 	int			spins_per_delay;
 	/* Buffer id of the buffer that Startup process waits for pin on, or -1 */
 	int			startupBufferPinWaitBufId;
+	/* Global dsm allocations */
+	pg_atomic_uint64 global_dsm_allocation;
+
+	/*
+	 * Max backend memory allocation tracker. Used/Initialized when
+	 * max_total_bkend_mem > 0 as max_total_bkend_mem (MB) converted to bytes.
+	 * Decreases/increases with free/malloc of backend memory.
+	 */
+	pg_atomic_uint64 max_total_bkend_mem_bytes;
 } PROC_HDR;
 
 extern PGDLLIMPORT PROC_HDR *ProcGlobal;

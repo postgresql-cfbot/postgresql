@@ -1995,3 +1995,95 @@ pg_stat_have_stats(PG_FUNCTION_ARGS)
 
 	PG_RETURN_BOOL(pgstat_have_entry(kind, dboid, objoid));
 }
+
+/*
+ * Get the memory allocation of PG backends.
+ */
+Datum
+pg_stat_get_memory_allocation(PG_FUNCTION_ARGS)
+{
+#define PG_STAT_GET_MEMORY_ALLOCATION_COLS	7
+	int			num_backends = pgstat_fetch_stat_numbackends();
+	int			curr_backend;
+	int			pid = PG_ARGISNULL(0) ? -1 : PG_GETARG_INT32(0);
+	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+
+	InitMaterializedSRF(fcinfo, 0);
+
+	/* 1-based index */
+	for (curr_backend = 1; curr_backend <= num_backends; curr_backend++)
+	{
+		/* for each row */
+		Datum		values[PG_STAT_GET_MEMORY_ALLOCATION_COLS] = {0};
+		bool		nulls[PG_STAT_GET_MEMORY_ALLOCATION_COLS] = {0};
+		LocalPgBackendStatus *local_beentry;
+		PgBackendStatus *beentry;
+
+		/* Get the next one in the list */
+		local_beentry = pgstat_fetch_stat_local_beentry(curr_backend);
+		beentry = &local_beentry->backendStatus;
+
+		/* If looking for specific PID, ignore all the others */
+		if (pid != -1 && beentry->st_procpid != pid)
+			continue;
+
+		/* Values available to all callers */
+		if (beentry->st_databaseid != InvalidOid)
+			values[0] = ObjectIdGetDatum(beentry->st_databaseid);
+		else
+			nulls[0] = true;
+
+		values[1] = Int32GetDatum(beentry->st_procpid);
+		values[2] = UInt64GetDatum(beentry->allocated_bytes);
+		values[3] = UInt64GetDatum(beentry->aset_allocated_bytes);
+		values[4] = UInt64GetDatum(beentry->dsm_allocated_bytes);
+		values[5] = UInt64GetDatum(beentry->generation_allocated_bytes);
+		values[6] = UInt64GetDatum(beentry->slab_allocated_bytes);
+
+		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
+
+		/* If only a single backend was requested, and we found it, break. */
+		if (pid != -1)
+			break;
+	}
+
+	return (Datum) 0;
+}
+
+/*
+ * Get the global memory allocation statistics.
+ */
+Datum
+pg_stat_get_global_memory_allocation(PG_FUNCTION_ARGS)
+{
+#define PG_STAT_GET_GLOBAL_MEMORY_ALLOCATION_COLS	3
+	TupleDesc	tupdesc;
+	Datum		values[PG_STAT_GET_GLOBAL_MEMORY_ALLOCATION_COLS] = {0};
+	bool		nulls[PG_STAT_GET_GLOBAL_MEMORY_ALLOCATION_COLS] = {0};
+	volatile PROC_HDR *procglobal = ProcGlobal;
+
+	/* Initialise attributes information in the tuple descriptor */
+	tupdesc = CreateTemplateTupleDesc(PG_STAT_GET_GLOBAL_MEMORY_ALLOCATION_COLS);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "datid",
+					   OIDOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 2, "max_total_bkend_mem_bytes_available",
+					   INT8OID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 3, "global_dsm_allocated_bytes",
+					   INT8OID, -1, 0);
+	BlessTupleDesc(tupdesc);
+
+	/* datid */
+	values[0] = ObjectIdGetDatum(MyDatabaseId);
+
+	/* Get max_total_bkend_mem_bytes - return -1 if disabled */
+	if (max_total_bkend_mem == 0)
+		values[1] = Int64GetDatum(-1);
+	else
+		values[1] = Int64GetDatum(pg_atomic_read_u64(&procglobal->max_total_bkend_mem_bytes));
+
+	/* Get global_dsm_allocated_bytes */
+	values[2] = Int64GetDatum(pg_atomic_read_u64(&procglobal->global_dsm_allocation));
+
+	/* Returns the record as Datum */
+	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
+}

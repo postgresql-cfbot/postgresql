@@ -51,6 +51,7 @@
 #include "storage/procsignal.h"
 #include "storage/spin.h"
 #include "storage/standby.h"
+#include "utils/guc.h"
 #include "utils/timeout.h"
 #include "utils/timestamp.h"
 
@@ -180,6 +181,51 @@ InitProcGlobal(void)
 	ProcGlobal->checkpointerLatch = NULL;
 	pg_atomic_init_u32(&ProcGlobal->procArrayGroupFirst, INVALID_PGPROCNO);
 	pg_atomic_init_u32(&ProcGlobal->clogGroupFirst, INVALID_PGPROCNO);
+	pg_atomic_init_u64(&ProcGlobal->global_dsm_allocation, 0);
+
+	/* Setup backend memory limiting if configured */
+	if (max_total_bkend_mem > 0)
+	{
+		/*
+		 * Convert max_total_bkend_mem to bytes, account for
+		 * shared_memory_size, and initialize max_total_bkend_mem_bytes.
+		 */
+		int			result = 0;
+
+		/* Get integer value of shared_memory_size */
+		if (parse_int(GetConfigOption("shared_memory_size", true, false), &result, 0, NULL))
+		{
+			/*
+			 * Error on startup if backend memory limit is less than shared
+			 * memory size. Warn on startup if backend memory available is
+			 * less than arbitrarily picked value of 100MB.
+			 */
+
+			if (max_total_bkend_mem - result <= 0)
+			{
+				ereport(ERROR,
+						errmsg("configured max_total_backend_memory %dMB is <= shared_memory_size %dMB",
+							   max_total_bkend_mem, result),
+						errhint("Disable or increase the configuration parameter \"max_total_backend_memory\"."));
+			}
+			else if (max_total_bkend_mem - result <= 100)
+			{
+				ereport(WARNING,
+						errmsg("max_total_backend_memory %dMB - shared_memory_size %dMB is <= 100MB",
+							   max_total_bkend_mem, result),
+						errhint("Consider increasing the configuration parameter \"max_total_backend_memory\"."));
+			}
+
+			/*
+			 * Account for shared memory size and initialize
+			 * max_total_bkend_mem_bytes.
+			 */
+			pg_atomic_init_u64(&ProcGlobal->max_total_bkend_mem_bytes,
+							   (uint64) max_total_bkend_mem * 1024 * 1024 - (uint64) result * 1024 * 1024);
+		}
+		else
+			ereport(ERROR, errmsg("max_total_backend_memory initialization is unable to parse shared_memory_size"));
+	}
 
 	/*
 	 * Create and initialize all the PGPROC structures we'll need.  There are

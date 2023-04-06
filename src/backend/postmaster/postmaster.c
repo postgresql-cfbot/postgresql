@@ -540,6 +540,7 @@ typedef struct
 #endif
 	char		my_exec_path[MAXPGPATH];
 	char		pkglib_path[MAXPGPATH];
+	int			max_total_bkend_mem;
 } BackendParameters;
 
 static void read_backend_variables(char *id, Port *port);
@@ -6122,6 +6123,8 @@ save_backend_variables(BackendParameters *param, Port *port,
 
 	strlcpy(param->pkglib_path, pkglib_path, MAXPGPATH);
 
+	param->max_total_bkend_mem = max_total_bkend_mem;
+
 	return true;
 }
 
@@ -6351,6 +6354,8 @@ restore_backend_variables(BackendParameters *param, Port *port)
 	strlcpy(my_exec_path, param->my_exec_path, MAXPGPATH);
 
 	strlcpy(pkglib_path, param->pkglib_path, MAXPGPATH);
+
+	max_total_bkend_mem = param->max_total_bkend_mem;
 
 	/*
 	 * We need to restore fd.c's counts of externally-opened FDs; to avoid

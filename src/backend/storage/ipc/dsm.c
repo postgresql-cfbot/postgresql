@@ -776,6 +776,15 @@ void
 dsm_detach(dsm_segment *seg)
 {
 	/*
+	 * Retain mapped_size to pass into destroy call in cases where the detach
+	 * is the last reference. mapped_size is zeroed as part of the detach
+	 * process, but is needed later in these cases for dsm_allocated_bytes
+	 * accounting.
+	 */
+	Size		local_seg_mapped_size = seg->mapped_size;
+	Size	   *ptr_local_seg_mapped_size = &local_seg_mapped_size;
+
+	/*
 	 * Invoke registered callbacks.  Just in case one of those callbacks
 	 * throws a further error that brings us back here, pop the callback
 	 * before invoking it, to avoid infinite error recursion.  Don't allow
@@ -855,7 +864,7 @@ dsm_detach(dsm_segment *seg)
 			 */
 			if (is_main_region_dsm_handle(seg->handle) ||
 				dsm_impl_op(DSM_OP_DESTROY, seg->handle, 0, &seg->impl_private,
-							&seg->mapped_address, &seg->mapped_size, WARNING))
+							&seg->mapped_address, ptr_local_seg_mapped_size, WARNING))
 			{
 				LWLockAcquire(DynamicSharedMemoryControlLock, LW_EXCLUSIVE);
 				if (is_main_region_dsm_handle(seg->handle))

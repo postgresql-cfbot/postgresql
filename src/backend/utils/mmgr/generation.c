@@ -37,6 +37,7 @@
 
 #include "lib/ilist.h"
 #include "port/pg_bitutils.h"
+#include "utils/backend_status.h"
 #include "utils/memdebug.h"
 #include "utils/memutils.h"
 #include "utils/memutils_memorychunk.h"
@@ -200,6 +201,16 @@ GenerationContextCreate(MemoryContext parent,
 	else
 		allocSize = Max(allocSize, initBlockSize);
 
+	if (exceeds_max_total_bkend_mem(allocSize))
+	{
+		MemoryContextStats(TopMemoryContext);
+		ereport(ERROR,
+				(errcode(ERRCODE_OUT_OF_MEMORY),
+				 errmsg("out of memory - exceeds max_total_backend_memory"),
+				 errdetail("Failed while creating memory context \"%s\".",
+						   name)));
+	}
+
 	/*
 	 * Allocate the initial block.  Unlike other generation.c blocks, it
 	 * starts with the context header and its block header follows that.
@@ -267,6 +278,7 @@ GenerationContextCreate(MemoryContext parent,
 						name);
 
 	((MemoryContext) set)->mem_allocated = firstBlockSize;
+	pgstat_report_allocated_bytes_increase(firstBlockSize, PG_ALLOC_GENERATION);
 
 	return (MemoryContext) set;
 }
@@ -283,6 +295,7 @@ GenerationReset(MemoryContext context)
 {
 	GenerationContext *set = (GenerationContext *) context;
 	dlist_mutable_iter miter;
+	uint64		deallocation = 0;
 
 	Assert(GenerationIsValid(set));
 
@@ -305,8 +318,13 @@ GenerationReset(MemoryContext context)
 		if (block == set->keeper)
 			GenerationBlockMarkEmpty(block);
 		else
+		{
+			deallocation += block->blksize;
 			GenerationBlockFree(set, block);
+		}
 	}
+
+	pgstat_report_allocated_bytes_decrease(deallocation, PG_ALLOC_GENERATION);
 
 	/* set it so new allocations to make use of the keeper block */
 	set->block = set->keeper;
@@ -328,6 +346,9 @@ GenerationDelete(MemoryContext context)
 {
 	/* Reset to release all releasable GenerationBlocks */
 	GenerationReset(context);
+
+	pgstat_report_allocated_bytes_decrease(context->mem_allocated, PG_ALLOC_GENERATION);
+
 	/* And free the context header and keeper block */
 	free(context);
 }
@@ -369,11 +390,15 @@ GenerationAlloc(MemoryContext context, Size size)
 	{
 		Size		blksize = required_size + Generation_BLOCKHDRSZ;
 
+		if (exceeds_max_total_bkend_mem(blksize))
+			return NULL;
+
 		block = (GenerationBlock *) malloc(blksize);
 		if (block == NULL)
 			return NULL;
 
 		context->mem_allocated += blksize;
+		pgstat_report_allocated_bytes_increase(blksize, PG_ALLOC_GENERATION);
 
 		/* block with a single (used) chunk */
 		block->context = set;
@@ -471,12 +496,16 @@ GenerationAlloc(MemoryContext context, Size size)
 			if (blksize < required_size)
 				blksize = pg_nextpower2_size_t(required_size);
 
+			if (exceeds_max_total_bkend_mem(blksize))
+				return NULL;
+
 			block = (GenerationBlock *) malloc(blksize);
 
 			if (block == NULL)
 				return NULL;
 
 			context->mem_allocated += blksize;
+			pgstat_report_allocated_bytes_increase(blksize, PG_ALLOC_GENERATION);
 
 			/* initialize the new block */
 			GenerationBlockInit(set, block, blksize);
@@ -729,6 +758,8 @@ GenerationFree(void *pointer)
 	dlist_delete(&block->node);
 
 	set->header.mem_allocated -= block->blksize;
+	pgstat_report_allocated_bytes_decrease(block->blksize, PG_ALLOC_GENERATION);
+
 	free(block);
 }
 

@@ -5644,6 +5644,282 @@ SELECT pid, wait_event_type, wait_event FROM pg_stat_activity WHERE wait_event i
 
  </sect2>
 
+ <sect2 id="monitoring-pg-stat-memory-allocation-view">
+  <title><structname>pg_stat_memory_allocation</structname></title>
+
+  <indexterm>
+   <primary>pg_stat_memory_allocation</primary>
+  </indexterm>
+
+  <para>
+   The <structname>pg_stat_memory_allocation</structname> view will have one
+   row per server process, showing information related to the current memory
+   allocation of that process in total and by allocator type. Due to the
+   dynamic nature of memory allocations the allocated bytes values may not be
+   exact but should be sufficient for the intended purposes. Dynamic shared
+   memory allocations are included only in the value displayed for the backend
+   that created them, they are not included in the value for backends that are
+   attached to them to avoid double counting.  Use
+   <function>pg_size_pretty</function> described in
+   <xref linkend="functions-admin-dbsize"/> to make these values more easily
+   readable.
+  </para>
+
+  <table id="pg-stat-memory-allocation-view" xreflabel="pg_stat_memory_allocation">
+   <title><structname>pg_stat_memory_allocation</structname> View</title>
+   <tgroup cols="1">
+    <thead>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       Column Type
+      </para>
+      <para>
+       Description
+      </para></entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>datid</structfield> <type>oid</type>
+      </para>
+      <para>
+       OID of the database this backend is connected to
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>pid</structfield> <type>integer</type>
+      </para>
+      <para>
+       Process ID of this backend
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>allocated_bytes</structfield> <type>bigint</type>
+      </para>
+     <para>
+      Memory currently allocated to this backend in bytes. This is the balance
+      of bytes allocated and freed by this backend.
+     </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>aset_allocated_bytes</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Memory currently allocated to this backend in bytes via the allocation
+       set allocator.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>dsm_allocated_bytes</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Memory currently allocated to this backend in bytes via the dynamic
+       shared memory allocator. Upon process exit, dsm allocations that have
+       not been freed are considered long lived and added to
+       <structfield>global_dsm_allocated_bytes</structfield> found in the
+       <link linkend="monitoring-pg-stat-global-memory-allocation-view">
+       <structname>pg_stat_global_memory_allocation</structname></link> view.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>generation_allocated_bytes</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Memory currently allocated to this backend in bytes via the generation
+       allocator.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>slab_allocated_bytes</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Memory currently allocated to this backend in bytes via the slab
+       allocator.
+      </para></entry>
+     </row>
+
+    </tbody>
+   </tgroup>
+  </table>
+
+ </sect2>
+
+ <sect2 id="monitoring-pg-stat-global-memory-allocation-view">
+  <title><structname>pg_stat_global_memory_allocation</structname></title>
+
+  <indexterm>
+   <primary>pg_stat_global-memory_allocation</primary>
+  </indexterm>
+
+  <para>
+   The <structname>pg_stat_global_memory_allocation</structname> view will
+   have one row showing information related to current shared memory
+   allocations. Due to the dynamic nature of memory allocations the allocated
+   bytes values may not be exact but should be sufficient for the intended
+   purposes. Use <function>pg_size_pretty</function> described in
+   <xref linkend="functions-admin-dbsize"/> to make the byte populated values
+   more easily readable.
+  </para>
+
+  <table id="pg-stat-global-memory-allocation-view" xreflabel="pg_stat_global_memory_allocation">
+   <title><structname>pg_stat_global_memory_allocation</structname> View</title>
+   <tgroup cols="1">
+    <thead>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       Column Type
+      </para>
+      <para>
+       Description
+      </para></entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>datid</structfield> <type>oid</type>
+      </para>
+      <para>
+       OID of the database this backend is connected to
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>shared_memory_size_mb</structfield> <type>integer</type>
+      </para>
+      <para>
+       Reports the size of the main shared memory area, rounded up to the
+       nearest megabyte. See <xref linkend="guc-shared-memory-size"/>.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>shared_memory_size_in_huge_pages</structfield> <type>bigint</type>
+      </para>
+     <para>
+      Reports the number of huge pages that are needed for the main shared
+      memory area based on the specified huge_page_size. If huge pages are not
+      supported, this will be -1. See
+      <xref linkend="guc-shared-memory-size-in-huge-pages"/>.
+     </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>max_total_backend_memory_bytes</structfield> <type>bigint</type>
+      </para>
+     <para>
+      Reports the user defined backend maximum allowed shared memory in bytes.
+      0 if disabled or not set. See
+      <xref linkend="guc-max-total-backend-memory"/>.
+     </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>max_total_bkend_mem_bytes_available</structfield> <type>bigint</type>
+      </para>
+     <para>
+      Tracks max_total_backend_memory (in bytes) available for allocation. At
+      database startup, max_total_bkend_mem_bytes_available is reduced by the
+      byte equivalent of shared_memory_size_mb. Each backend process is
+      intialized with a 1MB local allowance which also reduces
+      max_total_bkend_mem_bytes_available. A process's allocation requests
+      reduce it's local allowance. If a process's allocation request exceeds
+      it's remaining allowance, an attempt is made to refill the local
+      allowance from max_total_bkend_mem_bytes_available. If the refill request
+      fails, then the requesting process will fail with an out of memory error
+      resulting in the cancellation of that process's active query/transaction.
+      The default refill allocation quantity is 1MB.  If a request is greater
+      than 1MB, an attempt will be made to allocate the full amount. If
+      max_total_backend_memory is disabled, this will be -1.
+      <xref linkend="guc-max-total-backend-memory"/>.
+     </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>global_dsm_allocated_bytes</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Long lived dynamically allocated memory currently allocated to the
+       database. Upon process exit, dsm allocations that have not been freed
+       are considered long lived and added to
+       <structfield>global_dsm_allocated_bytes</structfield>.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>total_aset_allocated_bytes</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Sum total of <structfield>aset_allocated_bytes</structfield> for all
+       backend processes from
+       <link linkend="monitoring-pg-stat-memory-allocation-view">
+       <structname>pg_stat_memory_allocation</structname></link> view.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>total_dsm_allocated_bytes</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Sum total of <structfield>dsm_allocated_bytes</structfield> for all
+       backend processes from
+       <link linkend="monitoring-pg-stat-memory-allocation-view">
+       <structname>pg_stat_memory_allocation</structname></link> view.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>total_generation_allocated_bytes</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Sum total of <structfield>generation_allocated_bytes</structfield> for
+       all backend processes from
+       <link linkend="monitoring-pg-stat-memory-allocation-view">
+       <structname>pg_stat_memory_allocation</structname></link> view.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>total_slab_allocated_bytes</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Sum total of <structfield>slab_allocated_bytes</structfield> for all
+       backend processes from
+       <link linkend="monitoring-pg-stat-memory-allocation-view">
+       <structname>pg_stat_memory_allocation</structname></link> view.
+      </para></entry>
+     </row>
+
+    </tbody>
+   </tgroup>
+  </table>
+
+ </sect2>
+
  <sect2 id="monitoring-stats-functions">
   <title>Statistics Functions</title>
 

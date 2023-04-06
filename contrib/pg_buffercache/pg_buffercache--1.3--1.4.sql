@@ -8,10 +8,23 @@ CREATE FUNCTION pg_buffercache_summary(
     OUT buffers_unused int4,
     OUT buffers_dirty int4,
     OUT buffers_pinned int4,
-    OUT usagecount_avg float8)
+    OUT usagecounts int4[])
 AS 'MODULE_PATHNAME', 'pg_buffercache_summary'
 LANGUAGE C PARALLEL SAFE;
 
 -- Don't want these to be available to public.
 REVOKE ALL ON FUNCTION pg_buffercache_summary() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION pg_buffercache_summary() TO pg_monitor;
+
+CREATE FUNCTION pg_buffercache_usage_counts(
+    OUT usage_count int4,
+    OUT buffers int4,
+    OUT dirty int4,
+    OUT pinned int4)
+RETURNS SETOF record
+AS 'MODULE_PATHNAME', 'pg_buffercache_usage_counts'
+LANGUAGE C PARALLEL SAFE;
+
+-- Don't want these to be available to public.
+REVOKE ALL ON FUNCTION pg_buffercache_usage_counts() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION pg_buffercache_usage_counts() TO pg_monitor;

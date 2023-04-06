@@ -4166,7 +4166,24 @@ ReadControlFile(void)
 static void
 UpdateControlFile(void)
 {
-	update_controlfile(DataDir, ControlFile, true);
+	int			sync_op;
+
+	switch (sync_method)
+	{
+		case SYNC_METHOD_FDATASYNC:
+			sync_op = UPDATE_CONTROLFILE_FDATASYNC;
+			break;
+		case SYNC_METHOD_OPEN:
+			sync_op = UPDATE_CONTROLFILE_O_SYNC;
+			break;
+		case SYNC_METHOD_OPEN_DSYNC:
+			sync_op = UPDATE_CONTROLFILE_O_DSYNC;
+			break;
+		default:
+			sync_op = UPDATE_CONTROLFILE_FSYNC;
+	}
+
+	update_controlfile(DataDir, ControlFile, sync_op);
 }
 
 /*

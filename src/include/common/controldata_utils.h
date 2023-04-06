@@ -12,8 +12,13 @@
 
 #include "catalog/pg_control.h"
 
+#define UPDATE_CONTROLFILE_FSYNC 1
+#define UPDATE_CONTROLFILE_FDATASYNC 2
+#define UPDATE_CONTROLFILE_O_SYNC 3
+#define UPDATE_CONTROLFILE_O_DSYNC 4
+
 extern ControlFileData *get_controlfile(const char *DataDir, bool *crc_ok_p);
 extern void update_controlfile(const char *DataDir,
-							   ControlFileData *ControlFile, bool do_sync);
+							   ControlFileData *ControlFile, int sync_op);
 
 #endif							/* COMMON_CONTROLDATA_UTILS_H */

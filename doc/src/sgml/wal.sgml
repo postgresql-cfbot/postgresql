@@ -106,12 +106,12 @@
     <listitem>
       <para>
         On <productname>Windows</productname>, if <varname>wal_sync_method</varname> is
-        <literal>open_datasync</literal> (the default), write caching can be disabled
+        <literal>open_datasync</literal>, write caching can be disabled
         by unchecking <literal>My Computer\Open\<replaceable>disk drive</replaceable>\Properties\Hardware\Properties\Policies\Enable write caching on the disk</literal>.
         Alternatively, set <varname>wal_sync_method</varname> to
-        <literal>fdatasync</literal> (NTFS only), <literal>fsync</literal> or
-        <literal>fsync_writethrough</literal>, which prevent
-        write caching.
+        <literal>fdatasync</literal> (the default), <literal>fsync</literal> or
+        <literal>fsync_writethrough</literal>, which use system calls that
+        flush write caches.
       </para>
     </listitem>
 

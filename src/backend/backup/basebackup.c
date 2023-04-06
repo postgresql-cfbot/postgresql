@@ -39,6 +39,7 @@
 #include "storage/dsm_impl.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
+#include "storage/lwlock.h"
 #include "storage/reinit.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
@@ -345,8 +346,12 @@ perform_base_backup(basebackup_options *opt, bbsink *sink)
 							(errcode_for_file_access(),
 							 errmsg("could not stat file \"%s\": %m",
 									XLOG_CONTROL_FILE)));
+
+				/* Lock to avoid torn reads, if there is a concurrent write. */
+				LWLockAcquire(ControlFileLock, LW_SHARED);
 				sendFile(sink, XLOG_CONTROL_FILE, XLOG_CONTROL_FILE, &statbuf,
 						 false, InvalidOid, &manifest, NULL);
+				LWLockRelease(ControlFileLock);
 			}
 			else
 			{

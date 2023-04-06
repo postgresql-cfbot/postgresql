@@ -15,6 +15,7 @@
 #include "postgres.h"
 
 #include "access/detoast.h"
+#include "access/hio.h"
 #include "access/table.h"
 #include "access/toast_helper.h"
 #include "access/toast_internals.h"
@@ -254,7 +255,8 @@ toast_tuple_try_compression(ToastTupleContext *ttc, int attribute)
  * Move an attribute to external storage.
  */
 void
-toast_tuple_externalize(ToastTupleContext *ttc, int attribute, int options)
+toast_tuple_externalize(ToastTupleContext *ttc, int attribute, int options,
+						BulkInsertStateData *bistate)
 {
 	Datum	   *value = &ttc->ttc_values[attribute];
 	Datum		old_value = *value;
@@ -262,7 +264,7 @@ toast_tuple_externalize(ToastTupleContext *ttc, int attribute, int options)
 
 	attr->tai_colflags |= TOASTCOL_IGNORE;
 	*value = toast_save_datum(ttc->ttc_rel, old_value, attr->tai_oldexternal,
-							  options);
+							  options, bistate);
 	if ((attr->tai_colflags & TOASTCOL_NEEDS_FREE) != 0)
 		pfree(DatumGetPointer(old_value));
 	attr->tai_colflags |= TOASTCOL_NEEDS_FREE;

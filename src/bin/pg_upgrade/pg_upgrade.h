@@ -328,6 +328,21 @@ typedef struct
 } OSInfo;
 
 
+/* Function signature for data type check version hook */
+typedef bool (*DataTypesUsageVersionCheck)(ClusterInfo *cluster);
+
+/*
+ * DataTypesUsageChecks
+ */
+typedef struct
+{
+	const char *status;			/* status line to print to the user */
+	const char *report_filename;	/* filename to store report to */
+	const char *base_query;		/* Query to extract the oid of the datatype */
+	const char *report_text;	/* Text to store to report in case of error */
+	DataTypesUsageVersionCheck version_hook;
+} DataTypesUsageChecks;
+
 /*
  * Global variables
  */
@@ -450,19 +465,15 @@ unsigned int str2uint(const char *str);
 
 /* version.c */
 
-bool		check_for_data_types_usage(ClusterInfo *cluster,
-									   const char *base_query,
-									   const char *output_path);
-bool		check_for_data_type_usage(ClusterInfo *cluster,
-									  const char *type_name,
-									  const char *output_path);
-void		old_9_3_check_for_line_data_type_usage(ClusterInfo *cluster);
-void		old_9_6_check_for_unknown_data_type_usage(ClusterInfo *cluster);
+bool		old_9_3_check_for_line_data_type_usage(ClusterInfo *cluster);
+bool		check_for_jsonb_9_4_usage(ClusterInfo *cluster);
+bool		old_9_6_check_for_unknown_data_type_usage(ClusterInfo *cluster);
+bool		old_11_check_for_sql_identifier_data_type_usage(ClusterInfo *cluster);
 void		old_9_6_invalidate_hash_indexes(ClusterInfo *cluster,
 											bool check_mode);
 
-void		old_11_check_for_sql_identifier_data_type_usage(ClusterInfo *cluster);
 void		report_extension_updates(ClusterInfo *cluster);
+bool		check_for_aclitem_data_type_usage(ClusterInfo *cluster);
 
 /* parallel.c */
 void		parallel_exec_prog(const char *log_file, const char *opt_log_file,

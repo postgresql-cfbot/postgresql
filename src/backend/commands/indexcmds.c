@@ -713,11 +713,6 @@ DefineIndex(Oid relationId,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("cannot create index on partitioned table \"%s\" concurrently",
 							RelationGetRelationName(rel))));
-		if (stmt->excludeOpNames)
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("cannot create exclusion constraints on partitioned table \"%s\"",
-							RelationGetRelationName(rel))));
 	}
 
 	/*
@@ -924,15 +919,16 @@ DefineIndex(Oid relationId,
 		index_check_primary_key(rel, indexInfo, is_alter_table, stmt);
 
 	/*
-	 * If this table is partitioned and we're creating a unique index or a
-	 * primary key, make sure that the partition key is a subset of the
-	 * index's columns.  Otherwise it would be possible to violate uniqueness
-	 * by putting values that ought to be unique in different partitions.
+	 * If this table is partitioned and we're creating a unique index,
+	 * primary key, or exclusion constraint, make sure that the partition key
+	 * is a subset of the index's columns.  Otherwise it would be possible to
+	 * violate uniqueness by putting values that ought to be unique in
+	 * different partitions.
 	 *
 	 * We could lift this limitation if we had global indexes, but those have
 	 * their own problems, so this is a useful feature combination.
 	 */
-	if (partitioned && (stmt->unique || stmt->primary))
+	if (partitioned && (stmt->unique || stmt->primary || stmt->excludeOpNames != NIL))
 	{
 		PartitionKey key = RelationGetPartitionKey(rel);
 		const char *constraint_type;
@@ -985,15 +981,22 @@ DefineIndex(Oid relationId,
 			 * We'll need to be able to identify the equality operators
 			 * associated with index columns, too.  We know what to do with
 			 * btree opclasses; if there are ever any other index types that
-			 * support unique indexes, this logic will need extension.
+			 * support unique indexes, this logic will need extension. But
+			 * if we have an exclusion constraint, it already knows the
+			 * operators, so we don't have to infer them.
 			 */
-			if (accessMethodId == BTREE_AM_OID)
-				eq_strategy = BTEqualStrategyNumber;
+			if (stmt->excludeOpNames == NIL)
+			{
+				if (accessMethodId == BTREE_AM_OID)
+					eq_strategy = BTEqualStrategyNumber;
+				else
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("cannot match partition key to an index using access method \"%s\"",
+									accessMethodName)));
+			}
 			else
-				ereport(ERROR,
-						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-						 errmsg("cannot match partition key to an index using access method \"%s\"",
-								accessMethodName)));
+				eq_strategy = InvalidStrategy;
 
 			/*
 			 * It may be possible to support UNIQUE constraints when partition
@@ -1022,14 +1025,35 @@ DefineIndex(Oid relationId,
 					{
 						Oid			idx_eqop;
 
-						idx_eqop = get_opfamily_member(idx_opfamily,
-													   idx_opcintype,
-													   idx_opcintype,
-													   eq_strategy);
+						if (stmt->excludeOpNames != NIL)
+							idx_eqop = indexInfo->ii_ExclusionOps[j];
+						else
+							idx_eqop = get_opfamily_member(idx_opfamily,
+														   idx_opcintype,
+														   idx_opcintype,
+														   eq_strategy);
+
 						if (ptkey_eqop == idx_eqop)
 						{
 							found = true;
 							break;
+						}
+						else
+						{
+							/*
+							 * We found a matching column, but the index doesn't use
+							 * an equality operator. Instead of failing below with
+							 * an error message about a missing column, fail now and
+							 * explain that the operator is wrong.
+							 */
+							Form_pg_attribute att;
+
+							att = TupleDescAttr(RelationGetDescr(rel),
+												key->partattrs[i] - 1);
+							ereport(ERROR,
+									(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+									 errmsg("cannot match partition key to index on column \"%s\" using non-equal operator \"%s\".",
+											NameStr(att->attname), get_opname(indexInfo->ii_ExclusionOps[j]))));
 						}
 					}
 				}

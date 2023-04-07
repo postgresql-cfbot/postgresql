@@ -10237,19 +10237,18 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
       <listitem>
        <para>
         The shared lock table tracks locks on
-        <varname>max_locks_per_transaction</varname> * (<xref
-        linkend="guc-max-connections"/> + <xref
-        linkend="guc-max-prepared-transactions"/>) objects (e.g.,  tables);
-        hence, no more than this many distinct objects can be locked at
-        any one time.  This parameter controls the average number of object
-        locks allocated for each transaction;  individual transactions
-        can lock more objects as long as the locks of all transactions
-        fit in the lock table.  This is <emphasis>not</emphasis> the number of
-        rows that can be locked; that value is unlimited.  The default,
-        64, has historically proven sufficient, but you might need to
-        raise this value if you have queries that touch many different
-        tables in a single transaction, e.g., query of a parent table with
-        many children.  This parameter can only be set at server start.
+        <varname>max_locks_per_transaction</varname> objects (e.g., tables)
+        per eligible process or prepared transaction; hence, no more than this
+        many distinct objects can be locked at any one time.  This parameter
+        controls the average number of object locks allocated for each
+        transaction;  individual transactions can lock more objects as long as
+        the locks of all transactions fit in the lock table.  This is
+        <emphasis>not</emphasis> the number of rows that can be locked; that
+        value is unlimited.  The default, 64, has historically proven
+        sufficient, but you might need to raise this value if you have queries
+        that touch many different tables in a single transaction, e.g., query
+        of a parent table with many children.  This parameter can only be set
+        at server start.
        </para>
 
        <para>
@@ -10269,19 +10268,17 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
       <listitem>
        <para>
         The shared predicate lock table tracks locks on
-        <varname>max_pred_locks_per_transaction</varname> * (<xref
-        linkend="guc-max-connections"/> + <xref
-        linkend="guc-max-prepared-transactions"/>) objects (e.g., tables);
-        hence, no more than this many distinct objects can be locked at
-        any one time.  This parameter controls the average number of object
-        locks allocated for each transaction;  individual transactions
-        can lock more objects as long as the locks of all transactions
-        fit in the lock table.  This is <emphasis>not</emphasis> the number of
-        rows that can be locked; that value is unlimited.  The default,
-        64, has generally been sufficient in testing, but you might need to
-        raise this value if you have clients that touch many different
-        tables in a single serializable transaction. This parameter can
-        only be set at server start.
+        <varname>max_pred_locks_per_transaction</varname> objects (e.g.,
+        tables) per eligible process or prepared transaction; hence, no more
+        than this many distinct objects can be locked at any one time.  This
+        parameter controls the average number of object locks allocated for
+        each transaction;  individual transactions can lock more objects as
+        long as the locks of all transactions fit in the lock table.  This is
+        <emphasis>not</emphasis> the number of rows that can be locked; that
+        value is unlimited.  The default, 64, has generally been sufficient in
+        testing, but you might need to raise this value if you have clients
+        that touch many different tables in a single serializable transaction.
+        This parameter can only be set at server start.
        </para>
       </listitem>
      </varlistentry>

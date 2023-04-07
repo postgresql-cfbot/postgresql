@@ -501,6 +501,8 @@ pgarch_ArchiverCopyLoop(void)
 static bool
 pgarch_archiveXlog(char *xlog)
 {
+	sigjmp_buf	local_sigjmp_buf;
+	MemoryContext oldcontext = CurrentMemoryContext;
 	char		pathname[MAXPGPATH];
 	char		activitymsg[MAXFNAMELEN + 16];
 	bool		ret;
@@ -511,7 +513,49 @@ pgarch_archiveXlog(char *xlog)
 	snprintf(activitymsg, sizeof(activitymsg), "archiving %s", xlog);
 	set_ps_display(activitymsg);
 
-	ret = ArchiveCallbacks->archive_file_cb(archive_module_state, xlog, pathname);
+	/*
+	 * Since the archiver operates at the bottom of the exception stack,
+	 * ERRORs turn into FATALs and cause the archiver process to restart.
+	 * However, using ereport(ERROR, ...) when there are problems is easy to
+	 * code and maintain.  Therefore, we create our own exception handler to
+	 * catch ERRORs and return false instead of restarting the archiver
+	 * whenever there is a failure.
+	 */
+	if (sigsetjmp(local_sigjmp_buf, 1) != 0)
+	{
+		/* Since not using PG_TRY, must reset error stack by hand */
+		error_context_stack = NULL;
+
+		/* Prevent interrupts while cleaning up */
+		HOLD_INTERRUPTS();
+
+		/* Report the error and clear ErrorContext for next time */
+		EmitErrorReport();
+		MemoryContextSwitchTo(oldcontext);
+		FlushErrorState();
+
+		/* Remove our exception handler */
+		PG_exception_stack = NULL;
+
+		/* Now we can allow interrupts again */
+		RESUME_INTERRUPTS();
+
+		/* Report failure so that the archiver retries this file */
+		ret = false;
+	}
+	else
+	{
+		/* Enable our exception handler */
+		PG_exception_stack = &local_sigjmp_buf;
+
+		/* Archive the file! */
+		ret = ArchiveCallbacks->archive_file_cb(archive_module_state,
+												xlog, pathname);
+
+		/* Remove our exception handler */
+		PG_exception_stack = NULL;
+	}
+
 	if (ret)
 		snprintf(activitymsg, sizeof(activitymsg), "last was %s", xlog);
 	else

@@ -172,7 +172,6 @@ basic_archive_configured(ArchiveModuleState *state)
 static bool
 basic_archive_file(ArchiveModuleState *state, const char *file, const char *path)
 {
-	sigjmp_buf	local_sigjmp_buf;
 	MemoryContext oldcontext;
 	BasicArchiveData *data = (BasicArchiveData *) state->private_data;
 	MemoryContext basic_archive_context = data->context;
@@ -184,51 +183,22 @@ basic_archive_file(ArchiveModuleState *state, const char *file, const char *path
 	 */
 	oldcontext = MemoryContextSwitchTo(basic_archive_context);
 
-	/*
-	 * Since the archiver operates at the bottom of the exception stack,
-	 * ERRORs turn into FATALs and cause the archiver process to restart.
-	 * However, using ereport(ERROR, ...) when there are problems is easy to
-	 * code and maintain.  Therefore, we create our own exception handler to
-	 * catch ERRORs and return false instead of restarting the archiver
-	 * whenever there is a failure.
-	 */
-	if (sigsetjmp(local_sigjmp_buf, 1) != 0)
+	PG_TRY();
 	{
-		/* Since not using PG_TRY, must reset error stack by hand */
-		error_context_stack = NULL;
-
-		/* Prevent interrupts while cleaning up */
-		HOLD_INTERRUPTS();
-
-		/* Report the error and clear ErrorContext for next time */
-		EmitErrorReport();
-		FlushErrorState();
-
+		/* Archive the file! */
+		basic_archive_file_internal(file, path);
+	}
+	PG_CATCH();
+	{
 		/* Close any files left open by copy_file() or compare_files() */
-		AtEOSubXact_Files(false, InvalidSubTransactionId, InvalidSubTransactionId);
+		AtEOXact_Files(false);
 
-		/* Reset our memory context and switch back to the original one */
-		MemoryContextSwitchTo(oldcontext);
+		/* Reset our memory context */
 		MemoryContextReset(basic_archive_context);
 
-		/* Remove our exception handler */
-		PG_exception_stack = NULL;
-
-		/* Now we can allow interrupts again */
-		RESUME_INTERRUPTS();
-
-		/* Report failure so that the archiver retries this file */
-		return false;
+		PG_RE_THROW();
 	}
-
-	/* Enable our exception handler */
-	PG_exception_stack = &local_sigjmp_buf;
-
-	/* Archive the file! */
-	basic_archive_file_internal(file, path);
-
-	/* Remove our exception handler */
-	PG_exception_stack = NULL;
+	PG_END_TRY();
 
 	/* Reset our memory context and switch back to the original one */
 	MemoryContextSwitchTo(oldcontext);

@@ -163,6 +163,19 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
         </listitem>
        </varlistentry>
 
+       <varlistentry id="sql-createsubscription-with-password-required">
+        <term><literal>password_required</literal> (<type>boolean</type>)</term>
+        <listitem>
+         <para>
+          Specifies whether connections to the publisher made as a result
+          of this subscription must use password authentication. This setting
+          is ignored when the subscription is owned by a superuser.
+          The default is <literal>true</literal>. Only superusers can set
+          this value to <literal>false</literal>.
+         </para>
+        </listitem>
+       </varlistentry>
+
        <varlistentry id="sql-createsubscription-with-slot-name">
         <term><literal>slot_name</literal> (<type>string</type>)</term>
         <listitem>
@@ -353,21 +366,8 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
         </listitem>
        </varlistentry>
 
-       <varlistentry id="sql-createsubscription-with-password-required">
-        <term><literal>password_required</literal> (<type>string</type>)</term>
-        <listitem>
-         <para>
-          Specifies whether connections to the publisher made as a result
-          of this subscription must use password authentication. This setting
-          is ignored when the subscription is owned by a superuser.
-          The default is <literal>true</literal>. Only superusers can set
-          this value to <literal>false</literal>.
-         </para>
-        </listitem>
-       </varlistentry>
-
        <varlistentry id="sql-createsubscription-with-run-as-owner">
-        <term><literal>run_as_owner</literal> (<type>string</type>)</term>
+        <term><literal>run_as_owner</literal> (<type>boolean</type>)</term>
         <listitem>
          <para>
           If true, all replication actions are performed as the subscription

@@ -44,6 +44,7 @@
 #define FD_H
 
 #include <dirent.h>
+#include <fcntl.h>
 
 typedef enum RecoveryInitSyncMethod
 {
@@ -54,10 +55,16 @@ typedef enum RecoveryInitSyncMethod
 typedef int File;
 
 
+#define IO_DIRECT_DATA			0x01
+#define IO_DIRECT_WAL			0x02
+#define IO_DIRECT_WAL_INIT		0x04
+
+
 /* GUC parameter */
 extern PGDLLIMPORT int max_files_per_process;
 extern PGDLLIMPORT bool data_sync_retry;
 extern PGDLLIMPORT int recovery_init_sync_method;
+extern PGDLLIMPORT int io_direct_flags;
 
 /*
  * This is private to fd.c, but exported for save/restore_backend_variables()
@@ -82,9 +89,10 @@ extern PGDLLIMPORT int max_safe_fds;
  * to the appropriate Windows flag in src/port/open.c.  We simulate it with
  * fcntl(F_NOCACHE) on macOS inside fd.c's open() wrapper.  We use the name
  * PG_O_DIRECT rather than defining O_DIRECT in that case (probably not a good
- * idea on a Unix).
+ * idea on a Unix).  We can only use it if the compiler will correctly align
+ * PGIOAlignedBlock for us, though.
  */
-#if defined(O_DIRECT)
+#if defined(O_DIRECT) && defined(pg_attribute_aligned)
 #define		PG_O_DIRECT O_DIRECT
 #elif defined(F_NOCACHE)
 #define		PG_O_DIRECT 0x80000000

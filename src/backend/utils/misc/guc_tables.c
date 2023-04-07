@@ -568,6 +568,7 @@ static char *locale_ctype;
 static char *server_encoding_string;
 static char *server_version_string;
 static int	server_version_num;
+static char *io_direct_string;
 
 #ifdef HAVE_SYSLOG
 #define	DEFAULT_SYSLOG_FACILITY LOG_LOCAL0
@@ -4563,6 +4564,17 @@ struct config_string ConfigureNamesString[] =
 		&backtrace_functions,
 		"",
 		check_backtrace_functions, assign_backtrace_functions, NULL
+	},
+
+	{
+		{"io_direct", PGC_POSTMASTER, DEVELOPER_OPTIONS,
+			gettext_noop("Use direct I/O for file access."),
+			NULL,
+			GUC_LIST_INPUT | GUC_NOT_IN_SAMPLE
+		},
+		&io_direct_string,
+		"data,wal,wal_init",
+		check_io_direct, assign_io_direct, NULL
 	},
 
 	/* End-of-list marker */

@@ -420,6 +420,13 @@ process_syncing_tables_for_apply(XLogRecPtr current_lsn)
 
 	Assert(!IsTransactionState());
 
+	/*
+	 * If we've made it past our previously-stored special wakeup time, reset
+	 * it so that it can be recalculated as needed.
+	 */
+	if (LogRepWorkerGetSyncStartWakeup() <= GetCurrentTimestamp())
+		LogRepWorkerClearSyncStartWakeup();
+
 	/* We need up-to-date sync state info for subscription tables here. */
 	FetchTableStates(&started_tx);
 
@@ -593,6 +600,27 @@ process_syncing_tables_for_apply(XLogRecPtr current_lsn)
 												 DSM_HANDLE_INVALID);
 						hentry->last_start_time = now;
 					}
+					else
+					{
+						TimestampTz retry_time;
+
+						/*
+						 * Store when we can start the sync worker so that we
+						 * know how long to sleep.
+						 */
+						retry_time = TimestampTzPlusMilliseconds(hentry->last_start_time,
+																 wal_retrieve_retry_interval);
+						LogRepWorkerUpdateSyncStartWakeup(retry_time);
+					}
+				}
+				else
+				{
+					TimestampTz now = GetCurrentTimestamp();
+					TimestampTz retry_time;
+
+					/* Maybe there will be a free slot in a second... */
+					retry_time = TimestampTzPlusSeconds(now, 1);
+					LogRepWorkerUpdateSyncStartWakeup(retry_time);
 				}
 			}
 		}

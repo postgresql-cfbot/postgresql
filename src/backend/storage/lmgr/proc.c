@@ -805,6 +805,7 @@ ProcKill(int code, Datum arg)
 	dlist_head *procgloballist;
 
 	Assert(MyProc != NULL);
+	Assert(MyProc->pid == (int) getpid());  /* not safe if forked by system(), etc. */
 
 	/* Make sure we're out of the sync rep lists */
 	SyncRepCleanupAtProcExit();
@@ -925,6 +926,7 @@ AuxiliaryProcKill(int code, Datum arg)
 	PGPROC	   *proc;
 
 	Assert(proctype >= 0 && proctype < NUM_AUXILIARY_PROCS);
+	Assert(MyProc->pid == (int) getpid());  /* not safe if forked by system(), etc. */
 
 	auxproc = &AuxiliaryProcs[proctype];
 

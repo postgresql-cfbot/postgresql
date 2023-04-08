@@ -529,11 +529,7 @@ extern void write_pipe_chunks(char *data, int len, int dest);
 extern void write_csvlog(ErrorData *edata);
 extern void write_jsonlog(ErrorData *edata);
 
-/*
- * Write errors to stderr (or by equal means when stderr is
- * not available). Used before ereport/elog can be used
- * safely (memory context, GUC load etc)
- */
 extern void write_stderr(const char *fmt,...) pg_attribute_printf(1, 2);
+extern void write_stderr_signal_safe(const char *fmt);
 
 #endif							/* ELOG_H */

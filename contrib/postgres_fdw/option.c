@@ -211,6 +211,27 @@ postgres_fdw_validator(PG_FUNCTION_ARGS)
 						 errmsg("sslcert and sslkey are superuser-only"),
 						 errhint("User mappings with the sslcert or sslkey options set may only be created or modified by the superuser.")));
 		}
+		else if (strcmp(def->defname, "server_version") == 0)
+		{
+			char* value;
+			int			int_val;
+			bool		is_parsed;
+
+			value = defGetString(def);
+			is_parsed = parse_int(value, &int_val, 0, NULL);
+
+			if (!is_parsed)
+				ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						errmsg("invalid value for integer option \"%s\": %s",
+							def->defname, value)));
+
+			if (int_val <= 0)
+				ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						errmsg("\"%s\" must be an integer value greater than zero",
+							def->defname)));
+		}
 		else if (strcmp(def->defname, "analyze_sampling") == 0)
 		{
 			char	   *value;
@@ -293,6 +314,9 @@ InitPgFdwOptions(void)
 		 * mapping context too
 		 */
 		{"gssdeleg", UserMappingRelationId, true},
+
+		/* options for partial aggregation pushdown */
+		{"server_version", ForeignServerRelationId, false},
 
 		{NULL, InvalidOid, false}
 	};

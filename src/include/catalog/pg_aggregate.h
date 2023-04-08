@@ -55,6 +55,12 @@ CATALOG(pg_aggregate,2600,AggregateRelationId)
 	/* function to convert bytea to transtype (0 if none) */
 	regproc		aggdeserialfn BKI_DEFAULT(-) BKI_LOOKUP_OPT(pg_proc);
 
+	/* special aggregate function for partial aggregation (0 if none) */
+	regproc		partialaggfn BKI_DEFAULT(-) BKI_LOOKUP_OPT(pg_proc);
+
+	/* minimum PostgreSQL's version which has compatible partialaggfn */
+	int32		partialagg_minversion BKI_DEFAULT(0);
+
 	/* forward function for moving-aggregate mode (0 if none) */
 	regproc		aggmtransfn BKI_DEFAULT(-) BKI_LOOKUP_OPT(pg_proc);
 
@@ -141,6 +147,9 @@ DECLARE_UNIQUE_INDEX_PKEY(pg_aggregate_fnoid_index, 2650, AggregateFnoidIndexId,
 #define AGGMODIFY_SHAREABLE			's'
 #define AGGMODIFY_READ_WRITE		'w'
 
+/* Symbolic value for default partialagg_minversion */
+#define	PARTIALAGG_MINVERSION_DEFAULT	0
+
 #endif							/* EXPOSE_TO_CLIENT_CODE */
 
 
@@ -164,6 +173,7 @@ extern ObjectAddress AggregateCreate(const char *aggName,
 									 List *aggmtransfnName,
 									 List *aggminvtransfnName,
 									 List *aggmfinalfnName,
+									 List *aggpartialfnName,
 									 bool finalfnExtraArgs,
 									 bool mfinalfnExtraArgs,
 									 char finalfnModify,
@@ -173,6 +183,7 @@ extern ObjectAddress AggregateCreate(const char *aggName,
 									 int32 aggTransSpace,
 									 Oid aggmTransType,
 									 int32 aggmTransSpace,
+									 int32 partialaggMinversion,
 									 const char *agginitval,
 									 const char *aggminitval,
 									 char proparallel);

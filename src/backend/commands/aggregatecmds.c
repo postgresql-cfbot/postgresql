@@ -70,6 +70,7 @@ DefineAggregate(ParseState *pstate,
 	List	   *combinefuncName = NIL;
 	List	   *serialfuncName = NIL;
 	List	   *deserialfuncName = NIL;
+	List	   *partialaggfuncName = NIL;
 	List	   *mtransfuncName = NIL;
 	List	   *minvtransfuncName = NIL;
 	List	   *mfinalfuncName = NIL;
@@ -83,6 +84,7 @@ DefineAggregate(ParseState *pstate,
 	TypeName   *mtransType = NULL;
 	int32		transSpace = 0;
 	int32		mtransSpace = 0;
+	int32		partialaggMinversion = 0;
 	char	   *initval = NULL;
 	char	   *minitval = NULL;
 	char	   *parallel = NULL;
@@ -143,6 +145,8 @@ DefineAggregate(ParseState *pstate,
 			serialfuncName = defGetQualifiedName(defel);
 		else if (strcmp(defel->defname, "deserialfunc") == 0)
 			deserialfuncName = defGetQualifiedName(defel);
+		else if (strcmp(defel->defname, "partialaggfunc") == 0)
+			partialaggfuncName = defGetQualifiedName(defel);
 		else if (strcmp(defel->defname, "msfunc") == 0)
 			mtransfuncName = defGetQualifiedName(defel);
 		else if (strcmp(defel->defname, "minvfunc") == 0)
@@ -182,6 +186,8 @@ DefineAggregate(ParseState *pstate,
 			mtransType = defGetTypeName(defel);
 		else if (strcmp(defel->defname, "msspace") == 0)
 			mtransSpace = defGetInt32(defel);
+		else if (strcmp(defel->defname, "partialagg_minversion") == 0)
+			partialaggMinversion = defGetInt32(defel);
 		else if (strcmp(defel->defname, "initcond") == 0)
 			initval = defGetString(defel);
 		else if (strcmp(defel->defname, "initcond1") == 0)
@@ -461,6 +467,7 @@ DefineAggregate(ParseState *pstate,
 						   mtransfuncName,	/* fwd trans function name */
 						   minvtransfuncName,	/* inv trans function name */
 						   mfinalfuncName,	/* final function name */
+						   partialaggfuncName,
 						   finalfuncExtraArgs,
 						   mfinalfuncExtraArgs,
 						   finalfuncModify,
@@ -470,6 +477,7 @@ DefineAggregate(ParseState *pstate,
 						   transSpace,	/* transition space */
 						   mtransTypeId,	/* transition data type */
 						   mtransSpace, /* transition space */
+						   partialaggMinversion,
 						   initval, /* initial condition */
 						   minitval,	/* initial condition */
 						   proparallel);	/* parallel safe? */

@@ -687,6 +687,11 @@ ALTER SERVER loopback OPTIONS (ADD extensions 'postgres_fdw');
 
 DROP TABLE local_tbl;
 
+-- test that add_paths_with_pathkeys_for_rel() allows incremental sort atop of the epq_path
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT t1.c1, ss.a, ss.b FROM (SELECT c1 FROM "S 1"."T 3" WHERE c1 = 50) t1 INNER JOIN (SELECT t2.c1, t3.c1, t3.c2 FROM (SELECT c1 FROM ft4 WHERE c1 between 50 and 60) t2 INNER JOIN (SELECT c1, c2 FROM ft5 WHERE c1 between 50 and 60) t3 ON (t2.c1 = t3.c1) ) ss(a, b, c) ON (TRUE) ORDER BY t1.c1, ss.a, ss.b, ss.c FOR UPDATE OF t1;
+SELECT t1.c1, ss.a, ss.b FROM (SELECT c1 FROM "S 1"."T 3" WHERE c1 = 50) t1 INNER JOIN (SELECT t2.c1, t3.c1, t3.c2 FROM (SELECT c1 FROM ft4 WHERE c1 between 50 and 60) t2 INNER JOIN (SELECT c1, c2 FROM ft5 WHERE c1 between 50 and 60) t3 ON (t2.c1 = t3.c1) ) ss(a, b, c) ON (TRUE) ORDER BY t1.c1, ss.a, ss.b, ss.c FOR UPDATE OF t1;
+
 -- check join pushdown in situations where multiple userids are involved
 CREATE ROLE regress_view_owner SUPERUSER;
 CREATE USER MAPPING FOR regress_view_owner SERVER loopback;

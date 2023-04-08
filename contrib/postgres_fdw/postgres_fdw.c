@@ -6066,15 +6066,39 @@ add_paths_with_pathkeys_for_rel(PlannerInfo *root, RelOptInfo *rel,
 		 * case it gets used as input to a mergejoin.
 		 */
 		sorted_epq_path = epq_path;
-		if (sorted_epq_path != NULL &&
-			!pathkeys_contained_in(useful_pathkeys,
-								   sorted_epq_path->pathkeys))
-			sorted_epq_path = (Path *)
-				create_sort_path(root,
-								 rel,
-								 sorted_epq_path,
-								 useful_pathkeys,
-								 -1.0);
+		if (sorted_epq_path != NULL)
+		{
+			bool		is_sorted;
+			int			presorted_keys;
+
+			is_sorted = pathkeys_count_contained_in(useful_pathkeys,
+													sorted_epq_path->pathkeys,
+													&presorted_keys);
+
+			if (!is_sorted)
+			{
+				/*
+				 * We've no need to consider both a sort and incremental sort.
+				 * We'll just do a sort if there are no presorted keys and an
+				 * incremental sort when there are presorted keys.
+				 */
+				if (presorted_keys == 0 || !enable_incremental_sort)
+					sorted_epq_path = (Path *)
+						create_sort_path(root,
+										 rel,
+										 sorted_epq_path,
+										 useful_pathkeys,
+										 -1.0);
+				else
+					sorted_epq_path = (Path *)
+						create_incremental_sort_path(root,
+													 rel,
+													 sorted_epq_path,
+													 useful_pathkeys,
+													 presorted_keys,
+													 -1.0);
+			}
+		}
 
 		if (IS_SIMPLE_REL(rel))
 			add_path(rel, (Path *)

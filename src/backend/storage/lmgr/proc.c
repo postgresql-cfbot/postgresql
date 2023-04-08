@@ -36,6 +36,7 @@
 #include "access/transam.h"
 #include "access/twophase.h"
 #include "access/xlogutils.h"
+#include "commands/wait.h"
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "postmaster/autovacuum.h"
@@ -703,6 +704,9 @@ LockErrorCleanup(void)
 	HOLD_INTERRUPTS();
 
 	AbortStrongLockAcquire();
+
+	/* If wait lsn was interrupted, then stop waiting for that LSN */
+	DeleteWaitedLSN();
 
 	/* Nothing to do if we weren't waiting for a lock */
 	if (lockAwaited == NULL)

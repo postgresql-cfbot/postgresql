@@ -43,6 +43,7 @@
 #include "backup/basebackup.h"
 #include "catalog/pg_control.h"
 #include "commands/tablespace.h"
+#include "commands/wait.h"
 #include "common/file_utils.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -1750,6 +1751,15 @@ PerformWalRecovery(void)
 			{
 				reachedRecoveryTarget = true;
 				break;
+			}
+
+			/*
+			 * If we replayed an LSN that someone was waiting for,
+			 * set latches in shared memory array to notify the waiter.
+			 */
+			if (XLogRecoveryCtl->lastReplayedEndRecPtr >= GetMinWaitedLSN())
+			{
+				WaitSetLatch(XLogRecoveryCtl->lastReplayedEndRecPtr);
 			}
 
 			/* Else, try to fetch the next WAL record */

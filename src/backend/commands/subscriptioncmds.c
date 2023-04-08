@@ -71,6 +71,8 @@
 #define SUBOPT_RUN_AS_OWNER			0x00001000
 #define SUBOPT_LSN					0x00002000
 #define SUBOPT_ORIGIN				0x00004000
+#define SUBOPT_RELID				0x00008000
+#define SUBOPT_STATE				0x00010000
 
 /* check if the 'val' has 'bits' set */
 #define IsSet(val, bits)  (((val) & (bits)) == (bits))
@@ -97,6 +99,8 @@ typedef struct SubOpts
 	bool		runasowner;
 	char	   *origin;
 	XLogRecPtr	lsn;
+	Oid			relid;
+	char		state;
 } SubOpts;
 
 static List *fetch_table_list(WalReceiverConn *wrconn, List *publications);
@@ -353,6 +357,38 @@ parse_subscription_options(ParseState *pstate, List *stmt_options,
 			opts->specified_opts |= SUBOPT_LSN;
 			opts->lsn = lsn;
 		}
+		else if (IsSet(supported_opts, SUBOPT_RELID) &&
+				 strcmp(defel->defname, "relid") == 0)
+		{
+			Oid			relid = defGetObjectId(defel);
+
+			if (IsSet(opts->specified_opts, SUBOPT_RELID))
+				errorConflictingDefElem(defel, pstate);
+
+			if (!OidIsValid(relid))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("invalid relation identifier used")));
+
+			opts->specified_opts |= SUBOPT_RELID;
+			opts->relid = relid;
+		}
+		else if (IsSet(supported_opts, SUBOPT_STATE) &&
+				 strcmp(defel->defname, "state") == 0)
+		{
+			char	   *state_str = defGetString(defel);
+
+			if (IsSet(opts->specified_opts, SUBOPT_STATE))
+				errorConflictingDefElem(defel, pstate);
+
+			if (strlen(state_str) != 1)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("invalid relation state used")));
+
+			opts->specified_opts |= SUBOPT_STATE;
+			opts->state = defGetString(defel)[0];
+		}
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -580,6 +616,7 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	bits32		supported_opts;
 	SubOpts		opts = {0};
 	AclResult	aclresult;
+	RepOriginId	originid;
 
 	/*
 	 * Parse and check options.
@@ -592,6 +629,8 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 					  SUBOPT_STREAMING | SUBOPT_TWOPHASE_COMMIT |
 					  SUBOPT_DISABLE_ON_ERR | SUBOPT_PASSWORD_REQUIRED |
 					  SUBOPT_RUN_AS_OWNER | SUBOPT_ORIGIN);
+	if(IsBinaryUpgrade)
+		supported_opts |= SUBOPT_LSN;
 	parse_subscription_options(pstate, stmt->options, supported_opts, &opts);
 
 	/*
@@ -718,7 +757,12 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	recordDependencyOnOwner(SubscriptionRelationId, subid, owner);
 
 	ReplicationOriginNameForLogicalRep(subid, InvalidOid, originname, sizeof(originname));
-	replorigin_create(originname);
+	originid = replorigin_create(originname);
+
+	if (IsBinaryUpgrade && IsSet(opts.lsn, SUBOPT_LSN))
+		replorigin_advance(originid, opts.lsn, InvalidXLogRecPtr,
+							false /* backward */ ,
+							false /* WAL log */ );
 
 	/*
 	 * Connect to remote side to execute requested commands and fetch table
@@ -1425,6 +1469,27 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 				replaces[Anum_pg_subscription_subskiplsn - 1] = true;
 
 				update_tuple = true;
+				break;
+			}
+
+		case ALTER_SUBSCRIPTION_ADD_TABLE:
+			{
+				if (!IsBinaryUpgrade)
+					ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR)),
+							errmsg("ALTER SUBSCRIPTION ... ADD TABLE is not supported"));
+
+				supported_opts = SUBOPT_RELID | SUBOPT_STATE | SUBOPT_LSN;
+				parse_subscription_options(pstate, stmt->options,
+										   supported_opts, &opts);
+
+				/* relid and state should always be provided. */
+				Assert(IsSet(opts.specified_opts, SUBOPT_RELID));
+				Assert(IsSet(opts.specified_opts, SUBOPT_STATE));
+
+				AddSubscriptionRelState(subid, opts.relid, opts.state,
+										opts.lsn);
+
 				break;
 			}
 

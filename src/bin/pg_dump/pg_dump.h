@@ -648,6 +648,16 @@ typedef struct _PublicationSchemaInfo
 } PublicationSchemaInfo;
 
 /*
+ * The SubRelInfo struct is used to represent subscription relation.
+ */
+typedef struct _SubRelInfo
+{
+	Oid		srrelid;
+	char	srsubstate;
+	char   *srsublsn;
+} SubRelInfo;
+
+/*
  * The SubscriptionInfo struct is used to represent subscription.
  */
 typedef struct _SubscriptionInfo
@@ -664,6 +674,9 @@ typedef struct _SubscriptionInfo
 	char	   *subsynccommit;
 	char	   *subpublications;
 	char	   *subpasswordrequired;
+	char	   *suboriginremotelsn;
+	int			nrels;
+	SubRelInfo *subrels;
 } SubscriptionInfo;
 
 /*

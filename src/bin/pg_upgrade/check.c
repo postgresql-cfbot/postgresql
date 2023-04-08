@@ -20,6 +20,7 @@ static void check_is_install_user(ClusterInfo *cluster);
 static void check_proper_datallowconn(ClusterInfo *cluster);
 static void check_for_prepared_transactions(ClusterInfo *cluster);
 static void check_for_isn_and_int8_passing_mismatch(ClusterInfo *cluster);
+static void check_for_subscription_state(ClusterInfo *cluster);
 static void check_for_user_defined_postfix_ops(ClusterInfo *cluster);
 static void check_for_incompatible_polymorphics(ClusterInfo *cluster);
 static void check_for_tables_with_oids(ClusterInfo *cluster);
@@ -103,6 +104,8 @@ check_and_dump_old_cluster(bool live_check)
 	check_for_composite_data_type_usage(&old_cluster);
 	check_for_reg_data_type_usage(&old_cluster);
 	check_for_isn_and_int8_passing_mismatch(&old_cluster);
+	if (user_opts.preserve_subscriptions)
+		check_for_subscription_state(&old_cluster);
 
 	/*
 	 * PG 16 increased the size of the 'aclitem' type, which breaks the on-disk
@@ -783,6 +786,85 @@ check_for_isn_and_int8_passing_mismatch(ClusterInfo *cluster)
 	}
 	else
 		check_ok();
+}
+
+/*
+ * check_for_subscription_state()
+ *
+ * Verify that all subscriptions have a valid remote_lsn and doesn't contain
+ * any table in a state different than ready.
+ */
+static void
+check_for_subscription_state(ClusterInfo *cluster)
+{
+	int			dbnum;
+	bool		is_error = false;
+
+	Assert(user_opts.preserve_subscriptions);
+
+	/* No subscription before pg10. */
+	if (GET_MAJOR_VERSION(cluster->major_version < 1000))
+		return;
+
+	prep_status("Checking for subscription state");
+
+	for (dbnum = 0; dbnum < cluster->dbarr.ndbs; dbnum++)
+	{
+		PGresult   *res;
+		int			nb;
+		DbInfo	   *active_db = &cluster->dbarr.dbs[dbnum];
+		PGconn	   *conn = connectToServer(cluster, active_db->db_name);
+
+		/* We need to check for pg_replication_origin_status only once. */
+		if (dbnum == 0)
+		{
+			res = executeQueryOrDie(conn,
+									"SELECT count(0) "
+									"FROM pg_catalog.pg_subscription s "
+									"LEFT JOIN pg_catalog.pg_replication_origin_status os"
+									"  ON os.external_id = 'pg_' || s.oid "
+									"WHERE coalesce(remote_lsn, '0/0') = '0/0'");
+
+			if (PQntuples(res) != 1)
+				pg_fatal("could not determine the number of remote origin with invalid remote_lsn");
+
+			nb = atooid(PQgetvalue(res, 0, 0));
+			if (nb != 0)
+			{
+				is_error = true;
+				pg_log(PG_WARNING,
+					   "\nWARNING:  %d subscription have invalid remote_lsn",
+					   nb);
+			}
+			PQclear(res);
+		}
+
+		res = executeQueryOrDie(conn,
+								"SELECT count(0) "
+								"FROM pg_catalog.pg_subscription_rel "
+								"WHERE srsubstate != 'r'");
+
+		if (PQntuples(res) != 1)
+			pg_fatal("could not determine the number of non-ready subscription relations");
+
+		nb = atooid(PQgetvalue(res, 0, 0));
+		if (nb != 0)
+		{
+			is_error = true;
+			pg_log(PG_WARNING,
+				   "\nWARNING: database \"%s\" has %d subscription "
+				   "relations(s) in non-ready state", active_db->db_name, nb);
+		}
+
+		PQclear(res);
+		PQfinish(conn);
+	}
+
+	if (is_error)
+		pg_fatal("--preserve-subscription-state is incompatible with "
+				"subscription relations in non-ready state");
+
+	check_ok();
 }
 
 /*

@@ -241,6 +241,25 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><option>--preserve-subscription-state</option></term>
+      <listitem>
+       <para>
+        Fully preserve the logical subscription state if any.  That includes
+        the underlying replication origin with their remote LSN and the list of
+        relations in each subscription so that replication can be simply
+        resumed if the subscriptions are reactived.
+        If that option isn't used, it is up to the user to reactivate the
+        subscriptions in a suitable way; see the subscription part in <xref
+        linkend="pg-dump-notes"/> for more information.
+        If this option is used and any of the subscription on the old cluster
+        has an unknown <varname>remote_lsn</varname> (0/0), or has any relation
+        in a state different from <literal>r</literal> (ready), the
+        <application>pg_upgrade</application> run will error.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>-?</option></term>
       <term><option>--help</option></term>
       <listitem><para>show help, then exit</para></listitem>

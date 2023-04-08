@@ -10708,6 +10708,17 @@ AlterSubscriptionStmt:
 					n->options = $5;
 					$$ = (Node *) n;
 				}
+			/* for binary upgrade only */
+			| ALTER SUBSCRIPTION name ADD_P TABLE definition
+				{
+					AlterSubscriptionStmt *n =
+						makeNode(AlterSubscriptionStmt);
+
+					n->kind = ALTER_SUBSCRIPTION_ADD_TABLE;
+					n->subname = $3;
+					n->options = $6;
+					$$ = (Node *) n;
+				}
 		;
 
 /*****************************************************************************

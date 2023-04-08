@@ -57,6 +57,7 @@ parseCommandLine(int argc, char *argv[])
 		{"verbose", no_argument, NULL, 'v'},
 		{"clone", no_argument, NULL, 1},
 		{"copy", no_argument, NULL, 2},
+		{"preserve-subscription-state", no_argument, NULL, 3},
 
 		{NULL, 0, NULL, 0}
 	};
@@ -66,6 +67,7 @@ parseCommandLine(int argc, char *argv[])
 
 	user_opts.do_sync = true;
 	user_opts.transfer_mode = TRANSFER_MODE_COPY;
+	user_opts.preserve_subscriptions = false;
 
 	os_info.progname = get_progname(argv[0]);
 
@@ -199,6 +201,10 @@ parseCommandLine(int argc, char *argv[])
 				user_opts.transfer_mode = TRANSFER_MODE_COPY;
 				break;
 
+			case 3:
+				user_opts.preserve_subscriptions = true;
+				break;
+
 			default:
 				fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
 						os_info.progname);
@@ -289,6 +295,7 @@ usage(void)
 	printf(_("  -V, --version                 display version information, then exit\n"));
 	printf(_("  --clone                       clone instead of copying files to new cluster\n"));
 	printf(_("  --copy                        copy files to new cluster (default)\n"));
+	printf(_("  --preserve-subscription-state preserve the subscription state fully\n"));
 	printf(_("  -?, --help                    show this help, then exit\n"));
 	printf(_("\n"
 			 "Before running pg_upgrade you must:\n"

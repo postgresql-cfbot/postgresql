@@ -431,6 +431,7 @@ main(int argc, char **argv)
 		{"table-and-children", required_argument, NULL, 12},
 		{"exclude-table-and-children", required_argument, NULL, 13},
 		{"exclude-table-data-and-children", required_argument, NULL, 14},
+		{"preserve-subscription-state", no_argument, NULL, 15},
 
 		{NULL, 0, NULL, 0}
 	};
@@ -657,6 +658,10 @@ main(int argc, char **argv)
 										  optarg);
 				break;
 
+			case 15:			/* include full subscription state */
+				dopt.preserve_subscriptions = true;
+				break;
+
 			default:
 				/* getopt_long already emitted a complaint */
 				pg_log_error_hint("Try \"%s --help\" for more information.", progname);
@@ -713,6 +718,10 @@ main(int argc, char **argv)
 	 */
 	if (dopt.do_nothing && dopt.dump_inserts == 0)
 		pg_fatal("option --on-conflict-do-nothing requires option --inserts, --rows-per-insert, or --column-inserts");
+
+	/* --preserve-subscription-state requires --binary-upgrade */
+	if (dopt.preserve_subscriptions && !dopt.binary_upgrade)
+		pg_fatal("option --preserve-subscription-state requires option --binary-upgrade");
 
 	/* Identify archive format to emit */
 	archiveFormat = parseArchiveFormat(format, &archiveMode);
@@ -4586,6 +4595,69 @@ is_superuser(Archive *fout)
 }
 
 /*
+ * getSubscriptionRels
+ *	  get information about the given subscription's relations
+ */
+static SubRelInfo *
+getSubscriptionRels(Archive *fout, Oid subid, int *nrels)
+{
+	SubRelInfo *rels;
+	PQExpBuffer query;
+	PGresult   *res;
+	int			i_srrelid;
+	int			i_srsubstate;
+	int			i_srsublsn;
+	int			i,
+				ntups;
+
+	if (!fout->dopt->binary_upgrade || !fout->dopt->preserve_subscriptions)
+	{
+		*nrels = 0;
+
+		return NULL;
+	}
+
+	query = createPQExpBuffer();
+
+	appendPQExpBuffer(query, "SELECT srrelid, srsubstate, srsublsn "
+								" FROM pg_subscription_rel"
+								" WHERE srsubid = %u", subid);
+
+	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
+
+	ntups = PQntuples(res);
+	*nrels = ntups;
+
+	if (ntups == 0)
+	{
+		rels = NULL;
+		goto cleanup;
+	}
+
+	/*
+	 * Get subscription relation fields.
+	 */
+	i_srrelid = PQfnumber(res, "srrelid");
+	i_srsubstate = PQfnumber(res, "srsubstate");
+	i_srsublsn = PQfnumber(res, "srsublsn");
+
+	rels = pg_malloc(ntups * sizeof(SubRelInfo));
+
+	for (i = 0; i < ntups; i++)
+	{
+		rels[i].srrelid = atooid(PQgetvalue(res, i, i_srrelid));
+		rels[i].srsubstate = PQgetvalue(res, i, i_srsubstate)[0];
+		rels[i].srsublsn = pg_strdup(PQgetvalue(res, i, i_srsublsn));
+	}
+
+cleanup:
+	PQclear(res);
+	destroyPQExpBuffer(query);
+
+	return rels;
+}
+
+/*
  * getSubscriptions
  *	  get information about subscriptions
  */
@@ -4610,6 +4682,7 @@ getSubscriptions(Archive *fout)
 	int			i_subpublications;
 	int			i_subbinary;
 	int			i_subpasswordrequired;
+	int			i_suboriginremotelsn;
 	int			i,
 				ntups;
 
@@ -4664,15 +4737,19 @@ getSubscriptions(Archive *fout)
 	if (fout->remoteVersion >= 160000)
 		appendPQExpBufferStr(query,
 							 " s.suborigin,\n"
-							 " s.subpasswordrequired\n");
+							 " s.subpasswordrequired,\n");
 	else
 		appendPQExpBuffer(query,
 						  " '%s' AS suborigin,\n"
-						  " 't' AS subpasswordrequired\n",
+						  " 't' AS subpasswordrequired,\n",
 						  LOGICALREP_ORIGIN_ANY);
+
+	appendPQExpBufferStr(query, "o.remote_lsn\n");
 
 	appendPQExpBufferStr(query,
 						 "FROM pg_subscription s\n"
+						 "LEFT JOIN pg_replication_origin_status o \n"
+						 "    ON o.external_id = 'pg_' || s.oid::text \n"
 						 "WHERE s.subdbid = (SELECT oid FROM pg_database\n"
 						 "                   WHERE datname = current_database())");
 
@@ -4698,6 +4775,7 @@ getSubscriptions(Archive *fout)
 	i_subdisableonerr = PQfnumber(res, "subdisableonerr");
 	i_suborigin = PQfnumber(res, "suborigin");
 	i_subpasswordrequired = PQfnumber(res, "subpasswordrequired");
+	i_suboriginremotelsn = PQfnumber(res, "remote_lsn");
 
 	subinfo = pg_malloc(ntups * sizeof(SubscriptionInfo));
 
@@ -4730,6 +4808,15 @@ getSubscriptions(Archive *fout)
 		subinfo[i].suborigin = pg_strdup(PQgetvalue(res, i, i_suborigin));
 		subinfo[i].subpasswordrequired =
 			pg_strdup(PQgetvalue(res, i, i_subpasswordrequired));
+		if (PQgetisnull(res, i, i_suboriginremotelsn))
+			subinfo[i].suboriginremotelsn = NULL;
+		else
+			subinfo[i].suboriginremotelsn =
+				pg_strdup(PQgetvalue(res, i, i_suboriginremotelsn));
+
+		subinfo[i].subrels = getSubscriptionRels(fout,
+												 subinfo[i].dobj.catId.oid,
+												 &subinfo[i].nrels);
 
 		/* Decide whether we want to dump it */
 		selectDumpableObject(&(subinfo[i].dobj), fout);
@@ -4814,9 +4901,31 @@ dumpSubscription(Archive *fout, const SubscriptionInfo *subinfo)
 	if (strcmp(subinfo->subpasswordrequired, "t") != 0)
 		appendPQExpBuffer(query, ", password_required = false");
 
+	if (dopt->binary_upgrade && dopt->preserve_subscriptions &&
+		subinfo->suboriginremotelsn)
+	{
+		appendPQExpBuffer(query, ", lsn = '%s'", subinfo->suboriginremotelsn);
+	}
+
 	appendPQExpBufferStr(query, ");\n");
 
 	if (subinfo->dobj.dump & DUMP_COMPONENT_DEFINITION)
+	{
+		for (i = 0; i < subinfo->nrels; i++)
+		{
+			appendPQExpBuffer(query, "\nALTER SUBSCRIPTION %s ADD TABLE "
+									 "(relid = %u, state = '%c'",
+									 qsubname,
+									 subinfo->subrels[i].srrelid,
+									 subinfo->subrels[i].srsubstate);
+
+			if (subinfo->subrels[i].srsublsn[0] != '\0')
+				appendPQExpBuffer(query, ", LSN = '%s'",
+								  subinfo->subrels[i].srsublsn);
+
+			appendPQExpBufferStr(query, ");");
+		}
+
 		ArchiveEntry(fout, subinfo->dobj.catId, subinfo->dobj.dumpId,
 					 ARCHIVE_OPTS(.tag = subinfo->dobj.name,
 								  .owner = subinfo->rolname,
@@ -4824,6 +4933,7 @@ dumpSubscription(Archive *fout, const SubscriptionInfo *subinfo)
 								  .section = SECTION_POST_DATA,
 								  .createStmt = query->data,
 								  .dropStmt = delq->data));
+	}
 
 	if (subinfo->dobj.dump & DUMP_COMPONENT_COMMENT)
 		dumpComment(fout, "SUBSCRIPTION", qsubname,

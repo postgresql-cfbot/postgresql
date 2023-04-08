@@ -27,6 +27,7 @@
 #include "optimizer/paths.h"
 #include "partitioning/partbounds.h"
 #include "utils/lsyscache.h"
+#include "utils/typcache.h"
 
 
 static bool pathkey_is_redundant(PathKey *new_pathkey, List *pathkeys);
@@ -620,6 +621,54 @@ build_index_pathkeys(PlannerInfo *root,
 	}
 
 	return retval;
+}
+
+
+List *
+build_index_pathkeys_brin(PlannerInfo *root,
+						  IndexOptInfo *index,
+						  TargetEntry  *tle,
+						  int idx,
+						  bool reverse_sort,
+						  bool nulls_first)
+{
+	TypeCacheEntry *typcache;
+	PathKey		   *cpathkey;
+	Oid				sortopfamily;
+
+	/*
+	 * Get default btree opfamily for the type, extracted from the
+	 * entry in index targetlist.
+	 *
+	 * XXX Is there a better / more correct way to do this?
+	 */
+	typcache = lookup_type_cache(exprType((Node *) tle->expr),
+								 TYPECACHE_BTREE_OPFAMILY);
+	sortopfamily = typcache->btree_opf;
+
+	/*
+	 * OK, try to make a canonical pathkey for this sort key.  Note we're
+	 * underneath any outer joins, so nullable_relids should be NULL.
+	 */
+	cpathkey = make_pathkey_from_sortinfo(root,
+										  tle->expr,
+										  sortopfamily,
+										  index->opcintype[idx],
+										  index->indexcollations[idx],
+										  reverse_sort,
+										  nulls_first,
+										  0,
+										  index->rel->relids,
+										  false);
+
+	/*
+	 * There may be no pathkey if we haven't matched any sortkey, in which
+	 * case ignore it.
+	 */
+	if (!cpathkey)
+		return NIL;
+
+	return list_make1(cpathkey);
 }
 
 /*

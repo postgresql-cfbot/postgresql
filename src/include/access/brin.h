@@ -34,6 +34,34 @@ typedef struct BrinStatsData
 	BlockNumber revmapNumPages;
 } BrinStatsData;
 
+typedef struct BrinMinmaxStats
+{
+	int32		vl_len_;		/* varlena header (do not touch directly!) */
+	int64		n_ranges;
+	int64		n_summarized;
+	int64		n_all_nulls;
+	int64		n_has_nulls;
+
+	/* average number of overlapping ranges */
+	double		avg_overlaps;
+
+	/* average number of matching ranges (per value) */
+	double		avg_matches;
+	double		avg_matches_unique;
+
+	/* minval/maxval stats (ndistinct, correlation to blkno) */
+	int64		minval_ndistinct;
+	int64		maxval_ndistinct;
+	double		minval_correlation;
+	double		maxval_correlation;
+
+	/* minval/maxval increment stats */
+	double		minval_increment_avg;
+	double		minval_increment_max;
+	double		maxval_increment_avg;
+	double		maxval_increment_max;
+
+} BrinMinmaxStats;
 
 #define BRIN_DEFAULT_PAGES_PER_RANGE	128
 #define BrinGetPagesPerRange(relation) \

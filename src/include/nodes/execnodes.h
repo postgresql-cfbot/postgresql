@@ -1573,6 +1573,158 @@ typedef struct IndexScanState
 	Size		iss_PscanLen;
 } IndexScanState;
 
+typedef enum {
+	BRINSORT_START,
+	BRINSORT_LOAD_RANGE,
+	BRINSORT_PROCESS_RANGE,
+	BRINSORT_LOAD_NULLS,
+	BRINSORT_PROCESS_NULLS,
+	BRINSORT_FINISHED
+} BrinSortPhase;
+
+typedef struct BrinRangeScanDesc
+{
+	/* range info tuple descriptor */
+	TupleDesc		tdesc;
+
+	/* ranges, sorted by minval, blkno_start */
+	Tuplesortstate *ranges;
+
+	/* number of ranges in the tuplesort */
+	int64			nranges;
+
+	/* distinct minval (sorted) */
+	Tuplestorestate *minvals;
+
+	/* slot for accessing the tuplesort/tuplestore */
+	TupleTableSlot  *slot;
+
+} BrinRangeScanDesc;
+
+/*
+ * Info about ranges for BRIN Sort.
+ */
+typedef struct BrinRange
+{
+	BlockNumber blkno_start;
+	BlockNumber blkno_end;
+
+	Datum	min_value;
+	Datum	max_value;
+	bool	has_nulls;
+	bool	all_nulls;
+	bool	not_summarized;
+
+	/*
+	 * Index of the range when ordered by min_value (if there are multiple
+	 * ranges with the same min_value, it's the lowest one).
+	 */
+	uint32	min_index;
+
+	/*
+	 * Minimum min_index from all ranges with higher max_value (i.e. when
+	 * sorted by max_value). If there are multiple ranges with the same
+	 * max_value, it depends on the ordering (i.e. the ranges may get
+	 * different min_index_lowest, depending on the exact ordering).
+	 */
+	uint32	min_index_lowest;
+} BrinRange;
+
+typedef struct BrinRanges
+{
+	int			nranges;
+	BrinRange	ranges[FLEXIBLE_ARRAY_MEMBER];
+} BrinRanges;
+
+typedef struct BrinSortStats
+{
+	/* number of sorts */
+	int64	sort_count;
+
+	/* number of ranges loaded */
+	int64	range_count;
+
+	/* tuples in the current tuplesort */
+	int64	ntuples_tuplesort;
+
+	/* tuples written directly to tuplesort */
+	int64	ntuples_tuplesort_direct;
+
+	/* tuples written to tuplesort (all) */
+	int64	ntuples_tuplesort_all;
+
+	/* tuples written to tuplestore */
+	int64	ntuples_spilled;
+
+	/* tuples copied from old to new tuplestore */
+	int64	ntuples_respilled;
+
+	/* number of in-memory/on-disk sorts */
+	int64	sort_count_in_memory;
+	int64	sort_count_on_disk;
+
+	/* total/maximum amount of space used by either sort */
+	int64	total_space_used_in_memory;
+	int64	total_space_used_on_disk;
+	int64	max_space_used_in_memory;
+	int64	max_space_used_on_disk;
+
+	/* time to build ranges (milliseconds) */
+	int64	ranges_build_ms;
+
+	/* number/sum of watermark update steps */
+	int64	watermark_updates_steps;
+	int64	watermark_updates_count;
+
+} BrinSortStats;
+
+typedef struct BrinSortState
+{
+	ScanState	ss;				/* its first field is NodeTag */
+	ExprState  *indexqualorig;
+	List	   *indexorderbyorig;
+	struct ScanKeyData *iss_ScanKeys;
+	int			iss_NumScanKeys;
+	struct ScanKeyData *iss_OrderByKeys;
+	int			iss_NumOrderByKeys;
+	IndexRuntimeKeyInfo *iss_RuntimeKeys;
+	int			iss_NumRuntimeKeys;
+	bool		iss_RuntimeKeysReady;
+	ExprContext *iss_RuntimeContext;
+	Relation	iss_RelationDesc;
+	struct IndexScanDescData *iss_ScanDesc;
+
+	/* These are needed for re-checking ORDER BY expr ordering */
+	pairingheap *iss_ReorderQueue;
+	bool		iss_ReachedEnd;
+	Datum	   *iss_OrderByValues;
+	bool	   *iss_OrderByNulls;
+	SortSupport iss_SortSupport;
+	bool	   *iss_OrderByTypByVals;
+	int16	   *iss_OrderByTypLens;
+	Size		iss_PscanLen;
+
+	/* */
+	BrinRangeScanDesc *bs_scan;
+	BrinRange	   *bs_range;
+	ExprState	   *bs_qual;
+	int				bs_watermark_step;
+	Datum			bs_watermark;
+	bool			bs_watermark_set;
+	bool			bs_watermark_empty;
+	BrinSortPhase	bs_phase;
+	SortSupportData	bs_sortsupport;
+	ProjectionInfo *bs_ProjInfo;
+	BrinSortStats	bs_stats;
+
+	/*
+	 * We need two tuplesort instances - one for current range, one for
+	 * spill-over tuples from the overlapping ranges
+	 */
+	Tuplesortstate  *bs_tuplesortstate;
+	Tuplestorestate *bs_tuplestore;
+} BrinSortState;
+
 /* ----------------
  *	 IndexOnlyScanState information
  *

@@ -16,6 +16,7 @@
 
 #include <math.h>
 
+#include "access/brin_internal.h"
 #include "access/detoast.h"
 #include "access/genam.h"
 #include "access/multixact.h"
@@ -30,6 +31,7 @@
 #include "catalog/catalog.h"
 #include "catalog/index.h"
 #include "catalog/indexing.h"
+#include "catalog/pg_am.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_namespace.h"
@@ -81,6 +83,7 @@ typedef struct AnlIndexData
 
 /* Default statistics target (GUC parameter) */
 int			default_statistics_target = 100;
+bool		enable_indexam_stats = false;
 
 /* A few variables that don't seem worth passing around as parameters */
 static MemoryContext anl_context = NULL;
@@ -92,7 +95,7 @@ static void do_analyze_rel(Relation onerel,
 						   AcquireSampleRowsFunc acquirefunc, BlockNumber relpages,
 						   bool inh, bool in_outer_xact, int elevel);
 static void compute_index_stats(Relation onerel, double totalrows,
-								AnlIndexData *indexdata, int nindexes,
+								AnlIndexData *indexdata, Relation *indexRels, int nindexes,
 								HeapTuple *rows, int numrows,
 								MemoryContext col_context);
 static VacAttrStats *examine_attribute(Relation onerel, int attnum,
@@ -453,15 +456,49 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 		{
 			AnlIndexData *thisdata = &indexdata[ind];
 			IndexInfo  *indexInfo;
+			bool		collectAmStats;
+			Oid			regproc;
 
 			thisdata->indexInfo = indexInfo = BuildIndexInfo(Irel[ind]);
 			thisdata->tupleFract = 1.0; /* fix later if partial */
-			if (indexInfo->ii_Expressions != NIL && va_cols == NIL)
+
+			/*
+			 * Should we collect AM-specific statistics for any of the columns?
+			 *
+			 * If AM-specific statistics are enabled (using a GUC), see if we
+			 * have an optional support procedure to build the statistics.
+			 *
+			 * If there's any such attribute, we just force building stats
+			 * even for regular index keys (not just expressions) and indexes
+			 * without predicates. It'd be good to only build the AM stats, but
+			 * for now this is good enough.
+			 *
+			 * XXX The GUC is there morestly to make it easier to enable/disable
+			 * this during development.
+			 *
+			 * FIXME Only build the AM statistics, not the other stats. And only
+			 * do that for the keys with the optional procedure. not all of them.
+			 */
+			collectAmStats = false;
+			if (enable_indexam_stats && (Irel[ind]->rd_indam->amstatsprocnum != 0))
+			{
+				for (int j = 0; j < indexInfo->ii_NumIndexAttrs; j++)
+				{
+					regproc = index_getprocid(Irel[ind], (j+1), Irel[ind]->rd_indam->amstatsprocnum);
+					if (OidIsValid(regproc))
+					{
+						collectAmStats = true;
+						break;
+					}
+				}
+			}
+
+			if ((indexInfo->ii_Expressions != NIL || collectAmStats) && va_cols == NIL)
 			{
 				ListCell   *indexpr_item = list_head(indexInfo->ii_Expressions);
 
 				thisdata->vacattrstats = (VacAttrStats **)
-					palloc(indexInfo->ii_NumIndexAttrs * sizeof(VacAttrStats *));
+					palloc0(indexInfo->ii_NumIndexAttrs * sizeof(VacAttrStats *));
 				tcnt = 0;
 				for (i = 0; i < indexInfo->ii_NumIndexAttrs; i++)
 				{
@@ -481,6 +518,12 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 							examine_attribute(Irel[ind], i + 1, indexkey);
 						if (thisdata->vacattrstats[tcnt] != NULL)
 							tcnt++;
+					}
+					else
+					{
+						thisdata->vacattrstats[tcnt] =
+							examine_attribute(Irel[ind], i + 1, NULL);
+						tcnt++;
 					}
 				}
 				thisdata->attr_cnt = tcnt;
@@ -587,7 +630,7 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 
 		if (nindexes > 0)
 			compute_index_stats(onerel, totalrows,
-								indexdata, nindexes,
+								indexdata, Irel, nindexes,
 								rows, numrows,
 								col_context);
 
@@ -823,11 +866,92 @@ do_analyze_rel(Relation onerel, VacuumParams *params,
 }
 
 /*
+ * compute_indexam_stats
+ *		Call the optional procedure to compute AM-specific statistics.
+ *
+ * We simply call the procedure, which is expected to produce a bytea value.
+ *
+ * At the moment this only deals with BRIN indexes, and bails out for other
+ * access methods, but it should be generic - use something like amoptsprocnum
+ * and just check if the procedure exists.
+ */
+static void
+compute_indexam_stats(Relation onerel,
+					  Relation indexRel, IndexInfo *indexInfo,
+					  double totalrows, AnlIndexData *indexdata,
+					  HeapTuple *rows, int numrows)
+{
+	int		expridx;
+
+	if (!enable_indexam_stats)
+		return;
+
+	/* ignore index AMs without the optional procedure */
+	if (indexRel->rd_indam->amstatsprocnum == 0)
+		return;
+
+	/*
+	 * Look at attributes, and calculate stats for those that have the
+	 * optional stats proc for the opfamily.
+	 */
+	expridx = 0;
+	for (int i = 0; i < indexInfo->ii_NumIndexAttrs; i++)
+	{
+		AttrNumber		attno = (i + 1);
+		AttrNumber		attnum = indexInfo->ii_IndexAttrNumbers[i];	/* heap attnum */
+		RegProcedure	regproc;
+		FmgrInfo	   *statsproc;
+		Datum			datum;
+		VacAttrStats   *stats;
+		MemoryContext	oldcxt;
+		Node		   *expr = NULL;
+
+		if (!AttributeNumberIsValid(attnum))
+		{
+			expr = (Node *) list_nth(RelationGetIndexExpressions(indexRel),
+									 expridx);
+			expridx++;
+		}
+
+		/* do this first, as it doesn't fail when proc not defined */
+		regproc = index_getprocid(indexRel, attno, indexRel->rd_indam->amstatsprocnum);
+
+		/* ignore opclasses without the optional procedure */
+		if (!RegProcedureIsValid(regproc))
+			continue;
+
+		statsproc = index_getprocinfo(indexRel, attno, indexRel->rd_indam->amstatsprocnum);
+		Assert(statsproc != NULL);
+
+		stats = indexdata->vacattrstats[i];
+
+		oldcxt = MemoryContextSwitchTo(stats->anl_context);
+
+		/* call the proc, let the AM calculate whatever it wants */
+		/* XXX maybe we should just pass the index attno and leave the
+		 * expression handling up to the procedure? */
+		datum = FunctionCall7Coll(statsproc,
+								  InvalidOid, /* FIXME correct collation */
+								  PointerGetDatum(onerel),
+								  PointerGetDatum(indexRel),
+								  Int16GetDatum(attno),
+								  Int16GetDatum(attnum),
+								  PointerGetDatum(expr),
+								  PointerGetDatum(rows),
+								  Int32GetDatum(numrows));
+
+		stats->staindexam = datum;
+
+		MemoryContextSwitchTo(oldcxt);
+	}
+}
+
+/*
  * Compute statistics about indexes of a relation
  */
 static void
 compute_index_stats(Relation onerel, double totalrows,
-					AnlIndexData *indexdata, int nindexes,
+					AnlIndexData *indexdata, Relation *indexRels, int nindexes,
 					HeapTuple *rows, int numrows,
 					MemoryContext col_context)
 {
@@ -847,6 +971,7 @@ compute_index_stats(Relation onerel, double totalrows,
 	{
 		AnlIndexData *thisdata = &indexdata[ind];
 		IndexInfo  *indexInfo = thisdata->indexInfo;
+		Relation	indexRel = indexRels[ind];
 		int			attr_cnt = thisdata->attr_cnt;
 		TupleTableSlot *slot;
 		EState	   *estate;
@@ -858,6 +983,13 @@ compute_index_stats(Relation onerel, double totalrows,
 					tcnt,
 					rowno;
 		double		totalindexrows;
+
+		/*
+		 * If this is a BRIN index, try calling a procedure to collect
+		 * extra opfamily-specific statistics (if procedure defined).
+		 */
+		compute_indexam_stats(onerel, indexRel, indexInfo, totalrows,
+							  thisdata, rows, numrows);
 
 		/* Ignore index if no columns to analyze and not partial */
 		if (attr_cnt == 0 && indexInfo->ii_Predicate == NIL)
@@ -1664,6 +1796,13 @@ update_attstats(Oid relid, bool inh, int natts, VacAttrStats **vacattrstats)
 		values[Anum_pg_statistic_stanullfrac - 1] = Float4GetDatum(stats->stanullfrac);
 		values[Anum_pg_statistic_stawidth - 1] = Int32GetDatum(stats->stawidth);
 		values[Anum_pg_statistic_stadistinct - 1] = Float4GetDatum(stats->stadistinct);
+
+		/* optional AM-specific stats */
+		if (DatumGetPointer(stats->staindexam) != NULL)
+			values[Anum_pg_statistic_staindexam - 1] = stats->staindexam;
+		else
+			nulls[Anum_pg_statistic_staindexam - 1] = true;
+
 		i = Anum_pg_statistic_stakind1 - 1;
 		for (k = 0; k < STATISTIC_NUM_SLOTS; k++)
 		{

@@ -2369,6 +2369,8 @@ serialize_expr_stats(AnlExprData *exprdata, int nexprs)
 		values[Anum_pg_statistic_stanullfrac - 1] = Float4GetDatum(stats->stanullfrac);
 		values[Anum_pg_statistic_stawidth - 1] = Int32GetDatum(stats->stawidth);
 		values[Anum_pg_statistic_stadistinct - 1] = Float4GetDatum(stats->stadistinct);
+		nulls[Anum_pg_statistic_staindexam - 1] = true;
+
 		i = Anum_pg_statistic_stakind1 - 1;
 		for (k = 0; k < STATISTIC_NUM_SLOTS; k++)
 		{

@@ -121,6 +121,11 @@ CATALOG(pg_statistic,2619,StatisticRelationId)
 	anyarray	stavalues3;
 	anyarray	stavalues4;
 	anyarray	stavalues5;
+
+	/*
+	 * Statistics calculated by index AM (e.g. BRIN for ranges, etc.).
+	 */
+	bytea		staindexam;
 #endif
 } FormData_pg_statistic;
 

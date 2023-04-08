@@ -17,12 +17,16 @@
 
 #include <math.h>
 
+#include "access/brin_internal.h"
+#include "access/relation.h"
 #include "access/stratnum.h"
 #include "access/sysattr.h"
 #include "catalog/pg_am.h"
 #include "catalog/pg_operator.h"
+#include "catalog/pg_opclass.h"
 #include "catalog/pg_opfamily.h"
 #include "catalog/pg_type.h"
+#include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
 #include "nodes/supportnodes.h"
@@ -32,9 +36,12 @@
 #include "optimizer/paths.h"
 #include "optimizer/prep.h"
 #include "optimizer/restrictinfo.h"
+#include "utils/rel.h"
 #include "utils/lsyscache.h"
 #include "utils/selfuncs.h"
 
+
+bool		enable_brinsort = true;
 
 /* XXX see PartCollMatchesExprColl */
 #define IndexCollMatchesExprColl(idxcollation, exprcollation) \
@@ -1098,6 +1105,182 @@ build_index_paths(PlannerInfo *root, RelOptInfo *rel,
 					pfree(ipath);
 			}
 		}
+	}
+
+	/*
+	 * If this is a BRIN index with suitable opclass (minmax or such), we may
+	 * try doing BRIN sort. BRIN indexes are not ordered and amcanorderbyop
+	 * is set to false, so we probably will need some new opclass flag to
+	 * mark indexes that support this.
+	 */
+	if (enable_brinsort && pathkeys_possibly_useful)
+	{
+		ListCell *lc;
+		Relation rel2 = relation_open(index->indexoid, NoLock);
+		int		 idx;
+
+		/*
+		 * Try generating sorted paths for each key with the right opclass.
+		 */
+		idx = -1;
+		foreach(lc, index->indextlist)
+		{
+			TargetEntry	   *indextle = (TargetEntry *) lfirst(lc);
+			BrinSortPath   *bpath;
+			Oid				rangeproc;
+			AttrNumber		attnum;
+
+			idx++;
+			attnum = (idx + 1);
+
+
+			/* XXX ignore non-BRIN indexes */
+			if (rel2->rd_rel->relam != BRIN_AM_OID)
+				continue;
+
+			/*
+			 * XXX Ignore keys not using an opclass with the "ranges" proc.
+			 * For now we only do this for some minmax opclasses, but adding
+			 * it to all minmax is simple, and adding it to minmax-multi
+			 * should not be very hard.
+			 */
+			rangeproc = index_getprocid(rel2, attnum, BRIN_PROCNUM_RANGES);
+			if (!OidIsValid(rangeproc))
+				continue;
+
+			/*
+			 * XXX stuff extracted from build_index_pathkeys, except that we
+			 * only deal with a single index key (producing a single pathkey),
+			 * so we only sort on a single column. I guess we could use more
+			 * index keys and sort on more expressions? Would that mean these
+			 * keys need to be rather well correlated? In any case, it seems
+			 * rather complex to implement, so I leave it as a possible
+			 * future improvement.
+			 *
+			 * XXX This could also use the other BRIN keys (even from other
+			 * indexes) in a different way - we might use the other ranges
+			 * to quickly eliminate some of the chunks, essentially like a
+			 * bitmap, but maybe without using the bitmap. Or we might use
+			 * other indexes through bitmaps.
+			 *
+			 * XXX This fakes a number of parameters, because we don't store
+			 * the btree opclass in the index, instead we use the default
+			 * one for the key data type. And BRIN does not allow specifying
+			 *
+			 * XXX We don't add the path to result, because this function is
+			 * supposed to generate IndexPaths. Instead, we just add the path
+			 * using add_path(). We should be building this in a different
+			 * place, perhaps in create_index_paths() or so.
+			 *
+			 * XXX By building it elsewhere, we could also leverage the index
+			 * paths we've built here, particularly the bitmap index paths,
+			 * which we could use to eliminate many of the ranges.
+			 *
+			 * XXX We don't have any explicit ordering associated with the
+			 * BRIN index, e.g. we don't have ASC/DESC and NULLS FIRST/LAST.
+			 * So this is not encoded in the index, and we can satisfy all
+			 * these cases - but we need to add paths for each combination.
+			 * I wonder if there's a better way to do this.
+			 */
+
+			/* ASC NULLS LAST */
+			index_pathkeys = build_index_pathkeys_brin(root, index, indextle,
+													   idx,
+													   false,	/* reverse_sort */
+													   false);	/* nulls_first */
+
+			useful_pathkeys = truncate_useless_pathkeys(root, rel,
+														index_pathkeys);
+
+			if (useful_pathkeys != NIL)
+			{
+				bpath = create_brinsort_path(root, index,
+											 index_clauses,
+											 useful_pathkeys,
+											 ForwardScanDirection,
+											 index_only_scan,
+											 outer_relids,
+											 loop_count,
+											 false);
+
+				/* cheat and add it anyway */
+				add_path(rel, (Path *) bpath);
+			}
+
+			/* DESC NULLS LAST */
+			index_pathkeys = build_index_pathkeys_brin(root, index, indextle,
+													   idx,
+													   true,	/* reverse_sort */
+													   false);	/* nulls_first */
+
+			useful_pathkeys = truncate_useless_pathkeys(root, rel,
+														index_pathkeys);
+
+			if (useful_pathkeys != NIL)
+			{
+				bpath = create_brinsort_path(root, index,
+											 index_clauses,
+											 useful_pathkeys,
+											 BackwardScanDirection,
+											 index_only_scan,
+											 outer_relids,
+											 loop_count,
+											 false);
+
+				/* cheat and add it anyway */
+				add_path(rel, (Path *) bpath);
+			}
+
+			/* ASC NULLS FIRST */
+			index_pathkeys = build_index_pathkeys_brin(root, index, indextle,
+													   idx,
+													   false,	/* reverse_sort */
+													   true);	/* nulls_first */
+
+			useful_pathkeys = truncate_useless_pathkeys(root, rel,
+														index_pathkeys);
+
+			if (useful_pathkeys != NIL)
+			{
+				bpath = create_brinsort_path(root, index,
+											 index_clauses,
+											 useful_pathkeys,
+											 ForwardScanDirection,
+											 index_only_scan,
+											 outer_relids,
+											 loop_count,
+											 false);
+
+				/* cheat and add it anyway */
+				add_path(rel, (Path *) bpath);
+			}
+
+			/* DESC NULLS FIRST */
+			index_pathkeys = build_index_pathkeys_brin(root, index, indextle,
+													   idx,
+													   true,	/* reverse_sort */
+													   true);	/* nulls_first */
+
+			useful_pathkeys = truncate_useless_pathkeys(root, rel,
+														index_pathkeys);
+
+			if (useful_pathkeys != NIL)
+			{
+				bpath = create_brinsort_path(root, index,
+											 index_clauses,
+											 useful_pathkeys,
+											 BackwardScanDirection,
+											 index_only_scan,
+											 outer_relids,
+											 loop_count,
+											 false);
+
+				/* cheat and add it anyway */
+				add_path(rel, (Path *) bpath);
+			}
+		}
+
+		relation_close(rel2, NoLock);
 	}
 
 	return result;

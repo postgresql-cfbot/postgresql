@@ -47,6 +47,7 @@ ExplainOneQuery_hook_type ExplainOneQuery_hook = NULL;
 /* Hook for plugins to get control in explain_get_index_name() */
 explain_get_index_name_hook_type explain_get_index_name_hook = NULL;
 
+extern int brinsort_watermark_step;
 
 /* OR-able flags for ExplainXMLTag() */
 #define X_OPENING 0
@@ -85,6 +86,10 @@ static void show_sort_keys(SortState *sortstate, List *ancestors,
 						   ExplainState *es);
 static void show_incremental_sort_keys(IncrementalSortState *incrsortstate,
 									   List *ancestors, ExplainState *es);
+static void show_brinsort_keys(BrinSortState *sortstate, List *ancestors,
+							   ExplainState *es);
+static void show_brinsort_stats(BrinSortState *sortstate, List *ancestors,
+								ExplainState *es);
 static void show_merge_append_keys(MergeAppendState *mstate, List *ancestors,
 								   ExplainState *es);
 static void show_agg_keys(AggState *astate, List *ancestors,
@@ -1111,6 +1116,7 @@ ExplainPreScanNode(PlanState *planstate, Bitmapset **rels_used)
 		case T_IndexScan:
 		case T_IndexOnlyScan:
 		case T_BitmapHeapScan:
+		case T_BrinSort:
 		case T_TidScan:
 		case T_TidRangeScan:
 		case T_SubqueryScan:
@@ -1272,6 +1278,9 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			break;
 		case T_IndexOnlyScan:
 			pname = sname = "Index Only Scan";
+			break;
+		case T_BrinSort:
+			pname = sname = "BRIN Sort";
 			break;
 		case T_BitmapIndexScan:
 			pname = sname = "Bitmap Index Scan";
@@ -1517,6 +1526,16 @@ ExplainNode(PlanState *planstate, List *ancestors,
 										indexonlyscan->indexorderdir,
 										es);
 				ExplainScanTarget((Scan *) indexonlyscan, es);
+			}
+			break;
+		case T_BrinSort:
+			{
+				BrinSort  *brinsort = (BrinSort *) plan;
+
+				ExplainIndexScanDetails(brinsort->indexid,
+										brinsort->indexorderdir,
+										es);
+				ExplainScanTarget((Scan *) brinsort, es);
 			}
 			break;
 		case T_BitmapIndexScan:
@@ -1803,6 +1822,19 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			if (es->analyze)
 				ExplainPropertyFloat("Heap Fetches", NULL,
 									 planstate->instrument->ntuples2, 0, es);
+			break;
+		case T_BrinSort:
+			show_scan_qual(((BrinSort *) plan)->indexqualorig,
+						   "Index Cond", planstate, ancestors, es);
+			if (((BrinSort *) plan)->indexqualorig)
+				show_instrumentation_count("Rows Removed by Index Recheck", 2,
+										   planstate, es);
+			show_scan_qual(plan->qual, "Filter", planstate, ancestors, es);
+			show_brinsort_keys(castNode(BrinSortState, planstate), ancestors, es);
+			show_brinsort_stats(castNode(BrinSortState, planstate), ancestors, es);
+			if (plan->qual)
+				show_instrumentation_count("Rows Removed by Filter", 1,
+										   planstate, es);
 			break;
 		case T_BitmapIndexScan:
 			show_scan_qual(((BitmapIndexScan *) plan)->indexqualorig,
@@ -2401,6 +2433,158 @@ show_incremental_sort_keys(IncrementalSortState *incrsortstate,
 						 plan->sort.sortOperators, plan->sort.collations,
 						 plan->sort.nullsFirst,
 						 ancestors, es);
+}
+
+/*
+ * Show the sort keys for a BRIN Sort node.
+ */
+static void
+show_brinsort_keys(BrinSortState *sortstate, List *ancestors, ExplainState *es)
+{
+	BrinSort	   *plan = (BrinSort *) sortstate->ss.ps.plan;
+
+	show_sort_group_keys((PlanState *) sortstate, "Sort Key",
+						 plan->numCols, 0, plan->sortColIdx,
+						 plan->sortOperators, plan->collations,
+						 plan->nullsFirst,
+						 ancestors, es);
+}
+
+static void
+show_brinsort_stats(BrinSortState *sortstate, List *ancestors, ExplainState *es)
+{
+	BrinSortStats  *stats = &sortstate->bs_stats;
+	BrinSort   *plan = (BrinSort *) sortstate->ss.ps.plan;
+
+	if (sortstate->bs_scan != NULL &&
+		sortstate->bs_scan->ranges != NULL)
+	{
+		TuplesortInstrumentation stats;
+
+		memset(&stats, 0, sizeof(TuplesortInstrumentation));
+		tuplesort_get_stats(sortstate->bs_scan->ranges, &stats);
+
+		ExplainIndentText(es);
+		appendStringInfo(es->str, "Ranges: " INT64_FORMAT "  Build time: " INT64_FORMAT "  Method: %s  Space: " INT64_FORMAT " kB (%s)\n",
+						 sortstate->bs_scan->nranges,
+						 sortstate->bs_stats.ranges_build_ms,
+						 tuplesort_method_name(stats.sortMethod),
+						 stats.spaceUsed,
+						 tuplesort_space_type_name(stats.spaceType));
+	}
+
+	ExplainPropertyInteger("Step", NULL, (int64) brinsort_watermark_step, es);
+
+	if (stats->sort_count > 0)
+	{
+		ExplainPropertyInteger("Average Step", NULL, (int64)
+							   stats->watermark_updates_steps / stats->watermark_updates_count, es);
+
+		ExplainPropertyInteger("Ranges Processed", NULL, (int64)
+							   stats->range_count, es);
+
+		if (es->format == EXPLAIN_FORMAT_TEXT)
+		{
+			ExplainPropertyInteger("Sorts", NULL, (int64)
+								   stats->sort_count, es);
+
+			ExplainIndentText(es);
+			appendStringInfo(es->str, "Tuples Sorted: " INT64_FORMAT "  Per-sort: " INT64_FORMAT  "  Direct: " INT64_FORMAT "  Spilled: " INT64_FORMAT "  Respilled: " INT64_FORMAT "\n",
+							 stats->ntuples_tuplesort_all,
+							 stats->ntuples_tuplesort_all / stats->sort_count,
+							 stats->ntuples_tuplesort_direct,
+							 stats->ntuples_spilled,
+							 stats->ntuples_respilled);
+		}
+		else
+		{
+			ExplainOpenGroup("Sorts", "Sorts", true, es);
+
+			ExplainPropertyInteger("Count", NULL, (int64)
+								   stats->sort_count, es);
+
+			ExplainPropertyInteger("Tuples per sort", NULL, (int64)
+								   stats->ntuples_tuplesort_all / stats->sort_count, es);
+
+			ExplainPropertyInteger("Sorted tuples (all)", NULL, (int64)
+								   stats->ntuples_tuplesort_all, es);
+
+			ExplainPropertyInteger("Sorted tuples (direct)", NULL, (int64)
+								   stats->ntuples_tuplesort_direct, es);
+
+			ExplainPropertyInteger("Spilled tuples", NULL, (int64)
+								   stats->ntuples_spilled, es);
+
+			ExplainPropertyInteger("Respilled tuples", NULL, (int64)
+								   stats->ntuples_respilled, es);
+
+			ExplainCloseGroup("Sorts", "Sorts", true, es);
+		}
+	}
+	else
+		ExplainPropertyInteger("Initial Step", NULL, (int64) plan->watermark_step, es);
+
+	if (stats->sort_count_in_memory > 0)
+	{
+		if (es->format == EXPLAIN_FORMAT_TEXT)
+		{
+			ExplainIndentText(es);
+			appendStringInfo(es->str, "Sorts (in-memory)  Count: " INT64_FORMAT "  Space Total: " INT64_FORMAT  " kB  Maximum: " INT64_FORMAT " kB  Average: " INT64_FORMAT " kB\n",
+							 stats->sort_count_in_memory,
+							 stats->total_space_used_in_memory,
+							 stats->max_space_used_in_memory,
+							 stats->total_space_used_in_memory / stats->sort_count_in_memory);
+		}
+		else
+		{
+			ExplainOpenGroup("In-Memory Sorts", "In-Memory Sorts", true, es);
+
+			ExplainPropertyInteger("Count", NULL, (int64)
+								   stats->sort_count_in_memory, es);
+
+			ExplainPropertyInteger("Average space", "kB", (int64)
+								   stats->total_space_used_in_memory / stats->sort_count_in_memory, es);
+
+			ExplainPropertyInteger("Maximum space", "kB", (int64)
+								   stats->max_space_used_in_memory, es);
+
+			ExplainPropertyInteger("Total space", "kB", (int64)
+								   stats->total_space_used_in_memory, es);
+
+			ExplainCloseGroup("In-Memory Sorts", "In-Memory Sorts", true, es);
+		}
+	}
+
+	if (stats->sort_count_on_disk > 0)
+	{
+		if (es->format == EXPLAIN_FORMAT_TEXT)
+		{
+			ExplainIndentText(es);
+			appendStringInfo(es->str, "Sorts (on-disk)  Count: " INT64_FORMAT "  Space Total: " INT64_FORMAT  " kB  Maximum: " INT64_FORMAT " kB  Average: " INT64_FORMAT " kB\n",
+							 stats->sort_count_on_disk,
+							 stats->total_space_used_on_disk,
+							 stats->max_space_used_on_disk,
+							 stats->total_space_used_on_disk / stats->sort_count_on_disk);
+		}
+		else
+		{
+			ExplainOpenGroup("On-Disk Sorts", "On-Disk Sorts", true, es);
+
+			ExplainPropertyInteger("Count", NULL, (int64)
+								   stats->sort_count_on_disk, es);
+
+			ExplainPropertyInteger("Average space", "kB", (int64)
+								   stats->total_space_used_on_disk / stats->sort_count_on_disk, es);
+
+			ExplainPropertyInteger("Maximum space", "kB", (int64)
+								   stats->max_space_used_on_disk, es);
+
+			ExplainPropertyInteger("Total space", "kB", (int64)
+								   stats->total_space_used_on_disk, es);
+
+			ExplainCloseGroup("On-Disk Sorts", "On-Disk Sorts", true, es);
+		}
+	}
 }
 
 /*
@@ -3823,6 +4007,7 @@ ExplainTargetRel(Plan *plan, Index rti, ExplainState *es)
 		case T_ForeignScan:
 		case T_CustomScan:
 		case T_ModifyTable:
+		case T_BrinSort:
 			/* Assert it's on a real relation */
 			Assert(rte->rtekind == RTE_RELATION);
 			objectname = get_rel_name(rte->relid);

@@ -216,6 +216,8 @@ typedef struct IndexAmRoutine
 	uint16		amsupport;
 	/* opclass options support function number or 0 */
 	uint16		amoptsprocnum;
+	/* opclass statistics support function number or 0 */
+	uint16		amstatsprocnum;
 	/* does AM support ORDER BY indexed column's value? */
 	bool		amcanorder;
 	/* does AM support ORDER BY result of an operator on indexed column? */

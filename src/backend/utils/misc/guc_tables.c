@@ -98,6 +98,16 @@ extern char *temp_tablespaces;
 extern bool ignore_checksum_failure;
 extern bool ignore_invalid_pages;
 extern bool synchronize_seqscans;
+extern int	brinsort_watermark_step;
+
+#ifdef DEBUG_BRIN_STATS
+extern bool debug_brin_stats;
+extern bool debug_brin_cross_check;
+#endif
+
+#ifdef DEBUG_BRIN_SORT
+extern bool debug_brin_sort;
+#endif
 
 #ifdef TRACE_SYNCSCAN
 extern bool trace_syncscan;
@@ -1023,6 +1033,26 @@ struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
+		{"enable_indexam_stats", PGC_USERSET, QUERY_TUNING_METHOD,
+			gettext_noop("Enables the planner's use of index AM stats."),
+			NULL,
+			GUC_EXPLAIN
+		},
+		&enable_indexam_stats,
+		false,
+		NULL, NULL, NULL
+	},
+	{
+		{"enable_brinsort", PGC_USERSET, QUERY_TUNING_METHOD,
+			gettext_noop("Enables the planner's use of BRIN sort plans."),
+			NULL,
+			GUC_EXPLAIN
+		},
+		&enable_brinsort,
+		true,
+		NULL, NULL, NULL
+	},
+	{
 		{"geqo", PGC_USERSET, QUERY_TUNING_GEQO,
 			gettext_noop("Enables genetic query optimization."),
 			gettext_noop("This algorithm attempts to do planning without "
@@ -1239,6 +1269,43 @@ struct config_bool ConfigureNamesBool[] =
 		DEFAULT_ASSERT_ENABLED,
 		NULL, NULL, NULL
 	},
+
+#ifdef DEBUG_BRIN_STATS
+	/* this is undocumented because not exposed in a standard build */
+	{
+		{"debug_brin_stats", PGC_USERSET, DEVELOPER_OPTIONS,
+			gettext_noop("Print info about calculated BRIN statistics."),
+			NULL,
+			GUC_NOT_IN_SAMPLE
+		},
+		&debug_brin_stats,
+		false,
+		NULL, NULL, NULL
+	},
+	{
+		{"debug_brin_cross_check", PGC_USERSET, DEVELOPER_OPTIONS,
+			gettext_noop("Cross-check calculation of BRIN statistics."),
+			NULL
+		},
+		&debug_brin_cross_check,
+		false,
+		NULL, NULL, NULL
+	},
+#endif
+
+#ifdef DEBUG_BRIN_SORT
+	/* this is undocumented because not exposed in a standard build */
+	{
+		{"debug_brin_sort", PGC_USERSET, DEVELOPER_OPTIONS,
+			gettext_noop("Print info about BRIN sorting."),
+			NULL,
+			GUC_NOT_IN_SAMPLE
+		},
+		&debug_brin_sort,
+		false,
+		NULL, NULL, NULL
+	},
+#endif
 
 	{
 		{"exit_on_error", PGC_USERSET, ERROR_HANDLING_OPTIONS,
@@ -3506,6 +3573,17 @@ struct config_int ConfigureNamesInt[] =
 		},
 		&scram_sha_256_iterations,
 		SCRAM_SHA_256_DEFAULT_ITERATIONS, 1, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"brinsort_watermark_step", PGC_USERSET, DEVELOPER_OPTIONS,
+			gettext_noop("sets the step for brinsort watermark increments"),
+			NULL,
+			GUC_NOT_IN_SAMPLE
+		},
+		&brinsort_watermark_step,
+		0, -1, INT_MAX,
 		NULL, NULL, NULL
 	},
 

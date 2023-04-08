@@ -26,6 +26,7 @@ backend_sources += files(
   'nodeBitmapHeapscan.c',
   'nodeBitmapIndexscan.c',
   'nodeBitmapOr.c',
+  'nodeBrinSort.c',
   'nodeCtescan.c',
   'nodeCustom.c',
   'nodeForeignscan.c',

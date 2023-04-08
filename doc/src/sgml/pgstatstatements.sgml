@@ -529,10 +529,29 @@
   <para>
    In some cases, queries with visibly different texts might get merged into a
    single <structname>pg_stat_statements</structname> entry.  Normally this will happen
-   only for semantically equivalent queries, but there is a small chance of
-   hash collisions causing unrelated queries to be merged into one entry.
-   (This cannot happen for queries belonging to different users or databases,
-   however.)
+   only for semantically equivalent queries, for example when queries are
+   different only in values of constants they use. Another valid possibility for
+   merging queries into a single <structname>pg_stat_statements</structname>
+   entry is when <xref linkend="guc-query-id-const-merge"/> is enabled and the
+   queries contain an array of constants of similar size:
+
+<screen>
+=# SET query_id_const_merge = on;
+=# SELECT pg_stat_statements_reset();
+=# SELECT * FROM test WHERE a IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
+=# SELECT * FROM test WHERE a IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
+=# SELECT query, calls FROM pg_stat_statements;
+-[ RECORD 1 ]------------------------------
+query | SELECT * FROM test WHERE a IN (... [10-99 entries])
+calls | 2
+-[ RECORD 2 ]------------------------------
+query | SELECT pg_stat_statements_reset()
+calls | 1
+</screen>
+
+   But there is a small chance of hash collisions causing unrelated queries to
+   be merged into one entry. (This cannot happen for queries belonging to
+   different users or databases, however.)
   </para>
 
   <para>

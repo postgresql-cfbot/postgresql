@@ -313,6 +313,15 @@ struct PlannerInfo
 	/* list of active EquivalenceClasses */
 	List	   *eq_classes;
 
+	/* list of each EquivalenceMember */
+	List	   *eq_members;
+
+	/* list of source RestrictInfos used to build EquivalenceClasses */
+	List	   *eq_sources;
+
+	/* list of RestrictInfos derived from EquivalenceClasses */
+	List	   *eq_derives;
+
 	/* set true once ECs are canonical */
 	bool		ec_merging_done;
 
@@ -935,6 +944,7 @@ typedef struct RelOptInfo
 	double		allvisfrac;
 	/* indexes in PlannerInfo's eq_classes list of ECs that mention this rel */
 	Bitmapset  *eclass_indexes;
+
 	PlannerInfo *subroot;		/* if subquery */
 	List	   *subplan_params; /* if subquery */
 	/* wanted number of parallel workers */
@@ -1356,6 +1366,39 @@ typedef struct JoinDomain
  * entry: consider SELECT random() AS a, random() AS b ... ORDER BY b,a.
  * So we record the SortGroupRef of the originating sort clause.
  *
+ * At various locations in the query planner, we must search for
+ * EquivalenceMembers within a given EquivalenceClass.  For the common case,
+ * an EquivalenceClass does not have a large number of EquivalenceMembers,
+ * however, in cases such as planning queries to partitioned tables, the number
+ * of members can become large.  To maintain planning performance, we make use
+ * of a bitmap index to allow us to quickly find EquivalenceMembers in a given
+ * EquivalenceClass belonging to a given relation or set of relations.  This
+ * is done by storing a list of EquivalenceMembers belonging to all
+ * EquivalenceClasses in PlannerInfo and storing a Bitmapset for each
+ * RelOptInfo which has a bit set for each EquivalenceMember in that list
+ * which relates to the given relation.  We also store a Bitmapset to mark all
+ * of the indexes in the PlannerInfo's list of EquivalenceMembers in the
+ * EquivalenceClass.  We can quickly find the interesting indexes into the
+ * PlannerInfo's list by performing a bit-wise AND on the RelOptInfo's
+ * Bitmapset and the EquivalenceClasses.
+ *
+ * To further speed up the lookup of EquivalenceMembers we also record the
+ * non-child indexes.  This allows us to deal with fewer bits for searches
+ * that don't require "is_child" EquivalenceMembers.  We must also store the
+ * indexes into EquivalenceMembers which have no relids mentioned as some
+ * searches require that.
+ *
+ * Additionally, we also store the EquivalenceMembers of a given
+ * EquivalenceClass in the ec_members list.  Technically, we could obtain this
+ * from looking at the bits in ec_member_indexes, however, finding all members
+ * of a given EquivalenceClass is common enough that it pays to have fast
+ * access to a dense list containing all members.
+ *
+ * The source and derived RestrictInfos are indexed in a similar method,
+ * although we don't maintain a List in the EquivalenceClass for these.  These
+ * must be looked up in PlannerInfo using the ec_source_indexes and
+ * ec_derive_indexes Bitmapsets.
+ *
  * NB: if ec_merged isn't NULL, this class has been merged into another, and
  * should be ignored in favor of using the pointed-to class.
  *
@@ -1373,9 +1416,19 @@ typedef struct EquivalenceClass
 
 	List	   *ec_opfamilies;	/* btree operator family OIDs */
 	Oid			ec_collation;	/* collation, if datatypes are collatable */
-	List	   *ec_members;		/* list of EquivalenceMembers */
-	List	   *ec_sources;		/* list of generating RestrictInfos */
-	List	   *ec_derives;		/* list of derived RestrictInfos */
+	List	   *ec_members;		/* list of EquivalenceMembers in the class */
+	Bitmapset  *ec_member_indexes;	/* Indexes into all PlannerInfos
+									 * eq_members for this EquivalenceClass */
+	Bitmapset  *ec_nonchild_indexes;	/* Indexes into PlannerInfo's
+										 * eq_members with em_is_child ==
+										 * false */
+	Bitmapset  *ec_norel_indexes;	/* Indexes into PlannerInfo's eq_members
+									 * for members where pull_varno on the
+									 * em_expr is an empty set */
+	Bitmapset  *ec_source_indexes;	/* indexes into PlannerInfo's eq_sources
+									 * list of generating RestrictInfos */
+	Bitmapset  *ec_derive_indexes;	/* indexes into PlannerInfo's eq_derives
+									 * list of derived RestrictInfos */
 	Relids		ec_relids;		/* all relids appearing in ec_members, except
 								 * for child members (see below) */
 	bool		ec_has_const;	/* any pseudoconstants in ec_members? */
@@ -1423,8 +1476,9 @@ typedef struct EquivalenceMember
 	NodeTag		type;
 
 	Expr	   *em_expr;		/* the expression represented */
-	Relids		em_relids;		/* all relids appearing in em_expr */
-	bool		em_is_const;	/* expression is pseudoconstant? */
+	Relids		em_relids;		/* relids for this member */
+	bool		em_is_const;	/* is em_relids empty? */
+	bool		em_norel_expr;	/* true if em_expr contains no Vars */
 	bool		em_is_child;	/* derived version for a child relation? */
 	Oid			em_datatype;	/* the "nominal type" used by the opfamily */
 	JoinDomain *em_jdomain;		/* join domain containing the source clause */

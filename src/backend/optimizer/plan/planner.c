@@ -627,6 +627,9 @@ subquery_planner(PlannerGlobal *glob, Query *parse,
 	root->multiexpr_params = NIL;
 	root->join_domains = NIL;
 	root->eq_classes = NIL;
+	root->eq_members = NIL;
+	root->eq_sources = NIL;
+	root->eq_derives = NIL;
 	root->ec_merging_done = false;
 	root->last_rinfo_serial = 0;
 	root->all_result_relids =

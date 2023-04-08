@@ -7617,6 +7617,10 @@ conversion_error_callback(void *arg)
 				varno = var->varno;
 				colno = var->varattno;
 			}
+			/*
+			 * XXX why don't we break here? Surely there can't be another
+			 * equal EquivalenceMember?
+			 */
 		}
 
 		if (varno > 0)
@@ -7675,23 +7679,27 @@ conversion_error_callback(void *arg)
 EquivalenceMember *
 find_em_for_rel(PlannerInfo *root, EquivalenceClass *ec, RelOptInfo *rel)
 {
-	ListCell   *lc;
+	EquivalenceMemberIterator iter;
+	EquivalenceMember *em;
 
-	foreach(lc, ec->ec_members)
+	setup_eclass_member_iterator(&iter, root, ec, rel->relids, true, false);
+
+	while ((em = eclass_member_iterator_next(&iter)) != NULL)
 	{
-		EquivalenceMember *em = (EquivalenceMember *) lfirst(lc);
-
 		/*
 		 * Note we require !bms_is_empty, else we'd accept constant
 		 * expressions which are not suitable for the purpose.
 		 */
+		Assert(!bms_is_empty(em->em_relids));
+
 		if (bms_is_subset(em->em_relids, rel->relids) &&
-			!bms_is_empty(em->em_relids) &&
 			is_foreign_expr(root, rel, em->em_expr))
-			return em;
+			break;
 	}
 
-	return NULL;
+	eclass_member_iterator_dispose(&iter);
+
+	return em;
 }
 
 /*
@@ -7718,7 +7726,9 @@ find_em_for_rel_target(PlannerInfo *root, EquivalenceClass *ec,
 	{
 		Expr	   *expr = (Expr *) lfirst(lc1);
 		Index		sgref = get_pathtarget_sortgroupref(target, i);
-		ListCell   *lc2;
+		EquivalenceMemberIterator iter;
+		EquivalenceMember *em;
+		Relids		expr_relids;
 
 		/* Ignore non-sort expressions */
 		if (sgref == 0 ||
@@ -7733,19 +7743,20 @@ find_em_for_rel_target(PlannerInfo *root, EquivalenceClass *ec,
 		while (expr && IsA(expr, RelabelType))
 			expr = ((RelabelType *) expr)->arg;
 
+		expr_relids = pull_varnos(root, (Node *) expr);
+		setup_eclass_member_strict_iterator(&iter, root, ec, expr_relids,
+											false, false);
+
 		/* Locate an EquivalenceClass member matching this expr, if any */
-		foreach(lc2, ec->ec_members)
+		while ((em = eclass_member_iterator_strict_next(&iter)) != NULL)
 		{
-			EquivalenceMember *em = (EquivalenceMember *) lfirst(lc2);
 			Expr	   *em_expr;
 
-			/* Don't match constants */
-			if (em->em_is_const)
-				continue;
+			/* don't expect constants */
+			Assert(!em->em_is_const);
 
-			/* Ignore child members */
-			if (em->em_is_child)
-				continue;
+			/* don't expect child members */
+			Assert(!em->em_is_child);
 
 			/* Match if same expression (after stripping relabel) */
 			em_expr = em->em_expr;
@@ -7757,10 +7768,15 @@ find_em_for_rel_target(PlannerInfo *root, EquivalenceClass *ec,
 
 			/* Check that expression (including relabels!) is shippable */
 			if (is_foreign_expr(root, rel, em->em_expr))
+			{
+				bms_free(expr_relids);
+				eclass_member_iterator_dispose(&iter);
 				return em;
+			}
 		}
-
 		i++;
+		bms_free(expr_relids);
+		eclass_member_iterator_dispose(&iter);
 	}
 
 	return NULL;

@@ -929,6 +929,7 @@ bms_int_members(Bitmapset *a, const Bitmapset *b)
 {
 	int			shortlen;
 	int			i;
+	bool		result_is_empty = true;
 
 	/* Handle cases where either input is NULL */
 	if (a == NULL)
@@ -941,11 +942,24 @@ bms_int_members(Bitmapset *a, const Bitmapset *b)
 	/* Intersect b into a; we need never copy */
 	shortlen = Min(a->nwords, b->nwords);
 	for (i = 0; i < shortlen; i++)
-		a->words[i] &= b->words[i];
-	for (; i < a->nwords; i++)
-		a->words[i] = 0;
+	{
+		bitmapword	w = (a->words[i] &= b->words[i]);
+
+		if (w != 0)
+			result_is_empty = false;
+	}
+
+	/*
+	 * We simply shorten the left input to both remove the need to zero the
+	 * trailing words and also to reduce the required processing if this
+	 * function is being called in a loop.  If more words are required later
+	 * then AllocSetRealloc is likely not going to have to work very hard if
+	 * the new requested size is >= the actual size of the allocation.
+	 */
+	a->nwords = shortlen;
+
 	/* If we computed an empty result, we must return NULL */
-	if (bms_is_empty_internal(a))
+	if (result_is_empty)
 	{
 		pfree(a);
 		return NULL;

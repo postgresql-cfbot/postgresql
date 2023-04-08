@@ -11962,7 +11962,7 @@ generate_relation_name(Oid relid, List *namespaces)
 
 	/* Otherwise, qualify the name if not visible in search path */
 	if (!need_qual)
-		need_qual = !RelationIsVisible(relid);
+		need_qual = !ObjectIsVisible(RelationRelationId, relid);
 
 	if (need_qual)
 		nspname = get_namespace_name_or_temp(reltup->relnamespace);

@@ -308,7 +308,7 @@ format_type_extended(Oid type_oid, int32 typemod, bits16 flags)
 		char	   *typname;
 
 		if ((flags & FORMAT_TYPE_FORCE_QUALIFY) == 0 &&
-			TypeIsVisible(type_oid))
+			ObjectIsVisible(TypeRelationId, type_oid))
 			nspname = NULL;
 		else
 			nspname = get_namespace_name_or_temp(typeform->typnamespace);

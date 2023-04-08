@@ -2493,7 +2493,7 @@ generate_relation_name(Relation rel)
 	char	   *result;
 
 	/* Qualify the name if not visible in search path */
-	if (RelationIsVisible(RelationGetRelid(rel)))
+	if (ObjectIsVisible(RelationRelationId, RelationGetRelid(rel)))
 		nspname = NULL;
 	else
 		nspname = get_namespace_name(rel->rd_rel->relnamespace);

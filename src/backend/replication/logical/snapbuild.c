@@ -565,10 +565,14 @@ Snapshot
 SnapBuildInitialSnapshot(SnapBuild *builder)
 {
 	Snapshot	snap;
+	int			ntxn;
+	int			xiplen;
 	TransactionId xid;
 	TransactionId safeXid;
 	TransactionId *newxip;
+	TransactionId *newsubxip;
 	int			newxcnt = 0;
+	int			newsubxcnt = 0;
 
 	Assert(XactIsoLevel == XACT_REPEATABLE_READ);
 	Assert(builder->building_full_snapshot);
@@ -610,9 +614,35 @@ SnapBuildInitialSnapshot(SnapBuild *builder)
 
 	MyProc->xmin = snap->xmin;
 
-	/* allocate in transaction context */
-	newxip = (TransactionId *)
-		palloc(sizeof(TransactionId) * GetMaxSnapshotXidCount());
+	/*
+	 * Allocate in transaction context
+	 *
+	 * Since we know all the active XIDs, this snapshot won't be
+	 * suboverflowed. However, if the number of XIDs surpasses the XID arrays'
+	 * capacity, we cannot establish this snapshot because we don't know which
+	 * XIDs are top-level. Since the original snapshot is historical, we can't
+	 * reliably identify the top-level XIDs. Thus, we have no choice but fail
+	 * when there are too many active XIDs.
+	 */
+	ntxn = TransactionIdDistance(snap->xmin, snap->xmax) - snap->xcnt;
+	xiplen = GetMaxSnapshotXidCount();
+	newxip = (TransactionId *) palloc(sizeof(TransactionId) * xiplen);
+
+	if (ntxn > GetMaxSnapshotXidCount())
+	{
+		/*
+		 * Since we can't identify the top-level XIDs, we can't create a
+		 * suboverflowed snapshot.
+		 */
+		if (ntxn > xiplen + GetMaxSnapshotSubxidCount())
+			ereport(ERROR,
+					(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
+					 errmsg("initial slot snapshot too large")));
+			
+		newsubxip = (TransactionId *)
+			palloc(sizeof(TransactionId) * GetMaxSnapshotSubxidCount());
+	}
+		
 
 	/*
 	 * snapbuild.c builds transactions in an "inverted" manner, which means it
@@ -633,21 +663,23 @@ SnapBuildInitialSnapshot(SnapBuild *builder)
 
 		if (test == NULL)
 		{
-			if (newxcnt >= GetMaxSnapshotXidCount())
-				ereport(ERROR,
-						(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
-						 errmsg("initial slot snapshot too large")));
-
-			newxip[newxcnt++] = xid;
+			if (newxcnt < xiplen)
+				newxip[newxcnt++] = xid;
+			else
+				newsubxip[newsubxcnt++] = xid;
 		}
 
 		TransactionIdAdvance(xid);
 	}
 
+	Assert(newxcnt + newsubxcnt == ntxn);
+
 	/* adjust remaining snapshot fields as needed */
 	snap->snapshot_type = SNAPSHOT_MVCC;
 	snap->xcnt = newxcnt;
 	snap->xip = newxip;
+	snap->subxcnt = newsubxcnt;
+	snap->subxip = newsubxip;
 
 	return snap;
 }

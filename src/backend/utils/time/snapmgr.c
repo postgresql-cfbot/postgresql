@@ -2310,9 +2310,11 @@ XidInMVCCSnapshot(TransactionId xid, Snapshot snapshot)
 		/*
 		 * If the snapshot contains full subxact data, the fastest way to
 		 * check things is just to compare the given XID against both subxact
-		 * XIDs and top-level XIDs.  If the snapshot overflowed, we have to
-		 * use pg_subtrans to convert a subxact XID to its parent XID, but
-		 * then we need only look at top-level XIDs not subxacts.
+		 * XIDs and top-level XIDs. Note that there's a case where both arrays
+		 * contain top and sub-transaction's XIDs in a mixed manner.  If the
+		 * snapshot overflowed, we have to use pg_subtrans to convert a subxact
+		 * XID to its parent XID, but then we need only look at top-level XIDs
+		 * not subxacts.
 		 */
 		if (!snapshot->suboverflowed)
 		{

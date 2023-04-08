@@ -4823,22 +4823,10 @@ KnownAssignedXidsAdd(TransactionId from_xid, TransactionId to_xid,
 	Assert(TransactionIdPrecedesOrEquals(from_xid, to_xid));
 
 	/*
-	 * Calculate how many array slots we'll need.  Normally this is cheap; in
-	 * the unusual case where the XIDs cross the wrap point, we do it the hard
-	 * way.
+	 * Calculate how many array slots we'll need. Both ends of the region are
+	 * inclusive.
 	 */
-	if (to_xid >= from_xid)
-		nxids = to_xid - from_xid + 1;
-	else
-	{
-		nxids = 1;
-		next_xid = from_xid;
-		while (TransactionIdPrecedes(next_xid, to_xid))
-		{
-			nxids++;
-			TransactionIdAdvance(next_xid);
-		}
-	}
+ 	nxids = TransactionIdDistance(from_xid, to_xid) + 1;
 
 	/*
 	 * Since only the startup process modifies the head/tail pointers, we

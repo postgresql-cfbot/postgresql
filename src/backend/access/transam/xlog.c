@@ -505,6 +505,44 @@ typedef struct XLogCtlData
 	int			XLogCacheBlck;	/* highest allocated xlog buffer index */
 
 	/*
+	 * Start address of oldest initialized page in XLog buffers.
+	 *
+	 * We mainly track oldest initialized page explicitly to quickly tell if a
+	 * given WAL record is available in XLog buffers. It also can be used for
+	 * other purposes, see notes below.
+	 *
+	 * OldestInitializedPage gives XLog buffers following properties:
+	 *
+	 * 1) At any given point of time, pages in XLog buffers array are sorted in
+	 * an ascending order from OldestInitializedPage till InitializedUpTo.
+	 * Note that we verify this property for assert-only builds, see
+	 * IsXLogBuffersArraySorted() for more details.
+	 *
+	 * 2) OldestInitializedPage is monotonically increasing (by virtue of how
+	 * postgres generates WAL records), that is, its value never decreases.
+	 * This property lets someone read its value without a lock. There's no
+	 * problem even if its value is slightly stale i.e. concurrently being
+	 * updated. One can still use it for finding if a given WAL record is
+	 * available in XLog buffers. At worst, one might get false positives (i.e.
+	 * OldestInitializedPage may tell that the WAL record is available in XLog
+	 * buffers, but when one actually looks at it, it isn't really available).
+	 * This is more efficient and performant than acquiring a lock for reading.
+	 * Note that we may not need a lock to read OldestInitializedPage but we
+	 * need to update it holding WALBufMappingLock.
+	 *
+	 * 3) One can start traversing XLog buffers from OldestInitializedPage till
+	 * InitializedUpTo to list out all valid WAL records and stats, and expose
+	 * them via SQL-callable functions to users.
+	 *
+	 * 4) XLog buffers array is inherently organized as a circular, sorted and
+	 * rotated array with OldestInitializedPage as pivot with the property
+	 * where LSN of previous buffer page (if valid) is greater than
+	 * OldestInitializedPage and LSN of next buffer page (if valid) is greater
+	 * than OldestInitializedPage.
+	 */
+	XLogRecPtr	OldestInitializedPage;
+
+	/*
 	 * InsertTimeLineID is the timeline into which new WAL is being inserted
 	 * and flushed. It is zero during recovery, and does not change once set.
 	 *
@@ -579,6 +617,10 @@ static ControlFileData *ControlFile = NULL;
 /* Macro to advance to next buffer index. */
 #define NextBufIdx(idx)		\
 		(((idx) == XLogCtl->XLogCacheBlck) ? 0 : ((idx) + 1))
+
+/* Macro to retreat to previous buffer index. */
+#define PreviousBufIdx(idx)		\
+		(((idx) == 0) ? XLogCtl->XLogCacheBlck : ((idx) - 1))
 
 /*
  * XLogRecPtrToBufIdx returns the index of the WAL buffer that holds, or
@@ -697,6 +739,10 @@ static void WALInsertLockAcquire(void);
 static void WALInsertLockAcquireExclusive(void);
 static void WALInsertLockRelease(void);
 static void WALInsertLockUpdateInsertingAt(XLogRecPtr insertingAt);
+
+#ifdef USE_ASSERT_CHECKING
+static bool IsXLogBuffersArraySorted(void);
+#endif
 
 /*
  * Insert an XLOG record represented by an already-constructed chain of data
@@ -1925,6 +1971,52 @@ AdvanceXLInsertBuffer(XLogRecPtr upto, TimeLineID tli, bool opportunistic)
 		XLogCtl->InitializedUpTo = NewPageEndPtr;
 
 		npages++;
+
+		/*
+		 * Try updating oldest initialized XLog buffer page.
+		 *
+		 * Update it if we are initializing an XLog buffer page for the first
+		 * time or if XLog buffers are full and we are wrapping around.
+		 */
+		if (XLogRecPtrIsInvalid(XLogCtl->OldestInitializedPage) ||
+			XLogRecPtrToBufIdx(XLogCtl->OldestInitializedPage) == nextidx)
+		{
+			Assert(XLogCtl->OldestInitializedPage < NewPageBeginPtr);
+
+			XLogCtl->OldestInitializedPage = NewPageBeginPtr;
+		}
+
+		/*
+		 * Check some properties about XLog buffers array. We essentially
+		 * perform these checks as asserts to avoid extra costs.
+		 *
+		 * XXX: Perhaps these extra checks are too much for an assert build, so
+		 * placing them under WAL_DEBUG might be worth trying.
+		 */
+
+		/* OldestInitializedPage must have already been initialized. */
+		Assert(!XLogRecPtrIsInvalid(XLogCtl->OldestInitializedPage));
+
+		/*
+		 * OldestInitializedPage is always a starting address of XLog buffer
+		 * page.
+		 */
+		Assert((XLogCtl->OldestInitializedPage % XLOG_BLCKSZ) == 0);
+
+		/*
+		 * OldestInitializedPage and InitializedUpTo are always starting and
+		 * ending addresses of (same or different) XLog buffer page
+		 * respectively. Hence, they can never be same even if there's only one
+		 * initialized page in XLog buffers.
+		 */
+		Assert(XLogCtl->OldestInitializedPage != XLogCtl->InitializedUpTo);
+
+		/*
+		 * At any given point of time, pages in XLog buffers array are sorted
+		 * in an ascending order from OldestInitializedPage till
+		 * InitializedUpTo.
+		 */
+		Assert(IsXLogBuffersArraySorted());
 	}
 	LWLockRelease(WALBufMappingLock);
 
@@ -4618,6 +4710,7 @@ XLOGShmemInit(void)
 	XLogCtl->SharedRecoveryState = RECOVERY_STATE_CRASH;
 	XLogCtl->InstallXLogFileSegmentActive = false;
 	XLogCtl->WalWriterSleeping = false;
+	XLogCtl->OldestInitializedPage = InvalidXLogRecPtr;
 
 	SpinLockInit(&XLogCtl->Insert.insertpos_lck);
 	SpinLockInit(&XLogCtl->info_lck);
@@ -5624,6 +5717,14 @@ StartupXLOG(void)
 
 		XLogCtl->xlblocks[firstIdx] = endOfRecoveryInfo->lastPageBeginPtr + XLOG_BLCKSZ;
 		XLogCtl->InitializedUpTo = endOfRecoveryInfo->lastPageBeginPtr + XLOG_BLCKSZ;
+		XLogCtl->OldestInitializedPage = endOfRecoveryInfo->lastPageBeginPtr;
+
+		/*
+		 * OldestInitializedPage is always a starting address of XLog buffer
+		 * page.
+		 */
+		Assert(!XLogRecPtrIsInvalid(XLogCtl->OldestInitializedPage));
+		Assert((XLogCtl->OldestInitializedPage % XLOG_BLCKSZ) == 0);
 	}
 	else
 	{
@@ -8931,4 +9032,72 @@ SetWalWriterSleeping(bool sleeping)
 	SpinLockAcquire(&XLogCtl->info_lck);
 	XLogCtl->WalWriterSleeping = sleeping;
 	SpinLockRelease(&XLogCtl->info_lck);
+}
+
+#ifdef USE_ASSERT_CHECKING
+/*
+ * Returns whether or not XLog buffers array is sorted.
+ *
+ * XXX: Perhaps this function is too much for an assert build, so placing it
+ * under WAL_DEBUG might be worth trying.
+ */
+static bool
+IsXLogBuffersArraySorted(void)
+{
+	int	start;
+	int	end;
+	int	current;
+	int	next;
+	XLogRecPtr CurrentPage;
+	XLogRecPtr	NextPage;
+
+	start = XLogRecPtrToBufIdx(XLogCtl->OldestInitializedPage);
+	end = XLogRecPtrToBufIdx(XLogCtl->InitializedUpTo - XLOG_BLCKSZ);
+
+	if (start == end)
+		return true;
+
+	current = start;
+
+	while (current != end)
+	{
+		CurrentPage = XLogCtl->xlblocks[current];
+
+		next = NextBufIdx(current);
+		NextPage = XLogCtl->xlblocks[next];
+
+		if (!XLogRecPtrIsInvalid(NextPage) &&
+			CurrentPage > NextPage)
+			return false;
+
+		current = next;
+	}
+
+	Assert(XLogCtl->xlblocks[current] == XLogCtl->xlblocks[end]);
+
+	return true;
+}
+#endif
+
+/*
+ * Returns whether or not a given WAL record is available in XLog buffers.
+ *
+ * Note that we don't read OldestInitializedPage under a lock, see description
+ * near its definition in xlog.c for more details.
+ *
+ * Note that caller needs to pass in an LSN known to the server, not a future
+ * or unwritten or unflushed LSN.
+ */
+bool
+IsWALRecordAvailableInXLogBuffers(XLogRecPtr lsn)
+{
+	if (!XLogRecPtrIsInvalid(lsn) &&
+		!XLogRecPtrIsInvalid(XLogCtl->OldestInitializedPage) &&
+		lsn >= XLogCtl->OldestInitializedPage &&
+		lsn < XLogCtl->InitializedUpTo)
+	{
+		return true;
+	}
+
+	return false;
 }

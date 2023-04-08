@@ -257,6 +257,7 @@ extern void ReachedEndOfBackup(XLogRecPtr EndRecPtr, TimeLineID tli);
 extern void SetInstallXLogFileSegmentActive(void);
 extern bool IsInstallXLogFileSegmentActive(void);
 extern void XLogShutdownWalRcv(void);
+extern bool	IsWALRecordAvailableInXLogBuffers(XLogRecPtr lsn);
 
 /*
  * Routines to start, stop, and get status of a base backup.

@@ -19,6 +19,11 @@
 
 #include <llvm-c/Types.h>
 
+#if defined(__riscv) && LLVM_VERSION_MAJOR >= 15
+#include <llvm-c/Orc.h>
+#define USE_JITLINK
+/* else use legacy RTDyld */
+#endif
 
 /*
  * File needs to be includable by both C and C++ code, and include other
@@ -133,6 +138,10 @@ extern char *LLVMGetHostCPUFeatures(void);
 #endif
 
 extern unsigned LLVMGetAttributeCountAtIndexPG(LLVMValueRef F, uint32 Idx);
+
+#ifdef USE_JITLINK
+extern LLVMOrcObjectLayerRef LLVMOrcCreateJitlinkObjectLinkingLayer(LLVMOrcExecutionSessionRef ES);
+#endif
 
 #ifdef __cplusplus
 } /* extern "C" */
